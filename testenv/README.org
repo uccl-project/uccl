@@ -1,0 +1,79 @@
+# -*- fill-column: 76; -*-
+#+TITLE: Test environment script
+#+OPTIONS: ^:nil
+
+This directory contains a setup script that you can use to create test
+environments for testing your XDP programs. It works by creating virtual
+ethernet (veth) interface pairs and moving one end of each pair to another
+network namespace. You can load the XDP program in the other namespace and
+send traffic to it through the interface that is visible in the root
+namespace.
+
+Run =./testenv.sh= with no parameter to get a list of available commands, or
+run =./testenv.sh --help= to get the full help listing with all options. The
+script can maintain several environments active at the same time, and you
+can switch between them using the =--name= option.
+
+If you don't specify a name, the most recently used environment will be
+used. If you don't specify a name when setting up a new environment, a
+random name will be generated for you.
+
+Examples:
+
+Setup new environment named "test":
+=./testenv.sh setup --name=test=
+
+Create a shell alias for easy use of script from anywhere:
+=eval $(./testenv.sh alias)=
+
+See the currently active environment, and a list of all active environment
+names (with alias defined as above):
+=t status=
+
+Enter the currently active environment:
+=t enter=
+
+Execute a command inside the environment:
+=t exec -- ip a=
+
+Teardown the environment:
+=t teardown=
+
+* Understanding the network topology
+
+When setting up a test environment, there will be a virtual link between the
+environment inside the new namespace, and the interface visible from the
+host system root namespace. The new namespace will be named after the
+environment name passed to the script, as will the interface visible in the
+outer namespace. The interface *inside* the namespace will always be named
+'veth0'.
+
+To illustrate this, creating a test environment with the name 'test01' (with
+=t setup --name test01= will result in the following environment being set
+up:
+
+#+begin_example
++-----------------------------+                          +-----------------------------+
+| Root namespace              |                          | Testenv namespace 'test01'  |
+|                             |      From 'test01'       |                             |
+|                    +--------+ TX->                RX-> +--------+                    |
+|                    | test01 +--------------------------+  veth0 |                    |
+|                    +--------+ <-RX                <-TX +--------+                    |
+|                             |       From 'veth0'       |                             |
++-----------------------------+                          +-----------------------------+
+#+end_example
+
+The 'test01' interface visible in the root namespace is the one we will be
+installing XDP programs on in the tutorial lessons. The XDP program will see
+packets being *received* on this interface; as you can see from the diagram,
+this means all packets being transmitted from inside the new namespace.
+
+The setup is created this way to simulate the case where the host machine
+have physical interfaces; but instead of the traffic arriving from outside
+hosts on physical interfaces, they will arrive from inside the namespace on
+the virtual interface. This also means that when you generate traffic to
+test your XDP programs, you need to generate it from *inside* the test
+environment. The =t ping= command will start the ping inside the test
+environment by default, and you can run arbitrary programs inside the
+environment by using =t exec -- <command>=, or simply spawning a shell with
+=t enter=.

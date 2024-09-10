@@ -1,0 +1,226 @@
+# -*- fill-column: 76; -*-
+#+TITLE: Setup dependencies
+#+OPTIONS: ^:nil
+
+Before you can start completing the steps in this XDP-tutorial, go through
+this document and install the needed software packages.
+
+* Table of Contents                                                     :TOC:
+- [[#based-on-libxdp-and-libbpf][Based on libxdp and libbpf]]
+  - [[#libbpf-as-git-submodule][libbpf as git-submodule]]
+- [[#dependencies][Dependencies]]
+  - [[#packages-on-fedora][Packages on Fedora]]
+  - [[#packages-on-debianubuntu][Packages on Debian/Ubuntu]]
+  - [[#packages-on-opensuse][Packages on openSUSE]]
+- [[#kernel-headers-dependency][Kernel headers dependency]]
+  - [[#packages-on-fedora-1][Packages on Fedora]]
+  - [[#packages-on-debianubuntu-1][Packages on Debian/Ubuntu]]
+  - [[#packages-on-opensuse-1][Packages on openSUSE]]
+- [[#recommended-tools][Recommended tools]]
+  - [[#packages-on-fedora-2][Packages on Fedora]]
+  - [[#packages-on-ubuntu][Packages on Ubuntu]]
+  - [[#packages-on-debian][Packages on Debian]]
+  - [[#packages-on-opensuse-2][Packages on openSUSE]]
+
+* Based on libxdp and libbpf
+
+This XDP-tutorial leverages [[https://github.com/xdp-project/xdp-tools/][libxdp]] to load and manage XDP programs. The
+libxdp library is maintained as part of the [[https://github.com/xdp-project][XDP Project]]. The tutorial also
+leverages [[https://github.com/libbpf/libbpf/][libbpf]] to ease development and loading of BPF programs. The libbpf
+library is part of the kernel tree under [[https://github.com/torvalds/linux/blob/master/tools/lib/bpf/README.rst][tools/lib/bpf]], but Facebook
+engineers maintain a stand-alone build on GitHub under
+https://github.com/libbpf/libbpf.
+
+** libxdp and libbpf as git-submodules
+
+This repository uses both [[https://github.com/xdp-project/xdp-tools/][libxdp]] and [[https://github.com/libbpf/libbpf][libbpf]] as git-submodules.
+
+We will start by cloning this repository:
+
+#+begin_example
+git clone --recurse-submodules https://github.com/xdp-project/xdp-tutorial.git
+#+end_example
+
+
+Note: If you missed the --recurse-submodules option in the previous step or you already cloned it earlier without the submodules you can use the following command:
+
+#+begin_example
+git submodule update --init
+#+end_example
+
+If you need to add the submodules to your own project, you can use the command:
+
+#+begin_example
+git submodule add https://github.com/xdp-project/xdp-tools/ xdp-tools
+git submodule add https://github.com/libbpf/libbpf/ libbpf
+#+end_example
+
+* Dependencies
+
+The main dependencies are =libxdp=, =libbpf=, =llvm=, =clang= and
+=libelf=. LLVM+clang compiles our restricted-C programs into BPF-byte-code,
+which is stored in an ELF object file (=libelf=), that is loaded by =libbpf=
+into the kernel via the =bpf= syscall. XDP programs are managed by =libxdp=
+which implements the XDP multi-dispatch protocol. Some of the lessons also
+use the =perf= utility to track the kernel behaviour through tracepoints.
+
+The Makefiles in this repo will try to detect if you are missing some
+dependencies, and give you some pointers.
+
+** Packages on Fedora
+
+On a machine running the Fedora Linux distribution, install the packages:
+
+#+begin_example
+sudo dnf install clang llvm
+sudo dnf install elfutils-libelf-devel libpcap-devel perf glibc-devel.i686
+#+end_example
+
+Note also that Fedora by default sets a limit on the amount of locked memory
+the kernel will allow, which can interfere with loading BPF maps. The
+=testenv.sh= script will adjust this for you, but if you're not using that
+you will probably run into problems. Use this command to raise the limit:
+
+#+begin_example
+  # ulimit -l 1024
+#+end_example
+
+Note that you need to do this in the shell you are using to load programs
+(in particular, it won't work with =sudo=).
+
+** Packages on Debian/Ubuntu
+
+On Debian and Ubuntu installations, install the dependencies like this:
+
+#+begin_example
+sudo apt install clang llvm libelf-dev libpcap-dev build-essential libc6-dev-i386
+#+end_example
+
+To install the 'perf' utility, run this on Debian:
+#+begin_example
+sudo apt install linux-perf
+#+end_example
+
+or this on Ubuntu:
+
+#+begin_example
+sudo apt install linux-tools-$(uname -r)
+#+end_example
+
+** Packages on openSUSE
+
+On a machine running the openSUSE distribution, install the packages:
+
+#+begin_example
+sudo zypper install clang llvm libelf-devel libpcap-devel perf linux-glibc-devel
+#+end_example
+
+* Kernel headers dependency
+
+The Linux kernel provides a number of header files, which are usually installed
+in =/usr/include/linux=. The different Linux distributions usually provide a
+software package with these headers.
+
+Some of the header files (we depend on) are located in the kernel tree under
+include/uapi/linux/ (e.g. include/uapi/linux/bpf.h), but you should not include
+those files as they go through a conversion process when exported/installed into
+distros' =/usr/include/linux= directory. In the kernel git tree you can run the
+command: =make headers_install= which will create a lot of headers files in
+directory "usr/".
+
+For now, this tutorial depends on kernel headers package provided by your
+distro. We may choose to shadow some of these later.
+
+** Packages on Fedora
+
+On a machine running the Fedora Linux distribution, install the package:
+#+begin_example
+sudo dnf install kernel-headers
+#+end_example
+
+** Packages on Debian/Ubuntu
+
+On Debian and Ubuntu installations, install the headers like this
+
+#+begin_example
+sudo apt install linux-headers-$(uname -r)
+#+end_example
+
+** Packages on openSUSE
+
+On a machine running the openSUSE distribution, install the package:
+
+#+begin_example
+sudo zypper install kernel-devel
+#+end_example
+
+
+* Extra tools
+
+The =bpftool= is the recommended tool for inspecting BPF programs running on
+your system. It also offers simple manipulation of eBPF programs and maps.
+The =bpftool= is part of the Linux kernel tree under [[https://github.com/torvalds/linux/tree/master/tools/bpf/bpftool][tools/bpf/bpftool/]], but
+some Linux distributions also ship the tool as a software package.
+
+If you are planning on working through the packet processing examples you
+should also install tcpdump.
+
+** Packages on Fedora
+
+On a machine running the Fedora Linux distribution, install package:
+
+#+begin_example
+sudo dnf install bpftool
+sudo dnf install tcpdump
+#+end_example
+
+** Packages on Ubuntu
+
+Starting from Ubuntu 19.10, bpftool can be installed with:
+
+#+begin_example
+sudo apt install linux-tools-common linux-tools-generic
+sudo apt install tcpdump
+#+end_example
+
+(Ubuntu 18.04 LTS also has it, but it is an old and quite limited bpftool
+version.)
+
+** Packages on Debian
+
+Starting from Debian Bullseye, bpftool can be installed with:
+
+#+begin_example
+sudo apt install bpftool
+sudo apt install tcpdump
+#+end_example
+
+(If you are on Debian Buster, you can get it from [[https://backports.debian.org][buster-backports]].)
+
+** Packages on openSUSE
+
+On a machine running the openSUSE Tumbleweed distribution, install package:
+
+#+begin_example
+sudo zypper install bpftool
+sudo zypper install tcpdump
+#+end_example
+
+
+* Generate the necessary files
+
+Once you have installed the dependencies you need genereate the necessary files to follow the exercises.
+
+Start by running ./configure from the root of the repository to make sure every dependency is installed.
+
+#+begin_example
+./configure
+#+end_example
+
+If there is a missing dependency it should output some error, if not we can continue.
+
+Now run make to generate all the necessary files:
+
+#+begin_example
+make
+#+end_example

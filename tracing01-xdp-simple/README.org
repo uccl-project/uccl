@@ -1,0 +1,202 @@
+# -*- fill-column: 76; -*-
+#+TITLE: Tutorial: Tracing01 - monitor xdp tracepoint
+#+OPTIONS: ^:nil
+
+In this lesson we will show how to create and load eBPF program that
+hooks on xdp:exception tracepoint and get its values to user space
+stats application.
+
+* Table of Contents                                                     :TOC:
+- [[#xdp-tracepoints][XDP tracepoints]]
+  - [[#tracepoint-program-section][Tracepoint program section]]
+  - [[#tracepoint-arguments][Tracepoint arguments]]
+  - [[#tracepoint-attaching][Tracepoint attaching]]
+- [[#hash-map][HASH map]]
+- [[#assignments][Assignments]]
+  - [[#assignment-1-setting-up-your-test-lab][Assignment 1: Setting up your test lab]]
+  - [[#assignment-2-load-tracepoint-monitor-program][Assignment 2: Load tracepoint monitor program]]
+
+* XDP tracepoints
+
+The eBPF programs can be attached also to tracepoints. There are
+several tracepoints related to the xdp tracepoint subsystem:
+
+#+begin_src sh
+ls /sys/kernel/debug/tracing/events/xdp/
+xdp_cpumap_enqueue
+xdp_cpumap_kthread
+xdp_devmap_xmit
+xdp_exception
+xdp_redirect
+xdp_redirect_err
+xdp_redirect_map
+xdp_redirect_map_err
+#+end_src
+
+** Tracepoint program section
+
+The bpf library expects the tracepoint eBPF program to be stored
+in a section with following name:
+
+#+begin_src C
+tracepoint/<sys>/<tracepoint>
+#+end_src
+
+where =<sys>= is the tracepoint subsystem and =<tracepoint>= is
+the tracepoint name, which can be done with following construct:
+
+#+begin_src sh
+SEC("tracepoint/xdp/xdp_exception")
+int trace_xdp_exception(struct xdp_exception_ctx *ctx)
+#+end_src
+
+** Tracepoint arguments
+
+There's single program pointer argument which points
+to the structure, that defines the tracepoint fields.
+
+Like for xdp:xdp_exception tracepoint:
+
+#+begin_src C
+struct xdp_exception_ctx {
+        __u64 __pad;      // First 8 bytes are not accessible by bpf code
+        __s32 prog_id;    //      offset:8;  size:4; signed:1;
+        __u32 act;        //      offset:12; size:4; signed:0;
+        __s32 ifindex;    //      offset:16; size:4; signed:1;
+};
+
+int trace_xdp_exception(struct xdp_exception_ctx *ctx)
+#+end_src
+
+This struct is exported in tracepoint format file:
+
+#+begin_src C
+# cat /sys/kernel/debug/tracing/events/xdp/xdp_exception/format
+...
+        field:unsigned short common_type;       offset:0;       size:2; signed:0;
+        field:unsigned char common_flags;       offset:2;       size:1; signed:0;
+        field:unsigned char common_preempt_count;       offset:3;       size:1; signed:0;
+        field:int common_pid;   offset:4;       size:4; signed:1;
+
+        field:int prog_id;      offset:8;       size:4; signed:1;
+        field:u32 act;  offset:12;      size:4; signed:0;
+        field:int ifindex;      offset:16;      size:4; signed:1;
+...
+#+end_src
+
+** Tracepoint attaching
+
+To load a tracepoint program for this example we use following bpf
+library helper functions:
+
+#+begin_src sh
+bpf_object__open_file(cfg->filename, NULL);
+#+end_src
+
+#+begin_src sh
+bpf_object__load(obj);
+#+end_src
+
+To attach the program to the tracepoint we need to create a tracepoint
+perf event and attach the eBPF program to it, using its file descriptor.
+Under the hood this function sets up the PERF_EVENT_IOC_SET_BPF ioctl call:
+
+#+begin_src sh
+bpf_program__attach_tracepoint(prog, "xdp", "xdp_exception");
+#+end_src
+
+Please check trace_load_and_stats.c load_bpf_and_trace_attach function
+for all the details.
+
+* HASH map
+
+This example is using PERCPU HASH map, that stores number of aborted
+packets for interface
+#+begin_src C
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_HASH);
+    __type(key, __s32);
+    __type(value, __u64);
+    __uint(max_entries, 10);
+} xdp_stats_map SEC(".maps");
+#+end_src
+
+The interface is similar to the ARRAY map except that we need to specifically
+create new element in the hash if it does not exist:
+
+#+begin_src C
+/* Lookup in kernel BPF-side returns pointer to actual data. */
+valp = bpf_map_lookup_elem(&xdp_stats_map, &key);
+
+/* If there's no record for interface, we need to create one,
+ * with number of packets == 1
+ */
+if (!valp) {
+	__u64 one = 1;
+	return bpf_map_update_elem(&xdp_stats_map, &key, &one, 0) ? 1 : 0;
+}
+
+(*valp)++;
+#+end_src
+
+Please check trace_prog_kern.c for the full code.
+
+* Assignments
+
+** Assignment 1: Setting up your test lab
+
+In this lesson we will use the setup of the previous lesson:
+Basic02 - loading a program by name [[https://github.com/xdp-project/xdp-tutorial/tree/master/basic02-prog-by-name#assignment-2-add-xdp_abort-program]]
+
+and load XDP program from xdp_prog_kern.o that will abort every
+incoming packet:
+
+#+begin_src C
+SEC("xdp_abort")
+int xdp_drop_func(struct xdp_md *ctx)
+{
+        return XDP_ABORTED;
+}
+#+end_src
+
+with xdp-loader:
+Assignment 2: Add xdp_abort program [[https://github.com/xdp-project/xdp-tutorial/tree/master/basic02-prog-by-name#assignment-2-add-xdp_abort-program]]
+
+Setup the environment:
+
+#+begin_src sh
+$ sudo ../testenv/testenv.sh setup --name veth-basic02
+#+end_src
+
+Load the XDP program, that produces aborted packets:
+
+#+begin_src sh
+$ sudo xdp-loader load veth-basic02 xdp_prog_kern.o -n xdp_drop_func
+#+end_src
+
+and generate some packets:
+
+#+begin_src sh
+$ sudo ../testenv/testenv.sh enter --name veth-basic02
+# ping  fc00:dead:cafe:1::1
+PING fc00:dead:cafe:1::1(fc00:dead:cafe:1::1) 56 data bytes
+#+end_src
+
+** Assignment 2: Load tracepoint monitor program
+
+Now when you run the trace_load_and_stats application it will
+load and attach the tracepoint eBPF program and display number
+of aborted packets per interface:
+
+#+begin_src sh
+# ./trace_load_and_stats
+Success: Loaded BPF-object(trace_prog_kern.o)
+
+Collecting stats from BPF map
+ - BPF map (bpf_map_type:1) id:46 name:xdp_stats_map key_size:4 value_size:4 max_entries:10
+
+veth-basic02 (2)
+veth-basic02 (4)
+veth-basic02 (6)
+...
+#+end_src

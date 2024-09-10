@@ -1,0 +1,72 @@
+# Prerequisites
+*.d
+
+# Object files
+*.o
+*.ko
+*.obj
+*.elf
+*.s
+*.ll
+
+# Linker output
+*.ilk
+*.map
+*.exp
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Libraries
+*.lib
+*.a
+*.la
+*.lo
+
+# Shared objects (inc. Windows DLLs)
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Executables
+*.exe
+*.out
+*.app
+*.i*86
+*.x86_64
+*.hex
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Kernel Module Compile Results
+*.mod*
+*.cmd
+.tmp_versions/
+modules.order
+Module.symvers
+Mkfile.old
+dkms.conf
+
+# Userspace programs
+xdp-loader
+xdp_loader
+xdp_stats
+xdp_pass_user
+xdp_load_and_stats
+xdp_prog_user
+af_xdp_user
+
+# tracing userspace programs
+trace_load_and_stats
+trace_load_and_stats
+trace_read
+xdp_sample_pkts_user
+
+# configure output
+config.mk
