@@ -15,6 +15,7 @@ cd ..
 git clone https://github.com/amzn/amzn-drivers.git
 cd amzn-drivers/kernel/linux/ena/ && make
 sudo rmmod ena && sudo insmod ena.ko
+sudo mv ena.ko /lib/modules/6.5.0-1022-aws/kernel/drivers/net/ethernet/amazon/ena/ena.ko
 # Check version by modinfo ena
 
 # Can only use half of the queue, per ENA implementation: https://github.com/amzn/amzn-drivers/issues/240
