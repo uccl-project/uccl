@@ -1,0 +1,5 @@
+{
+    "files.associations": {
+        "fi_errno.h": "c"
+    }
+}
