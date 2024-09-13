@@ -34,13 +34,30 @@
 #define OFI_MR_BASIC_MAP (FI_MR_ALLOCATED | FI_MR_PROV_KEY | FI_MR_VIRT_ADDR)
 #endif
 
-#define PP_PRINTERR(call, retv)                                                \
-	fprintf(stderr, "%s(): %s:%-4d, ret=%d (%s)\n", call, __FILE__,        \
-		__LINE__, (int)retv, fi_strerror((int) -retv))
+#define PP_PRINTERR(call, retv)                                     \
+    fprintf(stderr, "%s(): %s:%-4d, ret=%d (%s)\n", call, __FILE__, \
+            __LINE__, (int)retv, fi_strerror((int)-retv))
 
-#define PP_ERR(fmt, ...)                                                       \
-	fprintf(stderr, "[%s] %s:%-4d: " fmt "\n", "error", __FILE__,          \
-		__LINE__, ##__VA_ARGS__)
+#define PP_ERR(fmt, ...)                                          \
+    fprintf(stderr, "[%s] %s:%-4d: " fmt "\n", "error", __FILE__, \
+            __LINE__, ##__VA_ARGS__)
+
+static int print_short_info(struct fi_info *info)
+{
+    struct fi_info *cur;
+
+    for (cur = info; cur; cur = cur->next)
+    {
+        printf("provider: %s\n", cur->fabric_attr->prov_name);
+        printf("    fabric: %s\n", cur->fabric_attr->name),
+            printf("    domain: %s\n", cur->domain_attr->name),
+            printf("    version: %d.%d\n", FI_MAJOR(cur->fabric_attr->prov_version),
+                   FI_MINOR(cur->fabric_attr->prov_version));
+        printf("    type: %s\n", fi_tostr(&cur->ep_attr->type, FI_TYPE_EP_TYPE));
+        printf("    protocol: %s\n", fi_tostr(&cur->ep_attr->protocol, FI_TYPE_PROTOCOL));
+    }
+    return EXIT_SUCCESS;
+}
 
 int main(int argc, char **argv)
 {
@@ -50,6 +67,18 @@ int main(int argc, char **argv)
     uint16_t dst_port = 8889;
 
     struct fi_info *fi_pep, *fi, *hints;
+    struct fid_fabric *fabric;
+    struct fi_eq_attr eq_attr;
+    struct fid_eq *eq;
+    struct fid_domain *domain;
+    struct fi_cq_attr cq_attr;
+    struct fid_cq *txcq, *rxcq;
+    struct fi_av_attr av_attr;
+    struct fid_av *av;
+    fi_addr_t local_fi_addr, remote_fi_addr;
+    void *local_name, *rem_name;
+    struct fi_context tx_ctx[2], rx_ctx[2];
+
     hints = fi_allocinfo();
     if (!hints)
         return EXIT_FAILURE;
@@ -58,18 +87,19 @@ int main(int argc, char **argv)
     hints->caps = FI_MSG;
     hints->mode = FI_CONTEXT;
     hints->domain_attr->mr_mode = FI_MR_UNSPEC;
+    hints->domain_attr->name = "enp39s0";
+    hints->fabric_attr->name = "172.31.64.0/20";
+    hints->fabric_attr->prov_name = "udp"; // "sockets" -> TCP
 
-    uint64_t flags = 0;
     ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION),
-                     NULL, NULL, flags, hints, &fi);
+                     NULL, NULL, 0, hints, &fi);
     if (ret)
     {
         PP_PRINTERR("fi_getinfo", ret);
         return ret;
     }
-    struct fi_context tx_ctx[2], rx_ctx[2];
+    print_short_info(fi);
 
-    struct fid_fabric *fabric;
     ret = fi_fabric(fi->fabric_attr, &(fabric), NULL);
     if (ret)
     {
@@ -77,8 +107,6 @@ int main(int argc, char **argv)
         return ret;
     }
 
-    struct fi_eq_attr eq_attr;
-    struct fid_eq *eq;
     ret = fi_eq_open(fabric, &(eq_attr), &(eq), NULL);
     if (ret)
     {
@@ -86,17 +114,12 @@ int main(int argc, char **argv)
         return ret;
     }
 
-    struct fid_domain *domain;
     ret = fi_domain(fabric, fi, &(domain), NULL);
     if (ret)
     {
         PP_PRINTERR("fi_domain", ret);
         return ret;
     }
-
-    struct fi_av_attr av_attr;
-    struct fi_cq_attr cq_attr;
-    struct fid_cq *txcq, *rxcq;
 
     cq_attr.format = FI_CQ_FORMAT_CONTEXT;
     cq_attr.wait_obj = FI_WAIT_NONE;
@@ -114,7 +137,6 @@ int main(int argc, char **argv)
         return ret;
     }
 
-    struct fid_av *av;
     av_attr.type = FI_AV_MAP;
     ret = fi_av_open(domain, &(av_attr), &(av), NULL);
     if (ret)
@@ -158,7 +180,6 @@ int main(int argc, char **argv)
         return ret;
     }
 
-    void *local_name, *rem_name;
     size_t addrlen = 0;
     local_name = NULL;
     ret = fi_getname(&ep->fid, local_name, &addrlen);
@@ -176,7 +197,6 @@ int main(int argc, char **argv)
         return ret;
     }
 
-    fi_addr_t local_fi_addr, remote_fi_addr;
     ret = fi_av_insert(av, local_name, 1, &local_fi_addr, 0, NULL);
     if (ret < 0)
     {
@@ -191,10 +211,15 @@ int main(int argc, char **argv)
         return -EXIT_FAILURE;
     }
 
-    char buf[128];
-    size_t reslen = addrlen;
-    char* res = fi_av_straddr(av, local_name, buf, &reslen);
-    printf("reslen %lu, local_name: %s\n", reslen, res);
+    char ep_name_buf[128];
+    size_t size = 0;
+    fi_av_straddr(av, local_name, NULL, &size);
+
+    fi_av_straddr(av, local_name, ep_name_buf, &size);
+
+    printf("OFI EP prov %s name %s straddr %s\n",
+           fi->fabric_attr->prov_name,
+           fi->fabric_attr->name, ep_name_buf);
 
     return 0;
 }

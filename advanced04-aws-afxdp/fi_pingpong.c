@@ -612,11 +612,6 @@ static int pp_send_name(struct ct_pingpong *ct, struct fid *endpoint)
 		goto fn;
 	}
 
-    char buf[128];
-    size_t reslen = addrlen;
-    char* res = fi_av_straddr(ct->av, ct->local_name, buf, &reslen);
-    printf("reslen %lu, local_name: %s\n", reslen, res);
-
 	PP_DEBUG("Sending name length\n");
 	len = htonl((uint32_t) addrlen);
 	ret = pp_ctrl_send(ct, (char *) &len, sizeof(len));
