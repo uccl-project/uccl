@@ -10,8 +10,11 @@ include $(COMMON_DIR)/common.mk
 COMMON_OBJS := $(COMMON_DIR)/common_params.o
 COMMON_OBJS += $(COMMON_DIR)/common_user_bpf_xdp.o
 
-dgram_gen: dgram_gen.c
-	gcc dgram_gen.c -o dgram_gen -I /opt/amazon/efa/include -L /opt/amazon/efa/lib -lfabric
+fi_pingpong: fi_pingpong.c
+	gcc fi_pingpong.c -o fi_pingpong -I /opt/amazon/efa/include -L /opt/amazon/efa/lib -lfabric
 
-clean_dgram_gen:
-	rm dgram_gen
+fi_udpgen: fi_udpgen.c
+	gcc fi_udpgen.c -o fi_udpgen -I /opt/amazon/efa/include -L /opt/amazon/efa/lib -lfabric
+
+clean_fi:
+	rm fi_pingpong fi_udpgen

@@ -70,3 +70,6 @@ xdp_sample_pkts_user
 
 # configure output
 config.mk
+
+fi_pingpong
+fi_udpgen
