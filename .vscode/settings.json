@@ -1,5 +1,12 @@
 {
     "files.associations": {
-        "fi_errno.h": "c"
+        "fi_errno.h": "c",
+        "common_user_bpf_xdp.h": "c",
+        "common_params.h": "c",
+        "common_libbpf.h": "c",
+        "xsk.h": "c",
+        "libxdp.h": "c",
+        "bpf.h": "c",
+        "config.h": "c"
     }
 }
