@@ -112,6 +112,7 @@ static int pp_get_cq_comp(struct fid_cq *cq, uint64_t *cur, uint64_t total,
 }
 
 uint64_t tx_seq, rx_seq, tx_cq_cntr, rx_cq_cntr;
+long cnt_ack_msg;
 
 static int pp_get_rx_comp(struct fid_cq *rxcq, uint64_t total) {
     int ret = FI_SUCCESS;
@@ -147,6 +148,71 @@ static ssize_t pp_tx(struct fid_ep *ep, void *tx_buf, size_t size, fi_addr_t rem
     tx_seq++;
 
     ret = pp_get_tx_comp(txcq, tx_seq);
+
+    return ret;
+}
+
+static ssize_t pp_inject(struct fid_ep *ep, void *tx_buf, size_t size, fi_addr_t remote_fi_addr, struct fid_cq *txcq) {
+    ssize_t ret, rc;
+
+    while (1) {
+        ret = (int)fi_inject(ep, tx_buf, size, remote_fi_addr);
+        if (!ret)
+            break;
+
+        if (ret != -FI_EAGAIN) {
+            PP_PRINTERR('inject', ret);
+            return ret;
+        }
+
+        rc = pp_get_tx_comp(txcq, rx_seq);
+        if (rc && rc != -FI_EAGAIN) {
+            PP_ERR("Failed to get inject completion");
+            return rc;
+        }
+    }
+    tx_seq++;
+
+    if (ret)
+        return ret;
+
+    tx_cq_cntr++;
+    return ret;
+}
+
+static ssize_t pp_rx(struct fid_ep *ep, void *rx_buf, size_t size, void *rx_ctx, struct fid_cq *rxcq) {
+    ssize_t ret, rc;
+
+    ret = pp_get_rx_comp(rxcq, rx_seq);
+    if (ret)
+        return ret;
+
+    /* Ignore the size arg. Post a buffer large enough to handle all message
+     * sizes. pp_sync() makes use of pp_rx() and gets called in tests just
+     * before message size is updated. The recvs posted are always for the
+     * next incoming message.
+     */
+
+    while (1) {
+        ret = (int)fi_recv(ep, rx_buf, size, NULL, 0, rxcq);
+        if (!ret)
+            break;
+
+        if (ret != -FI_EAGAIN) {
+            PP_PRINTERR('receive', ret);
+            return ret;
+        }
+
+        rc = pp_get_rx_comp(rxcq, rx_seq);
+        if (rc && rc != -FI_EAGAIN) {
+            PP_ERR("Failed to get receive completion");
+            return rc;
+        }
+    }
+    rx_seq++;
+
+    if (!ret)
+        cnt_ack_msg++;
 
     return ret;
 }
@@ -355,6 +421,7 @@ int main(int argc, char **argv) {
            fi->fabric_attr->name, ep_name_buf);
 
     void *sendbuf = malloc(msg_size);
+    void *recvbuf = malloc(msg_size);
     // ret = fi_inject(ep, sendbuf, msg_size, remote_fi_addr);
     // if (ret != msg_size) {
     //     printf("error fi_inject\n");
@@ -364,6 +431,8 @@ int main(int argc, char **argv) {
     for (int i = 0; i < 1024; i++) {
         pp_tx(ep, sendbuf, msg_size, remote_fi_addr, &tx_ctx[0], txcq);
         printf("pp_tx %d\n", i);
+        pp_rx(ep, recvbuf, msg_size, &rx_ctx[0], rxcq);
+        printf("pp_rx %d\n", i);
     }
 
     return 0;
