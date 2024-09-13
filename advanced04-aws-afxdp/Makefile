@@ -16,5 +16,5 @@ fi_pingpong: fi_pingpong.c
 fi_udpgen: fi_udpgen.c
 	gcc -O3 fi_udpgen.c -o fi_udpgen -I /opt/amazon/efa/include -L /opt/amazon/efa/lib -lfabric
 
-clean_fi:
+fi_clean:
 	rm fi_pingpong fi_udpgen

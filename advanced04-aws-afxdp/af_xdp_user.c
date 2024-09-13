@@ -9,7 +9,8 @@
 #include <linux/icmpv6.h>
 #include <linux/if_ether.h>
 #include <linux/if_link.h>
-#include <linux/ipv6.h>
+#include <linux/ip.h>
+#include <linux/udp.h>
 #include <locale.h>
 #include <net/if.h>
 #include <ofi_mem.h>
@@ -282,30 +283,28 @@ static bool process_packet(struct xsk_socket_info *xsk,
     int ret;
     uint32_t tx_idx = 0;
     uint8_t tmp_mac[ETH_ALEN];
-    struct in6_addr tmp_ip;
+    __be32 tmp_ip;
+    uint16_t tmp_port;
     struct ethhdr *eth = (struct ethhdr *)pkt;
-    struct ipv6hdr *ipv6 = (struct ipv6hdr *)(eth + 1);
-    struct icmp6hdr *icmp = (struct icmp6hdr *)(ipv6 + 1);
-
-    if (ntohs(eth->h_proto) != ETH_P_IPV6 ||
-        len < (sizeof(*eth) + sizeof(*ipv6) + sizeof(*icmp)) ||
-        ipv6->nexthdr != IPPROTO_ICMPV6 ||
-        icmp->icmp6_type != ICMPV6_ECHO_REQUEST)
-        return false;
+    struct iphdr *iph = (struct iphdr *)(eth + 1);
+    struct udphdr *udph = (struct udphdr *)((unsigned char *)iph + (iph->ihl << 2));
 
     memcpy(tmp_mac, eth->h_dest, ETH_ALEN);
     memcpy(eth->h_dest, eth->h_source, ETH_ALEN);
     memcpy(eth->h_source, tmp_mac, ETH_ALEN);
 
-    memcpy(&tmp_ip, &ipv6->saddr, sizeof(tmp_ip));
-    memcpy(&ipv6->saddr, &ipv6->daddr, sizeof(tmp_ip));
-    memcpy(&ipv6->daddr, &tmp_ip, sizeof(tmp_ip));
+    memcpy(&tmp_ip, &iph->saddr, sizeof(tmp_ip));
+    memcpy(&iph->saddr, &iph->daddr, sizeof(tmp_ip));
+    memcpy(&iph->daddr, &tmp_ip, sizeof(tmp_ip));
 
-    icmp->icmp6_type = ICMPV6_ECHO_REPLY;
+    // Swap source and destination port
+    tmp_port = udph->source;
+    udph->source = udph->dest;
+    udph->dest = tmp_port;
 
-    csum_replace2(&icmp->icmp6_cksum,
-                  htons(ICMPV6_ECHO_REQUEST << 8),
-                  htons(ICMPV6_ECHO_REPLY << 8));
+    // Causing transmission erros, but why?
+    // iph->check = compute_ip_checksum(iph);
+    udph->check = 0;
 
     /* Here we sent the packet out of the receive port. Note that
      * we allocate one entry and schedule it. Your design would be
@@ -475,6 +474,7 @@ static void *stats_poll(void *arg) {
     return NULL;
 }
 
+static int sockfd;
 static void exit_application(int signal) {
     int err;
 
@@ -486,6 +486,7 @@ static void exit_application(int signal) {
     }
 
     signal = signal;
+    close(sockfd);
     global_exit = true;
 }
 
@@ -645,7 +646,7 @@ static void *send_fi_name(void *arg) {
            fi->fabric_attr->prov_name,
            fi->fabric_attr->name, ep_name_buf);
 
-    int sockfd, connfd, len;
+    int connfd, len;
     struct sockaddr_in servaddr, cli;
 
     // socket create and verification
@@ -677,23 +678,26 @@ static void *send_fi_name(void *arg) {
         printf("Server listening..\n");
     len = sizeof(cli);
 
-    // Accept the data packet from client and verification
-    connfd = accept(sockfd, (struct sockaddr *)&cli, &len);
-    if (connfd < 0) {
-        printf("server accept failed...\n");
-        exit(0);
-    } else
-        printf("server accept the client...\n");
+    while(1) {
+        // Accept the data packet from client and verification
+        connfd = accept(sockfd, (struct sockaddr *)&cli, &len);
+        if (connfd < 0) {
+            printf("server accept failed...\n");
+            exit(0);
+        } else
+            printf("server accept the client...\n");
 
-    ret = write(connfd, &addrlen, sizeof(addrlen));
-    if (ret != sizeof(addrlen)) {
-        printf("error write addrlen\n");
-        exit(0);
-    }
-    ret = write(connfd, local_name, addrlen);
-    if (ret != addrlen) {
-        printf("error write local_name\n");
-        exit(0);
+        ret = write(connfd, &addrlen, sizeof(addrlen));
+        if (ret != sizeof(addrlen)) {
+            printf("error write addrlen\n");
+            exit(0);
+        }
+        ret = write(connfd, local_name, addrlen);
+        if (ret != addrlen) {
+            printf("error write local_name\n");
+            exit(0);
+        }
+        close(connfd);
     }
     return ret;
 }

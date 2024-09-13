@@ -422,15 +422,11 @@ int main(int argc, char **argv) {
 
     void *sendbuf = malloc(msg_size);
     void *recvbuf = malloc(msg_size);
-    // ret = fi_inject(ep, sendbuf, msg_size, remote_fi_addr);
-    // if (ret != msg_size) {
-    //     printf("error fi_inject\n");
-    //     exit(0);
-    // }
 
     for (int i = 0; i < 1024; i++) {
         pp_tx(ep, sendbuf, msg_size, remote_fi_addr, &tx_ctx[0], txcq);
         printf("pp_tx %d\n", i);
+        sleep(1);
         pp_rx(ep, recvbuf, msg_size, &rx_ctx[0], rxcq);
         printf("pp_rx %d\n", i);
     }

@@ -19,7 +19,8 @@ sudo mv ena.ko /lib/modules/6.5.0-1022-aws/kernel/drivers/net/ethernet/amazon/en
 # Check version by modinfo ena
 
 # Can only use half of the queue, per ENA implementation: https://github.com/amzn/amzn-drivers/issues/240
-sudo ethtool -L enp39s0 combined 4 
+# sudo ethtool -L enp39s0 combined 4
+sudo ethtool -L enp39s0 combined 1
 sudo ifconfig enp39s0 mtu 3498 up
 
 # The -z flag forces zero-copy mode.  Without it, it will probably default to copy mode
