@@ -53,6 +53,104 @@ static int print_short_info(struct fi_info *info) {
     return EXIT_SUCCESS;
 }
 
+/*******************************************************************************
+ *                                      Data Messaging
+ ******************************************************************************/
+
+static int pp_cq_readerr(struct fid_cq *cq) {
+    struct fi_cq_err_entry cq_err = {0};
+    int ret;
+
+    ret = fi_cq_readerr(cq, &cq_err, 0);
+    if (ret < 0) {
+        PP_PRINTERR("fi_cq_readerr", ret);
+    } else {
+        PP_ERR("cq_readerr: %s",
+               fi_cq_strerror(cq, cq_err.prov_errno, cq_err.err_data,
+                              NULL, 0));
+        ret = -cq_err.err;
+    }
+    return ret;
+}
+
+static int pp_get_cq_comp(struct fid_cq *cq, uint64_t *cur, uint64_t total,
+                          int timeout_sec) {
+    struct fi_cq_err_entry comp;
+    uint64_t a = 0, b = 0;
+    int ret = 0;
+
+    if (timeout_sec >= 0)
+        a = pp_gettime_us();
+
+    do {
+        ret = fi_cq_read(cq, &comp, 1);
+        if (ret > 0) {
+            if (timeout_sec >= 0)
+                a = pp_gettime_us();
+
+            (*cur)++;
+        } else if (ret < 0 && ret != -FI_EAGAIN) {
+            if (ret == -FI_EAVAIL) {
+                ret = pp_cq_readerr(cq);
+                (*cur)++;
+            } else {
+                PP_PRINTERR("pp_get_cq_comp", ret);
+            }
+
+            return ret;
+        } else if (timeout_sec >= 0) {
+            b = pp_gettime_us();
+            if ((b - a) / 1000000 > timeout_sec) {
+                fprintf(stderr, "%ds timeout expired\n",
+                        timeout_sec);
+                return -FI_ENODATA;
+            }
+        }
+    } while (total - *cur > 0);
+
+    return 0;
+}
+
+uint64_t tx_seq, rx_seq, tx_cq_cntr, rx_cq_cntr;
+
+static int pp_get_rx_comp(struct fid_cq *rxcq, uint64_t total) {
+    int ret = FI_SUCCESS;
+    ret = pp_get_cq_comp(rxcq, &(rx_cq_cntr), total, -1);
+    return ret;
+}
+
+static int pp_get_tx_comp(struct fid_cq *txcq, uint64_t total) {
+    int ret;
+    ret = pp_get_cq_comp(txcq, &(tx_cq_cntr), total, -1);
+    return ret;
+}
+
+static ssize_t pp_tx(struct fid_ep *ep, void *tx_buf, size_t size, fi_addr_t remote_fi_addr, void *tx_ctx, struct fid_cq *txcq) {
+    ssize_t ret, rc;
+
+    while (1) {
+        ret = (int)fi_send(ep, tx_buf, size, NULL, remote_fi_addr, tx_ctx);
+        if (!ret)
+            break;
+
+        if (ret != -FI_EAGAIN) {
+            PP_PRINTERR("transmit", ret);
+            return ret;
+        }
+
+        rc = pp_get_tx_comp(txcq, tx_seq);
+        if (rc && rc != -FI_EAGAIN) {
+            PP_ERR("Failed to get transmit completion");
+            return rc;
+        }
+    }
+    tx_seq++;
+
+    ret = pp_get_tx_comp(txcq, tx_seq);
+
+    return ret;
+}
+
 char *dst_addr = "172.31.76.70";
 uint16_t dst_port = 8889;
 uint16_t oob_dst_port = 8890;
@@ -193,7 +291,6 @@ int main(int argc, char **argv) {
     char ep_name_buf[128];
     size_t size = 0;
     fi_av_straddr(av, local_name, NULL, &size);
-
     fi_av_straddr(av, local_name, ep_name_buf, &size);
 
     printf("OFI EP prov %s name %s straddr %s\n",
@@ -232,6 +329,10 @@ int main(int argc, char **argv) {
     }
     rem_name = malloc(size);
     ret = read(sockfd, rem_name, size);
+    if (ret != size) {
+        printf("rem_name reading failure\n");
+        exit(0);
+    }
 
     ret = fi_av_insert(av, rem_name, 1, &remote_fi_addr, 0, NULL);
     if (ret < 0) {
@@ -245,11 +346,24 @@ int main(int argc, char **argv) {
         return -EXIT_FAILURE;
     }
 
+    size = 0;
+    fi_av_straddr(av, rem_name, NULL, &size);
+    fi_av_straddr(av, rem_name, ep_name_buf, &size);
+
+    printf("Remote OFI EP prov %s name %s straddr %s\n",
+           fi->fabric_attr->prov_name,
+           fi->fabric_attr->name, ep_name_buf);
+
     void *sendbuf = malloc(msg_size);
-    ret = fi_inject(ep, sendbuf, msg_size, remote_fi_addr);
-    if (ret != msg_size) {
-        printf("error fi_inject\n");
-        exit(0);
+    // ret = fi_inject(ep, sendbuf, msg_size, remote_fi_addr);
+    // if (ret != msg_size) {
+    //     printf("error fi_inject\n");
+    //     exit(0);
+    // }
+
+    for (int i = 0; i < 1024; i++) {
+        pp_tx(ep, sendbuf, msg_size, remote_fi_addr, &tx_ctx[0], txcq);
+        printf("pp_tx %d\n", i);
     }
 
     return 0;
