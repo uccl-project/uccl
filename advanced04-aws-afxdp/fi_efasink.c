@@ -381,8 +381,7 @@ int main(int argc, char **argv) {
            fi->fabric_attr->prov_name,
            fi->fabric_attr->name, ep_name_buf);
 
-    // OOB communication to get the remote address
-    int sockfd, connfd;
+    int sockfd, connfd, len;
     struct sockaddr_in servaddr, cli;
 
     // socket create and verification
@@ -396,31 +395,53 @@ int main(int argc, char **argv) {
 
     // assign IP, PORT
     servaddr.sin_family = AF_INET;
-    servaddr.sin_addr.s_addr = inet_addr(dst_addr);
+    servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
     servaddr.sin_port = htons(oob_dst_port);
 
-    // connect the client socket to server socket
-    if (connect(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr)) != 0) {
-        printf("connection with the server failed...\n");
+    // Binding newly created socket to given IP and verification
+    if ((bind(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr))) != 0) {
+        printf("socket bind failed...\n");
         exit(0);
     } else
-        printf("connected to the server..\n");
+        printf("Socket successfully binded..\n");
 
-    ret = read(sockfd, &size, sizeof(size));
-    if (ret != sizeof(size)) {
-        printf("size reading failure\n");
-        exit(0);
-    }
-    rem_name = malloc(size);
-    ret = read(sockfd, rem_name, size);
-    if (ret != size) {
-        printf("rem_name reading failure\n");
+    int flags = 1;
+    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &flags, sizeof(int)) != 0) {
+        printf("socket reuse failed...\n");
         exit(0);
     }
 
+    // Now server is ready to listen and verification
+    if ((listen(sockfd, 5)) != 0) {
+        printf("Listen failed...\n");
+        exit(0);
+    } else
+        printf("Server listening..\n");
+    len = sizeof(cli);
+
+    // Accept the data packet from client and verification
+    connfd = accept(sockfd, (struct sockaddr *)&cli, &len);
+    if (connfd < 0) {
+        printf("server accept failed...\n");
+        exit(0);
+    } else
+        printf("server accept the client...\n");
+
+    ret = write(connfd, &addrlen, sizeof(addrlen));
+    if (ret != sizeof(addrlen)) {
+        printf("error write addrlen\n");
+        exit(0);
+    }
+    ret = write(connfd, local_name, addrlen);
+    if (ret != addrlen) {
+        printf("error write local_name\n");
+        exit(0);
+    }
+    
     // remote EFA ipv6: fe80::c57:dcff:fea5:ce91
     unsigned char rem_name_hex[32] = {0xfe, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xc, 0x57, 0xdc, 0xff, 0xfe, 0xa5, 0xce, 0x91, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0};
 
+    rem_name = malloc(32);
     memcpy(rem_name, rem_name_hex, sizeof(rem_name_hex));
 
     ret = fi_av_insert(av, rem_name, 1, &remote_fi_addr, 0, NULL);
