@@ -217,39 +217,43 @@ static ssize_t pp_rx(struct fid_ep *ep, void *rx_buf, size_t size, void *rx_ctx,
     return ret;
 }
 
-char *dst_addr = "172.31.76.70";
+char *dst_addr = "172.31.38.12";
 uint16_t dst_port = 8889;
 uint16_t oob_dst_port = 8890;
 size_t msg_size = 128;
 
+// declare globally to get all zeros
+struct fi_info *fi_pep, *fi, *hints;
+struct fid_fabric *fabric;
+struct fi_eq_attr eq_attr;
+struct fid_eq *eq;
+struct fid_domain *domain;
+struct fid_ep *ep;
+struct fi_cq_attr cq_attr;
+struct fid_cq *txcq, *rxcq;
+struct fi_av_attr av_attr;
+struct fid_av *av;
+fi_addr_t local_fi_addr, remote_fi_addr;
+void *local_name, *rem_name;
+struct fi_context tx_ctx[2], rx_ctx[2];
+
 int main(int argc, char **argv) {
     int ret = EXIT_SUCCESS;
-
-    struct fi_info *fi_pep, *fi, *hints;
-    struct fid_fabric *fabric;
-    struct fi_eq_attr eq_attr;
-    struct fid_eq *eq;
-    struct fid_domain *domain;
-    struct fid_ep *ep;
-    struct fi_cq_attr cq_attr;
-    struct fid_cq *txcq, *rxcq;
-    struct fi_av_attr av_attr;
-    struct fid_av *av;
-    fi_addr_t local_fi_addr, remote_fi_addr;
-    void *local_name, *rem_name;
-    struct fi_context tx_ctx[2], rx_ctx[2];
 
     hints = fi_allocinfo();
     if (!hints)
         return EXIT_FAILURE;
+    hints->mode = ~0;
+    hints->domain_attr->mode = ~0;
+    hints->domain_attr->mr_mode = ~(FI_MR_BASIC | FI_MR_SCALABLE);
 
     hints->ep_attr->type = FI_EP_DGRAM;
     hints->caps = FI_MSG;
-    hints->mode = FI_CONTEXT;
-    hints->domain_attr->mr_mode = FI_MR_UNSPEC;
-    hints->domain_attr->name = "enp39s0";
-    hints->fabric_attr->name = "172.31.64.0/20";
-    hints->fabric_attr->prov_name = "udp";  // "sockets" -> TCP
+    hints->mode = FI_CONTEXT | FI_CONTEXT2 | FI_MSG_PREFIX;
+	hints->domain_attr->mr_mode = FI_MR_LOCAL | OFI_MR_BASIC_MAP;
+    hints->domain_attr->name = "rdmap0s31-dgrm";
+    // hints->fabric_attr->name = "172.31.64.0/20";
+    hints->fabric_attr->prov_name = "efa";  // "sockets" -> TCP, "udp" -> UDP
 
     ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION),
                      NULL, NULL, 0, hints, &fi);
@@ -265,6 +269,7 @@ int main(int argc, char **argv) {
         return ret;
     }
 
+    eq_attr.wait_obj = FI_WAIT_UNSPEC;
     ret = fi_eq_open(fabric, &(eq_attr), &(eq), NULL);
     if (ret) {
         PP_PRINTERR("fi_eq_open", ret);

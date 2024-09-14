@@ -541,7 +541,7 @@ static void *send_fi_name(void *arg) {
     hints->mode = FI_CONTEXT;
     hints->domain_attr->mr_mode = FI_MR_UNSPEC;
     hints->domain_attr->name = "enp39s0";
-    hints->fabric_attr->name = "172.31.64.0/20";
+    // hints->fabric_attr->name = "172.31.64.0/20";
     hints->fabric_attr->prov_name = "udp";  // "sockets" -> TCP
 
     ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION),

@@ -217,7 +217,7 @@ static ssize_t pp_rx(struct fid_ep *ep, void *rx_buf, size_t size, void *rx_ctx,
     return ret;
 }
 
-char *dst_addr = "172.31.76.70";
+char *dst_addr = "172.31.38.12";
 uint16_t dst_port = 8889;
 uint16_t oob_dst_port = 8890;
 size_t msg_size = 128;
@@ -248,7 +248,7 @@ int main(int argc, char **argv) {
     hints->mode = FI_CONTEXT;
     hints->domain_attr->mr_mode = FI_MR_UNSPEC;
     hints->domain_attr->name = "enp39s0";
-    hints->fabric_attr->name = "172.31.64.0/20";
+    // hints->fabric_attr->name = "172.31.64.0/20";
     hints->fabric_attr->prov_name = "udp";  // "sockets" -> TCP
 
     ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION),
