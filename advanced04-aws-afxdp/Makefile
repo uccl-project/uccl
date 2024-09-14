@@ -11,7 +11,7 @@ include $(COMMON_DIR)/common.mk
 COMMON_OBJS := $(COMMON_DIR)/common_params.o
 COMMON_OBJS += $(COMMON_DIR)/common_user_bpf_xdp.o
 
-fi: fi_pingpong fi_info fi_udpgen fi_efagen
+fi: fi_pingpong fi_info fi_udpgen fi_efagen fi_efasink
 
 fi_pingpong: fi_pingpong.c
 	gcc -O3 fi_pingpong.c -o fi_pingpong $(FI_FLAGS)
@@ -25,5 +25,8 @@ fi_udpgen: fi_udpgen.c
 fi_efagen: fi_efagen.c
 	gcc -O3 -g fi_efagen.c -o fi_efagen $(FI_FLAGS)
 
+fi_efasink: fi_efasink.c
+	gcc -O3 -g fi_efasink.c -o fi_efasink $(FI_FLAGS)
+
 fi_clean:
-	rm fi_pingpong fi_info fi_udpgen fi_efagen
+	rm fi_pingpong fi_info fi_udpgen fi_efagen fi_efasink

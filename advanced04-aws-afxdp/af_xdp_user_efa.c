@@ -285,29 +285,29 @@ static bool process_packet(struct xsk_socket_info *xsk,
     int ret;
     uint32_t tx_idx = 0;
     uint8_t tmp_mac[ETH_ALEN];
-    struct in6_addr tmp_ip;
-    struct ethhdr *eth = (struct ethhdr *) pkt;
-    struct ipv6hdr *ipv6 = (struct ipv6hdr *) (eth + 1);
-    // struct icmp6hdr *icmp = (struct icmp6hdr *) (ipv6 + 1);
-
+    __be32 tmp_ip;
+    uint16_t tmp_port;
+    struct ethhdr *eth = (struct ethhdr *)pkt;
+    struct iphdr *iph = (struct iphdr *)(eth + 1);
+    struct udphdr *udph = (struct udphdr *)((unsigned char *)iph + (iph->ihl << 2));
+    
     printf("ntohs(eth->h_proto) = %x\n", ntohs(eth->h_proto));
-
-    if (ntohs(eth->h_proto) != ETH_P_IPV6)
-        return false;
+    for (int i = 0; i < ETH_ALEN; i++) {
+        printf("%x:", (int)eth->h_source[i]);
+    }
+    printf("\n");
+    for (int i = 0; i < sizeof(tmp_ip); i++) {
+        printf("%hu.", (uint16_t)((unsigned char*)&iph->saddr)[i]);
+    }
+    printf("\n");
 
     memcpy(tmp_mac, eth->h_dest, ETH_ALEN);
     memcpy(eth->h_dest, eth->h_source, ETH_ALEN);
     memcpy(eth->h_source, tmp_mac, ETH_ALEN);
 
-    memcpy(&tmp_ip, &ipv6->saddr, sizeof(tmp_ip));
-    memcpy(&ipv6->saddr, &ipv6->daddr, sizeof(tmp_ip));
-    memcpy(&ipv6->daddr, &tmp_ip, sizeof(tmp_ip));
-
-    // icmp->icmp6_type = ICMPV6_ECHO_REPLY;
-
-    // csum_replace2(&icmp->icmp6_cksum,
-    //             htons(ICMPV6_ECHO_REQUEST << 8),
-    //             htons(ICMPV6_ECHO_REPLY << 8));
+    memcpy(&tmp_ip, &iph->saddr, sizeof(tmp_ip));
+    memcpy(&iph->saddr, &iph->daddr, sizeof(tmp_ip));
+    memcpy(&iph->daddr, &tmp_ip, sizeof(tmp_ip));
 
     /* Here we sent the packet out of the receive port. Note that
      * we allocate one entry and schedule it. Your design would be
