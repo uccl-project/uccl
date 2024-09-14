@@ -25,7 +25,7 @@ sudo ifconfig enp39s0 mtu 3498 up
 
 # The -z flag forces zero-copy mode.  Without it, it will probably default to copy mode
 # -p means using polling with timeout of 1ms.
-sudo ./af_xdp_user -d enp39s0 -z
+sudo ./af_xdp_user -d enp39s0 --filename af_xdp_kern.o -z
 
 # For client machines
 # Start followers first. Run this on each follower client machine: ./follower [num threads] [follower ip]

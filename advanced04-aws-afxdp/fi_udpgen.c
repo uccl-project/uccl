@@ -420,13 +420,16 @@ int main(int argc, char **argv) {
            fi->fabric_attr->prov_name,
            fi->fabric_attr->name, ep_name_buf);
 
+#define MAGIC_NUMBER 0xdeadbeef
+
     void *sendbuf = malloc(msg_size);
+    *(uint64_t*)sendbuf = MAGIC_NUMBER;
     void *recvbuf = malloc(msg_size);
 
     for (int i = 0; i < 1024; i++) {
         pp_tx(ep, sendbuf, msg_size, remote_fi_addr, &tx_ctx[0], txcq);
         printf("pp_tx %d\n", i);
-        sleep(1);
+        // sleep(1);
         pp_rx(ep, recvbuf, msg_size, &rx_ctx[0], rxcq);
         printf("pp_rx %d\n", i);
     }

@@ -174,7 +174,8 @@ static uint64_t xsk_umem_free_frames(struct xsk_socket_info *xsk) {
 }
 
 static struct xsk_socket_info *xsk_configure_socket(struct config *cfg,
-                                                    struct xsk_umem_info *umem) {
+                                                    struct xsk_umem_info *umem,
+                                                    int queue_id) {
     struct xsk_socket_config xsk_cfg;
     struct xsk_socket_info *xsk_info;
     uint32_t idx;
@@ -193,7 +194,7 @@ static struct xsk_socket_info *xsk_configure_socket(struct config *cfg,
     xsk_cfg.bind_flags = cfg->xsk_bind_flags;
     xsk_cfg.libbpf_flags = (custom_xsk) ? XSK_LIBBPF_FLAGS__INHIBIT_PROG_LOAD : 0;
     ret = xsk_socket__create(&xsk_info->xsk, cfg->ifname,
-                             cfg->xsk_if_queue, umem->umem, &xsk_info->rx,
+                             /*cfg->xsk_if_queue*/ queue_id, umem->umem, &xsk_info->rx,
                              &xsk_info->tx, &xsk_cfg);
     if (ret)
         goto error_exit;
@@ -474,7 +475,6 @@ static void *stats_poll(void *arg) {
     return NULL;
 }
 
-static int sockfd;
 static void exit_application(int signal) {
     int err;
 
@@ -486,7 +486,6 @@ static void exit_application(int signal) {
     }
 
     signal = signal;
-    close(sockfd);
     global_exit = true;
 }
 
@@ -646,7 +645,7 @@ static void *send_fi_name(void *arg) {
            fi->fabric_attr->prov_name,
            fi->fabric_attr->name, ep_name_buf);
 
-    int connfd, len;
+    int sockfd, connfd, len;
     struct sockaddr_in servaddr, cli;
 
     // socket create and verification
@@ -670,6 +669,12 @@ static void *send_fi_name(void *arg) {
     } else
         printf("Socket successfully binded..\n");
 
+    int flags = 1;
+    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &flags, sizeof(int)) != 0) {
+        printf("socket reuse failed...\n");
+        exit(0);
+    }
+
     // Now server is ready to listen and verification
     if ((listen(sockfd, 5)) != 0) {
         printf("Listen failed...\n");
@@ -678,7 +683,7 @@ static void *send_fi_name(void *arg) {
         printf("Server listening..\n");
     len = sizeof(cli);
 
-    while(1) {
+    while (1) {
         // Accept the data packet from client and verification
         connfd = accept(sockfd, (struct sockaddr *)&cli, &len);
         if (connfd < 0) {
@@ -802,7 +807,7 @@ int main(int argc, char **argv) {
     }
 
     /* Open and configure the AF_XDP (xsk) socket */
-    xsk_socket = xsk_configure_socket(&cfg, umem);
+    xsk_socket = xsk_configure_socket(&cfg, umem, 0);
     if (xsk_socket == NULL) {
         fprintf(stderr, "ERROR: Can't setup AF_XDP socket \"%s\"\n",
                 strerror(errno));

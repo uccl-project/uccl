@@ -9,6 +9,7 @@
 
 #define SERVER_PORT 8889
 #define UDP_PROTO 17
+#define MAGIC_NUMBER 0xdeadbeef
 #define htons(x) ((__be16)___constant_swab16((x)))
 
 struct {
@@ -40,9 +41,14 @@ int xdp_sock_prog(struct xdp_md *ctx)
     // Let AFXDP process all UDP traffic!
     if (ip->protocol != UDP_PROTO) return XDP_PASS;
 
-    // struct udphdr *udp = (struct udphdr *)(data + sizeof(*eth) + sizeof(*ip));
-    // if (udp + 1 > data_end) return XDP_PASS;
+    struct udphdr *udp = (struct udphdr *)((char *)ip + (ip->ihl << 2));
+    if (udp + 1 > data_end) return XDP_PASS;
+    if (udp + sizeof(struct udphdr) > data_end) return XDP_PASS;
 
+    char* payload = (char*)udp + sizeof(struct udphdr);
+    if (*(__u64*)payload != MAGIC_NUMBER) return XDP_PASS;
+
+    // How to specify PORT in libfabric UDP?
     // if (udp->dest != htons(SERVER_PORT)) return XDP_PASS;
 
     int index = ctx->rx_queue_index;
