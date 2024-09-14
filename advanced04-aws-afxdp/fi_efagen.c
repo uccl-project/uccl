@@ -53,6 +53,22 @@ static int print_short_info(struct fi_info *info) {
     return EXIT_SUCCESS;
 }
 
+// declare globally to get all zeros
+struct fi_info *fi_pep, *fi, *hints;
+struct fid_fabric *fabric;
+struct fi_eq_attr eq_attr;
+struct fid_eq *eq;
+struct fid_domain *domain;
+struct fid_ep *ep;
+struct fi_cq_attr cq_attr;
+struct fid_cq *txcq, *rxcq;
+struct fi_av_attr av_attr;
+struct fid_mr *mr;
+struct fid_av *av;
+fi_addr_t local_fi_addr, remote_fi_addr;
+void *local_name, *rem_name;
+struct fi_context tx_ctx[2], rx_ctx[2];
+
 /*******************************************************************************
  *                                      Data Messaging
  ******************************************************************************/
@@ -130,7 +146,7 @@ static ssize_t pp_tx(struct fid_ep *ep, void *tx_buf, size_t size, fi_addr_t rem
     ssize_t ret, rc;
 
     while (1) {
-        ret = (int)fi_send(ep, tx_buf, size, NULL, remote_fi_addr, tx_ctx);
+        ret = (int)fi_send(ep, tx_buf, size, fi_mr_desc(mr), remote_fi_addr, tx_ctx);
         if (!ret)
             break;
 
@@ -194,7 +210,7 @@ static ssize_t pp_rx(struct fid_ep *ep, void *rx_buf, size_t size, void *rx_ctx,
      */
 
     while (1) {
-        ret = (int)fi_recv(ep, rx_buf, size, NULL, 0, rxcq);
+        ret = (int)fi_recv(ep, rx_buf, size, fi_mr_desc(mr), 0, rxcq);
         if (!ret)
             break;
 
@@ -217,25 +233,12 @@ static ssize_t pp_rx(struct fid_ep *ep, void *rx_buf, size_t size, void *rx_ctx,
     return ret;
 }
 
+#define PP_MR_KEY 0xC0DE
+
 char *dst_addr = "172.31.38.12";
 uint16_t dst_port = 8889;
 uint16_t oob_dst_port = 8890;
 size_t msg_size = 128;
-
-// declare globally to get all zeros
-struct fi_info *fi_pep, *fi, *hints;
-struct fid_fabric *fabric;
-struct fi_eq_attr eq_attr;
-struct fid_eq *eq;
-struct fid_domain *domain;
-struct fid_ep *ep;
-struct fi_cq_attr cq_attr;
-struct fid_cq *txcq, *rxcq;
-struct fi_av_attr av_attr;
-struct fid_av *av;
-fi_addr_t local_fi_addr, remote_fi_addr;
-void *local_name, *rem_name;
-struct fi_context tx_ctx[2], rx_ctx[2];
 
 int main(int argc, char **argv) {
     int ret = EXIT_SUCCESS;
@@ -250,7 +253,7 @@ int main(int argc, char **argv) {
     hints->ep_attr->type = FI_EP_DGRAM;
     hints->caps = FI_MSG;
     hints->mode = FI_CONTEXT | FI_CONTEXT2 | FI_MSG_PREFIX;
-	hints->domain_attr->mr_mode = FI_MR_LOCAL | OFI_MR_BASIC_MAP;
+    hints->domain_attr->mr_mode = FI_MR_LOCAL | OFI_MR_BASIC_MAP;
     hints->domain_attr->name = "rdmap0s31-dgrm";
     // hints->fabric_attr->name = "172.31.64.0/20";
     hints->fabric_attr->prov_name = "efa";  // "sockets" -> TCP, "udp" -> UDP
@@ -347,6 +350,16 @@ int main(int argc, char **argv) {
         return ret;
     }
 
+    printf("addrlen = %lu\n", addrlen);
+    for (int i = 0; i < addrlen; i++) {
+        printf("%d ", (int)((char *)local_name)[i]);
+    }
+    printf("\n");
+    for (int i = 0; i < addrlen; i++) {
+        printf("0x%x, ", (int)((char *)local_name)[i]);
+    }
+    printf("\n");
+
     ret = fi_av_insert(av, local_name, 1, &local_fi_addr, 0, NULL);
     if (ret < 0) {
         PP_PRINTERR("fi_av_insert", ret);
@@ -405,6 +418,11 @@ int main(int argc, char **argv) {
         exit(0);
     }
 
+    // fe80::c0e:12ff:fe8f:a337
+    unsigned char rem_name_hex[32] = {0xfe, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xc, 0x0e, 0x12, 0xff, 0xfe, 0x8f, 0xa3, 0x37, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0};
+
+    memcpy(rem_name, rem_name_hex, sizeof(rem_name_hex));
+
     ret = fi_av_insert(av, rem_name, 1, &remote_fi_addr, 0, NULL);
     if (ret < 0) {
         PP_PRINTERR("fi_av_insert", ret);
@@ -427,16 +445,28 @@ int main(int argc, char **argv) {
 
 #define MAGIC_NUMBER 0xdeadbeef
 
-    void *sendbuf = malloc(msg_size);
-    *(uint64_t*)sendbuf = MAGIC_NUMBER;
-    void *recvbuf = malloc(msg_size);
+    void *sendbuf;
+    int alignment = 4096;
+    ret = ofi_memalign(&(sendbuf), (size_t)alignment, 2 * msg_size * alignment);
+    if (ret) {
+        PP_PRINTERR("ofi_memalign", ret);
+        return ret;
+    }
+    *(uint64_t *)sendbuf = MAGIC_NUMBER;
+    void *recvbuf = (char *)sendbuf + msg_size * alignment;
+
+    ret = fi_mr_reg(domain, sendbuf, 2 * msg_size * alignment, FI_SEND | FI_RECV, 0, PP_MR_KEY, 0, &(mr), NULL);
+    if (ret) {
+        PP_PRINTERR("fi_mr_reg", ret);
+        return ret;
+    }
 
     for (int i = 0; i < 1024; i++) {
         pp_tx(ep, sendbuf, msg_size, remote_fi_addr, &tx_ctx[0], txcq);
         printf("pp_tx %d\n", i);
         // sleep(1);
-        pp_rx(ep, recvbuf, msg_size, &rx_ctx[0], rxcq);
-        printf("pp_rx %d\n", i);
+        // pp_rx(ep, recvbuf, msg_size, &rx_ctx[0], rxcq);
+        // printf("pp_rx %d\n", i);
     }
 
     return 0;

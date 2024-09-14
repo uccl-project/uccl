@@ -27,6 +27,10 @@ sudo ifconfig enp39s0 mtu 3498 up
 # -p means using polling with timeout of 1ms.
 sudo ./af_xdp_user -d enp39s0 --filename af_xdp_kern.o -z
 
+# for efa
+sudo ./af_xdp_user_efa -d enp39s0 --filename af_xdp_kern_efa.o -z
+
+
 # For client machines
 # Start followers first. Run this on each follower client machine: ./follower [num threads] [follower ip]
 # Then start leader: ./leader [num_followers] [num leader threads] [follower ip 1] [follower ip 2] ... [follower ip n]

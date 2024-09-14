@@ -75,4 +75,5 @@ fi_pingpong
 fi_info
 fi_udpgen
 fi_efagen
+af_xdp_user_efa
 .vscode/settings.json

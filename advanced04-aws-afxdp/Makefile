@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: (GPL-2.0 OR BSD-2-Clause)
 
-XDP_TARGETS  := af_xdp_kern
-USER_TARGETS := af_xdp_user
+XDP_TARGETS  := af_xdp_kern af_xdp_kern_efa
+USER_TARGETS := af_xdp_user af_xdp_user_efa
 FI_FLAGS = -I /opt/amazon/efa/include -L /opt/amazon/efa/lib -lfabric
 LDLIBS += -lpthread $(FI_FLAGS)
 
@@ -23,7 +23,7 @@ fi_udpgen: fi_udpgen.c
 	gcc -O3 fi_udpgen.c -o fi_udpgen $(FI_FLAGS)
 
 fi_efagen: fi_efagen.c
-	gcc -O3 fi_efagen.c -o fi_efagen $(FI_FLAGS)
+	gcc -O3 -g fi_efagen.c -o fi_efagen $(FI_FLAGS)
 
 fi_clean:
 	rm fi_pingpong fi_info fi_udpgen fi_efagen
