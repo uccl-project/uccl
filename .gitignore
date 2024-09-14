@@ -72,4 +72,7 @@ xdp_sample_pkts_user
 config.mk
 
 fi_pingpong
+fi_info
 fi_udpgen
+fi_efagen
+.vscode/settings.json
