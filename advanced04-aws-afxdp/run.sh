@@ -19,16 +19,16 @@ sudo mv ena.ko /lib/modules/6.5.0-1022-aws/kernel/drivers/net/ethernet/amazon/en
 # Check version by modinfo ena
 
 # Can only use half of the queue, per ENA implementation: https://github.com/amzn/amzn-drivers/issues/240
-# sudo ethtool -L enp39s0 combined 4
-sudo ethtool -L enp39s0 combined 1
-sudo ifconfig enp39s0 mtu 3498 up
+# sudo ethtool -L ens5 combined 4
+sudo ethtool -L ens5 combined 1
+sudo ifconfig ens5 mtu 3498 up
 
 # The -z flag forces zero-copy mode.  Without it, it will probably default to copy mode
 # -p means using polling with timeout of 1ms.
-sudo ./af_xdp_user -d enp39s0 --filename af_xdp_kern.o -z
+sudo ./af_xdp_user -d ens5 --filename af_xdp_kern.o -z
 
 # for efa
-sudo ./af_xdp_user_efa -d enp39s0 --filename af_xdp_kern_efa.o -z
+sudo ./af_xdp_user_efa -d ens5 --filename af_xdp_kern_efa.o -z
 
 
 # For client machines
@@ -38,7 +38,7 @@ sudo ./af_xdp_user_efa -d enp39s0 --filename af_xdp_kern_efa.o -z
 
 # sudo systemctl stop irqbalance
 
-# (let CPU=0; cd /sys/class/net/enp39s0/device/msi_irqs/;
+# (let CPU=0; cd /sys/class/net/ens5/device/msi_irqs/;
 #   for IRQ in *; do
 #     echo $CPU | sudo tee /proc/irq/$IRQ/smp_affinity_list
 #     # let CPU=$(((CPU+1)%ncpu))

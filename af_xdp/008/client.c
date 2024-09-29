@@ -32,23 +32,27 @@
 #include <xdp/libxdp.h>
 #include <xdp/xsk.h>
 
-#define NUM_CPUS 4
+#define NUM_CPUS 1
 
-const char* INTERFACE_NAME = "enp8s0f0";
+const char* INTERFACE_NAME = "ens5";
 
-const uint8_t CLIENT_ETHERNET_ADDRESS[] = {0xa0, 0x36, 0x9f, 0x68, 0xeb, 0x98};
+const uint8_t SERVER_ETHERNET_ADDRESS[] = {0x0e, 0x47, 0x06, 0x90, 0x9a, 0xc5};
 
-const uint8_t SERVER_ETHERNET_ADDRESS[] = {0xa0, 0x36, 0x9f, 0x1e, 0x1a, 0xec};
+const uint8_t CLIENT_ETHERNET_ADDRESS[] = {0x0e, 0x8c, 0xef, 0x4e, 0x54, 0xa3};
 
-const uint32_t SERVER_IPV4_ADDRESS = 0xc0a8b77c;  // 192.168.183.124
+const uint32_t SERVER_IPV4_ADDRESS = 0xac1f24a4;  // 172.31.36.164
 
 const uint16_t SERVER_PORT = 40000;
+
+const uint32_t CLIENT_IPV4_ADDRESS = 0xac1f21ce;  // 172.31.33.206
 
 const uint16_t CLIENT_PORT = 40000;
 
 const int PAYLOAD_BYTES = 32;
 
 const int SEND_BATCH_SIZE = 256;
+
+const int RECV_BATCH_SIZE = 256;
 
 #define NUM_FRAMES (4096 * 16)
 
@@ -59,6 +63,7 @@ const int SEND_BATCH_SIZE = 256;
 struct socket_t {
     void* buffer;
     struct xsk_umem* umem;
+    struct xsk_ring_cons recv_queue;
     struct xsk_ring_prod send_queue;
     struct xsk_ring_cons complete_queue;
     struct xsk_ring_prod fill_queue;  // not used
@@ -189,15 +194,15 @@ int client_init(struct client_t* client, const char* interface_name) {
 
         memset(&xsk_config, 0, sizeof(xsk_config));
 
-        xsk_config.rx_size = 0;
+        xsk_config.rx_size = XSK_RING_CONS__DEFAULT_NUM_DESCS;
         xsk_config.tx_size = XSK_RING_PROD__DEFAULT_NUM_DESCS;
         xsk_config.xdp_flags = XDP_ZEROCOPY;          // force zero copy mode
-        xsk_config.bind_flags = XDP_USE_NEED_WAKEUP;  // manually wake up the driver when it needs to do work to send packets
+        // xsk_config.bind_flags = XDP_USE_NEED_WAKEUP;  // manually wake up the driver when it needs to do work to send packets
         xsk_config.libbpf_flags = XSK_LIBBPF_FLAGS__INHIBIT_PROG_LOAD;
 
         int queue_id = i;
 
-        ret = xsk_socket__create(&client->socket[i].xsk, interface_name, queue_id, client->socket[i].umem, NULL, &client->socket[i].send_queue, &xsk_config);
+        ret = xsk_socket__create(&client->socket[i].xsk, interface_name, queue_id, client->socket[i].umem, &client->socket[i].recv_queue, &client->socket[i].send_queue, &xsk_config);
         if (ret) {
             printf("\nerror: could not create xsk socket [%d]\n\n", queue_id);
             return 1;
@@ -379,8 +384,8 @@ int client_generate_packet(void* data, int payload_bytes, uint32_t counter) {
     ip->ttl = 64;
     ip->tot_len = htons(sizeof(struct iphdr) + sizeof(struct udphdr) + payload_bytes);
     ip->protocol = IPPROTO_UDP;
-    ip->saddr = 0xc0a80000 | (counter & 0xFF);  // 192.168.*.*
-    ip->daddr = SERVER_IPV4_ADDRESS;
+    ip->saddr = htonl(CLIENT_IPV4_ADDRESS);
+    ip->daddr = htonl(SERVER_IPV4_ADDRESS);
     ip->check = 0;
     ip->check = ipv4_checksum(ip, sizeof(struct iphdr));
 
@@ -403,8 +408,23 @@ int client_generate_packet(void* data, int payload_bytes, uint32_t counter) {
 }
 
 void socket_update(struct socket_t* socket, int queue_id) {
+    // Check any packet received, in order to drive packet receiving in the kernel.
+
+    uint32_t idx_rx = 0, rcvd;
+    rcvd = xsk_ring_cons__peek(&socket->recv_queue, RECV_BATCH_SIZE, &idx_rx);
+    if (rcvd) {
+        for (int i = 0; i < rcvd; i++) {
+            uint64_t addr = xsk_ring_cons__rx_desc(&socket->recv_queue, idx_rx)->addr;
+            uint32_t len = xsk_ring_cons__rx_desc(&socket->recv_queue, idx_rx++)->len;
+            // Doing some packet processing here...
+            socket_free_frame(socket, addr);
+        }
+        xsk_ring_cons__release(&socket->recv_queue, rcvd);
+    }
+
     // don't do anything if we don't have enough free packets to send a batch
 
+    printf("socket->num_frames = %u\n", socket->num_frames);
     if (socket->num_frames < SEND_BATCH_SIZE)
         return;
 
@@ -412,9 +432,14 @@ void socket_update(struct socket_t* socket, int queue_id) {
 
     int send_index;
     int result = xsk_ring_prod__reserve(&socket->send_queue, SEND_BATCH_SIZE, &send_index);
-    if (result == 0) {
-        return;
+    /* This should not happen, but just in case */
+    while (result != SEND_BATCH_SIZE) {
+        sendto(xsk_socket__fd(socket->xsk), NULL, 0, MSG_DONTWAIT, NULL, 0);
+        result = xsk_ring_prod__reserve(&socket->send_queue, SEND_BATCH_SIZE, &send_index);
     }
+    // if (result == 0) {
+    //     return;
+    // }
 
     int num_packets = 0;
     uint64_t packet_address[SEND_BATCH_SIZE];
@@ -446,8 +471,8 @@ void socket_update(struct socket_t* socket, int queue_id) {
 
     // send queued packets
 
-    if (xsk_ring_prod__needs_wakeup(&socket->send_queue))
-        sendto(xsk_socket__fd(socket->xsk), NULL, 0, MSG_DONTWAIT, NULL, 0);
+    // if (xsk_ring_prod__needs_wakeup(&socket->send_queue))
+    sendto(xsk_socket__fd(socket->xsk), NULL, 0, MSG_DONTWAIT, NULL, 0);
 
     // mark completed sent packet frames as free to be reused
 
@@ -455,6 +480,7 @@ void socket_update(struct socket_t* socket, int queue_id) {
 
     unsigned int completed = xsk_ring_cons__peek(&socket->complete_queue, XSK_RING_CONS__DEFAULT_NUM_DESCS, &complete_index);
 
+    printf("completed = %d\n", completed);
     if (completed > 0) {
         for (int i = 0; i < completed; i++) {
             socket_free_frame(socket, *xsk_ring_cons__comp_addr(&socket->complete_queue, complete_index++));
@@ -479,6 +505,7 @@ static void* socket_thread(void* arg) {
 
     while (!quit) {
         socket_update(socket, queue_id);
+        sleep(1);
     }
 }
 
