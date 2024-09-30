@@ -7,8 +7,6 @@
    https://github.com/xdp-project/xdp-tutorial/tree/master/advanced03-AF_XDP
 */
 
-#define _GNU_SOURCE
-
 #include <arpa/inet.h>
 #include <assert.h>
 #include <bpf/bpf.h>
@@ -24,7 +22,6 @@
 #include <net/if.h>
 #include <poll.h>
 #include <pthread.h>
-#include <sched.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -34,37 +31,30 @@
 #include <xdp/libxdp.h>
 #include <xdp/xsk.h>
 
+#include <atomic>
+#include <chrono>
+#include <vector>
+
+#include "util.h"
+
 #define NUM_CPUS 1
 
 const char* INTERFACE_NAME = "ens5";
-
 const uint8_t SERVER_ETHERNET_ADDRESS[] = {0x0e, 0x47, 0x06, 0x90, 0x9a, 0xc5};
-
 const uint8_t CLIENT_ETHERNET_ADDRESS[] = {0x0e, 0x8c, 0xef, 0x4e, 0x54, 0xa3};
-
 const uint32_t SERVER_IPV4_ADDRESS = 0xac1f24a4;  // 172.31.36.164
-
 const uint16_t SERVER_PORT = 40000;
-
 const uint32_t CLIENT_IPV4_ADDRESS = 0xac1f21ce;  // 172.31.33.206
-
 const uint16_t CLIENT_PORT = 40000;
-
 const int PAYLOAD_BYTES = 32;
-
-const int SEND_BATCH_SIZE = 256;
-
-const int RECV_BATCH_SIZE = 256;
-
-const bool busy_poll = false;
+const int SEND_BATCH_SIZE = 1;
+const int RECV_BATCH_SIZE = 32;
+const int MAX_INFLIGHT_PKTS = 1024;
+const bool busy_poll = true;
 
 #define NUM_FRAMES (4096 * 16)
-
 #define FRAME_SIZE XSK_UMEM__DEFAULT_FRAME_SIZE
-
 #define INVALID_FRAME UINT64_MAX
-
-pthread_spinlock_t frame_pool_lock;
 
 struct socket_t {
     void* buffer;
@@ -80,6 +70,7 @@ struct socket_t {
     uint64_t sent_packets;
     uint32_t counter;
     int queue_id;
+    std::vector<uint64_t> rtts;
 };
 
 struct client_t {
@@ -93,6 +84,39 @@ struct client_t {
     pthread_t recv_thread[NUM_CPUS];
     uint64_t previous_sent_packets;
 };
+
+static struct client_t client;
+pthread_spinlock_t frame_pool_lock;
+std::atomic<uint64_t> inflight_pkts{0};
+volatile bool quit;
+
+uint64_t socket_alloc_frame(struct socket_t* socket) {
+    pthread_spin_lock(&frame_pool_lock);
+    if (socket->num_frames == 0) {
+        pthread_spin_unlock(&frame_pool_lock);
+        return INVALID_FRAME;
+    }
+    socket->num_frames--;
+    uint64_t frame = socket->frames[socket->num_frames];
+    socket->frames[socket->num_frames] = INVALID_FRAME;
+    pthread_spin_unlock(&frame_pool_lock);
+    return frame;
+}
+
+void socket_free_frame(struct socket_t* socket, uint64_t frame) {
+    pthread_spin_lock(&frame_pool_lock);
+    assert(socket->num_frames < NUM_FRAMES);
+    socket->frames[socket->num_frames] = frame;
+    socket->num_frames++;
+    pthread_spin_unlock(&frame_pool_lock);
+}
+
+uint32_t socket_num_free_frames(struct socket_t* socket) {
+    pthread_spin_lock(&frame_pool_lock);
+    int num_free = socket->num_frames;
+    pthread_spin_unlock(&frame_pool_lock);
+    return num_free;
+}
 
 static void* stats_thread(void* arg);
 static void* send_thread(void* arg);
@@ -231,10 +255,8 @@ int client_init(struct client_t* client, const char* interface_name) {
 
         // initialize frame allocator
         for (int j = 0; j < NUM_FRAMES; j++) {
-            client->socket[i].frames[j] = j * FRAME_SIZE;
+            socket_free_frame(&client->socket[i], j * FRAME_SIZE);
         }
-
-        client->socket[i].num_frames = NUM_FRAMES;
 
         // set socket queue id for later use
         client->socket[i].queue_id = i;
@@ -302,43 +324,30 @@ void client_shutdown(struct client_t* client) {
     }
 }
 
-volatile bool quit;
-
 static void* stats_thread(void* arg) {
     struct client_t* client = (struct client_t*)arg;
 
     while (!quit) {
         usleep(1000000);
+        std::vector<uint64_t> rtts;
 
         uint64_t sent_packets = 0;
         for (int i = 0; i < NUM_CPUS; i++) {
             sent_packets += client->socket[i].sent_packets;
+            rtts.insert(rtts.end(), client->socket[i].rtts.begin(),
+                        client->socket[i].rtts.end());
         }
-
+        auto med_latency = Percentile(rtts, 50);
+        auto tail_latency = Percentile(rtts, 99);
         uint64_t sent_delta = sent_packets - client->previous_sent_packets;
-
-        printf("sent delta %" PRId64 "\n", sent_delta);
+        printf("send delta: %lu, med rtt: %lu us, tail rtt: %lu us\n",
+               sent_delta, med_latency, tail_latency);
 
         client->previous_sent_packets = sent_packets;
     }
 
     return NULL;
 }
-
-bool pin_thread_to_cpu(int cpu) {
-    int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
-    if (cpu < 0 || cpu >= num_cpus) return false;
-
-    cpu_set_t cpuset;
-    CPU_ZERO(&cpuset);
-    CPU_SET(cpu, &cpuset);
-
-    pthread_t current_thread = pthread_self();
-
-    pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
-}
-
-static struct client_t client;
 
 void interrupt_handler(int signal) {
     (void)signal;
@@ -355,58 +364,10 @@ static void cleanup() {
     fflush(stdout);
 }
 
-uint64_t socket_alloc_frame(struct socket_t* socket) {
-    pthread_spin_lock(&frame_pool_lock);
-    if (socket->num_frames == 0) {
-        pthread_spin_unlock(&frame_pool_lock);
-        return INVALID_FRAME;
-    }
-    socket->num_frames--;
-    uint64_t frame = socket->frames[socket->num_frames];
-    socket->frames[socket->num_frames] = INVALID_FRAME;
-    pthread_spin_unlock(&frame_pool_lock);
-    return frame;
-}
-
-void socket_free_frame(struct socket_t* socket, uint64_t frame) {
-    pthread_spin_lock(&frame_pool_lock);
-    assert(socket->num_frames < NUM_FRAMES);
-    socket->frames[socket->num_frames] = frame;
-    pthread_spin_unlock(&frame_pool_lock);
-    socket->num_frames++;
-}
-
-uint32_t socket_num_free_frames(struct socket_t* socket) {
-    pthread_spin_lock(&frame_pool_lock);
-    int num_free = socket->num_frames;
-    pthread_spin_unlock(&frame_pool_lock);
-    return num_free;
-}
-
-uint16_t ipv4_checksum(const void* data, size_t header_length) {
-    unsigned long sum = 0;
-
-    const uint16_t* p = (const uint16_t*)data;
-
-    while (header_length > 1) {
-        sum += *p++;
-        if (sum & 0x80000000) {
-            sum = (sum & 0xFFFF) + (sum >> 16);
-        }
-        header_length -= 2;
-    }
-
-    while (sum >> 16) {
-        sum = (sum & 0xFFFF) + (sum >> 16);
-    }
-
-    return ~sum;
-}
-
 int client_generate_packet(void* data, int payload_bytes, uint32_t counter) {
-    struct ethhdr* eth = data;
-    struct iphdr* ip = data + sizeof(struct ethhdr);
-    struct udphdr* udp = (void*)ip + sizeof(struct iphdr);
+    struct ethhdr* eth = (struct ethhdr*)data;
+    struct iphdr* ip = (struct iphdr*)((char*)data + sizeof(struct ethhdr));
+    struct udphdr* udp = (struct udphdr*)((char*)ip + sizeof(struct iphdr));
 
     // generate ethernet header
     memcpy(eth->h_dest, SERVER_ETHERNET_ADDRESS, ETH_ALEN);
@@ -435,11 +396,14 @@ int client_generate_packet(void* data, int payload_bytes, uint32_t counter) {
     udp->check = 0;
 
     // generate udp payload
-    uint8_t* payload = (void*)udp + sizeof(struct udphdr);
-
-    for (int i = 0; i < payload_bytes; i++) {
-        payload[i] = i;
-    }
+    uint8_t* payload = (uint8_t*)((char*)udp + sizeof(struct udphdr));
+    auto now = std::chrono::high_resolution_clock::now();
+    uint64_t now_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                          now.time_since_epoch())
+                          .count();
+    assert(payload_bytes >= sizeof(uint64_t) + sizeof(uint32_t));
+    memcpy(payload, &now_us, sizeof(uint64_t));
+    memcpy(payload + sizeof(uint64_t), &counter, sizeof(uint32_t));
 
     return sizeof(struct ethhdr) + sizeof(struct iphdr) +
            sizeof(struct udphdr) + payload_bytes;
@@ -447,11 +411,12 @@ int client_generate_packet(void* data, int payload_bytes, uint32_t counter) {
 
 void socket_send(struct socket_t* socket, int queue_id) {
     // don't do anything if we don't have enough free packets to send a batch
-    // printf("tx socket_num_free_frames = %u\n", socket_num_free_frames(socket));
-    if (socket_num_free_frames(socket) < SEND_BATCH_SIZE) return;
+    if (socket_num_free_frames(socket) < SEND_BATCH_SIZE ||
+        inflight_pkts >= MAX_INFLIGHT_PKTS)
+        return;
 
     // queue packets to send
-    int send_index;
+    uint32_t send_index;
     int result = xsk_ring_prod__reserve(&socket->send_queue, SEND_BATCH_SIZE,
                                         &send_index);
     if (result == 0) return;
@@ -462,10 +427,9 @@ void socket_send(struct socket_t* socket, int queue_id) {
 
     while (true) {
         uint64_t frame = socket_alloc_frame(socket);
-
         assert(frame != INVALID_FRAME);  // this should never happen
 
-        uint8_t* packet = socket->buffer + frame;
+        uint8_t* packet = (uint8_t*)socket->buffer + frame;
 
         packet_address[num_packets] = frame;
         packet_length[num_packets] = client_generate_packet(
@@ -484,6 +448,7 @@ void socket_send(struct socket_t* socket, int queue_id) {
     }
 
     xsk_ring_prod__submit(&socket->send_queue, num_packets);
+    inflight_pkts += num_packets;
 
     // send queued packets
     if (xsk_ring_prod__needs_wakeup(&socket->send_queue))
@@ -496,7 +461,8 @@ void socket_send(struct socket_t* socket, int queue_id) {
         xsk_ring_cons__peek(&socket->complete_queue,
                             XSK_RING_CONS__DEFAULT_NUM_DESCS, &complete_index);
 
-    // printf("tx complete_queue completed = %d\n", completed);
+    // printf("tx complete_queue completed = %d, inflight_pkts = %lu\n",
+    // completed, inflight_pkts.load());
     if (completed > 0) {
         for (int i = 0; i < completed; i++) {
             socket_free_frame(socket,
@@ -507,21 +473,6 @@ void socket_send(struct socket_t* socket, int queue_id) {
         xsk_ring_cons__release(&socket->complete_queue, completed);
         __sync_fetch_and_add(&socket->sent_packets, completed);
         socket->counter += completed;
-    }
-}
-
-static void* send_thread(void* arg) {
-    struct socket_t* socket = (struct socket_t*)arg;
-
-    int queue_id = socket->queue_id;
-
-    printf("started socket send thread for queue #%d\n", queue_id);
-
-    pin_thread_to_cpu(queue_id);
-
-    while (!quit) {
-        socket_send(socket, queue_id);
-        usleep(1000000);
     }
 }
 
@@ -551,24 +502,59 @@ void socket_recv(struct socket_t* socket, int queue_id) {
         xsk_ring_prod__submit(&socket->fill_queue, stock_frames);
     }
 
-    printf("rx fill_queue rcvd = %d\n", rcvd);
+    // printf("rx fill_queue rcvd = %d, inflight_pkts = %lu\n", rcvd,
+    // inflight_pkts.load());
     for (int i = 0; i < rcvd; i++) {
         uint64_t addr =
             xsk_ring_cons__rx_desc(&socket->recv_queue, idx_rx)->addr;
         uint32_t len =
             xsk_ring_cons__rx_desc(&socket->recv_queue, idx_rx++)->len;
+        uint8_t* pkt = (uint8_t*)xsk_umem__get_data(socket->buffer, addr);
+
         // Doing some packet processing here...
+        struct ethhdr* eth = (struct ethhdr*)pkt;
+        struct iphdr* ip = (struct iphdr*)((char*)pkt + sizeof(struct ethhdr));
+        struct udphdr* udp = (struct udphdr*)((char*)ip + sizeof(struct iphdr));
+        uint8_t* payload = (uint8_t*)((char*)udp + sizeof(struct udphdr));
+        uint64_t now_us = *(uint64_t*)payload;
+        uint32_t counter = *(uint32_t*)(payload + sizeof(uint64_t));
+        auto now = std::chrono::high_resolution_clock::now();
+        uint64_t now_us2 =
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                now.time_since_epoch())
+                .count();
+        uint64_t rtt = now_us2 - now_us;
+        socket->rtts.push_back(rtt);
+
         socket_free_frame(socket, addr);
     }
     xsk_ring_cons__release(&socket->recv_queue, rcvd);
+    inflight_pkts -= rcvd;
+}
+
+static void* send_thread(void* arg) {
+    struct socket_t* socket = (struct socket_t*)arg;
+
+    int queue_id = socket->queue_id;
+
+    printf("started socket send thread for queue #%d\n", queue_id);
+
+    pin_thread_to_cpu(queue_id);
+
+    while (!quit) {
+        socket_send(socket, queue_id);
+        usleep(100);
+    }
+    return NULL;
 }
 
 static void* recv_thread(void* arg) {
     struct socket_t* socket = (struct socket_t*)arg;
 
     // We also need to load and update the xsks_map for receiving packets
-    struct bpf_map *map;
-    map = bpf_object__find_map_by_name(xdp_program__bpf_obj(client.program), "xsks_map");
+    struct bpf_map* map;
+    map = bpf_object__find_map_by_name(xdp_program__bpf_obj(client.program),
+                                       "xsks_map");
     int xsk_map_fd = bpf_map__fd(map);
     if (xsk_map_fd < 0) {
         fprintf(stderr, "ERROR: no xsks map found: %s\n", strerror(xsk_map_fd));
@@ -576,14 +562,15 @@ static void* recv_thread(void* arg) {
     }
     int ret = xsk_socket__update_xskmap(socket->xsk, xsk_map_fd);
     if (ret) {
-        fprintf(stderr, "ERROR: xsks map update fails: %s\n", strerror(xsk_map_fd));
+        fprintf(stderr, "ERROR: xsks map update fails: %s\n",
+                strerror(xsk_map_fd));
         exit(0);
     }
 
     /* Stuff the receive path with buffers, we assume we have enough */
     uint32_t idx_rx = 0;
     ret = xsk_ring_prod__reserve(&socket->fill_queue,
-                                     XSK_RING_PROD__DEFAULT_NUM_DESCS, &idx_rx);
+                                 XSK_RING_PROD__DEFAULT_NUM_DESCS, &idx_rx);
 
     if (ret != XSK_RING_PROD__DEFAULT_NUM_DESCS) exit(0);
 
@@ -613,6 +600,7 @@ static void* recv_thread(void* arg) {
         }
         socket_recv(socket, queue_id);
     }
+    return NULL;
 }
 
 int main(int argc, char* argv[]) {
@@ -628,7 +616,7 @@ int main(int argc, char* argv[]) {
     int ret;
 
     /* initialize a spin lock */
-    ret = pthread_spin_init(&frame_pool_lock, pshared); 
+    ret = pthread_spin_init(&frame_pool_lock, pshared);
 
     if (client_init(&client, INTERFACE_NAME) != 0) {
         cleanup();
