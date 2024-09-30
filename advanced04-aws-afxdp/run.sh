@@ -21,6 +21,9 @@ cd ..
 # Can only use half of the queue, per ENA implementation: https://github.com/amzn/amzn-drivers/issues/240
 sudo ethtool -L ens5 combined 1
 sudo ifconfig ens5 mtu 3498 up
+sudo ethtool -C ens5 adaptive-rx off rx-usecs 0 tx-usecs 0
+# sudo ethtool -C ens5 adaptive-rx off rx-usecs 20 tx-usecs 60
+sudo service irqbalance stop
 
 ## The -z flag forces zero-copy mode.  Without it, it will probably default to copy mode
 ## -p means using polling with timeout of 1ms.
@@ -28,8 +31,6 @@ sudo ifconfig ens5 mtu 3498 up
 
 ## for efa
 # sudo ./af_xdp_user_efa -d ens5 --filename af_xdp_kern_efa.o -z
-
-sudo service irqbalance stop
 
 nqueue=8
 (let cnt=0; cd /sys/class/net/ens5/device/msi_irqs/;
