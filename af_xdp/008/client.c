@@ -367,7 +367,7 @@ void socket_free_frame(struct socket_t* socket, uint64_t frame) {
     socket->num_frames++;
 }
 
-uint64_t socket_num_free_frames(struct socket_t* socket) {
+uint32_t socket_num_free_frames(struct socket_t* socket) {
     return socket->num_frames;
 }
 
@@ -435,8 +435,8 @@ int client_generate_packet(void* data, int payload_bytes, uint32_t counter) {
 
 void socket_send(struct socket_t* socket, int queue_id) {
     // don't do anything if we don't have enough free packets to send a batch
-    printf("socket->num_frames = %u\n", socket->num_frames);
-    if (socket->num_frames < SEND_BATCH_SIZE) return;
+    // printf("tx socket_num_free_frames = %u\n", socket_num_free_frames(socket));
+    if (socket_num_free_frames(socket) < SEND_BATCH_SIZE) return;
 
     // queue packets to send
     int send_index;
@@ -484,7 +484,7 @@ void socket_send(struct socket_t* socket, int queue_id) {
         xsk_ring_cons__peek(&socket->complete_queue,
                             XSK_RING_CONS__DEFAULT_NUM_DESCS, &complete_index);
 
-    printf("completed = %d\n", completed);
+    // printf("tx complete_queue completed = %d\n", completed);
     if (completed > 0) {
         for (int i = 0; i < completed; i++) {
             socket_free_frame(socket,
@@ -509,14 +509,14 @@ static void* send_thread(void* arg) {
 
     while (!quit) {
         socket_send(socket, queue_id);
-        sleep(1);
+        usleep(100);
     }
 }
 
 void socket_recv(struct socket_t* socket, int queue_id) {
-    // Check any packet received, in order to drive packet receiving in the
-    // kernel.
-    uint32_t idx_rx = 0, idx_fq, rcvd;
+    // Check any packet received, in order to drive packet receiving path for
+    // other kernel transport.
+    uint32_t idx_rx, idx_fq, rcvd;
     rcvd = xsk_ring_cons__peek(&socket->recv_queue, RECV_BATCH_SIZE, &idx_rx);
     if (!rcvd) return;
 
@@ -539,6 +539,7 @@ void socket_recv(struct socket_t* socket, int queue_id) {
         xsk_ring_prod__submit(&socket->fill_queue, stock_frames);
     }
 
+    printf("rx fill_queue rcvd = %d\n", rcvd);
     for (int i = 0; i < rcvd; i++) {
         uint64_t addr =
             xsk_ring_cons__rx_desc(&socket->recv_queue, idx_rx)->addr;
@@ -595,6 +596,8 @@ int main(int argc, char* argv[]) {
     signal(SIGINT, interrupt_handler);
     signal(SIGTERM, clean_shutdown_handler);
     signal(SIGHUP, clean_shutdown_handler);
+    signal(SIGALRM, clean_shutdown_handler);
+    alarm(10);
 
     if (client_init(&client, INTERFACE_NAME) != 0) {
         cleanup();

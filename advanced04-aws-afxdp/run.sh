@@ -19,16 +19,26 @@ cd ..
 ## Check version by modinfo ena
 
 # Can only use half of the queue, per ENA implementation: https://github.com/amzn/amzn-drivers/issues/240
-sudo ethtool -L ens5 combined 1
+sudo ethtool -L ens5 combined 8
 sudo ifconfig ens5 mtu 3498 up
 
-# The -z flag forces zero-copy mode.  Without it, it will probably default to copy mode
-# -p means using polling with timeout of 1ms.
-sudo ./af_xdp_user -d ens5 --filename af_xdp_kern.o -z
+## The -z flag forces zero-copy mode.  Without it, it will probably default to copy mode
+## -p means using polling with timeout of 1ms.
+# sudo ./af_xdp_user -d ens5 --filename af_xdp_kern.o -z
 
-# for efa
-sudo ./af_xdp_user_efa -d ens5 --filename af_xdp_kern_efa.o -z
+## for efa
+# sudo ./af_xdp_user_efa -d ens5 --filename af_xdp_kern_efa.o -z
 
+sudo service irqbalance stop
+
+nqueue=8
+(let cnt=0; cd /sys/class/net/ens5/device/msi_irqs/;
+for IRQ in *; do
+    let CPU=$((cnt*2+1))
+    let cnt=$(((cnt+1)%nqueue))
+    echo $IRQ '->' $CPU
+    echo $CPU | sudo tee /proc/irq/$IRQ/smp_affinity_list > /dev/null
+done)
 
 # For client machines
 # Start followers first. Run this on each follower client machine: ./follower [num threads] [follower ip]
