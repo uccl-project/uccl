@@ -1,15 +1,3 @@
-/*
-    UDP client XDP program
-
-    Counts IPv4 UDP packets received on port 40000
-
-    USAGE:
-
-        clang -Ilibbpf/src -g -O2 -target bpf -c client_xdp.c -o client_xdp.o
-        sudo cat /sys/kernel/debug/tracing/trace_pipe
-*/
-
-#include <linux/types.h>
 #include <bpf/bpf_helpers.h>
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
@@ -19,6 +7,7 @@
 #include <linux/ip.h>
 #include <linux/ipv6.h>
 #include <linux/string.h>
+#include <linux/types.h>
 #include <linux/udp.h>
 
 #if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && \
@@ -44,10 +33,10 @@
 #endif  // #if DEBUG
 
 struct {
-	__uint(type, BPF_MAP_TYPE_XSKMAP);
-	__type(key, __u32);
-	__type(value, __u32);
-	__uint(max_entries, 64);
+    __uint(type, BPF_MAP_TYPE_XSKMAP);
+    __type(key, __u32);
+    __type(value, __u32);
+    __uint(max_entries, 64);
 } xsks_map SEC(".maps");
 
 SEC("client_xdp")

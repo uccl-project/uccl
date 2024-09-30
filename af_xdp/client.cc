@@ -1,12 +1,3 @@
-/*
-    UDP client (userspace)
-
-    Runs on Ubuntu 22.04 LTS 64bit with Linux Kernel 6.5+ *ONLY*
-
-    Derived from
-   https://github.com/xdp-project/xdp-tutorial/tree/master/advanced03-AF_XDP
-*/
-
 #include <arpa/inet.h>
 #include <assert.h>
 #include <bpf/bpf.h>
@@ -64,7 +55,6 @@ struct socket_t {
     struct xsk_ring_cons complete_queue;
     struct xsk_ring_prod fill_queue;
     struct xsk_socket* xsk;
-    // TODO(yang): make frames and num_frames thread-safe.
     uint64_t frames[NUM_FRAMES];
     uint32_t num_frames;
     uint64_t sent_packets;
@@ -90,6 +80,7 @@ pthread_spinlock_t frame_pool_lock;
 std::atomic<uint64_t> inflight_pkts{0};
 volatile bool quit;
 
+// TODO(yang): make thread-local cache for frame pool.
 uint64_t socket_alloc_frame(struct socket_t* socket) {
     pthread_spin_lock(&frame_pool_lock);
     if (socket->num_frames == 0) {

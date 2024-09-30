@@ -1,13 +1,3 @@
-/*
-    UDP server XDP program
-
-    Counts IPv4 UDP packets received on port 40000
-
-    USAGE:
-
-        clang -Ilibbpf/src -g -O2 -target bpf -c server_xdp.c -o server_xdp.o
-        sudo cat /sys/kernel/debug/tracing/trace_pipe
-*/
 // fmt: off
 #include <linux/types.h>
 // fmt: on
