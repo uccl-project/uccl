@@ -34,12 +34,13 @@ const char* INTERFACE_NAME = "ens5";
 const uint8_t SERVER_ETHERNET_ADDRESS[] = {0x0e, 0x47, 0x06, 0x90, 0x9a, 0xc5};
 const uint8_t CLIENT_ETHERNET_ADDRESS[] = {0x0e, 0x8c, 0xef, 0x4e, 0x54, 0xa3};
 const uint32_t SERVER_IPV4_ADDRESS = 0xac1f24a4;  // 172.31.36.164
-const uint16_t SERVER_PORT = 40000;
 const uint32_t CLIENT_IPV4_ADDRESS = 0xac1f21ce;  // 172.31.33.206
+const uint16_t SERVER_PORT = 40000;
 const uint16_t CLIENT_PORT = 40000;
-const int PAYLOAD_BYTES = 32;
+
 const int SEND_BATCH_SIZE = 1;
 const int RECV_BATCH_SIZE = 32;
+const int PAYLOAD_BYTES = 32;
 const int MAX_INFLIGHT_PKTS = 1024;
 const bool busy_poll = true;
 
@@ -543,9 +544,8 @@ static void* recv_thread(void* arg) {
     struct socket_t* socket = (struct socket_t*)arg;
 
     // We also need to load and update the xsks_map for receiving packets
-    struct bpf_map* map;
-    map = bpf_object__find_map_by_name(xdp_program__bpf_obj(client.program),
-                                       "xsks_map");
+    struct bpf_map* map = bpf_object__find_map_by_name(
+        xdp_program__bpf_obj(client.program), "xsks_map");
     int xsk_map_fd = bpf_map__fd(map);
     if (xsk_map_fd < 0) {
         fprintf(stderr, "ERROR: no xsks map found: %s\n", strerror(xsk_map_fd));

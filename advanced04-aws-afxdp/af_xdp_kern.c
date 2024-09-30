@@ -43,10 +43,9 @@ int xdp_sock_prog(struct xdp_md *ctx)
 
     struct udphdr *udp = (struct udphdr *)((char *)ip + (ip->ihl << 2));
     if (udp + 1 > data_end) return XDP_PASS;
-    if (udp + sizeof(struct udphdr) > data_end) return XDP_PASS;
 
-    char* payload = (char*)udp + sizeof(struct udphdr);
-    if (*(__u64*)payload != MAGIC_NUMBER) return XDP_PASS;
+    // char* payload = (char*)udp + sizeof(struct udphdr);
+    // if (*(__u64*)payload != MAGIC_NUMBER) return XDP_PASS;
 
     // How to specify PORT in libfabric UDP?
     // if (udp->dest != htons(SERVER_PORT)) return XDP_PASS;

@@ -10,11 +10,12 @@
 #include "util_xdp.h"
 
 struct {
-    __uint(type, BPF_MAP_TYPE_XSKMAP);
-    __type(key, __u32);
-    __type(value, __u32);
-    __uint(max_entries, 64);
-} xsks_map SEC(".maps");
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, int);
+    __type(value, __u64);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
+} received_packets_map SEC(".maps");
 
 SEC("server_xdp")
 int server_xdp_filter(struct xdp_md *ctx) {
@@ -33,11 +34,22 @@ int server_xdp_filter(struct xdp_md *ctx) {
     if ((void *)udp + sizeof(struct udphdr) > data_end) return XDP_PASS;
     if (udp->dest != __constant_htons(40000)) return XDP_PASS;
 
-    int index = ctx->rx_queue_index;
-    if (bpf_map_lookup_elem(&xsks_map, &index))
-        return bpf_redirect_map(&xsks_map, index, 0);
+    void *payload = (void *)udp + sizeof(struct udphdr);
+    int payload_bytes = data_end - payload;
 
-    return XDP_PASS;
+    debug_printf("server received %d byte packet", payload_bytes);
+
+    int zero = 0;
+    __u64 *packets_received =
+        (__u64 *)bpf_map_lookup_elem(&received_packets_map, &zero);
+
+    if (packets_received) {
+        __sync_fetch_and_add(packets_received, 1);
+    }
+
+    prepare_packet(eth, ip, udp);
+
+    return XDP_TX;
 }
 
 char _license[] SEC("license") = "GPL";
