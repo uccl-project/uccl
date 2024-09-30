@@ -19,7 +19,7 @@ cd ..
 ## Check version by modinfo ena
 
 # Can only use half of the queue, per ENA implementation: https://github.com/amzn/amzn-drivers/issues/240
-sudo ethtool -L ens5 combined 8
+sudo ethtool -L ens5 combined 1
 sudo ifconfig ens5 mtu 3498 up
 
 ## The -z flag forces zero-copy mode.  Without it, it will probably default to copy mode

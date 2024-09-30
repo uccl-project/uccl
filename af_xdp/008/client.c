@@ -64,6 +64,8 @@ const bool busy_poll = false;
 
 #define INVALID_FRAME UINT64_MAX
 
+pthread_spinlock_t frame_pool_lock;
+
 struct socket_t {
     void* buffer;
     struct xsk_umem* umem;
@@ -354,21 +356,31 @@ static void cleanup() {
 }
 
 uint64_t socket_alloc_frame(struct socket_t* socket) {
-    if (socket->num_frames == 0) return INVALID_FRAME;
+    pthread_spin_lock(&frame_pool_lock);
+    if (socket->num_frames == 0) {
+        pthread_spin_unlock(&frame_pool_lock);
+        return INVALID_FRAME;
+    }
     socket->num_frames--;
     uint64_t frame = socket->frames[socket->num_frames];
     socket->frames[socket->num_frames] = INVALID_FRAME;
+    pthread_spin_unlock(&frame_pool_lock);
     return frame;
 }
 
 void socket_free_frame(struct socket_t* socket, uint64_t frame) {
+    pthread_spin_lock(&frame_pool_lock);
     assert(socket->num_frames < NUM_FRAMES);
     socket->frames[socket->num_frames] = frame;
+    pthread_spin_unlock(&frame_pool_lock);
     socket->num_frames++;
 }
 
 uint32_t socket_num_free_frames(struct socket_t* socket) {
-    return socket->num_frames;
+    pthread_spin_lock(&frame_pool_lock);
+    int num_free = socket->num_frames;
+    pthread_spin_unlock(&frame_pool_lock);
+    return num_free;
 }
 
 uint16_t ipv4_checksum(const void* data, size_t header_length) {
@@ -509,7 +521,7 @@ static void* send_thread(void* arg) {
 
     while (!quit) {
         socket_send(socket, queue_id);
-        usleep(100);
+        usleep(1000000);
     }
 }
 
@@ -554,11 +566,23 @@ void socket_recv(struct socket_t* socket, int queue_id) {
 static void* recv_thread(void* arg) {
     struct socket_t* socket = (struct socket_t*)arg;
 
-    int queue_id = socket->queue_id;
-    uint32_t idx_rx = 0;
+    // We also need to load and update the xsks_map for receiving packets
+    struct bpf_map *map;
+    map = bpf_object__find_map_by_name(xdp_program__bpf_obj(client.program), "xsks_map");
+    int xsk_map_fd = bpf_map__fd(map);
+    if (xsk_map_fd < 0) {
+        fprintf(stderr, "ERROR: no xsks map found: %s\n", strerror(xsk_map_fd));
+        exit(0);
+    }
+    int ret = xsk_socket__update_xskmap(socket->xsk, xsk_map_fd);
+    if (ret) {
+        fprintf(stderr, "ERROR: xsks map update fails: %s\n", strerror(xsk_map_fd));
+        exit(0);
+    }
 
     /* Stuff the receive path with buffers, we assume we have enough */
-    int ret = xsk_ring_prod__reserve(&socket->fill_queue,
+    uint32_t idx_rx = 0;
+    ret = xsk_ring_prod__reserve(&socket->fill_queue,
                                      XSK_RING_PROD__DEFAULT_NUM_DESCS, &idx_rx);
 
     if (ret != XSK_RING_PROD__DEFAULT_NUM_DESCS) exit(0);
@@ -570,6 +594,7 @@ static void* recv_thread(void* arg) {
     xsk_ring_prod__submit(&socket->fill_queue,
                           XSK_RING_PROD__DEFAULT_NUM_DESCS);
 
+    int queue_id = socket->queue_id;
     printf("started socket recv thread for queue #%d\n", queue_id);
 
     pin_thread_to_cpu(NUM_CPUS + queue_id);
@@ -598,6 +623,12 @@ int main(int argc, char* argv[]) {
     signal(SIGHUP, clean_shutdown_handler);
     signal(SIGALRM, clean_shutdown_handler);
     alarm(10);
+
+    int pshared;
+    int ret;
+
+    /* initialize a spin lock */
+    ret = pthread_spin_init(&frame_pool_lock, pshared); 
 
     if (client_init(&client, INTERFACE_NAME) != 0) {
         cleanup();
