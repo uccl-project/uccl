@@ -32,9 +32,9 @@
 
 const char* INTERFACE_NAME = "ens5";
 const uint8_t SERVER_ETHERNET_ADDRESS[] = {0x0e, 0x47, 0x06, 0x90, 0x9a, 0xc5};
-const uint8_t CLIENT_ETHERNET_ADDRESS[] = {0x0e, 0x8c, 0xef, 0x4e, 0x54, 0xa3};
+const uint8_t CLIENT_ETHERNET_ADDRESS[] = {0x0a, 0xff, 0xd8, 0x28, 0x2c, 0x1f};
 const uint32_t SERVER_IPV4_ADDRESS = 0xac1f24a4;  // 172.31.36.164
-const uint32_t CLIENT_IPV4_ADDRESS = 0xac1f21ce;  // 172.31.33.206
+const uint32_t CLIENT_IPV4_ADDRESS = 0xac1f1467;  // 172.31.20.103
 const uint16_t SERVER_PORT = 40000;
 const uint16_t CLIENT_PORT = 40000;
 
