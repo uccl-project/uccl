@@ -2,26 +2,25 @@
  *  A server receiving and sending back a message multiple times.
  *  Usage: ./server.out -p <port> -n <message_size (bytes)>
  */
-#include <stdio.h>
-#include <sys/types.h> 
-#include <sys/socket.h>
+#include <fcntl.h>
 #include <netinet/in.h>
-#include <unistd.h>
+#include <netinet/tcp.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <strings.h>
-#include <fcntl.h>
-#include <netinet/tcp.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <signal.h>
 
-#include "connection.h"
+#include "util_tcp.h"
 
-void error(char *msg)
-{
+void error(char *msg) {
     perror(msg);
     exit(1);
 }
 
-int main(int argc, char *argv[])
-{
+int main(int argc, char *argv[]) {
     int sockfd, newsockfd;
     struct Config config = get_config(argc, argv);
     uint8_t *buffer = (uint8_t *)malloc(config.n_bytes);
@@ -32,32 +31,34 @@ int main(int argc, char *argv[])
     if (sockfd < 0) {
         error("ERROR opening socket");
     }
-    bzero((char *) &serv_addr, sizeof(serv_addr));
+    int flag = 1;
+    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) < 0)
+        error("setsockopt(SO_REUSEADDR) failed");
+
+    bzero((char *)&serv_addr, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_addr.s_addr = INADDR_ANY;
     serv_addr.sin_port = htons(config.port);
-    if (bind(sockfd, (struct sockaddr *) &serv_addr,
-        sizeof(serv_addr)) < 0) {
+    if (bind(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
         error("ERROR on binding");
     }
-    printf("Server ready, listening on port %d\n", config.port); 
+
+    printf("Server ready, listening on port %d\n", config.port);
     fflush(stdout);
     listen(sockfd, 5);
     socklen_t clilen = sizeof(cli_addr);
 
     // Accept connection and set nonblocking and nodelay
-    newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
+    newsockfd = accept(sockfd, (struct sockaddr *)&cli_addr, &clilen);
     if (newsockfd < 0) {
         error("ERROR on accept");
     }
     fcntl(newsockfd, F_SETFL, O_NONBLOCK);
-    int flag = 1;
     setsockopt(newsockfd, IPPROTO_TCP, TCP_NODELAY, (void *)&flag, sizeof(int));
 
     // Receive-send loop
     printf("Connection accepted, ready to receive!\n");
-    int i;
-    for (i = 0; i < N_ROUNDS; i++) {
+    for (size_t i = 0;; i++) {
         receive_message(config.n_bytes, newsockfd, buffer);
         send_message(config.n_bytes, newsockfd, buffer);
     }
@@ -67,6 +68,5 @@ int main(int argc, char *argv[])
     close(sockfd);
     close(newsockfd);
 
-    return 0; 
+    return 0;
 }
-

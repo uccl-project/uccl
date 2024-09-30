@@ -17,7 +17,7 @@ struct {
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } received_packets_map SEC(".maps");
 
-SEC("server_xdp")
+SEC("server1_xdp")
 int server_xdp_filter(struct xdp_md *ctx) {
     void *data = (void *)(long)ctx->data;
     void *data_end = (void *)(long)ctx->data_end;

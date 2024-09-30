@@ -79,7 +79,7 @@ int server_init(struct server_t *server, const char *interface_name) {
     printf("loading server_xdp...\n");
 
     server->program =
-        xdp_program__open_file("server_xdp.o", "server_xdp", NULL);
+        xdp_program__open_file("server1_xdp.o", "server1_xdp", NULL);
     if (libxdp_get_error(server->program)) {
         printf("\nerror: could not load server_xdp program\n\n");
         return 1;
