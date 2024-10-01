@@ -19,7 +19,7 @@ for IRQ in *; do
     echo $CPU | sudo tee /proc/irq/$IRQ/smp_affinity_list > /dev/null
 done)
 
-sudo ~/xdp-tutorial/lib/xdp-tools/xdp-loader/xdp-loader unload ${NIC} --all
+sudo ~/uccl/lib/xdp-tools/xdp-loader/xdp-loader unload ${NIC} --all
 
 ## run af_xdp l2fwd
 ## -z: zero-copy mode (without skb copy)

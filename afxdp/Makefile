@@ -34,4 +34,4 @@ server_tcp: server_tcp.cc $(DEPS)
 
 .PHONY: clean
 clean:
-	rm -f client server server1 client_tcp server_tcp *.o
+	@rm -f client server server1 client_tcp server_tcp *.o

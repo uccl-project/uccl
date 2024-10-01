@@ -1,5 +1,3 @@
-# SPDX-License-Identifier: (GPL-2.0 OR BSD-2-Clause)
-
 ifeq ("$(origin V)", "command line")
 VERBOSE = $(V)
 endif
@@ -12,19 +10,28 @@ MAKEFLAGS += --no-print-directory
 Q = @
 endif
 
-LESSONS = $(wildcard basic*) $(wildcard packet*) $(wildcard tracing??-*)
-# LESSONS += advanced03-AF_XDP
+LESSONS = $(wildcard afxdp*) $(wildcard aws*)
 LESSONS_CLEAN = $(addsuffix _clean,$(LESSONS))
 
 .PHONY: clean clobber distclean $(LESSONS) $(LESSONS_CLEAN)
 
 all: lib $(LESSONS)
-clean: $(LESSONS_CLEAN)
-	@echo; echo common; $(MAKE) -C common clean
-	@echo; echo lib; $(MAKE) -C lib clean
 
-lib: config.mk check_submodule
-	@echo; echo $@; $(MAKE) -C $@
+clean: $(LESSONS_CLEAN)
+	@echo; echo lib/xdp-tools; $(MAKE) -C lib/xdp-tools clean
+	@echo; echo lib; $(MAKE) -C lib clean
+	@echo; echo common; $(MAKE) -C common clean
+
+lib: check_submodule config
+	@echo; echo lib/xdp-tools; $(MAKE) -C lib/xdp-tools
+	@echo; echo lib; $(MAKE) -C lib
+
+check_submodule:
+	@git submodule update --init
+
+config: configure
+	@sh configure
+	@sh cd lib/xdp-tools; ./configure
 
 $(LESSONS):
 	@echo; echo $@; $(MAKE) -C $@
@@ -32,21 +39,10 @@ $(LESSONS):
 $(LESSONS_CLEAN):
 	@echo; echo $@; $(MAKE) -C $(subst _clean,,$@) clean
 
-config.mk: configure
-	@sh configure
-
 clobber:
 	@touch config.mk
 	$(Q)$(MAKE) clean
 	$(Q)rm -f config.mk
 
 distclean:	clobber
-
-check_submodule:
-	@if [ -d .git ] && `git submodule status lib/libbpf | grep -q '^+'`; then \
-		echo "" ;\
-		echo "** WARNING **: git submodule SHA-1 out-of-sync" ;\
-		echo " consider running: git submodule update"  ;\
-		echo "" ;\
-	fi\
 

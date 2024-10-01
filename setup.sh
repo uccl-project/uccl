@@ -38,18 +38,19 @@ sudo dkms install -m amzn-drivers -v 2.13.0
 sudo modprobe -r ena; sudo modprobe ena
 
 
-git submodule update --init
 sudo apt update
-sudo apt install clang llvm libelf-dev libpcap-dev gcc-multilib build-essential linux-tools-common linux-tools-generic m4 -y
+sudo apt install clang llvm libelf-dev libpcap-dev gcc-multilib build-essential linux-tools-common linux-tools-generic m4 linux-headers-$(uname -r) -y
 # On arm
-# sudo apt install clang llvm libelf-dev libpcap-dev build-essential linux-tools-common linux-tools-generic m4 -y
-sudo apt install linux-headers-$(uname -r)
+# sudo apt install clang llvm libelf-dev libpcap-dev build-essential linux-tools-common linux-tools-generic m4 linux-headers-$(uname -r) -y
 
-./autogen.sh && ./configure
-cd lib/xdp-tools && ./configure && make -j
-cd .. && make -j
-cd .. && make -j
-cd advanced04-aws-afxdp && make -j
+## To configure the repo, just
+make 
+
+## Or manually by
+# git submodule update --init && ./configure
+# pushd lib/xdp-tools && ./configure && make -j && popd
+# pushd lib/ && make -j && popd
+# make -j
 
 
 # sudo ethtool -N ens1f1np1 rx-flow-hash udp4 fn
