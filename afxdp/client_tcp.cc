@@ -33,7 +33,7 @@ void error(char *msg) {
 const int SEND_BATCH_SIZE = 1;
 const int RECV_BATCH_SIZE = 32;
 // const int PAYLOAD_BYTES = 32; // see DEFAULT_N_BYTES in util_tcp.h
-const int MAX_INFLIGHT_PKTS = 128;  // tune this to change packet rate
+const int MAX_INFLIGHT_PKTS = 32;  // tune this to change packet rate
 const int SEND_INTV_US = 0;
 
 std::vector<uint64_t> rtts;
