@@ -30,7 +30,7 @@
 
 #define NUM_CPUS 1
 
-const char* INTERFACE_NAME = "ens5";
+const char* INTERFACE_NAME = "ens6";
 
 const int RECV_BATCH_SIZE = 32;
 const bool busy_poll = true;
@@ -405,6 +405,7 @@ void complete_tx(struct socket_t* socket) {
     completed = xsk_ring_cons__peek(&socket->complete_queue,
                                     XSK_RING_CONS__DEFAULT_NUM_DESCS, &idx_cq);
 
+    // printf("rx complete_tx completed = %d\n", completed);
     if (completed > 0) {
         for (int i = 0; i < completed; i++)
             socket_free_frame(socket, *xsk_ring_cons__comp_addr(

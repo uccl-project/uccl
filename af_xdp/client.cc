@@ -28,20 +28,31 @@
 
 #include "util.h"
 
-#define NUM_CPUS 1
+const uint32_t NUM_QUEUES = 1;
 
-const char* INTERFACE_NAME = "ens5";
-const uint8_t SERVER_ETHERNET_ADDRESS[] = {0x0a, 0xff, 0xd8, 0x28, 0x2c, 0x1f};
-const uint8_t CLIENT_ETHERNET_ADDRESS[] = {0x0a, 0xff, 0xf7, 0x3f, 0x26, 0x59};
-const uint32_t SERVER_IPV4_ADDRESS = 0xac1f1467;  // 172.31.20.103
-const uint32_t CLIENT_IPV4_ADDRESS = 0xac1f1282;  // 172.31.18.130
+const char* INTERFACE_NAME = "ens6";
+const uint8_t SERVER_ETHERNET_ADDRESS[] = {0x0a, 0xff, 0xea, 0x86, 0x04, 0xd9};
+const uint8_t CLIENT_ETHERNET_ADDRESS[] = {0x0a, 0xff, 0xdf, 0x30, 0xe7, 0x59};
+const uint32_t SERVER_IPV4_ADDRESS = 0xac1f16f9;  // 172.31.22.249
+const uint32_t CLIENT_IPV4_ADDRESS = 0xac1f10c6;  // 172.31.16.198
 const uint16_t SERVER_PORT = 40000;
-const uint16_t CLIENT_PORT = 40000;
+const uint16_t CLIENT_PORT[8] = {40000, 40001, 40002, 40003, 40004, 40005, 40006, 40007};
 
+// For latency
 const int SEND_BATCH_SIZE = 1;
 const int RECV_BATCH_SIZE = 32;
 const int PAYLOAD_BYTES = 32;
 const int MAX_INFLIGHT_PKTS = 1024;
+const int SEND_INTV_US = 100;
+
+// For bandwidth
+// const int SEND_BATCH_SIZE = 64;
+// const int RECV_BATCH_SIZE = 64;
+// // 256 is reserved for xdp_meta, 42 is reserved for eth+ip+udp
+// const int PAYLOAD_BYTES = 4096 - 256 - 42;
+// const int MAX_INFLIGHT_PKTS = 4096;
+// const int SEND_INTV_US = 0;
+
 const bool busy_poll = true;
 
 #define NUM_FRAMES (4096 * 16)
@@ -58,6 +69,7 @@ struct socket_t {
     struct xsk_socket* xsk;
     uint64_t frames[NUM_FRAMES];
     uint32_t num_frames;
+    pthread_spinlock_t frame_pool_lock;
     uint64_t sent_packets;
     uint32_t counter;
     int queue_id;
@@ -69,44 +81,43 @@ struct client_t {
     struct xdp_program* program;
     bool attached_native;
     bool attached_skb;
-    struct socket_t socket[NUM_CPUS];
+    struct socket_t socket[NUM_QUEUES];
     pthread_t stats_thread;
-    pthread_t send_thread[NUM_CPUS];
-    pthread_t recv_thread[NUM_CPUS];
+    pthread_t send_thread[NUM_QUEUES];
+    pthread_t recv_thread[NUM_QUEUES];
     uint64_t previous_sent_packets;
 };
 
 static struct client_t client;
-pthread_spinlock_t frame_pool_lock;
 std::atomic<uint64_t> inflight_pkts{0};
 volatile bool quit;
 
 // TODO(yang): make thread-local cache for frame pool.
 uint64_t socket_alloc_frame(struct socket_t* socket) {
-    pthread_spin_lock(&frame_pool_lock);
+    pthread_spin_lock(&socket->frame_pool_lock);
     if (socket->num_frames == 0) {
-        pthread_spin_unlock(&frame_pool_lock);
+        pthread_spin_unlock(&socket->frame_pool_lock);
         return INVALID_FRAME;
     }
     socket->num_frames--;
     uint64_t frame = socket->frames[socket->num_frames];
     socket->frames[socket->num_frames] = INVALID_FRAME;
-    pthread_spin_unlock(&frame_pool_lock);
+    pthread_spin_unlock(&socket->frame_pool_lock);
     return frame;
 }
 
 void socket_free_frame(struct socket_t* socket, uint64_t frame) {
-    pthread_spin_lock(&frame_pool_lock);
+    pthread_spin_lock(&socket->frame_pool_lock);
     assert(socket->num_frames < NUM_FRAMES);
     socket->frames[socket->num_frames] = frame;
     socket->num_frames++;
-    pthread_spin_unlock(&frame_pool_lock);
+    pthread_spin_unlock(&socket->frame_pool_lock);
 }
 
 uint32_t socket_num_free_frames(struct socket_t* socket) {
-    pthread_spin_lock(&frame_pool_lock);
+    pthread_spin_lock(&socket->frame_pool_lock);
     int num_free = socket->num_frames;
-    pthread_spin_unlock(&frame_pool_lock);
+    pthread_spin_unlock(&socket->frame_pool_lock);
     return num_free;
 }
 
@@ -201,7 +212,7 @@ int client_init(struct client_t* client, const char* interface_name) {
     }
 
     // per-CPU socket setup
-    for (int i = 0; i < NUM_CPUS; i++) {
+    for (int i = 0; i < NUM_QUEUES; i++) {
         // allocate buffer for umem
         const int buffer_size = NUM_FRAMES * FRAME_SIZE;
 
@@ -262,7 +273,7 @@ int client_init(struct client_t* client, const char* interface_name) {
     }
 
     // create socket threads
-    for (int i = 0; i < NUM_CPUS; i++) {
+    for (int i = 0; i < NUM_QUEUES; i++) {
         ret = pthread_create(&client->recv_thread[i], NULL, recv_thread,
                              &client->socket[i]);
         if (ret) {
@@ -284,12 +295,12 @@ int client_init(struct client_t* client, const char* interface_name) {
 void client_shutdown(struct client_t* client) {
     assert(client);
 
-    for (int i = 0; i < NUM_CPUS; i++) {
+    for (int i = 0; i < NUM_QUEUES; i++) {
         pthread_join(client->recv_thread[i], NULL);
         pthread_join(client->send_thread[i], NULL);
     }
 
-    for (int i = 0; i < NUM_CPUS; i++) {
+    for (int i = 0; i < NUM_QUEUES; i++) {
         if (client->socket[i].xsk) {
             xsk_socket__delete(client->socket[i].xsk);
         }
@@ -324,7 +335,7 @@ static void* stats_thread(void* arg) {
         std::vector<uint64_t> rtts;
 
         uint64_t sent_packets = 0;
-        for (int i = 0; i < NUM_CPUS; i++) {
+        for (int i = 0; i < NUM_QUEUES; i++) {
             sent_packets += client->socket[i].sent_packets;
             rtts.insert(rtts.end(), client->socket[i].rtts.begin(),
                         client->socket[i].rtts.end());
@@ -356,7 +367,7 @@ static void cleanup() {
     fflush(stdout);
 }
 
-int client_generate_packet(void* data, int payload_bytes, uint32_t counter) {
+int client_generate_packet(void* data, int payload_bytes, uint32_t counter, int queue_id) {
     struct ethhdr* eth = (struct ethhdr*)data;
     struct iphdr* ip = (struct iphdr*)((char*)data + sizeof(struct ethhdr));
     struct udphdr* udp = (struct udphdr*)((char*)ip + sizeof(struct iphdr));
@@ -382,7 +393,7 @@ int client_generate_packet(void* data, int payload_bytes, uint32_t counter) {
     ip->check = ipv4_checksum(ip, sizeof(struct iphdr));
 
     // generate udp header
-    udp->source = htons(CLIENT_PORT);
+    udp->source = htons(CLIENT_PORT[queue_id]);
     udp->dest = htons(SERVER_PORT);
     udp->len = htons(sizeof(struct udphdr) + payload_bytes);
     udp->check = 0;
@@ -425,7 +436,7 @@ void socket_send(struct socket_t* socket, int queue_id) {
 
         packet_address[num_packets] = frame;
         packet_length[num_packets] = client_generate_packet(
-            packet, PAYLOAD_BYTES, socket->counter + num_packets);
+            packet, PAYLOAD_BYTES, socket->counter + num_packets, queue_id);
 
         num_packets++;
 
@@ -535,7 +546,7 @@ static void* send_thread(void* arg) {
 
     while (!quit) {
         socket_send(socket, queue_id);
-        usleep(100);
+        usleep(SEND_INTV_US);
     }
     return NULL;
 }
@@ -575,7 +586,7 @@ static void* recv_thread(void* arg) {
     int queue_id = socket->queue_id;
     printf("started socket recv thread for queue #%d\n", queue_id);
 
-    pin_thread_to_cpu(NUM_CPUS + queue_id);
+    pin_thread_to_cpu(NUM_QUEUES + queue_id);
 
     struct pollfd fds[2];
     int nfds = 1;
@@ -607,7 +618,8 @@ int main(int argc, char* argv[]) {
     int ret;
 
     /* initialize a spin lock */
-    ret = pthread_spin_init(&frame_pool_lock, pshared);
+    for (int i = 0; i < NUM_QUEUES; i++)
+        ret = pthread_spin_init(&client.socket[i].frame_pool_lock, pshared);
 
     if (client_init(&client, INTERFACE_NAME) != 0) {
         cleanup();

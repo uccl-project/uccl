@@ -31,7 +31,7 @@ int client_xdp_filter(struct xdp_md *ctx) {
 
     struct udphdr *udp = (void *)ip + sizeof(struct iphdr);
     if ((void *)udp + sizeof(struct udphdr) > data_end) return XDP_PASS;
-    if (udp->dest != __constant_htons(40000)) return XDP_PASS;
+    if (udp->source != __constant_htons(40000)) return XDP_PASS;
 
     int index = ctx->rx_queue_index;
     if (bpf_map_lookup_elem(&xsks_map, &index))

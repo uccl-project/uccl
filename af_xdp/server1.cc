@@ -13,7 +13,7 @@
 #include <unistd.h>
 #include <xdp/libxdp.h>
 
-const char *INTERFACE_NAME = "ens5";
+const char *INTERFACE_NAME = "ens6";
 
 struct server_t {
     int interface_index;
