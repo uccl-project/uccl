@@ -1,15 +1,16 @@
 #include <errno.h>
 #include <stdint.h>
 
-#define DEFAULT_N_BYTES 32
+#define PAYLOAD_BYTES 32
 #define DEFAULT_PORT 8787
 #define DEFAULT_ADDRESS "127.0.0.1"
+#define NUM_SOCKETS 1
 
 struct Config {
     char *address;
     int port;
     int n_bytes;
-    int sockfd;
+    int sockfds[NUM_SOCKETS];
 };
 
 void print_config(struct Config config) {
@@ -22,7 +23,7 @@ void print_config(struct Config config) {
 struct Config get_config(int argc, char *argv[]) {
     struct Config config;
     int c;
-    config.n_bytes = DEFAULT_N_BYTES;
+    config.n_bytes = PAYLOAD_BYTES;
     config.port = DEFAULT_PORT;
     config.address = DEFAULT_ADDRESS;
 

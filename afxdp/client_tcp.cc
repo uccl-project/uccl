@@ -2,6 +2,7 @@
  *  A client timing the roundtrip time of a message sent to a server multiple
  * times. Usage: ./client.out -a <address> -p <port> -b <message_size (bytes)>
  */
+#include <assert.h>
 #include <ctype.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -12,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/epoll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <time.h>
@@ -32,9 +34,9 @@ void error(char *msg) {
 
 const int SEND_BATCH_SIZE = 1;
 const int RECV_BATCH_SIZE = 32;
-// const int PAYLOAD_BYTES = 32; // see DEFAULT_N_BYTES in util_tcp.h
 const int MAX_INFLIGHT_PKTS = 32;  // tune this to change packet rate
 const int SEND_INTV_US = 0;
+const int MAX_EVENTS_ONCE = 32;
 
 std::vector<uint64_t> rtts;
 std::atomic<uint64_t> sent_packets{0};
@@ -45,24 +47,43 @@ static void *send_thread(void *arg) {
     pin_thread_to_cpu(0);
 
     struct Config *config = (struct Config *)arg;
-    int sockfd = config->sockfd;
+    int epfd = epoll_create(1);
+
+    // Monitor all sockets for EPOLLOUT
+    for (int i = 0; i < NUM_SOCKETS; i++) {
+        struct epoll_event ev;
+        ev.events = EPOLLOUT | EPOLLEXCLUSIVE;
+        ev.data.fd = config->sockfds[i];
+
+        if (epoll_ctl(epfd, EPOLL_CTL_ADD, config->sockfds[i], &ev) == -1) {
+            perror("epoll_ctl()\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+
     uint8_t *wbuffer = (uint8_t *)malloc(config->n_bytes);
+    struct epoll_event events[MAX_EVENTS_ONCE];
     while (!quit) {
         if (inflight_pkts >= MAX_INFLIGHT_PKTS) {
             continue;
         }
-        for (int i = 0; i < SEND_BATCH_SIZE; i++) {
-            auto now = std::chrono::high_resolution_clock::now();
-            *(uint64_t *)wbuffer =
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                    now.time_since_epoch())
-                    .count();
-            *(uint32_t *)(wbuffer + sizeof(uint64_t)) = inflight_pkts + i;
+        int nfds = epoll_wait(epfd, events, MAX_EVENTS_ONCE, -1);
+        for (int i = 0; i < nfds; i++) {
+            assert(events[i].events & EPOLLOUT);
+            for (int j = 0; j < SEND_BATCH_SIZE; j++) {
+                auto now = std::chrono::high_resolution_clock::now();
+                *(uint64_t *)wbuffer =
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        now.time_since_epoch())
+                        .count();
+                *(uint32_t *)(wbuffer + sizeof(uint64_t)) = inflight_pkts + i;
 
-            send_message(config->n_bytes, sockfd, wbuffer, &quit);
+                send_message(config->n_bytes, events[i].data.fd, wbuffer,
+                             &quit);
+            }
+            inflight_pkts += SEND_BATCH_SIZE;
+            sent_packets += SEND_BATCH_SIZE;
         }
-        inflight_pkts += SEND_BATCH_SIZE;
-        sent_packets += SEND_BATCH_SIZE;
         if (SEND_INTV_US) usleep(SEND_INTV_US);
     }
     free(wbuffer);
@@ -73,23 +94,42 @@ static void *recv_thread(void *arg) {
     pin_thread_to_cpu(1);
 
     struct Config *config = (struct Config *)arg;
-    int sockfd = config->sockfd;
-    uint8_t *rbuffer = (uint8_t *)malloc(config->n_bytes);
-    while (!quit) {
-        for (int i = 0; i < RECV_BATCH_SIZE; i++) {
-            receive_message(config->n_bytes, sockfd, rbuffer, &quit);
+    int epfd = epoll_create(1);
 
-            uint64_t now_us = *(uint64_t *)rbuffer;
-            uint32_t counter = *(uint32_t *)(rbuffer + sizeof(uint64_t));
-            auto now = std::chrono::high_resolution_clock::now();
-            uint64_t now_us2 =
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                    now.time_since_epoch())
-                    .count();
-            uint64_t rtt = now_us2 - now_us;
-            rtts.push_back(rtt);
+    // Monitor all sockets for EPOLLIN
+    for (int i = 0; i < NUM_SOCKETS; i++) {
+        struct epoll_event ev;
+        ev.events = EPOLLIN | EPOLLEXCLUSIVE;
+        ev.data.fd = config->sockfds[i];
+
+        if (epoll_ctl(epfd, EPOLL_CTL_ADD, config->sockfds[i], &ev) == -1) {
+            perror("epoll_ctl()\n");
+            exit(EXIT_FAILURE);
         }
-        inflight_pkts -= RECV_BATCH_SIZE;
+    }
+
+    uint8_t *rbuffer = (uint8_t *)malloc(config->n_bytes);
+    struct epoll_event events[MAX_EVENTS_ONCE];
+    while (!quit) {
+        int nfds = epoll_wait(epfd, events, MAX_EVENTS_ONCE, -1);
+        for (int i = 0; i < nfds; i++) {
+            assert(events[i].events & EPOLLIN);
+            for (int j = 0; j < RECV_BATCH_SIZE; j++) {
+                receive_message(config->n_bytes, events[i].data.fd, rbuffer,
+                                &quit);
+
+                uint64_t now_us = *(uint64_t *)rbuffer;
+                uint32_t counter = *(uint32_t *)(rbuffer + sizeof(uint64_t));
+                auto now = std::chrono::high_resolution_clock::now();
+                uint64_t now_us2 =
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        now.time_since_epoch())
+                        .count();
+                uint64_t rtt = now_us2 - now_us;
+                rtts.push_back(rtt);
+            }
+            inflight_pkts -= RECV_BATCH_SIZE;
+        }
     }
     free(rbuffer);
     return NULL;
@@ -134,16 +174,10 @@ int main(int argc, char *argv[]) {
     signal(SIGALRM, clean_shutdown_handler);
     alarm(10);
 
-    int sockfd;
     struct sockaddr_in serv_addr;
     struct hostent *server;
 
     struct Config config = get_config(argc, argv);
-
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0) {
-        error("ERROR opening socket");
-    }
     server = gethostbyname(config.address);
     if (server == NULL) {
         fprintf(stderr, "ERROR, no such host\n");
@@ -155,14 +189,22 @@ int main(int argc, char *argv[]) {
           server->h_length);
     serv_addr.sin_port = htons(config.port);
 
-    // Connect and set nonblocking and nodelay
-    if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-        error("ERROR connecting");
+    for (int i = 0; i < NUM_SOCKETS; i++) {
+        int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+        if (sockfd < 0) {
+            error("ERROR opening socket");
+        }
+        // Connect and set nonblocking and nodelay
+        if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) <
+            0) {
+            error("ERROR connecting");
+        }
+        fcntl(sockfd, F_SETFL, O_NONBLOCK);
+        int flag = 1;
+        setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, (void *)&flag,
+                   sizeof(int));
+        config.sockfds[i] = sockfd;
     }
-    fcntl(sockfd, F_SETFL, O_NONBLOCK);
-    int flag = 1;
-    setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, (void *)&flag, sizeof(int));
-    config.sockfd = sockfd;
 
     printf("Connection successful! Starting...\n");
     fflush(stdout);
@@ -191,7 +233,9 @@ int main(int argc, char *argv[]) {
     pthread_join(send_thread_ctl, NULL);
     pthread_join(stats_thread_ctl, NULL);
 
-    close(sockfd);
+    for (int i = 0; i < NUM_SOCKETS; i++) {
+        close(config.sockfds[i]);
+    }
 
     return 0;
 }
