@@ -36,21 +36,22 @@ const uint8_t CLIENT_ETHERNET_ADDRESS[] = {0x0a, 0xff, 0xdf, 0x30, 0xe7, 0x59};
 const uint32_t SERVER_IPV4_ADDRESS = 0xac1f16f9;  // 172.31.22.249
 const uint32_t CLIENT_IPV4_ADDRESS = 0xac1f10c6;  // 172.31.16.198
 const uint16_t SERVER_PORT = 40000;
-const uint16_t CLIENT_PORT[8] = {40000, 40001, 40002, 40003, 40004, 40005, 40006, 40007};
+const uint16_t CLIENT_PORT[8] = {40000, 40001, 40002, 40003,
+                                 40004, 40005, 40006, 40007};
 
 // For latency
 const int SEND_BATCH_SIZE = 1;
 const int RECV_BATCH_SIZE = 32;
 const int PAYLOAD_BYTES = 32;
 const int MAX_INFLIGHT_PKTS = 1024;
-const int SEND_INTV_US = 100;
+const int SEND_INTV_US = 80;
 
 // For bandwidth
-// const int SEND_BATCH_SIZE = 64;
-// const int RECV_BATCH_SIZE = 64;
+// const int SEND_BATCH_SIZE = 32;
+// const int RECV_BATCH_SIZE = 32;
 // // 256 is reserved for xdp_meta, 42 is reserved for eth+ip+udp
 // const int PAYLOAD_BYTES = 4096 - 256 - 42;
-// const int MAX_INFLIGHT_PKTS = 4096;
+// const int MAX_INFLIGHT_PKTS = 1024;
 // const int SEND_INTV_US = 0;
 
 const bool busy_poll = true;
@@ -367,7 +368,8 @@ static void cleanup() {
     fflush(stdout);
 }
 
-int client_generate_packet(void* data, int payload_bytes, uint32_t counter, int queue_id) {
+int client_generate_packet(void* data, int payload_bytes, uint32_t counter,
+                           int queue_id) {
     struct ethhdr* eth = (struct ethhdr*)data;
     struct iphdr* ip = (struct iphdr*)((char*)data + sizeof(struct ethhdr));
     struct udphdr* udp = (struct udphdr*)((char*)ip + sizeof(struct iphdr));
@@ -392,8 +394,9 @@ int client_generate_packet(void* data, int payload_bytes, uint32_t counter, int 
     ip->check = 0;
     ip->check = ipv4_checksum(ip, sizeof(struct iphdr));
 
-    // generate udp header
-    udp->source = htons(CLIENT_PORT[queue_id]);
+    // generate udp header: using different ports to bypass per-flow rate limiting
+    udp->source = htons(
+        CLIENT_PORT[counter % (sizeof(CLIENT_PORT) / sizeof(CLIENT_PORT[0]))]);
     udp->dest = htons(SERVER_PORT);
     udp->len = htons(sizeof(struct udphdr) + payload_bytes);
     udp->check = 0;
