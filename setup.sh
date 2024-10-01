@@ -48,8 +48,8 @@ make
 
 ## Or manually by
 # git submodule update --init && ./configure
-# pushd lib/xdp-tools && ./configure && make -j && popd
 # pushd lib/ && make -j && popd
+# pushd lib/xdp-tools && ./configure && make -j && popd
 # make -j
 
 

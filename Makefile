@@ -23,8 +23,8 @@ clean: $(LESSONS_CLEAN)
 	@echo; echo common; $(MAKE) -C common clean
 
 lib: check_submodule config
-	@echo; echo lib/xdp-tools; $(MAKE) -C lib/xdp-tools
 	@echo; echo lib; $(MAKE) -C lib
+	@echo; echo lib/xdp-tools; $(MAKE) -C lib/xdp-tools
 
 check_submodule:
 	@git submodule update --init
