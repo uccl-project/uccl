@@ -40,6 +40,7 @@ std::vector<uint64_t> rtts;
 std::atomic<uint64_t> sent_packets{0};
 std::atomic<uint64_t> inflight_pkts{0};
 
+// TODO(Yang): using multiple TCP connections to saturate the link
 static void *send_thread(void *arg) {
     pin_thread_to_cpu(0);
 
@@ -95,17 +96,31 @@ static void *recv_thread(void *arg) {
 }
 
 static void *stats_thread(void *arg) {
+    auto start = std::chrono::high_resolution_clock::now();
+    auto start_pkts = sent_packets.load();
     uint64_t previous_sent_packets = sent_packets;
     while (!quit) {
         usleep(1000000);
         auto med_latency = Percentile(rtts, 50);
         auto tail_latency = Percentile(rtts, 99);
         uint64_t sent_delta = sent_packets - previous_sent_packets;
+        previous_sent_packets = sent_packets;
+
         printf("send delta: %lu, med rtt: %lu us, tail rtt: %lu us\n",
                sent_delta, med_latency, tail_latency);
-
-        previous_sent_packets = sent_packets;
     }
+    auto end = std::chrono::high_resolution_clock::now();
+    auto end_pkts = sent_packets.load();
+    uint64_t duration =
+        std::chrono::duration_cast<std::chrono::microseconds>(end - start)
+            .count();
+    auto throughput = (end_pkts - start_pkts) * 1.0 / duration * 1000;
+
+    auto med_latency = Percentile(rtts, 50);
+    auto tail_latency = Percentile(rtts, 99);
+
+    printf("Throughput: %.2f Kpkts/s, med rtt: %lu us, tail rtt: %lu us\n",
+           throughput, med_latency, tail_latency);
 
     return NULL;
 }
@@ -147,19 +162,10 @@ int main(int argc, char *argv[]) {
     fcntl(sockfd, F_SETFL, O_NONBLOCK);
     int flag = 1;
     setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, (void *)&flag, sizeof(int));
-
-    pthread_t stats_thread_ctl;
-    // create stats thread
-    int ret = pthread_create(&stats_thread_ctl, NULL, stats_thread, NULL);
-    if (ret) {
-        printf("\nerror: could not create stats thread\n\n");
-        return 1;
-    }
+    config.sockfd = sockfd;
 
     printf("Connection successful! Starting...\n");
     fflush(stdout);
-
-    config.sockfd = sockfd;
 
     pthread_t recv_thread_ctl;
     if (pthread_create(&recv_thread_ctl, NULL, recv_thread, &config)) {
@@ -169,6 +175,12 @@ int main(int argc, char *argv[]) {
     pthread_t send_thread_ctl;
     if (pthread_create(&send_thread_ctl, NULL, send_thread, &config)) {
         error("ERROR creating send thread");
+    }
+
+    pthread_t stats_thread_ctl;
+    if (pthread_create(&stats_thread_ctl, NULL, stats_thread, NULL)) {
+        printf("\nerror: could not create stats thread\n\n");
+        return 1;
     }
 
     while (!quit) {

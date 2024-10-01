@@ -72,7 +72,7 @@ struct socket_t {
     uint64_t frames[NUM_FRAMES];
     uint32_t num_frames;
     pthread_spinlock_t frame_pool_lock;
-    uint64_t sent_packets;
+    std::atomic<uint64_t> sent_packets;
     uint32_t counter;
     int queue_id;
     std::vector<uint64_t> rtts;
@@ -267,13 +267,6 @@ int client_init(struct client_t* client, const char* interface_name) {
         client->socket[i].queue_id = i;
     }
 
-    // create stats thread
-    ret = pthread_create(&client->stats_thread, NULL, stats_thread, client);
-    if (ret) {
-        printf("\nerror: could not create stats thread\n\n");
-        return 1;
-    }
-
     // create socket threads
     for (int i = 0; i < NUM_QUEUES; i++) {
         ret = pthread_create(&client->recv_thread[i], NULL, recv_thread,
@@ -291,6 +284,13 @@ int client_init(struct client_t* client, const char* interface_name) {
         }
     }
 
+    // create stats thread
+    ret = pthread_create(&client->stats_thread, NULL, stats_thread, client);
+    if (ret) {
+        printf("\nerror: could not create stats thread\n\n");
+        return 1;
+    }
+
     return 0;
 }
 
@@ -301,6 +301,7 @@ void client_shutdown(struct client_t* client) {
         pthread_join(client->recv_thread[i], NULL);
         pthread_join(client->send_thread[i], NULL);
     }
+    pthread_join(client->stats_thread, NULL);
 
     for (int i = 0; i < NUM_QUEUES; i++) {
         if (client->socket[i].xsk) {
@@ -327,31 +328,6 @@ void client_shutdown(struct client_t* client) {
 
         xdp_program__close(client->program);
     }
-}
-
-static void* stats_thread(void* arg) {
-    struct client_t* client = (struct client_t*)arg;
-
-    while (!quit) {
-        usleep(1000000);
-        std::vector<uint64_t> rtts;
-
-        uint64_t sent_packets = 0;
-        for (int i = 0; i < NUM_QUEUES; i++) {
-            sent_packets += client->socket[i].sent_packets;
-            rtts.insert(rtts.end(), client->socket[i].rtts.begin(),
-                        client->socket[i].rtts.end());
-        }
-        auto med_latency = Percentile(rtts, 50);
-        auto tail_latency = Percentile(rtts, 99);
-        uint64_t sent_delta = sent_packets - client->previous_sent_packets;
-        printf("send delta: %lu, med rtt: %lu us, tail rtt: %lu us\n",
-               sent_delta, med_latency, tail_latency);
-
-        client->previous_sent_packets = sent_packets;
-    }
-
-    return NULL;
 }
 
 void interrupt_handler(int signal) {
@@ -480,7 +456,7 @@ void socket_send(struct socket_t* socket, int queue_id) {
         }
 
         xsk_ring_cons__release(&socket->complete_queue, completed);
-        __sync_fetch_and_add(&socket->sent_packets, completed);
+        socket->sent_packets += completed;
         socket->counter += completed;
     }
 }
@@ -608,6 +584,56 @@ static void* recv_thread(void* arg) {
         }
         socket_recv(socket, queue_id);
     }
+    return NULL;
+}
+
+uint64_t aggregate_sent_packets(struct client_t* client) {
+    uint64_t sent_packets = 0;
+    for (int i = 0; i < NUM_QUEUES; i++)
+        sent_packets += client->socket[i].sent_packets.load();
+    return sent_packets;
+}
+
+std::vector<uint64_t> aggregate_rtts(struct client_t* client) {
+    std::vector<uint64_t> rtts;
+    for (int i = 0; i < NUM_QUEUES; i++) {
+        rtts.insert(rtts.end(), client->socket[i].rtts.begin(),
+                    client->socket[i].rtts.end());
+    }
+    return rtts;
+}
+
+static void* stats_thread(void* arg) {
+    struct client_t* client = (struct client_t*)arg;
+    
+    auto start = std::chrono::high_resolution_clock::now();
+    auto start_pkts = aggregate_sent_packets(client);
+    while (!quit) {
+        usleep(1000000);
+        uint64_t sent_packets = aggregate_sent_packets(client);
+        auto rtts = aggregate_rtts(client);
+        auto med_latency = Percentile(rtts, 50);
+        auto tail_latency = Percentile(rtts, 99);
+        uint64_t sent_delta = sent_packets - client->previous_sent_packets;
+        client->previous_sent_packets = sent_packets;
+
+        printf("send delta: %lu, med rtt: %lu us, tail rtt: %lu us\n",
+               sent_delta, med_latency, tail_latency);
+    }
+    auto end = std::chrono::high_resolution_clock::now();
+    auto end_pkts = aggregate_sent_packets(client);
+    uint64_t duration =
+        std::chrono::duration_cast<std::chrono::microseconds>(end - start)
+            .count();
+    auto throughput = (end_pkts - start_pkts) * 1.0 / duration * 1000;
+
+    auto rtts = aggregate_rtts(client);
+    auto med_latency = Percentile(rtts, 50);
+    auto tail_latency = Percentile(rtts, 99);
+
+    printf("Throughput: %.2f Kpkts/s, med rtt: %lu us, tail rtt: %lu us\n",
+           throughput, med_latency, tail_latency);
+
     return NULL;
 }
 
