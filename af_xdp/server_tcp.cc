@@ -5,13 +5,13 @@
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <strings.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <signal.h>
 
 #include "util_tcp.h"
 
@@ -59,8 +59,8 @@ int main(int argc, char *argv[]) {
     // Receive-send loop
     printf("Connection accepted, ready to receive!\n");
     for (size_t i = 0;; i++) {
-        receive_message(config.n_bytes, newsockfd, buffer);
-        send_message(config.n_bytes, newsockfd, buffer);
+        receive_message(config.n_bytes, newsockfd, buffer, &quit);
+        send_message(config.n_bytes, newsockfd, buffer, &quit);
     }
     printf("Done!\n");
 

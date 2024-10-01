@@ -40,11 +40,11 @@ const uint16_t CLIENT_PORT[8] = {40000, 40001, 40002, 40003,
                                  40004, 40005, 40006, 40007};
 
 // For latency
-const int SEND_BATCH_SIZE = 1;
+const int SEND_BATCH_SIZE = 32;
 const int RECV_BATCH_SIZE = 32;
 const int PAYLOAD_BYTES = 32;
-const int MAX_INFLIGHT_PKTS = 1024;
-const int SEND_INTV_US = 80;
+const int MAX_INFLIGHT_PKTS = 128;
+const int SEND_INTV_US = 0;
 
 // For bandwidth
 // const int SEND_BATCH_SIZE = 32;
@@ -418,8 +418,9 @@ int client_generate_packet(void* data, int payload_bytes, uint32_t counter,
 void socket_send(struct socket_t* socket, int queue_id) {
     // don't do anything if we don't have enough free packets to send a batch
     if (socket_num_free_frames(socket) < SEND_BATCH_SIZE ||
-        inflight_pkts >= MAX_INFLIGHT_PKTS)
+        inflight_pkts >= MAX_INFLIGHT_PKTS) {
         return;
+    }
 
     // queue packets to send
     uint32_t send_index;

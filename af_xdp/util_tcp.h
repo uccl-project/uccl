@@ -9,6 +9,7 @@ struct Config {
     char *address;
     int port;
     int n_bytes;
+    int sockfd;
 };
 
 void print_config(struct Config config) {
@@ -65,11 +66,14 @@ uint64_t rdtscp() {
     return ((uint64_t)hi << 32) | lo;
 }
 
+volatile bool quit;
+
 // Reads from the given socket into the given buffer n_bytes bytes
-int receive_message(size_t n_bytes, int sockfd, uint8_t *buffer) {
+int receive_message(size_t n_bytes, int sockfd, uint8_t *buffer,
+                    volatile bool *quit) {
     int bytes_read = 0;
     int r;
-    while (bytes_read < n_bytes) {
+    while (bytes_read < n_bytes && !(*quit)) {
         // Make sure we read exactly n_bytes
         r = read(sockfd, buffer, n_bytes - bytes_read);
         if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
@@ -83,10 +87,11 @@ int receive_message(size_t n_bytes, int sockfd, uint8_t *buffer) {
 }
 
 // Writes n_bytes from the given buffer to the given socekt
-int send_message(size_t n_bytes, int sockfd, uint8_t *buffer) {
+int send_message(size_t n_bytes, int sockfd, uint8_t *buffer,
+                 volatile bool *quit) {
     int bytes_sent = 0;
     int r;
-    while (bytes_sent < n_bytes) {
+    while (bytes_sent < n_bytes && !(*quit)) {
         // Make sure we write exactly n_bytes
         r = write(sockfd, buffer, n_bytes - bytes_sent);
         if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
