@@ -43,9 +43,8 @@ const uint16_t CLIENT_PORT[8] = {40000, 40001, 40002, 40003,
 const int SEND_BATCH_SIZE = 1;
 const int RECV_BATCH_SIZE = 32;
 const int PAYLOAD_BYTES = 32;
-const int MAX_INFLIGHT_PKTS = 16;  // tune this to change packet rate
-const int SEND_INTV_US =
-    0;  // sleep will given unstable packet rate and latency
+const int MAX_INFLIGHT_PKTS = 1;  // tune this to change packet rate
+const int SEND_INTV_US = 0;        // sleep gives unstable rate and latency
 
 // For bandwidth
 // const int SEND_BATCH_SIZE = 32;
@@ -467,6 +466,7 @@ void socket_recv(struct socket_t* socket, int queue_id) {
     uint32_t idx_rx, idx_fq, rcvd;
     rcvd = xsk_ring_cons__peek(&socket->recv_queue, RECV_BATCH_SIZE, &idx_rx);
     if (!rcvd) return;
+    inflight_pkts -= rcvd;
 
     /* Stuff the ring with as much frames as possible */
     int stock_frames =
@@ -514,7 +514,6 @@ void socket_recv(struct socket_t* socket, int queue_id) {
         socket_free_frame(socket, addr);
     }
     xsk_ring_cons__release(&socket->recv_queue, rcvd);
-    inflight_pkts -= rcvd;
 }
 
 static void* send_thread(void* arg) {
@@ -605,7 +604,7 @@ std::vector<uint64_t> aggregate_rtts(struct client_t* client) {
 
 static void* stats_thread(void* arg) {
     struct client_t* client = (struct client_t*)arg;
-    
+
     auto start = std::chrono::high_resolution_clock::now();
     auto start_pkts = aggregate_sent_packets(client);
     while (!quit) {
