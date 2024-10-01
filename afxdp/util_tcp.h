@@ -1,10 +1,12 @@
 #include <errno.h>
 #include <stdint.h>
 
+// Need around 100k to saturate 10Gbps link
 #define PAYLOAD_BYTES 32
 #define DEFAULT_PORT 8787
 #define DEFAULT_ADDRESS "127.0.0.1"
-#define NUM_SOCKETS 1
+#define NUM_SOCKETS 8
+const int MAX_EVENTS_ONCE = 32;
 
 struct Config {
     char *address;
@@ -76,7 +78,7 @@ int receive_message(size_t n_bytes, int sockfd, uint8_t *buffer,
     int r;
     while (bytes_read < n_bytes && !(*quit)) {
         // Make sure we read exactly n_bytes
-        r = read(sockfd, buffer, n_bytes - bytes_read);
+        r = read(sockfd, buffer + bytes_read, n_bytes - bytes_read);
         if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
             panic("ERROR reading from socket");
         }
@@ -87,6 +89,16 @@ int receive_message(size_t n_bytes, int sockfd, uint8_t *buffer,
     return bytes_read;
 }
 
+int receive_message_early_return(size_t n_bytes, int sockfd, uint8_t *buffer,
+                                 volatile bool *quit) {
+    int r = read(sockfd, buffer, n_bytes);
+    // Indicate this read would block.
+    if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        return 0;
+    }
+    return r + receive_message(n_bytes - r, sockfd, buffer + r, quit);
+}
+
 // Writes n_bytes from the given buffer to the given socekt
 int send_message(size_t n_bytes, int sockfd, uint8_t *buffer,
                  volatile bool *quit) {
@@ -94,7 +106,7 @@ int send_message(size_t n_bytes, int sockfd, uint8_t *buffer,
     int r;
     while (bytes_sent < n_bytes && !(*quit)) {
         // Make sure we write exactly n_bytes
-        r = write(sockfd, buffer, n_bytes - bytes_sent);
+        r = write(sockfd, buffer + bytes_sent, n_bytes - bytes_sent);
         if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
             panic("ERROR writing to socket");
         }
@@ -103,4 +115,14 @@ int send_message(size_t n_bytes, int sockfd, uint8_t *buffer,
         }
     }
     return bytes_sent;
+}
+
+int send_message_early_return(size_t n_bytes, int sockfd, uint8_t *buffer,
+                              volatile bool *quit) {
+    int r = write(sockfd, buffer, n_bytes);
+    // Indicate this write would block.
+    if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        return 0;
+    }
+    return r + send_message(n_bytes - r, sockfd, buffer + r, quit);
 }

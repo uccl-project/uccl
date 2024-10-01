@@ -36,7 +36,6 @@ const int SEND_BATCH_SIZE = 1;
 const int RECV_BATCH_SIZE = 32;
 const int MAX_INFLIGHT_PKTS = 32;  // tune this to change packet rate
 const int SEND_INTV_US = 0;
-const int MAX_EVENTS_ONCE = 32;
 
 std::vector<uint64_t> rtts;
 std::atomic<uint64_t> sent_packets{0};
@@ -67,22 +66,28 @@ static void *send_thread(void *arg) {
         if (inflight_pkts >= MAX_INFLIGHT_PKTS) {
             continue;
         }
-        int nfds = epoll_wait(epfd, events, MAX_EVENTS_ONCE, -1);
+        // make sure we don't have inflight more than MAX_INFLIGHT_PKTS
+        int nfds = epoll_wait(epfd, events,
+                              std::min(MAX_EVENTS_ONCE, MAX_INFLIGHT_PKTS), -1);
         for (int i = 0; i < nfds; i++) {
             assert(events[i].events & EPOLLOUT);
-            for (int j = 0; j < SEND_BATCH_SIZE; j++) {
+            int sent_cnt = 0;
+            for (; sent_cnt < SEND_BATCH_SIZE; sent_cnt++) {
                 auto now = std::chrono::high_resolution_clock::now();
                 *(uint64_t *)wbuffer =
                     std::chrono::duration_cast<std::chrono::microseconds>(
                         now.time_since_epoch())
                         .count();
-                *(uint32_t *)(wbuffer + sizeof(uint64_t)) = inflight_pkts + i;
+                *(uint32_t *)(wbuffer + sizeof(uint64_t)) = sent_packets + i;
 
-                send_message(config->n_bytes, events[i].data.fd, wbuffer,
-                             &quit);
+                int ret = send_message_early_return(
+                    config->n_bytes, events[i].data.fd, wbuffer, &quit);
+                if (ret == 0) {  // would block
+                    break;
+                }
             }
-            inflight_pkts += SEND_BATCH_SIZE;
-            sent_packets += SEND_BATCH_SIZE;
+            inflight_pkts += sent_cnt;
+            sent_packets += sent_cnt;
         }
         if (SEND_INTV_US) usleep(SEND_INTV_US);
     }
@@ -114,9 +119,13 @@ static void *recv_thread(void *arg) {
         int nfds = epoll_wait(epfd, events, MAX_EVENTS_ONCE, -1);
         for (int i = 0; i < nfds; i++) {
             assert(events[i].events & EPOLLIN);
-            for (int j = 0; j < RECV_BATCH_SIZE; j++) {
-                receive_message(config->n_bytes, events[i].data.fd, rbuffer,
-                                &quit);
+            int recv_cnt = 0;
+            for (; recv_cnt < RECV_BATCH_SIZE; recv_cnt++) {
+                int ret = receive_message_early_return(
+                    config->n_bytes, events[i].data.fd, rbuffer, &quit);
+                if (ret == 0) {  // would block
+                    break;
+                }
 
                 uint64_t now_us = *(uint64_t *)rbuffer;
                 uint32_t counter = *(uint32_t *)(rbuffer + sizeof(uint64_t));
@@ -128,7 +137,7 @@ static void *recv_thread(void *arg) {
                 uint64_t rtt = now_us2 - now_us;
                 rtts.push_back(rtt);
             }
-            inflight_pkts -= RECV_BATCH_SIZE;
+            inflight_pkts -= recv_cnt;
         }
     }
     free(rbuffer);
