@@ -1,12 +1,12 @@
 #include <errno.h>
 #include <stdint.h>
 
-// Need around 100k to saturate 10Gbps link
+// Need around 100k to echieve 8Gbps
 #define PAYLOAD_BYTES 32
-#define DEFAULT_PORT 8787
+#define DEFAULT_PORT 40000
 #define DEFAULT_ADDRESS "127.0.0.1"
-#define NUM_SOCKETS 8
-const int MAX_EVENTS_ONCE = 32;
+#define NUM_SOCKETS 8  // only impact tcp_ep
+#define MAX_EVENTS_ONCE 32
 
 struct Config {
     char *address;

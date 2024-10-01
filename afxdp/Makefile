@@ -6,7 +6,7 @@ FLAGS = -Wno-pointer-arith
 DEPS = util.h util_xdp.h util_tcp.h
 
 .PHONY: build
-build: client server server1 client_tcp server_tcp
+build: client server server1 client_tcp server_tcp client_tcp_ep server_tcp_ep
 
 client: client.cc client_xdp.o $(DEPS)
 	g++ -O3 -g client.cc -o client $(INC) $(LIBS) $(FLAGS) -lz -lelf
@@ -32,6 +32,12 @@ client_tcp: client_tcp.cc $(DEPS)
 server_tcp: server_tcp.cc $(DEPS)
 	g++ -O3 -g server_tcp.cc -o server_tcp $(FLAGS) -Wno-write-strings
 
+client_tcp_ep: client_tcp_ep.cc $(DEPS)
+	g++ -O3 -g client_tcp_ep.cc -o client_tcp_ep $(FLAGS) -Wno-write-strings
+
+server_tcp_ep: server_tcp_ep.cc $(DEPS)
+	g++ -O3 -g server_tcp_ep.cc -o server_tcp_ep $(FLAGS) -Wno-write-strings
+
 .PHONY: clean
 clean:
-	@rm -f client server server1 client_tcp server_tcp *.o
+	@rm -f client server server1 client_tcp server_tcp client_tcp_ep server_tcp_ep *.o
