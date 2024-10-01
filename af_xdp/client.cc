@@ -40,11 +40,12 @@ const uint16_t CLIENT_PORT[8] = {40000, 40001, 40002, 40003,
                                  40004, 40005, 40006, 40007};
 
 // For latency
-const int SEND_BATCH_SIZE = 32;
+const int SEND_BATCH_SIZE = 1;
 const int RECV_BATCH_SIZE = 32;
 const int PAYLOAD_BYTES = 32;
-const int MAX_INFLIGHT_PKTS = 128;
-const int SEND_INTV_US = 0;
+const int MAX_INFLIGHT_PKTS = 16;  // tune this to change packet rate
+const int SEND_INTV_US =
+    0;  // sleep will given unstable packet rate and latency
 
 // For bandwidth
 // const int SEND_BATCH_SIZE = 32;
@@ -394,7 +395,8 @@ int client_generate_packet(void* data, int payload_bytes, uint32_t counter,
     ip->check = 0;
     ip->check = ipv4_checksum(ip, sizeof(struct iphdr));
 
-    // generate udp header: using different ports to bypass per-flow rate limiting
+    // generate udp header: using different ports to bypass per-flow rate
+    // limiting
     udp->source = htons(
         CLIENT_PORT[counter % (sizeof(CLIENT_PORT) / sizeof(CLIENT_PORT[0]))]);
     udp->dest = htons(SERVER_PORT);
@@ -550,7 +552,7 @@ static void* send_thread(void* arg) {
 
     while (!quit) {
         socket_send(socket, queue_id);
-        usleep(SEND_INTV_US);
+        if (SEND_INTV_US) usleep(SEND_INTV_US);
     }
     return NULL;
 }

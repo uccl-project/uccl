@@ -30,10 +30,10 @@ void error(char *msg) {
     exit(0);
 }
 
-const int SEND_BATCH_SIZE = 32;
+const int SEND_BATCH_SIZE = 1;
 const int RECV_BATCH_SIZE = 32;
 // const int PAYLOAD_BYTES = 32; // see DEFAULT_N_BYTES in util_tcp.h
-const int MAX_INFLIGHT_PKTS = 128;
+const int MAX_INFLIGHT_PKTS = 128;  // tune this to change packet rate
 const int SEND_INTV_US = 0;
 
 std::vector<uint64_t> rtts;
@@ -48,7 +48,6 @@ static void *send_thread(void *arg) {
     uint8_t *wbuffer = (uint8_t *)malloc(config->n_bytes);
     while (!quit) {
         if (inflight_pkts >= MAX_INFLIGHT_PKTS) {
-            usleep(SEND_INTV_US);
             continue;
         }
         for (int i = 0; i < SEND_BATCH_SIZE; i++) {
@@ -63,6 +62,7 @@ static void *send_thread(void *arg) {
         }
         inflight_pkts += SEND_BATCH_SIZE;
         sent_packets += SEND_BATCH_SIZE;
+        if (SEND_INTV_US) usleep(SEND_INTV_US);
     }
     free(wbuffer);
     return NULL;
