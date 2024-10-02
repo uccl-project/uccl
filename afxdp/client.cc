@@ -40,19 +40,19 @@ const uint16_t CLIENT_PORT[8] = {40000, 40001, 40002, 40003,
                                  40004, 40005, 40006, 40007};
 
 // For latency
-const int SEND_BATCH_SIZE = 1;
-const int RECV_BATCH_SIZE = 32;
-const int PAYLOAD_BYTES = 32;
-const int MAX_INFLIGHT_PKTS = 1;  // tune this to change packet rate
-const int SEND_INTV_US = 0;        // sleep gives unstable rate and latency
+// const int SEND_BATCH_SIZE = 1;
+// const int RECV_BATCH_SIZE = 32;
+// const int PAYLOAD_BYTES = 32;
+// const int MAX_INFLIGHT_PKTS = 1;  // tune this to change packet rate
+// const int SEND_INTV_US = 0;        // sleep gives unstable rate and latency
 
 // For bandwidth
-// const int SEND_BATCH_SIZE = 32;
-// const int RECV_BATCH_SIZE = 32;
-// // 256 is reserved for xdp_meta, 42 is reserved for eth+ip+udp
-// const int PAYLOAD_BYTES = 4096 - 256 - 42;
-// const int MAX_INFLIGHT_PKTS = 1024;
-// const int SEND_INTV_US = 0;
+const int SEND_BATCH_SIZE = 32;
+const int RECV_BATCH_SIZE = 32;
+// 256 is reserved for xdp_meta, 42 is reserved for eth+ip+udp
+const int PAYLOAD_BYTES = 4096 - 256 - 42;
+const int MAX_INFLIGHT_PKTS = 64;
+const int SEND_INTV_US = 0;
 
 const bool busy_poll = true;
 
@@ -607,7 +607,12 @@ static void* stats_thread(void* arg) {
 
     auto start = std::chrono::high_resolution_clock::now();
     auto start_pkts = aggregate_sent_packets(client);
+    auto end = start;
+    auto end_pkts = start_pkts;
     while (!quit) {
+        // Put before usleep to avoid counting it for tput calculation
+        end = std::chrono::high_resolution_clock::now();
+        end_pkts = aggregate_sent_packets(client);
         usleep(1000000);
         uint64_t sent_packets = aggregate_sent_packets(client);
         auto rtts = aggregate_rtts(client);
@@ -619,19 +624,21 @@ static void* stats_thread(void* arg) {
         printf("send delta: %lu, med rtt: %lu us, tail rtt: %lu us\n",
                sent_delta, med_latency, tail_latency);
     }
-    auto end = std::chrono::high_resolution_clock::now();
-    auto end_pkts = aggregate_sent_packets(client);
     uint64_t duration =
         std::chrono::duration_cast<std::chrono::microseconds>(end - start)
             .count();
     auto throughput = (end_pkts - start_pkts) * 1.0 / duration * 1000;
+    // 42B: eth+ip+udp, 24B: 4B FCS + 8B frame delimiter + 12B interframe gap
+    auto bw_gbps = throughput * (PAYLOAD_BYTES + 42 + 24) * 8.0 / 1024 / 1024;
 
     auto rtts = aggregate_rtts(client);
     auto med_latency = Percentile(rtts, 50);
     auto tail_latency = Percentile(rtts, 99);
 
-    printf("Throughput: %.2f Kpkts/s, med rtt: %lu us, tail rtt: %lu us\n",
-           throughput, med_latency, tail_latency);
+    printf(
+        "Throughput: %.2f Kpkts/s, BW: %.2f Gbps, med rtt: %lu us, tail rtt: "
+        "%lu us\n",
+        throughput, bw_gbps, med_latency, tail_latency);
 
     return NULL;
 }

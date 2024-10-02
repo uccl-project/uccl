@@ -1,12 +1,12 @@
 #include <errno.h>
 #include <stdint.h>
 
-// Need around 100k to echieve 8Gbps
-#define PAYLOAD_BYTES 32
+#define PAYLOAD_BYTES 500000  // need around 200k to echieve 9Gbps
 #define DEFAULT_PORT 40000
 #define DEFAULT_ADDRESS "127.0.0.1"
 #define NUM_SOCKETS 8  // only impact tcp_ep
 #define MAX_EVENTS_ONCE 32
+#define MTU 9000
 
 struct Config {
     char *address;

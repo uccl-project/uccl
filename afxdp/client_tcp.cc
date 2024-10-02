@@ -97,8 +97,12 @@ static void *recv_thread(void *arg) {
 static void *stats_thread(void *arg) {
     auto start = std::chrono::high_resolution_clock::now();
     auto start_pkts = sent_packets.load();
+    auto end = start;
+    auto end_pkts = start_pkts;
     uint64_t previous_sent_packets = sent_packets;
     while (!quit) {
+        end = std::chrono::high_resolution_clock::now();
+        end_pkts = sent_packets.load();
         usleep(1000000);
         auto med_latency = Percentile(rtts, 50);
         auto tail_latency = Percentile(rtts, 99);
@@ -108,18 +112,23 @@ static void *stats_thread(void *arg) {
         printf("send delta: %lu, med rtt: %lu us, tail rtt: %lu us\n",
                sent_delta, med_latency, tail_latency);
     }
-    auto end = std::chrono::high_resolution_clock::now();
-    auto end_pkts = sent_packets.load();
     uint64_t duration =
         std::chrono::duration_cast<std::chrono::microseconds>(end - start)
             .count();
     auto throughput = (end_pkts - start_pkts) * 1.0 / duration * 1000;
+    // 54B: eth+ip+tcp, 24B: 4B FCS + 8B frame delimiter + 12B interframe gap
+    // 9000B: MTU
+    auto bw_gbps = throughput *
+                   (PAYLOAD_BYTES * ((54 + 24 + MTU) * 1.0 / MTU)) * 8.0 /
+                   1024 / 1024;
 
     auto med_latency = Percentile(rtts, 50);
     auto tail_latency = Percentile(rtts, 99);
 
-    printf("Throughput: %.2f Kpkts/s, med rtt: %lu us, tail rtt: %lu us\n",
-           throughput, med_latency, tail_latency);
+    printf(
+        "Throughput: %.2f Kpkts/s, BW: %.2f Gbps, med rtt: %lu us, tail rtt: "
+        "%lu us\n",
+        throughput, bw_gbps, med_latency, tail_latency);
 
     return NULL;
 }
