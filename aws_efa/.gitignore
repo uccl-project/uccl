@@ -1,0 +1,9 @@
+*.o
+*.ll
+fi_pingpong
+fi_info
+fi_udpgen
+fi_efagen
+fi_efasink
+af_xdp_user
+af_xdp_user_efa

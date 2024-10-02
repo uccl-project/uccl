@@ -71,10 +71,5 @@ xdp_sample_pkts_user
 # configure output
 config.mk
 
-fi_pingpong
-fi_info
-fi_udpgen
-fi_efagen
-fi_efasink
-af_xdp_user_efa
+# vscode config
 .vscode/settings.json
