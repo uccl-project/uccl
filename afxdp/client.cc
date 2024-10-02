@@ -40,19 +40,21 @@ const uint16_t CLIENT_PORT[8] = {40000, 40001, 40002, 40003,
                                  40004, 40005, 40006, 40007};
 
 // For latency
-// const int SEND_BATCH_SIZE = 1;
-// const int RECV_BATCH_SIZE = 32;
-// const int PAYLOAD_BYTES = 32;
-// const int MAX_INFLIGHT_PKTS = 1;  // tune this to change packet rate
-// const int SEND_INTV_US = 0;        // sleep gives unstable rate and latency
+const int SEND_BATCH_SIZE = 1;
+const int RECV_BATCH_SIZE = 32;
+const int PAYLOAD_BYTES = 3072;
+// tune this to change packet rate
+const int MAX_INFLIGHT_PKTS = 512;
+// sleep gives unstable rate and latency
+const int SEND_INTV_US = 0;
 
 // For bandwidth
-const int SEND_BATCH_SIZE = 32;
-const int RECV_BATCH_SIZE = 32;
-// 256 is reserved for xdp_meta, 42 is reserved for eth+ip+udp
-const int PAYLOAD_BYTES = 4096 - 256 - 42;
-const int MAX_INFLIGHT_PKTS = 64;
-const int SEND_INTV_US = 0;
+// const int SEND_BATCH_SIZE = 32;
+// const int RECV_BATCH_SIZE = 32;
+// // 256 is reserved for xdp_meta, 42 is reserved for eth+ip+udp
+// const int PAYLOAD_BYTES = 4096 - 256 - 42;
+// const int MAX_INFLIGHT_PKTS =  2;
+// const int SEND_INTV_US = 0;
 
 const bool busy_poll = true;
 

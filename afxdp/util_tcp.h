@@ -1,10 +1,12 @@
 #include <errno.h>
 #include <stdint.h>
 
-#define PAYLOAD_BYTES 500000  // need around 200k to echieve 9Gbps
+// need around 200k to echieve 9Gbps
+#define PAYLOAD_BYTES 2048
 #define DEFAULT_PORT 40000
 #define DEFAULT_ADDRESS "127.0.0.1"
-#define NUM_SOCKETS 8  // only impact tcp_ep
+// only impact tcp_ep
+#define NUM_SOCKETS 8
 #define MAX_EVENTS_ONCE 32
 #define MTU 9000
 

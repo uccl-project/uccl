@@ -3,10 +3,11 @@
 # Can only use half of the queue, per ENA implementation: https://github.com/amzn/amzn-drivers/issues/240
 NIC=$1
 NQUEUE=$2
+MTU=$3
 echo "configuring ${NIC} with ${NQUEUE} queues"
 
 sudo ethtool -L ${NIC} combined ${NQUEUE}
-sudo ifconfig ${NIC} mtu 3498 up
+sudo ifconfig ${NIC} mtu ${MTU} up
 sudo service irqbalance stop
 sudo ethtool -C ${NIC} adaptive-rx off rx-usecs 0 tx-usecs 0
 # sudo ethtool -C ${NIC} adaptive-rx on rx-usecs 20 tx-usecs 60

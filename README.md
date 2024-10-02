@@ -12,14 +12,13 @@ make
 cd afxdp
 
 # On both server and client
-./run.sh ens6 1
-sudo ifconfig ens6 mtu 9000
+./run.sh ens6 1 9000
 
 # On server
-./server_tcp_ep
+./server_tcp
 
 # On client
-./client_tcp_ep -a 172.31.22.249
+./client_tcp -a 172.31.22.249
 ```
 
 ### Run AFXDP testing
@@ -28,7 +27,7 @@ sudo ifconfig ens6 mtu 9000
 cd afxdp
 
 # On both server and client
-./run.sh ens6 1
+./run.sh ens6 1 3498
 
 # On server
 sudo ./server
