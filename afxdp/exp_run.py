@@ -62,9 +62,9 @@ def run_afxdp_exp(inflight_pkt, payload_size):
     )
 
     _ = exec_command_and_wait(server, "cd uccl/afxdp; make clean; make -j")
-    _ = exec_command_and_wait(server, "cd uccl; ./sync.sh")
-    _ = exec_command_and_wait(server, "cd uccl; ./run.sh ens6 1 3498")
-    _ = exec_command_and_wait(client, "cd uccl; ./run.sh ens6 1 3498")
+    _ = exec_command_and_wait(server, f"cd uccl; ./sync.sh {client_ip}")
+    _ = exec_command_and_wait(server, "cd uccl; ./setup.sh ens6 1 3498")
+    _ = exec_command_and_wait(client, "cd uccl; ./setup.sh ens6 1 3498")
 
     server_desc = exec_command_no_wait(server, "cd uccl/afxdp; sudo ./server")
     time.sleep(3)
@@ -87,9 +87,9 @@ def run_tcp_exp(inflight_pkt, payload_size):
     )
 
     _ = exec_command_and_wait(server, "cd uccl/afxdp; make clean; make -j")
-    _ = exec_command_and_wait(server, "cd uccl; ./sync.sh")
-    _ = exec_command_and_wait(server, "cd uccl; ./run.sh ens6 1 9000")
-    _ = exec_command_and_wait(client, "cd uccl; ./run.sh ens6 1 9000")
+    _ = exec_command_and_wait(server, f"cd uccl; ./sync.sh {client_ip}")
+    _ = exec_command_and_wait(server, "cd uccl; ./setup.sh ens6 1 9000")
+    _ = exec_command_and_wait(client, "cd uccl; ./setup.sh ens6 1 9000")
 
     server_desc = exec_command_no_wait(server, "cd uccl/afxdp; ./server_tcp")
     time.sleep(3)
