@@ -47,3 +47,37 @@ bool pin_thread_to_cpu(int cpu) {
 
     return !pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
 }
+
+inline void apply_setsockopt(int xsk_fd) {
+    int ret;
+    int sock_opt;
+
+    sock_opt = 1;
+
+    ret = setsockopt(xsk_fd, SOL_SOCKET, SO_PREFER_BUSY_POLL, (void*)&sock_opt,
+                     sizeof(sock_opt));
+    if (ret == -EPERM) {
+        fprintf(stderr,
+                "Ignore SO_PREFER_BUSY_POLL as it failed: this option needs "
+                "privileged mode.\n");
+    } else if (ret < 0) {
+        fprintf(stderr, "Ignore SO_PREFER_BUSY_POLL as it failed\n");
+    }
+
+    sock_opt = 20;
+    if (setsockopt(xsk_fd, SOL_SOCKET, SO_BUSY_POLL, (void*)&sock_opt,
+                   sizeof(sock_opt)) < 0) {
+        fprintf(stderr, "Ignore SO_BUSY_POLL as it failed\n");
+    }
+
+    sock_opt = 64;
+    ret = setsockopt(xsk_fd, SOL_SOCKET, SO_BUSY_POLL_BUDGET, (void*)&sock_opt,
+                     sizeof(sock_opt));
+    if (ret == -EPERM) {
+        fprintf(stderr,
+                "Ignore SO_BUSY_POLL_BUDGET as it failed: this option needs "
+                "privileged mode.\n");
+    } else if (ret < 0) {
+        fprintf(stderr, "Ignore SO_BUSY_POLL_BUDGET as it failed\n");
+    }
+}

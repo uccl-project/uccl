@@ -131,13 +131,10 @@ def parse_results(log_str):
     return tput, bw, med_rtt, tail_rtt
 
 
-# legend_vec = ["afxdp", "tcp"]
-# inflight_pkt_vec = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
-# payload_size_vec = [64, 1024, 2048, 3072]
+legend_vec = ["afxdp", "tcp"]
+inflight_pkt_vec = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
+payload_size_vec = [64, 1024, 2048, 3072]
 
-legend_vec = ["tcp"]
-inflight_pkt_vec = [64]
-payload_size_vec = [2048]
 
 exp_res_file = open("exp_res.csv", "a")
 exp_res_file.write(

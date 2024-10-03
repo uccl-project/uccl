@@ -22,6 +22,12 @@ done)
 
 sudo ~/uccl/lib/xdp-tools/xdp-loader/xdp-loader unload ${NIC} --all
 
+# https://lwn.net/Articles/837010/; do not given improvements
+# echo 2 | sudo tee /sys/class/net/ens6/napi_defer_hard_irqs
+# echo 200000 | sudo tee /sys/class/net/ens6/gro_flush_timeout
+# echo 0 | sudo tee /sys/class/net/ens6/napi_defer_hard_irqs
+# echo 0 | sudo tee /sys/class/net/ens6/gro_flush_timeout
+
 ## run af_xdp l2fwd
 ## -z: zero-copy mode (without skb copy)
 ## -p: polling with timeout of 1ms.

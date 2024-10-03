@@ -232,6 +232,7 @@ int server_init(struct server_t* server, const char* interface_name) {
             printf("\nerror: could not create xsk socket [%d]\n\n", queue_id);
             return 1;
         }
+        // apply_setsockopt(xsk_socket__fd(server->socket[i].xsk));
 
         // initialize frame allocator
         for (int j = 0; j < NUM_FRAMES; j++) {
