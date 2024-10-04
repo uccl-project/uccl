@@ -25,6 +25,8 @@
 #include "util.h"
 #include "util_tcp.h"
 
+using namespace uccl;
+
 void error(char *msg) {
     perror(msg);
     exit(0);
@@ -33,10 +35,11 @@ void error(char *msg) {
 const int SEND_BATCH_SIZE = 1;
 const int RECV_BATCH_SIZE = 32;
 // tune this to change packet rate
-const int MAX_INFLIGHT_PKTS = 64; 
+const int MAX_INFLIGHT_PKTS = 64;
 const int SEND_INTV_US = 0;
 
 std::vector<uint64_t> rtts;
+std::mutex rtts_lock;
 std::atomic<uint64_t> sent_packets{0};
 std::atomic<uint64_t> inflight_pkts{0};
 
@@ -88,7 +91,10 @@ static void *recv_thread(void *arg) {
                     now.time_since_epoch())
                     .count();
             uint64_t rtt = now_us2 - now_us;
-            rtts.push_back(rtt);
+            {
+                std::lock_guard<std::mutex> lock(rtts_lock);
+                rtts.push_back(rtt);
+            }
         }
     }
     free(rbuffer);
@@ -105,8 +111,12 @@ static void *stats_thread(void *arg) {
         end = std::chrono::high_resolution_clock::now();
         end_pkts = sent_packets.load();
         usleep(1000000);
-        auto med_latency = Percentile(rtts, 50);
-        auto tail_latency = Percentile(rtts, 99);
+        uint64_t med_latency, tail_latency;
+        {
+            std::lock_guard<std::mutex> lock(rtts_lock);
+            med_latency = Percentile(rtts, 50);
+            tail_latency = Percentile(rtts, 99);
+        }
         uint64_t sent_delta = sent_packets - previous_sent_packets;
         previous_sent_packets = sent_packets;
 
@@ -123,8 +133,12 @@ static void *stats_thread(void *arg) {
                    (PAYLOAD_BYTES * ((54 + 24 + MTU) * 1.0 / MTU)) * 8.0 /
                    1024 / 1024;
 
-    auto med_latency = Percentile(rtts, 50);
-    auto tail_latency = Percentile(rtts, 99);
+    uint64_t med_latency, tail_latency;
+    {
+        std::lock_guard<std::mutex> lock(rtts_lock);
+        med_latency = Percentile(rtts, 50);
+        tail_latency = Percentile(rtts, 99);
+    }
 
     printf(
         "Throughput: %.2f Kpkts/s, BW: %.2f Gbps, med rtt: %lu us, tail rtt: "

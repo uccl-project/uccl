@@ -28,6 +28,8 @@
 
 #include "util.h"
 
+using namespace uccl;
+
 #define NUM_CPUS 1
 
 const char* INTERFACE_NAME = "ens6";

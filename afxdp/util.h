@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <vector>
 
+namespace uccl {
+
 template <class T>
 T Percentile(std::vector<T>& vectorIn, double percent) {
     if (vectorIn.size() == 0) return (T)0;
@@ -81,3 +83,24 @@ inline void apply_setsockopt(int xsk_fd) {
         fprintf(stderr, "Ignore SO_BUSY_POLL_BUDGET as it failed\n");
     }
 }
+
+namespace detail {
+template <typename F>
+struct FinalAction {
+    FinalAction(F f) : clean_{f} {}
+    ~FinalAction() {
+        if (enabled_) clean_();
+    }
+    void disable() { enabled_ = false; };
+
+   private:
+    F clean_;
+    bool enabled_{true};
+};
+}  // namespace detail
+
+template <typename F>
+detail::FinalAction<F> finally(F f) {
+    return detail::FinalAction<F>(f);
+}
+} // namespace uccl

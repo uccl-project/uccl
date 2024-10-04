@@ -24,9 +24,12 @@
 
 #include <atomic>
 #include <chrono>
+#include <mutex>
 #include <vector>
 
 #include "util.h"
+
+using namespace uccl;
 
 const uint32_t NUM_QUEUES = 1;
 
@@ -43,9 +46,9 @@ const int SEND_BATCH_SIZE = 1;
 const int RECV_BATCH_SIZE = 32;
 // 256 is reserved for xdp_meta, 42 is reserved for eth+ip+udp
 // Max payload under AFXDP is 4096-256-42;
-const int PAYLOAD_BYTES = 64;
+const int PAYLOAD_BYTES = 3072;
 // tune this to change packet rate
-const int MAX_INFLIGHT_PKTS = 1;
+const int MAX_INFLIGHT_PKTS = 128;
 // sleep gives unstable rate and latency
 const int SEND_INTV_US = 0;
 
@@ -70,6 +73,7 @@ struct socket_t {
     uint32_t counter;
     int queue_id;
     std::vector<uint64_t> rtts;
+    std::mutex rtts_lock;
 };
 
 struct client_t {
@@ -91,30 +95,29 @@ volatile bool quit;
 // TODO(yang): make thread-local cache for frame pool.
 uint64_t socket_alloc_frame(struct socket_t* socket) {
     pthread_spin_lock(&socket->frame_pool_lock);
-    if (socket->num_frames == 0) {
-        pthread_spin_unlock(&socket->frame_pool_lock);
-        return INVALID_FRAME;
-    }
+    auto spin_guard = uccl::finally(
+        [socket] { pthread_spin_unlock(&socket->frame_pool_lock); });
+    if (socket->num_frames == 0) return INVALID_FRAME;
     socket->num_frames--;
     uint64_t frame = socket->frames[socket->num_frames];
     socket->frames[socket->num_frames] = INVALID_FRAME;
-    pthread_spin_unlock(&socket->frame_pool_lock);
     return frame;
 }
 
 void socket_free_frame(struct socket_t* socket, uint64_t frame) {
     pthread_spin_lock(&socket->frame_pool_lock);
+    auto spin_guard = uccl::finally(
+        [socket] { pthread_spin_unlock(&socket->frame_pool_lock); });
     assert(socket->num_frames < NUM_FRAMES);
     socket->frames[socket->num_frames] = frame;
     socket->num_frames++;
-    pthread_spin_unlock(&socket->frame_pool_lock);
 }
 
 uint32_t socket_num_free_frames(struct socket_t* socket) {
     pthread_spin_lock(&socket->frame_pool_lock);
-    int num_free = socket->num_frames;
-    pthread_spin_unlock(&socket->frame_pool_lock);
-    return num_free;
+    auto spin_guard = uccl::finally(
+        [socket] { pthread_spin_unlock(&socket->frame_pool_lock); });
+    return socket->num_frames;
 }
 
 static void* stats_thread(void* arg);
@@ -506,7 +509,10 @@ void socket_recv(struct socket_t* socket, int queue_id) {
                 now.time_since_epoch())
                 .count();
         uint64_t rtt = now_us2 - now_us;
-        socket->rtts.push_back(rtt);
+        {
+            std::lock_guard<std::mutex> lock(socket->rtts_lock);
+            socket->rtts.push_back(rtt);
+        }
 
         socket_free_frame(socket, addr);
     }
@@ -593,6 +599,7 @@ uint64_t aggregate_sent_packets(struct client_t* client) {
 std::vector<uint64_t> aggregate_rtts(struct client_t* client) {
     std::vector<uint64_t> rtts;
     for (int i = 0; i < NUM_QUEUES; i++) {
+        std::lock_guard<std::mutex> lock(client->socket[i].rtts_lock);
         rtts.insert(rtts.end(), client->socket[i].rtts.begin(),
                     client->socket[i].rtts.end());
     }
