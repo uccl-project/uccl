@@ -48,7 +48,7 @@ const int RECV_BATCH_SIZE = 32;
 // Max payload under AFXDP is 4096-256-42;
 const int PAYLOAD_BYTES = 3072;
 // tune this to change packet rate
-const int MAX_INFLIGHT_PKTS = 128;
+const int MAX_INFLIGHT_PKTS = 512;
 // sleep gives unstable rate and latency
 const int SEND_INTV_US = 0;
 
