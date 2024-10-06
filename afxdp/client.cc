@@ -24,9 +24,11 @@
 
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <mutex>
 #include <vector>
 
+#include "transport_umem.h"
 #include "util.h"
 
 using namespace uccl;
@@ -46,9 +48,9 @@ const int SEND_BATCH_SIZE = 1;
 const int RECV_BATCH_SIZE = 32;
 // 256 is reserved for xdp_meta, 42 is reserved for eth+ip+udp
 // Max payload under AFXDP is 4096-256-42;
-const int PAYLOAD_BYTES = 3072;
+const int PAYLOAD_BYTES = 64;
 // tune this to change packet rate
-const int MAX_INFLIGHT_PKTS = 512;
+const int MAX_INFLIGHT_PKTS = 1;
 // sleep gives unstable rate and latency
 const int SEND_INTV_US = 0;
 
@@ -66,9 +68,7 @@ struct socket_t {
     struct xsk_ring_cons complete_queue;
     struct xsk_ring_prod fill_queue;
     struct xsk_socket* xsk;
-    uint64_t frames[NUM_FRAMES];
-    uint32_t num_frames;
-    pthread_spinlock_t frame_pool_lock;
+    std::unique_ptr<FramePool> frame_pool;
     std::atomic<uint64_t> sent_packets;
     uint32_t counter;
     int queue_id;
@@ -91,34 +91,6 @@ struct client_t {
 static struct client_t client;
 std::atomic<uint64_t> inflight_pkts{0};
 volatile bool quit;
-
-// TODO(yang): make thread-local cache for frame pool.
-uint64_t socket_alloc_frame(struct socket_t* socket) {
-    pthread_spin_lock(&socket->frame_pool_lock);
-    auto spin_guard = uccl::finally(
-        [socket] { pthread_spin_unlock(&socket->frame_pool_lock); });
-    if (socket->num_frames == 0) return INVALID_FRAME;
-    socket->num_frames--;
-    uint64_t frame = socket->frames[socket->num_frames];
-    socket->frames[socket->num_frames] = INVALID_FRAME;
-    return frame;
-}
-
-void socket_free_frame(struct socket_t* socket, uint64_t frame) {
-    pthread_spin_lock(&socket->frame_pool_lock);
-    auto spin_guard = uccl::finally(
-        [socket] { pthread_spin_unlock(&socket->frame_pool_lock); });
-    assert(socket->num_frames < NUM_FRAMES);
-    socket->frames[socket->num_frames] = frame;
-    socket->num_frames++;
-}
-
-uint32_t socket_num_free_frames(struct socket_t* socket) {
-    pthread_spin_lock(&socket->frame_pool_lock);
-    auto spin_guard = uccl::finally(
-        [socket] { pthread_spin_unlock(&socket->frame_pool_lock); });
-    return socket->num_frames;
-}
 
 static void* stats_thread(void* arg);
 static void* send_thread(void* arg);
@@ -258,8 +230,9 @@ int client_init(struct client_t* client, const char* interface_name) {
         // apply_setsockopt(xsk_socket__fd(client->socket[i].xsk));
 
         // initialize frame allocator
+        client->socket[i].frame_pool = std::make_unique<FramePool>(NUM_FRAMES);
         for (int j = 0; j < NUM_FRAMES; j++) {
-            socket_free_frame(&client->socket[i], j * FRAME_SIZE);
+            client->socket[i].frame_pool->push(j * FRAME_SIZE);
         }
 
         // set socket queue id for later use
@@ -394,7 +367,7 @@ int client_generate_packet(void* data, int payload_bytes, uint32_t counter,
 
 void socket_send(struct socket_t* socket, int queue_id) {
     // don't do anything if we don't have enough free packets to send a batch
-    if (socket_num_free_frames(socket) < SEND_BATCH_SIZE ||
+    if (socket->frame_pool->size() < SEND_BATCH_SIZE ||
         inflight_pkts >= MAX_INFLIGHT_PKTS) {
         return;
     }
@@ -410,7 +383,7 @@ void socket_send(struct socket_t* socket, int queue_id) {
     int packet_length[SEND_BATCH_SIZE];
 
     while (true) {
-        uint64_t frame = socket_alloc_frame(socket);
+        uint64_t frame = socket->frame_pool->pop();
         assert(frame != INVALID_FRAME);  // this should never happen
 
         uint8_t* packet = (uint8_t*)socket->buffer + frame;
@@ -449,9 +422,8 @@ void socket_send(struct socket_t* socket, int queue_id) {
     // completed, inflight_pkts.load());
     if (completed > 0) {
         for (int i = 0; i < completed; i++) {
-            socket_free_frame(socket,
-                              *xsk_ring_cons__comp_addr(&socket->complete_queue,
-                                                        complete_index++));
+            socket->frame_pool->push(*xsk_ring_cons__comp_addr(
+                &socket->complete_queue, complete_index++));
         }
 
         xsk_ring_cons__release(&socket->complete_queue, completed);
@@ -470,7 +442,7 @@ void socket_recv(struct socket_t* socket, int queue_id) {
 
     /* Stuff the ring with as much frames as possible */
     int stock_frames =
-        xsk_prod_nb_free(&socket->fill_queue, socket_num_free_frames(socket));
+        xsk_prod_nb_free(&socket->fill_queue, socket->frame_pool->size());
 
     if (stock_frames > 0) {
         int ret =
@@ -482,7 +454,7 @@ void socket_recv(struct socket_t* socket, int queue_id) {
 
         for (int i = 0; i < stock_frames; i++)
             *xsk_ring_prod__fill_addr(&socket->fill_queue, idx_fq++) =
-                socket_alloc_frame(socket);
+                socket->frame_pool->pop();
 
         xsk_ring_prod__submit(&socket->fill_queue, stock_frames);
     }
@@ -514,7 +486,7 @@ void socket_recv(struct socket_t* socket, int queue_id) {
             socket->rtts.push_back(rtt);
         }
 
-        socket_free_frame(socket, addr);
+        socket->frame_pool->push(addr);
     }
     xsk_ring_cons__release(&socket->recv_queue, rcvd);
 }
@@ -562,7 +534,7 @@ static void* recv_thread(void* arg) {
 
     for (int i = 0; i < XSK_RING_PROD__DEFAULT_NUM_DESCS; i++)
         *xsk_ring_prod__fill_addr(&socket->fill_queue, idx_rx++) =
-            socket_alloc_frame(socket);
+            socket->frame_pool->pop();
 
     xsk_ring_prod__submit(&socket->fill_queue,
                           XSK_RING_PROD__DEFAULT_NUM_DESCS);
@@ -658,10 +630,6 @@ int main(int argc, char* argv[]) {
 
     int pshared;
     int ret;
-
-    /* initialize a spin lock */
-    for (int i = 0; i < NUM_QUEUES; i++)
-        ret = pthread_spin_init(&client.socket[i].frame_pool_lock, pshared);
 
     if (client_init(&client, INTERFACE_NAME) != 0) {
         cleanup();

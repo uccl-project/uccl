@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pthread.h>
+#include <sys/socket.h>
 #include <sched.h>
 
 #include <algorithm>
@@ -10,14 +11,14 @@
 namespace uccl {
 
 template <class T>
-T Percentile(std::vector<T>& vectorIn, double percent) {
+inline T Percentile(std::vector<T>& vectorIn, double percent) {
     if (vectorIn.size() == 0) return (T)0;
     auto nth = vectorIn.begin() + (percent * vectorIn.size()) / 100;
     std::nth_element(vectorIn.begin(), nth, vectorIn.end());
     return *nth;
 }
 
-uint16_t ipv4_checksum(const void* data, size_t header_length) {
+inline uint16_t ipv4_checksum(const void* data, size_t header_length) {
     unsigned long sum = 0;
 
     const uint16_t* p = (const uint16_t*)data;
@@ -37,7 +38,7 @@ uint16_t ipv4_checksum(const void* data, size_t header_length) {
     return ~sum;
 }
 
-bool pin_thread_to_cpu(int cpu) {
+inline bool pin_thread_to_cpu(int cpu) {
     int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
     if (cpu < 0 || cpu >= num_cpus) return false;
 
@@ -100,7 +101,31 @@ struct FinalAction {
 }  // namespace detail
 
 template <typename F>
-detail::FinalAction<F> finally(F f) {
+inline detail::FinalAction<F> finally(F f) {
     return detail::FinalAction<F>(f);
 }
-} // namespace uccl
+
+class Spin {
+   private:
+    pthread_spinlock_t spin_;
+
+   public:
+    Spin() { pthread_spin_init(&spin_, PTHREAD_PROCESS_PRIVATE); }
+    ~Spin() { pthread_spin_destroy(&spin_); }
+    void Lock() { pthread_spin_lock(&spin_); }
+    void Unlock() { pthread_spin_unlock(&spin_); }
+    bool TryLock() { return pthread_spin_trylock(&spin_) == 0; }
+};
+
+#ifndef likely
+#define likely(X) __builtin_expect(!!(X), 1)
+#endif
+
+#ifndef unlikely
+#define unlikely(X) __builtin_expect(!!(X), 0)
+#endif
+
+#define load_acquire(X) __atomic_load_n(X, __ATOMIC_ACQUIRE)
+#define store_release(X, Y) __atomic_store_n(X, Y, __ATOMIC_RELEASE)
+
+}  // namespace uccl

@@ -12,10 +12,10 @@ make
 cd afxdp; make -j
 
 # On both server and client
-../setup.sh ens6 4 9001 tcp
+./setup.sh ens6 4 9001 tcp
 
 # On server
-../sync.sh 172.31.19.147
+./sync.sh 172.31.19.147
 ./server_tcp
 
 # On client
@@ -28,10 +28,10 @@ cd afxdp; make -j
 cd afxdp; make -j
 
 # On both server and client
-../setup.sh ens6 1 3498 afxdp
+./setup.sh ens6 1 3498 afxdp
 
 # On server
-../sync.sh 172.31.19.147
+./sync.sh 172.31.19.147
 sudo ./server
 
 # On client

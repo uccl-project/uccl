@@ -3,6 +3,7 @@
 #include <common.h>
 #include <linux/udp.h>
 #include "transport_cc.h"
+#include "transport_afxdp.h"
 #include <glog/logging.h>
 
 #include <concepts>
@@ -52,15 +53,14 @@ class Endpoint {
     bool Send(ConnectionID connection_id, const void *data, size_t len);
 
     // Receiving the data by leveraging multiple port combinations.
-    bool Recv(ConnectionID connection_id, void *data, size_t len);
+    bool Recv(ConnectionID connection_id, void *data, size_t* len);
 };
 
 class TXTracking {
    public:
     TXTracking() = delete;
-    explicit TXTracking(shm::Channel *channel)
-        : channel_(CHECK_NOTNULL(channel)),
-          oldest_unacked_msgbuf_(nullptr),
+    TXTracking()
+        : oldest_unacked_msgbuf_(nullptr),
           oldest_unsent_msgbuf_(nullptr),
           last_msgbuf_(nullptr),
           num_unsent_msgbufs_(0),

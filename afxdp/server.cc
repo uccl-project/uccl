@@ -26,11 +26,12 @@
 #include <chrono>
 #include <vector>
 
+#include "transport_umem.h"
 #include "util.h"
 
 using namespace uccl;
 
-#define NUM_CPUS 1
+#define NUM_QUEUES 1
 
 const char* INTERFACE_NAME = "ens6";
 
@@ -49,8 +50,7 @@ struct socket_t {
     struct xsk_ring_cons complete_queue;
     struct xsk_ring_prod fill_queue;
     struct xsk_socket* xsk;
-    uint64_t frames[NUM_FRAMES];
-    uint32_t num_frames;
+    std::unique_ptr<FramePool> frame_pool;
     uint64_t recv_packets;
     uint32_t counter;
     int queue_id;
@@ -62,44 +62,14 @@ struct server_t {
     struct xdp_program* program;
     bool attached_native;
     bool attached_skb;
-    struct socket_t socket[NUM_CPUS];
+    struct socket_t socket[NUM_QUEUES];
     pthread_t stats_thread;
-    pthread_t recv_thread[NUM_CPUS];
+    pthread_t recv_thread[NUM_QUEUES];
     uint64_t previous_recv_packets;
 };
 
 static struct server_t server;
-pthread_spinlock_t frame_pool_lock;
 volatile bool quit;
-
-// TODO(yang): make thread-local cache for frame pool.
-uint64_t socket_alloc_frame(struct socket_t* socket) {
-    pthread_spin_lock(&frame_pool_lock);
-    if (socket->num_frames == 0) {
-        pthread_spin_unlock(&frame_pool_lock);
-        return INVALID_FRAME;
-    }
-    socket->num_frames--;
-    uint64_t frame = socket->frames[socket->num_frames];
-    socket->frames[socket->num_frames] = INVALID_FRAME;
-    pthread_spin_unlock(&frame_pool_lock);
-    return frame;
-}
-
-void socket_free_frame(struct socket_t* socket, uint64_t frame) {
-    pthread_spin_lock(&frame_pool_lock);
-    assert(socket->num_frames < NUM_FRAMES);
-    socket->frames[socket->num_frames] = frame;
-    socket->num_frames++;
-    pthread_spin_unlock(&frame_pool_lock);
-}
-
-uint32_t socket_num_free_frames(struct socket_t* socket) {
-    pthread_spin_lock(&frame_pool_lock);
-    int num_free = socket->num_frames;
-    pthread_spin_unlock(&frame_pool_lock);
-    return num_free;
-}
 
 static void* stats_thread(void* arg);
 static void* recv_thread(void* arg);
@@ -191,7 +161,7 @@ int server_init(struct server_t* server, const char* interface_name) {
     }
 
     // per-CPU socket setup
-    for (int i = 0; i < NUM_CPUS; i++) {
+    for (int i = 0; i < NUM_QUEUES; i++) {
         // allocate buffer for umem
         const int buffer_size = NUM_FRAMES * FRAME_SIZE;
 
@@ -236,9 +206,10 @@ int server_init(struct server_t* server, const char* interface_name) {
         }
         // apply_setsockopt(xsk_socket__fd(server->socket[i].xsk));
 
+        server->socket[i].frame_pool = std::make_unique<FramePool>(NUM_FRAMES);
         // initialize frame allocator
         for (int j = 0; j < NUM_FRAMES; j++) {
-            socket_free_frame(&server->socket[i], j * FRAME_SIZE);
+            server->socket[i].frame_pool->push(j * FRAME_SIZE);
         }
 
         // set socket queue id for later use
@@ -253,7 +224,7 @@ int server_init(struct server_t* server, const char* interface_name) {
     }
 
     // create socket threads
-    for (int i = 0; i < NUM_CPUS; i++) {
+    for (int i = 0; i < NUM_QUEUES; i++) {
         ret = pthread_create(&server->recv_thread[i], NULL, recv_thread,
                              &server->socket[i]);
         if (ret) {
@@ -268,11 +239,11 @@ int server_init(struct server_t* server, const char* interface_name) {
 void server_shutdown(struct server_t* server) {
     assert(server);
 
-    for (int i = 0; i < NUM_CPUS; i++) {
+    for (int i = 0; i < NUM_QUEUES; i++) {
         pthread_join(server->recv_thread[i], NULL);
     }
 
-    for (int i = 0; i < NUM_CPUS; i++) {
+    for (int i = 0; i < NUM_QUEUES; i++) {
         if (server->socket[i].xsk) {
             xsk_socket__delete(server->socket[i].xsk);
         }
@@ -307,7 +278,7 @@ static void* stats_thread(void* arg) {
         std::vector<uint64_t> half_rtts;
 
         uint64_t recv_packets = 0;
-        for (int i = 0; i < NUM_CPUS; i++) {
+        for (int i = 0; i < NUM_QUEUES; i++) {
             recv_packets += server->socket[i].recv_packets;
             half_rtts.insert(half_rtts.end(),
                              server->socket[i].half_rtts.begin(),
@@ -411,8 +382,8 @@ void complete_tx(struct socket_t* socket) {
     // printf("rx complete_tx completed = %d\n", completed);
     if (completed > 0) {
         for (int i = 0; i < completed; i++)
-            socket_free_frame(socket, *xsk_ring_cons__comp_addr(
-                                          &socket->complete_queue, idx_cq++));
+            socket->frame_pool->push(
+                *xsk_ring_cons__comp_addr(&socket->complete_queue, idx_cq++));
 
         xsk_ring_cons__release(&socket->complete_queue, completed);
     }
@@ -427,7 +398,7 @@ void socket_recv(struct socket_t* socket, int queue_id) {
 
     /* Stuff the ring with as much frames as possible */
     int stock_frames =
-        xsk_prod_nb_free(&socket->fill_queue, socket_num_free_frames(socket));
+        xsk_prod_nb_free(&socket->fill_queue, socket->frame_pool->size());
 
     if (stock_frames > 0) {
         int ret =
@@ -439,7 +410,7 @@ void socket_recv(struct socket_t* socket, int queue_id) {
 
         for (int i = 0; i < stock_frames; i++)
             *xsk_ring_prod__fill_addr(&socket->fill_queue, idx_fq++) =
-                socket_alloc_frame(socket);
+                socket->frame_pool->pop();
 
         xsk_ring_prod__submit(&socket->fill_queue, stock_frames);
     }
@@ -454,7 +425,7 @@ void socket_recv(struct socket_t* socket, int queue_id) {
         // TODO(Yang): doing batched sending
         auto need_sending = process_packet_and_send(socket, addr, len);
         if (!need_sending) {
-            socket_free_frame(socket, addr);
+            socket->frame_pool->push(addr);
         }
     }
     xsk_ring_cons__release(&socket->recv_queue, rcvd);
@@ -490,7 +461,7 @@ static void* recv_thread(void* arg) {
 
     for (int i = 0; i < XSK_RING_PROD__DEFAULT_NUM_DESCS; i++)
         *xsk_ring_prod__fill_addr(&socket->fill_queue, idx_rx++) =
-            socket_alloc_frame(socket);
+            socket->frame_pool->pop();
 
     xsk_ring_prod__submit(&socket->fill_queue,
                           XSK_RING_PROD__DEFAULT_NUM_DESCS);
@@ -498,7 +469,7 @@ static void* recv_thread(void* arg) {
     int queue_id = socket->queue_id;
     printf("started socket recv thread for queue #%d\n", queue_id);
 
-    pin_thread_to_cpu(NUM_CPUS + queue_id);
+    pin_thread_to_cpu(NUM_QUEUES + queue_id);
 
     struct pollfd fds[2];
     int nfds = 1;
@@ -526,9 +497,6 @@ int main(int argc, char* argv[]) {
 
     int pshared;
     int ret;
-
-    /* initialize a spin lock */
-    ret = pthread_spin_init(&frame_pool_lock, pshared);
 
     if (server_init(&server, INTERFACE_NAME) != 0) {
         cleanup();
