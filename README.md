@@ -38,4 +38,4 @@ sudo ./server
 sudo ./client
 ```
 
-To output VLOG(3) for debugging, `sudo GLOG_v=3 ./server`
+To output VLOG(3) for debugging, `sudo GLOG_v=3 GLOG_logtostderr=1 ./server`

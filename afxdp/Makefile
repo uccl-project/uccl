@@ -3,7 +3,7 @@ KERNEL = $(shell uname -r)
 INC = -I ../lib/install/include 
 LIBS = ../lib/install/lib/libxdp.a ../lib/install/lib/libbpf.a -lglog
 FLAGS = -std=c++17 -Wno-pointer-arith
-DEPS = util.h util_xdp.h util_tcp.h
+DEPS = util_*.h transport_*.h
 LIB_OBJ = transport_umem.o
 
 .PHONY: build

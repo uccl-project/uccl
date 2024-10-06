@@ -54,6 +54,7 @@ const int PAYLOAD_BYTES = 64;
 const int MAX_INFLIGHT_PKTS = 1;
 // sleep gives unstable rate and latency
 const int SEND_INTV_US = 0;
+const int RTO_US = 2000;
 
 const bool busy_poll = true;
 
@@ -71,6 +72,7 @@ struct socket_t {
     struct xsk_socket* xsk;
     std::unique_ptr<FramePool> frame_pool;
     std::atomic<uint64_t> sent_packets;
+    uint64_t last_stall_time;
     uint32_t counter;
     int queue_id;
     std::vector<uint64_t> rtts;
@@ -367,11 +369,21 @@ int client_generate_packet(void* data, int payload_bytes, uint32_t counter,
 }
 
 void socket_send(struct socket_t* socket, int queue_id) {
-    // don't do anything if we don't have enough free packets to send a batch
-    if (socket->frame_pool->size() < SEND_BATCH_SIZE ||
-        inflight_pkts >= MAX_INFLIGHT_PKTS) {
+    if (inflight_pkts >= MAX_INFLIGHT_PKTS) {
+        auto now_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::high_resolution_clock::now().time_since_epoch())
+                .count();
+        if (socket->last_stall_time == 0) {
+            socket->last_stall_time = now_us;
+        } else if (now_us - socket->last_stall_time > RTO_US) {
+            // These inflight packets get lost, we just ignore them
+            printf("queue %d tx stall detected, forcing tx...\n", queue_id);
+            inflight_pkts = 0;
+        }
         return;
     }
+    socket->last_stall_time = 0;
 
     // queue packets to send
     uint32_t send_index;
@@ -442,8 +454,7 @@ void socket_recv(struct socket_t* socket, int queue_id) {
     inflight_pkts -= rcvd;
 
     /* Stuff the ring with as much frames as possible */
-    int stock_frames =
-        xsk_prod_nb_free(&socket->fill_queue, socket->frame_pool->size());
+    int stock_frames = xsk_prod_nb_free(&socket->fill_queue, RECV_BATCH_SIZE);
 
     if (stock_frames > 0) {
         int ret =

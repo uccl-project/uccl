@@ -1,8 +1,8 @@
 #pragma once
 
 #include <pthread.h>
-#include <sys/socket.h>
 #include <sched.h>
+#include <sys/socket.h>
 
 #include <algorithm>
 #include <cstdint>

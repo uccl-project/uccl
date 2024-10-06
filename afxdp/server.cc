@@ -398,8 +398,7 @@ void socket_recv(struct socket_t* socket, int queue_id) {
     if (!rcvd) return;
 
     /* Stuff the ring with as much frames as possible */
-    int stock_frames =
-        xsk_prod_nb_free(&socket->fill_queue, socket->frame_pool->size());
+    int stock_frames = xsk_prod_nb_free(&socket->fill_queue, RECV_BATCH_SIZE);
 
     if (stock_frames > 0) {
         int ret =
@@ -493,7 +492,7 @@ static void* recv_thread(void* arg) {
 int main(int argc, char* argv[]) {
     google::InitGoogleLogging(argv[0]);
     google::InstallFailureSignalHandler();
-    
+
     printf("\n[server]\n");
 
     signal(SIGINT, interrupt_handler);
