@@ -622,6 +622,9 @@ static void* stats_thread(void* arg) {
 }
 
 int main(int argc, char* argv[]) {
+    google::InitGoogleLogging(argv[0]);
+    google::InstallFailureSignalHandler();
+
     printf("\n[client]\n");
 
     signal(SIGINT, interrupt_handler);

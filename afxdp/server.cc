@@ -491,6 +491,9 @@ static void* recv_thread(void* arg) {
 }
 
 int main(int argc, char* argv[]) {
+    google::InitGoogleLogging(argv[0]);
+    google::InstallFailureSignalHandler();
+    
     printf("\n[server]\n");
 
     signal(SIGINT, interrupt_handler);
