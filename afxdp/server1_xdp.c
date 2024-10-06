@@ -37,7 +37,7 @@ int server_xdp_filter(struct xdp_md *ctx) {
     void *payload = (void *)udp + sizeof(struct udphdr);
     int payload_bytes = data_end - payload;
 
-    debug_printf("server received %d byte packet", payload_bytes);
+    bpf_printk("server received %d byte packet", payload_bytes);
 
     int zero = 0;
     __u64 *packets_received =

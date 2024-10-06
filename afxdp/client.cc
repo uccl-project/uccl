@@ -3,6 +3,7 @@
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 #include <errno.h>
+#include <glog/logging.h>
 #include <ifaddrs.h>
 #include <inttypes.h>
 #include <linux/if_ether.h>
@@ -418,8 +419,8 @@ void socket_send(struct socket_t* socket, int queue_id) {
         xsk_ring_cons__peek(&socket->complete_queue,
                             XSK_RING_CONS__DEFAULT_NUM_DESCS, &complete_index);
 
-    // printf("tx complete_queue completed = %d, inflight_pkts = %lu\n",
-    // completed, inflight_pkts.load());
+    VLOG(3) << "tx complete_queue completed = " << completed
+            << ", inflight_pkts = " << inflight_pkts.load();
     if (completed > 0) {
         for (int i = 0; i < completed; i++) {
             socket->frame_pool->push(*xsk_ring_cons__comp_addr(
@@ -459,8 +460,9 @@ void socket_recv(struct socket_t* socket, int queue_id) {
         xsk_ring_prod__submit(&socket->fill_queue, stock_frames);
     }
 
-    // printf("rx fill_queue rcvd = %d, inflight_pkts = %lu\n", rcvd,
-    // inflight_pkts.load());
+    VLOG(3) << "rx fill_queue rcvd = " << rcvd
+            << ", inflight_pkts = " << inflight_pkts.load()
+            << ", stock_frames = " << stock_frames;
     for (int i = 0; i < rcvd; i++) {
         uint64_t addr =
             xsk_ring_cons__rx_desc(&socket->recv_queue, idx_rx)->addr;

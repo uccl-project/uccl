@@ -33,11 +33,7 @@ int client_xdp_filter(struct xdp_md *ctx) {
     if ((void *)udp + sizeof(struct udphdr) > data_end) return XDP_PASS;
     if (udp->source != __constant_htons(40000)) return XDP_PASS;
 
-    int index = ctx->rx_queue_index;
-    if (bpf_map_lookup_elem(&xsks_map, &index))
-        return bpf_redirect_map(&xsks_map, index, 0);
-
-    return XDP_PASS;
+	return bpf_redirect_map(&xsks_map, ctx->rx_queue_index, XDP_PASS);
 }
 
 char _license[] SEC("license") = "GPL";

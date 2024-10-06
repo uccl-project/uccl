@@ -17,16 +17,6 @@
 #error "Endianness detection needs to be set up for your compiler?!"
 #endif
 
-// #define DEBUG 1
-
-#if DEBUG
-#define debug_printf bpf_printk
-#else  // #if DEBUG
-#define debug_printf(...) \
-    do {                  \
-    } while (0)
-#endif  // #if DEBUG
-
 static inline __u16 compute_ip_checksum(struct iphdr *ip) {
     __u32 csum = 0;
     __u16 *next_ip_u16 = (__u16 *)ip;

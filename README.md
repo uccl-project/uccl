@@ -37,3 +37,5 @@ sudo ./server
 # On client
 sudo ./client
 ```
+
+To output VLOG(3) for debugging, `sudo GLOG_v=3 ./server`
