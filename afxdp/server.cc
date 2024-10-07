@@ -27,7 +27,7 @@
 #include <chrono>
 #include <vector>
 
-#include "transport_umem.h"
+#include "util_umem.h"
 #include "util.h"
 
 using namespace uccl;
