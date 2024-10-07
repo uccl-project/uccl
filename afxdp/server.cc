@@ -27,8 +27,8 @@
 #include <chrono>
 #include <vector>
 
-#include "util_umem.h"
 #include "util.h"
+#include "util_umem.h"
 
 using namespace uccl;
 
@@ -44,7 +44,7 @@ const bool busy_poll = true;
 #define INVALID_FRAME UINT64_MAX
 
 struct socket_t {
-    void* buffer;
+    void* umem_buffer;
     struct xsk_umem* umem;
     struct xsk_ring_cons recv_queue;
     struct xsk_ring_prod send_queue;
@@ -163,20 +163,20 @@ int server_init(struct server_t* server, const char* interface_name) {
 
     // per-CPU socket setup
     for (int i = 0; i < NUM_QUEUES; i++) {
-        // allocate buffer for umem
+        // allocate umem_buffer for umem
         const int buffer_size = NUM_FRAMES * FRAME_SIZE;
 
-        if (posix_memalign(&server->socket[i].buffer, getpagesize(),
+        if (posix_memalign(&server->socket[i].umem_buffer, getpagesize(),
                            buffer_size)) {
-            printf("\nerror: could not allocate buffer\n\n");
+            printf("\nerror: could not allocate umem_buffer\n\n");
             return 1;
         }
 
         // allocate umem
-        ret =
-            xsk_umem__create(&server->socket[i].umem, server->socket[i].buffer,
-                             buffer_size, &server->socket[i].fill_queue,
-                             &server->socket[i].complete_queue, NULL);
+        ret = xsk_umem__create(&server->socket[i].umem,
+                               server->socket[i].umem_buffer, buffer_size,
+                               &server->socket[i].fill_queue,
+                               &server->socket[i].complete_queue, NULL);
         if (ret) {
             printf("\nerror: could not create umem\n\n");
             return 1;
@@ -210,7 +210,8 @@ int server_init(struct server_t* server, const char* interface_name) {
         server->socket[i].frame_pool = std::make_unique<FramePool>(NUM_FRAMES);
         // initialize frame allocator
         for (int j = 0; j < NUM_FRAMES; j++) {
-            server->socket[i].frame_pool->push(j * FRAME_SIZE);
+            server->socket[i].frame_pool->push(j * FRAME_SIZE +
+                                               XDP_PACKET_HEADROOM);
         }
 
         // set socket queue id for later use
@@ -253,7 +254,7 @@ void server_shutdown(struct server_t* server) {
             xsk_umem__delete(server->socket[i].umem);
         }
 
-        free(server->socket[i].buffer);
+        free(server->socket[i].umem_buffer);
     }
 
     if (server->program != NULL) {
@@ -313,14 +314,14 @@ static void cleanup() {
 }
 
 // Return whether this packet will be forwarded back.
-bool process_packet_and_send(struct socket_t* socket, uint64_t addr,
+bool process_packet_and_send(struct socket_t* socket, uint64_t frame_offset,
                              uint32_t len) {
     int ret;
     uint32_t tx_idx = 0;
     uint8_t tmp_mac[ETH_ALEN];
     __be32 tmp_ip;
     uint16_t tmp_port;
-    uint8_t* pkt = (uint8_t*)xsk_umem__get_data(socket->buffer, addr);
+    uint8_t* pkt = (uint8_t*)socket->umem_buffer + frame_offset;
     struct ethhdr* eth = (struct ethhdr*)pkt;
     struct iphdr* ip = (struct iphdr*)((char*)pkt + sizeof(struct ethhdr));
     struct udphdr* udp = (struct udphdr*)((char*)ip + sizeof(struct iphdr));
@@ -363,8 +364,9 @@ bool process_packet_and_send(struct socket_t* socket, uint64_t addr,
         return false;
     }
 
-    xsk_ring_prod__tx_desc(&socket->send_queue, tx_idx)->addr = addr;
-    xsk_ring_prod__tx_desc(&socket->send_queue, tx_idx)->len = len;
+    struct xdp_desc* desc = xsk_ring_prod__tx_desc(&socket->send_queue, tx_idx);
+    desc->addr = frame_offset;
+    desc->len = len;
     xsk_ring_prod__submit(&socket->send_queue, 1);
 
     return true;
@@ -418,15 +420,15 @@ void socket_recv(struct socket_t* socket, int queue_id) {
     VLOG(3) << "rx fill_queue rcvd = " << rcvd
             << ", stock_frames = " << stock_frames;
     for (int i = 0; i < rcvd; i++) {
-        uint64_t addr =
-            xsk_ring_cons__rx_desc(&socket->recv_queue, idx_rx)->addr;
-        uint32_t len =
-            xsk_ring_cons__rx_desc(&socket->recv_queue, idx_rx++)->len;
+        const struct xdp_desc* desc =
+            xsk_ring_cons__rx_desc(&socket->recv_queue, idx_rx++);
+        uint64_t frame_offset = desc->addr;
+        uint32_t len = desc->len;
 
         // TODO(Yang): doing batched sending
-        auto need_sending = process_packet_and_send(socket, addr, len);
+        auto need_sending = process_packet_and_send(socket, frame_offset, len);
         if (!need_sending) {
-            socket->frame_pool->push(addr);
+            socket->frame_pool->push(frame_offset);
         }
     }
     xsk_ring_cons__release(&socket->recv_queue, rcvd);

@@ -29,9 +29,9 @@
 #include <mutex>
 #include <vector>
 
-#include "util_umem.h"
-#include "util_afxdp.h"
 #include "util.h"
+#include "util_afxdp.h"
+#include "util_umem.h"
 
 using namespace uccl;
 
@@ -64,7 +64,7 @@ const bool busy_poll = true;
 #define INVALID_FRAME UINT64_MAX
 
 struct socket_t {
-    void* buffer;
+    void* umem_buffer;
     struct xsk_umem* umem;
     struct xsk_ring_cons recv_queue;
     struct xsk_ring_prod send_queue;
@@ -188,20 +188,20 @@ int client_init(struct client_t* client, const char* interface_name) {
 
     // per-CPU socket setup
     for (int i = 0; i < NUM_QUEUES; i++) {
-        // allocate buffer for umem
+        // allocate umem_buffer for umem
         const int buffer_size = NUM_FRAMES * FRAME_SIZE;
 
-        if (posix_memalign(&client->socket[i].buffer, getpagesize(),
+        if (posix_memalign(&client->socket[i].umem_buffer, getpagesize(),
                            buffer_size)) {
-            printf("\nerror: could not allocate buffer\n\n");
+            printf("\nerror: could not allocate umem_buffer\n\n");
             return 1;
         }
 
         // allocate umem
-        ret =
-            xsk_umem__create(&client->socket[i].umem, client->socket[i].buffer,
-                             buffer_size, &client->socket[i].fill_queue,
-                             &client->socket[i].complete_queue, NULL);
+        ret = xsk_umem__create(&client->socket[i].umem,
+                               client->socket[i].umem_buffer, buffer_size,
+                               &client->socket[i].fill_queue,
+                               &client->socket[i].complete_queue, NULL);
         if (ret) {
             printf("\nerror: could not create umem\n\n");
             return 1;
@@ -236,7 +236,8 @@ int client_init(struct client_t* client, const char* interface_name) {
         // initialize frame allocator
         client->socket[i].frame_pool = std::make_unique<FramePool>(NUM_FRAMES);
         for (int j = 0; j < NUM_FRAMES; j++) {
-            client->socket[i].frame_pool->push(j * FRAME_SIZE);
+            client->socket[i].frame_pool->push(j * FRAME_SIZE +
+                                               XDP_PACKET_HEADROOM);
         }
 
         // set socket queue id for later use
@@ -288,7 +289,7 @@ void client_shutdown(struct client_t* client) {
             xsk_umem__delete(client->socket[i].umem);
         }
 
-        free(client->socket[i].buffer);
+        free(client->socket[i].umem_buffer);
     }
 
     if (client->program != NULL) {
@@ -397,12 +398,11 @@ void socket_send(struct socket_t* socket, int queue_id) {
     int packet_length[SEND_BATCH_SIZE];
 
     while (true) {
-        uint64_t frame = socket->frame_pool->pop();
-        assert(frame != INVALID_FRAME);  // this should never happen
+        // the 256B before frame_offset is xdp metedata
+        uint64_t frame_offset = socket->frame_pool->pop();
+        uint8_t* packet = (uint8_t*)socket->umem_buffer + frame_offset;
 
-        uint8_t* packet = (uint8_t*)socket->buffer + frame;
-
-        packet_address[num_packets] = frame;
+        packet_address[num_packets] = frame_offset;
         packet_length[num_packets] = client_generate_packet(
             packet, PAYLOAD_BYTES, socket->counter + num_packets, queue_id);
 
@@ -436,8 +436,10 @@ void socket_send(struct socket_t* socket, int queue_id) {
             << ", inflight_pkts = " << inflight_pkts.load();
     if (completed > 0) {
         for (int i = 0; i < completed; i++) {
-            socket->frame_pool->push(*xsk_ring_cons__comp_addr(
-                &socket->complete_queue, complete_index++));
+            uint64_t frame_offset = *xsk_ring_cons__comp_addr(
+                &socket->complete_queue, complete_index++);
+            VLOG(3) << "complete: " << std::hex << frame_offset;
+            socket->frame_pool->push(frame_offset);
         }
 
         xsk_ring_cons__release(&socket->complete_queue, completed);
@@ -476,11 +478,14 @@ void socket_recv(struct socket_t* socket, int queue_id) {
             << ", inflight_pkts = " << inflight_pkts.load()
             << ", stock_frames = " << stock_frames;
     for (int i = 0; i < rcvd; i++) {
-        uint64_t addr =
-            xsk_ring_cons__rx_desc(&socket->recv_queue, idx_rx)->addr;
-        uint32_t len =
-            xsk_ring_cons__rx_desc(&socket->recv_queue, idx_rx++)->len;
-        uint8_t* pkt = (uint8_t*)xsk_umem__get_data(socket->buffer, addr);
+        const struct xdp_desc* desc =
+            xsk_ring_cons__rx_desc(&socket->recv_queue, idx_rx++);
+        // the 256B before frame_offset is xdp metedata
+        uint64_t frame_offset = desc->addr;
+        uint32_t len = desc->len;
+        uint8_t* pkt = (uint8_t*)socket->umem_buffer + frame_offset;
+        VLOG(3) << "recv: " << std::hex << frame_offset << " " << std::dec
+                << len;
 
         // Doing some packet processing here...
         struct ethhdr* eth = (struct ethhdr*)pkt;
@@ -500,7 +505,7 @@ void socket_recv(struct socket_t* socket, int queue_id) {
             socket->rtts.push_back(rtt);
         }
 
-        socket->frame_pool->push(addr);
+        socket->frame_pool->push(frame_offset);
     }
     xsk_ring_cons__release(&socket->recv_queue, rcvd);
 }

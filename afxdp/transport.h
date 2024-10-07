@@ -1,10 +1,7 @@
 #pragma once
 
-#include <common.h>
-#include <linux/udp.h>
-#include "transport_cc.h"
-#include "transport_afxdp.h"
 #include <glog/logging.h>
+#include <linux/udp.h>
 
 #include <concepts>
 #include <cstddef>
@@ -19,6 +16,9 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+#include "transport_cc.h"
+#include "util_afxdp.h"
 
 namespace uccl {
 
@@ -47,85 +47,114 @@ class Endpoint {
     ~Endpoint();
 
     // Connecting to a remote address.
-    ConnectionID Connect(const char *remote_ip);
+    ConnectionID Connect(const char *remote_ip) {
+        // TODO: waiting on a cond_var, while background engine is connecting to
+        // remote.
+    }
 
     // Sending the data by leveraging multiple port combinations.
-    bool Send(ConnectionID connection_id, const void *data, size_t len);
+    bool Send(ConnectionID connection_id, const void *data, size_t len) {
+        // TODO: waiting on a cond_var, while background engine is sending the
+        // data.
+    }
 
     // Receiving the data by leveraging multiple port combinations.
-    bool Recv(ConnectionID connection_id, void *data, size_t* len);
+    bool Recv(ConnectionID connection_id, void *data, size_t *len) {
+        // TODO: waiting on a cond_var, while background engine is receiving the
+        // data.
+    }
+};
+
+class FrameBuf {
+    // the XDP_PACKET_HEADROOM bytes before frame_offset is xdp metedata, and we
+    // reuse it to chain Framebufs.
+    FrameBuf *prev_;
+    FrameBuf *next_;
+    uint64_t frame_offset_;
+    void *umem_buffer_;
+
+    FrameBuf(uint64_t frame_offset, void *umem_buffer)
+        : frame_offset_(frame_offset), umem_buffer_(umem_buffer) {
+        prev_ = nullptr;
+        next_ = nullptr;
+    }
+
+   public:
+    static FrameBuf *Create(uint64_t frame_offset, void *umem_buffer) {
+        return new (reinterpret_cast<void *>(
+            frame_offset + (uint64_t)umem_buffer - XDP_PACKET_HEADROOM))
+            FrameBuf(frame_offset, umem_buffer);
+    }
+
+    uint64_t GetFrameOffset() const { return frame_offset_; }
+
+    void Link(FrameBuf *buf) {
+        CHECK(next_ == nullptr);
+        CHECK(buf->prev_ == nullptr);
+        next_ = buf;
+        buf->prev_ = this;
+    }
+
+    FrameBuf *Next() const { return next_; }
 };
 
 class TXTracking {
    public:
     TXTracking() = delete;
-    TXTracking()
-        : oldest_unacked_msgbuf_(nullptr),
+    TXTracking(AFXDPSocket *socket)
+        : socket_(socket),
+          oldest_unacked_msgbuf_(nullptr),
           oldest_unsent_msgbuf_(nullptr),
           last_msgbuf_(nullptr),
           num_unsent_msgbufs_(0),
           num_tracked_msgbufs_(0) {}
 
     const uint32_t NumUnsentMsgbufs() const { return num_unsent_msgbufs_; }
-    shm::MsgBuf *GetOldestUnackedMsgBuf() const {
-        return oldest_unacked_msgbuf_;
-    }
+    FrameBuf *GetOldestUnackedMsgBuf() const { return oldest_unacked_msgbuf_; }
 
     void ReceiveAcks(uint32_t num_acked_pkts) {
-        shm::MsgBufBatch to_free;
         while (num_acked_pkts) {
             auto msgbuf = oldest_unacked_msgbuf_;
             DCHECK(msgbuf != nullptr);
             if (msgbuf != last_msgbuf_) {
                 DCHECK_NE(oldest_unacked_msgbuf_, oldest_unsent_msgbuf_)
                     << "Releasing an unsent msgbuf!";
-                oldest_unacked_msgbuf_ = channel_->GetMsgBuf(msgbuf->next());
+                oldest_unacked_msgbuf_ = msgbuf->Next();
             } else {
                 oldest_unacked_msgbuf_ = nullptr;
                 last_msgbuf_ = nullptr;
             }
-            to_free.Append(msgbuf, msgbuf->index());
-            if (to_free.IsFull()) {
-                num_tracked_msgbufs_ -= to_free.GetSize();
-                CHECK(channel_->MsgBufBulkFree(&to_free));
-            }
+            // Free acked frames
+            socket_->frame_pool_->push(msgbuf->GetFrameOffset());
+            num_tracked_msgbufs_--;
             num_acked_pkts--;
         }
-
-        num_tracked_msgbufs_ -= to_free.GetSize();
-        CHECK(channel_->MsgBufBulkFree(&to_free));
     }
 
-    void Append(shm::MsgBuf *msgbuf) {
-        DCHECK(msgbuf->is_first());
+    void Append(FrameBuf *msgbuf) {
         // Append the message at the end of the chain of buffers, if any.
         if (last_msgbuf_ == nullptr) {
             // This is the first pending message buffer in the flow.
             DCHECK(oldest_unsent_msgbuf_ == nullptr);
-            last_msgbuf_ = channel_->GetMsgBuf(msgbuf->last());
+            last_msgbuf_ = msgbuf;
             oldest_unsent_msgbuf_ = msgbuf;
             oldest_unacked_msgbuf_ = msgbuf;
         } else {
             // This is not the first message buffer in the flow.
             DCHECK(oldest_unacked_msgbuf_ != nullptr);
             // Let's enqueue the new message buffer at the end of the chain.
-            last_msgbuf_->link(msgbuf);
-            DCHECK(!(last_msgbuf_->is_last() && last_msgbuf_->is_sg()));
+            last_msgbuf_->Link(msgbuf);
             // Update the last buffer pointer to point to the current buffer.
-            last_msgbuf_ = channel_->GetMsgBuf(msgbuf->last());
+            last_msgbuf_ = msgbuf;
             if (oldest_unsent_msgbuf_ == nullptr)
                 oldest_unsent_msgbuf_ = msgbuf;
         }
 
-        const auto msg_length = msgbuf->msg_length();
-        const auto effective_buffer_size = channel_->GetUsableBufSize();
-        const auto msg_buffers_nr =
-            (msg_length + effective_buffer_size - 1) / effective_buffer_size;
-        num_unsent_msgbufs_ += msg_buffers_nr;
-        num_tracked_msgbufs_ += msg_buffers_nr;
+        num_unsent_msgbufs_ += 1;
+        num_tracked_msgbufs_ += 1;
     }
 
-    std::optional<shm::MsgBuf *> GetAndUpdateOldestUnsent() {
+    std::optional<FrameBuf *> GetAndUpdateOldestUnsent() {
         if (oldest_unsent_msgbuf_ == nullptr) {
             DCHECK_EQ(NumUnsentMsgbufs(), 0);
             return std::nullopt;
@@ -133,8 +162,7 @@ class TXTracking {
 
         auto msgbuf = oldest_unsent_msgbuf_;
         if (oldest_unsent_msgbuf_ != last_msgbuf_) {
-            oldest_unsent_msgbuf_ =
-                channel_->GetMsgBuf(oldest_unsent_msgbuf_->next());
+            oldest_unsent_msgbuf_ = oldest_unsent_msgbuf_->Next();
         } else {
             oldest_unsent_msgbuf_ = nullptr;
         }
@@ -145,15 +173,15 @@ class TXTracking {
 
    private:
     const uint32_t NumTrackedMsgbufs() const { return num_tracked_msgbufs_; }
-    const shm::MsgBuf *GetLastMsgBuf() const { return last_msgbuf_; }
-    const shm::MsgBuf *GetOldestUnsentMsgBuf() const {
+    const FrameBuf *GetLastMsgBuf() const { return last_msgbuf_; }
+    const FrameBuf *GetOldestUnsentMsgBuf() const {
         return oldest_unsent_msgbuf_;
     }
 
-    shm::Channel *channel_;
+    AFXDPSocket *socket_;
 
     /*
-     * For the linked list of shm::MsgBufs in the channel (chain going
+     * For the linked list of FrameBufs in the channel (chain going
      * downwards), we track 3 pointers
      *
      * B   -> oldest sent but unacknowledged MsgBuf
@@ -163,9 +191,9 @@ class TXTracking {
      * B   -> last MsgBuf, among all active messages in this flow
      */
 
-    shm::MsgBuf *oldest_unacked_msgbuf_;
-    shm::MsgBuf *oldest_unsent_msgbuf_;
-    shm::MsgBuf *last_msgbuf_;
+    FrameBuf *oldest_unacked_msgbuf_;
+    FrameBuf *oldest_unsent_msgbuf_;
+    FrameBuf *last_msgbuf_;
 
     uint32_t num_unsent_msgbufs_;
     uint32_t num_tracked_msgbufs_;
@@ -190,20 +218,20 @@ class RXTracking {
                   "kReassemblyMaxSeqnoDistance must be a power of two");
 
     struct reasm_queue_ent_t {
-        shm::MsgBuf *msgbuf;
+        FrameBuf *msgbuf;
         uint64_t seqno;
 
-        reasm_queue_ent_t(shm::MsgBuf *m, uint64_t s) : msgbuf(m), seqno(s) {}
+        reasm_queue_ent_t(FrameBuf *m, uint64_t s) : msgbuf(m), seqno(s) {}
     };
 
     RXTracking(const RXTracking &) = delete;
     RXTracking(uint32_t local_ip, uint16_t local_port, uint32_t remote_ip,
-               uint16_t remote_port, shm::Channel *channel)
+               uint16_t remote_port, AFXDPSocket *socket)
         : local_ip_(local_ip),
           local_port_(local_port),
           remote_ip_(remote_ip),
           remote_port_(remote_port),
-          channel_(CHECK_NOTNULL(channel)),
+          socket_(CHECK_NOTNULL(socket)),
           cur_msg_train_head_(nullptr),
           cur_msg_train_tail_(nullptr) {}
 
@@ -315,10 +343,10 @@ class RXTracking {
     const uint16_t local_port_;
     const uint32_t remote_ip_;
     const uint16_t remote_port_;
-    shm::Channel *channel_;
+    AFXDPSocket *socket_;
     std::deque<reasm_queue_ent_t> reass_q_;
-    shm::MsgBuf *cur_msg_train_head_;
-    shm::MsgBuf *cur_msg_train_tail_;
+    FrameBuf *cur_msg_train_head_;
+    FrameBuf *cur_msg_train_tail_;
 };
 
 /**
@@ -385,7 +413,8 @@ class Flow {
          const Ipv4::Address &remote_addr, const Udp::Port &remote_port,
          const Ethernet::Address &local_l2_addr,
          const Ethernet::Address &remote_l2_addr, dpdk::TxRing *txring,
-         ApplicationCallback callback, shm::Channel *channel)
+         ApplicationCallback callback, shm::Channel *channel,
+         AFXDPSocket *socket)
         : key_(local_addr, local_port, remote_addr, remote_port),
           local_l2_addr_(local_l2_addr),
           remote_l2_addr_(remote_l2_addr),
@@ -394,10 +423,10 @@ class Flow {
           callback_(std::move(callback)),
           channel_(CHECK_NOTNULL(channel)),
           pcb_(),
-          tx_tracking_(CHECK_NOTNULL(channel)),
+          tx_tracking_(CHECK_NOTNULL(socket)),
           rx_tracking_(local_addr.address.value(), local_port.port.value(),
                        remote_addr.address.value(), remote_port.port.value(),
-                       CHECK_NOTNULL(channel)) {
+                       CHECK_NOTNULL(socket)) {
         CHECK_NOTNULL(txring_->GetPacketPool());
     }
     ~Flow() {}
@@ -444,7 +473,7 @@ class Flow {
                 udph->dst_port == key_.local_port);
     }
 
-    bool Match(const shm::MsgBuf *tx_msgbuf) const {
+    bool Match(const FrameBuf *tx_msgbuf) const {
         const auto *flow_info = tx_msgbuf->flow();
         return (flow_info->src_ip == key_.local_addr.address.value() &&
                 flow_info->dst_ip == key_.remote_addr.address.value() &&
@@ -592,7 +621,7 @@ class Flow {
      * @param msg Pointer to the first message buffer on a train of buffers,
      * aggregating to a partial or a full Message.
      */
-    void OutputMessage(shm::MsgBuf *msg) {
+    void OutputMessage(FrameBuf *msg) {
         tx_tracking_.Append(msg);
 
         // TODO(ilias): We first need to check whether the cwnd is < 1, so that
@@ -740,7 +769,7 @@ class Flow {
      * @param seqno Sequence number of the packet.
      */
     template <CopyMode copy_mode>
-    void PrepareDataPacket(shm::MsgBuf *msg_buf, dpdk::Packet *packet,
+    void PrepareDataPacket(FrameBuf *msg_buf, dpdk::Packet *packet,
                            uint32_t seqno) const {
         DCHECK(!(msg_buf->is_last() && msg_buf->is_sg()));
         // Header length after before the payload.
@@ -1394,7 +1423,7 @@ class MachnetEngine {
         rx_packet_batch.Release();
 
         // Process messages from channels.
-        shm::MsgBufBatch msg_buf_batch;
+        FrameBufBatch msg_buf_batch;
         for (auto &channel : channels_) {
             // TODO(ilias): Revisit the number of messages to dequeue.
             const auto nb_msg_dequeued =
@@ -1964,8 +1993,7 @@ class MachnetEngine {
      * @param msg     A pointer to the `MsgBuf` containing the first buffer of
      * the message.
      */
-    void process_msg(const shm::Channel *channel, shm::MsgBuf *msg,
-                     uint64_t now) {
+    void process_msg(const shm::Channel *channel, FrameBuf *msg, uint64_t now) {
         const auto *flow_info = msg->flow();
         const net::flow::Key msg_key(flow_info->src_ip, flow_info->src_port,
                                      flow_info->dst_ip, flow_info->dst_port);
