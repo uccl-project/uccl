@@ -5,6 +5,7 @@
 #include <linux/ip.h>
 #include <linux/udp.h>
 
+#include <chrono>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -20,6 +21,8 @@
 #include <vector>
 
 #include "transport_cc.h"
+#include "transport_config.h"
+#include "util.h"
 #include "util_afxdp.h"
 #include "util_endian.h"
 
@@ -27,16 +30,48 @@ namespace uccl {
 
 typedef uint64_t ConnectionID;
 
+enum ChannelOp : uint8_t {
+    kTx = 0,
+    kTxComp = 1,
+    kRx = 2,
+    kRxComp = 3,
+};
+
+struct ChannelMsg {
+    ChannelOp opcode;
+    void *data;
+    size_t *len_ptr;
+    ConnectionID connection_id;
+};
+static_assert(sizeof(ChannelMsg) % 4 == 0, "channelMsg must be 32-bit aligned");
+
+class Channel {
+    constexpr static uint32_t kChannelSize = 1024;
+
+   public:
+    Channel() {
+        tx_ring_ = create_ring(sizeof(ChannelMsg), kChannelSize);
+        tx_comp_ring_ = create_ring(sizeof(ChannelMsg), kChannelSize);
+        rx_ring_ = create_ring(sizeof(ChannelMsg), kChannelSize);
+        rx_comp_ring_ = create_ring(sizeof(ChannelMsg), kChannelSize);
+    }
+
+    ~Channel() {
+        free(tx_ring_);
+        free(tx_comp_ring_);
+        free(rx_ring_);
+        free(rx_comp_ring_);
+    }
+
+    jring_t *tx_ring_;
+    jring_t *tx_comp_ring_;
+    jring_t *rx_ring_;
+    jring_t *rx_comp_ring_;
+};
+
 class Endpoint {
-   private:
-    struct ConnectionState {
-        std::vector<uint16_t> src_ports;
-    };
-
-    std::unordered_map<ConnectionID, std::unique_ptr<ConnectionState>>
-        state_map;
-
-    const uint16_t bootstrap_port = 40000;
+    constexpr static uint16_t bootstrap_port = 40000;
+    Channel *channel_;
 
    public:
     // This function bind this endpoint to a specific local network interface
@@ -46,25 +81,50 @@ class Endpoint {
     // leverage multiple paths. Under the hood, we leverage TCP to boostrap our
     // connections. We do not consider multi-tenancy for now, assuming this
     // endpoint exclusively uses the NIC and its all queues.
-    Endpoint(const char *interface_name);
-    ~Endpoint();
+    Endpoint(Channel *channel) : channel_(channel) {}
+    ~Endpoint() {}
 
     // Connecting to a remote address.
     ConnectionID Connect(const char *remote_ip) {
-        // TODO: waiting on a cond_var, while background engine is connecting to
-        // remote.
+        // TODO: Using TCP to negotiate a ConnectionID.
     }
 
     // Sending the data by leveraging multiple port combinations.
     bool Send(ConnectionID connection_id, const void *data, size_t len) {
-        // TODO: waiting on a cond_var, while background engine is sending the
-        // data.
+        ChannelMsg msg = {
+            .opcode = ChannelOp::kTx,
+            .data = const_cast<void *>(data),
+            .len_ptr = &len,
+            .connection_id = connection_id,
+        };
+        while (jring_sp_enqueue_bulk(channel_->tx_ring_, &msg, 1, nullptr) !=
+               1) {
+            // do nothing
+        }
+        // Wait for the completion.
+        while (jring_sc_dequeue_bulk(channel_->tx_comp_ring_, &msg, 1,
+                                     nullptr) != 1) {
+            // do nothing
+        }
     }
 
     // Receiving the data by leveraging multiple port combinations.
     bool Recv(ConnectionID connection_id, void *data, size_t *len) {
-        // TODO: waiting on a cond_var, while background engine is receiving the
-        // data.
+        ChannelMsg msg = {
+            .opcode = ChannelOp::kRx,
+            .data = data,
+            .len_ptr = len,
+            .connection_id = connection_id,
+        };
+        while (jring_sp_enqueue_bulk(channel_->rx_ring_, &msg, 1, nullptr) !=
+               1) {
+            // do nothing
+        }
+        // Wait for the completion.
+        while (jring_sc_dequeue_bulk(channel_->rx_comp_ring_, &msg, 1,
+                                     nullptr) != 1) {
+            // do nothing
+        }
     }
 };
 
@@ -543,8 +603,8 @@ class Flow {
      */
     Flow(const uint32_t local_addr, const uint16_t local_port,
          const uint32_t remote_addr, const uint16_t remote_port,
-         const unsigned char *local_l2_addr,
-         const unsigned char *remote_l2_addr, AFXDPSocket *socket)
+         const uint8_t *local_l2_addr, const uint8_t *remote_l2_addr,
+         AFXDPSocket *socket)
         : key_(local_addr, local_port, remote_addr, remote_port),
           socket_(CHECK_NOTNULL(socket)),
           state_(State::kClosed),
@@ -1064,8 +1124,8 @@ class Flow {
 
     const Key key_;
     // A flow is identified by the 5-tuple (Proto is always UDP).
-    unsigned char local_l2_addr_[ETH_ALEN];
-    unsigned char remote_l2_addr_[ETH_ALEN];
+    uint8_t local_l2_addr_[ETH_ALEN];
+    uint8_t remote_l2_addr_[ETH_ALEN];
 
     AFXDPSocket *socket_;
     // Flow state.
@@ -1088,7 +1148,7 @@ class MachnetEngineSharedState {
     static constexpr size_t kSrcPortBitmapSize =
         (kSrcPortMax + 1) / sizeof(uint64_t) / 8;
     explicit MachnetEngineSharedState(std::vector<uint8_t> rss_key,
-                                      unsigned char *l2addr,
+                                      uint8_t *l2addr,
                                       std::vector<uint32_t> ipv4_addrs)
         : rss_key_(rss_key) {
         for (const auto &addr : ipv4_addrs) {
@@ -1403,31 +1463,19 @@ class MachnetEngine {
      * @param channels      (optional) Machnet channels the engine will be
      *                      responsible for (if any).
      */
-    MachnetEngine(int queue_id, int num_frames,
-                  std::shared_ptr<MachnetEngineSharedState> shared_state)
-        : shared_state_(CHECK_NOTNULL(shared_state)),
-          last_periodic_timestamp_(0),
+    MachnetEngine(int queue_id, int num_frames, Channel *channel,
+                  std::shared_ptr<MachnetEngineSharedState> shared_state,
+                  const uint32_t local_addr, const uint16_t local_port,
+                  const uint32_t remote_addr, const uint16_t remote_port,
+                  const uint8_t *local_l2_addr, const uint8_t *remote_l2_addr)
+        : socket_(queue_id, num_frames),
+          channel_(channel),
+          shared_state_(CHECK_NOTNULL(shared_state)),
+          last_periodic_timestamp_(std::chrono::high_resolution_clock::now()),
           periodic_ticks_(0) {
-        for (const auto &[ipv4_addr, _] : shared_state_->GetIpv4PortBitmap()) {
-            listeners_.emplace(
-                ipv4_addr,
-                std::unordered_map<uint16_t, std::shared_ptr<shm::Channel>>());
-        }
-    }
-
-    // Adds a channel to be served by this engine.
-    void AddChannel(std::shared_ptr<shm::Channel> channel,
-                    std::promise<bool> &&status) {
-        const std::lock_guard<std::mutex> lock(mtx_);
-        auto channel_info = std::make_tuple(std::move(CHECK_NOTNULL(channel)),
-                                            std::move(status));
-        channels_to_enqueue_.emplace_back(std::move(channel_info));
-    }
-
-    // Removes a channel from the engine.
-    void RemoveChannel(std::shared_ptr<shm::Channel> channel) {
-        const std::lock_guard<std::mutex> lock(mtx_);
-        channels_to_dequeue_.emplace_back(std::move(channel));
+        flow_ = std::make_unique<Flow>(local_addr, local_port, remote_addr,
+                                       remote_port, local_l2_addr,
+                                       remote_l2_addr, &socket_);
     }
 
     /**
@@ -1439,24 +1487,32 @@ class MachnetEngine {
      *
      * @param now The current TSC.
      */
-    void Run(uint64_t now) {
+    void Run() {
         // Calculate the time elapsed since the last periodic processing.
-        const auto elapsed = time::cycles_to_us(now - last_periodic_timestamp_);
+        auto now = std::chrono::high_resolution_clock::now();
+        const auto elapsed =
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                now - last_periodic_timestamp_)
+                .count();
+
+        // time::cycles_to_us(now - last_periodic_timestamp_);
         if (elapsed >= kSlowTimerIntervalUs) {
             // Perform periodic processing.
-            PeriodicProcess(now);
+            PeriodicProcess();
             last_periodic_timestamp_ = now;
         }
 
-        juggler::dpdk::PacketBatch rx_packet_batch;
-        const uint16_t nb_pkt_rx = rxring_->RecvPackets(&rx_packet_batch);
-        for (uint16_t i = 0; i < nb_pkt_rx; i++) {
-            const auto *pkt = rx_packet_batch.pkts()[i];
-            process_rx_pkt(pkt, now);
+        auto frames = socket_.recv_packets(RECV_BATCH_SIZE);
+        for (auto &frame : frames) {
+            auto pkt = FrameBuf::Create(frame.frame_offset,
+                                        socket_.umem_buffer_, frame.frame_len);
+            process_rx_pkt(pkt);
         }
 
         // We have processed the RX batch; release it.
-        rx_packet_batch.Release();
+        for (auto &frame : frames) {
+            socket_.frame_pool_->push(frame.frame_offset);
+        }
 
         // Process messages from channels.
         FrameBufBatch msg_buf_batch;
@@ -1466,7 +1522,7 @@ class MachnetEngine {
                 channel->DequeueMessages(&msg_buf_batch);
             for (uint32_t i = 0; i < nb_msg_dequeued; i++) {
                 auto *msg = msg_buf_batch.bufs()[i];
-                process_msg(channel.get(), msg, now);
+                process_tx_pkt(msg);
             }
             // We have processed the message batch; reset it.
             msg_buf_batch.Clear();
@@ -1479,7 +1535,7 @@ class MachnetEngine {
      *
      * @param now The current TSC.
      */
-    void PeriodicProcess(uint64_t now) {
+    void PeriodicProcess() {
         // Advance the periodic ticks counter.
         ++periodic_ticks_;
         HandleRTO();
@@ -1488,148 +1544,15 @@ class MachnetEngine {
         // Continue the rest of management tasks locked to avoid race conditions
         // with the control plane.
         const std::lock_guard<std::mutex> lock(mtx_);
-        // Refresh the list of active channels, if needed.
-        ChannelsUpdate();
     }
-
-    // Return the number of channels served by this engine.
-    size_t GetChannelCount() const { return channels_.size(); }
 
    protected:
     void DumpStatus() {
         std::string s;
         s += "[Machnet Engine Status]";
-        s += "[PMD Port: " + std::to_string(pmd_port_->GetPortId()) +
-             ", RX_Q: " + std::to_string(rxring_->GetRingId()) +
-             ", TX_Q: " + std::to_string(txring_->GetRingId()) + "]\n";
-        s += "\tLocal L2 address:\n";
-        s += "\t\t" + pmd_port_->GetL2Addr().ToString() + "\n";
-        s += "\tLocal IPv4 addresses:\n";
-        s += "\t\t";
-        for (const auto &[addr, _] : shared_state_->GetIpv4PortBitmap()) {
-            s += addr.ToString();
-            s += ",";
-        }
-        s += "\n";
-        s += "\tActive channels:";
-        for (const auto &channel : channels_) {
-            s += "\n\t\t";
-            s +=
-                "[" + channel->GetName() + "]" + " Total buffers: " +
-                std::to_string(channel->GetTotalBufCount()) +
-                ", Free buffers: " + std::to_string(channel->GetFreeBufCount());
-        }
-        s += "\n";
-        s += "\tARP Table:\n";
-        for (const auto &entry : shared_state_->GetArpTableEntries()) {
-            s += "\t\t" + std::get<0>(entry) + " -> " + std::get<1>(entry) +
-                 "\n";
-        }
-        s += "\tListeners:\n";
-        for (const auto &listeners_for_ip : listeners_) {
-            const auto ip = listeners_for_ip.first.ToString();
-            for (const auto &listener : listeners_for_ip.second) {
-                s += "\t\t" + ip + ":" +
-                     std::to_string(listener.first.port.value()) + " <-> [" +
-                     listener.second->GetName() + "]" + "\n";
-            }
-        }
-        s += "\tActive flows:\n";
-        for (const auto &[key, flow_it] : active_flows_map_) {
-            s += "\t\t";
-            s += (*flow_it)->ToString();
-            s += "\n";
-        }
+        // TODO: Add more status information.
         s += "\n";
         LOG(INFO) << s;
-    }
-
-    /**
-     * @brief This method curates the list of active channels under this engine.
-     * It enqueues newly added channels to the list of active channels, and
-     * removes/destroys channels pending for removal from the list.
-     * We choose to curate the list in a separate method, so that the caller can
-     * do this operation periodically, amortising the cost of locking.
-     *
-     * @attention This method should be executed periodically at the dataplane,
-     * with the mutex held to achieve synchronization with the control plane
-     * thread.
-     */
-    void ChannelsUpdate() {
-        // TODO(ilias): For now, we assume that added channels do not carry any
-        // flows (i.e., these are newly created channels).
-        // If we want, dynamic load balancing (e.g., moving channels to
-        // different engines, we should take care of flow migrations).
-        for (auto it = channels_to_enqueue_.begin();
-             it != channels_to_enqueue_.end();
-             it = channels_to_enqueue_.erase(it)) {
-            auto &channel_info = *it;
-            const auto &channel = std::get<0>(channel_info);
-            auto &status = std::get<1>(channel_info);
-
-            channels_.emplace_back(std::move(channel));
-            status.set_value(true);
-        }
-
-        // Remove channels pending for removal.
-        for (auto &channel : channels_to_dequeue_) {
-            const auto &it = std::find_if(
-                channels_.begin(), channels_.end(),
-                [&channel](const auto &c) { return channel == c; });
-            if (it == channels_.end()) {
-                // This channel is not in the list of active channels.
-                LOG(WARNING) << "Channel " << channel->GetName()
-                             << " is not in the list of active channels";
-                continue;
-            }
-
-            // Remove from the engine all listeners associated with this
-            // channel.
-            const auto &channel_listeners = channel->GetListeners();
-            for (const auto &ch_listener : channel_listeners) {
-                const auto &local_ip = ch_listener.addr;
-                const auto &local_port = ch_listener.port;
-
-                if (listeners_.find(local_ip) == listeners_.end()) {
-                    LOG(ERROR) << "No listeners for IP " << local_ip.ToString();
-                    continue;
-                }
-
-                auto &listeners_for_ip = listeners_[local_ip];
-                if (listeners_for_ip.find(local_port) ==
-                    listeners_for_ip.end()) {
-                    LOG(ERROR) << Format("Listener not found %s:%hu",
-                                         local_ip.ToString().c_str(),
-                                         local_port.port.value());
-                    continue;
-                }
-
-                shared_state_->UnregisterListener(local_ip, local_port);
-                listeners_for_ip.erase(local_port);
-            }
-
-            const auto &channel_flows = channel->GetActiveFlows();
-            // Remove from the engine's map all the flows associated with this
-            // channel.
-            for (const auto &flow : channel_flows) {
-                if (active_flows_map_.find(flow->key()) !=
-                    active_flows_map_.end()) {
-                    shared_state_->SrcPortRelease(flow->key().local_addr,
-                                                  flow->key().local_port);
-                    LOG(INFO) << "Removing flow " << flow->key().ToString();
-                    flow->ShutDown();
-                    active_flows_map_.erase(flow->key());
-                } else {
-                    LOG(WARNING) << "Flow " << flow->key().ToString()
-                                 << " is not in the list of active flows";
-                }
-            }
-
-            // Finally remove the channel.
-            channels_.erase(it);
-        }
-
-        channels_to_dequeue_.clear();
     }
 
     /**
@@ -1820,22 +1743,9 @@ class MachnetEngine {
      * @brief Iterate throught the list of flows, check and handle RTOs.
      */
     void HandleRTO() {
-        for (auto it = active_flows_map_.begin();
-             it != active_flows_map_.end();) {
-            const auto &flow_it = it->second;
-            auto is_active_flow = (*flow_it)->PeriodicCheck();
-            if (!is_active_flow) {
-                LOG(INFO) << "Flow " << (*flow_it)->key().ToString()
-                          << " is no longer active. Removing.";
-                auto channel = (*flow_it)->channel();
-                shared_state_->SrcPortRelease((*flow_it)->key().local_addr,
-                                              (*flow_it)->key().local_port);
-                channel->RemoveFlow(flow_it);
-                it = active_flows_map_.erase(it);
-                continue;
-            }
-            ++it;
-        }
+        // TODO: maintain active_flows_map_
+        auto is_active_flow = flow_->PeriodicCheck();
+        CHECK(is_active_flow);
     }
 
     /**
@@ -1844,7 +1754,7 @@ class MachnetEngine {
      * @param pkt Pointer to the packet.
      * @param now TSC timestamp.
      */
-    void process_rx_pkt(const juggler::dpdk::Packet *pkt, uint64_t now) {
+    void process_rx_pkt(FrameBuf *pkt) {
         // Sanity ethernet header check.
         if (pkt->length() < sizeof(Ethernet)) [[unlikely]]
             return;
@@ -1861,7 +1771,7 @@ class MachnetEngine {
             break;
                 // clang-format off
       [[likely]] case Ethernet::kIpv4:
-          process_rx_ipv4(pkt, now);
+          process_rx_ipv4(pkt);
         break;
             // clang-format on
             case Ethernet::kIpv6:
@@ -1872,7 +1782,7 @@ class MachnetEngine {
         }
     }
 
-    void process_rx_ipv4(const juggler::dpdk::Packet *pkt, uint64_t now) {
+    void process_rx_ipv4(FrameBuf *pkt) {
         // Sanity ipv4 header check.
         if (pkt->length() < sizeof(Ethernet) + sizeof(Ipv4)) [[unlikely]]
             return;
@@ -2029,63 +1939,35 @@ class MachnetEngine {
      * @param msg     A pointer to the `MsgBuf` containing the first buffer of
      * the message.
      */
-    void process_msg(const shm::Channel *channel, FrameBuf *msg, uint64_t now) {
-        const auto *flow_info = msg->flow();
-        const net::flow::Key msg_key(flow_info->src_ip, flow_info->src_port,
-                                     flow_info->dst_ip, flow_info->dst_port);
-        if (active_flows_map_.find(msg_key) == active_flows_map_.end()) {
-            LOG(ERROR) << "Message received for a non-existing flow! "
-                       << utils::Format(
-                              "(Channel: %s, 5-tuple hash: %lu, Flow: %s)",
-                              channel->GetName().c_str(),
-                              std::hash<net::flow::Key>{}(msg_key),
-                              msg_key.ToString().c_str());
-            return;
-        }
-        const auto &flow_it = active_flows_map_[msg_key];
-        (*flow_it)->OutputMessage(msg);
+    void process_tx_pkt(FrameBuf *msg) {
+        // TODO: lookup the msg five-tuple in an active_flows_map_
+        flow_->OutputMessage(msg);
     }
 
    private:
-    using channel_info =
-        std::tuple<std::shared_ptr<shm::Channel>, std::promise<bool>>;
-    using flow_info =
-        std::tuple<uint64_t, uint32_t, uint16_t, uint32_t, uint16_t,
-                   std::shared_ptr<shm::Channel>, std::promise<bool>>;
-    using listener_info =
-        std::tuple<uint64_t, uint16_t, std::shared_ptr<shm::Channel>,
-                   std::promise<bool>>;
     static const size_t kSrcPortMin = (1 << 10);      // 1024
     static const size_t kSrcPortMax = (1 << 16) - 1;  // 65535
     static constexpr size_t kSrcPortBitmapSize =
         ((kSrcPortMax - kSrcPortMin + 1) + sizeof(uint64_t) - 1) /
         sizeof(uint64_t);
+
+    // AFXDP socket used for send/recv packets.
+    AFXDPSocket socket_;
+    // For now, we just assume a single flow.
+    std::unique_ptr<Flow> flow_;
+    // Control plan channel with Endpoint.
+    Channel *channel_;
     // A mutex to synchronize control plane operations.
     std::mutex mtx_;
     // Shared State instance for this engine.
     std::shared_ptr<MachnetEngineSharedState> shared_state_;
-    // Local IPv4 addresses bound to this engine/interface.
-    std::unordered_set<uint32_t> local_ipv4_addrs_;
     // Timestamp of last periodic process execution.
-    uint64_t last_periodic_timestamp_{0};
+    std::chrono::time_point<std::chrono::high_resolution_clock>
+        last_periodic_timestamp_;
     // Clock ticks for the slow timer.
     uint64_t periodic_ticks_{0};
-    // Listeners for incoming packets.
-    std::unordered_map<
-        uint32_t, std::unordered_map<uint16_t, std::shared_ptr<shm::Channel>>>
-        listeners_{};
-    // Unordered map of active flows.
-    std::unordered_map<Key,
-                       const std::list<std::unique_ptr<Flow>>::const_iterator>
-        active_flows_map_{};
-    // Vector of channels to be added to the list of active channels.
-    std::vector<channel_info> channels_to_enqueue_{};
-    // Vector of channels to be removed from the list of active channels.
-    std::vector<std::shared_ptr<shm::Channel>> channels_to_dequeue_{};
     // List of pending control plane requests.
-    std::list<std::tuple<uint64_t, MachnetCtrlQueueEntry_t,
-                         const std::shared_ptr<shm::Channel>>>
-        pending_requests_{};
+    std::list<std::tuple<uint64_t, ChannelMsg>> pending_requests_{};
 };
 
 }  // namespace uccl

@@ -1,12 +1,16 @@
 #pragma once
 
+#include <glog/logging.h>
 #include <pthread.h>
 #include <sched.h>
+#include <stdarg.h>
 #include <sys/socket.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <vector>
+
+#include "util_jring.h"
 
 namespace uccl {
 
@@ -144,6 +148,35 @@ static inline std::string FormatVarg(const char* fmt, va_list ap) {
     const std::string s = FormatVarg(fmt, ap);
     va_end(ap);
     return s;
+}
+
+#ifdef __cpp_lib_hardware_interference_size
+using std::hardware_constructive_interference_size;
+using std::hardware_destructive_interference_size;
+#else
+// 64 bytes on x86-64 │ L1_CACHE_BYTES │ L1_CACHE_SHIFT │ __cacheline_aligned │
+// ...
+constexpr std::size_t hardware_constructive_interference_size = 64;
+constexpr std::size_t hardware_destructive_interference_size = 64;
+#endif
+// TODO(ilias): Adding an assertion for now, to prevent incompatibilities
+// with the C helper library.
+static_assert(hardware_constructive_interference_size == 64);
+static_assert(hardware_destructive_interference_size == 64);
+
+jring_t* create_ring(size_t element_size, size_t element_count) {
+    size_t ring_sz = jring_get_buf_ring_size(element_size, element_count);
+    LOG(INFO) << "Ring size: " << ring_sz
+              << " bytes, msg size: " << element_size
+              << " bytes, element count: " << element_count;
+    jring_t* ring = CHECK_NOTNULL(reinterpret_cast<jring_t*>(aligned_alloc(
+        juggler::hardware_constructive_interference_size, ring_sz)));
+    if (jring_init(ring, element_count, element_size, 1, 1) < 0) {
+        LOG(ERROR) << "Failed to initialize ring buffer";
+        free(ring);
+        exit(EXIT_FAILURE);
+    }
+    return ring;
 }
 
 }  // namespace uccl

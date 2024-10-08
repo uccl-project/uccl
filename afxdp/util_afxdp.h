@@ -77,6 +77,7 @@ class AFXDPSocket {
 
     void send_packet(frame_desc frame);
     void send_packets(std::vector<frame_desc>& frames);
+    std::vector<frame_desc> recv_packets(uint32_t nb_frames);
 
     ~AFXDPSocket();
 };
