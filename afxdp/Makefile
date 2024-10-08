@@ -4,7 +4,7 @@ INC = -I ../lib/install/include
 LIBS = ../lib/install/lib/libxdp.a ../lib/install/lib/libbpf.a -lglog
 CXXFLAGS = -O3 -g -std=c++17 -Wno-pointer-arith
 CLANGFLAGS = -O3 -g
-DEPS = util_*.h transport_*.h
+DEPS = util*.h transport*.h
 LIB_OBJ = util_umem.o util_afxdp.o
 
 .PHONY: build

@@ -164,13 +164,13 @@ constexpr std::size_t hardware_destructive_interference_size = 64;
 static_assert(hardware_constructive_interference_size == 64);
 static_assert(hardware_destructive_interference_size == 64);
 
-jring_t* create_ring(size_t element_size, size_t element_count) {
+inline jring_t* create_ring(size_t element_size, size_t element_count) {
     size_t ring_sz = jring_get_buf_ring_size(element_size, element_count);
     LOG(INFO) << "Ring size: " << ring_sz
               << " bytes, msg size: " << element_size
               << " bytes, element count: " << element_count;
-    jring_t* ring = CHECK_NOTNULL(reinterpret_cast<jring_t*>(aligned_alloc(
-        juggler::hardware_constructive_interference_size, ring_sz)));
+    jring_t* ring = CHECK_NOTNULL(reinterpret_cast<jring_t*>(
+        aligned_alloc(hardware_constructive_interference_size, ring_sz)));
     if (jring_init(ring, element_count, element_size, 1, 1) < 0) {
         LOG(ERROR) << "Failed to initialize ring buffer";
         free(ring);

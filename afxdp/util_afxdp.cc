@@ -161,6 +161,7 @@ std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
     uint32_t nb_frames) {
     // TODO: implement me.
     LOG(WARNING) << "AFXDPSocket::recv_packets() is not implemented yet.";
+    return std::vector<AFXDPSocket::frame_desc>();
 }
 
 AFXDPSocket::~AFXDPSocket() {

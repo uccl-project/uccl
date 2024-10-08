@@ -30,14 +30,13 @@ namespace uccl {
 
 typedef uint64_t ConnectionID;
 
-enum ChannelOp : uint8_t {
-    kTx = 0,
-    kTxComp = 1,
-    kRx = 2,
-    kRxComp = 3,
-};
-
 struct ChannelMsg {
+    enum ChannelOp : uint8_t {
+        kTx = 0,
+        kTxComp = 1,
+        kRx = 2,
+        kRxComp = 3,
+    };
     ChannelOp opcode;
     void *data;
     size_t *len_ptr;
@@ -92,7 +91,7 @@ class Endpoint {
     // Sending the data by leveraging multiple port combinations.
     bool Send(ConnectionID connection_id, const void *data, size_t len) {
         ChannelMsg msg = {
-            .opcode = ChannelOp::kTx,
+            .opcode = ChannelMsg::ChannelOp::kTx,
             .data = const_cast<void *>(data),
             .len_ptr = &len,
             .connection_id = connection_id,
@@ -111,7 +110,7 @@ class Endpoint {
     // Receiving the data by leveraging multiple port combinations.
     bool Recv(ConnectionID connection_id, void *data, size_t *len) {
         ChannelMsg msg = {
-            .opcode = ChannelOp::kRx,
+            .opcode = ChannelMsg::ChannelOp::kRx,
             .data = data,
             .len_ptr = len,
             .connection_id = connection_id,
@@ -130,7 +129,7 @@ class Endpoint {
 
 /**
  * @struct Key
- * @brief Flow key: corresponds to the 5-tuple (UDP is always the protocol).
+ * @brief UcclFlow key: corresponds to the 5-tuple (UDP is always the protocol).
  */
 struct Key {
     Key(const Key &other) = default;
@@ -166,7 +165,7 @@ struct Key {
     const uint16_t local_port;
     const uint16_t remote_port;
 };
-static_assert(sizeof(Key) == 12, "Flow key size is not 12 bytes.");
+static_assert(sizeof(Key) == 12, "UcclFlow key size is not 12 bytes.");
 
 /**
  * Uccl Packet Header.
@@ -528,7 +527,7 @@ class RXTracking {
 };
 
 /**
- * @class Flow A flow is a connection between a local and a remote endpoint.
+ * @class UcclFlow A flow is a connection between a local and a remote endpoint.
  * @brief Class to abstract the components and functionality of a single flow.
  * A flow is a bidirectional connection between two hosts, uniquely identified
  * by the 5-tuple: {SrcIP, DstIP, SrcPort, DstPort, Protocol}, Protocol is
@@ -543,7 +542,7 @@ class RXTracking {
  *    - Receiving messages from the application (via the `Channel'), which then
  *      converts to network packets and sends them out to the remote recipient.
  */
-class Flow {
+class UcclFlow {
    public:
     enum class State {
         kClosed,
@@ -579,10 +578,10 @@ class Flow {
      * @param remote_l2_addr Remote L2 address.
      * @param AFXDPSocket object for packet IOs.
      */
-    Flow(const uint32_t local_addr, const uint16_t local_port,
-         const uint32_t remote_addr, const uint16_t remote_port,
-         const uint8_t *local_l2_addr, const uint8_t *remote_l2_addr,
-         AFXDPSocket *socket)
+    UcclFlow(const uint32_t local_addr, const uint16_t local_port,
+             const uint32_t remote_addr, const uint16_t remote_port,
+             const uint8_t *local_l2_addr, const uint8_t *remote_l2_addr,
+             AFXDPSocket *socket)
         : key_(local_addr, local_port, remote_addr, remote_port),
           socket_(CHECK_NOTNULL(socket)),
           state_(State::kClosed),
@@ -593,13 +592,13 @@ class Flow {
         memcpy(local_l2_addr_, local_l2_addr, ETH_ALEN);
         memcpy(remote_l2_addr_, remote_l2_addr, ETH_ALEN);
     }
-    ~Flow() {}
+    ~UcclFlow() {}
     /**
      * @brief Operator to compare if two flows are equal.
      * @param other Other flow to compare to.
      * @return true if the flows are equal, false otherwise.
      */
-    bool operator==(const Flow &other) const { return key_ == other.key(); }
+    bool operator==(const UcclFlow &other) const { return key_ == other.key(); }
 
     /**
      * @brief Get the flow key.
@@ -811,7 +810,7 @@ class Flow {
             if (state_ == State::kSynSent) {
                 // Notify the application that the flow has not been
                 // established.
-                LOG(INFO) << "Flow " << this << " failed to establish";
+                LOG(INFO) << "UcclFlow " << this << " failed to establish";
             }
             // TODO(ilias): Send RST packet.
 
@@ -1105,7 +1104,7 @@ class Flow {
     uint8_t remote_l2_addr_[ETH_ALEN];
 
     AFXDPSocket *socket_;
-    // Flow state.
+    // UcclFlow state.
     State state_;
     // Swift CC protocol control block.
     swift::Pcb pcb_;
@@ -1121,10 +1120,6 @@ class UcclEngine {
    public:
     // Slow timer (periodic processing) interval in microseconds.
     const size_t kSlowTimerIntervalUs = 2000;  // 2ms
-    const size_t kPendingRequestTimeoutSlowTicks = 3;
-    // Flow creation timeout in slow ticks (# of periodic executions since
-    // flow creation request).
-    const size_t kFlowCreationTimeoutSlowTicks = 3;
     UcclEngine() = delete;
     UcclEngine(UcclEngine const &) = delete;
 
@@ -1147,9 +1142,9 @@ class UcclEngine {
           channel_(channel),
           last_periodic_timestamp_(std::chrono::high_resolution_clock::now()),
           periodic_ticks_(0) {
-        flow_ = std::make_unique<Flow>(local_addr, local_port, remote_addr,
-                                       remote_port, local_l2_addr,
-                                       remote_l2_addr, &socket_);
+        flow_ = std::make_unique<UcclFlow>(local_addr, local_port, remote_addr,
+                                           remote_port, local_l2_addr,
+                                           remote_l2_addr, &socket_);
     }
 
     /**
@@ -1358,7 +1353,7 @@ class UcclEngine {
     // AFXDP socket used for send/recv packets.
     AFXDPSocket socket_;
     // For now, we just assume a single flow.
-    std::unique_ptr<Flow> flow_;
+    std::unique_ptr<UcclFlow> flow_;
     // Control plan channel with Endpoint.
     Channel *channel_;
     // Timestamp of last periodic process execution.
@@ -1373,8 +1368,8 @@ class UcclEngine {
 namespace std {
 
 template <>
-struct hash<uccl::Flow> {
-    size_t operator()(const uccl::Flow &flow) const {
+struct hash<uccl::UcclFlow> {
+    size_t operator()(const uccl::UcclFlow &flow) const {
         const auto &key = flow.key();
         return std::hash<std::string_view>{}(
             {reinterpret_cast<const char *>(&key), sizeof(key)});
