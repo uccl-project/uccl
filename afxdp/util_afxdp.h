@@ -33,6 +33,8 @@
 
 namespace uccl {
 
+constexpr static uint32_t AFXDP_MTU = 3498;
+
 class AFXDPSocket;
 
 class AFXDPFactory {
@@ -67,6 +69,15 @@ class AFXDPSocket {
     FramePool* frame_pool_;
 
     AFXDPSocket(int queue_id, int num_frames);
+
+    struct frame_desc {
+        uint64_t frame_offset;
+        uint32_t frame_len;
+    };
+
+    void send_packet(frame_desc frame);
+    void send_packets(std::vector<frame_desc>& frames);
+
     ~AFXDPSocket();
 };
 

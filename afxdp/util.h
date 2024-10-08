@@ -128,4 +128,22 @@ class Spin {
 #define load_acquire(X) __atomic_load_n(X, __ATOMIC_ACQUIRE)
 #define store_release(X, Y) __atomic_store_n(X, Y, __ATOMIC_RELEASE)
 
+static inline std::string FormatVarg(const char* fmt, va_list ap) {
+    char* ptr = nullptr;
+    int len = vasprintf(&ptr, fmt, ap);
+    if (len < 0) return "<FormatVarg() error>";
+
+    std::string ret(ptr, len);
+    free(ptr);
+    return ret;
+}
+
+[[maybe_unused]] static inline std::string Format(const char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    const std::string s = FormatVarg(fmt, ap);
+    va_end(ap);
+    return s;
+}
+
 }  // namespace uccl

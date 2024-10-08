@@ -1,6 +1,8 @@
 #pragma once
 
 #include <glog/logging.h>
+#include <linux/if_ether.h>
+#include <linux/ip.h>
 #include <linux/udp.h>
 
 #include <concepts>
@@ -19,6 +21,7 @@
 
 #include "transport_cc.h"
 #include "util_afxdp.h"
+#include "util_endian.h"
 
 namespace uccl {
 
@@ -65,37 +68,177 @@ class Endpoint {
     }
 };
 
+/**
+ * @struct Key
+ * @brief Flow key: corresponds to the 5-tuple (UDP is always the protocol).
+ */
+struct Key {
+    Key(const Key &other) = default;
+    /**
+     * @brief Construct a new Key object.
+     *
+     * @param local_addr Local IP address (in host byte order).
+     * @param local_port Local UDP port (in host byte order).
+     * @param remote_addr Remote IP address (in host byte order).
+     * @param remote_port Remote UDP port (in host byte order).
+     */
+    Key(const uint32_t local_addr, const uint16_t local_port,
+        const uint32_t remote_addr, const uint16_t remote_port)
+        : local_addr(local_addr),
+          local_port(local_port),
+          remote_addr(remote_addr),
+          remote_port(remote_port) {}
+
+    bool operator==(const Key &other) const {
+        return local_addr == other.local_addr &&
+               local_port == other.local_port &&
+               remote_addr == other.remote_addr &&
+               remote_port == other.remote_port;
+    }
+
+    std::string ToString() const {
+        return Format("[%x:%hu <-> %x:%hu]", remote_addr, remote_port,
+                      local_addr, local_port);
+    }
+
+    const uint32_t local_addr;
+    const uint32_t remote_addr;
+    const uint16_t local_port;
+    const uint16_t remote_port;
+};
+static_assert(sizeof(Key) == 12, "Flow key size is not 12 bytes.");
+
+/**
+ * Machnet Packet Header.
+ */
+struct __attribute__((packed)) MachnetPktHdr {
+    static constexpr uint16_t kMagic = 0x4e53;
+    be16_t magic;  // Magic value tagged after initialization for the flow.
+    enum class MachnetFlags : uint8_t {
+        kData = 0b0,
+        kSyn = 0b1,         // SYN packet.
+        kAck = 0b10,        // ACK packet.
+        kSynAck = 0b11,     // SYN-ACK packet.
+        kRst = 0b10000000,  // RST packet.
+    };
+    MachnetFlags net_flags;  // Network flags.
+    uint8_t msg_flags;       // Field to reflect the `MachnetMsgBuf_t' flags.
+    be32_t seqno;  // Sequence number to denote the packet counter in the flow.
+    be32_t ackno;  // Sequence number to denote the packet counter in the flow.
+    be64_t sack_bitmap[4];     // Bitmap of the SACKs received.
+    be16_t sack_bitmap_count;  // Length of the SACK bitmap [0-256].
+    be64_t timestamp1;         // Timestamp of the packet before sending.
+};
+static_assert(sizeof(MachnetPktHdr) == 54, "MachnetPktHdr size mismatch");
+
+inline MachnetPktHdr::MachnetFlags operator|(MachnetPktHdr::MachnetFlags lhs,
+                                             MachnetPktHdr::MachnetFlags rhs) {
+    using MachnetFlagsType =
+        std::underlying_type<MachnetPktHdr::MachnetFlags>::type;
+    return MachnetPktHdr::MachnetFlags(static_cast<MachnetFlagsType>(lhs) |
+                                       static_cast<MachnetFlagsType>(rhs));
+}
+
+inline MachnetPktHdr::MachnetFlags operator&(MachnetPktHdr::MachnetFlags lhs,
+                                             MachnetPktHdr::MachnetFlags rhs) {
+    using MachnetFlagsType =
+        std::underlying_type<MachnetPktHdr::MachnetFlags>::type;
+    return MachnetPktHdr::MachnetFlags(static_cast<MachnetFlagsType>(lhs) &
+                                       static_cast<MachnetFlagsType>(rhs));
+}
+
 class FrameBuf {
-    // the XDP_PACKET_HEADROOM bytes before frame_offset is xdp metedata, and we
-    // reuse it to chain Framebufs.
-    FrameBuf *prev_;
+    // If multi-buffer message (SG), next points to next buffer index.
     FrameBuf *next_;
+    // If multi-buffer message (SG), last points to the last buffer index.
+    // This is only set in the first buffer of the message.
+    FrameBuf *last_;
+
+    // Describing the packet frame.
     uint64_t frame_offset_;
     void *umem_buffer_;
+    uint32_t frame_len_;
 
-    FrameBuf(uint64_t frame_offset, void *umem_buffer)
-        : frame_offset_(frame_offset), umem_buffer_(umem_buffer) {
-        prev_ = nullptr;
+    // Flags to denote the message buffer state.
+    uint8_t flags_;
+
+#define MACHNET_MSGBUF_FLAGS_SYN (1 << 0)
+#define MACHNET_MSGBUF_FLAGS_SG (1 << 1)
+#define MACHNET_MSGBUF_FLAGS_FIN (1 << 2)
+#define MACHNET_MSGBUF_FLAGS_CHAIN (1 << 3)
+#define MACHNET_MSGBUF_NOTIFY_DELIVERY (1 << 7)
+
+    FrameBuf(uint64_t frame_offset, void *umem_buffer, uint32_t frame_len)
+        : frame_offset_(frame_offset),
+          umem_buffer_(umem_buffer),
+          frame_len_(frame_len) {
         next_ = nullptr;
+        last_ = nullptr;
+        flags_ = 0;
     }
 
    public:
-    static FrameBuf *Create(uint64_t frame_offset, void *umem_buffer) {
+    static FrameBuf *Create(uint64_t frame_offset, void *umem_buffer,
+                            uint32_t frame_len) {
+        // the XDP_PACKET_HEADROOM bytes before frame_offset is xdp metedata,
+        // and we reuse it to chain Framebufs.
         return new (reinterpret_cast<void *>(
             frame_offset + (uint64_t)umem_buffer - XDP_PACKET_HEADROOM))
-            FrameBuf(frame_offset, umem_buffer);
+            FrameBuf(frame_offset, umem_buffer, frame_len);
+    }
+    uint64_t get_frame_offset() const { return frame_offset_; }
+    void *get_umem_buffer() const { return umem_buffer_; }
+    uint32_t get_frame_len() const { return frame_len_; }
+    uint8_t *get_pkt_addr() const {
+        return (uint8_t *)umem_buffer_ + frame_offset_;
     }
 
-    uint64_t GetFrameOffset() const { return frame_offset_; }
+    uint16_t flags() const { return flags_; }
 
-    void Link(FrameBuf *buf) {
-        CHECK(next_ == nullptr);
-        CHECK(buf->prev_ == nullptr);
+    // Returns true if the `MachnetMsgBuf_t' is the first in a message.
+    bool is_first() const { return (flags_ & MACHNET_MSGBUF_FLAGS_SYN) != 0; }
+    // Returns true if the `MachnetMsgBuf_t' is the last in a message.
+    bool is_last() const { return (flags_ & MACHNET_MSGBUF_FLAGS_FIN) != 0; }
+    // Returns true if the `MachnetMsgBuf_t' is the last in a message.
+    bool is_sg() const { return (flags_ & MACHNET_MSGBUF_FLAGS_SG) != 0; }
+
+    // Returns true if there is another message buffer in the chain.
+    bool has_next() const { return flags_ & (MACHNET_MSGBUF_FLAGS_SG); }
+    // Returns the next message buffer in the chain.
+    bool has_chain() const { return flags_ & (MACHNET_MSGBUF_FLAGS_CHAIN); }
+    // Returns the next message buffer index in the chain.
+    FrameBuf *next() const { return next_; }
+    // Returns the last message buffer index in the chain.
+    FrameBuf *last() const { return last_; }
+
+    void set_next(FrameBuf *buf) {
         next_ = buf;
-        buf->prev_ = this;
+        add_flags(MACHNET_MSGBUF_FLAGS_SG);
+    }
+    void set_last(FrameBuf *buf) { last_ = buf; }
+    void mark_first() { add_flags(MACHNET_MSGBUF_FLAGS_SYN); }
+    void mark_last() { add_flags(MACHNET_MSGBUF_FLAGS_FIN); }
+
+    void link(FrameBuf *next) {
+        DCHECK(is_last()) << "This is not the last buffer of a message!";
+        DCHECK(next->is_first())
+            << "The next buffer is not the first of a message!";
+        next_ = next;
+        add_flags(MACHNET_MSGBUF_FLAGS_CHAIN);
     }
 
-    FrameBuf *Next() const { return next_; }
+    void set_flags(uint16_t flags) { flags_ = flags; }
+    void add_flags(uint16_t flags) { flags_ |= flags; }
+
+    Key get_flow() const {
+        const auto *pkt_addr =
+            reinterpret_cast<uint8_t *>(umem_buffer_) + frame_offset_;
+        const auto *ih =
+            reinterpret_cast<const iphdr *>(pkt_addr + sizeof(ethhdr));
+        const auto *udph = reinterpret_cast<const udphdr *>(
+            pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
+        return Key(ih->saddr, udph->source, ih->daddr, udph->dest);
+    }
 };
 
 class TXTracking {
@@ -119,13 +262,13 @@ class TXTracking {
             if (msgbuf != last_msgbuf_) {
                 DCHECK_NE(oldest_unacked_msgbuf_, oldest_unsent_msgbuf_)
                     << "Releasing an unsent msgbuf!";
-                oldest_unacked_msgbuf_ = msgbuf->Next();
+                oldest_unacked_msgbuf_ = msgbuf->next();
             } else {
                 oldest_unacked_msgbuf_ = nullptr;
                 last_msgbuf_ = nullptr;
             }
             // Free acked frames
-            socket_->frame_pool_->push(msgbuf->GetFrameOffset());
+            socket_->frame_pool_->push(msgbuf->get_frame_offset());
             num_tracked_msgbufs_--;
             num_acked_pkts--;
         }
@@ -143,7 +286,7 @@ class TXTracking {
             // This is not the first message buffer in the flow.
             DCHECK(oldest_unacked_msgbuf_ != nullptr);
             // Let's enqueue the new message buffer at the end of the chain.
-            last_msgbuf_->Link(msgbuf);
+            last_msgbuf_->link(msgbuf);
             // Update the last buffer pointer to point to the current buffer.
             last_msgbuf_ = msgbuf;
             if (oldest_unsent_msgbuf_ == nullptr)
@@ -162,7 +305,7 @@ class TXTracking {
 
         auto msgbuf = oldest_unsent_msgbuf_;
         if (oldest_unsent_msgbuf_ != last_msgbuf_) {
-            oldest_unsent_msgbuf_ = oldest_unsent_msgbuf_->Next();
+            oldest_unsent_msgbuf_ = oldest_unsent_msgbuf_->next();
         } else {
             oldest_unsent_msgbuf_ = nullptr;
         }
@@ -207,8 +350,6 @@ class TXTracking {
  */
 class RXTracking {
    public:
-    using MachnetPktHdr = net::MachnetPktHdr;
-
     // 256-bit SACK bitmask => we can track up to 256 packets
     static constexpr std::size_t kReassemblyMaxSeqnoDistance =
         sizeof(sizeof(MachnetPktHdr::sack_bitmap)) * 8;
@@ -231,17 +372,20 @@ class RXTracking {
           local_port_(local_port),
           remote_ip_(remote_ip),
           remote_port_(remote_port),
-          socket_(CHECK_NOTNULL(socket)),
+          socket_(socket),
           cur_msg_train_head_(nullptr),
           cur_msg_train_tail_(nullptr) {}
 
     // If we fail to allocate in the SHM channel, return -1.
-    int Consume(swift::Pcb *pcb, const dpdk::Packet *packet) {
+    int Consume(swift::Pcb *pcb, uint64_t frame_offset, void *umem_buffer,
+                uint32_t frame_len) {
         const size_t net_hdr_len =
-            sizeof(Ethernet) + sizeof(Ipv4) + sizeof(Udp);
-        const auto *machneth = packet->head_data<MachnetPktHdr *>(net_hdr_len);
-        const auto *payload =
-            packet->head_data<uint8_t *>(net_hdr_len + sizeof(MachnetPktHdr));
+            sizeof(ethhdr) + sizeof(iphdr) + sizeof(udphdr);
+        uint8_t *pkt = (uint8_t *)umem_buffer + frame_offset;
+        const auto *machneth =
+            reinterpret_cast<const MachnetPktHdr *>(pkt + net_hdr_len);
+        const auto *payload = reinterpret_cast<const MachnetPktHdr *>(
+            pkt + net_hdr_len + sizeof(MachnetPktHdr));
         const auto seqno = machneth->seqno.value();
         const auto expected_seqno = pcb->rcv_nxt;
 
@@ -271,22 +415,15 @@ class RXTracking {
             }
         }
 
-        // Buffer the packet in the SHM channel. It may be out-of-order.
-        auto *msgbuf = channel_->MsgBufAlloc();
+        // Buffer the packet in the frame pool. It may be out-of-order.
+        auto *msgbuf = FrameBuf::Create(frame_offset, umem_buffer, frame_len);
         if (msgbuf == nullptr) {
             VLOG(1) << "Failed to allocate a message buffer. Dropping packet.";
             return -1;
         }
 
         const size_t payload_len =
-            packet->length() - net_hdr_len - sizeof(MachnetPktHdr);
-        auto *msg_data = msgbuf->append<uint8_t *>(payload_len);
-        utils::Copy(CHECK_NOTNULL(msg_data), payload, msgbuf->length());
-        msgbuf->set_flags(machneth->msg_flags);
-        msgbuf->set_src_ip(remote_ip_);
-        msgbuf->set_src_port(remote_port_);
-        msgbuf->set_dst_ip(local_ip_);
-        msgbuf->set_dst_port(local_port_);
+            frame_len - net_hdr_len - sizeof(MachnetPktHdr);
         DCHECK(!(msgbuf->is_last() && msgbuf->is_sg()));
 
         if (seqno == expected_seqno) {
@@ -314,7 +451,7 @@ class RXTracking {
                 cur_msg_train_head_ = msgbuf;
                 cur_msg_train_tail_ = msgbuf;
             } else {
-                cur_msg_train_tail_->set_next(msgbuf);
+                cur_msg_train_tail_->link(msgbuf);
                 cur_msg_train_tail_ = msgbuf;
             }
 
@@ -323,11 +460,14 @@ class RXTracking {
                 // application.
                 DCHECK(!cur_msg_train_tail_->is_sg());
                 auto *msgbuf_to_deliver = cur_msg_train_head_;
-                auto nr_delivered =
-                    channel_->EnqueueMessages(&msgbuf_to_deliver, 1);
-                if (nr_delivered != 1) {
-                    LOG(FATAL) << "SHM channel full, failed to deliver message";
-                }
+                // TODO: deliver the message to the application.
+                LOG(WARNING) << "Received a complete message!";
+                // auto nr_delivered =
+                //     channel_->EnqueueMessages(&msgbuf_to_deliver, 1);
+                // if (nr_delivered != 1) {
+                //     LOG(FATAL) << "SHM channel full, failed to deliver
+                //     message";
+                // }
 
                 cur_msg_train_head_ = nullptr;
                 cur_msg_train_tail_ = nullptr;
@@ -367,13 +507,6 @@ class RXTracking {
  */
 class Flow {
    public:
-    using Ethernet = net::Ethernet;
-    using Ipv4 = net::Ipv4;
-    using Udp = net::Udp;
-    using MachnetPktHdr = net::MachnetPktHdr;
-    using ApplicationCallback =
-        std::function<void(shm::Channel *, bool, const Key &)>;
-
     enum class State {
         kClosed,
         kSynSent,
@@ -406,28 +539,21 @@ class Flow {
      * @param remote_port Remote UDP port.
      * @param local_l2_addr Local L2 address.
      * @param remote_l2_addr Remote L2 address.
-     * @param txring TX ring to send packets to.
-     * @param channel Shared memory channel this flow is associated with.
+     * @param AFXDPSocket object for packet IOs.
      */
-    Flow(const Ipv4::Address &local_addr, const Udp::Port &local_port,
-         const Ipv4::Address &remote_addr, const Udp::Port &remote_port,
-         const Ethernet::Address &local_l2_addr,
-         const Ethernet::Address &remote_l2_addr, dpdk::TxRing *txring,
-         ApplicationCallback callback, shm::Channel *channel,
-         AFXDPSocket *socket)
+    Flow(const uint32_t local_addr, const uint16_t local_port,
+         const uint32_t remote_addr, const uint16_t remote_port,
+         const unsigned char *local_l2_addr,
+         const unsigned char *remote_l2_addr, AFXDPSocket *socket)
         : key_(local_addr, local_port, remote_addr, remote_port),
-          local_l2_addr_(local_l2_addr),
-          remote_l2_addr_(remote_l2_addr),
+          socket_(CHECK_NOTNULL(socket)),
           state_(State::kClosed),
-          txring_(CHECK_NOTNULL(txring)),
-          callback_(std::move(callback)),
-          channel_(CHECK_NOTNULL(channel)),
           pcb_(),
-          tx_tracking_(CHECK_NOTNULL(socket)),
-          rx_tracking_(local_addr.address.value(), local_port.port.value(),
-                       remote_addr.address.value(), remote_port.port.value(),
-                       CHECK_NOTNULL(socket)) {
-        CHECK_NOTNULL(txring_->GetPacketPool());
+          tx_tracking_(socket),
+          rx_tracking_(local_addr, local_port, remote_addr, remote_port,
+                       socket) {
+        memcpy(local_l2_addr_, local_l2_addr, ETH_ALEN);
+        memcpy(remote_l2_addr_, remote_l2_addr, ETH_ALEN);
     }
     ~Flow() {}
     /**
@@ -443,42 +569,36 @@ class Flow {
     const Key &key() const { return key_; }
 
     /**
-     * @brief Get the associated channel.
-     */
-    shm::Channel *channel() const { return channel_; }
-
-    /**
      * @brief Get the current state of the flow.
      */
     State state() const { return state_; }
 
     std::string ToString() const {
-        return utils::Format(
-            "%s [%s] <-> [%s]\n\t\t\t%s\n\t\t\t[TX Queue] Pending "
+        return Format(
+            "%s [%s] <-> [%d]\n\t\t\t%s\n\t\t\t[TX Queue] Pending "
             "MsgBufs: "
             "%u",
-            key_.ToString().c_str(), StateToString(state_),
-            channel_->GetName().c_str(), pcb_.ToString().c_str(),
-            tx_tracking_.NumUnsentMsgbufs());
+            key_.ToString().c_str(), StateToString(state_), socket_->queue_id_,
+            pcb_.ToString().c_str(), tx_tracking_.NumUnsentMsgbufs());
     }
 
-    bool Match(const dpdk::Packet *packet) const {
-        const auto *ih = packet->head_data<Ipv4 *>(sizeof(Ethernet));
-        const auto *udph =
-            packet->head_data<Udp *>(sizeof(Ethernet) + sizeof(Ipv4));
+    bool Match(const uint8_t *pkt_addr) const {
+        const auto *ih =
+            reinterpret_cast<const iphdr *>(pkt_addr + sizeof(ethhdr));
+        const auto *udph = reinterpret_cast<const udphdr *>(
+            pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
 
-        return (ih->src_addr == key_.remote_addr &&
-                ih->dst_addr == key_.local_addr &&
-                udph->src_port == key_.remote_port &&
-                udph->dst_port == key_.local_port);
+        return (ih->saddr == key_.remote_addr && ih->daddr == key_.local_addr &&
+                udph->source == key_.remote_port &&
+                udph->dest == key_.local_port);
     }
 
     bool Match(const FrameBuf *tx_msgbuf) const {
-        const auto *flow_info = tx_msgbuf->flow();
-        return (flow_info->src_ip == key_.local_addr.address.value() &&
-                flow_info->dst_ip == key_.remote_addr.address.value() &&
-                flow_info->src_port == key_.local_port.port.value() &&
-                flow_info->dst_port == key_.remote_port.port.value());
+        const auto flow_key = tx_msgbuf->get_flow();
+        return (flow_key.local_addr == key_.local_addr &&
+                flow_key.remote_addr == key_.remote_addr &&
+                flow_key.local_port == key_.local_port &&
+                flow_key.remote_port == key_.remote_port);
     }
 
     void InitiateHandshake() {
@@ -518,11 +638,14 @@ class Flow {
      * @param packet Pointer to the allocated packet on the rx ring of the
      * driver
      */
-    void InputPacket(const dpdk::Packet *packet) {
+    void InputPacket(uint64_t frame_offset, void *umem_buffer,
+                     uint32_t frame_len) {
         // Parse the Machnet header of the packet.
         const size_t net_hdr_len =
-            sizeof(Ethernet) + sizeof(Ipv4) + sizeof(Udp);
-        auto *machneth = packet->head_data<MachnetPktHdr *>(net_hdr_len);
+            sizeof(ethhdr) + sizeof(iphdr) + sizeof(udphdr);
+        uint8_t *pkt = (uint8_t *)umem_buffer + frame_offset;
+        const auto *machneth =
+            reinterpret_cast<const MachnetPktHdr *>(pkt + net_hdr_len);
 
         if (machneth->magic.value() != MachnetPktHdr::kMagic) {
             LOG(ERROR) << "Invalid Machnet header magic: " << machneth->magic;
@@ -579,8 +702,6 @@ class Flow {
                     pcb_.rto_maybe_reset();
                     // Mark the flow as established.
                     state_ = State::kEstablished;
-                    // Notify the application that the flow is established.
-                    callback_(channel(), true, key());
                 }
                 // Send an ACK packet.
                 SendAck();
@@ -605,8 +726,8 @@ class Flow {
                     return;
                 }
                 // Data packet, process the payload.
-                const int consume_returncode =
-                    rx_tracking_.Consume(&pcb_, packet);
+                const int consume_returncode = rx_tracking_.Consume(
+                    &pcb_, frame_offset, umem_buffer, frame_len);
                 if (consume_returncode == 0) SendAck();
                 break;
         }
@@ -655,7 +776,6 @@ class Flow {
                 // Notify the application that the flow has not been
                 // established.
                 LOG(INFO) << "Flow " << this << " failed to establish";
-                callback_(channel(), false, key());
             }
             // TODO(ilias): Send RST packet.
 
@@ -672,43 +792,42 @@ class Flow {
     }
 
    private:
-    void PrepareL2Header(dpdk::Packet *packet) const {
-        auto *eh = packet->head_data<Ethernet *>();
-        eh->src_addr = local_l2_addr_;
-        eh->dst_addr = remote_l2_addr_;
-        eh->eth_type = be16_t(Ethernet::kIpv4);
-        packet->set_l2_len(sizeof(*eh));
+    void PrepareL2Header(uint8_t *pkt_addr) const {
+        auto *eh = (ethhdr *)pkt_addr;
+        memcpy(eh->h_source, local_l2_addr_, ETH_ALEN);
+        memcpy(eh->h_dest, remote_l2_addr_, ETH_ALEN);
+        eh->h_proto = htons(ETH_P_IP);
     }
 
-    void PrepareL3Header(dpdk::Packet *packet) const {
-        auto *ipv4h = packet->head_data<Ipv4 *>(sizeof(Ethernet));
-        ipv4h->version_ihl = 0x45;
-        ipv4h->type_of_service = 0;
-        ipv4h->packet_id = be16_t(0x1513);
-        ipv4h->fragment_offset = be16_t(0);
-        ipv4h->time_to_live = 64;
-        ipv4h->next_proto_id = Ipv4::Proto::kUdp;
-        ipv4h->total_length = be16_t(packet->length() - sizeof(Ethernet));
-        ipv4h->src_addr = key_.local_addr;
-        ipv4h->dst_addr = key_.remote_addr;
-        ipv4h->hdr_checksum = 0;
-        packet->set_l3_len(sizeof(*ipv4h));
+    void PrepareL3Header(uint8_t *pkt_addr, uint32_t payload_bytes) const {
+        auto *ipv4h = (iphdr *)(pkt_addr + sizeof(ethhdr));
+        ipv4h->ihl = 5;
+        ipv4h->version = 4;
+        ipv4h->tos = 0x0;
+        ipv4h->id = htons(0x1513);
+        ipv4h->frag_off = htons(0);
+        ipv4h->ttl = 64;
+        ipv4h->protocol = IPPROTO_UDP;
+        ipv4h->tot_len = htons(sizeof(iphdr) + sizeof(udphdr) + payload_bytes);
+        ipv4h->saddr = htonl(key_.local_addr);
+        ipv4h->daddr = htonl(key_.remote_addr);
+        ipv4h->check = 0;
     }
 
-    void PrepareL4Header(dpdk::Packet *packet) const {
-        auto *udph = packet->head_data<Udp *>(sizeof(Ethernet) + sizeof(Ipv4));
-        udph->src_port = key_.local_port;
-        udph->dst_port = key_.remote_port;
-        udph->len = be16_t(packet->length() - sizeof(Ethernet) - sizeof(Ipv4));
-        udph->cksum = be16_t(0);
-        packet->offload_udpv4_csum();
+    void PrepareL4Header(uint8_t *pkt_addr, uint32_t payload_bytes) const {
+        auto *udph = (udphdr *)(pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
+        udph->source = htons(key_.local_port);
+        udph->dest = htons(key_.remote_port);
+        udph->len = htons(sizeof(udphdr) + payload_bytes);
+        udph->check = htons(0);
+        // TODO: Calculate the UDP checksum.
     }
 
-    void PrepareMachnetHdr(dpdk::Packet *packet, uint32_t seqno,
+    void PrepareMachnetHdr(uint8_t *pkt_addr, uint32_t seqno,
                            const MachnetPktHdr::MachnetFlags &net_flags,
                            uint8_t msg_flags = 0) const {
-        auto *machneth = packet->head_data<MachnetPktHdr *>(
-            sizeof(Ethernet) + sizeof(Ipv4) + sizeof(Udp));
+        auto *machneth = (MachnetPktHdr *)(pkt_addr + sizeof(ethhdr) +
+                                           sizeof(iphdr) + sizeof(udphdr));
         machneth->magic = be16_t(MachnetPktHdr::kMagic);
         machneth->net_flags = net_flags;
         machneth->msg_flags = msg_flags;
@@ -727,19 +846,19 @@ class Flow {
 
     void SendControlPacket(uint32_t seqno,
                            const MachnetPktHdr::MachnetFlags &flags) const {
-        auto *packet = CHECK_NOTNULL(txring_->GetPacketPool()->PacketAlloc());
-        dpdk::Packet::Reset(packet);
+        auto frame_offset = socket_->frame_pool_->pop();
+        uint8_t *pkt_addr = (uint8_t *)socket_->umem_buffer_ + frame_offset;
 
-        const size_t kControlPacketSize = sizeof(Ethernet) + sizeof(Ipv4) +
-                                          sizeof(Udp) + sizeof(MachnetPktHdr);
-        CHECK_NOTNULL(packet->append(kControlPacketSize));
-        PrepareL2Header(packet);
-        PrepareL3Header(packet);
-        PrepareL4Header(packet);
-        PrepareMachnetHdr(packet, seqno, flags);
+        const size_t kControlPayloadBytes = sizeof(MachnetPktHdr);
+        PrepareL2Header(pkt_addr);
+        PrepareL3Header(pkt_addr, kControlPayloadBytes);
+        PrepareL4Header(pkt_addr, kControlPayloadBytes);
+        PrepareMachnetHdr(pkt_addr, seqno, flags);
 
         // Send the packet.
-        txring_->SendPackets(&packet, 1);
+        socket_->send_packet({frame_offset, sizeof(ethhdr) + sizeof(iphdr) +
+                                                sizeof(ethhdr) +
+                                                kControlPayloadBytes});
     }
 
     void SendSyn(uint32_t seqno) const {
@@ -768,75 +887,39 @@ class Flow {
      * @param packet Pointer to an allocated packet.
      * @param seqno Sequence number of the packet.
      */
-    template <CopyMode copy_mode>
-    void PrepareDataPacket(FrameBuf *msg_buf, dpdk::Packet *packet,
-                           uint32_t seqno) const {
+    void PrepareDataPacket(FrameBuf *msg_buf, uint32_t seqno) const {
         DCHECK(!(msg_buf->is_last() && msg_buf->is_sg()));
         // Header length after before the payload.
-        const size_t hdr_length = (sizeof(Ethernet) + sizeof(Ipv4) +
-                                   sizeof(Udp) + sizeof(MachnetPktHdr));
-        const uint32_t pkt_len = hdr_length + msg_buf->length();
-        CHECK_LE(pkt_len - sizeof(Ethernet), dpdk::PmdRing::kDefaultFrameSize);
-
-        if constexpr (copy_mode == CopyMode::kMemCopy) {
-            // In this mode we memory copy the packet payload.
-
-            // We reset the allocated packet here. This is because if
-            // `FAST_FREE' offload is enabled, the DPDK driver will not free any
-            // EXT buffers attached to the mbuf which could lead to problems.
-            // For the zerocopy mode, we do not need to reset it because we do
-            // all the necessary initialization in the `attach_extbuf` method.
-            dpdk::Packet::Reset(packet);
-
-            // Allocate packet space.
-            CHECK_NOTNULL(packet->append(pkt_len));
-        } else {
-            // In this mode we zero-copy the packet payload, by attaching the
-            // message buffer.
-
-            // Move the message buffer into the packet.
-            auto *buf_va = msg_buf->base();
-            const auto buf_iova = msg_buf->iova();
-            const auto buf_len = msg_buf->size();
-            const auto buf_data_ofs = msg_buf->data_offset();
-            const auto buf_data_len = msg_buf->length();
-
-            packet->attach_extbuf(buf_va, buf_iova, buf_len, buf_data_ofs,
-                                  buf_data_len, channel_->GetMbufExtShinfo());
-            CHECK_NOTNULL(packet->prepend(hdr_length));
-        }
+        const size_t hdr_length = sizeof(ethhdr) + sizeof(iphdr) +
+                                  sizeof(ethhdr) + sizeof(MachnetPktHdr);
+        uint32_t frame_len = msg_buf->get_frame_len();
+        CHECK_LE(frame_len, AFXDP_MTU);
+        uint8_t *pkt_addr = msg_buf->get_pkt_addr();
 
         // Prepare network headers.
-        PrepareL2Header(packet);
-        PrepareL3Header(packet);
-        PrepareL4Header(packet);
+        PrepareL2Header(pkt_addr);
+        PrepareL3Header(pkt_addr, frame_len - hdr_length);
+        PrepareL4Header(pkt_addr, frame_len - hdr_length);
 
         // Prepare the Machnet-specific header.
-        auto *machneth = packet->head_data<MachnetPktHdr *>(
-            sizeof(Ethernet) + sizeof(Ipv4) + sizeof(Udp));
+        auto *machneth = reinterpret_cast<MachnetPktHdr *>(
+            pkt_addr + sizeof(ethhdr) + sizeof(iphdr) + sizeof(ethhdr));
         machneth->magic = be16_t(MachnetPktHdr::kMagic);
         machneth->net_flags = MachnetPktHdr::MachnetFlags::kData;
         machneth->ackno = be32_t(UINT32_MAX);
         machneth->msg_flags = msg_buf->flags();
         DCHECK(!(msg_buf->is_last() && msg_buf->is_sg()));
 
-        // machneth->msg_id = be32_t(msg_id_);
         machneth->seqno = be32_t(seqno);
         machneth->timestamp1 = be64_t(0);
-
-        if constexpr (copy_mode == CopyMode::kMemCopy) {
-            // Copy the payload.
-            auto *payload = reinterpret_cast<uint8_t *>(machneth + 1);
-            utils::Copy(payload, msg_buf->head_data(), msg_buf->length());
-        }
     }
 
     void FastRetransmit() {
         // Retransmit the oldest unacknowledged message buffer.
-        auto *packet = CHECK_NOTNULL(txring_->GetPacketPool()->PacketAlloc());
-        PrepareDataPacket<CopyMode::kMemCopy>(
-            tx_tracking_.GetOldestUnackedMsgBuf(), packet, pcb_.snd_una);
-        txring_->SendPackets(&packet, 1);
+        auto *msg_buf = tx_tracking_.GetOldestUnackedMsgBuf();
+        PrepareDataPacket(msg_buf, pcb_.snd_una);
+        socket_->send_packet(
+            {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
         pcb_.rto_reset();
         pcb_.fast_rexmits++;
         LOG(INFO) << "Fast retransmitting packet " << pcb_.snd_una;
@@ -845,11 +928,10 @@ class Flow {
     void RTORetransmit() {
         if (state_ == State::kEstablished) {
             LOG(INFO) << "RTO retransmitting data packet " << pcb_.snd_una;
-            auto *packet =
-                CHECK_NOTNULL(txring_->GetPacketPool()->PacketAlloc());
-            PrepareDataPacket<CopyMode::kMemCopy>(
-                tx_tracking_.GetOldestUnackedMsgBuf(), packet, pcb_.snd_una);
-            txring_->SendPackets(&packet, 1);
+            auto *msg_buf = tx_tracking_.GetOldestUnackedMsgBuf();
+            PrepareDataPacket(msg_buf, pcb_.snd_una);
+            socket_->send_packet(
+                {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
         } else if (state_ == State::kSynReceived) {
             SendSynAck(pcb_.snd_una);
         } else if (state_ == State::kSynSent) {
@@ -870,35 +952,20 @@ class Flow {
             std::min(pcb_.effective_wnd(), tx_tracking_.NumUnsentMsgbufs());
         if (remaining_packets == 0) return;
 
-        do {
-            // Allocate a packet batch.
-            dpdk::PacketBatch batch;
-            auto pkt_cnt = std::min(remaining_packets,
-                                    static_cast<uint32_t>(batch.GetRoom()));
-            if (!txring_->GetPacketPool()->PacketBulkAlloc(&batch, pkt_cnt)) {
-                LOG(ERROR) << "Failed to allocate packet batch";
-                return;
-            }
+        std::vector<AFXDPSocket::frame_desc> frames;
 
-            // Prepare the packets.
-            for (uint16_t i = 0; i < batch.GetSize(); i++) {
-                auto msg = tx_tracking_.GetAndUpdateOldestUnsent();
-                if (!msg.has_value()) break;
-                auto *msg_buf = msg.value();
-                auto *packet = batch.pkts()[i];
-                if (kShmZeroCopyEnabled) {
-                    PrepareDataPacket<CopyMode::kZeroCopy>(msg_buf, packet,
-                                                           pcb_.get_snd_nxt());
-                } else {
-                    PrepareDataPacket<CopyMode::kMemCopy>(msg_buf, packet,
-                                                          pcb_.get_snd_nxt());
-                }
-            }
+        // Prepare the packets.
+        for (uint16_t i = 0; i < remaining_packets; i++) {
+            auto msg_buf_opt = tx_tracking_.GetAndUpdateOldestUnsent();
+            if (!msg_buf_opt.has_value()) break;
+            auto *msg_buf = msg_buf_opt.value();
+            PrepareDataPacket(msg_buf, pcb_.get_snd_nxt());
+            frames.emplace_back(msg_buf->get_frame_offset(),
+                                msg_buf->get_frame_len());
+        }
 
-            // TX.
-            txring_->SendPackets(&batch);
-            remaining_packets -= pkt_cnt;
-        } while (remaining_packets);
+        // TX.
+        socket_->send_packets(frames);
 
         if (pcb_.rto_disabled()) pcb_.rto_enable();
     }
@@ -958,12 +1025,9 @@ class Flow {
                         // been retransmitted.
                         if (holes_to_skip-- == 0) {
                             auto seqno = pcb_.snd_una + index;
-                            auto *packet_pool = txring_->GetPacketPool();
-                            auto *packet =
-                                CHECK_NOTNULL(packet_pool->PacketAlloc());
-                            PrepareDataPacket<CopyMode::kMemCopy>(
-                                msgbuf, packet, seqno);
-                            txring_->SendPackets(&packet, 1);
+                            PrepareDataPacket(msgbuf, seqno);
+                            socket_->send_packet({msgbuf->get_frame_offset(),
+                                                  msgbuf->get_frame_len()});
                             pcb_.rto_reset();
                             return;
                         }
@@ -971,7 +1035,7 @@ class Flow {
                         sack_bitmap_count--;
                     }
                     index++;
-                    msgbuf = channel_->GetMsgBuf(msgbuf->next());
+                    msgbuf = msgbuf->next();
                 }
                 // There is no other missing segment to retransmit, so we could
                 // send new packets.
@@ -1000,16 +1064,12 @@ class Flow {
 
     const Key key_;
     // A flow is identified by the 5-tuple (Proto is always UDP).
-    const Ethernet::Address local_l2_addr_;
-    const Ethernet::Address remote_l2_addr_;
+    unsigned char local_l2_addr_[ETH_ALEN];
+    unsigned char remote_l2_addr_[ETH_ALEN];
+
+    AFXDPSocket *socket_;
     // Flow state.
     State state_;
-    // Pointer to the TX ring for the flow to send packets on.
-    dpdk::TxRing *txring_;
-    // Callback to be invoked when the flow is either established or closed.
-    ApplicationCallback callback_;
-    // Shared pointer to the channel attached to this flow.
-    shm::Channel *channel_;
     // Swift CC protocol control block.
     swift::Pcb pcb_;
     TXTracking tx_tracking_;
@@ -1027,10 +1087,10 @@ class MachnetEngineSharedState {
     static const size_t kSrcPortMax = (1 << 16) - 1;  // 65535
     static constexpr size_t kSrcPortBitmapSize =
         (kSrcPortMax + 1) / sizeof(uint64_t) / 8;
-    explicit MachnetEngineSharedState(
-        std::vector<uint8_t> rss_key, net::Ethernet::Address l2addr,
-        std::vector<net::Ipv4::Address> ipv4_addrs)
-        : rss_key_(rss_key), arp_handler_(l2addr, ipv4_addrs) {
+    explicit MachnetEngineSharedState(std::vector<uint8_t> rss_key,
+                                      unsigned char *l2addr,
+                                      std::vector<uint32_t> ipv4_addrs)
+        : rss_key_(rss_key) {
         for (const auto &addr : ipv4_addrs) {
             CHECK(ipv4_port_bitmap_.find(addr) == ipv4_port_bitmap_.end());
             ipv4_port_bitmap_.insert(
@@ -1038,12 +1098,12 @@ class MachnetEngineSharedState {
         }
     }
 
-    const std::unordered_map<net::Ipv4::Address, std::vector<uint64_t>> &
+    const std::unordered_map<uint32_t, std::vector<uint64_t>> &
     GetIpv4PortBitmap() const {
         return ipv4_port_bitmap_;
     }
 
-    bool IsLocalIpv4Address(const net::Ipv4::Address &ipv4_addr) const {
+    bool IsLocalIpv4Address(const uint32_t ipv4_addr) const {
         return ipv4_port_bitmap_.find(ipv4_addr) != ipv4_port_bitmap_.end();
     }
 
@@ -1079,9 +1139,9 @@ class MachnetEngineSharedState {
      * }
      * @endcode
      */
-    std::optional<net::Udp::Port> SrcPortAlloc(
-        const net::Ipv4::Address &ipv4_addr,
-        std::predicate<uint16_t> auto &&lambda) {
+    std::optional<uint16_t> SrcPortAlloc(
+        const uint32_t &ipv4_addr,
+        std::function<bool(uint16_t)> auto &&lambda) {
         constexpr size_t bits_per_slot = sizeof(uint64_t) * 8;
         auto it = ipv4_port_bitmap_.find(ipv4_addr);
         if (it == ipv4_port_bitmap_.end()) {
@@ -1091,9 +1151,9 @@ class MachnetEngineSharedState {
         // Helper lambda to find a free port.
         // Given a 64-bit wide slot in a bitmap (vector of uint64_t), find the
         // first available port that satisfies the lambda condition.
-        auto find_free_port =
-            [&lambda, &bits_per_slot](
-                auto &bitmap, size_t index) -> std::optional<net::Udp::Port> {
+        auto find_free_port = [&lambda, &bits_per_slot](
+                                  auto &bitmap,
+                                  size_t index) -> std::optional<uint16_t> {
             auto mask = ~0ULL;
             do {
                 auto pos = __builtin_ffsll(bitmap[index] & mask);
@@ -1102,7 +1162,7 @@ class MachnetEngineSharedState {
                 if (candidate_port > kSrcPortMax) break;  // Illegal port.
                 if (lambda(candidate_port)) {
                     bitmap[index] &= ~(1ULL << (pos - 1));
-                    return net::Udp::Port(candidate_port);
+                    return candidate_port;
                 }
                 // If we reached the end of the slot and the port is not
                 // suitable, abort.
@@ -1165,8 +1225,7 @@ class MachnetEngineSharedState {
      * SrcPortRelease(ipv4_addr, port); // Release the allocated port
      * @endcode
      */
-    void SrcPortRelease(const net::Ipv4::Address &ipv4_addr,
-                        const net::Udp::Port &port) {
+    void SrcPortRelease(const uint32_t ipv4_addr, const uint16_t port) {
         const std::lock_guard<std::mutex> lock(mtx_);
         SrcPortReleaseLocked(ipv4_addr, port);
     }
@@ -1203,15 +1262,15 @@ class MachnetEngineSharedState {
      * to register listener on the specified address and port
      * @endcode
      */
-    bool RegisterListener(const net::Ipv4::Address &ipv4_addr,
-                          const net::Udp::Port &port, size_t rx_queue_id) {
+    bool RegisterListener(const uint32_t ipv4_addr, const uint16_t port,
+                          size_t rx_queue_id) {
         const std::lock_guard<std::mutex> lock(mtx_);
         if (ipv4_port_bitmap_.find(ipv4_addr) == ipv4_port_bitmap_.end()) {
             return false;
         }
 
         constexpr size_t bits_per_slot = sizeof(uint64_t) * 8;
-        auto p = port.port.value();
+        auto p = port;
         const auto slot = p / bits_per_slot;
         const auto bit = p % bits_per_slot;
         auto &bitmap = ipv4_port_bitmap_[ipv4_addr];
@@ -1254,8 +1313,7 @@ class MachnetEngineSharedState {
      * release the associated port
      * @endcode
      */
-    void UnregisterListener(const net::Ipv4::Address &ipv4_addr,
-                            const net::Udp::Port &port) {
+    void UnregisterListener(const uint32_t ipv4_addr, const uint16_t port) {
         const std::lock_guard<std::mutex> lock(mtx_);
         auto it = listeners_to_rxq.find({ipv4_addr, port});
         if (it == listeners_to_rxq.end()) {
@@ -1266,22 +1324,23 @@ class MachnetEngineSharedState {
         SrcPortReleaseLocked(ipv4_addr, port);
     }
 
-    std::optional<net::Ethernet::Address> GetL2Addr(
-        const dpdk::TxRing *txring, const net::Ipv4::Address &local_ip,
-        const net::Ipv4::Address &target_ip) {
-        const std::lock_guard<std::mutex> lock(mtx_);
-        return arp_handler_.GetL2Addr(txring, local_ip, target_ip);
-    }
+    // TODO: Query kernel FIB table and cache in user space
+    // std::optional<net::Ethernet::Address> GetL2Addr(
+    //     const dpdk::TxRing *txring, const net::Ipv4::Address &local_ip,
+    //     const net::Ipv4::Address &target_ip) {
+    //     const std::lock_guard<std::mutex> lock(mtx_);
+    //     return arp_handler_.GetL2Addr(txring, local_ip, target_ip);
+    // }
 
-    void ProcessArpPacket(dpdk::TxRing *txring, net::Arp *arph) {
-        const std::lock_guard<std::mutex> lock(mtx_);
-        arp_handler_.ProcessArpPacket(txring, arph);
-    }
+    // void ProcessArpPacket(dpdk::TxRing *txring, net::Arp *arph) {
+    //     const std::lock_guard<std::mutex> lock(mtx_);
+    //     arp_handler_.ProcessArpPacket(txring, arph);
+    // }
 
-    std::vector<std::tuple<std::string, std::string>> GetArpTableEntries() {
-        const std::lock_guard<std::mutex> lock(mtx_);
-        return arp_handler_.GetArpTableEntries();
-    }
+    // std::vector<std::tuple<std::string, std::string>> GetArpTableEntries() {
+    //     const std::lock_guard<std::mutex> lock(mtx_);
+    //     return arp_handler_.GetArpTableEntries();
+    // }
 
    private:
     struct hash_ip_port_pair {
@@ -1297,15 +1356,14 @@ class MachnetEngineSharedState {
      * @attention This method is not thread-safe, and should only be called when
      * locked.
      */
-    void SrcPortReleaseLocked(const net::Ipv4::Address &ipv4_addr,
-                              const net::Udp::Port &port) {
+    void SrcPortReleaseLocked(const uint32_t ipv4_addr, const uint16_t port) {
         auto it = ipv4_port_bitmap_.find(ipv4_addr);
         if (it == ipv4_port_bitmap_.end()) {
             return;
         }
 
         constexpr size_t bits_per_slot = sizeof(uint64_t) * 8;
-        auto p = port.port.value();
+        auto p = port;
         const auto slot = p / bits_per_slot;
         const auto bit = p % bits_per_slot;
         auto &bitmap = ipv4_port_bitmap_[ipv4_addr];
@@ -1313,12 +1371,9 @@ class MachnetEngineSharedState {
     }
 
     const std::vector<uint8_t> rss_key_;
-    ArpHandler arp_handler_;
     std::mutex mtx_{};
-    std::unordered_map<net::Ipv4::Address, std::vector<uint64_t>>
-        ipv4_port_bitmap_{};
-    std::unordered_map<std::pair<net::Ipv4::Address, net::Udp::Port>, size_t,
-                       hash_ip_port_pair>
+    std::unordered_map<uint32_t, std::vector<uint64_t>> ipv4_port_bitmap_{};
+    std::unordered_map<std::pair<uint32_t, uint16_t>, size_t, hash_ip_port_pair>
         listeners_to_rxq{};
 };
 
@@ -1328,15 +1383,8 @@ class MachnetEngineSharedState {
  */
 class MachnetEngine {
    public:
-    using Ethernet = net::Ethernet;
-    using Arp = net::Arp;
-    using Ipv4 = net::Ipv4;
-    using Udp = net::Udp;
-    using Icmp = net::Icmp;
-    using Flow = net::flow::Flow;
-    using PmdPort = juggler::dpdk::PmdPort;
     // Slow timer (periodic processing) interval in microseconds.
-    const size_t kSlowTimerIntervalUs = 1000000;  // 2ms
+    const size_t kSlowTimerIntervalUs = 2000;  // 2ms
     const size_t kPendingRequestTimeoutSlowTicks = 3;
     // Flow creation timeout in slow ticks (# of periodic executions since
     // flow creation request).
@@ -1355,29 +1403,17 @@ class MachnetEngine {
      * @param channels      (optional) Machnet channels the engine will be
      *                      responsible for (if any).
      */
-    MachnetEngine(std::shared_ptr<PmdPort> pmd_port, uint16_t rx_queue_id,
-                  uint16_t tx_queue_id,
-                  std::shared_ptr<MachnetEngineSharedState> shared_state,
-                  std::vector<std::shared_ptr<shm::Channel>> channels = {})
-        : pmd_port_(CHECK_NOTNULL(pmd_port)),
-          rxring_(pmd_port_->GetRing<dpdk::RxRing>(rx_queue_id)),
-          txring_(pmd_port_->GetRing<dpdk::TxRing>(tx_queue_id)),
-          packet_pool_(CHECK_NOTNULL(txring_->GetPacketPool())),
-          shared_state_(CHECK_NOTNULL(shared_state)),
-          channels_(channels),
+    MachnetEngine(int queue_id, int num_frames,
+                  std::shared_ptr<MachnetEngineSharedState> shared_state)
+        : shared_state_(CHECK_NOTNULL(shared_state)),
           last_periodic_timestamp_(0),
           periodic_ticks_(0) {
         for (const auto &[ipv4_addr, _] : shared_state_->GetIpv4PortBitmap()) {
             listeners_.emplace(
                 ipv4_addr,
-                std::unordered_map<Udp::Port, std::shared_ptr<shm::Channel>>());
+                std::unordered_map<uint16_t, std::shared_ptr<shm::Channel>>());
         }
     }
-
-    /**
-     * @brief Get the PMD port used by this engine.
-     */
-    std::shared_ptr<PmdPort> GetPmdPort() const { return pmd_port_; }
 
     // Adds a channel to be served by this engine.
     void AddChannel(std::shared_ptr<shm::Channel> channel,
@@ -1562,9 +1598,9 @@ class MachnetEngine {
                 auto &listeners_for_ip = listeners_[local_ip];
                 if (listeners_for_ip.find(local_port) ==
                     listeners_for_ip.end()) {
-                    LOG(ERROR) << utils::Format("Listener not found %s:%hu",
-                                                local_ip.ToString().c_str(),
-                                                local_port.port.value());
+                    LOG(ERROR) << Format("Listener not found %s:%hu",
+                                         local_ip.ToString().c_str(),
+                                         local_port.port.value());
                     continue;
                 }
 
@@ -2014,10 +2050,10 @@ class MachnetEngine {
     using channel_info =
         std::tuple<std::shared_ptr<shm::Channel>, std::promise<bool>>;
     using flow_info =
-        std::tuple<uint64_t, Ipv4::Address, Udp::Port, Ipv4::Address, Udp::Port,
+        std::tuple<uint64_t, uint32_t, uint16_t, uint32_t, uint16_t,
                    std::shared_ptr<shm::Channel>, std::promise<bool>>;
     using listener_info =
-        std::tuple<Ipv4::Address, Udp::Port, std::shared_ptr<shm::Channel>,
+        std::tuple<uint64_t, uint16_t, std::shared_ptr<shm::Channel>,
                    std::promise<bool>>;
     static const size_t kSrcPortMin = (1 << 10);      // 1024
     static const size_t kSrcPortMax = (1 << 16) - 1;  // 65535
@@ -2026,32 +2062,20 @@ class MachnetEngine {
         sizeof(uint64_t);
     // A mutex to synchronize control plane operations.
     std::mutex mtx_;
-    // A shared pointer to the PmdPort instance.
-    std::shared_ptr<PmdPort> pmd_port_;
-    // Designated RX queue for this engine (not shared).
-    juggler::dpdk::RxRing *rxring_;
-    // Designated TX queue for this engine (not shared).
-    juggler::dpdk::TxRing *txring_;
-    // The following packet pool is used for all TX packets; should not be
-    // shared with other engines/threads.
-    dpdk::PacketPool *packet_pool_;
     // Shared State instance for this engine.
     std::shared_ptr<MachnetEngineSharedState> shared_state_;
     // Local IPv4 addresses bound to this engine/interface.
-    std::unordered_set<Ipv4::Address> local_ipv4_addrs_;
-    // Vector of active channels this engine is serving.
-    std::vector<std::shared_ptr<shm::Channel>> channels_;
+    std::unordered_set<uint32_t> local_ipv4_addrs_;
     // Timestamp of last periodic process execution.
     uint64_t last_periodic_timestamp_{0};
     // Clock ticks for the slow timer.
     uint64_t periodic_ticks_{0};
     // Listeners for incoming packets.
     std::unordered_map<
-        Ipv4::Address,
-        std::unordered_map<Udp::Port, std::shared_ptr<shm::Channel>>>
+        uint32_t, std::unordered_map<uint16_t, std::shared_ptr<shm::Channel>>>
         listeners_{};
     // Unordered map of active flows.
-    std::unordered_map<net::flow::Key,
+    std::unordered_map<Key,
                        const std::list<std::unique_ptr<Flow>>::const_iterator>
         active_flows_map_{};
     // Vector of channels to be added to the list of active channels.
@@ -2069,11 +2093,11 @@ class MachnetEngine {
 namespace std {
 
 template <>
-struct hash<juggler::net::flow::Flow> {
-    size_t operator()(const juggler::net::flow::Flow &flow) const {
+struct hash<uccl::Flow> {
+    size_t operator()(const uccl::Flow &flow) const {
         const auto &key = flow.key();
-        return juggler::utils::hash<uint64_t>(
-            reinterpret_cast<const char *>(&key), sizeof(key));
+        return std::hash<std::string_view>{}(
+            {reinterpret_cast<const char *>(&key), sizeof(key)});
     }
 };
 

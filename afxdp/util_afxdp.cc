@@ -147,6 +147,16 @@ AFXDPSocket::AFXDPSocket(int queue_id, int num_frames) {
     }
 }
 
+void AFXDPSocket::send_packet(frame_desc frame) {
+    // TODO: implement me.
+    LOG(WARNING) << "AFXDPSocket::send_packet() is not implemented yet.";
+}
+
+void AFXDPSocket::send_packets(std::vector<frame_desc>& frames) {
+    // TODO: implement me.
+    LOG(WARNING) << "AFXDPSocket::send_packets() is not implemented yet.";
+}
+
 AFXDPSocket::~AFXDPSocket() {
     delete frame_pool_;
     if (xsk_) xsk_socket__delete(xsk_);
