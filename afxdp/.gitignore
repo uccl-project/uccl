@@ -1,9 +1,3 @@
 *.o
-client
-server
-server_direct
-client_tcp
-server_tcp
-client_tcp_ep
-server_tcp_ep
+*_main
 *_test

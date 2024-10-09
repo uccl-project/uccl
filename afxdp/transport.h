@@ -591,7 +591,7 @@ class UcclFlow {
              AFXDPSocket *socket)
         : key_(local_addr, local_port, remote_addr, remote_port),
           socket_(CHECK_NOTNULL(socket)),
-          state_(State::kClosed),
+          state_(State::kEstablished),
           pcb_(),
           tx_tracking_(socket),
           rx_tracking_(local_addr, local_port, remote_addr, remote_port,
