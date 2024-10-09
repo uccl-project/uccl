@@ -6,4 +6,4 @@ client_tcp
 server_tcp
 client_tcp_ep
 server_tcp_ep
-transport_test
+*_test

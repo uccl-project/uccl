@@ -21,7 +21,6 @@
 #include <vector>
 
 #include "transport_cc.h"
-#include "transport_config.h"
 #include "util.h"
 #include "util_afxdp.h"
 #include "util_endian.h"
@@ -69,7 +68,7 @@ class Channel {
 };
 
 class Endpoint {
-    constexpr static uint16_t bootstrap_port = 40000;
+    constexpr static uint16_t kBootstrapPort = 40000;
     Channel *channel_;
 
    public:
@@ -84,7 +83,12 @@ class Endpoint {
     ~Endpoint() {}
 
     // Connecting to a remote address.
-    ConnectionID Connect(const char *remote_ip) {
+    ConnectionID Connect(uint32_t remote_ip) {
+        // TODO: Using TCP to negotiate a ConnectionID.
+        return 0xdeadbeaf;
+    }
+
+    ConnectionID Accept() {
         // TODO: Using TCP to negotiate a ConnectionID.
         return 0xdeadbeaf;
     }
@@ -1127,6 +1131,7 @@ class UcclEngine {
    public:
     // Slow timer (periodic processing) interval in microseconds.
     const size_t kSlowTimerIntervalUs = 2000;  // 2ms
+    const uint32_t RECV_BATCH_SIZE = 32;
     UcclEngine() = delete;
     UcclEngine(UcclEngine const &) = delete;
 
