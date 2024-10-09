@@ -54,11 +54,11 @@ server.connect(server_ip, username="ubuntu")
 def run_afxdp_exp(inflight_pkt, payload_size):
     _ = exec_command_and_wait(
         server,
-        f"cd uccl/afxdp; sed -i 's/const int MAX_INFLIGHT_PKTS = [0-9]\+;/const int MAX_INFLIGHT_PKTS = {inflight_pkt};/' client.cc",
+        f"cd uccl/afxdp; sed -i 's/const int MAX_INFLIGHT_PKTS = [0-9]\+;/const int MAX_INFLIGHT_PKTS = {inflight_pkt};/' client_main.cc",
     )
     _ = exec_command_and_wait(
         server,
-        f"cd uccl/afxdp; sed -i 's/const int PAYLOAD_BYTES = [0-9]\+;/const int PAYLOAD_BYTES = {payload_size};/' client.cc",
+        f"cd uccl/afxdp; sed -i 's/const int PAYLOAD_BYTES = [0-9]\+;/const int PAYLOAD_BYTES = {payload_size};/' client_main.cc",
     )
 
     _ = exec_command_and_wait(server, "cd uccl/afxdp; make clean; make -j")
@@ -66,9 +66,13 @@ def run_afxdp_exp(inflight_pkt, payload_size):
     _ = exec_command_and_wait(server, "cd uccl; ./setup.sh ens6 1 3498 afxdp")
     _ = exec_command_and_wait(client, "cd uccl; ./setup.sh ens6 1 3498 afxdp")
 
-    server_desc = exec_command_no_wait(server, "cd uccl/afxdp; sudo ./server")
+    server_desc = exec_command_no_wait(
+        server, "cd uccl/afxdp; sudo ./server_main"
+    )
     time.sleep(3)
-    client_res = exec_command_and_wait(client, "cd uccl/afxdp; sudo ./client")
+    client_res = exec_command_and_wait(
+        client, "cd uccl/afxdp; sudo ./client_main"
+    )
 
     server_desc.kill()
     _ = server_desc.wait()
@@ -79,7 +83,7 @@ def run_afxdp_exp(inflight_pkt, payload_size):
 def run_tcp_exp(inflight_pkt, payload_size):
     _ = exec_command_and_wait(
         server,
-        f"cd uccl/afxdp; sed -i 's/const int MAX_INFLIGHT_PKTS = [0-9]\+;/const int MAX_INFLIGHT_PKTS = {inflight_pkt};/' client_tcp.cc",
+        f"cd uccl/afxdp; sed -i 's/const int MAX_INFLIGHT_PKTS = [0-9]\+;/const int MAX_INFLIGHT_PKTS = {inflight_pkt};/' client_tcp_main.cc",
     )
     _ = exec_command_and_wait(
         server,
@@ -91,10 +95,12 @@ def run_tcp_exp(inflight_pkt, payload_size):
     _ = exec_command_and_wait(server, "cd uccl; ./setup.sh ens6 4 9001 tcp")
     _ = exec_command_and_wait(client, "cd uccl; ./setup.sh ens6 4 9001 tcp")
 
-    server_desc = exec_command_no_wait(server, "cd uccl/afxdp; ./server_tcp")
+    server_desc = exec_command_no_wait(
+        server, "cd uccl/afxdp; ./server_tcp_main"
+    )
     time.sleep(3)
     client_res = exec_command_and_wait(
-        client, "cd uccl/afxdp; ./client_tcp -a 172.31.22.249"
+        client, "cd uccl/afxdp; ./client_tcp_main -a 172.31.22.249"
     )
 
     server_desc.kill()

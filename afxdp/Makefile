@@ -60,4 +60,4 @@ util_afxdp_test: util_afxdp_test.cc ebpf_client.o $(DEPS) $(lib_obj)
 
 .PHONY: clean
 clean:
-	@rm -f *.o $(main_bin)
+	rm -f *.o $(main_bin)

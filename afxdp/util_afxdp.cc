@@ -60,8 +60,8 @@ void AFXDPFactory::init(const char* interface_name, const char* ebpf_filename,
         if (ret == 0) {
             afxdp_ctl.attached_skb_ = true;
         } else {
-            CHECK(false) << "error: failed to attach ebpf_client program to "
-                            "interface";
+            LOG(ERROR) << "error: failed to attach ebpf_client program to "
+                          "interface";
         }
     }
 

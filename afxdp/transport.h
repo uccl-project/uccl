@@ -646,7 +646,7 @@ class UcclFlow {
     }
 
     void InitiateHandshake() {
-        CHECK(state_ == State::kClosed);
+        DCHECK(state_ == State::kClosed);
         SendSyn(pcb_.get_snd_nxt());
         pcb_.rto_reset();
         state_ = State::kSynSent;
@@ -1285,7 +1285,7 @@ class UcclEngine {
     void HandleRTO() {
         // TODO: maintain active_flows_map_
         auto is_active_flow = flow_->PeriodicCheck();
-        CHECK(is_active_flow);
+        DCHECK(is_active_flow);
     }
 
     /**
@@ -1305,10 +1305,10 @@ class UcclEngine {
                 process_rx_ipv4(msgbuf, app_buf, app_buf_len);
                 break;
             case ETH_P_IPV6:
-                CHECK(false) << "IPv6 not supported yet.";
+                LOG(ERROR) << "IPv6 not supported yet.";
                 break;
             case ETH_P_ARP:
-                CHECK(false) << "ARP not supported yet.";
+                LOG(ERROR) << "ARP not supported yet.";
                 break;
             default:
                 break;

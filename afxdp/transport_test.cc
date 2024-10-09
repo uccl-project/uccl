@@ -74,10 +74,10 @@ int main(int argc, char* argv[]) {
         auto* data = new uint8_t[kTestMsgSize];
         size_t len;
         ep.Recv(conn_id, data, &len);
+        CHECK_EQ(len, kTestMsgSize) << "Received message size mismatches";
         for (int i = 0; i < kTestMsgSize / sizeof(uint32_t); i++) {
-            if (reinterpret_cast<uint32_t*>(data)[i] != i) {
-                LOG(ERROR) << "Data mismatch at index " << i;
-            }
+            CHECK_EQ(reinterpret_cast<uint32_t*>(data)[i], i)
+                << "Data mismatch at index " << i;
         }
     }
 
