@@ -7,7 +7,7 @@
 #include <linux/if_vlan.h>
 #include <linux/in.h>
 
-#include "util_xdp.h"
+#include "ebpf_util.h"
 
 struct {
     __uint(type, BPF_MAP_TYPE_XSKMAP);
@@ -16,8 +16,8 @@ struct {
     __uint(max_entries, 64);
 } xsks_map SEC(".maps");
 
-SEC("server_xdp")
-int server_xdp_filter(struct xdp_md *ctx) {
+SEC("ebpf_server")
+int ebpf_server_filter(struct xdp_md *ctx) {
     void *data = (void *)(long)ctx->data;
     void *data_end = (void *)(long)ctx->data_end;
 

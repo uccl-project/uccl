@@ -86,6 +86,7 @@ class Endpoint {
     // Connecting to a remote address.
     ConnectionID Connect(const char *remote_ip) {
         // TODO: Using TCP to negotiate a ConnectionID.
+        return 0xdeadbeaf;
     }
 
     // Sending the data by leveraging multiple port combinations.
@@ -105,6 +106,7 @@ class Endpoint {
                                      nullptr) != 1) {
             // do nothing
         }
+        return true;
     }
 
     // Receiving the data by leveraging multiple port combinations.
@@ -124,6 +126,7 @@ class Endpoint {
                                      nullptr) != 1) {
             // do nothing
         }
+        return true;
     }
 };
 
@@ -891,9 +894,10 @@ class UcclFlow {
         PrepareUcclHdr(pkt_addr, seqno, flags);
 
         // Send the packet.
-        socket_->send_packet({frame_offset, sizeof(ethhdr) + sizeof(iphdr) +
-                                                sizeof(ethhdr) +
-                                                kControlPayloadBytes});
+        socket_->send_packet(
+            {frame_offset, sizeof(ethhdr) + sizeof(iphdr) + sizeof(ethhdr) +
+                               kControlPayloadBytes},
+            /*free_frame=*/false);
     }
 
     void SendSyn(uint32_t seqno) const {
@@ -954,7 +958,8 @@ class UcclFlow {
         auto *msg_buf = tx_tracking_.GetOldestUnackedMsgBuf();
         PrepareDataPacket(msg_buf, pcb_.snd_una);
         socket_->send_packet(
-            {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
+            {msg_buf->get_frame_offset(), msg_buf->get_frame_len()},
+            /*free_frame=*/false);
         pcb_.rto_reset();
         pcb_.fast_rexmits++;
         LOG(INFO) << "Fast retransmitting packet " << pcb_.snd_una;
@@ -966,7 +971,8 @@ class UcclFlow {
             auto *msg_buf = tx_tracking_.GetOldestUnackedMsgBuf();
             PrepareDataPacket(msg_buf, pcb_.snd_una);
             socket_->send_packet(
-                {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
+                {msg_buf->get_frame_offset(), msg_buf->get_frame_len()},
+                /*free_frame=*/false);
         } else if (state_ == State::kSynReceived) {
             SendSynAck(pcb_.snd_una);
         } else if (state_ == State::kSynSent) {
@@ -995,12 +1001,12 @@ class UcclFlow {
             if (!msg_buf_opt.has_value()) break;
             auto *msg_buf = msg_buf_opt.value();
             PrepareDataPacket(msg_buf, pcb_.get_snd_nxt());
-            frames.emplace_back(msg_buf->get_frame_offset(),
-                                msg_buf->get_frame_len());
+            frames.emplace_back(AFXDPSocket::frame_desc{
+                msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
         }
 
         // TX.
-        socket_->send_packets(frames);
+        socket_->send_packets(frames, /*free_frames=*/false);
 
         if (pcb_.rto_disabled()) pcb_.rto_enable();
     }
@@ -1062,7 +1068,8 @@ class UcclFlow {
                             auto seqno = pcb_.snd_una + index;
                             PrepareDataPacket(msgbuf, seqno);
                             socket_->send_packet({msgbuf->get_frame_offset(),
-                                                  msgbuf->get_frame_len()});
+                                                  msgbuf->get_frame_len()},
+                                                 /*free_frame=*/false);
                             pcb_.rto_reset();
                             return;
                         }
@@ -1138,13 +1145,13 @@ class UcclEngine {
                const uint32_t local_addr, const uint16_t local_port,
                const uint32_t remote_addr, const uint16_t remote_port,
                const uint8_t *local_l2_addr, const uint8_t *remote_l2_addr)
-        : socket_(queue_id, num_frames),
+        : socket_(AFXDPFactory::CreateSocket(queue_id, num_frames)),
           channel_(channel),
           last_periodic_timestamp_(std::chrono::high_resolution_clock::now()),
           periodic_ticks_(0) {
         flow_ = std::make_unique<UcclFlow>(local_addr, local_port, remote_addr,
                                            remote_port, local_l2_addr,
-                                           remote_l2_addr, &socket_);
+                                           remote_l2_addr, socket_);
     }
 
     /**
@@ -1178,11 +1185,11 @@ class UcclEngine {
             }
 
             if (has_rx_work) {
-                auto frames = socket_.recv_packets(RECV_BATCH_SIZE);
+                auto frames = socket_->recv_packets(RECV_BATCH_SIZE);
                 for (auto &frame : frames) {
-                    auto msgbuf =
-                        FrameBuf::Create(frame.frame_offset,
-                                         socket_.umem_buffer_, frame.frame_len);
+                    auto msgbuf = FrameBuf::Create(frame.frame_offset,
+                                                   socket_->umem_buffer_,
+                                                   frame.frame_len);
                     // TODO: how to guarantee before receiving packets, the
                     // application already post the application buffer to the
                     // engine?
@@ -1209,10 +1216,10 @@ class UcclEngine {
                     while (remaining_bytes > 0) {
                         auto payload_len =
                             std::min(remaining_bytes, (size_t)AFXDP_MTU);
-                        auto frame_offset = socket_.frame_pool_->pop();
-                        auto *msgbuf =
-                            FrameBuf::Create(frame_offset, socket_.umem_buffer_,
-                                             payload_len + net_hdr_len);
+                        auto frame_offset = socket_->frame_pool_->pop();
+                        auto *msgbuf = FrameBuf::Create(
+                            frame_offset, socket_->umem_buffer_,
+                            payload_len + net_hdr_len);
                         auto pkt_payload_addr =
                             msgbuf->get_pkt_addr() + net_hdr_len;
                         memcpy(pkt_payload_addr, app_buf, payload_len);
@@ -1351,7 +1358,7 @@ class UcclEngine {
 
    private:
     // AFXDP socket used for send/recv packets.
-    AFXDPSocket socket_;
+    AFXDPSocket *socket_;
     // For now, we just assume a single flow.
     std::unique_ptr<UcclFlow> flow_;
     // Control plan channel with Endpoint.

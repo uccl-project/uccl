@@ -30,7 +30,6 @@
 #include <vector>
 
 #include "util.h"
-#include "util_afxdp.h"
 #include "util_umem.h"
 
 using namespace uccl;
@@ -145,19 +144,19 @@ int client_init(struct client_t* client, const char* interface_name) {
         }
     }
 
-    // load the client_xdp program and attach it to the network interface
-    printf("loading client_xdp...\n");
+    // load the ebpf_client program and attach it to the network interface
+    printf("loading ebpf_client...\n");
 
     client->program =
-        xdp_program__open_file("client_xdp.o", "client_xdp", NULL);
+        xdp_program__open_file("ebpf_client.o", "ebpf_client", NULL);
     if (libxdp_get_error(client->program)) {
-        printf("\nerror: could not load client_xdp program\n\n");
+        printf("\nerror: could not load ebpf_client program\n\n");
         return 1;
     }
 
-    printf("client_xdp loaded successfully.\n");
+    printf("ebpf_client loaded successfully.\n");
 
-    printf("attaching client_xdp to network interface\n");
+    printf("attaching ebpf_client to network interface\n");
 
     int ret = xdp_program__attach(client->program, client->interface_index,
                                   XDP_MODE_NATIVE, 0);
@@ -171,7 +170,7 @@ int client_init(struct client_t* client, const char* interface_name) {
             client->attached_skb = true;
         } else {
             printf(
-                "\nerror: failed to attach client_xdp program to "
+                "\nerror: failed to attach ebpf_client program to "
                 "interface\n\n");
             return 1;
         }
@@ -413,7 +412,7 @@ void socket_send(struct socket_t* socket, int queue_id) {
 
     for (int i = 0; i < num_packets; i++) {
         struct xdp_desc* desc =
-            xsk_ring_prod__tx_desc(&socket->send_queue, send_index + i);
+            xsk_ring_prod__tx_desc(&socket->send_queue, send_index++);
         desc->addr = packet_address[i];
         desc->len = packet_length[i];
     }
@@ -465,7 +464,8 @@ void socket_recv(struct socket_t* socket, int queue_id) {
 
         /* This should not happen, but just in case */
         while (ret != stock_frames)
-            ret = xsk_ring_prod__reserve(&socket->fill_queue, rcvd, &idx_fq);
+            ret = xsk_ring_prod__reserve(&socket->fill_queue, stock_frames,
+                                         &idx_fq);
 
         for (int i = 0; i < stock_frames; i++)
             *xsk_ring_prod__fill_addr(&socket->fill_queue, idx_fq++) =

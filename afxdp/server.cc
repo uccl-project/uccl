@@ -120,19 +120,19 @@ int server_init(struct server_t* server, const char* interface_name) {
         }
     }
 
-    // load the server_xdp program and attach it to the network interface
-    printf("loading server_xdp...\n");
+    // load the ebpf_server program and attach it to the network interface
+    printf("loading ebpf_server...\n");
 
     server->program =
-        xdp_program__open_file("server_xdp.o", "server_xdp", NULL);
+        xdp_program__open_file("ebpf_server.o", "ebpf_server", NULL);
     if (libxdp_get_error(server->program)) {
-        printf("\nerror: could not load server_xdp program\n\n");
+        printf("\nerror: could not load ebpf_server program\n\n");
         return 1;
     }
 
-    printf("server_xdp loaded successfully.\n");
+    printf("ebpf_server loaded successfully.\n");
 
-    printf("attaching server_xdp to network interface\n");
+    printf("attaching ebpf_server to network interface\n");
 
     int ret = xdp_program__attach(server->program, server->interface_index,
                                   XDP_MODE_NATIVE, 0);
@@ -146,7 +146,7 @@ int server_init(struct server_t* server, const char* interface_name) {
             server->attached_skb = true;
         } else {
             printf(
-                "\nerror: failed to attach server_xdp program to "
+                "\nerror: failed to attach ebpf_server program to "
                 "interface\n\n");
             return 1;
         }

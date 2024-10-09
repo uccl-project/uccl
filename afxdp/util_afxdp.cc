@@ -4,8 +4,8 @@ namespace uccl {
 
 AFXDPFactory afxdp_ctl;
 
-void AFXDPFactory::init(const char* interface_name,
-                        const char* xdp_program_path) {
+void AFXDPFactory::init(const char* interface_name, const char* ebpf_filename,
+                        const char* section_name) {
     // we can only run xdp programs as root
     CHECK(geteuid() == 0) << "error: this program must be run as root";
 
@@ -38,16 +38,16 @@ void AFXDPFactory::init(const char* interface_name,
                      << interface_name;
     }
 
-    // load the client_xdp program and attach it to the network interface
-    LOG(INFO) << "loading client_xdp...";
+    // load the ebpf_client program and attach it to the network interface
+    LOG(INFO) << "loading ebpf_client...";
 
     afxdp_ctl.program_ =
-        xdp_program__open_file("client_xdp.o", "client_xdp", NULL);
+        xdp_program__open_file(ebpf_filename, section_name, NULL);
     CHECK(!libxdp_get_error(afxdp_ctl.program_))
-        << "error: could not load client_xdp program";
+        << "error: could not load " << ebpf_filename << "program";
 
-    LOG(INFO) << "client_xdp loaded successfully.";
-    LOG(INFO) << "attaching client_xdp to network interface";
+    LOG(INFO) << "ebpf_client loaded successfully.";
+    LOG(INFO) << "attaching ebpf_client to network interface";
 
     int ret = xdp_program__attach(
         afxdp_ctl.program_, afxdp_ctl.interface_index_, XDP_MODE_NATIVE, 0);
@@ -60,7 +60,7 @@ void AFXDPFactory::init(const char* interface_name,
         if (ret == 0) {
             afxdp_ctl.attached_skb_ = true;
         } else {
-            CHECK(false) << "error: failed to attach client_xdp program to "
+            CHECK(false) << "error: failed to attach ebpf_client program to "
                             "interface";
         }
     }
@@ -68,10 +68,10 @@ void AFXDPFactory::init(const char* interface_name,
     // allow unlimited locking of memory, so all memory needed for packet
     // buffers can be locked
     struct rlimit rlim = {RLIM_INFINITY, RLIM_INFINITY};
-    CHECK(setrlimit(RLIMIT_MEMLOCK, &rlim)) << "error: could not setrlimit";
+    CHECK(!setrlimit(RLIMIT_MEMLOCK, &rlim)) << "error: could not setrlimit";
 }
 
-AFXDPSocket* AFXDPFactory::createSocket(int queue_id, int num_frames) {
+AFXDPSocket* AFXDPFactory::CreateSocket(int queue_id, int num_frames) {
     auto socket = new AFXDPSocket(queue_id, num_frames);
     std::lock_guard<std::mutex> lock(afxdp_ctl.socket_q_lock_);
     afxdp_ctl.socket_q_.push_back(socket);
@@ -93,6 +93,7 @@ void AFXDPFactory::shutdown() {
         xdp_program__close(afxdp_ctl.program_);
     }
 
+    std::lock_guard<std::mutex> lock(afxdp_ctl.socket_q_lock_);
     for (auto socket : afxdp_ctl.socket_q_) {
         delete socket;
     }
@@ -100,6 +101,12 @@ void AFXDPFactory::shutdown() {
 }
 
 AFXDPSocket::AFXDPSocket(int queue_id, int num_frames) {
+    // initialize queues, or misterious queue sync problems will happen
+    memset(&recv_queue_, 0, sizeof(recv_queue_));
+    memset(&send_queue_, 0, sizeof(send_queue_));
+    memset(&complete_queue_, 0, sizeof(complete_queue_));
+    memset(&fill_queue_, 0, sizeof(fill_queue_));
+
     queue_id_ = queue_id;
 
     // allocate buffer for umem
@@ -143,25 +150,125 @@ AFXDPSocket::AFXDPSocket(int queue_id, int num_frames) {
     // initialize frame allocator
     frame_pool_ = new FramePool(num_frames);
     for (int j = 0; j < num_frames; j++) {
-        frame_pool_->push(j * FRAME_SIZE);
+        frame_pool_->push(j * FRAME_SIZE + XDP_PACKET_HEADROOM);
     }
+
+    // We also need to load and update the xsks_map for receiving packets
+    struct bpf_map* map = bpf_object__find_map_by_name(
+        xdp_program__bpf_obj(afxdp_ctl.program_), "xsks_map");
+    int xsk_map_fd = bpf_map__fd(map);
+    if (xsk_map_fd < 0) {
+        fprintf(stderr, "ERROR: no xsks map found: %s\n", strerror(xsk_map_fd));
+        exit(0);
+    }
+    ret = xsk_socket__update_xskmap(xsk_, xsk_map_fd);
+    if (ret) {
+        fprintf(stderr, "ERROR: xsks map update fails: %s\n",
+                strerror(xsk_map_fd));
+        exit(0);
+    }
+
+    populate_fill_queue(XSK_RING_PROD__DEFAULT_NUM_DESCS);
 }
 
-void AFXDPSocket::send_packet(frame_desc frame) {
-    // TODO: implement me.
-    LOG(WARNING) << "AFXDPSocket::send_packet() is not implemented yet.";
+uint32_t AFXDPSocket::pull_complete_queue(bool free_frame) {
+    uint32_t complete_index;
+    uint32_t completed = xsk_ring_cons__peek(
+        &complete_queue_, XSK_RING_CONS__DEFAULT_NUM_DESCS, &complete_index);
+    VLOG(3) << "tx complete_queue completed = " << completed;
+    if (completed > 0) {
+        if (free_frame) {
+            for (int i = 0; i < completed; i++) {
+                uint64_t frame_offset = *xsk_ring_cons__comp_addr(
+                    &complete_queue_, complete_index++);
+                VLOG(3) << "complete: " << std::hex << frame_offset;
+                frame_pool_->push(frame_offset);
+            }
+        }
+        // Otherwise, the transport layer should handle frame freeing.
+
+        xsk_ring_cons__release(&complete_queue_, completed);
+    }
+    return completed;
 }
 
-void AFXDPSocket::send_packets(std::vector<frame_desc>& frames) {
-    // TODO: implement me.
-    LOG(WARNING) << "AFXDPSocket::send_packets() is not implemented yet.";
+uint32_t AFXDPSocket::send_packet(frame_desc frame, bool free_frame) {
+    // reserving a slot in the send queue.
+    uint32_t send_index;
+    while (xsk_ring_prod__reserve(&send_queue_, 1, &send_index) == 0) {
+        LOG(WARNING) << "send_queue_ is full. Busy waiting...";
+    }
+    struct xdp_desc* desc = xsk_ring_prod__tx_desc(&send_queue_, send_index);
+    desc->addr = frame.frame_offset;
+    desc->len = frame.frame_len;
+    xsk_ring_prod__submit(&send_queue_, 1);
+
+    if (xsk_ring_prod__needs_wakeup(&send_queue_)) {
+        sendto(xsk_socket__fd(xsk_), NULL, 0, MSG_DONTWAIT, NULL, 0);
+    }
+
+    return pull_complete_queue(free_frame);
+}
+
+uint32_t AFXDPSocket::send_packets(std::vector<frame_desc>& frames,
+                                   bool free_frame) {
+    // reserving slots in the send queue.
+    uint32_t send_index;
+    auto num_frames = frames.size();
+    VLOG(3) << "tx send_packets num_frames = " << num_frames;
+    while (xsk_ring_prod__reserve(&send_queue_, num_frames, &send_index) == 0) {
+        LOG(WARNING) << "send_queue_ is full. Busy waiting...";
+    }
+    for (int i = 0; i < num_frames; i++) {
+        struct xdp_desc* desc =
+            xsk_ring_prod__tx_desc(&send_queue_, send_index++);
+        desc->addr = frames[i].frame_offset;
+        desc->len = frames[i].frame_len;
+    }
+    xsk_ring_prod__submit(&send_queue_, num_frames);
+
+    if (xsk_ring_prod__needs_wakeup(&send_queue_)) {
+        sendto(xsk_socket__fd(xsk_), NULL, 0, MSG_DONTWAIT, NULL, 0);
+    }
+
+    return pull_complete_queue(free_frame);
+}
+
+void AFXDPSocket::populate_fill_queue(uint32_t nb_frames) {
+    uint32_t idx_fq;
+    int stock_frames = xsk_prod_nb_free(&fill_queue_, nb_frames);
+    if (stock_frames > 0) {
+        int ret = xsk_ring_prod__reserve(&fill_queue_, stock_frames, &idx_fq);
+        while (ret != stock_frames) {
+            LOG(WARNING) << "fill_queue_ is full. Busy waiting...";
+            ret = xsk_ring_prod__reserve(&fill_queue_, stock_frames, &idx_fq);
+        }
+        for (int i = 0; i < stock_frames; i++) {
+            *xsk_ring_prod__fill_addr(&fill_queue_, idx_fq++) =
+                frame_pool_->pop();
+        }
+        xsk_ring_prod__submit(&fill_queue_, stock_frames);
+    }
 }
 
 std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
     uint32_t nb_frames) {
-    // TODO: implement me.
-    LOG(WARNING) << "AFXDPSocket::recv_packets() is not implemented yet.";
-    return std::vector<AFXDPSocket::frame_desc>();
+    std::vector<AFXDPSocket::frame_desc> frames;
+
+    uint32_t idx_rx, idx_fq, rcvd;
+    rcvd = xsk_ring_cons__peek(&recv_queue_, nb_frames, &idx_rx);
+    if (!rcvd) return frames;
+
+    populate_fill_queue(nb_frames);
+
+    for (int i = 0; i < rcvd; i++) {
+        const struct xdp_desc* desc =
+            xsk_ring_cons__rx_desc(&recv_queue_, idx_rx++);
+        frames.push_back({desc->addr, desc->len});
+    }
+
+    xsk_ring_cons__release(&recv_queue_, rcvd);
+    return frames;
 }
 
 AFXDPSocket::~AFXDPSocket() {

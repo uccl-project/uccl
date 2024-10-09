@@ -15,8 +15,6 @@
 #include <memory.h>
 #include <net/if.h>
 #include <poll.h>
-#include <pthread.h>
-#include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,15 +45,18 @@ class AFXDPFactory {
     std::mutex socket_q_lock_;
     std::deque<AFXDPSocket*> socket_q_;
 
-    static void init(const char* interface_name, const char* xdp_program_path);
-    static AFXDPSocket* createSocket(int queue_id, int num_frames);
+    static void init(const char* interface_name, const char* ebpf_filename,
+                     const char* section_name);
+    static AFXDPSocket* CreateSocket(int queue_id, int num_frames);
     static void shutdown();
 };
 
 extern AFXDPFactory afxdp_ctl;
 
 class AFXDPSocket {
-    constexpr static int FRAME_SIZE = XSK_UMEM__DEFAULT_FRAME_SIZE;
+    constexpr static uint32_t FRAME_SIZE = XSK_UMEM__DEFAULT_FRAME_SIZE;
+
+    AFXDPSocket(int queue_id, int num_frames);
 
    public:
     int queue_id_;
@@ -68,18 +69,22 @@ class AFXDPSocket {
     struct xsk_ring_prod fill_queue_;
     FramePool* frame_pool_;
 
-    AFXDPSocket(int queue_id, int num_frames);
-
     struct frame_desc {
         uint64_t frame_offset;
         uint32_t frame_len;
     };
 
-    void send_packet(frame_desc frame);
-    void send_packets(std::vector<frame_desc>& frames);
+    // The completed packets might come from last send_packet call.
+    uint32_t send_packet(frame_desc frame, bool free_frame);
+    uint32_t send_packets(std::vector<frame_desc>& frames, bool free_frame);
+    uint32_t pull_complete_queue(bool free_frame);
+
+    void populate_fill_queue(uint32_t nb_frames);
     std::vector<frame_desc> recv_packets(uint32_t nb_frames);
 
     ~AFXDPSocket();
+
+    friend class AFXDPFactory;
 };
 
 }  // namespace uccl
