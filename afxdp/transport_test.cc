@@ -36,8 +36,8 @@ int main(int argc, char* argv[]) {
     signal(SIGINT, interrupt_handler);
     signal(SIGTERM, interrupt_handler);
     signal(SIGHUP, interrupt_handler);
-    signal(SIGALRM, interrupt_handler);
-    alarm(10);
+    // signal(SIGALRM, interrupt_handler);
+    // alarm(10);
 
     AFXDPFactory::init("ens6", "ebpf_client.o", "ebpf_client");
 

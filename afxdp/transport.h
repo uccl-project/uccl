@@ -258,6 +258,15 @@ class FrameBuf {
     FrameBuf *next() const { return next_; }
     // Set the next message buffer index in the chain.
     void set_next(FrameBuf *next) { next_ = next; }
+    // Link the message train to the current message train. The start and end of
+    // each message are still preserved.
+    void link_msg_train(FrameBuf *next) {
+        // next_ = next;
+        DCHECK(is_last()) << "This is not the last buffer of a message!";
+        DCHECK(next->is_first())
+            << "The next buffer is not the first of a message!";
+        next_ = next;
+    }
 
     void mark_first() { add_msg_flags(UCCL_MSGBUF_FLAGS_SYN); }
     void mark_last() { add_msg_flags(UCCL_MSGBUF_FLAGS_FIN); }
@@ -997,6 +1006,8 @@ class UcclFlow {
             std::min(pcb_.effective_wnd(), tx_tracking_.NumUnsentMsgbufs());
         if (remaining_packets == 0) return;
 
+        VLOG(3) << "TransmitPackets: remaining_packets " << remaining_packets;
+
         std::vector<AFXDPSocket::frame_desc> frames;
 
         // Prepare the packets.
@@ -1189,8 +1200,11 @@ class UcclEngine {
                 last_periodic_timestamp_ = now;
             }
 
+            // TODO: where to run process_rx_pkt for ACK packets even without
+            // user-supplied buffer?
             if (has_rx_work) {
                 auto frames = socket_->recv_packets(RECV_BATCH_SIZE);
+                VLOG(3) << "Rx recv_packets" << frames.size();
                 for (auto &frame : frames) {
                     auto msgbuf = FrameBuf::Create(frame.frame_offset,
                                                    socket_->umem_buffer_,
@@ -1203,21 +1217,30 @@ class UcclEngine {
             } else {
                 if (jring_sc_dequeue_bulk(channel_->rx_ring_, &rx_work, 1,
                                           nullptr) == 1) {
+                    VLOG(3) << "Rx jring dequeue";
                     has_rx_work = true;
                 }
             }
 
             if (has_tx_work) {
-                process_tx_pkt(tx_msgbuf_start);
+                VLOG(3) << "Tx process_tx_pkt";
+                if (tx_msgbuf_start != nullptr) {
+                    process_tx_pkt(tx_msgbuf_start);
+                    tx_msgbuf_start = tx_msgbuf_start->next();
+                } else {
+                    has_tx_work = false;
+                }
             } else {
                 if (jring_sc_dequeue_bulk(channel_->tx_ring_, &tx_work, 1,
                                           nullptr) == 1) {
+                    VLOG(3) << "Tx jring dequeue";
                     has_tx_work = true;
                     auto *app_buf = tx_work.data;
                     auto remaining_bytes = *tx_work.len_ptr;
                     const auto net_hdr_len = sizeof(ethhdr) + sizeof(iphdr) +
                                              sizeof(udphdr) +
                                              sizeof(UcclPktHdr);
+                    //  Deserializing the message into MTU-sized frames.
                     while (remaining_bytes > 0) {
                         auto payload_len =
                             std::min(remaining_bytes, (size_t)AFXDP_MTU);
