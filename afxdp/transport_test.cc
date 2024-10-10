@@ -39,7 +39,10 @@ int main(int argc, char* argv[]) {
     // signal(SIGALRM, interrupt_handler);
     // alarm(10);
 
-    AFXDPFactory::init("ens6", "ebpf_client.o", "ebpf_client");
+    if (FLAGS_client)
+        AFXDPFactory::init("ens6", "ebpf_client.o", "ebpf_client");
+    else
+        AFXDPFactory::init("ens6", "ebpf_server.o", "ebpf_server");
 
     Channel channel;
 

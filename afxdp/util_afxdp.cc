@@ -39,7 +39,7 @@ void AFXDPFactory::init(const char* interface_name, const char* ebpf_filename,
     }
 
     // load the ebpf_client program and attach it to the network interface
-    LOG(INFO) << "loading ebpf_client...";
+    LOG(INFO) << "loading " << section_name << "...";
 
     afxdp_ctl.program_ =
         xdp_program__open_file(ebpf_filename, section_name, NULL);

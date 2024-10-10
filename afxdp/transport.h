@@ -5,6 +5,7 @@
 #include <linux/ip.h>
 #include <linux/udp.h>
 
+#include <bitset>
 #include <chrono>
 #include <concepts>
 #include <cstddef>
@@ -67,29 +68,31 @@ class Channel {
     jring_t *rx_comp_ring_;
 };
 
+/**
+ * @class Endpoint
+ * @brief application-facing interface, communicating with `UcclEngine' through
+ * `Channel'. Each connection is identified by a unique connection_id, and uses
+ * multiple src+dst port combinations to leverage multiple paths. Under the
+ * hood, we leverage TCP to boostrap our connections. We do not consider
+ * multi-tenancy for now, assuming this endpoint exclusively uses the NIC and
+ * its all queues.
+ */
 class Endpoint {
     constexpr static uint16_t kBootstrapPort = 40000;
     Channel *channel_;
 
    public:
-    // This function bind this endpoint to a specific local network interface
-    // with the IP specified by the interface. It also listens on incoming
-    // Connect() requests to estabish connections. Each connection is identified
-    // by a unique connection_id, and uses multiple src+dst port combinations to
-    // leverage multiple paths. Under the hood, we leverage TCP to boostrap our
-    // connections. We do not consider multi-tenancy for now, assuming this
-    // endpoint exclusively uses the NIC and its all queues.
     Endpoint(Channel *channel) : channel_(channel) {}
     ~Endpoint() {}
 
     // Connecting to a remote address.
     ConnectionID Connect(uint32_t remote_ip) {
-        // TODO: Using TCP to negotiate a ConnectionID.
+        // TODO(yang): Using TCP to negotiate a ConnectionID.
         return 0xdeadbeaf;
     }
 
     ConnectionID Accept() {
-        // TODO: Using TCP to negotiate a ConnectionID.
+        // TODO(yang): Using TCP to negotiate a ConnectionID.
         return 0xdeadbeaf;
     }
 
@@ -135,47 +138,7 @@ class Endpoint {
 };
 
 /**
- * @struct Key
- * @brief UcclFlow key: corresponds to the 5-tuple (UDP is always the protocol).
- */
-struct Key {
-    Key(const Key &other) = default;
-    /**
-     * @brief Construct a new Key object.
-     *
-     * @param local_addr Local IP address (in host byte order).
-     * @param local_port Local UDP port (in host byte order).
-     * @param remote_addr Remote IP address (in host byte order).
-     * @param remote_port Remote UDP port (in host byte order).
-     */
-    Key(const uint32_t local_addr, const uint16_t local_port,
-        const uint32_t remote_addr, const uint16_t remote_port)
-        : local_addr(local_addr),
-          local_port(local_port),
-          remote_addr(remote_addr),
-          remote_port(remote_port) {}
-
-    bool operator==(const Key &other) const {
-        return local_addr == other.local_addr &&
-               local_port == other.local_port &&
-               remote_addr == other.remote_addr &&
-               remote_port == other.remote_port;
-    }
-
-    std::string ToString() const {
-        return Format("[%x:%hu <-> %x:%hu]", remote_addr, remote_port,
-                      local_addr, local_port);
-    }
-
-    const uint32_t local_addr;
-    const uint32_t remote_addr;
-    const uint16_t local_port;
-    const uint16_t remote_port;
-};
-static_assert(sizeof(Key) == 12, "UcclFlow key size is not 12 bytes.");
-
-/**
- * Uccl Packet Header.
+ * Uccl Packet Header just after UDP header.
  */
 struct __attribute__((packed)) UcclPktHdr {
     static constexpr uint16_t kMagic = 0x4e53;
@@ -234,8 +197,10 @@ class FrameBuf {
    public:
     static FrameBuf *Create(uint64_t frame_offset, void *umem_buffer,
                             uint32_t frame_len) {
-        // The XDP_PACKET_HEADROOM bytes before frame_offset is xdp metedata,
-        // and we reuse it to chain Framebufs.
+        /*
+         * The XDP_PACKET_HEADROOM bytes before frame_offset is xdp metedata,
+         * and we reuse it to chain Framebufs.
+         */
         return new (reinterpret_cast<void *>(
             frame_offset + (uint64_t)umem_buffer - XDP_PACKET_HEADROOM))
             FrameBuf(frame_offset, umem_buffer, frame_len);
@@ -261,7 +226,6 @@ class FrameBuf {
     // Link the message train to the current message train. The start and end of
     // each message are still preserved.
     void link_msg_train(FrameBuf *next) {
-        // next_ = next;
         DCHECK(is_last()) << "This is not the last buffer of a message!";
         DCHECK(next->is_first())
             << "The next buffer is not the first of a message!";
@@ -273,16 +237,6 @@ class FrameBuf {
 
     void set_msg_flags(uint16_t flags) { msg_flags_ = flags; }
     void add_msg_flags(uint16_t flags) { msg_flags_ |= flags; }
-
-    Key get_flow() const {
-        const auto *pkt_addr =
-            reinterpret_cast<uint8_t *>(umem_buffer_) + frame_offset_;
-        const auto *ih =
-            reinterpret_cast<const iphdr *>(pkt_addr + sizeof(ethhdr));
-        const auto *udph = reinterpret_cast<const udphdr *>(
-            pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
-        return Key(ih->saddr, udph->source, ih->daddr, udph->dest);
-    }
 };
 
 class TXTracking {
@@ -367,7 +321,7 @@ class TXTracking {
 
     AFXDPSocket *socket_;
 
-    /*
+    /**
      * For the linked list of FrameBufs in the channel (chain going
      * downwards), we track 3 pointers
      *
@@ -419,11 +373,12 @@ class RXTracking {
           socket_(socket),
           cur_msg_train_head_(nullptr),
           cur_msg_train_tail_(nullptr),
-          app_buf_pos_(0) {}
+          msg_ready_(false),
+          app_buf_(nullptr),
+          app_buf_len_(nullptr) {}
 
     // If we fail to allocate in the SHM channel, return -1.
-    int Consume(swift::Pcb *pcb, FrameBuf *msgbuf, void *app_buf,
-                size_t *app_buf_len) {
+    int Consume(swift::Pcb *pcb, FrameBuf *msgbuf) {
         const size_t net_hdr_len =
             sizeof(ethhdr) + sizeof(iphdr) + sizeof(udphdr);
         uint8_t *pkt = msgbuf->get_pkt_addr();
@@ -476,13 +431,54 @@ class RXTracking {
         // Update the SACK bitmap for the newly received packet.
         pcb->sack_bitmap_bit_set(distance);
 
-        PushInOrderMsgbufsToApp(pcb, app_buf, app_buf_len);
+        PushInOrderMsgbufsToApp(pcb);
         return 0;
     }
 
+    // Either the app supplies the app buffer or the engine receives a full msg.
+    void TryCopyMsgbufToAppBuf(void *app_buf, size_t *app_buf_len) {
+        // Either both app_buf and app_buf_len are nullptr or both are not.
+        if (app_buf_ == nullptr && app_buf_len_ == nullptr) {
+            app_buf_ = app_buf;
+            app_buf_len_ = app_buf_len;
+        } else {
+            DCHECK(app_buf_ && app_buf_len_);
+        }
+
+        if (msg_ready_ && app_buf_ && app_buf_len_) {
+            // We have a complete message. Let's deliver it to the app.
+            auto *msgbuf_to_deliver = cur_msg_train_head_;
+            size_t pos = 0;
+            const auto net_hdr_len = sizeof(ethhdr) + sizeof(iphdr) +
+                                     sizeof(udphdr) + sizeof(UcclPktHdr);
+            while (msgbuf_to_deliver != nullptr) {
+                auto *pkt_addr = msgbuf_to_deliver->get_pkt_addr();
+                auto pkt_payload_len =
+                    msgbuf_to_deliver->get_frame_len() - net_hdr_len;
+
+                memcpy((uint8_t *)app_buf_ + pos, pkt_addr, pkt_payload_len);
+                pos += pkt_payload_len;
+
+                socket_->frame_pool_->push(
+                    msgbuf_to_deliver->get_frame_offset());
+
+                msgbuf_to_deliver = msgbuf_to_deliver->next();
+            }
+            *app_buf_len_ = pos;
+            LOG(WARNING) << "Received a complete message " << pos << " bytes";
+
+            cur_msg_train_head_ = nullptr;
+            cur_msg_train_tail_ = nullptr;
+
+            // Reset the message ready flag for the next message.
+            msg_ready_ = false;
+            app_buf_ = nullptr;
+            app_buf_len_ = nullptr;
+        }
+    }
+
    private:
-    void PushInOrderMsgbufsToApp(swift::Pcb *pcb, void *app_buf,
-                                 size_t *app_buf_len) {
+    void PushInOrderMsgbufsToApp(swift::Pcb *pcb) {
         while (!reass_q_.empty() && reass_q_.front().seqno == pcb->rcv_nxt) {
             auto &front = reass_q_.front();
             auto *msgbuf = front.msgbuf;
@@ -498,30 +494,8 @@ class RXTracking {
             }
 
             if (cur_msg_train_tail_->is_last()) {
-                // We have a complete message. Let's deliver it to the
-                // application.
-                auto *msgbuf_to_deliver = cur_msg_train_head_;
-                while (msgbuf_to_deliver != nullptr) {
-                    auto *pkt_addr = msgbuf_to_deliver->get_pkt_addr();
-                    auto pkt_payload_len = msgbuf_to_deliver->get_frame_len() -
-                                           sizeof(ethhdr) - sizeof(iphdr) -
-                                           sizeof(udphdr) - sizeof(UcclPktHdr);
-
-                    memcpy((uint8_t *)app_buf + app_buf_pos_, pkt_addr,
-                           pkt_payload_len);
-                    app_buf_pos_ += pkt_payload_len;
-
-                    socket_->frame_pool_->push(
-                        msgbuf_to_deliver->get_frame_offset());
-
-                    msgbuf_to_deliver = msgbuf_to_deliver->next();
-                }
-
-                *app_buf_len = app_buf_pos_;
-
-                LOG(WARNING) << "Received a complete message!";
-                cur_msg_train_head_ = nullptr;
-                cur_msg_train_tail_ = nullptr;
+                msg_ready_ = true;
+                TryCopyMsgbufToAppBuf(nullptr, nullptr);
             }
 
             pcb->advance_rcv_nxt();
@@ -538,16 +512,16 @@ class RXTracking {
     std::deque<reasm_queue_ent_t> reass_q_;
     FrameBuf *cur_msg_train_head_;
     FrameBuf *cur_msg_train_tail_;
-    // TODO: maintain connectionID to app_buf_pos mappings
-    size_t app_buf_pos_;
+    bool msg_ready_;
+    void *app_buf_;
+    size_t *app_buf_len_;
 };
 
 /**
- * @class UcclFlow A flow is a connection between a local and a remote endpoint.
+ * @class UcclFlow, a connection between a local and a remote endpoint.
  * @brief Class to abstract the components and functionality of a single flow.
  * A flow is a bidirectional connection between two hosts, uniquely identified
- * by the 5-tuple: {SrcIP, DstIP, SrcPort, DstPort, Protocol}, Protocol is
- * always UDP.
+ * by a TCP-negotiated `ConnectionID', Protocol is always UDP.
  *
  * A flow is always associated with a single `Channel' object which serves as
  * the communication interface with the application to which the flow belongs.
@@ -560,29 +534,6 @@ class RXTracking {
  */
 class UcclFlow {
    public:
-    enum class State {
-        kClosed,
-        kSynSent,
-        kSynReceived,
-        kEstablished,
-    };
-
-    static constexpr char const *StateToString(State state) {
-        switch (state) {
-            case State::kClosed:
-                return "CLOSED";
-            case State::kSynSent:
-                return "SYN_SENT";
-            case State::kSynReceived:
-                return "SYN_RECEIVED";
-            case State::kEstablished:
-                return "ESTABLISHED";
-            default:
-                LOG(FATAL) << "Unknown state";
-                return "UNKNOWN";
-        }
-    }
-
     /**
      * @brief Construct a new flow.
      *
@@ -593,14 +544,18 @@ class UcclFlow {
      * @param local_l2_addr Local L2 address.
      * @param remote_l2_addr Remote L2 address.
      * @param AFXDPSocket object for packet IOs.
+     * @param ConnectionID Connection ID for the flow.
      */
     UcclFlow(const uint32_t local_addr, const uint16_t local_port,
              const uint32_t remote_addr, const uint16_t remote_port,
              const uint8_t *local_l2_addr, const uint8_t *remote_l2_addr,
-             AFXDPSocket *socket)
-        : key_(local_addr, local_port, remote_addr, remote_port),
+             AFXDPSocket *socket, ConnectionID connection_id)
+        : local_addr_(local_addr),
+          local_port_(local_port),
+          remote_addr_(remote_addr),
+          remote_port_(remote_port),
           socket_(CHECK_NOTNULL(socket)),
-          state_(State::kEstablished),
+          connection_id_(connection_id),
           pcb_(),
           tx_tracking_(socket),
           rx_tracking_(local_addr, local_port, remote_addr, remote_port,
@@ -609,74 +564,19 @@ class UcclFlow {
         memcpy(remote_l2_addr_, remote_l2_addr, ETH_ALEN);
     }
     ~UcclFlow() {}
-    /**
-     * @brief Operator to compare if two flows are equal.
-     * @param other Other flow to compare to.
-     * @return true if the flows are equal, false otherwise.
-     */
-    bool operator==(const UcclFlow &other) const { return key_ == other.key(); }
-
-    /**
-     * @brief Get the flow key.
-     */
-    const Key &key() const { return key_; }
-
-    /**
-     * @brief Get the current state of the flow.
-     */
-    State state() const { return state_; }
 
     std::string ToString() const {
         return Format(
-            "%s [%s] <-> [%d]\n\t\t\t%s\n\t\t\t[TX Queue] Pending "
+            "%x [queue %d] <-> %x\n\t\t\t%s\n\t\t\t[TX Queue] Pending "
             "MsgBufs: "
             "%u",
-            key_.ToString().c_str(), StateToString(state_), socket_->queue_id_,
+            local_addr_, socket_->queue_id_, remote_addr_,
             pcb_.ToString().c_str(), tx_tracking_.NumUnsentMsgbufs());
     }
 
-    bool Match(const uint8_t *pkt_addr) const {
-        const auto *ih =
-            reinterpret_cast<const iphdr *>(pkt_addr + sizeof(ethhdr));
-        const auto *udph = reinterpret_cast<const udphdr *>(
-            pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
-
-        return (ih->saddr == key_.remote_addr && ih->daddr == key_.local_addr &&
-                udph->source == key_.remote_port &&
-                udph->dest == key_.local_port);
-    }
-
-    bool Match(const FrameBuf *tx_msgbuf) const {
-        const auto flow_key = tx_msgbuf->get_flow();
-        return (flow_key.local_addr == key_.local_addr &&
-                flow_key.remote_addr == key_.remote_addr &&
-                flow_key.local_port == key_.local_port &&
-                flow_key.remote_port == key_.remote_port);
-    }
-
-    void InitiateHandshake() {
-        DCHECK(state_ == State::kClosed);
-        SendSyn(pcb_.get_snd_nxt());
-        pcb_.rto_reset();
-        state_ = State::kSynSent;
-    }
-
     void ShutDown() {
-        switch (state_) {
-            case State::kClosed:
-                break;
-            case State::kSynSent:
-                [[fallthrough]];
-            case State::kSynReceived:
-                [[fallthrough]];
-            case State::kEstablished:
-                pcb_.rto_disable();
-                SendRst();
-                state_ = State::kClosed;
-                break;
-            default:
-                LOG(FATAL) << "Unknown state";
-        }
+        pcb_.rto_disable();
+        SendRst();
     }
 
     /**
@@ -688,10 +588,11 @@ class UcclFlow {
      * If this is a transport control packet (e.g., ACK) it only updates
      * transport-related parameters for the flow.
      *
-     * @param packet Pointer to the allocated packet on the rx ring of the
-     * driver
+     * @param msgbuf Pointer to the allocated packet
+     * @param app_buf Pointer to the application receiving buffer
+     * @param app_buf_len Pointer to the application buffer length
      */
-    void InputPacket(FrameBuf *msgbuf, void *app_buf, size_t *app_buf_len) {
+    void InputPacket(FrameBuf *msgbuf) {
         // Parse the Uccl header of the packet.
         const size_t net_hdr_len =
             sizeof(ethhdr) + sizeof(iphdr) + sizeof(udphdr);
@@ -706,82 +607,27 @@ class UcclFlow {
 
         switch (ucclh->net_flags) {
             case UcclPktHdr::UcclFlags::kSyn:
-                // SYN packet received. For this to be valid it has to be an
-                // already established flow with this SYN being a
-                // retransmission.
-                if (state_ != State::kSynReceived && state_ != State::kClosed) {
-                    LOG(ERROR) << "SYN packet received for flow in state: "
-                               << static_cast<int>(state_);
-                    return;
-                }
-
-                if (state_ == State::kClosed) {
-                    // If the flow is in closed state, we need to send a SYN-ACK
-                    // packetj and mark the flow as established.
-                    pcb_.rcv_nxt = ucclh->seqno.value();
-                    pcb_.advance_rcv_nxt();
-                    SendSynAck(pcb_.get_snd_nxt());
-                    state_ = State::kSynReceived;
-                } else if (state_ == State::kSynReceived) {
-                    // If the flow is in SYN-RECEIVED state, our SYN-ACK packet
-                    // was lost. We need to retransmit it.
-                    SendSynAck(pcb_.snd_una);
-                }
-                break;
             case UcclPktHdr::UcclFlags::kSynAck:
-                // SYN-ACK packet received. For this to be valid it has to be an
-                // already established flow with this SYN-ACK being a
-                // retransmission.
-                if (state_ != State::kSynSent &&
-                    state_ != State::kEstablished) {
-                    LOG(ERROR) << "SYN-ACK packet received for flow in state: "
-                               << static_cast<int>(state_);
-                    return;
-                }
-
-                if (ucclh->ackno.value() != pcb_.snd_nxt) {
-                    LOG(ERROR) << "SYN-ACK packet received with invalid ackno: "
-                               << ucclh->ackno << " snd_una: " << pcb_.snd_una
-                               << " snd_nxt: " << pcb_.snd_nxt;
-                    return;
-                }
-
-                if (state_ == State::kSynSent) {
-                    pcb_.snd_una++;
-                    pcb_.rcv_nxt = ucclh->seqno.value();
-                    pcb_.advance_rcv_nxt();
-                    pcb_.rto_maybe_reset();
-                    // Mark the flow as established.
-                    state_ = State::kEstablished;
-                }
-                // Send an ACK packet.
-                SendAck();
+            case UcclPktHdr::UcclFlags::kRst:
+                LOG(ERROR) << "Unsupported UcclFlags: "
+                           << std::bitset<8>((uint8_t)ucclh->net_flags);
                 break;
-            case UcclPktHdr::UcclFlags::kRst: {
-                const auto seqno = ucclh->seqno.value();
-                const auto expected_seqno = pcb_.rcv_nxt;
-                if (swift::seqno_eq(seqno, expected_seqno)) {
-                    // If the RST packet is in sequence, we can reset the flow.
-                    state_ = State::kClosed;
-                }
-            } break;
             case UcclPktHdr::UcclFlags::kAck:
                 // ACK packet, update the flow.
                 // update_flow(ucclh);
                 process_ack(ucclh);
                 break;
             case UcclPktHdr::UcclFlags::kData:
-                if (state_ != State::kEstablished) {
-                    LOG(ERROR) << "Data packet received for flow in state: "
-                               << static_cast<int>(state_);
-                    return;
-                }
                 // Data packet, process the payload.
                 const int consume_returncode =
-                    rx_tracking_.Consume(&pcb_, msgbuf, app_buf, app_buf_len);
+                    rx_tracking_.Consume(&pcb_, msgbuf);
                 if (consume_returncode == 0) SendAck();
                 break;
         }
+    }
+
+    void supply_app_buf(void *app_buf, size_t *app_buf_len) {
+        rx_tracking_.TryCopyMsgbufToAppBuf(app_buf, app_buf_len);
     }
 
     /**
@@ -816,18 +662,10 @@ class UcclFlow {
      * periodically, false if the flow should be removed or closed.
      */
     bool PeriodicCheck() {
-        // CLOSED state is terminal; the engine might remove the flow.
-        if (state_ == State::kClosed) return false;
-
         if (pcb_.rto_disabled()) return true;
 
         pcb_.rto_advance();
         if (pcb_.max_rexmits_reached()) {
-            if (state_ == State::kSynSent) {
-                // Notify the application that the flow has not been
-                // established.
-                LOG(INFO) << "UcclFlow " << this << " failed to establish";
-            }
             // TODO(ilias): Send RST packet.
 
             // Indicate removal of the flow.
@@ -860,18 +698,18 @@ class UcclFlow {
         ipv4h->ttl = 64;
         ipv4h->protocol = IPPROTO_UDP;
         ipv4h->tot_len = htons(sizeof(iphdr) + sizeof(udphdr) + payload_bytes);
-        ipv4h->saddr = htonl(key_.local_addr);
-        ipv4h->daddr = htonl(key_.remote_addr);
+        ipv4h->saddr = htonl(local_addr_);
+        ipv4h->daddr = htonl(remote_addr_);
         ipv4h->check = 0;
     }
 
     void PrepareL4Header(uint8_t *pkt_addr, uint32_t payload_bytes) const {
         auto *udph = (udphdr *)(pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
-        udph->source = htons(key_.local_port);
-        udph->dest = htons(key_.remote_port);
+        udph->source = htons(local_port_);
+        udph->dest = htons(remote_port_);
         udph->len = htons(sizeof(udphdr) + payload_bytes);
         udph->check = htons(0);
-        // TODO: Calculate the UDP checksum.
+        // TODO(yang): Calculate the UDP checksum.
     }
 
     void PrepareUcclHdr(uint8_t *pkt_addr, uint32_t seqno,
@@ -979,20 +817,12 @@ class UcclFlow {
     }
 
     void RTORetransmit() {
-        if (state_ == State::kEstablished) {
-            LOG(INFO) << "RTO retransmitting data packet " << pcb_.snd_una;
-            auto *msg_buf = tx_tracking_.GetOldestUnackedMsgBuf();
-            PrepareDataPacket(msg_buf, pcb_.snd_una);
-            socket_->send_packet(
-                {msg_buf->get_frame_offset(), msg_buf->get_frame_len()},
-                /*free_frame=*/false);
-        } else if (state_ == State::kSynReceived) {
-            SendSynAck(pcb_.snd_una);
-        } else if (state_ == State::kSynSent) {
-            LOG(INFO) << "RTO retransmitting SYN packet " << pcb_.snd_una;
-            // Retransmit the SYN packet.
-            SendSyn(pcb_.snd_una);
-        }
+        LOG(INFO) << "RTO retransmitting data packet " << pcb_.snd_una;
+        auto *msg_buf = tx_tracking_.GetOldestUnackedMsgBuf();
+        PrepareDataPacket(msg_buf, pcb_.snd_una);
+        socket_->send_packet(
+            {msg_buf->get_frame_offset(), msg_buf->get_frame_len()},
+            /*free_frame=*/false);
         pcb_.rto_reset();
         pcb_.rto_rexmits++;
     }
@@ -1016,6 +846,7 @@ class UcclFlow {
             if (!msg_buf_opt.has_value()) break;
             auto *msg_buf = msg_buf_opt.value();
             PrepareDataPacket(msg_buf, pcb_.get_snd_nxt());
+            VLOG(3) << "TransmitPackets: transmit "<< i;
             frames.emplace_back(AFXDPSocket::frame_desc{
                 msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
         }
@@ -1102,11 +933,6 @@ class UcclFlow {
         } else {
             // This is a valid ACK, acknowledging new data.
             size_t num_acked_packets = ackno - pcb_.snd_una;
-            if (state_ == State::kSynReceived) {
-                state_ = State::kEstablished;
-                num_acked_packets--;
-            }
-
             tx_tracking_.ReceiveAcks(num_acked_packets);
 
             pcb_.snd_una = ackno;
@@ -1119,15 +945,19 @@ class UcclFlow {
         TransmitPackets();
     }
 
-    const Key key_;
-
-    // A flow is identified by the 5-tuple (Proto is always UDP).
+    // The following is used to fill packet headers.
+    uint32_t local_addr_;
+    uint16_t local_port_;
+    uint32_t remote_addr_;
+    uint16_t remote_port_;
     uint8_t local_l2_addr_[ETH_ALEN];
     uint8_t remote_l2_addr_[ETH_ALEN];
 
+    // The underlying AFXDPSocket.
     AFXDPSocket *socket_;
-    // UcclFlow state.
-    State state_;
+    // ConnectionID of this flow.
+    ConnectionID connection_id_;
+
     // Swift CC protocol control block.
     swift::Pcb pcb_;
     TXTracking tx_tracking_;
@@ -1149,13 +979,12 @@ class UcclEngine {
     /**
      * @brief Construct a new UcclEngine object.
      *
-     * @param pmd_port      Pointer to the PMD port to be used by the engine.
-     * The PMD port must be initialized (i.e., call InitDriver()).
-     * @param rx_queue_id   RX queue index to be used by the engine.
-     * @param tx_queue_id   TX queue index to be used by the engine. The TXRing
-     *                      associated should be initialized with a packet pool.
-     * @param channels      (optional) Uccl channels the engine will be
-     *                      responsible for (if any).
+     * @param queue_id      RX/TX queue index to be used by the engine.
+     * @param num_frames    Number of frames to be allocated for the queue.
+     * @param channel       Uccl channel the engine will be responsible for. For
+     *                      now, we assume an engine is responsible for a single
+     *                      channel, but future it may be responsible for
+     *                      multiple channels.
      */
     UcclEngine(int queue_id, int num_frames, Channel *channel,
                const uint32_t local_addr, const uint16_t local_port,
@@ -1165,27 +994,28 @@ class UcclEngine {
           channel_(channel),
           last_periodic_timestamp_(std::chrono::high_resolution_clock::now()),
           periodic_ticks_(0) {
+        // TODO(yang): using TCP-negotiated ConnectionID.
         flow_ = std::make_unique<UcclFlow>(local_addr, local_port, remote_addr,
                                            remote_port, local_l2_addr,
-                                           remote_l2_addr, socket_);
+                                           remote_l2_addr, socket_, 0xdeadbeaf);
     }
 
     /**
      * @brief This is the main event cycle of the Uccl engine.
-     * It is called repeatedly by the main thread of the Uccl engine.
-     * On each cycle, the engine processes incoming packets in the RX queue and
-     * enqueued messages in all channels that it is responsible for.
-     * This method is not thread-safe.
-     *
-     * @param now The current TSC.
+     * It is called by a separate thread running the Uccl engine.
+     * On each iteration, the engine processes incoming packets in the RX queue
+     * and enqueued messages in all channels that it is responsible for. This
+     * method is not thread-safe.
      */
     void Run() {
+        // TODO(yang): maintain a queue of rx_work and tx_work
         bool has_rx_work = false;
         ChannelMsg rx_work;
         bool has_tx_work = false;
         ChannelMsg tx_work;
         FrameBuf *tx_msgbuf_start = nullptr;
         FrameBuf *tx_msgbuf_cur = nullptr;
+
         while (true) {
             // Calculate the time elapsed since the last periodic processing.
             auto now = std::chrono::high_resolution_clock::now();
@@ -1200,71 +1030,64 @@ class UcclEngine {
                 last_periodic_timestamp_ = now;
             }
 
-            // TODO: where to run process_rx_pkt for ACK packets even without
-            // user-supplied buffer?
-            if (has_rx_work) {
-                auto frames = socket_->recv_packets(RECV_BATCH_SIZE);
+            if (jring_sc_dequeue_bulk(channel_->rx_ring_, &rx_work, 1,
+                                      nullptr) == 1) {
+                VLOG(3) << "Rx jring dequeue";
+                supply_app_buf(rx_work.data, rx_work.len_ptr);
+            }
+
+            auto frames = socket_->recv_packets(RECV_BATCH_SIZE);
+            if (frames.size()) {
                 VLOG(3) << "Rx recv_packets" << frames.size();
                 for (auto &frame : frames) {
                     auto msgbuf = FrameBuf::Create(frame.frame_offset,
                                                    socket_->umem_buffer_,
                                                    frame.frame_len);
-                    // TODO: how to guarantee before receiving packets, the
-                    // application already post the application buffer to the
-                    // engine?
-                    process_rx_pkt(msgbuf, rx_work.data, rx_work.len_ptr);
-                }
-            } else {
-                if (jring_sc_dequeue_bulk(channel_->rx_ring_, &rx_work, 1,
-                                          nullptr) == 1) {
-                    VLOG(3) << "Rx jring dequeue";
-                    has_rx_work = true;
+                    process_rx_pkt(msgbuf);
                 }
             }
 
+            if (jring_sc_dequeue_bulk(channel_->tx_ring_, &tx_work, 1,
+                                      nullptr) == 1) {
+                VLOG(3) << "Tx jring dequeue";
+                has_tx_work = true;
+                auto *app_buf = tx_work.data;
+                auto remaining_bytes = *tx_work.len_ptr;
+                const auto net_hdr_len = sizeof(ethhdr) + sizeof(iphdr) +
+                                         sizeof(udphdr) + sizeof(UcclPktHdr);
+                //  Deserializing the message into MTU-sized frames.
+                while (remaining_bytes > 0) {
+                    auto payload_len =
+                        std::min(remaining_bytes, (size_t)AFXDP_MTU);
+                    auto frame_offset = socket_->frame_pool_->pop();
+                    auto *msgbuf =
+                        FrameBuf::Create(frame_offset, socket_->umem_buffer_,
+                                         payload_len + net_hdr_len);
+                    auto pkt_payload_addr =
+                        msgbuf->get_pkt_addr() + net_hdr_len;
+                    memcpy(pkt_payload_addr, app_buf, payload_len);
+                    if (tx_msgbuf_start == nullptr) {
+                        msgbuf->mark_first();
+                        tx_msgbuf_start = msgbuf;
+                        tx_msgbuf_cur = msgbuf;
+                    } else {
+                        tx_msgbuf_cur->set_next(msgbuf);
+                        tx_msgbuf_cur = msgbuf;
+                    }
+                    remaining_bytes -= payload_len;
+                    app_buf += payload_len;
+                    if (remaining_bytes == 0) {
+                        msgbuf->mark_last();
+                    }
+                }
+            }
             if (has_tx_work) {
-                VLOG(3) << "Tx process_tx_pkt";
                 if (tx_msgbuf_start != nullptr) {
+                    VLOG(3) << "Tx process_tx_pkt";
                     process_tx_pkt(tx_msgbuf_start);
                     tx_msgbuf_start = tx_msgbuf_start->next();
                 } else {
                     has_tx_work = false;
-                }
-            } else {
-                if (jring_sc_dequeue_bulk(channel_->tx_ring_, &tx_work, 1,
-                                          nullptr) == 1) {
-                    VLOG(3) << "Tx jring dequeue";
-                    has_tx_work = true;
-                    auto *app_buf = tx_work.data;
-                    auto remaining_bytes = *tx_work.len_ptr;
-                    const auto net_hdr_len = sizeof(ethhdr) + sizeof(iphdr) +
-                                             sizeof(udphdr) +
-                                             sizeof(UcclPktHdr);
-                    //  Deserializing the message into MTU-sized frames.
-                    while (remaining_bytes > 0) {
-                        auto payload_len =
-                            std::min(remaining_bytes, (size_t)AFXDP_MTU);
-                        auto frame_offset = socket_->frame_pool_->pop();
-                        auto *msgbuf = FrameBuf::Create(
-                            frame_offset, socket_->umem_buffer_,
-                            payload_len + net_hdr_len);
-                        auto pkt_payload_addr =
-                            msgbuf->get_pkt_addr() + net_hdr_len;
-                        memcpy(pkt_payload_addr, app_buf, payload_len);
-                        if (tx_msgbuf_start == nullptr) {
-                            msgbuf->mark_first();
-                            tx_msgbuf_start = msgbuf;
-                            tx_msgbuf_cur = msgbuf;
-                        } else {
-                            tx_msgbuf_cur->set_next(msgbuf);
-                            tx_msgbuf_cur = msgbuf;
-                        }
-                        remaining_bytes -= payload_len;
-                        app_buf += payload_len;
-                        if (remaining_bytes == 0) {
-                            msgbuf->mark_last();
-                        }
-                    }
                 }
             }
         }
@@ -1273,14 +1096,12 @@ class UcclEngine {
     /**
      * @brief Method to perform periodic processing. This is called by the main
      * engine cycle (see method `Run`).
-     *
-     * @param now The current TSC.
      */
     void PeriodicProcess() {
         // Advance the periodic ticks counter.
         ++periodic_ticks_;
         HandleRTO();
-        DumpStatus();
+        // DumpStatus();
         ProcessControlRequests();
     }
 
@@ -1288,7 +1109,7 @@ class UcclEngine {
     void DumpStatus() {
         std::string s;
         s += "[Uccl Engine Status]";
-        // TODO: Add more status information.
+        // TODO(yang): Add more status information.
         s += "\n";
         LOG(INFO) << s;
     }
@@ -1298,26 +1119,30 @@ class UcclEngine {
      * and processes them. It is called periodically.
      */
     void ProcessControlRequests() {
-        // TODO: maintain pending_requests_; right now, we have done it in main
-        // run()
+        // TODO(yang): maintain pending_requests?
     }
 
     /**
      * @brief Iterate throught the list of flows, check and handle RTOs.
      */
     void HandleRTO() {
-        // TODO: maintain active_flows_map_
+        // TODO(yang): maintain active_flows_map_
         auto is_active_flow = flow_->PeriodicCheck();
         DCHECK(is_active_flow);
+    }
+
+    void supply_app_buf(void *app_buf, size_t *app_buf_len) {
+        flow_->supply_app_buf(app_buf, app_buf_len);
     }
 
     /**
      * @brief Process an incoming packet.
      *
-     * @param pkt Pointer to the packet.
-     * @param now TSC timestamp.
+     * @param msgbuf Pointer to the packet.
+     * @param app_buf Pointer to the application receiving buffer.
+     * @param app_buf_len Pointer to the length of the application buffer.
      */
-    void process_rx_pkt(FrameBuf *msgbuf, void *app_buf, size_t *app_buf_len) {
+    void process_rx_pkt(FrameBuf *msgbuf) {
         // Sanity ethernet header check.
         if (msgbuf->get_frame_len() < sizeof(ethhdr)) [[unlikely]]
             return;
@@ -1325,20 +1150,21 @@ class UcclEngine {
         auto *eh = reinterpret_cast<ethhdr *>(pkt_addr);
         switch (ntohs(eh->h_proto)) {
             [[likely]] case ETH_P_IP:
-                process_rx_ipv4(msgbuf, app_buf, app_buf_len);
+                process_rx_ipv4(msgbuf);
                 break;
             case ETH_P_IPV6:
-                LOG(ERROR) << "IPv6 not supported yet.";
+                LOG(WARNING) << "IPv6 not supported yet.";
                 break;
             case ETH_P_ARP:
-                LOG(ERROR) << "ARP not supported yet.";
+                LOG(WARNING) << "ARP not supported yet.";
                 break;
             default:
+                LOG(WARNING) << "Unsupported ethertype: " << ntohs(eh->h_proto);
                 break;
         }
     }
 
-    void process_rx_ipv4(FrameBuf *msgbuf, void *app_buf, size_t *app_buf_len) {
+    void process_rx_ipv4(FrameBuf *msgbuf) {
         auto frame_len = msgbuf->get_frame_len();
         // Sanity ipv4 header check.
         if (frame_len < sizeof(ethhdr) + sizeof(iphdr)) [[unlikely]]
@@ -1350,7 +1176,6 @@ class UcclEngine {
         auto *udph = reinterpret_cast<udphdr *>(pkt_addr + sizeof(ethhdr) +
                                                 sizeof(iphdr));
 
-        const Key pkt_key(ipv4h->daddr, udph->dest, ipv4h->saddr, udph->source);
         // Check ivp4 header length.
         if (frame_len != sizeof(ethhdr) + ntohs(ipv4h->tot_len)) [[unlikely]] {
             LOG(WARNING) << "IPv4 packet length mismatch (expected: "
@@ -1361,7 +1186,7 @@ class UcclEngine {
 
         switch (ipv4h->protocol) {
             [[likely]] case IPPROTO_UDP:
-                flow_->InputPacket(msgbuf, app_buf, app_buf_len);
+                flow_->InputPacket(msgbuf);
                 break;
             case IPPROTO_ICMP:
                 LOG(WARNING) << "ICMP not supported yet.";
@@ -1375,12 +1200,11 @@ class UcclEngine {
 
     /**
      * Process a message enqueued from an application to a channel.
-     * @param channel A pointer to the channel that the message was enqueued to.
      * @param msg     A pointer to the `MsgBuf` containing the first buffer of
      * the message.
      */
     void process_tx_pkt(FrameBuf *msg) {
-        // TODO: lookup the msg five-tuple in an active_flows_map_
+        // TODO(yang): lookup the msg five-tuple in an active_flows_map
         flow_->OutputMessage(msg);
     }
 
@@ -1399,16 +1223,3 @@ class UcclEngine {
 };
 
 }  // namespace uccl
-
-namespace std {
-
-template <>
-struct hash<uccl::UcclFlow> {
-    size_t operator()(const uccl::UcclFlow &flow) const {
-        const auto &key = flow.key();
-        return std::hash<std::string_view>{}(
-            {reinterpret_cast<const char *>(&key), sizeof(key)});
-    }
-};
-
-}  // namespace std
