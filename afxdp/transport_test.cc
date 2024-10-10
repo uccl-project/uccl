@@ -16,7 +16,7 @@ const uint16_t SERVER_PORT = 40000;
 const uint16_t CLIENT_PORT = 40000;
 const size_t NUM_FRAMES = 4096 * 16;
 const size_t QUEUE_ID = 0;
-const size_t kTestMsgSize = 1024;
+const size_t kTestMsgSize = 102400;
 
 DEFINE_bool(client, false, "Whether this is a client sending traffic.");
 

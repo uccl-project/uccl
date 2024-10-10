@@ -137,6 +137,9 @@ class Endpoint {
     }
 };
 
+static const size_t kNetHdrLen =
+    sizeof(ethhdr) + sizeof(iphdr) + sizeof(udphdr);
+
 /**
  * Uccl Packet Header just after UDP header.
  */
@@ -327,14 +330,12 @@ class RXTracking {
 
     // If we fail to allocate in the SHM channel, return -1.
     int Consume(swift::Pcb *pcb, FrameBuf *msgbuf) {
-        const size_t net_hdr_len =
-            sizeof(ethhdr) + sizeof(iphdr) + sizeof(udphdr);
         uint8_t *pkt_addr = msgbuf->get_pkt_addr();
         auto frame_len = msgbuf->get_frame_len();
         const auto *ucclh =
-            reinterpret_cast<const UcclPktHdr *>(pkt_addr + net_hdr_len);
+            reinterpret_cast<const UcclPktHdr *>(pkt_addr + kNetHdrLen);
         const auto *payload = reinterpret_cast<const UcclPktHdr *>(
-            pkt_addr + net_hdr_len + sizeof(UcclPktHdr));
+            pkt_addr + kNetHdrLen + sizeof(UcclPktHdr));
         const auto seqno = ucclh->seqno.value();
         const auto expected_seqno = pcb->rcv_nxt;
 
@@ -365,7 +366,7 @@ class RXTracking {
         }
 
         // Buffer the packet in the frame pool. It may be out-of-order.
-        const size_t payload_len = frame_len - net_hdr_len - sizeof(UcclPktHdr);
+        const size_t payload_len = frame_len - kNetHdrLen - sizeof(UcclPktHdr);
         // This records the incoming network packet UcclPktHdr.msg_flags in
         // FrameBuf.
         msgbuf->set_msg_flags(ucclh->msg_flags);
@@ -430,13 +431,11 @@ class RXTracking {
         // We have a complete message. Let's deliver it to the app.
         auto *msgbuf_to_deliver = cur_msg_train_head_;
         size_t pos = 0;
-        const auto net_hdr_len =
-            sizeof(ethhdr) + sizeof(iphdr) + sizeof(udphdr);
         while (msgbuf_to_deliver != nullptr) {
             auto *pkt_addr = msgbuf_to_deliver->get_pkt_addr();
-            auto *payload_addr = pkt_addr + net_hdr_len + sizeof(UcclPktHdr);
-            auto payload_len = msgbuf_to_deliver->get_frame_len() -
-                               net_hdr_len - sizeof(UcclPktHdr);
+            auto *payload_addr = pkt_addr + kNetHdrLen + sizeof(UcclPktHdr);
+            auto payload_len = msgbuf_to_deliver->get_frame_len() - kNetHdrLen -
+                               sizeof(UcclPktHdr);
 
             memcpy((uint8_t *)app_buf_ + pos, payload_addr, payload_len);
             pos += payload_len;
@@ -557,11 +556,9 @@ class UcclFlow {
      */
     void InputPacket(FrameBuf *msgbuf) {
         // Parse the Uccl header of the packet.
-        const size_t net_hdr_len =
-            sizeof(ethhdr) + sizeof(iphdr) + sizeof(udphdr);
         uint8_t *pkt_addr = msgbuf->get_pkt_addr();
         const auto *ucclh =
-            reinterpret_cast<const UcclPktHdr *>(pkt_addr + net_hdr_len);
+            reinterpret_cast<const UcclPktHdr *>(pkt_addr + kNetHdrLen);
 
         if (ucclh->magic.value() != UcclPktHdr::kMagic) {
             LOG(ERROR) << "Invalid Uccl header magic: " << ucclh->magic;
@@ -747,19 +744,17 @@ class UcclFlow {
      */
     void PrepareDataPacket(FrameBuf *msg_buf, uint32_t seqno) const {
         // Header length after before the payload.
-        const size_t net_hdr_length =
-            sizeof(ethhdr) + sizeof(iphdr) + sizeof(udphdr);
         uint32_t frame_len = msg_buf->get_frame_len();
         CHECK_LE(frame_len, AFXDP_MTU);
         uint8_t *pkt_addr = msg_buf->get_pkt_addr();
 
         // Prepare network headers.
         PrepareL2Header(pkt_addr);
-        PrepareL3Header(pkt_addr, frame_len - net_hdr_length);
-        PrepareL4Header(pkt_addr, frame_len - net_hdr_length);
+        PrepareL3Header(pkt_addr, frame_len - kNetHdrLen);
+        PrepareL4Header(pkt_addr, frame_len - kNetHdrLen);
 
         // Prepare the Uccl-specific header.
-        auto *ucclh = reinterpret_cast<UcclPktHdr *>(pkt_addr + net_hdr_length);
+        auto *ucclh = reinterpret_cast<UcclPktHdr *>(pkt_addr + kNetHdrLen);
         ucclh->magic = be16_t(UcclPktHdr::kMagic);
         ucclh->net_flags = UcclPktHdr::UcclFlags::kData;
         ucclh->ackno = be32_t(UINT32_MAX);
@@ -1025,21 +1020,20 @@ class UcclEngine {
                 has_tx_work = true;
                 auto *app_buf = tx_work.data;
                 auto remaining_bytes = *tx_work.len_ptr;
-                const auto net_hdr_len = sizeof(ethhdr) + sizeof(iphdr) +
-                                         sizeof(udphdr) + sizeof(UcclPktHdr);
                 //  Deserializing the message into MTU-sized frames.
                 while (remaining_bytes > 0) {
-                    auto payload_len =
-                        std::min(remaining_bytes, (size_t)AFXDP_MTU);
+                    auto payload_len = std::min(
+                        remaining_bytes,
+                        (size_t)AFXDP_MTU - kNetHdrLen - sizeof(UcclPktHdr));
                     auto frame_offset = socket_->frame_pool_->pop();
-                    auto *msgbuf =
-                        FrameBuf::Create(frame_offset, socket_->umem_buffer_,
-                                         payload_len + net_hdr_len);
+                    auto *msgbuf = FrameBuf::Create(
+                        frame_offset, socket_->umem_buffer_,
+                        payload_len + kNetHdrLen + sizeof(UcclPktHdr));
                     //  The transport engine will free these Tx frames when
                     //  receiving ACKs from receivers.
                     msgbuf->mark_not_pulltime_free();
-                    auto pkt_payload_addr =
-                        msgbuf->get_pkt_addr() + net_hdr_len;
+                    auto pkt_payload_addr = msgbuf->get_pkt_addr() +
+                                            kNetHdrLen + sizeof(UcclPktHdr);
                     memcpy(pkt_payload_addr, app_buf, payload_len);
                     if (tx_msgbuf_start == nullptr) {
                         msgbuf->mark_first();
