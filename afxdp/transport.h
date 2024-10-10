@@ -381,12 +381,12 @@ class RXTracking {
     int Consume(swift::Pcb *pcb, FrameBuf *msgbuf) {
         const size_t net_hdr_len =
             sizeof(ethhdr) + sizeof(iphdr) + sizeof(udphdr);
-        uint8_t *pkt = msgbuf->get_pkt_addr();
+        uint8_t *pkt_addr = msgbuf->get_pkt_addr();
         auto frame_len = msgbuf->get_frame_len();
         const auto *ucclh =
-            reinterpret_cast<const UcclPktHdr *>(msgbuf + net_hdr_len);
+            reinterpret_cast<const UcclPktHdr *>(pkt_addr + net_hdr_len);
         const auto *payload = reinterpret_cast<const UcclPktHdr *>(
-            msgbuf + net_hdr_len + sizeof(UcclPktHdr));
+            pkt_addr + net_hdr_len + sizeof(UcclPktHdr));
         const auto seqno = ucclh->seqno.value();
         const auto expected_seqno = pcb->rcv_nxt;
 
@@ -449,12 +449,12 @@ class RXTracking {
             // We have a complete message. Let's deliver it to the app.
             auto *msgbuf_to_deliver = cur_msg_train_head_;
             size_t pos = 0;
-            const auto net_hdr_len = sizeof(ethhdr) + sizeof(iphdr) +
-                                     sizeof(udphdr) + sizeof(UcclPktHdr);
+            const auto net_hdr_len =
+                sizeof(ethhdr) + sizeof(iphdr) + sizeof(udphdr);
             while (msgbuf_to_deliver != nullptr) {
                 auto *pkt_addr = msgbuf_to_deliver->get_pkt_addr();
-                auto pkt_payload_len =
-                    msgbuf_to_deliver->get_frame_len() - net_hdr_len;
+                auto pkt_payload_len = msgbuf_to_deliver->get_frame_len() -
+                                       net_hdr_len - sizeof(UcclPktHdr);
 
                 memcpy((uint8_t *)app_buf_ + pos, pkt_addr, pkt_payload_len);
                 pos += pkt_payload_len;
@@ -596,9 +596,9 @@ class UcclFlow {
         // Parse the Uccl header of the packet.
         const size_t net_hdr_len =
             sizeof(ethhdr) + sizeof(iphdr) + sizeof(udphdr);
-        uint8_t *pkt = msgbuf->get_pkt_addr();
+        uint8_t *pkt_addr = msgbuf->get_pkt_addr();
         const auto *ucclh =
-            reinterpret_cast<const UcclPktHdr *>(msgbuf + net_hdr_len);
+            reinterpret_cast<const UcclPktHdr *>(pkt_addr + net_hdr_len);
 
         if (ucclh->magic.value() != UcclPktHdr::kMagic) {
             LOG(ERROR) << "Invalid Uccl header magic: " << ucclh->magic;
@@ -701,6 +701,8 @@ class UcclFlow {
         ipv4h->saddr = htonl(local_addr_);
         ipv4h->daddr = htonl(remote_addr_);
         ipv4h->check = 0;
+        // AWS would block traffic if ipv4 checksum is not calculated.
+        ipv4h->check = ipv4_checksum(ipv4h, sizeof(iphdr));
     }
 
     void PrepareL4Header(uint8_t *pkt_addr, uint32_t payload_bytes) const {
@@ -779,20 +781,19 @@ class UcclFlow {
      */
     void PrepareDataPacket(FrameBuf *msg_buf, uint32_t seqno) const {
         // Header length after before the payload.
-        const size_t hdr_length = sizeof(ethhdr) + sizeof(iphdr) +
-                                  sizeof(ethhdr) + sizeof(UcclPktHdr);
+        const size_t net_hdr_length =
+            sizeof(ethhdr) + sizeof(iphdr) + sizeof(udphdr);
         uint32_t frame_len = msg_buf->get_frame_len();
         CHECK_LE(frame_len, AFXDP_MTU);
         uint8_t *pkt_addr = msg_buf->get_pkt_addr();
 
         // Prepare network headers.
         PrepareL2Header(pkt_addr);
-        PrepareL3Header(pkt_addr, frame_len - hdr_length);
-        PrepareL4Header(pkt_addr, frame_len - hdr_length);
+        PrepareL3Header(pkt_addr, frame_len - net_hdr_length);
+        PrepareL4Header(pkt_addr, frame_len - net_hdr_length);
 
         // Prepare the Uccl-specific header.
-        auto *ucclh = reinterpret_cast<UcclPktHdr *>(
-            pkt_addr + sizeof(ethhdr) + sizeof(iphdr) + sizeof(ethhdr));
+        auto *ucclh = reinterpret_cast<UcclPktHdr *>(pkt_addr + net_hdr_length);
         ucclh->magic = be16_t(UcclPktHdr::kMagic);
         ucclh->net_flags = UcclPktHdr::UcclFlags::kData;
         ucclh->ackno = be32_t(UINT32_MAX);
@@ -845,8 +846,10 @@ class UcclFlow {
             auto msg_buf_opt = tx_tracking_.GetAndUpdateOldestUnsent();
             if (!msg_buf_opt.has_value()) break;
             auto *msg_buf = msg_buf_opt.value();
-            PrepareDataPacket(msg_buf, pcb_.get_snd_nxt());
-            VLOG(3) << "TransmitPackets: transmit "<< i;
+            auto seqno = pcb_.get_snd_nxt();
+            VLOG(3) << "Fast retransmitting packet " << seqno;
+            PrepareDataPacket(msg_buf, seqno);
+            VLOG(3) << "TransmitPackets: transmit " << i;
             frames.emplace_back(AFXDPSocket::frame_desc{
                 msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
         }
@@ -1038,7 +1041,7 @@ class UcclEngine {
 
             auto frames = socket_->recv_packets(RECV_BATCH_SIZE);
             if (frames.size()) {
-                VLOG(3) << "Rx recv_packets" << frames.size();
+                VLOG(3) << "Rx recv_packets " << frames.size();
                 for (auto &frame : frames) {
                     auto msgbuf = FrameBuf::Create(frame.frame_offset,
                                                    socket_->umem_buffer_,

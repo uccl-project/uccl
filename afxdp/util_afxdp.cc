@@ -195,6 +195,7 @@ uint32_t AFXDPSocket::pull_complete_queue(bool free_frame) {
 uint32_t AFXDPSocket::send_packet(frame_desc frame, bool free_frame) {
     // reserving a slot in the send queue.
     uint32_t send_index;
+    VLOG(3) << "tx send_packets num_frames = " << 1;
     while (xsk_ring_prod__reserve(&send_queue_, 1, &send_index) == 0) {
         LOG(WARNING) << "send_queue_ is full. Busy waiting...";
     }
