@@ -435,8 +435,12 @@ class RXTracking {
         return 0;
     }
 
-    // Either the app supplies the app buffer or the engine receives a full msg.
-    void TryCopyMsgbufToAppBuf(void *app_buf, size_t *app_buf_len) {
+    /**
+     * Either the app supplies the app buffer or the engine receives a full msg.
+     * It returns true if successfully copying the msgbuf to the app buffer;
+     * otherwise false.
+     */
+    bool TryCopyMsgbufToAppBuf(void *app_buf, size_t *app_buf_len) {
         // Either both app_buf and app_buf_len are nullptr or both are not.
         if (app_buf_ == nullptr && app_buf_len_ == nullptr) {
             app_buf_ = app_buf;
@@ -445,36 +449,37 @@ class RXTracking {
             DCHECK(app_buf_ && app_buf_len_);
         }
 
-        if (msg_ready_ && app_buf_ && app_buf_len_) {
-            // We have a complete message. Let's deliver it to the app.
-            auto *msgbuf_to_deliver = cur_msg_train_head_;
-            size_t pos = 0;
-            const auto net_hdr_len =
-                sizeof(ethhdr) + sizeof(iphdr) + sizeof(udphdr);
-            while (msgbuf_to_deliver != nullptr) {
-                auto *pkt_addr = msgbuf_to_deliver->get_pkt_addr();
-                auto pkt_payload_len = msgbuf_to_deliver->get_frame_len() -
-                                       net_hdr_len - sizeof(UcclPktHdr);
+        if (!(msg_ready_ && app_buf_ && app_buf_len_)) return false;
 
-                memcpy((uint8_t *)app_buf_ + pos, pkt_addr, pkt_payload_len);
-                pos += pkt_payload_len;
+        // We have a complete message. Let's deliver it to the app.
+        auto *msgbuf_to_deliver = cur_msg_train_head_;
+        size_t pos = 0;
+        const auto net_hdr_len =
+            sizeof(ethhdr) + sizeof(iphdr) + sizeof(udphdr);
+        while (msgbuf_to_deliver != nullptr) {
+            auto *pkt_addr = msgbuf_to_deliver->get_pkt_addr();
+            auto pkt_payload_len = msgbuf_to_deliver->get_frame_len() -
+                                   net_hdr_len - sizeof(UcclPktHdr);
 
-                socket_->frame_pool_->push(
-                    msgbuf_to_deliver->get_frame_offset());
+            memcpy((uint8_t *)app_buf_ + pos, pkt_addr, pkt_payload_len);
+            pos += pkt_payload_len;
 
-                msgbuf_to_deliver = msgbuf_to_deliver->next();
-            }
-            *app_buf_len_ = pos;
-            LOG(WARNING) << "Received a complete message " << pos << " bytes";
+            socket_->frame_pool_->push(msgbuf_to_deliver->get_frame_offset());
 
-            cur_msg_train_head_ = nullptr;
-            cur_msg_train_tail_ = nullptr;
-
-            // Reset the message ready flag for the next message.
-            msg_ready_ = false;
-            app_buf_ = nullptr;
-            app_buf_len_ = nullptr;
+            msgbuf_to_deliver = msgbuf_to_deliver->next();
         }
+        *app_buf_len_ = pos;
+        LOG(WARNING) << "Received a complete message " << pos << " bytes";
+
+        cur_msg_train_head_ = nullptr;
+        cur_msg_train_tail_ = nullptr;
+
+        // Reset the message ready flag for the next message.
+        msg_ready_ = false;
+        app_buf_ = nullptr;
+        app_buf_len_ = nullptr;
+
+        return true;
     }
 
    private:
@@ -626,8 +631,8 @@ class UcclFlow {
         }
     }
 
-    void supply_app_buf(void *app_buf, size_t *app_buf_len) {
-        rx_tracking_.TryCopyMsgbufToAppBuf(app_buf, app_buf_len);
+    bool supply_app_buf(void *app_buf, size_t *app_buf_len) {
+        return rx_tracking_.TryCopyMsgbufToAppBuf(app_buf, app_buf_len);
     }
 
     /**
@@ -1036,7 +1041,16 @@ class UcclEngine {
             if (jring_sc_dequeue_bulk(channel_->rx_ring_, &rx_work, 1,
                                       nullptr) == 1) {
                 VLOG(3) << "Rx jring dequeue";
-                supply_app_buf(rx_work.data, rx_work.len_ptr);
+                bool success = supply_app_buf(rx_work.data, rx_work.len_ptr);
+                // TODO(yang): when to wake up the app thread?
+                // if (success) {
+                //     // Wakeup app thread waiting on endpoint.
+                //     while (jring_sp_enqueue_bulk(channel_->rx_comp_ring_,
+                //                                  &rx_work, 1, nullptr) != 1)
+                //                                  {
+                //         // do nothing
+                //     }
+                // }
             }
 
             auto frames = socket_->recv_packets(RECV_BATCH_SIZE);
@@ -1090,6 +1104,16 @@ class UcclEngine {
                     process_tx_pkt(tx_msgbuf_start);
                     tx_msgbuf_start = tx_msgbuf_start->next();
                 } else {
+                    VLOG(3) << "Tx finishes a message";
+                    // TODO(yang): when to wake up the app thread? Tx must
+                    // receive an ACK from Rx
+
+                    // Wakeup app thread waiting on endpoint.
+                    // while (jring_sp_enqueue_bulk(channel_->tx_comp_ring_,
+                    //                              &tx_work, 1, nullptr) != 1)
+                    //                              {
+                    //     // do nothing
+                    // }
                     has_tx_work = false;
                 }
             }
@@ -1134,8 +1158,8 @@ class UcclEngine {
         DCHECK(is_active_flow);
     }
 
-    void supply_app_buf(void *app_buf, size_t *app_buf_len) {
-        flow_->supply_app_buf(app_buf, app_buf_len);
+    bool supply_app_buf(void *app_buf, size_t *app_buf_len) {
+        return flow_->supply_app_buf(app_buf, app_buf_len);
     }
 
     /**
