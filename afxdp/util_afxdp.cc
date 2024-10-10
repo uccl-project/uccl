@@ -100,7 +100,7 @@ void AFXDPFactory::shutdown() {
     afxdp_ctl.socket_q_.clear();
 }
 
-AFXDPSocket::AFXDPSocket(int queue_id, int num_frames) {
+AFXDPSocket::AFXDPSocket(int queue_id, int num_frames) : unpulled_tx_pkts_(0) {
     // initialize queues, or misterious queue sync problems will happen
     memset(&recv_queue_, 0, sizeof(recv_queue_));
     memset(&send_queue_, 0, sizeof(send_queue_));
@@ -171,28 +171,29 @@ AFXDPSocket::AFXDPSocket(int queue_id, int num_frames) {
     populate_fill_queue(XSK_RING_PROD__DEFAULT_NUM_DESCS);
 }
 
-uint32_t AFXDPSocket::pull_complete_queue(bool free_frame) {
+uint32_t AFXDPSocket::pull_complete_queue() {
     uint32_t complete_index;
     uint32_t completed = xsk_ring_cons__peek(
         &complete_queue_, XSK_RING_CONS__DEFAULT_NUM_DESCS, &complete_index);
-    VLOG(3) << "tx complete_queue completed = " << completed;
     if (completed > 0) {
-        if (free_frame) {
-            for (int i = 0; i < completed; i++) {
-                uint64_t frame_offset = *xsk_ring_cons__comp_addr(
-                    &complete_queue_, complete_index++);
-                VLOG(3) << "complete: " << std::hex << frame_offset;
+        for (int i = 0; i < completed; i++) {
+            uint64_t frame_offset =
+                *xsk_ring_cons__comp_addr(&complete_queue_, complete_index++);
+            if (FrameBuf::should_pulltime_free(frame_offset, umem_buffer_)) {
                 frame_pool_->push(frame_offset);
             }
+            // Otherwise, the transport layer should handle frame freeing.
         }
-        // Otherwise, the transport layer should handle frame freeing.
 
         xsk_ring_cons__release(&complete_queue_, completed);
+        unpulled_tx_pkts_ -= completed;
     }
+    VLOG(3) << "tx complete_queue completed = " << completed
+            << " unpulled_tx_pkts = " << unpulled_tx_pkts_;
     return completed;
 }
 
-uint32_t AFXDPSocket::send_packet(frame_desc frame, bool free_frame) {
+uint32_t AFXDPSocket::send_packet(frame_desc frame) {
     // reserving a slot in the send queue.
     uint32_t send_index;
     VLOG(3) << "tx send_packets num_frames = " << 1;
@@ -203,16 +204,16 @@ uint32_t AFXDPSocket::send_packet(frame_desc frame, bool free_frame) {
     desc->addr = frame.frame_offset;
     desc->len = frame.frame_len;
     xsk_ring_prod__submit(&send_queue_, 1);
+    unpulled_tx_pkts_++;
 
     if (xsk_ring_prod__needs_wakeup(&send_queue_)) {
         sendto(xsk_socket__fd(xsk_), NULL, 0, MSG_DONTWAIT, NULL, 0);
     }
 
-    return pull_complete_queue(free_frame);
+    return pull_complete_queue();
 }
 
-uint32_t AFXDPSocket::send_packets(std::vector<frame_desc>& frames,
-                                   bool free_frame) {
+uint32_t AFXDPSocket::send_packets(std::vector<frame_desc>& frames) {
     // reserving slots in the send queue.
     uint32_t send_index;
     auto num_frames = frames.size();
@@ -227,12 +228,13 @@ uint32_t AFXDPSocket::send_packets(std::vector<frame_desc>& frames,
         desc->len = frames[i].frame_len;
     }
     xsk_ring_prod__submit(&send_queue_, num_frames);
+    unpulled_tx_pkts_ += num_frames;
 
     if (xsk_ring_prod__needs_wakeup(&send_queue_)) {
         sendto(xsk_socket__fd(xsk_), NULL, 0, MSG_DONTWAIT, NULL, 0);
     }
 
-    return pull_complete_queue(free_frame);
+    return pull_complete_queue();
 }
 
 void AFXDPSocket::populate_fill_queue(uint32_t nb_frames) {
@@ -270,6 +272,11 @@ std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
 
     xsk_ring_cons__release(&recv_queue_, rcvd);
     return frames;
+}
+
+void AFXDPSocket::Shutdown() {
+    // pull_complete_queue to make sure all frames are tx successfully.
+    while (unpulled_tx_pkts_) pull_complete_queue();
 }
 
 AFXDPSocket::~AFXDPSocket() {

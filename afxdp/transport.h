@@ -30,29 +30,29 @@ namespace uccl {
 
 typedef uint64_t ConnectionID;
 
-struct ChannelMsg {
-    enum ChannelOp : uint8_t {
-        kTx = 0,
-        kTxComp = 1,
-        kRx = 2,
-        kRxComp = 3,
-    };
-    ChannelOp opcode;
-    void *data;
-    size_t *len_ptr;
-    ConnectionID connection_id;
-};
-static_assert(sizeof(ChannelMsg) % 4 == 0, "channelMsg must be 32-bit aligned");
-
 class Channel {
     constexpr static uint32_t kChannelSize = 1024;
 
    public:
+    struct Msg {
+        enum Op : uint8_t {
+            kTx = 0,
+            kTxComp = 1,
+            kRx = 2,
+            kRxComp = 3,
+        };
+        Op opcode;
+        void *data;
+        size_t *len_ptr;
+        ConnectionID connection_id;
+    };
+    static_assert(sizeof(Msg) % 4 == 0, "channelMsg must be 32-bit aligned");
+
     Channel() {
-        tx_ring_ = create_ring(sizeof(ChannelMsg), kChannelSize);
-        tx_comp_ring_ = create_ring(sizeof(ChannelMsg), kChannelSize);
-        rx_ring_ = create_ring(sizeof(ChannelMsg), kChannelSize);
-        rx_comp_ring_ = create_ring(sizeof(ChannelMsg), kChannelSize);
+        tx_ring_ = create_ring(sizeof(Msg), kChannelSize);
+        tx_comp_ring_ = create_ring(sizeof(Msg), kChannelSize);
+        rx_ring_ = create_ring(sizeof(Msg), kChannelSize);
+        rx_comp_ring_ = create_ring(sizeof(Msg), kChannelSize);
     }
 
     ~Channel() {
@@ -98,8 +98,8 @@ class Endpoint {
 
     // Sending the data by leveraging multiple port combinations.
     bool Send(ConnectionID connection_id, const void *data, size_t len) {
-        ChannelMsg msg = {
-            .opcode = ChannelMsg::ChannelOp::kTx,
+        Channel::Msg msg = {
+            .opcode = Channel::Msg::Op::kTx,
             .data = const_cast<void *>(data),
             .len_ptr = &len,
             .connection_id = connection_id,
@@ -118,8 +118,8 @@ class Endpoint {
 
     // Receiving the data by leveraging multiple port combinations.
     bool Recv(ConnectionID connection_id, void *data, size_t *len) {
-        ChannelMsg msg = {
-            .opcode = ChannelMsg::ChannelOp::kRx,
+        Channel::Msg msg = {
+            .opcode = Channel::Msg::Op::kRx,
             .data = data,
             .len_ptr = len,
             .connection_id = connection_id,
@@ -174,76 +174,12 @@ inline UcclPktHdr::UcclFlags operator&(UcclPktHdr::UcclFlags lhs,
                                  static_cast<UcclFlagsType>(rhs));
 }
 
-class FrameBuf {
-    // Pointing to the next message buffer in the chain.
-    FrameBuf *next_;
-    // Describing the packet frame address and length.
-    uint64_t frame_offset_;
-    void *umem_buffer_;
-    uint32_t frame_len_;
-    // Flags to denote the message buffer state.
-#define UCCL_MSGBUF_FLAGS_SYN (1 << 0)
-#define UCCL_MSGBUF_FLAGS_FIN (1 << 1)
-    uint8_t msg_flags_;
-
-    FrameBuf(uint64_t frame_offset, void *umem_buffer, uint32_t frame_len)
-        : frame_offset_(frame_offset),
-          umem_buffer_(umem_buffer),
-          frame_len_(frame_len) {
-        next_ = nullptr;
-        msg_flags_ = 0;
-    }
-
-   public:
-    static FrameBuf *Create(uint64_t frame_offset, void *umem_buffer,
-                            uint32_t frame_len) {
-        /*
-         * The XDP_PACKET_HEADROOM bytes before frame_offset is xdp metedata,
-         * and we reuse it to chain Framebufs.
-         */
-        return new (reinterpret_cast<void *>(
-            frame_offset + (uint64_t)umem_buffer - XDP_PACKET_HEADROOM))
-            FrameBuf(frame_offset, umem_buffer, frame_len);
-    }
-    uint64_t get_frame_offset() const { return frame_offset_; }
-    void *get_umem_buffer() const { return umem_buffer_; }
-    uint32_t get_frame_len() const { return frame_len_; }
-    uint8_t *get_pkt_addr() const {
-        return (uint8_t *)umem_buffer_ + frame_offset_;
-    }
-
-    uint16_t msg_flags() const { return msg_flags_; }
-
-    // Returns true if this is the first in a message.
-    bool is_first() const { return (msg_flags_ & UCCL_MSGBUF_FLAGS_SYN) != 0; }
-    // Returns true if this is the last in a message.
-    bool is_last() const { return (msg_flags_ & UCCL_MSGBUF_FLAGS_FIN) != 0; }
-
-    // Returns the next message buffer index in the chain.
-    FrameBuf *next() const { return next_; }
-    // Set the next message buffer index in the chain.
-    void set_next(FrameBuf *next) { next_ = next; }
-    // Link the message train to the current message train. The start and end of
-    // each message are still preserved.
-    void link_msg_train(FrameBuf *next) {
-        DCHECK(is_last()) << "This is not the last buffer of a message!";
-        DCHECK(next->is_first())
-            << "The next buffer is not the first of a message!";
-        next_ = next;
-    }
-
-    void mark_first() { add_msg_flags(UCCL_MSGBUF_FLAGS_SYN); }
-    void mark_last() { add_msg_flags(UCCL_MSGBUF_FLAGS_FIN); }
-
-    void set_msg_flags(uint16_t flags) { msg_flags_ = flags; }
-    void add_msg_flags(uint16_t flags) { msg_flags_ |= flags; }
-};
-
 class TXTracking {
    public:
     TXTracking() = delete;
-    TXTracking(AFXDPSocket *socket)
+    TXTracking(AFXDPSocket *socket, Channel *channel)
         : socket_(socket),
+          channel_(channel),
           oldest_unacked_msgbuf_(nullptr),
           oldest_unsent_msgbuf_(nullptr),
           last_msgbuf_(nullptr),
@@ -265,10 +201,20 @@ class TXTracking {
                 oldest_unacked_msgbuf_ = nullptr;
                 last_msgbuf_ = nullptr;
             }
-            // Free acked frames
+            // Free transmitted frames that are acked
             socket_->frame_pool_->push(msgbuf->get_frame_offset());
             num_tracked_msgbufs_--;
             num_acked_pkts--;
+
+            if (msgbuf->is_last()) {
+                // Tx a full message; wakeup app thread waiting on endpoint.
+                LOG(WARNING) << "Transmitted a complete message";
+                Channel::Msg tx_work;
+                while (jring_sp_enqueue_bulk(channel_->tx_comp_ring_, &tx_work,
+                                             1, nullptr) != 1) {
+                    // do nothing
+                }
+            }
         }
     }
 
@@ -320,6 +266,7 @@ class TXTracking {
     }
 
     AFXDPSocket *socket_;
+    Channel *channel_;
 
     /**
      * For the linked list of FrameBufs in the channel (chain going
@@ -365,12 +312,13 @@ class RXTracking {
 
     RXTracking(const RXTracking &) = delete;
     RXTracking(uint32_t local_ip, uint16_t local_port, uint32_t remote_ip,
-               uint16_t remote_port, AFXDPSocket *socket)
+               uint16_t remote_port, AFXDPSocket *socket, Channel *channel)
         : local_ip_(local_ip),
           local_port_(local_port),
           remote_ip_(remote_ip),
           remote_port_(remote_port),
           socket_(socket),
+          channel_(channel),
           cur_msg_train_head_(nullptr),
           cur_msg_train_tail_(nullptr),
           msg_ready_(false),
@@ -435,53 +383,6 @@ class RXTracking {
         return 0;
     }
 
-    /**
-     * Either the app supplies the app buffer or the engine receives a full msg.
-     * It returns true if successfully copying the msgbuf to the app buffer;
-     * otherwise false.
-     */
-    bool TryCopyMsgbufToAppBuf(void *app_buf, size_t *app_buf_len) {
-        // Either both app_buf and app_buf_len are nullptr or both are not.
-        if (app_buf_ == nullptr && app_buf_len_ == nullptr) {
-            app_buf_ = app_buf;
-            app_buf_len_ = app_buf_len;
-        } else {
-            DCHECK(app_buf_ && app_buf_len_);
-        }
-
-        if (!(msg_ready_ && app_buf_ && app_buf_len_)) return false;
-
-        // We have a complete message. Let's deliver it to the app.
-        auto *msgbuf_to_deliver = cur_msg_train_head_;
-        size_t pos = 0;
-        const auto net_hdr_len =
-            sizeof(ethhdr) + sizeof(iphdr) + sizeof(udphdr);
-        while (msgbuf_to_deliver != nullptr) {
-            auto *pkt_addr = msgbuf_to_deliver->get_pkt_addr();
-            auto pkt_payload_len = msgbuf_to_deliver->get_frame_len() -
-                                   net_hdr_len - sizeof(UcclPktHdr);
-
-            memcpy((uint8_t *)app_buf_ + pos, pkt_addr, pkt_payload_len);
-            pos += pkt_payload_len;
-
-            socket_->frame_pool_->push(msgbuf_to_deliver->get_frame_offset());
-
-            msgbuf_to_deliver = msgbuf_to_deliver->next();
-        }
-        *app_buf_len_ = pos;
-        LOG(WARNING) << "Received a complete message " << pos << " bytes";
-
-        cur_msg_train_head_ = nullptr;
-        cur_msg_train_tail_ = nullptr;
-
-        // Reset the message ready flag for the next message.
-        msg_ready_ = false;
-        app_buf_ = nullptr;
-        app_buf_len_ = nullptr;
-
-        return true;
-    }
-
    private:
     void PushInOrderMsgbufsToApp(swift::Pcb *pcb) {
         while (!reass_q_.empty() && reass_q_.front().seqno == pcb->rcv_nxt) {
@@ -509,11 +410,70 @@ class RXTracking {
         }
     }
 
+   public:
+    /**
+     * Either the app supplies the app buffer or the engine receives a full msg.
+     * It returns true if successfully copying the msgbuf to the app buffer;
+     * otherwise false.
+     */
+    void TryCopyMsgbufToAppBuf(void *app_buf, size_t *app_buf_len) {
+        // Either both app_buf and app_buf_len are nullptr or both are not.
+        if (app_buf_ == nullptr && app_buf_len_ == nullptr) {
+            app_buf_ = app_buf;
+            app_buf_len_ = app_buf_len;
+        } else {
+            DCHECK(app_buf_ && app_buf_len_);
+        }
+
+        if (!(msg_ready_ && app_buf_ && app_buf_len_)) return;
+
+        // We have a complete message. Let's deliver it to the app.
+        auto *msgbuf_to_deliver = cur_msg_train_head_;
+        size_t pos = 0;
+        const auto net_hdr_len =
+            sizeof(ethhdr) + sizeof(iphdr) + sizeof(udphdr);
+        while (msgbuf_to_deliver != nullptr) {
+            auto *pkt_addr = msgbuf_to_deliver->get_pkt_addr();
+            auto *payload_addr = pkt_addr + net_hdr_len + sizeof(UcclPktHdr);
+            auto payload_len = msgbuf_to_deliver->get_frame_len() -
+                               net_hdr_len - sizeof(UcclPktHdr);
+
+            memcpy((uint8_t *)app_buf_ + pos, payload_addr, payload_len);
+            pos += payload_len;
+
+            // Free received frames that have been copied to app buf.
+            socket_->frame_pool_->push(msgbuf_to_deliver->get_frame_offset());
+
+            msgbuf_to_deliver = msgbuf_to_deliver->next();
+        }
+        *app_buf_len_ = pos;
+
+        // Wakeup app thread waiting on endpoint.
+        Channel::Msg rx_work;
+        while (jring_sp_enqueue_bulk(channel_->rx_comp_ring_, &rx_work, 1,
+                                     nullptr) != 1) {
+            // do nothing
+        }
+
+        LOG(WARNING) << "Received a complete message " << pos << " bytes";
+
+        cur_msg_train_head_ = nullptr;
+        cur_msg_train_tail_ = nullptr;
+
+        // Reset the message ready flag for the next message.
+        msg_ready_ = false;
+        app_buf_ = nullptr;
+        app_buf_len_ = nullptr;
+    }
+
+   private:
     const uint32_t local_ip_;
     const uint16_t local_port_;
     const uint32_t remote_ip_;
     const uint16_t remote_port_;
     AFXDPSocket *socket_;
+    Channel *channel_;
+
     std::deque<reasm_queue_ent_t> reass_q_;
     FrameBuf *cur_msg_train_head_;
     FrameBuf *cur_msg_train_tail_;
@@ -554,17 +514,18 @@ class UcclFlow {
     UcclFlow(const uint32_t local_addr, const uint16_t local_port,
              const uint32_t remote_addr, const uint16_t remote_port,
              const uint8_t *local_l2_addr, const uint8_t *remote_l2_addr,
-             AFXDPSocket *socket, ConnectionID connection_id)
+             AFXDPSocket *socket, Channel *channel, ConnectionID connection_id)
         : local_addr_(local_addr),
           local_port_(local_port),
           remote_addr_(remote_addr),
           remote_port_(remote_port),
           socket_(CHECK_NOTNULL(socket)),
+          channel_(channel),
           connection_id_(connection_id),
           pcb_(),
-          tx_tracking_(socket),
-          rx_tracking_(local_addr, local_port, remote_addr, remote_port,
-                       socket) {
+          tx_tracking_(socket, channel),
+          rx_tracking_(local_addr, local_port, remote_addr, remote_port, socket,
+                       channel) {
         memcpy(local_l2_addr_, local_l2_addr, ETH_ALEN);
         memcpy(remote_l2_addr_, remote_l2_addr, ETH_ALEN);
     }
@@ -579,10 +540,7 @@ class UcclFlow {
             pcb_.ToString().c_str(), tx_tracking_.NumUnsentMsgbufs());
     }
 
-    void ShutDown() {
-        pcb_.rto_disable();
-        SendRst();
-    }
+    void Shutdown() { pcb_.rto_disable(); }
 
     /**
      * @brief Push the received packet onto the ingress queue of the flow.
@@ -626,13 +584,15 @@ class UcclFlow {
                 // Data packet, process the payload.
                 const int consume_returncode =
                     rx_tracking_.Consume(&pcb_, msgbuf);
+                VLOG(3) << "Consumed packet with return code: "
+                        << consume_returncode;
                 if (consume_returncode == 0) SendAck();
                 break;
         }
     }
 
-    bool supply_app_buf(void *app_buf, size_t *app_buf_len) {
-        return rx_tracking_.TryCopyMsgbufToAppBuf(app_buf, app_buf_len);
+    void supply_app_buf(void *app_buf, size_t *app_buf_len) {
+        rx_tracking_.TryCopyMsgbufToAppBuf(app_buf, app_buf_len);
     }
 
     /**
@@ -751,11 +711,12 @@ class UcclFlow {
         PrepareL4Header(pkt_addr, kControlPayloadBytes);
         PrepareUcclHdr(pkt_addr, seqno, flags);
 
+        // Let AFXDPSocket::pull_complete_queue() free control frames.
+        FrameBuf::mark_pulltime_free(frame_offset, socket_->umem_buffer_);
         // Send the packet.
-        socket_->send_packet(
-            {frame_offset, sizeof(ethhdr) + sizeof(iphdr) + sizeof(ethhdr) +
-                               kControlPayloadBytes},
-            /*free_frame=*/false);
+        socket_->send_packet({frame_offset, sizeof(ethhdr) + sizeof(iphdr) +
+                                                sizeof(ethhdr) +
+                                                kControlPayloadBytes});
     }
 
     void SendSyn(uint32_t seqno) const {
@@ -814,9 +775,9 @@ class UcclFlow {
         // Retransmit the oldest unacknowledged message buffer.
         auto *msg_buf = tx_tracking_.GetOldestUnackedMsgBuf();
         PrepareDataPacket(msg_buf, pcb_.snd_una);
+        msg_buf->mark_not_pulltime_free();
         socket_->send_packet(
-            {msg_buf->get_frame_offset(), msg_buf->get_frame_len()},
-            /*free_frame=*/false);
+            {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
         pcb_.rto_reset();
         pcb_.fast_rexmits++;
         LOG(INFO) << "Fast retransmitting packet " << pcb_.snd_una;
@@ -826,9 +787,9 @@ class UcclFlow {
         LOG(INFO) << "RTO retransmitting data packet " << pcb_.snd_una;
         auto *msg_buf = tx_tracking_.GetOldestUnackedMsgBuf();
         PrepareDataPacket(msg_buf, pcb_.snd_una);
+        msg_buf->mark_not_pulltime_free();
         socket_->send_packet(
-            {msg_buf->get_frame_offset(), msg_buf->get_frame_len()},
-            /*free_frame=*/false);
+            {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
         pcb_.rto_reset();
         pcb_.rto_rexmits++;
     }
@@ -852,15 +813,16 @@ class UcclFlow {
             if (!msg_buf_opt.has_value()) break;
             auto *msg_buf = msg_buf_opt.value();
             auto seqno = pcb_.get_snd_nxt();
-            VLOG(3) << "Fast retransmitting packet " << seqno;
             PrepareDataPacket(msg_buf, seqno);
-            VLOG(3) << "TransmitPackets: transmit " << i;
+            VLOG(3) << "TransmitPackets: transmit idx " << i << " seq "
+                    << seqno;
+            msg_buf->mark_not_pulltime_free();
             frames.emplace_back(AFXDPSocket::frame_desc{
                 msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
         }
 
         // TX.
-        socket_->send_packets(frames, /*free_frames=*/false);
+        socket_->send_packets(frames);
 
         if (pcb_.rto_disabled()) pcb_.rto_enable();
     }
@@ -921,9 +883,9 @@ class UcclFlow {
                         if (holes_to_skip-- == 0) {
                             auto seqno = pcb_.snd_una + index;
                             PrepareDataPacket(msgbuf, seqno);
+                            msgbuf->mark_not_pulltime_free();
                             socket_->send_packet({msgbuf->get_frame_offset(),
-                                                  msgbuf->get_frame_len()},
-                                                 /*free_frame=*/false);
+                                                  msgbuf->get_frame_len()});
                             pcb_.rto_reset();
                             return;
                         }
@@ -963,6 +925,8 @@ class UcclFlow {
 
     // The underlying AFXDPSocket.
     AFXDPSocket *socket_;
+    // The channel this flow belongs to.
+    Channel *channel_;
     // ConnectionID of this flow.
     ConnectionID connection_id_;
 
@@ -1003,9 +967,9 @@ class UcclEngine {
           last_periodic_timestamp_(std::chrono::high_resolution_clock::now()),
           periodic_ticks_(0) {
         // TODO(yang): using TCP-negotiated ConnectionID.
-        flow_ = std::make_unique<UcclFlow>(local_addr, local_port, remote_addr,
-                                           remote_port, local_l2_addr,
-                                           remote_l2_addr, socket_, 0xdeadbeaf);
+        flow_ = new UcclFlow(local_addr, local_port, remote_addr, remote_port,
+                             local_l2_addr, remote_l2_addr, socket_, channel,
+                             0xdeadbeaf);
     }
 
     /**
@@ -1018,13 +982,13 @@ class UcclEngine {
     void Run() {
         // TODO(yang): maintain a queue of rx_work and tx_work
         bool has_rx_work = false;
-        ChannelMsg rx_work;
+        Channel::Msg rx_work;
         bool has_tx_work = false;
-        ChannelMsg tx_work;
+        Channel::Msg tx_work;
         FrameBuf *tx_msgbuf_start = nullptr;
         FrameBuf *tx_msgbuf_cur = nullptr;
 
-        while (true) {
+        while (!shutdown_) {
             // Calculate the time elapsed since the last periodic processing.
             auto now = std::chrono::high_resolution_clock::now();
             const auto elapsed =
@@ -1041,16 +1005,7 @@ class UcclEngine {
             if (jring_sc_dequeue_bulk(channel_->rx_ring_, &rx_work, 1,
                                       nullptr) == 1) {
                 VLOG(3) << "Rx jring dequeue";
-                bool success = supply_app_buf(rx_work.data, rx_work.len_ptr);
-                // TODO(yang): when to wake up the app thread?
-                // if (success) {
-                //     // Wakeup app thread waiting on endpoint.
-                //     while (jring_sp_enqueue_bulk(channel_->rx_comp_ring_,
-                //                                  &rx_work, 1, nullptr) != 1)
-                //                                  {
-                //         // do nothing
-                //     }
-                // }
+                supply_app_buf(rx_work.data, rx_work.len_ptr);
             }
 
             auto frames = socket_->recv_packets(RECV_BATCH_SIZE);
@@ -1080,6 +1035,9 @@ class UcclEngine {
                     auto *msgbuf =
                         FrameBuf::Create(frame_offset, socket_->umem_buffer_,
                                          payload_len + net_hdr_len);
+                    //  The transport engine will free these Tx frames when
+                    //  receiving ACKs from receivers.
+                    msgbuf->mark_not_pulltime_free();
                     auto pkt_payload_addr =
                         msgbuf->get_pkt_addr() + net_hdr_len;
                     memcpy(pkt_payload_addr, app_buf, payload_len);
@@ -1105,20 +1063,22 @@ class UcclEngine {
                     tx_msgbuf_start = tx_msgbuf_start->next();
                 } else {
                     VLOG(3) << "Tx finishes a message";
-                    // TODO(yang): when to wake up the app thread? Tx must
-                    // receive an ACK from Rx
-
-                    // Wakeup app thread waiting on endpoint.
-                    // while (jring_sp_enqueue_bulk(channel_->tx_comp_ring_,
-                    //                              &tx_work, 1, nullptr) != 1)
-                    //                              {
-                    //     // do nothing
-                    // }
                     has_tx_work = false;
                 }
             }
         }
+
+        // This will reset flow pcb state.
+        flow_->Shutdown();
+        // This will flush all unpolled tx frames.
+        socket_->Shutdown();
+        delete flow_;
+        delete socket_;
     }
+
+    // Called by application to shutdown the engine. App will need to join the
+    // engine thread.
+    void Shutdown() { shutdown_ = true; }
 
     /**
      * @brief Method to perform periodic processing. This is called by the main
@@ -1158,8 +1118,8 @@ class UcclEngine {
         DCHECK(is_active_flow);
     }
 
-    bool supply_app_buf(void *app_buf, size_t *app_buf_len) {
-        return flow_->supply_app_buf(app_buf, app_buf_len);
+    void supply_app_buf(void *app_buf, size_t *app_buf_len) {
+        flow_->supply_app_buf(app_buf, app_buf_len);
     }
 
     /**
@@ -1239,7 +1199,7 @@ class UcclEngine {
     // AFXDP socket used for send/recv packets.
     AFXDPSocket *socket_;
     // For now, we just assume a single flow.
-    std::unique_ptr<UcclFlow> flow_;
+    UcclFlow *flow_;
     // Control plan channel with Endpoint.
     Channel *channel_;
     // Timestamp of last periodic process execution.
@@ -1247,6 +1207,8 @@ class UcclEngine {
         last_periodic_timestamp_;
     // Clock ticks for the slow timer.
     uint64_t periodic_ticks_{0};
+    // Whether shutdown is requested.
+    std::atomic<bool> shutdown_{false};
 };
 
 }  // namespace uccl

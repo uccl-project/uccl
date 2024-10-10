@@ -39,30 +39,15 @@ int main(int argc, char* argv[]) {
     // signal(SIGALRM, interrupt_handler);
     // alarm(10);
 
-    if (FLAGS_client)
-        AFXDPFactory::init("ens6", "ebpf_client.o", "ebpf_client");
-    else
-        AFXDPFactory::init("ens6", "ebpf_server.o", "ebpf_server");
-
     Channel channel;
 
-    auto engine_th = std::thread([&channel]() {
-        if (FLAGS_client) {
-            UcclEngine client(QUEUE_ID, NUM_FRAMES, &channel,
-                              CLIENT_IPV4_ADDRESS, CLIENT_PORT,
-                              SERVER_IPV4_ADDRESS, SERVER_PORT,
-                              CLIENT_ETHERNET_ADDRESS, SERVER_ETHERNET_ADDRESS);
-            client.Run();
-        } else {
-            UcclEngine server(QUEUE_ID, NUM_FRAMES, &channel,
-                              SERVER_IPV4_ADDRESS, SERVER_PORT,
-                              CLIENT_IPV4_ADDRESS, CLIENT_PORT,
-                              SERVER_ETHERNET_ADDRESS, CLIENT_ETHERNET_ADDRESS);
-            server.Run();
-        }
-    });
-
     if (FLAGS_client) {
+        AFXDPFactory::init("ens6", "ebpf_client.o", "ebpf_client");
+        UcclEngine engine(QUEUE_ID, NUM_FRAMES, &channel, CLIENT_IPV4_ADDRESS,
+                          CLIENT_PORT, SERVER_IPV4_ADDRESS, SERVER_PORT,
+                          CLIENT_ETHERNET_ADDRESS, SERVER_ETHERNET_ADDRESS);
+        auto engine_th = std::thread([&engine]() { engine.Run(); });
+
         auto ep = Endpoint(&channel);
         auto conn_id = ep.Connect(SERVER_IPV4_ADDRESS);
         auto* data = new uint8_t[kTestMsgSize];
@@ -71,7 +56,16 @@ int main(int argc, char* argv[]) {
             data_u32[i] = i;
         }
         ep.Send(conn_id, data, kTestMsgSize);
+
+        engine.Shutdown();
+        engine_th.join();
     } else {
+        AFXDPFactory::init("ens6", "ebpf_server.o", "ebpf_server");
+        UcclEngine engine(QUEUE_ID, NUM_FRAMES, &channel, SERVER_IPV4_ADDRESS,
+                          SERVER_PORT, CLIENT_IPV4_ADDRESS, CLIENT_PORT,
+                          SERVER_ETHERNET_ADDRESS, CLIENT_ETHERNET_ADDRESS);
+        auto engine_th = std::thread([&engine]() { engine.Run(); });
+
         auto ep = Endpoint(&channel);
         auto conn_id = ep.Accept();
         auto* data = new uint8_t[kTestMsgSize];
@@ -82,6 +76,9 @@ int main(int argc, char* argv[]) {
             CHECK_EQ(reinterpret_cast<uint32_t*>(data)[i], i)
                 << "Data mismatch at index " << i;
         }
+
+        engine.Shutdown();
+        engine_th.join();
     }
 
     return 0;
