@@ -205,7 +205,7 @@ void socket_send(struct socket_t* socket, int queue_id) {
             (uint8_t*)socket->afxdp_socket->umem_buffer_ + frame_offset;
         uint32_t frame_len = client_generate_packet(
             packet, PAYLOAD_BYTES, socket->counter + i, queue_id);
-        FrameBuf::mark_pulltime_free(frame_offset,
+        FrameBuf::mark_txpulltime_free(frame_offset,
                                      socket->afxdp_socket->umem_buffer_);
         frames.emplace_back(AFXDPSocket::frame_desc({frame_offset, frame_len}));
     }

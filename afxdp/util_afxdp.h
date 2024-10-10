@@ -43,7 +43,7 @@ class FrameBuf {
     // Flags to denote the message buffer state.
 #define UCCL_MSGBUF_FLAGS_SYN (1 << 0)
 #define UCCL_MSGBUF_FLAGS_FIN (1 << 1)
-#define UCCL_MSGBUF_FLAGS_PULLTIME_FREE (1 << 2)
+#define UCCL_MSGBUF_FLAGS_TXPULLTIME_FREE (1 << 2)
     uint8_t msg_flags_;
 
     FrameBuf(uint64_t frame_offset, void *umem_buffer, uint32_t frame_len)
@@ -95,32 +95,32 @@ class FrameBuf {
     void mark_first() { add_msg_flags(UCCL_MSGBUF_FLAGS_SYN); }
     void mark_last() { add_msg_flags(UCCL_MSGBUF_FLAGS_FIN); }
 
-    void mark_pulltime_free() {
-        add_msg_flags(UCCL_MSGBUF_FLAGS_PULLTIME_FREE);
+    void mark_txpulltime_free() {
+        add_msg_flags(UCCL_MSGBUF_FLAGS_TXPULLTIME_FREE);
     }
-    void mark_not_pulltime_free() {
-        msg_flags_ &= ~UCCL_MSGBUF_FLAGS_PULLTIME_FREE;
+    void mark_not_txpulltime_free() {
+        msg_flags_ &= ~UCCL_MSGBUF_FLAGS_TXPULLTIME_FREE;
     }
-    bool should_pulltime_free() {
-        return (msg_flags_ & UCCL_MSGBUF_FLAGS_PULLTIME_FREE) != 0;
+    bool is_txpulltime_free() {
+        return (msg_flags_ & UCCL_MSGBUF_FLAGS_TXPULLTIME_FREE) != 0;
     }
 
 #define GET_FRAMEBUF_PTR(frame_offset, umem_buffer)                     \
     reinterpret_cast<FrameBuf *>(frame_offset + (uint64_t)umem_buffer - \
                                  XDP_PACKET_HEADROOM)
 
-    static void mark_pulltime_free(uint64_t frame_offset, void *umem_buffer) {
+    static void mark_txpulltime_free(uint64_t frame_offset, void *umem_buffer) {
         auto msgbuf = GET_FRAMEBUF_PTR(frame_offset, umem_buffer);
-        msgbuf->add_msg_flags(UCCL_MSGBUF_FLAGS_PULLTIME_FREE);
+        msgbuf->add_msg_flags(UCCL_MSGBUF_FLAGS_TXPULLTIME_FREE);
     }
-    static void mark_not_pulltime_free(uint64_t frame_offset,
-                                       void *umem_buffer) {
+    static void mark_not_txpulltime_free(uint64_t frame_offset,
+                                         void *umem_buffer) {
         auto msgbuf = GET_FRAMEBUF_PTR(frame_offset, umem_buffer);
-        msgbuf->msg_flags_ &= ~UCCL_MSGBUF_FLAGS_PULLTIME_FREE;
+        msgbuf->msg_flags_ &= ~UCCL_MSGBUF_FLAGS_TXPULLTIME_FREE;
     }
-    static bool should_pulltime_free(uint64_t frame_offset, void *umem_buffer) {
+    static bool is_txpulltime_free(uint64_t frame_offset, void *umem_buffer) {
         auto msgbuf = GET_FRAMEBUF_PTR(frame_offset, umem_buffer);
-        return (msgbuf->msg_flags_ & UCCL_MSGBUF_FLAGS_PULLTIME_FREE) != 0;
+        return (msgbuf->msg_flags_ & UCCL_MSGBUF_FLAGS_TXPULLTIME_FREE) != 0;
     }
 
     void set_msg_flags(uint16_t flags) { msg_flags_ = flags; }

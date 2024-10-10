@@ -39,10 +39,10 @@ int main(int argc, char* argv[]) {
     // signal(SIGALRM, interrupt_handler);
     // alarm(10);
 
+    AFXDPFactory::init("ens6", "ebpf_transport.o", "ebpf_transport");
     Channel channel;
 
     if (FLAGS_client) {
-        AFXDPFactory::init("ens6", "ebpf_client.o", "ebpf_client");
         UcclEngine engine(QUEUE_ID, NUM_FRAMES, &channel, CLIENT_IPV4_ADDRESS,
                           CLIENT_PORT, SERVER_IPV4_ADDRESS, SERVER_PORT,
                           CLIENT_ETHERNET_ADDRESS, SERVER_ETHERNET_ADDRESS);
@@ -60,7 +60,6 @@ int main(int argc, char* argv[]) {
         engine.Shutdown();
         engine_th.join();
     } else {
-        AFXDPFactory::init("ens6", "ebpf_server.o", "ebpf_server");
         UcclEngine engine(QUEUE_ID, NUM_FRAMES, &channel, SERVER_IPV4_ADDRESS,
                           SERVER_PORT, CLIENT_IPV4_ADDRESS, CLIENT_PORT,
                           SERVER_ETHERNET_ADDRESS, CLIENT_ETHERNET_ADDRESS);

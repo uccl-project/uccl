@@ -179,7 +179,7 @@ uint32_t AFXDPSocket::pull_complete_queue() {
         for (int i = 0; i < completed; i++) {
             uint64_t frame_offset =
                 *xsk_ring_cons__comp_addr(&complete_queue_, complete_index++);
-            if (FrameBuf::should_pulltime_free(frame_offset, umem_buffer_)) {
+            if (FrameBuf::is_txpulltime_free(frame_offset, umem_buffer_)) {
                 frame_pool_->push(frame_offset);
             }
             // Otherwise, the transport layer should handle frame freeing.
