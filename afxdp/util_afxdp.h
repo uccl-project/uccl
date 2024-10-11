@@ -176,6 +176,7 @@ class AFXDPSocket {
     void populate_fill_queue(uint32_t nb_frames);
     std::vector<frame_desc> recv_packets(uint32_t nb_frames);
 
+    std::string ToString() const;
     void Shutdown();
     ~AFXDPSocket();
 

@@ -38,4 +38,7 @@ sudo ./server_main
 sudo ./client_main
 ```
 
-To output VLOG(3) for debugging, `sudo GLOG_v=3 GLOG_logtostderr=1 ./server_main`
+### Debugging the transport stack
+
+sudo GLOG_logtostderr=1 GLOG_vmodule=transport=3,util_afxdp=3 ./transport_test
+sudo GLOG_logtostderr=1 GLOG_vmodule=transport=3,util_afxdp=3 ./transport_test --client

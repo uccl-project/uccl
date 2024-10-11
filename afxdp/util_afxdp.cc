@@ -274,6 +274,12 @@ std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
     return frames;
 }
 
+std::string AFXDPSocket::ToString() const {
+    std::string s;
+    s += Format("\t\t\t[Frame pool] free frames: %u\n", frame_pool_->size());
+    return s;
+}
+
 void AFXDPSocket::Shutdown() {
     // pull_complete_queue to make sure all frames are tx successfully.
     while (unpulled_tx_pkts_) pull_complete_queue();

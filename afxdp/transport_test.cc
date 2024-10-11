@@ -17,6 +17,8 @@ const uint16_t CLIENT_PORT = 40000;
 const size_t NUM_FRAMES = 4096 * 16;
 const size_t QUEUE_ID = 0;
 const size_t kTestMsgSize = 102400;
+const size_t kTestIters = 102400;
+const size_t kReportIters = 1000;
 
 DEFINE_bool(client, false, "Whether this is a client sending traffic.");
 
@@ -55,7 +57,12 @@ int main(int argc, char* argv[]) {
         for (int i = 0; i < kTestMsgSize / sizeof(uint32_t); i++) {
             data_u32[i] = i;
         }
-        ep.Send(conn_id, data, kTestMsgSize);
+        for (int i = 0; i < kTestIters; i++) {
+            ep.Send(conn_id, data, kTestMsgSize);
+            if (i % kReportIters == 0) {
+                LOG(INFO) << "Sent " << i << " messages";
+            }
+        }
 
         engine.Shutdown();
         engine_th.join();
@@ -69,13 +76,18 @@ int main(int argc, char* argv[]) {
         auto conn_id = ep.Accept();
         auto* data = new uint8_t[kTestMsgSize];
         size_t len;
-        ep.Recv(conn_id, data, &len);
-        CHECK_EQ(len, kTestMsgSize) << "Received message size mismatches";
-        for (int i = 0; i < kTestMsgSize / sizeof(uint32_t); i++) {
-            CHECK_EQ(reinterpret_cast<uint32_t*>(data)[i], i)
-                << "Data mismatch at index " << i;
-        }
 
+        for (int i = 0; i < kTestIters; i++) {
+            ep.Recv(conn_id, data, &len);
+            CHECK_EQ(len, kTestMsgSize) << "Received message size mismatches";
+            for (int j = 0; j < kTestMsgSize / sizeof(uint32_t); j++) {
+                CHECK_EQ(reinterpret_cast<uint32_t*>(data)[j], j)
+                    << "Data mismatch at index " << j;
+            }
+            if (i % kReportIters == 0) {
+                LOG(INFO) << "Received " << i << " messages";
+            }
+        }
         engine.Shutdown();
         engine_th.join();
     }
