@@ -17,7 +17,7 @@ const uint16_t CLIENT_PORT = 40000;
 const size_t NUM_FRAMES = 4096 * 16;
 const size_t QUEUE_ID = 0;
 const size_t kTestMsgSize = 102400;
-const size_t kTestIters = 102400;
+const size_t kTestIters = 1024000000;
 const size_t kReportIters = 1000;
 
 DEFINE_bool(client, false, "Whether this is a client sending traffic.");
@@ -41,10 +41,10 @@ int main(int argc, char* argv[]) {
     // signal(SIGALRM, interrupt_handler);
     // alarm(10);
 
-    AFXDPFactory::init("ens6", "ebpf_transport.o", "ebpf_transport");
     Channel channel;
 
     if (FLAGS_client) {
+        AFXDPFactory::init("ens6", "ebpf_transport.o", "ebpf_transport");
         UcclEngine engine(QUEUE_ID, NUM_FRAMES, &channel, CLIENT_IPV4_ADDRESS,
                           CLIENT_PORT, SERVER_IPV4_ADDRESS, SERVER_PORT,
                           CLIENT_ETHERNET_ADDRESS, SERVER_ETHERNET_ADDRESS);
@@ -67,6 +67,7 @@ int main(int argc, char* argv[]) {
         engine.Shutdown();
         engine_th.join();
     } else {
+        AFXDPFactory::init("ens6", "ebpf_transport_pktloss.o", "ebpf_transport");
         UcclEngine engine(QUEUE_ID, NUM_FRAMES, &channel, SERVER_IPV4_ADDRESS,
                           SERVER_PORT, CLIENT_IPV4_ADDRESS, CLIENT_PORT,
                           SERVER_ETHERNET_ADDRESS, CLIENT_ETHERNET_ADDRESS);

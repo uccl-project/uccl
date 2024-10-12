@@ -14,7 +14,7 @@ main_src = $(wildcard *_main.cc)
 main_src += $(wildcard *_test.cc)
 main_bin = $(main_src:.cc=)
 
-ebpf_obj = ebpf_client.o ebpf_server.o ebpf_server_direct.o ebpf_transport.o
+ebpf_obj = ebpf_client.o ebpf_server.o ebpf_server_direct.o ebpf_transport.o ebpf_transport_pktloss.o
 
 .PHONY: build
 build: $(main_bin) $(ebpf_obj)
@@ -30,6 +30,9 @@ ebpf_server_direct.o: ebpf_server_direct.c $(DEPS)
 
 ebpf_transport.o: ebpf_transport.c $(DEPS)
 	clang $(INC) -target bpf -c ebpf_transport.c -o ebpf_transport.o $(CLANGFLAGS)
+
+ebpf_transport_pktloss.o: ebpf_transport_pktloss.c $(DEPS)
+	clang $(INC) -target bpf -c ebpf_transport_pktloss.c -o ebpf_transport_pktloss.o $(CLANGFLAGS)
 
 client_tcp_main: client_tcp_main.cc $(DEPS)
 	g++ client_tcp_main.cc -o client_tcp_main $(INC) $(LIBS) $(CXXFLAGS) -Wno-write-strings

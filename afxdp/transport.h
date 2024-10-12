@@ -334,12 +334,11 @@ class RXTracking {
         kOldPkt = 0,
         kOOOUntrackable = 1,
         kOOOTrackableDup = 2,
-        kOOOTrackableNewOrInOrder = 3,
+        kOOOTrackableExpectedOrInOrder = 3,
     };
 
     // If we fail to allocate in the SHM channel, return -1.
-    std::tuple<ConsumeRet, uint32_t> Consume(swift::Pcb *pcb,
-                                             FrameBuf *msgbuf) {
+    ConsumeRet Consume(swift::Pcb *pcb, FrameBuf *msgbuf) {
         uint8_t *pkt_addr = msgbuf->get_pkt_addr();
         auto frame_len = msgbuf->get_frame_len();
         const auto *ucclh =
@@ -350,9 +349,9 @@ class RXTracking {
         const auto expected_seqno = pcb->rcv_nxt;
 
         if (swift::seqno_lt(seqno, expected_seqno)) {
-            VLOG(2) << "Received old packet: " << seqno << " < "
+            VLOG(3) << "Received old packet: " << seqno << " < "
                     << expected_seqno;
-            return std::make_tuple(kOldPkt, seqno);
+            return kOldPkt;
         }
 
         const size_t distance = seqno - expected_seqno;
@@ -360,7 +359,7 @@ class RXTracking {
             LOG(ERROR)
                 << "Packet too far ahead. Dropping as we can't handle SACK. "
                 << "seqno: " << seqno << ", expected: " << expected_seqno;
-            return std::make_tuple(kOOOUntrackable, seqno);
+            return kOOOUntrackable;
         }
 
         // Only iterate through the deque if we must, i.e., for ooo packts only
@@ -371,8 +370,9 @@ class RXTracking {
                                   return entry.seqno >= seqno;
                               });
             if (it != reass_q_.end() && it->seqno == seqno) {
+                VLOG(3) << "Received duplicate packet: " << seqno;
                 // Duplicate packet
-                return std::make_tuple(kOOOTrackableDup, seqno);
+                return kOOOTrackableDup;
             }
         }
 
@@ -383,8 +383,10 @@ class RXTracking {
         msgbuf->set_msg_flags(ucclh->msg_flags);
 
         if (seqno == expected_seqno) {
+            VLOG(3) << "Received expected packet: " << seqno;
             reass_q_.emplace_front(msgbuf, seqno);
         } else {
+            VLOG(3) << "Received ooo trackable packet: " << seqno;
             reass_q_.insert(it, reasm_queue_ent_t(msgbuf, seqno));
         }
 
@@ -392,7 +394,7 @@ class RXTracking {
         pcb->sack_bitmap_bit_set(distance);
 
         PushInOrderMsgbufsToApp(pcb);
-        return std::make_tuple(kOOOTrackableNewOrInOrder, seqno);
+        return kOOOTrackableExpectedOrInOrder;
     }
 
    private:
@@ -412,10 +414,9 @@ class RXTracking {
             }
 
             if (cur_msg_train_tail_->is_last()) {
-                // TODO(yang): how to stash cur_msg_train_head/tail_ in case
-                // application threads have not supplied the app buffer while
-                // the engine is keeping receiving messages? Stash this ready
-                // message
+                // Stash cur_msg_train_head/tail_ in case application threads
+                // have not supplied the app buffer while the engine is keeping
+                // receiving messages? Stash this ready message
                 ready_msg_stash_.push_back(
                     {cur_msg_train_head_, cur_msg_train_tail_});
                 TryCopyMsgbufToAppBuf(nullptr, nullptr);
@@ -606,14 +607,8 @@ class UcclFlow {
             case UcclPktHdr::UcclFlags::kData:
                 // Data packet, process the payload. The frame will be freed
                 // once the app copies the payload into app buffer
-                auto [consume_ret, recvd_seqno] =
-                    rx_tracking_.Consume(&pcb_, msgbuf);
-                if (consume_ret == RXTracking::kOOOTrackableNewOrInOrder ||
-                    consume_ret == RXTracking::kOOOUntrackable) {
-                    SendAck(pcb_.seqno(), pcb_.ackno());
-                } else {
-                    SendAck(pcb_.seqno(), recvd_seqno);
-                }
+                auto _ = rx_tracking_.Consume(&pcb_, msgbuf);
+                SendAck(pcb_.seqno(), pcb_.ackno());
                 break;
         }
     }
@@ -659,9 +654,7 @@ class UcclFlow {
 
         pcb_.rto_advance();
         if (pcb_.max_rexmits_reached()) {
-            // TODO(ilias): Send RST packet.
-
-            // Indicate removal of the flow.
+            // TODO(ilias): send RST packet, indicating removal of the flow.
             return false;
         }
 
@@ -787,6 +780,7 @@ class UcclFlow {
     }
 
     void FastRetransmit() {
+        VLOG(3) << "Fast retransmitting oldest unacked packet " << pcb_.snd_una;
         // Retransmit the oldest unacknowledged message buffer.
         auto *msg_buf = tx_tracking_.GetOldestUnackedMsgBuf();
         PrepareDataPacket(msg_buf, pcb_.snd_una);
@@ -795,11 +789,10 @@ class UcclFlow {
             {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
         pcb_.rto_reset();
         pcb_.fast_rexmits++;
-        LOG(INFO) << "Fast retransmitting packet " << pcb_.snd_una;
     }
 
     void RTORetransmit() {
-        LOG(INFO) << "RTO retransmitting data packet " << pcb_.snd_una;
+        VLOG(3) << "RTO retransmitting oldest unacked packet " << pcb_.snd_una;
         auto *msg_buf = tx_tracking_.GetOldestUnackedMsgBuf();
         PrepareDataPacket(msg_buf, pcb_.snd_una);
         msg_buf->mark_not_txpulltime_free();
@@ -879,7 +872,7 @@ class UcclFlow {
                 size_t holes_to_skip =
                     pcb_.duplicate_acks - swift::Pcb::kRexmitThreshold;
                 size_t index = 0;
-                while (sack_bitmap_count) {
+                while (sack_bitmap_count && !msgbuf) {
                     constexpr size_t sack_bitmap_bucket_size =
                         sizeof(ucclh->sack_bitmap[0]);
                     constexpr size_t sack_bitmap_max_bucket_idx =
@@ -963,7 +956,7 @@ class UcclEngine {
    public:
     // Slow timer (periodic processing) interval in microseconds.
     const size_t kSlowTimerIntervalUs = 2000;  // 2ms
-    const size_t kDumpStatusTicks = 1000;      // 1s
+    const size_t kDumpStatusTicks = 1000;      // 2s
     const uint32_t RECV_BATCH_SIZE = 32;
     const uint32_t SEND_BATCH_SIZE = 32;
     UcclEngine() = delete;

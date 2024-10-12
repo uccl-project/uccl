@@ -33,7 +33,7 @@ constexpr bool seqno_gt(uint32_t a, uint32_t b) {
 struct Pcb {
     static constexpr std::size_t kInitialCwnd = 32;
     static constexpr std::size_t kSackBitmapSize = 256;
-    static constexpr std::size_t kRexmitThreshold = 3;
+    static constexpr std::size_t kRexmitThreshold = 1500;
     static constexpr int kRtoThresholdInTicks = 3;  // in slow timer ticks.
     static constexpr int kRtoDisabled = -1;
     Pcb() {}
