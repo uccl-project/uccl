@@ -31,7 +31,7 @@ constexpr bool seqno_gt(uint32_t a, uint32_t b) {
  */
 // TODO(ilias): First-cut implementation. Needs a lot of work.
 struct Pcb {
-    static constexpr std::size_t kInitialCwnd = 32;
+    static constexpr std::size_t kInitialCwnd = 512;
     static constexpr std::size_t kSackBitmapSize = 256;
     static constexpr std::size_t kRexmitThreshold = 1500;
     static constexpr int kRtoThresholdInTicks = 3;  // in slow timer ticks.
@@ -51,7 +51,7 @@ struct Pcb {
         return seqno;
     }
 
-    std::string ToString() const {
+    std::string to_string() const {
         std::string s;
         s += "[CC] snd_nxt: " + std::to_string(snd_nxt) +
              ", snd_una: " + std::to_string(snd_una) +

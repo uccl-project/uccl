@@ -86,18 +86,18 @@ class Endpoint {
     ~Endpoint() {}
 
     // Connecting to a remote address.
-    ConnectionID Connect(uint32_t remote_ip) {
+    ConnectionID connect(uint32_t remote_ip) {
         // TODO(yang): Using TCP to negotiate a ConnectionID.
         return 0xdeadbeaf;
     }
 
-    ConnectionID Accept() {
+    ConnectionID accept() {
         // TODO(yang): Using TCP to negotiate a ConnectionID.
         return 0xdeadbeaf;
     }
 
     // Sending the data by leveraging multiple port combinations.
-    bool Send(ConnectionID connection_id, const void *data, size_t len) {
+    bool send(ConnectionID connection_id, const void *data, size_t len) {
         Channel::Msg msg = {
             .opcode = Channel::Msg::Op::kTx,
             .data = const_cast<void *>(data),
@@ -117,7 +117,7 @@ class Endpoint {
     }
 
     // Receiving the data by leveraging multiple port combinations.
-    bool Recv(ConnectionID connection_id, void *data, size_t *len) {
+    bool recv(ConnectionID connection_id, void *data, size_t *len) {
         Channel::Msg msg = {
             .opcode = Channel::Msg::Op::kRx,
             .data = data,
@@ -190,10 +190,12 @@ class TXTracking {
           num_unsent_msgbufs_(0),
           num_tracked_msgbufs_(0) {}
 
-    const uint32_t NumUnsentMsgbufs() const { return num_unsent_msgbufs_; }
-    FrameBuf *GetOldestUnackedMsgBuf() const { return oldest_unacked_msgbuf_; }
+    const uint32_t num_unsent_msgbufs() const { return num_unsent_msgbufs_; }
+    FrameBuf *get_oldest_unacked_msgbuf() const {
+        return oldest_unacked_msgbuf_;
+    }
 
-    void ReceiveAcks(uint32_t num_acked_pkts) {
+    void receive_acks(uint32_t num_acked_pkts) {
         while (num_acked_pkts) {
             auto msgbuf = oldest_unacked_msgbuf_;
             DCHECK(msgbuf != nullptr);
@@ -222,7 +224,7 @@ class TXTracking {
         }
     }
 
-    void Append(FrameBuf *msgbuf_head, FrameBuf *msgbuf_tail,
+    void append(FrameBuf *msgbuf_head, FrameBuf *msgbuf_tail,
                 uint32_t num_frames) {
         DCHECK(msgbuf_head->is_first());
         // Append the message at the end of the chain of buffers, if any.
@@ -247,9 +249,9 @@ class TXTracking {
         num_tracked_msgbufs_ += num_frames;
     }
 
-    std::optional<FrameBuf *> GetAndUpdateOldestUnsent() {
+    std::optional<FrameBuf *> get_and_update_oldest_unsent() {
         if (oldest_unsent_msgbuf_ == nullptr) {
-            DCHECK_EQ(NumUnsentMsgbufs(), 0);
+            DCHECK_EQ(num_unsent_msgbufs(), 0);
             return std::nullopt;
         }
 
@@ -265,9 +267,9 @@ class TXTracking {
     }
 
    private:
-    const uint32_t NumTrackedMsgbufs() const { return num_tracked_msgbufs_; }
-    const FrameBuf *GetLastMsgBuf() const { return last_msgbuf_; }
-    const FrameBuf *GetOldestUnsentMsgBuf() const {
+    const uint32_t num_tracked_msgbufs() const { return num_tracked_msgbufs_; }
+    const FrameBuf *get_last_msgbuf() const { return last_msgbuf_; }
+    const FrameBuf *get_oldest_unsent_msgbuf() const {
         return oldest_unsent_msgbuf_;
     }
 
@@ -337,8 +339,7 @@ class RXTracking {
         kOOOTrackableExpectedOrInOrder = 3,
     };
 
-    // If we fail to allocate in the SHM channel, return -1.
-    ConsumeRet Consume(swift::Pcb *pcb, FrameBuf *msgbuf) {
+    ConsumeRet consume(swift::Pcb *pcb, FrameBuf *msgbuf) {
         uint8_t *pkt_addr = msgbuf->get_pkt_addr();
         auto frame_len = msgbuf->get_frame_len();
         const auto *ucclh =
@@ -351,6 +352,7 @@ class RXTracking {
         if (swift::seqno_lt(seqno, expected_seqno)) {
             VLOG(3) << "Received old packet: " << seqno << " < "
                     << expected_seqno;
+            socket_->frame_pool_->push(msgbuf->get_frame_offset());
             return kOldPkt;
         }
 
@@ -359,6 +361,7 @@ class RXTracking {
             LOG(ERROR)
                 << "Packet too far ahead. Dropping as we can't handle SACK. "
                 << "seqno: " << seqno << ", expected: " << expected_seqno;
+            socket_->frame_pool_->push(msgbuf->get_frame_offset());
             return kOOOUntrackable;
         }
 
@@ -369,11 +372,11 @@ class RXTracking {
                               [&seqno](const reasm_queue_ent_t &entry) {
                                   return entry.seqno >= seqno;
                               });
-            LOG(INFO) << "Received OOO packet: reass_q size "
-                      << reass_q_.size();
+            VLOG(3) << "Received OOO packet: reass_q size " << reass_q_.size();
             if (it != reass_q_.end() && it->seqno == seqno) {
                 VLOG(3) << "Received duplicate packet: " << seqno;
-                // Duplicate packet
+                // Duplicate packet. Drop it.
+                socket_->frame_pool_->push(msgbuf->get_frame_offset());
                 return kOOOTrackableDup;
             }
         }
@@ -395,12 +398,13 @@ class RXTracking {
         // Update the SACK bitmap for the newly received packet.
         pcb->sack_bitmap_bit_set(distance);
 
-        PushInOrderMsgbufsToApp(pcb);
+        // These frames will be freed when the message is delivered to the app.
+        push_inorder_msgbuf_to_app(pcb);
         return kOOOTrackableExpectedOrInOrder;
     }
 
    private:
-    void PushInOrderMsgbufsToApp(swift::Pcb *pcb) {
+    void push_inorder_msgbuf_to_app(swift::Pcb *pcb) {
         while (!reass_q_.empty() && reass_q_.front().seqno == pcb->rcv_nxt) {
             auto &front = reass_q_.front();
             auto *msgbuf = front.msgbuf;
@@ -421,7 +425,7 @@ class RXTracking {
                 // receiving messages? Stash this ready message
                 ready_msg_stash_.push_back(
                     {cur_msg_train_head_, cur_msg_train_tail_});
-                TryCopyMsgbufToAppBuf(nullptr, nullptr);
+                try_copy_msgbuf_to_appbuf(nullptr, nullptr);
 
                 // Reset the message train for the next message.
                 cur_msg_train_head_ = nullptr;
@@ -440,7 +444,7 @@ class RXTracking {
      * It returns true if successfully copying the msgbuf to the app buffer;
      * otherwise false.
      */
-    void TryCopyMsgbufToAppBuf(void *app_buf, size_t *app_buf_len) {
+    void try_copy_msgbuf_to_appbuf(void *app_buf, size_t *app_buf_len) {
         // Either both app_buf and app_buf_len are nullptr or both are not.
         if (app_buf_stash_ == nullptr && app_buf_len_stash_ == nullptr) {
             app_buf_stash_ = app_buf;
@@ -552,6 +556,8 @@ class UcclFlow {
           socket_(CHECK_NOTNULL(socket)),
           channel_(channel),
           connection_id_(connection_id),
+          pending_ack_frames_(0),
+          pending_data_frames_(0),
           pcb_(),
           tx_tracking_(socket, channel),
           rx_tracking_(local_addr, local_port, remote_addr, remote_port, socket,
@@ -561,15 +567,15 @@ class UcclFlow {
     }
     ~UcclFlow() {}
 
-    std::string ToString() const {
+    std::string to_string() const {
         return Format(
             "\t\t\t%x [queue %d] <-> %x\n\t\t\t%s\n\t\t\t[TX Queue] Pending "
             "MsgBufs: %u\n",
             local_addr_, socket_->queue_id_, remote_addr_,
-            pcb_.ToString().c_str(), tx_tracking_.NumUnsentMsgbufs());
+            pcb_.to_string().c_str(), tx_tracking_.num_unsent_msgbufs());
     }
 
-    void Shutdown() { pcb_.rto_disable(); }
+    void shutdown() { pcb_.rto_disable(); }
 
     /**
      * @brief Push the received packet onto the ingress queue of the flow.
@@ -584,38 +590,42 @@ class UcclFlow {
      * @param app_buf Pointer to the application receiving buffer
      * @param app_buf_len Pointer to the application buffer length
      */
-    std::optional<AFXDPSocket::frame_desc> RxMsg(FrameBuf *msgbuf) {
-        // Parse the Uccl header of the packet.
-        uint8_t *pkt_addr = msgbuf->get_pkt_addr();
-        const auto *ucclh =
-            reinterpret_cast<const UcclPktHdr *>(pkt_addr + kNetHdrLen);
-        CHECK_EQ(ucclh->magic.value(), UcclPktHdr::kMagic)
-            << "Invalid Uccl header magic";
+    void rx_messages(std::vector<FrameBuf *> msgbufs) {
+        VLOG_EVERY_N(2, 10000) << "Received " << msgbufs.size() << " packets";
+        for (auto msgbuf : msgbufs) {
+            // ebpf_transport has filtered out invalid pkts.
+            auto *pkt_addr = msgbuf->get_pkt_addr();
+            auto *ucclh = reinterpret_cast<UcclPktHdr *>(pkt_addr + kNetHdrLen);
 
-        switch (ucclh->net_flags) {
-            case UcclPktHdr::UcclFlags::kSyn:
-            case UcclPktHdr::UcclFlags::kSynAck:
-            case UcclPktHdr::UcclFlags::kRst:
-                LOG(ERROR) << "Unsupported UcclFlags: "
-                           << std::bitset<8>((uint8_t)ucclh->net_flags);
-                return std::nullopt;
-            case UcclPktHdr::UcclFlags::kAck:
-                // ACK packet, update the flow.
-                process_ack(ucclh);
-                // Free the received frame.
-                socket_->frame_pool_->push(msgbuf->get_frame_offset());
-                return std::nullopt;
-            case UcclPktHdr::UcclFlags::kData:
-                // Data packet, process the payload. The frame will be freed
-                // once the app copies the payload into app buffer
-                auto _ = rx_tracking_.Consume(&pcb_, msgbuf);
-                return CraftAck(pcb_.seqno(), pcb_.ackno());
+            switch (ucclh->net_flags) {
+                case UcclPktHdr::UcclFlags::kSyn:
+                case UcclPktHdr::UcclFlags::kSynAck:
+                case UcclPktHdr::UcclFlags::kRst:
+                    LOG(ERROR) << "Unsupported UcclFlags: "
+                               << std::bitset<8>((uint8_t)ucclh->net_flags);
+                    break;
+                case UcclPktHdr::UcclFlags::kAck:
+                    // ACK packet, update the flow.
+                    process_ack(ucclh);
+                    // Free the received frame.
+                    socket_->frame_pool_->push(msgbuf->get_frame_offset());
+                    break;
+                case UcclPktHdr::UcclFlags::kData:
+                    // Data packet, process the payload. The frame will be freed
+                    // once the app copies the payload into app buffer
+                    auto _ = rx_tracking_.consume(&pcb_, msgbuf);
+                    pending_tx_frames_.push_back(
+                        craft_ack(pcb_.seqno(), pcb_.ackno()));
+                    pending_ack_frames_++;
+                    break;
+            }
         }
-        return std::nullopt;
+        // Sending both ack and data frames (that can be send per cwnd).
+        transmit_pending_packets();
     }
 
     void supply_rx_app_buf(void *app_buf, size_t *app_buf_len) {
-        rx_tracking_.TryCopyMsgbufToAppBuf(app_buf, app_buf_len);
+        rx_tracking_.try_copy_msgbuf_to_appbuf(app_buf, app_buf_len);
     }
 
     /**
@@ -627,16 +637,16 @@ class UcclFlow {
      * @param msg Pointer to the first message buffer on a train of buffers,
      * aggregating to a partial or a full Message.
      */
-    void TxMsg(FrameBuf *msg_head, FrameBuf *msg_tail, uint32_t num_frames) {
-        if (msg_head && msg_tail && num_frames)
-            tx_tracking_.Append(msg_head, msg_tail, num_frames);
+    void tx_messages(FrameBuf *msg_head, FrameBuf *msg_tail,
+                     uint32_t num_frames) {
+        if (num_frames) tx_tracking_.append(msg_head, msg_tail, num_frames);
 
         // TODO(ilias): We first need to check whether the cwnd is < 1, so
         // that we fallback to rate-based CC.
 
         // Calculate the effective window (in # of packets) to check whether
         // we can send more packets.
-        TransmitPackets();
+        transmit_pending_packets();
     }
 
     /**
@@ -651,7 +661,7 @@ class UcclFlow {
      * @return Returns true if the flow should continue to be checked
      * periodically, false if the flow should be removed or closed.
      */
-    bool PeriodicCheck() {
+    bool periodic_check() {
         if (pcb_.rto_disabled()) return true;
 
         pcb_.rto_advance();
@@ -662,21 +672,21 @@ class UcclFlow {
 
         if (pcb_.rto_expired()) {
             // Retransmit the oldest unacknowledged message buffer.
-            RTORetransmit();
+            rto_retransmit();
         }
 
         return true;
     }
 
    private:
-    void PrepareL2Header(uint8_t *pkt_addr) const {
+    void prepare_l2header(uint8_t *pkt_addr) const {
         auto *eh = (ethhdr *)pkt_addr;
         memcpy(eh->h_source, local_l2_addr_, ETH_ALEN);
         memcpy(eh->h_dest, remote_l2_addr_, ETH_ALEN);
         eh->h_proto = htons(ETH_P_IP);
     }
 
-    void PrepareL3Header(uint8_t *pkt_addr, uint32_t payload_bytes) const {
+    void prepare_l3header(uint8_t *pkt_addr, uint32_t payload_bytes) const {
         auto *ipv4h = (iphdr *)(pkt_addr + sizeof(ethhdr));
         ipv4h->ihl = 5;
         ipv4h->version = 4;
@@ -693,7 +703,7 @@ class UcclFlow {
         ipv4h->check = ipv4_checksum(ipv4h, sizeof(iphdr));
     }
 
-    void PrepareL4Header(uint8_t *pkt_addr, uint32_t payload_bytes) const {
+    void prepare_l4header(uint8_t *pkt_addr, uint32_t payload_bytes) const {
         auto *udph = (udphdr *)(pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
         udph->source = htons(local_port_);
         udph->dest = htons(remote_port_);
@@ -702,9 +712,9 @@ class UcclFlow {
         // TODO(yang): Calculate the UDP checksum.
     }
 
-    void PrepareUcclHdr(uint8_t *pkt_addr, uint32_t seqno, uint32_t ackno,
-                        const UcclPktHdr::UcclFlags &net_flags,
-                        uint8_t msg_flags = 0) const {
+    void prepare_ucclhdr(uint8_t *pkt_addr, uint32_t seqno, uint32_t ackno,
+                         const UcclPktHdr::UcclFlags &net_flags,
+                         uint8_t msg_flags = 0) const {
         auto *ucclh = (UcclPktHdr *)(pkt_addr + sizeof(ethhdr) + sizeof(iphdr) +
                                      sizeof(udphdr));
         ucclh->magic = be16_t(UcclPktHdr::kMagic);
@@ -723,17 +733,17 @@ class UcclFlow {
         ucclh->timestamp1 = be64_t(0);
     }
 
-    AFXDPSocket::frame_desc CraftControlPacket(
+    AFXDPSocket::frame_desc craft_ctlpacket(
         uint32_t seqno, uint32_t ackno,
         const UcclPktHdr::UcclFlags &flags) const {
         auto frame_offset = socket_->frame_pool_->pop();
         uint8_t *pkt_addr = (uint8_t *)socket_->umem_buffer_ + frame_offset;
 
         const size_t kControlPayloadBytes = kUcclHdrLen;
-        PrepareL2Header(pkt_addr);
-        PrepareL3Header(pkt_addr, kControlPayloadBytes);
-        PrepareL4Header(pkt_addr, kControlPayloadBytes);
-        PrepareUcclHdr(pkt_addr, seqno, ackno, flags);
+        prepare_l2header(pkt_addr);
+        prepare_l3header(pkt_addr, kControlPayloadBytes);
+        prepare_l4header(pkt_addr, kControlPayloadBytes);
+        prepare_ucclhdr(pkt_addr, seqno, ackno, flags);
 
         // Let AFXDPSocket::pull_complete_queue() free control frames.
         FrameBuf::mark_txpulltime_free(frame_offset, socket_->umem_buffer_);
@@ -742,9 +752,9 @@ class UcclFlow {
                                   kControlPayloadBytes};
     }
 
-    AFXDPSocket::frame_desc CraftAck(uint32_t seqno, uint32_t ackno) const {
+    AFXDPSocket::frame_desc craft_ack(uint32_t seqno, uint32_t ackno) const {
         VLOG(3) << "Sending ACK for seqno " << seqno << " ackno " << ackno;
-        return CraftControlPacket(seqno, ackno, UcclPktHdr::UcclFlags::kAck);
+        return craft_ctlpacket(seqno, ackno, UcclPktHdr::UcclFlags::kAck);
     }
 
     /**
@@ -757,16 +767,16 @@ class UcclFlow {
      * @param packet Pointer to an allocated packet.
      * @param seqno Sequence number of the packet.
      */
-    void PrepareDataPacket(FrameBuf *msg_buf, uint32_t seqno) const {
+    void prepare_datapacket(FrameBuf *msg_buf, uint32_t seqno) const {
         // Header length after before the payload.
         uint32_t frame_len = msg_buf->get_frame_len();
         CHECK_LE(frame_len, AFXDP_MTU);
         uint8_t *pkt_addr = msg_buf->get_pkt_addr();
 
         // Prepare network headers.
-        PrepareL2Header(pkt_addr);
-        PrepareL3Header(pkt_addr, frame_len - kNetHdrLen);
-        PrepareL4Header(pkt_addr, frame_len - kNetHdrLen);
+        prepare_l2header(pkt_addr);
+        prepare_l3header(pkt_addr, frame_len - kNetHdrLen);
+        prepare_l4header(pkt_addr, frame_len - kNetHdrLen);
 
         // Prepare the Uccl-specific header.
         auto *ucclh = reinterpret_cast<UcclPktHdr *>(pkt_addr + kNetHdrLen);
@@ -781,11 +791,11 @@ class UcclFlow {
         ucclh->timestamp1 = be64_t(0);
     }
 
-    void FastRetransmit() {
+    void fast_retransmit() {
         VLOG(3) << "Fast retransmitting oldest unacked packet " << pcb_.snd_una;
         // Retransmit the oldest unacknowledged message buffer.
-        auto *msg_buf = tx_tracking_.GetOldestUnackedMsgBuf();
-        PrepareDataPacket(msg_buf, pcb_.snd_una);
+        auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
+        prepare_datapacket(msg_buf, pcb_.snd_una);
         msg_buf->mark_not_txpulltime_free();
         socket_->send_packet(
             {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
@@ -793,10 +803,10 @@ class UcclFlow {
         pcb_.fast_rexmits++;
     }
 
-    void RTORetransmit() {
+    void rto_retransmit() {
         VLOG(3) << "RTO retransmitting oldest unacked packet " << pcb_.snd_una;
-        auto *msg_buf = tx_tracking_.GetOldestUnackedMsgBuf();
-        PrepareDataPacket(msg_buf, pcb_.snd_una);
+        auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
+        prepare_datapacket(msg_buf, pcb_.snd_una);
         msg_buf->mark_not_txpulltime_free();
         socket_->send_packet(
             {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
@@ -808,35 +818,46 @@ class UcclFlow {
      * @brief Helper function to transmit a number of packets from the queue
      * of pending TX data.
      */
-    void TransmitPackets() {
+    void transmit_pending_packets() {
         auto remaining_packets =
-            std::min(pcb_.effective_wnd(), tx_tracking_.NumUnsentMsgbufs());
-        if (remaining_packets == 0) return;
-
-        VLOG(3) << "TransmitPackets: remaining_packets " << remaining_packets;
-
-        std::vector<AFXDPSocket::frame_desc> frames;
-        frames.reserve(remaining_packets);
+            std::min(pcb_.effective_wnd(), tx_tracking_.num_unsent_msgbufs());
+        if (remaining_packets == 0) {
+            // Only TX ack frames.
+            flush_pending_tx();
+            return;
+        }
 
         // Prepare the packets.
         for (uint16_t i = 0; i < remaining_packets; i++) {
-            auto msg_buf_opt = tx_tracking_.GetAndUpdateOldestUnsent();
+            auto msg_buf_opt = tx_tracking_.get_and_update_oldest_unsent();
             if (!msg_buf_opt.has_value()) break;
 
             auto *msg_buf = msg_buf_opt.value();
             auto seqno = pcb_.get_snd_nxt();
-            PrepareDataPacket(msg_buf, seqno);
-            VLOG(3) << "TransmitPackets: transmit idx " << i << " seq "
-                    << seqno;
+            prepare_datapacket(msg_buf, seqno);
             msg_buf->mark_not_txpulltime_free();
-            frames.emplace_back(AFXDPSocket::frame_desc{
-                msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
+            pending_tx_frames_.push_back(
+                {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
+            pending_data_frames_++;
         }
 
-        // TX.
-        socket_->send_packets(frames);
+        // TX both data and ack frames.
+        flush_pending_tx();
 
         if (pcb_.rto_disabled()) pcb_.rto_enable();
+    }
+
+    void flush_pending_tx() {
+        if (pending_tx_frames_.empty()) return;
+        VLOG_EVERY_N(2, 10000) << "TransmitPackets: ack " << pending_ack_frames_
+                               << " data " << pending_data_frames_;
+
+        socket_->send_packets(pending_tx_frames_);
+        pending_tx_frames_.clear();
+        pending_ack_frames_ = 0;
+        pending_data_frames_ = 0;
+
+        last_transmit_timestamp_ = std::chrono::high_resolution_clock::now();
     }
 
     void process_ack(const UcclPktHdr *ucclh) {
@@ -856,7 +877,7 @@ class UcclFlow {
                 // anything.
             } else if (pcb_.duplicate_acks == swift::Pcb::kRexmitThreshold) {
                 // Fast retransmit.
-                FastRetransmit();
+                fast_retransmit();
             } else {
                 // We have already done the fast retransmit, so we are now
                 // in the fast recovery phase. We need to send a new packet
@@ -871,7 +892,7 @@ class UcclFlow {
                 // retransmitting multiple times other missing packets in
                 // the bitmap, we skip holes: we use the number of duplicate
                 // ACKs to skip previous holes.
-                auto *msgbuf = tx_tracking_.GetOldestUnackedMsgBuf();
+                auto *msgbuf = tx_tracking_.get_oldest_unacked_msgbuf();
                 size_t holes_to_skip =
                     pcb_.duplicate_acks - swift::Pcb::kRexmitThreshold;
                 size_t index = 0;
@@ -896,7 +917,7 @@ class UcclFlow {
                         // already been retransmitted.
                         if (holes_to_skip-- == 0) {
                             auto seqno = pcb_.snd_una + index;
-                            PrepareDataPacket(msgbuf, seqno);
+                            prepare_datapacket(msgbuf, seqno);
                             msgbuf->mark_not_txpulltime_free();
                             socket_->send_packet({msgbuf->get_frame_offset(),
                                                   msgbuf->get_frame_len()});
@@ -918,7 +939,7 @@ class UcclFlow {
             VLOG(3) << "Received valid ACK " << ackno;
             // This is a valid ACK, acknowledging new data.
             size_t num_acked_packets = ackno - pcb_.snd_una;
-            tx_tracking_.ReceiveAcks(num_acked_packets);
+            tx_tracking_.receive_acks(num_acked_packets);
 
             pcb_.snd_una = ackno;
             pcb_.duplicate_acks = 0;
@@ -926,8 +947,6 @@ class UcclFlow {
             pcb_.rto_rexmits = 0;
             pcb_.rto_maybe_reset();
         }
-
-        TransmitPackets();
     }
 
     // The following is used to fill packet headers.
@@ -944,6 +963,13 @@ class UcclFlow {
     Channel *channel_;
     // ConnectionID of this flow.
     ConnectionID connection_id_;
+    // Accumulated data and ack frames to be sent.
+    std::vector<AFXDPSocket::frame_desc> pending_tx_frames_;
+    uint32_t pending_ack_frames_;
+    uint32_t pending_data_frames_;
+    // Last time an array of packets were transmitted.
+    std::chrono::time_point<std::chrono::high_resolution_clock>
+        last_transmit_timestamp_;
 
     // Swift CC protocol control block.
     swift::Pcb pcb_;
@@ -995,7 +1021,7 @@ class UcclEngine {
      * queue and enqueued messages in all channels that it is responsible
      * for. This method is not thread-safe.
      */
-    void Run() {
+    void run() {
         // TODO(yang): maintain a queue of rx_work and tx_work
         Channel::Msg rx_work;
         Channel::Msg tx_work;
@@ -1011,7 +1037,7 @@ class UcclEngine {
 
             if (elapsed >= kSlowTimerIntervalUs) {
                 // Perform periodic processing.
-                PeriodicProcess();
+                periodic_process();
                 last_periodic_timestamp_ = now;
             }
 
@@ -1021,10 +1047,10 @@ class UcclEngine {
                 supply_rx_app_buf(rx_work.data, rx_work.len_ptr);
             }
 
-            // TODO(yang): we need to guarantee recv and send get equal split of
-            // CPU time, especially to give recv enough batch size per
-            // iteration. Otherwise, the system may be starved of recv.
-            auto frames = socket_->recv_packets(swift::Pcb::kInitialCwnd);
+            // We need to guarantee recv and send get equal split of CPU time,
+            // especially to give recv enough batch size per iteration.
+            // Otherwise, the system may be starved of recv.
+            auto frames = socket_->recv_packets(RECV_BATCH_SIZE);
             if (frames.size()) {
                 VLOG(3) << "Rx recv_packets " << frames.size();
                 std::vector<FrameBuf *> msgbufs;
@@ -1041,20 +1067,18 @@ class UcclEngine {
                                       nullptr) == 1) {
                 VLOG(3) << "Tx jring dequeue";
                 auto [tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames] =
-                    DeserializeMsg(tx_work.data, *tx_work.len_ptr);
+                    deserialize_msg(tx_work.data, *tx_work.len_ptr);
                 VLOG(3) << "Tx process_tx_msg";
-                // Append these tx frames to the flow's tx queue.
+                // Append these tx frames to the flow's tx queue, and trigger
+                // intial tx. Future received ACKs will trigger more tx.
                 process_tx_msg(tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames);
             }
-
-            // To drive tx pending frames to the NIC.
-            process_tx_msg(nullptr, nullptr, 0);
         }
 
         // This will reset flow pcb state.
-        flow_->Shutdown();
+        flow_->shutdown();
         // This will flush all unpolled tx frames.
-        socket_->Shutdown();
+        socket_->shutdown();
 
         delete flow_;
         delete socket_;
@@ -1062,26 +1086,26 @@ class UcclEngine {
 
     // Called by application to shutdown the engine. App will need to join
     // the engine thread.
-    void Shutdown() { shutdown_ = true; }
+    void shutdown() { shutdown_ = true; }
 
     /**
      * @brief Method to perform periodic processing. This is called by the
      * main engine cycle (see method `Run`).
      */
-    void PeriodicProcess() {
+    void periodic_process() {
         // Advance the periodic ticks counter.
         periodic_ticks_++;
-        HandleRTO();
-        if (periodic_ticks_ % kDumpStatusTicks == 0) DumpStatus();
-        ProcessControlRequests();
+        handle_rto();
+        if (periodic_ticks_ % kDumpStatusTicks == 0) dump_status();
+        process_ctl_reqs();
     }
 
    protected:
-    void DumpStatus() {
+    void dump_status() {
         std::string s;
         s += "\n\t\t[Uccl Engine Status]\n";
-        s += flow_->ToString();
-        s += socket_->ToString();
+        s += flow_->to_string();
+        s += socket_->to_string();
         // TODO(yang): Add more status information.
         s += "\n";
         LOG(INFO) << s;
@@ -1091,20 +1115,20 @@ class UcclEngine {
      * @brief This method polls active channels for all control plane
      * requests and processes them. It is called periodically.
      */
-    void ProcessControlRequests() {
+    void process_ctl_reqs() {
         // TODO(yang): maintain pending_requests?
     }
 
     /**
      * @brief Iterate throught the list of flows, check and handle RTOs.
      */
-    void HandleRTO() {
+    void handle_rto() {
         // TODO(yang): maintain active_flows_map_
-        auto is_active_flow = flow_->PeriodicCheck();
+        auto is_active_flow = flow_->periodic_check();
         DCHECK(is_active_flow);
     }
 
-    std::tuple<FrameBuf *, FrameBuf *, uint32_t> DeserializeMsg(
+    std::tuple<FrameBuf *, FrameBuf *, uint32_t> deserialize_msg(
         void *app_buf, size_t app_buf_len) {
         FrameBuf *tx_msgbuf_head = nullptr;
         FrameBuf *tx_msgbuf_tail = nullptr;
@@ -1167,34 +1191,7 @@ class UcclEngine {
      * @param app_buf_len Pointer to the length of the application buffer.
      */
     void process_rx_msg(std::vector<FrameBuf *> msgbufs) {
-        // ebpf_transport has filtered out invalid pkts, therefore, we do
-        // not need to care about the memory management of these frames.
-        std::vector<AFXDPSocket::frame_desc> frames;
-        frames.reserve(msgbufs.size());
-        for (auto msgbuf : msgbufs) {
-            auto frame_len = msgbuf->get_frame_len();
-            // Sanity ethernet header check.
-            DCHECK_GE(frame_len, kNetHdrLen + kUcclHdrLen)
-                << "Invalid frame length";
-
-            auto *pkt_addr = msgbuf->get_pkt_addr();
-            auto *eh = reinterpret_cast<ethhdr *>(pkt_addr);
-            auto *ipv4h = reinterpret_cast<iphdr *>(pkt_addr + sizeof(ethhdr));
-            auto *udph = reinterpret_cast<udphdr *>(pkt_addr + sizeof(ethhdr) +
-                                                    sizeof(iphdr));
-
-            DCHECK_EQ(eh->h_proto, ntohs(ETH_P_IP))
-                << "Unsupported ethertype: " << ntohs(eh->h_proto);
-            DCHECK_EQ(ipv4h->protocol, IPPROTO_UDP)
-                << "Unsupported IP protocol: "
-                << static_cast<uint32_t>(ipv4h->protocol);
-            DCHECK_EQ(frame_len, sizeof(ethhdr) + ntohs(ipv4h->tot_len))
-                << "IPv4 packet length mismatch";
-
-            auto frame_opt = flow_->RxMsg(msgbuf);
-            if (frame_opt.has_value()) frames.push_back(frame_opt.value());
-        }
-        if (frames.size()) socket_->send_packets(frames);
+        flow_->rx_messages(msgbufs);
     }
 
     /**
@@ -1205,7 +1202,7 @@ class UcclEngine {
     void process_tx_msg(FrameBuf *msg_head, FrameBuf *msg_tail,
                         uint32_t num_frames) {
         // TODO(yang): lookup the msg five-tuple in an active_flows_map
-        flow_->TxMsg(msg_head, msg_tail, num_frames);
+        flow_->tx_messages(msg_head, msg_tail, num_frames);
     }
 
    private:

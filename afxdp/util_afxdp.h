@@ -149,6 +149,7 @@ extern AFXDPFactory afxdp_ctl;
 
 class AFXDPSocket {
     constexpr static uint32_t FRAME_SIZE = XSK_UMEM__DEFAULT_FRAME_SIZE;
+    constexpr static uint32_t RECV_SPIN_US = 10;
 
     AFXDPSocket(int queue_id, int num_frames);
 
@@ -176,8 +177,8 @@ class AFXDPSocket {
     void populate_fill_queue(uint32_t nb_frames);
     std::vector<frame_desc> recv_packets(uint32_t nb_frames);
 
-    std::string ToString() const;
-    void Shutdown();
+    std::string to_string() const;
+    void shutdown();
     ~AFXDPSocket();
 
     friend class AFXDPFactory;

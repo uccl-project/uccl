@@ -17,7 +17,7 @@ const uint16_t SERVER_PORT = 40000;
 const uint16_t CLIENT_PORT = 40000;
 const size_t NUM_FRAMES = 4096 * 16;
 const size_t QUEUE_ID = 0;
-const size_t kTestMsgSize = 102400;
+const size_t kTestMsgSize = 1024000;
 const size_t kTestIters = 1024000000;
 const size_t kReportIters = 1000;
 
@@ -49,10 +49,14 @@ int main(int argc, char* argv[]) {
         UcclEngine engine(QUEUE_ID, NUM_FRAMES, &channel, CLIENT_IPV4_ADDRESS,
                           CLIENT_PORT, SERVER_IPV4_ADDRESS, SERVER_PORT,
                           CLIENT_ETHERNET_ADDRESS, SERVER_ETHERNET_ADDRESS);
-        auto engine_th = std::thread([&engine]() { engine.Run(); });
+        auto engine_th = std::thread([&engine]() {
+            pin_thread_to_cpu(2);
+            engine.run();
+        });
 
+        pin_thread_to_cpu(3);
         auto ep = Endpoint(&channel);
-        auto conn_id = ep.Connect(SERVER_IPV4_ADDRESS);
+        auto conn_id = ep.connect(SERVER_IPV4_ADDRESS);
         auto* data = new uint8_t[kTestMsgSize];
         auto* data_u32 = reinterpret_cast<uint32_t*>(data);
         for (int i = 0; i < kTestMsgSize / sizeof(uint32_t); i++) {
@@ -60,7 +64,7 @@ int main(int argc, char* argv[]) {
         }
         for (int i = 0; i < kTestIters; i++) {
             auto start = std::chrono::high_resolution_clock::now();
-            ep.Send(conn_id, data, kTestMsgSize);
+            ep.send(conn_id, data, kTestMsgSize);
             auto end = std::chrono::high_resolution_clock::now();
             auto duration_us =
                 std::chrono::duration_cast<std::chrono::microseconds>(end -
@@ -72,7 +76,7 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        engine.Shutdown();
+        engine.shutdown();
         engine_th.join();
     } else {
         // AFXDPFactory::init("ens6", "ebpf_transport_pktloss.o",
@@ -81,17 +85,21 @@ int main(int argc, char* argv[]) {
         UcclEngine engine(QUEUE_ID, NUM_FRAMES, &channel, SERVER_IPV4_ADDRESS,
                           SERVER_PORT, CLIENT_IPV4_ADDRESS, CLIENT_PORT,
                           SERVER_ETHERNET_ADDRESS, CLIENT_ETHERNET_ADDRESS);
-        auto engine_th = std::thread([&engine]() { engine.Run(); });
+        auto engine_th = std::thread([&engine]() {
+            pin_thread_to_cpu(2);
+            engine.run();
+        });
 
+        pin_thread_to_cpu(3);
         auto ep = Endpoint(&channel);
-        auto conn_id = ep.Accept();
+        auto conn_id = ep.accept();
         auto* data = new uint8_t[kTestMsgSize];
         size_t len;
 
         for (int i = 0; i < kTestIters; i++) {
             auto start = std::chrono::high_resolution_clock::now();
-            ep.Recv(conn_id, data, &len);
-                        auto end = std::chrono::high_resolution_clock::now();
+            ep.recv(conn_id, data, &len);
+            auto end = std::chrono::high_resolution_clock::now();
             auto duration_us =
                 std::chrono::duration_cast<std::chrono::microseconds>(end -
                                                                       start);
@@ -105,7 +113,7 @@ int main(int argc, char* argv[]) {
                           << duration_us.count() << " us";
             }
         }
-        engine.Shutdown();
+        engine.shutdown();
         engine_th.join();
     }
 
