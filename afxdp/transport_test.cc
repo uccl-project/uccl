@@ -4,6 +4,7 @@
 #include <glog/logging.h>
 #include <signal.h>
 
+#include <chrono>
 #include <thread>
 
 using namespace uccl;
@@ -58,16 +59,25 @@ int main(int argc, char* argv[]) {
             data_u32[i] = i;
         }
         for (int i = 0; i < kTestIters; i++) {
+            auto start = std::chrono::high_resolution_clock::now();
             ep.Send(conn_id, data, kTestMsgSize);
+            auto end = std::chrono::high_resolution_clock::now();
+            auto duration_us =
+                std::chrono::duration_cast<std::chrono::microseconds>(end -
+                                                                      start);
+            // usleep(1000);
             if (i % kReportIters == 0) {
-                LOG(INFO) << "Sent " << i << " messages";
+                LOG(INFO) << "Sent " << i << " messages " << " rtt "
+                          << duration_us.count() << " us";
             }
         }
 
         engine.Shutdown();
         engine_th.join();
     } else {
-        AFXDPFactory::init("ens6", "ebpf_transport_pktloss.o", "ebpf_transport");
+        // AFXDPFactory::init("ens6", "ebpf_transport_pktloss.o",
+        // "ebpf_transport");
+        AFXDPFactory::init("ens6", "ebpf_transport.o", "ebpf_transport");
         UcclEngine engine(QUEUE_ID, NUM_FRAMES, &channel, SERVER_IPV4_ADDRESS,
                           SERVER_PORT, CLIENT_IPV4_ADDRESS, CLIENT_PORT,
                           SERVER_ETHERNET_ADDRESS, CLIENT_ETHERNET_ADDRESS);
@@ -79,14 +89,20 @@ int main(int argc, char* argv[]) {
         size_t len;
 
         for (int i = 0; i < kTestIters; i++) {
+            auto start = std::chrono::high_resolution_clock::now();
             ep.Recv(conn_id, data, &len);
+                        auto end = std::chrono::high_resolution_clock::now();
+            auto duration_us =
+                std::chrono::duration_cast<std::chrono::microseconds>(end -
+                                                                      start);
             CHECK_EQ(len, kTestMsgSize) << "Received message size mismatches";
             for (int j = 0; j < kTestMsgSize / sizeof(uint32_t); j++) {
                 CHECK_EQ(reinterpret_cast<uint32_t*>(data)[j], j)
                     << "Data mismatch at index " << j;
             }
             if (i % kReportIters == 0) {
-                LOG(INFO) << "Received " << i << " messages";
+                LOG(INFO) << "Received " << i << " messages " << " rtt "
+                          << duration_us.count() << " us";
             }
         }
         engine.Shutdown();

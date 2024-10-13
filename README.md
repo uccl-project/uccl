@@ -40,5 +40,5 @@ sudo ./client_main
 
 ### Debugging the transport stack
 
-sudo GLOG_logtostderr=1 GLOG_vmodule=transport=3,util_afxdp=3 ./transport_test
-sudo GLOG_logtostderr=1 GLOG_vmodule=transport=3,util_afxdp=3 ./transport_test --client
+sudo ./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1
+sudo ./transport_test --client --logtostderr=1 --vmodule=transport=1,util_afxdp=1
