@@ -49,9 +49,9 @@ const int SEND_BATCH_SIZE = 1;
 const int RECV_BATCH_SIZE = 32;
 // 256 is reserved for xdp_meta, 42 is reserved for eth+ip+udp
 // Max payload under AFXDP is 4096-256-42;
-const int PAYLOAD_BYTES = 64;
+const int PAYLOAD_BYTES = 3000;
 // tune this to change packet rate
-const int MAX_INFLIGHT_PKTS = 1;
+const int MAX_INFLIGHT_PKTS = 128;
 // sleep gives unstable rate and latency
 const int SEND_INTV_US = 0;
 const int RTO_US = 2000;

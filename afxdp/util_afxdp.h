@@ -173,9 +173,11 @@ class AFXDPSocket {
     uint32_t send_packet(frame_desc frame);
     uint32_t send_packets(std::vector<frame_desc> &frames);
     uint32_t pull_complete_queue();
+    uint32_t pull_complete_queue_forced(uint32_t nb_frames);
 
     void populate_fill_queue(uint32_t nb_frames);
     std::vector<frame_desc> recv_packets(uint32_t nb_frames);
+    std::vector<frame_desc> recv_packets_force(uint32_t nb_frames);
 
     std::string to_string() const;
     void shutdown();

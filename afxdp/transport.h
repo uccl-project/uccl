@@ -4,6 +4,7 @@
 #include <linux/if_ether.h>
 #include <linux/ip.h>
 #include <linux/udp.h>
+#include <linux/tcp.h>
 
 #include <bitset>
 #include <chrono>
@@ -305,7 +306,7 @@ class RXTracking {
    public:
     // 256-bit SACK bitmask => we can track up to 256 packets
     static constexpr std::size_t kReassemblyMaxSeqnoDistance =
-        sizeof(sizeof(UcclPktHdr::sack_bitmap)) * 8;
+        sizeof(UcclPktHdr::sack_bitmap) * 8;
 
     static_assert((kReassemblyMaxSeqnoDistance &
                    (kReassemblyMaxSeqnoDistance - 1)) == 0,
@@ -350,7 +351,7 @@ class RXTracking {
         const auto expected_seqno = pcb->rcv_nxt;
 
         if (swift::seqno_lt(seqno, expected_seqno)) {
-            VLOG(2) << "Received old packet: " << seqno << " < "
+            VLOG(3) << "Received old packet: " << seqno << " < "
                     << expected_seqno;
             socket_->frame_pool_->push(msgbuf->get_frame_offset());
             return kOldPkt;
@@ -358,7 +359,7 @@ class RXTracking {
 
         const size_t distance = seqno - expected_seqno;
         if (distance >= kReassemblyMaxSeqnoDistance) {
-            LOG(ERROR)
+            LOG(INFO)
                 << "Packet too far ahead. Dropping as we can't handle SACK. "
                 << "seqno: " << seqno << ", expected: " << expected_seqno;
             socket_->frame_pool_->push(msgbuf->get_frame_offset());
@@ -372,7 +373,7 @@ class RXTracking {
                               [&seqno](const reasm_queue_ent_t &entry) {
                                   return entry.seqno >= seqno;
                               });
-            VLOG(2) << "Received OOO packet: reass_q size " << reass_q_.size();
+            VLOG(3) << "Received OOO packet: reass_q size " << reass_q_.size();
             if (it != reass_q_.end() && it->seqno == seqno) {
                 VLOG(3) << "Received duplicate packet: " << seqno;
                 // Duplicate packet. Drop it.
@@ -388,10 +389,10 @@ class RXTracking {
         msgbuf->set_msg_flags(ucclh->msg_flags);
 
         if (seqno == expected_seqno) {
-            VLOG(2) << "Received expected packet: " << seqno;
+            VLOG(3) << "Received expected packet: " << seqno;
             reass_q_.emplace_front(msgbuf, seqno);
         } else {
-            VLOG(2) << "Received ooo trackable packet: " << seqno;
+            VLOG(3) << "Received OOO trackable packet: " << seqno;
             reass_q_.insert(it, reasm_queue_ent_t(msgbuf, seqno));
         }
 
@@ -516,6 +517,7 @@ class RXTracking {
     size_t *app_buf_len_stash_;
 };
 
+class UcclEngine;
 /**
  * @class UcclFlow, a connection between a local and a remote endpoint.
  * @brief Class to abstract the components and functionality of a single flow.
@@ -567,6 +569,8 @@ class UcclFlow {
     }
     ~UcclFlow() {}
 
+    friend class UcclEngine;
+
     std::string to_string() const {
         return Format(
             "\t\t\t%x [queue %d] <-> %x\n\t\t\t%s\n\t\t\t[TX Queue] Pending "
@@ -591,7 +595,7 @@ class UcclFlow {
      * @param app_buf_len Pointer to the application buffer length
      */
     void rx_messages(std::vector<FrameBuf *> msgbufs) {
-        VLOG_EVERY_N(2, 1) << "Received " << msgbufs.size() << " packets";
+        VLOG(2) << "Received " << msgbufs.size() << " packets";
         for (auto msgbuf : msgbufs) {
             // ebpf_transport has filtered out invalid pkts.
             auto *pkt_addr = msgbuf->get_pkt_addr();
@@ -665,10 +669,11 @@ class UcclFlow {
         if (pcb_.rto_disabled()) return true;
 
         pcb_.rto_advance();
-        if (pcb_.max_rexmits_reached()) {
-            // TODO(ilias): send RST packet, indicating removal of the flow.
-            return false;
-        }
+
+        // TODO(ilias): send RST packet, indicating removal of the flow.
+        // if (pcb_.max_rexmits_reached()) {
+        //     return false;
+        // }
 
         if (pcb_.rto_expired()) {
             // Retransmit the oldest unacknowledged message buffer.
@@ -705,6 +710,9 @@ class UcclFlow {
 
     void prepare_l4header(uint8_t *pkt_addr, uint32_t payload_bytes) const {
         auto *udph = (udphdr *)(pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
+        // static uint16_t rand_port = 0;
+        // udph->source = htons(local_port_ + (rand_port++) % 8);
+        // udph->dest = htons(remote_port_ + (rand_port++) % 8);
         udph->source = htons(local_port_);
         udph->dest = htons(remote_port_);
         udph->len = htons(sizeof(udphdr) + payload_bytes);
@@ -792,7 +800,8 @@ class UcclFlow {
     }
 
     void fast_retransmit() {
-        VLOG(3) << "Fast retransmitting oldest unacked packet " << pcb_.snd_una;
+        LOG(INFO) << "Fast retransmitting oldest unacked packet "
+                  << pcb_.snd_una;
         // Retransmit the oldest unacknowledged message buffer.
         auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
         if (!msg_buf) return;
@@ -807,7 +816,8 @@ class UcclFlow {
     }
 
     void rto_retransmit() {
-        VLOG(3) << "RTO retransmitting oldest unacked packet " << pcb_.snd_una;
+        LOG(INFO) << "RTO retransmitting oldest unacked packet "
+                  << pcb_.snd_una;
         auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
         if (!msg_buf) return;
         prepare_datapacket(msg_buf, pcb_.snd_una);
@@ -855,8 +865,8 @@ class UcclFlow {
 
     void flush_pending_tx() {
         if (pending_tx_frames_.empty()) return;
-        VLOG_EVERY_N(2, 1) << "flush_pending_tx: ack " << pending_ack_frames_
-                           << " data " << pending_data_frames_;
+        VLOG(2) << "flush_pending_tx: ack " << pending_ack_frames_ << " data "
+                << pending_data_frames_;
 
         socket_->send_packets(pending_tx_frames_);
         pending_tx_frames_.clear();

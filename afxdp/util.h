@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <vector>
+#include <chrono>
 
 #include "util_jring.h"
 

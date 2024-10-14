@@ -64,6 +64,7 @@ int main(int argc, char* argv[]) {
             data_u32[i] = i;
         }
         std::vector<uint64_t> rtts;
+        auto start_bw = std::chrono::high_resolution_clock::now();
         for (int i = 0; i < kTestIters; i++) {
             auto start = std::chrono::high_resolution_clock::now();
             ep.send(conn_id, data, kTestMsgSize);
@@ -76,17 +77,32 @@ int main(int argc, char* argv[]) {
                 uint64_t med_latency, tail_latency;
                 med_latency = Percentile(rtts, 50);
                 tail_latency = Percentile(rtts, 99);
-                LOG(INFO) << "Med rtt: " << med_latency
-                          << " us, tail rtt: " << tail_latency << " us";
-                LOG(INFO) << "Sent " << i << " messages " << " rtt "
-                          << duration_us.count() << " us";
+                // 24B: 4B FCS + 8B frame delimiter + 12B interframe gap
+                double bw_gbps = 0.0;
+                auto end_bw = std::chrono::high_resolution_clock::now();
+                if (i != 0) {
+                    bw_gbps =
+                        kTestMsgSize * kReportIters *
+                        (AFXDP_MTU * 1.0 /
+                         (AFXDP_MTU - kNetHdrLen - kUcclHdrLen - 24)) *
+                        8.0 / 1024 / 1024 / 1024 /
+                        (std::chrono::duration_cast<std::chrono::microseconds>(
+                             end_bw - start_bw)
+                             .count() *
+                         1e-6);
+                }
+                start_bw = end_bw;
+
+                LOG(INFO) << "med rtt: " << med_latency
+                          << " us, tail rtt: " << tail_latency << " us, bw "
+                          << bw_gbps << " Gbps";
             }
-            if (duration_us.count() > 6000) {
-                cnt++;
-                if (cnt > 20) exit(0);
-            } else {
-                cnt = 0;
-            }
+            // if (duration_us.count() > 7000) {
+            //     cnt++;
+            //     if (cnt > 20) exit(0);
+            // } else {
+            //     cnt = 0;
+            // }
         }
 
         engine.shutdown();

@@ -31,7 +31,7 @@ constexpr bool seqno_gt(uint32_t a, uint32_t b) {
  */
 // TODO(ilias): First-cut implementation. Needs a lot of work.
 struct Pcb {
-    static constexpr std::size_t kInitialCwnd = 1024;
+    static constexpr std::size_t kInitialCwnd = 256;
     static constexpr std::size_t kSackBitmapSize = 256;
     static constexpr std::size_t kRexmitThreshold = 3;
     static constexpr int kRtoThresholdInTicks = 3;  // in slow timer ticks.
@@ -41,6 +41,8 @@ struct Pcb {
     // Return the sender effective window in # of packets.
     uint32_t effective_wnd() const {
         uint32_t effective_wnd = cwnd - (snd_nxt - snd_una - snd_ooo_acks);
+        // uint32_t effective_wnd = cwnd - (snd_nxt - snd_una);
+        // uint32_t effective_wnd = 1;
         return effective_wnd > cwnd ? 0 : effective_wnd;
     }
 
