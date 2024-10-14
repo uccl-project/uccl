@@ -145,7 +145,7 @@ AFXDPSocket::AFXDPSocket(int queue_id, int num_frames) : unpulled_tx_pkts_(0) {
         exit(0);
     }
 
-    // apply_setsockopt(xsk_socket__fd(socket->xsk));
+    // apply_setsockopt(xsk_socket__fd(xsk_));
 
     // initialize frame allocator
     frame_pool_ = new FramePool(num_frames);
@@ -250,14 +250,14 @@ void AFXDPSocket::populate_fill_queue(uint32_t nb_frames) {
 
 std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
     uint32_t nb_frames) {
-    std::vector<AFXDPSocket::frame_desc> frames;
 
+    std::vector<AFXDPSocket::frame_desc> frames;
     uint32_t idx_rx, rcvd;
     rcvd = xsk_ring_cons__peek(&recv_queue_, nb_frames, &idx_rx);
     if (!rcvd) return frames;
     VLOG(2) << "rx recv_packets num_frames = " << rcvd;
 
-    populate_fill_queue(rcvd);
+    populate_fill_queue(nb_frames);
 
     for (int i = 0; i < rcvd; i++) {
         const struct xdp_desc* desc =

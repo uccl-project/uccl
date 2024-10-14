@@ -35,7 +35,7 @@ void error(char *msg) {
 const int SEND_BATCH_SIZE = 1;
 const int RECV_BATCH_SIZE = 32;
 // tune this to change packet rate
-const int MAX_INFLIGHT_PKTS = 512;
+const int MAX_INFLIGHT_PKTS = 1;
 const int SEND_INTV_US = 0;
 
 std::vector<uint64_t> rtts;

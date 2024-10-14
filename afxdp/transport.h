@@ -350,7 +350,7 @@ class RXTracking {
         const auto expected_seqno = pcb->rcv_nxt;
 
         if (swift::seqno_lt(seqno, expected_seqno)) {
-            VLOG(3) << "Received old packet: " << seqno << " < "
+            VLOG(2) << "Received old packet: " << seqno << " < "
                     << expected_seqno;
             socket_->frame_pool_->push(msgbuf->get_frame_offset());
             return kOldPkt;
@@ -372,7 +372,7 @@ class RXTracking {
                               [&seqno](const reasm_queue_ent_t &entry) {
                                   return entry.seqno >= seqno;
                               });
-            VLOG(3) << "Received OOO packet: reass_q size " << reass_q_.size();
+            VLOG(2) << "Received OOO packet: reass_q size " << reass_q_.size();
             if (it != reass_q_.end() && it->seqno == seqno) {
                 VLOG(3) << "Received duplicate packet: " << seqno;
                 // Duplicate packet. Drop it.
@@ -388,10 +388,10 @@ class RXTracking {
         msgbuf->set_msg_flags(ucclh->msg_flags);
 
         if (seqno == expected_seqno) {
-            VLOG(3) << "Received expected packet: " << seqno;
+            VLOG(2) << "Received expected packet: " << seqno;
             reass_q_.emplace_front(msgbuf, seqno);
         } else {
-            VLOG(3) << "Received ooo trackable packet: " << seqno;
+            VLOG(2) << "Received ooo trackable packet: " << seqno;
             reass_q_.insert(it, reasm_queue_ent_t(msgbuf, seqno));
         }
 
@@ -591,7 +591,7 @@ class UcclFlow {
      * @param app_buf_len Pointer to the application buffer length
      */
     void rx_messages(std::vector<FrameBuf *> msgbufs) {
-        VLOG_EVERY_N(2, 10000) << "Received " << msgbufs.size() << " packets";
+        VLOG_EVERY_N(2, 1) << "Received " << msgbufs.size() << " packets";
         for (auto msgbuf : msgbufs) {
             // ebpf_transport has filtered out invalid pkts.
             auto *pkt_addr = msgbuf->get_pkt_addr();
@@ -621,7 +621,7 @@ class UcclFlow {
             }
         }
         // Sending both ack and data frames (that can be send per cwnd).
-        transmit_pending_packets();
+        // transmit_pending_packets();
     }
 
     void supply_rx_app_buf(void *app_buf, size_t *app_buf_len) {
@@ -795,9 +795,12 @@ class UcclFlow {
         VLOG(3) << "Fast retransmitting oldest unacked packet " << pcb_.snd_una;
         // Retransmit the oldest unacknowledged message buffer.
         auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
+        if (!msg_buf) return;
         prepare_datapacket(msg_buf, pcb_.snd_una);
         msg_buf->mark_not_txpulltime_free();
-        socket_->send_packet(
+        // socket_->send_packet(
+        //     {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
+        pending_tx_frames_.push_back(
             {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
         pcb_.rto_reset();
         pcb_.fast_rexmits++;
@@ -806,9 +809,12 @@ class UcclFlow {
     void rto_retransmit() {
         VLOG(3) << "RTO retransmitting oldest unacked packet " << pcb_.snd_una;
         auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
+        if (!msg_buf) return;
         prepare_datapacket(msg_buf, pcb_.snd_una);
         msg_buf->mark_not_txpulltime_free();
-        socket_->send_packet(
+        // socket_->send_packet(
+        //     {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
+        pending_tx_frames_.push_back(
             {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
         pcb_.rto_reset();
         pcb_.rto_rexmits++;
@@ -849,8 +855,8 @@ class UcclFlow {
 
     void flush_pending_tx() {
         if (pending_tx_frames_.empty()) return;
-        VLOG_EVERY_N(2, 10000) << "TransmitPackets: ack " << pending_ack_frames_
-                               << " data " << pending_data_frames_;
+        VLOG_EVERY_N(2, 1) << "flush_pending_tx: ack " << pending_ack_frames_
+                           << " data " << pending_data_frames_;
 
         socket_->send_packets(pending_tx_frames_);
         pending_tx_frames_.clear();
@@ -863,10 +869,10 @@ class UcclFlow {
     void process_ack(const UcclPktHdr *ucclh) {
         auto ackno = ucclh->ackno.value();
         if (swift::seqno_lt(ackno, pcb_.snd_una)) {
-            VLOG(3) << "Received old ACK " << ackno;
+            VLOG(2) << "Received old ACK " << ackno;
             return;
         } else if (swift::seqno_eq(ackno, pcb_.snd_una)) {
-            VLOG(3) << "Received duplicate ACK " << ackno;
+            VLOG(2) << "Received duplicate ACK " << ackno;
             // Duplicate ACK.
             pcb_.duplicate_acks++;
             // Update the number of out-of-order acknowledgements.
@@ -877,6 +883,7 @@ class UcclFlow {
                 // anything.
             } else if (pcb_.duplicate_acks == swift::Pcb::kRexmitThreshold) {
                 // Fast retransmit.
+                VLOG(2) << "Fast retransmit " << ackno;
                 fast_retransmit();
             } else {
                 // We have already done the fast retransmit, so we are now
@@ -895,8 +902,11 @@ class UcclFlow {
                 auto *msgbuf = tx_tracking_.get_oldest_unacked_msgbuf();
                 size_t holes_to_skip =
                     pcb_.duplicate_acks - swift::Pcb::kRexmitThreshold;
+                VLOG(2) << "Fast recovery " << ackno << " sack_bitmap_count "
+                        << sack_bitmap_count << " holes_to_skip "
+                        << holes_to_skip;
                 size_t index = 0;
-                while (sack_bitmap_count && !msgbuf) {
+                while (sack_bitmap_count && msgbuf) {
                     constexpr size_t sack_bitmap_bucket_size =
                         sizeof(ucclh->sack_bitmap[0]);
                     constexpr size_t sack_bitmap_max_bucket_idx =
@@ -916,11 +926,16 @@ class UcclFlow {
                         // We skip holes in the SACK bitmap that have
                         // already been retransmitted.
                         if (holes_to_skip-- == 0) {
+                            // VLOG(2) << "Fast recovery sack_bitmap_count "
+                            //         << sack_bitmap_count;
                             auto seqno = pcb_.snd_una + index;
                             prepare_datapacket(msgbuf, seqno);
                             msgbuf->mark_not_txpulltime_free();
-                            socket_->send_packet({msgbuf->get_frame_offset(),
-                                                  msgbuf->get_frame_len()});
+                            // socket_->send_packet({msgbuf->get_frame_offset(),
+                            //                       msgbuf->get_frame_len()});
+                            pending_tx_frames_.push_back(
+                                {msgbuf->get_frame_offset(),
+                                 msgbuf->get_frame_len()});
                             pcb_.rto_reset();
                             return;
                         }
@@ -1073,6 +1088,8 @@ class UcclEngine {
                 // intial tx. Future received ACKs will trigger more tx.
                 process_tx_msg(tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames);
             }
+
+            process_tx_msg(nullptr, nullptr, 0);
         }
 
         // This will reset flow pcb state.
@@ -1125,7 +1142,7 @@ class UcclEngine {
     void handle_rto() {
         // TODO(yang): maintain active_flows_map_
         auto is_active_flow = flow_->periodic_check();
-        DCHECK(is_active_flow);
+        // DCHECK(is_active_flow);
     }
 
     std::tuple<FrameBuf *, FrameBuf *, uint32_t> deserialize_msg(

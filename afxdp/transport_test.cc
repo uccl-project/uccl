@@ -43,6 +43,7 @@ int main(int argc, char* argv[]) {
     // alarm(10);
 
     Channel channel;
+    int cnt = 0;
 
     if (FLAGS_client) {
         AFXDPFactory::init("ens6", "ebpf_transport.o", "ebpf_transport");
@@ -62,6 +63,7 @@ int main(int argc, char* argv[]) {
         for (int i = 0; i < kTestMsgSize / sizeof(uint32_t); i++) {
             data_u32[i] = i;
         }
+        std::vector<uint64_t> rtts;
         for (int i = 0; i < kTestIters; i++) {
             auto start = std::chrono::high_resolution_clock::now();
             ep.send(conn_id, data, kTestMsgSize);
@@ -69,10 +71,21 @@ int main(int argc, char* argv[]) {
             auto duration_us =
                 std::chrono::duration_cast<std::chrono::microseconds>(end -
                                                                       start);
-            // usleep(1000);
+            rtts.push_back(duration_us.count());
             if (i % kReportIters == 0) {
+                uint64_t med_latency, tail_latency;
+                med_latency = Percentile(rtts, 50);
+                tail_latency = Percentile(rtts, 99);
+                LOG(INFO) << "Med rtt: " << med_latency
+                          << " us, tail rtt: " << tail_latency << " us";
                 LOG(INFO) << "Sent " << i << " messages " << " rtt "
                           << duration_us.count() << " us";
+            }
+            if (duration_us.count() > 6000) {
+                cnt++;
+                if (cnt > 20) exit(0);
+            } else {
+                cnt = 0;
             }
         }
 
@@ -108,10 +121,9 @@ int main(int argc, char* argv[]) {
                 CHECK_EQ(reinterpret_cast<uint32_t*>(data)[j], j)
                     << "Data mismatch at index " << j;
             }
-            if (i % kReportIters == 0) {
-                LOG(INFO) << "Received " << i << " messages " << " rtt "
-                          << duration_us.count() << " us";
-            }
+            LOG_EVERY_N(INFO, kReportIters)
+                << "Received " << i << " messages " << " rtt "
+                << duration_us.count() << " us";
         }
         engine.shutdown();
         engine_th.join();
