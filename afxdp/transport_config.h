@@ -1,0 +1,7 @@
+#ifndef TRANSPORT_CONFIG_H
+#define TRANSPORT_CONFIG_H
+
+#define USING_TCP
+#define USING_MULTIPATH
+
+#endif  // TRANSPORT_CONFIG_H

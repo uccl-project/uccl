@@ -80,11 +80,12 @@ static void *recv_thread(void *arg) {
     uint8_t *rbuffer = (uint8_t *)malloc(config->n_bytes);
     while (!quit) {
         for (int i = 0; i < RECV_BATCH_SIZE; i++) {
-            receive_message(config->n_bytes, sockfd, rbuffer, &quit);
+            receive_message(sizeof(uint64_t), sockfd, rbuffer, &quit);
             inflight_pkts--;
 
             uint64_t now_us = *(uint64_t *)rbuffer;
             uint32_t counter = *(uint32_t *)(rbuffer + sizeof(uint64_t));
+
             auto now = std::chrono::high_resolution_clock::now();
             uint64_t now_us2 =
                 std::chrono::duration_cast<std::chrono::microseconds>(
@@ -95,6 +96,9 @@ static void *recv_thread(void *arg) {
                 std::lock_guard<std::mutex> lock(rtts_lock);
                 rtts.push_back(rtt);
             }
+
+            receive_message(config->n_bytes - sizeof(uint64_t), sockfd,
+                            rbuffer + sizeof(uint64_t), &quit);
         }
     }
     free(rbuffer);

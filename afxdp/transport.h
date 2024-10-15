@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "transport_cc.h"
+#include "transport_config.h"
 #include "util.h"
 #include "util_afxdp.h"
 #include "util_endian.h"
@@ -161,8 +162,13 @@ struct __attribute__((packed)) UcclPktHdr {
 };
 static_assert(sizeof(UcclPktHdr) == 54, "UcclPktHdr size mismatch");
 
+#ifdef USING_TCP
 static const size_t kNetHdrLen =
     sizeof(ethhdr) + sizeof(iphdr) + sizeof(tcphdr);
+#else
+static const size_t kNetHdrLen =
+    sizeof(ethhdr) + sizeof(iphdr) + sizeof(udphdr);
+#endif
 static const size_t kUcclHdrLen = sizeof(UcclPktHdr);
 
 inline UcclPktHdr::UcclFlags operator|(UcclPktHdr::UcclFlags lhs,
@@ -359,7 +365,7 @@ class RXTracking {
 
         const size_t distance = seqno - expected_seqno;
         if (distance >= kReassemblyMaxSeqnoDistance) {
-            LOG(INFO)
+            VLOG(3)
                 << "Packet too far ahead. Dropping as we can't handle SACK. "
                 << "seqno: " << seqno << ", expected: " << expected_seqno;
             socket_->frame_pool_->push(msgbuf->get_frame_offset());
@@ -595,7 +601,7 @@ class UcclFlow {
      * @param app_buf_len Pointer to the application buffer length
      */
     void rx_messages(std::vector<FrameBuf *> msgbufs) {
-        VLOG(2) << "Received " << msgbufs.size() << " packets";
+        VLOG(3) << "Received " << msgbufs.size() << " packets";
         for (auto msgbuf : msgbufs) {
             // ebpf_transport has filtered out invalid pkts.
             auto *pkt_addr = msgbuf->get_pkt_addr();
@@ -625,7 +631,7 @@ class UcclFlow {
             }
         }
         // Sending both ack and data frames (that can be send per cwnd).
-        // transmit_pending_packets();
+        transmit_pending_packets();
     }
 
     void supply_rx_app_buf(void *app_buf, size_t *app_buf_len) {
@@ -671,9 +677,9 @@ class UcclFlow {
         pcb_.rto_advance();
 
         // TODO(ilias): send RST packet, indicating removal of the flow.
-        // if (pcb_.max_rexmits_reached()) {
-        //     return false;
-        // }
+        if (pcb_.max_rto_rexmits_reached()) {
+            return false;
+        }
 
         if (pcb_.rto_expired()) {
             // Retransmit the oldest unacknowledged message buffer.
@@ -700,7 +706,11 @@ class UcclFlow {
         ipv4h->frag_off = htons(0);
         ipv4h->ttl = 64;
         ipv4h->protocol = IPPROTO_TCP;
+#ifdef USING_TCP
         ipv4h->tot_len = htons(sizeof(iphdr) + sizeof(tcphdr) + payload_bytes);
+#else
+        ipv4h->tot_len = htons(sizeof(iphdr) + sizeof(udphdr) + payload_bytes);
+#endif
         ipv4h->saddr = htonl(local_addr_);
         ipv4h->daddr = htonl(remote_addr_);
         ipv4h->check = 0;
@@ -709,21 +719,37 @@ class UcclFlow {
     }
 
     void prepare_l4header(uint8_t *pkt_addr, uint32_t payload_bytes) const {
+#ifdef USING_TCP
         auto *tcph = (tcphdr *)(pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
-        // static uint16_t rand_port = 0;
-        // tcph->source = htons(local_port_ + (rand_port++) % 8);
-        // tcph->dest = htons(remote_port_ + (rand_port++) % 8);
         memset(tcph, 0, sizeof(tcphdr));
+#ifdef USING_MULTIPATH
+        static uint16_t rand_port = 0;
+        tcph->source = htons(local_port_ + (rand_port++) % 8);
+        tcph->dest = htons(remote_port_ + (rand_port++) % 8);
+#else
         tcph->source = htons(local_port_);
         tcph->dest = htons(remote_port_);
-        tcph->seq = htonl(pcb_.seqno());
-        tcph->ack_seq = htonl(pcb_.ackno());
+#endif
+        // tcph->seq = htonl(pcb_.seqno());
+        // tcph->ack_seq = htonl(pcb_.ackno());
         tcph->doff = 5;
-        tcph->ack = 1;
-        tcph->window = htons(491);
-        tcph->check = tcp_hdr_chksum(local_addr_, remote_addr_,
-                                     5 * sizeof(uint32_t) + payload_bytes);
+        // tcph->window = htons(65535);
+        // tcph->check = tcp_hdr_chksum(local_addr_, remote_addr_,
+        //                              5 * sizeof(uint32_t) + payload_bytes);
+#else
+        auto *udph = (udphdr *)(pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
+#ifdef USING_MULTIPATH
+        static uint16_t rand_port = 0;
+        udph->source = htons(local_port_ + (rand_port++) % 8);
+        udph->dest = htons(remote_port_ + (rand_port++) % 8);
+#else
+        udph->source = htons(local_port_);
+        udph->dest = htons(remote_port_);
+#endif
+        udph->len = htons(sizeof(udphdr) + payload_bytes);
+        udph->check = htons(0);
         // TODO(yang): Calculate the UDP checksum.
+#endif
     }
 
     void prepare_ucclhdr(uint8_t *pkt_addr, uint32_t seqno, uint32_t ackno,
@@ -804,31 +830,31 @@ class UcclFlow {
     }
 
     void fast_retransmit() {
-        LOG(INFO) << "Fast retransmitting oldest unacked packet "
-                  << pcb_.snd_una;
+        // LOG(INFO) << "Fast retransmitting oldest unacked packet "
+        //           << pcb_.snd_una;
         // Retransmit the oldest unacknowledged message buffer.
         auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
         if (!msg_buf) return;
         prepare_datapacket(msg_buf, pcb_.snd_una);
         msg_buf->mark_not_txpulltime_free();
-        // socket_->send_packet(
+        // pending_tx_frames_.push_back(
         //     {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
-        pending_tx_frames_.push_back(
+        socket_->send_packet(
             {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
         pcb_.rto_reset();
         pcb_.fast_rexmits++;
     }
 
     void rto_retransmit() {
-        LOG(INFO) << "RTO retransmitting oldest unacked packet "
-                  << pcb_.snd_una;
+        // LOG(INFO) << "RTO retransmitting oldest unacked packet "
+        //           << pcb_.snd_una;
         auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
         if (!msg_buf) return;
         prepare_datapacket(msg_buf, pcb_.snd_una);
         msg_buf->mark_not_txpulltime_free();
-        // socket_->send_packet(
+        // pending_tx_frames_.push_back(
         //     {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
-        pending_tx_frames_.push_back(
+        socket_->send_packet(
             {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
         pcb_.rto_reset();
         pcb_.rto_rexmits++;
@@ -869,15 +895,13 @@ class UcclFlow {
 
     void flush_pending_tx() {
         if (pending_tx_frames_.empty()) return;
-        VLOG(2) << "flush_pending_tx: ack " << pending_ack_frames_ << " data "
+        VLOG(3) << "flush_pending_tx: ack " << pending_ack_frames_ << " data "
                 << pending_data_frames_;
 
         socket_->send_packets(pending_tx_frames_);
         pending_tx_frames_.clear();
         pending_ack_frames_ = 0;
         pending_data_frames_ = 0;
-
-        last_transmit_timestamp_ = std::chrono::high_resolution_clock::now();
     }
 
     void process_ack(const UcclPktHdr *ucclh) {
@@ -892,10 +916,11 @@ class UcclFlow {
             // Update the number of out-of-order acknowledgements.
             pcb_.snd_ooo_acks = ucclh->sack_bitmap_count.value();
 
-            if (pcb_.duplicate_acks < swift::Pcb::kRexmitThreshold) {
+            if (pcb_.duplicate_acks < swift::Pcb::kFastRexmitDupAckThres) {
                 // We have not reached the threshold yet, so we do not do
                 // anything.
-            } else if (pcb_.duplicate_acks == swift::Pcb::kRexmitThreshold) {
+            } else if (pcb_.duplicate_acks ==
+                       swift::Pcb::kFastRexmitDupAckThres) {
                 // Fast retransmit.
                 VLOG(2) << "Fast retransmit " << ackno;
                 fast_retransmit();
@@ -915,7 +940,7 @@ class UcclFlow {
                 // ACKs to skip previous holes.
                 auto *msgbuf = tx_tracking_.get_oldest_unacked_msgbuf();
                 size_t holes_to_skip =
-                    pcb_.duplicate_acks - swift::Pcb::kRexmitThreshold;
+                    pcb_.duplicate_acks - swift::Pcb::kFastRexmitDupAckThres;
                 VLOG(2) << "Fast recovery " << ackno << " sack_bitmap_count "
                         << sack_bitmap_count << " holes_to_skip "
                         << holes_to_skip;
@@ -945,11 +970,11 @@ class UcclFlow {
                             auto seqno = pcb_.snd_una + index;
                             prepare_datapacket(msgbuf, seqno);
                             msgbuf->mark_not_txpulltime_free();
-                            // socket_->send_packet({msgbuf->get_frame_offset(),
-                            //                       msgbuf->get_frame_len()});
-                            pending_tx_frames_.push_back(
-                                {msgbuf->get_frame_offset(),
-                                 msgbuf->get_frame_len()});
+                            // pending_tx_frames_.push_back(
+                            //     {msgbuf->get_frame_offset(),
+                            //      msgbuf->get_frame_len()});
+                            socket_->send_packet({msgbuf->get_frame_offset(),
+                                                  msgbuf->get_frame_len()});
                             pcb_.rto_reset();
                             return;
                         }
@@ -996,9 +1021,6 @@ class UcclFlow {
     std::vector<AFXDPSocket::frame_desc> pending_tx_frames_;
     uint32_t pending_ack_frames_;
     uint32_t pending_data_frames_;
-    // Last time an array of packets were transmitted.
-    std::chrono::time_point<std::chrono::high_resolution_clock>
-        last_transmit_timestamp_;
 
     // Swift CC protocol control block.
     swift::Pcb pcb_;
@@ -1016,7 +1038,6 @@ class UcclEngine {
     const size_t kSlowTimerIntervalUs = 2000;  // 2ms
     const size_t kDumpStatusTicks = 1000;      // 2s
     const uint32_t RECV_BATCH_SIZE = 32;
-    const uint32_t SEND_BATCH_SIZE = 32;
     UcclEngine() = delete;
     UcclEngine(UcclEngine const &) = delete;
 
@@ -1103,7 +1124,7 @@ class UcclEngine {
                 process_tx_msg(tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames);
             }
 
-            process_tx_msg(nullptr, nullptr, 0);
+            // process_tx_msg(nullptr, nullptr, 0);
         }
 
         // This will reset flow pcb state.
@@ -1156,7 +1177,7 @@ class UcclEngine {
     void handle_rto() {
         // TODO(yang): maintain active_flows_map_
         auto is_active_flow = flow_->periodic_check();
-        // DCHECK(is_active_flow);
+        DCHECK(is_active_flow);
     }
 
     std::tuple<FrameBuf *, FrameBuf *, uint32_t> deserialize_msg(

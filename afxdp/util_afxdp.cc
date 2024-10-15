@@ -193,14 +193,6 @@ uint32_t AFXDPSocket::pull_complete_queue() {
     return completed;
 }
 
-uint32_t AFXDPSocket::pull_complete_queue_forced(uint32_t nb_frames) {
-    uint32_t completed = pull_complete_queue();
-    while (completed != nb_frames) {
-        completed += pull_complete_queue();
-    }
-    return completed;
-}
-
 uint32_t AFXDPSocket::send_packet(frame_desc frame) {
     // reserving a slot in the send queue.
     uint32_t send_index;
@@ -274,21 +266,6 @@ std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
     }
 
     xsk_ring_cons__release(&recv_queue_, rcvd);
-    return frames;
-}
-
-std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets_force(
-    uint32_t nb_frames) {
-    std::vector<AFXDPSocket::frame_desc> frames = recv_packets(nb_frames);
-    auto start = std::chrono::high_resolution_clock::now();
-    while (frames.size() != nb_frames &&
-           std::chrono::duration_cast<std::chrono::microseconds>(
-               std::chrono::high_resolution_clock::now() - start)
-                   .count() < 1000) {
-        auto more_frames = recv_packets(nb_frames - frames.size());
-        frames.insert(frames.end(), more_frames.begin(), more_frames.end());
-    }
-
     return frames;
 }
 

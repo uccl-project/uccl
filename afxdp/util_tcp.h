@@ -2,7 +2,7 @@
 #include <stdint.h>
 
 // need around 200k to echieve 9Gbps
-#define PAYLOAD_BYTES 1024
+#define PAYLOAD_BYTES (1024000)
 #define DEFAULT_PORT 40000
 #define DEFAULT_ADDRESS "127.0.0.1"
 // only impact tcp_ep

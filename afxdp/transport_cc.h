@@ -33,16 +33,15 @@ constexpr bool seqno_gt(uint32_t a, uint32_t b) {
 struct Pcb {
     static constexpr std::size_t kInitialCwnd = 256;
     static constexpr std::size_t kSackBitmapSize = 256;
-    static constexpr std::size_t kRexmitThreshold = 3;
-    static constexpr int kRtoThresholdInTicks = 3;  // in slow timer ticks.
+    static constexpr std::size_t kFastRexmitDupAckThres = 3;
+    static constexpr std::size_t kRtoMaxRexmitAllowed = 128;
+    static constexpr int kRtoExpireThresInTicks = 3;  // in slow timer ticks.
     static constexpr int kRtoDisabled = -1;
     Pcb() {}
 
     // Return the sender effective window in # of packets.
     uint32_t effective_wnd() const {
         uint32_t effective_wnd = cwnd - (snd_nxt - snd_una - snd_ooo_acks);
-        // uint32_t effective_wnd = cwnd - (snd_nxt - snd_una);
-        // uint32_t effective_wnd = 1;
         return effective_wnd > cwnd ? 0 : effective_wnd;
     }
 
@@ -66,9 +65,11 @@ struct Pcb {
     }
 
     uint32_t ackno() const { return rcv_nxt; }
-    bool max_rexmits_reached() const { return rto_rexmits >= kRexmitThreshold; }
+    bool max_rto_rexmits_reached() const {
+        return rto_rexmits >= kRtoMaxRexmitAllowed;
+    }
     bool rto_disabled() const { return rto_timer == kRtoDisabled; }
-    bool rto_expired() const { return rto_timer >= kRtoThresholdInTicks; }
+    bool rto_expired() const { return rto_timer >= kRtoExpireThresInTicks; }
 
     uint32_t get_rcv_nxt() const { return rcv_nxt; }
     void advance_rcv_nxt() { rcv_nxt++; }
