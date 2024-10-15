@@ -17,7 +17,7 @@ struct {
 } xsks_map SEC(".maps");
 
 #define kNetHdrLen \
-    (sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr))
+    (sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct tcphdr))
 #define kMagic 0x4e53
 #define kUcclHdrLen 54
 
@@ -32,7 +32,7 @@ int ebpf_transport_filter(struct xdp_md *ctx) {
     __u16 magic = *(__u16 *)(data + kNetHdrLen);
 
     if (eth->h_proto != __constant_htons(ETH_P_IP) ||
-        ip->protocol != IPPROTO_UDP || magic != __constant_htons(kMagic)) {
+        ip->protocol != IPPROTO_TCP || magic != __constant_htons(kMagic)) {
         return XDP_PASS;
     }
 

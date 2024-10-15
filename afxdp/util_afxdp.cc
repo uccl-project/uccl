@@ -225,7 +225,7 @@ uint32_t AFXDPSocket::send_packets(std::vector<frame_desc>& frames) {
     // reserving slots in the send queue.
     uint32_t send_index;
     auto num_frames = frames.size();
-    LOG_EVERY_N(INFO, 10000) << "tx send_packets num_frames = " << num_frames;
+    VLOG(2) << "tx send_packets num_frames = " << num_frames;
     while (xsk_ring_prod__reserve(&send_queue_, num_frames, &send_index) == 0) {
         LOG(WARNING) << "send_queue_ is full. Busy waiting...";
     }
@@ -250,7 +250,7 @@ void AFXDPSocket::populate_fill_queue(uint32_t nb_frames) {
     uint32_t idx_fq;
     int ret = xsk_ring_prod__reserve(&fill_queue_, nb_frames, &idx_fq);
     if (ret <= 0) return;
-    LOG_EVERY_N(INFO, 10000) << "afxdp reserved fill_queue slots = " << ret;
+    VLOG(2) << "afxdp reserved fill_queue slots = " << ret;
     for (int i = 0; i < ret; i++) {
         *xsk_ring_prod__fill_addr(&fill_queue_, idx_fq++) = frame_pool_->pop();
     }
@@ -263,7 +263,7 @@ std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
     uint32_t idx_rx, rcvd;
     rcvd = xsk_ring_cons__peek(&recv_queue_, nb_frames, &idx_rx);
     if (!rcvd) return frames;
-    LOG_EVERY_N(INFO, 10000) << "rx recv_packets num_frames = " << rcvd;
+    VLOG(2) << "rx recv_packets num_frames = " << rcvd;
 
     populate_fill_queue(nb_frames);
 

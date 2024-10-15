@@ -3,8 +3,8 @@
 #include <glog/logging.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
-#include <linux/udp.h>
 #include <linux/tcp.h>
+#include <linux/udp.h>
 
 #include <bitset>
 #include <chrono>
@@ -162,7 +162,7 @@ struct __attribute__((packed)) UcclPktHdr {
 static_assert(sizeof(UcclPktHdr) == 54, "UcclPktHdr size mismatch");
 
 static const size_t kNetHdrLen =
-    sizeof(ethhdr) + sizeof(iphdr) + sizeof(udphdr);
+    sizeof(ethhdr) + sizeof(iphdr) + sizeof(tcphdr);
 static const size_t kUcclHdrLen = sizeof(UcclPktHdr);
 
 inline UcclPktHdr::UcclFlags operator|(UcclPktHdr::UcclFlags lhs,
@@ -699,8 +699,8 @@ class UcclFlow {
         ipv4h->id = htons(0x1513);
         ipv4h->frag_off = htons(0);
         ipv4h->ttl = 64;
-        ipv4h->protocol = IPPROTO_UDP;
-        ipv4h->tot_len = htons(sizeof(iphdr) + sizeof(udphdr) + payload_bytes);
+        ipv4h->protocol = IPPROTO_TCP;
+        ipv4h->tot_len = htons(sizeof(iphdr) + sizeof(tcphdr) + payload_bytes);
         ipv4h->saddr = htonl(local_addr_);
         ipv4h->daddr = htonl(remote_addr_);
         ipv4h->check = 0;
@@ -709,22 +709,27 @@ class UcclFlow {
     }
 
     void prepare_l4header(uint8_t *pkt_addr, uint32_t payload_bytes) const {
-        auto *udph = (udphdr *)(pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
+        auto *tcph = (tcphdr *)(pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
         // static uint16_t rand_port = 0;
-        // udph->source = htons(local_port_ + (rand_port++) % 8);
-        // udph->dest = htons(remote_port_ + (rand_port++) % 8);
-        udph->source = htons(local_port_);
-        udph->dest = htons(remote_port_);
-        udph->len = htons(sizeof(udphdr) + payload_bytes);
-        udph->check = htons(0);
+        // tcph->source = htons(local_port_ + (rand_port++) % 8);
+        // tcph->dest = htons(remote_port_ + (rand_port++) % 8);
+        memset(tcph, 0, sizeof(tcphdr));
+        tcph->source = htons(local_port_);
+        tcph->dest = htons(remote_port_);
+        tcph->seq = htonl(pcb_.seqno());
+        tcph->ack_seq = htonl(pcb_.ackno());
+        tcph->doff = 5;
+        tcph->ack = 1;
+        tcph->window = htons(491);
+        tcph->check = tcp_hdr_chksum(local_addr_, remote_addr_,
+                                     5 * sizeof(uint32_t) + payload_bytes);
         // TODO(yang): Calculate the UDP checksum.
     }
 
     void prepare_ucclhdr(uint8_t *pkt_addr, uint32_t seqno, uint32_t ackno,
                          const UcclPktHdr::UcclFlags &net_flags,
                          uint8_t msg_flags = 0) const {
-        auto *ucclh = (UcclPktHdr *)(pkt_addr + sizeof(ethhdr) + sizeof(iphdr) +
-                                     sizeof(udphdr));
+        auto *ucclh = (UcclPktHdr *)(pkt_addr + kNetHdrLen);
         ucclh->magic = be16_t(UcclPktHdr::kMagic);
         ucclh->net_flags = net_flags;
         ucclh->msg_flags = msg_flags;
@@ -756,8 +761,7 @@ class UcclFlow {
         // Let AFXDPSocket::pull_complete_queue() free control frames.
         FrameBuf::mark_txpulltime_free(frame_offset, socket_->umem_buffer_);
 
-        return {frame_offset, sizeof(ethhdr) + sizeof(iphdr) + sizeof(ethhdr) +
-                                  kControlPayloadBytes};
+        return {frame_offset, kNetHdrLen + kControlPayloadBytes};
     }
 
     AFXDPSocket::frame_desc craft_ack(uint32_t seqno, uint32_t ackno) const {

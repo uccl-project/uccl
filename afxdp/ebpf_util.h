@@ -4,6 +4,7 @@
 #include <linux/string.h>
 #include <linux/types.h>
 #include <linux/udp.h>
+#include <linux/tcp.h>
 
 #if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && \
     __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
