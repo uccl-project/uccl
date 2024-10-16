@@ -162,7 +162,7 @@ class AFXDPSocket {
     struct xsk_ring_prod send_queue_;
     struct xsk_ring_cons complete_queue_;
     struct xsk_ring_prod fill_queue_;
-    FramePool *frame_pool_;
+    FramePool</*Sync=*/false> *frame_pool_;
 
     struct frame_desc {
         uint64_t frame_offset;
@@ -170,6 +170,7 @@ class AFXDPSocket {
     };
 
     // The completed packets might come from last send_packet call.
+    uint32_t send_queue_free_entries(uint32_t nb_frames);
     uint32_t send_packet(frame_desc frame);
     uint32_t send_packets(std::vector<frame_desc> &frames);
     uint32_t pull_complete_queue();

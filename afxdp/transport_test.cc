@@ -15,7 +15,7 @@ const uint32_t SERVER_IPV4_ADDRESS = 0xac1f16f9;  // 172.31.22.249
 const uint32_t CLIENT_IPV4_ADDRESS = 0xac1f10c6;  // 172.31.16.198
 const uint16_t SERVER_PORT = 40000;
 const uint16_t CLIENT_PORT = 40000;
-const size_t NUM_FRAMES = 4096 * 64; // 1GB frame pool
+const size_t NUM_FRAMES = 4096 * 64;  // 1GB frame pool
 const size_t QUEUE_ID = 0;
 const size_t kTestMsgSize = 1024000;
 const size_t kTestIters = 1024000000;
@@ -97,12 +97,6 @@ int main(int argc, char* argv[]) {
                           << " us, tail rtt: " << tail_latency << " us, bw "
                           << bw_gbps << " Gbps";
             }
-            // if (duration_us.count() > 7000) {
-            //     cnt++;
-            //     if (cnt > 20) exit(0);
-            // } else {
-            //     cnt = 0;
-            // }
         }
 
         engine.shutdown();
@@ -132,14 +126,16 @@ int main(int argc, char* argv[]) {
             auto duration_us =
                 std::chrono::duration_cast<std::chrono::microseconds>(end -
                                                                       start);
-            // CHECK_EQ(len, kTestMsgSize) << "Received message size mismatches";
-            // for (int j = 0; j < kTestMsgSize / sizeof(uint32_t); j++) {
+            // CHECK_EQ(len, kTestMsgSize) << "Received message size
+            // mismatches"; for (int j = 0; j < kTestMsgSize / sizeof(uint32_t);
+            // j++) {
             //     CHECK_EQ(reinterpret_cast<uint32_t*>(data)[j], j)
             //         << "Data mismatch at index " << j;
             // }
+            // memset(data, 0, kTestMsgSize);
             LOG_EVERY_N(INFO, kReportIters)
-                << "Received " << i << " messages, rtt "
-                << duration_us.count() << " us";
+                << "Received " << i << " messages, rtt " << duration_us.count()
+                << " us";
         }
         engine.shutdown();
         engine_th.join();

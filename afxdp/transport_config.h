@@ -5,6 +5,6 @@
 #define SEND_BATCH_SIZE 32
 
 // #define USING_TCP
-// #define USING_MULTIPATH
+#define USING_MULTIPATH
 
 #endif  // TRANSPORT_CONFIG_H

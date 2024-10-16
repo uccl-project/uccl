@@ -35,7 +35,7 @@ struct Pcb {
     static constexpr std::size_t kInitialCwnd = 256;
     static constexpr std::size_t kSackBitmapSize = 256;
     static constexpr std::size_t kFastRexmitDupAckThres = 1;
-    static constexpr std::size_t kRtoMaxRexmitAllowed = 128;
+    static constexpr std::size_t kRtoMaxRexmitConsectutiveAllowed = 1024;
     static constexpr int kRtoExpireThresInTicks = 3;  // in slow timer ticks.
     static constexpr int kRtoDisabled = -1;
     Pcb() {}
@@ -73,8 +73,8 @@ struct Pcb {
     }
 
     uint32_t ackno() const { return rcv_nxt; }
-    bool max_rto_rexmits_reached() const {
-        return rto_rexmits >= kRtoMaxRexmitAllowed;
+    bool max_rto_rexmits_consectutive_reached() const {
+        return rto_rexmits_consectutive >= kRtoMaxRexmitConsectutiveAllowed;
     }
     bool rto_disabled() const { return rto_timer == kRtoDisabled; }
     bool rto_expired() const { return rto_timer >= kRtoExpireThresInTicks; }
@@ -140,6 +140,7 @@ struct Pcb {
     int rto_timer{kRtoDisabled};
     uint16_t fast_rexmits{0};
     uint16_t rto_rexmits{0};
+    uint16_t rto_rexmits_consectutive{0};
     double ecn_alpha{1.0};
 };
 

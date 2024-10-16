@@ -51,7 +51,7 @@ struct socket_t {
     struct xsk_ring_cons complete_queue;
     struct xsk_ring_prod fill_queue;
     struct xsk_socket* xsk;
-    std::unique_ptr<FramePool> frame_pool;
+    std::unique_ptr<FramePool<true>> frame_pool;
     uint64_t recv_packets;
     uint32_t counter;
     int queue_id;
@@ -207,7 +207,8 @@ int server_init(struct server_t* server, const char* interface_name) {
         }
         // apply_setsockopt(xsk_socket__fd(server->socket[i].xsk));
 
-        server->socket[i].frame_pool = std::make_unique<FramePool>(NUM_FRAMES);
+        server->socket[i].frame_pool =
+            std::make_unique<FramePool<true>>(NUM_FRAMES);
         // initialize frame allocator
         for (int j = 0; j < NUM_FRAMES; j++) {
             server->socket[i].frame_pool->push(j * FRAME_SIZE +

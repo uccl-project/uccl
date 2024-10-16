@@ -131,8 +131,8 @@ AFXDPSocket::AFXDPSocket(int queue_id, int num_frames)
 
     memset(&xsk_config, 0, sizeof(xsk_config));
 
-    xsk_config.rx_size = XSK_RING_CONS__DEFAULT_NUM_DESCS;
-    xsk_config.tx_size = XSK_RING_PROD__DEFAULT_NUM_DESCS;
+    xsk_config.rx_size = XSK_RING_CONS__DEFAULT_NUM_DESCS * 2;
+    xsk_config.tx_size = XSK_RING_PROD__DEFAULT_NUM_DESCS * 2;
     xsk_config.xdp_flags = XDP_ZEROCOPY;  // force zero copy mode
     xsk_config.bind_flags =
         XDP_USE_NEED_WAKEUP;  // manually wake up the driver when it needs
@@ -149,7 +149,7 @@ AFXDPSocket::AFXDPSocket(int queue_id, int num_frames)
     // apply_setsockopt(xsk_socket__fd(xsk_));
 
     // initialize frame allocator
-    frame_pool_ = new FramePool(num_frames);
+    frame_pool_ = new FramePool</*Sync=*/false>(num_frames);
     for (int j = 0; j < num_frames; j++) {
         frame_pool_->push(j * FRAME_SIZE + XDP_PACKET_HEADROOM);
     }
@@ -194,12 +194,17 @@ uint32_t AFXDPSocket::pull_complete_queue() {
     return completed;
 }
 
+uint32_t AFXDPSocket::send_queue_free_entries(uint32_t nb_frames) {
+    return xsk_prod_nb_free(&send_queue_, nb_frames);
+}
+
 uint32_t AFXDPSocket::send_packet(frame_desc frame) {
     // reserving a slot in the send queue.
     uint32_t send_index;
     VLOG(2) << "tx send_packets num_frames = " << 1;
     while (xsk_ring_prod__reserve(&send_queue_, 1, &send_index) == 0) {
-        LOG(WARNING) << "send_queue_ is full. Busy waiting...";
+        LOG_EVERY_N(WARNING, 1000000) << "send_queue_ is full. Busy waiting...";
+        sendto(xsk_socket__fd(xsk_), NULL, 0, MSG_DONTWAIT, NULL, 0);
     }
     struct xdp_desc* desc = xsk_ring_prod__tx_desc(&send_queue_, send_index);
     desc->addr = frame.frame_offset;
@@ -220,7 +225,8 @@ uint32_t AFXDPSocket::send_packets(std::vector<frame_desc>& frames) {
     auto num_frames = frames.size();
     VLOG(2) << "tx send_packets num_frames = " << num_frames;
     while (xsk_ring_prod__reserve(&send_queue_, num_frames, &send_index) == 0) {
-        LOG(WARNING) << "send_queue_ is full. Busy waiting...";
+        LOG_EVERY_N(WARNING, 1000000) << "send_queue_ is full. Busy waiting...";
+        sendto(xsk_socket__fd(xsk_), NULL, 0, MSG_DONTWAIT, NULL, 0);
     }
     for (int i = 0; i < num_frames; i++) {
         struct xdp_desc* desc =

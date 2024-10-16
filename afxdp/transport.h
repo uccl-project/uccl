@@ -702,7 +702,7 @@ class UcclFlow {
         pcb_.rto_advance();
 
         // TODO(ilias): send RST packet, indicating removal of the flow.
-        if (pcb_.max_rto_rexmits_reached()) {
+        if (pcb_.max_rto_rexmits_consectutive_reached()) {
             return false;
         }
 
@@ -786,7 +786,7 @@ class UcclFlow {
             pcb_.snd_una = ackno;
             pcb_.duplicate_acks = 0;
             pcb_.snd_ooo_acks = 0;
-            pcb_.rto_rexmits = 0;
+            pcb_.rto_rexmits_consectutive = 0;
             pcb_.rto_maybe_reset();
         }
     }
@@ -956,6 +956,7 @@ class UcclFlow {
             {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
         pcb_.rto_reset();
         pcb_.rto_rexmits++;
+        pcb_.rto_rexmits_consectutive++;
     }
 
     /**
@@ -965,6 +966,9 @@ class UcclFlow {
     void transmit_pending_packets() {
         auto remaining_packets =
             std::min(pcb_.effective_wnd(), tx_tracking_.num_unsent_msgbufs());
+        remaining_packets =
+            std::min(remaining_packets,
+                     socket_->send_queue_free_entries(remaining_packets));
         if (remaining_packets == 0) return;
 
         // Prepare the packets.
