@@ -1,8 +1,10 @@
 #ifndef TRANSPORT_CONFIG_H
 #define TRANSPORT_CONFIG_H
 
+#define RECV_BATCH_SIZE 32
+#define SEND_BATCH_SIZE 32
+
 // #define USING_TCP
 // #define USING_MULTIPATH
-// #define DIRECT_SEND
 
 #endif  // TRANSPORT_CONFIG_H
