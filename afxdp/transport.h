@@ -765,14 +765,18 @@ class UcclFlow {
                         auto seqno = pcb_.snd_una + index;
                         prepare_datapacket(msgbuf, seqno);
                         msgbuf->mark_not_txpulltime_free();
-                        socket_->send_packet({msgbuf->get_frame_offset(),
-                                              msgbuf->get_frame_len()});
+                        missing_frames_.push_back({msgbuf->get_frame_offset(),
+                                                   msgbuf->get_frame_len()});
                         pcb_.rto_reset();
                     } else {
                         sack_bitmap_count--;
                     }
                     index++;
                     msgbuf = msgbuf->next();
+                }
+                if (!missing_frames_.empty()) {
+                    socket_->send_packets(missing_frames_);
+                    missing_frames_.clear();
                 }
             }
         } else if (swift::seqno_gt(ackno, pcb_.snd_nxt)) {
@@ -1007,8 +1011,10 @@ class UcclFlow {
     Channel *channel_;
     // ConnectionID of this flow.
     ConnectionID connection_id_;
-    // Accumulated data and ack frames to be sent.
+    // Accumulated data frames to be sent.
     std::vector<AFXDPSocket::frame_desc> pending_tx_frames_;
+    // Missing data frames to be sent.
+    std::vector<AFXDPSocket::frame_desc> missing_frames_;
 
     // Swift CC protocol control block.
     swift::Pcb pcb_;

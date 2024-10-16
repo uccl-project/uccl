@@ -34,7 +34,7 @@ constexpr bool seqno_gt(uint32_t a, uint32_t b) {
 struct Pcb {
     static constexpr std::size_t kInitialCwnd = 256;
     static constexpr std::size_t kSackBitmapSize = 256;
-    static constexpr std::size_t kFastRexmitDupAckThres = 1;
+    static constexpr std::size_t kFastRexmitDupAckThres = 2;
     static constexpr std::size_t kRtoMaxRexmitConsectutiveAllowed = 1024;
     static constexpr int kRtoExpireThresInTicks = 3;  // in slow timer ticks.
     static constexpr int kRtoDisabled = -1;
@@ -138,8 +138,8 @@ struct Pcb {
     uint16_t cwnd{kInitialCwnd};
     uint16_t duplicate_acks{0};
     int rto_timer{kRtoDisabled};
-    uint16_t fast_rexmits{0};
-    uint16_t rto_rexmits{0};
+    uint32_t fast_rexmits{0};
+    uint32_t rto_rexmits{0};
     uint16_t rto_rexmits_consectutive{0};
     double ecn_alpha{1.0};
 };
