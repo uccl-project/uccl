@@ -282,7 +282,7 @@ std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
 std::string AFXDPSocket::to_string() const {
     std::string s;
     s += Format(
-        "\t\t\t[Frame pool] free frames: %u unpulled tx pkts: %u fill queue "
+        "\n\t\t[Frame pool] free frames: %u unpulled tx pkts: %u fill queue "
         "entries: %u\n",
         frame_pool_->size(), unpulled_tx_pkts_, fill_queue_entries_);
     return s;

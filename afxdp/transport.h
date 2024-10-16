@@ -579,10 +579,12 @@ class UcclFlow {
 
     std::string to_string() const {
         return Format(
-            "\t\t\t%x [queue %d] <-> %x\n\t\t\t%s\n\t\t\t[TX Queue] Pending "
-            "MsgBufs: %u\n",
+            "%x [queue %d] <-> %x [queue 0]\n"
+            "\t\t%s\n"
+            "\t\t[TX Queue] pending msgbufs: %u ready msgs: %u",
             local_addr_, socket_->queue_id_, remote_addr_,
-            pcb_.to_string().c_str(), tx_tracking_.num_unsent_msgbufs());
+            pcb_.to_string().c_str(), tx_tracking_.num_unsent_msgbufs(),
+            rx_tracking_.ready_msg_stash_.size());
     }
 
     void shutdown() { pcb_.rto_disable(); }
@@ -1224,7 +1226,7 @@ class UcclEngine {
 
     void dump_status() {
         std::string s;
-        s += "\n\t\t[Uccl Engine Status]\n";
+        s += "\n\t\t[Uccl Engine Status] ";
         s += flow_->to_string();
         s += socket_->to_string();
         // TODO(yang): Add more status information.
