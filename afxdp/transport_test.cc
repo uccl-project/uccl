@@ -60,8 +60,8 @@ int main(int argc, char* argv[]) {
         auto conn_id = ep.connect(SERVER_IPV4_ADDRESS);
         auto* data = new uint8_t[kTestMsgSize];
         auto* data_u32 = reinterpret_cast<uint32_t*>(data);
-        for (int i = 0; i < kTestMsgSize / sizeof(uint32_t); i++) {
-            data_u32[i] = i;
+        for (int j = 0; j < kTestMsgSize / sizeof(uint32_t); j++) {
+            data_u32[j] = j;
         }
         std::vector<uint64_t> rtts;
         auto start_bw = std::chrono::high_resolution_clock::now();

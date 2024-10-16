@@ -1,5 +1,5 @@
 KERNEL = $(shell uname -r)
-INC = -I ../lib/install/include 
+INC = -I ../lib/install/include
 LIBS = ../lib/install/lib/libxdp.a ../lib/install/lib/libbpf.a -lglog -lgflags
 CXXFLAGS = -O3 -g -std=c++17 -Wno-pointer-arith
 CLANGFLAGS = -O3 -g

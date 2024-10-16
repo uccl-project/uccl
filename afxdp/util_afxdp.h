@@ -185,6 +185,7 @@ class AFXDPSocket {
 
    private:
     uint32_t unpulled_tx_pkts_;
+    uint32_t fill_queue_entries_;
 };
 
 }  // namespace uccl

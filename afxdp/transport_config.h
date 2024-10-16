@@ -1,7 +1,8 @@
 #ifndef TRANSPORT_CONFIG_H
 #define TRANSPORT_CONFIG_H
 
-#define USING_TCP
-#define USING_MULTIPATH
+// #define USING_TCP
+// #define USING_MULTIPATH
+// #define DIRECT_SEND
 
 #endif  // TRANSPORT_CONFIG_H

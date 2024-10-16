@@ -2,6 +2,7 @@
 
 #include <glog/logging.h>
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -42,7 +43,13 @@ struct Pcb {
     // Return the sender effective window in # of packets.
     uint32_t effective_wnd() const {
         uint32_t effective_wnd = cwnd - (snd_nxt - snd_una - snd_ooo_acks);
-        return effective_wnd > cwnd ? 0 : effective_wnd;
+        return effective_wnd > cwnd ? 0 : std::ceil(effective_wnd * ecn_alpha);
+    }
+
+    void mutliplicative_decrease() { ecn_alpha /= 2; }
+    void additive_increase() {
+        ecn_alpha += 0.1;
+        if (ecn_alpha > 1.0) ecn_alpha = 1.0;
     }
 
     uint32_t seqno() const { return snd_nxt; }
@@ -60,7 +67,8 @@ struct Pcb {
              ", cwnd: " + std::to_string(cwnd) +
              ", fast_rexmits: " + std::to_string(fast_rexmits) +
              ", rto_rexmits: " + std::to_string(rto_rexmits) +
-             ", effective_wnd: " + std::to_string(effective_wnd());
+             ", effective_wnd: " + std::to_string(effective_wnd()) +
+             ", ecn_alpha: " + std::to_string(ecn_alpha);
         return s;
     }
 
@@ -132,6 +140,7 @@ struct Pcb {
     int rto_timer{kRtoDisabled};
     uint16_t fast_rexmits{0};
     uint16_t rto_rexmits{0};
+    double ecn_alpha{1.0};
 };
 
 }  // namespace swift

@@ -311,4 +311,17 @@ static inline uint16_t tcp_hdr_chksum(uint32_t local_ip, uint32_t remote_ip,
     return ipv4_phdr_cksum(IPPROTO_TCP, local_ip, remote_ip, len);
 }
 
+static inline uint64_t rdtsc(void) {
+    uint32_t a, d;
+    asm volatile("rdtsc" : "=a"(a), "=d"(d));
+    return ((uint64_t)a) | (((uint64_t)d) << 32);
+}
+
+static inline double rdtsc_to_us(uint64_t tsc) {
+    static double ghz = 0;
+    // TODO(yang): auto detect the CPU frequency
+    if (unlikely(!ghz)) ghz = 3.0;
+    return tsc / ghz / 1000.0;
+}
+
 }  // namespace uccl
