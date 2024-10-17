@@ -18,14 +18,14 @@
 namespace uccl {
 
 template <class T>
-inline T Percentile(std::vector<T>& vectorIn, double percent) {
+static inline T Percentile(std::vector<T>& vectorIn, double percent) {
     if (vectorIn.size() == 0) return (T)0;
     auto nth = vectorIn.begin() + (percent * vectorIn.size()) / 100;
     std::nth_element(vectorIn.begin(), nth, vectorIn.end());
     return *nth;
 }
 
-inline uint16_t ipv4_checksum(const void* data, size_t header_length) {
+static inline uint16_t ipv4_checksum(const void* data, size_t header_length) {
     unsigned long sum = 0;
 
     const uint16_t* p = (const uint16_t*)data;
@@ -45,7 +45,7 @@ inline uint16_t ipv4_checksum(const void* data, size_t header_length) {
     return ~sum;
 }
 
-inline bool pin_thread_to_cpu(int cpu) {
+static inline bool pin_thread_to_cpu(int cpu) {
     int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
     if (cpu < 0 || cpu >= num_cpus) return false;
 
@@ -58,7 +58,7 @@ inline bool pin_thread_to_cpu(int cpu) {
     return !pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
 }
 
-inline void apply_setsockopt(int xsk_fd) {
+static inline void apply_setsockopt(int xsk_fd) {
     int ret;
     int sock_opt;
 
@@ -108,7 +108,7 @@ struct FinalAction {
 }  // namespace detail
 
 template <typename F>
-inline detail::FinalAction<F> finally(F f) {
+static inline detail::FinalAction<F> finally(F f) {
     return detail::FinalAction<F>(f);
 }
 
@@ -167,7 +167,7 @@ constexpr std::size_t hardware_destructive_interference_size = 64;
 static_assert(hardware_constructive_interference_size == 64);
 static_assert(hardware_destructive_interference_size == 64);
 
-inline jring_t* create_ring(size_t element_size, size_t element_count) {
+static inline jring_t* create_ring(size_t element_size, size_t element_count) {
     size_t ring_sz = jring_get_buf_ring_size(element_size, element_count);
     LOG(INFO) << "Ring size: " << ring_sz
               << " bytes, msg size: " << element_size
@@ -322,6 +322,22 @@ static inline double rdtsc_to_us(uint64_t tsc) {
     // TODO(yang): auto detect the CPU frequency
     if (unlikely(!ghz)) ghz = 3.0;
     return tsc / ghz / 1000.0;
+}
+
+// 0x04030201 -> 1.2.3.4
+static inline std::string ip_to_str(uint32_t ip) {
+    struct sockaddr_in sa;
+    char str[INET_ADDRSTRLEN];
+    sa.sin_addr.s_addr = ip;
+    inet_ntop(AF_INET, &(sa.sin_addr), str, INET_ADDRSTRLEN);
+    return std::string(str);
+}
+
+// 1.2.3.4 -> 0x04030201
+static inline uint32_t str_to_ip(const std::string& ip) {
+    struct sockaddr_in sa;
+    DCHECK(inet_pton(AF_INET, ip.c_str(), &(sa.sin_addr)) != 0);
+    return sa.sin_addr.s_addr;
 }
 
 }  // namespace uccl

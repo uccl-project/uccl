@@ -5,6 +5,7 @@
 #include <linux/ip.h>
 #include <linux/tcp.h>
 #include <linux/udp.h>
+#include <netdb.h>
 
 #include <bitset>
 #include <chrono>
@@ -80,26 +81,115 @@ class Channel {
  * its all queues.
  */
 class Endpoint {
-    constexpr static uint16_t kBootstrapPort = 40000;
+    constexpr static uint16_t kBootstrapPort = 30000;
     Channel *channel_;
+    int listen_fd_;
+    int next_avail_conn_id_;
+    std::unordered_map<ConnectionID, int> bootstrap_fd_map_;
 
    public:
-    Endpoint(Channel *channel) : channel_(channel) {}
-    ~Endpoint() {}
+    Endpoint(Channel *channel) : channel_(channel), next_avail_conn_id_(0x1) {
+        // Create listening socket
+        listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
+        DCHECK(listen_fd_ >= 0) << "ERROR: opening socket";
+
+        int flag = 1;
+        DCHECK(setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &flag,
+                          sizeof(int)) >= 0)
+            << "ERROR: setsockopt SO_REUSEADDR fails";
+
+        struct sockaddr_in serv_addr;
+        bzero((char *)&serv_addr, sizeof(serv_addr));
+        serv_addr.sin_family = AF_INET;
+        serv_addr.sin_addr.s_addr = INADDR_ANY;
+        serv_addr.sin_port = htons(kBootstrapPort);
+        DCHECK(bind(listen_fd_, (struct sockaddr *)&serv_addr,
+                    sizeof(serv_addr)) >= 0)
+            << "ERROR: binding";
+
+        DCHECK(!listen(listen_fd_, 5)) << "ERROR: listen";
+        LOG(INFO) << "Server ready, listening on port " << kBootstrapPort;
+    }
+    ~Endpoint() { close(listen_fd_); }
 
     // Connecting to a remote address.
-    ConnectionID connect(uint32_t remote_ip) {
-        // TODO(yang): Using TCP to negotiate a ConnectionID.
-        return 0xdeadbeaf;
+    ConnectionID uccl_connect(std::string remote_ip) {
+        struct sockaddr_in serv_addr;
+        struct hostent *server;
+        int bootstrap_fd;
+
+        bootstrap_fd = socket(AF_INET, SOCK_STREAM, 0);
+        DCHECK(bootstrap_fd >= 0) << "ERROR: opening socket";
+
+        server = gethostbyname(remote_ip.c_str());
+        DCHECK(server) << "ERROR: no such host";
+
+        bzero((char *)&serv_addr, sizeof(serv_addr));
+        serv_addr.sin_family = AF_INET;
+        bcopy((char *)server->h_addr, (char *)&serv_addr.sin_addr.s_addr,
+              server->h_length);
+        serv_addr.sin_port = htons(kBootstrapPort);
+
+        LOG(INFO) << "Connecting to " << remote_ip << " (0x" << std::hex
+                  << serv_addr.sin_addr.s_addr << std::dec << ":"
+                  << kBootstrapPort << ")";
+
+        // Connect and set nonblocking and nodelay
+        while (connect(bootstrap_fd, (struct sockaddr *)&serv_addr,
+                       sizeof(serv_addr))) {
+            LOG(INFO) << "Connecting... Make sure the server is up.";
+            sleep(1);
+        }
+
+        int flag = 1;
+        setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void *)&flag,
+                   sizeof(int));
+
+        ConnectionID conn_id;
+        int ret = read(bootstrap_fd, &conn_id, sizeof(ConnectionID));
+        DCHECK(ret == sizeof(ConnectionID)) << "ERROR: reading connection_id";
+
+        DCHECK(bootstrap_fd_map_.find(conn_id) == bootstrap_fd_map_.end())
+            << "Dup ConnectionID";
+        bootstrap_fd_map_[conn_id] = bootstrap_fd;
+
+        return conn_id;
     }
 
-    ConnectionID accept() {
-        // TODO(yang): Using TCP to negotiate a ConnectionID.
-        return 0xdeadbeaf;
+    std::tuple<ConnectionID, std::string> uccl_accept() {
+        struct sockaddr_in cli_addr;
+        socklen_t clilen = sizeof(cli_addr);
+        int bootstrap_fd;
+
+        // Accept connection and set nonblocking and nodelay
+        bootstrap_fd =
+            accept(listen_fd_, (struct sockaddr *)&cli_addr, &clilen);
+        DCHECK(bootstrap_fd >= 0) << "ERROR: accept";
+        auto ip_str = ip_to_str(cli_addr.sin_addr.s_addr);
+
+        LOG(INFO) << "Accepting from " << ip_str << " (0x" << std::hex
+                  << cli_addr.sin_addr.s_addr << std::dec << ":"
+                  << cli_addr.sin_port << ")";
+
+        int flag = 1;
+        setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void *)&flag,
+                   sizeof(int));
+
+        // TODO(yang): making it unique across all servers.
+        ConnectionID conn_id = next_avail_conn_id_++;
+
+        DCHECK(bootstrap_fd_map_.find(conn_id) == bootstrap_fd_map_.end())
+            << "Dup ConnectionID";
+        bootstrap_fd_map_[conn_id] = bootstrap_fd;
+
+        int ret = write(bootstrap_fd, &conn_id, sizeof(ConnectionID));
+        DCHECK(ret == sizeof(ConnectionID)) << "ERROR: writing connection_id";
+
+        return std::make_tuple(conn_id, ip_str);
     }
 
     // Sending the data by leveraging multiple port combinations.
-    bool send(ConnectionID connection_id, const void *data, size_t len) {
+    bool uccl_send(ConnectionID connection_id, const void *data, size_t len) {
         Channel::Msg msg = {
             .opcode = Channel::Msg::Op::kTx,
             .data = const_cast<void *>(data),
@@ -120,7 +210,7 @@ class Endpoint {
     }
 
     // Receiving the data by leveraging multiple port combinations.
-    bool recv(ConnectionID connection_id, void *data, size_t *len) {
+    bool uccl_recv(ConnectionID connection_id, void *data, size_t *len) {
         Channel::Msg msg = {
             .opcode = Channel::Msg::Op::kRx,
             .data = data,
@@ -320,13 +410,8 @@ class RXTracking {
                   "kReassemblyMaxSeqnoDistance must be a power of two");
 
     RXTracking(const RXTracking &) = delete;
-    RXTracking(uint32_t local_ip, uint16_t local_port, uint32_t remote_ip,
-               uint16_t remote_port, AFXDPSocket *socket, Channel *channel)
-        : local_ip_(local_ip),
-          local_port_(local_port),
-          remote_ip_(remote_ip),
-          remote_port_(remote_port),
-          socket_(socket),
+    RXTracking(AFXDPSocket *socket, Channel *channel)
+        : socket_(socket),
           channel_(channel),
           cur_msg_train_head_(nullptr),
           cur_msg_train_tail_(nullptr) {}
@@ -495,10 +580,6 @@ class RXTracking {
     }
 
    private:
-    const uint32_t local_ip_;
-    const uint16_t local_port_;
-    const uint32_t remote_ip_;
-    const uint16_t remote_port_;
     AFXDPSocket *socket_;
     Channel *channel_;
 
@@ -555,21 +636,20 @@ class UcclFlow {
      * @param AFXDPSocket object for packet IOs.
      * @param ConnectionID Connection ID for the flow.
      */
-    UcclFlow(const uint32_t local_addr, const uint16_t local_port,
-             const uint32_t remote_addr, const uint16_t remote_port,
+    UcclFlow(const std::string local_addr, const uint16_t local_port,
+             const std::string remote_addr, const uint16_t remote_port,
              const uint8_t *local_l2_addr, const uint8_t *remote_l2_addr,
              AFXDPSocket *socket, Channel *channel, ConnectionID connection_id)
-        : local_addr_(local_addr),
+        : local_addr_(htonl(str_to_ip(local_addr))),
           local_port_(local_port),
-          remote_addr_(remote_addr),
+          remote_addr_(htonl(str_to_ip(remote_addr))),
           remote_port_(remote_port),
           socket_(CHECK_NOTNULL(socket)),
           channel_(channel),
           connection_id_(connection_id),
           pcb_(),
           tx_tracking_(socket, channel),
-          rx_tracking_(local_addr, local_port, remote_addr, remote_port, socket,
-                       channel) {
+          rx_tracking_(socket, channel) {
         memcpy(local_l2_addr_, local_l2_addr, ETH_ALEN);
         memcpy(remote_l2_addr_, remote_l2_addr, ETH_ALEN);
     }
@@ -578,13 +658,12 @@ class UcclFlow {
     friend class UcclEngine;
 
     std::string to_string() const {
-        return Format(
-            "%x [queue %d] <-> %x [queue 0]\n"
-            "\t\t%s\n"
-            "\t\t[TX Queue] pending msgbufs: %u ready msgs: %u",
-            local_addr_, socket_->queue_id_, remote_addr_,
-            pcb_.to_string().c_str(), tx_tracking_.num_unsent_msgbufs(),
-            rx_tracking_.ready_msg_stash_.size());
+        std::string s;
+        s += "\t\t" + pcb_.to_string() + "\n\t\t[TX] pending msgbufs unsent: " +
+             std::to_string(tx_tracking_.num_unsent_msgbufs()) +
+             "\n\t\t[RX] ready msgs unconsumed: " +
+             std::to_string(rx_tracking_.ready_msg_stash_.size());
+        return s;
     }
 
     void shutdown() { pcb_.rto_disable(); }
@@ -810,10 +889,11 @@ class UcclFlow {
         ipv4h->id = htons(0x1513);
         ipv4h->frag_off = htons(0);
         ipv4h->ttl = 64;
-        ipv4h->protocol = IPPROTO_TCP;
 #ifdef USING_TCP
+        ipv4h->protocol = IPPROTO_TCP;
         ipv4h->tot_len = htons(sizeof(iphdr) + sizeof(tcphdr) + payload_bytes);
 #else
+        ipv4h->protocol = IPPROTO_UDP;
         ipv4h->tot_len = htons(sizeof(iphdr) + sizeof(udphdr) + payload_bytes);
 #endif
         ipv4h->saddr = htonl(local_addr_);
@@ -839,7 +919,7 @@ class UcclFlow {
         // tcph->ack_seq = htonl(pcb_.ackno());
         tcph->doff = 5;
         // tcph->window = htons(65535);
-        // tcph->check = tcp_hdr_chksum(local_addr_, remote_addr_,
+        // tcph->check = tcp_hdr_chksum(htonl(local_addr_), htonl(remote_addr_),
         //                              5 * sizeof(uint32_t) + payload_bytes);
 #else
         auto *udph = (udphdr *)(pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
@@ -1032,7 +1112,7 @@ class UcclEngine {
    public:
     // Slow timer (periodic processing) interval in microseconds.
     const size_t kSlowTimerIntervalUs = 2000;  // 2ms
-    const size_t kDumpStatusTicks = 1000;      // 2s
+    const size_t kDumpStatusTicks = 5000;      // 10s
     UcclEngine() = delete;
     UcclEngine(UcclEngine const &) = delete;
 
@@ -1046,8 +1126,8 @@ class UcclEngine {
      * future it may be responsible for multiple channels.
      */
     UcclEngine(int queue_id, int num_frames, Channel *channel,
-               const uint32_t local_addr, const uint16_t local_port,
-               const uint32_t remote_addr, const uint16_t remote_port,
+               const std::string local_addr, const uint16_t local_port,
+               const std::string remote_addr, const uint16_t remote_port,
                const uint8_t *local_l2_addr, const uint8_t *remote_l2_addr)
         : socket_(AFXDPFactory::CreateSocket(queue_id, num_frames)),
           channel_(channel),
@@ -1194,7 +1274,9 @@ class UcclEngine {
 
     void dump_status() {
         std::string s;
-        s += "\n\t\t[Uccl Engine Status] ";
+        s += "\n\t\t[Uccl Engine] " +
+             Format("%x [queue %d] <-> %x [queue 0]\n", flow_->local_addr_,
+                    socket_->queue_id_, flow_->remote_addr_);
         s += flow_->to_string();
         s += socket_->to_string();
         // TODO(yang): Add more status information.

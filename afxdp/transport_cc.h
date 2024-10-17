@@ -62,13 +62,13 @@ struct Pcb {
     std::string to_string() const {
         std::string s;
         s += "[CC] snd_nxt: " + std::to_string(snd_nxt) +
-             ", snd_una: " + std::to_string(snd_una) +
-             ", rcv_nxt: " + std::to_string(rcv_nxt) +
-             ", cwnd: " + std::to_string(cwnd) +
-             ", fast_rexmits: " + std::to_string(fast_rexmits) +
-             ", rto_rexmits: " + std::to_string(rto_rexmits) +
-             ", effective_wnd: " + std::to_string(effective_wnd()) +
-             ", ecn_alpha: " + std::to_string(ecn_alpha);
+             "\n\t\t     snd_una: " + std::to_string(snd_una) +
+             "\n\t\t     rcv_nxt: " + std::to_string(rcv_nxt) +
+             "\n\t\t     cwnd: " + std::to_string(cwnd) +
+             "\n\t\t     fast_rexmits: " + std::to_string(fast_rexmits) +
+             "\n\t\t     rto_rexmits: " + std::to_string(rto_rexmits) +
+             "\n\t\t     effective_wnd: " + std::to_string(effective_wnd()) +
+             "\n\t\t     ecn_alpha: " + std::to_string(ecn_alpha);
         return s;
     }
 

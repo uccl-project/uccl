@@ -37,10 +37,17 @@ int ebpf_transport_filter(struct xdp_md *ctx) {
     struct iphdr *ip = data + sizeof(struct ethhdr);
     __u16 magic = *(__u16 *)(data + kNetHdrLen);
 
+#ifdef USING_TCP
     if (eth->h_proto != __constant_htons(ETH_P_IP) ||
         ip->protocol != IPPROTO_TCP || magic != __constant_htons(kMagic)) {
         return XDP_PASS;
     }
+#else
+    if (eth->h_proto != __constant_htons(ETH_P_IP) ||
+        ip->protocol != IPPROTO_UDP || magic != __constant_htons(kMagic)) {
+        return XDP_PASS;
+    }
+#endif
 
     if (bpf_get_prandom_u32() % 1000 == 0) return XDP_DROP;
 
