@@ -150,8 +150,9 @@ AFXDPSocket::AFXDPSocket(int queue_id, int num_frames)
 
     // initialize frame allocator
     frame_pool_ = new FramePool</*Sync=*/false>(num_frames);
-    for (int j = 0; j < num_frames; j++) {
-        frame_pool_->push(j * FRAME_SIZE + XDP_PACKET_HEADROOM);
+    for (uint64_t j = 0; j < num_frames; j++) {
+        auto frame_offset = j * FRAME_SIZE + XDP_PACKET_HEADROOM;
+        push_frame(frame_offset, "init allocation");
     }
 
     // We also need to load and update the xsks_map for receiving packets
@@ -181,7 +182,7 @@ uint32_t AFXDPSocket::pull_complete_queue() {
             uint64_t frame_offset =
                 *xsk_ring_cons__comp_addr(&complete_queue_, complete_index++);
             if (FrameBuf::is_txpulltime_free(frame_offset, umem_buffer_)) {
-                frame_pool_->push(frame_offset);
+                push_frame(frame_offset, "pull_complete_queue");
             }
             // Otherwise, the transport layer should handle frame freeing.
         }
@@ -261,7 +262,10 @@ void AFXDPSocket::populate_fill_queue(uint32_t nb_frames) {
             << " fill_queue_entries_ = " << fill_queue_entries_;
 
     for (int i = 0; i < ret; i++) {
-        *xsk_ring_prod__fill_addr(&fill_queue_, idx_fq++) = frame_pool_->pop();
+        auto offset = frame_pool_->pop();
+        free_frames_.erase(offset);
+        FrameBuf::clear_fields(offset, umem_buffer_);
+        *xsk_ring_prod__fill_addr(&fill_queue_, idx_fq++) = offset;
     }
     xsk_ring_prod__submit(&fill_queue_, ret);
 }

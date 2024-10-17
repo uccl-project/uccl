@@ -58,6 +58,9 @@ server_direct_main: server_direct_main.cc ebpf_server_direct.o $(DEPS) $(lib_obj
 transport_test: transport_test.cc ebpf_client.o $(DEPS) $(lib_obj)
 	g++ transport_test.cc -o transport_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS) -lz -lelf
 
+transport_pp_test: transport_pp_test.cc ebpf_client.o $(DEPS) $(lib_obj)
+	g++ transport_pp_test.cc -o transport_pp_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS) -lz -lelf
+
 util_afxdp_test: util_afxdp_test.cc ebpf_client.o $(DEPS) $(lib_obj)
 	g++ util_afxdp_test.cc -o util_afxdp_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS) -lz -lelf
 

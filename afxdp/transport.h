@@ -292,19 +292,25 @@ class TXTracking {
     }
 
     void receive_acks(uint32_t num_acked_pkts) {
+        VLOG(3) << "Received " << num_acked_pkts << " acks "
+                  << "num_tracked_msgbufs " << num_tracked_msgbufs_;
         while (num_acked_pkts) {
             auto msgbuf = oldest_unacked_msgbuf_;
             DCHECK(msgbuf != nullptr);
-            if (msgbuf != last_msgbuf_) {
+            // if (msgbuf != last_msgbuf_) {
+            if (num_tracked_msgbufs_ != 1) {
                 DCHECK_NE(oldest_unacked_msgbuf_, oldest_unsent_msgbuf_)
                     << "Releasing an unsent msgbuf!";
                 oldest_unacked_msgbuf_ = msgbuf->next();
+                DCHECK(oldest_unacked_msgbuf_ != nullptr);
             } else {
                 oldest_unacked_msgbuf_ = nullptr;
+                oldest_unsent_msgbuf_ = nullptr;
                 last_msgbuf_ = nullptr;
+                CHECK_EQ(num_tracked_msgbufs_, 1);
             }
             // Free transmitted frames that are acked
-            socket_->frame_pool_->push(msgbuf->get_frame_offset());
+            socket_->push_frame(msgbuf->get_frame_offset(), "receive_acks");
             num_tracked_msgbufs_--;
             num_acked_pkts--;
 
@@ -322,7 +328,11 @@ class TXTracking {
 
     void append(FrameBuf *msgbuf_head, FrameBuf *msgbuf_tail,
                 uint32_t num_frames) {
+        VLOG(3) << "Appending " << num_frames << " frames "
+                  << " num_unsent_msgbufs_ " << num_unsent_msgbufs_
+                  << " last_msgbuf_ " << last_msgbuf_;
         DCHECK(msgbuf_head->is_first());
+        DCHECK(msgbuf_tail->is_last());
         // Append the message at the end of the chain of buffers, if any.
         if (last_msgbuf_ == nullptr) {
             // This is the first pending message buffer in the flow.
@@ -346,6 +356,8 @@ class TXTracking {
     }
 
     std::optional<FrameBuf *> get_and_update_oldest_unsent() {
+        VLOG(3) << "Get: unsent messages " << num_unsent_msgbufs_
+                  << " oldest_unsent_msgbuf " << oldest_unsent_msgbuf_;
         if (oldest_unsent_msgbuf_ == nullptr) {
             DCHECK_EQ(num_unsent_msgbufs(), 0);
             return std::nullopt;
@@ -439,7 +451,7 @@ class RXTracking {
         if (swift::seqno_lt(seqno, expected_seqno)) {
             VLOG(3) << "Received old packet: " << seqno << " < "
                     << expected_seqno;
-            socket_->frame_pool_->push(msgbuf->get_frame_offset());
+            socket_->push_frame(msgbuf->get_frame_offset(), "consume1");
             return kOldPkt;
         }
 
@@ -448,7 +460,7 @@ class RXTracking {
             VLOG(3)
                 << "Packet too far ahead. Dropping as we can't handle SACK. "
                 << "seqno: " << seqno << ", expected: " << expected_seqno;
-            socket_->frame_pool_->push(msgbuf->get_frame_offset());
+            socket_->push_frame(msgbuf->get_frame_offset(), "consume2");
             return kOOOUntrackable;
         }
 
@@ -463,7 +475,7 @@ class RXTracking {
             if (it != reass_q_.end() && it->seqno == seqno) {
                 VLOG(3) << "Received duplicate packet: " << seqno;
                 // Duplicate packet. Drop it.
-                socket_->frame_pool_->push(msgbuf->get_frame_offset());
+                socket_->push_frame(msgbuf->get_frame_offset(), "consume3");
                 return kOOOTrackableDup;
             }
         }
@@ -559,10 +571,11 @@ class RXTracking {
                 app_buf_pos += payload_len;
 
                 // Free received frames that have been copied to app buf.
-                socket_->frame_pool_->push(msgbuf_iter->get_frame_offset());
-
+                socket_->push_frame(msgbuf_iter->get_frame_offset(), "try_copy");
                 if (msgbuf_iter->is_last()) break;
                 msgbuf_iter = msgbuf_iter->next();
+
+                DCHECK(msgbuf_iter);
             }
 
             *app_buf_desc.buf_len = app_buf_pos;
@@ -575,7 +588,7 @@ class RXTracking {
             }
 
             VLOG(3) << "Received a complete message " << app_buf_pos
-                    << " bytes";
+                      << " bytes";
         }
     }
 
@@ -696,11 +709,11 @@ class UcclFlow {
                     // ACK packet, update the flow.
                     process_ack(ucclh);
                     // Free the received frame.
-                    socket_->frame_pool_->push(msgbuf->get_frame_offset());
+                    socket_->push_frame(msgbuf->get_frame_offset(), "rx_messages1");
                     break;
                 case UcclPktHdr::UcclFlags::kAckEcn:
                     process_ack(ucclh);
-                    socket_->frame_pool_->push(msgbuf->get_frame_offset());
+                    socket_->push_frame(msgbuf->get_frame_offset(), "rx_messages2");
                     // Need to slowdown the sender.
                     ecn_recvd = true;
                     break;
@@ -738,7 +751,7 @@ class UcclFlow {
     }
 
     void supply_rx_app_buf(void *app_buf, size_t *app_buf_len) {
-        // LOG(INFO) << "Supplying app buffer";
+        VLOG(3) << "Supplying app buffer";
         rx_tracking_.try_copy_msgbuf_to_appbuf(app_buf, app_buf_len);
     }
 
@@ -958,17 +971,17 @@ class UcclFlow {
     AFXDPSocket::frame_desc craft_ctlpacket(
         uint32_t seqno, uint32_t ackno,
         const UcclPktHdr::UcclFlags &flags) const {
-        auto frame_offset = socket_->frame_pool_->pop();
-        uint8_t *pkt_addr = (uint8_t *)socket_->umem_buffer_ + frame_offset;
+        auto frame_offset = socket_->pop_frame();
+        FrameBuf::clear_fields(frame_offset, socket_->umem_buffer_);
+        // Let AFXDPSocket::pull_complete_queue() free control frames.
+        FrameBuf::mark_txpulltime_free(frame_offset, socket_->umem_buffer_);
 
+        uint8_t *pkt_addr = (uint8_t *)socket_->umem_buffer_ + frame_offset;
         const size_t kControlPayloadBytes = kUcclHdrLen;
         prepare_l2header(pkt_addr);
         prepare_l3header(pkt_addr, kControlPayloadBytes);
         prepare_l4header(pkt_addr, kControlPayloadBytes);
         prepare_ucclhdr(pkt_addr, seqno, ackno, flags);
-
-        // Let AFXDPSocket::pull_complete_queue() free control frames.
-        FrameBuf::mark_txpulltime_free(frame_offset, socket_->umem_buffer_);
 
         return {frame_offset, kNetHdrLen + kControlPayloadBytes};
     }
@@ -1175,9 +1188,10 @@ class UcclEngine {
                 std::vector<FrameBuf *> msgbufs;
                 msgbufs.reserve(frames.size());
                 for (auto &frame : frames) {
-                    msgbufs.push_back(FrameBuf::Create(frame.frame_offset,
-                                                       socket_->umem_buffer_,
-                                                       frame.frame_len));
+                    auto *msgbuf = FrameBuf::Create(frame.frame_offset,
+                                                    socket_->umem_buffer_,
+                                                    frame.frame_len);
+                    msgbufs.push_back(msgbuf);
                 }
                 process_rx_msg(msgbufs);
             }
@@ -1293,17 +1307,20 @@ class UcclEngine {
         auto remaining_bytes = app_buf_len;
 
         //  Deserializing the message into MTU-sized frames.
-        FrameBuf *tx_msgbuf_iter = nullptr;
+        FrameBuf *last_msgbuf = nullptr;
         while (remaining_bytes > 0) {
             auto payload_len = std::min(
                 remaining_bytes, (size_t)AFXDP_MTU - kNetHdrLen - kUcclHdrLen);
-            auto frame_offset = socket_->frame_pool_->pop();
+            auto frame_offset = socket_->pop_frame();
+            FrameBuf::clear_fields(frame_offset, socket_->umem_buffer_);
             auto *msgbuf =
                 FrameBuf::Create(frame_offset, socket_->umem_buffer_,
                                  payload_len + kNetHdrLen + kUcclHdrLen);
             //  The transport engine will free these Tx frames when
             //  receiving ACKs from receivers.
             msgbuf->mark_not_txpulltime_free();
+
+            VLOG(3) << "Deser msgbuf " << msgbuf << " " << num_tx_frames;
             auto pkt_payload_addr =
                 msgbuf->get_pkt_addr() + kNetHdrLen + kUcclHdrLen;
             memcpy(pkt_payload_addr, app_buf, payload_len);
@@ -1314,17 +1331,20 @@ class UcclEngine {
                 msgbuf->mark_first();
                 tx_msgbuf_head = msgbuf;
             } else {
-                tx_msgbuf_iter->set_next(msgbuf);
+                last_msgbuf->set_next(msgbuf);
             }
 
             if (remaining_bytes == 0) {
                 msgbuf->mark_last();
+                msgbuf->set_next(nullptr);
                 tx_msgbuf_tail = msgbuf;
             }
 
-            tx_msgbuf_iter = msgbuf;
+            last_msgbuf = msgbuf;
             num_tx_frames++;
         }
+        CHECK(tx_msgbuf_head->is_first());
+        CHECK(tx_msgbuf_tail->is_last());
         return std::make_tuple(tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames);
     }
 

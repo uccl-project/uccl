@@ -26,6 +26,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <set>
 
 #include "util_umem.h"
 
@@ -44,6 +45,7 @@ class FrameBuf {
 #define UCCL_MSGBUF_FLAGS_SYN (1 << 0)
 #define UCCL_MSGBUF_FLAGS_FIN (1 << 1)
 #define UCCL_MSGBUF_FLAGS_TXPULLTIME_FREE (1 << 2)
+#define UCCL_MSGBUF_FLAGS_INUSE (1 << 3)
     uint8_t msg_flags_;
 
     FrameBuf(uint64_t frame_offset, void *umem_buffer, uint32_t frame_len)
@@ -95,6 +97,26 @@ class FrameBuf {
     void mark_first() { add_msg_flags(UCCL_MSGBUF_FLAGS_SYN); }
     void mark_last() { add_msg_flags(UCCL_MSGBUF_FLAGS_FIN); }
 
+#define GET_FRAMEBUF_PTR(frame_offset, umem_buffer)                     \
+    reinterpret_cast<FrameBuf *>(frame_offset + (uint64_t)umem_buffer - \
+                                 XDP_PACKET_HEADROOM)
+
+    void mark_not_inuse() { msg_flags_ &= ~UCCL_MSGBUF_FLAGS_INUSE; }
+    void mark_inuse() { add_msg_flags(UCCL_MSGBUF_FLAGS_INUSE); }
+    bool is_inuse() { return (msg_flags_ & UCCL_MSGBUF_FLAGS_INUSE) != 0; }
+    static void mark_not_inuse(uint64_t frame_offset, void *umem_buffer) {
+        auto msgbuf = GET_FRAMEBUF_PTR(frame_offset, umem_buffer);
+        msgbuf->msg_flags_ &= ~UCCL_MSGBUF_FLAGS_INUSE;
+    }
+    static void mark_inuse(uint64_t frame_offset, void *umem_buffer) {
+        auto msgbuf = GET_FRAMEBUF_PTR(frame_offset, umem_buffer);
+        msgbuf->add_msg_flags(UCCL_MSGBUF_FLAGS_INUSE);
+    }
+    static bool is_inuse(uint64_t frame_offset, void *umem_buffer) {
+        auto msgbuf = GET_FRAMEBUF_PTR(frame_offset, umem_buffer);
+        return (msgbuf->msg_flags_ & UCCL_MSGBUF_FLAGS_INUSE) != 0;
+    }
+
     void mark_txpulltime_free() {
         add_msg_flags(UCCL_MSGBUF_FLAGS_TXPULLTIME_FREE);
     }
@@ -104,10 +126,6 @@ class FrameBuf {
     bool is_txpulltime_free() {
         return (msg_flags_ & UCCL_MSGBUF_FLAGS_TXPULLTIME_FREE) != 0;
     }
-
-#define GET_FRAMEBUF_PTR(frame_offset, umem_buffer)                     \
-    reinterpret_cast<FrameBuf *>(frame_offset + (uint64_t)umem_buffer - \
-                                 XDP_PACKET_HEADROOM)
 
     static void mark_txpulltime_free(uint64_t frame_offset, void *umem_buffer) {
         auto msgbuf = GET_FRAMEBUF_PTR(frame_offset, umem_buffer);
@@ -125,6 +143,17 @@ class FrameBuf {
 
     void set_msg_flags(uint16_t flags) { msg_flags_ = flags; }
     void add_msg_flags(uint16_t flags) { msg_flags_ |= flags; }
+    void clear_fields() {
+        next_ = nullptr;
+        frame_offset_ = 0;
+        umem_buffer_ = nullptr;
+        frame_len_ = 0;
+        msg_flags_ = 0;
+    }
+    static void clear_fields(uint64_t frame_offset, void *umem_buffer) {
+        auto msgbuf = GET_FRAMEBUF_PTR(frame_offset, umem_buffer);
+        msgbuf->clear_fields();
+    }
 };
 
 class AFXDPSocket;
@@ -163,6 +192,7 @@ class AFXDPSocket {
     struct xsk_ring_cons complete_queue_;
     struct xsk_ring_prod fill_queue_;
     FramePool</*Sync=*/false> *frame_pool_;
+    std::set<uint64_t> free_frames_;
 
     struct frame_desc {
         uint64_t frame_offset;
@@ -177,6 +207,22 @@ class AFXDPSocket {
 
     void populate_fill_queue(uint32_t nb_frames);
     std::vector<frame_desc> recv_packets(uint32_t nb_frames);
+
+    uint64_t pop_frame() {
+        auto frame_offset = frame_pool_->pop();
+        free_frames_.erase(frame_offset);
+        return frame_offset;
+    }
+
+    void push_frame(uint64_t frame_offset, std::string msg) {
+        if (free_frames_.find(frame_offset) == free_frames_.end()) {
+            free_frames_.insert(frame_offset);
+            frame_pool_->push(frame_offset);
+        } else {
+            LOG(ERROR) << msg << ": frame offset " << frame_offset
+                       << " already in free_frames_";
+        }
+    }
 
     std::string to_string() const;
     void shutdown();
