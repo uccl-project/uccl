@@ -941,11 +941,12 @@ class UcclFlow {
         VLOG(3) << "Fast retransmitting oldest unacked packet " << pcb_.snd_una;
         // Retransmit the oldest unacknowledged message buffer.
         auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
-        if (!msg_buf) return;
-        prepare_datapacket(msg_buf, pcb_.snd_una);
-        msg_buf->mark_not_txpulltime_free();
-        socket_->send_packet(
-            {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
+        if (msg_buf) {
+            prepare_datapacket(msg_buf, pcb_.snd_una);
+            msg_buf->mark_not_txpulltime_free();
+            socket_->send_packet(
+                {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
+        }
         pcb_.rto_reset();
         pcb_.fast_rexmits++;
     }
@@ -953,11 +954,12 @@ class UcclFlow {
     void rto_retransmit() {
         VLOG(3) << "RTO retransmitting oldest unacked packet " << pcb_.snd_una;
         auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
-        if (!msg_buf) return;
-        prepare_datapacket(msg_buf, pcb_.snd_una);
-        msg_buf->mark_not_txpulltime_free();
-        socket_->send_packet(
-            {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
+        if (msg_buf) {
+            prepare_datapacket(msg_buf, pcb_.snd_una);
+            msg_buf->mark_not_txpulltime_free();
+            socket_->send_packet(
+                {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
+        }
         pcb_.rto_reset();
         pcb_.rto_rexmits++;
         pcb_.rto_rexmits_consectutive++;

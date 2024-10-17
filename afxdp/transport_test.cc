@@ -126,13 +126,12 @@ int main(int argc, char* argv[]) {
             auto duration_us =
                 std::chrono::duration_cast<std::chrono::microseconds>(end -
                                                                       start);
-            // CHECK_EQ(len, kTestMsgSize) << "Received message size
-            // mismatches"; for (int j = 0; j < kTestMsgSize / sizeof(uint32_t);
-            // j++) {
-            //     CHECK_EQ(reinterpret_cast<uint32_t*>(data)[j], j)
-            //         << "Data mismatch at index " << j;
-            // }
-            // memset(data, 0, kTestMsgSize);
+            CHECK_EQ(len, kTestMsgSize) << "Received message size mismatches";
+            for (int j = 0; j < kTestMsgSize / sizeof(uint32_t); j++) {
+                CHECK_EQ(reinterpret_cast<uint32_t*>(data)[j], j)
+                    << "Data mismatch at index " << j;
+            }
+            memset(data, 0, kTestMsgSize);
             LOG_EVERY_N(INFO, kReportIters)
                 << "Received " << i << " messages, rtt " << duration_us.count()
                 << " us";
