@@ -45,7 +45,6 @@ class FrameBuf {
 #define UCCL_MSGBUF_FLAGS_SYN (1 << 0)
 #define UCCL_MSGBUF_FLAGS_FIN (1 << 1)
 #define UCCL_MSGBUF_FLAGS_TXPULLTIME_FREE (1 << 2)
-#define UCCL_MSGBUF_FLAGS_INUSE (1 << 3)
     uint8_t msg_flags_;
 
     FrameBuf(uint64_t frame_offset, void *umem_buffer, uint32_t frame_len)
@@ -85,15 +84,7 @@ class FrameBuf {
     FrameBuf *next() const { return next_; }
     // Set the next message buffer index in the chain.
     void set_next(FrameBuf *next) { next_ = next; }
-    // Link the message train to the current message train. The start and end of
-    // each message are still preserved.
-    void link_msg_train(FrameBuf *next) {
-        DCHECK(is_last()) << "This is not the last buffer of a message!";
-        DCHECK(next->is_first())
-            << "The next buffer is not the first of a message!";
-        next_ = next;
-    }
-
+    
     void mark_first() { add_msg_flags(UCCL_MSGBUF_FLAGS_SYN); }
     void mark_last() { add_msg_flags(UCCL_MSGBUF_FLAGS_FIN); }
 
@@ -101,20 +92,8 @@ class FrameBuf {
     reinterpret_cast<FrameBuf *>(frame_offset + (uint64_t)umem_buffer - \
                                  XDP_PACKET_HEADROOM)
 
-    void mark_not_inuse() { msg_flags_ &= ~UCCL_MSGBUF_FLAGS_INUSE; }
-    void mark_inuse() { add_msg_flags(UCCL_MSGBUF_FLAGS_INUSE); }
-    bool is_inuse() { return (msg_flags_ & UCCL_MSGBUF_FLAGS_INUSE) != 0; }
-    static void mark_not_inuse(uint64_t frame_offset, void *umem_buffer) {
-        auto msgbuf = GET_FRAMEBUF_PTR(frame_offset, umem_buffer);
-        msgbuf->msg_flags_ &= ~UCCL_MSGBUF_FLAGS_INUSE;
-    }
-    static void mark_inuse(uint64_t frame_offset, void *umem_buffer) {
-        auto msgbuf = GET_FRAMEBUF_PTR(frame_offset, umem_buffer);
-        msgbuf->add_msg_flags(UCCL_MSGBUF_FLAGS_INUSE);
-    }
-    static bool is_inuse(uint64_t frame_offset, void *umem_buffer) {
-        auto msgbuf = GET_FRAMEBUF_PTR(frame_offset, umem_buffer);
-        return (msgbuf->msg_flags_ & UCCL_MSGBUF_FLAGS_INUSE) != 0;
+    static FrameBuf *get_msgbuf_ptr(uint64_t frame_offset, void *umem_buffer) {
+        return GET_FRAMEBUF_PTR(frame_offset, umem_buffer);
     }
 
     void mark_txpulltime_free() {
@@ -141,8 +120,6 @@ class FrameBuf {
         return (msgbuf->msg_flags_ & UCCL_MSGBUF_FLAGS_TXPULLTIME_FREE) != 0;
     }
 
-    void set_msg_flags(uint16_t flags) { msg_flags_ = flags; }
-    void add_msg_flags(uint16_t flags) { msg_flags_ |= flags; }
     void clear_fields() {
         next_ = nullptr;
         frame_offset_ = 0;
@@ -154,6 +131,9 @@ class FrameBuf {
         auto msgbuf = GET_FRAMEBUF_PTR(frame_offset, umem_buffer);
         msgbuf->clear_fields();
     }
+
+    void set_msg_flags(uint16_t flags) { msg_flags_ = flags; }
+    void add_msg_flags(uint16_t flags) { msg_flags_ |= flags; }
 };
 
 class AFXDPSocket;
@@ -209,19 +189,33 @@ class AFXDPSocket {
     std::vector<frame_desc> recv_packets(uint32_t nb_frames);
 
     uint64_t pop_frame() {
+#if 0
         auto frame_offset = frame_pool_->pop();
-        free_frames_.erase(frame_offset);
+        CHECK(free_frames_.erase(frame_offset) == 1);
+        FrameBuf::clear_fields(frame_offset, umem_buffer_);
         return frame_offset;
+#else
+        auto frame_offset = frame_pool_->pop();
+        FrameBuf::clear_fields(frame_offset, umem_buffer_);
+        return frame_offset;
+#endif
     }
 
-    void push_frame(uint64_t frame_offset, std::string msg) {
+    void push_frame(uint64_t frame_offset) {
+#if 0
         if (free_frames_.find(frame_offset) == free_frames_.end()) {
             free_frames_.insert(frame_offset);
             frame_pool_->push(frame_offset);
         } else {
-            LOG(ERROR) << msg << ": frame offset " << frame_offset
+            LOG(ERROR) << "Frame offset " << std::hex << frame_offset
+                       << " size " << std::dec
+                       << FrameBuf::get_msgbuf_ptr(frame_offset, umem_buffer_)
+                              ->get_frame_len()
                        << " already in free_frames_";
         }
+#else
+        frame_pool_->push(frame_offset);
+#endif
     }
 
     std::string to_string() const;

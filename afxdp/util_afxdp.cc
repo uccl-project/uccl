@@ -152,7 +152,7 @@ AFXDPSocket::AFXDPSocket(int queue_id, int num_frames)
     frame_pool_ = new FramePool</*Sync=*/false>(num_frames);
     for (uint64_t j = 0; j < num_frames; j++) {
         auto frame_offset = j * FRAME_SIZE + XDP_PACKET_HEADROOM;
-        push_frame(frame_offset, "init allocation");
+        push_frame(frame_offset);
     }
 
     // We also need to load and update the xsks_map for receiving packets
@@ -174,17 +174,24 @@ AFXDPSocket::AFXDPSocket(int queue_id, int num_frames)
 }
 
 uint32_t AFXDPSocket::pull_complete_queue() {
-    uint32_t complete_index;
+    uint32_t idx_cq;
     uint32_t completed = xsk_ring_cons__peek(
-        &complete_queue_, XSK_RING_CONS__DEFAULT_NUM_DESCS, &complete_index);
+        &complete_queue_, XSK_RING_CONS__DEFAULT_NUM_DESCS, &idx_cq);
     if (completed > 0) {
         for (int i = 0; i < completed; i++) {
             uint64_t frame_offset =
-                *xsk_ring_cons__comp_addr(&complete_queue_, complete_index++);
+                *xsk_ring_cons__comp_addr(&complete_queue_, idx_cq++);
             if (FrameBuf::is_txpulltime_free(frame_offset, umem_buffer_)) {
-                push_frame(frame_offset, "pull_complete_queue");
+                push_frame(frame_offset);
+                /**
+                 * Yang: I susspect this is a bug that AWS ENA driver will pull
+                 * the same frame multiple times. A temp fix is we mark it as
+                 * not txpulltime free, so that the next time polling will not
+                 * double free it.
+                 */
+                FrameBuf::mark_not_txpulltime_free(frame_offset, umem_buffer_);
             }
-            // Otherwise, the transport layer should handle frame freeing.
+            // In other cases, the transport layer should handle frame freeing.
         }
 
         xsk_ring_cons__release(&complete_queue_, completed);
@@ -203,7 +210,7 @@ uint32_t AFXDPSocket::send_packet(frame_desc frame) {
     // reserving a slot in the send queue.
     uint32_t send_index;
     VLOG(2) << "tx send_packets num_frames = " << 1;
-    while (xsk_ring_prod__reserve(&send_queue_, 1, &send_index) == 0) {
+    while (xsk_ring_prod__reserve(&send_queue_, 1, &send_index) != 1) {
         LOG_EVERY_N(WARNING, 1000000)
             << "send_queue is full. Busy waiting... unpulled_tx_pkts "
             << unpulled_tx_pkts_ << " send_queue_free_entries "
@@ -228,7 +235,8 @@ uint32_t AFXDPSocket::send_packets(std::vector<frame_desc>& frames) {
     uint32_t send_index;
     auto num_frames = frames.size();
     VLOG(2) << "tx send_packets num_frames = " << num_frames;
-    while (xsk_ring_prod__reserve(&send_queue_, num_frames, &send_index) == 0) {
+    while (xsk_ring_prod__reserve(&send_queue_, num_frames, &send_index) !=
+           num_frames) {
         LOG_EVERY_N(WARNING, 1000000)
             << "send_queue is full. Busy waiting... unpulled_tx_pkts "
             << unpulled_tx_pkts_ << " send_queue_free_entries "

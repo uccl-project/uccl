@@ -97,7 +97,7 @@ int main(int argc, char* argv[]) {
                 start_bw = end_bw;
 
                 LOG(INFO) << "Sent " << i
-                          << " messages, med rtt: " << med_latency
+                          << " pp messages, med rtt: " << med_latency
                           << " us, tail rtt: " << tail_latency << " us, bw "
                           << bw_gbps << " Gbps";
             }
@@ -140,8 +140,8 @@ int main(int argc, char* argv[]) {
             memset(data, 0, kTestMsgSize);
             */
             LOG_EVERY_N(INFO, kReportIters)
-                << "Received " << i << " messages, rtt " << duration_us.count()
-                << " us";
+                << "Handled " << i << " pp messages, rtt "
+                << duration_us.count() << " us";
         }
         engine.shutdown();
         engine_th.join();
