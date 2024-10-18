@@ -60,7 +60,11 @@ int main(int argc, char *argv[]) {
     printf("Connection accepted, ready to receive!\n");
     for (size_t i = 0;; i++) {
         receive_message(config.n_bytes, newsockfd, buffer, &quit);
+#ifdef PING_PONG_MSG
         send_message(config.n_bytes, newsockfd, buffer, &quit);
+#else
+        send_message(sizeof(uint64_t), newsockfd, buffer, &quit);
+#endif
     }
     printf("Done!\n");
 

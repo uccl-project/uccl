@@ -42,8 +42,10 @@ struct Pcb {
 
     // Return the sender effective window in # of packets.
     uint32_t effective_wnd() const {
-        uint32_t effective_wnd = cwnd - (snd_nxt - snd_una - snd_ooo_acks);
-        return effective_wnd > cwnd ? 0 : std::ceil(effective_wnd * ecn_alpha);
+        DCHECK(snd_nxt >= snd_una + snd_ooo_acks);
+        uint32_t inflight = snd_nxt - snd_una - snd_ooo_acks;
+        uint32_t effective_wnd = std::ceil((cwnd - inflight) * ecn_alpha);
+        return effective_wnd == 0 ? 1 : effective_wnd;
     }
 
     void mutliplicative_decrease() { ecn_alpha /= 2; }

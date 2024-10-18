@@ -9,6 +9,7 @@
 #define NUM_SOCKETS 8
 #define MAX_EVENTS_ONCE 32
 #define MTU 9000
+#define PING_PONG_MSG
 
 struct Config {
     char *address;

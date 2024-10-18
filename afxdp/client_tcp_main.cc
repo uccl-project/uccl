@@ -45,7 +45,7 @@ std::atomic<uint64_t> inflight_pkts{0};
 
 // TODO(Yang): using multiple TCP connections to saturate the link
 static void *send_thread(void *arg) {
-    pin_thread_to_cpu(0);
+    pin_thread_to_cpu(1);
 
     struct Config *config = (struct Config *)arg;
     int sockfd = config->sockfds[0];
@@ -73,7 +73,7 @@ static void *send_thread(void *arg) {
 }
 
 static void *recv_thread(void *arg) {
-    pin_thread_to_cpu(1);
+    pin_thread_to_cpu(2);
 
     struct Config *config = (struct Config *)arg;
     int sockfd = config->sockfds[0];
@@ -96,12 +96,38 @@ static void *recv_thread(void *arg) {
                 std::lock_guard<std::mutex> lock(rtts_lock);
                 rtts.push_back(rtt);
             }
-
-            receive_message(config->n_bytes - sizeof(uint64_t), sockfd,
-                            rbuffer + sizeof(uint64_t), &quit);
         }
     }
     free(rbuffer);
+    return NULL;
+}
+
+static void *send_recv_thread(void *arg) {
+    pin_thread_to_cpu(1);
+
+    struct Config *config = (struct Config *)arg;
+    int sockfd = config->sockfds[0];
+    uint8_t *rwbuffer = (uint8_t *)malloc(config->n_bytes);
+    while (!quit) {
+        for (int i = 0; i < RECV_BATCH_SIZE; i++) {
+            auto now = std::chrono::high_resolution_clock::now();
+            sent_packets++;
+
+            send_message(config->n_bytes, sockfd, rwbuffer, &quit);
+            receive_message(config->n_bytes, sockfd, rwbuffer, &quit);
+
+            auto now2 = std::chrono::high_resolution_clock::now();
+            uint64_t rtt =
+                std::chrono::duration_cast<std::chrono::microseconds>(now2 -
+                                                                      now)
+                    .count();
+            {
+                std::lock_guard<std::mutex> lock(rtts_lock);
+                rtts.push_back(rtt);
+            }
+        }
+    }
+    free(rwbuffer);
     return NULL;
 }
 
@@ -194,6 +220,13 @@ int main(int argc, char *argv[]) {
     printf("Connection successful! Starting...\n");
     fflush(stdout);
 
+#ifdef PING_PONG_MSG
+    pthread_t send_recv_thread_ctl;
+    if (pthread_create(&send_recv_thread_ctl, NULL, send_recv_thread,
+                       &config)) {
+        error("ERROR creating send_recv thread");
+    }
+#else
     pthread_t recv_thread_ctl;
     if (pthread_create(&recv_thread_ctl, NULL, recv_thread, &config)) {
         error("ERROR creating recv thread");
@@ -203,6 +236,7 @@ int main(int argc, char *argv[]) {
     if (pthread_create(&send_thread_ctl, NULL, send_thread, &config)) {
         error("ERROR creating send thread");
     }
+#endif
 
     pthread_t stats_thread_ctl;
     if (pthread_create(&stats_thread_ctl, NULL, stats_thread, NULL)) {
@@ -214,8 +248,12 @@ int main(int argc, char *argv[]) {
         usleep(1000);
     }
 
+#ifdef PING_PONG_MSG
+    pthread_join(send_recv_thread_ctl, NULL);
+#else
     pthread_join(recv_thread_ctl, NULL);
     pthread_join(send_thread_ctl, NULL);
+#endif
     pthread_join(stats_thread_ctl, NULL);
 
     close(sockfd);

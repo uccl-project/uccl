@@ -204,7 +204,7 @@ class Endpoint {
         while (jring_sc_dequeue_bulk(channel_->tx_comp_ring_, &msg, 1,
                                      nullptr) != 1) {
             // do nothing
-            usleep(5);
+            // usleep(5);
         }
         return true;
     }
@@ -225,7 +225,7 @@ class Endpoint {
         while (jring_sc_dequeue_bulk(channel_->rx_comp_ring_, &msg, 1,
                                      nullptr) != 1) {
             // do nothing
-            usleep(5);
+            // usleep(5);
         }
         return true;
     }
@@ -309,11 +309,7 @@ class TXTracking {
                 last_msgbuf_ = nullptr;
                 // CHECK_EQ(num_tracked_msgbufs_, 1);
             }
-            // Free transmitted frames that are acked
-            socket_->push_frame(msgbuf->get_frame_offset());
-            num_tracked_msgbufs_--;
-            num_acked_pkts--;
-
+    
             if (msgbuf->is_last()) {
                 // Tx a full message; wakeup app thread waiting on endpoint.
                 VLOG(3) << "Transmitted a complete message";
@@ -323,6 +319,10 @@ class TXTracking {
                     // do nothing
                 }
             }
+            // Free transmitted frames that are acked
+            socket_->push_frame(msgbuf->get_frame_offset());
+            num_tracked_msgbufs_--;
+            num_acked_pkts--;
         }
     }
 
@@ -1124,7 +1124,7 @@ class UcclEngine {
    public:
     // Slow timer (periodic processing) interval in microseconds.
     const size_t kSlowTimerIntervalUs = 2000;  // 2ms
-    const size_t kDumpStatusTicks = 5000;      // 10s
+    const size_t kDumpStatusTicks = 1000;      // 2s
     UcclEngine() = delete;
     UcclEngine(UcclEngine const &) = delete;
 
