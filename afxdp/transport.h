@@ -189,17 +189,45 @@ class Endpoint {
     }
 
     // Sending the data by leveraging multiple port combinations.
-    bool uccl_send(ConnectionID connection_id, const void *data, size_t len) {
+    bool uccl_send(ConnectionID connection_id, const void *data,
+                   const size_t &len) {
         Channel::Msg msg = {
             .opcode = Channel::Msg::Op::kTx,
             .data = const_cast<void *>(data),
-            .len_ptr = &len,
+            .len_ptr = const_cast<size_t*>(&len),
             .connection_id = connection_id,
         };
         while (jring_sp_enqueue_bulk(channel_->tx_ring_, &msg, 1, nullptr) !=
                1) {
             // do nothing
         }
+        // Wait for the completion.
+        while (jring_sc_dequeue_bulk(channel_->tx_comp_ring_, &msg, 1,
+                                     nullptr) != 1) {
+            // do nothing
+            // usleep(5);
+        }
+        return true;
+    }
+
+    // Sending the data by leveraging multiple port combinations.
+    bool uccl_send_async(ConnectionID connection_id, const void *data,
+                         const size_t &len) {
+        Channel::Msg msg = {
+            .opcode = Channel::Msg::Op::kTx,
+            .data = const_cast<void *>(data),
+            .len_ptr = const_cast<size_t*>(&len),
+            .connection_id = connection_id,
+        };
+        while (jring_sp_enqueue_bulk(channel_->tx_ring_, &msg, 1, nullptr) !=
+               1) {
+            // do nothing
+        }
+        return true;
+    }
+
+    bool uccl_send_poll() {
+        Channel::Msg msg;
         // Wait for the completion.
         while (jring_sc_dequeue_bulk(channel_->tx_comp_ring_, &msg, 1,
                                      nullptr) != 1) {
@@ -221,6 +249,32 @@ class Endpoint {
                1) {
             // do nothing
         }
+        // Wait for the completion.
+        while (jring_sc_dequeue_bulk(channel_->rx_comp_ring_, &msg, 1,
+                                     nullptr) != 1) {
+            // do nothing
+            // usleep(5);
+        }
+        return true;
+    }
+
+    // Receiving the data by leveraging multiple port combinations.
+    bool uccl_recv_async(ConnectionID connection_id, void *data, size_t *len) {
+        Channel::Msg msg = {
+            .opcode = Channel::Msg::Op::kRx,
+            .data = data,
+            .len_ptr = len,
+            .connection_id = connection_id,
+        };
+        while (jring_sp_enqueue_bulk(channel_->rx_ring_, &msg, 1, nullptr) !=
+               1) {
+            // do nothing
+        }
+        return true;
+    }
+
+    bool uccl_recv_poll() {
+        Channel::Msg msg;
         // Wait for the completion.
         while (jring_sc_dequeue_bulk(channel_->rx_comp_ring_, &msg, 1,
                                      nullptr) != 1) {
@@ -309,7 +363,7 @@ class TXTracking {
                 last_msgbuf_ = nullptr;
                 // CHECK_EQ(num_tracked_msgbufs_, 1);
             }
-    
+
             if (msgbuf->is_last()) {
                 // Tx a full message; wakeup app thread waiting on endpoint.
                 VLOG(3) << "Transmitted a complete message";

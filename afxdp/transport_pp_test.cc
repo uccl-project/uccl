@@ -65,12 +65,17 @@ int main(int argc, char* argv[]) {
         for (int j = 0; j < kTestMsgSize / sizeof(uint32_t); j++) {
             data_u32[j] = j;
         }
+        size_t test_msg_size = kTestMsgSize;
         std::vector<uint64_t> rtts;
         auto start_bw = std::chrono::high_resolution_clock::now();
         for (int i = 0; i < kTestIters; i++) {
             auto start = std::chrono::high_resolution_clock::now();
-            ep.uccl_send(conn_id, data, kTestMsgSize);
-            ep.uccl_recv(conn_id, data, &data_len);
+            // ep.uccl_send(conn_id, data, kTestMsgSize);
+            // ep.uccl_recv(conn_id, data, &data_len);
+            ep.uccl_send_async(conn_id, data, test_msg_size);
+            ep.uccl_recv_async(conn_id, data, &data_len);
+            ep.uccl_send_poll();
+            ep.uccl_recv_poll();
             auto end = std::chrono::high_resolution_clock::now();
             auto duration_us =
                 std::chrono::duration_cast<std::chrono::microseconds>(end -
@@ -123,10 +128,15 @@ int main(int argc, char* argv[]) {
 
         auto* data = new uint8_t[kTestMsgSize];
         size_t len;
+        size_t test_msg_size = kTestMsgSize;
         for (int i = 0; i < kTestIters; i++) {
             auto start = std::chrono::high_resolution_clock::now();
-            ep.uccl_recv(conn_id, data, &len);
-            ep.uccl_send(conn_id, data, kTestMsgSize);
+            // ep.uccl_recv(conn_id, data, &len);
+            // ep.uccl_send(conn_id, data, kTestMsgSize);
+            ep.uccl_recv_async(conn_id, data, &len);
+            ep.uccl_recv_poll();
+            ep.uccl_send_async(conn_id, data, test_msg_size);
+            ep.uccl_send_poll();
             auto end = std::chrono::high_resolution_clock::now();
             auto duration_us =
                 std::chrono::duration_cast<std::chrono::microseconds>(end -

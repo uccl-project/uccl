@@ -107,15 +107,17 @@ static void *send_recv_thread(void *arg) {
 
     struct Config *config = (struct Config *)arg;
     int sockfd = config->sockfds[0];
+    // size_t newsize = 10240;
+    // setsockopt(sockfd, SOL_SOCKET, SO_SNDBUF, &newsize, sizeof(newsize));
+    // setsockopt(sockfd, SOL_SOCKET, SO_RCVBUF, &newsize, sizeof(newsize));
     uint8_t *rwbuffer = (uint8_t *)malloc(config->n_bytes);
     while (!quit) {
         for (int i = 0; i < RECV_BATCH_SIZE; i++) {
-            auto now = std::chrono::high_resolution_clock::now();
             sent_packets++;
 
+            auto now = std::chrono::high_resolution_clock::now();
             send_message(config->n_bytes, sockfd, rwbuffer, &quit);
             receive_message(config->n_bytes, sockfd, rwbuffer, &quit);
-
             auto now2 = std::chrono::high_resolution_clock::now();
             uint64_t rtt =
                 std::chrono::duration_cast<std::chrono::microseconds>(now2 -
