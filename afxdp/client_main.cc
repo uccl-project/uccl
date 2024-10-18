@@ -29,6 +29,7 @@
 #include <mutex>
 #include <vector>
 
+#include "transport_config.h"
 #include "util.h"
 #include "util_umem.h"
 
@@ -36,17 +37,13 @@ using namespace uccl;
 
 const uint32_t NUM_QUEUES = 1;
 
-const char* INTERFACE_NAME = "ens6";
-const uint8_t SERVER_ETHERNET_ADDRESS[] = {0x0a, 0xff, 0xea, 0x86, 0x04, 0xd9};
-const uint8_t CLIENT_ETHERNET_ADDRESS[] = {0x0a, 0xff, 0xdf, 0x30, 0xe7, 0x59};
-const uint32_t SERVER_IPV4_ADDRESS = 0xac1f16f9;  // 172.31.22.249
-const uint32_t CLIENT_IPV4_ADDRESS = 0xac1f10c6;  // 172.31.16.198
-const uint16_t SERVER_PORT = 40000;
-const uint16_t CLIENT_PORT[8] = {40000, 40001, 40002, 40003,
-                                 40004, 40005, 40006, 40007};
+uint32_t server_addr_u32 = 0x0;
+uint32_t client_addr_u32 = 0x0;
+const uint16_t client_ports[8] = {40000, 40001, 40002, 40003,
+                                  40004, 40005, 40006, 40007};
 
-const int SEND_BATCH_SIZE = 1;
-const int RECV_BATCH_SIZE = 32;
+const int MY_SEND_BATCH_SIZE = 1;
+const int MY_RECV_BATCH_SIZE = 32;
 // 256 is reserved for xdp_meta, 42 is reserved for eth+ip+udp
 // Max payload under AFXDP is 4096-256-42;
 const int PAYLOAD_BYTES = 3000;
@@ -329,8 +326,8 @@ int client_generate_packet(void* data, int payload_bytes, uint32_t counter,
     struct udphdr* udp = (struct udphdr*)((char*)ip + sizeof(struct iphdr));
 
     // generate ethernet header
-    memcpy(eth->h_dest, SERVER_ETHERNET_ADDRESS, ETH_ALEN);
-    memcpy(eth->h_source, CLIENT_ETHERNET_ADDRESS, ETH_ALEN);
+    memcpy(eth->h_dest, server_ethernet_address, ETH_ALEN);
+    memcpy(eth->h_source, client_ethernet_address, ETH_ALEN);
     eth->h_proto = htons(ETH_P_IP);
 
     // generate ip header
@@ -343,16 +340,16 @@ int client_generate_packet(void* data, int payload_bytes, uint32_t counter,
     ip->tot_len =
         htons(sizeof(struct iphdr) + sizeof(struct udphdr) + payload_bytes);
     ip->protocol = IPPROTO_UDP;
-    ip->saddr = htonl(CLIENT_IPV4_ADDRESS);
-    ip->daddr = htonl(SERVER_IPV4_ADDRESS);
+    ip->saddr = htonl(client_addr_u32);
+    ip->daddr = htonl(server_addr_u32);
     ip->check = 0;
     ip->check = ipv4_checksum(ip, sizeof(struct iphdr));
 
     // generate udp header: using different ports to bypass per-flow rate
     // limiting
-    udp->source = htons(
-        CLIENT_PORT[counter % (sizeof(CLIENT_PORT) / sizeof(CLIENT_PORT[0]))]);
-    udp->dest = htons(SERVER_PORT);
+    udp->source = htons(client_ports[counter % (sizeof(client_ports) /
+                                                sizeof(client_ports[0]))]);
+    udp->dest = htons(server_port);
     udp->len = htons(sizeof(struct udphdr) + payload_bytes);
     udp->check = 0;
 
@@ -389,13 +386,13 @@ void socket_send(struct socket_t* socket, int queue_id) {
 
     // queue packets to send
     uint32_t send_index;
-    int result = xsk_ring_prod__reserve(&socket->send_queue, SEND_BATCH_SIZE,
+    int result = xsk_ring_prod__reserve(&socket->send_queue, MY_SEND_BATCH_SIZE,
                                         &send_index);
     if (result == 0) return;
 
     int num_packets = 0;
-    uint64_t packet_address[SEND_BATCH_SIZE];
-    int packet_length[SEND_BATCH_SIZE];
+    uint64_t packet_address[MY_SEND_BATCH_SIZE];
+    int packet_length[MY_SEND_BATCH_SIZE];
 
     while (true) {
         // the 256B before frame_offset is xdp metedata
@@ -408,7 +405,7 @@ void socket_send(struct socket_t* socket, int queue_id) {
 
         num_packets++;
 
-        if (num_packets == SEND_BATCH_SIZE) break;
+        if (num_packets == MY_SEND_BATCH_SIZE) break;
     }
 
     for (int i = 0; i < num_packets; i++) {
@@ -452,12 +449,14 @@ void socket_recv(struct socket_t* socket, int queue_id) {
     // Check any packet received, in order to drive packet receiving path for
     // other kernel transport.
     uint32_t idx_rx, idx_fq, rcvd;
-    rcvd = xsk_ring_cons__peek(&socket->recv_queue, RECV_BATCH_SIZE, &idx_rx);
+    rcvd =
+        xsk_ring_cons__peek(&socket->recv_queue, MY_RECV_BATCH_SIZE, &idx_rx);
     if (!rcvd) return;
     inflight_pkts -= rcvd;
 
     /* Stuff the ring with as much frames as possible */
-    int stock_frames = xsk_prod_nb_free(&socket->fill_queue, RECV_BATCH_SIZE);
+    int stock_frames =
+        xsk_prod_nb_free(&socket->fill_queue, MY_RECV_BATCH_SIZE);
 
     if (stock_frames > 0) {
         int ret =
@@ -651,10 +650,13 @@ int main(int argc, char* argv[]) {
     signal(SIGALRM, clean_shutdown_handler);
     alarm(10);
 
+    client_addr_u32 = htonl(str_to_ip(client_addr_str));
+    server_addr_u32 = htonl(str_to_ip(server_addr_str));
+
     int pshared;
     int ret;
 
-    if (client_init(&client, INTERFACE_NAME) != 0) {
+    if (client_init(&client, "ens6") != 0) {
         cleanup();
         return 1;
     }

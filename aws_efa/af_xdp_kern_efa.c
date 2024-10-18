@@ -7,7 +7,7 @@
 
 #include <bpf/bpf_helpers.h>
 
-#define SERVER_PORT 8889
+#define server_port 8889
 #define TCP_PROTO 6
 #define UDP_PROTO 17
 #define MAGIC_NUMBER 0xdeadbeef

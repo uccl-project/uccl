@@ -7,7 +7,7 @@
 
 #include <bpf/bpf_helpers.h>
 
-#define SERVER_PORT 8889
+#define server_port 8889
 #define UDP_PROTO 17
 #define MAGIC_NUMBER 0xdeadbeef
 #define htons(x) ((__be16)___constant_swab16((x)))
@@ -48,7 +48,7 @@ int xdp_sock_prog(struct xdp_md *ctx)
     // if (*(__u64*)payload != MAGIC_NUMBER) return XDP_PASS;
 
     // How to specify PORT in libfabric UDP?
-    // if (udp->dest != htons(SERVER_PORT)) return XDP_PASS;
+    // if (udp->dest != htons(server_port)) return XDP_PASS;
 
     int index = ctx->rx_queue_index;
     // __u32 *pkt_count;

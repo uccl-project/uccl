@@ -8,7 +8,6 @@
 #include <linux/in.h>
 
 #include "ebpf_util.h"
-#include "transport_config.h"
 
 struct {
     __uint(type, BPF_MAP_TYPE_XSKMAP);
@@ -16,6 +15,8 @@ struct {
     __type(value, __u32);
     __uint(max_entries, 64);
 } xsks_map SEC(".maps");
+
+// #define USING_TCP
 
 #ifdef USING_TCP
 #define kNetHdrLen \

@@ -1,6 +1,8 @@
 #include <errno.h>
 #include <stdint.h>
 
+// #define PING_PONG_MSG
+
 // need around 200k to echieve 9Gbps
 #define PAYLOAD_BYTES (1024000)
 #define DEFAULT_PORT 40000
@@ -9,7 +11,6 @@
 #define NUM_SOCKETS 8
 #define MAX_EVENTS_ONCE 32
 #define MTU 9000
-#define PING_PONG_MSG
 
 struct Config {
     char *address;

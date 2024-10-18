@@ -6,15 +6,10 @@
 #include <thread>
 
 #include "transport.h"
+#include "transport_config.h"
 
 using namespace uccl;
 
-const uint8_t SERVER_ETHERNET_ADDRESS[] = {0x0a, 0xff, 0xea, 0x86, 0x04, 0xd9};
-const uint8_t CLIENT_ETHERNET_ADDRESS[] = {0x0a, 0xff, 0xdf, 0x30, 0xe7, 0x59};
-const std::string server_addr_str = "172.31.22.249";
-const std::string client_addr_str = "172.31.16.198";
-const uint16_t SERVER_PORT = 40000;
-const uint16_t CLIENT_PORT = 40000;
 const size_t NUM_FRAMES = 4096 * 4;  // 256MB frame pool
 const size_t QUEUE_ID = 0;
 const size_t kTestMsgSize = 1024000;
@@ -48,8 +43,8 @@ int main(int argc, char* argv[]) {
     if (FLAGS_client) {
         AFXDPFactory::init("ens6", "ebpf_transport.o", "ebpf_transport");
         UcclEngine engine(QUEUE_ID, NUM_FRAMES, &channel, client_addr_str,
-                          CLIENT_PORT, server_addr_str, SERVER_PORT,
-                          CLIENT_ETHERNET_ADDRESS, SERVER_ETHERNET_ADDRESS);
+                          client_port, server_addr_str, server_port,
+                          client_ethernet_address, server_ethernet_address);
         auto engine_th = std::thread([&engine]() {
             pin_thread_to_cpu(2);
             engine.run();
@@ -115,8 +110,8 @@ int main(int argc, char* argv[]) {
         // "ebpf_transport");
         AFXDPFactory::init("ens6", "ebpf_transport.o", "ebpf_transport");
         UcclEngine engine(QUEUE_ID, NUM_FRAMES, &channel, server_addr_str,
-                          SERVER_PORT, client_addr_str, CLIENT_PORT,
-                          SERVER_ETHERNET_ADDRESS, CLIENT_ETHERNET_ADDRESS);
+                          server_port, client_addr_str, client_port,
+                          server_ethernet_address, client_ethernet_address);
         auto engine_th = std::thread([&engine]() {
             pin_thread_to_cpu(2);
             engine.run();
