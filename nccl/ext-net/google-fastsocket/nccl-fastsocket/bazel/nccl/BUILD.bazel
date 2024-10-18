@@ -1,0 +1,57 @@
+NCCL_MAJOR = 2
+NCCL_MINOR = 13
+NCCL_PATCH = 4
+NCCL_SUFFIX = 1
+NCCL_VERSION = NCCL_MAJOR * 10000 + NCCL_MINOR * 100 + NCCL_PATCH
+
+genrule(
+    name = "gen_nccl_h",
+    srcs = [
+        "src/nccl.h.in",
+    ],
+    outs = [
+        "src/nccl.h",
+    ],
+    cmd = 'sed -e "s/\\$${{nccl:Major}}/{}/g" -e "s/\\$${{nccl:Minor}}/{}/g" -e "s/\\$${{nccl:Patch}}/{}/g" -e "s/\\$${{nccl:Suffix}}/{}/g" -e "s/\\$${{nccl:Version}}/{}/g" $< > $@'.format(
+        NCCL_MAJOR,
+        NCCL_MINOR,
+        NCCL_PATCH,
+        NCCL_SUFFIX,
+        NCCL_VERSION,
+    ),
+)
+
+cc_library(
+    name = "src_hdrs",
+    hdrs = [
+        "src/nccl.h",
+    ],
+    includes = ["src"],
+    deps = [
+        "@local_config_cuda//:cuda_headers",
+    ],
+)
+
+cc_library(
+    name = "include_hdrs",
+    hdrs = glob([
+        "src/include/*.h",
+        "src/include/*.hpp",
+    ]),
+    includes = ["src/include"],
+    deps = [
+        ":src_hdrs",
+    ],
+)
+
+cc_library(
+    name = "plugin_lib",
+    srcs = [
+        "src/debug.cc",
+        "src/misc/utils.cc",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":include_hdrs",
+    ],
+)
