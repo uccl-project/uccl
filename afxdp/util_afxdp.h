@@ -172,7 +172,9 @@ class AFXDPSocket {
     struct xsk_ring_cons complete_queue_;
     struct xsk_ring_prod fill_queue_;
     FramePool</*Sync=*/false> *frame_pool_;
+#if 0
     std::set<uint64_t> free_frames_;
+#endif
 
     struct frame_desc {
         uint64_t frame_offset;

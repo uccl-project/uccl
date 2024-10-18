@@ -270,9 +270,7 @@ void AFXDPSocket::populate_fill_queue(uint32_t nb_frames) {
             << " fill_queue_entries_ = " << fill_queue_entries_;
 
     for (int i = 0; i < ret; i++) {
-        auto offset = frame_pool_->pop();
-        free_frames_.erase(offset);
-        FrameBuf::clear_fields(offset, umem_buffer_);
+        auto offset = pop_frame();
         *xsk_ring_prod__fill_addr(&fill_queue_, idx_fq++) = offset;
     }
     xsk_ring_prod__submit(&fill_queue_, ret);
@@ -288,10 +286,8 @@ std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
     VLOG(2) << "rx recv_packets num_frames = " << rcvd
             << " fill_queue_entries_ = " << fill_queue_entries_;
 
-    if (fill_queue_entries_ <= XSK_RING_PROD__DEFAULT_NUM_DESCS / 2) {
-        populate_fill_queue(XSK_RING_PROD__DEFAULT_NUM_DESCS -
-                            fill_queue_entries_);
-    }
+    // Do filling even it is a small batch to control tail latency.
+    populate_fill_queue(XSK_RING_PROD__DEFAULT_NUM_DESCS - fill_queue_entries_);
 
     for (int i = 0; i < rcvd; i++) {
         const struct xdp_desc* desc =
