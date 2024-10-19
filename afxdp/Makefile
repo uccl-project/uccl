@@ -1,7 +1,12 @@
 KERNEL = $(shell uname -r)
 INC = -I ../lib/install/include
-LIBS = ../lib/install/lib/libxdp.a ../lib/install/lib/libbpf.a -lglog -lgflags
-CXXFLAGS = -O3 -g -std=c++17 -Wno-pointer-arith
+# LIBS = ../lib/install/lib/libxdp.a ../lib/install/lib/libbpf.a -lglog -lgflags -lz -lelf
+# LIBS = -L../lib/xdp-tools/lib/libxdp -lxdp -L../lib/libbpf/src -lbpf -lglog -lgflags -lz -lelf
+LIBS = -Wl,-rpath=/home/ubuntu/uccl/lib/xdp-tools/lib/libxdp/ \
+	   -Wl,-rpath=/home/ubuntu/uccl/lib/libbpf/src/ \
+	   -L../lib/xdp-tools/lib/libxdp -lxdp -L../lib/libbpf/src -lbpf \
+	   -lglog -lgflags -lz -lelf
+CXXFLAGS = -O3 -g -std=c++17 -Wno-pointer-arith -fPIC
 CLANGFLAGS = -O3 -g
 DEPS = *.h
 PLUGIN_SO = libnccl-net.so
@@ -9,6 +14,7 @@ PLUGIN_SO = libnccl-net.so
 lib_src = $(wildcard *.cc)
 lib_src := $(filter-out %_main.cc,$(lib_src))
 lib_src := $(filter-out %_test.cc,$(lib_src))
+lib_src := $(filter-out %_plugin.cc,$(lib_src))
 lib_obj = $(lib_src:.cc=.o)
 
 main_src = $(wildcard *_main.cc)
@@ -48,22 +54,22 @@ server_tcp_ep_main: server_tcp_ep_main.cc $(DEPS)
 	g++ server_tcp_ep_main.cc -o server_tcp_ep_main $(INC) $(LIBS) $(CXXFLAGS) -Wno-write-strings
 
 client_main: client_main.cc ebpf_client.o $(DEPS) $(lib_obj)
-	g++ client_main.cc -o client_main $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS) -lz -lelf
+	g++ client_main.cc -o client_main $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
 server_main: server_main.cc ebpf_server.o $(DEPS) $(lib_obj)
-	g++ server_main.cc -o server_main $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS) -lz -lelf
+	g++ server_main.cc -o server_main $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
 server_direct_main: server_direct_main.cc ebpf_server_direct.o $(DEPS) $(lib_obj)
-	g++ server_direct_main.cc -o server_direct_main $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS) -lz -lelf
+	g++ server_direct_main.cc -o server_direct_main $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
-transport_test: transport_test.cc ebpf_client.o $(DEPS) $(lib_obj)
-	g++ transport_test.cc -o transport_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS) -lz -lelf
+transport_test: transport_test.cc ebpf_transport.o $(DEPS) $(lib_obj)
+	g++ transport_test.cc -o transport_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
-transport_pp_test: transport_pp_test.cc ebpf_client.o $(DEPS) $(lib_obj)
-	g++ transport_pp_test.cc -o transport_pp_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS) -lz -lelf
+transport_pp_test: transport_pp_test.cc ebpf_transport.o $(DEPS) $(lib_obj)
+	g++ transport_pp_test.cc -o transport_pp_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
 util_afxdp_test: util_afxdp_test.cc ebpf_client.o $(DEPS) $(lib_obj)
-	g++ util_afxdp_test.cc -o util_afxdp_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS) -lz -lelf
+	g++ util_afxdp_test.cc -o util_afxdp_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
 %.o: %.cc $(DEPS)
 	g++ -c $< -o $@ $(INC) $(CXXFLAGS)
@@ -72,8 +78,8 @@ NCCL_HOME:=../nccl/src
 CUDA_HOME:=/usr/local/cuda
 NCCL_INC:= -I$(NCCL_HOME)/include -I$(CUDA_HOME)/include
 
-$(PLUGIN_SO): nccl_plugin.cc
-	g++ $(NCCL_INC) -fPIC -shared -o $@ -Wl,-soname,$(PLUGIN_SO) $^
+$(PLUGIN_SO): nccl_plugin.cc ebpf_transport.o $(DEPS) $(lib_obj)
+	g++ $(NCCL_INC) -fPIC -shared -o $@ -Wl,-soname,$(PLUGIN_SO) nccl_plugin.cc $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
 .PHONY: clean
 clean:

@@ -129,8 +129,8 @@ int main(int argc, char* argv[]) {
             // ep.uccl_recv(conn_id, data, &len);
             // ep.uccl_send(conn_id, data, kTestMsgSize);
             ep.uccl_recv_async(conn_id, data, &len);
-            ep.uccl_recv_poll();
             ep.uccl_send_async(conn_id, data, test_msg_size);
+            ep.uccl_recv_poll();
             ep.uccl_send_poll();
             auto end = std::chrono::high_resolution_clock::now();
             auto duration_us =

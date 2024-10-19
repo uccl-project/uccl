@@ -46,8 +46,8 @@ void AFXDPFactory::init(const char* interface_name, const char* ebpf_filename,
     CHECK(!libxdp_get_error(afxdp_ctl.program_))
         << "error: could not load " << ebpf_filename << "program";
 
-    LOG(INFO) << "ebpf_client loaded successfully.";
-    LOG(INFO) << "attaching ebpf_client to network interface";
+    LOG(INFO) << ebpf_filename << " loaded successfully.";
+    LOG(INFO) << "attaching " << ebpf_filename << " to network interface";
 
     int ret = xdp_program__attach(
         afxdp_ctl.program_, afxdp_ctl.interface_index_, XDP_MODE_NATIVE, 0);
@@ -60,8 +60,8 @@ void AFXDPFactory::init(const char* interface_name, const char* ebpf_filename,
         if (ret == 0) {
             afxdp_ctl.attached_skb_ = true;
         } else {
-            LOG(ERROR) << "error: failed to attach ebpf_client program to "
-                          "interface";
+            LOG(ERROR) << "error: failed to attach " << ebpf_filename
+                       << " program to interface";
         }
     }
 
