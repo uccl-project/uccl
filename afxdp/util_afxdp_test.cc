@@ -136,8 +136,8 @@ int client_generate_packet(void* data, int payload_bytes, uint32_t counter,
     struct udphdr* udp = (struct udphdr*)((char*)ip + sizeof(struct iphdr));
 
     // generate ethernet header
-    memcpy(eth->h_dest, server_ethernet_address, ETH_ALEN);
-    memcpy(eth->h_source, client_ethernet_address, ETH_ALEN);
+    memcpy(eth->h_dest, server_mac_char, ETH_ALEN);
+    memcpy(eth->h_source, client_mac_char, ETH_ALEN);
     eth->h_proto = htons(ETH_P_IP);
 
     // generate ip header
@@ -365,8 +365,8 @@ int main(int argc, char* argv[]) {
     signal(SIGALRM, clean_shutdown_handler);
     alarm(10);
 
-    client_addr_u32 = htonl(str_to_ip(client_addr_str));
-    server_addr_u32 = htonl(str_to_ip(server_addr_str));
+    client_addr_u32 = htonl(str_to_ip(client_ip_str));
+    server_addr_u32 = htonl(str_to_ip(server_ip_str));
 
     int pshared;
     int ret;

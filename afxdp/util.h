@@ -2,15 +2,20 @@
 
 #include <arpa/inet.h>
 #include <glog/logging.h>
+#include <ifaddrs.h>
 #include <linux/in.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdarg.h>
 #include <sys/socket.h>
+#include <sys/types.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
+#include <iomanip>
+#include <sstream>
 #include <vector>
 
 #include "util_jring.h"
@@ -338,6 +343,93 @@ static inline uint32_t str_to_ip(const std::string& ip) {
     struct sockaddr_in sa;
     DCHECK(inet_pton(AF_INET, ip.c_str(), &(sa.sin_addr)) != 0);
     return sa.sin_addr.s_addr;
+}
+
+static inline std::string get_dev_ip(const char* dev_name) {
+    struct ifaddrs* ifAddrStruct = NULL;
+    struct ifaddrs* ifa = NULL;
+    void* tmpAddrPtr = NULL;
+
+    getifaddrs(&ifAddrStruct);
+
+    for (ifa = ifAddrStruct; ifa != NULL; ifa = ifa->ifa_next) {
+        if (!ifa->ifa_addr) {
+            continue;
+        }
+        if (strncmp(ifa->ifa_name, dev_name, strlen(dev_name)) != 0) {
+            continue;
+        }
+        if (ifa->ifa_addr->sa_family == AF_INET) {  // check it is IP4
+            // is a valid IP4 Address
+            tmpAddrPtr = &((struct sockaddr_in*)ifa->ifa_addr)->sin_addr;
+            char addressBuffer[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, tmpAddrPtr, addressBuffer, INET_ADDRSTRLEN);
+            LOG(INFO) << Format("%s IP Address %s\n", ifa->ifa_name,
+                                addressBuffer);
+            return std::string(addressBuffer);
+        } else if (ifa->ifa_addr->sa_family == AF_INET6) {  // check it is IP6
+            // is a valid IP6 Address
+            tmpAddrPtr = &((struct sockaddr_in6*)ifa->ifa_addr)->sin6_addr;
+            char addressBuffer[INET6_ADDRSTRLEN];
+            inet_ntop(AF_INET6, tmpAddrPtr, addressBuffer, INET6_ADDRSTRLEN);
+            LOG(INFO) << Format("%s IP Address %s\n", ifa->ifa_name,
+                                addressBuffer);
+            return std::string(addressBuffer);
+        }
+    }
+    if (ifAddrStruct != NULL) freeifaddrs(ifAddrStruct);
+    return std::string();
+}
+
+// Function to convert MAC string to hex char array
+static inline bool str_to_mac(const std::string& macStr, unsigned char mac[6]) {
+    if (macStr.length() != 17) {
+        LOG(ERROR) << "Invalid MAC address format.";
+        return false;
+    }
+
+    int values[6];  // Temp array to hold integer values
+    if (sscanf(macStr.c_str(), "%x:%x:%x:%x:%x:%x", &values[0], &values[1],
+               &values[2], &values[3], &values[4], &values[5]) == 6) {
+        // Convert to unsigned char array
+        for (int i = 0; i < 6; i++) {
+            mac[i] = static_cast<unsigned char>(values[i]);
+        }
+        return true;
+    } else {
+        LOG(ERROR) << "Invalid MAC address format.";
+        return false;
+    }
+}
+
+// Function to convert hex char array back to MAC string
+static inline std::string mac_to_str(const unsigned char mac[6]) {
+    std::stringstream ss;
+    ss << std::hex << std::setfill('0');
+    for (int i = 0; i < 6; i++) {
+        ss << std::setw(2) << static_cast<int>(mac[i]);
+        if (i != 5) {
+            ss << ":";
+        }
+    }
+    return ss.str();
+}
+
+static inline std::string get_dev_mac(const char* dev_name) {
+    std::string mac;
+    std::string cmd = Format("cat /sys/class/net/%s/address", dev_name);
+    FILE* fp = popen(cmd.c_str(), "r");
+    if (fp == nullptr) {
+        LOG(ERROR) << "Failed to get MAC address.";
+        return mac;
+    }
+    char buffer[18];
+    if (fgets(buffer, sizeof(buffer), fp) != nullptr) {
+        mac = std::string(buffer);
+        mac.erase(std::remove(mac.begin(), mac.end(), '\n'), mac.end());
+    }
+    pclose(fp);
+    return mac;
 }
 
 }  // namespace uccl

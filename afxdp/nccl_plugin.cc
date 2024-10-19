@@ -92,10 +92,32 @@ ncclResult_t pluginListen(int dev, void* handle, void** listenComm) {
     static_assert(sizeof(struct afxdp_context) < NCCL_NET_HANDLE_MAXSIZE,
                   "ncclSocketHandle size too large");
     ctx->channel = new Channel();
-    ctx->engine =
-        new UcclEngine(QUEUE_ID, NUM_FRAMES, ctx->channel, client_addr_str,
-                       client_port, server_addr_str, server_port,
-                       client_ethernet_address, server_ethernet_address);
+
+    std::string local_ip_str = get_dev_ip("ens6");
+    DCHECK(local_ip_str != "");
+    std::string local_mac_str = get_dev_mac("ens6");
+    DCHECK(local_mac_str != "");
+
+    std::string client_mac_str = mac_to_str(client_mac_char);
+    std::string server_mac_str = mac_to_str(server_mac_char);
+    DCHECK(server_mac_str != "" && client_mac_str != "");
+
+    if (local_ip_str == client_ip_str && local_mac_str == client_mac_str) {
+        LOG(INFO) << "This is the client machine";
+        ctx->engine = new UcclEngine(
+            QUEUE_ID, NUM_FRAMES, ctx->channel, client_ip_str, client_port,
+            server_ip_str, server_port, client_mac_char, server_mac_char);
+
+    } else if (local_ip_str == server_ip_str &&
+               local_mac_str == server_mac_str) {
+        LOG(INFO) << "This is the server machine";
+        ctx->engine = new UcclEngine(
+            QUEUE_ID, NUM_FRAMES, ctx->channel, server_ip_str, server_port,
+            client_ip_str, client_port, server_mac_char, client_mac_char);
+    } else {
+        DCHECK(false) << "This machine is neither client nor server";
+    }
+
     ctx->ep = new Endpoint(ctx->channel);
     ctx->engine_th = new std::thread([&ctx]() {
         pin_thread_to_cpu(2);
@@ -110,7 +132,7 @@ ncclResult_t pluginListen(int dev, void* handle, void** listenComm) {
 ncclResult_t pluginConnect(int dev, void* handle, void** sendComm,
                            ncclNetDeviceHandle_v8_t** sendDevComm) {
     struct afxdp_context* ctx = static_cast<struct afxdp_context*>(handle);
-    ctx->conn_id = ctx->ep->uccl_connect(server_addr_str);
+    ctx->conn_id = ctx->ep->uccl_connect(server_ip_str);
 
     *sendComm = ctx;
     return ncclSuccess;

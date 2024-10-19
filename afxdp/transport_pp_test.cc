@@ -42,9 +42,9 @@ int main(int argc, char* argv[]) {
 
     if (FLAGS_client) {
         AFXDPFactory::init("ens6", "ebpf_transport.o", "ebpf_transport");
-        UcclEngine engine(QUEUE_ID, NUM_FRAMES, &channel, client_addr_str,
-                          client_port, server_addr_str, server_port,
-                          client_ethernet_address, server_ethernet_address);
+        UcclEngine engine(QUEUE_ID, NUM_FRAMES, &channel, client_ip_str,
+                          client_port, server_ip_str, server_port,
+                          client_mac_char, server_mac_char);
         auto engine_th = std::thread([&engine]() {
             pin_thread_to_cpu(2);
             engine.run();
@@ -52,7 +52,7 @@ int main(int argc, char* argv[]) {
 
         pin_thread_to_cpu(3);
         auto ep = Endpoint(&channel);
-        auto conn_id = ep.uccl_connect(server_addr_str);
+        auto conn_id = ep.uccl_connect(server_ip_str);
 
         size_t data_len;
         auto* data = new uint8_t[kTestMsgSize];
@@ -109,9 +109,9 @@ int main(int argc, char* argv[]) {
         // AFXDPFactory::init("ens6", "ebpf_transport_pktloss.o",
         // "ebpf_transport");
         AFXDPFactory::init("ens6", "ebpf_transport.o", "ebpf_transport");
-        UcclEngine engine(QUEUE_ID, NUM_FRAMES, &channel, server_addr_str,
-                          server_port, client_addr_str, client_port,
-                          server_ethernet_address, client_ethernet_address);
+        UcclEngine engine(QUEUE_ID, NUM_FRAMES, &channel, server_ip_str,
+                          server_port, client_ip_str, client_port,
+                          server_mac_char, client_mac_char);
         auto engine_th = std::thread([&engine]() {
             pin_thread_to_cpu(2);
             engine.run();
