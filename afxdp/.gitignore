@@ -1,3 +1,4 @@
 *.o
 *_main
 *_test
+*.so

@@ -4,6 +4,7 @@ LIBS = ../lib/install/lib/libxdp.a ../lib/install/lib/libbpf.a -lglog -lgflags
 CXXFLAGS = -O3 -g -std=c++17 -Wno-pointer-arith
 CLANGFLAGS = -O3 -g
 DEPS = *.h
+PLUGIN_SO = libnccl-net.so
 
 lib_src = $(wildcard *.cc)
 lib_src := $(filter-out %_main.cc,$(lib_src))
@@ -14,7 +15,7 @@ main_src = $(wildcard *_main.cc)
 main_src += $(wildcard *_test.cc)
 main_bin = $(main_src:.cc=)
 
-ebpf_obj = ebpf_client.o ebpf_server.o ebpf_server_direct.o ebpf_transport.o ebpf_transport_pktloss.o
+ebpf_obj = ebpf_client.o ebpf_server.o ebpf_server_direct.o ebpf_transport.o ebpf_transport_pktloss.o $(PLUGIN_SO)
 
 .PHONY: build
 build: $(main_bin) $(ebpf_obj)
@@ -67,6 +68,13 @@ util_afxdp_test: util_afxdp_test.cc ebpf_client.o $(DEPS) $(lib_obj)
 %.o: %.cc $(DEPS)
 	g++ -c $< -o $@ $(INC) $(CXXFLAGS)
 
+NCCL_HOME:=../nccl/src
+CUDA_HOME:=/usr/local/cuda
+NCCL_INC:= -I$(NCCL_HOME)/include -I$(CUDA_HOME)/include
+
+$(PLUGIN_SO): nccl_plugin.cc
+	g++ $(NCCL_INC) -fPIC -shared -o $@ -Wl,-soname,$(PLUGIN_SO) $^
+
 .PHONY: clean
 clean:
-	rm -f *.o $(main_bin)
+	rm -f *.o $(main_bin) $(PLUGIN_SO)
