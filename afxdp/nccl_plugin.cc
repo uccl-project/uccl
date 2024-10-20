@@ -11,7 +11,7 @@
 using namespace uccl;
 
 const char* PLUGIN_NAME = "AFXDP_Plugin";
-const size_t NUM_FRAMES = 4096 * 4;  // 256MB frame pool
+const size_t NUM_FRAMES = 4096 * 64;  // 1GB frame pool
 const size_t QUEUE_ID = 0;
 
 volatile bool quit = false;

@@ -18,6 +18,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 #include <xdp/libxdp.h>
 #include <xdp/xsk.h>
@@ -83,7 +85,7 @@ class FrameBuf {
     FrameBuf *next() const { return next_; }
     // Set the next message buffer index in the chain.
     void set_next(FrameBuf *next) { next_ = next; }
-    
+
     void mark_first() { add_msg_flags(UCCL_MSGBUF_FLAGS_SYN); }
     void mark_last() { add_msg_flags(UCCL_MSGBUF_FLAGS_FIN); }
 
@@ -138,12 +140,13 @@ class FrameBuf {
 class AFXDPSocket;
 
 class AFXDPFactory {
+#define SHM_NAME "UMEM_SHM"
+#define SOCKET_PATH "/tmp/privileged_socket"
+
    public:
-    int interface_index_;
+    // UDS socket to connect to the afxdp daemon.
+    int client_sock_;
     char interface_name_[256];
-    struct xdp_program *program_;
-    bool attached_native_;
-    bool attached_skb_;
     std::mutex socket_q_lock_;
     std::deque<AFXDPSocket *> socket_q_;
 
@@ -156,16 +159,62 @@ class AFXDPFactory {
 extern AFXDPFactory afxdp_ctl;
 
 class AFXDPSocket {
+#define FILL_RING_SIZE                  \
+    (XSK_RING_PROD__DEFAULT_NUM_DESCS * \
+     2)  // recommened to be RX_RING_SIZE + NIC RING SIZE
+#define COMP_RING_SIZE XSK_RING_CONS__DEFAULT_NUM_DESCS
+#define TX_RING_SIZE XSK_RING_PROD__DEFAULT_NUM_DESCS
+#define RX_RING_SIZE XSK_RING_CONS__DEFAULT_NUM_DESCS
+
+    constexpr static uint32_t QUEUE_ID = 0;
+    constexpr static uint32_t NUM_FRAMES = 64 * 4096;
     constexpr static uint32_t FRAME_SIZE = XSK_UMEM__DEFAULT_FRAME_SIZE;
-    constexpr static uint32_t RECV_SPIN_US = 10;
 
     AFXDPSocket(int queue_id, int num_frames);
 
+    // For manually mapping umem struct from the afxdp daemon.
+    typedef __u64 u64;
+    typedef __u32 u32;
+    typedef __u16 u16;
+    typedef __u8 u8;
+
+    /* Up until and including Linux 5.3 */
+    struct xdp_ring_offset_v1 {
+        __u64 producer;
+        __u64 consumer;
+        __u64 desc;
+    };
+
+    /* Up until and including Linux 5.3 */
+    struct xdp_mmap_offsets_v1 {
+        struct xdp_ring_offset_v1 rx;
+        struct xdp_ring_offset_v1 tx;
+        struct xdp_ring_offset_v1 fr;
+        struct xdp_ring_offset_v1 cr;
+    };
+
+    void xsk_mmap_offsets_v1(struct xdp_mmap_offsets *off);
+    int xsk_get_mmap_offsets(int fd, struct xdp_mmap_offsets *off);
+    void destroy_afxdp_socket();
+    int create_afxdp_socket();
+
+    int xsk_fd_;
+    int umem_fd_;
+
+    void *fill_map_;
+    size_t fill_map_size_;
+    void *comp_map_;
+    size_t comp_map_size_;
+    void *rx_map_;
+    size_t rx_map_size_;
+    void *tx_map_;
+    size_t tx_map_size_;
+
    public:
-    int queue_id_;
+    uint32_t queue_id_;
+    uint32_t num_frames_;
     void *umem_buffer_;
-    struct xsk_umem *umem_;
-    struct xsk_socket *xsk_;
+    size_t umem_size_;
     struct xsk_ring_cons recv_queue_;
     struct xsk_ring_prod send_queue_;
     struct xsk_ring_cons complete_queue_;
@@ -218,6 +267,9 @@ class AFXDPSocket {
         frame_pool_->push(frame_offset);
 #endif
     }
+
+    int get_xsk_fd() const { return xsk_fd_; }
+    int get_umem_fd() const { return umem_fd_; }
 
     std::string to_string() const;
     void shutdown();

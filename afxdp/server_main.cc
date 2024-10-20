@@ -39,7 +39,7 @@ const char* INTERFACE_NAME = "ens6";
 const int RECV_BATCH_SIZE = 32;
 const bool busy_poll = true;
 
-#define NUM_FRAMES (4096 * 16)
+#define NUM_FRAMES (4096 * 64)
 #define FRAME_SIZE XSK_UMEM__DEFAULT_FRAME_SIZE
 #define INVALID_FRAME UINT64_MAX
 

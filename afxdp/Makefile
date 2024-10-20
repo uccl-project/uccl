@@ -62,6 +62,9 @@ server_main: server_main.cc ebpf_server.o $(DEPS) $(lib_obj)
 server_direct_main: server_direct_main.cc ebpf_server_direct.o $(DEPS) $(lib_obj)
 	g++ server_direct_main.cc -o server_direct_main $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
+afxdp_daemon_main: afxdp_daemon_main.cc ebpf_transport.o $(DEPS) $(lib_obj)
+	g++ afxdp_daemon_main.cc -o afxdp_daemon_main $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
+
 afxdp_setup_main: afxdp_setup_main.cc $(DEPS) $(lib_obj)
 	g++ afxdp_setup_main.cc -o afxdp_setup_main $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 

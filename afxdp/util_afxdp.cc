@@ -4,57 +4,28 @@ namespace uccl {
 
 AFXDPFactory afxdp_ctl;
 
-void AFXDPFactory::init(const char* interface_name, const char* ebpf_filename,
-                        const char* section_name) {
-    // TODO(yang): make eBPF attachment the afxdp_man process' job. Here we just
-    // get the xsk socket and umem through uds.
+void AFXDPFactory::init(const char *interface_name, const char *ebpf_filename,
+                        const char *section_name) {
+    // TODO(yang): negotiate with afxdp daemon to load the specified program
 
-    // we can only run xdp programs as root
-    CHECK(geteuid() == 0) << "error: this program must be run as root";
-
-    strcpy(afxdp_ctl.interface_name_, interface_name);
-
-    // find the network interface that matches the interface name
-    afxdp_ctl.interface_index_ = get_dev_index(interface_name);
-
-    CHECK(afxdp_ctl.interface_index_ != -1)
-        << "error: could not find any network interface matching "
-        << interface_name;
-
-    // load the ebpf_client program and attach it to the network interface
-    LOG(INFO) << "loading " << section_name << "...";
-
-    afxdp_ctl.program_ =
-        xdp_program__open_file(ebpf_filename, section_name, NULL);
-    CHECK(!libxdp_get_error(afxdp_ctl.program_))
-        << "error: could not load " << ebpf_filename << "program";
-
-    LOG(INFO) << ebpf_filename << " loaded successfully.";
-    LOG(INFO) << "attaching " << ebpf_filename << " to network interface";
-
-    int ret = xdp_program__attach(
-        afxdp_ctl.program_, afxdp_ctl.interface_index_, XDP_MODE_NATIVE, 0);
-    if (ret == 0) {
-        afxdp_ctl.attached_native_ = true;
-    } else {
-        LOG(INFO) << "falling back to skb mode...";
-        ret = xdp_program__attach(afxdp_ctl.program_,
-                                  afxdp_ctl.interface_index_, XDP_MODE_SKB, 0);
-        if (ret == 0) {
-            afxdp_ctl.attached_skb_ = true;
-        } else {
-            LOG(ERROR) << "error: failed to attach " << ebpf_filename
-                       << " program to interface";
-        }
+    struct sockaddr_un addr;
+    // Create a UNIX domain socket to receive file descriptors
+    if ((afxdp_ctl.client_sock_ = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
+        perror("socket");
+        exit(EXIT_FAILURE);
     }
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strcpy(addr.sun_path, SOCKET_PATH);
 
-    // allow unlimited locking of memory, so all memory needed for packet
-    // buffers can be locked
-    struct rlimit rlim = {RLIM_INFINITY, RLIM_INFINITY};
-    CHECK(!setrlimit(RLIMIT_MEMLOCK, &rlim)) << "error: could not setrlimit";
+    if (connect(afxdp_ctl.client_sock_, (struct sockaddr *)&addr,
+                sizeof(addr)) == -1) {
+        perror("connect");
+        exit(EXIT_FAILURE);
+    }
 }
 
-AFXDPSocket* AFXDPFactory::CreateSocket(int queue_id, int num_frames) {
+AFXDPSocket *AFXDPFactory::CreateSocket(int queue_id, int num_frames) {
     auto socket = new AFXDPSocket(queue_id, num_frames);
     std::lock_guard<std::mutex> lock(afxdp_ctl.socket_q_lock_);
     afxdp_ctl.socket_q_.push_back(socket);
@@ -62,19 +33,7 @@ AFXDPSocket* AFXDPFactory::CreateSocket(int queue_id, int num_frames) {
 }
 
 void AFXDPFactory::shutdown() {
-    if (afxdp_ctl.program_ != NULL) {
-        if (afxdp_ctl.attached_native_) {
-            xdp_program__detach(afxdp_ctl.program_, afxdp_ctl.interface_index_,
-                                XDP_MODE_NATIVE, 0);
-        }
-
-        if (afxdp_ctl.attached_skb_) {
-            xdp_program__detach(afxdp_ctl.program_, afxdp_ctl.interface_index_,
-                                XDP_MODE_SKB, 0);
-        }
-
-        xdp_program__close(afxdp_ctl.program_);
-    }
+    // eBPF program detaching is done by the afxdp daemon
 
     std::lock_guard<std::mutex> lock(afxdp_ctl.socket_q_lock_);
     for (auto socket : afxdp_ctl.socket_q_) {
@@ -85,51 +44,30 @@ void AFXDPFactory::shutdown() {
 
 AFXDPSocket::AFXDPSocket(int queue_id, int num_frames)
     : unpulled_tx_pkts_(0), fill_queue_entries_(0) {
+    // TODO(yang): negotiate with afxdp daemon for queue_id and num_frames.
+
+    DCHECK_EQ(queue_id, QUEUE_ID);
+    DCHECK_EQ(num_frames, NUM_FRAMES);
+    queue_id_ = queue_id;
+    num_frames_ = num_frames;
+
     // initialize queues, or misterious queue sync problems will happen
     memset(&recv_queue_, 0, sizeof(recv_queue_));
     memset(&send_queue_, 0, sizeof(send_queue_));
     memset(&complete_queue_, 0, sizeof(complete_queue_));
     memset(&fill_queue_, 0, sizeof(fill_queue_));
 
-    queue_id_ = queue_id;
+    // Step1: receive the file descriptors for AF_XDP socket and UMEM
+    DCHECK(receive_fd(afxdp_ctl.client_sock_, &xsk_fd_) == 0);
+    DCHECK(receive_fd(afxdp_ctl.client_sock_, &umem_fd_) == 0);
 
-    // allocate buffer for umem
-    const int buffer_size = num_frames * FRAME_SIZE;
+    // Step2: map UMEM and build four rings for the AF_XDP socket
+    int ret = create_afxdp_socket();
+    CHECK_EQ(ret, 0) << "xsk_socket__create_shared failed, " << ret;
 
-    if (posix_memalign(&umem_buffer_, getpagesize(), buffer_size)) {
-        printf("\nerror: could not allocate buffer\n\n");
-        exit(0);
-    }
+    LOG(INFO) << "AF_XDP socket successfully shared.";
 
-    // allocate umem
-    int ret = xsk_umem__create(&umem_, umem_buffer_, buffer_size, &fill_queue_,
-                               &complete_queue_, NULL);
-    if (ret) {
-        printf("\nerror: could not create umem\n\n");
-        exit(0);
-    }
-
-    // create xsk socket and assign to network interface queue
-    struct xsk_socket_config xsk_config;
-
-    memset(&xsk_config, 0, sizeof(xsk_config));
-
-    xsk_config.rx_size = XSK_RING_CONS__DEFAULT_NUM_DESCS;
-    xsk_config.tx_size = XSK_RING_PROD__DEFAULT_NUM_DESCS;
-    xsk_config.xdp_flags = XDP_ZEROCOPY;  // force zero copy mode
-    xsk_config.bind_flags =
-        XDP_USE_NEED_WAKEUP;  // manually wake up the driver when it needs
-                              // to do work to send packets
-    xsk_config.libbpf_flags = XSK_LIBBPF_FLAGS__INHIBIT_PROG_LOAD;
-
-    ret = xsk_socket__create(&xsk_, afxdp_ctl.interface_name_, queue_id_, umem_,
-                             &recv_queue_, &send_queue_, &xsk_config);
-    if (ret) {
-        printf("\nerror: could not create xsk socket [%d]\n\n", queue_id);
-        exit(0);
-    }
-
-    // apply_setsockopt(xsk_socket__fd(xsk_));
+    // apply_setsockopt(xsk_fd_);
 
     // initialize frame allocator
     frame_pool_ = new FramePool</*Sync=*/false>(num_frames);
@@ -138,22 +76,166 @@ AFXDPSocket::AFXDPSocket(int queue_id, int num_frames)
         push_frame(frame_offset);
     }
 
-    // We also need to load and update the xsks_map for receiving packets
-    struct bpf_map* map = bpf_object__find_map_by_name(
-        xdp_program__bpf_obj(afxdp_ctl.program_), "xsks_map");
-    int xsk_map_fd = bpf_map__fd(map);
-    if (xsk_map_fd < 0) {
-        fprintf(stderr, "ERROR: no xsks map found: %s\n", strerror(xsk_map_fd));
-        exit(0);
-    }
-    ret = xsk_socket__update_xskmap(xsk_, xsk_map_fd);
-    if (ret) {
-        fprintf(stderr, "ERROR: xsks map update fails: %s\n",
-                strerror(xsk_map_fd));
-        exit(0);
-    }
+    // xsks_map for receiving packets has been updated by afxdp daemon.
 
     populate_fill_queue(XSK_RING_PROD__DEFAULT_NUM_DESCS);
+}
+
+void AFXDPSocket::xsk_mmap_offsets_v1(struct xdp_mmap_offsets *off) {
+    struct xdp_mmap_offsets_v1 off_v1;
+
+    /* getsockopt on a kernel <= 5.3 has no flags fields.
+     * Copy over the offsets to the correct places in the >=5.4 format
+     * and put the flags where they would have been on that kernel.
+     */
+    memcpy(&off_v1, off, sizeof(off_v1));
+
+    off->rx.producer = off_v1.rx.producer;
+    off->rx.consumer = off_v1.rx.consumer;
+    off->rx.desc = off_v1.rx.desc;
+    off->rx.flags = off_v1.rx.consumer + sizeof(__u32);
+
+    off->tx.producer = off_v1.tx.producer;
+    off->tx.consumer = off_v1.tx.consumer;
+    off->tx.desc = off_v1.tx.desc;
+    off->tx.flags = off_v1.tx.consumer + sizeof(__u32);
+
+    off->fr.producer = off_v1.fr.producer;
+    off->fr.consumer = off_v1.fr.consumer;
+    off->fr.desc = off_v1.fr.desc;
+    off->fr.flags = off_v1.fr.consumer + sizeof(__u32);
+
+    off->cr.producer = off_v1.cr.producer;
+    off->cr.consumer = off_v1.cr.consumer;
+    off->cr.desc = off_v1.cr.desc;
+    off->cr.flags = off_v1.cr.consumer + sizeof(__u32);
+}
+
+int AFXDPSocket::xsk_get_mmap_offsets(int fd, struct xdp_mmap_offsets *off) {
+    socklen_t optlen;
+    int err;
+
+    optlen = sizeof(*off);
+    err = getsockopt(fd, SOL_XDP, XDP_MMAP_OFFSETS, off, &optlen);
+    if (err) return err;
+
+    if (optlen == sizeof(*off)) return 0;
+
+    if (optlen == sizeof(struct xdp_mmap_offsets_v1)) {
+        xsk_mmap_offsets_v1(off);
+        return 0;
+    }
+
+    return -1;
+}
+
+void AFXDPSocket::destroy_afxdp_socket() {
+    if (rx_map_ && rx_map_ != MAP_FAILED) munmap(rx_map_, rx_map_size_);
+    if (tx_map_ && tx_map_ != MAP_FAILED) munmap(tx_map_, tx_map_size_);
+    if (fill_map_ && fill_map_ != MAP_FAILED) munmap(fill_map_, fill_map_size_);
+    if (comp_map_ && comp_map_ != MAP_FAILED) munmap(comp_map_, comp_map_size_);
+    if (umem_buffer_ && umem_buffer_ != MAP_FAILED)
+        detach_shm(umem_buffer_, umem_size_);
+}
+
+/**
+ * @brief: Manually map UMEM and build four rings for a AF_XDP socket
+ * @note: (RX/TX/FILL/COMP_RING_SIZE, NUM_FRAMES, FRAME_SIZE) need negotiating
+ * with privileged processes
+ */
+int AFXDPSocket::create_afxdp_socket() {
+    struct xsk_ring_cons *rx = &recv_queue_;
+    struct xsk_ring_prod *tx = &send_queue_;
+    struct xsk_ring_prod *fill = &fill_queue_;
+    struct xsk_ring_cons *comp = &complete_queue_;
+    struct xdp_mmap_offsets off;
+
+    /* Map UMEM */
+    umem_size_ = num_frames_ * FRAME_SIZE;
+    umem_buffer_ = attach_shm(SHM_NAME, umem_size_);
+    if (umem_buffer_ == MAP_FAILED) {
+        perror("mmap");
+        goto out;
+    }
+
+    /* Get offsets for the following mmap */
+    if (xsk_get_mmap_offsets(umem_fd_, &off)) {
+        perror("xsk_get_mmap_offsets failed");
+        goto out;
+    }
+
+    /* RX Ring */
+    rx_map_size_ = off.rx.desc + RX_RING_SIZE * sizeof(struct xdp_desc);
+    rx_map_ = mmap(NULL, rx_map_size_, PROT_READ | PROT_WRITE,
+                   MAP_SHARED | MAP_POPULATE, xsk_fd_, XDP_PGOFF_RX_RING);
+    if (rx_map_ == MAP_FAILED) {
+        perror("rx mmap failed");
+        goto out;
+    }
+    rx->mask = RX_RING_SIZE - 1;
+    rx->size = RX_RING_SIZE;
+    rx->producer = (uint32_t *)((char *)rx_map_ + off.rx.producer);
+    rx->consumer = (uint32_t *)((char *)rx_map_ + off.rx.consumer);
+    rx->flags = (uint32_t *)((char *)rx_map_ + off.rx.flags);
+    rx->ring = rx_map_ + off.rx.desc;
+    rx->cached_prod = *rx->producer;
+    rx->cached_cons = *rx->consumer;
+
+    /* TX Ring */
+    tx_map_size_ = off.tx.desc + TX_RING_SIZE * sizeof(struct xdp_desc);
+    tx_map_ = mmap(NULL, tx_map_size_, PROT_READ | PROT_WRITE,
+                   MAP_SHARED | MAP_POPULATE, xsk_fd_, XDP_PGOFF_TX_RING);
+    if (tx_map_ == MAP_FAILED) {
+        perror("tx mmap failed");
+        goto out;
+    }
+    tx->mask = TX_RING_SIZE - 1;
+    tx->size = TX_RING_SIZE;
+    tx->producer = (uint32_t *)((char *)tx_map_ + off.tx.producer);
+    tx->consumer = (uint32_t *)((char *)tx_map_ + off.tx.consumer);
+    tx->flags = (uint32_t *)((char *)tx_map_ + off.tx.flags);
+    tx->ring = tx_map_ + off.tx.desc;
+    tx->cached_prod = *tx->producer;
+    tx->cached_cons = *tx->consumer + TX_RING_SIZE;
+
+    /* Fill Ring */
+    fill_map_size_ = off.fr.desc + FILL_RING_SIZE * sizeof(__u64);
+    fill_map_ =
+        mmap(NULL, fill_map_size_, PROT_READ | PROT_WRITE,
+             MAP_SHARED | MAP_POPULATE, xsk_fd_, XDP_UMEM_PGOFF_FILL_RING);
+    if (fill_map_ == MAP_FAILED) {
+        perror("fill mmap failed");
+        goto out;
+    }
+    fill->mask = FILL_RING_SIZE - 1;
+    fill->size = FILL_RING_SIZE;
+    fill->producer = (uint32_t *)((char *)fill_map_ + off.fr.producer);
+    fill->consumer = (uint32_t *)((char *)fill_map_ + off.fr.consumer);
+    fill->flags = (uint32_t *)((char *)fill_map_ + off.fr.flags);
+    fill->ring = fill_map_ + off.fr.desc;
+    fill->cached_cons = FILL_RING_SIZE;
+
+    /* Completion Ring */
+    comp_map_size_ = off.cr.desc + COMP_RING_SIZE * sizeof(__u64);
+    comp_map_ = mmap(NULL, comp_map_size_, PROT_READ | PROT_WRITE,
+                     MAP_SHARED | MAP_POPULATE, xsk_fd_,
+                     XDP_UMEM_PGOFF_COMPLETION_RING);
+    if (comp_map_ == MAP_FAILED) {
+        perror("comp mmap failed");
+        goto out;
+    }
+
+    comp->mask = COMP_RING_SIZE - 1;
+    comp->size = COMP_RING_SIZE;
+    comp->producer = (uint32_t *)((char *)comp_map_ + off.cr.producer);
+    comp->consumer = (uint32_t *)((char *)comp_map_ + off.cr.consumer);
+    comp->flags = (uint32_t *)((char *)comp_map_ + off.cr.flags);
+    comp->ring = comp_map_ + off.cr.desc;
+
+    return 0;
+out:
+    destroy_afxdp_socket();
+    return -1;
 }
 
 uint32_t AFXDPSocket::pull_complete_queue() {
@@ -198,22 +280,22 @@ uint32_t AFXDPSocket::send_packet(frame_desc frame) {
             << "send_queue is full. Busy waiting... unpulled_tx_pkts "
             << unpulled_tx_pkts_ << " send_queue_free_entries "
             << send_queue_free_entries(1);
-        sendto(xsk_socket__fd(xsk_), NULL, 0, MSG_DONTWAIT, NULL, 0);
+        sendto(xsk_fd_, NULL, 0, MSG_DONTWAIT, NULL, 0);
     }
-    struct xdp_desc* desc = xsk_ring_prod__tx_desc(&send_queue_, send_index);
+    struct xdp_desc *desc = xsk_ring_prod__tx_desc(&send_queue_, send_index);
     desc->addr = frame.frame_offset;
     desc->len = frame.frame_len;
     xsk_ring_prod__submit(&send_queue_, 1);
     unpulled_tx_pkts_++;
 
     if (xsk_ring_prod__needs_wakeup(&send_queue_)) {
-        sendto(xsk_socket__fd(xsk_), NULL, 0, MSG_DONTWAIT, NULL, 0);
+        sendto(xsk_fd_, NULL, 0, MSG_DONTWAIT, NULL, 0);
     }
 
     return pull_complete_queue();
 }
 
-uint32_t AFXDPSocket::send_packets(std::vector<frame_desc>& frames) {
+uint32_t AFXDPSocket::send_packets(std::vector<frame_desc> &frames) {
     // reserving slots in the send queue.
     uint32_t send_index;
     auto num_frames = frames.size();
@@ -224,10 +306,10 @@ uint32_t AFXDPSocket::send_packets(std::vector<frame_desc>& frames) {
             << "send_queue is full. Busy waiting... unpulled_tx_pkts "
             << unpulled_tx_pkts_ << " send_queue_free_entries "
             << send_queue_free_entries(num_frames);
-        sendto(xsk_socket__fd(xsk_), NULL, 0, MSG_DONTWAIT, NULL, 0);
+        sendto(xsk_fd_, NULL, 0, MSG_DONTWAIT, NULL, 0);
     }
     for (int i = 0; i < num_frames; i++) {
-        struct xdp_desc* desc =
+        struct xdp_desc *desc =
             xsk_ring_prod__tx_desc(&send_queue_, send_index++);
         desc->addr = frames[i].frame_offset;
         desc->len = frames[i].frame_len;
@@ -236,7 +318,7 @@ uint32_t AFXDPSocket::send_packets(std::vector<frame_desc>& frames) {
     unpulled_tx_pkts_ += num_frames;
 
     if (xsk_ring_prod__needs_wakeup(&send_queue_)) {
-        sendto(xsk_socket__fd(xsk_), NULL, 0, MSG_DONTWAIT, NULL, 0);
+        sendto(xsk_fd_, NULL, 0, MSG_DONTWAIT, NULL, 0);
     }
 
     return pull_complete_queue();
@@ -273,7 +355,7 @@ std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
     populate_fill_queue(XSK_RING_PROD__DEFAULT_NUM_DESCS - fill_queue_entries_);
 
     for (int i = 0; i < rcvd; i++) {
-        const struct xdp_desc* desc =
+        const struct xdp_desc *desc =
             xsk_ring_cons__rx_desc(&recv_queue_, idx_rx++);
         frames.push_back({desc->addr, desc->len});
     }
@@ -298,8 +380,6 @@ void AFXDPSocket::shutdown() {
 
 AFXDPSocket::~AFXDPSocket() {
     delete frame_pool_;
-    if (xsk_) xsk_socket__delete(xsk_);
-    if (umem_) xsk_umem__delete(umem_);
-    free(umem_buffer_);
+    destroy_afxdp_socket();
 }
 }  // namespace uccl

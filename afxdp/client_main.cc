@@ -55,7 +55,7 @@ const int RTO_US = 2000;
 
 const bool busy_poll = true;
 
-#define NUM_FRAMES (4096 * 16)
+#define NUM_FRAMES (4096 * 64)
 #define FRAME_SIZE XSK_UMEM__DEFAULT_FRAME_SIZE
 #define INVALID_FRAME UINT64_MAX
 

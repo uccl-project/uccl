@@ -35,7 +35,7 @@ const int RTO_US = 2000;
 
 const bool busy_poll = true;
 
-#define NUM_FRAMES (4096 * 16)
+#define NUM_FRAMES (4096 * 64)
 #define FRAME_SIZE XSK_UMEM__DEFAULT_FRAME_SIZE
 #define INVALID_FRAME UINT64_MAX
 
@@ -278,7 +278,7 @@ static void* recv_thread(void* arg) {
     int nfds = 1;
 
     memset(fds, 0, sizeof(fds));
-    fds[0].fd = xsk_socket__fd(socket->afxdp_socket->xsk_);
+    fds[0].fd = socket->afxdp_socket->get_xsk_fd();
     fds[0].events = POLLIN;
 
     int ret;

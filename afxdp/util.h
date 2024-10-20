@@ -1,6 +1,7 @@
 #pragma once
 
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <glog/logging.h>
 #include <ifaddrs.h>
 #include <linux/in.h>
@@ -8,8 +9,10 @@
 #include <pthread.h>
 #include <sched.h>
 #include <stdarg.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/un.h>
 
 #include <algorithm>
 #include <chrono>
@@ -454,6 +457,130 @@ static inline std::string get_dev_mac(const char* dev_name) {
     }
     pclose(fp);
     return mac;
+}
+
+static inline int send_fd(int sockfd, int fd) {
+    assert(sockfd >= 0);
+    assert(fd >= 0);
+    struct msghdr msg;
+    struct cmsghdr* cmsg;
+    struct iovec iov;
+    char buf[CMSG_SPACE(sizeof(fd))];
+    memset(&msg, 0, sizeof(msg));
+    memset(buf, 0, sizeof(buf));
+    const char* name = "fd";
+    iov.iov_base = (void*)name;
+    iov.iov_len = 4;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+
+    msg.msg_control = buf;
+    msg.msg_controllen = sizeof(buf);
+
+    cmsg = CMSG_FIRSTHDR(&msg);
+
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type = SCM_RIGHTS;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(fd));
+
+    *((int*)CMSG_DATA(cmsg)) = fd;
+
+    msg.msg_controllen = CMSG_SPACE(sizeof(fd));
+
+    if (sendmsg(sockfd, &msg, 0) < 0) {
+        fprintf(stderr, "sendmsg failed\n");
+        return -1;
+    }
+    return 0;
+}
+
+static inline int receive_fd(int sockfd, int* fd) {
+    assert(sockfd >= 0);
+    struct msghdr msg;
+    struct iovec iov;
+    char buf[CMSG_SPACE(sizeof(int))];
+    struct cmsghdr* cmsg;
+
+    iov.iov_base = buf;
+    iov.iov_len = sizeof(buf);
+
+    msg.msg_name = 0;
+    msg.msg_namelen = 0;
+
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+
+    msg.msg_control = buf;
+    msg.msg_controllen = sizeof(buf);
+    if (recvmsg(sockfd, &msg, 0) < 0) {
+        perror("recvmsg failed\n");
+        return -1;
+    }
+    cmsg = CMSG_FIRSTHDR(&msg);
+    if (cmsg == NULL || cmsg->cmsg_type != SCM_RIGHTS) {
+        perror("recvmsg failed\n");
+        return -1;
+    }
+    *fd = *((int*)CMSG_DATA(cmsg));
+    return 0;
+}
+
+static inline void* create_shm(const char* shm_name, size_t size) {
+    int fd;
+    void* addr;
+
+    /* unlink it if we exit excpetionally before */
+    shm_unlink(shm_name);
+
+    fd = shm_open(shm_name, O_CREAT | O_RDWR | O_EXCL, 0666);
+    if (fd == -1) {
+        perror("shm_open");
+        return MAP_FAILED;
+    }
+
+    if (ftruncate(fd, size) == -1) {
+        perror("ftruncate");
+        return MAP_FAILED;
+    }
+
+    addr = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (addr == MAP_FAILED) {
+        perror("mmap");
+        return MAP_FAILED;
+    }
+
+    return addr;
+}
+
+static inline void destroy_shm(const char* shm_name, void* addr, size_t size) {
+    munmap(addr, size);
+    shm_unlink(shm_name);
+}
+
+static inline void* attach_shm(const char* shm_name, size_t size) {
+    int fd;
+    void* addr;
+
+    fd = shm_open(shm_name, O_RDWR, 0);
+    if (fd == -1) {
+        perror("shm_open");
+        return MAP_FAILED;
+    }
+
+    addr = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (addr == MAP_FAILED) {
+        perror("mmap");
+        return MAP_FAILED;
+    }
+
+    return addr;
+}
+
+static inline void detach_shm(void* addr, size_t size) {
+    if (munmap(addr, size) == -1) {
+        perror("munmap");
+        exit(EXIT_FAILURE);
+    }
 }
 
 }  // namespace uccl
