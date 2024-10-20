@@ -4,6 +4,7 @@
 #include <glog/logging.h>
 #include <ifaddrs.h>
 #include <linux/in.h>
+#include <net/if.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdarg.h>
@@ -343,6 +344,29 @@ static inline uint32_t str_to_ip(const std::string& ip) {
     struct sockaddr_in sa;
     DCHECK(inet_pton(AF_INET, ip.c_str(), &(sa.sin_addr)) != 0);
     return sa.sin_addr.s_addr;
+}
+
+// Return -1 if not found
+static inline int get_dev_index(const char* dev_name) {
+    int ret = -1;
+    struct ifaddrs* addrs;
+    CHECK(getifaddrs(&addrs) == 0) << "error: getifaddrs failed";
+
+    for (struct ifaddrs* iap = addrs; iap != NULL; iap = iap->ifa_next) {
+        if (iap->ifa_addr && (iap->ifa_flags & IFF_UP) &&
+            iap->ifa_addr->sa_family == AF_INET) {
+            struct sockaddr_in* sa = (struct sockaddr_in*)iap->ifa_addr;
+            if (strcmp(dev_name, iap->ifa_name) == 0) {
+                LOG(INFO) << "found network interface: " << iap->ifa_name;
+                ret = if_nametoindex(iap->ifa_name);
+                CHECK(ret) << "error: if_nametoindex failed";
+                break;
+            }
+        }
+    }
+
+    freeifaddrs(addrs);
+    return ret;
 }
 
 static inline std::string get_dev_ip(const char* dev_name) {

@@ -6,37 +6,20 @@ AFXDPFactory afxdp_ctl;
 
 void AFXDPFactory::init(const char* interface_name, const char* ebpf_filename,
                         const char* section_name) {
+    // TODO(yang): make eBPF attachment the afxdp_man process' job. Here we just
+    // get the xsk socket and umem through uds.
+
     // we can only run xdp programs as root
     CHECK(geteuid() == 0) << "error: this program must be run as root";
 
     strcpy(afxdp_ctl.interface_name_, interface_name);
 
     // find the network interface that matches the interface name
-    {
-        bool found = false;
-        struct ifaddrs* addrs;
-        CHECK(getifaddrs(&addrs) == 0) << "error: getifaddrs failed";
+    afxdp_ctl.interface_index_ = get_dev_index(interface_name);
 
-        for (struct ifaddrs* iap = addrs; iap != NULL; iap = iap->ifa_next) {
-            if (iap->ifa_addr && (iap->ifa_flags & IFF_UP) &&
-                iap->ifa_addr->sa_family == AF_INET) {
-                struct sockaddr_in* sa = (struct sockaddr_in*)iap->ifa_addr;
-                if (strcmp(interface_name, iap->ifa_name) == 0) {
-                    LOG(INFO) << "found network interface: " << iap->ifa_name;
-                    afxdp_ctl.interface_index_ = if_nametoindex(iap->ifa_name);
-                    CHECK(afxdp_ctl.interface_index_)
-                        << "error: if_nametoindex failed";
-                    found = true;
-                    break;
-                }
-            }
-        }
-
-        freeifaddrs(addrs);
-
-        CHECK(found) << "error: could not find any network interface matching "
-                     << interface_name;
-    }
+    CHECK(afxdp_ctl.interface_index_ != -1)
+        << "error: could not find any network interface matching "
+        << interface_name;
 
     // load the ebpf_client program and attach it to the network interface
     LOG(INFO) << "loading " << section_name << "...";

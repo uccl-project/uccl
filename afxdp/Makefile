@@ -1,11 +1,11 @@
 KERNEL = $(shell uname -r)
 INC = -I ../lib/install/include
-# LIBS = ../lib/install/lib/libxdp.a ../lib/install/lib/libbpf.a -lglog -lgflags -lz -lelf
+LIBS = ../lib/install/lib/libxdp.a ../lib/install/lib/libbpf.a -lglog -lgflags -lz -lelf
 # LIBS = -L../lib/xdp-tools/lib/libxdp -lxdp -L../lib/libbpf/src -lbpf -lglog -lgflags -lz -lelf
-LIBS = -Wl,-rpath=/home/ubuntu/uccl/lib/xdp-tools/lib/libxdp/ \
-	   -Wl,-rpath=/home/ubuntu/uccl/lib/libbpf/src/ \
-	   -L../lib/xdp-tools/lib/libxdp -lxdp -L../lib/libbpf/src -lbpf \
-	   -lglog -lgflags -lz -lelf
+LIBS_SHARED = -Wl,-rpath=/home/ubuntu/uccl/lib/xdp-tools/lib/libxdp/ \
+	   		  -Wl,-rpath=/home/ubuntu/uccl/lib/libbpf/src/ \
+	   		  -L../lib/xdp-tools/lib/libxdp -lxdp -L../lib/libbpf/src -lbpf \
+	   		  -lglog -lgflags -lz -lelf
 CXXFLAGS = -O3 -g -std=c++17 -Wno-pointer-arith -fPIC
 CLANGFLAGS = -O3 -g
 DEPS = *.h
@@ -62,6 +62,12 @@ server_main: server_main.cc ebpf_server.o $(DEPS) $(lib_obj)
 server_direct_main: server_direct_main.cc ebpf_server_direct.o $(DEPS) $(lib_obj)
 	g++ server_direct_main.cc -o server_direct_main $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
+afxdp_setup_main: afxdp_setup_main.cc $(DEPS) $(lib_obj)
+	g++ afxdp_setup_main.cc -o afxdp_setup_main $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
+
+afxdp_use_main: afxdp_use_main.cc $(DEPS) $(lib_obj)
+	g++ afxdp_use_main.cc -o afxdp_use_main $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
+
 transport_test: transport_test.cc ebpf_transport.o $(DEPS) $(lib_obj)
 	g++ transport_test.cc -o transport_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
@@ -79,7 +85,7 @@ CUDA_HOME:=/usr/local/cuda
 NCCL_INC:= -I$(NCCL_HOME)/include -I$(CUDA_HOME)/include
 
 $(PLUGIN_SO): nccl_plugin.cc ebpf_transport.o $(DEPS) $(lib_obj)
-	g++ $(NCCL_INC) -fPIC -shared -o $@ -Wl,-soname,$(PLUGIN_SO) nccl_plugin.cc $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
+	g++ $(NCCL_INC) -fPIC -shared -o $@ -Wl,-soname,$(PLUGIN_SO) nccl_plugin.cc $(lib_obj) $(INC) $(LIBS_SHARED) $(CXXFLAGS)
 
 .PHONY: clean
 clean:

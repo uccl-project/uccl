@@ -15,7 +15,7 @@ cd afxdp; make -j
 ./setup.sh ens6 4 9001 tcp
 
 # On server
-./sync.sh 172.31.30.246
+./sync.sh 172.31.25.5
 ./server_tcp_main
 
 # On client
@@ -31,7 +31,7 @@ cd afxdp; make -j
 ./setup.sh ens6 1 3498 afxdp
 
 # On server
-./sync.sh 172.31.30.246
+./sync.sh 172.31.25.5
 sudo ./server_main
 
 # On client

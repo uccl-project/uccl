@@ -13,7 +13,6 @@
 #include <linux/ip.h>
 #include <linux/udp.h>
 #include <memory.h>
-#include <net/if.h>
 #include <poll.h>
 #include <stdbool.h>
 #include <stdio.h>

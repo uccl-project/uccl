@@ -39,6 +39,7 @@ ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
     return ncclSuccess;
 }
 ncclResult_t pluginDevices(int* ndev) {
+    LOG(INFO) << "Plugin Devices";
     *ndev = 1;
     return ncclSuccess;
 }
@@ -88,6 +89,7 @@ struct afxdp_context {
 };
 
 ncclResult_t pluginListen(int dev, void* handle, void** listenComm) {
+    LOG(INFO) << "Plugin Listen";
     struct afxdp_context* ctx = static_cast<struct afxdp_context*>(handle);
     static_assert(sizeof(struct afxdp_context) < NCCL_NET_HANDLE_MAXSIZE,
                   "ncclSocketHandle size too large");
