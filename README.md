@@ -32,11 +32,9 @@ cd afxdp; make -j
 
 # On server
 ./sync.sh 172.31.25.5
-sudo ./afxdp_daemon_main
 sudo ./server_main
 
 # On client
-sudo ./afxdp_daemon_main
 sudo ./client_main
 ```
 
@@ -45,9 +43,9 @@ sudo ./client_main
 Note that any program that leverages util_afxdp no long needs root to use AFXDP sockets.
 
 ```
-sudo ./afxdp_daemon_main
+sudo ./afxdp_daemon_main --logtostderr=1
 ./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1
 
-sudo ./afxdp_daemon_main
+sudo ./afxdp_daemon_main --logtostderr=1
 ./transport_test --client --logtostderr=1 --vmodule=transport=1,util_afxdp=1
 ```

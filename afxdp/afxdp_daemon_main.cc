@@ -51,26 +51,6 @@ struct xsk_socket *xsk;
 struct xsk_ring_cons rx_ring;
 struct xsk_ring_prod tx_ring;
 
-void interrupt_handler(int signal) {
-    (void)signal;
-    quit = true;
-    if (program_attach != nullptr) {
-        if (attached_native)
-            xdp_program__detach(program_attach, interface_index,
-                                XDP_MODE_NATIVE, 0);
-
-        if (attached_skb)
-            xdp_program__detach(program_attach, interface_index, XDP_MODE_SKB,
-                                0);
-
-        xdp_program__close(program_attach);
-    }
-
-    if (xsk) xsk_socket__delete(xsk);
-    if (umem) xsk_umem__delete(umem);
-    destroy_shm(SHM_NAME, umem_area, umem_size);
-}
-
 void load_program(const char *interface_name, const char *ebpf_filename,
                   const char *section_name) {
     // we can only run xdp programs as root
@@ -129,18 +109,13 @@ void update_xsks_map() {
                      << strerror(xsk_map_fd);
 }
 
-int main(int argc, char *argv[]) {
-    google::InitGoogleLogging(argv[0]);
-    google::InstallFailureSignalHandler();
-    gflags::ParseCommandLineFlags(&argc, &argv, true);
-
-    signal(SIGINT, interrupt_handler);
-    signal(SIGTERM, interrupt_handler);
-    signal(SIGHUP, interrupt_handler);
-
-    int server_sock, client_sock;
-    struct sockaddr_un addr;
+void create_umem_and_xsk() {
+    program_attach = nullptr;
+    umem = nullptr;
+    umem_area = nullptr;
+    xsk = nullptr;
     umem_size = NUM_FRAMES * FRAME_SIZE;
+
     struct xsk_umem_config umem_cfg = {.fill_size = FILL_RING_SIZE,
                                        .comp_size = COMP_RING_SIZE,
                                        .frame_size = FRAME_SIZE,
@@ -153,38 +128,12 @@ int main(int argc, char *argv[]) {
         .xdp_flags = XDP_ZEROCOPY,
         .bind_flags = XDP_USE_NEED_WAKEUP};
 
-    // Create a UNIX domain socket to send file descriptors
-    if ((server_sock = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
-        perror("socket");
-        exit(EXIT_FAILURE);
-    }
-    memset(&addr, 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
-    strcpy(addr.sun_path, SOCKET_PATH);
-
-    mode_t old_mask = umask(0);  // set directory priviledge
-    unlink(SOCKET_PATH);
-    if (bind(server_sock, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
-        perror("bind");
-        exit(EXIT_FAILURE);
-    }
-    umask(old_mask);  // restore
-
-    if (listen(server_sock, 5) == -1) {
-        perror("listen");
-        exit(EXIT_FAILURE);
-    }
-    printf("Waiting for non-privileged process to connect...\n");
-    if ((client_sock = accept(server_sock, NULL, NULL)) == -1) {
-        perror("accept");
-        exit(EXIT_FAILURE);
-    }
-
     // Step0: load the ebpf program
-    load_program(IF_NAME, "ebpf_transport.o", "ebpf_transport");
+    load_program(IF_NAME, "/home/ubuntu/uccl/afxdp/ebpf_transport.o",
+                 "ebpf_transport");
 
     // Step1: prepare a large shared memory for UMEM
-    old_mask = umask(0);  // set directory priviledge
+    mode_t old_mask = umask(0);  // set directory priviledge
     umem_area = create_shm(SHM_NAME, umem_size);
     if (umem_area == MAP_FAILED) {
         perror("mmap");
@@ -216,21 +165,93 @@ int main(int argc, char *argv[]) {
     // Step4: update the xsks_map for receiving packets
     update_xsks_map();
 
-    // Step5: send the file descriptors for the AF_XDP socket and UMEM
-    if (send_fd(client_sock, xsk_socket__fd(xsk))) goto out;
-    if (send_fd(client_sock, xsk_umem__fd(umem))) goto out;
-
-    while (1) {
-        sleep(1);
-    }
+    return;
 
 out:
     if (umem_area != MAP_FAILED) {
         destroy_shm(SHM_NAME, umem_area, umem_size);
     }
-    close(client_sock);
-    close(server_sock);
     unlink(SOCKET_PATH);
+    exit(EXIT_FAILURE);
+}
+
+void destroy_umem_and_xsk() {
+    if (program_attach) {
+        if (attached_native)
+            xdp_program__detach(program_attach, interface_index,
+                                XDP_MODE_NATIVE, 0);
+
+        if (attached_skb)
+            xdp_program__detach(program_attach, interface_index, XDP_MODE_SKB,
+                                0);
+
+        xdp_program__close(program_attach);
+    }
+
+    if (xsk) xsk_socket__delete(xsk);
+    if (umem) xsk_umem__delete(umem);
+    if (umem_area) destroy_shm(SHM_NAME, umem_area, umem_size);
+}
+
+void interrupt_handler(int signal) {
+    (void)signal;
+    quit = true;
+    destroy_umem_and_xsk();
+    exit(EXIT_FAILURE);
+}
+
+int main(int argc, char *argv[]) {
+    google::InitGoogleLogging(argv[0]);
+    google::InstallFailureSignalHandler();
+    gflags::ParseCommandLineFlags(&argc, &argv, true);
+
+    signal(SIGINT, interrupt_handler);
+    signal(SIGTERM, interrupt_handler);
+    signal(SIGHUP, interrupt_handler);
+
+    int server_sock, client_sock;
+    struct sockaddr_un addr;
+
+    // Create a UNIX domain socket to send file descriptors
+    if ((server_sock = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
+        perror("socket");
+        exit(EXIT_FAILURE);
+    }
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strcpy(addr.sun_path, SOCKET_PATH);
+
+    mode_t old_mask = umask(0);  // set directory priviledge
+    unlink(SOCKET_PATH);
+    if (bind(server_sock, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
+        perror("bind");
+        exit(EXIT_FAILURE);
+    }
+    umask(old_mask);  // restore
+
+    if (listen(server_sock, 128) == -1) {
+        perror("listen");
+        exit(EXIT_FAILURE);
+    }
+
+    while (true) {
+        printf("Waiting for non-privileged process to connect...\n");
+        if ((client_sock = accept(server_sock, NULL, NULL)) == -1) {
+            perror("accept");
+            exit(EXIT_FAILURE);
+        }
+
+        destroy_umem_and_xsk();
+        create_umem_and_xsk();
+
+        // Step5: send the file descriptors for the AF_XDP socket and UMEM
+        if (send_fd(client_sock, xsk_socket__fd(xsk))) break;
+        if (send_fd(client_sock, xsk_umem__fd(umem))) break;
+
+        close(client_sock);
+    }
+
+    close(server_sock);
 
     return 0;
 }
