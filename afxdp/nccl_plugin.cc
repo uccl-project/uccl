@@ -2,6 +2,7 @@
 #include <glog/logging.h>
 #include <signal.h>
 
+#include <atomic>
 #include <thread>
 
 #include "nccl_net.h"
@@ -22,6 +23,11 @@ void interrupt_handler(int signal) {
     AFXDPFactory::shutdown();
 }
 
+Channel* channel;
+UcclEngine* engine;
+Endpoint* ep;
+std::thread* engine_th;
+
 ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
     google::InitGoogleLogging("nccl_plugin");
     google::InstallFailureSignalHandler();
@@ -29,17 +35,63 @@ ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
     signal(SIGINT, interrupt_handler);
     signal(SIGTERM, interrupt_handler);
     signal(SIGHUP, interrupt_handler);
-    // signal(SIGALRM, interrupt_handler);
-    // alarm(10);
 
-    // TODO(yang): separate into separate root process and pass xsk sock back.
+    channel = new Channel();
+
     AFXDPFactory::init("ens6", "/home/ubuntu/uccl/afxdp/ebpf_transport.o",
                        "ebpf_transport");
+
+    std::string local_ip_str = get_dev_ip("ens6");
+    DCHECK(local_ip_str != "");
+    std::string local_mac_str = get_dev_mac("ens6");
+    DCHECK(local_mac_str != "");
+
+    std::string client_mac_str = mac_to_str(client_mac_char);
+    std::string server_mac_str = mac_to_str(server_mac_char);
+    DCHECK(server_mac_str != "" && client_mac_str != "");
+
+    bool is_this_client =
+        (local_ip_str == client_ip_str && local_mac_str == client_mac_str);
+    bool is_this_server =
+        (local_ip_str == server_ip_str && local_mac_str == server_mac_str);
+
+    if (is_this_client) {
+        LOG(INFO) << "pluginListen: This is the client machine";
+        engine = new UcclEngine(QUEUE_ID, NUM_FRAMES, channel, client_ip_str,
+                                client_port, server_ip_str, server_port,
+                                client_mac_char, server_mac_char);
+    } else if (is_this_server) {
+        LOG(INFO) << "pluginListen: This is the server machine";
+        engine = new UcclEngine(QUEUE_ID, NUM_FRAMES, channel, server_ip_str,
+                                server_port, client_ip_str, client_port,
+                                server_mac_char, client_mac_char);
+    } else {
+        DCHECK(false) << "This machine is neither client nor server";
+    }
+
+    engine_th = new std::thread([]() {
+        pin_thread_to_cpu(2);
+        engine->run();
+    });
+
+    // pin_thread_to_cpu(3);
+
+    ep = new Endpoint(channel);
+    if (is_this_client) {
+        ep->uccl_connect(server_ip_str);
+        LOG(INFO) << "Connected to server " << server_ip_str;
+    } else if (is_this_server) {
+        auto [conn_id, client_ip_str] = ep->uccl_accept();
+        LOG(INFO) << "Accepted connection from " << client_ip_str;
+    } else {
+        DCHECK(false) << "This machine is neither client nor server";
+    }
+
     LOG(INFO) << "NCCL Plugin initialized";
     return ncclSuccess;
 }
 ncclResult_t pluginDevices(int* ndev) {
-    LOG(INFO) << "Plugin Devices";
+    LOG(INFO) << "pluginDevices";
     *ndev = 1;
     return ncclSuccess;
 }
@@ -81,69 +133,30 @@ ncclResult_t pluginGetProperties(int dev, ncclNetProperties_v8_t* props) {
 }
 
 struct afxdp_context {
-    Channel* channel;
-    UcclEngine* engine;
-    Endpoint* ep;
-    std::thread* engine_th;
     ConnectionID conn_id;
 };
 
 ncclResult_t pluginListen(int dev, void* handle, void** listenComm) {
-    LOG(INFO) << "Plugin Listen";
     struct afxdp_context* ctx = static_cast<struct afxdp_context*>(handle);
     static_assert(sizeof(struct afxdp_context) < NCCL_NET_HANDLE_MAXSIZE,
                   "ncclSocketHandle size too large");
-    ctx->channel = new Channel();
-
-    std::string local_ip_str = get_dev_ip("ens6");
-    DCHECK(local_ip_str != "");
-    std::string local_mac_str = get_dev_mac("ens6");
-    DCHECK(local_mac_str != "");
-
-    std::string client_mac_str = mac_to_str(client_mac_char);
-    std::string server_mac_str = mac_to_str(server_mac_char);
-    DCHECK(server_mac_str != "" && client_mac_str != "");
-
-    if (local_ip_str == client_ip_str && local_mac_str == client_mac_str) {
-        LOG(INFO) << "This is the client machine";
-        ctx->engine = new UcclEngine(
-            QUEUE_ID, NUM_FRAMES, ctx->channel, client_ip_str, client_port,
-            server_ip_str, server_port, client_mac_char, server_mac_char);
-
-    } else if (local_ip_str == server_ip_str &&
-               local_mac_str == server_mac_str) {
-        LOG(INFO) << "This is the server machine";
-        ctx->engine = new UcclEngine(
-            QUEUE_ID, NUM_FRAMES, ctx->channel, server_ip_str, server_port,
-            client_ip_str, client_port, server_mac_char, client_mac_char);
-    } else {
-        DCHECK(false) << "This machine is neither client nor server";
-    }
-
-    ctx->ep = new Endpoint(ctx->channel);
-    ctx->engine_th = new std::thread([&ctx]() {
-        pin_thread_to_cpu(2);
-        ctx->engine->run();
-    });
-
-    pin_thread_to_cpu(3);
 
     *listenComm = ctx;
     return ncclSuccess;
 }
 ncclResult_t pluginConnect(int dev, void* handle, void** sendComm,
                            ncclNetDeviceHandle_v8_t** sendDevComm) {
+    // This handle data is transferred from remote via MPI
     struct afxdp_context* ctx = static_cast<struct afxdp_context*>(handle);
-    ctx->conn_id = ctx->ep->uccl_connect(server_ip_str);
 
     *sendComm = ctx;
     return ncclSuccess;
 }
 ncclResult_t pluginAccept(void* listenComm, void** recvComm,
                           ncclNetDeviceHandle_v8_t** recvDevComm) {
-    // Nothing to do
+    struct afxdp_context* ctx = static_cast<struct afxdp_context*>(listenComm);
 
-    *recvComm = listenComm;
+    *recvComm = ctx;
     return ncclSuccess;
 }
 ncclResult_t pluginRegMr(void* collComm, void* data, size_t size, int type,
@@ -159,38 +172,44 @@ ncclResult_t pluginDeregMr(void* collComm, void* mhandle) {
     return ncclSuccess;
 }
 
+#define MAX_RECV_CHUNKS 32
 struct afxdp_request {
     struct afxdp_context* ctx;
     bool send;
     size_t data_len = 0;
 };
 
+static std::atomic<size_t> inflight_send = 0;
+static std::atomic<size_t> inflight_recv = 0;
+
 ncclResult_t pluginIsend(void* sendComm, void* data, int size, int tag,
                          void* mhandle, void** request) {
+    inflight_send += size;
+    // LOG(INFO) << "pluginIsend " << size << " " << inflight_send;
     struct afxdp_context* ctx = static_cast<struct afxdp_context*>(sendComm);
     auto req = new afxdp_request();
     req->ctx = ctx;
     req->send = true;
     req->data_len = size;
-    // TODO(yang): fixing EndPoint Channel Msg to accept size_t of data_len, not
-    // ptr.
-    DCHECK(ctx->ep->uccl_send_async(ctx->conn_id, data, req->data_len));
+    // TODO(yang): fix Channel::Msg to accept size_t of data_len, not ptr.
+    DCHECK(ep->uccl_send_async(ctx->conn_id, data, req->data_len));
 
-    *request = ctx;
+    *request = req;
     return ncclSuccess;
 }
-static size_t recv_data_len = 0;
 ncclResult_t pluginIrecv(void* recvComm, int n, void** data, int* sizes,
                          int* tags, void** mhandles, void** request) {
     if (n != 1) return ncclInternalError;
+    inflight_recv += sizes[0];
+    // LOG(INFO) << "pluginIrecv " << sizes[0] << " " << inflight_recv;
     struct afxdp_context* ctx = static_cast<struct afxdp_context*>(recvComm);
     auto req = new afxdp_request();
     req->ctx = ctx;
     req->send = false;
     req->data_len = sizes[0];
-    DCHECK(ctx->ep->uccl_recv_async(ctx->conn_id, data[0], &req->data_len));
+    DCHECK(ep->uccl_recv_async(ctx->conn_id, data[0], &req->data_len));
 
-    *request = ctx;
+    *request = req;
     return ncclSuccess;
 }
 ncclResult_t pluginIflush(void* recvComm, int n, void** data, int* sizes,
@@ -199,14 +218,29 @@ ncclResult_t pluginIflush(void* recvComm, int n, void** data, int* sizes,
     return ncclInternalError;
 }
 ncclResult_t pluginTest(void* request, int* done, int* size) {
+    *done = 0;
     struct afxdp_request* req = static_cast<struct afxdp_request*>(request);
+    bool ret = false;
     if (req->send) {
-        DCHECK(req->ctx->ep->uccl_send_poll());
+        ret = ep->uccl_send_poll_once();
+        if (ret) {
+            inflight_send -= req->data_len;
+            // LOG(INFO) << "pluginTest send " << req->data_len << " " <<
+            // inflight_send;
+        }
     } else {
-        DCHECK(req->ctx->ep->uccl_recv_poll());
+        ret = ep->uccl_recv_poll_once();
+        if (ret) {
+            inflight_recv -= req->data_len;
+            // LOG(INFO) << "pluginTest recv " << req->data_len << " " <<
+            // inflight_recv;
+        }
     }
-    *done = 1;
-    *size = req->data_len;
+    if (ret) {
+        *done = 1;
+        *size = req->data_len;
+        delete req;
+    }
     return ncclSuccess;
 }
 ncclResult_t pluginCloseSend(void* sendComm) { return ncclSuccess; }

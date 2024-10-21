@@ -194,15 +194,15 @@ class Endpoint {
         Channel::Msg msg = {
             .opcode = Channel::Msg::Op::kTx,
             .data = const_cast<void *>(data),
-            .len_ptr = const_cast<size_t*>(&len),
+            .len_ptr = const_cast<size_t *>(&len),
             .connection_id = connection_id,
         };
-        while (jring_sp_enqueue_bulk(channel_->tx_ring_, &msg, 1, nullptr) !=
+        while (jring_mp_enqueue_bulk(channel_->tx_ring_, &msg, 1, nullptr) !=
                1) {
             // do nothing
         }
         // Wait for the completion.
-        while (jring_sc_dequeue_bulk(channel_->tx_comp_ring_, &msg, 1,
+        while (jring_mc_dequeue_bulk(channel_->tx_comp_ring_, &msg, 1,
                                      nullptr) != 1) {
             // do nothing
             // usleep(5);
@@ -216,10 +216,10 @@ class Endpoint {
         Channel::Msg msg = {
             .opcode = Channel::Msg::Op::kTx,
             .data = const_cast<void *>(data),
-            .len_ptr = const_cast<size_t*>(&len),
+            .len_ptr = const_cast<size_t *>(&len),
             .connection_id = connection_id,
         };
-        while (jring_sp_enqueue_bulk(channel_->tx_ring_, &msg, 1, nullptr) !=
+        while (jring_mp_enqueue_bulk(channel_->tx_ring_, &msg, 1, nullptr) !=
                1) {
             // do nothing
         }
@@ -229,12 +229,22 @@ class Endpoint {
     bool uccl_send_poll() {
         Channel::Msg msg;
         // Wait for the completion.
-        while (jring_sc_dequeue_bulk(channel_->tx_comp_ring_, &msg, 1,
+        while (jring_mc_dequeue_bulk(channel_->tx_comp_ring_, &msg, 1,
                                      nullptr) != 1) {
             // do nothing
             // usleep(5);
         }
         return true;
+    }
+
+    bool uccl_send_poll_once() {
+        Channel::Msg msg;
+        // Check for the completion.
+        if (jring_mc_dequeue_bulk(channel_->tx_comp_ring_, &msg, 1, nullptr) ==
+            1) {
+            return true;
+        }
+        return false;
     }
 
     // Receiving the data by leveraging multiple port combinations.
@@ -245,12 +255,12 @@ class Endpoint {
             .len_ptr = len,
             .connection_id = connection_id,
         };
-        while (jring_sp_enqueue_bulk(channel_->rx_ring_, &msg, 1, nullptr) !=
+        while (jring_mp_enqueue_bulk(channel_->rx_ring_, &msg, 1, nullptr) !=
                1) {
             // do nothing
         }
         // Wait for the completion.
-        while (jring_sc_dequeue_bulk(channel_->rx_comp_ring_, &msg, 1,
+        while (jring_mc_dequeue_bulk(channel_->rx_comp_ring_, &msg, 1,
                                      nullptr) != 1) {
             // do nothing
             // usleep(5);
@@ -266,7 +276,7 @@ class Endpoint {
             .len_ptr = len,
             .connection_id = connection_id,
         };
-        while (jring_sp_enqueue_bulk(channel_->rx_ring_, &msg, 1, nullptr) !=
+        while (jring_mp_enqueue_bulk(channel_->rx_ring_, &msg, 1, nullptr) !=
                1) {
             // do nothing
         }
@@ -276,12 +286,22 @@ class Endpoint {
     bool uccl_recv_poll() {
         Channel::Msg msg;
         // Wait for the completion.
-        while (jring_sc_dequeue_bulk(channel_->rx_comp_ring_, &msg, 1,
+        while (jring_mc_dequeue_bulk(channel_->rx_comp_ring_, &msg, 1,
                                      nullptr) != 1) {
             // do nothing
             // usleep(5);
         }
         return true;
+    }
+
+    bool uccl_recv_poll_once() {
+        Channel::Msg msg;
+        // Check for the completion.
+        if (jring_mc_dequeue_bulk(channel_->rx_comp_ring_, &msg, 1, nullptr) ==
+            1) {
+            return true;
+        }
+        return false;
     }
 };
 
@@ -1279,7 +1299,7 @@ class UcclEngine {
     void periodic_process() {
         // Advance the periodic ticks counter.
         periodic_ticks_++;
-        if (periodic_ticks_ % kDumpStatusTicks == 0) dump_status();
+        // if (periodic_ticks_ % kDumpStatusTicks == 0) dump_status();
         handle_rto();
         process_ctl_reqs();
     }

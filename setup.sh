@@ -25,11 +25,13 @@ else
     exit 1
 fi
 
+start_cpu=3
+ncpu=$(nproc)
 (let cnt=0; cd /sys/class/net/${NIC}/device/msi_irqs/;
 IRQs=(*)
 # Exclude the first IRQ, which is for the control plane
 for IRQ in "${IRQs[@]:1}"; do
-    let CPU=$((cnt))
+    let CPU=$(((cnt+start_cpu)%ncpu))
     let cnt=$(((cnt+1)%NQUEUE))
     echo $IRQ '->' $CPU
     echo $CPU | sudo tee /proc/irq/$IRQ/smp_affinity_list > /dev/null
