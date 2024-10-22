@@ -14,7 +14,7 @@ const size_t NUM_FRAMES = 4096 * 64;  // 1GB frame pool
 const size_t QUEUE_ID = 0;
 const size_t kTestMsgSize = 1024000;
 const size_t kTestIters = 1024000000;
-const size_t kReportIters = 1000;
+const size_t kReportIters = 100;
 
 DEFINE_bool(client, false, "Whether this is a client sending traffic.");
 
@@ -56,14 +56,14 @@ int main(int argc, char* argv[]) {
 
         size_t data_len;
         auto* data = new uint8_t[kTestMsgSize];
-        auto* data_u32 = reinterpret_cast<uint32_t*>(data);
-        for (int j = 0; j < kTestMsgSize / sizeof(uint32_t); j++) {
-            data_u32[j] = j;
-        }
         size_t test_msg_size = kTestMsgSize;
         std::vector<uint64_t> rtts;
         auto start_bw = std::chrono::high_resolution_clock::now();
         for (int i = 0; i < kTestIters; i++) {
+            auto* data_u32 = reinterpret_cast<uint32_t*>(data);
+            for (int j = 0; j < kTestMsgSize / sizeof(uint32_t); j++) {
+                data_u32[j] = i * j;
+            }
             auto start = std::chrono::high_resolution_clock::now();
             // ep.uccl_send(conn_id, data, kTestMsgSize);
             // ep.uccl_recv(conn_id, data, &data_len);
@@ -136,14 +136,13 @@ int main(int argc, char* argv[]) {
             auto duration_us =
                 std::chrono::duration_cast<std::chrono::microseconds>(end -
                                                                       start);
-            /*
-            CHECK_EQ(len, kTestMsgSize) << "Received message size mismatches";
+            // This cannot run frequently as it will slow down the client side
+            // latency measurements.
+            /*CHECK_EQ(len, kTestMsgSize) << "Received message size mismatches";
             for (int j = 0; j < kTestMsgSize / sizeof(uint32_t); j++) {
-            CHECK_EQ(reinterpret_cast<uint32_t*>(data)[j], j)
-            << "Data mismatch at index " << j;
-            }
-            memset(data, 0, kTestMsgSize);
-            */
+                CHECK_EQ(reinterpret_cast<uint32_t*>(data)[j], i * j)
+                    << "Data mismatch at index " << j;
+            }*/
             LOG_EVERY_N(INFO, kReportIters)
                 << "Handled " << i << " pp messages, rtt "
                 << duration_us.count() << " us";

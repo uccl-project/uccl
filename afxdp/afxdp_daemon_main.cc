@@ -112,9 +112,12 @@ void update_xsks_map() {
 void create_umem_and_xsk() {
     program_attach = nullptr;
     umem = nullptr;
-    umem_area = nullptr;
     xsk = nullptr;
     umem_size = NUM_FRAMES * FRAME_SIZE;
+    memset(&fill_ring, 0, sizeof(fill_ring));
+    memset(&comp_ring, 0, sizeof(comp_ring));
+    memset(&rx_ring, 0, sizeof(rx_ring));
+    memset(&tx_ring, 0, sizeof(tx_ring));
 
     struct xsk_umem_config umem_cfg = {.fill_size = FILL_RING_SIZE,
                                        .comp_size = COMP_RING_SIZE,
@@ -133,13 +136,15 @@ void create_umem_and_xsk() {
                  "ebpf_transport");
 
     // Step1: prepare a large shared memory for UMEM
-    mode_t old_mask = umask(0);  // set directory priviledge
-    umem_area = create_shm(SHM_NAME, umem_size);
-    if (umem_area == MAP_FAILED) {
-        perror("mmap");
-        goto out;
+    if (umem_area == nullptr) {
+        mode_t old_mask = umask(0);  // set directory priviledge
+        umem_area = create_shm(SHM_NAME, umem_size);
+        if (umem_area == MAP_FAILED) {
+            perror("mmap");
+            goto out;
+        }
+        umask(old_mask);  // restore
     }
-    umask(old_mask);  // restore
 
     // Step2: create UMEM
     if (xsk_umem__create(&umem, umem_area, umem_size, &fill_ring, &comp_ring,
@@ -175,7 +180,7 @@ out:
     exit(EXIT_FAILURE);
 }
 
-void destroy_umem_and_xsk() {
+void destroy_umem_and_xsk(bool free_shm = false) {
     if (program_attach) {
         if (attached_native)
             xdp_program__detach(program_attach, interface_index,
@@ -190,13 +195,13 @@ void destroy_umem_and_xsk() {
 
     if (xsk) xsk_socket__delete(xsk);
     if (umem) xsk_umem__delete(umem);
-    if (umem_area) destroy_shm(SHM_NAME, umem_area, umem_size);
+    if (umem_area && free_shm) destroy_shm(SHM_NAME, umem_area, umem_size);
 }
 
 void interrupt_handler(int signal) {
     (void)signal;
     quit = true;
-    destroy_umem_and_xsk();
+    destroy_umem_and_xsk(/*free_shm =*/true);
     exit(EXIT_FAILURE);
 }
 

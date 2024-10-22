@@ -134,8 +134,9 @@ void AFXDPSocket::destroy_afxdp_socket() {
     if (tx_map_ && tx_map_ != MAP_FAILED) munmap(tx_map_, tx_map_size_);
     if (fill_map_ && fill_map_ != MAP_FAILED) munmap(fill_map_, fill_map_size_);
     if (comp_map_ && comp_map_ != MAP_FAILED) munmap(comp_map_, comp_map_size_);
-    if (umem_buffer_ && umem_buffer_ != MAP_FAILED)
+    if (umem_buffer_ && umem_buffer_ != MAP_FAILED) {
         detach_shm(umem_buffer_, umem_size_);
+    }
 }
 
 /**

@@ -1299,7 +1299,7 @@ class UcclEngine {
     void periodic_process() {
         // Advance the periodic ticks counter.
         periodic_ticks_++;
-        // if (periodic_ticks_ % kDumpStatusTicks == 0) dump_status();
+        if (periodic_ticks_ % kDumpStatusTicks == 0) dump_status();
         handle_rto();
         process_ctl_reqs();
     }
