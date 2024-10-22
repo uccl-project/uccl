@@ -656,7 +656,7 @@ int main(int argc, char* argv[]) {
     int pshared;
     int ret;
 
-    if (client_init(&client, "ens6") != 0) {
+    if (client_init(&client, interface_name) != 0) {
         cleanup();
         return 1;
     }

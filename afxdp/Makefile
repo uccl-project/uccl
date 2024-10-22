@@ -1,12 +1,14 @@
+ABS_ROOT_PATH := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
+
 KERNEL = $(shell uname -r)
 INC = -I ../lib/install/include
 LIBS = ../lib/install/lib/libxdp.a ../lib/install/lib/libbpf.a -lglog -lgflags -lz -lelf
 # LIBS = -L../lib/xdp-tools/lib/libxdp -lxdp -L../lib/libbpf/src -lbpf -lglog -lgflags -lz -lelf
-LIBS_SHARED = -Wl,-rpath=/home/ubuntu/uccl/lib/xdp-tools/lib/libxdp/ \
-	   		  -Wl,-rpath=/home/ubuntu/uccl/lib/libbpf/src/ \
+LIBS_SHARED = -Wl,-rpath=$(ABS_ROOT_PATH)/../lib/xdp-tools/lib/libxdp/ \
+	   		  -Wl,-rpath=$(ABS_ROOT_PATH)/../lib/libbpf/src/ \
 	   		  -L../lib/xdp-tools/lib/libxdp -lxdp -L../lib/libbpf/src -lbpf \
 	   		  -lglog -lgflags -lz -lelf
-CXXFLAGS = -O3 -g -std=c++17 -Wno-pointer-arith -fPIC
+CXXFLAGS = -O3 -g -std=c++17 -Wno-pointer-arith -Wno-interference-size -fPIC
 CLANGFLAGS = -O3 -g
 DEPS = *.h
 PLUGIN_SO = libnccl-net.so
@@ -83,9 +85,9 @@ util_afxdp_test: util_afxdp_test.cc ebpf_client.o $(DEPS) $(lib_obj)
 %.o: %.cc $(DEPS)
 	g++ -c $< -o $@ $(INC) $(CXXFLAGS)
 
-NCCL_HOME:=../nccl/src
+NCCL_HOME:=../nccl
 CUDA_HOME:=/usr/local/cuda
-NCCL_INC:= -I$(NCCL_HOME)/include -I$(CUDA_HOME)/include
+NCCL_INC:= -I$(NCCL_HOME)/build/include -I$(NCCL_HOME)/src/include -I$(CUDA_HOME)/include
 
 $(PLUGIN_SO): nccl_plugin.cc ebpf_transport.o $(DEPS) $(lib_obj)
 	g++ $(NCCL_INC) -fPIC -shared -o $@ -Wl,-soname,$(PLUGIN_SO) nccl_plugin.cc $(lib_obj) $(INC) $(LIBS_SHARED) $(CXXFLAGS)

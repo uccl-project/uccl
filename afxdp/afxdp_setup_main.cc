@@ -10,7 +10,9 @@
 #include <unistd.h>
 #include <xdp/xsk.h>
 
-#define IF_NAME "ens6"
+#include "transport_config.h"
+
+#define IF_NAME interface_name
 #define SHM_NAME "UMEM_SHM"
 #define QUEUE_ID 0
 #define FILL_RING_SIZE                  \

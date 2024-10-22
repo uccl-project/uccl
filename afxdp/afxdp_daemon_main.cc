@@ -17,11 +17,12 @@
 #include <deque>
 #include <mutex>
 
+#include "transport_config.h"
 #include "util.h"
 
 using namespace uccl;
 
-#define IF_NAME "ens6"
+#define IF_NAME interface_name
 #define SHM_NAME "UMEM_SHM"
 #define QUEUE_ID 0
 #define FILL_RING_SIZE                  \

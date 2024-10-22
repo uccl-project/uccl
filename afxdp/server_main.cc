@@ -27,6 +27,7 @@
 #include <chrono>
 #include <vector>
 
+#include "transport_config.h"
 #include "util.h"
 #include "util_umem.h"
 
@@ -34,9 +35,9 @@ using namespace uccl;
 
 #define NUM_QUEUES 1
 
-const char* INTERFACE_NAME = "ens6";
+const char* INTERFACE_NAME = interface_name;
 
-const int RECV_BATCH_SIZE = 32;
+const int MY_RECV_BATCH_SIZE = 32;
 const bool busy_poll = true;
 
 #define NUM_FRAMES (4096 * 64)
@@ -397,11 +398,13 @@ void socket_recv(struct socket_t* socket, int queue_id) {
     // Check any packet received, in order to drive packet receiving path for
     // other kernel transport.
     uint32_t idx_rx, idx_fq, rcvd;
-    rcvd = xsk_ring_cons__peek(&socket->recv_queue, RECV_BATCH_SIZE, &idx_rx);
+    rcvd =
+        xsk_ring_cons__peek(&socket->recv_queue, MY_RECV_BATCH_SIZE, &idx_rx);
     if (!rcvd) return;
 
     /* Stuff the ring with as much frames as possible */
-    int stock_frames = xsk_prod_nb_free(&socket->fill_queue, RECV_BATCH_SIZE);
+    int stock_frames =
+        xsk_prod_nb_free(&socket->fill_queue, MY_RECV_BATCH_SIZE);
 
     if (stock_frames > 0) {
         int ret =

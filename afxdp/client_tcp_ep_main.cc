@@ -34,8 +34,8 @@ void error(char *msg) {
     exit(0);
 }
 
-const int SEND_BATCH_SIZE = 1;
-const int RECV_BATCH_SIZE = 32;
+const int MY_SEND_BATCH_SIZE = 1;
+const int MY_RECV_BATCH_SIZE = 32;
 const int MAX_INFLIGHT_PKTS = 32;  // tune this to change packet rate
 const int SEND_INTV_US = 0;
 
@@ -75,7 +75,7 @@ static void *send_thread(void *arg) {
         for (int i = 0; i < nfds; i++) {
             assert(events[i].events & EPOLLOUT);
             int sent_cnt = 0;
-            for (; sent_cnt < SEND_BATCH_SIZE; sent_cnt++) {
+            for (; sent_cnt < MY_SEND_BATCH_SIZE; sent_cnt++) {
                 auto now = std::chrono::high_resolution_clock::now();
                 *(uint64_t *)wbuffer =
                     std::chrono::duration_cast<std::chrono::microseconds>(
@@ -123,7 +123,7 @@ static void *recv_thread(void *arg) {
         for (int i = 0; i < nfds; i++) {
             assert(events[i].events & EPOLLIN);
             int recv_cnt = 0;
-            for (; recv_cnt < RECV_BATCH_SIZE; recv_cnt++) {
+            for (; recv_cnt < MY_RECV_BATCH_SIZE; recv_cnt++) {
                 int ret = receive_message_early_return(
                     config->n_bytes, events[i].data.fd, rbuffer, &quit);
                 if (ret == 0) {  // would block

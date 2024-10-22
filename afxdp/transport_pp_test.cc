@@ -41,7 +41,7 @@ int main(int argc, char* argv[]) {
     int cnt = 0;
 
     if (FLAGS_client) {
-        AFXDPFactory::init("ens6", "ebpf_transport.o", "ebpf_transport");
+        AFXDPFactory::init(interface_name, "ebpf_transport.o", "ebpf_transport");
         UcclEngine engine(QUEUE_ID, NUM_FRAMES, &channel, client_ip_str,
                           client_port, server_ip_str, server_port,
                           client_mac_char, server_mac_char);
@@ -106,9 +106,9 @@ int main(int argc, char* argv[]) {
         engine.shutdown();
         engine_th.join();
     } else {
-        // AFXDPFactory::init("ens6", "ebpf_transport_pktloss.o",
+        // AFXDPFactory::init(interface_name, "ebpf_transport_pktloss.o",
         // "ebpf_transport");
-        AFXDPFactory::init("ens6", "ebpf_transport.o", "ebpf_transport");
+        AFXDPFactory::init(interface_name, "ebpf_transport.o", "ebpf_transport");
         UcclEngine engine(QUEUE_ID, NUM_FRAMES, &channel, server_ip_str,
                           server_port, client_ip_str, client_port,
                           server_mac_char, client_mac_char);

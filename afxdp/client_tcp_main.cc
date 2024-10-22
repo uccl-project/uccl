@@ -32,8 +32,8 @@ void error(char *msg) {
     exit(0);
 }
 
-const int SEND_BATCH_SIZE = 1;
-const int RECV_BATCH_SIZE = 32;
+const int MY_SEND_BATCH_SIZE = 1;
+const int MY_RECV_BATCH_SIZE = 32;
 // tune this to change packet rate
 const int MAX_INFLIGHT_PKTS = 1;
 const int SEND_INTV_US = 0;
@@ -54,7 +54,7 @@ static void *send_thread(void *arg) {
         if (inflight_pkts >= MAX_INFLIGHT_PKTS) {
             continue;
         }
-        for (int i = 0; i < SEND_BATCH_SIZE; i++) {
+        for (int i = 0; i < MY_SEND_BATCH_SIZE; i++) {
             auto now = std::chrono::high_resolution_clock::now();
             *(uint64_t *)wbuffer =
                 std::chrono::duration_cast<std::chrono::microseconds>(
@@ -64,8 +64,8 @@ static void *send_thread(void *arg) {
 
             send_message(config->n_bytes, sockfd, wbuffer, &quit);
         }
-        inflight_pkts += SEND_BATCH_SIZE;
-        sent_packets += SEND_BATCH_SIZE;
+        inflight_pkts += MY_SEND_BATCH_SIZE;
+        sent_packets += MY_SEND_BATCH_SIZE;
         if (SEND_INTV_US) usleep(SEND_INTV_US);
     }
     free(wbuffer);
@@ -79,7 +79,7 @@ static void *recv_thread(void *arg) {
     int sockfd = config->sockfds[0];
     uint8_t *rbuffer = (uint8_t *)malloc(config->n_bytes);
     while (!quit) {
-        for (int i = 0; i < RECV_BATCH_SIZE; i++) {
+        for (int i = 0; i < MY_RECV_BATCH_SIZE; i++) {
             receive_message(sizeof(uint64_t), sockfd, rbuffer, &quit);
             inflight_pkts--;
 
@@ -112,7 +112,7 @@ static void *send_recv_thread(void *arg) {
     // setsockopt(sockfd, SOL_SOCKET, SO_RCVBUF, &newsize, sizeof(newsize));
     uint8_t *rwbuffer = (uint8_t *)malloc(config->n_bytes);
     while (!quit) {
-        for (int i = 0; i < RECV_BATCH_SIZE; i++) {
+        for (int i = 0; i < MY_RECV_BATCH_SIZE; i++) {
             sent_packets++;
 
             auto now = std::chrono::high_resolution_clock::now();

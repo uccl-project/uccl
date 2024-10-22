@@ -38,12 +38,13 @@ ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
 
     channel = new Channel();
 
-    AFXDPFactory::init("ens6", "/home/ubuntu/uccl/afxdp/ebpf_transport.o",
+    AFXDPFactory::init(interface_name,
+                       "/home/ubuntu/uccl/afxdp/ebpf_transport.o",
                        "ebpf_transport");
 
-    std::string local_ip_str = get_dev_ip("ens6");
+    std::string local_ip_str = get_dev_ip(interface_name);
     DCHECK(local_ip_str != "");
-    std::string local_mac_str = get_dev_mac("ens6");
+    std::string local_mac_str = get_dev_mac(interface_name);
     DCHECK(local_mac_str != "");
 
     std::string client_mac_str = mac_to_str(client_mac_char);

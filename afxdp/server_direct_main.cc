@@ -13,7 +13,9 @@
 #include <unistd.h>
 #include <xdp/libxdp.h>
 
-const char *INTERFACE_NAME = "ens6";
+#include "transport_config.h"
+
+const char *INTERFACE_NAME = interface_name;
 
 struct server_t {
     int interface_index;
@@ -78,8 +80,8 @@ int server_init(struct server_t *server, const char *interface_name) {
 
     printf("loading ebpf_server...\n");
 
-    server->program =
-        xdp_program__open_file("ebpf_server_direct.o", "ebpf_server_direct", NULL);
+    server->program = xdp_program__open_file("ebpf_server_direct.o",
+                                             "ebpf_server_direct", NULL);
     if (libxdp_get_error(server->program)) {
         printf("\nerror: could not load ebpf_server program\n\n");
         return 1;

@@ -22,7 +22,7 @@ void error(char *msg) {
     exit(1);
 }
 
-const int RECV_BATCH_SIZE = 32;
+const int MY_RECV_BATCH_SIZE = 32;
 
 int main(int argc, char *argv[]) {
     int sockfd, newsockfd;
@@ -86,7 +86,7 @@ int main(int argc, char *argv[]) {
         for (int i = 0; i < nfds; i++) {
             assert(events[i].events & EPOLLIN);
             int recv_cnt = 0;
-            for (; recv_cnt < RECV_BATCH_SIZE; recv_cnt++) {
+            for (; recv_cnt < MY_RECV_BATCH_SIZE; recv_cnt++) {
                 int ret = receive_message_early_return(
                     config.n_bytes, events[i].data.fd, buffer, &quit);
                 if (ret == 0) {  // would block
