@@ -69,7 +69,7 @@ void load_program(const char *interface_name, const char *ebpf_filename,
     LOG(INFO) << "loading " << section_name << "...";
     program_attach = xdp_program__open_file(ebpf_filename, section_name, NULL);
     CHECK(!libxdp_get_error(program_attach))
-        << "error: could not load " << ebpf_filename << "program";
+        << "error: could not load " << ebpf_filename << " program";
     LOG(INFO) << ebpf_filename << " loaded successfully.";
 
     // attach the ebpf program to the network interface
@@ -133,8 +133,7 @@ void create_umem_and_xsk() {
         .bind_flags = XDP_USE_NEED_WAKEUP};
 
     // Step0: load the ebpf program
-    load_program(IF_NAME, "/home/ubuntu/uccl/afxdp/ebpf_transport.o",
-                 "ebpf_transport");
+    load_program(IF_NAME, "ebpf_transport.o", "ebpf_transport");
 
     // Step1: prepare a large shared memory for UMEM
     if (umem_area == nullptr) {

@@ -31,14 +31,16 @@ make MPI=1 MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi CUDA_HOME=/usr/local/cuda 
 cd afxdp; make -j
 
 # On both server and client
-./setup.sh ens6 4 9001 tcp
+./setup.sh ens6 4 9001 tcp aws
+or
+./setup.sh ens1f1np1 4 1500 tcp cloudlab
 
 # On server
-./sync.sh 172.31.25.5
+./sync.sh 192.168.6.2
 ./server_tcp_main
 
 # On client
-./client_tcp_main -a 172.31.18.199
+./client_tcp_main -a 192.168.6.1
 ```
 
 ### Run AFXDP testing
@@ -47,10 +49,12 @@ cd afxdp; make -j
 cd afxdp; make -j
 
 # On both server and client
-./setup.sh ens6 1 3498 afxdp
+./setup.sh ens6 1 3498 afxdp aws
+or
+./setup.sh ens1f1np1 4 1500 afxdp cloudlab
 
 # On server
-./sync.sh 172.31.25.5
+./sync.sh 192.168.6.2
 sudo ./server_main
 
 # On client

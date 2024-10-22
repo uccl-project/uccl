@@ -33,8 +33,6 @@
 
 namespace uccl {
 
-constexpr static uint32_t AFXDP_MTU = 3498;
-
 class FrameBuf {
     // Pointing to the next message buffer in the chain.
     FrameBuf *next_;
