@@ -51,7 +51,7 @@ cd afxdp; make -j
 # On both server and client
 ./setup.sh ens6 1 3498 afxdp aws
 or
-./setup.sh ens1f1np1 4 1500 afxdp cloudlab
+./setup.sh ens1f1np1 1 1500 afxdp cloudlab
 
 # On server
 ./sync.sh 192.168.6.2
