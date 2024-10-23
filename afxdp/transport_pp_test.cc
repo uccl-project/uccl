@@ -14,7 +14,7 @@ const size_t NUM_FRAMES = 4096 * 64;  // 1GB frame pool
 const size_t QUEUE_ID = 0;
 const size_t kTestMsgSize = 1024000;
 const size_t kTestIters = 1024000000;
-const size_t kReportIters = 100;
+const size_t kReportIters = 1000;
 
 DEFINE_bool(client, false, "Whether this is a client sending traffic.");
 

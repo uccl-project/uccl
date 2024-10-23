@@ -1138,9 +1138,6 @@ class UcclFlow {
     void transmit_pending_packets() {
         auto remaining_packets =
             std::min(pcb_.effective_wnd(), tx_tracking_.num_unsent_msgbufs());
-        remaining_packets =
-            std::min(remaining_packets,
-                     socket_->send_queue_free_entries(remaining_packets));
         if (remaining_packets == 0) return;
 
         // Prepare the packets.

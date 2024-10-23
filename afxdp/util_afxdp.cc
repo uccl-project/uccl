@@ -240,9 +240,9 @@ out:
 }
 
 uint32_t AFXDPSocket::pull_complete_queue() {
-    uint32_t idx_cq;
-    uint32_t completed = xsk_ring_cons__peek(
-        &complete_queue_, XSK_RING_CONS__DEFAULT_NUM_DESCS, &idx_cq);
+    uint32_t idx_cq, completed;
+    completed = xsk_ring_cons__peek(&complete_queue_,
+                                    XSK_RING_CONS__DEFAULT_NUM_DESCS, &idx_cq);
     if (completed > 0) {
         for (int i = 0; i < completed; i++) {
             uint64_t frame_offset =
@@ -268,10 +268,6 @@ uint32_t AFXDPSocket::pull_complete_queue() {
     return completed;
 }
 
-uint32_t AFXDPSocket::send_queue_free_entries(uint32_t nb_frames) {
-    return xsk_prod_nb_free(&send_queue_, nb_frames);
-}
-
 uint32_t AFXDPSocket::send_packet(frame_desc frame) {
     // reserving a slot in the send queue.
     uint32_t send_index;
@@ -281,19 +277,26 @@ uint32_t AFXDPSocket::send_packet(frame_desc frame) {
             << "send_queue is full. Busy waiting... unpulled_tx_pkts "
             << unpulled_tx_pkts_ << " send_queue_free_entries "
             << send_queue_free_entries(1);
-        sendto(xsk_fd_, NULL, 0, MSG_DONTWAIT, NULL, 0);
+        kick_tx();
     }
     struct xdp_desc *desc = xsk_ring_prod__tx_desc(&send_queue_, send_index);
     desc->addr = frame.frame_offset;
     desc->len = frame.frame_len;
+    /**
+     * v6.8 kernel has a NULL pointer deference bug:
+     * https://lore.kernel.org/netdev/Zfho1lRIg0cjpWwK@google.com/T/
+     */
+    desc->options = 0;
     xsk_ring_prod__submit(&send_queue_, 1);
     unpulled_tx_pkts_++;
 
-    if (xsk_ring_prod__needs_wakeup(&send_queue_)) {
-        sendto(xsk_fd_, NULL, 0, MSG_DONTWAIT, NULL, 0);
-    }
+    uint32_t pull_tx_pkts = 0;
+    do {
+        kick_tx();
+        pull_tx_pkts += pull_complete_queue();
+    } while (unpulled_tx_pkts_ > FILL_RING_SIZE / 2);
 
-    return pull_complete_queue();
+    return pull_tx_pkts;
 }
 
 uint32_t AFXDPSocket::send_packets(std::vector<frame_desc> &frames) {
@@ -307,7 +310,7 @@ uint32_t AFXDPSocket::send_packets(std::vector<frame_desc> &frames) {
             << "send_queue is full. Busy waiting... unpulled_tx_pkts "
             << unpulled_tx_pkts_ << " send_queue_free_entries "
             << send_queue_free_entries(num_frames);
-        sendto(xsk_fd_, NULL, 0, MSG_DONTWAIT, NULL, 0);
+        kick_tx();
     }
     for (int i = 0; i < num_frames; i++) {
         struct xdp_desc *desc =
@@ -318,11 +321,13 @@ uint32_t AFXDPSocket::send_packets(std::vector<frame_desc> &frames) {
     xsk_ring_prod__submit(&send_queue_, num_frames);
     unpulled_tx_pkts_ += num_frames;
 
-    if (xsk_ring_prod__needs_wakeup(&send_queue_)) {
-        sendto(xsk_fd_, NULL, 0, MSG_DONTWAIT, NULL, 0);
-    }
+    uint32_t pull_tx_pkts = 0;
+    do {
+        kick_tx();
+        pull_tx_pkts += pull_complete_queue();
+    } while (unpulled_tx_pkts_ > FILL_RING_SIZE / 2);
 
-    return pull_complete_queue();
+    return pull_tx_pkts;
 }
 
 void AFXDPSocket::populate_fill_queue(uint32_t nb_frames) {
@@ -376,7 +381,10 @@ std::string AFXDPSocket::to_string() const {
 
 void AFXDPSocket::shutdown() {
     // pull_complete_queue to make sure all frames are tx successfully.
-    while (unpulled_tx_pkts_) pull_complete_queue();
+    while (unpulled_tx_pkts_) {
+        kick_tx();
+        pull_complete_queue();
+    }
 }
 
 AFXDPSocket::~AFXDPSocket() {

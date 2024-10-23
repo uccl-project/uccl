@@ -168,6 +168,18 @@ class AFXDPSocket {
     constexpr static uint32_t NUM_FRAMES = 64 * 4096;
     constexpr static uint32_t FRAME_SIZE = XSK_UMEM__DEFAULT_FRAME_SIZE;
 
+    int xsk_fd_;
+    int umem_fd_;
+
+    void *fill_map_;
+    size_t fill_map_size_;
+    void *comp_map_;
+    size_t comp_map_size_;
+    void *rx_map_;
+    size_t rx_map_size_;
+    void *tx_map_;
+    size_t tx_map_size_;
+
     AFXDPSocket(int queue_id, int num_frames);
 
     // For manually mapping umem struct from the afxdp daemon.
@@ -196,18 +208,6 @@ class AFXDPSocket {
     void destroy_afxdp_socket();
     int create_afxdp_socket();
 
-    int xsk_fd_;
-    int umem_fd_;
-
-    void *fill_map_;
-    size_t fill_map_size_;
-    void *comp_map_;
-    size_t comp_map_size_;
-    void *rx_map_;
-    size_t rx_map_size_;
-    void *tx_map_;
-    size_t tx_map_size_;
-
    public:
     uint32_t queue_id_;
     uint32_t num_frames_;
@@ -218,25 +218,26 @@ class AFXDPSocket {
     struct xsk_ring_cons complete_queue_;
     struct xsk_ring_prod fill_queue_;
     FramePool</*Sync=*/false> *frame_pool_;
-#if 0
-    std::set<uint64_t> free_frames_;
-#endif
 
     struct frame_desc {
         uint64_t frame_offset;
         uint32_t frame_len;
     };
 
-    // The completed packets might come from last send_packet call.
-    uint32_t send_queue_free_entries(uint32_t nb_frames);
     uint32_t send_packet(frame_desc frame);
     uint32_t send_packets(std::vector<frame_desc> &frames);
     uint32_t pull_complete_queue();
-
-    void populate_fill_queue(uint32_t nb_frames);
+    inline uint32_t send_queue_free_entries(uint32_t nb_frames) {
+        return xsk_prod_nb_free(&send_queue_, nb_frames);
+    }
     std::vector<frame_desc> recv_packets(uint32_t nb_frames);
+    void populate_fill_queue(uint32_t nb_frames);
 
-    uint64_t pop_frame() {
+#if 0
+    std::set<uint64_t> free_frames_;
+#endif
+
+    inline uint64_t pop_frame() {
 #if 0
         auto frame_offset = frame_pool_->pop();
         CHECK(free_frames_.erase(frame_offset) == 1);
@@ -249,25 +250,25 @@ class AFXDPSocket {
 #endif
     }
 
-    void push_frame(uint64_t frame_offset) {
+    inline void push_frame(uint64_t frame_offset) {
 #if 0
         if (free_frames_.find(frame_offset) == free_frames_.end()) {
             free_frames_.insert(frame_offset);
             frame_pool_->push(frame_offset);
         } else {
             LOG(ERROR) << "Frame offset " << std::hex << frame_offset
-                       << " size " << std::dec
-                       << FrameBuf::get_msgbuf_ptr(frame_offset, umem_buffer_)
-                              ->get_frame_len()
-                       << " already in free_frames_";
+                        << " size " << std::dec
+                        << FrameBuf::get_msgbuf_ptr(frame_offset, umem_buffer_)
+                                ->get_frame_len()
+                        << " already in free_frames_";
         }
 #else
         frame_pool_->push(frame_offset);
 #endif
     }
 
-    int get_xsk_fd() const { return xsk_fd_; }
-    int get_umem_fd() const { return umem_fd_; }
+    inline int get_xsk_fd() const { return xsk_fd_; }
+    inline int get_umem_fd() const { return umem_fd_; }
 
     std::string to_string() const;
     void shutdown();
@@ -278,6 +279,12 @@ class AFXDPSocket {
    private:
     uint32_t unpulled_tx_pkts_;
     uint32_t fill_queue_entries_;
+
+    inline void kick_tx() {
+        if (xsk_ring_prod__needs_wakeup(&send_queue_)) {
+            sendto(xsk_fd_, NULL, 0, MSG_DONTWAIT, NULL, 0);
+        }
+    }
 };
 
 }  // namespace uccl
