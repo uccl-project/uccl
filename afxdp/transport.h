@@ -725,7 +725,7 @@ class UcclFlow {
      */
     UcclFlow(const std::string local_addr, const uint16_t local_port,
              const std::string remote_addr, const uint16_t remote_port,
-             const uint8_t *local_l2_addr, const uint8_t *remote_l2_addr,
+             const std::string local_l2_addr, const std::string remote_l2_addr,
              AFXDPSocket *socket, Channel *channel, ConnectionID connection_id)
         : local_addr_(htonl(str_to_ip(local_addr))),
           local_port_(local_port),
@@ -737,8 +737,8 @@ class UcclFlow {
           pcb_(),
           tx_tracking_(socket, channel),
           rx_tracking_(socket, channel) {
-        memcpy(local_l2_addr_, local_l2_addr, ETH_ALEN);
-        memcpy(remote_l2_addr_, remote_l2_addr, ETH_ALEN);
+        DCHECK(str_to_mac(local_l2_addr, local_l2_addr_));
+        DCHECK(str_to_mac(remote_l2_addr, remote_l2_addr_));
     }
     ~UcclFlow() {}
 
@@ -1167,8 +1167,8 @@ class UcclFlow {
     uint16_t local_port_;
     uint32_t remote_addr_;
     uint16_t remote_port_;
-    uint8_t local_l2_addr_[ETH_ALEN];
-    uint8_t remote_l2_addr_[ETH_ALEN];
+    char local_l2_addr_[ETH_ALEN];
+    char remote_l2_addr_[ETH_ALEN];
 
     // The underlying AFXDPSocket.
     AFXDPSocket *socket_;
@@ -1211,7 +1211,8 @@ class UcclEngine {
     UcclEngine(int queue_id, int num_frames, Channel *channel,
                const std::string local_addr, const uint16_t local_port,
                const std::string remote_addr, const uint16_t remote_port,
-               const uint8_t *local_l2_addr, const uint8_t *remote_l2_addr)
+               const std::string local_l2_addr,
+               const std::string remote_l2_addr)
         : socket_(AFXDPFactory::CreateSocket(queue_id, num_frames)),
           channel_(channel),
           last_periodic_timestamp_(rdtsc_to_us(rdtsc())),

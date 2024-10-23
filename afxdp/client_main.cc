@@ -41,6 +41,8 @@ uint32_t server_addr_u32 = 0x0;
 uint32_t client_addr_u32 = 0x0;
 const uint16_t client_ports[8] = {40000, 40001, 40002, 40003,
                                   40004, 40005, 40006, 40007};
+char server_mac_char[6] = {};
+char client_mac_char[6] = {};
 
 const int MY_SEND_BATCH_SIZE = 1;
 const int MY_RECV_BATCH_SIZE = 32;
@@ -652,6 +654,8 @@ int main(int argc, char* argv[]) {
 
     client_addr_u32 = htonl(str_to_ip(client_ip_str));
     server_addr_u32 = htonl(str_to_ip(server_ip_str));
+    DCHECK(str_to_mac(client_mac_str, client_mac_char));
+    DCHECK(str_to_mac(server_mac_str, server_mac_char));
 
     int pshared;
     int ret;

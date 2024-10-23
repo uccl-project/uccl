@@ -47,10 +47,6 @@ ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
     std::string local_mac_str = get_dev_mac(interface_name);
     DCHECK(local_mac_str != "");
 
-    std::string client_mac_str = mac_to_str(client_mac_char);
-    std::string server_mac_str = mac_to_str(server_mac_char);
-    DCHECK(server_mac_str != "" && client_mac_str != "");
-
     bool is_this_client =
         (local_ip_str == client_ip_str && local_mac_str == client_mac_str);
     bool is_this_server =
@@ -60,12 +56,12 @@ ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
         LOG(INFO) << "pluginListen: This is the client machine";
         engine = new UcclEngine(QUEUE_ID, NUM_FRAMES, channel, client_ip_str,
                                 client_port, server_ip_str, server_port,
-                                client_mac_char, server_mac_char);
+                                client_mac_str, server_mac_str);
     } else if (is_this_server) {
         LOG(INFO) << "pluginListen: This is the server machine";
         engine = new UcclEngine(QUEUE_ID, NUM_FRAMES, channel, server_ip_str,
                                 server_port, client_ip_str, client_port,
-                                server_mac_char, client_mac_char);
+                                server_mac_str, client_mac_str);
     } else {
         DCHECK(false) << "This machine is neither client nor server";
     }

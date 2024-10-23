@@ -133,7 +133,7 @@ void create_umem_and_xsk() {
         .bind_flags = XDP_USE_NEED_WAKEUP};
 
     // Step0: load the ebpf program
-    load_program(IF_NAME, "ebpf_transport_pktloss.o", "ebpf_transport");
+    load_program(IF_NAME, "ebpf_transport.o", "ebpf_transport");
 
     // Step1: prepare a large shared memory for UMEM
     if (umem_area == nullptr) {

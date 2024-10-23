@@ -22,7 +22,7 @@ make src.build -j
 cp src/include/nccl_common.h build/include/
 
 cd nccl-tests
-make MPI=1 MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi CUDA_HOME=/usr/local/cuda NCCL_HOME=/users/yangzhou/uccl/nccl/build -j
+make MPI=1 MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi CUDA_HOME=/usr/local/cuda NCCL_HOME=/opt/uccl/nccl/build -j
 ```
 
 ### Run TCP testing
@@ -68,8 +68,6 @@ Note that any program that leverages util_afxdp no long needs root to use AFXDP 
 ```
 sudo ./afxdp_daemon_main --logtostderr=1
 ./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1
-
-sudo ./afxdp_daemon_main --logtostderr=1
 ./transport_test --client --logtostderr=1 --vmodule=transport=1,util_afxdp=1
 ```
 
@@ -78,5 +76,7 @@ sudo ./afxdp_daemon_main --logtostderr=1
 Install anaconda: 
 ```
 wget https://repo.anaconda.com/archive/Anaconda3-2024.06-1-Linux-x86_64.sh
-bash Anaconda3-2024.06-1-Linux-x86_64.sh -b
+bash Anaconda3-2024.06-1-Linux-x86_64.sh -b -p /opt/anaconda3
+source /opt/anaconda3/bin/activate
+conda init
 ```

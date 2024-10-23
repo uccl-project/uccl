@@ -9,7 +9,7 @@ PLATFORM=$5
 echo "configuring ${NIC} with ${NQUEUE} queues and ${MTU} MTU for ${MODE}"
 
 echo "unloading any xdp programs"
-sudo ~/uccl/lib/xdp-tools/xdp-loader/xdp-loader unload ${NIC} --all
+sudo /opt/uccl/lib/xdp-tools/xdp-loader/xdp-loader unload ${NIC} --all
 
 sudo ethtool -L ${NIC} combined ${NQUEUE}
 sudo ifconfig ${NIC} mtu ${MTU} up

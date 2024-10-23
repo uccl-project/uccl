@@ -409,7 +409,7 @@ static inline std::string get_dev_ip(const char* dev_name) {
 }
 
 // Function to convert MAC string to hex char array
-static inline bool str_to_mac(const std::string& macStr, unsigned char mac[6]) {
+static inline bool str_to_mac(const std::string& macStr, char mac[6]) {
     if (macStr.length() != 17) {
         LOG(ERROR) << "Invalid MAC address format.";
         return false;
@@ -418,9 +418,9 @@ static inline bool str_to_mac(const std::string& macStr, unsigned char mac[6]) {
     int values[6];  // Temp array to hold integer values
     if (sscanf(macStr.c_str(), "%x:%x:%x:%x:%x:%x", &values[0], &values[1],
                &values[2], &values[3], &values[4], &values[5]) == 6) {
-        // Convert to unsigned char array
+        // Convert to char array
         for (int i = 0; i < 6; i++) {
-            mac[i] = static_cast<unsigned char>(values[i]);
+            mac[i] = static_cast<char>(values[i]);
         }
         return true;
     } else {
@@ -430,7 +430,7 @@ static inline bool str_to_mac(const std::string& macStr, unsigned char mac[6]) {
 }
 
 // Function to convert hex char array back to MAC string
-static inline std::string mac_to_str(const unsigned char mac[6]) {
+static inline std::string mac_to_str(const char mac[6]) {
     std::stringstream ss;
     ss << std::hex << std::setfill('0');
     for (int i = 0; i < 6; i++) {

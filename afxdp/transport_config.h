@@ -12,16 +12,16 @@ static const uint32_t SEND_BATCH_SIZE = 32;
 // On AWS
 // static const uint32_t AFXDP_MTU = 3498;
 // static const char* interface_name = "ens6";
-// static const uint8_t server_mac_char[] = {0x0a, 0xff, 0xea, 0x11, 0x5e, 0xad};
-// static const uint8_t client_mac_char[] = {0x0a, 0xff, 0xc6, 0x7f, 0xc9, 0x35};
+// static const char* server_mac_str = "0a:ff:ea:11:5e:ad";
+// static const char* client_mac_str = "0a:ff:c6:7f:c9:35";
 // static const char* server_ip_str = "172.31.18.199";
 // static const char* client_ip_str = "172.31.25.5";
 
 // On Cloudlab (xl170-ubuntu24-v6.8 profile)
 static const uint32_t AFXDP_MTU = 1500;
 static const char* interface_name = "ens1f1np1";
-static const uint8_t server_mac_char[] = {0x9c, 0xdc, 0x71, 0x5d, 0x41, 0xe1};
-static const uint8_t client_mac_char[] = {0x9c, 0xdc, 0x71, 0x5b, 0x42, 0x91};
+static const char* server_mac_str = "9c:dc:71:5d:31:91";
+static const char* client_mac_str = "9c:dc:71:5d:51:21";
 static const char* server_ip_str = "192.168.6.1";
 static const char* client_ip_str = "192.168.6.2";
 
