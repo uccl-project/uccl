@@ -20,8 +20,8 @@ static const uint32_t SEND_BATCH_SIZE = 32;
 // On Cloudlab (xl170-ubuntu24-v6.8 profile)
 static const uint32_t AFXDP_MTU = 1500;
 static const char* interface_name = "ens1f1np1";
-static const char* server_mac_str = "9c:dc:71:5d:31:91";
-static const char* client_mac_str = "9c:dc:71:5d:51:21";
+static const char* server_mac_str = "9c:dc:71:5d:41:e1";
+static const char* client_mac_str = "9c:dc:71:5c:8f:e1";
 static const char* server_ip_str = "192.168.6.1";
 static const char* client_ip_str = "192.168.6.2";
 

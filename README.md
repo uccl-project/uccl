@@ -25,6 +25,8 @@ cd nccl-tests
 make MPI=1 MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi CUDA_HOME=/usr/local/cuda NCCL_HOME=/opt/uccl/nccl/build -j
 ```
 
+Remember to change `afxdp/transport_config.h` based on your NIC IPs and MACs. 
+
 ### Run TCP testing
 
 ```
