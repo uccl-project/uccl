@@ -18,6 +18,9 @@ const size_t kTestIters = 1024000000;
 const size_t kReportIters = 1000;
 
 DEFINE_bool(client, false, "Whether this is a client sending traffic.");
+DEFINE_string(test, "fixed", "Which test to run: fixed, random, async.");
+
+enum TestType { kFixed, kRandom, kAsync };
 
 volatile bool quit = false;
 
@@ -38,11 +41,22 @@ int main(int argc, char* argv[]) {
     // signal(SIGALRM, interrupt_handler);
     // alarm(10);
 
+    TestType test_type;
+    if (FLAGS_test == "fixed") {
+        test_type = kFixed;
+    } else if (FLAGS_test == "random") {
+        test_type = kRandom;
+    } else if (FLAGS_test == "async") {
+        test_type = kAsync;
+    } else {
+        LOG(FATAL) << "Unknown test type: " << FLAGS_test;
+    }
+
     Channel channel;
-    int cnt = 0;
 
     if (FLAGS_client) {
-        AFXDPFactory::init(interface_name, "ebpf_transport.o", "ebpf_transport");
+        AFXDPFactory::init(interface_name, "ebpf_transport.o",
+                           "ebpf_transport");
         UcclEngine engine(QUEUE_ID, NUM_FRAMES, &channel, client_ip_str,
                           client_port, server_ip_str, server_port,
                           client_mac_str, server_mac_str);
@@ -60,34 +74,44 @@ int main(int argc, char* argv[]) {
         for (int j = 0; j < kTestMsgSize / sizeof(uint32_t); j++) {
             data_u32[j] = j;
         }
+
+        size_t sent_bytes = 0;
         std::vector<uint64_t> rtts;
         auto start_bw = std::chrono::high_resolution_clock::now();
+
         for (int i = 0; i < kTestIters; i++) {
+            size_t len = kTestMsgSize;
+            if (test_type == kFixed) {
+                len = kTestMsgSize;
+            } else if (test_type == kRandom) {
+                len = IntRand(1, kTestMsgSize);
+            }
+
             auto start = std::chrono::high_resolution_clock::now();
-            ep.uccl_send(conn_id, data, kTestMsgSize);
-            auto end = std::chrono::high_resolution_clock::now();
+            ep.uccl_send(conn_id, data, len);
             auto duration_us =
-                std::chrono::duration_cast<std::chrono::microseconds>(end -
-                                                                      start);
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::high_resolution_clock::now() - start);
+
+            sent_bytes += len;
+
             rtts.push_back(duration_us.count());
-            if (i % kReportIters == 0) {
+            if (i % kReportIters == 0 && i != 0) {
                 uint64_t med_latency, tail_latency;
                 med_latency = Percentile(rtts, 50);
                 tail_latency = Percentile(rtts, 99);
-                // 24B: 4B FCS + 8B frame delimiter + 12B interframe gap
-                double bw_gbps = 0.0;
                 auto end_bw = std::chrono::high_resolution_clock::now();
-                if (i != 0) {
-                    bw_gbps =
-                        kTestMsgSize * kReportIters *
-                        (AFXDP_MTU * 1.0 /
-                         (AFXDP_MTU - kNetHdrLen - kUcclHdrLen - 24)) *
-                        8.0 / 1024 / 1024 / 1024 /
-                        (std::chrono::duration_cast<std::chrono::microseconds>(
-                             end_bw - start_bw)
-                             .count() *
-                         1e-6);
-                }
+                // 24B: 4B FCS + 8B frame delimiter + 12B interframe gap
+                auto bw_gbps =
+                    sent_bytes *
+                    (AFXDP_MTU * 1.0 /
+                     (AFXDP_MTU - kNetHdrLen - kUcclHdrLen - 24)) *
+                    8.0 / 1024 / 1024 / 1024 /
+                    (std::chrono::duration_cast<std::chrono::microseconds>(
+                         end_bw - start_bw)
+                         .count() *
+                     1e-6);
+                sent_bytes = 0;
                 start_bw = end_bw;
 
                 LOG(INFO) << "Sent " << i
@@ -100,9 +124,8 @@ int main(int argc, char* argv[]) {
         engine.shutdown();
         engine_th.join();
     } else {
-        // AFXDPFactory::init(interface_name, "ebpf_transport_pktloss.o",
-        // "ebpf_transport");
-        AFXDPFactory::init(interface_name, "ebpf_transport.o", "ebpf_transport");
+        AFXDPFactory::init(interface_name, "ebpf_transport.o",
+                           "ebpf_transport");
         UcclEngine engine(QUEUE_ID, NUM_FRAMES, &channel, server_ip_str,
                           server_port, client_ip_str, client_port,
                           server_mac_str, client_mac_str);
@@ -120,12 +143,11 @@ int main(int argc, char* argv[]) {
         for (int i = 0; i < kTestIters; i++) {
             auto start = std::chrono::high_resolution_clock::now();
             ep.uccl_recv(conn_id, data, &len);
-            auto end = std::chrono::high_resolution_clock::now();
             auto duration_us =
-                std::chrono::duration_cast<std::chrono::microseconds>(end -
-                                                                      start);
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::high_resolution_clock::now() - start);
             /*
-            CHECK_EQ(len, kTestMsgSize) << "Received message size mismatches";
+            CHECK_LE(len, kTestMsgSize) << "Received message size mismatches";
             for (int j = 0; j < kTestMsgSize / sizeof(uint32_t); j++) {
             CHECK_EQ(reinterpret_cast<uint32_t*>(data)[j], j)
             << "Data mismatch at index " << j;

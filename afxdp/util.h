@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iomanip>
+#include <random>
 #include <sstream>
 #include <vector>
 
@@ -581,6 +582,21 @@ static inline void detach_shm(void* addr, size_t size) {
         perror("munmap");
         exit(EXIT_FAILURE);
     }
+}
+
+inline int IntRand(const int& min, const int& max) {
+    static thread_local std::mt19937 generator(std::random_device{}());
+    // Do not use "static thread_local" for distribution object, as this will
+    // corrupt objects with different min/max values. Note that this object is
+    // extremely cheap.
+    std::uniform_int_distribution<int> distribution(min, max);
+    return distribution(generator);
+}
+
+inline double FloatRand(const double& min, const double& max) {
+    static thread_local std::mt19937 generator(std::random_device{}());
+    std::uniform_real_distribution<double> distribution(min, max);
+    return distribution(generator);
 }
 
 }  // namespace uccl
