@@ -233,7 +233,8 @@ class AFXDPSocket {
     std::vector<frame_desc> recv_packets(uint32_t nb_frames);
     void populate_fill_queue(uint32_t nb_frames);
 
-#define FRAME_POOL_DEBUG
+// #define FRAME_POOL_DEBUG
+
 #ifdef FRAME_POOL_DEBUG
     std::set<uint64_t> free_frames_;
 #endif
@@ -254,16 +255,18 @@ class AFXDPSocket {
     inline void push_frame(uint64_t frame_offset) {
 #ifdef FRAME_POOL_DEBUG
         if (free_frames_.find(frame_offset) == free_frames_.end()) {
+            FrameBuf::clear_fields(frame_offset, umem_buffer_);
             free_frames_.insert(frame_offset);
             frame_pool_->push(frame_offset);
         } else {
-            LOG(ERROR) << "Frame offset " << std::hex << frame_offset
-                        << " size " << std::dec
-                        << FrameBuf::get_msgbuf_ptr(frame_offset, umem_buffer_)
+            CHECK(false) << "Frame offset " << std::hex << frame_offset
+                         << " size " << std::dec
+                         << FrameBuf::get_msgbuf_ptr(frame_offset, umem_buffer_)
                                 ->get_frame_len()
-                        << " already in free_frames_";
+                         << " already in free_frames_";
         }
 #else
+        FrameBuf::clear_fields(frame_offset, umem_buffer_);
         frame_pool_->push(frame_offset);
 #endif
     }

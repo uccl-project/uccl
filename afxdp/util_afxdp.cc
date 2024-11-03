@@ -282,11 +282,6 @@ uint32_t AFXDPSocket::send_packet(frame_desc frame) {
     struct xdp_desc *desc = xsk_ring_prod__tx_desc(&send_queue_, send_index);
     desc->addr = frame.frame_offset;
     desc->len = frame.frame_len;
-    /**
-     * v6.8 kernel has a NULL pointer deference bug:
-     * https://lore.kernel.org/netdev/Zfho1lRIg0cjpWwK@google.com/T/
-     */
-    desc->options = 0;
     xsk_ring_prod__submit(&send_queue_, 1);
     unpulled_tx_pkts_++;
 
@@ -331,6 +326,8 @@ uint32_t AFXDPSocket::send_packets(std::vector<frame_desc> &frames) {
 }
 
 void AFXDPSocket::populate_fill_queue(uint32_t nb_frames) {
+    // TODO(yang): why this will fill duplicate frames?
+#if 0
     uint32_t idx_fq;
     // Returns either 0 or nb_frames.
     int ret = xsk_ring_prod__reserve(&fill_queue_, nb_frames, &idx_fq);
@@ -342,9 +339,31 @@ void AFXDPSocket::populate_fill_queue(uint32_t nb_frames) {
 
     for (int i = 0; i < ret; i++) {
         auto offset = pop_frame();
-        *xsk_ring_prod__fill_addr(&fill_queue_, idx_fq++) = offset;
+        VLOG(3) << "populate_fill_queue pop_frame offset = " << std::hex <<
+        offset; *xsk_ring_prod__fill_addr(&fill_queue_, idx_fq++) = offset;
     }
     xsk_ring_prod__submit(&fill_queue_, ret);
+#endif
+
+    uint32_t idx_fq;
+    auto stock_frames = xsk_prod_nb_free(&fill_queue_, nb_frames);
+
+    if (stock_frames > 0) {
+        int ret = xsk_ring_prod__reserve(&fill_queue_, stock_frames, &idx_fq);
+
+        /* This should not happen, but just in case */
+        while (ret != stock_frames)
+            ret = xsk_ring_prod__reserve(&fill_queue_, stock_frames, &idx_fq);
+
+        for (int i = 0; i < stock_frames; i++)
+            *xsk_ring_prod__fill_addr(&fill_queue_, idx_fq++) = pop_frame();
+
+        fill_queue_entries_ += stock_frames;
+        VLOG(2) << "afxdp reserved fill_queue slots = " << ret
+                << " fill_queue_entries_ = " << fill_queue_entries_;
+
+        xsk_ring_prod__submit(&fill_queue_, stock_frames);
+    }
 }
 
 std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
@@ -357,9 +376,6 @@ std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
     VLOG(2) << "rx recv_packets num_frames = " << rcvd
             << " fill_queue_entries_ = " << fill_queue_entries_;
 
-    // Do filling even it is a small batch to control tail latency.
-    populate_fill_queue(XSK_RING_PROD__DEFAULT_NUM_DESCS - fill_queue_entries_);
-
     for (int i = 0; i < rcvd; i++) {
         const struct xdp_desc *desc =
             xsk_ring_cons__rx_desc(&recv_queue_, idx_rx++);
@@ -367,6 +383,10 @@ std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
     }
 
     xsk_ring_cons__release(&recv_queue_, rcvd);
+
+    // Do filling even it is a small batch to control tail latency.
+    populate_fill_queue(XSK_RING_PROD__DEFAULT_NUM_DESCS - fill_queue_entries_);
+
     return frames;
 }
 

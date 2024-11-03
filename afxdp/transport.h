@@ -644,12 +644,17 @@ class RXTracking {
                        payload_len);
                 app_buf_pos += payload_len;
 
-                // Free received frames that have been copied to app buf.
-                socket_->push_frame(msgbuf_iter->get_frame_offset());
-                if (msgbuf_iter->is_last()) break;
-                msgbuf_iter = msgbuf_iter->next();
+                auto *msgbuf_iter_tmp = msgbuf_iter;
 
+                if (msgbuf_iter->is_last()) {
+                    socket_->push_frame(msgbuf_iter_tmp->get_frame_offset());
+                    break;
+                }
+                msgbuf_iter = msgbuf_iter->next();
                 DCHECK(msgbuf_iter);
+
+                // Free received frames that have been copied to app buf.
+                socket_->push_frame(msgbuf_iter_tmp->get_frame_offset());
             }
 
             *app_buf_desc.buf_len = app_buf_pos;

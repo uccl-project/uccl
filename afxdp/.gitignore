@@ -2,3 +2,4 @@
 *_main
 *_test
 *.so
+*log.txt

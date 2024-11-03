@@ -42,8 +42,9 @@ struct Pcb {
 
     // Return the sender effective window in # of packets.
     uint32_t effective_wnd() const {
-        DCHECK(snd_nxt >= snd_una + snd_ooo_acks);
+        if (snd_nxt < snd_una + snd_ooo_acks) return 1;
         uint32_t inflight = snd_nxt - snd_una - snd_ooo_acks;
+        if (cwnd <= inflight) return 1;
         uint32_t effective_wnd = std::ceil((cwnd - inflight) * ecn_alpha);
         return effective_wnd == 0 ? 1 : effective_wnd;
     }
