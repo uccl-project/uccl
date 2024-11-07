@@ -107,7 +107,7 @@ class Endpoint {
                     sizeof(serv_addr)) >= 0)
             << "ERROR: binding";
 
-        DCHECK(!listen(listen_fd_, 5)) << "ERROR: listen";
+        DCHECK(!listen(listen_fd_, 128)) << "ERROR: listen";
         LOG(INFO) << "Server ready, listening on port " << kBootstrapPort;
     }
     ~Endpoint() { close(listen_fd_); }

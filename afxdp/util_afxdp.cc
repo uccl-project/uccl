@@ -371,7 +371,10 @@ std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
     std::vector<AFXDPSocket::frame_desc> frames;
     uint32_t idx_rx, rcvd;
     rcvd = xsk_ring_cons__peek(&recv_queue_, nb_frames, &idx_rx);
-    if (!rcvd) return frames;
+    if (!rcvd) {
+        kick_rx();
+        return frames;
+    }
     fill_queue_entries_ -= rcvd;
     VLOG(2) << "rx recv_packets num_frames = " << rcvd
             << " fill_queue_entries_ = " << fill_queue_entries_;

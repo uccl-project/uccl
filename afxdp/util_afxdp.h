@@ -289,6 +289,12 @@ class AFXDPSocket {
             sendto(xsk_fd_, NULL, 0, MSG_DONTWAIT, NULL, 0);
         }
     }
+
+    inline void kick_rx() {
+        if (xsk_ring_prod__needs_wakeup(&fill_queue_)) {
+            recvfrom(xsk_fd_, NULL, 0, MSG_DONTWAIT, NULL, 0);
+        }
+    }
 };
 
 }  // namespace uccl
