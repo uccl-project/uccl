@@ -1,5 +1,7 @@
 #include "util_afxdp.h"
 
+#include "transport_config.h"
+
 namespace uccl {
 
 AFXDPFactory afxdp_ctl;
@@ -327,44 +329,26 @@ uint32_t AFXDPSocket::send_packets(std::vector<frame_desc> &frames) {
 }
 
 void AFXDPSocket::populate_fill_queue(uint32_t nb_frames) {
-    // TODO(yang): why this will fill duplicate frames?
-#if 0
+    // TODO(yang): figure out why cloudlab needs xsk_prod_nb_free().
+#ifdef AWS_ENA
+    auto stock_frames = nb_frames;
+#else
+    auto stock_frames = xsk_prod_nb_free(&fill_queue_, nb_frames);
+#endif
+    if (stock_frames <= 0) return;
+
     uint32_t idx_fq;
-    // Returns either 0 or nb_frames.
-    int ret = xsk_ring_prod__reserve(&fill_queue_, nb_frames, &idx_fq);
+    int ret = xsk_ring_prod__reserve(&fill_queue_, stock_frames, &idx_fq);
     if (ret <= 0) return;
-    CHECK_EQ(ret, nb_frames);
-    fill_queue_entries_ += nb_frames;
+
+    for (int i = 0; i < ret; i++)
+        *xsk_ring_prod__fill_addr(&fill_queue_, idx_fq++) = pop_frame();
+
+    fill_queue_entries_ += ret;
     VLOG(2) << "afxdp reserved fill_queue slots = " << ret
             << " fill_queue_entries_ = " << fill_queue_entries_;
 
-    for (int i = 0; i < ret; i++) {
-        auto offset = pop_frame();
-        VLOG(3) << "populate_fill_queue pop_frame offset = " << std::hex <<
-        offset; *xsk_ring_prod__fill_addr(&fill_queue_, idx_fq++) = offset;
-    }
     xsk_ring_prod__submit(&fill_queue_, ret);
-#endif
-
-    uint32_t idx_fq;
-    auto stock_frames = xsk_prod_nb_free(&fill_queue_, nb_frames);
-
-    if (stock_frames > 0) {
-        int ret = xsk_ring_prod__reserve(&fill_queue_, stock_frames, &idx_fq);
-
-        /* This should not happen, but just in case */
-        while (ret != stock_frames)
-            ret = xsk_ring_prod__reserve(&fill_queue_, stock_frames, &idx_fq);
-
-        for (int i = 0; i < stock_frames; i++)
-            *xsk_ring_prod__fill_addr(&fill_queue_, idx_fq++) = pop_frame();
-
-        fill_queue_entries_ += stock_frames;
-        VLOG(2) << "afxdp reserved fill_queue slots = " << ret
-                << " fill_queue_entries_ = " << fill_queue_entries_;
-
-        xsk_ring_prod__submit(&fill_queue_, stock_frames);
-    }
 }
 
 std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
@@ -389,7 +373,7 @@ std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
     xsk_ring_cons__release(&recv_queue_, rcvd);
 
     // Do filling even it is a small batch to control tail latency.
-    populate_fill_queue(XSK_RING_PROD__DEFAULT_NUM_DESCS - fill_queue_entries_);
+    populate_fill_queue(rcvd);
 
     return frames;
 }

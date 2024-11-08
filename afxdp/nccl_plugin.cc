@@ -39,7 +39,7 @@ ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
     channel = new Channel();
 
     AFXDPFactory::init(interface_name,
-                       "/home/ubuntu/uccl/afxdp/ebpf_transport.o",
+                       "/opt/uccl/afxdp/ebpf_transport.o",
                        "ebpf_transport");
 
     std::string local_ip_str = get_dev_ip(interface_name);
