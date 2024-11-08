@@ -192,24 +192,8 @@ class Endpoint {
     // Sending the data by leveraging multiple port combinations.
     bool uccl_send(ConnectionID connection_id, const void *data,
                    const size_t len) {
-        Channel::Msg msg = {
-            .opcode = Channel::Msg::Op::kTx,
-            .data = const_cast<void *>(data),
-            .len_tosend = len,
-            .len_recvd = nullptr,
-            .connection_id = connection_id,
-        };
-        while (jring_mp_enqueue_bulk(channel_->tx_ring_, &msg, 1, nullptr) !=
-               1) {
-            // do nothing
-        }
-        // Wait for the completion.
-        while (jring_mc_dequeue_bulk(channel_->tx_comp_ring_, &msg, 1,
-                                     nullptr) != 1) {
-            // do nothing
-            // usleep(5);
-        }
-        return true;
+        DCHECK(uccl_send_async(connection_id, data, len));
+        return uccl_send_poll();
     }
 
     // Sending the data by leveraging multiple port combinations.
@@ -252,24 +236,8 @@ class Endpoint {
 
     // Receiving the data by leveraging multiple port combinations.
     bool uccl_recv(ConnectionID connection_id, void *data, size_t *len) {
-        Channel::Msg msg = {
-            .opcode = Channel::Msg::Op::kRx,
-            .data = data,
-            .len_tosend = 0,
-            .len_recvd = len,
-            .connection_id = connection_id,
-        };
-        while (jring_mp_enqueue_bulk(channel_->rx_ring_, &msg, 1, nullptr) !=
-               1) {
-            // do nothing
-        }
-        // Wait for the completion.
-        while (jring_mc_dequeue_bulk(channel_->rx_comp_ring_, &msg, 1,
-                                     nullptr) != 1) {
-            // do nothing
-            // usleep(5);
-        }
-        return true;
+        DCHECK(uccl_recv_async(connection_id, data, len));
+        return uccl_recv_poll();
     }
 
     // Receiving the data by leveraging multiple port combinations.

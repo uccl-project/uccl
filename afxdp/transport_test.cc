@@ -69,6 +69,7 @@ int main(int argc, char* argv[]) {
         auto ep = Endpoint(&channel);
         auto conn_id = ep.uccl_connect(server_ip_str);
 
+        size_t send_len = kTestMsgSize, recv_len = kTestMsgSize;
         auto* data = new uint8_t[kTestMsgSize];
         auto* data_u32 = reinterpret_cast<uint32_t*>(data);
         for (int j = 0; j < kTestMsgSize / sizeof(uint32_t); j++) {
@@ -80,20 +81,26 @@ int main(int argc, char* argv[]) {
         auto start_bw = std::chrono::high_resolution_clock::now();
 
         for (int i = 0; i < kTestIters; i++) {
-            size_t len = kTestMsgSize;
-            if (test_type == kFixed) {
-                len = kTestMsgSize;
+            if (test_type == kFixed || test_type == kAsync) {
+                send_len = kTestMsgSize;
             } else if (test_type == kRandom) {
-                len = IntRand(1, kTestMsgSize);
+                send_len = IntRand(1, kTestMsgSize);
             }
 
             auto start = std::chrono::high_resolution_clock::now();
-            ep.uccl_send(conn_id, data, len);
+            if (test_type == kAsync) {
+                ep.uccl_send_async(conn_id, data, send_len);
+                ep.uccl_recv_async(conn_id, data, &recv_len);
+                ep.uccl_send_poll();
+                ep.uccl_recv_poll();
+            } else {
+                ep.uccl_send(conn_id, data, send_len);
+            }
             auto duration_us =
                 std::chrono::duration_cast<std::chrono::microseconds>(
                     std::chrono::high_resolution_clock::now() - start);
 
-            sent_bytes += len;
+            sent_bytes += send_len;
 
             rtts.push_back(duration_us.count());
             if (i % kReportIters == 0 && i != 0) {
@@ -138,19 +145,28 @@ int main(int argc, char* argv[]) {
         auto ep = Endpoint(&channel);
         auto [conn_id, client_ip_str] = ep.uccl_accept();
 
+        size_t send_len = kTestMsgSize, recv_len = kTestMsgSize;
         auto* data = new uint8_t[kTestMsgSize];
-        size_t len;
+
         for (int i = 0; i < kTestIters; i++) {
             auto start = std::chrono::high_resolution_clock::now();
-            ep.uccl_recv(conn_id, data, &len);
+            if (test_type == kAsync) {
+                ep.uccl_recv_async(conn_id, data, &recv_len);
+                ep.uccl_send_async(conn_id, data, send_len);
+                ep.uccl_recv_poll();
+                ep.uccl_send_poll();
+            } else {
+                ep.uccl_recv(conn_id, data, &send_len);
+            }
             auto duration_us =
                 std::chrono::duration_cast<std::chrono::microseconds>(
                     std::chrono::high_resolution_clock::now() - start);
             /*
-            CHECK_LE(len, kTestMsgSize) << "Received message size mismatches";
+            CHECK_LE(recv_len, kTestMsgSize)
+                << "Received message size mismatches";
             for (int j = 0; j < kTestMsgSize / sizeof(uint32_t); j++) {
-            CHECK_EQ(reinterpret_cast<uint32_t*>(data)[j], j)
-            << "Data mismatch at index " << j;
+                CHECK_EQ(reinterpret_cast<uint32_t*>(data)[j], j)
+                    << "Data mismatch at index " << j;
             }
             memset(data, 0, kTestMsgSize);
             */
