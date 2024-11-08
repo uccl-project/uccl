@@ -919,6 +919,8 @@ class UcclFlow {
                     msgbuf = msgbuf->next();
                 }
                 if (!missing_frames_.empty()) {
+                    // TODO(yang): handling the cases where the number of
+                    // missing frames is larger than the free send_queue size.
                     socket_->send_packets(missing_frames_);
                     missing_frames_.clear();
                 }
@@ -1116,6 +1118,9 @@ class UcclFlow {
     void transmit_pending_packets() {
         auto remaining_packets =
             std::min(pcb_.effective_wnd(), tx_tracking_.num_unsent_msgbufs());
+        remaining_packets =
+            std::min(remaining_packets,
+                     socket_->send_queue_free_entries(remaining_packets));
         if (remaining_packets == 0) return;
 
         // Prepare the packets.

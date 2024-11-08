@@ -15,12 +15,14 @@ const size_t NUM_FRAMES = 4096 * 64;  // 1GB frame pool
 const size_t QUEUE_ID = 0;
 const size_t kTestMsgSize = 1024000;
 const size_t kTestIters = 1024000000;
-const size_t kReportIters = 1000;
+size_t kReportIters = 1000;
+const size_t kMaxInflight = 8;
 
 DEFINE_bool(client, false, "Whether this is a client sending traffic.");
-DEFINE_string(test, "fixed", "Which test to run: fixed, random, async.");
+DEFINE_string(test, "fixed",
+              "Which test to run: fixed, random, async, pingpong, mt.");
 
-enum TestType { kFixed, kRandom, kAsync };
+enum TestType { kFixed, kRandom, kAsync, kPingpong, kMt };
 
 volatile bool quit = false;
 
@@ -48,6 +50,12 @@ int main(int argc, char* argv[]) {
         test_type = kRandom;
     } else if (FLAGS_test == "async") {
         test_type = kAsync;
+        kReportIters = 100;
+    } else if (FLAGS_test == "pingpong") {
+        test_type = kPingpong;
+        kReportIters = 100;
+    } else if (FLAGS_test == "mt") {
+        test_type = kMt;
     } else {
         LOG(FATAL) << "Unknown test type: " << FLAGS_test;
     }
@@ -81,26 +89,55 @@ int main(int argc, char* argv[]) {
         auto start_bw = std::chrono::high_resolution_clock::now();
 
         for (int i = 0; i < kTestIters; i++) {
-            if (test_type == kFixed || test_type == kAsync) {
-                send_len = kTestMsgSize;
-            } else if (test_type == kRandom) {
-                send_len = IntRand(1, kTestMsgSize);
-            }
+            send_len = kTestMsgSize;
+            if (test_type == kRandom) send_len = IntRand(1, kTestMsgSize);
 
             auto start = std::chrono::high_resolution_clock::now();
-            if (test_type == kAsync) {
-                ep.uccl_send_async(conn_id, data, send_len);
-                ep.uccl_recv_async(conn_id, data, &recv_len);
-                ep.uccl_send_poll();
-                ep.uccl_recv_poll();
-            } else {
-                ep.uccl_send(conn_id, data, send_len);
+            switch (test_type) {
+                case kFixed:
+                case kRandom:
+                    ep.uccl_send(conn_id, data, send_len);
+                    sent_bytes += send_len;
+                    break;
+                case kAsync:
+                    for (int j = 0; j < kMaxInflight; j++) {
+                        ep.uccl_send_async(conn_id, data, send_len);
+                        ep.uccl_recv_async(conn_id, data, &recv_len);
+                        sent_bytes += send_len;
+                    }
+                    for (int j = 0; j < kMaxInflight; j++) {
+                        ep.uccl_send_poll();
+                        ep.uccl_recv_poll();
+                    }
+                    break;
+                case kPingpong:
+                    ep.uccl_send_async(conn_id, data, send_len);
+                    ep.uccl_recv_async(conn_id, data, &recv_len);
+                    ep.uccl_send_poll();
+                    ep.uccl_recv_poll();
+                    sent_bytes += send_len;
+                    break;
+                case kMt: {
+                    std::thread t1([&ep, conn_id, data, send_len]() {
+                        ep.uccl_send_async(conn_id, data, send_len);
+                        ep.uccl_send_poll();
+                    });
+                    std::thread t2([&ep, conn_id, data, &recv_len]() {
+                        ep.uccl_recv_async(conn_id, data, &recv_len);
+                        ep.uccl_recv_poll();
+                    });
+                    t1.join();
+                    t2.join();
+                    sent_bytes += send_len;
+                    break;
+                }
+                default:
+                    break;
             }
+
             auto duration_us =
                 std::chrono::duration_cast<std::chrono::microseconds>(
                     std::chrono::high_resolution_clock::now() - start);
-
-            sent_bytes += send_len;
 
             rtts.push_back(duration_us.count());
             if (i % kReportIters == 0 && i != 0) {
@@ -150,13 +187,42 @@ int main(int argc, char* argv[]) {
 
         for (int i = 0; i < kTestIters; i++) {
             auto start = std::chrono::high_resolution_clock::now();
-            if (test_type == kAsync) {
-                ep.uccl_recv_async(conn_id, data, &recv_len);
-                ep.uccl_send_async(conn_id, data, send_len);
-                ep.uccl_recv_poll();
-                ep.uccl_send_poll();
-            } else {
-                ep.uccl_recv(conn_id, data, &send_len);
+            switch (test_type) {
+                case kFixed:
+                case kRandom:
+                    ep.uccl_recv(conn_id, data, &send_len);
+                    break;
+                case kAsync:
+                    for (int j = 0; j < kMaxInflight; j++) {
+                        ep.uccl_recv_async(conn_id, data, &recv_len);
+                        ep.uccl_send_async(conn_id, data, send_len);
+                    }
+                    for (int j = 0; j < kMaxInflight; j++) {
+                        ep.uccl_recv_poll();
+                        ep.uccl_send_poll();
+                    }
+                    break;
+                case kPingpong:
+                    ep.uccl_recv_async(conn_id, data, &recv_len);
+                    ep.uccl_send_async(conn_id, data, send_len);
+                    ep.uccl_recv_poll();
+                    ep.uccl_send_poll();
+                    break;
+                case kMt: {
+                    std::thread t1([&ep, conn_id, data, &recv_len]() {
+                        ep.uccl_recv_async(conn_id, data, &recv_len);
+                        ep.uccl_recv_poll();
+                    });
+                    std::thread t2([&ep, conn_id, data, send_len]() {
+                        ep.uccl_send_async(conn_id, data, send_len);
+                        ep.uccl_send_poll();
+                    });
+                    t1.join();
+                    t2.join();
+                    break;
+                }
+                default:
+                    break;
             }
             auto duration_us =
                 std::chrono::duration_cast<std::chrono::microseconds>(
