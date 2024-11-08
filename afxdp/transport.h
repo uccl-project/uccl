@@ -46,7 +46,8 @@ class Channel {
         };
         Op opcode;
         void *data;
-        size_t *len_ptr;
+        size_t len_tosend;
+        size_t *len_recvd;
         ConnectionID connection_id;
     };
     static_assert(sizeof(Msg) % 4 == 0, "channelMsg must be 32-bit aligned");
@@ -190,11 +191,12 @@ class Endpoint {
 
     // Sending the data by leveraging multiple port combinations.
     bool uccl_send(ConnectionID connection_id, const void *data,
-                   const size_t &len) {
+                   const size_t len) {
         Channel::Msg msg = {
             .opcode = Channel::Msg::Op::kTx,
             .data = const_cast<void *>(data),
-            .len_ptr = const_cast<size_t *>(&len),
+            .len_tosend = len,
+            .len_recvd = nullptr,
             .connection_id = connection_id,
         };
         while (jring_mp_enqueue_bulk(channel_->tx_ring_, &msg, 1, nullptr) !=
@@ -212,11 +214,12 @@ class Endpoint {
 
     // Sending the data by leveraging multiple port combinations.
     bool uccl_send_async(ConnectionID connection_id, const void *data,
-                         const size_t &len) {
+                         const size_t len) {
         Channel::Msg msg = {
             .opcode = Channel::Msg::Op::kTx,
             .data = const_cast<void *>(data),
-            .len_ptr = const_cast<size_t *>(&len),
+            .len_tosend = len,
+            .len_recvd = nullptr,
             .connection_id = connection_id,
         };
         while (jring_mp_enqueue_bulk(channel_->tx_ring_, &msg, 1, nullptr) !=
@@ -252,7 +255,8 @@ class Endpoint {
         Channel::Msg msg = {
             .opcode = Channel::Msg::Op::kRx,
             .data = data,
-            .len_ptr = len,
+            .len_tosend = 0,
+            .len_recvd = len,
             .connection_id = connection_id,
         };
         while (jring_mp_enqueue_bulk(channel_->rx_ring_, &msg, 1, nullptr) !=
@@ -273,7 +277,8 @@ class Endpoint {
         Channel::Msg msg = {
             .opcode = Channel::Msg::Op::kRx,
             .data = data,
-            .len_ptr = len,
+            .len_tosend = 0,
+            .len_recvd = len,
             .connection_id = connection_id,
         };
         while (jring_mp_enqueue_bulk(channel_->rx_ring_, &msg, 1, nullptr) !=
@@ -1255,7 +1260,7 @@ class UcclEngine {
             if (jring_sc_dequeue_bulk(channel_->rx_ring_, &rx_work, 1,
                                       nullptr) == 1) {
                 VLOG(3) << "Rx jring dequeue";
-                supply_rx_app_buf(rx_work.data, rx_work.len_ptr);
+                supply_rx_app_buf(rx_work.data, rx_work.len_recvd);
             }
 
             auto frames = socket_->recv_packets(RECV_BATCH_SIZE);
@@ -1276,7 +1281,7 @@ class UcclEngine {
                                       nullptr) == 1) {
                 VLOG(3) << "Tx jring dequeue";
                 auto [tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames] =
-                    deserialize_msg(tx_work.data, *tx_work.len_ptr);
+                    deserialize_msg(tx_work.data, tx_work.len_tosend);
                 VLOG(3) << "Tx process_tx_msg";
                 // Append these tx frames to the flow's tx queue, and trigger
                 // intial tx. Future received ACKs will trigger more tx.

@@ -188,7 +188,6 @@ ncclResult_t pluginIsend(void* sendComm, void* data, int size, int tag,
     req->ctx = ctx;
     req->send = true;
     req->data_len = size;
-    // TODO(yang): fix Channel::Msg to accept size_t of data_len, not ptr.
     DCHECK(ep->uccl_send_async(ctx->conn_id, data, req->data_len));
 
     *request = req;
