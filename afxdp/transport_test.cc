@@ -104,36 +104,46 @@ int main(int argc, char* argv[]) {
                     sent_bytes += send_len;
                     break;
                 case kAsync: {
+                    std::vector<PollCtx*> poll_ctxs;
                     size_t step_size = send_len / kMaxInflight + 1;
                     for (int j = 0; j < kMaxInflight; j++) {
                         auto iter_len =
                             std::min(step_size, send_len - j * step_size);
                         auto* iter_data = data + j * step_size;
-                        ep.uccl_send_async(conn_id, iter_data, iter_len);
-                        ep.uccl_recv_async(conn_id, iter_data, &recv_len);
+
+                        PollCtx* poll_ctx;
+                        poll_ctx =
+                            ep.uccl_send_async(conn_id, iter_data, iter_len);
+                        poll_ctxs.push_back(poll_ctx);
+                        poll_ctx =
+                            ep.uccl_recv_async(conn_id, iter_data, &recv_len);
+                        poll_ctxs.push_back(poll_ctx);
                     }
-                    for (int j = 0; j < kMaxInflight; j++) {
-                        ep.uccl_send_poll();
-                        ep.uccl_recv_poll();
+                    for (auto poll_ctx : poll_ctxs) {
+                        ep.uccl_poll(poll_ctx);
                     }
                     sent_bytes += send_len;
                     break;
                 }
-                case kPingpong:
-                    ep.uccl_send_async(conn_id, data, send_len);
-                    ep.uccl_recv_async(conn_id, data, &recv_len);
-                    ep.uccl_send_poll();
-                    ep.uccl_recv_poll();
+                case kPingpong: {
+                    PollCtx *poll_ctx1, *poll_ctx2;
+                    poll_ctx1 = ep.uccl_send_async(conn_id, data, send_len);
+                    poll_ctx2 = ep.uccl_recv_async(conn_id, data, &recv_len);
+                    ep.uccl_poll(poll_ctx1);
+                    ep.uccl_poll(poll_ctx2);
                     sent_bytes += send_len;
                     break;
+                }
                 case kMt: {
                     std::thread t1([&ep, conn_id, data, send_len]() {
-                        ep.uccl_send_async(conn_id, data, send_len);
-                        ep.uccl_send_poll();
+                        PollCtx* poll_ctx =
+                            ep.uccl_send_async(conn_id, data, send_len);
+                        ep.uccl_poll(poll_ctx);
                     });
                     std::thread t2([&ep, conn_id, data, &recv_len]() {
-                        ep.uccl_recv_async(conn_id, data, &recv_len);
-                        ep.uccl_recv_poll();
+                        PollCtx* poll_ctx =
+                            ep.uccl_recv_async(conn_id, data, &recv_len);
+                        ep.uccl_poll(poll_ctx);
                     });
                     t1.join();
                     t2.join();
@@ -204,34 +214,43 @@ int main(int argc, char* argv[]) {
                     break;
                 case kAsync: {
                     size_t step_size = send_len / kMaxInflight + 1;
+                    std::vector<PollCtx*> poll_ctxs;
                     for (int j = 0; j < kMaxInflight; j++) {
                         auto iter_len =
                             std::min(step_size, send_len - j * step_size);
                         auto* iter_data = data + j * step_size;
-                        // TODO: memory barrier to ensure data is ready? 
-                        ep.uccl_recv_async(conn_id, iter_data, &recv_len);
-                        ep.uccl_send_async(conn_id, iter_data, iter_len);
+
+                        PollCtx* poll_ctx;
+                        poll_ctx =
+                            ep.uccl_recv_async(conn_id, iter_data, &recv_len);
+                        poll_ctxs.push_back(poll_ctx);
+                        poll_ctx =
+                            ep.uccl_send_async(conn_id, iter_data, iter_len);
+                        poll_ctxs.push_back(poll_ctx);
                     }
-                    for (int j = 0; j < kMaxInflight; j++) {
-                        ep.uccl_recv_poll();
-                        ep.uccl_send_poll();
+                    for (auto poll_ctx : poll_ctxs) {
+                        ep.uccl_poll(poll_ctx);
                     }
                     break;
                 }
-                case kPingpong:
-                    ep.uccl_recv_async(conn_id, data, &recv_len);
-                    ep.uccl_send_async(conn_id, data, send_len);
-                    ep.uccl_recv_poll();
-                    ep.uccl_send_poll();
+                case kPingpong: {
+                    PollCtx *poll_ctx1, *poll_ctx2;
+                    poll_ctx1 = ep.uccl_recv_async(conn_id, data, &recv_len);
+                    poll_ctx2 = ep.uccl_send_async(conn_id, data, send_len);
+                    ep.uccl_poll(poll_ctx1);
+                    ep.uccl_poll(poll_ctx2);
                     break;
+                }
                 case kMt: {
                     std::thread t1([&ep, conn_id, data, &recv_len]() {
-                        ep.uccl_recv_async(conn_id, data, &recv_len);
-                        ep.uccl_recv_poll();
+                        PollCtx* poll_ctx =
+                            ep.uccl_recv_async(conn_id, data, &recv_len);
+                        ep.uccl_poll(poll_ctx);
                     });
                     std::thread t2([&ep, conn_id, data, send_len]() {
-                        ep.uccl_send_async(conn_id, data, send_len);
-                        ep.uccl_send_poll();
+                        PollCtx* poll_ctx =
+                            ep.uccl_send_async(conn_id, data, send_len);
+                        ep.uccl_poll(poll_ctx);
                     });
                     t1.join();
                     t2.join();
@@ -247,11 +266,20 @@ int main(int argc, char* argv[]) {
             if (FLAGS_verify) {
                 CHECK_LE(recv_len, kTestMsgSize)
                     << "Received message size mismatches";
+                bool data_mismatch = false;
                 for (int j = 0; j < recv_len / sizeof(uint64_t); j++) {
-                    CHECK_EQ(data_u64[j], (uint64_t)(i + 1) * (uint64_t)j)
-                        << "Data mismatch at index " << j << " at iter "
-                        << i + 1;
+                    if (data_u64[j] != (uint64_t)(i + 1) * (uint64_t)j) {
+                        LOG(INFO) << data_u64[j] << " vs "
+                                  << (uint64_t)(i + 1) * (uint64_t)j
+                                  << " Data mismatch at index " << j
+                                  << " at iter " << i + 1;
+                        data_mismatch = true;
+                    }
+                    // CHECK_EQ(data_u64[j], (uint64_t)(i + 1) * (uint64_t)j)
+                    //     << "Data mismatch at index " << j << " at iter "
+                    //     << i + 1;
                 }
+                CHECK(data_mismatch == false) << "Data mismatch at iter " << i;
                 memset(data, 0, recv_len);
             }
 

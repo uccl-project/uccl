@@ -11,7 +11,7 @@ LIBS_SHARED = -Wl,-rpath=$(ABS_ROOT_PATH)/../lib/xdp-tools/lib/libxdp/ \
 CXXFLAGS = -O3 -g -std=c++17 -Wno-pointer-arith -Wno-interference-size -fPIC
 CLANGFLAGS = -O3 -g
 DEPS = *.h
-PLUGIN_SO = libnccl-net.so
+# PLUGIN_SO = libnccl-net.so
 
 lib_src = $(wildcard *.cc)
 lib_src := $(filter-out %_main.cc,$(lib_src))

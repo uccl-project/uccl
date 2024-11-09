@@ -10,12 +10,14 @@
 #include <bitset>
 #include <chrono>
 #include <concepts>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <future>
 #include <list>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -33,6 +35,13 @@ namespace uccl {
 
 typedef uint64_t ConnectionID;
 
+struct PollCtx {
+    bool done;
+    std::mutex mu;
+    std::condition_variable cv;
+    PollCtx() : done(false) {};
+};
+
 class Channel {
     constexpr static uint32_t kChannelSize = 1024;
 
@@ -49,6 +58,7 @@ class Channel {
         size_t len_tosend;
         size_t *len_recvd;
         ConnectionID connection_id;
+        PollCtx *poll_ctx;
     };
     static_assert(sizeof(Msg) % 4 == 0, "channelMsg must be 32-bit aligned");
 
@@ -192,83 +202,63 @@ class Endpoint {
     // Sending the data by leveraging multiple port combinations.
     bool uccl_send(ConnectionID connection_id, const void *data,
                    const size_t len) {
-        DCHECK(uccl_send_async(connection_id, data, len));
-        return uccl_send_poll();
+        auto *poll_ctx = uccl_send_async(connection_id, data, len);
+        return uccl_poll(poll_ctx);
     }
 
     // Sending the data by leveraging multiple port combinations.
-    bool uccl_send_async(ConnectionID connection_id, const void *data,
-                         const size_t len) {
+    PollCtx *uccl_send_async(ConnectionID connection_id, const void *data,
+                             const size_t len) {
         Channel::Msg msg = {
             .opcode = Channel::Msg::Op::kTx,
             .data = const_cast<void *>(data),
             .len_tosend = len,
             .len_recvd = nullptr,
             .connection_id = connection_id,
+            .poll_ctx = new PollCtx(),
         };
-        std::atomic_thread_fence(std::memory_order_release);
         while (jring_mp_enqueue_bulk(channel_->tx_ring_, &msg, 1, nullptr) !=
                1) {
             // do nothing
         }
-        return true;
-    }
-
-    bool uccl_send_poll() {
-        while (!uccl_send_poll_once()) {
-            // usleep(5);
-        }
-        return true;
-    }
-
-    bool uccl_send_poll_once() {
-        Channel::Msg msg;
-        // Check for the completion.
-        if (jring_mc_dequeue_bulk(channel_->tx_comp_ring_, &msg, 1, nullptr) ==
-            1) {
-            return true;
-        }
-        return false;
+        return msg.poll_ctx;
     }
 
     // Receiving the data by leveraging multiple port combinations.
     bool uccl_recv(ConnectionID connection_id, void *data, size_t *len) {
-        DCHECK(uccl_recv_async(connection_id, data, len));
-        return uccl_recv_poll();
+        auto *poll_ctx = uccl_recv_async(connection_id, data, len);
+        return uccl_poll(poll_ctx);
     }
 
     // Receiving the data by leveraging multiple port combinations.
-    bool uccl_recv_async(ConnectionID connection_id, void *data, size_t *len) {
+    PollCtx *uccl_recv_async(ConnectionID connection_id, void *data,
+                             size_t *len) {
         Channel::Msg msg = {
             .opcode = Channel::Msg::Op::kRx,
             .data = data,
             .len_tosend = 0,
             .len_recvd = len,
             .connection_id = connection_id,
+            .poll_ctx = new PollCtx(),
         };
         while (jring_mp_enqueue_bulk(channel_->rx_ring_, &msg, 1, nullptr) !=
                1) {
             // do nothing
         }
+        return msg.poll_ctx;
+    }
+
+    bool uccl_poll(PollCtx *ctx) {
+        while (!uccl_poll_once(ctx));
         return true;
     }
 
-    bool uccl_recv_poll() {
-        while (!uccl_recv_poll_once()) {
-            // usleep(5);
-        }
-        return true;
-    }
-
-    bool uccl_recv_poll_once() {
-        Channel::Msg msg;
-        // Check for the completion.
-        if (jring_mc_dequeue_bulk(channel_->rx_comp_ring_, &msg, 1, nullptr) ==
-            1) {
-            std::atomic_thread_fence(std::memory_order_acquire);
-            return true;
-        }
-        return false;
+    bool uccl_poll_once(PollCtx *ctx) {
+        std::unique_lock<std::mutex> lock(ctx->mu);
+        bool res = ctx->cv.wait_for(lock, std::chrono::microseconds(10),
+                                    [&ctx] { return ctx->done; });
+        if (res) delete ctx;
+        return res;
     }
 };
 
@@ -316,6 +306,8 @@ inline UcclPktHdr::UcclFlags operator&(UcclPktHdr::UcclFlags lhs,
 }
 
 class TXTracking {
+    std::deque<PollCtx *> poll_ctxs_;
+
    public:
     TXTracking() = delete;
     TXTracking(AFXDPSocket *socket, Channel *channel)
@@ -352,12 +344,15 @@ class TXTracking {
             }
 
             if (msgbuf->is_last()) {
-                // Tx a full message; wakeup app thread waiting on endpoint.
                 VLOG(3) << "Transmitted a complete message";
-                Channel::Msg tx_work;
-                while (jring_sp_enqueue_bulk(channel_->tx_comp_ring_, &tx_work,
-                                             1, nullptr) != 1) {
-                    // do nothing
+                // Tx a full message; wakeup app thread waiting on endpoint.
+                DCHECK(!poll_ctxs_.empty());
+                auto poll_ctx = poll_ctxs_.front();
+                poll_ctxs_.pop_front();
+                {
+                    std::lock_guard<std::mutex> lock(poll_ctx->mu);
+                    poll_ctx->done = true;
+                    poll_ctx->cv.notify_one();
                 }
             }
             // Free transmitted frames that are acked
@@ -368,7 +363,8 @@ class TXTracking {
     }
 
     void append(FrameBuf *msgbuf_head, FrameBuf *msgbuf_tail,
-                uint32_t num_frames) {
+                uint32_t num_frames, PollCtx *poll_ctx) {
+        poll_ctxs_.push_back(poll_ctx);
         VLOG(3) << "Appending " << num_frames << " frames "
                 << " num_unsent_msgbufs_ " << num_unsent_msgbufs_
                 << " last_msgbuf_ " << last_msgbuf_;
@@ -566,7 +562,7 @@ class RXTracking {
                 // receiving messages? Stash this ready message
                 ready_msg_stash_.push_back(
                     {cur_msg_train_head_, cur_msg_train_tail_});
-                try_copy_msgbuf_to_appbuf(nullptr, nullptr);
+                try_copy_msgbuf_to_appbuf(nullptr, nullptr, nullptr);
 
                 // Reset the message train for the next message.
                 cur_msg_train_head_ = nullptr;
@@ -585,9 +581,10 @@ class RXTracking {
      * It returns true if successfully copying the msgbuf to the app buffer;
      * otherwise false.
      */
-    void try_copy_msgbuf_to_appbuf(void *app_buf, size_t *app_buf_len) {
-        if (app_buf && app_buf_len)
-            app_buf_stash_.push_back({app_buf, app_buf_len});
+    void try_copy_msgbuf_to_appbuf(void *app_buf, size_t *app_buf_len,
+                                   PollCtx *poll_ctx) {
+        if (app_buf && app_buf_len && poll_ctx)
+            app_buf_stash_.push_back({app_buf, app_buf_len, poll_ctx});
 
         VLOG(2) << "ready_msg_stash_ size: " << ready_msg_stash_.size()
                 << " app_buf_stash_ size: " << app_buf_stash_.size();
@@ -627,11 +624,10 @@ class RXTracking {
             *app_buf_desc.buf_len = app_buf_pos;
 
             // Wakeup app thread waiting on endpoint.
-            Channel::Msg rx_work;
-            std::atomic_thread_fence(std::memory_order_release);
-            while (jring_sp_enqueue_bulk(channel_->rx_comp_ring_, &rx_work, 1,
-                                         nullptr) != 1) {
-                // do nothing
+            {
+                std::lock_guard<std::mutex> lock(app_buf_desc.poll_ctx->mu);
+                app_buf_desc.poll_ctx->done = true;
+                app_buf_desc.poll_ctx->cv.notify_one();
             }
 
             VLOG(3) << "Received a complete message " << app_buf_pos
@@ -661,6 +657,7 @@ class RXTracking {
     struct app_buf_t {
         void *buf;
         size_t *buf_len;
+        PollCtx *poll_ctx;
     };
     std::deque<app_buf_t> app_buf_stash_;
 };
@@ -797,9 +794,10 @@ class UcclFlow {
         transmit_pending_packets();
     }
 
-    void supply_rx_app_buf(void *app_buf, size_t *app_buf_len) {
+    void supply_rx_app_buf(void *app_buf, size_t *app_buf_len,
+                           PollCtx *poll_ctx) {
         VLOG(3) << "Supplying app buffer";
-        rx_tracking_.try_copy_msgbuf_to_appbuf(app_buf, app_buf_len);
+        rx_tracking_.try_copy_msgbuf_to_appbuf(app_buf, app_buf_len, poll_ctx);
     }
 
     /**
@@ -812,8 +810,9 @@ class UcclFlow {
      * aggregating to a partial or a full Message.
      */
     void tx_messages(FrameBuf *msg_head, FrameBuf *msg_tail,
-                     uint32_t num_frames) {
-        if (num_frames) tx_tracking_.append(msg_head, msg_tail, num_frames);
+                     uint32_t num_frames, PollCtx *poll_ctx) {
+        if (num_frames)
+            tx_tracking_.append(msg_head, msg_tail, num_frames, poll_ctx);
 
         // TODO(ilias): We first need to check whether the cwnd is < 1, so
         // that we fallback to rate-based CC.
@@ -1228,7 +1227,8 @@ class UcclEngine {
             if (jring_sc_dequeue_bulk(channel_->rx_ring_, &rx_work, 1,
                                       nullptr) == 1) {
                 VLOG(3) << "Rx jring dequeue";
-                supply_rx_app_buf(rx_work.data, rx_work.len_recvd);
+                supply_rx_app_buf(rx_work.data, rx_work.len_recvd,
+                                  rx_work.poll_ctx);
             }
 
             auto frames = socket_->recv_packets(RECV_BATCH_SIZE);
@@ -1247,14 +1247,14 @@ class UcclEngine {
 
             if (jring_sc_dequeue_bulk(channel_->tx_ring_, &tx_work, 1,
                                       nullptr) == 1) {
-                std::atomic_thread_fence(std::memory_order_acquire);
                 VLOG(3) << "Tx jring dequeue";
                 auto [tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames] =
                     deserialize_msg(tx_work.data, tx_work.len_tosend);
                 VLOG(3) << "Tx process_tx_msg";
                 // Append these tx frames to the flow's tx queue, and trigger
                 // intial tx. Future received ACKs will trigger more tx.
-                process_tx_msg(tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames);
+                process_tx_msg(tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames,
+                               tx_work.poll_ctx);
             }
 
             // process_tx_msg(nullptr, nullptr, 0);
@@ -1293,8 +1293,9 @@ class UcclEngine {
      * @param app_buf Pointer to the application buffer.
      * @param app_buf_len Pointer to the length of the application buffer.
      */
-    void supply_rx_app_buf(void *app_buf, size_t *app_buf_len) {
-        flow_->supply_rx_app_buf(app_buf, app_buf_len);
+    void supply_rx_app_buf(void *app_buf, size_t *app_buf_len,
+                           PollCtx *poll_ctx) {
+        flow_->supply_rx_app_buf(app_buf, app_buf_len, poll_ctx);
     }
 
     /**
@@ -1314,9 +1315,9 @@ class UcclEngine {
      * of the message.
      */
     void process_tx_msg(FrameBuf *msg_head, FrameBuf *msg_tail,
-                        uint32_t num_frames) {
+                        uint32_t num_frames, PollCtx *poll_ctx) {
         // TODO(yang): lookup the msg five-tuple in an active_flows_map
-        flow_->tx_messages(msg_head, msg_tail, num_frames);
+        flow_->tx_messages(msg_head, msg_tail, num_frames, poll_ctx);
     }
 
     /**
