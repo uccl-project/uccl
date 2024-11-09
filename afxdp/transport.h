@@ -35,11 +35,12 @@ namespace uccl {
 
 typedef uint64_t ConnectionID;
 
-struct PollCtx {
-    bool done;
+struct alignas(64) PollCtx {
     std::mutex mu;
     std::condition_variable cv;
-    PollCtx() : done(false) {};
+    std::atomic<bool> fence;
+    bool done;
+    PollCtx() : fence(false), done(false) {};
 };
 
 class Channel {
@@ -209,19 +210,20 @@ class Endpoint {
     // Sending the data by leveraging multiple port combinations.
     PollCtx *uccl_send_async(ConnectionID connection_id, const void *data,
                              const size_t len) {
+        auto *poll_ctx = new PollCtx();
         Channel::Msg msg = {
             .opcode = Channel::Msg::Op::kTx,
             .data = const_cast<void *>(data),
             .len_tosend = len,
             .len_recvd = nullptr,
             .connection_id = connection_id,
-            .poll_ctx = new PollCtx(),
+            .poll_ctx = poll_ctx,
         };
+        std::atomic_store_explicit(&poll_ctx->fence, true,
+                                   std::memory_order_release);
         while (jring_mp_enqueue_bulk(channel_->tx_ring_, &msg, 1, nullptr) !=
-               1) {
-            // do nothing
-        }
-        return msg.poll_ctx;
+               1);
+        return poll_ctx;
     }
 
     // Receiving the data by leveraging multiple port combinations.
@@ -233,19 +235,18 @@ class Endpoint {
     // Receiving the data by leveraging multiple port combinations.
     PollCtx *uccl_recv_async(ConnectionID connection_id, void *data,
                              size_t *len) {
+        auto *poll_ctx = new PollCtx();
         Channel::Msg msg = {
             .opcode = Channel::Msg::Op::kRx,
             .data = data,
             .len_tosend = 0,
             .len_recvd = len,
             .connection_id = connection_id,
-            .poll_ctx = new PollCtx(),
+            .poll_ctx = poll_ctx,
         };
         while (jring_mp_enqueue_bulk(channel_->rx_ring_, &msg, 1, nullptr) !=
-               1) {
-            // do nothing
-        }
-        return msg.poll_ctx;
+               1);
+        return poll_ctx;
     }
 
     bool uccl_poll(PollCtx *ctx) {
@@ -254,11 +255,20 @@ class Endpoint {
     }
 
     bool uccl_poll_once(PollCtx *ctx) {
-        std::unique_lock<std::mutex> lock(ctx->mu);
-        bool res = ctx->cv.wait_for(lock, std::chrono::microseconds(10),
-                                    [&ctx] { return ctx->done; });
-        if (res) delete ctx;
-        return res;
+        bool res;
+        {
+            std::unique_lock<std::mutex> lock(ctx->mu);
+            res = ctx->cv.wait_for(lock, std::chrono::microseconds(10),
+                                   [&ctx] { return ctx->done; });
+        }
+        if (!res) return false;
+
+        // Make the data written by the engine thread visible to the app thread.
+        std::ignore =
+            std::atomic_load_explicit(&ctx->fence, std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_acquire);
+        delete ctx;
+        return true;
     }
 };
 
@@ -624,6 +634,8 @@ class RXTracking {
             *app_buf_desc.buf_len = app_buf_pos;
 
             // Wakeup app thread waiting on endpoint.
+            std::atomic_store_explicit(&app_buf_desc.poll_ctx->fence, true,
+                                       std::memory_order_release);
             {
                 std::lock_guard<std::mutex> lock(app_buf_desc.poll_ctx->mu);
                 app_buf_desc.poll_ctx->done = true;
@@ -1247,6 +1259,11 @@ class UcclEngine {
 
             if (jring_sc_dequeue_bulk(channel_->tx_ring_, &tx_work, 1,
                                       nullptr) == 1) {
+                // Make data written by the app thread visible to the engine.
+                std::ignore = std::atomic_load_explicit(
+                    &tx_work.poll_ctx->fence, std::memory_order_relaxed);
+                std::atomic_thread_fence(std::memory_order_acquire);
+
                 VLOG(3) << "Tx jring dequeue";
                 auto [tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames] =
                     deserialize_msg(tx_work.data, tx_work.len_tosend);

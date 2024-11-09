@@ -87,7 +87,7 @@ int main(int argc, char* argv[]) {
 
         for (int i = 0; i < kTestIters; i++) {
             send_len = kTestMsgSize;
-            if (test_type == kRandom)
+            if (test_type == kRandom || test_type == kAsync)
                 send_len = IntRand(1, kTestMsgSize - 1024) + 1024;
 
             if (FLAGS_verify) {
@@ -115,9 +115,10 @@ int main(int argc, char* argv[]) {
                         poll_ctx =
                             ep.uccl_send_async(conn_id, iter_data, iter_len);
                         poll_ctxs.push_back(poll_ctx);
-                        poll_ctx =
-                            ep.uccl_recv_async(conn_id, iter_data, &recv_len);
-                        poll_ctxs.push_back(poll_ctx);
+                        // poll_ctx =
+                        //     ep.uccl_recv_async(conn_id, iter_data,
+                        //     &recv_len);
+                        // poll_ctxs.push_back(poll_ctx);
                     }
                     for (auto poll_ctx : poll_ctxs) {
                         ep.uccl_poll(poll_ctx);
@@ -224,9 +225,9 @@ int main(int argc, char* argv[]) {
                         poll_ctx =
                             ep.uccl_recv_async(conn_id, iter_data, &recv_len);
                         poll_ctxs.push_back(poll_ctx);
-                        poll_ctx =
-                            ep.uccl_send_async(conn_id, iter_data, iter_len);
-                        poll_ctxs.push_back(poll_ctx);
+                        // poll_ctx =
+                        //     ep.uccl_send_async(conn_id, iter_data, iter_len);
+                        // poll_ctxs.push_back(poll_ctx);
                     }
                     for (auto poll_ctx : poll_ctxs) {
                         ep.uccl_poll(poll_ctx);

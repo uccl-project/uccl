@@ -38,8 +38,7 @@ ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
 
     channel = new Channel();
 
-    AFXDPFactory::init(interface_name,
-                       "/opt/uccl/afxdp/ebpf_transport.o",
+    AFXDPFactory::init(interface_name, "/opt/uccl/afxdp/ebpf_transport.o",
                        "ebpf_transport");
 
     std::string local_ip_str = get_dev_ip(interface_name);
@@ -174,6 +173,7 @@ struct afxdp_request {
     struct afxdp_context* ctx;
     bool send;
     size_t data_len = 0;
+    PollCtx* poll_ctx = nullptr;
 };
 
 static std::atomic<size_t> inflight_send = 0;
@@ -188,7 +188,7 @@ ncclResult_t pluginIsend(void* sendComm, void* data, int size, int tag,
     req->ctx = ctx;
     req->send = true;
     req->data_len = size;
-    DCHECK(ep->uccl_send_async(ctx->conn_id, data, req->data_len));
+    req->poll_ctx = ep->uccl_send_async(ctx->conn_id, data, req->data_len);
 
     *request = req;
     return ncclSuccess;
@@ -203,7 +203,7 @@ ncclResult_t pluginIrecv(void* recvComm, int n, void** data, int* sizes,
     req->ctx = ctx;
     req->send = false;
     req->data_len = sizes[0];
-    DCHECK(ep->uccl_recv_async(ctx->conn_id, data[0], &req->data_len));
+    req->poll_ctx = ep->uccl_recv_async(ctx->conn_id, data[0], &req->data_len);
 
     *request = req;
     return ncclSuccess;
@@ -216,23 +216,17 @@ ncclResult_t pluginIflush(void* recvComm, int n, void** data, int* sizes,
 ncclResult_t pluginTest(void* request, int* done, int* size) {
     *done = 0;
     struct afxdp_request* req = static_cast<struct afxdp_request*>(request);
-    bool ret = false;
-    if (req->send) {
-        ret = ep->uccl_send_poll_once();
-        if (ret) {
+    bool ret = ep->uccl_poll_once(req->poll_ctx);
+    if (ret) {
+        if (req->send) {
             inflight_send -= req->data_len;
             // LOG(INFO) << "pluginTest send " << req->data_len << " " <<
             // inflight_send;
-        }
-    } else {
-        ret = ep->uccl_recv_poll_once();
-        if (ret) {
+        } else {
             inflight_recv -= req->data_len;
             // LOG(INFO) << "pluginTest recv " << req->data_len << " " <<
             // inflight_recv;
         }
-    }
-    if (ret) {
         *done = 1;
         *size = req->data_len;
         delete req;
