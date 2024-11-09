@@ -206,6 +206,7 @@ class Endpoint {
             .len_recvd = nullptr,
             .connection_id = connection_id,
         };
+        std::atomic_thread_fence(std::memory_order_release);
         while (jring_mp_enqueue_bulk(channel_->tx_ring_, &msg, 1, nullptr) !=
                1) {
             // do nothing
@@ -214,11 +215,7 @@ class Endpoint {
     }
 
     bool uccl_send_poll() {
-        Channel::Msg msg;
-        // Wait for the completion.
-        while (jring_mc_dequeue_bulk(channel_->tx_comp_ring_, &msg, 1,
-                                     nullptr) != 1) {
-            // do nothing
+        while (!uccl_send_poll_once()) {
             // usleep(5);
         }
         return true;
@@ -257,11 +254,7 @@ class Endpoint {
     }
 
     bool uccl_recv_poll() {
-        Channel::Msg msg;
-        // Wait for the completion.
-        while (jring_mc_dequeue_bulk(channel_->rx_comp_ring_, &msg, 1,
-                                     nullptr) != 1) {
-            // do nothing
+        while (!uccl_recv_poll_once()) {
             // usleep(5);
         }
         return true;
@@ -272,6 +265,7 @@ class Endpoint {
         // Check for the completion.
         if (jring_mc_dequeue_bulk(channel_->rx_comp_ring_, &msg, 1, nullptr) ==
             1) {
+            std::atomic_thread_fence(std::memory_order_acquire);
             return true;
         }
         return false;
@@ -634,6 +628,7 @@ class RXTracking {
 
             // Wakeup app thread waiting on endpoint.
             Channel::Msg rx_work;
+            std::atomic_thread_fence(std::memory_order_release);
             while (jring_sp_enqueue_bulk(channel_->rx_comp_ring_, &rx_work, 1,
                                          nullptr) != 1) {
                 // do nothing
@@ -1252,6 +1247,7 @@ class UcclEngine {
 
             if (jring_sc_dequeue_bulk(channel_->tx_ring_, &tx_work, 1,
                                       nullptr) == 1) {
+                std::atomic_thread_fence(std::memory_order_acquire);
                 VLOG(3) << "Tx jring dequeue";
                 auto [tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames] =
                     deserialize_msg(tx_work.data, tx_work.len_tosend);

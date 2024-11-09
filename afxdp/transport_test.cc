@@ -19,6 +19,7 @@ size_t kReportIters = 1000;
 const size_t kMaxInflight = 8;
 
 DEFINE_bool(client, false, "Whether this is a client sending traffic.");
+DEFINE_bool(verify, false, "Whether to check data correctness.");
 DEFINE_string(test, "fixed",
               "Which test to run: fixed, random, async, pingpong, mt.");
 
@@ -50,7 +51,6 @@ int main(int argc, char* argv[]) {
         test_type = kRandom;
     } else if (FLAGS_test == "async") {
         test_type = kAsync;
-        kReportIters = 100;
     } else if (FLAGS_test == "pingpong") {
         test_type = kPingpong;
         kReportIters = 100;
@@ -79,10 +79,7 @@ int main(int argc, char* argv[]) {
 
         size_t send_len = kTestMsgSize, recv_len = kTestMsgSize;
         auto* data = new uint8_t[kTestMsgSize];
-        auto* data_u32 = reinterpret_cast<uint32_t*>(data);
-        for (int j = 0; j < kTestMsgSize / sizeof(uint32_t); j++) {
-            data_u32[j] = j;
-        }
+        auto* data_u64 = reinterpret_cast<uint64_t*>(data);
 
         size_t sent_bytes = 0;
         std::vector<uint64_t> rtts;
@@ -90,7 +87,14 @@ int main(int argc, char* argv[]) {
 
         for (int i = 0; i < kTestIters; i++) {
             send_len = kTestMsgSize;
-            if (test_type == kRandom) send_len = IntRand(1, kTestMsgSize);
+            if (test_type == kRandom)
+                send_len = IntRand(1, kTestMsgSize - 1024) + 1024;
+
+            if (FLAGS_verify) {
+                for (int j = 0; j < send_len / sizeof(uint64_t); j++) {
+                    data_u64[j] = (uint64_t)(i + 1) * (uint64_t)j;
+                }
+            }
 
             auto start = std::chrono::high_resolution_clock::now();
             switch (test_type) {
@@ -99,17 +103,22 @@ int main(int argc, char* argv[]) {
                     ep.uccl_send(conn_id, data, send_len);
                     sent_bytes += send_len;
                     break;
-                case kAsync:
+                case kAsync: {
+                    size_t step_size = send_len / kMaxInflight + 1;
                     for (int j = 0; j < kMaxInflight; j++) {
-                        ep.uccl_send_async(conn_id, data, send_len);
-                        ep.uccl_recv_async(conn_id, data, &recv_len);
-                        sent_bytes += send_len;
+                        auto iter_len =
+                            std::min(step_size, send_len - j * step_size);
+                        auto* iter_data = data + j * step_size;
+                        ep.uccl_send_async(conn_id, iter_data, iter_len);
+                        ep.uccl_recv_async(conn_id, iter_data, &recv_len);
                     }
                     for (int j = 0; j < kMaxInflight; j++) {
                         ep.uccl_send_poll();
                         ep.uccl_recv_poll();
                     }
+                    sent_bytes += send_len;
                     break;
+                }
                 case kPingpong:
                     ep.uccl_send_async(conn_id, data, send_len);
                     ep.uccl_recv_async(conn_id, data, &recv_len);
@@ -184,6 +193,7 @@ int main(int argc, char* argv[]) {
 
         size_t send_len = kTestMsgSize, recv_len = kTestMsgSize;
         auto* data = new uint8_t[kTestMsgSize];
+        auto* data_u64 = reinterpret_cast<uint64_t*>(data);
 
         for (int i = 0; i < kTestIters; i++) {
             auto start = std::chrono::high_resolution_clock::now();
@@ -192,16 +202,22 @@ int main(int argc, char* argv[]) {
                 case kRandom:
                     ep.uccl_recv(conn_id, data, &send_len);
                     break;
-                case kAsync:
+                case kAsync: {
+                    size_t step_size = send_len / kMaxInflight + 1;
                     for (int j = 0; j < kMaxInflight; j++) {
-                        ep.uccl_recv_async(conn_id, data, &recv_len);
-                        ep.uccl_send_async(conn_id, data, send_len);
+                        auto iter_len =
+                            std::min(step_size, send_len - j * step_size);
+                        auto* iter_data = data + j * step_size;
+                        // TODO: memory barrier to ensure data is ready? 
+                        ep.uccl_recv_async(conn_id, iter_data, &recv_len);
+                        ep.uccl_send_async(conn_id, iter_data, iter_len);
                     }
                     for (int j = 0; j < kMaxInflight; j++) {
                         ep.uccl_recv_poll();
                         ep.uccl_send_poll();
                     }
                     break;
+                }
                 case kPingpong:
                     ep.uccl_recv_async(conn_id, data, &recv_len);
                     ep.uccl_send_async(conn_id, data, send_len);
@@ -227,15 +243,18 @@ int main(int argc, char* argv[]) {
             auto duration_us =
                 std::chrono::duration_cast<std::chrono::microseconds>(
                     std::chrono::high_resolution_clock::now() - start);
-            /*
-            CHECK_LE(recv_len, kTestMsgSize)
-                << "Received message size mismatches";
-            for (int j = 0; j < kTestMsgSize / sizeof(uint32_t); j++) {
-                CHECK_EQ(reinterpret_cast<uint32_t*>(data)[j], j)
-                    << "Data mismatch at index " << j;
+
+            if (FLAGS_verify) {
+                CHECK_LE(recv_len, kTestMsgSize)
+                    << "Received message size mismatches";
+                for (int j = 0; j < recv_len / sizeof(uint64_t); j++) {
+                    CHECK_EQ(data_u64[j], (uint64_t)(i + 1) * (uint64_t)j)
+                        << "Data mismatch at index " << j << " at iter "
+                        << i + 1;
+                }
+                memset(data, 0, recv_len);
             }
-            memset(data, 0, kTestMsgSize);
-            */
+
             LOG_EVERY_N(INFO, kReportIters)
                 << "Received " << i << " messages, rtt " << duration_us.count()
                 << " us";
