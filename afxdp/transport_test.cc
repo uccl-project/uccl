@@ -20,10 +20,10 @@ const size_t kMaxInflight = 8;
 
 DEFINE_bool(client, false, "Whether this is a client sending traffic.");
 DEFINE_bool(verify, false, "Whether to check data correctness.");
-DEFINE_string(test, "fixed",
-              "Which test to run: fixed, random, async, pingpong, mt.");
+DEFINE_bool(rand_len, false, "Whether to use randomized data length.");
+DEFINE_string(test, "basic", "Which test to run: basic, async, pingpong, mt.");
 
-enum TestType { kFixed, kRandom, kAsync, kPingpong, kMt };
+enum TestType { kBasic, kAsync, kPingpong, kMt };
 
 volatile bool quit = false;
 
@@ -45,15 +45,12 @@ int main(int argc, char* argv[]) {
     // alarm(10);
 
     TestType test_type;
-    if (FLAGS_test == "fixed") {
-        test_type = kFixed;
-    } else if (FLAGS_test == "random") {
-        test_type = kRandom;
+    if (FLAGS_test == "basic") {
+        test_type = kBasic;
     } else if (FLAGS_test == "async") {
         test_type = kAsync;
     } else if (FLAGS_test == "pingpong") {
         test_type = kPingpong;
-        kReportIters = 100;
     } else if (FLAGS_test == "mt") {
         test_type = kMt;
     } else {
@@ -80,6 +77,7 @@ int main(int argc, char* argv[]) {
         size_t send_len = kTestMsgSize, recv_len = kTestMsgSize;
         auto* data = new uint8_t[kTestMsgSize];
         auto* data_u64 = reinterpret_cast<uint64_t*>(data);
+        auto* data2 = new uint8_t[kTestMsgSize];
 
         size_t sent_bytes = 0;
         std::vector<uint64_t> rtts;
@@ -87,7 +85,7 @@ int main(int argc, char* argv[]) {
 
         for (int i = 0; i < kTestIters; i++) {
             send_len = kTestMsgSize;
-            if (test_type == kRandom || test_type == kAsync)
+            if (FLAGS_rand_len)
                 send_len = IntRand(1, kTestMsgSize - 1024) + 1024;
 
             if (FLAGS_verify) {
@@ -98,8 +96,7 @@ int main(int argc, char* argv[]) {
 
             auto start = std::chrono::high_resolution_clock::now();
             switch (test_type) {
-                case kFixed:
-                case kRandom:
+                case kBasic:
                     ep.uccl_send(conn_id, data, send_len);
                     sent_bytes += send_len;
                     break;
@@ -115,10 +112,6 @@ int main(int argc, char* argv[]) {
                         poll_ctx =
                             ep.uccl_send_async(conn_id, iter_data, iter_len);
                         poll_ctxs.push_back(poll_ctx);
-                        // poll_ctx =
-                        //     ep.uccl_recv_async(conn_id, iter_data,
-                        //     &recv_len);
-                        // poll_ctxs.push_back(poll_ctx);
                     }
                     for (auto poll_ctx : poll_ctxs) {
                         ep.uccl_poll(poll_ctx);
@@ -129,7 +122,7 @@ int main(int argc, char* argv[]) {
                 case kPingpong: {
                     PollCtx *poll_ctx1, *poll_ctx2;
                     poll_ctx1 = ep.uccl_send_async(conn_id, data, send_len);
-                    poll_ctx2 = ep.uccl_recv_async(conn_id, data, &recv_len);
+                    poll_ctx2 = ep.uccl_recv_async(conn_id, data2, &recv_len);
                     ep.uccl_poll(poll_ctx1);
                     ep.uccl_poll(poll_ctx2);
                     sent_bytes += send_len;
@@ -141,9 +134,9 @@ int main(int argc, char* argv[]) {
                             ep.uccl_send_async(conn_id, data, send_len);
                         ep.uccl_poll(poll_ctx);
                     });
-                    std::thread t2([&ep, conn_id, data, &recv_len]() {
+                    std::thread t2([&ep, conn_id, data2, &recv_len]() {
                         PollCtx* poll_ctx =
-                            ep.uccl_recv_async(conn_id, data, &recv_len);
+                            ep.uccl_recv_async(conn_id, data2, &recv_len);
                         ep.uccl_poll(poll_ctx);
                     });
                     t1.join();
@@ -205,12 +198,12 @@ int main(int argc, char* argv[]) {
         size_t send_len = kTestMsgSize, recv_len = kTestMsgSize;
         auto* data = new uint8_t[kTestMsgSize];
         auto* data_u64 = reinterpret_cast<uint64_t*>(data);
+        auto* data2 = new uint8_t[kTestMsgSize];
 
         for (int i = 0; i < kTestIters; i++) {
             auto start = std::chrono::high_resolution_clock::now();
             switch (test_type) {
-                case kFixed:
-                case kRandom:
+                case kBasic:
                     ep.uccl_recv(conn_id, data, &send_len);
                     break;
                 case kAsync: {
@@ -225,9 +218,6 @@ int main(int argc, char* argv[]) {
                         poll_ctx =
                             ep.uccl_recv_async(conn_id, iter_data, &recv_len);
                         poll_ctxs.push_back(poll_ctx);
-                        // poll_ctx =
-                        //     ep.uccl_send_async(conn_id, iter_data, iter_len);
-                        // poll_ctxs.push_back(poll_ctx);
                     }
                     for (auto poll_ctx : poll_ctxs) {
                         ep.uccl_poll(poll_ctx);
@@ -237,7 +227,7 @@ int main(int argc, char* argv[]) {
                 case kPingpong: {
                     PollCtx *poll_ctx1, *poll_ctx2;
                     poll_ctx1 = ep.uccl_recv_async(conn_id, data, &recv_len);
-                    poll_ctx2 = ep.uccl_send_async(conn_id, data, send_len);
+                    poll_ctx2 = ep.uccl_send_async(conn_id, data2, send_len);
                     ep.uccl_poll(poll_ctx1);
                     ep.uccl_poll(poll_ctx2);
                     break;
@@ -248,9 +238,9 @@ int main(int argc, char* argv[]) {
                             ep.uccl_recv_async(conn_id, data, &recv_len);
                         ep.uccl_poll(poll_ctx);
                     });
-                    std::thread t2([&ep, conn_id, data, send_len]() {
+                    std::thread t2([&ep, conn_id, data2, send_len]() {
                         PollCtx* poll_ctx =
-                            ep.uccl_send_async(conn_id, data, send_len);
+                            ep.uccl_send_async(conn_id, data2, send_len);
                         ep.uccl_poll(poll_ctx);
                     });
                     t1.join();
@@ -267,20 +257,11 @@ int main(int argc, char* argv[]) {
             if (FLAGS_verify) {
                 CHECK_LE(recv_len, kTestMsgSize)
                     << "Received message size mismatches";
-                bool data_mismatch = false;
                 for (int j = 0; j < recv_len / sizeof(uint64_t); j++) {
-                    if (data_u64[j] != (uint64_t)(i + 1) * (uint64_t)j) {
-                        LOG(INFO) << data_u64[j] << " vs "
-                                  << (uint64_t)(i + 1) * (uint64_t)j
-                                  << " Data mismatch at index " << j
-                                  << " at iter " << i + 1;
-                        data_mismatch = true;
-                    }
-                    // CHECK_EQ(data_u64[j], (uint64_t)(i + 1) * (uint64_t)j)
-                    //     << "Data mismatch at index " << j << " at iter "
-                    //     << i + 1;
+                    CHECK_EQ(data_u64[j], (uint64_t)(i + 1) * (uint64_t)j)
+                        << "Data mismatch at index " << j << " at iter "
+                        << i + 1;
                 }
-                CHECK(data_mismatch == false) << "Data mismatch at iter " << i;
                 memset(data, 0, recv_len);
             }
 
