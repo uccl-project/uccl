@@ -3,7 +3,7 @@
 namespace uccl {
 
 Endpoint::Endpoint(Channel *channel)
-    : channel_(channel), next_avail_conn_id_(0x1), ctx_pool_(kMaxInflightMsg) {
+    : channel_(channel), next_avail_flow_id_(0x1), ctx_pool_(kMaxInflightMsg) {
     for (int i = 0; i < kMaxInflightMsg; i++) {
         ctx_pool_.push(new PollCtx());
     }
@@ -35,7 +35,7 @@ Endpoint::~Endpoint() {
     close(listen_fd_);
 }
 
-ConnectionID Endpoint::uccl_connect(std::string remote_ip) {
+FlowID Endpoint::uccl_connect(std::string remote_ip) {
     struct sockaddr_in serv_addr;
     struct hostent *server;
     int bootstrap_fd;
@@ -62,33 +62,47 @@ ConnectionID Endpoint::uccl_connect(std::string remote_ip) {
         LOG(INFO) << "Connecting... Make sure the server is up.";
         sleep(1);
     }
+    LOG(INFO) << "Connected!";
 
     int flag = 1;
     setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void *)&flag,
                sizeof(int));
 
-    ConnectionID conn_id;
-    int ret = read(bootstrap_fd, &conn_id, sizeof(ConnectionID));
-    DCHECK(ret == sizeof(ConnectionID)) << "ERROR: reading connection_id";
+    FlowID flow_id;
+    int ret = read(bootstrap_fd, &flow_id, sizeof(FlowID));
+    DCHECK(ret == sizeof(FlowID)) << "ERROR: reading flow_id";
+    DCHECK(bootstrap_fd_map_.find(flow_id) == bootstrap_fd_map_.end())
+        << "Dup FlowID";
+    bootstrap_fd_map_[flow_id] = bootstrap_fd;
 
-    DCHECK(bootstrap_fd_map_.find(conn_id) == bootstrap_fd_map_.end())
-        << "Dup ConnectionID";
-    bootstrap_fd_map_[conn_id] = bootstrap_fd;
+    char remote_mac_char[ETH_ALEN];
+    ret = read(bootstrap_fd, remote_mac_char, ETH_ALEN);
+    DCHECK(ret == ETH_ALEN) << "ERROR: reading remote_mac";
+    std::string remote_mac = mac_to_str(remote_mac_char);
 
-    return conn_id;
+    char local_mac_char[ETH_ALEN];
+    std::string local_mac = get_dev_mac(interface_name);
+    str_to_mac(local_mac, local_mac_char);
+    ret = write(bootstrap_fd, local_mac_char, ETH_ALEN);
+    DCHECK(ret == ETH_ALEN) << "ERROR: writing local_mac";
+
+    install_flow_via_channel(remote_ip, remote_mac, flow_id);
+
+    return flow_id;
 }
 
-std::tuple<ConnectionID, std::string> Endpoint::uccl_accept() {
+std::tuple<FlowID, std::string> Endpoint::uccl_accept() {
     struct sockaddr_in cli_addr;
     socklen_t clilen = sizeof(cli_addr);
     int bootstrap_fd;
 
+    LOG(INFO) << "Accepting...";
     // Accept connection and set nonblocking and nodelay
     bootstrap_fd = accept(listen_fd_, (struct sockaddr *)&cli_addr, &clilen);
     DCHECK(bootstrap_fd >= 0) << "ERROR: accept";
-    auto ip_str = ip_to_str(cli_addr.sin_addr.s_addr);
+    auto remote_ip = ip_to_str(cli_addr.sin_addr.s_addr);
 
-    LOG(INFO) << "Accepting from " << ip_str << " (0x" << std::hex
+    LOG(INFO) << "Accept from " << remote_ip << " (0x" << std::hex
               << cli_addr.sin_addr.s_addr << std::dec << ":"
               << cli_addr.sin_port << ")";
 
@@ -97,58 +111,68 @@ std::tuple<ConnectionID, std::string> Endpoint::uccl_accept() {
                sizeof(int));
 
     // TODO(yang): making it unique across all servers.
-    ConnectionID conn_id = next_avail_conn_id_++;
+    FlowID flow_id = next_avail_flow_id_++;
 
-    DCHECK(bootstrap_fd_map_.find(conn_id) == bootstrap_fd_map_.end())
-        << "Dup ConnectionID";
-    bootstrap_fd_map_[conn_id] = bootstrap_fd;
+    DCHECK(bootstrap_fd_map_.find(flow_id) == bootstrap_fd_map_.end())
+        << "Dup FlowID";
+    bootstrap_fd_map_[flow_id] = bootstrap_fd;
+    int ret = write(bootstrap_fd, &flow_id, sizeof(FlowID));
+    DCHECK(ret == sizeof(FlowID)) << "ERROR: writing flow_id";
 
-    int ret = write(bootstrap_fd, &conn_id, sizeof(ConnectionID));
-    DCHECK(ret == sizeof(ConnectionID)) << "ERROR: writing connection_id";
+    char local_mac_char[ETH_ALEN];
+    std::string local_mac = get_dev_mac(interface_name);
+    str_to_mac(local_mac, local_mac_char);
+    ret = write(bootstrap_fd, local_mac_char, ETH_ALEN);
+    DCHECK(ret == ETH_ALEN) << "ERROR: writing local_mac";
 
-    return std::make_tuple(conn_id, ip_str);
+    char remote_mac_char[ETH_ALEN];
+    ret = read(bootstrap_fd, remote_mac_char, ETH_ALEN);
+    DCHECK(ret == ETH_ALEN) << "ERROR: reading remote_mac";
+    std::string remote_mac = mac_to_str(remote_mac_char);
+
+    install_flow_via_channel(remote_ip, remote_mac, flow_id);
+
+    return std::make_tuple(flow_id, remote_ip);
 }
 
-bool Endpoint::uccl_send(ConnectionID connection_id, const void *data,
-                         const size_t len) {
-    auto *poll_ctx = uccl_send_async(connection_id, data, len);
+bool Endpoint::uccl_send(FlowID flow_id, const void *data, const size_t len) {
+    auto *poll_ctx = uccl_send_async(flow_id, data, len);
     return uccl_poll(poll_ctx);
 }
 
-PollCtx *Endpoint::uccl_send_async(ConnectionID connection_id, const void *data,
+PollCtx *Endpoint::uccl_send_async(FlowID flow_id, const void *data,
                                    const size_t len) {
     auto *poll_ctx = ctx_pool_.pop();
     Channel::Msg msg = {
         .opcode = Channel::Msg::Op::kTx,
+        .flow_id = flow_id,
         .data = const_cast<void *>(data),
         .len_tosend = len,
         .len_recvd = nullptr,
-        .connection_id = connection_id,
         .poll_ctx = poll_ctx,
     };
     std::atomic_store_explicit(&poll_ctx->fence, true,
                                std::memory_order_release);
-    while (jring_mp_enqueue_bulk(channel_->tx_ring_, &msg, 1, nullptr) != 1);
+    while (jring_mp_enqueue_bulk(channel_->tx_cmdq_, &msg, 1, nullptr) != 1);
     return poll_ctx;
 }
 
-bool Endpoint::uccl_recv(ConnectionID connection_id, void *data, size_t *len) {
-    auto *poll_ctx = uccl_recv_async(connection_id, data, len);
+bool Endpoint::uccl_recv(FlowID flow_id, void *data, size_t *len) {
+    auto *poll_ctx = uccl_recv_async(flow_id, data, len);
     return uccl_poll(poll_ctx);
 }
 
-PollCtx *Endpoint::uccl_recv_async(ConnectionID connection_id, void *data,
-                                   size_t *len) {
+PollCtx *Endpoint::uccl_recv_async(FlowID flow_id, void *data, size_t *len) {
     auto *poll_ctx = ctx_pool_.pop();
     Channel::Msg msg = {
         .opcode = Channel::Msg::Op::kRx,
+        .flow_id = flow_id,
         .data = data,
         .len_tosend = 0,
         .len_recvd = len,
-        .connection_id = connection_id,
         .poll_ctx = poll_ctx,
     };
-    while (jring_mp_enqueue_bulk(channel_->rx_ring_, &msg, 1, nullptr) != 1);
+    while (jring_mp_enqueue_bulk(channel_->rx_cmdq_, &msg, 1, nullptr) != 1);
     return poll_ctx;
 }
 
@@ -175,6 +199,19 @@ bool Endpoint::uccl_poll_once(PollCtx *ctx) {
     ctx_pool_.push(ctx);
     return true;
 }
+
+void Endpoint::install_flow_via_channel(const std::string remote_ip,
+                                        const std::string remote_mac,
+                                        FlowID flow_id) {
+    Channel::CtrlMsg ctrl_msg = {
+        .opcode = Channel::CtrlMsg::Op::kFlowAdd,
+        .flow_id = flow_id,
+        .remote_addr = htonl(str_to_ip(remote_ip)),
+    };
+    str_to_mac(remote_mac, ctrl_msg.remote_l2_addr);
+    while (jring_mp_enqueue_bulk(channel_->ctrl_cmdq_, &ctrl_msg, 1, nullptr) !=
+           1);
+};
 
 void TXTracking::receive_acks(uint32_t num_acked_pkts) {
     VLOG(3) << "Received " << num_acked_pkts << " acks "
@@ -417,7 +454,7 @@ void RXTracking::try_copy_msgbuf_to_appbuf(void *app_buf, size_t *app_buf_len,
 
 std::string UcclFlow::to_string() const {
     std::string s;
-    s += "\t\t" + pcb_.to_string() + "\n\t\t[TX] pending msgbufs unsent: " +
+    s += "\n\t\t" + pcb_.to_string() + "\n\t\t[TX] pending msgbufs unsent: " +
          std::to_string(tx_tracking_.num_unsent_msgbufs()) +
          "\n\t\t[RX] ready msgs unconsumed: " +
          std::to_string(rx_tracking_.ready_msg_stash_.size());
@@ -627,11 +664,11 @@ void UcclFlow::prepare_l4header(uint8_t *pkt_addr,
     memset(tcph, 0, sizeof(tcphdr));
 #ifdef USING_MULTIPATH
     static uint16_t rand_port = 0;
-    tcph->source = htons(local_port_ + (rand_port++) % 8);
-    tcph->dest = htons(remote_port_ + (rand_port++) % 8);
+    tcph->source = htons(base_port + (rand_port++) % 8);
+    tcph->dest = htons(base_port + (rand_port++) % 8);
 #else
-    tcph->source = htons(local_port_);
-    tcph->dest = htons(remote_port_);
+    tcph->source = htons(base_port);
+    tcph->dest = htons(base_port);
 #endif
     tcph->doff = 5;
     // TODO(yang): tcpdump shows wrong checksum. Need to fix it.
@@ -641,11 +678,11 @@ void UcclFlow::prepare_l4header(uint8_t *pkt_addr,
     auto *udph = (udphdr *)(pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
 #ifdef USING_MULTIPATH
     static uint16_t rand_port = 0;
-    udph->source = htons(local_port_ + (rand_port++) % 8);
-    udph->dest = htons(remote_port_ + (rand_port++) % 8);
+    udph->source = htons(base_port + (rand_port++) % 8);
+    udph->dest = htons(base_port + (rand_port++) % 8);
 #else
-    udph->source = htons(local_port_);
-    udph->dest = htons(remote_port_);
+    udph->source = htons(base_port);
+    udph->dest = htons(base_port);
 #endif
     udph->len = htons(sizeof(udphdr) + payload_bytes);
     udph->check = htons(0);
@@ -663,6 +700,7 @@ void UcclFlow::prepare_ucclhdr(uint8_t *pkt_addr, uint32_t seqno,
     ucclh->msg_flags = msg_flags;
     ucclh->seqno = be32_t(seqno);
     ucclh->ackno = be32_t(ackno);
+    ucclh->flow_id = be64_t(flow_id_);
 
     for (size_t i = 0; i < sizeof(UcclPktHdr::sack_bitmap) /
                                sizeof(UcclPktHdr::sack_bitmap[0]);
@@ -711,6 +749,7 @@ void UcclFlow::prepare_datapacket(FrameBuf *msg_buf, uint32_t seqno) const {
     ucclh->msg_flags = msg_buf->msg_flags();
 
     ucclh->seqno = be32_t(seqno);
+    ucclh->flow_id = be64_t(flow_id_);
 }
 
 void UcclFlow::fast_retransmit() {
@@ -778,6 +817,7 @@ void UcclEngine::run() {
     // TODO(yang): maintain a queue of rx_work and tx_work
     Channel::Msg rx_work;
     Channel::Msg tx_work;
+    std::unordered_map<FlowID, std::vector<FrameBuf *>> rx_msgbuf_map_;
 
     while (!shutdown_) {
         // Calculate the time elapsed since the last periodic
@@ -791,27 +831,33 @@ void UcclEngine::run() {
             last_periodic_timestamp_ = now;
         }
 
-        if (jring_sc_dequeue_bulk(channel_->rx_ring_, &rx_work, 1, nullptr) ==
+        if (jring_sc_dequeue_bulk(channel_->rx_cmdq_, &rx_work, 1, nullptr) ==
             1) {
             VLOG(3) << "Rx jring dequeue";
-            supply_rx_app_buf(rx_work.data, rx_work.len_recvd,
-                              rx_work.poll_ctx);
+            rx_supply_app_buf(rx_work.data, rx_work.len_recvd, rx_work.poll_ctx,
+                              rx_work.flow_id);
         }
 
         auto frames = socket_->recv_packets(RECV_BATCH_SIZE);
         if (frames.size()) {
             VLOG(3) << "Rx recv_packets " << frames.size();
-            std::vector<FrameBuf *> msgbufs;
-            msgbufs.reserve(frames.size());
             for (auto &frame : frames) {
                 auto *msgbuf = FrameBuf::Create(
                     frame.frame_offset, socket_->umem_buffer_, frame.frame_len);
-                msgbufs.push_back(msgbuf);
+                auto *pkt_addr = msgbuf->get_pkt_addr();
+                auto *ucclh =
+                    reinterpret_cast<UcclPktHdr *>(pkt_addr + kNetHdrLen);
+                auto flow_id = ucclh->flow_id.value();
+                rx_msgbuf_map_[flow_id].push_back(msgbuf);
             }
-            process_rx_msg(msgbufs);
+            for (auto &[flow_id, msgbufs] : rx_msgbuf_map_) {
+                if (msgbufs.empty()) continue;
+                process_rx_msg(msgbufs, flow_id);
+                msgbufs.clear();
+            }
         }
 
-        if (jring_sc_dequeue_bulk(channel_->tx_ring_, &tx_work, 1, nullptr) ==
+        if (jring_sc_dequeue_bulk(channel_->tx_cmdq_, &tx_work, 1, nullptr) ==
             1) {
             // Make data written by the app thread visible to the engine.
             std::ignore = std::atomic_load_explicit(&tx_work.poll_ctx->fence,
@@ -825,18 +871,20 @@ void UcclEngine::run() {
             // Append these tx frames to the flow's tx queue, and trigger
             // intial tx. Future received ACKs will trigger more tx.
             process_tx_msg(tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames,
-                           tx_work.poll_ctx);
+                           tx_work.poll_ctx, tx_work.flow_id);
         }
 
         // process_tx_msg(nullptr, nullptr, 0);
     }
 
     // This will reset flow pcb state.
-    flow_->shutdown();
+    for (auto [flow_id, flow] : active_flows_map_) {
+        flow->shutdown();
+        delete flow;
+    }
     // This will flush all unpolled tx frames.
     socket_->shutdown();
 
-    delete flow_;
     delete socket_;
 }
 
@@ -853,19 +901,31 @@ void UcclEngine::periodic_process() {
 }
 
 void UcclEngine::handle_rto() {
-    // TODO(yang): maintain active_flows_map_
-    auto is_active_flow = flow_->periodic_check();
-    DCHECK(is_active_flow);
+    for (auto [flow_id, flow] : active_flows_map_) {
+        auto is_active_flow = flow->periodic_check();
+        DCHECK(is_active_flow);
+    }
+}
+
+void UcclEngine::process_ctl_reqs() {
+    Channel::CtrlMsg ctrl_work;
+    if (jring_sc_dequeue_bulk(channel_->ctrl_cmdq_, &ctrl_work, 1, nullptr) ==
+        1) {
+        VLOG(3) << "Ctrl jring dequeue";
+        install_flow(ctrl_work.remote_addr, ctrl_work.remote_l2_addr,
+                     ctrl_work.flow_id);
+    }
 }
 
 void UcclEngine::dump_status() {
     std::string s;
-    s += "\n\t\t[Uccl Engine] " + Format("%x [queue %d] <-> %x [queue 0]\n",
-                                         flow_->local_addr_, socket_->queue_id_,
-                                         flow_->remote_addr_);
-    s += flow_->to_string();
+    s += "\n\t[Uccl Engine] ";
+    for (auto [flow_id, flow] : active_flows_map_) {
+        s += Format("\n\t\t%x [queue %d] <-> %x [queue 0]\n", flow->local_addr_,
+                    socket_->queue_id_, flow->remote_addr_);
+        s += flow->to_string();
+    }
     s += socket_->to_string();
-    // TODO(yang): Add more status information.
     s += "\n";
     LOG(INFO) << s;
 }

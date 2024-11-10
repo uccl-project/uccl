@@ -63,8 +63,7 @@ int main(int argc, char* argv[]) {
         AFXDPFactory::init(interface_name, "ebpf_transport.o",
                            "ebpf_transport");
         UcclEngine engine(QUEUE_ID, NUM_FRAMES, &channel, client_ip_str,
-                          client_port, server_ip_str, server_port,
-                          client_mac_str, server_mac_str);
+                          client_mac_str);
         auto engine_th = std::thread([&engine]() {
             pin_thread_to_cpu(2);
             engine.run();
@@ -72,6 +71,7 @@ int main(int argc, char* argv[]) {
 
         pin_thread_to_cpu(3);
         auto ep = Endpoint(&channel);
+        // Under the hood, ep should ask engine via channel to install a flow.
         auto conn_id = ep.uccl_connect(server_ip_str);
 
         size_t send_len = kTestMsgSize, recv_len = kTestMsgSize;
@@ -184,8 +184,7 @@ int main(int argc, char* argv[]) {
         AFXDPFactory::init(interface_name, "ebpf_transport.o",
                            "ebpf_transport");
         UcclEngine engine(QUEUE_ID, NUM_FRAMES, &channel, server_ip_str,
-                          server_port, client_ip_str, client_port,
-                          server_mac_str, client_mac_str);
+                          server_mac_str);
         auto engine_th = std::thread([&engine]() {
             pin_thread_to_cpu(2);
             engine.run();

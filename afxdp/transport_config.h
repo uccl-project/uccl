@@ -29,5 +29,6 @@ static const char* client_ip_str = "192.168.6.2";
 
 static const uint16_t server_port = 40000;
 static const uint16_t client_port = 40000;
+static const uint16_t base_port = 40000;
 
 #endif  // TRANSPORT_CONFIG_H

@@ -33,7 +33,7 @@
 
 namespace uccl {
 
-typedef uint64_t ConnectionID;
+typedef uint64_t FlowID;
 
 struct alignas(64) PollCtx {
     std::mutex mu;
@@ -50,6 +50,12 @@ struct alignas(64) PollCtx {
     }
 };
 
+/**
+ * @class Channel
+ * @brief A channel is a command queue for application threads to submit rx and
+ * tx requests to the UcclFlow. A channel is only served by one UcclFlow, but
+ * could be shared by multiple app threads if needed.
+ */
 class Channel {
     constexpr static uint32_t kChannelSize = 1024;
 
@@ -63,38 +69,49 @@ class Channel {
             kRxComp = 3,
         };
         Op opcode;
+        FlowID flow_id;
         void *data;
         size_t len_tosend;
         size_t *len_recvd;
-        ConnectionID connection_id;
         PollCtx *poll_ctx;
     };
     static_assert(sizeof(Msg) % 4 == 0, "channelMsg must be 32-bit aligned");
 
+    struct CtrlMsg {
+        enum Op : uint8_t {
+            kFlowAdd = 0,
+            kFlowRemove = 1,
+        };
+        Op opcode;
+        FlowID flow_id;
+        uint32_t remote_addr;
+        char remote_l2_addr[ETH_ALEN];
+        char pad[2];
+    };
+    static_assert(sizeof(CtrlMsg) % 4 == 0,
+                  "channelMsg must be 32-bit aligned");
+
     Channel() {
-        tx_ring_ = create_ring(sizeof(Msg), kChannelSize);
-        tx_comp_ring_ = create_ring(sizeof(Msg), kChannelSize);
-        rx_ring_ = create_ring(sizeof(Msg), kChannelSize);
-        rx_comp_ring_ = create_ring(sizeof(Msg), kChannelSize);
+        tx_cmdq_ = create_ring(sizeof(Msg), kChannelSize);
+        rx_cmdq_ = create_ring(sizeof(Msg), kChannelSize);
+        ctrl_cmdq_ = create_ring(sizeof(CtrlMsg), kChannelSize);
     }
 
     ~Channel() {
-        free(tx_ring_);
-        free(tx_comp_ring_);
-        free(rx_ring_);
-        free(rx_comp_ring_);
+        free(tx_cmdq_);
+        free(rx_cmdq_);
+        free(ctrl_cmdq_);
     }
 
-    jring_t *tx_ring_;
-    jring_t *tx_comp_ring_;
-    jring_t *rx_ring_;
-    jring_t *rx_comp_ring_;
+    jring_t *tx_cmdq_;
+    jring_t *rx_cmdq_;
+    jring_t *ctrl_cmdq_;
 };
 
 /**
  * @class Endpoint
  * @brief application-facing interface, communicating with `UcclEngine' through
- * `Channel'. Each connection is identified by a unique connection_id, and uses
+ * `Channel'. Each connection is identified by a unique flow_id, and uses
  * multiple src+dst port combinations to leverage multiple paths. Under the
  * hood, we leverage TCP to boostrap our connections. We do not consider
  * multi-tenancy for now, assuming this endpoint exclusively uses the NIC and
@@ -106,8 +123,8 @@ class Endpoint {
 
     Channel *channel_;
     int listen_fd_;
-    int next_avail_conn_id_;
-    std::unordered_map<ConnectionID, int> bootstrap_fd_map_;
+    int next_avail_flow_id_;
+    std::unordered_map<FlowID, int> bootstrap_fd_map_;
     SharedPool<PollCtx *, true> ctx_pool_;
 
    public:
@@ -115,25 +132,27 @@ class Endpoint {
     ~Endpoint();
 
     // Connecting to a remote address.
-    ConnectionID uccl_connect(std::string remote_ip);
+    FlowID uccl_connect(std::string remote_ip);
     // Accepting a connection from a remote address.
-    std::tuple<ConnectionID, std::string> uccl_accept();
+    std::tuple<FlowID, std::string> uccl_accept();
 
     // Sending the data by leveraging multiple port combinations.
-    bool uccl_send(ConnectionID connection_id, const void *data,
-                   const size_t len);
+    bool uccl_send(FlowID flow_id, const void *data, const size_t len);
     // Sending the data by leveraging multiple port combinations.
-    PollCtx *uccl_send_async(ConnectionID connection_id, const void *data,
+    PollCtx *uccl_send_async(FlowID flow_id, const void *data,
                              const size_t len);
 
     // Receiving the data by leveraging multiple port combinations.
-    bool uccl_recv(ConnectionID connection_id, void *data, size_t *len);
+    bool uccl_recv(FlowID flow_id, void *data, size_t *len);
     // Receiving the data by leveraging multiple port combinations.
-    PollCtx *uccl_recv_async(ConnectionID connection_id, void *data,
-                             size_t *len);
+    PollCtx *uccl_recv_async(FlowID flow_id, void *data, size_t *len);
 
     bool uccl_poll(PollCtx *ctx);
     bool uccl_poll_once(PollCtx *ctx);
+
+   private:
+    void install_flow_via_channel(const std::string remote_ip,
+                                  const std::string remote_mac, FlowID flow_id);
 };
 
 /**
@@ -149,12 +168,13 @@ struct __attribute__((packed)) UcclPktHdr {
     };
     UcclFlags net_flags;  // Network flags.
     uint8_t msg_flags;    // Field to reflect the `FrameBuf' flags.
+    be64_t flow_id;      // Flow ID to denote the connection.
     be32_t seqno;  // Sequence number to denote the packet counter in the flow.
     be32_t ackno;  // Sequence number to denote the packet counter in the flow.
     be64_t sack_bitmap[4];     // Bitmap of the SACKs received.
     be16_t sack_bitmap_count;  // Length of the SACK bitmap [0-256].
 };
-static_assert(sizeof(UcclPktHdr) == 46, "UcclPktHdr size mismatch");
+static_assert(sizeof(UcclPktHdr) == 54, "UcclPktHdr size mismatch");
 
 #ifdef USING_TCP
 static const size_t kNetHdrLen =
@@ -315,7 +335,7 @@ class RXTracking {
  * @class UcclFlow, a connection between a local and a remote endpoint.
  * @brief Class to abstract the components and functionality of a single flow.
  * A flow is a bidirectional connection between two hosts, uniquely identified
- * by a TCP-negotiated `ConnectionID', Protocol is always UDP.
+ * by a TCP-negotiated `FlowID', Protocol is always UDP.
  *
  * A flow is always associated with a single `Channel' object which serves as
  * the communication interface with the application to which the flow belongs.
@@ -334,30 +354,26 @@ class UcclFlow {
      * @brief Construct a new flow.
      *
      * @param local_addr Local IP address.
-     * @param local_port Local UDP port.
      * @param remote_addr Remote IP address.
-     * @param remote_port Remote UDP port.
      * @param local_l2_addr Local L2 address.
      * @param remote_l2_addr Remote L2 address.
      * @param AFXDPSocket object for packet IOs.
-     * @param ConnectionID Connection ID for the flow.
+     * @param FlowID Connection ID for the flow.
      */
-    UcclFlow(const std::string local_addr, const uint16_t local_port,
-             const std::string remote_addr, const uint16_t remote_port,
-             const std::string local_l2_addr, const std::string remote_l2_addr,
-             AFXDPSocket *socket, Channel *channel, ConnectionID connection_id)
-        : local_addr_(htonl(str_to_ip(local_addr))),
-          local_port_(local_port),
-          remote_addr_(htonl(str_to_ip(remote_addr))),
-          remote_port_(remote_port),
+    UcclFlow(const uint32_t local_addr, const uint32_t remote_addr,
+             const char local_l2_addr[ETH_ALEN],
+             const char remote_l2_addr[ETH_ALEN], AFXDPSocket *socket,
+             Channel *channel, FlowID flow_id)
+        : local_addr_(local_addr),
+          remote_addr_(remote_addr),
           socket_(CHECK_NOTNULL(socket)),
           channel_(channel),
-          connection_id_(connection_id),
+          flow_id_(flow_id),
           pcb_(),
           tx_tracking_(socket, channel),
           rx_tracking_(socket, channel) {
-        DCHECK(str_to_mac(local_l2_addr, local_l2_addr_));
-        DCHECK(str_to_mac(remote_l2_addr, remote_l2_addr_));
+        memcpy(local_l2_addr_, local_l2_addr, ETH_ALEN);
+        memcpy(remote_l2_addr_, remote_l2_addr, ETH_ALEN);
     }
     ~UcclFlow() {}
 
@@ -381,7 +397,7 @@ class UcclFlow {
      */
     void rx_messages(std::vector<FrameBuf *> msgbufs);
 
-    inline void supply_rx_app_buf(void *app_buf, size_t *app_buf_len,
+    inline void rx_supply_app_buf(void *app_buf, size_t *app_buf_len,
                                   PollCtx *poll_ctx) {
         rx_tracking_.try_copy_msgbuf_to_appbuf(app_buf, app_buf_len, poll_ctx);
     }
@@ -460,9 +476,7 @@ class UcclFlow {
 
     // The following is used to fill packet headers.
     uint32_t local_addr_;
-    uint16_t local_port_;
     uint32_t remote_addr_;
-    uint16_t remote_port_;
     char local_l2_addr_[ETH_ALEN];
     char remote_l2_addr_[ETH_ALEN];
 
@@ -470,8 +484,8 @@ class UcclFlow {
     AFXDPSocket *socket_;
     // The channel this flow belongs to.
     Channel *channel_;
-    // ConnectionID of this flow.
-    ConnectionID connection_id_;
+    // FlowID of this flow.
+    FlowID flow_id_;
     // Accumulated data frames to be sent.
     std::vector<AFXDPSocket::frame_desc> pending_tx_frames_;
     // Missing data frames to be sent.
@@ -505,18 +519,22 @@ class UcclEngine {
      * future it may be responsible for multiple channels.
      */
     UcclEngine(int queue_id, int num_frames, Channel *channel,
-               const std::string local_addr, const uint16_t local_port,
-               const std::string remote_addr, const uint16_t remote_port,
-               const std::string local_l2_addr,
-               const std::string remote_l2_addr)
-        : socket_(AFXDPFactory::CreateSocket(queue_id, num_frames)),
+               const std::string local_addr, const std::string local_l2_addr)
+        : local_addr_(htonl(str_to_ip(local_addr))),
+          socket_(AFXDPFactory::CreateSocket(queue_id, num_frames)),
           channel_(channel),
           last_periodic_timestamp_(rdtsc_to_us(rdtsc())),
           periodic_ticks_(0) {
-        // TODO(yang): using TCP-negotiated ConnectionID.
-        flow_ = new UcclFlow(local_addr, local_port, remote_addr, remote_port,
-                             local_l2_addr, remote_l2_addr, socket_, channel,
-                             0xdeadbeaf);
+        DCHECK(str_to_mac(local_l2_addr, local_l2_addr_));
+    }
+
+    // Install a flow that serves traffic with specific remote ip and mac.
+    void install_flow(const uint32_t remote_addr,
+                      const char remote_l2_addr[ETH_ALEN], FlowID flow_id) {
+        auto *flow = new UcclFlow(local_addr_, remote_addr, local_l2_addr_,
+                                  remote_l2_addr, socket_, channel_, flow_id);
+        auto [_, ret] = active_flows_map_.insert({flow_id, flow});
+        DCHECK(ret);
     }
 
     /**
@@ -546,9 +564,10 @@ class UcclEngine {
      * @param app_buf Pointer to the application buffer.
      * @param app_buf_len Pointer to the length of the application buffer.
      */
-    inline void supply_rx_app_buf(void *app_buf, size_t *app_buf_len,
-                                  PollCtx *poll_ctx) {
-        flow_->supply_rx_app_buf(app_buf, app_buf_len, poll_ctx);
+    inline void rx_supply_app_buf(void *app_buf, size_t *app_buf_len,
+                                  PollCtx *poll_ctx, FlowID flow_id) {
+        active_flows_map_[flow_id]->rx_supply_app_buf(app_buf, app_buf_len,
+                                                      poll_ctx);
     }
 
     /**
@@ -558,8 +577,9 @@ class UcclEngine {
      * @param app_buf Pointer to the application receiving buffer.
      * @param app_buf_len Pointer to the length of the application buffer.
      */
-    inline void process_rx_msg(std::vector<FrameBuf *> msgbufs) {
-        flow_->rx_messages(msgbufs);
+    inline void process_rx_msg(std::vector<FrameBuf *> msgbufs,
+                               FlowID flow_id) {
+        active_flows_map_[flow_id]->rx_messages(msgbufs);
     }
 
     /**
@@ -568,9 +588,10 @@ class UcclEngine {
      * of the message.
      */
     inline void process_tx_msg(FrameBuf *msg_head, FrameBuf *msg_tail,
-                               uint32_t num_frames, PollCtx *poll_ctx) {
-        // TODO(yang): lookup the msg five-tuple in an active_flows_map
-        flow_->tx_messages(msg_head, msg_tail, num_frames, poll_ctx);
+                               uint32_t num_frames, PollCtx *poll_ctx,
+                               FlowID flow_id) {
+        active_flows_map_[flow_id]->tx_messages(msg_head, msg_tail, num_frames,
+                                                poll_ctx);
     }
 
     /**
@@ -582,9 +603,7 @@ class UcclEngine {
      * @brief This method polls active channels for all control plane
      * requests and processes them. It is called periodically.
      */
-    inline void process_ctl_reqs() {
-        // TODO(yang): maintain pending_requests?
-    }
+    void process_ctl_reqs();
 
     void dump_status();
 
@@ -592,10 +611,13 @@ class UcclEngine {
         void *app_buf, size_t app_buf_len);
 
    private:
+    uint32_t local_addr_;
+    char local_l2_addr_[ETH_ALEN];
+
     // AFXDP socket used for send/recv packets.
     AFXDPSocket *socket_;
-    // For now, we just assume a single flow.
-    UcclFlow *flow_;
+    // UcclFlow map
+    std::unordered_map<FlowID, UcclFlow *> active_flows_map_;
     // Control plan channel with Endpoint.
     Channel *channel_;
     // Timestamp of last periodic process execution.
