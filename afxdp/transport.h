@@ -38,8 +38,8 @@ typedef uint64_t FlowID;
 struct alignas(64) PollCtx {
     std::mutex mu;
     std::condition_variable cv;
-    std::atomic<bool> fence;
-    bool done;
+    std::atomic<bool> fence;  // Sync rx/tx memcpy visibility.
+    bool done;                // Sync cv wake-up.
     PollCtx() : fence(false), done(false) {};
     ~PollCtx() { clear(); }
     void clear() {
@@ -87,6 +87,7 @@ class Channel {
         uint32_t remote_addr;
         char remote_l2_addr[ETH_ALEN];
         char pad[2];
+        PollCtx *poll_ctx;
     };
     static_assert(sizeof(CtrlMsg) % 4 == 0,
                   "channelMsg must be 32-bit aligned");
@@ -109,53 +110,6 @@ class Channel {
 };
 
 /**
- * @class Endpoint
- * @brief application-facing interface, communicating with `UcclEngine' through
- * `Channel'. Each connection is identified by a unique flow_id, and uses
- * multiple src+dst port combinations to leverage multiple paths. Under the
- * hood, we leverage TCP to boostrap our connections. We do not consider
- * multi-tenancy for now, assuming this endpoint exclusively uses the NIC and
- * its all queues.
- */
-class Endpoint {
-    constexpr static uint16_t kBootstrapPort = 30000;
-    constexpr static uint32_t kMaxInflightMsg = 4096;
-
-    Channel *channel_;
-    int listen_fd_;
-    int next_avail_flow_id_;
-    std::unordered_map<FlowID, int> bootstrap_fd_map_;
-    SharedPool<PollCtx *, true> ctx_pool_;
-
-   public:
-    Endpoint(Channel *channel);
-    ~Endpoint();
-
-    // Connecting to a remote address.
-    FlowID uccl_connect(std::string remote_ip);
-    // Accepting a connection from a remote address.
-    std::tuple<FlowID, std::string> uccl_accept();
-
-    // Sending the data by leveraging multiple port combinations.
-    bool uccl_send(FlowID flow_id, const void *data, const size_t len);
-    // Sending the data by leveraging multiple port combinations.
-    PollCtx *uccl_send_async(FlowID flow_id, const void *data,
-                             const size_t len);
-
-    // Receiving the data by leveraging multiple port combinations.
-    bool uccl_recv(FlowID flow_id, void *data, size_t *len);
-    // Receiving the data by leveraging multiple port combinations.
-    PollCtx *uccl_recv_async(FlowID flow_id, void *data, size_t *len);
-
-    bool uccl_poll(PollCtx *ctx);
-    bool uccl_poll_once(PollCtx *ctx);
-
-   private:
-    void install_flow_via_channel(const std::string remote_ip,
-                                  const std::string remote_mac, FlowID flow_id);
-};
-
-/**
  * Uccl Packet Header just after UDP header.
  */
 struct __attribute__((packed)) UcclPktHdr {
@@ -168,7 +122,7 @@ struct __attribute__((packed)) UcclPktHdr {
     };
     UcclFlags net_flags;  // Network flags.
     uint8_t msg_flags;    // Field to reflect the `FrameBuf' flags.
-    be64_t flow_id;      // Flow ID to denote the connection.
+    be64_t flow_id;       // Flow ID to denote the connection.
     be32_t seqno;  // Sequence number to denote the packet counter in the flow.
     be32_t ackno;  // Sequence number to denote the packet counter in the flow.
     be64_t sack_bitmap[4];     // Bitmap of the SACKs received.
@@ -530,12 +484,8 @@ class UcclEngine {
 
     // Install a flow that serves traffic with specific remote ip and mac.
     void install_flow(const uint32_t remote_addr,
-                      const char remote_l2_addr[ETH_ALEN], FlowID flow_id) {
-        auto *flow = new UcclFlow(local_addr_, remote_addr, local_l2_addr_,
-                                  remote_l2_addr, socket_, channel_, flow_id);
-        auto [_, ret] = active_flows_map_.insert({flow_id, flow});
-        DCHECK(ret);
-    }
+                      const char remote_l2_addr[ETH_ALEN], FlowID flow_id,
+                      PollCtx *poll_ctx);
 
     /**
      * @brief This is the main event cycle of the Uccl engine.
@@ -626,6 +576,53 @@ class UcclEngine {
     uint64_t periodic_ticks_;
     // Whether shutdown is requested.
     std::atomic<bool> shutdown_{false};
+};
+
+/**
+ * @class Endpoint
+ * @brief application-facing interface, communicating with `UcclEngine' through
+ * `Channel'. Each connection is identified by a unique flow_id, and uses
+ * multiple src+dst port combinations to leverage multiple paths. Under the
+ * hood, we leverage TCP to boostrap our connections. We do not consider
+ * multi-tenancy for now, assuming this endpoint exclusively uses the NIC and
+ * its all queues.
+ */
+class Endpoint {
+    constexpr static uint16_t kBootstrapPort = 30000;
+    constexpr static uint32_t kMaxInflightMsg = 4096;
+
+    Channel *channel_;
+    int listen_fd_;
+    int next_avail_flow_id_;
+    std::unordered_map<FlowID, int> bootstrap_fd_map_;
+    SharedPool<PollCtx *, true> ctx_pool_;
+
+   public:
+    Endpoint(Channel *channel);
+    ~Endpoint();
+
+    // Connecting to a remote address.
+    FlowID uccl_connect(std::string remote_ip);
+    // Accepting a connection from a remote address.
+    std::tuple<FlowID, std::string> uccl_accept();
+
+    // Sending the data by leveraging multiple port combinations.
+    bool uccl_send(FlowID flow_id, const void *data, const size_t len);
+    // Sending the data by leveraging multiple port combinations.
+    PollCtx *uccl_send_async(FlowID flow_id, const void *data,
+                             const size_t len);
+
+    // Receiving the data by leveraging multiple port combinations.
+    bool uccl_recv(FlowID flow_id, void *data, size_t *len);
+    // Receiving the data by leveraging multiple port combinations.
+    PollCtx *uccl_recv_async(FlowID flow_id, void *data, size_t *len);
+
+    bool uccl_poll(PollCtx *ctx);
+    bool uccl_poll_once(PollCtx *ctx);
+
+   private:
+    void install_flow_on_engine(const std::string remote_ip,
+                                const std::string remote_mac, FlowID flow_id);
 };
 
 }  // namespace uccl

@@ -433,9 +433,9 @@ static inline bool str_to_mac(const std::string& macStr, char mac[6]) {
 // Function to convert hex char array back to MAC string
 static inline std::string mac_to_str(const char mac[6]) {
     std::stringstream ss;
-    ss << std::hex << std::setfill('0');
     for (int i = 0; i < 6; i++) {
-        ss << std::setw(2) << static_cast<int>(mac[i]);
+        ss << std::setfill('0') << std::setw(2) << std::hex
+           << static_cast<int>(0xFF & mac[i]);
         if (i != 5) {
             ss << ":";
         }

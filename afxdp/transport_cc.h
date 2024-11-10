@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <iomanip>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -63,6 +65,9 @@ struct Pcb {
     }
 
     std::string to_string() const {
+        std::stringstream ecn_alpha_stream;
+        ecn_alpha_stream << std::fixed << std::setprecision(2) << ecn_alpha;
+
         std::string s;
         s += "[CC] snd_nxt: " + std::to_string(snd_nxt) +
              " snd_una: " + std::to_string(snd_una) +
@@ -71,7 +76,7 @@ struct Pcb {
              " fast_rexmits: " + std::to_string(fast_rexmits) +
              " rto_rexmits: " + std::to_string(rto_rexmits) +
              " effective_wnd: " + std::to_string(effective_wnd()) +
-             " ecn_alpha: " + std::to_string(ecn_alpha);
+             " ecn_alpha: " + ecn_alpha_stream.str();
         return s;
     }
 
