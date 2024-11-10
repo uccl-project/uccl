@@ -785,10 +785,27 @@ std::tuple<FrameBuf *, FrameBuf *, uint32_t> UcclEngine::deserialize_msg(
     return std::make_tuple(tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames);
 }
 
-Endpoint::Endpoint(Channel *channel)
-    : channel_(channel),
-      next_avail_flow_id_(0xdeadbeaf),
-      ctx_pool_(kMaxInflightMsg) {
+Endpoint::Endpoint(const char *interface_name, int queue_id, int num_frames,
+                   int engine_cpuid)
+    : next_avail_flow_id_(0xdeadbeaf), ctx_pool_(kMaxInflightMsg) {
+    static std::once_flag flag_once;
+    std::call_once(flag_once, [interface_name]() {
+        AFXDPFactory::init(interface_name, "ebpf_transport.o",
+                           "ebpf_transport");
+    });
+
+    auto local_ip_str = get_dev_ip(interface_name);
+    auto local_mac_str = get_dev_mac(interface_name);
+
+    channel_ = std::make_unique<Channel>();
+    engine_ = std::make_unique<UcclEngine>(queue_id, num_frames, channel_.get(),
+                                           local_ip_str, local_mac_str);
+    engine_th_ = std::make_unique<std::thread>(
+        [engine_ptr = engine_.get(), engine_cpuid]() {
+            pin_thread_to_cpu(engine_cpuid);
+            engine_ptr->run();
+        });
+
     for (int i = 0; i < kMaxInflightMsg; i++) {
         ctx_pool_.push(new PollCtx());
     }
@@ -818,6 +835,11 @@ Endpoint::Endpoint(Channel *channel)
 Endpoint::~Endpoint() {
     // TODO(yang): free all ctx in ctx_pool_.
     close(listen_fd_);
+    for (auto [flow_id, fd] : bootstrap_fd_map_) {
+        close(fd);
+    }
+    engine_->shutdown();
+    engine_th_->join();
 }
 
 FlowID Endpoint::uccl_connect(std::string remote_ip) {
@@ -868,7 +890,7 @@ FlowID Endpoint::uccl_connect(std::string remote_ip) {
     LOG(INFO) << "Remote MAC: " << remote_mac;
 
     char local_mac_char[ETH_ALEN];
-    std::string local_mac = get_dev_mac(interface_name);
+    std::string local_mac = get_dev_mac(DEV_DEFAULT);
     LOG(INFO) << "Local MAC: " << local_mac;
     str_to_mac(local_mac, local_mac_char);
     ret = write(bootstrap_fd, local_mac_char, ETH_ALEN);
@@ -880,6 +902,7 @@ FlowID Endpoint::uccl_connect(std::string remote_ip) {
     // found the flow installed; otherwise, SEGV may happen.
     bool sync = true;
     ret = write(bootstrap_fd, &sync, sizeof(bool));
+    ret = read(bootstrap_fd, &sync, sizeof(bool));
     DCHECK(ret == sizeof(bool) && sync) << "ERROR: final syncing";
 
     return flow_id;
@@ -913,7 +936,7 @@ std::tuple<FlowID, std::string> Endpoint::uccl_accept() {
     LOG(INFO) << "FlowID: " << std::hex << "0x" << flow_id;
 
     char local_mac_char[ETH_ALEN];
-    std::string local_mac = get_dev_mac(interface_name);
+    std::string local_mac = get_dev_mac(DEV_DEFAULT);
     LOG(INFO) << "Local MAC: " << local_mac;
     str_to_mac(local_mac, local_mac_char);
     ret = write(bootstrap_fd, local_mac_char, ETH_ALEN);
@@ -929,6 +952,7 @@ std::tuple<FlowID, std::string> Endpoint::uccl_accept() {
 
     bool sync = false;
     ret = read(bootstrap_fd, &sync, sizeof(bool));
+    ret = write(bootstrap_fd, &sync, sizeof(bool));
     DCHECK(ret == sizeof(bool) && sync) << "ERROR: final syncing";
 
     return std::make_tuple(flow_id, remote_ip);

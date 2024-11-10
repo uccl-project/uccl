@@ -591,14 +591,18 @@ class Endpoint {
     constexpr static uint16_t kBootstrapPort = 30000;
     constexpr static uint32_t kMaxInflightMsg = 4096;
 
-    Channel *channel_;
+    std::unique_ptr<Channel> channel_;
+    std::unique_ptr<UcclEngine> engine_;
+    std::unique_ptr<std::thread> engine_th_;
+
     int listen_fd_;
     int next_avail_flow_id_;
     std::unordered_map<FlowID, int> bootstrap_fd_map_;
     SharedPool<PollCtx *, true> ctx_pool_;
 
    public:
-    Endpoint(Channel *channel);
+    Endpoint(const char *interface_name, int queue_id, int num_frames,
+             int engine_cpuid);
     ~Endpoint();
 
     // Connecting to a remote address.

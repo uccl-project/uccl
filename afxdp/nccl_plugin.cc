@@ -12,8 +12,6 @@
 using namespace uccl;
 
 const char* PLUGIN_NAME = "AFXDP_Plugin";
-const size_t NUM_FRAMES = 4096 * 64;  // 1GB frame pool
-const size_t QUEUE_ID = 0;
 
 volatile bool quit = false;
 
@@ -23,10 +21,7 @@ void interrupt_handler(int signal) {
     AFXDPFactory::shutdown();
 }
 
-Channel* channel;
-UcclEngine* engine;
 Endpoint* ep;
-std::thread* engine_th;
 
 ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
     google::InitGoogleLogging("nccl_plugin");
@@ -36,14 +31,12 @@ ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
     signal(SIGTERM, interrupt_handler);
     signal(SIGHUP, interrupt_handler);
 
-    channel = new Channel();
+    ep = new Endpoint(DEV_DEFAULT, QID_DEFAULT, NUM_FRAMES, ENGINE_CPUID);
+    pin_thread_to_cpu(ENGINE_CPUID + 1);
 
-    AFXDPFactory::init(interface_name, "/opt/uccl/afxdp/ebpf_transport.o",
-                       "ebpf_transport");
-
-    std::string local_ip_str = get_dev_ip(interface_name);
+    std::string local_ip_str = get_dev_ip(DEV_DEFAULT);
     DCHECK(local_ip_str != "");
-    std::string local_mac_str = get_dev_mac(interface_name);
+    std::string local_mac_str = get_dev_mac(DEV_DEFAULT);
     DCHECK(local_mac_str != "");
 
     bool is_this_client =
@@ -53,28 +46,10 @@ ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
 
     if (is_this_client) {
         LOG(INFO) << "pluginListen: This is the client machine";
-        engine = new UcclEngine(QUEUE_ID, NUM_FRAMES, channel, client_ip_str,
-                                client_mac_str);
-    } else if (is_this_server) {
-        LOG(INFO) << "pluginListen: This is the server machine";
-        engine = new UcclEngine(QUEUE_ID, NUM_FRAMES, channel, server_ip_str,
-                                server_mac_str);
-    } else {
-        DCHECK(false) << "This machine is neither client nor server";
-    }
-
-    engine_th = new std::thread([]() {
-        pin_thread_to_cpu(2);
-        engine->run();
-    });
-
-    // pin_thread_to_cpu(3);
-
-    ep = new Endpoint(channel);
-    if (is_this_client) {
         ep->uccl_connect(server_ip_str);
         LOG(INFO) << "Connected to server " << server_ip_str;
     } else if (is_this_server) {
+        LOG(INFO) << "pluginListen: This is the server machine";
         auto [flow_id, client_ip_str] = ep->uccl_accept();
         LOG(INFO) << "Accepted connection from " << client_ip_str;
     } else {

@@ -15,7 +15,7 @@
 
 #include "transport_config.h"
 
-const char *INTERFACE_NAME = interface_name;
+const char *INTERFACE_NAME = DEV_DEFAULT;
 
 struct server_t {
     int interface_index;

@@ -13,7 +13,7 @@
 
 #include "transport_config.h"
 
-#define IF_NAME interface_name
+#define IF_NAME DEV_DEFAULT
 #define SHM_NAME "UMEM_SHM"
 #define QUEUE_ID 0
 #define FILL_RING_SIZE                  \

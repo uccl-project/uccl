@@ -25,7 +25,7 @@ using namespace uccl;
 
 DEFINE_bool(pktloss, false, "Enable packet loss for testing");
 
-#define IF_NAME interface_name
+#define IF_NAME DEV_DEFAULT
 #define SHM_NAME "UMEM_SHM"
 #define QUEUE_ID 0
 #define FILL_RING_SIZE                  \

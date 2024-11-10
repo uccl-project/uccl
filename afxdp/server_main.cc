@@ -35,7 +35,7 @@ using namespace uccl;
 
 #define NUM_QUEUES 1
 
-const char* INTERFACE_NAME = interface_name;
+const char* INTERFACE_NAME = DEV_DEFAULT;
 
 const int MY_RECV_BATCH_SIZE = 32;
 const bool busy_poll = true;

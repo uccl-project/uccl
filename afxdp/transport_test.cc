@@ -11,8 +11,6 @@
 
 using namespace uccl;
 
-const size_t NUM_FRAMES = 4096 * 64;  // 1GB frame pool
-const size_t QUEUE_ID = 0;
 const size_t kTestMsgSize = 1024000;
 const size_t kTestIters = 1024000000;
 size_t kReportIters = 1000;
@@ -57,21 +55,9 @@ int main(int argc, char* argv[]) {
         LOG(FATAL) << "Unknown test type: " << FLAGS_test;
     }
 
-    Channel channel;
-
     if (FLAGS_client) {
-        AFXDPFactory::init(interface_name, "ebpf_transport.o",
-                           "ebpf_transport");
-        UcclEngine engine(QUEUE_ID, NUM_FRAMES, &channel, client_ip_str,
-                          client_mac_str);
-        auto engine_th = std::thread([&engine]() {
-            pin_thread_to_cpu(2);
-            engine.run();
-        });
-
-        pin_thread_to_cpu(3);
-        auto ep = Endpoint(&channel);
-        // Under the hood, ep should ask engine via channel to install a flow.
+        auto ep = Endpoint(DEV_DEFAULT, QID_DEFAULT, NUM_FRAMES, ENGINE_CPUID);
+        pin_thread_to_cpu(ENGINE_CPUID + 1);
         auto conn_id = ep.uccl_connect(server_ip_str);
 
         size_t send_len = kTestMsgSize, recv_len = kTestMsgSize;
@@ -177,21 +163,9 @@ int main(int argc, char* argv[]) {
                           << bw_gbps << " Gbps";
             }
         }
-
-        engine.shutdown();
-        engine_th.join();
     } else {
-        AFXDPFactory::init(interface_name, "ebpf_transport.o",
-                           "ebpf_transport");
-        UcclEngine engine(QUEUE_ID, NUM_FRAMES, &channel, server_ip_str,
-                          server_mac_str);
-        auto engine_th = std::thread([&engine]() {
-            pin_thread_to_cpu(2);
-            engine.run();
-        });
-
-        pin_thread_to_cpu(3);
-        auto ep = Endpoint(&channel);
+        auto ep = Endpoint(DEV_DEFAULT, QID_DEFAULT, NUM_FRAMES, ENGINE_CPUID);
+        pin_thread_to_cpu(ENGINE_CPUID + 1);
         auto [conn_id, client_ip_str] = ep.uccl_accept();
 
         size_t send_len = kTestMsgSize, recv_len = kTestMsgSize;
@@ -268,8 +242,6 @@ int main(int argc, char* argv[]) {
                 << "Received " << i << " messages, rtt " << duration_us.count()
                 << " us";
         }
-        engine.shutdown();
-        engine_th.join();
     }
 
     return 0;
