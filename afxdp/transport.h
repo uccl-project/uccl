@@ -54,6 +54,7 @@ class Channel {
     constexpr static uint32_t kChannelSize = 1024;
 
    public:
+    // TODO(yang): merging Msg and PollCtx as MsgCtx.
     struct Msg {
         enum Op : uint8_t {
             kTx = 0,

@@ -29,6 +29,7 @@ Endpoint::Endpoint(Channel *channel)
     DCHECK(!listen(listen_fd_, 128)) << "ERROR: listen";
     LOG(INFO) << "Server ready, listening on port " << kBootstrapPort;
 }
+
 Endpoint::~Endpoint() {
     // TODO(yang): free all ctx in ctx_pool_.
     close(listen_fd_);
@@ -477,6 +478,7 @@ void UcclFlow::rx_messages(std::vector<FrameBuf *> msgbufs) {
     // Sending data frames that can be send per cwnd.
     transmit_pending_packets();
 }
+
 void UcclFlow::tx_messages(FrameBuf *msg_head, FrameBuf *msg_tail,
                            uint32_t num_frames, PollCtx *poll_ctx) {
     if (num_frames)
