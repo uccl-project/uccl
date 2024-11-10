@@ -31,7 +31,7 @@
 
 #include "transport_config.h"
 #include "util.h"
-#include "util_umem.h"
+#include "util_shared_pool.h"
 
 using namespace uccl;
 
@@ -69,7 +69,7 @@ struct socket_t {
     struct xsk_ring_cons complete_queue;
     struct xsk_ring_prod fill_queue;
     struct xsk_socket* xsk;
-    std::unique_ptr<FramePool<true>> frame_pool;
+    std::unique_ptr<SharedPool<uint64_t, true>> frame_pool;
     std::atomic<uint64_t> sent_packets;
     uint64_t last_stall_time;
     uint32_t counter;
@@ -233,7 +233,7 @@ int client_init(struct client_t* client, const char* interface_name) {
 
         // initialize frame allocator
         client->socket[i].frame_pool =
-            std::make_unique<FramePool<true>>(NUM_FRAMES);
+            std::make_unique<SharedPool<uint64_t, true>>(NUM_FRAMES);
         for (int j = 0; j < NUM_FRAMES; j++) {
             client->socket[i].frame_pool->push(j * FRAME_SIZE +
                                                XDP_PACKET_HEADROOM);

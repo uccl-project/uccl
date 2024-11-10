@@ -29,7 +29,7 @@
 #include <mutex>
 #include <set>
 
-#include "util_umem.h"
+#include "util_shared_pool.h"
 
 namespace uccl {
 
@@ -217,7 +217,7 @@ class AFXDPSocket {
     struct xsk_ring_prod send_queue_;
     struct xsk_ring_cons complete_queue_;
     struct xsk_ring_prod fill_queue_;
-    FramePool</*Sync=*/false> *frame_pool_;
+    SharedPool<uint64_t, /*Sync=*/false> *frame_pool_;
 
     struct frame_desc {
         uint64_t frame_offset;
@@ -233,7 +233,7 @@ class AFXDPSocket {
     std::vector<frame_desc> recv_packets(uint32_t nb_frames);
     void populate_fill_queue(uint32_t nb_frames);
 
-// #define FRAME_POOL_DEBUG
+    // #define FRAME_POOL_DEBUG
 
 #ifdef FRAME_POOL_DEBUG
     std::set<uint64_t> free_frames_;

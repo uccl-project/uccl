@@ -72,7 +72,7 @@ AFXDPSocket::AFXDPSocket(int queue_id, int num_frames)
     // apply_setsockopt(xsk_fd_);
 
     // initialize frame allocator
-    frame_pool_ = new FramePool</*Sync=*/false>(num_frames);
+    frame_pool_ = new SharedPool<uint64_t, /*Sync=*/false>(num_frames);
     for (uint64_t j = 0; j < num_frames; j++) {
         auto frame_offset = j * FRAME_SIZE + XDP_PACKET_HEADROOM;
         push_frame(frame_offset);

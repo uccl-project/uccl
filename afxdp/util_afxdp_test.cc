@@ -11,7 +11,7 @@
 
 #include "transport_config.h"
 #include "util.h"
-#include "util_umem.h"
+#include "util_shared_pool.h"
 
 using namespace uccl;
 
