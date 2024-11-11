@@ -22,6 +22,11 @@ void interrupt_handler(int signal) {
 }
 
 Endpoint* ep;
+FlowID flow_id;
+
+struct afxdp_context {
+    FlowID flow_id;
+};
 
 ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
     google::InitGoogleLogging("nccl_plugin");
@@ -46,11 +51,12 @@ ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
 
     if (is_this_client) {
         LOG(INFO) << "pluginListen: This is the client machine";
-        ep->uccl_connect(server_ip_str);
+        flow_id = ep->uccl_connect(server_ip_str);
         LOG(INFO) << "Connected to server " << server_ip_str;
     } else if (is_this_server) {
         LOG(INFO) << "pluginListen: This is the server machine";
-        auto [flow_id, client_ip_str] = ep->uccl_accept();
+        auto [flow_id_, client_ip_str] = ep->uccl_accept();
+        flow_id = flow_id_;
         LOG(INFO) << "Accepted connection from " << client_ip_str;
     } else {
         DCHECK(false) << "This machine is neither client nor server";
@@ -100,10 +106,6 @@ ncclResult_t pluginGetProperties(int dev, ncclNetProperties_v8_t* props) {
     props->netDeviceVersion = NCCL_NET_DEVICE_INVALID_VERSION;
     return ncclSuccess;
 }
-
-struct afxdp_context {
-    FlowID flow_id;
-};
 
 ncclResult_t pluginListen(int dev, void* handle, void** listenComm) {
     struct afxdp_context* ctx = static_cast<struct afxdp_context*>(handle);
@@ -161,7 +163,7 @@ ncclResult_t pluginIsend(void* sendComm, void* data, int size, int tag,
     req->ctx = ctx;
     req->send = true;
     req->data_len = size;
-    req->poll_ctx = ep->uccl_send_async(ctx->flow_id, data, req->data_len);
+    req->poll_ctx = ep->uccl_send_async(flow_id, data, req->data_len);
 
     *request = req;
     return ncclSuccess;
@@ -176,7 +178,7 @@ ncclResult_t pluginIrecv(void* recvComm, int n, void** data, int* sizes,
     req->ctx = ctx;
     req->send = false;
     req->data_len = sizes[0];
-    req->poll_ctx = ep->uccl_recv_async(ctx->flow_id, data[0], &req->data_len);
+    req->poll_ctx = ep->uccl_recv_async(flow_id, data[0], &req->data_len);
 
     *request = req;
     return ncclSuccess;

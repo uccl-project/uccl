@@ -39,7 +39,7 @@ struct alignas(64) PollCtx {
     std::mutex mu;
     std::condition_variable cv;
     std::atomic<bool> fence;  // Sync rx/tx memcpy visibility.
-    bool done;                // Sync cv wake-up.
+    std::atomic<bool> done;   // Sync cv wake-up.
     PollCtx() : fence(false), done(false) {};
     ~PollCtx() { clear(); }
     void clear() {
@@ -591,6 +591,9 @@ class Endpoint {
     constexpr static uint16_t kBootstrapPort = 30000;
     constexpr static uint32_t kMaxInflightMsg = 4096;
 
+    std::string local_ip_str_;
+    std::string local_mac_str_;
+
     std::unique_ptr<Channel> channel_;
     std::unique_ptr<UcclEngine> engine_;
     std::unique_ptr<std::thread> engine_th_;
@@ -621,10 +624,12 @@ class Endpoint {
     // Receiving the data by leveraging multiple port combinations.
     PollCtx *uccl_recv_async(FlowID flow_id, void *data, size_t *len);
 
+    bool uccl_wait(PollCtx *ctx);
     bool uccl_poll(PollCtx *ctx);
     bool uccl_poll_once(PollCtx *ctx);
 
    private:
+    inline void fence_and_clean_ctx(PollCtx *ctx);
     void install_flow_on_engine(const std::string remote_ip,
                                 const std::string remote_mac, FlowID flow_id);
 };

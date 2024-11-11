@@ -829,12 +829,12 @@ Endpoint::Endpoint(const char *interface_name, int queue_id, int num_frames,
                            "ebpf_transport");
     });
 
-    auto local_ip_str = get_dev_ip(interface_name);
-    auto local_mac_str = get_dev_mac(interface_name);
+    local_ip_str_ = get_dev_ip(interface_name);
+    local_mac_str_ = get_dev_mac(interface_name);
 
     channel_ = std::make_unique<Channel>();
     engine_ = std::make_unique<UcclEngine>(queue_id, num_frames, channel_.get(),
-                                           local_ip_str, local_mac_str);
+                                           local_ip_str_, local_mac_str_);
     engine_th_ = std::make_unique<std::thread>(
         [engine_ptr = engine_.get(), engine_cpuid]() {
             pin_thread_to_cpu(engine_cpuid);
@@ -897,6 +897,12 @@ FlowID Endpoint::uccl_connect(std::string remote_ip) {
     bcopy((char *)server->h_addr, (char *)&serv_addr.sin_addr.s_addr,
           server->h_length);
     serv_addr.sin_port = htons(kBootstrapPort);
+
+    // Force the socket to bind to the local IP address.
+    sockaddr_in localaddr = {0};
+    localaddr.sin_family = AF_INET;
+    localaddr.sin_addr.s_addr = inet_addr(local_ip_str_.c_str());
+    bind(bootstrap_fd, (sockaddr *)&localaddr, sizeof(localaddr));
 
     LOG(INFO) << "Connecting to " << remote_ip << ":" << kBootstrapPort;
 
@@ -1017,7 +1023,7 @@ std::tuple<FlowID, std::string> Endpoint::uccl_accept() {
 
 bool Endpoint::uccl_send(FlowID flow_id, const void *data, const size_t len) {
     auto *poll_ctx = uccl_send_async(flow_id, data, len);
-    return uccl_poll(poll_ctx);
+    return uccl_wait(poll_ctx);
 }
 
 PollCtx *Endpoint::uccl_send_async(FlowID flow_id, const void *data,
@@ -1039,7 +1045,7 @@ PollCtx *Endpoint::uccl_send_async(FlowID flow_id, const void *data,
 
 bool Endpoint::uccl_recv(FlowID flow_id, void *data, size_t *len) {
     auto *poll_ctx = uccl_recv_async(flow_id, data, len);
-    return uccl_poll(poll_ctx);
+    return uccl_wait(poll_ctx);
 }
 
 PollCtx *Endpoint::uccl_recv_async(FlowID flow_id, void *data, size_t *len) {
@@ -1056,20 +1062,27 @@ PollCtx *Endpoint::uccl_recv_async(FlowID flow_id, void *data, size_t *len) {
     return poll_ctx;
 }
 
+bool Endpoint::uccl_wait(PollCtx *ctx) {
+    {
+        std::unique_lock<std::mutex> lock(ctx->mu);
+        ctx->cv.wait(lock, [&ctx] { return ctx->done.load(); });
+    }
+    fence_and_clean_ctx(ctx);
+    return true;
+}
+
 bool Endpoint::uccl_poll(PollCtx *ctx) {
     while (!uccl_poll_once(ctx));
     return true;
 }
 
 bool Endpoint::uccl_poll_once(PollCtx *ctx) {
-    bool done;
-    {
-        std::unique_lock<std::mutex> lock(ctx->mu);
-        done = ctx->cv.wait_for(lock, std::chrono::microseconds(1000),
-                                [&ctx] { return ctx->done; });
-    }
-    if (!done) return false;
+    if (!ctx->done.load()) return false;
+    fence_and_clean_ctx(ctx);
+    return true;
+}
 
+inline void Endpoint::fence_and_clean_ctx(PollCtx *ctx) {
     // Make the data written by the engine thread visible to the app thread.
     std::ignore =
         std::atomic_load_explicit(&ctx->fence, std::memory_order_relaxed);
@@ -1077,7 +1090,6 @@ bool Endpoint::uccl_poll_once(PollCtx *ctx) {
 
     ctx->clear();
     ctx_pool_->push(ctx);
-    return true;
 }
 
 void Endpoint::install_flow_on_engine(const std::string remote_ip,
@@ -1097,7 +1109,7 @@ void Endpoint::install_flow_on_engine(const std::string remote_ip,
     // Wait until the flow has been installed on the engine.
     {
         std::unique_lock<std::mutex> lock(poll_ctx->mu);
-        poll_ctx->cv.wait(lock, [poll_ctx] { return poll_ctx->done; });
+        poll_ctx->cv.wait(lock, [poll_ctx] { return poll_ctx->done.load(); });
     }
     delete poll_ctx;
 };
