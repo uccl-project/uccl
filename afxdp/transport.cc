@@ -454,11 +454,11 @@ void UcclFlow::prepare_l4header(uint8_t *pkt_addr,
     memset(tcph, 0, sizeof(tcphdr));
 #ifdef USING_MULTIPATH
     static uint16_t rand_port = 0;
-    tcph->source = htons(base_port + (rand_port++) % 8);
-    tcph->dest = htons(base_port + (rand_port++) % 8);
+    tcph->source = htons(BASE_PORT + (rand_port++) % 8);
+    tcph->dest = htons(BASE_PORT + (rand_port++) % 8);
 #else
-    tcph->source = htons(base_port);
-    tcph->dest = htons(base_port);
+    tcph->source = htons(BASE_PORT);
+    tcph->dest = htons(BASE_PORT);
 #endif
     tcph->doff = 5;
     // TODO(yang): tcpdump shows wrong checksum. Need to fix it.
@@ -468,11 +468,11 @@ void UcclFlow::prepare_l4header(uint8_t *pkt_addr,
     auto *udph = (udphdr *)(pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
 #ifdef USING_MULTIPATH
     static uint16_t rand_port = 0;
-    udph->source = htons(base_port + (rand_port++) % 8);
-    udph->dest = htons(base_port + (rand_port++) % 8);
+    udph->source = htons(BASE_PORT + (rand_port++) % 8);
+    udph->dest = htons(BASE_PORT + (rand_port++) % 8);
 #else
-    udph->source = htons(base_port);
-    udph->dest = htons(base_port);
+    udph->source = htons(BASE_PORT);
+    udph->dest = htons(BASE_PORT);
 #endif
     udph->len = htons(sizeof(udphdr) + payload_bytes);
     udph->check = htons(0);

@@ -351,7 +351,7 @@ int client_generate_packet(void* data, int payload_bytes, uint32_t counter,
     // limiting
     udp->source = htons(client_ports[counter % (sizeof(client_ports) /
                                                 sizeof(client_ports[0]))]);
-    udp->dest = htons(server_port);
+    udp->dest = htons(BASE_PORT);
     udp->len = htons(sizeof(struct udphdr) + payload_bytes);
     udp->check = 0;
 

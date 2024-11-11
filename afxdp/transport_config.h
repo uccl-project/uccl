@@ -8,6 +8,7 @@ static const uint32_t SEND_BATCH_SIZE = 32;
 static const uint32_t QID_DEFAULT = 0;
 static const uint32_t NUM_FRAMES = 4096 * 64;  // 1GB frame pool
 static const uint32_t ENGINE_CPUID = 2;
+static const uint16_t BASE_PORT = 40000;
 
 // #define USING_TCP
 #define USING_MULTIPATH
@@ -29,9 +30,5 @@ static const char* server_mac_str = "9c:dc:71:56:af:45";
 static const char* client_mac_str = "9c:dc:71:5b:22:91";
 static const char* server_ip_str = "192.168.6.1";
 static const char* client_ip_str = "192.168.6.2";
-
-static const uint16_t server_port = 40000;
-static const uint16_t client_port = 40000;
-static const uint16_t base_port = 40000;
 
 #endif  // TRANSPORT_CONFIG_H
