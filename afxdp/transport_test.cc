@@ -197,6 +197,9 @@ int main(int argc, char* argv[]) {
         auto* data2 = new uint8_t[kTestMsgSize];
 
         for (int i = 0; i < kTestIters; i++) {
+            send_len = kTestMsgSize;
+            if (FLAGS_rand) send_len = distribution(generator);
+
             auto start = std::chrono::high_resolution_clock::now();
             switch (test_type) {
                 case kBasic:
@@ -204,6 +207,7 @@ int main(int argc, char* argv[]) {
                     break;
                 case kAsync: {
                     size_t step_size = send_len / kMaxInflight + 1;
+                    size_t recv_lens[kMaxInflight] = {0};
                     std::vector<PollCtx*> poll_ctxs;
                     for (int j = 0; j < kMaxInflight; j++) {
                         auto iter_len =
@@ -211,12 +215,16 @@ int main(int argc, char* argv[]) {
                         auto* iter_data = data + j * step_size;
 
                         PollCtx* poll_ctx;
-                        poll_ctx =
-                            ep.uccl_recv_async(conn_id, iter_data, &recv_len);
+                        poll_ctx = ep.uccl_recv_async(conn_id, iter_data,
+                                                      &recv_lens[j]);
                         poll_ctxs.push_back(poll_ctx);
                     }
                     for (auto poll_ctx : poll_ctxs) {
                         ep.uccl_poll(poll_ctx);
+                    }
+                    recv_len = 0;
+                    for (auto len : recv_lens) {
+                        recv_len += len;
                     }
                     break;
                 }
@@ -260,8 +268,7 @@ int main(int argc, char* argv[]) {
 
             if (FLAGS_verify) {
                 bool data_mismatch = false;
-                auto expected_len =
-                    FLAGS_rand ? distribution(generator) : kTestMsgSize;
+                auto expected_len = FLAGS_rand ? send_len : kTestMsgSize;
                 if (recv_len != expected_len) {
                     LOG(ERROR) << "Received message size mismatches, expected "
                                << expected_len << ", received " << recv_len;
@@ -270,7 +277,7 @@ int main(int argc, char* argv[]) {
                 for (int j = 0; j < recv_len / sizeof(uint64_t); j++) {
                     if (data_u64[j] != (uint64_t)i * (uint64_t)j) {
                         data_mismatch = true;
-                        LOG(ERROR)
+                        LOG_EVERY_N(ERROR, 1000)
                             << "Data mismatch at index " << j * sizeof(uint64_t)
                             << ", expected " << (uint64_t)i * (uint64_t)j
                             << ", received " << data_u64[j];
