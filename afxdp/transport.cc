@@ -786,8 +786,7 @@ std::tuple<FrameBuf *, FrameBuf *, uint32_t> UcclEngine::deserialize_msg(
 }
 
 Endpoint::Endpoint(const char *interface_name, int queue_id, int num_frames,
-                   int engine_cpuid)
-    : next_avail_flow_id_(0xdeadbeaf), ctx_pool_(kMaxInflightMsg) {
+                   int engine_cpuid) {
     static std::once_flag flag_once;
     std::call_once(flag_once, [interface_name]() {
         AFXDPFactory::init(interface_name, "ebpf_transport.o",
@@ -806,8 +805,10 @@ Endpoint::Endpoint(const char *interface_name, int queue_id, int num_frames,
             engine_ptr->run();
         });
 
+    ctx_pool_ = new SharedPool<PollCtx *, true>(kMaxInflightMsg);
+    ctx_pool_buf_ = new uint8_t[kMaxInflightMsg * sizeof(PollCtx)];
     for (int i = 0; i < kMaxInflightMsg; i++) {
-        ctx_pool_.push(new PollCtx());
+        ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());
     }
 
     // Create listening socket
@@ -833,13 +834,15 @@ Endpoint::Endpoint(const char *interface_name, int queue_id, int num_frames,
 }
 
 Endpoint::~Endpoint() {
-    // TODO(yang): free all ctx in ctx_pool_.
+    engine_->shutdown();
+    engine_th_->join();
+
+    delete ctx_pool_;
+    delete[] ctx_pool_buf_;
     close(listen_fd_);
     for (auto [flow_id, fd] : bootstrap_fd_map_) {
         close(fd);
     }
-    engine_->shutdown();
-    engine_th_->join();
 }
 
 FlowID Endpoint::uccl_connect(std::string remote_ip) {
@@ -848,10 +851,10 @@ FlowID Endpoint::uccl_connect(std::string remote_ip) {
     int bootstrap_fd;
 
     bootstrap_fd = socket(AF_INET, SOCK_STREAM, 0);
-    DCHECK(bootstrap_fd >= 0) << "ERROR: opening socket";
+    DCHECK(bootstrap_fd >= 0);
 
     server = gethostbyname(remote_ip.c_str());
-    DCHECK(server) << "ERROR: no such host";
+    DCHECK(server);
 
     bzero((char *)&serv_addr, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
@@ -859,9 +862,7 @@ FlowID Endpoint::uccl_connect(std::string remote_ip) {
           server->h_length);
     serv_addr.sin_port = htons(kBootstrapPort);
 
-    LOG(INFO) << "Connecting to " << remote_ip << " (0x" << std::hex
-              << serv_addr.sin_addr.s_addr << std::dec << ":" << kBootstrapPort
-              << ")";
+    LOG(INFO) << "Connecting to " << remote_ip << ":" << kBootstrapPort;
 
     // Connect and set nonblocking and nodelay
     while (connect(bootstrap_fd, (struct sockaddr *)&serv_addr,
@@ -875,17 +876,26 @@ FlowID Endpoint::uccl_connect(std::string remote_ip) {
     setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void *)&flag,
                sizeof(int));
 
+    int ret;
     FlowID flow_id;
-    int ret = read(bootstrap_fd, &flow_id, sizeof(FlowID));
-    DCHECK(ret == sizeof(FlowID)) << "ERROR: reading flow_id";
-    DCHECK(bootstrap_fd_map_.find(flow_id) == bootstrap_fd_map_.end())
-        << "ERROR: Duplicate FlowID";
+    while (true) {
+        ret = read(bootstrap_fd, &flow_id, sizeof(FlowID));
+        DCHECK(ret == sizeof(FlowID));
+
+        // Check if the flow ID is unique, and answer to the server.
+        bool unique =
+            (bootstrap_fd_map_.find(flow_id) == bootstrap_fd_map_.end());
+        ret = write(bootstrap_fd, &unique, sizeof(bool));
+        DCHECK(ret == sizeof(bool));
+
+        if (unique) break;
+    }
     bootstrap_fd_map_[flow_id] = bootstrap_fd;
     LOG(INFO) << "FlowID: " << std::hex << "0x" << flow_id;
 
     char remote_mac_char[ETH_ALEN];
     ret = read(bootstrap_fd, remote_mac_char, ETH_ALEN);
-    DCHECK(ret == ETH_ALEN) << "ERROR: reading remote_mac";
+    DCHECK(ret == ETH_ALEN);
     std::string remote_mac = mac_to_str(remote_mac_char);
     LOG(INFO) << "Remote MAC: " << remote_mac;
 
@@ -894,7 +904,7 @@ FlowID Endpoint::uccl_connect(std::string remote_ip) {
     LOG(INFO) << "Local MAC: " << local_mac;
     str_to_mac(local_mac, local_mac_char);
     ret = write(bootstrap_fd, local_mac_char, ETH_ALEN);
-    DCHECK(ret == ETH_ALEN) << "ERROR: writing local_mac";
+    DCHECK(ret == ETH_ALEN);
 
     install_flow_on_engine(remote_ip, remote_mac, flow_id);
 
@@ -903,7 +913,7 @@ FlowID Endpoint::uccl_connect(std::string remote_ip) {
     bool sync = true;
     ret = write(bootstrap_fd, &sync, sizeof(bool));
     ret = read(bootstrap_fd, &sync, sizeof(bool));
-    DCHECK(ret == sizeof(bool) && sync) << "ERROR: final syncing";
+    DCHECK(ret == sizeof(bool) && sync);
 
     return flow_id;
 }
@@ -916,7 +926,7 @@ std::tuple<FlowID, std::string> Endpoint::uccl_accept() {
     LOG(INFO) << "Accepting...";
     // Accept connection and set nonblocking and nodelay
     bootstrap_fd = accept(listen_fd_, (struct sockaddr *)&cli_addr, &clilen);
-    DCHECK(bootstrap_fd >= 0) << "ERROR: accept";
+    DCHECK(bootstrap_fd >= 0);
     auto remote_ip = ip_to_str(cli_addr.sin_addr.s_addr);
 
     LOG(INFO) << "Accept from " << remote_ip << ":" << cli_addr.sin_port;
@@ -925,14 +935,25 @@ std::tuple<FlowID, std::string> Endpoint::uccl_accept() {
     setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void *)&flag,
                sizeof(int));
 
-    // TODO(yang): making it unique for both client and server.
-    FlowID flow_id = next_avail_flow_id_++;
+    // Generate unique flow ID for both client and server.
+    int ret;
+    FlowID flow_id;
+    while (true) {
+        flow_id = U64Rand(0, std::numeric_limits<FlowID>::max());
+        if (bootstrap_fd_map_.find(flow_id) != bootstrap_fd_map_.end()) {
+            continue;
+        }
 
-    DCHECK(bootstrap_fd_map_.find(flow_id) == bootstrap_fd_map_.end())
-        << "ERROR: Duplicate FlowID";
+        // Ask client if this is unique
+        ret = write(bootstrap_fd, &flow_id, sizeof(FlowID));
+        DCHECK(ret == sizeof(FlowID));
+        bool unique = false;
+        ret = read(bootstrap_fd, &unique, sizeof(bool));
+        DCHECK(ret == sizeof(bool));
+
+        if (unique) break;
+    }
     bootstrap_fd_map_[flow_id] = bootstrap_fd;
-    int ret = write(bootstrap_fd, &flow_id, sizeof(FlowID));
-    DCHECK(ret == sizeof(FlowID)) << "ERROR: writing flow_id";
     LOG(INFO) << "FlowID: " << std::hex << "0x" << flow_id;
 
     char local_mac_char[ETH_ALEN];
@@ -940,11 +961,11 @@ std::tuple<FlowID, std::string> Endpoint::uccl_accept() {
     LOG(INFO) << "Local MAC: " << local_mac;
     str_to_mac(local_mac, local_mac_char);
     ret = write(bootstrap_fd, local_mac_char, ETH_ALEN);
-    DCHECK(ret == ETH_ALEN) << "ERROR: writing local_mac";
+    DCHECK(ret == ETH_ALEN);
 
     char remote_mac_char[ETH_ALEN];
     ret = read(bootstrap_fd, remote_mac_char, ETH_ALEN);
-    DCHECK(ret == ETH_ALEN) << "ERROR: reading remote_mac";
+    DCHECK(ret == ETH_ALEN);
     std::string remote_mac = mac_to_str(remote_mac_char);
     LOG(INFO) << "Remote MAC: " << remote_mac;
 
@@ -953,7 +974,7 @@ std::tuple<FlowID, std::string> Endpoint::uccl_accept() {
     bool sync = false;
     ret = read(bootstrap_fd, &sync, sizeof(bool));
     ret = write(bootstrap_fd, &sync, sizeof(bool));
-    DCHECK(ret == sizeof(bool) && sync) << "ERROR: final syncing";
+    DCHECK(ret == sizeof(bool) && sync);
 
     return std::make_tuple(flow_id, remote_ip);
 }
@@ -965,7 +986,7 @@ bool Endpoint::uccl_send(FlowID flow_id, const void *data, const size_t len) {
 
 PollCtx *Endpoint::uccl_send_async(FlowID flow_id, const void *data,
                                    const size_t len) {
-    auto *poll_ctx = ctx_pool_.pop();
+    auto *poll_ctx = ctx_pool_->pop();
     Channel::Msg msg = {
         .opcode = Channel::Msg::Op::kTx,
         .flow_id = flow_id,
@@ -986,7 +1007,7 @@ bool Endpoint::uccl_recv(FlowID flow_id, void *data, size_t *len) {
 }
 
 PollCtx *Endpoint::uccl_recv_async(FlowID flow_id, void *data, size_t *len) {
-    auto *poll_ctx = ctx_pool_.pop();
+    auto *poll_ctx = ctx_pool_->pop();
     Channel::Msg msg = {
         .opcode = Channel::Msg::Op::kRx,
         .flow_id = flow_id,
@@ -1019,7 +1040,7 @@ bool Endpoint::uccl_poll_once(PollCtx *ctx) {
     std::atomic_thread_fence(std::memory_order_acquire);
 
     ctx->clear();
-    ctx_pool_.push(ctx);
+    ctx_pool_->push(ctx);
     return true;
 }
 

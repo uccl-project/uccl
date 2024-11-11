@@ -596,18 +596,18 @@ class Endpoint {
     std::unique_ptr<std::thread> engine_th_;
 
     int listen_fd_;
-    int next_avail_flow_id_;
     std::unordered_map<FlowID, int> bootstrap_fd_map_;
-    SharedPool<PollCtx *, true> ctx_pool_;
+    SharedPool<PollCtx *, true> *ctx_pool_;
+    uint8_t *ctx_pool_buf_;
 
    public:
     Endpoint(const char *interface_name, int queue_id, int num_frames,
              int engine_cpuid);
     ~Endpoint();
 
-    // Connecting to a remote address.
+    // Connecting to a remote address; not thread-safe
     FlowID uccl_connect(std::string remote_ip);
-    // Accepting a connection from a remote address.
+    // Accepting a connection from a remote address; not thread-safe
     std::tuple<FlowID, std::string> uccl_accept();
 
     // Sending the data by leveraging multiple port combinations.

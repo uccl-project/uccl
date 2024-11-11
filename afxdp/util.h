@@ -593,6 +593,12 @@ inline int IntRand(const int& min, const int& max) {
     return distribution(generator);
 }
 
+inline uint64_t U64Rand(const uint64_t& min, const uint64_t& max) {
+    static thread_local std::mt19937 generator(std::random_device{}());
+    std::uniform_int_distribution<uint64_t> distribution(min, max);
+    return distribution(generator);
+}
+
 inline double FloatRand(const double& min, const double& max) {
     static thread_local std::mt19937 generator(std::random_device{}());
     std::uniform_real_distribution<double> distribution(min, max);
