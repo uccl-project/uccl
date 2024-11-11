@@ -69,8 +69,8 @@ Note that any program that leverages util_afxdp no long needs root to use AFXDP 
 
 ```
 sudo ./afxdp_daemon_main --logtostderr=1
-./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1
-./transport_test --client --logtostderr=1 --vmodule=transport=1,util_afxdp=1
+./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --test=async --verify --rand
+./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --client --test=async --verify --rand
 ```
 
 ### MISC setup
