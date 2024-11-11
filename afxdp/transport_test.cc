@@ -19,9 +19,11 @@ const size_t kMaxInflight = 8;
 DEFINE_bool(client, false, "Whether this is a client sending traffic.");
 DEFINE_bool(verify, false, "Whether to check data correctness.");
 DEFINE_bool(rand_len, false, "Whether to use randomized data length.");
-DEFINE_string(test, "basic", "Which test to run: basic, async, pingpong, mt.");
+DEFINE_string(test, "basic",
+              "Which test to run: basic, async, pingpong, mt (multi-thread), "
+              "mc (multi-connection).");
 
-enum TestType { kBasic, kAsync, kPingpong, kMt };
+enum TestType { kBasic, kAsync, kPingpong, kMt, kMc };
 
 volatile bool quit = false;
 
@@ -51,6 +53,8 @@ int main(int argc, char* argv[]) {
         test_type = kPingpong;
     } else if (FLAGS_test == "mt") {
         test_type = kMt;
+    } else if (FLAGS_test == "mc") {
+        test_type = kMc;
     } else {
         LOG(FATAL) << "Unknown test type: " << FLAGS_test;
     }
@@ -59,6 +63,8 @@ int main(int argc, char* argv[]) {
         auto ep = Endpoint(DEV_DEFAULT, QID_DEFAULT, NUM_FRAMES, ENGINE_CPUID);
         pin_thread_to_cpu(ENGINE_CPUID + 1);
         auto conn_id = ep.uccl_connect(server_ip_str);
+        FlowID conn_id2;
+        if (test_type == kMc) conn_id2 = ep.uccl_connect(server_ip_str);
 
         size_t send_len = kTestMsgSize, recv_len = kTestMsgSize;
         auto* data = new uint8_t[kTestMsgSize];
@@ -130,6 +136,15 @@ int main(int argc, char* argv[]) {
                     sent_bytes += send_len;
                     break;
                 }
+                case kMc: {
+                    PollCtx *poll_ctx1, *poll_ctx2;
+                    poll_ctx1 = ep.uccl_send_async(conn_id, data, send_len);
+                    poll_ctx2 = ep.uccl_send_async(conn_id2, data2, send_len);
+                    ep.uccl_poll(poll_ctx1);
+                    ep.uccl_poll(poll_ctx2);
+                    sent_bytes += send_len * 2;
+                    break;
+                }
                 default:
                     break;
             }
@@ -167,6 +182,10 @@ int main(int argc, char* argv[]) {
         auto ep = Endpoint(DEV_DEFAULT, QID_DEFAULT, NUM_FRAMES, ENGINE_CPUID);
         pin_thread_to_cpu(ENGINE_CPUID + 1);
         auto [conn_id, client_ip_str] = ep.uccl_accept();
+        FlowID conn_id2;
+        std::string client_ip_str2;
+        if (test_type == kMc)
+            std::tie(conn_id2, client_ip_str2) = ep.uccl_accept();
 
         size_t send_len = kTestMsgSize, recv_len = kTestMsgSize;
         auto* data = new uint8_t[kTestMsgSize];
@@ -218,6 +237,14 @@ int main(int argc, char* argv[]) {
                     });
                     t1.join();
                     t2.join();
+                    break;
+                }
+                case kMc: {
+                    PollCtx *poll_ctx1, *poll_ctx2;
+                    poll_ctx1 = ep.uccl_recv_async(conn_id, data, &recv_len);
+                    poll_ctx2 = ep.uccl_recv_async(conn_id2, data2, &recv_len);
+                    ep.uccl_poll(poll_ctx1);
+                    ep.uccl_poll(poll_ctx2);
                     break;
                 }
                 default:
