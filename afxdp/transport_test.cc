@@ -18,7 +18,7 @@ const size_t kMaxInflight = 8;
 
 DEFINE_bool(client, false, "Whether this is a client sending traffic.");
 DEFINE_bool(verify, false, "Whether to check data correctness.");
-DEFINE_bool(rand_len, false, "Whether to use randomized data length.");
+DEFINE_bool(rand, false, "Whether to use randomized data length.");
 DEFINE_string(test, "basic",
               "Which test to run: basic, async, pingpong, mt (multi-thread), "
               "mc (multi-connection).");
@@ -59,6 +59,11 @@ int main(int argc, char* argv[]) {
         LOG(FATAL) << "Unknown test type: " << FLAGS_test;
     }
 
+    std::mt19937 generator(42);
+    std::uniform_int_distribution<int> distribution(1024, kTestMsgSize);
+
+    srand(42);
+
     if (FLAGS_client) {
         auto ep = Endpoint(DEV_DEFAULT, QID_DEFAULT, NUM_FRAMES, ENGINE_CPUID);
         pin_thread_to_cpu(ENGINE_CPUID + 1);
@@ -77,12 +82,11 @@ int main(int argc, char* argv[]) {
 
         for (int i = 0; i < kTestIters; i++) {
             send_len = kTestMsgSize;
-            if (FLAGS_rand_len)
-                send_len = IntRand(1, kTestMsgSize - 1024) + 1024;
+            if (FLAGS_rand) send_len = distribution(generator);
 
             if (FLAGS_verify) {
                 for (int j = 0; j < send_len / sizeof(uint64_t); j++) {
-                    data_u64[j] = (uint64_t)(i + 1) * (uint64_t)j;
+                    data_u64[j] = (uint64_t)i * (uint64_t)j;
                 }
             }
 
@@ -196,7 +200,7 @@ int main(int argc, char* argv[]) {
             auto start = std::chrono::high_resolution_clock::now();
             switch (test_type) {
                 case kBasic:
-                    ep.uccl_recv(conn_id, data, &send_len);
+                    ep.uccl_recv(conn_id, data, &recv_len);
                     break;
                 case kAsync: {
                     size_t step_size = send_len / kMaxInflight + 1;
@@ -255,13 +259,24 @@ int main(int argc, char* argv[]) {
                     std::chrono::high_resolution_clock::now() - start);
 
             if (FLAGS_verify) {
-                CHECK_LE(recv_len, kTestMsgSize)
-                    << "Received message size mismatches";
-                for (int j = 0; j < recv_len / sizeof(uint64_t); j++) {
-                    CHECK_EQ(data_u64[j], (uint64_t)(i + 1) * (uint64_t)j)
-                        << "Data mismatch at index " << j << " at iter "
-                        << i + 1;
+                bool data_mismatch = false;
+                auto expected_len =
+                    FLAGS_rand ? distribution(generator) : kTestMsgSize;
+                if (recv_len != expected_len) {
+                    LOG(ERROR) << "Received message size mismatches, expected "
+                               << expected_len << ", received " << recv_len;
+                    data_mismatch = true;
                 }
+                for (int j = 0; j < recv_len / sizeof(uint64_t); j++) {
+                    if (data_u64[j] != (uint64_t)i * (uint64_t)j) {
+                        data_mismatch = true;
+                        LOG(ERROR)
+                            << "Data mismatch at index " << j * sizeof(uint64_t)
+                            << ", expected " << (uint64_t)i * (uint64_t)j
+                            << ", received " << data_u64[j];
+                    }
+                }
+                CHECK(!data_mismatch) << "Data mismatch at iter " << i;
                 memset(data, 0, recv_len);
             }
 

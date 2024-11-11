@@ -122,13 +122,16 @@ struct __attribute__((packed)) UcclPktHdr {
     };
     UcclFlags net_flags;  // Network flags.
     uint8_t msg_flags;    // Field to reflect the `FrameBuf' flags.
+    be16_t frame_len;     // Length of the frame.
     be64_t flow_id;       // Flow ID to denote the connection.
     be32_t seqno;  // Sequence number to denote the packet counter in the flow.
     be32_t ackno;  // Sequence number to denote the packet counter in the flow.
-    be64_t sack_bitmap[4];     // Bitmap of the SACKs received.
+    be64_t sack_bitmap[swift::Pcb::kSackBitmapSize /
+                       swift::Pcb::kSackBitmapBucketSize];  // Bitmap of the
+                                                            // SACKs received.
     be16_t sack_bitmap_count;  // Length of the SACK bitmap [0-256].
 };
-static_assert(sizeof(UcclPktHdr) == 54, "UcclPktHdr size mismatch");
+static_assert(sizeof(UcclPktHdr) == 56, "UcclPktHdr size mismatch");
 
 #ifdef USING_TCP
 static const size_t kNetHdrLen =
@@ -222,7 +225,7 @@ class RXTracking {
    public:
     // 256-bit SACK bitmask => we can track up to 256 packets
     static constexpr std::size_t kReassemblyMaxSeqnoDistance =
-        sizeof(UcclPktHdr::sack_bitmap) * 8;
+        swift::Pcb::kSackBitmapSize;
 
     static_assert((kReassemblyMaxSeqnoDistance &
                    (kReassemblyMaxSeqnoDistance - 1)) == 0,
@@ -388,12 +391,9 @@ class UcclFlow {
     void prepare_l2header(uint8_t *pkt_addr) const;
     void prepare_l3header(uint8_t *pkt_addr, uint32_t payload_bytes) const;
     void prepare_l4header(uint8_t *pkt_addr, uint32_t payload_bytes) const;
-    void prepare_ucclhdr(uint8_t *pkt_addr, uint32_t seqno, uint32_t ackno,
-                         const UcclPktHdr::UcclFlags &net_flags,
-                         uint8_t msg_flags = 0) const;
     AFXDPSocket::frame_desc craft_ctlpacket(
         uint32_t seqno, uint32_t ackno,
-        const UcclPktHdr::UcclFlags &flags) const;
+        const UcclPktHdr::UcclFlags &net_flags) const;
 
     inline AFXDPSocket::frame_desc craft_ack(uint32_t seqno,
                                              uint32_t ackno) const {

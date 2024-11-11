@@ -36,6 +36,7 @@ constexpr bool seqno_gt(uint32_t a, uint32_t b) {
 struct Pcb {
     static constexpr std::size_t kInitialCwnd = 256;
     static constexpr std::size_t kSackBitmapSize = 256;
+    static constexpr std::size_t kSackBitmapBucketSize = sizeof(uint64_t) * 8;
     static constexpr std::size_t kFastRexmitDupAckThres = 2;
     static constexpr std::size_t kRtoMaxRexmitConsectutiveAllowed = 1024;
     static constexpr int kRtoExpireThresInTicks = 3;  // in slow timer ticks.
@@ -100,32 +101,31 @@ struct Pcb {
     }
     void rto_advance() { rto_timer++; }
 
-    void sack_bitmap_shift_right_one() {
+    void sack_bitmap_shift_left_one() {
         constexpr size_t sack_bitmap_bucket_max_idx =
-            kSackBitmapSize / sizeof(sack_bitmap[0]) - 1;
+            kSackBitmapSize / kSackBitmapBucketSize - 1;
 
-        for (size_t i = sack_bitmap_bucket_max_idx; i > 0; --i) {
-            // Shift the current each bucket to the right by 1 and take the most
-            // significant bit from the previous bucket
-            const uint64_t sack_bitmap_left_bucket = sack_bitmap[i - 1];
-            uint64_t &sack_bitmap_right_bucket = sack_bitmap[i];
+        for (size_t i = 0; i < sack_bitmap_bucket_max_idx; i++) {
+            // Shift the current each bucket to the left by 1 and take the most
+            // significant bit from the next bucket
+            uint64_t &sack_bitmap_left_bucket = sack_bitmap[i];
+            const uint64_t sack_bitmap_right_bucket = sack_bitmap[i + 1];
 
-            sack_bitmap_right_bucket = (sack_bitmap_right_bucket >> 1) |
-                                       (sack_bitmap_left_bucket << 63);
+            sack_bitmap_left_bucket = (sack_bitmap_left_bucket >> 1) |
+                                      (sack_bitmap_right_bucket << 63);
         }
 
-        // Special handling for the left most bucket
-        uint64_t &sack_bitmap_left_most_bucket = sack_bitmap[0];
-        sack_bitmap_left_most_bucket >>= 1;
+        // Special handling for the right most bucket
+        uint64_t &sack_bitmap_right_most_bucket =
+            sack_bitmap[sack_bitmap_bucket_max_idx];
+        sack_bitmap_right_most_bucket >>= 1;
 
         sack_bitmap_count--;
     }
 
     void sack_bitmap_bit_set(const size_t index) {
-        constexpr size_t sack_bitmap_bucket_size = sizeof(sack_bitmap[0]) * 8;
-        const size_t sack_bitmap_bucket_idx = index / sack_bitmap_bucket_size;
-        const size_t sack_bitmap_idx_in_bucket =
-            index % sack_bitmap_bucket_size;
+        const size_t sack_bitmap_bucket_idx = index / kSackBitmapBucketSize;
+        const size_t sack_bitmap_idx_in_bucket = index % kSackBitmapBucketSize;
 
         LOG_IF(FATAL, index >= kSackBitmapSize)
             << "Index out of bounds: " << index;
@@ -141,7 +141,7 @@ struct Pcb {
     uint32_t snd_una{0};
     uint32_t snd_ooo_acks{0};
     uint32_t rcv_nxt{0};
-    uint64_t sack_bitmap[kSackBitmapSize / sizeof(uint64_t)]{0};
+    uint64_t sack_bitmap[kSackBitmapSize / kSackBitmapBucketSize]{0};
     uint8_t sack_bitmap_count{0};
     uint16_t cwnd{kInitialCwnd};
     uint16_t duplicate_acks{0};

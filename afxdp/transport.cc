@@ -131,15 +131,16 @@ RXTracking::ConsumeRet RXTracking::consume(swift::Pcb *pcb, FrameBuf *msgbuf) {
 
     // Buffer the packet in the frame pool. It may be out-of-order.
     const size_t payload_len = frame_len - kNetHdrLen - kUcclHdrLen;
-    // This records the incoming network packet UcclPktHdr.msg_flags in
-    // FrameBuf.
-    msgbuf->set_msg_flags(ucclh->msg_flags);
 
     if (seqno == expected_seqno) {
-        VLOG(3) << "Received expected packet: " << seqno;
+        if (msgbuf->is_last())
+            VLOG(2) << "Received expected packet: " << seqno
+                    << " payload_len: " << payload_len;
         reass_q_.emplace_front(msgbuf, seqno);
     } else {
-        VLOG(3) << "Received OOO trackable packet: " << seqno;
+        if (msgbuf->is_last())
+            VLOG(2) << "Received OOO trackable packet: " << seqno
+                    << " payload_len: " << payload_len;
         reass_q_.insert(it, reasm_queue_ent_t(msgbuf, seqno));
     }
 
@@ -182,7 +183,7 @@ void RXTracking::push_inorder_msgbuf_to_app(swift::Pcb *pcb) {
 
         pcb->advance_rcv_nxt();
 
-        pcb->sack_bitmap_shift_right_one();
+        pcb->sack_bitmap_shift_left_one();
     }
 }
 
@@ -191,7 +192,7 @@ void RXTracking::try_copy_msgbuf_to_appbuf(void *app_buf, size_t *app_buf_len,
     if (app_buf && app_buf_len && poll_ctx)
         app_buf_stash_.push_back({app_buf, app_buf_len, poll_ctx});
 
-    VLOG(2) << "ready_msg_stash_ size: " << ready_msg_stash_.size()
+    VLOG(3) << "ready_msg_stash_ size: " << ready_msg_stash_.size()
             << " app_buf_stash_ size: " << app_buf_stash_.size();
 
     while (!ready_msg_stash_.empty() && !app_buf_stash_.empty()) {
@@ -208,6 +209,12 @@ void RXTracking::try_copy_msgbuf_to_appbuf(void *app_buf, size_t *app_buf_len,
             auto *payload_addr = pkt_addr + kNetHdrLen + kUcclHdrLen;
             auto payload_len =
                 msgbuf_iter->get_frame_len() - kNetHdrLen - kUcclHdrLen;
+
+            const auto *ucclh =
+                reinterpret_cast<const UcclPktHdr *>(pkt_addr + kNetHdrLen);
+
+            VLOG(2) << "payload_len: " << payload_len << " seqno: " << std::dec
+                    << ucclh->seqno.value();
 
             memcpy((uint8_t *)app_buf_desc.buf + app_buf_pos, payload_addr,
                    payload_len);
@@ -237,7 +244,7 @@ void RXTracking::try_copy_msgbuf_to_appbuf(void *app_buf, size_t *app_buf_len,
             app_buf_desc.poll_ctx->cv.notify_one();
         }
 
-        VLOG(3) << "Received a complete message " << app_buf_pos << " bytes";
+        VLOG(2) << "Received a complete message " << app_buf_pos << " bytes";
     }
 }
 
@@ -354,7 +361,6 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
             // anything.
         } else if (pcb_.duplicate_acks == swift::Pcb::kFastRexmitDupAckThres) {
             // Fast retransmit.
-            VLOG(3) << "Fast retransmit " << ackno;
             fast_retransmit();
         } else {
             // We have already done the fast retransmit, so we are now
@@ -366,23 +372,27 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
             // find from the SACK bitmap, when enumerating the SACK bitmap
             // for up to sack_bitmap_count ACKs.
             auto *msgbuf = tx_tracking_.get_oldest_unacked_msgbuf();
-            VLOG(3) << "Fast recovery " << ackno << " sack_bitmap_count "
+            VLOG(2) << "Fast recovery " << ackno << " sack_bitmap_count "
                     << sack_bitmap_count;
             size_t index = 0;
-            while (sack_bitmap_count && msgbuf) {
-                constexpr size_t sack_bitmap_bucket_size =
-                    sizeof(ucclh->sack_bitmap[0]) * 8;
+            while (sack_bitmap_count && msgbuf &&
+                   index < swift::Pcb::kSackBitmapSize) {
                 const size_t sack_bitmap_bucket_idx =
-                    index / sack_bitmap_bucket_size;
+                    index / swift::Pcb::kSackBitmapBucketSize;
                 const size_t sack_bitmap_idx_in_bucket =
-                    index % sack_bitmap_bucket_size;
+                    index % swift::Pcb::kSackBitmapBucketSize;
                 auto sack_bitmap =
                     ucclh->sack_bitmap[sack_bitmap_bucket_idx].value();
                 if ((sack_bitmap & (1ULL << sack_bitmap_idx_in_bucket)) == 0) {
                     // We found a missing packet.
-                    VLOG(3) << "Fast recovery sack_bitmap_count "
-                            << sack_bitmap_count;
                     auto seqno = pcb_.snd_una + index;
+
+                    VLOG(2) << "Fast recovery retransmitting " << seqno;
+                    const auto *ucclh = reinterpret_cast<const UcclPktHdr *>(
+                        msgbuf->get_pkt_addr() + kNetHdrLen);
+                    DCHECK_EQ(seqno, ucclh->seqno.value())
+                        << " seqno mismatch at index " << index;
+
                     prepare_datapacket(msgbuf, seqno);
                     msgbuf->mark_not_txpulltime_free();
                     missing_frames_.push_back(
@@ -480,28 +490,9 @@ void UcclFlow::prepare_l4header(uint8_t *pkt_addr,
 #endif
 }
 
-void UcclFlow::prepare_ucclhdr(uint8_t *pkt_addr, uint32_t seqno,
-                               uint32_t ackno,
-                               const UcclPktHdr::UcclFlags &net_flags,
-                               uint8_t msg_flags) const {
-    auto *ucclh = (UcclPktHdr *)(pkt_addr + kNetHdrLen);
-    ucclh->magic = be16_t(UcclPktHdr::kMagic);
-    ucclh->net_flags = net_flags;
-    ucclh->msg_flags = msg_flags;
-    ucclh->seqno = be32_t(seqno);
-    ucclh->ackno = be32_t(ackno);
-    ucclh->flow_id = be64_t(flow_id_);
-
-    for (size_t i = 0; i < sizeof(UcclPktHdr::sack_bitmap) /
-                               sizeof(UcclPktHdr::sack_bitmap[0]);
-         ++i) {
-        ucclh->sack_bitmap[i] = be64_t(pcb_.sack_bitmap[i]);
-    }
-    ucclh->sack_bitmap_count = be16_t(pcb_.sack_bitmap_count);
-}
-
 AFXDPSocket::frame_desc UcclFlow::craft_ctlpacket(
-    uint32_t seqno, uint32_t ackno, const UcclPktHdr::UcclFlags &flags) const {
+    uint32_t seqno, uint32_t ackno,
+    const UcclPktHdr::UcclFlags &net_flags) const {
     const size_t kControlPayloadBytes = kUcclHdrLen;
     auto frame_offset = socket_->pop_frame();
     auto msgbuf = FrameBuf::Create(frame_offset, socket_->umem_buffer_,
@@ -513,7 +504,23 @@ AFXDPSocket::frame_desc UcclFlow::craft_ctlpacket(
     prepare_l2header(pkt_addr);
     prepare_l3header(pkt_addr, kControlPayloadBytes);
     prepare_l4header(pkt_addr, kControlPayloadBytes);
-    prepare_ucclhdr(pkt_addr, seqno, ackno, flags);
+    // prepare_ucclhdr(pkt_addr, seqno, ackno, flags);
+
+    auto *ucclh = (UcclPktHdr *)(pkt_addr + kNetHdrLen);
+    ucclh->magic = be16_t(UcclPktHdr::kMagic);
+    ucclh->net_flags = net_flags;
+    ucclh->msg_flags = 0;
+    ucclh->frame_len = be16_t(kNetHdrLen + kControlPayloadBytes);
+    ucclh->seqno = be32_t(seqno);
+    ucclh->ackno = be32_t(ackno);
+    ucclh->flow_id = be64_t(flow_id_);
+
+    for (size_t i = 0; i < sizeof(UcclPktHdr::sack_bitmap) /
+                               sizeof(UcclPktHdr::sack_bitmap[0]);
+         ++i) {
+        ucclh->sack_bitmap[i] = be64_t(pcb_.sack_bitmap[i]);
+    }
+    ucclh->sack_bitmap_count = be16_t(pcb_.sack_bitmap_count);
 
     return {frame_offset, kNetHdrLen + kControlPayloadBytes};
 }
@@ -521,7 +528,7 @@ AFXDPSocket::frame_desc UcclFlow::craft_ctlpacket(
 void UcclFlow::prepare_datapacket(FrameBuf *msg_buf, uint32_t seqno) const {
     // Header length after before the payload.
     uint32_t frame_len = msg_buf->get_frame_len();
-    CHECK_LE(frame_len, AFXDP_MTU);
+    DCHECK_LE(frame_len, AFXDP_MTU);
     uint8_t *pkt_addr = msg_buf->get_pkt_addr();
 
     // Prepare network headers.
@@ -537,6 +544,7 @@ void UcclFlow::prepare_datapacket(FrameBuf *msg_buf, uint32_t seqno) const {
     // This fills the FrameBuf.flags into the outgoing packet
     // UcclPktHdr.msg_flags.
     ucclh->msg_flags = msg_buf->msg_flags();
+    ucclh->frame_len = be16_t(frame_len);
 
     ucclh->seqno = be32_t(seqno);
     ucclh->flow_id = be64_t(flow_id_);
@@ -548,6 +556,9 @@ void UcclFlow::fast_retransmit() {
     auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
     if (msg_buf) {
         prepare_datapacket(msg_buf, pcb_.snd_una);
+        const auto *ucclh = reinterpret_cast<const UcclPktHdr *>(
+            msg_buf->get_pkt_addr() + kNetHdrLen);
+        DCHECK_EQ(pcb_.snd_una, ucclh->seqno.value());
         msg_buf->mark_not_txpulltime_free();
         socket_->send_packet(
             {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
@@ -588,6 +599,10 @@ void UcclFlow::transmit_pending_packets() {
 
         auto *msg_buf = msg_buf_opt.value();
         auto seqno = pcb_.get_snd_nxt();
+        if (msg_buf->is_last()) {
+            VLOG(2) << "Transmitting seqno: " << seqno << " payload_len: "
+                    << msg_buf->get_frame_len() - kNetHdrLen - kUcclHdrLen;
+        }
         prepare_datapacket(msg_buf, seqno);
         msg_buf->mark_not_txpulltime_free();
         pending_tx_frames_.push_back(
@@ -652,6 +667,27 @@ void UcclEngine::run() {
                 auto *pkt_addr = msgbuf->get_pkt_addr();
                 auto *ucclh =
                     reinterpret_cast<UcclPktHdr *>(pkt_addr + kNetHdrLen);
+
+                // Record the incoming packet UcclPktHdr.msg_flags in FrameBuf.
+                msgbuf->set_msg_flags(ucclh->msg_flags);
+
+                // Work around an AFXDP bug that would receive the same packets
+                // with differet lengths multiple times.
+                if (ucclh->frame_len.value() != frame.frame_len) {
+                    VLOG(2) << "Received invalid frame length: "
+                            << ucclh->frame_len.value()
+                            << " != " << frame.frame_len;
+                    socket_->push_frame(frame.frame_offset);
+                    continue;
+                }
+
+                if (msgbuf->is_last()) {
+                    VLOG(2)
+                        << "Received seqno: " << ucclh->seqno.value()
+                        << " payload_len: "
+                        << msgbuf->get_frame_len() - kNetHdrLen - kUcclHdrLen;
+                }
+
                 auto flow_id = ucclh->flow_id.value();
                 rx_msgbuf_map_[flow_id].push_back(msgbuf);
             }
