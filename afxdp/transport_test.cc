@@ -69,7 +69,10 @@ int main(int argc, char* argv[]) {
         pin_thread_to_cpu(ENGINE_CPUID + 1);
         auto conn_id = ep.uccl_connect(server_ip_str);
         FlowID conn_id2;
-        if (test_type == kMc) conn_id2 = ep.uccl_connect(server_ip_str);
+        if (test_type == kMc) {
+            auto [conn_id_tmp, remote_ip_str] = ep.uccl_accept();
+            conn_id2 = conn_id_tmp;
+        }
 
         size_t send_len = kTestMsgSize, recv_len = kTestMsgSize;
         auto* data = new uint8_t[kTestMsgSize];
@@ -185,11 +188,11 @@ int main(int argc, char* argv[]) {
     } else {
         auto ep = Endpoint(DEV_DEFAULT, QID_DEFAULT, NUM_FRAMES, ENGINE_CPUID);
         pin_thread_to_cpu(ENGINE_CPUID + 1);
-        auto [conn_id, client_ip_str] = ep.uccl_accept();
+        auto [conn_id, client_ip_str_tmp] = ep.uccl_accept();
         FlowID conn_id2;
-        std::string client_ip_str2;
-        if (test_type == kMc)
-            std::tie(conn_id2, client_ip_str2) = ep.uccl_accept();
+        if (test_type == kMc) {
+            conn_id2 = ep.uccl_connect(client_ip_str);
+        }
 
         size_t send_len = kTestMsgSize, recv_len = kTestMsgSize;
         auto* data = new uint8_t[kTestMsgSize];

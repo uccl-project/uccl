@@ -480,6 +480,7 @@ class UcclEngine {
           last_periodic_timestamp_(rdtsc_to_us(rdtsc())),
           periodic_ticks_(0) {
         DCHECK(str_to_mac(local_l2_addr, local_l2_addr_));
+        if (GetEnvVar("UCCL_ENGINE_QUIET") == "1") stay_quiet_ = true;
     }
 
     // Install a flow that serves traffic with specific remote ip and mac.
@@ -574,6 +575,8 @@ class UcclEngine {
     uint64_t last_periodic_timestamp_;
     // Clock ticks for the slow timer.
     uint64_t periodic_ticks_;
+    // Whether to call dump_status() in periodic_process().
+    bool stay_quiet_{false};
     // Whether shutdown is requested.
     std::atomic<bool> shutdown_{false};
 };
@@ -594,12 +597,15 @@ class Endpoint {
     std::string local_ip_str_;
     std::string local_mac_str_;
 
+    std::mutex bootstrap_fd_map_mu_;
+
     std::unique_ptr<Channel> channel_;
     std::unique_ptr<UcclEngine> engine_;
     std::unique_ptr<std::thread> engine_th_;
 
     int listen_fd_;
     std::unordered_map<FlowID, int> bootstrap_fd_map_;
+
     SharedPool<PollCtx *, true> *ctx_pool_;
     uint8_t *ctx_pool_buf_;
 
@@ -608,9 +614,9 @@ class Endpoint {
              int engine_cpuid);
     ~Endpoint();
 
-    // Connecting to a remote address; not thread-safe
+    // Connecting to a remote address; thread-safe
     FlowID uccl_connect(std::string remote_ip);
-    // Accepting a connection from a remote address; not thread-safe
+    // Accepting a connection from a remote address; thread-safe
     std::tuple<FlowID, std::string> uccl_accept();
 
     // Sending the data by leveraging multiple port combinations.

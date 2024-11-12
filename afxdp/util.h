@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <iomanip>
 #include <random>
@@ -392,16 +393,16 @@ static inline std::string get_dev_ip(const char* dev_name) {
             tmpAddrPtr = &((struct sockaddr_in*)ifa->ifa_addr)->sin_addr;
             char addressBuffer[INET_ADDRSTRLEN];
             inet_ntop(AF_INET, tmpAddrPtr, addressBuffer, INET_ADDRSTRLEN);
-            LOG(INFO) << Format("%s IP Address %s\n", ifa->ifa_name,
-                                addressBuffer);
+            VLOG(3) << Format("%s IP Address %s\n", ifa->ifa_name,
+                              addressBuffer);
             return std::string(addressBuffer);
         } else if (ifa->ifa_addr->sa_family == AF_INET6) {  // check it is IP6
             // is a valid IP6 Address
             tmpAddrPtr = &((struct sockaddr_in6*)ifa->ifa_addr)->sin6_addr;
             char addressBuffer[INET6_ADDRSTRLEN];
             inet_ntop(AF_INET6, tmpAddrPtr, addressBuffer, INET6_ADDRSTRLEN);
-            LOG(INFO) << Format("%s IP Address %s\n", ifa->ifa_name,
-                                addressBuffer);
+            VLOG(3) << Format("%s IP Address %s\n", ifa->ifa_name,
+                              addressBuffer);
             return std::string(addressBuffer);
         }
     }
@@ -603,6 +604,11 @@ inline double FloatRand(const double& min, const double& max) {
     static thread_local std::mt19937 generator(std::random_device{}());
     std::uniform_real_distribution<double> distribution(min, max);
     return distribution(generator);
+}
+
+inline std::string GetEnvVar(std::string const& key) {
+    char* val = getenv(key.c_str());
+    return val == NULL ? std::string("") : std::string(val);
 }
 
 }  // namespace uccl

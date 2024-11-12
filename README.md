@@ -68,7 +68,7 @@ sudo ./client_main
 Note that any program that leverages util_afxdp no long needs root to use AFXDP sockets.
 
 ```
-sudo ./afxdp_daemon_main --logtostderr=1
+sudo ./afxdp_daemon_main --logtostderr=1 --pktloss
 ./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --test=async --verify --rand
 ./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --client --test=async --verify --rand
 ```

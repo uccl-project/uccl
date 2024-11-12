@@ -22,11 +22,6 @@ void interrupt_handler(int signal) {
 }
 
 Endpoint* ep;
-FlowID flow_id;
-
-struct afxdp_context {
-    FlowID flow_id;
-};
 
 ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
     google::InitGoogleLogging("nccl_plugin");
@@ -39,35 +34,12 @@ ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
     ep = new Endpoint(DEV_DEFAULT, QID_DEFAULT, NUM_FRAMES, ENGINE_CPUID);
     pin_thread_to_cpu(ENGINE_CPUID + 1);
 
-    std::string local_ip_str = get_dev_ip(DEV_DEFAULT);
-    DCHECK(local_ip_str != "");
-    std::string local_mac_str = get_dev_mac(DEV_DEFAULT);
-    DCHECK(local_mac_str != "");
-
-    bool is_this_client =
-        (local_ip_str == client_ip_str && local_mac_str == client_mac_str);
-    bool is_this_server =
-        (local_ip_str == server_ip_str && local_mac_str == server_mac_str);
-
-    if (is_this_client) {
-        LOG(INFO) << "pluginListen: This is the client machine";
-        flow_id = ep->uccl_connect(server_ip_str);
-        LOG(INFO) << "Connected to server " << server_ip_str;
-    } else if (is_this_server) {
-        LOG(INFO) << "pluginListen: This is the server machine";
-        auto [flow_id_, client_ip_str] = ep->uccl_accept();
-        flow_id = flow_id_;
-        LOG(INFO) << "Accepted connection from " << client_ip_str;
-    } else {
-        DCHECK(false) << "This machine is neither client nor server";
-    }
-
     LOG(INFO) << "NCCL Plugin initialized";
     return ncclSuccess;
 }
 ncclResult_t pluginDevices(int* ndev) {
-    LOG(INFO) << "pluginDevices";
     *ndev = 1;
+    LOG(INFO) << "pluginDevices 1";
     return ncclSuccess;
 }
 
@@ -78,7 +50,7 @@ ncclResult_t pluginPtrSupport(int dev, int* supportedTypes) {
 ncclResult_t pluginGetProperties(int dev, ncclNetProperties_v8_t* props) {
     // Below are default values, if unsure don't change.
 
-    props->name = (char*)"Example";
+    props->name = (char*)DEV_DEFAULT;
     // Fill for proper topology detection, e.g.
     // /sys/devices/pci0000:00/0000:00:10.0/0000:0b:00.0
     props->pciPath = NULL;
@@ -107,45 +79,122 @@ ncclResult_t pluginGetProperties(int dev, ncclNetProperties_v8_t* props) {
     return ncclSuccess;
 }
 
+struct SharedCtlCtx {
+    uint32_t ip_addr_u32;
+};
+
+struct SharedDataCtx {
+    FlowID flow_id;
+};
+
+// To create a connection, NCCL will start by calling listen on the receiver
+// side. This function takes a device number as input argument, and should
+// return a local listenComm object, and a handle to pass to the other side, so
+// that the sender side can connect to the receiver. The handle is a buffer of
+// size NCCL_NET_HANDLE_MAXSIZE and is provided by NCCL. This call should never
+// block, but contrary to connect and accept, listenComm should never be NULL if
+// the call succeeds.
 ncclResult_t pluginListen(int dev, void* handle, void** listenComm) {
-    struct afxdp_context* ctx = static_cast<struct afxdp_context*>(handle);
-    static_assert(sizeof(struct afxdp_context) < NCCL_NET_HANDLE_MAXSIZE,
+    DCHECK(dev == 0);
+
+    struct SharedCtlCtx* ctx = static_cast<struct SharedCtlCtx*>(handle);
+    static_assert(sizeof(struct SharedCtlCtx) < NCCL_NET_HANDLE_MAXSIZE,
                   "ncclSocketHandle size too large");
 
+    std::string local_ip_str = get_dev_ip(DEV_DEFAULT);
+    ctx->ip_addr_u32 = str_to_ip(local_ip_str);
+    LOG(INFO) << "pluginListen: " << local_ip_str;
+
+    // Listen is alreday done by Endpoint init.
     *listenComm = ctx;
     return ncclSuccess;
 }
+
+struct AsyncConnectCtx {
+    FlowID flow_id;
+    std::atomic<bool> done = false;
+    std::thread connect_th;
+};
+// Mapping from remote_ip to AsyncConnectCtx
+std::mutex async_connect_ctx_map_mu;
+std::unordered_map<uint32_t, AsyncConnectCtx*> async_connect_ctx_map;
+
+// NCCL will use its bootstrap infrastructure to provide the handle to the
+// sender side, then call connect on the sender side on a given device index
+// dev, providing the handle. connect should not block either, and instead set
+// sendComm to NULL and return ncclSuccess. In that case, NCCL will call accept
+// again until it succeeds.
 ncclResult_t pluginConnect(int dev, void* handle, void** sendComm,
                            ncclNetDeviceHandle_v8_t** sendDevComm) {
-    // This handle data is transferred from remote via MPI
-    struct afxdp_context* ctx = static_cast<struct afxdp_context*>(handle);
+    DCHECK(dev == 0);
 
-    *sendComm = ctx;
+    // This handle data from pluginListen is transferred from remote via MPI
+    struct SharedCtlCtx* ctx = static_cast<struct SharedCtlCtx*>(handle);
+    auto remote_ip = ctx->ip_addr_u32;
+
+    std::lock_guard<std::mutex> lock(async_connect_ctx_map_mu);
+    auto it = async_connect_ctx_map.find(remote_ip);
+    if (it == async_connect_ctx_map.end()) {
+        auto* ctx = new AsyncConnectCtx();
+        ctx->connect_th = std::thread([ctx, remote_ip] {
+            std::string remote_ip_str = ip_to_str(remote_ip);
+            auto flow_id = ep->uccl_connect(remote_ip_str);
+            LOG(INFO) << "pluginConnect: connected to " << remote_ip_str;
+            ctx->flow_id = flow_id;
+            std::atomic_thread_fence(std::memory_order_release);
+            std::atomic_store_explicit(&ctx->done, true,
+                                       std::memory_order_relaxed);
+        });
+        async_connect_ctx_map[remote_ip] = ctx;
+        *sendComm = nullptr;
+    } else {
+        auto* ctx = it->second;
+        auto done =
+            std::atomic_load_explicit(&ctx->done, std::memory_order_relaxed);
+        if (done) {
+            std::atomic_thread_fence(std::memory_order_acquire);
+            auto flow_id = ctx->flow_id;
+            ctx->connect_th.join();
+            delete ctx;
+            *sendComm = new SharedDataCtx{flow_id};
+        } else {
+            *sendComm = nullptr;
+        }
+    }
     return ncclSuccess;
 }
+
+// To finalize the connection, the receiver side will call accept on the
+// listenComm returned by the listen call previously. If the sender did not
+// connect yet, accept should not block. It should return ncclSuccess, setting
+// recvComm to NULL. NCCL will call accept again until it succeeds.
 ncclResult_t pluginAccept(void* listenComm, void** recvComm,
                           ncclNetDeviceHandle_v8_t** recvDevComm) {
-    struct afxdp_context* ctx = static_cast<struct afxdp_context*>(listenComm);
+    struct SharedCtlCtx* ctx = static_cast<struct SharedCtlCtx*>(listenComm);
 
-    *recvComm = ctx;
+    auto [flow_id, remote_ip_str] = ep->uccl_accept();
+    LOG(INFO) << "pluginAccept: accepted connection from " << remote_ip_str;
+
+    *recvComm = new SharedDataCtx{flow_id};
     return ncclSuccess;
 }
+
 ncclResult_t pluginRegMr(void* collComm, void* data, size_t size, int type,
                          void** mhandle) {
     return (type != NCCL_PTR_HOST) ? ncclInternalError : ncclSuccess;
 }
+
 ncclResult_t pluginRegMrDmaBuf(void* collComm, void* data, size_t size,
                                int type, uint64_t offset, int fd,
                                void** mhandle) {
     return ncclInternalError;
 }
+
 ncclResult_t pluginDeregMr(void* collComm, void* mhandle) {
     return ncclSuccess;
 }
 
-#define MAX_RECV_CHUNKS 32
-struct afxdp_request {
-    struct afxdp_context* ctx;
+struct UcclRequest {
     bool send;
     size_t data_len = 0;
     PollCtx* poll_ctx = nullptr;
@@ -157,50 +206,55 @@ static std::atomic<size_t> inflight_recv = 0;
 ncclResult_t pluginIsend(void* sendComm, void* data, int size, int tag,
                          void* mhandle, void** request) {
     inflight_send += size;
-    // LOG(INFO) << "pluginIsend " << size << " " << inflight_send;
-    struct afxdp_context* ctx = static_cast<struct afxdp_context*>(sendComm);
-    auto req = new afxdp_request();
-    req->ctx = ctx;
+    struct SharedDataCtx* ctx = static_cast<struct SharedDataCtx*>(sendComm);
+    auto flow_id = ctx->flow_id;
+
+    auto req = new UcclRequest();
     req->send = true;
     req->data_len = size;
     req->poll_ctx = ep->uccl_send_async(flow_id, data, req->data_len);
+    VLOG(4) << "pluginIsend " << size << " " << inflight_send;
 
     *request = req;
     return ncclSuccess;
 }
+
 ncclResult_t pluginIrecv(void* recvComm, int n, void** data, int* sizes,
                          int* tags, void** mhandles, void** request) {
     if (n != 1) return ncclInternalError;
     inflight_recv += sizes[0];
-    // LOG(INFO) << "pluginIrecv " << sizes[0] << " " << inflight_recv;
-    struct afxdp_context* ctx = static_cast<struct afxdp_context*>(recvComm);
-    auto req = new afxdp_request();
-    req->ctx = ctx;
+    struct SharedDataCtx* ctx = static_cast<struct SharedDataCtx*>(recvComm);
+    auto flow_id = ctx->flow_id;
+
+    auto req = new UcclRequest();
     req->send = false;
     req->data_len = sizes[0];
     req->poll_ctx = ep->uccl_recv_async(flow_id, data[0], &req->data_len);
+    VLOG(4) << "pluginIrecv " << sizes[0] << " " << inflight_recv;
 
     *request = req;
     return ncclSuccess;
 }
+
 ncclResult_t pluginIflush(void* recvComm, int n, void** data, int* sizes,
                           void** mhandles, void** request) {
     // We don't support CUDA pointers, so we don't need a flush operation
     return ncclInternalError;
 }
+
 ncclResult_t pluginTest(void* request, int* done, int* size) {
     *done = 0;
-    struct afxdp_request* req = static_cast<struct afxdp_request*>(request);
+    struct UcclRequest* req = static_cast<struct UcclRequest*>(request);
     bool ret = ep->uccl_poll_once(req->poll_ctx);
     if (ret) {
         if (req->send) {
             inflight_send -= req->data_len;
-            // LOG(INFO) << "pluginTest send " << req->data_len << " " <<
-            // inflight_send;
+            VLOG(4) << "pluginTest send " << req->data_len << " "
+                    << inflight_send;
         } else {
             inflight_recv -= req->data_len;
-            // LOG(INFO) << "pluginTest recv " << req->data_len << " " <<
-            // inflight_recv;
+            VLOG(4) << "pluginTest recv " << req->data_len << " "
+                    << inflight_recv;
         }
         *done = 1;
         *size = req->data_len;
@@ -208,6 +262,7 @@ ncclResult_t pluginTest(void* request, int* done, int* size) {
     }
     return ncclSuccess;
 }
+
 ncclResult_t pluginCloseSend(void* sendComm) { return ncclSuccess; }
 ncclResult_t pluginCloseRecv(void* recvComm) { return ncclSuccess; }
 ncclResult_t pluginCloseListen(void* listenComm) { return ncclSuccess; }

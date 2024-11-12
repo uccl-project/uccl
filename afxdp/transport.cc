@@ -736,7 +736,7 @@ void UcclEngine::run() {
 void UcclEngine::periodic_process() {
     // Advance the periodic ticks counter.
     periodic_ticks_++;
-    if (periodic_ticks_ % kDumpStatusTicks == 0) dump_status();
+    if (!stay_quiet_ && periodic_ticks_ % kDumpStatusTicks == 0) dump_status();
     handle_rto();
     process_ctl_reqs();
 }
@@ -876,6 +876,8 @@ Endpoint::~Endpoint() {
     delete ctx_pool_;
     delete[] ctx_pool_buf_;
     close(listen_fd_);
+
+    std::lock_guard<std::mutex> lock(bootstrap_fd_map_mu_);
     for (auto [flow_id, fd] : bootstrap_fd_map_) {
         close(fd);
     }
@@ -920,19 +922,22 @@ FlowID Endpoint::uccl_connect(std::string remote_ip) {
 
     int ret;
     FlowID flow_id;
-    while (true) {
-        ret = read(bootstrap_fd, &flow_id, sizeof(FlowID));
-        DCHECK(ret == sizeof(FlowID));
+    {
+        std::lock_guard<std::mutex> lock(bootstrap_fd_map_mu_);
+        while (true) {
+            ret = read(bootstrap_fd, &flow_id, sizeof(FlowID));
+            DCHECK(ret == sizeof(FlowID));
 
-        // Check if the flow ID is unique, and answer to the server.
-        bool unique =
-            (bootstrap_fd_map_.find(flow_id) == bootstrap_fd_map_.end());
-        ret = write(bootstrap_fd, &unique, sizeof(bool));
-        DCHECK(ret == sizeof(bool));
+            // Check if the flow ID is unique, and answer to the server.
+            bool unique =
+                (bootstrap_fd_map_.find(flow_id) == bootstrap_fd_map_.end());
+            ret = write(bootstrap_fd, &unique, sizeof(bool));
+            DCHECK(ret == sizeof(bool));
 
-        if (unique) break;
+            if (unique) break;
+        }
+        bootstrap_fd_map_[flow_id] = bootstrap_fd;
     }
-    bootstrap_fd_map_[flow_id] = bootstrap_fd;
     LOG(INFO) << "FlowID: " << std::hex << "0x" << flow_id;
 
     char remote_mac_char[ETH_ALEN];
@@ -980,22 +985,25 @@ std::tuple<FlowID, std::string> Endpoint::uccl_accept() {
     // Generate unique flow ID for both client and server.
     int ret;
     FlowID flow_id;
-    while (true) {
-        flow_id = U64Rand(0, std::numeric_limits<FlowID>::max());
-        if (bootstrap_fd_map_.find(flow_id) != bootstrap_fd_map_.end()) {
-            continue;
+    {
+        std::lock_guard<std::mutex> lock(bootstrap_fd_map_mu_);
+        while (true) {
+            flow_id = U64Rand(0, std::numeric_limits<FlowID>::max());
+            if (bootstrap_fd_map_.find(flow_id) != bootstrap_fd_map_.end()) {
+                continue;
+            }
+
+            // Ask client if this is unique
+            ret = write(bootstrap_fd, &flow_id, sizeof(FlowID));
+            DCHECK(ret == sizeof(FlowID));
+            bool unique = false;
+            ret = read(bootstrap_fd, &unique, sizeof(bool));
+            DCHECK(ret == sizeof(bool));
+
+            if (unique) break;
         }
-
-        // Ask client if this is unique
-        ret = write(bootstrap_fd, &flow_id, sizeof(FlowID));
-        DCHECK(ret == sizeof(FlowID));
-        bool unique = false;
-        ret = read(bootstrap_fd, &unique, sizeof(bool));
-        DCHECK(ret == sizeof(bool));
-
-        if (unique) break;
+        bootstrap_fd_map_[flow_id] = bootstrap_fd;
     }
-    bootstrap_fd_map_[flow_id] = bootstrap_fd;
     LOG(INFO) << "FlowID: " << std::hex << "0x" << flow_id;
 
     char local_mac_char[ETH_ALEN];
