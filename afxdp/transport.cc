@@ -922,21 +922,24 @@ FlowID Endpoint::uccl_connect(std::string remote_ip) {
 
     int ret;
     FlowID flow_id;
-    {
-        std::lock_guard<std::mutex> lock(bootstrap_fd_map_mu_);
-        while (true) {
-            ret = read(bootstrap_fd, &flow_id, sizeof(FlowID));
-            DCHECK(ret == sizeof(FlowID));
+    while (true) {
+        ret = read(bootstrap_fd, &flow_id, sizeof(FlowID));
+        DCHECK(ret == sizeof(FlowID));
+        VLOG(3) << "Connect: Proposed FlowID: " << std::hex << "0x" << flow_id;
 
-            // Check if the flow ID is unique, and answer to the server.
-            bool unique =
+        // Check if the flow ID is unique, and return it to the server.
+        bool unique;
+        {
+            std::lock_guard<std::mutex> lock(bootstrap_fd_map_mu_);
+            unique =
                 (bootstrap_fd_map_.find(flow_id) == bootstrap_fd_map_.end());
-            ret = write(bootstrap_fd, &unique, sizeof(bool));
-            DCHECK(ret == sizeof(bool));
-
-            if (unique) break;
+            if (unique) bootstrap_fd_map_[flow_id] = bootstrap_fd;
         }
-        bootstrap_fd_map_[flow_id] = bootstrap_fd;
+
+        ret = write(bootstrap_fd, &unique, sizeof(bool));
+        DCHECK(ret == sizeof(bool));
+
+        if (unique) break;
     }
     LOG(INFO) << "FlowID: " << std::hex << "0x" << flow_id;
 
@@ -985,24 +988,37 @@ std::tuple<FlowID, std::string> Endpoint::uccl_accept() {
     // Generate unique flow ID for both client and server.
     int ret;
     FlowID flow_id;
-    {
-        std::lock_guard<std::mutex> lock(bootstrap_fd_map_mu_);
-        while (true) {
-            flow_id = U64Rand(0, std::numeric_limits<FlowID>::max());
-            if (bootstrap_fd_map_.find(flow_id) != bootstrap_fd_map_.end()) {
+    while (true) {
+        flow_id = U64Rand(0, std::numeric_limits<FlowID>::max());
+        bool unique;
+        {
+            std::lock_guard<std::mutex> lock(bootstrap_fd_map_mu_);
+            unique =
+                (bootstrap_fd_map_.find(flow_id) == bootstrap_fd_map_.end());
+            if (unique) {
+                // Speculatively insert the flow ID.
+                bootstrap_fd_map_[flow_id] = bootstrap_fd;
+            } else {
                 continue;
             }
-
-            // Ask client if this is unique
-            ret = write(bootstrap_fd, &flow_id, sizeof(FlowID));
-            DCHECK(ret == sizeof(FlowID));
-            bool unique = false;
-            ret = read(bootstrap_fd, &unique, sizeof(bool));
-            DCHECK(ret == sizeof(bool));
-
-            if (unique) break;
         }
-        bootstrap_fd_map_[flow_id] = bootstrap_fd;
+
+        VLOG(3) << "Accept: Proposed FlowID: " << std::hex << "0x" << flow_id;
+
+        // Ask client if this is unique
+        ret = write(bootstrap_fd, &flow_id, sizeof(FlowID));
+        DCHECK(ret == sizeof(FlowID));
+        bool unique_from_client;
+        ret = read(bootstrap_fd, &unique_from_client, sizeof(bool));
+        DCHECK(ret == sizeof(bool));
+
+        if (unique_from_client) {
+            break;
+        } else {
+            // Remove the speculatively inserted flow ID.
+            std::lock_guard<std::mutex> lock(bootstrap_fd_map_mu_);
+            DCHECK(1 == bootstrap_fd_map_.erase(flow_id));
+        }
     }
     LOG(INFO) << "FlowID: " << std::hex << "0x" << flow_id;
 
