@@ -41,6 +41,16 @@ uint32_t server_addr_u32 = 0x0;
 uint32_t client_addr_u32 = 0x0;
 const uint16_t client_ports[8] = {40000, 40001, 40002, 40003,
                                   40004, 40005, 40006, 40007};
+
+// static const char* server_mac_str = "16:ff:d0:73:a9:cf";
+// static const char* client_mac_str = "16:ff:d9:ee:ab:47";
+// static const char* server_ip_str = "172.31.66.106";
+// static const char* client_ip_str = "172.31.72.149";
+static const char* server_mac_str = "9c:dc:71:56:af:45";
+static const char* client_mac_str = "9c:dc:71:5b:22:91";
+static const char* server_ip_str = "192.168.6.1";
+static const char* client_ip_str = "192.168.6.2";
+
 char server_mac_char[6] = {};
 char client_mac_char[6] = {};
 

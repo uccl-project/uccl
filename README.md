@@ -30,17 +30,17 @@ Remember to change `afxdp/transport_config.h` based on your NIC IPs and MACs.
 ### Run TCP testing
 
 ```
-cd afxdp; make -j "CXXFLAGS=-DAWS"
+cd afxdp; make -j "CXXFLAGS=-DAWS_ENA"
 or 
-cd afxdp; make -j "CXXFLAGS=-DCLOUDLAB"
+cd afxdp; make -j "CXXFLAGS=-DCLOUDLAB_MLX5"
 
 # On both server and client
 ./config_nic.sh ens5 4 9001 tcp aws
 or
 ./config_nic.sh ens1f1np1 4 1500 tcp cloudlab
 
-# On server
-./sync.sh 192.168.6.2
+# On server, edit nodes.txt to include all node ips
+./sync.sh
 ./server_tcp_main
 
 # On client
@@ -50,17 +50,17 @@ or
 ### Run AFXDP testing
 
 ```
-cd afxdp; make -j "CXXFLAGS=-DAWS"
+cd afxdp; make -j "CXXFLAGS=-DAWS_ENA"
 or 
-cd afxdp; make -j "CXXFLAGS=-DCLOUDLAB"
+cd afxdp; make -j "CXXFLAGS=-DCLOUDLAB_MLX5"
 
 # On both server and client
 ./config_nic.sh ens5 1 3498 afxdp aws
 or
 ./config_nic.sh ens1f1np1 1 1500 afxdp cloudlab
 
-# On server
-./sync.sh 192.168.6.2
+# On server, edit nodes.txt to include all node ips
+./sync.sh
 sudo ./server_main
 
 # On client
@@ -74,7 +74,7 @@ Note that any program that leverages util_afxdp no long needs root to use AFXDP 
 ```
 sudo ./afxdp_daemon_main --logtostderr=1
 ./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --test=async --verify --rand
-./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --client --test=async --verify --rand
+./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --client --serverip=192.168.6.1 --test=async --verify --rand
 ```
 
 ### MISC setup
@@ -85,4 +85,5 @@ wget https://repo.anaconda.com/archive/Anaconda3-2024.06-1-Linux-x86_64.sh
 bash Anaconda3-2024.06-1-Linux-x86_64.sh -b -p /opt/anaconda3
 source /opt/anaconda3/bin/activate
 conda init
+conda install paramiko -y
 ```

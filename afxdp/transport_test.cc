@@ -17,6 +17,7 @@ size_t kReportIters = 1000;
 const size_t kMaxInflight = 8;
 
 DEFINE_bool(client, false, "Whether this is a client sending traffic.");
+DEFINE_string(serverip, "", "Server IP address the client tries to connect.");
 DEFINE_bool(verify, false, "Whether to check data correctness.");
 DEFINE_bool(rand, false, "Whether to use randomized data length.");
 DEFINE_string(test, "basic",
@@ -67,11 +68,11 @@ int main(int argc, char* argv[]) {
     if (FLAGS_client) {
         auto ep = Endpoint(DEV_DEFAULT, QID_DEFAULT, NUM_FRAMES, ENGINE_CPUID);
         pin_thread_to_cpu(ENGINE_CPUID + 1);
-        auto conn_id = ep.uccl_connect(server_ip_str);
+        DCHECK(FLAGS_serverip != "");
+        auto conn_id = ep.uccl_connect(FLAGS_serverip);
         FlowID conn_id2;
         if (test_type == kMc) {
-            auto [conn_id_tmp, remote_ip_str] = ep.uccl_accept();
-            conn_id2 = conn_id_tmp;
+            conn_id2 = ep.uccl_connect(FLAGS_serverip);
         }
 
         size_t send_len = kTestMsgSize, recv_len = kTestMsgSize;
@@ -188,10 +189,10 @@ int main(int argc, char* argv[]) {
     } else {
         auto ep = Endpoint(DEV_DEFAULT, QID_DEFAULT, NUM_FRAMES, ENGINE_CPUID);
         pin_thread_to_cpu(ENGINE_CPUID + 1);
-        auto [conn_id, client_ip_str_tmp] = ep.uccl_accept();
+        auto [conn_id, _] = ep.uccl_accept();
         FlowID conn_id2;
         if (test_type == kMc) {
-            conn_id2 = ep.uccl_connect(client_ip_str);
+            std::tie(conn_id2, std::ignore) = ep.uccl_accept();
         }
 
         size_t send_len = kTestMsgSize, recv_len = kTestMsgSize;
