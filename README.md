@@ -30,12 +30,14 @@ Remember to change `afxdp/transport_config.h` based on your NIC IPs and MACs.
 ### Run TCP testing
 
 ```
-cd afxdp; make -j
+cd afxdp; make -j "CXXFLAGS=-DAWS"
+or 
+cd afxdp; make -j "CXXFLAGS=-DCLOUDLAB"
 
 # On both server and client
-./setup.sh ens6 4 9001 tcp aws
+./config_nic.sh ens6 4 9001 tcp aws
 or
-./setup.sh ens1f1np1 4 1500 tcp cloudlab
+./config_nic.sh ens1f1np1 4 1500 tcp cloudlab
 
 # On server
 ./sync.sh 192.168.6.2
@@ -48,12 +50,14 @@ or
 ### Run AFXDP testing
 
 ```
-cd afxdp; make -j
+cd afxdp; make -j "CXXFLAGS=-DAWS"
+or 
+cd afxdp; make -j "CXXFLAGS=-DCLOUDLAB"
 
 # On both server and client
-./setup.sh ens6 1 3498 afxdp aws
+./config_nic.sh ens6 1 3498 afxdp aws
 or
-./setup.sh ens1f1np1 1 1500 afxdp cloudlab
+./config_nic.sh ens1f1np1 1 1500 afxdp cloudlab
 
 # On server
 ./sync.sh 192.168.6.2

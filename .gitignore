@@ -73,3 +73,4 @@ config.mk
 
 # vscode config
 .vscode/settings.json
+__pycache__/

@@ -1,44 +1,10 @@
-import paramiko
 import time
 import re
+import sys
+sys.path.append("../")
+from common import *
 
-
-class CommandDescriptor:
-    def __init__(self, sshclient, pid, stdout, stderr):
-        self.sshclient = sshclient
-        self.pid = pid
-        self.stdout = stdout
-        self.stderr = stderr
-
-    def wait(self):
-        res = (self.stdout.read().decode(), self.stderr.read().decode())
-        print(res[0], res[1])
-        return res
-
-    def kill(self):
-        self.sshclient.exec_command(f"kill -s SIGINT {self.pid}")
-
-
-def exec_command_and_wait(sshclient, command):
-    # exec_command will return before the command is finished,
-    # one must use read() to wait for the command to finish
-    print(f'echo $$ ; exec /bin/bash -c "{command}"')
-    stdin, stdout, stderr = sshclient.exec_command(
-        f'echo $$ ; exec /bin/bash -c "{command}"'
-    )
-    pid = stdout.readline()
-    cd = CommandDescriptor(sshclient, pid, stdout, stderr)
-    return cd.wait()
-
-
-def exec_command_no_wait(sshclient, command):
-    stdin, stdout, stderr = sshclient.exec_command(
-        f'echo $$ ; exec /bin/bash -c "{command}"'
-    )
-    pid = stdout.readline()
-    return CommandDescriptor(sshclient, pid, stdout, stderr)
-
-
+    
 client_ip = "172.31.19.147"
 server_ip = "172.31.20.99"
 
@@ -63,8 +29,8 @@ def run_afxdp_exp(inflight_pkt, payload_size):
 
     _ = exec_command_and_wait(server, "cd uccl/afxdp; make clean; make -j")
     _ = exec_command_and_wait(server, f"cd uccl; ./sync.sh {client_ip}")
-    _ = exec_command_and_wait(server, "cd uccl; ./setup.sh ens6 1 3498 afxdp")
-    _ = exec_command_and_wait(client, "cd uccl; ./setup.sh ens6 1 3498 afxdp")
+    _ = exec_command_and_wait(server, "cd uccl; ./config_nic.sh ens6 1 3498 afxdp")
+    _ = exec_command_and_wait(client, "cd uccl; ./config_nic.sh ens6 1 3498 afxdp")
 
     server_desc = exec_command_no_wait(
         server, "cd uccl/afxdp; sudo ./server_main"
@@ -92,8 +58,8 @@ def run_tcp_exp(inflight_pkt, payload_size):
 
     _ = exec_command_and_wait(server, "cd uccl/afxdp; make clean; make -j")
     _ = exec_command_and_wait(server, f"cd uccl; ./sync.sh {client_ip}")
-    _ = exec_command_and_wait(server, "cd uccl; ./setup.sh ens6 4 9001 tcp")
-    _ = exec_command_and_wait(client, "cd uccl; ./setup.sh ens6 4 9001 tcp")
+    _ = exec_command_and_wait(server, "cd uccl; ./config_nic.sh ens6 4 9001 tcp")
+    _ = exec_command_and_wait(client, "cd uccl; ./config_nic.sh ens6 4 9001 tcp")
 
     server_desc = exec_command_no_wait(
         server, "cd uccl/afxdp; ./server_tcp_main"

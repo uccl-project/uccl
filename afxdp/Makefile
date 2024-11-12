@@ -8,7 +8,7 @@ LIBS_SHARED = -Wl,-rpath=$(ABS_ROOT_PATH)/../lib/xdp-tools/lib/libxdp/ \
 	   		  -Wl,-rpath=$(ABS_ROOT_PATH)/../lib/libbpf/src/ \
 	   		  -L../lib/xdp-tools/lib/libxdp -lxdp -L../lib/libbpf/src -lbpf \
 	   		  -lglog -lgflags -lz -lelf
-CXXFLAGS = -O3 -g -std=c++17 -Wno-pointer-arith -Wno-interference-size -fPIC
+override CXXFLAGS += -O3 -g -std=c++17 -Wno-pointer-arith -Wno-interference-size -fPIC
 CLANGFLAGS = -O3 -g
 DEPS = *.h
 PLUGIN_SO = libnccl-net.so
