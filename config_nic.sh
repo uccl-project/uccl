@@ -55,10 +55,10 @@ ncpu=$(nproc)
 )
 
 # https://lwn.net/Articles/837010/; do not given improvements
-# echo 2 | sudo tee /sys/class/net/ens6/napi_defer_hard_irqs
-# echo 200000 | sudo tee /sys/class/net/ens6/gro_flush_timeout
-# echo 0 | sudo tee /sys/class/net/ens6/napi_defer_hard_irqs
-# echo 0 | sudo tee /sys/class/net/ens6/gro_flush_timeout
+# echo 2 | sudo tee /sys/class/net/ens5/napi_defer_hard_irqs
+# echo 200000 | sudo tee /sys/class/net/ens5/gro_flush_timeout
+# echo 0 | sudo tee /sys/class/net/ens5/napi_defer_hard_irqs
+# echo 0 | sudo tee /sys/class/net/ens5/gro_flush_timeout
 
 ## run af_xdp l2fwd
 ## -z: zero-copy mode (without skb copy)

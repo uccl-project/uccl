@@ -35,7 +35,7 @@ or
 cd afxdp; make -j "CXXFLAGS=-DCLOUDLAB"
 
 # On both server and client
-./config_nic.sh ens6 4 9001 tcp aws
+./config_nic.sh ens5 4 9001 tcp aws
 or
 ./config_nic.sh ens1f1np1 4 1500 tcp cloudlab
 
@@ -55,7 +55,7 @@ or
 cd afxdp; make -j "CXXFLAGS=-DCLOUDLAB"
 
 # On both server and client
-./config_nic.sh ens6 1 3498 afxdp aws
+./config_nic.sh ens5 1 3498 afxdp aws
 or
 ./config_nic.sh ens1f1np1 1 1500 afxdp cloudlab
 

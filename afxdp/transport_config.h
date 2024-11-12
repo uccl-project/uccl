@@ -17,11 +17,11 @@ static const uint16_t BASE_PORT = 40000;
 // On AWS g4
 #define AWS_ENA
 static const uint32_t AFXDP_MTU = 3498;
-static const char* DEV_DEFAULT = "ens6";
-static const char* server_mac_str = "0a:ff:ea:11:5e:ad";
-static const char* client_mac_str = "0a:ff:c6:7f:c9:35";
-static const char* server_ip_str = "172.31.18.199";
-static const char* client_ip_str = "172.31.25.5";
+static const char* DEV_DEFAULT = "ens5";
+static const char* server_mac_str = "16:ff:d0:73:a9:cf";
+static const char* client_mac_str = "16:ff:d9:ee:ab:47";
+static const char* server_ip_str = "172.31.66.106";
+static const char* client_ip_str = "172.31.72.149";
 #elif defined(CLOUDLAB)
 // On Cloudlab (xl170-ubuntu24-v6.8 profile)
 #define CLOUDLAB_MLX5

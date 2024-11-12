@@ -9,24 +9,20 @@ LIBNCCL_PATH="${UCCL_HOME}/nccl/build/lib/libnccl.so"
 PROG_NAME=all_reduce_perf
 
 # PLUGIN_PATH="${UCCL_HOME}/nccl/ext-net/google-fastsocket/libnccl-net.so"
-PLUGIN_PATH="/opt/aws-ofi-nccl/lib/libnccl-net.so"
+# PLUGIN_PATH="/opt/aws-ofi-nccl/lib/libnccl-net.so"
 
-# mpirun -np 2 -N 1 --host 172.31.16.220,172.31.30.246 \
-# mpirun -np 3 -N 1 --host 172.31.16.220,172.31.30.246,172.31.31.56 \
-# mpirun -np 4 -N 1 --host 172.31.16.220,172.31.30.246,172.31.31.56,172.31.19.200 \
-    # --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
-    # --mca orte_base_help_aggregate 0 \
-    # --mca btl_tcp_if_include ens5 \
-    # -x LD_PRELOAD="${LIBNCCL_PATH} ${PLUGIN_PATH}" \
-    # -x NCCL_DEBUG=INFO \
-    # ${UCCL_HOME}/nccl-tests/build/${PROG_NAME} \
-    # -b 1024 -e 1048576 -f 2 -g 1 -w 100 -n 100
+# mpirun -np 4 -N 1 --host 172.31.66.106,172.31.72.149,172.31.72.33,172.31.79.90 \
+#     --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
+#     --mca orte_base_help_aggregate 0 \
+#     --mca btl_tcp_if_include ens5 \
+#     -x LD_PRELOAD="${LIBNCCL_PATH} ${PLUGIN_PATH}" \
+#     -x NCCL_DEBUG=INFO \
+#     ${UCCL_HOME}/nccl-tests/build/${PROG_NAME} \
+#     -b 1024 -e 1048576 -f 2 -g 1 -w 100 -n 100
 
 PLUGIN_PATH="${UCCL_HOME}/afxdp/libnccl-net.so"
 
-# mpirun -np 2 -N 1 --host 172.31.16.220,172.31.19.200 \
-# mpirun -np 3 -N 1 --host 172.31.16.220,172.31.30.246,172.31.31.56 \
-mpirun -np 4 -N 1 --host 172.31.16.220,172.31.30.246,172.31.31.56,172.31.19.200 \
+mpirun -np 4 -N 1 --host 172.31.66.106,172.31.72.149,172.31.72.33,172.31.79.90 \
     --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
     --mca orte_base_help_aggregate 0 \
     --mca btl_tcp_if_include ens5 \
