@@ -14,6 +14,7 @@ PLUGIN_PATH="/opt/aws-ofi-nccl/lib/libnccl-net.so"
 # mpirun -np 2 -N 1 --host 172.31.16.220,172.31.30.246 \
 # mpirun -np 3 -N 1 --host 172.31.16.220,172.31.30.246,172.31.31.56 \
 # mpirun -np 4 -N 1 --host 172.31.16.220,172.31.30.246,172.31.31.56,172.31.19.200 \
+    # --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
     # --mca orte_base_help_aggregate 0 \
     # --mca btl_tcp_if_include ens5 \
     # -x LD_PRELOAD="${LIBNCCL_PATH} ${PLUGIN_PATH}" \
@@ -26,6 +27,7 @@ PLUGIN_PATH="${UCCL_HOME}/afxdp/libnccl-net.so"
 # mpirun -np 2 -N 1 --host 172.31.16.220,172.31.19.200 \
 # mpirun -np 3 -N 1 --host 172.31.16.220,172.31.30.246,172.31.31.56 \
 mpirun -np 4 -N 1 --host 172.31.16.220,172.31.30.246,172.31.31.56,172.31.19.200 \
+    --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
     --mca orte_base_help_aggregate 0 \
     --mca btl_tcp_if_include ens5 \
     -x LD_PRELOAD="${LIBNCCL_PATH} ${PLUGIN_PATH}" \
