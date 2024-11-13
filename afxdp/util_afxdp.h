@@ -150,7 +150,7 @@ class AFXDPFactory {
 
     static void init(const char *interface_name, const char *ebpf_filename,
                      const char *section_name);
-    static AFXDPSocket *CreateSocket(int queue_id, int num_frames);
+    static AFXDPSocket *CreateSocket(int queue_id, uint64_t num_frames);
     static void shutdown();
 };
 
@@ -164,8 +164,6 @@ class AFXDPSocket {
 #define TX_RING_SIZE XSK_RING_PROD__DEFAULT_NUM_DESCS
 #define RX_RING_SIZE XSK_RING_CONS__DEFAULT_NUM_DESCS
 
-    constexpr static uint32_t QUEUE_ID = 0;
-    constexpr static uint32_t NUM_FRAMES = 64 * 4096;
     constexpr static uint32_t FRAME_SIZE = XSK_UMEM__DEFAULT_FRAME_SIZE;
 
     int xsk_fd_;
@@ -180,7 +178,7 @@ class AFXDPSocket {
     void *tx_map_;
     size_t tx_map_size_;
 
-    AFXDPSocket(int queue_id, int num_frames);
+    AFXDPSocket(int queue_id, uint64_t num_frames);
 
     // For manually mapping umem struct from the afxdp daemon.
     typedef __u64 u64;
@@ -210,7 +208,7 @@ class AFXDPSocket {
 
    public:
     uint32_t queue_id_;
-    uint32_t num_frames_;
+    uint64_t num_frames_;
     void *umem_buffer_;
     size_t umem_size_;
     struct xsk_ring_cons recv_queue_;

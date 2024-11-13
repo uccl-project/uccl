@@ -25,7 +25,6 @@
 
 #define SOCKET_PATH "/tmp/privileged_socket"
 #define FRAME_SIZE XSK_UMEM__DEFAULT_FRAME_SIZE
-#define NUM_FRAMES (64 * 4096)
 
 typedef __u64 u64;
 typedef __u32 u32;

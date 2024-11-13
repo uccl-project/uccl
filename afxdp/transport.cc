@@ -464,8 +464,8 @@ void UcclFlow::prepare_l4header(uint8_t *pkt_addr,
     memset(tcph, 0, sizeof(tcphdr));
 #ifdef USING_MULTIPATH
     static uint16_t rand_port = 0;
-    tcph->source = htons(BASE_PORT + (rand_port++) % 8);
-    tcph->dest = htons(BASE_PORT + (rand_port++) % 8);
+    tcph->source = htons(BASE_PORT + (rand_port++) % 128);
+    tcph->dest = htons(BASE_PORT + (rand_port++) % 128);
 #else
     tcph->source = htons(BASE_PORT);
     tcph->dest = htons(BASE_PORT);
@@ -478,8 +478,8 @@ void UcclFlow::prepare_l4header(uint8_t *pkt_addr,
     auto *udph = (udphdr *)(pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
 #ifdef USING_MULTIPATH
     static uint16_t rand_port = 0;
-    udph->source = htons(BASE_PORT + (rand_port++) % 8);
-    udph->dest = htons(BASE_PORT + (rand_port++) % 8);
+    udph->source = htons(BASE_PORT + (rand_port++) % 128);
+    udph->dest = htons(BASE_PORT + (rand_port++) % 128);
 #else
     udph->source = htons(BASE_PORT);
     udph->dest = htons(BASE_PORT);
@@ -743,7 +743,7 @@ void UcclEngine::periodic_process() {
 
 void UcclEngine::process_rx_msg(std::vector<FrameBuf *> msgbufs,
                                 FlowID flow_id) {
-    // Yang: this only happens on aws instances with no guarantee net bw. 
+    // Yang: this only happens on aws instances with no guarantee net bw.
     if (active_flows_map_.find(flow_id) == active_flows_map_.end()) {
         LOG(ERROR) << "process_rx_msg unknown flow " << std::hex << "0x"
                    << flow_id;
@@ -839,8 +839,8 @@ std::tuple<FrameBuf *, FrameBuf *, uint32_t> UcclEngine::deserialize_msg(
     return std::make_tuple(tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames);
 }
 
-Endpoint::Endpoint(const char *interface_name, int queue_id, int num_frames,
-                   int engine_cpuid) {
+Endpoint::Endpoint(const char *interface_name, int queue_id,
+                   uint64_t num_frames, int engine_cpuid) {
     static std::once_flag flag_once;
     std::call_once(flag_once, [interface_name]() {
         AFXDPFactory::init(interface_name, "ebpf_transport.o",

@@ -37,7 +37,6 @@ DEFINE_bool(pktloss, false, "Enable packet loss for testing");
 
 #define SOCKET_PATH "/tmp/privileged_socket"
 #define FRAME_SIZE XSK_UMEM__DEFAULT_FRAME_SIZE
-#define NUM_FRAMES (64 * 4096)
 
 volatile bool quit = false;
 int interface_index;

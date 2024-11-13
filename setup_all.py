@@ -4,15 +4,22 @@ sys.path.append("../")
 from common import *
 import signal
 import argparse
+import os
+
+core_count = os.cpu_count()
 
 make_macro_mapping = {
-    "aws": "AWS_ENA",
-    "cloudlab": "CLOUDLAB_MLX5",
+    "aws_afxdp": "AWS_ENA",
+    "cloudlab_afxdp": "CLOUDLAB_MLX5",
+    "aws_tcp": "AWS_ENA",
+    "cloudlab_tcp": "CLOUDLAB_MLX5",
 }
 
 config_nic_cmd_mapping = {
-    "aws": "./config_nic.sh ens6 1 3498 afxdp aws",
-    "cloudlab": "./config_nic.sh ens1f1np1 1 1500 afxdp cloudlab",
+    "aws_afxdp": "./config_nic.sh ens6 1 3498 afxdp aws",
+    "cloudlab_afxdp": "./config_nic.sh ens1f1np1 1 1500 afxdp cloudlab",
+    "aws_tcp": f'./config_nic.sh ens6 {core_count} 9001 tcp aws',
+    "cloudlab_tcp": f'./config_nic.sh ens1f1np1 {core_count} 1500 tcp cloudlab',
 }
 
 
@@ -25,16 +32,17 @@ def read_nodes():
         ]
 
 
-# Usage: python setup_all.py --platform cloudlab|aws
+# Usage: python setup_all.py --target aws_afxdp|cloudlab_afxdp|aws_tcp|cloudlab_tcp
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="parsing setup_all arguments.")
 
     parser.add_argument(
-        "--platform", type=str, default="cloudlab", help="aws, cloudlab"
+        "--target", type=str, default="cloudlab_afxdp", help="aws_afxdp, cloudlab_afxdp, aws_tcp, cloudlab_tcp"
     )
 
     args = parser.parse_args()
-    platform = args.platform
+    target = args.target
 
     nodes = read_nodes()
     print(f"Nodes: {nodes}")
@@ -46,7 +54,7 @@ if __name__ == "__main__":
 
     _ = exec_command_and_wait(
         node_clients[0],
-        f'cd /opt/uccl/afxdp; make -j "CXXFLAGS=-D{make_macro_mapping[platform]}"',
+        f'cd /opt/uccl/afxdp; make -j "CXXFLAGS=-D{make_macro_mapping[target]}"',
     )
 
     _ = exec_command_and_wait(node_clients[0], f"cd /opt/uccl; ./sync.sh")
@@ -54,11 +62,14 @@ if __name__ == "__main__":
     wait_handler_vec = []
     for node_client in node_clients:
         wait_handler = exec_command_no_wait(
-            node_client, f"cd /opt/uccl; {config_nic_cmd_mapping[platform]}"
+            node_client, f"cd /opt/uccl; {config_nic_cmd_mapping[target]}"
         )
         wait_handler_vec.append(wait_handler)
     for wait_handler in wait_handler_vec:
         _ = wait_handler.wait()
+
+    if target == "aws_tcp" or target == "cloudlab_tcp":
+        exit(0)
 
     wait_handler_vec.clear()
     for node_client in node_clients:

@@ -472,7 +472,7 @@ class UcclEngine {
      * For now, we assume an engine is responsible for a single channel, but
      * future it may be responsible for multiple channels.
      */
-    UcclEngine(int queue_id, int num_frames, Channel *channel,
+    UcclEngine(int queue_id, uint64_t num_frames, Channel *channel,
                const std::string local_addr, const std::string local_l2_addr)
         : local_addr_(htonl(str_to_ip(local_addr))),
           socket_(AFXDPFactory::CreateSocket(queue_id, num_frames)),
@@ -607,7 +607,7 @@ class Endpoint {
     uint8_t *ctx_pool_buf_;
 
    public:
-    Endpoint(const char *interface_name, int queue_id, int num_frames,
+    Endpoint(const char *interface_name, int queue_id, uint64_t num_frames,
              int engine_cpuid);
     ~Endpoint();
 

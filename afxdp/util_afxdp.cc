@@ -27,7 +27,7 @@ void AFXDPFactory::init(const char *interface_name, const char *ebpf_filename,
     }
 }
 
-AFXDPSocket *AFXDPFactory::CreateSocket(int queue_id, int num_frames) {
+AFXDPSocket *AFXDPFactory::CreateSocket(int queue_id, uint64_t num_frames) {
     auto socket = new AFXDPSocket(queue_id, num_frames);
     std::lock_guard<std::mutex> lock(afxdp_ctl.socket_q_lock_);
     afxdp_ctl.socket_q_.push_back(socket);
@@ -44,12 +44,10 @@ void AFXDPFactory::shutdown() {
     afxdp_ctl.socket_q_.clear();
 }
 
-AFXDPSocket::AFXDPSocket(int queue_id, int num_frames)
+AFXDPSocket::AFXDPSocket(int queue_id, uint64_t num_frames)
     : unpulled_tx_pkts_(0), fill_queue_entries_(0) {
     // TODO(yang): negotiate with afxdp daemon for queue_id and num_frames.
 
-    DCHECK_EQ(queue_id, QUEUE_ID);
-    DCHECK_EQ(num_frames, NUM_FRAMES);
     queue_id_ = queue_id;
     num_frames_ = num_frames;
 

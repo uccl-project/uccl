@@ -24,7 +24,6 @@
 
 #define SOCKET_PATH "/tmp/privileged_socket"
 #define FRAME_SIZE XSK_UMEM__DEFAULT_FRAME_SIZE
-#define NUM_FRAMES (64 * 4096)
 
 struct xsk_umem *umem;
 struct xsk_ring_prod fill_ring;
