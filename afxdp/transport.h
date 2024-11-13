@@ -115,6 +115,8 @@ class Channel {
 struct __attribute__((packed)) UcclPktHdr {
     static constexpr uint16_t kMagic = 0x4e53;
     be16_t magic;  // Magic value tagged after initialization for the flow.
+    uint8_t socket_id;  // AFXDP Socket ID to process this packet.
+    uint8_t reserved;  // Reserved for future use.
     enum class UcclFlags : uint8_t {
         kData = 0b0,      // Data packet.
         kAck = 0b10,      // ACK packet.
@@ -131,7 +133,8 @@ struct __attribute__((packed)) UcclPktHdr {
                                                             // SACKs received.
     be16_t sack_bitmap_count;  // Length of the SACK bitmap [0-256].
 };
-static_assert(sizeof(UcclPktHdr) == 56, "UcclPktHdr size mismatch");
+static const size_t kUcclHdrLen = sizeof(UcclPktHdr);
+static_assert(kUcclHdrLen == 58, "UcclPktHdr size mismatch");
 
 #ifdef USING_TCP
 static const size_t kNetHdrLen =
@@ -140,7 +143,6 @@ static const size_t kNetHdrLen =
 static const size_t kNetHdrLen =
     sizeof(ethhdr) + sizeof(iphdr) + sizeof(udphdr);
 #endif
-static const size_t kUcclHdrLen = sizeof(UcclPktHdr);
 
 inline UcclPktHdr::UcclFlags operator|(UcclPktHdr::UcclFlags lhs,
                                        UcclPktHdr::UcclFlags rhs) {

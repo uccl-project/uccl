@@ -178,6 +178,7 @@ class AFXDPSocket {
     void *tx_map_;
     size_t tx_map_size_;
 
+    // queue_id starts from 0, equal to socket_id.
     AFXDPSocket(int queue_id, uint64_t num_frames);
 
     // For manually mapping umem struct from the afxdp daemon.
@@ -222,6 +223,7 @@ class AFXDPSocket {
         uint32_t frame_len;
     };
 
+    inline uint32_t get_socket_id() const { return queue_id_; }
     uint32_t send_packet(frame_desc frame);
     uint32_t send_packets(std::vector<frame_desc> &frames);
     uint32_t pull_complete_queue();

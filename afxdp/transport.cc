@@ -508,10 +508,10 @@ AFXDPSocket::frame_desc UcclFlow::craft_ctlpacket(
     prepare_l2header(pkt_addr);
     prepare_l3header(pkt_addr, kControlPayloadBytes);
     prepare_l4header(pkt_addr, kControlPayloadBytes);
-    // prepare_ucclhdr(pkt_addr, seqno, ackno, flags);
 
     auto *ucclh = (UcclPktHdr *)(pkt_addr + kNetHdrLen);
     ucclh->magic = be16_t(UcclPktHdr::kMagic);
+    ucclh->socket_id = socket_->get_socket_id();
     ucclh->net_flags = net_flags;
     ucclh->msg_flags = 0;
     ucclh->frame_len = be16_t(kNetHdrLen + kControlPayloadBytes);
@@ -543,6 +543,7 @@ void UcclFlow::prepare_datapacket(FrameBuf *msg_buf, uint32_t seqno) const {
     // Prepare the Uccl-specific header.
     auto *ucclh = reinterpret_cast<UcclPktHdr *>(pkt_addr + kNetHdrLen);
     ucclh->magic = be16_t(UcclPktHdr::kMagic);
+    ucclh->socket_id = socket_->get_socket_id();
     ucclh->net_flags = UcclPktHdr::UcclFlags::kData;
     ucclh->ackno = be32_t(UINT32_MAX);
     // This fills the FrameBuf.flags into the outgoing packet
@@ -854,6 +855,9 @@ Endpoint::Endpoint(const char *interface_name, int queue_id,
     local_ip_str_ = get_dev_ip(interface_name);
     local_mac_str_ = get_dev_mac(interface_name);
 
+    // TODO(yang): create multiple engines, each got its xsk and umem from the
+    // daemon. Each engine has its own thread and channel to let the endpoint
+    // communicate with.
     channel_ = std::make_unique<Channel>();
     engine_ = std::make_unique<UcclEngine>(queue_id, num_frames, channel_.get(),
                                            local_ip_str_, local_mac_str_);

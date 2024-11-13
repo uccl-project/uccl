@@ -32,7 +32,7 @@ ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
     signal(SIGHUP, interrupt_handler);
 
     ep = new Endpoint(DEV_DEFAULT, QID_DEFAULT, NUM_FRAMES, ENGINE_CPUID);
-    pin_thread_to_cpu(ENGINE_CPUID + 1);
+    // pin_thread_to_cpu(ENGINE_CPUID + 1);
 
     LOG(INFO) << "NCCL Plugin initialized";
     return ncclSuccess;

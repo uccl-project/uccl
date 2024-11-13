@@ -26,7 +26,7 @@ struct {
     (sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr))
 #endif
 #define kMagic 0x4e53
-#define kUcclHdrLen 56
+#define kUcclHdrLen 58
 
 SEC("ebpf_transport")
 int ebpf_transport_filter(struct xdp_md *ctx) {
@@ -37,6 +37,7 @@ int ebpf_transport_filter(struct xdp_md *ctx) {
     struct ethhdr *eth = data;
     struct iphdr *ip = data + sizeof(struct ethhdr);
     __u16 magic = *(__u16 *)(data + kNetHdrLen);
+    __u8 socket_id = *(__u8 *)(data + kNetHdrLen + sizeof(__u16));
 
 #ifdef USING_TCP
     if (eth->h_proto != __constant_htons(ETH_P_IP) ||
@@ -52,7 +53,7 @@ int ebpf_transport_filter(struct xdp_md *ctx) {
 
     if (bpf_get_prandom_u32() % 1000 == 0) return XDP_DROP;
 
-    return bpf_redirect_map(&xsks_map, ctx->rx_queue_index, XDP_PASS);
+    return bpf_redirect_map(&xsks_map, socket_id, XDP_PASS);
 }
 
 char _license[] SEC("license") = "GPL";

@@ -67,7 +67,7 @@ int main(int argc, char* argv[]) {
 
     if (FLAGS_client) {
         auto ep = Endpoint(DEV_DEFAULT, QID_DEFAULT, NUM_FRAMES, ENGINE_CPUID);
-        pin_thread_to_cpu(ENGINE_CPUID + 1);
+        // pin_thread_to_cpu(ENGINE_CPUID + 1);
         DCHECK(FLAGS_serverip != "");
         auto conn_id = ep.uccl_connect(FLAGS_serverip);
         FlowID conn_id2;
@@ -188,7 +188,7 @@ int main(int argc, char* argv[]) {
         }
     } else {
         auto ep = Endpoint(DEV_DEFAULT, QID_DEFAULT, NUM_FRAMES, ENGINE_CPUID);
-        pin_thread_to_cpu(ENGINE_CPUID + 1);
+        // pin_thread_to_cpu(ENGINE_CPUID + 1);
         auto [conn_id, _] = ep.uccl_accept();
         FlowID conn_id2;
         if (test_type == kMc) {
