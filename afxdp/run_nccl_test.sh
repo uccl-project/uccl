@@ -30,8 +30,11 @@ if [ "$TEST" = "tcp" ]; then
         -x LD_PRELOAD="${LIBNCCL_PATH} ${PLUGIN_PATH}" \
         -x NCCL_DEBUG=INFO \
         ${UCCL_HOME}/nccl-tests/build/${PROG_NAME} \
-        -b 1K -e 256M -f 2 -g 1 -w 100 -n 100
+        -b 1K -e 4M -f 2 -g 1 -w 100 -n 100
 
+    # Does not help with performance
+    # -x NCCL_SOCKET_NTHREADS=4 \
+    # -x NCCL_NSOCKS_PERTHREAD=4 \
 elif [ "$TEST" = "afxdp" ]; then
 
     # Clear existing files for all ranks

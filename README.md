@@ -77,6 +77,20 @@ sudo ./afxdp_daemon_main --logtostderr=1
 ./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --client --serverip=192.168.6.1 --test=async --verify --rand
 ```
 
+### Run nccl-tests
+
+Assume you have 4 node IPs in `nodes.txt`
+
+```
+# for TCP
+python setup_all.py --target=aws_tcp
+./run_nccl_test.sh tcp 4
+
+# for AFXDP
+python setup_all.py --target=aws_afxdp
+./run_nccl_test.sh afxdp 4
+```
+
 ### MISC setup
 
 Install anaconda: 
