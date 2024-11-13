@@ -20,7 +20,7 @@ static const uint16_t BASE_PORT = 40000;
 #ifdef AWS_ENA
 // On AWS ENA (eg, c5, g4dn)
 static const uint32_t AFXDP_MTU = 3498;
-static const char* DEV_DEFAULT = "ens5";
+static const char* DEV_DEFAULT = "ens6";
 #elif defined(CLOUDLAB_MLX5)
 // On Cloudlab (xl170-ubuntu24-v6.8 profile)
 static const uint32_t AFXDP_MTU = 1500;

@@ -24,7 +24,7 @@ if [ "$TEST" = "tcp" ]; then
     mpirun -np 4 -N 1 --host ${NODES} \
         --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
         --mca orte_base_help_aggregate 0 \
-        --mca btl_tcp_if_include ens5 \
+        --mca btl_tcp_if_include ens6 \
         -x LD_PRELOAD="${LIBNCCL_PATH} ${PLUGIN_PATH}" \
         -x NCCL_DEBUG=INFO \
         ${UCCL_HOME}/nccl-tests/build/${PROG_NAME} \
@@ -42,7 +42,7 @@ elif [ "$TEST" = "afxdp" ]; then
     mpirun -np ${NUM_PROCS} -N 1 --tag-output --merge-stderr-to-stdout --host ${NODES} \
         --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
         --mca orte_base_help_aggregate 0 \
-        --mca btl_tcp_if_include ens5 \
+        --mca btl_tcp_if_include ens6 \
         -x LD_PRELOAD="${LIBNCCL_PATH} ${PLUGIN_PATH}" \
         -x NCCL_DEBUG=INFO \
         -x UCCL_ENGINE_QUIET=1 \

@@ -11,7 +11,7 @@ make_macro_mapping = {
 }
 
 config_nic_cmd_mapping = {
-    "aws": "./config_nic.sh ens5 1 3498 afxdp aws",
+    "aws": "./config_nic.sh ens6 1 3498 afxdp aws",
     "cloudlab": "./config_nic.sh ens1f1np1 1 1500 afxdp cloudlab",
 }
 
