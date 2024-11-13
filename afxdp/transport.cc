@@ -743,6 +743,7 @@ void UcclEngine::periodic_process() {
 
 void UcclEngine::process_rx_msg(std::vector<FrameBuf *> msgbufs,
                                 FlowID flow_id) {
+    // Yang: this only happens on aws instances with no guarantee net bw. 
     if (active_flows_map_.find(flow_id) == active_flows_map_.end()) {
         LOG(ERROR) << "process_rx_msg unknown flow " << std::hex << "0x"
                    << flow_id;
