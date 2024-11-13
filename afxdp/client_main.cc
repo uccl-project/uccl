@@ -39,8 +39,6 @@ const uint32_t NUM_QUEUES = 1;
 
 uint32_t server_addr_u32 = 0x0;
 uint32_t client_addr_u32 = 0x0;
-const uint16_t client_ports[8] = {40000, 40001, 40002, 40003,
-                                  40004, 40005, 40006, 40007};
 
 // static const char* server_mac_str = "16:ff:d0:73:a9:cf";
 // static const char* client_mac_str = "16:ff:d9:ee:ab:47";
@@ -58,7 +56,7 @@ const int MY_SEND_BATCH_SIZE = 1;
 const int MY_RECV_BATCH_SIZE = 32;
 // 256 is reserved for xdp_meta, 42 is reserved for eth+ip+udp
 // Max payload under AFXDP is 4096-256-42;
-const int PAYLOAD_BYTES = 3000;
+const int PAYLOAD_BYTES = 1000;
 // tune this to change packet rate
 const int MAX_INFLIGHT_PKTS = 128;
 // sleep gives unstable rate and latency
@@ -359,8 +357,7 @@ int client_generate_packet(void* data, int payload_bytes, uint32_t counter,
 
     // generate udp header: using different ports to bypass per-flow rate
     // limiting
-    udp->source = htons(client_ports[counter % (sizeof(client_ports) /
-                                                sizeof(client_ports[0]))]);
+    udp->source = htons(BASE_PORT + counter % 256);
     udp->dest = htons(BASE_PORT);
     udp->len = htons(sizeof(struct udphdr) + payload_bytes);
     udp->check = 0;

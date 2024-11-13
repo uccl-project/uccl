@@ -1,6 +1,8 @@
 #include <assert.h>
 #include <fcntl.h>
 #include <linux/if_xdp.h>
+#include <linux/ip.h>
+#include <linux/udp.h>
 #include <netinet/ether.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -10,6 +12,9 @@
 #include <sys/un.h>
 #include <unistd.h>
 #include <xdp/xsk.h>
+
+#include <atomic>
+#include <thread>
 
 #include "transport_config.h"
 
@@ -31,8 +36,8 @@ typedef __u32 u32;
 typedef __u16 u16;
 typedef __u8 u8;
 
-u64 nr_rx_packets = 0;
-u64 nr_tx_packets = 0;
+std::atomic<u64> nr_rx_packets[2] = {0, 0};
+std::atomic<u64> nr_tx_packets[2] = {0, 0};
 
 struct xsk_socket_info {
     int xsk_fd;
@@ -322,7 +327,7 @@ int populate_fill_ring(struct xsk_ring_prod *fq) {
     return 0;
 }
 
-void rx_drop(struct xsk_socket_info *xsk) {
+void rx_drop(struct xsk_socket_info *xsk, int qid) {
     unsigned int rcvd, i;
     u32 idx_rx = 0, idx_fq = 0;
     int ret;
@@ -363,18 +368,31 @@ void rx_drop(struct xsk_socket_info *xsk) {
     xsk_ring_prod__submit(&xsk->fq, rcvd);
     xsk_ring_cons__release(&xsk->rx, rcvd);
 
-    nr_rx_packets += rcvd;
+    nr_rx_packets[qid] += rcvd;
 }
 
 static inline void swap_mac_addresses(void *data) {
     struct ether_header *eth = (struct ether_header *)data;
+    struct iphdr *ip = (struct iphdr *)(data + sizeof(struct ether_header));
+    struct udphdr *udp = (struct udphdr *)((void *)ip + sizeof(struct iphdr));
+
     struct ether_addr *src_addr = (struct ether_addr *)&eth->ether_shost;
     struct ether_addr *dst_addr = (struct ether_addr *)&eth->ether_dhost;
     struct ether_addr tmp;
+    uint32_t tmp_ip;
+    uint16_t tmp_port;
 
     tmp = *src_addr;
     *src_addr = *dst_addr;
     *dst_addr = tmp;
+
+    tmp_ip = ip->saddr;
+    ip->saddr = ip->daddr;
+    ip->daddr = tmp_ip;
+
+    tmp_port = udp->source;
+    udp->source = udp->dest;
+    udp->dest = tmp_port;
 }
 
 static void kick_tx(struct xsk_socket_info *xsk) {
@@ -415,7 +433,7 @@ static inline void complete_tx_l2fwd(struct xsk_socket_info *xsk) {
     }
 }
 
-void l2fwd(struct xsk_socket_info *xsk) {
+void l2fwd(struct xsk_socket_info *xsk, int qid) {
     u32 idx_rx = 0, idx_tx = 0;
     unsigned int rcvd, i;
     int ret;
@@ -463,20 +481,22 @@ void l2fwd(struct xsk_socket_info *xsk) {
     xsk_ring_cons__release(&xsk->rx, rcvd);
 
     xsk->outstanding_tx += rcvd;
-    nr_rx_packets += rcvd;
-    nr_tx_packets += rcvd;
+    nr_rx_packets[qid] += rcvd;
+    nr_tx_packets[qid] += rcvd;
 }
 
 void *dump_nr_rx_packets(void *arg) {
-    u64 prev_nr_rx_packets = 0;
-    u64 prev_nr_tx_packets = 0;
+    u64 prev_nr_rx_packets[2] = {0, 0};
+    u64 prev_nr_tx_packets[2] = {0, 0};
     while (1) {
-        printf("Rx pps: %.2f Mpps, Tx pps: %.2f Mpps\n",
-               (nr_rx_packets - prev_nr_rx_packets) / 1e6,
-               (nr_tx_packets - prev_nr_tx_packets) / 1e6);
-        prev_nr_rx_packets = nr_rx_packets;
-        prev_nr_tx_packets = nr_tx_packets;
-        sleep(1);
+        for (int i = 0; i < 2; i++) {
+            printf("Rx %d pps: %.2f Mpps, Tx pps: %.2f Mpps\n", i,
+                   (nr_rx_packets[i] - prev_nr_rx_packets[i]) / 1e6,
+                   (nr_tx_packets[i] - prev_nr_tx_packets[i]) / 1e6);
+            prev_nr_rx_packets[i] = nr_rx_packets[i];
+            prev_nr_tx_packets[i] = nr_tx_packets[i];
+            sleep(1);
+        }
     }
 }
 
@@ -486,6 +506,8 @@ int main() {
     struct sockaddr_un addr;
 
     struct xsk_socket_info xsk_info;
+    struct xsk_socket_info xsk_info2;
+    std::thread *t1, *t2;
 
     // Create a UNIX domain socket to receive file descriptors
     if ((client_sock = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
@@ -502,12 +524,19 @@ int main() {
     }
 
     // Step1: receive the file descriptors for AF_XDP socket and UMEM
-    int xsk_fd, umem_fd;
+    int xsk_fd, xsk_fd2, umem_fd;
     assert(receive_fd(client_sock, &xsk_fd) == 0);
+    assert(receive_fd(client_sock, &xsk_fd2) == 0);
     assert(receive_fd(client_sock, &umem_fd) == 0);
 
     // Step2: map UMEM and build four rings for the AF_XDP socket
     ret = create_afxdp_socket(&xsk_info, xsk_fd, umem_fd);
+    if (ret) {
+        fprintf(stderr, "xsk_socket__create_shared failed, %d\n", ret);
+        goto out;
+    }
+
+    ret = create_afxdp_socket(&xsk_info2, xsk_fd2, umem_fd);
     if (ret) {
         fprintf(stderr, "xsk_socket__create_shared failed, %d\n", ret);
         goto out;
@@ -520,13 +549,30 @@ int main() {
         goto out;
     }
 
+    if (populate_fill_ring(&xsk_info2.fq)) {
+        fprintf(stderr, "populate_fill_ring failed\n");
+        goto out;
+    }
+
     pthread_t dump_thread;
     pthread_create(&dump_thread, NULL, dump_nr_rx_packets, NULL);
 
-    while (1) {
-        // rx_drop(&xsk_info);
-        l2fwd(&xsk_info);
-    }
+    t1 = new std::thread([&xsk_info]() {
+        while (1) {
+            // rx_drop(&xsk_info, 0);
+            l2fwd(&xsk_info, 0);
+        }
+    });
+
+    t2 = new std::thread([&xsk_info2]() {
+        while (1) {
+            // rx_drop(&xsk_info, 1);
+            l2fwd(&xsk_info2, 1);
+        }
+    });
+
+    t1->join();
+    t2->join();
 
 out:
     destroy_afxdp_socket(&xsk_info);

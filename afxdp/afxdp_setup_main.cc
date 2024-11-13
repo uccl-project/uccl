@@ -32,6 +32,13 @@ struct xsk_socket *xsk;
 struct xsk_ring_cons rx_ring;
 struct xsk_ring_prod tx_ring;
 
+struct xsk_umem *umem2;
+struct xsk_ring_prod fill_ring2;
+struct xsk_ring_cons comp_ring2;
+struct xsk_socket *xsk2;
+struct xsk_ring_cons rx_ring2;
+struct xsk_ring_prod tx_ring2;
+
 int send_fd(int sockfd, int fd) {
     assert(sockfd >= 0);
     assert(fd >= 0);
@@ -166,6 +173,12 @@ int main() {
         goto out;
     }
 
+    if (xsk_socket__create_shared(&xsk2, IF_NAME, QUEUE_ID + 1, umem, &rx_ring2, &tx_ring2,
+                                &fill_ring2, &comp_ring2, &xsk_cfg)) {
+        perror("xsk_socket__create_shared");
+        goto out;
+    }
+
     /* Note: Actually, xsk_socket__fd(xsk) == xsk_umem__fd(umem), there is no
      * need to send both. We send both of them just for demonstration. This is
      * because libxdp would reuse the UMEM's fd for the ***first socket***
@@ -176,6 +189,7 @@ int main() {
 
     // Step4: send the file descriptors for the AF_XDP socket and UMEM
     if (send_fd(client_sock, xsk_socket__fd(xsk))) goto out;
+    if (send_fd(client_sock, xsk_socket__fd(xsk2))) goto out;
     if (send_fd(client_sock, xsk_umem__fd(umem))) goto out;
 
     while (1) {
