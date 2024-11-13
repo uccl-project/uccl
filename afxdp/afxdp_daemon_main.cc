@@ -201,6 +201,10 @@ void destroy_umem_and_xsk(bool free_shm = false) {
     if (xsk) xsk_socket__delete(xsk);
     if (umem) xsk_umem__delete(umem);
     if (umem_area && free_shm) destroy_shm(SHM_NAME, umem_area, umem_size);
+
+    program_attach = nullptr;
+    umem = nullptr;
+    xsk = nullptr;
 }
 
 void interrupt_handler(int signal) {
@@ -244,6 +248,7 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
+    uint32_t test_word;
     while (true) {
         printf("Waiting for non-privileged process to connect...\n");
         if ((client_sock = accept(server_sock, NULL, NULL)) == -1) {
@@ -257,6 +262,19 @@ int main(int argc, char *argv[]) {
         // Step5: send the file descriptors for the AF_XDP socket and UMEM
         if (send_fd(client_sock, xsk_socket__fd(xsk))) break;
         if (send_fd(client_sock, xsk_umem__fd(umem))) break;
+
+        ssize_t bytes_received =
+            recv(client_sock, &test_word, sizeof(test_word), 0);
+
+        if (bytes_received == 0) {
+            printf(
+                "Peer has closed the connection or crashed, forcely clean up "
+                "all xsks and umem\n");
+            destroy_umem_and_xsk();
+        } else if (bytes_received < 0) {
+            perror("recv failed");
+            destroy_umem_and_xsk();
+        }
 
         close(client_sock);
     }

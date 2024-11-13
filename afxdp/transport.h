@@ -528,10 +528,7 @@ class UcclEngine {
      * @param app_buf Pointer to the application receiving buffer.
      * @param app_buf_len Pointer to the length of the application buffer.
      */
-    inline void process_rx_msg(std::vector<FrameBuf *> msgbufs,
-                               FlowID flow_id) {
-        active_flows_map_[flow_id]->rx_messages(msgbufs);
-    }
+    void process_rx_msg(std::vector<FrameBuf *> msgbufs, FlowID flow_id);
 
     /**
      * Process a message enqueued from an application to a channel.

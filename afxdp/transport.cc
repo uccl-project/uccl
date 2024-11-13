@@ -741,6 +741,23 @@ void UcclEngine::periodic_process() {
     process_ctl_reqs();
 }
 
+void UcclEngine::process_rx_msg(std::vector<FrameBuf *> msgbufs,
+                                FlowID flow_id) {
+    if (active_flows_map_.find(flow_id) == active_flows_map_.end()) {
+        LOG(ERROR) << "process_rx_msg unknown flow " << std::hex << "0x"
+                   << flow_id;
+        for (auto [flow_id, flow] : active_flows_map_) {
+            LOG(ERROR) << "                active flow " << std::hex << "0x"
+                       << flow_id;
+        }
+        for (auto msgbuf : msgbufs) {
+            socket_->push_frame(msgbuf->get_frame_offset());
+        }
+        return;
+    }
+    active_flows_map_[flow_id]->rx_messages(msgbufs);
+}
+
 void UcclEngine::handle_rto() {
     for (auto [flow_id, flow] : active_flows_map_) {
         auto is_active_flow = flow->periodic_check();
@@ -914,7 +931,6 @@ FlowID Endpoint::uccl_connect(std::string remote_ip) {
         LOG(INFO) << "Connecting... Make sure the server is up.";
         sleep(1);
     }
-    LOG(INFO) << "Connected!";
 
     int flag = 1;
     setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void *)&flag,
@@ -941,17 +957,18 @@ FlowID Endpoint::uccl_connect(std::string remote_ip) {
 
         if (unique) break;
     }
-    LOG(INFO) << "FlowID: " << std::hex << "0x" << flow_id;
+    LOG(INFO) << "Connect FlowID: " << std::hex << "0x" << flow_id << " : "
+              << local_ip_str_ << "<->" << remote_ip;
 
     char remote_mac_char[ETH_ALEN];
     ret = read(bootstrap_fd, remote_mac_char, ETH_ALEN);
     DCHECK(ret == ETH_ALEN);
     std::string remote_mac = mac_to_str(remote_mac_char);
-    LOG(INFO) << "Remote MAC: " << remote_mac;
+    VLOG(3) << "Remote MAC: " << remote_mac;
 
     char local_mac_char[ETH_ALEN];
     std::string local_mac = get_dev_mac(DEV_DEFAULT);
-    LOG(INFO) << "Local MAC: " << local_mac;
+    VLOG(3) << "Local MAC: " << local_mac;
     str_to_mac(local_mac, local_mac_char);
     ret = write(bootstrap_fd, local_mac_char, ETH_ALEN);
     DCHECK(ret == ETH_ALEN);
@@ -973,7 +990,6 @@ std::tuple<FlowID, std::string> Endpoint::uccl_accept() {
     socklen_t clilen = sizeof(cli_addr);
     int bootstrap_fd;
 
-    LOG(INFO) << "Accepting...";
     // Accept connection and set nonblocking and nodelay
     bootstrap_fd = accept(listen_fd_, (struct sockaddr *)&cli_addr, &clilen);
     DCHECK(bootstrap_fd >= 0);
@@ -1020,11 +1036,12 @@ std::tuple<FlowID, std::string> Endpoint::uccl_accept() {
             DCHECK(1 == bootstrap_fd_map_.erase(flow_id));
         }
     }
-    LOG(INFO) << "FlowID: " << std::hex << "0x" << flow_id;
+    LOG(INFO) << "Accept FlowID: " << std::hex << "0x" << flow_id << " : "
+              << local_ip_str_ << "<->" << remote_ip;
 
     char local_mac_char[ETH_ALEN];
     std::string local_mac = get_dev_mac(DEV_DEFAULT);
-    LOG(INFO) << "Local MAC: " << local_mac;
+    VLOG(3) << "Local MAC: " << local_mac;
     str_to_mac(local_mac, local_mac_char);
     ret = write(bootstrap_fd, local_mac_char, ETH_ALEN);
     DCHECK(ret == ETH_ALEN);
@@ -1033,7 +1050,7 @@ std::tuple<FlowID, std::string> Endpoint::uccl_accept() {
     ret = read(bootstrap_fd, remote_mac_char, ETH_ALEN);
     DCHECK(ret == ETH_ALEN);
     std::string remote_mac = mac_to_str(remote_mac_char);
-    LOG(INFO) << "Remote MAC: " << remote_mac;
+    VLOG(3) << "Remote MAC: " << remote_mac;
 
     install_flow_on_engine(remote_ip, remote_mac, flow_id);
 
