@@ -37,9 +37,6 @@ int ebpf_transport_filter(struct xdp_md *ctx) {
     struct ethhdr *eth = data;
     struct iphdr *ip = data + sizeof(struct ethhdr);
     __u16 magic = *(__u16 *)(data + kNetHdrLen);
-    __u8 socket_id = *(__u8 *)(data + kNetHdrLen + sizeof(__u16));
-
-    bpf_printk("queue_id %u socket_id %d\n", ctx->rx_queue_index, socket_id);
 
 #ifdef USING_TCP
     if (eth->h_proto != __constant_htons(ETH_P_IP) ||
@@ -53,7 +50,7 @@ int ebpf_transport_filter(struct xdp_md *ctx) {
     }
 #endif
 
-    return bpf_redirect_map(&xsks_map, socket_id, XDP_PASS);
+    return bpf_redirect_map(&xsks_map, ctx->rx_queue_index, XDP_PASS);
 }
 
 char _license[] SEC("license") = "GPL";

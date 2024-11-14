@@ -66,7 +66,6 @@ class Channel {
     constexpr static uint32_t kChannelSize = 1024;
 
    public:
-    // TODO(yang): merging Msg and PollCtx as MsgCtx.
     struct Msg {
         enum Op : uint8_t {
             kTx = 0,
@@ -93,26 +92,37 @@ class Channel {
         uint32_t remote_addr;
         char remote_l2_addr[ETH_ALEN];
         char pad[2];
+        uint32_t remote_engine_idx;
         PollCtx *poll_ctx;
     };
     static_assert(sizeof(CtrlMsg) % 4 == 0,
                   "channelMsg must be 32-bit aligned");
 
+    struct PktMsg {
+        uint64_t frame_offset;
+        uint32_t frame_len;
+        uint32_t pad;
+    };
+    static_assert(sizeof(PktMsg) % 4 == 0, "channelMsg must be 32-bit aligned");
+
     Channel() {
         tx_cmdq_ = create_ring(sizeof(Msg), kChannelSize);
         rx_cmdq_ = create_ring(sizeof(Msg), kChannelSize);
         ctrl_cmdq_ = create_ring(sizeof(CtrlMsg), kChannelSize);
+        pktq_ = create_ring(sizeof(PktMsg), kChannelSize * 8);
     }
 
     ~Channel() {
         free(tx_cmdq_);
         free(rx_cmdq_);
         free(ctrl_cmdq_);
+        free(pktq_);
     }
 
     jring_t *tx_cmdq_;
     jring_t *rx_cmdq_;
     jring_t *ctrl_cmdq_;
+    jring_t *pktq_;
 };
 
 /**
@@ -121,7 +131,7 @@ class Channel {
 struct __attribute__((packed)) UcclPktHdr {
     static constexpr uint16_t kMagic = 0x4e53;
     be16_t magic;       // Magic value tagged after initialization for the flow.
-    uint8_t socket_id;  // AFXDP Socket ID to process this packet.
+    uint8_t engine_id;  // remote UcclEngine ID to process this packet.
     uint8_t reserved;   // Reserved for future use.
     enum class UcclFlags : uint8_t {
         kData = 0b0,      // Data packet.
@@ -327,10 +337,13 @@ class UcclFlow {
      */
     UcclFlow(const uint32_t local_addr, const uint32_t remote_addr,
              const char local_l2_addr[ETH_ALEN],
-             const char remote_l2_addr[ETH_ALEN], AFXDPSocket *socket,
-             Channel *channel, FlowID flow_id)
+             const char remote_l2_addr[ETH_ALEN], uint32_t local_engine_idx,
+             uint32_t remote_engine_idx, AFXDPSocket *socket, Channel *channel,
+             FlowID flow_id)
         : local_addr_(local_addr),
           remote_addr_(remote_addr),
+          local_engine_idx_(local_engine_idx),
+          remote_engine_idx_(remote_engine_idx),
           socket_(CHECK_NOTNULL(socket)),
           channel_(channel),
           flow_id_(flow_id),
@@ -441,6 +454,9 @@ class UcclFlow {
     uint32_t remote_addr_;
     char local_l2_addr_[ETH_ALEN];
     char remote_l2_addr_[ETH_ALEN];
+    // Which engine (also NIC queue and xsk) this flow belongs to.
+    uint32_t local_engine_idx_;
+    uint32_t remote_engine_idx_;
 
     // The underlying AFXDPSocket.
     AFXDPSocket *socket_;
@@ -479,11 +495,13 @@ class UcclEngine {
      * For now, we assume an engine is responsible for a single channel, but
      * future it may be responsible for multiple channels.
      */
-    UcclEngine(int queue_id, Channel *channel,
+    UcclEngine(int queue_id, Channel *channel, Channel **channel_vec,
                const std::string local_addr, const std::string local_l2_addr)
         : local_addr_(htonl(str_to_ip(local_addr))),
+          local_engine_idx_(queue_id),
           socket_(AFXDPFactory::CreateSocket(queue_id)),
           channel_(channel),
+          channel_vec_(channel_vec),
           last_periodic_timestamp_(rdtsc_to_us(rdtsc())),
           periodic_ticks_(0) {
         DCHECK(str_to_mac(local_l2_addr, local_l2_addr_));
@@ -492,7 +510,8 @@ class UcclEngine {
 
     // Install a flow that serves traffic with specific remote ip and mac.
     void install_flow(const uint32_t remote_addr,
-                      const char remote_l2_addr[ETH_ALEN], FlowID flow_id,
+                      const char remote_l2_addr[ETH_ALEN],
+                      uint32_t remote_engine_idx, FlowID flow_id,
                       PollCtx *poll_ctx);
 
     /**
@@ -568,13 +587,16 @@ class UcclEngine {
    private:
     uint32_t local_addr_;
     char local_l2_addr_[ETH_ALEN];
+    // Engine index, also NIC queue ID and xsk index.
+    uint32_t local_engine_idx_;
 
     // AFXDP socket used for send/recv packets.
     AFXDPSocket *socket_;
     // UcclFlow map
     std::unordered_map<FlowID, UcclFlow *> active_flows_map_;
-    // Control plan channel with Endpoint.
+    // Control plane channel with Endpoint.
     Channel *channel_;
+    Channel **channel_vec_;
     // Timestamp of last periodic process execution.
     uint64_t last_periodic_timestamp_;
     // Clock ticks for the slow timer.
@@ -601,7 +623,8 @@ class Endpoint {
     std::string local_ip_str_;
     std::string local_mac_str_;
 
-    std::vector<std::unique_ptr<Channel>> channel_vec_;
+    int num_queues_;
+    Channel **channel_vec_;
     std::vector<std::unique_ptr<UcclEngine>> engine_vec_;
     std::vector<std::unique_ptr<std::thread>> engine_th_vec_;
 
@@ -646,8 +669,9 @@ class Endpoint {
    private:
     inline void fence_and_clean_ctx(PollCtx *ctx);
     void install_flow_on_engine(const std::string remote_ip,
-                                const std::string remote_mac, FlowID flow_id,
-                                int engine_idx);
+                                const std::string remote_mac,
+                                const uint32_t remote_engine_idx,
+                                FlowID flow_id, int engine_idx);
     inline int find_least_loaded_engine_idx_and_update();
 };
 

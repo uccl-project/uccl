@@ -396,7 +396,7 @@ std::string AFXDPSocket::to_string() const {
     std::string s;
     s += Format(
         "\n\t[AFXDPSocket] unpulled tx pkts: %u, fill queue "
-        "entries: %u\n",
+        "entries: %u",
         unpulled_tx_pkts_, fill_queue_entries_);
     return s;
 }

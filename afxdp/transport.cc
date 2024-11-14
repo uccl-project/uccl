@@ -511,7 +511,7 @@ AFXDPSocket::frame_desc UcclFlow::craft_ctlpacket(
 
     auto *ucclh = (UcclPktHdr *)(pkt_addr + kNetHdrLen);
     ucclh->magic = be16_t(UcclPktHdr::kMagic);
-    ucclh->socket_id = socket_->get_socket_id();
+    ucclh->engine_id = remote_engine_idx_;
     ucclh->net_flags = net_flags;
     ucclh->msg_flags = 0;
     ucclh->frame_len = be16_t(kNetHdrLen + kControlPayloadBytes);
@@ -543,7 +543,7 @@ void UcclFlow::prepare_datapacket(FrameBuf *msg_buf, uint32_t seqno) const {
     // Prepare the Uccl-specific header.
     auto *ucclh = reinterpret_cast<UcclPktHdr *>(pkt_addr + kNetHdrLen);
     ucclh->magic = be16_t(UcclPktHdr::kMagic);
-    ucclh->socket_id = socket_->get_socket_id();
+    ucclh->engine_id = remote_engine_idx_;
     ucclh->net_flags = UcclPktHdr::UcclFlags::kData;
     ucclh->ackno = be32_t(UINT32_MAX);
     // This fills the FrameBuf.flags into the outgoing packet
@@ -625,9 +625,11 @@ void UcclFlow::transmit_pending_packets() {
 
 void UcclEngine::install_flow(const uint32_t remote_addr,
                               const char remote_l2_addr[ETH_ALEN],
-                              FlowID flow_id, PollCtx *poll_ctx) {
+                              uint32_t remote_engine_idx, FlowID flow_id,
+                              PollCtx *poll_ctx) {
     auto *flow = new UcclFlow(local_addr_, remote_addr, local_l2_addr_,
-                              remote_l2_addr, socket_, channel_, flow_id);
+                              remote_l2_addr, local_engine_idx_,
+                              remote_engine_idx, socket_, channel_, flow_id);
     auto [_, ret] = active_flows_map_.insert({flow_id, flow});
     DCHECK(ret);
 
@@ -643,6 +645,10 @@ void UcclEngine::run() {
     Channel::Msg rx_work;
     Channel::Msg tx_work;
     std::unordered_map<FlowID, std::vector<FrameBuf *>> rx_msgbuf_map_;
+
+    std::vector<Channel::PktMsg> pkt_msgs_out[NUM_QUEUES];
+    Channel::PktMsg *pkt_msgs_in = new Channel::PktMsg[RECV_BATCH_SIZE];
+    int num_pkt_msgs_in = 0;
 
     while (!shutdown_) {
         // Calculate the time elapsed since the last periodic
@@ -665,8 +671,34 @@ void UcclEngine::run() {
 
         auto frames = socket_->recv_packets(RECV_BATCH_SIZE);
         if (frames.size()) {
-            VLOG(3) << "Rx recv_packets " << frames.size();
+            LOG_EVERY_N(INFO, 1000) << "Rx recv_packets " << frames.size();
             for (auto &frame : frames) {
+                auto pkt_addr =
+                    (uint8_t *)socket_->umem_buffer_ + frame.frame_offset;
+                auto engine_idx =
+                    *(pkt_addr + kNetHdrLen + sizeof(uint16_t));  // skip magic
+                DCHECK(engine_idx >= 0 && engine_idx < NUM_QUEUES);
+                pkt_msgs_out[engine_idx].push_back(
+                    {frame.frame_offset, frame.frame_len});
+            }
+            for (int i = 0; i < NUM_QUEUES; i++) {
+                auto &pkt_msgs = pkt_msgs_out[i]; 
+                if (pkt_msgs.empty()) continue;
+                while (jring_mp_enqueue_bulk(channel_vec_[i]->pktq_,
+                                             pkt_msgs.data(), pkt_msgs.size(),
+                                             nullptr) != pkt_msgs.size()) {
+                    LOG_EVERY_N(INFO, 1000000)
+                        << "busy loop " << pkt_msgs.size();
+                }
+                pkt_msgs.clear();
+            }
+        }
+
+        while (num_pkt_msgs_in = jring_sc_dequeue_burst(
+                channel_->pktq_, pkt_msgs_in, RECV_BATCH_SIZE, nullptr)) {
+            LOG_EVERY_N(INFO, 1000) << "Rx dequeue pkts " << num_pkt_msgs_in;
+            for (int i = 0; i < num_pkt_msgs_in; i++) {
+                auto &frame = pkt_msgs_in[i];
                 auto *msgbuf = FrameBuf::Create(
                     frame.frame_offset, socket_->umem_buffer_, frame.frame_len);
                 auto *pkt_addr = msgbuf->get_pkt_addr();
@@ -723,6 +755,8 @@ void UcclEngine::run() {
         // process_tx_msg(nullptr, nullptr, 0);
     }
 
+    delete[] pkt_msgs_in;
+
     // This will reset flow pcb state.
     for (auto [flow_id, flow] : active_flows_map_) {
         flow->shutdown();
@@ -777,7 +811,8 @@ void UcclEngine::process_ctl_reqs() {
         1) {
         VLOG(3) << "Ctrl jring dequeue";
         install_flow(ctrl_work.remote_addr, ctrl_work.remote_l2_addr,
-                     ctrl_work.flow_id, ctrl_work.poll_ctx);
+                     ctrl_work.remote_engine_idx, ctrl_work.flow_id,
+                     ctrl_work.poll_ctx);
     }
 }
 
@@ -846,7 +881,8 @@ std::tuple<FrameBuf *, FrameBuf *, uint32_t> UcclEngine::deserialize_msg(
 }
 
 Endpoint::Endpoint(const char *interface_name, int num_queues,
-                   uint64_t num_frames, int engine_cpu_start) {
+                   uint64_t num_frames, int engine_cpu_start)
+    : num_queues_(num_queues) {
     static std::once_flag flag_once;
     std::call_once(flag_once, [interface_name, num_frames]() {
         // This will create UDS socket and get the umem_id.
@@ -857,17 +893,17 @@ Endpoint::Endpoint(const char *interface_name, int num_queues,
     local_ip_str_ = get_dev_ip(interface_name);
     local_mac_str_ = get_dev_mac(interface_name);
 
-    int queue_id = 0;
-    int engine_cpu_id = engine_cpu_start;
-
     // Create multiple engines, each got its xsk and umem from the
     // daemon. Each engine has its own thread and channel to let the endpoint
     // communicate with.
-    for (; queue_id < num_queues; queue_id++, engine_cpu_id++) {
-        channel_vec_.emplace_back(std::make_unique<Channel>());
-        engine_vec_.emplace_back(
-            std::make_unique<UcclEngine>(queue_id, channel_vec_.back().get(),
-                                         local_ip_str_, local_mac_str_));
+    channel_vec_ = new Channel *[num_queues];
+    for (int i = 0; i < num_queues; i++) channel_vec_[i] = new Channel();
+
+    for (int queue_id = 0, engine_cpu_id = engine_cpu_start;
+         queue_id < num_queues; queue_id++, engine_cpu_id++) {
+        engine_vec_.emplace_back(std::make_unique<UcclEngine>(
+            queue_id, channel_vec_[queue_id], channel_vec_, local_ip_str_,
+            local_mac_str_));
         engine_th_vec_.emplace_back(std::make_unique<std::thread>(
             [engine_ptr = engine_vec_.back().get(), engine_cpu_id]() {
                 pin_thread_to_cpu(engine_cpu_id);
@@ -904,6 +940,8 @@ Endpoint::Endpoint(const char *interface_name, int num_queues,
 }
 
 Endpoint::~Endpoint() {
+    for (int i = 0; i < num_queues_; i++) delete channel_vec_[i];
+    delete[] channel_vec_;
     for (auto &engine : engine_vec_) engine->shutdown();
     for (auto &engine_th : engine_th_vec_) engine_th->join();
 
@@ -991,12 +1029,19 @@ ConnID Endpoint::uccl_connect(std::string remote_ip) {
 
     conn_id.boostrap_id = bootstrap_fd;
     conn_id.engine_idx = find_least_loaded_engine_idx_and_update();
-    install_flow_on_engine(remote_ip, remote_mac, conn_id.flow_id,
-                           conn_id.engine_idx);
+
+    // Sync remote engine index.
+    uint32_t remote_engine_idx;
+    ret = write(bootstrap_fd, &conn_id.engine_idx, sizeof(uint32_t));
+    ret = read(bootstrap_fd, &remote_engine_idx, sizeof(uint32_t));
+    DCHECK(ret == sizeof(uint32_t));
+
+    install_flow_on_engine(remote_ip, remote_mac, remote_engine_idx,
+                           conn_id.flow_id, conn_id.engine_idx);
 
     LOG(INFO) << "Connect FlowID " << std::hex << "0x" << conn_id.flow_id
-              << " at engine " << conn_id.engine_idx << " : " << local_ip_str_
-              << "<->" << remote_ip;
+              << " : " << local_ip_str_ << Format("(%d)", conn_id.engine_idx)
+              << "<->" << remote_ip << Format("(%d)", remote_engine_idx);
 
     // Finally sync client and sender to make sure any incoming packets have
     // found the flow installed; otherwise, SEGV may happen.
@@ -1076,12 +1121,19 @@ std::tuple<ConnID, std::string> Endpoint::uccl_accept() {
 
     conn_id.boostrap_id = bootstrap_fd;
     conn_id.engine_idx = find_least_loaded_engine_idx_and_update();
-    install_flow_on_engine(remote_ip, remote_mac, conn_id.flow_id,
-                           conn_id.engine_idx);
+
+    // Sync remote engine index.
+    uint32_t remote_engine_idx;
+    ret = write(bootstrap_fd, &conn_id.engine_idx, sizeof(uint32_t));
+    ret = read(bootstrap_fd, &remote_engine_idx, sizeof(uint32_t));
+    DCHECK(ret == sizeof(uint32_t));
+
+    install_flow_on_engine(remote_ip, remote_mac, remote_engine_idx,
+                           conn_id.flow_id, conn_id.engine_idx);
 
     LOG(INFO) << "Accept FlowID " << std::hex << "0x" << conn_id.flow_id
-              << " at engine " << conn_id.engine_idx << " : " << local_ip_str_
-              << "<->" << remote_ip;
+              << " : " << local_ip_str_ << Format("(%d)", conn_id.engine_idx)
+              << "<->" << remote_ip << Format("(%d)", remote_engine_idx);
 
     bool sync = false;
     ret = read(bootstrap_fd, &sync, sizeof(bool));
@@ -1166,12 +1218,14 @@ inline void Endpoint::fence_and_clean_ctx(PollCtx *ctx) {
 
 void Endpoint::install_flow_on_engine(const std::string remote_ip,
                                       const std::string remote_mac,
+                                      const uint32_t remote_engine_idx,
                                       FlowID flow_id, int engine_idx) {
     auto *poll_ctx = new PollCtx();
     Channel::CtrlMsg ctrl_msg = {
         .opcode = Channel::CtrlMsg::Op::kFlowAdd,
         .flow_id = flow_id,
         .remote_addr = htonl(str_to_ip(remote_ip)),
+        .remote_engine_idx = remote_engine_idx,
         .poll_ctx = poll_ctx,
     };
     str_to_mac(remote_mac, ctrl_msg.remote_l2_addr);
