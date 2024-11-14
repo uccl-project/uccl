@@ -143,8 +143,23 @@ class Spin {
 #define unlikely(X) __builtin_expect(!!(X), 0)
 #endif
 
+// #define barrier() asm volatile("" ::: "memory")
+// #define load_acquire(p)                   \
+//     ({                                    \
+//         typeof(*p) __p = ACCESS_ONCE(*p); \
+//         barrier();                        \
+//         __p;                              \
+//     })
+// #define store_release(p, v)  \
+//     do {                     \
+//         barrier();           \
+//         ACCESS_ONCE(*p) = v; \
+//     } while (0)
+
 #define load_acquire(X) __atomic_load_n(X, __ATOMIC_ACQUIRE)
 #define store_release(X, Y) __atomic_store_n(X, Y, __ATOMIC_RELEASE)
+#define ACCESS_ONCE(x) (*(volatile decltype(x)*)&(x))
+#define is_power_of_two(x) ((x) != 0 && !((x) & ((x) - 1)))
 
 static inline std::string FormatVarg(const char* fmt, va_list ap) {
     char* ptr = nullptr;

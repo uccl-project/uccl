@@ -646,6 +646,7 @@ void UcclEngine::run() {
     Channel::Msg tx_work;
     std::unordered_map<FlowID, std::vector<FrameBuf *>> rx_msgbuf_map_;
 
+    Channel::PktMsg pkt_msg;
     std::vector<Channel::PktMsg> pkt_msgs_out[NUM_QUEUES];
     Channel::PktMsg *pkt_msgs_in = new Channel::PktMsg[RECV_BATCH_SIZE];
     int num_pkt_msgs_in = 0;
@@ -671,7 +672,7 @@ void UcclEngine::run() {
 
         auto frames = socket_->recv_packets(RECV_BATCH_SIZE);
         if (frames.size()) {
-            LOG_EVERY_N(INFO, 1000) << "Rx recv_packets " << frames.size();
+            // LOG_EVERY_N(INFO, 1000) << "Rx recv_packets " << frames.size();
             for (auto &frame : frames) {
                 auto pkt_addr =
                     (uint8_t *)socket_->umem_buffer_ + frame.frame_offset;
@@ -682,21 +683,63 @@ void UcclEngine::run() {
                     {frame.frame_offset, frame.frame_len});
             }
             for (int i = 0; i < NUM_QUEUES; i++) {
-                auto &pkt_msgs = pkt_msgs_out[i]; 
+                auto &pkt_msgs = pkt_msgs_out[i];
                 if (pkt_msgs.empty()) continue;
-                while (jring_mp_enqueue_bulk(channel_vec_[i]->pktq_,
-                                             pkt_msgs.data(), pkt_msgs.size(),
-                                             nullptr) != pkt_msgs.size()) {
-                    LOG_EVERY_N(INFO, 1000000)
-                        << "busy loop " << pkt_msgs.size();
+
+                if (i == local_engine_idx_) {
+                    for (auto& frame: pkt_msgs){
+                        auto *msgbuf = FrameBuf::Create(frame.frame_offset,
+                                                        socket_->umem_buffer_,
+                                                        frame.frame_len);
+                        auto *pkt_addr = msgbuf->get_pkt_addr();
+                        auto *ucclh = reinterpret_cast<UcclPktHdr *>(
+                            pkt_addr + kNetHdrLen);
+
+                        // Record the incoming packet UcclPktHdr.msg_flags in
+                        // FrameBuf.
+                        msgbuf->set_msg_flags(ucclh->msg_flags);
+
+                        // Work around an AFXDP bug that would receive the same
+                        // packets with differet lengths multiple times.
+                        if (ucclh->frame_len.value() != frame.frame_len) {
+                            VLOG(2) << "Received invalid frame length: "
+                                    << ucclh->frame_len.value()
+                                    << " != " << frame.frame_len;
+                            AFXDPFactory::push_frame(frame.frame_offset);
+                            continue;
+                        }
+
+                        if (msgbuf->is_last()) {
+                            VLOG(2)
+                                << "Received seqno: " << ucclh->seqno.value()
+                                << " payload_len: "
+                                << msgbuf->get_frame_len() - kNetHdrLen -
+                                       kUcclHdrLen;
+                        }
+
+                        auto flow_id = ucclh->flow_id.value();
+                        rx_msgbuf_map_[flow_id].push_back(msgbuf);
+                    }
+                    for (auto &[flow_id, msgbufs] : rx_msgbuf_map_) {
+                        if (msgbufs.empty()) continue;
+                        process_rx_msg(msgbufs, flow_id);
+                        msgbufs.clear();
+                    }
+                } else {
+                    while (jring_mp_enqueue_bulk(
+                               channel_vec_[i]->pktq_, pkt_msgs.data(),
+                               pkt_msgs.size(), nullptr) != pkt_msgs.size()) {
+                        // LOG_EVERY_N(INFO, 1000000)
+                        //     << "busy loop " << pkt_msgs.size();
+                    }
                 }
                 pkt_msgs.clear();
             }
         }
 
-        while (num_pkt_msgs_in = jring_sc_dequeue_burst(
-                channel_->pktq_, pkt_msgs_in, RECV_BATCH_SIZE, nullptr)) {
-            LOG_EVERY_N(INFO, 1000) << "Rx dequeue pkts " << num_pkt_msgs_in;
+        if (num_pkt_msgs_in = jring_sc_dequeue_bulk(
+                   channel_->pktq_, pkt_msgs_in, RECV_BATCH_SIZE, nullptr)) {
+            // LOG_EVERY_N(INFO, 1000) << "Rx dequeue pkts " << num_pkt_msgs_in;
             for (int i = 0; i < num_pkt_msgs_in; i++) {
                 auto &frame = pkt_msgs_in[i];
                 auto *msgbuf = FrameBuf::Create(
