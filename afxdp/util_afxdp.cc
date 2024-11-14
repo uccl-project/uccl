@@ -6,9 +6,10 @@ namespace uccl {
 
 AFXDPFactory afxdp_ctl;
 
-void AFXDPFactory::init(const char *interface_name, const char *ebpf_filename,
-                        const char *section_name) {
+void AFXDPFactory::init(const char *interface_name, uint64_t num_frames,
+                        const char *ebpf_filename, const char *section_name) {
     // TODO(yang): negotiate with afxdp daemon to load the specified program
+    strcpy(afxdp_ctl.interface_name_, interface_name);
 
     struct sockaddr_un addr;
     // Create a UNIX domain socket to receive file descriptors
@@ -25,10 +26,27 @@ void AFXDPFactory::init(const char *interface_name, const char *ebpf_filename,
         perror("connect");
         exit(EXIT_FAILURE);
     }
+    // Receive the file descriptor for the UMEM
+    DCHECK(receive_fd(afxdp_ctl.client_sock_, &afxdp_ctl.umem_fd_) == 0);
+
+    afxdp_ctl.umem_size_ = num_frames * FRAME_SIZE;
+    afxdp_ctl.umem_buffer_ = attach_shm(SHM_NAME, afxdp_ctl.umem_size_);
+    if (afxdp_ctl.umem_buffer_ == MAP_FAILED) {
+        perror("mmap");
+        exit(EXIT_FAILURE);
+    }
+
+    afxdp_ctl.num_frames_ = num_frames;
+    // initialize frame allocator
+    afxdp_ctl.frame_pool_ = new SharedPool<uint64_t, /*Sync=*/true>(num_frames);
+    for (uint64_t j = 0; j < num_frames; j++) {
+        auto frame_offset = j * FRAME_SIZE + XDP_PACKET_HEADROOM;
+        push_frame(frame_offset);
+    }
 }
 
-AFXDPSocket *AFXDPFactory::CreateSocket(int queue_id, uint64_t num_frames) {
-    auto socket = new AFXDPSocket(queue_id, num_frames);
+AFXDPSocket *AFXDPFactory::CreateSocket(int queue_id) {
+    auto socket = new AFXDPSocket(queue_id);
     std::lock_guard<std::mutex> lock(afxdp_ctl.socket_q_lock_);
     afxdp_ctl.socket_q_.push_back(socket);
     return socket;
@@ -42,14 +60,22 @@ void AFXDPFactory::shutdown() {
         delete socket;
     }
     afxdp_ctl.socket_q_.clear();
+
+    delete afxdp_ctl.frame_pool_;
 }
 
-AFXDPSocket::AFXDPSocket(int queue_id, uint64_t num_frames)
+std::string AFXDPFactory::to_string() {
+    std::string s;
+    s += Format("\n\t[Global frame pool] free frames: %u\n",
+                afxdp_ctl.frame_pool_->size());
+    return s;
+}
+
+AFXDPSocket::AFXDPSocket(int queue_id)
     : unpulled_tx_pkts_(0), fill_queue_entries_(0) {
     // TODO(yang): negotiate with afxdp daemon for queue_id and num_frames.
 
     queue_id_ = queue_id;
-    num_frames_ = num_frames;
 
     // initialize queues, or misterious queue sync problems will happen
     memset(&recv_queue_, 0, sizeof(recv_queue_));
@@ -57,9 +83,8 @@ AFXDPSocket::AFXDPSocket(int queue_id, uint64_t num_frames)
     memset(&complete_queue_, 0, sizeof(complete_queue_));
     memset(&fill_queue_, 0, sizeof(fill_queue_));
 
-    // Step1: receive the file descriptors for AF_XDP socket and UMEM
+    // Step1: receive the file descriptors for AF_XDP socket
     DCHECK(receive_fd(afxdp_ctl.client_sock_, &xsk_fd_) == 0);
-    DCHECK(receive_fd(afxdp_ctl.client_sock_, &umem_fd_) == 0);
 
     // Step2: map UMEM and build four rings for the AF_XDP socket
     int ret = create_afxdp_socket();
@@ -68,13 +93,6 @@ AFXDPSocket::AFXDPSocket(int queue_id, uint64_t num_frames)
     LOG(INFO) << "AF_XDP socket successfully shared.";
 
     // apply_setsockopt(xsk_fd_);
-
-    // initialize frame allocator
-    frame_pool_ = new SharedPool<uint64_t, /*Sync=*/false>(num_frames);
-    for (uint64_t j = 0; j < num_frames; j++) {
-        auto frame_offset = j * FRAME_SIZE + XDP_PACKET_HEADROOM;
-        push_frame(frame_offset);
-    }
 
     // xsks_map for receiving packets has been updated by afxdp daemon.
 
@@ -152,12 +170,9 @@ int AFXDPSocket::create_afxdp_socket() {
     struct xdp_mmap_offsets off;
 
     /* Map UMEM */
-    umem_size_ = num_frames_ * FRAME_SIZE;
-    umem_buffer_ = attach_shm(SHM_NAME, umem_size_);
-    if (umem_buffer_ == MAP_FAILED) {
-        perror("mmap");
-        goto out;
-    }
+    umem_fd_ = afxdp_ctl.umem_fd_;
+    umem_size_ = afxdp_ctl.umem_size_;
+    umem_buffer_ = afxdp_ctl.umem_buffer_;
 
     /* Get offsets for the following mmap */
     if (xsk_get_mmap_offsets(umem_fd_, &off)) {
@@ -248,7 +263,7 @@ uint32_t AFXDPSocket::pull_complete_queue() {
             uint64_t frame_offset =
                 *xsk_ring_cons__comp_addr(&complete_queue_, idx_cq++);
             if (FrameBuf::is_txpulltime_free(frame_offset, umem_buffer_)) {
-                push_frame(frame_offset);
+                AFXDPFactory::push_frame(frame_offset);
                 /**
                  * Yang: I susspect this is a bug that AWS ENA driver will pull
                  * the same frame multiple times. A temp fix is we mark it as
@@ -340,7 +355,8 @@ void AFXDPSocket::populate_fill_queue(uint32_t nb_frames) {
     if (ret <= 0) return;
 
     for (int i = 0; i < ret; i++)
-        *xsk_ring_prod__fill_addr(&fill_queue_, idx_fq++) = pop_frame();
+        *xsk_ring_prod__fill_addr(&fill_queue_, idx_fq++) =
+            AFXDPFactory::pop_frame();
 
     fill_queue_entries_ += ret;
     VLOG(2) << "afxdp reserved fill_queue slots = " << ret
@@ -379,9 +395,9 @@ std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
 std::string AFXDPSocket::to_string() const {
     std::string s;
     s += Format(
-        "\n\t[Frame pool] free frames: %u, unpulled tx pkts: %u, fill queue "
+        "\n\t[AFXDPSocket] unpulled tx pkts: %u, fill queue "
         "entries: %u\n",
-        frame_pool_->size(), unpulled_tx_pkts_, fill_queue_entries_);
+        unpulled_tx_pkts_, fill_queue_entries_);
     return s;
 }
 
@@ -393,8 +409,5 @@ void AFXDPSocket::shutdown() {
     }
 }
 
-AFXDPSocket::~AFXDPSocket() {
-    delete frame_pool_;
-    destroy_afxdp_socket();
-}
+AFXDPSocket::~AFXDPSocket() { destroy_afxdp_socket(); }
 }  // namespace uccl

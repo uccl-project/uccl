@@ -31,8 +31,8 @@ ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
     signal(SIGTERM, interrupt_handler);
     signal(SIGHUP, interrupt_handler);
 
-    ep = new Endpoint(DEV_DEFAULT, QID_DEFAULT, NUM_FRAMES, ENGINE_CPUID);
-    // pin_thread_to_cpu(ENGINE_CPUID + 1);
+    ep = new Endpoint(DEV_DEFAULT, NUM_QUEUES, NUM_FRAMES, ENGINE_CPU_START);
+    // pin_thread_to_cpu(ENGINE_CPU_START + 1);
 
     LOG(INFO) << "NCCL Plugin initialized";
     return ncclSuccess;
@@ -84,7 +84,7 @@ struct SharedCtlCtx {
 };
 
 struct SharedDataCtx {
-    FlowID flow_id;
+    ConnID conn_id;
 };
 
 // To create a connection, NCCL will start by calling listen on the receiver
@@ -111,7 +111,7 @@ ncclResult_t pluginListen(int dev, void* handle, void** listenComm) {
 }
 
 struct AsyncConnectCtx {
-    FlowID flow_id;
+    ConnID conn_id;
     std::atomic<bool> done = false;
     std::thread connect_th;
 };
@@ -138,9 +138,9 @@ ncclResult_t pluginConnect(int dev, void* handle, void** sendComm,
         auto* ctx = new AsyncConnectCtx();
         ctx->connect_th = std::thread([ctx, remote_ip] {
             std::string remote_ip_str = ip_to_str(remote_ip);
-            auto flow_id = ep->uccl_connect(remote_ip_str);
+            auto conn_id = ep->uccl_connect(remote_ip_str);
             LOG(INFO) << "pluginConnect: connected to " << remote_ip_str;
-            ctx->flow_id = flow_id;
+            ctx->conn_id = conn_id;
             std::atomic_thread_fence(std::memory_order_release);
             std::atomic_store_explicit(&ctx->done, true,
                                        std::memory_order_relaxed);
@@ -153,10 +153,10 @@ ncclResult_t pluginConnect(int dev, void* handle, void** sendComm,
             std::atomic_load_explicit(&ctx->done, std::memory_order_relaxed);
         if (done) {
             std::atomic_thread_fence(std::memory_order_acquire);
-            auto flow_id = ctx->flow_id;
+            auto conn_id = ctx->conn_id;
             ctx->connect_th.join();
             delete ctx;
-            *sendComm = new SharedDataCtx{flow_id};
+            *sendComm = new SharedDataCtx{conn_id};
         } else {
             *sendComm = nullptr;
         }
@@ -172,10 +172,10 @@ ncclResult_t pluginAccept(void* listenComm, void** recvComm,
                           ncclNetDeviceHandle_v8_t** recvDevComm) {
     struct SharedCtlCtx* ctx = static_cast<struct SharedCtlCtx*>(listenComm);
 
-    auto [flow_id, remote_ip_str] = ep->uccl_accept();
+    auto [conn_id, remote_ip_str] = ep->uccl_accept();
     LOG(INFO) << "pluginAccept: accepted connection from " << remote_ip_str;
 
-    *recvComm = new SharedDataCtx{flow_id};
+    *recvComm = new SharedDataCtx{conn_id};
     return ncclSuccess;
 }
 
@@ -207,12 +207,12 @@ ncclResult_t pluginIsend(void* sendComm, void* data, int size, int tag,
                          void* mhandle, void** request) {
     inflight_send += size;
     struct SharedDataCtx* ctx = static_cast<struct SharedDataCtx*>(sendComm);
-    auto flow_id = ctx->flow_id;
+    auto conn_id = ctx->conn_id;
 
     auto req = new UcclRequest();
     req->send = true;
     req->data_len = size;
-    req->poll_ctx = ep->uccl_send_async(flow_id, data, req->data_len);
+    req->poll_ctx = ep->uccl_send_async(conn_id, data, req->data_len);
     VLOG(4) << "pluginIsend " << size << " " << inflight_send;
 
     *request = req;
@@ -224,12 +224,12 @@ ncclResult_t pluginIrecv(void* recvComm, int n, void** data, int* sizes,
     if (n != 1) return ncclInternalError;
     inflight_recv += sizes[0];
     struct SharedDataCtx* ctx = static_cast<struct SharedDataCtx*>(recvComm);
-    auto flow_id = ctx->flow_id;
+    auto conn_id = ctx->conn_id;
 
     auto req = new UcclRequest();
     req->send = false;
     req->data_len = sizes[0];
-    req->poll_ctx = ep->uccl_recv_async(flow_id, data[0], &req->data_len);
+    req->poll_ctx = ep->uccl_recv_async(conn_id, data[0], &req->data_len);
     VLOG(4) << "pluginIrecv " << sizes[0] << " " << inflight_recv;
 
     *request = req;

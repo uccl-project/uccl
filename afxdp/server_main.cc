@@ -33,7 +33,7 @@
 
 using namespace uccl;
 
-#define NUM_QUEUES 1
+#define MY_NUM_QUEUES 1
 
 const char* INTERFACE_NAME = DEV_DEFAULT;
 
@@ -64,9 +64,9 @@ struct server_t {
     struct xdp_program* program;
     bool attached_native;
     bool attached_skb;
-    struct socket_t socket[NUM_QUEUES];
+    struct socket_t socket[MY_NUM_QUEUES];
     pthread_t stats_thread;
-    pthread_t recv_thread[NUM_QUEUES];
+    pthread_t recv_thread[MY_NUM_QUEUES];
     uint64_t previous_recv_packets;
 };
 
@@ -163,7 +163,7 @@ int server_init(struct server_t* server, const char* interface_name) {
     }
 
     // per-CPU socket setup
-    for (int i = 0; i < NUM_QUEUES; i++) {
+    for (int i = 0; i < MY_NUM_QUEUES; i++) {
         // allocate umem_buffer for umem
         const int buffer_size = NUM_FRAMES * FRAME_SIZE;
 
@@ -228,7 +228,7 @@ int server_init(struct server_t* server, const char* interface_name) {
     }
 
     // create socket threads
-    for (int i = 0; i < NUM_QUEUES; i++) {
+    for (int i = 0; i < MY_NUM_QUEUES; i++) {
         ret = pthread_create(&server->recv_thread[i], NULL, recv_thread,
                              &server->socket[i]);
         if (ret) {
@@ -243,11 +243,11 @@ int server_init(struct server_t* server, const char* interface_name) {
 void server_shutdown(struct server_t* server) {
     assert(server);
 
-    for (int i = 0; i < NUM_QUEUES; i++) {
+    for (int i = 0; i < MY_NUM_QUEUES; i++) {
         pthread_join(server->recv_thread[i], NULL);
     }
 
-    for (int i = 0; i < NUM_QUEUES; i++) {
+    for (int i = 0; i < MY_NUM_QUEUES; i++) {
         if (server->socket[i].xsk) {
             xsk_socket__delete(server->socket[i].xsk);
         }
@@ -282,7 +282,7 @@ static void* stats_thread(void* arg) {
         std::vector<uint64_t> half_rtts;
 
         uint64_t recv_packets = 0;
-        for (int i = 0; i < NUM_QUEUES; i++) {
+        for (int i = 0; i < MY_NUM_QUEUES; i++) {
             recv_packets += server->socket[i].recv_packets;
             half_rtts.insert(half_rtts.end(),
                              server->socket[i].half_rtts.begin(),
@@ -476,7 +476,7 @@ static void* recv_thread(void* arg) {
     int queue_id = socket->queue_id;
     printf("started socket recv thread for queue #%d\n", queue_id);
 
-    pin_thread_to_cpu(NUM_QUEUES + queue_id);
+    pin_thread_to_cpu(MY_NUM_QUEUES + queue_id);
 
     struct pollfd fds[2];
     int nfds = 1;

@@ -26,16 +26,16 @@
 #define FRAME_SIZE XSK_UMEM__DEFAULT_FRAME_SIZE
 
 struct xsk_umem *umem;
+
+struct xsk_socket *xsk;
 struct xsk_ring_prod fill_ring;
 struct xsk_ring_cons comp_ring;
-struct xsk_socket *xsk;
 struct xsk_ring_cons rx_ring;
 struct xsk_ring_prod tx_ring;
 
-struct xsk_umem *umem2;
+struct xsk_socket *xsk2;
 struct xsk_ring_prod fill_ring2;
 struct xsk_ring_cons comp_ring2;
-struct xsk_socket *xsk2;
 struct xsk_ring_cons rx_ring2;
 struct xsk_ring_prod tx_ring2;
 

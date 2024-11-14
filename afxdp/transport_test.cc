@@ -22,9 +22,9 @@ DEFINE_bool(verify, false, "Whether to check data correctness.");
 DEFINE_bool(rand, false, "Whether to use randomized data length.");
 DEFINE_string(test, "basic",
               "Which test to run: basic, async, pingpong, mt (multi-thread), "
-              "mc (multi-connection).");
+              "mc (multi-connection), mq (multi-queue).");
 
-enum TestType { kBasic, kAsync, kPingpong, kMt, kMc };
+enum TestType { kBasic, kAsync, kPingpong, kMt, kMc, kMq };
 
 volatile bool quit = false;
 
@@ -56,6 +56,8 @@ int main(int argc, char* argv[]) {
         test_type = kMt;
     } else if (FLAGS_test == "mc") {
         test_type = kMc;
+    } else if (FLAGS_test == "mq") {
+        test_type = kMq;
     } else {
         LOG(FATAL) << "Unknown test type: " << FLAGS_test;
     }
@@ -66,12 +68,15 @@ int main(int argc, char* argv[]) {
     srand(42);
 
     if (FLAGS_client) {
-        auto ep = Endpoint(DEV_DEFAULT, QID_DEFAULT, NUM_FRAMES, ENGINE_CPUID);
-        // pin_thread_to_cpu(ENGINE_CPUID + 1);
+        auto ep =
+            Endpoint(DEV_DEFAULT, NUM_QUEUES, NUM_FRAMES, ENGINE_CPU_START);
+        // pin_thread_to_cpu(ENGINE_CPU_START + 1);
         DCHECK(FLAGS_serverip != "");
         auto conn_id = ep.uccl_connect(FLAGS_serverip);
-        FlowID conn_id2;
+        ConnID conn_id2;
         if (test_type == kMc) {
+            conn_id2 = ep.uccl_connect(FLAGS_serverip);
+        } else if (test_type == kMq) {
             conn_id2 = ep.uccl_connect(FLAGS_serverip);
         }
 
@@ -153,6 +158,15 @@ int main(int argc, char* argv[]) {
                     sent_bytes += send_len * 2;
                     break;
                 }
+                case kMq: {
+                    PollCtx *poll_ctx1, *poll_ctx2;
+                    poll_ctx1 = ep.uccl_send_async(conn_id, data, send_len);
+                    poll_ctx2 = ep.uccl_send_async(conn_id2, data2, send_len);
+                    ep.uccl_poll(poll_ctx1);
+                    ep.uccl_poll(poll_ctx2);
+                    sent_bytes += send_len * 2;
+                    break;
+                }
                 default:
                     break;
             }
@@ -187,11 +201,14 @@ int main(int argc, char* argv[]) {
             }
         }
     } else {
-        auto ep = Endpoint(DEV_DEFAULT, QID_DEFAULT, NUM_FRAMES, ENGINE_CPUID);
-        // pin_thread_to_cpu(ENGINE_CPUID + 1);
+        auto ep =
+            Endpoint(DEV_DEFAULT, NUM_QUEUES, NUM_FRAMES, ENGINE_CPU_START);
+        // pin_thread_to_cpu(ENGINE_CPU_START + 1);
         auto [conn_id, _] = ep.uccl_accept();
-        FlowID conn_id2;
+        ConnID conn_id2;
         if (test_type == kMc) {
+            std::tie(conn_id2, std::ignore) = ep.uccl_accept();
+        } else if (test_type == kMq) {
             std::tie(conn_id2, std::ignore) = ep.uccl_accept();
         }
 
@@ -256,6 +273,14 @@ int main(int argc, char* argv[]) {
                     break;
                 }
                 case kMc: {
+                    PollCtx *poll_ctx1, *poll_ctx2;
+                    poll_ctx1 = ep.uccl_recv_async(conn_id, data, &recv_len);
+                    poll_ctx2 = ep.uccl_recv_async(conn_id2, data2, &recv_len);
+                    ep.uccl_poll(poll_ctx1);
+                    ep.uccl_poll(poll_ctx2);
+                    break;
+                }
+                case kMq: {
                     PollCtx *poll_ctx1, *poll_ctx2;
                     poll_ctx1 = ep.uccl_recv_async(conn_id, data, &recv_len);
                     poll_ctx2 = ep.uccl_recv_async(conn_id2, data2, &recv_len);

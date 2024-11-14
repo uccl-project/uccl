@@ -35,6 +35,12 @@ namespace uccl {
 
 typedef uint64_t FlowID;
 
+struct ConnID {
+    FlowID flow_id;       // Used for UcclEngine to look up UcclFlow.
+    uint32_t engine_idx;  // Used for Endpoint to locate the right engine.
+    int boostrap_id;      // Used for bootstrap connection with the peer.
+};
+
 struct alignas(64) PollCtx {
     std::mutex mu;
     std::condition_variable cv;
@@ -114,9 +120,9 @@ class Channel {
  */
 struct __attribute__((packed)) UcclPktHdr {
     static constexpr uint16_t kMagic = 0x4e53;
-    be16_t magic;  // Magic value tagged after initialization for the flow.
+    be16_t magic;       // Magic value tagged after initialization for the flow.
     uint8_t socket_id;  // AFXDP Socket ID to process this packet.
-    uint8_t reserved;  // Reserved for future use.
+    uint8_t reserved;   // Reserved for future use.
     enum class UcclFlags : uint8_t {
         kData = 0b0,      // Data packet.
         kAck = 0b10,      // ACK packet.
@@ -469,15 +475,14 @@ class UcclEngine {
      * @brief Construct a new UcclEngine object.
      *
      * @param queue_id      RX/TX queue index to be used by the engine.
-     * @param num_frames    Number of frames to be allocated for the queue.
      * @param channel       Uccl channel the engine will be responsible for.
      * For now, we assume an engine is responsible for a single channel, but
      * future it may be responsible for multiple channels.
      */
-    UcclEngine(int queue_id, uint64_t num_frames, Channel *channel,
+    UcclEngine(int queue_id, Channel *channel,
                const std::string local_addr, const std::string local_l2_addr)
         : local_addr_(htonl(str_to_ip(local_addr))),
-          socket_(AFXDPFactory::CreateSocket(queue_id, num_frames)),
+          socket_(AFXDPFactory::CreateSocket(queue_id)),
           channel_(channel),
           last_periodic_timestamp_(rdtsc_to_us(rdtsc())),
           periodic_ticks_(0) {
@@ -596,38 +601,43 @@ class Endpoint {
     std::string local_ip_str_;
     std::string local_mac_str_;
 
-    std::mutex bootstrap_fd_map_mu_;
-
-    std::unique_ptr<Channel> channel_;
-    std::unique_ptr<UcclEngine> engine_;
-    std::unique_ptr<std::thread> engine_th_;
+    std::vector<std::unique_ptr<Channel>> channel_vec_;
+    std::vector<std::unique_ptr<UcclEngine>> engine_vec_;
+    std::vector<std::unique_ptr<std::thread>> engine_th_vec_;
 
     int listen_fd_;
-    std::unordered_map<FlowID, int> bootstrap_fd_map_;
+    // Mapping from unique flow_id to the boostrap fd.
+    std::mutex boostrap_fd_map_mu_;
+    std::unordered_map<FlowID, int> boostrap_fd_map_;
+
+    // Number of flows on each engine, indexed by engine_idx.
+    std::mutex engine_load_vec_mu_;
+    // TODO(yang): get rid of dependency on NUM_QUEUES.
+    std::array<int, NUM_QUEUES> engine_load_vec_ = {0};
 
     SharedPool<PollCtx *, true> *ctx_pool_;
     uint8_t *ctx_pool_buf_;
 
    public:
-    Endpoint(const char *interface_name, int queue_id, uint64_t num_frames,
-             int engine_cpuid);
+    Endpoint(const char *interface_name, int num_queues, uint64_t num_frames,
+             int engine_cpu_start);
     ~Endpoint();
 
     // Connecting to a remote address; thread-safe
-    FlowID uccl_connect(std::string remote_ip);
+    ConnID uccl_connect(std::string remote_ip);
     // Accepting a connection from a remote address; thread-safe
-    std::tuple<FlowID, std::string> uccl_accept();
+    std::tuple<ConnID, std::string> uccl_accept();
 
     // Sending the data by leveraging multiple port combinations.
-    bool uccl_send(FlowID flow_id, const void *data, const size_t len);
+    bool uccl_send(ConnID flow_id, const void *data, const size_t len);
     // Sending the data by leveraging multiple port combinations.
-    PollCtx *uccl_send_async(FlowID flow_id, const void *data,
+    PollCtx *uccl_send_async(ConnID flow_id, const void *data,
                              const size_t len);
 
     // Receiving the data by leveraging multiple port combinations.
-    bool uccl_recv(FlowID flow_id, void *data, size_t *len);
+    bool uccl_recv(ConnID flow_id, void *data, size_t *len);
     // Receiving the data by leveraging multiple port combinations.
-    PollCtx *uccl_recv_async(FlowID flow_id, void *data, size_t *len);
+    PollCtx *uccl_recv_async(ConnID flow_id, void *data, size_t *len);
 
     bool uccl_wait(PollCtx *ctx);
     bool uccl_poll(PollCtx *ctx);
@@ -636,7 +646,9 @@ class Endpoint {
    private:
     inline void fence_and_clean_ctx(PollCtx *ctx);
     void install_flow_on_engine(const std::string remote_ip,
-                                const std::string remote_mac, FlowID flow_id);
+                                const std::string remote_mac, FlowID flow_id,
+                                int engine_idx);
+    inline int find_least_loaded_engine_idx_and_update();
 };
 
 }  // namespace uccl

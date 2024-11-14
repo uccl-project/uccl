@@ -35,7 +35,7 @@
 
 using namespace uccl;
 
-const uint32_t NUM_QUEUES = 1;
+const uint32_t MY_NUM_QUEUES = 1;
 
 uint32_t server_addr_u32 = 0x0;
 uint32_t client_addr_u32 = 0x0;
@@ -91,10 +91,10 @@ struct client_t {
     struct xdp_program* program;
     bool attached_native;
     bool attached_skb;
-    struct socket_t socket[NUM_QUEUES];
+    struct socket_t socket[MY_NUM_QUEUES];
     pthread_t stats_thread;
-    pthread_t send_thread[NUM_QUEUES];
-    pthread_t recv_thread[NUM_QUEUES];
+    pthread_t send_thread[MY_NUM_QUEUES];
+    pthread_t recv_thread[MY_NUM_QUEUES];
     uint64_t previous_sent_packets;
 };
 
@@ -193,7 +193,7 @@ int client_init(struct client_t* client, const char* interface_name) {
     }
 
     // per-CPU socket setup
-    for (int i = 0; i < NUM_QUEUES; i++) {
+    for (int i = 0; i < MY_NUM_QUEUES; i++) {
         // allocate umem_buffer for umem
         const int buffer_size = NUM_FRAMES * FRAME_SIZE;
 
@@ -252,7 +252,7 @@ int client_init(struct client_t* client, const char* interface_name) {
     }
 
     // create socket threads
-    for (int i = 0; i < NUM_QUEUES; i++) {
+    for (int i = 0; i < MY_NUM_QUEUES; i++) {
         ret = pthread_create(&client->recv_thread[i], NULL, recv_thread,
                              &client->socket[i]);
         if (ret) {
@@ -281,13 +281,13 @@ int client_init(struct client_t* client, const char* interface_name) {
 void client_shutdown(struct client_t* client) {
     assert(client);
 
-    for (int i = 0; i < NUM_QUEUES; i++) {
+    for (int i = 0; i < MY_NUM_QUEUES; i++) {
         pthread_join(client->recv_thread[i], NULL);
         pthread_join(client->send_thread[i], NULL);
     }
     pthread_join(client->stats_thread, NULL);
 
-    for (int i = 0; i < NUM_QUEUES; i++) {
+    for (int i = 0; i < MY_NUM_QUEUES; i++) {
         if (client->socket[i].xsk) {
             xsk_socket__delete(client->socket[i].xsk);
         }
@@ -570,7 +570,7 @@ static void* recv_thread(void* arg) {
     int queue_id = socket->queue_id;
     printf("started socket recv thread for queue #%d\n", queue_id);
 
-    pin_thread_to_cpu(NUM_QUEUES + queue_id);
+    pin_thread_to_cpu(MY_NUM_QUEUES + queue_id);
 
     struct pollfd fds[2];
     int nfds = 1;
@@ -591,14 +591,14 @@ static void* recv_thread(void* arg) {
 
 uint64_t aggregate_sent_packets(struct client_t* client) {
     uint64_t sent_packets = 0;
-    for (int i = 0; i < NUM_QUEUES; i++)
+    for (int i = 0; i < MY_NUM_QUEUES; i++)
         sent_packets += client->socket[i].sent_packets.load();
     return sent_packets;
 }
 
 std::vector<uint64_t> aggregate_rtts(struct client_t* client) {
     std::vector<uint64_t> rtts;
-    for (int i = 0; i < NUM_QUEUES; i++) {
+    for (int i = 0; i < MY_NUM_QUEUES; i++) {
         std::lock_guard<std::mutex> lock(client->socket[i].rtts_lock);
         rtts.insert(rtts.end(), client->socket[i].rtts.begin(),
                     client->socket[i].rtts.end());

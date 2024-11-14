@@ -27,7 +27,6 @@ DEFINE_bool(pktloss, false, "Enable packet loss for testing");
 
 #define IF_NAME DEV_DEFAULT
 #define SHM_NAME "UMEM_SHM"
-#define QUEUE_ID 0
 #define FILL_RING_SIZE                  \
     (XSK_RING_PROD__DEFAULT_NUM_DESCS * \
      2)  // recommened to be RX_RING_SIZE + NIC RING SIZE
@@ -48,11 +47,11 @@ bool attached_skb;
 struct xsk_umem *umem;
 void *umem_area;
 uint64_t umem_size;
-struct xsk_ring_prod fill_ring;
-struct xsk_ring_cons comp_ring;
-struct xsk_socket *xsk;
-struct xsk_ring_cons rx_ring;
-struct xsk_ring_prod tx_ring;
+struct xsk_socket *xsk_vec[NUM_QUEUES];
+struct xsk_ring_prod fill_ring_vec[NUM_QUEUES];
+struct xsk_ring_cons comp_ring_vec[NUM_QUEUES];
+struct xsk_ring_cons rx_ring_vec[NUM_QUEUES];
+struct xsk_ring_prod tx_ring_vec[NUM_QUEUES];
 
 void load_program(const char *interface_name, const char *ebpf_filename,
                   const char *section_name) {
@@ -107,20 +106,22 @@ void update_xsks_map() {
     CHECK(xsk_map_fd >= 0) << "ERROR: no xsks map found: "
                            << strerror(xsk_map_fd);
 
-    int ret = xsk_socket__update_xskmap(xsk, xsk_map_fd);
-    CHECK_EQ(ret, 0) << "ERROR: xsks map update fails: "
-                     << strerror(xsk_map_fd);
+    for (auto &xsk : xsk_vec) {
+        int ret = xsk_socket__update_xskmap(xsk, xsk_map_fd);
+        CHECK_EQ(ret, 0) << "ERROR: xsks map update fails: "
+                         << strerror(xsk_map_fd);
+    }
 }
 
 void create_umem_and_xsk() {
     program_attach = nullptr;
     umem = nullptr;
-    xsk = nullptr;
+    for (auto &xsk : xsk_vec) xsk = nullptr;
     umem_size = NUM_FRAMES * FRAME_SIZE;
-    memset(&fill_ring, 0, sizeof(fill_ring));
-    memset(&comp_ring, 0, sizeof(comp_ring));
-    memset(&rx_ring, 0, sizeof(rx_ring));
-    memset(&tx_ring, 0, sizeof(tx_ring));
+    memset(&fill_ring_vec, 0, sizeof(fill_ring_vec));
+    memset(&comp_ring_vec, 0, sizeof(comp_ring_vec));
+    memset(&rx_ring_vec, 0, sizeof(rx_ring_vec));
+    memset(&tx_ring_vec, 0, sizeof(tx_ring_vec));
 
     struct xsk_umem_config umem_cfg = {.fill_size = FILL_RING_SIZE,
                                        .comp_size = COMP_RING_SIZE,
@@ -133,6 +134,7 @@ void create_umem_and_xsk() {
         .libbpf_flags = XSK_LIBBPF_FLAGS__INHIBIT_PROG_LOAD,
         .xdp_flags = XDP_ZEROCOPY,
         .bind_flags = XDP_USE_NEED_WAKEUP};
+    int queue_id = 0;
 
     // Step0: load the ebpf program
     auto ebpf_filename =
@@ -151,16 +153,28 @@ void create_umem_and_xsk() {
     }
 
     // Step2: create UMEM
-    if (xsk_umem__create(&umem, umem_area, umem_size, &fill_ring, &comp_ring,
-                         &umem_cfg)) {
+    if (xsk_umem__create(&umem, umem_area, umem_size, &fill_ring_vec[queue_id],
+                         &comp_ring_vec[queue_id], &umem_cfg)) {
         perror("xsk_umem__create");
         goto out;
     }
+
     // Step3: create a AF_XDP socket and bind it to a NIC queue and the UMEM
-    if (xsk_socket__create(&xsk, IF_NAME, QUEUE_ID, umem, &rx_ring, &tx_ring,
+    if (xsk_socket__create(&xsk_vec[queue_id], IF_NAME, queue_id, umem,
+                           &rx_ring_vec[queue_id], &tx_ring_vec[queue_id],
                            &xsk_cfg)) {
         perror("xsk_socket__create");
         goto out;
+    }
+
+    for (queue_id = 1; queue_id < NUM_QUEUES; queue_id++) {
+        if (xsk_socket__create_shared(
+                &xsk_vec[queue_id], IF_NAME, queue_id, umem,
+                &rx_ring_vec[queue_id], &tx_ring_vec[queue_id],
+                &fill_ring_vec[queue_id], &comp_ring_vec[queue_id], &xsk_cfg)) {
+            perror("xsk_socket__create_shared");
+            goto out;
+        }
     }
 
     /* Note: Actually, xsk_socket__fd(xsk) == xsk_umem__fd(umem), there is no
@@ -169,7 +183,7 @@ void create_umem_and_xsk() {
      * binding to the UMEM, the UMEM fd is also created by socket(AF_XDP,
      * SOCK_RAW, 0). See xsk_socket__create_shared()
      */
-    DCHECK_EQ(xsk_socket__fd(xsk), xsk_umem__fd(umem));
+    DCHECK_EQ(xsk_socket__fd(xsk_vec[0]), xsk_umem__fd(umem));
 
     // Step4: update the xsks_map for receiving packets
     update_xsks_map();
@@ -197,13 +211,14 @@ void destroy_umem_and_xsk(bool free_shm = false) {
         xdp_program__close(program_attach);
     }
 
-    if (xsk) xsk_socket__delete(xsk);
+    for (auto &xsk : xsk_vec)
+        if (xsk) xsk_socket__delete(xsk);
     if (umem) xsk_umem__delete(umem);
     if (umem_area && free_shm) destroy_shm(SHM_NAME, umem_area, umem_size);
 
     program_attach = nullptr;
     umem = nullptr;
-    xsk = nullptr;
+    for (auto &xsk : xsk_vec) xsk = nullptr;
 }
 
 void interrupt_handler(int signal) {
@@ -259,8 +274,9 @@ int main(int argc, char *argv[]) {
         create_umem_and_xsk();
 
         // Step5: send the file descriptors for the AF_XDP socket and UMEM
-        if (send_fd(client_sock, xsk_socket__fd(xsk))) break;
-        if (send_fd(client_sock, xsk_umem__fd(umem))) break;
+        if (send_fd(client_sock, xsk_umem__fd(umem))) goto out;
+        for (auto &xsk : xsk_vec)
+            if (send_fd(client_sock, xsk_socket__fd(xsk))) goto out;
 
         ssize_t bytes_received =
             recv(client_sock, &test_word, sizeof(test_word), 0);
@@ -278,6 +294,7 @@ int main(int argc, char *argv[]) {
         close(client_sock);
     }
 
+out:
     close(server_sock);
 
     return 0;

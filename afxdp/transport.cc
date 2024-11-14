@@ -34,7 +34,7 @@ void TXTracking::receive_acks(uint32_t num_acked_pkts) {
             }
         }
         // Free transmitted frames that are acked
-        socket_->push_frame(msgbuf->get_frame_offset());
+        AFXDPFactory::push_frame(msgbuf->get_frame_offset());
         num_tracked_msgbufs_--;
         num_acked_pkts--;
     }
@@ -101,7 +101,7 @@ RXTracking::ConsumeRet RXTracking::consume(swift::Pcb *pcb, FrameBuf *msgbuf) {
 
     if (swift::seqno_lt(seqno, expected_seqno)) {
         VLOG(3) << "Received old packet: " << seqno << " < " << expected_seqno;
-        socket_->push_frame(msgbuf->get_frame_offset());
+        AFXDPFactory::push_frame(msgbuf->get_frame_offset());
         return kOldPkt;
     }
 
@@ -109,7 +109,7 @@ RXTracking::ConsumeRet RXTracking::consume(swift::Pcb *pcb, FrameBuf *msgbuf) {
     if (distance >= kReassemblyMaxSeqnoDistance) {
         VLOG(3) << "Packet too far ahead. Dropping as we can't handle SACK. "
                 << "seqno: " << seqno << ", expected: " << expected_seqno;
-        socket_->push_frame(msgbuf->get_frame_offset());
+        AFXDPFactory::push_frame(msgbuf->get_frame_offset());
         return kOOOUntrackable;
     }
 
@@ -124,7 +124,7 @@ RXTracking::ConsumeRet RXTracking::consume(swift::Pcb *pcb, FrameBuf *msgbuf) {
         if (it != reass_q_.end() && it->seqno == seqno) {
             VLOG(3) << "Received duplicate packet: " << seqno;
             // Duplicate packet. Drop it.
-            socket_->push_frame(msgbuf->get_frame_offset());
+            AFXDPFactory::push_frame(msgbuf->get_frame_offset());
             return kOOOTrackableDup;
         }
     }
@@ -223,14 +223,14 @@ void RXTracking::try_copy_msgbuf_to_appbuf(void *app_buf, size_t *app_buf_len,
             auto *msgbuf_iter_tmp = msgbuf_iter;
 
             if (msgbuf_iter->is_last()) {
-                socket_->push_frame(msgbuf_iter_tmp->get_frame_offset());
+                AFXDPFactory::push_frame(msgbuf_iter_tmp->get_frame_offset());
                 break;
             }
             msgbuf_iter = msgbuf_iter->next();
             DCHECK(msgbuf_iter);
 
             // Free received frames that have been copied to app buf.
-            socket_->push_frame(msgbuf_iter_tmp->get_frame_offset());
+            AFXDPFactory::push_frame(msgbuf_iter_tmp->get_frame_offset());
         }
 
         *app_buf_desc.buf_len = app_buf_pos;
@@ -273,11 +273,11 @@ void UcclFlow::rx_messages(std::vector<FrameBuf *> msgbufs) {
                 // ACK packet, update the flow.
                 process_ack(ucclh);
                 // Free the received frame.
-                socket_->push_frame(msgbuf->get_frame_offset());
+                AFXDPFactory::push_frame(msgbuf->get_frame_offset());
                 break;
             case UcclPktHdr::UcclFlags::kAckEcn:
                 process_ack(ucclh);
-                socket_->push_frame(msgbuf->get_frame_offset());
+                AFXDPFactory::push_frame(msgbuf->get_frame_offset());
                 // Need to slowdown the sender.
                 ecn_recvd = true;
                 break;
@@ -498,7 +498,7 @@ AFXDPSocket::frame_desc UcclFlow::craft_ctlpacket(
     uint32_t seqno, uint32_t ackno,
     const UcclPktHdr::UcclFlags &net_flags) const {
     const size_t kControlPayloadBytes = kUcclHdrLen;
-    auto frame_offset = socket_->pop_frame();
+    auto frame_offset = AFXDPFactory::pop_frame();
     auto msgbuf = FrameBuf::Create(frame_offset, socket_->umem_buffer_,
                                    kNetHdrLen + kControlPayloadBytes);
     // Let AFXDPSocket::pull_complete_queue() free control frames.
@@ -682,7 +682,7 @@ void UcclEngine::run() {
                     VLOG(2) << "Received invalid frame length: "
                             << ucclh->frame_len.value()
                             << " != " << frame.frame_len;
-                    socket_->push_frame(frame.frame_offset);
+                    AFXDPFactory::push_frame(frame.frame_offset);
                     continue;
                 }
 
@@ -757,7 +757,7 @@ void UcclEngine::process_rx_msg(std::vector<FrameBuf *> msgbufs,
                        << flow_id;
         }
         for (auto msgbuf : msgbufs) {
-            socket_->push_frame(msgbuf->get_frame_offset());
+            AFXDPFactory::push_frame(msgbuf->get_frame_offset());
         }
         return;
     }
@@ -793,6 +793,7 @@ void UcclEngine::dump_status() {
         s += flow->to_string();
     }
     s += socket_->to_string();
+    s += AFXDPFactory::to_string();
     s += "\n";
     LOG(INFO) << s;
 }
@@ -810,7 +811,7 @@ std::tuple<FrameBuf *, FrameBuf *, uint32_t> UcclEngine::deserialize_msg(
     while (remaining_bytes > 0) {
         auto payload_len = std::min(
             remaining_bytes, (size_t)AFXDP_MTU - kNetHdrLen - kUcclHdrLen);
-        auto frame_offset = socket_->pop_frame();
+        auto frame_offset = AFXDPFactory::pop_frame();
         auto *msgbuf = FrameBuf::Create(frame_offset, socket_->umem_buffer_,
                                         kNetHdrLen + kUcclHdrLen + payload_len);
         // The engine will free these Tx frames when receiving ACKs.
@@ -844,28 +845,35 @@ std::tuple<FrameBuf *, FrameBuf *, uint32_t> UcclEngine::deserialize_msg(
     return std::make_tuple(tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames);
 }
 
-Endpoint::Endpoint(const char *interface_name, int queue_id,
-                   uint64_t num_frames, int engine_cpuid) {
+Endpoint::Endpoint(const char *interface_name, int num_queues,
+                   uint64_t num_frames, int engine_cpu_start) {
     static std::once_flag flag_once;
-    std::call_once(flag_once, [interface_name]() {
-        AFXDPFactory::init(interface_name, "ebpf_transport.o",
+    std::call_once(flag_once, [interface_name, num_frames]() {
+        // This will create UDS socket and get the umem_id.
+        AFXDPFactory::init(interface_name, num_frames, "ebpf_transport.o",
                            "ebpf_transport");
     });
 
     local_ip_str_ = get_dev_ip(interface_name);
     local_mac_str_ = get_dev_mac(interface_name);
 
-    // TODO(yang): create multiple engines, each got its xsk and umem from the
+    int queue_id = 0;
+    int engine_cpu_id = engine_cpu_start;
+
+    // Create multiple engines, each got its xsk and umem from the
     // daemon. Each engine has its own thread and channel to let the endpoint
     // communicate with.
-    channel_ = std::make_unique<Channel>();
-    engine_ = std::make_unique<UcclEngine>(queue_id, num_frames, channel_.get(),
-                                           local_ip_str_, local_mac_str_);
-    engine_th_ = std::make_unique<std::thread>(
-        [engine_ptr = engine_.get(), engine_cpuid]() {
-            pin_thread_to_cpu(engine_cpuid);
-            engine_ptr->run();
-        });
+    for (; queue_id < num_queues; queue_id++, engine_cpu_id++) {
+        channel_vec_.emplace_back(std::make_unique<Channel>());
+        engine_vec_.emplace_back(
+            std::make_unique<UcclEngine>(queue_id, channel_vec_.back().get(),
+                                         local_ip_str_, local_mac_str_));
+        engine_th_vec_.emplace_back(std::make_unique<std::thread>(
+            [engine_ptr = engine_vec_.back().get(), engine_cpu_id]() {
+                pin_thread_to_cpu(engine_cpu_id);
+                engine_ptr->run();
+            }));
+    }
 
     ctx_pool_ = new SharedPool<PollCtx *, true>(kMaxInflightMsg);
     ctx_pool_buf_ = new uint8_t[kMaxInflightMsg * sizeof(PollCtx)];
@@ -896,20 +904,20 @@ Endpoint::Endpoint(const char *interface_name, int queue_id,
 }
 
 Endpoint::~Endpoint() {
-    engine_->shutdown();
-    engine_th_->join();
+    for (auto &engine : engine_vec_) engine->shutdown();
+    for (auto &engine_th : engine_th_vec_) engine_th->join();
 
     delete ctx_pool_;
     delete[] ctx_pool_buf_;
     close(listen_fd_);
 
-    std::lock_guard<std::mutex> lock(bootstrap_fd_map_mu_);
-    for (auto [flow_id, fd] : bootstrap_fd_map_) {
-        close(fd);
+    std::lock_guard<std::mutex> lock(boostrap_fd_map_mu_);
+    for (auto &[flow_id, boostrap_id] : boostrap_fd_map_) {
+        close(boostrap_id);
     }
 }
 
-FlowID Endpoint::uccl_connect(std::string remote_ip) {
+ConnID Endpoint::uccl_connect(std::string remote_ip) {
     struct sockaddr_in serv_addr;
     struct hostent *server;
     int bootstrap_fd;
@@ -946,19 +954,20 @@ FlowID Endpoint::uccl_connect(std::string remote_ip) {
                sizeof(int));
 
     int ret;
-    FlowID flow_id;
+    ConnID conn_id;
     while (true) {
-        ret = read(bootstrap_fd, &flow_id, sizeof(FlowID));
+        ret = read(bootstrap_fd, &conn_id.flow_id, sizeof(FlowID));
         DCHECK(ret == sizeof(FlowID));
-        VLOG(3) << "Connect: Proposed FlowID: " << std::hex << "0x" << flow_id;
+        VLOG(3) << "Connect: Proposed FlowID: " << std::hex << "0x"
+                << conn_id.flow_id;
 
         // Check if the flow ID is unique, and return it to the server.
         bool unique;
         {
-            std::lock_guard<std::mutex> lock(bootstrap_fd_map_mu_);
-            unique =
-                (bootstrap_fd_map_.find(flow_id) == bootstrap_fd_map_.end());
-            if (unique) bootstrap_fd_map_[flow_id] = bootstrap_fd;
+            std::lock_guard<std::mutex> lock(boostrap_fd_map_mu_);
+            unique = (boostrap_fd_map_.find(conn_id.flow_id) ==
+                      boostrap_fd_map_.end());
+            if (unique) boostrap_fd_map_[conn_id.flow_id] = bootstrap_fd;
         }
 
         ret = write(bootstrap_fd, &unique, sizeof(bool));
@@ -966,8 +975,6 @@ FlowID Endpoint::uccl_connect(std::string remote_ip) {
 
         if (unique) break;
     }
-    LOG(INFO) << "Connect FlowID: " << std::hex << "0x" << flow_id << " : "
-              << local_ip_str_ << "<->" << remote_ip;
 
     char remote_mac_char[ETH_ALEN];
     ret = read(bootstrap_fd, remote_mac_char, ETH_ALEN);
@@ -982,7 +989,14 @@ FlowID Endpoint::uccl_connect(std::string remote_ip) {
     ret = write(bootstrap_fd, local_mac_char, ETH_ALEN);
     DCHECK(ret == ETH_ALEN);
 
-    install_flow_on_engine(remote_ip, remote_mac, flow_id);
+    conn_id.boostrap_id = bootstrap_fd;
+    conn_id.engine_idx = find_least_loaded_engine_idx_and_update();
+    install_flow_on_engine(remote_ip, remote_mac, conn_id.flow_id,
+                           conn_id.engine_idx);
+
+    LOG(INFO) << "Connect FlowID " << std::hex << "0x" << conn_id.flow_id
+              << " at engine " << conn_id.engine_idx << " : " << local_ip_str_
+              << "<->" << remote_ip;
 
     // Finally sync client and sender to make sure any incoming packets have
     // found the flow installed; otherwise, SEGV may happen.
@@ -991,10 +1005,10 @@ FlowID Endpoint::uccl_connect(std::string remote_ip) {
     ret = read(bootstrap_fd, &sync, sizeof(bool));
     DCHECK(ret == sizeof(bool) && sync);
 
-    return flow_id;
+    return conn_id;
 }
 
-std::tuple<FlowID, std::string> Endpoint::uccl_accept() {
+std::tuple<ConnID, std::string> Endpoint::uccl_accept() {
     struct sockaddr_in cli_addr;
     socklen_t clilen = sizeof(cli_addr);
     int bootstrap_fd;
@@ -1012,26 +1026,27 @@ std::tuple<FlowID, std::string> Endpoint::uccl_accept() {
 
     // Generate unique flow ID for both client and server.
     int ret;
-    FlowID flow_id;
+    ConnID conn_id;
     while (true) {
-        flow_id = U64Rand(0, std::numeric_limits<FlowID>::max());
+        conn_id.flow_id = U64Rand(0, std::numeric_limits<FlowID>::max());
         bool unique;
         {
-            std::lock_guard<std::mutex> lock(bootstrap_fd_map_mu_);
-            unique =
-                (bootstrap_fd_map_.find(flow_id) == bootstrap_fd_map_.end());
+            std::lock_guard<std::mutex> lock(boostrap_fd_map_mu_);
+            unique = (boostrap_fd_map_.find(conn_id.flow_id) ==
+                      boostrap_fd_map_.end());
             if (unique) {
                 // Speculatively insert the flow ID.
-                bootstrap_fd_map_[flow_id] = bootstrap_fd;
+                boostrap_fd_map_[conn_id.flow_id] = bootstrap_fd;
             } else {
                 continue;
             }
         }
 
-        VLOG(3) << "Accept: Proposed FlowID: " << std::hex << "0x" << flow_id;
+        VLOG(3) << "Accept: Proposed FlowID: " << std::hex << "0x"
+                << conn_id.flow_id;
 
         // Ask client if this is unique
-        ret = write(bootstrap_fd, &flow_id, sizeof(FlowID));
+        ret = write(bootstrap_fd, &conn_id.flow_id, sizeof(FlowID));
         DCHECK(ret == sizeof(FlowID));
         bool unique_from_client;
         ret = read(bootstrap_fd, &unique_from_client, sizeof(bool));
@@ -1041,12 +1056,10 @@ std::tuple<FlowID, std::string> Endpoint::uccl_accept() {
             break;
         } else {
             // Remove the speculatively inserted flow ID.
-            std::lock_guard<std::mutex> lock(bootstrap_fd_map_mu_);
-            DCHECK(1 == bootstrap_fd_map_.erase(flow_id));
+            std::lock_guard<std::mutex> lock(boostrap_fd_map_mu_);
+            DCHECK(1 == boostrap_fd_map_.erase(conn_id.flow_id));
         }
     }
-    LOG(INFO) << "Accept FlowID: " << std::hex << "0x" << flow_id << " : "
-              << local_ip_str_ << "<->" << remote_ip;
 
     char local_mac_char[ETH_ALEN];
     std::string local_mac = get_dev_mac(DEV_DEFAULT);
@@ -1061,27 +1074,34 @@ std::tuple<FlowID, std::string> Endpoint::uccl_accept() {
     std::string remote_mac = mac_to_str(remote_mac_char);
     VLOG(3) << "Remote MAC: " << remote_mac;
 
-    install_flow_on_engine(remote_ip, remote_mac, flow_id);
+    conn_id.boostrap_id = bootstrap_fd;
+    conn_id.engine_idx = find_least_loaded_engine_idx_and_update();
+    install_flow_on_engine(remote_ip, remote_mac, conn_id.flow_id,
+                           conn_id.engine_idx);
+
+    LOG(INFO) << "Accept FlowID " << std::hex << "0x" << conn_id.flow_id
+              << " at engine " << conn_id.engine_idx << " : " << local_ip_str_
+              << "<->" << remote_ip;
 
     bool sync = false;
     ret = read(bootstrap_fd, &sync, sizeof(bool));
     ret = write(bootstrap_fd, &sync, sizeof(bool));
     DCHECK(ret == sizeof(bool) && sync);
 
-    return std::make_tuple(flow_id, remote_ip);
+    return std::make_tuple(conn_id, remote_ip);
 }
 
-bool Endpoint::uccl_send(FlowID flow_id, const void *data, const size_t len) {
-    auto *poll_ctx = uccl_send_async(flow_id, data, len);
+bool Endpoint::uccl_send(ConnID conn_id, const void *data, const size_t len) {
+    auto *poll_ctx = uccl_send_async(conn_id, data, len);
     return uccl_wait(poll_ctx);
 }
 
-PollCtx *Endpoint::uccl_send_async(FlowID flow_id, const void *data,
+PollCtx *Endpoint::uccl_send_async(ConnID conn_id, const void *data,
                                    const size_t len) {
     auto *poll_ctx = ctx_pool_->pop();
     Channel::Msg msg = {
         .opcode = Channel::Msg::Op::kTx,
-        .flow_id = flow_id,
+        .flow_id = conn_id.flow_id,
         .data = const_cast<void *>(data),
         .len_tosend = len,
         .len_recvd = nullptr,
@@ -1089,26 +1109,28 @@ PollCtx *Endpoint::uccl_send_async(FlowID flow_id, const void *data,
     };
     std::atomic_store_explicit(&poll_ctx->fence, true,
                                std::memory_order_release);
-    while (jring_mp_enqueue_bulk(channel_->tx_cmdq_, &msg, 1, nullptr) != 1);
+    while (jring_mp_enqueue_bulk(channel_vec_[conn_id.engine_idx]->tx_cmdq_,
+                                 &msg, 1, nullptr) != 1);
     return poll_ctx;
 }
 
-bool Endpoint::uccl_recv(FlowID flow_id, void *data, size_t *len) {
-    auto *poll_ctx = uccl_recv_async(flow_id, data, len);
+bool Endpoint::uccl_recv(ConnID conn_id, void *data, size_t *len) {
+    auto *poll_ctx = uccl_recv_async(conn_id, data, len);
     return uccl_wait(poll_ctx);
 }
 
-PollCtx *Endpoint::uccl_recv_async(FlowID flow_id, void *data, size_t *len) {
+PollCtx *Endpoint::uccl_recv_async(ConnID conn_id, void *data, size_t *len) {
     auto *poll_ctx = ctx_pool_->pop();
     Channel::Msg msg = {
         .opcode = Channel::Msg::Op::kRx,
-        .flow_id = flow_id,
+        .flow_id = conn_id.flow_id,
         .data = data,
         .len_tosend = 0,
         .len_recvd = len,
         .poll_ctx = poll_ctx,
     };
-    while (jring_mp_enqueue_bulk(channel_->rx_cmdq_, &msg, 1, nullptr) != 1);
+    while (jring_mp_enqueue_bulk(channel_vec_[conn_id.engine_idx]->rx_cmdq_,
+                                 &msg, 1, nullptr) != 1);
     return poll_ctx;
 }
 
@@ -1144,7 +1166,7 @@ inline void Endpoint::fence_and_clean_ctx(PollCtx *ctx) {
 
 void Endpoint::install_flow_on_engine(const std::string remote_ip,
                                       const std::string remote_mac,
-                                      FlowID flow_id) {
+                                      FlowID flow_id, int engine_idx) {
     auto *poll_ctx = new PollCtx();
     Channel::CtrlMsg ctrl_msg = {
         .opcode = Channel::CtrlMsg::Op::kFlowAdd,
@@ -1153,8 +1175,8 @@ void Endpoint::install_flow_on_engine(const std::string remote_ip,
         .poll_ctx = poll_ctx,
     };
     str_to_mac(remote_mac, ctrl_msg.remote_l2_addr);
-    while (jring_mp_enqueue_bulk(channel_->ctrl_cmdq_, &ctrl_msg, 1, nullptr) !=
-           1);
+    while (jring_mp_enqueue_bulk(channel_vec_[engine_idx]->ctrl_cmdq_,
+                                 &ctrl_msg, 1, nullptr) != 1);
 
     // Wait until the flow has been installed on the engine.
     {
@@ -1164,4 +1186,13 @@ void Endpoint::install_flow_on_engine(const std::string remote_ip,
     delete poll_ctx;
 };
 
+inline int Endpoint::find_least_loaded_engine_idx_and_update() {
+    std::lock_guard<std::mutex> lock(engine_load_vec_mu_);
+    if (engine_load_vec_.empty()) return -1;  // Handle empty vector case
+
+    auto minElementIter =
+        std::min_element(engine_load_vec_.begin(), engine_load_vec_.end());
+    *minElementIter += 1;
+    return std::distance(engine_load_vec_.begin(), minElementIter);
+}
 }  // namespace uccl

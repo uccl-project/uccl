@@ -39,7 +39,7 @@ int ebpf_transport_filter(struct xdp_md *ctx) {
     __u16 magic = *(__u16 *)(data + kNetHdrLen);
     __u8 socket_id = *(__u8 *)(data + kNetHdrLen + sizeof(__u16));
 
-    // bpf_printk("queue_id %u socket_id %d\n", ctx->rx_queue_index, socket_id);
+    bpf_printk("queue_id %u socket_id %d\n", ctx->rx_queue_index, socket_id);
 
 #ifdef USING_TCP
     if (eth->h_proto != __constant_htons(ETH_P_IP) ||

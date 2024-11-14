@@ -136,25 +136,75 @@ class FrameBuf {
 };
 
 class AFXDPSocket;
+class AFXDPFactory;
+extern AFXDPFactory afxdp_ctl;
 
 class AFXDPFactory {
-#define SHM_NAME "UMEM_SHM"
-#define SOCKET_PATH "/tmp/privileged_socket"
-
    public:
+    constexpr static uint32_t FRAME_SIZE = XSK_UMEM__DEFAULT_FRAME_SIZE;
+    constexpr static char *SHM_NAME = (char*)"UMEM_SHM";
+    constexpr static char *SOCKET_PATH = (char*)"/tmp/privileged_socket";
+
+    char interface_name_[256];
+
     // UDS socket to connect to the afxdp daemon.
     int client_sock_;
-    char interface_name_[256];
+
+    // umem shared by all afxdp sockets.
+    int umem_fd_;
+    void *umem_buffer_;
+    size_t umem_size_;
+
+    // frame pool shared by all afxdp sockets.
+    uint64_t num_frames_;
+    SharedPool<uint64_t, /*Sync=*/true> *frame_pool_;
+
     std::mutex socket_q_lock_;
     std::deque<AFXDPSocket *> socket_q_;
 
-    static void init(const char *interface_name, const char *ebpf_filename,
-                     const char *section_name);
-    static AFXDPSocket *CreateSocket(int queue_id, uint64_t num_frames);
+    static void init(const char *interface_name, uint64_t num_frames,
+                     const char *ebpf_filename, const char *section_name);
+    static AFXDPSocket *CreateSocket(int queue_id);
     static void shutdown();
-};
+    static std::string to_string();
 
-extern AFXDPFactory afxdp_ctl;
+    // #define FRAME_POOL_DEBUG
+
+#ifdef FRAME_POOL_DEBUG
+    std::set<uint64_t> free_frames_;
+#endif
+
+    static inline uint64_t pop_frame() {
+#ifdef FRAME_POOL_DEBUG
+        auto frame_offset = afxdp_ctl.frame_pool_->pop();
+        CHECK(free_frames_.erase(frame_offset) == 1);
+        FrameBuf::clear_fields(frame_offset, umem_buffer_);
+        return frame_offset;
+#else
+        auto frame_offset = afxdp_ctl.frame_pool_->pop();
+        FrameBuf::clear_fields(frame_offset, afxdp_ctl.umem_buffer_);
+        return frame_offset;
+#endif
+    }
+    static inline void push_frame(uint64_t frame_offset) {
+#ifdef FRAME_POOL_DEBUG
+        if (free_frames_.find(frame_offset) == free_frames_.end()) {
+            FrameBuf::clear_fields(frame_offset, umem_buffer_);
+            free_frames_.insert(frame_offset);
+            afxdp_ctl.frame_pool_->push(frame_offset);
+        } else {
+            CHECK(false) << "Frame offset " << std::hex << frame_offset
+                         << " size " << std::dec
+                         << FrameBuf::get_msgbuf_ptr(frame_offset, umem_buffer_)
+                                ->get_frame_len()
+                         << " already in free_frames_";
+        }
+#else
+        FrameBuf::clear_fields(frame_offset, afxdp_ctl.umem_buffer_);
+        afxdp_ctl.frame_pool_->push(frame_offset);
+#endif
+    }
+};
 
 class AFXDPSocket {
 #define FILL_RING_SIZE                  \
@@ -163,8 +213,6 @@ class AFXDPSocket {
 #define COMP_RING_SIZE XSK_RING_CONS__DEFAULT_NUM_DESCS
 #define TX_RING_SIZE XSK_RING_PROD__DEFAULT_NUM_DESCS
 #define RX_RING_SIZE XSK_RING_CONS__DEFAULT_NUM_DESCS
-
-    constexpr static uint32_t FRAME_SIZE = XSK_UMEM__DEFAULT_FRAME_SIZE;
 
     int xsk_fd_;
     int umem_fd_;
@@ -179,7 +227,7 @@ class AFXDPSocket {
     size_t tx_map_size_;
 
     // queue_id starts from 0, equal to socket_id.
-    AFXDPSocket(int queue_id, uint64_t num_frames);
+    AFXDPSocket(int queue_id);
 
     // For manually mapping umem struct from the afxdp daemon.
     typedef __u64 u64;
@@ -209,14 +257,12 @@ class AFXDPSocket {
 
    public:
     uint32_t queue_id_;
-    uint64_t num_frames_;
     void *umem_buffer_;
     size_t umem_size_;
     struct xsk_ring_cons recv_queue_;
     struct xsk_ring_prod send_queue_;
     struct xsk_ring_cons complete_queue_;
     struct xsk_ring_prod fill_queue_;
-    SharedPool<uint64_t, /*Sync=*/false> *frame_pool_;
 
     struct frame_desc {
         uint64_t frame_offset;
@@ -232,44 +278,6 @@ class AFXDPSocket {
     }
     std::vector<frame_desc> recv_packets(uint32_t nb_frames);
     void populate_fill_queue(uint32_t nb_frames);
-
-    // #define FRAME_POOL_DEBUG
-
-#ifdef FRAME_POOL_DEBUG
-    std::set<uint64_t> free_frames_;
-#endif
-
-    inline uint64_t pop_frame() {
-#ifdef FRAME_POOL_DEBUG
-        auto frame_offset = frame_pool_->pop();
-        CHECK(free_frames_.erase(frame_offset) == 1);
-        FrameBuf::clear_fields(frame_offset, umem_buffer_);
-        return frame_offset;
-#else
-        auto frame_offset = frame_pool_->pop();
-        FrameBuf::clear_fields(frame_offset, umem_buffer_);
-        return frame_offset;
-#endif
-    }
-
-    inline void push_frame(uint64_t frame_offset) {
-#ifdef FRAME_POOL_DEBUG
-        if (free_frames_.find(frame_offset) == free_frames_.end()) {
-            FrameBuf::clear_fields(frame_offset, umem_buffer_);
-            free_frames_.insert(frame_offset);
-            frame_pool_->push(frame_offset);
-        } else {
-            CHECK(false) << "Frame offset " << std::hex << frame_offset
-                         << " size " << std::dec
-                         << FrameBuf::get_msgbuf_ptr(frame_offset, umem_buffer_)
-                                ->get_frame_len()
-                         << " already in free_frames_";
-        }
-#else
-        FrameBuf::clear_fields(frame_offset, umem_buffer_);
-        frame_pool_->push(frame_offset);
-#endif
-    }
 
     inline int get_xsk_fd() const { return xsk_fd_; }
     inline int get_umem_fd() const { return umem_fd_; }
