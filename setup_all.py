@@ -7,7 +7,7 @@ import argparse
 import os
 
 core_count = os.cpu_count()
-num_queues = 1
+num_queues = 2
 
 make_macro_mapping = {
     "aws_afxdp": "AWS_ENA",

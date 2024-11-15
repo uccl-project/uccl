@@ -30,7 +30,7 @@
 #include "util.h"
 #include "util_afxdp.h"
 #include "util_endian.h"
-#include "util_lrpc.h"
+#include "util_rss.h"
 
 namespace uccl {
 
@@ -314,6 +314,7 @@ class RXTracking {
  */
 class UcclFlow {
     const static uint32_t kReadyMsgThresholdForEcn = 32;
+    const static uint32_t kPortEntropy = 1024;
 
    public:
     /**
@@ -343,6 +344,20 @@ class UcclFlow {
           rx_tracking_(socket, channel) {
         memcpy(local_l2_addr_, local_l2_addr, ETH_ALEN);
         memcpy(remote_l2_addr_, remote_l2_addr, ETH_ALEN);
+
+        uint16_t target_queue_id = remote_engine_idx_;
+        std::shared_lock<std::shared_mutex> lock(rss_mu_);
+        // bool res = get_dst_ports_with_target_queueid(
+        //     local_addr_, remote_addr_, BASE_PORT, target_queue_id,
+        //     kRemoteRssKey, kRemoteRedirTable, kPortEntropy, dst_ports_);
+        // LOG(INFO) << "target_queue_id: " << target_queue_id;
+        // for (auto port : dst_ports_) {
+        //     LOG(INFO) << "dst_port: " << port;
+        // }
+        // DCHECK(res);
+        for (int i = 0; i < kPortEntropy; i++) {
+            dst_ports_.push_back(BASE_PORT + i);
+        }
     }
     ~UcclFlow() {}
 
@@ -455,6 +470,8 @@ class UcclFlow {
     Channel *channel_;
     // FlowID of this flow.
     FlowID flow_id_;
+    // Destination ports with remote_engine_idx_ as the target queue_id.
+    std::vector<uint16_t> dst_ports_;
     // Accumulated data frames to be sent.
     std::vector<AFXDPSocket::frame_desc> pending_tx_frames_;
     // Missing data frames to be sent.
@@ -486,14 +503,12 @@ class UcclEngine {
      * For now, we assume an engine is responsible for a single channel, but
      * future it may be responsible for multiple channels.
      */
-    UcclEngine(int queue_id, Channel *channel, LRPC *lrpc_out, LRPC *lrpc_in,
-               const std::string local_addr, const std::string local_l2_addr)
+    UcclEngine(int queue_id, Channel *channel, const std::string local_addr,
+               const std::string local_l2_addr)
         : local_addr_(htonl(str_to_ip(local_addr))),
           local_engine_idx_(queue_id),
           socket_(AFXDPFactory::CreateSocket(queue_id)),
           channel_(channel),
-          lrpc_out_(lrpc_out),
-          lrpc_in_(lrpc_in),
           last_periodic_timestamp_(rdtsc_to_us(rdtsc())),
           periodic_ticks_(0) {
         DCHECK(str_to_mac(local_l2_addr, local_l2_addr_));
@@ -591,9 +606,6 @@ class UcclEngine {
     std::unordered_map<FlowID, UcclFlow *> active_flows_map_;
     // Control plane channel with Endpoint.
     Channel *channel_;
-    // Packet redirection channels.
-    LRPC *lrpc_out_;
-    LRPC *lrpc_in_;
     // Classifiy the incoming packets into the right flow.
     std::unordered_map<FlowID, std::vector<FrameBuf *>> rx_msgbuf_map_;
     // Timestamp of last periodic process execution.
@@ -624,9 +636,6 @@ class Endpoint {
 
     int num_queues_;
     Channel **channel_vec_;
-    // Packet redirection channels.
-    LRPC *lrpc_out_[NUM_QUEUES];
-    LRPC lrpc_in_[NUM_QUEUES][NUM_QUEUES];
     std::vector<std::unique_ptr<UcclEngine>> engine_vec_;
     std::vector<std::unique_ptr<std::thread>> engine_th_vec_;
 
@@ -675,6 +684,9 @@ class Endpoint {
                                 const uint32_t remote_engine_idx,
                                 FlowID flow_id, int engine_idx);
     inline int find_least_loaded_engine_idx_and_update();
+    inline void sync_rss_config(int bootstrap_fd);
+
+    friend class UcclFlow;
 };
 
 }  // namespace uccl

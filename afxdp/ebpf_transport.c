@@ -36,7 +36,9 @@ int ebpf_transport_filter(struct xdp_md *ctx) {
 
     struct ethhdr *eth = data;
     struct iphdr *ip = data + sizeof(struct ethhdr);
+    struct udphdr *udp = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
     __u16 magic = *(__u16 *)(data + kNetHdrLen);
+    __u8 engine_idx = *(__u8 *)(data + kNetHdrLen + 2);
 
 #ifdef USING_TCP
     if (eth->h_proto != __constant_htons(ETH_P_IP) ||
@@ -49,6 +51,9 @@ int ebpf_transport_filter(struct xdp_md *ctx) {
         return XDP_PASS;
     }
 #endif
+
+    bpf_printk("dst_port: %lu, engine_idx: %d, rx_queue_idx: %d\n",
+               __constant_htons(udp->dest), engine_idx, ctx->rx_queue_index);
 
     return bpf_redirect_map(&xsks_map, ctx->rx_queue_index, XDP_PASS);
 }

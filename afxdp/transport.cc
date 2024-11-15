@@ -468,8 +468,8 @@ void UcclFlow::prepare_l4header(uint8_t *pkt_addr,
     memset(tcph, 0, sizeof(tcphdr));
 #ifdef USING_MULTIPATH
     static uint16_t rand_port = 0;
-    tcph->source = htons(BASE_PORT + (rand_port++) % 128);
-    tcph->dest = htons(BASE_PORT + (rand_port++) % 128);
+    tcph->source = htons(BASE_PORT);
+    tcph->dest = htons(dst_ports_[(rand_port++) % kPortEntropy]);
 #else
     tcph->source = htons(BASE_PORT);
     tcph->dest = htons(BASE_PORT);
@@ -482,8 +482,8 @@ void UcclFlow::prepare_l4header(uint8_t *pkt_addr,
     auto *udph = (udphdr *)(pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
 #ifdef USING_MULTIPATH
     static uint16_t rand_port = 0;
-    udph->source = htons(BASE_PORT + (rand_port++) % 128);
-    udph->dest = htons(BASE_PORT + (rand_port++) % 128);
+    udph->source = htons(BASE_PORT);
+    udph->dest = htons(dst_ports_[(rand_port++) % kPortEntropy]);
 #else
     udph->source = htons(BASE_PORT);
     udph->dest = htons(BASE_PORT);
@@ -753,11 +753,11 @@ void UcclEngine::process_rx_msg(std::vector<FrameBuf *> msgbufs,
                                 FlowID flow_id) {
     // Yang: this only happens on aws instances with no guarantee net bw.
     if (active_flows_map_.find(flow_id) == active_flows_map_.end()) {
-        LOG(ERROR) << "process_rx_msg unknown flow " << std::hex << "0x"
-                   << flow_id;
+        LOG_EVERY_N(ERROR, 1000000)
+            << "process_rx_msg unknown flow " << std::hex << "0x" << flow_id;
         for (auto [flow_id, flow] : active_flows_map_) {
-            LOG(ERROR) << "                active flow " << std::hex << "0x"
-                       << flow_id;
+            LOG_EVERY_N(ERROR, 1000000) << "                active flow "
+                                        << std::hex << "0x" << flow_id;
         }
         for (auto msgbuf : msgbufs) {
             AFXDPFactory::push_frame(msgbuf->get_frame_offset());
@@ -852,9 +852,35 @@ std::tuple<FrameBuf *, FrameBuf *, uint32_t> UcclEngine::deserialize_msg(
 Endpoint::Endpoint(const char *interface_name, int num_queues,
                    uint64_t num_frames, int engine_cpu_start)
     : num_queues_(num_queues) {
+    // Need a lock as UcclFlows are in different threads with Endpoint.
+    {
+        std::unique_lock<std::shared_mutex> lock(rss_mu_);
+        bool res =
+            get_rss_config(interface_name, kLocalRedirTable, kLocalRssKey);
+        DCHECK(res);
+    }
+
+    std::ostringstream log_stream;
+    log_stream << interface_name << " RSS key: ";
+    for (auto byte : kLocalRssKey) {
+        log_stream << std::hex << std::setw(2) << std::setfill('0')
+                   << (int)byte;
+    }
+    log_stream << std::endl;
+    LOG(INFO) << log_stream.str();
+
+    log_stream.str("");
+    log_stream.clear();
+    log_stream << interface_name << " Redirection table: ";
+    for (auto entry : kLocalRedirTable) {
+        log_stream << std::dec << entry << " ";
+    }
+    log_stream << std::endl;
+    LOG(INFO) << log_stream.str();
+
+    // Create UDS socket and get the umem_id.
     static std::once_flag flag_once;
     std::call_once(flag_once, [interface_name, num_frames]() {
-        // This will create UDS socket and get the umem_id.
         AFXDPFactory::init(interface_name, num_frames, "ebpf_transport.o",
                            "ebpf_transport");
     });
@@ -868,23 +894,10 @@ Endpoint::Endpoint(const char *interface_name, int num_queues,
     channel_vec_ = new Channel *[num_queues];
     for (int i = 0; i < num_queues; i++) channel_vec_[i] = new Channel();
 
-    for (int rcore = 0; rcore < num_queues; rcore++) {
-        // rcore uses it to send redirect packets to all other cores.
-        lrpc_out_[rcore] = new LRPC[num_queues];
-    }
-
-    for (int lcore = 0; lcore < num_queues; lcore++) {
-        // lcore uses it to receive redirect packets from all other cores.
-        for (int rcore = 0; rcore < num_queues; rcore++) {
-            lrpc_in_[lcore][rcore] = lrpc_out_[rcore][lcore];
-        }
-    }
-
     for (int queue_id = 0, engine_cpu_id = engine_cpu_start;
          queue_id < num_queues; queue_id++, engine_cpu_id++) {
         engine_vec_.emplace_back(std::make_unique<UcclEngine>(
-            queue_id, channel_vec_[queue_id], lrpc_out_[queue_id],
-            lrpc_in_[queue_id], local_ip_str_, local_mac_str_));
+            queue_id, channel_vec_[queue_id], local_ip_str_, local_mac_str_));
         engine_th_vec_.emplace_back(std::make_unique<std::thread>(
             [engine_ptr = engine_vec_.back().get(), engine_cpu_id]() {
                 pin_thread_to_cpu(engine_cpu_id);
@@ -995,18 +1008,18 @@ ConnID Endpoint::uccl_connect(std::string remote_ip) {
         if (unique) break;
     }
 
-    char remote_mac_char[ETH_ALEN];
-    ret = read(bootstrap_fd, remote_mac_char, ETH_ALEN);
-    DCHECK(ret == ETH_ALEN);
-    std::string remote_mac = mac_to_str(remote_mac_char);
-    VLOG(3) << "Remote MAC: " << remote_mac;
-
     char local_mac_char[ETH_ALEN];
     std::string local_mac = get_dev_mac(DEV_DEFAULT);
     VLOG(3) << "Local MAC: " << local_mac;
     str_to_mac(local_mac, local_mac_char);
     ret = write(bootstrap_fd, local_mac_char, ETH_ALEN);
     DCHECK(ret == ETH_ALEN);
+
+    char remote_mac_char[ETH_ALEN];
+    ret = read(bootstrap_fd, remote_mac_char, ETH_ALEN);
+    DCHECK(ret == ETH_ALEN);
+    std::string remote_mac = mac_to_str(remote_mac_char);
+    VLOG(3) << "Remote MAC: " << remote_mac;
 
     conn_id.boostrap_id = bootstrap_fd;
     conn_id.engine_idx = find_least_loaded_engine_idx_and_update();
@@ -1016,6 +1029,8 @@ ConnID Endpoint::uccl_connect(std::string remote_ip) {
     ret = write(bootstrap_fd, &conn_id.engine_idx, sizeof(uint32_t));
     ret = read(bootstrap_fd, &remote_engine_idx, sizeof(uint32_t));
     DCHECK(ret == sizeof(uint32_t));
+
+    sync_rss_config(bootstrap_fd);
 
     install_flow_on_engine(remote_ip, remote_mac, remote_engine_idx,
                            conn_id.flow_id, conn_id.engine_idx);
@@ -1109,6 +1124,8 @@ std::tuple<ConnID, std::string> Endpoint::uccl_accept() {
     ret = read(bootstrap_fd, &remote_engine_idx, sizeof(uint32_t));
     DCHECK(ret == sizeof(uint32_t));
 
+    sync_rss_config(bootstrap_fd);
+
     install_flow_on_engine(remote_ip, remote_mac, remote_engine_idx,
                            conn_id.flow_id, conn_id.engine_idx);
 
@@ -1116,9 +1133,9 @@ std::tuple<ConnID, std::string> Endpoint::uccl_accept() {
               << " : " << local_ip_str_ << Format("(%d)", conn_id.engine_idx)
               << "<->" << remote_ip << Format("(%d)", remote_engine_idx);
 
-    bool sync = false;
-    ret = read(bootstrap_fd, &sync, sizeof(bool));
+    bool sync = true;
     ret = write(bootstrap_fd, &sync, sizeof(bool));
+    ret = read(bootstrap_fd, &sync, sizeof(bool));
     DCHECK(ret == sizeof(bool) && sync);
 
     return std::make_tuple(conn_id, remote_ip);
@@ -1230,4 +1247,28 @@ inline int Endpoint::find_least_loaded_engine_idx_and_update() {
     *minElementIter += 1;
     return std::distance(engine_load_vec_.begin(), minElementIter);
 }
+
+inline void Endpoint::sync_rss_config(int bootstrap_fd) {
+    std::unique_lock<std::shared_mutex> lock(rss_mu_);
+
+    size_t rsskey_size = kLocalRssKey.size();
+    int ret = write(bootstrap_fd, &rsskey_size, sizeof(size_t));
+    size_t redirtable_size = kLocalRedirTable.size();
+    ret = write(bootstrap_fd, &redirtable_size, sizeof(size_t));
+
+    ret = write(bootstrap_fd, kLocalRssKey.data(),
+                kLocalRssKey.size() * sizeof(uint8_t));
+    ret = write(bootstrap_fd, kLocalRedirTable.data(),
+                kLocalRedirTable.size() * sizeof(uint32_t));
+
+    ret = read(bootstrap_fd, &rsskey_size, sizeof(size_t));
+    ret = read(bootstrap_fd, &redirtable_size, sizeof(size_t));
+    kRemoteRssKey.resize(rsskey_size);
+    kRemoteRedirTable.resize(redirtable_size);
+    ret =
+        read(bootstrap_fd, kRemoteRssKey.data(), rsskey_size * sizeof(uint8_t));
+    ret = read(bootstrap_fd, kRemoteRedirTable.data(),
+               redirtable_size * sizeof(uint32_t));
+}
+
 }  // namespace uccl
