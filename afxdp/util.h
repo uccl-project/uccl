@@ -4,15 +4,19 @@
 #include <fcntl.h>
 #include <glog/logging.h>
 #include <ifaddrs.h>
+#include <linux/ethtool.h>
 #include <linux/in.h>
+#include <linux/sockios.h>
 #include <net/if.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdarg.h>
+#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/un.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <chrono>
@@ -20,10 +24,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <iomanip>
+#include <iostream>
 #include <random>
 #include <sstream>
 #include <vector>
 
+#include "transport_config.h"
 #include "util_jring.h"
 
 namespace uccl {
@@ -626,4 +632,153 @@ inline std::string GetEnvVar(std::string const& key) {
     return val == NULL ? std::string("") : std::string(val);
 }
 
+// Function to retrieve the redirection table and RSS key
+inline bool get_rss_config(const std::string& interface_name,
+                           std::vector<uint32_t>& redir_table,
+                           std::vector<uint8_t>& rss_key) {
+    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd < 0) {
+        perror("Socket creation failed");
+        return false;
+    }
+
+    // Prepare structures for ioctl
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, interface_name.c_str(), IFNAMSIZ - 1);
+
+    // Step 1: Query the sizes of the RSS key and redirection table
+    struct ethtool_rxfh* rss_query =
+        (struct ethtool_rxfh*)malloc(sizeof(struct ethtool_rxfh));
+    memset(rss_query, 0, sizeof(struct ethtool_rxfh));
+    rss_query->cmd = ETHTOOL_GRSSH;  // Get RSS configuration command
+
+    ifr.ifr_data = reinterpret_cast<char*>(rss_query);
+
+    if (ioctl(sockfd, SIOCETHTOOL, &ifr) < 0) {
+        perror("Failed to query RSS configuration sizes");
+        free(rss_query);
+        close(sockfd);
+        return false;
+    }
+
+    uint32_t indir_size = rss_query->indir_size;
+    uint32_t key_size = rss_query->key_size;
+    free(rss_query);
+
+    LOG(INFO) << "Interface " << interface_name
+              << ": RSS indirection table size " << indir_size
+              << ", RSS key size " << key_size;
+
+    if (indir_size == 0 && key_size == 0) {
+        std::cerr << "RSS configuration not supported on this NIC."
+                  << std::endl;
+        close(sockfd);
+        return false;
+    }
+
+    // Step 2: Allocate memory for the full RSS configuration
+    size_t struct_size =
+        sizeof(struct ethtool_rxfh) + indir_size * sizeof(uint32_t) + key_size;
+    struct ethtool_rxfh* rss_config = (struct ethtool_rxfh*)malloc(struct_size);
+    memset(rss_config, 0, struct_size);
+
+    rss_config->cmd = ETHTOOL_GRSSH;
+    rss_config->indir_size = indir_size;
+    rss_config->key_size = key_size;
+
+    ifr.ifr_data = reinterpret_cast<char*>(rss_config);
+
+    // Step 3: Perform ioctl to retrieve the RSS configuration
+    if (ioctl(sockfd, SIOCETHTOOL, &ifr) < 0) {
+        perror("Failed to retrieve RSS configuration");
+        free(rss_config);
+        close(sockfd);
+        return false;
+    }
+
+    // Copy the redirection table
+    if (indir_size > 0) {
+        uint32_t* indir_table_start = (uint32_t*)rss_config->rss_config;
+        redir_table.assign(indir_table_start, indir_table_start + indir_size);
+    }
+
+    // Copy the RSS key
+    if (key_size > 0) {
+        uint8_t* key_start =
+            (uint8_t*)((uint32_t*)rss_config->rss_config + indir_size);
+        rss_key.assign(key_start, key_start + key_size);
+    }
+
+    free(rss_config);
+    close(sockfd);
+    return true;
+}
+
+// Function to compute Toeplitz hash
+inline uint32_t compute_rss_hash(const std::vector<uint8_t>& tuple,
+                                 const std::vector<uint8_t>& rss_key) {
+    uint32_t hash = 0;
+
+    // Iterate through each bit in the tuple
+    for (size_t i = 0; i < tuple.size() * 8; ++i) {
+        if (tuple[i / 8] & (1 << (7 - (i % 8)))) {
+            hash ^=
+                ((uint32_t*)
+                     rss_key.data())[i % (rss_key.size() / sizeof(uint32_t))];
+        }
+    }
+
+    return hash;
+}
+
+// Function to calculate queue ID directly from IPs and ports
+inline uint32_t calculate_queue_id(uint32_t src_ip, uint32_t dst_ip,
+                                   uint16_t src_port, uint16_t dst_port,
+                                   const std::vector<uint8_t>& rss_key,
+                                   const std::vector<uint32_t>& redir_table) {
+    // Convert IPs and ports to network byte order
+    src_ip = htonl(src_ip);
+    dst_ip = htonl(dst_ip);
+    src_port = htons(src_port);
+    dst_port = htons(dst_port);
+
+    // Combine the tuple fields into a single vector
+    std::vector<uint8_t> tuple;
+    tuple.insert(tuple.end(), (uint8_t*)&src_ip,
+                 (uint8_t*)&src_ip + sizeof(src_ip));
+    tuple.insert(tuple.end(), (uint8_t*)&dst_ip,
+                 (uint8_t*)&dst_ip + sizeof(dst_ip));
+    tuple.insert(tuple.end(), (uint8_t*)&src_port,
+                 (uint8_t*)&src_port + sizeof(src_port));
+    tuple.insert(tuple.end(), (uint8_t*)&dst_port,
+                 (uint8_t*)&dst_port + sizeof(dst_port));
+
+    // Step 1: Calculate the RSS hash
+    uint32_t rss_hash = compute_rss_hash(tuple, rss_key);
+
+    // Step 2: Map the hash to the redirection table
+    uint32_t queue_id = redir_table[rss_hash % redir_table.size()];
+
+    return queue_id;
+}
+
+inline bool get_dst_ports_with_target_queueid(
+    uint32_t src_ip, uint32_t dst_ip, uint16_t src_port,
+    uint32_t target_queue_id, const std::vector<uint8_t>& rss_key,
+    const std::vector<uint32_t>& redir_table, int num_dst_ports,
+    std::vector<uint16_t>& dst_ports) {
+    for (int port = BASE_PORT; port < 65536; port++) {
+        uint16_t dst_port = port;
+        uint32_t queue_id = calculate_queue_id(src_ip, dst_ip, src_port,
+                                               dst_port, rss_key, redir_table);
+        if (queue_id == target_queue_id) {
+            dst_ports.push_back(dst_port);
+            if (dst_ports.size() == num_dst_ports) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
 }  // namespace uccl

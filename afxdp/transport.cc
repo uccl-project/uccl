@@ -645,9 +645,6 @@ void UcclEngine::run() {
     Channel::Msg rx_work;
     Channel::Msg tx_work;
 
-    std::vector<Channel::PktMsg> pkt_msgs_out_vec[NUM_QUEUES];
-    std::vector<Channel::PktMsg> pkt_msgs_in;
-
     while (!shutdown_) {
         // Calculate the time elapsed since the last periodic
         // processing.
@@ -669,52 +666,7 @@ void UcclEngine::run() {
 
         auto frames = socket_->recv_packets(RECV_BATCH_SIZE);
         if (frames.size()) {
-            // LOG_EVERY_N(INFO, 1000000) << "Rx recv_packets " <<
-            // frames.size();
-            for (auto &frame : frames) {
-                auto pkt_addr =
-                    (uint8_t *)socket_->umem_buffer_ + frame.frame_offset;
-                auto engine_idx =
-                    *(pkt_addr + kNetHdrLen + sizeof(uint16_t));  // skip magic
-                DCHECK(engine_idx >= 0 && engine_idx < NUM_QUEUES);
-                pkt_msgs_out_vec[engine_idx].push_back(
-                    {frame.frame_offset, frame.frame_len});
-            }
-            for (int rcore = 0; rcore < NUM_QUEUES; rcore++) {
-                auto &pkt_msgs_out = pkt_msgs_out_vec[rcore];
-                if (pkt_msgs_out.empty()) continue;
-
-                if (rcore == local_engine_idx_) {
-                    dispatch_pkts_to_local_engine(pkt_msgs_out);
-                } else {
-                    // LOG(INFO)
-                    //     << "lrpc_out " << pkt_msgs_out.size() << " from core
-                    //     "
-                    //     << local_engine_idx_ << " to core " << rcore;
-                    for (auto &pkt_msg : pkt_msgs_out) {
-                        lrpc_msg msg;
-                        *(Channel::PktMsg *)msg.data = pkt_msg;
-                        while (lrpc_out_[rcore].rcore_send(&msg));
-                    }
-                }
-                pkt_msgs_out.clear();
-            }
-        }
-
-        // Pull redirected packets from other cores.
-        for (int rcore = 0; rcore < NUM_QUEUES; rcore++) {
-            lrpc_msg msg;
-            int budget = RECV_BATCH_SIZE;
-            while (budget-- && !lrpc_in_[rcore].lcore_recv(&msg)) {
-                auto &pkt_msg = *(Channel::PktMsg *)msg.data;
-                pkt_msgs_in.push_back(pkt_msg);
-            }
-        }
-        if (pkt_msgs_in.size()) {
-            // LOG(INFO) << "lrpc_in " << pkt_msgs_in.size() << " at core "
-            //           << local_engine_idx_;
-            dispatch_pkts_to_local_engine(pkt_msgs_in);
-            pkt_msgs_in.clear();
+            dispatch_pkts_to_local_engine(frames);
         }
 
         if (jring_sc_dequeue_bulk(channel_->tx_cmdq_, &tx_work, 1, nullptr) ==
@@ -749,7 +701,7 @@ void UcclEngine::run() {
 }
 
 void UcclEngine::dispatch_pkts_to_local_engine(
-    std::vector<Channel::PktMsg> &pkt_msgs) {
+    std::vector<AFXDPSocket::frame_desc> &pkt_msgs) {
     for (auto &frame : pkt_msgs) {
         auto *msgbuf = FrameBuf::Create(frame.frame_offset,
                                         socket_->umem_buffer_, frame.frame_len);
@@ -776,10 +728,6 @@ void UcclEngine::dispatch_pkts_to_local_engine(
         }
 
         auto flow_id = ucclh->flow_id.value();
-        // LOG(INFO) << "flow_id 0x" << std::hex << flow_id << " len " <<
-        // std::dec
-        //           << frame.frame_len << " pkt_addr " << std::hex
-        //           << (uint64_t)pkt_addr;
         rx_msgbuf_map_[flow_id].push_back(msgbuf);
     }
     for (auto &[flow_id, msgbufs] : rx_msgbuf_map_) {

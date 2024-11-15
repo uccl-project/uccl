@@ -99,31 +99,21 @@ class Channel {
     static_assert(sizeof(CtrlMsg) % 4 == 0,
                   "channelMsg must be 32-bit aligned");
 
-    struct PktMsg {
-        uint64_t frame_offset;
-        uint32_t frame_len;
-        uint32_t pad;
-    };
-    static_assert(sizeof(PktMsg) % 4 == 0, "channelMsg must be 32-bit aligned");
-
     Channel() {
         tx_cmdq_ = create_ring(sizeof(Msg), kChannelSize);
         rx_cmdq_ = create_ring(sizeof(Msg), kChannelSize);
         ctrl_cmdq_ = create_ring(sizeof(CtrlMsg), kChannelSize);
-        pktq_ = create_ring(sizeof(PktMsg), kChannelSize * 8);
     }
 
     ~Channel() {
         free(tx_cmdq_);
         free(rx_cmdq_);
         free(ctrl_cmdq_);
-        free(pktq_);
     }
 
     jring_t *tx_cmdq_;
     jring_t *rx_cmdq_;
     jring_t *ctrl_cmdq_;
-    jring_t *pktq_;
 };
 
 /**
@@ -525,7 +515,8 @@ class UcclEngine {
      */
     void run();
 
-    void dispatch_pkts_to_local_engine(std::vector<Channel::PktMsg> &pkt_msgs);
+    void dispatch_pkts_to_local_engine(
+        std::vector<AFXDPSocket::frame_desc> &pkt_msgs);
 
     /**
      * @brief Method to perform periodic processing. This is called by the

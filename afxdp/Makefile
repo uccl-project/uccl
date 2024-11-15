@@ -82,6 +82,9 @@ transport_pp_test: transport_pp_test.cc ebpf_transport.o $(DEPS) $(lib_obj)
 util_afxdp_test: util_afxdp_test.cc ebpf_client.o $(DEPS) $(lib_obj)
 	g++ util_afxdp_test.cc -o util_afxdp_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
+rss_hash_test: rss_hash_test.cc $(DEPS) $(lib_obj)
+	g++ rss_hash_test.cc -o rss_hash_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
+
 %.o: %.cc $(DEPS)
 	g++ -c $< -o $@ $(INC) $(CXXFLAGS)
 
