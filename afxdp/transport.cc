@@ -705,7 +705,7 @@ void UcclEngine::run() {
         for (int rcore = 0; rcore < NUM_QUEUES; rcore++) {
             lrpc_msg msg;
             int budget = RECV_BATCH_SIZE;
-            while (!lrpc_in_[rcore].lcore_recv(&msg) && budget--) {
+            while (budget-- && !lrpc_in_[rcore].lcore_recv(&msg)) {
                 auto &pkt_msg = *(Channel::PktMsg *)msg.data;
                 pkt_msgs_in.push_back(pkt_msg);
             }
