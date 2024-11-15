@@ -644,12 +644,9 @@ void UcclEngine::install_flow(const uint32_t remote_addr,
 void UcclEngine::run() {
     Channel::Msg rx_work;
     Channel::Msg tx_work;
-    std::unordered_map<FlowID, std::vector<FrameBuf *>> rx_msgbuf_map_;
 
-    Channel::PktMsg pkt_msg;
-    std::vector<Channel::PktMsg> pkt_msgs_out[NUM_QUEUES];
-    Channel::PktMsg *pkt_msgs_in = new Channel::PktMsg[RECV_BATCH_SIZE];
-    int num_pkt_msgs_in = 0;
+    std::vector<Channel::PktMsg> pkt_msgs_out_vec[NUM_QUEUES];
+    std::vector<Channel::PktMsg> pkt_msgs_in;
 
     while (!shutdown_) {
         // Calculate the time elapsed since the last periodic
@@ -672,110 +669,52 @@ void UcclEngine::run() {
 
         auto frames = socket_->recv_packets(RECV_BATCH_SIZE);
         if (frames.size()) {
-            // LOG_EVERY_N(INFO, 1000) << "Rx recv_packets " << frames.size();
+            // LOG_EVERY_N(INFO, 1000000) << "Rx recv_packets " <<
+            // frames.size();
             for (auto &frame : frames) {
                 auto pkt_addr =
                     (uint8_t *)socket_->umem_buffer_ + frame.frame_offset;
                 auto engine_idx =
                     *(pkt_addr + kNetHdrLen + sizeof(uint16_t));  // skip magic
                 DCHECK(engine_idx >= 0 && engine_idx < NUM_QUEUES);
-                pkt_msgs_out[engine_idx].push_back(
+                pkt_msgs_out_vec[engine_idx].push_back(
                     {frame.frame_offset, frame.frame_len});
             }
-            for (int i = 0; i < NUM_QUEUES; i++) {
-                auto &pkt_msgs = pkt_msgs_out[i];
-                if (pkt_msgs.empty()) continue;
+            for (int rcore = 0; rcore < NUM_QUEUES; rcore++) {
+                auto &pkt_msgs_out = pkt_msgs_out_vec[rcore];
+                if (pkt_msgs_out.empty()) continue;
 
-                if (i == local_engine_idx_) {
-                    for (auto& frame: pkt_msgs){
-                        auto *msgbuf = FrameBuf::Create(frame.frame_offset,
-                                                        socket_->umem_buffer_,
-                                                        frame.frame_len);
-                        auto *pkt_addr = msgbuf->get_pkt_addr();
-                        auto *ucclh = reinterpret_cast<UcclPktHdr *>(
-                            pkt_addr + kNetHdrLen);
-
-                        // Record the incoming packet UcclPktHdr.msg_flags in
-                        // FrameBuf.
-                        msgbuf->set_msg_flags(ucclh->msg_flags);
-
-                        // Work around an AFXDP bug that would receive the same
-                        // packets with differet lengths multiple times.
-                        if (ucclh->frame_len.value() != frame.frame_len) {
-                            VLOG(2) << "Received invalid frame length: "
-                                    << ucclh->frame_len.value()
-                                    << " != " << frame.frame_len;
-                            AFXDPFactory::push_frame(frame.frame_offset);
-                            continue;
-                        }
-
-                        if (msgbuf->is_last()) {
-                            VLOG(2)
-                                << "Received seqno: " << ucclh->seqno.value()
-                                << " payload_len: "
-                                << msgbuf->get_frame_len() - kNetHdrLen -
-                                       kUcclHdrLen;
-                        }
-
-                        auto flow_id = ucclh->flow_id.value();
-                        rx_msgbuf_map_[flow_id].push_back(msgbuf);
-                    }
-                    for (auto &[flow_id, msgbufs] : rx_msgbuf_map_) {
-                        if (msgbufs.empty()) continue;
-                        process_rx_msg(msgbufs, flow_id);
-                        msgbufs.clear();
-                    }
+                if (rcore == local_engine_idx_) {
+                    dispatch_pkts_to_local_engine(pkt_msgs_out);
                 } else {
-                    while (jring_mp_enqueue_bulk(
-                               channel_vec_[i]->pktq_, pkt_msgs.data(),
-                               pkt_msgs.size(), nullptr) != pkt_msgs.size()) {
-                        // LOG_EVERY_N(INFO, 1000000)
-                        //     << "busy loop " << pkt_msgs.size();
+                    // LOG(INFO)
+                    //     << "lrpc_out " << pkt_msgs_out.size() << " from core
+                    //     "
+                    //     << local_engine_idx_ << " to core " << rcore;
+                    for (auto &pkt_msg : pkt_msgs_out) {
+                        lrpc_msg msg;
+                        *(Channel::PktMsg *)msg.data = pkt_msg;
+                        while (lrpc_out_[rcore].rcore_send(&msg));
                     }
                 }
-                pkt_msgs.clear();
+                pkt_msgs_out.clear();
             }
         }
 
-        if (num_pkt_msgs_in = jring_sc_dequeue_bulk(
-                   channel_->pktq_, pkt_msgs_in, RECV_BATCH_SIZE, nullptr)) {
-            // LOG_EVERY_N(INFO, 1000) << "Rx dequeue pkts " << num_pkt_msgs_in;
-            for (int i = 0; i < num_pkt_msgs_in; i++) {
-                auto &frame = pkt_msgs_in[i];
-                auto *msgbuf = FrameBuf::Create(
-                    frame.frame_offset, socket_->umem_buffer_, frame.frame_len);
-                auto *pkt_addr = msgbuf->get_pkt_addr();
-                auto *ucclh =
-                    reinterpret_cast<UcclPktHdr *>(pkt_addr + kNetHdrLen);
-
-                // Record the incoming packet UcclPktHdr.msg_flags in FrameBuf.
-                msgbuf->set_msg_flags(ucclh->msg_flags);
-
-                // Work around an AFXDP bug that would receive the same packets
-                // with differet lengths multiple times.
-                if (ucclh->frame_len.value() != frame.frame_len) {
-                    VLOG(2) << "Received invalid frame length: "
-                            << ucclh->frame_len.value()
-                            << " != " << frame.frame_len;
-                    AFXDPFactory::push_frame(frame.frame_offset);
-                    continue;
-                }
-
-                if (msgbuf->is_last()) {
-                    VLOG(2)
-                        << "Received seqno: " << ucclh->seqno.value()
-                        << " payload_len: "
-                        << msgbuf->get_frame_len() - kNetHdrLen - kUcclHdrLen;
-                }
-
-                auto flow_id = ucclh->flow_id.value();
-                rx_msgbuf_map_[flow_id].push_back(msgbuf);
+        // Pull redirected packets from other cores.
+        for (int rcore = 0; rcore < NUM_QUEUES; rcore++) {
+            lrpc_msg msg;
+            int budget = RECV_BATCH_SIZE;
+            while (!lrpc_in_[rcore].lcore_recv(&msg) && budget--) {
+                auto &pkt_msg = *(Channel::PktMsg *)msg.data;
+                pkt_msgs_in.push_back(pkt_msg);
             }
-            for (auto &[flow_id, msgbufs] : rx_msgbuf_map_) {
-                if (msgbufs.empty()) continue;
-                process_rx_msg(msgbufs, flow_id);
-                msgbufs.clear();
-            }
+        }
+        if (pkt_msgs_in.size()) {
+            // LOG(INFO) << "lrpc_in " << pkt_msgs_in.size() << " at core "
+            //           << local_engine_idx_;
+            dispatch_pkts_to_local_engine(pkt_msgs_in);
+            pkt_msgs_in.clear();
         }
 
         if (jring_sc_dequeue_bulk(channel_->tx_cmdq_, &tx_work, 1, nullptr) ==
@@ -798,8 +737,6 @@ void UcclEngine::run() {
         // process_tx_msg(nullptr, nullptr, 0);
     }
 
-    delete[] pkt_msgs_in;
-
     // This will reset flow pcb state.
     for (auto [flow_id, flow] : active_flows_map_) {
         flow->shutdown();
@@ -809,6 +746,47 @@ void UcclEngine::run() {
     socket_->shutdown();
 
     delete socket_;
+}
+
+void UcclEngine::dispatch_pkts_to_local_engine(
+    std::vector<Channel::PktMsg> &pkt_msgs) {
+    for (auto &frame : pkt_msgs) {
+        auto *msgbuf = FrameBuf::Create(frame.frame_offset,
+                                        socket_->umem_buffer_, frame.frame_len);
+        auto *pkt_addr = msgbuf->get_pkt_addr();
+        auto *ucclh = reinterpret_cast<UcclPktHdr *>(pkt_addr + kNetHdrLen);
+
+        // Record the incoming packet UcclPktHdr.msg_flags in
+        // FrameBuf.
+        msgbuf->set_msg_flags(ucclh->msg_flags);
+
+        // Work around an AFXDP bug that would receive the same
+        // packets with differet lengths multiple times.
+        if (ucclh->frame_len.value() != frame.frame_len) {
+            VLOG(2) << "Received invalid frame length: "
+                    << ucclh->frame_len.value() << " != " << frame.frame_len;
+            AFXDPFactory::push_frame(frame.frame_offset);
+            continue;
+        }
+
+        if (msgbuf->is_last()) {
+            VLOG(2) << "Received seqno: " << ucclh->seqno.value()
+                    << " payload_len: "
+                    << msgbuf->get_frame_len() - kNetHdrLen - kUcclHdrLen;
+        }
+
+        auto flow_id = ucclh->flow_id.value();
+        // LOG(INFO) << "flow_id 0x" << std::hex << flow_id << " len " <<
+        // std::dec
+        //           << frame.frame_len << " pkt_addr " << std::hex
+        //           << (uint64_t)pkt_addr;
+        rx_msgbuf_map_[flow_id].push_back(msgbuf);
+    }
+    for (auto &[flow_id, msgbufs] : rx_msgbuf_map_) {
+        if (msgbufs.empty()) continue;
+        process_rx_msg(msgbufs, flow_id);
+        msgbufs.clear();
+    }
 }
 
 /**
@@ -942,11 +920,23 @@ Endpoint::Endpoint(const char *interface_name, int num_queues,
     channel_vec_ = new Channel *[num_queues];
     for (int i = 0; i < num_queues; i++) channel_vec_[i] = new Channel();
 
+    for (int rcore = 0; rcore < num_queues; rcore++) {
+        // rcore uses it to send redirect packets to all other cores.
+        lrpc_out_[rcore] = new LRPC[num_queues];
+    }
+
+    for (int lcore = 0; lcore < num_queues; lcore++) {
+        // lcore uses it to receive redirect packets from all other cores.
+        for (int rcore = 0; rcore < num_queues; rcore++) {
+            lrpc_in_[lcore][rcore] = lrpc_out_[rcore][lcore];
+        }
+    }
+
     for (int queue_id = 0, engine_cpu_id = engine_cpu_start;
          queue_id < num_queues; queue_id++, engine_cpu_id++) {
         engine_vec_.emplace_back(std::make_unique<UcclEngine>(
-            queue_id, channel_vec_[queue_id], channel_vec_, local_ip_str_,
-            local_mac_str_));
+            queue_id, channel_vec_[queue_id], lrpc_out_[queue_id],
+            lrpc_in_[queue_id], local_ip_str_, local_mac_str_));
         engine_th_vec_.emplace_back(std::make_unique<std::thread>(
             [engine_ptr = engine_vec_.back().get(), engine_cpu_id]() {
                 pin_thread_to_cpu(engine_cpu_id);

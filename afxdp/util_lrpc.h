@@ -116,3 +116,48 @@ static inline bool lrpc_empty(struct lrpc_chan_in *chan) {
     uint64_t parity = (chan->recv_head & chan->size) ? 0 : LRPC_DONE_PARITY;
     return (ACCESS_ONCE(m->cmd) & LRPC_DONE_PARITY) != parity;
 }
+
+class LRPC {
+    char *storage_;
+
+    // local core in and out messages
+    struct lrpc_chan_in lcore_in_;
+    struct lrpc_chan_out lcore_out_;
+
+    // remote core out and in messages
+    struct lrpc_chan_out rcore_out_;
+    struct lrpc_chan_in rcore_in_;
+
+   public:
+    LRPC() {
+        const int lrpc_size = sizeof(struct head_wb) * 2 +
+                              sizeof(lrpc_msg) * LRPC_CHANNEL_SIZE * 2;
+        storage_ = new char[lrpc_size];
+
+        char *rcore_recv_head_wb = storage_;
+        char *lcore_recv_head_wb = rcore_recv_head_wb + sizeof(struct head_wb);
+
+        char *channel_1, *channel_2;
+        channel_1 = lcore_recv_head_wb + sizeof(struct head_wb);
+        channel_2 = channel_1 + sizeof(lrpc_msg) * LRPC_CHANNEL_SIZE;
+
+        CHECK(!lrpc_init_in(&lcore_in_, (lrpc_msg *)channel_1,
+                            LRPC_CHANNEL_SIZE, (uint32_t *)lcore_recv_head_wb));
+        CHECK(!lrpc_init_out(&lcore_out_, (lrpc_msg *)channel_2,
+                             LRPC_CHANNEL_SIZE,
+                             (uint32_t *)rcore_recv_head_wb));
+
+        CHECK(!lrpc_init_out(&rcore_out_, (lrpc_msg *)channel_1,
+                             LRPC_CHANNEL_SIZE,
+                             (uint32_t *)lcore_recv_head_wb));
+        CHECK(!lrpc_init_in(&rcore_in_, (lrpc_msg *)channel_2,
+                            LRPC_CHANNEL_SIZE, (uint32_t *)rcore_recv_head_wb));
+    }
+    ~LRPC() { delete[] storage_; }
+
+    inline int lcore_send(lrpc_msg *msg) { return lrpc_send(&lcore_out_, msg); }
+    inline int lcore_recv(lrpc_msg *msg) { return lrpc_recv(&lcore_in_, msg); }
+
+    inline int rcore_send(lrpc_msg *msg) { return lrpc_send(&rcore_out_, msg); }
+    inline int rcore_recv(lrpc_msg *msg) { return lrpc_recv(&rcore_in_, msg); }
+};

@@ -30,6 +30,7 @@
 #include "util.h"
 #include "util_afxdp.h"
 #include "util_endian.h"
+#include "util_lrpc.h"
 
 namespace uccl {
 
@@ -495,13 +496,14 @@ class UcclEngine {
      * For now, we assume an engine is responsible for a single channel, but
      * future it may be responsible for multiple channels.
      */
-    UcclEngine(int queue_id, Channel *channel, Channel **channel_vec,
+    UcclEngine(int queue_id, Channel *channel, LRPC *lrpc_out, LRPC *lrpc_in,
                const std::string local_addr, const std::string local_l2_addr)
         : local_addr_(htonl(str_to_ip(local_addr))),
           local_engine_idx_(queue_id),
           socket_(AFXDPFactory::CreateSocket(queue_id)),
           channel_(channel),
-          channel_vec_(channel_vec),
+          lrpc_out_(lrpc_out),
+          lrpc_in_(lrpc_in),
           last_periodic_timestamp_(rdtsc_to_us(rdtsc())),
           periodic_ticks_(0) {
         DCHECK(str_to_mac(local_l2_addr, local_l2_addr_));
@@ -522,6 +524,8 @@ class UcclEngine {
      * for. This method is not thread-safe.
      */
     void run();
+
+    void dispatch_pkts_to_local_engine(std::vector<Channel::PktMsg> &pkt_msgs);
 
     /**
      * @brief Method to perform periodic processing. This is called by the
@@ -596,7 +600,11 @@ class UcclEngine {
     std::unordered_map<FlowID, UcclFlow *> active_flows_map_;
     // Control plane channel with Endpoint.
     Channel *channel_;
-    Channel **channel_vec_;
+    // Packet redirection channels.
+    LRPC *lrpc_out_;
+    LRPC *lrpc_in_;
+    // Classifiy the incoming packets into the right flow.
+    std::unordered_map<FlowID, std::vector<FrameBuf *>> rx_msgbuf_map_;
     // Timestamp of last periodic process execution.
     uint64_t last_periodic_timestamp_;
     // Clock ticks for the slow timer.
@@ -625,6 +633,9 @@ class Endpoint {
 
     int num_queues_;
     Channel **channel_vec_;
+    // Packet redirection channels.
+    LRPC *lrpc_out_[NUM_QUEUES];
+    LRPC lrpc_in_[NUM_QUEUES][NUM_QUEUES];
     std::vector<std::unique_ptr<UcclEngine>> engine_vec_;
     std::vector<std::unique_ptr<std::thread>> engine_th_vec_;
 
