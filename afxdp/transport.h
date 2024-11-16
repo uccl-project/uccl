@@ -87,6 +87,7 @@ class Channel {
         enum Op : uint8_t {
             kFlowAdd = 0,
             kFlowRemove = 1,
+            kDstportInstall = 2,
         };
         Op opcode;
         FlowID flow_id;
@@ -94,6 +95,7 @@ class Channel {
         char remote_l2_addr[ETH_ALEN];
         char pad[2];
         uint32_t remote_engine_idx;
+        std::vector<uint16_t> *dst_ports;
         PollCtx *poll_ctx;
     };
     static_assert(sizeof(CtrlMsg) % 4 == 0,
@@ -125,9 +127,10 @@ struct __attribute__((packed)) UcclPktHdr {
     uint8_t engine_id;  // remote UcclEngine ID to process this packet.
     uint8_t reserved;   // Reserved for future use.
     enum class UcclFlags : uint8_t {
-        kData = 0b0,      // Data packet.
-        kAck = 0b10,      // ACK packet.
-        kAckEcn = 0b100,  // ACK-ECN packet.
+        kData = 0b0,         // Data packet.
+        kAck = 0b10,         // ACK packet.
+        kAckEcn = 0b100,     // ACK-ECN packet.
+        kRssProbe = 0b1000,  // RSS probing packet.
     };
     UcclFlags net_flags;  // Network flags.
     uint8_t msg_flags;    // Field to reflect the `FrameBuf' flags.
@@ -224,6 +227,7 @@ class TXTracking {
 
 class UcclFlow;
 class UcclEngine;
+class Endpoint;
 /**
  * @class RXTracking
  * @brief Tracking for message buffers that are received from the network. This
@@ -344,20 +348,6 @@ class UcclFlow {
           rx_tracking_(socket, channel) {
         memcpy(local_l2_addr_, local_l2_addr, ETH_ALEN);
         memcpy(remote_l2_addr_, remote_l2_addr, ETH_ALEN);
-
-        uint16_t target_queue_id = remote_engine_idx_;
-        std::shared_lock<std::shared_mutex> lock(rss_mu_);
-        // bool res = get_dst_ports_with_target_queueid(
-        //     local_addr_, remote_addr_, BASE_PORT, target_queue_id,
-        //     kRemoteRssKey, kRemoteRedirTable, kPortEntropy, dst_ports_);
-        // LOG(INFO) << "target_queue_id: " << target_queue_id;
-        // for (auto port : dst_ports_) {
-        //     LOG(INFO) << "dst_port: " << port;
-        // }
-        // DCHECK(res);
-        for (int i = 0; i < kPortEntropy; i++) {
-            dst_ports_.push_back(BASE_PORT + i);
-        }
     }
     ~UcclFlow() {}
 
@@ -417,19 +407,22 @@ class UcclFlow {
 
     void prepare_l2header(uint8_t *pkt_addr) const;
     void prepare_l3header(uint8_t *pkt_addr, uint32_t payload_bytes) const;
-    void prepare_l4header(uint8_t *pkt_addr, uint32_t payload_bytes) const;
+    void prepare_l4header(uint8_t *pkt_addr, uint32_t payload_bytes,
+                          uint16_t dst_port) const;
+    inline uint16_t get_next_dst_port() {
+        return dst_ports_[next_port_idx_++ % kPortEntropy];
+    }
     AFXDPSocket::frame_desc craft_ctlpacket(
-        uint32_t seqno, uint32_t ackno,
-        const UcclPktHdr::UcclFlags &net_flags) const;
+        uint32_t seqno, uint32_t ackno, const UcclPktHdr::UcclFlags &net_flags);
+    AFXDPSocket::frame_desc craft_rssprobe_packet(uint16_t dst_port);
 
-    inline AFXDPSocket::frame_desc craft_ack(uint32_t seqno,
-                                             uint32_t ackno) const {
+    inline AFXDPSocket::frame_desc craft_ack(uint32_t seqno, uint32_t ackno) {
         VLOG(3) << "Sending ACK for seqno " << seqno << " ackno " << ackno;
         return craft_ctlpacket(seqno, ackno, UcclPktHdr::UcclFlags::kAck);
     }
 
     inline AFXDPSocket::frame_desc craft_ack_with_ecn(uint32_t seqno,
-                                                      uint32_t ackno) const {
+                                                      uint32_t ackno) {
         VLOG(3) << "Sending ACK-ECN for seqno " << seqno << " ackno " << ackno;
         return craft_ctlpacket(seqno, ackno, UcclPktHdr::UcclFlags::kAckEcn);
     }
@@ -444,7 +437,7 @@ class UcclFlow {
      * @param packet Pointer to an allocated packet.
      * @param seqno Sequence number of the packet.
      */
-    void prepare_datapacket(FrameBuf *msg_buf, uint32_t seqno) const;
+    void prepare_datapacket(FrameBuf *msg_buf, uint32_t seqno);
 
     void fast_retransmit();
     void rto_retransmit();
@@ -472,6 +465,8 @@ class UcclFlow {
     FlowID flow_id_;
     // Destination ports with remote_engine_idx_ as the target queue_id.
     std::vector<uint16_t> dst_ports_;
+    // Index in dst_ports_ for the next port to use.
+    uint32_t next_port_idx_ = 0;
     // Accumulated data frames to be sent.
     std::vector<AFXDPSocket::frame_desc> pending_tx_frames_;
     // Missing data frames to be sent.
@@ -481,6 +476,9 @@ class UcclFlow {
     swift::Pcb pcb_;
     TXTracking tx_tracking_;
     RXTracking rx_tracking_;
+
+    friend class UcclEngine;
+    friend class Endpoint;
 };
 
 /**
@@ -518,8 +516,13 @@ class UcclEngine {
     // Install a flow that serves traffic with specific remote ip and mac.
     void install_flow(const uint32_t remote_addr,
                       const char remote_l2_addr[ETH_ALEN],
-                      uint32_t remote_engine_idx, FlowID flow_id,
+                      uint32_t remote_engine_idx,
+                      std::vector<uint16_t> *dst_ports, FlowID flow_id,
                       PollCtx *poll_ctx);
+
+    // Install dst_ports that match remote engine queue.
+    void install_dst_ports(std::vector<uint16_t> *dst_ports, FlowID flow_id,
+                           PollCtx *poll_ctx);
 
     /**
      * @brief This is the main event cycle of the Uccl engine.
@@ -682,9 +685,11 @@ class Endpoint {
     void install_flow_on_engine(const std::string remote_ip,
                                 const std::string remote_mac,
                                 const uint32_t remote_engine_idx,
+                                std::vector<uint16_t> *dst_ports,
                                 FlowID flow_id, int engine_idx);
+    void install_dst_ports_on_flow(std::vector<uint16_t> *dst_ports,
+                                   FlowID flow_id, int engine_idx);
     inline int find_least_loaded_engine_idx_and_update();
-    inline void sync_rss_config(int bootstrap_fd);
 
     friend class UcclFlow;
 };

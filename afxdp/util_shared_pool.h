@@ -14,7 +14,7 @@ namespace uccl {
 // thread_local cache.
 template <typename T, bool Sync = false>
 class SharedPool {
-    constexpr static uint32_t kNumCachedItemsPerCPU = 8;
+    constexpr static uint32_t kNumCachedItemsPerCPU = 64;
     using global_pool_t = CircularBuffer<T, /* sync = */ false>;
     using th_cache_t = CircularBuffer<T, false, kNumCachedItemsPerCPU>;
 

@@ -39,8 +39,8 @@ else
     exit 1
 fi
 
-start_cpu=3
 ncpu=$(nproc)
+start_cpu=$((ncpu/2))
 (
     let cnt=0
     cd /sys/class/net/${NIC}/device/msi_irqs/

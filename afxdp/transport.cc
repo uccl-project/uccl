@@ -287,6 +287,12 @@ void UcclFlow::rx_messages(std::vector<FrameBuf *> msgbufs) {
                 consume_ret = rx_tracking_.consume(&pcb_, msgbuf);
                 num_data_frames_recvd++;
                 break;
+            case UcclPktHdr::UcclFlags::kRssProbe:
+                // RSS probing packet, ignore.
+                LOG_EVERY_N(INFO, 10000)
+                    << "RSS probing packet received, ignoring...";
+                AFXDPFactory::push_frame(msgbuf->get_frame_offset());
+                break;
             default:
                 VLOG(3) << "Unsupported UcclFlags: "
                         << std::bitset<8>((uint8_t)ucclh->net_flags);
@@ -461,15 +467,14 @@ void UcclFlow::prepare_l3header(uint8_t *pkt_addr,
     ipv4h->check = ipv4_checksum(ipv4h, sizeof(iphdr));
 }
 
-void UcclFlow::prepare_l4header(uint8_t *pkt_addr,
-                                uint32_t payload_bytes) const {
+void UcclFlow::prepare_l4header(uint8_t *pkt_addr, uint32_t payload_bytes,
+                                uint16_t dst_port) const {
 #ifdef USING_TCP
     auto *tcph = (tcphdr *)(pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
     memset(tcph, 0, sizeof(tcphdr));
 #ifdef USING_MULTIPATH
-    static uint16_t rand_port = 0;
     tcph->source = htons(BASE_PORT);
-    tcph->dest = htons(dst_ports_[(rand_port++) % kPortEntropy]);
+    tcph->dest = htons(dst_port);
 #else
     tcph->source = htons(BASE_PORT);
     tcph->dest = htons(BASE_PORT);
@@ -481,9 +486,8 @@ void UcclFlow::prepare_l4header(uint8_t *pkt_addr,
 #else
     auto *udph = (udphdr *)(pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
 #ifdef USING_MULTIPATH
-    static uint16_t rand_port = 0;
     udph->source = htons(BASE_PORT);
-    udph->dest = htons(dst_ports_[(rand_port++) % kPortEntropy]);
+    udph->dest = htons(dst_port);
 #else
     udph->source = htons(BASE_PORT);
     udph->dest = htons(BASE_PORT);
@@ -495,8 +499,7 @@ void UcclFlow::prepare_l4header(uint8_t *pkt_addr,
 }
 
 AFXDPSocket::frame_desc UcclFlow::craft_ctlpacket(
-    uint32_t seqno, uint32_t ackno,
-    const UcclPktHdr::UcclFlags &net_flags) const {
+    uint32_t seqno, uint32_t ackno, const UcclPktHdr::UcclFlags &net_flags) {
     const size_t kControlPayloadBytes = kUcclHdrLen;
     auto frame_offset = AFXDPFactory::pop_frame();
     auto msgbuf = FrameBuf::Create(frame_offset, socket_->umem_buffer_,
@@ -507,7 +510,7 @@ AFXDPSocket::frame_desc UcclFlow::craft_ctlpacket(
     uint8_t *pkt_addr = (uint8_t *)socket_->umem_buffer_ + frame_offset;
     prepare_l2header(pkt_addr);
     prepare_l3header(pkt_addr, kControlPayloadBytes);
-    prepare_l4header(pkt_addr, kControlPayloadBytes);
+    prepare_l4header(pkt_addr, kControlPayloadBytes, get_next_dst_port());
 
     auto *ucclh = (UcclPktHdr *)(pkt_addr + kNetHdrLen);
     ucclh->magic = be16_t(UcclPktHdr::kMagic);
@@ -529,7 +532,36 @@ AFXDPSocket::frame_desc UcclFlow::craft_ctlpacket(
     return {frame_offset, kNetHdrLen + kControlPayloadBytes};
 }
 
-void UcclFlow::prepare_datapacket(FrameBuf *msg_buf, uint32_t seqno) const {
+AFXDPSocket::frame_desc UcclFlow::craft_rssprobe_packet(uint16_t dst_port) {
+    const size_t kRssProbePayloadBytes = kUcclHdrLen;
+    auto frame_offset = AFXDPFactory::pop_frame();
+    auto msgbuf = FrameBuf::Create(frame_offset, socket_->umem_buffer_,
+                                   kNetHdrLen + kRssProbePayloadBytes);
+    // Let AFXDPSocket::pull_complete_queue() free control frames.
+    msgbuf->mark_txpulltime_free();
+
+    uint8_t *pkt_addr = (uint8_t *)socket_->umem_buffer_ + frame_offset;
+    prepare_l2header(pkt_addr);
+    prepare_l3header(pkt_addr, kRssProbePayloadBytes);
+    prepare_l4header(pkt_addr, kRssProbePayloadBytes, dst_port);
+
+    auto *udph = (udphdr *)(pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
+    udph->dest = htons(dst_port);
+
+    auto *ucclh = (UcclPktHdr *)(pkt_addr + kNetHdrLen);
+    ucclh->magic = be16_t(UcclPktHdr::kMagic);
+    ucclh->engine_id = remote_engine_idx_;
+    ucclh->net_flags = UcclPktHdr::UcclFlags::kRssProbe;
+    ucclh->msg_flags = 0;
+    ucclh->frame_len = be16_t(kNetHdrLen + kRssProbePayloadBytes);
+    ucclh->seqno = be32_t(0);
+    ucclh->ackno = be32_t(0);
+    ucclh->flow_id = be64_t(flow_id_);
+
+    return {frame_offset, kNetHdrLen + kRssProbePayloadBytes};
+}
+
+void UcclFlow::prepare_datapacket(FrameBuf *msg_buf, uint32_t seqno) {
     // Header length after before the payload.
     uint32_t frame_len = msg_buf->get_frame_len();
     DCHECK_LE(frame_len, AFXDP_MTU);
@@ -538,7 +570,7 @@ void UcclFlow::prepare_datapacket(FrameBuf *msg_buf, uint32_t seqno) const {
     // Prepare network headers.
     prepare_l2header(pkt_addr);
     prepare_l3header(pkt_addr, frame_len - kNetHdrLen);
-    prepare_l4header(pkt_addr, frame_len - kNetHdrLen);
+    prepare_l4header(pkt_addr, frame_len - kNetHdrLen, get_next_dst_port());
 
     // Prepare the Uccl-specific header.
     auto *ucclh = reinterpret_cast<UcclPktHdr *>(pkt_addr + kNetHdrLen);
@@ -625,7 +657,8 @@ void UcclFlow::transmit_pending_packets() {
 
 void UcclEngine::install_flow(const uint32_t remote_addr,
                               const char remote_l2_addr[ETH_ALEN],
-                              uint32_t remote_engine_idx, FlowID flow_id,
+                              uint32_t remote_engine_idx,
+                              std::vector<uint16_t> *dst_ports, FlowID flow_id,
                               PollCtx *poll_ctx) {
     auto *flow = new UcclFlow(local_addr_, remote_addr, local_l2_addr_,
                               remote_l2_addr, local_engine_idx_,
@@ -633,9 +666,58 @@ void UcclEngine::install_flow(const uint32_t remote_addr,
     auto [_, ret] = active_flows_map_.insert({flow_id, flow});
     DCHECK(ret);
 
-    // Wakeup app thread waiting on endpoint.
+    // Doing RSS probing to get a list of dst_port that matches remote engine
+    // queue.
+    std::vector<uint16_t> local_dst_ports;
+    for (int i = BASE_PORT; i < 65536; i++) {
+        uint16_t dst_port = i;
+        auto frame = flow->craft_rssprobe_packet(dst_port);
+        socket_->send_packet(frame);
+
+        if ((i - BASE_PORT) % RECV_BATCH_SIZE == 0) {
+            auto frames = socket_->recv_packets(RECV_BATCH_SIZE);
+            for (auto &frame : frames) {
+                auto *msgbuf = FrameBuf::Create(
+                    frame.frame_offset, socket_->umem_buffer_, frame.frame_len);
+                auto *pkt_addr = msgbuf->get_pkt_addr();
+
+                auto *udph = reinterpret_cast<udphdr *>(
+                    pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
+                auto *ucclh =
+                    reinterpret_cast<UcclPktHdr *>(pkt_addr + kNetHdrLen);
+
+                if (ucclh->net_flags == UcclPktHdr::UcclFlags::kRssProbe) {
+                    // Probe packets successfully arrive this engine!
+                    local_dst_ports.push_back(ntohs(udph->dest));
+                } else {
+                    DCHECK(false);
+                }
+                AFXDPFactory::push_frame(frame.frame_offset);
+            }
+        }
+    }
+    // TODO(yang): what if there is no enough dst_ports probed?
+
+    // Pass back the dst_ports, and wakeup app thread waiting on endpoint.
     {
         std::lock_guard<std::mutex> lock(poll_ctx->mu);
+        dst_ports->insert(dst_ports->end(), local_dst_ports.begin(),
+                          local_dst_ports.end());
+        poll_ctx->done = true;
+        poll_ctx->cv.notify_one();
+    }
+}
+
+void UcclEngine::install_dst_ports(std::vector<uint16_t> *dst_ports,
+                                   FlowID flow_id, PollCtx *poll_ctx) {
+    auto *flow = active_flows_map_[flow_id];
+    DCHECK(flow) << "Install dst_ports hits unknown flow " << std::hex << "0x"
+                 << flow_id;
+    // Insert dst_ports to the flow, and wakeup app thread waiting on endpoint.
+    {
+        std::lock_guard<std::mutex> lock(poll_ctx->mu);
+        flow->dst_ports_.insert(flow->dst_ports_.end(), dst_ports->begin(),
+                                dst_ports->end());
         poll_ctx->done = true;
         poll_ctx->cv.notify_one();
     }
@@ -779,9 +861,22 @@ void UcclEngine::process_ctl_reqs() {
     if (jring_sc_dequeue_bulk(channel_->ctrl_cmdq_, &ctrl_work, 1, nullptr) ==
         1) {
         VLOG(3) << "Ctrl jring dequeue";
-        install_flow(ctrl_work.remote_addr, ctrl_work.remote_l2_addr,
-                     ctrl_work.remote_engine_idx, ctrl_work.flow_id,
-                     ctrl_work.poll_ctx);
+        switch (ctrl_work.opcode) {
+            case Channel::CtrlMsg::kFlowAdd:
+                install_flow(ctrl_work.remote_addr, ctrl_work.remote_l2_addr,
+                             ctrl_work.remote_engine_idx, ctrl_work.dst_ports,
+                             ctrl_work.flow_id, ctrl_work.poll_ctx);
+                break;
+            case Channel::CtrlMsg::kDstportInstall:
+                install_dst_ports(ctrl_work.dst_ports, ctrl_work.flow_id,
+                                  ctrl_work.poll_ctx);
+                break;
+            case Channel::CtrlMsg::kFlowRemove:
+                DCHECK(false) << "kFlowRemove not supported";
+                break;
+            default:
+                break;
+        }
     }
 }
 
@@ -789,11 +884,11 @@ void UcclEngine::dump_status() {
     std::string s;
     s += "\n\t[Uccl Engine] ";
     for (auto [flow_id, flow] : active_flows_map_) {
-        s += Format("\n\t\tFlow 0x%x: %s (%s) <-> %s (%s)", flow_id,
+        s += Format("\n\t\tFlow 0x%lx: %s (%u) <-> %s (%u)", flow_id,
                     ip_to_str(htonl(flow->local_addr_)).c_str(),
-                    mac_to_str(flow->local_l2_addr_).c_str(),
+                    flow->local_engine_idx_,
                     ip_to_str(htonl(flow->remote_addr_)).c_str(),
-                    mac_to_str(flow->remote_l2_addr_).c_str());
+                    flow->remote_engine_idx_);
         s += flow->to_string();
     }
     s += socket_->to_string();
@@ -852,32 +947,6 @@ std::tuple<FrameBuf *, FrameBuf *, uint32_t> UcclEngine::deserialize_msg(
 Endpoint::Endpoint(const char *interface_name, int num_queues,
                    uint64_t num_frames, int engine_cpu_start)
     : num_queues_(num_queues) {
-    // Need a lock as UcclFlows are in different threads with Endpoint.
-    {
-        std::unique_lock<std::shared_mutex> lock(rss_mu_);
-        bool res =
-            get_rss_config(interface_name, kLocalRedirTable, kLocalRssKey);
-        DCHECK(res);
-    }
-
-    std::ostringstream log_stream;
-    log_stream << interface_name << " RSS key: ";
-    for (auto byte : kLocalRssKey) {
-        log_stream << std::hex << std::setw(2) << std::setfill('0')
-                   << (int)byte;
-    }
-    log_stream << std::endl;
-    LOG(INFO) << log_stream.str();
-
-    log_stream.str("");
-    log_stream.clear();
-    log_stream << interface_name << " Redirection table: ";
-    for (auto entry : kLocalRedirTable) {
-        log_stream << std::dec << entry << " ";
-    }
-    log_stream << std::endl;
-    LOG(INFO) << log_stream.str();
-
     // Create UDS socket and get the umem_id.
     static std::once_flag flag_once;
     std::call_once(flag_once, [interface_name, num_frames]() {
@@ -900,6 +969,7 @@ Endpoint::Endpoint(const char *interface_name, int num_queues,
             queue_id, channel_vec_[queue_id], local_ip_str_, local_mac_str_));
         engine_th_vec_.emplace_back(std::make_unique<std::thread>(
             [engine_ptr = engine_vec_.back().get(), engine_cpu_id]() {
+                LOG(INFO) << "Engine thread " << engine_cpu_id;
                 pin_thread_to_cpu(engine_cpu_id);
                 engine_ptr->run();
             }));
@@ -1030,10 +1100,23 @@ ConnID Endpoint::uccl_connect(std::string remote_ip) {
     ret = read(bootstrap_fd, &remote_engine_idx, sizeof(uint32_t));
     DCHECK(ret == sizeof(uint32_t));
 
-    sync_rss_config(bootstrap_fd);
-
-    install_flow_on_engine(remote_ip, remote_mac, remote_engine_idx,
+    std::vector<uint16_t> dst_ports;
+    install_flow_on_engine(remote_ip, remote_mac, remote_engine_idx, &dst_ports,
                            conn_id.flow_id, conn_id.engine_idx);
+    LOG(INFO) << "dst_ports size: " << dst_ports.size();
+
+    // send the dst_ports back to the server
+    ret = write(bootstrap_fd, dst_ports.data(),
+                UcclFlow::kPortEntropy * sizeof(uint16_t));
+
+    std::vector<uint16_t> recvd_dst_ports;
+    recvd_dst_ports.resize(UcclFlow::kPortEntropy);
+    ret = read(bootstrap_fd, recvd_dst_ports.data(),
+               UcclFlow::kPortEntropy * sizeof(uint16_t));
+    LOG(INFO) << "recvd_dst_ports size: " << recvd_dst_ports.size();
+
+    install_dst_ports_on_flow(&recvd_dst_ports, conn_id.flow_id,
+                              conn_id.engine_idx);
 
     LOG(INFO) << "Connect FlowID " << std::hex << "0x" << conn_id.flow_id
               << " : " << local_ip_str_ << Format("(%d)", conn_id.engine_idx)
@@ -1124,10 +1207,23 @@ std::tuple<ConnID, std::string> Endpoint::uccl_accept() {
     ret = read(bootstrap_fd, &remote_engine_idx, sizeof(uint32_t));
     DCHECK(ret == sizeof(uint32_t));
 
-    sync_rss_config(bootstrap_fd);
-
-    install_flow_on_engine(remote_ip, remote_mac, remote_engine_idx,
+    std::vector<uint16_t> dst_ports;
+    install_flow_on_engine(remote_ip, remote_mac, remote_engine_idx, &dst_ports,
                            conn_id.flow_id, conn_id.engine_idx);
+    LOG(INFO) << "dst_ports size: " << dst_ports.size();
+
+    // send the dst_ports back to the server
+    ret = write(bootstrap_fd, dst_ports.data(),
+                UcclFlow::kPortEntropy * sizeof(uint16_t));
+
+    std::vector<uint16_t> recvd_dst_ports;
+    recvd_dst_ports.resize(UcclFlow::kPortEntropy);
+    ret = read(bootstrap_fd, recvd_dst_ports.data(),
+               UcclFlow::kPortEntropy * sizeof(uint16_t));
+    LOG(INFO) << "recvd_dst_ports size: " << recvd_dst_ports.size();
+
+    install_dst_ports_on_flow(&recvd_dst_ports, conn_id.flow_id,
+                              conn_id.engine_idx);
 
     LOG(INFO) << "Accept FlowID " << std::hex << "0x" << conn_id.flow_id
               << " : " << local_ip_str_ << Format("(%d)", conn_id.engine_idx)
@@ -1217,6 +1313,7 @@ inline void Endpoint::fence_and_clean_ctx(PollCtx *ctx) {
 void Endpoint::install_flow_on_engine(const std::string remote_ip,
                                       const std::string remote_mac,
                                       const uint32_t remote_engine_idx,
+                                      std::vector<uint16_t> *dst_ports,
                                       FlowID flow_id, int engine_idx) {
     auto *poll_ctx = new PollCtx();
     Channel::CtrlMsg ctrl_msg = {
@@ -1224,9 +1321,32 @@ void Endpoint::install_flow_on_engine(const std::string remote_ip,
         .flow_id = flow_id,
         .remote_addr = htonl(str_to_ip(remote_ip)),
         .remote_engine_idx = remote_engine_idx,
+        .dst_ports = dst_ports,
         .poll_ctx = poll_ctx,
     };
     str_to_mac(remote_mac, ctrl_msg.remote_l2_addr);
+    while (jring_mp_enqueue_bulk(channel_vec_[engine_idx]->ctrl_cmdq_,
+                                 &ctrl_msg, 1, nullptr) != 1);
+
+    // Wait until the flow has been installed on the engine.
+    {
+        std::unique_lock<std::mutex> lock(poll_ctx->mu);
+        poll_ctx->cv.wait(lock, [poll_ctx] { return poll_ctx->done.load(); });
+    }
+    delete poll_ctx;
+};
+
+void Endpoint::install_dst_ports_on_flow(std::vector<uint16_t> *dst_ports,
+                                         FlowID flow_id, int engine_idx) {
+    auto *poll_ctx = new PollCtx();
+    Channel::CtrlMsg ctrl_msg = {
+        .opcode = Channel::CtrlMsg::Op::kDstportInstall,
+        .flow_id = flow_id,
+        .remote_addr = UINT32_MAX,
+        .remote_engine_idx = UINT32_MAX,
+        .dst_ports = dst_ports,
+        .poll_ctx = poll_ctx,
+    };
     while (jring_mp_enqueue_bulk(channel_vec_[engine_idx]->ctrl_cmdq_,
                                  &ctrl_msg, 1, nullptr) != 1);
 
@@ -1246,29 +1366,6 @@ inline int Endpoint::find_least_loaded_engine_idx_and_update() {
         std::min_element(engine_load_vec_.begin(), engine_load_vec_.end());
     *minElementIter += 1;
     return std::distance(engine_load_vec_.begin(), minElementIter);
-}
-
-inline void Endpoint::sync_rss_config(int bootstrap_fd) {
-    std::unique_lock<std::shared_mutex> lock(rss_mu_);
-
-    size_t rsskey_size = kLocalRssKey.size();
-    int ret = write(bootstrap_fd, &rsskey_size, sizeof(size_t));
-    size_t redirtable_size = kLocalRedirTable.size();
-    ret = write(bootstrap_fd, &redirtable_size, sizeof(size_t));
-
-    ret = write(bootstrap_fd, kLocalRssKey.data(),
-                kLocalRssKey.size() * sizeof(uint8_t));
-    ret = write(bootstrap_fd, kLocalRedirTable.data(),
-                kLocalRedirTable.size() * sizeof(uint32_t));
-
-    ret = read(bootstrap_fd, &rsskey_size, sizeof(size_t));
-    ret = read(bootstrap_fd, &redirtable_size, sizeof(size_t));
-    kRemoteRssKey.resize(rsskey_size);
-    kRemoteRedirTable.resize(redirtable_size);
-    ret =
-        read(bootstrap_fd, kRemoteRssKey.data(), rsskey_size * sizeof(uint8_t));
-    ret = read(bootstrap_fd, kRemoteRedirTable.data(),
-               redirtable_size * sizeof(uint32_t));
 }
 
 }  // namespace uccl

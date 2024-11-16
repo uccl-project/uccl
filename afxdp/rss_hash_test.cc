@@ -22,11 +22,12 @@ int main() {
     bool res = get_rss_config(DEV_DEFAULT, redir_table, rss_key);
     DCHECK(res);
 
-    // uint32_t rss_hash =
-    //     calculate_rss_hash(src_ip, dst_ip, src_port, dst_port, default_rss_key);
-    // CHECK_EQ(rss_hash, 0x51ccc178);
+    uint32_t rss_hash =
+        calculate_rss_hash(src_ip, dst_ip, src_port, dst_port, default_rss_key);
+    CHECK_EQ(rss_hash, 0x51ccc178);
 
-    calculate_queue_id(src_ip, dst_ip, src_port, dst_port, default_rss_key, redir_table);
+    calculate_queue_id(src_ip, dst_ip, src_port, dst_port, default_rss_key,
+                       redir_table);
 
     std::cout << "RSS key: ";
     for (auto byte : rss_key) {
@@ -43,18 +44,26 @@ int main() {
     std::vector<uint8_t> rss_key_le;
     rss_key_le.resize(rss_key.size());
     rte_convert_rss_key((const uint32_t*)rss_key.data(),
-                        (uint32_t*)rss_key_le.data(),
-                        rss_key.size() * sizeof(uint8_t));
+                        (uint32_t*)rss_key_le.data(), rss_key.size());
 
-    dst_ip = 0xc0a80602;  // 192.168.6.2
+    std::cout << "RSS key le: ";
+    for (auto byte : rss_key_le) {
+        std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)byte;
+    }
+    std::cout << std::endl;
+
     src_ip = 0xc0a80601;  // 192.168.6.1
-    dst_port = 40000;
-    src_port = 40000;
+    dst_ip = 0xc0a80602;  // 192.168.6.2
+    src_port = BASE_PORT;
+    dst_port = BASE_PORT;
 
-    for (; dst_port < 41024; dst_port++) {
+    for (int i = BASE_PORT; i < BASE_PORT + 128; i++) {
+        dst_port = i;
+        src_port = src_port;
+        dst_port = dst_port;
         uint32_t queue_id = calculate_queue_id(src_ip, dst_ip, src_port,
-                                               dst_port, rss_key_le, redir_table);
-        std::cout << "dst_port " << dst_port << " Queue ID " << queue_id
+                                               dst_port, rss_key, redir_table);
+        std::cout << std::dec << "dst_port " << i << " Queue ID " << queue_id
                   << std::endl;
     }
 
@@ -62,7 +71,7 @@ int main() {
 
     std::vector<uint16_t> dst_ports;
     res = get_dst_ports_with_target_queueid(src_ip, dst_ip, src_port, queue_id,
-                                            rss_key_le, redir_table, 1024,
+                                            rss_key, redir_table, 1024,
                                             dst_ports);
 
     std::cout << "Destination ports: ";

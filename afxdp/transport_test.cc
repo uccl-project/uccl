@@ -74,16 +74,19 @@ int main(int argc, char* argv[]) {
         DCHECK(FLAGS_serverip != "");
         auto conn_id = ep.uccl_connect(FLAGS_serverip);
         ConnID conn_id2;
+        ConnID conn_id3;
         if (test_type == kMc) {
             conn_id2 = ep.uccl_connect(FLAGS_serverip);
         } else if (test_type == kMq) {
             conn_id2 = ep.uccl_connect(FLAGS_serverip);
+            conn_id3 = ep.uccl_connect(FLAGS_serverip);
         }
 
         size_t send_len = kTestMsgSize, recv_len = kTestMsgSize;
         auto* data = new uint8_t[kTestMsgSize];
         auto* data_u64 = reinterpret_cast<uint64_t*>(data);
         auto* data2 = new uint8_t[kTestMsgSize];
+        auto* data3 = new uint8_t[kTestMsgSize];
 
         size_t sent_bytes = 0;
         std::vector<uint64_t> rtts;
@@ -159,12 +162,14 @@ int main(int argc, char* argv[]) {
                     break;
                 }
                 case kMq: {
-                    PollCtx *poll_ctx1, *poll_ctx2;
+                    PollCtx *poll_ctx1, *poll_ctx2, *poll_ctx3;
                     poll_ctx1 = ep.uccl_send_async(conn_id, data, send_len);
                     poll_ctx2 = ep.uccl_send_async(conn_id2, data2, send_len);
+                    poll_ctx3 = ep.uccl_send_async(conn_id3, data3, send_len);
                     ep.uccl_poll(poll_ctx1);
                     ep.uccl_poll(poll_ctx2);
-                    sent_bytes += send_len * 2;
+                    ep.uccl_poll(poll_ctx3);
+                    sent_bytes += send_len * 3;
                     break;
                 }
                 default:
@@ -206,16 +211,19 @@ int main(int argc, char* argv[]) {
         // pin_thread_to_cpu(ENGINE_CPU_START + 1);
         auto [conn_id, _] = ep.uccl_accept();
         ConnID conn_id2;
+        ConnID conn_id3;
         if (test_type == kMc) {
             std::tie(conn_id2, std::ignore) = ep.uccl_accept();
         } else if (test_type == kMq) {
             std::tie(conn_id2, std::ignore) = ep.uccl_accept();
+            std::tie(conn_id3, std::ignore) = ep.uccl_accept();
         }
 
         size_t send_len = kTestMsgSize, recv_len = kTestMsgSize;
         auto* data = new uint8_t[kTestMsgSize];
         auto* data_u64 = reinterpret_cast<uint64_t*>(data);
         auto* data2 = new uint8_t[kTestMsgSize];
+        auto* data3 = new uint8_t[kTestMsgSize];
 
         for (int i = 0; i < kTestIters; i++) {
             send_len = kTestMsgSize;
@@ -281,11 +289,13 @@ int main(int argc, char* argv[]) {
                     break;
                 }
                 case kMq: {
-                    PollCtx *poll_ctx1, *poll_ctx2;
+                    PollCtx *poll_ctx1, *poll_ctx2, *poll_ctx3;
                     poll_ctx1 = ep.uccl_recv_async(conn_id, data, &recv_len);
                     poll_ctx2 = ep.uccl_recv_async(conn_id2, data2, &recv_len);
+                    poll_ctx3 = ep.uccl_recv_async(conn_id3, data3, &recv_len);
                     ep.uccl_poll(poll_ctx1);
                     ep.uccl_poll(poll_ctx2);
+                    ep.uccl_poll(poll_ctx3);
                     break;
                 }
                 default:

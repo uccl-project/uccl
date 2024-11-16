@@ -99,14 +99,13 @@ inline bool get_rss_config(const std::string& interface_name,
     return true;
 }
 
-inline void rte_convert_rss_key(const uint32_t* orig, uint32_t* targ,
-                                       int len) {
+inline void rte_convert_rss_key(const uint32_t* orig, uint32_t* targ, int len) {
     int i;
     for (i = 0; i < (len >> 2); i++) targ[i] = __builtin_bswap32(orig[i]);
 }
 
 inline uint32_t rte_softrss(uint32_t* input_tuple, uint32_t input_len,
-                                   const uint8_t* rss_key) {
+                            const uint8_t* rss_key) {
     uint32_t i, j, map, ret = 0;
 
     for (j = 0; j < input_len; j++) {
@@ -131,16 +130,20 @@ struct rte_ipv4_tuple {
 
 constexpr int RTE_THASH_V4_L4_LEN = ((sizeof(struct rte_ipv4_tuple)) / 4);
 
-// Why separate this function from calculate_queue_id will give wrong results?
 inline uint32_t calculate_rss_hash(uint32_t src_ip, uint32_t dst_ip,
                                    uint16_t src_port, uint16_t dst_port,
                                    const std::vector<uint8_t>& rss_key) {
-    struct rte_ipv4_tuple tuple = {
-        .src_addr = src_ip,
-        .dst_addr = dst_ip,
-        .dport = dst_port,
-        .sport = src_port,
-    };
+    // TODO(yang): Why using struct will given a wrong and inconsistent result?
+    // struct rte_ipv4_tuple tuple = {
+    //     .src_addr = src_ip,
+    //     .dst_addr = dst_ip,
+    //     .dport = dst_port,
+    //     .sport = src_port,
+    // };
+    uint32_t tuple[RTE_THASH_V4_L4_LEN];
+    tuple[0] = src_ip;
+    tuple[1] = dst_ip;
+    tuple[2] = (uint32_t)dst_port | ((uint32_t)src_port << 16);
     return rte_softrss((uint32_t*)&tuple, RTE_THASH_V4_L4_LEN, rss_key.data());
 }
 
@@ -149,19 +152,9 @@ inline uint32_t calculate_queue_id(uint32_t src_ip, uint32_t dst_ip,
                                    uint16_t src_port, uint16_t dst_port,
                                    const std::vector<uint8_t>& rss_key,
                                    const std::vector<uint32_t>& redir_table) {
-    struct rte_ipv4_tuple tuple = {
-        .src_addr = src_ip,
-        .dst_addr = dst_ip,
-        .dport = dst_port,
-        .sport = src_port,
-    };
-
     // Step 1: Calculate the RSS hash
-    uint32_t rss_hash =
-        rte_softrss((uint32_t*)&tuple, RTE_THASH_V4_L4_LEN, rss_key.data());
-    // auto rss_hash =
-    //     calculate_rss_hash(src_ip, dst_ip, src_port, dst_port, rss_key);
-    LOG(INFO) << "RSS hash: " << std::hex << rss_hash;
+    auto rss_hash =
+        calculate_rss_hash(src_ip, dst_ip, src_port, dst_port, rss_key);
 
     // Step 2: Map the hash to the redirection table
     uint32_t queue_id = redir_table[rss_hash % redir_table.size()];
@@ -187,12 +180,5 @@ inline bool get_dst_ports_with_target_queueid(
     }
     return false;
 }
-
-// TODO(yang): maintain per-interface RSS configuration
-static inline std::shared_mutex rss_mu_;
-static inline std::vector<uint32_t> kLocalRedirTable;
-static inline std::vector<uint8_t> kLocalRssKey;
-static inline std::vector<uint32_t> kRemoteRedirTable;
-static inline std::vector<uint8_t> kRemoteRssKey;
 
 }  // namespace uccl
