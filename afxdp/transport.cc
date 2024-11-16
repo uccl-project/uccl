@@ -1104,6 +1104,7 @@ ConnID Endpoint::uccl_connect(std::string remote_ip) {
     install_flow_on_engine(remote_ip, remote_mac, remote_engine_idx, &dst_ports,
                            conn_id.flow_id, conn_id.engine_idx);
     LOG(INFO) << "dst_ports size: " << dst_ports.size();
+    DCHECK_GE(dst_ports.size(), UcclFlow::kPortEntropy);
 
     // send the dst_ports back to the server
     ret = write(bootstrap_fd, dst_ports.data(),
@@ -1211,6 +1212,7 @@ std::tuple<ConnID, std::string> Endpoint::uccl_accept() {
     install_flow_on_engine(remote_ip, remote_mac, remote_engine_idx, &dst_ports,
                            conn_id.flow_id, conn_id.engine_idx);
     LOG(INFO) << "dst_ports size: " << dst_ports.size();
+    DCHECK_GE(dst_ports.size(), UcclFlow::kPortEntropy);
 
     // send the dst_ports back to the server
     ret = write(bootstrap_fd, dst_ports.data(),

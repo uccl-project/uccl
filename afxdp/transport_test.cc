@@ -58,6 +58,7 @@ int main(int argc, char* argv[]) {
         test_type = kMc;
     } else if (FLAGS_test == "mq") {
         test_type = kMq;
+        kReportIters /= kMaxInflight;
     } else {
         LOG(FATAL) << "Unknown test type: " << FLAGS_test;
     }
@@ -74,23 +75,23 @@ int main(int argc, char* argv[]) {
         DCHECK(FLAGS_serverip != "");
         auto conn_id = ep.uccl_connect(FLAGS_serverip);
         ConnID conn_id2;
-        ConnID conn_id3;
+        ConnID conn_id_vec[NUM_QUEUES];
         if (test_type == kMc) {
             conn_id2 = ep.uccl_connect(FLAGS_serverip);
         } else if (test_type == kMq) {
-            conn_id2 = ep.uccl_connect(FLAGS_serverip);
-            conn_id3 = ep.uccl_connect(FLAGS_serverip);
+            conn_id_vec[0] = conn_id;
+            for (int i = 1; i < NUM_QUEUES; i++)
+                conn_id_vec[i] = ep.uccl_connect(FLAGS_serverip);
         }
 
         size_t send_len = kTestMsgSize, recv_len = kTestMsgSize;
         auto* data = new uint8_t[kTestMsgSize];
         auto* data_u64 = reinterpret_cast<uint64_t*>(data);
         auto* data2 = new uint8_t[kTestMsgSize];
-        auto* data3 = new uint8_t[kTestMsgSize];
 
         size_t sent_bytes = 0;
         std::vector<uint64_t> rtts;
-        auto start_bw = std::chrono::high_resolution_clock::now();
+        auto start_bw_mea = std::chrono::high_resolution_clock::now();
 
         for (int i = 0; i < kTestIters; i++) {
             send_len = kTestMsgSize;
@@ -162,14 +163,18 @@ int main(int argc, char* argv[]) {
                     break;
                 }
                 case kMq: {
-                    PollCtx *poll_ctx1, *poll_ctx2, *poll_ctx3;
-                    poll_ctx1 = ep.uccl_send_async(conn_id, data, send_len);
-                    poll_ctx2 = ep.uccl_send_async(conn_id2, data2, send_len);
-                    poll_ctx3 = ep.uccl_send_async(conn_id3, data3, send_len);
-                    ep.uccl_poll(poll_ctx1);
-                    ep.uccl_poll(poll_ctx2);
-                    ep.uccl_poll(poll_ctx3);
-                    sent_bytes += send_len * 3;
+                    std::vector<PollCtx*> poll_ctxs;
+                    for (int j = 0; j < NUM_QUEUES; j++) {
+                        for (int k = 0; k < kMaxInflight; k++) {
+                            auto poll_ctx = ep.uccl_send_async(conn_id_vec[j],
+                                                               data, send_len);
+                            poll_ctxs.push_back(poll_ctx);
+                        }
+                    }
+                    for (auto poll_ctx : poll_ctxs) {
+                        ep.uccl_poll(poll_ctx);
+                        sent_bytes += send_len;
+                    }
                     break;
                 }
                 default:
@@ -182,27 +187,27 @@ int main(int argc, char* argv[]) {
 
             rtts.push_back(duration_us.count());
             if (i % kReportIters == 0 && i != 0) {
+                auto end_bw_mea = std::chrono::high_resolution_clock::now();
                 uint64_t med_latency, tail_latency;
                 med_latency = Percentile(rtts, 50);
                 tail_latency = Percentile(rtts, 99);
-                auto end_bw = std::chrono::high_resolution_clock::now();
                 // 24B: 4B FCS + 8B frame delimiter + 12B interframe gap
                 auto bw_gbps =
                     sent_bytes *
-                    (AFXDP_MTU * 1.0 /
-                     (AFXDP_MTU - kNetHdrLen - kUcclHdrLen - 24)) *
+                    ((AFXDP_MTU * 1.0 + 24) /
+                     (AFXDP_MTU - kNetHdrLen - kUcclHdrLen)) *
                     8.0 / 1024 / 1024 / 1024 /
                     (std::chrono::duration_cast<std::chrono::microseconds>(
-                         end_bw - start_bw)
+                         end_bw_mea - start_bw_mea)
                          .count() *
                      1e-6);
                 sent_bytes = 0;
-                start_bw = end_bw;
 
                 LOG(INFO) << "Sent " << i
                           << " messages, med rtt: " << med_latency
                           << " us, tail rtt: " << tail_latency << " us, bw "
                           << bw_gbps << " Gbps";
+                start_bw_mea = std::chrono::high_resolution_clock::now();
             }
         }
     } else {
@@ -211,19 +216,19 @@ int main(int argc, char* argv[]) {
         // pin_thread_to_cpu(ENGINE_CPU_START + 1);
         auto [conn_id, _] = ep.uccl_accept();
         ConnID conn_id2;
-        ConnID conn_id3;
+        ConnID conn_id_vec[NUM_QUEUES];
         if (test_type == kMc) {
             std::tie(conn_id2, std::ignore) = ep.uccl_accept();
         } else if (test_type == kMq) {
-            std::tie(conn_id2, std::ignore) = ep.uccl_accept();
-            std::tie(conn_id3, std::ignore) = ep.uccl_accept();
+            conn_id_vec[0] = conn_id;
+            for (int i = 1; i < NUM_QUEUES; i++)
+                std::tie(conn_id_vec[i], std::ignore) = ep.uccl_accept();
         }
 
         size_t send_len = kTestMsgSize, recv_len = kTestMsgSize;
         auto* data = new uint8_t[kTestMsgSize];
         auto* data_u64 = reinterpret_cast<uint64_t*>(data);
         auto* data2 = new uint8_t[kTestMsgSize];
-        auto* data3 = new uint8_t[kTestMsgSize];
 
         for (int i = 0; i < kTestIters; i++) {
             send_len = kTestMsgSize;
@@ -289,13 +294,17 @@ int main(int argc, char* argv[]) {
                     break;
                 }
                 case kMq: {
-                    PollCtx *poll_ctx1, *poll_ctx2, *poll_ctx3;
-                    poll_ctx1 = ep.uccl_recv_async(conn_id, data, &recv_len);
-                    poll_ctx2 = ep.uccl_recv_async(conn_id2, data2, &recv_len);
-                    poll_ctx3 = ep.uccl_recv_async(conn_id3, data3, &recv_len);
-                    ep.uccl_poll(poll_ctx1);
-                    ep.uccl_poll(poll_ctx2);
-                    ep.uccl_poll(poll_ctx3);
+                    std::vector<PollCtx*> poll_ctxs;
+                    for (int j = 0; j < NUM_QUEUES; j++) {
+                        for (int k = 0; k < kMaxInflight; k++) {
+                            auto poll_ctx = ep.uccl_recv_async(conn_id_vec[j],
+                                                               data, &recv_len);
+                            poll_ctxs.push_back(poll_ctx);
+                        }
+                    }
+                    for (auto poll_ctx : poll_ctxs) {
+                        ep.uccl_poll(poll_ctx);
+                    }
                     break;
                 }
                 default:
