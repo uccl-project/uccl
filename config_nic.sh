@@ -3,10 +3,11 @@
 # Can only use half of the queue, per ENA implementation: https://github.com/amzn/amzn-drivers/issues/240
 NIC=$1
 NQUEUE=$2
-MTU=$3
-MODE=$4
-PLATFORM=$5
-echo "configuring ${NIC} with ${NQUEUE} queues and ${MTU} MTU for ${MODE}"
+NIRQCORE=$3
+MTU=$4
+MODE=$5
+PLATFORM=$6
+echo "configuring ${NIC} with ${NQUEUE} nic queues ${NIRQCORE} irq cores ${MTU} MTU for ${MODE} on ${PLATFORM}"
 
 echo "unloading any xdp programs"
 sudo /opt/uccl/lib/xdp-tools/xdp-loader/xdp-loader unload ${NIC} --all
@@ -40,15 +41,15 @@ else
 fi
 
 ncpu=$(nproc)
-start_cpu=$((ncpu/2))
+irq_start_cpu=$((ncpu / 2))
 (
     let cnt=0
     cd /sys/class/net/${NIC}/device/msi_irqs/
     IRQs=(*)
     # Exclude the first IRQ, which is for the control plane
     for IRQ in "${IRQs[@]:1}"; do
-        let CPU=$(((cnt + start_cpu) % ncpu))
-        let cnt=$(((cnt + 1) % NQUEUE))
+        let CPU=$(((cnt + irq_start_cpu) % ncpu))
+        let cnt=$(((cnt + 1) % NIRQCORE))
         echo $IRQ '->' $CPU
         echo $CPU | sudo tee /proc/irq/$IRQ/smp_affinity_list >/dev/null
     done

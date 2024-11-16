@@ -8,10 +8,10 @@
 
 static const uint32_t RECV_BATCH_SIZE = 32;
 static const uint32_t SEND_BATCH_SIZE = 32;
-static const uint32_t NUM_QUEUES = 2;
+static const uint32_t NUM_QUEUES = 8;
 static const uint64_t NUM_FRAMES = 4096 * 64;  // 1GB frame pool
 static const uint32_t ENGINE_CPU_START = 0;
-static const uint16_t BASE_PORT = 40000;
+static const uint16_t BASE_PORT = 10000;
 
 #if !defined(AWS_ENA) && !defined(CLOUDLAB_MLX5)
 #define CLOUDLAB_MLX5
