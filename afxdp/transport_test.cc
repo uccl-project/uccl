@@ -5,15 +5,16 @@
 #include <signal.h>
 
 #include <chrono>
+#include <deque>
 #include <thread>
 
 #include "transport_config.h"
 
 using namespace uccl;
 
-const size_t kTestMsgSize = 1024000;
-const size_t kTestIters = 1024000000;
+size_t kTestMsgSize = 1024000;
 size_t kReportIters = 1000;
+const size_t kTestIters = 1024000000;
 const size_t kMaxInflight = 8;
 
 DEFINE_bool(client, false, "Whether this is a client sending traffic.");
@@ -58,6 +59,8 @@ int main(int argc, char* argv[]) {
         test_type = kMc;
     } else if (FLAGS_test == "mq") {
         test_type = kMq;
+        kTestMsgSize /= 8;
+        kReportIters *= 8;
         kReportIters /= kMaxInflight;
     } else {
         LOG(FATAL) << "Unknown test type: " << FLAGS_test;
@@ -93,6 +96,7 @@ int main(int argc, char* argv[]) {
         std::vector<uint64_t> rtts;
         auto start_bw_mea = std::chrono::high_resolution_clock::now();
 
+        std::deque<PollCtx*> poll_ctxs;
         for (int i = 0; i < kTestIters; i++) {
             send_len = kTestMsgSize;
             if (FLAGS_rand) send_len = distribution(generator);
@@ -163,7 +167,6 @@ int main(int argc, char* argv[]) {
                     break;
                 }
                 case kMq: {
-                    std::vector<PollCtx*> poll_ctxs;
                     for (int j = 0; j < NUM_QUEUES; j++) {
                         for (int k = 0; k < kMaxInflight; k++) {
                             auto poll_ctx = ep.uccl_send_async(conn_id_vec[j],
@@ -171,7 +174,13 @@ int main(int argc, char* argv[]) {
                             poll_ctxs.push_back(poll_ctx);
                         }
                     }
-                    for (auto poll_ctx : poll_ctxs) {
+                    // for (auto poll_ctx : poll_ctxs) {
+                    //     ep.uccl_poll(poll_ctx);
+                    //     sent_bytes += send_len;
+                    // }
+                    while (poll_ctxs.size() > kMaxInflight * NUM_QUEUES) {
+                        auto poll_ctx = poll_ctxs.front();
+                        poll_ctxs.pop_front();
                         ep.uccl_poll(poll_ctx);
                         sent_bytes += send_len;
                     }
@@ -230,6 +239,7 @@ int main(int argc, char* argv[]) {
         auto* data_u64 = reinterpret_cast<uint64_t*>(data);
         auto* data2 = new uint8_t[kTestMsgSize];
 
+        std::deque<PollCtx*> poll_ctxs;
         for (int i = 0; i < kTestIters; i++) {
             send_len = kTestMsgSize;
             if (FLAGS_rand) send_len = distribution(generator);
@@ -294,7 +304,6 @@ int main(int argc, char* argv[]) {
                     break;
                 }
                 case kMq: {
-                    std::vector<PollCtx*> poll_ctxs;
                     for (int j = 0; j < NUM_QUEUES; j++) {
                         for (int k = 0; k < kMaxInflight; k++) {
                             auto poll_ctx = ep.uccl_recv_async(conn_id_vec[j],
@@ -302,7 +311,12 @@ int main(int argc, char* argv[]) {
                             poll_ctxs.push_back(poll_ctx);
                         }
                     }
-                    for (auto poll_ctx : poll_ctxs) {
+                    // for (auto poll_ctx : poll_ctxs) {
+                    //     ep.uccl_poll(poll_ctx);
+                    // }
+                    while (poll_ctxs.size() > kMaxInflight * NUM_QUEUES) {
+                        auto poll_ctx = poll_ctxs.front();
+                        poll_ctxs.pop_front();
                         ep.uccl_poll(poll_ctx);
                     }
                     break;

@@ -638,18 +638,17 @@ class Endpoint {
     std::string local_mac_str_;
 
     int num_queues_;
-    Channel **channel_vec_;
+    Channel *channel_vec_[NUM_QUEUES];
     std::vector<std::unique_ptr<UcclEngine>> engine_vec_;
     std::vector<std::unique_ptr<std::thread>> engine_th_vec_;
 
     int listen_fd_;
     // Mapping from unique flow_id to the boostrap fd.
-    std::mutex boostrap_fd_map_mu_;
-    std::unordered_map<FlowID, int> boostrap_fd_map_;
+    std::mutex bootstrap_fd_map_mu_;
+    std::unordered_map<FlowID, int> bootstrap_fd_map_;
 
     // Number of flows on each engine, indexed by engine_idx.
     std::mutex engine_load_vec_mu_;
-    // TODO(yang): get rid of dependency on NUM_QUEUES.
     std::array<int, NUM_QUEUES> engine_load_vec_ = {0};
 
     SharedPool<PollCtx *, true> *ctx_pool_;
@@ -681,6 +680,8 @@ class Endpoint {
     bool uccl_poll_once(PollCtx *ctx);
 
    private:
+    ConnID exchange_info_and_finish_setup(int bootstrap_fd, FlowID flow_id,
+                                          std::string remote_ip);
     inline void fence_and_clean_ctx(PollCtx *ctx);
     void install_flow_on_engine(const std::string remote_ip,
                                 const std::string remote_mac,
