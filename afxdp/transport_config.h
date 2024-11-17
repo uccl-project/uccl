@@ -8,7 +8,7 @@
 
 static const uint32_t RECV_BATCH_SIZE = 32;
 static const uint32_t SEND_BATCH_SIZE = 32;
-static const uint32_t NUM_QUEUES = 8;
+static const uint32_t NUM_QUEUES = 1;
 static const uint64_t NUM_FRAMES = 4096 * 64;  // 1GB frame pool
 static const uint32_t ENGINE_CPU_START = 0;
 static const uint16_t BASE_PORT = 10000;
@@ -20,7 +20,8 @@ static const uint16_t BASE_PORT = 10000;
 #ifdef AWS_ENA
 // On AWS ENA (eg, c5, g4dn)
 static const uint32_t AFXDP_MTU = 3498;
-static const char* DEV_DEFAULT = "ens6";
+// static const char* DEV_DEFAULT = "ens6";
+static const char* DEV_DEFAULT = "enp199s0";
 #elif defined(CLOUDLAB_MLX5)
 // On Cloudlab (xl170-ubuntu24-v6.8 profile)
 static const uint32_t AFXDP_MTU = 1500;

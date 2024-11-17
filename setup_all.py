@@ -7,8 +7,10 @@ import argparse
 import os
 
 core_count = os.cpu_count()
-num_queues = 8
+num_queues = 1
 num_irqcores = int(num_queues)
+# dev = "ens6"
+dev = "enp199s0"
 
 make_macro_mapping = {
     "aws_afxdp": "AWS_ENA",
@@ -18,9 +20,9 @@ make_macro_mapping = {
 }
 
 config_nic_cmd_mapping = {
-    "aws_afxdp": f"./config_nic.sh ens6 {num_queues} {num_irqcores} 3498 afxdp aws",
+    "aws_afxdp": f"./config_nic.sh {dev} {num_queues} {num_irqcores} 3498 afxdp aws",
     "cloudlab_afxdp": f"./config_nic.sh ens1f1np1 {num_queues} {num_irqcores} 1500 afxdp cloudlab",
-    "aws_tcp": f"./config_nic.sh ens6 {core_count} {core_count} 9001 tcp aws",
+    "aws_tcp": f"./config_nic.sh {dev} {core_count} {core_count} 9001 tcp aws",
     "cloudlab_tcp": f"./config_nic.sh ens1f1np1 {core_count} {core_count} 1500 tcp cloudlab",
 }
 
