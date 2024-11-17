@@ -258,7 +258,7 @@ std::string UcclFlow::to_string() const {
     return s;
 }
 
-void UcclFlow::rx_messages(std::vector<FrameBuf *> msgbufs) {
+void UcclFlow::rx_messages(std::vector<FrameBuf *> &msgbufs) {
     VLOG(3) << "Received " << msgbufs.size() << " packets";
     uint32_t num_data_frames_recvd = 0;
     bool ecn_recvd = false;
@@ -701,7 +701,6 @@ void UcclEngine::run() {
         // process_tx_msg(nullptr, nullptr, 0);
     }
 
-    std::lock_guard<std::mutex> lock(bootstrap_fd_map_mu_);
     for (auto &[flow_id, boostrap_id] : bootstrap_fd_map_) {
         close(boostrap_id);
     }
@@ -766,7 +765,7 @@ void UcclEngine::periodic_process() {
     process_ctl_reqs();
 }
 
-void UcclEngine::process_rx_msg(std::vector<FrameBuf *> msgbufs,
+void UcclEngine::process_rx_msg(std::vector<FrameBuf *> &msgbufs,
                                 FlowID flow_id) {
     // Yang: this only happens on aws instances with no guarantee net bw.
     if (active_flows_map_.find(flow_id) == active_flows_map_.end()) {
@@ -821,13 +820,9 @@ void UcclEngine::handle_uccl_connect_on_engine(Channel::CtrlMsg &ctrl_work) {
         VLOG(3) << "Connect: Proposed FlowID: " << std::hex << "0x" << flow_id;
 
         // Check if the flow ID is unique, and return it to the server.
-        bool unique;
-        {
-            std::lock_guard<std::mutex> lock(bootstrap_fd_map_mu_);
-            unique =
-                (bootstrap_fd_map_.find(flow_id) == bootstrap_fd_map_.end());
-            if (unique) bootstrap_fd_map_[flow_id] = bootstrap_fd;
-        }
+        bool unique =
+            (bootstrap_fd_map_.find(flow_id) == bootstrap_fd_map_.end());
+        if (unique) bootstrap_fd_map_[flow_id] = bootstrap_fd;
 
         ret = write(bootstrap_fd, &unique, sizeof(bool));
         DCHECK(ret == sizeof(bool));
@@ -856,17 +851,13 @@ void UcclEngine::handle_uccl_accept_on_engine(Channel::CtrlMsg &ctrl_work) {
     FlowID flow_id;
     while (true) {
         flow_id = U64Rand(0, std::numeric_limits<FlowID>::max());
-        bool unique;
-        {
-            std::lock_guard<std::mutex> lock(bootstrap_fd_map_mu_);
-            unique =
-                (bootstrap_fd_map_.find(flow_id) == bootstrap_fd_map_.end());
-            if (unique) {
-                // Speculatively insert the flow ID.
-                bootstrap_fd_map_[flow_id] = bootstrap_fd;
-            } else {
-                continue;
-            }
+        bool unique =
+            (bootstrap_fd_map_.find(flow_id) == bootstrap_fd_map_.end());
+        if (unique) {
+            // Speculatively insert the flow ID.
+            bootstrap_fd_map_[flow_id] = bootstrap_fd;
+        } else {
+            continue;
         }
 
         VLOG(3) << "Accept: Proposed FlowID: " << std::hex << "0x" << flow_id;
@@ -882,7 +873,6 @@ void UcclEngine::handle_uccl_accept_on_engine(Channel::CtrlMsg &ctrl_work) {
             break;
         } else {
             // Remove the speculatively inserted flow ID.
-            std::lock_guard<std::mutex> lock(bootstrap_fd_map_mu_);
             DCHECK(1 == bootstrap_fd_map_.erase(flow_id));
         }
     }
@@ -959,36 +949,60 @@ ConnID UcclEngine::exchange_info_and_finish_setup(int bootstrap_fd,
     }
     // TODO(yang): what if there is no enough dst_ports probed?
 
-    // Driving TCP packet processing.
-    socket_->populate_fill_queue(XSK_RING_PROD__DEFAULT_NUM_DESCS);
+    std::atomic<bool> done = false;
+    std::atomic_thread_fence(std::memory_order_release);
+    std::atomic_store_explicit(&done, false, std::memory_order_relaxed);
 
-    LOG(INFO) << "dst_ports size: " << local_dst_ports.size();
-    DCHECK_GE(local_dst_ports.size(), UcclFlow::kPortEntropy);
+    std::thread t([this, flow, &done, &local_dst_ports, &bootstrap_fd, &conn_id,
+                   &local_ip_str, &remote_ip, &remote_engine_idx]() {
+        std::ignore =
+            std::atomic_load_explicit(&done, std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_acquire);
 
-    LOG(INFO) << "install_flow1";
-    // send the local_dst_ports back to the server
-    std::vector<uint16_t> local_dst_ports_vec(local_dst_ports.begin(),
-                                              local_dst_ports.end());
-    ret = write(bootstrap_fd, local_dst_ports_vec.data(),
-                UcclFlow::kPortEntropy * sizeof(uint16_t));
+        LOG(INFO) << "dst_ports size: " << local_dst_ports.size();
+        DCHECK_GE(local_dst_ports.size(), UcclFlow::kPortEntropy);
 
-    LOG(INFO) << "install_flow2";
-    std::vector<uint16_t> recvd_dst_ports;
-    recvd_dst_ports.resize(UcclFlow::kPortEntropy);
-    ret = read(bootstrap_fd, recvd_dst_ports.data(),
-               UcclFlow::kPortEntropy * sizeof(uint16_t));
-    LOG(INFO) << "recvd_dst_ports size: " << recvd_dst_ports.size();
+        // send the local_dst_ports back to the server
+        std::vector<uint16_t> local_dst_ports_vec(local_dst_ports.begin(),
+                                                  local_dst_ports.end());
+        int ret = write(bootstrap_fd, local_dst_ports_vec.data(),
+                        UcclFlow::kPortEntropy * sizeof(uint16_t));
 
-    flow->dst_ports_.insert(flow->dst_ports_.end(), recvd_dst_ports.begin(),
-                            recvd_dst_ports.end());
+        std::vector<uint16_t> recvd_dst_ports;
+        recvd_dst_ports.resize(UcclFlow::kPortEntropy);
+        ret = read(bootstrap_fd, recvd_dst_ports.data(),
+                   UcclFlow::kPortEntropy * sizeof(uint16_t));
+        LOG(INFO) << "recvd_dst_ports size: " << recvd_dst_ports.size();
 
-    LOG(INFO) << "Connect FlowID " << std::hex << "0x" << conn_id.flow_id
-              << " : " << local_ip_str << Format("(%d)", conn_id.engine_idx)
-              << "<->" << remote_ip << Format("(%d)", remote_engine_idx);
+        flow->dst_ports_.insert(flow->dst_ports_.end(), recvd_dst_ports.begin(),
+                                recvd_dst_ports.end());
 
-    // Finally sync client and sender to make sure any incoming packets have
-    // found the flow installed; otherwise, SEGV may happen.
-    net_barrier(bootstrap_fd);
+        LOG(INFO) << "Connect FlowID " << std::hex << "0x" << conn_id.flow_id
+                  << " : " << local_ip_str << Format("(%d)", conn_id.engine_idx)
+                  << "<->" << remote_ip << Format("(%d)", remote_engine_idx);
+
+        // Finally sync client and sender to make sure any incoming packets have
+        // found the flow installed; otherwise, SEGV may happen.
+        net_barrier(bootstrap_fd);
+
+        std::atomic_thread_fence(std::memory_order_release);
+        std::atomic_store_explicit(&done, true, std::memory_order_relaxed);
+    });
+
+    do {
+        auto frames = socket_->recv_packets(RECV_BATCH_SIZE);
+        for (auto &frame : frames) {
+            auto *msgbuf = FrameBuf::Create(
+                frame.frame_offset, socket_->umem_buffer_, frame.frame_len);
+            auto *pkt_addr = msgbuf->get_pkt_addr();
+            auto *ucclh = reinterpret_cast<UcclPktHdr *>(pkt_addr + kNetHdrLen);
+            DCHECK(ucclh->net_flags == UcclPktHdr::UcclFlags::kRssProbe);
+            AFXDPFactory::push_frame(frame.frame_offset);
+        }
+    } while (!std::atomic_load_explicit(&done, std::memory_order_relaxed));
+    std::atomic_thread_fence(std::memory_order_acquire);
+
+    t.join();
 
     return conn_id;
 }

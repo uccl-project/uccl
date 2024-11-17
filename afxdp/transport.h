@@ -366,7 +366,7 @@ class UcclFlow {
      * @param app_buf Pointer to the application receiving buffer
      * @param app_buf_len Pointer to the application buffer length
      */
-    void rx_messages(std::vector<FrameBuf *> msgbufs);
+    void rx_messages(std::vector<FrameBuf *>& msgbufs);
 
     inline void rx_supply_app_buf(void *app_buf, size_t *app_buf_len,
                                   PollCtx *poll_ctx) {
@@ -559,7 +559,7 @@ class UcclEngine {
      * @param app_buf Pointer to the application receiving buffer.
      * @param app_buf_len Pointer to the length of the application buffer.
      */
-    void process_rx_msg(std::vector<FrameBuf *> msgbufs, FlowID flow_id);
+    void process_rx_msg(std::vector<FrameBuf *>& msgbufs, FlowID flow_id);
 
     /**
      * Process a message enqueued from an application to a channel.
@@ -596,7 +596,6 @@ class UcclEngine {
     uint32_t local_engine_idx_;
 
     // Mapping from unique (within this engine) flow_id to the boostrap fd.
-    std::mutex bootstrap_fd_map_mu_;
     std::unordered_map<FlowID, int> bootstrap_fd_map_;
 
     // AFXDP socket used for send/recv packets.

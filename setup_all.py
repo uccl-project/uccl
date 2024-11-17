@@ -7,7 +7,7 @@ import argparse
 import os
 
 core_count = os.cpu_count()
-num_queues = 1
+num_queues = 4
 num_irqcores = int(num_queues)
 aws_dev = "ens6"
 # aws_dev = "enp199s0"
