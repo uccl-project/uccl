@@ -934,15 +934,13 @@ ConnID UcclEngine::exchange_info_and_finish_setup(int bootstrap_fd,
     std::tie(std::ignore, ret) = active_flows_map_.insert({flow_id, flow});
     DCHECK(ret);
 
-    // Doing RSS probing to get a list of dst_port that matches remote engine
-    // queue.
-    std::vector<uint16_t> local_dst_ports;
+    // RSS probing to get a list of dst_port matching remote engine queue.
+    std::set<uint16_t> local_dst_ports;
     for (int i = BASE_PORT; i < 65536; i++) {
         uint16_t dst_port = i;
         auto frame = flow->craft_rssprobe_packet(dst_port);
         socket_->send_packet(frame);
 
-        // if ((i - BASE_PORT) % RECV_BATCH_SIZE == 0) {
         auto frames = socket_->recv_packets(RECV_BATCH_SIZE);
         for (auto &frame : frames) {
             auto *msgbuf = FrameBuf::Create(
@@ -955,19 +953,23 @@ ConnID UcclEngine::exchange_info_and_finish_setup(int bootstrap_fd,
             DCHECK(ucclh->net_flags == UcclPktHdr::UcclFlags::kRssProbe);
 
             // Probe packets successfully arrive this engine!
-            local_dst_ports.push_back(ntohs(udph->dest));
+            local_dst_ports.insert(ntohs(udph->dest));
             AFXDPFactory::push_frame(frame.frame_offset);
         }
-        // }
     }
     // TODO(yang): what if there is no enough dst_ports probed?
+
+    // Driving TCP packet processing.
+    socket_->populate_fill_queue(XSK_RING_PROD__DEFAULT_NUM_DESCS);
 
     LOG(INFO) << "dst_ports size: " << local_dst_ports.size();
     DCHECK_GE(local_dst_ports.size(), UcclFlow::kPortEntropy);
 
     LOG(INFO) << "install_flow1";
     // send the local_dst_ports back to the server
-    ret = write(bootstrap_fd, local_dst_ports.data(),
+    std::vector<uint16_t> local_dst_ports_vec(local_dst_ports.begin(),
+                                              local_dst_ports.end());
+    ret = write(bootstrap_fd, local_dst_ports_vec.data(),
                 UcclFlow::kPortEntropy * sizeof(uint16_t));
 
     LOG(INFO) << "install_flow2";
