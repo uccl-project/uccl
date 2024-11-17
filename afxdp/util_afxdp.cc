@@ -37,12 +37,6 @@ void AFXDPFactory::init(const char *interface_name, uint64_t num_frames,
     }
 
     afxdp_ctl.num_frames_ = num_frames;
-    // initialize frame allocator
-    afxdp_ctl.frame_pool_ = new SharedPool<uint64_t, /*Sync=*/true>(num_frames);
-    for (uint64_t j = 0; j < num_frames; j++) {
-        auto frame_offset = j * FRAME_SIZE + XDP_PACKET_HEADROOM;
-        push_frame(frame_offset);
-    }
 }
 
 AFXDPSocket *AFXDPFactory::CreateSocket(int queue_id) {
@@ -60,15 +54,6 @@ void AFXDPFactory::shutdown() {
         delete socket;
     }
     afxdp_ctl.socket_q_.clear();
-
-    delete afxdp_ctl.frame_pool_;
-}
-
-std::string AFXDPFactory::to_string() {
-    std::string s;
-    s += Format("\n\t[Global frame pool] free frames: %u\n",
-                afxdp_ctl.frame_pool_->size());
-    return s;
 }
 
 AFXDPSocket::AFXDPSocket(int queue_id)
@@ -174,6 +159,16 @@ int AFXDPSocket::create_afxdp_socket() {
     umem_size_ = afxdp_ctl.umem_size_;
     umem_buffer_ = afxdp_ctl.umem_buffer_;
 
+    // initialize frame allocator
+    uint64_t frame_pool_size = afxdp_ctl.num_frames_ / NUM_QUEUES;
+    frame_pool_ = new SharedPool<uint64_t, /*Sync=*/false>(frame_pool_size);
+    uint64_t frame_pool_offset = FRAME_SIZE * frame_pool_size * queue_id_;
+    for (uint64_t i = 0; i < frame_pool_size; i++) {
+        auto frame_offset =
+            i * FRAME_SIZE + XDP_PACKET_HEADROOM + frame_pool_offset;
+        push_frame(frame_offset);
+    }
+
     /* Get offsets for the following mmap */
     if (xsk_get_mmap_offsets(umem_fd_, &off)) {
         perror("xsk_get_mmap_offsets failed");
@@ -263,7 +258,7 @@ uint32_t AFXDPSocket::pull_complete_queue() {
             uint64_t frame_offset =
                 *xsk_ring_cons__comp_addr(&complete_queue_, idx_cq++);
             if (FrameBuf::is_txpulltime_free(frame_offset, umem_buffer_)) {
-                AFXDPFactory::push_frame(frame_offset);
+                push_frame(frame_offset);
                 /**
                  * Yang: I susspect this is a bug that AWS ENA driver will pull
                  * the same frame multiple times. A temp fix is we mark it as
@@ -355,8 +350,7 @@ void AFXDPSocket::populate_fill_queue(uint32_t nb_frames) {
     if (ret <= 0) return;
 
     for (int i = 0; i < ret; i++)
-        *xsk_ring_prod__fill_addr(&fill_queue_, idx_fq++) =
-            AFXDPFactory::pop_frame();
+        *xsk_ring_prod__fill_addr(&fill_queue_, idx_fq++) = pop_frame();
 
     fill_queue_entries_ += ret;
     VLOG(2) << "afxdp reserved fill_queue slots = " << ret
@@ -395,9 +389,9 @@ std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
 std::string AFXDPSocket::to_string() const {
     std::string s;
     s += Format(
-        "\n\t[AFXDPSocket] unpulled tx pkts: %u, fill queue "
+        "\n\t\t[AFXDP] free frames: %u, unpulled tx pkts: %u, fill queue "
         "entries: %u",
-        unpulled_tx_pkts_, fill_queue_entries_);
+        frame_pool_->size(), unpulled_tx_pkts_, fill_queue_entries_);
     return s;
 }
 
@@ -409,5 +403,8 @@ void AFXDPSocket::shutdown() {
     }
 }
 
-AFXDPSocket::~AFXDPSocket() { destroy_afxdp_socket(); }
+AFXDPSocket::~AFXDPSocket() {
+    destroy_afxdp_socket();
+    delete frame_pool_;
+}
 }  // namespace uccl

@@ -209,7 +209,7 @@ void socket_send(struct socket_t* socket, int queue_id) {
     std::vector<AFXDPSocket::frame_desc> frames;
     for (int i = 0; i < MY_SEND_BATCH_SIZE; i++) {
         // the 256B before frame_offset is xdp metedata
-        uint64_t frame_offset = AFXDPFactory::pop_frame();
+        uint64_t frame_offset = socket->afxdp_socket->pop_frame();
         uint8_t* packet =
             (uint8_t*)socket->afxdp_socket->umem_buffer_ + frame_offset;
         uint32_t frame_len = client_generate_packet(
@@ -259,7 +259,7 @@ void socket_recv(struct socket_t* socket, int queue_id) {
             std::lock_guard<std::mutex> lock(socket->rtts_lock);
             socket->rtts.push_back(rtt);
         }
-        AFXDPFactory::push_frame(frame_offset);
+        socket->afxdp_socket->push_frame(frame_offset);
     }
 }
 

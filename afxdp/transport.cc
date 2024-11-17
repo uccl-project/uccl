@@ -5,11 +5,12 @@ namespace uccl {
 void TXTracking::receive_acks(uint32_t num_acked_pkts) {
     VLOG(3) << "Received " << num_acked_pkts << " acks "
             << "num_tracked_msgbufs " << num_tracked_msgbufs_;
+    DCHECK_LE(num_acked_pkts, num_tracked_msgbufs_);
     while (num_acked_pkts) {
         auto msgbuf = oldest_unacked_msgbuf_;
         DCHECK(msgbuf != nullptr);
         // if (msgbuf != last_msgbuf_) {
-        if (num_tracked_msgbufs_ != 1) {
+        if (num_tracked_msgbufs_ > 1) {
             DCHECK_NE(oldest_unacked_msgbuf_, oldest_unsent_msgbuf_)
                 << "Releasing an unsent msgbuf!";
             oldest_unacked_msgbuf_ = msgbuf->next();
@@ -18,7 +19,7 @@ void TXTracking::receive_acks(uint32_t num_acked_pkts) {
             oldest_unacked_msgbuf_ = nullptr;
             oldest_unsent_msgbuf_ = nullptr;
             last_msgbuf_ = nullptr;
-            // CHECK_EQ(num_tracked_msgbufs_, 1);
+            CHECK_EQ(num_tracked_msgbufs_, 1);
         }
 
         if (msgbuf->is_last()) {
@@ -34,7 +35,7 @@ void TXTracking::receive_acks(uint32_t num_acked_pkts) {
             }
         }
         // Free transmitted frames that are acked
-        AFXDPFactory::push_frame(msgbuf->get_frame_offset());
+        socket_->push_frame(msgbuf->get_frame_offset());
         num_tracked_msgbufs_--;
         num_acked_pkts--;
     }
@@ -101,7 +102,7 @@ RXTracking::ConsumeRet RXTracking::consume(swift::Pcb *pcb, FrameBuf *msgbuf) {
 
     if (swift::seqno_lt(seqno, expected_seqno)) {
         VLOG(3) << "Received old packet: " << seqno << " < " << expected_seqno;
-        AFXDPFactory::push_frame(msgbuf->get_frame_offset());
+        socket_->push_frame(msgbuf->get_frame_offset());
         return kOldPkt;
     }
 
@@ -109,7 +110,7 @@ RXTracking::ConsumeRet RXTracking::consume(swift::Pcb *pcb, FrameBuf *msgbuf) {
     if (distance >= kReassemblyMaxSeqnoDistance) {
         VLOG(3) << "Packet too far ahead. Dropping as we can't handle SACK. "
                 << "seqno: " << seqno << ", expected: " << expected_seqno;
-        AFXDPFactory::push_frame(msgbuf->get_frame_offset());
+        socket_->push_frame(msgbuf->get_frame_offset());
         return kOOOUntrackable;
     }
 
@@ -124,7 +125,7 @@ RXTracking::ConsumeRet RXTracking::consume(swift::Pcb *pcb, FrameBuf *msgbuf) {
         if (it != reass_q_.end() && it->seqno == seqno) {
             VLOG(3) << "Received duplicate packet: " << seqno;
             // Duplicate packet. Drop it.
-            AFXDPFactory::push_frame(msgbuf->get_frame_offset());
+            socket_->push_frame(msgbuf->get_frame_offset());
             return kOOOTrackableDup;
         }
     }
@@ -223,14 +224,14 @@ void RXTracking::try_copy_msgbuf_to_appbuf(void *app_buf, size_t *app_buf_len,
             auto *msgbuf_iter_tmp = msgbuf_iter;
 
             if (msgbuf_iter->is_last()) {
-                AFXDPFactory::push_frame(msgbuf_iter_tmp->get_frame_offset());
+                socket_->push_frame(msgbuf_iter_tmp->get_frame_offset());
                 break;
             }
             msgbuf_iter = msgbuf_iter->next();
             DCHECK(msgbuf_iter);
 
             // Free received frames that have been copied to app buf.
-            AFXDPFactory::push_frame(msgbuf_iter_tmp->get_frame_offset());
+            socket_->push_frame(msgbuf_iter_tmp->get_frame_offset());
         }
 
         *app_buf_desc.buf_len = app_buf_pos;
@@ -273,11 +274,11 @@ void UcclFlow::rx_messages(std::vector<FrameBuf *> &msgbufs) {
                 // ACK packet, update the flow.
                 process_ack(ucclh);
                 // Free the received frame.
-                AFXDPFactory::push_frame(msgbuf->get_frame_offset());
+                socket_->push_frame(msgbuf->get_frame_offset());
                 break;
             case UcclPktHdr::UcclFlags::kAckEcn:
                 process_ack(ucclh);
-                AFXDPFactory::push_frame(msgbuf->get_frame_offset());
+                socket_->push_frame(msgbuf->get_frame_offset());
                 // Need to slowdown the sender.
                 ecn_recvd = true;
                 break;
@@ -291,7 +292,7 @@ void UcclFlow::rx_messages(std::vector<FrameBuf *> &msgbufs) {
                 // RSS probing packet, ignore.
                 LOG_EVERY_N(INFO, 10000)
                     << "RSS probing packet received, ignoring...";
-                AFXDPFactory::push_frame(msgbuf->get_frame_offset());
+                socket_->push_frame(msgbuf->get_frame_offset());
                 break;
             default:
                 VLOG(3) << "Unsupported UcclFlags: "
@@ -501,7 +502,7 @@ void UcclFlow::prepare_l4header(uint8_t *pkt_addr, uint32_t payload_bytes,
 AFXDPSocket::frame_desc UcclFlow::craft_ctlpacket(
     uint32_t seqno, uint32_t ackno, const UcclPktHdr::UcclFlags &net_flags) {
     const size_t kControlPayloadBytes = kUcclHdrLen;
-    auto frame_offset = AFXDPFactory::pop_frame();
+    auto frame_offset = socket_->pop_frame();
     auto msgbuf = FrameBuf::Create(frame_offset, socket_->umem_buffer_,
                                    kNetHdrLen + kControlPayloadBytes);
     // Let AFXDPSocket::pull_complete_queue() free control frames.
@@ -534,7 +535,7 @@ AFXDPSocket::frame_desc UcclFlow::craft_ctlpacket(
 
 AFXDPSocket::frame_desc UcclFlow::craft_rssprobe_packet(uint16_t dst_port) {
     const size_t kRssProbePayloadBytes = kUcclHdrLen;
-    auto frame_offset = AFXDPFactory::pop_frame();
+    auto frame_offset = socket_->pop_frame();
     auto msgbuf = FrameBuf::Create(frame_offset, socket_->umem_buffer_,
                                    kNetHdrLen + kRssProbePayloadBytes);
     // Let AFXDPSocket::pull_complete_queue() free control frames.
@@ -733,7 +734,7 @@ void UcclEngine::dispatch_pkts_to_local_engine(
         if (ucclh->frame_len.value() != frame.frame_len) {
             VLOG(2) << "Received invalid frame length: "
                     << ucclh->frame_len.value() << " != " << frame.frame_len;
-            AFXDPFactory::push_frame(frame.frame_offset);
+            socket_->push_frame(frame.frame_offset);
             continue;
         }
 
@@ -776,7 +777,7 @@ void UcclEngine::process_rx_msg(std::vector<FrameBuf *> &msgbufs,
                                         << std::hex << "0x" << flow_id;
         }
         for (auto msgbuf : msgbufs) {
-            AFXDPFactory::push_frame(msgbuf->get_frame_offset());
+            socket_->push_frame(msgbuf->get_frame_offset());
         }
         return;
     }
@@ -944,7 +945,7 @@ ConnID UcclEngine::exchange_info_and_finish_setup(int bootstrap_fd,
 
             // Probe packets successfully arrive this engine!
             local_dst_ports.insert(ntohs(udph->dest));
-            AFXDPFactory::push_frame(frame.frame_offset);
+            socket_->push_frame(frame.frame_offset);
         }
     }
     // TODO(yang): what if there is no enough dst_ports probed?
@@ -997,7 +998,7 @@ ConnID UcclEngine::exchange_info_and_finish_setup(int bootstrap_fd,
             auto *pkt_addr = msgbuf->get_pkt_addr();
             auto *ucclh = reinterpret_cast<UcclPktHdr *>(pkt_addr + kNetHdrLen);
             DCHECK(ucclh->net_flags == UcclPktHdr::UcclFlags::kRssProbe);
-            AFXDPFactory::push_frame(frame.frame_offset);
+            socket_->push_frame(frame.frame_offset);
         }
     } while (!std::atomic_load_explicit(&done, std::memory_order_relaxed));
     std::atomic_thread_fence(std::memory_order_acquire);
@@ -1027,7 +1028,6 @@ void UcclEngine::dump_status() {
         s += flow->to_string();
     }
     s += socket_->to_string();
-    s += AFXDPFactory::to_string();
     s += "\n";
     LOG(INFO) << s;
 }
@@ -1045,7 +1045,7 @@ std::tuple<FrameBuf *, FrameBuf *, uint32_t> UcclEngine::deserialize_msg(
     while (remaining_bytes > 0) {
         auto payload_len = std::min(
             remaining_bytes, (size_t)AFXDP_MTU - kNetHdrLen - kUcclHdrLen);
-        auto frame_offset = AFXDPFactory::pop_frame();
+        auto frame_offset = socket_->pop_frame();
         auto *msgbuf = FrameBuf::Create(frame_offset, socket_->umem_buffer_,
                                         kNetHdrLen + kUcclHdrLen + payload_len);
         // The engine will free these Tx frames when receiving ACKs.
