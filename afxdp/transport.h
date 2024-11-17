@@ -87,15 +87,14 @@ class Channel {
         enum Op : uint8_t {
             kFlowAdd = 0,
             kFlowRemove = 1,
-            kDstportInstall = 2,
         };
         Op opcode;
         FlowID flow_id;
+        int bootstrap_fd;
         uint32_t remote_addr;
         char remote_l2_addr[ETH_ALEN];
         char pad[2];
         uint32_t remote_engine_idx;
-        std::vector<uint16_t> *dst_ports;
         PollCtx *poll_ctx;
     };
     static_assert(sizeof(CtrlMsg) % 4 == 0,
@@ -486,6 +485,8 @@ class UcclFlow {
  * contains all the functionality need to be run by the stack's threads.
  */
 class UcclEngine {
+    constexpr static uint16_t kBootstrapPort = 30000;
+    
    public:
     // Slow timer (periodic processing) interval in microseconds.
     const size_t kSlowTimerIntervalUs = 2000;  // 2ms
@@ -514,15 +515,10 @@ class UcclEngine {
     }
 
     // Install a flow that serves traffic with specific remote ip and mac.
-    void install_flow(const uint32_t remote_addr,
-                      const char remote_l2_addr[ETH_ALEN],
-                      uint32_t remote_engine_idx,
-                      std::vector<uint16_t> *dst_ports, FlowID flow_id,
-                      PollCtx *poll_ctx);
-
-    // Install dst_ports that match remote engine queue.
-    void install_dst_ports(std::vector<uint16_t> *dst_ports, FlowID flow_id,
-                           PollCtx *poll_ctx);
+    // void install_flow(const uint32_t remote_addr,
+    //                   const char remote_l2_addr[ETH_ALEN],
+    //                   uint32_t remote_engine_idx, int bootstrap_fd,
+    //                   FlowID flow_id, PollCtx *poll_ctx);
 
     /**
      * @brief This is the main event cycle of the Uccl engine.
@@ -541,6 +537,9 @@ class UcclEngine {
      * main engine cycle (see method `Run`).
      */
     void periodic_process();
+
+    void handle_uccl_connect_on_engine(const std::string remote_ip);
+    void handle_uccl_accept_on_engine();
 
     // Called by application to shutdown the engine. App will need to join
     // the engine thread.
@@ -631,7 +630,6 @@ class UcclEngine {
  * its all queues.
  */
 class Endpoint {
-    constexpr static uint16_t kBootstrapPort = 30000;
     constexpr static uint32_t kMaxInflightMsg = 4096;
 
     std::string local_ip_str_;
@@ -680,16 +678,16 @@ class Endpoint {
     bool uccl_poll_once(PollCtx *ctx);
 
    private:
-    ConnID exchange_info_and_finish_setup(int bootstrap_fd, FlowID flow_id,
-                                          std::string remote_ip);
+    // ConnID exchange_info_and_finish_setup(int bootstrap_fd, FlowID flow_id,
+    //                                       std::string remote_ip);
     inline void fence_and_clean_ctx(PollCtx *ctx);
-    void install_flow_on_engine(const std::string remote_ip,
-                                const std::string remote_mac,
-                                const uint32_t remote_engine_idx,
-                                std::vector<uint16_t> *dst_ports,
-                                FlowID flow_id, int engine_idx);
-    void install_dst_ports_on_flow(std::vector<uint16_t> *dst_ports,
-                                   FlowID flow_id, int engine_idx);
+    ConnID uccl_connect_on_engine(const std::string remote_ip, int engine_idx);
+    std::tuple<ConnID, std::string> uccl_accept_on_engine(int engine_idx);
+    // void install_flow_on_engine(const std::string remote_ip,
+    //                             const std::string remote_mac,
+    //                             const uint32_t remote_engine_idx,
+    //                             int bootstrap_fd, FlowID flow_id,
+    //                             int engine_idx);
     inline int find_least_loaded_engine_idx_and_update();
 
     friend class UcclFlow;
