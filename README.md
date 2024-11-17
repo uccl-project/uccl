@@ -3,11 +3,11 @@
 ### Building the system
 
 ```
-sudo apt install clang llvm libelf-dev libpcap-dev build-essential libc6-dev-i386 linux-tools-$(uname -r) libgoogle-glog-dev -y
+sudo apt install clang llvm libelf-dev libpcap-dev build-essential libc6-dev-i386 linux-tools-$(uname -r) libgoogle-glog-dev byobu net-tools iperf -y
 make
 ```
 
-If you want to build nccl and nccl-tests on cloudlab ubuntu24, you need to install cuda and openmpi: 
+If you want to build nccl and nccl-tests on cloudlab ubuntu22, you need to install cuda and openmpi: 
 ```
 wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
 sudo apt install ./cuda-keyring_1.1-1_all.deb
