@@ -85,16 +85,14 @@ class Channel {
 
     struct CtrlMsg {
         enum Op : uint8_t {
-            kFlowAdd = 0,
-            kFlowRemove = 1,
+            kConnect = 0,
+            kAccept = 1,
         };
         Op opcode;
-        FlowID flow_id;
         int bootstrap_fd;
-        uint32_t remote_addr;
-        char remote_l2_addr[ETH_ALEN];
-        char pad[2];
-        uint32_t remote_engine_idx;
+        uint32_t remote_ip;
+        // return value
+        ConnID *conn_id;
         PollCtx *poll_ctx;
     };
     static_assert(sizeof(CtrlMsg) % 4 == 0,
@@ -485,8 +483,6 @@ class UcclFlow {
  * contains all the functionality need to be run by the stack's threads.
  */
 class UcclEngine {
-    constexpr static uint16_t kBootstrapPort = 30000;
-    
    public:
     // Slow timer (periodic processing) interval in microseconds.
     const size_t kSlowTimerIntervalUs = 2000;  // 2ms
@@ -514,12 +510,6 @@ class UcclEngine {
         if (GetEnvVar("UCCL_ENGINE_QUIET") == "1") stay_quiet_ = true;
     }
 
-    // Install a flow that serves traffic with specific remote ip and mac.
-    // void install_flow(const uint32_t remote_addr,
-    //                   const char remote_l2_addr[ETH_ALEN],
-    //                   uint32_t remote_engine_idx, int bootstrap_fd,
-    //                   FlowID flow_id, PollCtx *poll_ctx);
-
     /**
      * @brief This is the main event cycle of the Uccl engine.
      * It is called by a separate thread running the Uccl engine.
@@ -538,8 +528,11 @@ class UcclEngine {
      */
     void periodic_process();
 
-    void handle_uccl_connect_on_engine(const std::string remote_ip);
-    void handle_uccl_accept_on_engine();
+    void handle_uccl_connect_on_engine(Channel::CtrlMsg &ctrl_work);
+    void handle_uccl_accept_on_engine(Channel::CtrlMsg &ctrl_work);
+    ConnID exchange_info_and_finish_setup(int bootstrap_fd, FlowID flow_id,
+                                          std::string remote_ip);
+    void net_barrier(int bootstrap_fd);
 
     // Called by application to shutdown the engine. App will need to join
     // the engine thread.
@@ -602,6 +595,10 @@ class UcclEngine {
     // Engine index, also NIC queue ID and xsk index.
     uint32_t local_engine_idx_;
 
+    // Mapping from unique (within this engine) flow_id to the boostrap fd.
+    std::mutex bootstrap_fd_map_mu_;
+    std::unordered_map<FlowID, int> bootstrap_fd_map_;
+
     // AFXDP socket used for send/recv packets.
     AFXDPSocket *socket_;
     // UcclFlow map
@@ -631,6 +628,7 @@ class UcclEngine {
  */
 class Endpoint {
     constexpr static uint32_t kMaxInflightMsg = 4096;
+    constexpr static uint16_t kBootstrapPort = 30000;
 
     std::string local_ip_str_;
     std::string local_mac_str_;
@@ -640,17 +638,14 @@ class Endpoint {
     std::vector<std::unique_ptr<UcclEngine>> engine_vec_;
     std::vector<std::unique_ptr<std::thread>> engine_th_vec_;
 
-    int listen_fd_;
-    // Mapping from unique flow_id to the boostrap fd.
-    std::mutex bootstrap_fd_map_mu_;
-    std::unordered_map<FlowID, int> bootstrap_fd_map_;
-
     // Number of flows on each engine, indexed by engine_idx.
     std::mutex engine_load_vec_mu_;
     std::array<int, NUM_QUEUES> engine_load_vec_ = {0};
 
     SharedPool<PollCtx *, true> *ctx_pool_;
     uint8_t *ctx_pool_buf_;
+
+    int listen_fd_;
 
    public:
     Endpoint(const char *interface_name, int num_queues, uint64_t num_frames,
@@ -678,17 +673,12 @@ class Endpoint {
     bool uccl_poll_once(PollCtx *ctx);
 
    private:
-    // ConnID exchange_info_and_finish_setup(int bootstrap_fd, FlowID flow_id,
-    //                                       std::string remote_ip);
-    inline void fence_and_clean_ctx(PollCtx *ctx);
-    ConnID uccl_connect_on_engine(const std::string remote_ip, int engine_idx);
-    std::tuple<ConnID, std::string> uccl_accept_on_engine(int engine_idx);
-    // void install_flow_on_engine(const std::string remote_ip,
-    //                             const std::string remote_mac,
-    //                             const uint32_t remote_engine_idx,
-    //                             int bootstrap_fd, FlowID flow_id,
-    //                             int engine_idx);
+    ConnID uccl_connect_on_engine(const std::string remote_ip, int bootstrap_fd,
+                                  int engine_idx);
+    ConnID uccl_accept_on_engine(const std::string remote_ip, int bootstrap_fd,
+                                 int engine_idx);
     inline int find_least_loaded_engine_idx_and_update();
+    inline void fence_and_clean_ctx(PollCtx *ctx);
 
     friend class UcclFlow;
 };

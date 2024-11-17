@@ -655,75 +655,6 @@ void UcclFlow::transmit_pending_packets() {
     if (pcb_.rto_disabled()) pcb_.rto_enable();
 }
 
-void UcclEngine::install_flow(const uint32_t remote_addr,
-                              const char remote_l2_addr[ETH_ALEN],
-                              uint32_t remote_engine_idx, int bootstrap_fd,
-                              FlowID flow_id, PollCtx *poll_ctx) {
-    auto *flow = new UcclFlow(local_addr_, remote_addr, local_l2_addr_,
-                              remote_l2_addr, local_engine_idx_,
-                              remote_engine_idx, socket_, channel_, flow_id);
-    auto [_, ret] = active_flows_map_.insert({flow_id, flow});
-    DCHECK(ret);
-
-    // bool sync = true;
-    // ret = write(bootstrap_fd, &sync, sizeof(bool));
-    // ret = read(bootstrap_fd, &sync, sizeof(bool));
-    // DCHECK(ret == sizeof(bool) && sync);
-
-    // Doing RSS probing to get a list of dst_port that matches remote engine
-    // queue.
-    std::vector<uint16_t> local_dst_ports;
-    for (int i = BASE_PORT; i < 65536; i++) {
-        uint16_t dst_port = i;
-        auto frame = flow->craft_rssprobe_packet(dst_port);
-        socket_->send_packet(frame);
-
-        // if ((i - BASE_PORT) % RECV_BATCH_SIZE == 0) {
-        auto frames = socket_->recv_packets(RECV_BATCH_SIZE);
-        for (auto &frame : frames) {
-            auto *msgbuf = FrameBuf::Create(
-                frame.frame_offset, socket_->umem_buffer_, frame.frame_len);
-            auto *pkt_addr = msgbuf->get_pkt_addr();
-
-            auto *udph = reinterpret_cast<udphdr *>(pkt_addr + sizeof(ethhdr) +
-                                                    sizeof(iphdr));
-            auto *ucclh = reinterpret_cast<UcclPktHdr *>(pkt_addr + kNetHdrLen);
-            DCHECK(ucclh->net_flags == UcclPktHdr::UcclFlags::kRssProbe);
-            
-            // Probe packets successfully arrive this engine!
-            local_dst_ports.push_back(ntohs(udph->dest));
-            AFXDPFactory::push_frame(frame.frame_offset);
-        }
-        // }
-    }
-    // TODO(yang): what if there is no enough dst_ports probed?
-
-    LOG(INFO) << "dst_ports size: " << local_dst_ports.size();
-    DCHECK_GE(local_dst_ports.size(), UcclFlow::kPortEntropy);
-
-    LOG(INFO) << "install_flow1";
-    // send the local_dst_ports back to the server
-    ret = write(bootstrap_fd, local_dst_ports.data(),
-                UcclFlow::kPortEntropy * sizeof(uint16_t));
-
-    LOG(INFO) << "install_flow2";
-    std::vector<uint16_t> recvd_dst_ports;
-    recvd_dst_ports.resize(UcclFlow::kPortEntropy);
-    ret = read(bootstrap_fd, recvd_dst_ports.data(),
-               UcclFlow::kPortEntropy * sizeof(uint16_t));
-    LOG(INFO) << "recvd_dst_ports size: " << recvd_dst_ports.size();
-
-    flow->dst_ports_.insert(flow->dst_ports_.end(), recvd_dst_ports.begin(),
-                            recvd_dst_ports.end());
-
-    // Insert dst_ports to the flow, and wakeup app thread waiting on endpoint.
-    {
-        std::lock_guard<std::mutex> lock(poll_ctx->mu);
-        poll_ctx->done = true;
-        poll_ctx->cv.notify_one();
-    }
-}
-
 void UcclEngine::run() {
     Channel::Msg rx_work;
     Channel::Msg tx_work;
@@ -768,6 +699,11 @@ void UcclEngine::run() {
         }
 
         // process_tx_msg(nullptr, nullptr, 0);
+    }
+
+    std::lock_guard<std::mutex> lock(bootstrap_fd_map_mu_);
+    for (auto &[flow_id, boostrap_id] : bootstrap_fd_map_) {
+        close(boostrap_id);
     }
 
     // This will reset flow pcb state.
@@ -861,14 +797,11 @@ void UcclEngine::process_ctl_reqs() {
         1) {
         VLOG(3) << "Ctrl jring dequeue";
         switch (ctrl_work.opcode) {
-            case Channel::CtrlMsg::kFlowAdd:
-                install_flow(ctrl_work.remote_addr, ctrl_work.remote_l2_addr,
-                             ctrl_work.remote_engine_idx,
-                             ctrl_work.bootstrap_fd, ctrl_work.flow_id,
-                             ctrl_work.poll_ctx);
+            case Channel::CtrlMsg::kConnect:
+                handle_uccl_connect_on_engine(ctrl_work);
                 break;
-            case Channel::CtrlMsg::kFlowRemove:
-                DCHECK(false) << "kFlowRemove not supported";
+            case Channel::CtrlMsg::kAccept:
+                handle_uccl_accept_on_engine(ctrl_work);
                 break;
             default:
                 break;
@@ -876,41 +809,10 @@ void UcclEngine::process_ctl_reqs() {
     }
 }
 
-void UcclEngine::handle_uccl_connect_on_engine(const std::string remote_ip) {
-        struct sockaddr_in serv_addr;
-    struct hostent *server;
-    int bootstrap_fd;
-
-    bootstrap_fd = socket(AF_INET, SOCK_STREAM, 0);
-    DCHECK(bootstrap_fd >= 0);
-
-    server = gethostbyname(remote_ip.c_str());
-    DCHECK(server);
-
-    bzero((char *)&serv_addr, sizeof(serv_addr));
-    serv_addr.sin_family = AF_INET;
-    bcopy((char *)server->h_addr, (char *)&serv_addr.sin_addr.s_addr,
-          server->h_length);
-    serv_addr.sin_port = htons(kBootstrapPort);
-
-    // Force the socket to bind to the local IP address.
-    sockaddr_in localaddr = {0};
-    localaddr.sin_family = AF_INET;
-    localaddr.sin_addr.s_addr = htonl(local_addr_);
-    bind(bootstrap_fd, (sockaddr *)&localaddr, sizeof(localaddr));
-
-    LOG(INFO) << "Connecting to " << remote_ip << ":" << kBootstrapPort;
-
-    // Connect and set nonblocking and nodelay
-    while (connect(bootstrap_fd, (struct sockaddr *)&serv_addr,
-                   sizeof(serv_addr))) {
-        LOG(INFO) << "Connecting... Make sure the server is up.";
-        sleep(1);
-    }
-
-    int flag = 1;
-    setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void *)&flag,
-               sizeof(int));
+void UcclEngine::handle_uccl_connect_on_engine(Channel::CtrlMsg &ctrl_work) {
+    std::string remote_ip = ip_to_str(htonl(ctrl_work.remote_ip));
+    int bootstrap_fd = ctrl_work.bootstrap_fd;
+    auto *poll_ctx = ctrl_work.poll_ctx;
 
     FlowID flow_id;
     while (true) {
@@ -936,14 +838,172 @@ void UcclEngine::handle_uccl_connect_on_engine(const std::string remote_ip) {
     ConnID conn_id =
         exchange_info_and_finish_setup(bootstrap_fd, flow_id, remote_ip);
 
+    // Passing back conn_id and wakeup app thread waiting on endpoint.
+    {
+        std::lock_guard<std::mutex> lock(poll_ctx->mu);
+        *ctrl_work.conn_id = conn_id;
+        poll_ctx->done = true;
+        poll_ctx->cv.notify_one();
+    }
+}
+
+void UcclEngine::handle_uccl_accept_on_engine(Channel::CtrlMsg &ctrl_work) {
+    std::string remote_ip = ip_to_str(htonl(ctrl_work.remote_ip));
+    int bootstrap_fd = ctrl_work.bootstrap_fd;
+    auto *poll_ctx = ctrl_work.poll_ctx;
+
+    // Generate unique flow ID for both client and server.
+    FlowID flow_id;
+    while (true) {
+        flow_id = U64Rand(0, std::numeric_limits<FlowID>::max());
+        bool unique;
+        {
+            std::lock_guard<std::mutex> lock(bootstrap_fd_map_mu_);
+            unique =
+                (bootstrap_fd_map_.find(flow_id) == bootstrap_fd_map_.end());
+            if (unique) {
+                // Speculatively insert the flow ID.
+                bootstrap_fd_map_[flow_id] = bootstrap_fd;
+            } else {
+                continue;
+            }
+        }
+
+        VLOG(3) << "Accept: Proposed FlowID: " << std::hex << "0x" << flow_id;
+
+        // Ask client if this is unique
+        int ret = write(bootstrap_fd, &flow_id, sizeof(FlowID));
+        DCHECK(ret == sizeof(FlowID));
+        bool unique_from_client;
+        ret = read(bootstrap_fd, &unique_from_client, sizeof(bool));
+        DCHECK(ret == sizeof(bool));
+
+        if (unique_from_client) {
+            break;
+        } else {
+            // Remove the speculatively inserted flow ID.
+            std::lock_guard<std::mutex> lock(bootstrap_fd_map_mu_);
+            DCHECK(1 == bootstrap_fd_map_.erase(flow_id));
+        }
+    }
+
+    ConnID conn_id =
+        exchange_info_and_finish_setup(bootstrap_fd, flow_id, remote_ip);
+
+    // Passing back conn_id and wakeup app thread waiting on endpoint.
+    {
+        std::lock_guard<std::mutex> lock(poll_ctx->mu);
+        *ctrl_work.conn_id = conn_id;
+        poll_ctx->done = true;
+        poll_ctx->cv.notify_one();
+    }
+}
+
+ConnID UcclEngine::exchange_info_and_finish_setup(int bootstrap_fd,
+                                                  FlowID flow_id,
+                                                  std::string remote_ip) {
+    std::string local_ip_str = ip_to_str(htonl(local_addr_));
+    auto remote_addr = htonl(str_to_ip(remote_ip));
+    ConnID conn_id = {.flow_id = flow_id,
+                      .engine_idx = local_engine_idx_,
+                      .boostrap_id = bootstrap_fd};
+    int ret;
+
+    char local_mac_char[ETH_ALEN];
+    std::string local_mac = get_dev_mac(DEV_DEFAULT);
+    VLOG(3) << "Local MAC: " << local_mac;
+    str_to_mac(local_mac, local_mac_char);
+    ret = write(bootstrap_fd, local_mac_char, ETH_ALEN);
+    DCHECK(ret == ETH_ALEN);
+
+    char remote_mac_char[ETH_ALEN];
+    ret = read(bootstrap_fd, remote_mac_char, ETH_ALEN);
+    DCHECK(ret == ETH_ALEN);
+    std::string remote_mac = mac_to_str(remote_mac_char);
+    VLOG(3) << "Remote MAC: " << remote_mac;
+
+    // Sync remote engine index.
+    uint32_t remote_engine_idx;
+    ret = write(bootstrap_fd, &conn_id.engine_idx, sizeof(uint32_t));
+    ret = read(bootstrap_fd, &remote_engine_idx, sizeof(uint32_t));
+    DCHECK(ret == sizeof(uint32_t));
+
+    auto *flow = new UcclFlow(local_addr_, remote_addr, local_l2_addr_,
+                              remote_mac_char, local_engine_idx_,
+                              remote_engine_idx, socket_, channel_, flow_id);
+    std::tie(std::ignore, ret) = active_flows_map_.insert({flow_id, flow});
+    DCHECK(ret);
+
+    // Doing RSS probing to get a list of dst_port that matches remote engine
+    // queue.
+    std::vector<uint16_t> local_dst_ports;
+    for (int i = BASE_PORT; i < 65536; i++) {
+        uint16_t dst_port = i;
+        auto frame = flow->craft_rssprobe_packet(dst_port);
+        socket_->send_packet(frame);
+
+        // if ((i - BASE_PORT) % RECV_BATCH_SIZE == 0) {
+        auto frames = socket_->recv_packets(RECV_BATCH_SIZE);
+        for (auto &frame : frames) {
+            auto *msgbuf = FrameBuf::Create(
+                frame.frame_offset, socket_->umem_buffer_, frame.frame_len);
+            auto *pkt_addr = msgbuf->get_pkt_addr();
+
+            auto *udph = reinterpret_cast<udphdr *>(pkt_addr + sizeof(ethhdr) +
+                                                    sizeof(iphdr));
+            auto *ucclh = reinterpret_cast<UcclPktHdr *>(pkt_addr + kNetHdrLen);
+            DCHECK(ucclh->net_flags == UcclPktHdr::UcclFlags::kRssProbe);
+
+            // Probe packets successfully arrive this engine!
+            local_dst_ports.push_back(ntohs(udph->dest));
+            AFXDPFactory::push_frame(frame.frame_offset);
+        }
+        // }
+    }
+    // TODO(yang): what if there is no enough dst_ports probed?
+
+    LOG(INFO) << "dst_ports size: " << local_dst_ports.size();
+    DCHECK_GE(local_dst_ports.size(), UcclFlow::kPortEntropy);
+
+    LOG(INFO) << "install_flow1";
+    // send the local_dst_ports back to the server
+    ret = write(bootstrap_fd, local_dst_ports.data(),
+                UcclFlow::kPortEntropy * sizeof(uint16_t));
+
+    LOG(INFO) << "install_flow2";
+    std::vector<uint16_t> recvd_dst_ports;
+    recvd_dst_ports.resize(UcclFlow::kPortEntropy);
+    ret = read(bootstrap_fd, recvd_dst_ports.data(),
+               UcclFlow::kPortEntropy * sizeof(uint16_t));
+    LOG(INFO) << "recvd_dst_ports size: " << recvd_dst_ports.size();
+
+    flow->dst_ports_.insert(flow->dst_ports_.end(), recvd_dst_ports.begin(),
+                            recvd_dst_ports.end());
+
+    LOG(INFO) << "Connect FlowID " << std::hex << "0x" << conn_id.flow_id
+              << " : " << local_ip_str << Format("(%d)", conn_id.engine_idx)
+              << "<->" << remote_ip << Format("(%d)", remote_engine_idx);
+
+    // Finally sync client and sender to make sure any incoming packets have
+    // found the flow installed; otherwise, SEGV may happen.
+    net_barrier(bootstrap_fd);
+
     return conn_id;
+}
+
+inline void UcclEngine::net_barrier(int bootstrap_fd) {
+    bool sync = true;
+    int ret = write(bootstrap_fd, &sync, sizeof(bool));
+    ret = read(bootstrap_fd, &sync, sizeof(bool));
+    DCHECK(ret == sizeof(bool) && sync);
 }
 
 void UcclEngine::dump_status() {
     std::string s;
     s += "\n\t[Uccl Engine] ";
     for (auto [flow_id, flow] : active_flows_map_) {
-        s += Format("\n\t\tFlow 0x%lx: %s (%u) <-> %s (%u)", flow_id,
+        s += Format("\n\t\tEngine %d Flow 0x%lx: %s (%u) <-> %s (%u)",
+                    local_engine_idx_, flow_id,
                     ip_to_str(htonl(flow->local_addr_)).c_str(),
                     flow->local_engine_idx_,
                     ip_to_str(htonl(flow->remote_addr_)).c_str(),
@@ -1068,17 +1128,48 @@ Endpoint::~Endpoint() {
 
     delete ctx_pool_;
     delete[] ctx_pool_buf_;
-    close(listen_fd_);
 
-    std::lock_guard<std::mutex> lock(bootstrap_fd_map_mu_);
-    for (auto &[flow_id, boostrap_id] : bootstrap_fd_map_) {
-        close(boostrap_id);
-    }
+    close(listen_fd_);
 }
 
 ConnID Endpoint::uccl_connect(std::string remote_ip) {
+    struct sockaddr_in serv_addr;
+    struct hostent *server;
+    int bootstrap_fd;
+
+    bootstrap_fd = socket(AF_INET, SOCK_STREAM, 0);
+    DCHECK(bootstrap_fd >= 0);
+
+    server = gethostbyname(remote_ip.c_str());
+    DCHECK(server);
+
+    bzero((char *)&serv_addr, sizeof(serv_addr));
+    serv_addr.sin_family = AF_INET;
+    bcopy((char *)server->h_addr, (char *)&serv_addr.sin_addr.s_addr,
+          server->h_length);
+    serv_addr.sin_port = htons(kBootstrapPort);
+
+    // Force the socket to bind to the local IP address.
+    sockaddr_in localaddr = {0};
+    localaddr.sin_family = AF_INET;
+    localaddr.sin_addr.s_addr = str_to_ip(local_ip_str_.c_str());
+    bind(bootstrap_fd, (sockaddr *)&localaddr, sizeof(localaddr));
+
+    LOG(INFO) << "Connecting to " << remote_ip << ":" << kBootstrapPort;
+
+    // Connect and set nonblocking and nodelay
+    while (connect(bootstrap_fd, (struct sockaddr *)&serv_addr,
+                   sizeof(serv_addr))) {
+        LOG(INFO) << "Connecting... Make sure the server is up.";
+        sleep(1);
+    }
+
+    int flag = 1;
+    setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void *)&flag,
+               sizeof(int));
+
     auto local_engine_idx = find_least_loaded_engine_idx_and_update();
-    return uccl_connect_on_engine(remote_ip, local_engine_idx);    
+    return uccl_connect_on_engine(remote_ip, bootstrap_fd, local_engine_idx);
 }
 
 std::tuple<ConnID, std::string> Endpoint::uccl_accept() {
@@ -1097,43 +1188,9 @@ std::tuple<ConnID, std::string> Endpoint::uccl_accept() {
     setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void *)&flag,
                sizeof(int));
 
-    // Generate unique flow ID for both client and server.
-    FlowID flow_id;
-    while (true) {
-        flow_id = U64Rand(0, std::numeric_limits<FlowID>::max());
-        bool unique;
-        {
-            std::lock_guard<std::mutex> lock(bootstrap_fd_map_mu_);
-            unique =
-                (bootstrap_fd_map_.find(flow_id) == bootstrap_fd_map_.end());
-            if (unique) {
-                // Speculatively insert the flow ID.
-                bootstrap_fd_map_[flow_id] = bootstrap_fd;
-            } else {
-                continue;
-            }
-        }
-
-        VLOG(3) << "Accept: Proposed FlowID: " << std::hex << "0x" << flow_id;
-
-        // Ask client if this is unique
-        int ret = write(bootstrap_fd, &flow_id, sizeof(FlowID));
-        DCHECK(ret == sizeof(FlowID));
-        bool unique_from_client;
-        ret = read(bootstrap_fd, &unique_from_client, sizeof(bool));
-        DCHECK(ret == sizeof(bool));
-
-        if (unique_from_client) {
-            break;
-        } else {
-            // Remove the speculatively inserted flow ID.
-            std::lock_guard<std::mutex> lock(bootstrap_fd_map_mu_);
-            DCHECK(1 == bootstrap_fd_map_.erase(flow_id));
-        }
-    }
-
-    ConnID conn_id =
-        exchange_info_and_finish_setup(bootstrap_fd, flow_id, remote_ip);
+    auto local_engine_idx = find_least_loaded_engine_idx_and_update();
+    auto conn_id =
+        uccl_accept_on_engine(remote_ip, bootstrap_fd, local_engine_idx);
 
     return std::make_tuple(conn_id, remote_ip);
 }
@@ -1201,48 +1258,62 @@ bool Endpoint::uccl_poll_once(PollCtx *ctx) {
     return true;
 }
 
-ConnID Endpoint::exchange_info_and_finish_setup(int bootstrap_fd,
-                                                FlowID flow_id,
-                                                std::string remote_ip) {
-    ConnID conn_id = {.flow_id = flow_id, .boostrap_id = bootstrap_fd};
-    int ret;
+ConnID Endpoint::uccl_connect_on_engine(const std::string remote_ip,
+                                        int bootstrap_fd, int engine_idx) {
+    ConnID conn_id;
+    auto *poll_ctx = new PollCtx();
+    Channel::CtrlMsg ctrl_msg = {
+        .opcode = Channel::CtrlMsg::Op::kConnect,
+        .bootstrap_fd = bootstrap_fd,
+        .remote_ip = htonl(str_to_ip(remote_ip)),
+        .conn_id = &conn_id,
+        .poll_ctx = poll_ctx,
+    };
+    while (jring_mp_enqueue_bulk(channel_vec_[engine_idx]->ctrl_cmdq_,
+                                 &ctrl_msg, 1, nullptr) != 1);
 
-    char local_mac_char[ETH_ALEN];
-    std::string local_mac = get_dev_mac(DEV_DEFAULT);
-    VLOG(3) << "Local MAC: " << local_mac;
-    str_to_mac(local_mac, local_mac_char);
-    ret = write(bootstrap_fd, local_mac_char, ETH_ALEN);
-    DCHECK(ret == ETH_ALEN);
-
-    char remote_mac_char[ETH_ALEN];
-    ret = read(bootstrap_fd, remote_mac_char, ETH_ALEN);
-    DCHECK(ret == ETH_ALEN);
-    std::string remote_mac = mac_to_str(remote_mac_char);
-    VLOG(3) << "Remote MAC: " << remote_mac;
-
-    conn_id.engine_idx = find_least_loaded_engine_idx_and_update();
-
-    // Sync remote engine index.
-    uint32_t remote_engine_idx;
-    ret = write(bootstrap_fd, &conn_id.engine_idx, sizeof(uint32_t));
-    ret = read(bootstrap_fd, &remote_engine_idx, sizeof(uint32_t));
-    DCHECK(ret == sizeof(uint32_t));
-
-    install_flow_on_engine(remote_ip, remote_mac, remote_engine_idx,
-                           bootstrap_fd, conn_id.flow_id, conn_id.engine_idx);
-
-    LOG(INFO) << "Connect FlowID " << std::hex << "0x" << conn_id.flow_id
-              << " : " << local_ip_str_ << Format("(%d)", conn_id.engine_idx)
-              << "<->" << remote_ip << Format("(%d)", remote_engine_idx);
-
-    // Finally sync client and sender to make sure any incoming packets have
-    // found the flow installed; otherwise, SEGV may happen.
-    bool sync = true;
-    ret = write(bootstrap_fd, &sync, sizeof(bool));
-    ret = read(bootstrap_fd, &sync, sizeof(bool));
-    DCHECK(ret == sizeof(bool) && sync);
+    // Wait until the flow has been installed on the engine.
+    {
+        std::unique_lock<std::mutex> lock(poll_ctx->mu);
+        poll_ctx->cv.wait(lock, [poll_ctx] { return poll_ctx->done.load(); });
+    }
+    delete poll_ctx;
 
     return conn_id;
+}
+
+ConnID Endpoint::uccl_accept_on_engine(const std::string remote_ip,
+                                       int bootstrap_fd, int engine_idx) {
+    ConnID conn_id;
+    auto *poll_ctx = new PollCtx();
+    Channel::CtrlMsg ctrl_msg = {
+        .opcode = Channel::CtrlMsg::Op::kAccept,
+        .bootstrap_fd = bootstrap_fd,
+        .remote_ip = htonl(str_to_ip(remote_ip)),
+        .conn_id = &conn_id,
+        .poll_ctx = poll_ctx,
+    };
+    while (jring_mp_enqueue_bulk(channel_vec_[engine_idx]->ctrl_cmdq_,
+                                 &ctrl_msg, 1, nullptr) != 1);
+
+    // Wait until the flow has been installed on the engine.
+    {
+        std::unique_lock<std::mutex> lock(poll_ctx->mu);
+        poll_ctx->cv.wait(lock, [poll_ctx] { return poll_ctx->done.load(); });
+    }
+    delete poll_ctx;
+
+    return conn_id;
+}
+
+inline int Endpoint::find_least_loaded_engine_idx_and_update() {
+    std::lock_guard<std::mutex> lock(engine_load_vec_mu_);
+    if (engine_load_vec_.empty()) return -1;  // Handle empty vector case
+
+    auto minElementIter =
+        std::min_element(engine_load_vec_.begin(), engine_load_vec_.end());
+    *minElementIter += 1;
+    return std::distance(engine_load_vec_.begin(), minElementIter);
 }
 
 inline void Endpoint::fence_and_clean_ctx(PollCtx *ctx) {
@@ -1253,42 +1324,6 @@ inline void Endpoint::fence_and_clean_ctx(PollCtx *ctx) {
 
     ctx->clear();
     ctx_pool_->push(ctx);
-}
-
-void Endpoint::install_flow_on_engine(const std::string remote_ip,
-                                      const std::string remote_mac,
-                                      const uint32_t remote_engine_idx,
-                                      int bootstrap_fd, FlowID flow_id,
-                                      int engine_idx) {
-    auto *poll_ctx = new PollCtx();
-    Channel::CtrlMsg ctrl_msg = {
-        .opcode = Channel::CtrlMsg::Op::kFlowAdd,
-        .flow_id = flow_id,
-        .bootstrap_fd = bootstrap_fd,
-        .remote_addr = htonl(str_to_ip(remote_ip)),
-        .remote_engine_idx = remote_engine_idx,
-        .poll_ctx = poll_ctx,
-    };
-    str_to_mac(remote_mac, ctrl_msg.remote_l2_addr);
-    while (jring_mp_enqueue_bulk(channel_vec_[engine_idx]->ctrl_cmdq_,
-                                 &ctrl_msg, 1, nullptr) != 1);
-
-    // Wait until the flow has been installed on the engine.
-    {
-        std::unique_lock<std::mutex> lock(poll_ctx->mu);
-        poll_ctx->cv.wait(lock, [poll_ctx] { return poll_ctx->done.load(); });
-    }
-    delete poll_ctx;
-};
-
-inline int Endpoint::find_least_loaded_engine_idx_and_update() {
-    std::lock_guard<std::mutex> lock(engine_load_vec_mu_);
-    if (engine_load_vec_.empty()) return -1;  // Handle empty vector case
-
-    auto minElementIter =
-        std::min_element(engine_load_vec_.begin(), engine_load_vec_.end());
-    *minElementIter += 1;
-    return std::distance(engine_load_vec_.begin(), minElementIter);
 }
 
 }  // namespace uccl
