@@ -34,7 +34,7 @@
 
 namespace uccl {
 
-constexpr static uint32_t FRAME_SIZE = XSK_UMEM__DEFAULT_FRAME_SIZE;
+constexpr static uint64_t FRAME_SIZE = XSK_UMEM__DEFAULT_FRAME_SIZE;
 
 class FrameBuf {
     // Pointing to the next message buffer in the chain.

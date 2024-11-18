@@ -8,8 +8,9 @@
 
 static const uint32_t RECV_BATCH_SIZE = 32;
 static const uint32_t SEND_BATCH_SIZE = 32;
-static const uint32_t NUM_QUEUES = 1;
-static const uint64_t NUM_FRAMES = 4096 * 64 * NUM_QUEUES;  // 1GB frame pool
+static const uint32_t NUM_QUEUES = 6;
+// 4GB frame pool in total; exceeding will cause crash.
+static const uint64_t NUM_FRAMES = 1024 * 1024;
 static const uint32_t ENGINE_CPU_START = 0;
 static const uint16_t BASE_PORT = 10000;
 

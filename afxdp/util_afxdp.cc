@@ -159,14 +159,14 @@ int AFXDPSocket::create_afxdp_socket() {
     umem_size_ = afxdp_ctl.umem_size_;
     umem_buffer_ = afxdp_ctl.umem_buffer_;
 
-    // initialize frame allocator
+    /* initialize frame allocator */
     uint64_t frame_pool_size = afxdp_ctl.num_frames_ / NUM_QUEUES;
     frame_pool_ = new SharedPool<uint64_t, /*Sync=*/false>(frame_pool_size);
     uint64_t frame_pool_offset = FRAME_SIZE * frame_pool_size * queue_id_;
     for (uint64_t i = 0; i < frame_pool_size; i++) {
-        auto frame_offset =
-            i * FRAME_SIZE + XDP_PACKET_HEADROOM + frame_pool_offset;
+        uint64_t frame_offset = frame_pool_offset + XDP_PACKET_HEADROOM;
         push_frame(frame_offset);
+        frame_pool_offset += FRAME_SIZE;
     }
 
     /* Get offsets for the following mmap */

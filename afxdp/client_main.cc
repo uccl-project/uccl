@@ -195,7 +195,7 @@ int client_init(struct client_t* client, const char* interface_name) {
     // per-CPU socket setup
     for (int i = 0; i < MY_NUM_QUEUES; i++) {
         // allocate umem_buffer for umem
-        const int buffer_size = NUM_FRAMES * FRAME_SIZE;
+        const size_t buffer_size = NUM_FRAMES * FRAME_SIZE;
 
         if (posix_memalign(&client->socket[i].umem_buffer, getpagesize(),
                            buffer_size)) {

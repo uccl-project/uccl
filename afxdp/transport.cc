@@ -14,7 +14,7 @@ void TXTracking::receive_acks(uint32_t num_acked_pkts) {
             DCHECK_NE(oldest_unacked_msgbuf_, oldest_unsent_msgbuf_)
                 << "Releasing an unsent msgbuf!";
             oldest_unacked_msgbuf_ = msgbuf->next();
-            DCHECK(oldest_unacked_msgbuf_ != nullptr);
+            DCHECK(oldest_unacked_msgbuf_ != nullptr) << num_acked_pkts;
         } else {
             oldest_unacked_msgbuf_ = nullptr;
             oldest_unsent_msgbuf_ = nullptr;
@@ -121,7 +121,8 @@ RXTracking::ConsumeRet RXTracking::consume(swift::Pcb *pcb, FrameBuf *msgbuf) {
                           [&seqno](const reasm_queue_ent_t &entry) {
                               return entry.seqno >= seqno;
                           });
-        VLOG(3) << "Received OOO packet: reass_q size " << reass_q_.size();
+        VLOG(3) << "Received OOO packet: seqno " << seqno << " reass_q size "
+                << reass_q_.size();
         if (it != reass_q_.end() && it->seqno == seqno) {
             VLOG(3) << "Received duplicate packet: " << seqno;
             // Duplicate packet. Drop it.
@@ -134,14 +135,12 @@ RXTracking::ConsumeRet RXTracking::consume(swift::Pcb *pcb, FrameBuf *msgbuf) {
     const size_t payload_len = frame_len - kNetHdrLen - kUcclHdrLen;
 
     if (seqno == expected_seqno) {
-        if (msgbuf->is_last())
-            VLOG(2) << "Received expected packet: " << seqno
-                    << " payload_len: " << payload_len;
+        VLOG(3) << "Received expected packet: " << seqno
+                << " payload_len: " << payload_len;
         reass_q_.emplace_front(msgbuf, seqno);
     } else {
-        if (msgbuf->is_last())
-            VLOG(2) << "Received OOO trackable packet: " << seqno
-                    << " payload_len: " << payload_len;
+        VLOG(3) << "Received OOO trackable packet: " << seqno
+                << " payload_len: " << payload_len;
         reass_q_.insert(it, reasm_queue_ent_t(msgbuf, seqno));
     }
 
@@ -207,6 +206,7 @@ void RXTracking::try_copy_msgbuf_to_appbuf(void *app_buf, size_t *app_buf_len,
         size_t app_buf_pos = 0;
         while (true) {
             auto *pkt_addr = msgbuf_iter->get_pkt_addr();
+            DCHECK(pkt_addr) << "pkt_addr is nullptr when copy to app buf";
             auto *payload_addr = pkt_addr + kNetHdrLen + kUcclHdrLen;
             auto payload_len =
                 msgbuf_iter->get_frame_len() - kNetHdrLen - kUcclHdrLen;
@@ -555,8 +555,8 @@ AFXDPSocket::frame_desc UcclFlow::craft_rssprobe_packet(uint16_t dst_port) {
     ucclh->net_flags = UcclPktHdr::UcclFlags::kRssProbe;
     ucclh->msg_flags = 0;
     ucclh->frame_len = be16_t(kNetHdrLen + kRssProbePayloadBytes);
-    ucclh->seqno = be32_t(0);
-    ucclh->ackno = be32_t(0);
+    ucclh->seqno = be32_t(UINT32_MAX);
+    ucclh->ackno = be32_t(UINT32_MAX);
     ucclh->flow_id = be64_t(flow_id_);
 
     return {frame_offset, kNetHdrLen + kRssProbePayloadBytes};
