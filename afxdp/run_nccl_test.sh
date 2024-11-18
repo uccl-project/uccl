@@ -56,7 +56,7 @@ elif [ "$TEST" = "afxdp" ]; then
         -x NCCL_NSOCKS_PERTHREAD=1 \
         -x NCCL_MAX_NCHANNELS=1 \
         ${UCCL_HOME}/nccl-tests/build/${PROG_NAME} \
-        -b 1K -e 4M -f 2 -g 1 -w 100 -n 100 \
+        -b 1K -e 128M -f 2 -g 1 -w 100 -n 100 \
         2>&1 | while read -r line; do
         # Extract rank from the format [1,2]
         if [[ "$line" =~ ^\[[0-9]+,([0-9]+)\](.+) ]]; then
