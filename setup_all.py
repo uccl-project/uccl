@@ -9,22 +9,27 @@ import os
 core_count = os.cpu_count()
 num_queues = 1
 num_irqcores = int(num_queues)
-aws_dev = "ens6"
-# aws_dev = "enp199s0"
 
-make_macro_mapping = {
-    "aws_afxdp": "AWS_ENA",
-    "cloudlab_afxdp": "CLOUDLAB_MLX5",
-    "aws_tcp": "AWS_ENA",
-    "cloudlab_tcp": "CLOUDLAB_MLX5",
+config_mapping = {
+    "aws_afxdp_c5": ["AWS_C5", "ens6", 3498],
+    "aws_afxdp_g4": ["AWS_G4", "ens6", 3498],
+    "aws_afxdp_g4_metal": ["AWS_G4_METAL", "enp199s0", 3498],
+    "cloudlab_afxdp_xl170": ["CLOUDLAB_XL170", "ens1f1np1", 1500],
+    "cloudlab_afxdp_d6515": ["CLOUDLAB_D6515", "enp65s0f0np0", 3498],
+    #
+    "aws_tcp_c5": ["AWS_C5", "ens6", 9001],
+    "aws_tcp_g4": ["AWS_G4", "ens6", 9001],
+    "aws_tcp_g4_metal": ["AWS_G4_METAL", "enp199s0", 9001],
+    "cloudlab_tcp_xl170": ["CLOUDLAB_XL170", "ens1f1np1", 1500],
+    "cloudlab_tcp_d6515": ["CLOUDLAB_D6515", "enp65s0f0np0", 9000],
 }
 
-config_nic_cmd_mapping = {
-    "aws_afxdp": f"./config_nic.sh {aws_dev} {num_queues} {num_irqcores} 3498 afxdp aws",
-    "cloudlab_afxdp": f"./config_nic.sh ens1f1np1 {num_queues} {num_irqcores} 1500 afxdp cloudlab",
-    "aws_tcp": f"./config_nic.sh {aws_dev} {core_count} {core_count} 9001 tcp aws",
-    "cloudlab_tcp": f"./config_nic.sh ens1f1np1 {core_count} {core_count} 1500 tcp cloudlab",
-}
+# nic_cmd_mapping = {
+#     "aws_afxdp": f"./config_nic.sh {net_dev} {num_queues} {num_irqcores} 3498 afxdp aws",
+#     "cloudlab_afxdp": f"./config_nic.sh {net_dev} {num_queues} {num_irqcores} 3498 afxdp cloudlab",
+#     "aws_tcp": f"./config_nic.sh {net_dev} {core_count} {core_count} 9001 tcp aws",
+#     "cloudlab_tcp": f"./config_nic.sh {net_dev} {core_count} {core_count} 1500 tcp cloudlab",
+# }
 
 
 def read_nodes():
@@ -44,12 +49,20 @@ if __name__ == "__main__":
     parser.add_argument(
         "--target",
         type=str,
-        default="cloudlab_afxdp",
-        help="aws_afxdp, cloudlab_afxdp, aws_tcp, cloudlab_tcp",
+        default="cloudlab_afxdp_xl170",
+        help=f"{", ".join(list(config_mapping.keys()))}",
     )
 
     args = parser.parse_args()
     target = args.target
+
+    if target not in config_mapping:
+        print("target not found!")
+        exit(0)
+
+    make_macro = config_mapping[target][0]
+    net_dev = config_mapping[target][1]
+    mtu = config_mapping[target][2]
 
     nodes = read_nodes()
     print(f"Nodes: {nodes}")
@@ -61,21 +74,28 @@ if __name__ == "__main__":
 
     _ = exec_command_and_wait(
         node_clients[0],
-        f'cd /opt/uccl/afxdp; make -j "CXXFLAGS=-D{make_macro_mapping[target]}"',
+        f'cd /opt/uccl/afxdp; make -j "CXXFLAGS=-D{make_macro}"',
     )
 
     _ = exec_command_and_wait(node_clients[0], f"cd /opt/uccl; ./sync.sh")
 
+    afxdp_or_tcp = "afxdp" if "afxdp" in target else "tcp"
+    aws_or_cloudlab = "aws" if "aws" in target else "cloudlab"
+    if afxdp_or_tcp == "afxdp":
+        nic_cmd = f"./config_nic.sh {net_dev} {num_queues} {num_irqcores} {mtu} {afxdp_or_tcp} {aws_or_cloudlab}"
+    else:
+        nic_cmd = f"./config_nic.sh {net_dev} {core_count} {core_count} {mtu} {afxdp_or_tcp} {aws_or_cloudlab}"
+
     wait_handler_vec = []
     for node_client in node_clients:
         wait_handler = exec_command_no_wait(
-            node_client, f"cd /opt/uccl; {config_nic_cmd_mapping[target]}"
+            node_client, f"cd /opt/uccl; {nic_cmd}"
         )
         wait_handler_vec.append(wait_handler)
     for wait_handler in wait_handler_vec:
         _ = wait_handler.wait()
 
-    if target == "aws_tcp" or target == "cloudlab_tcp":
+    if afxdp_or_tcp == "tcp":
         exit(0)
 
     wait_handler_vec.clear()

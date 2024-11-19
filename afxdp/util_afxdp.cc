@@ -338,7 +338,7 @@ uint32_t AFXDPSocket::send_packets(std::vector<frame_desc> &frames) {
 
 void AFXDPSocket::populate_fill_queue(uint32_t nb_frames) {
     // TODO(yang): figure out why cloudlab needs xsk_prod_nb_free().
-#ifdef AWS_ENA
+#ifdef defined(AWS_C5) || defined(AWS_G4) || defined(AWS_G4_METAL)
     auto stock_frames = nb_frames;
 #else
     auto stock_frames = xsk_prod_nb_free(&fill_queue_, nb_frames);

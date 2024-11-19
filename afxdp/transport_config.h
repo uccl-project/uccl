@@ -16,21 +16,20 @@ static const uint32_t ENGINE_CPU_START = 0;
 static const uint16_t BASE_PORT = 10000;
 static const uint32_t kPortEntropy = 128;
 
-#if !defined(AWS_ENA) && !defined(CLOUDLAB_MLX5)
-#define CLOUDLAB_MLX5
-#endif
-
-#ifdef AWS_ENA
-// On AWS ENA (eg, c5, g4dn)
+#if defined(AWS_C5) || defined(AWS_G4)
 static const uint32_t AFXDP_MTU = 3498;
 static const char* DEV_DEFAULT = "ens6";
-// static const char* DEV_DEFAULT = "enp199s0";
-#elif defined(CLOUDLAB_MLX5)
-// On Cloudlab (xl170-ubuntu24-v6.8 profile)
+#elif defined(AWS_G4_METAL)
+static const uint32_t AFXDP_MTU = 3498;
+static const char* DEV_DEFAULT = "enp199s0";
+#elif defined(CLOUDLAB_XL170)
 static const uint32_t AFXDP_MTU = 1500;
 static const char* DEV_DEFAULT = "ens1f1np1";
+#elif defined(CLOUDLAB_D6515)
+static const uint32_t AFXDP_MTU = 3498;
+static const char* DEV_DEFAULT = "enp65s0f0np0";
 #else
-static_assert(false, "Please specify the platform in make");
+#define CLOUDLAB_XL170
 #endif
 
 #endif  // TRANSPORT_CONFIG_H
