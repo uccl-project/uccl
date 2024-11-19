@@ -117,32 +117,23 @@ RXTracking::ConsumeRet RXTracking::consume(swift::Pcb *pcb, FrameBuf *msgbuf) {
     // Only iterate through the deque if we must, i.e., for ooo packts only
     auto it = reass_q_.begin();
     if (seqno != expected_seqno) {
-        it = std::find_if(reass_q_.begin(), reass_q_.end(),
-                          [&seqno](const reasm_queue_ent_t &entry) {
-                              return entry.seqno >= seqno;
-                          });
-        VLOG(3) << "Received OOO packet: seqno " << seqno << " reass_q size "
-                << reass_q_.size();
-        if (it != reass_q_.end() && it->seqno == seqno) {
+        it = reass_q_.lower_bound(seqno);
+        if (it != reass_q_.end() && it->first == seqno) {
             VLOG(3) << "Received duplicate packet: " << seqno;
             // Duplicate packet. Drop it.
             socket_->push_frame(msgbuf->get_frame_offset());
             return kOOOTrackableDup;
         }
+        VLOG(3) << "Received OOO trackable packet: " << seqno
+                << " payload_len: " << frame_len - kNetHdrLen - kUcclHdrLen
+                << " reass_q size " << reass_q_.size();
+    } else {
+        VLOG(3) << "Received expected packet: " << seqno
+                << " payload_len: " << frame_len - kNetHdrLen - kUcclHdrLen;
     }
 
     // Buffer the packet in the frame pool. It may be out-of-order.
-    const size_t payload_len = frame_len - kNetHdrLen - kUcclHdrLen;
-
-    if (seqno == expected_seqno) {
-        VLOG(3) << "Received expected packet: " << seqno
-                << " payload_len: " << payload_len;
-        reass_q_.emplace_front(msgbuf, seqno);
-    } else {
-        VLOG(3) << "Received OOO trackable packet: " << seqno
-                << " payload_len: " << payload_len;
-        reass_q_.insert(it, reasm_queue_ent_t(msgbuf, seqno));
-    }
+    reass_q_.insert(it, std::pair<uint32_t, FrameBuf *>(seqno, msgbuf));
 
     // Update the SACK bitmap for the newly received packet.
     pcb->sack_bitmap_bit_set(distance);
@@ -154,10 +145,9 @@ RXTracking::ConsumeRet RXTracking::consume(swift::Pcb *pcb, FrameBuf *msgbuf) {
 }
 
 void RXTracking::push_inorder_msgbuf_to_app(swift::Pcb *pcb) {
-    while (!reass_q_.empty() && reass_q_.front().seqno == pcb->rcv_nxt) {
-        auto &front = reass_q_.front();
-        auto *msgbuf = front.msgbuf;
-        reass_q_.pop_front();
+    while (!reass_q_.empty() && reass_q_.begin()->first == pcb->rcv_nxt) {
+        auto *msgbuf = reass_q_.begin()->second;
+        reass_q_.erase(reass_q_.begin());
 
         if (cur_msg_train_head_ == nullptr) {
             DCHECK(msgbuf->is_first());
@@ -694,6 +684,7 @@ void UcclEngine::run() {
             VLOG(3) << "Tx jring dequeue";
             auto [tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames] =
                 deserialize_msg(tx_work.data, tx_work.len_tosend);
+            
             VLOG(3) << "Tx process_tx_msg";
             // Append these tx frames to the flow's tx queue, and trigger
             // intial tx. Future received ACKs will trigger more tx.

@@ -24,6 +24,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <map>
 
 #include "transport_cc.h"
 #include "transport_config.h"
@@ -276,12 +277,7 @@ class RXTracking {
     AFXDPSocket *socket_;
     Channel *channel_;
 
-    struct reasm_queue_ent_t {
-        FrameBuf *msgbuf;
-        uint64_t seqno;
-        reasm_queue_ent_t(FrameBuf *m, uint64_t s) : msgbuf(m), seqno(s) {}
-    };
-    std::deque<reasm_queue_ent_t> reass_q_;
+    std::map<uint32_t, FrameBuf *> reass_q_;
     FrameBuf *cur_msg_train_head_;
     FrameBuf *cur_msg_train_tail_;
     struct ready_msg_t {
