@@ -259,12 +259,12 @@ std::string UcclFlow::to_string() const {
     return s;
 }
 
-void UcclFlow::rx_messages(std::vector<FrameBuf *> &msgbufs) {
-    VLOG(3) << "Received " << msgbufs.size() << " packets";
+void UcclFlow::rx_messages() {
+    VLOG(3) << "Received " << pending_rx_msgbufs_.size() << " packets";
     uint32_t num_data_frames_recvd = 0;
     bool ecn_recvd = false;
     RXTracking::ConsumeRet consume_ret;
-    for (auto msgbuf : msgbufs) {
+    for (auto msgbuf : pending_rx_msgbufs_) {
         // ebpf_transport has filtered out invalid pkts.
         auto *pkt_addr = msgbuf->get_pkt_addr();
         auto *ucclh = reinterpret_cast<UcclPktHdr *>(pkt_addr + kNetHdrLen);
@@ -299,6 +299,8 @@ void UcclFlow::rx_messages(std::vector<FrameBuf *> &msgbufs) {
                         << std::bitset<8>((uint8_t)ucclh->net_flags);
         }
     }
+    pending_rx_msgbufs_.clear();
+
     // Send one ack for a bunch of received packets.
     if (num_data_frames_recvd) {
         if (rx_tracking_.ready_msg_stash_.size() <= kReadyMsgThresholdForEcn) {
@@ -680,7 +682,7 @@ void UcclEngine::run() {
         }
 
         auto frames = socket_->recv_packets(RECV_BATCH_SIZE);
-        if (frames.size()) dispatch_pkts_to_local_engine(frames);
+        if (frames.size()) process_rx_msg(frames);
 
         if (jring_sc_dequeue_bulk(channel_->tx_cmdq_, &tx_work, 1, nullptr) ==
             1) {
@@ -717,7 +719,7 @@ void UcclEngine::run() {
     delete socket_;
 }
 
-void UcclEngine::dispatch_pkts_to_local_engine(
+void UcclEngine::process_rx_msg(
     std::vector<AFXDPSocket::frame_desc> &pkt_msgs) {
     for (auto &frame : pkt_msgs) {
         auto *msgbuf = FrameBuf::Create(frame.frame_offset,
@@ -745,12 +747,22 @@ void UcclEngine::dispatch_pkts_to_local_engine(
         }
 
         auto flow_id = ucclh->flow_id.value();
-        rx_msgbuf_map_[flow_id].push_back(msgbuf);
+
+        auto it = active_flows_map_.find(flow_id);
+        if (it == active_flows_map_.end()) {
+            LOG_EVERY_N(ERROR, 1000000) << "process_rx_msg unknown flow "
+                                        << std::hex << "0x" << flow_id;
+            for (auto [flow_id, flow] : active_flows_map_) {
+                LOG_EVERY_N(ERROR, 1000000) << "                active flow "
+                                            << std::hex << "0x" << flow_id;
+            }
+            socket_->push_frame(msgbuf->get_frame_offset());
+            continue;
+        }
+        it->second->pending_rx_msgbufs_.push_back(msgbuf);
     }
-    for (auto &[flow_id, msgbufs] : rx_msgbuf_map_) {
-        if (msgbufs.empty()) continue;
-        process_rx_msg(msgbufs, flow_id);
-        msgbufs.clear();
+    for (auto &[flow_id, flow] : active_flows_map_) {
+        flow->rx_messages();
     }
 }
 
@@ -764,24 +776,6 @@ void UcclEngine::periodic_process() {
     if (!stay_quiet_ && periodic_ticks_ % kDumpStatusTicks == 0) dump_status();
     handle_rto();
     process_ctl_reqs();
-}
-
-void UcclEngine::process_rx_msg(std::vector<FrameBuf *> &msgbufs,
-                                FlowID flow_id) {
-    // Yang: this only happens on aws instances with no guarantee net bw.
-    if (active_flows_map_.find(flow_id) == active_flows_map_.end()) {
-        LOG_EVERY_N(ERROR, 1000000)
-            << "process_rx_msg unknown flow " << std::hex << "0x" << flow_id;
-        for (auto [flow_id, flow] : active_flows_map_) {
-            LOG_EVERY_N(ERROR, 1000000) << "                active flow "
-                                        << std::hex << "0x" << flow_id;
-        }
-        for (auto msgbuf : msgbufs) {
-            socket_->push_frame(msgbuf->get_frame_offset());
-        }
-        return;
-    }
-    active_flows_map_[flow_id]->rx_messages(msgbufs);
 }
 
 void UcclEngine::handle_rto() {
@@ -982,10 +976,6 @@ ConnID UcclEngine::exchange_info_and_finish_setup(int bootstrap_fd,
                   << " : " << local_ip_str << Format("(%d)", conn_id.engine_idx)
                   << "<->" << remote_ip << Format("(%d)", remote_engine_idx);
 
-        // Finally sync client and sender to make sure any incoming packets have
-        // found the flow installed; otherwise, SEGV may happen.
-        net_barrier(bootstrap_fd);
-
         std::atomic_thread_fence(std::memory_order_release);
         std::atomic_store_explicit(&done, true, std::memory_order_relaxed);
     });
@@ -1004,6 +994,10 @@ ConnID UcclEngine::exchange_info_and_finish_setup(int bootstrap_fd,
     std::atomic_thread_fence(std::memory_order_acquire);
 
     t.join();
+
+    // Finally sync client and sender to make sure any incoming packets have
+    // found the flow installed; otherwise, SEGV may happen.
+    net_barrier(bootstrap_fd);
 
     return conn_id;
 }

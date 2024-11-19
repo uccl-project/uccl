@@ -362,6 +362,7 @@ void AFXDPSocket::populate_fill_queue(uint32_t nb_frames) {
 std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
     uint32_t nb_frames) {
     std::vector<AFXDPSocket::frame_desc> frames;
+    frames.reserve(nb_frames);
     uint32_t idx_rx, rcvd;
     rcvd = xsk_ring_cons__peek(&recv_queue_, nb_frames, &idx_rx);
     if (!rcvd) {

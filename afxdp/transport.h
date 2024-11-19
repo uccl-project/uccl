@@ -315,7 +315,7 @@ class RXTracking {
  */
 class UcclFlow {
     const static uint32_t kReadyMsgThresholdForEcn = 32;
-    const static uint32_t kPortEntropy = 1024;
+    const static uint32_t kPortEntropy = 128;
 
    public:
     /**
@@ -361,12 +361,8 @@ class UcclFlow {
      *
      * If this is a transport control packet (e.g., ACK) it only updates
      * transport-related parameters for the flow.
-     *
-     * @param msgbuf Pointer to the allocated packet
-     * @param app_buf Pointer to the application receiving buffer
-     * @param app_buf_len Pointer to the application buffer length
      */
-    void rx_messages(std::vector<FrameBuf *>& msgbufs);
+    void rx_messages();
 
     inline void rx_supply_app_buf(void *app_buf, size_t *app_buf_len,
                                   PollCtx *poll_ctx) {
@@ -468,6 +464,8 @@ class UcclFlow {
     std::vector<AFXDPSocket::frame_desc> pending_tx_frames_;
     // Missing data frames to be sent.
     std::vector<AFXDPSocket::frame_desc> missing_frames_;
+    // Frames that are pending rx processing in a batch.
+    std::vector<FrameBuf *> pending_rx_msgbufs_;
 
     // Swift CC protocol control block.
     swift::Pcb pcb_;
@@ -519,9 +517,6 @@ class UcclEngine {
      */
     void run();
 
-    void dispatch_pkts_to_local_engine(
-        std::vector<AFXDPSocket::frame_desc> &pkt_msgs);
-
     /**
      * @brief Method to perform periodic processing. This is called by the
      * main engine cycle (see method `Run`).
@@ -540,6 +535,13 @@ class UcclEngine {
 
    protected:
     /**
+     * @brief Process incoming packets.
+     *
+     * @param pkt_msgs Pointer to a list of packets.
+     */
+    void process_rx_msg(std::vector<AFXDPSocket::frame_desc> &pkt_msgs);
+
+    /**
      * @brief Supply the application with a buffer to receive the incoming
      * message.
      *
@@ -551,15 +553,6 @@ class UcclEngine {
         active_flows_map_[flow_id]->rx_supply_app_buf(app_buf, app_buf_len,
                                                       poll_ctx);
     }
-
-    /**
-     * @brief Process an incoming packet.
-     *
-     * @param msgbuf Pointer to the packet.
-     * @param app_buf Pointer to the application receiving buffer.
-     * @param app_buf_len Pointer to the length of the application buffer.
-     */
-    void process_rx_msg(std::vector<FrameBuf *>& msgbufs, FlowID flow_id);
 
     /**
      * Process a message enqueued from an application to a channel.
@@ -604,8 +597,6 @@ class UcclEngine {
     std::unordered_map<FlowID, UcclFlow *> active_flows_map_;
     // Control plane channel with Endpoint.
     Channel *channel_;
-    // Classifiy the incoming packets into the right flow.
-    std::unordered_map<FlowID, std::vector<FrameBuf *>> rx_msgbuf_map_;
     // Timestamp of last periodic process execution.
     uint64_t last_periodic_timestamp_;
     // Clock ticks for the slow timer.
