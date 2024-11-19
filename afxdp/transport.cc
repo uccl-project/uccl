@@ -344,6 +344,8 @@ bool UcclFlow::periodic_check() {
 }
 
 void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
+    const auto *ucclsackh = reinterpret_cast<const UcclSackHdr *>(
+        reinterpret_cast<const uint8_t *>(ucclh) + kUcclHdrLen);
     auto ackno = ucclh->ackno.value();
     if (swift::seqno_lt(ackno, pcb_.snd_una)) {
         VLOG(3) << "Received old ACK " << ackno;
@@ -353,7 +355,7 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
         // Duplicate ACK.
         pcb_.duplicate_acks++;
         // Update the number of out-of-order acknowledgements.
-        pcb_.snd_ooo_acks = ucclh->sack_bitmap_count.value();
+        pcb_.snd_ooo_acks = ucclsackh->sack_bitmap_count.value();
 
         if (pcb_.duplicate_acks < swift::Pcb::kFastRexmitDupAckThres) {
             // We have not reached the threshold yet, so we do not do
@@ -364,7 +366,7 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
         } else {
             // We have already done the fast retransmit, so we are now
             // in the fast recovery phase.
-            auto sack_bitmap_count = ucclh->sack_bitmap_count.value();
+            auto sack_bitmap_count = ucclsackh->sack_bitmap_count.value();
             // We check the SACK bitmap to see if there are more undelivered
             // packets. In fast recovery mode we get after a fast
             // retransmit, we will retransmit all missing packets that we
@@ -381,7 +383,7 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
                 const size_t sack_bitmap_idx_in_bucket =
                     index % swift::Pcb::kSackBitmapBucketSize;
                 auto sack_bitmap =
-                    ucclh->sack_bitmap[sack_bitmap_bucket_idx].value();
+                    ucclsackh->sack_bitmap[sack_bitmap_bucket_idx].value();
                 if ((sack_bitmap & (1ULL << sack_bitmap_idx_in_bucket)) == 0) {
                     // We found a missing packet.
                     auto seqno = pcb_.snd_una + index;
@@ -473,9 +475,11 @@ void UcclFlow::prepare_l4header(uint8_t *pkt_addr, uint32_t payload_bytes,
     tcph->dest = htons(BASE_PORT);
 #endif
     tcph->doff = 5;
-    // TODO(yang): tcpdump shows wrong checksum. Need to fix it.
-    // tcph->check = tcp_hdr_chksum(htonl(local_addr_), htonl(remote_addr_),
-    //                              5 * sizeof(uint32_t) + payload_bytes);
+    tcph->check = 0;
+#ifdef ENABLE_CSUM
+    tcph->check = ipv4_udptcp_cksum(IPPROTO_TCP, local_addr_, remote_addr_,
+                                    sizeof(tcphdr) + payload_bytes, tcph);
+#endif
 #else
     auto *udph = (udphdr *)(pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
 #ifdef USING_MULTIPATH
@@ -487,13 +491,16 @@ void UcclFlow::prepare_l4header(uint8_t *pkt_addr, uint32_t payload_bytes,
 #endif
     udph->len = htons(sizeof(udphdr) + payload_bytes);
     udph->check = htons(0);
-    // TODO(yang): Calculate the UDP checksum.
+#ifdef ENABLE_CSUM
+    udph->check = ipv4_udptcp_cksum(IPPROTO_UDP, local_addr_, remote_addr_,
+                                    sizeof(udphdr) + payload_bytes, udph);
+#endif
 #endif
 }
 
 AFXDPSocket::frame_desc UcclFlow::craft_ctlpacket(
     uint32_t seqno, uint32_t ackno, const UcclPktHdr::UcclFlags &net_flags) {
-    const size_t kControlPayloadBytes = kUcclHdrLen;
+    const size_t kControlPayloadBytes = kUcclHdrLen + kUcclSackHdrLen;
     auto frame_offset = socket_->pop_frame();
     auto msgbuf = FrameBuf::Create(frame_offset, socket_->umem_buffer_,
                                    kNetHdrLen + kControlPayloadBytes);
@@ -515,12 +522,14 @@ AFXDPSocket::frame_desc UcclFlow::craft_ctlpacket(
     ucclh->ackno = be32_t(ackno);
     ucclh->flow_id = be64_t(flow_id_);
 
-    for (size_t i = 0; i < sizeof(UcclPktHdr::sack_bitmap) /
-                               sizeof(UcclPktHdr::sack_bitmap[0]);
+    auto *ucclsackh = (UcclSackHdr *)(pkt_addr + kNetHdrLen + kUcclHdrLen);
+
+    for (size_t i = 0; i < sizeof(UcclSackHdr::sack_bitmap) /
+                               sizeof(UcclSackHdr::sack_bitmap[0]);
          ++i) {
-        ucclh->sack_bitmap[i] = be64_t(pcb_.sack_bitmap[i]);
+        ucclsackh->sack_bitmap[i] = be64_t(pcb_.sack_bitmap[i]);
     }
-    ucclh->sack_bitmap_count = be16_t(pcb_.sack_bitmap_count);
+    ucclsackh->sack_bitmap_count = be16_t(pcb_.sack_bitmap_count);
 
     return {frame_offset, kNetHdrLen + kControlPayloadBytes};
 }
@@ -684,7 +693,7 @@ void UcclEngine::run() {
             VLOG(3) << "Tx jring dequeue";
             auto [tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames] =
                 deserialize_msg(tx_work.data, tx_work.len_tosend);
-            
+
             VLOG(3) << "Tx process_tx_msg";
             // Append these tx frames to the flow's tx queue, and trigger
             // intial tx. Future received ACKs will trigger more tx.
@@ -946,18 +955,18 @@ ConnID UcclEngine::exchange_info_and_finish_setup(int bootstrap_fd,
         std::atomic_thread_fence(std::memory_order_acquire);
 
         LOG(INFO) << "dst_ports size: " << local_dst_ports.size();
-        DCHECK_GE(local_dst_ports.size(), UcclFlow::kPortEntropy);
+        DCHECK_GE(local_dst_ports.size(), kPortEntropy);
 
         // send the local_dst_ports back to the server
         std::vector<uint16_t> local_dst_ports_vec(local_dst_ports.begin(),
                                                   local_dst_ports.end());
         int ret = write(bootstrap_fd, local_dst_ports_vec.data(),
-                        UcclFlow::kPortEntropy * sizeof(uint16_t));
+                        kPortEntropy * sizeof(uint16_t));
 
         std::vector<uint16_t> recvd_dst_ports;
-        recvd_dst_ports.resize(UcclFlow::kPortEntropy);
+        recvd_dst_ports.resize(kPortEntropy);
         ret = read(bootstrap_fd, recvd_dst_ports.data(),
-                   UcclFlow::kPortEntropy * sizeof(uint16_t));
+                   kPortEntropy * sizeof(uint16_t));
         LOG(INFO) << "recvd_dst_ports size: " << recvd_dst_ports.size();
 
         flow->dst_ports_.insert(flow->dst_ports_.end(), recvd_dst_ports.begin(),
@@ -1173,7 +1182,7 @@ ConnID Endpoint::uccl_connect(std::string remote_ip) {
     return uccl_connect_on_engine(remote_ip, bootstrap_fd, local_engine_idx);
 }
 
-std::tuple<ConnID, std::string> Endpoint::uccl_accept() {
+ConnID Endpoint::uccl_accept(std::string &remote_ip) {
     struct sockaddr_in cli_addr;
     socklen_t clilen = sizeof(cli_addr);
     int bootstrap_fd;
@@ -1181,7 +1190,7 @@ std::tuple<ConnID, std::string> Endpoint::uccl_accept() {
     // Accept connection and set nonblocking and nodelay
     bootstrap_fd = accept(listen_fd_, (struct sockaddr *)&cli_addr, &clilen);
     DCHECK(bootstrap_fd >= 0);
-    auto remote_ip = ip_to_str(cli_addr.sin_addr.s_addr);
+    remote_ip = ip_to_str(cli_addr.sin_addr.s_addr);
 
     LOG(INFO) << "Accept from " << remote_ip << ":" << cli_addr.sin_port;
 
@@ -1193,7 +1202,7 @@ std::tuple<ConnID, std::string> Endpoint::uccl_accept() {
     auto conn_id =
         uccl_accept_on_engine(remote_ip, bootstrap_fd, local_engine_idx);
 
-    return std::make_tuple(conn_id, remote_ip);
+    return conn_id;
 }
 
 bool Endpoint::uccl_send(ConnID conn_id, const void *data, const size_t len) {

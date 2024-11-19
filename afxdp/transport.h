@@ -16,6 +16,7 @@
 #include <functional>
 #include <future>
 #include <list>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -24,7 +25,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include <map>
 
 #include "transport_cc.h"
 #include "transport_config.h"
@@ -136,13 +136,16 @@ struct __attribute__((packed)) UcclPktHdr {
     be64_t flow_id;       // Flow ID to denote the connection.
     be32_t seqno;  // Sequence number to denote the packet counter in the flow.
     be32_t ackno;  // Sequence number to denote the packet counter in the flow.
+};
+struct __attribute__((packed)) UcclSackHdr {
     be64_t sack_bitmap[swift::Pcb::kSackBitmapSize /
                        swift::Pcb::kSackBitmapBucketSize];  // Bitmap of the
                                                             // SACKs received.
     be16_t sack_bitmap_count;  // Length of the SACK bitmap [0-256].
 };
 static const size_t kUcclHdrLen = sizeof(UcclPktHdr);
-static_assert(kUcclHdrLen == 58, "UcclPktHdr size mismatch");
+static const size_t kUcclSackHdrLen = sizeof(UcclSackHdr);
+static_assert(kUcclHdrLen == 24, "UcclPktHdr size mismatch");
 
 #ifdef USING_TCP
 static const size_t kNetHdrLen =
@@ -311,7 +314,6 @@ class RXTracking {
  */
 class UcclFlow {
     const static uint32_t kReadyMsgThresholdForEcn = 32;
-    const static uint32_t kPortEntropy = 128;
 
    public:
     /**
@@ -641,7 +643,7 @@ class Endpoint {
     // Connecting to a remote address; thread-safe
     ConnID uccl_connect(std::string remote_ip);
     // Accepting a connection from a remote address; thread-safe
-    std::tuple<ConnID, std::string> uccl_accept();
+    ConnID uccl_accept(std::string& remote_ip);
 
     // Sending the data by leveraging multiple port combinations.
     bool uccl_send(ConnID flow_id, const void *data, const size_t len);
@@ -658,6 +660,9 @@ class Endpoint {
     bool uccl_poll(PollCtx *ctx);
     bool uccl_poll_once(PollCtx *ctx);
 
+    // Zero-copy APIs
+    // std::vector<>
+
    private:
     ConnID uccl_connect_on_engine(const std::string remote_ip, int bootstrap_fd,
                                   int engine_idx);
@@ -668,5 +673,10 @@ class Endpoint {
 
     friend class UcclFlow;
 };
+
+// class ZeroCopyBuf {
+//     std::vector<>
+//     public: 
+// };
 
 }  // namespace uccl

@@ -223,15 +223,16 @@ int main(int argc, char* argv[]) {
         auto ep =
             Endpoint(DEV_DEFAULT, NUM_QUEUES, NUM_FRAMES, ENGINE_CPU_START);
         // pin_thread_to_cpu(ENGINE_CPU_START + 1);
-        auto [conn_id, _] = ep.uccl_accept();
+        std::string remote_ip;
+        auto conn_id = ep.uccl_accept(remote_ip);
         ConnID conn_id2;
         ConnID conn_id_vec[NUM_QUEUES];
         if (test_type == kMc) {
-            std::tie(conn_id2, std::ignore) = ep.uccl_accept();
+            conn_id2 = ep.uccl_accept(remote_ip);
         } else if (test_type == kMq) {
             conn_id_vec[0] = conn_id;
             for (int i = 1; i < NUM_QUEUES; i++)
-                std::tie(conn_id_vec[i], std::ignore) = ep.uccl_accept();
+                conn_id_vec[i] = ep.uccl_accept(remote_ip);
         }
 
         size_t send_len = kTestMsgSize, recv_len = kTestMsgSize;

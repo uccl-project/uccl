@@ -179,7 +179,7 @@ ncclResult_t pluginAccept(void* listenComm, void** recvComm,
 
     std::string remote_ip_str;
     for (int i = 0; i < NUM_QUEUES; i++) {
-        std::tie(data_ctx->conn_id[i], remote_ip_str) = ep->uccl_accept();
+        data_ctx->conn_id[i] = ep->uccl_accept(remote_ip_str);
     }
     LOG(INFO) << "pluginAccept: accepted connection from " << remote_ip_str;
 

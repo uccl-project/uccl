@@ -26,7 +26,7 @@ struct {
     (sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr))
 #endif
 #define kMagic 0x4e53
-#define kUcclHdrLen 58
+#define kUcclHdrLen 24
 
 SEC("ebpf_transport")
 int ebpf_transport_filter(struct xdp_md *ctx) {

@@ -3,7 +3,7 @@
 ### Building the system
 
 ```
-sudo apt install clang llvm libelf-dev libpcap-dev build-essential libc6-dev-i386 linux-tools-$(uname -r) libgoogle-glog-dev byobu net-tools iperf -y
+sudo apt install clang llvm libelf-dev libpcap-dev build-essential libc6-dev-i386 linux-tools-$(uname -r) libgoogle-glog-dev byobu net-tools iperf iperf3 -y
 make
 ```
 

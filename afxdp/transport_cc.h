@@ -35,7 +35,7 @@ constexpr bool seqno_gt(uint32_t a, uint32_t b) {
 // TODO(ilias): First-cut implementation. Needs a lot of work.
 struct Pcb {
     static constexpr std::size_t kInitialCwnd = 256;
-    static constexpr std::size_t kSackBitmapSize = 256;
+    static constexpr std::size_t kSackBitmapSize = 1024;
     static constexpr std::size_t kSackBitmapBucketSize = sizeof(uint64_t) * 8;
     static constexpr std::size_t kFastRexmitDupAckThres = 3;
     static constexpr std::size_t kRtoMaxRexmitConsectutiveAllowed = 102400;

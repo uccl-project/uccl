@@ -40,26 +40,6 @@ static inline T Percentile(std::vector<T>& vectorIn, double percent) {
     return *nth;
 }
 
-static inline uint16_t ipv4_checksum(const void* data, size_t header_length) {
-    unsigned long sum = 0;
-
-    const uint16_t* p = (const uint16_t*)data;
-
-    while (header_length > 1) {
-        sum += *p++;
-        if (sum & 0x80000000) {
-            sum = (sum & 0xFFFF) + (sum >> 16);
-        }
-        header_length -= 2;
-    }
-
-    while (sum >> 16) {
-        sum = (sum & 0xFFFF) + (sum >> 16);
-    }
-
-    return ~sum;
-}
-
 static inline bool pin_thread_to_cpu(int cpu) {
     int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
     if (cpu < 0 || cpu >= num_cpus) return false;
@@ -212,6 +192,26 @@ static inline jring_t* create_ring(size_t element_size, size_t element_count) {
     return ring;
 }
 
+static inline uint16_t ipv4_checksum(const void* data, size_t header_length) {
+    unsigned long sum = 0;
+
+    const uint16_t* p = (const uint16_t*)data;
+
+    while (header_length > 1) {
+        sum += *p++;
+        if (sum & 0x80000000) {
+            sum = (sum & 0xFFFF) + (sum >> 16);
+        }
+        header_length -= 2;
+    }
+
+    while (sum >> 16) {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+
+    return ~sum;
+}
+
 /*
  * SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 1982, 1986, 1990, 1993
@@ -334,11 +334,6 @@ static inline uint16_t ipv4_udptcp_cksum(uint8_t proto, uint32_t saddr,
     if (cksum == 0) cksum = 0xffff;
 
     return (uint16_t)cksum;
-}
-
-static inline uint16_t tcp_hdr_chksum(uint32_t local_ip, uint32_t remote_ip,
-                                      uint16_t len) {
-    return ipv4_phdr_cksum(IPPROTO_TCP, local_ip, remote_ip, len);
 }
 
 static inline uint64_t rdtsc(void) {

@@ -4,6 +4,7 @@
 #include <cstdint>
 
 // #define USING_TCP
+// #define ENABLE_CSUM
 #define USING_MULTIPATH
 
 static const uint32_t RECV_BATCH_SIZE = 32;
@@ -13,6 +14,7 @@ static const uint32_t NUM_QUEUES = 1;
 static const uint64_t NUM_FRAMES = 1024 * 1024;
 static const uint32_t ENGINE_CPU_START = 0;
 static const uint16_t BASE_PORT = 10000;
+static const uint32_t kPortEntropy = 128;
 
 #if !defined(AWS_ENA) && !defined(CLOUDLAB_MLX5)
 #define CLOUDLAB_MLX5
