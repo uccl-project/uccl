@@ -24,14 +24,6 @@ config_mapping = {
     "cloudlab_tcp_d6515": ["CLOUDLAB_D6515", "enp65s0f0np0", 9000],
 }
 
-# nic_cmd_mapping = {
-#     "aws_afxdp": f"./config_nic.sh {net_dev} {num_queues} {num_irqcores} 3498 afxdp aws",
-#     "cloudlab_afxdp": f"./config_nic.sh {net_dev} {num_queues} {num_irqcores} 3498 afxdp cloudlab",
-#     "aws_tcp": f"./config_nic.sh {net_dev} {core_count} {core_count} 9001 tcp aws",
-#     "cloudlab_tcp": f"./config_nic.sh {net_dev} {core_count} {core_count} 1500 tcp cloudlab",
-# }
-
-
 def read_nodes():
     with open("nodes.txt", "r") as file:
         return [
@@ -41,7 +33,7 @@ def read_nodes():
         ]
 
 
-# Usage: python setup_all.py --target aws_afxdp|cloudlab_afxdp|aws_tcp|cloudlab_tcp
+# Usage: python setup_all.py --target=cloudlab_afxdp_xl170
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="parsing setup_all arguments.")

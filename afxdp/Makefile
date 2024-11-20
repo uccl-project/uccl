@@ -2,12 +2,12 @@ ABS_ROOT_PATH := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
 KERNEL = $(shell uname -r)
 INC = -I ../lib/install/include
-LIBS = ../lib/install/lib/libxdp.a ../lib/install/lib/libbpf.a -lglog -lgflags -lz -lelf
+LIBS = ../lib/install/lib/libxdp.a ../lib/install/lib/libbpf.a -lglog -lgflags -lgtest -lz -lelf
 # LIBS = -L../lib/xdp-tools/lib/libxdp -lxdp -L../lib/libbpf/src -lbpf -lglog -lgflags -lz -lelf
 LIBS_SHARED = -Wl,-rpath=$(ABS_ROOT_PATH)/../lib/xdp-tools/lib/libxdp/ \
 	   		  -Wl,-rpath=$(ABS_ROOT_PATH)/../lib/libbpf/src/ \
 	   		  -L../lib/xdp-tools/lib/libxdp -lxdp -L../lib/libbpf/src -lbpf \
-	   		  -lglog -lgflags -lz -lelf
+	   		  -lglog -lgflags -lgtest -lz -lelf
 override CXXFLAGS += -O3 -g -std=c++17 -Wno-pointer-arith -Wno-interference-size -fPIC
 CLANGFLAGS = -O3 -g
 DEPS = *.h
@@ -84,6 +84,12 @@ util_afxdp_test: util_afxdp_test.cc ebpf_client.o $(DEPS) $(lib_obj)
 
 rss_hash_test: rss_hash_test.cc $(DEPS) $(lib_obj)
 	g++ rss_hash_test.cc -o rss_hash_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
+
+timely_test: timely_test.cc $(DEPS) $(lib_obj)
+	g++ timely_test.cc -o timely_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
+
+timing_wheel_test: timing_wheel_test.cc $(DEPS) $(lib_obj)
+	g++ timing_wheel_test.cc -o timing_wheel_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
 %.o: %.cc $(DEPS)
 	g++ -c $< -o $@ $(INC) $(CXXFLAGS)

@@ -32,6 +32,7 @@
 #include "util_afxdp.h"
 #include "util_endian.h"
 #include "util_rss.h"
+#include "util_timer.h"
 
 namespace uccl {
 
@@ -643,7 +644,7 @@ class Endpoint {
     // Connecting to a remote address; thread-safe
     ConnID uccl_connect(std::string remote_ip);
     // Accepting a connection from a remote address; thread-safe
-    ConnID uccl_accept(std::string& remote_ip);
+    ConnID uccl_accept(std::string &remote_ip);
 
     // Sending the data by leveraging multiple port combinations.
     bool uccl_send(ConnID flow_id, const void *data, const size_t len);
@@ -676,7 +677,7 @@ class Endpoint {
 
 // class ZeroCopyBuf {
 //     std::vector<>
-//     public: 
+//     public:
 // };
 
 }  // namespace uccl

@@ -30,6 +30,8 @@ static const uint32_t AFXDP_MTU = 3498;
 static const char* DEV_DEFAULT = "enp65s0f0np0";
 #else
 #define CLOUDLAB_XL170
+static const uint32_t AFXDP_MTU = 1500;
+static const char* DEV_DEFAULT = "ens1f1np1";
 #endif
 
 #endif  // TRANSPORT_CONFIG_H

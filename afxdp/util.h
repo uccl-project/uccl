@@ -27,7 +27,6 @@
 #include <sstream>
 #include <vector>
 
-#include "transport_config.h"
 #include "util_jring.h"
 
 namespace uccl {
@@ -144,6 +143,10 @@ class Spin {
 #define store_release(X, Y) __atomic_store_n(X, Y, __ATOMIC_RELEASE)
 #define ACCESS_ONCE(x) (*(volatile decltype(x)*)&(x))
 #define is_power_of_two(x) ((x) != 0 && !((x) & ((x) - 1)))
+
+#define KB(x) (static_cast<size_t>(x) << 10)
+#define MB(x) (static_cast<size_t>(x) << 20)
+#define GB(x) (static_cast<size_t>(x) << 30)
 
 static inline std::string FormatVarg(const char* fmt, va_list ap) {
     char* ptr = nullptr;
@@ -336,20 +339,7 @@ static inline uint16_t ipv4_udptcp_cksum(uint8_t proto, uint32_t saddr,
     return (uint16_t)cksum;
 }
 
-static inline uint64_t rdtsc(void) {
-    uint32_t a, d;
-    asm volatile("rdtsc" : "=a"(a), "=d"(d));
-    return ((uint64_t)a) | (((uint64_t)d) << 32);
-}
-
-static inline double rdtsc_to_us(uint64_t tsc) {
-    static double ghz = 0;
-    // TODO(yang): auto detect the CPU frequency
-    if (unlikely(!ghz)) ghz = 3.0;
-    return tsc / ghz / 1000.0;
-}
-
-// 0x04030201 -> 1.2.3.4
+// 0x04030201 (network order) -> 1.2.3.4
 static inline std::string ip_to_str(uint32_t ip) {
     struct sockaddr_in sa;
     char str[INET_ADDRSTRLEN];
@@ -358,7 +348,7 @@ static inline std::string ip_to_str(uint32_t ip) {
     return std::string(str);
 }
 
-// 1.2.3.4 -> 0x04030201
+// 1.2.3.4 -> 0x04030201 (network order)
 static inline uint32_t str_to_ip(const std::string& ip) {
     struct sockaddr_in sa;
     DCHECK(inet_pton(AF_INET, ip.c_str(), &(sa.sin_addr)) != 0);
