@@ -320,12 +320,16 @@ void UcclFlow::rx_messages() {
 }
 
 void UcclFlow::process_rtt_probe(rtt_probe_t *rtt_probe) {
-    auto recvd_tx_tsc = __builtin_bswap64(rtt_probe->tx_tsc);
+    // auto recvd_tx_tsc = __builtin_bswap64(rtt_probe->tx_tsc);
+    // auto now_tsc = rdtsc();
+    // auto sample_rtt_tsc = now_tsc - recvd_tx_tsc;
+
     auto now_tsc = rdtsc();
-    auto sample_rtt_tsc = now_tsc - recvd_tx_tsc;
+    auto rtt_ns = rtt_probe->tx_tsc;
+    auto sample_rtt_tsc = ns_to_cycles(rtt_ns, ghz);
 
     pcb_.update_rate(now_tsc, sample_rtt_tsc);
-    LOG_EVERY_N(INFO, 10000)
+    LOG_EVERY_N(INFO, 1000)
         << "sample_rtt_us " << rdtsc_to_us(sample_rtt_tsc) << "us, timely rate "
         << pcb_.timely.get_rate_gbps() << " Gbps";
 }
@@ -665,7 +669,13 @@ AFXDPSocket::frame_desc UcclFlow::craft_rttprobe_packet(
 
     auto *rtt_probe = (rtt_probe_t *)(pkt_addr + kNetHdrLen + kUcclHdrLen);
     rtt_probe->reverse_dst_port = htons(reverse_dst_port);
-    rtt_probe->tx_tsc = __builtin_bswap64((uint64_t)rdtsc());
+    
+    struct timespec ts;
+    // Get monotonic time, aligned with bpf_ktime_get_ns()
+    CHECK(clock_gettime(CLOCK_MONOTONIC, &ts) == 0);
+    // Convert to nanoseconds
+    uint64_t monotonic_time_ns = (uint64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+    rtt_probe->tx_tsc = __builtin_bswap64(monotonic_time_ns);
 
     return {frame_offset, kNetHdrLen + kRttProbePayloadBytes};
 }
@@ -733,6 +743,7 @@ void UcclFlow::rto_retransmit() {
  */
 void UcclFlow::transmit_pending_packets() {
     auto permitted_packets = pcb_.get_num_ready_tx_pkt();
+    // LOG_EVERY_N(INFO, 1000) << "permitted_packets " << permitted_packets;
     if (permitted_packets == 0) return;
 
     auto now_tsc = rdtsc();

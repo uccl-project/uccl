@@ -52,6 +52,7 @@ int ebpf_transport_filter(struct xdp_md *ctx) {
 
     __u8 *net_flags_p = (__u8 *)(data + kNetHdrLen + 4);
     if (*net_flags_p == 0b10000) {
+        // RTT probing packet. 
         void *rtt_probe = data + kNetHdrLen + kUcclHdrLen;
         if (rtt_probe + 10 > data_end) return XDP_PASS;
 
@@ -68,6 +69,16 @@ int ebpf_transport_filter(struct xdp_md *ctx) {
         reverse_packet(eth, ip, udp);
 
         return XDP_TX;
+    } else if (*net_flags_p == 0b100000) {
+        // RTT probing response packet.
+        void *rtt_probe = data + kNetHdrLen + kUcclHdrLen;
+        if (rtt_probe + 10 > data_end) return XDP_PASS;
+
+        __u64 rx_ns = bpf_ktime_get_ns();
+        __u64* tx_ns_p = (__u64 *)(data + kNetHdrLen + kUcclHdrLen + 2);
+        // bpf_printk("rx_ns: %llu, tx_ns: %llu\n", rx_ns, ___constant_swab64(*tx_ns_p));
+        __u64 rtt = rx_ns - ___constant_swab64(*tx_ns_p);
+        *tx_ns_p = rtt;
     }
 
     return bpf_redirect_map(&xsks_map, ctx->rx_queue_index, XDP_PASS);
