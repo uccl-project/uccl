@@ -41,7 +41,7 @@ struct Pcb {
     static constexpr std::size_t kSackBitmapBucketSize = sizeof(uint64_t) * 8;
     static constexpr std::size_t kFastRexmitDupAckThres = 3;
     static constexpr std::size_t kRtoMaxRexmitConsectutiveAllowed = 102400;
-    static constexpr std::size_t kRttProbingIntervalUs = 50;
+    static constexpr std::size_t kRttProbingIntervalUs = 100;
     static constexpr int kRtoExpireThresInTicks = 3;  // in slow timer ticks.
     static constexpr int kRtoDisabled = -1;
     Pcb()
@@ -60,10 +60,9 @@ struct Pcb {
     }
 
     inline void queue_on_timing_wheel(size_t ref_tsc, size_t pkt_size) {
-        // double ns_delta = 1000000000 * (pkt_size / timely.rate_);
-        double ns_delta = 1000000000 * (pkt_size / timely.link_bandwidth_);
-        // const double test_link_bw = 40.0 * 1000 * 1000 * 1000 / 8;
-        // double ns_delta = 1000000000 * (pkt_size / test_link_bw);
+        double ns_delta = 1000000000 * (pkt_size / timely.rate_);
+        // double ns_delta = 1000000000 * (pkt_size / timely.link_bandwidth_);
+        // double ns_delta = 1000000000 * (pkt_size / (GB(10) / 8));
         double cycle_delta = ns_to_cycles(ns_delta, ghz);
 
         size_t desired_tx_tsc = prev_desired_tx_tsc_ + cycle_delta;
@@ -79,9 +78,7 @@ struct Pcb {
         wheel_.reap(cur_tsc);
 
         size_t num_ready = wheel_.ready_queue_.size();
-        for (size_t i = 0; i < num_ready; i++) {
-            wheel_.ready_queue_.pop();
-        }
+        wheel_.ready_queue_ = {};
 
         return num_ready;
     }
@@ -109,18 +106,17 @@ struct Pcb {
     }
 
     std::string to_string() const {
-        std::stringstream ecn_alpha_stream;
-        ecn_alpha_stream << std::fixed << std::setprecision(2) << ecn_alpha;
-
+        auto avg_rtt_diff = timely.get_avg_rtt_diff();
+        auto rate_gbps = timely.get_rate_gbps();
         std::string s;
         s += "[CC] snd_nxt: " + std::to_string(snd_nxt) +
              " snd_una: " + std::to_string(snd_una) +
              " rcv_nxt: " + std::to_string(rcv_nxt) +
-             " cwnd: " + std::to_string(cwnd) +
              " fast_rexmits: " + std::to_string(fast_rexmits) +
              " rto_rexmits: " + std::to_string(rto_rexmits) +
-             " effective_wnd: " + std::to_string(effective_wnd()) +
-             " ecn_alpha: " + ecn_alpha_stream.str();
+             Format(" timely prev_rtt: %.2lf us ", timely.prev_rtt_) +
+             Format(" timely avg_rtt_diff: %.2lf us ", avg_rtt_diff) +
+             Format(" timely rate: %.2lf Gbps ", rate_gbps);
         return s;
     }
 

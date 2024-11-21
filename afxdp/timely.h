@@ -52,7 +52,7 @@ class Timely {
     static constexpr double kAddRate = 5.0 * 1000 * 1000;
 
     static constexpr double kMinRTT = 2;
-    static constexpr double kTLow = 50;
+    static constexpr double kTLow = 72;
     static constexpr double kTHigh = 1000;
     static constexpr size_t kHaiThresh = 5;
 

@@ -15,7 +15,7 @@
 
 #include "timely.h"
 #include "transport_config.h"
-#include "util_shared_pool.h"
+#include "util_cb.h"
 
 namespace uccl {
 
@@ -128,7 +128,7 @@ class TimingWheel {
 
         bkt_pool_buf_ = new uint8_t[sizeof(wheel_bkt_t) * kBktPoolSize];
         for (int i = 0; i < kBktPoolSize; i++) {
-            bkt_pool_.push((wheel_bkt_t *)bkt_pool_buf_ + i);
+            CHECK(bkt_pool_.push_front((wheel_bkt_t *)bkt_pool_buf_ + i));
         }
     }
 
@@ -233,7 +233,7 @@ class TimingWheel {
             wheel_bkt_t *tmp_next = bkt->next_;
 
             reset_bkt(bkt);
-            if (bkt != &wheel_[ws_i]) bkt_pool_.push(bkt);
+            if (bkt != &wheel_[ws_i]) CHECK(bkt_pool_.push_front(bkt));
             bkt = tmp_next;
         }
 
@@ -246,7 +246,8 @@ class TimingWheel {
     }
 
     wheel_bkt_t *alloc_bkt() {
-        wheel_bkt_t *bkt = bkt_pool_.pop();  // Exception if allocation fails
+        wheel_bkt_t *bkt;
+        CHECK(bkt_pool_.pop_front(&bkt));  // Exception if allocation fails
         reset_bkt(bkt);
         return bkt;
     }
@@ -258,7 +259,7 @@ class TimingWheel {
 
     wheel_bkt_t *wheel_;
     size_t cur_wslot_ = 0;
-    SharedPool<wheel_bkt_t *, /*sync=*/false> bkt_pool_;
+    CircularBuffer<wheel_bkt_t *, /*sync=*/false> bkt_pool_;
     uint8_t *bkt_pool_buf_;
 
    public:

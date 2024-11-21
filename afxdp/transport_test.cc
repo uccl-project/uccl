@@ -167,8 +167,8 @@ int main(int argc, char* argv[]) {
                     break;
                 }
                 case kMq: {
-                    for (int j = 0; j < NUM_QUEUES; j++) {
-                        for (int k = 0; k < kMaxInflight; k++) {
+                    for (int k = 0; k < kMaxInflight; k++) {
+                        for (int j = 0; j < NUM_QUEUES; j++) {
                             auto poll_ctx = ep.uccl_send_async(conn_id_vec[j],
                                                                data, send_len);
                             poll_ctxs.push_back(poll_ctx);
@@ -305,8 +305,8 @@ int main(int argc, char* argv[]) {
                     break;
                 }
                 case kMq: {
-                    for (int j = 0; j < NUM_QUEUES; j++) {
-                        for (int k = 0; k < kMaxInflight; k++) {
+                    for (int k = 0; k < kMaxInflight; k++) {
+                        for (int j = 0; j < NUM_QUEUES; j++) {
                             auto poll_ctx = ep.uccl_recv_async(conn_id_vec[j],
                                                                data, &recv_len);
                             poll_ctxs.push_back(poll_ctx);

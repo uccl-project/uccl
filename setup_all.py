@@ -7,7 +7,7 @@ import argparse
 import os
 
 core_count = os.cpu_count()
-num_queues = 1
+num_queues = 3
 num_irqcores = int(num_queues)
 
 config_mapping = {

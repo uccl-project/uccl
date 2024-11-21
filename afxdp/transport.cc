@@ -323,11 +323,11 @@ void UcclFlow::process_rtt_probe(rtt_probe_t *rtt_probe) {
     auto now_tsc = rdtsc();
     auto rtt_ns = rtt_probe->tx_tsc;
     auto sample_rtt_tsc = ns_to_cycles(rtt_ns, ghz);
-
     pcb_.update_rate(now_tsc, sample_rtt_tsc);
-    LOG_EVERY_N(INFO, 1000)
-        << "sample_rtt_us " << rdtsc_to_us(sample_rtt_tsc)
-        << " us, timely rate " << pcb_.timely.get_rate_gbps() << " Gbps";
+
+    VLOG(3) << "sample_rtt_us " << rdtsc_to_us(sample_rtt_tsc)
+            << " us, avg_rtt_diff " << pcb_.timely.get_avg_rtt_diff()
+            << " us, timely rate " << pcb_.timely.get_rate_gbps() << " Gbps";
 }
 
 void UcclFlow::tx_messages(Channel::Msg &tx_work) {
@@ -745,7 +745,7 @@ void UcclFlow::transmit_pending_packets() {
     }
 
     auto permitted_packets = pcb_.get_num_ready_tx_pkt();
-    // LOG_EVERY_N(INFO, 1000) << "permitted_packets " << permitted_packets;
+    VLOG(3) << "permitted_packets " << permitted_packets;
     if (permitted_packets == 0) return;
 
     // Prepare the packets.
@@ -810,6 +810,11 @@ void UcclEngine::run() {
 
             VLOG(3) << "Tx jring dequeue";
             process_tx_msg(tx_work);
+        }
+
+        // Drive rtt probing.
+        for (auto &[flow_id, flow] : active_flows_map_) {
+            flow->transmit_pending_packets();
         }
     }
 
