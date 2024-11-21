@@ -284,7 +284,7 @@ void UcclFlow::rx_messages() {
                     << "RSS probing packet received, ignoring...";
                 socket_->push_frame(msgbuf->get_frame_offset());
                 break;
-            case UcclPktHdr::UcclFlags::kRttProbeRsp:
+            case UcclPktHdr::UcclFlags::kRttProbeRsp2:
                 // RTT probing packet, update rate.
                 process_rtt_probe(reinterpret_cast<rtt_probe_t *>(
                     pkt_addr + kNetHdrLen + kUcclHdrLen));
@@ -320,18 +320,14 @@ void UcclFlow::rx_messages() {
 }
 
 void UcclFlow::process_rtt_probe(rtt_probe_t *rtt_probe) {
-    // auto recvd_tx_tsc = __builtin_bswap64(rtt_probe->tx_tsc);
-    // auto now_tsc = rdtsc();
-    // auto sample_rtt_tsc = now_tsc - recvd_tx_tsc;
-
     auto now_tsc = rdtsc();
     auto rtt_ns = rtt_probe->tx_tsc;
     auto sample_rtt_tsc = ns_to_cycles(rtt_ns, ghz);
 
     pcb_.update_rate(now_tsc, sample_rtt_tsc);
     LOG_EVERY_N(INFO, 1000)
-        << "sample_rtt_us " << rdtsc_to_us(sample_rtt_tsc) << "us, timely rate "
-        << pcb_.timely.get_rate_gbps() << " Gbps";
+        << "sample_rtt_us " << rdtsc_to_us(sample_rtt_tsc)
+        << " us, timely rate " << pcb_.timely.get_rate_gbps() << " Gbps";
 }
 
 void UcclFlow::tx_messages(Channel::Msg &tx_work) {
@@ -669,13 +665,7 @@ AFXDPSocket::frame_desc UcclFlow::craft_rttprobe_packet(
 
     auto *rtt_probe = (rtt_probe_t *)(pkt_addr + kNetHdrLen + kUcclHdrLen);
     rtt_probe->reverse_dst_port = htons(reverse_dst_port);
-    
-    struct timespec ts;
-    // Get monotonic time, aligned with bpf_ktime_get_ns()
-    CHECK(clock_gettime(CLOCK_MONOTONIC, &ts) == 0);
-    // Convert to nanoseconds
-    uint64_t monotonic_time_ns = (uint64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
-    rtt_probe->tx_tsc = __builtin_bswap64(monotonic_time_ns);
+    rtt_probe->tx_tsc = __builtin_bswap64(UINT64_MAX);
 
     return {frame_offset, kNetHdrLen + kRttProbePayloadBytes};
 }
@@ -742,10 +732,6 @@ void UcclFlow::rto_retransmit() {
  * of pending TX data.
  */
 void UcclFlow::transmit_pending_packets() {
-    auto permitted_packets = pcb_.get_num_ready_tx_pkt();
-    // LOG_EVERY_N(INFO, 1000) << "permitted_packets " << permitted_packets;
-    if (permitted_packets == 0) return;
-
     auto now_tsc = rdtsc();
     if (now_tsc - last_rtt_probe_tsc_ >= kRttProbeIntervalTsc_) {
         // Send a RttProbe packet per batch to measure the RTT.
@@ -753,7 +739,14 @@ void UcclFlow::transmit_pending_packets() {
             craft_rttprobe_packet(get_next_dst_port(), local_dst_ports_[0]);
         pending_tx_frames_.push_back(frame);
         last_rtt_probe_tsc_ = now_tsc;
+
+        socket_->send_packets(pending_tx_frames_);
+        pending_tx_frames_.clear();
     }
+
+    auto permitted_packets = pcb_.get_num_ready_tx_pkt();
+    // LOG_EVERY_N(INFO, 1000) << "permitted_packets " << permitted_packets;
+    if (permitted_packets == 0) return;
 
     // Prepare the packets.
     for (uint16_t i = 0; i < permitted_packets; i++) {
@@ -774,7 +767,7 @@ void UcclFlow::transmit_pending_packets() {
 
     // TX both data and ack frames.
     if (pending_tx_frames_.empty()) return;
-    VLOG(3) << "transmit_pending_packets " << pending_tx_frames_.size();
+    VLOG(3) << "tx packets " << pending_tx_frames_.size();
 
     socket_->send_packets(pending_tx_frames_);
     pending_tx_frames_.clear();

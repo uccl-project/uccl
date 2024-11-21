@@ -126,12 +126,13 @@ struct __attribute__((packed)) UcclPktHdr {
     uint8_t engine_id;  // remote UcclEngine ID to process this packet.
     uint8_t reserved;   // Reserved for future use.
     enum class UcclFlags : uint8_t {
-        kData = 0b0,              // Data packet.
-        kAck = 0b10,              // ACK packet.
-        kAckEcn = 0b100,          // ACK-ECN packet.
-        kRssProbe = 0b1000,       // RSS probing packet.
-        kRttProbe = 0b10000,      // RTT probing packet.
-        kRttProbeRsp = 0b100000,  // RTT probing response.
+        kData = 0b0,                // Data packet.
+        kAck = 0b10,                // ACK packet.
+        kAckEcn = 0b100,            // ACK-ECN packet.
+        kRssProbe = 0b1000,         // RSS probing packet.
+        kRttProbe = 0b10000,        // RTT probing packet.
+        kRttProbeRsp = 0b100000,    // RTT probing response.
+        kRttProbeRsp2 = 0b1000000,  // RTT probing response2.
     };
     UcclFlags net_flags;  // Network flags.
     uint8_t msg_flags;    // Field to reflect the `FrameBuf' flags.

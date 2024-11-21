@@ -2,9 +2,9 @@
 #include <linux/if_ether.h>
 #include <linux/ip.h>
 #include <linux/string.h>
+#include <linux/tcp.h>
 #include <linux/types.h>
 #include <linux/udp.h>
-#include <linux/tcp.h>
 
 #if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && \
     __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
@@ -51,4 +51,19 @@ static inline void reverse_packet(struct ethhdr *eth, struct iphdr *ip,
 
     udp->check = 0;
     ip->check = compute_ip_checksum(ip);
+}
+
+static inline void reverse_packet_l2_l3_wo_csum(struct ethhdr *eth,
+                                                struct iphdr *ip) {
+    unsigned char tmp_mac[ETH_ALEN];
+    __be32 tmp_ip;
+    __be16 tmp_port;
+
+    memcpy(tmp_mac, eth->h_source, ETH_ALEN);
+    memcpy(eth->h_source, eth->h_dest, ETH_ALEN);
+    memcpy(eth->h_dest, tmp_mac, ETH_ALEN);
+
+    tmp_ip = ip->saddr;
+    ip->saddr = ip->daddr;
+    ip->daddr = tmp_ip;
 }

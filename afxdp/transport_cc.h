@@ -61,9 +61,9 @@ struct Pcb {
 
     inline void queue_on_timing_wheel(size_t ref_tsc, size_t pkt_size) {
         // double ns_delta = 1000000000 * (pkt_size / timely.rate_);
-        // double ns_delta = 1000000000 * (pkt_size / timely.link_bandwidth_);
-        const double test_link_bw = 40.0 * 1000 * 1000 * 1000 / 8;
-        double ns_delta = 1000000000 * (pkt_size / test_link_bw);
+        double ns_delta = 1000000000 * (pkt_size / timely.link_bandwidth_);
+        // const double test_link_bw = 40.0 * 1000 * 1000 * 1000 / 8;
+        // double ns_delta = 1000000000 * (pkt_size / test_link_bw);
         double cycle_delta = ns_to_cycles(ns_delta, ghz);
 
         size_t desired_tx_tsc = prev_desired_tx_tsc_ + cycle_delta;

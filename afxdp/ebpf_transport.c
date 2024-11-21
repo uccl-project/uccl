@@ -27,6 +27,7 @@ struct {
 #endif
 #define kMagic 0x4e53
 #define kUcclHdrLen 24
+#define BASE_PORT 10000
 
 SEC("ebpf_transport")
 int ebpf_transport_filter(struct xdp_md *ctx) {
@@ -51,34 +52,68 @@ int ebpf_transport_filter(struct xdp_md *ctx) {
 #endif
 
     __u8 *net_flags_p = (__u8 *)(data + kNetHdrLen + 4);
-    if (*net_flags_p == 0b10000) {
-        // RTT probing packet. 
-        void *rtt_probe = data + kNetHdrLen + kUcclHdrLen;
-        if (rtt_probe + 10 > data_end) return XDP_PASS;
 
-        // Set to response of RTT probing packet.
-        *net_flags_p = 0b100000;
+    switch (*net_flags_p) {
+        case 0b10000: {
+            // RTT probing packet.
+            void *rtt_probe = data + kNetHdrLen + kUcclHdrLen;
+            if (rtt_probe + 10 > data_end) return XDP_PASS;
 
-        // See craft_rttprobe_packet() in transport.cc
-        __u16 reverse_dst_port = *(__u16 *)rtt_probe;
+            *net_flags_p = 0b100000;
+            // See craft_rttprobe_packet() in transport.cc
+            __u16 *reverse_dst_port = (__u16 *)rtt_probe;
 
-        struct udphdr *udp =
-            data + sizeof(struct ethhdr) + sizeof(struct iphdr);
-        udp->dest = udp->source;
-        udp->source = reverse_dst_port;
-        reverse_packet(eth, ip, udp);
+            __u64 rx_ns = bpf_ktime_get_ns();
+            __u64 *tx_ns_p = (__u64 *)(data + kNetHdrLen + kUcclHdrLen + 2);
+            *tx_ns_p = rx_ns;
 
-        return XDP_TX;
-    } else if (*net_flags_p == 0b100000) {
-        // RTT probing response packet.
-        void *rtt_probe = data + kNetHdrLen + kUcclHdrLen;
-        if (rtt_probe + 10 > data_end) return XDP_PASS;
+            struct udphdr *udp =
+                data + sizeof(struct ethhdr) + sizeof(struct iphdr);
+            __u16 ori_dst_port = udp->dest;
 
-        __u64 rx_ns = bpf_ktime_get_ns();
-        __u64* tx_ns_p = (__u64 *)(data + kNetHdrLen + kUcclHdrLen + 2);
-        // bpf_printk("rx_ns: %llu, tx_ns: %llu\n", rx_ns, ___constant_swab64(*tx_ns_p));
-        __u64 rtt = rx_ns - ___constant_swab64(*tx_ns_p);
-        *tx_ns_p = rtt;
+            reverse_packet_l2_l3_wo_csum(eth, ip);
+
+            udp->source = __constant_htons(BASE_PORT);
+            udp->dest = *reverse_dst_port;
+            *reverse_dst_port = ori_dst_port;
+
+            ip->check = compute_ip_checksum(ip);
+            return XDP_TX;
+        }
+        case 0b100000: {
+            // RTT probing response packet.
+            void *rtt_probe = data + kNetHdrLen + kUcclHdrLen;
+            if (rtt_probe + 10 > data_end) return XDP_PASS;
+
+            *net_flags_p = 0b1000000;
+            __u16 *reverse_dst_port = (__u16 *)rtt_probe;
+
+            struct udphdr *udp =
+                data + sizeof(struct ethhdr) + sizeof(struct iphdr);
+            __u16 ori_dst_port = udp->dest;
+
+            reverse_packet_l2_l3_wo_csum(eth, ip);
+
+            udp->source = __constant_htons(BASE_PORT);
+            udp->dest = *reverse_dst_port;
+            *reverse_dst_port = ori_dst_port;
+
+            ip->check = compute_ip_checksum(ip);
+            return XDP_TX;
+        }
+        case 0b1000000: {
+            // RTT probing response2 packet.
+            void *rtt_probe = data + kNetHdrLen + kUcclHdrLen;
+            if (rtt_probe + 10 > data_end) return XDP_PASS;
+
+            __u64 rx_ns = bpf_ktime_get_ns();
+            __u64 *tx_ns_p = (__u64 *)(data + kNetHdrLen + kUcclHdrLen + 2);
+            __u64 rtt = rx_ns - *tx_ns_p;
+            *tx_ns_p = rtt;
+            break;
+        }
+        default:
+            break;
     }
 
     return bpf_redirect_map(&xsks_map, ctx->rx_queue_index, XDP_PASS);
