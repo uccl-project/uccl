@@ -135,6 +135,7 @@ struct __attribute__((packed)) UcclPktHdr {
     uint8_t msg_flags;    // Field to reflect the `FrameBuf' flags.
     be16_t frame_len;     // Length of the frame.
     be64_t flow_id;       // Flow ID to denote the connection.
+    be64_t tx_tsc;        // TSC timestamp when sending this packet.
     be32_t seqno;  // Sequence number to denote the packet counter in the flow.
     be32_t ackno;  // Sequence number to denote the packet counter in the flow.
 };
@@ -146,7 +147,7 @@ struct __attribute__((packed)) UcclSackHdr {
 };
 static const size_t kUcclHdrLen = sizeof(UcclPktHdr);
 static const size_t kUcclSackHdrLen = sizeof(UcclSackHdr);
-static_assert(kUcclHdrLen == 24, "UcclPktHdr size mismatch");
+static_assert(kUcclHdrLen == 32, "UcclPktHdr size mismatch");
 
 #ifdef USING_TCP
 static const size_t kNetHdrLen =
@@ -377,8 +378,10 @@ class UcclFlow {
      * @param msg Pointer to the first message buffer on a train of buffers,
      * aggregating to a partial or a full Message.
      */
-    void tx_messages(FrameBuf *msg_head, FrameBuf *msg_tail,
-                     uint32_t num_frames, PollCtx *poll_ctx);
+    void tx_messages(Channel::Msg &tx_work);
+
+    std::tuple<FrameBuf *, FrameBuf *, uint32_t> deserialize_and_queue_msg(
+        void *app_buf, size_t app_buf_len);
 
     /**
      * @brief Periodically checks the state of the flow and performs
@@ -405,18 +408,23 @@ class UcclFlow {
         return dst_ports_[next_port_idx_++ % kPortEntropy];
     }
     AFXDPSocket::frame_desc craft_ctlpacket(
-        uint32_t seqno, uint32_t ackno, const UcclPktHdr::UcclFlags &net_flags);
+        uint32_t seqno, uint32_t ackno, const UcclPktHdr::UcclFlags &net_flags,
+        uint64_t tx_tsc);
     AFXDPSocket::frame_desc craft_rssprobe_packet(uint16_t dst_port);
 
-    inline AFXDPSocket::frame_desc craft_ack(uint32_t seqno, uint32_t ackno) {
+    inline AFXDPSocket::frame_desc craft_ack(uint32_t seqno, uint32_t ackno,
+                                             uint64_t tx_tsc) {
         VLOG(3) << "Sending ACK for seqno " << seqno << " ackno " << ackno;
-        return craft_ctlpacket(seqno, ackno, UcclPktHdr::UcclFlags::kAck);
+        return craft_ctlpacket(seqno, ackno, UcclPktHdr::UcclFlags::kAck,
+                               tx_tsc);
     }
 
     inline AFXDPSocket::frame_desc craft_ack_with_ecn(uint32_t seqno,
-                                                      uint32_t ackno) {
+                                                      uint32_t ackno,
+                                                      uint64_t tx_tsc) {
         VLOG(3) << "Sending ACK-ECN for seqno " << seqno << " ackno " << ackno;
-        return craft_ctlpacket(seqno, ackno, UcclPktHdr::UcclFlags::kAckEcn);
+        return craft_ctlpacket(seqno, ackno, UcclPktHdr::UcclFlags::kAckEcn,
+                               tx_tsc);
     }
 
     /**
@@ -429,7 +437,7 @@ class UcclFlow {
      * @param packet Pointer to an allocated packet.
      * @param seqno Sequence number of the packet.
      */
-    void prepare_datapacket(FrameBuf *msg_buf, uint32_t seqno);
+    void prepare_datapacket(FrameBuf *msg_buf, uint32_t seqno, uint64_t tx_tsc);
 
     void fast_retransmit();
     void rto_retransmit();
@@ -558,11 +566,8 @@ class UcclEngine {
      * @param msg     A pointer to the `MsgBuf` containing the first buffer
      * of the message.
      */
-    inline void process_tx_msg(FrameBuf *msg_head, FrameBuf *msg_tail,
-                               uint32_t num_frames, PollCtx *poll_ctx,
-                               FlowID flow_id) {
-        active_flows_map_[flow_id]->tx_messages(msg_head, msg_tail, num_frames,
-                                                poll_ctx);
+    inline void process_tx_msg(Channel::Msg &tx_work) {
+        active_flows_map_[tx_work.flow_id]->tx_messages(tx_work);
     }
 
     /**
@@ -577,9 +582,6 @@ class UcclEngine {
     void process_ctl_reqs();
 
     void dump_status();
-
-    std::tuple<FrameBuf *, FrameBuf *, uint32_t> deserialize_msg(
-        void *app_buf, size_t app_buf_len);
 
    private:
     uint32_t local_addr_;

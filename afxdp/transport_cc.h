@@ -10,6 +10,9 @@
 #include <string>
 #include <vector>
 
+#include "timely.h"
+#include "timing_wheel.h"
+
 namespace uccl {
 namespace swift {
 
@@ -32,7 +35,6 @@ constexpr bool seqno_gt(uint32_t a, uint32_t b) {
 /**
  * @brief Swift Congestion Control (SWCC) protocol control block.
  */
-// TODO(ilias): First-cut implementation. Needs a lot of work.
 struct Pcb {
     static constexpr std::size_t kInitialCwnd = 256;
     static constexpr std::size_t kSackBitmapSize = 1024;
@@ -41,7 +43,48 @@ struct Pcb {
     static constexpr std::size_t kRtoMaxRexmitConsectutiveAllowed = 102400;
     static constexpr int kRtoExpireThresInTicks = 3;  // in slow timer ticks.
     static constexpr int kRtoDisabled = -1;
-    Pcb() {}
+    Pcb()
+        : timely(ghz, kLinkBandwidth),
+          wheel_({ghz}),
+          prev_desired_tx_tsc_(rdtsc()) {
+        wheel_.catchup();
+    }
+
+    Timely timely;
+    TimingWheel wheel_;
+    size_t prev_desired_tx_tsc_;
+
+    inline void update_rate(size_t _rdtsc, size_t sample_rtt_tsc) {
+        timely.update_rate(_rdtsc, sample_rtt_tsc);
+    }
+
+    inline void queue_on_timing_wheel(size_t ref_tsc, size_t pkt_size) {
+        // double ns_delta = 1000000000 * (pkt_size / timely.rate_);
+        double ns_delta = 1000000000 * (pkt_size / timely.link_bandwidth_);
+        double cycle_delta = ns_to_cycles(ns_delta, ghz);
+
+        size_t desired_tx_tsc = prev_desired_tx_tsc_ + cycle_delta;
+        desired_tx_tsc = (std::max)(desired_tx_tsc, ref_tsc);
+
+        // LOG(INFO) << "Queueing pkt at " << ref_tsc << " desired_tx_tsc "
+        //           << desired_tx_tsc << " cycle_delta " << cycle_delta
+        //           << " prev_desired_tx_tsc_ " << prev_desired_tx_tsc_;
+        prev_desired_tx_tsc_ = desired_tx_tsc;
+
+        wheel_.insert(TimingWheel::get_dummy_ent(), ref_tsc, desired_tx_tsc);
+    }
+
+    inline uint32_t get_num_ready_tx_pkt() {
+        size_t cur_tsc = rdtsc();
+        wheel_.reap(cur_tsc);
+
+        size_t num_ready = wheel_.ready_queue_.size();
+        for (size_t i = 0; i < num_ready; i++) {
+            wheel_.ready_queue_.pop();
+        }
+
+        return num_ready;
+    }
 
     // Return the sender effective window in # of packets.
     uint32_t effective_wnd() const {

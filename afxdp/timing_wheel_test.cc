@@ -54,7 +54,8 @@ TEST_F(TimingWheelTest, Basic) {
 
 // This is not a fixture test because we use a different wheel for each rate
 TEST(TimingWheelRateTest, RateTest) {
-    const std::vector<double> target_gbps = {1.0, 5.0, 10.0, 20.0, 40.0, 80.0};
+    const std::vector<double> target_gbps = {1.0,  5.0,   10.0,  20.0, 40.0,
+                                             80.0, 100.0, 200.0, 400.0};
     const double freq_ghz = measure_rdtsc_freq();
 
     for (size_t iters = 0; iters < target_gbps.size(); iters++) {

@@ -68,7 +68,6 @@ static constexpr double kWheelHorizonUs =
 
 static constexpr size_t kWheelNumWslots =
     1 + std::ceil(kWheelHorizonUs / kWheelSlotWidthUs);
-static constexpr size_t kBktPoolSize = 1024;
 
 static constexpr bool kWheelRecord = false;  ///< Fast-record wheel actions
 
@@ -85,6 +84,8 @@ static_assert(sizeof(wheel_ent_t) == 8, "");
 static constexpr size_t kWheelBucketCap = 5;  ///< Wheel entries per bucket
 static constexpr size_t kNumBktEntriesBits = 3;
 static_assert((1ull << kNumBktEntriesBits) > kWheelBucketCap, "");
+
+static constexpr size_t kBktPoolSize = kWheelNumWslots * kWheelBucketCap;
 
 // TSC ticks per day = ~3 billion per second * 86400 seconds per day
 // Require that rollback happens only after server lifetime
@@ -257,7 +258,7 @@ class TimingWheel {
 
     wheel_bkt_t *wheel_;
     size_t cur_wslot_ = 0;
-    SharedPool<wheel_bkt_t *, /*sync=*/true> bkt_pool_;
+    SharedPool<wheel_bkt_t *, /*sync=*/false> bkt_pool_;
     uint8_t *bkt_pool_buf_;
 
    public:

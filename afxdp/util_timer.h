@@ -110,11 +110,9 @@ static double to_nsec(size_t cycles, double freq_ghz) {
     return (cycles / freq_ghz);
 }
 
-static inline double rdtsc_to_us(uint64_t tsc) {
-    static double ghz = 0;
-    if (unlikely(!ghz)) ghz = measure_rdtsc_freq();
-    return tsc / ghz / 1000.0;
-}
+static double ghz = measure_rdtsc_freq();
+
+static inline double rdtsc_to_us(uint64_t tsc) { return tsc / ghz / 1000.0; }
 
 /// Simple time that uses RDTSC
 class TscTimer {
