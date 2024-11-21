@@ -31,7 +31,7 @@ static inline __u16 compute_ip_checksum(struct iphdr *ip) {
     return ~((csum & 0xffff) + (csum >> 16));
 }
 
-static inline void prepare_packet(struct ethhdr *eth, struct iphdr *ip,
+static inline void reverse_packet(struct ethhdr *eth, struct iphdr *ip,
                                   struct udphdr *udp) {
     unsigned char tmp_mac[ETH_ALEN];
     __be32 tmp_ip;

@@ -47,7 +47,7 @@ int ebpf_server_direct_filter(struct xdp_md *ctx) {
         __sync_fetch_and_add(packets_received, 1);
     }
 
-    prepare_packet(eth, ip, udp);
+    reverse_packet(eth, ip, udp);
 
     return XDP_TX;
 }

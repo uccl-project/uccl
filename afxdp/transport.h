@@ -126,16 +126,17 @@ struct __attribute__((packed)) UcclPktHdr {
     uint8_t engine_id;  // remote UcclEngine ID to process this packet.
     uint8_t reserved;   // Reserved for future use.
     enum class UcclFlags : uint8_t {
-        kData = 0b0,         // Data packet.
-        kAck = 0b10,         // ACK packet.
-        kAckEcn = 0b100,     // ACK-ECN packet.
-        kRssProbe = 0b1000,  // RSS probing packet.
+        kData = 0b0,              // Data packet.
+        kAck = 0b10,              // ACK packet.
+        kAckEcn = 0b100,          // ACK-ECN packet.
+        kRssProbe = 0b1000,       // RSS probing packet.
+        kRttProbe = 0b10000,      // RTT probing packet.
+        kRttProbeRsp = 0b100000,  // RTT probing response.
     };
     UcclFlags net_flags;  // Network flags.
     uint8_t msg_flags;    // Field to reflect the `FrameBuf' flags.
     be16_t frame_len;     // Length of the frame.
     be64_t flow_id;       // Flow ID to denote the connection.
-    be64_t tx_tsc;        // TSC timestamp when sending this packet.
     be32_t seqno;  // Sequence number to denote the packet counter in the flow.
     be32_t ackno;  // Sequence number to denote the packet counter in the flow.
 };
@@ -147,7 +148,7 @@ struct __attribute__((packed)) UcclSackHdr {
 };
 static const size_t kUcclHdrLen = sizeof(UcclPktHdr);
 static const size_t kUcclSackHdrLen = sizeof(UcclSackHdr);
-static_assert(kUcclHdrLen == 32, "UcclPktHdr size mismatch");
+static_assert(kUcclHdrLen == 24, "UcclPktHdr size mismatch");
 
 #ifdef USING_TCP
 static const size_t kNetHdrLen =
@@ -341,6 +342,8 @@ class UcclFlow {
           channel_(channel),
           flow_id_(flow_id),
           pcb_(),
+          kRttProbeIntervalTsc_(
+              us_to_cycles(swift::Pcb::kRttProbingIntervalUs, ghz)),
           tx_tracking_(socket, channel),
           rx_tracking_(socket, channel) {
         memcpy(local_l2_addr_, local_l2_addr, ETH_ALEN);
@@ -363,6 +366,12 @@ class UcclFlow {
      * transport-related parameters for the flow.
      */
     void rx_messages();
+
+    struct __attribute__((packed)) rtt_probe_t {
+        uint16_t reverse_dst_port;
+        uint64_t tx_tsc;
+    };
+    void process_rtt_probe(rtt_probe_t *rtt_probe);
 
     inline void rx_supply_app_buf(void *app_buf, size_t *app_buf_len,
                                   PollCtx *poll_ctx) {
@@ -408,24 +417,10 @@ class UcclFlow {
         return dst_ports_[next_port_idx_++ % kPortEntropy];
     }
     AFXDPSocket::frame_desc craft_ctlpacket(
-        uint32_t seqno, uint32_t ackno, const UcclPktHdr::UcclFlags &net_flags,
-        uint64_t tx_tsc);
+        uint32_t seqno, uint32_t ackno, const UcclPktHdr::UcclFlags &net_flags);
     AFXDPSocket::frame_desc craft_rssprobe_packet(uint16_t dst_port);
-
-    inline AFXDPSocket::frame_desc craft_ack(uint32_t seqno, uint32_t ackno,
-                                             uint64_t tx_tsc) {
-        VLOG(3) << "Sending ACK for seqno " << seqno << " ackno " << ackno;
-        return craft_ctlpacket(seqno, ackno, UcclPktHdr::UcclFlags::kAck,
-                               tx_tsc);
-    }
-
-    inline AFXDPSocket::frame_desc craft_ack_with_ecn(uint32_t seqno,
-                                                      uint32_t ackno,
-                                                      uint64_t tx_tsc) {
-        VLOG(3) << "Sending ACK-ECN for seqno " << seqno << " ackno " << ackno;
-        return craft_ctlpacket(seqno, ackno, UcclPktHdr::UcclFlags::kAckEcn,
-                               tx_tsc);
-    }
+    AFXDPSocket::frame_desc craft_rttprobe_packet(uint16_t dst_port,
+                                                  uint16_t reverse_dst_port);
 
     /**
      * @brief This helper method prepares a network packet that carries the
@@ -437,7 +432,7 @@ class UcclFlow {
      * @param packet Pointer to an allocated packet.
      * @param seqno Sequence number of the packet.
      */
-    void prepare_datapacket(FrameBuf *msg_buf, uint32_t seqno, uint64_t tx_tsc);
+    void prepare_datapacket(FrameBuf *msg_buf, uint32_t seqno);
 
     void fast_retransmit();
     void rto_retransmit();
@@ -465,6 +460,8 @@ class UcclFlow {
     FlowID flow_id_;
     // Destination ports with remote_engine_idx_ as the target queue_id.
     std::vector<uint16_t> dst_ports_;
+    // Destination ports with local_engine_idx_ as the target queue_id.
+    std::vector<uint16_t> local_dst_ports_;
     // Index in dst_ports_ for the next port to use.
     uint32_t next_port_idx_ = 0;
     // Accumulated data frames to be sent.
@@ -476,6 +473,10 @@ class UcclFlow {
 
     // Swift CC protocol control block.
     swift::Pcb pcb_;
+    // Last Rtt probe timestamp.
+    uint64_t last_rtt_probe_tsc_ = 0;
+    uint64_t kRttProbeIntervalTsc_;
+
     TXTracking tx_tracking_;
     RXTracking rx_tracking_;
 

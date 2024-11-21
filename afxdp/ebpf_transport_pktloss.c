@@ -26,7 +26,7 @@ struct {
     (sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr))
 #endif
 #define kMagic 0x4e53
-#define kUcclHdrLen 32
+#define kUcclHdrLen 24
 
 SEC("ebpf_transport")
 int ebpf_transport_filter(struct xdp_md *ctx) {
@@ -51,6 +51,26 @@ int ebpf_transport_filter(struct xdp_md *ctx) {
 #endif
 
     if (bpf_get_prandom_u32() % 1000 == 0) return XDP_DROP;
+
+    __u8 *net_flags_p = (__u8 *)(data + kNetHdrLen + 4);
+    if (*net_flags_p == 0b10000) {
+        void *rtt_probe = data + kNetHdrLen + kUcclHdrLen;
+        if (rtt_probe + 10 > data_end) return XDP_PASS;
+
+        // Set to response of RTT probing packet.
+        *net_flags_p = 0b100000;
+
+        // See craft_rttprobe_packet() in transport.cc
+        __u16 reverse_dst_port = *(__u16 *)rtt_probe;
+
+        struct udphdr *udp =
+            data + sizeof(struct ethhdr) + sizeof(struct iphdr);
+        udp->dest = udp->source;
+        udp->source = reverse_dst_port;
+        reverse_packet(eth, ip, udp);
+
+        return XDP_TX;
+    }
 
     return bpf_redirect_map(&xsks_map, ctx->rx_queue_index, XDP_PASS);
 }

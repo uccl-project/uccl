@@ -41,6 +41,7 @@ struct Pcb {
     static constexpr std::size_t kSackBitmapBucketSize = sizeof(uint64_t) * 8;
     static constexpr std::size_t kFastRexmitDupAckThres = 3;
     static constexpr std::size_t kRtoMaxRexmitConsectutiveAllowed = 102400;
+    static constexpr std::size_t kRttProbingIntervalUs = 50;
     static constexpr int kRtoExpireThresInTicks = 3;  // in slow timer ticks.
     static constexpr int kRtoDisabled = -1;
     Pcb()
@@ -59,16 +60,15 @@ struct Pcb {
     }
 
     inline void queue_on_timing_wheel(size_t ref_tsc, size_t pkt_size) {
-        // double ns_delta = 1000000000 * (pkt_size / timely.rate_);
-        double ns_delta = 1000000000 * (pkt_size / timely.link_bandwidth_);
+        double ns_delta = 1000000000 * (pkt_size / timely.rate_);
+        // double ns_delta = 1000000000 * (pkt_size / timely.link_bandwidth_);
+        // const double test_link_bw = 10.0 * 1000 * 1000 * 1000 / 8;
+        // double ns_delta = 1000000000 * (pkt_size / test_link_bw);
         double cycle_delta = ns_to_cycles(ns_delta, ghz);
 
         size_t desired_tx_tsc = prev_desired_tx_tsc_ + cycle_delta;
         desired_tx_tsc = (std::max)(desired_tx_tsc, ref_tsc);
 
-        // LOG(INFO) << "Queueing pkt at " << ref_tsc << " desired_tx_tsc "
-        //           << desired_tx_tsc << " cycle_delta " << cycle_delta
-        //           << " prev_desired_tx_tsc_ " << prev_desired_tx_tsc_;
         prev_desired_tx_tsc_ = desired_tx_tsc;
 
         wheel_.insert(TimingWheel::get_dummy_ent(), ref_tsc, desired_tx_tsc);
@@ -82,6 +82,8 @@ struct Pcb {
         for (size_t i = 0; i < num_ready; i++) {
             wheel_.ready_queue_.pop();
         }
+
+        // LOG_EVERY_N(INFO, 1000) << "Num ready " << num_ready;
 
         return num_ready;
     }
