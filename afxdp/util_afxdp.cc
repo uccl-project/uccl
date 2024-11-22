@@ -257,6 +257,14 @@ uint32_t AFXDPSocket::pull_complete_queue() {
         for (int i = 0; i < completed; i++) {
             uint64_t frame_offset =
                 *xsk_ring_cons__comp_addr(&complete_queue_, idx_cq++);
+
+            // TODO(yang): why collecting stats here is smaller than at tx time?
+            // out_bytes_ +=
+            //     FrameBuf::get_frame_len(frame_offset, umem_buffer_);
+            // TODO(yang): why will this trigger SEGV? Seems kernel bug.
+            // out_bytes_ +=
+            //     FrameBuf::get_uccl_frame_len(frame_offset, umem_buffer_);
+
             if (FrameBuf::is_txpulltime_free(frame_offset, umem_buffer_)) {
                 push_frame(frame_offset);
                 /**
@@ -269,6 +277,7 @@ uint32_t AFXDPSocket::pull_complete_queue() {
             }
             // In other cases, the transport layer should handle frame freeing.
         }
+        // out_packets_ += completed;
 
         xsk_ring_cons__release(&complete_queue_, completed);
         unpulled_tx_pkts_ -= completed;
@@ -294,6 +303,9 @@ uint32_t AFXDPSocket::send_packet(frame_desc frame) {
     desc->len = frame.frame_len;
     xsk_ring_prod__submit(&send_queue_, 1);
     unpulled_tx_pkts_++;
+
+    out_bytes_ += frame.frame_len;
+    out_packets_++;
 
     uint32_t pull_tx_pkts = 0;
     do {
@@ -323,7 +335,10 @@ uint32_t AFXDPSocket::send_packets(std::vector<frame_desc> &frames) {
             xsk_ring_prod__tx_desc(&send_queue_, send_index++);
         desc->addr = frames[i].frame_offset;
         desc->len = frames[i].frame_len;
+
+        out_bytes_ += frames[i].frame_len;
     }
+    out_packets_ += num_frames;
     xsk_ring_prod__submit(&send_queue_, num_frames);
     unpulled_tx_pkts_ += num_frames;
 
@@ -377,7 +392,10 @@ std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
         const struct xdp_desc *desc =
             xsk_ring_cons__rx_desc(&recv_queue_, idx_rx++);
         frames.push_back({desc->addr, desc->len});
+
+        in_bytes_ += desc->len;
     }
+    in_packets_ += rcvd;
 
     xsk_ring_cons__release(&recv_queue_, rcvd);
 
@@ -387,12 +405,30 @@ std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
     return frames;
 }
 
-std::string AFXDPSocket::to_string() const {
+std::string AFXDPSocket::to_string() {
     std::string s;
     s += Format(
         "\n\t\t[AFXDP] free frames: %u, unpulled tx pkts: %u, fill queue "
         "entries: %u",
         frame_pool_->size(), unpulled_tx_pkts_, fill_queue_entries_);
+    if (queue_id_ == 0) {
+        auto now_tsc = rdtsc();
+        auto elapsed = rdtsc_to_us(now_tsc - last_stat_tsc_);
+        last_stat_tsc_ = now_tsc;
+
+        auto out_packets_rate = (double)out_packets_.load() / elapsed;
+        auto out_bytes_rate = (double)out_bytes_.load() / elapsed / 1024 * 8;
+        auto in_packets_rate = (double)in_packets_.load() / elapsed;
+        auto in_bytes_rate = (double)in_bytes_.load() / elapsed / 1024 * 8;
+        out_packets_ = 0;
+        out_bytes_ = 0;
+        in_packets_ = 0;
+        in_bytes_ = 0;
+
+        s += Format(
+            "\n\t\t        in: %lf Mpps %lf Gbps, out: %lf Mpps %lf Gbps",
+            in_packets_rate, in_bytes_rate, out_packets_rate, out_bytes_rate);
+    }
     return s;
 }
 

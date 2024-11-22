@@ -368,16 +368,7 @@ class UcclFlow {
      */
     void rx_messages();
 
-    struct __attribute__((packed)) rtt_probe_t {
-        uint16_t reverse_dst_port;
-        uint64_t tx_tsc;
-    };
-    void process_rtt_probe(rtt_probe_t *rtt_probe);
-
-    inline void rx_supply_app_buf(void *app_buf, size_t *app_buf_len,
-                                  PollCtx *poll_ctx) {
-        rx_tracking_.try_copy_msgbuf_to_appbuf(app_buf, app_buf_len, poll_ctx);
-    }
+    void rx_supply_app_buf(Channel::Msg &rx_work);
 
     /**
      * @brief Push a Message from the application onto the egress queue of
@@ -389,6 +380,12 @@ class UcclFlow {
      * aggregating to a partial or a full Message.
      */
     void tx_messages(Channel::Msg &tx_work);
+
+    struct __attribute__((packed)) rtt_probe_t {
+        uint16_t reverse_dst_port;
+        uint64_t tx_tsc;
+    };
+    void process_rtt_probe(rtt_probe_t *rtt_probe);
 
     std::tuple<FrameBuf *, FrameBuf *, uint32_t> deserialize_and_queue_msg(
         void *app_buf, size_t app_buf_len);
@@ -549,28 +546,6 @@ class UcclEngine {
      * @param pkt_msgs Pointer to a list of packets.
      */
     void process_rx_msg(std::vector<AFXDPSocket::frame_desc> &pkt_msgs);
-
-    /**
-     * @brief Supply the application with a buffer to receive the incoming
-     * message.
-     *
-     * @param app_buf Pointer to the application buffer.
-     * @param app_buf_len Pointer to the length of the application buffer.
-     */
-    inline void rx_supply_app_buf(void *app_buf, size_t *app_buf_len,
-                                  PollCtx *poll_ctx, FlowID flow_id) {
-        active_flows_map_[flow_id]->rx_supply_app_buf(app_buf, app_buf_len,
-                                                      poll_ctx);
-    }
-
-    /**
-     * Process a message enqueued from an application to a channel.
-     * @param msg     A pointer to the `MsgBuf` containing the first buffer
-     * of the message.
-     */
-    inline void process_tx_msg(Channel::Msg &tx_work) {
-        active_flows_map_[tx_work.flow_id]->tx_messages(tx_work);
-    }
 
     /**
      * @brief Iterate throught the list of flows, check and handle RTOs.

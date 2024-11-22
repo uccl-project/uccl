@@ -319,15 +319,9 @@ void UcclFlow::rx_messages() {
     transmit_pending_packets();
 }
 
-void UcclFlow::process_rtt_probe(rtt_probe_t *rtt_probe) {
-    auto now_tsc = rdtsc();
-    auto rtt_ns = rtt_probe->tx_tsc;
-    auto sample_rtt_tsc = ns_to_cycles(rtt_ns, ghz);
-    pcb_.update_rate(now_tsc, sample_rtt_tsc);
-
-    VLOG(3) << "sample_rtt_us " << rdtsc_to_us(sample_rtt_tsc)
-            << " us, avg_rtt_diff " << pcb_.timely.get_avg_rtt_diff()
-            << " us, timely rate " << pcb_.timely.get_rate_gbps() << " Gbps";
+void UcclFlow::rx_supply_app_buf(Channel::Msg &rx_work) {
+    rx_tracking_.try_copy_msgbuf_to_appbuf(rx_work.data, rx_work.len_recvd,
+                                           rx_work.poll_ctx);
 }
 
 void UcclFlow::tx_messages(Channel::Msg &tx_work) {
@@ -344,6 +338,17 @@ void UcclFlow::tx_messages(Channel::Msg &tx_work) {
     // Calculate the effective window (in # of packets) to check whether
     // we can send more packets.
     transmit_pending_packets();
+}
+
+void UcclFlow::process_rtt_probe(rtt_probe_t *rtt_probe) {
+    auto now_tsc = rdtsc();
+    auto rtt_ns = rtt_probe->tx_tsc;
+    auto sample_rtt_tsc = ns_to_cycles(rtt_ns, ghz);
+    pcb_.update_rate(now_tsc, sample_rtt_tsc);
+
+    VLOG(3) << "sample_rtt_us " << rdtsc_to_us(sample_rtt_tsc)
+            << " us, avg_rtt_diff " << pcb_.timely.get_avg_rtt_diff()
+            << " us, timely rate " << pcb_.timely.get_rate_gbps() << " Gbps";
 }
 
 std::tuple<FrameBuf *, FrameBuf *, uint32_t>
@@ -794,8 +799,7 @@ void UcclEngine::run() {
         if (jring_sc_dequeue_bulk(channel_->rx_cmdq_, &rx_work, 1, nullptr) ==
             1) {
             VLOG(3) << "Rx jring dequeue";
-            rx_supply_app_buf(rx_work.data, rx_work.len_recvd, rx_work.poll_ctx,
-                              rx_work.flow_id);
+            active_flows_map_[rx_work.flow_id]->rx_supply_app_buf(rx_work);
         }
 
         auto frames = socket_->recv_packets(RECV_BATCH_SIZE);
@@ -809,7 +813,7 @@ void UcclEngine::run() {
             std::atomic_thread_fence(std::memory_order_acquire);
 
             VLOG(3) << "Tx jring dequeue";
-            process_tx_msg(tx_work);
+            active_flows_map_[tx_work.flow_id]->tx_messages(tx_work);
         }
 
         // Drive rtt probing.
@@ -845,11 +849,21 @@ void UcclEngine::process_rx_msg(
         // FrameBuf.
         msgbuf->set_msg_flags(ucclh->msg_flags);
 
-        // Work around an AFXDP bug that would receive the same
-        // packets with differet lengths multiple times.
+        /**
+         * Work around an AFXDP bug that would receive the same packets with
+         * differet lengths multiple times under high traffic volume. This is
+         * likely caused by race conditions in the the kernel:
+         * https://blog.cloudflare.com/a-debugging-story-corrupt-packets-in-af_xdp-kernel-bug-or-user-error/
+         */
         if (ucclh->frame_len.value() != frame.frame_len) {
-            VLOG(2) << "Received invalid frame length: "
-                    << ucclh->frame_len.value() << " != " << frame.frame_len;
+            VLOG(3) << "Received invalid frame length: "
+                    << "xdp_desc->len " << frame.frame_len
+                    << " ucclh->frame_len " << ucclh->frame_len.value()
+                    << " net_flags " << std::bitset<8>((int)ucclh->net_flags)
+                    << " seqno " << ucclh->seqno.value() << " ackno "
+                    << ucclh->ackno.value() << " flow_id " << std::hex << "0x"
+                    << ucclh->flow_id.value() << " engine_id "
+                    << (int)ucclh->engine_id;
             socket_->push_frame(frame.frame_offset);
             continue;
         }

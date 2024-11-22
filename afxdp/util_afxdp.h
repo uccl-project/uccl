@@ -31,6 +31,7 @@
 #include <set>
 
 #include "util_shared_pool.h"
+#include "util_timer.h"
 
 namespace uccl {
 
@@ -120,6 +121,19 @@ class FrameBuf {
     static bool is_txpulltime_free(uint64_t frame_offset, void *umem_buffer) {
         auto msgbuf = GET_FRAMEBUF_PTR(frame_offset, umem_buffer);
         return (msgbuf->msg_flags_ & UCCL_MSGBUF_FLAGS_TXPULLTIME_FREE) != 0;
+    }
+
+    static uint32_t get_frame_len(uint64_t frame_offset, void *umem_buffer) {
+        auto msgbuf = GET_FRAMEBUF_PTR(frame_offset, umem_buffer);
+        return msgbuf->get_frame_len();
+    }
+
+    static uint32_t get_uccl_frame_len(uint64_t frame_offset,
+                                       void *umem_buffer) {
+        auto msgbuf = GET_FRAMEBUF_PTR(frame_offset, umem_buffer);
+        auto pktaddr = msgbuf->get_pkt_addr();
+        return htons(*(uint16_t *)(pktaddr + sizeof(ethhdr) + sizeof(iphdr) +
+                                   sizeof(udphdr) + 6));
     }
 
     void clear_fields() {
@@ -245,7 +259,7 @@ class AFXDPSocket {
     inline int get_xsk_fd() const { return xsk_fd_; }
     inline int get_umem_fd() const { return umem_fd_; }
 
-    std::string to_string() const;
+    std::string to_string();
     void shutdown();
     ~AFXDPSocket();
 
@@ -292,6 +306,12 @@ class AFXDPSocket {
    private:
     uint32_t unpulled_tx_pkts_;
     uint32_t fill_queue_entries_;
+
+    uint64_t last_stat_tsc_ = 0;
+    inline static std::atomic<uint64_t> out_packets_ = 0;
+    inline static std::atomic<uint64_t> out_bytes_ = 0;
+    inline static std::atomic<uint64_t> in_packets_ = 0;
+    inline static std::atomic<uint64_t> in_bytes_ = 0;
 
     inline void kick_tx() {
         if (xsk_ring_prod__needs_wakeup(&send_queue_)) {
