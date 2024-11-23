@@ -258,6 +258,12 @@ uint32_t AFXDPSocket::pull_complete_queue() {
             uint64_t frame_offset =
                 *xsk_ring_cons__comp_addr(&complete_queue_, idx_cq++);
 
+            if (frame_offset &
+                XDP_PACKET_HEADROOM_MASK != XDP_PACKET_HEADROOM) {
+                frame_offset &= ~XDP_PACKET_HEADROOM_MASK;
+                frame_offset |= XDP_PACKET_HEADROOM;
+            }
+
             // TODO(yang): why collecting stats here is smaller than at tx time?
             // out_bytes_ +=
             //     FrameBuf::get_frame_len(frame_offset, umem_buffer_);
@@ -391,8 +397,21 @@ std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
     for (int i = 0; i < rcvd; i++) {
         const struct xdp_desc *desc =
             xsk_ring_cons__rx_desc(&recv_queue_, idx_rx++);
-        frames.push_back({desc->addr, desc->len});
 
+        /**
+         * Yang: Under AFXDP zerocopy mode, XDP_TX'ed packets by the XDP hook
+         * will trigger spurious packet receiving behavior. This should be
+         * caused by some subtle kernel bugs. We temporarily work around this by
+         * filtering out these packets who normally have a wrong offset.
+         */
+        if (desc->addr & XDP_PACKET_HEADROOM_MASK != XDP_PACKET_HEADROOM) {
+            LOG_EVERY_N(WARNING, 1000000)
+                << "Received a frame with wrong offset: 0x" << std::hex
+                << desc->addr;
+            continue;
+        }
+
+        frames.push_back({desc->addr, desc->len});
         in_bytes_ += desc->len;
     }
     in_packets_ += rcvd;

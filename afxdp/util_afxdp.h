@@ -25,6 +25,7 @@
 #include <xdp/xsk.h>
 
 #include <atomic>
+#include <bitset>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -150,6 +151,25 @@ class FrameBuf {
 
     void set_msg_flags(uint16_t flags) { msg_flags_ = flags; }
     void add_msg_flags(uint16_t flags) { msg_flags_ |= flags; }
+
+    std::string to_string() {
+        std::stringstream s;
+        s << "frame_offset: 0x" << std::hex << frame_len_
+          << " frame_len: " << std::dec << frame_len_ << " umem_buffer: 0x"
+          << std::hex << umem_buffer_ << " msg_flags: " << std::dec
+          << std::bitset<8>(msg_flags_);
+        return s.str();
+    }
+
+    std::string print_chain() {
+        std::stringstream s;
+        auto *cur = this;
+        while (cur && !cur->is_last()) {
+            s << cur->to_string();
+            cur = cur->next_;
+        }
+        return s.str();
+    }
 };
 
 class AFXDPSocket;
@@ -188,6 +208,9 @@ class AFXDPSocket {
 #define COMP_RING_SIZE XSK_RING_CONS__DEFAULT_NUM_DESCS
 #define TX_RING_SIZE XSK_RING_PROD__DEFAULT_NUM_DESCS
 #define RX_RING_SIZE XSK_RING_CONS__DEFAULT_NUM_DESCS
+
+    static_assert(XDP_PACKET_HEADROOM == 0x100, "XDP_PACKET_HEADROOM is 256");
+    static const uint64_t XDP_PACKET_HEADROOM_MASK = 0x1FF;
 
     int xsk_fd_;
     int umem_fd_;

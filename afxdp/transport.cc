@@ -58,7 +58,8 @@ void TXTracking::append(FrameBuf *msgbuf_head, FrameBuf *msgbuf_tail,
         oldest_unacked_msgbuf_ = msgbuf_head;
     } else {
         // This is not the first message buffer in the flow.
-        DCHECK(oldest_unacked_msgbuf_ != nullptr);
+        DCHECK(oldest_unacked_msgbuf_ != nullptr)
+            << oldest_unacked_msgbuf_->print_chain();
         // Let's enqueue the new message buffer at the end of the chain.
         last_msgbuf_->set_next(msgbuf_head);
         // Update the last buffer pointer to point to the current buffer.
@@ -150,7 +151,7 @@ void RXTracking::push_inorder_msgbuf_to_app(swift::Pcb *pcb) {
         reass_q_.erase(reass_q_.begin());
 
         if (cur_msg_train_head_ == nullptr) {
-            DCHECK(msgbuf->is_first());
+            DCHECK(msgbuf->is_first()) << msgbuf->print_chain();
             cur_msg_train_head_ = msgbuf;
             cur_msg_train_tail_ = msgbuf;
         } else {
@@ -218,7 +219,7 @@ void RXTracking::try_copy_msgbuf_to_appbuf(void *app_buf, size_t *app_buf_len,
                 break;
             }
             msgbuf_iter = msgbuf_iter->next();
-            DCHECK(msgbuf_iter);
+            DCHECK(msgbuf_iter) << msgbuf_iter->print_chain();
 
             // Free received frames that have been copied to app buf.
             socket_->push_frame(msgbuf_iter_tmp->get_frame_offset());
