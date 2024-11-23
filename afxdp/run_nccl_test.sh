@@ -34,7 +34,7 @@ if [ "$TEST" = "tcp" ]; then
         -x LD_PRELOAD="${LIBNCCL_PATH} ${PLUGIN_PATH}" \
         -x NCCL_DEBUG=INFO \
         ${UCCL_HOME}/nccl-tests/build/${PROG_NAME} \
-        -b 1K -e 128M -f 2 -g 1 -w 100 -n 100 -t 8
+        -b 1K -e 128M -f 2 -g 1 -w 100 -n 100 -t 1
 
 elif [ "$TEST" = "afxdp" ]; then
 
