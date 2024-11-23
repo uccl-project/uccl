@@ -42,7 +42,7 @@ if __name__ == "__main__":
         "--target",
         type=str,
         default="cloudlab_afxdp_xl170",
-        help=f"{", ".join(list(config_mapping.keys()))}",
+        help=f'{", ".join(list(config_mapping.keys()))}',
     )
 
     args = parser.parse_args()
@@ -73,6 +73,10 @@ if __name__ == "__main__":
 
     afxdp_or_tcp = "afxdp" if "afxdp" in target else "tcp"
     aws_or_cloudlab = "aws" if "aws" in target else "cloudlab"
+    if target == "aws_tcp_g4_metal":
+        core_count = 32
+        num_irqcores = 32
+
     if afxdp_or_tcp == "afxdp":
         nic_cmd = f"./config_nic.sh {net_dev} {num_queues} {num_irqcores} {mtu} {afxdp_or_tcp} {aws_or_cloudlab}"
     else:

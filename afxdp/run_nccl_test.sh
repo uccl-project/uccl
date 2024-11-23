@@ -1,6 +1,6 @@
 # !/bin/bash
 
-# Usage: ./run_nccl_test.sh [tcp|afxdp] [num of processes]
+# Usage: ./run_nccl_test.sh [tcp|afxdp] [num of processes] [ens6|enp199s0]
 
 TEST=${1:-tcp}
 UCCL_HOME="/opt/uccl"
@@ -9,6 +9,7 @@ LIBNCCL_PATH="${UCCL_HOME}/nccl/build/lib/libnccl.so"
 # hypercube_perf  reduce_perf  reduce_scatter_perf  scatter_perf  sendrecv_perf
 PROG_NAME=all_reduce_perf
 NUM_PROCS=${2:-4}
+NIC=${3:-ens6} # enp199s0 for g4.metal
 NODES=""
 while IFS= read -r line || [[ -n "$line" ]]; do
     [[ "$line" =~ ^# ]] && continue
@@ -16,7 +17,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
 done <../nodes.txt
 NODES="${NODES%,}"
 
-echo "Running test: ${TEST}, ${PROG_NAME}, ${NUM_PROCS} processes, ${NODES}"
+echo "Running test: ${TEST}, ${PROG_NAME}, ${NUM_PROCS} processes, NIC ${NIC}, ${NODES}"
 
 if [ "$TEST" = "tcp" ]; then
 
@@ -26,15 +27,15 @@ if [ "$TEST" = "tcp" ]; then
     mpirun -np ${NUM_PROCS} -N 1 --host ${NODES} \
         --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
         --mca orte_base_help_aggregate 0 \
-        --mca btl_tcp_if_include ens6 \
+        --mca btl_tcp_if_include ${NIC} \
+        -x NCCL_SOCKET_NTHREADS=16 \
+        -x NCCL_NSOCKS_PERTHREAD=4 \
+        -x NCCL_IGNORE_CPU_AFFINITY=1 \
         -x LD_PRELOAD="${LIBNCCL_PATH} ${PLUGIN_PATH}" \
         -x NCCL_DEBUG=INFO \
         ${UCCL_HOME}/nccl-tests/build/${PROG_NAME} \
-        -b 1K -e 128M -f 2 -g 1 -w 100 -n 100
+        -b 1K -e 128M -f 2 -g 1 -w 100 -n 100 -t 8
 
-    # Does not help with performance
-    # -x NCCL_SOCKET_NTHREADS=4 \
-    # -x NCCL_NSOCKS_PERTHREAD=4 \
 elif [ "$TEST" = "afxdp" ]; then
 
     # Clear existing files for all ranks
@@ -47,7 +48,7 @@ elif [ "$TEST" = "afxdp" ]; then
     mpirun -np ${NUM_PROCS} -N 1 --tag-output --merge-stderr-to-stdout --host ${NODES} \
         --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
         --mca orte_base_help_aggregate 0 \
-        --mca btl_tcp_if_include ens6 \
+        --mca btl_tcp_if_include ${NIC} \
         -x LD_PRELOAD="${LIBNCCL_PATH} ${PLUGIN_PATH}" \
         -x NCCL_DEBUG=INFO \
         -x UCCL_ENGINE_QUIET=1 \
