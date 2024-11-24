@@ -71,6 +71,9 @@ if __name__ == "__main__":
     if target == "aws_tcp_g4_metal":
         core_count = 32
         num_irqcores = 32
+    elif target == "cloudlab_tcp_d6515":
+        core_count = 63
+        num_irqcores = 63
 
     if afxdp_or_tcp == "afxdp":
         nic_cmd = f"./config_nic.sh {net_dev} {num_queues} {num_irqcores} {mtu} {afxdp_or_tcp} {aws_or_cloudlab}"
