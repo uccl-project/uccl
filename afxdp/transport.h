@@ -21,6 +21,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -490,7 +491,6 @@ class UcclEngine {
    public:
     // Slow timer (periodic processing) interval in microseconds.
     const size_t kSlowTimerIntervalUs = 2000;  // 2ms
-    const size_t kDumpStatusTicks = 1000;      // 2s
     UcclEngine() = delete;
     UcclEngine(UcclEngine const &) = delete;
 
@@ -508,10 +508,10 @@ class UcclEngine {
           local_engine_idx_(queue_id),
           socket_(AFXDPFactory::CreateSocket(queue_id)),
           channel_(channel),
-          last_periodic_timestamp_(rdtsc_to_us(rdtsc())),
-          periodic_ticks_(0) {
+          last_periodic_tsc_(rdtsc()),
+          periodic_ticks_(0),
+          kSlowTimerIntervalTsc_(us_to_cycles(kSlowTimerIntervalUs, ghz)) {
         DCHECK(str_to_mac(local_l2_addr, local_l2_addr_));
-        if (GetEnvVar("UCCL_ENGINE_QUIET") == "1") stay_quiet_ = true;
     }
 
     /**
@@ -539,6 +539,8 @@ class UcclEngine {
     // the engine thread.
     inline void shutdown() { shutdown_ = true; }
 
+    std::string status_to_string();
+
    protected:
     /**
      * @brief Process incoming packets.
@@ -558,8 +560,6 @@ class UcclEngine {
      */
     void process_ctl_reqs();
 
-    void dump_status();
-
    private:
     uint32_t local_addr_;
     char local_l2_addr_[ETH_ALEN];
@@ -576,11 +576,11 @@ class UcclEngine {
     // Control plane channel with Endpoint.
     Channel *channel_;
     // Timestamp of last periodic process execution.
-    uint64_t last_periodic_timestamp_;
+    uint64_t last_periodic_tsc_;
     // Clock ticks for the slow timer.
     uint64_t periodic_ticks_;
-    // Whether to call dump_status() in periodic_process().
-    bool stay_quiet_{false};
+    // Slow timer interval in TSC.
+    uint64_t kSlowTimerIntervalTsc_;
     // Whether shutdown is requested.
     std::atomic<bool> shutdown_{false};
 };
@@ -597,6 +597,7 @@ class UcclEngine {
 class Endpoint {
     constexpr static uint32_t kMaxInflightMsg = 4096;
     constexpr static uint16_t kBootstrapPort = 30000;
+    constexpr static uint32_t kSlowTimerIntervalSec = 2;
 
     std::string local_ip_str_;
     std::string local_mac_str_;
@@ -640,9 +641,6 @@ class Endpoint {
     bool uccl_poll(PollCtx *ctx);
     bool uccl_poll_once(PollCtx *ctx);
 
-    // Zero-copy APIs
-    // std::vector<>
-
    private:
     ConnID uccl_connect_on_engine(const std::string remote_ip, int bootstrap_fd,
                                   int engine_idx);
@@ -651,12 +649,10 @@ class Endpoint {
     inline int find_least_loaded_engine_idx_and_update();
     inline void fence_and_clean_ctx(PollCtx *ctx);
 
+    std::thread stats_thread_;
+    void stats_thread_fn();
+
     friend class UcclFlow;
 };
-
-// class ZeroCopyBuf {
-//     std::vector<>
-//     public:
-// };
 
 }  // namespace uccl

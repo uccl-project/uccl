@@ -1,5 +1,6 @@
 import paramiko
 
+
 class CommandDescriptor:
     def __init__(self, sshclient, pid, stdout, stderr):
         self.sshclient = sshclient
@@ -34,3 +35,12 @@ def exec_command_no_wait(sshclient, command):
     )
     pid = stdout.readline()
     return CommandDescriptor(sshclient, pid, stdout, stderr)
+
+
+def read_nodes():
+    with open("nodes.txt", "r") as file:
+        return [
+            line.strip()
+            for line in file
+            if not line.strip().startswith("#") and line.strip()
+        ]

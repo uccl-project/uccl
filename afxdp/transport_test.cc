@@ -19,13 +19,15 @@ const size_t kMaxInflight = 8;
 
 DEFINE_bool(client, false, "Whether this is a client sending traffic.");
 DEFINE_string(serverip, "", "Server IP address the client tries to connect.");
+DEFINE_string(clientip, "", "Client IP address the server tries to connect.");
 DEFINE_bool(verify, false, "Whether to check data correctness.");
 DEFINE_bool(rand, false, "Whether to use randomized data length.");
-DEFINE_string(test, "basic",
-              "Which test to run: basic, async, pingpong, mt (multi-thread), "
-              "mc (multi-connection), mq (multi-queue).");
+DEFINE_string(
+    test, "basic",
+    "Which test to run: basic, async, pingpong, mt (multi-thread), "
+    "mc (multi-connection), mq (multi-queue), bimq (bi-directional mq).");
 
-enum TestType { kBasic, kAsync, kPingpong, kMt, kMc, kMq };
+enum TestType { kBasic, kAsync, kPingpong, kMt, kMc, kMq, kBiMq };
 
 volatile bool quit = false;
 
@@ -62,6 +64,11 @@ int main(int argc, char* argv[]) {
         kTestMsgSize /= 8;
         kReportIters *= 8;
         kReportIters /= kMaxInflight;
+    } else if (FLAGS_test == "bimq") {
+        test_type = kBiMq;
+        kTestMsgSize /= 8;
+        kReportIters *= 8;
+        kReportIters /= kMaxInflight;
     } else {
         LOG(FATAL) << "Unknown test type: " << FLAGS_test;
     }
@@ -85,6 +92,15 @@ int main(int argc, char* argv[]) {
             conn_id_vec[0] = conn_id;
             for (int i = 1; i < NUM_QUEUES; i++)
                 conn_id_vec[i] = ep.uccl_connect(FLAGS_serverip);
+        } else if (test_type == kBiMq) {
+            conn_id_vec[0] = conn_id;
+            for (int i = 1; i < NUM_QUEUES; i++) {
+                std::string remote_ip;
+                if (i % 2 == 0)
+                    conn_id_vec[i] = ep.uccl_connect(FLAGS_serverip);
+                else
+                    conn_id_vec[i] = ep.uccl_accept(remote_ip);
+            }
         }
 
         size_t send_len = kTestMsgSize, recv_len = kTestMsgSize;
@@ -174,10 +190,26 @@ int main(int argc, char* argv[]) {
                             poll_ctxs.push_back(poll_ctx);
                         }
                     }
-                    // for (auto poll_ctx : poll_ctxs) {
-                    //     ep.uccl_poll(poll_ctx);
-                    //     sent_bytes += send_len;
-                    // }
+                    while (poll_ctxs.size() > kMaxInflight * NUM_QUEUES) {
+                        auto poll_ctx = poll_ctxs.front();
+                        poll_ctxs.pop_front();
+                        ep.uccl_poll(poll_ctx);
+                        sent_bytes += send_len;
+                    }
+                    break;
+                }
+                case kBiMq: {
+                    for (int k = 0; k < kMaxInflight; k++) {
+                        for (int j = 0; j < NUM_QUEUES; j++) {
+                            auto* poll_ctx =
+                                (j % 2 == 0)
+                                    ? ep.uccl_send_async(conn_id_vec[j], data,
+                                                         send_len)
+                                    : ep.uccl_recv_async(conn_id_vec[j], data,
+                                                         &recv_len);
+                            poll_ctxs.push_back(poll_ctx);
+                        }
+                    }
                     while (poll_ctxs.size() > kMaxInflight * NUM_QUEUES) {
                         auto poll_ctx = poll_ctxs.front();
                         poll_ctxs.pop_front();
@@ -233,6 +265,15 @@ int main(int argc, char* argv[]) {
             conn_id_vec[0] = conn_id;
             for (int i = 1; i < NUM_QUEUES; i++)
                 conn_id_vec[i] = ep.uccl_accept(remote_ip);
+        } else if (test_type == kBiMq) {
+            conn_id_vec[0] = conn_id;
+            for (int i = 1; i < NUM_QUEUES; i++) {
+                std::string remote_ip;
+                if (i % 2 == 0)
+                    conn_id_vec[i] = ep.uccl_accept(remote_ip);
+                else
+                    conn_id_vec[i] = ep.uccl_connect(FLAGS_clientip);
+            }
         }
 
         size_t send_len = kTestMsgSize, recv_len = kTestMsgSize;
@@ -312,9 +353,25 @@ int main(int argc, char* argv[]) {
                             poll_ctxs.push_back(poll_ctx);
                         }
                     }
-                    // for (auto poll_ctx : poll_ctxs) {
-                    //     ep.uccl_poll(poll_ctx);
-                    // }
+                    while (poll_ctxs.size() > kMaxInflight * NUM_QUEUES) {
+                        auto poll_ctx = poll_ctxs.front();
+                        poll_ctxs.pop_front();
+                        ep.uccl_poll(poll_ctx);
+                    }
+                    break;
+                }
+                case kBiMq: {
+                    for (int k = 0; k < kMaxInflight; k++) {
+                        for (int j = 0; j < NUM_QUEUES; j++) {
+                            auto* poll_ctx =
+                                (j % 2 == 0)
+                                    ? ep.uccl_recv_async(conn_id_vec[j], data,
+                                                         &recv_len)
+                                    : ep.uccl_send_async(conn_id_vec[j], data,
+                                                         send_len);
+                            poll_ctxs.push_back(poll_ctx);
+                        }
+                    }
                     while (poll_ctxs.size() > kMaxInflight * NUM_QUEUES) {
                         auto poll_ctx = poll_ctxs.front();
                         poll_ctxs.pop_front();

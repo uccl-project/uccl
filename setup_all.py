@@ -7,7 +7,7 @@ import argparse
 import os
 
 core_count = os.cpu_count()
-num_queues = 3
+num_queues = 4
 num_irqcores = int(num_queues)
 
 config_mapping = {
@@ -23,15 +23,7 @@ config_mapping = {
     "cloudlab_tcp_xl170": ["CLOUDLAB_XL170", "ens1f1np1", 1500],
     "cloudlab_tcp_d6515": ["CLOUDLAB_D6515", "enp65s0f0np0", 9000],
 }
-
-def read_nodes():
-    with open("nodes.txt", "r") as file:
-        return [
-            line.strip()
-            for line in file
-            if not line.strip().startswith("#") and line.strip()
-        ]
-
+PYTHON = "source /opt/anaconda3/bin/activate; conda run -n base python"
 
 # Usage: python setup_all.py --target=cloudlab_afxdp_xl170
 
@@ -69,7 +61,10 @@ if __name__ == "__main__":
         f'cd /opt/uccl/afxdp; make -j "CXXFLAGS=-D{make_macro}"',
     )
 
-    _ = exec_command_and_wait(node_clients[0], f"cd /opt/uccl; ./sync.sh")
+    _ = exec_command_and_wait(
+        node_clients[0],
+        f"cd /opt/uccl; {PYTHON} rsync.py",
+    )
 
     afxdp_or_tcp = "afxdp" if "afxdp" in target else "tcp"
     aws_or_cloudlab = "aws" if "aws" in target else "cloudlab"

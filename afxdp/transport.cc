@@ -347,7 +347,7 @@ void UcclFlow::process_rtt_probe(rtt_probe_t *rtt_probe) {
     auto sample_rtt_tsc = ns_to_cycles(rtt_ns, ghz);
     pcb_.update_rate(now_tsc, sample_rtt_tsc);
 
-    VLOG(3) << "sample_rtt_us " << rdtsc_to_us(sample_rtt_tsc)
+    VLOG(3) << "sample_rtt_us " << to_usec(sample_rtt_tsc, ghz)
             << " us, avg_rtt_diff " << pcb_.timely.get_avg_rtt_diff()
             << " us, timely rate " << pcb_.timely.get_rate_gbps() << " Gbps";
 }
@@ -786,15 +786,14 @@ void UcclEngine::run() {
     Channel::Msg tx_work;
 
     while (!shutdown_) {
-        // Calculate the time elapsed since the last periodic
-        // processing.
-        auto now = rdtsc_to_us(rdtsc());
-        const auto elapsed = now - last_periodic_timestamp_;
+        // Calculate the cycles elapsed since last periodic processing.
+        auto now_tsc = rdtsc();
+        const auto elapsed_tsc = now_tsc - last_periodic_tsc_;
 
-        if (elapsed >= kSlowTimerIntervalUs) {
+        if (elapsed_tsc >= kSlowTimerIntervalTsc_) {
             // Perform periodic processing.
             periodic_process();
-            last_periodic_timestamp_ = now;
+            last_periodic_tsc_ = now_tsc;
         }
 
         if (jring_sc_dequeue_bulk(channel_->rx_cmdq_, &rx_work, 1, nullptr) ==
@@ -851,9 +850,9 @@ void UcclEngine::process_rx_msg(
         msgbuf->set_msg_flags(ucclh->msg_flags);
 
         /**
-         * Work around an AFXDP bug that would receive the same packets with
-         * differet lengths multiple times under high traffic volume. This is
-         * likely caused by race conditions in the the kernel:
+         * Yang: Work around an AFXDP bug that would receive the same packets
+         * with differet lengths multiple times under high traffic volume. This
+         * is likely caused by race conditions in the the kernel:
          * https://blog.cloudflare.com/a-debugging-story-corrupt-packets-in-af_xdp-kernel-bug-or-user-error/
          */
         if (ucclh->frame_len.value() != frame.frame_len) {
@@ -902,7 +901,6 @@ void UcclEngine::process_rx_msg(
 void UcclEngine::periodic_process() {
     // Advance the periodic ticks counter.
     periodic_ticks_++;
-    if (!stay_quiet_ && periodic_ticks_ % kDumpStatusTicks == 0) dump_status();
     handle_rto();
     process_ctl_reqs();
 }
@@ -1142,9 +1140,8 @@ inline void UcclEngine::net_barrier(int bootstrap_fd) {
     DCHECK(ret == sizeof(bool) && sync);
 }
 
-void UcclEngine::dump_status() {
+std::string UcclEngine::status_to_string() {
     std::string s;
-    s += "\n\t[Uccl Engine] ";
     for (auto [flow_id, flow] : active_flows_map_) {
         s += Format("\n\t\tEngine %d Flow 0x%lx: %s (%u) <-> %s (%u)",
                     local_engine_idx_, flow_id,
@@ -1155,13 +1152,12 @@ void UcclEngine::dump_status() {
         s += flow->to_string();
     }
     s += socket_->to_string();
-    s += "\n";
-    LOG(INFO) << s;
+    return s;
 }
 
 Endpoint::Endpoint(const char *interface_name, int num_queues,
                    uint64_t num_frames, int engine_cpu_start)
-    : num_queues_(num_queues) {
+    : num_queues_(num_queues), stats_thread_([this]() { stats_thread_fn(); }) {
     // Create UDS socket and get the umem_id.
     static std::once_flag flag_once;
     std::call_once(flag_once, [interface_name, num_frames]() {
@@ -1420,6 +1416,21 @@ inline void Endpoint::fence_and_clean_ctx(PollCtx *ctx) {
 
     ctx->clear();
     ctx_pool_->push(ctx);
+}
+
+void Endpoint::stats_thread_fn() {
+    if (GetEnvVar("UCCL_ENGINE_QUIET") == "1") return;
+
+    while (true) {
+        std::this_thread::sleep_for(
+            std::chrono::seconds(kSlowTimerIntervalSec));
+        std::string s;
+        s += "\n\t[Uccl Engine] ";
+        for (auto &engine : engine_vec_) {
+            s += engine->status_to_string();
+        }
+        LOG(INFO) << s;
+    }
 }
 
 }  // namespace uccl

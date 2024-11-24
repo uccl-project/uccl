@@ -258,11 +258,9 @@ uint32_t AFXDPSocket::pull_complete_queue() {
             uint64_t frame_offset =
                 *xsk_ring_cons__comp_addr(&complete_queue_, idx_cq++);
 
-            if (frame_offset &
-                XDP_PACKET_HEADROOM_MASK != XDP_PACKET_HEADROOM) {
-                frame_offset &= ~XDP_PACKET_HEADROOM_MASK;
-                frame_offset |= XDP_PACKET_HEADROOM;
-            }
+            DCHECK((frame_offset & XDP_PACKET_HEADROOM_MASK) ==
+                   XDP_PACKET_HEADROOM)
+                << std::hex << frame_offset;
 
             // TODO(yang): why collecting stats here is smaller than at tx time?
             // out_bytes_ +=
@@ -427,12 +425,12 @@ std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
 std::string AFXDPSocket::to_string() {
     std::string s;
     s += Format(
-        "\n\t\t[AFXDP] free frames: %u, unpulled tx pkts: %u, fill queue "
+        "\n\t\t\t[AFXDP] free frames: %u, unpulled tx pkts: %u, fill queue "
         "entries: %u",
         frame_pool_->size(), unpulled_tx_pkts_, fill_queue_entries_);
     if (queue_id_ == 0) {
         auto now_tsc = rdtsc();
-        auto elapsed = rdtsc_to_us(now_tsc - last_stat_tsc_);
+        auto elapsed = to_usec(now_tsc - last_stat_tsc_, ghz);
         last_stat_tsc_ = now_tsc;
 
         auto out_packets_rate = (double)out_packets_.load() / elapsed;
@@ -445,7 +443,8 @@ std::string AFXDPSocket::to_string() {
         in_bytes_ = 0;
 
         s += Format(
-            "\n\t\t        in: %lf Mpps %lf Gbps, out: %lf Mpps %lf Gbps",
+            "\n\t\t\t        total in: %lf Mpps, %lf Gbps; total out: %lf "
+            "Mpps, %lf Gbps",
             in_packets_rate, in_bytes_rate, out_packets_rate, out_bytes_rate);
     }
     return s;

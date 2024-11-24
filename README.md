@@ -40,7 +40,7 @@ or
 ./config_nic.sh ens1f1np1 4 4 1500 tcp cloudlab
 
 # On server, edit nodes.txt to include all node ips
-./sync.sh
+python rsync.sh
 ./server_tcp_main
 
 # On client
@@ -60,7 +60,7 @@ or
 ./config_nic.sh ens1f1np1 1 1 1500 afxdp cloudlab
 
 # On server, edit nodes.txt to include all node ips
-./sync.sh
+python rsync.sh
 sudo ./server_main
 
 # On client
@@ -73,7 +73,7 @@ Note that any program that leverages util_afxdp no long needs root to use AFXDP 
 
 ```
 sudo ./afxdp_daemon_main --logtostderr=1
-./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --test=async --verify --rand
+./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --clientip=192.168.6.2 --test=async --verify --rand
 ./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --client --serverip=192.168.6.1 --test=async --verify --rand
 ```
 

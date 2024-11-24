@@ -78,6 +78,8 @@ static double measure_rdtsc_freq() {
     return freq_ghz;
 }
 
+static double ghz = measure_rdtsc_freq();
+
 /// Convert cycles measured by rdtsc with frequence \p freq_ghz to seconds
 static double to_sec(size_t cycles, double freq_ghz) {
     return (cycles / (freq_ghz * 1000000000));
@@ -109,10 +111,6 @@ static size_t ns_to_cycles(double ns, double freq_ghz) {
 static double to_nsec(size_t cycles, double freq_ghz) {
     return (cycles / freq_ghz);
 }
-
-static double ghz = measure_rdtsc_freq();
-
-static inline double rdtsc_to_us(uint64_t tsc) { return tsc / ghz / 1000.0; }
 
 /// Simple time that uses RDTSC
 class TscTimer {
