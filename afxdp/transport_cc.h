@@ -73,12 +73,12 @@ struct Pcb {
         wheel_.insert(TimingWheel::get_dummy_ent(), ref_tsc, desired_tx_tsc);
     }
 
-    inline uint32_t get_num_ready_tx_pkt() {
+    inline uint32_t get_num_ready_tx_pkt(uint32_t budget) {
         size_t cur_tsc = rdtsc();
         wheel_.reap(cur_tsc);
 
-        size_t num_ready = wheel_.ready_queue_.size();
-        wheel_.ready_queue_ = {};
+        size_t num_ready = std::min(wheel_.ready_entries_, (uint64_t)budget);
+        wheel_.ready_entries_ -= num_ready;
 
         return num_ready;
     }

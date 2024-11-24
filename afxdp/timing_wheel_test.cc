@@ -41,7 +41,7 @@ class TimingWheelTest : public ::testing::Test {
 TEST_F(TimingWheelTest, Basic) {
     // Empty wheel
     wheel_->reap(rdtsc());
-    ASSERT_EQ(wheel_->ready_queue_.size(), 0);
+    ASSERT_EQ(wheel_->ready_entries_, 0);
 
     // One entry. Check that it's eventually sent.
     size_t ref_tsc = rdtsc();
@@ -49,7 +49,7 @@ TEST_F(TimingWheelTest, Basic) {
     wheel_->insert(TimingWheel::get_dummy_ent(), ref_tsc, abs_tx_tsc);
 
     wheel_->reap(abs_tx_tsc + wheel_->wslot_width_tsc_);
-    ASSERT_EQ(wheel_->ready_queue_.size(), 1);
+    ASSERT_EQ(wheel_->ready_entries_, 1);
 }
 
 // This is not a fixture test because we use a different wheel for each rate
@@ -91,13 +91,13 @@ TEST(TimingWheelRateTest, RateTest) {
             size_t cur_tsc = rdtsc();
             wheel.reap(cur_tsc);
 
-            size_t num_ready = wheel.ready_queue_.size();
+            size_t num_ready = wheel.ready_entries_;
             assert(num_ready <= kSessionCredits);
 
             if (num_ready > 0) {
                 num_pkts_sent += num_ready;
 
-                for (size_t i = 0; i < num_ready; i++) wheel.ready_queue_.pop();
+                wheel.ready_entries_ -= num_ready;
 
                 // Send more packets
                 ref_tsc = rdtsc();

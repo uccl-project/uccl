@@ -58,7 +58,7 @@ struct wheel_record_t {
 };
 
 static constexpr double kWheelSlotWidthUs = .5;  ///< Duration per wheel slot
-static constexpr size_t kSessionCredits = 1024;
+static constexpr size_t kSessionCredits = SEND_BATCH_SIZE;
 static constexpr double kWheelHorizonUs =
     1000000 * (kSessionCredits * AFXDP_MTU) / Timely::kMinRate;
 
@@ -175,8 +175,10 @@ class TimingWheel {
      */
     inline void insert(const wheel_ent_t &ent, size_t ref_tsc,
                        size_t desired_tx_tsc) {
-        assert(desired_tx_tsc >= ref_tsc);
-        assert(desired_tx_tsc - ref_tsc <= horizon_tsc_);  // Horizon definition
+        CHECK(desired_tx_tsc >= ref_tsc);
+        CHECK(desired_tx_tsc - ref_tsc <= horizon_tsc_)
+            << desired_tx_tsc - ref_tsc << " vs "
+            << horizon_tsc_;  // Horizon definition
 
         reap(ref_tsc);  // Advance the wheel to a recent time
         assert(wheel_[cur_wslot_].tx_tsc_ > ref_tsc);
@@ -188,7 +190,8 @@ class TimingWheel {
             size_t wslot_delta =
                 1 + (desired_tx_tsc - wheel_[cur_wslot_].tx_tsc_) /
                         wslot_width_tsc_;
-            assert(wslot_delta < kWheelNumWslots);
+            CHECK(wslot_delta < kWheelNumWslots)
+                << wslot_delta << " vs " << kWheelNumWslots;
 
             dst_wslot = cur_wslot_ + wslot_delta;
             if (dst_wslot >= kWheelNumWslots) dst_wslot -= kWheelNumWslots;
@@ -223,7 +226,7 @@ class TimingWheel {
         wheel_bkt_t *bkt = &wheel_[ws_i];
         while (bkt != nullptr) {
             for (size_t i = 0; i < bkt->num_entries_; i++) {
-                ready_queue_.push(bkt->entry_[i]);
+                ready_entries_++;
                 if (kWheelRecord) {
                     record_vec_.push_back(
                         wheel_record_t(bkt->entry_[i].pkt_num_));
@@ -264,6 +267,6 @@ class TimingWheel {
 
    public:
     std::vector<wheel_record_t> record_vec_;  ///< Used only with kWheelRecord
-    std::queue<wheel_ent_t> ready_queue_;
+    uint64_t ready_entries_ = 0;
 };
 }  // namespace uccl

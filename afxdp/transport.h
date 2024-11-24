@@ -388,9 +388,6 @@ class UcclFlow {
     };
     void process_rtt_probe(rtt_probe_t *rtt_probe);
 
-    std::tuple<FrameBuf *, FrameBuf *, uint32_t> deserialize_and_queue_msg(
-        void *app_buf, size_t app_buf_len);
-
     /**
      * @brief Periodically checks the state of the flow and performs
      * necessary actions.
@@ -407,19 +404,6 @@ class UcclFlow {
 
    private:
     void process_ack(const UcclPktHdr *ucclh);
-
-    void prepare_l2header(uint8_t *pkt_addr) const;
-    void prepare_l3header(uint8_t *pkt_addr, uint32_t payload_bytes) const;
-    void prepare_l4header(uint8_t *pkt_addr, uint32_t payload_bytes,
-                          uint16_t dst_port) const;
-    inline uint16_t get_next_dst_port() {
-        return dst_ports_[next_port_idx_++ % kPortEntropy];
-    }
-    AFXDPSocket::frame_desc craft_ctlpacket(
-        uint32_t seqno, uint32_t ackno, const UcclPktHdr::UcclFlags &net_flags);
-    AFXDPSocket::frame_desc craft_rssprobe_packet(uint16_t dst_port);
-    AFXDPSocket::frame_desc craft_rttprobe_packet(uint16_t dst_port,
-                                                  uint16_t reverse_dst_port);
 
     /**
      * @brief This helper method prepares a network packet that carries the
@@ -441,6 +425,32 @@ class UcclFlow {
      * of pending TX data.
      */
     void transmit_pending_packets();
+
+    struct pending_tx_msg_t {
+        Channel::Msg tx_work;
+        size_t cur_offset = 0;
+    };
+
+    std::deque<pending_tx_msg_t> pending_tx_msgs_;
+
+    /**
+     * @brief Deserialize a chunk of data from the application buffer and append
+     * to the tx tracking.
+     */
+    void deserialize_and_append_to_txtracking();
+
+    void prepare_l2header(uint8_t *pkt_addr) const;
+    void prepare_l3header(uint8_t *pkt_addr, uint32_t payload_bytes) const;
+    void prepare_l4header(uint8_t *pkt_addr, uint32_t payload_bytes,
+                          uint16_t dst_port) const;
+    AFXDPSocket::frame_desc craft_ctlpacket(
+        uint32_t seqno, uint32_t ackno, const UcclPktHdr::UcclFlags &net_flags);
+    AFXDPSocket::frame_desc craft_rssprobe_packet(uint16_t dst_port);
+    AFXDPSocket::frame_desc craft_rttprobe_packet(uint16_t dst_port,
+                                                  uint16_t reverse_dst_port);
+    inline uint16_t get_next_dst_port() {
+        return dst_ports_[next_port_idx_++ % kPortEntropy];
+    }
 
     // The following is used to fill packet headers.
     uint32_t local_addr_;

@@ -9,8 +9,8 @@ void TXTracking::receive_acks(uint32_t num_acked_pkts) {
     while (num_acked_pkts) {
         auto msgbuf = oldest_unacked_msgbuf_;
         DCHECK(msgbuf != nullptr);
-        // if (msgbuf != last_msgbuf_) {
         if (num_tracked_msgbufs_ > 1) {
+            DCHECK_NE(msgbuf, last_msgbuf_) << "Releasing the last msgbuf!";
             DCHECK_NE(oldest_unacked_msgbuf_, oldest_unsent_msgbuf_)
                 << "Releasing an unsent msgbuf!";
             oldest_unacked_msgbuf_ = msgbuf->next();
@@ -43,12 +43,12 @@ void TXTracking::receive_acks(uint32_t num_acked_pkts) {
 
 void TXTracking::append(FrameBuf *msgbuf_head, FrameBuf *msgbuf_tail,
                         uint32_t num_frames, PollCtx *poll_ctx) {
-    poll_ctxs_.push_back(poll_ctx);
     VLOG(3) << "Appending " << num_frames << " frames "
             << " num_unsent_msgbufs_ " << num_unsent_msgbufs_
             << " last_msgbuf_ " << last_msgbuf_;
-    DCHECK(msgbuf_head->is_first());
-    DCHECK(msgbuf_tail->is_last());
+
+    if (poll_ctx) poll_ctxs_.push_back(poll_ctx);
+
     // Append the message at the end of the chain of buffers, if any.
     if (last_msgbuf_ == nullptr) {
         // This is the first pending message buffer in the flow.
@@ -326,18 +326,12 @@ void UcclFlow::rx_supply_app_buf(Channel::Msg &rx_work) {
 }
 
 void UcclFlow::tx_messages(Channel::Msg &tx_work) {
-    auto [tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames] =
-        deserialize_and_queue_msg(tx_work.data, tx_work.len_tosend);
+    pending_tx_msgs_.push_back({tx_work, 0});
 
-    if (num_tx_frames) {
-        // Append these tx frames to the flow's tx queue, and trigger
-        // intial tx. Future received ACKs will trigger more tx.
-        tx_tracking_.append(tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames,
-                            tx_work.poll_ctx);
-    }
+    deserialize_and_append_to_txtracking();
 
-    // Calculate the effective window (in # of packets) to check whether
-    // we can send more packets.
+    // Append these tx frames to the flow's tx queue, and trigger
+    // intial tx. Future received ACKs will trigger more tx.
     transmit_pending_packets();
 }
 
@@ -350,57 +344,6 @@ void UcclFlow::process_rtt_probe(rtt_probe_t *rtt_probe) {
     VLOG(3) << "sample_rtt_us " << to_usec(sample_rtt_tsc, ghz)
             << " us, avg_rtt_diff " << pcb_.timely.get_avg_rtt_diff()
             << " us, timely rate " << pcb_.timely.get_rate_gbps() << " Gbps";
-}
-
-std::tuple<FrameBuf *, FrameBuf *, uint32_t>
-UcclFlow::deserialize_and_queue_msg(void *app_buf, size_t app_buf_len) {
-    FrameBuf *tx_msgbuf_head = nullptr;
-    FrameBuf *tx_msgbuf_tail = nullptr;
-    uint32_t num_tx_frames = 0;
-
-    auto ref_tsc = rdtsc();
-    auto remaining_bytes = app_buf_len;
-
-    //  Deserializing the message into MTU-sized frames.
-    FrameBuf *last_msgbuf = nullptr;
-    while (remaining_bytes > 0) {
-        auto payload_len = std::min(
-            remaining_bytes, (size_t)AFXDP_MTU - kNetHdrLen - kUcclHdrLen);
-        auto frame_offset = socket_->pop_frame();
-        auto *msgbuf = FrameBuf::Create(frame_offset, socket_->umem_buffer_,
-                                        kNetHdrLen + kUcclHdrLen + payload_len);
-        // The engine will free these Tx frames when receiving ACKs.
-        msgbuf->mark_not_txpulltime_free();
-
-        pcb_.queue_on_timing_wheel(ref_tsc,
-                                   payload_len + kNetHdrLen + kUcclHdrLen);
-
-        VLOG(3) << "Deser msgbuf " << msgbuf << " " << num_tx_frames;
-        auto pkt_payload_addr =
-            msgbuf->get_pkt_addr() + kNetHdrLen + kUcclHdrLen;
-        memcpy(pkt_payload_addr, app_buf, payload_len);
-        remaining_bytes -= payload_len;
-        app_buf += payload_len;
-
-        if (tx_msgbuf_head == nullptr) {
-            msgbuf->mark_first();
-            tx_msgbuf_head = msgbuf;
-        } else {
-            last_msgbuf->set_next(msgbuf);
-        }
-
-        if (remaining_bytes == 0) {
-            msgbuf->mark_last();
-            msgbuf->set_next(nullptr);
-            tx_msgbuf_tail = msgbuf;
-        }
-
-        last_msgbuf = msgbuf;
-        num_tx_frames++;
-    }
-    CHECK(tx_msgbuf_head->is_first());
-    CHECK(tx_msgbuf_tail->is_last());
-    return std::make_tuple(tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames);
 }
 
 bool UcclFlow::periodic_check() {
@@ -508,6 +451,170 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
         pcb_.snd_ooo_acks = 0;
         pcb_.rto_rexmits_consectutive = 0;
         pcb_.rto_maybe_reset();
+    }
+}
+
+void UcclFlow::fast_retransmit() {
+    VLOG(3) << "Fast retransmitting oldest unacked packet " << pcb_.snd_una;
+    // Retransmit the oldest unacknowledged message buffer.
+    auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
+    if (msg_buf) {
+        prepare_datapacket(msg_buf, pcb_.snd_una);
+        const auto *ucclh = reinterpret_cast<const UcclPktHdr *>(
+            msg_buf->get_pkt_addr() + kNetHdrLen);
+        DCHECK_EQ(pcb_.snd_una, ucclh->seqno.value());
+        msg_buf->mark_not_txpulltime_free();
+        socket_->send_packet(
+            {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
+    }
+    pcb_.rto_reset();
+    pcb_.fast_rexmits++;
+}
+
+void UcclFlow::rto_retransmit() {
+    VLOG(3) << "RTO retransmitting oldest unacked packet " << pcb_.snd_una;
+    auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
+    if (msg_buf) {
+        prepare_datapacket(msg_buf, pcb_.snd_una);
+        msg_buf->mark_not_txpulltime_free();
+        socket_->send_packet(
+            {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
+    }
+    pcb_.rto_reset();
+    pcb_.rto_rexmits++;
+    pcb_.rto_rexmits_consectutive++;
+}
+
+/**
+ * @brief Helper function to transmit a number of packets from the queue
+ * of pending TX data.
+ */
+void UcclFlow::transmit_pending_packets() {
+    auto now_tsc = rdtsc();
+    if (now_tsc - last_rtt_probe_tsc_ >= kRttProbeIntervalTsc_) {
+        // Send a RttProbe packet per batch to measure the RTT.
+        auto frame =
+            craft_rttprobe_packet(get_next_dst_port(), local_dst_ports_[0]);
+        pending_tx_frames_.push_back(frame);
+        last_rtt_probe_tsc_ = now_tsc;
+
+        socket_->send_packets(pending_tx_frames_);
+        pending_tx_frames_.clear();
+    }
+
+    auto permitted_packets = pcb_.get_num_ready_tx_pkt(SEND_BATCH_SIZE);
+    if (permitted_packets)
+        LOG(INFO) << "permitted_packets " << permitted_packets << " tx_unsent "
+                  << tx_tracking_.num_unsent_msgbufs();
+    if (permitted_packets == 0) goto ret;
+
+    // Prepare the packets.
+    for (uint16_t i = 0; i < permitted_packets; i++) {
+        auto msg_buf_opt = tx_tracking_.get_and_update_oldest_unsent();
+        if (!msg_buf_opt.has_value()) break;
+
+        auto *msg_buf = msg_buf_opt.value();
+        auto seqno = pcb_.get_snd_nxt();
+        if (msg_buf->is_last()) {
+            VLOG(2) << "Transmitting seqno: " << seqno << " payload_len: "
+                    << msg_buf->get_frame_len() - kNetHdrLen - kUcclHdrLen;
+        }
+        prepare_datapacket(msg_buf, seqno);
+        msg_buf->mark_not_txpulltime_free();
+        pending_tx_frames_.push_back(
+            {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
+    }
+
+    // TX both data and ack frames.
+    if (pending_tx_frames_.empty()) goto ret;
+    VLOG(3) << "tx packets " << pending_tx_frames_.size();
+
+    socket_->send_packets(pending_tx_frames_);
+    pending_tx_frames_.clear();
+
+    if (pcb_.rto_disabled()) pcb_.rto_enable();
+
+ret:
+    // Check if we can add more packet into the timingwheel.
+    deserialize_and_append_to_txtracking();
+}
+
+void UcclFlow::deserialize_and_append_to_txtracking() {
+    if (pending_tx_msgs_.empty()) return;
+    auto &[tx_work, cur_offset] = pending_tx_msgs_.front();
+
+    auto packet_bugget = SEND_BATCH_SIZE - tx_tracking_.num_unsent_msgbufs();
+    VLOG(3) << "deser unsent_msgbufs " << tx_tracking_.num_unsent_msgbufs()
+            << " packet_bugget " << packet_bugget;
+    if (packet_bugget == 0) return;
+
+    FrameBuf *tx_msgbuf_head = nullptr;
+    FrameBuf *tx_msgbuf_tail = nullptr;
+    uint32_t num_tx_frames = 0;
+
+    auto remaining_bytes = tx_work.len_tosend - cur_offset;
+    auto *app_buf_cursor = (uint8_t *)tx_work.data + cur_offset;
+
+    auto now_tsc = rdtsc();
+    FrameBuf *last_msgbuf = nullptr;
+    while (remaining_bytes > 0 && num_tx_frames < packet_bugget) {
+        //  Deserializing the message into MTU-sized frames.
+        auto payload_len = std::min(
+            remaining_bytes, (size_t)AFXDP_MTU - kNetHdrLen - kUcclHdrLen);
+
+        // Get a frame from the socket.
+        auto frame_offset = socket_->pop_frame();
+        auto *msgbuf = FrameBuf::Create(frame_offset, socket_->umem_buffer_,
+                                        kNetHdrLen + kUcclHdrLen + payload_len);
+
+        if (remaining_bytes == tx_work.len_tosend) msgbuf->mark_first();
+
+        // The flow will free these Tx frames when receiving ACKs.
+        msgbuf->mark_not_txpulltime_free();
+
+        // Queue on the timing wheel.
+        pcb_.queue_on_timing_wheel(now_tsc,
+                                   payload_len + kNetHdrLen + kUcclHdrLen);
+
+        // VLOG(3) << "Deser copy " << msgbuf << " " << num_tx_frames;
+        auto pkt_payload_addr =
+            msgbuf->get_pkt_addr() + kNetHdrLen + kUcclHdrLen;
+        memcpy(pkt_payload_addr, app_buf_cursor, payload_len);
+
+        remaining_bytes -= payload_len;
+        app_buf_cursor += payload_len;
+
+        if (tx_msgbuf_head == nullptr) {
+            tx_msgbuf_head = msgbuf;
+        } else {
+            last_msgbuf->set_next(msgbuf);
+        }
+
+        if (remaining_bytes == 0) {
+            msgbuf->mark_last();
+            msgbuf->set_next(nullptr);
+        }
+
+        last_msgbuf = msgbuf;
+        num_tx_frames++;
+    }
+    tx_msgbuf_tail = last_msgbuf;
+
+    // LOG(INFO) << "deser successfully adds to timingwheel " << num_tx_frames;
+
+    // This message has been fully deserialized and added to tx tracking.
+    if (remaining_bytes == 0)
+        pending_tx_msgs_.pop_front();
+    else
+        cur_offset = tx_work.len_tosend - remaining_bytes;
+
+    tx_tracking_.append(
+        tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames,
+        tx_msgbuf_head->is_first() ? tx_work.poll_ctx : nullptr);
+
+    // Recursively call this function to append more messages to the tx.
+    if (num_tx_frames < packet_bugget) {
+        deserialize_and_append_to_txtracking();
     }
 }
 
@@ -693,92 +800,12 @@ void UcclFlow::prepare_datapacket(FrameBuf *msg_buf, uint32_t seqno) {
     ucclh->engine_id = remote_engine_idx_;
     ucclh->net_flags = UcclPktHdr::UcclFlags::kData;
     ucclh->ackno = be32_t(UINT32_MAX);
-    // This fills the FrameBuf.flags into the outgoing packet
-    // UcclPktHdr.msg_flags.
+    // This fills the FrameBuf flags into the outgoing packet msg_flags.
     ucclh->msg_flags = msg_buf->msg_flags();
     ucclh->frame_len = be16_t(frame_len);
 
     ucclh->seqno = be32_t(seqno);
     ucclh->flow_id = be64_t(flow_id_);
-}
-
-void UcclFlow::fast_retransmit() {
-    VLOG(3) << "Fast retransmitting oldest unacked packet " << pcb_.snd_una;
-    // Retransmit the oldest unacknowledged message buffer.
-    auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
-    if (msg_buf) {
-        prepare_datapacket(msg_buf, pcb_.snd_una);
-        const auto *ucclh = reinterpret_cast<const UcclPktHdr *>(
-            msg_buf->get_pkt_addr() + kNetHdrLen);
-        DCHECK_EQ(pcb_.snd_una, ucclh->seqno.value());
-        msg_buf->mark_not_txpulltime_free();
-        socket_->send_packet(
-            {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
-    }
-    pcb_.rto_reset();
-    pcb_.fast_rexmits++;
-}
-
-void UcclFlow::rto_retransmit() {
-    VLOG(3) << "RTO retransmitting oldest unacked packet " << pcb_.snd_una;
-    auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
-    if (msg_buf) {
-        prepare_datapacket(msg_buf, pcb_.snd_una);
-        msg_buf->mark_not_txpulltime_free();
-        socket_->send_packet(
-            {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
-    }
-    pcb_.rto_reset();
-    pcb_.rto_rexmits++;
-    pcb_.rto_rexmits_consectutive++;
-}
-
-/**
- * @brief Helper function to transmit a number of packets from the queue
- * of pending TX data.
- */
-void UcclFlow::transmit_pending_packets() {
-    auto now_tsc = rdtsc();
-    if (now_tsc - last_rtt_probe_tsc_ >= kRttProbeIntervalTsc_) {
-        // Send a RttProbe packet per batch to measure the RTT.
-        auto frame =
-            craft_rttprobe_packet(get_next_dst_port(), local_dst_ports_[0]);
-        pending_tx_frames_.push_back(frame);
-        last_rtt_probe_tsc_ = now_tsc;
-
-        socket_->send_packets(pending_tx_frames_);
-        pending_tx_frames_.clear();
-    }
-
-    auto permitted_packets = pcb_.get_num_ready_tx_pkt();
-    VLOG(3) << "permitted_packets " << permitted_packets;
-    if (permitted_packets == 0) return;
-
-    // Prepare the packets.
-    for (uint16_t i = 0; i < permitted_packets; i++) {
-        auto msg_buf_opt = tx_tracking_.get_and_update_oldest_unsent();
-        if (!msg_buf_opt.has_value()) break;
-
-        auto *msg_buf = msg_buf_opt.value();
-        auto seqno = pcb_.get_snd_nxt();
-        if (msg_buf->is_last()) {
-            VLOG(2) << "Transmitting seqno: " << seqno << " payload_len: "
-                    << msg_buf->get_frame_len() - kNetHdrLen - kUcclHdrLen;
-        }
-        prepare_datapacket(msg_buf, seqno);
-        msg_buf->mark_not_txpulltime_free();
-        pending_tx_frames_.push_back(
-            {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
-    }
-
-    // TX both data and ack frames.
-    if (pending_tx_frames_.empty()) return;
-    VLOG(3) << "tx packets " << pending_tx_frames_.size();
-
-    socket_->send_packets(pending_tx_frames_);
-    pending_tx_frames_.clear();
-
-    if (pcb_.rto_disabled()) pcb_.rto_enable();
 }
 
 void UcclEngine::run() {
