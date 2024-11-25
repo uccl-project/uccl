@@ -36,6 +36,8 @@ void TXTracking::receive_acks(uint32_t num_acked_pkts) {
         }
         // Free transmitted frames that are acked
         socket_->push_frame(msgbuf->get_frame_offset());
+
+        num_unacked_msgbufs_--;
         num_tracked_msgbufs_--;
         num_acked_pkts--;
     }
@@ -87,6 +89,7 @@ std::optional<FrameBuf *> TXTracking::get_and_update_oldest_unsent() {
         oldest_unsent_msgbuf_ = nullptr;
     }
 
+    num_unacked_msgbufs_++;
     num_unsent_msgbufs_--;
     return msgbuf;
 }
@@ -316,6 +319,8 @@ void UcclFlow::rx_messages() {
         pcb_.additive_increase();
     }
 
+    deserialize_and_append_to_txtracking();
+
     // Sending data frames that can be send per cwnd.
     transmit_pending_packets();
 }
@@ -495,21 +500,28 @@ void UcclFlow::transmit_pending_packets() {
         // Send a RttProbe packet per batch to measure the RTT.
         auto frame =
             craft_rttprobe_packet(get_next_dst_port(), local_dst_ports_[0]);
-        pending_tx_frames_.push_back(frame);
         last_rtt_probe_tsc_ = now_tsc;
 
-        socket_->send_packets(pending_tx_frames_);
-        pending_tx_frames_.clear();
+        socket_->send_packet(frame);
     }
 
-    auto permitted_packets = pcb_.get_num_ready_tx_pkt(SEND_BATCH_SIZE);
-    if (permitted_packets)
-        LOG(INFO) << "permitted_packets " << permitted_packets << " tx_unsent "
-                  << tx_tracking_.num_unsent_msgbufs();
-    if (permitted_packets == 0) goto ret;
+    // Avoid sending too many packets.
+    auto num_unacked_pkts = tx_tracking_.num_unacked_msgbufs();
+    if (num_unacked_pkts >= MAX_UNACKED_PKTS) return;
+
+    auto unacked_pkt_budget = MAX_UNACKED_PKTS - num_unacked_pkts;
+    auto txq_free_entries =
+        socket_->send_queue_free_entries(unacked_pkt_budget);
+    auto permitted_packets = pcb_.get_num_ready_tx_pkt(
+        std::min(txq_free_entries, unacked_pkt_budget));
+
+    VLOG(3) << "permitted_packets " << permitted_packets << " num_unacked_pkts "
+            << num_unacked_pkts << " txq_free_entries " << txq_free_entries
+            << " num_unsent_pkts " << tx_tracking_.num_unsent_msgbufs()
+            << " pending_tx_msgs_ " << pending_tx_msgs_.size();
 
     // Prepare the packets.
-    for (uint16_t i = 0; i < permitted_packets; i++) {
+    for (uint32_t i = 0; i < permitted_packets; i++) {
         auto msg_buf_opt = tx_tracking_.get_and_update_oldest_unsent();
         if (!msg_buf_opt.has_value()) break;
 
@@ -526,27 +538,23 @@ void UcclFlow::transmit_pending_packets() {
     }
 
     // TX both data and ack frames.
-    if (pending_tx_frames_.empty()) goto ret;
+    if (pending_tx_frames_.empty()) return;
     VLOG(3) << "tx packets " << pending_tx_frames_.size();
 
     socket_->send_packets(pending_tx_frames_);
     pending_tx_frames_.clear();
 
     if (pcb_.rto_disabled()) pcb_.rto_enable();
-
-ret:
-    // Check if we can add more packet into the timingwheel.
-    deserialize_and_append_to_txtracking();
 }
 
 void UcclFlow::deserialize_and_append_to_txtracking() {
     if (pending_tx_msgs_.empty()) return;
-    auto &[tx_work, cur_offset] = pending_tx_msgs_.front();
 
-    auto packet_bugget = SEND_BATCH_SIZE - tx_tracking_.num_unsent_msgbufs();
-    VLOG(3) << "deser unsent_msgbufs " << tx_tracking_.num_unsent_msgbufs()
-            << " packet_bugget " << packet_bugget;
-    if (packet_bugget == 0) return;
+    if (tx_tracking_.num_unsent_msgbufs() >= MAX_TIMING_WHEEL_PKTS) return;
+    auto deser_budget =
+        MAX_TIMING_WHEEL_PKTS - tx_tracking_.num_unsent_msgbufs();
+
+    auto &[tx_work, cur_offset] = pending_tx_msgs_.front();
 
     FrameBuf *tx_msgbuf_head = nullptr;
     FrameBuf *tx_msgbuf_tail = nullptr;
@@ -557,7 +565,7 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
 
     auto now_tsc = rdtsc();
     FrameBuf *last_msgbuf = nullptr;
-    while (remaining_bytes > 0 && num_tx_frames < packet_bugget) {
+    while (remaining_bytes > 0 && num_tx_frames < deser_budget) {
         //  Deserializing the message into MTU-sized frames.
         auto payload_len = std::min(
             remaining_bytes, (size_t)AFXDP_MTU - kNetHdrLen - kUcclHdrLen);
@@ -600,20 +608,23 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
     }
     tx_msgbuf_tail = last_msgbuf;
 
-    // LOG(INFO) << "deser successfully adds to timingwheel " << num_tx_frames;
-
     // This message has been fully deserialized and added to tx tracking.
     if (remaining_bytes == 0)
         pending_tx_msgs_.pop_front();
     else
         cur_offset = tx_work.len_tosend - remaining_bytes;
 
+    VLOG(3) << "deser unsent_msgbufs " << tx_tracking_.num_unsent_msgbufs()
+            << " deser_budget " << deser_budget << " pending_tx_msgs "
+            << pending_tx_msgs_.size() << " successfully added to timingwheel "
+            << num_tx_frames;
+
     tx_tracking_.append(
         tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames,
         tx_msgbuf_head->is_first() ? tx_work.poll_ctx : nullptr);
 
     // Recursively call this function to append more messages to the tx.
-    if (num_tx_frames < packet_bugget) {
+    if (num_tx_frames < deser_budget) {
         deserialize_and_append_to_txtracking();
     }
 }

@@ -27,9 +27,7 @@ DEFINE_bool(pktloss, false, "Enable packet loss for testing");
 
 #define IF_NAME DEV_DEFAULT
 #define SHM_NAME "UMEM_SHM"
-#define FILL_RING_SIZE                  \
-    (XSK_RING_PROD__DEFAULT_NUM_DESCS * \
-     2)  // recommened to be RX_RING_SIZE + NIC RING SIZE
+#define FILL_RING_SIZE XSK_RING_PROD__DEFAULT_NUM_DESCS
 #define COMP_RING_SIZE XSK_RING_CONS__DEFAULT_NUM_DESCS
 #define TX_RING_SIZE XSK_RING_PROD__DEFAULT_NUM_DESCS
 #define RX_RING_SIZE XSK_RING_CONS__DEFAULT_NUM_DESCS

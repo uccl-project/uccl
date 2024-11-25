@@ -185,6 +185,7 @@ class TXTracking {
           oldest_unacked_msgbuf_(nullptr),
           oldest_unsent_msgbuf_(nullptr),
           last_msgbuf_(nullptr),
+          num_unacked_msgbufs_(0),
           num_unsent_msgbufs_(0),
           num_tracked_msgbufs_(0) {}
 
@@ -193,6 +194,9 @@ class TXTracking {
                 uint32_t num_frames, PollCtx *poll_ctx);
     std::optional<FrameBuf *> get_and_update_oldest_unsent();
 
+    inline const uint32_t num_unacked_msgbufs() const {
+        return num_unacked_msgbufs_;
+    }
     inline const uint32_t num_unsent_msgbufs() const {
         return num_unsent_msgbufs_;
     }
@@ -227,6 +231,7 @@ class TXTracking {
     FrameBuf *oldest_unsent_msgbuf_;
     FrameBuf *last_msgbuf_;
 
+    uint32_t num_unacked_msgbufs_;
     uint32_t num_unsent_msgbufs_;
     uint32_t num_tracked_msgbufs_;
 };

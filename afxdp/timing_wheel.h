@@ -58,7 +58,7 @@ struct wheel_record_t {
 };
 
 static constexpr double kWheelSlotWidthUs = .5;  ///< Duration per wheel slot
-static constexpr size_t kSessionCredits = SEND_BATCH_SIZE;
+static constexpr size_t kSessionCredits = MAX_TIMING_WHEEL_PKTS;
 static constexpr double kWheelHorizonUs =
     1000000 * (kSessionCredits * AFXDP_MTU) / Timely::kMinRate;
 
