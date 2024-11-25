@@ -129,7 +129,6 @@ struct __attribute__((packed)) UcclPktHdr {
     enum class UcclFlags : uint8_t {
         kData = 0b0,                // Data packet.
         kAck = 0b10,                // ACK packet.
-        kAckEcn = 0b100,            // ACK-ECN packet.
         kRssProbe = 0b1000,         // RSS probing packet.
         kRttProbe = 0b10000,        // RTT probing packet.
         kRttProbeRsp = 0b100000,    // RTT probing response.
@@ -323,7 +322,7 @@ class RXTracking {
  *      converts to network packets and sends them out to the remote recipient.
  */
 class UcclFlow {
-    const static uint32_t kReadyMsgThresholdForEcn = 32;
+    const static uint32_t kMaxReadyMsgs = 32;
 
    public:
     /**
@@ -612,7 +611,7 @@ class UcclEngine {
  * its all queues.
  */
 class Endpoint {
-    constexpr static uint32_t kMaxInflightMsg = 4096;
+    constexpr static uint32_t kMaxInflightMsg = 1024 * 256;
     constexpr static uint16_t kBootstrapPort = 30000;
     constexpr static uint32_t kSlowTimerIntervalSec = 2;
 

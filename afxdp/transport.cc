@@ -270,12 +270,6 @@ void UcclFlow::rx_messages() {
                 // Free the received frame.
                 socket_->push_frame(msgbuf->get_frame_offset());
                 break;
-            case UcclPktHdr::UcclFlags::kAckEcn:
-                process_ack(ucclh);
-                socket_->push_frame(msgbuf->get_frame_offset());
-                // Need to slowdown the sender.
-                ecn_recvd = true;
-                break;
             case UcclPktHdr::UcclFlags::kData:
                 // Data packet, process the payload. The frame will be freed
                 // once the engine copies the payload into app buffer
@@ -303,12 +297,10 @@ void UcclFlow::rx_messages() {
 
     // Send one ack for a bunch of received packets.
     if (num_data_frames_recvd) {
-        if (rx_tracking_.ready_msg_stash_.size() <= kReadyMsgThresholdForEcn) {
+        // Avoiding client sending too much packet which would empty msgbuf.
+        if (rx_tracking_.ready_msg_stash_.size() <= kMaxReadyMsgs) {
             socket_->send_packet(craft_ctlpacket(pcb_.seqno(), pcb_.ackno(),
                                                  UcclPktHdr::UcclFlags::kAck));
-        } else {
-            socket_->send_packet(craft_ctlpacket(
-                pcb_.seqno(), pcb_.ackno(), UcclPktHdr::UcclFlags::kAckEcn));
         }
     }
 
