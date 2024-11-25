@@ -425,6 +425,8 @@ class UcclFlow {
     void fast_retransmit();
     void rto_retransmit();
 
+    void send_rtt_probe();
+
     /**
      * @brief Helper function to transmit a number of packets from the queue
      * of pending TX data.

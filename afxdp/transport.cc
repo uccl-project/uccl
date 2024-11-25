@@ -490,11 +490,7 @@ void UcclFlow::rto_retransmit() {
     pcb_.rto_rexmits_consectutive++;
 }
 
-/**
- * @brief Helper function to transmit a number of packets from the queue
- * of pending TX data.
- */
-void UcclFlow::transmit_pending_packets() {
+void UcclFlow::send_rtt_probe() {
     auto now_tsc = rdtsc();
     if (now_tsc - last_rtt_probe_tsc_ >= kRttProbeIntervalTsc_) {
         // Send a RttProbe packet per batch to measure the RTT.
@@ -504,6 +500,14 @@ void UcclFlow::transmit_pending_packets() {
 
         socket_->send_packet(frame);
     }
+}
+
+/**
+ * @brief Helper function to transmit a number of packets from the queue
+ * of pending TX data.
+ */
+void UcclFlow::transmit_pending_packets() {
+    send_rtt_probe();
 
     // Avoid sending too many packets.
     auto num_unacked_pkts = tx_tracking_.num_unacked_msgbufs();
@@ -515,10 +519,11 @@ void UcclFlow::transmit_pending_packets() {
     auto permitted_packets = pcb_.get_num_ready_tx_pkt(
         std::min(txq_free_entries, unacked_pkt_budget));
 
-    VLOG(3) << "permitted_packets " << permitted_packets << " num_unacked_pkts "
-            << num_unacked_pkts << " txq_free_entries " << txq_free_entries
-            << " num_unsent_pkts " << tx_tracking_.num_unsent_msgbufs()
-            << " pending_tx_msgs_ " << pending_tx_msgs_.size();
+    // LOG_EVERY_N(INFO, 10000)
+    //     << "permitted_packets " << permitted_packets << " num_unacked_pkts "
+    //     << num_unacked_pkts << " txq_free_entries " << txq_free_entries
+    //     << " num_unsent_pkts " << tx_tracking_.num_unsent_msgbufs()
+    //     << " pending_tx_msgs_ " << pending_tx_msgs_.size();
 
     // Prepare the packets.
     for (uint32_t i = 0; i < permitted_packets; i++) {
@@ -614,10 +619,11 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
     else
         cur_offset = tx_work.len_tosend - remaining_bytes;
 
-    VLOG(3) << "deser unsent_msgbufs " << tx_tracking_.num_unsent_msgbufs()
-            << " deser_budget " << deser_budget << " pending_tx_msgs "
-            << pending_tx_msgs_.size() << " successfully added to timingwheel "
-            << num_tx_frames;
+    // LOG_EVERY_N(INFO, 10000)
+    //     << "deser unsent_msgbufs " << tx_tracking_.num_unsent_msgbufs()
+    //     << " deser_budget " << deser_budget << " pending_tx_msgs "
+    //     << pending_tx_msgs_.size() << " successfully added to timingwheel "
+    //     << num_tx_frames;
 
     tx_tracking_.append(
         tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames,
