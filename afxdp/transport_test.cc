@@ -217,6 +217,7 @@ int main(int argc, char* argv[]) {
                         ep.uccl_poll(poll_ctx);
                         sent_bytes += send_len;
                     }
+                    CHECK(send_len == recv_len);
                     break;
                 }
                 default:
@@ -238,11 +239,16 @@ int main(int argc, char* argv[]) {
                     sent_bytes *
                     ((AFXDP_MTU * 1.0 + 24) /
                      (AFXDP_MTU - kNetHdrLen - kUcclHdrLen)) *
-                    8.0 / 1024 / 1024 / 1024 /
+                    8.0 / 1000 / 1000 / 1000 /
                     (std::chrono::duration_cast<std::chrono::microseconds>(
                          end_bw_mea - start_bw_mea)
                          .count() *
                      1e-6);
+                // Clear to avoid Percentile() taking too much time.
+                if (rtts.size() > 100000) {
+                    rtts.erase(rtts.begin(),
+                               rtts.begin() + rtts.size() - 100000);
+                }
                 sent_bytes = 0;
 
                 LOG(INFO) << "Sent " << i
@@ -378,6 +384,7 @@ int main(int argc, char* argv[]) {
                         poll_ctxs.pop_front();
                         ep.uccl_poll(poll_ctx);
                     }
+                    CHECK(recv_len == send_len);
                     break;
                 }
                 default:

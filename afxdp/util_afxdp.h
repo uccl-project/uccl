@@ -330,7 +330,7 @@ class AFXDPSocket {
     uint32_t unpulled_tx_pkts_;
     uint32_t fill_queue_entries_;
 
-    uint64_t last_stat_tsc_ = 0;
+    std::chrono::time_point<std::chrono::high_resolution_clock> last_stat_;
     inline static std::atomic<uint64_t> out_packets_ = 0;
     inline static std::atomic<uint64_t> out_bytes_ = 0;
     inline static std::atomic<uint64_t> in_packets_ = 0;

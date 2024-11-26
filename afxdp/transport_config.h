@@ -18,7 +18,7 @@ static const uint32_t ENGINE_CPU_START = 0;
 static const uint16_t BASE_PORT = 10000;
 static const uint32_t kPortEntropy = 128;
 static const double kLinkBandwidth =
-    100.0 * 1024 * 1024 * 1024 / 8;  // byte per second
+    100.0 * 1000 * 1000 * 1000 / 8;  // byte per second
 
 #if defined(AWS_C5) || defined(AWS_G4)
 static const uint32_t AFXDP_MTU = 3498;

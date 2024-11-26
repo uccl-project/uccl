@@ -433,14 +433,16 @@ std::string AFXDPSocket::to_string() {
         "entries: %u",
         frame_pool_->size(), unpulled_tx_pkts_, fill_queue_entries_);
     if (queue_id_ == 0) {
-        auto now_tsc = rdtsc();
-        auto elapsed = to_usec(now_tsc - last_stat_tsc_, ghz);
-        last_stat_tsc_ = now_tsc;
+        auto now = std::chrono::high_resolution_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+                           now - last_stat_)
+                           .count();
+        last_stat_ = now;
 
         auto out_packets_rate = (double)out_packets_.load() / elapsed;
-        auto out_bytes_rate = (double)out_bytes_.load() / elapsed / 1024 * 8;
+        auto out_bytes_rate = (double)out_bytes_.load() / elapsed / 1000 * 8;
         auto in_packets_rate = (double)in_packets_.load() / elapsed;
-        auto in_bytes_rate = (double)in_bytes_.load() / elapsed / 1024 * 8;
+        auto in_bytes_rate = (double)in_bytes_.load() / elapsed / 1000 * 8;
         out_packets_ = 0;
         out_bytes_ = 0;
         in_packets_ = 0;
