@@ -130,7 +130,8 @@ struct __attribute__((packed)) UcclPktHdr {
     enum class UcclFlags : uint8_t {
         kData = 0b0,              // Data packet.
         kAck = 0b10,              // ACK packet.
-        kRssProbe = 0b1000,       // RSS probing packet.
+        kRssProbe = 0b100,        // RSS probing packet.
+        kRssProbeRsp = 0b1000,    // RSS probing rsp packet.
         kDataRttProbe = 0b10000,  // RTT probing packet.
         kAckRttProbe = 0b100000,  // RTT probing packet.
     };
@@ -438,8 +439,8 @@ class UcclFlow {
     void prepare_datapacket(FrameBuf *msg_buf, uint32_t seqno,
                             const UcclPktHdr::UcclFlags net_flags);
     AFXDPSocket::frame_desc craft_ackpacket(
-        uint32_t seqno, uint32_t ackno, const UcclPktHdr::UcclFlags net_flags,
-        uint64_t ts1, uint64_t ts2);
+        uint16_t dst_port, uint32_t seqno, uint32_t ackno,
+        const UcclPktHdr::UcclFlags net_flags, uint64_t ts1, uint64_t ts2);
     AFXDPSocket::frame_desc craft_rssprobe_packet(uint16_t dst_port);
     inline uint16_t get_next_dst_port() {
         return dst_ports_[next_port_idx_++ % kPortEntropy];
