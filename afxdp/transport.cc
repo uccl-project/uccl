@@ -580,8 +580,8 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
         msgbuf->mark_not_txpulltime_free();
 
         // Queue on the timing wheel.
-        pcb_.queue_on_timing_wheel(now_tsc,
-                                   payload_len + kNetHdrLen + kUcclHdrLen);
+        pcb_.queue_on_timing_wheel(
+            now_tsc, payload_len + kNetHdrLen + kUcclHdrLen, msgbuf);
 
         // VLOG(3) << "Deser copy " << msgbuf << " " << num_tx_frames;
         auto pkt_payload_addr =
@@ -722,7 +722,8 @@ void UcclFlow::prepare_datapacket(FrameBuf *msg_buf, uint32_t seqno,
 
     // TODO(yang): calibrate timestamp based on output queue length and nic bw.
     ucclh->timestamp1 = (net_flags == UcclPktHdr::UcclFlags::kDataRttProbe)
-                            ? get_monotonic_time_ns()
+                            ? get_monotonic_time_ns() +
+                                  socket_->send_queue_estimated_latency_ns()
                             : 0;
     ucclh->timestamp2 = 0;  // let the receiver ebpf fill this in.
 }
@@ -765,7 +766,8 @@ AFXDPSocket::frame_desc UcclFlow::craft_ackpacket(
 
     // TODO(yang): calibrate timestamp based on output queue length and nic bw.
     ucclsackh->timestamp3 = (net_flags == UcclPktHdr::UcclFlags::kAckRttProbe)
-                                ? get_monotonic_time_ns()
+                                ? get_monotonic_time_ns() +
+                                      socket_->send_queue_estimated_latency_ns()
                                 : 0;
     ucclsackh->timestamp4 = 0;  // let the sender ebpf fill this in.
 

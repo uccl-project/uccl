@@ -6,8 +6,8 @@ import signal
 import argparse
 import os
 
+num_queues = 2
 core_count = os.cpu_count()
-num_queues = 4
 num_irqcores = int(num_queues)
 
 config_mapping = {

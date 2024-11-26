@@ -58,11 +58,12 @@ struct Pcb {
         timely.update_rate(_rdtsc, sample_rtt_tsc);
     }
 
-    inline void queue_on_timing_wheel(size_t ref_tsc, size_t pkt_size) {
-        // double ns_delta = 1000000000 * (pkt_size / timely.rate_);
-        // double ns_delta = 1000000000 * (pkt_size / timely.link_bandwidth_);
-        double ns_delta =
-            1000000000 * (pkt_size / (Timely::gbps_to_rate(45)));
+    inline void queue_on_timing_wheel(size_t ref_tsc, size_t pkt_size,
+                                      void *msgbuf) {
+        auto rate = timely.rate_;
+        // auto rate = timely.link_bandwidth_;
+        // auto rate = Timely::gbps_to_rate(50);
+        double ns_delta = 1000000000 * (pkt_size / rate);
         double cycle_delta = ns_to_cycles(ns_delta, ghz);
 
         size_t desired_tx_tsc = prev_desired_tx_tsc_ + cycle_delta;
@@ -70,7 +71,7 @@ struct Pcb {
 
         prev_desired_tx_tsc_ = desired_tx_tsc;
 
-        wheel_.insert(TimingWheel::get_dummy_ent(), ref_tsc, desired_tx_tsc);
+        wheel_.insert(wheel_ent_t{msgbuf, pkt_size}, ref_tsc, desired_tx_tsc);
     }
 
     inline uint32_t get_num_ready_tx_pkt(uint32_t budget) {
@@ -79,6 +80,32 @@ struct Pcb {
 
         size_t num_ready = std::min(wheel_.ready_entries_, (uint64_t)budget);
         wheel_.ready_entries_ -= num_ready;
+
+        if (unlikely(wheel_.ready_entries_ > 0)) {
+            LOG_EVERY_N(INFO, 1000) << "[CC] TimingWheel ready queue not empty "
+                                    << wheel_.ready_entries_;
+
+            // Consuming the ready entries.
+            while (wheel_.ready_queue_.size() > wheel_.ready_entries_) {
+                wheel_.ready_queue_.pop_front();
+            }
+
+            // Requeue the uncomsumed entries back to the wheel.
+            auto now = rdtsc();
+            while (!wheel_.ready_queue_.empty()) {
+                auto ent = wheel_.ready_queue_.front();
+                wheel_.ready_queue_.pop_front();
+                queue_on_timing_wheel(now, ent.pkt_size_,
+                                      (void *)(uint64_t)ent.sslot_);
+            }
+
+            wheel_.ready_entries_ = 0;
+        } else {
+            wheel_.ready_queue_.clear();
+        }
+
+        DCHECK_EQ(wheel_.ready_entries_, 0);
+        DCHECK(wheel_.ready_queue_.empty());
 
         return num_ready;
     }

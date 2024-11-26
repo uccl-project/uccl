@@ -74,9 +74,9 @@ static constexpr bool kWheelRecord = false;  ///< Fast-record wheel actions
 /// One entry in a timing wheel bucket
 struct wheel_ent_t {
     uint64_t sslot_ : 48;  ///< The things I do for perf
-    uint64_t pkt_num_ : 16;
-    wheel_ent_t(void *sslot, size_t pkt_num)
-        : sslot_(reinterpret_cast<uint64_t>(sslot)), pkt_num_(pkt_num) {}
+    uint64_t pkt_size_ : 16;
+    wheel_ent_t(void *sslot, size_t pkt_size)
+        : sslot_(reinterpret_cast<uint64_t>(sslot)), pkt_size_(pkt_size) {}
 };
 static_assert(sizeof(wheel_ent_t) == 8, "");
 
@@ -198,7 +198,7 @@ class TimingWheel {
         }
 
         if (kWheelRecord)
-            record_vec_.emplace_back(ent.pkt_num_, desired_tx_tsc);
+            record_vec_.emplace_back(ent.pkt_size_, desired_tx_tsc);
 
         insert_into_wslot(dst_wslot, ent);
     }
@@ -227,9 +227,10 @@ class TimingWheel {
         while (bkt != nullptr) {
             for (size_t i = 0; i < bkt->num_entries_; i++) {
                 ready_entries_++;
+                ready_queue_.push_back(bkt->entry_[i]);
                 if (kWheelRecord) {
                     record_vec_.push_back(
-                        wheel_record_t(bkt->entry_[i].pkt_num_));
+                        wheel_record_t(bkt->entry_[i].pkt_size_));
                 }
             }
 
@@ -268,5 +269,6 @@ class TimingWheel {
    public:
     std::vector<wheel_record_t> record_vec_;  ///< Used only with kWheelRecord
     uint64_t ready_entries_ = 0;
+    std::deque<wheel_ent_t> ready_queue_;
 };
 }  // namespace uccl

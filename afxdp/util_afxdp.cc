@@ -299,7 +299,7 @@ uint32_t AFXDPSocket::send_packet(frame_desc frame) {
         LOG_EVERY_N(WARNING, 1000000)
             << "send_queue is full. Busy waiting... unpulled_tx_pkts "
             << unpulled_tx_pkts_ << " send_queue_free_entries "
-            << send_queue_free_entries(1);
+            << send_queue_free_entries();
         kick_tx();
     }
     struct xdp_desc *desc = xsk_ring_prod__tx_desc(&send_queue_, send_index);
@@ -330,7 +330,7 @@ uint32_t AFXDPSocket::send_packets(std::vector<frame_desc> &frames) {
         LOG_EVERY_N(WARNING, 1000000)
             << "send_queue is full. Busy waiting... unpulled_tx_pkts "
             << unpulled_tx_pkts_ << " send_queue_free_entries "
-            << send_queue_free_entries(num_frames) << " num_frames "
+            << send_queue_free_entries() << " num_frames "
             << num_frames;
         kick_tx();
     }

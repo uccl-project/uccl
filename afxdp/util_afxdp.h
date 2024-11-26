@@ -31,6 +31,7 @@
 #include <mutex>
 #include <set>
 
+#include "transport_config.h"
 #include "util_shared_pool.h"
 #include "util_timer.h"
 
@@ -272,10 +273,15 @@ class AFXDPSocket {
     uint32_t send_packet(frame_desc frame);
     uint32_t send_packets(std::vector<frame_desc> &frames);
     uint32_t pull_complete_queue();
-    inline uint32_t send_queue_free_entries(uint32_t nb_frames) {
-        return xsk_prod_nb_free(&send_queue_, nb_frames);
+    inline uint32_t send_queue_free_entries(uint32_t nb = UINT32_MAX) {
+        return xsk_prod_nb_free(&send_queue_, nb);
     }
-    inline uint32_t get_unpulled_tx_pkts() const { return unpulled_tx_pkts_; }
+    inline uint64_t send_queue_estimated_latency_ns() {
+        auto send_queue_pending_entries =
+            TX_RING_SIZE - send_queue_free_entries();
+        return send_queue_pending_entries * AFXDP_MTU * 1000000000UL /
+               kLinkBandwidth;
+    }
     std::vector<frame_desc> recv_packets(uint32_t nb_frames);
     void populate_fill_queue(uint32_t nb_frames);
 
