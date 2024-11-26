@@ -275,6 +275,7 @@ class AFXDPSocket {
     inline uint32_t send_queue_free_entries(uint32_t nb_frames) {
         return xsk_prod_nb_free(&send_queue_, nb_frames);
     }
+    inline uint32_t get_unpulled_tx_pkts() const { return unpulled_tx_pkts_; }
     std::vector<frame_desc> recv_packets(uint32_t nb_frames);
     void populate_fill_queue(uint32_t nb_frames);
 

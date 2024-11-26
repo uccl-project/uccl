@@ -26,7 +26,8 @@ struct {
     (sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr))
 #endif
 #define kMagic 0x4e53
-#define kUcclHdrLen 24
+#define kUcclHdrLen 40
+#define BASE_PORT 10000
 
 SEC("ebpf_transport")
 int ebpf_transport_filter(struct xdp_md *ctx) {
@@ -52,24 +53,31 @@ int ebpf_transport_filter(struct xdp_md *ctx) {
 
     if (bpf_get_prandom_u32() % 1000 == 0) return XDP_DROP;
 
-    __u8 *net_flags_p = (__u8 *)(data + kNetHdrLen + 4);
-    if (*net_flags_p == 0b10000) {
-        void *rtt_probe = data + kNetHdrLen + kUcclHdrLen;
-        if (rtt_probe + 10 > data_end) return XDP_PASS;
+    __u8 net_flags = *(__u8 *)(data + kNetHdrLen + 4);
 
-        // Set to response of RTT probing packet.
-        *net_flags_p = 0b100000;
+    switch (net_flags) {
+        case 0b10000: {
+            // Receiver receiving RTT probing + data packet.
+            void *rtt_probe =
+                data + kNetHdrLen + kUcclHdrLen - sizeof(__u64) * 2;
 
-        // See craft_rttprobe_packet() in transport.cc
-        __u16 reverse_dst_port = *(__u16 *)rtt_probe;
+            __u64 *rx_ns_p = (__u64 *)(rtt_probe + sizeof(__u64));
+            *rx_ns_p = bpf_ktime_get_ns();
 
-        struct udphdr *udp =
-            data + sizeof(struct ethhdr) + sizeof(struct iphdr);
-        udp->dest = udp->source;
-        udp->source = reverse_dst_port;
-        reverse_packet(eth, ip, udp);
+            break;
+        }
+        case 0b100000: {
+            // Sender receiving RTT probing + ACK packet.
+            void *rtt_probe = data + kNetHdrLen + kUcclHdrLen;
+            if (rtt_probe + 16 > data_end) return XDP_PASS;
 
-        return XDP_TX;
+            __u64 *rx_ns_p = (__u64 *)(rtt_probe + sizeof(__u64));
+            *rx_ns_p = bpf_ktime_get_ns();
+
+            break;
+        }
+        default:
+            break;
     }
 
     return bpf_redirect_map(&xsks_map, ctx->rx_queue_index, XDP_PASS);

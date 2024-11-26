@@ -615,4 +615,10 @@ inline std::string GetEnvVar(std::string const& key) {
     return val == NULL ? std::string("") : std::string(val);
 }
 
+inline uint64_t get_monotonic_time_ns() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000LL + (uint64_t)ts.tv_nsec;
+}
+
 }  // namespace uccl

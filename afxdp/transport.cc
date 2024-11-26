@@ -255,21 +255,34 @@ std::string UcclFlow::to_string() const {
 
 void UcclFlow::rx_messages() {
     VLOG(3) << "Received " << pending_rx_msgbufs_.size() << " packets";
-    uint32_t num_data_frames_recvd = 0;
-    bool ecn_recvd = false;
     RXTracking::ConsumeRet consume_ret;
+    uint32_t num_data_frames_recvd = 0;
+    uint64_t timestamp1 = 0, timestamp2 = 0;
+
     for (auto msgbuf : pending_rx_msgbufs_) {
         // ebpf_transport has filtered out invalid pkts.
         auto *pkt_addr = msgbuf->get_pkt_addr();
         auto *ucclh = reinterpret_cast<UcclPktHdr *>(pkt_addr + kNetHdrLen);
+        auto *ucclsackh = reinterpret_cast<UcclSackHdr *>(
+            reinterpret_cast<uint8_t *>(ucclh) + kUcclHdrLen);
 
         switch (ucclh->net_flags) {
+            case UcclPktHdr::UcclFlags::kAckRttProbe:
+                // Sender gets the RTT probe response, update the flow.
+                process_rttprobe_rsp(ucclh->timestamp1, ucclh->timestamp2,
+                                     ucclsackh->timestamp3,
+                                     ucclsackh->timestamp4);
             case UcclPktHdr::UcclFlags::kAck:
                 // ACK packet, update the flow.
                 process_ack(ucclh);
                 // Free the received frame.
                 socket_->push_frame(msgbuf->get_frame_offset());
                 break;
+            case UcclPktHdr::UcclFlags::kDataRttProbe:
+                // Receiver gets the RTT probe, relay it back in the ACK.
+                // If multiple RTT probe, we take the last one's timestamp.
+                timestamp1 = ucclh->timestamp1;
+                timestamp2 = ucclh->timestamp2;
             case UcclPktHdr::UcclFlags::kData:
                 // Data packet, process the payload. The frame will be freed
                 // once the engine copies the payload into app buffer
@@ -280,12 +293,6 @@ void UcclFlow::rx_messages() {
                 // RSS probing packet, ignore.
                 LOG_EVERY_N(INFO, 10000)
                     << "RSS probing packet received, ignoring...";
-                socket_->push_frame(msgbuf->get_frame_offset());
-                break;
-            case UcclPktHdr::UcclFlags::kRttProbeRsp2:
-                // RTT probing packet, update rate.
-                process_rtt_probe(reinterpret_cast<rtt_probe_t *>(
-                    pkt_addr + kNetHdrLen + kUcclHdrLen));
                 socket_->push_frame(msgbuf->get_frame_offset());
                 break;
             default:
@@ -299,16 +306,13 @@ void UcclFlow::rx_messages() {
     if (num_data_frames_recvd) {
         // Avoiding client sending too much packet which would empty msgbuf.
         if (rx_tracking_.ready_msg_stash_.size() <= kMaxReadyMsgs) {
-            socket_->send_packet(craft_ctlpacket(pcb_.seqno(), pcb_.ackno(),
-                                                 UcclPktHdr::UcclFlags::kAck));
+            auto net_flags = (timestamp1 && timestamp2)
+                                 ? UcclPktHdr::UcclFlags::kAckRttProbe
+                                 : UcclPktHdr::UcclFlags::kAck;
+            AFXDPSocket::frame_desc ack_frame = craft_ackpacket(
+                pcb_.seqno(), pcb_.ackno(), net_flags, timestamp1, timestamp2);
+            socket_->send_packet(ack_frame);
         }
-    }
-
-    if (ecn_recvd) {
-        // update the cwnd and rate.
-        pcb_.mutliplicative_decrease();
-    } else {
-        pcb_.additive_increase();
     }
 
     deserialize_and_append_to_txtracking();
@@ -332,11 +336,11 @@ void UcclFlow::tx_messages(Channel::Msg &tx_work) {
     transmit_pending_packets();
 }
 
-void UcclFlow::process_rtt_probe(rtt_probe_t *rtt_probe) {
-    auto now_tsc = rdtsc();
-    auto rtt_ns = rtt_probe->tx_tsc;
+void UcclFlow::process_rttprobe_rsp(uint64_t ts1, uint64_t ts2, uint64_t ts3,
+                                    uint64_t ts4) {
+    auto rtt_ns = (ts4 - ts1) - (ts3 - ts2);
     auto sample_rtt_tsc = ns_to_cycles(rtt_ns, ghz);
-    pcb_.update_rate(now_tsc, sample_rtt_tsc);
+    pcb_.update_rate(rdtsc(), sample_rtt_tsc);
 
     VLOG(3) << "sample_rtt_us " << to_usec(sample_rtt_tsc, ghz)
             << " us, avg_rtt_diff " << pcb_.timely.get_avg_rtt_diff()
@@ -425,7 +429,8 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
                     if (seqno == missing_ucclh->seqno.value()) {
                         // DCHECK_EQ(seqno, missing_ucclh->seqno.value())
                         //     << " seqno mismatch at index " << index;
-                        prepare_datapacket(msgbuf, seqno);
+                        prepare_datapacket(msgbuf, seqno,
+                                           UcclPktHdr::UcclFlags::kData);
                         msgbuf->mark_not_txpulltime_free();
                         missing_frames_.push_back({msgbuf->get_frame_offset(),
                                                    msgbuf->get_frame_len()});
@@ -465,7 +470,7 @@ void UcclFlow::fast_retransmit() {
     // Retransmit the oldest unacknowledged message buffer.
     auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
     if (msg_buf) {
-        prepare_datapacket(msg_buf, pcb_.snd_una);
+        prepare_datapacket(msg_buf, pcb_.snd_una, UcclPktHdr::UcclFlags::kData);
         const auto *ucclh = reinterpret_cast<const UcclPktHdr *>(
             msg_buf->get_pkt_addr() + kNetHdrLen);
         DCHECK_EQ(pcb_.snd_una, ucclh->seqno.value());
@@ -481,7 +486,7 @@ void UcclFlow::rto_retransmit() {
     VLOG(3) << "RTO retransmitting oldest unacked packet " << pcb_.snd_una;
     auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
     if (msg_buf) {
-        prepare_datapacket(msg_buf, pcb_.snd_una);
+        prepare_datapacket(msg_buf, pcb_.snd_una, UcclPktHdr::UcclFlags::kData);
         msg_buf->mark_not_txpulltime_free();
         socket_->send_packet(
             {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
@@ -491,25 +496,11 @@ void UcclFlow::rto_retransmit() {
     pcb_.rto_rexmits_consectutive++;
 }
 
-void UcclFlow::send_rtt_probe() {
-    auto now_tsc = rdtsc();
-    if (now_tsc - last_rtt_probe_tsc_ >= kRttProbeIntervalTsc_) {
-        // Send a RttProbe packet per batch to measure the RTT.
-        auto frame =
-            craft_rttprobe_packet(get_next_dst_port(), local_dst_ports_[0]);
-        last_rtt_probe_tsc_ = now_tsc;
-
-        socket_->send_packet(frame);
-    }
-}
-
 /**
  * @brief Helper function to transmit a number of packets from the queue
  * of pending TX data.
  */
 void UcclFlow::transmit_pending_packets() {
-    send_rtt_probe();
-
     // Avoid sending too many packets.
     auto num_unacked_pkts = tx_tracking_.num_unacked_msgbufs();
     if (num_unacked_pkts >= MAX_UNACKED_PKTS) return;
@@ -537,7 +528,9 @@ void UcclFlow::transmit_pending_packets() {
             VLOG(2) << "Transmitting seqno: " << seqno << " payload_len: "
                     << msg_buf->get_frame_len() - kNetHdrLen - kUcclHdrLen;
         }
-        prepare_datapacket(msg_buf, seqno);
+        auto net_flags = (i == 0) ? UcclPktHdr::UcclFlags::kDataRttProbe
+                                  : UcclPktHdr::UcclFlags::kData;
+        prepare_datapacket(msg_buf, seqno, net_flags);
         msg_buf->mark_not_txpulltime_free();
         pending_tx_frames_.push_back(
             {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
@@ -702,8 +695,41 @@ void UcclFlow::prepare_l4header(uint8_t *pkt_addr, uint32_t payload_bytes,
 #endif
 }
 
-AFXDPSocket::frame_desc UcclFlow::craft_ctlpacket(
-    uint32_t seqno, uint32_t ackno, const UcclPktHdr::UcclFlags &net_flags) {
+void UcclFlow::prepare_datapacket(FrameBuf *msg_buf, uint32_t seqno,
+                                  const UcclPktHdr::UcclFlags net_flags) {
+    // Header length after before the payload.
+    uint32_t frame_len = msg_buf->get_frame_len();
+    DCHECK_LE(frame_len, AFXDP_MTU);
+    uint8_t *pkt_addr = msg_buf->get_pkt_addr();
+
+    // Prepare network headers.
+    prepare_l2header(pkt_addr);
+    prepare_l3header(pkt_addr, frame_len - kNetHdrLen);
+    prepare_l4header(pkt_addr, frame_len - kNetHdrLen, get_next_dst_port());
+
+    // Prepare the Uccl-specific header.
+    auto *ucclh = reinterpret_cast<UcclPktHdr *>(pkt_addr + kNetHdrLen);
+    ucclh->magic = be16_t(UcclPktHdr::kMagic);
+    ucclh->engine_id = remote_engine_idx_;
+    ucclh->net_flags = net_flags;
+    ucclh->ackno = be32_t(UINT32_MAX);
+    // This fills the FrameBuf flags into the outgoing packet msg_flags.
+    ucclh->msg_flags = msg_buf->msg_flags();
+    ucclh->frame_len = be16_t(frame_len);
+
+    ucclh->seqno = be32_t(seqno);
+    ucclh->flow_id = be64_t(flow_id_);
+
+    // TODO(yang): calibrate timestamp based on output queue length and nic bw.
+    ucclh->timestamp1 = (net_flags == UcclPktHdr::UcclFlags::kDataRttProbe)
+                            ? get_monotonic_time_ns()
+                            : 0;
+    ucclh->timestamp2 = 0;  // let the receiver ebpf fill this in.
+}
+
+AFXDPSocket::frame_desc UcclFlow::craft_ackpacket(
+    uint32_t seqno, uint32_t ackno, const UcclPktHdr::UcclFlags net_flags,
+    uint64_t ts1, uint64_t ts2) {
     const size_t kControlPayloadBytes = kUcclHdrLen + kUcclSackHdrLen;
     auto frame_offset = socket_->pop_frame();
     auto msgbuf = FrameBuf::Create(frame_offset, socket_->umem_buffer_,
@@ -725,6 +751,8 @@ AFXDPSocket::frame_desc UcclFlow::craft_ctlpacket(
     ucclh->seqno = be32_t(seqno);
     ucclh->ackno = be32_t(ackno);
     ucclh->flow_id = be64_t(flow_id_);
+    ucclh->timestamp1 = ts1;
+    ucclh->timestamp2 = ts2;
 
     auto *ucclsackh = (UcclSackHdr *)(pkt_addr + kNetHdrLen + kUcclHdrLen);
 
@@ -734,6 +762,12 @@ AFXDPSocket::frame_desc UcclFlow::craft_ctlpacket(
         ucclsackh->sack_bitmap[i] = be64_t(pcb_.sack_bitmap[i]);
     }
     ucclsackh->sack_bitmap_count = be16_t(pcb_.sack_bitmap_count);
+
+    // TODO(yang): calibrate timestamp based on output queue length and nic bw.
+    ucclsackh->timestamp3 = (net_flags == UcclPktHdr::UcclFlags::kAckRttProbe)
+                                ? get_monotonic_time_ns()
+                                : 0;
+    ucclsackh->timestamp4 = 0;  // let the sender ebpf fill this in.
 
     return {frame_offset, kNetHdrLen + kControlPayloadBytes};
 }
@@ -763,67 +797,10 @@ AFXDPSocket::frame_desc UcclFlow::craft_rssprobe_packet(uint16_t dst_port) {
     ucclh->seqno = be32_t(UINT32_MAX);
     ucclh->ackno = be32_t(UINT32_MAX);
     ucclh->flow_id = be64_t(flow_id_);
+    ucclh->timestamp1 = 0;
+    ucclh->timestamp2 = 0;
 
     return {frame_offset, kNetHdrLen + kRssProbePayloadBytes};
-}
-
-AFXDPSocket::frame_desc UcclFlow::craft_rttprobe_packet(
-    uint16_t dst_port, uint16_t reverse_dst_port) {
-    const size_t kRttProbePayloadBytes = kUcclHdrLen + sizeof(rtt_probe_t);
-    auto frame_offset = socket_->pop_frame();
-    auto msgbuf = FrameBuf::Create(frame_offset, socket_->umem_buffer_,
-                                   kNetHdrLen + kRttProbePayloadBytes);
-    // Let AFXDPSocket::pull_complete_queue() free control frames.
-    msgbuf->mark_txpulltime_free();
-
-    uint8_t *pkt_addr = (uint8_t *)socket_->umem_buffer_ + frame_offset;
-    prepare_l2header(pkt_addr);
-    prepare_l3header(pkt_addr, kRttProbePayloadBytes);
-    prepare_l4header(pkt_addr, kRttProbePayloadBytes, UINT16_MAX);
-
-    auto *udph = (udphdr *)(pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
-    udph->dest = htons(dst_port);
-
-    auto *ucclh = (UcclPktHdr *)(pkt_addr + kNetHdrLen);
-    ucclh->magic = be16_t(UcclPktHdr::kMagic);
-    ucclh->engine_id = remote_engine_idx_;
-    ucclh->net_flags = UcclPktHdr::UcclFlags::kRttProbe;
-    ucclh->msg_flags = 0;
-    ucclh->frame_len = be16_t(kNetHdrLen + kRttProbePayloadBytes);
-    ucclh->seqno = be32_t(UINT32_MAX);
-    ucclh->ackno = be32_t(UINT32_MAX);
-    ucclh->flow_id = be64_t(flow_id_);
-
-    auto *rtt_probe = (rtt_probe_t *)(pkt_addr + kNetHdrLen + kUcclHdrLen);
-    rtt_probe->reverse_dst_port = htons(reverse_dst_port);
-    rtt_probe->tx_tsc = __builtin_bswap64(UINT64_MAX);
-
-    return {frame_offset, kNetHdrLen + kRttProbePayloadBytes};
-}
-
-void UcclFlow::prepare_datapacket(FrameBuf *msg_buf, uint32_t seqno) {
-    // Header length after before the payload.
-    uint32_t frame_len = msg_buf->get_frame_len();
-    DCHECK_LE(frame_len, AFXDP_MTU);
-    uint8_t *pkt_addr = msg_buf->get_pkt_addr();
-
-    // Prepare network headers.
-    prepare_l2header(pkt_addr);
-    prepare_l3header(pkt_addr, frame_len - kNetHdrLen);
-    prepare_l4header(pkt_addr, frame_len - kNetHdrLen, get_next_dst_port());
-
-    // Prepare the Uccl-specific header.
-    auto *ucclh = reinterpret_cast<UcclPktHdr *>(pkt_addr + kNetHdrLen);
-    ucclh->magic = be16_t(UcclPktHdr::kMagic);
-    ucclh->engine_id = remote_engine_idx_;
-    ucclh->net_flags = UcclPktHdr::UcclFlags::kData;
-    ucclh->ackno = be32_t(UINT32_MAX);
-    // This fills the FrameBuf flags into the outgoing packet msg_flags.
-    ucclh->msg_flags = msg_buf->msg_flags();
-    ucclh->frame_len = be16_t(frame_len);
-
-    ucclh->seqno = be32_t(seqno);
-    ucclh->flow_id = be64_t(flow_id_);
 }
 
 void UcclEngine::run() {

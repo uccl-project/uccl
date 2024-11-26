@@ -41,7 +41,6 @@ struct Pcb {
     static constexpr std::size_t kSackBitmapBucketSize = sizeof(uint64_t) * 8;
     static constexpr std::size_t kFastRexmitDupAckThres = 3;
     static constexpr std::size_t kRtoMaxRexmitConsectutiveAllowed = 102400;
-    static constexpr std::size_t kRttProbingIntervalUs = 100;
     static constexpr int kRtoExpireThresInTicks = 3;  // in slow timer ticks.
     static constexpr int kRtoDisabled = -1;
     Pcb()
@@ -63,7 +62,7 @@ struct Pcb {
         double ns_delta = 1000000000 * (pkt_size / timely.rate_);
         // double ns_delta = 1000000000 * (pkt_size / timely.link_bandwidth_);
         // double ns_delta =
-        //     1000000000 * (pkt_size / (Timely::gbps_to_rate(45.0)));
+        //     1000000000 * (pkt_size / (Timely::gbps_to_rate(40.0)));
         double cycle_delta = ns_to_cycles(ns_delta, ghz);
 
         size_t desired_tx_tsc = prev_desired_tx_tsc_ + cycle_delta;
