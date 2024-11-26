@@ -406,10 +406,10 @@ std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
             LOG_EVERY_N(WARNING, 1000000)
                 << "Received a frame with wrong offset: 0x" << std::hex
                 << desc->addr;
-            auto frame_offset = desc->addr;
-            frame_offset &= ~XDP_PACKET_HEADROOM_MASK;
-            frame_offset |= XDP_PACKET_HEADROOM;
-            push_frame(frame_offset);
+            // auto frame_offset = desc->addr;
+            // frame_offset &= ~XDP_PACKET_HEADROOM_MASK;
+            // frame_offset |= XDP_PACKET_HEADROOM;
+            // push_frame(frame_offset);
             continue;
         }
 

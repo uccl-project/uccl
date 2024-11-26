@@ -32,6 +32,7 @@
 #include "util.h"
 #include "util_afxdp.h"
 #include "util_endian.h"
+#include "util_latency.h"
 #include "util_rss.h"
 #include "util_timer.h"
 
@@ -491,6 +492,9 @@ class UcclFlow {
     // Last Rtt probe timestamp.
     uint64_t last_rtt_probe_tsc_ = 0;
     uint64_t kRttProbeIntervalTsc_;
+    // Measure the distribution of probed RTT.
+    Latency rtt_stats_;
+    uint64_t rtt_probe_count_ = 0;
 
     TXTracking tx_tracking_;
     RXTracking rx_tracking_;

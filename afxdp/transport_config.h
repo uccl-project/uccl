@@ -5,6 +5,7 @@
 
 // #define USING_TCP
 // #define ENABLE_CSUM
+// #define RTT_STATS
 #define USING_MULTIPATH
 
 static const uint32_t RECV_BATCH_SIZE = 32;

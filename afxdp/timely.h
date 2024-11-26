@@ -33,7 +33,7 @@ struct timely_record_t {
         std::ostringstream ret;
         ret << "[RTT " << std::setprecision(5) << rtt_ << " us"
             << ", rate " << std::setprecision(4)
-            << (rate_ / (1000 * 1000 * 1000)) * 8 << "]";
+            << (rate_ / (1024 * 1024 * 1024)) * 8 << "]";
         return ret.str();
     }
 };
@@ -214,12 +214,12 @@ class Timely {
 
     /// Convert a default bytes/second rate to Gbit/s
     static double rate_to_gbps(double r) {
-        return (r / (1000 * 1000 * 1000)) * 8;
+        return (r / (1024 * 1024 * 1024)) * 8;
     }
 
     /// Convert a Gbit/s rate to the default bytes/second
     static double gbps_to_rate(double r) {
-        return (r / 8) * (1000 * 1000 * 1000);
+        return (r / 8) * (1024 * 1024 * 1024);
     }
 };
 }  // namespace uccl

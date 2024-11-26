@@ -341,6 +341,15 @@ void UcclFlow::process_rtt_probe(rtt_probe_t *rtt_probe) {
     VLOG(3) << "sample_rtt_us " << to_usec(sample_rtt_tsc, ghz)
             << " us, avg_rtt_diff " << pcb_.timely.get_avg_rtt_diff()
             << " us, timely rate " << pcb_.timely.get_rate_gbps() << " Gbps";
+
+#ifdef RTT_STATS
+    rtt_stats_.update(rtt_ns / 1000);
+    if (++rtt_probe_count_ % 100000 == 0) {
+        FILE *fp = fopen("rtt_stats.txt", "w");
+        rtt_stats_.print(fp);
+        fclose(fp);
+    }
+#endif
 }
 
 bool UcclFlow::periodic_check() {
