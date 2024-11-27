@@ -37,9 +37,7 @@ constexpr bool seqno_gt(uint32_t a, uint32_t b) {
  */
 struct Pcb {
     static constexpr std::size_t kInitialCwnd = 256;
-    static constexpr std::size_t kSackBitmapSize = 1024;
     static constexpr std::size_t kSackBitmapBucketSize = sizeof(uint64_t) * 8;
-    static constexpr std::size_t kFastRexmitDupAckThres = 3;
     static constexpr std::size_t kRtoMaxRexmitConsectutiveAllowed = 102400;
     static constexpr int kRtoExpireThresInTicks = 3;  // in slow timer ticks.
     static constexpr int kRtoDisabled = -1;
@@ -62,7 +60,7 @@ struct Pcb {
                                       void *msgbuf) {
         // auto rate = timely.rate_;
         // auto rate = timely.link_bandwidth_;
-        auto rate = Timely::gbps_to_rate(12.5);
+        auto rate = kLinkBandwidth / NUM_QUEUES * 2;  // for bimq
         double ns_delta = 1000000000 * (pkt_size / rate);
         double cycle_delta = ns_to_cycles(ns_delta, ghz);
 

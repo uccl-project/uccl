@@ -1,6 +1,4 @@
-#ifndef TRANSPORT_CONFIG_H
-#define TRANSPORT_CONFIG_H
-
+#pragma once
 #include <cstdint>
 
 // #define USING_TCP
@@ -16,26 +14,34 @@ static const uint32_t MAX_TIMING_WHEEL_PKTS = 1024;
 static const uint64_t NUM_FRAMES = 1024 * 1024;
 static const uint32_t ENGINE_CPU_START = 0;
 static const uint16_t BASE_PORT = 10000;
+// CC parameters.
 static const uint32_t kPortEntropy = 128;
-static const double kLinkBandwidth =
-    100.0 * 1000 * 1000 * 1000 / 8;  // byte per second
+static const std::size_t kSackBitmapSize = 1024;
+static const std::size_t kFastRexmitDupAckThres = 5;
 
-#if defined(AWS_C5) || defined(AWS_G4)
+#if defined(AWS_C5)
 static const uint32_t AFXDP_MTU = 3498;
 static const char* DEV_DEFAULT = "ens6";
+static const double kLinkBandwidth = 10.0 * 1e9 / 8;
+#elif defined(AWS_G4)
+static const uint32_t AFXDP_MTU = 3498;
+static const char* DEV_DEFAULT = "ens6";
+static const double kLinkBandwidth = 50.0 * 1e9 / 8;
 #elif defined(AWS_G4_METAL)
 static const uint32_t AFXDP_MTU = 3498;
 static const char* DEV_DEFAULT = "enp199s0";
+static const double kLinkBandwidth = 100.0 * 1e9 / 8;
 #elif defined(CLOUDLAB_XL170)
 static const uint32_t AFXDP_MTU = 1500;
 static const char* DEV_DEFAULT = "ens1f1np1";
+static const double kLinkBandwidth = 25.0 * 1e9 / 8;
 #elif defined(CLOUDLAB_D6515)
 static const uint32_t AFXDP_MTU = 3498;
 static const char* DEV_DEFAULT = "enp65s0f0np0";
+static const double kLinkBandwidth = 100.0 * 1e9 / 8;
 #else
 #define CLOUDLAB_XL170
 static const uint32_t AFXDP_MTU = 1500;
 static const char* DEV_DEFAULT = "ens1f1np1";
+static const double kLinkBandwidth = 25.0 * 1e9 / 8;
 #endif
-
-#endif  // TRANSPORT_CONFIG_H

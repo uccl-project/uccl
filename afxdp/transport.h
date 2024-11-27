@@ -147,7 +147,7 @@ struct __attribute__((packed)) UcclPktHdr {
 struct __attribute__((packed)) UcclSackHdr {
     uint64_t timestamp3;  // Filled by recer with calibration for output queue
     uint64_t timestamp4;  // Filled by sender eBPF
-    be64_t sack_bitmap[swift::Pcb::kSackBitmapSize /
+    be64_t sack_bitmap[kSackBitmapSize /
                        swift::Pcb::kSackBitmapBucketSize];  // Bitmap of the
                                                             // SACKs received.
     be16_t sack_bitmap_count;  // Length of the SACK bitmap [0-256].
@@ -252,8 +252,7 @@ class Endpoint;
 class RXTracking {
    public:
     // 256-bit SACK bitmask => we can track up to 256 packets
-    static constexpr std::size_t kReassemblyMaxSeqnoDistance =
-        swift::Pcb::kSackBitmapSize;
+    static constexpr std::size_t kReassemblyMaxSeqnoDistance = kSackBitmapSize;
 
     static_assert((kReassemblyMaxSeqnoDistance &
                    (kReassemblyMaxSeqnoDistance - 1)) == 0,

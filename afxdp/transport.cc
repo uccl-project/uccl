@@ -396,10 +396,10 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
         // Update the number of out-of-order acknowledgements.
         pcb_.snd_ooo_acks = ucclsackh->sack_bitmap_count.value();
 
-        if (pcb_.duplicate_acks < swift::Pcb::kFastRexmitDupAckThres) {
+        if (pcb_.duplicate_acks < kFastRexmitDupAckThres) {
             // We have not reached the threshold yet, so we do not do
             // anything.
-        } else if (pcb_.duplicate_acks == swift::Pcb::kFastRexmitDupAckThres) {
+        } else if (pcb_.duplicate_acks == kFastRexmitDupAckThres) {
             // Fast retransmit.
             fast_retransmit();
         } else {
@@ -416,7 +416,7 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
                     << sack_bitmap_count;
             size_t index = 0;
             while (sack_bitmap_count && msgbuf &&
-                   index < swift::Pcb::kSackBitmapSize) {
+                   index < kSackBitmapSize) {
                 const size_t sack_bitmap_bucket_idx =
                     index / swift::Pcb::kSackBitmapBucketSize;
                 const size_t sack_bitmap_idx_in_bucket =
