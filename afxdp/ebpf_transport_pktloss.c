@@ -56,20 +56,6 @@ int ebpf_transport_filter(struct xdp_md *ctx) {
     __u8 net_flags = *(__u8 *)(data + kNetHdrLen + 4);
 
     switch (net_flags) {
-        case 0b100: {
-            __u8 engine_idx = *(__u8 *)(data + kNetHdrLen + 2);
-            if (engine_idx != ctx->rx_queue_index) return XDP_DROP;
-
-            // Make it a RSS rsp packet.
-            *(__u8 *)(data + kNetHdrLen + 4) = 0b1000;
-
-            // RSS probing packet hits the right queue, forward back.
-            struct udphdr *udp =
-                data + sizeof(struct ethhdr) + sizeof(struct iphdr);
-            reverse_packet(eth, ip, udp);
-
-            return XDP_TX;
-        }
         case 0b10000: {
             // Receiver receiving RTT probing + data packet.
             void *rtt_probe =

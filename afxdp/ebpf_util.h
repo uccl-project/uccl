@@ -50,6 +50,7 @@ static inline void reverse_packet(struct ethhdr *eth, struct iphdr *ip,
     udp->dest = tmp_port;
 
     udp->check = 0;
+    ip->check = 0;
     ip->check = compute_ip_checksum(ip);
 }
 

@@ -294,10 +294,11 @@ void UcclFlow::rx_messages() {
                 // Our dst_port selection are symmetric.
                 dst_port = htons(udph->dest);
                 break;
+            case UcclPktHdr::UcclFlags::kRssProbe:
             case UcclPktHdr::UcclFlags::kRssProbeRsp:
                 // RSS probing rsp packet, ignore.
                 LOG_EVERY_N(INFO, 10000)
-                    << "RSS probing rsp packet received, ignoring...";
+                    << "RSS probing packet received, ignoring...";
                 socket_->push_frame(msgbuf->get_frame_offset());
                 break;
             default:
@@ -809,6 +810,33 @@ AFXDPSocket::frame_desc UcclFlow::craft_rssprobe_packet(uint16_t dst_port) {
     return {frame_offset, kNetHdrLen + kRssProbePayloadBytes};
 }
 
+void UcclFlow::reverse_packet(FrameBuf *msg_buf) {
+    auto *pkt_addr = msg_buf->get_pkt_addr();
+    auto *eth = (ethhdr *)pkt_addr;
+    auto *ipv4h = (iphdr *)(pkt_addr + sizeof(ethhdr));
+    auto *udp = (udphdr *)(pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
+
+    unsigned char tmp_mac[ETH_ALEN];
+    uint32_t tmp_ip;
+    uint32_t tmp_port;
+
+    memcpy(tmp_mac, eth->h_source, ETH_ALEN);
+    memcpy(eth->h_source, eth->h_dest, ETH_ALEN);
+    memcpy(eth->h_dest, tmp_mac, ETH_ALEN);
+
+    tmp_ip = ipv4h->saddr;
+    ipv4h->saddr = ipv4h->daddr;
+    ipv4h->daddr = tmp_ip;
+
+    tmp_port = udp->source;
+    udp->source = udp->dest;
+    udp->dest = tmp_port;
+
+    udp->check = 0;
+    ipv4h->check = 0;
+    ipv4h->check = ipv4_checksum(ipv4h, sizeof(iphdr));
+}
+
 void UcclEngine::run() {
     Channel::Msg rx_work;
     Channel::Msg tx_work;
@@ -1088,21 +1116,40 @@ ConnID UcclEngine::exchange_info_and_finish_setup(int bootstrap_fd,
             auto *msgbuf = FrameBuf::Create(
                 frame.frame_offset, socket_->umem_buffer_, frame.frame_len);
             auto *pkt_addr = msgbuf->get_pkt_addr();
-
             auto *udph = reinterpret_cast<udphdr *>(pkt_addr + sizeof(ethhdr) +
                                                     sizeof(iphdr));
             auto *ucclh = reinterpret_cast<UcclPktHdr *>(pkt_addr + kNetHdrLen);
-            DCHECK(ucclh->net_flags == UcclPktHdr::UcclFlags::kRssProbeRsp);
 
-            if (ucclh->engine_id == remote_engine_idx) {
-                // Forwarded-back probe packets successfully arrive this engine!
-                local_dst_ports_set.insert(ntohs(udph->source));
+            if (ucclh->net_flags == UcclPktHdr::UcclFlags::kRssProbe) {
+                if (ucclh->engine_id == local_engine_idx_) {
+                    // Probe packets arrive the remote engine!
+                    ucclh->net_flags = UcclPktHdr::UcclFlags::kRssProbeRsp;
+                    ucclh->engine_id = remote_engine_idx;
+                    msgbuf->mark_txpulltime_free();
+                    // Reverse so to send back
+                    flow->reverse_packet(msgbuf);
+                    socket_->send_packet(
+                        {msgbuf->get_frame_offset(), msgbuf->get_frame_len()});
+                } else {
+                    socket_->push_frame(frame.frame_offset);
+                }
+            } else {
+                DCHECK(ucclh->net_flags == UcclPktHdr::UcclFlags::kRssProbeRsp);
+                if (ucclh->engine_id == local_engine_idx_) {
+                    // Probe rsp packets arrive this engine!
+                    local_dst_ports_set.insert(ntohs(udph->source));
+                }
+                socket_->push_frame(frame.frame_offset);
             }
-
-            socket_->push_frame(frame.frame_offset);
         }
 
-        if (local_dst_ports_set.size() >= kPortEntropy) break;
+        if ((i + 1) % kPortEntropy == 0) {
+            bool my_done = (local_dst_ports_set.size() >= kPortEntropy);
+            bool remote_done = false;
+            int ret = write(bootstrap_fd, &my_done, sizeof(bool));
+            ret = read(bootstrap_fd, &remote_done, sizeof(bool));
+            if (my_done && remote_done) break;
+        }
     }
 
     std::atomic<bool> done = false;
@@ -1118,24 +1165,31 @@ ConnID UcclEngine::exchange_info_and_finish_setup(int bootstrap_fd,
         LOG(INFO) << "dst_ports size: " << local_dst_ports_set.size();
         DCHECK_GE(local_dst_ports_set.size(), kPortEntropy);
 
-        flow->local_dst_ports_.reserve(kPortEntropy);
+        // flow->local_dst_ports_.reserve(kPortEntropy);
+        // auto it = local_dst_ports_set.begin();
+        // std::advance(it, kPortEntropy);
+        // std::copy(local_dst_ports_set.begin(), it,
+        //           std::back_inserter(flow->local_dst_ports_));
+
+        // // send the local_dst_ports back to the server
+        // int ret = write(bootstrap_fd, flow->local_dst_ports_.data(),
+        //                 kPortEntropy * sizeof(uint16_t));
+
+        // std::vector<uint16_t> recvd_dst_ports;
+        // recvd_dst_ports.resize(kPortEntropy);
+        // ret = read(bootstrap_fd, recvd_dst_ports.data(),
+        //            kPortEntropy * sizeof(uint16_t));
+        // LOG(INFO) << "recvd_dst_ports size: " << recvd_dst_ports.size();
+
+        // flow->dst_ports_.insert(flow->dst_ports_.end(),
+        // recvd_dst_ports.begin(),
+        //                         recvd_dst_ports.end());
+
+        flow->dst_ports_.reserve(kPortEntropy);
         auto it = local_dst_ports_set.begin();
         std::advance(it, kPortEntropy);
         std::copy(local_dst_ports_set.begin(), it,
-                  std::back_inserter(flow->local_dst_ports_));
-
-        // send the local_dst_ports back to the server
-        int ret = write(bootstrap_fd, flow->local_dst_ports_.data(),
-                        kPortEntropy * sizeof(uint16_t));
-
-        std::vector<uint16_t> recvd_dst_ports;
-        recvd_dst_ports.resize(kPortEntropy);
-        ret = read(bootstrap_fd, recvd_dst_ports.data(),
-                   kPortEntropy * sizeof(uint16_t));
-        LOG(INFO) << "recvd_dst_ports size: " << recvd_dst_ports.size();
-
-        flow->dst_ports_.insert(flow->dst_ports_.end(), recvd_dst_ports.begin(),
-                                recvd_dst_ports.end());
+                  std::back_inserter(flow->dst_ports_));
 
         LOG(INFO) << "Connect FlowID " << std::hex << "0x" << conn_id.flow_id
                   << " : " << local_ip_str << Format("(%d)", conn_id.engine_idx)
@@ -1152,7 +1206,8 @@ ConnID UcclEngine::exchange_info_and_finish_setup(int bootstrap_fd,
                 frame.frame_offset, socket_->umem_buffer_, frame.frame_len);
             auto *pkt_addr = msgbuf->get_pkt_addr();
             auto *ucclh = reinterpret_cast<UcclPktHdr *>(pkt_addr + kNetHdrLen);
-            DCHECK(ucclh->net_flags == UcclPktHdr::UcclFlags::kRssProbeRsp);
+            DCHECK(ucclh->net_flags == UcclPktHdr::UcclFlags::kRssProbe ||
+                   ucclh->net_flags == UcclPktHdr::UcclFlags::kRssProbeRsp);
             socket_->push_frame(frame.frame_offset);
         }
     } while (!std::atomic_load_explicit(&done, std::memory_order_relaxed));
