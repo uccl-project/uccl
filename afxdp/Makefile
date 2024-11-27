@@ -55,6 +55,9 @@ client_tcp_ep_main: client_tcp_ep_main.cc $(DEPS)
 server_tcp_ep_main: server_tcp_ep_main.cc $(DEPS)
 	g++ server_tcp_ep_main.cc -o server_tcp_ep_main $(INC) $(LIBS) $(CXXFLAGS) -Wno-write-strings
 
+tcp_latency_main: tcp_latency_main.cc $(DEPS)
+	g++ tcp_latency_main.cc -o tcp_latency_main $(INC) $(LIBS) $(CXXFLAGS) -Wno-write-strings
+
 client_main: client_main.cc ebpf_client.o $(DEPS) $(lib_obj)
 	g++ client_main.cc -o client_main $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
