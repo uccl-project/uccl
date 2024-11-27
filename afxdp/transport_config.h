@@ -6,7 +6,7 @@
 // #define RTT_STATS
 #define USING_MULTIPATH
 
-static const uint32_t NUM_QUEUES = 8;
+static const uint32_t NUM_QUEUES = 1;
 static const uint32_t RECV_BATCH_SIZE = 32;
 static const uint32_t MAX_UNACKED_PKTS = 512;
 static const uint32_t MAX_TIMING_WHEEL_PKTS = 1024;

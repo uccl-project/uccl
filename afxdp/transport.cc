@@ -415,8 +415,7 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
             VLOG(2) << "Fast recovery " << ackno << " sack_bitmap_count "
                     << sack_bitmap_count;
             size_t index = 0;
-            while (sack_bitmap_count && msgbuf &&
-                   index < kSackBitmapSize) {
+            while (sack_bitmap_count && msgbuf && index < kSackBitmapSize) {
                 const size_t sack_bitmap_bucket_idx =
                     index / swift::Pcb::kSackBitmapBucketSize;
                 const size_t sack_bitmap_idx_in_bucket =
@@ -1138,7 +1137,8 @@ ConnID UcclEngine::exchange_info_and_finish_setup(int bootstrap_fd,
             }
         }
 
-        if ((i + 1) % kPortEntropy == 0) {
+        // Check frequently to avoid rss probes consuming all FillRing entries.
+        if ((i + 1) % 32 == 0) {
             bool my_done = (dst_ports_set.size() >= kPortEntropy);
             bool remote_done = false;
             int ret = write(bootstrap_fd, &my_done, sizeof(bool));
