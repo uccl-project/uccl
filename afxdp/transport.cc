@@ -1152,68 +1152,18 @@ ConnID UcclEngine::exchange_info_and_finish_setup(int bootstrap_fd,
         }
     }
 
-    std::atomic<bool> done = false;
-    std::atomic_thread_fence(std::memory_order_release);
-    std::atomic_store_explicit(&done, false, std::memory_order_relaxed);
+    LOG(INFO) << "dst_ports size: " << local_dst_ports_set.size();
+    DCHECK_GE(local_dst_ports_set.size(), kPortEntropy);
 
-    std::thread t([this, flow, &done, &local_dst_ports_set, &bootstrap_fd,
-                   &conn_id, &local_ip_str, &remote_ip, &remote_engine_idx]() {
-        std::ignore =
-            std::atomic_load_explicit(&done, std::memory_order_relaxed);
-        std::atomic_thread_fence(std::memory_order_acquire);
+    flow->dst_ports_.reserve(kPortEntropy);
+    auto it = local_dst_ports_set.begin();
+    std::advance(it, kPortEntropy);
+    std::copy(local_dst_ports_set.begin(), it,
+              std::back_inserter(flow->dst_ports_));
 
-        LOG(INFO) << "dst_ports size: " << local_dst_ports_set.size();
-        DCHECK_GE(local_dst_ports_set.size(), kPortEntropy);
-
-        // flow->local_dst_ports_.reserve(kPortEntropy);
-        // auto it = local_dst_ports_set.begin();
-        // std::advance(it, kPortEntropy);
-        // std::copy(local_dst_ports_set.begin(), it,
-        //           std::back_inserter(flow->local_dst_ports_));
-
-        // // send the local_dst_ports back to the server
-        // int ret = write(bootstrap_fd, flow->local_dst_ports_.data(),
-        //                 kPortEntropy * sizeof(uint16_t));
-
-        // std::vector<uint16_t> recvd_dst_ports;
-        // recvd_dst_ports.resize(kPortEntropy);
-        // ret = read(bootstrap_fd, recvd_dst_ports.data(),
-        //            kPortEntropy * sizeof(uint16_t));
-        // LOG(INFO) << "recvd_dst_ports size: " << recvd_dst_ports.size();
-
-        // flow->dst_ports_.insert(flow->dst_ports_.end(),
-        // recvd_dst_ports.begin(),
-        //                         recvd_dst_ports.end());
-
-        flow->dst_ports_.reserve(kPortEntropy);
-        auto it = local_dst_ports_set.begin();
-        std::advance(it, kPortEntropy);
-        std::copy(local_dst_ports_set.begin(), it,
-                  std::back_inserter(flow->dst_ports_));
-
-        LOG(INFO) << "Connect FlowID " << std::hex << "0x" << conn_id.flow_id
-                  << " : " << local_ip_str << Format("(%d)", conn_id.engine_idx)
-                  << "<->" << remote_ip << Format("(%d)", remote_engine_idx);
-
-        std::atomic_thread_fence(std::memory_order_release);
-        std::atomic_store_explicit(&done, true, std::memory_order_relaxed);
-    });
-
-    do {
-        auto frames = socket_->recv_packets(RECV_BATCH_SIZE);
-        for (auto &frame : frames) {
-            auto *msgbuf = FrameBuf::Create(
-                frame.frame_offset, socket_->umem_buffer_, frame.frame_len);
-            auto *pkt_addr = msgbuf->get_pkt_addr();
-            auto *ucclh = reinterpret_cast<UcclPktHdr *>(pkt_addr + kNetHdrLen);
-            DCHECK(ucclh->net_flags == UcclPktHdr::UcclFlags::kRssProbe ||
-                   ucclh->net_flags == UcclPktHdr::UcclFlags::kRssProbeRsp);
-            socket_->push_frame(frame.frame_offset);
-        }
-    } while (!std::atomic_load_explicit(&done, std::memory_order_relaxed));
-    std::atomic_thread_fence(std::memory_order_acquire);
-
-    t.join();
+    LOG(INFO) << "Connect FlowID " << std::hex << "0x" << conn_id.flow_id
+              << " : " << local_ip_str << Format("(%d)", conn_id.engine_idx)
+              << "<->" << remote_ip << Format("(%d)", remote_engine_idx);
 
     // Finally sync client and sender to make sure any incoming packets have
     // found the flow installed; otherwise, SEGV may happen.

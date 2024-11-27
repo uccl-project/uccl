@@ -465,8 +465,6 @@ class UcclFlow {
     FlowID flow_id_;
     // Destination ports with remote_engine_idx_ as the target queue_id.
     std::vector<uint16_t> dst_ports_;
-    // Destination ports with local_engine_idx_ as the target queue_id.
-    std::vector<uint16_t> local_dst_ports_;
     // Index in dst_ports_ for the next port to use.
     uint32_t next_port_idx_ = 0;
     // Accumulated data frames to be sent.
