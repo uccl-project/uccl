@@ -62,7 +62,7 @@ struct Pcb {
                                       void *msgbuf) {
         // auto rate = timely.rate_;
         // auto rate = timely.link_bandwidth_;
-        auto rate = Timely::gbps_to_rate(50);
+        auto rate = Timely::gbps_to_rate(12.5);
         double ns_delta = 1000000000 * (pkt_size / rate);
         double cycle_delta = ns_to_cycles(ns_delta, ghz);
 

@@ -6,7 +6,7 @@ import signal
 import argparse
 import os
 
-num_queues = 3
+num_queues = 8
 core_count = os.cpu_count()
 num_irqcores = int(num_queues)
 

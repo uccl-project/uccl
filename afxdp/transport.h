@@ -442,7 +442,7 @@ class UcclFlow {
         uint16_t dst_port, uint32_t seqno, uint32_t ackno,
         const UcclPktHdr::UcclFlags net_flags, uint64_t ts1, uint64_t ts2);
     AFXDPSocket::frame_desc craft_rssprobe_packet(uint16_t dst_port);
-    void reverse_packet(FrameBuf *msg_buf);
+    void reverse_packet_l2l3(FrameBuf *msg_buf);
 
     inline uint16_t get_next_dst_port() {
         return dst_ports_[next_port_idx_++ % kPortEntropy];
