@@ -78,7 +78,7 @@ static double measure_rdtsc_freq() {
     return freq_ghz;
 }
 
-static double ghz = measure_rdtsc_freq();
+static double freq_ghz = measure_rdtsc_freq();
 
 /// Convert cycles measured by rdtsc with frequence \p freq_ghz to seconds
 static double to_sec(size_t cycles, double freq_ghz) {

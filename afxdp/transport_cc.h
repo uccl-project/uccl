@@ -42,8 +42,8 @@ struct Pcb {
     static constexpr int kRtoExpireThresInTicks = 3;  // in slow timer ticks.
     static constexpr int kRtoDisabled = -1;
     Pcb()
-        : timely(ghz, kLinkBandwidth),
-          wheel_({ghz}),
+        : timely(freq_ghz, kLinkBandwidth),
+          wheel_({freq_ghz}),
           prev_desired_tx_tsc_(rdtsc()) {
         wheel_.catchup();
     }
@@ -63,7 +63,7 @@ struct Pcb {
         auto rate = kLinkBandwidth / NUM_QUEUES * 2;  // for bimq
         // auto rate = Timely::gbps_to_rate(20.0);
         double ns_delta = 1000000000 * (pkt_size / rate);
-        double cycle_delta = ns_to_cycles(ns_delta, ghz);
+        double cycle_delta = ns_to_cycles(ns_delta, freq_ghz);
 
         size_t desired_tx_tsc = prev_desired_tx_tsc_ + cycle_delta;
         desired_tx_tsc = (std::max)(desired_tx_tsc, ref_tsc);

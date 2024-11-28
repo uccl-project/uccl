@@ -123,13 +123,16 @@ int main(int argc, char* argv[]) {
                     data_u64[j] = (uint64_t)i * (uint64_t)j;
                 }
             }
-
-            auto start = std::chrono::high_resolution_clock::now();
             switch (test_type) {
-                case kBasic:
+                case kBasic: {
+                    TscTimer timer;
+                    timer.start();
                     ep.uccl_send(conn_id, data, send_len);
+                    timer.stop();
+                    rtts.push_back(timer.avg_usec(freq_ghz));
                     sent_bytes += send_len;
                     break;
+                }
                 case kAsync: {
                     std::vector<PollCtx*> poll_ctxs;
                     size_t step_size = send_len / kMaxInflight + 1;
@@ -141,24 +144,35 @@ int main(int argc, char* argv[]) {
                         PollCtx* poll_ctx;
                         poll_ctx =
                             ep.uccl_send_async(conn_id, iter_data, iter_len);
+                        poll_ctx->timestamp = rdtsc();
                         poll_ctxs.push_back(poll_ctx);
                     }
                     for (auto poll_ctx : poll_ctxs) {
+                        auto async_start = poll_ctx->timestamp;
+                        // after a success poll, poll_ctx is freed
                         ep.uccl_poll(poll_ctx);
+                        rtts.push_back(
+                            to_usec(rdtsc() - async_start, freq_ghz));
                     }
                     sent_bytes += send_len;
                     break;
                 }
                 case kPingpong: {
                     PollCtx *poll_ctx1, *poll_ctx2;
+                    TscTimer timer;
+                    timer.start();
                     poll_ctx1 = ep.uccl_send_async(conn_id, data, send_len);
                     poll_ctx2 = ep.uccl_recv_async(conn_id, data2, &recv_len);
                     ep.uccl_poll(poll_ctx1);
                     ep.uccl_poll(poll_ctx2);
+                    timer.stop();
+                    rtts.push_back(timer.avg_usec(freq_ghz));
                     sent_bytes += send_len;
                     break;
                 }
                 case kMt: {
+                    TscTimer timer;
+                    timer.start();
                     std::thread t1([&ep, conn_id, data, send_len]() {
                         PollCtx* poll_ctx =
                             ep.uccl_send_async(conn_id, data, send_len);
@@ -171,15 +185,21 @@ int main(int argc, char* argv[]) {
                     });
                     t1.join();
                     t2.join();
+                    timer.stop();
+                    rtts.push_back(timer.avg_usec(freq_ghz));
                     sent_bytes += send_len;
                     break;
                 }
                 case kMc: {
                     PollCtx *poll_ctx1, *poll_ctx2;
+                    TscTimer timer;
+                    timer.start();
                     poll_ctx1 = ep.uccl_send_async(conn_id, data, send_len);
                     poll_ctx2 = ep.uccl_send_async(conn_id2, data2, send_len);
                     ep.uccl_poll(poll_ctx1);
                     ep.uccl_poll(poll_ctx2);
+                    timer.stop();
+                    rtts.push_back(timer.avg_usec(freq_ghz));
                     sent_bytes += send_len * 2;
                     break;
                 }
@@ -188,13 +208,17 @@ int main(int argc, char* argv[]) {
                         for (int j = 0; j < NUM_QUEUES; j++) {
                             auto poll_ctx = ep.uccl_send_async(conn_id_vec[j],
                                                                data, send_len);
+                            poll_ctx->timestamp = rdtsc();
                             poll_ctxs.push_back(poll_ctx);
                         }
                     }
                     while (poll_ctxs.size() > kMaxInflight * NUM_QUEUES) {
                         auto poll_ctx = poll_ctxs.front();
                         poll_ctxs.pop_front();
+                        auto async_start = poll_ctx->timestamp;
                         ep.uccl_poll(poll_ctx);
+                        rtts.push_back(
+                            to_usec(rdtsc() - async_start, freq_ghz));
                         sent_bytes += send_len;
                     }
                     break;
@@ -208,13 +232,17 @@ int main(int argc, char* argv[]) {
                                                          send_len)
                                     : ep.uccl_recv_async(conn_id_vec[j], data,
                                                          &recv_len);
+                            poll_ctx->timestamp = rdtsc();
                             poll_ctxs.push_back(poll_ctx);
                         }
                     }
                     while (poll_ctxs.size() > kMaxInflight * NUM_QUEUES) {
                         auto poll_ctx = poll_ctxs.front();
                         poll_ctxs.pop_front();
+                        auto async_start = poll_ctx->timestamp;
                         ep.uccl_poll(poll_ctx);
+                        rtts.push_back(
+                            to_usec(rdtsc() - async_start, freq_ghz));
                         sent_bytes += send_len;
                     }
                     CHECK(send_len == recv_len);
@@ -224,11 +252,6 @@ int main(int argc, char* argv[]) {
                     break;
             }
 
-            auto duration_us =
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::high_resolution_clock::now() - start);
-
-            rtts.push_back(duration_us.count());
             if (i % kReportIters == 0 && i != 0) {
                 auto end_bw_mea = std::chrono::high_resolution_clock::now();
                 uint64_t med_latency, tail_latency;

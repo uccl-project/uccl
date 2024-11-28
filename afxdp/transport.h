@@ -51,13 +51,15 @@ struct alignas(64) PollCtx {
     std::condition_variable cv;
     std::atomic<bool> fence;  // Sync rx/tx memcpy visibility.
     std::atomic<bool> done;   // Sync cv wake-up.
-    PollCtx() : fence(false), done(false) {};
+    uint64_t timestamp;       // Timestamp for request issuing.
+    PollCtx() : fence(false), done(false), timestamp(0) {};
     ~PollCtx() { clear(); }
     void clear() {
         mu.~mutex();
         cv.~condition_variable();
         fence = false;
         done = false;
+        timestamp = 0;
     }
 };
 
@@ -513,7 +515,7 @@ class UcclEngine {
           channel_(channel),
           last_periodic_tsc_(rdtsc()),
           periodic_ticks_(0),
-          kSlowTimerIntervalTsc_(us_to_cycles(kSlowTimerIntervalUs, ghz)) {
+          kSlowTimerIntervalTsc_(us_to_cycles(kSlowTimerIntervalUs, freq_ghz)) {
         DCHECK(str_to_mac(local_l2_addr, local_l2_addr_));
     }
 

@@ -346,10 +346,10 @@ void UcclFlow::tx_messages(Channel::Msg &tx_work) {
 void UcclFlow::process_rttprobe_rsp(uint64_t ts1, uint64_t ts2, uint64_t ts3,
                                     uint64_t ts4) {
     auto rtt_ns = (ts4 - ts1) - (ts3 - ts2);
-    auto sample_rtt_tsc = ns_to_cycles(rtt_ns, ghz);
+    auto sample_rtt_tsc = ns_to_cycles(rtt_ns, freq_ghz);
     pcb_.update_rate(rdtsc(), sample_rtt_tsc);
 
-    VLOG(3) << "sample_rtt_us " << to_usec(sample_rtt_tsc, ghz)
+    VLOG(3) << "sample_rtt_us " << to_usec(sample_rtt_tsc, freq_ghz)
             << " us, avg_rtt_diff " << pcb_.timely.get_avg_rtt_diff()
             << " us, timely rate " << pcb_.timely.get_rate_gbps() << " Gbps";
 
