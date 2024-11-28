@@ -35,9 +35,9 @@ or
 cd afxdp; make -j "CXXFLAGS=-DCLOUDLAB_MLX5"
 
 # On both server and client
-./config_nic.sh ens6 4 4 9001 tcp aws
+./setup_nic.sh ens6 4 4 9001 tcp aws
 or
-./config_nic.sh ens1f1np1 4 4 1500 tcp cloudlab
+./setup_nic.sh ens1f1np1 4 4 1500 tcp cloudlab
 
 # On server, edit nodes.txt to include all node ips
 python rsync.sh
@@ -55,9 +55,9 @@ or
 cd afxdp; make -j "CXXFLAGS=-DCLOUDLAB_MLX5"
 
 # On both server and client
-./config_nic.sh ens6 1 1 3498 afxdp aws
+./setup_nic.sh ens6 1 1 3498 afxdp aws
 or
-./config_nic.sh ens1f1np1 1 1 1500 afxdp cloudlab
+./setup_nic.sh ens1f1np1 1 1 1500 afxdp cloudlab
 
 # On server, edit nodes.txt to include all node ips
 python rsync.sh

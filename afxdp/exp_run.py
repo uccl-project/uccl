@@ -29,8 +29,8 @@ def run_afxdp_exp(inflight_pkt, payload_size):
 
     _ = exec_command_and_wait(server, "cd uccl/afxdp; make clean; make -j")
     _ = exec_command_and_wait(server, f"cd uccl; ./sync.sh")
-    _ = exec_command_and_wait(server, "cd uccl; ./config_nic.sh ens6 1 1 3498 afxdp")
-    _ = exec_command_and_wait(client, "cd uccl; ./config_nic.sh ens6 1 1 3498 afxdp")
+    _ = exec_command_and_wait(server, "cd uccl; ./setup_nic.sh ens6 1 1 3498 afxdp")
+    _ = exec_command_and_wait(client, "cd uccl; ./setup_nic.sh ens6 1 1 3498 afxdp")
 
     server_desc = exec_command_no_wait(
         server, "cd uccl/afxdp; sudo ./server_main"
@@ -58,8 +58,8 @@ def run_tcp_exp(inflight_pkt, payload_size):
 
     _ = exec_command_and_wait(server, "cd uccl/afxdp; make clean; make -j")
     _ = exec_command_and_wait(server, f"cd uccl; ./sync.sh")
-    _ = exec_command_and_wait(server, "cd uccl; ./config_nic.sh ens6 4 9001 tcp")
-    _ = exec_command_and_wait(client, "cd uccl; ./config_nic.sh ens6 4 9001 tcp")
+    _ = exec_command_and_wait(server, "cd uccl; ./setup_nic.sh ens6 4 9001 tcp")
+    _ = exec_command_and_wait(client, "cd uccl; ./setup_nic.sh ens6 4 9001 tcp")
 
     server_desc = exec_command_no_wait(
         server, "cd uccl/afxdp; ./server_tcp_main"

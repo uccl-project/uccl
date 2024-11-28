@@ -1,6 +1,4 @@
 import sys
-
-sys.path.append("../")
 from common import *
 import signal
 import argparse
@@ -76,9 +74,9 @@ if __name__ == "__main__":
         num_irqcores = 63
 
     if afxdp_or_tcp == "afxdp":
-        nic_cmd = f"./config_nic.sh {net_dev} {num_queues} {num_irqcores} {mtu} {afxdp_or_tcp} {aws_or_cloudlab}"
+        nic_cmd = f"./setup_nic.sh {net_dev} {num_queues} {num_irqcores} {mtu} {afxdp_or_tcp} {aws_or_cloudlab}"
     else:
-        nic_cmd = f"./config_nic.sh {net_dev} {core_count} {core_count} {mtu} {afxdp_or_tcp} {aws_or_cloudlab}"
+        nic_cmd = f"./setup_nic.sh {net_dev} {core_count} {core_count} {mtu} {afxdp_or_tcp} {aws_or_cloudlab}"
 
     wait_handler_vec = []
     for node_client in node_clients:
