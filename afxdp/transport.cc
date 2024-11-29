@@ -210,9 +210,10 @@ void RXTracking::try_copy_msgbuf_to_appbuf(void *app_buf, size_t *app_buf_len,
 
             VLOG(2) << "payload_len: " << payload_len << " seqno: " << std::dec
                     << ucclh->seqno.value();
-
+#ifndef TEST_ZC
             memcpy((uint8_t *)app_buf_desc.buf + app_buf_pos, payload_addr,
                    payload_len);
+#endif
             app_buf_pos += payload_len;
 
             auto *msgbuf_iter_tmp = msgbuf_iter;
@@ -597,11 +598,12 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
         pcb_.queue_on_timing_wheel(
             now_tsc, payload_len + kNetHdrLen + kUcclHdrLen, msgbuf);
 
+#ifndef TEST_ZC
         // VLOG(3) << "Deser copy " << msgbuf << " " << num_tx_frames;
         auto pkt_payload_addr =
             msgbuf->get_pkt_addr() + kNetHdrLen + kUcclHdrLen;
-        memcpy(pkt_payload_addr, app_buf_cursor, payload_len);
-
+        // memcpy(pkt_payload_addr, app_buf_cursor, payload_len);
+#endif
         remaining_bytes -= payload_len;
         app_buf_cursor += payload_len;
 
@@ -660,7 +662,7 @@ void UcclFlow::prepare_l3header(uint8_t *pkt_addr,
     ipv4h->id = htons(0x1513);
     ipv4h->frag_off = htons(0);
     ipv4h->ttl = 64;
-#ifdef USING_TCP
+#ifdef USE_TCP
     ipv4h->protocol = IPPROTO_TCP;
     ipv4h->tot_len = htons(sizeof(iphdr) + sizeof(tcphdr) + payload_bytes);
 #else
@@ -676,10 +678,10 @@ void UcclFlow::prepare_l3header(uint8_t *pkt_addr,
 
 void UcclFlow::prepare_l4header(uint8_t *pkt_addr, uint32_t payload_bytes,
                                 uint16_t dst_port) const {
-#ifdef USING_TCP
+#ifdef USE_TCP
     auto *tcph = (tcphdr *)(pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
     memset(tcph, 0, sizeof(tcphdr));
-#ifdef USING_MULTIPATH
+#ifdef USE_MULTIPATH
     tcph->source = htons(BASE_PORT);
     tcph->dest = htons(dst_port);
 #else
@@ -694,7 +696,7 @@ void UcclFlow::prepare_l4header(uint8_t *pkt_addr, uint32_t payload_bytes,
 #endif
 #else
     auto *udph = (udphdr *)(pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
-#ifdef USING_MULTIPATH
+#ifdef USE_MULTIPATH
     udph->source = htons(BASE_PORT);
     udph->dest = htons(dst_port);
 #else

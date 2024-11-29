@@ -158,7 +158,7 @@ static const size_t kUcclHdrLen = sizeof(UcclPktHdr);
 static const size_t kUcclSackHdrLen = sizeof(UcclSackHdr);
 static_assert(kUcclHdrLen == 40, "UcclPktHdr size mismatch");
 
-#ifdef USING_TCP
+#ifdef USE_TCP
 static const size_t kNetHdrLen =
     sizeof(ethhdr) + sizeof(iphdr) + sizeof(tcphdr);
 #else

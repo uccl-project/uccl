@@ -1,10 +1,11 @@
 #pragma once
 #include <cstdint>
 
-// #define USING_TCP
+// #define USE_TCP
 // #define ENABLE_CSUM
 // #define RTT_STATS
-#define USING_MULTIPATH
+// #define TEST_ZC
+#define USE_MULTIPATH
 
 static const uint32_t NUM_QUEUES = 1;
 static const uint32_t RECV_BATCH_SIZE = 32;

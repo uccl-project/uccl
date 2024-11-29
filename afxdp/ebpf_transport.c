@@ -16,9 +16,9 @@ struct {
     __uint(max_entries, 64);
 } xsks_map SEC(".maps");
 
-// #define USING_TCP
+// #define USE_TCP
 
-#ifdef USING_TCP
+#ifdef USE_TCP
 #define kNetHdrLen \
     (sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct tcphdr))
 #else
@@ -39,7 +39,7 @@ int ebpf_transport_filter(struct xdp_md *ctx) {
     struct iphdr *ip = data + sizeof(struct ethhdr);
     __u16 magic = *(__u16 *)(data + kNetHdrLen);
 
-#ifdef USING_TCP
+#ifdef USE_TCP
     if (eth->h_proto != __constant_htons(ETH_P_IP) ||
         ip->protocol != IPPROTO_TCP || magic != __constant_htons(kMagic)) {
         return XDP_PASS;
