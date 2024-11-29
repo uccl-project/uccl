@@ -1,0 +1,7 @@
+*.o
+*_main
+*_test
+*.so
+*log.txt
+*.log
+*.txt
