@@ -18,6 +18,7 @@ const size_t kTestIters = 1024000000;
 // Using larger inlights like 64 will cause severe cache miss, impacting perf.
 const size_t kMaxInflight = 8;
 
+DEFINE_uint64(size, 1024000, "Size of test message.");
 DEFINE_bool(client, false, "Whether this is a client sending traffic.");
 DEFINE_string(serverip, "", "Server IP address the client tries to connect.");
 DEFINE_string(clientip, "", "Client IP address the server tries to connect.");
@@ -26,9 +27,9 @@ DEFINE_bool(rand, false, "Whether to use randomized data length.");
 DEFINE_string(
     test, "basic",
     "Which test to run: basic, async, pingpong, mt (multi-thread), "
-    "mc (multi-connection), mq (multi-queue), bimq (bi-directional mq).");
+    "mc (multi-connection), mq (multi-queue), bimq (bi-directional mq), tput.");
 
-enum TestType { kBasic, kAsync, kPingpong, kMt, kMc, kMq, kBiMq };
+enum TestType { kBasic, kAsync, kPingpong, kMt, kMc, kMq, kBiMq, kTput };
 
 volatile bool quit = false;
 
@@ -48,6 +49,8 @@ int main(int argc, char* argv[]) {
     signal(SIGHUP, interrupt_handler);
     // signal(SIGALRM, interrupt_handler);
     // alarm(10);
+
+    kTestMsgSize = FLAGS_size;
 
     TestType test_type;
     if (FLAGS_test == "basic") {
@@ -70,6 +73,8 @@ int main(int argc, char* argv[]) {
         kTestMsgSize /= 8;
         kReportIters *= 8;
         kReportIters /= kMaxInflight;
+    } else if (FLAGS_test == "tput") {
+        test_type = kTput;
     } else {
         LOG(FATAL) << "Unknown test type: " << FLAGS_test;
     }
@@ -114,6 +119,7 @@ int main(int argc, char* argv[]) {
         auto start_bw_mea = std::chrono::high_resolution_clock::now();
 
         std::deque<PollCtx*> poll_ctxs;
+        PollCtx* last_ctx = nullptr;
         for (int i = 0; i < kTestIters; i++) {
             send_len = kTestMsgSize;
             if (FLAGS_rand) send_len = distribution(generator);
@@ -248,6 +254,20 @@ int main(int argc, char* argv[]) {
                     CHECK(send_len == recv_len);
                     break;
                 }
+                case kTput: {
+                    auto* poll_ctx =
+                        ep.uccl_send_async(conn_id, data, send_len);
+                    poll_ctx->timestamp = rdtsc();
+                    if (last_ctx) {
+                        auto async_start = last_ctx->timestamp;
+                        ep.uccl_poll(last_ctx);
+                        rtts.push_back(
+                            to_usec(rdtsc() - async_start, freq_ghz));
+                        sent_bytes += send_len;
+                    }
+                    last_ctx = poll_ctx;
+                    break;
+                }
                 default:
                     break;
             }
@@ -312,6 +332,7 @@ int main(int argc, char* argv[]) {
         auto* data2 = new uint8_t[kTestMsgSize];
 
         std::deque<PollCtx*> poll_ctxs;
+        PollCtx* last_ctx = nullptr;
         for (int i = 0; i < kTestIters; i++) {
             send_len = kTestMsgSize;
             if (FLAGS_rand) send_len = distribution(generator);
@@ -408,6 +429,13 @@ int main(int argc, char* argv[]) {
                         ep.uccl_poll(poll_ctx);
                     }
                     CHECK(recv_len == send_len);
+                    break;
+                }
+                case kTput: {
+                    auto* poll_ctx =
+                        ep.uccl_recv_async(conn_id, data, &recv_len);
+                    if (last_ctx) ep.uccl_poll(last_ctx);
+                    last_ctx = poll_ctx;
                     break;
                 }
                 default:

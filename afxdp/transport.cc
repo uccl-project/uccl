@@ -517,6 +517,15 @@ void UcclFlow::transmit_pending_packets() {
     auto permitted_packets = pcb_.get_num_ready_tx_pkt(
         std::min(txq_free_entries, unacked_pkt_budget));
 
+    // static uint64_t transmit_tries = 0;
+    // static uint64_t transmit_success = 0;
+    // transmit_tries++;
+    // if (permitted_packets != 0) transmit_success++;
+    // if (transmit_tries % 10000 == 0) {
+    //     LOG(INFO) << "transmitting success rate: "
+    //               << (double)transmit_success / transmit_tries;
+    // }
+
     // LOG_EVERY_N(INFO, 10000)
     //     << "permitted_packets " << permitted_packets << " num_unacked_pkts "
     //     << num_unacked_pkts << " txq_free_entries " << txq_free_entries
@@ -554,12 +563,11 @@ void UcclFlow::transmit_pending_packets() {
 
 void UcclFlow::deserialize_and_append_to_txtracking() {
     if (pending_tx_msgs_.empty()) return;
-
     if (tx_tracking_.num_unsent_msgbufs() >= MAX_TIMING_WHEEL_PKTS) return;
-    auto deser_budget =
-        MAX_TIMING_WHEEL_PKTS - tx_tracking_.num_unsent_msgbufs();
 
     auto &[tx_work, cur_offset] = pending_tx_msgs_.front();
+    auto deser_budget =
+        MAX_TIMING_WHEEL_PKTS - tx_tracking_.num_unsent_msgbufs();
 
     FrameBuf *tx_msgbuf_head = nullptr;
     FrameBuf *tx_msgbuf_tail = nullptr;
@@ -630,7 +638,8 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
         tx_msgbuf_head->is_first() ? tx_work.poll_ctx : nullptr);
 
     // Recursively call this function to append more messages to the tx.
-    if (num_tx_frames < deser_budget) {
+    if (tx_tracking_.num_unsent_msgbufs() < MAX_TIMING_WHEEL_PKTS &&
+        !pending_tx_msgs_.empty()) {
         deserialize_and_append_to_txtracking();
     }
 }
@@ -866,7 +875,6 @@ void UcclEngine::run() {
             active_flows_map_[tx_work.flow_id]->tx_messages(tx_work);
         }
 
-        // Drive rtt probing.
         for (auto &[flow_id, flow] : active_flows_map_) {
             flow->transmit_pending_packets();
         }
