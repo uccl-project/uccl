@@ -56,7 +56,7 @@ if __name__ == "__main__":
 
     _ = exec_command_and_wait(
         node_clients[0],
-        f'cd /opt/uccl/afxdp; make -j "CXXFLAGS=-D{make_macro}"',
+        f'cd /opt/uccl/afxdp; make -j "CXXFLAGS=-D{make_macro}"; cd playground; make -j "CXXFLAGS=-D{make_macro}"',
     )
 
     _ = exec_command_and_wait(

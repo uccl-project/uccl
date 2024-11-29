@@ -26,8 +26,8 @@ const uint16_t client_ports[8] = {40000, 40001, 40002, 40003,
 // static const char* client_mac_str = "16:ff:d9:ee:ab:47";
 // static const char* server_ip_str = "172.31.66.106";
 // static const char* client_ip_str = "172.31.72.149";
-static const char* server_mac_str = "9c:dc:71:56:af:45";
-static const char* client_mac_str = "9c:dc:71:5b:22:91";
+static const char* server_mac_str = "1c:34:da:41:c6:fc";
+static const char* client_mac_str = "1c:34:da:41:c7:0c";
 static const char* server_ip_str = "192.168.6.1";
 static const char* client_ip_str = "192.168.6.2";
 
@@ -40,7 +40,7 @@ const int MY_RECV_BATCH_SIZE = 32;
 // Max payload under AFXDP is 4096-256-42;
 const int PAYLOAD_BYTES = 64;
 // tune this to change packet rate
-const int MAX_INFLIGHT_PKTS = 1;
+const int MAX_INFLIGHT_PKTS = 512;
 // sleep gives unstable rate and latency
 const int SEND_INTV_US = 0;
 const int RTO_US = 2000;
@@ -77,12 +77,12 @@ static void* send_thread(void* arg);
 static void* recv_thread(void* arg);
 
 int client_init(struct client_t* client, const char* interface_name) {
-    AFXDPFactory::init(interface_name, NUM_FRAMES, "ebpf_client.o", "ebpf_client");
+    AFXDPFactory::init(interface_name, NUM_FRAMES, "ebpf_afxdp_test.o",
+                       "ebpf_afxdp_test");
 
     // per-CPU socket setup
     for (int i = 0; i < MY_NUM_QUEUES; i++) {
-        client->socket[i].afxdp_socket =
-            AFXDPFactory::CreateSocket(i);
+        client->socket[i].afxdp_socket = AFXDPFactory::CreateSocket(i);
     }
 
     int ret;
@@ -363,7 +363,7 @@ static void* stats_thread(void* arg) {
 }
 
 // TO RUN THE TEST:
-// On server: sudo ./server
+// On server: cd playground; sudo ./server_main
 // On client: sudo ./util_afxdp_test
 int main(int argc, char* argv[]) {
     google::InitGoogleLogging(argv[0]);

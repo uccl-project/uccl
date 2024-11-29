@@ -32,7 +32,7 @@ int ebpf_server_direct_filter(struct xdp_md *ctx) {
 
     struct udphdr *udp = (void *)ip + sizeof(struct iphdr);
     if ((void *)udp + sizeof(struct udphdr) > data_end) return XDP_PASS;
-    if (udp->dest != __constant_htons(40000)) return XDP_PASS;
+    if (udp->dest != __constant_htons(10000)) return XDP_PASS;
 
     void *payload = (void *)udp + sizeof(struct udphdr);
     int payload_bytes = data_end - payload;

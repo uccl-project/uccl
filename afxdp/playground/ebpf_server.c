@@ -31,7 +31,7 @@ int ebpf_server_filter(struct xdp_md *ctx) {
 
     struct udphdr *udp = (void *)ip + sizeof(struct iphdr);
     if ((void *)udp + sizeof(struct udphdr) > data_end) return XDP_PASS;
-    if (udp->dest != __constant_htons(40000)) return XDP_PASS;
+    if (udp->dest != __constant_htons(10000)) return XDP_PASS;
 
 	return bpf_redirect_map(&xsks_map, ctx->rx_queue_index, XDP_PASS);
 }

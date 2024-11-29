@@ -16,8 +16,8 @@ struct {
     __uint(max_entries, 64);
 } xsks_map SEC(".maps");
 
-SEC("ebpf_client")
-int ebpf_client_filter(struct xdp_md *ctx) {
+SEC("ebpf_afxdp_test")
+int ebpf_afxdp_test_filter(struct xdp_md *ctx) {
     void *data = (void *)(long)ctx->data;
     void *data_end = (void *)(long)ctx->data_end;
 
@@ -31,7 +31,7 @@ int ebpf_client_filter(struct xdp_md *ctx) {
 
     struct udphdr *udp = (void *)ip + sizeof(struct iphdr);
     if ((void *)udp + sizeof(struct udphdr) > data_end) return XDP_PASS;
-    if (udp->source != __constant_htons(40000)) return XDP_PASS;
+    if (udp->source != __constant_htons(10000)) return XDP_PASS;
 
 	return bpf_redirect_map(&xsks_map, ctx->rx_queue_index, XDP_PASS);
 }
