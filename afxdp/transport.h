@@ -625,13 +625,15 @@ class Endpoint {
     ConnID uccl_accept(std::string &remote_ip);
 
     // Sending the data by leveraging multiple port combinations.
-    bool uccl_send(ConnID flow_id, const void *data, const size_t len);
+    bool uccl_send(ConnID flow_id, const void *data, const size_t len,
+                   bool busypoll = false);
+    // Receiving the data by leveraging multiple port combinations.
+    bool uccl_recv(ConnID flow_id, void *data, size_t *len,
+                   bool busypoll = false);
+
     // Sending the data by leveraging multiple port combinations.
     PollCtx *uccl_send_async(ConnID flow_id, const void *data,
                              const size_t len);
-
-    // Receiving the data by leveraging multiple port combinations.
-    bool uccl_recv(ConnID flow_id, void *data, size_t *len);
     // Receiving the data by leveraging multiple port combinations.
     PollCtx *uccl_recv_async(ConnID flow_id, void *data, size_t *len);
 

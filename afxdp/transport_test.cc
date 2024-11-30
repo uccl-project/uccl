@@ -133,7 +133,7 @@ int main(int argc, char* argv[]) {
                 case kBasic: {
                     TscTimer timer;
                     timer.start();
-                    ep.uccl_send(conn_id, data, send_len);
+                    ep.uccl_send(conn_id, data, send_len, /*busypoll=*/true);
                     timer.stop();
                     rtts.push_back(timer.avg_usec(freq_ghz));
                     sent_bytes += send_len;
@@ -340,7 +340,7 @@ int main(int argc, char* argv[]) {
             auto start = std::chrono::high_resolution_clock::now();
             switch (test_type) {
                 case kBasic:
-                    ep.uccl_recv(conn_id, data, &recv_len);
+                    ep.uccl_recv(conn_id, data, &recv_len, /*busypoll=*/true);
                     break;
                 case kAsync: {
                     size_t step_size = send_len / kMaxInflight + 1;

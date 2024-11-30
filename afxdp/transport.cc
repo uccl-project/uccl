@@ -578,7 +578,7 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
         // VLOG(3) << "Deser copy " << msgbuf << " " << num_tx_frames;
         auto pkt_payload_addr =
             msgbuf->get_pkt_addr() + kNetHdrLen + kUcclHdrLen;
-        // memcpy(pkt_payload_addr, app_buf_cursor, payload_len);
+        memcpy(pkt_payload_addr, app_buf_cursor, payload_len);
 #endif
         remaining_bytes -= payload_len;
         app_buf_cursor += payload_len;
@@ -1306,9 +1306,16 @@ ConnID Endpoint::uccl_accept(std::string &remote_ip) {
     return conn_id;
 }
 
-bool Endpoint::uccl_send(ConnID conn_id, const void *data, const size_t len) {
+bool Endpoint::uccl_send(ConnID conn_id, const void *data, const size_t len,
+                         bool busypoll) {
     auto *poll_ctx = uccl_send_async(conn_id, data, len);
-    return uccl_wait(poll_ctx);
+    return busypoll ? uccl_poll(poll_ctx) : uccl_wait(poll_ctx);
+}
+
+bool Endpoint::uccl_recv(ConnID conn_id, void *data, size_t *len,
+                         bool busypoll) {
+    auto *poll_ctx = uccl_recv_async(conn_id, data, len);
+    return busypoll ? uccl_poll(poll_ctx) : uccl_wait(poll_ctx);
 }
 
 PollCtx *Endpoint::uccl_send_async(ConnID conn_id, const void *data,
@@ -1327,11 +1334,6 @@ PollCtx *Endpoint::uccl_send_async(ConnID conn_id, const void *data,
     while (jring_mp_enqueue_bulk(channel_vec_[conn_id.engine_idx]->tx_cmdq_,
                                  &msg, 1, nullptr) != 1);
     return poll_ctx;
-}
-
-bool Endpoint::uccl_recv(ConnID conn_id, void *data, size_t *len) {
-    auto *poll_ctx = uccl_recv_async(conn_id, data, len);
-    return uccl_wait(poll_ctx);
 }
 
 PollCtx *Endpoint::uccl_recv_async(ConnID conn_id, void *data, size_t *len) {
