@@ -165,11 +165,11 @@ void RXTracking::push_inorder_msgbuf_to_app(swift::Pcb *pcb) {
 
 void RXTracking::try_copy_msgbuf_to_appbuf(void *app_buf, size_t *app_buf_len_p,
                                            PollCtx *poll_ctx) {
-    if (app_buf && app_buf_len_p && poll_ctx)
+    if (app_buf && app_buf_len_p && poll_ctx) {
+        VLOG(3) << "ready_msg_queue_ size: " << ready_msg_queue_.size()
+                << " app_buf_queue_ size: " << app_buf_queue_.size();
         app_buf_queue_.push_back({app_buf, app_buf_len_p, poll_ctx, 0});
-
-    VLOG(3) << "ready_msg_queue_ size: " << ready_msg_queue_.size()
-            << " app_buf_queue_ size: " << app_buf_queue_.size();
+    }
 
     while (!ready_msg_queue_.empty() && !app_buf_queue_.empty()) {
         FrameBuf *ready_msg = ready_msg_queue_.front();

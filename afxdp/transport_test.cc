@@ -339,9 +339,10 @@ int main(int argc, char* argv[]) {
 
             auto start = std::chrono::high_resolution_clock::now();
             switch (test_type) {
-                case kBasic:
+                case kBasic: {
                     ep.uccl_recv(conn_id, data, &recv_len, /*busypoll=*/true);
                     break;
+                }
                 case kAsync: {
                     size_t step_size = send_len / kMaxInflight + 1;
                     size_t recv_lens[kMaxInflight] = {0};
