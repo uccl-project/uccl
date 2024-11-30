@@ -262,10 +262,7 @@ class RXTracking {
 
     RXTracking(const RXTracking &) = delete;
     RXTracking(AFXDPSocket *socket, Channel *channel)
-        : socket_(socket),
-          channel_(channel),
-          cur_msg_train_head_(nullptr),
-          cur_msg_train_tail_(nullptr) {}
+        : socket_(socket), channel_(channel) {}
 
     friend class UcclFlow;
     friend class UcclEngine;
@@ -288,7 +285,7 @@ class RXTracking {
      * It returns true if successfully copying the msgbuf to the app buffer;
      * otherwise false.
      */
-    void try_copy_msgbuf_to_appbuf(void *app_buf, size_t *app_buf_len,
+    void try_copy_msgbuf_to_appbuf(void *app_buf, size_t *app_buf_len_p,
                                    PollCtx *poll_ctx);
 
    private:
@@ -296,20 +293,16 @@ class RXTracking {
     Channel *channel_;
 
     std::map<uint32_t, FrameBuf *> reass_q_;
-    FrameBuf *cur_msg_train_head_;
-    FrameBuf *cur_msg_train_tail_;
-    struct ready_msg_t {
-        FrameBuf *msg_head;
-        FrameBuf *msg_tail;
-    };
+
     // FIFO queue for ready messages that wait for app to claim.
-    std::deque<ready_msg_t> ready_msg_stash_;
+    std::deque<FrameBuf *> ready_msg_queue_;
     struct app_buf_t {
         void *buf;
-        size_t *buf_len;
+        size_t *buf_len_p;
         PollCtx *poll_ctx;
+        size_t cur_offset;
     };
-    std::deque<app_buf_t> app_buf_stash_;
+    std::deque<app_buf_t> app_buf_queue_;
 };
 
 /**
@@ -328,7 +321,7 @@ class RXTracking {
  *      converts to network packets and sends them out to the remote recipient.
  */
 class UcclFlow {
-    const static uint32_t kMaxReadyMsgs = 32;
+    const static uint32_t kMaxReadyMsgbufs = MAX_UNACKED_PKTS;
 
    public:
     /**

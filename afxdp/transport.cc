@@ -153,94 +153,70 @@ void RXTracking::push_inorder_msgbuf_to_app(swift::Pcb *pcb) {
         auto *msgbuf = reass_q_.begin()->second;
         reass_q_.erase(reass_q_.begin());
 
-        if (cur_msg_train_head_ == nullptr) {
-            DCHECK(msgbuf->is_first()) << msgbuf->print_chain();
-            cur_msg_train_head_ = msgbuf;
-            cur_msg_train_tail_ = msgbuf;
-        } else {
-            cur_msg_train_tail_->set_next(msgbuf);
-            cur_msg_train_tail_ = msgbuf;
-        }
-
-        if (cur_msg_train_tail_->is_last()) {
-            // Stash cur_msg_train_head/tail_ in case application threads
-            // have not supplied the app buffer while the engine is keeping
-            // receiving messages? Stash this ready message
-            ready_msg_stash_.push_back(
-                {cur_msg_train_head_, cur_msg_train_tail_});
-            try_copy_msgbuf_to_appbuf(nullptr, nullptr, nullptr);
-
-            // Reset the message train for the next message.
-            cur_msg_train_head_ = nullptr;
-            cur_msg_train_tail_ = nullptr;
-        }
+        // Stash this ready message in case application threads have not
+        // supplied the app buffer while the engine keeps receiving messages.
+        ready_msg_queue_.push_back(msgbuf);
+        try_copy_msgbuf_to_appbuf(nullptr, nullptr, nullptr);
 
         pcb->advance_rcv_nxt();
-
         pcb->sack_bitmap_shift_left_one();
     }
 }
 
-void RXTracking::try_copy_msgbuf_to_appbuf(void *app_buf, size_t *app_buf_len,
+void RXTracking::try_copy_msgbuf_to_appbuf(void *app_buf, size_t *app_buf_len_p,
                                            PollCtx *poll_ctx) {
-    if (app_buf && app_buf_len && poll_ctx)
-        app_buf_stash_.push_back({app_buf, app_buf_len, poll_ctx});
+    if (app_buf && app_buf_len_p && poll_ctx)
+        app_buf_queue_.push_back({app_buf, app_buf_len_p, poll_ctx, 0});
 
-    VLOG(3) << "ready_msg_stash_ size: " << ready_msg_stash_.size()
-            << " app_buf_stash_ size: " << app_buf_stash_.size();
+    VLOG(3) << "ready_msg_queue_ size: " << ready_msg_queue_.size()
+            << " app_buf_queue_ size: " << app_buf_queue_.size();
 
-    while (!ready_msg_stash_.empty() && !app_buf_stash_.empty()) {
-        ready_msg_t ready_msg = ready_msg_stash_.front();
-        ready_msg_stash_.pop_front();
-        app_buf_t app_buf_desc = app_buf_stash_.front();
-        app_buf_stash_.pop_front();
+    while (!ready_msg_queue_.empty() && !app_buf_queue_.empty()) {
+        FrameBuf *ready_msg = ready_msg_queue_.front();
+        ready_msg_queue_.pop_front();
+        DCHECK(ready_msg) << ready_msg->print_chain();
+
+        auto &[app_buf, app_buf_len_p, poll_ctx, cur_offset] =
+            app_buf_queue_.front();
+
+        auto *pkt_addr = ready_msg->get_pkt_addr();
+        DCHECK(pkt_addr) << "pkt_addr is nullptr when copy to app buf";
+        auto *payload_addr = pkt_addr + kNetHdrLen + kUcclHdrLen;
+        auto payload_len =
+            ready_msg->get_frame_len() - kNetHdrLen - kUcclHdrLen;
+
+        const auto *ucclh =
+            reinterpret_cast<const UcclPktHdr *>(pkt_addr + kNetHdrLen);
+        VLOG(2) << "payload_len: " << payload_len << " seqno: " << std::dec
+                << ucclh->seqno.value();
+
+#ifndef TEST_ZC
+        memcpy((uint8_t *)app_buf + cur_offset, payload_addr, payload_len);
+#endif
+        cur_offset += payload_len;
+
+        auto ready_frame_offset = ready_msg->get_frame_offset();
 
         // We have a complete message. Let's deliver it to the app.
-        auto *msgbuf_iter = ready_msg.msg_head;
-        size_t app_buf_pos = 0;
-        while (true) {
-            auto *pkt_addr = msgbuf_iter->get_pkt_addr();
-            DCHECK(pkt_addr) << "pkt_addr is nullptr when copy to app buf";
-            auto *payload_addr = pkt_addr + kNetHdrLen + kUcclHdrLen;
-            auto payload_len =
-                msgbuf_iter->get_frame_len() - kNetHdrLen - kUcclHdrLen;
+        if (ready_msg->is_last()) {
+            *app_buf_len_p = cur_offset;
 
-            const auto *ucclh =
-                reinterpret_cast<const UcclPktHdr *>(pkt_addr + kNetHdrLen);
-
-            VLOG(2) << "payload_len: " << payload_len << " seqno: " << std::dec
-                    << ucclh->seqno.value();
-#ifndef TEST_ZC
-            memcpy((uint8_t *)app_buf_desc.buf + app_buf_pos, payload_addr,
-                   payload_len);
-#endif
-            app_buf_pos += payload_len;
-
-            auto *msgbuf_iter_tmp = msgbuf_iter;
-
-            if (msgbuf_iter->is_last()) {
-                socket_->push_frame(msgbuf_iter_tmp->get_frame_offset());
-                break;
+            // Wakeup app thread waiting on endpoint.
+            std::atomic_store_explicit(&poll_ctx->fence, true,
+                                       std::memory_order_release);
+            {
+                std::lock_guard<std::mutex> lock(poll_ctx->mu);
+                poll_ctx->done = true;
+                poll_ctx->cv.notify_one();
             }
-            msgbuf_iter = msgbuf_iter->next();
-            DCHECK(msgbuf_iter) << msgbuf_iter->print_chain();
 
-            // Free received frames that have been copied to app buf.
-            socket_->push_frame(msgbuf_iter_tmp->get_frame_offset());
+            app_buf_queue_.pop_front();
+
+            VLOG(2) << "Received a complete message " << cur_offset << " bytes";
         }
 
-        *app_buf_desc.buf_len = app_buf_pos;
-
-        // Wakeup app thread waiting on endpoint.
-        std::atomic_store_explicit(&app_buf_desc.poll_ctx->fence, true,
-                                   std::memory_order_release);
-        {
-            std::lock_guard<std::mutex> lock(app_buf_desc.poll_ctx->mu);
-            app_buf_desc.poll_ctx->done = true;
-            app_buf_desc.poll_ctx->cv.notify_one();
-        }
-
-        VLOG(2) << "Received a complete message " << app_buf_pos << " bytes";
+        // Free received frames that have been copied to app buf.
+        socket_->push_frame(ready_frame_offset);
     }
 }
 
@@ -250,7 +226,7 @@ std::string UcclFlow::to_string() const {
          "\n\t\t\t[TX] pending msgbufs unsent: " +
          std::to_string(tx_tracking_.num_unsent_msgbufs()) +
          "\n\t\t\t[RX] ready msgs unconsumed: " +
-         std::to_string(rx_tracking_.ready_msg_stash_.size());
+         std::to_string(rx_tracking_.ready_msg_queue_.size());
     return s;
 }
 
@@ -312,7 +288,7 @@ void UcclFlow::rx_messages() {
     // Send one ack for a bunch of received packets.
     if (num_data_frames_recvd) {
         // Avoiding client sending too much packet which would empty msgbuf.
-        if (rx_tracking_.ready_msg_stash_.size() <= kMaxReadyMsgs) {
+        if (rx_tracking_.ready_msg_queue_.size() <= kMaxReadyMsgbufs) {
             auto net_flags = (timestamp1 && timestamp2)
                                  ? UcclPktHdr::UcclFlags::kAckRttProbe
                                  : UcclPktHdr::UcclFlags::kAck;
