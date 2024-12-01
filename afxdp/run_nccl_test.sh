@@ -1,5 +1,7 @@
 # !/bin/bash
 
+source ../shared.sh
+
 # Usage: ./run_nccl_test.sh [tcp|afxdp] [num of processes] [ens6|enp199s0]
 
 TEST=${1:-tcp}
@@ -10,12 +12,7 @@ LIBNCCL_PATH="${UCCL_HOME}/nccl/build/lib/libnccl.so"
 PROG_NAME=all_reduce_perf
 NUM_PROCS=${2:-4}
 NIC=${3:-ens6} # enp199s0 for g4.metal
-NODES=""
-while IFS= read -r line || [[ -n "$line" ]]; do
-    [[ "$line" =~ ^# ]] && continue
-    NODES+="$line,"
-done <../nodes.txt
-NODES="${NODES%,}"
+NODES=$(get_nodes "../nodes.txt")
 
 echo "Running test: ${TEST}, ${PROG_NAME}, ${NUM_PROCS} processes, NIC ${NIC}, ${NODES}"
 

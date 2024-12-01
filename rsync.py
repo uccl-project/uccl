@@ -1,4 +1,4 @@
-from common import *
+from shared import *
 
 
 def rsync(local_client, nodes):
@@ -13,7 +13,7 @@ def rsync(local_client, nodes):
         _ = wait_handler.wait()
 
 
-nodes = read_nodes()
+nodes = get_nodes()
 print(f"Nodes: {nodes}")
 
 local_client = paramiko.SSHClient()

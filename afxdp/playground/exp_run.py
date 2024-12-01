@@ -2,7 +2,7 @@ import time
 import re
 import sys
 sys.path.append("../")
-from common import *
+from shared import *
 
     
 client_ip = "172.31.19.147"

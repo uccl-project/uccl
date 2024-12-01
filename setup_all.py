@@ -1,5 +1,5 @@
 import sys
-from common import *
+from shared import *
 import signal
 import argparse
 import os
@@ -46,7 +46,7 @@ if __name__ == "__main__":
     net_dev = config_mapping[target][1]
     mtu = config_mapping[target][2]
 
-    nodes = read_nodes()
+    nodes = get_nodes()
     print(f"Nodes: {nodes}")
 
     node_clients = [paramiko.SSHClient() for _ in nodes]

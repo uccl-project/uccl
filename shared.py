@@ -37,8 +37,8 @@ def exec_command_no_wait(sshclient, command):
     return CommandDescriptor(sshclient, pid, stdout, stderr)
 
 
-def read_nodes():
-    with open("nodes.txt", "r") as file:
+def get_nodes(path="nodes.txt"):
+    with open(path, "r") as file:
         return [
             line.strip()
             for line in file
