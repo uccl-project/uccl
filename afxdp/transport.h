@@ -83,22 +83,24 @@ class Channel {
         Op opcode;
         FlowID flow_id;
         void *data;
-        size_t len_tosend;
-        size_t *len_recvd;
+        size_t len;
+        size_t *len_p;
+        // Wakeup handler
         PollCtx *poll_ctx;
     };
     static_assert(sizeof(Msg) % 4 == 0, "channelMsg must be 32-bit aligned");
 
     struct CtrlMsg {
         enum Op : uint8_t {
-            kConnect = 0,
-            kAccept = 1,
+            kInstallFlow = 0,
         };
         Op opcode;
-        int bootstrap_fd;
+        FlowID flow_id;
         uint32_t remote_ip;
-        // return value
-        ConnID *conn_id;
+        char remote_mac[ETH_ALEN];
+        char padding[2];
+        uint32_t remote_engine_idx;
+        // Wakeup handler
         PollCtx *poll_ctx;
     };
     static_assert(sizeof(CtrlMsg) % 4 == 0,
@@ -527,44 +529,7 @@ class UcclEngine {
      */
     void periodic_process();
 
-    int receive_message(int sockfd, void *buffer, size_t n_bytes) {
-        int bytes_read = 0;
-        int r;
-        while (bytes_read < n_bytes) {
-            socket_->populate_fill_queue_to_full();
-            // Make sure we read exactly n_bytes
-            r = read(sockfd, buffer + bytes_read, n_bytes - bytes_read);
-            if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
-                CHECK(false) << "ERROR reading from socket";
-            }
-            if (r > 0) {
-                bytes_read += r;
-            }
-        }
-        return bytes_read;
-    }
-
-    int send_message(int sockfd, const void *buffer, size_t n_bytes) {
-        int bytes_sent = 0;
-        int r;
-        while (bytes_sent < n_bytes) {
-            // Make sure we write exactly n_bytes
-            r = write(sockfd, buffer + bytes_sent, n_bytes - bytes_sent);
-            if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
-                CHECK(false) << "ERROR writing to socket";
-            }
-            if (r > 0) {
-                bytes_sent += r;
-            }
-        }
-        return bytes_sent;
-    }
-
-    void handle_uccl_connect_on_engine(Channel::CtrlMsg &ctrl_work);
-    void handle_uccl_accept_on_engine(Channel::CtrlMsg &ctrl_work);
-    ConnID exchange_info_and_finish_setup(int bootstrap_fd, FlowID flow_id,
-                                          std::string remote_ip);
-    void net_barrier(int bootstrap_fd);
+    void handle_install_flow_on_engine(Channel::CtrlMsg &ctrl_work);
 
     // Called by application to shutdown the engine. App will need to join
     // the engine thread.
@@ -596,10 +561,6 @@ class UcclEngine {
     char local_l2_addr_[ETH_ALEN];
     // Engine index, also NIC queue ID and xsk index.
     uint32_t local_engine_idx_;
-
-    // Mapping from unique (within this engine) flow_id to the boostrap fd.
-    std::unordered_map<FlowID, int> bootstrap_fd_map_;
-
     // AFXDP socket used for send/recv packets.
     AFXDPSocket *socket_;
     // UcclFlow map
@@ -647,6 +608,10 @@ class Endpoint {
 
     int listen_fd_;
 
+    std::mutex bootstrap_fd_map_mu_;
+    // Mapping from unique (within this engine) flow_id to the boostrap fd.
+    std::unordered_map<FlowID, int> bootstrap_fd_map_;
+
    public:
     Endpoint(const char *interface_name, int num_queues, uint64_t num_frames,
              int engine_cpu_start);
@@ -661,26 +626,63 @@ class Endpoint {
     bool uccl_send(ConnID flow_id, const void *data, const size_t len,
                    bool busypoll = false);
     // Receiving the data by leveraging multiple port combinations.
-    bool uccl_recv(ConnID flow_id, void *data, size_t *len,
+    bool uccl_recv(ConnID flow_id, void *data, size_t *len_p,
                    bool busypoll = false);
 
     // Sending the data by leveraging multiple port combinations.
     PollCtx *uccl_send_async(ConnID flow_id, const void *data,
                              const size_t len);
     // Receiving the data by leveraging multiple port combinations.
-    PollCtx *uccl_recv_async(ConnID flow_id, void *data, size_t *len);
+    PollCtx *uccl_recv_async(ConnID flow_id, void *data, size_t *len_p);
 
     bool uccl_wait(PollCtx *ctx);
     bool uccl_poll(PollCtx *ctx);
     bool uccl_poll_once(PollCtx *ctx);
 
    private:
-    ConnID uccl_connect_on_engine(const std::string remote_ip, int bootstrap_fd,
-                                  int engine_idx);
-    ConnID uccl_accept_on_engine(const std::string remote_ip, int bootstrap_fd,
-                                 int engine_idx);
+    void install_flow_on_engine(FlowID flow_id, const std::string &remote_ip,
+                                uint32_t local_engine_idx, int bootstrap_fd);
     inline int find_least_loaded_engine_idx_and_update();
     inline void fence_and_clean_ctx(PollCtx *ctx);
+
+    inline int receive_message(int sockfd, void *buffer, size_t n_bytes) {
+        int bytes_read = 0;
+        int r;
+        while (bytes_read < n_bytes) {
+            // Make sure we read exactly n_bytes
+            r = read(sockfd, buffer + bytes_read, n_bytes - bytes_read);
+            if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
+                CHECK(false) << "ERROR reading from socket";
+            }
+            if (r > 0) {
+                bytes_read += r;
+            }
+        }
+        return bytes_read;
+    }
+
+    inline int send_message(int sockfd, const void *buffer, size_t n_bytes) {
+        int bytes_sent = 0;
+        int r;
+        while (bytes_sent < n_bytes) {
+            // Make sure we write exactly n_bytes
+            r = write(sockfd, buffer + bytes_sent, n_bytes - bytes_sent);
+            if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
+                CHECK(false) << "ERROR writing to socket";
+            }
+            if (r > 0) {
+                bytes_sent += r;
+            }
+        }
+        return bytes_sent;
+    }
+
+    inline void net_barrier(int bootstrap_fd) {
+        bool sync = true;
+        int ret = send_message(bootstrap_fd, &sync, sizeof(bool));
+        ret = receive_message(bootstrap_fd, &sync, sizeof(bool));
+        DCHECK(ret == sizeof(bool) && sync);
+    }
 
     std::thread stats_thread_;
     void stats_thread_fn();
