@@ -28,7 +28,7 @@ static const double kLinkBandwidth = 10.0 * 1e9 / 8;
 static const uint32_t AFXDP_MTU = 3498;
 static const char* DEV_DEFAULT = "ens6";
 static const double kLinkBandwidth = 50.0 * 1e9 / 8;
-#elif defined(AWS_G4_METAL)
+#elif defined(AWS_G4METAL)
 static const uint32_t AFXDP_MTU = 3498;
 static const char* DEV_DEFAULT = "enp199s0";
 static const double kLinkBandwidth = 100.0 * 1e9 / 8;

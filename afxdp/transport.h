@@ -527,6 +527,39 @@ class UcclEngine {
      */
     void periodic_process();
 
+    int receive_message(int sockfd, void *buffer, size_t n_bytes) {
+        int bytes_read = 0;
+        int r;
+        while (bytes_read < n_bytes) {
+            socket_->populate_fill_queue_to_full();
+            // Make sure we read exactly n_bytes
+            r = read(sockfd, buffer + bytes_read, n_bytes - bytes_read);
+            if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
+                CHECK(false) << "ERROR reading from socket";
+            }
+            if (r > 0) {
+                bytes_read += r;
+            }
+        }
+        return bytes_read;
+    }
+
+    int send_message(int sockfd, const void *buffer, size_t n_bytes) {
+        int bytes_sent = 0;
+        int r;
+        while (bytes_sent < n_bytes) {
+            // Make sure we write exactly n_bytes
+            r = write(sockfd, buffer + bytes_sent, n_bytes - bytes_sent);
+            if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
+                CHECK(false) << "ERROR writing to socket";
+            }
+            if (r > 0) {
+                bytes_sent += r;
+            }
+        }
+        return bytes_sent;
+    }
+
     void handle_uccl_connect_on_engine(Channel::CtrlMsg &ctrl_work);
     void handle_uccl_accept_on_engine(Channel::CtrlMsg &ctrl_work);
     ConnID exchange_info_and_finish_setup(int bootstrap_fd, FlowID flow_id,

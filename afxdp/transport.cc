@@ -952,7 +952,7 @@ void UcclEngine::process_ctl_reqs() {
     Channel::CtrlMsg ctrl_work;
     if (jring_sc_dequeue_bulk(channel_->ctrl_cmdq_, &ctrl_work, 1, nullptr) ==
         1) {
-        VLOG(3) << "Ctrl jring dequeue";
+        LOG(INFO) << "Ctrl jring dequeue";
         switch (ctrl_work.opcode) {
             case Channel::CtrlMsg::kConnect:
                 handle_uccl_connect_on_engine(ctrl_work);
@@ -973,16 +973,17 @@ void UcclEngine::handle_uccl_connect_on_engine(Channel::CtrlMsg &ctrl_work) {
 
     FlowID flow_id;
     while (true) {
-        int ret = read(bootstrap_fd, &flow_id, sizeof(FlowID));
+        int ret = receive_message(bootstrap_fd, &flow_id, sizeof(FlowID));
         DCHECK(ret == sizeof(FlowID));
-        VLOG(3) << "Connect: Proposed FlowID: " << std::hex << "0x" << flow_id;
+        LOG(INFO) << "Connect: Proposed FlowID: " << std::hex << "0x"
+                  << flow_id;
 
         // Check if the flow ID is unique, and return it to the server.
         bool unique =
             (bootstrap_fd_map_.find(flow_id) == bootstrap_fd_map_.end());
         if (unique) bootstrap_fd_map_[flow_id] = bootstrap_fd;
 
-        ret = write(bootstrap_fd, &unique, sizeof(bool));
+        ret = send_message(bootstrap_fd, &unique, sizeof(bool));
         DCHECK(ret == sizeof(bool));
 
         if (unique) break;
@@ -1018,13 +1019,13 @@ void UcclEngine::handle_uccl_accept_on_engine(Channel::CtrlMsg &ctrl_work) {
             continue;
         }
 
-        VLOG(3) << "Accept: Proposed FlowID: " << std::hex << "0x" << flow_id;
+        LOG(INFO) << "Accept: Proposed FlowID: " << std::hex << "0x" << flow_id;
 
         // Ask client if this is unique
-        int ret = write(bootstrap_fd, &flow_id, sizeof(FlowID));
+        int ret = send_message(bootstrap_fd, &flow_id, sizeof(FlowID));
         DCHECK(ret == sizeof(FlowID));
         bool unique_from_client;
-        ret = read(bootstrap_fd, &unique_from_client, sizeof(bool));
+        ret = receive_message(bootstrap_fd, &unique_from_client, sizeof(bool));
         DCHECK(ret == sizeof(bool));
 
         if (unique_from_client) {
@@ -1059,21 +1060,21 @@ ConnID UcclEngine::exchange_info_and_finish_setup(int bootstrap_fd,
 
     char local_mac_char[ETH_ALEN];
     std::string local_mac = get_dev_mac(DEV_DEFAULT);
-    VLOG(3) << "Local MAC: " << local_mac;
+    LOG(INFO) << "Local MAC: " << local_mac;
     str_to_mac(local_mac, local_mac_char);
-    ret = write(bootstrap_fd, local_mac_char, ETH_ALEN);
+    ret = send_message(bootstrap_fd, local_mac_char, ETH_ALEN);
     DCHECK(ret == ETH_ALEN);
 
     char remote_mac_char[ETH_ALEN];
-    ret = read(bootstrap_fd, remote_mac_char, ETH_ALEN);
+    ret = receive_message(bootstrap_fd, remote_mac_char, ETH_ALEN);
     DCHECK(ret == ETH_ALEN);
     std::string remote_mac = mac_to_str(remote_mac_char);
-    VLOG(3) << "Remote MAC: " << remote_mac;
+    LOG(INFO) << "Remote MAC: " << remote_mac;
 
     // Sync remote engine index.
     uint32_t remote_engine_idx;
-    ret = write(bootstrap_fd, &conn_id.engine_idx, sizeof(uint32_t));
-    ret = read(bootstrap_fd, &remote_engine_idx, sizeof(uint32_t));
+    ret = send_message(bootstrap_fd, &conn_id.engine_idx, sizeof(uint32_t));
+    ret = receive_message(bootstrap_fd, &remote_engine_idx, sizeof(uint32_t));
     DCHECK(ret == sizeof(uint32_t));
 
     auto *flow = new UcclFlow(local_addr_, remote_addr, local_l2_addr_,
@@ -1125,10 +1126,11 @@ ConnID UcclEngine::exchange_info_and_finish_setup(int bootstrap_fd,
 
         // Check frequently to avoid rss probes consuming all FillRing entries.
         if ((i + 1) % 32 == 0) {
+            LOG(INFO) << "RSS probing iteration " << i;
             bool my_done = (dst_ports_set.size() >= kPortEntropy);
             bool remote_done = false;
-            int ret = write(bootstrap_fd, &my_done, sizeof(bool));
-            ret = read(bootstrap_fd, &remote_done, sizeof(bool));
+            int ret = send_message(bootstrap_fd, &my_done, sizeof(bool));
+            ret = receive_message(bootstrap_fd, &remote_done, sizeof(bool));
             if (my_done && remote_done) break;
         }
     }
@@ -1154,8 +1156,8 @@ ConnID UcclEngine::exchange_info_and_finish_setup(int bootstrap_fd,
 
 inline void UcclEngine::net_barrier(int bootstrap_fd) {
     bool sync = true;
-    int ret = write(bootstrap_fd, &sync, sizeof(bool));
-    ret = read(bootstrap_fd, &sync, sizeof(bool));
+    int ret = send_message(bootstrap_fd, &sync, sizeof(bool));
+    ret = receive_message(bootstrap_fd, &sync, sizeof(bool));
     DCHECK(ret == sizeof(bool) && sync);
 }
 
@@ -1275,6 +1277,7 @@ ConnID Endpoint::uccl_connect(std::string remote_ip) {
         sleep(1);
     }
 
+    fcntl(bootstrap_fd, F_SETFL, O_NONBLOCK);
     int flag = 1;
     setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void *)&flag,
                sizeof(int));
@@ -1295,6 +1298,7 @@ ConnID Endpoint::uccl_accept(std::string &remote_ip) {
 
     LOG(INFO) << "Accept from " << remote_ip << ":" << cli_addr.sin_port;
 
+    fcntl(bootstrap_fd, F_SETFL, O_NONBLOCK);
     int flag = 1;
     setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void *)&flag,
                sizeof(int));

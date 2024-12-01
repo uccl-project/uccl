@@ -11,13 +11,13 @@ num_irqcores = int(num_queues)
 config_mapping = {
     "aws_afxdp_c5": ["AWS_C5", "ens6", 3498],
     "aws_afxdp_g4": ["AWS_G4", "ens6", 3498],
-    "aws_afxdp_g4_metal": ["AWS_G4_METAL", "enp199s0", 3498],
+    "aws_afxdp_g4metal": ["AWS_G4METAL", "enp199s0", 3498],
     "cloudlab_afxdp_xl170": ["CLOUDLAB_XL170", "ens1f1np1", 1500],
     "cloudlab_afxdp_d6515": ["CLOUDLAB_D6515", "enp65s0f0np0", 3498],
     #
     "aws_tcp_c5": ["AWS_C5", "ens6", 9001],
     "aws_tcp_g4": ["AWS_G4", "ens6", 9001],
-    "aws_tcp_g4_metal": ["AWS_G4_METAL", "enp199s0", 9001],
+    "aws_tcp_g4metal": ["AWS_G4METAL", "enp199s0", 9001],
     "cloudlab_tcp_xl170": ["CLOUDLAB_XL170", "ens1f1np1", 1500],
     "cloudlab_tcp_d6515": ["CLOUDLAB_D6515", "enp65s0f0np0", 9000],
 }
@@ -66,7 +66,7 @@ if __name__ == "__main__":
 
     afxdp_or_tcp = "afxdp" if "afxdp" in target else "tcp"
     aws_or_cloudlab = "aws" if "aws" in target else "cloudlab"
-    if target == "aws_tcp_g4_metal":
+    if target == "aws_tcp_g4metal":
         core_count = 32
         num_irqcores = 32
     elif target == "cloudlab_tcp_d6515":

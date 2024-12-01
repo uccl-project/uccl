@@ -81,7 +81,7 @@ AFXDPSocket::AFXDPSocket(int queue_id)
 
     // xsks_map for receiving packets has been updated by afxdp daemon.
 
-    populate_fill_queue(XSK_RING_PROD__DEFAULT_NUM_DESCS);
+    populate_fill_queue(FILL_RING_SIZE);
 }
 
 void AFXDPSocket::xsk_mmap_offsets_v1(struct xdp_mmap_offsets *off) {
@@ -357,7 +357,7 @@ uint32_t AFXDPSocket::send_packets(std::vector<frame_desc> &frames) {
 
 void AFXDPSocket::populate_fill_queue(uint32_t nb_frames) {
     // TODO(yang): figure out why cloudlab needs xsk_prod_nb_free().
-#if defined(AWS_C5) || defined(AWS_G4) || defined(AWS_G4_METAL)
+#if defined(AWS_C5) || defined(AWS_G4) || defined(AWS_G4METAL)
     auto stock_frames = nb_frames;
 #else
     auto stock_frames = xsk_prod_nb_free(&fill_queue_, nb_frames);

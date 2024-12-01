@@ -284,6 +284,9 @@ class AFXDPSocket {
     }
     std::vector<frame_desc> recv_packets(uint32_t nb_frames);
     void populate_fill_queue(uint32_t nb_frames);
+    inline void populate_fill_queue_to_full() {
+        populate_fill_queue(FILL_RING_SIZE - fill_queue_entries_);
+    }
 
     inline int get_xsk_fd() const { return xsk_fd_; }
     inline int get_umem_fd() const { return umem_fd_; }
