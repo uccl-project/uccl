@@ -31,7 +31,7 @@ if [ "$TEST" = "tcp" ]; then
         -x LD_PRELOAD="${LIBNCCL_PATH} ${PLUGIN_PATH}" \
         -x NCCL_DEBUG=INFO \
         ${UCCL_HOME}/nccl-tests/build/${PROG_NAME} \
-        -b 1K -e 4M -f 2 -g 1 -w 100 -n 100 -t 1
+        -b 1K -e 16M -f 2 -g 1 -w 100 -n 100 -t 1
 
 elif [ "$TEST" = "afxdp" ]; then
 
@@ -55,7 +55,7 @@ elif [ "$TEST" = "afxdp" ]; then
         -x NCCL_MAX_NCHANNELS=1 \
         -x NCCL_IGNORE_CPU_AFFINITY=1 \
         ${UCCL_HOME}/nccl-tests/build/${PROG_NAME} \
-        -b 1K -e 16M -f 2 -g 1 -w 100 -n 100 \
+        -b 1K -e 16M -f 2 -g 1 -w 100 -n 100 -t 1 \
         2>&1 | while read -r line; do
         # Extract rank from the format [1,2]
         if [[ "$line" =~ ^\[[0-9]+,([0-9]+)\](.+) ]]; then
