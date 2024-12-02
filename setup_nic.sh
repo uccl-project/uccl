@@ -41,7 +41,8 @@ else
 fi
 
 NCPU=$(nproc)
-irq_start_cpu=$((NCPU / 2))
+# Starting from 3/4 of the CPUs to avoid conflicting with nccl proxy services.
+irq_start_cpu=$((NCPU / 2 + NCPU / 4))
 (
     let cnt=0
     cd /sys/class/net/${NIC}/device/msi_irqs/

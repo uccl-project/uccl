@@ -234,7 +234,7 @@ ncclResult_t pluginIsend(void* sendComm, void* data, int size, int tag,
             ep->uccl_send_async(conn_id_vec[i], iter_data, iter_len);
     }
 
-    LOG(INFO) << "pluginIsend " << size << " " << inflight_send;
+    // LOG(INFO) << "pluginIsend " << size << " " << inflight_send;
 
     *request = req;
     return ncclSuccess;
@@ -262,7 +262,7 @@ ncclResult_t pluginIrecv(void* recvComm, int n, void** data, int* sizes,
             ep->uccl_recv_async(conn_id_vec[i], iter_data, &req->recv_len[i]);
     }
 
-    LOG(INFO) << "pluginIrecv " << sizes[0];
+    // LOG(INFO) << "pluginIrecv " << sizes[0];
 
     *request = req;
     return ncclSuccess;

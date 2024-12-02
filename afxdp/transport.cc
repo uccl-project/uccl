@@ -1082,6 +1082,9 @@ Endpoint::Endpoint(const char *interface_name, int num_queues,
     local_ip_str_ = get_dev_ip(interface_name);
     local_mac_str_ = get_dev_mac(interface_name);
 
+    CHECK_LE(num_queues, NUM_CPUS / 4)
+        << "num_queues should be less than or equal to the number of CPUs / 4";
+
     // Create multiple engines, each got its xsk and umem from the
     // daemon. Each engine has its own thread and channel to let the endpoint
     // communicate with.
@@ -1092,8 +1095,9 @@ Endpoint::Endpoint(const char *interface_name, int num_queues,
         engine_vec_.emplace_back(std::make_unique<UcclEngine>(
             queue_id, channel_vec_[queue_id], local_ip_str_, local_mac_str_));
         engine_th_vec_.emplace_back(std::make_unique<std::thread>(
-            [engine_ptr = engine_vec_.back().get(), engine_cpu_id]() {
-                LOG(INFO) << "[Engine] thread " << engine_cpu_id << " running";
+            [engine_ptr = engine_vec_.back().get(), queue_id, engine_cpu_id]() {
+                LOG(INFO) << "[Engine] thread " << queue_id
+                          << " running on CPU " << engine_cpu_id;
                 pin_thread_to_cpu(engine_cpu_id);
                 engine_ptr->run();
             }));
