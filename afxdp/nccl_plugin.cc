@@ -7,7 +7,6 @@
 
 #include "nccl_net.h"
 #include "transport.h"
-#include "transport_config.h"
 
 using namespace uccl;
 
@@ -23,6 +22,54 @@ void interrupt_handler(int signal) {
 
 Endpoint* ep;
 
+struct ConnectAcceptHandler {
+    uint32_t ip_addr_u32;
+    uint32_t conn_idx;
+
+    bool operator==(const ConnectAcceptHandler& other) const {
+        return ip_addr_u32 == other.ip_addr_u32 && conn_idx == other.conn_idx;
+    }
+};
+
+namespace std {
+template <>
+struct hash<ConnectAcceptHandler> {
+    std::size_t operator()(const ConnectAcceptHandler& key) const {
+        return std::hash<uint64_t>{}(*(uint64_t*)&key);
+    }
+};
+}  // namespace std
+
+struct CommHandler {
+    ConnID conn_id;
+};
+
+struct AsyncConnectState {
+    CommHandler comm_handler;
+    std::atomic<bool> done = false;
+    std::thread connect_th;
+};
+// Mapping from remote_ip to AsyncConnectState
+std::mutex connect_tracker_mu;
+std::unordered_map<ConnectAcceptHandler, AsyncConnectState*> connect_tracker;
+
+struct UcclRequest {
+    bool send = false;
+    size_t data_len = 0;
+    size_t recv_len = 0;
+    PollCtx* poll_ctx = nullptr;
+    bool done = false;
+
+    void clear() { memset(this, 0, sizeof(UcclRequest)); }
+};
+
+static constexpr size_t kMaxInflightMsg = 1024 * 256;
+static char* uccl_req_pool_buf = nullptr;
+SharedPool<UcclRequest*, true> uccl_req_pool(kMaxInflightMsg);
+
+static std::atomic<size_t> inflight_send = 0;
+static std::atomic<size_t> inflight_recv = 0;
+
 ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
     google::InitGoogleLogging("nccl_plugin");
     google::InstallFailureSignalHandler();
@@ -33,6 +80,13 @@ ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
 
     ep = new Endpoint(DEV_DEFAULT, NUM_QUEUES, NUM_FRAMES, ENGINE_CPU_START);
     // pin_thread_to_cpu(ENGINE_CPU_START + 1);
+
+    uccl_req_pool_buf = (char*)malloc(sizeof(UcclRequest) * kMaxInflightMsg);
+    for (int i = 0; i < kMaxInflightMsg; i++) {
+        auto* req = (UcclRequest*)uccl_req_pool_buf + i;
+        req->clear();
+        uccl_req_pool.push(req);
+    }
 
     LOG(INFO) << "NCCL Plugin initialized";
     return ncclSuccess;
@@ -79,10 +133,6 @@ ncclResult_t pluginGetProperties(int dev, ncclNetProperties_v8_t* props) {
     return ncclSuccess;
 }
 
-struct SharedCtlCtx {
-    uint32_t ip_addr_u32;
-};
-
 // To create a connection, NCCL will start by calling listen on the receiver
 // side. This function takes a device number as input argument, and should
 // return a local listenComm object, and a handle to pass to the other side, so
@@ -93,31 +143,21 @@ struct SharedCtlCtx {
 ncclResult_t pluginListen(int dev, void* handle, void** listenComm) {
     DCHECK(dev == 0);
 
-    struct SharedCtlCtx* ctx = static_cast<struct SharedCtlCtx*>(handle);
-    static_assert(sizeof(struct SharedCtlCtx) < NCCL_NET_HANDLE_MAXSIZE,
+    struct ConnectAcceptHandler* ctx =
+        static_cast<struct ConnectAcceptHandler*>(handle);
+    static_assert(sizeof(struct ConnectAcceptHandler) < NCCL_NET_HANDLE_MAXSIZE,
                   "ncclSocketHandle size too large");
+    static uint32_t global_conn_idx = 0;
 
     std::string local_ip_str = get_dev_ip(DEV_DEFAULT);
     ctx->ip_addr_u32 = str_to_ip(local_ip_str);
+    ctx->conn_idx = global_conn_idx++;
     LOG(INFO) << "pluginListen: " << local_ip_str;
 
     // Listen is alreday done by Endpoint init.
     *listenComm = ctx;
     return ncclSuccess;
 }
-
-struct SharedDataCtx {
-    ConnID conn_id[NUM_QUEUES];
-};
-
-struct AsyncConnectCtx {
-    SharedDataCtx data_ctx;
-    std::atomic<bool> done = false;
-    std::thread connect_th;
-};
-// Mapping from remote_ip to AsyncConnectCtx
-std::mutex async_connect_ctx_map_mu;
-std::unordered_map<uint32_t, AsyncConnectCtx*> async_connect_ctx_map;
 
 // NCCL will use its bootstrap infrastructure to provide the handle to the
 // sender side, then call connect on the sender side on a given device index
@@ -129,37 +169,36 @@ ncclResult_t pluginConnect(int dev, void* handle, void** sendComm,
     DCHECK(dev == 0);
 
     // This handle data from pluginListen is transferred from remote via MPI
-    struct SharedCtlCtx* ctrl_ctx = static_cast<struct SharedCtlCtx*>(handle);
+    struct ConnectAcceptHandler* ctrl_ctx =
+        static_cast<struct ConnectAcceptHandler*>(handle);
     auto remote_ip = ctrl_ctx->ip_addr_u32;
 
-    std::lock_guard<std::mutex> lock(async_connect_ctx_map_mu);
-    auto it = async_connect_ctx_map.find(remote_ip);
-    if (it == async_connect_ctx_map.end()) {
-        auto* async_ctx = new AsyncConnectCtx();
-        async_ctx->connect_th = std::thread([async_ctx, remote_ip] {
+    std::lock_guard<std::mutex> lock(connect_tracker_mu);
+    auto it = connect_tracker.find(*ctrl_ctx);
+    if (it == connect_tracker.end()) {
+        auto* connect_state = new AsyncConnectState();
+        connect_state->connect_th = std::thread([connect_state, remote_ip] {
             std::string remote_ip_str = ip_to_str(remote_ip);
-            for (int i = 0; i < NUM_QUEUES; i++) {
-                async_ctx->data_ctx.conn_id[i] =
-                    ep->uccl_connect(remote_ip_str);
-            }
+            connect_state->comm_handler.conn_id =
+                ep->uccl_connect(remote_ip_str);
             LOG(INFO) << "pluginConnect: connected to " << remote_ip_str;
             std::atomic_thread_fence(std::memory_order_release);
-            std::atomic_store_explicit(&async_ctx->done, true,
+            std::atomic_store_explicit(&connect_state->done, true,
                                        std::memory_order_relaxed);
         });
-        async_connect_ctx_map[remote_ip] = async_ctx;
+        connect_tracker[*ctrl_ctx] = connect_state;
         *sendComm = nullptr;
     } else {
-        auto* async_ctx = it->second;
-        auto done = std::atomic_load_explicit(&async_ctx->done,
+        auto* connect_state = it->second;
+        auto done = std::atomic_load_explicit(&connect_state->done,
                                               std::memory_order_relaxed);
         if (done) {
             std::atomic_thread_fence(std::memory_order_acquire);
-            auto* data_ctx = new SharedDataCtx();
-            *data_ctx = async_ctx->data_ctx;
-            async_ctx->connect_th.join();
-            delete async_ctx;
-            *sendComm = data_ctx;
+            auto* comm_handler = new CommHandler();
+            *comm_handler = connect_state->comm_handler;
+            connect_state->connect_th.join();
+            delete connect_state;
+            *sendComm = comm_handler;
         } else {
             *sendComm = nullptr;
         }
@@ -173,17 +212,15 @@ ncclResult_t pluginConnect(int dev, void* handle, void** sendComm,
 // recvComm to NULL. NCCL will call accept again until it succeeds.
 ncclResult_t pluginAccept(void* listenComm, void** recvComm,
                           ncclNetDeviceHandle_v8_t** recvDevComm) {
-    struct SharedCtlCtx* ctrl_ctx =
-        static_cast<struct SharedCtlCtx*>(listenComm);
-    auto* data_ctx = new SharedDataCtx{};
+    struct ConnectAcceptHandler* ctrl_ctx =
+        static_cast<struct ConnectAcceptHandler*>(listenComm);
+    auto* comm_handler = new CommHandler{};
 
     std::string remote_ip_str;
-    for (int i = 0; i < NUM_QUEUES; i++) {
-        data_ctx->conn_id[i] = ep->uccl_accept(remote_ip_str);
-    }
+    comm_handler->conn_id = ep->uccl_accept(remote_ip_str);
     LOG(INFO) << "pluginAccept: accepted connection from " << remote_ip_str;
 
-    *recvComm = data_ctx;
+    *recvComm = comm_handler;
     return ncclSuccess;
 }
 
@@ -202,37 +239,17 @@ ncclResult_t pluginDeregMr(void* collComm, void* mhandle) {
     return ncclSuccess;
 }
 
-struct UcclRequest {
-    bool send;
-    size_t data_len = 0;
-    size_t recv_len[NUM_QUEUES];
-    PollCtx* poll_ctxs[NUM_QUEUES];
-    bool done[NUM_QUEUES] = {false};
-};
-
-static std::atomic<size_t> inflight_send = 0;
-static std::atomic<size_t> inflight_recv = 0;
-
 ncclResult_t pluginIsend(void* sendComm, void* data, int size, int tag,
                          void* mhandle, void** request) {
     inflight_send += size;
-    struct SharedDataCtx* data_ctx =
-        static_cast<struct SharedDataCtx*>(sendComm);
-    auto* conn_id_vec = data_ctx->conn_id;
+    struct CommHandler* comm_handler =
+        static_cast<struct CommHandler*>(sendComm);
+    auto conn_id = comm_handler->conn_id;
 
-    auto req = new UcclRequest();
+    auto* req = uccl_req_pool.pop();
     req->send = true;
     req->data_len = size;
-
-    size_t step_size = size / NUM_QUEUES;
-    if (size % NUM_QUEUES != 0) step_size += 1;
-
-    for (int i = 0; i < NUM_QUEUES; i++) {
-        auto iter_len = std::min(step_size, size - i * step_size);
-        auto* iter_data = data + i * step_size;
-        req->poll_ctxs[i] =
-            ep->uccl_send_async(conn_id_vec[i], iter_data, iter_len);
-    }
+    req->poll_ctx = ep->uccl_send_async(conn_id, data, size);
 
     // LOG(INFO) << "pluginIsend " << size << " " << inflight_send;
 
@@ -244,23 +261,14 @@ ncclResult_t pluginIrecv(void* recvComm, int n, void** data, int* sizes,
                          int* tags, void** mhandles, void** request) {
     if (n != 1) return ncclInternalError;
     inflight_recv += sizes[0];
-    struct SharedDataCtx* data_ctx =
-        static_cast<struct SharedDataCtx*>(recvComm);
-    auto* conn_id_vec = data_ctx->conn_id;
+    struct CommHandler* comm_handler =
+        static_cast<struct CommHandler*>(recvComm);
+    auto conn_id = comm_handler->conn_id;
 
-    auto req = new UcclRequest();
+    auto* req = uccl_req_pool.pop();
     req->send = false;
     req->data_len = sizes[0];
-
-    size_t step_size = sizes[0] / NUM_QUEUES;
-    if (sizes[0] % NUM_QUEUES != 0) step_size += 1;
-
-    for (int i = 0; i < NUM_QUEUES; i++) {
-        auto iter_len = std::min(step_size, sizes[0] - i * step_size);
-        auto* iter_data = data[0] + i * step_size;
-        req->poll_ctxs[i] =
-            ep->uccl_recv_async(conn_id_vec[i], iter_data, &req->recv_len[i]);
-    }
+    req->poll_ctx = ep->uccl_recv_async(conn_id, data[0], &req->recv_len);
 
     // LOG(INFO) << "pluginIrecv " << sizes[0];
 
@@ -278,15 +286,7 @@ ncclResult_t pluginTest(void* request, int* done, int* size) {
     *done = 0;
     struct UcclRequest* req = static_cast<struct UcclRequest*>(request);
 
-    bool all_done = true;
-    for (int i = 0; i < NUM_QUEUES; i++) {
-        if (!req->done[i]) {
-            req->done[i] = ep->uccl_poll_once(req->poll_ctxs[i]);
-        }
-        all_done = all_done && req->done[i];
-    }
-
-    if (all_done) {
+    if (ep->uccl_poll_once(req->poll_ctx)) {
         if (req->send) {
             inflight_send -= req->data_len;
             VLOG(4) << "pluginTest send " << req->data_len << " "
@@ -298,7 +298,8 @@ ncclResult_t pluginTest(void* request, int* done, int* size) {
         }
         *done = 1;
         *size = req->data_len;
-        delete req;
+        req->clear();
+        uccl_req_pool.push(req);
     }
     return ncclSuccess;
 }

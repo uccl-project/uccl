@@ -51,8 +51,8 @@ elif [ "$TEST" = "afxdp" ]; then
         -x UCCL_ENGINE_QUIET=1 \
         -x GLOG_logtostderr=1 \
         -x NCCL_SOCKET_NTHREADS=1 \
-        -x NCCL_NSOCKS_PERTHREAD=1 \
-        -x NCCL_MAX_NCHANNELS=1 \
+        -x NCCL_NSOCKS_PERTHREAD=2 \
+        -x NCCL_MAX_NCHANNELS=2 \
         -x NCCL_IGNORE_CPU_AFFINITY=1 \
         ${UCCL_HOME}/nccl-tests/build/${PROG_NAME} \
         -b 1K -e 16M -f 2 -g 1 -w 100 -n 100 -t 1 \
