@@ -30,6 +30,18 @@ if [ "$TEST" = "tcp" ]; then
         ${UCCL_HOME}/nccl-tests/build/${PROG_NAME} \
         -b 1K -e 128M -f 2 -g 1 -w 100 -n 100 -t 1
 
+        # -x NCCL_SOCKET_IFNAME=${NIC} \
+
+        # Does not help and causes perf degradation for large sizes. 
+        # -x NCCL_SOCKET_NTHREADS=16 \
+        # -x NCCL_NSOCKS_PERTHREAD=4 \
+        # -x NCCL_MAX_NCHANNELS=16 \
+        # -x NCCL_MIN_NCHANNELS=16 \
+
+        # -x NCCL_P2P_DISABLE=1 \
+        # -x NCCL_SHM_DISABLE=1 \
+        # -x NCCL_NET_DISABLE=0 \
+
 elif [ "$TEST" = "afxdp" ]; then
 
     # Clear existing files for all ranks
