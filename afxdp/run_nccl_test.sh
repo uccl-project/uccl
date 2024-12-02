@@ -21,17 +21,14 @@ if [ "$TEST" = "tcp" ]; then
     # PLUGIN_PATH="${UCCL_HOME}/nccl/ext-net/google-fastsocket/libnccl-net.so"
     PLUGIN_PATH="/opt/aws-ofi-nccl/lib/libnccl-net.so"
 
-    mpirun -np ${NUM_PROCS} -N 1 --host ${NODES} \
+    mpirun --bind-to none -np ${NUM_PROCS} -N 1 --host ${NODES} \
         --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
         --mca orte_base_help_aggregate 0 \
         --mca btl_tcp_if_include ${NIC} \
-        -x NCCL_SOCKET_NTHREADS=16 \
-        -x NCCL_NSOCKS_PERTHREAD=4 \
-        -x NCCL_IGNORE_CPU_AFFINITY=1 \
         -x LD_PRELOAD="${LIBNCCL_PATH} ${PLUGIN_PATH}" \
         -x NCCL_DEBUG=INFO \
         ${UCCL_HOME}/nccl-tests/build/${PROG_NAME} \
-        -b 1K -e 16M -f 2 -g 1 -w 100 -n 100 -t 1
+        -b 1K -e 128M -f 2 -g 1 -w 100 -n 100 -t 1
 
 elif [ "$TEST" = "afxdp" ]; then
 
@@ -42,7 +39,8 @@ elif [ "$TEST" = "afxdp" ]; then
 
     PLUGIN_PATH="${UCCL_HOME}/afxdp/libnccl-net.so"
 
-    mpirun -np ${NUM_PROCS} -N 1 --tag-output --merge-stderr-to-stdout --host ${NODES} \
+    mpirun --bind-to none -np ${NUM_PROCS} -N 1 --host ${NODES} \
+        --tag-output --merge-stderr-to-stdout \
         --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
         --mca orte_base_help_aggregate 0 \
         --mca btl_tcp_if_include ${NIC} \
@@ -50,12 +48,12 @@ elif [ "$TEST" = "afxdp" ]; then
         -x NCCL_DEBUG=INFO \
         -x UCCL_ENGINE_QUIET=1 \
         -x GLOG_logtostderr=1 \
-        -x NCCL_SOCKET_NTHREADS=1 \
-        -x NCCL_NSOCKS_PERTHREAD=2 \
-        -x NCCL_MAX_NCHANNELS=2 \
-        -x NCCL_IGNORE_CPU_AFFINITY=1 \
+        -x NCCL_SOCKET_NTHREADS=4 \
+        -x NCCL_NSOCKS_PERTHREAD=1 \
+        -x NCCL_MAX_NCHANNELS=4 \
+        -x NCCL_MIN_NCHANNELS=4 \
         ${UCCL_HOME}/nccl-tests/build/${PROG_NAME} \
-        -b 1K -e 16M -f 2 -g 1 -w 100 -n 100 -t 1 \
+        -b 1K -e 128M -f 2 -g 1 -w 100 -n 100 -t 1 \
         2>&1 | while read -r line; do
         # Extract rank from the format [1,2]
         if [[ "$line" =~ ^\[[0-9]+,([0-9]+)\](.+) ]]; then
