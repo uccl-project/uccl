@@ -14,8 +14,7 @@ using namespace uccl;
 
 size_t kTestMsgSize = 1024000;
 size_t kReportIters = 1000;
-// const size_t kTestIters = 1024000000;
-const size_t kTestIters = 10240;
+const size_t kTestIters = 1024000000000UL;
 // Using larger inlights like 64 will cause severe cache miss, impacting perf.
 const size_t kMaxInflight = 8;
 
@@ -469,8 +468,8 @@ int main(int argc, char* argv[]) {
             }
 
             LOG_EVERY_N(INFO, kReportIters)
-                << "Received " << i << " messages, rtt "
-                << duration_us.count() << " us";
+                << "Received " << i << " messages, rtt " << duration_us.count()
+                << " us";
         }
     }
 

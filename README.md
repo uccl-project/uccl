@@ -102,3 +102,9 @@ source /opt/anaconda3/bin/activate
 conda init
 conda install paramiko -y
 ```
+
+Avoiding nodes.txt polluting the repo: 
+```
+git update-index --skip-worktree nodes.txt
+git update-index --no-skip-worktree nodes.txt
+```

@@ -20,10 +20,14 @@ config_mapping = {
     "aws_tcp_g4metal": ["AWS_G4METAL", "enp199s0", 9001],
     "cloudlab_tcp_xl170": ["CLOUDLAB_XL170", "ens1f1np1", 1500],
     "cloudlab_tcp_d6515": ["CLOUDLAB_D6515", "enp65s0f0np0", 9000],
+    #
+    "setup_extra": ["", "", 0],
 }
 PYTHON = "source /opt/anaconda3/bin/activate; conda run -n base python"
 
-# Usage: python setup_all.py --target=cloudlab_afxdp_xl170
+# Usage:
+#   python setup_all.py --target=setup_extra
+#   python setup_all.py --target=cloudlab_afxdp_xl170
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="parsing setup_all arguments.")
@@ -54,6 +58,21 @@ if __name__ == "__main__":
         node_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         node_client.connect(node)
 
+    if target == "setup_extra":
+        _ = exec_command_and_wait(
+            node_clients[0],
+            f"cd /opt/uccl; {PYTHON} rsync.py",
+        )
+        wait_handler_vec = []
+        for node_client in node_clients:
+            wait_handler = exec_command_no_wait(
+                node_client, f"cd /opt/uccl; ./setup_extra.sh"
+            )
+            wait_handler_vec.append(wait_handler)
+        for wait_handler in wait_handler_vec:
+            _ = wait_handler.wait()
+        exit(0)
+
     _ = exec_command_and_wait(
         node_clients[0],
         f'cd /opt/uccl/afxdp; make -j "CXXFLAGS=-D{make_macro}"; cd playground; make -j "CXXFLAGS=-D{make_macro}"',
@@ -64,6 +83,7 @@ if __name__ == "__main__":
         f"cd /opt/uccl; {PYTHON} rsync.py",
     )
 
+    ### Setup NIC
     afxdp_or_tcp = "afxdp" if "afxdp" in target else "tcp"
     aws_or_cloudlab = "aws" if "aws" in target else "cloudlab"
     if target == "aws_tcp_g4metal":
@@ -90,7 +110,7 @@ if __name__ == "__main__":
     if afxdp_or_tcp == "tcp":
         exit(0)
 
-    wait_handler_vec.clear()
+    wait_handler_vec = []
     for node_client in node_clients:
         wait_handler = exec_command_no_wait(
             node_client,
