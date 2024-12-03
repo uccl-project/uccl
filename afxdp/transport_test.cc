@@ -14,7 +14,8 @@ using namespace uccl;
 
 size_t kTestMsgSize = 1024000;
 size_t kReportIters = 1000;
-const size_t kTestIters = 1024000000;
+// const size_t kTestIters = 1024000000;
+const size_t kTestIters = 10240;
 // Using larger inlights like 64 will cause severe cache miss, impacting perf.
 const size_t kMaxInflight = 8;
 
@@ -120,7 +121,7 @@ int main(int argc, char* argv[]) {
 
         std::deque<PollCtx*> poll_ctxs;
         PollCtx* last_ctx = nullptr;
-        for (int i = 0; i < kTestIters; i++) {
+        for (size_t i = 0; i < kTestIters; i++) {
             send_len = kTestMsgSize;
             if (FLAGS_rand) send_len = distribution(generator);
 
@@ -272,7 +273,7 @@ int main(int argc, char* argv[]) {
                     break;
             }
 
-            if (i % kReportIters == 0 && i != 0) {
+            if ((i + 1) % kReportIters == 0) {
                 auto end_bw_mea = std::chrono::high_resolution_clock::now();
                 uint64_t med_latency, tail_latency;
                 med_latency = Percentile(rtts, 50);
@@ -294,7 +295,7 @@ int main(int argc, char* argv[]) {
                 }
                 sent_bytes = 0;
 
-                LOG(INFO) << "Sent " << i
+                LOG(INFO) << "Sent " << i + 1
                           << " messages, med rtt: " << med_latency
                           << " us, tail rtt: " << tail_latency << " us, bw "
                           << bw_gbps << " Gbps";
@@ -333,7 +334,7 @@ int main(int argc, char* argv[]) {
 
         std::deque<PollCtx*> poll_ctxs;
         PollCtx* last_ctx = nullptr;
-        for (int i = 0; i < kTestIters; i++) {
+        for (size_t i = 0; i < kTestIters; i++) {
             send_len = kTestMsgSize;
             if (FLAGS_rand) send_len = distribution(generator);
 
@@ -468,8 +469,8 @@ int main(int argc, char* argv[]) {
             }
 
             LOG_EVERY_N(INFO, kReportIters)
-                << "Received " << i << " messages, rtt " << duration_us.count()
-                << " us";
+                << "Received " << i << " messages, rtt "
+                << duration_us.count() << " us";
         }
     }
 

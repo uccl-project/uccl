@@ -880,8 +880,6 @@ void UcclEngine::run() {
     }
     // This will flush all unpolled tx frames.
     socket_->shutdown();
-
-    delete socket_;
 }
 
 void UcclEngine::process_rx_msg(
@@ -1135,19 +1133,31 @@ Endpoint::Endpoint(const char *interface_name, int num_queues,
 }
 
 Endpoint::~Endpoint() {
-    for (int i = 0; i < num_queues_; i++) delete channel_vec_[i];
     for (auto &engine : engine_vec_) engine->shutdown();
     for (auto &engine_th : engine_th_vec_) engine_th->join();
+    for (int i = 0; i < num_queues_; i++) delete channel_vec_[i];
 
     delete ctx_pool_;
     delete[] ctx_pool_buf_;
 
     close(listen_fd_);
 
-    std::lock_guard<std::mutex> lock(bootstrap_fd_map_mu_);
-    for (auto &[flow_id, boostrap_id] : bootstrap_fd_map_) {
-        close(boostrap_id);
+    {
+        std::lock_guard<std::mutex> lock(bootstrap_fd_map_mu_);
+        for (auto &[flow_id, boostrap_id] : bootstrap_fd_map_) {
+            close(boostrap_id);
+        }
     }
+
+    static std::once_flag flag_once;
+    std::call_once(flag_once, []() { AFXDPFactory::shutdown(); });
+
+    {
+        std::lock_guard<std::mutex> lock(stats_mu_);
+        shutdown_ = true;
+        stats_cv_.notify_all();
+    }
+    stats_thread_.join();
 }
 
 ConnID Endpoint::uccl_connect(std::string remote_ip) {
@@ -1421,9 +1431,15 @@ inline void Endpoint::fence_and_clean_ctx(PollCtx *ctx) {
 void Endpoint::stats_thread_fn() {
     if (GetEnvVar("UCCL_ENGINE_QUIET") == "1") return;
 
-    while (true) {
-        std::this_thread::sleep_for(
-            std::chrono::seconds(kSlowTimerIntervalSec));
+    while (!shutdown_) {
+        {
+            std::unique_lock<std::mutex> lock(stats_mu_);
+            bool shutdown = stats_cv_.wait_for(
+                lock, std::chrono::seconds(kStatsTimerIntervalSec),
+                [this] { return shutdown_.load(); });
+            if (shutdown) break;
+        }
+
         if (engine_vec_.empty()) continue;
         std::string s;
         s += "\n\t[Uccl Engine] ";

@@ -2,6 +2,7 @@
 
 #include <glog/logging.h>
 
+#include <atomic>
 #include <deque>
 #include <functional>
 
@@ -18,6 +19,8 @@ class SharedPool {
     using global_pool_t = CircularBuffer<T, /* sync = */ false>;
     using th_cache_t = CircularBuffer<T, false, kNumCachedItemsPerCPU>;
 
+    static inline std::atomic<bool> shutdown_{false};
+
     // Adding another class to release the thread cache on destruction.
     class ThreadCache {
         th_cache_t cache_;
@@ -27,6 +30,11 @@ class SharedPool {
         ThreadCache() {}
         ~ThreadCache() {
             if (!global_pool_ptr_) return;
+
+            // global_pool_ has been deleted.
+            if (shutdown_) return;
+
+            // Return all items to the global pool when thread exits normally.
             T item;
             while (cache_.pop_front(&item)) {
                 global_pool_ptr_->push_front(item);
@@ -46,6 +54,7 @@ class SharedPool {
 
    public:
     SharedPool(uint32_t capacity) : global_pool_(capacity) {}
+    ~SharedPool() { shutdown_ = true; }
     void push(T item) {
         if constexpr (Sync) {
             auto &cache = th_cache_;

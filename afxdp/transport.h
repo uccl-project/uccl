@@ -590,7 +590,7 @@ class UcclEngine {
 class Endpoint {
     constexpr static uint32_t kMaxInflightMsg = 1024 * 256;
     constexpr static uint16_t kBootstrapPort = 30000;
-    constexpr static uint32_t kSlowTimerIntervalSec = 2;
+    constexpr static uint32_t kStatsTimerIntervalSec = 2;
 
     std::string local_ip_str_;
     std::string local_mac_str_;
@@ -687,6 +687,9 @@ class Endpoint {
 
     std::thread stats_thread_;
     void stats_thread_fn();
+    std::mutex stats_mu_;
+    std::condition_variable stats_cv_;
+    std::atomic<bool> shutdown_{false};
 
     friend class UcclFlow;
 };
