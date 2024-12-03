@@ -294,7 +294,8 @@ class RXTracking {
     AFXDPSocket *socket_;
     Channel *channel_;
 
-    std::map<uint32_t, FrameBuf *> reass_q_;
+    // Intentionally using int for uint32_t seqno to handle integer wrapping.
+    std::map<int, FrameBuf *> reass_q_;
 
     // FIFO queue for ready messages that wait for app to claim.
     std::deque<FrameBuf *> ready_msg_queue_;

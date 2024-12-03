@@ -137,7 +137,8 @@ RXTracking::ConsumeRet RXTracking::consume(swift::Pcb *pcb, FrameBuf *msgbuf) {
     }
 
     // Buffer the packet in the frame pool. It may be out-of-order.
-    reass_q_.insert(it, std::pair<uint32_t, FrameBuf *>(seqno, msgbuf));
+    reass_q_.insert(
+        it, std::pair<int, FrameBuf *>(static_cast<int>(seqno), msgbuf));
 
     // Update the SACK bitmap for the newly received packet.
     pcb->sack_bitmap_bit_set(distance);
@@ -149,7 +150,8 @@ RXTracking::ConsumeRet RXTracking::consume(swift::Pcb *pcb, FrameBuf *msgbuf) {
 }
 
 void RXTracking::push_inorder_msgbuf_to_app(swift::Pcb *pcb) {
-    while (!reass_q_.empty() && reass_q_.begin()->first == pcb->rcv_nxt) {
+    while (!reass_q_.empty() &&
+           static_cast<uint32_t>(reass_q_.begin()->first) == pcb->rcv_nxt) {
         auto *msgbuf = reass_q_.begin()->second;
         reass_q_.erase(reass_q_.begin());
 
@@ -404,7 +406,7 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
             auto *msgbuf = tx_tracking_.get_oldest_unacked_msgbuf();
             VLOG(2) << "Fast recovery " << ackno << " sack_bitmap_count "
                     << sack_bitmap_count;
-            size_t index = 0;
+            uint32_t index = 0;
             while (sack_bitmap_count && msgbuf && index < kSackBitmapSize) {
                 const size_t sack_bitmap_bucket_idx =
                     index / swift::Pcb::kSackBitmapBucketSize;

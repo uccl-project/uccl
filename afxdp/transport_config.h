@@ -8,7 +8,7 @@
 // #define TEST_ZC
 #define USE_MULTIPATH
 
-static const uint32_t NUM_QUEUES = 8;
+static const uint32_t NUM_QUEUES = 4;
 static uint32_t NUM_CPUS = std::thread::hardware_concurrency();
 // Starting from 1/4 of the CPUs to avoid conflicting with nccl proxy service.
 static uint32_t ENGINE_CPU_START = NUM_CPUS / 4;
