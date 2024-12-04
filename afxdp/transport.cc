@@ -51,6 +51,12 @@ void TXTracking::append(FrameBuf *msgbuf_head, FrameBuf *msgbuf_tail,
 
     if (poll_ctx) poll_ctxs_.push_back(poll_ctx);
 
+    if (num_frames == 0) {
+        DCHECK(msgbuf_head == nullptr);
+        DCHECK(msgbuf_tail == nullptr);
+        return;
+    }
+
     // Append the message at the end of the chain of buffers, if any.
     if (last_msgbuf_ == nullptr) {
         // This is the first pending message buffer in the flow.
@@ -326,7 +332,17 @@ void UcclFlow::rx_supply_app_buf(Channel::Msg &rx_work) {
 }
 
 void UcclFlow::tx_messages(Channel::Msg &tx_work) {
+    // This happens to NCCL plugin!!!
+    if (tx_work.len == 0) {
+        std::lock_guard<std::mutex> lock(tx_work.poll_ctx->mu);
+        tx_work.poll_ctx->done = true;
+        tx_work.poll_ctx->cv.notify_one();
+        return;
+    }
+
     pending_tx_msgs_.push_back({tx_work, 0});
+
+    VLOG(3) << "tx_messages size: " << tx_work.len << " bytes";
 
     deserialize_and_append_to_txtracking();
 
@@ -614,21 +630,24 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
     }
     tx_msgbuf_tail = last_msgbuf;
 
+    // LOG_EVERY_N(INFO, 10000)
+    //     << "deser unsent_msgbufs " << tx_tracking_.num_unsent_msgbufs()
+    //     << " deser_budget " << deser_budget << " pending_tx_msgs "
+    //     << pending_tx_msgs_.size() << " successfully added to timingwheel "
+    //     << num_tx_frames << " tx_tracking poll_ctxs "
+    //     << tx_tracking_.poll_ctxs_.size();
+
     // This message has been fully deserialized and added to tx tracking.
     if (remaining_bytes == 0)
         pending_tx_msgs_.pop_front();
     else
         cur_offset = tx_work.len - remaining_bytes;
 
-    // LOG_EVERY_N(INFO, 10000)
-    //     << "deser unsent_msgbufs " << tx_tracking_.num_unsent_msgbufs()
-    //     << " deser_budget " << deser_budget << " pending_tx_msgs "
-    //     << pending_tx_msgs_.size() << " successfully added to timingwheel "
-    //     << num_tx_frames;
-
     tx_tracking_.append(
         tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames,
-        tx_msgbuf_head->is_first() ? tx_work.poll_ctx : nullptr);
+        (tx_msgbuf_head && tx_msgbuf_head->is_first() && num_tx_frames)
+            ? tx_work.poll_ctx
+            : nullptr);
 
     // Recursively call this function to append more messages to the tx.
     if (tx_tracking_.num_unsent_msgbufs() < MAX_TIMING_WHEEL_PKTS &&

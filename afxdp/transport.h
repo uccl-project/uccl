@@ -182,6 +182,10 @@ inline UcclPktHdr::UcclFlags operator&(UcclPktHdr::UcclFlags lhs,
                                  static_cast<UcclFlagsType>(rhs));
 }
 
+class UcclFlow;
+class UcclEngine;
+class Endpoint;
+
 class TXTracking {
     std::deque<PollCtx *> poll_ctxs_;
 
@@ -211,6 +215,9 @@ class TXTracking {
     inline FrameBuf *get_oldest_unacked_msgbuf() const {
         return oldest_unacked_msgbuf_;
     }
+
+    friend class UcclFlow;
+    friend class UcclEngine;
 
    private:
     inline const uint32_t num_tracked_msgbufs() const {
@@ -244,9 +251,6 @@ class TXTracking {
     uint32_t num_tracked_msgbufs_;
 };
 
-class UcclFlow;
-class UcclEngine;
-class Endpoint;
 /**
  * @class RXTracking
  * @brief Tracking for message buffers that are received from the network. This

@@ -4,22 +4,22 @@ import signal
 import argparse
 import os
 
-num_queues = 4
+num_queues = 8
 core_count = os.cpu_count()
 num_irqcores = int(num_queues)
 
 config_mapping = {
-    "aws_afxdp_c5": ["AWS_C5", "ens6", 3498],
-    "aws_afxdp_g4": ["AWS_G4", "ens6", 3498],
-    "aws_afxdp_g4metal": ["AWS_G4METAL", "enp199s0", 3498],
-    "cloudlab_afxdp_xl170": ["CLOUDLAB_XL170", "ens1f1np1", 1500],
-    "cloudlab_afxdp_d6515": ["CLOUDLAB_D6515", "enp65s0f0np0", 3498],
+    "aws_c5_afxdp": ["AWS_C5", "ens6", 3498],
+    "aws_g4_afxdp": ["AWS_G4", "ens6", 3498],
+    "aws_g4metal_afxdp": ["AWS_G4METAL", "enp199s0", 3498],
+    "cloudlab_xl170_afxdp": ["CLOUDLAB_XL170", "ens1f1np1", 1500],
+    "cloudlab_d6515_afxdp": ["CLOUDLAB_D6515", "enp65s0f0np0", 3498],
     #
-    "aws_tcp_c5": ["AWS_C5", "ens6", 9001],
-    "aws_tcp_g4": ["AWS_G4", "ens6", 9001],
-    "aws_tcp_g4metal": ["AWS_G4METAL", "enp199s0", 9001],
-    "cloudlab_tcp_xl170": ["CLOUDLAB_XL170", "ens1f1np1", 1500],
-    "cloudlab_tcp_d6515": ["CLOUDLAB_D6515", "enp65s0f0np0", 9000],
+    "aws_c5_tcp": ["AWS_C5", "ens6", 9001],
+    "aws_g4_tcp": ["AWS_G4", "ens6", 9001],
+    "aws_g4metal_tcp": ["AWS_G4METAL", "enp199s0", 9001],
+    "cloudlab_xl170_tcp": ["CLOUDLAB_XL170", "ens1f1np1", 1500],
+    "cloudlab_d6515_tcp": ["CLOUDLAB_D6515", "enp65s0f0np0", 9000],
     #
     "setup_extra": ["", "", 0],
 }
@@ -27,7 +27,7 @@ PYTHON = "source /opt/anaconda3/bin/activate; conda run -n base python"
 
 # Usage:
 #   python setup_all.py --target=setup_extra
-#   python setup_all.py --target=cloudlab_afxdp_xl170
+#   python setup_all.py --target=cloudlab_xl170_afxdp
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="parsing setup_all arguments.")
@@ -35,7 +35,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--target",
         type=str,
-        default="cloudlab_afxdp_xl170",
+        default="cloudlab_xl170_afxdp",
         help=f'{", ".join(list(config_mapping.keys()))}',
     )
 
@@ -86,10 +86,10 @@ if __name__ == "__main__":
     ### Setup NIC
     afxdp_or_tcp = "afxdp" if "afxdp" in target else "tcp"
     aws_or_cloudlab = "aws" if "aws" in target else "cloudlab"
-    if target == "aws_tcp_g4metal":
+    if target == "aws_g4metal_tcp":
         core_count = 32
         num_irqcores = 32
-    elif target == "cloudlab_tcp_d6515":
+    elif target == "cloudlab_d6515_tcp":
         core_count = 63
         num_irqcores = 63
 

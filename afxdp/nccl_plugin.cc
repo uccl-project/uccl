@@ -241,6 +241,10 @@ ncclResult_t pluginDeregMr(void* collComm, void* mhandle) {
 
 ncclResult_t pluginIsend(void* sendComm, void* data, int size, int tag,
                          void* mhandle, void** request) {
+    // Handling a special case of size 0: we must send something, as the
+    // receiver side blocks on irecv.
+    if (size == 0) size = 1;
+
     inflight_send += size;
     struct CommHandler* comm_handler =
         static_cast<struct CommHandler*>(sendComm);
@@ -287,6 +291,9 @@ ncclResult_t pluginTest(void* request, int* done, int* size) {
     struct UcclRequest* req = static_cast<struct UcclRequest*>(request);
 
     if (ep->uccl_poll_once(req->poll_ctx)) {
+        // Handling a special case of size 0.
+        if (req->data_len == 1) req->data_len = 0;
+
         if (req->send) {
             inflight_send -= req->data_len;
             VLOG(4) << "pluginTest send " << req->data_len << " "
