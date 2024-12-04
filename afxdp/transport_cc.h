@@ -81,9 +81,8 @@ struct Pcb {
         wheel_.ready_entries_ -= num_ready;
 
         if (unlikely(wheel_.ready_entries_ > 0)) {
-            LOG_EVERY_N(INFO, 100000)
-                << "[CC] TimingWheel ready queue not empty "
-                << wheel_.ready_entries_;
+            VLOG(3) << "[CC] TimingWheel ready queue not empty "
+                    << wheel_.ready_entries_;
 
             // Consuming the ready entries.
             while (wheel_.ready_queue_.size() > wheel_.ready_entries_) {
