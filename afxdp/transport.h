@@ -130,7 +130,7 @@ struct __attribute__((packed)) UcclPktHdr {
     static constexpr uint16_t kMagic = 0x4e53;
     be16_t magic;       // Magic value tagged after initialization for the flow.
     uint8_t engine_id;  // remote UcclEngine ID to process this packet.
-    uint8_t reserved;   // Reserved for future use.
+    uint8_t path_id;    // path_id of this dst port.
     enum class UcclFlags : uint8_t {
         kData = 0b0,              // Data packet.
         kAck = 0b10,              // ACK packet.
@@ -391,7 +391,7 @@ class UcclFlow {
     void tx_messages(Channel::Msg &tx_work);
 
     void process_rttprobe_rsp(uint64_t ts1, uint64_t ts2, uint64_t ts3,
-                              uint64_t ts4);
+                              uint64_t ts4, uint32_t path_id);
 
     /**
      * @brief Periodically checks the state of the flow and performs
@@ -437,17 +437,13 @@ class UcclFlow {
     void prepare_l4header(uint8_t *pkt_addr, uint32_t payload_bytes,
                           uint16_t dst_port) const;
 
-    void prepare_datapacket(FrameBuf *msg_buf, uint32_t seqno,
+    void prepare_datapacket(FrameBuf *msg_buf, uint32_t path_id, uint32_t seqno,
                             const UcclPktHdr::UcclFlags net_flags);
     AFXDPSocket::frame_desc craft_ackpacket(
-        uint16_t dst_port, uint32_t seqno, uint32_t ackno,
+        uint32_t path_id, uint16_t dst_port, uint32_t seqno, uint32_t ackno,
         const UcclPktHdr::UcclFlags net_flags, uint64_t ts1, uint64_t ts2);
     AFXDPSocket::frame_desc craft_rssprobe_packet(uint16_t dst_port);
     void reverse_packet_l2l3(FrameBuf *msg_buf);
-
-    inline uint16_t get_next_dst_port() {
-        return dst_ports_[next_port_idx_++ % kPortEntropy];
-    }
 
     // The following is used to fill packet headers.
     uint32_t local_addr_;
@@ -464,10 +460,6 @@ class UcclFlow {
     Channel *channel_;
     // FlowID of this flow.
     FlowID flow_id_;
-    // Destination ports with remote_engine_idx_ as the target queue_id.
-    std::vector<uint16_t> dst_ports_;
-    // Index in dst_ports_ for the next port to use.
-    uint32_t next_port_idx_ = 0;
     // Accumulated data frames to be sent.
     std::vector<AFXDPSocket::frame_desc> pending_tx_frames_;
     // Missing data frames to be sent.
@@ -483,6 +475,24 @@ class UcclFlow {
 
     TXTracking tx_tracking_;
     RXTracking rx_tracking_;
+
+    /* Maintaining per-path RTT for entropy-based path selection. */
+    static const uint32_t kPortEntropyMask = kPortEntropy - 1;
+    // Destination ports with remote_engine_idx_ as the target queue_id.
+    std::vector<uint16_t> dst_ports_;
+    // RTT in tsc; indexed by path_id.
+    size_t port_path_rtt_[kPortEntropy] = {0};
+
+    inline uint32_t get_path_id_with_lowest_rtt() {
+        auto idx_u32 = U32Rand(0, UINT32_MAX);
+        auto idx1 = idx_u32 & kPortEntropyMask;
+        auto idx2 = (idx_u32 >> 16) & kPortEntropyMask;
+        VLOG(3) << "rtt: idx1 " << port_path_rtt_[idx1] << " idx2 "
+                << port_path_rtt_[idx2];
+        return (port_path_rtt_[idx1] < port_path_rtt_[idx2]) ? idx1 : idx2;
+        // static uint32_t next_path_id = 0;
+        // return (next_path_id++) & kPortEntropyMask;
+    }
 
     friend class UcclEngine;
     friend class Endpoint;

@@ -8,7 +8,7 @@
 // #define TEST_ZC
 #define USE_MULTIPATH
 
-static const uint32_t NUM_QUEUES = 8;
+static const uint32_t NUM_QUEUES = 4;
 static uint32_t NUM_CPUS = std::thread::hardware_concurrency();
 // Starting from 1/4 of the CPUs to avoid conflicting with nccl proxy service.
 static uint32_t ENGINE_CPU_START = NUM_CPUS / 4;
@@ -20,6 +20,7 @@ static const uint32_t MAX_TIMING_WHEEL_PKTS = 1024;
 static const uint64_t NUM_FRAMES = 1024 * 1024;
 // CC parameters.
 static const uint32_t kPortEntropy = 32;
+static_assert(kPortEntropy < 256, "kPortEntropy too large");
 static const std::size_t kSackBitmapSize = 1024;
 static const std::size_t kFastRexmitDupAckThres = 5;
 
