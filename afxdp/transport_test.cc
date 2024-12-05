@@ -274,6 +274,11 @@ int main(int argc, char* argv[]) {
 
             if ((i + 1) % kReportIters == 0) {
                 auto end_bw_mea = std::chrono::high_resolution_clock::now();
+                // Clear to avoid Percentile() taking too much time.
+                if (rtts.size() > 100000) {
+                    rtts.assign(rtts.end() - 100000, rtts.end());
+                }
+
                 uint64_t med_latency, tail_latency;
                 med_latency = Percentile(rtts, 50);
                 tail_latency = Percentile(rtts, 99);
@@ -287,11 +292,6 @@ int main(int argc, char* argv[]) {
                          end_bw_mea - start_bw_mea)
                          .count() *
                      1e-6);
-                // Clear to avoid Percentile() taking too much time.
-                if (rtts.size() > 100000) {
-                    rtts.erase(rtts.begin(),
-                               rtts.begin() + rtts.size() - 100000);
-                }
                 sent_bytes = 0;
 
                 LOG(INFO) << "Sent " << i + 1

@@ -2,11 +2,12 @@
 #include <cstdint>
 #include <thread>
 
+#define USE_MULTIPATH
+#define PATH_SELECTION
 // #define USE_TCP
 // #define ENABLE_CSUM
 // #define RTT_STATS
-// #define TEST_ZC
-#define USE_MULTIPATH
+// #define EMULATE_ZC
 
 static const uint32_t NUM_QUEUES = 4;
 static uint32_t NUM_CPUS = std::thread::hardware_concurrency();

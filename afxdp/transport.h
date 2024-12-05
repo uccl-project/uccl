@@ -484,14 +484,17 @@ class UcclFlow {
     size_t port_path_rtt_[kPortEntropy] = {0};
 
     inline uint32_t get_path_id_with_lowest_rtt() {
+#ifdef PATH_SELECTION
         auto idx_u32 = U32Rand(0, UINT32_MAX);
         auto idx1 = idx_u32 & kPortEntropyMask;
         auto idx2 = (idx_u32 >> 16) & kPortEntropyMask;
         VLOG(3) << "rtt: idx1 " << port_path_rtt_[idx1] << " idx2 "
                 << port_path_rtt_[idx2];
         return (port_path_rtt_[idx1] < port_path_rtt_[idx2]) ? idx1 : idx2;
-        // static uint32_t next_path_id = 0;
-        // return (next_path_id++) & kPortEntropyMask;
+#else
+        static uint32_t next_path_id = 0;
+        return (next_path_id++) & kPortEntropyMask;
+#endif
     }
 
     friend class UcclEngine;

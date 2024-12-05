@@ -198,7 +198,7 @@ void RXTracking::try_copy_msgbuf_to_appbuf(void *app_buf, size_t *app_buf_len_p,
         VLOG(2) << "payload_len: " << payload_len << " seqno: " << std::dec
                 << ucclh->seqno.value();
 
-#ifndef TEST_ZC
+#ifndef EMULATE_ZC
         memcpy((uint8_t *)app_buf + cur_offset, payload_addr, payload_len);
 #endif
         cur_offset += payload_len;
@@ -612,7 +612,7 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
         pcb_.queue_on_timing_wheel(
             now_tsc, payload_len + kNetHdrLen + kUcclHdrLen, msgbuf);
 
-#ifndef TEST_ZC
+#ifndef EMULATE_ZC
         // VLOG(3) << "Deser copy " << msgbuf << " " << num_tx_frames;
         auto pkt_payload_addr =
             msgbuf->get_pkt_addr() + kNetHdrLen + kUcclHdrLen;
