@@ -13,7 +13,7 @@
 using namespace uccl;
 
 size_t kTestMsgSize = 1024000;
-size_t kReportIters = 1000;
+size_t kReportIters = 5000;
 const size_t kTestIters = 1024000000000UL;
 // Using larger inlights like 64 will cause severe cache miss, impacting perf.
 const size_t kMaxInflight = 8;

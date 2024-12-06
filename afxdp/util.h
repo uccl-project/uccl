@@ -32,10 +32,11 @@
 namespace uccl {
 
 template <class T>
-static inline T Percentile(std::vector<T>& vectorIn, double percent) {
+static inline T Percentile(const std::vector<T>& vectorIn, double percent) {
     if (vectorIn.size() == 0) return (T)0;
-    auto nth = vectorIn.begin() + (percent * vectorIn.size()) / 100;
-    std::nth_element(vectorIn.begin(), nth, vectorIn.end());
+    std::vector<T> vectorCopy = vectorIn;
+    auto nth = vectorCopy.begin() + (percent * vectorCopy.size()) / 100;
+    std::nth_element(vectorCopy.begin(), nth, vectorCopy.end());
     return *nth;
 }
 
