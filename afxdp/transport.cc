@@ -358,7 +358,7 @@ void UcclFlow::process_rttprobe_rsp(uint64_t ts1, uint64_t ts2, uint64_t ts3,
     auto rtt_ns = (ts4 - ts1) - (ts3 - ts2);
     auto sample_rtt_tsc = ns_to_cycles(rtt_ns, freq_ghz);
 #ifdef LATENCY_CC
-    pcb_.update_rate(rdtsc(), sample_rtt_tsc);
+    pcb_.timely_update_rate(rdtsc(), sample_rtt_tsc);
 #endif
     port_path_rtt_[path_id] = sample_rtt_tsc;
 
@@ -518,7 +518,7 @@ void UcclFlow::rto_retransmit() {
             {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
     }
 #ifndef LATENCY_CC
-    pcb_.cubic_on_pkt_loss();
+    pcb_.cubic_on_packet_loss();
 #endif
     pcb_.rto_reset();
     pcb_.rto_rexmits++;
@@ -539,7 +539,7 @@ void UcclFlow::transmit_pending_packets() {
         socket_->send_queue_free_entries(unacked_pkt_budget);
 
 #ifdef LATENCY_CC
-    auto permitted_packets = pcb_.get_num_ready_tx_pkt(
+    auto permitted_packets = pcb_.timely_ready_packets(
         std::min(txq_free_entries, unacked_pkt_budget));
 #else
     auto permitted_packets =
@@ -625,8 +625,8 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
 
 #ifdef LATENCY_CC
         // Queue on the timing wheel.
-        pcb_.queue_on_timing_wheel(
-            now_tsc, payload_len + kNetHdrLen + kUcclHdrLen, msgbuf);
+        pcb_.timely_pace_packet(now_tsc, payload_len + kNetHdrLen + kUcclHdrLen,
+                                msgbuf);
 #endif
 
 #ifndef EMULATE_ZC

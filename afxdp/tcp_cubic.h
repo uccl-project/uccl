@@ -22,7 +22,7 @@ class CubicCC {
           last_update_time(rdtsc()) {}
 
     /* https://book.systemsapproach.org/congestion/tcpcc.html */
-    void on_ack_received(
+    inline void on_ack_received(
         uint32_t distance = 1) {  // Distance: number of packets acknowledged
         auto now = rdtsc();
         auto duration = to_usec(now - last_update_time, freq_ghz);
@@ -58,7 +58,7 @@ class CubicCC {
                 << ", ssthresh=" << ssthresh << std::endl;
     }
 
-    void on_packet_loss() {
+    inline void on_packet_loss() {
         last_max_cwnd = cwnd;
         ssthresh = cwnd * beta;  // Apply multiplicative decrease factor
         // Adjust cwnd based on last_max_cwnd and beta, similar to Linux

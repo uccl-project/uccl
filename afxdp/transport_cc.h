@@ -81,7 +81,7 @@ struct Pcb {
         cubic.on_ack_received(acked_pkts);
     }
 
-    inline void cubic_on_pkt_loss() { cubic.on_packet_loss(); }
+    inline void cubic_on_packet_loss() { cubic.on_packet_loss(); }
     /********* Cubic congestion control ends *********/
 
     /********* Timely congestion control starts *********/
@@ -89,12 +89,12 @@ struct Pcb {
     TimingWheel wheel_;
     size_t prev_desired_tx_tsc_;
 
-    inline void update_rate(size_t _rdtsc, size_t sample_rtt_tsc) {
+    inline void timely_update_rate(size_t _rdtsc, size_t sample_rtt_tsc) {
         timely.update_rate(_rdtsc, sample_rtt_tsc);
     }
 
-    inline void queue_on_timing_wheel(size_t ref_tsc, size_t pkt_size,
-                                      void *msgbuf) {
+    inline void timely_pace_packet(size_t ref_tsc, size_t pkt_size,
+                                   void *msgbuf) {
         // auto rate = timely.rate_;
         // auto rate = timely.link_bandwidth_;
         // auto rate = kLinkBandwidth / NUM_QUEUES * 2;  // for bimq
@@ -110,7 +110,7 @@ struct Pcb {
         wheel_.insert(wheel_ent_t{msgbuf, pkt_size}, ref_tsc, desired_tx_tsc);
     }
 
-    inline uint32_t get_num_ready_tx_pkt(uint32_t budget) {
+    inline uint32_t timely_ready_packets(uint32_t budget) {
         size_t cur_tsc = rdtsc();
         wheel_.reap(cur_tsc);
 
@@ -131,8 +131,8 @@ struct Pcb {
             while (!wheel_.ready_queue_.empty()) {
                 auto ent = wheel_.ready_queue_.front();
                 wheel_.ready_queue_.pop_front();
-                queue_on_timing_wheel(now, ent.pkt_size_,
-                                      (void *)(uint64_t)ent.sslot_);
+                timely_pace_packet(now, ent.pkt_size_,
+                                   (void *)(uint64_t)ent.sslot_);
             }
 
             wheel_.ready_entries_ = 0;
