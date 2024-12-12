@@ -4,7 +4,7 @@ import signal
 import argparse
 import os
 
-num_queues = 1
+num_queues = 8
 core_count = os.cpu_count()
 num_irqcores = int(num_queues)
 
@@ -87,6 +87,9 @@ if __name__ == "__main__":
     afxdp_or_tcp = "afxdp" if "afxdp" in target else "tcp"
     aws_or_cloudlab = "aws" if "aws" in target else "cloudlab"
     if target == "aws_g4metal_tcp":
+        core_count = 32
+        num_irqcores = 32
+    elif target == "aws_c5_tcp":
         core_count = 32
         num_irqcores = 32
     elif target == "cloudlab_d6515_tcp":

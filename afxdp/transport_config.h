@@ -2,6 +2,8 @@
 #include <cstdint>
 #include <thread>
 
+#include "util.h"
+
 #define USE_MULTIPATH
 #define PATH_SELECTION
 // #define USE_TCP
@@ -9,7 +11,7 @@
 // #define RTT_STATS
 // #define EMULATE_ZC
 
-static const uint32_t NUM_QUEUES = 1;
+static const uint32_t NUM_QUEUES = 8;
 static uint32_t NUM_CPUS = std::thread::hardware_concurrency();
 // Starting from 1/4 of the CPUs to avoid conflicting with nccl proxy service.
 static uint32_t ENGINE_CPU_START = NUM_CPUS / 4;
@@ -22,13 +24,14 @@ static const uint64_t NUM_FRAMES = 1024 * 1024;
 // CC parameters.
 static const uint32_t kPortEntropy = 32;
 static_assert(kPortEntropy < 256, "kPortEntropy too large");
+static_assert(is_power_of_two(kPortEntropy), "kPortEntropy must be power of 2");
 static const std::size_t kSackBitmapSize = 1024;
 static const std::size_t kFastRexmitDupAckThres = 5;
 
 #if defined(AWS_C5)
 static const uint32_t AFXDP_MTU = 3498;
 static const char* DEV_DEFAULT = "ens6";
-static const double kLinkBandwidth = 10.0 * 1e9 / 8;
+static const double kLinkBandwidth = 100.0 * 1e9 / 8;
 #elif defined(AWS_G4)
 static const uint32_t AFXDP_MTU = 3498;
 static const char* DEV_DEFAULT = "ens6";
