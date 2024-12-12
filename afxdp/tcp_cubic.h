@@ -63,11 +63,10 @@ class CubicCC {
         ssthresh = cwnd * beta;  // Apply multiplicative decrease factor
         // Adjust cwnd based on last_max_cwnd and beta, similar to Linux
         // behavior
-        // cwnd = std::max(
-        //     2.0, last_max_cwnd *
-        //              (1 - beta));  // Avoid cwnd falling below a minimum
-        //              of 2.0
-        cwnd = std::max(1.0, cwnd / 2);
+        cwnd = std::max(
+            2.0,
+            last_max_cwnd *
+                (1 - beta));  // Avoid cwnd falling below a minimum of 2.0
         epoch_start = 0;
         VLOG(3) << "Packet loss detected: cwnd=" << cwnd
                 << ", ssthresh=" << ssthresh << std::endl;
