@@ -530,7 +530,6 @@ void UcclFlow::rto_retransmit() {
  * of pending TX data.
  */
 void UcclFlow::transmit_pending_packets() {
-#ifdef LATENCY_CC
     // Avoid sending too many packets.
     auto num_unacked_pkts = tx_tracking_.num_unacked_msgbufs();
     if (num_unacked_pkts >= MAX_UNACKED_PKTS) return;
@@ -538,10 +537,11 @@ void UcclFlow::transmit_pending_packets() {
     auto unacked_pkt_budget = MAX_UNACKED_PKTS - num_unacked_pkts;
     auto txq_free_entries =
         socket_->send_queue_free_entries(unacked_pkt_budget);
+
+#ifdef LATENCY_CC
     auto permitted_packets = pcb_.get_num_ready_tx_pkt(
         std::min(txq_free_entries, unacked_pkt_budget));
 #else
-    auto txq_free_entries = socket_->send_queue_free_entries();
     auto permitted_packets =
         std::min(txq_free_entries, pcb_.cubic_effective_wnd());
 #endif

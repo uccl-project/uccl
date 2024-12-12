@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "tcp_cubic.h"
 #include "timely.h"
 #include "timing_wheel.h"
 
@@ -62,10 +63,12 @@ struct Pcb {
     uint16_t rto_rexmits_consectutive{0};
 
     /********* Cubic congestion control starts *********/
-    double cwnd{kInitialCwnd};
+    CubicCC cubic;
 
     inline uint32_t cubic_effective_wnd() const {
         auto snd_adjusted_una = snd_una + snd_ooo_acks;
+        auto cwnd = cubic.get_cwnd();
+
         // This normally does not happen.
         if (snd_nxt < snd_adjusted_una || cwnd <= snd_nxt - snd_adjusted_una)
             return 1;
@@ -75,14 +78,10 @@ struct Pcb {
     }
 
     inline void cubic_on_recv_ack(uint32_t acked_pkts) {
-        cwnd += acked_pkts / cwnd;
-        if (cwnd > MAX_UNACKED_PKTS) cwnd = MAX_UNACKED_PKTS;
+        cubic.on_ack_received(acked_pkts);
     }
 
-    inline void cubic_on_pkt_loss() {
-        cwnd /= 2;
-        if (cwnd < 1) cwnd = 1;
-    }
+    inline void cubic_on_pkt_loss() { cubic.on_packet_loss(); }
     /********* Cubic congestion control ends *********/
 
     /********* Timely congestion control starts *********/
@@ -167,7 +166,7 @@ struct Pcb {
              Format(" timely prev_rtt: %.2lf us", timely.prev_rtt_) +
              Format(" timely avg_rtt_diff: %.2lf us", avg_rtt_diff) +
              Format(" timely rate: %.2lf Gbps", rate_gbps) +
-             Format(" cubic cwnd: %.2lf effective_cwnd: %u", cwnd,
+             Format(" cubic cwnd: %.2lf effective_cwnd: %u", cubic.get_cwnd(),
                     cubic_effective_wnd());
         return s;
     }
