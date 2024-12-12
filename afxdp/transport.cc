@@ -357,7 +357,9 @@ void UcclFlow::process_rttprobe_rsp(uint64_t ts1, uint64_t ts2, uint64_t ts3,
                                     uint64_t ts4, uint32_t path_id) {
     auto rtt_ns = (ts4 - ts1) - (ts3 - ts2);
     auto sample_rtt_tsc = ns_to_cycles(rtt_ns, freq_ghz);
+#ifdef LATENCY_CC
     pcb_.update_rate(rdtsc(), sample_rtt_tsc);
+#endif
     port_path_rtt_[path_id] = sample_rtt_tsc;
 
     VLOG(3) << "sample_rtt_us " << to_usec(sample_rtt_tsc, freq_ghz)
@@ -475,6 +477,10 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
         size_t num_acked_packets = ackno - pcb_.snd_una;
         tx_tracking_.receive_acks(num_acked_packets);
 
+#ifndef LATENCY_CC
+        pcb_.cubic_on_recv_ack(num_acked_packets);
+#endif
+
         pcb_.snd_una = ackno;
         pcb_.duplicate_acks = 0;
         pcb_.snd_ooo_acks = 0;
@@ -511,6 +517,9 @@ void UcclFlow::rto_retransmit() {
         socket_->send_packet(
             {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
     }
+#ifndef LATENCY_CC
+    pcb_.cubic_on_pkt_loss();
+#endif
     pcb_.rto_reset();
     pcb_.rto_rexmits++;
     pcb_.rto_rexmits_consectutive++;
@@ -521,6 +530,7 @@ void UcclFlow::rto_retransmit() {
  * of pending TX data.
  */
 void UcclFlow::transmit_pending_packets() {
+#ifdef LATENCY_CC
     // Avoid sending too many packets.
     auto num_unacked_pkts = tx_tracking_.num_unacked_msgbufs();
     if (num_unacked_pkts >= MAX_UNACKED_PKTS) return;
@@ -530,6 +540,11 @@ void UcclFlow::transmit_pending_packets() {
         socket_->send_queue_free_entries(unacked_pkt_budget);
     auto permitted_packets = pcb_.get_num_ready_tx_pkt(
         std::min(txq_free_entries, unacked_pkt_budget));
+#else
+    auto txq_free_entries = socket_->send_queue_free_entries();
+    auto permitted_packets =
+        std::min(txq_free_entries, pcb_.cubic_effective_wnd());
+#endif
 
     // static uint64_t transmit_tries = 0;
     // static uint64_t transmit_success = 0;
@@ -608,9 +623,11 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
         // The flow will free these Tx frames when receiving ACKs.
         msgbuf->mark_not_txpulltime_free();
 
+#ifdef LATENCY_CC
         // Queue on the timing wheel.
         pcb_.queue_on_timing_wheel(
             now_tsc, payload_len + kNetHdrLen + kUcclHdrLen, msgbuf);
+#endif
 
 #ifndef EMULATE_ZC
         // VLOG(3) << "Deser copy " << msgbuf << " " << num_tx_frames;

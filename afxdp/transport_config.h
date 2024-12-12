@@ -6,6 +6,7 @@
 
 #define USE_MULTIPATH
 #define PATH_SELECTION
+// #define LATENCY_CC
 // #define USE_TCP
 // #define ENABLE_CSUM
 // #define RTT_STATS

@@ -48,6 +48,44 @@ struct Pcb {
         wheel_.catchup();
     }
 
+    uint32_t target_delay{0};
+    uint32_t snd_nxt{0};
+    uint32_t snd_una{0};
+    uint32_t snd_ooo_acks{0};
+    uint32_t rcv_nxt{0};
+    uint64_t sack_bitmap[kSackBitmapSize / kSackBitmapBucketSize]{0};
+    uint8_t sack_bitmap_count{0};
+    uint16_t duplicate_acks{0};
+    int rto_timer{kRtoDisabled};
+    uint32_t fast_rexmits{0};
+    uint32_t rto_rexmits{0};
+    uint16_t rto_rexmits_consectutive{0};
+
+    /********* Cubic congestion control starts *********/
+    double cwnd{kInitialCwnd};
+
+    inline uint32_t cubic_effective_wnd() const {
+        auto snd_adjusted_una = snd_una + snd_ooo_acks;
+        // This normally does not happen.
+        if (snd_nxt < snd_adjusted_una || cwnd <= snd_nxt - snd_adjusted_una)
+            return 1;
+
+        uint32_t effective_wnd = cwnd - (snd_nxt - snd_adjusted_una);
+        return effective_wnd == 0 ? 1 : effective_wnd;
+    }
+
+    inline void cubic_on_recv_ack(uint32_t acked_pkts) {
+        cwnd += acked_pkts / cwnd;
+        if (cwnd > MAX_UNACKED_PKTS) cwnd = MAX_UNACKED_PKTS;
+    }
+
+    inline void cubic_on_pkt_loss() {
+        cwnd /= 2;
+        if (cwnd < 1) cwnd = 1;
+    }
+    /********* Cubic congestion control ends *********/
+
+    /********* Timely congestion control starts *********/
     Timely timely;
     TimingWheel wheel_;
     size_t prev_desired_tx_tsc_;
@@ -108,21 +146,7 @@ struct Pcb {
 
         return num_ready;
     }
-
-    // Return the sender effective window in # of packets.
-    uint32_t effective_wnd() const {
-        if (snd_nxt < snd_una + snd_ooo_acks) return 1;
-        uint32_t inflight = snd_nxt - snd_una - snd_ooo_acks;
-        if (cwnd <= inflight) return 1;
-        uint32_t effective_wnd = std::ceil((cwnd - inflight) * ecn_alpha);
-        return effective_wnd == 0 ? 1 : effective_wnd;
-    }
-
-    void mutliplicative_decrease() { ecn_alpha /= 2; }
-    void additive_increase() {
-        ecn_alpha += 0.1;
-        if (ecn_alpha > 1.0) ecn_alpha = 1.0;
-    }
+    /********* Timely congestion control ends *********/
 
     uint32_t seqno() const { return snd_nxt; }
     uint32_t get_snd_nxt() {
@@ -140,9 +164,11 @@ struct Pcb {
              " rcv_nxt: " + std::to_string(rcv_nxt) +
              " fast_rexmits: " + std::to_string(fast_rexmits) +
              " rto_rexmits: " + std::to_string(rto_rexmits) +
-             Format(" timely prev_rtt: %.2lf us ", timely.prev_rtt_) +
-             Format(" timely avg_rtt_diff: %.2lf us ", avg_rtt_diff) +
-             Format(" timely rate: %.2lf Gbps ", rate_gbps);
+             Format(" timely prev_rtt: %.2lf us", timely.prev_rtt_) +
+             Format(" timely avg_rtt_diff: %.2lf us", avg_rtt_diff) +
+             Format(" timely rate: %.2lf Gbps", rate_gbps) +
+             Format(" cubic cwnd: %.2lf effective_cwnd: %u", cwnd,
+                    cubic_effective_wnd());
         return s;
     }
 
@@ -200,21 +226,6 @@ struct Pcb {
 
         sack_bitmap_count++;
     }
-
-    uint32_t target_delay{0};
-    uint32_t snd_nxt{0};
-    uint32_t snd_una{0};
-    uint32_t snd_ooo_acks{0};
-    uint32_t rcv_nxt{0};
-    uint64_t sack_bitmap[kSackBitmapSize / kSackBitmapBucketSize]{0};
-    uint8_t sack_bitmap_count{0};
-    uint16_t cwnd{kInitialCwnd};
-    uint16_t duplicate_acks{0};
-    int rto_timer{kRtoDisabled};
-    uint32_t fast_rexmits{0};
-    uint32_t rto_rexmits{0};
-    uint16_t rto_rexmits_consectutive{0};
-    double ecn_alpha{1.0};
 };
 
 }  // namespace swift
