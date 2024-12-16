@@ -581,7 +581,6 @@ void UcclFlow::transmit_pending_packets() {
 #ifdef LATENCY_CC
     auto permitted_packets = pcb_.timely_ready_packets(hard_budget);
 #else
-    // TODO(yang): control the size of batch.
     auto &pcb_cc = pcb_cc_[path_id];
     auto permitted_packets =
         std::min(hard_budget, pcb_cc.cubic_effective_wnd());
