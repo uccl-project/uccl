@@ -329,6 +329,7 @@ class RXTracking {
  */
 class UcclFlow {
     const static uint32_t kMaxReadyMsgbufs = MAX_UNACKED_PKTS;
+    const static uint32_t kMaxUnackedPktsMask = MAX_UNACKED_PKTS - 1;
 
    public:
     /**
@@ -358,8 +359,9 @@ class UcclFlow {
           rx_tracking_(socket, channel) {
         memcpy(local_l2_addr_, local_l2_addr, ETH_ALEN);
         memcpy(remote_l2_addr_, remote_l2_addr, ETH_ALEN);
+        pcb_cc_ = new swift::Pcb[kPortEntropy];
     }
-    ~UcclFlow() {}
+    ~UcclFlow() { delete[] pcb_cc_; }
 
     friend class UcclEngine;
 
@@ -467,14 +469,27 @@ class UcclFlow {
     // Frames that are pending rx processing in a batch.
     std::vector<FrameBuf *> pending_rx_msgbufs_;
 
+    TXTracking tx_tracking_;
+    RXTracking rx_tracking_;
+
     // Swift CC protocol control block.
     swift::Pcb pcb_;
+    // Each path has its own PCB for CC.
+    swift::Pcb *pcb_cc_;
+    // Path ID for each packet indexed by seqno.
+    uint8_t hist_path_id_[MAX_UNACKED_PKTS] = {0};
+
+    inline void set_path_id(uint32_t seqno, uint32_t path_id) {
+        hist_path_id_[seqno & kMaxUnackedPktsMask] = path_id;
+    }
+
+    inline uint32_t get_path_id(uint32_t seqno) {
+        return hist_path_id_[seqno & kMaxUnackedPktsMask];
+    }
+
     // Measure the distribution of probed RTT.
     Latency rtt_stats_;
     uint64_t rtt_probe_count_ = 0;
-
-    TXTracking tx_tracking_;
-    RXTracking rx_tracking_;
 
     /* Maintaining per-path RTT for entropy-based path selection. */
     static const uint32_t kPortEntropyMask = kPortEntropy - 1;

@@ -77,7 +77,7 @@ struct Pcb {
         return effective_wnd == 0 ? 1 : effective_wnd;
     }
 
-    inline void cubic_on_recv_ack(uint32_t acked_pkts) {
+    inline void cubic_on_recv_ack(uint32_t acked_pkts = 1) {
         cubic.on_ack_received(acked_pkts);
     }
 

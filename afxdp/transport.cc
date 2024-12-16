@@ -244,7 +244,9 @@ void UcclFlow::rx_messages() {
     uint32_t num_data_frames_recvd = 0;
     uint32_t path_id = 0;
     uint16_t dst_port = 0;
+    uint16_t dst_port_rtt_probe = 0;
     uint64_t timestamp1 = 0, timestamp2 = 0;
+    bool received_rtt_probe = false;
 
     for (auto msgbuf : pending_rx_msgbufs_) {
         // ebpf_transport has filtered out invalid pkts.
@@ -270,7 +272,9 @@ void UcclFlow::rx_messages() {
             case UcclPktHdr::UcclFlags::kDataRttProbe:
                 // Receiver gets the RTT probe, relay it back in the ACK.
                 // If multiple RTT probe, we take the last one's timestamp.
+                received_rtt_probe = true;
                 path_id = ucclh->path_id;
+                dst_port_rtt_probe = htons(udph->dest);
                 timestamp1 = ucclh->timestamp1;
                 timestamp2 = ucclh->timestamp2;
             case UcclPktHdr::UcclFlags::kData:
@@ -278,7 +282,7 @@ void UcclFlow::rx_messages() {
                 // once the engine copies the payload into app buffer
                 consume_ret = rx_tracking_.consume(&pcb_, msgbuf);
                 num_data_frames_recvd++;
-                // Our dst_port selection are symmetric.
+                // Sender's dst_port selection are symmetric.
                 dst_port = htons(udph->dest);
                 break;
             case UcclPktHdr::UcclFlags::kRssProbe:
@@ -312,12 +316,15 @@ void UcclFlow::rx_messages() {
     if (num_data_frames_recvd) {
         // Avoiding client sending too much packet which would empty msgbuf.
         if (rx_tracking_.ready_msg_queue_.size() <= kMaxReadyMsgbufs) {
-            auto net_flags = (timestamp1 && timestamp2)
+            auto net_flags = received_rtt_probe
                                  ? UcclPktHdr::UcclFlags::kAckRttProbe
                                  : UcclPktHdr::UcclFlags::kAck;
-            AFXDPSocket::frame_desc ack_frame =
-                craft_ackpacket(path_id, dst_port, pcb_.seqno(), pcb_.ackno(),
-                                net_flags, timestamp1, timestamp2);
+            auto dst_port_reverse =
+                received_rtt_probe ? dst_port_rtt_probe : dst_port;
+
+            AFXDPSocket::frame_desc ack_frame = craft_ackpacket(
+                path_id, dst_port_reverse, pcb_.seqno(), pcb_.ackno(),
+                net_flags, timestamp1, timestamp2);
             socket_->send_packet(ack_frame);
         }
     }
@@ -448,8 +455,9 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
                     if (seqno == missing_ucclh->seqno.value()) {
                         // DCHECK_EQ(seqno, missing_ucclh->seqno.value())
                         //     << " seqno mismatch at index " << index;
-                        prepare_datapacket(msgbuf,
-                                           get_path_id_with_lowest_rtt(), seqno,
+                        auto path_id = get_path_id_with_lowest_rtt();
+                        set_path_id(seqno, path_id);
+                        prepare_datapacket(msgbuf, path_id, seqno,
                                            UcclPktHdr::UcclFlags::kData);
                         msgbuf->mark_not_txpulltime_free();
                         missing_frames_.push_back({msgbuf->get_frame_offset(),
@@ -478,7 +486,20 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
         tx_tracking_.receive_acks(num_acked_packets);
 
 #ifndef LATENCY_CC
-        pcb_.cubic_on_recv_ack(num_acked_packets);
+        uint32_t accumu_acks = 0;
+        auto last_path_id = kPortEntropy;
+        for (uint32_t seqno = pcb_.snd_una; seqno < ackno; seqno++) {
+            auto path_id = get_path_id(seqno);
+            if (path_id != last_path_id && last_path_id != kPortEntropy) {
+                pcb_cc_[last_path_id].cubic_on_recv_ack(accumu_acks);
+                accumu_acks = 0;
+            }
+            last_path_id = path_id;
+            accumu_acks++;
+        }
+        if (accumu_acks) {
+            pcb_cc_[last_path_id].cubic_on_recv_ack(accumu_acks);
+        }
 #endif
 
         pcb_.snd_una = ackno;
@@ -494,7 +515,9 @@ void UcclFlow::fast_retransmit() {
     // Retransmit the oldest unacknowledged message buffer.
     auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
     if (msg_buf) {
-        prepare_datapacket(msg_buf, get_path_id_with_lowest_rtt(), pcb_.snd_una,
+        auto path_id = get_path_id_with_lowest_rtt();
+        set_path_id(pcb_.snd_una, path_id);
+        prepare_datapacket(msg_buf, path_id, pcb_.snd_una,
                            UcclPktHdr::UcclFlags::kData);
         const auto *ucclh = reinterpret_cast<const UcclPktHdr *>(
             msg_buf->get_pkt_addr() + kNetHdrLen);
@@ -511,14 +534,17 @@ void UcclFlow::rto_retransmit() {
     VLOG(3) << "RTO retransmitting oldest unacked packet " << pcb_.snd_una;
     auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
     if (msg_buf) {
-        prepare_datapacket(msg_buf, get_path_id_with_lowest_rtt(), pcb_.snd_una,
+        auto path_id = get_path_id_with_lowest_rtt();
+        set_path_id(pcb_.snd_una, path_id);
+        prepare_datapacket(msg_buf, path_id, pcb_.snd_una,
                            UcclPktHdr::UcclFlags::kData);
         msg_buf->mark_not_txpulltime_free();
         socket_->send_packet(
             {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
     }
 #ifndef LATENCY_CC
-    pcb_.cubic_on_packet_loss();
+    auto path_id = get_path_id(pcb_.snd_una);
+    pcb_cc_[path_id].cubic_on_packet_loss();
 #endif
     pcb_.rto_reset();
     pcb_.rto_rexmits++;
@@ -537,13 +563,18 @@ void UcclFlow::transmit_pending_packets() {
     auto unacked_pkt_budget = MAX_UNACKED_PKTS - num_unacked_pkts;
     auto txq_free_entries =
         socket_->send_queue_free_entries(unacked_pkt_budget);
+    auto hard_budget = std::min(txq_free_entries, unacked_pkt_budget);
+
+    // Choosing a path to send a batch of packets.
+    // TODO(yang): control the size of batch.
+    auto path_id = get_path_id_with_lowest_rtt();
+    auto &pcb_cc = pcb_cc_[path_id];
 
 #ifdef LATENCY_CC
-    auto permitted_packets = pcb_.timely_ready_packets(
-        std::min(txq_free_entries, unacked_pkt_budget));
+    auto permitted_packets = pcb_cc.timely_ready_packets(hard_budget);
 #else
     auto permitted_packets =
-        std::min(txq_free_entries, pcb_.cubic_effective_wnd());
+        std::min(hard_budget, pcb_cc.cubic_effective_wnd());
 #endif
 
     // static uint64_t transmit_tries = 0;
@@ -568,14 +599,15 @@ void UcclFlow::transmit_pending_packets() {
 
         auto *msg_buf = msg_buf_opt.value();
         auto seqno = pcb_.get_snd_nxt();
+        set_path_id(seqno, path_id);
+
         if (msg_buf->is_last()) {
             VLOG(2) << "Transmitting seqno: " << seqno << " payload_len: "
                     << msg_buf->get_frame_len() - kNetHdrLen - kUcclHdrLen;
         }
         auto net_flags = (i == 0) ? UcclPktHdr::UcclFlags::kDataRttProbe
                                   : UcclPktHdr::UcclFlags::kData;
-        prepare_datapacket(msg_buf, get_path_id_with_lowest_rtt(), seqno,
-                           net_flags);
+        prepare_datapacket(msg_buf, path_id, seqno, net_flags);
         msg_buf->mark_not_txpulltime_free();
         pending_tx_frames_.push_back(
             {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
