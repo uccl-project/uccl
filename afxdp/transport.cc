@@ -3,8 +3,11 @@
 namespace uccl {
 
 void TXTracking::receive_acks(uint32_t num_acked_pkts) {
-    VLOG(3) << "Received " << num_acked_pkts << " acks "
-            << "num_tracked_msgbufs " << num_tracked_msgbufs_;
+    VLOG(3) << "Received " << num_acked_pkts << " acks :"
+            << " num_unsent_msgbufs_ " << num_unsent_msgbufs_
+            << " last_msgbuf_ " << last_msgbuf_ << " oldest_unsent_msgbuf "
+            << oldest_unsent_msgbuf_ << " oldest_unacked_msgbuf_ "
+            << oldest_unacked_msgbuf_;
     DCHECK_LE(num_acked_pkts, num_tracked_msgbufs_);
     while (num_acked_pkts) {
         auto msgbuf = oldest_unacked_msgbuf_;
@@ -45,9 +48,11 @@ void TXTracking::receive_acks(uint32_t num_acked_pkts) {
 
 void TXTracking::append(FrameBuf *msgbuf_head, FrameBuf *msgbuf_tail,
                         uint32_t num_frames, PollCtx *poll_ctx) {
-    VLOG(3) << "Appending " << num_frames << " frames "
+    VLOG(3) << "Appending " << num_frames << " frames :"
             << " num_unsent_msgbufs_ " << num_unsent_msgbufs_
-            << " last_msgbuf_ " << last_msgbuf_;
+            << " last_msgbuf_ " << last_msgbuf_ << " oldest_unsent_msgbuf "
+            << oldest_unsent_msgbuf_ << " oldest_unacked_msgbuf_ "
+            << oldest_unacked_msgbuf_;
 
     if (poll_ctx) poll_ctxs_.push_back(poll_ctx);
 
@@ -81,8 +86,11 @@ void TXTracking::append(FrameBuf *msgbuf_head, FrameBuf *msgbuf_tail,
 }
 
 std::optional<FrameBuf *> TXTracking::get_and_update_oldest_unsent() {
-    VLOG(3) << "Get: unsent messages " << num_unsent_msgbufs_
-            << " oldest_unsent_msgbuf " << oldest_unsent_msgbuf_;
+    if (num_unsent_msgbufs_)
+        VLOG(3) << "Getting: num_unsent_msgbufs_ " << num_unsent_msgbufs_
+                << " last_msgbuf_ " << last_msgbuf_ << " oldest_unsent_msgbuf "
+                << oldest_unsent_msgbuf_ << " oldest_unacked_msgbuf_ "
+                << oldest_unacked_msgbuf_;
     if (oldest_unsent_msgbuf_ == nullptr) {
         DCHECK_EQ(num_unsent_msgbufs(), 0);
         return std::nullopt;
@@ -188,7 +196,9 @@ void RXTracking::try_copy_msgbuf_to_appbuf(void *app_buf, size_t *app_buf_len_p,
             app_buf_queue_.front();
 
         auto *pkt_addr = ready_msg->get_pkt_addr();
-        DCHECK(pkt_addr) << "pkt_addr is nullptr when copy to app buf";
+        DCHECK(pkt_addr) << "pkt_addr is nullptr when copy to app buf "
+                         << std::hex << "0x" << ready_msg << std::dec
+                         << ready_msg->to_string();
         auto *payload_addr = pkt_addr + kNetHdrLen + kUcclHdrLen;
         auto payload_len =
             ready_msg->get_frame_len() - kNetHdrLen - kUcclHdrLen;
@@ -566,13 +576,13 @@ void UcclFlow::transmit_pending_packets() {
     auto hard_budget = std::min(txq_free_entries, unacked_pkt_budget);
 
     // Choosing a path to send a batch of packets.
-    // TODO(yang): control the size of batch.
     auto path_id = get_path_id_with_lowest_rtt();
-    auto &pcb_cc = pcb_cc_[path_id];
 
 #ifdef LATENCY_CC
-    auto permitted_packets = pcb_cc.timely_ready_packets(hard_budget);
+    auto permitted_packets = pcb_.timely_ready_packets(hard_budget);
 #else
+    // TODO(yang): control the size of batch.
+    auto &pcb_cc = pcb_cc_[path_id];
     auto permitted_packets =
         std::min(hard_budget, pcb_cc.cubic_effective_wnd());
 #endif
@@ -685,6 +695,7 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
         num_tx_frames++;
     }
     tx_msgbuf_tail = last_msgbuf;
+    if (tx_msgbuf_tail) tx_msgbuf_tail->set_next(nullptr);
 
     // LOG_EVERY_N(INFO, 10000)
     //     << "deser unsent_msgbufs " << tx_tracking_.num_unsent_msgbufs()

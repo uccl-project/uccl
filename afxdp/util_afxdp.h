@@ -204,7 +204,7 @@ class AFXDPFactory {
 
 class AFXDPSocket {
     // Assuming default NIC queue size is 1024.
-#define FILL_RING_SIZE XSK_RING_PROD__DEFAULT_NUM_DESCS
+#define FILL_RING_SIZE (XSK_RING_PROD__DEFAULT_NUM_DESCS * 2)
 #define COMP_RING_SIZE XSK_RING_CONS__DEFAULT_NUM_DESCS
 #define TX_RING_SIZE XSK_RING_PROD__DEFAULT_NUM_DESCS
 #define RX_RING_SIZE XSK_RING_CONS__DEFAULT_NUM_DESCS
@@ -297,7 +297,7 @@ class AFXDPSocket {
 
     friend class AFXDPFactory;
 
-    // #define FRAME_POOL_DEBUG
+// #define FRAME_POOL_DEBUG
 
 #ifdef FRAME_POOL_DEBUG
     std::set<uint64_t> free_frames_;
