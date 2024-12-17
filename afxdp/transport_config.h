@@ -7,7 +7,8 @@
 #define USE_MULTIPATH
 #define PATH_SELECTION
 #define LATENCY_CC
-#define EMULATE_ZC
+// #define PERPATH_CUBIC
+// #define EMULATE_ZC
 // #define USE_TCP
 // #define ENABLE_CSUM
 // #define RTT_STATS

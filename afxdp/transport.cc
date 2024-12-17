@@ -507,6 +507,7 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
         tx_tracking_.receive_acks(num_acked_packets);
 
 #ifndef LATENCY_CC
+#ifdef PERPATH_CUBIC
         uint32_t accumu_acks = 0;
         auto last_path_id = kPortEntropy;
         for (uint32_t seqno = pcb_.snd_una; seqno < ackno; seqno++) {
@@ -521,6 +522,9 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
         if (accumu_acks) {
             pcb_cc_[last_path_id].cubic_on_recv_ack(accumu_acks);
         }
+#else
+        pcb_.cubic_on_recv_ack(num_acked_packets);
+#endif
 #endif
 
         pcb_.snd_una = ackno;
@@ -564,8 +568,12 @@ void UcclFlow::rto_retransmit() {
             {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
     }
 #ifndef LATENCY_CC
+#ifdef PERPATH_CUBIC
     auto path_id = get_path_id(pcb_.snd_una);
     pcb_cc_[path_id].cubic_on_packet_loss();
+#else
+    pcb_.cubic_on_packet_loss();
+#endif
 #endif
     pcb_.rto_reset();
     pcb_.rto_rexmits++;
@@ -592,9 +600,14 @@ void UcclFlow::transmit_pending_packets() {
 #ifdef LATENCY_CC
     auto permitted_packets = pcb_.timely_ready_packets(hard_budget);
 #else
+#ifdef PERPATH_CUBIC
+    // TODO(yang): control the size of batch.
     auto &pcb_cc = pcb_cc_[path_id];
     auto permitted_packets =
         std::min(hard_budget, pcb_cc.cubic_effective_wnd());
+#else
+    auto permitted_packets = std::min(hard_budget, pcb_.cubic_effective_wnd());
+#endif
 #endif
 
     // static uint64_t transmit_tries = 0;
