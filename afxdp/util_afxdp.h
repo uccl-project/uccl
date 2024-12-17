@@ -297,7 +297,7 @@ class AFXDPSocket {
 
     friend class AFXDPFactory;
 
-// #define FRAME_POOL_DEBUG
+    // #define FRAME_POOL_DEBUG
 
 #ifdef FRAME_POOL_DEBUG
     std::set<uint64_t> free_frames_;

@@ -444,8 +444,19 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
             auto *msgbuf = tx_tracking_.get_oldest_unacked_msgbuf();
             VLOG(2) << "Fast recovery " << ackno << " sack_bitmap_count "
                     << sack_bitmap_count;
+
+            // Avoid sending too many packets.
+            auto num_unacked_pkts = tx_tracking_.num_unacked_msgbufs();
+            if (num_unacked_pkts >= MAX_UNACKED_PKTS) return;
+            auto unacked_pkt_budget = MAX_UNACKED_PKTS - num_unacked_pkts;
+            auto txq_free_entries =
+                socket_->send_queue_free_entries(unacked_pkt_budget);
+            auto hard_budget =
+                std::min(std::min(txq_free_entries, unacked_pkt_budget),
+                         (uint32_t)kSackBitmapSize);
+
             uint32_t index = 0;
-            while (sack_bitmap_count && msgbuf && index < kSackBitmapSize) {
+            while (sack_bitmap_count && msgbuf && index < hard_budget) {
                 const size_t sack_bitmap_bucket_idx =
                     index / swift::Pcb::kSackBitmapBucketSize;
                 const size_t sack_bitmap_idx_in_bucket =
