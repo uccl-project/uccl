@@ -65,6 +65,9 @@ afxdp_setup_main: afxdp_setup_main.cc $(DEPS) $(lib_obj)
 afxdp_use_main: afxdp_use_main.cc $(DEPS) $(lib_obj)
 	g++ afxdp_use_main.cc -o afxdp_use_main $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
+membw_main: membw_main.cc
+	g++ membw_main.cc -o membw_main $(CXXFLAGS)
+
 %.o: %.cc $(DEPS)
 	g++ -c $< -o $@ $(INC) $(CXXFLAGS)
 
