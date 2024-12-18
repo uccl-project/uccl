@@ -155,6 +155,7 @@ class LRPC {
     }
     ~LRPC() { delete[] storage_; }
 
+    // Return 0 on success, otherwise return -1.
     inline int lcore_send(lrpc_msg *msg) { return lrpc_send(&lcore_out_, msg); }
     inline int lcore_recv(lrpc_msg *msg) { return lrpc_recv(&lcore_in_, msg); }
 

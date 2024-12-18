@@ -214,7 +214,7 @@ void RXTracking::try_copy_msgbuf_to_appbuf(void *app_buf, size_t *app_buf_len_p,
         cur_offset += payload_len;
 
         auto ready_frame_offset = ready_msg->get_frame_offset();
-
+        
         // We have a complete message. Let's deliver it to the app.
         if (ready_msg->is_last()) {
             *app_buf_len_p = cur_offset;
@@ -325,7 +325,7 @@ void UcclFlow::rx_messages() {
     // Send one ack for a bunch of received packets.
     if (num_data_frames_recvd) {
         // Avoiding client sending too much packet which would empty msgbuf.
-        if (rx_tracking_.ready_msg_queue_.size() <= kMaxReadyMsgbufs) {
+        if (rx_tracking_.ready_msg_queue_.size() <= kMaxReadyRxMsgbufs) {
             auto net_flags = received_rtt_probe
                                  ? UcclPktHdr::UcclFlags::kAckRttProbe
                                  : UcclPktHdr::UcclFlags::kAck;

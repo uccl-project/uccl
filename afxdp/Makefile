@@ -54,6 +54,9 @@ timely_test: timely_test.cc $(DEPS) $(lib_obj)
 timing_wheel_test: timing_wheel_test.cc $(DEPS) $(lib_obj)
 	g++ timing_wheel_test.cc -o timing_wheel_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
+util_lrpc_test: util_lrpc_test.cc $(DEPS) $(lib_obj)
+	g++ util_lrpc_test.cc -o util_lrpc_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
+
 %.o: %.cc $(DEPS)
 	g++ -c $< -o $@ $(INC) $(CXXFLAGS)
 

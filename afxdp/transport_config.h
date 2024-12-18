@@ -19,7 +19,7 @@ static uint32_t NUM_CPUS = std::thread::hardware_concurrency();
 static uint32_t ENGINE_CPU_START = NUM_CPUS / 4;
 static const uint16_t BASE_PORT = 10000;
 static const uint32_t RECV_BATCH_SIZE = 32;
-static const uint32_t MAX_UNACKED_PKTS = 512;
+static const uint32_t MAX_UNACKED_PKTS = 256;
 static const uint32_t MAX_TIMING_WHEEL_PKTS = 1024;
 // 4GB frame pool in total; exceeding will cause crash.
 static const uint64_t NUM_FRAMES = 1024 * 1024;

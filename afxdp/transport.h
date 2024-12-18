@@ -118,6 +118,7 @@ class Channel {
         free(ctrl_cmdq_);
     }
 
+    // Communicating rx/tx cmds between app thread and engine thread.
     jring_t *tx_cmdq_;
     jring_t *rx_cmdq_;
     jring_t *ctrl_cmdq_;
@@ -328,7 +329,7 @@ class RXTracking {
  *      converts to network packets and sends them out to the remote recipient.
  */
 class UcclFlow {
-    const static uint32_t kMaxReadyMsgbufs = MAX_UNACKED_PKTS;
+    const static uint32_t kMaxReadyRxMsgbufs = MAX_UNACKED_PKTS * 32;
     const static uint32_t kMaxUnackedPktsMask = MAX_UNACKED_PKTS - 1;
 
    public:
