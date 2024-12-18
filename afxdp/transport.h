@@ -54,12 +54,23 @@ struct alignas(64) PollCtx {
     uint64_t timestamp;       // Timestamp for request issuing.
     PollCtx() : fence(false), done(false), timestamp(0) {};
     ~PollCtx() { clear(); }
-    void clear() {
+
+    inline void clear() {
         mu.~mutex();
         cv.~condition_variable();
         fence = false;
         done = false;
         timestamp = 0;
+    }
+
+    inline void write_barrier() {
+        std::atomic_store_explicit(&fence, true, std::memory_order_release);
+    }
+
+    inline void read_barrier() {
+        std::ignore =
+            std::atomic_load_explicit(&fence, std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_acquire);
     }
 };
 
@@ -83,12 +94,12 @@ class Channel {
         void *data;
         size_t len;
         size_t *len_p;
+        // A list of FrameBuf bw deser_th and engine_th.
+        std::vector<FrameBuf *> *deser_msgs;
         // Wakeup handler
         PollCtx *poll_ctx;
-        // A list of frame offset from deser_th to engine_th.
-        std::vector<FrameBuf *> *deser_msgs;
     };
-    static_assert(sizeof(Msg) % 4 == 0, "channelMsg must be 32-bit aligned");
+    static_assert(sizeof(Msg) % 4 == 0, "Msg must be 32-bit aligned");
 
     struct CtrlMsg {
         enum Op : uint8_t {
@@ -103,31 +114,45 @@ class Channel {
         // Wakeup handler
         PollCtx *poll_ctx;
     };
-    static_assert(sizeof(CtrlMsg) % 4 == 0,
-                  "channelMsg must be 32-bit aligned");
+    static_assert(sizeof(CtrlMsg) % 4 == 0, "CtrlMsg must be 32-bit aligned");
 
     Channel() {
-        tx_cmdq_ = create_ring(sizeof(Msg), kChannelSize);
+        tx_task_q_ = create_ring(sizeof(Msg), kChannelSize);
+        rx_task_q_ = create_ring(sizeof(Msg), kChannelSize);
         tx_deser_q_ = create_ring(sizeof(Msg), kChannelSize);
-        rx_cmdq_ = create_ring(sizeof(Msg), kChannelSize);
-        rx_ser_q_ = create_ring(sizeof(Msg), kChannelSize);
-        ctrl_cmdq_ = create_ring(sizeof(CtrlMsg), kChannelSize);
+        rx_deser_q_ = create_ring(sizeof(Msg), kChannelSize);
+        ctrl_task_q_ = create_ring(sizeof(CtrlMsg), kChannelSize);
     }
 
     ~Channel() {
-        free(tx_cmdq_);
+        free(tx_task_q_);
+        free(rx_task_q_);
         free(tx_deser_q_);
-        free(rx_cmdq_);
-        free(rx_ser_q_);
-        free(ctrl_cmdq_);
+        free(rx_deser_q_);
+        free(ctrl_task_q_);
     }
 
     // Communicating rx/tx cmds between app thread and engine thread.
-    jring_t *tx_cmdq_;
+    jring_t *tx_task_q_;
+    jring_t *rx_task_q_;
+    // Communicating deser msgs between engine thread and deser thread.
     jring_t *tx_deser_q_;
-    jring_t *rx_cmdq_;
-    jring_t *rx_ser_q_;
-    jring_t *ctrl_cmdq_;
+    jring_t *rx_deser_q_;
+    // Communicating ctrl cmds between app thread and engine thread.
+    jring_t *ctrl_task_q_;
+
+    // A set of helper functions to enqueue/dequeue messages.
+    static inline void enqueue_sp(jring_t *ring, const void *data) {
+        while (jring_sp_enqueue_bulk(ring, data, 1, nullptr) != 1) {
+        }
+    }
+    static inline void enqueue_mp(jring_t *ring, const void *data) {
+        while (jring_mp_enqueue_bulk(ring, data, 1, nullptr) != 1) {
+        }
+    }
+    static inline bool dequeue_sc(jring_t *ring, void *data) {
+        return jring_sc_dequeue_bulk(ring, data, 1, nullptr) == 1;
+    }
 };
 
 /**
@@ -407,7 +432,7 @@ class UcclFlow {
      * @param msg Pointer to the first message buffer on a train of buffers,
      * aggregating to a partial or a full Message.
      */
-    void tx_messages(Channel::Msg &tx_work);
+    void tx_messages(Channel::Msg &tx_deser_work);
 
     void process_rttprobe_rsp(uint64_t ts1, uint64_t ts2, uint64_t ts3,
                               uint64_t ts4, uint32_t path_id);
@@ -563,7 +588,7 @@ class UcclEngine {
           kSlowTimerIntervalTsc_(us_to_cycles(kSlowTimerIntervalUs, freq_ghz)),
           deser_th([this, deser_th_cpuid]() {
               pin_thread_to_cpu(deser_th_cpuid);
-              deser_func();
+              deser_th_func();
           }) {
         DCHECK(str_to_mac(local_l2_addr, local_l2_addr_));
     }
@@ -577,7 +602,7 @@ class UcclEngine {
      */
     void run();
 
-    void deser_func();
+    void deser_th_func();
 
     /**
      * @brief Method to perform periodic processing. This is called by the

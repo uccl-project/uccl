@@ -199,22 +199,19 @@ void RXTracking::try_copy_msgbuf_to_appbuf(void *app_buf, size_t *app_buf_len_p,
                 app_buf_queue_.front();
             app_buf_queue_.pop_front();
 
-            Channel::Msg rx_work = {
-                .opcode = Channel::Msg::kRx,
+            Channel::Msg rx_deser_work = {
+                .opcode = Channel::Msg::Op::kRx,
                 .flow_id = 0xdeadbeef,
                 .data = app_buf,
                 .len = 0,
                 .len_p = app_buf_len_p,
-                .poll_ctx = poll_ctx,
                 .deser_msgs = deser_msgs_,
+                .poll_ctx = poll_ctx,
             };
 
             // Make sure the deser thread sees the deserialized messages.
-            std::atomic_store_explicit(&poll_ctx->fence, true,
-                                       std::memory_order_release);
-            while (jring_sp_enqueue_bulk(channel_->rx_ser_q_, &rx_work, 1,
-                                         nullptr) != 1) {
-            }
+            poll_ctx->write_barrier();
+            Channel::enqueue_sp(channel_->rx_deser_q_, &rx_deser_work);
 
             deser_msgs_ = new std::vector<FrameBuf *>();
             deser_msgs_->reserve(512);
@@ -335,18 +332,18 @@ void UcclFlow::rx_supply_app_buf(Channel::Msg &rx_work) {
                                            rx_work.poll_ctx);
 }
 
-void UcclFlow::tx_messages(Channel::Msg &tx_work) {
+void UcclFlow::tx_messages(Channel::Msg &tx_deser_work) {
     // This happens to NCCL plugin!!!
-    if (tx_work.len == 0) {
-        std::lock_guard<std::mutex> lock(tx_work.poll_ctx->mu);
-        tx_work.poll_ctx->done = true;
-        tx_work.poll_ctx->cv.notify_one();
+    if (tx_deser_work.len == 0) {
+        std::lock_guard<std::mutex> lock(tx_deser_work.poll_ctx->mu);
+        tx_deser_work.poll_ctx->done = true;
+        tx_deser_work.poll_ctx->cv.notify_one();
         return;
     }
 
-    pending_tx_msgs_.push_back({tx_work, 0});
+    pending_tx_msgs_.push_back({tx_deser_work, 0});
 
-    VLOG(3) << "tx_messages size: " << tx_work.len << " bytes";
+    VLOG(3) << "tx_messages size: " << tx_deser_work.len << " bytes";
 
     deserialize_and_append_to_txtracking();
 
@@ -918,7 +915,7 @@ void UcclFlow::reverse_packet_l2l3(FrameBuf *msg_buf) {
 
 void UcclEngine::run() {
     Channel::Msg rx_work;
-    Channel::Msg tx_work;
+    Channel::Msg tx_deser_work;
 
     while (!shutdown_) {
         // Calculate the cycles elapsed since last periodic processing.
@@ -931,8 +928,7 @@ void UcclEngine::run() {
             last_periodic_tsc_ = now_tsc;
         }
 
-        if (jring_sc_dequeue_bulk(channel_->rx_cmdq_, &rx_work, 1, nullptr) ==
-            1) {
+        if (Channel::dequeue_sc(channel_->rx_task_q_, &rx_work)) {
             VLOG(3) << "Rx jring dequeue";
             active_flows_map_[rx_work.flow_id]->rx_supply_app_buf(rx_work);
         }
@@ -940,15 +936,13 @@ void UcclEngine::run() {
         auto frames = socket_->recv_packets(RECV_BATCH_SIZE);
         if (frames.size()) process_rx_msg(frames);
 
-        if (jring_sc_dequeue_bulk(channel_->tx_deser_q_, &tx_work, 1,
-                                  nullptr) == 1) {
+        if (Channel::dequeue_sc(channel_->tx_deser_q_, &tx_deser_work)) {
             // Make data written by the app thread visible to the engine.
-            std::ignore = std::atomic_load_explicit(&tx_work.poll_ctx->fence,
-                                                    std::memory_order_relaxed);
-            std::atomic_thread_fence(std::memory_order_acquire);
+            tx_deser_work.poll_ctx->read_barrier();
 
             VLOG(3) << "Tx deser jring dequeue";
-            active_flows_map_[tx_work.flow_id]->tx_messages(tx_work);
+            active_flows_map_[tx_deser_work.flow_id]->tx_messages(
+                tx_deser_work);
         }
 
         for (auto &[flow_id, flow] : active_flows_map_) {
@@ -967,24 +961,21 @@ void UcclEngine::run() {
     deser_th.join();
 }
 
-void UcclEngine::deser_func() {
-    Channel::Msg tx_work;
-    Channel::Msg rx_work;
-    while (!shutdown_) {
-        if (jring_sc_dequeue_bulk(channel_->tx_cmdq_, &tx_work, 1, nullptr) ==
-            1) {
-            // Make data written by the app thread visible to the deser thread.
-            std::ignore = std::atomic_load_explicit(&tx_work.poll_ctx->fence,
-                                                    std::memory_order_relaxed);
-            std::atomic_thread_fence(std::memory_order_acquire);
+void UcclEngine::deser_th_func() {
+    Channel::Msg tx_deser_work;
+    Channel::Msg rx_deser_work;
 
+    while (!shutdown_) {
+        if (Channel::dequeue_sc(channel_->tx_task_q_, &tx_deser_work)) {
+            // Make data written by the app thread visible to the deser thread.
+            tx_deser_work.poll_ctx->read_barrier();
             VLOG(3) << "Tx jring dequeue";
 
             // deser tx_work into a vector, then pass to deser_th.
             auto *deser_msgs = new std::vector<FrameBuf *>();
             deser_msgs->reserve(512);
-            auto *app_buf_cursor = tx_work.data;
-            auto remaining_bytes = tx_work.len;
+            auto *app_buf_cursor = tx_deser_work.data;
+            auto remaining_bytes = tx_deser_work.len;
             while (remaining_bytes > 0) {
                 auto payload_len =
                     std::min(remaining_bytes,
@@ -1003,29 +994,21 @@ void UcclEngine::deser_func() {
                 app_buf_cursor += payload_len;
                 deser_msgs->push_back(msgbuf);
             }
-            tx_work.deser_msgs = deser_msgs;
+            tx_deser_work.deser_msgs = deser_msgs;
 
             // Make sure the app thread sees the deserialized messages.
-            std::atomic_store_explicit(&tx_work.poll_ctx->fence, true,
-                                       std::memory_order_release);
-            while (jring_sp_enqueue_bulk(channel_->tx_deser_q_, &tx_work, 1,
-                                         nullptr) != 1) {
-            }
+            tx_deser_work.poll_ctx->write_barrier();
+            Channel::enqueue_sp(channel_->tx_deser_q_, &tx_deser_work);
         }
-        if (jring_sc_dequeue_bulk(channel_->rx_ser_q_, &rx_work, 1, nullptr) ==
-            1) {
-            // Make data written by the engine thread visible to the deser
-            // thread.
-            std::ignore = std::atomic_load_explicit(&rx_work.poll_ctx->fence,
-                                                    std::memory_order_relaxed);
-            std::atomic_thread_fence(std::memory_order_acquire);
-
+        if (Channel::dequeue_sc(channel_->rx_deser_q_, &rx_deser_work)) {
+            // Make data written by engine thread visible to the deser thread.
+            rx_deser_work.poll_ctx->read_barrier();
             VLOG(3) << "Rx ser jring dequeue";
 
-            std::vector<FrameBuf *> *deser_msgs = rx_work.deser_msgs;
-            auto *app_buf = rx_work.data;
-            auto *app_buf_len_p = rx_work.len_p;
-            auto *poll_ctx = rx_work.poll_ctx;
+            std::vector<FrameBuf *> *deser_msgs = rx_deser_work.deser_msgs;
+            auto *app_buf = rx_deser_work.data;
+            auto *app_buf_len_p = rx_deser_work.len_p;
+            auto *poll_ctx = rx_deser_work.poll_ctx;
             size_t cur_offset = 0;
 
             for (auto *ready_msg : *deser_msgs) {
@@ -1055,8 +1038,7 @@ void UcclEngine::deser_func() {
                     *app_buf_len_p = cur_offset;
 
                     // Wakeup app thread waiting on endpoint.
-                    std::atomic_store_explicit(&poll_ctx->fence, true,
-                                               std::memory_order_release);
+                    poll_ctx->write_barrier();
                     {
                         std::lock_guard<std::mutex> lock(poll_ctx->mu);
                         poll_ctx->done = true;
@@ -1152,10 +1134,9 @@ void UcclEngine::handle_rto() {
 
 void UcclEngine::process_ctl_reqs() {
     Channel::CtrlMsg ctrl_work;
-    if (jring_sc_dequeue_bulk(channel_->ctrl_cmdq_, &ctrl_work, 1, nullptr) ==
-        1) {
+    if (Channel::dequeue_sc(channel_->ctrl_task_q_, &ctrl_work)) {
         switch (ctrl_work.opcode) {
-            case Channel::CtrlMsg::kInstallFlow:
+            case Channel::CtrlMsg::Op::kInstallFlow:
                 handle_install_flow_on_engine(ctrl_work);
                 break;
             default:
@@ -1511,12 +1492,11 @@ PollCtx *Endpoint::uccl_send_async(ConnID conn_id, const void *data,
         .data = const_cast<void *>(data),
         .len = len,
         .len_p = nullptr,
+        .deser_msgs = nullptr,
         .poll_ctx = poll_ctx,
     };
-    std::atomic_store_explicit(&poll_ctx->fence, true,
-                               std::memory_order_release);
-    while (jring_mp_enqueue_bulk(channel_vec_[conn_id.engine_idx]->tx_cmdq_,
-                                 &msg, 1, nullptr) != 1);
+    poll_ctx->write_barrier();
+    Channel::enqueue_mp(channel_vec_[conn_id.engine_idx]->tx_task_q_, &msg);
     return poll_ctx;
 }
 
@@ -1528,10 +1508,10 @@ PollCtx *Endpoint::uccl_recv_async(ConnID conn_id, void *data, size_t *len_p) {
         .data = data,
         .len = 0,
         .len_p = len_p,
+        .deser_msgs = nullptr,
         .poll_ctx = poll_ctx,
     };
-    while (jring_mp_enqueue_bulk(channel_vec_[conn_id.engine_idx]->rx_cmdq_,
-                                 &msg, 1, nullptr) != 1);
+    Channel::enqueue_mp(channel_vec_[conn_id.engine_idx]->rx_task_q_, &msg);
     return poll_ctx;
 }
 
@@ -1590,8 +1570,8 @@ void Endpoint::install_flow_on_engine(FlowID flow_id,
         .poll_ctx = poll_ctx,
     };
     str_to_mac(remote_mac, ctrl_msg.remote_mac);
-    while (jring_mp_enqueue_bulk(channel_vec_[local_engine_idx]->ctrl_cmdq_,
-                                 &ctrl_msg, 1, nullptr) != 1);
+    Channel::enqueue_mp(channel_vec_[local_engine_idx]->ctrl_task_q_,
+                        &ctrl_msg);
 
     // Wait until the flow has been installed on the engine.
     {
@@ -1616,10 +1596,7 @@ inline int Endpoint::find_least_loaded_engine_idx_and_update() {
 
 inline void Endpoint::fence_and_clean_ctx(PollCtx *ctx) {
     // Make the data written by the engine thread visible to the app thread.
-    std::ignore =
-        std::atomic_load_explicit(&ctx->fence, std::memory_order_relaxed);
-    std::atomic_thread_fence(std::memory_order_acquire);
-
+    ctx->read_barrier();
     ctx->clear();
     ctx_pool_->push(ctx);
 }
