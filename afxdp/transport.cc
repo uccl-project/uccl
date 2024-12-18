@@ -993,9 +993,12 @@ void UcclEngine::deser_func() {
                 auto *msgbuf =
                     FrameBuf::Create(frame_offset, socket_->umem_buffer_,
                                      kNetHdrLen + kUcclHdrLen + payload_len);
+#ifdef EMULATE_ZC
                 auto pkt_payload_addr =
                     msgbuf->get_pkt_addr() + kNetHdrLen + kUcclHdrLen;
                 memcpy(pkt_payload_addr, app_buf_cursor, payload_len);
+#endif
+
                 remaining_bytes -= payload_len;
                 app_buf_cursor += payload_len;
                 deser_msgs->push_back(msgbuf);
@@ -1039,8 +1042,10 @@ void UcclEngine::deser_func() {
                 VLOG(2) << "payload_len: " << payload_len
                         << " seqno: " << std::dec << ucclh->seqno.value();
 
+#ifdef EMULATE_ZC
                 memcpy((uint8_t *)app_buf + cur_offset, payload_addr,
                        payload_len);
+#endif
                 cur_offset += payload_len;
 
                 auto ready_frame_offset = ready_msg->get_frame_offset();
