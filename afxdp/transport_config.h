@@ -33,6 +33,17 @@ static_assert(is_power_of_two(MAX_UNACKED_PKTS),
 static_assert(kPortEntropy <= 256, "kPortEntropy too large");
 static_assert(is_power_of_two(kPortEntropy), "kPortEntropy must be power of 2");
 
+#ifdef CLOUDLAB_XL170
+// TODO(yang): why XL170 would crash with 1x fill ring size?
+#define FILL_RING_SIZE (XSK_RING_PROD__DEFAULT_NUM_DESCS * 2)
+#else
+// TODO(yang): why C5 would crash with 2x fill ring size?
+#define FILL_RING_SIZE (XSK_RING_PROD__DEFAULT_NUM_DESCS)
+#endif
+#define COMP_RING_SIZE XSK_RING_CONS__DEFAULT_NUM_DESCS
+#define TX_RING_SIZE XSK_RING_PROD__DEFAULT_NUM_DESCS
+#define RX_RING_SIZE XSK_RING_CONS__DEFAULT_NUM_DESCS
+
 #if defined(AWS_C5)
 static const uint32_t AFXDP_MTU = 3498;
 static const char* DEV_DEFAULT = "ens6";

@@ -203,12 +203,6 @@ class AFXDPFactory {
 };
 
 class AFXDPSocket {
-    // Assuming default NIC queue size is 1024.
-#define FILL_RING_SIZE (XSK_RING_PROD__DEFAULT_NUM_DESCS * 2)
-#define COMP_RING_SIZE XSK_RING_CONS__DEFAULT_NUM_DESCS
-#define TX_RING_SIZE XSK_RING_PROD__DEFAULT_NUM_DESCS
-#define RX_RING_SIZE XSK_RING_CONS__DEFAULT_NUM_DESCS
-
     static_assert(XDP_PACKET_HEADROOM == 0x100, "XDP_PACKET_HEADROOM is 256");
     static const uint64_t XDP_PACKET_HEADROOM_MASK = 0x1FF;
 
