@@ -256,7 +256,7 @@ class AFXDPSocket {
     struct xsk_ring_cons complete_queue_;
     struct xsk_ring_prod fill_queue_;
 
-    SharedPool<uint64_t, /*Sync=*/false> *frame_pool_;
+    SharedPool<uint64_t, /*Sync=*/true> *frame_pool_;
 
     struct frame_desc {
         uint64_t frame_offset;

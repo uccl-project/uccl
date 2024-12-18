@@ -81,13 +81,12 @@ int main(int argc, char* argv[]) {
 
     std::mt19937 generator(42);
     std::uniform_int_distribution<int> distribution(1024, kTestMsgSize);
-
     srand(42);
+    pin_thread_to_cpu(0);
 
     if (FLAGS_client) {
         auto ep =
             Endpoint(DEV_DEFAULT, NUM_QUEUES, NUM_FRAMES, ENGINE_CPU_START);
-        // pin_thread_to_cpu(ENGINE_CPU_START + 1);
         DCHECK(FLAGS_serverip != "");
         auto conn_id = ep.uccl_connect(FLAGS_serverip);
         ConnID conn_id2;
@@ -304,7 +303,6 @@ int main(int argc, char* argv[]) {
     } else {
         auto ep =
             Endpoint(DEV_DEFAULT, NUM_QUEUES, NUM_FRAMES, ENGINE_CPU_START);
-        // pin_thread_to_cpu(ENGINE_CPU_START + 1);
         std::string remote_ip;
         auto conn_id = ep.uccl_accept(remote_ip);
         ConnID conn_id2;

@@ -98,7 +98,7 @@ struct Pcb {
         // auto rate = timely.rate_;
         // auto rate = timely.link_bandwidth_;
         auto rate = kLinkBandwidth / NUM_QUEUES * 2;  // for bimq
-        // auto rate = Timely::gbps_to_rate(45.0);
+        // auto rate = Timely::gbps_to_rate(40.0);
         double ns_delta = 1000000000 * (pkt_size / rate);
         double cycle_delta = ns_to_cycles(ns_delta, freq_ghz);
 
@@ -118,7 +118,7 @@ struct Pcb {
         wheel_.ready_entries_ -= num_ready;
 
         if (unlikely(wheel_.ready_entries_ > 0)) {
-            LOG_EVERY_N(INFO, 1000) << "[CC] TimingWheel ready queue not empty "
+            VLOG(3) << "[CC] TimingWheel ready queue not empty "
                     << wheel_.ready_entries_;
 
             // Consuming the ready entries.

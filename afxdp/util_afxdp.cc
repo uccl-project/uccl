@@ -162,7 +162,7 @@ int AFXDPSocket::create_afxdp_socket() {
 
     /* initialize frame allocator */
     uint64_t frame_pool_size = afxdp_ctl.num_frames_ / NUM_QUEUES;
-    frame_pool_ = new SharedPool<uint64_t, /*Sync=*/false>(frame_pool_size);
+    frame_pool_ = new SharedPool<uint64_t, /*Sync=*/true>(frame_pool_size);
     uint64_t frame_pool_offset = FRAME_SIZE * frame_pool_size * queue_id_;
     LOG(INFO) << "[AF_XDP] frame pool " << queue_id_
               << " initialized: frame_pool_size = " << frame_pool_size

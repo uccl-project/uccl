@@ -76,9 +76,7 @@ class Channel {
     struct Msg {
         enum Op : uint8_t {
             kTx = 0,
-            kTxComp = 1,
-            kRx = 2,
-            kRxComp = 3,
+            kRx = 1,
         };
         Op opcode;
         FlowID flow_id;
@@ -87,6 +85,8 @@ class Channel {
         size_t *len_p;
         // Wakeup handler
         PollCtx *poll_ctx;
+        // A list of frame offset from deser_th to engine_th.
+        std::vector<FrameBuf *> *deser_msgs;
     };
     static_assert(sizeof(Msg) % 4 == 0, "channelMsg must be 32-bit aligned");
 
@@ -108,19 +108,25 @@ class Channel {
 
     Channel() {
         tx_cmdq_ = create_ring(sizeof(Msg), kChannelSize);
+        tx_deser_q_ = create_ring(sizeof(Msg), kChannelSize);
         rx_cmdq_ = create_ring(sizeof(Msg), kChannelSize);
+        rx_ser_q_ = create_ring(sizeof(Msg), kChannelSize);
         ctrl_cmdq_ = create_ring(sizeof(CtrlMsg), kChannelSize);
     }
 
     ~Channel() {
         free(tx_cmdq_);
+        free(tx_deser_q_);
         free(rx_cmdq_);
+        free(rx_ser_q_);
         free(ctrl_cmdq_);
     }
 
     // Communicating rx/tx cmds between app thread and engine thread.
     jring_t *tx_cmdq_;
+    jring_t *tx_deser_q_;
     jring_t *rx_cmdq_;
+    jring_t *rx_ser_q_;
     jring_t *ctrl_cmdq_;
 };
 
@@ -269,7 +275,10 @@ class RXTracking {
 
     RXTracking(const RXTracking &) = delete;
     RXTracking(AFXDPSocket *socket, Channel *channel)
-        : socket_(socket), channel_(channel) {}
+        : socket_(socket), channel_(channel) {
+        deser_msgs_ = new std::vector<FrameBuf *>();
+        deser_msgs_->reserve(512);
+    }
 
     friend class UcclFlow;
     friend class UcclEngine;
@@ -311,6 +320,7 @@ class RXTracking {
         size_t cur_offset;
     };
     std::deque<app_buf_t> app_buf_queue_;
+    std::vector<FrameBuf *> *deser_msgs_;
 };
 
 /**
@@ -474,7 +484,7 @@ class UcclFlow {
     // Missing data frames to be sent.
     std::vector<AFXDPSocket::frame_desc> missing_frames_;
     // Frames that are pending rx processing in a batch.
-    std::vector<FrameBuf *> pending_rx_msgbufs_;
+    std::deque<FrameBuf *> pending_rx_msgbufs_;
 
     TXTracking tx_tracking_;
     RXTracking rx_tracking_;
@@ -543,14 +553,18 @@ class UcclEngine {
      * future it may be responsible for multiple channels.
      */
     UcclEngine(int queue_id, Channel *channel, const std::string local_addr,
-               const std::string local_l2_addr)
+               const std::string local_l2_addr, uint32_t deser_th_cpuid)
         : local_addr_(htonl(str_to_ip(local_addr))),
           local_engine_idx_(queue_id),
           socket_(AFXDPFactory::CreateSocket(queue_id)),
           channel_(channel),
           last_periodic_tsc_(rdtsc()),
           periodic_ticks_(0),
-          kSlowTimerIntervalTsc_(us_to_cycles(kSlowTimerIntervalUs, freq_ghz)) {
+          kSlowTimerIntervalTsc_(us_to_cycles(kSlowTimerIntervalUs, freq_ghz)),
+          deser_th([this, deser_th_cpuid]() {
+              pin_thread_to_cpu(deser_th_cpuid);
+              deser_func();
+          }) {
         DCHECK(str_to_mac(local_l2_addr, local_l2_addr_));
     }
 
@@ -562,6 +576,8 @@ class UcclEngine {
      * for. This method is not thread-safe.
      */
     void run();
+
+    void deser_func();
 
     /**
      * @brief Method to perform periodic processing. This is called by the
@@ -615,6 +631,8 @@ class UcclEngine {
     uint64_t kSlowTimerIntervalTsc_;
     // Whether shutdown is requested.
     std::atomic<bool> shutdown_{false};
+    // Deserialization thread.
+    std::thread deser_th;
 };
 
 /**
