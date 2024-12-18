@@ -214,7 +214,7 @@ void RXTracking::try_copy_msgbuf_to_appbuf(void *app_buf, size_t *app_buf_len_p,
         cur_offset += payload_len;
 
         auto ready_frame_offset = ready_msg->get_frame_offset();
-        
+
         // We have a complete message. Let's deliver it to the app.
         if (ready_msg->is_last()) {
             *app_buf_len_p = cur_offset;
@@ -447,8 +447,8 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
 
             // Avoid sending too many packets.
             auto num_unacked_pkts = tx_tracking_.num_unacked_msgbufs();
-            if (num_unacked_pkts >= MAX_UNACKED_PKTS) return;
-            auto unacked_pkt_budget = MAX_UNACKED_PKTS - num_unacked_pkts;
+            if (num_unacked_pkts >= kMaxUnackedPkts) return;
+            auto unacked_pkt_budget = kMaxUnackedPkts - num_unacked_pkts;
             auto txq_free_entries =
                 socket_->send_queue_free_entries(unacked_pkt_budget);
             auto hard_budget =
@@ -587,9 +587,9 @@ void UcclFlow::rto_retransmit() {
 void UcclFlow::transmit_pending_packets() {
     // Avoid sending too many packets.
     auto num_unacked_pkts = tx_tracking_.num_unacked_msgbufs();
-    if (num_unacked_pkts >= MAX_UNACKED_PKTS) return;
+    if (num_unacked_pkts >= kMaxUnackedPkts) return;
 
-    auto unacked_pkt_budget = MAX_UNACKED_PKTS - num_unacked_pkts;
+    auto unacked_pkt_budget = kMaxUnackedPkts - num_unacked_pkts;
     auto txq_free_entries =
         socket_->send_queue_free_entries(unacked_pkt_budget);
     auto hard_budget = std::min(txq_free_entries, unacked_pkt_budget);
@@ -658,11 +658,10 @@ void UcclFlow::transmit_pending_packets() {
 
 void UcclFlow::deserialize_and_append_to_txtracking() {
     if (pending_tx_msgs_.empty()) return;
-    if (tx_tracking_.num_unsent_msgbufs() >= MAX_TIMING_WHEEL_PKTS) return;
+    if (tx_tracking_.num_unsent_msgbufs() >= kMaxTwPkts) return;
 
     auto &[tx_work, cur_offset] = pending_tx_msgs_.front();
-    auto deser_budget =
-        MAX_TIMING_WHEEL_PKTS - tx_tracking_.num_unsent_msgbufs();
+    auto deser_budget = kMaxTwPkts - tx_tracking_.num_unsent_msgbufs();
 
     FrameBuf *tx_msgbuf_head = nullptr;
     FrameBuf *tx_msgbuf_tail = nullptr;
@@ -695,7 +694,6 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
 #endif
 
 #ifndef EMULATE_ZC
-        // VLOG(3) << "Deser copy " << msgbuf << " " << num_tx_frames;
         auto pkt_payload_addr =
             msgbuf->get_pkt_addr() + kNetHdrLen + kUcclHdrLen;
         memcpy(pkt_payload_addr, app_buf_cursor, payload_len);
@@ -740,7 +738,7 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
             : nullptr);
 
     // Recursively call this function to append more messages to the tx.
-    if (tx_tracking_.num_unsent_msgbufs() < MAX_TIMING_WHEEL_PKTS &&
+    if (tx_tracking_.num_unsent_msgbufs() < kMaxTwPkts &&
         !pending_tx_msgs_.empty()) {
         deserialize_and_append_to_txtracking();
     }

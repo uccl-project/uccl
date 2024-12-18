@@ -329,8 +329,8 @@ class RXTracking {
  *      converts to network packets and sends them out to the remote recipient.
  */
 class UcclFlow {
-    const static uint32_t kMaxReadyRxMsgbufs = MAX_UNACKED_PKTS * 32;
-    const static uint32_t kMaxUnackedPktsMask = MAX_UNACKED_PKTS - 1;
+    const static uint32_t kMaxReadyRxMsgbufs = kMaxUnackedPkts * 32;
+    const static uint32_t kMaxUnackedPktsMask = kMaxUnackedPkts - 1;
 
    public:
     /**
@@ -360,9 +360,15 @@ class UcclFlow {
           rx_tracking_(socket, channel) {
         memcpy(local_l2_addr_, local_l2_addr, ETH_ALEN);
         memcpy(remote_l2_addr_, remote_l2_addr, ETH_ALEN);
+#if (!defined(LATENCY_CC)) && defined(PERPATH_CUBIC)
         pcb_cc_ = new swift::Pcb[kPortEntropy];
+#endif
     }
-    ~UcclFlow() { delete[] pcb_cc_; }
+    ~UcclFlow() {
+#if (!defined(LATENCY_CC)) && defined(PERPATH_CUBIC)
+        delete[] pcb_cc_;
+#endif
+    }
 
     friend class UcclEngine;
 
@@ -478,7 +484,7 @@ class UcclFlow {
     // Each path has its own PCB for CC.
     swift::Pcb *pcb_cc_;
     // Path ID for each packet indexed by seqno.
-    uint8_t hist_path_id_[MAX_UNACKED_PKTS] = {0};
+    uint8_t hist_path_id_[kMaxUnackedPkts] = {0};
 
     inline void set_path_id(uint32_t seqno, uint32_t path_id) {
         hist_path_id_[seqno & kMaxUnackedPktsMask] = path_id;

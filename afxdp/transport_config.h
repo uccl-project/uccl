@@ -8,7 +8,7 @@
 #define PATH_SELECTION
 #define LATENCY_CC
 // #define PERPATH_CUBIC
-// #define EMULATE_ZC
+#define EMULATE_ZC
 // #define USE_TCP
 // #define ENABLE_CSUM
 // #define RTT_STATS
@@ -18,18 +18,19 @@ static uint32_t NUM_CPUS = std::thread::hardware_concurrency();
 // Starting from 1/4 of the CPUs to avoid conflicting with nccl proxy service.
 static uint32_t ENGINE_CPU_START = NUM_CPUS / 4;
 static const uint16_t BASE_PORT = 10000;
-static const uint32_t RECV_BATCH_SIZE = 32;
-static const uint32_t MAX_UNACKED_PKTS = 256;
-static const uint32_t MAX_TIMING_WHEEL_PKTS = 1024;
 // 4GB frame pool in total; exceeding will cause crash.
 static const uint64_t NUM_FRAMES = 1024 * 1024;
+static const uint32_t RECV_BATCH_SIZE = 32;
+
 // CC parameters.
 static const uint32_t kPortEntropy = 32;
 static const std::size_t kSackBitmapSize = 1024;
 static const std::size_t kFastRexmitDupAckThres = 5;
+static const uint32_t kMaxUnackedPkts = 128 * kPortEntropy;
+static const uint32_t kMaxTwPkts = 256 * kPortEntropy;
 
-static_assert(is_power_of_two(MAX_UNACKED_PKTS),
-              "MAX_UNACKED_PKTS must be power of 2");
+static_assert(is_power_of_two(kMaxUnackedPkts),
+              "kMaxUnackedPkts must be power of 2");
 static_assert(kPortEntropy <= 256, "kPortEntropy too large");
 static_assert(is_power_of_two(kPortEntropy), "kPortEntropy must be power of 2");
 
