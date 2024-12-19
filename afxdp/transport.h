@@ -95,7 +95,7 @@ class Channel {
         size_t len;
         size_t *len_p;
         // A list of FrameBuf bw deser_th and engine_th.
-        std::vector<FrameBuf *> *deser_msgs;
+        FrameBuf *deser_msgs;
         // Wakeup handler
         PollCtx *poll_ctx;
     };
@@ -300,10 +300,7 @@ class RXTracking {
 
     RXTracking(const RXTracking &) = delete;
     RXTracking(AFXDPSocket *socket, Channel *channel)
-        : socket_(socket), channel_(channel) {
-        deser_msgs_ = new std::vector<FrameBuf *>();
-        deser_msgs_->reserve(512);
-    }
+        : socket_(socket), channel_(channel) {}
 
     friend class UcclFlow;
     friend class UcclEngine;
@@ -326,8 +323,7 @@ class RXTracking {
      * It returns true if successfully copying the msgbuf to the app buffer;
      * otherwise false.
      */
-    void try_copy_msgbuf_to_appbuf(void *app_buf, size_t *app_buf_len_p,
-                                   PollCtx *poll_ctx);
+    void try_copy_msgbuf_to_appbuf(Channel::Msg *rx_work);
 
    private:
     AFXDPSocket *socket_;
@@ -339,13 +335,11 @@ class RXTracking {
     // FIFO queue for ready messages that wait for app to claim.
     std::deque<FrameBuf *> ready_msg_queue_;
     struct app_buf_t {
-        void *buf;
-        size_t *buf_len_p;
-        PollCtx *poll_ctx;
-        size_t cur_offset;
+        Channel::Msg rx_work;
     };
     std::deque<app_buf_t> app_buf_queue_;
-    std::vector<FrameBuf *> *deser_msgs_;
+    FrameBuf *deser_msgs_head_ = nullptr;
+    FrameBuf *deser_msgs_tail_ = nullptr;
 };
 
 /**
@@ -421,7 +415,9 @@ class UcclFlow {
      */
     void rx_messages();
 
-    void rx_supply_app_buf(Channel::Msg &rx_work);
+    inline void rx_supply_app_buf(Channel::Msg &rx_work) {
+        rx_tracking_.try_copy_msgbuf_to_appbuf(&rx_work);
+    }
 
     /**
      * @brief Push a Message from the application onto the egress queue of

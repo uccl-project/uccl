@@ -26,8 +26,8 @@ static const uint32_t RECV_BATCH_SIZE = 32;
 static const uint32_t kPortEntropy = 32;
 static const std::size_t kSackBitmapSize = 1024;
 static const std::size_t kFastRexmitDupAckThres = 5;
-static const uint32_t kMaxUnackedPkts = 128 * kPortEntropy;
-static const uint32_t kMaxTwPkts = 256 * kPortEntropy;
+static const uint32_t kMaxUnackedPkts = 512;
+static const uint32_t kMaxTwPkts = 1024;
 
 static_assert(is_power_of_two(kMaxUnackedPkts),
               "kMaxUnackedPkts must be power of 2");
