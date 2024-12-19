@@ -108,3 +108,9 @@ Avoiding nodes.txt polluting the repo:
 git update-index --skip-worktree nodes.txt
 git update-index --no-skip-worktree nodes.txt
 ```
+
+Iperf test: 
+```
+iperf -s -i 1 -P 64 -t 1000 --dualtest -B 192.168.6.1
+iperf -c 192.168.6.1 -i 1 -P 64 -t 1000 --dualtest -B 192.168.6.2
+```

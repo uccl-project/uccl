@@ -291,12 +291,19 @@ int main(int argc, char* argv[]) {
                          end_bw_mea - start_bw_mea)
                          .count() *
                      1e-6);
+                auto app_bw_gbps =
+                    sent_bytes * 8.0 / 1000 / 1000 / 1000 /
+                    (std::chrono::duration_cast<std::chrono::microseconds>(
+                         end_bw_mea - start_bw_mea)
+                         .count() *
+                     1e-6);
                 sent_bytes = 0;
 
                 LOG(INFO) << "Sent " << i + 1
                           << " messages, med rtt: " << med_latency
-                          << " us, tail rtt: " << tail_latency << " us, bw "
-                          << bw_gbps << " Gbps";
+                          << " us, tail rtt: " << tail_latency
+                          << " us, link bw " << bw_gbps << " Gbps, app bw "
+                          << app_bw_gbps;
                 start_bw_mea = std::chrono::high_resolution_clock::now();
             }
         }
