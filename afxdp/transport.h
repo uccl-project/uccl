@@ -359,7 +359,6 @@ class RXTracking {
  */
 class UcclFlow {
     const static uint32_t kMaxReadyRxMsgbufs = kMaxUnackedPkts * 32;
-    const static uint32_t kMaxUnackedPktsMask = kMaxUnackedPkts - 1;
 
    public:
     /**
@@ -520,11 +519,11 @@ class UcclFlow {
     uint8_t hist_path_id_[kMaxUnackedPkts] = {0};
 
     inline void set_path_id(uint32_t seqno, uint32_t path_id) {
-        hist_path_id_[seqno & kMaxUnackedPktsMask] = path_id;
+        hist_path_id_[seqno % kMaxUnackedPkts] = path_id;
     }
 
     inline uint32_t get_path_id(uint32_t seqno) {
-        return hist_path_id_[seqno & kMaxUnackedPktsMask];
+        return hist_path_id_[seqno % kMaxUnackedPkts];
     }
 
     // Measure the distribution of probed RTT.

@@ -569,6 +569,7 @@ void UcclFlow::transmit_pending_packets() {
     auto txq_free_entries =
         socket_->send_queue_free_entries(unacked_pkt_budget);
     auto hard_budget = std::min(txq_free_entries, unacked_pkt_budget);
+    hard_budget = std::min(hard_budget, 4u);
 
     // Choosing a path to send a batch of packets.
     auto path_id = get_path_id_with_lowest_rtt();
