@@ -6,12 +6,18 @@
 
 #define USE_MULTIPATH
 #define PATH_SELECTION
-// #define LATENCY_CC
-#define PERPATH_CUBIC
 // #define EMULATE_ZC
 // #define USE_TCP
 // #define ENABLE_CSUM
 // #define RTT_STATS
+
+enum class CCType {
+    kTimely,
+    kTimelyPP,
+    kCubic,
+    kCubicPP,
+};
+static constexpr CCType kCCType = CCType::kTimelyPP;
 
 static const uint32_t NUM_QUEUES = 4;
 static uint32_t NUM_CPUS = std::thread::hardware_concurrency();

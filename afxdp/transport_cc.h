@@ -43,7 +43,7 @@ struct Pcb {
     static constexpr int kRtoExpireThresInTicks = 3;  // in slow timer ticks.
     static constexpr int kRtoDisabled = -1;
     Pcb()
-        : timely(freq_ghz, kLinkBandwidth),
+        : timely_(freq_ghz, kLinkBandwidth),
           wheel_({freq_ghz}),
           prev_desired_tx_tsc_(rdtsc()) {
         wheel_.catchup();
@@ -85,20 +85,27 @@ struct Pcb {
     /********* Cubic congestion control ends *********/
 
     /********* Timely congestion control starts *********/
-    Timely timely;
+    Timely timely_;
     TimingWheel wheel_;
     size_t prev_desired_tx_tsc_;
 
+    inline double timely_rate() { return timely_.rate_; }
+
     inline void timely_update_rate(size_t _rdtsc, size_t sample_rtt_tsc) {
-        timely.update_rate(_rdtsc, sample_rtt_tsc);
+        timely_.update_rate(_rdtsc, sample_rtt_tsc);
     }
 
     inline void timely_pace_packet(size_t ref_tsc, size_t pkt_size,
                                    void *msgbuf) {
-        auto rate = timely.rate_;
+        auto rate = timely_.rate_;
         // auto rate = timely.link_bandwidth_;
         // auto rate = kLinkBandwidth / NUM_QUEUES * 2;  // for bimq
         // auto rate = Timely::gbps_to_rate(40.0);
+        timely_pace_packet_with_rate(ref_tsc, pkt_size, msgbuf, rate);
+    }
+
+    inline void timely_pace_packet_with_rate(size_t ref_tsc, size_t pkt_size,
+                                             void *msgbuf, double rate) {
         double ns_delta = 1000000000 * (pkt_size / rate);
         double cycle_delta = ns_to_cycles(ns_delta, freq_ghz);
 
@@ -155,15 +162,15 @@ struct Pcb {
     }
 
     std::string to_string() const {
-        auto avg_rtt_diff = timely.get_avg_rtt_diff();
-        auto rate_gbps = timely.get_rate_gbps();
+        auto avg_rtt_diff = timely_.get_avg_rtt_diff();
+        auto rate_gbps = timely_.get_rate_gbps();
         std::string s;
         s += "[CC] snd_nxt: " + std::to_string(snd_nxt) +
              " snd_una: " + std::to_string(snd_una) +
              " rcv_nxt: " + std::to_string(rcv_nxt) +
              " fast_rexmits: " + std::to_string(fast_rexmits) +
              " rto_rexmits: " + std::to_string(rto_rexmits) +
-             Format(" timely prev_rtt: %.2lf us", timely.prev_rtt_) +
+             Format(" timely prev_rtt: %.2lf us", timely_.prev_rtt_) +
              Format(" timely avg_rtt_diff: %.2lf us", avg_rtt_diff) +
              Format(" timely rate: %.2lf Gbps", rate_gbps) +
              Format(" cubic cwnd: %.2lf effective_cwnd: %u", cubic.get_cwnd(),

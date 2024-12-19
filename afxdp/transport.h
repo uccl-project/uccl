@@ -389,14 +389,16 @@ class UcclFlow {
           rx_tracking_(socket, channel) {
         memcpy(local_l2_addr_, local_l2_addr, ETH_ALEN);
         memcpy(remote_l2_addr_, remote_l2_addr, ETH_ALEN);
-#if (!defined(LATENCY_CC)) && defined(PERPATH_CUBIC)
-        pcb_cc_ = new swift::Pcb[kPortEntropy];
-#endif
+        if constexpr (kCCType == CCType::kCubicPP ||
+                      kCCType == CCType::kTimelyPP) {
+            pcb_pp_ = new swift::Pcb[kPortEntropy];
+        }
     }
     ~UcclFlow() {
-#if (!defined(LATENCY_CC)) && defined(PERPATH_CUBIC)
-        delete[] pcb_cc_;
-#endif
+        if constexpr (kCCType == CCType::kCubicPP ||
+                      kCCType == CCType::kTimelyPP) {
+            delete[] pcb_pp_;
+        }
     }
 
     friend class UcclEngine;
@@ -513,7 +515,7 @@ class UcclFlow {
     // Swift CC protocol control block.
     swift::Pcb pcb_;
     // Each path has its own PCB for CC.
-    swift::Pcb *pcb_cc_;
+    swift::Pcb *pcb_pp_;
     // Path ID for each packet indexed by seqno.
     uint8_t hist_path_id_[kMaxUnackedPkts] = {0};
 

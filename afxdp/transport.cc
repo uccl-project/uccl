@@ -348,14 +348,18 @@ void UcclFlow::process_rttprobe_rsp(uint64_t ts1, uint64_t ts2, uint64_t ts3,
                                     uint64_t ts4, uint32_t path_id) {
     auto rtt_ns = (ts4 - ts1) - (ts3 - ts2);
     auto sample_rtt_tsc = ns_to_cycles(rtt_ns, freq_ghz);
-#ifdef LATENCY_CC
-    pcb_.timely_update_rate(rdtsc(), sample_rtt_tsc);
-#endif
     port_path_rtt_[path_id] = sample_rtt_tsc;
 
+    if constexpr (kCCType == CCType::kTimely) {
+        pcb_.timely_update_rate(rdtsc(), sample_rtt_tsc);
+    }
+    if constexpr (kCCType == CCType::kTimelyPP) {
+        pcb_pp_[path_id].timely_update_rate(rdtsc(), sample_rtt_tsc);
+    }
+
     VLOG(3) << "sample_rtt_us " << to_usec(sample_rtt_tsc, freq_ghz)
-            << " us, avg_rtt_diff " << pcb_.timely.get_avg_rtt_diff()
-            << " us, timely rate " << pcb_.timely.get_rate_gbps() << " Gbps";
+            << " us, avg_rtt_diff " << pcb_.timely_.get_avg_rtt_diff()
+            << " us, timely rate " << pcb_.timely_.get_rate_gbps() << " Gbps";
 
 #ifdef RTT_STATS
     rtt_stats_.update(rtt_ns / 1000);
@@ -480,26 +484,25 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
         size_t num_acked_packets = ackno - pcb_.snd_una;
         tx_tracking_.receive_acks(num_acked_packets);
 
-#ifndef LATENCY_CC
-#ifdef PERPATH_CUBIC
-        uint32_t accumu_acks = 0;
-        auto last_path_id = kPortEntropy;
-        for (uint32_t seqno = pcb_.snd_una; seqno < ackno; seqno++) {
-            auto path_id = get_path_id(seqno);
-            if (path_id != last_path_id && last_path_id != kPortEntropy) {
-                pcb_cc_[last_path_id].cubic_on_recv_ack(accumu_acks);
-                accumu_acks = 0;
+        if constexpr (kCCType == CCType::kCubic) {
+            pcb_.cubic_on_recv_ack(num_acked_packets);
+        }
+        if constexpr (kCCType == CCType::kCubicPP) {
+            uint32_t accumu_acks = 0;
+            auto last_path_id = kPortEntropy;
+            for (uint32_t seqno = pcb_.snd_una; seqno < ackno; seqno++) {
+                auto path_id = get_path_id(seqno);
+                if (path_id != last_path_id && last_path_id != kPortEntropy) {
+                    pcb_pp_[last_path_id].cubic_on_recv_ack(accumu_acks);
+                    accumu_acks = 0;
+                }
+                last_path_id = path_id;
+                accumu_acks++;
             }
-            last_path_id = path_id;
-            accumu_acks++;
+            if (accumu_acks) {
+                pcb_pp_[last_path_id].cubic_on_recv_ack(accumu_acks);
+            }
         }
-        if (accumu_acks) {
-            pcb_cc_[last_path_id].cubic_on_recv_ack(accumu_acks);
-        }
-#else
-        pcb_.cubic_on_recv_ack(num_acked_packets);
-#endif
-#endif
 
         pcb_.snd_una = ackno;
         pcb_.duplicate_acks = 0;
@@ -541,14 +544,13 @@ void UcclFlow::rto_retransmit() {
         socket_->send_packet(
             {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
     }
-#ifndef LATENCY_CC
-#ifdef PERPATH_CUBIC
-    auto path_id = get_path_id(pcb_.snd_una);
-    pcb_cc_[path_id].cubic_on_packet_loss();
-#else
-    pcb_.cubic_on_packet_loss();
-#endif
-#endif
+    if constexpr (kCCType == CCType::kCubic) {
+        pcb_.cubic_on_packet_loss();
+    }
+    if constexpr (kCCType == CCType::kCubicPP) {
+        auto path_id = get_path_id(pcb_.snd_una);
+        pcb_pp_[path_id].cubic_on_packet_loss();
+    }
     pcb_.rto_reset();
     pcb_.rto_rexmits++;
     pcb_.rto_rexmits_consectutive++;
@@ -570,18 +572,19 @@ void UcclFlow::transmit_pending_packets() {
 
     // Choosing a path to send a batch of packets.
     auto path_id = get_path_id_with_lowest_rtt();
+    uint32_t permitted_packets = 0;
 
-#ifdef LATENCY_CC
-    auto permitted_packets = pcb_.timely_ready_packets(hard_budget);
-#else
-#ifdef PERPATH_CUBIC
-    auto &pcb_cc = pcb_cc_[path_id];
-    auto permitted_packets =
-        std::min(hard_budget, pcb_cc.cubic_effective_wnd());
-#else
-    auto permitted_packets = std::min(hard_budget, pcb_.cubic_effective_wnd());
-#endif
-#endif
+    if constexpr (kCCType == CCType::kTimely || kCCType == CCType::kTimelyPP) {
+        permitted_packets = pcb_.timely_ready_packets(hard_budget);
+    }
+    if constexpr (kCCType == CCType::kCubic) {
+        permitted_packets = std::min(hard_budget, pcb_.cubic_effective_wnd());
+    }
+    if constexpr (kCCType == CCType::kCubicPP) {
+        auto &pcb_select = pcb_pp_[path_id];
+        permitted_packets =
+            std::min(hard_budget, pcb_select.cubic_effective_wnd());
+    }
 
     // static uint64_t transmit_tries = 0;
     // static uint64_t transmit_success = 0;
@@ -641,6 +644,11 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
     uint32_t num_tx_frames = 0;
     size_t remaining_bytes = tx_work.len - cur_offset;
 
+    uint32_t path_id = kPortEntropy;
+    if constexpr (kCCType == CCType::kTimelyPP) {
+        path_id = get_path_id_with_lowest_rtt();
+    }
+
     auto now_tsc = rdtsc();
     while (cur_msgbuf != nullptr && num_tx_frames < deser_budget) {
         // The flow will free these Tx frames when receiving ACKs.
@@ -649,11 +657,23 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
 
         auto payload_len =
             cur_msgbuf->get_frame_len() - kNetHdrLen - kUcclHdrLen;
-#ifdef LATENCY_CC
-        // Queue on the timing wheel.
-        pcb_.timely_pace_packet(now_tsc, payload_len + kNetHdrLen + kUcclHdrLen,
-                                cur_msgbuf);
-#endif
+
+        // Both queue on one timing wheel.
+        if constexpr (kCCType == CCType::kTimely) {
+            pcb_.timely_pace_packet(
+                now_tsc, payload_len + kNetHdrLen + kUcclHdrLen, cur_msgbuf);
+        }
+        if constexpr (kCCType == CCType::kTimelyPP) {
+            // TODO(yang): consider per-path rate limiting? If so, we need to
+            // maintain prev_desired_tx_tsc_ for each path, calculate two
+            // timestamps (one from pcb_, one from pcb_pp_), and insert the
+            // larger one into the pcb_.
+            double rate = pcb_pp_[path_id].timely_rate();
+            pcb_.timely_pace_packet_with_rate(
+                now_tsc, payload_len + kNetHdrLen + kUcclHdrLen, cur_msgbuf,
+                rate);
+        }
+
         remaining_bytes -= payload_len;
         if (remaining_bytes == 0) {
             DCHECK_EQ(cur_msgbuf->next(), nullptr);
