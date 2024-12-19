@@ -542,7 +542,7 @@ int main() {
         goto out;
     }
 
-    printf("AF_XDP socket successfully shared.\n");
+    printf("AF_XDP socket successfully shared\n");
 
     if (populate_fill_ring(&xsk_info.fq)) {
         fprintf(stderr, "populate_fill_ring failed\n");

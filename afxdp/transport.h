@@ -582,8 +582,10 @@ class UcclEngine {
           last_periodic_tsc_(rdtsc()),
           periodic_ticks_(0),
           kSlowTimerIntervalTsc_(us_to_cycles(kSlowTimerIntervalUs, freq_ghz)),
-          deser_th([this, deser_th_cpuid]() {
+          deser_th([this, queue_id, deser_th_cpuid]() {
               pin_thread_to_cpu(deser_th_cpuid);
+              LOG(INFO) << "[Engine] deser thread " << queue_id
+                        << " running on CPU " << deser_th_cpuid;
               deser_th_func();
           }) {
         DCHECK(str_to_mac(local_l2_addr, local_l2_addr_));

@@ -189,6 +189,7 @@ class AFXDPFactory {
 
     // umem shared by all afxdp sockets.
     int umem_fd_;
+    int xsk_fds_[NUM_QUEUES];
     void *umem_buffer_;
     size_t umem_size_;
     uint64_t num_frames_;

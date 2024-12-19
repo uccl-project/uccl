@@ -575,7 +575,6 @@ void UcclFlow::transmit_pending_packets() {
     auto permitted_packets = pcb_.timely_ready_packets(hard_budget);
 #else
 #ifdef PERPATH_CUBIC
-    // TODO(yang): control the size of batch.
     auto &pcb_cc = pcb_cc_[path_id];
     auto permitted_packets =
         std::min(hard_budget, pcb_cc.cubic_effective_wnd());
@@ -1234,7 +1233,8 @@ std::string UcclEngine::status_to_string() {
 Endpoint::Endpoint(const char *interface_name, int num_queues,
                    uint64_t num_frames, int engine_cpu_start)
     : num_queues_(num_queues), stats_thread_([this]() { stats_thread_fn(); }) {
-    // Create UDS socket and get the umem_id.
+    LOG(INFO) << "Creating AFXDPFactory";
+    // Create UDS socket and get umem_fd and xsk_ids.
     static std::once_flag flag_once;
     std::call_once(flag_once, [interface_name, num_frames]() {
         AFXDPFactory::init(interface_name, num_frames, "ebpf_transport.o",
@@ -1247,25 +1247,42 @@ Endpoint::Endpoint(const char *interface_name, int num_queues,
     CHECK_LE(num_queues, NUM_CPUS / 4)
         << "num_queues should be less than or equal to the number of CPUs / 4";
 
+    LOG(INFO) << "Creating Channels";
+
     // Create multiple engines, each got its xsk and umem from the
     // daemon. Each engine has its own thread and channel to let the endpoint
     // communicate with.
     for (int i = 0; i < num_queues; i++) channel_vec_[i] = new Channel();
 
+    LOG(INFO) << "Creating Engines";
+
+    std::vector<std::future<std::unique_ptr<UcclEngine>>> engine_futures;
     for (int queue_id = 0, engine_cpu_id = engine_cpu_start;
          queue_id < num_queues; queue_id++, engine_cpu_id++) {
-        // Placing the engine deser thread on engine_cpu_id + num_queues.
-        engine_vec_.emplace_back(std::make_unique<UcclEngine>(
-            queue_id, channel_vec_[queue_id], local_ip_str_, local_mac_str_,
-            engine_cpu_id + num_queues));
-        // Spawning a new thread to run the engine loop.
+        std::promise<std::unique_ptr<UcclEngine>> engine_promise;
+        auto engine_future = engine_promise.get_future();
+        engine_futures.emplace_back(std::move(engine_future));
+
+        // Spawning a new thread to init engine and run the engine loop.
         engine_th_vec_.emplace_back(std::make_unique<std::thread>(
-            [engine_ptr = engine_vec_.back().get(), queue_id, engine_cpu_id]() {
+            [this, num_queues, queue_id, engine_cpu_id,
+             engine_promise = std::move(engine_promise)]() mutable {
+                pin_thread_to_cpu(engine_cpu_id);
                 LOG(INFO) << "[Engine] thread " << queue_id
                           << " running on CPU " << engine_cpu_id;
-                pin_thread_to_cpu(engine_cpu_id);
+
+                // Placing deser thread on engine_cpu_id + num_queues.
+                auto engine = std::make_unique<UcclEngine>(
+                    queue_id, channel_vec_[queue_id], local_ip_str_,
+                    local_mac_str_, engine_cpu_id + num_queues);
+                auto *engine_ptr = engine.get();
+
+                engine_promise.set_value(std::move(engine));
                 engine_ptr->run();
             }));
+    }
+    for (auto &engine_future : engine_futures) {
+        engine_vec_.emplace_back(std::move(engine_future.get()));
     }
 
     ctx_pool_ = new SharedPool<PollCtx *, true>(kMaxInflightMsg);
@@ -1600,8 +1617,8 @@ void Endpoint::stats_thread_fn() {
                 [this] { return shutdown_.load(); });
             if (shutdown) break;
         }
-
         if (engine_vec_.empty()) continue;
+
         std::string s;
         s += "\n\t[Uccl Engine] ";
         for (auto &engine : engine_vec_) {

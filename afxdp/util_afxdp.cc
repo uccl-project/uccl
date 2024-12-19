@@ -27,7 +27,12 @@ void AFXDPFactory::init(const char *interface_name, uint64_t num_frames,
         exit(EXIT_FAILURE);
     }
     // Receive the file descriptor for the UMEM
-    DCHECK(receive_fd(afxdp_ctl.client_sock_, &afxdp_ctl.umem_fd_) == 0);
+    CHECK(receive_fd(afxdp_ctl.client_sock_, &afxdp_ctl.umem_fd_) == 0);
+
+    // Receive the file descriptor for all AF_XDP sockets
+    for (int i = 0; i < NUM_QUEUES; i++) {
+        CHECK(receive_fd(afxdp_ctl.client_sock_, &afxdp_ctl.xsk_fds_[i]) == 0);
+    }
 
     afxdp_ctl.umem_size_ = num_frames * FRAME_SIZE;
     afxdp_ctl.umem_buffer_ = attach_shm(SHM_NAME, afxdp_ctl.umem_size_);
@@ -72,14 +77,14 @@ AFXDPSocket::AFXDPSocket(int queue_id)
     memset(&complete_queue_, 0, sizeof(complete_queue_));
     memset(&fill_queue_, 0, sizeof(fill_queue_));
 
-    // Step1: receive the file descriptors for AF_XDP socket
-    DCHECK(receive_fd(afxdp_ctl.client_sock_, &xsk_fd_) == 0);
+    // Step1: retrieve the file descriptors for AF_XDP socket
+    xsk_fd_ = afxdp_ctl.xsk_fds_[queue_id_];
 
     // Step2: map UMEM and build four rings for the AF_XDP socket
     int ret = create_afxdp_socket();
     CHECK_EQ(ret, 0) << "xsk_socket__create_shared failed, " << ret;
 
-    LOG(INFO) << "[AF_XDP] socket successfully shared.";
+    LOG(INFO) << "[AF_XDP] socket " << queue_id << " successfully shared";
 
     // apply_setsockopt(xsk_fd_);
 
@@ -174,7 +179,8 @@ int AFXDPSocket::create_afxdp_socket() {
         frame_pool_offset += FRAME_SIZE;
     }
     // Flushing the cache to prevent one socket pool's entries from being pushed
-    // to another socket pool, as socket creatation is done by a single thread.
+    // to another socket pool, in case socket creatations are done by a single
+    // main thread.
     frame_pool_->flush_th_cache();
 
     /* Get offsets for the following mmap */
