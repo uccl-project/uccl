@@ -95,9 +95,9 @@ struct Pcb {
 
     inline void timely_pace_packet(size_t ref_tsc, size_t pkt_size,
                                    void *msgbuf) {
-        // auto rate = timely.rate_;
+        auto rate = timely.rate_;
         // auto rate = timely.link_bandwidth_;
-        auto rate = kLinkBandwidth / NUM_QUEUES * 2;  // for bimq
+        // auto rate = kLinkBandwidth / NUM_QUEUES * 2;  // for bimq
         // auto rate = Timely::gbps_to_rate(40.0);
         double ns_delta = 1000000000 * (pkt_size / rate);
         double cycle_delta = ns_to_cycles(ns_delta, freq_ghz);

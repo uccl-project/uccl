@@ -95,6 +95,18 @@ class SharedPool {
             return item;
         }
     }
+    void flush_th_cache() {
+        if constexpr (Sync) {
+            auto &cache = th_cache_;
+            global_spin_.Lock();
+            auto spin_guard = finally([&]() { global_spin_.Unlock(); });
+            cache.set_global_pool_ptr(global_pool_);
+            T item;
+            while (cache.pop_front(&item)) {
+                global_pool_.push_front(item);
+            }
+        }
+    }
     uint32_t size() {
         if constexpr (Sync) {
             return th_cache_.size() + global_pool_.size();

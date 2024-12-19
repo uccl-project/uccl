@@ -17,9 +17,9 @@
  * @file timely-sweep-params.h
  * @brief Timely parameters that need to be sweeped
  */
-static constexpr bool kPatched = true;  ///< Patch from ECN-vs-delay
-static constexpr double kEwmaAlpha = 0.46;
-static constexpr double kBeta = 0.26;
+static constexpr bool kPatched = true;     ///< Patch from ECN-vs-delay
+static constexpr double kEwmaAlpha = 0.1;  ///< Was 0.46 in eRPC
+static constexpr double kBeta = 0.25;       ///< Was 0.26 in eRPC
 
 namespace uccl {
 struct timely_record_t {

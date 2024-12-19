@@ -173,6 +173,9 @@ int AFXDPSocket::create_afxdp_socket() {
         push_frame(frame_offset);
         frame_pool_offset += FRAME_SIZE;
     }
+    // Flushing the cache to prevent one socket pool's entries from being pushed
+    // to another socket pool, as socket creatation is done by a single thread.
+    frame_pool_->flush_th_cache();
 
     /* Get offsets for the following mmap */
     if (xsk_get_mmap_offsets(umem_fd_, &off)) {
