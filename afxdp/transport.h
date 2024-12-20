@@ -384,7 +384,7 @@ class UcclFlow {
           channel_(channel),
           flow_id_(flow_id),
           pcb_(),
-          pacer_(kPortEntropy, kPerPathMaxBw),
+          pacer_(),
           tx_tracking_(socket, channel),
           rx_tracking_(socket, channel) {
         memcpy(local_l2_addr_, local_l2_addr, ETH_ALEN);

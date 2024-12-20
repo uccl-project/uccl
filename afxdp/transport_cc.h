@@ -66,8 +66,8 @@ struct Pcb {
     CubicCC cubic;
 
     inline uint32_t cubic_effective_wnd() const {
-        auto snd_adjusted_una = snd_una + snd_ooo_acks;
-        auto cwnd = cubic.get_cwnd();
+        uint32_t snd_adjusted_una = snd_una + snd_ooo_acks;
+        uint32_t cwnd = cubic.get_cwnd();
 
         // This normally does not happen.
         if (snd_nxt < snd_adjusted_una || cwnd <= snd_nxt - snd_adjusted_una)
@@ -236,48 +236,30 @@ struct Pcb {
 
 class Pacer {
    public:
-    uint32_t num_path_;
-    double rate_per_path_;  // 5Gbps on AWS
     Timely timely_;
     TimingWheel wheel_;
-    size_t prev_desired_tx_tsc_[kPortEntropy];
-    size_t prev_desired_tx_tsc_global_;
+    size_t prev_desired_tx_tsc_;
     double rate_global_;
 
-    Pacer(uint32_t num_path, double rate_per_path)
-        : num_path_(num_path),
-          rate_per_path_(rate_per_path),
-          timely_(freq_ghz, kLinkBandwidth),
-          wheel_({freq_ghz}) {
-        auto now = rdtsc();
-        for (uint32_t i = 0; i < num_path_; i++) {
-            prev_desired_tx_tsc_[i] = now;
-        }
-        prev_desired_tx_tsc_global_ = now;
-        rate_global_ = kLinkBandwidth;
+    Pacer()
+        : timely_(freq_ghz, kLinkBandwidth),
+          wheel_({freq_ghz}),
+          prev_desired_tx_tsc_(rdtsc()),
+          rate_global_(kLinkBandwidth) {
         wheel_.catchup();
     }
 
-    inline void pace_packet(size_t ref_tsc, size_t pkt_size, uint32_t path_id) {
+    inline void pace_packet(size_t ref_tsc, size_t pkt_size, void *msgbuf) {
         // This is just a pacer, with not dynamic rate control.
-        double ns_delta = 1000000000 * (pkt_size / rate_global_);
+        double ns_delta = 1e9 * (pkt_size / rate_global_);
         double cycle_delta = ns_to_cycles(ns_delta, freq_ghz);
 
-        size_t desired_tx_tsc = prev_desired_tx_tsc_global_ + cycle_delta;
+        size_t desired_tx_tsc = prev_desired_tx_tsc_ + cycle_delta;
         desired_tx_tsc = (std::max)(desired_tx_tsc, ref_tsc);
 
-        // Rate limiting on each path too!
-        ns_delta = 1000000000 * (pkt_size / rate_per_path_);
-        cycle_delta = ns_to_cycles(ns_delta, freq_ghz);
-        size_t desired_tx_tsc_path =
-            prev_desired_tx_tsc_[path_id] + cycle_delta;
-        desired_tx_tsc = (std::max)(desired_tx_tsc, desired_tx_tsc_path);
+        prev_desired_tx_tsc_ = desired_tx_tsc;
 
-        prev_desired_tx_tsc_global_ = desired_tx_tsc;
-        prev_desired_tx_tsc_[path_id] = desired_tx_tsc;
-
-        wheel_.insert(wheel_ent_t{(void *)(uint64_t)path_id, pkt_size}, ref_tsc,
-                      desired_tx_tsc);
+        wheel_.insert(wheel_ent_t{msgbuf, pkt_size}, ref_tsc, desired_tx_tsc);
     }
 
     inline uint32_t ready_packets(uint32_t budget) {
@@ -301,7 +283,7 @@ class Pacer {
             while (!wheel_.ready_queue_.empty()) {
                 auto ent = wheel_.ready_queue_.front();
                 wheel_.ready_queue_.pop_front();
-                pace_packet(now, ent.pkt_size_, (uint32_t)ent.sslot_);
+                pace_packet(now, ent.pkt_size_, (void *)(uint64_t)ent.sslot_);
             }
 
             wheel_.ready_entries_ = 0;

@@ -33,7 +33,7 @@ static const uint32_t RECV_BATCH_SIZE = 32;
 static const uint32_t kPortEntropy = 32;
 static const std::size_t kSackBitmapSize = 1024;
 static const std::size_t kFastRexmitDupAckThres = 5;
-static const uint32_t kMaxUnackedPkts = 256;
+static const uint32_t kMaxUnackedPkts = 1000 / NUM_QUEUES;
 static const uint32_t kMaxTwPkts = 1024;
 static const double kPerPathMaxBw = 5.0 * 1e9 / 8;
 

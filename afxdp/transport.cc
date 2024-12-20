@@ -575,7 +575,7 @@ void UcclFlow::transmit_pending_packets() {
     uint32_t permitted_packets = 0;
 
     if constexpr (kCCType == CCType::kTimely || kCCType == CCType::kTimelyPP) {
-        hard_budget = std::min(hard_budget, 4u);
+        hard_budget = std::min(hard_budget, 4u);  // magic number for AWS
         permitted_packets = pcb_.timely_ready_packets(hard_budget);
     }
     if constexpr (kCCType == CCType::kCubic) {
@@ -612,6 +612,11 @@ void UcclFlow::transmit_pending_packets() {
     for (uint32_t i = 0; i < permitted_packets; i++) {
         auto msg_buf_opt = tx_tracking_.get_and_update_oldest_unsent();
         if (!msg_buf_opt.has_value()) break;
+
+        // Avoiding sending too many packets on the same path.
+        if ((i + 1) % 4u == 0) {
+            path_id = get_path_id_with_lowest_rtt();
+        }
 
         auto *msg_buf = msg_buf_opt.value();
         auto seqno = pcb_.get_snd_nxt();
@@ -652,7 +657,7 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
     size_t remaining_bytes = tx_work.len - cur_offset;
 
     uint32_t path_id = kPortEntropy;
-    if constexpr (kCCType == CCType::kTimelyPP || kCCType == CCType::kHybrid) {
+    if constexpr (kCCType == CCType::kTimelyPP) {
         path_id = get_path_id_with_lowest_rtt();
     }
 
@@ -680,10 +685,9 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
                 now_tsc, payload_len + kNetHdrLen + kUcclHdrLen, cur_msgbuf,
                 rate);
         }
-        // TODO(yang): avoding adding too much packets into the same path. 
         if constexpr (kCCType == CCType::kHybrid) {
             pacer_.pace_packet(now_tsc, payload_len + kNetHdrLen + kUcclHdrLen,
-                               path_id);
+                               cur_msgbuf);
         }
 
         remaining_bytes -= payload_len;

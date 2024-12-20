@@ -72,7 +72,9 @@ class CubicCC {
                 << ", ssthresh=" << ssthresh << std::endl;
     }
 
-    inline double get_cwnd() const { return cwnd; }
+    inline double get_cwnd() const {
+        return std::min(cwnd, (double)kMaxUnackedPkts);
+    }
 
    private:
     double cwnd;                // Congestion window size
