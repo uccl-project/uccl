@@ -484,7 +484,7 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
         size_t num_acked_packets = ackno - pcb_.snd_una;
         tx_tracking_.receive_acks(num_acked_packets);
 
-        if constexpr (kCCType == CCType::kCubic) {
+        if constexpr (kCCType == CCType::kCubic || kCCType == CCType::kHybrid) {
             pcb_.cubic_on_recv_ack(num_acked_packets);
         }
         if constexpr (kCCType == CCType::kCubicPP) {
@@ -544,7 +544,7 @@ void UcclFlow::rto_retransmit() {
         socket_->send_packet(
             {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
     }
-    if constexpr (kCCType == CCType::kCubic) {
+    if constexpr (kCCType == CCType::kCubic || kCCType == CCType::kHybrid) {
         pcb_.cubic_on_packet_loss();
     }
     if constexpr (kCCType == CCType::kCubicPP) {
@@ -569,22 +569,28 @@ void UcclFlow::transmit_pending_packets() {
     auto txq_free_entries =
         socket_->send_queue_free_entries(unacked_pkt_budget);
     auto hard_budget = std::min(txq_free_entries, unacked_pkt_budget);
-    hard_budget = std::min(hard_budget, 4u);
 
     // Choosing a path to send a batch of packets.
     auto path_id = get_path_id_with_lowest_rtt();
     uint32_t permitted_packets = 0;
 
     if constexpr (kCCType == CCType::kTimely || kCCType == CCType::kTimelyPP) {
+        hard_budget = std::min(hard_budget, 4u);
         permitted_packets = pcb_.timely_ready_packets(hard_budget);
     }
     if constexpr (kCCType == CCType::kCubic) {
+        hard_budget = std::min(hard_budget, 4u);
         permitted_packets = std::min(hard_budget, pcb_.cubic_effective_wnd());
     }
     if constexpr (kCCType == CCType::kCubicPP) {
+        hard_budget = std::min(hard_budget, 4u);
         auto &pcb_select = pcb_pp_[path_id];
         permitted_packets =
             std::min(hard_budget, pcb_select.cubic_effective_wnd());
+    }
+    if constexpr (kCCType == CCType::kHybrid) {
+        hard_budget = std::min(hard_budget, pcb_.cubic_effective_wnd());
+        permitted_packets = pacer_.ready_packets(hard_budget);
     }
 
     // static uint64_t transmit_tries = 0;
@@ -646,7 +652,7 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
     size_t remaining_bytes = tx_work.len - cur_offset;
 
     uint32_t path_id = kPortEntropy;
-    if constexpr (kCCType == CCType::kTimelyPP) {
+    if constexpr (kCCType == CCType::kTimelyPP || kCCType == CCType::kHybrid) {
         path_id = get_path_id_with_lowest_rtt();
     }
 
@@ -673,6 +679,11 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
             pcb_.timely_pace_packet_with_rate(
                 now_tsc, payload_len + kNetHdrLen + kUcclHdrLen, cur_msgbuf,
                 rate);
+        }
+        // TODO(yang): avoding adding too much packets into the same path. 
+        if constexpr (kCCType == CCType::kHybrid) {
+            pacer_.pace_packet(now_tsc, payload_len + kNetHdrLen + kUcclHdrLen,
+                               path_id);
         }
 
         remaining_bytes -= payload_len;

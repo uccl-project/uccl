@@ -16,10 +16,11 @@ enum class CCType {
     kTimelyPP,
     kCubic,
     kCubicPP,
+    kHybrid,
 };
-static constexpr CCType kCCType = CCType::kCubic;
+static constexpr CCType kCCType = CCType::kHybrid;
 
-static const uint32_t NUM_QUEUES = 12;
+static const uint32_t NUM_QUEUES = 4;
 static uint32_t NUM_CPUS = std::thread::hardware_concurrency();
 // Starting from 1/4 of the CPUs to avoid conflicting with nccl proxy service.
 static uint32_t ENGINE_CPU_START = NUM_CPUS / 4;
@@ -32,8 +33,9 @@ static const uint32_t RECV_BATCH_SIZE = 32;
 static const uint32_t kPortEntropy = 32;
 static const std::size_t kSackBitmapSize = 1024;
 static const std::size_t kFastRexmitDupAckThres = 5;
-static const uint32_t kMaxUnackedPkts = 128;
+static const uint32_t kMaxUnackedPkts = 256;
 static const uint32_t kMaxTwPkts = 1024;
+static const double kPerPathMaxBw = 5.0 * 1e9 / 8;
 
 static_assert(kPortEntropy <= 256, "kPortEntropy too large");
 static_assert(is_power_of_two(kPortEntropy), "kPortEntropy must be power of 2");

@@ -234,5 +234,87 @@ struct Pcb {
     }
 };
 
+class Pacer {
+   public:
+    uint32_t num_path_;
+    double rate_per_path_;  // 5Gbps on AWS
+    Timely timely_;
+    TimingWheel wheel_;
+    size_t prev_desired_tx_tsc_[kPortEntropy];
+    size_t prev_desired_tx_tsc_global_;
+    double rate_global_;
+
+    Pacer(uint32_t num_path, double rate_per_path)
+        : num_path_(num_path),
+          rate_per_path_(rate_per_path),
+          timely_(freq_ghz, kLinkBandwidth),
+          wheel_({freq_ghz}) {
+        auto now = rdtsc();
+        for (uint32_t i = 0; i < num_path_; i++) {
+            prev_desired_tx_tsc_[i] = now;
+        }
+        prev_desired_tx_tsc_global_ = now;
+        rate_global_ = kLinkBandwidth;
+        wheel_.catchup();
+    }
+
+    inline void pace_packet(size_t ref_tsc, size_t pkt_size, uint32_t path_id) {
+        // This is just a pacer, with not dynamic rate control.
+        double ns_delta = 1000000000 * (pkt_size / rate_global_);
+        double cycle_delta = ns_to_cycles(ns_delta, freq_ghz);
+
+        size_t desired_tx_tsc = prev_desired_tx_tsc_global_ + cycle_delta;
+        desired_tx_tsc = (std::max)(desired_tx_tsc, ref_tsc);
+
+        // Rate limiting on each path too!
+        ns_delta = 1000000000 * (pkt_size / rate_per_path_);
+        cycle_delta = ns_to_cycles(ns_delta, freq_ghz);
+        size_t desired_tx_tsc_path =
+            prev_desired_tx_tsc_[path_id] + cycle_delta;
+        desired_tx_tsc = (std::max)(desired_tx_tsc, desired_tx_tsc_path);
+
+        prev_desired_tx_tsc_global_ = desired_tx_tsc;
+        prev_desired_tx_tsc_[path_id] = desired_tx_tsc;
+
+        wheel_.insert(wheel_ent_t{(void *)(uint64_t)path_id, pkt_size}, ref_tsc,
+                      desired_tx_tsc);
+    }
+
+    inline uint32_t ready_packets(uint32_t budget) {
+        size_t cur_tsc = rdtsc();
+        wheel_.reap(cur_tsc);
+
+        size_t num_ready = std::min(wheel_.ready_entries_, (uint64_t)budget);
+        wheel_.ready_entries_ -= num_ready;
+
+        if (unlikely(wheel_.ready_entries_ > 0)) {
+            VLOG(3) << "[CC] TimingWheel ready queue not empty "
+                    << wheel_.ready_entries_;
+
+            // Consuming the ready entries.
+            while (wheel_.ready_queue_.size() > wheel_.ready_entries_) {
+                wheel_.ready_queue_.pop_front();
+            }
+
+            // Requeue the uncomsumed entries back to the wheel.
+            auto now = rdtsc();
+            while (!wheel_.ready_queue_.empty()) {
+                auto ent = wheel_.ready_queue_.front();
+                wheel_.ready_queue_.pop_front();
+                pace_packet(now, ent.pkt_size_, (uint32_t)ent.sslot_);
+            }
+
+            wheel_.ready_entries_ = 0;
+        } else {
+            wheel_.ready_queue_.clear();
+        }
+
+        DCHECK_EQ(wheel_.ready_entries_, 0);
+        DCHECK(wheel_.ready_queue_.empty());
+
+        return num_ready;
+    }
+};
+
 }  // namespace swift
 }  // namespace uccl

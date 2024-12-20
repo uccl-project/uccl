@@ -384,6 +384,7 @@ class UcclFlow {
           channel_(channel),
           flow_id_(flow_id),
           pcb_(),
+          pacer_(kPortEntropy, kPerPathMaxBw),
           tx_tracking_(socket, channel),
           rx_tracking_(socket, channel) {
         memcpy(local_l2_addr_, local_l2_addr, ETH_ALEN);
@@ -515,6 +516,8 @@ class UcclFlow {
     swift::Pcb pcb_;
     // Each path has its own PCB for CC.
     swift::Pcb *pcb_pp_;
+    // Pacer for Hybrid CC.
+    swift::Pacer pacer_;
     // Path ID for each packet indexed by seqno.
     uint8_t hist_path_id_[kMaxUnackedPkts] = {0};
 
