@@ -283,6 +283,24 @@ class TXTracking {
     uint32_t num_tracked_msgbufs_;
 
     uint16_t unacked_pkts_pp_[kPortEntropy] = {0};
+    inline void inc_unacked_pkts_pp(uint32_t path_id) {
+        unacked_pkts_pp_[path_id]++;
+    }
+    inline void dec_unacked_pkts_pp(uint32_t path_id) {
+        DCHECK_GT(unacked_pkts_pp_[path_id], 0) << "path_id " << path_id;
+        unacked_pkts_pp_[path_id]--;
+    }
+    inline uint32_t get_unacked_pkts_pp(uint32_t path_id) {
+        return unacked_pkts_pp_[path_id];
+    }
+    inline void print_unacked_pkts_pp() {
+        std::stringstream ss;
+        ss << "unacked_pkts_pp_: ";
+        for (uint32_t i = 0; i < kPortEntropy; i++) {
+            ss << unacked_pkts_pp_[i] << " ";
+        }
+        LOG(INFO) << ss.str();
+    }
 };
 
 /**

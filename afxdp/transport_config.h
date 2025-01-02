@@ -20,7 +20,7 @@ enum class CCType {
 };
 static constexpr CCType kCCType = CCType::kHybrid;
 
-static const uint32_t NUM_QUEUES = 6;
+static const uint32_t NUM_QUEUES = 1;
 static uint32_t NUM_CPUS = std::thread::hardware_concurrency();
 // Starting from 1/4 of the CPUs to avoid conflicting with nccl proxy service.
 static uint32_t ENGINE_CPU_START = NUM_CPUS / 4;
@@ -36,7 +36,7 @@ static const std::size_t kFastRexmitDupAckThres = 5;
 static const uint32_t kMaxTwPkts = 1024;
 static const double kPerPathMaxBw = 5.0 * 1e9 / 8;
 static const uint32_t kSwitchPathThres = 1u;
-static const uint32_t kMaxUnackedPktsPP = 4u;
+static const uint32_t kMaxUnackedPktsPP = 8u;
 static const uint32_t kMaxUnackedPktsPerEngine =
     kMaxUnackedPktsPP * kPortEntropy;
 

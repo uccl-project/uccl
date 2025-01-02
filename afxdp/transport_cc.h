@@ -97,10 +97,10 @@ struct Pcb {
 
     inline void timely_pace_packet(size_t ref_tsc, size_t pkt_size,
                                    void *msgbuf) {
-        // auto rate = timely_.rate_;
+        auto rate = timely_.rate_;
         // auto rate = timely.link_bandwidth_;
         // auto rate = kLinkBandwidth / NUM_QUEUES * 2;  // for bimq
-        auto rate = Timely::gbps_to_rate(25);
+        // auto rate = Timely::gbps_to_rate(25);
         timely_pace_packet_with_rate(ref_tsc, pkt_size, msgbuf, rate);
     }
 
@@ -248,7 +248,7 @@ class Pacer {
     }
 
     inline void pace_packet(size_t ref_tsc, size_t pkt_size, void *msgbuf) {
-        // This is just a pacer, with not dynamic rate control.
+        // This is just a pacer, with no dynamic rate control.
         double ns_delta = 1e9 * (pkt_size / rate_global_);
         double cycle_delta = ns_to_cycles(ns_delta, freq_ghz);
 

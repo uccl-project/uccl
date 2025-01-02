@@ -455,10 +455,10 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
                     if (seqno == missing_ucclh->seqno.value()) {
                         // DCHECK_EQ(seqno, missing_ucclh->seqno.value())
                         //     << " seqno mismatch at index " << index;
-                        tx_tracking_.unacked_pkts_pp_[get_path_id(seqno)]--;
+                        tx_tracking_.dec_unacked_pkts_pp(get_path_id(seqno));
                         auto path_id = get_path_id_with_lowest_rtt();
                         set_path_id(seqno, path_id);
-                        tx_tracking_.unacked_pkts_pp_[path_id]++;
+                        tx_tracking_.inc_unacked_pkts_pp(path_id);
 
                         prepare_datapacket(msgbuf, path_id, seqno,
                                            UcclPktHdr::UcclFlags::kData);
@@ -491,10 +491,9 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
         if constexpr (kCCType == CCType::kHybrid) {
             for (uint32_t seqno = pcb_.snd_una; seqno < ackno; seqno++) {
                 auto path_id = get_path_id(seqno);
-                // TODO(yang): why this check would fail?
-                // DCHECK_GT(tx_tracking_.unacked_pkts_pp_[path_id], 0)
-                //     << "path_id " << path_id;
-                tx_tracking_.unacked_pkts_pp_[path_id]--;
+                VLOG(3) << "Hybrid acked seqno " << seqno << " path_id "
+                        << path_id;
+                tx_tracking_.dec_unacked_pkts_pp(path_id);
             }
         }
 
@@ -531,10 +530,10 @@ void UcclFlow::fast_retransmit() {
     // Retransmit the oldest unacknowledged message buffer.
     auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
     if (msg_buf) {
-        tx_tracking_.unacked_pkts_pp_[get_path_id(pcb_.snd_una)]--;
+        tx_tracking_.dec_unacked_pkts_pp(get_path_id(pcb_.snd_una));
         auto path_id = get_path_id_with_lowest_rtt();
         set_path_id(pcb_.snd_una, path_id);
-        tx_tracking_.unacked_pkts_pp_[path_id]++;
+        tx_tracking_.inc_unacked_pkts_pp(path_id);
 
         prepare_datapacket(msg_buf, path_id, pcb_.snd_una,
                            UcclPktHdr::UcclFlags::kData);
@@ -553,10 +552,10 @@ void UcclFlow::rto_retransmit() {
     VLOG(3) << "RTO retransmitting oldest unacked packet " << pcb_.snd_una;
     auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
     if (msg_buf) {
-        tx_tracking_.unacked_pkts_pp_[get_path_id(pcb_.snd_una)]--;
+        tx_tracking_.dec_unacked_pkts_pp(get_path_id(pcb_.snd_una));
         auto path_id = get_path_id_with_lowest_rtt();
         set_path_id(pcb_.snd_una, path_id);
-        tx_tracking_.unacked_pkts_pp_[path_id]++;
+        tx_tracking_.inc_unacked_pkts_pp(path_id);
 
         prepare_datapacket(msg_buf, path_id, pcb_.snd_una,
                            UcclPktHdr::UcclFlags::kData);
@@ -610,7 +609,8 @@ void UcclFlow::transmit_pending_packets() {
     }
     if constexpr (kCCType == CCType::kHybrid) {
         hard_budget = std::min(hard_budget, pcb_.cubic_effective_wnd());
-        permitted_packets = pacer_.ready_packets(hard_budget);
+        // permitted_packets = pacer_.ready_packets(hard_budget);
+        permitted_packets = hard_budget;
     }
 
     // static uint64_t transmit_tries = 0;
@@ -632,22 +632,23 @@ void UcclFlow::transmit_pending_packets() {
     for (uint32_t i = 0; i < permitted_packets; i++) {
         if constexpr (kCCType != CCType::kCubicPP) {
             // Avoiding sending too many packets on the same path.
-            // if (i % kSwitchPathThres == 0) {
-            //     int tries = 0;
-            //     do {
-            //         path_id = get_path_id_with_lowest_rtt();
-            //     } while (tx_tracking_.unacked_pkts_pp_[path_id] +
-            //                      kSwitchPathThres >=
-            //                  kMaxUnackedPktsPP &&
-            //              tries++ < 5);
-            //     if (tries >= 5) {
-            //         // We cannot find a path with enough space to send
-            //         packets. break;
-            //     }
-            // }
             if (i % kSwitchPathThres == 0) {
-                path_id = get_path_id_with_lowest_rtt();
+                int tries = 0;
+                do {
+                    path_id = get_path_id_with_lowest_rtt();
+                } while (tx_tracking_.get_unacked_pkts_pp(path_id) +
+                                 kSwitchPathThres >=
+                             kMaxUnackedPktsPP &&
+                         tries++ < 16);
+                if (tries >= 16) {
+                    // tx_tracking_.print_unacked_pkts_pp();
+                    // We cannot find a path with enough space to send packets.
+                    break;
+                }
             }
+            // if (i % kSwitchPathThres == 0) {
+            //     path_id = get_path_id_with_lowest_rtt();
+            // }
         }
 
         auto msg_buf_opt = tx_tracking_.get_and_update_oldest_unsent();
@@ -655,7 +656,8 @@ void UcclFlow::transmit_pending_packets() {
         auto *msg_buf = msg_buf_opt.value();
         auto seqno = pcb_.get_snd_nxt();
         set_path_id(seqno, path_id);
-        tx_tracking_.unacked_pkts_pp_[path_id]++;
+        tx_tracking_.inc_unacked_pkts_pp(path_id);
+        VLOG(3) << "Transmitting seqno: " << seqno << " path_id: " << path_id;
 
         if (msg_buf->is_last()) {
             VLOG(2) << "Transmitting seqno: " << seqno << " payload_len: "
@@ -721,8 +723,8 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
                 rate);
         }
         if constexpr (kCCType == CCType::kHybrid) {
-            pacer_.pace_packet(now_tsc, payload_len + kNetHdrLen + kUcclHdrLen,
-                               cur_msgbuf);
+            // pacer_.pace_packet(now_tsc, payload_len + kNetHdrLen + kUcclHdrLen,
+            //                    cur_msgbuf);
         }
 
         remaining_bytes -= payload_len;
