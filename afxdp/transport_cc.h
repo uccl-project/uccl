@@ -236,14 +236,12 @@ struct Pcb {
 
 class Pacer {
    public:
-    Timely timely_;
     TimingWheel wheel_;
     size_t prev_desired_tx_tsc_;
     double rate_global_;
 
     Pacer()
-        : timely_(freq_ghz, kLinkBandwidth),
-          wheel_({freq_ghz}),
+        : wheel_({freq_ghz}),
           prev_desired_tx_tsc_(rdtsc()),
           rate_global_(kLinkBandwidth) {
         wheel_.catchup();

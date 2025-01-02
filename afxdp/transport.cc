@@ -570,20 +570,18 @@ void UcclFlow::transmit_pending_packets() {
         socket_->send_queue_free_entries(unacked_pkt_budget);
     auto hard_budget = std::min(txq_free_entries, unacked_pkt_budget);
 
-    // Choosing a path to send a batch of packets.
-    auto path_id = get_path_id_with_lowest_rtt();
+    auto path_id = 0;
     uint32_t permitted_packets = 0;
 
     if constexpr (kCCType == CCType::kTimely || kCCType == CCType::kTimelyPP) {
-        hard_budget = std::min(hard_budget, 4u);  // magic number for AWS
         permitted_packets = pcb_.timely_ready_packets(hard_budget);
     }
     if constexpr (kCCType == CCType::kCubic) {
-        hard_budget = std::min(hard_budget, 4u);
         permitted_packets = std::min(hard_budget, pcb_.cubic_effective_wnd());
     }
     if constexpr (kCCType == CCType::kCubicPP) {
-        hard_budget = std::min(hard_budget, 4u);
+        // Choosing a path to send a batch of packets.
+        path_id = get_path_id_with_lowest_rtt();
         auto &pcb_select = pcb_pp_[path_id];
         permitted_packets =
             std::min(hard_budget, pcb_select.cubic_effective_wnd());
@@ -613,9 +611,10 @@ void UcclFlow::transmit_pending_packets() {
         auto msg_buf_opt = tx_tracking_.get_and_update_oldest_unsent();
         if (!msg_buf_opt.has_value()) break;
 
-        // Avoiding sending too many packets on the same path.
-        if ((i + 1) % 4u == 0) {
-            path_id = get_path_id_with_lowest_rtt();
+        if constexpr (kCCType != CCType::kCubicPP) {
+            // Avoiding sending too many packets on the same path.
+            if (i % kSwitchPathThres == 0)
+                path_id = get_path_id_with_lowest_rtt();
         }
 
         auto *msg_buf = msg_buf_opt.value();

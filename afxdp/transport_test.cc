@@ -303,7 +303,7 @@ int main(int argc, char* argv[]) {
                           << " messages, med rtt: " << med_latency
                           << " us, tail rtt: " << tail_latency
                           << " us, link bw " << bw_gbps << " Gbps, app bw "
-                          << app_bw_gbps;
+                          << app_bw_gbps << " Gbps";
                 start_bw_mea = std::chrono::high_resolution_clock::now();
             }
         }
