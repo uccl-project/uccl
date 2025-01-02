@@ -73,7 +73,7 @@ class CubicCC {
     }
 
     inline double get_cwnd() const {
-        return std::min(cwnd, (double)kMaxUnackedPkts);
+        return std::min(cwnd, (double)kMaxUnackedPktsPerEngine);
     }
 
    private:

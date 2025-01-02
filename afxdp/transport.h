@@ -281,6 +281,8 @@ class TXTracking {
     uint32_t num_unacked_msgbufs_;
     uint32_t num_unsent_msgbufs_;
     uint32_t num_tracked_msgbufs_;
+
+    uint16_t unacked_pkts_pp_[kPortEntropy] = {0};
 };
 
 /**
@@ -358,7 +360,7 @@ class RXTracking {
  *      converts to network packets and sends them out to the remote recipient.
  */
 class UcclFlow {
-    const static uint32_t kMaxReadyRxMsgbufs = kMaxUnackedPkts * 32;
+    const static uint32_t kMaxReadyRxMsgbufs = kMaxUnackedPktsPerEngine * 32;
 
    public:
     /**
@@ -519,14 +521,12 @@ class UcclFlow {
     // Pacer for Hybrid CC.
     swift::Pacer pacer_;
     // Path ID for each packet indexed by seqno.
-    uint8_t hist_path_id_[kMaxUnackedPkts] = {0};
-
+    uint8_t hist_path_id_[kMaxUnackedPktsPerEngine] = {0};
     inline void set_path_id(uint32_t seqno, uint32_t path_id) {
-        hist_path_id_[seqno % kMaxUnackedPkts] = path_id;
+        hist_path_id_[seqno % kMaxUnackedPktsPerEngine] = path_id;
     }
-
     inline uint32_t get_path_id(uint32_t seqno) {
-        return hist_path_id_[seqno % kMaxUnackedPkts];
+        return hist_path_id_[seqno % kMaxUnackedPktsPerEngine];
     }
 
     // Measure the distribution of probed RTT.

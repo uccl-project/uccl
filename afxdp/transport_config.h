@@ -30,16 +30,15 @@ static const uint64_t NUM_FRAMES = 1024 * 1024;
 static const uint32_t RECV_BATCH_SIZE = 32;
 
 // CC parameters.
-static const uint32_t kPortEntropy = 256;
+static const uint32_t kPortEntropy = 64;
 static const std::size_t kSackBitmapSize = 1024;
 static const std::size_t kFastRexmitDupAckThres = 5;
-// For bimq
-// static const uint32_t kMaxUnackedPkts = 1500 / NUM_QUEUES * 2;
-// For mq
-static const uint32_t kMaxUnackedPkts = 1500 / NUM_QUEUES;
 static const uint32_t kMaxTwPkts = 1024;
 static const double kPerPathMaxBw = 5.0 * 1e9 / 8;
 static const uint32_t kSwitchPathThres = 1u;
+static const uint32_t kMaxUnackedPktsPP = 4u;
+static const uint32_t kMaxUnackedPktsPerEngine =
+    kMaxUnackedPktsPP * kPortEntropy;
 
 static_assert(kPortEntropy <= 256, "kPortEntropy too large");
 static_assert(is_power_of_two(kPortEntropy), "kPortEntropy must be power of 2");

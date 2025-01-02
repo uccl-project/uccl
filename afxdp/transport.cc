@@ -425,8 +425,9 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
 
             // Avoid sending too many packets.
             auto num_unacked_pkts = tx_tracking_.num_unacked_msgbufs();
-            if (num_unacked_pkts >= kMaxUnackedPkts) return;
-            auto unacked_pkt_budget = kMaxUnackedPkts - num_unacked_pkts;
+            if (num_unacked_pkts >= kMaxUnackedPktsPerEngine) return;
+            auto unacked_pkt_budget =
+                kMaxUnackedPktsPerEngine - num_unacked_pkts;
             auto txq_free_entries =
                 socket_->send_queue_free_entries(unacked_pkt_budget);
             auto hard_budget =
@@ -454,8 +455,11 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
                     if (seqno == missing_ucclh->seqno.value()) {
                         // DCHECK_EQ(seqno, missing_ucclh->seqno.value())
                         //     << " seqno mismatch at index " << index;
+                        tx_tracking_.unacked_pkts_pp_[get_path_id(seqno)]--;
                         auto path_id = get_path_id_with_lowest_rtt();
                         set_path_id(seqno, path_id);
+                        tx_tracking_.unacked_pkts_pp_[path_id]++;
+
                         prepare_datapacket(msgbuf, path_id, seqno,
                                            UcclPktHdr::UcclFlags::kData);
                         msgbuf->mark_not_txpulltime_free();
@@ -483,6 +487,16 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
         // This is a valid ACK, acknowledging new data.
         size_t num_acked_packets = ackno - pcb_.snd_una;
         tx_tracking_.receive_acks(num_acked_packets);
+
+        if constexpr (kCCType == CCType::kHybrid) {
+            for (uint32_t seqno = pcb_.snd_una; seqno < ackno; seqno++) {
+                auto path_id = get_path_id(seqno);
+                // TODO(yang): why this check would fail?
+                // DCHECK_GT(tx_tracking_.unacked_pkts_pp_[path_id], 0)
+                //     << "path_id " << path_id;
+                tx_tracking_.unacked_pkts_pp_[path_id]--;
+            }
+        }
 
         if constexpr (kCCType == CCType::kCubic || kCCType == CCType::kHybrid) {
             pcb_.cubic_on_recv_ack(num_acked_packets);
@@ -517,8 +531,11 @@ void UcclFlow::fast_retransmit() {
     // Retransmit the oldest unacknowledged message buffer.
     auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
     if (msg_buf) {
+        tx_tracking_.unacked_pkts_pp_[get_path_id(pcb_.snd_una)]--;
         auto path_id = get_path_id_with_lowest_rtt();
         set_path_id(pcb_.snd_una, path_id);
+        tx_tracking_.unacked_pkts_pp_[path_id]++;
+
         prepare_datapacket(msg_buf, path_id, pcb_.snd_una,
                            UcclPktHdr::UcclFlags::kData);
         const auto *ucclh = reinterpret_cast<const UcclPktHdr *>(
@@ -536,8 +553,11 @@ void UcclFlow::rto_retransmit() {
     VLOG(3) << "RTO retransmitting oldest unacked packet " << pcb_.snd_una;
     auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
     if (msg_buf) {
+        tx_tracking_.unacked_pkts_pp_[get_path_id(pcb_.snd_una)]--;
         auto path_id = get_path_id_with_lowest_rtt();
         set_path_id(pcb_.snd_una, path_id);
+        tx_tracking_.unacked_pkts_pp_[path_id]++;
+
         prepare_datapacket(msg_buf, path_id, pcb_.snd_una,
                            UcclPktHdr::UcclFlags::kData);
         msg_buf->mark_not_txpulltime_free();
@@ -562,13 +582,15 @@ void UcclFlow::rto_retransmit() {
  */
 void UcclFlow::transmit_pending_packets() {
     // Avoid sending too many packets.
-    auto num_unacked_pkts = tx_tracking_.num_unacked_msgbufs();
-    if (num_unacked_pkts >= kMaxUnackedPkts) return;
+    // auto num_unacked_pkts = tx_tracking_.num_unacked_msgbufs();
+    // if (num_unacked_pkts >= kMaxUnackedPktsPerEngine) return;
 
-    auto unacked_pkt_budget = kMaxUnackedPkts - num_unacked_pkts;
-    auto txq_free_entries =
-        socket_->send_queue_free_entries(unacked_pkt_budget);
-    auto hard_budget = std::min(txq_free_entries, unacked_pkt_budget);
+    // auto unacked_pkt_budget = kMaxUnackedPktsPerEngine - num_unacked_pkts;
+    // auto txq_free_entries =
+    //     socket_->send_queue_free_entries(unacked_pkt_budget);
+    // auto hard_budget = std::min(txq_free_entries, unacked_pkt_budget);
+
+    auto hard_budget = socket_->send_queue_free_entries();
 
     auto path_id = 0;
     uint32_t permitted_packets = 0;
@@ -608,18 +630,32 @@ void UcclFlow::transmit_pending_packets() {
 
     // Prepare the packets.
     for (uint32_t i = 0; i < permitted_packets; i++) {
-        auto msg_buf_opt = tx_tracking_.get_and_update_oldest_unsent();
-        if (!msg_buf_opt.has_value()) break;
-
         if constexpr (kCCType != CCType::kCubicPP) {
             // Avoiding sending too many packets on the same path.
-            if (i % kSwitchPathThres == 0)
+            // if (i % kSwitchPathThres == 0) {
+            //     int tries = 0;
+            //     do {
+            //         path_id = get_path_id_with_lowest_rtt();
+            //     } while (tx_tracking_.unacked_pkts_pp_[path_id] +
+            //                      kSwitchPathThres >=
+            //                  kMaxUnackedPktsPP &&
+            //              tries++ < 5);
+            //     if (tries >= 5) {
+            //         // We cannot find a path with enough space to send
+            //         packets. break;
+            //     }
+            // }
+            if (i % kSwitchPathThres == 0) {
                 path_id = get_path_id_with_lowest_rtt();
+            }
         }
 
+        auto msg_buf_opt = tx_tracking_.get_and_update_oldest_unsent();
+        if (!msg_buf_opt.has_value()) break;
         auto *msg_buf = msg_buf_opt.value();
         auto seqno = pcb_.get_snd_nxt();
         set_path_id(seqno, path_id);
+        tx_tracking_.unacked_pkts_pp_[path_id]++;
 
         if (msg_buf->is_last()) {
             VLOG(2) << "Transmitting seqno: " << seqno << " payload_len: "
