@@ -285,12 +285,12 @@ class TXTracking {
     inline uint32_t get_unacked_pkts_pp(uint32_t path_id) {
         return unacked_pkts_pp_[path_id];
     }
-    inline void print_unacked_pkts_pp() {
+    inline std::string unacked_pkts_pp_to_string() {
         std::stringstream ss;
         ss << "unacked_pkts_pp_: ";
         for (uint32_t i = 0; i < kPortEntropy; i++)
             ss << unacked_pkts_pp_[i] << " ";
-        LOG(INFO) << ss.str();
+        return ss.str();
     }
 };
 
@@ -397,30 +397,29 @@ class UcclFlow {
           pcb_(),
           cubic_g_(),
           timely_g_(),
-          pacer_(kLinkBandwidth),
           tx_tracking_(socket, channel),
           rx_tracking_(socket, channel) {
         // Copy MAC addresses.
         memcpy(local_l2_addr_, local_l2_addr, ETH_ALEN);
         memcpy(remote_l2_addr_, remote_l2_addr, ETH_ALEN);
 
-        cubic_g_.init(&pcb_);
         timely_g_.init(&pcb_);
-
-        if constexpr (kCCType == CCType::kCubicPP) {
-            cubic_pp_ = new swift::CubicCtl[kPortEntropy];
-            for (uint32_t i = 0; i < kPortEntropy; i++)
-                cubic_pp_[i].init(&pcb_);
-        }
         if constexpr (kCCType == CCType::kTimelyPP) {
             timely_pp_ = new swift::TimelyCtl[kPortEntropy];
             for (uint32_t i = 0; i < kPortEntropy; i++)
                 timely_pp_[i].init(&pcb_);
         }
+
+        cubic_g_.init(&pcb_, kMaxUnackedPktsPerEngine);
+        if constexpr (kCCType == CCType::kCubicPP) {
+            cubic_pp_ = new swift::CubicCtl[kPortEntropy];
+            for (uint32_t i = 0; i < kPortEntropy; i++)
+                cubic_pp_[i].init(&pcb_, kMaxUnackedPktsPP);
+        }
     }
     ~UcclFlow() {
-        if constexpr (kCCType == CCType::kCubicPP) delete[] cubic_pp_;
         if constexpr (kCCType == CCType::kTimelyPP) delete[] timely_pp_;
+        if constexpr (kCCType == CCType::kCubicPP) delete[] cubic_pp_;
     }
 
     friend class UcclEngine;
@@ -536,21 +535,19 @@ class UcclFlow {
 
     // Swift reliable transmission control block.
     swift::Pcb pcb_;
-    swift::CubicCtl cubic_g_;
     swift::TimelyCtl timely_g_;
+    swift::CubicCtl cubic_g_;
     // Each path has its own PCB for CC.
-    swift::CubicCtl *cubic_pp_;
     swift::TimelyCtl *timely_pp_;
-    // Pacer for Hybrid CC.
-    swift::Pacer pacer_;
+    swift::CubicCtl *cubic_pp_;
 
     // Path ID for each packet indexed by seqno.
-    uint8_t hist_path_id_[kMaxUnackedPktsPerEngine] = {0};
+    uint8_t hist_path_id_[kMaxPathHistoryPerEngine] = {0};
     inline void set_path_id(uint32_t seqno, uint32_t path_id) {
-        hist_path_id_[seqno % kMaxUnackedPktsPerEngine] = path_id;
+        hist_path_id_[seqno & (kMaxPathHistoryPerEngine - 1)] = path_id;
     }
     inline uint32_t get_path_id(uint32_t seqno) {
-        return hist_path_id_[seqno % kMaxUnackedPktsPerEngine];
+        return hist_path_id_[seqno & (kMaxPathHistoryPerEngine - 1)];
     }
 
     // Measure the distribution of probed RTT.

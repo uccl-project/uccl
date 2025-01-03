@@ -19,7 +19,9 @@ class CubicCC {
           beta(0.7),
           last_max_cwnd(1.0),
           epoch_start(0),
-          last_update_time(rdtsc()) {}
+          last_update_time(rdtsc()),
+          max_cwnd(1024.0) {}
+    void init(uint32_t _max_cwnd) { max_cwnd = _max_cwnd; }
 
     /* https://book.systemsapproach.org/congestion/tcpcc.html */
     inline void on_ack_received(
@@ -52,6 +54,7 @@ class CubicCC {
                          (1.0 / cwnd));  // Scale additive increase by distance
             }
         }
+        cwnd = std::min(cwnd, max_cwnd);  // Cap cwnd at max_cwnd
 
         last_update_time = now;
         VLOG(3) << "ACK received: distance=" << distance << ", cwnd=" << cwnd
@@ -72,9 +75,7 @@ class CubicCC {
                 << ", ssthresh=" << ssthresh << std::endl;
     }
 
-    inline double get_cwnd() const {
-        return std::min(cwnd, (double)kMaxUnackedPktsPerEngine);
-    }
+    inline double get_cwnd() const { return cwnd; }
 
    private:
     double cwnd;                // Congestion window size
@@ -85,6 +86,7 @@ class CubicCC {
     double epoch_start;         // Start time of the current epoch
     uint64_t last_update_time;  // Last update time
     double K;                   // Inflection point in CUBIC formula
+    double max_cwnd;            // Maximum congestion window size
 
     friend class Pcb;
 };

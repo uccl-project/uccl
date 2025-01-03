@@ -16,7 +16,6 @@ enum class CCType {
     kTimelyPP,
     kCubic,
     kCubicPP,
-    kHybrid,
 };
 static constexpr CCType kCCType = CCType::kCubicPP;
 
@@ -28,6 +27,7 @@ static const uint16_t BASE_PORT = 10000;
 // 4GB frame pool in total; exceeding will cause crash.
 static const uint64_t NUM_FRAMES = 1024 * 1024;
 static const uint32_t RECV_BATCH_SIZE = 32;
+static const uint32_t SEND_BATCH_SIZE = 32;
 
 // CC parameters.
 static const uint32_t kPortEntropy = 64;
@@ -39,9 +39,14 @@ static const uint32_t kSwitchPathThres = 1u;
 static const uint32_t kMaxUnackedPktsPP = 8u;
 static const uint32_t kMaxUnackedPktsPerEngine =
     kMaxUnackedPktsPP * kPortEntropy;
+static const uint32_t kMaxPathHistoryPerEngine = 4096;
 
 static_assert(kPortEntropy <= 256, "kPortEntropy too large");
+static_assert(kMaxUnackedPktsPerEngine <= kMaxPathHistoryPerEngine,
+              "kMaxUnackedPktsPerEngine too large");
 static_assert(is_power_of_two(kPortEntropy), "kPortEntropy must be power of 2");
+static_assert(is_power_of_two(kMaxPathHistoryPerEngine),
+              "kMaxPathHistoryPerEngine must be power of 2");
 
 #ifdef CLOUDLAB_XL170
 // TODO(yang): why XL170 would crash with 1x fill ring size?

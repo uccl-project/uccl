@@ -135,7 +135,10 @@ struct CubicCtl {
     CubicCC cubic;
 
     CubicCtl() {};
-    inline void init(Pcb *pcb) { pcb_ = pcb; }
+    inline void init(Pcb *pcb, uint32_t max_cwnd) {
+        pcb_ = pcb;
+        cubic.init(max_cwnd);
+    }
 
     inline uint32_t cubic_effective_wnd() const {
         uint32_t snd_adjusted_una = pcb_->snd_una + pcb_->snd_ooo_acks;

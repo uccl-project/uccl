@@ -489,16 +489,7 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
         size_t num_acked_packets = ackno - pcb_.snd_una;
         tx_tracking_.receive_acks(num_acked_packets);
 
-        if constexpr (kCCType == CCType::kHybrid) {
-            for (uint32_t seqno = pcb_.snd_una; seqno < ackno; seqno++) {
-                auto path_id = get_path_id(seqno);
-                VLOG(3) << "Hybrid acked seqno " << seqno << " path_id "
-                        << path_id;
-                tx_tracking_.dec_unacked_pkts_pp(path_id);
-            }
-        }
-
-        if constexpr (kCCType == CCType::kCubic || kCCType == CCType::kHybrid) {
+        if constexpr (kCCType == CCType::kCubic) {
             cubic_g_.cubic_on_recv_ack(num_acked_packets);
         }
         if constexpr (kCCType == CCType::kCubicPP) {
@@ -512,9 +503,19 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
                 }
                 last_path_id = path_id;
                 accumu_acks++;
+                tx_tracking_.dec_unacked_pkts_pp(path_id);
+                VLOG(3) << "Hybrid acked seqno " << seqno << " path_id "
+                        << path_id;
             }
             if (accumu_acks) {
                 cubic_pp_[last_path_id].cubic_on_recv_ack(accumu_acks);
+            }
+        } else {
+            for (uint32_t seqno = pcb_.snd_una; seqno < ackno; seqno++) {
+                auto path_id = get_path_id(seqno);
+                tx_tracking_.dec_unacked_pkts_pp(path_id);
+                VLOG(3) << "Hybrid acked seqno " << seqno << " path_id "
+                        << path_id;
             }
         }
 
@@ -564,7 +565,7 @@ void UcclFlow::rto_retransmit() {
         socket_->send_packet(
             {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
     }
-    if constexpr (kCCType == CCType::kCubic || kCCType == CCType::kHybrid) {
+    if constexpr (kCCType == CCType::kCubic) {
         cubic_g_.cubic_on_packet_loss();
     }
     if constexpr (kCCType == CCType::kCubicPP) {
@@ -592,7 +593,6 @@ void UcclFlow::transmit_pending_packets() {
 
     auto hard_budget = socket_->send_queue_free_entries();
 
-    auto path_id = 0;
     uint32_t permitted_packets = 0;
 
     if constexpr (kCCType == CCType::kTimely || kCCType == CCType::kTimelyPP) {
@@ -603,14 +603,7 @@ void UcclFlow::transmit_pending_packets() {
             std::min(hard_budget, cubic_g_.cubic_effective_wnd());
     }
     if constexpr (kCCType == CCType::kCubicPP) {
-        // Choosing a path to send a batch of packets.
-        path_id = get_path_id_with_lowest_rtt();
-        permitted_packets =
-            std::min(hard_budget, cubic_pp_[path_id].cubic_effective_wnd());
-    }
-    if constexpr (kCCType == CCType::kHybrid) {
-        hard_budget = std::min(hard_budget, cubic_g_.cubic_effective_wnd());
-        permitted_packets = hard_budget;
+        permitted_packets = std::min(hard_budget, SEND_BATCH_SIZE);
     }
 
     // static uint64_t transmit_tries = 0;
@@ -630,25 +623,34 @@ void UcclFlow::transmit_pending_packets() {
 
     // Prepare the packets.
     for (uint32_t i = 0; i < permitted_packets; i++) {
-        if constexpr (kCCType != CCType::kCubicPP) {
+        uint32_t path_id = 0;
+        uint32_t path_cwnd = 0;
+        uint32_t path_unacked = 0;
+        bool found_path = false;
+
+        if constexpr (kCCType == CCType::kCubicPP) {
             // Avoiding sending too many packets on the same path.
             if (i % kSwitchPathThres == 0) {
                 int tries = 0;
-                do {
+                while (tries++ < 16) {
                     path_id = get_path_id_with_lowest_rtt();
-                } while (tx_tracking_.get_unacked_pkts_pp(path_id) +
-                                 kSwitchPathThres >=
-                             kMaxUnackedPktsPP &&
-                         tries++ < 16);
-                if (tries >= 16) {
-                    // tx_tracking_.print_unacked_pkts_pp();
+                    path_unacked = tx_tracking_.get_unacked_pkts_pp(path_id);
+                    path_cwnd = cubic_pp_[path_id].cubic.get_cwnd();
+                    if (path_unacked + kSwitchPathThres <= path_cwnd) {
+                        found_path = true;
+                        break;
+                    }
+                }
+                if (!found_path) {
                     // We cannot find a path with enough space to send packets.
+                    LOG_EVERY_N(INFO, 1000000)
+                        << "Cannot find path with available cwnd: "
+                        << tx_tracking_.unacked_pkts_pp_to_string();
                     break;
                 }
             }
-            // if (i % kSwitchPathThres == 0) {
-            //     path_id = get_path_id_with_lowest_rtt();
-            // }
+        } else {
+            path_id = get_path_id_with_lowest_rtt();
         }
 
         auto msg_buf_opt = tx_tracking_.get_and_update_oldest_unsent();
