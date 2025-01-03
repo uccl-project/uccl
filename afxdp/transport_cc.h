@@ -66,11 +66,11 @@ struct Pcb {
 
     std::string to_string() const {
         std::string s;
-        s += "[CC] snd_nxt: " + std::to_string(snd_nxt) +
-             " snd_una: " + std::to_string(snd_una) +
-             " rcv_nxt: " + std::to_string(rcv_nxt) +
-             " fast_rexmits: " + std::to_string(fast_rexmits) +
-             " rto_rexmits: " + std::to_string(rto_rexmits);
+        s += "snd_nxt: " + std::to_string(snd_nxt) +
+             ", snd_una: " + std::to_string(snd_una) +
+             ", rcv_nxt: " + std::to_string(rcv_nxt) +
+             ", fast_rexmits: " + std::to_string(fast_rexmits) +
+             ", rto_rexmits: " + std::to_string(rto_rexmits);
         return s;
     }
 
@@ -161,7 +161,7 @@ struct CubicCtl {
 
     inline std::string to_string() const {
         std::string s;
-        s += Format(" cubic cwnd: %.2lf effective_cwnd: %u", cubic.get_cwnd(),
+        s += Format("cwnd: %.2lf, effective_cwnd: %u", cubic.get_cwnd(),
                     cubic_effective_wnd());
         return s;
     }
@@ -249,9 +249,9 @@ struct TimelyCtl {
         auto avg_rtt_diff = timely_.get_avg_rtt_diff();
         auto rate_gbps = timely_.get_rate_gbps();
         std::string s;
-        s += Format(" timely prev_rtt: %.2lf us", timely_.prev_rtt_) +
-             Format(" timely avg_rtt_diff: %.2lf us", avg_rtt_diff) +
-             Format(" timely rate: %.2lf Gbps", rate_gbps);
+        s += Format(
+            "prev_rtt: %.2lf us, avg_rtt_diff: %.2lf us, rate: %.2lf Gbps",
+            timely_.prev_rtt_, avg_rtt_diff, rate_gbps);
         return s;
     }
 };

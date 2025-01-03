@@ -219,7 +219,10 @@ void RXTracking::try_copy_msgbuf_to_appbuf(Channel::Msg *rx_work) {
 
 std::string UcclFlow::to_string() const {
     std::string s;
-    s += "\n\t\t\t" + pcb_.to_string() +
+    s += "\n\t\t\t[CC] pcb:         " + pcb_.to_string() +
+         "\n\t\t\t     cubic:       " + cubic_g_.to_string() +
+         "\n\t\t\t     cubic_pp[0]: " + cubic_pp_[0].to_string() +
+         "\n\t\t\t     timely:      " + timely_g_.to_string() +
          "\n\t\t\t[TX] pending msgbufs unsent: " +
          std::to_string(tx_tracking_.num_unsent_msgbufs()) +
          "\n\t\t\t[RX] ready msgs unconsumed: " +
@@ -1298,7 +1301,7 @@ std::string UcclEngine::status_to_string() {
                     flow->remote_engine_idx_);
         s += flow->to_string();
     }
-    s += socket_->to_string();
+    s += "\n\t\t\t[AFXDP] " + socket_->to_string();
     return s;
 }
 

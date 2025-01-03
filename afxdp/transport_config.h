@@ -19,7 +19,7 @@ enum class CCType {
 };
 static constexpr CCType kCCType = CCType::kCubicPP;
 
-static const uint32_t NUM_QUEUES = 1;
+static const uint32_t NUM_QUEUES = 2;
 static uint32_t NUM_CPUS = std::thread::hardware_concurrency();
 // Starting from 1/4 of the CPUs to avoid conflicting with nccl proxy service.
 static uint32_t ENGINE_CPU_START = NUM_CPUS / 4;

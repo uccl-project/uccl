@@ -441,10 +441,8 @@ std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
 
 std::string AFXDPSocket::to_string() {
     std::string s;
-    s += Format(
-        "\n\t\t\t[AFXDP] free frames: %u, unpulled tx pkts: %u, fill queue "
-        "entries: %u",
-        frame_pool_->size(), unpulled_tx_pkts_, fill_queue_entries_);
+    s += Format("free frames: %u, unpulled tx pkts: %u, fill queue entries: %u",
+                frame_pool_->size(), unpulled_tx_pkts_, fill_queue_entries_);
     if (queue_id_ == 0) {
         auto now = std::chrono::high_resolution_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
