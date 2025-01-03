@@ -457,12 +457,10 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
                     // TODO(yang): tmp fix---they should be equal, need to
                     // refine the way we maintain tx_but_unacked msgbufs chains.
                     if (seqno == missing_ucclh->seqno.value()) {
-                        // DCHECK_EQ(seqno, missing_ucclh->seqno.value())
-                        //     << " seqno mismatch at index " << index;
-                        tx_tracking_.dec_unacked_pkts_pp(get_path_id(seqno));
                         auto path_id = get_path_id_with_lowest_rtt();
-                        set_path_id(seqno, path_id);
+                        tx_tracking_.dec_unacked_pkts_pp(get_path_id(seqno));
                         tx_tracking_.inc_unacked_pkts_pp(path_id);
+                        set_path_id(seqno, path_id);
 
                         prepare_datapacket(msgbuf, path_id, seqno,
                                            UcclPktHdr::UcclFlags::kData);
@@ -497,10 +495,10 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
         }
         if constexpr (kCCType == CCType::kCubicPP) {
             uint32_t accumu_acks = 0;
-            auto last_path_id = kPortEntropy;
+            auto last_path_id = kMaxPath;
             for (uint32_t seqno = pcb_.snd_una; seqno < ackno; seqno++) {
                 auto path_id = get_path_id(seqno);
-                if (path_id != last_path_id && last_path_id != kPortEntropy) {
+                if (path_id != last_path_id && last_path_id != kMaxPath) {
                     cubic_pp_[last_path_id].cubic_on_recv_ack(accumu_acks);
                     accumu_acks = 0;
                 }
@@ -535,10 +533,10 @@ void UcclFlow::fast_retransmit() {
     // Retransmit the oldest unacknowledged message buffer.
     auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
     if (msg_buf && pcb_.snd_una != pcb_.snd_nxt) {
-        tx_tracking_.dec_unacked_pkts_pp(get_path_id(pcb_.snd_una));
         auto path_id = get_path_id_with_lowest_rtt();
-        set_path_id(pcb_.snd_una, path_id);
+        tx_tracking_.dec_unacked_pkts_pp(get_path_id(pcb_.snd_una));
         tx_tracking_.inc_unacked_pkts_pp(path_id);
+        set_path_id(pcb_.snd_una, path_id);
 
         prepare_datapacket(msg_buf, path_id, pcb_.snd_una,
                            UcclPktHdr::UcclFlags::kData);
@@ -557,10 +555,10 @@ void UcclFlow::rto_retransmit() {
     VLOG(3) << "RTO retransmitting oldest unacked packet " << pcb_.snd_una;
     auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
     if (msg_buf && pcb_.snd_una != pcb_.snd_nxt) {
-        tx_tracking_.dec_unacked_pkts_pp(get_path_id(pcb_.snd_una));
         auto path_id = get_path_id_with_lowest_rtt();
-        set_path_id(pcb_.snd_una, path_id);
+        tx_tracking_.dec_unacked_pkts_pp(get_path_id(pcb_.snd_una));
         tx_tracking_.inc_unacked_pkts_pp(path_id);
+        set_path_id(pcb_.snd_una, path_id);
 
         prepare_datapacket(msg_buf, path_id, pcb_.snd_una,
                            UcclPktHdr::UcclFlags::kData);
@@ -677,7 +675,10 @@ void UcclFlow::transmit_pending_packets() {
     }
 
     // TX both data and ack frames.
-    if (pending_tx_frames_.empty()) return;
+    if (pending_tx_frames_.empty()) {
+        socket_->kick_tx_and_pull();
+        return;
+    }
     VLOG(3) << "tx packets " << pending_tx_frames_.size();
 
     socket_->send_packets(pending_tx_frames_);
@@ -698,7 +699,7 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
     uint32_t num_tx_frames = 0;
     size_t remaining_bytes = tx_work.len - cur_offset;
 
-    uint32_t path_id = kPortEntropy;
+    uint32_t path_id = kMaxPath;
     if constexpr (kCCType == CCType::kTimelyPP) {
         path_id = get_path_id_with_lowest_rtt();
     }
@@ -1266,16 +1267,16 @@ void UcclEngine::handle_install_flow_on_engine(Channel::CtrlMsg &ctrl_work) {
                 socket_->push_frame(frame.frame_offset);
             }
         }
-        if (dst_ports_set.size() >= kPortEntropy) break;
+        if (dst_ports_set.size() >= kMaxPath) break;
     }
 
     LOG(INFO) << "[Engine] handle_install_flow_on_engine dst_ports size: "
               << dst_ports_set.size();
-    DCHECK_GE(dst_ports_set.size(), kPortEntropy);
+    DCHECK_GE(dst_ports_set.size(), kMaxPath);
 
-    flow->dst_ports_.reserve(kPortEntropy);
+    flow->dst_ports_.reserve(kMaxPath);
     auto it = dst_ports_set.begin();
-    std::advance(it, kPortEntropy);
+    std::advance(it, kMaxPath);
     std::copy(dst_ports_set.begin(), it, std::back_inserter(flow->dst_ports_));
 
     LOG(INFO) << "[Engine] install FlowID " << std::hex << "0x" << flow_id

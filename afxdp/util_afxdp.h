@@ -268,6 +268,14 @@ class AFXDPSocket {
     uint32_t send_packet(frame_desc frame);
     uint32_t send_packets(std::vector<frame_desc> &frames);
     uint32_t pull_complete_queue();
+    inline uint32_t kick_tx_and_pull() {
+        uint32_t pull_tx_pkts = 0;
+        do {
+            kick_tx();
+            pull_tx_pkts += pull_complete_queue();
+        } while (unpulled_tx_pkts_ > FILL_RING_SIZE / 2);
+        return pull_tx_pkts;
+    }
     inline uint32_t send_queue_free_entries(uint32_t nb = UINT32_MAX) {
         return xsk_prod_nb_free(&send_queue_, nb);
     }

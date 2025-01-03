@@ -37,18 +37,18 @@ constexpr bool seqno_gt(uint32_t a, uint32_t b) {
  * @brief Swift Congestion Control (SWCC) protocol control block.
  */
 struct Pcb {
-    static constexpr std::size_t kInitialCwnd = 256;
     static constexpr std::size_t kSackBitmapBucketSize = sizeof(uint64_t) * 8;
     static constexpr std::size_t kRtoMaxRexmitConsectutiveAllowed = 102400;
     static constexpr int kRtoExpireThresInTicks = 3;  // in slow timer ticks.
     static constexpr int kRtoDisabled = -1;
+    static constexpr uint32_t kInitSeq = 0u;
     Pcb() {}
 
     uint32_t target_delay{0};
-    uint32_t snd_nxt{0};
-    uint32_t snd_una{0};
+    uint32_t snd_nxt{kInitSeq};
+    uint32_t snd_una{kInitSeq};
     uint32_t snd_ooo_acks{0};
-    uint32_t rcv_nxt{0};
+    uint32_t rcv_nxt{kInitSeq};
     uint64_t sack_bitmap[kSackBitmapSize / kSackBitmapBucketSize]{0};
     uint8_t sack_bitmap_count{0};
     uint16_t duplicate_acks{0};

@@ -274,7 +274,7 @@ class TXTracking {
     uint32_t num_unsent_msgbufs_;
     uint32_t num_tracked_msgbufs_;
 
-    uint16_t unacked_pkts_pp_[kPortEntropy] = {0};
+    uint16_t unacked_pkts_pp_[kMaxPath] = {0};
     inline void inc_unacked_pkts_pp(uint32_t path_id) {
         unacked_pkts_pp_[path_id]++;
     }
@@ -288,7 +288,7 @@ class TXTracking {
     inline std::string unacked_pkts_pp_to_string() {
         std::stringstream ss;
         ss << "unacked_pkts_pp_: ";
-        for (uint32_t i = 0; i < kPortEntropy; i++)
+        for (uint32_t i = 0; i < kMaxPath; i++)
             ss << unacked_pkts_pp_[i] << " ";
         return ss.str();
     }
@@ -405,15 +405,14 @@ class UcclFlow {
 
         timely_g_.init(&pcb_);
         if constexpr (kCCType == CCType::kTimelyPP) {
-            timely_pp_ = new swift::TimelyCtl[kPortEntropy];
-            for (uint32_t i = 0; i < kPortEntropy; i++)
-                timely_pp_[i].init(&pcb_);
+            timely_pp_ = new swift::TimelyCtl[kMaxPath];
+            for (uint32_t i = 0; i < kMaxPath; i++) timely_pp_[i].init(&pcb_);
         }
 
         cubic_g_.init(&pcb_, kMaxUnackedPktsPerEngine);
         if constexpr (kCCType == CCType::kCubicPP) {
-            cubic_pp_ = new swift::CubicCtl[kPortEntropy];
-            for (uint32_t i = 0; i < kPortEntropy; i++)
+            cubic_pp_ = new swift::CubicCtl[kMaxPath];
+            for (uint32_t i = 0; i < kMaxPath; i++)
                 cubic_pp_[i].init(&pcb_, kMaxUnackedPktsPP);
         }
     }
@@ -555,23 +554,23 @@ class UcclFlow {
     uint64_t rtt_probe_count_ = 0;
 
     /* Maintaining per-path RTT for entropy-based path selection. */
-    static const uint32_t kPortEntropyMask = kPortEntropy - 1;
+    static const uint32_t kMaxPathMask = kMaxPath - 1;
     // Destination ports with remote_engine_idx_ as the target queue_id.
     std::vector<uint16_t> dst_ports_;
     // RTT in tsc; indexed by path_id.
-    size_t port_path_rtt_[kPortEntropy] = {0};
+    size_t port_path_rtt_[kMaxPath] = {0};
 
     inline uint32_t get_path_id_with_lowest_rtt() {
 #ifdef PATH_SELECTION
         auto idx_u32 = U32Rand(0, UINT32_MAX);
-        auto idx1 = idx_u32 & kPortEntropyMask;
-        auto idx2 = (idx_u32 >> 16) & kPortEntropyMask;
+        auto idx1 = idx_u32 & kMaxPathMask;
+        auto idx2 = (idx_u32 >> 16) & kMaxPathMask;
         VLOG(3) << "rtt: idx1 " << port_path_rtt_[idx1] << " idx2 "
                 << port_path_rtt_[idx2];
         return (port_path_rtt_[idx1] < port_path_rtt_[idx2]) ? idx1 : idx2;
 #else
         static uint32_t next_path_id = 0;
-        return (next_path_id++) & kPortEntropyMask;
+        return (next_path_id++) & kMaxPathMask;
 #endif
     }
 

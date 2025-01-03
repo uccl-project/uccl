@@ -325,13 +325,7 @@ uint32_t AFXDPSocket::send_packet(frame_desc frame) {
     out_bytes_ += frame.frame_len;
     out_packets_++;
 
-    uint32_t pull_tx_pkts = 0;
-    do {
-        kick_tx();
-        pull_tx_pkts += pull_complete_queue();
-    } while (unpulled_tx_pkts_ > FILL_RING_SIZE / 2);
-
-    return pull_tx_pkts;
+    return kick_tx_and_pull();
 }
 
 uint32_t AFXDPSocket::send_packets(std::vector<frame_desc> &frames) {
@@ -359,13 +353,7 @@ uint32_t AFXDPSocket::send_packets(std::vector<frame_desc> &frames) {
     xsk_ring_prod__submit(&send_queue_, num_frames);
     unpulled_tx_pkts_ += num_frames;
 
-    uint32_t pull_tx_pkts = 0;
-    do {
-        kick_tx();
-        pull_tx_pkts += pull_complete_queue();
-    } while (unpulled_tx_pkts_ > FILL_RING_SIZE / 2);
-
-    return pull_tx_pkts;
+    return kick_tx_and_pull();
 }
 
 void AFXDPSocket::populate_fill_queue(uint32_t nb_frames) {

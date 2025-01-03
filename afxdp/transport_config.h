@@ -30,21 +30,20 @@ static const uint32_t RECV_BATCH_SIZE = 32;
 static const uint32_t SEND_BATCH_SIZE = 32;
 
 // CC parameters.
-static const uint32_t kPortEntropy = 64;
+static const uint32_t kMaxPath = 64;
 static const std::size_t kSackBitmapSize = 1024;
 static const std::size_t kFastRexmitDupAckThres = 5;
 static const uint32_t kMaxTwPkts = 1024;
 static const double kPerPathMaxBw = 5.0 * 1e9 / 8;
 static const uint32_t kSwitchPathThres = 1u;
 static const uint32_t kMaxUnackedPktsPP = 8u;
-static const uint32_t kMaxUnackedPktsPerEngine =
-    kMaxUnackedPktsPP * kPortEntropy;
+static const uint32_t kMaxUnackedPktsPerEngine = kMaxUnackedPktsPP * kMaxPath;
 static const uint32_t kMaxPathHistoryPerEngine = 4096;
 
-static_assert(kPortEntropy <= 256, "kPortEntropy too large");
+static_assert(kMaxPath <= 256, "kMaxPath too large");
 static_assert(kMaxUnackedPktsPerEngine <= kMaxPathHistoryPerEngine,
               "kMaxUnackedPktsPerEngine too large");
-static_assert(is_power_of_two(kPortEntropy), "kPortEntropy must be power of 2");
+static_assert(is_power_of_two(kMaxPath), "kMaxPath must be power of 2");
 static_assert(is_power_of_two(kMaxPathHistoryPerEngine),
               "kMaxPathHistoryPerEngine must be power of 2");
 
