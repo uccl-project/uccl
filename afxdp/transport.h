@@ -252,14 +252,6 @@ class TXTracking {
     friend class UcclEngine;
 
    private:
-    inline const uint32_t num_tracked_msgbufs() const {
-        return num_tracked_msgbufs_;
-    }
-    inline const FrameBuf *get_last_msgbuf() const { return last_msgbuf_; }
-    inline const FrameBuf *get_oldest_unsent_msgbuf() const {
-        return oldest_unsent_msgbuf_;
-    }
-
     AFXDPSocket *socket_;
     Channel *channel_;
 

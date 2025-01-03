@@ -19,10 +19,10 @@ void TXTracking::receive_acks(uint32_t num_acked_pkts) {
             oldest_unacked_msgbuf_ = msgbuf->next();
             DCHECK(oldest_unacked_msgbuf_ != nullptr) << num_acked_pkts;
         } else {
+            CHECK_EQ(num_tracked_msgbufs_, 1);
             oldest_unacked_msgbuf_ = nullptr;
             oldest_unsent_msgbuf_ = nullptr;
             last_msgbuf_ = nullptr;
-            CHECK_EQ(num_tracked_msgbufs_, 1);
         }
 
         if (msgbuf->is_last()) {
@@ -68,12 +68,9 @@ void TXTracking::append(FrameBuf *msgbuf_head, FrameBuf *msgbuf_tail,
         DCHECK(oldest_unsent_msgbuf_ == nullptr);
         last_msgbuf_ = msgbuf_tail;
         oldest_unsent_msgbuf_ = msgbuf_head;
-        oldest_unacked_msgbuf_ = msgbuf_head;
     } else {
-        // This is not the first message buffer in the flow.
-        DCHECK(oldest_unacked_msgbuf_ != nullptr)
-            << oldest_unacked_msgbuf_->print_chain();
-        // Let's enqueue the new message buffer at the end of the chain.
+        // This is not the first message buffer in the flow; let's enqueue the
+        // new message buffer at the end of the chain.
         last_msgbuf_->set_next(msgbuf_head);
         // Update the last buffer pointer to point to the current buffer.
         last_msgbuf_ = msgbuf_tail;
@@ -91,8 +88,9 @@ std::optional<FrameBuf *> TXTracking::get_and_update_oldest_unsent() {
                 << " last_msgbuf_ " << last_msgbuf_ << " oldest_unsent_msgbuf "
                 << oldest_unsent_msgbuf_ << " oldest_unacked_msgbuf_ "
                 << oldest_unacked_msgbuf_;
+
     if (oldest_unsent_msgbuf_ == nullptr) {
-        DCHECK_EQ(num_unsent_msgbufs(), 0);
+        DCHECK_EQ(num_unsent_msgbufs_, 0);
         return std::nullopt;
     }
 
@@ -102,6 +100,8 @@ std::optional<FrameBuf *> TXTracking::get_and_update_oldest_unsent() {
     } else {
         oldest_unsent_msgbuf_ = nullptr;
     }
+
+    if (oldest_unacked_msgbuf_ == nullptr) oldest_unacked_msgbuf_ = msgbuf;
 
     num_unacked_msgbufs_++;
     num_unsent_msgbufs_--;
@@ -530,7 +530,7 @@ void UcclFlow::fast_retransmit() {
     VLOG(3) << "Fast retransmitting oldest unacked packet " << pcb_.snd_una;
     // Retransmit the oldest unacknowledged message buffer.
     auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
-    if (msg_buf) {
+    if (msg_buf && pcb_.snd_una != pcb_.snd_nxt) {
         tx_tracking_.dec_unacked_pkts_pp(get_path_id(pcb_.snd_una));
         auto path_id = get_path_id_with_lowest_rtt();
         set_path_id(pcb_.snd_una, path_id);
@@ -552,7 +552,7 @@ void UcclFlow::fast_retransmit() {
 void UcclFlow::rto_retransmit() {
     VLOG(3) << "RTO retransmitting oldest unacked packet " << pcb_.snd_una;
     auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
-    if (msg_buf) {
+    if (msg_buf && pcb_.snd_una != pcb_.snd_nxt) {
         tx_tracking_.dec_unacked_pkts_pp(get_path_id(pcb_.snd_una));
         auto path_id = get_path_id_with_lowest_rtt();
         set_path_id(pcb_.snd_una, path_id);
@@ -610,7 +610,6 @@ void UcclFlow::transmit_pending_packets() {
     }
     if constexpr (kCCType == CCType::kHybrid) {
         hard_budget = std::min(hard_budget, cubic_g_.cubic_effective_wnd());
-        // permitted_packets = pacer_.ready_packets(hard_budget);
         permitted_packets = hard_budget;
     }
 
@@ -723,11 +722,6 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
             timely_g_.timely_pace_packet_with_rate(
                 now_tsc, payload_len + kNetHdrLen + kUcclHdrLen, cur_msgbuf,
                 rate);
-        }
-        if constexpr (kCCType == CCType::kHybrid) {
-            // pacer_.pace_packet(now_tsc, payload_len + kNetHdrLen +
-            // kUcclHdrLen,
-            //                    cur_msgbuf);
         }
 
         remaining_bytes -= payload_len;

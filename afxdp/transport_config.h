@@ -18,7 +18,7 @@ enum class CCType {
     kCubicPP,
     kHybrid,
 };
-static constexpr CCType kCCType = CCType::kHybrid;
+static constexpr CCType kCCType = CCType::kCubicPP;
 
 static const uint32_t NUM_QUEUES = 1;
 static uint32_t NUM_CPUS = std::thread::hardware_concurrency();
