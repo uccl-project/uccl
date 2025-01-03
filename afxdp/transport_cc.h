@@ -42,12 +42,7 @@ struct Pcb {
     static constexpr std::size_t kRtoMaxRexmitConsectutiveAllowed = 102400;
     static constexpr int kRtoExpireThresInTicks = 3;  // in slow timer ticks.
     static constexpr int kRtoDisabled = -1;
-    Pcb()
-        : timely_(freq_ghz, kLinkBandwidth),
-          wheel_({freq_ghz}),
-          prev_desired_tx_tsc_(rdtsc()) {
-        wheel_.catchup();
-    }
+    Pcb() {}
 
     uint32_t target_delay{0};
     uint32_t snd_nxt{0};
@@ -62,18 +57,96 @@ struct Pcb {
     uint32_t rto_rexmits{0};
     uint16_t rto_rexmits_consectutive{0};
 
-    /********* Cubic congestion control starts *********/
+    uint32_t seqno() const { return snd_nxt; }
+    uint32_t get_snd_nxt() {
+        uint32_t seqno = snd_nxt;
+        snd_nxt++;
+        return seqno;
+    }
+
+    std::string to_string() const {
+        std::string s;
+        s += "[CC] snd_nxt: " + std::to_string(snd_nxt) +
+             " snd_una: " + std::to_string(snd_una) +
+             " rcv_nxt: " + std::to_string(rcv_nxt) +
+             " fast_rexmits: " + std::to_string(fast_rexmits) +
+             " rto_rexmits: " + std::to_string(rto_rexmits);
+        return s;
+    }
+
+    uint32_t ackno() const { return rcv_nxt; }
+    bool max_rto_rexmits_consectutive_reached() const {
+        return rto_rexmits_consectutive >= kRtoMaxRexmitConsectutiveAllowed;
+    }
+    bool rto_disabled() const { return rto_timer == kRtoDisabled; }
+    bool rto_expired() const { return rto_timer >= kRtoExpireThresInTicks; }
+
+    uint32_t get_rcv_nxt() const { return rcv_nxt; }
+    void advance_rcv_nxt() { rcv_nxt++; }
+    void rto_enable() { rto_timer = 0; }
+    void rto_disable() { rto_timer = kRtoDisabled; }
+    void rto_reset() { rto_enable(); }
+    void rto_maybe_reset() {
+        if (snd_una == snd_nxt)
+            rto_disable();
+        else
+            rto_reset();
+    }
+    void rto_advance() { rto_timer++; }
+
+    void sack_bitmap_shift_left_one() {
+        constexpr size_t sack_bitmap_bucket_max_idx =
+            kSackBitmapSize / kSackBitmapBucketSize - 1;
+
+        for (size_t i = 0; i < sack_bitmap_bucket_max_idx; i++) {
+            // Shift the current each bucket to the left by 1 and take the most
+            // significant bit from the next bucket
+            uint64_t &sack_bitmap_left_bucket = sack_bitmap[i];
+            const uint64_t sack_bitmap_right_bucket = sack_bitmap[i + 1];
+
+            sack_bitmap_left_bucket = (sack_bitmap_left_bucket >> 1) |
+                                      (sack_bitmap_right_bucket << 63);
+        }
+
+        // Special handling for the right most bucket
+        uint64_t &sack_bitmap_right_most_bucket =
+            sack_bitmap[sack_bitmap_bucket_max_idx];
+        sack_bitmap_right_most_bucket >>= 1;
+
+        sack_bitmap_count--;
+    }
+
+    void sack_bitmap_bit_set(const size_t index) {
+        const size_t sack_bitmap_bucket_idx = index / kSackBitmapBucketSize;
+        const size_t sack_bitmap_idx_in_bucket = index % kSackBitmapBucketSize;
+
+        LOG_IF(FATAL, index >= kSackBitmapSize)
+            << "Index out of bounds: " << index;
+
+        sack_bitmap[sack_bitmap_bucket_idx] |=
+            (1ULL << sack_bitmap_idx_in_bucket);
+
+        sack_bitmap_count++;
+    }
+};
+
+struct CubicCtl {
+    Pcb *pcb_;
     CubicCC cubic;
 
+    CubicCtl() {};
+    inline void init(Pcb *pcb) { pcb_ = pcb; }
+
     inline uint32_t cubic_effective_wnd() const {
-        uint32_t snd_adjusted_una = snd_una + snd_ooo_acks;
+        uint32_t snd_adjusted_una = pcb_->snd_una + pcb_->snd_ooo_acks;
         uint32_t cwnd = cubic.get_cwnd();
 
         // This normally does not happen.
-        if (snd_nxt < snd_adjusted_una || cwnd <= snd_nxt - snd_adjusted_una)
+        if (pcb_->snd_nxt < snd_adjusted_una ||
+            cwnd <= pcb_->snd_nxt - snd_adjusted_una)
             return 1;
 
-        uint32_t effective_wnd = cwnd - (snd_nxt - snd_adjusted_una);
+        uint32_t effective_wnd = cwnd - (pcb_->snd_nxt - snd_adjusted_una);
         return effective_wnd == 0 ? 1 : effective_wnd;
     }
 
@@ -82,12 +155,28 @@ struct Pcb {
     }
 
     inline void cubic_on_packet_loss() { cubic.on_packet_loss(); }
-    /********* Cubic congestion control ends *********/
 
-    /********* Timely congestion control starts *********/
+    inline std::string to_string() const {
+        std::string s;
+        s += Format(" cubic cwnd: %.2lf effective_cwnd: %u", cubic.get_cwnd(),
+                    cubic_effective_wnd());
+        return s;
+    }
+};
+
+struct TimelyCtl {
+    Pcb *pcb_;
     Timely timely_;
     TimingWheel wheel_;
     size_t prev_desired_tx_tsc_;
+
+    TimelyCtl()
+        : timely_(freq_ghz, kLinkBandwidth),
+          wheel_({freq_ghz}),
+          prev_desired_tx_tsc_(rdtsc()) {
+        wheel_.catchup();
+    }
+    inline void init(Pcb *pcb) { pcb_ = pcb; }
 
     inline double timely_rate() { return timely_.rate_; }
 
@@ -152,104 +241,34 @@ struct Pcb {
 
         return num_ready;
     }
-    /********* Timely congestion control ends *********/
 
-    uint32_t seqno() const { return snd_nxt; }
-    uint32_t get_snd_nxt() {
-        uint32_t seqno = snd_nxt;
-        snd_nxt++;
-        return seqno;
-    }
-
-    std::string to_string() const {
+    inline std::string to_string() const {
         auto avg_rtt_diff = timely_.get_avg_rtt_diff();
         auto rate_gbps = timely_.get_rate_gbps();
         std::string s;
-        s += "[CC] snd_nxt: " + std::to_string(snd_nxt) +
-             " snd_una: " + std::to_string(snd_una) +
-             " rcv_nxt: " + std::to_string(rcv_nxt) +
-             " fast_rexmits: " + std::to_string(fast_rexmits) +
-             " rto_rexmits: " + std::to_string(rto_rexmits) +
-             Format(" timely prev_rtt: %.2lf us", timely_.prev_rtt_) +
+        s += Format(" timely prev_rtt: %.2lf us", timely_.prev_rtt_) +
              Format(" timely avg_rtt_diff: %.2lf us", avg_rtt_diff) +
-             Format(" timely rate: %.2lf Gbps", rate_gbps) +
-             Format(" cubic cwnd: %.2lf effective_cwnd: %u", cubic.get_cwnd(),
-                    cubic_effective_wnd());
+             Format(" timely rate: %.2lf Gbps", rate_gbps);
         return s;
-    }
-
-    uint32_t ackno() const { return rcv_nxt; }
-    bool max_rto_rexmits_consectutive_reached() const {
-        return rto_rexmits_consectutive >= kRtoMaxRexmitConsectutiveAllowed;
-    }
-    bool rto_disabled() const { return rto_timer == kRtoDisabled; }
-    bool rto_expired() const { return rto_timer >= kRtoExpireThresInTicks; }
-
-    uint32_t get_rcv_nxt() const { return rcv_nxt; }
-    void advance_rcv_nxt() { rcv_nxt++; }
-    void rto_enable() { rto_timer = 0; }
-    void rto_disable() { rto_timer = kRtoDisabled; }
-    void rto_reset() { rto_enable(); }
-    void rto_maybe_reset() {
-        if (snd_una == snd_nxt)
-            rto_disable();
-        else
-            rto_reset();
-    }
-    void rto_advance() { rto_timer++; }
-
-    void sack_bitmap_shift_left_one() {
-        constexpr size_t sack_bitmap_bucket_max_idx =
-            kSackBitmapSize / kSackBitmapBucketSize - 1;
-
-        for (size_t i = 0; i < sack_bitmap_bucket_max_idx; i++) {
-            // Shift the current each bucket to the left by 1 and take the most
-            // significant bit from the next bucket
-            uint64_t &sack_bitmap_left_bucket = sack_bitmap[i];
-            const uint64_t sack_bitmap_right_bucket = sack_bitmap[i + 1];
-
-            sack_bitmap_left_bucket = (sack_bitmap_left_bucket >> 1) |
-                                      (sack_bitmap_right_bucket << 63);
-        }
-
-        // Special handling for the right most bucket
-        uint64_t &sack_bitmap_right_most_bucket =
-            sack_bitmap[sack_bitmap_bucket_max_idx];
-        sack_bitmap_right_most_bucket >>= 1;
-
-        sack_bitmap_count--;
-    }
-
-    void sack_bitmap_bit_set(const size_t index) {
-        const size_t sack_bitmap_bucket_idx = index / kSackBitmapBucketSize;
-        const size_t sack_bitmap_idx_in_bucket = index % kSackBitmapBucketSize;
-
-        LOG_IF(FATAL, index >= kSackBitmapSize)
-            << "Index out of bounds: " << index;
-
-        sack_bitmap[sack_bitmap_bucket_idx] |=
-            (1ULL << sack_bitmap_idx_in_bucket);
-
-        sack_bitmap_count++;
     }
 };
 
-class Pacer {
-   public:
+struct Pacer {
     TimingWheel wheel_;
     size_t prev_desired_tx_tsc_;
-    double rate_global_;
+    double target_rate_;
 
-    Pacer()
+    // Rate in GBytes per second.
+    Pacer(double target_rate)
         : wheel_({freq_ghz}),
           prev_desired_tx_tsc_(rdtsc()),
-          rate_global_(kLinkBandwidth) {
+          target_rate_(kLinkBandwidth) {
         wheel_.catchup();
     }
 
     inline void pace_packet(size_t ref_tsc, size_t pkt_size, void *msgbuf) {
         // This is just a pacer, with no dynamic rate control.
-        double ns_delta = 1e9 * (pkt_size / rate_global_);
+        double ns_delta = 1e9 * (pkt_size / target_rate_);
         double cycle_delta = ns_to_cycles(ns_delta, freq_ghz);
 
         size_t desired_tx_tsc = prev_desired_tx_tsc_ + cycle_delta;

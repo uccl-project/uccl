@@ -296,9 +296,8 @@ class TXTracking {
     inline void print_unacked_pkts_pp() {
         std::stringstream ss;
         ss << "unacked_pkts_pp_: ";
-        for (uint32_t i = 0; i < kPortEntropy; i++) {
+        for (uint32_t i = 0; i < kPortEntropy; i++)
             ss << unacked_pkts_pp_[i] << " ";
-        }
         LOG(INFO) << ss.str();
     }
 };
@@ -404,21 +403,32 @@ class UcclFlow {
           channel_(channel),
           flow_id_(flow_id),
           pcb_(),
-          pacer_(),
+          cubic_g_(),
+          timely_g_(),
+          pacer_(kLinkBandwidth),
           tx_tracking_(socket, channel),
           rx_tracking_(socket, channel) {
+        // Copy MAC addresses.
         memcpy(local_l2_addr_, local_l2_addr, ETH_ALEN);
         memcpy(remote_l2_addr_, remote_l2_addr, ETH_ALEN);
-        if constexpr (kCCType == CCType::kCubicPP ||
-                      kCCType == CCType::kTimelyPP) {
-            pcb_pp_ = new swift::Pcb[kPortEntropy];
+
+        cubic_g_.init(&pcb_);
+        timely_g_.init(&pcb_);
+
+        if constexpr (kCCType == CCType::kCubicPP) {
+            cubic_pp_ = new swift::CubicCtl[kPortEntropy];
+            for (uint32_t i = 0; i < kPortEntropy; i++)
+                cubic_pp_[i].init(&pcb_);
+        }
+        if constexpr (kCCType == CCType::kTimelyPP) {
+            timely_pp_ = new swift::TimelyCtl[kPortEntropy];
+            for (uint32_t i = 0; i < kPortEntropy; i++)
+                timely_pp_[i].init(&pcb_);
         }
     }
     ~UcclFlow() {
-        if constexpr (kCCType == CCType::kCubicPP ||
-                      kCCType == CCType::kTimelyPP) {
-            delete[] pcb_pp_;
-        }
+        if constexpr (kCCType == CCType::kCubicPP) delete[] cubic_pp_;
+        if constexpr (kCCType == CCType::kTimelyPP) delete[] timely_pp_;
     }
 
     friend class UcclEngine;
@@ -532,12 +542,16 @@ class UcclFlow {
     TXTracking tx_tracking_;
     RXTracking rx_tracking_;
 
-    // Swift CC protocol control block.
+    // Swift reliable transmission control block.
     swift::Pcb pcb_;
+    swift::CubicCtl cubic_g_;
+    swift::TimelyCtl timely_g_;
     // Each path has its own PCB for CC.
-    swift::Pcb *pcb_pp_;
+    swift::CubicCtl *cubic_pp_;
+    swift::TimelyCtl *timely_pp_;
     // Pacer for Hybrid CC.
     swift::Pacer pacer_;
+
     // Path ID for each packet indexed by seqno.
     uint8_t hist_path_id_[kMaxUnackedPktsPerEngine] = {0};
     inline void set_path_id(uint32_t seqno, uint32_t path_id) {

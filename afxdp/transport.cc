@@ -351,15 +351,16 @@ void UcclFlow::process_rttprobe_rsp(uint64_t ts1, uint64_t ts2, uint64_t ts3,
     port_path_rtt_[path_id] = sample_rtt_tsc;
 
     if constexpr (kCCType == CCType::kTimely) {
-        pcb_.timely_update_rate(rdtsc(), sample_rtt_tsc);
+        timely_g_.timely_update_rate(rdtsc(), sample_rtt_tsc);
     }
     if constexpr (kCCType == CCType::kTimelyPP) {
-        pcb_pp_[path_id].timely_update_rate(rdtsc(), sample_rtt_tsc);
+        timely_pp_[path_id].timely_update_rate(rdtsc(), sample_rtt_tsc);
     }
 
     VLOG(3) << "sample_rtt_us " << to_usec(sample_rtt_tsc, freq_ghz)
-            << " us, avg_rtt_diff " << pcb_.timely_.get_avg_rtt_diff()
-            << " us, timely rate " << pcb_.timely_.get_rate_gbps() << " Gbps";
+            << " us, avg_rtt_diff " << timely_g_.timely_.get_avg_rtt_diff()
+            << " us, timely rate " << timely_g_.timely_.get_rate_gbps()
+            << " Gbps";
 
 #ifdef RTT_STATS
     rtt_stats_.update(rtt_ns / 1000);
@@ -498,7 +499,7 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
         }
 
         if constexpr (kCCType == CCType::kCubic || kCCType == CCType::kHybrid) {
-            pcb_.cubic_on_recv_ack(num_acked_packets);
+            cubic_g_.cubic_on_recv_ack(num_acked_packets);
         }
         if constexpr (kCCType == CCType::kCubicPP) {
             uint32_t accumu_acks = 0;
@@ -506,14 +507,14 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
             for (uint32_t seqno = pcb_.snd_una; seqno < ackno; seqno++) {
                 auto path_id = get_path_id(seqno);
                 if (path_id != last_path_id && last_path_id != kPortEntropy) {
-                    pcb_pp_[last_path_id].cubic_on_recv_ack(accumu_acks);
+                    cubic_pp_[last_path_id].cubic_on_recv_ack(accumu_acks);
                     accumu_acks = 0;
                 }
                 last_path_id = path_id;
                 accumu_acks++;
             }
             if (accumu_acks) {
-                pcb_pp_[last_path_id].cubic_on_recv_ack(accumu_acks);
+                cubic_pp_[last_path_id].cubic_on_recv_ack(accumu_acks);
             }
         }
 
@@ -564,11 +565,11 @@ void UcclFlow::rto_retransmit() {
             {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
     }
     if constexpr (kCCType == CCType::kCubic || kCCType == CCType::kHybrid) {
-        pcb_.cubic_on_packet_loss();
+        cubic_g_.cubic_on_packet_loss();
     }
     if constexpr (kCCType == CCType::kCubicPP) {
         auto path_id = get_path_id(pcb_.snd_una);
-        pcb_pp_[path_id].cubic_on_packet_loss();
+        cubic_pp_[path_id].cubic_on_packet_loss();
     }
     pcb_.rto_reset();
     pcb_.rto_rexmits++;
@@ -595,20 +596,20 @@ void UcclFlow::transmit_pending_packets() {
     uint32_t permitted_packets = 0;
 
     if constexpr (kCCType == CCType::kTimely || kCCType == CCType::kTimelyPP) {
-        permitted_packets = pcb_.timely_ready_packets(hard_budget);
+        permitted_packets = timely_g_.timely_ready_packets(hard_budget);
     }
     if constexpr (kCCType == CCType::kCubic) {
-        permitted_packets = std::min(hard_budget, pcb_.cubic_effective_wnd());
+        permitted_packets =
+            std::min(hard_budget, cubic_g_.cubic_effective_wnd());
     }
     if constexpr (kCCType == CCType::kCubicPP) {
         // Choosing a path to send a batch of packets.
         path_id = get_path_id_with_lowest_rtt();
-        auto &pcb_select = pcb_pp_[path_id];
         permitted_packets =
-            std::min(hard_budget, pcb_select.cubic_effective_wnd());
+            std::min(hard_budget, cubic_pp_[path_id].cubic_effective_wnd());
     }
     if constexpr (kCCType == CCType::kHybrid) {
-        hard_budget = std::min(hard_budget, pcb_.cubic_effective_wnd());
+        hard_budget = std::min(hard_budget, cubic_g_.cubic_effective_wnd());
         // permitted_packets = pacer_.ready_packets(hard_budget);
         permitted_packets = hard_budget;
     }
@@ -709,21 +710,23 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
 
         // Both queue on one timing wheel.
         if constexpr (kCCType == CCType::kTimely) {
-            pcb_.timely_pace_packet(
+            timely_g_.timely_pace_packet(
                 now_tsc, payload_len + kNetHdrLen + kUcclHdrLen, cur_msgbuf);
         }
         if constexpr (kCCType == CCType::kTimelyPP) {
             // TODO(yang): consider per-path rate limiting? If so, we need to
             // maintain prev_desired_tx_tsc_ for each path, calculate two
-            // timestamps (one from pcb_, one from pcb_pp_), and insert the
-            // larger one into the pcb_.
-            double rate = pcb_pp_[path_id].timely_rate();
-            pcb_.timely_pace_packet_with_rate(
+            // timestamps (one from timely_g_, one from
+            // timely_pp_[path_id]), and insert the larger one into the
+            // timely_g_.
+            double rate = timely_pp_[path_id].timely_rate();
+            timely_g_.timely_pace_packet_with_rate(
                 now_tsc, payload_len + kNetHdrLen + kUcclHdrLen, cur_msgbuf,
                 rate);
         }
         if constexpr (kCCType == CCType::kHybrid) {
-            // pacer_.pace_packet(now_tsc, payload_len + kNetHdrLen + kUcclHdrLen,
+            // pacer_.pace_packet(now_tsc, payload_len + kNetHdrLen +
+            // kUcclHdrLen,
             //                    cur_msgbuf);
         }
 
