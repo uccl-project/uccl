@@ -68,15 +68,17 @@ sudo ./server_main
 sudo ./client_main
 ```
 
-### Debugging the transport stack
+### Run transport test
 
 Note that any program that leverages util_afxdp no long needs root to use AFXDP sockets.
 
 ```
-sudo ./afxdp_daemon_main --logtostderr=1
-./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --clientip=192.168.6.2 --test=async --verify --rand
-./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --client --serverip=192.168.6.1 --test=async --verify --rand
+/opt/uccl$ python setup_all.py --target cloudlab_d6515_afxdp
+./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --clientip=192.168.6.2 --test=bimq
+./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --client --serverip=192.168.6.1 --test=bimq
 ```
+
+using `--test=async --verify --rand` for debugging purpose. 
 
 ### Run nccl-tests
 
@@ -111,6 +113,6 @@ git update-index --no-skip-worktree nodes.txt
 
 Iperf test: 
 ```
-iperf -s -i 1 -P 64 -t 1000 --dualtest -B 192.168.6.1
-iperf -c 192.168.6.1 -i 1 -P 64 -t 1000 --dualtest -B 192.168.6.2
+iperf -s -i 1 -P 32 -t 1000 --dualtest -B 192.168.6.1%enp65s0f0np0
+iperf -c 192.168.6.1 -i 1 -P 32 -t 1000 --dualtest -B 192.168.6.2%enp65s0f0np0
 ```

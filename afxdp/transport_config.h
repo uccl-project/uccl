@@ -21,9 +21,9 @@
 static const uint32_t AFXDP_MTU = 3498;
 static const char* DEV_DEFAULT = "ens6";
 static const double kLinkBandwidth = 100.0 * 1e9 / 8;
-static const uint32_t NUM_QUEUES = 12;
+static const uint32_t NUM_QUEUES = 12;  // 5 for unidirectional test.
 static const uint32_t kMaxPath = 128;
-static const uint32_t kMaxUnackedPktsPP = 3u;
+static const uint32_t kMaxUnackedPktsPP = 2u;
 #elif defined(AWS_G4)
 static const uint32_t AFXDP_MTU = 3498;
 static const char* DEV_DEFAULT = "ens6";
@@ -92,7 +92,7 @@ static_assert(is_power_of_two(kMaxPathHistoryPerEngine),
 #define FILL_RING_SIZE (XSK_RING_PROD__DEFAULT_NUM_DESCS * 2)
 #else
 // TODO(yang): why C5 would crash with 2x fill ring size?
-#define FILL_RING_SIZE (XSK_RING_PROD__DEFAULT_NUM_DESCS)
+#define FILL_RING_SIZE XSK_RING_PROD__DEFAULT_NUM_DESCS
 #endif
 #define COMP_RING_SIZE XSK_RING_CONS__DEFAULT_NUM_DESCS
 #define TX_RING_SIZE XSK_RING_PROD__DEFAULT_NUM_DESCS
