@@ -654,8 +654,8 @@ void UcclFlow::transmit_pending_packets() {
                 }
                 if (!found_path) {
                     // We cannot find a path with enough space to send packets.
-                    LOG_EVERY_N(INFO, 1000000)
-                        << "Cannot find path with available cwnd: "
+                    VLOG(2)
+                        << "[CubicPP] Cannot find path with available cwnd: "
                         << tx_tracking_.unacked_pkts_pp_to_string();
                     break;
                 }

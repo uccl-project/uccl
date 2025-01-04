@@ -4,7 +4,11 @@ import signal
 import argparse
 import os
 
-num_queues = 2
+num_queues = parse_num_queues("afxdp/transport_config.h")
+if num_queues is None:
+    print("NUM_QUEUES not found!")
+    exit(0)
+
 core_count = os.cpu_count()
 num_irqcores = int(num_queues)
 
@@ -103,9 +107,7 @@ if __name__ == "__main__":
 
     wait_handler_vec = []
     for node_client in node_clients:
-        wait_handler = exec_command_no_wait(
-            node_client, f"cd /opt/uccl; {nic_cmd}"
-        )
+        wait_handler = exec_command_no_wait(node_client, f"cd /opt/uccl; {nic_cmd}")
         wait_handler_vec.append(wait_handler)
     for wait_handler in wait_handler_vec:
         _ = wait_handler.wait()

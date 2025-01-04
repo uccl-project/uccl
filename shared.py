@@ -1,4 +1,5 @@
 import paramiko
+import re
 
 
 class CommandDescriptor:
@@ -44,3 +45,13 @@ def get_nodes(path="nodes.txt"):
             for line in file
             if not line.strip().startswith("#") and line.strip()
         ]
+
+
+def parse_num_queues(file_path):
+    pattern = r"static\s+const\s+uint32_t\s+NUM_QUEUES\s*=\s*(\d+)\s*;"
+    with open(file_path, "r") as file:
+        for line in file:
+            match = re.search(pattern, line)
+            if match:
+                return int(match.group(1))
+    return None
