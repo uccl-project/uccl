@@ -6,7 +6,7 @@
 
 #define USE_MULTIPATH
 #define PATH_SELECTION
-#define IGNORE_REXMIT_PATH
+#define REXMIT_SET_PATH
 // #define EMULATE_ZC
 // #define USE_TCP
 // #define ENABLE_CSUM

@@ -52,10 +52,10 @@ struct Pcb {
     uint64_t sack_bitmap[kSackBitmapSize / kSackBitmapBucketSize]{0};
     uint8_t sack_bitmap_count{0};
     uint16_t duplicate_acks{0};
-    int rto_timer{kRtoDisabled};
     uint32_t fast_rexmits{0};
     uint32_t rto_rexmits{0};
     uint16_t rto_rexmits_consectutive{0};
+    uint32_t fast_recovers{0};
 
     uint32_t seqno() const { return snd_nxt; }
     uint32_t get_snd_nxt() {
@@ -70,29 +70,36 @@ struct Pcb {
              ", snd_una: " + std::to_string(snd_una) +
              ", rcv_nxt: " + std::to_string(rcv_nxt) +
              ", fast_rexmits: " + std::to_string(fast_rexmits) +
+             ", fast_recovers: " + std::to_string(fast_recovers) +
              ", rto_rexmits: " + std::to_string(rto_rexmits);
         return s;
     }
 
     uint32_t ackno() const { return rcv_nxt; }
+    uint32_t get_rcv_nxt() const { return rcv_nxt; }
+    void advance_rcv_nxt() { rcv_nxt++; }
+
+    /************* RTO related *************/
+    struct wheel_ent_t {
+        void *msgbuf;
+        uint32_t seqno;
+    };
+    static constexpr uint32_t kMaxTicks = kRtoExpireThresInTicks + 1;
+    std::deque<wheel_ent_t> wheels_[kMaxTicks];
+    int rto_tick_ = 0;
+
+    void advance_rto_tick() { rto_tick_ = (rto_tick_ + 1) % kMaxTicks; }
+    void add_to_rto_wheel(void *msgbuf, uint32_t seqno) {
+        auto ready_tick = (rto_tick_ + kRtoExpireThresInTicks) % kMaxTicks;
+        wheels_[ready_tick].push_back(wheel_ent_t{msgbuf, seqno});
+    }
+    std::deque<wheel_ent_t> &get_ready_rto_wheel() {
+        return wheels_[rto_tick_];
+    }
     bool max_rto_rexmits_consectutive_reached() const {
         return rto_rexmits_consectutive >= kRtoMaxRexmitConsectutiveAllowed;
     }
-    bool rto_disabled() const { return rto_timer == kRtoDisabled; }
-    bool rto_expired() const { return rto_timer >= kRtoExpireThresInTicks; }
-
-    uint32_t get_rcv_nxt() const { return rcv_nxt; }
-    void advance_rcv_nxt() { rcv_nxt++; }
-    void rto_enable() { rto_timer = 0; }
-    void rto_disable() { rto_timer = kRtoDisabled; }
-    void rto_reset() { rto_enable(); }
-    void rto_maybe_reset() {
-        if (snd_una == snd_nxt)
-            rto_disable();
-        else
-            rto_reset();
-    }
-    void rto_advance() { rto_timer++; }
+    /************* RTO related *************/
 
     void sack_bitmap_shift_left_one() {
         constexpr size_t sack_bitmap_bucket_max_idx =

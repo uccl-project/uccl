@@ -424,7 +424,7 @@ class UcclFlow {
     friend class UcclEngine;
 
     std::string to_string() const;
-    inline void shutdown() { pcb_.rto_disable(); }
+    inline void shutdown() {}
 
     /**
      * @brief Push the received packet onto the ingress queue of the flow.
@@ -473,7 +473,7 @@ class UcclFlow {
     void process_ack(const UcclPktHdr *ucclh);
 
     void fast_retransmit();
-    void rto_retransmit();
+    void rto_retransmit(FrameBuf *msgbuf, uint32_t seqno);
 
     /**
      * @brief Helper function to transmit a number of packets from the queue
@@ -499,13 +499,13 @@ class UcclFlow {
     void prepare_l4header(uint8_t *pkt_addr, uint32_t payload_bytes,
                           uint16_t dst_port) const;
 
-    void prepare_datapacket(FrameBuf *msg_buf, uint32_t path_id, uint32_t seqno,
+    void prepare_datapacket(FrameBuf *msgbuf, uint32_t path_id, uint32_t seqno,
                             const UcclPktHdr::UcclFlags net_flags);
     AFXDPSocket::frame_desc craft_ackpacket(
         uint32_t path_id, uint16_t dst_port, uint32_t seqno, uint32_t ackno,
         const UcclPktHdr::UcclFlags net_flags, uint64_t ts1, uint64_t ts2);
     AFXDPSocket::frame_desc craft_rssprobe_packet(uint16_t dst_port);
-    void reverse_packet_l2l3(FrameBuf *msg_buf);
+    void reverse_packet_l2l3(FrameBuf *msgbuf);
 
     // The following is used to fill packet headers.
     uint32_t local_addr_;
