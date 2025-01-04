@@ -20,7 +20,48 @@ enum class CCType {
 };
 static constexpr CCType kCCType = CCType::kCubicPP;
 
+#if !defined(AWS_C5) && !defined(AWS_G4) && !defined(AWS_G4METAL) && \
+    !defined(CLOUDLAB_XL170) && !defined(CLOUDLAB_D6515)
+#define CLOUDLAB_D6515
+#endif
+
+#if defined(AWS_C5)
+static const uint32_t AFXDP_MTU = 3498;
+static const char* DEV_DEFAULT = "ens6";
+static const double kLinkBandwidth = 100.0 * 1e9 / 8;
+static const uint32_t NUM_QUEUES = 12;
+static const uint32_t kMaxPath = 128;
+static const uint32_t kMaxUnackedPktsPP = 3u;
+#elif defined(AWS_G4)
+static const uint32_t AFXDP_MTU = 3498;
+static const char* DEV_DEFAULT = "ens6";
+static const double kLinkBandwidth = 50.0 * 1e9 / 8;
+static const uint32_t NUM_QUEUES = 8;
+static const uint32_t kMaxPath = 128;
+static const uint32_t kMaxUnackedPktsPP = 3u;
+#elif defined(AWS_G4METAL)
+static const uint32_t AFXDP_MTU = 3498;
+static const char* DEV_DEFAULT = "enp199s0";
+static const double kLinkBandwidth = 100.0 * 1e9 / 8;
+static const uint32_t NUM_QUEUES = 12;
+static const uint32_t kMaxPath = 128;
+static const uint32_t kMaxUnackedPktsPP = 3u;
+#elif defined(CLOUDLAB_XL170)
+static const uint32_t AFXDP_MTU = 1500;
+static const char* DEV_DEFAULT = "ens1f1np1";
+static const double kLinkBandwidth = 25.0 * 1e9 / 8;
+static const uint32_t NUM_QUEUES = 2;
+static const uint32_t kMaxPath = 64;
+static const uint32_t kMaxUnackedPktsPP = 8u;
+#elif defined(CLOUDLAB_D6515)
+static const uint32_t AFXDP_MTU = 3498;
+static const char* DEV_DEFAULT = "enp65s0f0np0";
+static const double kLinkBandwidth = 100.0 * 1e9 / 8;
 static const uint32_t NUM_QUEUES = 4;
+static const uint32_t kMaxPath = 64;
+static const uint32_t kMaxUnackedPktsPP = 8u;
+#endif
+
 static uint32_t NUM_CPUS = std::thread::hardware_concurrency();
 // Starting from 1/4 of the CPUs to avoid conflicting with nccl proxy service.
 static uint32_t ENGINE_CPU_START = NUM_CPUS / 4;
@@ -31,13 +72,11 @@ static const uint32_t RECV_BATCH_SIZE = 32;
 static const uint32_t SEND_BATCH_SIZE = 32;
 
 // CC parameters.
-static const uint32_t kMaxPath = 64;
 static const std::size_t kSackBitmapSize = 1024;
-static const std::size_t kFastRexmitDupAckThres = 5;
+static const std::size_t kFastRexmitDupAckThres = 10;
 static const uint32_t kMaxTwPkts = 1024;
 static const double kPerPathMaxBw = 5.0 * 1e9 / 8;
 static const uint32_t kSwitchPathThres = 1u;
-static const uint32_t kMaxUnackedPktsPP = 8u;
 static const uint32_t kMaxUnackedPktsPerEngine = kMaxUnackedPktsPP * kMaxPath;
 static const uint32_t kMaxPathHistoryPerEngine = 4096;
 
@@ -58,30 +97,3 @@ static_assert(is_power_of_two(kMaxPathHistoryPerEngine),
 #define COMP_RING_SIZE XSK_RING_CONS__DEFAULT_NUM_DESCS
 #define TX_RING_SIZE XSK_RING_PROD__DEFAULT_NUM_DESCS
 #define RX_RING_SIZE XSK_RING_CONS__DEFAULT_NUM_DESCS
-
-#if defined(AWS_C5)
-static const uint32_t AFXDP_MTU = 3498;
-static const char* DEV_DEFAULT = "ens6";
-static const double kLinkBandwidth = 100.0 * 1e9 / 8;
-#elif defined(AWS_G4)
-static const uint32_t AFXDP_MTU = 3498;
-static const char* DEV_DEFAULT = "ens6";
-static const double kLinkBandwidth = 50.0 * 1e9 / 8;
-#elif defined(AWS_G4METAL)
-static const uint32_t AFXDP_MTU = 3498;
-static const char* DEV_DEFAULT = "enp199s0";
-static const double kLinkBandwidth = 100.0 * 1e9 / 8;
-#elif defined(CLOUDLAB_XL170)
-static const uint32_t AFXDP_MTU = 1500;
-static const char* DEV_DEFAULT = "ens1f1np1";
-static const double kLinkBandwidth = 25.0 * 1e9 / 8;
-#elif defined(CLOUDLAB_D6515)
-static const uint32_t AFXDP_MTU = 3498;
-static const char* DEV_DEFAULT = "enp65s0f0np0";
-static const double kLinkBandwidth = 100.0 * 1e9 / 8;
-#else
-#define CLOUDLAB_XL170
-static const uint32_t AFXDP_MTU = 1500;
-static const char* DEV_DEFAULT = "ens1f1np1";
-static const double kLinkBandwidth = 25.0 * 1e9 / 8;
-#endif

@@ -1705,11 +1705,15 @@ void Endpoint::stats_thread_fn() {
         }
         if (engine_vec_.empty()) continue;
 
+        int cnt = 0;
         std::string s;
         s += "\n\t[Uccl Engine] ";
         for (auto &engine : engine_vec_) {
             s += engine->status_to_string();
+            if (++cnt == 2) break;
         }
+        if (cnt < engine_vec_.size())
+            s += Format("\n\t\t... %d more engines", engine_vec_.size() - cnt);
         LOG(INFO) << s;
     }
 }
