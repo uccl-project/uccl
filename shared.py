@@ -47,11 +47,16 @@ def get_nodes(path="nodes.txt"):
         ]
 
 
-def parse_num_queues(file_path):
+def parse_num_queues(make_macro, file_path):
+    after_marker = f"if defined({make_macro})"
     pattern = r"static\s+const\s+uint32_t\s+NUM_QUEUES\s*=\s*(\d+)\s*;"
+    hit_marker = False
     with open(file_path, "r") as file:
         for line in file:
-            match = re.search(pattern, line)
-            if match:
-                return int(match.group(1))
+            if after_marker in line:
+                hit_marker = True
+            if hit_marker:
+                match = re.search(pattern, line)
+                if match:
+                    return int(match.group(1))
     return None

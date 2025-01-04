@@ -4,14 +4,6 @@ import signal
 import argparse
 import os
 
-num_queues = parse_num_queues("afxdp/transport_config.h")
-if num_queues is None:
-    print("NUM_QUEUES not found!")
-    exit(0)
-
-core_count = os.cpu_count()
-num_irqcores = int(num_queues)
-
 config_mapping = {
     "aws_c5_afxdp": ["AWS_C5", "ens6", 3498],
     "aws_g4_afxdp": ["AWS_G4", "ens6", 3498],
@@ -53,6 +45,13 @@ if __name__ == "__main__":
     make_macro = config_mapping[target][0]
     net_dev = config_mapping[target][1]
     mtu = config_mapping[target][2]
+
+    num_queues = parse_num_queues(make_macro, "afxdp/transport_config.h")
+    if num_queues is None:
+        print("NUM_QUEUES not found!")
+        exit(0)
+    core_count = os.cpu_count()
+    num_irqcores = int(num_queues)
 
     nodes = get_nodes()
     print(f"Nodes: {nodes}")

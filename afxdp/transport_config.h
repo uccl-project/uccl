@@ -12,14 +12,6 @@
 // #define ENABLE_CSUM
 // #define RTT_STATS
 
-enum class CCType {
-    kTimely,
-    kTimelyPP,
-    kCubic,
-    kCubicPP,
-};
-static constexpr CCType kCCType = CCType::kCubicPP;
-
 #if !defined(AWS_C5) && !defined(AWS_G4) && !defined(AWS_G4METAL) && \
     !defined(CLOUDLAB_XL170) && !defined(CLOUDLAB_D6515)
 #define CLOUDLAB_D6515
@@ -59,8 +51,16 @@ static const char* DEV_DEFAULT = "enp65s0f0np0";
 static const double kLinkBandwidth = 100.0 * 1e9 / 8;
 static const uint32_t NUM_QUEUES = 4;
 static const uint32_t kMaxPath = 64;
-static const uint32_t kMaxUnackedPktsPP = 8u;
+static const uint32_t kMaxUnackedPktsPP = 16u;
 #endif
+
+enum class CCType {
+    kTimely,
+    kTimelyPP,
+    kCubic,
+    kCubicPP,
+};
+static constexpr CCType kCCType = CCType::kCubicPP;
 
 static uint32_t NUM_CPUS = std::thread::hardware_concurrency();
 // Starting from 1/4 of the CPUs to avoid conflicting with nccl proxy service.
