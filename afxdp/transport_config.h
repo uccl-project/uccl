@@ -6,6 +6,7 @@
 
 #define USE_MULTIPATH
 #define PATH_SELECTION
+#define IGNORE_REXMIT_PATH
 // #define EMULATE_ZC
 // #define USE_TCP
 // #define ENABLE_CSUM
@@ -17,7 +18,7 @@ enum class CCType {
     kCubic,
     kCubicPP,
 };
-static constexpr CCType kCCType = CCType::kCubicPP;
+static constexpr CCType kCCType = CCType::kCubic;
 
 static const uint32_t NUM_QUEUES = 2;
 static uint32_t NUM_CPUS = std::thread::hardware_concurrency();

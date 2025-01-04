@@ -221,7 +221,9 @@ std::string UcclFlow::to_string() const {
     std::string s;
     s += "\n\t\t\t[CC] pcb:         " + pcb_.to_string() +
          "\n\t\t\t     cubic:       " + cubic_g_.to_string() +
-         "\n\t\t\t     cubic_pp[0]: " + cubic_pp_[0].to_string() +
+         (kCCType == CCType::kCubicPP
+              ? "\n\t\t\t     cubic_pp[0]: " + cubic_pp_[0].to_string()
+              : "") +
          "\n\t\t\t     timely:      " + timely_g_.to_string() +
          "\n\t\t\t[TX] pending msgbufs unsent: " +
          std::to_string(tx_tracking_.num_unsent_msgbufs()) +
@@ -458,10 +460,11 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
                     // refine the way we maintain tx_but_unacked msgbufs chains.
                     if (seqno == missing_ucclh->seqno.value()) {
                         auto path_id = get_path_id_with_lowest_rtt();
+#ifdef IGNORE_REXMIT_PATH
                         tx_tracking_.dec_unacked_pkts_pp(get_path_id(seqno));
                         tx_tracking_.inc_unacked_pkts_pp(path_id);
                         set_path_id(seqno, path_id);
-
+#endif
                         prepare_datapacket(msgbuf, path_id, seqno,
                                            UcclPktHdr::UcclFlags::kData);
                         msgbuf->mark_not_txpulltime_free();
@@ -476,6 +479,8 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
                 msgbuf = msgbuf->next();
             }
             if (!missing_frames_.empty()) {
+                LOG(INFO) << "Fast recovery retransmitting "
+                          << missing_frames_.size() << " missing packets";
                 // TODO(yang): handling the cases where the number of
                 // missing frames is larger than the free send_queue size.
                 socket_->send_packets(missing_frames_);
@@ -496,7 +501,8 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
         if constexpr (kCCType == CCType::kCubicPP) {
             uint32_t accumu_acks = 0;
             auto last_path_id = kMaxPath;
-            for (uint32_t seqno = pcb_.snd_una; seqno < ackno; seqno++) {
+            uint32_t seqno = pcb_.snd_una;
+            for (size_t i = 0; i < num_acked_packets; i++, seqno++) {
                 auto path_id = get_path_id(seqno);
                 if (path_id != last_path_id && last_path_id != kMaxPath) {
                     cubic_pp_[last_path_id].cubic_on_recv_ack(accumu_acks);
@@ -512,7 +518,8 @@ void UcclFlow::process_ack(const UcclPktHdr *ucclh) {
                 cubic_pp_[last_path_id].cubic_on_recv_ack(accumu_acks);
             }
         } else {
-            for (uint32_t seqno = pcb_.snd_una; seqno < ackno; seqno++) {
+            uint32_t seqno = pcb_.snd_una;
+            for (size_t i = 0; i < num_acked_packets; i++, seqno++) {
                 auto path_id = get_path_id(seqno);
                 tx_tracking_.dec_unacked_pkts_pp(path_id);
                 VLOG(3) << "Hybrid acked seqno " << seqno << " path_id "
@@ -534,10 +541,11 @@ void UcclFlow::fast_retransmit() {
     auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
     if (msg_buf && pcb_.snd_una != pcb_.snd_nxt) {
         auto path_id = get_path_id_with_lowest_rtt();
+#ifdef IGNORE_REXMIT_PATH
         tx_tracking_.dec_unacked_pkts_pp(get_path_id(pcb_.snd_una));
         tx_tracking_.inc_unacked_pkts_pp(path_id);
         set_path_id(pcb_.snd_una, path_id);
-
+#endif
         prepare_datapacket(msg_buf, path_id, pcb_.snd_una,
                            UcclPktHdr::UcclFlags::kData);
         const auto *ucclh = reinterpret_cast<const UcclPktHdr *>(
@@ -546,9 +554,10 @@ void UcclFlow::fast_retransmit() {
         msg_buf->mark_not_txpulltime_free();
         socket_->send_packet(
             {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
+
+        pcb_.fast_rexmits++;
     }
     pcb_.rto_reset();
-    pcb_.fast_rexmits++;
 }
 
 void UcclFlow::rto_retransmit() {
@@ -556,26 +565,31 @@ void UcclFlow::rto_retransmit() {
     auto *msg_buf = tx_tracking_.get_oldest_unacked_msgbuf();
     if (msg_buf && pcb_.snd_una != pcb_.snd_nxt) {
         auto path_id = get_path_id_with_lowest_rtt();
+#ifdef IGNORE_REXMIT_PATH
         tx_tracking_.dec_unacked_pkts_pp(get_path_id(pcb_.snd_una));
         tx_tracking_.inc_unacked_pkts_pp(path_id);
         set_path_id(pcb_.snd_una, path_id);
-
+#endif
         prepare_datapacket(msg_buf, path_id, pcb_.snd_una,
                            UcclPktHdr::UcclFlags::kData);
         msg_buf->mark_not_txpulltime_free();
         socket_->send_packet(
             {msg_buf->get_frame_offset(), msg_buf->get_frame_len()});
-    }
-    if constexpr (kCCType == CCType::kCubic) {
-        cubic_g_.cubic_on_packet_loss();
-    }
-    if constexpr (kCCType == CCType::kCubicPP) {
-        auto path_id = get_path_id(pcb_.snd_una);
-        cubic_pp_[path_id].cubic_on_packet_loss();
+
+        if constexpr (kCCType == CCType::kCubic) {
+            cubic_g_.cubic_on_packet_loss();
+            LOG(INFO) << "rto " << cubic_g_.to_string() << " inflight "
+                      << pcb_.snd_nxt - pcb_.snd_una << " "
+                      << tx_tracking_.num_unacked_msgbufs();
+        }
+        if constexpr (kCCType == CCType::kCubicPP) {
+            auto path_id = get_path_id(pcb_.snd_una);
+            cubic_pp_[path_id].cubic_on_packet_loss();
+        }
+        pcb_.rto_rexmits++;
+        pcb_.rto_rexmits_consectutive++;
     }
     pcb_.rto_reset();
-    pcb_.rto_rexmits++;
-    pcb_.rto_rexmits_consectutive++;
 }
 
 /**
