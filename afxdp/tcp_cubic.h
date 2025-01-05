@@ -9,18 +9,16 @@
 
 using namespace uccl;
 
-class Pcb;
-class CubicCC {
-   public:
+struct CubicCC {
     CubicCC()
-        : cwnd(1.0),
+        : max_cwnd(1024.0),
+          cwnd(1.0),
           ssthresh(64.0),
           C(0.4),
           beta(0.7),
           last_max_cwnd(1.0),
           epoch_start(0),
-          last_update_time(rdtsc()),
-          max_cwnd(1024.0) {}
+          last_update_time(rdtsc()) {}
     void init(uint32_t _max_cwnd) { max_cwnd = _max_cwnd; }
 
     /* https://book.systemsapproach.org/congestion/tcpcc.html */
@@ -77,7 +75,7 @@ class CubicCC {
 
     inline double get_cwnd() const { return cwnd; }
 
-   private:
+    double max_cwnd;            // Maximum congestion window size
     double cwnd;                // Congestion window size
     double ssthresh;            // Slow start threshold
     double C;                   // CUBIC scaling constant
@@ -86,7 +84,4 @@ class CubicCC {
     double epoch_start;         // Start time of the current epoch
     uint64_t last_update_time;  // Last update time
     double K;                   // Inflection point in CUBIC formula
-    double max_cwnd;            // Maximum congestion window size
-
-    friend class Pcb;
 };

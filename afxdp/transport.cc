@@ -220,10 +220,9 @@ void RXTracking::try_copy_msgbuf_to_appbuf(Channel::Msg *rx_work) {
 std::string UcclFlow::to_string() const {
     std::string s;
     s += "\n\t\t\t[CC] pcb:         " + pcb_.to_string() +
-         "\n\t\t\t     cubic:       " + cubic_g_.to_string() +
          (kCCType == CCType::kCubicPP
               ? "\n\t\t\t     cubic_pp[0]: " + cubic_pp_[0].to_string()
-              : "") +
+              : "\n\t\t\t     cubic:       " + cubic_g_.to_string()) +
          "\n\t\t\t     timely:      " + timely_g_.to_string() +
          "\n\t\t\t[TX] pending msgbufs unsent: " +
          std::to_string(tx_tracking_.num_unsent_msgbufs()) +
@@ -647,7 +646,7 @@ void UcclFlow::transmit_pending_packets() {
                 while (tries++ < 16) {
                     path_id = get_path_id_with_lowest_rtt();
                     path_unacked = tx_tracking_.get_unacked_pkts_pp(path_id);
-                    path_cwnd = cubic_pp_[path_id].cubic.get_cwnd();
+                    path_cwnd = cubic_pp_[path_id].cubic_cwnd();
                     if (path_unacked + kSwitchPathThres <= path_cwnd &&
                         tx_tracking_.is_available_for_tx(path_id, now_tsc)) {
                         found_path = true;

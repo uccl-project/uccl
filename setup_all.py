@@ -17,6 +17,9 @@ config_mapping = {
     "cloudlab_xl170_tcp": ["CLOUDLAB_XL170", "ens1f1np1", 1500],
     "cloudlab_d6515_tcp": ["CLOUDLAB_D6515", "enp65s0f0np0", 9000],
     #
+    "aws_c5_tcp_3kmtu": ["AWS_C5", "ens6", 3498],
+    "cloudlab_d6515_tcp_3kmtu": ["CLOUDLAB_D6515", "enp65s0f0np0", 3498],
+    #
     "setup_extra": ["", "", 0],
 }
 PYTHON = "source /opt/anaconda3/bin/activate; conda run -n base python"
@@ -42,17 +45,6 @@ if __name__ == "__main__":
         print("target not found!")
         exit(0)
 
-    make_macro = config_mapping[target][0]
-    net_dev = config_mapping[target][1]
-    mtu = config_mapping[target][2]
-
-    num_queues = parse_num_queues(make_macro, "afxdp/transport_config.h")
-    if num_queues is None:
-        print("NUM_QUEUES not found!")
-        exit(0)
-    core_count = os.cpu_count()
-    num_irqcores = int(num_queues)
-
     nodes = get_nodes()
     print(f"Nodes: {nodes}")
 
@@ -76,6 +68,17 @@ if __name__ == "__main__":
             _ = wait_handler.wait()
         exit(0)
 
+    make_macro = config_mapping[target][0]
+    net_dev = config_mapping[target][1]
+    mtu = config_mapping[target][2]
+
+    num_queues = parse_num_queues(make_macro, "afxdp/transport_config.h")
+    if num_queues is None:
+        print("NUM_QUEUES not found!")
+        exit(0)
+    core_count = os.cpu_count()
+    num_irqcores = int(num_queues)
+
     _ = exec_command_and_wait(
         node_clients[0],
         f'cd /opt/uccl/afxdp; make -j "CXXFLAGS=-D{make_macro}"; cd playground; make -j "CXXFLAGS=-D{make_macro}"',
@@ -89,13 +92,13 @@ if __name__ == "__main__":
     ### Setup NIC
     afxdp_or_tcp = "afxdp" if "afxdp" in target else "tcp"
     aws_or_cloudlab = "aws" if "aws" in target else "cloudlab"
-    if target == "aws_g4metal_tcp":
+    if "aws_g4metal_tcp" in target:
         core_count = 32
         num_irqcores = 32
-    elif target == "aws_c5_tcp":
+    elif "aws_c5_tcp" in target:
         core_count = 32
         num_irqcores = 32
-    elif target == "cloudlab_d6515_tcp":
+    elif "cloudlab_d6515_tcp" in target:
         core_count = 63
         num_irqcores = 63
 
@@ -106,7 +109,9 @@ if __name__ == "__main__":
 
     wait_handler_vec = []
     for node_client in node_clients:
-        wait_handler = exec_command_no_wait(node_client, f"cd /opt/uccl; {nic_cmd}")
+        wait_handler = exec_command_no_wait(
+            node_client, f"cd /opt/uccl; {nic_cmd}"
+        )
         wait_handler_vec.append(wait_handler)
     for wait_handler in wait_handler_vec:
         _ = wait_handler.wait()

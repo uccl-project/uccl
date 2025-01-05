@@ -147,9 +147,11 @@ struct CubicCtl {
         cubic.init(max_cwnd);
     }
 
+    inline double cubic_cwnd() const { return cubic.get_cwnd(); }
+
     inline uint32_t cubic_effective_wnd() const {
         uint32_t snd_adjusted_una = pcb_->snd_una + pcb_->snd_ooo_acks;
-        uint32_t cwnd = cubic.get_cwnd();
+        uint32_t cwnd = cubic_cwnd();
 
         // This normally does not happen.
         if (pcb_->snd_nxt < snd_adjusted_una ||
@@ -168,8 +170,11 @@ struct CubicCtl {
 
     inline std::string to_string() const {
         std::string s;
-        s += Format("cwnd: %.2lf, effective_cwnd: %u", cubic.get_cwnd(),
-                    cubic_effective_wnd());
+        s += Format(
+            "cwnd: %.2lf, effective_cwnd: %u, ssthresh: %.2lf, last_max_cwnd: "
+            "%.2lf",
+            cubic_cwnd(), cubic_effective_wnd(), cubic.ssthresh,
+            cubic.last_max_cwnd);
         return s;
     }
 };
