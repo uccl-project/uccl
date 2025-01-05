@@ -633,6 +633,7 @@ void UcclFlow::transmit_pending_packets() {
     //     << " pending_tx_msgs_ " << pending_tx_msgs_.size();
 
     // Prepare the packets.
+    auto now_tsc = rdtsc();
     for (uint32_t i = 0; i < permitted_packets; i++) {
         uint32_t path_id = 0;
         uint32_t path_cwnd = 0;
@@ -647,7 +648,8 @@ void UcclFlow::transmit_pending_packets() {
                     path_id = get_path_id_with_lowest_rtt();
                     path_unacked = tx_tracking_.get_unacked_pkts_pp(path_id);
                     path_cwnd = cubic_pp_[path_id].cubic.get_cwnd();
-                    if (path_unacked + kSwitchPathThres <= path_cwnd) {
+                    if (path_unacked + kSwitchPathThres <= path_cwnd &&
+                        tx_tracking_.is_available_for_tx(path_id, now_tsc)) {
                         found_path = true;
                         break;
                     }
@@ -670,6 +672,7 @@ void UcclFlow::transmit_pending_packets() {
         auto seqno = pcb_.get_snd_nxt();
         set_path_id(seqno, path_id);
         tx_tracking_.inc_unacked_pkts_pp(path_id);
+        tx_tracking_.set_last_tx_tsc_pp(path_id, now_tsc);
         VLOG(3) << "Transmitting seqno: " << seqno << " path_id: " << path_id;
 
         if (msgbuf->is_last()) {

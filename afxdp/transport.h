@@ -231,7 +231,10 @@ class TXTracking {
           last_msgbuf_(nullptr),
           num_unacked_msgbufs_(0),
           num_unsent_msgbufs_(0),
-          num_tracked_msgbufs_(0) {}
+          num_tracked_msgbufs_(0) {
+        static const double kMinTxIntervalUs = AFXDP_MTU * 1.0 / kMaxBwPP * 1e6;
+        kMinTxIntervalTsc = us_to_cycles(kMinTxIntervalUs, freq_ghz);
+    }
 
     void receive_acks(uint32_t num_acked_pkts);
     void append(FrameBuf *msgbuf_head, FrameBuf *msgbuf_tail,
@@ -291,6 +294,15 @@ class TXTracking {
         for (uint32_t i = 0; i < kMaxPath; i++)
             ss << unacked_pkts_pp_[i] << " ";
         return ss.str();
+    }
+
+    uint64_t kMinTxIntervalTsc = 0;
+    uint64_t last_tx_tsc_pp_[kMaxPath] = {0};
+    inline void set_last_tx_tsc_pp(uint32_t path_id, uint64_t tx_tsc) {
+        last_tx_tsc_pp_[path_id] = tx_tsc;
+    }
+    inline bool is_available_for_tx(uint32_t path_id, uint64_t now_tsc) {
+        return now_tsc - last_tx_tsc_pp_[path_id] >= kMinTxIntervalTsc;
     }
 };
 

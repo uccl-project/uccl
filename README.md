@@ -116,3 +116,22 @@ Iperf test:
 iperf -s -i 1 -P 32 -t 1000 --dualtest -B 192.168.6.1%enp65s0f0np0
 iperf -c 192.168.6.1 -i 1 -P 32 -t 1000 --dualtest -B 192.168.6.2%enp65s0f0np0
 ```
+
+performance debugging
+```
+sudo apt install flex bison libtraceevent-dev libzstd1 libdwarf-dev libdw-dev binutils-dev libcap-dev libelf-dev libnuma-dev python3 python3-dev python-setuptools libssl-dev libunwind-dev libdwarf-dev zlib1g-dev liblzma-dev libaio-dev libtraceevent-dev debuginfod libpfm4-dev libslang2-dev systemtap-sdt-dev libperl-dev binutils-dev libbabeltrace-dev libiberty-dev libzstd-dev lld -y
+
+cd /tmp
+git clone --depth 1 git@github.com:torvalds/linux.git -b v6.6
+cd linux/tools/perf 
+make NO_LIBPYTHON=1
+sudo cp perf /usr/bin
+
+cd /tmp
+git clone https://github.com/brendangregg/FlameGraph
+cd FlameGraph
+sudo perf record -F 99 -p `pidof transport_test` -g -- sleep 20
+sudo perf script | ./stackcollapse-perf.pl > out.perf-folded
+# Must use sudo so as it can capture kernel symbols
+sudo ./flamegraph.pl out.perf-folded > perf.svg
+```
