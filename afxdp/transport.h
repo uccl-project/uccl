@@ -160,9 +160,9 @@ class Channel {
  */
 struct __attribute__((packed)) UcclPktHdr {
     static constexpr uint16_t kMagic = 0x4e53;
-    be16_t magic;       // Magic value tagged after initialization for the flow.
-    uint8_t engine_id;  // remote UcclEngine ID to process this packet.
-    uint8_t path_id;    // path_id of this dst port.
+    be16_t magic;  // Magic value tagged after initialization for the flow.
+    uint16_t engine_id : 4;  // remote UcclEngine ID to process this packet.
+    uint16_t path_id : 12;   // path_id of this dst port.
     enum class UcclFlags : uint8_t {
         kData = 0b0,              // Data packet.
         kAck = 0b10,              // ACK packet.
@@ -553,7 +553,7 @@ class UcclFlow {
     swift::CubicCtl *cubic_pp_;
 
     // Path ID for each packet indexed by seqno.
-    uint8_t hist_path_id_[kMaxPathHistoryPerEngine] = {0};
+    uint16_t hist_path_id_[kMaxPathHistoryPerEngine] = {0};
     inline void set_path_id(uint32_t seqno, uint32_t path_id) {
         hist_path_id_[seqno & (kMaxPathHistoryPerEngine - 1)] = path_id;
     }
@@ -565,24 +565,22 @@ class UcclFlow {
     Latency rtt_stats_;
     uint64_t rtt_probe_count_ = 0;
 
-    /* Maintaining per-path RTT for entropy-based path selection. */
-    static const uint32_t kMaxPathMask = kMaxPath - 1;
+    /****** Maintaining per-path RTT for entropy-based path selection ******/
     // Destination ports with remote_engine_idx_ as the target queue_id.
     std::vector<uint16_t> dst_ports_;
-    // RTT in tsc; indexed by path_id.
+    // RTT in tsc, indexed by path_id.
     size_t port_path_rtt_[kMaxPath] = {0};
-
     inline uint32_t get_path_id_with_lowest_rtt() {
 #ifdef PATH_SELECTION
         auto idx_u32 = U32Rand(0, UINT32_MAX);
-        auto idx1 = idx_u32 & kMaxPathMask;
-        auto idx2 = (idx_u32 >> 16) & kMaxPathMask;
+        auto idx1 = idx_u32 % kMaxPath;
+        auto idx2 = (idx_u32 >> 16) % kMaxPath;
         VLOG(3) << "rtt: idx1 " << port_path_rtt_[idx1] << " idx2 "
                 << port_path_rtt_[idx2];
         return (port_path_rtt_[idx1] < port_path_rtt_[idx2]) ? idx1 : idx2;
 #else
         static uint32_t next_path_id = 0;
-        return (next_path_id++) & kMaxPathMask;
+        return (next_path_id++) % kMaxPath;
 #endif
     }
 

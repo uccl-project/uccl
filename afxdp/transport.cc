@@ -867,7 +867,7 @@ void UcclFlow::prepare_datapacket(FrameBuf *msgbuf, uint32_t path_id,
     auto *ucclh = reinterpret_cast<UcclPktHdr *>(pkt_addr + kNetHdrLen);
     ucclh->magic = be16_t(UcclPktHdr::kMagic);
     ucclh->engine_id = remote_engine_idx_;
-    ucclh->path_id = (uint8_t)path_id;
+    ucclh->path_id = (uint16_t)path_id;
     ucclh->net_flags = net_flags;
     ucclh->ackno = be32_t(UINT32_MAX);
     // This fills the FrameBuf flags into the outgoing packet msg_flags.
@@ -902,7 +902,7 @@ AFXDPSocket::frame_desc UcclFlow::craft_ackpacket(
     auto *ucclh = (UcclPktHdr *)(pkt_addr + kNetHdrLen);
     ucclh->magic = be16_t(UcclPktHdr::kMagic);
     ucclh->engine_id = remote_engine_idx_;
-    ucclh->path_id = (uint8_t)path_id;
+    ucclh->path_id = (uint16_t)path_id;
     ucclh->net_flags = net_flags;
     ucclh->msg_flags = 0;
     ucclh->frame_len = be16_t(kNetHdrLen + kControlPayloadBytes);
