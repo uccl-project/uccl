@@ -37,8 +37,8 @@ static const uint32_t AFXDP_MTU = 3498;
 static const char* DEV_DEFAULT = "ens6";
 static const double kLinkBandwidth = 50.0 * 1e9 / 8;
 static const uint32_t NUM_QUEUES = 8;
-static const uint32_t kMaxPath = 128;
-static const uint32_t kMaxUnackedPktsPP = 3u;
+static const uint32_t kMaxPath = 256;
+static const uint32_t kMaxUnackedPktsPP = 1u;
 #elif defined(AWS_G4METAL)
 static const uint32_t AFXDP_MTU = 3498;
 static const char* DEV_DEFAULT = "enp199s0";

@@ -92,6 +92,9 @@ python setup_all.py --target=aws_tcp
 # for AFXDP
 python setup_all.py --target=aws_afxdp
 ./run_nccl_test.sh afxdp 4
+
+# monitoring bw usage
+./measure_bw.sh ens6
 ```
 
 ### MISC setup
