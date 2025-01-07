@@ -7,7 +7,7 @@
 #define USE_MULTIPATH
 #define PATH_SELECTION
 #define REXMIT_SET_PATH
-// #define THREADED_MEMCPY
+#define THREADED_MEMCPY
 // #define EMULATE_ZC
 // #define USE_TCP
 // #define ENABLE_CSUM

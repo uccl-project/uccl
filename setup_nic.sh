@@ -41,8 +41,15 @@ else
 fi
 
 NCPU=$(nproc)
+
 # Starting from 3/4 of the CPUs to avoid conflicting with nccl proxy services.
 irq_start_cpu=$((NCPU / 2 + NCPU / 4))
+
+# For AWS, just mapping irqs to the application cores
+if [ $PLATFORM = "aws" ]; then
+    irq_start_cpu=$((NCPU / 4))
+fi
+
 (
     let cnt=0
     cd /sys/class/net/${NIC}/device/msi_irqs/
@@ -55,6 +62,12 @@ irq_start_cpu=$((NCPU / 2 + NCPU / 4))
         echo $CPU | sudo tee /proc/irq/$IRQ/smp_affinity_list >/dev/null
     done
 )
+
+# https://github.com/amzn/amzn-drivers/issues/334#issuecomment-2575417997; giving very bad improvements
+# echo 50 | sudo tee /proc/sys/net/core/busy_poll
+# echo 50 | sudo tee /proc/sys/net/core/busy_read
+# echo 2 | sudo tee /sys/class/net/ens6/napi_defer_hard_irqs
+# echo 200000 | sudo tee /sys/class/net/ens6/gro_flush_timeout
 
 # https://lwn.net/Articles/837010/; do not given improvements
 # echo 2 | sudo tee /sys/class/net/ens5/napi_defer_hard_irqs
