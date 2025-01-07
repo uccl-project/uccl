@@ -1018,6 +1018,10 @@ void UcclEngine::run() {
         for (auto &[flow_id, flow] : active_flows_map_) {
             flow->transmit_pending_packets();
         }
+
+#ifndef THREADED_MEMCPY
+        deser_th_func();
+#endif
     }
 
     // This will reset flow pcb state.
@@ -1035,7 +1039,9 @@ void UcclEngine::deser_th_func() {
     Channel::Msg tx_deser_work;
     Channel::Msg rx_deser_work;
 
+#ifdef THREADED_MEMCPY
     while (!shutdown_) {
+#endif
         if (Channel::dequeue_sc(channel_->tx_task_q_, &tx_deser_work)) {
             // Make data written by the app thread visible to the deser thread.
             tx_deser_work.poll_ctx->read_barrier();
@@ -1129,7 +1135,9 @@ void UcclEngine::deser_th_func() {
                 socket_->push_frame(ready_frame_offset);
             }
         }
+#ifdef THREADED_MEMCPY
     }
+#endif
 }
 
 void UcclEngine::process_rx_msg(
