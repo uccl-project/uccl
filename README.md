@@ -34,12 +34,12 @@ Remember to change `afxdp/transport_config.h` based on your NIC IPs and MACs.
 ```
 cd afxdp; make -j "CXXFLAGS=-DAWS_ENA"
 or 
-cd afxdp; make -j "CXXFLAGS=-DCLOUDLAB_MLX5"
+cd afxdp; make -j "CXXFLAGS=-DCLAB_MLX5"
 
 # On both server and client
 ./setup_nic.sh ens6 4 4 9001 tcp aws
 or
-./setup_nic.sh ens1f1np1 4 4 1500 tcp cloudlab
+./setup_nic.sh ens1f1np1 4 4 1500 tcp clab
 
 # On server, edit nodes.txt to include all node ips
 python rsync.sh
@@ -54,12 +54,12 @@ python rsync.sh
 ```
 cd afxdp; make -j "CXXFLAGS=-DAWS_ENA"
 or 
-cd afxdp; make -j "CXXFLAGS=-DCLOUDLAB_MLX5"
+cd afxdp; make -j "CXXFLAGS=-DCLAB_MLX5"
 
 # On both server and client
 ./setup_nic.sh ens6 1 1 3498 afxdp aws
 or
-./setup_nic.sh ens1f1np1 1 1 1500 afxdp cloudlab
+./setup_nic.sh ens1f1np1 1 1 1500 afxdp clab
 
 # On server, edit nodes.txt to include all node ips
 python rsync.sh
@@ -74,7 +74,7 @@ sudo ./client_main
 Note that any program that leverages util_afxdp no long needs root to use AFXDP sockets.
 
 ```
-/opt/uccl$ python setup_all.py --target cloudlab_d6515_afxdp
+/opt/uccl$ python setup_all.py --target clab_d6515_afxdp
 ./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --clientip=192.168.6.2 --test=bimq
 ./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --client --serverip=192.168.6.1 --test=bimq
 ```

@@ -8,17 +8,17 @@ config_mapping = {
     "aws_c5_afxdp": ["AWS_C5", "ens6", 3498],
     "aws_g4_afxdp": ["AWS_G4", "ens6", 3498],
     "aws_g4metal_afxdp": ["AWS_G4METAL", "enp199s0", 3498],
-    "cloudlab_xl170_afxdp": ["CLOUDLAB_XL170", "ens1f1np1", 1500],
-    "cloudlab_d6515_afxdp": ["CLOUDLAB_D6515", "enp65s0f0np0", 3498],
+    "clab_xl170_afxdp": ["CLAB_XL170", "ens1f1np1", 1500],
+    "clab_d6515_afxdp": ["CLAB_D6515", "enp65s0f0np0", 3498],
     #
     "aws_c5_tcp": ["AWS_C5", "ens6", 9001],
     "aws_g4_tcp": ["AWS_G4", "ens6", 9001],
     "aws_g4metal_tcp": ["AWS_G4METAL", "enp199s0", 9001],
-    "cloudlab_xl170_tcp": ["CLOUDLAB_XL170", "ens1f1np1", 1500],
-    "cloudlab_d6515_tcp": ["CLOUDLAB_D6515", "enp65s0f0np0", 9000],
+    "clab_xl170_tcp": ["CLAB_XL170", "ens1f1np1", 1500],
+    "clab_d6515_tcp": ["CLAB_D6515", "enp65s0f0np0", 9000],
     #
     "aws_c5_tcp_3kmtu": ["AWS_C5", "ens6", 3498],
-    "cloudlab_d6515_tcp_3kmtu": ["CLOUDLAB_D6515", "enp65s0f0np0", 3498],
+    "clab_d6515_tcp_3kmtu": ["CLAB_D6515", "enp65s0f0np0", 3498],
     #
     "setup_extra": ["", "", 0],
 }
@@ -26,7 +26,7 @@ PYTHON = "source /opt/anaconda3/bin/activate; conda run -n base python"
 
 # Usage:
 #   python setup_all.py --target=setup_extra
-#   python setup_all.py --target=cloudlab_xl170_afxdp
+#   python setup_all.py --target=clab_xl170_afxdp
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="parsing setup_all arguments.")
@@ -34,7 +34,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--target",
         type=str,
-        default="cloudlab_xl170_afxdp",
+        default="clab_xl170_afxdp",
         help=f'{", ".join(list(config_mapping.keys()))}',
     )
 
@@ -91,21 +91,21 @@ if __name__ == "__main__":
 
     ### Setup NIC
     afxdp_or_tcp = "afxdp" if "afxdp" in target else "tcp"
-    aws_or_cloudlab = "aws" if "aws" in target else "cloudlab"
+    aws_or_clab = "aws" if "aws" in target else "clab"
     if "aws_g4metal_tcp" in target:
         core_count = 32
         num_irqcores = 32
     elif "aws_c5_tcp" in target:
         core_count = 32
         num_irqcores = 32
-    elif "cloudlab_d6515_tcp" in target:
+    elif "clab_d6515_tcp" in target:
         core_count = 63
         num_irqcores = 63
 
     if afxdp_or_tcp == "afxdp":
-        nic_cmd = f"./setup_nic.sh {net_dev} {num_queues} {num_irqcores} {mtu} {afxdp_or_tcp} {aws_or_cloudlab}"
+        nic_cmd = f"./setup_nic.sh {net_dev} {num_queues} {num_irqcores} {mtu} {afxdp_or_tcp} {aws_or_clab}"
     else:
-        nic_cmd = f"./setup_nic.sh {net_dev} {core_count} {core_count} {mtu} {afxdp_or_tcp} {aws_or_cloudlab}"
+        nic_cmd = f"./setup_nic.sh {net_dev} {core_count} {core_count} {mtu} {afxdp_or_tcp} {aws_or_clab}"
 
     wait_handler_vec = []
     for node_client in node_clients:

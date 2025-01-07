@@ -19,7 +19,7 @@ if [ $MODE = "afxdp" ]; then
     sudo service irqbalance stop
     if [ $PLATFORM = "aws" ]; then
         sudo ethtool -C ${NIC} adaptive-rx off rx-usecs 0 tx-usecs 0
-    elif [ $PLATFORM = "cloudlab" ]; then
+    elif [ $PLATFORM = "clab" ]; then
         sudo ethtool -C ${NIC} adaptive-rx off adaptive-tx off rx-usecs 0 rx-frames 1 tx-usecs 0 tx-frames 1
     else
         echo "Invalid platform: ${PLATFORM}"
@@ -29,7 +29,7 @@ elif [ $MODE = "tcp" ]; then
     sudo service irqbalance start
     if [ $PLATFORM = "aws" ]; then
         sudo ethtool -C ${NIC} adaptive-rx on rx-usecs 20 tx-usecs 60
-    elif [ $PLATFORM = "cloudlab" ]; then
+    elif [ $PLATFORM = "clab" ]; then
         sudo ethtool -C ${NIC} adaptive-rx on adaptive-tx on rx-usecs 8 rx-frames 128 tx-usecs 8 tx-frames 128
     else
         echo "Invalid platform: ${PLATFORM}"

@@ -21,7 +21,7 @@ enum class CCType {
 static constexpr CCType kCCType = CCType::kCubicPP;
 
 #if !defined(AWS_C5) && !defined(AWS_G4) && !defined(AWS_G4METAL) && \
-    !defined(CLOUDLAB_XL170) && !defined(CLOUDLAB_D6515)
+    !defined(CLAB_XL170) && !defined(CLAB_D6515)
 #define AWS_C5
 #endif
 
@@ -46,14 +46,14 @@ static const double kLinkBandwidth = 100.0 * 1e9 / 8;
 static const uint32_t NUM_QUEUES = 12;
 static const uint32_t kMaxPath = 128;
 static const uint32_t kMaxUnackedPktsPP = 3u;
-#elif defined(CLOUDLAB_XL170)
+#elif defined(CLAB_XL170)
 static const uint32_t AFXDP_MTU = 1500;
 static const char* DEV_DEFAULT = "ens1f1np1";
 static const double kLinkBandwidth = 25.0 * 1e9 / 8;
 static const uint32_t NUM_QUEUES = 2;
 static const uint32_t kMaxPath = 64;
 static const uint32_t kMaxUnackedPktsPP = 8u;
-#elif defined(CLOUDLAB_D6515)
+#elif defined(CLAB_D6515)
 static const uint32_t AFXDP_MTU = 3498;
 static const char* DEV_DEFAULT = "enp65s0f0np0";
 static const double kLinkBandwidth = 100.0 * 1e9 / 8;
@@ -87,7 +87,7 @@ static_assert(kMaxUnackedPktsPerEngine <= kMaxPathHistoryPerEngine,
 static_assert(is_power_of_two(kMaxPathHistoryPerEngine),
               "kMaxPathHistoryPerEngine must be power of 2");
 
-#ifdef CLOUDLAB_XL170
+#ifdef CLAB_XL170
 // TODO(yang): why XL170 would crash with 1x fill ring size?
 #define FILL_RING_SIZE (XSK_RING_PROD__DEFAULT_NUM_DESCS * 2)
 #else
