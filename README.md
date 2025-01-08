@@ -139,3 +139,5 @@ sudo perf script | ./stackcollapse-perf.pl > out.perf-folded
 # Must use sudo so as it can capture kernel symbols
 sudo ./flamegraph.pl out.perf-folded > perf.svg
 ```
+
+Count LoC: `cloc . --exclude-list-file=.clocignore`
