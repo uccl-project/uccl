@@ -43,7 +43,7 @@ fi
 NCPU=$(nproc)
 
 # Starting from 3/4 of the CPUs to avoid conflicting with nccl proxy services.
-irq_start_cpu=$((NCPU / 2 + NCPU / 4))
+irq_start_cpu=$((NCPU / 4 * 3))
 
 # For AWS, just mapping irqs to the application cores
 if [ $PLATFORM = "aws" ]; then

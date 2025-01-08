@@ -608,24 +608,14 @@ class UcclEngine {
      * future it may be responsible for multiple channels.
      */
     UcclEngine(int queue_id, Channel *channel, const std::string local_addr,
-               const std::string local_l2_addr, uint32_t deser_th_cpuid)
+               const std::string local_l2_addr)
         : local_addr_(htonl(str_to_ip(local_addr))),
           local_engine_idx_(queue_id),
           socket_(AFXDPFactory::CreateSocket(queue_id)),
           channel_(channel),
           last_periodic_tsc_(rdtsc()),
           periodic_ticks_(0),
-          kSlowTimerIntervalTsc_(us_to_cycles(kSlowTimerIntervalUs, freq_ghz))
-#ifdef THREADED_MEMCPY
-          ,
-          deser_th([this, queue_id, deser_th_cpuid]() {
-              pin_thread_to_cpu(deser_th_cpuid);
-              LOG(INFO) << "[Engine] deser thread " << queue_id
-                        << " running on CPU " << deser_th_cpuid;
-              deser_th_func();
-          })
-#endif
-    {
+          kSlowTimerIntervalTsc_(us_to_cycles(kSlowTimerIntervalUs, freq_ghz)) {
         DCHECK(str_to_mac(local_l2_addr, local_l2_addr_));
     }
 
@@ -638,7 +628,7 @@ class UcclEngine {
      */
     void run();
 
-    void deser_th_func();
+    static void deser_th_func(std::vector<UcclEngine *> engines);
 
     /**
      * @brief Method to perform periodic processing. This is called by the
@@ -692,8 +682,6 @@ class UcclEngine {
     uint64_t kSlowTimerIntervalTsc_;
     // Whether shutdown is requested.
     std::atomic<bool> shutdown_{false};
-    // Deserialization thread.
-    std::thread deser_th;
 };
 
 /**
@@ -717,6 +705,7 @@ class Endpoint {
     Channel *channel_vec_[NUM_QUEUES];
     std::vector<std::unique_ptr<UcclEngine>> engine_vec_;
     std::vector<std::unique_ptr<std::thread>> engine_th_vec_;
+    std::vector<std::unique_ptr<std::thread>> deser_th_vec_;
 
     // Number of flows on each engine, indexed by engine_idx.
     std::mutex engine_load_vec_mu_;

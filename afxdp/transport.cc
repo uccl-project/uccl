@@ -1020,7 +1020,7 @@ void UcclEngine::run() {
         }
 
 #ifndef THREADED_MEMCPY
-        deser_th_func();
+        deser_th_func(std::vector<UcclEngine *>{this});
 #endif
     }
 
@@ -1031,108 +1031,114 @@ void UcclEngine::run() {
     }
     // This will flush all unpolled tx frames.
     socket_->shutdown();
-
-    deser_th.join();
 }
 
-void UcclEngine::deser_th_func() {
+void UcclEngine::deser_th_func(std::vector<UcclEngine *> engines) {
     Channel::Msg tx_deser_work;
     Channel::Msg rx_deser_work;
 
 #ifdef THREADED_MEMCPY
-    while (!shutdown_) {
+    while (!engines[0]->shutdown_) {
 #endif
-        if (Channel::dequeue_sc(channel_->tx_task_q_, &tx_deser_work)) {
-            // Make data written by the app thread visible to the deser thread.
-            tx_deser_work.poll_ctx->read_barrier();
-            VLOG(3) << "Tx jring dequeue";
+        for (auto engine : engines) {
+            if (Channel::dequeue_sc(engine->channel_->tx_task_q_,
+                                    &tx_deser_work)) {
+                // Make data written by the app thread visible to the deser
+                // thread.
+                tx_deser_work.poll_ctx->read_barrier();
+                VLOG(3) << "Tx jring dequeue";
 
-            // deser tx_work into a framebuf chain, then pass to deser_th.
-            FrameBuf *deser_msgs_head = nullptr;
-            FrameBuf *deser_msgs_tail = nullptr;
-            auto *app_buf_cursor = tx_deser_work.data;
-            auto remaining_bytes = tx_deser_work.len;
-            while (remaining_bytes > 0) {
-                auto payload_len =
-                    std::min(remaining_bytes,
-                             (size_t)AFXDP_MTU - kNetHdrLen - kUcclHdrLen);
-                auto frame_offset = socket_->pop_frame();
-                auto *msgbuf =
-                    FrameBuf::Create(frame_offset, socket_->umem_buffer_,
-                                     kNetHdrLen + kUcclHdrLen + payload_len);
+                // deser tx_work into a framebuf chain, then pass to deser_th.
+                FrameBuf *deser_msgs_head = nullptr;
+                FrameBuf *deser_msgs_tail = nullptr;
+                auto *app_buf_cursor = tx_deser_work.data;
+                auto remaining_bytes = tx_deser_work.len;
+                while (remaining_bytes > 0) {
+                    auto payload_len =
+                        std::min(remaining_bytes,
+                                 (size_t)AFXDP_MTU - kNetHdrLen - kUcclHdrLen);
+                    auto frame_offset = engine->socket_->pop_frame();
+                    auto *msgbuf = FrameBuf::Create(
+                        frame_offset, engine->socket_->umem_buffer_,
+                        kNetHdrLen + kUcclHdrLen + payload_len);
 #ifndef EMULATE_ZC
-                auto pkt_payload_addr =
-                    msgbuf->get_pkt_addr() + kNetHdrLen + kUcclHdrLen;
-                memcpy(pkt_payload_addr, app_buf_cursor, payload_len);
+                    auto pkt_payload_addr =
+                        msgbuf->get_pkt_addr() + kNetHdrLen + kUcclHdrLen;
+                    memcpy(pkt_payload_addr, app_buf_cursor, payload_len);
 #endif
 
-                remaining_bytes -= payload_len;
-                app_buf_cursor += payload_len;
+                    remaining_bytes -= payload_len;
+                    app_buf_cursor += payload_len;
 
-                if (deser_msgs_head == nullptr) {
-                    deser_msgs_head = msgbuf;
-                    deser_msgs_tail = msgbuf;
-                } else {
-                    deser_msgs_tail->set_next(msgbuf);
-                    deser_msgs_tail = msgbuf;
-                }
-            }
-            deser_msgs_tail->set_next(nullptr);
-            tx_deser_work.deser_msgs = deser_msgs_head;
-
-            // Make sure the app thread sees the deserialized messages.
-            tx_deser_work.poll_ctx->write_barrier();
-            Channel::enqueue_sp(channel_->tx_deser_q_, &tx_deser_work);
-        }
-        if (Channel::dequeue_sc(channel_->rx_deser_q_, &rx_deser_work)) {
-            // Make data written by engine thread visible to the deser thread.
-            rx_deser_work.poll_ctx->read_barrier();
-            VLOG(3) << "Rx ser jring dequeue";
-
-            FrameBuf *ready_msg = rx_deser_work.deser_msgs;
-            auto *app_buf = rx_deser_work.data;
-            auto *app_buf_len_p = rx_deser_work.len_p;
-            auto *poll_ctx = rx_deser_work.poll_ctx;
-            size_t cur_offset = 0;
-
-            while (ready_msg != nullptr) {
-                auto *pkt_addr = ready_msg->get_pkt_addr();
-                DCHECK(pkt_addr)
-                    << "pkt_addr is nullptr when copy to app buf " << std::hex
-                    << "0x" << ready_msg << std::dec << ready_msg->to_string();
-                auto *payload_addr = pkt_addr + kNetHdrLen + kUcclHdrLen;
-                auto payload_len =
-                    ready_msg->get_frame_len() - kNetHdrLen - kUcclHdrLen;
-
-                const auto *ucclh =
-                    reinterpret_cast<const UcclPktHdr *>(pkt_addr + kNetHdrLen);
-                VLOG(2) << "payload_len: " << payload_len
-                        << " seqno: " << std::dec << ucclh->seqno.value();
-#ifndef EMULATE_ZC
-                memcpy((uint8_t *)app_buf + cur_offset, payload_addr,
-                       payload_len);
-#endif
-                cur_offset += payload_len;
-                auto ready_frame_offset = ready_msg->get_frame_offset();
-
-                // We have a complete message. Let's deliver it to the app.
-                if (ready_msg->is_last()) {
-                    *app_buf_len_p = cur_offset;
-
-                    // Wakeup app thread waiting on endpoint.
-                    poll_ctx->write_barrier();
-                    {
-                        std::lock_guard<std::mutex> lock(poll_ctx->mu);
-                        poll_ctx->done = true;
-                        poll_ctx->cv.notify_one();
+                    if (deser_msgs_head == nullptr) {
+                        deser_msgs_head = msgbuf;
+                        deser_msgs_tail = msgbuf;
+                    } else {
+                        deser_msgs_tail->set_next(msgbuf);
+                        deser_msgs_tail = msgbuf;
                     }
-                    VLOG(2) << "Received a complete message " << cur_offset
-                            << " bytes";
                 }
+                deser_msgs_tail->set_next(nullptr);
+                tx_deser_work.deser_msgs = deser_msgs_head;
 
-                ready_msg = ready_msg->next();
-                // Free received frames that have been copied to app buf.
-                socket_->push_frame(ready_frame_offset);
+                // Make sure the app thread sees the deserialized messages.
+                tx_deser_work.poll_ctx->write_barrier();
+                Channel::enqueue_sp(engine->channel_->tx_deser_q_,
+                                    &tx_deser_work);
+            }
+            if (Channel::dequeue_sc(engine->channel_->rx_deser_q_,
+                                    &rx_deser_work)) {
+                // Make data written by engine thread visible to the deser
+                // thread.
+                rx_deser_work.poll_ctx->read_barrier();
+                VLOG(3) << "Rx ser jring dequeue";
+
+                FrameBuf *ready_msg = rx_deser_work.deser_msgs;
+                auto *app_buf = rx_deser_work.data;
+                auto *app_buf_len_p = rx_deser_work.len_p;
+                auto *poll_ctx = rx_deser_work.poll_ctx;
+                size_t cur_offset = 0;
+
+                while (ready_msg != nullptr) {
+                    auto *pkt_addr = ready_msg->get_pkt_addr();
+                    DCHECK(pkt_addr)
+                        << "pkt_addr is nullptr when copy to app buf "
+                        << std::hex << "0x" << ready_msg << std::dec
+                        << ready_msg->to_string();
+                    auto *payload_addr = pkt_addr + kNetHdrLen + kUcclHdrLen;
+                    auto payload_len =
+                        ready_msg->get_frame_len() - kNetHdrLen - kUcclHdrLen;
+
+                    const auto *ucclh = reinterpret_cast<const UcclPktHdr *>(
+                        pkt_addr + kNetHdrLen);
+                    VLOG(2) << "payload_len: " << payload_len
+                            << " seqno: " << std::dec << ucclh->seqno.value();
+#ifndef EMULATE_ZC
+                    memcpy((uint8_t *)app_buf + cur_offset, payload_addr,
+                           payload_len);
+#endif
+                    cur_offset += payload_len;
+                    auto ready_frame_offset = ready_msg->get_frame_offset();
+
+                    // We have a complete message. Let's deliver it to the app.
+                    if (ready_msg->is_last()) {
+                        *app_buf_len_p = cur_offset;
+
+                        // Wakeup app thread waiting on endpoint.
+                        poll_ctx->write_barrier();
+                        {
+                            std::lock_guard<std::mutex> lock(poll_ctx->mu);
+                            poll_ctx->done = true;
+                            poll_ctx->cv.notify_one();
+                        }
+                        VLOG(2) << "Received a complete message " << cur_offset
+                                << " bytes";
+                    }
+
+                    ready_msg = ready_msg->next();
+                    // Free received frames that have been copied to app buf.
+                    engine->socket_->push_frame(ready_frame_offset);
+                }
             }
         }
 #ifdef THREADED_MEMCPY
@@ -1353,33 +1359,46 @@ Endpoint::Endpoint(const char *interface_name, int num_queues,
     LOG(INFO) << "Creating Engines";
 
     std::vector<std::future<std::unique_ptr<UcclEngine>>> engine_futures;
-    for (int queue_id = 0, engine_cpu_id = engine_cpu_start;
-         queue_id < num_queues; queue_id++, engine_cpu_id++) {
+    for (int i = 0; i < num_queues; i++) {
         std::promise<std::unique_ptr<UcclEngine>> engine_promise;
         auto engine_future = engine_promise.get_future();
         engine_futures.emplace_back(std::move(engine_future));
 
         // Spawning a new thread to init engine and run the engine loop.
         engine_th_vec_.emplace_back(std::make_unique<std::thread>(
-            [this, num_queues, queue_id, engine_cpu_id,
+            [this, num_queues, i, engine_th_cpuid = engine_cpu_start + i,
              engine_promise = std::move(engine_promise)]() mutable {
-                pin_thread_to_cpu(engine_cpu_id);
-                LOG(INFO) << "[Engine] thread " << queue_id
-                          << " running on CPU " << engine_cpu_id;
+                pin_thread_to_cpu(engine_th_cpuid);
+                LOG(INFO) << "[Engine] thread " << i << " running on CPU "
+                          << engine_th_cpuid;
 
-                // Placing deser thread on engine_cpu_id + num_queues.
                 auto engine = std::make_unique<UcclEngine>(
-                    queue_id, channel_vec_[queue_id], local_ip_str_,
-                    local_mac_str_, engine_cpu_id + num_queues);
+                    i, channel_vec_[i], local_ip_str_, local_mac_str_);
                 auto *engine_ptr = engine.get();
 
                 engine_promise.set_value(std::move(engine));
                 engine_ptr->run();
             }));
     }
+    std::vector<UcclEngine *> engines;
     for (auto &engine_future : engine_futures) {
         engine_vec_.emplace_back(std::move(engine_future.get()));
+        engines.push_back(engine_vec_.back().get());
     }
+
+#ifdef THREADED_MEMCPY
+    for (int i = 0; i < num_queues; i++) {
+        // Placing deser thread on engine_th_cpuid + num_queues.
+        deser_th_vec_.emplace_back(std::make_unique<std::thread>(
+            [i, deser_th_cpuid = engine_cpu_start + num_queues + i,
+             engines = std::vector<UcclEngine *>{engines[i]}]() {
+                pin_thread_to_cpu(deser_th_cpuid);
+                LOG(INFO) << "[Engine] deser thread " << i << " running on CPU "
+                          << deser_th_cpuid;
+                UcclEngine::deser_th_func(engines);
+            }));
+    }
+#endif
 
     ctx_pool_ = new SharedPool<PollCtx *, true>(kMaxInflightMsg);
     ctx_pool_buf_ = new uint8_t[kMaxInflightMsg * sizeof(PollCtx)];
@@ -1413,6 +1432,7 @@ Endpoint::Endpoint(const char *interface_name, int num_queues,
 Endpoint::~Endpoint() {
     for (auto &engine : engine_vec_) engine->shutdown();
     for (auto &engine_th : engine_th_vec_) engine_th->join();
+    for (auto &deser_th : deser_th_vec_) deser_th->join();
     for (int i = 0; i < num_queues_; i++) delete channel_vec_[i];
 
     delete ctx_pool_;
