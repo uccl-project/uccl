@@ -15,13 +15,15 @@
 
 UCCL is an efficient collective communication library for GPUs. 
 
-Existing network transports, i.e., kernel TCP and RDMA, under NCCL leverage one or few network paths to stream huge data volumes, thus prone to congestion happening in datacenter networks. Instead, UCCL employss packet sparying in software to leverage abundant network paths to avoid "single-path-of-congestion". 
-
-UCCL provides the following benefits: 
+Existing network transports, i.e., kernel TCP and RDMA, under NCCL leverage one or few network paths to stream huge data volumes, thus prone to congestion happening in datacenter networks. Instead, UCCL employss packet sparying in software to leverage abundant network paths to avoid "single-path-of-congestion". With this design, UCCL provides the following benefits: 
 * Faster collectives by leveraging multi-path
 * Widely available in the public cloud by leveraging legacy NICs and Ethernet fabric
 * Evolvable transport designs including multi-path load balancing and congestion control
 * Open-source research platform for ML collectives
+
+On two AWS `g4dn.8xlarge` instanaces with 50G NICs and T4 GPUs under the cluster placement group, UCCL outperform NCCL by up to **3.7x** for AllReduce: 
+
+![UCCL Performance Report](./allreduce_perf.png)
 
 ## Getting Started
 
