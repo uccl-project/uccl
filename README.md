@@ -15,8 +15,7 @@
 
 UCCL is an efficient collective communication library for GPUs. 
 
-Existing network transports, i.e., kernel TCP and RDMA, under NCCL leverage one or few network paths to stream huge data volumes, thus prone to congestion happening in datacenter networks. 
-Instead, UCCL employss packet sparying in software to leverage abundant network paths to avoid "single-path-of-congestion". 
+Existing network transports, i.e., kernel TCP and RDMA, under NCCL leverage one or few network paths to stream huge data volumes, thus prone to congestion happening in datacenter networks. Instead, UCCL employss packet sparying in software to leverage abundant network paths to avoid "single-path-of-congestion". 
 
 UCCL provides the following benefits: 
 * Faster collectives by leveraging multi-path
@@ -33,7 +32,7 @@ UCCL currently support AWS ENA NICs; support for Azure and GCP NICs and RDMA is 
     * Login to EC2 console `us-east-1` and click `Launch instances`
     * Enter `Name and tags`
     * Select AMI of `Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.5 (Ubuntu 22.04)` or latest version
-        * Alternatively, we have prepared an AMI (ami-07f7062a5d995d7c4) to simplify dependency setup in step 2
+        * Alternatively, we have prepared an AMI (`ami-07f7062a5d995d7c4`) to simplify dependency setup in step 2
     * Select `g4dn.8xlarge` for `instances types` and choose your own `Key pair`
     * Click `Edit` for `Networking settings`, then select a random subnet and disable `Auto-assign public IP`
     * Click `Advanced network configuration`, then click `Add network interface`
@@ -129,4 +128,4 @@ Please refer to [README_dev.md](./README_dev.md) for development setup and testi
 
 ## Acknowledgement
 
-UCCL is being actively developed at [UC Berkeley Sky Computing Lab](https://sky.cs.berkeley.edu/). We welcome contributions from any open-source developers. 
+UCCL is being actively developed at [UC Berkeley Sky Computing Lab](https://sky.cs.berkeley.edu/). We welcome contributions from open-source developers. 
