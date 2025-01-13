@@ -23,7 +23,6 @@ UCCL provides the following benefits:
 * Evolvable transport designs including multi-path load balancing and congestion control
 * Open-source research platform for ML collectives
 
----
 ## Getting Started
 
 UCCL currently supports AWS ENA NICs; support for Azure and GCP NICs and RDMA is on the way. It is implemented as a NCCL plugin library with drop-in replacement for NCCL applications. Here, we show how to run the standard `nccl-tests` that leverages UCCL atop two AWS `g4dn.8xlarge` instanaces with T4 GPUs. 
