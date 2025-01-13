@@ -2,9 +2,16 @@
 
 # UCCL
 
+<p align="center">
+    <a href="#about"><b>About</b></a> | 
+    <a href="#getting-started"><b>Getting Started</b></a> | 
+    <a href="#development-guide"><b>Development Guide</b></a> | 
+    <a href="#acknowledgement"><b>Acknowledgement</b></a>
+</p>
+
 </div>
 
-# About 
+## About 
 
 UCCL is an efficient collective communication library for GPUs. 
 
@@ -17,15 +24,16 @@ UCCL provides the following benefits:
 * Evolvable transport designs including multi-path load balancing and congestion control
 * Open-source research platform for ML collectives
 
-# Getting Started
+---
+## Getting Started
 
 UCCL currently support AWS ENA NICs; support for Azure and GCP NICs and RDMA is on the way. It is implemented as a NCCL plugin library with drop-in replacement for NCCL applications. Here, we show how to run the standard `nccl-tests` that leverages UCCL atop two AWS g4dn.8xlarge instanaces with T4 GPUs. 
 
 1. Create two g4dn.8xlarge instanaces each with a second ENA NIC interface and a public IP: 
-    * Login to EC2 console and click `Launch instances`
+    * Login to EC2 console `us-east-1` and click `Launch instances`
     * Enter `Name and tags`
     * Select AMI of `Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.5 (Ubuntu 22.04)` or latest version
-        * Alternatively, we have prepared an AMI (TBD) to simplify dependency setup in step 2
+        * Alternatively, we have prepared an AMI (ami-07f7062a5d995d7c4) to simplify dependency setup in step 2
     * Select `g4dn.8xlarge` for `instances types` and choose your own `Key pair`
     * Click `Edit` for `Networking settings`, then select a random subnet and disable `Auto-assign public IP`
     * Click `Advanced network configuration`, then click `Add network interface`
@@ -49,8 +57,13 @@ UCCL currently support AWS ENA NICs; support for Azure and GCP NICs and RDMA is 
             ```
             sudo apt update
             sudo apt install clang llvm libelf-dev libpcap-dev build-essential libc6-dev-i386 linux-tools-$(uname -r) libgoogle-glog-dev libgtest-dev byobu net-tools iperf iperf3 libgtest-dev cmake -y
-            ./setup_extra.sh # re-login to use conda
-            make # ignore "config.h: No such file or directory" in the end
+
+             # re-login to use conda
+            ./setup_extra.sh
+            conda activate && conda install paramiko -y
+
+            # ignore "config.h: No such file or directory" in the end
+            make
             ```
         * Update AWS ENA driver to support zero-copy AF_XDP
             ```
@@ -83,6 +96,7 @@ UCCL currently support AWS ENA NICs; support for Azure and GCP NICs and RDMA is 
         make src.build -j
         cp src/include/nccl_common.h build/include/
         cd ..
+
         cd nccl-tests
         make MPI=1 MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi CUDA_HOME=/usr/local/cuda NCCL_HOME=/opt/uccl/nccl/build -j
         cd ..
@@ -91,15 +105,15 @@ UCCL currently support AWS ENA NICs; support for Azure and GCP NICs and RDMA is 
 
 3. Run UCCL transport tests
     * [On VM1]: 
+        * `cd /opt/uccl && git pull`
         * Edit `nodes.txt` to only include the two public IPs of the VMs
         * Build UCCL: 
-            * `conda activate && conda install paramiko -y`
             * `python setup_all.py --target aws_g4_afxdp`
             * Keep `setup_all.py` running
         * Run UCCL test: 
             * `cd /opt/uccl/afxdp/`
-            * [VM1] `./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --clientip=<VM2 ens6 IP> --test=bimq`
-            * [VM2] `./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --client --serverip=<VM1 ens6 IP> --test=bimq`
+            * [VM1] `./transport_test --logtostderr=1 --clientip=<VM2 ens6 IP> --test=bimq`
+            * [VM2] `./transport_test --logtostderr=1 --client --serverip=<VM1 ens6 IP> --test=bimq`
             * [VM2] You should be able to see something like `Sent 10000 messages, med rtt: 1033 us, tail rtt: 1484 us, link bw 98.3371 Gbps, app bw 95.3775 Gbps`. 
 
 4. Run nccl-tests
@@ -109,10 +123,10 @@ UCCL currently support AWS ENA NICs; support for Azure and GCP NICs and RDMA is 
         * `./run_nccl_test.sh afxdp 2`
         * You should be able to see nccl-tests results. 
 
-# For Developers
+## Development Guide
 
 Please refer to [README_dev.md](./README_dev.md) for development setup and testing.
 
-# Acknowledgement
+## Acknowledgement
 
-UCCL is being actively developed at [Berkeley Sky Computing Lab](https://sky.cs.berkeley.edu/). We welcome contributions from any open-source developers. 
+UCCL is being actively developed at [UC Berkeley Sky Computing Lab](https://sky.cs.berkeley.edu/). We welcome contributions from any open-source developers. 
