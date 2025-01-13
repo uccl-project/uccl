@@ -10,7 +10,8 @@ MAKEFLAGS += --no-print-directory
 Q = @
 endif
 
-LESSONS = $(wildcard afxdp*) $(wildcard aws*)
+# LESSONS = $(wildcard afxdp*) $(wildcard aws*)
+LESSONS = $(wildcard aws*)
 LESSONS_CLEAN = $(addsuffix _clean,$(LESSONS))
 
 .PHONY: clean clobber distclean $(LESSONS) $(LESSONS_CLEAN)

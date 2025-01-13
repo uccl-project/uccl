@@ -1,143 +1,118 @@
-# Unified CCL
+<div align="center">
 
-### Building the system
+# UCCL
 
-```
-sudo apt update
-sudo apt install clang llvm libelf-dev libpcap-dev build-essential libc6-dev-i386 linux-tools-$(uname -r) libgoogle-glog-dev libgtest-dev byobu net-tools iperf iperf3 libgtest-dev cmake -y
-./setup_extra.sh
-make
-```
+</div>
 
-If you want to build nccl and nccl-tests on cloudlab ubuntu22, you need to install cuda and openmpi: 
-```
-wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
-sudo apt install ./cuda-keyring_1.1-1_all.deb
-sudo apt update
-sudo apt install cuda-toolkit -y
-sudo apt install nvidia-driver-550 nvidia-utils-550 -y
+# About 
 
-sudo apt-get install openmpi-bin openmpi-doc libopenmpi-dev -y
+UCCL is an efficient collective communication library for GPUs. 
 
-cd nccl
-make src.build -j
-cp src/include/nccl_common.h build/include/
+Existing network transports, i.e., kernel TCP and RDMA, under NCCL leverage one or few network paths to stream huge data volumes, thus prone to congestion happening in datacenter networks. 
+Instead, UCCL employss packet sparying in software to leverage abundant network paths to avoid "single-path-of-congestion". 
 
-cd nccl-tests
-make MPI=1 MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi CUDA_HOME=/usr/local/cuda NCCL_HOME=/opt/uccl/nccl/build -j
-```
+UCCL provides the following benefits: 
+* Faster collectives by leveraging multi-path
+* Immediately deployable and widely available in the public cloud by directly leveraging legacy NICs and Ethernet fabric
+* Evolvable transport designs on CPU including multi-path load balancing, congestion control, out-of-order handling
+* Open-source research platform for ML collectives
 
-Remember to change `afxdp/transport_config.h` based on your NIC IPs and MACs. 
+# Getting Started
 
-### Run TCP testing
+UCCL currently support AWS ENA NICs; support for Azure and GCP NICs and RDMA is on the way. It is implemented as a NCCL plugin library with drop-in replacement for NCCL applications. Here, we show how to run the standard `nccl-tests` that leverages UCCL atop two AWS g4dn.8xlarge instanaces with T4 GPUs. 
 
-```
-cd afxdp; make -j "CXXFLAGS=-DAWS_ENA"
-or 
-cd afxdp; make -j "CXXFLAGS=-DCLAB_MLX5"
+1. Create two g4dn.8xlarge instanaces each with a second ENA NIC interface and a public IP: 
+    * Login to EC2 console and click "Launch instances"
+    * Enter "Name and tags"
+    * Select AMI of "Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.5 (Ubuntu 22.04)" or latest version
+        * Alternatively, we have prepared an AMI (TBD) to simplify dependency setup in step 2
+    * Select "g4dn.8xlarge" for "instances types" and choose your own "Key pair"
+    * Click "Edit" for "Networking settings", then select a random subnet and disable "Auto-assign public IP"
+    * Click "Advanced network configuration", then click "Add network interface"
+    * Configure security rules to allow any traffic goes through the instances
+    * Under "Summary", enter 2 for "Number of instances"
+    * Click "Launch instance"
+    * Back to the EC2 console page, click "Elastic IPs" then "Allocate Elastic IP address" to allocate two public IPs
+    * Back to the "Elastic IPs" page, for each public IP, right click the it to "Associate Elastic IP address"
+        * Click "Network interface", then enter the first network interface ID of each g4dn.8xlarge instance
+        * Click "Allow this Elastic IP address to be reassociated" then "Associate"
+    * Now you should be able to login to VM1 and VM2 via ssh over public IPs
+    * Also configure necessary ssh keys to make sure VM1 can ssh VM2 with password
 
-# On both server and client
-./setup_nic.sh ens6 4 4 9001 tcp aws
-or
-./setup_nic.sh ens1f1np1 4 4 1500 tcp clab
+2. Configure VM instances for UCCL tests as follows. Note if you have use our provided AMI, you can skip this setp.
 
-# On server, edit nodes.txt to include all node ips
-python rsync.sh
-./server_tcp_main
+    <details><summary>Click me</summary>
+    
+    * [On two VMs] Build UCCL under the `/opt` folder:
+        * `sudo chown ubuntu:ubuntu /opt && cd /opt`
+        * `git clone https://github.com/uccl-project/uccl.git && cd uccl`
+        * Install dependency: 
+            ```
+            sudo apt update
+            sudo apt install clang llvm libelf-dev libpcap-dev build-essential libc6-dev-i386 linux-tools-$(uname -r) libgoogle-glog-dev libgtest-dev byobu net-tools iperf iperf3 libgtest-dev cmake -y
+            ./setup_extra.sh # re-login to use conda
+            make # ignore "config.h: No such file or directory" in the end
+            ```
+        * Update AWS ENA driver to support zero-copy AF_XDP
+            ```
+            # Install last ena driver with reboot persistent
+            sudo apt-get install dkms
+            git clone https://github.com/amzn/amzn-drivers.git -b ena_linux_2.13.0
+            sudo mv amzn-drivers /usr/src/amzn-drivers-2.13.0
+            sudo vi /usr/src/amzn-drivers-2.13.0/dkms.conf
 
-# On client
-./client_tcp_main -a 192.168.6.1
-```
+            # Paste the following and save the file:
+            PACKAGE_NAME="ena"
+            PACKAGE_VERSION="2.13.0"
+            CLEAN="make -C kernel/linux/ena clean"
+            MAKE="make -C kernel/linux/ena/ BUILD_KERNEL=${kernelver}"
+            BUILT_MODULE_NAME[0]="ena"
+            BUILT_MODULE_LOCATION="kernel/linux/ena"
+            DEST_MODULE_LOCATION[0]="/updates"
+            DEST_MODULE_NAME[0]="ena"
+            REMAKE_INITRD="yes"
+            AUTOINSTALL="yes"
 
-### Run AFXDP testing
+            sudo dkms add -m amzn-drivers -v 2.13.0
+            sudo dkms build -m amzn-drivers -v 2.13.0
+            sudo dkms install -m amzn-drivers -v 2.13.0
+            sudo modprobe -r ena; sudo modprobe ena
+            ```
+    * [On two VMs] Build nccl and nccl-tests under the `/opt/uccl` folder:
+        ```
+        cd nccl
+        make src.build -j
+        cp src/include/nccl_common.h build/include/
+        cd ..
+        cd nccl-tests
+        make MPI=1 MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi CUDA_HOME=/usr/local/cuda NCCL_HOME=/opt/uccl/nccl/build -j
+        cd ..
+        ```
+    </details>
 
-```
-cd afxdp; make -j "CXXFLAGS=-DAWS_ENA"
-or 
-cd afxdp; make -j "CXXFLAGS=-DCLAB_MLX5"
+3. Run UCCL transport tests
+    * [On VM1]: 
+        * Edit `nodes.txt` to only include the two public IPs of the VMs
+        * Build UCCL: 
+            * `conda activate && conda install paramiko -y`
+            * `python setup_all.py --target aws_g4_afxdp` # keep it running
+        * Run UCCL test: 
+            * `cd /opt/uccl/afxdp/`
+            * [VM1] `./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --clientip=<VM2 ens6 IP> --test=bimq`
+            * [VM2] `./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --client --serverip=<VM1 ens6 IP> --test=bimq`
+            * [VM2] You should be able to see something like `Sent 10000 messages, med rtt: 1033 us, tail rtt: 1484 us, link bw 98.3371 Gbps, app bw 95.3775 Gbps`. 
 
-# On both server and client
-./setup_nic.sh ens6 1 1 3498 afxdp aws
-or
-./setup_nic.sh ens1f1np1 1 1 1500 afxdp clab
+4. Run nccl-tests
+    * [On VM1]:
+        * `python setup_all.py --target aws_g4_afxdp` # keep it running
+        * `cd /opt/uccl/afxdp/`
+        * `./run_nccl_test.sh afxdp 2`
+        * You should be able to see nccl-tests results. 
 
-# On server, edit nodes.txt to include all node ips
-python rsync.sh
-sudo ./server_main
+# For Developers
 
-# On client
-sudo ./client_main
-```
+Please refer to [README_dev.md](./README_dev.md) for development setup and testing.
 
-### Run transport test
+# Acknowledgement
 
-Note that any program that leverages util_afxdp no long needs root to use AFXDP sockets.
-
-```
-/opt/uccl$ python setup_all.py --target clab_d6515_afxdp
-./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --clientip=192.168.6.2 --test=bimq
-./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --client --serverip=192.168.6.1 --test=bimq
-```
-
-using `--test=async --verify --rand` for debugging purpose. 
-
-### Run nccl-tests
-
-Assume you have 4 node IPs in `nodes.txt`
-
-```
-# for TCP
-python setup_all.py --target=aws_tcp
-./run_nccl_test.sh tcp 4
-
-# for AFXDP
-python setup_all.py --target=aws_afxdp
-./run_nccl_test.sh afxdp 4
-
-# monitoring bw usage
-./measure_bw.sh ens6
-```
-
-### MISC setup
-
-Install anaconda and ssh lib: 
-```
-wget https://repo.anaconda.com/archive/Anaconda3-2024.06-1-Linux-x86_64.sh
-bash Anaconda3-2024.06-1-Linux-x86_64.sh -b -p /opt/anaconda3
-source /opt/anaconda3/bin/activate
-conda init
-conda install paramiko -y
-```
-
-Avoiding nodes.txt polluting the repo: 
-```
-git update-index --skip-worktree nodes.txt
-git update-index --no-skip-worktree nodes.txt
-```
-
-Iperf test: 
-```
-iperf -s -i 1 -P 32 -t 1000 --dualtest -B 192.168.6.1%enp65s0f0np0
-iperf -c 192.168.6.1 -i 1 -P 32 -t 1000 --dualtest -B 192.168.6.2%enp65s0f0np0
-```
-
-Run performance debugging:
-```
-sudo apt install flex bison libtraceevent-dev libzstd1 libdwarf-dev libdw-dev binutils-dev libcap-dev libelf-dev libnuma-dev python3 python3-dev python-setuptools libssl-dev libunwind-dev libdwarf-dev zlib1g-dev liblzma-dev libaio-dev libtraceevent-dev debuginfod libpfm4-dev libslang2-dev systemtap-sdt-dev libperl-dev binutils-dev libbabeltrace-dev libiberty-dev libzstd-dev lld -y
-
-cd /tmp
-git clone --depth 1 git@github.com:torvalds/linux.git -b v6.6
-cd linux/tools/perf 
-make NO_LIBPYTHON=1
-sudo cp perf /usr/bin
-
-cd /tmp
-git clone https://github.com/brendangregg/FlameGraph
-cd FlameGraph
-sudo perf record -F 99 -p `pidof transport_test` -g -- sleep 20
-sudo perf script | ./stackcollapse-perf.pl > out.perf-folded
-# Must use sudo so as it can capture kernel symbols
-sudo ./flamegraph.pl out.perf-folded > perf.svg
-```
-
-Count LoC: `cloc . --exclude-list-file=.clocignore`
+UCCL is being actively developed at [Berkeley Sky Computing Lab](https://sky.cs.berkeley.edu/). We welcome contributions from any open-source developers. 
