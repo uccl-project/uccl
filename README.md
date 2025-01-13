@@ -26,9 +26,9 @@ UCCL provides the following benefits:
 ---
 ## Getting Started
 
-UCCL currently support AWS ENA NICs; support for Azure and GCP NICs and RDMA is on the way. It is implemented as a NCCL plugin library with drop-in replacement for NCCL applications. Here, we show how to run the standard `nccl-tests` that leverages UCCL atop two AWS g4dn.8xlarge instanaces with T4 GPUs. 
+UCCL currently supports AWS ENA NICs; support for Azure and GCP NICs and RDMA is on the way. It is implemented as a NCCL plugin library with drop-in replacement for NCCL applications. Here, we show how to run the standard `nccl-tests` that leverages UCCL atop two AWS `g4dn.8xlarge` instanaces with T4 GPUs. 
 
-1. Create two g4dn.8xlarge instanaces each with a second ENA NIC interface and a public IP: 
+1. Create two `g4dn.8xlarge` instanaces each with a second ENA NIC interface and a public IP: 
     * Login to EC2 console `us-east-1` and click `Launch instances`
     * Enter `Name and tags`
     * Select AMI of `Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.5 (Ubuntu 22.04)` or latest version
@@ -41,15 +41,15 @@ UCCL currently support AWS ENA NICs; support for Azure and GCP NICs and RDMA is 
     * Click `Launch instance`
     * Back to the EC2 console page, click `Elastic IPs` then `Allocate Elastic IP address` to allocate two public IPs
     * Back to the `Elastic IPs` page, for each public IP, right click the it to `Associate Elastic IP address`
-        * Click `Network interface`, then enter the first network interface ID of each g4dn.8xlarge instance
+        * Click `Network interface`, then enter the first network interface ID of each VM
         * Click `Allow this Elastic IP address to be reassociated` then `Associate`
-    * Now you should be able to login to VM1 and VM2 via ssh over public IPs
-    * Also configure necessary ssh keys to make sure VM1 can ssh VM2 with password
+    * Now you should be able to login to `VM1` and `VM2` via ssh over public IPs
+    * Also configure necessary ssh keys to make sure `VM1` can ssh `VM2` with password
 
-2. Configure VM instances for UCCL tests as follows. Note if you have use our provided AMI, you can skip this setp.
+2. Configure the two VM instances for UCCL tests as follows. Note if you have use our provided AMI, you can skip this setp.
     <details><summary>Click me</summary>
     
-    * [On two VMs] Build UCCL under the `/opt` folder:
+    * Build `uccl` under the `/opt` folder:
         * `sudo chown ubuntu:ubuntu /opt && cd /opt`
         * `git clone https://github.com/uccl-project/uccl.git && cd uccl`
         * Install dependency: 
@@ -89,7 +89,7 @@ UCCL currently support AWS ENA NICs; support for Azure and GCP NICs and RDMA is 
             sudo dkms install -m amzn-drivers -v 2.13.0
             sudo modprobe -r ena; sudo modprobe ena
             ```
-    * [On two VMs] Build nccl and nccl-tests under the `/opt/uccl` folder:
+    * Build `nccl` and `nccl-tests` under the `/opt/uccl` folder:
         ```
         cd nccl
         make src.build -j
@@ -102,25 +102,23 @@ UCCL currently support AWS ENA NICs; support for Azure and GCP NICs and RDMA is 
         ```
     </details>
 
-3. Run UCCL transport tests
-    * [On VM1]: 
-        * `cd /opt/uccl && git pull`
-        * Edit `nodes.txt` to only include the two public IPs of the VMs
-        * Build UCCL: 
-            * `python setup_all.py --target aws_g4_afxdp`
-            * Keep `setup_all.py` running
-        * Run UCCL test: 
-            * `cd /opt/uccl/afxdp/`
-            * [VM1] `./transport_test --logtostderr=1 --clientip=<VM2 ens6 IP> --test=bimq`
-            * [VM2] `./transport_test --logtostderr=1 --client --serverip=<VM1 ens6 IP> --test=bimq`
-            * [VM2] You should be able to see something like `Sent 10000 messages, med rtt: 1033 us, tail rtt: 1484 us, link bw 98.3371 Gbps, app bw 95.3775 Gbps`. 
-
-4. Run nccl-tests
-    * [On VM1]:
+3. Run UCCL transport tests on `VM1`:
+    * `cd /opt/uccl && git pull`
+    * Edit `nodes.txt` to only include the two public IPs of the VMs
+    * Build UCCL: 
         * `python setup_all.py --target aws_g4_afxdp`
+        * Keep `setup_all.py` running
+    * Run UCCL tests: 
         * `cd /opt/uccl/afxdp/`
-        * `./run_nccl_test.sh afxdp 2`
-        * You should be able to see nccl-tests results. 
+        * [`VM1`] `./transport_test --logtostderr=1 --clientip=<VM2 ens6 IP> --test=bimq`
+        * [`VM2`] `./transport_test --logtostderr=1 --client --serverip=<VM1 ens6 IP> --test=bimq`
+        * [`VM2`] You should be able to see something like `Sent 10000 messages, med rtt: 1033 us, tail rtt: 1484 us, link bw 98.3371 Gbps, app bw 95.3775 Gbps`. 
+
+4. Run `nccl-tests` on `VM1`: 
+    * `python setup_all.py --target aws_g4_afxdp`
+    * `cd /opt/uccl/afxdp/`
+    * `./run_nccl_test.sh afxdp 2`
+    * You should be able to see `nccl-tests` results. 
 
 ## Development Guide
 

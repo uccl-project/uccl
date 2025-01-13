@@ -30,8 +30,8 @@ static constexpr CCType kCCType = CCType::kCubicPP;
 static const uint32_t AFXDP_MTU = 3498;
 static const char* DEV_DEFAULT = "ens6";
 static const double kLinkBandwidth = 100.0 * 1e9 / 8;
-static const uint32_t NUM_QUEUES = 5;  // 5/12 for uni/dual.
-static const uint32_t kMaxPath = 256;  // 256/200 for uni/dual.
+static const uint32_t NUM_QUEUES = 12;  // 5/12 for uni/dual.
+static const uint32_t kMaxPath = 200;  // 256/200 for uni/dual.
 static const uint32_t kMaxUnackedPktsPP = 1u;
 #elif defined(AWS_G4)
 static const uint32_t AFXDP_MTU = 3498;
