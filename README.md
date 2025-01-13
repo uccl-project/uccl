@@ -13,8 +13,8 @@ Instead, UCCL employss packet sparying in software to leverage abundant network 
 
 UCCL provides the following benefits: 
 * Faster collectives by leveraging multi-path
-* Immediately deployable and widely available in the public cloud by directly leveraging legacy NICs and Ethernet fabric
-* Evolvable transport designs on CPU including multi-path load balancing, congestion control, out-of-order handling
+* Widely available in the public cloud by leveraging legacy NICs and Ethernet fabric
+* Evolvable transport designs including multi-path load balancing and congestion control
 * Open-source research platform for ML collectives
 
 # Getting Started
@@ -22,25 +22,24 @@ UCCL provides the following benefits:
 UCCL currently support AWS ENA NICs; support for Azure and GCP NICs and RDMA is on the way. It is implemented as a NCCL plugin library with drop-in replacement for NCCL applications. Here, we show how to run the standard `nccl-tests` that leverages UCCL atop two AWS g4dn.8xlarge instanaces with T4 GPUs. 
 
 1. Create two g4dn.8xlarge instanaces each with a second ENA NIC interface and a public IP: 
-    * Login to EC2 console and click "Launch instances"
-    * Enter "Name and tags"
-    * Select AMI of "Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.5 (Ubuntu 22.04)" or latest version
+    * Login to EC2 console and click `Launch instances`
+    * Enter `Name and tags`
+    * Select AMI of `Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.5 (Ubuntu 22.04)` or latest version
         * Alternatively, we have prepared an AMI (TBD) to simplify dependency setup in step 2
-    * Select "g4dn.8xlarge" for "instances types" and choose your own "Key pair"
-    * Click "Edit" for "Networking settings", then select a random subnet and disable "Auto-assign public IP"
-    * Click "Advanced network configuration", then click "Add network interface"
+    * Select `g4dn.8xlarge` for `instances types` and choose your own `Key pair`
+    * Click `Edit` for `Networking settings`, then select a random subnet and disable `Auto-assign public IP`
+    * Click `Advanced network configuration`, then click `Add network interface`
     * Configure security rules to allow any traffic goes through the instances
-    * Under "Summary", enter 2 for "Number of instances"
-    * Click "Launch instance"
-    * Back to the EC2 console page, click "Elastic IPs" then "Allocate Elastic IP address" to allocate two public IPs
-    * Back to the "Elastic IPs" page, for each public IP, right click the it to "Associate Elastic IP address"
-        * Click "Network interface", then enter the first network interface ID of each g4dn.8xlarge instance
-        * Click "Allow this Elastic IP address to be reassociated" then "Associate"
+    * Under `Summary`, enter 2 for `Number of instances`
+    * Click `Launch instance`
+    * Back to the EC2 console page, click `Elastic IPs` then `Allocate Elastic IP address` to allocate two public IPs
+    * Back to the `Elastic IPs` page, for each public IP, right click the it to `Associate Elastic IP address`
+        * Click `Network interface`, then enter the first network interface ID of each g4dn.8xlarge instance
+        * Click `Allow this Elastic IP address to be reassociated` then `Associate`
     * Now you should be able to login to VM1 and VM2 via ssh over public IPs
     * Also configure necessary ssh keys to make sure VM1 can ssh VM2 with password
 
 2. Configure VM instances for UCCL tests as follows. Note if you have use our provided AMI, you can skip this setp.
-
     <details><summary>Click me</summary>
     
     * [On two VMs] Build UCCL under the `/opt` folder:
@@ -95,7 +94,8 @@ UCCL currently support AWS ENA NICs; support for Azure and GCP NICs and RDMA is 
         * Edit `nodes.txt` to only include the two public IPs of the VMs
         * Build UCCL: 
             * `conda activate && conda install paramiko -y`
-            * `python setup_all.py --target aws_g4_afxdp` # keep it running
+            * `python setup_all.py --target aws_g4_afxdp`
+            * Keep `setup_all.py` running
         * Run UCCL test: 
             * `cd /opt/uccl/afxdp/`
             * [VM1] `./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --clientip=<VM2 ens6 IP> --test=bimq`
@@ -104,7 +104,7 @@ UCCL currently support AWS ENA NICs; support for Azure and GCP NICs and RDMA is 
 
 4. Run nccl-tests
     * [On VM1]:
-        * `python setup_all.py --target aws_g4_afxdp` # keep it running
+        * `python setup_all.py --target aws_g4_afxdp`
         * `cd /opt/uccl/afxdp/`
         * `./run_nccl_test.sh afxdp 2`
         * You should be able to see nccl-tests results. 
