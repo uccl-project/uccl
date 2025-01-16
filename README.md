@@ -15,39 +15,39 @@
 
 UCCL is an efficient collective communication library for GPUs. 
 
-Existing network transports, i.e., kernel TCP and RDMA, under NCCL leverage one or few network paths to stream huge data volumes, thus prone to congestion happening in datacenter networks. Instead, UCCL employss packet sparying in software to leverage abundant network paths to avoid "single-path-of-congestion". With this design, UCCL provides the following benefits: 
+Existing network transports under NCCL (i.e., kernel TCP and RDMA) leverage one or few network paths to stream huge data volumes, thus prone to congestion happening in datacenter networks. Instead, UCCL employs packet spraying in software to leverage abundant network paths to avoid "single-path-of-congestion". With this design, UCCL provides the following benefits: 
 * Faster collectives by leveraging multi-path
 * Widely available in the public cloud by leveraging legacy NICs and Ethernet fabric
 * Evolvable transport designs including multi-path load balancing and congestion control
 * Open-source research platform for ML collectives
 
-On two AWS `g4dn.8xlarge` instanaces with 50G NICs and T4 GPUs under the cluster placement group, UCCL outperform NCCL by up to **3.7x** for AllReduce: 
+On two AWS `g4dn.8xlarge` instances with 50G NICs and T4 GPUs under the cluster placement group, UCCL outperforms NCCL by up to **3.7x** for AllReduce: 
 
 ![UCCL Performance Report](./allreduce_perf.png)
 
 ## Getting Started
 
-UCCL currently supports AWS ENA NICs; support for Azure and GCP NICs and RDMA is on the way. It is implemented as a NCCL plugin library with drop-in replacement for NCCL applications. Here, we show how to run the standard `nccl-tests` that leverages UCCL atop two AWS `g4dn.8xlarge` instanaces with T4 GPUs. 
+UCCL currently supports AWS ENA NICs; support for Azure and GCP NICs and RDMA is on the way. It is implemented as an NCCL plugin library with a drop-in replacement for NCCL applications. Here, we show how to run the standard `nccl-tests` that leverages UCCL atop two AWS `g4dn.8xlarge` instances with T4 GPUs. 
 
-1. Create two `g4dn.8xlarge` instanaces each with a second ENA NIC interface and a public IP: 
+1. Create two `g4dn.8xlarge` instances each with a second ENA NIC interface and a public IP: 
     * Login to EC2 console `us-east-1` and click `Launch instances`
     * Enter `Name and tags`
-    * Select AMI of `Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.5 (Ubuntu 22.04)` or latest version
+    * Select AMI of `Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.5 (Ubuntu 22.04)` or the latest version
         * Alternatively, we have prepared an AMI (`ami-07f7062a5d995d7c4`) to simplify dependency setup in step 2
     * Select `g4dn.8xlarge` for `instances types` and choose your own `Key pair`
     * Click `Edit` for `Networking settings`, then select a random subnet and disable `Auto-assign public IP`
     * Click `Advanced network configuration`, then click `Add network interface`
-    * Configure security rules to allow any traffic goes through the instances
+    * Configure security rules to allow any traffic to go through the instances
     * Under `Summary`, enter 2 for `Number of instances`
     * Click `Launch instance`
     * Back to the EC2 console page, click `Elastic IPs` then `Allocate Elastic IP address` to allocate two public IPs
-    * Back to the `Elastic IPs` page, for each public IP, right click the it to `Associate Elastic IP address`
+    * Back to the `Elastic IPs` page, for each public IP, right-click it to `Associate Elastic IP address`
         * Click `Network interface`, then enter the first network interface ID of each VM
         * Click `Allow this Elastic IP address to be reassociated` then `Associate`
     * Now you should be able to login to `VM1` and `VM2` via ssh over public IPs
     * Also configure necessary ssh keys to make sure `VM1` can ssh `VM2` with password
 
-2. Configure the two VM instances for UCCL tests as follows. Note if you have use our provided AMI, you can skip this setp.
+2. Configure the two VM instances for UCCL tests as follows. Note if you have used our provided AMI, you can skip this step.
     <details><summary>Click me</summary>
     
     * Build `uccl` under the `/opt` folder:
@@ -62,7 +62,7 @@ UCCL currently supports AWS ENA NICs; support for Azure and GCP NICs and RDMA is
             ./setup_extra.sh
             conda activate && conda install paramiko -y
 
-            # ignore "config.h: No such file or directory" in the end
+            # ignore "config.h: No such file or directory" at the end
             make
             ```
         * Update AWS ENA driver to support zero-copy AF_XDP
