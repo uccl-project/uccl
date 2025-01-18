@@ -45,7 +45,8 @@ UCCL currently supports AWS ENA NICs; support for Azure and GCP NICs and RDMA is
         * Click `Network interface`, then enter the first network interface ID of each VM
         * Click `Allow this Elastic IP address to be reassociated` then `Associate`
     * Now you should be able to login to `VM1` and `VM2` via ssh over public IPs
-    * Also configure necessary ssh keys to make sure `VM1` can ssh `VM2` with password
+    * Also configure necessary ssh keys to make sure `VM1` can ssh `VM2` without password
+        * Eg, you can run `ssh-keygen` on `VM1` to generate temporary pub-priv key pairs, then copy the pub key to the `~/.ssh/authorized_keys` on `VM2`.
 
 2. Configure the two VM instances for UCCL tests as follows. Note if you have used our provided AMI, you can skip this step.
     <details><summary>Click me</summary>
@@ -114,6 +115,7 @@ UCCL currently supports AWS ENA NICs; support for Azure and GCP NICs and RDMA is
         * [`VM1`] `./transport_test --logtostderr=1 --clientip=<VM2 ens6 IP> --test=bimq`
         * [`VM2`] `./transport_test --logtostderr=1 --client --serverip=<VM1 ens6 IP> --test=bimq`
         * [`VM2`] You should be able to see something like `Sent 10000 messages, med rtt: 1033 us, tail rtt: 1484 us, link bw 98.3371 Gbps, app bw 95.3775 Gbps`. 
+        * If you hit `[util_afxdp.cc:30] Check failed: receive_fd(afxdp_ctl.client_sock_, &afxdp_ctl.umem_fd_) == 0`, try `make -C afxdp/ clean` then `python setup_all.py --target aws_g4_afxdp` again.
 
 4. Run `nccl-tests` on `VM1`: 
     * `python setup_all.py --target aws_g4_afxdp`
