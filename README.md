@@ -45,7 +45,8 @@ UCCL currently supports AWS ENA NICs; support for Azure and GCP NICs and RDMA is
         * Click `Network interface`, then enter the first network interface ID of each VM
         * Click `Allow this Elastic IP address to be reassociated` then `Associate`
     * Now you should be able to login to `VM1` and `VM2` via ssh over public IPs
-    * Also configure necessary ssh keys to make sure `VM1` can ssh both `VM1` (itself) and `VM2` without password
+    * Configure necessary ssh keys to make sure `VM1` can ssh both `VM1` (itself) and `VM2` without password
+        * Note that we do not support ssh agent forwarding yet: eg, if you are using `ForwardAgent yes` option in `.ssh/config`, you still need to configure the necessary ssh keys on VMs, rather than relying on the key in ssh agent
         * Eg, you can run `ssh-keygen` on `VM1` to generate a temporary pub-priv key pair, then copy the pub key to `~/.ssh/authorized_keys` on `VM1` and `VM2`
 
 2. Configure the two VM instances for UCCL tests as follows. Note if you have used our provided AMI, you can skip this step.
