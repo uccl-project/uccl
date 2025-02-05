@@ -5,7 +5,6 @@ source ../shared.sh
 # Usage: ./run_nccl_test.sh [tcp|afxdp] [num of processes] [ens6|enp199s0]
 
 TEST=${1:-tcp}
-UCCL_HOME="/opt/uccl"
 LIBNCCL_PATH="${UCCL_HOME}/nccl/build/lib/libnccl.so"
 # all_gather_perf  all_reduce_perf  alltoall_perf  broadcast_perf  gather_perf
 # hypercube_perf  reduce_perf  reduce_scatter_perf  scatter_perf  sendrecv_perf
@@ -14,7 +13,7 @@ NUM_PROCS=${2:-4}
 NIC=${3:-ens6} # enp199s0 for g4.metal
 NODES=$(get_nodes "../nodes.txt")
 
-echo "Running test: ${TEST}, ${PROG_NAME}, ${NUM_PROCS} processes, NIC ${NIC}, ${NODES}"
+echo "Running test: ${TEST}, ${PROG_NAME}, ${NUM_PROCS} processes, NIC ${NIC}0, ${NODES}"
 
 if [ "$TEST" = "tcp" ]; then
 
