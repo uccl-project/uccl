@@ -13,7 +13,7 @@ NUM_PROCS=${2:-4}
 NIC=${3:-ens6} # enp199s0 for g4.metal
 NODES=$(get_nodes "../nodes.txt")
 
-echo "Running test: ${TEST}, ${PROG_NAME}, ${NUM_PROCS} processes, NIC ${NIC}0, ${NODES}"
+echo "Running test: ${TEST}, ${PROG_NAME}, ${NUM_PROCS} processes, NIC ${NIC}, ${NODES}"
 
 if [ "$TEST" = "tcp" ]; then
 
