@@ -96,6 +96,13 @@ UCCL currently supports AWS ENA NICs and IBM VirtIO NICs; support for Azure and 
             sudo dkms install -m amzn-drivers -v 2.13.0
             sudo modprobe -r ena; sudo modprobe ena
             ```
+        * On IBM VMs: Upgrade the Kernel to latest (>6.2) to support AF_XDP
+            For example, on Ubuntu 22.04 image
+            ```
+            sudo apt update
+            sudo apt install linux-image-generic-hwe-22.04
+            sudo apt install -y linux-headers-$(uname -r) build-essential
+            ```
     * Build `nccl` and `nccl-tests`:
         ```
         cd $UCCL_HOME/nccl
@@ -115,6 +122,7 @@ UCCL currently supports AWS ENA NICs and IBM VirtIO NICs; support for Azure and 
     * Build UCCL: 
         * `python setup_all.py --target aws_g4_afxdp`
         * Keep `setup_all.py` running
+        Note: This will build and setup UCCL on both VMs
     * Run UCCL tests: 
         * `cd $UCCL_HOME/afxdp/`
         * [`VM1`] `./transport_test --logtostderr=1 --clientip=<VM2 IP> --test=bimq`
@@ -124,7 +132,7 @@ UCCL currently supports AWS ENA NICs and IBM VirtIO NICs; support for Azure and 
 
 4. Run `nccl-tests` on `VM1`: 
     * `python setup_all.py --target aws_g4_afxdp`
-    * `cd /opt/uccl/afxdp/`
+    * `cd $UCCL_HOME/afxdp/`
     * `./run_nccl_test.sh afxdp 2 <nic>`
     * You should be able to see `nccl-tests` results. 
 
