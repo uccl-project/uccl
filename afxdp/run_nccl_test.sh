@@ -5,7 +5,6 @@ source ../shared.sh
 # Usage: ./run_nccl_test.sh [tcp|afxdp] [num of processes] [ens6|enp199s0]
 
 TEST=${1:-tcp}
-UCCL_HOME="/opt/uccl"
 LIBNCCL_PATH="${UCCL_HOME}/nccl/build/lib/libnccl.so"
 # all_gather_perf  all_reduce_perf  alltoall_perf  broadcast_perf  gather_perf
 # hypercube_perf  reduce_perf  reduce_scatter_perf  scatter_perf  sendrecv_perf
