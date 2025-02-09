@@ -12,4 +12,5 @@ cuda_memcpy
 cuda_memcpy_async
 cuda_persist_kernel
 efa_sge_mr
-efa_shared_cp
+efa_shared_cp_ibverbs
+efa_shared_cp_libfabric

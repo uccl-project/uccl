@@ -27,11 +27,14 @@ fi_efagen: fi_efagen.c
 fi_efasink: fi_efasink.c
 	gcc -O3 -g fi_efasink.c -o fi_efasink $(FI_FLAGS)
 
-EFA_BIN = efa_shared_cp efa_sge_mr
+EFA_BIN = efa_shared_cp_libfabric efa_shared_cp_ibverbs efa_sge_mr
 efa: $(EFA_BIN)
 
-efa_shared_cp: efa_shared_cp.cc
-	g++ -O3 -g efa_shared_cp.cc -o efa_shared_cp $(FI_FLAGS)
+efa_shared_cp_libfabric: efa_shared_cp_libfabric.cc
+	g++ -O3 -g efa_shared_cp_libfabric.cc -o efa_shared_cp_libfabric $(FI_FLAGS)
+
+efa_shared_cp_ibverbs: efa_shared_cp_ibverbs.cc
+	g++ -O3 -g efa_shared_cp_ibverbs.cc -o efa_shared_cp_ibverbs $(FI_FLAGS) -fstack-protector-all
 
 efa_sge_mr: efa_sge_mr.cu
 	nvcc -O3 -g efa_sge_mr.cu -o efa_sge_mr $(FI_FLAGS)

@@ -27,6 +27,10 @@ struct rdma_context {
     char *buf1, *buf2;
 };
 
+size_t align_size(size_t size, size_t alignment) {
+    return (size + alignment - 1) & ~(alignment - 1);
+}
+
 // Retrieve GID based on gid_index
 void get_gid(struct rdma_context *rdma, int gid_index, union ibv_gid *gid) {
     if (ibv_query_gid(rdma->ctx, PORT_NUM, gid_index, gid)) {
@@ -40,7 +44,6 @@ void get_gid(struct rdma_context *rdma, int gid_index, union ibv_gid *gid) {
 // Create and configure a UD QP
 struct ibv_qp *create_qp(struct rdma_context *rdma) {
     struct ibv_qp_init_attr qp_attr = {};
-    memset(&qp_attr, 0, sizeof(qp_attr));
     qp_attr.qp_type = IBV_QPT_UD;
     qp_attr.send_cq = rdma->cq;
     qp_attr.recv_cq = rdma->cq;
@@ -56,12 +59,10 @@ struct ibv_qp *create_qp(struct rdma_context *rdma) {
     }
 
     struct ibv_qp_attr attr = {};
-    memset(&attr, 0, sizeof(attr));
     attr.qp_state = IBV_QPS_INIT;
     attr.pkey_index = 0;
     attr.port_num = PORT_NUM;
     attr.qkey = QKEY;
-
     if (ibv_modify_qp(
             qp, &attr,
             IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_QKEY)) {
@@ -78,8 +79,7 @@ struct ibv_qp *create_qp(struct rdma_context *rdma) {
 
     memset(&attr, 0, sizeof(attr));
     attr.qp_state = IBV_QPS_RTS;
-    attr.sq_psn = 0x12345;  // ✅ Set initial Send Queue PSN
-
+    attr.sq_psn = 0x12345;  // Set initial Send Queue PSN
     if (ibv_modify_qp(qp, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN)) {
         perror("Failed to modify QP to RTS");
         exit(1);
@@ -92,12 +92,11 @@ struct ibv_qp *create_qp(struct rdma_context *rdma) {
 struct ibv_ah *create_ah(struct rdma_context *rdma, int gid_index,
                          union ibv_gid remote_gid) {
     struct ibv_ah_attr ah_attr = {};
-    memset(&ah_attr, 0, sizeof(ah_attr));
 
-    ah_attr.is_global = 1;  // ✅ Enable Global Routing Header (GRH)
+    ah_attr.is_global = 1;  // Enable Global Routing Header (GRH)
     ah_attr.port_num = PORT_NUM;
-    ah_attr.grh.sgid_index = gid_index;  // ✅ Use selected GID index
-    ah_attr.grh.dgid = remote_gid;       // ✅ Destination GID
+    ah_attr.grh.sgid_index = gid_index;  // Use selected GID index
+    ah_attr.grh.dgid = remote_gid;       // Destination GID
     ah_attr.grh.flow_label = 0;
     ah_attr.grh.hop_limit = 255;
     ah_attr.grh.traffic_class = 0;
@@ -190,14 +189,16 @@ struct rdma_context *init_rdma() {
 
 // Register memory regions
 #if USE_GDR == 0
-    rdma->buf1 = (char *)aligned_alloc(4096, BUFFER_SIZE + UD_ADDITION);
+    rdma->buf1 = (char *)aligned_alloc(
+        4096, align_size(4096, BUFFER_SIZE + UD_ADDITION));
 #else
     if (cudaMalloc(&rdma->buf1, BUFFER_SIZE) != cudaSuccess) {
         perror("Failed to allocate GPU memory");
         exit(1);
     }
 #endif
-    rdma->buf2 = (char *)aligned_alloc(4096, BUFFER_SIZE + UD_ADDITION);
+    rdma->buf2 = (char *)aligned_alloc(
+        4096, align_size(4096, BUFFER_SIZE + UD_ADDITION));
     rdma->mr1 = ibv_reg_mr(rdma->pd, rdma->buf1, BUFFER_SIZE + UD_ADDITION,
                            IBV_ACCESS_LOCAL_WRITE);
     rdma->mr2 = ibv_reg_mr(rdma->pd, rdma->buf2, BUFFER_SIZE + UD_ADDITION,
@@ -226,7 +227,6 @@ void run_server(struct rdma_context *rdma, int gid_index) {
         {(uintptr_t)rdma->buf2, BUFFER_SIZE + UD_ADDITION, rdma->mr2->lkey}};
 
     struct ibv_recv_wr wr = {}, *bad_wr;
-    memset(&wr, 0, sizeof(wr));
     wr.num_sge = 2;
     wr.sg_list = sge;
 
@@ -275,7 +275,6 @@ void run_client(struct rdma_context *rdma, const char *server_ip,
         {(uintptr_t)rdma->buf2, BUFFER_SIZE, rdma->mr2->lkey}};
 
     struct ibv_send_wr wr = {};
-    memset(&wr, 0, sizeof(wr));
     struct ibv_send_wr *bad_wr = NULL;
     wr.wr_id = 1;
     wr.opcode = IBV_WR_SEND;

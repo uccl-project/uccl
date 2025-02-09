@@ -19,6 +19,7 @@ mpirun --bind-to none -np 4 -N 1 --host 172.31.37.118,172.31.45.5,172.31.43.3,17
     # -x NCCL_NSOCKS_PERTHREAD=2 \
     # -x NCCL_MAX_NCHANNELS=8 \
     # -x NCCL_MIN_NCHANNELS=8 \
+    # -x NCCL_IB_QPS_PER_CONNECTION=1 \
     # -x CUDA_VISIBLE_DEVICES=0,2,4,6 \
     # all_reduce_perf, alltoall_perf \
 
@@ -40,6 +41,7 @@ mpirun --bind-to none -np 4 -N 1 --host 172.31.37.118,172.31.45.5,172.31.43.3,17
 #         --mca orte_base_help_aggregate 0 \
 #         -x LD_PRELOAD="/opt/uccl/nccl/build/lib/libnccl.so" \
 #         -x NCCL_NET_PLUGIN="${PLUGIN_PATH}" \
+#         -x NCCL_DEBUG=INFO \
 #         -x NCCL_P2P_DISABLE=1 \
 #         -x NCCL_SHM_DISABLE=1 \
 #         -x NCCL_NET_DISABLE=0 \
