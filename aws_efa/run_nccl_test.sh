@@ -1,9 +1,9 @@
 # !/bin/bash
 
-# PLUGIN_PATH="/opt/aws-ofi-nccl/lib/libnccl-net.so" # for p4d
-PLUGIN_PATH="/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu/libnccl-net.so" # for p3d
+PLUGIN_PATH="/opt/aws-ofi-nccl/lib/libnccl-net.so" # for p4d
+# PLUGIN_PATH="/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu/libnccl-net.so" # for p3d
 
-mpirun --bind-to none -np 1 -N 1 --host 172.31.33.227 \
+mpirun --bind-to none -np 4 -N 1 --host 172.31.37.118,172.31.45.5,172.31.43.3,172.31.46.175 \
     --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
     --mca orte_base_help_aggregate 0 \
     -x LD_PRELOAD="/opt/uccl/nccl/build/lib/libnccl.so" \

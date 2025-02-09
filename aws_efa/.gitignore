@@ -7,3 +7,9 @@ fi_efagen
 fi_efasink
 af_xdp_user
 af_xdp_user_efa
+cuda_event
+cuda_memcpy
+cuda_memcpy_async
+cuda_persist_kernel
+efa_sge_mr
+efa_shared_cp
