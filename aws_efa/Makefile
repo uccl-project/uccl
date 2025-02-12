@@ -39,7 +39,7 @@ efa_shared_cp_ibverbs: efa_shared_cp_ibverbs.cc
 efa_sge_mr: efa_sge_mr.cu
 	nvcc -O3 -g efa_sge_mr.cu -o efa_sge_mr $(FI_FLAGS)
 
-CUDA_BIN = cuda_event cuda_memcpy cuda_memcpy_async cuda_persist_kernel
+CUDA_BIN = cuda_event cuda_memcpy cuda_memcpy_async cuda_persist_kernel cuda_memcpy_gpu
 cuda: $(CUDA_BIN)
 
 cuda_event: cuda_event.cu
@@ -53,6 +53,9 @@ cuda_memcpy_async: cuda_memcpy_async.cu
 
 cuda_persist_kernel: cuda_persist_kernel.cu
 	nvcc -O3 -g cuda_persist_kernel.cu -o cuda_persist_kernel $(FI_FLAGS) -std=c++11
+
+cuda_memcpy_gpu: cuda_memcpy_gpu.cu
+	nvcc -O3 -g cuda_memcpy_gpu.cu -o cuda_memcpy_gpu $(FI_FLAGS) -std=c++11
 
 clean:
 	rm $(FI_BIN) $(EFA_BIN) $(CUDA_BIN)

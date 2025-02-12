@@ -14,3 +14,4 @@ cuda_persist_kernel
 efa_sge_mr
 efa_shared_cp_ibverbs
 efa_shared_cp_libfabric
+cuda_memcpy_gpu
