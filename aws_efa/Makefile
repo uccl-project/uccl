@@ -1,17 +1,16 @@
 # SPDX-License-Identifier: (GPL-2.0 OR BSD-2-Clause)
 
+# !!! Remember to conda deactivate before running make !!!
+
 XDP_TARGETS  := af_xdp_kern af_xdp_kern_efa
 USER_TARGETS := af_xdp_user af_xdp_user_efa
-FI_FLAGS = -I /opt/amazon/efa/include -L /opt/amazon/efa/lib -lfabric
+FI_FLAGS = -I /opt/amazon/efa/include -L /opt/amazon/efa/lib -lfabric -libverbs
 LDLIBS += -lpthread $(FI_FLAGS)
 
-COMMON_DIR := ../common
+all: fi efa cuda
 
-include $(COMMON_DIR)/common.mk
-COMMON_OBJS := $(COMMON_DIR)/common_params.o
-COMMON_OBJS += $(COMMON_DIR)/common_user_bpf_xdp.o
-
-fi: fi_pingpong fi_info fi_udpgen fi_efagen fi_efasink
+FI_BIN = fi_pingpong fi_info fi_udpgen fi_efagen fi_efasink
+fi: $(FI_BIN)
 
 fi_pingpong: fi_pingpong.c
 	gcc -O3 fi_pingpong.c -o fi_pingpong $(FI_FLAGS)
@@ -28,5 +27,35 @@ fi_efagen: fi_efagen.c
 fi_efasink: fi_efasink.c
 	gcc -O3 -g fi_efasink.c -o fi_efasink $(FI_FLAGS)
 
-fi_clean:
-	rm fi_pingpong fi_info fi_udpgen fi_efagen fi_efasink
+EFA_BIN = efa_shared_cp_libfabric efa_shared_cp_ibverbs efa_sge_mr
+efa: $(EFA_BIN)
+
+efa_shared_cp_libfabric: efa_shared_cp_libfabric.cc
+	g++ -O3 -g efa_shared_cp_libfabric.cc -o efa_shared_cp_libfabric $(FI_FLAGS)
+
+efa_shared_cp_ibverbs: efa_shared_cp_ibverbs.cc
+	g++ -O3 -g efa_shared_cp_ibverbs.cc -o efa_shared_cp_ibverbs $(FI_FLAGS) -fstack-protector-all
+
+efa_sge_mr: efa_sge_mr.cu
+	nvcc -O3 -g efa_sge_mr.cu -o efa_sge_mr $(FI_FLAGS)
+
+CUDA_BIN = cuda_event cuda_memcpy cuda_memcpy_async cuda_persist_kernel cuda_memcpy_gpu
+cuda: $(CUDA_BIN)
+
+cuda_event: cuda_event.cu
+	nvcc -O3 -g cuda_event.cu -o cuda_event $(FI_FLAGS) -std=c++11
+
+cuda_memcpy: cuda_memcpy.cu
+	nvcc -O3 -g cuda_memcpy.cu -o cuda_memcpy $(FI_FLAGS) -std=c++11
+
+cuda_memcpy_async: cuda_memcpy_async.cu
+	nvcc -O3 -g cuda_memcpy_async.cu -o cuda_memcpy_async $(FI_FLAGS) -std=c++11
+
+cuda_persist_kernel: cuda_persist_kernel.cu
+	nvcc -O3 -g cuda_persist_kernel.cu -o cuda_persist_kernel $(FI_FLAGS) -std=c++11
+
+cuda_memcpy_gpu: cuda_memcpy_gpu.cu
+	nvcc -O3 -g cuda_memcpy_gpu.cu -o cuda_memcpy_gpu $(FI_FLAGS) -std=c++11
+
+clean:
+	rm $(FI_BIN) $(EFA_BIN) $(CUDA_BIN)
