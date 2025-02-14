@@ -66,7 +66,7 @@ static const uint32_t AFXDP_MTU = 1500;
 static const char* DEV_DEFAULT = "ens3";
 static const double kLinkBandwidth = 48.0 * 1e9 / 8;
 static const uint32_t NUM_QUEUES = 6;
-static const uint32_t kMaxPath = 200;
+static const uint32_t kMaxPath = 64;
 static const uint32_t kMaxUnackedPktsPP = 1u;
 #endif
 
