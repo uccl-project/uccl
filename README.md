@@ -27,7 +27,7 @@ On two AWS `g4dn.8xlarge` instances with 50G NICs and T4 GPUs under the cluster 
 
 ## Getting Started
 
-UCCL currently supports AWS ENA NICs; support for Azure and GCP NICs and RDMA is on the way. It is implemented as an NCCL plugin library with a drop-in replacement for NCCL applications. Here, we show how to run the standard `nccl-tests` that leverages UCCL atop two AWS `g4dn.8xlarge` instances with T4 GPUs. 
+UCCL currently supports AWS ENA NICs and IBM VirtIO NICs; support for Azure and GCP NICs and RDMA is on the way. It is implemented as an NCCL plugin library with a drop-in replacement for NCCL applications. Here, we show how to run the standard `nccl-tests` that leverages UCCL atop two AWS `g4dn.8xlarge` instances with T4 GPUs. 
 
 1. Create two `g4dn.8xlarge` instances each with a second ENA NIC interface and a public IP: 
     * Login to EC2 console `us-east-1` and click `Launch instances`
@@ -52,22 +52,26 @@ UCCL currently supports AWS ENA NICs; support for Azure and GCP NICs and RDMA is
 2. Configure the two VM instances for UCCL tests as follows. Note if you have used our provided AMI, you can skip this step.
     <details><summary>Click me</summary>
     
-    * Build `uccl` under the `/opt` folder:
-        * `sudo chown ubuntu:ubuntu /opt && cd /opt`
-        * `git clone https://github.com/uccl-project/uccl.git && cd uccl`
+    * Build `uccl`:
+        * `git clone https://github.com/uccl-project/uccl.git`
+        * `export UCCL_HOME=$(pwd)/uccl`
         * Install dependency: 
             ```
             sudo apt update
-            sudo apt install clang llvm libelf-dev libpcap-dev build-essential libc6-dev-i386 linux-tools-$(uname -r) libgoogle-glog-dev libgtest-dev byobu net-tools iperf iperf3 libgtest-dev cmake -y
+            sudo apt install clang llvm libelf-dev libpcap-dev build-essential libc6-dev-i386 linux-tools-$(uname -r) libgoogle-glog-dev libgtest-dev byobu net-tools iperf iperf3 libgtest-dev cmake m4 -y
 
-             # re-login to use conda
-            ./setup_extra.sh
-            conda activate && conda install paramiko -y
+            wget https://repo.anaconda.com/archive/Anaconda3-2024.10-1-Linux-x86_64.sh
+            bash ./Anaconda3-2024.10-1-Linux-x86_64.sh
+            source ~/.bashrc
+            conda init
+            ```
 
-            # ignore "config.h: No such file or directory" at the end
+        * Build UCCL: ignore "config.h: No such file or directory" at the end
+            ```
+            cd $UCCL_HOME
             make
             ```
-        * Update AWS ENA driver to support zero-copy AF_XDP
+        * On Amazon VMs (Skip this step on other environments): Update AWS ENA driver to support zero-copy AF_XDP 
             ```
             # Install last ena driver with reboot persistent
             sudo apt-get install dkms
@@ -92,37 +96,45 @@ UCCL currently supports AWS ENA NICs; support for Azure and GCP NICs and RDMA is
             sudo dkms install -m amzn-drivers -v 2.13.0
             sudo modprobe -r ena; sudo modprobe ena
             ```
-    * Build `nccl` and `nccl-tests` under the `/opt/uccl` folder:
+        * On IBM VMs: Upgrade the Kernel to latest (>6.2) to support AF_XDP
+            For example, on Ubuntu 22.04 image
+            ```
+            sudo apt update
+            sudo apt install linux-image-generic-hwe-22.04
+            sudo apt install -y linux-headers-$(uname -r) build-essential
+            ```
+    * Build `nccl` and `nccl-tests`:
         ```
-        cd nccl
+        cd $UCCL_HOME/nccl
         make src.build -j
         cp src/include/nccl_common.h build/include/
         cd ..
 
         # Consider "conda deactivate" when hitting dependency errors
-        cd nccl-tests
-        make MPI=1 MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi CUDA_HOME=/usr/local/cuda NCCL_HOME=/opt/uccl/nccl/build -j
+        cd $UCCL_HOME/nccl-tests
+        make MPI=1 MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi CUDA_HOME=/usr/local/cuda NCCL_HOME=$UCCL_HOME/nccl/build -j
         cd ..
         ```
     </details>
 
 3. Run UCCL transport tests on `VM1`:
-    * `cd /opt/uccl && git pull`
-    * Edit `nodes.txt` to only include the two public IPs of the VMs
+    * `cd $UCCL_HOME && git pull`
+    * Edit `nodes.txt` to only include the two IPs of the VMs
     * Build UCCL: 
         * `python setup_all.py --target aws_g4_afxdp`
         * Keep `setup_all.py` running
+        Note: This will build and setup UCCL on both VMs
     * Run UCCL tests: 
-        * `cd /opt/uccl/afxdp/`
-        * [`VM1`] `./transport_test --logtostderr=1 --clientip=<VM2 ens6 IP> --test=bimq`
-        * [`VM2`] `./transport_test --logtostderr=1 --client --serverip=<VM1 ens6 IP> --test=bimq`
+        * `cd $UCCL_HOME/afxdp/`
+        * [`VM1`] `./transport_test --logtostderr=1 --clientip=<VM2 IP> --test=bimq`
+        * [`VM2`] `./transport_test --logtostderr=1 --client --serverip=<VM1 IP> --test=bimq`
         * [`VM2`] You should be able to see something like `Sent 10000 messages, med rtt: 1033 us, tail rtt: 1484 us, link bw 98.3371 Gbps, app bw 95.3775 Gbps`. 
         * If you hit `[util_afxdp.cc:30] Check failed: receive_fd(afxdp_ctl.client_sock_, &afxdp_ctl.umem_fd_) == 0`, try `make -C afxdp/ clean` then `python setup_all.py --target aws_g4_afxdp` again.
 
 4. Run `nccl-tests` on `VM1`: 
     * `python setup_all.py --target aws_g4_afxdp`
-    * `cd /opt/uccl/afxdp/`
-    * `./run_nccl_test.sh afxdp 2`
+    * `cd $UCCL_HOME/afxdp/`
+    * `./run_nccl_test.sh afxdp 2 <nic>`
     * You should be able to see `nccl-tests` results. 
 
 ## Development Guide

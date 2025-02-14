@@ -20,9 +20,12 @@ config_mapping = {
     "aws_c5_tcp_3kmtu": ["AWS_C5", "ens6", 3498],
     "clab_d6515_tcp_3kmtu": ["CLAB_D6515", "enp65s0f0np0", 3498],
     #
+    "ibm_gx3_afxdp": ["IBM_GX3", "ens3", 1500],
+    #
     "setup_extra": ["", "", 0],
 }
-PYTHON = "source /opt/anaconda3/bin/activate; conda run -n base python"
+UCCL_HOME = os.getenv("UCCL_HOME")
+PYTHON = f"source {UCCL_HOME}/../anaconda3/bin/activate; conda run -n base python"
 
 # Usage:
 #   python setup_all.py --target=setup_extra
@@ -34,7 +37,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--target",
         type=str,
-        default="clab_xl170_afxdp",
+        default="default",
         help=f'{", ".join(list(config_mapping.keys()))}',
     )
 
@@ -56,12 +59,12 @@ if __name__ == "__main__":
     if target == "setup_extra":
         _ = exec_command_and_wait(
             node_clients[0],
-            f"cd /opt/uccl; {PYTHON} rsync.py",
+            f"cd {UCCL_HOME}; {PYTHON} rsync.py",
         )
         wait_handler_vec = []
         for node_client in node_clients:
             wait_handler = exec_command_no_wait(
-                node_client, f"cd /opt/uccl; ./setup_extra.sh"
+                node_client, f"cd {UCCL_HOME}; ./setup_extra.sh"
             )
             wait_handler_vec.append(wait_handler)
         for wait_handler in wait_handler_vec:
@@ -72,6 +75,7 @@ if __name__ == "__main__":
     net_dev = config_mapping[target][1]
     mtu = config_mapping[target][2]
 
+    print(make_macro)
     num_queues = parse_num_queues(make_macro, "afxdp/transport_config.h")
     if num_queues is None:
         print("NUM_QUEUES not found!")
@@ -79,19 +83,23 @@ if __name__ == "__main__":
     core_count = os.cpu_count()
     num_irqcores = int(num_queues)
 
-    _ = exec_command_and_wait(
+    stdout, stderr = exec_command_and_wait(
         node_clients[0],
-        f'cd /opt/uccl/afxdp; make -j "CXXFLAGS=-D{make_macro}"; cd playground; make -j "CXXFLAGS=-D{make_macro}"',
+        f'cd {UCCL_HOME}/afxdp; make -j "CXXFLAGS=-D{make_macro}"; cd playground; make -j "CXXFLAGS=-D{make_macro}"',
     )
 
-    _ = exec_command_and_wait(
+    print(f'{stdout} {stderr}')
+    stdout, stderr = exec_command_and_wait(
         node_clients[0],
-        f"cd /opt/uccl; {PYTHON} rsync.py",
+        f"cd {UCCL_HOME}; {PYTHON} rsync.py",
     )
+    print(f'{stdout} {stderr}')
 
     ### Setup NIC
+    core_count = os.cpu_count()
+    num_irqcores = core_count
     afxdp_or_tcp = "afxdp" if "afxdp" in target else "tcp"
-    aws_or_clab = "aws" if "aws" in target else "clab"
+    platform = target.split("_", 1)[0]
     if "aws_g4metal_tcp" in target:
         core_count = 32
         num_irqcores = 32
@@ -101,16 +109,18 @@ if __name__ == "__main__":
     elif "clab_d6515_tcp" in target:
         core_count = 63
         num_irqcores = 63
+    elif "ibm_gx3" in target:
+        num_irqcores = 6
 
     if afxdp_or_tcp == "afxdp":
-        nic_cmd = f"./setup_nic.sh {net_dev} {num_queues} {num_irqcores} {mtu} {afxdp_or_tcp} {aws_or_clab}"
+        nic_cmd = f"./setup_nic.sh {net_dev} {num_queues} {num_irqcores} {mtu} {afxdp_or_tcp} {platform}"
     else:
-        nic_cmd = f"./setup_nic.sh {net_dev} {core_count} {core_count} {mtu} {afxdp_or_tcp} {aws_or_clab}"
+        nic_cmd = f"./setup_nic.sh {net_dev} {core_count} {core_count} {mtu} {afxdp_or_tcp} {platform}"
 
     wait_handler_vec = []
     for node_client in node_clients:
         wait_handler = exec_command_no_wait(
-            node_client, f"cd /opt/uccl; {nic_cmd}"
+            node_client, f"cd {UCCL_HOME}; {nic_cmd}"
         )
         wait_handler_vec.append(wait_handler)
     for wait_handler in wait_handler_vec:
@@ -121,9 +131,10 @@ if __name__ == "__main__":
 
     wait_handler_vec = []
     for node_client in node_clients:
+        print(f"Running AFXDP daemon")
         wait_handler = exec_command_no_wait(
             node_client,
-            f"cd /opt/uccl/afxdp; sudo pkill afxdp_daemon; sudo ./afxdp_daemon_main --logtostderr=1",
+            f"cd {UCCL_HOME}/afxdp; sudo pkill afxdp_daemon; sudo ./afxdp_daemon_main --logtostderr=1",
         )
         wait_handler_vec.append(wait_handler)
 

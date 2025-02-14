@@ -10,14 +10,16 @@ PLATFORM=$6
 echo "configuring ${NIC} with ${NQUEUE} nic queues ${NIRQCORE} irq cores ${MTU} MTU for ${MODE} on ${PLATFORM}"
 
 echo "unloading any xdp programs"
-sudo /opt/uccl/lib/xdp-tools/xdp-loader/xdp-loader unload ${NIC} --all
+sudo $UCCL_HOME/lib/xdp-tools/xdp-loader/xdp-loader unload ${NIC} --all
 
+echo "sudo ethtool -L ${NIC} combined ${NQUEUE}"
 sudo ethtool -L ${NIC} combined ${NQUEUE}
+echo "sudo ifconfig ${NIC} mtu ${MTU} up"
 sudo ifconfig ${NIC} mtu ${MTU} up
 
 if [ $MODE = "afxdp" ]; then
     sudo service irqbalance stop
-    if [ $PLATFORM = "aws" ]; then
+    if [ $PLATFORM = "aws" ] || [ $PLATFORM = "ibm" ]; then
         sudo ethtool -C ${NIC} adaptive-rx off rx-usecs 0 tx-usecs 0
     elif [ $PLATFORM = "clab" ]; then
         sudo ethtool -C ${NIC} adaptive-rx off adaptive-tx off rx-usecs 0 rx-frames 1 tx-usecs 0 tx-frames 1
@@ -27,7 +29,7 @@ if [ $MODE = "afxdp" ]; then
     fi
 elif [ $MODE = "tcp" ]; then
     sudo service irqbalance start
-    if [ $PLATFORM = "aws" ]; then
+    if [ $PLATFORM = "aws" ] || [ $PLATFORM = "ibm" ]; then
         sudo ethtool -C ${NIC} adaptive-rx on rx-usecs 20 tx-usecs 60
     elif [ $PLATFORM = "clab" ]; then
         sudo ethtool -C ${NIC} adaptive-rx on adaptive-tx on rx-usecs 8 rx-frames 128 tx-usecs 8 tx-frames 128
@@ -52,15 +54,22 @@ fi
 
 (
     let cnt=0
-    cd /sys/class/net/${NIC}/device/msi_irqs/
-    IRQs=(*)
+    if [ -d "/sys/class/net/${NIC}/device/msi_irqs/" ]; then
+        echo "NIC supports MSI-IRQs"
+        cd /sys/class/net/${NIC}/device/msi_irqs/
+        IRQs=(*)
+    else
+        echo "NIC is possibly VirtIO"
+        pci_addr=$(basename $(readlink /sys/class/net/${NIC}/device))
+        IRQs=($(grep -i "$pci_addr" /proc/interrupts | awk '{print $1}' | sed 's/://'))
+    fi
     # Exclude the first IRQ, which is for the control plane
     for IRQ in "${IRQs[@]:1}"; do
         let CPU=$(((cnt + irq_start_cpu) % NCPU))
         let cnt=$(((cnt + 1) % NIRQCORE))
         echo $IRQ '->' $CPU
         echo $CPU | sudo tee /proc/irq/$IRQ/smp_affinity_list >/dev/null
-    done
+    done    
 )
 
 # https://github.com/amzn/amzn-drivers/issues/334#issuecomment-2575417997; giving very bad improvements

@@ -22,7 +22,7 @@ enum class CCType {
 static constexpr CCType kCCType = CCType::kCubicPP;
 
 #if !defined(AWS_C5) && !defined(AWS_G4) && !defined(AWS_G4METAL) && \
-    !defined(CLAB_XL170) && !defined(CLAB_D6515)
+    !defined(CLAB_XL170) && !defined(CLAB_D6515) && !defined(IBM_GX3)
 #define AWS_C5
 #endif
 
@@ -61,7 +61,15 @@ static const double kLinkBandwidth = 100.0 * 1e9 / 8;
 static const uint32_t NUM_QUEUES = 4;
 static const uint32_t kMaxPath = 64;
 static const uint32_t kMaxUnackedPktsPP = 16u;
+#elif defined(IBM_GX3)
+static const uint32_t AFXDP_MTU = 1500;
+static const char* DEV_DEFAULT = "ens3";
+static const double kLinkBandwidth = 48.0 * 1e9 / 8;
+static const uint32_t NUM_QUEUES = 6;
+static const uint32_t kMaxPath = 64;
+static const uint32_t kMaxUnackedPktsPP = 1u;
 #endif
+
 
 static uint32_t NUM_CPUS = std::thread::hardware_concurrency();
 // Starting from 1/4 of the CPUs to avoid conflicting with nccl proxy service.
