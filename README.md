@@ -110,6 +110,7 @@ UCCL currently supports AWS ENA NICs and IBM VirtIO NICs; support for Azure and 
         cp src/include/nccl_common.h build/include/
         cd ..
 
+        # Consider "conda deactivate" when hitting dependency errors
         cd $UCCL_HOME/nccl-tests
         make MPI=1 MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi CUDA_HOME=/usr/local/cuda NCCL_HOME=$UCCL_HOME/nccl/build -j
         cd ..

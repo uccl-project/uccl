@@ -10,7 +10,7 @@ git clone -b 1.22.0amzn1.0 git@github.com:aws/libfabric.git && cd libfabric && m
 ./autogen.sh && ./configure --prefix=/home/ubuntu/libfabric/build
 # make -j && make install
 sudo mv /opt/amazon/efa/include/ /opt/amazon/efa/include_efa/
-sudo cp -r include/ /opt/amazon/efa/include/
+sudo cp -r include/* /opt/amazon/efa/include/
 sudo cp config.h /opt/amazon/efa/include/
 
 

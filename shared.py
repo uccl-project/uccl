@@ -1,5 +1,6 @@
 import paramiko
 import re
+import asyncio
 
 
 class CommandDescriptor:
@@ -60,3 +61,14 @@ def parse_num_queues(make_macro, file_path):
                 if match:
                     return int(match.group(1))
     return None
+
+
+async def run_command(command):
+    process = await asyncio.create_subprocess_shell(
+        command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+
+    stdout, stderr = await process.communicate()
+    print(f"STDOUT:\n{stdout.decode()}")
+    if stderr:
+        print(f"STDERR:\n{stderr.decode()}")
