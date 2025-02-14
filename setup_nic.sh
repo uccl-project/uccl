@@ -58,14 +58,12 @@ fi
         echo "NIC supports MSI-IRQs"
         cd /sys/class/net/${NIC}/device/msi_irqs/
         IRQs=(*)
-        # Exclude the first IRQ, which is for the control plane
     else
         echo "NIC is possibly VirtIO"
         pci_addr=$(basename $(readlink /sys/class/net/${NIC}/device))
         IRQs=($(grep -i "$pci_addr" /proc/interrupts | awk '{print $1}' | sed 's/://'))
     fi
-    echo $IRQs
-
+    # Exclude the first IRQ, which is for the control plane
     for IRQ in "${IRQs[@]:1}"; do
         let CPU=$(((cnt + irq_start_cpu) % NCPU))
         let cnt=$(((cnt + 1) % NIRQCORE))
