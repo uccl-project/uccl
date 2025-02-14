@@ -59,14 +59,19 @@ fi
         cd /sys/class/net/${NIC}/device/msi_irqs/
         IRQs=(*)
         # Exclude the first IRQ, which is for the control plane
-        for IRQ in "${IRQs[@]:1}"; do
-            echo $IRQ
-            let CPU=$(((cnt + irq_start_cpu) % NCPU))
-            let cnt=$(((cnt + 1) % NIRQCORE))
-            echo $IRQ '->' $CPU
-            echo $CPU | sudo tee /proc/irq/$IRQ/smp_affinity_list >/dev/null
-        done
+    else
+        echo "NIC is possibly VirtIO"
+        pci_addr=$(basename $(readlink /sys/class/net/${NIC}/device))
+        IRQs=($(grep -i "$pci_addr" /proc/interrupts | awk '{print $1}' | sed 's/://'))
     fi
+    echo $IRQs
+
+    for IRQ in "${IRQs[@]:1}"; do
+        let CPU=$(((cnt + irq_start_cpu) % NCPU))
+        let cnt=$(((cnt + 1) % NIRQCORE))
+        echo $IRQ '->' $CPU
+        echo $CPU | sudo tee /proc/irq/$IRQ/smp_affinity_list >/dev/null
+    done    
 )
 
 # https://github.com/amzn/amzn-drivers/issues/334#issuecomment-2575417997; giving very bad improvements
