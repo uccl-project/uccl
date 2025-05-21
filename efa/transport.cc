@@ -1727,7 +1727,26 @@ Endpoint::Endpoint() : stats_thread_([this]() { stats_thread_fn(); }) {
         ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());
     }
 
-    // TODO(MaoZiming): ifndef EMULATE_RC_ZC
+
+#if !defined(EMULATE_RC_ZC) && !defined(SCATTERED_MEMCPY)
+    // Creating copy thread for each engine.
+    for (int i = 0; i < kNumEngines; i++) {
+        auto gpu_idx = get_gpu_idx_by_engine_idx(i);
+        auto engine_cpu_start = ENGINE_CPU_START[gpu_idx / 4];
+        auto num_engines_per_numa =
+            gpu_idx / 4 == 0 ? kNumEngines : kNumEngines / 2;
+        auto copy_th_cpuid = engine_cpu_start + num_engines_per_numa +
+                             i % (8 * kNumEnginesPerVdev / 2);
+
+        copy_th_vec_.emplace_back(std::make_unique<std::thread>(
+            [this, i, engine = engines[i], copy_th_cpuid]() {
+                pin_thread_to_cpu(copy_th_cpuid);
+                LOG(INFO) << "[Copy] thread " << i << " running on CPU "
+                          << copy_th_cpuid;
+                RXTracking::copy_thread_func(i, engine);
+            }));
+    }
+#endif
 }
 
 
