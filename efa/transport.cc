@@ -1684,11 +1684,10 @@ Endpoint::Endpoint() : stats_thread_([this]() { stats_thread_fn(); }) {
         auto engine_future = engine_promise.get_future();
         engine_futures.emplace_back(std::move(engine_future));
 
-        // TODO(MaoZiming): Understand this part.
         // GPU 0-3 on numa 0, and GPU 4-7 on numa 1.
+        // This can be found with nvidia-smi topo -m.
         auto engine_cpu_start = ENGINE_CPU_START[gpu_idx / 4];
-        // Total possible GPUs: 8 * kNumEnginesPerVdev, separated into two
-        // numas.
+        // Total possible GPUs: 8 * kNumEnginesPerVdev, separated into two numas.
         auto engine_th_cpuid =
             engine_cpu_start + i % (8 * kNumEnginesPerVdev / 2);
 
