@@ -12,7 +12,7 @@ NV_LINK_DISABLE=1
 MULTI_GROUP=0
 NIC=ens32
 # Processes/Ranks/GPUs per node.
-PROCS_PER_NODE=8
+PROCS_PER_NODE=1
 
 TEST=${1:-srd}
 NUM_PROCS=${2:-32}
@@ -125,7 +125,7 @@ elif [ "$TEST" = "ud" ]; then
         -x NCCL_PXN_DISABLE=1 \
         -x UCCL_ENGINE_QUIET=1 \
         ${UCCL_HOME}/thirdparty/nccl-tests/build/${PROG_NAME} \
-        -b 1K -e 1G -f 2 -c 1 -w 5 -n 10 -t 1 -g 1 \
+        -b 1K -e 1G -f 2 -c 1 -w 5 -n 10 -t 8 -g 1 \
         2>&1 | while read -r line; do
         if [[ "$line" =~ ^\[[0-9]+,([0-9]+)\](.+) ]]; then
             RANK=${BASH_REMATCH[1]}

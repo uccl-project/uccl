@@ -297,6 +297,8 @@ class EFAFactory {
     // Not thread-safe; should be called just once.
     static void Init(int gpu);
 
+    static void Init();
+
     // dev_idx from [1, ..., NUM_DEVICES];
     // socket_idx from [0, ..., kNumEngines - 1].
     static EFASocket *CreateSocket(int gpu_idx, int dev_idx, int socket_idx);

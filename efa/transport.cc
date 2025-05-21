@@ -1643,6 +1643,95 @@ std::string UcclEngine::status_to_string(bool abbrev) {
     return s;
 }
 
+Endpoint::Endpoint() : stats_thread_([this]() { stats_thread_fn(); }) {
+
+    listen_port_cur_.store(kBootstrapPort);
+    LOG(INFO) << "Creating EFAFactory (Lazy Init)";
+
+    static std::once_flag flag_once;
+    // TODO(MaoZiming): Fix EFAFactory::Init
+    std::call_once(flag_once, []() { EFAFactory::Init(); });
+
+    CHECK_LE(kNumEngines, NUM_CPUS / 4)
+        << "num_queues should be less than or equal to the number of CPUs "
+           "/ 4";
+
+    LOG(INFO) << "Creating Channels";
+    // TODO(MaoZiming): Possibly lazy init. 
+    for (int i = 0; i < kNumEngines; i++) channel_vec_[i] = new Channel();
+
+    LOG(INFO) << "Creating Pacers";
+    for (int i = 0; i < NUM_DEVICES; i++) eqds_[i] = new eqds::EQDS(i);
+
+    LOG(INFO) << "Creating Engines";
+    std::vector<std::future<std::unique_ptr<UcclEngine>>> engine_futures;
+
+    for (int i = 0; i < kNumEngines; i++) {
+        auto gpu_idx = get_gpu_idx_by_engine_idx(i);
+        auto dev_idx = get_dev_idx_by_engine_idx(i);
+        auto socket_idx = i;
+
+        std::string local_ip_str;
+        auto ret = util_efa_get_ip_from_dev_idx(0, &local_ip_str);
+        CHECK_EQ(ret, 0) << "Failed to get IP address from dev idx 0";
+
+        // Creating engines sequentially to have inorder QPNs.
+        auto engine = std::make_unique<UcclEngine>(
+            local_ip_str, gpu_idx, dev_idx, socket_idx, channel_vec_[i], 
+            eqds_[dev_idx]->credit_qp_ctx_[get_engine_off_by_engine_idx(i)], &eqds_[dev_idx]->channel_);
+
+        std::promise<std::unique_ptr<UcclEngine>> engine_promise;
+        auto engine_future = engine_promise.get_future();
+        engine_futures.emplace_back(std::move(engine_future));
+
+        // TODO(MaoZiming): Understand this part.
+        // GPU 0-3 on numa 0, and GPU 4-7 on numa 1.
+        auto engine_cpu_start = ENGINE_CPU_START[gpu_idx / 4];
+        // Total possible GPUs: 8 * kNumEnginesPerVdev, separated into two
+        // numas.
+        auto engine_th_cpuid =
+            engine_cpu_start + i % (8 * kNumEnginesPerVdev / 2);
+
+
+        // Spawning a new thread to init engine and run the engine loop.
+        engine_th_vec_.emplace_back(std::make_unique<std::thread>(
+            [this, i, engine_th_cpuid,
+             engine_promise = std::move(engine_promise),
+             engine = std::move(engine)]() mutable {
+                pin_thread_to_cpu(engine_th_cpuid);
+                LOG(INFO) << "[Engine] thread " << i << " running on CPU "
+                          << engine_th_cpuid;
+
+                auto *engine_ptr = engine.get();
+                engine_promise.set_value(std::move(engine));
+
+                if constexpr (kSplitSendRecvEngine) {
+                    if (i%2 == 0)
+                        engine_ptr->sender_only_run();
+                    else
+                        engine_ptr->receiver_only_run();
+                } else
+                    engine_ptr->run();
+            }));
+    }
+
+    std::vector<UcclEngine *> engines;
+    for (auto &engine_future : engine_futures) {
+        engine_vec_.emplace_back(std::move(engine_future.get()));
+        engines.push_back(engine_vec_.back().get());
+    }
+
+    ctx_pool_ = new SharedPool<PollCtx *, true>(NUM_FRAMES * 4);
+    ctx_pool_buf_ = new uint8_t[NUM_FRAMES * 4 * sizeof(PollCtx)];
+
+    for (int i = 0; i < NUM_FRAMES * 4; i++) {
+        ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());
+    }
+
+    // TODO(MaoZiming): ifndef EMULATE_RC_ZC
+}
+
+
 Endpoint::Endpoint(int gpu) : gpu_(gpu), stats_thread_([this]() { stats_thread_fn(); }) {
     
     listen_port_cur_.store(kBootstrapPort + gpu_ * 1000);
@@ -1809,9 +1898,30 @@ std::tuple<uint16_t, int> Endpoint::uccl_listen() {
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_addr.s_addr = INADDR_ANY;
     serv_addr.sin_port = htons(listen_port);
-    DCHECK(bind(listen_fd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) >=
-           0)
-        << "ERROR: binding";
+
+
+    // Get the device currently assigned to this process
+    int gpu;
+    cudaGetDevice(&gpu);
+
+    int localRank = 0;
+    // Try to determine local rank from environment variable
+    const char* localRankEnv = std::getenv("LOCAL_RANK");
+    if (localRankEnv) {
+        localRank = std::atoi(localRankEnv);
+    } else {
+        localRank = gpu;  // fallback guess
+    }
+
+    LOG(INFO) << "[Endpoint] Rank " << localRank << " trying to bind on port " << listen_port
+              << " (fd=" << listen_fd << ")";
+              
+    int bind_ret = bind(listen_fd, (struct sockaddr *)&serv_addr, sizeof(serv_addr));
+    if (bind_ret < 0) {
+        LOG(ERROR) << "[Endpoint] Rank " << localRank << " failed to bind port " << listen_port
+                   << " (errno: " << errno << ", " << strerror(errno) << ")";
+    }
+    DCHECK(bind_ret >= 0) << "ERROR: binding";
 
     DCHECK(!listen(listen_fd, 128)) << "ERROR: listen";
     LOG(INFO) << "[Endpoint] server ready, listening on port " << listen_port;
@@ -2152,8 +2262,8 @@ bool Endpoint::uccl_poll_once(PollCtx *ctx) {
 
 int Endpoint::uccl_regmr_dmabuf(int dev, void *addr, size_t len, int type,
                                 int offset, int fd, struct Mhandle **mhandle) {
-    // auto factory_dev = EFAFactory::GetEFADevice(dev);
-    auto factory_dev = EFAFactory::GetEFADevice(gpu_);
+    auto factory_dev = EFAFactory::GetEFADevice(dev);
+    // auto factory_dev = EFAFactory::GetEFADevice(gpu_);
     *mhandle = new Mhandle();
 
     (*mhandle)->mr =
@@ -2165,8 +2275,8 @@ int Endpoint::uccl_regmr_dmabuf(int dev, void *addr, size_t len, int type,
 
 int Endpoint::uccl_regmr(int dev, void *addr, size_t len,
                          int type /*unsed for now*/, struct Mhandle **mhandle) {
-    // auto factory_dev = EFAFactory::GetEFADevice(dev);
-    auto factory_dev = EFAFactory::GetEFADevice(gpu_);
+    auto factory_dev = EFAFactory::GetEFADevice(dev);
+    // auto factory_dev = EFAFactory::GetEFADevice(gpu_);
 
     *mhandle = new Mhandle();
     (*mhandle)->mr =

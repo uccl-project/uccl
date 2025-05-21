@@ -913,6 +913,7 @@ class Endpoint {
     
     int gpu_;
     Endpoint(int gpu);
+    Endpoint();
     ~Endpoint();
 
     std::mutex listen_mu_;
