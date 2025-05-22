@@ -1645,6 +1645,11 @@ std::string UcclEngine::status_to_string(bool abbrev) {
 
 bool Endpoint::initialize_engine_by_gpu_idx(int gpu_idx) {
 
+    static std::once_flag flag_once;
+    std::call_once(flag_once, [this, gpu_idx]() { 
+        listen_port_cur_.store(kBootstrapPort + gpu_idx * 1000);
+    });
+
     std::vector<std::future<std::unique_ptr<UcclEngine>>> engine_futures;
     for (int i = 0; i < kNumEnginesPerVdev; i++) {
         auto engine_idx = gpu_idx * kNumEnginesPerVdev + i;
@@ -1723,7 +1728,6 @@ bool Endpoint::initialize_engine_by_gpu_idx(int gpu_idx) {
 
 Endpoint::Endpoint() : stats_thread_([this]() { stats_thread_fn(); }) {
 
-    listen_port_cur_.store(kBootstrapPort);
     LOG(INFO) << "Creating EFAFactory (Lazy Init)";
 
     static std::once_flag flag_once;

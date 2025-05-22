@@ -123,17 +123,6 @@ ncclResult_t pluginPciPath(const char *ib_name, char **path) {
     return ncclSuccess;
 }
 
-int getThreadCount() {
-    std::ifstream status("/proc/self/status");
-    std::string line;
-    while (std::getline(status, line)) {
-        if (line.rfind("Threads:", 0) == 0) {
-            return std::stoi(line.substr(8));
-        }
-    }
-    return -1;  // error
-}
-
 ncclResult_t pluginGetProperties(int pdev, ncclNetProperties_v8_t *props) {
     auto factory_dev = EFAFactory::GetEFADevice(pdev);
     // auto factory_dev = EFAFactory::GetEFADevice(ep->gpu_);
@@ -187,16 +176,15 @@ ncclResult_t pluginListen(int vdev, void *opaque_handle, void **listenComm) {
 
     LOG(INFO) << "[pluginListen] pid=" << getpid()
             << ", using GPU " << gpu_idx
-            << ", vdev=" << vdev
-            << ", thread count = " << getThreadCount();
+            << ", vdev=" << vdev;
 
     if (vdev != gpu_idx) {
         LOG_FIRST_N(INFO, 1)
             << "pluginListen detects different vdev " << vdev << " vs. gpu_idx "
             << gpu_idx << ", forcely setting vdev to gpu_idx";
-        // vdev = gpu_idx;
+        vdev = gpu_idx;
     }
-    ep->initialize_engine_by_gpu_idx(vdev);
+    ep->initialize_engine_by_gpu_idx(gpu_idx);
     auto pdev = get_pdev(vdev);
     struct UcclHandle *handle = (struct UcclHandle *)opaque_handle;
     memset(handle, 0, sizeof(struct UcclHandle));
@@ -241,7 +229,7 @@ ncclResult_t pluginConnect(int vdev, void *opaque_handle, void **sendComm,
         LOG_FIRST_N(INFO, 1) << "pluginConnect detects different vdev " << vdev
                              << " vs. gpu_idx " << gpu_idx
                              << ", forcely setting vdev to gpu_idx";
-        // vdev = gpu_idx;
+        vdev = gpu_idx;
     }
 
     auto pdev = get_pdev(vdev);

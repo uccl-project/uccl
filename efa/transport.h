@@ -890,7 +890,7 @@ class Endpoint {
     std::vector<std::unique_ptr<std::thread>> engine_th_vec_;
     std::vector<std::unique_ptr<std::thread>> copy_th_vec_;
 
-    std::atomic<uint16_t> listen_port_cur_;
+    std::atomic<uint16_t> listen_port_cur_ = {kBootstrapPort};
 
     // Number of flows on each engine, indexed by engine_idx.
     std::mutex engine_load_vec_mu_;
