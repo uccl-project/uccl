@@ -12,10 +12,10 @@ NV_LINK_DISABLE=1
 MULTI_GROUP=0
 NIC=ens32
 # Processes/Ranks/GPUs per node.
-PROCS_PER_NODE=8
+PROCS_PER_NODE=1
 
-TEST=${1:-srd}
-NUM_PROCS=${2:-24}
+TEST=${1:-ud}
+NUM_PROCS=${2:-3}
 PROG_NAME=${3:-0}
 
 # all_gather_perf  all_reduce_perf  alltoall_perf  broadcast_perf  gather_perf
@@ -57,7 +57,7 @@ if [ "$TEST" = "srd" ]; then
     LIBNCCL_PATH="${UCCL_HOME}/thirdparty/nccl/build/lib/libnccl.so"
     PLUGIN_PATH="/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu/libnccl-net.so"
 
-    mpirun --bind-to none -np ${NUM_PROCS} -N ${PROCS_PER_NODE} --hostfile hostname \
+    mpirun --bind-to none -np ${NUM_PROCS} -N ${PROCS_PER_NODE} --hostfile hostname_single_proc \
         --tag-output --merge-stderr-to-stdout \
         --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
         --mca orte_base_help_aggregate 0 \
@@ -75,7 +75,7 @@ if [ "$TEST" = "srd" ]; then
         -x NCCL_P2P_NET_CHUNKSIZE=${CHUNK_SIZE} \
         -x NCCL_BUFFSIZE=${BUFFSIZE} \
         ${UCCL_HOME}/thirdparty/nccl-tests/build/${PROG_NAME} \
-        -b 1K -e 1G -f 2 -c 1 -w 5 -n 10 -t 1 -g 1 \
+        -b 1K -e 1G -f 2 -c 1 -w 5 -n 10 -t 8 -g 1 \
         2>&1 | while read -r line; do
         if [[ "$line" =~ ^\[[0-9]+,([0-9]+)\](.+) ]]; then
             RANK=${BASH_REMATCH[1]}
@@ -96,7 +96,7 @@ elif [ "$TEST" = "ud" ]; then
     LIBNCCL_PATH="${UCCL_HOME}/thirdparty/nccl-sg/build/lib/libnccl.so"
     PLUGIN_PATH="${UCCL_HOME}/efa/libnccl-net.so"
 
-    mpirun --bind-to none -np ${NUM_PROCS} -N ${PROCS_PER_NODE} --hostfile hostname \
+    mpirun --bind-to none -np ${NUM_PROCS} -N ${PROCS_PER_NODE} --hostfile hostname_single_proc \
         --tag-output --merge-stderr-to-stdout \
         --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
         --mca orte_base_help_aggregate 0 \
@@ -125,7 +125,7 @@ elif [ "$TEST" = "ud" ]; then
         -x NCCL_PXN_DISABLE=1 \
         -x UCCL_ENGINE_QUIET=1 \
         ${UCCL_HOME}/thirdparty/nccl-tests/build/${PROG_NAME} \
-        -b 1K -e 1G -f 2 -c 1 -w 5 -n 10 -t 1 -g 1 \
+        -b 1K -e 1G -f 2 -c 1 -w 5 -n 10 -t 8 -g 1 \
         2>&1 | while read -r line; do
         if [[ "$line" =~ ^\[[0-9]+,([0-9]+)\](.+) ]]; then
             RANK=${BASH_REMATCH[1]}

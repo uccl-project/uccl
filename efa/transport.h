@@ -885,6 +885,8 @@ class Endpoint {
 
     Channel *channel_vec_[kNumEngines];
     std::vector<std::unique_ptr<UcclEngine>> engine_vec_;
+    std::unordered_map<int, std::unique_ptr<UcclEngine>> engine_id_to_engine_map_;
+    std::mutex engine_map_mutex_;
     std::vector<std::unique_ptr<std::thread>> engine_th_vec_;
     std::vector<std::unique_ptr<std::thread>> copy_th_vec_;
 
@@ -908,7 +910,6 @@ class Endpoint {
     // Each physical device has its own EQDS pacer.
     eqds::EQDS *eqds_[NUM_DEVICES] = {};
 
-    
     public:
     
     int gpu_;
@@ -928,6 +929,8 @@ class Endpoint {
     // Accepting a connection from a remote address; thread-safe
     ConnID uccl_accept(int local_vdev, int *remote_vdev, std::string &remote_ip,
                        int listen_fd);
+
+    bool initialize_engine_by_gpu_idx(int gpu_idx);
 
     // Sending the data by leveraging multiple port combinations.
     bool uccl_send(ConnID conn_id, const void *data, const int len,
