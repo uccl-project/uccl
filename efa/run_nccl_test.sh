@@ -75,7 +75,7 @@ if [ "$TEST" = "srd" ]; then
         -x NCCL_P2P_NET_CHUNKSIZE=${CHUNK_SIZE} \
         -x NCCL_BUFFSIZE=${BUFFSIZE} \
         ${UCCL_HOME}/thirdparty/nccl-tests/build/${PROG_NAME} \
-        -b 1K -e 1G -f 2 -c 1 -w 5 -n 10 -t 1 -g 1 \
+        -b 1K -e 1G -f 2 -c 1 -w 5 -n 10 -t 8 -g 1 \
         2>&1 | while read -r line; do
         if [[ "$line" =~ ^\[[0-9]+,([0-9]+)\](.+) ]]; then
             RANK=${BASH_REMATCH[1]}

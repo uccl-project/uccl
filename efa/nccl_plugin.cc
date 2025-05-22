@@ -171,12 +171,12 @@ ncclResult_t pluginListen(int vdev, void *opaque_handle, void **listenComm) {
     cudaGetDevice(&gpu_idx);
 
     LOG(INFO) << "[pluginListen] Using GPU " << gpu_idx;
-    // if (vdev != gpu_idx) {
-    //     LOG_FIRST_N(INFO, 1)
-    //         << "pluginListen detects different vdev " << vdev << " vs. gpu_idx "
-    //         << gpu_idx << ", forcely setting vdev to gpu_idx";
-    //     vdev = gpu_idx;
-    // }
+    if (vdev != gpu_idx) {
+        LOG_FIRST_N(INFO, 1)
+            << "pluginListen detects different vdev " << vdev << " vs. gpu_idx "
+            << gpu_idx << ", forcely setting vdev to gpu_idx";
+        vdev = gpu_idx;
+    }
 
     auto pdev = get_pdev(vdev);
     struct UcclHandle *handle = (struct UcclHandle *)opaque_handle;
@@ -218,12 +218,12 @@ ncclResult_t pluginConnect(int vdev, void *opaque_handle, void **sendComm,
 
     LOG(INFO) << "[pluginConnect] Using GPU " << gpu_idx;
 
-    // if (vdev != gpu_idx) {
-    //     LOG_FIRST_N(INFO, 1) << "pluginConnect detects different vdev " << vdev
-    //                          << " vs. gpu_idx " << gpu_idx
-    //                          << ", forcely setting vdev to gpu_idx";
-    //     vdev = gpu_idx;
-    // }
+    if (vdev != gpu_idx) {
+        LOG_FIRST_N(INFO, 1) << "pluginConnect detects different vdev " << vdev
+                             << " vs. gpu_idx " << gpu_idx
+                             << ", forcely setting vdev to gpu_idx";
+        vdev = gpu_idx;
+    }
 
     auto pdev = get_pdev(vdev);
     struct UcclHandle *handle = (struct UcclHandle *)opaque_handle;
@@ -283,8 +283,8 @@ ncclResult_t pluginAccept(void *listenComm, void **recvComm,
         (struct UcclRecvComm *)calloc(1, sizeof(struct UcclRecvComm));
 
     if (lcomm->state == kConnInit) {
-        // DCHECK(lcomm->vdev == gpu_idx) << "pluginAccept: vdev " << lcomm->vdev
-        //                                << " vs. gpu_idx " << gpu_idx;
+        DCHECK(lcomm->vdev == gpu_idx) << "pluginAccept: vdev " << lcomm->vdev
+                                       << " vs. gpu_idx " << gpu_idx;
         auto vdev = lcomm->vdev;
         LOG(INFO) << "pluginAccept on vdev: " << vdev << " listen_fd "
                   << lcomm->listen_fd << " gpu_idx " << gpu_idx;

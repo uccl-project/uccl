@@ -53,7 +53,7 @@ void EFAFactory::InitDev(int dev_idx) {
         fprintf(stderr, "No device found for %s\n", dev->ib_name);
         goto free_devices;
     }
-    DCHECK(i == (dev_idx / 2));
+    // DCHECK(i == (dev_idx / 2));
     LOG(INFO) << "Found device: " << dev->ib_name << " at dev_idx " << i
               << " with gid_idx " << (uint32_t)EFA_GID_IDX;
 
