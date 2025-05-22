@@ -1290,9 +1290,9 @@ static inline int modify_qp_rtr(struct ibv_qp *qp, int dev,
     memset(&attr, 0, sizeof(attr));
     attr.qp_state = IBV_QPS_RTR;
     attr.path_mtu = factory_dev->port_attr.active_mtu;
+    attr.ah_attr.port_num = IB_PORT_NUM;
     if (ROCE_NET) {
         attr.ah_attr.is_global = 1;
-        attr.ah_attr.port_num = IB_PORT_NUM;
         attr.ah_attr.grh.dgid = remote_ctx->remote_gid;
         attr.ah_attr.grh.sgid_index = factory_dev->gid_idx;
         attr.ah_attr.grh.hop_limit = 0xff;
@@ -1305,7 +1305,6 @@ static inline int modify_qp_rtr(struct ibv_qp *qp, int dev,
             LOG(ERROR) << "Only support same subnet communication for now.";
         }
         attr.ah_attr.is_global = 0;
-        attr.ah_attr.port_num = IB_PORT_NUM;
         attr.ah_attr.dlid = remote_ctx->remote_port_attr.lid;
     }
     attr.ah_attr.sl = kServiceLevel;

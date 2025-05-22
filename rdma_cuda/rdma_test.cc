@@ -17,7 +17,7 @@
 
 #include "cuda_runtime.h"
 
-#define GPU 0
+// #define GPU 0
 
 using namespace uccl;
 

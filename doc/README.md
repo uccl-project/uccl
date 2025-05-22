@@ -2,7 +2,7 @@
 
 ### Building the system
 
-```
+```shell
 sudo apt update
 sudo apt install clang llvm libelf-dev libpcap-dev build-essential libc6-dev-i386 linux-tools-$(uname -r) libgoogle-glog-dev libgtest-dev byobu net-tools iperf iperf3 libgtest-dev cmake -y
 ./scripts/setup_extra.sh
@@ -10,7 +10,7 @@ make
 ```
 
 If you want to build nccl and nccl-tests on cloudlab ubuntu22, you need to install cuda and openmpi: 
-```
+```shell
 wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
 sudo apt install ./cuda-keyring_1.1-1_all.deb
 sudo apt update
@@ -31,7 +31,7 @@ Remember to change `afxdp/transport_config.h` based on your NIC IPs and MACs.
 
 ### Run TCP testing
 
-```
+```shell
 cd afxdp; make -j "CXXFLAGS=-DAWS_ENA"
 or 
 cd afxdp; make -j "CXXFLAGS=-DCLAB_MLX5"
@@ -51,7 +51,7 @@ python rsync.sh
 
 ### Run AFXDP testing
 
-```
+```shell
 cd afxdp; make -j "CXXFLAGS=-DAWS_ENA"
 or 
 cd afxdp; make -j "CXXFLAGS=-DCLAB_MLX5"
@@ -73,7 +73,7 @@ sudo ./client_main
 
 Note that any program that leverages util_afxdp no long needs root to use AFXDP sockets.
 
-```
+```shell
 /opt/uccl$ python setup_all.py --target clab_d6515_afxdp
 ./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --clientip=192.168.6.2 --test=bimq
 ./transport_test --logtostderr=1 --vmodule=transport=1,util_afxdp=1 --client --serverip=192.168.6.1 --test=bimq
@@ -85,7 +85,7 @@ using `--test=async --verify --rand` for debugging purpose.
 
 Assume you have 4 node IPs in `nodes.txt`
 
-```
+```shell
 # for TCP
 python setup_all.py --target=aws_tcp
 ./run_nccl_test.sh tcp 4
@@ -101,7 +101,7 @@ python setup_all.py --target=aws_afxdp
 ### MISC setup
 
 Install anaconda and ssh lib: 
-```
+```shell
 wget https://repo.anaconda.com/archive/Anaconda3-2024.06-1-Linux-x86_64.sh
 bash Anaconda3-2024.06-1-Linux-x86_64.sh -b -p /opt/anaconda3
 source /opt/anaconda3/bin/activate
@@ -110,19 +110,19 @@ conda install paramiko -y
 ```
 
 Avoiding nodes.txt polluting the repo: 
-```
+```shell
 git update-index --skip-worktree nodes.txt
 git update-index --no-skip-worktree nodes.txt
 ```
 
 Iperf test: 
-```
+```shell
 iperf -s -i 1 -P 32 -t 1000 --dualtest -B 192.168.6.1%enp65s0f0np0
 iperf -c 192.168.6.1 -i 1 -P 32 -t 1000 --dualtest -B 192.168.6.2%enp65s0f0np0
 ```
 
 Run performance debugging:
-```
+```shell
 sudo apt install flex bison libtraceevent-dev libzstd1 libdwarf-dev libdw-dev binutils-dev libcap-dev libelf-dev libnuma-dev python3 python3-dev python-setuptools libssl-dev libunwind-dev libdwarf-dev zlib1g-dev liblzma-dev libaio-dev libtraceevent-dev debuginfod libpfm4-dev libslang2-dev systemtap-sdt-dev libperl-dev binutils-dev libbabeltrace-dev libiberty-dev libzstd-dev lld -y
 
 cd /tmp

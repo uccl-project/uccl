@@ -1,6 +1,6 @@
 # UCCL-RDMA-RCCL
 
-UCCL-RDMA support for RCCL.
+UCCL-RDMA plugin for RCCL.
 
 1. UCCL supports two network fabrics: RoCE, Infiniband.
 2. UCCL supports two modes: Unreliable Connection (UC) and Reliable Connection (RC).
@@ -10,28 +10,29 @@ This guide assumes under the [AMD HPC Fund cluster](https://amdresearch.github.i
 ## Configuration
 
 ### transport_config.h:
+Modify the below constants based on the environment.
 
 1. Network
 ```
-ROCE_NET:               True (RoCE) or false (Infiniband)
+ROCE_NET:               true (RoCE) or false (Infiniband)
 
-SINGLE_CTRL_NIC:        The device name of control NIC. Set to empty string if each RDMA NIC has its own IP address. UCCL will detect them atomically.
+SINGLE_CTRL_NIC:        The device name of control NIC. Set to empty string if each RDMA NIC has its own IP address. UCCL will detect them automatically.
 ```
 
 2. NIC
 ```
-NUM_DEVICES:            The number of physical NICs.
+NUM_DEVICES:            The number of physical NICs (use ibv_devices).
 
-IB_DEVICE_NAME_PREFIX:  The prefix of the device name.
+IB_DEVICE_NAME_PREFIX:  The prefix of the device name (e.g. mlx5_).
 
-DEVNAME_SUFFIX_LIST:    The suffix of the device name.
+DEVNAME_SUFFIX_LIST:    The suffix of the device name (use ibv_devices).
 
-LINK_BANDWIDTH:         The bandwidth of each NIC (Bytes per second).
+LINK_BANDWIDTH:         The bandwidth (bytes per second) of each NIC (use ibstat).
 ```
 
 ## Prepare dependency
 Install and activate recent Anaconda to prepare necessary libraries such as `-lglog -lgflags -lgtest`. Consider installing it into `$WORK` directory as Anaconda is large. Then: 
-```
+```shell
 pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3
 ```
 
@@ -39,7 +40,7 @@ pip3 install torch torchvision torchaudio --index-url https://download.pytorch.o
 
 Build `rccl` and `rccl-tests`: 
 
-```
+```shell
 # Eg, /home1/yangzhou/uccl
 export UCCL_HOME=<the absolute path of uccl>
 # Eg, /work1/yzhou/yangzhou/anaconda3/lib
@@ -55,14 +56,14 @@ make MPI=1 MPI_HOME=/opt/ohpc/pub/mpi/openmpi4-gnu12/4.1.5 HIP_HOME=/opt/rocm-6.
 
 Build `librccl-net-uccl.so`
 
-```
+```shell
 cd $UCCL_HOME/rdma_hip
 make -j
 ```
 
 Running `rccl-tests`:
 
-```
+```shell
 # Using slurm to allocate two AMD nodes
 salloc -N 2 -n 2 -p mi2104x -t 00:30:00
 

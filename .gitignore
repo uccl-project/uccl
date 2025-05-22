@@ -79,3 +79,5 @@ compile_commands.json
 *.cache
 *-rep
 *.sqlite
+
+**/.DS_Store

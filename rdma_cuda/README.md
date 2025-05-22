@@ -1,29 +1,30 @@
 # UCCL-RDMA-NCCL
 
-UCCL RDMA support for RCCL.
+UCCL RDMA plugin for NCCL.
 
 1. UCCL supports two network fabrics: RoCE, Infiniband.
 2. UCCL supports two modes: Unreliable Connection (UC) and Reliable Connection (RC).
 
 ## Configuration
 ### transport_config.h:
+Modify the below constants based on the environment.
 
 1. Network
 ```
-ROCE_NET:               True (RoCE) or false (Infiniband)
+ROCE_NET:               true (RoCE) or false (Infiniband)
 
-SINGLE_CTRL_NIC:        The device name of control NIC. Set to empty string if each RDMA NIC has its own IP address. UCCL will detect them atomically.
+SINGLE_CTRL_NIC:        The device name of control NIC. Set to empty string if each RDMA NIC has its own IP address. UCCL will detect them automatically.
 ```
 
 2. NIC
 ```
-NUM_DEVICES:            The number of physical NICs.
+NUM_DEVICES:            The number of physical NICs (use ibv_devices).
 
-IB_DEVICE_NAME_PREFIX:  The prefix of the device name.
+IB_DEVICE_NAME_PREFIX:  The prefix of the device name (e.g. mlx5_).
 
-DEVNAME_SUFFIX_LIST:    The suffix of the device name.
+DEVNAME_SUFFIX_LIST:    The suffix of the device name (use ibv_devices).
 
-LINK_BANDWIDTH:         The bandwidth of each NIC (Bytes per second).
+LINK_BANDWIDTH:         The bandwidth (bytes per second) of each NIC (use ibstat).
 ```
 
 ### run_nccl_test.sh:
@@ -41,7 +42,7 @@ Usage: ./run_nccl_test.sh [NCCL/UCCL: 0/1, default:1] [# of Nodes, default:2] [#
 
 Build `nccl` and `nccl-tests`: 
 
-```
+```shell
 # Eg, /home/yangz/uccl
 export UCCL_HOME=<the absolute path of uccl>
 
@@ -57,13 +58,13 @@ make MPI=1 MPI_HOME=/opt/amazon/openmpi CUDA_HOME=/usr/local/cuda NCCL_HOME=$UCC
 
 Build `libnccl-net.so`
 
-```
+```shell
 cd $UCCL_HOME/rdma_cuda
 make -j
 ```
 
 Running `nccl-tests`:
 
-```
+```shell
 ./run_nccl_test.sh 1 2 8 1
 ```

@@ -182,7 +182,6 @@ struct FifoItem *UcclFlow::post_fifo(uint32_t engine_idx, void **data,
     }
 
     UCCL_LOG_EP << "recv_async: provided buffer at recv slot: " << slot;
-    VLOG(1) << "recv_async: provided buffer at recv slot: " << slot << std::endl;
 
     rem_fifo->fifo_tail++;
 
@@ -245,6 +244,7 @@ void UcclRDMAEngine::handle_rx_work(void) {
         auto rdma_ctx = it.first;
         auto ureq = it.second;
 
+        UCCL_LOG_ENGINE << "Process rx work.";
         if (rdma_ctx->supply_rx_buff(rx_work.ureq) == 0) {
             pending_rx_works_.pop_front();
         } else {
@@ -268,7 +268,8 @@ void UcclRDMAEngine::handle_rx_work(void) {
         auto it = rdma_ctx_map_.find(peer_id);
         DCHECK(it != rdma_ctx_map_.end());
         auto rdma_ctx = it->second;
-
+        
+        UCCL_LOG_ENGINE << "Process rx work.";
         if (rdma_ctx->supply_rx_buff(rx_work.ureq)) {
             pending_rx_works_.push_back(std::make_pair(rdma_ctx, rx_work.ureq));
         }
@@ -287,7 +288,7 @@ void UcclRDMAEngine::handle_tx_work(void) {
         pending_tx_works_.pop_front();
         auto rdma_ctx = it.first;
         auto ureq = it.second;
-
+        UCCL_LOG_ENGINE << "Process tx work.";
         if (!rdma_ctx->tx_message(ureq)) {
             // Push the message to the pending transmit queue.
             pending_tx_works_.push_back(std::make_pair(rdma_ctx, ureq));
@@ -308,7 +309,8 @@ void UcclRDMAEngine::handle_tx_work(void) {
         auto it = rdma_ctx_map_.find(peer_id);
         DCHECK(it != rdma_ctx_map_.end());
         auto rdma_ctx = it->second;
-
+        
+        UCCL_LOG_ENGINE << "Process tx work.";
         if (!rdma_ctx->tx_message(tx_work.ureq)) {
             // Push the message to the pending transmit queue.
             pending_tx_works_.push_back(std::make_pair(rdma_ctx, tx_work.ureq));
@@ -971,7 +973,7 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev, int
     DCHECK(bootstrap_fd >= 0) << "uccl_connect: socket()";
 
     server = gethostbyname(remote_ip.c_str());
-    DCHECK(server) << "uccl_connect: gethostbyname()";
+    DCHECK(server) << "uccl_connect: gethostbyname() " << remote_ip;
 
     // Force the socket to bind to the local IP address.
     sockaddr_in localaddr = {};
@@ -1234,6 +1236,8 @@ void UcclFlow::post_multi_send(struct ucclRequest **ureqs,
 
     while (jring_mp_enqueue_bulk(txq, msgs, n, nullptr) != n) {
     }
+
+    UCCL_LOG_EP << "Enqueue tx work to engine " << engine_idx;
 }
 
 int RDMAEndpoint::uccl_send_async(UcclFlow *flow, struct Mhandle *mhandle,
@@ -1256,7 +1260,7 @@ int RDMAEndpoint::uccl_send_async(UcclFlow *flow, struct Mhandle *mhandle,
         if (ureqs[i] != nullptr)
             continue;
         DCHECK(
-            !(slots[i].size < 0 || slots[i].addr == 0 || slots[i].rkey == 0));
+            !(slots[i].size < 0 || slots[i].addr == 0 || slots[i].rkey == 0)) << slots[i].size << ", " << slots[i].addr << ", " << slots[i].rkey;
 
         if (size > slots[i].size) {
             // Can't send more than what the receiver can receive.
@@ -1303,10 +1307,7 @@ int RDMAEndpoint::uccl_send_async(UcclFlow *flow, struct Mhandle *mhandle,
 
         UCCL_LOG_EP << "send_async: posted " << nmsg << " requests"
                 << " on engine " << slots[i].engine_offset << " size: " << size
-                << " slot: " << slot;
-        VLOG(1) << "send_async: posted " << nmsg << " requests"
-                << " on engine " << slots[i].engine_offset << " size: " << size
-                << " slot: " << slot << std::endl;
+                << " slot: " << slot << ", flow " << flow << ", flow->dev " << flow->dev_;
 
         return 0;
     }

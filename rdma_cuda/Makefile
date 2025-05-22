@@ -23,14 +23,10 @@ test_bin = $(test_src:.cc=)
 .PHONY: build
 build: $(test_bin) $(lib_obj) $(PLUGIN_SO)
 
+azure: $(test_bin) $(lib_obj)
+
 rdma_test: rdma_test.cc $(DEPS) $(lib_obj)
 	g++ rdma_test.cc -o rdma_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
-
-incast_test: incast_test.cc $(DEPS) $(lib_obj)
-	g++ incast_test.cc -o incast_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
-
-plugin_test: plugin_test.cc $(DEPS) $(lib_obj)
-	g++ plugin_test.cc -o plugin_test $(lib_obj) $(NCCL_INC) $(INC) $(LIBS) $(CXXFLAGS) -ldl
 
 %.o: %.cc $(DEPS)
 	g++ -c $< -o $@ $(INC) $(CXXFLAGS)

@@ -541,6 +541,8 @@ int RDMAContext::supply_rx_buff(struct ucclRequest *ureq) {
     memset(req->received_bytes, 0, sizeof(uint32_t) * kMaxRecv);
     req->fin_msg = 0;
 
+    UCCL_LOG_IO << "Really supply rx buff by posting buffers to FIFO QP.";
+
     return 0;
 }
 
@@ -1674,6 +1676,7 @@ void RDMAContext::try_update_csn(SubUcclFlow *subflow) {
             req->ureq->recv.data_len[0] = req->received_bytes[0];
             // Wakeup app thread.
             uccl_wakeup(req->ureq->poll_ctx);
+            UCCL_LOG_IO << "Rx message complete.";
             // Free the request.
             free_recvreq(req);
         }

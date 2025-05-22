@@ -173,6 +173,12 @@ ncclResult_t pluginGetProperties(int pdev, ncclNetProperties_v8_t *props) {
 ncclResult_t pluginListen(int vdev, void *opaque_handle, void **listenComm) {
     int gpu_idx = 0;
     cudaGetDevice(&gpu_idx);
+    if (vdev != gpu_idx) {
+        LOG_FIRST_N(INFO, 1)
+            << "pluginListen detects different vdev " << vdev << " vs. gpu_idx "
+            << gpu_idx << ", forcely setting vdev to gpu_idx";
+        vdev = gpu_idx;
+    }
 
     LOG(INFO) << "[pluginListen] pid=" << getpid()
             << ", using GPU " << gpu_idx
@@ -222,9 +228,6 @@ ncclResult_t pluginConnect(int vdev, void *opaque_handle, void **sendComm,
                            ncclNetDeviceHandle_v8_t ** /*sendDevComm*/) {
     int gpu_idx = 0;
     cudaGetDevice(&gpu_idx);
-
-    LOG(INFO) << "[pluginConnect] Using GPU " << gpu_idx;
-
     if (vdev != gpu_idx) {
         LOG_FIRST_N(INFO, 1) << "pluginConnect detects different vdev " << vdev
                              << " vs. gpu_idx " << gpu_idx
