@@ -1738,13 +1738,13 @@ Endpoint::Endpoint() : stats_thread_([this]() { stats_thread_fn(); }) {
            "/ 4";
 
     LOG(INFO) << "Creating Channels";
-    // TODO(MaoZiming): Possibly lazy init. 
     for (int i = 0; i < kNumEngines; i++) channel_vec_[i] = new Channel();
-
     LOG(INFO) << "Creating Pacers";
     for (int i = 0; i < NUM_DEVICES; i++) eqds_[i] = new eqds::EQDS(i);
 
-#ifdef ENDPOINT_CREATE_ENGINE
+#ifdef LAZY_CREATE_ENGINE
+    LOG(INFO) << "Endpoint() skips creating Engines";
+#else
     LOG(INFO) << "Creating Engines";
     std::vector<std::future<std::unique_ptr<UcclEngine>>> engine_futures;
 
@@ -1801,8 +1801,6 @@ Endpoint::Endpoint() : stats_thread_([this]() { stats_thread_fn(); }) {
         engine_vec_.emplace_back(std::move(engine_future.get()));
         engines.push_back(engine_vec_.back().get());
     }
-#else 
-    LOG(INFO) << "Endpoint() skips creating Engines";
 #endif
 
     ctx_pool_ = new SharedPool<PollCtx *, true>(NUM_FRAMES * 4);
@@ -2371,8 +2369,11 @@ bool Endpoint::uccl_poll_once(PollCtx *ctx) {
 
 int Endpoint::uccl_regmr_dmabuf(int dev, void *addr, size_t len, int type,
                                 int offset, int fd, struct Mhandle **mhandle) {
+#ifdef LAZY_CREATE_ENGINE
     auto factory_dev = EFAFactory::GetEFADevice(dev);
-    // auto factory_dev = EFAFactory::GetEFADevice(gpu_);
+#else
+    auto factory_dev = EFAFactory::GetEFADevice(gpu_);
+#endif
     *mhandle = new Mhandle();
 
     (*mhandle)->mr =
@@ -2384,8 +2385,11 @@ int Endpoint::uccl_regmr_dmabuf(int dev, void *addr, size_t len, int type,
 
 int Endpoint::uccl_regmr(int dev, void *addr, size_t len,
                          int type /*unsed for now*/, struct Mhandle **mhandle) {
+#ifdef LAZY_CREATE_ENGINE
     auto factory_dev = EFAFactory::GetEFADevice(dev);
-    // auto factory_dev = EFAFactory::GetEFADevice(gpu_);
+#else
+    auto factory_dev = EFAFactory::GetEFADevice(gpu_);
+#endif
 
     *mhandle = new Mhandle();
     (*mhandle)->mr =

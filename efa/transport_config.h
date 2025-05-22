@@ -12,6 +12,7 @@
 #define SCATTERED_MEMCPY
 // #define RTT_STATS
 // #define POLLCTX_DEBUG
+#define LAZY_CREATE_ENGINE
 
 enum class SenderCCType {
     kNone,
@@ -33,7 +34,6 @@ static_assert(
 
 #define P4D
 
-// TODO(MaoZiming): detect number of GPUs dynamically? 
 static const uint32_t kNumVdevices = 8;        // # of vEFA/GPUs.
 static const uint32_t kNumEnginesPerVdev = 2;  // # of engines per vEFA/GPU.
 static const uint32_t kNumEngines = kNumVdevices * kNumEnginesPerVdev;

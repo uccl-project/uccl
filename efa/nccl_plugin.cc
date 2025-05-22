@@ -97,9 +97,11 @@ ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
     int gpu;
     cudaGetDevice(&gpu);
 
-    // Construct the endpoint for this GPU
-    // ep = new Endpoint(gpu);
+#ifdef LAZY_CREATE_ENGINE
     ep = new Endpoint();
+#else
+    ep = new Endpoint(gpu);
+#endif
 
     return ncclSuccess;
 }
@@ -124,8 +126,11 @@ ncclResult_t pluginPciPath(const char *ib_name, char **path) {
 }
 
 ncclResult_t pluginGetProperties(int pdev, ncclNetProperties_v8_t *props) {
+#ifdef LAZY_CREATE_ENGINE
     auto factory_dev = EFAFactory::GetEFADevice(pdev);
-    // auto factory_dev = EFAFactory::GetEFADevice(ep->gpu_);
+#else
+    auto factory_dev = EFAFactory::GetEFADevice(ep->gpu_);
+#endif
     props->name = factory_dev->ib_name;
 
     // Speed in *Mbps*. 100000 means 100G
@@ -198,8 +203,11 @@ ncclResult_t pluginListen(int vdev, void *opaque_handle, void **listenComm) {
     auto [listen_port, listen_fd] = ep->uccl_listen();
 
     // Fill out handle which will be passed to the other side.
+#ifdef LAZY_CREATE_ENGINE
     auto factory_dev = EFAFactory::GetEFADevice(pdev);
-    // auto factory_dev = EFAFactory::GetEFADevice(ep->gpu_);
+#else
+    auto factory_dev = EFAFactory::GetEFADevice(ep->gpu_);
+#endif
     handle->ip_addr_u32 = str_to_ip(factory_dev->local_ip_str);
     handle->remote_vdev = vdev;
     handle->listen_port = listen_port;
