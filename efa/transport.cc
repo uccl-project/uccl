@@ -1649,7 +1649,6 @@ Endpoint::Endpoint() : stats_thread_([this]() { stats_thread_fn(); }) {
     LOG(INFO) << "Creating EFAFactory (Lazy Init)";
 
     static std::once_flag flag_once;
-    // TODO(MaoZiming): Fix EFAFactory::Init
     std::call_once(flag_once, []() { EFAFactory::Init(); });
 
     CHECK_LE(kNumEngines, NUM_CPUS / 4)
