@@ -53,7 +53,7 @@ cp src/include/nccl_common.h build/include/
 
 # Build nccl-tests; consider "conda deactivate" when hitting dependency errors
 cd $UCCL_HOME/thirdparty/nccl-tests
-make MPI=1 MPI_HOME=/opt/amazon/openmpi CUDA_HOME=/usr/local/cuda NCCL_HOME=$UCCL_HOME/thirdparty/nccl-sg/build -j
+make MPI=1 MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi CUDA_HOME=/usr/local/cuda NCCL_HOME=$UCCL_HOME/thirdparty/nccl/build -j
 ```
 
 Build `libnccl-net.so`

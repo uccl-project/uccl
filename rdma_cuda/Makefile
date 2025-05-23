@@ -8,7 +8,7 @@ LIBS = -lglog -lgflags -lgtest -lz -lelf -libverbs  -L /usr/local/cuda/lib64 -lc
 LIBS_SHARED = -lglog -lgflags -lgtest -lz -lelf -libverbs
 override CXXFLAGS += -O3 -g -std=c++17 -Wno-pointer-arith -Wno-interference-size -fPIC
 DEPS = *.h
-PLUGIN_SO = libnccl-net.so
+PLUGIN_SO = libnccl-net-uccl.so
 NCCL_INC:= -I$(NCCL_HOME)/build/include -I$(NCCL_HOME)/src/include -I$(CUDA_HOME)/include
 
 lib_src = $(wildcard *.cc)

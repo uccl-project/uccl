@@ -10,15 +10,15 @@ NUM_GPUS_PER_NODE=${3:-8}
 PROG_OPTION=${4:-0}
 
 # IP of Nodes.
-NODES="87.120.213.6,87.120.213.5"
+NODES="87.120.213.5,87.120.213.6"
 # Names of HCAs."
 HCA_NAMES="mlx5_0:1,mlx5_1:1,mlx5_2:1,mlx5_3:1,mlx5_4:1,mlx5_5:1,mlx5_6:1,mlx5_7:1"
 # Name of Control NIC.
-CTRL_NIC="eth0"
+CTRL_NIC="ens10f0np0"
 # Path of NCCL
 NCCL_PATH="${UCCL_HOME}/thirdparty/nccl/build/lib"
 # Path of UCCL
-PLUGIN_LIB="${UCCL_HOME}/rdma_cuda/libnccl-net.so"
+PLUGIN_LIB="${UCCL_HOME}/rdma_cuda/libnccl-net-uccl.so"
 
 # Number of chunnels.
 NUM_CHUNNEL=4
@@ -70,6 +70,8 @@ mpirun --bind-to none -np ${NUM_PROCS} -N 1 \
     --mca btl_tcp_if_include ${CTRL_NIC} \
     --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
     --mca orte_base_help_aggregate 0 \
+    -x LD_LIBRARY_PATH=${NCCL_PATH}:${LD_LIBRARY_PATH} \
+    -x NCCL_NET_PLUGIN=${PLUGIN_LIB} \
     -x GLOG_logtostderr=1 \
     -x GLOG_v=0 \
     -x NCCL_DEBUG=WARN \
@@ -86,8 +88,6 @@ mpirun --bind-to none -np ${NUM_PROCS} -N 1 \
     -x NCCL_BUFFSIZE=${BUFFSIZE} \
     -x NCCL_IB_QPS_PER_CONNECTION=${NUM_QPS_PER_CONNECTION} -x NCCL_IB_SPLIT_DATA_ON_QPS=${SPLIT_DATA_ON_QPS} \
     -x NCCL_IB_HCA=${HCA_NAMES} \
-    -x NCCL_NET_PLUGIN=${PLUGIN_LIB} \
-    -x LD_LIBRARY_PATH=${NCCL_PATH}:${LD_LIBRARY_PATH} \
     ${UCCL_HOME}/thirdparty/nccl-tests/build/${PROG_NAME} \
     -f 2 \
     --minbytes 1K --maxbytes 1G \
