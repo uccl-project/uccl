@@ -1643,6 +1643,196 @@ std::string UcclEngine::status_to_string(bool abbrev) {
     return s;
 }
 
+bool Endpoint::initialize_engine_by_gpu_idx(int gpu_idx) {
+
+    static std::once_flag flag_once;
+    std::call_once(flag_once, [this, gpu_idx]() { 
+        listen_port_cur_.store(kBootstrapPort + gpu_idx * 1000);
+    });
+
+    std::vector<std::future<std::unique_ptr<UcclEngine>>> engine_futures;
+    for (int i = 0; i < kNumEnginesPerVdev; i++) {
+        auto engine_idx = gpu_idx * kNumEnginesPerVdev + i;
+
+        LOG(INFO) << "Creating Engines by GPU Idx " << gpu_idx << " engine_idx " << engine_idx;
+        {
+            std::lock_guard<std::mutex> lock(engine_map_mutex_);
+            if (engine_id_to_engine_map_.find(engine_idx) !=
+                engine_id_to_engine_map_.end()) {
+                LOG(INFO) << "Engine " << engine_idx << " already exists";
+                continue;
+            }
+        }
+
+        auto dev_idx = get_dev_idx_by_engine_idx(engine_idx);
+        auto socket_idx = engine_idx;
+
+        CHECK_EQ(gpu_idx, get_gpu_idx_by_engine_idx(engine_idx))
+            << "gpu_idx " << gpu_idx << " != "
+            << get_gpu_idx_by_engine_idx(engine_idx);
+
+        std::string local_ip_str;
+        auto ret = util_efa_get_ip_from_dev_idx(0, &local_ip_str);
+        CHECK_EQ(ret, 0) << "Failed to get IP address from dev idx 0";
+
+        // Creating engines sequentially to have inorder QPNs.
+        auto engine = std::make_unique<UcclEngine>(
+            local_ip_str, gpu_idx, dev_idx, socket_idx, channel_vec_[engine_idx], 
+            eqds_[dev_idx]->credit_qp_ctx_[get_engine_off_by_engine_idx(engine_idx)], &eqds_[dev_idx]->channel_);
+
+        std::promise<std::unique_ptr<UcclEngine>> engine_promise;
+        auto engine_future = engine_promise.get_future();
+        engine_futures.emplace_back(std::move(engine_future));
+
+        // GPU 0-3 on numa 0, and GPU 4-7 on numa 1.
+        // This can be found with nvidia-smi topo -m.
+        auto engine_cpu_start = ENGINE_CPU_START[gpu_idx / 4];
+        // Total possible GPUs: 8 * kNumEnginesPerVdev, separated into two numas.
+        auto engine_th_cpuid =
+            engine_cpu_start + engine_idx % (8 * kNumEnginesPerVdev / 2);
+
+        // Spawning a new thread to init engine and run the engine loop.
+        engine_th_vec_.emplace_back(std::make_unique<std::thread>(
+            [this, engine_idx, engine_th_cpuid,
+             engine_promise = std::move(engine_promise),
+             engine = std::move(engine)]() mutable {
+                pin_thread_to_cpu(engine_th_cpuid);
+                LOG(INFO) << "[Engine] thread " << engine_idx << " running on CPU "
+                          << engine_th_cpuid;
+
+                auto *engine_ptr = engine.get();
+                engine_promise.set_value(std::move(engine));
+
+                if constexpr (kSplitSendRecvEngine) {
+                    if (engine_idx%2 == 0)
+                        engine_ptr->sender_only_run();
+                    else
+                        engine_ptr->receiver_only_run();
+                } else
+                    engine_ptr->run();
+            }));
+    }
+
+    int i = 0;
+    for (auto &engine_future : engine_futures) {
+        // engine_vec_.emplace_back(std::move(engine_future.get()));
+        auto engine_idx = gpu_idx * kNumEnginesPerVdev + i;
+        {
+            std::lock_guard<std::mutex> lock(engine_map_mutex_);
+            engine_id_to_engine_map_[engine_idx] = std::move(engine_future.get());
+        }
+        i++;
+    }
+    return true;
+}
+
+Endpoint::Endpoint() : stats_thread_([this]() { stats_thread_fn(); }) {
+
+    LOG(INFO) << "Creating EFAFactory (Lazy Init)";
+
+    static std::once_flag flag_once;
+    std::call_once(flag_once, []() { EFAFactory::Init(); });
+
+    CHECK_LE(kNumEngines, NUM_CPUS / 4)
+        << "num_queues should be less than or equal to the number of CPUs "
+           "/ 4";
+
+    LOG(INFO) << "Creating Channels";
+    for (int i = 0; i < kNumEngines; i++) channel_vec_[i] = new Channel();
+    LOG(INFO) << "Creating Pacers";
+    for (int i = 0; i < NUM_DEVICES; i++) eqds_[i] = new eqds::EQDS(i);
+
+#ifdef LAZY_CREATE_ENGINE
+    LOG(INFO) << "Endpoint() skips creating Engines";
+#else
+    LOG(INFO) << "Creating Engines";
+    std::vector<std::future<std::unique_ptr<UcclEngine>>> engine_futures;
+
+    for (int i = 0; i < kNumEngines; i++) {
+        auto gpu_idx = get_gpu_idx_by_engine_idx(i);
+        auto dev_idx = get_dev_idx_by_engine_idx(i);
+        auto socket_idx = i;
+
+        std::string local_ip_str;
+        auto ret = util_efa_get_ip_from_dev_idx(0, &local_ip_str);
+        CHECK_EQ(ret, 0) << "Failed to get IP address from dev idx 0";
+
+        // Creating engines sequentially to have inorder QPNs.
+        auto engine = std::make_unique<UcclEngine>(
+            local_ip_str, gpu_idx, dev_idx, socket_idx, channel_vec_[i], 
+            eqds_[dev_idx]->credit_qp_ctx_[get_engine_off_by_engine_idx(i)], &eqds_[dev_idx]->channel_);
+
+        std::promise<std::unique_ptr<UcclEngine>> engine_promise;
+        auto engine_future = engine_promise.get_future();
+        engine_futures.emplace_back(std::move(engine_future));
+
+        // GPU 0-3 on numa 0, and GPU 4-7 on numa 1.
+        // This can be found with nvidia-smi topo -m.
+        auto engine_cpu_start = ENGINE_CPU_START[gpu_idx / 4];
+        // Total possible GPUs: 8 * kNumEnginesPerVdev, separated into two numas.
+        auto engine_th_cpuid =
+            engine_cpu_start + i % (8 * kNumEnginesPerVdev / 2);
+
+
+        // Spawning a new thread to init engine and run the engine loop.
+        engine_th_vec_.emplace_back(std::make_unique<std::thread>(
+            [this, i, engine_th_cpuid,
+             engine_promise = std::move(engine_promise),
+             engine = std::move(engine)]() mutable {
+                pin_thread_to_cpu(engine_th_cpuid);
+                LOG(INFO) << "[Engine] thread " << i << " running on CPU "
+                          << engine_th_cpuid;
+
+                auto *engine_ptr = engine.get();
+                engine_promise.set_value(std::move(engine));
+
+                if constexpr (kSplitSendRecvEngine) {
+                    if (i%2 == 0)
+                        engine_ptr->sender_only_run();
+                    else
+                        engine_ptr->receiver_only_run();
+                } else
+                    engine_ptr->run();
+            }));
+    }
+
+    std::vector<UcclEngine *> engines;
+    for (auto &engine_future : engine_futures) {
+        engine_vec_.emplace_back(std::move(engine_future.get()));
+        engines.push_back(engine_vec_.back().get());
+    }
+#endif
+
+    ctx_pool_ = new SharedPool<PollCtx *, true>(NUM_FRAMES * 4);
+    ctx_pool_buf_ = new uint8_t[NUM_FRAMES * 4 * sizeof(PollCtx)];
+
+    for (int i = 0; i < NUM_FRAMES * 4; i++) {
+        ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());
+    }
+
+
+#if !defined(EMULATE_RC_ZC) && !defined(SCATTERED_MEMCPY)
+    // Creating copy thread for each engine.
+    for (int i = 0; i < kNumEngines; i++) {
+        auto gpu_idx = get_gpu_idx_by_engine_idx(i);
+        auto engine_cpu_start = ENGINE_CPU_START[gpu_idx / 4];
+        auto num_engines_per_numa =
+            gpu_idx / 4 == 0 ? kNumEngines : kNumEngines / 2;
+        auto copy_th_cpuid = engine_cpu_start + num_engines_per_numa +
+                             i % (8 * kNumEnginesPerVdev / 2);
+
+        copy_th_vec_.emplace_back(std::make_unique<std::thread>(
+            [this, i, engine = engines[i], copy_th_cpuid]() {
+                pin_thread_to_cpu(copy_th_cpuid);
+                LOG(INFO) << "[Copy] thread " << i << " running on CPU "
+                          << copy_th_cpuid;
+                RXTracking::copy_thread_func(i, engine);
+            }));
+    }
+#endif
+}
+
+
 Endpoint::Endpoint(int gpu) : gpu_(gpu), stats_thread_([this]() { stats_thread_fn(); }) {
     
     listen_port_cur_.store(kBootstrapPort + gpu_ * 1000);
@@ -1763,6 +1953,12 @@ Endpoint::Endpoint(int gpu) : gpu_(gpu), stats_thread_([this]() { stats_thread_f
 
 Endpoint::~Endpoint() {
     for (auto &engine : engine_vec_) engine->shutdown();
+    {
+        std::lock_guard<std::mutex> lock(engine_map_mutex_);
+        for (auto &[engine_id, engine] : engine_id_to_engine_map_) {
+            engine->shutdown();
+        }
+    }
     for (auto &engine_th : engine_th_vec_) engine_th->join();
     for (auto &copy_th : copy_th_vec_) copy_th->join();
     for (int i = 0; i < kNumEngines; i++) delete channel_vec_[i];
@@ -1809,9 +2005,30 @@ std::tuple<uint16_t, int> Endpoint::uccl_listen() {
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_addr.s_addr = INADDR_ANY;
     serv_addr.sin_port = htons(listen_port);
-    DCHECK(bind(listen_fd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) >=
-           0)
-        << "ERROR: binding";
+
+
+    // Get the device currently assigned to this process
+    int gpu;
+    cudaGetDevice(&gpu);
+
+    int localRank = 0;
+    // Try to determine local rank from environment variable
+    const char* localRankEnv = std::getenv("LOCAL_RANK");
+    if (localRankEnv) {
+        localRank = std::atoi(localRankEnv);
+    } else {
+        localRank = gpu;  // fallback guess
+    }
+
+    LOG(INFO) << "[Endpoint] Rank " << localRank << " trying to bind on port " << listen_port
+              << " (fd=" << listen_fd << ")";
+              
+    int bind_ret = bind(listen_fd, (struct sockaddr *)&serv_addr, sizeof(serv_addr));
+    if (bind_ret < 0) {
+        LOG(ERROR) << "[Endpoint] Rank " << localRank << " failed to bind port " << listen_port
+                   << " (errno: " << errno << ", " << strerror(errno) << ")";
+    }
+    DCHECK(bind_ret >= 0) << "ERROR: binding";
 
     DCHECK(!listen(listen_fd, 128)) << "ERROR: listen";
     LOG(INFO) << "[Endpoint] server ready, listening on port " << listen_port;
@@ -2152,8 +2369,11 @@ bool Endpoint::uccl_poll_once(PollCtx *ctx) {
 
 int Endpoint::uccl_regmr_dmabuf(int dev, void *addr, size_t len, int type,
                                 int offset, int fd, struct Mhandle **mhandle) {
-    // auto factory_dev = EFAFactory::GetEFADevice(dev);
+#ifdef LAZY_CREATE_ENGINE
+    auto factory_dev = EFAFactory::GetEFADevice(dev);
+#else
     auto factory_dev = EFAFactory::GetEFADevice(gpu_);
+#endif
     *mhandle = new Mhandle();
 
     (*mhandle)->mr =
@@ -2165,8 +2385,11 @@ int Endpoint::uccl_regmr_dmabuf(int dev, void *addr, size_t len, int type,
 
 int Endpoint::uccl_regmr(int dev, void *addr, size_t len,
                          int type /*unsed for now*/, struct Mhandle **mhandle) {
-    // auto factory_dev = EFAFactory::GetEFADevice(dev);
+#ifdef LAZY_CREATE_ENGINE
+    auto factory_dev = EFAFactory::GetEFADevice(dev);
+#else
     auto factory_dev = EFAFactory::GetEFADevice(gpu_);
+#endif
 
     *mhandle = new Mhandle();
     (*mhandle)->mr =
@@ -2193,7 +2416,7 @@ void Endpoint::install_flow_on_engine(FlowID flow_id,
     DCHECK(ret == sizeof(uint32_t));
     
     // Exchange ConnMeta with the peer.
-    auto *efa_socket = engine_vec_[local_engine_idx]->socket_;
+    auto *efa_socket = engine_id_to_engine_map_[local_engine_idx]->socket_;
     ConnMeta *remote_meta = new ConnMeta();
     ConnMeta *local_meta = new ConnMeta();
     efa_socket->get_conn_metadata(local_meta);
@@ -2213,7 +2436,7 @@ void Endpoint::install_flow_on_engine(FlowID flow_id,
     if constexpr (kReceiverCCType == ReceiverCCType::kEQDS) {
         for (int i = 0; i < kMaxSrcDstQPCredit; i++) {
             local_meta->qpn_list_credit[i] = 
-                engine_vec_[local_engine_idx]->credit_qp_ctx_->get_qpn(i);
+                engine_id_to_engine_map_[local_engine_idx]->credit_qp_ctx_->get_qpn(i);
         }
     
         str << "\n [Engine] local_meta->qpn_list_credit: ";

@@ -13,6 +13,12 @@ void EFAFactory::Init(int gpu) {
     }
 }
 
+void EFAFactory::Init() {
+    for (int i = 0; i < NUM_DEVICES; i++) {
+        EFAFactory::InitDev(i);
+    }
+}
+
 void EFAFactory::InitDev(int dev_idx) {
     struct EFADevice *dev = new struct EFADevice();
     struct ibv_device **device_list;
@@ -47,7 +53,7 @@ void EFAFactory::InitDev(int dev_idx) {
         fprintf(stderr, "No device found for %s\n", dev->ib_name);
         goto free_devices;
     }
-    DCHECK(i == (dev_idx / 2));
+    // DCHECK(i == (dev_idx / 2));
     LOG(INFO) << "Found device: " << dev->ib_name << " at dev_idx " << i
               << " with gid_idx " << (uint32_t)EFA_GID_IDX;
 
@@ -172,6 +178,22 @@ EFASocket *EFAFactory::CreateSocket(int gpu_idx, int dev_idx, int socket_idx) {
 
 struct EFADevice *EFAFactory::GetEFADevice(int dev_idx) {
     auto dev_iter = efa_ctl.dev_map.find(dev_idx);
+
+    if (dev_iter == efa_ctl.dev_map.end()) {
+        std::ostringstream oss;
+        oss << "[EFAFactory] Invalid dev_idx = " << dev_idx
+            << ". Available dev_map keys: ";
+        for (const auto& [key, _] : efa_ctl.dev_map) {
+            oss << key << " ";
+        }
+
+        char hostname[256];
+        gethostname(hostname, sizeof(hostname));
+        oss << "(host: " << hostname << ")";
+        LOG(ERROR) << oss.str();
+    }
+
+
     DCHECK(dev_iter != efa_ctl.dev_map.end());
     auto *dev = dev_iter->second;
     return dev;
