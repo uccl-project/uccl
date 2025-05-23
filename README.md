@@ -81,7 +81,7 @@ Next you can dive into individual folders for various supports:
 Please refer to [doc/README.md](./doc/README.md) for full documentation.
 
 # Citation
-The code in this repository is mostly described in the post below. Please consider citing this work if you find the repository helpful. 
+The code in this repository is mostly described in the paper below. Please consider citing this work if you find the repository helpful. 
 
 ```bibtex
 @article{zhou2025extensible,
