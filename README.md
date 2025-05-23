@@ -80,6 +80,18 @@ Next you can dive into individual folders for various supports:
 
 Please refer to [doc/README.md](./doc/README.md) for full documentation.
 
+# Citation
+The code in this repository is mostly described in the paper below. Please consider citing this work if you find the repository helpful. 
+
+```bibtex
+@article{zhou2025extensible,
+  title={An Extensible Software Transport Layer for GPU Networking},
+  author={Zhou, Yang and Chen, Zhongjie and Mao, Ziming and Lao, ChonLam and Yang, Shuo and Kannan, Pravein Govindan and Gao, Jiaqi and Zhao, Yilong and Wu, Yongji and You, Kaichao and others},
+  journal={arXiv preprint arXiv:2504.17307},
+  year={2025}
+}
+```
+
 ## Acknowledgement
 
 UCCL is being actively developed at [UC Berkeley Sky Computing Lab](https://sky.cs.berkeley.edu/). We welcome open-source developers. 
