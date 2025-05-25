@@ -1794,7 +1794,7 @@ Endpoint::Endpoint() : stats_thread_([this]() { stats_thread_fn(); }) {
 #endif
 }
 
-// TODO(MaoZiming):
+// TODO(MaoZiming): Deprecate this constructor. Use Endpoint()
 Endpoint::Endpoint(int gpu) : gpu_(gpu), stats_thread_([this]() { stats_thread_fn(); }) {
     
     listen_port_cur_.store(kBootstrapPort + gpu_ * 1000);
