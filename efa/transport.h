@@ -930,6 +930,7 @@ class Endpoint {
     ConnID uccl_accept(int local_vdev, int *remote_vdev, std::string &remote_ip,
                        int listen_fd);
 
+    bool create_engine_and_add_to_engine_future(int engine_idx, int gpu_idx, std::vector<std::future<std::unique_ptr<UcclEngine>>> &engine_futures);
     bool initialize_engine_by_gpu_idx(int gpu_idx);
 
     // Sending the data by leveraging multiple port combinations.
