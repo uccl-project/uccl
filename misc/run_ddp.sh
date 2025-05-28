@@ -1,22 +1,14 @@
 # !/bin/bash
 
-set -e
-set -x
+source ../scripts/shared.sh
 
 TEST=${1:-srd}
 
 NV_LINK_DISABLE=1
 UCCL_QUITE=1
 PROG=ddp.py
-
-# UCCL_HOME="/opt/uccl_rdma_mp"
-
-UCCL_HOME="/opt/uccl_rdma"
 DEVICES=0,1,2,3,4,5,6,7
 NUM_DEVS=8
-# UCCL_HOME="/opt/uccl_rdma_4gpu"
-# DEVICES=0,2,4,6
-# NUM_DEVS=4
 
 CHANNELS=4
 CHANNELS_NET_PEER=4
@@ -30,7 +22,7 @@ if [ "$TEST" = "srd" ]; then
 fi
 
 if [ "$TEST" = "srd" ]; then
-    LD_PRELOAD="/opt/uccl_rdma_zc/nccl/build/lib/libnccl.so" \
+    LD_PRELOAD="${UCCL_HOME}/thirdparty/nccl/build/lib/libnccl.so" \
         NCCL_NET_PLUGIN="/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu/libnccl-net.so" \
         NCCL_PROTO=Simple \
         NCCL_P2P_DISABLE=${NV_LINK_DISABLE} \
@@ -43,10 +35,9 @@ if [ "$TEST" = "srd" ]; then
         NCCL_P2P_NET_CHUNKSIZE=${CHUNK_SIZE} \
         NCCL_BUFFSIZE=${BUFFSIZE} \
         torchrun --nproc_per_node=${NUM_DEVS} ${PROG} --batch_size 128 --epochs 10
-        # NCCL_DEBUG=INFO \
 
 elif [ "$TEST" = "ud" ]; then
-    LD_PRELOAD="${UCCL_HOME}/nccl/build/lib/libnccl.so" \
+    LD_PRELOAD="${UCCL_HOME}/thirdparty/nccl-sg/build/lib/libnccl.so" \
         NCCL_NET_PLUGIN="${UCCL_HOME}/efa/libnccl-net.so" \
         NCCL_PROTO=Simple \
         NCCL_P2P_DISABLE=${NV_LINK_DISABLE} \
@@ -65,10 +56,4 @@ elif [ "$TEST" = "ud" ]; then
         UCCL_ENGINE_QUIET=${UCCL_QUITE} \
         GLOG_logtostderr=0 \
         torchrun --nproc_per_node=${NUM_DEVS} ${PROG} --batch_size 128 --epochs 10
-        # python -m torch.distributed.run --nproc_per_node=4 ddp.py --batch_size 128 --epochs 10
-        # gdb --args python -m torch.distributed.run --nproc_per_node=4 ddp.py --batch_size 128 --epochs 10
-        # NCCL_DEBUG=INFO \
 fi
-
-        # NCCL_ALGO=Tree \
-        # NCCL_ALGO=Ring \

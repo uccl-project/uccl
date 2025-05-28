@@ -52,6 +52,18 @@ cd $UCCL_HOME/efa
 ./run_nccl_test.sh ud 32 0
 ``` 
 
+## Running UCCL for PyTorch Applications
+
+Generally, the main environment variables to set for UCCL are: 
+```shell
+LD_PRELOAD="${UCCL_HOME}/thirdparty/nccl-sg/build/lib/libnccl.so"
+NCCL_NET_PLUGIN="${UCCL_HOME}/efa/libnccl-net.so"
+NCCL_PROTO=Simple
+```
+Currently, UCCL only supports `Simple` protocol; support for `LL` and `LL128` is on the way. 
+
+Check [misc/run_ddp.sh](../misc/run_ddp.sh) for an example of running UCCL with PyTorch DDP applications by `cd ../misc; ./run_ddp.sh`. Other applications such as DeepSpeed, vLLM, Megatron-LM, and PyTorch FSDP should work similarly. 
+
 
 ## MISC
 
