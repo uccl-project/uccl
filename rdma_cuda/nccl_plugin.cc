@@ -175,9 +175,9 @@ ncclResult_t pluginListen(int dev, void *opaqueHandle, void **listenComm) {
     struct ucclHandle *handle = (struct ucclHandle *)opaqueHandle;
     memset(handle, 0, sizeof(struct ucclHandle));
     
-    int local_gpuidx;
-    cudaGetDevice(&local_gpuidx);
-    dev = local_gpuidx;
+    // int local_gpuidx;
+    // cudaGetDevice(&local_gpuidx);
+    // dev = local_gpuidx;
 
     // Create a listening socket.
     int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -231,7 +231,7 @@ ncclResult_t pluginConnect(int dev, void *opaque_handle, void **sendComm,
     int local_gpuidx;
     cudaGetDevice(&local_gpuidx);
     
-    dev = local_gpuidx;
+    // dev = local_gpuidx;
 
     std::string remote_ip_str = ip_to_str(handle->ip_addr_u32);
 
@@ -262,8 +262,8 @@ ncclResult_t pluginConnect(int dev, void *opaque_handle, void **sendComm,
     }
 
     if (*sendComm) {
-        // printf("Connected to %s/%d on dev:%d, %ld\n", remote_ip_str.c_str(),
-        // handle->remote_dev, dev, scomm->base.conn_id.flow_id);
+         printf("Connected to %s/%d on dev:%d, %ld\n", remote_ip_str.c_str(),
+         handle->remote_dev, dev, scomm->base.conn_id.flow_id);
     }
 
     return ncclSuccess;
@@ -312,9 +312,9 @@ ncclResult_t pluginAccept(void *listenComm, void **recvComm,
     }
 
     if (*recvComm) {
-        // printf("Accepted from %s/%d on dev:%d, %ld\n",
-        // rcomm->remote_ip_str.c_str(), rcomm->remote_dev, lcomm->dev,
-        // rcomm->base.conn_id.flow_id);
+         printf("Accepted from %s/%d on dev:%d, %ld\n",
+         rcomm->remote_ip_str.c_str(), rcomm->remote_dev, lcomm->dev,
+         rcomm->base.conn_id.flow_id);
     }
 
     return ncclSuccess;
