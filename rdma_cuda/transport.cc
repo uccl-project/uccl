@@ -916,9 +916,14 @@ void RDMAEndpoint::install_flow_on_engines(int dev, PeerID peer_id,
     info->context = flow;
     info->is_send = is_send;
 
+    std::vector<PollCtx *> poll_ctx_vec;
+
     for (int i = 0; i < num_engines_per_dev_; i++) {
         auto engine_idx = find_first_engine_idx_on_dev(dev) + i;
         auto *poll_ctx = install_flow_on_engine(engine_idx, peer_id, meta);
+        poll_ctx_vec.push_back(poll_ctx);
+    }
+    for (auto *poll_ctx : poll_ctx_vec) {
         uccl_poll(poll_ctx);
     }
 

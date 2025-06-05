@@ -110,13 +110,15 @@ echo -e "Details: NCCL_NCHANNELS=${NUM_CHUNNEL} \n\t NCCL_P2P_NET_CHUNKSIZE=${P2
 #     -g 1 -t ${NUM_GPUS_PER_NODE}
 
 # -hostfile /root/my_hosts \
+# -hostfile /root/my_hosts_worstRing \
+# -hostfile ./zhongjie_hosts \
 # --host ${NODES} \
 
 
 mpirun --allow-run-as-root -np ${NUM_PROCS} \
     -x NCCL_IB_DISABLE=0  \
-    -hostfile /root/my_hosts \
-    -x NCCL_DEBUG=INFO \
+    -hostfile ./zhongjie_hosts \
+    -x NCCL_DEBUG=WARN \
     -x NCCL_IB_HCA=mlx5_1,mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7,mlx5_8 \
     -x NCCL_TOPO_FILE=/root/virtualTopology-gdr-h100-q35.xml \
     -x NCCL_IB_QPS_PER_CONNECTION=${NUM_QPS_PER_CONNECTION} -x NCCL_IB_SPLIT_DATA_ON_QPS=${SPLIT_DATA_ON_QPS} \

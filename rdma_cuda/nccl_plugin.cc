@@ -256,8 +256,8 @@ ncclResult_t pluginConnect(int dev, void *opaque_handle, void **sendComm,
     }
 
     if (*sendComm) {
-         printf("Connected to %s/%d on dev:%d, %ld\n", remote_ip_str.c_str(),
-         handle->remote_dev, dev, scomm->base.conn_id.flow_id);
+        //  printf("Connected to %s/%d on dev:%d, %ld\n", remote_ip_str.c_str(),
+        //  handle->remote_dev, dev, scomm->base.conn_id.flow_id);
     }
 
     return ncclSuccess;
@@ -306,9 +306,9 @@ ncclResult_t pluginAccept(void *listenComm, void **recvComm,
     }
 
     if (*recvComm) {
-         printf("Accepted from %s/%d on dev:%d, %ld\n",
-         rcomm->remote_ip_str.c_str(), rcomm->remote_dev, lcomm->dev,
-         rcomm->base.conn_id.flow_id);
+        //  printf("Accepted from %s/%d on dev:%d, %ld\n",
+        //  rcomm->remote_ip_str.c_str(), rcomm->remote_dev, lcomm->dev,
+        //  rcomm->base.conn_id.flow_id);
     }
 
     return ncclSuccess;

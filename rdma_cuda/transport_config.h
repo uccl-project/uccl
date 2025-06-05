@@ -61,9 +61,11 @@ static constexpr bool kBypassPacing = true;
 static constexpr uint32_t kMaxUnAckedBytesPerFlow = 2 * std::max(kChunkSize, 32768u);
 // Limit the outstanding bytes on each engine.
 // Low means if a flow exceeds its own budget but doesn't exceed the Low threshold, it can send until Low threshold.
-static constexpr uint32_t kMaxUnAckedBytesPerEngineLow = 18 * std::max(kChunkSize, 32768u);
+// static constexpr uint32_t kMaxUnAckedBytesPerEngineLow = 18 * std::max(kChunkSize, 32768u);
+static constexpr uint32_t kMaxUnAckedBytesPerEngineLow = 8 * std::max(kChunkSize, 32768u);
 // High means if all flows reach this threshold, all flows can't send any bytes.
-static constexpr uint32_t kMaxUnAckedBytesPerEngineHigh = 24 * std::max(kChunkSize, 32768u);
+// static constexpr uint32_t kMaxUnAckedBytesPerEngineHigh = 24 * std::max(kChunkSize, 32768u);
+static constexpr uint32_t kMaxUnAckedBytesPerEngineHigh = 12 * std::max(kChunkSize, 32768u);
 
 // Congestion control algorithm.
 enum SenderCCA {
