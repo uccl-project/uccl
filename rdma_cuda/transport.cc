@@ -1327,7 +1327,6 @@ bool RDMAEndpoint::uccl_poll_ureq_once(struct ucclRequest *ureq) {
     }
     if ((ureq->type == ReqRx || ureq->type == ReqRxRC) && ret) {
         flow->dec_outstanding_reqs();
-
         if (ureq->recv.data_len[0] <= kRCSize && ureq->n == 1) {
             // This message should have used RC.
             // Give subsequent messages a chance to use RC.
@@ -1384,6 +1383,7 @@ int RDMAEndpoint::uccl_recv_async(UcclFlow *flow, struct Mhandle **mhandles,
         ureq->type = ReqRxRC;
         ureq->context = flow;
         ureq->rc_or_flush_done = false;
+        ureq->n = 1;
 
         flow->poll_flow_cq();
         return 0;
@@ -1477,7 +1477,7 @@ int RDMAEndpoint::uccl_regmr_dmabuf(UcclFlow *flow, void *addr, size_t len,
     (*mhandle)->mr =
         ibv_reg_dmabuf_mr(factory_dev->pd, offset, len, (uint64_t)addr, fd,
                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                              IBV_ACCESS_REMOTE_READ);
+                              IBV_ACCESS_REMOTE_READ | IBV_ACCESS_RELAXED_ORDERING);
 
     return 0;
 }
@@ -1491,7 +1491,7 @@ int RDMAEndpoint::uccl_regmr(UcclFlow *flow, void *addr, size_t len,
     (*mhandle)->mr =
         ibv_reg_mr(factory_dev->pd, addr, len,
                    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                       IBV_ACCESS_REMOTE_READ);
+                       IBV_ACCESS_REMOTE_READ | IBV_ACCESS_RELAXED_ORDERING);
 
     return 0;
 }

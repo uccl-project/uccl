@@ -11,6 +11,7 @@ PROG_OPTION=${4:-0}
 
 # IP of Nodes.
 NODES="192.168.102.190,192.168.102.191,192.168.102.192,192.168.102.193,192.168.102.194,192.168.102.195"
+# NODES="192.168.102.190,192.168.102.195"
 # Names of HCAs."
 
 # NCCL uses the following GPU-NIC mapping can achieve 47GB/s:
@@ -73,37 +74,71 @@ echo "Running test: ${PROG_NAME}, $([ "${UCCL}" -eq 1 ] && echo "UCCL" || echo "
 
 echo -e "Details: NCCL_NCHANNELS=${NUM_CHUNNEL} \n\t NCCL_P2P_NET_CHUNKSIZE=${P2P_NET_CHUNKSIZE} \n\t NCCL_BUFFSIZE=${BUFFSIZE} \n\t NCCL_NCHANNELS_PER_NET_PEER=${CHANNELS_NET_PEER} \n\t NCCL_ALGO=${ALGO} \n\t NCCL_IB_QPS_PER_CONNECTION=${NUM_QPS_PER_CONNECTION} \n\t NCCL_IB_SPLIT_DATA_ON_QPS=${SPLIT_DATA_ON_QPS} \n\t NCCL_PXN_DISABLE=${PXN_DISABLE} \n\t NCCL_P2P_DISABLE=${P2P_DISABLE} \n\t NCCL_SHM_DISABLE=${SHM_DISABLE} \n\t NCCL_IB_HCA=${HCA_NAMES}"
 
-mpirun  --allow-run-as-root -np ${NUM_PROCS} -N 1 \
-    --host ${NODES} \
-    --mca btl_tcp_if_include ${CTRL_NIC} \
-    --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
-    --mca orte_base_help_aggregate 0 \
-    -x LD_LIBRARY_PATH=${NCCL_PATH}:${LD_LIBRARY_PATH} \
-    -x NCCL_NET_PLUGIN=${PLUGIN_LIB} \
-    -x NCCL_SOCKET_IFNAME=${CTRL_NIC} \
-    -x GLOG_logtostderr=1 \
-    -x GLOG_v=0 \
-    -x NCCL_DEBUG=WARN \
-    -x NCCL_DEBUG_SUBSYS=NET \
-    -x NCCL_PROTO=${NCCL_PROTO} \
-    -x NCCL_PXN_DISABLE=${PXN_DISABLE} \
-    -x NCCL_P2P_DISABLE=${P2P_DISABLE} \
-    -x NCCL_SHM_DISABLE=${SHM_DISABLE} \
-    -x NCCL_NET_DISABLE=0 \
-    -x NCCL_ALGO=${ALGO} \
-    -x NCCL_MAX_NCHANNELS=${NUM_CHUNNEL} \
-    -x NCCL_MIN_NCHANNELS=${NUM_CHUNNEL} \
-    -x NCCL_NCHANNELS_PER_NET_PEER=${CHANNELS_NET_PEER} \
-    -x NCCL_P2P_NET_CHUNKSIZE=${P2P_NET_CHUNKSIZE} \
-    -x NCCL_BUFFSIZE=${BUFFSIZE} \
-    -x NCCL_IB_QPS_PER_CONNECTION=${NUM_QPS_PER_CONNECTION} -x NCCL_IB_SPLIT_DATA_ON_QPS=${SPLIT_DATA_ON_QPS} \
-    -x NCCL_IB_HCA=${HCA_NAMES} \
-    -x NCCL_SOCKET_IFNAME=${CTRL_NIC} \
-    -x NCCL_NVLS_ENABLE=0 \
-    -x NCCL_GRAPH_DUMP_FILE=graph-dump.xml \
-    ${UCCL_HOME}/thirdparty/nccl-tests/build/${PROG_NAME} \
-    -f 2 \
-    --minbytes 1K --maxbytes 1G \
-    --warmup_iters 50 --iters 50 \
-    -g 1 -t ${NUM_GPUS_PER_NODE}
+# mpirun  --allow-run-as-root -np ${NUM_PROCS} -N 1 \
+#     --host ${NODES} \
+#     --mca btl_tcp_if_include ${CTRL_NIC} \
+#     --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
+#     --mca orte_base_help_aggregate 0 \
+#     -x LD_LIBRARY_PATH=${NCCL_PATH}:${LD_LIBRARY_PATH} \
+#     -x NCCL_NET_PLUGIN=${PLUGIN_LIB} \
+#     -x NCCL_SOCKET_IFNAME=${CTRL_NIC} \
+#     -x GLOG_logtostderr=1 \
+#     -x GLOG_v=0 \
+#     -x NCCL_DEBUG=WARN \
+#     -x NCCL_NVLS_ENABLE=0 \
+#     -x NCCL_DEBUG_SUBSYS=NET \
+#     -x NCCL_PROTO=${NCCL_PROTO} \
+#     -x NCCL_PXN_DISABLE=${PXN_DISABLE} \
+#     -x NCCL_P2P_DISABLE=${P2P_DISABLE} \
+#     -x NCCL_SHM_DISABLE=${SHM_DISABLE} \
+#     -x NCCL_NET_DISABLE=0 \
+#     -x NCCL_ALGO=${ALGO} \
+#     -x NCCL_MAX_NCHANNELS=${NUM_CHUNNEL} \
+#     -x NCCL_MIN_NCHANNELS=${NUM_CHUNNEL} \
+#     -x NCCL_NCHANNELS_PER_NET_PEER=${CHANNELS_NET_PEER} \
+#     -x NCCL_P2P_NET_CHUNKSIZE=${P2P_NET_CHUNKSIZE} \
+#     -x NCCL_BUFFSIZE=${BUFFSIZE} \
+#     -x NCCL_IB_QPS_PER_CONNECTION=${NUM_QPS_PER_CONNECTION} -x NCCL_IB_SPLIT_DATA_ON_QPS=${SPLIT_DATA_ON_QPS} \
+#     -x NCCL_IB_HCA=${HCA_NAMES} \
+#     -x NCCL_SOCKET_IFNAME=${CTRL_NIC} \
+#     -x NCCL_NVLS_ENABLE=0 \
+#     -x NCCL_GRAPH_DUMP_FILE=graph-dump.xml \
+#     ${UCCL_HOME}/thirdparty/nccl-tests/build/${PROG_NAME} \
+#     -f 2 \
+#     --minbytes 1K --maxbytes 4G \
+#     --warmup_iters 50 --iters 50 \
+#     -g 1 -t ${NUM_GPUS_PER_NODE}
 
+# -hostfile /root/my_hosts \
+# --host ${NODES} \
+
+
+mpirun --allow-run-as-root -np ${NUM_PROCS} \
+    -x NCCL_IB_DISABLE=0  \
+    -hostfile /root/my_hosts \
+    -x NCCL_DEBUG=INFO \
+    -x NCCL_IB_HCA=mlx5_1,mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7,mlx5_8 \
+    -x NCCL_TOPO_FILE=/root/virtualTopology-gdr-h100-q35.xml \
+    -x NCCL_IB_QPS_PER_CONNECTION=${NUM_QPS_PER_CONNECTION} -x NCCL_IB_SPLIT_DATA_ON_QPS=${SPLIT_DATA_ON_QPS} \
+    -x NCCL_IB_PCI_RELAXED_ORDERING=1 \
+    -x NCCL_IB_GID_INDEX=3 \
+    -x NCCL_ALGO=Ring \
+    -x CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+    -x NCCL_SOCKET_IFNAME=enp164s0 \
+    -x NCCL_IGNORE_CPU_AFFINITY=1 \
+    -x NCCL_SOCKET_NTHREADS=2 \
+    -x NCCL_CROSS_NIC=0 \
+    -x NCCL_P2P_NET_CHUNKSIZE=524288 \
+    -x NCCL_BUFFSIZE=8388608 \
+    -x NCCL_DMABUF_ENABLE=0 \
+    -x LD_LIBRARY_PATH=${NCCL_PATH}:${LD_LIBRARY_PATH} \
+    -x NCCL_IB_MERGE_NICS=0 \
+    -x NCCL_NVLS_ENABLE=0 \
+    -x NCCL_NET_PLUGIN=$PLUGIN_LIB \
+    -x NCCL_GRAPH_DUMP_FILE=graph-dump.xml \
+    --mca btl tcp,self \
+    --mca btl_tcp_if_include enp164s0 \
+    /root/uccl/thirdparty/nccl-tests/build/${PROG_NAME} -c 0 \
+    -b 1K -e 1G \
+    -f 2 -w 50 -n 50 \
+    -g 1 -t ${NUM_GPUS_PER_NODE}

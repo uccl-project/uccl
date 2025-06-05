@@ -174,10 +174,6 @@ ncclResult_t pluginListen(int dev, void *opaqueHandle, void **listenComm) {
     int ret = 0;
     struct ucclHandle *handle = (struct ucclHandle *)opaqueHandle;
     memset(handle, 0, sizeof(struct ucclHandle));
-    
-    // int local_gpuidx;
-    // cudaGetDevice(&local_gpuidx);
-    // dev = local_gpuidx;
 
     // Create a listening socket.
     int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -230,8 +226,6 @@ ncclResult_t pluginConnect(int dev, void *opaque_handle, void **sendComm,
 
     int local_gpuidx;
     cudaGetDevice(&local_gpuidx);
-    
-    // dev = local_gpuidx;
 
     std::string remote_ip_str = ip_to_str(handle->ip_addr_u32);
 
@@ -374,7 +368,7 @@ ncclResult_t pluginIsend(void *sendComm, void *data, int size, int tag,
 
     *request = req;
 
-    UCCL_LOG_PLUGIN << "Isend on dev:" << dev << ", " << size << "B, ureq ptr:" << req;
+    UCCL_LOG_PLUGIN << "Isend on dev: " << dev << ", " << size << "B, ureq ptr:" << req;
 
     return ncclSuccess;
 }
@@ -453,7 +447,7 @@ ncclResult_t pluginTest(void *request, int *done, int *size) {
         } else if (req->type == ReqRx || req->type == ReqRxRC) {
             for (int i = 0; i < req->n; i++)
                 size[i] = req->recv.data_len[i];
-            UCCL_LOG_PLUGIN << "Test Rx done, " << size[0] << "B, ureq ptr:" << req;
+            UCCL_LOG_PLUGIN << "Test Rx done, " << size[0] << "B, ureq ptr:" << req << ", req->type:" << req->type;
         } else if (req->type == ReqFlush) {
             // Do nothing.
             UCCL_LOG_PLUGIN << "Test Flush done, " << size[0] << "B, ureq ptr:" << req;
