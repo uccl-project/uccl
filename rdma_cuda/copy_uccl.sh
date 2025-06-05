@@ -1,8 +1,7 @@
 #!/bin/bash
 
-scp $UCCL_HOME/rdma_cuda/libnccl-net-uccl.so root@192.168.102.191:$UCCL_HOME/rdma_cuda/
-scp $UCCL_HOME/rdma_cuda/libnccl-net-uccl.so root@192.168.102.192:$UCCL_HOME/rdma_cuda/
-scp $UCCL_HOME/rdma_cuda/libnccl-net-uccl.so root@192.168.102.193:$UCCL_HOME/rdma_cuda/
-scp $UCCL_HOME/rdma_cuda/libnccl-net-uccl.so root@192.168.102.194:$UCCL_HOME/rdma_cuda/
-scp $UCCL_HOME/rdma_cuda/libnccl-net-uccl.so root@192.168.102.195:$UCCL_HOME/rdma_cuda/
-
+for host in 192.168.102.191 192.168.102.192 192.168.102.193 192.168.102.194 192.168.102.195
+do
+  ssh root@$host "mkdir -p $UCCL_HOME"
+  scp -r $UCCL_HOME root@$host:/root/
+done
