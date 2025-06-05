@@ -85,8 +85,13 @@ struct ucclSendComm {
 
 ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
     std::cout << "Hello UCCL!" << std::endl;
+
+#ifdef LAZY_CREATE_ENGINE
+    ep = std::make_shared<RDMAEndpoint>(NUM_DEVICES, NUM_ENGINES);
+#else
     ep = std::make_shared<RDMAEndpoint>(DEVNAME_SUFFIX_LIST, NUM_DEVICES,
                                         NUM_ENGINES);
+#endif
     return ncclSuccess;
 }
 
@@ -118,6 +123,10 @@ static bool GdrSupportInitOnce() {
 
 ncclResult_t pluginGetProperties(int dev, ncclNetProperties_v8_t *props) {
     auto factory_dev = RDMAFactory::get_factory_dev(dev);
+
+#ifdef LAZY_CREATE_ENGINE
+    ep->initialize_engine_by_dev(dev);
+#endif
 
     props->name = factory_dev->ib_name;
 

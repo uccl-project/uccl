@@ -8,6 +8,8 @@ UCCL=${1:-1}
 NUM_PROCS=${2:-2}
 NUM_GPUS_PER_NODE=${3:-8}
 PROG_OPTION=${4:-0}
+PROCS_PER_NODE=${5:-1}
+HOSTNAME=${6:-"zhongjie_hosts"}
 
 # IP of Nodes.
 NODES="192.168.102.190,192.168.102.191,192.168.102.192,192.168.102.193,192.168.102.194,192.168.102.195"
@@ -115,9 +117,11 @@ echo -e "Details: NCCL_NCHANNELS=${NUM_CHUNNEL} \n\t NCCL_P2P_NET_CHUNKSIZE=${P2
 # --host ${NODES} \
 
 
-mpirun --allow-run-as-root -np ${NUM_PROCS} \
+echo $NUM_PROCS
+echo $PROCS_PER_NODE
+mpirun --allow-run-as-root -np ${NUM_PROCS} -N ${PROCS_PER_NODE} \
     -x NCCL_IB_DISABLE=0  \
-    -hostfile ./zhongjie_hosts \
+    -hostfile ${HOSTNAME} \
     -x NCCL_DEBUG=WARN \
     -x NCCL_IB_HCA=mlx5_1,mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7,mlx5_8 \
     -x NCCL_TOPO_FILE=/root/virtualTopology-gdr-h100-q35.xml \

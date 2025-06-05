@@ -276,6 +276,47 @@ void UcclRDMAEngine::handle_rx_work(void) {
     }
 }
 
+bool RDMAEndpoint::initialize_engine_by_dev(int dev){
+    
+    int start_engine_idx = dev * num_engines_per_dev_;
+    int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
+
+    static std::once_flag flag_once;
+    std::call_once(flag_once, [&]() {
+        for (int i = start_engine_idx; i <= end_engine_idx; i++) {
+            RDMAFactory::init_dev(DEVNAME_SUFFIX_LIST[i]);
+        }
+    });
+
+    for (int i = start_engine_idx; i <= end_engine_idx; i++)
+        channel_vec_[i] = new Channel();
+    if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
+        eqds_[dev] = new eqds::EQDS(dev);
+    }
+
+    for (int engine_id = start_engine_idx; engine_id <= end_engine_idx;
+         engine_id++) {
+        
+        int engine_cpu_id = ENGINE_CPU_START_LIST[dev] + engine_id % num_engines_per_dev_;
+        DCHECK(engine_cpu_id < NUM_CPUS) << engine_cpu_id << ", " << NUM_CPUS;
+        
+        engine_vec_.emplace_back(std::make_unique<UcclRDMAEngine>(
+            dev, engine_id, channel_vec_[engine_id], eqds_[dev]));
+
+        engine_th_vec_.emplace_back(std::make_unique<std::thread>(
+            [engine_ptr = engine_vec_.back().get(), engine_id,
+             engine_cpu_id]() {
+                UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
+                        << "running on CPU " << engine_cpu_id;
+                pin_thread_to_cpu(engine_cpu_id);
+                engine_ptr->run();
+            }));
+    }
+
+    create_listen_socket(&test_listen_fds_[dev], kTestListenPort + dev);
+    return true;
+}
+
 void UcclRDMAEngine::handle_tx_work(void) {
     Channel::Msg tx_work;
     int budget;
@@ -557,6 +598,22 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg &ctrl_work) {
 
     // Detach the thread to allow it to run independently.
     qp_setup_thread.detach();
+}
+
+RDMAEndpoint::RDMAEndpoint(int num_devices,
+                           int num_engines_per_dev)
+    : num_devices_(num_devices), num_engines_per_dev_(num_engines_per_dev),
+        stats_thread_([this]() { stats_thread_fn(); }) {
+    
+    static std::once_flag flag_once;
+    std::call_once(flag_once, [&]() {
+        rdma_ctl_ = rdma_ctl;
+        ctx_pool_ = new SharedPool<PollCtx *, true>(kMaxInflightMsg);
+        ctx_pool_buf_ = new uint8_t[kMaxInflightMsg * sizeof(PollCtx)];
+        for (int i = 0; i < kMaxInflightMsg; i++) {
+            ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());
+        }
+    });
 }
 
 RDMAEndpoint::RDMAEndpoint(const uint8_t *devname_suffix_list, int num_devices,
