@@ -908,6 +908,15 @@ void RDMAEndpoint::install_flow_on_engines(int dev, PeerID peer_id,
     uccl_poll(poll_ctx);
   }
 
+  for (int i = 0; i < num_engines_per_dev_; i++) {
+    auto engine_idx = find_first_engine_idx_on_dev(dev) + i;
+    auto* poll_ctx = install_flow_on_engine(engine_idx, peer_id, meta);
+    poll_ctx_vec.push_back(poll_ctx);
+  }
+  for (auto* poll_ctx : poll_ctx_vec) {
+    uccl_poll(poll_ctx);
+  }
+
   UCCL_LOG_EP << "Installed flow " << flow_id << " on all engines";
 }
 
