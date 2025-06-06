@@ -5,9 +5,7 @@ set -e
 
 # Directories to format (excluding thirdparty/, scripts/, doc/, etc.)
 DIRECTORIES=("afxdp" "efa" "gpu_driven" "rdma_cuda" "rdma_hip" "misc")
-
-# Extensions to format
-EXTENSIONS=("cpp" "cxx" "cc" "h" "hpp")
+EXTENSIONS=("cpp" "cxx" "cc" "h" "hpp" "cu")
 
 # Check if clang-format is installed
 if ! command -v clang-format &> /dev/null; then
@@ -17,15 +15,26 @@ fi
 
 echo "Formatting C++ files..."
 
+FILES=()
+
 for DIR in "${DIRECTORIES[@]}"; do
     if [ -d "$DIR" ]; then
         for EXT in "${EXTENSIONS[@]}"; do
-            FILES=$(find "$DIR" -type f -name "*.${EXT}")
-            if [ -n "$FILES" ]; then
-                echo "$FILES" | xargs clang-format -i
-            fi
+            while IFS= read -r -d '' FILE; do
+                FILES+=("$FILE")
+            done < <(find "$DIR" -type f -name "*.${EXT}" -print0)
         done
     fi
+done
+
+if [ ${#FILES[@]} -eq 0 ]; then
+    echo "No files to format."
+    exit 0
+fi
+
+for FILE in "${FILES[@]}"; do
+    echo "Formatting $FILE"
+    clang-format -i "$FILE"
 done
 
 echo "Formatting complete."
