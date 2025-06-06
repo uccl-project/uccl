@@ -28,19 +28,19 @@ For example, existing network transports under NCCL (i.e., kernel TCP and RDMA) 
 Instead, UCCL employs packet spraying in software to leverage abundant network paths to avoid "single-path-of-congestion". 
 More benefits include: 1) packet spraying with 256 paths, 2) advanced congestion control such as latency-based and receiver-driven ones, 3) efficient loss recovery by selective repeat, and 4) widely usable in public clouds with legacy NICs and Ethernet. 
 
-On two AWS `g4dn.8xlarge` instances with 1x50G NICs and 1xT4 GPUs under the same cluster placement group, UCCL outperforms NCCL by up to **3.7x** for AllReduce: 
+On two AWS `g4dn.8xlarge` instances with 1x50G ENA NICs and 1xT4 GPUs under the same cluster placement group, UCCL outperforms NCCL by up to **3.7x** for AllReduce: 
 
-<p align="center"> <img src="./doc/images/allreduce_perf.png" alt="" width="700"> </p>
+<p align="center"> <img src="./doc/images/allreduce_2_g4dn.png" alt="" width="700"> </p>
 
-On four AWS `p4d.24xlarge` instances with 4x100G NICs and 8xA100 GPUs, UCCL outperforms NCCL by up to **3.3x** for AlltoAll: 
+On four AWS `p4d.24xlarge` instances with 4x100G EFA NICs and 8xA100 GPUs, UCCL outperforms NCCL by up to **3.3x** for AlltoAll: 
 
-<p align="center"> <img src="./doc/images/alltoall_perf.png" alt="" width="700"> </p>
+<p align="center"> <img src="./doc/images/alltoall_4_p4d.png" alt="" width="700"> </p>
 
-On two cross-rack HGX nodes with 8x400G CX-7 RoCE NICs and 8xH100 GPUs, UCCL outperforms NCCL by up to **1.6x** for AlltoAll:
+On six HGX servers (across two racks) with 8x400G CX-7 RoCE NICs and 8xH100 GPUs, UCCL outperforms NCCL by up to **2.5x** for AllReduce:
 
-<p align="center"> <img src="./doc/images/alltoall_perf2.png" alt="" width="700"> </p>
+<p align="center"> <img src="./doc/images/allreduce_6_hgx.png" alt="" width="700"> </p>
 
-Feel free to check out our full [technical report](https://arxiv.org/pdf/2504.17307) and [slides](./doc/slides/uccl_slides.pdf).
+Feel free to check out our full [technical report](https://arxiv.org/pdf/2504.17307) and [slides](https://drive.google.com/file/d/1YsgMNPeCV797sYPiCWAT0AMfc0WgIhP0/view?usp=sharing).
 
 ## Dev Plan
 
