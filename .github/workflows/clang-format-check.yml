@@ -18,15 +18,31 @@ jobs:
 
     - name: Check C++ formatting
       run: |
-        # List of directories to check
-        DIRECTORIES="afxdp efa gpu_driven rdma_cuda rdma_hip misc"
-        EXTENSIONS="cpp cxx cc h hpp"
+        set -e
 
-        # Gather files
-        FILES=$(find $DIRECTORIES \( $(echo $EXTENSIONS | sed 's/ / -o -name "*./g') \) -type f -print)
+        DIRECTORIES=("afxdp" "efa" "gpu_driven" "rdma_cuda" "rdma_hip" "misc")
+        EXTENSIONS=("cpp" "cxx" "cc" "h" "hpp")
+
+        FILES=()
+
+        for DIR in "${DIRECTORIES[@]}"; do
+          if [ -d "$DIR" ]; then
+            for EXT in "${EXTENSIONS[@]}"; do
+              while IFS= read -r -d '' FILE; do
+                FILES+=("$FILE")
+              done < <(find "$DIR" -type f -name "*.${EXT}" -print0)
+            done
+          fi
+        done
+
+        if [ ${#FILES[@]} -eq 0 ]; then
+          echo "No files found to check."
+          exit 0
+        fi
 
         echo "Checking formatting on files:"
-        echo "$FILES"
+        for FILE in "${FILES[@]}"; do
+          echo "$FILE"
+        done
 
-        # Run clang-format in check mode
-        clang-format --dry-run --Werror $FILES
+        clang-format --dry-run --Werror "${FILES[@]}"
