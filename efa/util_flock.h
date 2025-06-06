@@ -9,67 +9,66 @@
  * a lock file.
  */
 
-#include <string>
-#include <unistd.h>
-#include <fcntl.h>
 #include <stdexcept>
+#include <string>
+#include <fcntl.h>
+#include <unistd.h>
 
 #define UCCL_LOCKFILE "/tmp/uccl.lockfile"
 
 class ProcessFileLock {
-public:
-    explicit ProcessFileLock()
-        : lockfile_(UCCL_LOCKFILE), fd_(-1) {
-        fd_ = open(lockfile_.c_str(), O_RDWR | O_CREAT, 0644);
-        if (fd_ < 0) {
-            throw std::runtime_error("Failed to open lock file");
-        }
+ public:
+  explicit ProcessFileLock() : lockfile_(UCCL_LOCKFILE), fd_(-1) {
+    fd_ = open(lockfile_.c_str(), O_RDWR | O_CREAT, 0644);
+    if (fd_ < 0) {
+      throw std::runtime_error("Failed to open lock file");
     }
+  }
 
-    void lock() {
-        struct flock fl;
-        fl.l_type = F_WRLCK;
-        fl.l_whence = SEEK_SET;
-        fl.l_start = 0;
-        fl.l_len = 0;
+  void lock() {
+    struct flock fl;
+    fl.l_type = F_WRLCK;
+    fl.l_whence = SEEK_SET;
+    fl.l_start = 0;
+    fl.l_len = 0;
 
-        if (fcntl(fd_, F_SETLKW, &fl) < 0) {
-            throw std::runtime_error("Failed to acquire lock");
-        }
+    if (fcntl(fd_, F_SETLKW, &fl) < 0) {
+      throw std::runtime_error("Failed to acquire lock");
     }
+  }
 
-    bool try_lock() {
-        struct flock fl;
-        fl.l_type = F_WRLCK;
-        fl.l_whence = SEEK_SET;
-        fl.l_start = 0;
-        fl.l_len = 0;
+  bool try_lock() {
+    struct flock fl;
+    fl.l_type = F_WRLCK;
+    fl.l_whence = SEEK_SET;
+    fl.l_start = 0;
+    fl.l_len = 0;
 
-        return fcntl(fd_, F_SETLK, &fl) >= 0;
+    return fcntl(fd_, F_SETLK, &fl) >= 0;
+  }
+
+  void unlock() {
+    struct flock fl;
+    fl.l_type = F_UNLCK;
+    fl.l_whence = SEEK_SET;
+    fl.l_start = 0;
+    fl.l_len = 0;
+
+    if (fcntl(fd_, F_SETLK, &fl) < 0) {
+      throw std::runtime_error("Failed to release lock");
     }
+  }
 
-    void unlock() {
-        struct flock fl;
-        fl.l_type = F_UNLCK;
-        fl.l_whence = SEEK_SET;
-        fl.l_start = 0;
-        fl.l_len = 0;
-
-        if (fcntl(fd_, F_SETLK, &fl) < 0) {
-            throw std::runtime_error("Failed to release lock");
-        }
+  ~ProcessFileLock() {
+    if (fd_ >= 0) {
+      close(fd_);
     }
+  }
 
-    ~ProcessFileLock() {
-        if (fd_ >= 0) {
-            close(fd_);
-        }
-    }
+  ProcessFileLock(ProcessFileLock const&) = delete;
+  ProcessFileLock& operator=(ProcessFileLock const&) = delete;
 
-    ProcessFileLock(const ProcessFileLock&) = delete;
-    ProcessFileLock& operator=(const ProcessFileLock&) = delete;
-
-private:
-    std::string lockfile_;
-    int fd_;
+ private:
+  std::string lockfile_;
+  int fd_;
 };
