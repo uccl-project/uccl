@@ -45,7 +45,7 @@ fi
 
 for FILE in "${FILES[@]}"; do
     echo "Formatting $FILE"
-    clang-format --dry-run --Werror "$FILE"
+    clang-format -i "$FILE"
 done
 
 echo "Formatting complete."
