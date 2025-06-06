@@ -7,7 +7,6 @@
 #include <arpa/inet.h>
 #include <assert.h>
 #include <cuda_runtime.h>
-#include <infiniband/efadv.h>
 #include <infiniband/verbs.h>
 #include <netinet/in.h>
 #include <stdio.h>
