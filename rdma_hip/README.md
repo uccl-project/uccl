@@ -16,7 +16,7 @@ Modify the below constants based on the environment.
 ```
 ROCE_NET:               true (RoCE) or false (Infiniband)
 
-SINGLE_CTRL_NIC:        The device name of control NIC. Set to empty string if each RDMA NIC has its own IP address. UCCL will detect them automatically.
+SINGLE_CTRL_NIC:        The device name of control NIC (can be just prefix). Set to empty string if each RDMA NIC has its own IP address. UCCL will detect them automatically.
 ```
 
 2. NIC
