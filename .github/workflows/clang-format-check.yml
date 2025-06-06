@@ -27,7 +27,7 @@ jobs:
         set -e
 
         DIRECTORIES=("afxdp" "efa" "gpu_driven" "rdma_cuda" "rdma_hip" "misc")
-        EXTENSIONS=("cpp" "cxx" "cc" "h" "hpp")
+        EXTENSIONS=("cpp" "cxx" "cc" "h" "hpp" "cu" "cuh")
 
         FILES=()
 
