@@ -28,6 +28,12 @@ jobs:
 
         DIRECTORIES=("afxdp" "efa" "gpu_driven" "rdma_cuda" "rdma_hip" "misc")
         EXTENSIONS=("cpp" "cxx" "cc" "h" "hpp" "cu" "cuh")
+        EXCLUDE=("afxdp/lib/libbpf" "afxdp/lib/xdp-tools")
+
+        EXCLUDE_ARGS=()
+        for EXC in "${EXCLUDE[@]}"; do
+            EXCLUDE_ARGS+=( -path "$EXC" -prune -o )
+        done
 
         FILES=()
 
@@ -36,7 +42,7 @@ jobs:
             for EXT in "${EXTENSIONS[@]}"; do
               while IFS= read -r -d '' FILE; do
                 FILES+=("$FILE")
-              done < <(find "$DIR" -type f -name "*.${EXT}" -print0)
+              done < <(find "$DIR" "${EXCLUDE_ARGS[@]}" -type f -name "*.${EXT}" -print0)
             done
           fi
         done
