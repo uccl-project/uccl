@@ -1,0 +1,32 @@
+name: Clang Format Check
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  clang-format-check:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install clang-format
+      run: sudo apt-get update && sudo apt-get install -y clang-format
+
+    - name: Check C++ formatting
+      run: |
+        # List of directories to check
+        DIRECTORIES="afxdp efa gpu_driven rdma_cuda rdma_hip misc"
+        EXTENSIONS="cpp cxx cc h hpp"
+
+        # Gather files
+        FILES=$(find $DIRECTORIES \( $(echo $EXTENSIONS | sed 's/ / -o -name "*./g') \) -type f -print)
+
+        echo "Checking formatting on files:"
+        echo "$FILES"
+
+        # Run clang-format in check mode
+        clang-format --dry-run --Werror $FILES

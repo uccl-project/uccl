@@ -1,16 +1,15 @@
 #pragma once
 
-#include <unistd.h>
-
 #include <cstdint>
 #include <string>
 #include <thread>
+#include <unistd.h>
 
 // #define STATS
 
-/// Interface configuration. 
+/// Interface configuration.
 // For Azure HPC Ubuntu 22.04 only, normally it should be "mlx5_".
-static const char *IB_DEVICE_NAME_PREFIX = "mlx5_ib";
+static char const* IB_DEVICE_NAME_PREFIX = "mlx5_ib";
 static constexpr bool ROCE_NET = false;
 // If SINGLE_CTRL_NIC is set, all devices will use the same IP.
 static std::string SINGLE_CTRL_NIC("eth0");
@@ -18,7 +17,7 @@ static constexpr uint8_t DEVNAME_SUFFIX_LIST[8] = {0, 1, 2, 3, 4, 5, 6, 7};
 static constexpr uint8_t NUM_DEVICES = 1;
 // static constexpr uint8_t DEVNAME_SUFFIX_LIST[8] = {0, 2, 4, 6, 0, 0, 0, 0};
 // static constexpr uint8_t NUM_DEVICES = 4;
-static constexpr double LINK_BANDWIDTH = 200.0 * 1e9 / 8; // 200Gbps
+static constexpr double LINK_BANDWIDTH = 200.0 * 1e9 / 8;  // 200Gbps
 static constexpr uint32_t MAX_PEER = 256;
 // Maximum number of flows (one-way) on each engine.
 static constexpr uint32_t MAX_FLOW = 256;
@@ -34,16 +33,11 @@ static constexpr uint8_t GID_IDX = ROCE_NET ? 3 : 0;
 // # of engines per device.
 static constexpr uint32_t NUM_ENGINES = 3;
 static uint32_t NUM_CPUS = std::thread::hardware_concurrency();
-// Each dev use [ENGINE_CPU_START_LIST[dev], ENGINE_CPU_START_LIST[dev] + NUM_ENGINES)
+// Each dev use [ENGINE_CPU_START_LIST[dev], ENGINE_CPU_START_LIST[dev] +
+// NUM_ENGINES)
 static uint32_t ENGINE_CPU_START_LIST[8] = {
-    1,
-    16 + NUM_ENGINES,
-    16 + 2 * NUM_ENGINES,
-    16 + 3 * NUM_ENGINES,
-    48,
-    48 + NUM_ENGINES,
-    48 + 2 * NUM_ENGINES,
-    48 + 3 * NUM_ENGINES,
+    1,  16 + NUM_ENGINES, 16 + 2 * NUM_ENGINES, 16 + 3 * NUM_ENGINES,
+    48, 48 + NUM_ENGINES, 48 + 2 * NUM_ENGINES, 48 + 3 * NUM_ENGINES,
 };
 
 // Path/QP per engine. The total number is NUM_ENGINES * kPortEntropy.
@@ -56,25 +50,29 @@ static constexpr uint32_t kChunkSize = 32 << 10;
 static constexpr bool kBypassPacing = true;
 
 // Limit the per-flow outstanding bytes on each engine.
-static constexpr uint32_t kMaxUnAckedBytesPerFlow = 2 * std::max(kChunkSize, 32768u);
+static constexpr uint32_t kMaxUnAckedBytesPerFlow =
+    2 * std::max(kChunkSize, 32768u);
 // Limit the outstanding bytes on each engine.
-// Low means if a flow exceeds its own budget but doesn't exceed the Low threshold, it can send until Low threshold.
-static constexpr uint32_t kMaxUnAckedBytesPerEngineLow = 18 * std::max(kChunkSize, 32768u);
+// Low means if a flow exceeds its own budget but doesn't exceed the Low
+// threshold, it can send until Low threshold.
+static constexpr uint32_t kMaxUnAckedBytesPerEngineLow =
+    18 * std::max(kChunkSize, 32768u);
 // High means if all flows reach this threshold, all flows can't send any bytes.
-static constexpr uint32_t kMaxUnAckedBytesPerEngineHigh = 24 * std::max(kChunkSize, 32768u);
+static constexpr uint32_t kMaxUnAckedBytesPerEngineHigh =
+    24 * std::max(kChunkSize, 32768u);
 
 // Congestion control algorithm.
 enum SenderCCA {
-    SENDER_CCA_NONE,
-    // Timely [SIGCOMM'15]
-    SENDER_CCA_TIMELY,
-    // Swift [SIGCOMM'20]
-    SENDER_CCA_SWIFT,
+  SENDER_CCA_NONE,
+  // Timely [SIGCOMM'15]
+  SENDER_CCA_TIMELY,
+  // Swift [SIGCOMM'20]
+  SENDER_CCA_SWIFT,
 };
 enum ReceiverCCA {
-    RECEIVER_CCA_NONE,
-    // EQDS [NSDI'22]
-    RECEIVER_CCA_EQDS,
+  RECEIVER_CCA_NONE,
+  // EQDS [NSDI'22]
+  RECEIVER_CCA_EQDS,
 };
 static constexpr enum SenderCCA kSenderCCA = SENDER_CCA_TIMELY;
 static constexpr enum ReceiverCCA kReceiverCCA = RECEIVER_CCA_NONE;
@@ -85,23 +83,23 @@ static_assert(kSenderCCA != SENDER_CCA_NONE ||
 
 // Note that load-based policy shoud >= ENGINE_POLICY_LOAD.
 enum engine_lb_policy {
-    // Bind each flow to one engine.
-    ENGINE_POLICY_BIND,
-    // Round-robin among engines.
-    ENGINE_POLICY_RR,
-    // Choose obliviously.
-    ENGINE_POLICY_OBLIVIOUS,
-    // Load balancing based on the load of each engine.
-    ENGINE_POLICY_LOAD,
-    // Variant of ENGINE_POLICY_LOAD, which uses power of two.
-    ENGINE_POLICY_LOAD_POT,
+  // Bind each flow to one engine.
+  ENGINE_POLICY_BIND,
+  // Round-robin among engines.
+  ENGINE_POLICY_RR,
+  // Choose obliviously.
+  ENGINE_POLICY_OBLIVIOUS,
+  // Load balancing based on the load of each engine.
+  ENGINE_POLICY_LOAD,
+  // Variant of ENGINE_POLICY_LOAD, which uses power of two.
+  ENGINE_POLICY_LOAD_POT,
 };
 static constexpr enum engine_lb_policy kEngineLBPolicy = ENGINE_POLICY_RR;
 
 static const uint32_t PACER_CPU_START = 3 * NUM_CPUS / 4;
 
-constexpr static int kTotalQP = kPortEntropy + 1 /* Credit QP */ +
-                                (kRCMode ? 0 : 1) /* Ctrl QP */;
+constexpr static int kTotalQP =
+    kPortEntropy + 1 /* Credit QP */ + (kRCMode ? 0 : 1) /* Ctrl QP */;
 // Recv buffer size smaller than kRCSize will be handled by RC directly.
 static constexpr uint32_t kRCSize = 8192;
 // static constexpr uint32_t kRCSize = 5000000;
@@ -173,14 +171,14 @@ static constexpr std::size_t kFastRexmitDupAckThres = ROCE_NET ? 32 : 65536;
 // Maximum number of Retransmission Timeout (RTO) before aborting the flow.
 static constexpr uint32_t kRTOAbortThreshold = 50;
 
-static constexpr uint32_t kMAXRTTUS = 10000; 
+static constexpr uint32_t kMAXRTTUS = 10000;
 // Constant/Dynamic RTO.
 static constexpr bool kConstRTO = true;
 // kConstRTO == true: Constant retransmission timeout in microseconds.
 static constexpr double kRTOUSec = 1000;
 // kConstRTO == false: Minimum retransmission timeout in microseconds.
 static constexpr double kMinRTOUsec = 1000;
-static constexpr uint32_t kRTORTT = 4;      // RTO = kRTORTT RTTs
+static constexpr uint32_t kRTORTT = 4;  // RTO = kRTORTT RTTs
 
 // Slow timer (periodic processing) interval in microseconds.
 static constexpr size_t kSlowTimerIntervalUs = 1000;
@@ -194,5 +192,8 @@ static constexpr bool kTestConstantRate = false;
 static constexpr bool kTestLoss = false;
 static constexpr double kTestLossRate = 0.0;
 // Disable RTO.
-static constexpr bool kTestNoRTO = (ROCE_NET || kTestLoss) ? false : true; // Infiniband is lossless, disable RTO even for UC.
+static constexpr bool kTestNoRTO =
+    (ROCE_NET || kTestLoss)
+        ? false
+        : true;  // Infiniband is lossless, disable RTO even for UC.
 /// Debugging and testing.

@@ -3,31 +3,27 @@
  * @brief Test for UCCL RDMA transport
  */
 
-#include <chrono>
-#include <thread>
-
-#include <signal.h>
-
-#include <gflags/gflags.h>
-#include <glog/logging.h>
-
+#include "cuda_runtime.h"
 #include "transport.h"
 #include "transport_config.h"
 #include "util_timer.h"
-
-#include "cuda_runtime.h"
+#include <gflags/gflags.h>
+#include <glog/logging.h>
+#include <chrono>
+#include <thread>
+#include <signal.h>
 
 // #define GPU 0
 
 using namespace uccl;
 
-static volatile bool quit = false;
+static bool volatile quit = false;
 
 std::optional<RDMAEndpoint> ep;
 
 void interrupt_handler(int signal) {
-    (void)signal;
-    quit = true;
+  (void)signal;
+  quit = true;
 }
 
 DEFINE_bool(server, false, "Whether this is a server receiving traffic.");
@@ -42,103 +38,103 @@ DEFINE_uint32(iterations, 1000000, "Number of iterations to run.");
 DEFINE_bool(flush, false, "Whether to flush after receiving.");
 DEFINE_bool(bi, false, "Whether to run bidirectional test.");
 
-static void server_basic(ConnID conn_id, struct Mhandle *mhandle, void *data) {
-    for (int i = 0; i < FLAGS_iterations; i++) {
-        int len = 65536;
-        void *recv_data = data;
+static void server_basic(ConnID conn_id, struct Mhandle* mhandle, void* data) {
+  for (int i = 0; i < FLAGS_iterations; i++) {
+    int len = 65536;
+    void* recv_data = data;
 
-        struct ucclRequest ureq;
-        DCHECK(ep->uccl_recv_async((UcclFlow *)conn_id.context, &mhandle,
-                                   &recv_data, &len, 1, &ureq) == 0);
+    struct ucclRequest ureq;
+    DCHECK(ep->uccl_recv_async((UcclFlow*)conn_id.context, &mhandle, &recv_data,
+                               &len, 1, &ureq) == 0);
 
-        ep->uccl_poll_ureq(&ureq);
+    ep->uccl_poll_ureq(&ureq);
 
-        // verify data
-        for (int i = 0; i < 65536 / 4; i++) {
-            assert(((uint32_t *)data)[i] == 0x123456);
-        }
-
-        // VLOG(5) << "Iteration " << i << " done";
-        std::cout << "Iteration " << i << " done" << std::endl;
-    }
-}
-
-static void client_basic(ConnID conn_id, struct Mhandle *mhandle, void *data) {
-    // Fill data in a pattern of 0x123456,0x123456,0x123456...
+    // verify data
     for (int i = 0; i < 65536 / 4; i++) {
-        ((uint32_t *)data)[i] = 0x123456;
+      assert(((uint32_t*)data)[i] == 0x123456);
     }
 
-    for (int i = 0; i < FLAGS_iterations; i++) {
-        void *send_data = data;
-        struct ucclRequest ureq;
-        while (ep->uccl_send_async((UcclFlow *)conn_id.context, mhandle,
-                                   send_data, 65536, &ureq)) {
-        }
-
-        ep->uccl_poll_ureq(&ureq);
-
-        // VLOG(5) << "Iteration " << i << " done";
-        std::cout << "Iteration " << i << " done" << std::endl;
-    }
+    // VLOG(5) << "Iteration " << i << " done";
+    std::cout << "Iteration " << i << " done" << std::endl;
+  }
 }
 
-static void server_lat(ConnID conn_id, struct Mhandle *mhandle, void *data) {
-    // Latency is measured at server side as it is asynchronous receive
-    std::vector<uint64_t> lat_vec;
+static void client_basic(ConnID conn_id, struct Mhandle* mhandle, void* data) {
+  // Fill data in a pattern of 0x123456,0x123456,0x123456...
+  for (int i = 0; i < 65536 / 4; i++) {
+    ((uint32_t*)data)[i] = 0x123456;
+  }
 
-    if (FLAGS_warmup) {
-        for (int i = 0; i < 1000; i++) {
-            int len = FLAGS_msize;
-            void *recv_data = data;
-            struct ucclRequest ureq;
-            DCHECK(ep->uccl_recv_async((UcclFlow *)conn_id.context, &mhandle,
-                                       &recv_data, &len, 1, &ureq) == 0);
-            ep->uccl_poll_ureq(&ureq);
-        }
+  for (int i = 0; i < FLAGS_iterations; i++) {
+    void* send_data = data;
+    struct ucclRequest ureq;
+    while (ep->uccl_send_async((UcclFlow*)conn_id.context, mhandle, send_data,
+                               65536, &ureq)) {
     }
 
-    for (int i = 0; i < FLAGS_iterations; i++) {
-        int len = FLAGS_msize;
-        void *recv_data = data;
-        auto t1 = rdtsc();
-        struct ucclRequest ureq;
-        DCHECK(ep->uccl_recv_async((UcclFlow *)conn_id.context, &mhandle,
-                                   &recv_data, &len, 1, &ureq) == 0);
-        ep->uccl_poll_ureq(&ureq);
-        auto t2 = rdtsc();
-        lat_vec.push_back(to_usec(t2 - t1, freq_ghz));
-    }
-    std::sort(lat_vec.begin(), lat_vec.end());
-    std::cout << "Min: " << lat_vec[0] << "us" << std::endl;
-    std::cout << "P50: " << lat_vec[FLAGS_iterations / 2] << "us" << std::endl;
-    std::cout << "P90: " << lat_vec[FLAGS_iterations * 9 / 10] << "us"
-              << std::endl;
-    std::cout << "P99: " << lat_vec[FLAGS_iterations * 99 / 100] << "us"
-              << std::endl;
-    std::cout << "Max: " << lat_vec[FLAGS_iterations - 1] << "us" << std::endl;
+    ep->uccl_poll_ureq(&ureq);
+
+    // VLOG(5) << "Iteration " << i << " done";
+    std::cout << "Iteration " << i << " done" << std::endl;
+  }
 }
 
-static void client_lat(ConnID conn_id, struct Mhandle *mhandle, void *data) {
-    if (FLAGS_warmup) {
-        for (int i = 0; i < 1000; i++) {
-            void *send_data = data;
-            struct ucclRequest ureq;
-            while (ep->uccl_send_async((UcclFlow *)conn_id.context, mhandle,
-                                       send_data, FLAGS_msize, &ureq)) {
-            }
-            ep->uccl_poll_ureq(&ureq);
-        }
-    }
+static void server_lat(ConnID conn_id, struct Mhandle* mhandle, void* data) {
+  // Latency is measured at server side as it is asynchronous receive
+  std::vector<uint64_t> lat_vec;
 
-    for (int i = 0; i < FLAGS_iterations; i++) {
-        void *send_data = data;
-        struct ucclRequest ureq;
-        while (ep->uccl_send_async((UcclFlow *)conn_id.context, mhandle,
-                                   send_data, FLAGS_msize, &ureq)) {
-        }
-        ep->uccl_poll_ureq(&ureq);
+  if (FLAGS_warmup) {
+    for (int i = 0; i < 1000; i++) {
+      int len = FLAGS_msize;
+      void* recv_data = data;
+      struct ucclRequest ureq;
+      DCHECK(ep->uccl_recv_async((UcclFlow*)conn_id.context, &mhandle,
+                                 &recv_data, &len, 1, &ureq) == 0);
+      ep->uccl_poll_ureq(&ureq);
     }
+  }
+
+  for (int i = 0; i < FLAGS_iterations; i++) {
+    int len = FLAGS_msize;
+    void* recv_data = data;
+    auto t1 = rdtsc();
+    struct ucclRequest ureq;
+    DCHECK(ep->uccl_recv_async((UcclFlow*)conn_id.context, &mhandle, &recv_data,
+                               &len, 1, &ureq) == 0);
+    ep->uccl_poll_ureq(&ureq);
+    auto t2 = rdtsc();
+    lat_vec.push_back(to_usec(t2 - t1, freq_ghz));
+  }
+  std::sort(lat_vec.begin(), lat_vec.end());
+  std::cout << "Min: " << lat_vec[0] << "us" << std::endl;
+  std::cout << "P50: " << lat_vec[FLAGS_iterations / 2] << "us" << std::endl;
+  std::cout << "P90: " << lat_vec[FLAGS_iterations * 9 / 10] << "us"
+            << std::endl;
+  std::cout << "P99: " << lat_vec[FLAGS_iterations * 99 / 100] << "us"
+            << std::endl;
+  std::cout << "Max: " << lat_vec[FLAGS_iterations - 1] << "us" << std::endl;
+}
+
+static void client_lat(ConnID conn_id, struct Mhandle* mhandle, void* data) {
+  if (FLAGS_warmup) {
+    for (int i = 0; i < 1000; i++) {
+      void* send_data = data;
+      struct ucclRequest ureq;
+      while (ep->uccl_send_async((UcclFlow*)conn_id.context, mhandle, send_data,
+                                 FLAGS_msize, &ureq)) {
+      }
+      ep->uccl_poll_ureq(&ureq);
+    }
+  }
+
+  for (int i = 0; i < FLAGS_iterations; i++) {
+    void* send_data = data;
+    struct ucclRequest ureq;
+    while (ep->uccl_send_async((UcclFlow*)conn_id.context, mhandle, send_data,
+                               FLAGS_msize, &ureq)) {
+    }
+    ep->uccl_poll_ureq(&ureq);
+  }
 }
 
 volatile uint64_t tx_cur_sec_bytes = 0;
@@ -149,298 +145,284 @@ uint64_t rx_prev_sec_bytes = 0;
 volatile uint64_t c_itr = 0;
 volatile uint64_t s_itr = 0;
 
-static void server_tpt(std::vector<ConnID> &conn_ids,
-                       std::vector<struct Mhandle *> &mhandles,
-                       std::vector<void *> &datas) {
-    s_itr = FLAGS_iterations;
-    s_itr *= FLAGS_nflow;
+static void server_tpt(std::vector<ConnID>& conn_ids,
+                       std::vector<struct Mhandle*>& mhandles,
+                       std::vector<void*>& datas) {
+  s_itr = FLAGS_iterations;
+  s_itr *= FLAGS_nflow;
 
-    int len[FLAGS_nflow][FLAGS_nreq][FLAGS_nmsg];
-    struct Mhandle *mhs[FLAGS_nflow][FLAGS_nreq][FLAGS_nmsg];
-    void *recv_data[FLAGS_nflow][FLAGS_nreq][FLAGS_nmsg];
+  int len[FLAGS_nflow][FLAGS_nreq][FLAGS_nmsg];
+  struct Mhandle* mhs[FLAGS_nflow][FLAGS_nreq][FLAGS_nmsg];
+  void* recv_data[FLAGS_nflow][FLAGS_nreq][FLAGS_nmsg];
 
-    int flag[FLAGS_nflow][FLAGS_nreq];
-    memset(flag, 0, sizeof(int) * FLAGS_nflow * FLAGS_nreq);
+  int flag[FLAGS_nflow][FLAGS_nreq];
+  memset(flag, 0, sizeof(int) * FLAGS_nflow * FLAGS_nreq);
 
-    std::vector<std::vector<ucclRequest>> ureq_vec(FLAGS_nflow);
-    for (int i = 0; i < FLAGS_nflow; i++) {
-        ureq_vec[i].resize(FLAGS_nreq);
+  std::vector<std::vector<ucclRequest>> ureq_vec(FLAGS_nflow);
+  for (int i = 0; i < FLAGS_nflow; i++) {
+    ureq_vec[i].resize(FLAGS_nreq);
+  }
+
+  for (int f = 0; f < FLAGS_nflow; f++) {
+    for (int r = 0; r < FLAGS_nreq; r++)
+      for (int m = 0; m < FLAGS_nmsg; m++) {
+        len[f][r][m] = FLAGS_msize;
+        recv_data[f][r][m] = reinterpret_cast<char*>(datas[f]) +
+                             r * FLAGS_msize * FLAGS_nmsg + m * FLAGS_msize;
+        mhs[f][r][m] = mhandles[f];
+      }
+  }
+
+  for (int f = 0; f < FLAGS_nflow; f++) {
+    for (int r = 0; r < FLAGS_nreq; r++) {
+      DCHECK(ep->uccl_recv_async((UcclFlow*)conn_ids[f].context, mhs[f][r],
+                                 recv_data[f][r], len[f][r], FLAGS_nmsg,
+                                 &ureq_vec[f][r]) == 0);
+      s_itr--;
+      rx_cur_sec_bytes += FLAGS_msize * FLAGS_nmsg;
     }
+  }
 
+  while (s_itr) {
     for (int f = 0; f < FLAGS_nflow; f++) {
-        for (int r = 0; r < FLAGS_nreq; r++)
-            for (int m = 0; m < FLAGS_nmsg; m++) {
-                len[f][r][m] = FLAGS_msize;
-                recv_data[f][r][m] = reinterpret_cast<char *>(datas[f]) +
-                                     r * FLAGS_msize * FLAGS_nmsg +
-                                     m * FLAGS_msize;
-                mhs[f][r][m] = mhandles[f];
-            }
-    }
-
-    for (int f = 0; f < FLAGS_nflow; f++) {
-        for (int r = 0; r < FLAGS_nreq; r++) {
-            DCHECK(ep->uccl_recv_async((UcclFlow *)conn_ids[f].context,
-                                       mhs[f][r], recv_data[f][r], len[f][r],
-                                       FLAGS_nmsg, &ureq_vec[f][r]) == 0);
-            s_itr--;
-            rx_cur_sec_bytes += FLAGS_msize * FLAGS_nmsg;
+      for (int r = 0; r < FLAGS_nreq; r++) {
+        if (quit) {
+          s_itr = 0;
+          break;
         }
-    }
+        if (!ep->uccl_poll_ureq_once(&ureq_vec[f][r])) continue;
 
-    while (s_itr) {
-        for (int f = 0; f < FLAGS_nflow; f++) {
-            for (int r = 0; r < FLAGS_nreq; r++) {
-                if (quit) {
-                    s_itr = 0;
-                    break;
-                }
-                if (!ep->uccl_poll_ureq_once(&ureq_vec[f][r]))
-                    continue;
-
-                if (!FLAGS_flush) {
-                    s_itr--;
-                    if (s_itr == 0)
-                        break;
-                    DCHECK(ep->uccl_recv_async((UcclFlow *)conn_ids[f].context,
-                                               mhs[f][r], recv_data[f][r],
-                                               len[f][r], FLAGS_nmsg,
-                                               &ureq_vec[f][r]) == 0);
-                    rx_cur_sec_bytes += FLAGS_msize * FLAGS_nmsg;
-                    continue;
-                }
-
-                if (flag[f][r] == 0) {
-                    DCHECK(ep->uccl_flush((UcclFlow *)conn_ids[f].context,
-                                          mhs[f][r], recv_data[f][r], len[f][r],
-                                          FLAGS_nmsg, &ureq_vec[f][r]) == 0);
-                    flag[f][r] = 1;
-                } else if (flag[f][r] == 1) {
-                    s_itr--;
-                    if (s_itr == 0)
-                        break;
-                    DCHECK(ep->uccl_recv_async((UcclFlow *)conn_ids[f].context,
-                                               mhs[f][r], recv_data[f][r],
-                                               len[f][r], FLAGS_nmsg,
-                                               &ureq_vec[f][r]) == 0);
-                    rx_cur_sec_bytes += FLAGS_msize * FLAGS_nmsg;
-                    flag[f][r] = 0;
-                }
-            }
+        if (!FLAGS_flush) {
+          s_itr--;
+          if (s_itr == 0) break;
+          DCHECK(ep->uccl_recv_async((UcclFlow*)conn_ids[f].context, mhs[f][r],
+                                     recv_data[f][r], len[f][r], FLAGS_nmsg,
+                                     &ureq_vec[f][r]) == 0);
+          rx_cur_sec_bytes += FLAGS_msize * FLAGS_nmsg;
+          continue;
         }
+
+        if (flag[f][r] == 0) {
+          DCHECK(ep->uccl_flush((UcclFlow*)conn_ids[f].context, mhs[f][r],
+                                recv_data[f][r], len[f][r], FLAGS_nmsg,
+                                &ureq_vec[f][r]) == 0);
+          flag[f][r] = 1;
+        } else if (flag[f][r] == 1) {
+          s_itr--;
+          if (s_itr == 0) break;
+          DCHECK(ep->uccl_recv_async((UcclFlow*)conn_ids[f].context, mhs[f][r],
+                                     recv_data[f][r], len[f][r], FLAGS_nmsg,
+                                     &ureq_vec[f][r]) == 0);
+          rx_cur_sec_bytes += FLAGS_msize * FLAGS_nmsg;
+          flag[f][r] = 0;
+        }
+      }
     }
+  }
 }
 
-static void client_tpt(std::vector<ConnID> &conn_ids,
-    std::vector<struct Mhandle *> &mhandles,
-    std::vector<void *> &datas) {
-    c_itr = FLAGS_iterations;
-    c_itr *= FLAGS_nflow;
+static void client_tpt(std::vector<ConnID>& conn_ids,
+                       std::vector<struct Mhandle*>& mhandles,
+                       std::vector<void*>& datas) {
+  c_itr = FLAGS_iterations;
+  c_itr *= FLAGS_nflow;
 
-    std::vector<std::vector<std::vector<struct ucclRequest>>> ureq_vec(
-    FLAGS_nflow);
-    for (int f = 0; f < FLAGS_nflow; f++) {
+  std::vector<std::vector<std::vector<struct ucclRequest>>> ureq_vec(
+      FLAGS_nflow);
+  for (int f = 0; f < FLAGS_nflow; f++) {
     ureq_vec[f].resize(FLAGS_nreq);
     for (int r = 0; r < FLAGS_nreq; r++) {
-    ureq_vec[f][r].resize(FLAGS_nmsg);
-    for (int n = 0; n < FLAGS_nmsg; n++)
-    ureq_vec[f][r][n] = {};
+      ureq_vec[f][r].resize(FLAGS_nmsg);
+      for (int n = 0; n < FLAGS_nmsg; n++) ureq_vec[f][r][n] = {};
     }
-    }
-    for (int f = 0; f < FLAGS_nflow; f++) {
+  }
+  for (int f = 0; f < FLAGS_nflow; f++) {
     for (int r = 0; r < FLAGS_nreq; r++) {
-    for (int n = 0; n < FLAGS_nmsg; n++) {
-    void *send_data = reinterpret_cast<char *>(datas[f]) +
-                r * FLAGS_msize * FLAGS_nmsg +
-                n * FLAGS_msize;
-    while (ep->uccl_send_async((UcclFlow *)conn_ids[f].context,
-                            mhandles[f], send_data, FLAGS_msize,
-                            &ureq_vec[f][r][n]) && !quit) {
-    }
-    ureq_vec[f][r][n].rtt_tsc = rdtsc();
-    tx_cur_sec_bytes += FLAGS_msize;
-    }
-    c_itr--;
-    }
-    }
-
-    int fin_msg = 0;
-
-    while (c_itr && !quit) {
-    for (int f = 0; f < FLAGS_nflow; f++) {
-    for (int r = 0; r < FLAGS_nreq; r++) {
-    for (int n = 0; n < FLAGS_nmsg; n++) {
-    if (ureq_vec[f][r][n].rtt_tsc == 0 || ep->uccl_poll_ureq_once(&ureq_vec[f][r][n])) {
-
-        ureq_vec[f][r][n].rtt_tsc = 0;
-
-        void *send_data = reinterpret_cast<char *>(datas[f]) +
-                        r * FLAGS_msize * FLAGS_nmsg +
-                        n * FLAGS_msize;
-        if (ep->uccl_send_async(
-                            (UcclFlow *)conn_ids[f].context,
-                            mhandles[f], send_data, FLAGS_msize,
-                            &ureq_vec[f][r][n])) {
-                                continue;
-                            }
+      for (int n = 0; n < FLAGS_nmsg; n++) {
+        void* send_data = reinterpret_cast<char*>(datas[f]) +
+                          r * FLAGS_msize * FLAGS_nmsg + n * FLAGS_msize;
+        while (ep->uccl_send_async((UcclFlow*)conn_ids[f].context, mhandles[f],
+                                   send_data, FLAGS_msize,
+                                   &ureq_vec[f][r][n]) &&
+               !quit) {
+        }
         ureq_vec[f][r][n].rtt_tsc = rdtsc();
         tx_cur_sec_bytes += FLAGS_msize;
-        if (++fin_msg == FLAGS_nreq) {
-            c_itr--;
-            fin_msg = 0;
+      }
+      c_itr--;
+    }
+  }
+
+  int fin_msg = 0;
+
+  while (c_itr && !quit) {
+    for (int f = 0; f < FLAGS_nflow; f++) {
+      for (int r = 0; r < FLAGS_nreq; r++) {
+        for (int n = 0; n < FLAGS_nmsg; n++) {
+          if (ureq_vec[f][r][n].rtt_tsc == 0 ||
+              ep->uccl_poll_ureq_once(&ureq_vec[f][r][n])) {
+            ureq_vec[f][r][n].rtt_tsc = 0;
+
+            void* send_data = reinterpret_cast<char*>(datas[f]) +
+                              r * FLAGS_msize * FLAGS_nmsg + n * FLAGS_msize;
+            if (ep->uccl_send_async((UcclFlow*)conn_ids[f].context, mhandles[f],
+                                    send_data, FLAGS_msize,
+                                    &ureq_vec[f][r][n])) {
+              continue;
+            }
+            ureq_vec[f][r][n].rtt_tsc = rdtsc();
+            tx_cur_sec_bytes += FLAGS_msize;
+            if (++fin_msg == FLAGS_nreq) {
+              c_itr--;
+              fin_msg = 0;
+            }
+          }
+          if (quit) {
+            c_itr = 0;
+            break;
+          }
         }
+      }
     }
-    if (quit) {
-        c_itr = 0;
-        break;
-    }
-    }
-    }
-    }
-    }
+  }
 }
 
 static void server_worker(void) {
-    std::string remote_ip;
+  std::string remote_ip;
 
-    std::vector<ConnID> conn_ids;
-    std::vector<void *> datas;
-    std::vector<struct Mhandle *> mhandles;
+  std::vector<ConnID> conn_ids;
+  std::vector<void*> datas;
+  std::vector<struct Mhandle*> mhandles;
 
-    mhandles.resize(FLAGS_nflow);
+  mhandles.resize(FLAGS_nflow);
 
-    for (int i = 0; i < FLAGS_nflow; i++) {
-        int remote_dev;
-        auto conn_id = ep->test_uccl_accept(0, remote_ip, &remote_dev);
-        printf("Server accepted connection from %s (flow#%d)\n",
-               remote_ip.c_str(), i);
-        #ifdef GPU
-        cudaSetDevice(GPU);
-        void *data;
-        cudaMalloc(&data, FLAGS_msize * FLAGS_nreq * FLAGS_nmsg);
-        #else        
-        void *data =
-            mmap(nullptr, FLAGS_msize * FLAGS_nreq * FLAGS_nmsg,
-                 PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        #endif
-        assert(data != MAP_FAILED);
-        ep->uccl_regmr((UcclFlow *)conn_id.context, data,
-                       FLAGS_msize * FLAGS_nreq * FLAGS_nmsg, 0, &mhandles[i]);
+  for (int i = 0; i < FLAGS_nflow; i++) {
+    int remote_dev;
+    auto conn_id = ep->test_uccl_accept(0, remote_ip, &remote_dev);
+    printf("Server accepted connection from %s (flow#%d)\n", remote_ip.c_str(),
+           i);
+#ifdef GPU
+    cudaSetDevice(GPU);
+    void* data;
+    cudaMalloc(&data, FLAGS_msize * FLAGS_nreq * FLAGS_nmsg);
+#else
+    void* data =
+        mmap(nullptr, FLAGS_msize * FLAGS_nreq * FLAGS_nmsg,
+             PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+#endif
+    assert(data != MAP_FAILED);
+    ep->uccl_regmr((UcclFlow*)conn_id.context, data,
+                   FLAGS_msize * FLAGS_nreq * FLAGS_nmsg, 0, &mhandles[i]);
 
-        conn_ids.push_back(conn_id);
-        datas.push_back(data);
-    }
+    conn_ids.push_back(conn_id);
+    datas.push_back(data);
+  }
 
-    if (FLAGS_perftype == "basic") {
-        server_basic(conn_ids[0], mhandles[0], datas[0]);
-    } else if (FLAGS_perftype == "lat") {
-        server_lat(conn_ids[0], mhandles[0], datas[0]);
-    } else if (FLAGS_perftype == "tpt") {
-        server_tpt(conn_ids, mhandles, datas);
-    } else {
-        std::cerr << "Unknown performance type: " << FLAGS_perftype
-                  << std::endl;
-    }
+  if (FLAGS_perftype == "basic") {
+    server_basic(conn_ids[0], mhandles[0], datas[0]);
+  } else if (FLAGS_perftype == "lat") {
+    server_lat(conn_ids[0], mhandles[0], datas[0]);
+  } else if (FLAGS_perftype == "tpt") {
+    server_tpt(conn_ids, mhandles, datas);
+  } else {
+    std::cerr << "Unknown performance type: " << FLAGS_perftype << std::endl;
+  }
 
-    while (!quit) {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-    }
+  while (!quit) {
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+  }
 
-    for (int i = 0; i < FLAGS_nflow; i++) {
-        ep->uccl_deregmr(mhandles[i]);
-        munmap(datas[i], FLAGS_msize * FLAGS_nreq * FLAGS_nmsg);
-    }
+  for (int i = 0; i < FLAGS_nflow; i++) {
+    ep->uccl_deregmr(mhandles[i]);
+    munmap(datas[i], FLAGS_msize * FLAGS_nreq * FLAGS_nmsg);
+  }
 }
 
 static void client_worker(void) {
-    std::vector<ConnID> conn_ids;
-    std::vector<void *> datas;
-    std::vector<struct Mhandle *> mhandles;
+  std::vector<ConnID> conn_ids;
+  std::vector<void*> datas;
+  std::vector<struct Mhandle*> mhandles;
 
-    mhandles.resize(FLAGS_nflow);
+  mhandles.resize(FLAGS_nflow);
 
-    for (int i = 0; i < FLAGS_nflow; i++) {
-        auto conn_id = ep->test_uccl_connect(0, FLAGS_serverip, 0);
-        printf("Client connected to %s (flow#%d)\n", FLAGS_serverip.c_str(), i);
-        #ifdef GPU
-        cudaSetDevice(GPU);
-        void *data;
-        cudaMalloc(&data, FLAGS_msize * FLAGS_nreq * FLAGS_nmsg);
-        #else
-        void *data =
-            mmap(nullptr, FLAGS_msize * FLAGS_nreq * FLAGS_nmsg,
-                 PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        #endif
-        assert(data != MAP_FAILED);
-        ep->uccl_regmr((UcclFlow *)conn_id.context, data,
-                       FLAGS_msize * FLAGS_nreq * FLAGS_nmsg, 0, &mhandles[i]);
+  for (int i = 0; i < FLAGS_nflow; i++) {
+    auto conn_id = ep->test_uccl_connect(0, FLAGS_serverip, 0);
+    printf("Client connected to %s (flow#%d)\n", FLAGS_serverip.c_str(), i);
+#ifdef GPU
+    cudaSetDevice(GPU);
+    void* data;
+    cudaMalloc(&data, FLAGS_msize * FLAGS_nreq * FLAGS_nmsg);
+#else
+    void* data =
+        mmap(nullptr, FLAGS_msize * FLAGS_nreq * FLAGS_nmsg,
+             PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+#endif
+    assert(data != MAP_FAILED);
+    ep->uccl_regmr((UcclFlow*)conn_id.context, data,
+                   FLAGS_msize * FLAGS_nreq * FLAGS_nmsg, 0, &mhandles[i]);
 
-        conn_ids.push_back(conn_id);
-        datas.push_back(data);
-    }
+    conn_ids.push_back(conn_id);
+    datas.push_back(data);
+  }
 
-    if (FLAGS_perftype == "basic") {
-        client_basic(conn_ids[0], mhandles[0], datas[0]);
-    } else if (FLAGS_perftype == "lat") {
-        client_lat(conn_ids[0], mhandles[0], datas[0]);
-    } else if (FLAGS_perftype == "tpt") {
-        client_tpt(conn_ids, mhandles, datas);
-    } else {
-        std::cerr << "Unknown performance type: " << FLAGS_perftype
-                  << std::endl;
-    }
+  if (FLAGS_perftype == "basic") {
+    client_basic(conn_ids[0], mhandles[0], datas[0]);
+  } else if (FLAGS_perftype == "lat") {
+    client_lat(conn_ids[0], mhandles[0], datas[0]);
+  } else if (FLAGS_perftype == "tpt") {
+    client_tpt(conn_ids, mhandles, datas);
+  } else {
+    std::cerr << "Unknown performance type: " << FLAGS_perftype << std::endl;
+  }
 
-    for (int i = 0; i < FLAGS_nflow; i++) {
-        ep->uccl_deregmr(mhandles[i]);
-        munmap(datas[i], FLAGS_msize * FLAGS_nreq * FLAGS_nmsg);
-    }
+  for (int i = 0; i < FLAGS_nflow; i++) {
+    ep->uccl_deregmr(mhandles[i]);
+    munmap(datas[i], FLAGS_msize * FLAGS_nreq * FLAGS_nmsg);
+  }
 }
 
-int main(int argc, char *argv[]) {
-    google::InitGoogleLogging(argv[0]);
-    google::InstallFailureSignalHandler();
-    gflags::ParseCommandLineFlags(&argc, &argv, true);
+int main(int argc, char* argv[]) {
+  google::InitGoogleLogging(argv[0]);
+  google::InstallFailureSignalHandler();
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
 
-    signal(SIGINT, interrupt_handler);
-    signal(SIGTERM, interrupt_handler);
-    signal(SIGHUP, interrupt_handler);
+  signal(SIGINT, interrupt_handler);
+  signal(SIGTERM, interrupt_handler);
+  signal(SIGHUP, interrupt_handler);
 
-    ep.emplace(DEVNAME_SUFFIX_LIST, NUM_DEVICES, NUM_ENGINES);
+  ep.emplace(DEVNAME_SUFFIX_LIST, NUM_DEVICES, NUM_ENGINES);
 
-    // Create a thread to print throughput every second
-    std::thread t([&] {
-        while (!quit) {
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-            printf(
-                "(%d flows) TX Tpt: %.2f Gbps(%lu), RX Tpt: %.2f Gbps(%lu)\n",
-                FLAGS_nflow,
-                (tx_cur_sec_bytes - tx_prev_sec_bytes) * 8.0 / 1000 / 1000 /
-                    1000,
-                c_itr,
-                (rx_cur_sec_bytes - rx_prev_sec_bytes) * 8.0 / 1000 / 1000 /
-                    1000,
-                s_itr);
+  // Create a thread to print throughput every second
+  std::thread t([&] {
+    while (!quit) {
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+      printf("(%d flows) TX Tpt: %.2f Gbps(%lu), RX Tpt: %.2f Gbps(%lu)\n",
+             FLAGS_nflow,
+             (tx_cur_sec_bytes - tx_prev_sec_bytes) * 8.0 / 1000 / 1000 / 1000,
+             c_itr,
+             (rx_cur_sec_bytes - rx_prev_sec_bytes) * 8.0 / 1000 / 1000 / 1000,
+             s_itr);
 
-            tx_prev_sec_bytes = tx_cur_sec_bytes;
-            rx_prev_sec_bytes = rx_cur_sec_bytes;
-        }
-    });
-
-    if (FLAGS_bi) {
-        CHECK(!FLAGS_serverip.empty()) << "Server IP address is required.";
-        std::thread server_thread(server_worker);
-        std::thread client_thread(client_worker);
-
-        server_thread.join();
-        client_thread.join();
-    } else if (FLAGS_server) {
-        server_worker();
-    } else {
-        CHECK(!FLAGS_serverip.empty()) << "Server IP address is required.";
-        client_worker();
+      tx_prev_sec_bytes = tx_cur_sec_bytes;
+      rx_prev_sec_bytes = rx_cur_sec_bytes;
     }
+  });
 
-    t.join();
+  if (FLAGS_bi) {
+    CHECK(!FLAGS_serverip.empty()) << "Server IP address is required.";
+    std::thread server_thread(server_worker);
+    std::thread client_thread(client_worker);
 
-    return 0;
+    server_thread.join();
+    client_thread.join();
+  } else if (FLAGS_server) {
+    server_worker();
+  } else {
+    CHECK(!FLAGS_serverip.empty()) << "Server IP address is required.";
+    client_worker();
+  }
+
+  t.join();
+
+  return 0;
 }

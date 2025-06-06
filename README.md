@@ -30,13 +30,17 @@ More benefits include: 1) packet spraying with 256 paths, 2) advanced congestion
 
 On two AWS `g4dn.8xlarge` instances with 1x50G NICs and 1xT4 GPUs under the same cluster placement group, UCCL outperforms NCCL by up to **3.7x** for AllReduce: 
 
-![UCCL allreduce performance](./doc/images/allreduce_perf.png)
+<p align="center"> <img src="./doc/images/allreduce_perf.png" alt="" width="700"> </p>
 
 On four AWS `p4d.24xlarge` instances with 4x100G NICs and 8xA100 GPUs, UCCL outperforms NCCL by up to **3.3x** for AlltoAll: 
 
-![UCCL allreduce performance](./doc/images/alltoall_perf.png)
+<p align="center"> <img src="./doc/images/alltoall_perf.png" alt="" width="700"> </p>
 
-Feel free to check out our full [technical report](https://arxiv.org/pdf/2504.17307).
+On two cross-rack HGX nodes with 8x400G CX-7 RoCE NICs and 8xH100 GPUs, UCCL outperforms NCCL by up to **1.6x** for AlltoAll:
+
+<p align="center"> <img src="./doc/images/alltoall_perf2.png" alt="" width="700"> </p>
+
+Feel free to check out our full [technical report](https://arxiv.org/pdf/2504.17307) and [slides](./doc/slides/uccl_slides.pdf).
 
 ## Dev Plan
 

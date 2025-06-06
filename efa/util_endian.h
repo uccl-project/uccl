@@ -10,37 +10,37 @@
 namespace uccl {
 
 constexpr bool is_be_system() {
-    return (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__);
+  return (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__);
 }
 
 template <typename T>
 class EndianBase {
-   public:
-    static constexpr T swap(const T &v);
+ public:
+  static constexpr T swap(const T& v);
 };
 
 template <>
 class EndianBase<uint16_t> {
-   public:
-    static constexpr uint16_t swap(const uint16_t &v) {
-        return __builtin_bswap16(v);
-    }
+ public:
+  static constexpr uint16_t swap(uint16_t const& v) {
+    return __builtin_bswap16(v);
+  }
 };
 
 template <>
 class EndianBase<uint32_t> {
-   public:
-    static constexpr uint32_t swap(const uint32_t &v) {
-        return __builtin_bswap32(v);
-    }
+ public:
+  static constexpr uint32_t swap(uint32_t const& v) {
+    return __builtin_bswap32(v);
+  }
 };
 
 template <>
 class EndianBase<uint64_t> {
-   public:
-    static constexpr uint64_t swap(const uint64_t &v) {
-        return __builtin_bswap64(v);
-    }
+ public:
+  static constexpr uint64_t swap(uint64_t const& v) {
+    return __builtin_bswap64(v);
+  }
 };
 
 // NOTE: DO NOT ADD implicit type-conversion, comparison, and operations.
@@ -51,90 +51,88 @@ class EndianBase<uint64_t> {
 //       which may not be immediately clear from the variable name.
 template <typename T>
 class __attribute__((packed)) BigEndian final : public EndianBase<T> {
-   public:
-    BigEndian() = default;
-    BigEndian(const BigEndian<T> &o) = default;
+ public:
+  BigEndian() = default;
+  BigEndian(BigEndian<T> const& o) = default;
 
-    explicit constexpr BigEndian(const T &cpu_value)
-        : data_(is_be_system() ? cpu_value : EndianBase<T>::swap(cpu_value)) {}
+  explicit constexpr BigEndian(const T& cpu_value)
+      : data_(is_be_system() ? cpu_value : EndianBase<T>::swap(cpu_value)) {}
 
-    constexpr T value() const {
-        return is_be_system() ? data_ : EndianBase<T>::swap(data_);
-    }
+  constexpr T value() const {
+    return is_be_system() ? data_ : EndianBase<T>::swap(data_);
+  }
 
-    constexpr T raw_value() const { return data_; }
+  constexpr T raw_value() const { return data_; }
 
-    constexpr BigEndian<T> operator~() const {
-        return BigEndian(~(this->value()));
-    }
+  constexpr BigEndian<T> operator~() const {
+    return BigEndian(~(this->value()));
+  }
 
-    // While this swap(swap(a) & swap(b)) looks inefficient, gcc 4.9+ will
-    // correctly optimize the code.
-    constexpr BigEndian<T> operator&(const BigEndian<T> &o) const {
-        return BigEndian(this->value() & o.value());
-    }
+  // While this swap(swap(a) & swap(b)) looks inefficient, gcc 4.9+ will
+  // correctly optimize the code.
+  constexpr BigEndian<T> operator&(BigEndian<T> const& o) const {
+    return BigEndian(this->value() & o.value());
+  }
 
-    constexpr BigEndian<T> operator|(const BigEndian<T> &o) const {
-        return BigEndian(this->value() | o.value());
-    }
+  constexpr BigEndian<T> operator|(BigEndian<T> const& o) const {
+    return BigEndian(this->value() | o.value());
+  }
 
-    constexpr BigEndian<T> operator^(const BigEndian<T> &o) const {
-        return BigEndian(this->value() ^ o.value());
-    }
+  constexpr BigEndian<T> operator^(BigEndian<T> const& o) const {
+    return BigEndian(this->value() ^ o.value());
+  }
 
-    constexpr BigEndian<T> operator+(const BigEndian<T> &o) const {
-        return BigEndian(this->value() + o.value());
-    }
+  constexpr BigEndian<T> operator+(BigEndian<T> const& o) const {
+    return BigEndian(this->value() + o.value());
+  }
 
-    constexpr BigEndian<T> operator-(const BigEndian<T> &o) const {
-        return BigEndian(this->value() - o.value());
-    }
+  constexpr BigEndian<T> operator-(BigEndian<T> const& o) const {
+    return BigEndian(this->value() - o.value());
+  }
 
-    constexpr BigEndian<T> operator<<(size_t shift) const {
-        return BigEndian(this->value() << shift);
-    }
+  constexpr BigEndian<T> operator<<(size_t shift) const {
+    return BigEndian(this->value() << shift);
+  }
 
-    constexpr BigEndian<T> operator>>(size_t shift) const {
-        return BigEndian(this->value() >> shift);
-    }
+  constexpr BigEndian<T> operator>>(size_t shift) const {
+    return BigEndian(this->value() >> shift);
+  }
 
-    constexpr bool operator==(const BigEndian &o) const {
-        return data_ == o.data_;
-    }
+  constexpr bool operator==(BigEndian const& o) const {
+    return data_ == o.data_;
+  }
 
-    constexpr bool operator!=(const BigEndian &o) const {
-        return !(*this == o);
-    }
+  constexpr bool operator!=(BigEndian const& o) const { return !(*this == o); }
 
-    constexpr bool operator<(const BigEndian &o) const {
-        return this->value() < o.value();
-    }
+  constexpr bool operator<(BigEndian const& o) const {
+    return this->value() < o.value();
+  }
 
-    constexpr bool operator>(const BigEndian &o) const { return o < *this; }
+  constexpr bool operator>(BigEndian const& o) const { return o < *this; }
 
-    constexpr bool operator<=(const BigEndian &o) const { return !(*this > o); }
+  constexpr bool operator<=(BigEndian const& o) const { return !(*this > o); }
 
-    constexpr bool operator>=(const BigEndian &o) const { return !(*this < o); }
+  constexpr bool operator>=(BigEndian const& o) const { return !(*this < o); }
 
-    explicit constexpr operator bool() const { return data_ != 0; }
+  explicit constexpr operator bool() const { return data_ != 0; }
 
-    friend std::ostream &operator<<(std::ostream &os, const BigEndian &be) {
-        os << "0x" << std::hex << std::setw(sizeof(be) * 2) << std::setfill('0')
-           << be.value() << std::setfill(' ') << std::dec;
-        return os;
-    }
+  friend std::ostream& operator<<(std::ostream& os, BigEndian const& be) {
+    os << "0x" << std::hex << std::setw(sizeof(be) * 2) << std::setfill('0')
+       << be.value() << std::setfill(' ') << std::dec;
+    return os;
+  }
 
-    const std::vector<uint8_t> ToByteVector() const {
-        union {
-            T data;
-            uint8_t bytes[sizeof(T)];
-        } t = {data_};
+  const std::vector<uint8_t> ToByteVector() const {
+    union {
+      T data;
+      uint8_t bytes[sizeof(T)];
+    } t = {data_};
 
-        return std::vector<uint8_t>(&t.bytes[0], &t.bytes[sizeof(T)]);
-    }
+    return std::vector<uint8_t>(&t.bytes[0], &t.bytes[sizeof(T)]);
+  }
 
-   protected:
-    T data_;  // stored in big endian in memory
+ protected:
+  T data_;  // stored in big endian in memory
 };
 
 using be16_t = BigEndian<uint16_t>;
@@ -158,7 +156,7 @@ static_assert(sizeof(be32_t) == 4, "be32_t is not 4 bytes");
 static_assert(sizeof(be64_t) == 8, "be64_t is not 8 bytes");
 
 // Copy data from val to *ptr. Set "big_endian" to store in big endian
-bool uint64_to_bin(void *ptr, uint64_t val, size_t size, bool big_endian);
+bool uint64_to_bin(void* ptr, uint64_t val, size_t size, bool big_endian);
 
 // this is to make sure BigEndian has constexpr constructor and value()
 static_assert(be32_t(0x1234).value() == 0x1234, "Something is wrong");
