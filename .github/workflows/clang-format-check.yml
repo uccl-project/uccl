@@ -13,8 +13,14 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Install clang-format
-      run: sudo apt-get update && sudo apt-get install -y clang-format
+    - name: Install clang-format 14
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang-format-14
+        sudo ln -sf /usr/bin/clang-format-14 /usr/bin/clang-format
+
+    - name: Show clang-format version
+      run: clang-format --version
 
     - name: Check C++ formatting
       run: |
