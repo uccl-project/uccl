@@ -31,7 +31,7 @@
 #define OUTSTNADING_MSG 4     // Number of outstanding messages.
 #define ITERATIONS 1000000    // Number of iterations.
 //#define MANAGED                     // Use cudaMallocManaged rather than
-//cudaMalloc
+// cudaMalloc
 //////////////////////////////////////////////////////////////////////
 
 #define GID_INDEX 3
