@@ -122,12 +122,11 @@ static bool GdrSupportInitOnce() {
 }
 
 ncclResult_t pluginGetProperties(int dev, ncclNetProperties_v8_t *props) {
-    auto factory_dev = RDMAFactory::get_factory_dev(dev);
 
 #ifdef LAZY_CREATE_ENGINE
-    ep->initialize_engine_by_dev(dev);
+    ep->initialize_rdma_factory_by_dev(dev);
 #endif
-
+    auto factory_dev = RDMAFactory::get_factory_dev(dev);
     props->name = factory_dev->ib_name;
 
     // Speed in *Mbps*. 100000 means 100G
@@ -184,6 +183,21 @@ ncclResult_t pluginListen(int dev, void *opaqueHandle, void **listenComm) {
     struct ucclHandle *handle = (struct ucclHandle *)opaqueHandle;
     memset(handle, 0, sizeof(struct ucclHandle));
 
+#ifdef LAZY_CREATE_ENGINE
+    int gpu_idx = 0;
+    cudaGetDevice(&gpu_idx);
+    if (dev != gpu_idx) {
+        LOG_FIRST_N(INFO, 1)
+            << "pluginListen detects different vdev " << dev << " vs. gpu_idx "
+            << gpu_idx << ", forcely setting vdev to gpu_idx";
+        dev = gpu_idx;
+    }
+    if (listen_port.load() == 10000) {
+        listen_port.store(10000 + dev * 100);
+    }
+    ep->initialize_engine_by_dev(dev);
+#endif
+
     // Create a listening socket.
     int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
     DCHECK(listen_fd >= 0) << "ERROR: opening socket";
@@ -233,6 +247,16 @@ ncclResult_t pluginConnect(int dev, void *opaque_handle, void **sendComm,
                            ncclNetDeviceHandle_v8_t ** /*sendDevComm*/) {
     struct ucclHandle *handle = (struct ucclHandle *)opaque_handle;
 
+#ifdef LAZY_CREATE_ENGINE
+    int gpu_idx = 0;
+    cudaGetDevice(&gpu_idx);
+    if (dev != gpu_idx) {
+        LOG_FIRST_N(INFO, 1)
+            << "pluginListen detects different vdev " << dev << " vs. gpu_idx "
+            << gpu_idx << ", forcely setting vdev to gpu_idx";
+        dev = gpu_idx;
+    }
+#endif
     int local_gpuidx;
     cudaGetDevice(&local_gpuidx);
 

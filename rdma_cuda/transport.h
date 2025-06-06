@@ -331,8 +331,9 @@ class RDMAEndpoint {
     // Per-engine communication channel
     Channel *channel_vec_[NUM_ENGINES * NUM_DEVICES];
     std::vector<std::unique_ptr<UcclRDMAEngine>> engine_vec_;
+    std::unordered_map<int, std::unique_ptr<UcclRDMAEngine>> engine_id_to_engine_map_;
     std::vector<std::unique_ptr<std::thread>> engine_th_vec_;
-
+    
     // Number of outstanding messages for each engine.
     std::array<std::atomic<uint32_t>, NUM_ENGINES *NUM_DEVICES>
         engine_load_vec_ = {};
@@ -372,6 +373,7 @@ class RDMAEndpoint {
     ~RDMAEndpoint();
 
     bool initialize_engine_by_dev(int dev);
+    bool initialize_rdma_factory_by_dev(int dev);
 
     /// For testing easily.
     ConnID test_uccl_connect(int dev, std::string remote_ip, int remote_dev) {
