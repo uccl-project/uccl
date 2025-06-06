@@ -20,7 +20,7 @@ NODES="192.168.0.58,192.168.0.100,192.168.0.99"
 # The topology detected by UCCL is the same as NCCL. But UCCL using the above mapping only achieves ~5GB/s.
 # if mismatched, 30GB/s is expected. Occasionally, segmentation fault occurs.
 
-HCA_NAMES="mlx5_1:1,mlx5_2:1,mlx5_3:1,mlx5_4:1,mlx5_5:1,mlx5_6:1,mlx5_7:1,mlx5_8:1"
+HCA_NAMES="mlx5_0:1,mlx5_1:1,mlx5_2:1,mlx5_3:1,mlx5_4:1,mlx5_5:1,mlx5_6:1,mlx5_7:1"
 # Name of Control NIC.
 CTRL_NIC="ds-eap-1,ds-eap-2,ds-eap-3"
 # Path of NCCL
@@ -65,9 +65,9 @@ if [ "$UCCL" -ne 1 ]; then
     PLUGIN_LIB=""
 fi
 
-P2P_DISABLE=1
-SHM_DISABLE=1
-PXN_DISABLE=1
+P2P_DISABLE=0
+SHM_DISABLE=0
+PXN_DISABLE=0
 
 echo "Running test: ${PROG_NAME}, $([ "${UCCL}" -eq 1 ] && echo "UCCL" || echo "NCCL"), ${NUM_PROCS} nodes, ${NUM_GPUS_PER_NODE} GPUs per node, $((NUM_PROCS * NUM_GPUS_PER_NODE)) GPUs in total."
 
@@ -103,6 +103,6 @@ echo -e "Details: NCCL_NCHANNELS=${NUM_CHUNNEL} \n\t NCCL_P2P_NET_CHUNKSIZE=${P2
     -x NCCL_NVLS_ENABLE=0 \
     ${UCCL_HOME}/thirdparty/nccl-tests/build/${PROG_NAME} \
     -f 2 \
-    --minbytes 1K --maxbytes 4G \
+    --minbytes 1K --maxbytes 1G \
     --warmup_iters 50 --iters 50 \
     -g 1 -t ${NUM_GPUS_PER_NODE}
