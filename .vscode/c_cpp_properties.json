@@ -4,9 +4,8 @@
             "name": "Linux",
             "includePath": [
                 "${workspaceFolder}/**",
-                "/opt/amazon/efa/include/",
-                "/usr/local/include/",
                 "/usr/include/",
+                "/usr/local/include/",
                 "/usr/local/cuda/include/"
             ],
             "defines": [],
