@@ -14,8 +14,7 @@ static constexpr bool ROCE_NET = true;
 // If SINGLE_CTRL_NIC is set, all devices will use the same IP.
 // static std::string SINGLE_CTRL_NIC("ens10f0np0");
 static std::string SINGLE_CTRL_NIC("enp164s0");
-// static constexpr uint8_t DEVNAME_SUFFIX_LIST[8] = {1, 2, 3, 4, 5, 6, 7, 8};
-static constexpr uint8_t DEVNAME_SUFFIX_LIST[8] = {8, 7, 6, 5, 4, 3, 2, 1};
+static constexpr uint8_t DEVNAME_SUFFIX_LIST[8] = {1, 2, 3, 4, 5, 6, 7, 8};
 static constexpr uint8_t NUM_DEVICES = 8;
 // static constexpr uint8_t DEVNAME_SUFFIX_LIST[8] = {0, 2, 4, 6, 0, 0, 0, 0};
 // static constexpr uint8_t NUM_DEVICES = 4;

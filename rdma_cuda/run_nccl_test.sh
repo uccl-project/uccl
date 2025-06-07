@@ -76,47 +76,6 @@ echo "Running test: ${PROG_NAME}, $([ "${UCCL}" -eq 1 ] && echo "UCCL" || echo "
 
 echo -e "Details: NCCL_NCHANNELS=${NUM_CHUNNEL} \n\t NCCL_P2P_NET_CHUNKSIZE=${P2P_NET_CHUNKSIZE} \n\t NCCL_BUFFSIZE=${BUFFSIZE} \n\t NCCL_NCHANNELS_PER_NET_PEER=${CHANNELS_NET_PEER} \n\t NCCL_ALGO=${ALGO} \n\t NCCL_IB_QPS_PER_CONNECTION=${NUM_QPS_PER_CONNECTION} \n\t NCCL_IB_SPLIT_DATA_ON_QPS=${SPLIT_DATA_ON_QPS} \n\t NCCL_PXN_DISABLE=${PXN_DISABLE} \n\t NCCL_P2P_DISABLE=${P2P_DISABLE} \n\t NCCL_SHM_DISABLE=${SHM_DISABLE} \n\t NCCL_IB_HCA=${HCA_NAMES}"
 
-# mpirun  --allow-run-as-root -np ${NUM_PROCS} -N 1 \
-#     --host ${NODES} \
-#     --mca btl_tcp_if_include ${CTRL_NIC} \
-#     --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
-#     --mca orte_base_help_aggregate 0 \
-#     -x LD_LIBRARY_PATH=${NCCL_PATH}:${LD_LIBRARY_PATH} \
-#     -x NCCL_NET_PLUGIN=${PLUGIN_LIB} \
-#     -x NCCL_SOCKET_IFNAME=${CTRL_NIC} \
-#     -x GLOG_logtostderr=1 \
-#     -x GLOG_v=0 \
-#     -x NCCL_DEBUG=WARN \
-#     -x NCCL_NVLS_ENABLE=0 \
-#     -x NCCL_DEBUG_SUBSYS=NET \
-#     -x NCCL_PROTO=${NCCL_PROTO} \
-#     -x NCCL_PXN_DISABLE=${PXN_DISABLE} \
-#     -x NCCL_P2P_DISABLE=${P2P_DISABLE} \
-#     -x NCCL_SHM_DISABLE=${SHM_DISABLE} \
-#     -x NCCL_NET_DISABLE=0 \
-#     -x NCCL_ALGO=${ALGO} \
-#     -x NCCL_MAX_NCHANNELS=${NUM_CHUNNEL} \
-#     -x NCCL_MIN_NCHANNELS=${NUM_CHUNNEL} \
-#     -x NCCL_NCHANNELS_PER_NET_PEER=${CHANNELS_NET_PEER} \
-#     -x NCCL_P2P_NET_CHUNKSIZE=${P2P_NET_CHUNKSIZE} \
-#     -x NCCL_BUFFSIZE=${BUFFSIZE} \
-#     -x NCCL_IB_QPS_PER_CONNECTION=${NUM_QPS_PER_CONNECTION} -x NCCL_IB_SPLIT_DATA_ON_QPS=${SPLIT_DATA_ON_QPS} \
-#     -x NCCL_IB_HCA=${HCA_NAMES} \
-#     -x NCCL_SOCKET_IFNAME=${CTRL_NIC} \
-#     -x NCCL_NVLS_ENABLE=0 \
-#     -x NCCL_GRAPH_DUMP_FILE=graph-dump.xml \
-#     ${UCCL_HOME}/thirdparty/nccl-tests/build/${PROG_NAME} \
-#     -f 2 \
-#     --minbytes 1K --maxbytes 4G \
-#     --warmup_iters 50 --iters 50 \
-#     -g 1 -t ${NUM_GPUS_PER_NODE}
-
-# -hostfile /root/my_hosts \
-# -hostfile /root/my_hosts_worstRing \
-# -hostfile ./zhongjie_hosts \
-# --host ${NODES} \
-
-
 echo $NUM_PROCS
 echo $PROCS_PER_NODE
 mpirun --allow-run-as-root -np ${NUM_PROCS} -N ${PROCS_PER_NODE} \
@@ -141,7 +100,6 @@ mpirun --allow-run-as-root -np ${NUM_PROCS} -N ${PROCS_PER_NODE} \
     -x NCCL_IB_MERGE_NICS=0 \
     -x NCCL_NVLS_ENABLE=0 \
     -x NCCL_NET_PLUGIN=$PLUGIN_LIB \
-    -x NCCL_GRAPH_DUMP_FILE=graph-dump.xml \
     --mca btl tcp,self \
     --mca btl_tcp_if_include enp164s0 \
     /root/uccl/thirdparty/nccl-tests/build/${PROG_NAME} -c 0 \
