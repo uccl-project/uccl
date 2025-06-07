@@ -256,13 +256,12 @@ struct rdma_context* init_rdma(char const* server_ip) {
   }
 
   DCHECK(i < nb_devices) << "Device " << device_name << " not found";
-
-  ibv_free_device_list(dev_list);
-
   auto* open_dev = dev_list[i];
 
   rdma->ctx = ibv_open_device(open_dev);
   DCHECK(rdma->ctx) << "Failed to open device";
+
+  ibv_free_device_list(dev_list);
 
   rdma->pd = ibv_alloc_pd(rdma->ctx);
   DCHECK(rdma->pd) << "Failed to allocate pd";

@@ -12,7 +12,6 @@
 #include <infiniband/verbs.h>
 #include <cstdint>
 #include <cstring>
-#include <map>
 #include <set>
 #include <unordered_map>
 #include <vector>

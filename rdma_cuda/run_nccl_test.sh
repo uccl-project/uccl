@@ -83,7 +83,6 @@ mpirun --allow-run-as-root -np ${NUM_PROCS} -N ${PROCS_PER_NODE} \
     -hostfile ${HOSTNAME} \
     -x NCCL_DEBUG=WARN \
     -x NCCL_IB_HCA=mlx5_1,mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7,mlx5_8 \
-    -x NCCL_TOPO_FILE=/root/virtualTopology-gdr-h100-q35.xml \
     -x NCCL_IB_QPS_PER_CONNECTION=${NUM_QPS_PER_CONNECTION} -x NCCL_IB_SPLIT_DATA_ON_QPS=${SPLIT_DATA_ON_QPS} \
     -x NCCL_IB_PCI_RELAXED_ORDERING=1 \
     -x NCCL_IB_GID_INDEX=3 \
