@@ -317,6 +317,7 @@ class RDMAEndpoint {
   constexpr static uint16_t kTestListenPort = 30000;
   constexpr static uint32_t kStatsTimerIntervalSec = 2;
   constexpr static uint32_t RC_MAGIC = 0x12345678;
+  constexpr static uint16_t kBootstrapPort = 5000;
 
   std::shared_ptr<RDMAFactory> rdma_ctl_;
 
@@ -370,8 +371,7 @@ class RDMAEndpoint {
   RDMAEndpoint(int num_devices, int num_engines_per_dev);
   ~RDMAEndpoint();
 
-  bool initialize_engine_by_dev(int dev);
-  bool initialize_rdma_factory_by_dev(int dev);
+  bool initialize_engine_by_dev(int dev, std::atomic<uint16_t>& port);
 
   /// For testing easily.
   ConnID test_uccl_connect(int dev, std::string remote_ip, int remote_dev) {

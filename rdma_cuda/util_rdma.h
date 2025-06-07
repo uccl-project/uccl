@@ -12,6 +12,7 @@
 #include <infiniband/verbs.h>
 #include <cstdint>
 #include <cstring>
+#include <map>
 #include <set>
 #include <unordered_map>
 #include <vector>
@@ -1203,13 +1204,8 @@ class RDMAFactory {
                                     uint32_t engine_offset_,
                                     union CtrlMeta meta);
   static inline struct FactoryDevice* get_factory_dev(int dev) {
-#ifdef LAZY_CREATE_ENGINE
-    DCHECK(dev >= 0 && rdma_ctl->devices_.size() == 1);
-    return &rdma_ctl->devices_[0];
-#else
     DCHECK(dev >= 0 && dev < rdma_ctl->devices_.size());
     return &rdma_ctl->devices_[dev];
-#endif
   }
 
   std::string to_string(void) const;

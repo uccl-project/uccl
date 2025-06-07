@@ -271,18 +271,14 @@ void UcclRDMAEngine::handle_rx_work(void) {
   }
 }
 
-bool RDMAEndpoint::initialize_engine_by_dev(int dev) {
+bool RDMAEndpoint::initialize_engine_by_dev(int dev,
+                                            std::atomic<uint16_t>& port) {
   static std::once_flag flag_once;
-  std::call_once(flag_once, [this, dev]() {
+  std::call_once(flag_once, [this, dev, &port]() {
     int start_engine_idx = dev * num_engines_per_dev_;
     int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
 
-    for (int i = start_engine_idx; i <= end_engine_idx; i++)
-      channel_vec_[i] = new Channel();
-    if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
-      eqds_[dev] = new eqds::EQDS(dev);
-    }
-
+    port.store(kBootstrapPort + dev * 1000);
     for (int engine_id = start_engine_idx; engine_id <= end_engine_idx;
          engine_id++) {
       int engine_cpu_id =
@@ -587,23 +583,27 @@ RDMAEndpoint::RDMAEndpoint(int num_devices, int num_engines_per_dev)
     : num_devices_(num_devices),
       num_engines_per_dev_(num_engines_per_dev),
       stats_thread_([this]() { stats_thread_fn(); }) {
-  rdma_ctl_ = rdma_ctl;
-
   static std::once_flag flag_once;
   std::call_once(flag_once, [&]() {
-    ctx_pool_ = new SharedPool<PollCtx*, true>(kMaxInflightMsg);
-    ctx_pool_buf_ = new uint8_t[kMaxInflightMsg * sizeof(PollCtx)];
-    for (int i = 0; i < kMaxInflightMsg; i++) {
-      ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());
+    rdma_ctl_ = rdma_ctl;
+
+    for (int i = 0; i < num_devices; i++) {
+      RDMAFactory::init_dev(DEVNAME_SUFFIX_LIST[i]);
     }
   });
-}
+  ctx_pool_ = new SharedPool<PollCtx*, true>(kMaxInflightMsg);
+  ctx_pool_buf_ = new uint8_t[kMaxInflightMsg * sizeof(PollCtx)];
+  for (int i = 0; i < kMaxInflightMsg; i++) {
+    ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());
+  }
+  int total_num_engines = num_devices * num_engines_per_dev;
 
-bool RDMAEndpoint::initialize_rdma_factory_by_dev(int dev) {
-  static std::once_flag flag_once;
-  std::call_once(flag_once,
-                 [&]() { RDMAFactory::init_dev(DEVNAME_SUFFIX_LIST[dev]); });
-  return true;
+  for (int i = 0; i < total_num_engines; i++) channel_vec_[i] = new Channel();
+
+  if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
+    // Receiver-driven congestion control per device.
+    for (int i = 0; i < num_devices; i++) eqds_[i] = new eqds::EQDS(i);
+  }
 }
 
 RDMAEndpoint::RDMAEndpoint(uint8_t const* devname_suffix_list, int num_devices,

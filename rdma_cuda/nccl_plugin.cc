@@ -120,9 +120,6 @@ static bool GdrSupportInitOnce() {
 }
 
 ncclResult_t pluginGetProperties(int dev, ncclNetProperties_v8_t* props) {
-#ifdef LAZY_CREATE_ENGINE
-  ep->initialize_rdma_factory_by_dev(dev);
-#endif
   auto factory_dev = RDMAFactory::get_factory_dev(dev);
   props->name = factory_dev->ib_name;
 
@@ -185,12 +182,9 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
     LOG_FIRST_N(INFO, 1) << "pluginListen detects different vdev " << dev
                          << " vs. gpu_idx " << gpu_idx
                          << ", forcely setting vdev to gpu_idx";
-    dev = gpu_idx;
+    // dev = gpu_idx;
   }
-  if (listen_port.load() == 10000) {
-    listen_port.store(10000 + dev * 100);
-  }
-  ep->initialize_engine_by_dev(dev);
+  ep->initialize_engine_by_dev(dev, listen_port);
 #endif
 
   // Create a listening socket.
@@ -249,7 +243,7 @@ ncclResult_t pluginConnect(int dev, void* opaque_handle, void** sendComm,
     LOG_FIRST_N(INFO, 1) << "pluginListen detects different vdev " << dev
                          << " vs. gpu_idx " << gpu_idx
                          << ", forcely setting vdev to gpu_idx";
-    dev = gpu_idx;
+    // dev = gpu_idx;
   }
 #endif
   int local_gpuidx;
