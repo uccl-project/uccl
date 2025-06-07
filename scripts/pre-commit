@@ -1,0 +1,36 @@
+# .git/hooks/pre-commit
+#!/bin/bash
+
+# Make sure clang-format is installed
+if ! command -v clang-format &> /dev/null; then
+    echo "clang-format is not installed. Please install it to commit."
+    exit 1
+fi
+
+echo "Running clang-format check..."
+
+# Only check staged files (files in git index)
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(cpp|cxx|cc|h|hpp)$')
+
+if [ -z "$STAGED_FILES" ]; then
+    echo "No C++ files staged for commit."
+    exit 0
+fi
+
+# Run clang-format --dry-run on each staged file
+FAIL=0
+for FILE in $STAGED_FILES; do
+    clang-format --dry-run --Werror "$FILE"
+    if [ $? -ne 0 ]; then
+        echo "File $FILE is not formatted."
+        FAIL=1
+    fi
+done
+
+if [ $FAIL -ne 0 ]; then
+    echo "Commit aborted due to formatting errors."
+    echo "Please run ./format.sh to format your files."
+    exit 1
+fi
+
+echo "All staged C++ files are properly formatted."

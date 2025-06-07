@@ -1,8 +1,7 @@
 #pragma once
+#include "util.h"
 #include <cstdint>
 #include <thread>
-
-#include "util.h"
 
 #define USE_MULTIPATH
 #define PATH_SELECTION
@@ -14,10 +13,10 @@
 // #define RTT_STATS
 
 enum class CCType {
-    kTimely,
-    kTimelyPP,
-    kCubic,
-    kCubicPP,
+  kTimely,
+  kTimelyPP,
+  kCubic,
+  kCubicPP,
 };
 static constexpr CCType kCCType = CCType::kCubicPP;
 
@@ -28,48 +27,47 @@ static constexpr CCType kCCType = CCType::kCubicPP;
 
 #if defined(AWS_C5)
 static const uint32_t AFXDP_MTU = 3498;
-static const char* DEV_DEFAULT = "ens6";
-static const double kLinkBandwidth = 100.0 * 1e9 / 8;
+static char const* DEV_DEFAULT = "ens6";
+static double const kLinkBandwidth = 100.0 * 1e9 / 8;
 static const uint32_t NUM_QUEUES = 12;  // 5/12 for uni/dual.
-static const uint32_t kMaxPath = 200;  // 256/200 for uni/dual.
+static const uint32_t kMaxPath = 200;   // 256/200 for uni/dual.
 static const uint32_t kMaxUnackedPktsPP = 1u;
 #elif defined(AWS_G4)
 static const uint32_t AFXDP_MTU = 3498;
-static const char* DEV_DEFAULT = "ens6";
-static const double kLinkBandwidth = 50.0 * 1e9 / 8;
+static char const* DEV_DEFAULT = "ens6";
+static double const kLinkBandwidth = 50.0 * 1e9 / 8;
 static const uint32_t NUM_QUEUES = 8;
 static const uint32_t kMaxPath = 256;
 static const uint32_t kMaxUnackedPktsPP = 1u;
 #elif defined(AWS_G4METAL)
 static const uint32_t AFXDP_MTU = 3498;
-static const char* DEV_DEFAULT = "enp199s0";
-static const double kLinkBandwidth = 100.0 * 1e9 / 8;
+static char const* DEV_DEFAULT = "enp199s0";
+static double const kLinkBandwidth = 100.0 * 1e9 / 8;
 static const uint32_t NUM_QUEUES = 12;
 static const uint32_t kMaxPath = 128;
 static const uint32_t kMaxUnackedPktsPP = 3u;
 #elif defined(CLAB_XL170)
 static const uint32_t AFXDP_MTU = 1500;
-static const char* DEV_DEFAULT = "ens1f1np1";
-static const double kLinkBandwidth = 25.0 * 1e9 / 8;
+static char const* DEV_DEFAULT = "ens1f1np1";
+static double const kLinkBandwidth = 25.0 * 1e9 / 8;
 static const uint32_t NUM_QUEUES = 2;
 static const uint32_t kMaxPath = 64;
 static const uint32_t kMaxUnackedPktsPP = 8u;
 #elif defined(CLAB_D6515)
 static const uint32_t AFXDP_MTU = 3498;
-static const char* DEV_DEFAULT = "enp65s0f0np0";
-static const double kLinkBandwidth = 100.0 * 1e9 / 8;
+static char const* DEV_DEFAULT = "enp65s0f0np0";
+static double const kLinkBandwidth = 100.0 * 1e9 / 8;
 static const uint32_t NUM_QUEUES = 4;
 static const uint32_t kMaxPath = 64;
 static const uint32_t kMaxUnackedPktsPP = 16u;
 #elif defined(IBM_GX3)
 static const uint32_t AFXDP_MTU = 1500;
-static const char* DEV_DEFAULT = "ens3";
-static const double kLinkBandwidth = 48.0 * 1e9 / 8;
+static char const* DEV_DEFAULT = "ens3";
+static double const kLinkBandwidth = 48.0 * 1e9 / 8;
 static const uint32_t NUM_QUEUES = 6;
 static const uint32_t kMaxPath = 64;
 static const uint32_t kMaxUnackedPktsPP = 1u;
 #endif
-
 
 static uint32_t NUM_CPUS = std::thread::hardware_concurrency();
 // Starting from 1/4 of the CPUs to avoid conflicting with nccl proxy service.
@@ -84,7 +82,7 @@ static const uint32_t SEND_BATCH_SIZE = 32;
 static const std::size_t kSackBitmapSize = 1024;
 static const std::size_t kFastRexmitDupAckThres = 10;
 static const uint32_t kMaxTwPkts = 1024;
-static const double kMaxBwPP = 5.0 * 1e9 / 8;
+static double const kMaxBwPP = 5.0 * 1e9 / 8;
 static const uint32_t kSwitchPathThres = 1u;
 static const uint32_t kMaxUnackedPktsPerEngine = kMaxUnackedPktsPP * kMaxPath;
 static const uint32_t kMaxPathHistoryPerEngine = 4096;

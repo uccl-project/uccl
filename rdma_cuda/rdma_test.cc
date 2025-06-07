@@ -1,446 +1,582 @@
 /**
- * @file rdma_test.cc
- * @brief Test for UCCL RDMA transport
+    Usage:
+
+    server: ./rdma_test
+    client: ./rdma_test <server_ip>
  */
-
-#include <chrono>
-#include <thread>
-
-#include <signal.h>
-
+#include <arpa/inet.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
+#include <infiniband/efadv.h>
+#include <infiniband/verbs.h>
+#include <netinet/in.h>
+#include <thread>
+#include <tuple>
+#include <assert.h>
+#include <cuda_runtime.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
-#include "transport.h"
-#include "transport_config.h"
-#include "util_timer.h"
+//////////////////////////////////////////////////////////////////////
+#define DEV_INDEX 1           // mlx5_1-8
+#define USE_GPU 0             // GPU_0-7
+#define NUM_QPS 4             // Number of QPs.
+#define MSG_SIZE (1ul << 20)  // Message size.
+#define OUTSTNADING_MSG 4     // Number of outstanding messages.
+#define ITERATIONS 1000000    // Number of iterations.
+//#define MANAGED                     // Use cudaMallocManaged rather than
+// cudaMalloc
+//////////////////////////////////////////////////////////////////////
 
-#include "cuda_runtime.h"
+#define GID_INDEX 3
+#define PORT_NUM 1
+#define QKEY 0x12345
+#define TCP_PORT 55555
+#define MAX_WR 1024
+#define BASE_PSN 0x12345
 
-// #define GPU 0
+static volatile uint64_t rx_stats_bytes = 0;
+static volatile uint64_t last_rx_stats_bytes = 0;
+static volatile uint64_t tx_stats_bytes = 0;
+static volatile uint64_t last_tx_stats_bytes = 0;
 
-using namespace uccl;
+static bool is_server = false;
 
-static volatile bool quit = false;
+static uint32_t next_data_offset = 0;
+static uint32_t next_send_qp_idx = 0;
 
-std::optional<RDMAEndpoint> ep;
+struct metadata {
+  uint32_t qpn[NUM_QPS];
+  uint32_t rkey;
+  union ibv_gid gid;
+  uint64_t addr;
+};
 
-void interrupt_handler(int signal) {
-    (void)signal;
-    quit = true;
+struct rdma_context {
+  struct ibv_context* ctx;
+  struct ibv_pd* pd;
+  struct ibv_cq_ex* cq_ex;
+  struct ibv_mr* mr;
+
+  struct ibv_srq* srq;
+
+  char* local_buf;
+  uint32_t remote_rkey;
+  uint64_t remote_addr;
+
+  struct ibv_qp* qp[NUM_QPS];
+  struct metadata remote_meta;
+
+  union ibv_gid gid;
+
+  struct ibv_device_attr dev_attr;
+  struct ibv_port_attr port_attr;
+};
+
+static bool force_exit = false;
+
+void signal_handler(int signal) { force_exit = true; }
+
+int set_nonblocking(int fd) {
+  int flags = fcntl(fd, F_GETFL, 0);
+  if (flags == -1) return -1;
+  return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
-DEFINE_bool(server, false, "Whether this is a server receiving traffic.");
-DEFINE_string(serverip, "", "Server IP address the client tries to connect.");
-DEFINE_string(perftype, "tpt", "Performance type: basic/lat/tpt/bi.");
-DEFINE_bool(warmup, false, "Whether to run warmup.");
-DEFINE_uint32(nflow, 4, "Number of flows.");
-DEFINE_uint32(nmsg, 1, "Number of messages within one request to post.");
-DEFINE_uint32(nreq, 2, "Outstanding requests to post.");
-DEFINE_uint32(msize, 1000000, "Size of message.");
-DEFINE_uint32(iterations, 1000000, "Number of iterations to run.");
-DEFINE_bool(flush, false, "Whether to flush after receiving.");
-DEFINE_bool(bi, false, "Whether to run bidirectional test.");
+// Exchange QPNs and GIDs via TCP
+void exchange_qpns(char const* peer_ip, metadata* local_meta,
+                   metadata* remote_meta) {
+  int sock;
+  struct sockaddr_in addr;
+  char mode = peer_ip ? 'c' : 's';
 
-static void server_basic(ConnID conn_id, struct Mhandle *mhandle, void *data) {
-    for (int i = 0; i < FLAGS_iterations; i++) {
-        int len = 65536;
-        void *recv_data = data;
+  sock = socket(AF_INET, SOCK_STREAM, 0);
+  int opt = 1;
+  setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt,
+             sizeof(opt));  // Avoid port conflicts
 
-        struct ucclRequest ureq;
-        DCHECK(ep->uccl_recv_async((UcclFlow *)conn_id.context, &mhandle,
-                                   &recv_data, &len, 1, &ureq) == 0);
+  set_nonblocking(sock);
 
-        ep->uccl_poll_ureq(&ureq);
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(TCP_PORT);
+  addr.sin_addr.s_addr = peer_ip ? inet_addr(peer_ip) : INADDR_ANY;
 
-        // verify data
-        for (int i = 0; i < 65536 / 4; i++) {
-            assert(((uint32_t *)data)[i] == 0x123456);
-        }
-
-        // VLOG(5) << "Iteration " << i << " done";
-        std::cout << "Iteration " << i << " done" << std::endl;
+  if (mode == 's') {
+    int listensock = sock;
+    DCHECK(bind(listensock, (struct sockaddr*)&addr, sizeof(addr)) == 0)
+        << "Failed to bind";
+    DCHECK(listen(listensock, 10) == 0) << "Failed to listen";
+    printf("Server waiting for connection...\n");
+    // accept in a non-blocking way
+    while (!force_exit) {
+      struct sockaddr_in client_addr;
+      socklen_t client_len = sizeof(client_addr);
+      sock = accept(listensock, (struct sockaddr*)&client_addr, &client_len);
+      if (sock != -1) break;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+    printf("Server accepted connection\n");
+  } else {
+    printf("Client attempting connection...\n");
+    int attempts = 5;
+    // connect in a non-blocking way
+    while (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0 &&
+           attempts--) {
+      sleep(1);
+    }
+    if (attempts == 0) {
+      perror("Failed to connect after retries");
+      exit(1);
+    }
+    printf("Client connected\n");
+  }
+
+  // Set receive timeout to avoid blocking
+  struct timeval timeout = {5, 0};  // 5 seconds timeout
+  setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
+  // Send local metadata
+  if (send(sock, local_meta, sizeof(*local_meta), 0) <= 0)
+    perror("send() failed");
+
+  // Receive remote metadata
+  if (recv(sock, remote_meta, sizeof(*remote_meta), 0) <= 0)
+    perror("recv() timeout");
+
+  VLOG(1) << "local addr=" << (uint64_t)local_meta->addr
+          << ", local rkey=" << local_meta->rkey
+          << ", remote addr=" << (uint64_t)remote_meta->addr
+          << ", remote rkey=" << remote_meta->rkey;
+
+  close(sock);
 }
 
-static void client_basic(ConnID conn_id, struct Mhandle *mhandle, void *data) {
-    // Fill data in a pattern of 0x123456,0x123456,0x123456...
-    for (int i = 0; i < 65536 / 4; i++) {
-        ((uint32_t *)data)[i] = 0x123456;
-    }
+void create_qp(struct rdma_context* rdma);
+void create_cq(struct rdma_context* rdma);
+void create_srq(struct rdma_context* rdma);
+void init_srq_wr();
+void post_srq(struct rdma_context* rdma, int nb_wr);
+uint32_t poll_cq(struct rdma_context* rdma, uint32_t expect_opcode);
+void send_message(struct rdma_context* rdma);
 
-    for (int i = 0; i < FLAGS_iterations; i++) {
-        void *send_data = data;
-        struct ucclRequest ureq;
-        while (ep->uccl_send_async((UcclFlow *)conn_id.context, mhandle,
-                                   send_data, 65536, &ureq)) {
-        }
+struct ibv_recv_wr wr[MAX_WR];
 
-        ep->uccl_poll_ureq(&ureq);
-
-        // VLOG(5) << "Iteration " << i << " done";
-        std::cout << "Iteration " << i << " done" << std::endl;
-    }
+void init_srq_wr() {
+  for (int i = 0; i < MAX_WR; i++) {
+    wr[i].next = (i == MAX_WR - 1) ? nullptr : &wr[i + 1];
+  }
 }
 
-static void server_lat(ConnID conn_id, struct Mhandle *mhandle, void *data) {
-    // Latency is measured at server side as it is asynchronous receive
-    std::vector<uint64_t> lat_vec;
+void post_srq(struct rdma_context* rdma, int nb_wr) {
+  if (nb_wr == 0) return;
+  DCHECK(nb_wr <= MAX_WR) << "nb_wr is greater than MAX_WR";
 
-    if (FLAGS_warmup) {
-        for (int i = 0; i < 1000; i++) {
-            int len = FLAGS_msize;
-            void *recv_data = data;
-            struct ucclRequest ureq;
-            DCHECK(ep->uccl_recv_async((UcclFlow *)conn_id.context, &mhandle,
-                                       &recv_data, &len, 1, &ureq) == 0);
-            ep->uccl_poll_ureq(&ureq);
-        }
-    }
+  auto* srq = rdma->srq;
 
-    for (int i = 0; i < FLAGS_iterations; i++) {
-        int len = FLAGS_msize;
-        void *recv_data = data;
-        auto t1 = rdtsc();
-        struct ucclRequest ureq;
-        DCHECK(ep->uccl_recv_async((UcclFlow *)conn_id.context, &mhandle,
-                                   &recv_data, &len, 1, &ureq) == 0);
-        ep->uccl_poll_ureq(&ureq);
-        auto t2 = rdtsc();
-        lat_vec.push_back(to_usec(t2 - t1, freq_ghz));
-    }
-    std::sort(lat_vec.begin(), lat_vec.end());
-    std::cout << "Min: " << lat_vec[0] << "us" << std::endl;
-    std::cout << "P50: " << lat_vec[FLAGS_iterations / 2] << "us" << std::endl;
-    std::cout << "P90: " << lat_vec[FLAGS_iterations * 9 / 10] << "us"
-              << std::endl;
-    std::cout << "P99: " << lat_vec[FLAGS_iterations * 99 / 100] << "us"
-              << std::endl;
-    std::cout << "Max: " << lat_vec[FLAGS_iterations - 1] << "us" << std::endl;
+  struct ibv_recv_wr* cache_wr = wr[nb_wr - 1].next;
+  wr[nb_wr - 1].next = nullptr;
+
+  struct ibv_recv_wr* bad_wr;
+  DCHECK(ibv_post_srq_recv(srq, wr, &bad_wr) == 0);
+
+  wr[nb_wr - 1].next = cache_wr;
 }
 
-static void client_lat(ConnID conn_id, struct Mhandle *mhandle, void *data) {
-    if (FLAGS_warmup) {
-        for (int i = 0; i < 1000; i++) {
-            void *send_data = data;
-            struct ucclRequest ureq;
-            while (ep->uccl_send_async((UcclFlow *)conn_id.context, mhandle,
-                                       send_data, FLAGS_msize, &ureq)) {
-            }
-            ep->uccl_poll_ureq(&ureq);
-        }
-    }
+void modify_qp_rtr(struct rdma_context* rdma) {
+  auto remote_meta = rdma->remote_meta;
+  struct ibv_qp_attr attr = {};
+  int attr_mask = IBV_QP_STATE | IBV_QP_PATH_MTU | IBV_QP_AV | IBV_QP_DEST_QPN |
+                  IBV_QP_RQ_PSN | IBV_QP_MIN_RNR_TIMER |
+                  IBV_QP_MAX_DEST_RD_ATOMIC;
 
-    for (int i = 0; i < FLAGS_iterations; i++) {
-        void *send_data = data;
-        struct ucclRequest ureq;
-        while (ep->uccl_send_async((UcclFlow *)conn_id.context, mhandle,
-                                   send_data, FLAGS_msize, &ureq)) {
-        }
-        ep->uccl_poll_ureq(&ureq);
-    }
+  attr.qp_state = IBV_QPS_RTR;
+  attr.path_mtu = rdma->port_attr.active_mtu;
+  attr.ah_attr.port_num = PORT_NUM;
+
+  attr.ah_attr.is_global = 1;
+  attr.ah_attr.grh.dgid = rdma->remote_meta.gid;
+  attr.ah_attr.grh.sgid_index = GID_INDEX;
+  attr.ah_attr.grh.hop_limit = 0xff;
+  attr.ah_attr.grh.traffic_class = 0;
+  attr.ah_attr.sl = 0;
+  attr.rq_psn = BASE_PSN;
+
+  attr.min_rnr_timer = 12;
+  attr.max_dest_rd_atomic = 1;
+
+  for (int i = 0; i < NUM_QPS; i++) {
+    attr.dest_qp_num = rdma->remote_meta.qpn[i];
+    int ret = ibv_modify_qp(rdma->qp[i], &attr, attr_mask);
+    DCHECK(ret == 0) << "Failed to modify QP: " << ret;
+  }
 }
 
-volatile uint64_t tx_cur_sec_bytes = 0;
-uint64_t tx_prev_sec_bytes = 0;
-volatile uint64_t rx_cur_sec_bytes = 0;
-uint64_t rx_prev_sec_bytes = 0;
+void modify_qp_rts(struct rdma_context* rdma) {
+  struct ibv_qp_attr attr = {};
+  int attr_mask = IBV_QP_STATE | IBV_QP_SQ_PSN | IBV_QP_TIMEOUT |
+                  IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY | IBV_QP_MAX_QP_RD_ATOMIC;
 
-volatile uint64_t c_itr = 0;
-volatile uint64_t s_itr = 0;
+  attr.qp_state = IBV_QPS_RTS;
+  attr.sq_psn = BASE_PSN;
 
-static void server_tpt(std::vector<ConnID> &conn_ids,
-                       std::vector<struct Mhandle *> &mhandles,
-                       std::vector<void *> &datas) {
-    s_itr = FLAGS_iterations;
-    s_itr *= FLAGS_nflow;
+  attr.timeout = 14;
+  attr.retry_cnt = 7;
+  attr.rnr_retry = 7;
+  attr.max_rd_atomic = 1;
 
-    int len[FLAGS_nflow][FLAGS_nreq][FLAGS_nmsg];
-    struct Mhandle *mhs[FLAGS_nflow][FLAGS_nreq][FLAGS_nmsg];
-    void *recv_data[FLAGS_nflow][FLAGS_nreq][FLAGS_nmsg];
-
-    int flag[FLAGS_nflow][FLAGS_nreq];
-    memset(flag, 0, sizeof(int) * FLAGS_nflow * FLAGS_nreq);
-
-    std::vector<std::vector<ucclRequest>> ureq_vec(FLAGS_nflow);
-    for (int i = 0; i < FLAGS_nflow; i++) {
-        ureq_vec[i].resize(FLAGS_nreq);
-    }
-
-    for (int f = 0; f < FLAGS_nflow; f++) {
-        for (int r = 0; r < FLAGS_nreq; r++)
-            for (int m = 0; m < FLAGS_nmsg; m++) {
-                len[f][r][m] = FLAGS_msize;
-                recv_data[f][r][m] = reinterpret_cast<char *>(datas[f]) +
-                                     r * FLAGS_msize * FLAGS_nmsg +
-                                     m * FLAGS_msize;
-                mhs[f][r][m] = mhandles[f];
-            }
-    }
-
-    for (int f = 0; f < FLAGS_nflow; f++) {
-        for (int r = 0; r < FLAGS_nreq; r++) {
-            DCHECK(ep->uccl_recv_async((UcclFlow *)conn_ids[f].context,
-                                       mhs[f][r], recv_data[f][r], len[f][r],
-                                       FLAGS_nmsg, &ureq_vec[f][r]) == 0);
-            s_itr--;
-            rx_cur_sec_bytes += FLAGS_msize * FLAGS_nmsg;
-        }
-    }
-
-    while (s_itr) {
-        for (int f = 0; f < FLAGS_nflow; f++) {
-            for (int r = 0; r < FLAGS_nreq; r++) {
-                if (quit) {
-                    s_itr = 0;
-                    break;
-                }
-                if (!ep->uccl_poll_ureq_once(&ureq_vec[f][r]))
-                    continue;
-
-                if (!FLAGS_flush) {
-                    s_itr--;
-                    if (s_itr == 0)
-                        break;
-                    DCHECK(ep->uccl_recv_async((UcclFlow *)conn_ids[f].context,
-                                               mhs[f][r], recv_data[f][r],
-                                               len[f][r], FLAGS_nmsg,
-                                               &ureq_vec[f][r]) == 0);
-                    rx_cur_sec_bytes += FLAGS_msize * FLAGS_nmsg;
-                    continue;
-                }
-
-                if (flag[f][r] == 0) {
-                    DCHECK(ep->uccl_flush((UcclFlow *)conn_ids[f].context,
-                                          mhs[f][r], recv_data[f][r], len[f][r],
-                                          FLAGS_nmsg, &ureq_vec[f][r]) == 0);
-                    flag[f][r] = 1;
-                } else if (flag[f][r] == 1) {
-                    s_itr--;
-                    if (s_itr == 0)
-                        break;
-                    DCHECK(ep->uccl_recv_async((UcclFlow *)conn_ids[f].context,
-                                               mhs[f][r], recv_data[f][r],
-                                               len[f][r], FLAGS_nmsg,
-                                               &ureq_vec[f][r]) == 0);
-                    rx_cur_sec_bytes += FLAGS_msize * FLAGS_nmsg;
-                    flag[f][r] = 0;
-                }
-            }
-        }
-    }
+  for (int i = 0; i < NUM_QPS; i++) {
+    int ret = ibv_modify_qp(rdma->qp[i], &attr, attr_mask);
+    DCHECK(ret == 0) << "Failed to modify QP: " << ret;
+  }
 }
 
-static void client_tpt(std::vector<ConnID> &conn_ids,
-    std::vector<struct Mhandle *> &mhandles,
-    std::vector<void *> &datas) {
-    c_itr = FLAGS_iterations;
-    c_itr *= FLAGS_nflow;
+// Initialize RDMA resources
+struct rdma_context* init_rdma(char const* server_ip) {
+  struct rdma_context* rdma =
+      (struct rdma_context*)calloc(1, sizeof(struct rdma_context));
 
-    std::vector<std::vector<std::vector<struct ucclRequest>>> ureq_vec(
-    FLAGS_nflow);
-    for (int f = 0; f < FLAGS_nflow; f++) {
-    ureq_vec[f].resize(FLAGS_nreq);
-    for (int r = 0; r < FLAGS_nreq; r++) {
-    ureq_vec[f][r].resize(FLAGS_nmsg);
-    for (int n = 0; n < FLAGS_nmsg; n++)
-    ureq_vec[f][r][n] = {};
-    }
-    }
-    for (int f = 0; f < FLAGS_nflow; f++) {
-    for (int r = 0; r < FLAGS_nreq; r++) {
-    for (int n = 0; n < FLAGS_nmsg; n++) {
-    void *send_data = reinterpret_cast<char *>(datas[f]) +
-                r * FLAGS_msize * FLAGS_nmsg +
-                n * FLAGS_msize;
-    while (ep->uccl_send_async((UcclFlow *)conn_ids[f].context,
-                            mhandles[f], send_data, FLAGS_msize,
-                            &ureq_vec[f][r][n]) && !quit) {
-    }
-    ureq_vec[f][r][n].rtt_tsc = rdtsc();
-    tx_cur_sec_bytes += FLAGS_msize;
-    }
-    c_itr--;
-    }
-    }
+  int nb_devices;
 
-    int fin_msg = 0;
+  struct ibv_device** dev_list = ibv_get_device_list(&nb_devices);
 
-    while (c_itr && !quit) {
-    for (int f = 0; f < FLAGS_nflow; f++) {
-    for (int r = 0; r < FLAGS_nreq; r++) {
-    for (int n = 0; n < FLAGS_nmsg; n++) {
-    if (ureq_vec[f][r][n].rtt_tsc == 0 || ep->uccl_poll_ureq_once(&ureq_vec[f][r][n])) {
+  char device_name[32];
+  sprintf(device_name, "mlx5_%d", DEV_INDEX);
 
-        ureq_vec[f][r][n].rtt_tsc = 0;
+  int i;
+  for (i = 0; i < nb_devices; i++) {
+    if (strcmp(ibv_get_device_name(dev_list[i]), device_name) == 0) {
+      break;
+    }
+  }
 
-        void *send_data = reinterpret_cast<char *>(datas[f]) +
-                        r * FLAGS_msize * FLAGS_nmsg +
-                        n * FLAGS_msize;
-        if (ep->uccl_send_async(
-                            (UcclFlow *)conn_ids[f].context,
-                            mhandles[f], send_data, FLAGS_msize,
-                            &ureq_vec[f][r][n])) {
-                                continue;
-                            }
-        ureq_vec[f][r][n].rtt_tsc = rdtsc();
-        tx_cur_sec_bytes += FLAGS_msize;
-        if (++fin_msg == FLAGS_nreq) {
-            c_itr--;
-            fin_msg = 0;
-        }
-    }
-    if (quit) {
-        c_itr = 0;
-        break;
-    }
-    }
-    }
-    }
-    }
+  DCHECK(i < nb_devices) << "Device " << device_name << " not found";
+  auto* open_dev = dev_list[i];
+
+  rdma->ctx = ibv_open_device(open_dev);
+  DCHECK(rdma->ctx) << "Failed to open device";
+
+  ibv_free_device_list(dev_list);
+
+  rdma->pd = ibv_alloc_pd(rdma->ctx);
+  DCHECK(rdma->pd) << "Failed to allocate pd";
+
+  DCHECK(ibv_query_device(rdma->ctx, &rdma->dev_attr) == 0)
+      << "Failed to query device";
+
+  DCHECK(rdma->dev_attr.phys_port_cnt == 1) << "Only one port is supported";
+
+  DCHECK(ibv_query_port(rdma->ctx, 1, &rdma->port_attr) == 0)
+      << "Failed to query port";
+
+  DCHECK(rdma->port_attr.state == IBV_PORT_ACTIVE) << "Port is not active";
+
+  DCHECK(rdma->port_attr.link_layer == IBV_LINK_LAYER_ETHERNET)
+      << "RoCE is not supported";
+
+  DCHECK(ibv_query_gid(rdma->ctx, 1, GID_INDEX, &rdma->gid) == 0)
+      << "Failed to query gid";
+
+#ifdef USE_GPU
+  cudaSetDevice(USE_GPU);
+#ifndef MANAGED
+  if (cudaMalloc(&rdma->local_buf, OUTSTNADING_MSG * MSG_SIZE) != cudaSuccess) {
+#else
+  if (cudaMallocManaged(&rdma->local_buf, OUTSTNADING_MSG * MSG_SIZE) !=
+      cudaSuccess) {
+#endif
+    perror("Failed to allocate GPU memory");
+    exit(1);
+  }
+
+#ifdef MANAGED
+  DCHECK(cudaMemAdvise(rdma->local_buf, OUTSTNADING_MSG * MSG_SIZE,
+                       cudaMemAdviseSetPreferredLocation,
+                       USE_GPU) == cudaSuccess)
+      << "Failed to set preferred location";
+  DCHECK(cudaMemAdvise(rdma->local_buf, OUTSTNADING_MSG * MSG_SIZE,
+                       cudaMemAdviseSetAccessedBy, USE_GPU) == cudaSuccess)
+      << "Failed to set accessed by";
+  DCHECK(cudaMemPrefetchAsync(rdma->local_buf, OUTSTNADING_MSG * MSG_SIZE,
+                              USE_GPU) == cudaSuccess)
+      << "Failed to prefetch GPU memory";
+  DCHECK(cudaDeviceSynchronize() == cudaSuccess) << "Failed to synchronize";
+#endif
+
+  rdma->mr = ibv_reg_mr(rdma->pd, rdma->local_buf, OUTSTNADING_MSG * MSG_SIZE,
+                        IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                            IBV_ACCESS_REMOTE_READ);
+#else
+  if (posix_memalign((void**)&rdma->local_buf, sysconf(_SC_PAGESIZE),
+                     OUTSTNADING_MSG * MSG_SIZE)) {
+    perror("Failed to allocate local buffer");
+    exit(1);
+  }
+  rdma->mr = ibv_reg_mr(rdma->pd, rdma->local_buf, OUTSTNADING_MSG * MSG_SIZE,
+                        IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                            IBV_ACCESS_REMOTE_READ);
+#endif
+
+  DCHECK(rdma->mr) << "Failed to register memory regions";
+  assert((uintptr_t)rdma->mr->addr == (uintptr_t)rdma->local_buf);
+
+  VLOG(1) << "RX MR: addr=" << (uint64_t)rdma->mr->addr
+          << ", len=" << rdma->mr->length << ", lkey=" << rdma->mr->lkey
+          << ", rkey=" << rdma->mr->rkey;
+
+  create_srq(rdma);
+
+  create_cq(rdma);
+
+  create_qp(rdma);
+
+  metadata local_meta;
+  for (int i = 0; i < NUM_QPS; i++) {
+    local_meta.qpn[i] = rdma->qp[i]->qp_num;
+  }
+  local_meta.rkey = rdma->mr->rkey;
+  local_meta.addr = (uint64_t)rdma->local_buf;
+  memcpy(&local_meta.gid, &rdma->gid, sizeof(local_meta.gid));
+
+  exchange_qpns(server_ip, &local_meta, &rdma->remote_meta);
+
+  modify_qp_rtr(rdma);
+
+  modify_qp_rts(rdma);
+
+  init_srq_wr();
+
+  post_srq(rdma, MAX_WR);
+
+  return rdma;
 }
 
-static void server_worker(void) {
-    std::string remote_ip;
+void create_cq(struct rdma_context* rdma) {
+  struct ibv_cq_init_attr_ex cq_ex_attr;
+  cq_ex_attr.cqe = 16384;
+  cq_ex_attr.cq_context = nullptr;
+  cq_ex_attr.channel = nullptr;
+  cq_ex_attr.comp_vector = 0;
+  cq_ex_attr.wc_flags =
+      IBV_WC_EX_WITH_BYTE_LEN | IBV_WC_EX_WITH_IMM | IBV_WC_EX_WITH_QP_NUM |
+      IBV_WC_EX_WITH_SRC_QP |
+      IBV_WC_EX_WITH_COMPLETION_TIMESTAMP;  // Timestamp support.
+  cq_ex_attr.comp_mask = IBV_CQ_INIT_ATTR_MASK_FLAGS;
+  cq_ex_attr.flags =
+      IBV_CREATE_CQ_ATTR_SINGLE_THREADED | IBV_CREATE_CQ_ATTR_IGNORE_OVERRUN;
 
-    std::vector<ConnID> conn_ids;
-    std::vector<void *> datas;
-    std::vector<struct Mhandle *> mhandles;
+  rdma->cq_ex = ibv_create_cq_ex(rdma->ctx, &cq_ex_attr);
+  DCHECK(rdma->cq_ex) << "Failed to create CQ";
+}
 
-    mhandles.resize(FLAGS_nflow);
+void create_srq(struct rdma_context* rdma) {
+  struct ibv_srq_init_attr srq_init_attr;
+  memset(&srq_init_attr, 0, sizeof(srq_init_attr));
+  srq_init_attr.attr.max_sge = 1;
+  srq_init_attr.attr.max_wr = MAX_WR;
+  srq_init_attr.attr.srq_limit = 0;
+  rdma->srq = ibv_create_srq(rdma->pd, &srq_init_attr);
+  DCHECK(rdma->srq) << "Failed to create SRQ";
+}
 
-    for (int i = 0; i < FLAGS_nflow; i++) {
-        int remote_dev;
-        auto conn_id = ep->test_uccl_accept(0, remote_ip, &remote_dev);
-        printf("Server accepted connection from %s (flow#%d)\n",
-               remote_ip.c_str(), i);
-        #ifdef GPU
-        cudaSetDevice(GPU);
-        void *data;
-        cudaMalloc(&data, FLAGS_msize * FLAGS_nreq * FLAGS_nmsg);
-        #else        
-        void *data =
-            mmap(nullptr, FLAGS_msize * FLAGS_nreq * FLAGS_nmsg,
-                 PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        #endif
-        assert(data != MAP_FAILED);
-        ep->uccl_regmr((UcclFlow *)conn_id.context, data,
-                       FLAGS_msize * FLAGS_nreq * FLAGS_nmsg, 0, &mhandles[i]);
+// Create and configure a UD QP
+void create_qp(struct rdma_context* rdma) {
+  struct ibv_qp_init_attr attr;
+  memset(&attr, 0, sizeof(attr));
 
-        conn_ids.push_back(conn_id);
-        datas.push_back(data);
-    }
+  attr.qp_context = nullptr;
+  attr.send_cq = ibv_cq_ex_to_cq(rdma->cq_ex);
+  attr.recv_cq = ibv_cq_ex_to_cq(rdma->cq_ex);
+  attr.qp_type = IBV_QPT_RC;
 
-    if (FLAGS_perftype == "basic") {
-        server_basic(conn_ids[0], mhandles[0], datas[0]);
-    } else if (FLAGS_perftype == "lat") {
-        server_lat(conn_ids[0], mhandles[0], datas[0]);
-    } else if (FLAGS_perftype == "tpt") {
-        server_tpt(conn_ids, mhandles, datas);
+  attr.cap.max_send_wr = MAX_WR;
+  attr.cap.max_send_sge = 1;
+  attr.cap.max_inline_data = 0;
+  attr.srq = rdma->srq;
+
+  struct ibv_qp_attr qp_attr;
+  memset(&qp_attr, 0, sizeof(qp_attr));
+
+  qp_attr.qp_state = IBV_QPS_INIT;
+  qp_attr.pkey_index = 0;
+  qp_attr.port_num = PORT_NUM;
+  qp_attr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE;
+
+  for (int i = 0; i < NUM_QPS; i++) {
+    rdma->qp[i] = ibv_create_qp(rdma->pd, &attr);
+    DCHECK(rdma->qp[i]) << "Failed to create QP";
+
+    DCHECK(ibv_modify_qp(rdma->qp[i], &qp_attr,
+                         IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT |
+                             IBV_QP_ACCESS_FLAGS) == 0)
+        << "Failed to modify QP";
+  }
+}
+
+uint32_t poll_cq(struct rdma_context* rdma, uint32_t expect_opcode) {
+  auto totoal_bytes = 0;
+  auto* cq_ex = rdma->cq_ex;
+  int post_srq_cnt = 0;
+
+  struct ibv_poll_cq_attr poll_cq_attr = {};
+  if (ibv_start_poll(cq_ex, &poll_cq_attr)) return 0;
+
+  while (!force_exit) {
+    DCHECK(cq_ex->status == IBV_WC_SUCCESS)
+        << "Failed to poll CQ: " << cq_ex->status;
+    DCHECK(ibv_wc_read_opcode(cq_ex) == expect_opcode)
+        << "Unexpected opcode: " << ibv_wc_read_opcode(cq_ex);
+
+    if (ibv_wc_read_opcode(cq_ex) == IBV_WC_RECV_RDMA_WITH_IMM) {
+      totoal_bytes += ibv_wc_read_byte_len(cq_ex);
+      post_srq_cnt++;
     } else {
-        std::cerr << "Unknown performance type: " << FLAGS_perftype
-                  << std::endl;
+      totoal_bytes++;  // it is actually acked_msgs
     }
 
-    while (!quit) {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-    }
+    if (ibv_next_poll(cq_ex)) break;
+  }
 
-    for (int i = 0; i < FLAGS_nflow; i++) {
-        ep->uccl_deregmr(mhandles[i]);
-        munmap(datas[i], FLAGS_msize * FLAGS_nreq * FLAGS_nmsg);
-    }
+  ibv_end_poll(cq_ex);
+
+  post_srq(rdma, post_srq_cnt);
+
+  return totoal_bytes;
 }
 
-static void client_worker(void) {
-    std::vector<ConnID> conn_ids;
-    std::vector<void *> datas;
-    std::vector<struct Mhandle *> mhandles;
+// Server: Post a receive and poll CQ
+void run_server(struct rdma_context* rdma) {
+  uint32_t iterations = 0;
+  printf("Server waiting for message...\n");
 
-    mhandles.resize(FLAGS_nflow);
+  while (!force_exit) {
+    auto received_bytes = poll_cq(rdma, IBV_WC_RECV_RDMA_WITH_IMM);
+    rx_stats_bytes += received_bytes;
 
-    for (int i = 0; i < FLAGS_nflow; i++) {
-        auto conn_id = ep->test_uccl_connect(0, FLAGS_serverip, 0);
-        printf("Client connected to %s (flow#%d)\n", FLAGS_serverip.c_str(), i);
-        #ifdef GPU
-        cudaSetDevice(GPU);
-        void *data;
-        cudaMalloc(&data, FLAGS_msize * FLAGS_nreq * FLAGS_nmsg);
-        #else
-        void *data =
-            mmap(nullptr, FLAGS_msize * FLAGS_nreq * FLAGS_nmsg,
-                 PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        #endif
-        assert(data != MAP_FAILED);
-        ep->uccl_regmr((UcclFlow *)conn_id.context, data,
-                       FLAGS_msize * FLAGS_nreq * FLAGS_nmsg, 0, &mhandles[i]);
-
-        conn_ids.push_back(conn_id);
-        datas.push_back(data);
+    if (received_bytes) {
+      iterations++;
     }
 
-    if (FLAGS_perftype == "basic") {
-        client_basic(conn_ids[0], mhandles[0], datas[0]);
-    } else if (FLAGS_perftype == "lat") {
-        client_lat(conn_ids[0], mhandles[0], datas[0]);
-    } else if (FLAGS_perftype == "tpt") {
-        client_tpt(conn_ids, mhandles, datas);
-    } else {
-        std::cerr << "Unknown performance type: " << FLAGS_perftype
-                  << std::endl;
+    if (iterations == ITERATIONS) {
+      break;
     }
-
-    for (int i = 0; i < FLAGS_nflow; i++) {
-        ep->uccl_deregmr(mhandles[i]);
-        munmap(datas[i], FLAGS_msize * FLAGS_nreq * FLAGS_nmsg);
-    }
+  }
 }
 
-int main(int argc, char *argv[]) {
-    google::InitGoogleLogging(argv[0]);
-    google::InstallFailureSignalHandler();
-    gflags::ParseCommandLineFlags(&argc, &argv, true);
+void send_message(struct rdma_context* rdma) {
+  auto* data = rdma->local_buf + next_data_offset;
+  auto remote_meta = rdma->remote_meta;
 
-    signal(SIGINT, interrupt_handler);
-    signal(SIGTERM, interrupt_handler);
-    signal(SIGHUP, interrupt_handler);
+  struct ibv_send_wr wr = {};
+  struct ibv_sge sge = {};
 
-    ep.emplace(DEVNAME_SUFFIX_LIST, NUM_DEVICES, NUM_ENGINES);
+  wr.wr.rdma.remote_addr = remote_meta.addr + next_data_offset;
+  wr.wr.rdma.rkey = remote_meta.rkey;
 
-    // Create a thread to print throughput every second
-    std::thread t([&] {
-        while (!quit) {
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-            printf(
-                "(%d flows) TX Tpt: %.2f Gbps(%lu), RX Tpt: %.2f Gbps(%lu)\n",
-                FLAGS_nflow,
-                (tx_cur_sec_bytes - tx_prev_sec_bytes) * 8.0 / 1000 / 1000 /
-                    1000,
-                c_itr,
-                (rx_cur_sec_bytes - rx_prev_sec_bytes) * 8.0 / 1000 / 1000 /
-                    1000,
-                s_itr);
+  sge.lkey = rdma->mr->lkey;
+  sge.addr = (uint64_t)data;
+  sge.length = MSG_SIZE;
 
-            tx_prev_sec_bytes = tx_cur_sec_bytes;
-            rx_prev_sec_bytes = rx_cur_sec_bytes;
-        }
-    });
+  wr.sg_list = &sge;
+  wr.num_sge = 1;
 
-    if (FLAGS_bi) {
-        CHECK(!FLAGS_serverip.empty()) << "Server IP address is required.";
-        std::thread server_thread(server_worker);
-        std::thread client_thread(client_worker);
+  wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+  wr.send_flags = IBV_SEND_SIGNALED;
 
-        server_thread.join();
-        client_thread.join();
-    } else if (FLAGS_server) {
-        server_worker();
-    } else {
-        CHECK(!FLAGS_serverip.empty()) << "Server IP address is required.";
-        client_worker();
+  struct ibv_send_wr* bad_wr;
+  DCHECK(ibv_post_send(rdma->qp[next_send_qp_idx], &wr, &bad_wr) == 0);
+
+  next_send_qp_idx = (next_send_qp_idx + 1) % NUM_QPS;
+  next_data_offset =
+      (next_data_offset + MSG_SIZE) % (MSG_SIZE * OUTSTNADING_MSG);
+}
+
+// Client: Send message
+void run_client(struct rdma_context* rdma) {
+  uint32_t outstanding_msg = 0;
+  uint32_t iterations = 0;
+
+  while (!force_exit) {
+    while (outstanding_msg < OUTSTNADING_MSG && iterations < ITERATIONS) {
+      send_message(rdma);
+      tx_stats_bytes += MSG_SIZE;
+      outstanding_msg++;
+      iterations++;
     }
 
-    t.join();
+    outstanding_msg -= poll_cq(rdma, IBV_WC_RDMA_WRITE);
 
-    return 0;
+    if (outstanding_msg == 0 && iterations == ITERATIONS) {
+      break;
+    }
+  }
+}
+
+#define KNL_MODULE_LOADED(a) ((access(a, F_OK) == -1) ? 0 : 1)
+static bool GdrSupportInitOnce() {
+  // Check for the nv_peer_mem module being loaded
+  return KNL_MODULE_LOADED("/sys/kernel/mm/memory_peers/nv_mem/version") ||
+         KNL_MODULE_LOADED("/sys/kernel/mm/memory_peers/nv_mem_nc/version") ||
+         KNL_MODULE_LOADED("/sys/module/nvidia_peermem/version");
+}
+
+void check_gdr_support() {
+  if (!GdrSupportInitOnce()) {
+    printf("nvidia_peermem is not available for GPUDirect RDMA\n");
+    return;
+  }
+
+  int driverVersion;
+  cudaDriverGetVersion(&driverVersion);
+  DCHECK(driverVersion >= 11030);
+  for (int i = 0; i < 8; i++) {
+    int cudaDev, attr = 0;
+    cudaSetDevice(i);
+    cudaGetDevice(&cudaDev);
+    cudaDeviceGetAttribute(&attr, cudaDevAttrGPUDirectRDMASupported, cudaDev);
+    printf("GPU%d GDR support: %d\n", i, attr);
+  }
+}
+
+int main(int argc, char* argv[]) {
+  signal(SIGINT, signal_handler);
+
+  check_gdr_support();
+
+  is_server = (argc == 1);
+
+  struct rdma_context* rdma = init_rdma(is_server ? nullptr : argv[1]);
+
+  // launch a stats thread, print stats every 1 second
+  std::thread stats_thread([&]() {
+    while (!force_exit) {
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+      // unit: Gbps
+      auto rx_stats_bytes_per_sec =
+          8 * (rx_stats_bytes - last_rx_stats_bytes) / 1e9;
+      auto tx_stats_bytes_per_sec =
+          8 * (tx_stats_bytes - last_tx_stats_bytes) / 1e9;
+#ifdef USE_GPU
+      printf("[GPU%d <---> mlx5_%d] RX: %.2f Gbps, TX: %.2f Gbps\n", USE_GPU,
+             DEV_INDEX, rx_stats_bytes_per_sec, tx_stats_bytes_per_sec);
+#else
+      printf("[Host  <---> mlx5_%d]  RX: %.2f Gbps, TX: %.2f Gbps\n", DEV_INDEX,
+             rx_stats_bytes_per_sec, tx_stats_bytes_per_sec);
+#endif
+      last_rx_stats_bytes = rx_stats_bytes;
+      last_tx_stats_bytes = tx_stats_bytes;
+    }
+  });
+
+  if (!is_server)
+    run_client(rdma);
+  else
+    run_server(rdma);
+
+  return 0;
 }

@@ -16,9 +16,9 @@ static const uint32_t THREADS_PER_BLOCK = 512;
 static const uint32_t MAX_COPIES = 128;
 
 typedef struct {
-    uint64_t dst[MAX_COPIES];
-    uint64_t src[MAX_COPIES];
-    uint32_t len[MAX_COPIES];
+  uint64_t dst[MAX_COPIES];
+  uint64_t src[MAX_COPIES];
+  uint32_t len[MAX_COPIES];
 } copy_param_t;
 
 static const uint32_t param_size = sizeof(copy_param_t);
@@ -27,9 +27,9 @@ static const uint32_t param_size = sizeof(copy_param_t);
 static_assert(param_size <= 32764, "param_size must be <= 32764");
 
 // Launch wrapper (exposed with C linkage) that is callable from a .cc file.
-void launchScatteredMemcpy(uint32_t num_copies, const copy_param_t *p);
+void launchScatteredMemcpy(uint32_t num_copies, copy_param_t const* p);
 // 1 vs 128 MAX_COPIES -> 2.6 vs 3.6 us async launch time.
-void launchScatteredMemcpyAsync(uint32_t num_copies, const copy_param_t *params,
+void launchScatteredMemcpyAsync(uint32_t num_copies, copy_param_t const* params,
                                 cudaStream_t stream);
 // 0.56 us for pollScatteredMemcpy.
 int pollScatteredMemcpy(cudaStream_t stream);

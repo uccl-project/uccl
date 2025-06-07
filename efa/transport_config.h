@@ -1,8 +1,7 @@
 #pragma once
+#include "util.h"
 #include <cstdint>
 #include <thread>
-
-#include "util.h"
 
 #define PATH_SELECTION
 #define REXMIT_SET_PATH
@@ -15,15 +14,15 @@
 #define LAZY_CREATE_ENGINE
 
 enum class SenderCCType {
-    kNone,
-    kTimely,
-    kTimelyPP,
-    kCubic,
-    kCubicPP,
+  kNone,
+  kTimely,
+  kTimelyPP,
+  kCubic,
+  kCubicPP,
 };
 enum class ReceiverCCType {
-    kNone,
-    kEQDS,
+  kNone,
+  kEQDS,
 };
 static constexpr SenderCCType kSenderCCType = SenderCCType::kCubic;
 static constexpr ReceiverCCType kReceiverCCType = ReceiverCCType::kNone;
@@ -37,7 +36,7 @@ static_assert(
 static const uint32_t kNumVdevices = 8;        // # of vEFA/GPUs.
 static const uint32_t kNumEnginesPerVdev = 2;  // # of engines per vEFA/GPU.
 static const uint32_t kNumEngines = kNumVdevices * kNumEnginesPerVdev;
-static const bool kSplitSendRecvEngine =
+static bool const kSplitSendRecvEngine =
     true;  // Split sender/recevier flows to dedicated engines.
 
 /// Interface configuration.
@@ -45,21 +44,21 @@ static const bool kSplitSendRecvEngine =
 static const uint8_t NUM_DEVICES = (kNumVdevices + 1) / 2;
 static const uint8_t EFA_GID_IDX = 0;
 static const std::string EFA_DEVICE_NAME_LIST[] = {
-    "rdmap16s27", 
-    
-    "rdmap32s27", 
-    
-    "rdmap144s27", 
-    
+    "rdmap16s27",
+
+    "rdmap32s27",
+
+    "rdmap144s27",
+
     "rdmap160s27",
 };
 static const std::string ENA_DEVICE_NAME_LIST[] = {
-    "ens32", 
-    
-    "ens65", 
-    
+    "ens32",
+
+    "ens65",
+
     "ens130",
-    
+
     "ens163",
 };
 static constexpr double kLinkBandwidth = 100.0 * 1e9 / 8;  // 100Gbps
@@ -134,11 +133,11 @@ static_assert((kMaxSrcQP + kMaxSrcQPCtrl) * kNumEnginesPerVdev * 2 +
               EFA_MAX_QPS);
 
 // CC parameters.
-static const double kMaxUnackedPktsPP = 1u;
+static double const kMaxUnackedPktsPP = 1u;
 static const uint32_t kMaxUnackedPktsPerEngine = kMaxUnackedPktsPP * kMaxPath;
 static const std::size_t kSackBitmapSize = 1024;
 static const std::size_t kFastRexmitDupAckThres = 128;
-static const double kMaxBwPP = 5.0 * 1e9 / 8;
+static double const kMaxBwPP = 5.0 * 1e9 / 8;
 static const uint32_t kSwitchPathThres = 1u;
 static const uint32_t kMaxPktsInTimingWheel = 1024;
 static const uint32_t kMaxPathHistoryPerEngine = 4096;

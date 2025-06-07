@@ -52,50 +52,50 @@ extern "C" {
 #define RING_SZ_MASK (unsigned)(0x0fffffff) /**< Ring slots mask */
 #define CACHE_LINE_SIZE 64
 
-#define ISPOWEROF2(x) (((((x) - 1) & (x)) == 0) && x)
-#define __ROUND_MASK(x, y) ((__typeof__(x))((y) - 1))
-#define ALIGN_UP_POW2(x, y) ((((x) - 1) | __ROUND_MASK(x, y)) + 1)
+#define ISPOWEROF2(x) (((((x)-1) & (x)) == 0) && x)
+#define __ROUND_MASK(x, y) ((__typeof__(x))((y)-1))
+#define ALIGN_UP_POW2(x, y) ((((x)-1) | __ROUND_MASK(x, y)) + 1)
 #define ROUND_DOWN_POW2(x, y) ((x) & ~__ROUND_MASK(x, y))
 
 /** enqueue/dequeue behavior types */
 enum jring_queue_behavior {
-    /** Enq/Deq a fixed number of items from a ring */
-    JRING_QUEUE_FIXED = 0,
-    /** Enq/Deq as many items as possible from ring */
-    JRING_QUEUE_VARIABLE
+  /** Enq/Deq a fixed number of items from a ring */
+  JRING_QUEUE_FIXED = 0,
+  /** Enq/Deq as many items as possible from ring */
+  JRING_QUEUE_VARIABLE
 };
 
 /** prod/cons sync types */
 enum jring_sync_type {
-    JRING_SYNC_MT = 0, /**< multi-thread safe */
-    JRING_SYNC_ST = 1, /**< single-thread */
+  JRING_SYNC_MT = 0, /**< multi-thread safe */
+  JRING_SYNC_ST = 1, /**< single-thread */
 };
 
 struct jring_headtail {
-    volatile uint32_t head;
-    volatile uint32_t tail;
-    enum jring_sync_type sync;
+  volatile uint32_t head;
+  volatile uint32_t tail;
+  enum jring_sync_type sync;
 };
 
 struct jring {
-    uint32_t size;     /**< Size of ring. */
-    uint32_t mask;     /**< Mask (size-1) of ring. */
-    uint32_t capacity; /**< Usable size of ring */
-    uint32_t esize;    /**< Size of each element in the ring. */
-    uint32_t reserved[2];
+  uint32_t size;     /**< Size of ring. */
+  uint32_t mask;     /**< Mask (size-1) of ring. */
+  uint32_t capacity; /**< Usable size of ring */
+  uint32_t esize;    /**< Size of each element in the ring. */
+  uint32_t reserved[2];
 
-    // Producer head/tail.
-    struct jring_headtail prod __attribute__((aligned(CACHE_LINE_SIZE)));
+  // Producer head/tail.
+  struct jring_headtail prod __attribute__((aligned(CACHE_LINE_SIZE)));
 
-    // Empty cache line.
-    char pad0 __attribute__((aligned(CACHE_LINE_SIZE)));
+  // Empty cache line.
+  char pad0 __attribute__((aligned(CACHE_LINE_SIZE)));
 
-    // Consumer head/tail.
-    struct jring_headtail cons __attribute__((aligned(CACHE_LINE_SIZE)));
+  // Consumer head/tail.
+  struct jring_headtail cons __attribute__((aligned(CACHE_LINE_SIZE)));
 
-    // Empty cache line.
-    char pad1 __attribute__((aligned(CACHE_LINE_SIZE)));
-    void *ring[0] __attribute__((aligned(CACHE_LINE_SIZE)));
+  // Empty cache line.
+  char pad1 __attribute__((aligned(CACHE_LINE_SIZE)));
+  void* ring[0] __attribute__((aligned(CACHE_LINE_SIZE)));
 };
 typedef struct jring jring_t;
 
@@ -125,14 +125,14 @@ typedef struct jring jring_t;
  */
 static inline size_t jring_get_buf_ring_size(uint32_t element_size,
                                              uint32_t count) {
-    if ((element_size % 4) != 0) return -1;
+  if ((element_size % 4) != 0) return -1;
 
-    if (!(ISPOWEROF2(count)) || (count > RING_SZ_MASK)) return -1;
+  if (!(ISPOWEROF2(count)) || (count > RING_SZ_MASK)) return -1;
 
-    size_t sz = sizeof(struct jring) + (count * element_size);
+  size_t sz = sizeof(struct jring) + (count * element_size);
 
-    sz = ALIGN_UP_POW2(sz, CACHE_LINE_SIZE);
-    return sz;
+  sz = ALIGN_UP_POW2(sz, CACHE_LINE_SIZE);
+  return sz;
 }
 
 /**
@@ -145,28 +145,28 @@ static inline size_t jring_get_buf_ring_size(uint32_t element_size,
  * @param mc Set to 1 if the ring is to be multi-consumer safe.
  * @return 0 on success, -1 on failure.
  */
-static inline int jring_init(struct jring *r, uint32_t count, uint32_t esize,
+static inline int jring_init(struct jring* r, uint32_t count, uint32_t esize,
                              int mp, int mc) {
-    // The buffer ring needs to be a power of two.
-    if (!ISPOWEROF2(count)) {
-        return -1;
-    }
-    // Element size needs to be a multiple of 4.
-    if (esize % 4 != 0) return -1;
+  // The buffer ring needs to be a power of two.
+  if (!ISPOWEROF2(count)) {
+    return -1;
+  }
+  // Element size needs to be a multiple of 4.
+  if (esize % 4 != 0) return -1;
 
-    r->size = count;
-    r->mask = r->size - 1;
-    r->capacity = r->mask;  // Usable size of the ring.
-    r->esize = esize;
+  r->size = count;
+  r->mask = r->size - 1;
+  r->capacity = r->mask;  // Usable size of the ring.
+  r->esize = esize;
 
-    r->prod.head = 0;
-    r->prod.tail = 0;
-    !!mp ? (r->prod.sync = JRING_SYNC_MT) : (r->prod.sync = JRING_SYNC_ST);
-    r->cons.head = 0;
-    r->cons.tail = 0;
-    !!mc ? (r->cons.sync = JRING_SYNC_MT) : (r->cons.sync = JRING_SYNC_ST);
+  r->prod.head = 0;
+  r->prod.tail = 0;
+  !!mp ? (r->prod.sync = JRING_SYNC_MT) : (r->prod.sync = JRING_SYNC_ST);
+  r->cons.head = 0;
+  r->cons.tail = 0;
+  !!mc ? (r->cons.sync = JRING_SYNC_MT) : (r->cons.sync = JRING_SYNC_ST);
 
-    return 0;
+  return 0;
 }
 
 /**
@@ -185,10 +185,10 @@ static inline int jring_init(struct jring *r, uint32_t count, uint32_t esize,
  *   The number of objects enqueued, either 0 or n
  */
 static __attribute__((always_inline)) inline unsigned int jring_sp_enqueue_bulk(
-    struct jring *r, const void *obj_table, unsigned int n,
-    unsigned int *free_space) {
-    return __jring_do_enqueue_elem(r, obj_table, r->esize, n, JRING_QUEUE_FIXED,
-                                   JRING_SYNC_ST, free_space);
+    struct jring* r, void const* obj_table, unsigned int n,
+    unsigned int* free_space) {
+  return __jring_do_enqueue_elem(r, obj_table, r->esize, n, JRING_QUEUE_FIXED,
+                                 JRING_SYNC_ST, free_space);
 }
 
 /**
@@ -207,10 +207,10 @@ static __attribute__((always_inline)) inline unsigned int jring_sp_enqueue_bulk(
  *   The number of objects enqueued, either 0 or n
  */
 static __attribute__((always_inline)) inline unsigned int jring_mp_enqueue_bulk(
-    struct jring *r, const void *obj_table, unsigned int n,
-    unsigned int *free_space) {
-    return __jring_do_enqueue_elem(r, obj_table, r->esize, n, JRING_QUEUE_FIXED,
-                                   JRING_SYNC_MT, free_space);
+    struct jring* r, void const* obj_table, unsigned int n,
+    unsigned int* free_space) {
+  return __jring_do_enqueue_elem(r, obj_table, r->esize, n, JRING_QUEUE_FIXED,
+                                 JRING_SYNC_MT, free_space);
 }
 
 /**
@@ -230,11 +230,11 @@ static __attribute__((always_inline)) inline unsigned int jring_mp_enqueue_bulk(
  *   The number of objects enqueued, either 0 or n
  */
 static __attribute((always_inline)) inline unsigned int jring_enqueue_bulk(
-    struct jring *r, const void *obj_table, unsigned int n,
-    unsigned int *free_space) {
-    return (r->prod.sync == JRING_SYNC_ST)
-               ? jring_sp_enqueue_bulk(r, obj_table, n, free_space)
-               : jring_mp_enqueue_bulk(r, obj_table, n, free_space);
+    struct jring* r, void const* obj_table, unsigned int n,
+    unsigned int* free_space) {
+  return (r->prod.sync == JRING_SYNC_ST)
+             ? jring_sp_enqueue_bulk(r, obj_table, n, free_space)
+             : jring_mp_enqueue_bulk(r, obj_table, n, free_space);
 }
 
 /**
@@ -253,11 +253,11 @@ static __attribute((always_inline)) inline unsigned int jring_enqueue_bulk(
  *   The number of objects enqueued, ranging in [0,n].
  */
 static __attribute__((always_inline)) inline unsigned int
-jring_sp_enqueue_burst(struct jring *r, const void *obj_table, unsigned int n,
-                       unsigned int *free_space) {
-    return __jring_do_enqueue_elem(r, obj_table, r->esize, n,
-                                   JRING_QUEUE_VARIABLE, JRING_SYNC_ST,
-                                   free_space);
+jring_sp_enqueue_burst(struct jring* r, void const* obj_table, unsigned int n,
+                       unsigned int* free_space) {
+  return __jring_do_enqueue_elem(r, obj_table, r->esize, n,
+                                 JRING_QUEUE_VARIABLE, JRING_SYNC_ST,
+                                 free_space);
 }
 
 /**
@@ -276,11 +276,11 @@ jring_sp_enqueue_burst(struct jring *r, const void *obj_table, unsigned int n,
  *   The number of objects enqueued, ranging in [0,n].
  */
 static __attribute__((always_inline)) inline unsigned int
-jring_mp_enqueue_burst(struct jring *r, const void *obj_table, unsigned int n,
-                       unsigned int *free_space) {
-    return __jring_do_enqueue_elem(r, obj_table, r->esize, n,
-                                   JRING_QUEUE_VARIABLE, JRING_SYNC_MT,
-                                   free_space);
+jring_mp_enqueue_burst(struct jring* r, void const* obj_table, unsigned int n,
+                       unsigned int* free_space) {
+  return __jring_do_enqueue_elem(r, obj_table, r->esize, n,
+                                 JRING_QUEUE_VARIABLE, JRING_SYNC_MT,
+                                 free_space);
 }
 
 /**
@@ -300,11 +300,11 @@ jring_mp_enqueue_burst(struct jring *r, const void *obj_table, unsigned int n,
  *   The number of objects enqueued, ranging in [0,n].
  */
 static __attribute__((always_inline)) inline unsigned int jring_enqueue_burst(
-    struct jring *r, const void *obj_table, unsigned int n,
-    unsigned int *free_space) {
-    return (r->prod.sync == JRING_SYNC_ST)
-               ? jring_sp_enqueue_burst(r, obj_table, n, free_space)
-               : jring_mp_enqueue_burst(r, obj_table, n, free_space);
+    struct jring* r, void const* obj_table, unsigned int n,
+    unsigned int* free_space) {
+  return (r->prod.sync == JRING_SYNC_ST)
+             ? jring_sp_enqueue_burst(r, obj_table, n, free_space)
+             : jring_mp_enqueue_burst(r, obj_table, n, free_space);
 }
 
 /**
@@ -324,9 +324,9 @@ static __attribute__((always_inline)) inline unsigned int jring_enqueue_burst(
  *   The number of objects dequeued, either 0 or n
  */
 static __attribute((always_inline)) inline unsigned int jring_sc_dequeue_bulk(
-    struct jring *r, void *obj_table, unsigned int n, unsigned int *available) {
-    return __jring_do_dequeue_elem(r, obj_table, r->esize, n, JRING_QUEUE_FIXED,
-                                   JRING_SYNC_ST, available);
+    struct jring* r, void* obj_table, unsigned int n, unsigned int* available) {
+  return __jring_do_dequeue_elem(r, obj_table, r->esize, n, JRING_QUEUE_FIXED,
+                                 JRING_SYNC_ST, available);
 }
 
 /**
@@ -346,9 +346,9 @@ static __attribute((always_inline)) inline unsigned int jring_sc_dequeue_bulk(
  *   The number of objects dequeued, either 0 or n
  */
 static __attribute((always_inline)) inline unsigned int jring_mc_dequeue_bulk(
-    struct jring *r, void *obj_table, unsigned int n, unsigned int *available) {
-    return __jring_do_dequeue_elem(r, obj_table, r->esize, n, JRING_QUEUE_FIXED,
-                                   JRING_SYNC_MT, available);
+    struct jring* r, void* obj_table, unsigned int n, unsigned int* available) {
+  return __jring_do_dequeue_elem(r, obj_table, r->esize, n, JRING_QUEUE_FIXED,
+                                 JRING_SYNC_MT, available);
 }
 
 /**
@@ -368,10 +368,10 @@ static __attribute((always_inline)) inline unsigned int jring_mc_dequeue_bulk(
  *   The number of objects dequeued, either 0 or n.
  */
 static __attribute((always_inline)) inline unsigned int jring_dequeue_bulk(
-    struct jring *r, void *obj_table, unsigned int n, unsigned int *available) {
-    return (r->cons.sync == JRING_SYNC_ST)
-               ? jring_sc_dequeue_bulk(r, obj_table, n, available)
-               : jring_mc_dequeue_bulk(r, obj_table, n, available);
+    struct jring* r, void* obj_table, unsigned int n, unsigned int* available) {
+  return (r->cons.sync == JRING_SYNC_ST)
+             ? jring_sc_dequeue_bulk(r, obj_table, n, available)
+             : jring_mc_dequeue_bulk(r, obj_table, n, available);
 }
 
 /**
@@ -392,10 +392,10 @@ static __attribute((always_inline)) inline unsigned int jring_dequeue_bulk(
  *   The number of objects dequeued, in the range [0, n]
  */
 static __attribute((always_inline)) inline unsigned int jring_sc_dequeue_burst(
-    struct jring *r, void *obj_table, unsigned int n, unsigned int *available) {
-    return __jring_do_dequeue_elem(r, obj_table, r->esize, n,
-                                   JRING_QUEUE_VARIABLE, JRING_SYNC_ST,
-                                   available);
+    struct jring* r, void* obj_table, unsigned int n, unsigned int* available) {
+  return __jring_do_dequeue_elem(r, obj_table, r->esize, n,
+                                 JRING_QUEUE_VARIABLE, JRING_SYNC_ST,
+                                 available);
 }
 
 /**
@@ -416,10 +416,10 @@ static __attribute((always_inline)) inline unsigned int jring_sc_dequeue_burst(
  *   The number of objects dequeued, in the range [0, n]
  */
 static __attribute((always_inline)) inline unsigned int jring_mc_dequeue_burst(
-    struct jring *r, void *obj_table, unsigned int n, unsigned int *available) {
-    return __jring_do_dequeue_elem(r, obj_table, r->esize, n,
-                                   JRING_QUEUE_VARIABLE, JRING_SYNC_MT,
-                                   available);
+    struct jring* r, void* obj_table, unsigned int n, unsigned int* available) {
+  return __jring_do_dequeue_elem(r, obj_table, r->esize, n,
+                                 JRING_QUEUE_VARIABLE, JRING_SYNC_MT,
+                                 available);
 }
 
 /**
@@ -439,10 +439,10 @@ static __attribute((always_inline)) inline unsigned int jring_mc_dequeue_burst(
  *   The number of objects dequeued, ranging in [0,n].
  */
 static __attribute((always_inline)) inline unsigned int jring_dequeue_burst(
-    struct jring *r, void *obj_table, unsigned int n, unsigned int *available) {
-    return (r->cons.sync == JRING_SYNC_ST)
-               ? jring_sc_dequeue_burst(r, obj_table, n, available)
-               : jring_mc_dequeue_burst(r, obj_table, n, available);
+    struct jring* r, void* obj_table, unsigned int n, unsigned int* available) {
+  return (r->cons.sync == JRING_SYNC_ST)
+             ? jring_sc_dequeue_burst(r, obj_table, n, available)
+             : jring_mc_dequeue_burst(r, obj_table, n, available);
 }
 
 /**
@@ -454,11 +454,11 @@ static __attribute((always_inline)) inline unsigned int jring_dequeue_burst(
  *   The number of entries in the ring.
  */
 static __attribute__((always_inline)) inline unsigned int jring_count(
-    const struct jring *r) {
-    uint32_t prod_tail = r->prod.tail;
-    uint32_t cons_tail = r->cons.tail;
-    uint32_t count = (prod_tail - cons_tail) & r->mask;
-    return (count > r->capacity) ? r->capacity : count;
+    const struct jring* r) {
+  uint32_t prod_tail = r->prod.tail;
+  uint32_t cons_tail = r->cons.tail;
+  uint32_t count = (prod_tail - cons_tail) & r->mask;
+  return (count > r->capacity) ? r->capacity : count;
 }
 
 /**
@@ -470,8 +470,8 @@ static __attribute__((always_inline)) inline unsigned int jring_count(
  *   The number of free entries in the ring.
  */
 static __attribute__((always_inline)) inline unsigned int jring_free_count(
-    const struct jring *r) {
-    return r->capacity - jring_count(r);
+    const struct jring* r) {
+  return r->capacity - jring_count(r);
 }
 
 /**
@@ -484,8 +484,8 @@ static __attribute__((always_inline)) inline unsigned int jring_free_count(
  *   - 0: The ring is not full.
  */
 static __attribute__((always_inline)) inline int jring_full(
-    const struct jring *r) {
-    return jring_free_count(r) == 0;
+    const struct jring* r) {
+  return jring_free_count(r) == 0;
 }
 
 /**
@@ -498,10 +498,10 @@ static __attribute__((always_inline)) inline int jring_full(
  *   - 0: The ring is not empty.
  */
 static __attribute__((always_inline)) inline int jring_empty(
-    const struct jring *r) {
-    uint32_t prod_tail = r->prod.tail;
-    uint32_t cons_tail = r->cons.tail;
-    return cons_tail == prod_tail;
+    const struct jring* r) {
+  uint32_t prod_tail = r->prod.tail;
+  uint32_t cons_tail = r->cons.tail;
+  return cons_tail == prod_tail;
 }
 
 #ifdef __cplusplus
