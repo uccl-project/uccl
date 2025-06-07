@@ -1,37 +1,88 @@
 #include "ring_buffer.cuh"
+#include "proxy.hpp"
+
+#include <atomic>
+#include <chrono>
 #include <thread>
 #include <vector>
-#include <chrono>
-#include "proxy.hpp"
+#include <stdio.h>
+#include <unistd.h>
+#include <assert.h>
+#include <cuda_runtime.h>
+
+#define kIterations 10000000
+#define kQueueSize 128
+#define kQueueMask (kQueueSize - 1)
+
+static inline bool pin_thread_to_cpu(int cpu) {
+    int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+    if (cpu < 0 || cpu >= num_cpus) return false;
+
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(cpu, &cpuset);
+
+    pthread_t current_thread = pthread_self();
+    return !pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
+}
 
 #ifdef NO_RDMA
 #include <cuda_runtime.h>
 void rdma_write_stub(int dst_rank, void* local_dev_ptr, size_t bytes) {
-    // Local simulation: do nothing (assume remote node copies).
     (void)dst_rank; (void)local_dev_ptr; (void)bytes;
 }
 #else
 #include <infiniband/verbs.h>
-// A minimal wrapper around an RDMA WRITE. Production code should create
-// protection domain, queue pair, registered MR, CQ, etc. For brevity we show
-// only a conceptual stub; fill with your own ibv_* calls when integrating.
 void rdma_write_stub(int, void*, size_t) {
     fprintf(stderr, "[RDMA] real implementation required\n");
 }
 #endif
 
-void proxy_loop(ProxyCtx ctx) {
-    auto& rb = *ctx.rb_host;
-    uint64_t tail = 0;
-    for (;;) {
-        uint64_t head = rb.head.load(std::memory_order_acquire);
-        while (tail < head) {
-            uint32_t idx = tail & QUEUE_MASK;
-            auto& cmd = rb.buf[idx];
-            rdma_write_stub(cmd.dst_rank, cmd.src_ptr, cmd.bytes);
-            tail++;
-            rb.tail.store(tail, std::memory_order_release);
-        }
-        std::this_thread::sleep_for(std::chrono::microseconds(10));
+void cpu_consume(RingBuffer* rb, int block_idx) {
+  // printf("CPU thread for block %d started\n", block_idx);
+  pin_thread_to_cpu(block_idx);
+
+  uint64_t my_tail = 0;
+  for (int seen = 0; seen < kIterations; ++seen) {
+    // TODO: here, if CPU caches fifo->head, it may not see the updates from
+    // GPU.
+    while (rb->head == my_tail) {
+#ifdef DEBUG_PRINT
+      if (block_idx == 0) {
+        printf(
+            "CPU thread for block %d, waiting for head to advance: my_tail: "
+            "%lu, head: %llu\n",
+            block_idx, my_tail, fifo->head);
+      }
+#endif
+      /* spin */
     }
+    uint64_t idx = my_tail & kQueueMask;
+    uint64_t cmd;
+    do {
+      cmd = rb->buf[idx].cmd;
+      _mm_pause();  // Avoid hammering the cacheline.
+    } while (cmd == 0);
+
+#ifdef DEBUG_PRINT
+    printf(
+        "CPU thread for block %d, seen: %d, my_head: %llu, my_tail: %lu, "
+        "consuming cmd %llu\n",
+        block_idx, seen, fifo->head, my_tail,
+        static_cast<unsigned long long>(cmd));
+#endif
+    uint64_t expected_cmd =
+        (static_cast<uint64_t>(block_idx) << 32) | (seen + 1);
+    if (cmd != expected_cmd) {
+      fprintf(stderr, "Error: block %d, expected cmd %llu, got %llu\n",
+              block_idx, static_cast<unsigned long long>(expected_cmd),
+              static_cast<unsigned long long>(cmd));
+      exit(1);
+    }
+    rb->buf[idx].cmd = 0;
+    // std::atomic_thread_fence(std::memory_order_release);
+    my_tail++;
+    rb->tail = my_tail;
+    // _mm_clflush(&(fifo->tail));
+  }
 }

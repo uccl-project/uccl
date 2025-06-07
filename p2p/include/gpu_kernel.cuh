@@ -1,10 +1,16 @@
 #ifndef GPU_KERNEL_CUH
 #define GPU_KERNEL_CUH
 
-#include "ring_buffer.hpp"
+#include "common.hpp"
+#include "ring_buffer.cuh"
 
-// Kernel: GPU pushes commands into the ring buffer asynchronously
-__global__ void push_kernel(RingBuffer* rb, void* src, size_t bytes, 
-                            uint32_t dst_rank, uint32_t dst_gpu, int iters);
+__global__ void gpu_issue_batched_commands(RingBuffer* rbs);
+
+
+#ifdef MEASURE_PER_OP_LATENCY
+// __device__ unsigned long long cycle_accum[kNumThBlocks];
+// __device__ unsigned int op_count[kNumThBlocks];
+#endif
+
 
 #endif // GPU_KERNEL_CUH
