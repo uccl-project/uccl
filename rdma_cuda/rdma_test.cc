@@ -7,7 +7,6 @@
 #include <arpa/inet.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
-#include <infiniband/efadv.h>
 #include <infiniband/verbs.h>
 #include <netinet/in.h>
 #include <thread>
