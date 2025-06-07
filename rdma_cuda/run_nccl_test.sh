@@ -36,8 +36,7 @@ P2P_NET_CHUNKSIZE=524288
 # Buffer size.
 BUFFSIZE=8388608
 # Number of chunnels per NET peer.
-# CHANNELS_NET_PEER=-1
-CHANNELS_NET_PEER=8
+CHANNELS_NET_PEER=4
 # Algorithm
 # TREE, RING
 ALGO=-1
@@ -45,7 +44,7 @@ ALGO=-1
 NCCL_PROTO=-1
 
 # Multi-QP for NCCL.
-NUM_QPS_PER_CONNECTION=4
+NUM_QPS_PER_CONNECTION=1
 SPLIT_DATA_ON_QPS=1
 
 # all_gather_perf  all_reduce_perf  alltoall_perf  broadcast_perf  gather_perf
@@ -65,15 +64,13 @@ if [ "$UCCL" -ne 1 ]; then
     PLUGIN_LIB=""
 fi
 
-P2P_DISABLE=0
-SHM_DISABLE=0
-PXN_DISABLE=0
+NVLINK_OFF=0
 
 echo "Running test: ${PROG_NAME}, $([ "${UCCL}" -eq 1 ] && echo "UCCL" || echo "NCCL"), ${NUM_PROCS} nodes, ${NUM_GPUS_PER_NODE} GPUs per node, $((NUM_PROCS * NUM_GPUS_PER_NODE)) GPUs in total."
 
-echo -e "Details: NCCL_NCHANNELS=${NUM_CHUNNEL} \n\t NCCL_P2P_NET_CHUNKSIZE=${P2P_NET_CHUNKSIZE} \n\t NCCL_BUFFSIZE=${BUFFSIZE} \n\t NCCL_NCHANNELS_PER_NET_PEER=${CHANNELS_NET_PEER} \n\t NCCL_ALGO=${ALGO} \n\t NCCL_IB_QPS_PER_CONNECTION=${NUM_QPS_PER_CONNECTION} \n\t NCCL_IB_SPLIT_DATA_ON_QPS=${SPLIT_DATA_ON_QPS} \n\t NCCL_PXN_DISABLE=${PXN_DISABLE} \n\t NCCL_P2P_DISABLE=${P2P_DISABLE} \n\t NCCL_SHM_DISABLE=${SHM_DISABLE} \n\t NCCL_IB_HCA=${HCA_NAMES}"
+echo -e "Details: NCCL_NCHANNELS=${NUM_CHUNNEL} \n\t NCCL_P2P_NET_CHUNKSIZE=${P2P_NET_CHUNKSIZE} \n\t NCCL_BUFFSIZE=${BUFFSIZE} \n\t NCCL_NCHANNELS_PER_NET_PEER=${CHANNELS_NET_PEER} \n\t NCCL_ALGO=${ALGO} \n\t NCCL_IB_QPS_PER_CONNECTION=${NUM_QPS_PER_CONNECTION} \n\t NCCL_IB_SPLIT_DATA_ON_QPS=${SPLIT_DATA_ON_QPS} \n\t NCCL_PXN_DISABLE=${NVLINK_OFF} \n\t NCCL_P2P_DISABLE=${NVLINK_OFF} \n\t NCCL_SHM_DISABLE=${NVLINK_OFF} \n\t NCCL_IB_HCA=${HCA_NAMES}"
 
-/usr/mpi/gcc/openmpi-4.1.7a1/bin/mpirun --prefix /usr/mpi/gcc/openmpi-4.1.7a1 -np ${NUM_PROCS} -N 1 \
+/usr/mpi/gcc/openmpi-4.1.7a1/bin/mpirun --prefix /usr/mpi/gcc/openmpi-4.1.7a1 --bind-to none -np ${NUM_PROCS} -N 1 \
     --host ${NODES} \
     --mca btl_tcp_if_include ${CTRL_NIC} \
     --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
@@ -84,12 +81,11 @@ echo -e "Details: NCCL_NCHANNELS=${NUM_CHUNNEL} \n\t NCCL_P2P_NET_CHUNKSIZE=${P2
     -x GLOG_logtostderr=1 \
     -x GLOG_v=0 \
     -x NCCL_DEBUG=WARN \
-    -x NCCL_NVLS_ENABLE=0 \
     -x NCCL_DEBUG_SUBSYS=NET \
     -x NCCL_PROTO=${NCCL_PROTO} \
-    -x NCCL_PXN_DISABLE=${PXN_DISABLE} \
-    -x NCCL_P2P_DISABLE=${P2P_DISABLE} \
-    -x NCCL_SHM_DISABLE=${SHM_DISABLE} \
+    -x NCCL_PXN_DISABLE=${NVLINK_OFF} \
+    -x NCCL_P2P_DISABLE=${NVLINK_OFF} \
+    -x NCCL_SHM_DISABLE=${NVLINK_OFF} \
     -x NCCL_NET_DISABLE=0 \
     -x NCCL_ALGO=${ALGO} \
     -x NCCL_MAX_NCHANNELS=${NUM_CHUNNEL} \
@@ -97,10 +93,12 @@ echo -e "Details: NCCL_NCHANNELS=${NUM_CHUNNEL} \n\t NCCL_P2P_NET_CHUNKSIZE=${P2
     -x NCCL_NCHANNELS_PER_NET_PEER=${CHANNELS_NET_PEER} \
     -x NCCL_P2P_NET_CHUNKSIZE=${P2P_NET_CHUNKSIZE} \
     -x NCCL_BUFFSIZE=${BUFFSIZE} \
-    -x NCCL_IB_QPS_PER_CONNECTION=${NUM_QPS_PER_CONNECTION} -x NCCL_IB_SPLIT_DATA_ON_QPS=${SPLIT_DATA_ON_QPS} \
+    -x NCCL_IB_QPS_PER_CONNECTION=${NUM_QPS_PER_CONNECTION} \
+    -x NCCL_IB_SPLIT_DATA_ON_QPS=${SPLIT_DATA_ON_QPS} \
     -x NCCL_IB_HCA=${HCA_NAMES} \
-    -x NCCL_SOCKET_IFNAME=${CTRL_NIC} \
-    -x NCCL_NVLS_ENABLE=0 \
+    -x NCCL_IB_PCI_RELAXED_ORDERING=1 \
+    -x NCCL_IGNORE_CPU_AFFINITY=1 \
+    -x NCCL_CROSS_NIC=0 \
     ${UCCL_HOME}/thirdparty/nccl-tests/build/${PROG_NAME} \
     -f 2 \
     --minbytes 1K --maxbytes 1G \
