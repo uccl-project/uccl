@@ -245,7 +245,6 @@ void modify_qp_to_rts(RDMAConnectionInfo* local_info) {
     printf("QP modified to RTS state\n");
 }
 
-// Dummy `rdma_write_stub` — real post
 void rdma_write_stub(void* local_dev_ptr, size_t bytes) {
 
     printf("Posting RDMA write of %zu bytes\n", bytes);
@@ -272,6 +271,8 @@ void rdma_write_stub(void* local_dev_ptr, size_t bytes) {
         perror("ibv_post_send failed");
         exit(1);
     }
+
+    printf("RDMA write posted successfully\n");
 }
 
 #define KNL_MODULE_LOADED(a) ((access(a, F_OK) == -1) ? 0 : 1)
@@ -300,4 +301,7 @@ void poll_completion() {
                 ibv_wc_status_str(wc.status), (unsigned long long)wc.wr_id);
         exit(1);
     }
+
+    printf("Completion received: wr_id=%llu, opcode=%d, byte_len=%u\n",
+           (unsigned long long)wc.wr_id, wc.opcode, wc.byte_len);
 }
