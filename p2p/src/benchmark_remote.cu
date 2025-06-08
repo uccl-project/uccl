@@ -87,6 +87,8 @@ int main(int argc, char** argv) {
   remote_addr = remote_info.addr;
   remote_rkey = remote_info.rkey;
 
+  std::thread cq_thread(progress_thread);
+
   if (rank == 0) {
     rdma_write_stub(gpu_buffer, total_size);
     printf("RDMA write stub completed\n");
@@ -118,6 +120,10 @@ int main(int argc, char** argv) {
       t.join();
     }
     printf("After cpu_thraed join\n");
+
+    drain_cq();
+    g_progress_run.store(false);
+    cq_thread.join();
 
     unsigned int tot_ops = 0;
 #ifdef MEASURE_PER_OP_LATENCY

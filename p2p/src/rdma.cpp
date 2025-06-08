@@ -1,10 +1,15 @@
 #include "rdma.hpp"
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cuda_runtime.h>
+#include <immintrin.h>
+#include <stdio.h>
 #include <sys/socket.h>
+#include <unistd.h>
 
 // Define globals
 struct ibv_context* context = nullptr;
@@ -17,6 +22,12 @@ uintptr_t remote_addr = 0;
 uint32_t remote_rkey = 0;
 
 constexpr int TCP_PORT = 18515;
+constexpr int kSignalledEvery = 64;       // choose ≤ cq_depth
+static thread_local int outstanding = 0;  // per-CPU thread counter
+
+static std::atomic<uint64_t> g_posted = 0;     // WRs posted
+static std::atomic<uint64_t> g_completed = 0;  // CQEs seen
+std::atomic<bool> g_progress_run{true};
 
 void exchange_connection_info(int rank, char const* peer_ip,
                               RDMAConnectionInfo* local,
@@ -99,9 +110,9 @@ void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info,
   struct ibv_qp_init_attr qp_init_attr = {};
   qp_init_attr.send_cq = cq;
   qp_init_attr.recv_cq = cq;
-  qp_init_attr.qp_type = IBV_QPT_RC;   // Reliable Connection
-  qp_init_attr.cap.max_send_wr = 128;  // max outstanding sends
-  qp_init_attr.cap.max_recv_wr = 128;  // max outstanding recvs
+  qp_init_attr.qp_type = IBV_QPT_RC;    // Reliable Connection
+  qp_init_attr.cap.max_send_wr = 1024;  // max outstanding sends
+  qp_init_attr.cap.max_recv_wr = 1024;  // max outstanding recvs
   qp_init_attr.cap.max_send_sge = 1;
   qp_init_attr.cap.max_recv_sge = 1;
 
@@ -245,6 +256,33 @@ void modify_qp_to_rts(RDMAConnectionInfo* local_info) {
   printf("QP modified to RTS state\n");
 }
 
+void post_rdma_async(void* buf, size_t bytes) {
+  struct ibv_sge sge {
+    .addr = (uintptr_t)buf, .length = (uint32_t)bytes, .lkey = mr->lkey
+  };
+
+  struct ibv_send_wr wr {};
+  wr.opcode = IBV_WR_RDMA_WRITE;
+  wr.sg_list = &sge;
+  wr.num_sge = 1;
+  wr.wr.rdma.remote_addr = remote_addr;
+  wr.wr.rdma.rkey = remote_rkey;
+
+  if (true || ++outstanding % kSignalledEvery == 0)
+    wr.send_flags = IBV_SEND_SIGNALED;  // generate a CQE
+  else
+    wr.send_flags = 0;  // no CQE → cheaper
+
+  ibv_send_wr* bad = nullptr;
+  if (ibv_post_send(qp, &wr, &bad)) perror("ibv_post_send"), exit(1);
+
+  g_posted.fetch_add(1, std::memory_order_relaxed);
+
+  printf("g_posted: %lu, g_completed: %lu, outstanding: %d\n",
+         g_posted.load(std::memory_order_acquire),
+         g_completed.load(std::memory_order_acquire), outstanding);
+}
+
 void rdma_write_stub(void* local_dev_ptr, size_t bytes) {
   struct ibv_qp_attr qattr;
   struct ibv_qp_init_attr qinit;
@@ -308,4 +346,30 @@ void poll_completion() {
 
   // printf("Completion received: wr_id=%llu, opcode=%d, byte_len=%u\n",
   //        (unsigned long long)wc.wr_id, wc.opcode, wc.byte_len);
+}
+
+void progress_thread() {
+  struct ibv_wc wc[kSignalledEvery];  // batch poll
+  while (g_progress_run.load(std::memory_order_acquire)) {
+    int ne = ibv_poll_cq(cq, kSignalledEvery, wc);
+    if (ne == 0) {
+      _mm_pause();
+      continue;
+    }
+
+    for (int i = 0; i < ne; ++i) {
+      if (wc[i].status != IBV_WC_SUCCESS) {
+        fprintf(stderr, "CQE error wr_id=%llu status=%s\n",
+                (unsigned long long)wc[i].wr_id,
+                ibv_wc_status_str(wc[i].status));
+        std::abort();
+      }
+      g_completed.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+}
+
+void drain_cq() {
+  uint64_t want = g_posted.load(std::memory_order_acquire);
+  while (g_completed.load(std::memory_order_acquire) < want) _mm_pause();
 }

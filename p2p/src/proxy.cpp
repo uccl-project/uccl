@@ -68,10 +68,14 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
       exit(1);
     }
 
-    if (rank == 0) {
+    if (false && rank == 0) {
       rdma_write_stub(gpu_buffer, total_size);
       poll_completion();
       printf("Polling completions done. %d out of %d\n", seen, kIterations);
+    } else {
+      post_rdma_async(gpu_buffer, total_size);
+      printf("Posted RDMA write for block %d, seen %d out of %d\n", block_idx,
+             seen, kIterations);
     }
 
     rb->buf[idx].cmd = 0;
