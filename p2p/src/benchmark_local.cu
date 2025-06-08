@@ -7,6 +7,7 @@
 #include <iostream>
 #include <thread>
 #include <vector>
+#include "rdma.hpp"
 
 inline void** allocate_memory_for_gpudirect() {
   size_t bytes_per_block = kObjectSize * kBatchSize;
@@ -27,6 +28,13 @@ inline void** allocate_memory_for_gpudirect() {
 }
 
 int main() {
+
+  GdrSupportInitOnce();
+if (!GdrSupportInitOnce()) {
+    printf("Error: GPUDirect RDMA module is not loaded. Please load nvidia_peermem or nv_peer_mem!\n");
+    exit(1);
+}
+
   cudaStream_t stream1;
   cudaStreamCreate(&stream1);
   cudaCheckErrors("cudaStreamCreate failed");

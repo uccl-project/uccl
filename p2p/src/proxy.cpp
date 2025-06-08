@@ -25,19 +25,6 @@ static inline bool pin_thread_to_cpu(int cpu) {
   return !pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
 }
 
-#ifdef NO_RDMA
-#include <cuda_runtime.h>
-void rdma_write_stub(int dst_rank, void* local_dev_ptr, size_t bytes) {
-  (void)dst_rank;
-  (void)local_dev_ptr;
-  (void)bytes;
-}
-#else
-#include <infiniband/verbs.h>
-void rdma_write_stub(int, void*, size_t) {
-  fprintf(stderr, "[RDMA] real implementation required\n");
-}
-#endif
 
 void cpu_consume(RingBuffer* rb, int block_idx) {
   // printf("CPU thread for block %d started\n", block_idx);
