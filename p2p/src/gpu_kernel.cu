@@ -102,7 +102,7 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs, void** d_ptrs) {
 #ifdef MEASURE_PER_OP_LATENCY
   while (complete < kIterations) {
     uint32_t cidx = complete & kQueueMask;
-    while (complete >= rb->tail) { /* spin */
+    while (complete >= ld_volatile(&rb->tail)) { /* spin */
     }
 
     unsigned long long t1 = clock64();
@@ -115,4 +115,6 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs, void** d_ptrs) {
   rb->op_count = op_count_smem;
 
 #endif
+
+  printf("Device Block %d done\n", bid);
 }

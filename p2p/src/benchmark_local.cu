@@ -1,13 +1,13 @@
 #include "common.hpp"
 #include "gpu_kernel.cuh"
 #include "proxy.hpp"
+#include "rdma.hpp"
 #include "ring_buffer.cuh"
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
 #include <thread>
 #include <vector>
-#include "rdma.hpp"
 
 inline void** allocate_memory_for_gpudirect() {
   size_t bytes_per_block = kObjectSize * kBatchSize;
@@ -28,12 +28,13 @@ inline void** allocate_memory_for_gpudirect() {
 }
 
 int main() {
-
   GdrSupportInitOnce();
-if (!GdrSupportInitOnce()) {
-    printf("Error: GPUDirect RDMA module is not loaded. Please load nvidia_peermem or nv_peer_mem!\n");
+  if (!GdrSupportInitOnce()) {
+    printf(
+        "Error: GPUDirect RDMA module is not loaded. Please load "
+        "nvidia_peermem or nv_peer_mem!\n");
     exit(1);
-}
+  }
 
   cudaStream_t stream1;
   cudaStreamCreate(&stream1);
@@ -59,7 +60,7 @@ if (!GdrSupportInitOnce()) {
   // Launch one CPU polling thread per block
   std::vector<std::thread> cpu_threads;
   for (int i = 0; i < kNumThBlocks; ++i) {
-    cpu_threads.emplace_back(cpu_consume, &rbs[i], i);
+    cpu_threads.emplace_back(cpu_consume_local, &rbs[i], i);
   }
   auto t0 = std::chrono::high_resolution_clock::now();
   size_t shmem_bytes = kQueueSize * sizeof(unsigned long long);

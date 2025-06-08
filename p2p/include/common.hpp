@@ -35,7 +35,7 @@
 #define kQueueSize 128
 #define kQueueMask (kQueueSize - 1)
 #define kBatchSize 8
-#define kIterations 10000000
+#define kIterations 1000
 #define kNumThBlocks 8
 #define kNumThPerBlock 1
 #define kObjectSize 4096  // 4 KB

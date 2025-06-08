@@ -1,10 +1,10 @@
 #include "rdma.hpp"
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <arpa/inet.h>
 #include <sys/socket.h>
-#include <netinet/in.h>
 
 // Define globals
 struct ibv_context* context = nullptr;
@@ -18,266 +18,265 @@ uint32_t remote_rkey = 0;
 
 constexpr int TCP_PORT = 18515;
 
-void exchange_connection_info(int rank, const char* peer_ip, RDMAConnectionInfo* local, RDMAConnectionInfo* remote) {
-    int sockfd;
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
+void exchange_connection_info(int rank, char const* peer_ip,
+                              RDMAConnectionInfo* local,
+                              RDMAConnectionInfo* remote) {
+  int sockfd;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
 
-    if (rank == 0) {
-        // Listen
-        int listenfd = socket(AF_INET, SOCK_STREAM, 0);
-        addr.sin_family = AF_INET;
-        addr.sin_port = htons(TCP_PORT);
-        addr.sin_addr.s_addr = INADDR_ANY;
-        bind(listenfd, (struct sockaddr*)&addr, sizeof(addr));
-        listen(listenfd, 1);
+  if (rank == 0) {
+    // Listen
+    int listenfd = socket(AF_INET, SOCK_STREAM, 0);
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(TCP_PORT);
+    addr.sin_addr.s_addr = INADDR_ANY;
+    bind(listenfd, (struct sockaddr*)&addr, sizeof(addr));
+    listen(listenfd, 1);
 
-        socklen_t len = sizeof(addr);
-        sockfd = accept(listenfd, (struct sockaddr*)&addr, &len);
-        close(listenfd);
-    } else {
-        // Connect
-        sockfd = socket(AF_INET, SOCK_STREAM, 0);
-        addr.sin_family = AF_INET;
-        addr.sin_port = htons(TCP_PORT);
-        inet_pton(AF_INET, peer_ip, &addr.sin_addr);
-        while (connect(sockfd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
-            sleep(1);  // retry
-        }
+    socklen_t len = sizeof(addr);
+    sockfd = accept(listenfd, (struct sockaddr*)&addr, &len);
+    close(listenfd);
+  } else {
+    // Connect
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(TCP_PORT);
+    inet_pton(AF_INET, peer_ip, &addr.sin_addr);
+    while (connect(sockfd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+      sleep(1);  // retry
     }
+  }
 
-    // Exchange info
-    send(sockfd, local, sizeof(*local), 0);
-    recv(sockfd, remote, sizeof(*remote), MSG_WAITALL);
+  // Exchange info
+  send(sockfd, local, sizeof(*local), 0);
+  recv(sockfd, remote, sizeof(*remote), MSG_WAITALL);
 
-    close(sockfd);
+  close(sockfd);
 }
 
-void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info, int rank) {
-    srand(time(NULL) + getpid() + rank * 1000);
-    struct ibv_device** dev_list = ibv_get_device_list(NULL);
-    if (!dev_list) {
-        perror("Failed to get IB devices list");
-        exit(1);
-    }
+void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info,
+                int rank) {
+  srand(time(NULL) + getpid() + rank * 1000);
+  struct ibv_device** dev_list = ibv_get_device_list(NULL);
+  if (!dev_list) {
+    perror("Failed to get IB devices list");
+    exit(1);
+  }
 
-    context = ibv_open_device(dev_list[0]);
-    if (!context) {
-        perror("Failed to open device");
-        exit(1);
-    }
-    ibv_free_device_list(dev_list);
+  context = ibv_open_device(dev_list[0]);
+  if (!context) {
+    perror("Failed to open device");
+    exit(1);
+  }
+  ibv_free_device_list(dev_list);
 
-    // 2. Allocate a Protection Domain
-    pd = ibv_alloc_pd(context);
-    if (!pd) {
-        perror("Failed to allocate PD");
-        exit(1);
-    }
+  // 2. Allocate a Protection Domain
+  pd = ibv_alloc_pd(context);
+  if (!pd) {
+    perror("Failed to allocate PD");
+    exit(1);
+  }
 
-    // 3. Register the GPU memory
-    mr = ibv_reg_mr(pd, gpu_buffer, size,
-                    IBV_ACCESS_LOCAL_WRITE |
-                    IBV_ACCESS_REMOTE_WRITE |
-                    IBV_ACCESS_REMOTE_READ |
-                    IBV_ACCESS_ZERO_BASED);
+  // 3. Register the GPU memory
+  mr = ibv_reg_mr(pd, gpu_buffer, size,
+                  IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                      IBV_ACCESS_REMOTE_READ | IBV_ACCESS_ZERO_BASED);
 
-    if (!mr) {
-        perror("ibv_reg_mr (GPUDirect) failed");
-        exit(1);
-    }
-    rkey = mr->rkey;
-    int cq_depth = 128;
-    cq = ibv_create_cq(context, /* cqe */ cq_depth, /* user_context */ nullptr, 
-                       /* channel */ nullptr, /* comp_vector */ 0);
-    if (!cq) {
-        perror("Failed to create CQ");
-        exit(1);
-    }
+  if (!mr) {
+    perror("ibv_reg_mr (GPUDirect) failed");
+    exit(1);
+  }
+  rkey = mr->rkey;
+  int cq_depth = 128;
+  cq = ibv_create_cq(context, /* cqe */ cq_depth, /* user_context */ nullptr,
+                     /* channel */ nullptr, /* comp_vector */ 0);
+  if (!cq) {
+    perror("Failed to create CQ");
+    exit(1);
+  }
 
-    struct ibv_qp_init_attr qp_init_attr = {};
-    qp_init_attr.send_cq = cq;
-    qp_init_attr.recv_cq = cq;
-    qp_init_attr.qp_type = IBV_QPT_RC; // Reliable Connection
-    qp_init_attr.cap.max_send_wr  = 128;  // max outstanding sends
-    qp_init_attr.cap.max_recv_wr  = 128;  // max outstanding recvs
-    qp_init_attr.cap.max_send_sge = 1;
-    qp_init_attr.cap.max_recv_sge = 1;
+  struct ibv_qp_init_attr qp_init_attr = {};
+  qp_init_attr.send_cq = cq;
+  qp_init_attr.recv_cq = cq;
+  qp_init_attr.qp_type = IBV_QPT_RC;   // Reliable Connection
+  qp_init_attr.cap.max_send_wr = 128;  // max outstanding sends
+  qp_init_attr.cap.max_recv_wr = 128;  // max outstanding recvs
+  qp_init_attr.cap.max_send_sge = 1;
+  qp_init_attr.cap.max_recv_sge = 1;
 
-    qp = ibv_create_qp(pd, &qp_init_attr);
-    if (!qp) {
-        perror("Failed to create QP");
-        exit(1);
-    }
+  qp = ibv_create_qp(pd, &qp_init_attr);
+  if (!qp) {
+    perror("Failed to create QP");
+    exit(1);
+  }
 
-    // Query port
-    struct ibv_port_attr port_attr;
-    if (ibv_query_port(context, 1, &port_attr)) {
-        perror("Failed to query port");
-        exit(1);
-    }
-    printf("Local LID: 0x%x\n", port_attr.lid);
-    // Fill local connection info
-    local_info->qp_num = qp->qp_num;
-    local_info->lid    = port_attr.lid;
-    local_info->rkey   = rkey;
-    local_info->addr   = reinterpret_cast<uintptr_t>(gpu_buffer);
-    local_info->psn    = rand() & 0xffffff;  // random psn
-    memset(local_info->gid, 0, 16);
-    printf("Local RDMA info: addr=0x%lx, rkey=0x%x, qp_num=%u, psn=%u\n",
-            local_info->addr, local_info->rkey, local_info->qp_num, local_info->psn);
+  // Query port
+  struct ibv_port_attr port_attr;
+  if (ibv_query_port(context, 1, &port_attr)) {
+    perror("Failed to query port");
+    exit(1);
+  }
+  printf("Local LID: 0x%x\n", port_attr.lid);
+  // Fill local connection info
+  local_info->qp_num = qp->qp_num;
+  local_info->lid = port_attr.lid;
+  local_info->rkey = rkey;
+  local_info->addr = reinterpret_cast<uintptr_t>(gpu_buffer);
+  local_info->psn = rand() & 0xffffff;  // random psn
+  memset(local_info->gid, 0, 16);
+  printf("Local RDMA info: addr=0x%lx, rkey=0x%x, qp_num=%u, psn=%u\n",
+         local_info->addr, local_info->rkey, local_info->qp_num,
+         local_info->psn);
 }
 
-void modify_qp_to_init()
-{
-    struct ibv_qp_attr attr;
-    memset(&attr, 0, sizeof(attr));
+void modify_qp_to_init() {
+  struct ibv_qp_attr attr;
+  memset(&attr, 0, sizeof(attr));
 
-    attr.qp_state        = IBV_QPS_INIT;
-    attr.port_num        = 1;            // HCA port you use
-    attr.pkey_index      = 0;
-    attr.qp_access_flags = IBV_ACCESS_LOCAL_WRITE    |
-                           IBV_ACCESS_REMOTE_READ    |
-                           IBV_ACCESS_REMOTE_WRITE;
+  attr.qp_state = IBV_QPS_INIT;
+  attr.port_num = 1;  // HCA port you use
+  attr.pkey_index = 0;
+  attr.qp_access_flags =
+      IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
 
-    int flags = IBV_QP_STATE | IBV_QP_PKEY_INDEX |
-                IBV_QP_PORT  | IBV_QP_ACCESS_FLAGS;
+  int flags =
+      IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS;
 
-    if (ibv_modify_qp(qp, &attr, flags)) {
-        perror("Failed to modify QP to INIT");
-        exit(1);
-    }
+  if (ibv_modify_qp(qp, &attr, flags)) {
+    perror("Failed to modify QP to INIT");
+    exit(1);
+  }
 
-    printf("QP modified to INIT state\n");
+  printf("QP modified to INIT state\n");
 }
-
 
 void modify_qp_to_rtr(RDMAConnectionInfo* remote) {
+  int is_roce = 0;
 
-    int is_roce = 0;
+  struct ibv_port_attr port_attr;
+  if (ibv_query_port(context, 1, &port_attr)) {
+    perror("Failed to query port");
+    exit(1);
+  }
 
-    struct ibv_port_attr port_attr;
-    if (ibv_query_port(context, 1, &port_attr)) {
-        perror("Failed to query port");
-        exit(1);
-    }
+  if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
+    printf("RoCE detected (Ethernet)\n");
+    is_roce = 1;
+  } else if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
+    printf("InfiniBand detected\n");
+    is_roce = 0;
+  } else {
+    printf("Unknown link layer: %d\n", port_attr.link_layer);
+    exit(1);
+  }
 
-    if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
-        printf("RoCE detected (Ethernet)\n");
-        is_roce = 1;
-    } else if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
-        printf("InfiniBand detected\n");
-        is_roce = 0;
-    } else {
-        printf("Unknown link layer: %d\n", port_attr.link_layer);
-        exit(1);
-    }
+  struct ibv_qp_attr attr;
+  memset(&attr, 0, sizeof(attr));
+  attr.qp_state = IBV_QPS_RTR;
+  attr.path_mtu = port_attr.active_mtu;
+  attr.dest_qp_num = remote->qp_num;
+  attr.rq_psn = remote->psn;
+  attr.max_dest_rd_atomic = 1;
+  attr.min_rnr_timer = 12;
 
-    struct ibv_qp_attr attr;
-    memset(&attr, 0, sizeof(attr));
-    attr.qp_state           = IBV_QPS_RTR;
-    attr.path_mtu           = port_attr.active_mtu;
-    attr.dest_qp_num        = remote->qp_num;
-    attr.rq_psn             = remote->psn;
-    attr.max_dest_rd_atomic = 1;
-    attr.min_rnr_timer      = 12;
+  if (is_roce) {
+    attr.ah_attr.is_global = 1;
+    attr.ah_attr.port_num = 1;
+    attr.ah_attr.sl = 0;
+    attr.ah_attr.src_path_bits = 0;
+    attr.ah_attr.grh.hop_limit = 1;
+    // Fill GID from remote_info
+    memcpy(&attr.ah_attr.grh.dgid, remote->gid, 16);
+    attr.ah_attr.grh.sgid_index = 0;  // Assume GID index 0
+  } else {
+    attr.ah_attr.is_global = 0;
+    attr.ah_attr.dlid = remote->lid;
+    attr.ah_attr.port_num = 1;
+    attr.ah_attr.sl = 0;
+    attr.ah_attr.src_path_bits = 0;
+    attr.ah_attr.static_rate = 0;
+    memset(&attr.ah_attr.grh, 0, sizeof(attr.ah_attr.grh));  // Safe
+  }
 
-    if (is_roce) {
-        attr.ah_attr.is_global = 1;
-        attr.ah_attr.port_num  = 1;
-        attr.ah_attr.sl        = 0;
-        attr.ah_attr.src_path_bits = 0;
-        attr.ah_attr.grh.hop_limit = 1;
-        // Fill GID from remote_info
-        memcpy(&attr.ah_attr.grh.dgid, remote->gid, 16);
-        attr.ah_attr.grh.sgid_index = 0; // Assume GID index 0
-    } else {
-        attr.ah_attr.is_global = 0;
-        attr.ah_attr.dlid = remote->lid;
-        attr.ah_attr.port_num = 1;
-        attr.ah_attr.sl = 0;
-        attr.ah_attr.src_path_bits = 0;
-        attr.ah_attr.static_rate = 0;
-        memset(&attr.ah_attr.grh, 0, sizeof(attr.ah_attr.grh)); // Safe
-    }
+  int flags = IBV_QP_STATE | IBV_QP_PATH_MTU | IBV_QP_AV | IBV_QP_DEST_QPN |
+              IBV_QP_RQ_PSN | IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
 
-    int flags = IBV_QP_STATE | IBV_QP_PATH_MTU | IBV_QP_AV |
-                IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
-                IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
+  printf("Remote LID: 0x%x, QPN: %u, PSN: %u\n", remote->lid, remote->qp_num,
+         remote->psn);
+  printf("Verifying port state:\n");
+  printf("  link_layer: %s\n", (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET)
+                                   ? "Ethernet (RoCE)"
+                                   : "InfiniBand");
+  printf("  port_state: %s\n",
+         (port_attr.state == IBV_PORT_ACTIVE) ? "ACTIVE" : "NOT ACTIVE");
+  printf("  max_mtu: %d\n", port_attr.max_mtu);
+  printf("  active_mtu: %d\n", port_attr.active_mtu);
+  printf("  lid: 0x%x\n", port_attr.lid);
 
-    printf("Remote LID: 0x%x, QPN: %u, PSN: %u\n",
-        remote->lid, remote->qp_num, remote->psn);
-    printf("Verifying port state:\n");
-    printf("  link_layer: %s\n", (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) ? "Ethernet (RoCE)" : "InfiniBand");
-    printf("  port_state: %s\n", (port_attr.state == IBV_PORT_ACTIVE) ? "ACTIVE" : "NOT ACTIVE");
-    printf("  max_mtu: %d\n", port_attr.max_mtu);
-    printf("  active_mtu: %d\n", port_attr.active_mtu);
-    printf("  lid: 0x%x\n", port_attr.lid);
+  int ret = ibv_modify_qp(qp, &attr, flags);
+  if (ret) {
+    perror("Failed to modify QP to RTR");
+    fprintf(stderr, "errno: %d\n", errno);
+    exit(1);
+  }
 
-    int ret = ibv_modify_qp(qp, &attr, flags);
-    if (ret) {
-        perror("Failed to modify QP to RTR");
-        fprintf(stderr, "errno: %d\n", errno);
-        exit(1);
-    }
-
-    printf("QP modified to RTR state\n");
+  printf("QP modified to RTR state\n");
 }
 
 void modify_qp_to_rts(RDMAConnectionInfo* local_info) {
-    struct ibv_qp_attr attr;
-    memset(&attr, 0, sizeof(attr));
-    attr.qp_state      = IBV_QPS_RTS;
-    attr.timeout       = 14;
-    attr.retry_cnt     = 7;
-    attr.rnr_retry     = 7;
-    attr.sq_psn        = local_info->psn;
-    attr.max_rd_atomic = 1;
+  struct ibv_qp_attr attr;
+  memset(&attr, 0, sizeof(attr));
+  attr.qp_state = IBV_QPS_RTS;
+  attr.timeout = 14;
+  attr.retry_cnt = 7;
+  attr.rnr_retry = 7;
+  attr.sq_psn = local_info->psn;
+  attr.max_rd_atomic = 1;
 
-    int flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT |
-                IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC;
+  int flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT |
+              IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC;
 
-    if (ibv_modify_qp(qp, &attr, flags)) {
-        perror("Failed to modify QP to RTS");
-        exit(1);
-    }
+  if (ibv_modify_qp(qp, &attr, flags)) {
+    perror("Failed to modify QP to RTS");
+    exit(1);
+  }
 
-    printf("QP modified to RTS state\n");
+  printf("QP modified to RTS state\n");
 }
 
 void rdma_write_stub(void* local_dev_ptr, size_t bytes) {
+  struct ibv_qp_attr qattr;
+  struct ibv_qp_init_attr qinit;
+  ibv_query_qp(qp, &qattr, IBV_QP_STATE, &qinit);
+  // printf("QP state (should be RTS=5): %d\n", qattr.qp_state);
 
-    struct ibv_qp_attr qattr;
-    struct ibv_qp_init_attr qinit;
-    ibv_query_qp(qp, &qattr, IBV_QP_STATE, &qinit);
-    printf("QP state (should be RTS=5): %d\n", qattr.qp_state);
+  // printf("Posting RDMA write of %zu bytes\n", bytes);
+  struct ibv_sge sge;
+  memset(&sge, 0, sizeof(sge));
+  sge.addr = reinterpret_cast<uintptr_t>(local_dev_ptr);  // GPU memory address
+  sge.length = bytes;
+  sge.lkey = mr->lkey;
 
-    printf("Posting RDMA write of %zu bytes\n", bytes);
-    struct ibv_sge sge;
-    memset(&sge, 0, sizeof(sge));
-    sge.addr   = reinterpret_cast<uintptr_t>(local_dev_ptr);  // GPU memory address
-    sge.length = bytes;
-    sge.lkey   = mr->lkey;
+  struct ibv_send_wr wr;
+  memset(&wr, 0, sizeof(wr));
+  wr.wr_id = 0;
+  wr.opcode = IBV_WR_RDMA_WRITE;
+  wr.send_flags = IBV_SEND_SIGNALED;
+  wr.sg_list = &sge;
+  wr.num_sge = 1;
 
-    struct ibv_send_wr wr;
-    memset(&wr, 0, sizeof(wr));
-    wr.wr_id      = 0;
-    wr.opcode     = IBV_WR_RDMA_WRITE;
-    wr.send_flags = IBV_SEND_SIGNALED;
-    wr.sg_list    = &sge;
-    wr.num_sge    = 1;
+  wr.wr.rdma.remote_addr = remote_addr;
+  wr.wr.rdma.rkey = remote_rkey;
 
-    wr.wr.rdma.remote_addr = remote_addr;
-    wr.wr.rdma.rkey        = remote_rkey;
+  struct ibv_send_wr* bad_wr = nullptr;
+  int ret = ibv_post_send(qp, &wr, &bad_wr);
+  if (ret) {
+    perror("ibv_post_send failed");
+    exit(1);
+  }
 
-    struct ibv_send_wr* bad_wr = nullptr;
-    int ret = ibv_post_send(qp, &wr, &bad_wr);
-    if (ret) {
-        perror("ibv_post_send failed");
-        exit(1);
-    }
-
-    printf("RDMA write posted successfully\n");
+  // printf("RDMA write posted successfully\n");
 }
 
 #define KNL_MODULE_LOADED(a) ((access(a, F_OK) == -1) ? 0 : 1)
@@ -289,24 +288,24 @@ bool GdrSupportInitOnce() {
 }
 
 void poll_completion() {
-    struct ibv_wc wc;
-    int ret;
+  struct ibv_wc wc;
+  int ret;
 
-    do {
-        ret = ibv_poll_cq(cq, 1, &wc);  // poll one completion
-    } while (ret == 0);  // 0 means no completion yet, keep polling
+  do {
+    ret = ibv_poll_cq(cq, 1, &wc);  // poll one completion
+  } while (ret == 0);               // 0 means no completion yet, keep polling
 
-    if (ret < 0) {
-        perror("ibv_poll_cq failed");
-        exit(1);
-    }
+  if (ret < 0) {
+    perror("ibv_poll_cq failed");
+    exit(1);
+  }
 
-    if (wc.status != IBV_WC_SUCCESS) {
-        fprintf(stderr, "Completion with error: %s (wr_id=%llu)\n",
-                ibv_wc_status_str(wc.status), (unsigned long long)wc.wr_id);
-        exit(1);
-    }
+  if (wc.status != IBV_WC_SUCCESS) {
+    fprintf(stderr, "Completion with error: %s (wr_id=%llu)\n",
+            ibv_wc_status_str(wc.status), (unsigned long long)wc.wr_id);
+    exit(1);
+  }
 
-    printf("Completion received: wr_id=%llu, opcode=%d, byte_len=%u\n",
-           (unsigned long long)wc.wr_id, wc.opcode, wc.byte_len);
+  // printf("Completion received: wr_id=%llu, opcode=%d, byte_len=%u\n",
+  //        (unsigned long long)wc.wr_id, wc.opcode, wc.byte_len);
 }

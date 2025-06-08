@@ -7,21 +7,13 @@
 #include <vector>
 #include <immintrin.h>
 
-#ifdef NO_RDMA
-#include <cuda_runtime.h>
-void rdma_write_stub(int dst_rank, void* local_dev_ptr, size_t bytes);
-#else
-#include <infiniband/verbs.h>
-// A minimal wrapper around an RDMA WRITE. Production code should create
-// protection domain, queue pair, registered MR, CQ, etc.
-void rdma_write_stub(int dst_rank, void* local_dev_ptr, size_t bytes);
-#endif
-
 struct ProxyCtx {
   RingBuffer* rb_host;  // host pointer (CPU visible address of RingBuffer)
   int my_rank;          // rank id for this proxy (if simulating multiple)
 };
 
-void cpu_consume(RingBuffer* rb, int block_idx);
+void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
+                 size_t total_size, int rank);
+void cpu_consume_local(RingBuffer* rb, int block_idx);
 
 #endif  // PROXY_HPP
