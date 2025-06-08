@@ -85,8 +85,14 @@ int main(int argc, char** argv) {
   remote_addr = remote_info.addr;
   remote_rkey = remote_info.rkey;
 
-  rdma_write_stub(gpu_buffer, total_size);
-  poll_completion();
+  if (rank == 0) {
+    rdma_write_stub(gpu_buffer, total_size);
+    printf("RDMA write stub completed\n");
+
+    poll_completion();
+    printf("Polling completions done\n");
+  }
+
 
   // Launch one CPU polling thread per block
   std::vector<std::thread> cpu_threads;

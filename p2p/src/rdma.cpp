@@ -87,8 +87,8 @@ void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info, i
         exit(1);
     }
     rkey = mr->rkey;
-
-    cq = ibv_create_cq(context, /* cqe */ 16, /* user_context */ nullptr, 
+    int cq_depth = 128;
+    cq = ibv_create_cq(context, /* cqe */ cq_depth, /* user_context */ nullptr, 
                        /* channel */ nullptr, /* comp_vector */ 0);
     if (!cq) {
         perror("Failed to create CQ");
@@ -246,6 +246,11 @@ void modify_qp_to_rts(RDMAConnectionInfo* local_info) {
 }
 
 void rdma_write_stub(void* local_dev_ptr, size_t bytes) {
+
+    struct ibv_qp_attr qattr;
+    struct ibv_qp_init_attr qinit;
+    ibv_query_qp(qp, &qattr, IBV_QP_STATE, &qinit);
+    printf("QP state (should be RTS=5): %d\n", qattr.qp_state);
 
     printf("Posting RDMA write of %zu bytes\n", bytes);
     struct ibv_sge sge;
