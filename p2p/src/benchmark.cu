@@ -1,13 +1,30 @@
 #include "common.hpp"
-#include "ring_buffer.cuh"
 #include "gpu_kernel.cuh"
 #include "proxy.hpp"
-
-#include <thread>
-#include <vector>
-#include <iostream>
+#include "ring_buffer.cuh"
 #include <chrono>
 #include <cstdlib>
+#include <iostream>
+#include <thread>
+#include <vector>
+
+inline void** allocate_memory_for_gpudirect() {
+  size_t bytes_per_block = kObjectSize * kBatchSize;
+  size_t total_bytes = bytes_per_block * kNumThBlocks;
+  void* d_big = nullptr;
+  cudaMalloc(&d_big, total_bytes);
+
+  std::vector<void*> h_ptrs(kNumThBlocks);
+  for (int b = 0; b < kNumThBlocks; ++b)
+    h_ptrs[b] = static_cast<char*>(d_big) + b * bytes_per_block;
+
+  void** d_ptrs = nullptr;
+  cudaMalloc(&d_ptrs, sizeof(void*) * kNumThBlocks);
+  cudaMemcpy(d_ptrs, h_ptrs.data(), sizeof(void*) * kNumThBlocks,
+             cudaMemcpyHostToDevice);
+
+  return d_ptrs;
+}
 
 int main() {
   cudaStream_t stream1;
@@ -29,6 +46,8 @@ int main() {
     }
   }
 
+  void** d_ptrs = allocate_memory_for_gpudirect();
+
   // Launch one CPU polling thread per block
   std::vector<std::thread> cpu_threads;
   for (int i = 0; i < kNumThBlocks; ++i) {
@@ -37,27 +56,19 @@ int main() {
   auto t0 = std::chrono::high_resolution_clock::now();
   size_t shmem_bytes = kQueueSize * sizeof(unsigned long long);
   gpu_issue_batched_commands<<<kNumThBlocks, kNumThPerBlock, shmem_bytes,
-                               stream1>>>(rbs);
+                               stream1>>>(rbs, d_ptrs);
   cudaCheckErrors("gpu_issue_batched_commands kernel failed");
 
   cudaStreamSynchronize(stream1);
   cudaCheckErrors("cudaStreamSynchronize failed");
   auto t1 = std::chrono::high_resolution_clock::now();
 
-
-cudaDeviceSynchronize(); 
-cudaCheckErrors("cudaDeviceSynchronize failed");
+  cudaDeviceSynchronize();
+  cudaCheckErrors("cudaDeviceSynchronize failed");
 
   for (auto& t : cpu_threads) {
     t.join();
   }
-
-#ifdef MEASURE_PER_OP_LATENCY
-//   unsigned long long h_cycles[kNumThBlocks];
-//   unsigned int h_ops[kNumThBlocks];
-//   cudaMemcpyFromSymbol(h_cycles, cycle_accum, sizeof(h_cycles));
-//   cudaMemcpyFromSymbol(h_ops, op_count, sizeof(h_ops));
-#endif
 
   unsigned int tot_ops = 0;
 #ifdef MEASURE_PER_OP_LATENCY
@@ -65,7 +76,8 @@ cudaCheckErrors("cudaDeviceSynchronize failed");
   unsigned long long tot_cycles = 0;
   printf("\nPer-block avg latency:\n");
   for (int b = 0; b < kNumThBlocks; ++b) {
-    double us = (double)rbs[b].cycle_accum * 1000.0 / prop.clockRate / rbs[b].op_count;
+    double us =
+        (double)rbs[b].cycle_accum * 1000.0 / prop.clockRate / rbs[b].op_count;
     printf("  Block %d : %.3f µs over %lu ops\n", b, us, rbs[b].op_count);
     total_us += us;
     tot_cycles += rbs[b].cycle_accum;

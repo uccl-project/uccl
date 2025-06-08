@@ -2,9 +2,9 @@
 #define PROXY_HPP
 
 #include "ring_buffer.cuh"
+#include <chrono>
 #include <thread>
 #include <vector>
-#include <chrono>
 #include <immintrin.h>
 
 #ifdef NO_RDMA
@@ -18,10 +18,10 @@ void rdma_write_stub(int dst_rank, void* local_dev_ptr, size_t bytes);
 #endif
 
 struct ProxyCtx {
-    RingBuffer* rb_host;  // host pointer (CPU visible address of RingBuffer)
-    int         my_rank;  // rank id for this proxy (if simulating multiple)
+  RingBuffer* rb_host;  // host pointer (CPU visible address of RingBuffer)
+  int my_rank;          // rank id for this proxy (if simulating multiple)
 };
 
 void cpu_consume(RingBuffer* rb, int block_idx);
 
-#endif // PROXY_HPP
+#endif  // PROXY_HPP

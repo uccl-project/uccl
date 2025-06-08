@@ -1,40 +1,41 @@
-#include "ring_buffer.cuh"
 #include "proxy.hpp"
-
+#include "ring_buffer.cuh"
 #include <atomic>
 #include <chrono>
 #include <thread>
 #include <vector>
-#include <stdio.h>
-#include <unistd.h>
 #include <assert.h>
 #include <cuda_runtime.h>
+#include <stdio.h>
+#include <unistd.h>
 
 #define kIterations 10000000
 #define kQueueSize 128
 #define kQueueMask (kQueueSize - 1)
 
 static inline bool pin_thread_to_cpu(int cpu) {
-    int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
-    if (cpu < 0 || cpu >= num_cpus) return false;
+  int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+  if (cpu < 0 || cpu >= num_cpus) return false;
 
-    cpu_set_t cpuset;
-    CPU_ZERO(&cpuset);
-    CPU_SET(cpu, &cpuset);
+  cpu_set_t cpuset;
+  CPU_ZERO(&cpuset);
+  CPU_SET(cpu, &cpuset);
 
-    pthread_t current_thread = pthread_self();
-    return !pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
+  pthread_t current_thread = pthread_self();
+  return !pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
 }
 
 #ifdef NO_RDMA
 #include <cuda_runtime.h>
 void rdma_write_stub(int dst_rank, void* local_dev_ptr, size_t bytes) {
-    (void)dst_rank; (void)local_dev_ptr; (void)bytes;
+  (void)dst_rank;
+  (void)local_dev_ptr;
+  (void)bytes;
 }
 #else
 #include <infiniband/verbs.h>
 void rdma_write_stub(int, void*, size_t) {
-    fprintf(stderr, "[RDMA] real implementation required\n");
+  fprintf(stderr, "[RDMA] real implementation required\n");
 }
 #endif
 
