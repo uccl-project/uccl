@@ -53,8 +53,8 @@ void exchange_connection_info(int rank, const char* peer_ip, RDMAConnectionInfo*
     close(sockfd);
 }
 
-void setup_rdma(void* gpu_buffer, size_t size) {
-    // 1. Get device list and open the first one
+void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info, int rank) {
+    srand(time(NULL) + getpid() + rank * 1000);
     struct ibv_device** dev_list = ibv_get_device_list(NULL);
     if (!dev_list) {
         perror("Failed to get IB devices list");
@@ -110,10 +110,145 @@ void setup_rdma(void* gpu_buffer, size_t size) {
         exit(1);
     }
 
+    // Query port
+    struct ibv_port_attr port_attr;
+    if (ibv_query_port(context, 1, &port_attr)) {
+        perror("Failed to query port");
+        exit(1);
+    }
+    printf("Local LID: 0x%x\n", port_attr.lid);
+    // Fill local connection info
+    local_info->qp_num = qp->qp_num;
+    local_info->lid    = port_attr.lid;
+    local_info->rkey   = rkey;
+    local_info->addr   = reinterpret_cast<uintptr_t>(gpu_buffer);
+    local_info->psn    = rand() & 0xffffff;  // random psn
+    memset(local_info->gid, 0, 16);
+    printf("Local RDMA info: addr=0x%lx, rkey=0x%x, qp_num=%u, psn=%u\n",
+            local_info->addr, local_info->rkey, local_info->qp_num, local_info->psn);
+}
+
+void modify_qp_to_init()
+{
+    struct ibv_qp_attr attr;
+    memset(&attr, 0, sizeof(attr));
+
+    attr.qp_state        = IBV_QPS_INIT;
+    attr.port_num        = 1;            // HCA port you use
+    attr.pkey_index      = 0;
+    attr.qp_access_flags = IBV_ACCESS_LOCAL_WRITE    |
+                           IBV_ACCESS_REMOTE_READ    |
+                           IBV_ACCESS_REMOTE_WRITE;
+
+    int flags = IBV_QP_STATE | IBV_QP_PKEY_INDEX |
+                IBV_QP_PORT  | IBV_QP_ACCESS_FLAGS;
+
+    if (ibv_modify_qp(qp, &attr, flags)) {
+        perror("Failed to modify QP to INIT");
+        exit(1);
+    }
+
+    printf("QP modified to INIT state\n");
+}
+
+
+void modify_qp_to_rtr(RDMAConnectionInfo* remote) {
+
+    int is_roce = 0;
+
+    struct ibv_port_attr port_attr;
+    if (ibv_query_port(context, 1, &port_attr)) {
+        perror("Failed to query port");
+        exit(1);
+    }
+
+    if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
+        printf("RoCE detected (Ethernet)\n");
+        is_roce = 1;
+    } else if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
+        printf("InfiniBand detected\n");
+        is_roce = 0;
+    } else {
+        printf("Unknown link layer: %d\n", port_attr.link_layer);
+        exit(1);
+    }
+
+    struct ibv_qp_attr attr;
+    memset(&attr, 0, sizeof(attr));
+    attr.qp_state           = IBV_QPS_RTR;
+    attr.path_mtu           = port_attr.active_mtu;
+    attr.dest_qp_num        = remote->qp_num;
+    attr.rq_psn             = remote->psn;
+    attr.max_dest_rd_atomic = 1;
+    attr.min_rnr_timer      = 12;
+
+    if (is_roce) {
+        attr.ah_attr.is_global = 1;
+        attr.ah_attr.port_num  = 1;
+        attr.ah_attr.sl        = 0;
+        attr.ah_attr.src_path_bits = 0;
+        attr.ah_attr.grh.hop_limit = 1;
+        // Fill GID from remote_info
+        memcpy(&attr.ah_attr.grh.dgid, remote->gid, 16);
+        attr.ah_attr.grh.sgid_index = 0; // Assume GID index 0
+    } else {
+        attr.ah_attr.is_global = 0;
+        attr.ah_attr.dlid = remote->lid;
+        attr.ah_attr.port_num = 1;
+        attr.ah_attr.sl = 0;
+        attr.ah_attr.src_path_bits = 0;
+        attr.ah_attr.static_rate = 0;
+        memset(&attr.ah_attr.grh, 0, sizeof(attr.ah_attr.grh)); // Safe
+    }
+
+    int flags = IBV_QP_STATE | IBV_QP_PATH_MTU | IBV_QP_AV |
+                IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
+                IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
+
+    printf("Remote LID: 0x%x, QPN: %u, PSN: %u\n",
+        remote->lid, remote->qp_num, remote->psn);
+    printf("Verifying port state:\n");
+    printf("  link_layer: %s\n", (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) ? "Ethernet (RoCE)" : "InfiniBand");
+    printf("  port_state: %s\n", (port_attr.state == IBV_PORT_ACTIVE) ? "ACTIVE" : "NOT ACTIVE");
+    printf("  max_mtu: %d\n", port_attr.max_mtu);
+    printf("  active_mtu: %d\n", port_attr.active_mtu);
+    printf("  lid: 0x%x\n", port_attr.lid);
+
+    int ret = ibv_modify_qp(qp, &attr, flags);
+    if (ret) {
+        perror("Failed to modify QP to RTR");
+        fprintf(stderr, "errno: %d\n", errno);
+        exit(1);
+    }
+
+    printf("QP modified to RTR state\n");
+}
+
+void modify_qp_to_rts(RDMAConnectionInfo* local_info) {
+    struct ibv_qp_attr attr;
+    memset(&attr, 0, sizeof(attr));
+    attr.qp_state      = IBV_QPS_RTS;
+    attr.timeout       = 14;
+    attr.retry_cnt     = 7;
+    attr.rnr_retry     = 7;
+    attr.sq_psn        = local_info->psn;
+    attr.max_rd_atomic = 1;
+
+    int flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT |
+                IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC;
+
+    if (ibv_modify_qp(qp, &attr, flags)) {
+        perror("Failed to modify QP to RTS");
+        exit(1);
+    }
+
+    printf("QP modified to RTS state\n");
 }
 
 // Dummy `rdma_write_stub` — real post
 void rdma_write_stub(void* local_dev_ptr, size_t bytes) {
+
+    printf("Posting RDMA write of %zu bytes\n", bytes);
     struct ibv_sge sge;
     memset(&sge, 0, sizeof(sge));
     sge.addr   = reinterpret_cast<uintptr_t>(local_dev_ptr);  // GPU memory address

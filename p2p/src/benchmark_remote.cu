@@ -70,25 +70,20 @@ int main(int argc, char** argv) {
   void* gpu_buffer = nullptr;
   cudaMalloc(&gpu_buffer, total_size);
 
-  setup_rdma(gpu_buffer, total_size);
   RDMAConnectionInfo local_info, remote_info;
-  local_info.qp_num = 0x1234;        // Dummy, needs real QP setup
-  local_info.psn    = 0x5678;        // Dummy, needs real PSN
-  local_info.rkey   = rkey;
-  local_info.addr   = reinterpret_cast<uintptr_t>(gpu_buffer);
-  local_info.lid    = 0;             // Dummy, needs real LID
-  memset(local_info.gid, 0, 16);     // Optional if you want to use RoCE GIDs
+  setup_rdma(gpu_buffer, total_size, &local_info, rank);
+
+  modify_qp_to_init();
 
   printf("Local RDMA info: addr=0x%lx, rkey=0x%x\n", local_info.addr, local_info.rkey);
   exchange_connection_info(rank, peer_ip, &local_info, &remote_info);
   printf("Exchanged remote_addr: 0x%lx, remote_rkey: 0x%x\n", remote_info.addr, remote_info.rkey);
 
-  
-  rdma_write_stub(gpu_buffer, total_size);
-  printf("RDMA write stub completed\n");
+  modify_qp_to_rtr(&remote_info);
+  modify_qp_to_rts(&local_info);
 
-  poll_completion();
-  printf("Polling completions done\n");
+  remote_addr = remote_info.addr;
+  remote_rkey = remote_info.rkey;
 
 
   // Launch one CPU polling thread per block

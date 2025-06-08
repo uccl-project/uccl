@@ -23,7 +23,7 @@ struct RDMAConnectionInfo {
 };
 
 // Setup RDMA resources (register GPU memory, create QP, etc.)
-void setup_rdma(void* gpu_buffer, size_t size);
+void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info, int rank);
 
 // Post an RDMA write
 void rdma_write_stub(void* local_dev_ptr, size_t bytes);
@@ -32,6 +32,13 @@ bool GdrSupportInitOnce();
 
 void exchange_connection_info(int rank, const char* peer_ip, RDMAConnectionInfo* local, RDMAConnectionInfo* remote);
 
+void modify_qp_to_rtr(RDMAConnectionInfo* remote);
+
+void modify_qp_to_rts(RDMAConnectionInfo* local_info);
+
 void poll_completion();
+
+
+void modify_qp_to_init();
 
 #endif // RDMA_HPP
