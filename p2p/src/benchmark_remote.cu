@@ -90,7 +90,7 @@ int main(int argc, char** argv) {
   std::thread cq_thread(progress_thread);
 
   if (rank == 0) {
-    rdma_write_stub(gpu_buffer, total_size);
+    rdma_write_stub(gpu_buffer, kObjectSize);
     printf("RDMA write stub completed\n");
 
     poll_completion();
@@ -99,7 +99,7 @@ int main(int argc, char** argv) {
     // Launch one CPU polling thread per block
     std::vector<std::thread> cpu_threads;
     for (int i = 0; i < kNumThBlocks; ++i) {
-      cpu_threads.emplace_back(cpu_consume, &rbs[i], i, gpu_buffer, total_size,
+      cpu_threads.emplace_back(cpu_consume, &rbs[i], i, gpu_buffer, kObjectSize,
                                rank);
     }
     auto t0 = std::chrono::high_resolution_clock::now();

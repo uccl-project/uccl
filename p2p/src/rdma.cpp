@@ -278,9 +278,9 @@ void post_rdma_async(void* buf, size_t bytes) {
 
   g_posted.fetch_add(1, std::memory_order_relaxed);
 
-  printf("g_posted: %lu, g_completed: %lu, outstanding: %d\n",
-         g_posted.load(std::memory_order_acquire),
-         g_completed.load(std::memory_order_acquire), outstanding);
+  // printf("g_posted: %lu, g_completed: %lu, outstanding: %d\n",
+  //        g_posted.load(std::memory_order_acquire),
+  //        g_completed.load(std::memory_order_acquire), outstanding);
 }
 
 void rdma_write_stub(void* local_dev_ptr, size_t bytes) {
