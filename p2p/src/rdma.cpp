@@ -268,7 +268,7 @@ void post_rdma_async(void* buf, size_t bytes) {
   wr.wr.rdma.remote_addr = remote_addr;
   wr.wr.rdma.rkey = remote_rkey;
 
-  if (true || ++outstanding % kSignalledEvery == 0)
+  if (++outstanding % kSignalledEvery == 0)
     wr.send_flags = IBV_SEND_SIGNALED;  // generate a CQE
   else
     wr.send_flags = 0;  // no CQE → cheaper
@@ -366,10 +366,17 @@ void progress_thread() {
       }
       g_completed.fetch_add(1, std::memory_order_relaxed);
     }
+
+    printf(
+        "Finished processing %d completions, "
+        "g_posted: %lu, g_completed: %lu\n",
+        ne, g_posted.load(std::memory_order_acquire),
+        g_completed.load(std::memory_order_acquire));
   }
 }
 
 void drain_cq() {
   uint64_t want = g_posted.load(std::memory_order_acquire);
-  while (g_completed.load(std::memory_order_acquire) < want) _mm_pause();
+  while (g_completed.load(std::memory_order_acquire) * kSignalledEvery < want)
+    _mm_pause();
 }

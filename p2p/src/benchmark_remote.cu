@@ -115,15 +115,11 @@ int main(int argc, char** argv) {
     cudaDeviceSynchronize();
     cudaCheckErrors("cudaDeviceSynchronize failed");
 
-    printf("Before cpu_thraed join\n");
+    printf("Before cpu_threads join\n");
     for (auto& t : cpu_threads) {
       t.join();
     }
-    printf("After cpu_thraed join\n");
-
-    drain_cq();
-    g_progress_run.store(false);
-    cq_thread.join();
+    printf("After cpu_threads join\n");
 
     unsigned int tot_ops = 0;
 #ifdef MEASURE_PER_OP_LATENCY
@@ -165,4 +161,8 @@ int main(int argc, char** argv) {
       printf("Rank %d is waiting...\n", rank);
     }
   }
+
+  drain_cq();
+  g_progress_run.store(false);
+  cq_thread.join();
 }
