@@ -27,6 +27,8 @@ inline void** allocate_memory_for_gpudirect() {
   return d_ptrs;
 }
 
+
+
 int main(int argc, char** argv) {
 
   if (argc < 3) {
@@ -60,11 +62,15 @@ int main(int argc, char** argv) {
   }
 
   void** d_ptrs = allocate_memory_for_gpudirect();
+  printf("Allocated %d bytes for %d blocks of %d bytes each\n",
+         kObjectSize * kBatchSize * kNumThBlocks, kNumThBlocks, kObjectSize * kBatchSize);
+  printf("d_ptrs address: %p\n", d_ptrs);
 
   size_t total_size = kObjectSize * kBatchSize * kNumThBlocks;
-  void* gpu_buffer = (void*)((uintptr_t)d_ptrs[0]); // First block
-  setup_rdma(gpu_buffer, total_size);
+  void* gpu_buffer = nullptr;
+  cudaMalloc(&gpu_buffer, total_size);
 
+  setup_rdma(gpu_buffer, total_size);
   RDMAConnectionInfo local_info, remote_info;
   local_info.qp_num = 0x1234;        // Dummy, needs real QP setup
   local_info.psn    = 0x5678;        // Dummy, needs real PSN
@@ -73,8 +79,16 @@ int main(int argc, char** argv) {
   local_info.lid    = 0;             // Dummy, needs real LID
   memset(local_info.gid, 0, 16);     // Optional if you want to use RoCE GIDs
 
+  printf("Local RDMA info: addr=0x%lx, rkey=0x%x\n", local_info.addr, local_info.rkey);
   exchange_connection_info(rank, peer_ip, &local_info, &remote_info);
   printf("Exchanged remote_addr: 0x%lx, remote_rkey: 0x%x\n", remote_info.addr, remote_info.rkey);
+
+  
+  rdma_write_stub(gpu_buffer, total_size);
+  printf("RDMA write stub completed\n");
+
+  poll_completion();
+  printf("Polling completions done\n");
 
 
   // Launch one CPU polling thread per block

@@ -26,10 +26,12 @@ struct RDMAConnectionInfo {
 void setup_rdma(void* gpu_buffer, size_t size);
 
 // Post an RDMA write
-void rdma_write_stub(int dst_rank, void* local_dev_ptr, size_t bytes);
+void rdma_write_stub(void* local_dev_ptr, size_t bytes);
 
 bool GdrSupportInitOnce();
 
 void exchange_connection_info(int rank, const char* peer_ip, RDMAConnectionInfo* local, RDMAConnectionInfo* remote);
+
+void poll_completion();
 
 #endif // RDMA_HPP

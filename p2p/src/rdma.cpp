@@ -9,6 +9,7 @@
 // Define globals
 struct ibv_context* context = nullptr;
 struct ibv_pd* pd = nullptr;
+struct ibv_cq* cq = nullptr;
 struct ibv_qp* qp = nullptr;
 struct ibv_mr* mr = nullptr;
 uint32_t rkey = 0;
@@ -86,10 +87,33 @@ void setup_rdma(void* gpu_buffer, size_t size) {
         exit(1);
     }
     rkey = mr->rkey;
+
+    cq = ibv_create_cq(context, /* cqe */ 16, /* user_context */ nullptr, 
+                       /* channel */ nullptr, /* comp_vector */ 0);
+    if (!cq) {
+        perror("Failed to create CQ");
+        exit(1);
+    }
+
+    struct ibv_qp_init_attr qp_init_attr = {};
+    qp_init_attr.send_cq = cq;
+    qp_init_attr.recv_cq = cq;
+    qp_init_attr.qp_type = IBV_QPT_RC; // Reliable Connection
+    qp_init_attr.cap.max_send_wr  = 128;  // max outstanding sends
+    qp_init_attr.cap.max_recv_wr  = 128;  // max outstanding recvs
+    qp_init_attr.cap.max_send_sge = 1;
+    qp_init_attr.cap.max_recv_sge = 1;
+
+    qp = ibv_create_qp(pd, &qp_init_attr);
+    if (!qp) {
+        perror("Failed to create QP");
+        exit(1);
+    }
+
 }
 
 // Dummy `rdma_write_stub` — real post
-void rdma_write_stub(int dst_rank, void* local_dev_ptr, size_t bytes) {
+void rdma_write_stub(void* local_dev_ptr, size_t bytes) {
     struct ibv_sge sge;
     memset(&sge, 0, sizeof(sge));
     sge.addr   = reinterpret_cast<uintptr_t>(local_dev_ptr);  // GPU memory address
@@ -121,4 +145,24 @@ bool GdrSupportInitOnce() {
   return KNL_MODULE_LOADED("/sys/kernel/mm/memory_peers/nv_mem/version") ||
          KNL_MODULE_LOADED("/sys/kernel/mm/memory_peers/nv_mem_nc/version") ||
          KNL_MODULE_LOADED("/sys/module/nvidia_peermem/version");
+}
+
+void poll_completion() {
+    struct ibv_wc wc;
+    int ret;
+
+    do {
+        ret = ibv_poll_cq(cq, 1, &wc);  // poll one completion
+    } while (ret == 0);  // 0 means no completion yet, keep polling
+
+    if (ret < 0) {
+        perror("ibv_poll_cq failed");
+        exit(1);
+    }
+
+    if (wc.status != IBV_WC_SUCCESS) {
+        fprintf(stderr, "Completion with error: %s (wr_id=%llu)\n",
+                ibv_wc_status_str(wc.status), (unsigned long long)wc.wr_id);
+        exit(1);
+    }
 }
