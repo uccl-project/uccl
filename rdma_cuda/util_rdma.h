@@ -145,7 +145,7 @@ class RetrChunkBuffPool : public BuffPool {
  public:
   static constexpr uint32_t kRetrChunkSize =
       kChunkSize + sizeof(retr_chunk_hdr);
-  static constexpr uint32_t kNumChunk = 4096;
+  static constexpr uint32_t kNumChunk = kMaxSRQ * 2;
   static_assert((kNumChunk & (kNumChunk - 1)) == 0,
                 "kNumChunk must be power of 2");
 

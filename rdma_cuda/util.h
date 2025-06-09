@@ -37,6 +37,7 @@ namespace uccl {
 #define UCCL_LOG_EP VLOG(3) << "[Endpoint] "
 #define UCCL_LOG_RE VLOG(3) << "[Resource] "
 #define UCCL_LOG_ENGINE VLOG(4) << "[Engine] "
+#define UCCL_LOG_RTO LOG(ERROR) << "[RTO] "
 
 #define POISON_64 UINT64_MAX
 #define POISON_32 UINT32_MAX
