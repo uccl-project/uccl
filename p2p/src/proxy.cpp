@@ -82,7 +82,14 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
       printf("Polling completions done. %d out of %d\n", seen, kIterations);
     } else if (true) {
       post_rdma_async(gpu_buffer, total_size);
+      
 
+      // if (seen % 100 == 0) {
+      //   // Poll completion every 100 iterations to avoid too many outstanding
+      //   // writes.
+      //   poll_completions();
+      //   printf("Polling completions done. %d out of %d\n", seen, kIterations);
+      // }
       // Busy loop for 1us
       // for (int i = 0; i < 100; ++i) {
       //   _mm_pause();

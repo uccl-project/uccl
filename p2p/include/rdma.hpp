@@ -47,5 +47,6 @@ void poll_completion();
 void modify_qp_to_init();
 void progress_thread();
 void drain_cq();
+void poll_completions();
 
 #endif  // RDMA_HPP
