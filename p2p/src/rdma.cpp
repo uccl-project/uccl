@@ -1,15 +1,30 @@
 #include "rdma.hpp"
+#include "common.hpp"
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 #include <cuda_runtime.h>
 #include <immintrin.h>
 #include <stdio.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+static inline bool pin_thread_to_cpu(int cpu) {
+  int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+  if (cpu < 0 || cpu >= num_cpus) return false;
+
+  cpu_set_t cpuset;
+  CPU_ZERO(&cpuset);
+  CPU_SET(cpu, &cpuset);
+
+  pthread_t current_thread = pthread_self();
+  return !pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
+}
 
 // Define globals
 struct ibv_context* context = nullptr;
@@ -115,6 +130,7 @@ void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info,
   qp_init_attr.cap.max_recv_wr = 1024;  // max outstanding recvs
   qp_init_attr.cap.max_send_sge = 1;
   qp_init_attr.cap.max_recv_sge = 1;
+  qp_init_attr.sq_sig_all = 0;
 
   qp = ibv_create_qp(pd, &qp_init_attr);
   if (!qp) {
@@ -349,6 +365,7 @@ void poll_completion() {
 }
 
 void progress_thread() {
+  pin_thread_to_cpu(15);
   struct ibv_wc wc[kSignalledEvery];  // batch poll
   while (g_progress_run.load(std::memory_order_acquire)) {
     int ne = ibv_poll_cq(cq, kSignalledEvery, wc);

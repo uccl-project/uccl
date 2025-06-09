@@ -9,6 +9,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
+// #define DEBUG_PRINT
 // CUDA error checking macro
 #define CHECK_CUDA(call)                                            \
   do {                                                              \
@@ -36,7 +37,7 @@
 #define kQueueMask (kQueueSize - 1)
 #define kBatchSize 8
 #define kIterations 1000
-#define kNumThBlocks 1
+#define kNumThBlocks 8
 #define kNumThPerBlock 1
 #define kObjectSize 4096  // 4 KB
 

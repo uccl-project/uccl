@@ -1,4 +1,5 @@
 #include "proxy.hpp"
+#include "common.hpp"
 #include "rdma.hpp"
 #include "ring_buffer.cuh"
 #include <atomic>
@@ -9,9 +10,6 @@
 #include <cuda_runtime.h>
 #include <stdio.h>
 #include <unistd.h>
-
-#define kQueueSize 128
-#define kQueueMask (kQueueSize - 1)
 
 static inline bool pin_thread_to_cpu(int cpu) {
   int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
@@ -25,22 +23,32 @@ static inline bool pin_thread_to_cpu(int cpu) {
   return !pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
 }
 
+inline uint64_t load_volatile_u64(uint64_t volatile* addr) {
+  uint64_t val;
+  asm volatile("movq %1, %0" : "=r"(val) : "m"(*addr) : "memory");
+  return val;
+}
+
 void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
                  size_t total_size, int rank) {
-  // printf("CPU thread for block %d started\n", block_idx);
+  printf("CPU thread for block %d started\n", block_idx);
   pin_thread_to_cpu(block_idx);
 
   uint64_t my_tail = 0;
   for (int seen = 0; seen < kIterations; ++seen) {
     // TODO: here, if CPU caches fifo->head, it may not see the updates from
     // GPU.
+#ifdef MEASURE_PER_OP_LATENCY
+    auto start = std::chrono::high_resolution_clock::now();
+#endif
+
     while (rb->head == my_tail) {
 #ifdef DEBUG_PRINT
       if (block_idx == 0) {
         printf(
             "CPU thread for block %d, waiting for head to advance: my_tail: "
-            "%lu, head: %llu\n",
-            block_idx, my_tail, fifo->head);
+            "%lu, head: %lu\n",
+            block_idx, my_tail, rb->head);
       }
 #endif
       /* spin */
@@ -54,9 +62,9 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
 
 #ifdef DEBUG_PRINT
     printf(
-        "CPU thread for block %d, seen: %d, my_head: %llu, my_tail: %lu, "
+        "CPU thread for block %d, seen: %d, my_head: %lu, my_tail: %lu, "
         "consuming cmd %llu\n",
-        block_idx, seen, fifo->head, my_tail,
+        block_idx, seen, rb->head, my_tail,
         static_cast<unsigned long long>(cmd));
 #endif
     uint64_t expected_cmd =
@@ -72,16 +80,31 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
       rdma_write_stub(gpu_buffer, total_size);
       poll_completion();
       printf("Polling completions done. %d out of %d\n", seen, kIterations);
-    } else {
+    } else if (true) {
       post_rdma_async(gpu_buffer, total_size);
-      printf("Posted RDMA write for block %d, seen %d out of %d\n", block_idx,
-             seen, kIterations);
+
+      // Busy loop for 1us
+      // for (int i = 0; i < 100; ++i) {
+      //   _mm_pause();
+      // }
+
+      // printf("Posted RDMA write for block %d with %ld bytes, seen %d out of
+      // %d\n", block_idx, total_size,
+      //        seen, kIterations);
     }
 
     rb->buf[idx].cmd = 0;
     // std::atomic_thread_fence(std::memory_order_release);
     my_tail++;
     rb->tail = my_tail;
+
+#ifdef MEASURE_PER_OP_LATENCY
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration =
+        std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+    // printf("Took %ld microseconds\n", duration.count());
+#endif
+
     // _mm_clflush(&(fifo->tail));
   }
 
@@ -102,8 +125,8 @@ void cpu_consume_local(RingBuffer* rb, int block_idx) {
       if (block_idx == 0) {
         printf(
             "CPU thread for block %d, waiting for head to advance: my_tail: "
-            "%lu, head: %llu\n",
-            block_idx, my_tail, fifo->head);
+            "%lu, head: %lu\n",
+            block_idx, my_tail, rb->head);
       }
 #endif
       /* spin */
@@ -117,9 +140,9 @@ void cpu_consume_local(RingBuffer* rb, int block_idx) {
 
 #ifdef DEBUG_PRINT
     printf(
-        "CPU thread for block %d, seen: %d, my_head: %llu, my_tail: %lu, "
+        "CPU thread for block %d, seen: %d, my_head: %lu, my_tail: %lu, "
         "consuming cmd %llu\n",
-        block_idx, seen, fifo->head, my_tail,
+        block_idx, seen, rb->head, my_tail,
         static_cast<unsigned long long>(cmd));
 #endif
     uint64_t expected_cmd =
@@ -129,6 +152,10 @@ void cpu_consume_local(RingBuffer* rb, int block_idx) {
               block_idx, static_cast<unsigned long long>(expected_cmd),
               static_cast<unsigned long long>(cmd));
       exit(1);
+    }
+
+    for (int i = 0; i < 100; ++i) {
+      _mm_pause();
     }
 
     rb->buf[idx].cmd = 0;

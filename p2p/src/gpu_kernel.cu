@@ -84,7 +84,7 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs, void** d_ptrs) {
 #ifdef MEASURE_PER_OP_LATENCY
     while (complete < my_hdr + todo) {
       uint32_t cidx = complete & kQueueMask;
-      if (complete < rb->tail) {
+      if (complete < ld_volatile(&rb->tail)) {
         unsigned long long t1 = clock64();
         unsigned long long cycles = t1 - start_cycle_smem[cidx];
         cycle_accum_smem += cycles;
@@ -96,8 +96,6 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs, void** d_ptrs) {
     }
 #endif
   }
-
-  __threadfence_system();
 
 #ifdef MEASURE_PER_OP_LATENCY
   while (complete < kIterations) {
