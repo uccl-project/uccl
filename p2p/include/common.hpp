@@ -37,13 +37,13 @@
 #define kQueueMask (kQueueSize - 1)
 #define kBatchSize 4
 #define kIterations 20000
-#define kNumThBlocks 8
+#define kNumThBlocks 16
 #define kNumThPerBlock 1
-#define kObjectSize 4096  // 4 KB
+#define kObjectSize 8192  // 8 KB
 #define kMaxOutstandingSends 64
 #define kSignalledEvery 1
 #define kNumPollingThreads 3
-#define kPollingThreadStartPort 15
+#define kPollingThreadStartPort kNumThBlocks * 2
 
 // Command structure for each transfer
 struct TransferCmd {

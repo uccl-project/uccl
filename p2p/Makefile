@@ -9,7 +9,7 @@ ifdef NO_RDMA
 CXXFLAGS  += -DNO_RDMA
 NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread" -DNO_RDMA
 else
-CXXFLAGS  +=
+CXXFLAGS  += -mclwb
 LDFLAGS   += -libverbs
 NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread"
 endif

@@ -44,7 +44,8 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
     auto start = std::chrono::high_resolution_clock::now();
 #endif
 
-    while (rb->head == my_tail) {
+    // Force loading rb->head from DRAM.
+    while (load_volatile_u64(&rb->head) == my_tail) {
 #ifdef DEBUG_PRINT
       if (block_idx == 0) {
         printf(
@@ -54,6 +55,7 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
       }
 #endif
       /* spin */
+      _mm_pause();
     }
     uint64_t idx = my_tail & kQueueMask;
     uint64_t cmd;
@@ -85,7 +87,7 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
     } else if (true) {
       // Record time
       auto start = std::chrono::high_resolution_clock::now();
-      post_rdma_async(gpu_buffer, total_size);
+      post_rdma_async(gpu_buffer, total_size, seen);
       auto end = std::chrono::high_resolution_clock::now();
       total_rdma_write_durations +=
           std::chrono::duration_cast<std::chrono::microseconds>(end - start);
@@ -111,6 +113,10 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
     // std::atomic_thread_fence(std::memory_order_release);
     my_tail++;
     rb->tail = my_tail;
+    // Initiate flush to DRAM
+    _mm_clwb(&(rb->tail));
+    // Ensure that flush to DRAM completes.
+    _mm_sfence();
 
 #ifdef MEASURE_PER_OP_LATENCY
     auto end = std::chrono::high_resolution_clock::now();
@@ -118,8 +124,6 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
         std::chrono::duration_cast<std::chrono::microseconds>(end - start);
     // printf("Took %ld microseconds\n", duration.count());
 #endif
-
-    // _mm_clflush(&(fifo->tail));
   }
 
   printf("CPU thread for block %d finished consuming %d commands\n", block_idx,

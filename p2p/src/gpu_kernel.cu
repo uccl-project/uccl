@@ -50,21 +50,35 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs, void** d_ptrs) {
 
   extern __shared__ unsigned long long start_cycle_smem[];
 
-  for (int it = 0; it < kIterations; it += kBatchSize) {
+  for (int it = 0; it < kIterations;) {
     uint64_t my_hdr;
     uint64_t cur_tail;
 
-    unsigned int const todo =
+    unsigned int const initial_todo =
         (it + kBatchSize <= kIterations) ? kBatchSize : (kIterations - it);
+    unsigned int todo = initial_todo;
 
+    // Dynamically send the number of todos to send.
     while (true) {
       uint64_t cur_head = rb->head;
       cur_tail = ld_volatile(&rb->tail);
-      if (cur_head - cur_tail + todo <= kQueueSize) {
+      uint64_t free_slots = kQueueSize - (cur_head - cur_tail);
+
+      if (free_slots >= todo) {
         rb->head = cur_head + todo;
         my_hdr = cur_head;
         break;
       }
+
+#ifdef False  // Doesn't seem to work.
+      if (free_slots >= 1) {
+        todo = free_slots;
+        rb->head = cur_head + todo;
+        my_hdr = cur_head;
+        break;
+      }
+#endif
+      /* Spin */
     }
 
 #pragma unroll
@@ -96,6 +110,7 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs, void** d_ptrs) {
       }
     }
 #endif
+    it += todo;
   }
 
 #ifdef MEASURE_PER_OP_LATENCY

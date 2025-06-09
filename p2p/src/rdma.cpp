@@ -272,7 +272,7 @@ void modify_qp_to_rts(RDMAConnectionInfo* local_info) {
   printf("QP modified to RTS state\n");
 }
 
-void post_rdma_async(void* buf, size_t bytes) {
+void post_rdma_async(void* buf, size_t bytes, uint64_t wr_id) {
   /* Make it a closed loop to limit the maximum outstanding sends. */
   while (g_posted.load() - g_completed.load() > kMaxOutstandingSends) {
     poll_completions();
@@ -288,6 +288,7 @@ void post_rdma_async(void* buf, size_t bytes) {
   wr.num_sge = 1;
   wr.wr.rdma.remote_addr = remote_addr;
   wr.wr.rdma.rkey = remote_rkey;
+  // wr.wr_id = wr_id;
 
   if (++outstanding % kSignalledEvery == 0)
     wr.send_flags = IBV_SEND_SIGNALED;  // generate a CQE
@@ -425,10 +426,8 @@ void progress_thread(int thread_idx) {
 }
 
 void drain_cq() {
-  uint64_t want = g_posted.load(std::memory_order_acquire);
-  printf("drain_cq: g_completed: %ld, g_posted: %ld\n",
-         g_completed.load(std::memory_order_acquire),
-         g_posted.load(std::memory_order_acquire));
-  while (g_completed.load(std::memory_order_acquire) * kSignalledEvery < want)
-    _mm_pause();
+  uint64_t posted = g_posted.load(std::memory_order_acquire);
+  uint64_t completed = g_completed.load(std::memory_order_acquire);
+  printf("drain_cq: g_completed: %ld, g_posted: %ld\n", completed, posted);
+  while (completed * kSignalledEvery < posted) _mm_pause();
 }
