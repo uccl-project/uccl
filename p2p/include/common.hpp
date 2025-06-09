@@ -33,15 +33,17 @@
   } while (0)
 
 #define MEASURE_PER_OP_LATENCY
-#define kQueueSize 128
+#define kQueueSize 16
 #define kQueueMask (kQueueSize - 1)
-#define kBatchSize 8
+#define kBatchSize 4
 #define kIterations 20000
 #define kNumThBlocks 8
 #define kNumThPerBlock 1
 #define kObjectSize 4096  // 4 KB
 #define kMaxOutstandingSends 64
 #define kSignalledEvery 1
+#define kNumPollingThreads 3
+#define kPollingThreadStartPort 15
 
 // Command structure for each transfer
 struct TransferCmd {

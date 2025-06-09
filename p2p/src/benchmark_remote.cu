@@ -88,11 +88,10 @@ int main(int argc, char** argv) {
   remote_rkey = remote_info.rkey;
 
   std::vector<std::thread> cq_threads;
-  int const num_threads = 3;
 
   // Launch threads
-  for (int i = 0; i < num_threads; ++i) {
-    int cpu_id = 15 + i;  // 15, 16, 17 for example
+  for (int i = 0; i < kNumPollingThreads; ++i) {
+    int cpu_id = kPollingThreadStartPort + i;
     cq_threads.emplace_back(progress_thread, cpu_id);
   }
 

@@ -81,6 +81,7 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs, void** d_ptrs) {
       start_cycle_smem[idx] = t0;
     }
     __threadfence_system();
+
 #ifdef MEASURE_PER_OP_LATENCY
     while (complete < my_hdr + todo) {
       uint32_t cidx = complete & kQueueMask;
