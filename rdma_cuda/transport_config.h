@@ -101,7 +101,7 @@ enum engine_lb_policy {
 };
 static constexpr enum engine_lb_policy kEngineLBPolicy = ENGINE_POLICY_RR;
 
-static const uint32_t PACER_CPU_START = 3 * NUM_CPUS / 4;
+static uint32_t const PACER_CPU_START = 3 * NUM_CPUS / 4;
 
 constexpr static int kTotalQP =
     kPortEntropy + 1 /* Credit QP */ + (kRCMode ? 0 : 1) /* Ctrl QP */;
