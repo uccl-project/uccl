@@ -37,7 +37,6 @@ uintptr_t remote_addr = 0;
 uint32_t remote_rkey = 0;
 
 constexpr int TCP_PORT = 18515;
-constexpr int kSignalledEvery = 4096;     // choose ≤ cq_depth
 static thread_local int outstanding = 0;  // per-CPU thread counter
 
 static std::atomic<uint64_t> g_posted = 0;     // WRs posted
@@ -114,7 +113,7 @@ void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info,
     exit(1);
   }
   rkey = mr->rkey;
-  int cq_depth = 4096;
+  int cq_depth = kMaxOutstandingSends * 2;
   cq = ibv_create_cq(context, /* cqe */ cq_depth, /* user_context */ nullptr,
                      /* channel */ nullptr, /* comp_vector */ 0);
   if (!cq) {
@@ -125,9 +124,10 @@ void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info,
   struct ibv_qp_init_attr qp_init_attr = {};
   qp_init_attr.send_cq = cq;
   qp_init_attr.recv_cq = cq;
-  qp_init_attr.qp_type = IBV_QPT_RC;    // Reliable Connection
-  qp_init_attr.cap.max_send_wr = 4096;  // max outstanding sends
-  qp_init_attr.cap.max_recv_wr = 1;     // max outstanding recvs
+  qp_init_attr.qp_type = IBV_QPT_RC;  // Reliable Connection
+  qp_init_attr.cap.max_send_wr =
+      kMaxOutstandingSends * 2;      // max outstanding sends
+  qp_init_attr.cap.max_recv_wr = 1;  // max outstanding recvs
   qp_init_attr.cap.max_send_sge = 1;
   qp_init_attr.cap.max_recv_sge = 1;
   qp_init_attr.sq_sig_all = 0;
@@ -273,10 +273,10 @@ void modify_qp_to_rts(RDMAConnectionInfo* local_info) {
 }
 
 void post_rdma_async(void* buf, size_t bytes) {
-  // while (g_posted.load() - g_completed.load() >= 1024) {
-  //     poll_completions();  // Try to drain CQ
-
-  // }
+  /* Make it a closed loop to limit the maximum outstanding sends. */
+  while (g_posted.load() - g_completed.load() > kMaxOutstandingSends) {
+    poll_completions();
+  }
 
   struct ibv_sge sge {
     .addr = (uintptr_t)buf, .length = (uint32_t)bytes, .lkey = mr->lkey
@@ -289,7 +289,7 @@ void post_rdma_async(void* buf, size_t bytes) {
   wr.wr.rdma.remote_addr = remote_addr;
   wr.wr.rdma.rkey = remote_rkey;
 
-  if (true || ++outstanding % kSignalledEvery == 0)
+  if (++outstanding % kSignalledEvery == 0)
     wr.send_flags = IBV_SEND_SIGNALED;  // generate a CQE
   else
     wr.send_flags = 0;  // no CQE → cheaper
@@ -378,8 +378,8 @@ void poll_completion() {
 }
 
 void poll_completions() {
-  struct ibv_wc wc[kSignalledEvery];  // batch poll
-  int ne = ibv_poll_cq(cq, kSignalledEvery, wc);
+  struct ibv_wc wc[kMaxOutstandingSends];  // batch poll
+  int ne = ibv_poll_cq(cq, kMaxOutstandingSends, wc);
   for (int i = 0; i < ne; ++i) {
     if (wc[i].status != IBV_WC_SUCCESS) {
       fprintf(stderr, "CQE error wr_id=%llu status=%s\n",
@@ -398,9 +398,9 @@ void poll_completions() {
 void progress_thread(int thread_idx) {
   pin_thread_to_cpu(thread_idx);
   printf("Progress thread started on CPU %d\n", sched_getcpu());
-  struct ibv_wc wc[kSignalledEvery];  // batch poll
+  struct ibv_wc wc[kMaxOutstandingSends];  // batch poll
   while (g_progress_run.load(std::memory_order_acquire)) {
-    int ne = ibv_poll_cq(cq, kSignalledEvery, wc);
+    int ne = ibv_poll_cq(cq, kMaxOutstandingSends, wc);
     if (ne == 0) {
       _mm_pause();
       continue;
@@ -426,6 +426,9 @@ void progress_thread(int thread_idx) {
 
 void drain_cq() {
   uint64_t want = g_posted.load(std::memory_order_acquire);
+  printf("drain_cq: g_completed: %ld, g_posted: %ld\n",
+         g_completed.load(std::memory_order_acquire),
+         g_posted.load(std::memory_order_acquire));
   while (g_completed.load(std::memory_order_acquire) * kSignalledEvery < want)
     _mm_pause();
 }

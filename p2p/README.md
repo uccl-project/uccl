@@ -17,7 +17,8 @@ make
 
 ## Run (two nodes)
 ```bash
-./benchmark
+./benchmark_remote 0 192.168.0.100 # sender
+./benchmark_remote 1 192.168.0.58 # receiver
 ```
 
 The program prints the latency of pushing commands from the GPU. Extend the `rdma_write_stub()` and add receiver‑side logic to measure end‑to‑end transfer latency.

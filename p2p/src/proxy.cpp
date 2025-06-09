@@ -35,6 +35,8 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
   pin_thread_to_cpu(block_idx);
 
   uint64_t my_tail = 0;
+  auto total_rdma_write_durations =
+      std::chrono::duration<double, std::micro>::zero();
   for (int seen = 0; seen < kIterations; ++seen) {
     // TODO: here, if CPU caches fifo->head, it may not see the updates from
     // GPU.
@@ -81,7 +83,12 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
       poll_completion();
       printf("Polling completions done. %d out of %d\n", seen, kIterations);
     } else if (true) {
+      // Record time
+      auto start = std::chrono::high_resolution_clock::now();
       post_rdma_async(gpu_buffer, total_size);
+      auto end = std::chrono::high_resolution_clock::now();
+      total_rdma_write_durations +=
+          std::chrono::duration_cast<std::chrono::microseconds>(end - start);
 
       // if (seen % 100 == 0) {
       //   // Poll completion every 100 iterations to avoid too many outstanding
@@ -117,6 +124,9 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
 
   printf("CPU thread for block %d finished consuming %d commands\n", block_idx,
          kIterations);
+
+  printf("Average rdma write duration: %.2f us\n",
+         total_rdma_write_durations.count() / kIterations);
 }
 
 void cpu_consume_local(RingBuffer* rb, int block_idx) {
