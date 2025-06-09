@@ -45,7 +45,7 @@ void modify_qp_to_rts(RDMAConnectionInfo* local_info);
 void poll_completion();
 
 void modify_qp_to_init();
-void progress_thread();
+void progress_thread(int thread_idx);
 void drain_cq();
 void poll_completions();
 

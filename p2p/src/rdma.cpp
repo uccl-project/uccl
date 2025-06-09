@@ -37,7 +37,7 @@ uintptr_t remote_addr = 0;
 uint32_t remote_rkey = 0;
 
 constexpr int TCP_PORT = 18515;
-constexpr int kSignalledEvery = 4096;       // choose ≤ cq_depth
+constexpr int kSignalledEvery = 4096;     // choose ≤ cq_depth
 static thread_local int outstanding = 0;  // per-CPU thread counter
 
 static std::atomic<uint64_t> g_posted = 0;     // WRs posted
@@ -127,7 +127,7 @@ void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info,
   qp_init_attr.recv_cq = cq;
   qp_init_attr.qp_type = IBV_QPT_RC;    // Reliable Connection
   qp_init_attr.cap.max_send_wr = 4096;  // max outstanding sends
-  qp_init_attr.cap.max_recv_wr = 1;  // max outstanding recvs
+  qp_init_attr.cap.max_recv_wr = 1;     // max outstanding recvs
   qp_init_attr.cap.max_send_sge = 1;
   qp_init_attr.cap.max_recv_sge = 1;
   qp_init_attr.sq_sig_all = 0;
@@ -273,10 +273,9 @@ void modify_qp_to_rts(RDMAConnectionInfo* local_info) {
 }
 
 void post_rdma_async(void* buf, size_t bytes) {
-
   // while (g_posted.load() - g_completed.load() >= 1024) {
   //     poll_completions();  // Try to drain CQ
-      
+
   // }
 
   struct ibv_sge sge {
@@ -298,12 +297,12 @@ void post_rdma_async(void* buf, size_t bytes) {
   ibv_send_wr* bad = nullptr;
   int ret = ibv_post_send(qp, &wr, &bad);
   if (ret) {
-      fprintf(stderr, "ibv_post_send failed: %s (ret=%d)\n", strerror(ret), ret);
-      if (bad) {
-          fprintf(stderr, "Bad WR at address: %p\n", bad);
-      }
-      // Optionally query QP state here for more info
-      exit(1);
+    fprintf(stderr, "ibv_post_send failed: %s (ret=%d)\n", strerror(ret), ret);
+    if (bad) {
+      fprintf(stderr, "Bad WR at address: %p\n", bad);
+    }
+    // Optionally query QP state here for more info
+    exit(1);
   }
 
   g_posted.fetch_add(1, std::memory_order_relaxed);
@@ -384,11 +383,10 @@ void poll_completions() {
   for (int i = 0; i < ne; ++i) {
     if (wc[i].status != IBV_WC_SUCCESS) {
       fprintf(stderr, "CQE error wr_id=%llu status=%s\n",
-              (unsigned long long)wc[i].wr_id,
-              ibv_wc_status_str(wc[i].status));
+              (unsigned long long)wc[i].wr_id, ibv_wc_status_str(wc[i].status));
       std::abort();
     }
-  } 
+  }
   g_completed.fetch_add(ne, std::memory_order_relaxed);
   printf(
       "Finished processing %d completions, "
@@ -397,8 +395,8 @@ void poll_completions() {
       g_completed.load(std::memory_order_acquire));
 }
 
-void progress_thread() {
-  pin_thread_to_cpu(15);
+void progress_thread(int thread_idx) {
+  pin_thread_to_cpu(thread_idx);
   printf("Progress thread started on CPU %d\n", sched_getcpu());
   struct ibv_wc wc[kSignalledEvery];  // batch poll
   while (g_progress_run.load(std::memory_order_acquire)) {
@@ -415,7 +413,7 @@ void progress_thread() {
                 ibv_wc_status_str(wc[i].status));
         std::abort();
       }
-    } 
+    }
     g_completed.fetch_add(ne, std::memory_order_relaxed);
 
     // printf(

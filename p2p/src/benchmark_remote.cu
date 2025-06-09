@@ -87,7 +87,14 @@ int main(int argc, char** argv) {
   remote_addr = remote_info.addr;
   remote_rkey = remote_info.rkey;
 
-  std::thread cq_thread(progress_thread);
+  std::vector<std::thread> cq_threads;
+  int const num_threads = 3;
+
+  // Launch threads
+  for (int i = 0; i < num_threads; ++i) {
+    int cpu_id = 15 + i;  // 15, 16, 17 for example
+    cq_threads.emplace_back(progress_thread, cpu_id);
+  }
 
   if (rank == 0) {
     rdma_write_stub(gpu_buffer, kObjectSize);
@@ -164,5 +171,9 @@ int main(int argc, char** argv) {
 
   drain_cq();
   g_progress_run.store(false);
-  cq_thread.join();
+  for (auto& t : cq_threads) {
+    if (t.joinable()) {
+      t.join();
+    }
+  }
 }
