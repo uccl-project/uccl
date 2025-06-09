@@ -1863,7 +1863,7 @@ void RDMAContext::rx_data(struct list_head* ack_list) {
   auto req = get_recvreq_by_id(rid);
   if (req->type != RecvRequest::RECV || req->ureq->context != flow) {
     UCCL_LOG_RTO << "Can't find corresponding request or this request is "
-                   "invalid for this chunk. Dropping.";
+                    "invalid for this chunk. Dropping.";
     subflow->pcb.stats_chunk_drop++;
     return;
   }
@@ -1874,14 +1874,14 @@ void RDMAContext::rx_data(struct list_head* ack_list) {
 
   if (UINT_CSN::uintcsn_seqno_lt(UINT_CSN(csn), ecsn)) {
     UCCL_LOG_RTO << "Chunk lag behind. Dropping as we can't handle SACK. "
-                << "csn: " << csn << ", ecsn: " << ecsn.to_uint32();
+                 << "csn: " << csn << ", ecsn: " << ecsn.to_uint32();
     subflow->pcb.stats_chunk_drop++;
     return;
   }
 
   if (distance.to_uint32() > kReassemblyMaxSeqnoDistance) {
     UCCL_LOG_RTO << "Chunk too far ahead. Dropping as we can't handle SACK. "
-                << "csn: " << csn << ", ecsn: " << ecsn.to_uint32();
+                 << "csn: " << csn << ", ecsn: " << ecsn.to_uint32();
     subflow->pcb.stats_chunk_drop++;
     return;
   }
