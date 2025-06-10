@@ -83,10 +83,9 @@ conda install paramiko -y
 ```
 
 Next, you can dive into individual folders for various supports: 
-* [`efa/`](./efa/README.md): AWS EFA NIC (currently support p4d.24xlarge)
 * [`afxdp/`](./afxdp/README.md): Non-RDMA NICs (currently support AWS ENA NICs and IBM VirtIO NICs)
-* [`rdma_cuda/`](./rdma_cuda/README.md): Nvidia/Mellanox GPUs + RDMA NICs (both IB and RoCE)
-* [`rdma_hip/`](./rdma_hip/README.md): AMD GPUs + RDMA NICs (both IB and RoCE)
+* [`efa/`](./efa/README.md): AWS EFA NIC (currently support p4d.24xlarge)
+* [`rdma/`](./rdma/README.md): Nvidia/AMD GPUs + IB/RoCE RDMA NICs (currently support Nvidia NICs)
 
 ## Documentation
 

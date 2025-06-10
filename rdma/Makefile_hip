@@ -1,6 +1,6 @@
 ABS_ROOT_PATH := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
-NCCL_HOME:=../thirdparty/rccl
+RCCL_HOME:=../thirdparty/rccl
 HIP_HOME:=/opt/rocm-6.3.1
 
 INC = -I./ -I$(HIP_HOME)/include -I/work1/yzhou/yangzhou/anaconda3/include -L/work1/yzhou/yangzhou/anaconda3/lib
@@ -9,7 +9,7 @@ LIBS_SHARED = -lglog -lgflags -lgtest -lz -lelf -libverbs
 override CXXFLAGS += -O3 -g -std=c++17 -Wno-pointer-arith -Wno-interference-size -fPIC -D__HIP_PLATFORM_AMD__
 DEPS = *.h
 PLUGIN_SO = librccl-net-uccl.so
-NCCL_INC:= -I$(NCCL_HOME)/build/release/include -I$(NCCL_HOME)/src/include -I$(HIP_HOME)/include
+NCCL_INC:= -I$(RCCL_HOME)/build/release/include -I$(RCCL_HOME)/src/include -I$(HIP_HOME)/include
 
 lib_src = $(wildcard *.cc)
 lib_src := $(filter-out %_main.cc,$(lib_src))
@@ -18,13 +18,14 @@ lib_src := $(filter-out %_plugin.cc,$(lib_src))
 lib_obj = $(lib_src:.cc=.o)
 
 test_src = $(wildcard *_test.cc)
+test_src := $(filter-out rdma_test.cc,$(test_src))
 test_bin = $(test_src:.cc=)
 
 .PHONY: build
 build: $(test_bin) $(lib_obj) $(PLUGIN_SO)
 
-rdma_test: rdma_test.cc $(DEPS) $(lib_obj)
-	g++ rdma_test.cc -o rdma_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
+transport_test: transport_test.cc $(DEPS) $(lib_obj)
+	g++ transport_test.cc -o transport_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
 %.o: %.cc $(DEPS)
 	g++ -c $< -o $@ $(INC) $(CXXFLAGS)

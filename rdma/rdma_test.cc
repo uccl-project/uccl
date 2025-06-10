@@ -7,13 +7,12 @@
 #include <arpa/inet.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
-#include <infiniband/efadv.h>
 #include <infiniband/verbs.h>
 #include <netinet/in.h>
 #include <thread>
 #include <tuple>
 #include <assert.h>
-#include <cuda_runtime.h>
+#include <cuda_runtime.h>  // cuda only for now
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>

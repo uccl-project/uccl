@@ -28,6 +28,9 @@ azure: $(test_bin) $(lib_obj)
 rdma_test: rdma_test.cc $(DEPS) $(lib_obj)
 	g++ rdma_test.cc -o rdma_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
+transport_test: transport_test.cc $(DEPS) $(lib_obj)
+	g++ transport_test.cc -o transport_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
+
 %.o: %.cc $(DEPS)
 	g++ -c $< -o $@ $(INC) $(CXXFLAGS)
 

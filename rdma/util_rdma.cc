@@ -5,7 +5,6 @@
 #include "util.h"
 #include "util_timer.h"
 #include <glog/logging.h>
-#include <hip/hip_runtime.h>
 #include <infiniband/verbs.h>
 #include <cstdint>
 #include <cstdio>
@@ -17,6 +16,28 @@ namespace uccl {
 
 // RDMAFactory rdma_ctl;
 std::shared_ptr<RDMAFactory> rdma_ctl;
+
+static int ibvWidths[] = {1, 4, 8, 12, 2};
+static int ibvSpeeds[] = {2500,  /* SDR */
+                          5000,  /* DDR */
+                          10000, /* QDR */
+                          10000, /* QDR */
+                          14000, /* FDR */
+                          25000, /* EDR */
+                          50000, /* HDR */
+                          100000 /* NDR */};
+
+static int firstBitSet(int val, int max) {
+  int i = 0;
+  while (i < max && ((val & (1 << i)) == 0)) i++;
+  return i;
+}
+static int ncclIbWidth(int width) {
+  return ibvWidths[firstBitSet(width, sizeof(ibvWidths) / sizeof(int) - 1)];
+}
+static int ncclIbSpeed(int speed) {
+  return ibvSpeeds[firstBitSet(speed, sizeof(ibvSpeeds) / sizeof(int) - 1)];
+}
 
 void RDMAFactory::init_dev(int devname_suffix) {
   struct FactoryDevice dev;
@@ -509,11 +530,13 @@ RDMAContext::~RDMAContext() {
 }
 
 int RDMAContext::supply_rx_buff(struct ucclRequest* ureq) {
+  DCHECK(ureq);
   auto* elems = ureq->recv.elems;
+  DCHECK(elems);
 
   auto req = alloc_recvreq();
   if (req == nullptr) return -1;
-
+  DCHECK(ureq->n == 1);
   for (int i = 0; i < ureq->n; i++) {
     // For sender to encode the request id in the immediate data.
     elems[i].rid = get_recvreq_id(req);
@@ -526,6 +549,8 @@ int RDMAContext::supply_rx_buff(struct ucclRequest* ureq) {
   req->ureq = ureq;
   memset(req->received_bytes, 0, sizeof(uint32_t) * kMaxRecv);
   req->fin_msg = 0;
+
+  UCCL_LOG_IO << "Really supply rx buff by posting buffers to FIFO QP.";
 
   return 0;
 }
@@ -1632,6 +1657,7 @@ void RDMAContext::try_update_csn(SubUcclFlow* subflow) {
       req->ureq->recv.data_len[0] = req->received_bytes[0];
       // Wakeup app thread.
       uccl_wakeup(req->ureq->poll_ctx);
+      UCCL_LOG_IO << "Rx message complete.";
       // Free the request.
       free_recvreq(req);
     }
@@ -1727,10 +1753,17 @@ void RDMAContext::rx_rtx_data(struct list_head* ack_list) {
          reinterpret_cast<void*>(chunk_addr + sizeof(struct retr_chunk_hdr)),
          chunk_len);
 #else
+#ifndef __HIP_PLATFORM_AMD__
+  cudaMemcpy(
+      reinterpret_cast<void*>(hdr->remote_addr),
+      reinterpret_cast<void*>(chunk_addr + sizeof(struct retr_chunk_hdr)),
+      chunk_len, cudaMemcpyHostToDevice);
+#else
   DCHECK(hipMemcpy(reinterpret_cast<void*>(hdr->remote_addr),
                    reinterpret_cast<void*>(chunk_addr +
                                            sizeof(struct retr_chunk_hdr)),
                    chunk_len, hipMemcpyHostToDevice) == hipSuccess);
+#endif
 #endif
 
   subflow->pcb.stats_accept_retr++;

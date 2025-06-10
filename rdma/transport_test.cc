@@ -4,27 +4,26 @@
  */
 
 #include "transport.h"
+#ifndef __HIP_PLATFORM_AMD__
+#include "cuda_runtime.h"
+#else
+#include "hip/hip_runtime.h"
+#endif
 #include "transport_config.h"
 #include "util_timer.h"
 #include <gflags/gflags.h>
 #include <glog/logging.h>
-#include <hip/hip_runtime.h>
 #include <chrono>
 #include <thread>
 #include <signal.h>
 
-#define GPU 0
+// #define GPU 7
 
 using namespace uccl;
 
 static bool volatile quit = false;
 
 std::optional<RDMAEndpoint> ep;
-
-void interrupt_handler(int signal) {
-  (void)signal;
-  quit = true;
-}
 
 DEFINE_bool(server, false, "Whether this is a server receiving traffic.");
 DEFINE_string(serverip, "", "Server IP address the client tries to connect.");
@@ -137,13 +136,13 @@ static void client_lat(ConnID conn_id, struct Mhandle* mhandle, void* data) {
   }
 }
 
-volatile uint64_t tx_cur_sec_bytes = 0;
+uint64_t volatile tx_cur_sec_bytes = 0;
 uint64_t tx_prev_sec_bytes = 0;
-volatile uint64_t rx_cur_sec_bytes = 0;
+uint64_t volatile rx_cur_sec_bytes = 0;
 uint64_t rx_prev_sec_bytes = 0;
 
-volatile uint64_t c_itr = 0;
-volatile uint64_t s_itr = 0;
+uint64_t volatile c_itr = 0;
+uint64_t volatile s_itr = 0;
 
 static void server_tpt(std::vector<ConnID>& conn_ids,
                        std::vector<struct Mhandle*>& mhandles,
@@ -302,10 +301,15 @@ static void server_worker(void) {
     printf("Server accepted connection from %s (flow#%d)\n", remote_ip.c_str(),
            i);
 #ifdef GPU
-    CHECK(hipSetDevice(GPU) == hipSuccess);
     void* data;
+#ifndef __HIP_PLATFORM_AMD__
+    cudaSetDevice(GPU);
+    cudaMalloc(&data, FLAGS_msize * FLAGS_nreq * FLAGS_nmsg);
+#else
+    CHECK(hipSetDevice(GPU) == hipSuccess);
     CHECK(hipMalloc(&data, FLAGS_msize * FLAGS_nreq * FLAGS_nmsg) ==
           hipSuccess);
+#endif
 #else
     void* data =
         mmap(nullptr, FLAGS_msize * FLAGS_nreq * FLAGS_nmsg,
@@ -350,10 +354,15 @@ static void client_worker(void) {
     auto conn_id = ep->test_uccl_connect(0, FLAGS_serverip, 0);
     printf("Client connected to %s (flow#%d)\n", FLAGS_serverip.c_str(), i);
 #ifdef GPU
-    CHECK(hipSetDevice(GPU) == hipSuccess);
     void* data;
+#ifndef __HIP_PLATFORM_AMD__
+    cudaSetDevice(GPU);
+    cudaMalloc(&data, FLAGS_msize * FLAGS_nreq * FLAGS_nmsg);
+#else
+    CHECK(hipSetDevice(GPU) == hipSuccess);
     CHECK(hipMalloc(&data, FLAGS_msize * FLAGS_nreq * FLAGS_nmsg) ==
           hipSuccess);
+#endif
 #else
     void* data =
         mmap(nullptr, FLAGS_msize * FLAGS_nreq * FLAGS_nmsg,
@@ -392,11 +401,6 @@ int main(int argc, char* argv[]) {
   google::InitGoogleLogging(argv[0]);
   google::InstallFailureSignalHandler();
   gflags::ParseCommandLineFlags(&argc, &argv, true);
-
-  // Yang: comment it out as it would cause hangs.
-  // signal(SIGINT, interrupt_handler);
-  // signal(SIGTERM, interrupt_handler);
-  // signal(SIGHUP, interrupt_handler);
 
   ep.emplace(DEVNAME_SUFFIX_LIST, NUM_DEVICES, NUM_ENGINES);
 

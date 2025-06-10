@@ -83,8 +83,13 @@ struct ucclSendComm {
 
 ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
   std::cout << "Hello UCCL!" << std::endl;
+
+#ifdef LAZY_CREATE_ENGINE
+  ep = std::make_shared<RDMAEndpoint>(NUM_DEVICES, NUM_ENGINES);
+#else
   ep = std::make_shared<RDMAEndpoint>(DEVNAME_SUFFIX_LIST, NUM_DEVICES,
                                       NUM_ENGINES);
+#endif
   return ncclSuccess;
 }
 
@@ -116,7 +121,6 @@ static bool GdrSupportInitOnce() {
 
 ncclResult_t pluginGetProperties(int dev, ncclNetProperties_v8_t* props) {
   auto factory_dev = RDMAFactory::get_factory_dev(dev);
-
   props->name = factory_dev->ib_name;
 
   // Speed in *Mbps*. 100000 means 100G
@@ -171,6 +175,17 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
   struct ucclHandle* handle = (struct ucclHandle*)opaqueHandle;
   memset(handle, 0, sizeof(struct ucclHandle));
 
+#ifdef LAZY_CREATE_ENGINE
+  int gpu_idx = 0;
+  cudaGetDevice(&gpu_idx);
+  if (dev != gpu_idx) {
+    LOG_FIRST_N(INFO, 1) << "pluginListen detects different vdev " << dev
+                         << " vs. gpu_idx " << gpu_idx;
+    // dev = gpu_idx;
+  }
+  ep->initialize_engine_by_dev(dev, listen_port);
+#endif
+
   // Create a listening socket.
   int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
   DCHECK(listen_fd >= 0) << "ERROR: opening socket";
@@ -195,7 +210,11 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
   handle->ip_addr_u32 = str_to_ip(factory_dev->local_ip_str);
   handle->listen_port = ntohs(serv_addr.sin_port);
   handle->remote_dev = dev;
+#ifndef __HIP_PLATFORM_AMD__
+  cudaGetDevice(&handle->remote_gpuidx);
+#else
   DCHECK(hipGetDevice(&handle->remote_gpuidx) == hipSuccess);
+#endif
 
   struct ucclListenComm* lcomm =
       (struct ucclListenComm*)calloc(1, sizeof(struct ucclListenComm));
@@ -220,8 +239,21 @@ ncclResult_t pluginConnect(int dev, void* opaque_handle, void** sendComm,
                            ncclNetDeviceHandle_v8_t** /*sendDevComm*/) {
   struct ucclHandle* handle = (struct ucclHandle*)opaque_handle;
 
+#ifdef LAZY_CREATE_ENGINE
+  int gpu_idx = 0;
+  cudaGetDevice(&gpu_idx);
+  if (dev != gpu_idx) {
+    LOG_FIRST_N(INFO, 1) << "pluginListen detects different vdev " << dev
+                         << " vs. gpu_idx " << gpu_idx;
+    // dev = gpu_idx;
+  }
+#endif
   int local_gpuidx;
+#ifndef __HIP_PLATFORM_AMD__
+  cudaGetDevice(&local_gpuidx);
+#else
   DCHECK(hipGetDevice(&local_gpuidx) == hipSuccess);
+#endif
 
   std::string remote_ip_str = ip_to_str(handle->ip_addr_u32);
 
@@ -253,8 +285,8 @@ ncclResult_t pluginConnect(int dev, void* opaque_handle, void** sendComm,
   }
 
   if (*sendComm) {
-    // printf("Connected to %s/%d on dev:%d, %ld\n", remote_ip_str.c_str(),
-    // handle->remote_dev, dev, scomm->base.conn_id.flow_id);
+    //  printf("Connected to %s/%d on dev:%d, %ld\n", remote_ip_str.c_str(),
+    //  handle->remote_dev, dev, scomm->base.conn_id.flow_id);
   }
 
   return ncclSuccess;
@@ -303,9 +335,9 @@ ncclResult_t pluginAccept(void* listenComm, void** recvComm,
   }
 
   if (*recvComm) {
-    // printf("Accepted from %s/%d on dev:%d, %ld\n",
-    // rcomm->remote_ip_str.c_str(), rcomm->remote_dev, lcomm->dev,
-    // rcomm->base.conn_id.flow_id);
+    //  printf("Accepted from %s/%d on dev:%d, %ld\n",
+    //  rcomm->remote_ip_str.c_str(), rcomm->remote_dev, lcomm->dev,
+    //  rcomm->base.conn_id.flow_id);
   }
 
   return ncclSuccess;
@@ -365,7 +397,7 @@ ncclResult_t pluginIsend(void* sendComm, void* data, int size, int tag,
 
   *request = req;
 
-  UCCL_LOG_PLUGIN << "Isend on dev:" << dev << ", " << size
+  UCCL_LOG_PLUGIN << "Isend on dev: " << dev << ", " << size
                   << "B, ureq ptr:" << req;
 
   return ncclSuccess;
@@ -445,7 +477,8 @@ ncclResult_t pluginTest(void* request, int* done, int* size) {
       UCCL_LOG_PLUGIN << "Test Tx done, " << size[0] << "B, ureq ptr:" << req;
     } else if (req->type == ReqRx || req->type == ReqRxRC) {
       for (int i = 0; i < req->n; i++) size[i] = req->recv.data_len[i];
-      UCCL_LOG_PLUGIN << "Test Rx done, " << size[0] << "B, ureq ptr:" << req;
+      UCCL_LOG_PLUGIN << "Test Rx done, " << size[0] << "B, ureq ptr:" << req
+                      << ", req->type:" << req->type;
     } else if (req->type == ReqFlush) {
       // Do nothing.
       UCCL_LOG_PLUGIN << "Test Flush done, " << size[0]

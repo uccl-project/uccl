@@ -10,16 +10,33 @@
 
 /// Interface configuration.
 static char const* IB_DEVICE_NAME_PREFIX = "mlx5_";
+
+#ifndef __HIP_PLATFORM_AMD__
 static constexpr bool ROCE_NET = true;
 // If SINGLE_CTRL_NIC is set, all devices will use the same IP.
-// static std::string SINGLE_CTRL_NIC("ens10f0np0");
 static std::string SINGLE_CTRL_NIC("enp164s0");
 static constexpr uint8_t DEVNAME_SUFFIX_LIST[8] = {1, 2, 3, 4, 5, 6, 7, 8};
 static constexpr uint8_t NUM_DEVICES = 8;
 // static constexpr uint8_t DEVNAME_SUFFIX_LIST[8] = {0, 2, 4, 6, 0, 0, 0, 0};
 // static constexpr uint8_t NUM_DEVICES = 4;
-// static constexpr double LINK_BANDWIDTH = 400.0 * 1e9 / 8; // 400Gbps
 static constexpr double LINK_BANDWIDTH = 400.0 * 1e9 / 8;  // 400Gbps
+// # of engines per device.
+static constexpr uint32_t NUM_ENGINES = 4;
+// Path/QP per engine. The total number is NUM_ENGINES * kPortEntropy.
+static constexpr uint32_t kPortEntropy = 64;
+// Maximum chunk size (Bytes) for each WQE.
+static constexpr uint32_t kChunkSize = 32 << 10;
+#else
+static constexpr bool ROCE_NET = false;
+static std::string SINGLE_CTRL_NIC("eth0");
+static constexpr uint8_t NUM_DEVICES = 1;
+static constexpr uint8_t DEVNAME_SUFFIX_LIST[NUM_DEVICES] = {0};
+static constexpr double LINK_BANDWIDTH = 200.0 * 1e9 / 8;  // 200Gbps
+static constexpr uint32_t NUM_ENGINES = 1;
+static constexpr uint32_t kPortEntropy = 256;
+static constexpr uint32_t kChunkSize = 128 << 10;
+#endif
+
 static constexpr uint32_t MAX_PEER = 256;
 // Maximum number of flows (one-way) on each engine.
 static constexpr uint32_t MAX_FLOW = 256;
@@ -32,8 +49,6 @@ static constexpr uint8_t kServiceLevel = ROCE_NET ? 135 : 0;
 static constexpr uint8_t GID_IDX = ROCE_NET ? 3 : 0;
 /// Interface configuration.
 
-// # of engines per device.
-static constexpr uint32_t NUM_ENGINES = 4;
 static uint32_t NUM_CPUS = std::thread::hardware_concurrency();
 // Each dev use [ENGINE_CPU_START_LIST[dev], ENGINE_CPU_START_LIST[dev] +
 // NUM_ENGINES)
@@ -42,12 +57,8 @@ static uint32_t ENGINE_CPU_START_LIST[8] = {
     96, 96 + NUM_ENGINES, 96 + 2 * NUM_ENGINES, 96 + 3 * NUM_ENGINES,
 };
 
-// Path/QP per engine. The total number is NUM_ENGINES * kPortEntropy.
-static constexpr uint32_t kPortEntropy = 64;
 // Use RC rather than UC.
 static constexpr bool kRCMode = false;
-// Maximum chunk size (Bytes) for each WQE.
-static constexpr uint32_t kChunkSize = 32 << 10;
 // Bypass the pacing stage.
 static constexpr bool kBypassPacing = true;
 
@@ -101,7 +112,7 @@ enum engine_lb_policy {
 };
 static constexpr enum engine_lb_policy kEngineLBPolicy = ENGINE_POLICY_RR;
 
-static const uint32_t PACER_CPU_START = 3 * NUM_CPUS / 4;
+static uint32_t const PACER_CPU_START = 3 * NUM_CPUS / 4;
 
 constexpr static int kTotalQP =
     kPortEntropy + 1 /* Credit QP */ + (kRCMode ? 0 : 1) /* Ctrl QP */;
