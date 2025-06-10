@@ -9,6 +9,7 @@
 #include <cstring>
 #include <mutex>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 #include <cuda_runtime.h>
 #include <immintrin.h>
@@ -37,6 +38,10 @@ struct ibv_mr* mr = nullptr;
 uint32_t rkey = 0;
 thread_local uintptr_t remote_addr = 0;
 thread_local uint32_t remote_rkey = 0;
+// thread_local std::unordered_set<uint64_t> finished_wrs;
+
+std::unordered_set<uint64_t> finished_wrs;
+std::mutex finished_wrs_mutex;
 
 constexpr int TCP_PORT = 18515;
 static thread_local int outstanding = 0;  // per-CPU thread counter
@@ -297,15 +302,22 @@ void modify_qp_to_rts(RDMAConnectionInfo* local_info) {
   printf("QP modified to RTS state\n");
 }
 
-void post_rdma_async_chained(void* buf, size_t bytes, int num_wrs) {
+void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
+                             std::vector<uint64_t> wrs_to_post) {
   while (g_posted.load() - g_completed.load() > kMaxOutstandingSends) {
     poll_completions();
   }
 
   std::vector<struct ibv_sge> sges(num_wrs);
   std::vector<struct ibv_send_wr> wrs(num_wrs);
+  if (num_wrs != wrs_to_post.size()) {
+    fprintf(stderr,
+            "Error: num_wrs (%ld) does not match wrs_to_post size (%zu)\n",
+            num_wrs, wrs_to_post.size());
+    exit(1);
+  }
 
-  for (int i = 0; i < num_wrs; ++i) {
+  for (size_t i = 0; i < num_wrs; ++i) {
     int offset = kNumThBlocks > i ? i : (i % kNumThBlocks);
     sges[i].addr = (uintptr_t)buf + offset * bytes;
     sges[i].addr = (uintptr_t)buf;
@@ -317,6 +329,11 @@ void post_rdma_async_chained(void* buf, size_t bytes, int num_wrs) {
     wrs[i].num_sge = 1;
     wrs[i].wr.rdma.remote_addr = remote_addr + offset * bytes;
     wrs[i].wr.rdma.rkey = remote_rkey;
+
+    // printf("Posting WR %zu: addr=0x%lx, rkey=0x%x, remote_addr=0x%lx\n",
+    //        wrs_to_post[i], sges[i].addr, mr->rkey,
+    //        wrs[i].wr.rdma.remote_addr);
+    wrs[i].wr_id = wrs_to_post[i];
 
     if ((i + 1) % kSignalledEvery == 0)
       wrs[i].send_flags = IBV_SEND_SIGNALED;  // generate a CQE
@@ -357,7 +374,7 @@ void post_rdma_async(void* buf, size_t bytes, uint64_t wr_id) {
   wr.num_sge = 1;
   wr.wr.rdma.remote_addr = remote_addr;
   wr.wr.rdma.rkey = remote_rkey;
-  // wr.wr_id = wr_id;
+  wr.wr_id = wr_id;
 
   if (++outstanding % kSignalledEvery == 0)
     wr.send_flags = IBV_SEND_SIGNALED;  // generate a CQE
@@ -457,6 +474,12 @@ void poll_completions() {
               (unsigned long long)wc[i].wr_id, ibv_wc_status_str(wc[i].status));
       std::abort();
     }
+    {
+      std::lock_guard<std::mutex> lock(finished_wrs_mutex);
+      // printf("Completion received: wr_id=%llu, opcode=%d, byte_len=%u\n",
+      //        (unsigned long long)wc[i].wr_id, wc[i].opcode, wc[i].byte_len);
+      finished_wrs.insert(wc[i].wr_id);
+    }
   }
   g_completed.fetch_add(ne, std::memory_order_relaxed);
   // printf(
@@ -488,6 +511,12 @@ void progress_thread(int thread_idx) {
                 (unsigned long long)wc[i].wr_id,
                 ibv_wc_status_str(wc[i].status));
         std::abort();
+      }
+      {
+        std::lock_guard<std::mutex> lock(finished_wrs_mutex);
+        // printf("Completion received: wr_id=%llu, opcode=%d, byte_len=%u\n",
+        // (unsigned long long)wc[i].wr_id, wc[i].opcode, wc[i].byte_len);
+        finished_wrs.insert(wc[i].wr_id);
       }
     }
     g_completed.fetch_add(ne, std::memory_order_relaxed);

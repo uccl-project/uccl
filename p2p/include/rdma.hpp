@@ -4,6 +4,9 @@
 #include "unistd.h"
 #include <infiniband/verbs.h>
 #include <atomic>
+#include <mutex>
+#include <unordered_set>
+#include <vector>
 
 // Global RDMA resources
 extern struct ibv_context* context;
@@ -14,6 +17,9 @@ extern uint32_t rkey;
 extern thread_local uintptr_t remote_addr;
 extern thread_local uint32_t remote_rkey;
 extern std::atomic<bool> g_progress_run;
+extern std::unordered_set<uint64_t> finished_wrs;
+extern std::mutex finished_wrs_mutex;
+// extern thread_local std::unordered_set<uint64_t> finished_wrs;
 
 struct RDMAConnectionInfo {
   uint32_t qp_num;  // Queue pair number
@@ -31,7 +37,8 @@ void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info,
 // Post an RDMA write
 void rdma_write_stub(void* local_dev_ptr, size_t bytes);
 void post_rdma_async(void* buf, size_t bytes, uint64_t wr_id);
-void post_rdma_async_chained(void* buf, size_t bytes, int num_wrs);
+void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
+                             std::vector<uint64_t> wrs_to_post);
 
 bool GdrSupportInitOnce();
 
