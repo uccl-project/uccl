@@ -1369,9 +1369,9 @@ int RDMAEndpoint::uccl_send_async(UcclFlow* flow, struct Mhandle* mhandle,
 }
 
 bool RDMAEndpoint::uccl_poll_ureq_once(struct ucclRequest* ureq) {
-  #ifdef __HIP_PLATFORM_AMD__
-    if (ureq->type == ReqFlush) return true;
-  #endif
+#ifdef __HIP_PLATFORM_AMD__
+  if (ureq->type == ReqFlush) return true;
+#endif
 
   bool ret;
   UcclFlow* flow = reinterpret_cast<UcclFlow*>(ureq->context);

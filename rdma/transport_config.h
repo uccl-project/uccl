@@ -26,7 +26,7 @@ static constexpr uint32_t NUM_ENGINES = 4;
 static constexpr uint32_t kPortEntropy = 64;
 // Maximum chunk size (Bytes) for each WQE.
 static constexpr uint32_t kChunkSize = 32 << 10;
-#else 
+#else
 static constexpr bool ROCE_NET = false;
 static std::string SINGLE_CTRL_NIC("eth0");
 static constexpr uint8_t NUM_DEVICES = 1;
@@ -49,7 +49,6 @@ static constexpr uint8_t kServiceLevel = ROCE_NET ? 135 : 0;
 static constexpr uint8_t GID_IDX = ROCE_NET ? 3 : 0;
 /// Interface configuration.
 
-
 static uint32_t NUM_CPUS = std::thread::hardware_concurrency();
 // Each dev use [ENGINE_CPU_START_LIST[dev], ENGINE_CPU_START_LIST[dev] +
 // NUM_ENGINES)
@@ -57,7 +56,6 @@ static uint32_t ENGINE_CPU_START_LIST[8] = {
     16, 16 + NUM_ENGINES, 16 + 2 * NUM_ENGINES, 16 + 3 * NUM_ENGINES,
     96, 96 + NUM_ENGINES, 96 + 2 * NUM_ENGINES, 96 + 3 * NUM_ENGINES,
 };
-
 
 // Use RC rather than UC.
 static constexpr bool kRCMode = false;
