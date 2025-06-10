@@ -70,7 +70,10 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs, void** d_ptrs) {
         break;
       }
 
-#ifdef False  // Doesn't seem to work.
+#ifdef False
+      // Doesn't seem to work.
+      //  The idea is that if there are fewer slots than batch_size
+      // Just send whatever is allowed.
       if (free_slots >= 1) {
         todo = free_slots;
         rb->head = cur_head + todo;

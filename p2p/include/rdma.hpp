@@ -31,6 +31,7 @@ void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info,
 // Post an RDMA write
 void rdma_write_stub(void* local_dev_ptr, size_t bytes);
 void post_rdma_async(void* buf, size_t bytes, uint64_t wr_id);
+void post_rdma_async_chained(void* buf, size_t bytes, int num_wrs);
 
 bool GdrSupportInitOnce();
 

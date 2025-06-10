@@ -35,9 +35,9 @@
 #define MEASURE_PER_OP_LATENCY
 #define kQueueSize 16
 #define kQueueMask (kQueueSize - 1)
-#define kBatchSize 4
+#define kBatchSize 1
 #define kIterations 20000
-#define kNumThBlocks 16
+#define kNumThBlocks 8
 #define kNumThPerBlock 1
 #define kObjectSize 8192  // 8 KB
 #define kMaxOutstandingSends 64

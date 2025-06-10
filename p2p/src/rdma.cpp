@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <thread>
+#include <vector>
 #include <cuda_runtime.h>
 #include <immintrin.h>
 #include <stdio.h>
@@ -272,6 +273,50 @@ void modify_qp_to_rts(RDMAConnectionInfo* local_info) {
   printf("QP modified to RTS state\n");
 }
 
+void post_rdma_async_chained(void* buf, size_t bytes, int num_wrs) {
+  while (g_posted.load() - g_completed.load() > kMaxOutstandingSends) {
+    poll_completions();
+  }
+
+  std::vector<struct ibv_sge> sges(num_wrs);
+  std::vector<struct ibv_send_wr> wrs(num_wrs);
+
+  for (int i = 0; i < num_wrs; ++i) {
+    int offset = kNumThBlocks > i ? i : (i % kNumThBlocks);
+    sges[i].addr = (uintptr_t)buf + offset * bytes;
+    sges[i].addr = (uintptr_t)buf;
+    sges[i].length = (uint32_t)bytes;
+    sges[i].lkey = mr->lkey;
+
+    wrs[i].opcode = IBV_WR_RDMA_WRITE;
+    wrs[i].sg_list = &sges[i];
+    wrs[i].num_sge = 1;
+    wrs[i].wr.rdma.remote_addr = remote_addr + offset * bytes;
+    wrs[i].wr.rdma.rkey = remote_rkey;
+
+    if ((i + 1) % kSignalledEvery == 0)
+      wrs[i].send_flags = IBV_SEND_SIGNALED;  // generate a CQE
+    else
+      wrs[i].send_flags = 0;  // no CQE → cheaper
+
+    if (i < num_wrs - 1) {
+      wrs[i].next = &wrs[i + 1];  // chain to next WR
+    } else {
+      wrs[i].next = nullptr;  // last WR in the chain
+    }
+  }
+  ibv_send_wr* bad = nullptr;
+  int ret = ibv_post_send(qp, &wrs[0], &bad);
+  if (ret) {
+    fprintf(stderr, "ibv_post_send failed: %s (ret=%d)\n", strerror(ret), ret);
+    if (bad) {
+      fprintf(stderr, "Bad WR at address: %p\n", bad);
+    }
+    exit(1);
+  }
+  g_posted.fetch_add(num_wrs, std::memory_order_relaxed);
+}
+
 void post_rdma_async(void* buf, size_t bytes, uint64_t wr_id) {
   /* Make it a closed loop to limit the maximum outstanding sends. */
   while (g_posted.load() - g_completed.load() > kMaxOutstandingSends) {
@@ -381,6 +426,7 @@ void poll_completion() {
 void poll_completions() {
   struct ibv_wc wc[kMaxOutstandingSends];  // batch poll
   int ne = ibv_poll_cq(cq, kMaxOutstandingSends, wc);
+  if (ne == 0) return;
   for (int i = 0; i < ne; ++i) {
     if (wc[i].status != IBV_WC_SUCCESS) {
       fprintf(stderr, "CQE error wr_id=%llu status=%s\n",

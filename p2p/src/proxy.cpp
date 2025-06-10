@@ -37,13 +37,7 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
   uint64_t my_tail = 0;
   auto total_rdma_write_durations =
       std::chrono::duration<double, std::micro>::zero();
-  for (int seen = 0; seen < kIterations; ++seen) {
-    // TODO: here, if CPU caches fifo->head, it may not see the updates from
-    // GPU.
-#ifdef MEASURE_PER_OP_LATENCY
-    auto start = std::chrono::high_resolution_clock::now();
-#endif
-
+  for (int seen = 0; seen < kIterations;) {
     // Force loading rb->head from DRAM.
     while (load_volatile_u64(&rb->head) == my_tail) {
 #ifdef DEBUG_PRINT
@@ -63,7 +57,6 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
       cmd = rb->buf[idx].cmd;
       _mm_pause();  // Avoid hammering the cacheline.
     } while (cmd == 0);
-
 #ifdef DEBUG_PRINT
     printf(
         "CPU thread for block %d, seen: %d, my_head: %lu, my_tail: %lu, "
@@ -84,7 +77,7 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
       rdma_write_stub(gpu_buffer, total_size);
       poll_completion();
       printf("Polling completions done. %d out of %d\n", seen, kIterations);
-    } else if (true) {
+    } else if (rb->head - my_tail == 1) {
       // Record time
       auto start = std::chrono::high_resolution_clock::now();
       post_rdma_async(gpu_buffer, total_size, seen);
@@ -92,38 +85,41 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
       total_rdma_write_durations +=
           std::chrono::duration_cast<std::chrono::microseconds>(end - start);
 
-      // if (seen % 100 == 0) {
-      //   // Poll completion every 100 iterations to avoid too many outstanding
-      //   // writes.
-      //   poll_completions();
-      //   printf("Polling completions done. %d out of %d\n", seen,
-      //   kIterations);
+      rb->buf[idx].cmd = 0;
+      // std::atomic_thread_fence(std::memory_order_release);
+      my_tail++;
+      rb->tail = my_tail;
+      // Initiate flush to DRAM
+      _mm_clwb(&(rb->tail));
+      // Ensure that flush to DRAM completes.
+      _mm_sfence();
+      ++seen;
+    } else {
+      int batch_size = rb->head - my_tail;
+      // if (batch_size > kBatchSize) {
+      //   batch_size = kBatchSize;
       // }
-      // Busy loop for 1us
-      // for (int i = 0; i < 100; ++i) {
-      //   _mm_pause();
-      // }
+      printf("Posting %d commands, original: %ld\n", batch_size,
+             rb->head - my_tail);
+      auto start = std::chrono::high_resolution_clock::now();
+      post_rdma_async_chained(gpu_buffer, total_size, batch_size);
+      auto end = std::chrono::high_resolution_clock::now();
+      total_rdma_write_durations +=
+          std::chrono::duration_cast<std::chrono::microseconds>(end - start);
 
-      // printf("Posted RDMA write for block %d with %ld bytes, seen %d out of
-      // %d\n", block_idx, total_size,
-      //        seen, kIterations);
+      for (int i = 0; i < batch_size; ++i) {
+        uint64_t idx = (my_tail + i) & kQueueMask;
+        rb->buf[idx].cmd = 0;
+      }
+      // std::atomic_thread_fence(std::memory_order_release);
+      my_tail += batch_size;
+      rb->tail = my_tail;
+      // Initiate flush to DRAM
+      _mm_clwb(&(rb->tail));
+      // Ensure that flush to DRAM completes.
+      _mm_sfence();
+      seen += batch_size;
     }
-
-    rb->buf[idx].cmd = 0;
-    // std::atomic_thread_fence(std::memory_order_release);
-    my_tail++;
-    rb->tail = my_tail;
-    // Initiate flush to DRAM
-    _mm_clwb(&(rb->tail));
-    // Ensure that flush to DRAM completes.
-    _mm_sfence();
-
-#ifdef MEASURE_PER_OP_LATENCY
-    auto end = std::chrono::high_resolution_clock::now();
-    auto duration =
-        std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    // printf("Took %ld microseconds\n", duration.count());
-#endif
   }
 
   printf("CPU thread for block %d finished consuming %d commands\n", block_idx,
