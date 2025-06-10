@@ -83,8 +83,6 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
 
   close(sockfd);
 
-  remote_addr = remote->addr;
-  remote_rkey = remote->rkey;
   printf(
       "Rank %d exchanged RDMA info: addr=0x%lx, rkey=0x%x, "
       "qp_num=%u, psn=%u\n",

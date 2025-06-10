@@ -93,6 +93,9 @@ int main(int argc, char** argv) {
 
     // Launch one CPU polling thread per block
 
+    printf("Waiting for 5 seconds before issuing commands...\n");
+    sleep(5);
+
     auto t0 = std::chrono::high_resolution_clock::now();
     size_t shmem_bytes = kQueueSize * sizeof(unsigned long long);
     gpu_issue_batched_commands<<<kNumThBlocks, kNumThPerBlock, shmem_bytes,

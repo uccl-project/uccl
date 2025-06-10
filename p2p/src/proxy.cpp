@@ -48,6 +48,9 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
   modify_qp_to_rtr(&remote_info);
   modify_qp_to_rts(&local_info);
 
+  remote_addr = remote_info.addr;
+  remote_rkey = remote_info.rkey;
+
   uint64_t my_tail = 0;
   auto total_rdma_write_durations =
       std::chrono::duration<double, std::micro>::zero();
@@ -91,7 +94,7 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
       rdma_write_stub(gpu_buffer, total_size);
       poll_completion();
       printf("Polling completions done. %d out of %d\n", seen, kIterations);
-    } else if (true || rb->head - my_tail == 1) {
+    } else if (rb->head - my_tail == 1) {
       // Record time
       auto start = std::chrono::high_resolution_clock::now();
       post_rdma_async(gpu_buffer, total_size, seen);
