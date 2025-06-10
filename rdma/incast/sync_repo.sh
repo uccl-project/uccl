@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SOURCE_DIR="/home/ubuntu/uccl/rdma_cuda/incast"
+SOURCE_DIR="/home/ubuntu/uccl/rdma/incast"
 
 TARGET_MACHINES=("87.120.213.6" "87.120.213.5")
 

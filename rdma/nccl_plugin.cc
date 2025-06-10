@@ -210,7 +210,11 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
   handle->ip_addr_u32 = str_to_ip(factory_dev->local_ip_str);
   handle->listen_port = ntohs(serv_addr.sin_port);
   handle->remote_dev = dev;
+#ifndef __HIP_PLATFORM_AMD__
   cudaGetDevice(&handle->remote_gpuidx);
+#else
+  DCHECK(hipGetDevice(&handle->remote_gpuidx) == hipSuccess);
+#endif
 
   struct ucclListenComm* lcomm =
       (struct ucclListenComm*)calloc(1, sizeof(struct ucclListenComm));
@@ -245,7 +249,11 @@ ncclResult_t pluginConnect(int dev, void* opaque_handle, void** sendComm,
   }
 #endif
   int local_gpuidx;
+#ifndef __HIP_PLATFORM_AMD__
   cudaGetDevice(&local_gpuidx);
+#else
+  DCHECK(hipGetDevice(&local_gpuidx) == hipSuccess);
+#endif
 
   std::string remote_ip_str = ip_to_str(handle->ip_addr_u32);
 

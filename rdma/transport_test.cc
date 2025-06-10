@@ -4,7 +4,11 @@
  */
 
 #include "transport.h"
+#ifndef __HIP_PLATFORM_AMD__
 #include "cuda_runtime.h"
+#else
+#include "hip/hip_runtime.h"
+#endif
 #include "transport_config.h"
 #include "util_timer.h"
 #include <gflags/gflags.h>
@@ -297,9 +301,15 @@ static void server_worker(void) {
     printf("Server accepted connection from %s (flow#%d)\n", remote_ip.c_str(),
            i);
 #ifdef GPU
-    cudaSetDevice(GPU);
     void* data;
+#ifndef __HIP_PLATFORM_AMD__
+    cudaSetDevice(GPU);
     cudaMalloc(&data, FLAGS_msize * FLAGS_nreq * FLAGS_nmsg);
+#else
+    CHECK(hipSetDevice(GPU) == hipSuccess);
+    CHECK(hipMalloc(&data, FLAGS_msize * FLAGS_nreq * FLAGS_nmsg) ==
+          hipSuccess);
+#endif
 #else
     void* data =
         mmap(nullptr, FLAGS_msize * FLAGS_nreq * FLAGS_nmsg,
@@ -344,9 +354,15 @@ static void client_worker(void) {
     auto conn_id = ep->test_uccl_connect(0, FLAGS_serverip, 0);
     printf("Client connected to %s (flow#%d)\n", FLAGS_serverip.c_str(), i);
 #ifdef GPU
-    cudaSetDevice(GPU);
     void* data;
+#ifndef __HIP_PLATFORM_AMD__
+    cudaSetDevice(GPU);
     cudaMalloc(&data, FLAGS_msize * FLAGS_nreq * FLAGS_nmsg);
+#else
+    CHECK(hipSetDevice(GPU) == hipSuccess);
+    CHECK(hipMalloc(&data, FLAGS_msize * FLAGS_nreq * FLAGS_nmsg) ==
+          hipSuccess);
+#endif
 #else
     void* data =
         mmap(nullptr, FLAGS_msize * FLAGS_nreq * FLAGS_nmsg,
@@ -375,6 +391,11 @@ static void client_worker(void) {
     munmap(datas[i], FLAGS_msize * FLAGS_nreq * FLAGS_nmsg);
   }
 }
+
+// TO run on AMD:
+// LD_LIBRARY_PATH="/work1/yzhou/yangzhou/anaconda3/lib:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH}"
+// HIP_VISIBLE_DEVICES=6 ./rdma_test -server true
+// HIP_VISIBLE_DEVICES=6 ./rdma_test -serverip 10.0.100.114
 
 int main(int argc, char* argv[]) {
   google::InitGoogleLogging(argv[0]);

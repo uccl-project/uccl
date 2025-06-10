@@ -10,7 +10,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#ifndef __HIP_PLATFORM_HCC__
 #include <cuda_runtime.h>
+#else
+#include <hip/hip_runtime.h>
+#endif
 #include <sys/mman.h>
 
 namespace uccl {
@@ -1754,10 +1758,17 @@ void RDMAContext::rx_rtx_data(struct list_head* ack_list) {
          reinterpret_cast<void*>(chunk_addr + sizeof(struct retr_chunk_hdr)),
          chunk_len);
 #else
+#ifndef __HIP_PLATFORM_HCC__
   cudaMemcpy(
       reinterpret_cast<void*>(hdr->remote_addr),
       reinterpret_cast<void*>(chunk_addr + sizeof(struct retr_chunk_hdr)),
       chunk_len, cudaMemcpyHostToDevice);
+#else
+  DCHECK(hipMemcpy(reinterpret_cast<void*>(hdr->remote_addr),
+                   reinterpret_cast<void*>(chunk_addr +
+                                           sizeof(struct retr_chunk_hdr)),
+                   chunk_len, hipMemcpyHostToDevice) == hipSuccess);
+#endif
 #endif
 
   subflow->pcb.stats_accept_retr++;

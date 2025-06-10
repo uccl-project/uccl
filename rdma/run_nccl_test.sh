@@ -29,7 +29,7 @@ CTRL_NIC="enp164s0"
 # Path of NCCL
 NCCL_PATH="${UCCL_HOME}/thirdparty/nccl/build/lib"
 # Path of UCCL
-PLUGIN_LIB="${UCCL_HOME}/rdma_cuda/libnccl-net-uccl.so"
+PLUGIN_LIB="${UCCL_HOME}/rdma/libnccl-net-uccl.so"
 
 # Number of chunnels.
 NUM_CHUNNEL=8

@@ -12,8 +12,8 @@ if [ ! -d "$SOURCE_DIR" ]; then
 fi
 
 # Using azure perm traffic specific config
-mv $SOURCE_DIR/rdma_cuda/transport_config.h $SOURCE_DIR/rdma_cuda/transport_config.h.bak
-cp $SOURCE_DIR/rdma_cuda/azure_perm_traffic/transport_config.h $SOURCE_DIR/rdma_cuda/transport_config.h
+mv $SOURCE_DIR/rdma/transport_config.h $SOURCE_DIR/rdma/transport_config.h.bak
+cp $SOURCE_DIR/rdma/azure_perm_traffic/transport_config.h $SOURCE_DIR/rdma/transport_config.h
 
 for MACHINE in "${TARGET_MACHINES[@]}"; do
   (
@@ -26,13 +26,13 @@ for MACHINE in "${TARGET_MACHINES[@]}"; do
     if [ $? -eq 0 ]; then
       echo "Copy done on machine: $MACHINE"
 
-      ssh -o StrictHostKeyChecking=no "azureuser@$MACHINE" "cd $TARGET_DIR/rdma_cuda && bash configure_rdma_ip.sh && make azure -j" > /dev/null 2>&1
+      ssh -o StrictHostKeyChecking=no "azureuser@$MACHINE" "cd $TARGET_DIR/rdma && bash configure_rdma_ip.sh && make azure -j" > /dev/null 2>&1
       if [ $? -eq 0 ]; then
         echo "Compile rdma successfully on machine: $MACHINE"
       else
         echo "Compile error on machine: $MACHINE"
       fi
-      ssh -o StrictHostKeyChecking=no "azureuser@$MACHINE" "cd $TARGET_DIR/rdma_cuda/permutation_traffic && make clean && make" > /dev/null 2>&1
+      ssh -o StrictHostKeyChecking=no "azureuser@$MACHINE" "cd $TARGET_DIR/rdma/permutation_traffic && make clean && make" > /dev/null 2>&1
       if [ $? -eq 0 ]; then
         echo "Compile pt successfully on machine: $MACHINE"
       else
@@ -47,6 +47,6 @@ done
 wait
 
 # Restore the original transport_config.h file
-mv $SOURCE_DIR/rdma_cuda/transport_config.h.bak $SOURCE_DIR/rdma_cuda/transport_config.h
+mv $SOURCE_DIR/rdma/transport_config.h.bak $SOURCE_DIR/rdma/transport_config.h
 
 echo "Done."
