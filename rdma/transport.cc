@@ -10,7 +10,6 @@
 #include <cstdlib>
 #include <string>
 #include <utility>
-#include <cuda_runtime.h>
 #include <endian.h>
 
 namespace uccl {
@@ -1370,6 +1369,10 @@ int RDMAEndpoint::uccl_send_async(UcclFlow* flow, struct Mhandle* mhandle,
 }
 
 bool RDMAEndpoint::uccl_poll_ureq_once(struct ucclRequest* ureq) {
+  #ifdef __HIP_PLATFORM_AMD__
+    if (ureq->type == ReqFlush) return true;
+  #endif
+
   bool ret;
   UcclFlow* flow = reinterpret_cast<UcclFlow*>(ureq->context);
   if (ureq->type == ReqTxRC || ureq->type == ReqRxRC ||
@@ -1404,7 +1407,11 @@ int RDMAEndpoint::uccl_flush(UcclFlow* flow, struct Mhandle** mhandles,
   int last = flow->check_need_flush(size, n);
   if (last == -1) return 0;
 
+#ifndef __HIP_PLATFORM_AMD__
   flow->post_flush(mhandles, data, size, n, &ureq->rc_or_flush_done, last);
+#else
+  ureq->rc_or_flush_done = true;
+#endif
 
   ureq->type = ReqFlush;
 

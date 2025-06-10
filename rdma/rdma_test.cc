@@ -12,7 +12,7 @@
 #include <thread>
 #include <tuple>
 #include <assert.h>
-#include <cuda_runtime.h>
+#include <cuda_runtime.h> // cuda only for now
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
