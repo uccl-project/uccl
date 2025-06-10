@@ -30,9 +30,23 @@ inline uint64_t load_volatile_u64(uint64_t volatile* addr) {
 }
 
 void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
-                 size_t total_size, int rank) {
+                 size_t total_size, int rank, char const* peer_ip) {
   printf("CPU thread for block %d started\n", block_idx);
   pin_thread_to_cpu(block_idx);
+
+  RDMAConnectionInfo local_info, remote_info;
+  ensure_thread_qp(gpu_buffer, total_size, &local_info, rank);
+
+  modify_qp_to_init();
+
+  printf("Local RDMA info: addr=0x%lx, rkey=0x%x\n", local_info.addr,
+         local_info.rkey);
+  exchange_connection_info(rank, peer_ip, block_idx, &local_info, &remote_info);
+  printf("Exchanged remote_addr: 0x%lx, remote_rkey: 0x%x\n", remote_info.addr,
+         remote_info.rkey);
+
+  modify_qp_to_rtr(&remote_info);
+  modify_qp_to_rts(&local_info);
 
   uint64_t my_tail = 0;
   auto total_rdma_write_durations =
@@ -77,7 +91,7 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
       rdma_write_stub(gpu_buffer, total_size);
       poll_completion();
       printf("Polling completions done. %d out of %d\n", seen, kIterations);
-    } else if (rb->head - my_tail == 1) {
+    } else if (true || rb->head - my_tail == 1) {
       // Record time
       auto start = std::chrono::high_resolution_clock::now();
       post_rdma_async(gpu_buffer, total_size, seen);
@@ -99,8 +113,8 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
       // if (batch_size > kBatchSize) {
       //   batch_size = kBatchSize;
       // }
-      printf("Posting %d commands, original: %ld\n", batch_size,
-             rb->head - my_tail);
+      // printf("Posting %d commands, original: %ld\n", batch_size,
+      //  rb->head - my_tail);
       auto start = std::chrono::high_resolution_clock::now();
       post_rdma_async_chained(gpu_buffer, total_size, batch_size);
       auto end = std::chrono::high_resolution_clock::now();

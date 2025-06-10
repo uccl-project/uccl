@@ -70,23 +70,8 @@ int main(int argc, char** argv) {
   void* gpu_buffer = nullptr;
   cudaMalloc(&gpu_buffer, total_size);
 
-  RDMAConnectionInfo local_info, remote_info;
-  setup_rdma(gpu_buffer, total_size, &local_info, rank);
-
-  modify_qp_to_init();
-
-  printf("Local RDMA info: addr=0x%lx, rkey=0x%x\n", local_info.addr,
-         local_info.rkey);
-  exchange_connection_info(rank, peer_ip, &local_info, &remote_info);
-  printf("Exchanged remote_addr: 0x%lx, remote_rkey: 0x%x\n", remote_info.addr,
-         remote_info.rkey);
-
-  modify_qp_to_rtr(&remote_info);
-  modify_qp_to_rts(&local_info);
-
-  remote_addr = remote_info.addr;
-  remote_rkey = remote_info.rkey;
-
+  RDMAConnectionInfo local_info;
+  global_rdma_init(gpu_buffer, total_size, &local_info, rank);
   std::vector<std::thread> cq_threads;
 
   // Launch threads
@@ -94,20 +79,20 @@ int main(int argc, char** argv) {
     int cpu_id = kPollingThreadStartPort + i;
     cq_threads.emplace_back(progress_thread, cpu_id);
   }
-
+  std::vector<std::thread> cpu_threads;
+  for (int i = 0; i < kNumThBlocks; ++i) {
+    cpu_threads.emplace_back(cpu_consume, &rbs[i], i, gpu_buffer, kObjectSize,
+                             rank, peer_ip);
+  }
   if (rank == 0) {
-    rdma_write_stub(gpu_buffer, kObjectSize);
-    printf("RDMA write stub completed\n");
+    // rdma_write_stub(gpu_buffer, kObjectSize);
+    // printf("RDMA write stub completed\n");
 
-    poll_completion();
-    printf("Polling completions done\n");
+    // poll_completion();
+    // printf("Polling completions done\n");
 
     // Launch one CPU polling thread per block
-    std::vector<std::thread> cpu_threads;
-    for (int i = 0; i < kNumThBlocks; ++i) {
-      cpu_threads.emplace_back(cpu_consume, &rbs[i], i, gpu_buffer, kObjectSize,
-                               rank);
-    }
+
     auto t0 = std::chrono::high_resolution_clock::now();
     size_t shmem_bytes = kQueueSize * sizeof(unsigned long long);
     gpu_issue_batched_commands<<<kNumThBlocks, kNumThPerBlock, shmem_bytes,

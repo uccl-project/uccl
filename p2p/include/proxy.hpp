@@ -13,7 +13,7 @@ struct ProxyCtx {
 };
 
 void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
-                 size_t total_size, int rank);
+                 size_t total_size, int rank, char const* peer_ip);
 void cpu_consume_local(RingBuffer* rb, int block_idx);
 
 #endif  // PROXY_HPP

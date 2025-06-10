@@ -8,11 +8,11 @@
 // Global RDMA resources
 extern struct ibv_context* context;
 extern struct ibv_pd* pd;
-extern struct ibv_qp* qp;
+extern thread_local struct ibv_qp* qp;
 extern struct ibv_mr* mr;
 extern uint32_t rkey;
-extern uintptr_t remote_addr;
-extern uint32_t remote_rkey;
+extern thread_local uintptr_t remote_addr;
+extern thread_local uint32_t remote_rkey;
 extern std::atomic<bool> g_progress_run;
 
 struct RDMAConnectionInfo {
@@ -35,7 +35,7 @@ void post_rdma_async_chained(void* buf, size_t bytes, int num_wrs);
 
 bool GdrSupportInitOnce();
 
-void exchange_connection_info(int rank, char const* peer_ip,
+void exchange_connection_info(int rank, char const* peer_ip, int tid,
                               RDMAConnectionInfo* local,
                               RDMAConnectionInfo* remote);
 
@@ -49,5 +49,8 @@ void modify_qp_to_init();
 void progress_thread(int thread_idx);
 void drain_cq();
 void poll_completions();
-
+void global_rdma_init(void* gpu_buf, size_t bytes, RDMAConnectionInfo* local,
+                      int rank);
+void ensure_thread_qp(void* gpu_buffer, size_t size,
+                      RDMAConnectionInfo* local_info, int rank);
 #endif  // RDMA_HPP

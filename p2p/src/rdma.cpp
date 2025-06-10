@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <thread>
 #include <vector>
 #include <cuda_runtime.h>
@@ -31,11 +32,11 @@ static inline bool pin_thread_to_cpu(int cpu) {
 struct ibv_context* context = nullptr;
 struct ibv_pd* pd = nullptr;
 struct ibv_cq* cq = nullptr;
-struct ibv_qp* qp = nullptr;
+thread_local struct ibv_qp* qp = nullptr;
 struct ibv_mr* mr = nullptr;
 uint32_t rkey = 0;
-uintptr_t remote_addr = 0;
-uint32_t remote_rkey = 0;
+thread_local uintptr_t remote_addr = 0;
+thread_local uint32_t remote_rkey = 0;
 
 constexpr int TCP_PORT = 18515;
 static thread_local int outstanding = 0;  // per-CPU thread counter
@@ -44,18 +45,20 @@ static std::atomic<uint64_t> g_posted = 0;     // WRs posted
 static std::atomic<uint64_t> g_completed = 0;  // CQEs seen
 std::atomic<bool> g_progress_run{true};
 
-void exchange_connection_info(int rank, char const* peer_ip,
+void exchange_connection_info(int rank, char const* peer_ip, int tid,
                               RDMAConnectionInfo* local,
                               RDMAConnectionInfo* remote) {
   int sockfd;
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
 
+  printf("Rank %d exchanging RDMA connection info with peer %s\n", rank,
+         peer_ip);
   if (rank == 0) {
     // Listen
     int listenfd = socket(AF_INET, SOCK_STREAM, 0);
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(TCP_PORT);
+    addr.sin_port = htons(TCP_PORT + tid);
     addr.sin_addr.s_addr = INADDR_ANY;
     bind(listenfd, (struct sockaddr*)&addr, sizeof(addr));
     listen(listenfd, 1);
@@ -67,7 +70,7 @@ void exchange_connection_info(int rank, char const* peer_ip,
     // Connect
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(TCP_PORT);
+    addr.sin_port = htons(TCP_PORT + tid);
     inet_pton(AF_INET, peer_ip, &addr.sin_addr);
     while (connect(sockfd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
       sleep(1);  // retry
@@ -79,10 +82,66 @@ void exchange_connection_info(int rank, char const* peer_ip,
   recv(sockfd, remote, sizeof(*remote), MSG_WAITALL);
 
   close(sockfd);
+
+  remote_addr = remote->addr;
+  remote_rkey = remote->rkey;
+  printf(
+      "Rank %d exchanged RDMA info: addr=0x%lx, rkey=0x%x, "
+      "qp_num=%u, psn=%u\n",
+      rank, remote->addr, remote->rkey, remote->qp_num, remote->psn);
+}
+
+void global_rdma_init(void* gpu_buf, size_t bytes, RDMAConnectionInfo* local,
+                      int rank) {
+  static std::once_flag flag;
+  std::call_once(flag, [&] {
+    setup_rdma(gpu_buf, bytes, local, rank);  // your existing function
+  });
+}
+
+void ensure_thread_qp(void* gpu_buffer, size_t size,
+                      RDMAConnectionInfo* local_info, int rank) {
+  if (qp) return;  // Already initialized for this thread
+  struct ibv_qp_init_attr qp_init_attr = {};
+  qp_init_attr.send_cq = cq;
+  qp_init_attr.recv_cq = cq;
+  qp_init_attr.qp_type = IBV_QPT_RC;  // Reliable Connection
+  qp_init_attr.cap.max_send_wr =
+      kMaxOutstandingSends * 2;      // max outstanding sends
+  qp_init_attr.cap.max_recv_wr = 1;  // max outstanding recvs
+  qp_init_attr.cap.max_send_sge = 1;
+  qp_init_attr.cap.max_recv_sge = 1;
+  qp_init_attr.sq_sig_all = 0;
+
+  qp = ibv_create_qp(pd, &qp_init_attr);
+  if (!qp) {
+    perror("Failed to create QP");
+    exit(1);
+  }
+
+  // Query port
+  struct ibv_port_attr port_attr;
+  if (ibv_query_port(context, 1, &port_attr)) {
+    perror("Failed to query port");
+    exit(1);
+  }
+  printf("Local LID: 0x%x\n", port_attr.lid);
+  // Fill local connection info
+  local_info->qp_num = qp->qp_num;
+  local_info->lid = port_attr.lid;
+  local_info->rkey = rkey;
+  local_info->addr = reinterpret_cast<uintptr_t>(gpu_buffer);
+  local_info->psn = rand() & 0xffffff;  // random psn
+  memset(local_info->gid, 0, 16);
+  printf("Local RDMA info: addr=0x%lx, rkey=0x%x, qp_num=%u, psn=%u\n",
+         local_info->addr, local_info->rkey, local_info->qp_num,
+         local_info->psn);
 }
 
 void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info,
                 int rank) {
+  if (qp) return;
+
   srand(time(NULL) + getpid() + rank * 1000);
   struct ibv_device** dev_list = ibv_get_device_list(NULL);
   if (!dev_list) {
@@ -122,40 +181,7 @@ void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info,
     exit(1);
   }
 
-  struct ibv_qp_init_attr qp_init_attr = {};
-  qp_init_attr.send_cq = cq;
-  qp_init_attr.recv_cq = cq;
-  qp_init_attr.qp_type = IBV_QPT_RC;  // Reliable Connection
-  qp_init_attr.cap.max_send_wr =
-      kMaxOutstandingSends * 2;      // max outstanding sends
-  qp_init_attr.cap.max_recv_wr = 1;  // max outstanding recvs
-  qp_init_attr.cap.max_send_sge = 1;
-  qp_init_attr.cap.max_recv_sge = 1;
-  qp_init_attr.sq_sig_all = 0;
-
-  qp = ibv_create_qp(pd, &qp_init_attr);
-  if (!qp) {
-    perror("Failed to create QP");
-    exit(1);
-  }
-
-  // Query port
-  struct ibv_port_attr port_attr;
-  if (ibv_query_port(context, 1, &port_attr)) {
-    perror("Failed to query port");
-    exit(1);
-  }
-  printf("Local LID: 0x%x\n", port_attr.lid);
-  // Fill local connection info
-  local_info->qp_num = qp->qp_num;
-  local_info->lid = port_attr.lid;
-  local_info->rkey = rkey;
-  local_info->addr = reinterpret_cast<uintptr_t>(gpu_buffer);
-  local_info->psn = rand() & 0xffffff;  // random psn
-  memset(local_info->gid, 0, 16);
-  printf("Local RDMA info: addr=0x%lx, rkey=0x%x, qp_num=%u, psn=%u\n",
-         local_info->addr, local_info->rkey, local_info->qp_num,
-         local_info->psn);
+  // ensure_thread_qp(gpu_buffer, size, local_info, rank);
 }
 
 void modify_qp_to_init() {
@@ -435,16 +461,21 @@ void poll_completions() {
     }
   }
   g_completed.fetch_add(ne, std::memory_order_relaxed);
-  printf(
-      "Finished processing %d completions, "
-      "g_posted: %lu, g_completed: %lu\n",
-      ne, g_posted.load(std::memory_order_acquire),
-      g_completed.load(std::memory_order_acquire));
+  // printf(
+  //     "Finished processing %d completions, "
+  //     "g_posted: %lu, g_completed: %lu\n",
+  //     ne, g_posted.load(std::memory_order_acquire),
+  //     g_completed.load(std::memory_order_acquire));
 }
 
 void progress_thread(int thread_idx) {
   pin_thread_to_cpu(thread_idx);
   printf("Progress thread started on CPU %d\n", sched_getcpu());
+
+  while (cq == nullptr && g_progress_run.load()) _mm_pause();
+
+  printf("Progress thread %d: cq=%p\n", thread_idx, cq);
+
   struct ibv_wc wc[kMaxOutstandingSends];  // batch poll
   while (g_progress_run.load(std::memory_order_acquire)) {
     int ne = ibv_poll_cq(cq, kMaxOutstandingSends, wc);
