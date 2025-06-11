@@ -6,7 +6,7 @@ set -e
 # Directories to format (excluding thirdparty/, scripts/, doc/, etc.)
 DIRECTORIES=("afxdp" "efa" "gpu_driven" "rdma" "misc")
 EXTENSIONS=("cpp" "cxx" "cc" "h" "hpp" "cu" "cuh")
-EXCLUDE=("afxdp/lib/libbpf" "afxdp/lib/xdp-tools")
+EXCLUDE=("afxdp/lib")
 
 # Check if clang-format is installed
 if ! command -v clang-format &> /dev/null; then
