@@ -156,15 +156,16 @@ int main(int argc, char** argv) {
     }
   }
 
-  if (kNumPollingThreads == 0) {
-    cq_threads.emplace_back(progress_thread, kPollingThreadStartPort);
-  }
+  sleep(1);
+  // if (kNumPollingThreads == 0) {
+  //   cq_threads.emplace_back(progress_thread, kPollingThreadStartPort);
+  // }
 
-  drain_cq();
-  g_progress_run.store(false);
-  for (auto& t : cq_threads) {
-    if (t.joinable()) {
-      t.join();
-    }
-  }
+  // drain_cq();
+  // g_progress_run.store(false);
+  // for (auto& t : cq_threads) {
+  //   if (t.joinable()) {
+  //     t.join();
+  //   }
+  // }
 }

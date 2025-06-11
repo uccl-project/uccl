@@ -35,14 +35,14 @@
 #define MEASURE_PER_OP_LATENCY
 #define kQueueSize 32
 #define kQueueMask (kQueueSize - 1)
-#define kBatchSize 4
+#define kBatchSize 8
 #define kIterations 100000
 #define kNumThBlocks 8
 #define kNumThPerBlock 1
 #define kObjectSize 8192  // 8 KB
 #define kMaxOutstandingSends 64
 #define kSignalledEvery 1
-#define kNumPollingThreads 1  // Rely on CPU proxy to poll.
+#define kNumPollingThreads 0  // Rely on CPU proxy to poll.
 #define kPollingThreadStartPort kNumThBlocks * 2
 
 // Command structure for each transfer

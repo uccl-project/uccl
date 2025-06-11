@@ -17,8 +17,8 @@ extern uint32_t rkey;
 extern thread_local uintptr_t remote_addr;
 extern thread_local uint32_t remote_rkey;
 extern std::atomic<bool> g_progress_run;
-extern std::unordered_set<uint64_t> finished_wrs;
-extern std::mutex finished_wrs_mutex;
+extern thread_local std::unordered_set<uint64_t> finished_wrs;
+extern thread_local std::mutex finished_wrs_mutex;
 // extern thread_local std::unordered_set<uint64_t> finished_wrs;
 
 struct RDMAConnectionInfo {
@@ -58,6 +58,7 @@ void drain_cq();
 void poll_completions();
 void global_rdma_init(void* gpu_buf, size_t bytes, RDMAConnectionInfo* local,
                       int rank);
-void ensure_thread_qp(void* gpu_buffer, size_t size,
-                      RDMAConnectionInfo* local_info, int rank);
+void create_per_thread_qp(void* gpu_buffer, size_t size,
+                          RDMAConnectionInfo* local_info, int rank);
+void create_per_thread_cq();
 #endif  // RDMA_HPP

@@ -36,8 +36,9 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
   printf("CPU thread for block %d started\n", block_idx);
   pin_thread_to_cpu(block_idx);
 
+  create_per_thread_cq();
   RDMAConnectionInfo local_info, remote_info;
-  ensure_thread_qp(gpu_buffer, total_size, &local_info, rank);
+  create_per_thread_qp(gpu_buffer, total_size, &local_info, rank);
 
   modify_qp_to_init();
 
@@ -57,7 +58,8 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
   auto total_rdma_write_durations =
       std::chrono::duration<double, std::micro>::zero();
 
-  for (size_t seen = 0; seen < kIterations || my_tail < kIterations;) {
+  for (size_t seen = 0; my_tail < kIterations;) {
+    poll_completions();
     // Force loading rb->head from DRAM.
     while (load_volatile_u64(&rb->head) == my_tail) {
 #ifdef DEBUG_PRINT
@@ -71,12 +73,7 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
       /* spin */
       _mm_pause();
     }
-    uint64_t idx = my_tail & kQueueMask;
-    uint64_t cmd;
-    do {
-      cmd = rb->buf[idx].cmd;
-      _mm_pause();  // Avoid hammering the cacheline.
-    } while (cmd == 0);
+
 #ifdef DEBUG_PRINT
     printf(
         "CPU thread for block %d, seen: %d, my_head: %lu, my_tail: %lu, "
@@ -84,109 +81,105 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
         block_idx, seen, rb->head, my_tail,
         static_cast<unsigned long long>(cmd));
 #endif
-    uint64_t expected_cmd =
-        (static_cast<uint64_t>(block_idx) << 32) | (my_tail + 1);
-    if (cmd != expected_cmd) {
-      fprintf(stderr, "Error: block %d, expected cmd %llu, got %llu\n",
-              block_idx, static_cast<unsigned long long>(expected_cmd),
-              static_cast<unsigned long long>(cmd));
+
+    uint64_t cur_head = load_volatile_u64(&rb->head);
+    size_t batch_size = cur_head - seen;
+
+    if (batch_size > kQueueSize) {
+      fprintf(stderr, "Error: batch_size %zu exceeds kQueueSize %d\n",
+              batch_size, kQueueSize);
       exit(1);
     }
 
-    if (false && rank == 0) {
-      rdma_write_stub(gpu_buffer, total_size);
-      poll_completion();
-      // printf("Polling completions done. %ld out of %d\n", seen, kIterations);
-    } else if (false && rb->head - my_tail == 1) {
-      // Record time
+    if (batch_size < 0) {
+      fprintf(stderr, "Error: batch_size %zu is negative\n", batch_size);
+      exit(1);
+    }
+    // if (batch_size > kBatchSize) {
+    //   batch_size = kBatchSize;
+    // }
+    // printf("Posting %ld commands, original: %ld, cur_head: %ld, seen:
+    // %ld\n", batch_size,
+    //  cur_head - my_tail, cur_head, seen);
+    std::vector<uint64_t> wrs_to_post;
+    for (size_t i = seen; i < cur_head; ++i) {
+      uint64_t cmd;
+      do {
+        cmd = rb->buf[i & kQueueMask].cmd;
+        _mm_pause();  // Avoid hammering the cacheline.
+      } while (cmd == 0);
+      uint64_t expected_cmd =
+          (static_cast<uint64_t>(block_idx) << 32) | (i + 1);
+      if (cmd != expected_cmd) {
+        fprintf(stderr, "Error: block %d, expected cmd %llu, got %llu\n",
+                block_idx, static_cast<unsigned long long>(expected_cmd),
+                static_cast<unsigned long long>(cmd));
+        exit(1);
+      }
+      wrs_to_post.push_back(cmd);
+    }
+
+    seen = cur_head;
+    if (wrs_to_post.size() != batch_size) {
+      fprintf(stderr, "Error: wrs_to_post size %zu exceeds batch size %zu\n",
+              wrs_to_post.size(), batch_size);
+      exit(1);
+    }
+
+    if (!wrs_to_post.empty()) {
       auto start = std::chrono::high_resolution_clock::now();
-      post_rdma_async(gpu_buffer, total_size, seen);
+      post_rdma_async_chained(gpu_buffer, total_size, batch_size, wrs_to_post);
       auto end = std::chrono::high_resolution_clock::now();
       total_rdma_write_durations +=
           std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+    }
 
-      rb->buf[idx].cmd = 0;
-      // std::atomic_thread_fence(std::memory_order_release);
-      my_tail++;
-      rb->tail = my_tail;
-      // Initiate flush to DRAM
-      _mm_clwb(&(rb->tail));
-      // Ensure that flush to DRAM completes.
-      _mm_sfence();
-      ++seen;
-    } else {
-      uint64_t cur_head = load_volatile_u64(&rb->head);
-      size_t batch_size = cur_head - seen;
-
-      if (batch_size > kQueueSize) {
-        fprintf(stderr, "Error: batch_size %zu exceeds kQueueSize %d\n",
-                batch_size, kQueueSize);
-        exit(1);
-      }
-      // if (batch_size > kBatchSize) {
-      //   batch_size = kBatchSize;
-      // }
-      // printf("Posting %ld commands, original: %ld, cur_head: %ld, seen:
-      // %ld\n", batch_size,
-      //  cur_head - my_tail, cur_head, seen);
-      std::vector<uint64_t> wrs_to_post;
-      for (size_t i = seen; i < cur_head; ++i) {
-        uint64_t cmd = rb->buf[i & kQueueMask].cmd;
-        wrs_to_post.push_back(cmd);
-      }
-
-      if (!wrs_to_post.empty()) {
-        auto start = std::chrono::high_resolution_clock::now();
-        post_rdma_async_chained(gpu_buffer, total_size, batch_size,
-                                wrs_to_post);
-        auto end = std::chrono::high_resolution_clock::now();
-        total_rdma_write_durations +=
-            std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-      }
-
-      if (wrs_to_post.size() > batch_size) {
-        fprintf(stderr, "Error: wrs_to_post size %zu exceeds batch size %zu\n",
-                wrs_to_post.size(), batch_size);
-        exit(1);
-      }
-      for (size_t i = my_tail; i < cur_head; ++i) {
-        uint64_t cmd = rb->buf[i & kQueueMask].cmd;
-        {
-          std::lock_guard<std::mutex> lock(finished_wrs_mutex);
-          if (finished_wrs.count(cmd)) {
-            rb->buf[i & kQueueMask].cmd = 0;
-            my_tail++;
-            finished_wrs.erase(cmd);
-            seen++;
-            // printf("CPU thread for block %d, cmd %llu finished, "
-            //        "my_tail: %lu, head: %lu, tail: %lu\n",
-            //        block_idx, static_cast<unsigned long long>(cmd), my_tail,
-            //        rb->head, rb->tail);
-          } else {
-            // Unlock happens automatically at the end of scope
-            // printf("CPU thread for block %d, cmd %llu not finished yet, "
-            //        "waiting...\n",
-            //        block_idx, static_cast<unsigned long long>(cmd));
-            if (i > seen) seen++;
-            break;
-          }
+    for (size_t i = my_tail; i < cur_head; ++i) {
+      uint64_t cmd = rb->buf[i & kQueueMask].cmd;
+      {
+        std::lock_guard<std::mutex> lock(finished_wrs_mutex);
+        if (false) {
+          rb->buf[i & kQueueMask].cmd = 0;
+          my_tail++;
+          // seen++;
+        } else if (finished_wrs.count(cmd)) {
+          rb->buf[i & kQueueMask].cmd = 0;
+          my_tail++;
+          // size_t before_size = finished_wrs.size();
+          finished_wrs.erase(cmd);
+          // seen++;
+          // printf("CPU thread for block %d: finished_wrs.size(), %lu, cmd:
+          // %lu, seen: %lu, my_tail: %lu\n", block_idx, finished_wrs.size(),
+          // cmd, seen, my_tail); printf("CPU thread for block %d, cmd %llu
+          // finished, "
+          //        "my_tail: %lu, head: %lu, tail: %lu\n",
+          //        block_idx, static_cast<unsigned long long>(cmd), my_tail,
+          //        rb->head, rb->tail);
+        } else {
+          // Unlock happens automatically at the end of scope
+          // printf("CPU thread for block %d, cmd %llu not finished yet, "
+          //        "waiting...\n",
+          //        block_idx, static_cast<unsigned long long>(cmd));
+          break;
         }
       }
-      // std::atomic_thread_fence(std::memory_order_release);
-      rb->tail = my_tail;
-      // Initiate flush to DRAM
-      _mm_clwb(&(rb->tail));
-      // Ensure that flush to DRAM completes.
-      _mm_sfence();
-
-      // printf("CPU thread for block %d, my_tail: %lu, head: %lu, "
-      //        "tail: %lu\n",
-      //        block_idx, my_tail, rb->head, rb->tail);
     }
+    // std::atomic_thread_fence(std::memory_order_release);
+    rb->tail = my_tail;
+    // Initiate flush to DRAM
+    _mm_clwb(&(rb->tail));
+    // Ensure that flush to DRAM completes.
+    _mm_sfence();
+
+    // printf("CPU thread for block %d, seen: %lu, my_tail: %lu, head: %lu, "
+    //        "tail: %lu, finished_wrs.size(): %lu\n",
+    //        block_idx, seen, my_tail, rb->head, rb->tail,
+    //        finished_wrs.size());
   }
 
-  printf("CPU thread for block %d finished consuming %d commands\n", block_idx,
-         kIterations);
+  printf(
+      "CPU thread for block %d finished consuming %d commands, my_tail: %ld\n",
+      block_idx, kIterations, my_tail);
 
   printf("Average rdma write duration: %.2f us\n",
          total_rdma_write_durations.count() / kIterations);

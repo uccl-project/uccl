@@ -32,7 +32,7 @@ static inline bool pin_thread_to_cpu(int cpu) {
 // Define globals
 struct ibv_context* context = nullptr;
 struct ibv_pd* pd = nullptr;
-struct ibv_cq* cq = nullptr;
+thread_local struct ibv_cq* cq = nullptr;
 thread_local struct ibv_qp* qp = nullptr;
 struct ibv_mr* mr = nullptr;
 uint32_t rkey = 0;
@@ -40,8 +40,8 @@ thread_local uintptr_t remote_addr = 0;
 thread_local uint32_t remote_rkey = 0;
 // thread_local std::unordered_set<uint64_t> finished_wrs;
 
-std::unordered_set<uint64_t> finished_wrs;
-std::mutex finished_wrs_mutex;
+thread_local std::unordered_set<uint64_t> finished_wrs;
+thread_local std::mutex finished_wrs_mutex;
 
 constexpr int TCP_PORT = 18515;
 static thread_local int outstanding = 0;  // per-CPU thread counter
@@ -102,8 +102,19 @@ void global_rdma_init(void* gpu_buf, size_t bytes, RDMAConnectionInfo* local,
   });
 }
 
-void ensure_thread_qp(void* gpu_buffer, size_t size,
-                      RDMAConnectionInfo* local_info, int rank) {
+void create_per_thread_cq() {
+  if (cq) return;
+  int cq_depth = kMaxOutstandingSends * 2;
+  cq = ibv_create_cq(context, /* cqe */ cq_depth, /* user_context */ nullptr,
+                     /* channel */ nullptr, /* comp_vector */ 0);
+  if (!cq) {
+    perror("Failed to create CQ");
+    exit(1);
+  }
+}
+
+void create_per_thread_qp(void* gpu_buffer, size_t size,
+                          RDMAConnectionInfo* local_info, int rank) {
   if (qp) return;  // Already initialized for this thread
   struct ibv_qp_init_attr qp_init_attr = {};
   qp_init_attr.send_cq = cq;
@@ -176,15 +187,8 @@ void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info,
     exit(1);
   }
   rkey = mr->rkey;
-  int cq_depth = kMaxOutstandingSends * 2;
-  cq = ibv_create_cq(context, /* cqe */ cq_depth, /* user_context */ nullptr,
-                     /* channel */ nullptr, /* comp_vector */ 0);
-  if (!cq) {
-    perror("Failed to create CQ");
-    exit(1);
-  }
 
-  // ensure_thread_qp(gpu_buffer, size, local_info, rank);
+  // create_per_thread_qp(gpu_buffer, size, local_info, rank);
 }
 
 void modify_qp_to_init() {
