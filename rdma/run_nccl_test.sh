@@ -11,23 +11,12 @@ PROG_OPTION=${4:-0}
 PROCS_PER_NODE=${5:-1}
 HOSTNAME=${6:-"hosts_single_process"}
 
-# IP of Nodes.
-NODES="192.168.102.190,192.168.102.191,192.168.102.192,192.168.102.193,192.168.102.194,192.168.102.195"
-# NODES="192.168.102.190,192.168.102.195"
-# Names of HCAs."
-
-# NCCL uses the following GPU-NIC mapping can achieve 47GB/s:
-#  0-7, 1-6, 2-5, 3-4, 4-3, 5-2, 6-1, 7-0
-# If mismatched, 30GB/s is expected.
-
-# The topology detected by UCCL is the same as NCCL. But UCCL using the above mapping only achieves ~5GB/s.
-# if mismatched, 30GB/s is expected. Occasionally, segmentation fault occurs.
-
+# Names of HCAs.
 HCA_NAMES="mlx5_1:1,mlx5_2:1,mlx5_3:1,mlx5_4:1,mlx5_5:1,mlx5_6:1,mlx5_7:1,mlx5_8:1"
 # Name of Control NIC.
 CTRL_NIC="enp164s0"
 # Path of NCCL
-NCCL_PATH="${UCCL_HOME}/thirdparty/nccl/build/lib"
+NCCL_LIB="${UCCL_HOME}/thirdparty/nccl/build/lib/libnccl.so"
 # Path of UCCL
 PLUGIN_LIB="${UCCL_HOME}/rdma/libnccl-net-uccl.so"
 
@@ -68,9 +57,9 @@ if [ "$UCCL" -ne 1 ]; then
     PLUGIN_LIB=""
 fi
 
-P2P_DISABLE=1
-SHM_DISABLE=1
-PXN_DISABLE=1
+P2P_DISABLE=0
+SHM_DISABLE=0
+PXN_DISABLE=0
 
 echo "Running test: ${PROG_NAME}, $([ "${UCCL}" -eq 1 ] && echo "UCCL" || echo "NCCL"), ${NUM_PROCS} nodes, ${NUM_GPUS_PER_NODE} GPUs per node, $((NUM_PROCS * NUM_GPUS_PER_NODE)) GPUs in total."
 
@@ -95,10 +84,10 @@ mpirun --allow-run-as-root -np ${NUM_PROCS} -N ${PROCS_PER_NODE} \
     -x NCCL_P2P_NET_CHUNKSIZE=524288 \
     -x NCCL_BUFFSIZE=8388608 \
     -x NCCL_DMABUF_ENABLE=0 \
-    -x LD_LIBRARY_PATH=${NCCL_PATH}:${LD_LIBRARY_PATH} \
+    -x LD_PRELOAD=${NCCL_LIB} \
+    -x NCCL_NET_PLUGIN=${PLUGIN_LIB} \
     -x NCCL_IB_MERGE_NICS=0 \
     -x NCCL_NVLS_ENABLE=0 \
-    -x NCCL_NET_PLUGIN=$PLUGIN_LIB \
     --mca btl tcp,self \
     --mca btl_tcp_if_include enp164s0 \
     ${UCCL_HOME}/thirdparty/nccl-tests/build/${PROG_NAME} -c 0 \

@@ -1035,6 +1035,7 @@ int RDMAContext::receiver_poll_rc_cq(void) {
     if (cq_ex->status == IBV_WC_SUCCESS) {
       rc_rx_data();
       post_srq_cnt_++;
+      check_srq(true);
     } else {
       LOG(ERROR) << "data path CQ state error: " << cq_ex->status
                  << " from QP:" << ibv_wc_read_qp_num(cq_ex);
@@ -1081,6 +1082,7 @@ int RDMAContext::receiver_poll_uc_cq(void) {
       retr_chunk_pool_->free_buff(chunk_addr);
 
       post_srq_cnt_++;
+      check_srq(true);
     } else {
       LOG(ERROR) << "data path CQ state error: " << cq_ex->status
                  << " from QP:" << ibv_wc_read_qp_num(cq_ex);
@@ -1574,6 +1576,7 @@ int RDMAContext::poll_ctrl_cq(void) {
             rx_ack(pkt_addr);
           }
           post_ctrl_rq_cnt_++;
+          check_ctrl_rq(true);
         }
         ctrl_chunk_pool_->free_buff(chunk_addr);
       } else {
@@ -1865,8 +1868,8 @@ void RDMAContext::rx_data(struct list_head* ack_list) {
   DCHECK(rid < kMaxReq);
   auto req = get_recvreq_by_id(rid);
   if (req->type != RecvRequest::RECV || req->ureq->context != flow) {
-    UCCL_LOG_IO << "Can't find corresponding request or this request is "
-                   "invalid for this chunk. Dropping.";
+    UCCL_LOG_RTO << "Can't find corresponding request or this request is "
+                    "invalid for this chunk. Dropping.";
     subflow->pcb.stats_chunk_drop++;
     return;
   }
@@ -1876,15 +1879,15 @@ void RDMAContext::rx_data(struct list_head* ack_list) {
   auto distance = UINT_CSN(csn) - ecsn;
 
   if (UINT_CSN::uintcsn_seqno_lt(UINT_CSN(csn), ecsn)) {
-    UCCL_LOG_IO << "Chunk lag behind. Dropping as we can't handle SACK. "
-                << "csn: " << csn << ", ecsn: " << ecsn.to_uint32();
+    UCCL_LOG_RTO << "Chunk lag behind. Dropping as we can't handle SACK. "
+                 << "csn: " << csn << ", ecsn: " << ecsn.to_uint32();
     subflow->pcb.stats_chunk_drop++;
     return;
   }
 
   if (distance.to_uint32() > kReassemblyMaxSeqnoDistance) {
-    UCCL_LOG_IO << "Chunk too far ahead. Dropping as we can't handle SACK. "
-                << "csn: " << csn << ", ecsn: " << ecsn.to_uint32();
+    UCCL_LOG_RTO << "Chunk too far ahead. Dropping as we can't handle SACK. "
+                 << "csn: " << csn << ", ecsn: " << ecsn.to_uint32();
     subflow->pcb.stats_chunk_drop++;
     return;
   }
@@ -1927,15 +1930,15 @@ void RDMAContext::rx_data(struct list_head* ack_list) {
   subflow->next_ack_path_ = qpidx;
 
   // Send ACK if needed.
-  if (subflow->rxtracking.need_imm_ack()) {
-    uint64_t chunk_addr;
-    DCHECK(ctrl_chunk_pool_->alloc_buff(&chunk_addr) == 0);
-    craft_ack(subflow, chunk_addr, 0);
-    flush_acks(1, chunk_addr);
+  // if (subflow->rxtracking.need_imm_ack()) {
+  uint64_t chunk_addr;
+  DCHECK(ctrl_chunk_pool_->alloc_buff(&chunk_addr) == 0);
+  craft_ack(subflow, chunk_addr, 0);
+  flush_acks(1, chunk_addr);
 
-    subflow->rxtracking.clear_imm_ack();
-    list_del(&subflow->ack.ack_link);
-  }
+  subflow->rxtracking.clear_imm_ack();
+  list_del(&subflow->ack.ack_link);
+  // }
 
   EventOnRxData(subflow, &imm_data);
 }
@@ -2001,17 +2004,25 @@ void RDMAContext::__retransmit_for_flow(void* context, bool rto) {
   }
 
   if (subflow->pcb.rto_rexmits_consectutive >= kRTOAbortThreshold) {
-    LOG_FIRST_N(ERROR, 1) << "RTO retransmission threshold reached."
-                          << subflow->fid_;
+    LOG_FIRST_N(ERROR, 1) << "RTO retransmission threshold reached for flow "
+                          << subflow->fid_ << ", consecutive RTOs: "
+                          << subflow->pcb.rto_rexmits_consectutive
+                          << ", unacked chunks: "
+                          << subflow->txtracking.track_size()
+                          << ", unacked bytes: " << subflow->unacked_bytes_
+                          << ", post_srq_cnt_: " << post_srq_cnt_
+                          << ", post_ctrl_rq_cnt_: " << post_ctrl_rq_cnt_;
   }
 
   // Case#1: SACK bitmap at the sender side is empty. Retransmit the oldest
   // unacked chunk.
   auto sack_bitmap_count = subflow->pcb.tx_sack_bitmap_count;
+  UCCL_LOG_RTO << "sack_bitmap_count: " << (uint32_t)sack_bitmap_count;
   if (!sack_bitmap_count) {
     auto chunk = subflow->txtracking.get_oldest_unacked_chunk();
     auto wr_ex = chunk.wr_ex;
     try_retransmit_chunk(subflow, wr_ex);
+    UCCL_LOG_RTO << "case #1 retransmit_chunk: " << chunk.csn;
     // Arm timer for Retransmission
     rearm_timer_for_flow(subflow);
     if (rto) {
@@ -2043,6 +2054,7 @@ void RDMAContext::__retransmit_for_flow(void* context, bool rto) {
       if (seqno == chunk.csn) {
         auto wr_ex = chunk.wr_ex;
         if (try_retransmit_chunk(subflow, wr_ex)) {
+          UCCL_LOG_RTO << "case #2 retransmit_chunk: " << chunk.csn;
           done = true;
         } else {
           // We can't retransmit the chunk due to lack of credits.
