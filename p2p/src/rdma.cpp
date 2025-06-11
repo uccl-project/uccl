@@ -102,8 +102,8 @@ void global_rdma_init(void* gpu_buf, size_t bytes, RDMAConnectionInfo* local,
   });
 }
 
-ibv_cq *create_per_thread_cq() {
-  ibv_cq *cq;
+ibv_cq* create_per_thread_cq() {
+  ibv_cq* cq;
   // if (cq) return;
   int cq_depth = kMaxOutstandingSends * 2;
   cq = ibv_create_cq(context, /* cqe */ cq_depth, /* user_context */ nullptr,
@@ -116,7 +116,8 @@ ibv_cq *create_per_thread_cq() {
 }
 
 void create_per_thread_qp(void* gpu_buffer, size_t size,
-                          RDMAConnectionInfo* local_info, int rank, ibv_cq *cq) {
+                          RDMAConnectionInfo* local_info, int rank,
+                          ibv_cq* cq) {
   if (qp) return;  // Already initialized for this thread
   struct ibv_qp_init_attr qp_init_attr = {};
   qp_init_attr.send_cq = cq;
@@ -309,8 +310,9 @@ void modify_qp_to_rts(RDMAConnectionInfo* local_info) {
 }
 
 void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
-                             std::vector<uint64_t> wrs_to_post, ibv_cq *cq, std::unordered_set<uint64_t>& finished_wrs,
-                      std::mutex& finished_wrs_mutex) {
+                             std::vector<uint64_t> wrs_to_post, ibv_cq* cq,
+                             std::unordered_set<uint64_t>& finished_wrs,
+                             std::mutex& finished_wrs_mutex) {
   while (g_posted.load() - g_completed.load() > kMaxOutstandingSends) {
     poll_completions(cq, finished_wrs, finished_wrs_mutex);
   }
@@ -365,8 +367,9 @@ void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
   g_posted.fetch_add(num_wrs, std::memory_order_relaxed);
 }
 
-void post_rdma_async(void* buf, size_t bytes, uint64_t wr_id, ibv_cq *cq, std::unordered_set<uint64_t>& finished_wrs,
-                      std::mutex& finished_wrs_mutex) {
+void post_rdma_async(void* buf, size_t bytes, uint64_t wr_id, ibv_cq* cq,
+                     std::unordered_set<uint64_t>& finished_wrs,
+                     std::mutex& finished_wrs_mutex) {
   /* Make it a closed loop to limit the maximum outstanding sends. */
   while (g_posted.load() - g_completed.load() > kMaxOutstandingSends) {
     poll_completions(cq, finished_wrs, finished_wrs_mutex);
@@ -449,7 +452,7 @@ bool GdrSupportInitOnce() {
          KNL_MODULE_LOADED("/sys/module/nvidia_peermem/version");
 }
 
-void poll_completion(ibv_cq *cq) {
+void poll_completion(ibv_cq* cq) {
   struct ibv_wc wc;
   int ret;
 
@@ -472,8 +475,7 @@ void poll_completion(ibv_cq *cq) {
   //        (unsigned long long)wc.wr_id, wc.opcode, wc.byte_len);
 }
 
-void poll_completions(ibv_cq *cq, 
-                      std::unordered_set<uint64_t>& finished_wrs,
+void poll_completions(ibv_cq* cq, std::unordered_set<uint64_t>& finished_wrs,
                       std::mutex& finished_wrs_mutex) {
   struct ibv_wc wc[kMaxOutstandingSends];  // batch poll
   int ne = ibv_poll_cq(cq, kMaxOutstandingSends, wc);
@@ -499,7 +501,9 @@ void poll_completions(ibv_cq *cq,
   //     g_completed.load(std::memory_order_acquire));
 }
 
-void per_thread_polling(int thread_idx, struct ibv_cq* per_thread_cq, std::unordered_set<uint64_t>* per_thread_finished_wrs, std::mutex *per_thread_finished_wrs_mutex) {
+void per_thread_polling(int thread_idx, struct ibv_cq* per_thread_cq,
+                        std::unordered_set<uint64_t>* per_thread_finished_wrs,
+                        std::mutex* per_thread_finished_wrs_mutex) {
   pin_thread_to_cpu(thread_idx);
   printf("Progress thread started on CPU %d\n", sched_getcpu());
 
@@ -539,8 +543,9 @@ void per_thread_polling(int thread_idx, struct ibv_cq* per_thread_cq, std::unord
   }
 }
 
-void progress_thread(int thread_idx, ibv_cq *cq, std::unordered_set<uint64_t>& finished_wrs,
-                      std::mutex& finished_wrs_mutex) {
+void progress_thread(int thread_idx, ibv_cq* cq,
+                     std::unordered_set<uint64_t>& finished_wrs,
+                     std::mutex& finished_wrs_mutex) {
   pin_thread_to_cpu(thread_idx);
   printf("Progress thread started on CPU %d\n", sched_getcpu());
 
@@ -583,6 +588,8 @@ void progress_thread(int thread_idx, ibv_cq *cq, std::unordered_set<uint64_t>& f
 bool drain_cq() {
   uint64_t posted = g_posted.load(std::memory_order_acquire);
   uint64_t completed = g_completed.load(std::memory_order_acquire);
-  printf("drain_cq: g_completed: %ld, g_posted: %ld, total: %d\n", completed, posted, kIterations * kNumThBlocks);
-  return completed * kSignalledEvery == posted && kIterations * kNumThBlocks == completed;
+  printf("drain_cq: g_completed: %ld, g_posted: %ld, total: %d\n", completed,
+         posted, kIterations * kNumThBlocks);
+  return completed * kSignalledEvery == posted &&
+         kIterations * kNumThBlocks == completed;
 }

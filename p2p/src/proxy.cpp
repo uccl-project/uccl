@@ -36,7 +36,7 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
   printf("CPU thread for block %d started\n", block_idx);
   pin_thread_to_cpu(block_idx);
 
-  ibv_cq *cq = create_per_thread_cq();
+  ibv_cq* cq = create_per_thread_cq();
   RDMAConnectionInfo local_info, remote_info;
   create_per_thread_qp(gpu_buffer, total_size, &local_info, rank, cq);
 
@@ -60,14 +60,13 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
   int cpu_id = kPollingThreadStartPort + block_idx;
   std::vector<std::thread> cq_threads;
 #ifdef SEPARATE_POLLING
-  cq_threads.emplace_back(per_thread_polling, cpu_id, cq, &finished_wrs, &finished_wrs_mutex);
+  cq_threads.emplace_back(per_thread_polling, cpu_id, cq, &finished_wrs,
+                          &finished_wrs_mutex);
 #endif
-
 
   uint64_t my_tail = 0;
   auto total_rdma_write_durations =
       std::chrono::duration<double, std::micro>::zero();
-
 
   for (size_t seen = 0; my_tail < kIterations;) {
     poll_completions(cq, finished_wrs, finished_wrs_mutex);
@@ -86,7 +85,8 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
       _mm_pause();
       // while_count ++;
       // if (while_count > 1000000) {
-      //   fprintf(stderr, "Error: CPU thread for block %d is spinning too long "
+      //   fprintf(stderr, "Error: CPU thread for block %d is spinning too long
+      //   "
       //                   "waiting for head to advance.\n",
       //           block_idx);
       //   exit(1);
@@ -147,7 +147,8 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
 
     if (!wrs_to_post.empty()) {
       auto start = std::chrono::high_resolution_clock::now();
-      post_rdma_async_chained(gpu_buffer, total_size, batch_size, wrs_to_post, cq, finished_wrs, finished_wrs_mutex);
+      post_rdma_async_chained(gpu_buffer, total_size, batch_size, wrs_to_post,
+                              cq, finished_wrs, finished_wrs_mutex);
       auto end = std::chrono::high_resolution_clock::now();
       total_rdma_write_durations +=
           std::chrono::duration_cast<std::chrono::microseconds>(end - start);
@@ -170,12 +171,12 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
           // seen++;
           // printf("CPU thread for block %d: finished_wrs.size(), %lu, cmd:
           //  %lu, seen: %lu, my_tail: %lu\n", block_idx, finished_wrs.size(),
-          // cmd, seen, my_tail); 
+          // cmd, seen, my_tail);
           // printf("CPU thread for block %d, cmd %llu
           // finished, "
-                //  "my_tail: %lu, head: %lu, tail: %lu\n",
-                //  block_idx, static_cast<unsigned long long>(cmd), my_tail,
-                //  rb->head, rb->tail);
+          //  "my_tail: %lu, head: %lu, tail: %lu\n",
+          //  block_idx, static_cast<unsigned long long>(cmd), my_tail,
+          //  rb->head, rb->tail);
         } else {
           // Unlock happens automatically at the end of scope
           // printf("CPU thread for block %d, cmd %llu not finished yet, "
@@ -205,15 +206,15 @@ void cpu_consume(RingBuffer* rb, int block_idx, void* gpu_buffer,
   printf("Average rdma write duration: %.2f us\n",
          total_rdma_write_durations.count() / kIterations);
 
-  if (drain_cq())
-    g_progress_run.store(false);
+  if (drain_cq()) g_progress_run.store(false);
   for (auto& t : cq_threads) {
     if (t.joinable()) {
       t.join();
     }
   }
 
-  printf("CPU thread for block %d finished, joined all CQ threads\n", block_idx);
+  printf("CPU thread for block %d finished, joined all CQ threads\n",
+         block_idx);
 }
 
 void cpu_consume_local(RingBuffer* rb, int block_idx) {

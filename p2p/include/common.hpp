@@ -44,7 +44,7 @@
 #define kSignalledEvery 1
 #define kNumPollingThreads 0  // Rely on CPU proxy to poll.
 #define kPollingThreadStartPort kNumThBlocks * 2
-
+#define SEPARATE_POLLING
 // Command structure for each transfer
 struct TransferCmd {
   uint64_t cmd;
