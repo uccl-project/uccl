@@ -72,13 +72,13 @@ int main(int argc, char** argv) {
 
   RDMAConnectionInfo local_info;
   global_rdma_init(gpu_buffer, total_size, &local_info, rank);
-  std::vector<std::thread> cq_threads;
+  // std::vector<std::thread> cq_threads;
 
   // Launch threads
-  for (int i = 0; i < kNumPollingThreads; ++i) {
-    int cpu_id = kPollingThreadStartPort + i;
-    cq_threads.emplace_back(progress_thread, cpu_id);
-  }
+  // for (int i = 0; i < kNumPollingThreads; ++i) {
+  //   int cpu_id = kPollingThreadStartPort + i;
+  //   cq_threads.emplace_back(progress_thread, cpu_id);
+  // }
   std::vector<std::thread> cpu_threads;
   for (int i = 0; i < kNumThBlocks; ++i) {
     cpu_threads.emplace_back(cpu_consume, &rbs[i], i, gpu_buffer, kObjectSize,
@@ -93,8 +93,8 @@ int main(int argc, char** argv) {
 
     // Launch one CPU polling thread per block
 
-    printf("Waiting for 5 seconds before issuing commands...\n");
-    sleep(5);
+    printf("Waiting for 2 seconds before issuing commands...\n");
+    sleep(2);
 
     auto t0 = std::chrono::high_resolution_clock::now();
     size_t shmem_bytes = kQueueSize * sizeof(unsigned long long);
