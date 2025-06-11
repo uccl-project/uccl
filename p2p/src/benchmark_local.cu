@@ -9,25 +9,12 @@
 #include <thread>
 #include <vector>
 
-inline void** allocate_memory_for_gpudirect() {
-  size_t bytes_per_block = kObjectSize * kBatchSize;
-  size_t total_bytes = bytes_per_block * kNumThBlocks;
-  void* d_big = nullptr;
-  cudaMalloc(&d_big, total_bytes);
+int main(int argc, char** argv) {
+  if (argc > 1) {
+    std::cerr << "Usage: ./benchmark_local\n";
+    return 1;
+  }
 
-  std::vector<void*> h_ptrs(kNumThBlocks);
-  for (int b = 0; b < kNumThBlocks; ++b)
-    h_ptrs[b] = static_cast<char*>(d_big) + b * bytes_per_block;
-
-  void** d_ptrs = nullptr;
-  cudaMalloc(&d_ptrs, sizeof(void*) * kNumThBlocks);
-  cudaMemcpy(d_ptrs, h_ptrs.data(), sizeof(void*) * kNumThBlocks,
-             cudaMemcpyHostToDevice);
-
-  return d_ptrs;
-}
-
-int main() {
   GdrSupportInitOnce();
   if (!GdrSupportInitOnce()) {
     printf(
@@ -55,25 +42,19 @@ int main() {
     }
   }
 
-  void** d_ptrs = allocate_memory_for_gpudirect();
-
   // Launch one CPU polling thread per block
   std::vector<std::thread> cpu_threads;
   for (int i = 0; i < kNumThBlocks; ++i) {
-    cpu_threads.emplace_back(cpu_consume_local, &rbs[i], i);
+    cpu_threads.emplace_back(cpu_proxy_local, &rbs[i], i);
   }
   auto t0 = std::chrono::high_resolution_clock::now();
   size_t shmem_bytes = kQueueSize * sizeof(unsigned long long);
   gpu_issue_batched_commands<<<kNumThBlocks, kNumThPerBlock, shmem_bytes,
-                               stream1>>>(rbs, d_ptrs);
+                               stream1>>>(rbs);
   cudaCheckErrors("gpu_issue_batched_commands kernel failed");
-
   cudaStreamSynchronize(stream1);
   cudaCheckErrors("cudaStreamSynchronize failed");
   auto t1 = std::chrono::high_resolution_clock::now();
-
-  cudaDeviceSynchronize();
-  cudaCheckErrors("cudaDeviceSynchronize failed");
 
   for (auto& t : cpu_threads) {
     t.join();
@@ -105,7 +86,7 @@ int main() {
 #endif
   printf("Total ops                          : %u\n", tot_ops);
   printf("End-to-end Wall-clock time        : %.3f ms\n", wall_ms);
-  printf("Throughput                        : %.2f Mops/s\n", throughput);
+  printf("Throughput                        : %.2f Mops\n", throughput);
 
   cudaFreeHost(rbs);
   cudaCheckErrors("cudaFreeHost failed");

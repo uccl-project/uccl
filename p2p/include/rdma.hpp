@@ -55,13 +55,8 @@ void modify_qp_to_rtr(RDMAConnectionInfo* remote);
 
 void modify_qp_to_rts(RDMAConnectionInfo* local_info);
 
-void poll_completion(ibv_cq* cq);
-
 void modify_qp_to_init();
-void progress_thread(int thread_idx, ibv_cq* cq,
-                     std::unordered_set<uint64_t>& finished_wrs,
-                     std::mutex& finished_wrs_mutex);
-bool drain_cq();
+bool check_cq_completion();
 void poll_completions(ibv_cq* cq, std::unordered_set<uint64_t>& finished_wrs,
                       std::mutex& finished_wrs_mutex);
 void global_rdma_init(void* gpu_buf, size_t bytes, RDMAConnectionInfo* local,

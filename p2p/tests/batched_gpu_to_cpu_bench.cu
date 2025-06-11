@@ -61,7 +61,7 @@ struct alignas(128) Fifo {
   // Using volatile and avoiding atomics.
   uint64_t head;                      // Next slot to produce
   uint64_t tail;                      // Next slot to consume
-  volatile uint64_t buf[kQueueSize];  // Payload buffer (8 bytes).
+  uint64_t volatile buf[kQueueSize];  // Payload buffer (8 bytes).
 };
 
 __device__ __forceinline__ uint64_t ld_volatile(uint64_t* ptr) {
@@ -174,7 +174,7 @@ static inline bool pin_thread_to_cpu(int cpu) {
   return !pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
 }
 
-void cpu_consume(Fifo* fifo, int block_idx) {
+void cpu_proxy(Fifo* fifo, int block_idx) {
   // printf("CPU thread for block %d started\n", block_idx);
   pin_thread_to_cpu(block_idx);
 
@@ -246,7 +246,7 @@ int main() {
   // Launch one CPU polling thread per block
   std::vector<std::thread> cpu_threads;
   for (int i = 0; i < kNumThBlocks; ++i) {
-    cpu_threads.emplace_back(cpu_consume, &fifos[i], i);
+    cpu_threads.emplace_back(cpu_proxy, &fifos[i], i);
   }
   auto t0 = std::chrono::high_resolution_clock::now();
   size_t shmem_bytes = kQueueSize * sizeof(unsigned long long);
