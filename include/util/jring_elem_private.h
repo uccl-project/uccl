@@ -13,7 +13,7 @@
 extern "C" {
 #endif
 
-#include "util_pause.h"
+#include "pause.h"
 #include <memory.h>
 #include <stdint.h>
 

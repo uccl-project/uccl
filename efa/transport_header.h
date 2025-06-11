@@ -2,7 +2,7 @@
 
 #include "transport_cc.h"
 #include "transport_config.h"
-#include "util_endian.h"
+#include "util/endian.h"
 #include <cstdint>
 
 namespace uccl {
@@ -57,12 +57,12 @@ struct __attribute__((packed)) UcclSackHdr {
   be32_t rwnd;               // Receiver window size in terms of packets.
 };
 
-static const size_t kUcclPktHdrLen = sizeof(UcclPktHdr);
-static const size_t kUcclPullHdrLen = sizeof(UcclPullHdr);
+static size_t const kUcclPktHdrLen = sizeof(UcclPktHdr);
+static size_t const kUcclPullHdrLen = sizeof(UcclPullHdr);
 static_assert(kUcclPullHdrLen <= EFA_MAX_INLINE_SIZE,
               "PullHdr too large for inline");
-static const size_t kUcclPktDataMaxLen = EFA_MAX_PAYLOAD - kUcclPktHdrLen;
-static const size_t kUcclSackHdrLen = sizeof(UcclSackHdr);
+static size_t const kUcclPktDataMaxLen = EFA_MAX_PAYLOAD - kUcclPktHdrLen;
+static size_t const kUcclSackHdrLen = sizeof(UcclSackHdr);
 
 inline UcclPktHdr::UcclFlags operator|(UcclPktHdr::UcclFlags lhs,
                                        UcclPktHdr::UcclFlags rhs) {

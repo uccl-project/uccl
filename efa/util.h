@@ -1,7 +1,7 @@
 #pragma once
 
 #include "cuda_runtime.h"
-#include "util_jring.h"
+#include "util/jring.h"
 #include <arpa/inet.h>
 #include <glog/logging.h>
 #include <linux/in.h>
@@ -161,7 +161,7 @@ static inline std::string FormatVarg(char const* fmt, va_list ap) {
 [[maybe_unused]] static inline std::string Format(char const* fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  const std::string s = FormatVarg(fmt, ap);
+  std::string const s = FormatVarg(fmt, ap);
   va_end(ap);
   return s;
 }

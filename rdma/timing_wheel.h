@@ -12,7 +12,7 @@
 
 #include "timely.h"
 #include "transport_config.h"
-#include "util_cb.h"
+#include "util/cb.h"
 #include <queue>
 
 namespace uccl {
@@ -64,7 +64,7 @@ struct wheel_record_t {
 };
 
 static constexpr double kWheelSlotWidthUs = .5;  ///< Duration per wheel slot
-static const uint32_t MAX_TIMING_WHEEL_PKTS = 1024;
+static uint32_t const MAX_TIMING_WHEEL_PKTS = 1024;
 static constexpr size_t kSessionCredits = MAX_TIMING_WHEEL_PKTS;
 static constexpr double kWheelHorizonUs =
     1000000 * (kSessionCredits * kChunkSize) / timely::TimelyCC::kMinRate;
@@ -293,8 +293,8 @@ class TimingWheel {
   }
 
   double const freq_ghz_;         ///< TSC freq, used only for us/tsc conversion
-  const size_t wslot_width_tsc_;  ///< Time-granularity in TSC units
-  const size_t horizon_tsc_;      ///< Horizon in TSC units
+  size_t const wslot_width_tsc_;  ///< Time-granularity in TSC units
+  size_t const horizon_tsc_;      ///< Horizon in TSC units
   uint8_t* wheel_buffer_;
 
   wheel_bkt_t* wheel_;

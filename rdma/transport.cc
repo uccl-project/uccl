@@ -1,7 +1,7 @@
 #include "transport.h"
 #include "transport_config.h"
 #include "util.h"
-#include "util_list.h"
+#include "util/list.h"
 #include "util_rdma.h"
 #include "util_timer.h"
 #include <infiniband/verbs.h>
@@ -504,7 +504,7 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
     auto info = &meta.install_ctx;
     auto* poll_ctx = ctrl_work.poll_ctx;
     // Send PSN, QPN to remote peer.
-    const int size = sizeof(uint32_t) + sizeof(uint32_t);
+    int const size = sizeof(uint32_t) + sizeof(uint32_t);
     char buf[kTotalQP * size];
     for (auto i = 0; i < kPortEntropy; i++) {
       memcpy(buf + i * size, &rdma_ctx->dp_qps_[i].local_psn, sizeof(uint32_t));
@@ -1296,7 +1296,7 @@ void UcclFlow::post_multi_send(struct ucclRequest** ureqs,
 }
 
 int RDMAEndpoint::uccl_send_async(UcclFlow* flow, struct Mhandle* mhandle,
-                                  void const* data, const size_t size,
+                                  void const* data, size_t const size,
                                   struct ucclRequest* ureq) {
   ureq->type = ReqTx;
   ureq->send.data_len = size;

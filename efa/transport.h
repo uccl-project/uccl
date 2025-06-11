@@ -8,11 +8,11 @@
 #include "transport_config.h"
 #include "transport_header.h"
 #include "util.h"
-#include "util_efa.h"
-#include "util_endian.h"
-#include "util_latency.h"
-#include "util_shared_pool.h"
-#include "util_timer.h"
+#include "util/efa.h"
+#include "util/endian.h"
+#include "util/latency.h"
+#include "util/shared_pool.h"
+#include "util/timer.h"
 #include <glog/logging.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
@@ -125,8 +125,8 @@ struct UcclRequest {
   void* ptrs[32];
   /***********************/
 };
-static const uint32_t kIovStart = offsetof(struct UcclRequest, iov_addrs);
-static const uint32_t kPtrsStart = offsetof(struct UcclRequest, ptrs);
+static uint32_t const kIovStart = offsetof(struct UcclRequest, iov_addrs);
+static uint32_t const kPtrsStart = offsetof(struct UcclRequest, ptrs);
 
 /**
  * @class Channel
@@ -161,7 +161,7 @@ class Channel {
     PollCtx* poll_ctx;
     uint64_t reserved;
   };
-  const static uint32_t kMsgSize = sizeof(Msg);
+  static uint32_t const kMsgSize = sizeof(Msg);
   static_assert(kMsgSize % 4 == 0, "Msg must be 32-bit aligned");
 
   struct CtrlMsg {
@@ -178,7 +178,7 @@ class Channel {
     // Wakeup handler
     PollCtx* poll_ctx;
   };
-  const static uint32_t kCtrlMsgSize = sizeof(CtrlMsg);
+  static uint32_t const kCtrlMsgSize = sizeof(CtrlMsg);
   static_assert(sizeof(kCtrlMsgSize) % 4 == 0,
                 "CtrlMsg must be 32-bit aligned");
 
@@ -258,10 +258,10 @@ class TXTracking {
 
   uint32_t convert_permitted_packets_to_bytes(uint32_t permitted_packets);
 
-  inline const uint32_t num_unacked_msgbufs() const {
+  inline uint32_t const num_unacked_msgbufs() const {
     return num_unacked_msgbufs_;
   }
-  inline const uint32_t num_unsent_msgbufs() const {
+  inline uint32_t const num_unsent_msgbufs() const {
     return num_unsent_msgbufs_;
   }
   inline FrameDesc* get_oldest_unacked_msgbuf() const {
@@ -612,9 +612,9 @@ class UcclFlow {
   void deserialize_and_append_to_txtracking();
 
   void prepare_datapacket(FrameDesc* msgbuf, uint32_t path_id, uint32_t seqno,
-                          const UcclPktHdr::UcclFlags net_flags);
+                          UcclPktHdr::UcclFlags const net_flags);
   FrameDesc* craft_ackpacket(uint32_t path_id, uint32_t seqno, uint32_t ackno,
-                             const UcclPktHdr::UcclFlags net_flags,
+                             UcclPktHdr::UcclFlags const net_flags,
                              uint64_t ts1, uint64_t ts2, uint32_t rwnd);
 
   bool send_pullpacket(PullQuanta const& pullno);
@@ -756,7 +756,7 @@ class UcclEngine {
  public:
   // Slow timer (periodic processing) interval in microseconds.
   // const size_t kSlowTimerIntervalUs = 1000;
-  const size_t kSlowTimerIntervalUs = 2000;
+  size_t const kSlowTimerIntervalUs = 2000;
   UcclEngine() = delete;
   UcclEngine(UcclEngine const&) = delete;
 

@@ -3,9 +3,9 @@
 #include "eqds.h"
 #include "transport_config.h"
 #include "util.h"
-#include "util_latency.h"
+#include "util/latency.h"
+#include "util/shared_pool.h"
 #include "util_rdma.h"
-#include "util_shared_pool.h"
 #include "util_timer.h"
 #include <glog/logging.h>
 #include <infiniband/verbs.h>
@@ -405,7 +405,7 @@ class RDMAEndpoint {
 
   // Post a buffer to engine for sending data asynchronously.
   int uccl_send_async(UcclFlow* flow, struct Mhandle* mhandle, void const* data,
-                      const size_t size, struct ucclRequest* ureq);
+                      size_t const size, struct ucclRequest* ureq);
 
   // Post n buffers to engine for receiving data asynchronously.
   int uccl_recv_async(UcclFlow* flow, struct Mhandle** mhandles, void** data,

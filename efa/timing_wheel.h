@@ -12,7 +12,7 @@
 
 #include "timely.h"
 #include "transport_config.h"
-#include "util_cb.h"
+#include "util/cb.h"
 #include <iomanip>
 #include <queue>
 
@@ -251,8 +251,8 @@ class TimingWheel {
   }
 
   double const freq_ghz_;         ///< TSC freq, used only for us/tsc conversion
-  const size_t wslot_width_tsc_;  ///< Time-granularity in TSC units
-  const size_t horizon_tsc_;      ///< Horizon in TSC units
+  size_t const wslot_width_tsc_;  ///< Time-granularity in TSC units
+  size_t const horizon_tsc_;      ///< Horizon in TSC units
   uint8_t* wheel_buffer_;
 
   wheel_bkt_t* wheel_;
