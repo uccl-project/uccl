@@ -107,9 +107,11 @@ int main(int argc, char** argv) {
     cudaStreamDestroy(stream1);
     cudaCheckErrors("cudaStreamDestroy failed");
   } else {
-    while (true) {
+    int i = 0;
+    while (i < 60) {
       std::this_thread::sleep_for(std::chrono::seconds(1));
       printf("Rank %d is waiting...\n", rank);
+      i++;
     }
   }
   sleep(1);
