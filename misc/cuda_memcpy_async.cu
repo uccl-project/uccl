@@ -71,7 +71,7 @@ int main() {
   int device_count;
   err = cudaGetDeviceCount(&device_count);
   if (err != cudaSuccess || device_count < 2) {
-    std::cout << "Need at least 2 GPUs to measure peer copy overhead. Found " 
+    std::cout << "Need at least 2 GPUs to measure peer copy overhead. Found "
               << device_count << " GPUs." << std::endl;
     return 0;
   }
@@ -81,14 +81,16 @@ int main() {
   cudaSetDevice(0);
   err = cudaMalloc(&buf0, size);
   if (err != cudaSuccess) {
-    std::cerr << "cudaMalloc error on GPU 0: " << cudaGetErrorString(err) << std::endl;
+    std::cerr << "cudaMalloc error on GPU 0: " << cudaGetErrorString(err)
+              << std::endl;
     return 1;
   }
 
-  cudaSetDevice(1); 
+  cudaSetDevice(1);
   err = cudaMalloc(&buf1, size);
   if (err != cudaSuccess) {
-    std::cerr << "cudaMalloc error on GPU 1: " << cudaGetErrorString(err) << std::endl;
+    std::cerr << "cudaMalloc error on GPU 1: " << cudaGetErrorString(err)
+              << std::endl;
     cudaFree(buf0);
     return 1;
   }
@@ -97,7 +99,8 @@ int main() {
   cudaSetDevice(0);
   err = cudaDeviceEnablePeerAccess(1, 0);
   if (err != cudaSuccess && err != cudaErrorPeerAccessAlreadyEnabled) {
-    std::cerr << "Failed to enable peer access 0->1: " << cudaGetErrorString(err) << std::endl;
+    std::cerr << "Failed to enable peer access 0->1: "
+              << cudaGetErrorString(err) << std::endl;
     cudaFree(buf0);
     cudaFree(buf1);
     return 1;
@@ -107,7 +110,8 @@ int main() {
   cudaStream_t peer_stream;
   err = cudaStreamCreate(&peer_stream);
   if (err != cudaSuccess) {
-    std::cerr << "cudaStreamCreate error: " << cudaGetErrorString(err) << std::endl;
+    std::cerr << "cudaStreamCreate error: " << cudaGetErrorString(err)
+              << std::endl;
     cudaFree(buf0);
     cudaFree(buf1);
     return 1;
@@ -124,8 +128,10 @@ int main() {
   }
   end = std::chrono::high_resolution_clock::now();
 
-  total_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
-  double avg_peer_submission_time_ns = static_cast<double>(total_ns) / iterations;
+  total_ns =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+  double avg_peer_submission_time_ns =
+      static_cast<double>(total_ns) / iterations;
   std::cout << "Average async cudaMemcpyPeer submission overhead: "
             << avg_peer_submission_time_ns << " ns" << std::endl;
 
@@ -135,7 +141,6 @@ int main() {
   cudaDeviceDisablePeerAccess(1);
   cudaFree(buf0);
   cudaFree(buf1);
-
 
   return 0;
 }
