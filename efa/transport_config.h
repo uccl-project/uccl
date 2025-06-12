@@ -10,7 +10,6 @@
 // #define EMULATE_RC_ZC
 #define SCATTERED_MEMCPY
 // #define RTT_STATS
-// #define POLLCTX_DEBUG
 #define LAZY_CREATE_ENGINE
 
 enum class SenderCCType {

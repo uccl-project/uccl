@@ -237,10 +237,6 @@ struct alignas(64) PollCtx {
   std::atomic<uint16_t> num_unfinished;  // Number of unfinished requests.
   uint64_t timestamp;                    // Timestamp for request issuing.
   uint32_t engine_idx;                   // Engine index for request issuing.
-#ifdef POLLCTX_DEBUG
-  FlowID flow_id;   // Flow ID for request issuing.
-  uint64_t req_id;  // Tx ID for request issuing.
-#endif
   PollCtx() : fence(false), done(false), num_unfinished(0), timestamp(0){};
   ~PollCtx() { clear(); }
 
