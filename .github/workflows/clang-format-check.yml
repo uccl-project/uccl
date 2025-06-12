@@ -31,7 +31,7 @@ jobs:
 
         DIRECTORIES=("afxdp" "efa" "gpu_driven" "rdma" "misc")
         EXTENSIONS=("cpp" "cxx" "cc" "h" "hpp" "cu" "cuh")
-        EXCLUDE=(""afxdp/lib"")
+        EXCLUDE=("afxdp/lib")
 
         EXCLUDE_ARGS=()
         for EXC in "${EXCLUDE[@]}"; do
