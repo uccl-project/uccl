@@ -1,15 +1,15 @@
 CUDA_PATH ?= /usr/local/cuda
-CXX       ?= g++
+override CXX := /usr/bin/g++
 NVCC      := $(CUDA_PATH)/bin/nvcc
 
 CXXFLAGS  := -O3 -std=c++17 -Wall -pthread
 LDFLAGS   := -lpthread
 
 CXXFLAGS  += -mclwb
-LDFLAGS   += -libverbs
-NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread"
+LDFLAGS   += -libverbs -lnl-3 -lnl-route-3
+NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread" -ccbin /usr/bin/g++
 
-INCLUDES := -Iinclude -I$(CUDA_PATH)/include
+INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include
 
 SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp
 SRC_CU  := src/gpu_kernel.cu src/ring_buffer.cu
