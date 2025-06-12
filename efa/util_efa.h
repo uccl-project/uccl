@@ -2,8 +2,8 @@
 
 #include "transport_config.h"
 #include "transport_header.h"
-#include "util.h"
 #include "util/list.h"
+#include "util/util.h"
 #include "util_buffpool.h"
 #include "util_flock.h"
 #include "util_timer.h"

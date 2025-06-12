@@ -1,5 +1,6 @@
 #pragma once
 
+#include "cuda_runtime.h"
 #include "util/jring.h"
 #include <arpa/inet.h>
 #include <glog/logging.h>
@@ -230,10 +231,16 @@ class UINT_CSN {
 struct alignas(64) PollCtx {
   std::mutex mu;
   std::condition_variable cv;
-  std::atomic<bool> fence;  // Sync rx/tx memcpy visibility.
-  std::atomic<bool> done;   // Sync cv wake-up.
-  uint64_t timestamp;       // Timestamp for request issuing.
-  PollCtx() : fence(false), done(false), timestamp(0){};
+  std::atomic<bool> fence;               // Sync rx/tx memcpy visibility.
+  std::atomic<bool> done;                // Sync cv wake-up.
+  std::atomic<uint16_t> num_unfinished;  // Number of unfinished requests.
+  uint64_t timestamp;                    // Timestamp for request issuing.
+  uint32_t engine_idx;                   // Engine index for request issuing.
+#ifdef POLLCTX_DEBUG
+  FlowID flow_id;   // Flow ID for request issuing.
+  uint64_t req_id;  // Tx ID for request issuing.
+#endif
+  PollCtx() : fence(false), done(false), num_unfinished(0), timestamp(0){};
   ~PollCtx() { clear(); }
 
   inline void clear() {
@@ -241,6 +248,7 @@ struct alignas(64) PollCtx {
     cv.~condition_variable();
     fence = false;
     done = false;
+    num_unfinished = 0;
     timestamp = 0;
   }
 
@@ -864,6 +872,25 @@ inline uint64_t get_monotonic_time_ns() {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return (uint64_t)ts.tv_sec * 1000000000LL + (uint64_t)ts.tv_nsec;
+}
+
+typedef std::chrono::time_point<std::chrono::high_resolution_clock> TimePoint;
+
+inline void checkMemoryLocation(void* ptr) {
+  cudaPointerAttributes attributes;
+  cudaError_t err = cudaPointerGetAttributes(&attributes, ptr);
+
+  if (err == cudaSuccess) {
+    if (attributes.type == cudaMemoryTypeDevice) {
+      LOG(INFO) << "Memory belongs to GPU " << attributes.device << std::endl;
+    } else if (attributes.type == cudaMemoryTypeHost) {
+      LOG(INFO) << "Memory is allocated on the Host (CPU)." << std::endl;
+    } else {
+      LOG(INFO) << "Unknown memory type." << std::endl;
+    }
+  } else {
+    std::cerr << "Error: " << cudaGetErrorString(err) << std::endl;
+  }
 }
 
 }  // namespace uccl

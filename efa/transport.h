@@ -7,12 +7,12 @@
 #include "transport_cc.h"
 #include "transport_config.h"
 #include "transport_header.h"
-#include "util.h"
-#include "util/efa.h"
 #include "util/endian.h"
 #include "util/latency.h"
 #include "util/shared_pool.h"
-#include "util/timer.h"
+#include "util/util.h"
+#include "util_efa.h"
+#include "util_timer.h"
 #include <glog/logging.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
@@ -51,40 +51,6 @@ struct ConnID {
 
 struct Mhandle {
   struct ibv_mr* mr;
-};
-
-struct alignas(64) PollCtx {
-  std::mutex mu;
-  std::condition_variable cv;
-  std::atomic<bool> fence;               // Sync rx/tx memcpy visibility.
-  std::atomic<bool> done;                // Sync cv wake-up.
-  std::atomic<uint16_t> num_unfinished;  // Number of unfinished requests.
-  uint64_t timestamp;                    // Timestamp for request issuing.
-  uint32_t engine_idx;                   // Engine index for request issuing.
-#ifdef POLLCTX_DEBUG
-  FlowID flow_id;   // Flow ID for request issuing.
-  uint64_t req_id;  // Tx ID for request issuing.
-#endif
-  PollCtx() : fence(false), done(false), num_unfinished(0), timestamp(0){};
-  ~PollCtx() { clear(); }
-
-  inline void clear() {
-    mu.~mutex();
-    cv.~condition_variable();
-    fence = false;
-    done = false;
-    num_unfinished = 0;
-    timestamp = 0;
-  }
-
-  inline void write_barrier() {
-    std::atomic_store_explicit(&fence, true, std::memory_order_release);
-  }
-
-  inline void read_barrier() {
-    std::ignore = std::atomic_load_explicit(&fence, std::memory_order_relaxed);
-    std::atomic_thread_fence(std::memory_order_acquire);
-  }
 };
 
 class PollCtxPool : public BuffPool {
@@ -971,45 +937,6 @@ class Endpoint {
 
   friend class UcclFlow;
 };
-
-static inline int receive_message(int sockfd, void* buffer, size_t n_bytes) {
-  int bytes_read = 0;
-  int r;
-  while (bytes_read < n_bytes) {
-    // Make sure we read exactly n_bytes
-    r = read(sockfd, buffer + bytes_read, n_bytes - bytes_read);
-    if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
-      CHECK(false) << "ERROR reading from socket";
-    }
-    if (r > 0) {
-      bytes_read += r;
-    }
-  }
-  return bytes_read;
-}
-
-static inline int send_message(int sockfd, void const* buffer, size_t n_bytes) {
-  int bytes_sent = 0;
-  int r;
-  while (bytes_sent < n_bytes) {
-    // Make sure we write exactly n_bytes
-    r = write(sockfd, buffer + bytes_sent, n_bytes - bytes_sent);
-    if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
-      CHECK(false) << "ERROR writing to socket";
-    }
-    if (r > 0) {
-      bytes_sent += r;
-    }
-  }
-  return bytes_sent;
-}
-
-static inline void net_barrier(int bootstrap_fd) {
-  bool sync = true;
-  int ret = send_message(bootstrap_fd, &sync, sizeof(bool));
-  ret = receive_message(bootstrap_fd, &sync, sizeof(bool));
-  DCHECK(ret == sizeof(bool) && sync);
-}
 
 static inline uint32_t get_gpu_idx_by_engine_idx(uint32_t engine_idx) {
   return engine_idx / kNumEnginesPerVdev;
