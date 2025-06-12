@@ -877,6 +877,7 @@ inline uint64_t get_monotonic_time_ns() {
 
 typedef std::chrono::time_point<std::chrono::high_resolution_clock> TimePoint;
 
+#ifdef USE_EFA
 inline void checkMemoryLocation(void* ptr) {
   cudaPointerAttributes attributes;
   cudaError_t err = cudaPointerGetAttributes(&attributes, ptr);
@@ -893,5 +894,6 @@ inline void checkMemoryLocation(void* ptr) {
     std::cerr << "Error: " << cudaGetErrorString(err) << std::endl;
   }
 }
+#endif
 
 }  // namespace uccl

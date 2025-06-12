@@ -8,8 +8,8 @@
 #pragma once
 
 #include "util/latency.h"
+#include "util/timer.h"
 #include "util/util.h"
-#include "util_timer.h"
 #include <iomanip>
 
 /**

@@ -4,10 +4,10 @@
 #include "transport_config.h"
 #include "util/endian.h"
 #include "util/latency.h"
+#include "util/rss.h"
+#include "util/timer.h"
 #include "util/util.h"
 #include "util_afxdp.h"
-#include "util_rss.h"
-#include "util_timer.h"
 #include <glog/logging.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
