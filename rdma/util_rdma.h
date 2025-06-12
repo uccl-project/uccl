@@ -150,7 +150,7 @@ class RetrChunkBuffPool : public BuffPool {
  public:
   static constexpr uint32_t kRetrChunkSize =
       kChunkSize + sizeof(retr_chunk_hdr);
-  static constexpr uint32_t kNumChunk = 4096;
+  static constexpr uint32_t kNumChunk = kMaxSRQ * 2;
   static_assert((kNumChunk & (kNumChunk - 1)) == 0,
                 "kNumChunk must be power of 2");
 
@@ -541,7 +541,7 @@ struct __attribute__((packed)) UcclPullHdr {
   be16_t pullno;
 };
 
-static const size_t kUcclSackHdrLen = sizeof(UcclSackHdr);
+static size_t const kUcclSackHdrLen = sizeof(UcclSackHdr);
 static_assert(kUcclSackHdrLen == 32, "UcclSackHdr size mismatch");
 static_assert(CtrlChunkBuffPool::kPktSize >= kUcclSackHdrLen,
               "CtrlChunkBuffPool::PktSize must be larger than UcclSackHdr");
