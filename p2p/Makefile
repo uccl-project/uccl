@@ -11,7 +11,7 @@ NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread"
 
 INCLUDES := -Iinclude -I$(CUDA_PATH)/include
 
-SRC_CPP := src/proxy.cpp src/rdma.cpp
+SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp
 SRC_CU  := src/gpu_kernel.cu src/ring_buffer.cu
 SRC_LOCAL  := src/benchmark_local.cu
 SRC_REMOTE := src/benchmark_remote.cu
