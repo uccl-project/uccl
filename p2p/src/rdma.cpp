@@ -507,38 +507,39 @@ bool check_cq_completion() {
 }
 
 void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq) {
-  struct ibv_wc wc;
+  struct ibv_wc wc[kMaxOutstandingSends];
   size_t pool_index = 0;
   static char recv_buf_pool[64 * 128] __attribute__((aligned(64)));
 
-  while (true) {
-    int n = ibv_poll_cq(cq, 1, &wc);
-    if (n > 0) {
-      if (wc.status != IBV_WC_SUCCESS) {
-        fprintf(stderr, "RDMA error: %s\n", ibv_wc_status_str(wc.status));
+  while (g_progress_run.load(std::memory_order_acquire)) {
+    int ne = ibv_poll_cq(cq, kMaxOutstandingSends, wc);
+    if (ne == 0) continue;
+    for (int i = 0; i < ne; ++i) {
+      if (wc[i].status != IBV_WC_SUCCESS) {
+        fprintf(stderr, "RDMA error: %s\n", ibv_wc_status_str(wc[i].status));
         continue;
       }
-      if (wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
-        // uint32_t imm = ntohl(wc.imm_data);
+      if (wc[i].opcode != IBV_WC_RECV_RDMA_WITH_IMM) {
+        continue;
+      }
 
-        pool_index = (pool_index + 1) & 127;  // simple circular pool
-        char* next_buf = recv_buf_pool + pool_index * 64;
+      pool_index = (pool_index + 1) & 127;  // simple circular pool
+      char* next_buf = recv_buf_pool + pool_index * 64;
 
-        struct ibv_sge sge = {
-            .addr = (uintptr_t)next_buf, .length = 64, .lkey = mr->lkey};
+      struct ibv_sge sge = {
+          .addr = (uintptr_t)next_buf, .length = 64, .lkey = mr->lkey};
 
-        struct ibv_recv_wr wr = {
-            .wr_id = wc.wr_id + 0x10000000ULL,  // any unique id
-            .next = nullptr,
-            .sg_list = &sge,
-            .num_sge = 1};
+      struct ibv_recv_wr wr = {
+          .wr_id = wc[i].wr_id + 0x10000000ULL,  // any unique id
+          .next = nullptr,
+          .sg_list = &sge,
+          .num_sge = 1};
 
-        struct ibv_recv_wr* bad = nullptr;
-        int ret = ibv_post_recv(qp, &wr, &bad);
-        if (ret) {
-          fprintf(stderr, "ibv_post_recv failed: %s\n", strerror(ret));
-          std::abort();
-        }
+      struct ibv_recv_wr* bad = nullptr;
+      int ret = ibv_post_recv(qp, &wr, &bad);
+      if (ret) {
+        fprintf(stderr, "ibv_post_recv failed: %s\n", strerror(ret));
+        std::abort();
       }
     }
   }
