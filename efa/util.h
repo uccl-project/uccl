@@ -141,7 +141,9 @@ class Spin {
 
 #define load_acquire(X) __atomic_load_n(X, __ATOMIC_ACQUIRE)
 #define store_release(X, Y) __atomic_store_n(X, Y, __ATOMIC_RELEASE)
-#define ACCESS_ONCE(x) (*(decltype volatile(x)*)&(x))
+// clang-format off
+#define ACCESS_ONCE(x) (*(volatile decltype(x)*)&(x))
+// clang-format on
 #define is_power_of_two(x) ((x) != 0 && !((x) & ((x)-1)))
 
 #define KB(x) (static_cast<size_t>(x) << 10)

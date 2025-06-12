@@ -81,3 +81,4 @@ compile_commands.json
 *.sqlite
 
 **/.DS_Store
+scripts/node_ips/default.txt

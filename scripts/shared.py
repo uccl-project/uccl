@@ -39,13 +39,16 @@ def exec_command_no_wait(sshclient, command):
     return CommandDescriptor(sshclient, pid, stdout, stderr)
 
 
-def get_nodes(path="nodes.txt"):
+def get_nodes(path="node_ips/default.txt"):
     with open(path, "r") as file:
-        return [
+        node_list = [
             line.strip()
             for line in file
             if not line.strip().startswith("#") and line.strip()
         ]
+        if not node_list:
+            raise ValueError(f"No valid nodes found in {path}.")
+    return node_list
 
 
 def parse_num_queues(make_macro, file_path):
