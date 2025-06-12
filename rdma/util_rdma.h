@@ -4,9 +4,9 @@
 #include "eqds.h"
 #include "pcb.h"
 #include "transport_config.h"
-#include "util.h"
 #include "util/endian.h"
 #include "util/list.h"
+#include "util/util.h"
 #include "util_buffpool.h"
 #include <glog/logging.h>
 #include <infiniband/verbs.h>

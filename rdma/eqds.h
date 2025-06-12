@@ -6,10 +6,10 @@
 #pragma once
 
 #include "transport_config.h"
-#include "util.h"
 #include "util/jring.h"
 #include "util/latency.h"
 #include "util/list.h"
+#include "util/util.h"
 #include "util_buffpool.h"
 #include "util_timer.h"
 #include <infiniband/verbs.h>

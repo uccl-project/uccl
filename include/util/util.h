@@ -6,12 +6,15 @@
 #include <linux/in.h>
 #include <net/if.h>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
 #include <random>
 #include <sstream>
 #include <vector>
@@ -28,6 +31,244 @@
 #include <unistd.h>
 
 namespace uccl {
+
+#define UCCL_LOG_PLUGIN VLOG(1) << "[Plugin] "
+#define UCCL_LOG_IO VLOG(2) << "[IO] "
+#define UCCL_LOG_EP VLOG(3) << "[Endpoint] "
+#define UCCL_LOG_RE VLOG(3) << "[Resource] "
+#define UCCL_LOG_ENGINE VLOG(4) << "[Engine] "
+
+#define POISON_64 UINT64_MAX
+#define POISON_32 UINT32_MAX
+
+#define UCCL_INIT_CHECK(x, msg)      \
+  do {                               \
+    if (!(x)) {                      \
+      throw std::runtime_error(msg); \
+    }                                \
+  } while (0)
+
+/// Convert a default bytes/second rate to Gbit/s
+inline double rate_to_gbps(double r) { return (r / (1000 * 1000 * 1000)) * 8; }
+
+/// Convert a Gbit/s rate to the default bytes/second
+inline double gbps_to_rate(double r) { return (r / 8) * (1000 * 1000 * 1000); }
+
+inline int receive_message(int sockfd, void* buffer, size_t n_bytes) {
+  int bytes_read = 0;
+  int r;
+  while (bytes_read < n_bytes) {
+    // Make sure we read exactly n_bytes
+    r = read(sockfd, buffer + bytes_read, n_bytes - bytes_read);
+    if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
+      CHECK(false) << "ERROR reading from socket";
+    }
+    if (r > 0) {
+      bytes_read += r;
+    }
+  }
+  return bytes_read;
+}
+
+inline int send_message(int sockfd, void const* buffer, size_t n_bytes) {
+  int bytes_sent = 0;
+  int r;
+  while (bytes_sent < n_bytes) {
+    // Make sure we write exactly n_bytes
+    r = write(sockfd, buffer + bytes_sent, n_bytes - bytes_sent);
+    if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
+      CHECK(false) << "ERROR writing to socket";
+    }
+    if (r > 0) {
+      bytes_sent += r;
+    }
+  }
+  return bytes_sent;
+}
+
+inline void send_ready(int bootstrap_fd) {
+  bool ready = true;
+  int ret = send_message(bootstrap_fd, &ready, sizeof(bool));
+  DCHECK(ret == sizeof(bool)) << ret;
+}
+
+inline void send_abort(int bootstrap_fd) {
+  bool ready = false;
+  int ret = send_message(bootstrap_fd, &ready, sizeof(bool));
+  DCHECK(ret == sizeof(bool)) << ret;
+}
+
+inline void wait_ready(int bootstrap_fd) {
+  bool ready;
+  int ret = receive_message(bootstrap_fd, &ready, sizeof(bool));
+  DCHECK(ret == sizeof(bool) && ready == true) << ret << ", " << ready;
+}
+
+inline bool wait_sync(int bootstrap_fd) {
+  bool ready;
+  int ret = receive_message(bootstrap_fd, &ready, sizeof(bool));
+  DCHECK(ret == sizeof(bool)) << ret;
+  return ready;
+}
+
+inline void net_barrier(int bootstrap_fd) {
+  bool sync = true;
+  int ret = send_message(bootstrap_fd, &sync, sizeof(bool));
+  ret = receive_message(bootstrap_fd, &sync, sizeof(bool));
+  DCHECK(ret == sizeof(bool) && sync) << ret << ", " << sync;
+}
+
+inline void create_listen_socket(int* listen_fd, uint16_t listen_port) {
+  *listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+  DCHECK(*listen_fd >= 0) << "ERROR: opening socket";
+  int flag = 1;
+  DCHECK(setsockopt(*listen_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) >=
+         0)
+      << "ERROR: setsockopt SO_REUSEADDR fails";
+  struct sockaddr_in serv_addr;
+  bzero((char*)&serv_addr, sizeof(serv_addr));
+  serv_addr.sin_family = AF_INET;
+  serv_addr.sin_addr.s_addr = INADDR_ANY;
+  serv_addr.sin_port = htons(listen_port);
+  DCHECK(bind(*listen_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) >= 0)
+      << "ERROR: binding";
+
+  DCHECK(!listen(*listen_fd, 128)) << "ERROR: listen";
+  VLOG(5) << "[Endpoint] server ready, listening on port " << listen_port;
+}
+
+#define UINT_CSN_BIT 8
+#define UINT_CSN_MASK ((1 << UINT_CSN_BIT) - 1)
+
+constexpr bool seqno_lt(uint8_t a, uint8_t b) {
+  return static_cast<int8_t>(a - b) < 0;
+}
+constexpr bool seqno_le(uint8_t a, uint8_t b) {
+  return static_cast<int8_t>(a - b) <= 0;
+}
+constexpr bool seqno_eq(uint8_t a, uint8_t b) {
+  return static_cast<int8_t>(a - b) == 0;
+}
+constexpr bool seqno_ge(uint8_t a, uint8_t b) {
+  return static_cast<int8_t>(a - b) >= 0;
+}
+constexpr bool seqno_gt(uint8_t a, uint8_t b) {
+  return static_cast<int8_t>(a - b) > 0;
+}
+
+/**
+ * @brief An X-bit (8/16) unsigned integer used for Chunk Sequence Number (CSN).
+ */
+class UINT_CSN {
+ public:
+  UINT_CSN() : value_(0) {}
+  UINT_CSN(uint32_t value) : value_(value & UINT_CSN_MASK) {}
+  UINT_CSN(const UINT_CSN& other) : value_(other.value_) {}
+
+  static inline bool uintcsn_seqno_le(UINT_CSN a, UINT_CSN b) {
+    return seqno_le(a.value_, b.value_);
+  }
+
+  static inline bool uintcsn_seqno_lt(UINT_CSN a, UINT_CSN b) {
+    return seqno_lt(a.value_, b.value_);
+  }
+
+  static inline bool uintcsn_seqno_eq(UINT_CSN a, UINT_CSN b) {
+    return seqno_eq(a.value_, b.value_);
+  }
+
+  static inline bool uintcsn_seqno_ge(UINT_CSN a, UINT_CSN b) {
+    return seqno_ge(a.value_, b.value_);
+  }
+
+  static inline bool uintcsn_seqno_gt(UINT_CSN a, UINT_CSN b) {
+    return seqno_gt(a.value_, b.value_);
+  }
+
+  UINT_CSN& operator=(const UINT_CSN& other) {
+    value_ = other.value_;
+    return *this;
+  }
+  bool operator==(const UINT_CSN& other) const {
+    return value_ == other.value_;
+  }
+  UINT_CSN operator+(const UINT_CSN& other) const {
+    return UINT_CSN(value_ + other.value_);
+  }
+  UINT_CSN operator-(const UINT_CSN& other) const {
+    return UINT_CSN(value_ - other.value_);
+  }
+  UINT_CSN& operator+=(const UINT_CSN& other) {
+    value_ += other.value_;
+    value_ &= UINT_CSN_MASK;
+    return *this;
+  }
+  UINT_CSN& operator-=(const UINT_CSN& other) {
+    value_ -= other.value_;
+    value_ &= UINT_CSN_MASK;
+    return *this;
+  }
+  bool operator<(const UINT_CSN& other) const {
+    return seqno_lt(value_, other.value_);
+  }
+  bool operator<=(const UINT_CSN& other) const {
+    return seqno_le(value_, other.value_);
+  }
+  bool operator>(const UINT_CSN& other) const {
+    return seqno_gt(value_, other.value_);
+  }
+  bool operator>=(const UINT_CSN& other) const {
+    return seqno_ge(value_, other.value_);
+  }
+
+  inline uint32_t to_uint32() const { return value_; }
+
+ private:
+  uint8_t value_;
+};
+
+struct alignas(64) PollCtx {
+  std::mutex mu;
+  std::condition_variable cv;
+  std::atomic<bool> fence;  // Sync rx/tx memcpy visibility.
+  std::atomic<bool> done;   // Sync cv wake-up.
+  uint64_t timestamp;       // Timestamp for request issuing.
+  PollCtx() : fence(false), done(false), timestamp(0){};
+  ~PollCtx() { clear(); }
+
+  inline void clear() {
+    mu.~mutex();
+    cv.~condition_variable();
+    fence = false;
+    done = false;
+    timestamp = 0;
+  }
+
+  inline void write_barrier() {
+    std::atomic_store_explicit(&fence, true, std::memory_order_release);
+  }
+
+  inline void read_barrier() {
+    std::ignore = std::atomic_load_explicit(&fence, std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_acquire);
+  }
+};
+
+inline void uccl_wakeup(PollCtx* ctx) {
+  std::lock_guard<std::mutex> lock(ctx->mu);
+  ctx->done = true;
+  ctx->cv.notify_one();
+}
+
+template <class T>
+static inline T Percentile(std::vector<T>& vectorIn, double percent) {
+  if (vectorIn.size() == 0) return (T)0;
+  auto nth = vectorIn.begin() + (percent * vectorIn.size()) / 100;
+  std::nth_element(vectorIn.begin(), nth, vectorIn.end());
+  return *nth;
+}
+
+#define DIVUP(x, y) (((x) + (y)-1) / (y))
 
 template <class T>
 static inline T Percentile(std::vector<T> const& vectorIn, double percent) {
@@ -183,7 +424,7 @@ static_assert(hardware_destructive_interference_size == 64);
 
 static inline jring_t* create_ring(size_t element_size, size_t element_count) {
   size_t ring_sz = jring_get_buf_ring_size(element_size, element_count);
-  VLOG(3) << "Ring size: " << ring_sz << " bytes, msg size: " << element_size
+  VLOG(5) << "Ring size: " << ring_sz << " bytes, msg size: " << element_size
           << " bytes, element count: " << element_count;
   jring_t* ring = CHECK_NOTNULL(reinterpret_cast<jring_t*>(
       aligned_alloc(hardware_constructive_interference_size, ring_sz)));
@@ -366,7 +607,7 @@ static inline int get_dev_index(char const* dev_name) {
         iap->ifa_addr->sa_family == AF_INET) {
       struct sockaddr_in* sa = (struct sockaddr_in*)iap->ifa_addr;
       if (strcmp(dev_name, iap->ifa_name) == 0) {
-        LOG(INFO) << "found network interface: " << iap->ifa_name;
+        VLOG(5) << "found network interface: " << iap->ifa_name;
         ret = if_nametoindex(iap->ifa_name);
         CHECK(ret) << "error: if_nametoindex failed";
         break;
@@ -397,14 +638,14 @@ static inline std::string get_dev_ip(char const* dev_name) {
       tmpAddrPtr = &((struct sockaddr_in*)ifa->ifa_addr)->sin_addr;
       char addressBuffer[INET_ADDRSTRLEN];
       inet_ntop(AF_INET, tmpAddrPtr, addressBuffer, INET_ADDRSTRLEN);
-      VLOG(3) << Format("%s IP Address %s\n", ifa->ifa_name, addressBuffer);
+      VLOG(5) << Format("%s IP Address %s\n", ifa->ifa_name, addressBuffer);
       return std::string(addressBuffer);
     } else if (ifa->ifa_addr->sa_family == AF_INET6) {  // check it is IP6
       // is a valid IP6 Address
       tmpAddrPtr = &((struct sockaddr_in6*)ifa->ifa_addr)->sin6_addr;
       char addressBuffer[INET6_ADDRSTRLEN];
       inet_ntop(AF_INET6, tmpAddrPtr, addressBuffer, INET6_ADDRSTRLEN);
-      VLOG(3) << Format("%s IP Address %s\n", ifa->ifa_name, addressBuffer);
+      VLOG(5) << Format("%s IP Address %s\n", ifa->ifa_name, addressBuffer);
       return std::string(addressBuffer);
     }
   }

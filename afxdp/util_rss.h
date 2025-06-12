@@ -1,6 +1,6 @@
 #pragma once
 
-#include "util.h"
+#include "util/util.h"
 #include <linux/ethtool.h>
 #include <linux/sockios.h>
 #include <net/if.h>

@@ -2,7 +2,7 @@
  * lrpc.cc - shared memory communication channels
  */
 
-#include "util_lrpc.h"
+#include "util/lrpc.h"
 #include <errno.h>
 
 int __lrpc_send(struct lrpc_chan_out* chan, lrpc_msg* msg) {
