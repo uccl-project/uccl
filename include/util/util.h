@@ -1,6 +1,7 @@
 #pragma once
-
+#ifdef USE_EFA
 #include "cuda_runtime.h"
+#endif
 #include "util/jring.h"
 #include <arpa/inet.h>
 #include <glog/logging.h>
