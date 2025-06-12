@@ -87,10 +87,12 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs) {
   while (complete < kIterations) {
     while (complete >= ld_volatile(&rb->tail)) { /* spin */
     }
-    unsigned long long t1 = clock64();
-    cycle_accum_smem += (t1 - start_cycle_smem[complete & kQueueMask]);
-    ++op_count_smem;
-    ++complete;
+    if (complete >= kWarmupOps) {
+      unsigned long long t1 = clock64();
+      cycle_accum_smem += (t1 - start_cycle_smem[complete & kQueueMask]);
+      ++op_count_smem;
+      ++complete;
+    }
   }
 
   rb->cycle_accum = cycle_accum_smem;

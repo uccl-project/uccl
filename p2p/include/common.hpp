@@ -36,6 +36,7 @@
   } while (0)
 
 #define MEASURE_PER_OP_LATENCY
+#define ASSUME_WR_IN_ORDER
 #define kQueueSize 32
 #define kQueueMask (kQueueSize - 1)
 #define kBatchSize 4
@@ -47,6 +48,7 @@
 #define kSignalledEvery 1
 #define kNumPollingThreads 0  // Rely on CPU proxy to poll.
 #define kPollingThreadStartPort kNumThBlocks * 2
+#define kWarmupOps 10000
 // #define SEPARATE_POLLING
 // Command structure for each transfer
 struct TransferCmd {

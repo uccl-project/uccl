@@ -107,7 +107,7 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
                 static_cast<unsigned long long>(cmd));
         exit(1);
       }
-      wrs_to_post.push_back(cmd);
+      wrs_to_post.push_back(i);
     }
     seen = cur_head;
 
@@ -126,20 +126,31 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
           std::chrono::duration_cast<std::chrono::microseconds>(end - start);
     }
 
+    // This assumes we don't have EFA NICs.
+#ifdef ASSUME_WR_IN_ORDER
+    {
+      std::lock_guard<std::mutex> lock(finished_wrs_mutex);
+      for (auto i : finished_wrs) {
+        rb->buf[i & kQueueMask].cmd = 0;
+      }
+      my_tail += finished_wrs.size();
+      finished_wrs.clear();
+    }
+#else
     for (size_t i = my_tail; i < cur_head; ++i) {
-      uint64_t cmd = rb->buf[i & kQueueMask].cmd;
+      // uint64_t cmd = rb->buf[i & kQueueMask].cmd;
       {
         std::lock_guard<std::mutex> lock(finished_wrs_mutex);
-        if (finished_wrs.count(cmd)) {
+        if (finished_wrs.count(i)) {
           rb->buf[i & kQueueMask].cmd = 0;
           my_tail++;
-          finished_wrs.erase(cmd);
+          finished_wrs.erase(i);
         } else {
           break;
         }
       }
     }
-
+#endif
     rb->tail = my_tail;
     _mm_clwb(&(rb->tail));
     _mm_sfence();
