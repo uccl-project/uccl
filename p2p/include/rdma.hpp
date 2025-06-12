@@ -46,6 +46,7 @@ void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
                              std::mutex& finished_wrs_mutex);
 
 bool GdrSupportInitOnce();
+void post_receive_buffer_for_imm();
 
 void exchange_connection_info(int rank, char const* peer_ip, int tid,
                               RDMAConnectionInfo* local,
@@ -59,6 +60,8 @@ void modify_qp_to_init();
 bool check_cq_completion();
 void poll_completions(ibv_cq* cq, std::unordered_set<uint64_t>& finished_wrs,
                       std::mutex& finished_wrs_mutex);
+void poll_completions_plain(ibv_cq* cq);
+
 void global_rdma_init(void* gpu_buf, size_t bytes, RDMAConnectionInfo* local,
                       int rank);
 void create_per_thread_qp(void* gpu_buffer, size_t size,
@@ -67,4 +70,5 @@ ibv_cq* create_per_thread_cq();
 void per_thread_polling(int thread_idx, struct ibv_cq* per_thread_cq,
                         std::unordered_set<uint64_t>* per_thread_finished_wrs,
                         std::mutex* per_thread_finished_wrs_mutex);
+void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq);
 #endif  // RDMA_HPP

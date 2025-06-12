@@ -18,6 +18,43 @@ inline uint64_t load_volatile_u64(uint64_t volatile* addr) {
   return val;
 }
 
+void remote_cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
+                      size_t total_size, int rank, char const* peer_ip) {
+  printf("Remote CPU thread for block %d started\n", block_idx);
+
+  pin_thread_to_cpu(block_idx);
+
+  ibv_cq* cq = create_per_thread_cq();
+  RDMAConnectionInfo local_info, remote_info;
+  create_per_thread_qp(gpu_buffer, total_size, &local_info, rank, cq);
+
+  modify_qp_to_init();
+  printf("Local RDMA info: addr=0x%lx, rkey=0x%x\n", local_info.addr,
+         local_info.rkey);
+  exchange_connection_info(rank, peer_ip, block_idx, &local_info, &remote_info);
+  printf("Exchanged remote_addr: 0x%lx, remote_rkey: 0x%x\n", remote_info.addr,
+         remote_info.rkey);
+
+  modify_qp_to_rtr(&remote_info);
+  modify_qp_to_rts(&local_info);
+
+  remote_addr = remote_info.addr;
+  remote_rkey = remote_info.rkey;
+
+#ifdef REMOTE_NVLINK_FORWARDING
+  post_receive_buffer_for_imm();
+#endif
+  // Busy Loop
+  while (g_progress_run.load()) {
+#ifdef REMOTE_NVLINK_FORWARDING
+    cpu_proxy_poll_write_with_immediate(block_idx, cq);
+#else
+    poll_completions_plain(cq);
+#endif
+    // Force loading rb->head from DRAM.
+  }
+}
+
 void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
                size_t total_size, int rank, char const* peer_ip) {
   printf("CPU thread for block %d started\n", block_idx);

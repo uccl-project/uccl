@@ -36,6 +36,7 @@
   } while (0)
 
 #define MEASURE_PER_OP_LATENCY
+#define REMOTE_NVLINK_FORWARDING
 #define ASSUME_WR_IN_ORDER
 #define kQueueSize 32
 #define kQueueMask (kQueueSize - 1)

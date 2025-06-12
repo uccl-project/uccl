@@ -50,8 +50,12 @@ int main(int argc, char** argv) {
   global_rdma_init(gpu_buffer, total_size, &local_info, rank);
   std::vector<std::thread> cpu_threads;
   for (int i = 0; i < kNumThBlocks; ++i) {
-    cpu_threads.emplace_back(cpu_proxy, &rbs[i], i, gpu_buffer, kObjectSize,
-                             rank, peer_ip);
+    if (rank == 0)
+      cpu_threads.emplace_back(cpu_proxy, &rbs[i], i, gpu_buffer, kObjectSize,
+                               rank, peer_ip);
+    else
+      cpu_threads.emplace_back(remote_cpu_proxy, &rbs[i], i, gpu_buffer,
+                               kObjectSize, rank, peer_ip);
   }
   if (rank == 0) {
     printf("Waiting for 2 seconds before issuing commands...\n");
@@ -113,6 +117,8 @@ int main(int argc, char** argv) {
       printf("Rank %d is waiting...\n", rank);
       i++;
     }
+    g_progress_run.store(false);
+    exit(0);
   }
   sleep(1);
 }

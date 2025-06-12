@@ -14,7 +14,4 @@ struct alignas(128) RingBuffer {
   uint64_t op_count;
 };
 
-// Allocates a host-pinned ring buffer and returns device-visible pointer
-RingBuffer* create_ring_buffer(CUstream_st* stream = nullptr);
-
 #endif  // RING_BUFFER_CUH

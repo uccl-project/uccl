@@ -292,6 +292,24 @@ void modify_qp_to_rts(RDMAConnectionInfo* local_info) {
   printf("QP modified to RTS state\n");
 }
 
+void post_receive_buffer_for_imm() {
+  static char recv_buf[64];
+
+  struct ibv_sge sge = {.addr = (uintptr_t)recv_buf,
+                        .length = sizeof(recv_buf),
+                        .lkey = mr->lkey};
+
+  struct ibv_recv_wr wr = {
+      .wr_id = 123, .next = nullptr, .sg_list = &sge, .num_sge = 1};
+
+  struct ibv_recv_wr* bad_wr = nullptr;
+  int ret = ibv_post_recv(qp, &wr, &bad_wr);
+  if (ret) {
+    fprintf(stderr, "Failed to post RECV: %s\n", strerror(ret));
+    exit(1);
+  }
+}
+
 void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
                              std::vector<uint64_t> wrs_to_post, ibv_cq* cq,
                              std::unordered_set<uint64_t>& finished_wrs,
@@ -315,7 +333,12 @@ void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
     sges[i].length = (uint32_t)bytes;
     sges[i].lkey = mr->lkey;
 
+#ifdef REMOTE_NVLINK_FORWARDING
+    wrs[i].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+    wrs[i].imm_data = 0;
+#else
     wrs[i].opcode = IBV_WR_RDMA_WRITE;
+#endif
     wrs[i].sg_list = &sges[i];
     wrs[i].num_sge = 1;
     wrs[i].wr.rdma.remote_addr = remote_addr + offset * bytes;
@@ -445,6 +468,20 @@ void poll_completions(ibv_cq* cq, std::unordered_set<uint64_t>& finished_wrs,
   g_completed.fetch_add(ne, std::memory_order_relaxed);
 }
 
+void poll_completions_plain(ibv_cq* cq) {
+  struct ibv_wc wc[kMaxOutstandingSends];  // batch poll
+  int ne = ibv_poll_cq(cq, kMaxOutstandingSends, wc);
+  if (ne == 0) return;
+  for (int i = 0; i < ne; ++i) {
+    if (wc[i].status != IBV_WC_SUCCESS) {
+      fprintf(stderr, "CQE error wr_id=%llu status=%s\n",
+              (unsigned long long)wc[i].wr_id, ibv_wc_status_str(wc[i].status));
+      std::abort();
+    }
+  }
+  g_completed.fetch_add(ne, std::memory_order_relaxed);
+}
+
 void per_thread_polling(int thread_idx, struct ibv_cq* per_thread_cq,
                         std::unordered_set<uint64_t>* per_thread_finished_wrs,
                         std::mutex* per_thread_finished_wrs_mutex) {
@@ -467,4 +504,42 @@ bool check_cq_completion() {
          completed, posted, kIterations * kNumThBlocks);
   return completed * kSignalledEvery == posted &&
          kIterations * kNumThBlocks == completed;
+}
+
+void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq) {
+  struct ibv_wc wc;
+  size_t pool_index = 0;
+  static char recv_buf_pool[64 * 128] __attribute__((aligned(64)));
+
+  while (true) {
+    int n = ibv_poll_cq(cq, 1, &wc);
+    if (n > 0) {
+      if (wc.status != IBV_WC_SUCCESS) {
+        fprintf(stderr, "RDMA error: %s\n", ibv_wc_status_str(wc.status));
+        continue;
+      }
+      if (wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
+        // uint32_t imm = ntohl(wc.imm_data);
+
+        pool_index = (pool_index + 1) & 127;  // simple circular pool
+        char* next_buf = recv_buf_pool + pool_index * 64;
+
+        struct ibv_sge sge = {
+            .addr = (uintptr_t)next_buf, .length = 64, .lkey = mr->lkey};
+
+        struct ibv_recv_wr wr = {
+            .wr_id = wc.wr_id + 0x10000000ULL,  // any unique id
+            .next = nullptr,
+            .sg_list = &sge,
+            .num_sge = 1};
+
+        struct ibv_recv_wr* bad = nullptr;
+        int ret = ibv_post_recv(qp, &wr, &bad);
+        if (ret) {
+          fprintf(stderr, "ibv_post_recv failed: %s\n", strerror(ret));
+          std::abort();
+        }
+      }
+    }
+  }
 }

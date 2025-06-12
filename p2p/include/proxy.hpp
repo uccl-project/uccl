@@ -15,5 +15,7 @@ struct ProxyCtx {
 void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
                size_t total_size, int rank, char const* peer_ip);
 void cpu_proxy_local(RingBuffer* rb, int block_idx);
+void remote_cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
+                      size_t total_size, int rank, char const* peer_ip);
 
 #endif  // PROXY_HPP
