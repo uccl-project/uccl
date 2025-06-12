@@ -6,8 +6,8 @@
 #pragma once
 
 #include "glog/logging.h"
-#include "util/timer.h"
 #include "transport_config.h"
+#include "util/timer.h"
 #include <chrono>
 #include <unordered_map>
 #include <stdint.h>
