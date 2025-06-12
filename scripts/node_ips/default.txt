@@ -1,0 +1,7 @@
+# Add your node IPs here, one per line.
+# Example:
+#
+# 172.31.46.241
+# 172.31.39.66
+# 172.31.45.114
+# 172.31.47.215
