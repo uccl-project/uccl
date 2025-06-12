@@ -1,5 +1,5 @@
 #pragma once
-#ifdef USE_EFA
+#ifdef USE_CUDA
 #include "cuda_runtime.h"
 #endif
 #include "util/jring.h"
@@ -873,7 +873,7 @@ inline uint64_t get_monotonic_time_ns() {
 
 typedef std::chrono::time_point<std::chrono::high_resolution_clock> TimePoint;
 
-#ifdef USE_EFA
+#ifdef USE_CUDA
 inline void checkMemoryLocation(void* ptr) {
   cudaPointerAttributes attributes;
   cudaError_t err = cudaPointerGetAttributes(&attributes, ptr);

@@ -7,7 +7,7 @@ CUDA_HOME:=/usr/local/cuda
 INC = -I./ -I$(CUDA_HOME)/include -I$(ABS_REPO_ROOT)/include
 LIBS = -lglog -lgflags -lgtest -lz -lelf -libverbs  -L /usr/local/cuda/lib64 -lcudart
 LIBS_SHARED = -lglog -lgflags -lgtest -lz -lelf -libverbs
-override CXXFLAGS += -O3 -g -std=c++17 -Wno-pointer-arith -Wno-interference-size -fPIC
+override CXXFLAGS += -O3 -g -std=c++17 -Wno-pointer-arith -Wno-interference-size -fPIC -DUSE_CUDA
 DEPS = *.h
 PLUGIN_SO = libnccl-net-uccl.so
 NCCL_INC:= -I$(NCCL_HOME)/build/include -I$(NCCL_HOME)/src/include -I$(CUDA_HOME)/include
