@@ -49,6 +49,8 @@ static constexpr uint32_t MAX_CHUNK_ROCE_IPV6_4096_HDR_OVERHEAD =
 static constexpr uint32_t MAX_CHUNK_IB_4096_HDR_OVERHEAD =
     ((kChunkSize + 4096) / 4096) * IB_HDR_OVERHEAD;
 
+static int num_devices = 0;
+
 /**
  * @brief Buffer pool for work request extension.
  */

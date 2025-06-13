@@ -326,48 +326,48 @@ class RDMAEndpoint {
 
   int num_engines_per_dev_;
   // Per-engine communication channel
-  Channel* channel_vec_[NUM_ENGINES * NUM_DEVICES];
+  std::vector<Channel*> channel_vec_; 
   std::vector<std::unique_ptr<UcclRDMAEngine>> engine_vec_;
   std::unordered_map<int, std::unique_ptr<UcclRDMAEngine>>
       engine_id_to_engine_map_;
   std::vector<std::unique_ptr<std::thread>> engine_th_vec_;
 
   // Number of outstanding messages for each engine.
-  std::array<std::atomic<uint32_t>, NUM_ENGINES* NUM_DEVICES> engine_load_vec_ =
-      {};
+  std::vector<std::unique_ptr<std::atomic<uint32_t>>> engine_load_vec_;
 
   // Receiver-driven congestion control.
-  eqds::EQDS* eqds_[NUM_DEVICES] = {};
+  std::vector<eqds::EQDS*> eqds_;
 
   SharedPool<PollCtx*, true>* ctx_pool_;
   uint8_t* ctx_pool_buf_;
 
-  int test_listen_fds_[NUM_DEVICES];
+  std::vector<int> test_listen_fds_;
 
   std::mutex fd_vec_mu_;
   // Mapping from unique (within this engine) flow_id to the boostrap fd.
   std::vector<int> fd_vec_;
 
   // Peer map for connecting/accepting
-  std::unordered_map<UcclPeer, PeerInfo, UcclPeerHash> peer_map_[NUM_DEVICES];
-  std::mutex peer_map_mu_[NUM_DEVICES];
+  std::vector<std::unordered_map<UcclPeer, PeerInfo, UcclPeerHash>> peer_map_;
+  std::vector<std::unique_ptr<std::mutex>> peer_map_mu_;
 
-  std::unordered_map<UcclPeer, PeerInfo, UcclPeerHash>
-      peer_same_dev_map_[NUM_DEVICES][2];
-  std::mutex peer_same_dev_map_mu_[NUM_DEVICES][2];
+  std::vector<std::unordered_map<UcclPeer, PeerInfo, UcclPeerHash>> peer_same_dev_map_[2];
+  std::vector<std::unique_ptr<std::mutex>> peer_same_dev_map_mu_[2];
+    
+  std::vector<std::unique_ptr<std::atomic<PeerID>>> next_peer_id_;
 
-  std::atomic<PeerID> next_peer_id_[NUM_DEVICES] = {};
+  std::vector<std::vector<Spin>> flow_id_spin_;
+  std::vector<std::vector<FlowID>> next_flow_id_;
 
-  Spin flow_id_spin_[NUM_DEVICES][MAX_PEER];
-  FlowID next_flow_id_[NUM_DEVICES][MAX_PEER] = {};
-
-  std::vector<UcclFlow*> active_flows_vec_[NUM_DEVICES];
-  Spin active_flows_spin_[NUM_DEVICES];
+  std::vector<std::vector<UcclFlow*>> active_flows_vec_;
+  std::vector<Spin> active_flows_spin_;
 
  public:
   RDMAEndpoint(int num_engines_per_dev);
 
   ~RDMAEndpoint();
+
+  void initialize_vec(int total_num_engines);
 
   bool initialize_engine_by_dev(int dev, std::atomic<uint16_t>& port);
 
@@ -441,7 +441,7 @@ class RDMAEndpoint {
   }
 
   inline PeerID alloc_peer_id(int dev) {
-    return next_peer_id_[dev].fetch_add(1);
+    return next_peer_id_[dev]->fetch_add(1);
   }
 
  private:
@@ -484,11 +484,11 @@ class RDMAEndpoint {
                                UcclFlow* flow, bool is_send);
 
   inline void inc_load_on_engine(int engine_id) {
-    std::atomic_fetch_add(&engine_load_vec_[engine_id], 1);
+    engine_load_vec_[engine_id]->fetch_add(1);
   }
 
   inline void dec_load_on_engine(int engine_id) {
-    std::atomic_fetch_sub(&engine_load_vec_[engine_id], 1);
+    engine_load_vec_[engine_id]->fetch_sub(1);
   }
 
   // Find a least loaded engine and update the load for the given device.
@@ -684,7 +684,7 @@ class UcclFlow {
                       "Failed to modify GPU flush QP to RTS");
     }
     // Avoid all flows using the same initial engine offset.
-    static std::atomic<uint32_t> off[NUM_DEVICES] = {};
+    static std::atomic<uint32_t> off[num_devices] = {};
     next_engine_offset_ = off[dev].fetch_add(1) % NUM_ENGINES;
   }
 

@@ -270,6 +270,131 @@ void UcclRDMAEngine::handle_rx_work(void) {
   }
 }
 
+inline void RDMAEndpoint::initialize_vec(int total_num_engines) {
+// Initialize all dynamic arrays
+  channel_vec_.resize(total_num_engines);
+  engine_vec_.resize(total_num_engines);
+  engine_load_vec_.resize(total_num_engines);
+  for (int i = 0; i < total_num_engines; i++) {
+    engine_load_vec_[i] = std::make_unique<std::atomic<uint32_t>>(0);
+  }
+  eqds_.resize(num_devices_);
+  test_listen_fds_.resize(num_devices_);
+        
+  peer_map_.resize(num_devices_);
+  peer_map_mu_.resize(num_devices_);
+        
+  for (int i = 0; i < 2; i++) {
+    peer_same_dev_map_[i].resize(num_devices_);
+    peer_same_dev_map_mu_[i].resize(num_devices_);
+  }
+        
+  next_peer_id_.resize(num_devices_);
+        
+  flow_id_spin_.resize(num_devices_);
+  next_flow_id_.resize(num_devices_);
+  for (int i = 0; i < num_devices_; i++) {
+    flow_id_spin_[i].resize(MAX_PEER);
+    next_flow_id_[i].resize(MAX_PEER);
+  }
+        
+  active_flows_vec_.resize(num_devices_);
+  active_flows_spin_.resize(num_devices_);
+        
+  // Initialize channels
+  for (int i = 0; i < total_num_engines; i++) {
+    channel_vec_[i] = new Channel();
+  }
+        
+  printf("Initialized %d channels for %d devices with %d engines per device\n", 
+    total_num_engines, num_devices_, num_engines_per_dev_);  
+}
+
+
+void RDMAEndpoint::cleanup_resources() {
+  // Clean up channels
+  for (auto* channel : channel_vec_) {
+    if (channel) {
+      delete channel;
+    }
+  }
+  channel_vec_.clear();
+
+  // Clean up engine load vectors
+  engine_load_vec_.clear();
+
+  // Clean up EQDS
+  for (auto* eqds_ptr : eqds_) {
+    if (eqds_ptr) {
+      delete eqds_ptr;
+    }
+  }
+  eqds_.clear();
+
+  // Clean up test listen fds
+  for (int fd : test_listen_fds_) {
+    if (fd >= 0) {
+      close(fd);
+    }
+  }
+  test_listen_fds_.clear();
+
+  // Clean up peer maps and mutexes
+  peer_map_.clear();
+  peer_map_mu_.clear();
+
+  // Clean up same device maps and mutexes
+  for (int i = 0; i < 2; i++) {
+    peer_same_dev_map_[i].clear();
+    peer_same_dev_map_mu_[i].clear();
+  }
+
+  // Clean up peer IDs
+  next_peer_id_.clear();
+
+  // Clean up flow ID arrays
+  for (auto& spins : flow_id_spin_) {
+    spins.clear();
+  }
+  flow_id_spin_.clear();
+
+  for (auto& flow_ids : next_flow_id_) {
+    flow_ids.clear();
+  }
+  next_flow_id_.clear();
+
+  // Clean up active flows
+  for (auto& flows : active_flows_vec_) {
+    for (auto* flow : flows) {
+      if (flow) {
+        delete flow;
+      }
+    }
+    flows.clear();
+  }
+  active_flows_vec_.clear();
+
+  // Clean up active flows spin
+  active_flows_spin_.clear();
+
+  // Clean up engine vectors
+  engine_vec_.clear();
+  engine_id_to_engine_map_.clear();
+
+  // Clean up context pool
+  if (ctx_pool_) {
+    delete ctx_pool_;
+    ctx_pool_ = nullptr;
+  }
+  if (ctx_pool_buf_) {
+    free(ctx_pool_buf_);
+    ctx_pool_buf_ = nullptr;
+  }
+
+  // Clean up static atomic array in UcclFlow
+  UcclFlow::cleanup();
+}
+
 bool RDMAEndpoint::initialize_engine_by_dev(int dev,
                                             std::atomic<uint16_t>& port) {
   static std::once_flag flag_once;
@@ -594,6 +719,7 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
     ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());
   }
   int total_num_engines = num_devices_ * num_engines_per_dev;
+  initialize_vec(total_num_engines);
 
   for (int i = 0; i < total_num_engines; i++) channel_vec_[i] = new Channel();
 
@@ -616,11 +742,13 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
   rdma_ctl_ = rdma_ctl;
 
   int total_num_engines = num_devices_ * num_engines_per_dev;
-
+  printf("Starting to initialize %d channels for %d devices with %d engines per device\n", 
+           total_num_engines, num_devices_, num_engines_per_dev_);
+  initialize_vec(total_num_engines);
   // Create multiple engines. Each engine has its own thread and channel to
   // let the endpoint communicate with.
   for (int i = 0; i < total_num_engines; i++) channel_vec_[i] = new Channel();
-
+  printf("Initialized channel vec\n")
   if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
     // Receiver-driven congestion control per device.
     for (int i = 0; i < num_devices_; i++) eqds_[i] = new eqds::EQDS(i);
@@ -716,21 +844,8 @@ RDMAEndpoint::~RDMAEndpoint() {
 #else
   for (auto& engine : engine_vec_) engine->release();
 #endif
-
-  for (int dev = 0; dev < num_devices_; dev++) {
-    for (auto& flow : active_flows_vec_[dev]) {
-      delete flow;
-    }
-    active_flows_vec_[dev].clear();
-
-    peer_map_[dev].clear();
-
-    close(test_listen_fds_[dev]);
-  }
-
-  for (int i = 0; i < num_devices_ * num_engines_per_dev_; i++)
-    delete channel_vec_[i];
-
+  
+  cleanup_resources();
   delete ctx_pool_;
   delete[] ctx_pool_buf_;
 
@@ -792,9 +907,9 @@ void RDMAEndpoint::same_dev_install_ctx(int dev, int bootstrap_fd,
                                         PeerID* peer_id,
                                         struct RemoteRDMAContext* remote_ctx) {
   auto* first_map = &peer_same_dev_map_[dev][0];
-  auto* first_lock = &peer_same_dev_map_mu_[dev][0];
+  auto* first_lock = &peer_same_dev_map_mu_[dev][0].get();
   auto* second_map = &peer_same_dev_map_[dev][1];
-  auto* second_lock = &peer_same_dev_map_mu_[dev][1];
+  auto* second_lock = &peer_same_dev_map_mu_[dev][1].get();
 
   if (local_lock_first) {
     first_lock->lock();
@@ -889,7 +1004,7 @@ void RDMAEndpoint::safe_install_ctx(int dev, int bootstrap_fd,
                                     PeerID* peer_id,
                                     struct RemoteRDMAContext* remote_ctx) {
   if (local_lock_first) {
-    peer_map_mu_[dev].lock();
+    peer_map_mu_[dev]->lock();
     auto it = peer_map_[dev].find({remote_ip, remote_dev});
     if (it == peer_map_[dev].end()) {  // This device has not connected to
                                        // the remote device yet.
@@ -908,7 +1023,7 @@ void RDMAEndpoint::safe_install_ctx(int dev, int bootstrap_fd,
       // Wait until remote side releases its lock.
       wait_ready(bootstrap_fd);
       // Release the lock and tell remote side we have released the lock.
-      peer_map_mu_[dev].unlock();
+      peer_map_mu_[dev]->unlock();
       send_ready(bootstrap_fd);
     } else {
       // This device has connected to the remote device.
@@ -917,7 +1032,7 @@ void RDMAEndpoint::safe_install_ctx(int dev, int bootstrap_fd,
       remote_ctx->remote_port_attr = it->second.remote_port_attr;
       it->second.flow_cnt++;
       // Release the lock and tell remote side we have released the lock.
-      peer_map_mu_[dev].unlock();
+      peer_map_mu_[dev]->unlock();
       send_abort(bootstrap_fd);
     }
   } else {
@@ -925,17 +1040,17 @@ void RDMAEndpoint::safe_install_ctx(int dev, int bootstrap_fd,
     if (installed) {
       // Remote side tell us that this device has connected to the remote
       // device.
-      peer_map_mu_[dev].lock();
+      peer_map_mu_[dev]->lock();
       auto it = peer_map_[dev].find({remote_ip, remote_dev});
       DCHECK(it != peer_map_[dev].end());
       *peer_id = it->second.peer_id;
       remote_ctx->remote_gid = it->second.remote_gid;
       remote_ctx->remote_port_attr = it->second.remote_port_attr;
       it->second.flow_cnt++;
-      peer_map_mu_[dev].unlock();
+      peer_map_mu_[dev]->unlock();
     } else {
       // Hold the lock and tell remote side we have already held the lock.
-      peer_map_mu_[dev].lock();
+      peer_map_mu_[dev]->lock();
       auto it = peer_map_[dev].find({remote_ip, remote_dev});
       DCHECK(it == peer_map_[dev].end());
       send_ready(bootstrap_fd);
@@ -948,7 +1063,7 @@ void RDMAEndpoint::safe_install_ctx(int dev, int bootstrap_fd,
                              {*peer_id, remote_ctx->remote_gid,
                               remote_ctx->remote_port_attr, 1}});
       // Release the lock and tell remote side we have released the lock.
-      peer_map_mu_[dev].unlock();
+      peer_map_mu_[dev]->unlock();
       send_ready(bootstrap_fd);
       // Wait until remote side releases its lock.
       wait_ready(bootstrap_fd);
@@ -1575,5 +1690,6 @@ std::string UcclRDMAEngine::status_to_string() {
 
   return s;
 }
+
 
 }  // namespace uccl

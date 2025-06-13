@@ -846,33 +846,33 @@ struct ib_dev {
   int port;
 };
 
-static bool matchIf(const char* string, const char* ref, bool matchExact) {
+static bool match_if(const char* string, const char* ref, bool matchExact) {
   // Make sure to include '\0' in the exact case
   int matchLen = matchExact ? strlen(string) + 1 : strlen(ref);
   return strncmp(string, ref, matchLen) == 0;
 }
 
-static bool matchPort(const int port1, const int port2) {
+static bool match_port(const int port1, const int port2) {
   if (port1 == -1) return true;
   if (port2 == -1) return true;
   if (port1 == port2) return true;
   return false;
 }
 
-static bool matchIfList(const char* string, int port, struct ib_dev* ifList, int listSize, bool matchExact) {
+static bool match_if_list(const char* string, int port, struct ib_dev* ifList, int listSize, bool matchExact) {
   // Make an exception for the case where no user list is defined
   if (listSize == 0) return true;
 
   for (int i=0; i<listSize; i++) {
-    if (matchIf(string, ifList[i].prefix, matchExact)
-        && matchPort(port, ifList[i].port)) {
+    if (match_if(string, ifList[i].prefix, matchExact)
+        && match_port(port, ifList[i].port)) {
       return true;
     }
   }
   return false;
 }
 
-static inline int parseStringList(const char* string, struct ib_dev* ifList, int maxList) {
+static inline int parse_interfaces(const char* string, struct ib_dev* ifList, int maxList) {
   if (!string) return 0;
 
   const char* ptr = string;

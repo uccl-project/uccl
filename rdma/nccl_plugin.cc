@@ -84,16 +84,13 @@ struct ucclSendComm {
 ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
   std::cout << "Hello UCCL!" << std::endl;
 
-#ifdef LAZY_CREATE_ENGINE
-  ep = std::make_shared<RDMAEndpoint>(NUM_DEVICES, NUM_ENGINES);
-#else
   ep = std::make_shared<RDMAEndpoint>(NUM_ENGINES);
-#endif
+
   return ncclSuccess;
 }
 
 ncclResult_t pluginDevices(int* ndev) {
-  *ndev = NUM_DEVICES;
+  *ndev = num_devices;
   return ncclSuccess;
 }
 
