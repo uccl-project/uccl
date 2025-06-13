@@ -9,24 +9,6 @@
 #include <thread>
 #include <vector>
 
-inline void** allocate_memory_for_gpudirect() {
-  size_t bytes_per_block = kObjectSize * kBatchSize;
-  size_t total_bytes = bytes_per_block * kNumThBlocks;
-  void* d_big = nullptr;
-  cudaMalloc(&d_big, total_bytes);
-
-  std::vector<void*> h_ptrs(kNumThBlocks);
-  for (int b = 0; b < kNumThBlocks; ++b)
-    h_ptrs[b] = static_cast<char*>(d_big) + b * bytes_per_block;
-
-  void** d_ptrs = nullptr;
-  cudaMalloc(&d_ptrs, sizeof(void*) * kNumThBlocks);
-  cudaMemcpy(d_ptrs, h_ptrs.data(), sizeof(void*) * kNumThBlocks,
-             cudaMemcpyHostToDevice);
-
-  return d_ptrs;
-}
-
 int main(int argc, char** argv) {
   if (argc < 3) {
     std::cerr << "Usage: ./benchmark_remote <rank> <peer_ip>\n";
@@ -60,54 +42,30 @@ int main(int argc, char** argv) {
     }
   }
 
-  void** d_ptrs = allocate_memory_for_gpudirect();
-  printf("Allocated %d bytes for %d blocks of %d bytes each\n",
-         kObjectSize * kBatchSize * kNumThBlocks, kNumThBlocks,
-         kObjectSize * kBatchSize);
-  printf("d_ptrs address: %p\n", d_ptrs);
-
   size_t total_size = kObjectSize * kBatchSize * kNumThBlocks;
   void* gpu_buffer = nullptr;
   cudaMalloc(&gpu_buffer, total_size);
 
   RDMAConnectionInfo local_info;
   global_rdma_init(gpu_buffer, total_size, &local_info, rank);
-  std::vector<std::thread> cq_threads;
-
-  // Launch threads
-  for (int i = 0; i < kNumPollingThreads; ++i) {
-    int cpu_id = kPollingThreadStartPort + i;
-    cq_threads.emplace_back(progress_thread, cpu_id);
-  }
   std::vector<std::thread> cpu_threads;
   for (int i = 0; i < kNumThBlocks; ++i) {
-    cpu_threads.emplace_back(cpu_consume, &rbs[i], i, gpu_buffer, kObjectSize,
+    cpu_threads.emplace_back(cpu_proxy, &rbs[i], i, gpu_buffer, kObjectSize,
                              rank, peer_ip);
   }
   if (rank == 0) {
-    // rdma_write_stub(gpu_buffer, kObjectSize);
-    // printf("RDMA write stub completed\n");
-
-    // poll_completion();
-    // printf("Polling completions done\n");
-
-    // Launch one CPU polling thread per block
-
-    printf("Waiting for 5 seconds before issuing commands...\n");
-    sleep(5);
+    printf("Waiting for 2 seconds before issuing commands...\n");
+    sleep(2);
 
     auto t0 = std::chrono::high_resolution_clock::now();
-    size_t shmem_bytes = kQueueSize * sizeof(unsigned long long);
+    size_t shmem_bytes = kQueueSize * 2 * sizeof(unsigned long long);
     gpu_issue_batched_commands<<<kNumThBlocks, kNumThPerBlock, shmem_bytes,
-                                 stream1>>>(rbs, d_ptrs);
+                                 stream1>>>(rbs);
     cudaCheckErrors("gpu_issue_batched_commands kernel failed");
 
     cudaStreamSynchronize(stream1);
     cudaCheckErrors("cudaStreamSynchronize failed");
     auto t1 = std::chrono::high_resolution_clock::now();
-
-    cudaDeviceSynchronize();
-    cudaCheckErrors("cudaDeviceSynchronize failed");
 
     printf("Before cpu_threads join\n");
     for (auto& t : cpu_threads) {
@@ -142,25 +100,19 @@ int main(int argc, char** argv) {
 #endif
     printf("Total ops                          : %u\n", tot_ops);
     printf("End-to-end Wall-clock time        : %.3f ms\n", wall_ms);
-    printf("Throughput                        : %.2f Mops/s\n", throughput);
+    printf("Throughput                        : %.2f Mops\n", throughput);
 
     cudaFreeHost(rbs);
     cudaCheckErrors("cudaFreeHost failed");
     cudaStreamDestroy(stream1);
     cudaCheckErrors("cudaStreamDestroy failed");
   } else {
-    // Infinite loop
-    while (true) {
+    int i = 0;
+    while (i < 60) {
       std::this_thread::sleep_for(std::chrono::seconds(1));
       printf("Rank %d is waiting...\n", rank);
+      i++;
     }
   }
-
-  drain_cq();
-  g_progress_run.store(false);
-  for (auto& t : cq_threads) {
-    if (t.joinable()) {
-      t.join();
-    }
-  }
+  sleep(1);
 }

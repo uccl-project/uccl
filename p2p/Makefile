@@ -1,53 +1,52 @@
 CUDA_PATH ?= /usr/local/cuda
-CXX       ?= g++
+override CXX := /usr/bin/g++
 NVCC      := $(CUDA_PATH)/bin/nvcc
 
 CXXFLAGS  := -O3 -std=c++17 -Wall -pthread
 LDFLAGS   := -lpthread
 
-ifdef NO_RDMA
-CXXFLAGS  += -DNO_RDMA
-NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread" -DNO_RDMA
-else
 CXXFLAGS  += -mclwb
-LDFLAGS   += -libverbs
-NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread"
-endif
+LDFLAGS   += -libverbs -lnl-3 -lnl-route-3
+NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread" -ccbin /usr/bin/g++
 
-INC       := -Iinclude -I$(CUDA_PATH)/include
+INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include
 
-SRC_CPP   := src/proxy.cpp src/rdma.cpp
-SRC_CU_LOCAL := src/benchmark_local.cu src/gpu_kernel.cu src/ring_buffer.cu
-SRC_CU_REMOTE := src/benchmark_remote.cu src/gpu_kernel.cu src/ring_buffer.cu
+SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp
+SRC_CU  := src/gpu_kernel.cu src/ring_buffer.cu
+SRC_LOCAL  := src/benchmark_local.cu
+SRC_REMOTE := src/benchmark_remote.cu
 
-OBJ_CPP   := $(SRC_CPP:.cpp=.o)
-OBJ_CU_LOCAL := $(SRC_CU_LOCAL:.cu=.o)
-OBJ_CU_REMOTE := $(SRC_CU_REMOTE:.cu=.o)
+OBJ_CPP := $(SRC_CPP:.cpp=.o)
+OBJ_CU := $(SRC_CU:.cu=.o)
 
-OBJ_LOCAL := $(OBJ_CPP) $(OBJ_CU_LOCAL)
-OBJ_REMOTE := $(OBJ_CPP) $(OBJ_CU_REMOTE)
+OBJ_LOCAL  := $(OBJ_CPP) $(OBJ_CU) $(SRC_LOCAL:.cu=.o)
+OBJ_REMOTE := $(OBJ_CPP) $(OBJ_CU) $(SRC_REMOTE:.cu=.o)
 
 TARGET_LOCAL  := benchmark_local
 TARGET_REMOTE := benchmark_remote
 
 all: $(TARGET_LOCAL) $(TARGET_REMOTE)
 
-# Compile C++ sources
+# C++ compilation rule with dependency generation
 %.o: %.cpp
-	$(CXX) $(CXXFLAGS) $(INC) -c $< -o $@ -Wno-deprecated-gpu-targets
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
-# Compile CUDA sources
+# CUDA compilation rule with dependency generation
 %.o: %.cu
-	$(NVCC) -arch=sm_90 $(NVCCFLAGS) $(INC) -c $< -o $@ -Wno-deprecated-gpu-targets
+	$(NVCC) -arch=sm_90 $(NVCCFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
-# Linking
+# Linking rules
 $(TARGET_LOCAL): $(OBJ_LOCAL)
-	$(NVCC) -arch=sm_90 $(NVCCFLAGS) $(INC) $(OBJ_LOCAL) -lcuda -lcudart $(LDFLAGS) -o $@  -Wno-deprecated-gpu-targets
+	$(NVCC) -arch=sm_90 $(NVCCFLAGS) $(INCLUDES) $(OBJ_LOCAL) -lcuda -lcudart $(LDFLAGS) -o $@
 
 $(TARGET_REMOTE): $(OBJ_REMOTE)
-	$(NVCC) -arch=sm_90 $(NVCCFLAGS) $(INC) $(OBJ_REMOTE) -lcuda -lcudart $(LDFLAGS) -o $@  -Wno-deprecated-gpu-targets
+	$(NVCC) -arch=sm_90 $(NVCCFLAGS) $(INCLUDES) $(OBJ_REMOTE) -lcuda -lcudart $(LDFLAGS) -o $@
 
+# Clean all generated files
 clean:
-	rm -f $(OBJ_CPP) $(OBJ_CU_LOCAL) $(OBJ_CU_REMOTE) $(TARGET_LOCAL) $(TARGET_REMOTE)
+	rm -f $(OBJ_CPP) $(OBJ_CU) $(SRC_LOCAL:.cu=.o) $(SRC_REMOTE:.cu=.o) $(TARGET_LOCAL) $(TARGET_REMOTE) *.d src/*.d
 
 .PHONY: all clean
+
+# Automatically include dependency files if they exist
+-include $(OBJ_LOCAL:.o=.d) $(OBJ_REMOTE:.o=.d)

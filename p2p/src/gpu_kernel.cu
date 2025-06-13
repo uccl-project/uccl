@@ -14,31 +14,13 @@ __device__ __forceinline__ uint64_t ld_volatile(uint64_t* ptr) {
   return ans;
 }
 
-__device__ __forceinline__ void populate_data(void* d_ptr, int bid) {
-  printf("d_ptrs[%d] = %p\n", bid, d_ptr);
-  unsigned char* base_ptr = reinterpret_cast<unsigned char*>(d_ptr);
-  for (int i = 0; i < kBatchSize; ++i) {
-    unsigned char* obj_ptr = base_ptr + i * kObjectSize;
-    int* int_fields = reinterpret_cast<int*>(obj_ptr);
-    int_fields[0] = bid;
-    int_fields[1] = i;
-    if (kObjectSize > 8) {
-      memset(obj_ptr + 8, 0xAB, kObjectSize - 8);
-    }
-  }
-  __threadfence_system();
-}
-
-__global__ void gpu_issue_batched_commands(RingBuffer* rbs, void** d_ptrs) {
+__global__ void gpu_issue_batched_commands(RingBuffer* rbs) {
   int const bid = blockIdx.x;
   int const tid = threadIdx.x;
   RingBuffer* rb = &rbs[bid];
-  void* const d_ptr = d_ptrs[bid];
   if (tid != 0) {
     return;
   }
-
-  populate_data(d_ptr, bid);
 
 #ifdef MEASURE_PER_OP_LATENCY
   uint32_t complete = 0;
@@ -54,9 +36,8 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs, void** d_ptrs) {
     uint64_t my_hdr;
     uint64_t cur_tail;
 
-    unsigned int const initial_todo =
+    unsigned int const todo =
         (it + kBatchSize <= kIterations) ? kBatchSize : (kIterations - it);
-    unsigned int todo = initial_todo;
 
     // Dynamically send the number of todos to send.
     while (true) {
@@ -69,22 +50,9 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs, void** d_ptrs) {
         my_hdr = cur_head;
         break;
       }
-
-#ifdef False
-      // Doesn't seem to work.
-      //  The idea is that if there are fewer slots than batch_size
-      // Just send whatever is allowed.
-      if (free_slots >= 1) {
-        todo = free_slots;
-        rb->head = cur_head + todo;
-        my_hdr = cur_head;
-        break;
-      }
-#endif
       /* Spin */
     }
 
-#pragma unroll
     for (int i = 0; i < todo; ++i) {
       uint32_t idx = (my_hdr + i) & kQueueMask;
       unsigned long long t0 = clock64();
@@ -93,8 +61,7 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs, void** d_ptrs) {
       rb->buf[idx].dst_gpu = 0;
       rb->buf[idx].src_ptr =
           reinterpret_cast<void*>(static_cast<uintptr_t>(it + i + 1));
-      rb->buf[idx].bytes = 8;
-
+      rb->buf[idx].bytes = kObjectSize;
       start_cycle_smem[idx] = t0;
     }
     __threadfence_system();
@@ -118,14 +85,14 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs, void** d_ptrs) {
 
 #ifdef MEASURE_PER_OP_LATENCY
   while (complete < kIterations) {
-    uint32_t cidx = complete & kQueueMask;
     while (complete >= ld_volatile(&rb->tail)) { /* spin */
     }
-
-    unsigned long long t1 = clock64();
-    cycle_accum_smem += (t1 - start_cycle_smem[cidx]);
-    ++op_count_smem;
-    ++complete;
+    if (complete >= kWarmupOps) {
+      unsigned long long t1 = clock64();
+      cycle_accum_smem += (t1 - start_cycle_smem[complete & kQueueMask]);
+      ++op_count_smem;
+      ++complete;
+    }
   }
 
   rb->cycle_accum = cycle_accum_smem;

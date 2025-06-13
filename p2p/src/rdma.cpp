@@ -9,6 +9,7 @@
 #include <cstring>
 #include <mutex>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 #include <cuda_runtime.h>
 #include <immintrin.h>
@@ -16,31 +17,18 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-static inline bool pin_thread_to_cpu(int cpu) {
-  int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
-  if (cpu < 0 || cpu >= num_cpus) return false;
-
-  cpu_set_t cpuset;
-  CPU_ZERO(&cpuset);
-  CPU_SET(cpu, &cpuset);
-
-  pthread_t current_thread = pthread_self();
-  return !pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
-}
-
 // Define globals
 struct ibv_context* context = nullptr;
 struct ibv_pd* pd = nullptr;
-struct ibv_cq* cq = nullptr;
-thread_local struct ibv_qp* qp = nullptr;
 struct ibv_mr* mr = nullptr;
 uint32_t rkey = 0;
+
+// Define thread_local structs
+thread_local struct ibv_qp* qp = nullptr;
 thread_local uintptr_t remote_addr = 0;
 thread_local uint32_t remote_rkey = 0;
 
 constexpr int TCP_PORT = 18515;
-static thread_local int outstanding = 0;  // per-CPU thread counter
-
 static std::atomic<uint64_t> g_posted = 0;     // WRs posted
 static std::atomic<uint64_t> g_completed = 0;  // CQEs seen
 std::atomic<bool> g_progress_run{true};
@@ -80,7 +68,6 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
   // Exchange info
   send(sockfd, local, sizeof(*local), 0);
   recv(sockfd, remote, sizeof(*remote), MSG_WAITALL);
-
   close(sockfd);
 
   printf(
@@ -97,8 +84,21 @@ void global_rdma_init(void* gpu_buf, size_t bytes, RDMAConnectionInfo* local,
   });
 }
 
-void ensure_thread_qp(void* gpu_buffer, size_t size,
-                      RDMAConnectionInfo* local_info, int rank) {
+ibv_cq* create_per_thread_cq() {
+  ibv_cq* cq;
+  int cq_depth = kMaxOutstandingSends * 2;
+  cq = ibv_create_cq(context, /* cqe */ cq_depth, /* user_context */ nullptr,
+                     /* channel */ nullptr, /* comp_vector */ 0);
+  if (!cq) {
+    perror("Failed to create CQ");
+    exit(1);
+  }
+  return cq;
+}
+
+void create_per_thread_qp(void* gpu_buffer, size_t size,
+                          RDMAConnectionInfo* local_info, int rank,
+                          ibv_cq* cq) {
   if (qp) return;  // Already initialized for this thread
   struct ibv_qp_init_attr qp_init_attr = {};
   qp_init_attr.send_cq = cq;
@@ -170,16 +170,11 @@ void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info,
     perror("ibv_reg_mr (GPUDirect) failed");
     exit(1);
   }
-  rkey = mr->rkey;
-  int cq_depth = kMaxOutstandingSends * 2;
-  cq = ibv_create_cq(context, /* cqe */ cq_depth, /* user_context */ nullptr,
-                     /* channel */ nullptr, /* comp_vector */ 0);
-  if (!cq) {
-    perror("Failed to create CQ");
+  if (rkey != 0) {
+    perror("rkey already set, this should not happen");
     exit(1);
   }
-
-  // ensure_thread_qp(gpu_buffer, size, local_info, rank);
+  rkey = mr->rkey;
 }
 
 void modify_qp_to_init() {
@@ -297,18 +292,26 @@ void modify_qp_to_rts(RDMAConnectionInfo* local_info) {
   printf("QP modified to RTS state\n");
 }
 
-void post_rdma_async_chained(void* buf, size_t bytes, int num_wrs) {
-  while (g_posted.load() - g_completed.load() > kMaxOutstandingSends) {
-    poll_completions();
-  }
+void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
+                             std::vector<uint64_t> wrs_to_post, ibv_cq* cq,
+                             std::unordered_set<uint64_t>& finished_wrs,
+                             std::mutex& finished_wrs_mutex) {
+  // while (g_posted.load() - g_completed.load() > kMaxOutstandingSends) {
+  //   poll_completions(cq, finished_wrs, finished_wrs_mutex);
+  // }
 
   std::vector<struct ibv_sge> sges(num_wrs);
   std::vector<struct ibv_send_wr> wrs(num_wrs);
+  if (num_wrs != wrs_to_post.size()) {
+    fprintf(stderr,
+            "Error: num_wrs (%ld) does not match wrs_to_post size (%zu)\n",
+            num_wrs, wrs_to_post.size());
+    exit(1);
+  }
 
-  for (int i = 0; i < num_wrs; ++i) {
+  for (size_t i = 0; i < num_wrs; ++i) {
     int offset = kNumThBlocks > i ? i : (i % kNumThBlocks);
     sges[i].addr = (uintptr_t)buf + offset * bytes;
-    sges[i].addr = (uintptr_t)buf;
     sges[i].length = (uint32_t)bytes;
     sges[i].lkey = mr->lkey;
 
@@ -317,6 +320,11 @@ void post_rdma_async_chained(void* buf, size_t bytes, int num_wrs) {
     wrs[i].num_sge = 1;
     wrs[i].wr.rdma.remote_addr = remote_addr + offset * bytes;
     wrs[i].wr.rdma.rkey = remote_rkey;
+
+    // printf("Posting WR %zu: addr=0x%lx, rkey=0x%x, remote_addr=0x%lx\n",
+    //        wrs_to_post[i], sges[i].addr, mr->rkey,
+    //        wrs[i].wr.rdma.remote_addr);
+    wrs[i].wr_id = wrs_to_post[i];
 
     if ((i + 1) % kSignalledEvery == 0)
       wrs[i].send_flags = IBV_SEND_SIGNALED;  // generate a CQE
@@ -341,10 +349,12 @@ void post_rdma_async_chained(void* buf, size_t bytes, int num_wrs) {
   g_posted.fetch_add(num_wrs, std::memory_order_relaxed);
 }
 
-void post_rdma_async(void* buf, size_t bytes, uint64_t wr_id) {
+void post_rdma_async(void* buf, size_t bytes, uint64_t wr_id, ibv_cq* cq,
+                     std::unordered_set<uint64_t>& finished_wrs,
+                     std::mutex& finished_wrs_mutex) {
   /* Make it a closed loop to limit the maximum outstanding sends. */
   while (g_posted.load() - g_completed.load() > kMaxOutstandingSends) {
-    poll_completions();
+    poll_completions(cq, finished_wrs, finished_wrs_mutex);
   }
 
   struct ibv_sge sge {
@@ -357,12 +367,12 @@ void post_rdma_async(void* buf, size_t bytes, uint64_t wr_id) {
   wr.num_sge = 1;
   wr.wr.rdma.remote_addr = remote_addr;
   wr.wr.rdma.rkey = remote_rkey;
-  // wr.wr_id = wr_id;
+  wr.wr_id = wr_id;
 
-  if (++outstanding % kSignalledEvery == 0)
+  if (wr_id % kSignalledEvery == 0)
     wr.send_flags = IBV_SEND_SIGNALED;  // generate a CQE
   else
-    wr.send_flags = 0;  // no CQE → cheaper
+    wr.send_flags = 0;
 
   ibv_send_wr* bad = nullptr;
   int ret = ibv_post_send(qp, &wr, &bad);
@@ -376,19 +386,13 @@ void post_rdma_async(void* buf, size_t bytes, uint64_t wr_id) {
   }
 
   g_posted.fetch_add(1, std::memory_order_relaxed);
-
-  // printf("g_posted: %lu, g_completed: %lu, outstanding: %d\n",
-  //        g_posted.load(std::memory_order_acquire),
-  //        g_completed.load(std::memory_order_acquire), outstanding);
 }
 
 void rdma_write_stub(void* local_dev_ptr, size_t bytes) {
   struct ibv_qp_attr qattr;
   struct ibv_qp_init_attr qinit;
   ibv_query_qp(qp, &qattr, IBV_QP_STATE, &qinit);
-  // printf("QP state (should be RTS=5): %d\n", qattr.qp_state);
 
-  // printf("Posting RDMA write of %zu bytes\n", bytes);
   struct ibv_sge sge;
   memset(&sge, 0, sizeof(sge));
   sge.addr = reinterpret_cast<uintptr_t>(local_dev_ptr);  // GPU memory address
@@ -412,8 +416,6 @@ void rdma_write_stub(void* local_dev_ptr, size_t bytes) {
     perror("ibv_post_send failed");
     exit(1);
   }
-
-  // printf("RDMA write posted successfully\n");
 }
 
 #define KNL_MODULE_LOADED(a) ((access(a, F_OK) == -1) ? 0 : 1)
@@ -424,30 +426,8 @@ bool GdrSupportInitOnce() {
          KNL_MODULE_LOADED("/sys/module/nvidia_peermem/version");
 }
 
-void poll_completion() {
-  struct ibv_wc wc;
-  int ret;
-
-  do {
-    ret = ibv_poll_cq(cq, 1, &wc);  // poll one completion
-  } while (ret == 0);               // 0 means no completion yet, keep polling
-
-  if (ret < 0) {
-    perror("ibv_poll_cq failed");
-    exit(1);
-  }
-
-  if (wc.status != IBV_WC_SUCCESS) {
-    fprintf(stderr, "Completion with error: %s (wr_id=%llu)\n",
-            ibv_wc_status_str(wc.status), (unsigned long long)wc.wr_id);
-    exit(1);
-  }
-
-  // printf("Completion received: wr_id=%llu, opcode=%d, byte_len=%u\n",
-  //        (unsigned long long)wc.wr_id, wc.opcode, wc.byte_len);
-}
-
-void poll_completions() {
+void poll_completions(ibv_cq* cq, std::unordered_set<uint64_t>& finished_wrs,
+                      std::mutex& finished_wrs_mutex) {
   struct ibv_wc wc[kMaxOutstandingSends];  // batch poll
   int ne = ibv_poll_cq(cq, kMaxOutstandingSends, wc);
   if (ne == 0) return;
@@ -457,52 +437,34 @@ void poll_completions() {
               (unsigned long long)wc[i].wr_id, ibv_wc_status_str(wc[i].status));
       std::abort();
     }
+    {
+      std::lock_guard<std::mutex> lock(finished_wrs_mutex);
+      finished_wrs.insert(wc[i].wr_id);
+    }
   }
   g_completed.fetch_add(ne, std::memory_order_relaxed);
-  // printf(
-  //     "Finished processing %d completions, "
-  //     "g_posted: %lu, g_completed: %lu\n",
-  //     ne, g_posted.load(std::memory_order_acquire),
-  //     g_completed.load(std::memory_order_acquire));
 }
 
-void progress_thread(int thread_idx) {
+void per_thread_polling(int thread_idx, struct ibv_cq* per_thread_cq,
+                        std::unordered_set<uint64_t>* per_thread_finished_wrs,
+                        std::mutex* per_thread_finished_wrs_mutex) {
   pin_thread_to_cpu(thread_idx);
   printf("Progress thread started on CPU %d\n", sched_getcpu());
 
-  while (cq == nullptr && g_progress_run.load()) _mm_pause();
+  while (per_thread_cq == nullptr && g_progress_run.load()) _mm_pause();
+  printf("Progress thread %d: cq=%p\n", thread_idx, per_thread_cq);
 
-  printf("Progress thread %d: cq=%p\n", thread_idx, cq);
-
-  struct ibv_wc wc[kMaxOutstandingSends];  // batch poll
   while (g_progress_run.load(std::memory_order_acquire)) {
-    int ne = ibv_poll_cq(cq, kMaxOutstandingSends, wc);
-    if (ne == 0) {
-      _mm_pause();
-      continue;
-    }
-
-    for (int i = 0; i < ne; ++i) {
-      if (wc[i].status != IBV_WC_SUCCESS) {
-        fprintf(stderr, "CQE error wr_id=%llu status=%s\n",
-                (unsigned long long)wc[i].wr_id,
-                ibv_wc_status_str(wc[i].status));
-        std::abort();
-      }
-    }
-    g_completed.fetch_add(ne, std::memory_order_relaxed);
-
-    // printf(
-    //     "Finished processing %d completions, "
-    //     "g_posted: %lu, g_completed: %lu\n",
-    //     ne, g_posted.load(std::memory_order_acquire),
-    //     g_completed.load(std::memory_order_acquire));
+    poll_completions(per_thread_cq, *per_thread_finished_wrs,
+                     *per_thread_finished_wrs_mutex);
   }
 }
 
-void drain_cq() {
+bool check_cq_completion() {
   uint64_t posted = g_posted.load(std::memory_order_acquire);
   uint64_t completed = g_completed.load(std::memory_order_acquire);
-  printf("drain_cq: g_completed: %ld, g_posted: %ld\n", completed, posted);
-  while (completed * kSignalledEvery < posted) _mm_pause();
+  printf("check_cq_completion: g_completed: %ld, g_posted: %ld, total: %d\n",
+         completed, posted, kIterations * kNumThBlocks);
+  return completed * kSignalledEvery == posted &&
+         kIterations * kNumThBlocks == completed;
 }

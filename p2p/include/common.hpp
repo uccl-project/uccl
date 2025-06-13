@@ -6,8 +6,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 #include <cuda.h>
 #include <cuda_runtime.h>
+#include <stdio.h>
+#include <unistd.h>
 
 // #define DEBUG_PRINT
 // CUDA error checking macro
@@ -33,18 +36,20 @@
   } while (0)
 
 #define MEASURE_PER_OP_LATENCY
+#define ASSUME_WR_IN_ORDER
 #define kQueueSize 32
 #define kQueueMask (kQueueSize - 1)
 #define kBatchSize 4
-#define kIterations 20000
+#define kIterations 100000
 #define kNumThBlocks 8
 #define kNumThPerBlock 1
 #define kObjectSize 8192  // 8 KB
-#define kMaxOutstandingSends 64
+#define kMaxOutstandingSends kNumThBlocks* kBatchSize
 #define kSignalledEvery 1
-#define kNumPollingThreads 3
+#define kNumPollingThreads 0  // Rely on CPU proxy to poll.
 #define kPollingThreadStartPort kNumThBlocks * 2
-
+#define kWarmupOps 10000
+// #define SEPARATE_POLLING
 // Command structure for each transfer
 struct TransferCmd {
   uint64_t cmd;
@@ -57,5 +62,7 @@ struct TransferCmd {
 // Ring buffer queue size and mask (must be a power of 2)
 constexpr uint32_t QUEUE_SIZE = 1024;
 constexpr uint32_t QUEUE_MASK = QUEUE_SIZE - 1;
+
+bool pin_thread_to_cpu(int cpu);
 
 #endif  // COMMON_HPP
