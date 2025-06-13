@@ -219,8 +219,6 @@ void per_thread_rdma_init(void* gpu_buf, size_t bytes, int rank,
                           int block_idx) {
   if (context) return;  // already initialized
 
-  srand(time(NULL) + getpid() + rank * 1000);
-
   struct ibv_device** dev_list = ibv_get_device_list(NULL);
   if (!dev_list) {
     perror("Failed to get IB devices list");
