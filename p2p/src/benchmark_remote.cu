@@ -17,6 +17,14 @@ int main(int argc, char** argv) {
   int rank = std::atoi(argv[1]);
   char const* peer_ip = argv[2];
 
+  pin_thread_to_cpu(MAIN_THREAD_CPU_IDX);
+  int dev = -1;
+  cudaGetDevice(&dev);
+  printf("About to launch on GPU %d\n", dev);
+  int numa_node = gpu_numa_node(dev);
+  printf("Rank %d: GPU NUMA node is %d\n", rank, numa_node);
+  discover_nics(numa_node);
+
   if (!GdrSupportInitOnce()) {
     printf(
         "Error: GPUDirect RDMA module is not loaded. Please load "
@@ -42,20 +50,22 @@ int main(int argc, char** argv) {
     }
   }
 
-  size_t total_size = kObjectSize * kBatchSize * kNumThBlocks;
+  size_t total_size = kRemoteBufferSize;
   void* gpu_buffer = nullptr;
   cudaMalloc(&gpu_buffer, total_size);
 
+#ifndef NUMA_AWARE_SCHEDULING
   RDMAConnectionInfo local_info;
   global_rdma_init(gpu_buffer, total_size, &local_info, rank);
+#endif
   std::vector<std::thread> cpu_threads;
   for (int i = 0; i < kNumThBlocks; ++i) {
     if (rank == 0)
-      cpu_threads.emplace_back(cpu_proxy, &rbs[i], i, gpu_buffer, kObjectSize,
+      cpu_threads.emplace_back(cpu_proxy, &rbs[i], i, gpu_buffer, kRemoteBufferSize,
                                rank, peer_ip);
     else
       cpu_threads.emplace_back(remote_cpu_proxy, &rbs[i], i, gpu_buffer,
-                               kObjectSize, rank, peer_ip);
+                               kRemoteBufferSize, rank, peer_ip);
   }
   if (rank == 0) {
     printf("Waiting for 2 seconds before issuing commands...\n");

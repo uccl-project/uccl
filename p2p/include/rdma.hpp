@@ -1,6 +1,6 @@
 #ifndef RDMA_HPP
 #define RDMA_HPP
-
+#include "common.hpp"
 #include "unistd.h"
 #include <infiniband/verbs.h>
 #include <atomic>
@@ -9,15 +9,22 @@
 #include <vector>
 
 // Global RDMA resources
+#ifdef NUMA_AWARE_SCHEDULING
+extern thread_local struct ibv_context* context;
+extern thread_local struct ibv_pd* pd;
+extern thread_local struct ibv_mr* mr;
+extern thread_local uint32_t rkey;
+#else
 extern struct ibv_context* context;
 extern struct ibv_pd* pd;
-extern thread_local struct ibv_qp* qp;
-// extern thread_local struct ibv_cq* cq;
 extern struct ibv_mr* mr;
 extern uint32_t rkey;
+#endif
+
+extern thread_local struct ibv_qp* qp;
 extern thread_local uintptr_t remote_addr;
 extern thread_local uint32_t remote_rkey;
-extern std::atomic<bool> g_progress_run;
+extern thread_local std::atomic<bool> g_progress_run;
 // extern thread_local std::unordered_set<uint64_t> finished_wrs;
 // extern thread_local std::mutex finished_wrs_mutex;
 // extern thread_local std::unordered_set<uint64_t> finished_wrs;
@@ -73,4 +80,13 @@ void per_thread_polling(int thread_idx, struct ibv_cq* per_thread_cq,
 void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq);
 void handle_peer_copy(uint64_t wr_id, uint32_t imm, int src_dev, int dst_dev,
                       void* src_ptr, void* dst_ptr, size_t num_bytes);
+
+
+void discover_nics(int numa_node);
+void parse_cpulist(const std::string& s, std::vector<int>* out);
+void pin_thread_to_nic_numa(int nic_idx, int core_offset);
+int pick_nic_index(int i);
+void per_thread_rdma_init(void *gpu_buf, size_t bytes, 
+                          int rank, int nic_idx);
+int gpu_numa_node(int gpu_id);
 #endif  // RDMA_HPP

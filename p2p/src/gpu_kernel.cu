@@ -36,7 +36,7 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs) {
     uint64_t my_hdr;
     uint64_t cur_tail;
 
-    unsigned int const todo =
+    unsigned int todo =
         (it + kBatchSize <= kIterations) ? kBatchSize : (kIterations - it);
 
     // Dynamically send the number of todos to send.
@@ -48,6 +48,11 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs) {
       if (free_slots >= todo) {
         rb->head = cur_head + todo;
         my_hdr = cur_head;
+        break;
+      } else if (free_slots >= 1) {
+        rb->head = cur_head + free_slots;
+        my_hdr = cur_head;
+        todo = free_slots;
         break;
       }
       /* Spin */

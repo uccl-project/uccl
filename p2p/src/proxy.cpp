@@ -20,13 +20,26 @@ inline uint64_t load_volatile_u64(uint64_t volatile* addr) {
 
 void remote_cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
                       size_t total_size, int rank, char const* peer_ip) {
-  printf("Remote CPU thread for block %d started\n", block_idx);
+  printf("Remote CPU thread for block %d started\n", block_idx + 1);
 
-  pin_thread_to_cpu(block_idx);
-
+#ifdef NUMA_AWARE_SCHEDULING
+  per_thread_rdma_init(gpu_buffer, total_size, rank,
+                          block_idx);
+  const int nic_idx = pick_nic_index(block_idx);
+  pin_thread_to_nic_numa(nic_idx, block_idx);
+            
+#else
+  pin_thread_to_cpu(block_idx + 1);
+#endif
+  int cpu = sched_getcpu();
+  if (cpu == -1) {
+      perror("sched_getcpu");
+  } else {
+      printf("Thread pinned to CPU core %d\n", cpu);
+  }          
   ibv_cq* cq = create_per_thread_cq();
   RDMAConnectionInfo local_info, remote_info;
-  create_per_thread_qp(gpu_buffer, total_size, &local_info, rank, cq);
+  create_per_thread_qp(gpu_buffer, total_size, &local_info, rank, cq);                      
 
   modify_qp_to_init();
   printf("Local RDMA info: addr=0x%lx, rkey=0x%x\n", local_info.addr,
@@ -57,18 +70,31 @@ void remote_cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
 
 void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
                size_t total_size, int rank, char const* peer_ip) {
-  printf("CPU thread for block %d started\n", block_idx);
-  pin_thread_to_cpu(block_idx);
-
+  printf("CPU thread for block %d started\n", block_idx + 1);
+#ifdef NUMA_AWARE_SCHEDULING
+  per_thread_rdma_init(gpu_buffer, total_size, rank,
+                          block_idx);
+  const int nic_idx = pick_nic_index(block_idx);
+  pin_thread_to_nic_numa(nic_idx, block_idx);
+#else
+  pin_thread_to_cpu(block_idx + 1);
+#endif
+  int cpu = sched_getcpu();
+  if (cpu == -1) {
+      perror("sched_getcpu");
+  } else {
+      printf("Thread pinned to CPU core %d\n", cpu);
+  }          
   ibv_cq* cq = create_per_thread_cq();
   RDMAConnectionInfo local_info, remote_info;
   create_per_thread_qp(gpu_buffer, total_size, &local_info, rank, cq);
 
   modify_qp_to_init();
-  printf("Local RDMA info: addr=0x%lx, rkey=0x%x\n", local_info.addr,
-         local_info.rkey);
+  // printf("Local RDMA info: addr=0x%lx, rkey=0x%x\n", local_info.addr,
+  //        local_info.rkey);
   exchange_connection_info(rank, peer_ip, block_idx, &local_info, &remote_info);
-  printf("Exchanged remote_addr: 0x%lx, remote_rkey: 0x%x\n", remote_info.addr,
+  printf("Exchanged remote_addr: 0x%lx, remote_rkey: 0x%x, Local RDMA info: addr=0x%lx, rkey=0x%x\n", local_info.addr,
+         local_info.rkey, remote_info.addr,
          remote_info.rkey);
 
   modify_qp_to_rtr(&remote_info);
@@ -156,7 +182,7 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
 
     if (!wrs_to_post.empty()) {
       auto start = std::chrono::high_resolution_clock::now();
-      post_rdma_async_chained(gpu_buffer, total_size, batch_size, wrs_to_post,
+      post_rdma_async_chained(gpu_buffer, kObjectSize, batch_size, wrs_to_post,
                               cq, finished_wrs, finished_wrs_mutex);
       auto end = std::chrono::high_resolution_clock::now();
       total_rdma_write_durations +=
@@ -214,7 +240,7 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
 
 void cpu_proxy_local(RingBuffer* rb, int block_idx) {
   // printf("CPU thread for block %d started\n", block_idx);
-  pin_thread_to_cpu(block_idx);
+  pin_thread_to_cpu(block_idx + 1);
 
   uint64_t my_tail = 0;
   for (int seen = 0; seen < kIterations; ++seen) {
