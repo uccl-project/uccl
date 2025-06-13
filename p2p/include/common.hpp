@@ -39,11 +39,11 @@
 #define REMOTE_NVLINK_FORWARDING
 #define ASSUME_WR_IN_ORDER
 #define NUMA_AWARE_SCHEDULING
-#define kQueueSize 32
+#define kQueueSize 8
 #define kQueueMask (kQueueSize - 1)
 #define kBatchSize 4
-#define kIterations 200000
-#define kNumThBlocks 8
+#define kIterations 500000
+#define kNumThBlocks 16
 #define kNumThPerBlock 1
 #define kObjectSize 8192  // 8 KB
 #define kMaxOutstandingSends kNumThBlocks* kQueueSize

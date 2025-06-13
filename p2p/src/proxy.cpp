@@ -156,11 +156,13 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
 
     std::vector<uint64_t> wrs_to_post;
     for (size_t i = seen; i < cur_head; ++i) {
-      uint64_t cmd;
-      do {
+      uint64_t cmd = rb->buf[i & kQueueMask].cmd;
+      ;
+      while (cmd == 0) {
+        exit(0);
         cmd = rb->buf[i & kQueueMask].cmd;
         _mm_pause();  // Avoid hammering the cacheline.
-      } while (cmd == 0);
+      }
       uint64_t expected_cmd =
           (static_cast<uint64_t>(block_idx) << 32) | (i + 1);
       if (cmd != expected_cmd) {
@@ -198,9 +200,18 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
       if (!finished_wrs.empty()) {
         size_t min =
             *std::min_element(finished_wrs.begin(), finished_wrs.end());
-        if (min != my_tail)
+        size_t max =
+            *std::max_element(finished_wrs.begin(), finished_wrs.end());
+        if (min != my_tail) {
           fprintf(stderr, "WRs not contiguous at block %d: tail=%lu min=%lu\n",
                   block_idx, my_tail, min);
+          exit(1);
+        }
+        if (max != my_tail + finished_wrs.size() - 1) {
+          fprintf(stderr, "WRs not contiguous at block %d: tail=%lu max=%lu\n",
+                  block_idx, my_tail, max);
+          exit(1);
+        }
       }
 
       my_tail += finished_wrs.size();

@@ -45,7 +45,7 @@ static thread_local std::atomic<uint64_t> g_completed = 0;  // CQEs seen
 thread_local std::atomic<bool> g_progress_run{true};
 
 struct NicCtx {
-  ibv_context* ctx;
+  // ibv_context* ctx;
   int numa;          // NUMA node that owns the PCIe slot
   std::string name;  // "mlx5_0" …
 };
@@ -86,8 +86,8 @@ void discover_nics(int numa_node) {
 
   g_nics.reserve(num);
   for (int i = 0; i < num; ++i) {
-    auto* ctx = ibv_open_device(list[i]);
-    if (!ctx) continue;
+    // auto* ctx = ibv_open_device(list[i]);
+    // if (!ctx) continue;
 
     // read /sys/class/infiniband/<dev>/device/numa_node
     char path[256];
@@ -109,7 +109,9 @@ void discover_nics(int numa_node) {
       close(fd);
     }
     if (numa < 0 || numa != numa_node) continue;
-    g_nics.push_back({ctx, numa < 0 ? 0 : numa, ibv_get_device_name(list[i])});
+    // g_nics.push_back({ctx, numa < 0 ? 0 : numa,
+    // ibv_get_device_name(list[i])});
+    g_nics.push_back({numa < 0 ? 0 : numa, ibv_get_device_name(list[i])});
     printf("[init] found %s on NUMA node %d\n", g_nics.back().name.c_str(),
            g_nics.back().numa);
   }
@@ -231,14 +233,12 @@ void per_thread_rdma_init(void* gpu_buf, size_t bytes, int rank,
   }
 
   // Select NIC by index
-  int block_idx_to_nic[8] = {
-      4, 4, 4, 4,  // GPUs 0-3 → NIC4
-      5, 6, 7, 5   // GPUs 4-7 → NIC0-3
-  };
+  int block_idx_to_nic[8] = {4, 4, 4, 4, 5, 5, 6, 6};
 
-  int selected_idx = block_idx_to_nic[block_idx];
+  int selected_idx = block_idx_to_nic[block_idx % 8];
 
 #ifndef FALSE
+  // For some reason, this gives the best performance.
   selected_idx = 0;
 #endif
   context = ibv_open_device(dev_list[selected_idx]);
