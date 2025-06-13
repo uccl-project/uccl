@@ -18,13 +18,14 @@ int main(int argc, char** argv) {
   char const* peer_ip = argv[2];
 
   pin_thread_to_cpu(MAIN_THREAD_CPU_IDX);
+#ifdef NUMA_AWARE_SCHEDULING
   int dev = -1;
   cudaGetDevice(&dev);
   printf("About to launch on GPU %d\n", dev);
   int numa_node = gpu_numa_node(dev);
   printf("Rank %d: GPU NUMA node is %d\n", rank, numa_node);
   discover_nics(numa_node);
-
+#endif
   if (!GdrSupportInitOnce()) {
     printf(
         "Error: GPUDirect RDMA module is not loaded. Please load "
@@ -61,8 +62,8 @@ int main(int argc, char** argv) {
   std::vector<std::thread> cpu_threads;
   for (int i = 0; i < kNumThBlocks; ++i) {
     if (rank == 0)
-      cpu_threads.emplace_back(cpu_proxy, &rbs[i], i, gpu_buffer, kRemoteBufferSize,
-                               rank, peer_ip);
+      cpu_threads.emplace_back(cpu_proxy, &rbs[i], i, gpu_buffer,
+                               kRemoteBufferSize, rank, peer_ip);
     else
       cpu_threads.emplace_back(remote_cpu_proxy, &rbs[i], i, gpu_buffer,
                                kRemoteBufferSize, rank, peer_ip);
@@ -109,7 +110,8 @@ int main(int argc, char** argv) {
 
 #ifdef MEASURE_PER_OP_LATENCY
     printf("\nOverall avg GPU-measured latency  : %.3f µs\n",
-           (double)tot_cycles * 1000.0 / prop.clockRate / tot_ops);
+           (double)tot_cycles * 1000.0 / prop.clockRate /
+               (tot_ops - kWarmupOps * kNumThBlocks));
     printf("Total cycles                       : %llu\n", tot_cycles);
 #endif
     printf("Total ops                          : %u\n", tot_ops);

@@ -23,30 +23,28 @@ void remote_cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
   printf("Remote CPU thread for block %d started\n", block_idx + 1);
 
 #ifdef NUMA_AWARE_SCHEDULING
-  per_thread_rdma_init(gpu_buffer, total_size, rank,
-                          block_idx);
-  const int nic_idx = pick_nic_index(block_idx);
+  int const nic_idx = pick_nic_index(block_idx);
+  per_thread_rdma_init(gpu_buffer, total_size, rank, nic_idx);
   pin_thread_to_nic_numa(nic_idx, block_idx);
-            
 #else
   pin_thread_to_cpu(block_idx + 1);
 #endif
   int cpu = sched_getcpu();
   if (cpu == -1) {
-      perror("sched_getcpu");
+    perror("sched_getcpu");
   } else {
-      printf("Thread pinned to CPU core %d\n", cpu);
-  }          
+    printf("Thread pinned to CPU core %d\n", cpu);
+  }
   ibv_cq* cq = create_per_thread_cq();
   RDMAConnectionInfo local_info, remote_info;
-  create_per_thread_qp(gpu_buffer, total_size, &local_info, rank, cq);                      
+  create_per_thread_qp(gpu_buffer, total_size, &local_info, rank, cq);
 
   modify_qp_to_init();
   printf("Local RDMA info: addr=0x%lx, rkey=0x%x\n", local_info.addr,
          local_info.rkey);
   exchange_connection_info(rank, peer_ip, block_idx, &local_info, &remote_info);
-  printf("Exchanged remote_addr: 0x%lx, remote_rkey: 0x%x\n", remote_info.addr,
-         remote_info.rkey);
+  printf("Exchanged remote_addr %d: 0x%lx, remote_rkey: 0x%x\n", block_idx + 1,
+         remote_info.addr, remote_info.rkey);
 
   modify_qp_to_rtr(&remote_info);
   modify_qp_to_rts(&local_info);
@@ -72,19 +70,18 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
                size_t total_size, int rank, char const* peer_ip) {
   printf("CPU thread for block %d started\n", block_idx + 1);
 #ifdef NUMA_AWARE_SCHEDULING
-  per_thread_rdma_init(gpu_buffer, total_size, rank,
-                          block_idx);
-  const int nic_idx = pick_nic_index(block_idx);
+  per_thread_rdma_init(gpu_buffer, total_size, rank, block_idx);
+  int const nic_idx = pick_nic_index(block_idx);
   pin_thread_to_nic_numa(nic_idx, block_idx);
 #else
   pin_thread_to_cpu(block_idx + 1);
 #endif
   int cpu = sched_getcpu();
   if (cpu == -1) {
-      perror("sched_getcpu");
+    perror("sched_getcpu");
   } else {
-      printf("Thread pinned to CPU core %d\n", cpu);
-  }          
+    printf("Thread pinned to CPU core %d\n", cpu);
+  }
   ibv_cq* cq = create_per_thread_cq();
   RDMAConnectionInfo local_info, remote_info;
   create_per_thread_qp(gpu_buffer, total_size, &local_info, rank, cq);
@@ -93,9 +90,11 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
   // printf("Local RDMA info: addr=0x%lx, rkey=0x%x\n", local_info.addr,
   //        local_info.rkey);
   exchange_connection_info(rank, peer_ip, block_idx, &local_info, &remote_info);
-  printf("Exchanged remote_addr: 0x%lx, remote_rkey: 0x%x, Local RDMA info: addr=0x%lx, rkey=0x%x\n", local_info.addr,
-         local_info.rkey, remote_info.addr,
-         remote_info.rkey);
+  printf(
+      "Exchanged remote_addr %d: 0x%lx, remote_rkey: 0x%x, Local RDMA info: "
+      "addr=0x%lx, rkey=0x%x\n",
+      block_idx + 1, local_info.addr, local_info.rkey, remote_info.addr,
+      remote_info.rkey);
 
   modify_qp_to_rtr(&remote_info);
   modify_qp_to_rts(&local_info);
@@ -196,6 +195,14 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
       for (auto i : finished_wrs) {
         rb->buf[i & kQueueMask].cmd = 0;
       }
+      if (!finished_wrs.empty()) {
+        size_t min =
+            *std::min_element(finished_wrs.begin(), finished_wrs.end());
+        if (min != my_tail)
+          fprintf(stderr, "WRs not contiguous at block %d: tail=%lu min=%lu\n",
+                  block_idx, my_tail, min);
+      }
+
       my_tail += finished_wrs.size();
       finished_wrs.clear();
     }

@@ -2,23 +2,23 @@
 #include "common.hpp"
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <mutex>
 #include <thread>
 #include <unordered_set>
 #include <vector>
 #include <cuda_runtime.h>
+#include <fcntl.h>
 #include <immintrin.h>
 #include <stdio.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#include <fcntl.h>
-#include <fstream>
-#include <algorithm>
 
 // Define globals
 #ifdef NUMA_AWARE_SCHEDULING
@@ -45,124 +45,122 @@ static thread_local std::atomic<uint64_t> g_completed = 0;  // CQEs seen
 thread_local std::atomic<bool> g_progress_run{true};
 
 struct NicCtx {
-    ibv_context* ctx;
-    int          numa;          // NUMA node that owns the PCIe slot
-    std::string  name;          // "mlx5_0" …
+  ibv_context* ctx;
+  int numa;          // NUMA node that owns the PCIe slot
+  std::string name;  // "mlx5_0" …
 };
 
 static std::vector<NicCtx> g_nics;
 
+int gpu_numa_node(int gpu_id) {
+  char bus_id[16];
+  cudaDeviceGetPCIBusId(bus_id, sizeof(bus_id), gpu_id);
 
-int gpu_numa_node(int gpu_id)
-{
-    char bus_id[16];
-    cudaDeviceGetPCIBusId(bus_id, sizeof(bus_id), gpu_id);
+  /* convert to lower-case in place */
+  std::transform(bus_id, bus_id + strlen(bus_id), bus_id,
+                 [](unsigned char c) { return std::tolower(c); });
 
-    /* convert to lower-case in place */
-    std::transform(bus_id, bus_id + strlen(bus_id),
-                   bus_id, [](unsigned char c){ return std::tolower(c); });
+  char path[128];
+  snprintf(path, sizeof(path), "/sys/bus/pci/devices/%s/numa_node", bus_id);
 
-    char path[128];
-    snprintf(path, sizeof(path),
-             "/sys/bus/pci/devices/%s/numa_node", bus_id);
-
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) {
-        /* -1 = unknown; treat as NUMA 0 */
-        return 0;
-    }
-    char buf[8] {};
-    if (read(fd, buf, sizeof(buf)-1) <= 0) { close(fd); return 0; }
+  int fd = open(path, O_RDONLY);
+  if (fd < 0) {
+    /* -1 = unknown; treat as NUMA 0 */
+    return 0;
+  }
+  char buf[8]{};
+  if (read(fd, buf, sizeof(buf) - 1) <= 0) {
     close(fd);
+    return 0;
+  }
+  close(fd);
 
-    int node = atoi(buf);
-    return (node < 0) ? 0 : node;
+  int node = atoi(buf);
+  return (node < 0) ? 0 : node;
 }
 
 void discover_nics(int numa_node) {
-    int num = 0;
-    ibv_device **list = ibv_get_device_list(&num);
-    if (num == 0) throw std::runtime_error("No RDMA devices");
+  int num = 0;
+  ibv_device** list = ibv_get_device_list(&num);
+  if (num == 0) throw std::runtime_error("No RDMA devices");
 
-    g_nics.reserve(num);
-    for (int i = 0; i < num; ++i) {
-        auto *ctx = ibv_open_device(list[i]);
-        if (!ctx) continue;
+  g_nics.reserve(num);
+  for (int i = 0; i < num; ++i) {
+    auto* ctx = ibv_open_device(list[i]);
+    if (!ctx) continue;
 
-        // read /sys/class/infiniband/<dev>/device/numa_node
-        char path[256];
-        sprintf(path,
-            "/sys/class/infiniband/%s/device/numa_node",
+    // read /sys/class/infiniband/<dev>/device/numa_node
+    char path[256];
+    sprintf(path, "/sys/class/infiniband/%s/device/numa_node",
             ibv_get_device_name(list[i]));
 
-        int fd   = open(path, O_RDONLY);
-        int numa = 0;
-        if (fd >= 0) {
-            char buf[8] {};
-            ssize_t n = read(fd, buf, sizeof(buf) - 1);
-            if (n <= 0) {
-                perror("read failed");
-                close(fd);
-                continue;
-            }
-            buf[n] = '\0'; 
-            numa = atoi(buf);            // -1 means “unknown” → treat as 0
-            close(fd);
-        }
-        if (numa < 0 || numa != numa_node)
-          continue;
-        g_nics.push_back({ctx, numa < 0 ? 0 : numa,
-                          ibv_get_device_name(list[i])});
-        printf("[init] found %s on NUMA node %d\n",
-               g_nics.back().name.c_str(), g_nics.back().numa);
+    int fd = open(path, O_RDONLY);
+    int numa = 0;
+    if (fd >= 0) {
+      char buf[8]{};
+      ssize_t n = read(fd, buf, sizeof(buf) - 1);
+      if (n <= 0) {
+        perror("read failed");
+        close(fd);
+        continue;
+      }
+      buf[n] = '\0';
+      numa = atoi(buf);  // -1 means “unknown” → treat as 0
+      close(fd);
     }
-    ibv_free_device_list(list);
+    if (numa < 0 || numa != numa_node) continue;
+    g_nics.push_back({ctx, numa < 0 ? 0 : numa, ibv_get_device_name(list[i])});
+    printf("[init] found %s on NUMA node %d\n", g_nics.back().name.c_str(),
+           g_nics.back().numa);
+  }
+  ibv_free_device_list(list);
 }
 
 int pick_nic_index(int i) {
   printf("[init] pick_nic_index(%d), numa: %d, name: %s\n", i,
-         g_nics[i % g_nics.size()].numa, g_nics[i % g_nics.size()].name.c_str());
+         g_nics[i % g_nics.size()].numa,
+         g_nics[i % g_nics.size()].name.c_str());
   return i % g_nics.size();
-} 
+}
 
-void parse_cpulist(const std::string& s, std::vector<int>* out) {
-    size_t start = 0;
-    while (start < s.size()) {
-        size_t dash = s.find('-', start);
-        size_t comma = s.find(',', start);
-        if (comma == std::string::npos) comma = s.size();
+void parse_cpulist(std::string const& s, std::vector<int>* out) {
+  size_t start = 0;
+  while (start < s.size()) {
+    size_t dash = s.find('-', start);
+    size_t comma = s.find(',', start);
+    if (comma == std::string::npos) comma = s.size();
 
-        if (dash != std::string::npos && dash < comma) {
-            int lo = std::stoi(s.substr(start, dash - start));
-            int hi = std::stoi(s.substr(dash + 1, comma - dash - 1));
-            for (int i = lo; i <= hi; ++i) out->push_back(i);
-        } else {
-            int val = std::stoi(s.substr(start, comma - start));
-            out->push_back(val);
-        }
-        start = comma + 1;
+    if (dash != std::string::npos && dash < comma) {
+      int lo = std::stoi(s.substr(start, dash - start));
+      int hi = std::stoi(s.substr(dash + 1, comma - dash - 1));
+      for (int i = lo; i <= hi; ++i) out->push_back(i);
+    } else {
+      int val = std::stoi(s.substr(start, comma - start));
+      out->push_back(val);
     }
+    start = comma + 1;
+  }
 }
 
 void pin_thread_to_nic_numa(int nic_idx, int core_offset = 0) {
-    const int node      = g_nics[nic_idx].numa;
-    // read the CPU mask of that node, choose one core
-    cpu_set_t mask;
-    CPU_ZERO(&mask);
+  int const node = g_nics[nic_idx].numa;
+  // read the CPU mask of that node, choose one core
+  cpu_set_t mask;
+  CPU_ZERO(&mask);
 
-    std::ifstream f("/sys/devices/system/node/node" + std::to_string(node) +
-                    "/cpulist");
-    std::string cpulist;
-    std::getline(f, cpulist);               // e.g. "16-31"
-    // pick the (core_offset)-th CPU inside that list
+  std::ifstream f("/sys/devices/system/node/node" + std::to_string(node) +
+                  "/cpulist");
+  std::string cpulist;
+  std::getline(f, cpulist);  // e.g. "16-31"
+  // pick the (core_offset)-th CPU inside that list
 
-    printf("Numa and cpu list: %d, %s\n", node, cpulist.c_str());
-    std::vector<int> cpus;
-    parse_cpulist(cpulist, &cpus);          // helper you implement
-    CPU_SET(cpus[core_offset % cpus.size()], &mask);
+  printf("Numa and cpu list: %d, %s\n", node, cpulist.c_str());
+  std::vector<int> cpus;
+  parse_cpulist(cpulist, &cpus);  // helper you implement
+  CPU_SET(cpus[core_offset % cpus.size()], &mask);
 
-    if (sched_setaffinity(0, sizeof(mask), &mask) != 0)
-        perror("sched_setaffinity");
+  if (sched_setaffinity(0, sizeof(mask), &mask) != 0)
+    perror("sched_setaffinity");
 }
 
 void exchange_connection_info(int rank, char const* peer_ip, int tid,
@@ -177,10 +175,15 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
   if (rank == 0) {
     // Listen
     int listenfd = socket(AF_INET, SOCK_STREAM, 0);
+    int one = 1;
+    setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
     addr.sin_family = AF_INET;
     addr.sin_port = htons(TCP_PORT + tid);
     addr.sin_addr.s_addr = INADDR_ANY;
-    bind(listenfd, (struct sockaddr*)&addr, sizeof(addr));
+    if (bind(listenfd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+      perror("bind failed");
+      exit(1);
+    }
     listen(listenfd, 1);
 
     socklen_t len = sizeof(addr);
@@ -189,6 +192,8 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
   } else {
     // Connect
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    int one = 1;
+    setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
     addr.sin_family = AF_INET;
     addr.sin_port = htons(TCP_PORT + tid);
     inet_pton(AF_INET, peer_ip, &addr.sin_addr);
@@ -208,26 +213,64 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
       rank, remote->addr, remote->rkey, remote->qp_num, remote->psn);
 }
 
-void per_thread_rdma_init(void *gpu_buf, size_t bytes, int rank, int nic_idx) {
-  if (!context) {
-    printf("[init] g_nics.size(): %zu, nic_idx: %d\n", g_nics.size(), nic_idx);
-    context = g_nics[nic_idx % g_nics.size()].ctx;
-    pd = ibv_alloc_pd(context);
-    if (!pd) {
-      perror("Failed to allocate PD");
-      exit(1);
-    }
+void per_thread_rdma_init(void* gpu_buf, size_t bytes, int rank,
+                          int block_idx) {
+  if (context) return;  // already initialized
 
-    mr = ibv_reg_mr(pd, gpu_buf, bytes,
-                    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                        IBV_ACCESS_REMOTE_READ | IBV_ACCESS_ZERO_BASED);
-    if (!mr) {
-      perror("ibv_reg_mr failed");
-      exit(1);
-    }
+  srand(time(NULL) + getpid() + rank * 1000);
 
-    rkey = mr->rkey;
+  struct ibv_device** dev_list = ibv_get_device_list(NULL);
+  if (!dev_list) {
+    perror("Failed to get IB devices list");
+    exit(1);
   }
+
+  // Print all available NICs
+  for (int i = 0; dev_list[i]; ++i) {
+    printf("[RDMA] NIC %d: %s\n", i, ibv_get_device_name(dev_list[i]));
+  }
+
+  // Select NIC by index
+  int block_idx_to_nic[8] = {
+      4, 4, 4, 4,  // GPUs 0-3 → NIC4
+      5, 6, 7, 5   // GPUs 4-7 → NIC0-3
+  };
+
+  int selected_idx = block_idx_to_nic[block_idx];
+
+#ifndef FALSE
+  selected_idx = 0;
+#endif
+  context = ibv_open_device(dev_list[selected_idx]);
+  if (!context) {
+    perror("Failed to open device");
+    exit(1);
+  }
+  printf("[RDMA] Selected NIC: %s (index %d)\n",
+         ibv_get_device_name(dev_list[selected_idx]), selected_idx);
+
+  ibv_free_device_list(dev_list);
+
+  // Allocate PD
+  pd = ibv_alloc_pd(context);
+  if (!pd) {
+    perror("Failed to allocate PD");
+    exit(1);
+  }
+
+  // Register GPU memory
+  mr = ibv_reg_mr(pd, gpu_buf, bytes,
+                  IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                      IBV_ACCESS_REMOTE_READ | IBV_ACCESS_ZERO_BASED);
+  if (!mr) {
+    perror("ibv_reg_mr failed");
+    exit(1);
+  }
+
+  if (rkey != 0) {
+    fprintf(stderr, "Warning: rkey already set (%x), overwriting\n", rkey);
+  }
+  rkey = mr->rkey;
 }
 
 void global_rdma_init(void* gpu_buf, size_t bytes, RDMAConnectionInfo* local,
@@ -306,6 +349,11 @@ void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info,
   if (!context) {
     perror("Failed to open device");
     exit(1);
+  }
+  printf("[RDMA] Selected NIC: %s\n", ibv_get_device_name(dev_list[0]));
+  // Print out all the NICs
+  for (int i = 0; dev_list[i]; ++i) {
+    printf("[RDMA] NIC %d: %s\n", i, ibv_get_device_name(dev_list[i]));
   }
   ibv_free_device_list(dev_list);
 
@@ -450,9 +498,8 @@ void modify_qp_to_rts(RDMAConnectionInfo* local_info) {
 void post_receive_buffer_for_imm() {
   // static char recv_buf[64];
 
-  struct ibv_sge sge = {.addr = (uintptr_t)mr->addr,
-                        .length = kObjectSize,
-                        .lkey = mr->lkey};
+  struct ibv_sge sge = {
+      .addr = (uintptr_t)mr->addr, .length = kObjectSize, .lkey = mr->lkey};
 
   struct ibv_recv_wr wr = {
       .wr_id = 123, .next = nullptr, .sg_list = &sge, .num_sge = 1};
@@ -664,8 +711,7 @@ bool check_cq_completion() {
   uint64_t completed = g_completed.load(std::memory_order_acquire);
   printf("check_cq_completion: g_completed: %ld, g_posted: %ld, total: %d\n",
          completed, posted, kIterations * kNumThBlocks);
-  return completed * kSignalledEvery == posted &&
-         kIterations == completed;
+  return completed * kSignalledEvery == posted && kIterations == completed;
 }
 
 void handle_peer_copy(uint64_t wr_id, uint32_t imm, int src_dev, int dst_dev,

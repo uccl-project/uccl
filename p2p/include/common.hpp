@@ -42,7 +42,7 @@
 #define kQueueSize 32
 #define kQueueMask (kQueueSize - 1)
 #define kBatchSize 4
-#define kIterations 100000
+#define kIterations 200000
 #define kNumThBlocks 8
 #define kNumThPerBlock 1
 #define kObjectSize 8192  // 8 KB
@@ -51,7 +51,7 @@
 #define kNumPollingThreads 0  // Rely on CPU proxy to poll.
 #define kPollingThreadStartPort kNumThBlocks * 2
 #define kWarmupOps 10000
-#define kRemoteBufferSize kBatchSize * kNumThBlocks * kObjectSize * 100
+#define kRemoteBufferSize kBatchSize* kNumThBlocks* kObjectSize * 100
 #define MAIN_THREAD_CPU_IDX 31
 // #define SEPARATE_POLLING
 // Command structure for each transfer

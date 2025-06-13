@@ -21,6 +21,7 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs) {
   if (tid != 0) {
     return;
   }
+  printf("Device Block %d: Scheduled\n", bid);
 
 #ifdef MEASURE_PER_OP_LATENCY
   uint32_t complete = 0;
@@ -31,7 +32,7 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs) {
 #endif
 
   extern __shared__ unsigned long long start_cycle_smem[];
-
+  bool print_warmup_exit = true;
   for (int it = 0; it < kIterations;) {
     uint64_t my_hdr;
     uint64_t cur_tail;
@@ -46,11 +47,11 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs) {
       uint64_t free_slots = kQueueSize - (cur_head - cur_tail);
 
       if (free_slots >= todo) {
-        rb->head = cur_head + todo;
+        // rb->head = cur_head + todo;
         my_hdr = cur_head;
         break;
       } else if (free_slots >= 1) {
-        rb->head = cur_head + free_slots;
+        // rb->head = cur_head + free_slots;
         my_hdr = cur_head;
         todo = free_slots;
         break;
@@ -70,15 +71,18 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs) {
       start_cycle_smem[idx] = t0;
     }
     __threadfence_system();
+    rb->head = my_hdr + todo;
 
 #ifdef MEASURE_PER_OP_LATENCY
     while (complete < my_hdr + todo) {
       uint32_t cidx = complete & kQueueMask;
       if (complete < ld_volatile(&rb->tail)) {
-        unsigned long long t1 = clock64();
-        unsigned long long cycles = t1 - start_cycle_smem[cidx];
-        cycle_accum_smem += cycles;
-        op_count_smem++;
+        if (complete >= kWarmupOps) {
+          unsigned long long t1 = clock64();
+          unsigned long long cycles = t1 - start_cycle_smem[cidx];
+          cycle_accum_smem += cycles;
+          op_count_smem++;
+        }
         complete++;
       } else {
         break;
@@ -86,6 +90,12 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs) {
     }
 #endif
     it += todo;
+    if (complete > kWarmupOps) {
+      if (print_warmup_exit) {
+        printf("Device Block %d: Exiting warmup phase\n", bid);
+        print_warmup_exit = false;
+      }
+    }
   }
 
 #ifdef MEASURE_PER_OP_LATENCY
@@ -96,14 +106,13 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs) {
       unsigned long long t1 = clock64();
       cycle_accum_smem += (t1 - start_cycle_smem[complete & kQueueMask]);
       ++op_count_smem;
-      ++complete;
     }
+    ++complete;
   }
 
   rb->cycle_accum = cycle_accum_smem;
   rb->op_count = op_count_smem;
 
 #endif
-
   printf("Device Block %d done\n", bid);
 }
