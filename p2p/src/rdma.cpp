@@ -105,8 +105,9 @@ void create_per_thread_qp(void* gpu_buffer, size_t size,
   qp_init_attr.recv_cq = cq;
   qp_init_attr.qp_type = IBV_QPT_RC;  // Reliable Connection
   qp_init_attr.cap.max_send_wr =
-      kMaxOutstandingSends * 2;      // max outstanding sends
-  qp_init_attr.cap.max_recv_wr = 1;  // max outstanding recvs
+      kMaxOutstandingSends * 2;  // max outstanding sends
+  qp_init_attr.cap.max_recv_wr =
+      kMaxOutstandingSends * 2;  // max outstanding recvs
   qp_init_attr.cap.max_send_sge = 1;
   qp_init_attr.cap.max_recv_sge = 1;
   qp_init_attr.sq_sig_all = 0;
@@ -314,9 +315,9 @@ void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
                              std::vector<uint64_t> wrs_to_post, ibv_cq* cq,
                              std::unordered_set<uint64_t>& finished_wrs,
                              std::mutex& finished_wrs_mutex) {
-  // while (g_posted.load() - g_completed.load() > kMaxOutstandingSends) {
-  //   poll_completions(cq, finished_wrs, finished_wrs_mutex);
-  // }
+  while (g_posted.load() - g_completed.load() > kMaxOutstandingSends) {
+    poll_completions(cq, finished_wrs, finished_wrs_mutex);
+  }
 
   std::vector<struct ibv_sge> sges(num_wrs);
   std::vector<struct ibv_send_wr> wrs(num_wrs);
@@ -363,7 +364,14 @@ void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
   ibv_send_wr* bad = nullptr;
   int ret = ibv_post_send(qp, &wrs[0], &bad);
   if (ret) {
-    fprintf(stderr, "ibv_post_send failed: %s (ret=%d)\n", strerror(ret), ret);
+    fprintf(stderr,
+            "ibv_post_send failed: %s (ret=%d), num_wrs: %ld, g_posted: %ld. "
+            "g_completed: %ld\n",
+            strerror(ret), ret, num_wrs, g_posted.load(), g_completed.load());
+    uint64_t inflight = g_posted.load(std::memory_order_acquire) -
+                        g_completed.load(std::memory_order_acquire);
+    printf("Currently outstanding send WRs: %lu\n", inflight);
+
     if (bad) {
       fprintf(stderr, "Bad WR at address: %p\n", bad);
     }
@@ -506,10 +514,36 @@ bool check_cq_completion() {
          kIterations * kNumThBlocks == completed;
 }
 
+void handle_peer_copy(uint64_t wr_id, uint32_t imm, int src_dev, int dst_dev,
+                      void* src_ptr, void* dst_ptr, size_t num_bytes) {
+  static thread_local cudaStream_t copy_stream = nullptr;
+  if (copy_stream == nullptr) {
+    cudaStreamCreate(&copy_stream);
+  }
+
+  static thread_local bool peer_enabled[16][16] = {};
+  if (!peer_enabled[src_dev][dst_dev]) {
+    cudaDeviceEnablePeerAccess(dst_dev, 0);
+    cudaSetDevice(dst_dev);
+    cudaDeviceEnablePeerAccess(src_dev, 0);
+    peer_enabled[src_dev][dst_dev] = true;
+    cudaSetDevice(src_dev);
+  }
+
+  cudaMemcpyPeerAsync(dst_ptr, dst_dev, src_ptr, src_dev, num_bytes,
+                      copy_stream);
+
+  printf(
+      "[CPU-proxy] wr_id=%llu  imm=0x%x → peer copy %zu bytes "
+      "GPU%d→GPU%d launched\n",
+      (unsigned long long)wr_id, imm, num_bytes, src_dev, dst_dev);
+}
+
 void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq) {
   struct ibv_wc wc[kMaxOutstandingSends];
   size_t pool_index = 0;
-  static char recv_buf_pool[64 * 128] __attribute__((aligned(64)));
+  static char recv_buf_pool[64 * kRemoteBufferSize]
+      __attribute__((aligned(64)));
 
   while (g_progress_run.load(std::memory_order_acquire)) {
     int ne = ibv_poll_cq(cq, kMaxOutstandingSends, wc);
@@ -523,17 +557,16 @@ void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq) {
         continue;
       }
 
-      pool_index = (pool_index + 1) & 127;  // simple circular pool
+      pool_index = (pool_index + 1) & (kRemoteBufferSize - 1);
       char* next_buf = recv_buf_pool + pool_index * 64;
 
       struct ibv_sge sge = {
           .addr = (uintptr_t)next_buf, .length = 64, .lkey = mr->lkey};
 
-      struct ibv_recv_wr wr = {
-          .wr_id = wc[i].wr_id + 0x10000000ULL,  // any unique id
-          .next = nullptr,
-          .sg_list = &sge,
-          .num_sge = 1};
+      struct ibv_recv_wr wr = {.wr_id = wc[i].wr_id + 0x10000000ULL,
+                               .next = nullptr,
+                               .sg_list = &sge,
+                               .num_sge = 1};
 
       struct ibv_recv_wr* bad = nullptr;
       int ret = ibv_post_recv(qp, &wr, &bad);

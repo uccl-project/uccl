@@ -45,11 +45,12 @@
 #define kNumThBlocks 8
 #define kNumThPerBlock 1
 #define kObjectSize 8192  // 8 KB
-#define kMaxOutstandingSends kNumThBlocks* kBatchSize
+#define kMaxOutstandingSends kNumThBlocks* kQueueSize
 #define kSignalledEvery 1
 #define kNumPollingThreads 0  // Rely on CPU proxy to poll.
 #define kPollingThreadStartPort kNumThBlocks * 2
 #define kWarmupOps 10000
+#define kRemoteBufferSize 128
 // #define SEPARATE_POLLING
 // Command structure for each transfer
 struct TransferCmd {
