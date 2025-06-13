@@ -39,6 +39,129 @@ static int ncclIbSpeed(int speed) {
   return ibvSpeeds[firstBitSet(speed, sizeof(ibvSpeeds) / sizeof(int) - 1)];
 }
 
+int RDMAFactory::init_devs() {
+  static int ucclNIbDevs = -1;
+  static ib_dev ucclIbDev[MAX_IB_DEVS];
+  int num_devs;
+  struct ibv_device **devices;
+
+  static std::once_flag init_flag;
+  std::call_once(init_flag,
+                 []() { rdma_ctl = std::make_shared<RDMAFactory>(); });
+
+  if (ucclNIbDevs == -1) {
+      ucclNIbDevs = 0;
+      char* ib_hca = getenv("NCCL_IB_HCA");
+      char* if_name = getenv("NCCL_SOCKET_IFNAME");
+      printf("NCCL_IB_HCA=%s\n", ib_hca);
+      struct uccl::ib_dev userIfs[MAX_IB_DEVS];
+       bool searchNot = ib_hca && ib_hca[0] == '^';
+       if (searchNot) ib_hca++;
+        bool searchExact = ib_hca && ib_hca[0] == '=';
+        if (searchExact) ib_hca++;
+        int nUserIfs = parseStringList(ib_hca, userIfs, MAX_IB_DEVS);
+        devices = ibv_get_device_list(&num_devs);
+        for (int d=0; d<num_devs && ucclNIbDevs<MAX_IB_DEVS; d++) {
+            printf("Checking device %s\n", devices[d]->name);
+            struct ibv_context * context;
+            context = ibv_open_device(devices[d]);
+            if (context == NULL) {
+                printf("NET/IB : Unable to open device %s", devices[d]->name);
+                continue;
+            }
+            int nPorts = 0;
+            struct ibv_device_attr dev_attr;
+            memset(&dev_attr, 0, sizeof(dev_attr));
+            if (ibv_query_device(context, &dev_attr)) {
+                ibv_close_device(context);
+                continue;
+            }
+            for (int port_num = 1; port_num <= dev_attr.phys_port_cnt; port_num++) {
+                nPorts=0;
+                struct ibv_port_attr port_attr;
+                if (ibv_query_port(context, port_num, &port_attr)) {
+                  printf("NET/IB : Unable to query port_num %d", port_num);
+                  ibv_close_device(context);
+                  continue;
+                }
+                // check against user specified HCAs/ports
+                if (! (matchIfList(devices[d]->name, port_num, userIfs, nUserIfs, searchExact) ^ searchNot)) {
+                  ibv_close_device(context);
+                  continue;
+                }
+                if (port_attr.state != IBV_PORT_ACTIVE) {
+                  ibv_close_device(context);
+                  continue;
+                }
+
+                // Initialize Dev
+                struct FactoryDevice dev;
+                strncpy(dev.ib_name, devices[d]->name, sizeof(devices[d]->name));
+                
+                if (if_name) {
+                  char* first_intf = strtok(if_name, ",");
+                  if (first_intf) {
+                    dev.local_ip_str = get_dev_ip(first_intf);
+                  } else {
+                    dev.local_ip_str = get_dev_ip(if_name);
+                  }
+                } else {
+                  DCHECK(util_rdma_get_ip_from_ib_name(dev.ib_name, &dev.local_ip_str) == 0);
+                }
+
+                dev.dev_attr = dev_attr;
+                dev.port_attr = port_attr;
+                dev.ib_port_num = port_num;
+                dev.gid_idx = GID_IDX;
+                dev.context = context;
+
+                if (ibv_query_gid(context, port_num, dev.gid_idx, &dev.gid)) {
+                  perror("ibv_query_gid");
+                  ibv_close_device(context);
+                  continue;
+                }
+
+                // Allocate a PD for this device.
+                dev.pd = ibv_alloc_pd(context);
+                if (dev.pd == nullptr) {
+                  perror("ibv_alloc_pd");
+                  ibv_close_device(context);
+                  continue;                
+                }
+
+                // Detect DMA-BUF support.
+                {
+                  struct ibv_pd* pd;
+                  pd = ibv_alloc_pd(context);
+                  if (pd == nullptr) {
+                    perror("ibv_alloc_pd");
+                    ibv_close_device(context);
+                    continue;
+                  }
+                  // Test kernel DMA-BUF support with a dummy call (fd=-1)
+                  (void)ibv_reg_dmabuf_mr(pd, 0ULL /*offset*/, 0ULL /*len*/, 0ULL /*iova*/,
+                                          -1 /*fd*/, 0 /*flags*/);
+                  dev.dma_buf_support =
+                      !((errno == EOPNOTSUPP) || (errno == EPROTONOSUPPORT));
+                  ibv_dealloc_pd(pd);
+
+                  UCCL_LOG_RE << "DMA-BUF support: " << dev.dma_buf_support;
+                }
+
+                rdma_ctl->devices_.push_back(dev);
+                nPorts++;
+                printf("Initialized %s\n", devices[d]->name);
+                ucclNIbDevs++;
+            }
+        }
+    }
+
+  ibv_free_device_list(devices);
+  return ucclNIbDevs;
+error:
+  throw std::runtime_error("Failed to initialize RDMAFactory");
+}
+
 void RDMAFactory::init_dev(int devname_suffix) {
   struct FactoryDevice dev;
   struct ibv_device** device_list;
@@ -114,7 +237,7 @@ void RDMAFactory::init_dev(int devname_suffix) {
     fprintf(stderr, "IB is not supported\n");
     goto close_device;
   }
-
+  
   dev.dev_attr = dev_attr;
   dev.port_attr = port_attr;
   dev.ib_port_num = IB_PORT_NUM;
@@ -457,19 +580,43 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
     struct ibv_recv_wr* bad_wr;
     struct ibv_sge sge;
     if constexpr (!kRCMode) {
-      uint64_t chunk_addr;
-      if (retr_chunk_pool_->alloc_buff(&chunk_addr))
-        throw std::runtime_error(
-            "Failed to allocate buffer for retransmission chunk");
-      sge.addr = chunk_addr;
-      sge.length = RetrChunkBuffPool::kRetrChunkSize;
-      sge.lkey = retr_chunk_pool_->get_lkey();
-      wr.wr_id = chunk_addr;
-      wr.next = nullptr;
-      wr.sg_list = &sge;
-      wr.num_sge = 1;
+      for (int i = 0; i < kPostRQThreshold; i++) {
+        uint64_t chunk_addr;
+        DCHECK(retr_chunk_pool_->alloc_buff(&chunk_addr) == 0);
+        sge[i].addr = chunk_addr;
+        sge[i].length = RetrChunkBuffPool::kRetrChunkSize;
+        sge[i].lkey = retr_chunk_pool_->get_lkey();
+        imm_wrs_[i].sg_list = &sge[i];
+        imm_wrs_[i].num_sge = 1;
+        imm_wrs_[i].wr_id = chunk_addr;
+      }
     }
-    DCHECK(ibv_post_srq_recv(srq_, &wr, &bad_wr) == 0);
+
+    DCHECK(ibv_post_srq_recv(srq_, &imm_wrs_[0], &bad_wr) == 0);
+    UCCL_LOG_IO << "Posted " << kPostRQThreshold << " recv requests for SRQ";
+    post_srq_cnt_ -= kPostRQThreshold;
+  }
+
+  if (force && post_srq_cnt_) {
+    struct ibv_recv_wr* bad_wr;
+    if constexpr (!kRCMode) {
+      for (int i = 0; i < post_srq_cnt_; i++) {
+        uint64_t chunk_addr;
+        DCHECK(retr_chunk_pool_->alloc_buff(&chunk_addr) == 0);
+        sge[i].addr = chunk_addr;
+        sge[i].length = RetrChunkBuffPool::kRetrChunkSize;
+        sge[i].lkey = retr_chunk_pool_->get_lkey();
+        imm_wrs_[i].sg_list = &sge[i];
+        imm_wrs_[i].num_sge = 1;
+        imm_wrs_[i].wr_id = chunk_addr;
+      }
+    }
+
+    imm_wrs_[post_srq_cnt_ - 1].next = nullptr;
+    DCHECK(ibv_post_srq_recv(srq_, &imm_wrs_[0], &bad_wr) == 0);
+    UCCL_LOG_IO << "Posted " << post_srq_cnt_ << " recv requests for SRQ";
+    imm_wrs_[post_srq_cnt_ - 1].next = &imm_wrs_[post_srq_cnt_];
+    post_srq_cnt_ = 0;
   }
 
   // Timing wheel.

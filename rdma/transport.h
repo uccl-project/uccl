@@ -365,10 +365,8 @@ class RDMAEndpoint {
   Spin active_flows_spin_[NUM_DEVICES];
 
  public:
-  RDMAEndpoint(uint8_t const* devname_suffix_list, int num_devices,
-               int num_engines_per_dev);
+  RDMAEndpoint(int num_engines_per_dev);
 
-  RDMAEndpoint(int num_devices, int num_engines_per_dev);
   ~RDMAEndpoint();
 
   bool initialize_engine_by_dev(int dev, std::atomic<uint16_t>& port);

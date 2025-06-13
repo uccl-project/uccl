@@ -1193,6 +1193,10 @@ class RDMAFactory {
   ~RDMAFactory() { devices_.clear(); }
 
   /**
+   * @brief Initialize all eligible RDMA devices.
+   */
+  static int init_devs();
+  /**
    * @brief Initialize RDMA device.
    */
   static void init_dev(int devname_suffix);

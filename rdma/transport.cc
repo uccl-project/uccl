@@ -578,24 +578,22 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
   qp_setup_thread.detach();
 }
 
-RDMAEndpoint::RDMAEndpoint(int num_devices, int num_engines_per_dev)
-    : num_devices_(num_devices),
-      num_engines_per_dev_(num_engines_per_dev),
+#ifdef LAZY_CREATE_ENGINE
+RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
+    : num_engines_per_dev_(num_engines_per_dev),
       stats_thread_([this]() { stats_thread_fn(); }) {
   static std::once_flag flag_once;
   std::call_once(flag_once, [&]() {
     rdma_ctl_ = rdma_ctl;
 
-    for (int i = 0; i < num_devices; i++) {
-      RDMAFactory::init_dev(DEVNAME_SUFFIX_LIST[i]);
-    }
+    num_devices_ = RDMAFactory::init_devs();
   });
   ctx_pool_ = new SharedPool<PollCtx*, true>(kMaxInflightMsg);
   ctx_pool_buf_ = new uint8_t[kMaxInflightMsg * sizeof(PollCtx)];
   for (int i = 0; i < kMaxInflightMsg; i++) {
     ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());
   }
-  int total_num_engines = num_devices * num_engines_per_dev;
+  int total_num_engines = num_devices_ * num_engines_per_dev;
 
   for (int i = 0; i < total_num_engines; i++) channel_vec_[i] = new Channel();
 
@@ -604,23 +602,20 @@ RDMAEndpoint::RDMAEndpoint(int num_devices, int num_engines_per_dev)
     for (int i = 0; i < num_devices; i++) eqds_[i] = new eqds::EQDS(i);
   }
 }
-
-RDMAEndpoint::RDMAEndpoint(uint8_t const* devname_suffix_list, int num_devices,
-                           int num_engines_per_dev)
-    : num_devices_(num_devices),
-      num_engines_per_dev_(num_engines_per_dev),
+#else
+RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
+    : num_engines_per_dev_(num_engines_per_dev),
       stats_thread_([this]() { stats_thread_fn(); }) {
   // Initialize all RDMA devices.
   static std::once_flag flag_once;
+
   std::call_once(flag_once, [&]() {
-    for (int i = 0; i < num_devices; i++) {
-      RDMAFactory::init_dev(devname_suffix_list[i]);
-    }
+    num_devices_ = RDMAFactory::init_devs();
   });
 
   rdma_ctl_ = rdma_ctl;
 
-  int total_num_engines = num_devices * num_engines_per_dev;
+  int total_num_engines = num_devices_ * num_engines_per_dev;
 
   // Create multiple engines. Each engine has its own thread and channel to
   // let the endpoint communicate with.
@@ -628,7 +623,7 @@ RDMAEndpoint::RDMAEndpoint(uint8_t const* devname_suffix_list, int num_devices,
 
   if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
     // Receiver-driven congestion control per device.
-    for (int i = 0; i < num_devices; i++) eqds_[i] = new eqds::EQDS(i);
+    for (int i = 0; i < num_devices_; i++) eqds_[i] = new eqds::EQDS(i);
   }
 
   for (int engine_id = 0, engine_cpu_id; engine_id < total_num_engines;
@@ -657,11 +652,12 @@ RDMAEndpoint::RDMAEndpoint(uint8_t const* devname_suffix_list, int num_devices,
     ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());
   }
 
-  for (int i = 0; i < num_devices; i++) {
+  for (int i = 0; i < num_devices_; i++) {
     // Create listening sockets
     create_listen_socket(&test_listen_fds_[i], kTestListenPort + i);
   }
 }
+#endif
 
 inline uint32_t RDMAEndpoint::find_pot_load_engine_idx(int dev) {
   auto c1 = find_oblivious_engine_idx(dev);
@@ -774,7 +770,7 @@ PollCtx* RDMAEndpoint::install_flow_on_engine(uint32_t engine_idx,
 PollCtx* RDMAEndpoint::install_ctx_on_engine(uint32_t engine_idx,
                                              PeerID peer_id,
                                              union CtrlMeta meta) {
-  auto* cmdq = channel_vec_[engine_idx]->ctrl_cmdq_;
+  auto* cmdq = channel_vec_[engine_idx]->ctrl_cmdq_;  
 
   auto* poll_ctx = ctx_pool_->pop();
   Channel::CtrlMsg ctrl_msg = {

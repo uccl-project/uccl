@@ -841,4 +841,67 @@ inline uint64_t get_monotonic_time_ns() {
   return (uint64_t)ts.tv_sec * 1000000000LL + (uint64_t)ts.tv_nsec;
 }
 
+struct ib_dev {
+  char prefix[64];
+  int port;
+};
+
+static bool matchIf(const char* string, const char* ref, bool matchExact) {
+  // Make sure to include '\0' in the exact case
+  int matchLen = matchExact ? strlen(string) + 1 : strlen(ref);
+  return strncmp(string, ref, matchLen) == 0;
+}
+
+static bool matchPort(const int port1, const int port2) {
+  if (port1 == -1) return true;
+  if (port2 == -1) return true;
+  if (port1 == port2) return true;
+  return false;
+}
+
+static bool matchIfList(const char* string, int port, struct ib_dev* ifList, int listSize, bool matchExact) {
+  // Make an exception for the case where no user list is defined
+  if (listSize == 0) return true;
+
+  for (int i=0; i<listSize; i++) {
+    if (matchIf(string, ifList[i].prefix, matchExact)
+        && matchPort(port, ifList[i].port)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static inline int parseStringList(const char* string, struct ib_dev* ifList, int maxList) {
+  if (!string) return 0;
+
+  const char* ptr = string;
+
+  int ifNum = 0;
+  int ifC = 0;
+  char c;
+  do {
+    c = *ptr;
+    if (c == ':') {
+      if (ifC > 0) {
+        ifList[ifNum].prefix[ifC] = '\0';
+        ifList[ifNum].port = atoi(ptr+1);
+        ifNum++; ifC = 0;
+      }
+      while (c != ',' && c != '\0') c = *(++ptr);
+    } else if (c == ',' || c == '\0') {
+      if (ifC > 0) {
+        ifList[ifNum].prefix[ifC] = '\0';
+        ifList[ifNum].port = -1;
+        ifNum++; ifC = 0;
+      }
+    } else {
+      ifList[ifNum].prefix[ifC] = c;
+      ifC++;
+    }
+    ptr++;
+  } while (ifNum < maxList && c);
+  return ifNum;
+}
+
 }  // namespace uccl

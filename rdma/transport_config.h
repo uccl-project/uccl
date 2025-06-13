@@ -1,52 +1,41 @@
 #pragma once
 
-#include <cstdint>
 #include <string>
 #include <thread>
 #include <unistd.h>
+#include <cstdlib>
+
 
 // #define STATS
 // #define LAZY_CREATE_ENGINE
 
-/// Interface configuration.
-static char const* IB_DEVICE_NAME_PREFIX = "mlx5_";
+#define MAX_IB_DEVS 32
 
-#ifndef __HIP_PLATFORM_AMD__
-static constexpr bool ROCE_NET = true;
-// If SINGLE_CTRL_NIC is set, all devices will use the same IP.
-static std::string SINGLE_CTRL_NIC("enp164s0");
-static constexpr uint8_t DEVNAME_SUFFIX_LIST[8] = {1, 2, 3, 4, 5, 6, 7, 8};
-static constexpr uint8_t NUM_DEVICES = 8;
-// static constexpr uint8_t DEVNAME_SUFFIX_LIST[8] = {0, 2, 4, 6, 0, 0, 0, 0};
-// static constexpr uint8_t NUM_DEVICES = 4;
-static constexpr double LINK_BANDWIDTH = 400.0 * 1e9 / 8;  // 400Gbps
-// # of engines per device.
-static constexpr uint32_t NUM_ENGINES = 4;
-// Path/QP per engine. The total number is NUM_ENGINES * kPortEntropy.
-static constexpr uint32_t kPortEntropy = 64;
-// Maximum chunk size (Bytes) for each WQE.
-static constexpr uint32_t kChunkSize = 32 << 10;
-#else
-static constexpr bool ROCE_NET = false;
-static std::string SINGLE_CTRL_NIC("eth0");
-static constexpr uint8_t NUM_DEVICES = 1;
-static constexpr uint8_t DEVNAME_SUFFIX_LIST[NUM_DEVICES] = {0};
-static constexpr double LINK_BANDWIDTH = 200.0 * 1e9 / 8;  // 200Gbps
-static constexpr uint32_t NUM_ENGINES = 1;
-static constexpr uint32_t kPortEntropy = 256;
-static constexpr uint32_t kChunkSize = 128 << 10;
-#endif
+inline uint32_t getEnvUint32(const char* name, uint32_t default_value) {
+    const char* val = std::getenv(name);
+    return val ? static_cast<uint32_t>(std::stoul(val)) : default_value;
+}   
 
-static constexpr uint32_t MAX_PEER = 256;
+
+// Configuration parameters
+static const bool ROCE_NET = true;
+
+static const double LINK_BANDWIDTH = 100.0 * 1e9 / 8;
+static const uint32_t NUM_ENGINES = getEnvUint32("NUM_ENGINES", 1);
+static const uint32_t kPortEntropy = getEnvUint32("PORT_ENTROPY", 256);
+static const uint32_t kChunkSize = getEnvUint32("CHUNK_SIZE", 128 << 10);
+
+
+static const uint32_t MAX_PEER = 256;
 // Maximum number of flows (one-way) on each engine.
-static constexpr uint32_t MAX_FLOW = 256;
-static constexpr uint8_t IB_PORT_NUM = 1;
+static const uint32_t MAX_FLOW = 256;
+
 // Traffic class
-static constexpr uint8_t kTrafficClass = ROCE_NET ? 3 : 0;
+static const uint8_t kTrafficClass = ROCE_NET ? 3 : 0;
 // Service level
-static constexpr uint8_t kServiceLevel = ROCE_NET ? 135 : 0;
+static const uint8_t kServiceLevel = ROCE_NET ? 135 : 0;
 // GID Index
-static constexpr uint8_t GID_IDX = ROCE_NET ? 3 : 0;
+static const uint8_t GID_IDX = ROCE_NET ? 3 : 0;
 /// Interface configuration.
 
 static uint32_t NUM_CPUS = std::thread::hardware_concurrency();
@@ -58,23 +47,23 @@ static uint32_t ENGINE_CPU_START_LIST[8] = {
 };
 
 // Use RC rather than UC.
-static constexpr bool kRCMode = false;
+static const bool kRCMode = false;
 // Bypass the pacing stage.
-static constexpr bool kBypassPacing = true;
+static const bool kBypassPacing = true;
 
 // Limit the per-flow outstanding bytes on each engine.
-static constexpr uint32_t kMaxUnAckedBytesPerFlow =
+static const uint32_t kMaxUnAckedBytesPerFlow =
     2 * std::max(kChunkSize, 32768u);
 // Limit the outstanding bytes on each engine.
 // Low means if a flow exceeds its own budget but doesn't exceed the Low
 // threshold, it can send until Low threshold. static constexpr uint32_t
 // kMaxUnAckedBytesPerEngineLow = 18 * std::max(kChunkSize, 32768u);
-static constexpr uint32_t kMaxUnAckedBytesPerEngineLow =
+static const uint32_t kMaxUnAckedBytesPerEngineLow =
     8 * std::max(kChunkSize, 32768u);
 // High means if all flows reach this threshold, all flows can't send any bytes.
 // static constexpr uint32_t kMaxUnAckedBytesPerEngineHigh = 24 *
 // std::max(kChunkSize, 32768u);
-static constexpr uint32_t kMaxUnAckedBytesPerEngineHigh =
+static const uint32_t kMaxUnAckedBytesPerEngineHigh =
     12 * std::max(kChunkSize, 32768u);
 
 // Congestion control algorithm.
@@ -90,8 +79,8 @@ enum ReceiverCCA {
   // EQDS [NSDI'22]
   RECEIVER_CCA_EQDS,
 };
-static constexpr enum SenderCCA kSenderCCA = SENDER_CCA_TIMELY;
-static constexpr enum ReceiverCCA kReceiverCCA = RECEIVER_CCA_NONE;
+static const enum SenderCCA kSenderCCA = SENDER_CCA_TIMELY;
+static const enum ReceiverCCA kReceiverCCA = RECEIVER_CCA_NONE;
 static_assert(kSenderCCA != SENDER_CCA_NONE ||
                   kReceiverCCA != RECEIVER_CCA_NONE,
               "At least one of the sender and receiver must have a congestion "
@@ -110,108 +99,108 @@ enum engine_lb_policy {
   // Variant of ENGINE_POLICY_LOAD, which uses power of two.
   ENGINE_POLICY_LOAD_POT,
 };
-static constexpr enum engine_lb_policy kEngineLBPolicy = ENGINE_POLICY_RR;
+static const enum engine_lb_policy kEngineLBPolicy = ENGINE_POLICY_RR;
 
 static uint32_t const PACER_CPU_START = 3 * NUM_CPUS / 4;
 
-constexpr static int kTotalQP =
+// Replace constexpr with const for kTotalQP
+static const int kTotalQP =
     kPortEntropy + 1 /* Credit QP */ + (kRCMode ? 0 : 1) /* Ctrl QP */;
 // Recv buffer size smaller than kRCSize will be handled by RC directly.
-static constexpr uint32_t kRCSize = 8192;
+static const uint32_t kRCSize = 8192;
 // fallback to nccl
 // static constexpr uint32_t kRCSize = 4000000;
 // Minimum post receive size in NCCL.
-static constexpr uint32_t NCCL_MIN_POST_RECV = 65536;
+static const uint32_t NCCL_MIN_POST_RECV = 65536;
 // fallback to nccl
 // static constexpr uint32_t NCCL_MIN_POST_RECV = 4000000;
 
 // Limit the bytes of consecutive cached QP uses.
-static constexpr uint32_t kMAXConsecutiveSameChoiceBytes = 16384;
+static const uint32_t kMAXConsecutiveSameChoiceBytes = 16384;
 // Message size threshold for allowing using cached QP.
-static constexpr uint32_t kMAXUseCacheQPSize = 8192;
+static const uint32_t kMAXUseCacheQPSize = 8192;
 // Message size threshold for bypassing the timing wheel.
-static constexpr uint32_t kBypassTimingWheelThres = 9000;
+static const uint32_t kBypassTimingWheelThres = 9000;
 
 // # of Tx work handled in one loop.
-static constexpr uint32_t kMaxTxWork = 4;
+static const uint32_t kMaxTxWork = 4;
 // Maximum number of Tx bytes to be transmitted in one loop.
-static constexpr uint32_t kMaxTxBytesThres = 32 * std::max(kChunkSize, 32768u);
+static const uint32_t kMaxTxBytesThres = 32 * std::max(kChunkSize, 32768u);
 // # of Rx work handled in one loop.
-static constexpr uint32_t kMaxRxWork = 8;
+static const uint32_t kMaxRxWork = 8;
 // Completion queue (CQ) size.
-static constexpr int kCQSize = 16384;
+static const int kCQSize = 16384;
 // Interval for posting a signal WQE.
 // static constexpr uint32_t kSignalInterval = kCQSize >> 1;
-static constexpr uint32_t kSignalInterval = 1;
+static const uint32_t kSignalInterval = 1;
 // Interval for syncing the clock with NIC.
-static constexpr uint32_t kSyncClockIntervalNS = 100000;
+static const uint32_t kSyncClockIntervalNS = 100000;
 // Maximum number of CQEs to retrieve in one loop.
-static constexpr uint32_t kMaxBatchCQ = 16;
+static const uint32_t kMaxBatchCQ = 16;
 // CQ moderation count.
-static constexpr uint32_t kCQMODCount = 32;
+static const uint32_t kCQMODCount = 32;
 // CQ moderation period in microsecond.
-static constexpr uint32_t kCQMODPeriod = 100;
+static const uint32_t kCQMODPeriod = 100;
 // Maximum size of inline data.
-static constexpr uint32_t kMaxInline = 512;
+static const uint32_t kMaxInline = 512;
 // Maximum number of SGEs in one WQE.
-static constexpr uint32_t kMaxSge = 2;
+static const uint32_t kMaxSge = 2;
 // Maximum number of outstanding receive messages in one recv request.
-static constexpr uint32_t kMaxRecv = 1;
+static const uint32_t kMaxRecv = 1;
 // Maximum number of outstanding receive requests in one engine.
-static constexpr uint32_t kMaxReq = 128;
+static const uint32_t kMaxReq = 128;
 // Maximum number of WQEs in SRQ (Shared Receive Queue).
-static constexpr uint32_t kMaxSRQ = 16 * kMaxReq;
+static const uint32_t kMaxSRQ = 16 * kMaxReq;
 // Maximum number of chunks can be transmitted from timing wheel in one loop.
-static constexpr uint32_t kMaxBurstTW = 8;
+static const uint32_t kMaxBurstTW = 8;
 // Posting recv WQEs every kPostRQThreshold.
-static constexpr uint32_t kPostRQThreshold = kMaxBatchCQ;
+static const uint32_t kPostRQThreshold = kMaxBatchCQ;
 // When CQEs from one QP reach kMAXCumWQE, send immediate ack.
 // 1 means always send immediate ack.
-static constexpr uint32_t kMAXCumWQE = 4;
+static const uint32_t kMAXCumWQE = 4;
 // When the cumulative bytes reach kMAXCumBytes, send immediate ack.
-static constexpr uint32_t kMAXCumBytes = kMAXCumWQE * kChunkSize;
+static const uint32_t kMAXCumBytes = kMAXCumWQE * kChunkSize;
 // Before reaching it, the receiver will not consider that it has encountered
 // OOO, and thus there is no immediate ack. This is to tolerate the OOO caused
 // by the sender's qp scheduling.
-static constexpr uint32_t kMAXRXOOO = 8;
+static const uint32_t kMAXRXOOO = 8;
 
 // Sack bitmap size in bits.
 // Note that kSackBitmapSize must be <= half the maximum value of UINT_CSN.
 // E.g., UINT_CSN = 8bit, kSacBitmapSize <= 128.
-static constexpr std::size_t kSackBitmapSize = 64 << 1;
+static const std::size_t kSackBitmapSize = 64 << 1;
 // kFastRexmitDupAckThres equals to 1 means all duplicate acks are caused by
 // packet loss. This is true for flow-level ECMP, which is the common case. When
 // the network supports adaptive routing, duplicate acks may be caused by
 // adaptive routing. In this case, kFastRexmitDupAckThres should be set to a
 // value greater than 0.
-static constexpr std::size_t kFastRexmitDupAckThres = ROCE_NET ? 32 : 65536;
+static const std::size_t kFastRexmitDupAckThres = ROCE_NET ? 32 : 65536;
 
 // Maximum number of Retransmission Timeout (RTO) before aborting the flow.
-static constexpr uint32_t kRTOAbortThreshold = 50;
+static const uint32_t kRTOAbortThreshold = 50;
 
-static constexpr uint32_t kMAXRTTUS = 10000;
+static const uint32_t kMAXRTTUS = 10000;
 // Constant/Dynamic RTO.
-static constexpr bool kConstRTO = true;
+static const bool kConstRTO = true;
 // kConstRTO == true: Constant retransmission timeout in microseconds.
-static constexpr double kRTOUSec = 1000;
+static const double kRTOUSec = 1000;
 // kConstRTO == false: Minimum retransmission timeout in microseconds.
-static constexpr double kMinRTOUsec = 1000;
-static constexpr uint32_t kRTORTT = 4;  // RTO = kRTORTT RTTs
+static const double kMinRTOUsec = 1000;
+static const uint32_t kRTORTT = 4;  // RTO = kRTORTT RTTs
 
 // Slow timer (periodic processing) interval in microseconds.
-static constexpr size_t kSlowTimerIntervalUs = 1000;
+static const size_t kSlowTimerIntervalUs = 1000;
 
 /// Debugging and testing.
 // Disable hardware timestamp.
-static constexpr bool kTestNoHWTimestamp = false;
+static const bool kTestNoHWTimestamp = false;
 // Use constant(maximum) rate for transmission.
-static constexpr bool kTestConstantRate = false;
+static const bool kTestConstantRate = false;
 // Test lossy network.
-static constexpr bool kTestLoss = false;
-static constexpr double kTestLossRate = 0.0;
+static const bool kTestLoss = false;
+static const double kTestLossRate = 0.0;
 // Disable RTO.
-static constexpr bool kTestNoRTO =
+static const bool kTestNoRTO =
     (ROCE_NET || kTestLoss)
         ? false
         : true;  // Infiniband is lossless, disable RTO even for UC.
-/// Debugging and testing.

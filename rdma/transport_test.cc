@@ -402,7 +402,7 @@ int main(int argc, char* argv[]) {
   google::InstallFailureSignalHandler();
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
-  ep.emplace(DEVNAME_SUFFIX_LIST, NUM_DEVICES, NUM_ENGINES);
+  ep.emplace(NUM_ENGINES);
 
   // Create a thread to print throughput every second
   std::thread t([&] {

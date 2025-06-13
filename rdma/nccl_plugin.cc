@@ -87,8 +87,7 @@ ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
 #ifdef LAZY_CREATE_ENGINE
   ep = std::make_shared<RDMAEndpoint>(NUM_DEVICES, NUM_ENGINES);
 #else
-  ep = std::make_shared<RDMAEndpoint>(DEVNAME_SUFFIX_LIST, NUM_DEVICES,
-                                      NUM_ENGINES);
+  ep = std::make_shared<RDMAEndpoint>(NUM_ENGINES);
 #endif
   return ncclSuccess;
 }
