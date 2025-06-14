@@ -37,27 +37,57 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs) {
     uint64_t my_hdr;
     uint64_t cur_tail;
 
+#ifdef MEASURE_PER_OP_LATENCY
+    // if (complete < my_hdr + todo) {
+    uint32_t cidx = complete & kQueueMask;
+    cur_tail = ld_volatile(&rb->tail);
+    if (complete < cur_tail) {
+      // __threadfence_system();
+      for (int i = complete; i < cur_tail; ++i) {
+        if (rb->buf[cidx].cmd != 0) {
+          printf(
+              "Device Block %d: Error at complete %u, rb->tail:%lu, expected "
+              "0, got %llu\n",
+              bid, complete, rb->tail, rb->buf[cidx].cmd);
+          return;
+        }
+        if (complete >= kWarmupOps) {
+          unsigned long long t1 = clock64();
+          unsigned long long cycles = t1 - start_cycle_smem[cidx];
+          cycle_accum_smem += cycles;
+          op_count_smem++;
+        }
+      }
+      complete = cur_tail;
+    }  // else {
+       // break;
+       // }
+       // }
+#endif
+
     unsigned int todo =
         (it + kBatchSize <= kIterations) ? kBatchSize : (kIterations - it);
 
     // Dynamically send the number of todos to send.
-    while (true) {
-      uint64_t cur_head = rb->head;
-      cur_tail = ld_volatile(&rb->tail);
-      uint64_t free_slots = kHeadTailLimit - (cur_head - cur_tail);
+    // while (true) {
+    uint64_t cur_head = rb->head;
+    cur_tail = ld_volatile(&rb->tail);
+    uint64_t free_slots = kHeadTailLimit - (cur_head - cur_tail);
 
-      if (free_slots >= todo) {
-        // rb->head = cur_head + todo;
-        my_hdr = cur_head;
-        break;
-      } else if (free_slots >= 1) {
-        // rb->head = cur_head + free_slots;
-        my_hdr = cur_head;
-        todo = free_slots;
-        break;
-      }
-      /* Spin */
+    if (free_slots >= todo) {
+      // rb->head = cur_head + todo;
+      my_hdr = cur_head;
+      // break;
+    } else if (free_slots >= 1) {
+      // rb->head = cur_head + free_slots;
+      my_hdr = cur_head;
+      todo = free_slots;
+      // break;
+    } else {
+      continue;
     }
+    /* Spin */
+    // }
 
     for (int i = 0; i < todo; ++i) {
       uint32_t idx = (my_hdr + i) & kQueueMask;
@@ -73,29 +103,6 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs) {
     __threadfence_system();
     rb->head = my_hdr + todo;
 
-#ifdef MEASURE_PER_OP_LATENCY
-    while (complete < my_hdr + todo) {
-      uint32_t cidx = complete & kQueueMask;
-      if (complete < ld_volatile(&rb->tail)) {
-        // __threadfence_system();
-        if (rb->buf[cidx].cmd != 0) {
-          printf(
-              "Device Block %d: Error at complete %u, rb->tail:%lu, expected "
-              "0, got %llu\n",
-              bid, complete, rb->tail, rb->buf[cidx].cmd);
-        }
-        if (complete >= kWarmupOps) {
-          unsigned long long t1 = clock64();
-          unsigned long long cycles = t1 - start_cycle_smem[cidx];
-          cycle_accum_smem += cycles;
-          op_count_smem++;
-        }
-        complete++;
-      } else {
-        break;
-      }
-    }
-#endif
     it += todo;
     if (complete > kWarmupOps) {
       if (print_warmup_exit) {
@@ -107,12 +114,14 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs) {
 
 #ifdef MEASURE_PER_OP_LATENCY
   while (complete < kIterations) {
-    while (complete >= ld_volatile(&rb->tail)) { /* spin */
-    }
-    if (complete >= kWarmupOps) {
+    // while (complete >= ld_volatile(&rb->tail)) { /* spin */
+    // }
+    if (complete >= kWarmupOps && complete < ld_volatile(&rb->tail)) {
       unsigned long long t1 = clock64();
       cycle_accum_smem += (t1 - start_cycle_smem[complete & kQueueMask]);
       ++op_count_smem;
+    } else {
+      continue;
     }
     ++complete;
   }

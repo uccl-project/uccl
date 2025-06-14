@@ -127,7 +127,7 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
   for (size_t seen = 0; my_tail < kIterations;) {
     poll_completions(cq, finished_wrs, finished_wrs_mutex);
     // Force loading rb->head from DRAM.
-    while (load_volatile_u64(&rb->head) == my_tail) {
+    if (load_volatile_u64(&rb->head) == my_tail) {
 #ifdef DEBUG_PRINT
       if (block_idx == 0) {
         printf(
@@ -137,7 +137,8 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
       }
 #endif
       /* spin */
-      _mm_pause();
+      // _mm_pause();
+      continue;
     }
 
 #ifdef DEBUG_PRINT
@@ -165,11 +166,10 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
     std::vector<uint64_t> wrs_to_post;
     for (size_t i = seen; i < cur_head; ++i) {
       uint64_t cmd = rb->buf[i & kQueueMask].cmd;
-      ;
-      while (cmd == 0) {
-        exit(0);
-        cmd = rb->buf[i & kQueueMask].cmd;
-        _mm_pause();  // Avoid hammering the cacheline.
+      if (cmd == 0) {
+        fprintf(stderr, "Error: cmd at index %zu is zero, my_tail: %lu\n", i,
+                my_tail);
+        exit(1);
       }
       uint64_t expected_cmd =
           (static_cast<uint64_t>(block_idx) << 32) | (i + 1);

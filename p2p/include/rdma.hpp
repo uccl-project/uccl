@@ -87,4 +87,7 @@ void pin_thread_to_nic_numa(int nic_idx, int core_offset);
 int pick_nic_index(int i);
 void per_thread_rdma_init(void* gpu_buf, size_t bytes, int rank, int block_idx);
 int gpu_numa_node(int gpu_id);
+
+extern void* per_GPU_device_buf[NUM_GPUS];
+
 #endif  // RDMA_HPP

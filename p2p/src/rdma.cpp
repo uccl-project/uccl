@@ -50,6 +50,7 @@ struct NicCtx {
   std::string name;  // "mlx5_0" …
 };
 
+void* per_GPU_device_buf[NUM_GPUS];
 static std::vector<NicCtx> g_nics;
 
 int gpu_numa_node(int gpu_id) {
@@ -746,13 +747,21 @@ void handle_peer_copy(uint64_t wr_id, uint32_t imm, int src_dev, int dst_dev,
     cudaSetDevice(src_dev);
   }
 
-  cudaMemcpyPeerAsync(dst_ptr, dst_dev, src_ptr, src_dev, num_bytes,
-                      copy_stream);
+  cudaError_t err = cudaMemcpyPeerAsync(dst_ptr, dst_dev, src_ptr, src_dev,
+                                        num_bytes, copy_stream);
+  if (err != cudaSuccess) {
+    fprintf(stderr,
+            "cudaMemcpyPeerAsync failed (%s)\n"
+            "  wr_id=%llu  imm=0x%x  %zu B  GPU%d→GPU%d\n",
+            cudaGetErrorString(err), (unsigned long long)wr_id, imm, num_bytes,
+            src_dev, dst_dev);
+    std::abort();
+  }
 
-  printf(
-      "[CPU-proxy] wr_id=%llu  imm=0x%x → peer copy %zu bytes "
-      "GPU%d→GPU%d launched\n",
-      (unsigned long long)wr_id, imm, num_bytes, src_dev, dst_dev);
+  // printf(
+  //     "[CPU-proxy] wr_id=%llu  imm=0x%x → peer copy %zu bytes "
+  //     "GPU%d→GPU%d launched\n",
+  //     (unsigned long long)wr_id, imm, num_bytes, src_dev, dst_dev);
 }
 
 void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq) {
@@ -790,6 +799,11 @@ void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq) {
                 .next = (i + 1 < ne) ? &wrs[i + 1] : nullptr,
                 .sg_list = &sges[i],
                 .num_sge = 1};
+
+#ifdef ENABLE_PROXY_CUDA_MEMCPY
+      handle_peer_copy(wc[i].wr_id, wc[i].imm_data, 0, 1, mr->addr,
+                       per_GPU_device_buf[1], kObjectSize);
+#endif
     }
 
     ibv_recv_wr* bad = nullptr;
