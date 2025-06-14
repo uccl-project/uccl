@@ -9,7 +9,7 @@
 struct alignas(128) RingBuffer {
   uint64_t head;  // Next slot to produce
   uint64_t tail;  // Next slot to consume
-  volatile TransferCmd buf[QUEUE_SIZE];
+  TransferCmd buf[kQueueSize];
   uint64_t cycle_accum;
   uint64_t op_count;
 };

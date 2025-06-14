@@ -39,14 +39,16 @@
 #define REMOTE_NVLINK_FORWARDING
 #define ASSUME_WR_IN_ORDER
 #define NUMA_AWARE_SCHEDULING
-#define kQueueSize 8
+#define kQueueSize 16
+#define kHeadTailLimit 4
 #define kQueueMask (kQueueSize - 1)
 #define kBatchSize 4
 #define kIterations 1000000
 #define kNumThBlocks 16
 #define kNumThPerBlock 1
 #define kObjectSize 8192  // 8 KB
-#define kMaxOutstandingSends kNumThBlocks* kQueueSize
+#define kMaxOutstandingSends 1024
+#define kMaxOutstandingRecvs 1024
 #define kSignalledEvery 1
 #define kNumPollingThreads 0  // Rely on CPU proxy to poll.
 #define kPollingThreadStartPort kNumThBlocks * 2
@@ -62,10 +64,6 @@ struct TransferCmd {
   void* src_ptr;      // device pointer to data
   uint64_t bytes;     // transfer size
 };
-
-// Ring buffer queue size and mask (must be a power of 2)
-constexpr uint32_t QUEUE_SIZE = 1024;
-constexpr uint32_t QUEUE_MASK = QUEUE_SIZE - 1;
 
 bool pin_thread_to_cpu(int cpu);
 

@@ -12,6 +12,12 @@
 #include <stdio.h>
 #include <unistd.h>
 
+thread_local std::unordered_map<int,
+                                std::chrono::high_resolution_clock::time_point>
+    wr_id_to_start_time;
+thread_local uint64_t completion_count;
+thread_local uint64_t wr_time_total;
+
 inline uint64_t load_volatile_u64(uint64_t volatile* addr) {
   uint64_t val;
   asm volatile("movq %1, %0" : "=r"(val) : "m"(*addr) : "memory");
@@ -36,6 +42,7 @@ void remote_cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
     printf("Thread pinned to CPU core %d\n", cpu);
   }
   ibv_cq* cq = create_per_thread_cq();
+  printf("Created CQ for block %d: %p\n", block_idx + 1, cq);
   RDMAConnectionInfo local_info, remote_info;
   create_per_thread_qp(gpu_buffer, total_size, &local_info, rank, cq);
 
@@ -60,7 +67,8 @@ void remote_cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
 #ifdef REMOTE_NVLINK_FORWARDING
     cpu_proxy_poll_write_with_immediate(block_idx, cq);
 #else
-    poll_completions_plain(cq);
+    // In normal RDMA receiver does not need to poll.
+    // poll_completions_plain(cq);
 #endif
     // Force loading rb->head from DRAM.
   }
@@ -143,9 +151,9 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
     uint64_t cur_head = load_volatile_u64(&rb->head);
     size_t batch_size = cur_head - seen;
 
-    if (batch_size > kQueueSize) {
-      fprintf(stderr, "Error: batch_size %zu exceeds kQueueSize %d\n",
-              batch_size, kQueueSize);
+    if (batch_size > kHeadTailLimit) {
+      fprintf(stderr, "Error: batch_size %zu exceeds kHeadTailLimit %d\n",
+              batch_size, kHeadTailLimit);
       exit(1);
     }
 
@@ -172,6 +180,9 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
         exit(1);
       }
       wrs_to_post.push_back(i);
+      wr_id_to_start_time[i] =
+          std::chrono::high_resolution_clock::now();  // Record start time for
+                                                      // this block
     }
     seen = cur_head;
 
@@ -185,6 +196,9 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
       auto start = std::chrono::high_resolution_clock::now();
       post_rdma_async_chained(gpu_buffer, kObjectSize, batch_size, wrs_to_post,
                               cq, finished_wrs, finished_wrs_mutex);
+      // for (auto wr_id : wrs_to_post) {
+      //   finished_wrs.insert(wr_id);
+      // }
       auto end = std::chrono::high_resolution_clock::now();
       total_rdma_write_durations +=
           std::chrono::duration_cast<std::chrono::microseconds>(end - start);
@@ -194,8 +208,23 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
 #ifdef ASSUME_WR_IN_ORDER
     {
       std::lock_guard<std::mutex> lock(finished_wrs_mutex);
+      int check_i = 0;
       for (auto i : finished_wrs) {
-        rb->buf[i & kQueueMask].cmd = 0;
+        rb->buf[(my_tail + check_i) & kQueueMask].cmd = 0;
+        check_i++;
+        auto it = wr_id_to_start_time.find(i);
+        if (it == wr_id_to_start_time.end()) {
+          fprintf(stderr, "Error: WR ID %lu not found in wr_id_to_start_time\n",
+                  i);
+          exit(1);
+        }
+        auto start_time = it->second;
+        auto end_time = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
+            end_time - start_time);
+        // printf("WR ID %lu took %ld us\n", i, duration.cou());
+        wr_time_total += duration.count();
+        completion_count++;
       }
       if (!finished_wrs.empty()) {
         size_t min =
@@ -254,6 +283,11 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
 #endif
   printf("CPU thread for block %d finished, joined all CQ threads\n",
          block_idx);
+
+  printf(
+      "Per-wr time: %.2f us, total wr time: %lu us, "
+      "completion count: %lu\n",
+      (float)wr_time_total / completion_count, wr_time_total, completion_count);
 }
 
 void cpu_proxy_local(RingBuffer* rb, int block_idx) {

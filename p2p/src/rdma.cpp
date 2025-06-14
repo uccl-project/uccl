@@ -257,9 +257,13 @@ void per_thread_rdma_init(void* gpu_buf, size_t bytes, int rank,
   }
 
   // Register GPU memory
+  // mr = ibv_reg_mr(pd, gpu_buf, bytes,
+  //                 IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+  //                     IBV_ACCESS_REMOTE_READ | IBV_ACCESS_ZERO_BASED);
+
   mr = ibv_reg_mr(pd, gpu_buf, bytes,
-                  IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                      IBV_ACCESS_REMOTE_READ | IBV_ACCESS_ZERO_BASED);
+                  IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+
   if (!mr) {
     perror("ibv_reg_mr failed");
     exit(1);
@@ -494,19 +498,26 @@ void modify_qp_to_rts(RDMAConnectionInfo* local_info) {
 }
 
 void post_receive_buffer_for_imm() {
-  // static char recv_buf[64];
+  std::vector<ibv_recv_wr> wrs(kMaxOutstandingRecvs);
+  std::vector<ibv_sge> sges(kMaxOutstandingRecvs);
 
-  struct ibv_sge sge = {
-      .addr = (uintptr_t)mr->addr, .length = kObjectSize, .lkey = mr->lkey};
+  for (size_t i = 0; i < kMaxOutstandingRecvs; ++i) {
+    int offset = kNumThBlocks > i ? i : (i % kNumThBlocks);
 
-  struct ibv_recv_wr wr = {
-      .wr_id = 123, .next = nullptr, .sg_list = &sge, .num_sge = 1};
+    sges[i] = {.addr = (uintptr_t)mr->addr + offset * kObjectSize,
+               .length = kObjectSize,
+               .lkey = mr->lkey};
+    wrs[i] = {.wr_id = i,  // choose something meaningful
+              .next = (i + 1 < kMaxOutstandingRecvs) ? &wrs[i + 1] : nullptr,
+              .sg_list = &sges[i],
+              .num_sge = 1};
+  }
 
-  struct ibv_recv_wr* bad_wr = nullptr;
-  int ret = ibv_post_recv(qp, &wr, &bad_wr);
-  if (ret) {
-    fprintf(stderr, "Failed to post RECV: %s\n", strerror(ret));
-    exit(1);
+  /* Post the whole chain with ONE verbs call */
+  ibv_recv_wr* bad = nullptr;
+  if (ibv_post_recv(qp, &wrs[0], &bad)) {
+    perror("ibv_post_recv");
+    abort();
   }
 }
 
@@ -535,7 +546,7 @@ void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
 
 #ifdef REMOTE_NVLINK_FORWARDING
     wrs[i].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-    wrs[i].imm_data = 0;
+    wrs[i].imm_data = 42;
 #else
     wrs[i].opcode = IBV_WR_RDMA_WRITE;
 #endif
@@ -558,6 +569,14 @@ void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
       wrs[i].next = &wrs[i + 1];  // chain to next WR
     } else {
       wrs[i].next = nullptr;  // last WR in the chain
+    }
+    if (false) {
+      std::lock_guard<std::mutex> lock(finished_wrs_mutex);
+      // Insert the WR ID into the set of finished WRs
+      // This is used to track which WRs have been posted
+      // and completed.
+      finished_wrs.insert(wrs[i].wr_id);
+      g_completed.fetch_add(1, std::memory_order_relaxed);
     }
   }
   ibv_send_wr* bad = nullptr;
@@ -677,16 +696,23 @@ void poll_completions(ibv_cq* cq, std::unordered_set<uint64_t>& finished_wrs,
 
 void poll_completions_plain(ibv_cq* cq) {
   struct ibv_wc wc[kMaxOutstandingSends];  // batch poll
-  int ne = ibv_poll_cq(cq, kMaxOutstandingSends, wc);
-  if (ne == 0) return;
-  for (int i = 0; i < ne; ++i) {
-    if (wc[i].status != IBV_WC_SUCCESS) {
-      fprintf(stderr, "CQE error wr_id=%llu status=%s\n",
-              (unsigned long long)wc[i].wr_id, ibv_wc_status_str(wc[i].status));
-      std::abort();
+
+  while (g_progress_run.load(std::memory_order_acquire)) {
+    int ne = ibv_poll_cq(cq, kMaxOutstandingSends, wc);
+    if (ne == 0) return;
+    for (int i = 0; i < ne; ++i) {
+      if (wc[i].status != IBV_WC_SUCCESS) {
+        fprintf(stderr, "CQE error wr_id=%llu status=%s\n",
+                (unsigned long long)wc[i].wr_id,
+                ibv_wc_status_str(wc[i].status));
+        std::abort();
+      }
+      if (wc[i].opcode != IBV_WC_RECV) {
+        fprintf(stderr, "Unexpected opcode: %d\n", wc[i].opcode);
+        exit(1);
+      }
     }
   }
-  g_completed.fetch_add(ne, std::memory_order_relaxed);
 }
 
 void per_thread_polling(int thread_idx, struct ibv_cq* per_thread_cq,
@@ -738,38 +764,47 @@ void handle_peer_copy(uint64_t wr_id, uint32_t imm, int src_dev, int dst_dev,
 }
 
 void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq) {
-  struct ibv_wc wc[kMaxOutstandingSends];
+  struct ibv_wc wc[kMaxOutstandingRecvs];
+  struct ibv_sge sges[kMaxOutstandingRecvs];
+  struct ibv_recv_wr wrs[kMaxOutstandingRecvs];
   size_t pool_index = 0;
 
   while (g_progress_run.load(std::memory_order_acquire)) {
-    int ne = ibv_poll_cq(cq, kMaxOutstandingSends, wc);
+    int ne = ibv_poll_cq(cq, kMaxOutstandingRecvs, wc);
     if (ne == 0) continue;
     for (int i = 0; i < ne; ++i) {
       if (wc[i].status != IBV_WC_SUCCESS) {
         fprintf(stderr, "RDMA error: %s\n", ibv_wc_status_str(wc[i].status));
-        continue;
+        exit(1);
       }
       if (wc[i].opcode != IBV_WC_RECV_RDMA_WITH_IMM) {
-        continue;
+        fprintf(stderr, "Unexpected opcode: %d\n", wc[i].opcode);
+        exit(1);
+      }
+
+      if (wc[i].imm_data != 42) {
+        fprintf(stderr, "Unexpected immediate data: %u\n", wc[i].imm_data);
+        exit(1);
       }
 
       pool_index = (pool_index + 1) % (kRemoteBufferSize / kObjectSize - 1);
-      char* next_buf = (char*)mr->addr + pool_index * kObjectSize;
+      char* next_buf = static_cast<char*>(mr->addr) + pool_index * kObjectSize;
 
-      struct ibv_sge sge = {
-          .addr = (uintptr_t)next_buf, .length = kObjectSize, .lkey = mr->lkey};
+      sges[i] = {.addr = reinterpret_cast<uintptr_t>(next_buf),
+                 .length = kObjectSize,
+                 .lkey = mr->lkey};
 
-      struct ibv_recv_wr wr = {.wr_id = wc[i].wr_id + 0x10000000ULL,
-                               .next = nullptr,
-                               .sg_list = &sge,
-                               .num_sge = 1};
+      wrs[i] = {.wr_id = wc[i].wr_id + 0x10000000ULL,
+                .next = (i + 1 < ne) ? &wrs[i + 1] : nullptr,
+                .sg_list = &sges[i],
+                .num_sge = 1};
+    }
 
-      struct ibv_recv_wr* bad = nullptr;
-      int ret = ibv_post_recv(qp, &wr, &bad);
-      if (ret) {
-        fprintf(stderr, "ibv_post_recv failed: %s\n", strerror(ret));
-        std::abort();
-      }
+    ibv_recv_wr* bad = nullptr;
+    int ret = ibv_post_recv(qp, &wrs[0], &bad);
+    if (ret) {
+      fprintf(stderr, "ibv_post_recv failed: %s\n", strerror(ret));
+      std::abort();
     }
   }
 }

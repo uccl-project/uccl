@@ -44,7 +44,7 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs) {
     while (true) {
       uint64_t cur_head = rb->head;
       cur_tail = ld_volatile(&rb->tail);
-      uint64_t free_slots = kQueueSize - (cur_head - cur_tail);
+      uint64_t free_slots = kHeadTailLimit - (cur_head - cur_tail);
 
       if (free_slots >= todo) {
         // rb->head = cur_head + todo;
@@ -77,6 +77,13 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs) {
     while (complete < my_hdr + todo) {
       uint32_t cidx = complete & kQueueMask;
       if (complete < ld_volatile(&rb->tail)) {
+        // __threadfence_system();
+        if (rb->buf[cidx].cmd != 0) {
+          printf(
+              "Device Block %d: Error at complete %u, rb->tail:%lu, expected "
+              "0, got %llu\n",
+              bid, complete, rb->tail, rb->buf[cidx].cmd);
+        }
         if (complete >= kWarmupOps) {
           unsigned long long t1 = clock64();
           unsigned long long cycles = t1 - start_cycle_smem[cidx];
