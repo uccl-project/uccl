@@ -525,9 +525,9 @@ void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
                              std::vector<uint64_t> wrs_to_post, ibv_cq* cq,
                              std::unordered_set<uint64_t>& finished_wrs,
                              std::mutex& finished_wrs_mutex) {
-  while (g_posted.load() - g_completed.load() > kMaxOutstandingSends) {
-    poll_completions(cq, finished_wrs, finished_wrs_mutex);
-  }
+  // while (g_posted.load() - g_completed.load() > kMaxOutstandingSends) {
+  //   poll_completions(cq, finished_wrs, finished_wrs_mutex);
+  // }
 
   std::vector<struct ibv_sge> sges(num_wrs);
   std::vector<struct ibv_send_wr> wrs(num_wrs);
@@ -570,14 +570,6 @@ void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
     } else {
       wrs[i].next = nullptr;  // last WR in the chain
     }
-    if (false) {
-      std::lock_guard<std::mutex> lock(finished_wrs_mutex);
-      // Insert the WR ID into the set of finished WRs
-      // This is used to track which WRs have been posted
-      // and completed.
-      finished_wrs.insert(wrs[i].wr_id);
-      g_completed.fetch_add(1, std::memory_order_relaxed);
-    }
   }
   ibv_send_wr* bad = nullptr;
   int ret = ibv_post_send(qp, &wrs[0], &bad);
@@ -602,9 +594,9 @@ void post_rdma_async(void* buf, size_t bytes, uint64_t wr_id, ibv_cq* cq,
                      std::unordered_set<uint64_t>& finished_wrs,
                      std::mutex& finished_wrs_mutex) {
   /* Make it a closed loop to limit the maximum outstanding sends. */
-  while (g_posted.load() - g_completed.load() > kMaxOutstandingSends) {
-    poll_completions(cq, finished_wrs, finished_wrs_mutex);
-  }
+  // while (g_posted.load() - g_completed.load() > kMaxOutstandingSends) {
+  //   poll_completions(cq, finished_wrs, finished_wrs_mutex);
+  // }
 
   struct ibv_sge sge {
     .addr = (uintptr_t)buf, .length = (uint32_t)bytes, .lkey = mr->lkey

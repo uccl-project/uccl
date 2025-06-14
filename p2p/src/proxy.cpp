@@ -226,6 +226,7 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
         wr_time_total += duration.count();
         completion_count++;
       }
+#ifdef DEBUG_PRINT
       if (!finished_wrs.empty()) {
         size_t min =
             *std::min_element(finished_wrs.begin(), finished_wrs.end());
@@ -242,7 +243,7 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
           exit(1);
         }
       }
-
+#endif
       my_tail += finished_wrs.size();
       finished_wrs.clear();
     }
