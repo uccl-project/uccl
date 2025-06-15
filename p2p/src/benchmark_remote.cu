@@ -1,5 +1,7 @@
 #include "common.hpp"
+#include "copy_ring.hpp"
 #include "gpu_kernel.cuh"
+#include "peer_copy_worker.hpp"
 #include "proxy.hpp"
 #include "rdma.hpp"
 #include "ring_buffer.cuh"
@@ -56,9 +58,13 @@ int main(int argc, char** argv) {
   cudaMalloc(&gpu_buffer, total_size);
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
   if (rank == 1) {
-    for (int d = 1; d < NUM_GPUS; ++d) {
+    for (int d = 0; d < NUM_GPUS; ++d) {
       cudaSetDevice(d);
       cudaMalloc(&per_GPU_device_buf[d], total_size);
+      if (per_GPU_device_buf[d] == nullptr) {
+        fprintf(stderr, "Failed to allocate GPU buffer on GPU %d\n", d);
+        exit(1);
+      }
     }
     cudaSetDevice(0);
   }
@@ -132,6 +138,21 @@ int main(int argc, char** argv) {
     cudaStreamDestroy(stream1);
     cudaCheckErrors("cudaStreamDestroy failed");
   } else {
+#ifdef ENABLE_PROXY_CUDA_MEMCPY
+    cudaDeviceProp p{};
+    cudaGetDeviceProperties(&p, 0);
+    printf("asyncEngineCount = %d\n", p.asyncEngineCount);
+    int num_copy_engine = p.asyncEngineCount;
+    std::vector<std::thread> copy_threads;
+    copy_threads.reserve(num_copy_engine);
+
+    num_copy_engine = 1;  // Right now, 1 gives best perf.
+
+    for (int t = 0; t < num_copy_engine; ++t) {
+      copy_threads.emplace_back(peer_copy_worker);
+    }
+    g_run.store(true, std::memory_order_release);
+#endif
     int i = 0;
     while (i < 60) {
       std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -139,6 +160,12 @@ int main(int argc, char** argv) {
       i++;
     }
     g_progress_run.store(false);
+
+#ifdef ENABLE_PROXY_CUDA_MEMCPY
+    g_run.store(false, std::memory_order_release);
+    for (auto& th : copy_threads) th.join();
+#endif
+
     exit(0);
   }
   sleep(1);

@@ -1,5 +1,7 @@
 #include "rdma.hpp"
 #include "common.hpp"
+#include "copy_ring.hpp"
+#include "peer_copy_worker.hpp"
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <algorithm>
@@ -48,11 +50,6 @@ constexpr int TCP_PORT = 18515;
 static thread_local std::atomic<uint64_t> g_posted = 0;     // WRs posted
 static thread_local std::atomic<uint64_t> g_completed = 0;  // CQEs seen
 thread_local std::atomic<bool> g_progress_run{true};
-
-#ifdef ENABLE_PROXY_CUDA_MEMCPY
-thread_local uint64_t async_memcpy_count = 0;
-thread_local uint64_t async_memcpy_total_time = 0;
-#endif
 
 struct NicCtx {
   // ibv_context* ctx;
@@ -239,6 +236,7 @@ static std::string run_cmd(char const* cmd) {
 }
 
 int best_nic_pix(int gpu_index) {
+  printf("Picking best NIC (Expect some delay)...\n");
   std::string topo = run_cmd("nvidia-smi topo -m");
   if (topo.empty()) return -2;
 
@@ -882,10 +880,24 @@ void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq) {
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
     for (int i = 0; i < ne; ++i) {
       int forward_to_gpu_index = wc[i].imm_data % NUM_GPUS;
-      handle_peer_copy(wc[i].wr_id, 0, forward_to_gpu_index, mr->addr,
-                       per_GPU_device_buf[forward_to_gpu_index], kObjectSize);
+      // handle_peer_copy(wc[i].wr_id, 0, forward_to_gpu_index, mr->addr,
+      //                  per_GPU_device_buf[forward_to_gpu_index],
+      //                  kObjectSize);
+
+      if (per_GPU_device_buf[forward_to_gpu_index] == nullptr) {
+        fprintf(stderr, "per_GPU_device_buf[%d] is null\n",
+                forward_to_gpu_index);
+        std::abort();
+      }
+      CopyTask task{.wr_id = wc[i].wr_id,
+                    .dst_dev = forward_to_gpu_index,
+                    .src_ptr = mr->addr,
+                    .dst_ptr = per_GPU_device_buf[forward_to_gpu_index],
+                    .bytes = kObjectSize};
+      while (!g_ring.emplace(task)) {
+        std::this_thread::yield();
+      }
     }
-    if (pool_index % 10000 == 0) print_average_async_memcpy_time();
 #endif
   }
 }
