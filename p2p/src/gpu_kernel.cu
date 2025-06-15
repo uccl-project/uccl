@@ -58,7 +58,9 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs) {
           unsigned long long cycles = t1 - start_cycle_smem[cidx];
           cycle_accum_smem += cycles;
           op_count_smem++;
-          rb->cycle_start = rb->cycle_start == 0 ? t1 : rb->cycle_start;
+          if (rb->cycle_start == 0) {
+            rb->cycle_start = t1;
+          }
         }
       }
       complete = cur_tail;
