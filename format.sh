@@ -4,11 +4,7 @@
 set -e
 
 # Directories to format (excluding thirdparty/, scripts/, doc/, etc.)
-<<<<<<< uccl_util_refacotring
 DIRECTORIES=("afxdp" "efa" "gpu_driven" "rdma" "misc" "p2p" "include")
-=======
-DIRECTORIES=("afxdp" "efa" "gpu_driven" "rdma" "misc" "p2p")
->>>>>>> main
 EXTENSIONS=("cpp" "cxx" "cc" "h" "hpp" "cu" "cuh")
 EXCLUDE=("afxdp/lib")
 
