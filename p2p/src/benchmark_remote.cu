@@ -55,11 +55,13 @@ int main(int argc, char** argv) {
   void* gpu_buffer = nullptr;
   cudaMalloc(&gpu_buffer, total_size);
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
-  for (int d = 0; d < NUM_GPUS; ++d) {
-    cudaSetDevice(d);
-    cudaMalloc(&per_GPU_device_buf[d], total_size);
+  if (rank == 1) {
+    for (int d = 1; d < NUM_GPUS; ++d) {
+      cudaSetDevice(d);
+      cudaMalloc(&per_GPU_device_buf[d], total_size);
+    }
+    cudaSetDevice(0);
   }
-  cudaSetDevice(0);
 #endif
 
 #ifndef NUMA_AWARE_SCHEDULING

@@ -44,6 +44,11 @@ static thread_local std::atomic<uint64_t> g_posted = 0;     // WRs posted
 static thread_local std::atomic<uint64_t> g_completed = 0;  // CQEs seen
 thread_local std::atomic<bool> g_progress_run{true};
 
+#ifdef ENABLE_PROXY_CUDA_MEMCPY
+thread_local uint64_t async_memcpy_count = 0;
+thread_local uint64_t async_memcpy_total_time = 0;
+#endif
+
 struct NicCtx {
   // ibv_context* ctx;
   int numa;          // NUMA node that owns the PCIe slot
@@ -232,14 +237,10 @@ void per_thread_rdma_init(void* gpu_buf, size_t bytes, int rank,
   }
 
   // Select NIC by index
-  int block_idx_to_nic[8] = {4, 4, 4, 4, 5, 5, 6, 6};
+  int block_idx_to_nic[8] = {4, 4, 4, 4, 4, 4, 4, 4};
 
   int selected_idx = block_idx_to_nic[block_idx % 8];
 
-#ifndef FALSE
-  // For some reason, this gives the best performance.
-  selected_idx = 0;
-#endif
   context = ibv_open_device(dev_list[selected_idx]);
   if (!context) {
     perror("Failed to open device");
@@ -263,7 +264,8 @@ void per_thread_rdma_init(void* gpu_buf, size_t bytes, int rank,
   //                     IBV_ACCESS_REMOTE_READ | IBV_ACCESS_ZERO_BASED);
 
   mr = ibv_reg_mr(pd, gpu_buf, bytes,
-                  IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+                  IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                      IBV_ACCESS_RELAXED_ORDERING);
 
   if (!mr) {
     perror("ibv_reg_mr failed");
@@ -370,7 +372,8 @@ void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info,
   // 3. Register the GPU memory
   mr = ibv_reg_mr(pd, gpu_buffer, size,
                   IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                      IBV_ACCESS_REMOTE_READ | IBV_ACCESS_ZERO_BASED);
+                      IBV_ACCESS_REMOTE_READ | IBV_ACCESS_ZERO_BASED |
+                      IBV_ACCESS_RELAXED_ORDERING);
 
   if (!mr) {
     perror("ibv_reg_mr (GPUDirect) failed");
@@ -545,12 +548,6 @@ void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
     sges[i].length = (uint32_t)bytes;
     sges[i].lkey = mr->lkey;
 
-#ifdef REMOTE_NVLINK_FORWARDING
-    wrs[i].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-    wrs[i].imm_data = 42;
-#else
-    wrs[i].opcode = IBV_WR_RDMA_WRITE;
-#endif
     wrs[i].sg_list = &sges[i];
     wrs[i].num_sge = 1;
     wrs[i].wr.rdma.remote_addr = remote_addr + offset * bytes;
@@ -560,7 +557,12 @@ void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
     //        wrs_to_post[i], sges[i].addr, mr->rkey,
     //        wrs[i].wr.rdma.remote_addr);
     wrs[i].wr_id = wrs_to_post[i];
-
+#ifdef ENABLE_WRITE_WITH_IMMEDIATE
+    wrs[i].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+    wrs[i].imm_data = wrs[i].wr_id % NUM_GPUS;
+#else
+    wrs[i].opcode = IBV_WR_RDMA_WRITE;
+#endif
     if ((i + 1) % kSignalledEvery == 0)
       wrs[i].send_flags = IBV_SEND_SIGNALED;  // generate a CQE
     else
@@ -731,14 +733,17 @@ bool check_cq_completion() {
   return completed * kSignalledEvery == posted && kIterations == completed;
 }
 
-void handle_peer_copy(uint64_t wr_id, uint32_t imm, int src_dev, int dst_dev,
-                      void* src_ptr, void* dst_ptr, size_t num_bytes) {
+void handle_peer_copy(uint64_t wr_id, int src_dev, int dst_dev, void* src_ptr,
+                      void* dst_ptr, size_t num_bytes) {
+  if (src_dev == dst_dev) {
+    return;
+  }
   static thread_local cudaStream_t copy_stream = nullptr;
   if (copy_stream == nullptr) {
     cudaStreamCreate(&copy_stream);
   }
 
-  static thread_local bool peer_enabled[16][16] = {};
+  static thread_local bool peer_enabled[NUM_GPUS][NUM_GPUS] = {};
   if (!peer_enabled[src_dev][dst_dev]) {
     cudaDeviceEnablePeerAccess(dst_dev, 0);
     cudaSetDevice(dst_dev);
@@ -747,21 +752,29 @@ void handle_peer_copy(uint64_t wr_id, uint32_t imm, int src_dev, int dst_dev,
     cudaSetDevice(src_dev);
   }
 
+  // Get Start Time
+#ifdef ENABLE_PROXY_CUDA_MEMCPY
+  auto start_time = std::chrono::high_resolution_clock::now();
   cudaError_t err = cudaMemcpyPeerAsync(dst_ptr, dst_dev, src_ptr, src_dev,
                                         num_bytes, copy_stream);
+  async_memcpy_count++;
+  // Get End Time
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
+      end_time - start_time);
+  async_memcpy_total_time += duration.count();
+#else
+  cudaError_t err = cudaMemcpyPeerAsync(dst_ptr, dst_dev, src_ptr, src_dev,
+                                        num_bytes, copy_stream);
+#endif
   if (err != cudaSuccess) {
     fprintf(stderr,
             "cudaMemcpyPeerAsync failed (%s)\n"
-            "  wr_id=%llu  imm=0x%x  %zu B  GPU%d→GPU%d\n",
-            cudaGetErrorString(err), (unsigned long long)wr_id, imm, num_bytes,
+            "  wr_id=%llu  %zu B  GPU%d→GPU%d\n",
+            cudaGetErrorString(err), (unsigned long long)wr_id, num_bytes,
             src_dev, dst_dev);
     std::abort();
   }
-
-  // printf(
-  //     "[CPU-proxy] wr_id=%llu  imm=0x%x → peer copy %zu bytes "
-  //     "GPU%d→GPU%d launched\n",
-  //     (unsigned long long)wr_id, imm, num_bytes, src_dev, dst_dev);
 }
 
 void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq) {
@@ -769,7 +782,6 @@ void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq) {
   struct ibv_sge sges[kMaxOutstandingRecvs];
   struct ibv_recv_wr wrs[kMaxOutstandingRecvs];
   size_t pool_index = 0;
-
   while (g_progress_run.load(std::memory_order_acquire)) {
     int ne = ibv_poll_cq(cq, kMaxOutstandingRecvs, wc);
     if (ne == 0) continue;
@@ -783,8 +795,9 @@ void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq) {
         exit(1);
       }
 
-      if (wc[i].imm_data != 42) {
-        fprintf(stderr, "Unexpected immediate data: %u\n", wc[i].imm_data);
+      if (wc[i].imm_data != wc[i].wr_id % NUM_GPUS) {
+        fprintf(stderr, "Unexpected immediate data: %u, wr_id: %lu\n",
+                wc[i].imm_data, wc[i].wr_id);
         exit(1);
       }
 
@@ -799,11 +812,6 @@ void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq) {
                 .next = (i + 1 < ne) ? &wrs[i + 1] : nullptr,
                 .sg_list = &sges[i],
                 .num_sge = 1};
-
-#ifdef ENABLE_PROXY_CUDA_MEMCPY
-      handle_peer_copy(wc[i].wr_id, wc[i].imm_data, 0, 1, mr->addr,
-                       per_GPU_device_buf[1], kObjectSize);
-#endif
     }
 
     ibv_recv_wr* bad = nullptr;
@@ -812,5 +820,26 @@ void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq) {
       fprintf(stderr, "ibv_post_recv failed: %s\n", strerror(ret));
       std::abort();
     }
+
+#ifdef ENABLE_PROXY_CUDA_MEMCPY
+    for (int i = 0; i < ne; ++i) {
+      int forward_to_gpu_index = wc[i].imm_data % NUM_GPUS;
+      handle_peer_copy(wc[i].wr_id, 0, forward_to_gpu_index, mr->addr,
+                       per_GPU_device_buf[forward_to_gpu_index], kObjectSize);
+    }
+    if (pool_index % 10000 == 0) print_average_async_memcpy_time();
+#endif
   }
 }
+
+#ifdef ENABLE_PROXY_CUDA_MEMCPY
+void print_average_async_memcpy_time() {
+  printf("Total async memcpy calls: %lu\n", async_memcpy_count);
+  if (async_memcpy_count == 0) {
+    printf("No async memcpy calls were made.\n");
+    return;
+  }
+  printf("Average async memcpy time: %lu us\n",
+         async_memcpy_total_time / async_memcpy_count);
+}
+#endif

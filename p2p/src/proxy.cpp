@@ -59,25 +59,16 @@ void remote_cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
   remote_addr = remote_info.addr;
   remote_rkey = remote_info.rkey;
 
-#ifdef REMOTE_NVLINK_FORWARDING
+#ifdef ENABLE_WRITE_WITH_IMMEDIATE
   post_receive_buffer_for_imm();
+  cpu_proxy_poll_write_with_immediate(block_idx, cq);
 #endif
-  // Busy Loop
-  while (g_progress_run.load()) {
-#ifdef REMOTE_NVLINK_FORWARDING
-    cpu_proxy_poll_write_with_immediate(block_idx, cq);
-#else
-    // In normal RDMA receiver does not need to poll.
-    // poll_completions_plain(cq);
-#endif
-    // Force loading rb->head from DRAM.
-  }
 }
 
 void notify_gpu_completion(std::unordered_set<uint64_t>& finished_wrs,
                            std::mutex& finished_wrs_mutex, RingBuffer* rb,
                            int block_idx, uint64_t& my_tail) {
-  // This assumes we don't have EFA NICs.
+// This assumes we don't have EFA NICs.
 #ifdef ASSUME_WR_IN_ORDER
   if (finished_wrs.size() > 0) {
     {
@@ -215,9 +206,6 @@ void post_gpu_command(
     auto start = std::chrono::high_resolution_clock::now();
     post_rdma_async_chained(gpu_buffer, kObjectSize, batch_size, wrs_to_post,
                             cq, finished_wrs, finished_wrs_mutex);
-    // for (auto wr_id : wrs_to_post) {
-    //   finished_wrs.insert(wr_id);
-    // }
     auto end = std::chrono::high_resolution_clock::now();
     total_rdma_write_durations +=
         std::chrono::duration_cast<std::chrono::microseconds>(end - start);
@@ -346,10 +334,6 @@ void cpu_proxy_local(RingBuffer* rb, int block_idx) {
               block_idx, static_cast<unsigned long long>(expected_cmd),
               static_cast<unsigned long long>(cmd));
       exit(1);
-    }
-
-    for (int i = 0; i < 100; ++i) {
-      _mm_pause();
     }
 
     rb->buf[idx].cmd = 0;

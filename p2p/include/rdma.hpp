@@ -90,4 +90,7 @@ int gpu_numa_node(int gpu_id);
 
 extern void* per_GPU_device_buf[NUM_GPUS];
 
+#ifdef ENABLE_PROXY_CUDA_MEMCPY
+void print_average_async_memcpy_time();
+#endif
 #endif  // RDMA_HPP
