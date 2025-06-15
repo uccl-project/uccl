@@ -3,13 +3,18 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iostream>
 #include <mutex>
+#include <regex>
+#include <sstream>
+#include <string>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -221,6 +226,68 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
       rank, remote->addr, remote->rkey, remote->qp_num, remote->psn);
 }
 
+static std::string run_cmd(char const* cmd) {
+  std::array<char, 2048> buf;
+  std::string out;
+  FILE* pipe = popen(cmd, "r");
+  if (!pipe) return "";
+  while (fgets(buf.data(), buf.size(), pipe)) {
+    out += buf.data();
+  }
+  pclose(pipe);
+  return out;
+}
+
+int best_nic_pix(int gpu_index) {
+  std::string topo = run_cmd("nvidia-smi topo -m");
+  if (topo.empty()) return -2;
+
+  std::istringstream ss(topo);
+  std::string line;
+  std::string header_line;
+  std::vector<std::string> headers;
+  std::vector<std::string> gpu_values;
+  while (std::getline(ss, line)) {
+    if (header_line.empty()) {
+      header_line = line;
+      continue;
+    }
+    if (line.rfind("GPU" + std::to_string(gpu_index), 0) == 0) {
+      break;
+    }
+  }
+  std::istringstream hl(header_line);
+  std::string token;
+  while (hl >> token) {
+    headers.push_back(token);
+  }
+
+  std::istringstream l(line);
+  while (l >> token) {
+    gpu_values.push_back(token);
+  }
+
+  for (size_t i = 0; i < gpu_values.size(); ++i) {
+    if (gpu_values[i].find("PIX") != std::string::npos) {
+      if (i == 0) {
+        std::cerr << "This should not happen!" << gpu_index << std::endl;
+        return -1;
+      }
+      std::string header_str = headers[i - 1];
+      if (header_str.find("NIC") == std::string::npos) {
+        return -1;
+      } else {
+        char last_char = header_str.back();
+        if (!std::isdigit(last_char)) {
+          throw std::invalid_argument("Last character is not a digit");
+        }
+        return last_char - '0';
+      }
+    }
+  }
+  return -1;
+}
+
 void per_thread_rdma_init(void* gpu_buf, size_t bytes, int rank,
                           int block_idx) {
   if (context) return;  // already initialized
@@ -231,15 +298,14 @@ void per_thread_rdma_init(void* gpu_buf, size_t bytes, int rank,
     exit(1);
   }
 
-  // Print all available NICs
-  for (int i = 0; dev_list[i]; ++i) {
-    printf("[RDMA] NIC %d: %s\n", i, ibv_get_device_name(dev_list[i]));
-  }
-
-  // Select NIC by index
-  int block_idx_to_nic[8] = {4, 4, 4, 4, 4, 4, 4, 4};
-
-  int selected_idx = block_idx_to_nic[block_idx % 8];
+#ifdef NUMA_AWARE_SCHEDULING
+  int dev = -1;
+  cudaGetDevice(&dev);
+  int selected_idx = best_nic_pix(dev) + 1;
+  printf("[RDMA] Best NIC for GPU %d is %d\n", dev, selected_idx);
+#else
+  selected_idx = 0;
+#endif
 
   context = ibv_open_device(dev_list[selected_idx]);
   if (!context) {
@@ -251,18 +317,11 @@ void per_thread_rdma_init(void* gpu_buf, size_t bytes, int rank,
 
   ibv_free_device_list(dev_list);
 
-  // Allocate PD
   pd = ibv_alloc_pd(context);
   if (!pd) {
     perror("Failed to allocate PD");
     exit(1);
   }
-
-  // Register GPU memory
-  // mr = ibv_reg_mr(pd, gpu_buf, bytes,
-  //                 IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-  //                     IBV_ACCESS_REMOTE_READ | IBV_ACCESS_ZERO_BASED);
-
   mr = ibv_reg_mr(pd, gpu_buf, bytes,
                   IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
                       IBV_ACCESS_RELAXED_ORDERING);
@@ -372,7 +431,6 @@ void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info,
   // 3. Register the GPU memory
   mr = ibv_reg_mr(pd, gpu_buffer, size,
                   IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                      IBV_ACCESS_REMOTE_READ | IBV_ACCESS_ZERO_BASED |
                       IBV_ACCESS_RELAXED_ORDERING);
 
   if (!mr) {
