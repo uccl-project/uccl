@@ -33,6 +33,8 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs) {
 
   extern __shared__ unsigned long long start_cycle_smem[];
   bool print_warmup_exit = true;
+
+  rb->cycle_start = 0;
   for (int it = 0; it < kIterations;) {
     uint64_t my_hdr;
     uint64_t cur_tail;
@@ -56,6 +58,7 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs) {
           unsigned long long cycles = t1 - start_cycle_smem[cidx];
           cycle_accum_smem += cycles;
           op_count_smem++;
+          rb->cycle_start = rb->cycle_start == 0 ? t1 : rb->cycle_start;
         }
       }
       complete = cur_tail;
@@ -72,7 +75,7 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs) {
     // while (true) {
     uint64_t cur_head = rb->head;
     cur_tail = ld_volatile(&rb->tail);
-    uint64_t free_slots = kHeadTailLimit - (cur_head - cur_tail);
+    uint64_t free_slots = kMaxInflight - (cur_head - cur_tail);
 
     if (free_slots >= todo) {
       // rb->head = cur_head + todo;
@@ -128,7 +131,7 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs) {
 
   rb->cycle_accum = cycle_accum_smem;
   rb->op_count = op_count_smem;
-
 #endif
+  rb->cycle_end = clock64();
   printf("Device Block %d done\n", bid);
 }

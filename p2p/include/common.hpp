@@ -41,11 +41,11 @@
 #define NUMA_AWARE_SCHEDULING
 // #define ENABLE_PROXY_CUDA_MEMCPY
 #define kQueueSize 1024
-#define kHeadTailLimit 4
 #define kQueueMask (kQueueSize - 1)
-#define kBatchSize 4
+#define kMaxInflight 32
+#define kBatchSize 12
 #define kIterations 1000000
-#define kNumThBlocks 16
+#define kNumThBlocks 1
 #define kNumThPerBlock 1
 #define kObjectSize 8192  // 8 KB
 #define kMaxOutstandingSends 1024

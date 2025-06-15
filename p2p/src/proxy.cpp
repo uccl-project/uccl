@@ -139,7 +139,9 @@ void post_gpu_command(
     std::mutex& finished_wrs_mutex,
     std::chrono::duration<double, std::micro>& total_rdma_write_durations) {
   // Force loading rb->head from DRAM.
-  if (load_volatile_u64(&rb->head) == my_tail) {
+  uint64_t cur_head = load_volatile_u64(&rb->head);
+
+  if (cur_head == my_tail) {
 #ifdef DEBUG_PRINT
     if (block_idx == 0) {
       printf(
@@ -160,12 +162,11 @@ void post_gpu_command(
       block_idx, seen, rb->head, my_tail, static_cast<unsigned long long>(cmd));
 #endif
 
-  uint64_t cur_head = load_volatile_u64(&rb->head);
   size_t batch_size = cur_head - seen;
 
-  if (batch_size > kHeadTailLimit) {
-    fprintf(stderr, "Error: batch_size %zu exceeds kHeadTailLimit %d\n",
-            batch_size, kHeadTailLimit);
+  if (batch_size > kMaxInflight) {
+    fprintf(stderr, "Error: batch_size %zu exceeds kMaxInflight %d\n",
+            batch_size, kMaxInflight);
     exit(1);
   }
 

@@ -114,17 +114,17 @@ int main(int argc, char** argv) {
     tot_ops = kNumThBlocks * kIterations;
 #endif
     double wall_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    double throughput =
-        (double)(kNumThBlocks * kIterations) / (wall_ms * 1000.0);
+    double wall_ms_gpu = (rbs[0].cycle_end - rbs[0].cycle_start) * 1000.0 /
+                         prop.clockRate / 1000.0;
+    double throughput = (double)(tot_ops) / (wall_ms_gpu * 1000.0);
 
 #ifdef MEASURE_PER_OP_LATENCY
     printf("\nOverall avg GPU-measured latency  : %.3f µs\n",
-           (double)tot_cycles * 1000.0 / prop.clockRate /
-               (tot_ops - kWarmupOps * kNumThBlocks));
-    printf("Total cycles                       : %llu\n", tot_cycles);
+           (double)tot_cycles * 1000.0 / prop.clockRate / tot_ops);
+    printf("Total cycles                      : %llu\n", tot_cycles);
 #endif
-    printf("Total ops                          : %u\n", tot_ops);
-    printf("End-to-end Wall-clock time        : %.3f ms\n", wall_ms);
+    printf("Total ops                         : %u\n", tot_ops);
+    printf("End-to-end wall-clock time        : %.3f ms\n", wall_ms_gpu);
     printf("Throughput                        : %.2f Mops\n", throughput);
 
     cudaFreeHost(rbs);

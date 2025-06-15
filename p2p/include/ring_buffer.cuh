@@ -12,6 +12,8 @@ struct alignas(128) RingBuffer {
   TransferCmd buf[kQueueSize];
   uint64_t cycle_accum;
   uint64_t op_count;
+  uint64_t cycle_start;
+  uint64_t cycle_end;
 };
 
 #endif  // RING_BUFFER_CUH
