@@ -46,14 +46,16 @@ Feel free to check out our full [technical report](https://arxiv.org/pdf/2504.17
 
 More UCCL features are under development in this repo, currently including: 
 - [ ] Dynamic membership with GPU servers joining and exiting
-- [ ] More efficient KV cache transfer engine
-- [ ] Generic and SM-free GPU-initiated P2P (e.g., DeepEP for MoE)
-  * Supporting all NIC vendors including Nvidia, AWS EFA, and Broadcom
-  * Avoiding burning precious GPU SMs
+- [ ] More efficient KV cache transfer engine (e.g., better Mooncake)
+- [ ] Generic and SM-free GPU-initiated P2P (e.g., better DeepEP for MoE)
+
+  - [ ] Supporting all NIC vendors including Nvidia, AWS EFA, and Broadcom
+  - [ ] Avoiding burning precious GPU SMs
 - [ ] Re-architecting NCCL to unleash network hardware performance
-  * Scalable and efficient CPU proxy
-  * Fast async collectives with compute-communication ordering guarantee
-  * Device kernels in vendor-agnostic Triton language
+
+  - [ ] Scalable and efficient CPU proxy
+  - [ ] Fast async collectives with compute-communication ordering guarantee
+  - [ ] Device kernels in vendor-agnostic Triton language
 
 
 ## Getting Started
