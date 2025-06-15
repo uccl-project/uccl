@@ -2,26 +2,42 @@
 #include "common.hpp"
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <iostream>
 #include <mutex>
+#include <regex>
+#include <sstream>
+#include <string>
 #include <thread>
 #include <unordered_set>
 #include <vector>
 #include <cuda_runtime.h>
+#include <fcntl.h>
 #include <immintrin.h>
 #include <stdio.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
 // Define globals
+#ifdef NUMA_AWARE_SCHEDULING
+thread_local struct ibv_context* context = nullptr;
+thread_local struct ibv_pd* pd = nullptr;
+thread_local struct ibv_mr* mr = nullptr;
+thread_local uint32_t rkey = 0;
+#else
 struct ibv_context* context = nullptr;
 struct ibv_pd* pd = nullptr;
 struct ibv_mr* mr = nullptr;
 uint32_t rkey = 0;
+
+#endif
 
 // Define thread_local structs
 thread_local struct ibv_qp* qp = nullptr;
@@ -29,9 +45,136 @@ thread_local uintptr_t remote_addr = 0;
 thread_local uint32_t remote_rkey = 0;
 
 constexpr int TCP_PORT = 18515;
-static std::atomic<uint64_t> g_posted = 0;     // WRs posted
-static std::atomic<uint64_t> g_completed = 0;  // CQEs seen
-std::atomic<bool> g_progress_run{true};
+static thread_local std::atomic<uint64_t> g_posted = 0;     // WRs posted
+static thread_local std::atomic<uint64_t> g_completed = 0;  // CQEs seen
+thread_local std::atomic<bool> g_progress_run{true};
+
+#ifdef ENABLE_PROXY_CUDA_MEMCPY
+thread_local uint64_t async_memcpy_count = 0;
+thread_local uint64_t async_memcpy_total_time = 0;
+#endif
+
+struct NicCtx {
+  // ibv_context* ctx;
+  int numa;          // NUMA node that owns the PCIe slot
+  std::string name;  // "mlx5_0" …
+};
+
+void* per_GPU_device_buf[NUM_GPUS];
+static std::vector<NicCtx> g_nics;
+
+int gpu_numa_node(int gpu_id) {
+  char bus_id[16];
+  cudaDeviceGetPCIBusId(bus_id, sizeof(bus_id), gpu_id);
+
+  /* convert to lower-case in place */
+  std::transform(bus_id, bus_id + strlen(bus_id), bus_id,
+                 [](unsigned char c) { return std::tolower(c); });
+
+  char path[128];
+  snprintf(path, sizeof(path), "/sys/bus/pci/devices/%s/numa_node", bus_id);
+
+  int fd = open(path, O_RDONLY);
+  if (fd < 0) {
+    /* -1 = unknown; treat as NUMA 0 */
+    return 0;
+  }
+  char buf[8]{};
+  if (read(fd, buf, sizeof(buf) - 1) <= 0) {
+    close(fd);
+    return 0;
+  }
+  close(fd);
+
+  int node = atoi(buf);
+  return (node < 0) ? 0 : node;
+}
+
+void discover_nics(int numa_node) {
+  int num = 0;
+  ibv_device** list = ibv_get_device_list(&num);
+  if (num == 0) throw std::runtime_error("No RDMA devices");
+
+  g_nics.reserve(num);
+  for (int i = 0; i < num; ++i) {
+    // auto* ctx = ibv_open_device(list[i]);
+    // if (!ctx) continue;
+
+    // read /sys/class/infiniband/<dev>/device/numa_node
+    char path[256];
+    sprintf(path, "/sys/class/infiniband/%s/device/numa_node",
+            ibv_get_device_name(list[i]));
+
+    int fd = open(path, O_RDONLY);
+    int numa = 0;
+    if (fd >= 0) {
+      char buf[8]{};
+      ssize_t n = read(fd, buf, sizeof(buf) - 1);
+      if (n <= 0) {
+        perror("read failed");
+        close(fd);
+        continue;
+      }
+      buf[n] = '\0';
+      numa = atoi(buf);  // -1 means “unknown” → treat as 0
+      close(fd);
+    }
+    if (numa < 0 || numa != numa_node) continue;
+    // g_nics.push_back({ctx, numa < 0 ? 0 : numa,
+    // ibv_get_device_name(list[i])});
+    g_nics.push_back({numa < 0 ? 0 : numa, ibv_get_device_name(list[i])});
+    printf("[init] found %s on NUMA node %d\n", g_nics.back().name.c_str(),
+           g_nics.back().numa);
+  }
+  ibv_free_device_list(list);
+}
+
+int pick_nic_index(int i) {
+  printf("[init] pick_nic_index(%d), numa: %d, name: %s\n", i,
+         g_nics[i % g_nics.size()].numa,
+         g_nics[i % g_nics.size()].name.c_str());
+  return i % g_nics.size();
+}
+
+void parse_cpulist(std::string const& s, std::vector<int>* out) {
+  size_t start = 0;
+  while (start < s.size()) {
+    size_t dash = s.find('-', start);
+    size_t comma = s.find(',', start);
+    if (comma == std::string::npos) comma = s.size();
+
+    if (dash != std::string::npos && dash < comma) {
+      int lo = std::stoi(s.substr(start, dash - start));
+      int hi = std::stoi(s.substr(dash + 1, comma - dash - 1));
+      for (int i = lo; i <= hi; ++i) out->push_back(i);
+    } else {
+      int val = std::stoi(s.substr(start, comma - start));
+      out->push_back(val);
+    }
+    start = comma + 1;
+  }
+}
+
+void pin_thread_to_nic_numa(int nic_idx, int core_offset = 0) {
+  int const node = g_nics[nic_idx].numa;
+  // read the CPU mask of that node, choose one core
+  cpu_set_t mask;
+  CPU_ZERO(&mask);
+
+  std::ifstream f("/sys/devices/system/node/node" + std::to_string(node) +
+                  "/cpulist");
+  std::string cpulist;
+  std::getline(f, cpulist);  // e.g. "16-31"
+  // pick the (core_offset)-th CPU inside that list
+
+  printf("Numa and cpu list: %d, %s\n", node, cpulist.c_str());
+  std::vector<int> cpus;
+  parse_cpulist(cpulist, &cpus);  // helper you implement
+  CPU_SET(cpus[core_offset % cpus.size()], &mask);
+
+  if (sched_setaffinity(0, sizeof(mask), &mask) != 0)
+    perror("sched_setaffinity");
+}
 
 void exchange_connection_info(int rank, char const* peer_ip, int tid,
                               RDMAConnectionInfo* local,
@@ -45,10 +188,15 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
   if (rank == 0) {
     // Listen
     int listenfd = socket(AF_INET, SOCK_STREAM, 0);
+    int one = 1;
+    setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
     addr.sin_family = AF_INET;
     addr.sin_port = htons(TCP_PORT + tid);
     addr.sin_addr.s_addr = INADDR_ANY;
-    bind(listenfd, (struct sockaddr*)&addr, sizeof(addr));
+    if (bind(listenfd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+      perror("bind failed");
+      exit(1);
+    }
     listen(listenfd, 1);
 
     socklen_t len = sizeof(addr);
@@ -57,6 +205,8 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
   } else {
     // Connect
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    int one = 1;
+    setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
     addr.sin_family = AF_INET;
     addr.sin_port = htons(TCP_PORT + tid);
     inet_pton(AF_INET, peer_ip, &addr.sin_addr);
@@ -74,6 +224,117 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
       "Rank %d exchanged RDMA info: addr=0x%lx, rkey=0x%x, "
       "qp_num=%u, psn=%u\n",
       rank, remote->addr, remote->rkey, remote->qp_num, remote->psn);
+}
+
+static std::string run_cmd(char const* cmd) {
+  std::array<char, 2048> buf;
+  std::string out;
+  FILE* pipe = popen(cmd, "r");
+  if (!pipe) return "";
+  while (fgets(buf.data(), buf.size(), pipe)) {
+    out += buf.data();
+  }
+  pclose(pipe);
+  return out;
+}
+
+int best_nic_pix(int gpu_index) {
+  std::string topo = run_cmd("nvidia-smi topo -m");
+  if (topo.empty()) return -2;
+
+  std::istringstream ss(topo);
+  std::string line;
+  std::string header_line;
+  std::vector<std::string> headers;
+  std::vector<std::string> gpu_values;
+  while (std::getline(ss, line)) {
+    if (header_line.empty()) {
+      header_line = line;
+      continue;
+    }
+    if (line.rfind("GPU" + std::to_string(gpu_index), 0) == 0) {
+      break;
+    }
+  }
+  std::istringstream hl(header_line);
+  std::string token;
+  while (hl >> token) {
+    headers.push_back(token);
+  }
+
+  std::istringstream l(line);
+  while (l >> token) {
+    gpu_values.push_back(token);
+  }
+
+  for (size_t i = 0; i < gpu_values.size(); ++i) {
+    if (gpu_values[i].find("PIX") != std::string::npos) {
+      if (i == 0) {
+        std::cerr << "This should not happen!" << gpu_index << std::endl;
+        return -1;
+      }
+      std::string header_str = headers[i - 1];
+      if (header_str.find("NIC") == std::string::npos) {
+        return -1;
+      } else {
+        char last_char = header_str.back();
+        if (!std::isdigit(last_char)) {
+          throw std::invalid_argument("Last character is not a digit");
+        }
+        return last_char - '0';
+      }
+    }
+  }
+  return -1;
+}
+
+void per_thread_rdma_init(void* gpu_buf, size_t bytes, int rank,
+                          int block_idx) {
+  if (context) return;  // already initialized
+
+  struct ibv_device** dev_list = ibv_get_device_list(NULL);
+  if (!dev_list) {
+    perror("Failed to get IB devices list");
+    exit(1);
+  }
+
+#ifdef NUMA_AWARE_SCHEDULING
+  int dev = -1;
+  cudaGetDevice(&dev);
+  int selected_idx = best_nic_pix(dev) + 1;
+  printf("[RDMA] Best NIC for GPU %d is %d\n", dev, selected_idx);
+#else
+  selected_idx = 0;
+#endif
+
+  context = ibv_open_device(dev_list[selected_idx]);
+  if (!context) {
+    perror("Failed to open device");
+    exit(1);
+  }
+  printf("[RDMA] Selected NIC: %s (index %d)\n",
+         ibv_get_device_name(dev_list[selected_idx]), selected_idx);
+
+  ibv_free_device_list(dev_list);
+
+  pd = ibv_alloc_pd(context);
+  if (!pd) {
+    perror("Failed to allocate PD");
+    exit(1);
+  }
+  mr = ibv_reg_mr(pd, gpu_buf, bytes,
+                  IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                      IBV_ACCESS_RELAXED_ORDERING);
+
+  if (!mr) {
+    perror("ibv_reg_mr failed");
+    exit(1);
+  }
+
+  if (rkey != 0) {
+    fprintf(stderr, "Warning: rkey already set (%x), overwriting\n", rkey);
+  }
+  rkey = mr->rkey;
 }
 
 void global_rdma_init(void* gpu_buf, size_t bytes, RDMAConnectionInfo* local,
@@ -105,8 +366,9 @@ void create_per_thread_qp(void* gpu_buffer, size_t size,
   qp_init_attr.recv_cq = cq;
   qp_init_attr.qp_type = IBV_QPT_RC;  // Reliable Connection
   qp_init_attr.cap.max_send_wr =
-      kMaxOutstandingSends * 2;      // max outstanding sends
-  qp_init_attr.cap.max_recv_wr = 1;  // max outstanding recvs
+      kMaxOutstandingSends * 2;  // max outstanding sends
+  qp_init_attr.cap.max_recv_wr =
+      kMaxOutstandingSends * 2;  // max outstanding recvs
   qp_init_attr.cap.max_send_sge = 1;
   qp_init_attr.cap.max_recv_sge = 1;
   qp_init_attr.sq_sig_all = 0;
@@ -152,6 +414,11 @@ void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info,
     perror("Failed to open device");
     exit(1);
   }
+  printf("[RDMA] Selected NIC: %s\n", ibv_get_device_name(dev_list[0]));
+  // Print out all the NICs
+  for (int i = 0; dev_list[i]; ++i) {
+    printf("[RDMA] NIC %d: %s\n", i, ibv_get_device_name(dev_list[i]));
+  }
   ibv_free_device_list(dev_list);
 
   // 2. Allocate a Protection Domain
@@ -164,7 +431,7 @@ void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info,
   // 3. Register the GPU memory
   mr = ibv_reg_mr(pd, gpu_buffer, size,
                   IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                      IBV_ACCESS_REMOTE_READ | IBV_ACCESS_ZERO_BASED);
+                      IBV_ACCESS_RELAXED_ORDERING);
 
   if (!mr) {
     perror("ibv_reg_mr (GPUDirect) failed");
@@ -292,6 +559,30 @@ void modify_qp_to_rts(RDMAConnectionInfo* local_info) {
   printf("QP modified to RTS state\n");
 }
 
+void post_receive_buffer_for_imm() {
+  std::vector<ibv_recv_wr> wrs(kMaxOutstandingRecvs);
+  std::vector<ibv_sge> sges(kMaxOutstandingRecvs);
+
+  for (size_t i = 0; i < kMaxOutstandingRecvs; ++i) {
+    int offset = kNumThBlocks > i ? i : (i % kNumThBlocks);
+
+    sges[i] = {.addr = (uintptr_t)mr->addr + offset * kObjectSize,
+               .length = kObjectSize,
+               .lkey = mr->lkey};
+    wrs[i] = {.wr_id = i,  // choose something meaningful
+              .next = (i + 1 < kMaxOutstandingRecvs) ? &wrs[i + 1] : nullptr,
+              .sg_list = &sges[i],
+              .num_sge = 1};
+  }
+
+  /* Post the whole chain with ONE verbs call */
+  ibv_recv_wr* bad = nullptr;
+  if (ibv_post_recv(qp, &wrs[0], &bad)) {
+    perror("ibv_post_recv");
+    abort();
+  }
+}
+
 void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
                              std::vector<uint64_t> wrs_to_post, ibv_cq* cq,
                              std::unordered_set<uint64_t>& finished_wrs,
@@ -315,7 +606,6 @@ void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
     sges[i].length = (uint32_t)bytes;
     sges[i].lkey = mr->lkey;
 
-    wrs[i].opcode = IBV_WR_RDMA_WRITE;
     wrs[i].sg_list = &sges[i];
     wrs[i].num_sge = 1;
     wrs[i].wr.rdma.remote_addr = remote_addr + offset * bytes;
@@ -325,7 +615,12 @@ void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
     //        wrs_to_post[i], sges[i].addr, mr->rkey,
     //        wrs[i].wr.rdma.remote_addr);
     wrs[i].wr_id = wrs_to_post[i];
-
+#ifdef ENABLE_WRITE_WITH_IMMEDIATE
+    wrs[i].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+    wrs[i].imm_data = wrs[i].wr_id % NUM_GPUS;
+#else
+    wrs[i].opcode = IBV_WR_RDMA_WRITE;
+#endif
     if ((i + 1) % kSignalledEvery == 0)
       wrs[i].send_flags = IBV_SEND_SIGNALED;  // generate a CQE
     else
@@ -340,7 +635,14 @@ void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
   ibv_send_wr* bad = nullptr;
   int ret = ibv_post_send(qp, &wrs[0], &bad);
   if (ret) {
-    fprintf(stderr, "ibv_post_send failed: %s (ret=%d)\n", strerror(ret), ret);
+    fprintf(stderr,
+            "ibv_post_send failed: %s (ret=%d), num_wrs: %ld, g_posted: %ld. "
+            "g_completed: %ld\n",
+            strerror(ret), ret, num_wrs, g_posted.load(), g_completed.load());
+    uint64_t inflight = g_posted.load(std::memory_order_acquire) -
+                        g_completed.load(std::memory_order_acquire);
+    printf("Currently outstanding send WRs: %lu\n", inflight);
+
     if (bad) {
       fprintf(stderr, "Bad WR at address: %p\n", bad);
     }
@@ -353,9 +655,9 @@ void post_rdma_async(void* buf, size_t bytes, uint64_t wr_id, ibv_cq* cq,
                      std::unordered_set<uint64_t>& finished_wrs,
                      std::mutex& finished_wrs_mutex) {
   /* Make it a closed loop to limit the maximum outstanding sends. */
-  while (g_posted.load() - g_completed.load() > kMaxOutstandingSends) {
-    poll_completions(cq, finished_wrs, finished_wrs_mutex);
-  }
+  // while (g_posted.load() - g_completed.load() > kMaxOutstandingSends) {
+  //   poll_completions(cq, finished_wrs, finished_wrs_mutex);
+  // }
 
   struct ibv_sge sge {
     .addr = (uintptr_t)buf, .length = (uint32_t)bytes, .lkey = mr->lkey
@@ -445,6 +747,27 @@ void poll_completions(ibv_cq* cq, std::unordered_set<uint64_t>& finished_wrs,
   g_completed.fetch_add(ne, std::memory_order_relaxed);
 }
 
+void poll_completions_plain(ibv_cq* cq) {
+  struct ibv_wc wc[kMaxOutstandingSends];  // batch poll
+
+  while (g_progress_run.load(std::memory_order_acquire)) {
+    int ne = ibv_poll_cq(cq, kMaxOutstandingSends, wc);
+    if (ne == 0) return;
+    for (int i = 0; i < ne; ++i) {
+      if (wc[i].status != IBV_WC_SUCCESS) {
+        fprintf(stderr, "CQE error wr_id=%llu status=%s\n",
+                (unsigned long long)wc[i].wr_id,
+                ibv_wc_status_str(wc[i].status));
+        std::abort();
+      }
+      if (wc[i].opcode != IBV_WC_RECV) {
+        fprintf(stderr, "Unexpected opcode: %d\n", wc[i].opcode);
+        exit(1);
+      }
+    }
+  }
+}
+
 void per_thread_polling(int thread_idx, struct ibv_cq* per_thread_cq,
                         std::unordered_set<uint64_t>* per_thread_finished_wrs,
                         std::mutex* per_thread_finished_wrs_mutex) {
@@ -465,6 +788,116 @@ bool check_cq_completion() {
   uint64_t completed = g_completed.load(std::memory_order_acquire);
   printf("check_cq_completion: g_completed: %ld, g_posted: %ld, total: %d\n",
          completed, posted, kIterations * kNumThBlocks);
-  return completed * kSignalledEvery == posted &&
-         kIterations * kNumThBlocks == completed;
+  return completed * kSignalledEvery == posted && kIterations == completed;
 }
+
+void handle_peer_copy(uint64_t wr_id, int src_dev, int dst_dev, void* src_ptr,
+                      void* dst_ptr, size_t num_bytes) {
+  if (src_dev == dst_dev) {
+    return;
+  }
+  static thread_local cudaStream_t copy_stream = nullptr;
+  if (copy_stream == nullptr) {
+    cudaStreamCreate(&copy_stream);
+  }
+
+  static thread_local bool peer_enabled[NUM_GPUS][NUM_GPUS] = {};
+  if (!peer_enabled[src_dev][dst_dev]) {
+    cudaDeviceEnablePeerAccess(dst_dev, 0);
+    cudaSetDevice(dst_dev);
+    cudaDeviceEnablePeerAccess(src_dev, 0);
+    peer_enabled[src_dev][dst_dev] = true;
+    cudaSetDevice(src_dev);
+  }
+
+  // Get Start Time
+#ifdef ENABLE_PROXY_CUDA_MEMCPY
+  auto start_time = std::chrono::high_resolution_clock::now();
+  cudaError_t err = cudaMemcpyPeerAsync(dst_ptr, dst_dev, src_ptr, src_dev,
+                                        num_bytes, copy_stream);
+  async_memcpy_count++;
+  // Get End Time
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
+      end_time - start_time);
+  async_memcpy_total_time += duration.count();
+#else
+  cudaError_t err = cudaMemcpyPeerAsync(dst_ptr, dst_dev, src_ptr, src_dev,
+                                        num_bytes, copy_stream);
+#endif
+  if (err != cudaSuccess) {
+    fprintf(stderr,
+            "cudaMemcpyPeerAsync failed (%s)\n"
+            "  wr_id=%llu  %zu B  GPU%d→GPU%d\n",
+            cudaGetErrorString(err), (unsigned long long)wr_id, num_bytes,
+            src_dev, dst_dev);
+    std::abort();
+  }
+}
+
+void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq) {
+  struct ibv_wc wc[kMaxOutstandingRecvs];
+  struct ibv_sge sges[kMaxOutstandingRecvs];
+  struct ibv_recv_wr wrs[kMaxOutstandingRecvs];
+  size_t pool_index = 0;
+  while (g_progress_run.load(std::memory_order_acquire)) {
+    int ne = ibv_poll_cq(cq, kMaxOutstandingRecvs, wc);
+    if (ne == 0) continue;
+    for (int i = 0; i < ne; ++i) {
+      if (wc[i].status != IBV_WC_SUCCESS) {
+        fprintf(stderr, "RDMA error: %s\n", ibv_wc_status_str(wc[i].status));
+        exit(1);
+      }
+      if (wc[i].opcode != IBV_WC_RECV_RDMA_WITH_IMM) {
+        fprintf(stderr, "Unexpected opcode: %d\n", wc[i].opcode);
+        exit(1);
+      }
+
+      if (wc[i].imm_data != wc[i].wr_id % NUM_GPUS) {
+        fprintf(stderr, "Unexpected immediate data: %u, wr_id: %lu\n",
+                wc[i].imm_data, wc[i].wr_id);
+        exit(1);
+      }
+
+      pool_index = (pool_index + 1) % (kRemoteBufferSize / kObjectSize - 1);
+      char* next_buf = static_cast<char*>(mr->addr) + pool_index * kObjectSize;
+
+      sges[i] = {.addr = reinterpret_cast<uintptr_t>(next_buf),
+                 .length = kObjectSize,
+                 .lkey = mr->lkey};
+
+      wrs[i] = {.wr_id = wc[i].wr_id + 0x10000000ULL,
+                .next = (i + 1 < ne) ? &wrs[i + 1] : nullptr,
+                .sg_list = &sges[i],
+                .num_sge = 1};
+    }
+
+    ibv_recv_wr* bad = nullptr;
+    int ret = ibv_post_recv(qp, &wrs[0], &bad);
+    if (ret) {
+      fprintf(stderr, "ibv_post_recv failed: %s\n", strerror(ret));
+      std::abort();
+    }
+
+#ifdef ENABLE_PROXY_CUDA_MEMCPY
+    for (int i = 0; i < ne; ++i) {
+      int forward_to_gpu_index = wc[i].imm_data % NUM_GPUS;
+      handle_peer_copy(wc[i].wr_id, 0, forward_to_gpu_index, mr->addr,
+                       per_GPU_device_buf[forward_to_gpu_index], kObjectSize);
+    }
+    if (pool_index % 10000 == 0) print_average_async_memcpy_time();
+#endif
+  }
+}
+
+#ifdef ENABLE_PROXY_CUDA_MEMCPY
+void print_average_async_memcpy_time() {
+  printf("Total async memcpy calls: %lu\n", async_memcpy_count);
+  if (async_memcpy_count == 0) {
+    printf("No async memcpy calls were made.\n");
+    return;
+  }
+  printf("Average async memcpy time: %lu us\n",
+         async_memcpy_total_time / async_memcpy_count);
+}
+#endif

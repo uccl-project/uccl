@@ -17,6 +17,15 @@ int main(int argc, char** argv) {
   int rank = std::atoi(argv[1]);
   char const* peer_ip = argv[2];
 
+  pin_thread_to_cpu(MAIN_THREAD_CPU_IDX);
+#ifdef NUMA_AWARE_SCHEDULING
+  int dev = -1;
+  cudaGetDevice(&dev);
+  printf("About to launch on GPU %d\n", dev);
+  int numa_node = gpu_numa_node(dev);
+  printf("Rank %d: GPU NUMA node is %d\n", rank, numa_node);
+  discover_nics(numa_node);
+#endif
   if (!GdrSupportInitOnce()) {
     printf(
         "Error: GPUDirect RDMA module is not loaded. Please load "
@@ -42,16 +51,31 @@ int main(int argc, char** argv) {
     }
   }
 
-  size_t total_size = kObjectSize * kBatchSize * kNumThBlocks;
+  size_t total_size = kRemoteBufferSize;
   void* gpu_buffer = nullptr;
   cudaMalloc(&gpu_buffer, total_size);
+#ifdef ENABLE_PROXY_CUDA_MEMCPY
+  if (rank == 1) {
+    for (int d = 1; d < NUM_GPUS; ++d) {
+      cudaSetDevice(d);
+      cudaMalloc(&per_GPU_device_buf[d], total_size);
+    }
+    cudaSetDevice(0);
+  }
+#endif
 
+#ifndef NUMA_AWARE_SCHEDULING
   RDMAConnectionInfo local_info;
   global_rdma_init(gpu_buffer, total_size, &local_info, rank);
+#endif
   std::vector<std::thread> cpu_threads;
   for (int i = 0; i < kNumThBlocks; ++i) {
-    cpu_threads.emplace_back(cpu_proxy, &rbs[i], i, gpu_buffer, kObjectSize,
-                             rank, peer_ip);
+    if (rank == 0)
+      cpu_threads.emplace_back(cpu_proxy, &rbs[i], i, gpu_buffer,
+                               kRemoteBufferSize, rank, peer_ip);
+    else
+      cpu_threads.emplace_back(remote_cpu_proxy, &rbs[i], i, gpu_buffer,
+                               kRemoteBufferSize, rank, peer_ip);
   }
   if (rank == 0) {
     printf("Waiting for 2 seconds before issuing commands...\n");
@@ -90,16 +114,17 @@ int main(int argc, char** argv) {
     tot_ops = kNumThBlocks * kIterations;
 #endif
     double wall_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    double throughput =
-        (double)(kNumThBlocks * kIterations) / (wall_ms * 1000.0);
+    double wall_ms_gpu = (rbs[0].cycle_end - rbs[0].cycle_start) * 1000.0 /
+                         prop.clockRate / 1000.0;
+    double throughput = (double)(tot_ops) / (wall_ms_gpu * 1000.0);
 
 #ifdef MEASURE_PER_OP_LATENCY
     printf("\nOverall avg GPU-measured latency  : %.3f µs\n",
            (double)tot_cycles * 1000.0 / prop.clockRate / tot_ops);
-    printf("Total cycles                       : %llu\n", tot_cycles);
+    printf("Total cycles                      : %llu\n", tot_cycles);
 #endif
-    printf("Total ops                          : %u\n", tot_ops);
-    printf("End-to-end Wall-clock time        : %.3f ms\n", wall_ms);
+    printf("Total ops                         : %u\n", tot_ops);
+    printf("End-to-end wall-clock time        : %.3f ms\n", wall_ms_gpu);
     printf("Throughput                        : %.2f Mops\n", throughput);
 
     cudaFreeHost(rbs);
@@ -113,6 +138,8 @@ int main(int argc, char** argv) {
       printf("Rank %d is waiting...\n", rank);
       i++;
     }
+    g_progress_run.store(false);
+    exit(0);
   }
   sleep(1);
 }
