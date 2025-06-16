@@ -300,12 +300,7 @@ inline void RDMAEndpoint::initialize_vec(int total_num_engines) {
         
   active_flows_vec_.resize(num_devices_);
   active_flows_spin_.resize(num_devices_);
-        
-  // Initialize channels
-  for (int i = 0; i < total_num_engines; i++) {
-    channel_vec_[i] = new Channel();
-  }
-  off_.resize(num_devices_);
+
   printf("Initialized %d channels for %d devices with %d engines per device\n", 
     total_num_engines, num_devices_, num_engines_per_dev_);  
 }
@@ -774,7 +769,7 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
 inline uint32_t RDMAEndpoint::find_pot_load_engine_idx(int dev) {
   auto c1 = find_oblivious_engine_idx(dev);
   auto c2 = find_least_loaded_engine_idx(dev);
-  return engine_load_vec_[c1].load() < engine_load_vec_[c2].load() ? c1 : c2;
+  return engine_load_vec_[c1]->load() < engine_load_vec_[c2]->load() ? c1 : c2;
 }
 
 inline uint32_t RDMAEndpoint::find_least_loaded_engine_idx(int dev) {
@@ -784,7 +779,7 @@ inline uint32_t RDMAEndpoint::find_least_loaded_engine_idx(int dev) {
   uint32_t min_load = std::numeric_limits<uint32_t>::max();
   uint32_t candidate = 0;
   for (uint32_t i = first_engine_idx; i <= last_engine_idx; i++) {
-    uint32_t load = engine_load_vec_[i].load();
+    uint32_t load = engine_load_vec_[i]->load();
     if (load < min_load) {
       min_load = load;
       candidate = i;
@@ -812,20 +807,24 @@ void UcclRDMAEngine::release() {
 }
 
 RDMAEndpoint::~RDMAEndpoint() {
-#ifdef LAZY_CREATE_ENGINE
-  for (auto& [engine_id, engine] : engine_id_to_engine_map_) {
-  engine->shutdown();
-#else
-  for (auto& engine : engine_vec_) engine->shutdown();
-#endif
-  for (auto& engine_th : engine_th_vec_) engine_th->join();
-#ifdef LAZY_CREATE_ENGINE
-  for (auto& [engine_id, engine] : engine_id_to_engine_map_) {
-    engine->release();
-#else
-  for (auto& engine : engine_vec_) engine->release();
-#endif
-  
+  for (auto& engine : engine_vec_) {
+    if (engine) {
+      engine->shutdown();
+    }
+  }
+
+  for (auto& engine_th : engine_th_vec_) {
+    if (engine_th) {
+      engine_th->join();
+    }
+  }
+
+  for (auto& engine : engine_vec_) {
+    if (engine) {
+      engine->release();
+    }
+  }
+
   cleanup_resources();
 
   {
@@ -883,9 +882,9 @@ void RDMAEndpoint::same_dev_install_ctx(int dev, int bootstrap_fd,
                                         PeerID* peer_id,
                                         struct RemoteRDMAContext* remote_ctx) {
   auto* first_map = &peer_same_dev_map_[dev][0];
-  auto* first_lock = &peer_same_dev_map_mu_[dev][0].get();
+  auto* first_lock = peer_same_dev_map_mu_[dev][0].get();
   auto* second_map = &peer_same_dev_map_[dev][1];
-  auto* second_lock = &peer_same_dev_map_mu_[dev][1].get();
+  auto* second_lock = peer_same_dev_map_mu_[dev][1].get();
 
   if (local_lock_first) {
     first_lock->lock();

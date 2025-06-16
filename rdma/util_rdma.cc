@@ -155,7 +155,6 @@ int RDMAFactory::init_devs() {
           printf("Initialized %s\n", devices[d]->name);
           num_devices++;
       }
-      printf("Total devs =%d\n", (rdma_ctl->devices_.size()))
   }
 
   ibv_free_device_list(devices);
@@ -458,43 +457,19 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
     struct ibv_recv_wr* bad_wr;
     struct ibv_sge sge;
     if constexpr (!kRCMode) {
-      for (int i = 0; i < kPostRQThreshold; i++) {
-        uint64_t chunk_addr;
-        DCHECK(retr_chunk_pool_->alloc_buff(&chunk_addr) == 0);
-        sge[i].addr = chunk_addr;
-        sge[i].length = RetrChunkBuffPool::kRetrChunkSize;
-        sge[i].lkey = retr_chunk_pool_->get_lkey();
-        imm_wrs_[i].sg_list = &sge[i];
-        imm_wrs_[i].num_sge = 1;
-        imm_wrs_[i].wr_id = chunk_addr;
-      }
+      uint64_t chunk_addr;
+      if (retr_chunk_pool_->alloc_buff(&chunk_addr))
+        throw std::runtime_error(
+            "Failed to allocate buffer for retransmission chunk");
+      sge.addr = chunk_addr;
+      sge.length = RetrChunkBuffPool::kRetrChunkSize;
+      sge.lkey = retr_chunk_pool_->get_lkey();
+      wr.wr_id = chunk_addr;
+      wr.next = nullptr;
+      wr.sg_list = &sge;
+      wr.num_sge = 1;
+      DCHECK(ibv_post_srq_recv(srq_, &wr, &bad_wr) == 0);
     }
-
-    DCHECK(ibv_post_srq_recv(srq_, &imm_wrs_[0], &bad_wr) == 0);
-    UCCL_LOG_IO << "Posted " << kPostRQThreshold << " recv requests for SRQ";
-    post_srq_cnt_ -= kPostRQThreshold;
-  }
-
-  if (force && post_srq_cnt_) {
-    struct ibv_recv_wr* bad_wr;
-    if constexpr (!kRCMode) {
-      for (int i = 0; i < post_srq_cnt_; i++) {
-        uint64_t chunk_addr;
-        DCHECK(retr_chunk_pool_->alloc_buff(&chunk_addr) == 0);
-        sge[i].addr = chunk_addr;
-        sge[i].length = RetrChunkBuffPool::kRetrChunkSize;
-        sge[i].lkey = retr_chunk_pool_->get_lkey();
-        imm_wrs_[i].sg_list = &sge[i];
-        imm_wrs_[i].num_sge = 1;
-        imm_wrs_[i].wr_id = chunk_addr;
-      }
-    }
-
-    imm_wrs_[post_srq_cnt_ - 1].next = nullptr;
-    DCHECK(ibv_post_srq_recv(srq_, &imm_wrs_[0], &bad_wr) == 0);
-    UCCL_LOG_IO << "Posted " << post_srq_cnt_ << " recv requests for SRQ";
-    imm_wrs_[post_srq_cnt_ - 1].next = &imm_wrs_[post_srq_cnt_];
-    post_srq_cnt_ = 0;
   }
 
   // Timing wheel.

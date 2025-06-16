@@ -537,10 +537,6 @@ class UcclFlow {
   static constexpr int kFifoMRSize = sizeof(struct RemFifo);
   static constexpr int kFifoCQSize = 4096;
 
-  // Avoid all flows using the same initial engine offset.
-  static std::vector<std::atomic<uint32_t>>* off;
-  static std::atomic<int> ref_count;
-
  public:
   SubUcclFlow* sub_flows_[NUM_ENGINES];
 
@@ -713,10 +709,6 @@ class UcclFlow {
       delete sub_flows_[i];
     }
 
-    if (off != nullptr && --ref_count == 0) {
-      delete off;
-      off = nullptr;
-    }
   }
 
   inline FlowID flowid() const { return flow_id_; }
