@@ -17,7 +17,6 @@ namespace uccl {
 // RDMAFactory rdma_ctl;
 std::shared_ptr<RDMAFactory> rdma_ctl;
 
-static int num_devices = 0;
 static int ibvWidths[] = {1, 4, 8, 12, 2};
 static int ibvSpeeds[] = {2500,  /* SDR */
                           5000,  /* DDR */

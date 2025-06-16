@@ -305,65 +305,13 @@ inline void RDMAEndpoint::initialize_vec(int total_num_engines) {
   for (int i = 0; i < total_num_engines; i++) {
     channel_vec_[i] = new Channel();
   }
-        
+  off_.resize(num_devices_);
   printf("Initialized %d channels for %d devices with %d engines per device\n", 
     total_num_engines, num_devices_, num_engines_per_dev_);  
 }
 
 
 void RDMAEndpoint::cleanup_resources() {
-  // Clean up channels
-  for (auto* channel : channel_vec_) {
-    if (channel) {
-      delete channel;
-    }
-  }
-  channel_vec_.clear();
-
-  // Clean up engine load vectors
-  engine_load_vec_.clear();
-
-  // Clean up EQDS
-  for (auto* eqds_ptr : eqds_) {
-    if (eqds_ptr) {
-      delete eqds_ptr;
-    }
-  }
-  eqds_.clear();
-
-  // Clean up test listen fds
-  for (int fd : test_listen_fds_) {
-    if (fd >= 0) {
-      close(fd);
-    }
-  }
-  test_listen_fds_.clear();
-
-  // Clean up peer maps and mutexes
-  peer_map_.clear();
-  peer_map_mu_.clear();
-
-  // Clean up same device maps and mutexes
-  for (int i = 0; i < 2; i++) {
-    peer_same_dev_map_[i].clear();
-    peer_same_dev_map_mu_[i].clear();
-  }
-
-  // Clean up peer IDs
-  next_peer_id_.clear();
-
-  // Clean up flow ID arrays
-  for (auto& spins : flow_id_spin_) {
-    spins.clear();
-  }
-  flow_id_spin_.clear();
-
-  for (auto& flow_ids : next_flow_id_) {
-    flow_ids.clear();
-  }
-  next_flow_id_.clear();
-
-  // Clean up active flows
   for (auto& flows : active_flows_vec_) {
     for (auto* flow : flows) {
       if (flow) {
@@ -373,26 +321,62 @@ void RDMAEndpoint::cleanup_resources() {
     flows.clear();
   }
   active_flows_vec_.clear();
-
-  // Clean up active flows spin
   active_flows_spin_.clear();
 
-  // Clean up engine vectors
+  for (auto* channel : channel_vec_) {
+    if (channel) {
+      delete channel;
+    }
+  }
+  channel_vec_.clear();
+  engine_load_vec_.clear();
   engine_vec_.clear();
   engine_id_to_engine_map_.clear();
 
-  // Clean up context pool
+  for (auto* eqds_ptr : eqds_) {
+    if (eqds_ptr) {
+      delete eqds_ptr;
+    }
+  }
+  eqds_.clear();
+
+  for (int fd : test_listen_fds_) {
+    if (fd >= 0) {
+      close(fd);
+    }
+  }
+  test_listen_fds_.clear();
+
+  peer_map_.clear();
+  peer_map_mu_.clear();
+  for (int i = 0; i < 2; i++) {
+    peer_same_dev_map_[i].clear();
+    peer_same_dev_map_mu_[i].clear();
+  }
+
+  next_peer_id_.clear();
+  for (auto& spins : flow_id_spin_) {
+    spins.clear();
+  }
+  flow_id_spin_.clear();
+  for (auto& flow_ids : next_flow_id_) {
+    flow_ids.clear();
+  }
+  next_flow_id_.clear();
+
+  for (auto& boostrap_fd : fd_vec_) {
+    close(boostrap_fd);
+  }
+  fd_vec_.clear();
+
   if (ctx_pool_) {
     delete ctx_pool_;
     ctx_pool_ = nullptr;
   }
   if (ctx_pool_buf_) {
-    free(ctx_pool_buf_);
+    delete[] ctx_pool_buf_;
     ctx_pool_buf_ = nullptr;
   }
-
-  // Clean up static atomic array in UcclFlow
-  UcclFlow::cleanup();
 }
 
 bool RDMAEndpoint::initialize_engine_by_dev(int dev,
@@ -754,6 +738,7 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
     for (int i = 0; i < num_devices_; i++) eqds_[i] = new eqds::EQDS(i);
   }
 
+
   for (int engine_id = 0, engine_cpu_id; engine_id < total_num_engines;
        engine_id++) {
     auto dev = engine_id / num_engines_per_dev;
@@ -830,29 +815,19 @@ void UcclRDMAEngine::release() {
 RDMAEndpoint::~RDMAEndpoint() {
 #ifdef LAZY_CREATE_ENGINE
   for (auto& [engine_id, engine] : engine_id_to_engine_map_) {
-    engine->shutdown();
-  }
+  engine->shutdown();
 #else
   for (auto& engine : engine_vec_) engine->shutdown();
 #endif
-
   for (auto& engine_th : engine_th_vec_) engine_th->join();
 #ifdef LAZY_CREATE_ENGINE
   for (auto& [engine_id, engine] : engine_id_to_engine_map_) {
     engine->release();
-  }
 #else
   for (auto& engine : engine_vec_) engine->release();
 #endif
   
   cleanup_resources();
-  delete ctx_pool_;
-  delete[] ctx_pool_buf_;
-
-  for (auto& boostrap_fd : fd_vec_) {
-    close(boostrap_fd);
-  }
-  fd_vec_.clear();
 
   {
     std::lock_guard<std::mutex> lock(stats_mu_);
@@ -860,7 +835,9 @@ RDMAEndpoint::~RDMAEndpoint() {
     stats_cv_.notify_all();
   }
 
-  stats_thread_.join();
+  if (stats_thread_.joinable()) {
+    stats_thread_.join();
+  }
 }
 
 PollCtx* RDMAEndpoint::install_flow_on_engine(uint32_t engine_idx,

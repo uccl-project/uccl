@@ -1,10 +1,9 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <thread>
 #include <unistd.h>
-#include <cstdlib>
-
 
 // #define STATS
 // #define LAZY_CREATE_ENGINE
@@ -19,6 +18,7 @@ inline uint32_t getEnvUint32(const char* name, uint32_t default_value) {
 
 // Configuration parameters
 static const bool ROCE_NET = true;
+
 
 static const double LINK_BANDWIDTH = 100.0 * 1e9 / 8;
 static const uint32_t NUM_ENGINES = getEnvUint32("NUM_ENGINES", 1);

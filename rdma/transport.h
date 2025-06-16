@@ -369,6 +369,8 @@ class RDMAEndpoint {
 
   void initialize_vec(int total_num_engines);
 
+  void cleanup_resources();
+
   bool initialize_engine_by_dev(int dev, std::atomic<uint16_t>& port);
 
   /// For testing easily.
@@ -535,6 +537,10 @@ class UcclFlow {
   static constexpr int kFifoMRSize = sizeof(struct RemFifo);
   static constexpr int kFifoCQSize = 4096;
 
+  // Avoid all flows using the same initial engine offset.
+  static std::vector<std::atomic<uint32_t>>* off;
+  static std::atomic<int> ref_count;
+
  public:
   SubUcclFlow* sub_flows_[NUM_ENGINES];
 
@@ -684,8 +690,8 @@ class UcclFlow {
                       "Failed to modify GPU flush QP to RTS");
     }
     // Avoid all flows using the same initial engine offset.
-    static std::atomic<uint32_t> off[num_devices] = {};
-    next_engine_offset_ = off[dev].fetch_add(1) % NUM_ENGINES;
+    static std::vector<std::atomic<uint32_t>>* off = new std::vector<std::atomic<uint32_t>>(num_devices);
+    next_engine_offset_ = (*off)[dev].fetch_add(1) % NUM_ENGINES;
   }
 
   ~UcclFlow() {
@@ -705,6 +711,11 @@ class UcclFlow {
 
     for (int i = 0; i < NUM_ENGINES; i++) {
       delete sub_flows_[i];
+    }
+
+    if (off != nullptr && --ref_count == 0) {
+      delete off;
+      off = nullptr;
     }
   }
 
