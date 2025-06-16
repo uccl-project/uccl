@@ -732,7 +732,6 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
   // Create multiple engines. Each engine has its own thread and channel to
   // let the endpoint communicate with.
   for (int i = 0; i < total_num_engines; i++) channel_vec_[i] = new Channel();
-  printf("Initialized channel vec\n")
   if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
     // Receiver-driven congestion control per device.
     for (int i = 0; i < num_devices_; i++) eqds_[i] = new eqds::EQDS(i);
