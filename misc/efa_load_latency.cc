@@ -1,4 +1,4 @@
-#include "../efa/util.h"
+#include "util/util.h"
 #include <arpa/inet.h>
 #include <infiniband/efadv.h>
 #include <infiniband/verbs.h>

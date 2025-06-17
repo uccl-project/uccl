@@ -1,12 +1,10 @@
 #include <arpa/inet.h>
 #include <assert.h>
-#include <config.h>
 #include <getopt.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <netdb.h>
 #include <netinet/in.h>
-#include <ofi_mem.h>
 #include <poll.h>
 #include <rdma/fabric.h>
 #include <rdma/fi_cm.h>
@@ -468,9 +466,9 @@ int main(int argc, char **argv) {
 
     void *sendbuf;
     int alignment = 4096;
-    ret = ofi_memalign(&(sendbuf), (size_t)alignment, 2 * msg_size * alignment);
+    ret = posix_memalign(&(sendbuf), (size_t)alignment, 2 * msg_size * alignment);
     if (ret) {
-        PP_PRINTERR("ofi_memalign", ret);
+        PP_PRINTERR("posix_memalign", ret);
         return ret;
     }
     *(uint64_t *)sendbuf = MAGIC_NUMBER;

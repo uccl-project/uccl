@@ -1,12 +1,10 @@
 #include <arpa/inet.h>
 #include <assert.h>
-#include <config.h>
 #include <getopt.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <netdb.h>
 #include <netinet/in.h>
-#include <ofi_mem.h>
 #include <poll.h>
 #include <rdma/fabric.h>
 #include <rdma/fi_cm.h>
