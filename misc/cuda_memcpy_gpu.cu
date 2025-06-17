@@ -3,9 +3,9 @@
 #include <vector>
 #include <cuda_runtime.h>
 
-#define NUM_4KB_BLOCKS 32  // Adjust this for different block counts
-// #define BLOCK_SIZE (8 * 1024)    // 8KB
-#define BLOCK_SIZE (1 * 1024 * 1024)  // 1MB
+#define NUM_4KB_BLOCKS 32      // Adjust this for different block counts
+#define BLOCK_SIZE (8 * 1024)  // 8KB
+// #define BLOCK_SIZE (1 * 1024 * 1024)  // 1MB
 // Number of CUDA streams for async copy: only one is needed for peer copy
 #define NUM_STREAMS 1
 
@@ -171,6 +171,58 @@ void benchmarkMemcpy() {
       stop_time - start_time);
 
   std::cout << "cudaMemcpyPeerAsync performance: "
+            << (NUM_4KB_BLOCKS * BLOCK_SIZE) / (elapsed_time.count() * 1e3)
+            << " GB/s" << std::endl;
+
+  // Cleanup peer resources
+  for (int i = 0; i < NUM_STREAMS; i++) {
+    cudaStreamDestroy(peerStreams[i]);
+  }
+  cudaFree(d_dst);
+  checkCudaError(cudaDeviceDisablePeerAccess(srcDevice), "Disable peer access");
+  checkCudaError(cudaSetDevice(srcDevice), "Reset to src device");
+
+  // --------------------------------------------------
+  // Benchmark cudaMemcpyAsync + cudaMemcpyPeerAsync between two GPUs
+  // --------------------------------------------------
+
+  cudaSetDevice(dstDevice);
+  cudaDeviceEnablePeerAccess(srcDevice, 0);
+  checkCudaError(cudaMalloc(&d_dst, NUM_4KB_BLOCKS * BLOCK_SIZE),
+                 "re-alloc d_dst");
+  dst_ptr = static_cast<char*>(d_dst);
+
+  for (int i = 0; i < NUM_STREAMS; i++) {
+    checkCudaError(cudaStreamCreate(&peerStreams[i]), "Create peer stream");
+  }
+  start_time = std::chrono::high_resolution_clock::now();
+
+  cudaSetDevice(srcDevice);
+  for (int i = 0; i < NUM_4KB_BLOCKS; i++) {
+    int stream_id = i % NUM_STREAMS;
+    checkCudaError(
+        cudaMemcpyAsync(d_continuous + i * BLOCK_SIZE, d_scattered[i],
+                        BLOCK_SIZE, cudaMemcpyDeviceToDevice,
+                        peerStreams[stream_id]),
+        "Memcpy scattered to continuous");
+  }
+  cudaSetDevice(dstDevice);
+  checkCudaError(
+      cudaMemcpyPeerAsync(dst_ptr, dstDevice, d_continuous, srcDevice,
+                          BLOCK_SIZE * NUM_4KB_BLOCKS, peerStreams[0]),
+      "MemcpyPeerAsync scattered to continuous");
+
+  // Synchronize all streams
+  for (int i = 0; i < NUM_STREAMS; i++) {
+    checkCudaError(cudaStreamSynchronize(peerStreams[i]),
+                   "Synchronize peer stream");
+  }
+
+  stop_time = std::chrono::high_resolution_clock::now();
+  elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(
+      stop_time - start_time);
+
+  std::cout << "cudaMemcpyAsync + cudaMemcpyPeerAsync performance: "
             << (NUM_4KB_BLOCKS * BLOCK_SIZE) / (elapsed_time.count() * 1e3)
             << " GB/s" << std::endl;
 
