@@ -1,4 +1,5 @@
 #include "peer_copy_worker.hpp"
+#include "peer_copy.cuh"
 
 CopyRing g_ring;
 std::atomic<bool> g_run;
@@ -46,8 +47,12 @@ void peer_copy_worker() {
 
     auto st = std::chrono::high_resolution_clock::now();
     // printf("Before cudaMemcpyPeerAsync\n");
-    cudaError_t err = cudaMemcpyPeerAsync(t->dst_ptr, t->dst_dev, t->src_ptr,
-                                          src_device, t->bytes, stream);
+    // cudaError_t err = cudaMemcpyPeerAsync(t->dst_ptr, t->dst_dev, t->src_ptr,
+    // src_device, t->bytes, stream);
+
+    cudaError_t err = launch_peer_bulk_copy(t->dst_ptr, t->dst_dev, t->src_ptr,
+                                            src_device, t->bytes, stream);
+
     // printf("cudaMemcpyPeerAsync finished!\n");
     if (err != cudaSuccess) {
       fprintf(stderr, "cudaMemcpyPeerAsync failed (%s) wr_id=%llu\n",
@@ -55,6 +60,13 @@ void peer_copy_worker() {
               static_cast<unsigned long long>(t->wr_id));
       std::abort();
     }
+
+    err = cudaStreamSynchronize(stream);
+    if (err != cudaSuccess) {
+      fprintf(stderr, "Kernel execution failed: %s\n", cudaGetErrorString(err));
+      std::abort();
+    }
+
     async_memcpy_count++;
     async_memcpy_total_time +=
         std::chrono::duration_cast<std::chrono::microseconds>(
