@@ -51,6 +51,8 @@ static constexpr uint32_t MAX_CHUNK_IB_4096_HDR_OVERHEAD =
 
 static int num_devices = 0;
 
+// Maintain link bandwidth of each device
+static std::vector<double> link_bandwidth = {};
 /**
  * @brief Buffer pool for work request extension.
  */
@@ -461,8 +463,8 @@ class SubUcclFlow {
  public:
   SubUcclFlow() {}
 
-  SubUcclFlow(uint32_t fid)
-      : fid_(fid), in_wheel_cnt_(0), txtracking(), rxtracking(), pcb() {
+  SubUcclFlow(uint32_t fid, double link_bandwidth)
+      : fid_(fid), in_wheel_cnt_(0), txtracking(), rxtracking(), pcb(link_bandwidth) {
     INIT_LIST_HEAD(&ack.ack_link);
     ack.subflow = this;
   }
@@ -571,6 +573,8 @@ class RDMAContext {
   uint32_t engine_offset_;
 
   uint32_t flow_cnt_ = 0;
+
+  double link_speed = 0;
 
   void* sender_flow_tbl_[MAX_FLOW] = {};
   void* receiver_flow_tbl_[MAX_FLOW] = {};
@@ -1532,18 +1536,6 @@ static inline int util_rdma_ib2eth_name(char const* ib_name,
 }
 
 /**
- * @brief This helper function gets the Infiniband name from the suffix.
- *
- * @param suffix
- * @param ib_name
- * @return int
- */
-static inline int util_rdma_get_ib_name_from_suffix(int suffix, char* ib_name) {
-  sprintf(ib_name, "%s%d", IB_DEVICE_NAME_PREFIX, suffix);
-  return 0;
-}
-
-/**
  * @brief This helper function gets the IP address of the device from Infiniband
  * name.
  *
@@ -1578,6 +1570,32 @@ static inline int util_rdma_get_mtu_from_ibv_mtu(ibv_mtu mtu) {
     default:
       return 0;
   }
+}
+
+static int ibvWidths[] = {1, 4, 8, 12, 2};
+static int ibvSpeeds[] = {2500,  /* SDR */
+                          5000,  /* DDR */
+                          10000, /* QDR */
+                          10000, /* QDR */
+                          14000, /* FDR */
+                          25000, /* EDR */
+                          50000, /* HDR */
+                          100000 /* NDR */};
+
+static int firstBitSet(int val, int max) {
+  int i = 0;
+  while (i < max && ((val & (1 << i)) == 0)) i++;
+  return i;
+}
+static int ncclIbWidth(int width) {
+  return ibvWidths[firstBitSet(width, sizeof(ibvWidths) / sizeof(int) - 1)];
+}
+static int ncclIbSpeed(int speed) {
+  return ibvSpeeds[firstBitSet(speed, sizeof(ibvSpeeds) / sizeof(int) - 1)];
+}
+
+static inline int util_rdma_get_link_speed_from_ibv_speed(int active_speed, int active_width) {
+ return (ncclIbSpeed(active_speed) * ncclIbWidth(active_width)) * 1e6 /8;
 }
 
 }  // namespace uccl

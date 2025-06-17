@@ -1,6 +1,7 @@
 #include "nccl_net.h"
 #include "transport.h"
 #include "transport_config.h"
+#include "util_rdma.h"
 #include <glog/logging.h>
 #include <atomic>
 #include <mutex>
@@ -120,7 +121,7 @@ ncclResult_t pluginGetProperties(int dev, ncclNetProperties_v8_t* props) {
   props->name = factory_dev->ib_name;
 
   // Speed in *Mbps*. 100000 means 100G
-  props->speed = LINK_BANDWIDTH * 8 / 1e6;
+  props->speed = link_bandwidth[0] * 8 / 1e6;
 
   pluginPciPath(factory_dev->ib_name, &props->pciPath);
 

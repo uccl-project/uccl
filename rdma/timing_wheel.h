@@ -152,7 +152,7 @@ class TimingWheel {
                                     size_t* prev_desired_tx_tsc, size_t ref_tsc,
                                     void* wr, size_t chunk_size,
                                     bool allow_bypass) {
-    if constexpr (kTestConstantRate) target_rate = gbps_to_rate(LINK_BANDWIDTH);
+    if constexpr (kTestConstantRate) target_rate = gbps_to_rate(DEFAULT_LINK_BW);
 
     if (chunk_size < kBypassTimingWheelThres && allow_bypass) return false;
 

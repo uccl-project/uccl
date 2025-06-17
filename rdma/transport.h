@@ -552,7 +552,7 @@ class UcclFlow {
         remote_dev_(remote_dev),
         is_send_(is_send) {
     for (int i = 0; i < NUM_ENGINES; i++) {
-      sub_flows_[i] = new SubUcclFlow(flow_id);
+      sub_flows_[i] = new SubUcclFlow(flow_id, link_bandwidth[dev]);
     }
 
     memset(&send_comm_, 0, sizeof(send_comm_));

@@ -11,6 +11,7 @@
 #include "util_jring.h"
 #include "util_latency.h"
 #include "util_list.h"
+#include "util_rdma.h"
 #include "util_timer.h"
 #include <infiniband/verbs.h>
 #include <iomanip>
@@ -257,10 +258,10 @@ class EQDS {
 
   // Reference: for PULL_QUANTUM = 16384, LINK_BANDWIDTH = 400 * 1e9 / 8,
   // kCreditPerPull = 4, kSendersPerPull = 4, kPacingIntervalUs ~= 5.3 us.
-  static constexpr uint64_t kPacingIntervalUs =
-      1.01 /* slower than line rate */ *
-      (38 /* FCS overhead */ + PULL_QUANTUM) * kCreditPerPull * 1e6 *
-      kSendersPerPull / LINK_BANDWIDTH;
+  // static constexpr uint64_t kPacingIntervalUs =
+  //     1.01 /* slower than line rate */ *
+  //     (38 /* FCS overhead */ + PULL_QUANTUM) * kCreditPerPull * 1e6 *
+  //     kSendersPerPull / link_bandwidth;
 
   EQDSChannel channel_;
 
@@ -295,7 +296,11 @@ class EQDS {
     }
   }
 
-  EQDS(int dev) : dev_(dev), channel_() {
+  EQDS(int dev, double link_bandwidth) : dev_(dev), channel_() {
+    uint64_t kPacingIntervalUs =
+       1.01 /* slower than line rate */ *
+       (38 /* FCS overhead */ + PULL_QUANTUM) * kCreditPerPull * 1e6 *
+       kSendersPerPull / link_bandwidth;
     pacing_interval_tsc_ = us_to_cycles(kPacingIntervalUs, freq_ghz);
 
     // Initialize the pacer thread.

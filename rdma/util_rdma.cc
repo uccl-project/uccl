@@ -10,34 +10,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <vector>
 #include <sys/mman.h>
 
 namespace uccl {
 
 // RDMAFactory rdma_ctl;
 std::shared_ptr<RDMAFactory> rdma_ctl;
-
-static int ibvWidths[] = {1, 4, 8, 12, 2};
-static int ibvSpeeds[] = {2500,  /* SDR */
-                          5000,  /* DDR */
-                          10000, /* QDR */
-                          10000, /* QDR */
-                          14000, /* FDR */
-                          25000, /* EDR */
-                          50000, /* HDR */
-                          100000 /* NDR */};
-
-static int firstBitSet(int val, int max) {
-  int i = 0;
-  while (i < max && ((val & (1 << i)) == 0)) i++;
-  return i;
-}
-static int ncclIbWidth(int width) {
-  return ibvWidths[firstBitSet(width, sizeof(ibvWidths) / sizeof(int) - 1)];
-}
-static int ncclIbSpeed(int speed) {
-  return ibvSpeeds[firstBitSet(speed, sizeof(ibvSpeeds) / sizeof(int) - 1)];
-}
 
 int RDMAFactory::init_devs() {
   int num_devs;
@@ -116,7 +95,21 @@ int RDMAFactory::init_devs() {
           dev.dev_attr = dev_attr;
           dev.port_attr = port_attr;
           dev.ib_port_num = port_num;
-          dev.gid_idx = GID_IDX;
+
+          double link_bw = (ncclIbSpeed(port_attr.active_speed) * ncclIbWidth(port_attr.active_width)) * 1e6 /8;
+          // TODO : Extend this to support multiple ports per device
+          if (port_num == 1) link_bandwidth.push_back(link_bw);
+          printf("Device %s port %d: Link bandwidth = %lf bytes %lf\n", 
+                 dev.ib_name, port_num, link_bw, DEFAULT_LINK_BW);
+
+          for (int i = 0; i < port_attr.gid_tbl_len; i++) {
+            printf("Port GID=%d\n", i);
+            if (ibv_query_gid(context, port_num, i, &dev.gid) == 0) {
+              dev.gid_idx = i;
+              break;
+            }
+          }
+
           dev.context = context;
 
           if (ibv_query_gid(context, port_num, dev.gid_idx, &dev.gid)) {
@@ -156,7 +149,6 @@ int RDMAFactory::init_devs() {
           num_devices++;
       }
   }
-
   ibv_free_device_list(devices);
   return num_devices;
 
@@ -214,6 +206,11 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
   mtu_bytes_ =
       util_rdma_get_mtu_from_ibv_mtu(factory_dev->port_attr.active_mtu);
 
+
+  link_speed =
+    util_rdma_get_link_speed_from_ibv_speed(factory_dev->port_attr.active_speed, factory_dev->port_attr.active_width);
+  printf("Inside context, link speed= %lf, %lf\n\n", 
+                 link_speed, DEFAULT_LINK_BW);
   // Create PD.
   pd_ = factory_dev->pd;
 
@@ -965,7 +962,7 @@ uint64_t TXTracking::ack_transmitted_chunks(void* subflow_context,
   auto fabric_delay_tsc = (t6 - t1) - endpoint_delay_tsc;
   // Make RTT independent of segment size.
   auto serial_delay_tsc =
-      us_to_cycles(seg_size * 1e6 / LINK_BANDWIDTH, freq_ghz);
+      us_to_cycles(seg_size * 1e6 / rdma_ctx->link_speed, freq_ghz);
   if (fabric_delay_tsc > serial_delay_tsc ||
       to_usec(fabric_delay_tsc, freq_ghz) < kMAXRTTUS)
     fabric_delay_tsc -= serial_delay_tsc;
