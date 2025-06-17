@@ -51,8 +51,6 @@ static constexpr uint32_t MAX_CHUNK_IB_4096_HDR_OVERHEAD =
 
 static int num_devices = 0;
 
-// Maintain link bandwidth of each device
-static std::vector<double> link_bandwidth = {};
 /**
  * @brief Buffer pool for work request extension.
  */
@@ -1181,6 +1179,8 @@ struct FactoryDevice {
   uint8_t gid_idx;
   union ibv_gid gid;
 
+  double link_bw;
+
   struct ibv_pd* pd;
 
   // DMA-BUF support
@@ -1254,7 +1254,7 @@ static inline int modify_qp_rtr_gpuflush(struct ibv_qp* qp, int dev) {
 
   attr.ah_attr.sl = kServiceLevel;
 
-  attr.ah_attr.port_num = IB_PORT_NUM;
+  attr.ah_attr.port_num = factory_dev->ib_port_num;
   attr.dest_qp_num = qp->qp_num;
   attr.rq_psn = 0;
 
@@ -1288,7 +1288,7 @@ static inline int modify_qp_rtr(struct ibv_qp* qp, int dev,
   memset(&attr, 0, sizeof(attr));
   attr.qp_state = IBV_QPS_RTR;
   attr.path_mtu = factory_dev->port_attr.active_mtu;
-  attr.ah_attr.port_num = IB_PORT_NUM;
+  attr.ah_attr.port_num = factory_dev->ib_port_num;
   if (ROCE_NET) {
     attr.ah_attr.is_global = 1;
     attr.ah_attr.grh.dgid = remote_ctx->remote_gid;
@@ -1360,8 +1360,9 @@ static inline int modify_qp_rts(struct ibv_qp* qp, uint32_t local_psn,
 static inline void util_rdma_create_qp_seperate_cq(
     struct ibv_context* context, struct ibv_qp** qp, enum ibv_qp_type qp_type,
     bool cq_ex, bool ts, struct ibv_cq** scq, struct ibv_cq** rcq,
-    bool share_cq, uint32_t cqsize, struct ibv_pd* pd, uint32_t max_send_wr,
-    uint32_t max_recv_wr, uint32_t max_send_sge, uint32_t max_recv_sge) {
+    bool share_cq, uint32_t cqsize, struct ibv_pd* pd, int port,
+    uint32_t max_send_wr, uint32_t max_recv_wr, uint32_t max_send_sge,
+    uint32_t max_recv_sge) {
   // Creating SCQ and RCQ
   if (!share_cq) {
     if (cq_ex) {
@@ -1420,7 +1421,8 @@ static inline void util_rdma_create_qp_seperate_cq(
   memset(&qp_attr, 0, sizeof(qp_attr));
   qp_attr.qp_state = IBV_QPS_INIT;
   qp_attr.pkey_index = 0;
-  qp_attr.port_num = IB_PORT_NUM;
+  auto factory_dev = RDMAFactory::get_factory_dev(dev);
+  qp_attr.port_num = port;
   qp_attr.qp_access_flags =
       IBV_ACCESS_REMOTE_WRITE |
       ((qp_type == IBV_QPT_RC) ? IBV_ACCESS_REMOTE_READ : 0);
@@ -1432,7 +1434,7 @@ static inline void util_rdma_create_qp_seperate_cq(
 static inline void util_rdma_create_qp(
     struct ibv_context* context, struct ibv_qp** qp, enum ibv_qp_type qp_type,
     bool cq_ex, bool ts, struct ibv_cq** cq, bool share_cq, uint32_t cqsize,
-    struct ibv_pd* pd, struct ibv_mr** mr, void* addr, size_t mr_size,
+    struct ibv_pd* pd, int port, struct ibv_mr** mr, void* addr, size_t mr_size,
     uint32_t max_send_wr, uint32_t max_recv_wr, uint32_t max_send_sge,
     uint32_t max_recv_sge) {
   // Creating CQ
@@ -1499,7 +1501,7 @@ static inline void util_rdma_create_qp(
   memset(&qp_attr, 0, sizeof(qp_attr));
   qp_attr.qp_state = IBV_QPS_INIT;
   qp_attr.pkey_index = 0;
-  qp_attr.port_num = IB_PORT_NUM;
+  qp_attr.port_num = port;
   qp_attr.qp_access_flags =
       IBV_ACCESS_REMOTE_WRITE |
       ((qp_type == IBV_QPT_RC) ? IBV_ACCESS_REMOTE_READ : 0);

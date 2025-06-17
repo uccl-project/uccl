@@ -551,8 +551,9 @@ class UcclFlow {
         remote_ip_(remote_ip),
         remote_dev_(remote_dev),
         is_send_(is_send) {
+    auto factory_dev = RDMAFactory::get_factory_dev(dev);
     for (int i = 0; i < NUM_ENGINES; i++) {
-      sub_flows_[i] = new SubUcclFlow(flow_id, link_bandwidth[dev]);
+      sub_flows_[i] = new SubUcclFlow(flow_id, factory_dev->link_bw);
     }
 
     memset(&send_comm_, 0, sizeof(send_comm_));
@@ -560,13 +561,11 @@ class UcclFlow {
 
     auto comm_base = is_send_ ? &send_comm_.base : &recv_comm_.base;
 
-    auto factory_dev = RDMAFactory::get_factory_dev(dev);
-
     // Fifo QP.
     comm_base->fifo_local_psn = BASE_PSN;
     util_rdma_create_qp(factory_dev->context, &comm_base->fifo_qp, IBV_QPT_RC,
                         false, false, &comm_base->flow_cq, false, kFifoCQSize,
-                        factory_dev->pd, &comm_base->fifo_mr, nullptr,
+                        factory_dev->pd, factory_dev->ib_port_num, &comm_base->fifo_mr, nullptr,
                         kFifoMRSize, kMaxReq * kMaxRecv, kMaxReq * kMaxRecv, 1,
                         1);
     comm_base->fifo =
@@ -634,7 +633,7 @@ class UcclFlow {
     memset(&qpAttr, 0, sizeof(qpAttr));
     qpAttr.qp_state = IBV_QPS_INIT;
     qpAttr.pkey_index = 0;
-    qpAttr.port_num = IB_PORT_NUM;
+    qpAttr.port_num = factory_dev->ib_port_num;
     qpAttr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE;
 
     comm_base->rc_qp = ibv_create_qp(factory_dev->pd, &qp_init_attr);
@@ -672,7 +671,7 @@ class UcclFlow {
     if (!is_send_) {
       util_rdma_create_qp(
           factory_dev->context, &recv_comm_.gpu_flush_qp, IBV_QPT_RC, false,
-          false, &comm_base->flow_cq, true, 0, factory_dev->pd,
+          false, &comm_base->flow_cq, true, 0, factory_dev->pd, port,
           &recv_comm_.gpu_flush_mr, &recv_comm_.gpu_flush, sizeof(int),
           kMaxReq * kMaxRecv, kMaxReq * kMaxRecv, kMaxSge, kMaxSge);
 

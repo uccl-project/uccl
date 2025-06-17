@@ -97,10 +97,7 @@ int RDMAFactory::init_devs() {
           dev.ib_port_num = port_num;
 
           double link_bw = (ncclIbSpeed(port_attr.active_speed) * ncclIbWidth(port_attr.active_width)) * 1e6 /8;
-          // TODO : Extend this to support multiple ports per device
-          if (port_num == 1) link_bandwidth.push_back(link_bw);
-          printf("Device %s port %d: Link bandwidth = %lf bytes %lf\n", 
-                 dev.ib_name, port_num, link_bw, DEFAULT_LINK_BW);
+          dev.link_bw = link_bw;
 
           for (int i = 0; i < port_attr.gid_tbl_len; i++) {
             printf("Port GID=%d\n", i);
@@ -276,7 +273,7 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
   memset(&qpAttr, 0, sizeof(qpAttr));
   qpAttr.qp_state = IBV_QPS_INIT;
   qpAttr.pkey_index = 0;
-  qpAttr.port_num = IB_PORT_NUM;
+  qpAttr.port_num = factory_dev->ib_port_num;
   qpAttr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE;
 
   for (int i = 0; i < kPortEntropy; i++) {
@@ -305,7 +302,7 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
   util_rdma_create_qp_seperate_cq(context_, &credit_qp_, IBV_QPT_UC, true,
                                   false, (struct ibv_cq**)&pacer_credit_cq_ex_,
                                   (struct ibv_cq**)&engine_credit_cq_ex_, false,
-                                  kCQSize, pd_,
+                                  kCQSize, pd_, factory_dev->ib_port_num,
                                   eqds::CreditChunkBuffPool::kNumChunk,
                                   eqds::CreditChunkBuffPool::kNumChunk, 1, 1);
 
@@ -363,8 +360,8 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
     // Create Ctrl QP, CQ, and MR.
     ctrl_local_psn_ = BASE_PSN;
     util_rdma_create_qp(context_, &ctrl_qp_, IBV_QPT_UC, true, true,
-                        (struct ibv_cq**)&ctrl_cq_ex_, false, kCQSize, pd_,
-                        &ctrl_mr_, nullptr, kCtrlMRSize,
+                        (struct ibv_cq**)&ctrl_cq_ex_, false, kCQSize, pd_, 
+                        factory_dev->ib_port_num, &ctrl_mr_, nullptr, kCtrlMRSize,
                         CtrlChunkBuffPool::kNumChunk,
                         CtrlChunkBuffPool::kNumChunk, 1, 1);
 

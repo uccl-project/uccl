@@ -704,7 +704,10 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
 
   if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
     // Receiver-driven congestion control per device.
-    for (int i = 0; i < num_devices; i++) eqds_[i] = new eqds::EQDS(i, link_bandwidth[i]);
+    for (int i = 0; i < num_devices; i++) {
+      auto factory_dev = RDMAFactory::get_factory_dev(i);
+      eqds_[i] = new eqds::EQDS(i, factory_dev->link_bw);
+    }
   }
 }
 #else
@@ -729,7 +732,10 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
   for (int i = 0; i < total_num_engines; i++) channel_vec_[i] = new Channel();
   if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
     // Receiver-driven congestion control per device.
-    for (int i = 0; i < num_devices_; i++) eqds_[i] = new eqds::EQDS(i, link_bandwidth[i]);
+    for (int i = 0; i < num_devices_; i++) {
+      auto factory_dev = RDMAFactory::get_factory_dev(i);
+      eqds_[i] = new eqds::EQDS(i, factory_dev->link_bw);
+    }
   }
 
 
