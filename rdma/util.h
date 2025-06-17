@@ -275,8 +275,8 @@ static inline void apply_setsockopt(int xsk_fd) {
   int ret;
   int sock_opt;
 
+#ifdef SO_PREFER_BUSY_POLL
   sock_opt = 1;
-
   ret = setsockopt(xsk_fd, SOL_SOCKET, SO_PREFER_BUSY_POLL, (void*)&sock_opt,
                    sizeof(sock_opt));
   if (ret == -EPERM) {
@@ -286,13 +286,13 @@ static inline void apply_setsockopt(int xsk_fd) {
   } else if (ret < 0) {
     fprintf(stderr, "Ignore SO_PREFER_BUSY_POLL as it failed\n");
   }
-
+#endif
   sock_opt = 20;
   if (setsockopt(xsk_fd, SOL_SOCKET, SO_BUSY_POLL, (void*)&sock_opt,
                  sizeof(sock_opt)) < 0) {
     fprintf(stderr, "Ignore SO_BUSY_POLL as it failed\n");
   }
-
+#ifdef SO_BUSY_POLL_BUDGET
   sock_opt = 64;
   ret = setsockopt(xsk_fd, SOL_SOCKET, SO_BUSY_POLL_BUDGET, (void*)&sock_opt,
                    sizeof(sock_opt));
@@ -303,6 +303,7 @@ static inline void apply_setsockopt(int xsk_fd) {
   } else if (ret < 0) {
     fprintf(stderr, "Ignore SO_BUSY_POLL_BUDGET as it failed\n");
   }
+#endif
 }
 
 namespace detail {
