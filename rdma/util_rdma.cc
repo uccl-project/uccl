@@ -80,6 +80,7 @@ int RDMAFactory::init_devs() {
           strncpy(dev.ib_name, devices[d]->name, sizeof(devices[d]->name));
             
           if (if_name) {
+              // TODO: For now support a single control nic through configuration
               char* first_intf = strtok(if_name, ",");
               if (first_intf) {
                   dev.local_ip_str = get_dev_ip(first_intf);
