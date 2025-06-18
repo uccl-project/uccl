@@ -371,7 +371,7 @@ class RDMAEndpoint {
   RDMAEndpoint(int num_devices, int num_engines_per_dev);
   ~RDMAEndpoint();
 
-  bool initialize_engine_by_dev(int dev, std::atomic<uint16_t>& port);
+  bool initialize_engine_by_dev(int dev);
 
   /// For testing easily.
   ConnID test_uccl_connect(int dev, std::string remote_ip, int remote_dev) {

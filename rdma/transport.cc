@@ -270,14 +270,12 @@ void UcclRDMAEngine::handle_rx_work(void) {
   }
 }
 
-bool RDMAEndpoint::initialize_engine_by_dev(int dev,
-                                            std::atomic<uint16_t>& port) {
+bool RDMAEndpoint::initialize_engine_by_dev(int dev) {
   static std::once_flag flag_once;
-  std::call_once(flag_once, [this, dev, &port]() {
+  std::call_once(flag_once, [this, dev]() {
     int start_engine_idx = dev * num_engines_per_dev_;
     int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
 
-    port.store(kBootstrapPort + dev * 1000);
     for (int engine_id = start_engine_idx; engine_id <= end_engine_idx;
          engine_id++) {
       int engine_cpu_id =
@@ -287,8 +285,7 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev,
       engine_id_to_engine_map_[engine_id] = std::make_unique<UcclRDMAEngine>(
           dev, engine_id, channel_vec_[engine_id], eqds_[dev]);
 
-      UcclRDMAEngine* engine_ptr = nullptr;
-      engine_ptr = engine_id_to_engine_map_[engine_id].get();
+      UcclRDMAEngine* engine_ptr = engine_id_to_engine_map_[engine_id].get();
       engine_th_vec_.emplace_back(std::make_unique<std::thread>(
           [engine_ptr, engine_id, engine_cpu_id]() {
             UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "

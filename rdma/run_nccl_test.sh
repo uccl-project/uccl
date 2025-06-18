@@ -8,9 +8,20 @@ UCCL=${1:-1}
 NUM_PROCS=${2:-2}
 NUM_GPUS_PER_NODE=${3:-8}
 PROG_OPTION=${4:-0}
+PROCS_PER_NODE=${5:-1}
+HOSTNAME=${6:-"hosts_single_process"}
 
-# IP of Nodes.
-NODES="192.168.0.58,192.168.0.100,192.168.0.99"
+HOSTFILE="$HOSTNAME"
+NODES=""
+while IFS= read -r line || [[ -n "$line" ]]; do
+  [[ -z "$line" || "$line" =~ ^# ]] && continue
+  host=$(echo "$line" | awk '{print $1}')
+  NODES="${NODES}${host},"
+done < "$HOSTFILE"
+
+# Trim trailing comma
+NODES=${NODES%,}
+echo "Parsed NODES: $NODES"
 
 IFS=',' read -ra ADDR <<< "$NODES"
 for node in "${ADDR[@]}"; do
@@ -86,8 +97,8 @@ echo "Running test: ${PROG_NAME}, $([ "${UCCL}" -eq 1 ] && echo "UCCL" || echo "
 
 echo -e "Details: NCCL_NCHANNELS=${NUM_CHUNNEL} \n\t NCCL_P2P_NET_CHUNKSIZE=${P2P_NET_CHUNKSIZE} \n\t NCCL_BUFFSIZE=${BUFFSIZE} \n\t NCCL_NCHANNELS_PER_NET_PEER=${CHANNELS_NET_PEER} \n\t NCCL_ALGO=${ALGO} \n\t NCCL_IB_QPS_PER_CONNECTION=${NUM_QPS_PER_CONNECTION} \n\t NCCL_IB_SPLIT_DATA_ON_QPS=${SPLIT_DATA_ON_QPS} \n\t NCCL_PXN_DISABLE=${NVLINK_OFF} \n\t NCCL_P2P_DISABLE=${NVLINK_OFF} \n\t NCCL_SHM_DISABLE=${NVLINK_OFF} \n\t NCCL_IB_HCA=${HCA_NAMES}"
 
-/usr/mpi/gcc/openmpi-4.1.7a1/bin/mpirun --prefix /usr/mpi/gcc/openmpi-4.1.7a1 --bind-to none -np ${NUM_PROCS} -N 1 \
-    --host ${NODES} \
+/usr/mpi/gcc/openmpi-4.1.7a1/bin/mpirun --prefix /usr/mpi/gcc/openmpi-4.1.7a1 --bind-to none -np ${NUM_PROCS} -N ${PROCS_PER_NODE} \
+    -hostfile ${HOSTNAME} \
     --mca btl_tcp_if_include ${CTRL_NIC} \
     --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
     --mca orte_base_help_aggregate 0 \
