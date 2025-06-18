@@ -6,9 +6,20 @@
 
 // #define STATS
 // #define LAZY_CREATE_ENGINE
-#define MAX_IB_DEVS 32
 
-/// Interface configuration.
+// TODO : Convert them to user definable configs
+#define ROCE_TRAFFIC_CLASS 3
+
+#define ROCE_SERVICE_LEVEL 135
+#define IB_SERVICE_LEVEL 0
+
+// DupAckThres equals to 1 means all duplicate acks are caused by
+// packet loss. This is true for flow-level ECMP, which is the common case. When
+// the network supports adaptive routing, duplicate acks may be caused by
+// adaptive routing. In this case, DupAckThres should be set to a
+// value greater than 0.
+#define ROCE_DUP_ACK_THRES 32
+
 static const bool ROCE_NET = true;
 static constexpr double DEFAULT_LINK_BW = 100.0 * 1e9 / 8;  // 100Gbps
 static constexpr uint32_t NUM_ENGINES = 1;
@@ -18,10 +29,6 @@ static constexpr uint32_t kChunkSize = 128 << 10;
 static constexpr uint32_t MAX_PEER = 256;
 // Maximum number of flows (one-way) on each engine.
 static constexpr uint32_t MAX_FLOW = 256;
-// Traffic class
-static constexpr uint8_t kTrafficClass = ROCE_NET ? 3 : 0;
-// Service level
-static constexpr uint8_t kServiceLevel = ROCE_NET ? 135 : 0;
 
 
 static uint32_t NUM_CPUS = std::thread::hardware_concurrency();
@@ -154,12 +161,6 @@ static constexpr uint32_t kMAXRXOOO = 8;
 // Note that kSackBitmapSize must be <= half the maximum value of UINT_CSN.
 // E.g., UINT_CSN = 8bit, kSacBitmapSize <= 128.
 static constexpr std::size_t kSackBitmapSize = 64 << 1;
-// kFastRexmitDupAckThres equals to 1 means all duplicate acks are caused by
-// packet loss. This is true for flow-level ECMP, which is the common case. When
-// the network supports adaptive routing, duplicate acks may be caused by
-// adaptive routing. In this case, kFastRexmitDupAckThres should be set to a
-// value greater than 0.
-static constexpr std::size_t kFastRexmitDupAckThres = ROCE_NET ? 32 : 65536;
 
 // Maximum number of Retransmission Timeout (RTO) before aborting the flow.
 static constexpr uint32_t kRTOAbortThreshold = 50;
@@ -189,4 +190,3 @@ static constexpr bool kTestNoRTO =
     (ROCE_NET || kTestLoss)
         ? false
         : true;  // Infiniband is lossless, disable RTO even for UC.
-/// Debugging and testing.

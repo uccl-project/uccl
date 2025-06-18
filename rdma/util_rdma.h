@@ -23,6 +23,10 @@
 #endif
 
 namespace uccl {
+#define MAX_IB_DEVS 32
+
+#define ROCE_GID_IDX 3
+#define IB_GID_IDX 0
 
 typedef uint64_t FlowID;
 typedef uint64_t PeerID;
@@ -737,6 +741,10 @@ class RDMAContext {
 
   uint32_t* engine_unacked_bytes_;
 
+  inline bool is_roce() {
+    return (sgid_index_ == ROCE_GID_IDX);
+  }
+
   inline void update_clock(double ratio, double offset) {
     ratio_ = ratio;
     offset_ = offset;
@@ -955,12 +963,12 @@ class RDMAContext {
    */
   void __retransmit_for_flow(void* context, bool rto);
   inline void fast_retransmit_for_flow(void* context) {
-    if constexpr (ROCE_NET || kTestLoss) {
+    if (is_roce() || kTestLoss) {
       __retransmit_for_flow(context, false);
     }
   }
   inline void rto_retransmit_for_flow(void* context) {
-    if constexpr (ROCE_NET || kTestLoss) {
+    if (is_roce() || kTestLoss) {
       __retransmit_for_flow(context, true);
     }
   }
@@ -1217,9 +1225,15 @@ class RDMAFactory {
                                     eqds::EQDS* eqds, int dev,
                                     uint32_t engine_offset_,
                                     union CtrlMeta meta);
+
   static inline struct FactoryDevice* get_factory_dev(int dev) {
     DCHECK(dev >= 0 && dev < rdma_ctl->devices_.size());
     return &rdma_ctl->devices_[dev];
+  }
+
+  static inline bool is_roce(int dev) {
+    DCHECK(dev >= 0 && dev < rdma_ctl->devices_.size());
+    return (rdma_ctl->devices_[dev].gid_idx == ROCE_GID_IDX);
   }
 
   std::string to_string(void) const;
@@ -1241,18 +1255,18 @@ static inline int modify_qp_rtr_gpuflush(struct ibv_qp* qp, int dev) {
 
   attr.qp_state = IBV_QPS_RTR;
   attr.path_mtu = factory_dev->port_attr.active_mtu;
-  if (ROCE_NET) {
+  if (RDMAFactory::is_roce(dev)) {
     attr.ah_attr.is_global = 1;
     attr.ah_attr.grh.dgid = factory_dev->gid;
     attr.ah_attr.grh.sgid_index = factory_dev->gid_idx;
     attr.ah_attr.grh.hop_limit = 0xff;
-    attr.ah_attr.grh.traffic_class = kTrafficClass;
+    attr.ah_attr.grh.traffic_class = ROCE_TRAFFIC_CLASS;
+    attr.ah_attr.sl = ROCE_SERVICE_LEVEL;
   } else {
     attr.ah_attr.is_global = 0;
     attr.ah_attr.dlid = factory_dev->port_attr.lid;
+    attr.ah_attr.sl = IB_SERVICE_LEVEL;
   }
-
-  attr.ah_attr.sl = kServiceLevel;
 
   attr.ah_attr.port_num = factory_dev->ib_port_num;
   attr.dest_qp_num = qp->qp_num;
@@ -1289,12 +1303,13 @@ static inline int modify_qp_rtr(struct ibv_qp* qp, int dev,
   attr.qp_state = IBV_QPS_RTR;
   attr.path_mtu = factory_dev->port_attr.active_mtu;
   attr.ah_attr.port_num = factory_dev->ib_port_num;
-  if (ROCE_NET) {
+  if (RDMAFactory::is_roce(dev)) {
     attr.ah_attr.is_global = 1;
     attr.ah_attr.grh.dgid = remote_ctx->remote_gid;
     attr.ah_attr.grh.sgid_index = factory_dev->gid_idx;
     attr.ah_attr.grh.hop_limit = 0xff;
-    attr.ah_attr.grh.traffic_class = kTrafficClass;
+    attr.ah_attr.grh.traffic_class = ROCE_TRAFFIC_CLASS;
+    attr.ah_attr.sl = ROCE_SERVICE_LEVEL;
   } else {
     if (util_rdma_extract_local_subnet_prefix(
             factory_dev->gid.global.subnet_prefix) !=
@@ -1304,8 +1319,8 @@ static inline int modify_qp_rtr(struct ibv_qp* qp, int dev,
     }
     attr.ah_attr.is_global = 0;
     attr.ah_attr.dlid = remote_ctx->remote_port_attr.lid;
+    attr.ah_attr.sl = IB_SERVICE_LEVEL;
   }
-  attr.ah_attr.sl = kServiceLevel;
   attr.dest_qp_num = remote_qpn;
   attr.rq_psn = remote_psn;
 
@@ -1421,7 +1436,6 @@ static inline void util_rdma_create_qp_seperate_cq(
   memset(&qp_attr, 0, sizeof(qp_attr));
   qp_attr.qp_state = IBV_QPS_INIT;
   qp_attr.pkey_index = 0;
-  auto factory_dev = RDMAFactory::get_factory_dev(dev);
   qp_attr.port_num = port;
   qp_attr.qp_access_flags =
       IBV_ACCESS_REMOTE_WRITE |

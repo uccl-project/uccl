@@ -380,7 +380,6 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev,
   std::call_once(flag_once, [this, dev, &port]() {
     int start_engine_idx = dev * num_engines_per_dev_;
     int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
-
     port.store(kBootstrapPort + dev * 1000);
     for (int engine_id = start_engine_idx; engine_id <= end_engine_idx;
          engine_id++) {
@@ -390,7 +389,6 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev,
 
       engine_id_to_engine_map_[engine_id] = std::make_unique<UcclRDMAEngine>(
           dev, engine_id, channel_vec_[engine_id], eqds_[dev]);
-
       UcclRDMAEngine* engine_ptr = nullptr;
       engine_ptr = engine_id_to_engine_map_[engine_id].get();
       engine_th_vec_.emplace_back(std::make_unique<std::thread>(
@@ -498,7 +496,7 @@ void UcclRDMAEngine::periodic_process() {
 }
 
 void UcclRDMAEngine::handle_rto() {
-  if constexpr (kTestNoRTO) return;
+  if (is_no_rto()) return;
 
   auto expired_qp_vec = rto_tm_.check_expired();
 

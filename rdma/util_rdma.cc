@@ -27,7 +27,6 @@ int RDMAFactory::init_devs() {
 
   char* ib_hca = getenv("NCCL_IB_HCA");
   char* if_name = getenv("NCCL_SOCKET_IFNAME");
-  printf("NCCL_IB_HCA=%s\n", ib_hca);
     
   struct ib_dev user_ifs[MAX_IB_DEVS];
   bool searchNot = ib_hca && ib_hca[0] == '^';
@@ -44,7 +43,6 @@ int RDMAFactory::init_devs() {
   }
 
   for (int d = 0; d < num_devs && num_devices < MAX_IB_DEVS; d++) {
-      printf("Checking device %s\n", devices[d]->name);
       struct ibv_context* context = ibv_open_device(devices[d]);
       if (context == nullptr) {
           printf("NET/IB : Unable to open device %s", devices[d]->name);
@@ -99,12 +97,14 @@ int RDMAFactory::init_devs() {
           double link_bw = (ncclIbSpeed(port_attr.active_speed) * ncclIbWidth(port_attr.active_width)) * 1e6 /8;
           dev.link_bw = link_bw;
 
-          for (int i = 0; i < port_attr.gid_tbl_len; i++) {
-            printf("Port GID=%d\n", i);
-            if (ibv_query_gid(context, port_num, i, &dev.gid) == 0) {
-              dev.gid_idx = i;
-              break;
-            }
+          if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
+            dev.gid_idx = ROCE_GID_IDX;
+          } else if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
+            dev.gid_idx = IB_GID_IDX;
+          } else {
+            printf("Unknown link layer: %d\n", port_attr.link_layer);
+            ibv_close_device(context);
+            continue;
           }
 
           dev.context = context;
@@ -206,8 +206,8 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
 
   link_speed =
     util_rdma_get_link_speed_from_ibv_speed(factory_dev->port_attr.active_speed, factory_dev->port_attr.active_width);
-  printf("Inside context, link speed= %lf, %lf\n\n", 
-                 link_speed, DEFAULT_LINK_BW);
+
+  sgid_index_ = factory_dev->gid_idx;
   // Create PD.
   pd_ = factory_dev->pd;
 
@@ -789,17 +789,17 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
       wr->wr_id = (1ULL * imm_data.GetCSN()) << 56 | (uint64_t)subflow;
     else
       wr->wr_id = 0;
-
+    bool roce = is_roce();
     {
       auto wheel = &wheel_;
       uint32_t hdr_overhead;
       if (likely(chunk_size == kChunkSize && mtu_bytes_ == 4096)) {
-        hdr_overhead = ROCE_NET ? MAX_CHUNK_IB_4096_HDR_OVERHEAD
+        hdr_overhead = (roce) ? MAX_CHUNK_IB_4096_HDR_OVERHEAD
                                 : MAX_CHUNK_ROCE_IPV4_4096_HDR_OVERHEAD;
       } else {
         auto num_mtu = (chunk_size + mtu_bytes_) / mtu_bytes_;
         hdr_overhead =
-            num_mtu * (ROCE_NET ? ROCE_IPV4_HDR_OVERHEAD : IB_HDR_OVERHEAD);
+            num_mtu * (roce ? ROCE_IPV4_HDR_OVERHEAD : IB_HDR_OVERHEAD);
       }
 
       // Enforce global cwnd.
@@ -1411,10 +1411,12 @@ void RDMAContext::rx_ack(uint64_t pkt_addr) {
     subflow->pcb.duplicate_acks++;
     subflow->pcb.snd_ooo_acks = ucclsackh->sack_bitmap_count.value();
 
-    if (subflow->pcb.duplicate_acks < kFastRexmitDupAckThres) {
+    int fast_rexmit_thres = ((is_roce())? ROCE_DUP_ACK_THRES : 65536);
+
+    if (subflow->pcb.duplicate_acks < fast_rexmit_thres) {
       // We have not reached the threshold yet, so we do not do
       // retransmission.
-    } else if (subflow->pcb.duplicate_acks == kFastRexmitDupAckThres) {
+    } else if (subflow->pcb.duplicate_acks == fast_rexmit_thres) {
       // Fast retransmit.
       fast_retransmit_for_flow(subflow);
     } else {

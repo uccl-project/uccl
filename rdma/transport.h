@@ -125,6 +125,9 @@ class UcclRDMAEngine {
         rto_tm_(kRTOUSec),
         kSlowTimerIntervalTsc_(us_to_cycles(kSlowTimerIntervalUs, freq_ghz)) {
     auto context = RDMAFactory::get_factory_dev(dev_)->context;
+    is_no_rto_ = (RDMAFactory::is_roce(dev_) || kTestLoss)
+        ? false
+        : true;  // Infiniband is lossless, disable RTO even for UC.;
     struct ibv_values_ex values;
     values.comp_mask = IBV_VALUES_MASK_RAW_CLOCK;
     ibv_query_rt_values_ex(context, &values);
@@ -221,6 +224,10 @@ class UcclRDMAEngine {
     }
   }
 
+  inline bool is_no_rto() {
+    return is_no_rto_;
+  }
+
   // Called by application to shutdown the engine. App will need to join
   // the engine thread.
   inline void shutdown() { shutdown_ = true; }
@@ -269,7 +276,7 @@ class UcclRDMAEngine {
   uint64_t last_nic_clock_;
   double ratio_ = 0;
   double offset_ = 0;
-
+  bool is_no_rto_;
   // Whether shutdown is requested.
   std::atomic<bool> shutdown_{false};
 
@@ -671,7 +678,7 @@ class UcclFlow {
     if (!is_send_) {
       util_rdma_create_qp(
           factory_dev->context, &recv_comm_.gpu_flush_qp, IBV_QPT_RC, false,
-          false, &comm_base->flow_cq, true, 0, factory_dev->pd, port,
+          false, &comm_base->flow_cq, true, 0, factory_dev->pd, factory_dev->ib_port_num,
           &recv_comm_.gpu_flush_mr, &recv_comm_.gpu_flush, sizeof(int),
           kMaxReq * kMaxRecv, kMaxReq * kMaxRecv, kMaxSge, kMaxSge);
 
