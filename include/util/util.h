@@ -597,6 +597,7 @@ static inline std::string ip_to_str(uint32_t ip) {
 // 1.2.3.4 -> 0x04030201 (network order)
 static inline uint32_t str_to_ip(std::string const& ip) {
   struct sockaddr_in sa;
+  printf("Converting IP string '%s' to network order...\n", ip.c_str());
   DCHECK(inet_pton(AF_INET, ip.c_str(), &(sa.sin_addr)) != 0);
   return sa.sin_addr.s_addr;
 }

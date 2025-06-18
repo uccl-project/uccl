@@ -5,7 +5,7 @@
 #include <atomic>
 #include <mutex>
 #include <thread>
-
+#include <unistd.h>
 using namespace uccl;
 
 char const* PLUGIN_NAME = "RDMA_Plugin";
@@ -82,7 +82,7 @@ struct ucclSendComm {
 };
 
 ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
-  std::cout << "Hello UCCL!" << std::endl;
+  std::cout << "Hello UCCL from PID: " << getpid() << std::endl;
 
 #ifdef LAZY_CREATE_ENGINE
   ep = std::make_shared<RDMAEndpoint>(NUM_DEVICES, NUM_ENGINES);
@@ -207,6 +207,8 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
 
   // Fill out handle which will be passed to the other side.
   auto factory_dev = RDMAFactory::get_factory_dev(dev);
+  printf("pluginListen: dev %d, local_ip_str: %s\n", dev,
+         factory_dev->local_ip_str.c_str());
   handle->ip_addr_u32 = str_to_ip(factory_dev->local_ip_str);
   handle->listen_port = ntohs(serv_addr.sin_port);
   handle->remote_dev = dev;
