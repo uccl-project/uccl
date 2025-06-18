@@ -271,7 +271,7 @@ void UcclRDMAEngine::handle_rx_work(void) {
 }
 
 inline void RDMAEndpoint::initialize_resources(int total_num_engines) {
-// Initialize all dynamic arrays
+  // Initialize all dynamic arrays
   channel_vec_.resize(total_num_engines);
   engine_vec_.resize(total_num_engines);
   engine_load_vec_.resize(total_num_engines);
@@ -280,31 +280,30 @@ inline void RDMAEndpoint::initialize_resources(int total_num_engines) {
   }
   eqds_.resize(num_devices_);
   test_listen_fds_.resize(num_devices_);
-        
+
   peer_map_.resize(num_devices_);
   peer_map_mu_.resize(num_devices_);
-        
+
   for (int i = 0; i < 2; i++) {
     peer_same_dev_map_[i].resize(num_devices_);
     peer_same_dev_map_mu_[i].resize(num_devices_);
   }
-        
+
   next_peer_id_.resize(num_devices_);
-        
+
   flow_id_spin_.resize(num_devices_);
   next_flow_id_.resize(num_devices_);
   for (int i = 0; i < num_devices_; i++) {
     flow_id_spin_[i].resize(MAX_PEER);
     next_flow_id_[i].resize(MAX_PEER);
   }
-        
+
   active_flows_vec_.resize(num_devices_);
   active_flows_spin_.resize(num_devices_);
 
-  printf("Initialized %d channels for %d devices with %d engines per device\n", 
-    total_num_engines, num_devices_, num_engines_per_dev_);  
+  printf("Initialized %d channels for %d devices with %d engines per device\n",
+         total_num_engines, num_devices_, num_engines_per_dev_);
 }
-
 
 void RDMAEndpoint::cleanup_resources() {
   for (auto& flows : active_flows_vec_) {
@@ -380,7 +379,7 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev,
   std::call_once(flag_once, [this, dev, &port]() {
     int start_engine_idx = dev * num_engines_per_dev_;
     int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
-    
+
     port.store(kBootstrapPort + dev * 1000);
     for (int engine_id = start_engine_idx; engine_id <= end_engine_idx;
          engine_id++) {
@@ -717,15 +716,15 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
   // Initialize all RDMA devices.
   static std::once_flag flag_once;
 
-  std::call_once(flag_once, [&]() {
-    num_devices_ = RDMAFactory::init_devs();
-  });
+  std::call_once(flag_once, [&]() { num_devices_ = RDMAFactory::init_devs(); });
 
   rdma_ctl_ = rdma_ctl;
 
   int total_num_engines = num_devices_ * num_engines_per_dev;
-  printf("Starting to initialize %d channels for %d devices with %d engines per device\n", 
-           total_num_engines, num_devices_, num_engines_per_dev_);
+  printf(
+      "Starting to initialize %d channels for %d devices with %d engines per "
+      "device\n",
+      total_num_engines, num_devices_, num_engines_per_dev_);
   initialize_resources(total_num_engines);
   // Create multiple engines. Each engine has its own thread and channel to
   // let the endpoint communicate with.
@@ -813,7 +812,6 @@ void UcclRDMAEngine::release() {
 }
 
 RDMAEndpoint::~RDMAEndpoint() {
-
 #ifdef LAZY_CREATE_ENGINE
   for (auto& [engine_id, engine] : engine_id_to_engine_map_) {
     engine->shutdown();
@@ -841,7 +839,7 @@ RDMAEndpoint::~RDMAEndpoint() {
       engine->release();
     }
   }
-#endif  
+#endif
 
   cleanup_resources();
 
@@ -1683,6 +1681,5 @@ std::string UcclRDMAEngine::status_to_string() {
 
   return s;
 }
-
 
 }  // namespace uccl

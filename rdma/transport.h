@@ -125,9 +125,10 @@ class UcclRDMAEngine {
         rto_tm_(kRTOUSec),
         kSlowTimerIntervalTsc_(us_to_cycles(kSlowTimerIntervalUs, freq_ghz)) {
     auto context = RDMAFactory::get_factory_dev(dev_)->context;
-    is_no_rto_ = (RDMAFactory::is_roce(dev_) || kTestLoss)
-        ? false
-        : true;  // Infiniband is lossless, disable RTO even for UC.;
+    is_no_rto_ =
+        (RDMAFactory::is_roce(dev_) || kTestLoss)
+            ? false
+            : true;  // Infiniband is lossless, disable RTO even for UC.;
     struct ibv_values_ex values;
     values.comp_mask = IBV_VALUES_MASK_RAW_CLOCK;
     ibv_query_rt_values_ex(context, &values);
@@ -224,9 +225,7 @@ class UcclRDMAEngine {
     }
   }
 
-  inline bool is_no_rto() {
-    return is_no_rto_;
-  }
+  inline bool is_no_rto() { return is_no_rto_; }
 
   // Called by application to shutdown the engine. App will need to join
   // the engine thread.
@@ -333,7 +332,7 @@ class RDMAEndpoint {
 
   int num_engines_per_dev_;
   // Per-engine communication channel
-  std::vector<Channel*> channel_vec_; 
+  std::vector<Channel*> channel_vec_;
   std::vector<std::unique_ptr<UcclRDMAEngine>> engine_vec_;
   std::unordered_map<int, std::unique_ptr<UcclRDMAEngine>>
       engine_id_to_engine_map_;
@@ -358,9 +357,10 @@ class RDMAEndpoint {
   std::vector<std::unordered_map<UcclPeer, PeerInfo, UcclPeerHash>> peer_map_;
   std::vector<std::unique_ptr<std::mutex>> peer_map_mu_;
 
-  std::vector<std::unordered_map<UcclPeer, PeerInfo, UcclPeerHash>> peer_same_dev_map_[2];
+  std::vector<std::unordered_map<UcclPeer, PeerInfo, UcclPeerHash>>
+      peer_same_dev_map_[2];
   std::vector<std::unique_ptr<std::mutex>> peer_same_dev_map_mu_[2];
-    
+
   std::vector<std::unique_ptr<std::atomic<PeerID>>> next_peer_id_;
 
   std::vector<std::vector<Spin>> flow_id_spin_;
@@ -572,9 +572,9 @@ class UcclFlow {
     comm_base->fifo_local_psn = BASE_PSN;
     util_rdma_create_qp(factory_dev->context, &comm_base->fifo_qp, IBV_QPT_RC,
                         false, false, &comm_base->flow_cq, false, kFifoCQSize,
-                        factory_dev->pd, factory_dev->ib_port_num, &comm_base->fifo_mr, nullptr,
-                        kFifoMRSize, kMaxReq * kMaxRecv, kMaxReq * kMaxRecv, 1,
-                        1);
+                        factory_dev->pd, factory_dev->ib_port_num,
+                        &comm_base->fifo_mr, nullptr, kFifoMRSize,
+                        kMaxReq * kMaxRecv, kMaxReq * kMaxRecv, 1, 1);
     comm_base->fifo =
         reinterpret_cast<struct RemFifo*>(comm_base->fifo_mr->addr);
 
@@ -676,11 +676,12 @@ class UcclFlow {
 
     // GPU flush QP for receiver.
     if (!is_send_) {
-      util_rdma_create_qp(
-          factory_dev->context, &recv_comm_.gpu_flush_qp, IBV_QPT_RC, false,
-          false, &comm_base->flow_cq, true, 0, factory_dev->pd, factory_dev->ib_port_num,
-          &recv_comm_.gpu_flush_mr, &recv_comm_.gpu_flush, sizeof(int),
-          kMaxReq * kMaxRecv, kMaxReq * kMaxRecv, kMaxSge, kMaxSge);
+      util_rdma_create_qp(factory_dev->context, &recv_comm_.gpu_flush_qp,
+                          IBV_QPT_RC, false, false, &comm_base->flow_cq, true,
+                          0, factory_dev->pd, factory_dev->ib_port_num,
+                          &recv_comm_.gpu_flush_mr, &recv_comm_.gpu_flush,
+                          sizeof(int), kMaxReq * kMaxRecv, kMaxReq * kMaxRecv,
+                          kMaxSge, kMaxSge);
 
       recv_comm_.gpu_flush_sge.addr = (uint64_t)&recv_comm_.gpu_flush;
       recv_comm_.gpu_flush_sge.length = 1;
@@ -692,7 +693,8 @@ class UcclFlow {
                       "Failed to modify GPU flush QP to RTS");
     }
     // Avoid all flows using the same initial engine offset.
-    static std::vector<std::atomic<uint32_t>>* off = new std::vector<std::atomic<uint32_t>>(num_devices);
+    static std::vector<std::atomic<uint32_t>>* off =
+        new std::vector<std::atomic<uint32_t>>(num_devices);
     next_engine_offset_ = (*off)[dev].fetch_add(1) % NUM_ENGINES;
   }
 

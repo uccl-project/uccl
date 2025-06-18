@@ -877,36 +877,38 @@ struct ib_dev {
   int port;
 };
 
-static bool match_if(const char* string, const char* ref, bool matchExact) {
+static bool match_if(char const* string, char const* ref, bool matchExact) {
   // Make sure to include '\0' in the exact case
   int matchLen = matchExact ? strlen(string) + 1 : strlen(ref);
   return strncmp(string, ref, matchLen) == 0;
 }
 
-static bool match_port(const int port1, const int port2) {
+static bool match_port(int const port1, int const port2) {
   if (port1 == -1) return true;
   if (port2 == -1) return true;
   if (port1 == port2) return true;
   return false;
 }
 
-static bool match_if_list(const char* string, int port, struct ib_dev* ifList, int listSize, bool matchExact) {
+static bool match_if_list(char const* string, int port, struct ib_dev* ifList,
+                          int listSize, bool matchExact) {
   // Make an exception for the case where no user list is defined
   if (listSize == 0) return true;
 
-  for (int i=0; i<listSize; i++) {
-    if (match_if(string, ifList[i].prefix, matchExact)
-        && match_port(port, ifList[i].port)) {
+  for (int i = 0; i < listSize; i++) {
+    if (match_if(string, ifList[i].prefix, matchExact) &&
+        match_port(port, ifList[i].port)) {
       return true;
     }
   }
   return false;
 }
 
-static inline int parse_interfaces(const char* string, struct ib_dev* ifList, int maxList) {
+static inline int parse_interfaces(char const* string, struct ib_dev* ifList,
+                                   int maxList) {
   if (!string) return 0;
 
-  const char* ptr = string;
+  char const* ptr = string;
 
   int ifNum = 0;
   int ifC = 0;
@@ -916,15 +918,17 @@ static inline int parse_interfaces(const char* string, struct ib_dev* ifList, in
     if (c == ':') {
       if (ifC > 0) {
         ifList[ifNum].prefix[ifC] = '\0';
-        ifList[ifNum].port = atoi(ptr+1);
-        ifNum++; ifC = 0;
+        ifList[ifNum].port = atoi(ptr + 1);
+        ifNum++;
+        ifC = 0;
       }
       while (c != ',' && c != '\0') c = *(++ptr);
     } else if (c == ',' || c == '\0') {
       if (ifC > 0) {
         ifList[ifNum].prefix[ifC] = '\0';
         ifList[ifNum].port = -1;
-        ifNum++; ifC = 0;
+        ifNum++;
+        ifC = 0;
       }
     } else {
       ifList[ifNum].prefix[ifC] = c;

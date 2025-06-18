@@ -22,7 +22,7 @@ struct PCB {
   PCB()
       : timely_cc(freq_ghz, DEFAULT_LINK_BW),
         swift_cc(freq_ghz, DEFAULT_LINK_BW) {}
-        
+
   PCB(double link_bandwidth)
       : timely_cc(freq_ghz, link_bandwidth),
         swift_cc(freq_ghz, link_bandwidth) {}

@@ -466,7 +466,11 @@ class SubUcclFlow {
   SubUcclFlow() {}
 
   SubUcclFlow(uint32_t fid, double link_bandwidth)
-      : fid_(fid), in_wheel_cnt_(0), txtracking(), rxtracking(), pcb(link_bandwidth) {
+      : fid_(fid),
+        in_wheel_cnt_(0),
+        txtracking(),
+        rxtracking(),
+        pcb(link_bandwidth) {
     INIT_LIST_HEAD(&ack.ack_link);
     ack.subflow = this;
   }
@@ -741,9 +745,7 @@ class RDMAContext {
 
   uint32_t* engine_unacked_bytes_;
 
-  inline bool is_roce() {
-    return (sgid_index_ == ROCE_GID_IDX);
-  }
+  inline bool is_roce() { return (sgid_index_ == ROCE_GID_IDX); }
 
   inline void update_clock(double ratio, double offset) {
     ratio_ = ratio;
@@ -1606,8 +1608,9 @@ static int ncclIbSpeed(int speed) {
   return ibvSpeeds[firstBitSet(speed, sizeof(ibvSpeeds) / sizeof(int) - 1)];
 }
 
-static inline int util_rdma_get_link_speed_from_ibv_speed(int active_speed, int active_width) {
- return (ncclIbSpeed(active_speed) * ncclIbWidth(active_width)) * 1e6 /8;
+static inline int util_rdma_get_link_speed_from_ibv_speed(int active_speed,
+                                                          int active_width) {
+  return (ncclIbSpeed(active_speed) * ncclIbWidth(active_width)) * 1e6 / 8;
 }
 
 }  // namespace uccl

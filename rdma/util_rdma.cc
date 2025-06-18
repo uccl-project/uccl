@@ -23,19 +23,20 @@ int RDMAFactory::init_devs() {
   struct ibv_device** devices;
 
   static std::once_flag init_flag;
-  std::call_once(init_flag, []() { rdma_ctl = std::make_shared<RDMAFactory>(); });
+  std::call_once(init_flag,
+                 []() { rdma_ctl = std::make_shared<RDMAFactory>(); });
 
   // TODO: Move env vars to a unified place
   char* ib_hca = getenv("NCCL_IB_HCA");
   char* if_name = getenv("NCCL_SOCKET_IFNAME");
-    
+
   struct ib_dev user_ifs[MAX_IB_DEVS];
   bool searchNot = ib_hca && ib_hca[0] == '^';
   if (searchNot) ib_hca++;
-    
+
   bool searchExact = ib_hca && ib_hca[0] == '=';
   if (searchExact) ib_hca++;
-    
+
   int num_ifs = parse_interfaces(ib_hca, user_ifs, MAX_IB_DEVS);
   devices = ibv_get_device_list(&num_devs);
   if (devices == nullptr || num_devs == 0) {
@@ -46,15 +47,15 @@ int RDMAFactory::init_devs() {
   for (int d = 0; d < num_devs && num_devices < MAX_IB_DEVS; d++) {
     struct ibv_context* context = ibv_open_device(devices[d]);
     if (context == nullptr) {
-        printf("NET/IB : Unable to open device %s", devices[d]->name);
-        continue;
+      printf("NET/IB : Unable to open device %s", devices[d]->name);
+      continue;
     }
 
     struct ibv_device_attr dev_attr;
     memset(&dev_attr, 0, sizeof(dev_attr));
     if (ibv_query_device(context, &dev_attr)) {
-        ibv_close_device(context);
-        continue;
+      ibv_close_device(context);
+      continue;
     }
 
     for (int port_num = 1; port_num <= dev_attr.phys_port_cnt; port_num++) {
@@ -66,7 +67,9 @@ int RDMAFactory::init_devs() {
       }
 
       // Check against user specified HCAs/ports
-      if (!(match_if_list(devices[d]->name, port_num, user_ifs, num_ifs, searchExact) ^ searchNot)) {
+      if (!(match_if_list(devices[d]->name, port_num, user_ifs, num_ifs,
+                          searchExact) ^
+            searchNot)) {
         ibv_close_device(context);
         continue;
       }
@@ -79,7 +82,7 @@ int RDMAFactory::init_devs() {
       // Initialize Dev
       struct FactoryDevice dev;
       strncpy(dev.ib_name, devices[d]->name, sizeof(devices[d]->name));
-            
+
       if (if_name) {
         // TODO: For now support a single control nic through configuration
         char* first_intf = strtok(if_name, ",");
@@ -89,14 +92,17 @@ int RDMAFactory::init_devs() {
           dev.local_ip_str = get_dev_ip(if_name);
         }
       } else {
-        DCHECK(util_rdma_get_ip_from_ib_name(dev.ib_name, &dev.local_ip_str) == 0);
+        DCHECK(util_rdma_get_ip_from_ib_name(dev.ib_name, &dev.local_ip_str) ==
+               0);
       }
 
       dev.dev_attr = dev_attr;
       dev.port_attr = port_attr;
       dev.ib_port_num = port_num;
 
-      double link_bw = (ncclIbSpeed(port_attr.active_speed) * ncclIbWidth(port_attr.active_width)) * 1e6 /8;
+      double link_bw = (ncclIbSpeed(port_attr.active_speed) *
+                        ncclIbWidth(port_attr.active_width)) *
+                       1e6 / 8;
       dev.link_bw = link_bw;
 
       if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
@@ -135,9 +141,10 @@ int RDMAFactory::init_devs() {
         }
 
         // Test kernel DMA-BUF support with a dummy call (fd=-1)
-        (void)ibv_reg_dmabuf_mr(pd, 0ULL /*offset*/, 0ULL /*len*/, 0ULL /*iova*/,
-                                -1 /*fd*/, 0 /*flags*/);
-        dev.dma_buf_support = !((errno == EOPNOTSUPP) || (errno == EPROTONOSUPPORT));
+        (void)ibv_reg_dmabuf_mr(pd, 0ULL /*offset*/, 0ULL /*len*/,
+                                0ULL /*iova*/, -1 /*fd*/, 0 /*flags*/);
+        dev.dma_buf_support =
+            !((errno == EOPNOTSUPP) || (errno == EPROTONOSUPPORT));
         ibv_dealloc_pd(pd);
 
         UCCL_LOG_RE << "DMA-BUF support: " << dev.dma_buf_support;
@@ -205,8 +212,8 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
   mtu_bytes_ =
       util_rdma_get_mtu_from_ibv_mtu(factory_dev->port_attr.active_mtu);
 
-  link_speed =
-    util_rdma_get_link_speed_from_ibv_speed(factory_dev->port_attr.active_speed, factory_dev->port_attr.active_width);
+  link_speed = util_rdma_get_link_speed_from_ibv_speed(
+      factory_dev->port_attr.active_speed, factory_dev->port_attr.active_width);
 
   sgid_index_ = factory_dev->gid_idx;
   // Create PD.
@@ -361,9 +368,9 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
     // Create Ctrl QP, CQ, and MR.
     ctrl_local_psn_ = BASE_PSN;
     util_rdma_create_qp(context_, &ctrl_qp_, IBV_QPT_UC, true, true,
-                        (struct ibv_cq**)&ctrl_cq_ex_, false, kCQSize, pd_, 
-                        factory_dev->ib_port_num, &ctrl_mr_, nullptr, kCtrlMRSize,
-                        CtrlChunkBuffPool::kNumChunk,
+                        (struct ibv_cq**)&ctrl_cq_ex_, false, kCQSize, pd_,
+                        factory_dev->ib_port_num, &ctrl_mr_, nullptr,
+                        kCtrlMRSize, CtrlChunkBuffPool::kNumChunk,
                         CtrlChunkBuffPool::kNumChunk, 1, 1);
 
     // Initialize Control packet buffer pool.
@@ -796,7 +803,7 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
       uint32_t hdr_overhead;
       if (likely(chunk_size == kChunkSize && mtu_bytes_ == 4096)) {
         hdr_overhead = (roce) ? MAX_CHUNK_IB_4096_HDR_OVERHEAD
-                                : MAX_CHUNK_ROCE_IPV4_4096_HDR_OVERHEAD;
+                              : MAX_CHUNK_ROCE_IPV4_4096_HDR_OVERHEAD;
       } else {
         auto num_mtu = (chunk_size + mtu_bytes_) / mtu_bytes_;
         hdr_overhead =
@@ -1412,7 +1419,7 @@ void RDMAContext::rx_ack(uint64_t pkt_addr) {
     subflow->pcb.duplicate_acks++;
     subflow->pcb.snd_ooo_acks = ucclsackh->sack_bitmap_count.value();
 
-    int fast_rexmit_thres = ((is_roce())? ROCE_DUP_ACK_THRES : 65536);
+    int fast_rexmit_thres = ((is_roce()) ? ROCE_DUP_ACK_THRES : 65536);
 
     if (subflow->pcb.duplicate_acks < fast_rexmit_thres) {
       // We have not reached the threshold yet, so we do not do
