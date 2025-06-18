@@ -819,16 +819,28 @@ RDMAEndpoint::~RDMAEndpoint() {
     engine->shutdown();
   }
 #else
-  for (auto& engine : engine_vec_) engine->shutdown();
+  for (auto& engine : engine_vec_) {
+    if (engine) {
+      engine->shutdown();
+    }
+  }
 #endif
 
-  for (auto& engine_th : engine_th_vec_) engine_th->join();
+  for (auto& engine_th : engine_th_vec_) {
+    if (engine_th) {
+      engine_th->join();
+    }
+  }
 #ifdef LAZY_CREATE_ENGINE
   for (auto& [engine_id, engine] : engine_id_to_engine_map_) {
     engine->release();
   }
 #else
-  for (auto& engine : engine_vec_) engine->release();
+  for (auto& engine : engine_vec_) {
+    if (engine) {
+      engine->release();
+    }
+  }
 #endif  
 
   cleanup_resources();
