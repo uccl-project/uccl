@@ -11,7 +11,19 @@ PROG_OPTION=${4:-0}
 
 # IP of Nodes.
 NODES="192.168.0.58,192.168.0.100,192.168.0.99"
-# Names of HCAs."
+
+IFS=',' read -ra ADDR <<< "$NODES"
+for node in "${ADDR[@]}"; do
+    echo "Checking GPU usage on $node..."
+    gpu_procs=$(ssh "$node" "nvidia-smi --query-compute-apps=pid --format=csv,noheader")
+
+    if [[ -n "$gpu_procs" ]]; then
+        echo "GPU in use on $node by PIDs: $gpu_procs"
+        exit 1
+    else
+        echo "No GPU processes found on $node."
+    fi
+done
 
 # NCCL uses the following GPU-NIC mapping can achieve 47GB/s:
 #  0-7, 1-6, 2-5, 3-4, 4-3, 5-2, 6-1, 7-0
@@ -20,6 +32,7 @@ NODES="192.168.0.58,192.168.0.100,192.168.0.99"
 # The topology detected by UCCL is the same as NCCL. But UCCL using the above mapping only achieves ~5GB/s.
 # if mismatched, 30GB/s is expected. Occasionally, segmentation fault occurs.
 
+# Names of HCAs."
 HCA_NAMES="mlx5_0:1,mlx5_1:1,mlx5_2:1,mlx5_3:1,mlx5_4:1,mlx5_5:1,mlx5_6:1,mlx5_7:1"
 # Name of Control NIC.
 CTRL_NIC="ds-eap-1,ds-eap-2,ds-eap-3"
