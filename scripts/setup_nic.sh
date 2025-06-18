@@ -52,7 +52,6 @@ else
 fi
 
 NCPU=$(nproc)
-
 # Starting from 3/4 of the CPUs to avoid conflicting with nccl proxy services.
 irq_start_cpu=$((NCPU / 4 * 3))
 
@@ -75,7 +74,7 @@ fi
         IRQs=($(grep -i "$pci_addr" /proc/interrupts | awk '{print $1}' | sed 's/://'))
     fi
     # Exclude the first IRQ, which is for the control plane
-    for IRQ in "${IRQs[@]:1}"; do
+    for IRQ in "${IRQs[@]:0}"; do
         let CPU=$(((cnt + irq_start_cpu) % NCPU))
         let cnt=$(((cnt + 1) % NIRQCORE))
         echo $IRQ '->' $CPU

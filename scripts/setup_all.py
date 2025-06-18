@@ -21,6 +21,7 @@ config_mapping = {
     "clab_d6515_tcp_3kmtu": ["CLAB_D6515", "enp65s0f0np0", 3498],
     #
     "ibm_gx3_afxdp": ["IBM_GX3", "ens3", 1500],
+    "ibm_gx3_tcp": ["IBM_GX3", "ens3", 1500],
     #
     "tpu_v6e8_tcp": ["TPU_V6E8", "ens8", 1460],
     "tpu_v6e8_afxdp": ["TPU_V6E8", "ens8", 1460],
@@ -33,7 +34,7 @@ if not UCCL_HOME:
     raise ValueError("UCCL_HOME environment variable is not set.")
 
 
-async def sync_repo():
+async def sync_repo(node_file):
     await run_command(
         f"cd {UCCL_HOME}/scripts; UCCL_HOME={UCCL_HOME} python rsync.py --node_file {node_file}",
     )
@@ -79,14 +80,13 @@ if __name__ == "__main__":
 
     nodes = get_nodes(node_file)
     print(f"Nodes: {nodes}")
-
     node_clients = [paramiko.SSHClient() for _ in nodes]
     for node, node_client in zip(nodes, node_clients):
         node_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         node_client.connect(node)
 
     if target == "setup_extra":
-        asyncio.run(sync_repo())
+        asyncio.run(sync_repo(node_file))
         wait_handler_vec = []
         for node_client in node_clients:
             wait_handler = exec_command_no_wait(
@@ -101,24 +101,22 @@ if __name__ == "__main__":
     net_dev = config_mapping[target][1]
     mtu = config_mapping[target][2]
 
-    print(make_macro)
+    asyncio.run(make_afxdp(make_macro, target))
+    asyncio.run(sync_repo(node_file))
+
+    ### Setup NIC
     num_queues = parse_num_queues(
         make_macro, f"{UCCL_HOME}/afxdp/transport_config.h"
     )
     if num_queues is None:
         print("NUM_QUEUES not found!")
         exit(0)
+
     core_count = os.cpu_count()
     num_irqcores = int(num_queues)
-
-    asyncio.run(make_afxdp(make_macro, target))
-    asyncio.run(sync_repo())
-
-    ### Setup NIC
-    core_count = os.cpu_count()
-    num_irqcores = core_count
     afxdp_or_tcp = "afxdp" if "afxdp" in target else "tcp"
     platform = target.split("_", 1)[0]
+
     if "aws_g4metal_tcp" in target:
         core_count = 32
         num_irqcores = 32
@@ -128,9 +126,9 @@ if __name__ == "__main__":
     elif "clab_d6515_tcp" in target:
         core_count = 63
         num_irqcores = 63
-    elif "ibm_gx3" in target:
-        num_irqcores = 6
-    elif "tpu_v6e8" in target:
+    elif "ibm_gx3_tcp" in target:
+        num_irqcores = 16
+    elif "tpu_v6e8_tcp" in target:
         num_irqcores = 16
 
     if afxdp_or_tcp == "afxdp":

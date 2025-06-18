@@ -20,7 +20,7 @@ enum class CCType {
 };
 static constexpr CCType kCCType = CCType::kCubicPP;
 
-#if !defined(AWS_C5) && !defined(AWS_G4) && !defined(AWS_G4METAL) && \
+#if !defined(AWS_C5) && !defined(AWS_G4) && !defined(AWS_G4METAL) &&     \
     !defined(CLAB_XL170) && !defined(CLAB_D6515) && !defined(IBM_GX3) && \
     !defined(TPU_V6E8)
 #define AWS_C5
