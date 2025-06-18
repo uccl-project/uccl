@@ -38,12 +38,6 @@ void TXTracking::receive_acks(uint32_t num_acked_pkts) {
         poll_ctx->done = true;
         poll_ctx->cv.notify_one();
       }
-
-#ifdef POLLCTX_DEBUG
-      LOG(INFO) << "Transmitted a complete message: engine_id "
-                << poll_ctx->engine_idx << " flow_id " << poll_ctx->flow_id
-                << " req_id " << poll_ctx->req_id;
-#endif
     }
     // Free transmitted frames that are acked
     socket_->push_pkt_hdr(msgbuf->get_pkt_hdr_addr());
@@ -283,14 +277,6 @@ void RXTracking::try_copy_msgbuf_to_appbuf(Channel::Msg* rx_work) {
         std::lock_guard<std::mutex> lock(poll_ctx->mu);
         poll_ctx->done = true;
         poll_ctx->cv.notify_one();
-
-#ifdef POLLCTX_DEBUG
-        LOG(INFO) << "Received a complete message engine_id: "
-                  << poll_ctx->engine_idx << " rx flow_id " << poll_ctx->flow_id
-                  << " req_id " << poll_ctx->req_id << " size "
-                  << deser_msg_len_ << " req ptr " << req << " req type "
-                  << req->type;
-#endif
       }
 
       app_buf_queue_.pop_front();
@@ -369,12 +355,6 @@ void RXTracking::try_copy_msgbuf_to_appbuf(Channel::Msg* rx_work) {
 #else
       rx_copy_work.poll_ctx->write_barrier();
       Channel::enqueue_sp(channel_->rx_copy_q_, &rx_copy_work);
-#endif
-
-#ifdef POLLCTX_DEBUG
-      LOG(INFO) << "Received a complete message engine_id: "
-                << poll_ctx->engine_idx << " rx flow_id " << poll_ctx->flow_id
-                << " req_id " << poll_ctx->req_id << " size " << deser_msg_len_;
 #endif
 
       app_buf_queue_.pop_front();
@@ -2094,19 +2074,11 @@ bool Endpoint::uccl_recv_multi(ConnID conn_id, void** data, int* len_p,
   return busypoll ? uccl_poll(poll_ctx) : uccl_wait(poll_ctx);
 }
 
-#ifdef POLLCTX_DEBUG
-static std::atomic<uint64_t> req_id = 0;
-#endif
-
 PollCtx* Endpoint::uccl_send_async(ConnID conn_id, void const* data,
                                    int const len, Mhandle* mhandle) {
   PollCtx* poll_ctx = ctx_pool_->pop();
   poll_ctx->num_unfinished = 1;
   poll_ctx->engine_idx = conn_id.engine_idx;
-#ifdef POLLCTX_DEBUG
-  poll_ctx->flow_id = conn_id.flow_id;
-  poll_ctx->req_id = req_id++;
-#endif
 
   Channel::Msg msg = {
       .opcode = Channel::Msg::Op::kTx,
@@ -2128,10 +2100,6 @@ PollCtx* Endpoint::uccl_recv_async(ConnID conn_id, void* data, int* len_p,
   PollCtx* poll_ctx = ctx_pool_->pop();
   poll_ctx->num_unfinished = 1;
   poll_ctx->engine_idx = conn_id.engine_idx;
-#ifdef POLLCTX_DEBUG
-  poll_ctx->flow_id = conn_id.flow_id;
-  poll_ctx->req_id = req_id++;
-#endif
 
   Channel::Msg msg = {
       .opcode = Channel::Msg::Op::kRx,
@@ -2151,10 +2119,6 @@ PollCtx* Endpoint::uccl_recv_scattered_async(ConnID conn_id, UcclRequest* req,
   PollCtx* poll_ctx = ctx_pool_->pop();
   poll_ctx->num_unfinished = 1;
   poll_ctx->engine_idx = conn_id.engine_idx;
-#ifdef POLLCTX_DEBUG
-  poll_ctx->flow_id = conn_id.flow_id;
-  poll_ctx->req_id = req_id++;
-#endif
 
   Channel::Msg msg = {
       .opcode = Channel::Msg::Op::kRxScattered,
@@ -2190,10 +2154,6 @@ PollCtx* Endpoint::uccl_recv_multi_async(ConnID conn_id, void** data,
   PollCtx* poll_ctx = ctx_pool_->pop();
   poll_ctx->num_unfinished = n;
   poll_ctx->engine_idx = conn_id.engine_idx;
-#ifdef POLLCTX_DEBUG
-  poll_ctx->flow_id = conn_id.flow_id;
-  poll_ctx->req_id = req_id++;
-#endif
 
   Channel::Msg msg[kMaxMultiRecv];
   for (int i = 0; i < n; i++) {
@@ -2218,10 +2178,6 @@ PollCtx* Endpoint::uccl_flush_async(ConnID conn_id, void** data, int* len_p,
   PollCtx* poll_ctx = ctx_pool_->pop();
   poll_ctx->num_unfinished = n;
   poll_ctx->engine_idx = conn_id.engine_idx;
-#ifdef POLLCTX_DEBUG
-  poll_ctx->flow_id = conn_id.flow_id;
-  poll_ctx->req_id = req_id++;
-#endif
   // UD does not require flush.
   poll_ctx->done = true;
   return poll_ctx;

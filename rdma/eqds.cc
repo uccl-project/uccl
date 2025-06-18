@@ -1,6 +1,6 @@
 #include "eqds.h"
 #include "transport_config.h"
-#include "util_list.h"
+#include "util/list.h"
 #include "util_rdma.h"
 #include <glog/logging.h>
 #include <infiniband/verbs.h>

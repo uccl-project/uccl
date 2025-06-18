@@ -29,7 +29,7 @@ jobs:
       run: |
         set -e
 
-        DIRECTORIES=("afxdp" "efa" "gpu_driven" "rdma" "misc")
+        DIRECTORIES=("afxdp" "efa" "gpu_driven" "rdma" "misc" "p2p" "include")
         EXTENSIONS=("cpp" "cxx" "cc" "h" "hpp" "cu" "cuh")
         EXCLUDE=("afxdp/lib")
 

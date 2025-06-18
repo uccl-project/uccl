@@ -2,12 +2,12 @@
 
 #include "transport_cc.h"
 #include "transport_config.h"
-#include "util.h"
+#include "util/endian.h"
+#include "util/latency.h"
+#include "util/rss.h"
+#include "util/timer.h"
+#include "util/util.h"
 #include "util_afxdp.h"
-#include "util_endian.h"
-#include "util_latency.h"
-#include "util_rss.h"
-#include "util_timer.h"
 #include <glog/logging.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
@@ -42,33 +42,6 @@ struct ConnID {
   FlowID flow_id;       // Used for UcclEngine to look up UcclFlow.
   uint32_t engine_idx;  // Used for Endpoint to locate the right engine.
   int boostrap_id;      // Used for bootstrap connection with the peer.
-};
-
-struct alignas(64) PollCtx {
-  std::mutex mu;
-  std::condition_variable cv;
-  std::atomic<bool> fence;  // Sync rx/tx memcpy visibility.
-  std::atomic<bool> done;   // Sync cv wake-up.
-  uint64_t timestamp;       // Timestamp for request issuing.
-  PollCtx() : fence(false), done(false), timestamp(0){};
-  ~PollCtx() { clear(); }
-
-  inline void clear() {
-    mu.~mutex();
-    cv.~condition_variable();
-    fence = false;
-    done = false;
-    timestamp = 0;
-  }
-
-  inline void write_barrier() {
-    std::atomic_store_explicit(&fence, true, std::memory_order_release);
-  }
-
-  inline void read_barrier() {
-    std::ignore = std::atomic_load_explicit(&fence, std::memory_order_relaxed);
-    std::atomic_thread_fence(std::memory_order_acquire);
-  }
 };
 
 /**

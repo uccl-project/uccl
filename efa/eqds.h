@@ -7,11 +7,11 @@
 
 #include "transport_config.h"
 #include "transport_header.h"
-#include "util.h"
+#include "util/jring.h"
+#include "util/list.h"
+#include "util/util.h"
 #include "util_buffpool.h"
 #include "util_efa.h"
-#include "util_jring.h"
-#include "util_list.h"
 #include "util_timer.h"
 #include <infiniband/verbs.h>
 #include <atomic>
@@ -476,14 +476,14 @@ class CreditQPContext {
 class EQDS {
  public:
   // How many credits to grant per pull.
-  static const PullQuanta kCreditPerPull = 6;
+  static PullQuanta const kCreditPerPull = 6;
   // How many senders to grant credit per iteration.
   // static const uint32_t kSendersPerPull = 2;
-  static const uint32_t kSendersPerPull = 1;  // Good for allreduce
+  static uint32_t const kSendersPerPull = 1;  // Good for allreduce
 
   // Reference: for PULL_QUANTUM = 16384, kLinkBandwidth = 400 * 1e9 / 8,
   // kCreditPerPull = 4, kSendersPerPull = 4, kPacingIntervalUs ~= 5.3 us.
-  static const uint64_t kPacingIntervalUs =
+  static uint64_t const kPacingIntervalUs =
       1.01 /* slower than line rate */ * (PULL_QUANTUM)*kCreditPerPull * 1e6 *
       kSendersPerPull / (kLinkBandwidth);
 

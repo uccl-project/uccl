@@ -5,8 +5,8 @@
 
 #pragma once
 
-#include "util.h"
-#include "util_latency.h"
+#include "util/latency.h"
+#include "util/util.h"
 #include "util_timer.h"
 #include <infiniband/verbs.h>
 #include <iomanip>

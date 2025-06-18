@@ -1,7 +1,10 @@
 ABS_ROOT_PATH := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
+ABS_REPO_ROOT := $(shell realpath $(ABS_ROOT_PATH)/..)
 
 KERNEL = $(shell uname -r)
-INC = -I ./lib/install/include
+INC = -I./lib/install/include \
+      -I$(ABS_REPO_ROOT)/include \
+      -I$(ABS_ROOT_PATH)/lib/libbpf/src
 LIBS = ./lib/install/lib/libxdp.a ./lib/install/lib/libbpf.a -lglog -lgflags -lgtest -lz -lelf
 LIBS_SHARED = -Wl,-rpath=$(ABS_ROOT_PATH)/./lib/xdp-tools/lib/libxdp/ \
 	   		  -Wl,-rpath=$(ABS_ROOT_PATH)/./lib/libbpf/src/ \

@@ -1,5 +1,5 @@
 #include "transport_config.h"
-#include "util_rss.h"
+#include "util/rss.h"
 
 using namespace uccl;
 

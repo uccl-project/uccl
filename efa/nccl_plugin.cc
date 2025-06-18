@@ -413,13 +413,6 @@ ncclResult_t pluginIsend(void* sendComm, void* data, int size, int tag,
   *request = req;
   // LOG(INFO) << "pluginIsend on size " << size;
 
-#ifdef POLLCTX_DEBUG
-  LOG(INFO) << std::this_thread::get_id() << " pluginIsend on vdev: " << vdev
-            << " size " << size << " engine_id " << req->poll_ctx->engine_idx
-            << " flow_id " << conn_id.flow_id << " req_id "
-            << req->poll_ctx->req_id << " data ptr " << std::hex << data
-            << " req ptr " << req;
-#endif
   return ncclSuccess;
 }
 
@@ -446,14 +439,6 @@ ncclResult_t pluginIrecv(void* recvComm, int n, void** data, int* sizes,
   req->req_pool = (void*)rcomm->base.uccl_req_pool.get();
 
   *request = req;
-
-#ifdef POLLCTX_DEBUG
-  LOG(INFO) << std::this_thread::get_id() << " pluginIrecv on vdev: " << vdev
-            << " size " << sizes[0] << " engine_id "
-            << req->poll_ctx->engine_idx << " flow_id " << conn_id.flow_id
-            << " n " << n << " req_id " << req->poll_ctx->req_id << " data ptr "
-            << std::hex << data;
-#endif
 
   return ncclSuccess;
 }
@@ -482,14 +467,6 @@ ncclResult_t pluginIrecvScattered(void* recvComm, int* tags, void* mhandles,
 
   *request = req;
 
-#ifdef POLLCTX_DEBUG
-  LOG(INFO) << std::this_thread::get_id()
-            << " pluginIrecvScattered on vdev: " << vdev << " engine_id "
-            << req->poll_ctx->engine_idx << " flow_id " << conn_id.flow_id
-            << " n " << 1 << " req_id " << req->poll_ctx->req_id << " req ptr"
-            << req;
-#endif
-
   return ncclSuccess;
 }
 
@@ -502,14 +479,6 @@ ncclResult_t pluginIrecvFreePtrs(void* recvComm, void* request) {
 
   auto uccl_req_pool = reinterpret_cast<UcclRequestBuffPool*>(req->req_pool);
   uccl_req_pool->free_buff(reinterpret_cast<uint64_t>(req));
-
-#ifdef POLLCTX_DEBUG
-  LOG(INFO) << std::this_thread::get_id()
-            << " pluginIrecvFreePtrs on vdev: " << rcomm->base.vdev
-            << " engine_id " << req->poll_ctx->engine_idx << " flow_id "
-            << conn_id.flow_id << " req_id " << req->poll_ctx->req_id
-            << " req ptr " << req;
-#endif
 
   return ncclSuccess;
 }
@@ -536,14 +505,6 @@ ncclResult_t pluginIflush(void* recvComm, int n, void** data, int* sizes,
 
   *request = req;
 
-#ifdef POLLCTX_DEBUG
-  LOG(INFO) << std::this_thread::get_id() << " pluginIflush on vdev: " << vdev
-            << " size " << sizes[0] << " engine_id "
-            << req->poll_ctx->engine_idx << " flow_id " << conn_id.flow_id
-            << " n " << n << " req_id " << req->poll_ctx->req_id << " data ptr "
-            << std::hex << data;
-#endif
-
   return ncclSuccess;
 }
 
@@ -568,22 +529,8 @@ ncclResult_t pluginTest(void* request, int* done, int* size) {
       uccl_req_pool->free_buff(reinterpret_cast<uint64_t>(req));
     }
 
-#ifdef POLLCTX_DEBUG
-    LOG(INFO) << std::this_thread::get_id() << " pluginTest " << req->type
-              << " done: engine_id " << req->poll_ctx->engine_idx << " flow_id "
-              << req->poll_ctx->flow_id << " req_id " << req->poll_ctx->req_id
-              << " size " << size[0] << " req ptr" << req;
-#endif
   } else {
     *done = 0;
-
-#ifdef POLLCTX_DEBUG
-    LOG_EVERY_N(INFO, 1000000)
-        << "pluginTest poll NOT done: "
-        << (req->type == ReqTx ? "ReqTx" : "ReqRx") << " engine_id "
-        << req->poll_ctx->engine_idx << " flow_id " << req->poll_ctx->flow_id
-        << " req_id " << req->poll_ctx->req_id;
-#endif
   }
 
   return ncclSuccess;

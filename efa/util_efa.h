@@ -2,10 +2,10 @@
 
 #include "transport_config.h"
 #include "transport_header.h"
-#include "util.h"
+#include "util/list.h"
+#include "util/util.h"
 #include "util_buffpool.h"
 #include "util_flock.h"
-#include "util_list.h"
 #include "util_timer.h"
 #include <arpa/inet.h>
 #include <glog/logging.h>
@@ -94,8 +94,8 @@ class FrameDesc {
   uint64_t cpe_time_tsc_;  // Completion event time.
 
   // Flags to denote the message buffer state.
-  static const uint8_t UCCL_MSGBUF_FLAGS_SYN = (1 << 0);
-  static const uint8_t UCCL_MSGBUF_FLAGS_FIN = (1 << 1);
+  static uint8_t const UCCL_MSGBUF_FLAGS_SYN = (1 << 0);
+  static uint8_t const UCCL_MSGBUF_FLAGS_FIN = (1 << 1);
   uint8_t msg_flags_;
 
   // Pointing to the next message buffer in the chain.

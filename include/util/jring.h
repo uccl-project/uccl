@@ -102,7 +102,7 @@ typedef struct jring jring_t;
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Warray-bounds"
 #pragma GCC diagnostic ignored "-Wstringop-overflow"
-#include "util_jring_elem_private.h"
+#include "util/jring_elem_private.h"
 #pragma GCC diagnostic pop
 
 /**

@@ -1,7 +1,7 @@
 #include "util_afxdp.h"
 #include "transport_config.h"
-#include "util.h"
-#include "util_shared_pool.h"
+#include "util/shared_pool.h"
+#include "util/util.h"
 #include <atomic>
 #include <chrono>
 #include <memory>

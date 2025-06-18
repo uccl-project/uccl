@@ -1,5 +1,5 @@
 #pragma once
-#include "util.h"
+#include "util/util.h"
 #include <cstdint>
 #include <thread>
 
@@ -10,7 +10,6 @@
 // #define EMULATE_RC_ZC
 #define SCATTERED_MEMCPY
 // #define RTT_STATS
-// #define POLLCTX_DEBUG
 #define LAZY_CREATE_ENGINE
 
 enum class SenderCCType {

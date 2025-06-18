@@ -4,10 +4,10 @@
 #include "eqds.h"
 #include "pcb.h"
 #include "transport_config.h"
-#include "util.h"
+#include "util/endian.h"
+#include "util/list.h"
+#include "util/util.h"
 #include "util_buffpool.h"
-#include "util_endian.h"
-#include "util_list.h"
 #include <glog/logging.h>
 #include <infiniband/verbs.h>
 #include <cstdint>
@@ -547,7 +547,7 @@ struct __attribute__((packed)) UcclPullHdr {
   be16_t pullno;
 };
 
-static const size_t kUcclSackHdrLen = sizeof(UcclSackHdr);
+static size_t const kUcclSackHdrLen = sizeof(UcclSackHdr);
 static_assert(kUcclSackHdrLen == 32, "UcclSackHdr size mismatch");
 static_assert(CtrlChunkBuffPool::kPktSize >= kUcclSackHdrLen,
               "CtrlChunkBuffPool::PktSize must be larger than UcclSackHdr");

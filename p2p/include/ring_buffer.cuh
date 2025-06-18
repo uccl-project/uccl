@@ -9,12 +9,11 @@
 struct alignas(128) RingBuffer {
   uint64_t head;  // Next slot to produce
   uint64_t tail;  // Next slot to consume
-  volatile TransferCmd buf[QUEUE_SIZE];
+  TransferCmd buf[kQueueSize];
   uint64_t cycle_accum;
   uint64_t op_count;
+  uint64_t cycle_start;
+  uint64_t cycle_end;
 };
-
-// Allocates a host-pinned ring buffer and returns device-visible pointer
-RingBuffer* create_ring_buffer(CUstream_st* stream = nullptr);
 
 #endif  // RING_BUFFER_CUH

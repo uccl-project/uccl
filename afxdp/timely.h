@@ -7,9 +7,9 @@
 
 #pragma once
 
-#include "util.h"
-#include "util_latency.h"
-#include "util_timer.h"
+#include "util/latency.h"
+#include "util/timer.h"
+#include "util/util.h"
 #include <iomanip>
 
 /**

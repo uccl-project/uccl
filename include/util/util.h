@@ -1,6 +1,8 @@
 #pragma once
-
-#include "util_jring.h"
+#ifdef USE_CUDA
+#include "cuda_runtime.h"
+#endif
+#include "util/jring.h"
 #include <arpa/inet.h>
 #include <glog/logging.h>
 #include <linux/in.h>
@@ -230,17 +232,30 @@ class UINT_CSN {
 struct alignas(64) PollCtx {
   std::mutex mu;
   std::condition_variable cv;
-  std::atomic<bool> fence;  // Sync rx/tx memcpy visibility.
-  std::atomic<bool> done;   // Sync cv wake-up.
-  uint64_t timestamp;       // Timestamp for request issuing.
-  PollCtx() : fence(false), done(false), timestamp(0){};
+  std::atomic<bool> fence;               // Sync rx/tx memcpy visibility.
+  std::atomic<bool> done;                // Sync cv wake-up.
+  std::atomic<uint16_t> num_unfinished;  // Number of unfinished requests.
+  uint64_t timestamp;                    // Timestamp for request issuing.
+  uint32_t engine_idx;                   // Engine index for request issuing.
+  PollCtx() : fence(false), done(false), num_unfinished(0), timestamp(0){};
   ~PollCtx() { clear(); }
-  void clear() {
+
+  inline void clear() {
     mu.~mutex();
     cv.~condition_variable();
     fence = false;
     done = false;
+    num_unfinished = 0;
     timestamp = 0;
+  }
+
+  inline void write_barrier() {
+    std::atomic_store_explicit(&fence, true, std::memory_order_release);
+  }
+
+  inline void read_barrier() {
+    std::ignore = std::atomic_load_explicit(&fence, std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_acquire);
   }
 };
 
@@ -255,6 +270,17 @@ static inline T Percentile(std::vector<T>& vectorIn, double percent) {
   if (vectorIn.size() == 0) return (T)0;
   auto nth = vectorIn.begin() + (percent * vectorIn.size()) / 100;
   std::nth_element(vectorIn.begin(), nth, vectorIn.end());
+  return *nth;
+}
+
+#define DIVUP(x, y) (((x) + (y)-1) / (y))
+
+template <class T>
+static inline T Percentile(std::vector<T> const& vectorIn, double percent) {
+  if (vectorIn.size() == 0) return (T)0;
+  std::vector<T> vectorCopy = vectorIn;
+  auto nth = vectorCopy.begin() + (percent * vectorCopy.size()) / 100;
+  std::nth_element(vectorCopy.begin(), nth, vectorCopy.end());
   return *nth;
 }
 
@@ -337,8 +363,6 @@ class Spin {
   void Unlock() { pthread_spin_unlock(&spin_); }
   bool TryLock() { return pthread_spin_trylock(&spin_) == 0; }
 };
-
-#define DIVUP(x, y) (((x) + (y)-1) / (y))
 
 #ifndef likely
 #define likely(X) __builtin_expect(!!(X), 1)
@@ -819,6 +843,12 @@ inline int IntRand(int const& min, int const& max) {
   return distribution(generator);
 }
 
+inline uint32_t U32Rand(uint32_t const& min, uint32_t const& max) {
+  static thread_local std::mt19937 generator(std::random_device{}());
+  std::uniform_int_distribution<uint32_t> distribution(min, max);
+  return distribution(generator);
+}
+
 inline uint64_t U64Rand(uint64_t const& min, uint64_t const& max) {
   static thread_local std::mt19937 generator(std::random_device{}());
   std::uniform_int_distribution<uint64_t> distribution(min, max);
@@ -904,5 +934,25 @@ static inline int parse_interfaces(const char* string, struct ib_dev* ifList, in
   } while (ifNum < maxList && c);
   return ifNum;
 }
+typedef std::chrono::time_point<std::chrono::high_resolution_clock> TimePoint;
+
+#ifdef USE_CUDA
+inline void checkMemoryLocation(void* ptr) {
+  cudaPointerAttributes attributes;
+  cudaError_t err = cudaPointerGetAttributes(&attributes, ptr);
+
+  if (err == cudaSuccess) {
+    if (attributes.type == cudaMemoryTypeDevice) {
+      LOG(INFO) << "Memory belongs to GPU " << attributes.device << std::endl;
+    } else if (attributes.type == cudaMemoryTypeHost) {
+      LOG(INFO) << "Memory is allocated on the Host (CPU)." << std::endl;
+    } else {
+      LOG(INFO) << "Unknown memory type." << std::endl;
+    }
+  } else {
+    std::cerr << "Error: " << cudaGetErrorString(err) << std::endl;
+  }
+}
+#endif
 
 }  // namespace uccl

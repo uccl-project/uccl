@@ -12,7 +12,7 @@
 
 #include "timely.h"
 #include "transport_config.h"
-#include "util_cb.h"
+#include "util/cb.h"
 #include <iomanip>
 #include <queue>
 
@@ -20,7 +20,7 @@ namespace uccl {
 
 #pragma once
 
-#include "util_timer.h"
+#include "util/timer.h"
 
 /// Used for fast recording of wheel actions for debugging
 struct wheel_record_t {

@@ -1,6 +1,6 @@
 #include "transport.h"
 #include "transport_config.h"
-#include "util_timer.h"
+#include "util/timer.h"
 #include <arpa/inet.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
@@ -62,7 +62,7 @@ uint64_t rx_prev_sec_bytes = 0;
 
 static bool volatile quit = false;
 
-static volatile uint32_t cur_iteration = 0;
+static uint32_t volatile cur_iteration = 0;
 
 void interrupt_handler(int signal) {
   (void)signal;

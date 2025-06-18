@@ -2,7 +2,7 @@
 #include "eqds.h"
 #include "transport.h"
 #include "transport_config.h"
-#include "util.h"
+#include "util/util.h"
 #include "util_timer.h"
 #include <glog/logging.h>
 #include <infiniband/verbs.h>
