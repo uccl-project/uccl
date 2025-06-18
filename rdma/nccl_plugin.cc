@@ -161,7 +161,7 @@ ncclResult_t pluginGetProperties(int dev, ncclNetProperties_v8_t* props) {
   return ncclSuccess;
 }
 
-static std::atomic<uint16_t> listen_port = 10000;
+static std::atomic<uint16_t> listen_port = 5000;
 
 // To create a connection, NCCL will start by calling listen on the receiver
 // side. This function takes a device number as input argument, and should
@@ -207,8 +207,6 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
 
   // Fill out handle which will be passed to the other side.
   auto factory_dev = RDMAFactory::get_factory_dev(dev);
-  printf("pluginListen: dev %d, local_ip_str: %s\n", dev,
-         factory_dev->local_ip_str.c_str());
   handle->ip_addr_u32 = str_to_ip(factory_dev->local_ip_str);
   handle->listen_port = ntohs(serv_addr.sin_port);
   handle->remote_dev = dev;

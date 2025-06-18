@@ -587,7 +587,6 @@ RDMAEndpoint::RDMAEndpoint(int num_devices, int num_engines_per_dev)
     rdma_ctl_ = rdma_ctl;
 
     for (int i = 0; i < num_devices; i++) {
-      printf("Initializing RDMA device %d\n", i);
       RDMAFactory::init_dev(DEVNAME_SUFFIX_LIST[i]);
     }
   });
@@ -615,7 +614,6 @@ RDMAEndpoint::RDMAEndpoint(uint8_t const* devname_suffix_list, int num_devices,
   static std::once_flag flag_once;
   std::call_once(flag_once, [&]() {
     for (int i = 0; i < num_devices; i++) {
-      printf("Initializing RDMA device %d\n", i);
       RDMAFactory::init_dev(devname_suffix_list[i]);
     }
   });
