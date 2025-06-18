@@ -72,7 +72,7 @@ static const uint32_t kMaxUnackedPktsPP = 1u;
 static const uint32_t AFXDP_MTU = 1460;
 static char const* DEV_DEFAULT = "ens8";
 static double const kLinkBandwidth = 200.0 * 1e9 / 8;
-static const uint32_t NUM_QUEUES = 6;
+static const uint32_t NUM_QUEUES = 1;
 static const uint32_t kMaxPath = 64;
 static const uint32_t kMaxUnackedPktsPP = 1u;
 #endif

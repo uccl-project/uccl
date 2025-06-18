@@ -59,6 +59,8 @@ irq_start_cpu=$((NCPU / 4 * 3))
 # For AWS, just mapping irqs to the application cores
 if [ $PLATFORM = "aws" ]; then
     irq_start_cpu=$((NCPU / 4))
+elif [ $PLATFORM = "tpu" ]; then
+    irq_start_cpu=$((NCPU / 8))
 fi
 
 (
@@ -78,7 +80,7 @@ fi
         let cnt=$(((cnt + 1) % NIRQCORE))
         echo $IRQ '->' $CPU
         echo $CPU | sudo tee /proc/irq/$IRQ/smp_affinity_list >/dev/null
-    done    
+    done
 )
 
 # https://github.com/amzn/amzn-drivers/issues/334#issuecomment-2575417997; giving very bad improvements
