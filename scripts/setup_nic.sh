@@ -10,10 +10,15 @@ PLATFORM=$6
 echo "configuring ${NIC} with ${NQUEUE} nic queues ${NIRQCORE} irq cores ${MTU} MTU for ${MODE} on ${PLATFORM}"
 
 echo "unloading any xdp programs"
-sudo $UCCL_HOME/afxdp/lib/xdp-tools/xdp-loader/xdp-loader unload ${NIC} --all
+sudo ${UCCL_HOME}/afxdp/lib/xdp-tools/xdp-loader/xdp-loader unload ${NIC} --all
 
-echo "sudo ethtool -L ${NIC} combined ${NQUEUE}"
-sudo ethtool -L ${NIC} combined ${NQUEUE}
+if [ $PLATFORM = "tpu" ]; then
+    echo "sudo ethtool -L ${NIC} rx ${NQUEUE} tx ${NQUEUE}"
+    sudo ethtool -L ${NIC} rx ${NQUEUE} tx ${NQUEUE}
+else
+    echo "sudo ethtool -L ${NIC} combined ${NQUEUE}"
+    sudo ethtool -L ${NIC} combined ${NQUEUE}
+fi
 echo "sudo ifconfig ${NIC} mtu ${MTU} up"
 sudo ifconfig ${NIC} mtu ${MTU} up
 
@@ -23,6 +28,8 @@ if [ $MODE = "afxdp" ]; then
         sudo ethtool -C ${NIC} adaptive-rx off rx-usecs 0 tx-usecs 0
     elif [ $PLATFORM = "clab" ]; then
         sudo ethtool -C ${NIC} adaptive-rx off adaptive-tx off rx-usecs 0 rx-frames 1 tx-usecs 0 tx-frames 1
+    elif [ $PLATFORM = "tpu" ]; then
+        sudo ethtool -C ${NIC} rx-usecs 0 tx-usecs 0
     else
         echo "Invalid platform: ${PLATFORM}"
         exit 1
@@ -33,6 +40,8 @@ elif [ $MODE = "tcp" ]; then
         sudo ethtool -C ${NIC} adaptive-rx on rx-usecs 20 tx-usecs 60
     elif [ $PLATFORM = "clab" ]; then
         sudo ethtool -C ${NIC} adaptive-rx on adaptive-tx on rx-usecs 8 rx-frames 128 tx-usecs 8 tx-frames 128
+    elif [ $PLATFORM = "tpu" ]; then
+        sudo ethtool -C ${NIC} rx-usecs 20 tx-usecs 50
     else
         echo "Invalid platform: ${PLATFORM}"
         exit 1

@@ -22,6 +22,9 @@ config_mapping = {
     #
     "ibm_gx3_afxdp": ["IBM_GX3", "ens3", 1500],
     #
+    "tpu_v6e8_tcp": ["TPU_V6E8", "ens8", 1460],
+    "tpu_v6e8_afxdp": ["TPU_V6E8", "ens8", 1460],
+    #
     "setup_extra": ["", "", 0],
 }
 UCCL_HOME = os.getenv("UCCL_HOME")
@@ -111,6 +114,8 @@ if __name__ == "__main__":
         num_irqcores = 63
     elif "ibm_gx3" in target:
         num_irqcores = 6
+    elif "tpu_v6e8" in target:
+        num_irqcores = 16
 
     if afxdp_or_tcp == "afxdp":
         nic_cmd = f"./setup_nic.sh {net_dev} {num_queues} {num_irqcores} {mtu} {afxdp_or_tcp} {platform}"
