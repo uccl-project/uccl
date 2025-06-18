@@ -1,4 +1,5 @@
 #pragma once
+
 #include <cstdint>
 #include <string>
 #include <thread>
@@ -20,11 +21,19 @@
 // value greater than 0.
 #define ROCE_DUP_ACK_THRES 32
 
-static const bool ROCE_NET = true;
-static constexpr double DEFAULT_LINK_BW = 100.0 * 1e9 / 8;  // 100Gbps
+#ifndef __HIP_PLATFORM_AMD__
+// # of engines per device.
+static constexpr uint32_t NUM_ENGINES = 4;
+// Path/QP per engine. The total number is NUM_ENGINES * kPortEntropy.
+static constexpr uint32_t kPortEntropy = 64;
+// Maximum chunk size (Bytes) for each WQE.
+static constexpr uint32_t kChunkSize = 32 << 10;
+#else
 static constexpr uint32_t NUM_ENGINES = 1;
 static constexpr uint32_t kPortEntropy = 256;
 static constexpr uint32_t kChunkSize = 128 << 10;
+#endif
+static constexpr double DEFAULT_LINK_BW = 100.0 * 1e9 / 8;  // 100Gbps
 
 static constexpr uint32_t MAX_PEER = 256;
 // Maximum number of flows (one-way) on each engine.
@@ -185,8 +194,3 @@ static constexpr bool kTestConstantRate = false;
 // Test lossy network.
 static constexpr bool kTestLoss = false;
 static constexpr double kTestLossRate = 0.0;
-// Disable RTO.
-static constexpr bool kTestNoRTO =
-    (ROCE_NET || kTestLoss)
-        ? false
-        : true;  // Infiniband is lossless, disable RTO even for UC.

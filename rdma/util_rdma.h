@@ -1211,10 +1211,6 @@ class RDMAFactory {
    */
   static int init_devs();
   /**
-   * @brief Initialize RDMA device.
-   */
-  static void init_dev(int devname_suffix);
-  /**
    * @brief Create a Context object for the given device using the given meta.
    * @param dev
    * @param meta

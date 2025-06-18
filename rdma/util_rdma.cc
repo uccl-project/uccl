@@ -25,6 +25,7 @@ int RDMAFactory::init_devs() {
   static std::once_flag init_flag;
   std::call_once(init_flag, []() { rdma_ctl = std::make_shared<RDMAFactory>(); });
 
+  // TODO: Move env vars to a unified place
   char* ib_hca = getenv("NCCL_IB_HCA");
   char* if_name = getenv("NCCL_SOCKET_IFNAME");
     
@@ -38,114 +39,114 @@ int RDMAFactory::init_devs() {
   int num_ifs = parse_interfaces(ib_hca, user_ifs, MAX_IB_DEVS);
   devices = ibv_get_device_list(&num_devs);
   if (devices == nullptr || num_devs == 0) {
-      perror("ibv_get_device_list");
-      goto error;
+    perror("ibv_get_device_list");
+    goto error;
   }
 
   for (int d = 0; d < num_devs && num_devices < MAX_IB_DEVS; d++) {
-      struct ibv_context* context = ibv_open_device(devices[d]);
-      if (context == nullptr) {
-          printf("NET/IB : Unable to open device %s", devices[d]->name);
-          continue;
+    struct ibv_context* context = ibv_open_device(devices[d]);
+    if (context == nullptr) {
+        printf("NET/IB : Unable to open device %s", devices[d]->name);
+        continue;
+    }
+
+    struct ibv_device_attr dev_attr;
+    memset(&dev_attr, 0, sizeof(dev_attr));
+    if (ibv_query_device(context, &dev_attr)) {
+        ibv_close_device(context);
+        continue;
+    }
+
+    for (int port_num = 1; port_num <= dev_attr.phys_port_cnt; port_num++) {
+      struct ibv_port_attr port_attr;
+      if (ibv_query_port(context, port_num, &port_attr)) {
+        printf("NET/IB : Unable to query port_num %d", port_num);
+        ibv_close_device(context);
+        continue;
       }
 
-      struct ibv_device_attr dev_attr;
-      memset(&dev_attr, 0, sizeof(dev_attr));
-      if (ibv_query_device(context, &dev_attr)) {
+      // Check against user specified HCAs/ports
+      if (!(match_if_list(devices[d]->name, port_num, user_ifs, num_ifs, searchExact) ^ searchNot)) {
+        ibv_close_device(context);
+        continue;
+      }
+
+      if (port_attr.state != IBV_PORT_ACTIVE) {
+        ibv_close_device(context);
+        continue;
+      }
+
+      // Initialize Dev
+      struct FactoryDevice dev;
+      strncpy(dev.ib_name, devices[d]->name, sizeof(devices[d]->name));
+            
+      if (if_name) {
+        // TODO: For now support a single control nic through configuration
+        char* first_intf = strtok(if_name, ",");
+        if (first_intf) {
+          dev.local_ip_str = get_dev_ip(first_intf);
+        } else {
+          dev.local_ip_str = get_dev_ip(if_name);
+        }
+      } else {
+        DCHECK(util_rdma_get_ip_from_ib_name(dev.ib_name, &dev.local_ip_str) == 0);
+      }
+
+      dev.dev_attr = dev_attr;
+      dev.port_attr = port_attr;
+      dev.ib_port_num = port_num;
+
+      double link_bw = (ncclIbSpeed(port_attr.active_speed) * ncclIbWidth(port_attr.active_width)) * 1e6 /8;
+      dev.link_bw = link_bw;
+
+      if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
+        dev.gid_idx = ROCE_GID_IDX;
+      } else if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
+        dev.gid_idx = IB_GID_IDX;
+      } else {
+        printf("Unknown link layer: %d\n", port_attr.link_layer);
+        ibv_close_device(context);
+        continue;
+      }
+
+      dev.context = context;
+
+      if (ibv_query_gid(context, port_num, dev.gid_idx, &dev.gid)) {
+        perror("ibv_query_gid");
+        ibv_close_device(context);
+        continue;
+      }
+
+      // Allocate a PD for this device
+      dev.pd = ibv_alloc_pd(context);
+      if (dev.pd == nullptr) {
+        perror("ibv_alloc_pd");
+        ibv_close_device(context);
+        continue;
+      }
+
+      // Detect DMA-BUF support
+      {
+        struct ibv_pd* pd = ibv_alloc_pd(context);
+        if (pd == nullptr) {
+          perror("ibv_alloc_pd");
           ibv_close_device(context);
           continue;
+        }
+
+        // Test kernel DMA-BUF support with a dummy call (fd=-1)
+        (void)ibv_reg_dmabuf_mr(pd, 0ULL /*offset*/, 0ULL /*len*/, 0ULL /*iova*/,
+                                -1 /*fd*/, 0 /*flags*/);
+        dev.dma_buf_support = !((errno == EOPNOTSUPP) || (errno == EPROTONOSUPPORT));
+        ibv_dealloc_pd(pd);
+
+        UCCL_LOG_RE << "DMA-BUF support: " << dev.dma_buf_support;
       }
 
-      for (int port_num = 1; port_num <= dev_attr.phys_port_cnt; port_num++) {
-          struct ibv_port_attr port_attr;
-          if (ibv_query_port(context, port_num, &port_attr)) {
-              printf("NET/IB : Unable to query port_num %d", port_num);
-              ibv_close_device(context);
-              continue;
-          }
-
-          // Check against user specified HCAs/ports
-          if (!(match_if_list(devices[d]->name, port_num, user_ifs, num_ifs, searchExact) ^ searchNot)) {
-              ibv_close_device(context);
-              continue;
-          }
-
-          if (port_attr.state != IBV_PORT_ACTIVE) {
-              ibv_close_device(context);
-              continue;
-          }
-
-          // Initialize Dev
-          struct FactoryDevice dev;
-          strncpy(dev.ib_name, devices[d]->name, sizeof(devices[d]->name));
-            
-          if (if_name) {
-              // TODO: For now support a single control nic through configuration
-              char* first_intf = strtok(if_name, ",");
-              if (first_intf) {
-                  dev.local_ip_str = get_dev_ip(first_intf);
-              } else {
-                  dev.local_ip_str = get_dev_ip(if_name);
-              }
-          } else {
-              DCHECK(util_rdma_get_ip_from_ib_name(dev.ib_name, &dev.local_ip_str) == 0);
-          }
-
-          dev.dev_attr = dev_attr;
-          dev.port_attr = port_attr;
-          dev.ib_port_num = port_num;
-
-          double link_bw = (ncclIbSpeed(port_attr.active_speed) * ncclIbWidth(port_attr.active_width)) * 1e6 /8;
-          dev.link_bw = link_bw;
-
-          if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
-            dev.gid_idx = ROCE_GID_IDX;
-          } else if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
-            dev.gid_idx = IB_GID_IDX;
-          } else {
-            printf("Unknown link layer: %d\n", port_attr.link_layer);
-            ibv_close_device(context);
-            continue;
-          }
-
-          dev.context = context;
-
-          if (ibv_query_gid(context, port_num, dev.gid_idx, &dev.gid)) {
-              perror("ibv_query_gid");
-              ibv_close_device(context);
-              continue;
-          }
-
-          // Allocate a PD for this device
-          dev.pd = ibv_alloc_pd(context);
-          if (dev.pd == nullptr) {
-              perror("ibv_alloc_pd");
-              ibv_close_device(context);
-              continue;
-          }
-
-          // Detect DMA-BUF support
-          {
-              struct ibv_pd* pd = ibv_alloc_pd(context);
-              if (pd == nullptr) {
-                  perror("ibv_alloc_pd");
-                  ibv_close_device(context);
-                  continue;
-              }
-
-              // Test kernel DMA-BUF support with a dummy call (fd=-1)
-              (void)ibv_reg_dmabuf_mr(pd, 0ULL /*offset*/, 0ULL /*len*/, 0ULL /*iova*/,
-                                     -1 /*fd*/, 0 /*flags*/);
-              dev.dma_buf_support = !((errno == EOPNOTSUPP) || (errno == EPROTONOSUPPORT));
-              ibv_dealloc_pd(pd);
-
-              UCCL_LOG_RE << "DMA-BUF support: " << dev.dma_buf_support;
-          }
-
-          rdma_ctl->devices_.push_back(dev);
-          printf("Initialized %s\n", devices[d]->name);
-          num_devices++;
-      }
+      rdma_ctl->devices_.push_back(dev);
+      printf("Initialized %s\n", devices[d]->name);
+      num_devices++;
+    }
   }
   ibv_free_device_list(devices);
   return num_devices;
@@ -203,7 +204,6 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
 
   mtu_bytes_ =
       util_rdma_get_mtu_from_ibv_mtu(factory_dev->port_attr.active_mtu);
-
 
   link_speed =
     util_rdma_get_link_speed_from_ibv_speed(factory_dev->port_attr.active_speed, factory_dev->port_attr.active_width);
@@ -463,8 +463,8 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
       wr.next = nullptr;
       wr.sg_list = &sge;
       wr.num_sge = 1;
-      DCHECK(ibv_post_srq_recv(srq_, &wr, &bad_wr) == 0);
     }
+    DCHECK(ibv_post_srq_recv(srq_, &wr, &bad_wr) == 0);
   }
 
   // Timing wheel.

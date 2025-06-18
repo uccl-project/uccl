@@ -270,7 +270,7 @@ void UcclRDMAEngine::handle_rx_work(void) {
   }
 }
 
-inline void RDMAEndpoint::initialize_vec(int total_num_engines) {
+inline void RDMAEndpoint::initialize_resources(int total_num_engines) {
 // Initialize all dynamic arrays
   channel_vec_.resize(total_num_engines);
   engine_vec_.resize(total_num_engines);
@@ -380,6 +380,7 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev,
   std::call_once(flag_once, [this, dev, &port]() {
     int start_engine_idx = dev * num_engines_per_dev_;
     int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
+    
     port.store(kBootstrapPort + dev * 1000);
     for (int engine_id = start_engine_idx; engine_id <= end_engine_idx;
          engine_id++) {
@@ -389,6 +390,7 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev,
 
       engine_id_to_engine_map_[engine_id] = std::make_unique<UcclRDMAEngine>(
           dev, engine_id, channel_vec_[engine_id], eqds_[dev]);
+
       UcclRDMAEngine* engine_ptr = nullptr;
       engine_ptr = engine_id_to_engine_map_[engine_id].get();
       engine_th_vec_.emplace_back(std::make_unique<std::thread>(
@@ -696,7 +698,7 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
     ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());
   }
   int total_num_engines = num_devices_ * num_engines_per_dev;
-  initialize_vec(total_num_engines);
+  initialize_resources(total_num_engines);
 
   for (int i = 0; i < total_num_engines; i++) channel_vec_[i] = new Channel();
 
@@ -724,10 +726,11 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
   int total_num_engines = num_devices_ * num_engines_per_dev;
   printf("Starting to initialize %d channels for %d devices with %d engines per device\n", 
            total_num_engines, num_devices_, num_engines_per_dev_);
-  initialize_vec(total_num_engines);
+  initialize_resources(total_num_engines);
   // Create multiple engines. Each engine has its own thread and channel to
   // let the endpoint communicate with.
   for (int i = 0; i < total_num_engines; i++) channel_vec_[i] = new Channel();
+
   if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
     // Receiver-driven congestion control per device.
     for (int i = 0; i < num_devices_; i++) {
@@ -735,7 +738,6 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
       eqds_[i] = new eqds::EQDS(i, factory_dev->link_bw);
     }
   }
-
 
   for (int engine_id = 0, engine_cpu_id; engine_id < total_num_engines;
        engine_id++) {
@@ -811,23 +813,23 @@ void UcclRDMAEngine::release() {
 }
 
 RDMAEndpoint::~RDMAEndpoint() {
-  for (auto& engine : engine_vec_) {
-    if (engine) {
-      engine->shutdown();
-    }
-  }
 
-  for (auto& engine_th : engine_th_vec_) {
-    if (engine_th) {
-      engine_th->join();
-    }
+#ifdef LAZY_CREATE_ENGINE
+  for (auto& [engine_id, engine] : engine_id_to_engine_map_) {
+    engine->shutdown();
   }
+#else
+  for (auto& engine : engine_vec_) engine->shutdown();
+#endif
 
-  for (auto& engine : engine_vec_) {
-    if (engine) {
-      engine->release();
-    }
+  for (auto& engine_th : engine_th_vec_) engine_th->join();
+#ifdef LAZY_CREATE_ENGINE
+  for (auto& [engine_id, engine] : engine_id_to_engine_map_) {
+    engine->release();
   }
+#else
+  for (auto& engine : engine_vec_) engine->release();
+#endif  
 
   cleanup_resources();
 
@@ -864,7 +866,7 @@ PollCtx* RDMAEndpoint::install_flow_on_engine(uint32_t engine_idx,
 PollCtx* RDMAEndpoint::install_ctx_on_engine(uint32_t engine_idx,
                                              PeerID peer_id,
                                              union CtrlMeta meta) {
-  auto* cmdq = channel_vec_[engine_idx]->ctrl_cmdq_;  
+  auto* cmdq = channel_vec_[engine_idx]->ctrl_cmdq_;
 
   auto* poll_ctx = ctx_pool_->pop();
   Channel::CtrlMsg ctrl_msg = {

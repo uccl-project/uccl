@@ -374,7 +374,7 @@ class RDMAEndpoint {
 
   ~RDMAEndpoint();
 
-  void initialize_vec(int total_num_engines);
+  void initialize_resources(int total_num_engines);
 
   void cleanup_resources();
 
@@ -714,7 +714,6 @@ class UcclFlow {
     for (int i = 0; i < NUM_ENGINES; i++) {
       delete sub_flows_[i];
     }
-
   }
 
   inline FlowID flowid() const { return flow_id_; }
