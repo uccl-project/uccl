@@ -540,9 +540,9 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
     }
 
     // Wait until our turn to use bootstrap fd.
-    while (next_install_engine->load() != engine_idx_ % NUM_ENGINES) {
-      next_install_engine->store(next_install_engine->load() + 1);
-    }
+    auto engine_offset = engine_idx_ % NUM_ENGINES;
+    while (next_install_engine->load() != engine_offset)
+      ;
 
     int ret = send_message(bootstrap_fd, buf, kTotalQP * size);
     DCHECK(ret == kTotalQP * size);
@@ -550,6 +550,9 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
     // Receive PSN, QPN from remote peer.
     ret = receive_message(bootstrap_fd, buf, kTotalQP * size);
     DCHECK(ret == kTotalQP * size);
+
+    // Let other engines to use bootstrap fd.
+    next_install_engine->store(next_install_engine->load() + 1);
 
     // Modify QPs to RTR and RTS.
     for (auto i = 0; i < kPortEntropy; i++) {
