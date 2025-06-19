@@ -42,7 +42,7 @@ async def sync_repo(node_file):
 
 async def make_afxdp(make_macro, target):
     make_cmd = (
-        f'cd {UCCL_HOME}/afxdp; make -j "CXXFLAGS=-D{make_macro}" transport_test afxdp_daemon_main'
+        f'cd {UCCL_HOME}/afxdp; make -j "CXXFLAGS=-D{make_macro}" transport_test afxdp_daemon_main ebpf_transport.o'
         if "tpu" in target
         else f'cd {UCCL_HOME}/afxdp; make -j "CXXFLAGS=-D{make_macro}"'
     )
