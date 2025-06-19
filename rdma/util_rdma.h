@@ -200,6 +200,7 @@ union CtrlMeta {
     struct ibv_port_attr remote_port_attr;
     bool is_send;
     int bootstrap_fd;
+    std::atomic<int>* next_install_engine;
   } install_ctx;
 
   // kInstallFlow

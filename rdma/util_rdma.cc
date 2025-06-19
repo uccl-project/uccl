@@ -1709,7 +1709,8 @@ void RDMAContext::rx_rtx_data(struct list_head* ack_list) {
   auto req = get_recvreq_by_id(rid);
   if (req->type != RecvRequest::RECV || req->ureq->context != flow) {
     UCCL_LOG_IO << "Can't find corresponding request or this request is "
-                   "invalid for this retransmission chunk. Dropping. " << req->type;
+                   "invalid for this retransmission chunk. Dropping. "
+                << req->type;
     subflow->pcb.stats_retr_chunk_drop++;
     return;
   }
@@ -1819,7 +1820,8 @@ void RDMAContext::rc_rx_data(void) {
 
   if (req->type != RecvRequest::RECV || req->ureq->context != flow) {
     LOG(ERROR) << "Can't find corresponding request or this request is "
-                  "invalid for this chunk. Dropping. " << req->type;
+                  "invalid for this chunk. Dropping. "
+               << req->type;
     // This should never happen.
     CHECK(0);
     return;
