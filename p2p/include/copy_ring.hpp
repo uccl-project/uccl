@@ -2,6 +2,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
+#include <vector>
 
 #ifndef COPY_RING_CAP
 #define COPY_RING_CAP 4096
@@ -33,6 +34,31 @@ struct CopyRing {
     return true;
   }
 
+  bool emplace(std::vector<CopyTask> const& tasks) {
+    if (tasks.empty()) return true;
+
+    emplace_count.fetch_add(static_cast<uint32_t>(tasks.size()),
+                            std::memory_order_relaxed);
+
+    uint32_t h = head.load(std::memory_order_relaxed);
+    uint32_t t = tail.load(std::memory_order_acquire);
+    uint32_t cap = COPY_RING_CAP;
+
+    // Compute free space in the ring
+    uint32_t free_slots = (t + cap - h - 1) & (cap - 1);
+    if (tasks.size() > free_slots) return false;
+
+    // Insert tasks with wraparound
+    uint32_t idx = h;
+    for (CopyTask const& task : tasks) {
+      buf[idx] = task;
+      idx = (idx + 1) & (cap - 1);
+    }
+
+    head.store(idx, std::memory_order_release);
+    return true;
+  }
+
   /** pop: returns nullptr when the ring is empty */
   CopyTask* pop() {
     pop_count.fetch_add(1, std::memory_order_relaxed);
@@ -41,68 +67,5 @@ struct CopyRing {
     CopyTask* ret = &buf[t];
     tail.store((t + 1) & (COPY_RING_CAP - 1), std::memory_order_release);
     return ret;
-  }
-};
-
-struct alignas(64) CopyRingMPMC {
-  struct Slot {
-    std::atomic<uint64_t> seq;
-    CopyTask task;
-  };
-
-  Slot buf[COPY_RING_CAP];
-
-  alignas(64) std::atomic<uint64_t> head{0};
-  alignas(64) std::atomic<uint64_t> tail{0};
-
-  CopyRingMPMC() {
-    for (uint64_t i = 0; i < COPY_RING_CAP; ++i)
-      buf[i].seq.store(i, std::memory_order_relaxed);
-  }
-
-  bool emplace(CopyTask const& t) {
-    uint64_t pos = head.load(std::memory_order_relaxed);
-
-    for (;;) {
-      Slot& s = buf[pos & (COPY_RING_CAP - 1)];
-      uint64_t seq = s.seq.load(std::memory_order_acquire);
-
-      intptr_t diff = static_cast<intptr_t>(seq) - static_cast<intptr_t>(pos);
-      if (diff == 0) {
-        if (head.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed,
-                                       std::memory_order_relaxed)) {
-          s.task = t;
-          s.seq.store(pos + 1, std::memory_order_release);
-          return true;
-        }
-      } else if (diff < 0) {
-        return false;
-      } else {
-        pos = head.load(std::memory_order_relaxed);
-      }
-    }
-  }
-
-  CopyTask* pop() {
-    uint64_t pos = tail.load(std::memory_order_relaxed);
-
-    for (;;) {
-      Slot& s = buf[pos & (COPY_RING_CAP - 1)];
-      uint64_t seq = s.seq.load(std::memory_order_acquire);
-
-      intptr_t diff =
-          static_cast<intptr_t>(seq) - static_cast<intptr_t>(pos + 1);
-      if (diff == 0) {
-        if (tail.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed,
-                                       std::memory_order_relaxed)) {
-          s.seq.store(pos + COPY_RING_CAP, std::memory_order_release);
-          return &s.task;
-        }
-      } else if (diff < 0) {
-        return nullptr;
-      } else {
-        pos = tail.load(std::memory_order_relaxed);
-      }
-    }
   }
 };

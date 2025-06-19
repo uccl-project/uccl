@@ -1,4 +1,5 @@
 #include "peer_copy_worker.hpp"
+#include "common.hpp"
 #include "peer_copy.cuh"
 
 CopyRing g_ring;
@@ -61,10 +62,13 @@ void peer_copy_worker() {
       std::abort();
     }
 
-    err = cudaStreamSynchronize(stream);
-    if (err != cudaSuccess) {
-      fprintf(stderr, "Kernel execution failed: %s\n", cudaGetErrorString(err));
-      std::abort();
+    if (async_memcpy_count % kRemoteNVLinkBatchSize == 0) {
+      err = cudaStreamSynchronize(stream);
+      if (err != cudaSuccess) {
+        fprintf(stderr, "Kernel execution failed: %s\n",
+                cudaGetErrorString(err));
+        std::abort();
+      }
     }
 
     async_memcpy_count++;
