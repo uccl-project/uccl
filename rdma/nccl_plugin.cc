@@ -356,7 +356,6 @@ ncclResult_t pluginAccept(void* listenComm, void** recvComm,
 ncclResult_t pluginRegMr(void* collComm, void* data, size_t size, int type,
                          void** mhandle) {
   int ret;
-  printf("pluginRegMr, data: %p, size: %zu, type: %d\n", data, size, type);
   struct ucclBaseComm* base = (struct ucclBaseComm*)collComm;
   ret = ep->uccl_regmr((UcclFlow*)base->conn_id.context, data, size, type,
                        (struct Mhandle**)mhandle);
@@ -369,9 +368,6 @@ ncclResult_t pluginRegMrDmaBuf(void* collComm, void* data, size_t size,
                                int type, uint64_t offset, int fd,
                                void** mhandle) {
   int ret;
-  printf(
-      "pluginRegMrDmaBuf, data: %p, size: %zu, type: %d, offset: %lu, fd: %d\n",
-      data, size, type, offset, fd);
   struct ucclBaseComm* base = (struct ucclBaseComm*)collComm;
   ret = ep->uccl_regmr_dmabuf((UcclFlow*)base->conn_id.context, data, size,
                               type, offset, fd, (struct Mhandle**)mhandle);

@@ -581,12 +581,13 @@ RDMAEndpoint::RDMAEndpoint(int num_devices, int num_engines_per_dev)
       stats_thread_([this]() { stats_thread_fn(); }) {
   static std::once_flag flag_once;
   std::call_once(flag_once, [&]() {
-    rdma_ctl_ = rdma_ctl;
-
     for (int i = 0; i < num_devices; i++) {
       RDMAFactory::init_dev(DEVNAME_SUFFIX_LIST[i]);
     }
   });
+
+  rdma_ctl_ = rdma_ctl;
+
   ctx_pool_ = new SharedPool<PollCtx*, true>(kMaxInflightMsg);
   ctx_pool_buf_ = new uint8_t[kMaxInflightMsg * sizeof(PollCtx)];
   for (int i = 0; i < kMaxInflightMsg; i++) {
