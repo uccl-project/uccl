@@ -1,20 +1,35 @@
 #include "peer_copy_worker.hpp"
+#include "common.hpp"
 #include "peer_copy.cuh"
+#include <mutex>
 
-CopyRing g_ring;
 std::atomic<bool> g_run;
 thread_local uint64_t async_memcpy_count = 0;
 thread_local uint64_t async_memcpy_total_time = 0;
 int src_device = 0;
+std::once_flag peer_ok_flag[NUM_GPUS];
 
-void peer_copy_worker() {
+void maybe_enable_peer_access(int src_dev, int dst_dev) {
+  std::call_once(peer_ok_flag[dst_dev], [&]() {
+    cudaSetDevice(dst_dev);
+    cudaDeviceEnablePeerAccess(src_dev, 0);  // enable from dst to src
+    cudaSetDevice(src_dev);
+    cudaDeviceEnablePeerAccess(dst_dev, 0);  // enable from src to dst
+  });
+}
+
+void peer_copy_worker(CopyRing& g_ring, int idx) {
   // one stream for this thread
+
+  pin_thread_to_cpu(idx + 1 + MAIN_THREAD_CPU_IDX);
+  printf("Peer copy worker %d started on CPU core %d\n", idx + 1,
+         sched_getcpu());
+
   cudaStream_t stream;
   cudaSetDevice(src_device);  // source GPU in your example
   cudaStreamCreate(&stream);
 
   // peer-enable table (dst GPU -> enabled?)
-  bool peer_ok[NUM_GPUS] = {false};
 
   while (g_run.load(std::memory_order_acquire)) {
     CopyTask* t = g_ring.pop();
@@ -37,13 +52,7 @@ void peer_copy_worker() {
     }
 
     // enable peer access to this destination once
-    if (!peer_ok[t->dst_dev]) {
-      cudaDeviceEnablePeerAccess(t->dst_dev, 0);
-      cudaSetDevice(t->dst_dev);
-      cudaDeviceEnablePeerAccess(0, 0);  // back-enable to src
-      cudaSetDevice(0);
-      peer_ok[t->dst_dev] = true;
-    }
+    maybe_enable_peer_access(src_device, t->dst_dev);
 
     auto st = std::chrono::high_resolution_clock::now();
     // printf("Before cudaMemcpyPeerAsync\n");
@@ -61,10 +70,13 @@ void peer_copy_worker() {
       std::abort();
     }
 
-    err = cudaStreamSynchronize(stream);
-    if (err != cudaSuccess) {
-      fprintf(stderr, "Kernel execution failed: %s\n", cudaGetErrorString(err));
-      std::abort();
+    if (async_memcpy_count % kRemoteNVLinkBatchSize == 0) {
+      err = cudaStreamSynchronize(stream);
+      if (err != cudaSuccess) {
+        fprintf(stderr, "Kernel execution failed: %s\n",
+                cudaGetErrorString(err));
+        std::abort();
+      }
     }
 
     async_memcpy_count++;

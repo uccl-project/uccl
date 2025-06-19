@@ -75,13 +75,16 @@ int main(int argc, char** argv) {
   global_rdma_init(gpu_buffer, total_size, &local_info, rank);
 #endif
   std::vector<std::thread> cpu_threads;
+  std::vector<CopyRing> g_rings(kNumThBlocks);
   for (int i = 0; i < kNumThBlocks; ++i) {
     if (rank == 0)
       cpu_threads.emplace_back(cpu_proxy, &rbs[i], i, gpu_buffer,
                                kRemoteBufferSize, rank, peer_ip);
-    else
+    else {
       cpu_threads.emplace_back(remote_cpu_proxy, &rbs[i], i, gpu_buffer,
-                               kRemoteBufferSize, rank, peer_ip);
+                               kRemoteBufferSize, rank, peer_ip,
+                               std::ref(g_rings[i]));
+    }
   }
   if (rank == 0) {
     printf("Waiting for 2 seconds before issuing commands...\n");
@@ -146,10 +149,10 @@ int main(int argc, char** argv) {
     std::vector<std::thread> copy_threads;
     copy_threads.reserve(num_copy_engine);
 
-    num_copy_engine = 1;  // Right now, 1 gives best perf.
+    num_copy_engine = kNumThBlocks;  // Right now, 1 gives best perf.
 
     for (int t = 0; t < num_copy_engine; ++t) {
-      copy_threads.emplace_back(peer_copy_worker);
+      copy_threads.emplace_back(peer_copy_worker, std::ref(g_rings[t]), t);
     }
     g_run.store(true, std::memory_order_release);
 #endif

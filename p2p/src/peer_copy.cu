@@ -31,12 +31,13 @@ cudaError_t launch_peer_bulk_copy(void* dst_ptr, int dst_dev, void* src_ptr,
                                   int src_dev, size_t bytes,
                                   cudaStream_t stream) {
   // Enable peer access in both directions
-  cudaError_t err;
-  if ((err = enable_peer_access(src_dev, dst_dev)) != cudaSuccess) return err;
-  if ((err = enable_peer_access(dst_dev, src_dev)) != cudaSuccess) return err;
+  // cudaError_t err;
+  // if ((err = enable_peer_access(src_dev, dst_dev)) != cudaSuccess) return
+  // err; if ((err = enable_peer_access(dst_dev, src_dev)) != cudaSuccess)
+  // return err;
 
   // Launch kernel on the source device
-  cudaSetDevice(src_dev);
+  // cudaSetDevice(src_dev);
 
   constexpr int threads_per_block = 256;
   size_t total_threads = (bytes + threads_per_block - 1) / threads_per_block;

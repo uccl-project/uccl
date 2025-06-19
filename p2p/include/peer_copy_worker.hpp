@@ -13,4 +13,4 @@ extern thread_local uint64_t async_memcpy_total_time;
 #endif
 extern int src_device;
 
-void peer_copy_worker();
+void peer_copy_worker(CopyRing& g_ring, int idx);

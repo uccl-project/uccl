@@ -833,7 +833,8 @@ void handle_peer_copy(uint64_t wr_id, int src_dev, int dst_dev, void* src_ptr,
   }
 }
 
-void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq) {
+void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq,
+                                         CopyRing& g_ring) {
   struct ibv_wc wc[kMaxOutstandingRecvs];
   struct ibv_sge sges[kMaxOutstandingRecvs];
   struct ibv_recv_wr wrs[kMaxOutstandingRecvs];
@@ -878,6 +879,7 @@ void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq) {
     }
 
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
+    std::vector<CopyTask> task_vec(ne);
     for (int i = 0; i < ne; ++i) {
       int forward_to_gpu_index = wc[i].imm_data % NUM_GPUS;
       // handle_peer_copy(wc[i].wr_id, 0, forward_to_gpu_index, mr->addr,
@@ -894,9 +896,14 @@ void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq) {
                     .src_ptr = mr->addr,
                     .dst_ptr = per_GPU_device_buf[forward_to_gpu_index],
                     .bytes = kObjectSize};
-      while (!g_ring.emplace(task)) {
-        std::this_thread::yield();
-      }
+      task_vec[i] = task;
+      // while (!g_ring.emplace(task)) {
+      //   std::this_thread::yield();
+      // }
+    }
+    while (!g_ring.emplace(task_vec)) {
+      ;
+      /* Busy spin. */
     }
 #endif
   }
