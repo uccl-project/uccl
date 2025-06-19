@@ -790,176 +790,6 @@ PollCtx* RDMAEndpoint::install_ctx_on_engine(uint32_t engine_idx,
   return poll_ctx;
 }
 
-void RDMAEndpoint::same_dev_install_ctx(int dev, int bootstrap_fd,
-                                        bool local_lock_first, bool is_send,
-                                        std::string& remote_ip, int remote_dev,
-                                        PeerID* peer_id,
-                                        struct RemoteRDMAContext* remote_ctx) {
-  auto* first_map = &peer_same_dev_map_[dev][0];
-  auto* first_lock = &peer_same_dev_map_mu_[dev][0];
-  auto* second_map = &peer_same_dev_map_[dev][1];
-  auto* second_lock = &peer_same_dev_map_mu_[dev][1];
-
-  if (local_lock_first) {
-    first_lock->lock();
-    auto it = first_map->find({remote_ip, remote_dev});
-    if (it == first_map->end()) {  // This device has not connected to
-                                   // the remote device yet.
-      // Tell remote side we have already held the lock.
-      send_ready(bootstrap_fd);
-      // Wait until remote side holds its lock.
-      wait_ready(bootstrap_fd);
-      *peer_id = alloc_peer_id(dev);
-      // Install RDMAContexts on all engines.
-      UCCL_LOG_EP << "(Same device)Install ctx on all engines for dev:" << dev
-                  << ", remote_dev:" << remote_dev << ", peerid: " << *peer_id;
-      install_ctx_on_engines(bootstrap_fd, dev, *peer_id, remote_ctx);
-      first_map->insert({{remote_ip, remote_dev},
-                         {*peer_id, remote_ctx->remote_gid,
-                          remote_ctx->remote_port_attr, 1}});
-      // Wait until remote side releases its lock.
-      wait_ready(bootstrap_fd);
-      // Release the lock and tell remote side we have released the lock.
-      first_lock->unlock();
-      send_ready(bootstrap_fd);
-    } else {
-      // This device has connected to the remote device.
-      *peer_id = it->second.peer_id;
-      remote_ctx->remote_gid = it->second.remote_gid;
-      remote_ctx->remote_port_attr = it->second.remote_port_attr;
-      it->second.flow_cnt++;
-      // Release the lock and tell remote side we have released the lock.
-      first_lock->unlock();
-      send_abort(bootstrap_fd);
-    }
-  } else {
-    bool installed = !wait_sync(bootstrap_fd);
-    if (installed) {
-      // Remote side tell us that this device has connected to the remote
-      // device.
-      second_lock->lock();
-      auto it = second_map->find({remote_ip, remote_dev});
-      DCHECK(it != second_map->end());
-      *peer_id = it->second.peer_id;
-      remote_ctx->remote_gid = it->second.remote_gid;
-      remote_ctx->remote_port_attr = it->second.remote_port_attr;
-      it->second.flow_cnt++;
-      second_lock->unlock();
-    } else {
-      // Hold the lock and tell remote side we have already held the lock.
-      second_lock->lock();
-      auto it = second_map->find({remote_ip, remote_dev});
-      DCHECK(it == second_map->end());
-      send_ready(bootstrap_fd);
-      *peer_id = alloc_peer_id(dev);
-      // Install RDMAContexts on all engines.
-      UCCL_LOG_EP << "(Same device)Install ctx on all engines for dev:" << dev
-                  << ", remote_dev:" << remote_dev << ", peerid: " << *peer_id;
-      install_ctx_on_engines(bootstrap_fd, dev, *peer_id, remote_ctx);
-      second_map->insert({{remote_ip, remote_dev},
-                          {*peer_id, remote_ctx->remote_gid,
-                           remote_ctx->remote_port_attr, 1}});
-      // Release the lock and tell remote side we have released the lock.
-      second_lock->unlock();
-      send_ready(bootstrap_fd);
-      // Wait until remote side releases its lock.
-      wait_ready(bootstrap_fd);
-    }
-  }
-
-  // Adjust used peer according to flow direction.
-  if (is_send) {
-    first_lock->lock();
-    auto it = first_map->find({remote_ip, remote_dev});
-    DCHECK(it != first_map->end());
-    *peer_id = it->second.peer_id;
-    remote_ctx->remote_gid = it->second.remote_gid;
-    remote_ctx->remote_port_attr = it->second.remote_port_attr;
-    first_lock->unlock();
-  } else {
-    second_lock->lock();
-    auto it = second_map->find({remote_ip, remote_dev});
-    DCHECK(it != second_map->end());
-    *peer_id = it->second.peer_id;
-    remote_ctx->remote_gid = it->second.remote_gid;
-    remote_ctx->remote_port_attr = it->second.remote_port_attr;
-    second_lock->unlock();
-  }
-}
-
-void RDMAEndpoint::safe_install_ctx(int dev, int bootstrap_fd,
-                                    bool local_lock_first,
-                                    std::string& remote_ip, int remote_dev,
-                                    PeerID* peer_id,
-                                    struct RemoteRDMAContext* remote_ctx) {
-  if (local_lock_first) {
-    peer_map_mu_[dev].lock();
-    auto it = peer_map_[dev].find({remote_ip, remote_dev});
-    if (it == peer_map_[dev].end()) {  // This device has not connected to
-                                       // the remote device yet.
-      // Tell remote side we have already held the lock.
-      send_ready(bootstrap_fd);
-      // Wait until remote side holds its lock.
-      wait_ready(bootstrap_fd);
-      *peer_id = alloc_peer_id(dev);
-      // Install RDMAContexts on all engines.
-      UCCL_LOG_EP << "Install ctx on all engines for dev:" << dev
-                  << ", remote_dev:" << remote_dev;
-      install_ctx_on_engines(bootstrap_fd, dev, *peer_id, remote_ctx);
-      peer_map_[dev].insert({{remote_ip, remote_dev},
-                             {*peer_id, remote_ctx->remote_gid,
-                              remote_ctx->remote_port_attr, 1}});
-      // Wait until remote side releases its lock.
-      wait_ready(bootstrap_fd);
-      // Release the lock and tell remote side we have released the lock.
-      peer_map_mu_[dev].unlock();
-      send_ready(bootstrap_fd);
-    } else {
-      // This device has connected to the remote device.
-      *peer_id = it->second.peer_id;
-      remote_ctx->remote_gid = it->second.remote_gid;
-      remote_ctx->remote_port_attr = it->second.remote_port_attr;
-      it->second.flow_cnt++;
-      // Release the lock and tell remote side we have released the lock.
-      peer_map_mu_[dev].unlock();
-      send_abort(bootstrap_fd);
-    }
-  } else {
-    bool installed = !wait_sync(bootstrap_fd);
-    if (installed) {
-      // Remote side tell us that this device has connected to the remote
-      // device.
-      peer_map_mu_[dev].lock();
-      auto it = peer_map_[dev].find({remote_ip, remote_dev});
-      DCHECK(it != peer_map_[dev].end());
-      *peer_id = it->second.peer_id;
-      remote_ctx->remote_gid = it->second.remote_gid;
-      remote_ctx->remote_port_attr = it->second.remote_port_attr;
-      it->second.flow_cnt++;
-      peer_map_mu_[dev].unlock();
-    } else {
-      // Hold the lock and tell remote side we have already held the lock.
-      peer_map_mu_[dev].lock();
-      auto it = peer_map_[dev].find({remote_ip, remote_dev});
-      DCHECK(it == peer_map_[dev].end());
-      send_ready(bootstrap_fd);
-      *peer_id = alloc_peer_id(dev);
-      // Install RDMAContexts on all engines.
-      UCCL_LOG_EP << "Install ctx on all engines for dev:" << dev
-                  << ", remote_dev:" << remote_dev;
-      install_ctx_on_engines(bootstrap_fd, dev, *peer_id, remote_ctx);
-      peer_map_[dev].insert({{remote_ip, remote_dev},
-                             {*peer_id, remote_ctx->remote_gid,
-                              remote_ctx->remote_port_attr, 1}});
-      // Release the lock and tell remote side we have released the lock.
-      peer_map_mu_[dev].unlock();
-      send_ready(bootstrap_fd);
-      // Wait until remote side releases its lock.
-      wait_ready(bootstrap_fd);
-    }
-  }
-}
-
 void RDMAEndpoint::install_flow_on_engines(int dev, PeerID peer_id,
                                            FlowID flow_id, UcclFlow* flow,
                                            bool is_send) {
@@ -1005,9 +835,15 @@ void RDMAEndpoint::install_ctx_on_engines(
 
   info->bootstrap_fd = fd;
 
+  std::vector<PollCtx*> poll_ctx_vec;
+
   for (int i = 0; i < num_engines_per_dev_; i++) {
     auto engine_idx = find_first_engine_idx_on_dev(dev) + i;
     auto* poll_ctx = install_ctx_on_engine(engine_idx, peer_id, meta);
+    poll_ctx_vec.push_back(poll_ctx);
+  }
+
+  for (auto* poll_ctx : poll_ctx_vec) {
     uccl_poll(poll_ctx);
   }
 
@@ -1022,7 +858,6 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   struct hostent* server;
   int ret;
   int bootstrap_fd;
-  bool local_lock_first = false;
   PeerID peer_id;
   struct RemoteRDMAContext remote_ctx;
   FlowID flow_id;
@@ -1063,61 +898,80 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   int flag = 1;
   setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
 
-  // Step1: send our device ID and thread ID to the server.
-  ret = send_message(bootstrap_fd, &dev, sizeof(int));
-  DCHECK(ret == sizeof(int)) << "uccl_connect: send_message()";
+  int first_call = 0;
 
-  ret = send_message(bootstrap_fd, &local_gpuidx, sizeof(int));
-  DCHECK(ret == sizeof(int)) << "uccl_connect: send_message()";
-
-  // Step2: determine the lock order.
-  if (str_to_ip(factory_dev->local_ip_str.c_str()) <
-      str_to_ip(remote_ip.c_str())) {
-    local_lock_first = true;
-  } else if (str_to_ip(factory_dev->local_ip_str.c_str()) ==
-             str_to_ip(remote_ip.c_str())) {
-    // Handle the intra-node case.
-    if (dev < remote_dev)
-      local_lock_first = true;
-    else if (dev == remote_dev) {
-      same_dev = true;
-      // Handle the shared NIC case.
-      if (local_gpuidx < remote_gpuidx) local_lock_first = true;
-    }
-  }
-
-  // Step3: install RDMAContexts on both sides if needed.
-  if (same_dev) {
-    same_dev_install_ctx(dev, bootstrap_fd, local_lock_first, true, remote_ip,
-                         remote_dev, &peer_id, &remote_ctx);
+  peer_map_mu_[dev].lock();
+  auto it = peer_map_[dev].find({remote_ip, remote_dev});
+  if (it == peer_map_[dev].end()) {
+    first_call = 1;
+    peer_id = alloc_peer_id(dev);
+    peer_map_[dev].insert({{remote_ip, remote_dev}, {peer_id, {}, {}, false}});
   } else {
-    safe_install_ctx(dev, bootstrap_fd, local_lock_first, remote_ip, remote_dev,
-                     &peer_id, &remote_ctx);
+    peer_id = it->second.peer_id;
   }
+  peer_map_mu_[dev].unlock();
 
   CHECK(peer_id < MAX_PEER);
+
+  flag = first_call &&
+         should_install_ctx(dev, local_gpuidx, factory_dev->local_ip_str,
+                            remote_dev, remote_gpuidx, remote_ip);
+
+  int buf[3] = {dev, local_gpuidx, flag};
+  ret = send_message(bootstrap_fd, buf, sizeof(int) * 3);
+  DCHECK(ret == sizeof(int) * 3) << "uccl_connect: send_message()";
+
+  if (flag) {
+    install_ctx_on_engines(bootstrap_fd, dev, peer_id, &remote_ctx);
+
+    // Update peer map.
+    peer_map_mu_[dev].lock();
+    peer_map_[dev][{remote_ip, remote_dev}].ready = true;
+    peer_map_[dev][{remote_ip, remote_dev}].remote_gid = remote_ctx.remote_gid;
+    peer_map_[dev][{remote_ip, remote_dev}].remote_port_attr =
+        remote_ctx.remote_port_attr;
+    peer_map_mu_[dev].unlock();
+  }
 
   {
     std::lock_guard<std::mutex> lock(fd_vec_mu_);
     fd_vec_.push_back(bootstrap_fd);
   }
 
-  // Step4: negotiate FlowID with server.
+  // Negotiate FlowID with server.
   ret = receive_message(bootstrap_fd, &flow_id, sizeof(FlowID));
   DCHECK(ret == sizeof(FlowID)) << "uccl_connect: receive_message()";
 
   UCCL_LOG_EP << "connect: receive proposed FlowID: " << std::hex << "0x"
               << flow_id << " for dev/peer: " << dev << "/" << peer_id;
 
-  // Step5: create a new UcclFlow.
-  auto* flow = new UcclFlow(this, bootstrap_fd, dev, peer_id, flow_id,
-                            remote_ctx, remote_ip, remote_dev, true);
+  // Create a new UcclFlow.
+  auto* flow =
+      new UcclFlow(this, dev, peer_id, flow_id, remote_ip, remote_dev, true);
   DCHECK(flow);
   active_flows_spin_[dev].Lock();
   active_flows_vec_[dev].push_back(flow);
   active_flows_spin_[dev].Unlock();
 
   install_flow_on_engines(dev, peer_id, flow_id, flow, true);
+
+  while (1) {
+    peer_map_mu_[dev].lock();
+    auto it = peer_map_[dev].find({remote_ip, remote_dev});
+    DCHECK(it != peer_map_[dev].end());
+
+    if (it->second.ready) {
+      remote_ctx.remote_gid = it->second.remote_gid;
+      remote_ctx.remote_port_attr = it->second.remote_port_attr;
+      peer_map_mu_[dev].unlock();
+      break;
+    }
+
+    peer_map_mu_[dev].unlock();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
+  flow->prepare_fifo(bootstrap_fd, dev, remote_ctx);
 
   return ConnID{
       .context = flow, .flow_id = flow_id, .peer_id = peer_id, .dev = dev};
@@ -1148,42 +1002,40 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   int flag = 1;
   setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
 
-  // Step1: receive the remote_dev and remote_gpuidx from client.
-  ret = receive_message(bootstrap_fd, remote_dev, sizeof(int));
-  DCHECK(ret == sizeof(int));
+  int buf[3];
+  ret = receive_message(bootstrap_fd, buf, sizeof(int) * 3);
+  DCHECK(ret == sizeof(int) * 3) << "uccl_accept: receive_message()";
 
-  ret = receive_message(bootstrap_fd, &remote_gpuidx, sizeof(int));
-  DCHECK(ret == sizeof(int));
+  *remote_dev = buf[0];
+  remote_gpuidx = buf[1];
+  int should_install_ctx = buf[2];
 
-  // Step2: determine the lock order.
-  auto factory_dev = RDMAFactory::get_factory_dev(dev);
-  if (str_to_ip(factory_dev->local_ip_str.c_str()) <
-      str_to_ip(remote_ip.c_str())) {
-    local_lock_first = true;
-  } else if (str_to_ip(factory_dev->local_ip_str.c_str()) ==
-             str_to_ip(remote_ip.c_str())) {
-    // Handle the intra-node case.
-    if (dev < *remote_dev)
-      local_lock_first = true;
-    else if (dev == *remote_dev) {
-      same_dev = true;
-      // Handle the shared NIC case.
-      if (local_gpuidx < remote_gpuidx) local_lock_first = true;
+  // Wait until connect() is called and allocate a peer id.
+  while (1) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    peer_map_mu_[dev].lock();
+    auto it = peer_map_[dev].find({remote_ip, *remote_dev});
+    if (it != peer_map_[dev].end()) {
+      peer_id = it->second.peer_id;
+      peer_map_mu_[dev].unlock();
+      break;
     }
+    peer_map_mu_[dev].unlock();
   }
 
-  // Step3: install RDMAContexts on both sides if needed.
-  if (same_dev) {
-    same_dev_install_ctx(dev, bootstrap_fd, local_lock_first, false, remote_ip,
-                         *remote_dev, &peer_id, &remote_ctx);
-  } else {
-    safe_install_ctx(dev, bootstrap_fd, local_lock_first, remote_ip,
-                     *remote_dev, &peer_id, &remote_ctx);
+  if (should_install_ctx) {
+    install_ctx_on_engines(bootstrap_fd, dev, peer_id, &remote_ctx);
+
+    // Update peer map.
+    peer_map_mu_[dev].lock();
+    peer_map_[dev][{remote_ip, *remote_dev}].ready = true;
+    peer_map_[dev][{remote_ip, *remote_dev}].remote_gid = remote_ctx.remote_gid;
+    peer_map_[dev][{remote_ip, *remote_dev}].remote_port_attr =
+        remote_ctx.remote_port_attr;
+    peer_map_mu_[dev].unlock();
   }
 
-  CHECK(peer_id < MAX_PEER);
-
-  // Step4: negotiate FlowID with client.
+  // Negotiate FlowID with client.
   flow_id_spin_[dev][peer_id].Lock();
   flow_id = next_flow_id_[dev][peer_id]++;
   flow_id_spin_[dev][peer_id].Unlock();
@@ -1197,15 +1049,34 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   UCCL_LOG_EP << "accept: propose FlowID: " << std::hex << "0x" << flow_id
               << " for dev/peer: " << dev << "/" << peer_id;
 
-  // Step5: create a new UcclFlow.
-  auto* flow = new UcclFlow(this, bootstrap_fd, dev, peer_id, flow_id,
-                            remote_ctx, remote_ip, *remote_dev, false);
+  // Create a new UcclFlow.
+  auto* flow =
+      new UcclFlow(this, dev, peer_id, flow_id, remote_ip, *remote_dev, false);
   DCHECK(flow);
   active_flows_spin_[dev].Lock();
   active_flows_vec_[dev].push_back(flow);
   active_flows_spin_[dev].Unlock();
 
   install_flow_on_engines(dev, peer_id, flow_id, flow, false);
+
+  while (1) {
+    peer_map_mu_[dev].lock();
+
+    auto it = peer_map_[dev].find({remote_ip, *remote_dev});
+    DCHECK(it != peer_map_[dev].end());
+
+    if (it->second.ready) {
+      remote_ctx.remote_gid = it->second.remote_gid;
+      remote_ctx.remote_port_attr = it->second.remote_port_attr;
+      peer_map_mu_[dev].unlock();
+      break;
+    }
+
+    peer_map_mu_[dev].unlock();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
+  flow->prepare_fifo(bootstrap_fd, dev, remote_ctx);
 
   return ConnID{
       .context = flow, .flow_id = flow_id, .peer_id = peer_id, .dev = dev};

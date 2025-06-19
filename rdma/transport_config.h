@@ -23,7 +23,7 @@ static constexpr double LINK_BANDWIDTH = 400.0 * 1e9 / 8;  // 400Gbps
 // # of engines per device.
 static constexpr uint32_t NUM_ENGINES = 4;
 // Path/QP per engine. The total number is NUM_ENGINES * kPortEntropy.
-static constexpr uint32_t kPortEntropy = 64;
+static constexpr uint32_t kPortEntropy = 32;
 // Maximum chunk size (Bytes) for each WQE.
 static constexpr uint32_t kChunkSize = 32 << 10;
 #else

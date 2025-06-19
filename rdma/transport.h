@@ -299,7 +299,7 @@ struct PeerInfo {
   PeerID peer_id;
   ibv_gid remote_gid;
   struct ibv_port_attr remote_port_attr;
-  uint32_t flow_cnt;
+  bool ready;
 };
 
 /**
@@ -394,6 +394,21 @@ class RDMAEndpoint {
   ConnID uccl_accept(int dev, int listen_fd, int local_gpuidx,
                      std::string& remote_ip, int* remote_dev);
 
+  bool should_install_ctx(int ldev, int lgpu, std::string lip, int rdev,
+                          int rgpu, std::string rip) {
+    if (str_to_ip(lip.c_str()) < str_to_ip(rip.c_str())) {
+      return true;
+    } else if (str_to_ip(lip.c_str()) == str_to_ip(rip.c_str())) {
+      if (ldev < rdev)
+        return true;
+      else if (ldev == rdev) {
+        if (lgpu < rgpu) return true;
+        DCHECK(lgpu != rgpu);
+      }
+    }
+    return false;
+  }
+
   // Register a memory region.
   int uccl_regmr(UcclFlow* flow, void* data, size_t len, int type,
                  struct Mhandle** mhandle);
@@ -452,32 +467,6 @@ class RDMAEndpoint {
 
   PollCtx* install_flow_on_engine(uint32_t engine_idx, PeerID peer_id,
                                   union CtrlMeta meta);
-
-  /**
-   * @brief Safely install context on all engines serving the device.
-   * When local_lock_first is true, the function will acquire local lock
-   * first, and then acquire remote lock. Otherwise, it will acquire remote
-   * lock first. When holding the two locks, and no context is installed for
-   * the remote peer before, the function will install the context on all
-   * engines serving the device. peer_id and remote_ctx are returned for
-   * creating UcclFlow.
-   *
-   * @param dev
-   * @param bootstrap_fd
-   * @param local_lock_first
-   * @param remote_ip
-   * @param remote_dev
-   * @param peer_id
-   * @param remote_ctx
-   */
-  void safe_install_ctx(int dev, int bootstrap_fd, bool local_lock_first,
-                        std::string& remote_ip, int remote_dev, PeerID* peer_id,
-                        struct RemoteRDMAContext* remote_ctx);
-
-  void same_dev_install_ctx(int dev, int bootstrap_fd, bool local_lock_first,
-                            bool is_send, std::string& remote_ip,
-                            int remote_dev, PeerID* peer_id,
-                            struct RemoteRDMAContext* remote_ctx);
 
   void install_ctx_on_engines(int fd, int dev, PeerID peer_id,
                               struct RemoteRDMAContext* remote_ctx);
@@ -540,14 +529,12 @@ class UcclFlow {
  public:
   SubUcclFlow* sub_flows_[NUM_ENGINES];
 
-  UcclFlow(RDMAEndpoint* ep, int bootstrap_fd, int dev, PeerID peer_id,
-           FlowID flow_id, struct RemoteRDMAContext remote_ctx,
+  UcclFlow(RDMAEndpoint* ep, int dev, PeerID peer_id, FlowID flow_id,
            std::string remote_ip, int remote_dev, bool is_send)
       : ep_(ep),
         dev_(dev),
         peer_id_(peer_id),
         flow_id_(flow_id),
-        remote_ctx_(remote_ctx),
         remote_ip_(remote_ip),
         remote_dev_(remote_dev),
         is_send_(is_send) {
@@ -557,7 +544,33 @@ class UcclFlow {
 
     memset(&send_comm_, 0, sizeof(send_comm_));
     memset(&recv_comm_, 0, sizeof(recv_comm_));
+    // Avoid all flows using the same initial engine offset.
+    static std::atomic<uint32_t> off[NUM_DEVICES] = {};
+    next_engine_offset_ = off[dev].fetch_add(1) % NUM_ENGINES;
+  }
 
+  ~UcclFlow() {
+    auto comm_base = is_send_ ? &send_comm_.base : &recv_comm_.base;
+
+    munmap(comm_base->fifo_mr->addr, comm_base->fifo_mr->length);
+    ibv_dereg_mr(comm_base->fifo_mr);
+    ibv_destroy_qp(comm_base->fifo_qp);
+
+    ibv_destroy_cq(comm_base->flow_cq);
+
+    if (!is_send_) {
+      munmap(recv_comm_.gpu_flush_mr->addr, recv_comm_.gpu_flush_mr->length);
+      ibv_dereg_mr(recv_comm_.gpu_flush_mr);
+      ibv_destroy_qp(recv_comm_.gpu_flush_qp);
+    }
+
+    for (int i = 0; i < NUM_ENGINES; i++) {
+      delete sub_flows_[i];
+    }
+  }
+
+  void prepare_fifo(int bootstrap_fd, int dev,
+                    struct RemoteRDMAContext remote_ctx) {
     auto comm_base = is_send_ ? &send_comm_.base : &recv_comm_.base;
 
     auto factory_dev = RDMAFactory::get_factory_dev(dev);
@@ -684,29 +697,6 @@ class UcclFlow {
                       "Failed to modify GPU flush QP to RTR");
       UCCL_INIT_CHECK(modify_qp_rts(recv_comm_.gpu_flush_qp, 0, true) == 0,
                       "Failed to modify GPU flush QP to RTS");
-    }
-    // Avoid all flows using the same initial engine offset.
-    static std::atomic<uint32_t> off[NUM_DEVICES] = {};
-    next_engine_offset_ = off[dev].fetch_add(1) % NUM_ENGINES;
-  }
-
-  ~UcclFlow() {
-    auto comm_base = is_send_ ? &send_comm_.base : &recv_comm_.base;
-
-    munmap(comm_base->fifo_mr->addr, comm_base->fifo_mr->length);
-    ibv_dereg_mr(comm_base->fifo_mr);
-    ibv_destroy_qp(comm_base->fifo_qp);
-
-    ibv_destroy_cq(comm_base->flow_cq);
-
-    if (!is_send_) {
-      munmap(recv_comm_.gpu_flush_mr->addr, recv_comm_.gpu_flush_mr->length);
-      ibv_dereg_mr(recv_comm_.gpu_flush_mr);
-      ibv_destroy_qp(recv_comm_.gpu_flush_qp);
-    }
-
-    for (int i = 0; i < NUM_ENGINES; i++) {
-      delete sub_flows_[i];
     }
   }
 
