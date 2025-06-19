@@ -45,7 +45,7 @@
 #define kMaxInflight 32
 #define kBatchSize 4
 #define kIterations 1000000
-#define kNumThBlocks 4
+#define kNumThBlocks 1
 #define kNumThPerBlock 1
 #define kRemoteNVLinkBatchSize 512
 #define kObjectSize 8192  // 8 KB
