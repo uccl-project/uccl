@@ -504,9 +504,15 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
 
   {
     DCHECK(rdma_ctx_map_.find(ctrl_work.peer_id) == rdma_ctx_map_.end());
+    // auto t1 = std::chrono::high_resolution_clock::now();
     rdma_ctx = RDMAFactory::CreateContext(ctrl_work.peer_id, &rto_tm_,
                                           &engine_outstanding_bytes_, eqds_,
                                           dev, engine_idx_ % NUM_ENGINES, meta);
+    // auto t2 = std::chrono::high_resolution_clock::now();
+    // std::cout << "create RDMAContext time: "
+    //             << std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1)
+    //                    .count()
+    //             << "ms on dev " << dev << "/" << engine_idx_ << std::endl;
     std::tie(std::ignore, ret) =
         rdma_ctx_map_.insert({ctrl_work.peer_id, rdma_ctx});
     DCHECK(ret);
@@ -538,11 +544,14 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
       memcpy(buf + (kPortEntropy + 1) * size + sizeof(uint32_t),
              &rdma_ctx->ctrl_qp_->qp_num, sizeof(uint32_t));
     }
-
     // Wait until our turn to use bootstrap fd.
     auto engine_offset = engine_idx_ % NUM_ENGINES;
-    while (next_install_engine->load() != engine_offset)
-      ;
+    while (next_install_engine->load() != engine_offset) {
+      // yield CPU
+      std::this_thread::yield();
+    }
+
+    // auto t1 = std::chrono::high_resolution_clock::now();
 
     int ret = send_message(bootstrap_fd, buf, kTotalQP * size);
     DCHECK(ret == kTotalQP * size);
@@ -550,6 +559,12 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
     // Receive PSN, QPN from remote peer.
     ret = receive_message(bootstrap_fd, buf, kTotalQP * size);
     DCHECK(ret == kTotalQP * size);
+
+    // auto t2 = std::chrono::high_resolution_clock::now();
+    // std::cout << "exchange PSN, QPN time: "
+    //             << std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1)
+    //                    .count()
+    //             << "ms on dev " << dev << "/" << engine_idx_ << std::endl;
 
     // Let other engines to use bootstrap fd.
     next_install_engine->store(next_install_engine->load() + 1);
@@ -935,8 +950,9 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   int flag = 1;
   setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
 
-  // 1. We only allocate a peer id when the first connect() is called.
+  // We only allocate a peer id when the first connect() is called.
   int first_call = 0;
+
   peer_map_mu_[dev].lock();
   auto it = peer_map_[dev].find({remote_ip, remote_dev});
   if (it == peer_map_[dev].end()) {
@@ -950,7 +966,7 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
 
   CHECK(peer_id < MAX_PEER);
 
-  // 2. For the first connect(), and should_install_ctx() returns true,
+  // For the first connect(), and should_install_ctx() returns true,
   // we install RDMA context on all engines with the help of corresponding
   // accept() at the other side.
   flag = first_call &&
@@ -965,7 +981,13 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   if (flag) {
     UCCL_LOG_EP << "connect: install_ctx_on_engines for dev/peer: " << dev
                 << "/" << peer_id;
+    // auto t1 = std::chrono::high_resolution_clock::now();
     install_ctx_on_engines(bootstrap_fd, dev, peer_id, remote_ip, remote_dev);
+    // auto t2 = std::chrono::high_resolution_clock::now();
+    // std::cout << "install_ctx_on_engines time: "
+    //             << std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1)
+    //                    .count()
+    //             << "ms on <dev, remote_dev>: " << dev << "/" << remote_dev << std::endl;
   }
 
   {
