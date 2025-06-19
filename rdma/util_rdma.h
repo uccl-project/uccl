@@ -1499,6 +1499,53 @@ static inline void util_rdma_create_qp(
                   "ibv_modify_qp failed");
 }
 
+static inline struct ibv_srq* util_rdma_create_srq(struct ibv_pd*pd, uint32_t max_wr, uint32_t max_sge, uint32_t srq_limit)
+{
+  struct ibv_srq* srq = nullptr;
+  struct ibv_srq_init_attr srq_init_attr;
+  memset(&srq_init_attr, 0, sizeof(srq_init_attr));
+  srq_init_attr.attr.max_wr = max_wr;
+  srq_init_attr.attr.max_sge = max_sge;
+  srq_init_attr.attr.srq_limit = srq_limit;
+  srq = ibv_create_srq(pd, &srq_init_attr);
+  return srq;
+}
+
+static inline struct ibv_cq_ex* util_rdma_create_cq_ex(struct ibv_context* context, uint32_t cqsize)
+{
+    struct ibv_cq_ex* cq_ex = nullptr;
+    struct ibv_cq_init_attr_ex cq_ex_attr;
+    cq_ex_attr.cqe = cqsize;
+    cq_ex_attr.cq_context = nullptr;
+    cq_ex_attr.channel = nullptr;
+    cq_ex_attr.comp_vector = 0;
+    cq_ex_attr.wc_flags =
+        IBV_WC_EX_WITH_BYTE_LEN | IBV_WC_EX_WITH_IMM | IBV_WC_EX_WITH_QP_NUM |
+        IBV_WC_EX_WITH_SRC_QP |
+        IBV_WC_EX_WITH_COMPLETION_TIMESTAMP;  // Timestamp support.
+    cq_ex_attr.comp_mask = IBV_CQ_INIT_ATTR_MASK_FLAGS;
+    cq_ex_attr.flags =
+        IBV_CREATE_CQ_ATTR_SINGLE_THREADED | IBV_CREATE_CQ_ATTR_IGNORE_OVERRUN;
+
+    if constexpr (kTestNoHWTimestamp)
+      cq_ex_attr.wc_flags &= ~IBV_WC_EX_WITH_COMPLETION_TIMESTAMP;
+
+    cq_ex = ibv_create_cq_ex(context, &cq_ex_attr);
+    return cq_ex;
+}
+
+static inline int util_rdma_modify_cq_attr(struct ibv_cq_ex* cq_ex, uint32_t cq_count, uint32_t cq_period)
+{
+  struct ibv_modify_cq_attr cq_attr;
+  cq_attr.attr_mask = IBV_CQ_ATTR_MODERATE;
+  cq_attr.moderate.cq_count = cq_count;
+  cq_attr.moderate.cq_period = cq_period;
+
+  return ibv_modify_cq(ibv_cq_ex_to_cq(cq_ex), &cq_attr);
+}
+
+
+
 /**
  * @brief This helper function converts an Infiniband name (e.g., mlx5_0) to an
  * Ethernet name (e.g., eth0)

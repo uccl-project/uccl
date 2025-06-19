@@ -204,6 +204,7 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
       engine_offset_(engine_offset),
       wheel_({freq_ghz, us_to_cycles(kWheelSlotWidthUs, freq_ghz),
               us_to_cycles(kWheelHorizonUs, freq_ghz), kBktPoolSize}) {
+  int ret;
   auto* factory_dev = RDMAFactory::get_factory_dev(dev);
 
   context_ = factory_dev->context;
@@ -214,51 +215,23 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
   mtu_bytes_ =
       util_rdma_get_mtu_from_ibv_mtu(factory_dev->port_attr.active_mtu);
 
-  // Create PD.
   pd_ = factory_dev->pd;
 
   // Create a SRQ for all data path QPs.
-  struct ibv_srq_init_attr srq_init_attr;
-  memset(&srq_init_attr, 0, sizeof(srq_init_attr));
-  srq_init_attr.attr.max_sge = 1;
-  srq_init_attr.attr.max_wr = kMaxSRQ;
-  srq_init_attr.attr.srq_limit = 0;
-  srq_ = ibv_create_srq(pd_, &srq_init_attr);
-  UCCL_INIT_CHECK(srq_ != nullptr, "ibv_create_srq failed");
+  srq_ = util_rdma_create_srq(pd_, kMaxSRQ, 1, 0);
+  UCCL_INIT_CHECK(srq_ != nullptr, "util_rdma_create_srq failed");
 
   // Create seperate send/recv CQ for data path QPs.
-  struct ibv_cq_init_attr_ex cq_ex_attr;
-  cq_ex_attr.cqe = kCQSize;
-  cq_ex_attr.cq_context = nullptr;
-  cq_ex_attr.channel = nullptr;
-  cq_ex_attr.comp_vector = 0;
-  cq_ex_attr.wc_flags =
-      IBV_WC_EX_WITH_BYTE_LEN | IBV_WC_EX_WITH_IMM | IBV_WC_EX_WITH_QP_NUM |
-      IBV_WC_EX_WITH_SRC_QP |
-      IBV_WC_EX_WITH_COMPLETION_TIMESTAMP;  // Timestamp support.
-  cq_ex_attr.comp_mask = IBV_CQ_INIT_ATTR_MASK_FLAGS;
-  cq_ex_attr.flags =
-      IBV_CREATE_CQ_ATTR_SINGLE_THREADED | IBV_CREATE_CQ_ATTR_IGNORE_OVERRUN;
-
-  if constexpr (kTestNoHWTimestamp)
-    cq_ex_attr.wc_flags &= ~IBV_WC_EX_WITH_COMPLETION_TIMESTAMP;
-
-  send_cq_ex_ = ibv_create_cq_ex(context_, &cq_ex_attr);
-  UCCL_INIT_CHECK(send_cq_ex_ != nullptr, "ibv_create_cq_ex failed");
-
-  recv_cq_ex_ = ibv_create_cq_ex(context_, &cq_ex_attr);
-  UCCL_INIT_CHECK(recv_cq_ex_ != nullptr, "ibv_create_cq_ex failed");
+  send_cq_ex_ = util_rdma_create_cq_ex(context_, kCQSize);
+  UCCL_INIT_CHECK(send_cq_ex_ != nullptr, "util_rdma_create_cq_ex failed");
+  recv_cq_ex_ = util_rdma_create_cq_ex(context_, kCQSize);
+  UCCL_INIT_CHECK(recv_cq_ex_ != nullptr, "util_rdma_create_cq_ex failed");
 
   // Configure CQ moderation.
-  struct ibv_modify_cq_attr cq_attr;
-  cq_attr.attr_mask = IBV_CQ_ATTR_MODERATE;
-  cq_attr.moderate.cq_count = kCQMODCount;
-  cq_attr.moderate.cq_period = kCQMODPeriod;
-
-  UCCL_INIT_CHECK(ibv_modify_cq(ibv_cq_ex_to_cq(send_cq_ex_), &cq_attr) == 0,
-                  "ibv_modify_cq failed");
-  UCCL_INIT_CHECK(ibv_modify_cq(ibv_cq_ex_to_cq(recv_cq_ex_), &cq_attr) == 0,
-                  "ibv_modify_cq failed");
+  ret = util_rdma_modify_cq_attr(send_cq_ex_, kCQMODCount, kCQMODPeriod);
+  UCCL_INIT_CHECK(ret == 0, "util_rdma_modify_cq_attr failed");
+  ret = util_rdma_modify_cq_attr(recv_cq_ex_, kCQMODCount, kCQMODPeriod);
+  UCCL_INIT_CHECK(ret == 0, "util_rdma_modify_cq_attr failed");
 
   // Create data path QPs. (UC/RC)
   struct ibv_qp_init_attr qp_init_attr;
@@ -346,8 +319,7 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
     struct ibv_sge sge;
     for (int i = 0; i < (eqds::CreditChunkBuffPool::kNumChunk - 1) / 2; i++) {
       uint64_t chunk_addr;
-      if (engine_credit_chunk_pool_->alloc_buff(&chunk_addr))
-        throw std::runtime_error("Failed to allocate buffer for credit packet");
+      UCCL_INIT_CHECK(engine_credit_chunk_pool_->alloc_buff(&chunk_addr) == 0, "Failed to allocate buffer for credit packet");
       sge.addr = chunk_addr;
       sge.length = eqds::CreditChunkBuffPool::kChunkSize;
       sge.lkey = engine_credit_chunk_pool_->get_lkey();
@@ -356,8 +328,7 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
       wr.sg_list = &sge;
       wr.num_sge = 1;
       struct ibv_recv_wr* bad_wr;
-      if (ibv_post_recv(credit_qp_, &wr, &bad_wr))
-        throw std::runtime_error("ibv_post_recv failed");
+      UCCL_INIT_CHECK(ibv_post_recv(credit_qp_, &wr, &bad_wr) == 0, "ibv_post_recv failed");
     }
   }
 
@@ -377,19 +348,19 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
     // Create Retr hdr/chunk MR.
     void* retr_mr_addr = mmap(nullptr, kRetrMRSize, PROT_READ | PROT_WRITE,
                               MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-    if (retr_mr_addr == MAP_FAILED) throw std::runtime_error("mmap failed");
+    UCCL_INIT_CHECK(retr_mr_addr != MAP_FAILED, "mmap failed");
     retr_mr_ = ibv_reg_mr(pd_, retr_mr_addr, kRetrMRSize,
                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
-    if (retr_mr_ == nullptr) throw std::runtime_error("ibv_reg_mr failed");
+    UCCL_INIT_CHECK(retr_mr_ != nullptr, "ibv_reg_mr failed");
 
     void* retr_hdr =
         mmap(nullptr, RetrHdrBuffPool::kNumHdr * RetrHdrBuffPool::kHdrSize,
              PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-    if (retr_hdr == MAP_FAILED) throw std::runtime_error("mmap failed");
+    UCCL_INIT_CHECK(retr_hdr != MAP_FAILED, "mmap failed");
     retr_hdr_mr_ = ibv_reg_mr(
         pd_, retr_hdr, RetrHdrBuffPool::kNumHdr * RetrHdrBuffPool::kHdrSize,
         IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
-    if (retr_hdr_mr_ == nullptr) throw std::runtime_error("ibv_reg_mr failed");
+    UCCL_INIT_CHECK(retr_hdr_mr_ != nullptr, "ibv_reg_mr failed");
 
     // Initialize retransmission chunk and header buffer pool.
     {
@@ -402,9 +373,7 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
       struct ibv_sge sge;
       for (int i = 0; i < (CtrlChunkBuffPool::kNumChunk - 1) / 2; i++) {
         uint64_t chunk_addr;
-        if (ctrl_chunk_pool_->alloc_buff(&chunk_addr))
-          throw std::runtime_error(
-              "Failed to allocate buffer for control packet");
+        UCCL_INIT_CHECK(ctrl_chunk_pool_->alloc_buff(&chunk_addr) == 0, "Failed to allocate buffer for control packet");
         sge.addr = chunk_addr;
         sge.length = CtrlChunkBuffPool::kChunkSize;
         sge.lkey = ctrl_chunk_pool_->get_lkey();
@@ -413,8 +382,7 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
         wr.sg_list = &sge;
         wr.num_sge = 1;
         struct ibv_recv_wr* bad_wr;
-        if (ibv_post_recv(ctrl_qp_, &wr, &bad_wr))
-          throw std::runtime_error("ibv_post_recv failed");
+        UCCL_INIT_CHECK(ibv_post_recv(ctrl_qp_, &wr, &bad_wr) == 0, "ibv_post_recv failed");
       }
     }
 
@@ -458,9 +426,7 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
     struct ibv_sge sge;
     if constexpr (!kRCMode) {
       uint64_t chunk_addr;
-      if (retr_chunk_pool_->alloc_buff(&chunk_addr))
-        throw std::runtime_error(
-            "Failed to allocate buffer for retransmission chunk");
+      UCCL_INIT_CHECK(retr_chunk_pool_->alloc_buff(&chunk_addr) == 0, "Failed to allocate buffer for retransmission chunk");
       sge.addr = chunk_addr;
       sge.length = RetrChunkBuffPool::kRetrChunkSize;
       sge.lkey = retr_chunk_pool_->get_lkey();
