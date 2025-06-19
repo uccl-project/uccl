@@ -23,6 +23,10 @@
 #endif
 
 namespace uccl {
+#define MAX_IB_DEVS 32
+
+#define ROCE_GID_IDX 3
+#define IB_GID_IDX 0
 
 typedef uint64_t FlowID;
 typedef uint64_t PeerID;
@@ -48,6 +52,8 @@ static constexpr uint32_t MAX_CHUNK_ROCE_IPV6_4096_HDR_OVERHEAD =
     ((kChunkSize + 4096) / 4096) * ROCE_IPV6_HDR_OVERHEAD;
 static constexpr uint32_t MAX_CHUNK_IB_4096_HDR_OVERHEAD =
     ((kChunkSize + 4096) / 4096) * IB_HDR_OVERHEAD;
+
+static int num_devices = 0;
 
 /**
  * @brief Buffer pool for work request extension.
@@ -459,8 +465,12 @@ class SubUcclFlow {
  public:
   SubUcclFlow() {}
 
-  SubUcclFlow(uint32_t fid)
-      : fid_(fid), in_wheel_cnt_(0), txtracking(), rxtracking(), pcb() {
+  SubUcclFlow(uint32_t fid, double link_bandwidth)
+      : fid_(fid),
+        in_wheel_cnt_(0),
+        txtracking(),
+        rxtracking(),
+        pcb(link_bandwidth) {
     INIT_LIST_HEAD(&ack.ack_link);
     ack.subflow = this;
   }
@@ -569,6 +579,8 @@ class RDMAContext {
   uint32_t engine_offset_;
 
   uint32_t flow_cnt_ = 0;
+
+  double link_speed = 0;
 
   void* sender_flow_tbl_[MAX_FLOW] = {};
   void* receiver_flow_tbl_[MAX_FLOW] = {};
@@ -732,6 +744,8 @@ class RDMAContext {
   uint32_t last_qp_choice_ = 0;
 
   uint32_t* engine_unacked_bytes_;
+
+  inline bool is_roce() { return (sgid_index_ == ROCE_GID_IDX); }
 
   inline void update_clock(double ratio, double offset) {
     ratio_ = ratio;
@@ -951,12 +965,12 @@ class RDMAContext {
    */
   void __retransmit_for_flow(void* context, bool rto);
   inline void fast_retransmit_for_flow(void* context) {
-    if constexpr (ROCE_NET || kTestLoss) {
+    if (is_roce() || kTestLoss) {
       __retransmit_for_flow(context, false);
     }
   }
   inline void rto_retransmit_for_flow(void* context) {
-    if constexpr (ROCE_NET || kTestLoss) {
+    if (is_roce() || kTestLoss) {
       __retransmit_for_flow(context, true);
     }
   }
@@ -1175,6 +1189,8 @@ struct FactoryDevice {
   uint8_t gid_idx;
   union ibv_gid gid;
 
+  double link_bw;
+
   struct ibv_pd* pd;
 
   // DMA-BUF support
@@ -1193,9 +1209,9 @@ class RDMAFactory {
   ~RDMAFactory() { devices_.clear(); }
 
   /**
-   * @brief Initialize RDMA device.
+   * @brief Initialize all eligible RDMA devices.
    */
-  static void init_dev(int devname_suffix);
+  static int init_devs();
   /**
    * @brief Create a Context object for the given device using the given meta.
    * @param dev
@@ -1207,9 +1223,15 @@ class RDMAFactory {
                                     eqds::EQDS* eqds, int dev,
                                     uint32_t engine_offset_,
                                     union CtrlMeta meta);
+
   static inline struct FactoryDevice* get_factory_dev(int dev) {
     DCHECK(dev >= 0 && dev < rdma_ctl->devices_.size());
     return &rdma_ctl->devices_[dev];
+  }
+
+  static inline bool is_roce(int dev) {
+    DCHECK(dev >= 0 && dev < rdma_ctl->devices_.size());
+    return (rdma_ctl->devices_[dev].gid_idx == ROCE_GID_IDX);
   }
 
   std::string to_string(void) const;
@@ -1231,20 +1253,20 @@ static inline int modify_qp_rtr_gpuflush(struct ibv_qp* qp, int dev) {
 
   attr.qp_state = IBV_QPS_RTR;
   attr.path_mtu = factory_dev->port_attr.active_mtu;
-  if (ROCE_NET) {
+  if (RDMAFactory::is_roce(dev)) {
     attr.ah_attr.is_global = 1;
     attr.ah_attr.grh.dgid = factory_dev->gid;
     attr.ah_attr.grh.sgid_index = factory_dev->gid_idx;
     attr.ah_attr.grh.hop_limit = 0xff;
-    attr.ah_attr.grh.traffic_class = kTrafficClass;
+    attr.ah_attr.grh.traffic_class = ROCE_TRAFFIC_CLASS;
+    attr.ah_attr.sl = ROCE_SERVICE_LEVEL;
   } else {
     attr.ah_attr.is_global = 0;
     attr.ah_attr.dlid = factory_dev->port_attr.lid;
+    attr.ah_attr.sl = IB_SERVICE_LEVEL;
   }
 
-  attr.ah_attr.sl = kServiceLevel;
-
-  attr.ah_attr.port_num = IB_PORT_NUM;
+  attr.ah_attr.port_num = factory_dev->ib_port_num;
   attr.dest_qp_num = qp->qp_num;
   attr.rq_psn = 0;
 
@@ -1278,13 +1300,14 @@ static inline int modify_qp_rtr(struct ibv_qp* qp, int dev,
   memset(&attr, 0, sizeof(attr));
   attr.qp_state = IBV_QPS_RTR;
   attr.path_mtu = factory_dev->port_attr.active_mtu;
-  attr.ah_attr.port_num = IB_PORT_NUM;
-  if (ROCE_NET) {
+  attr.ah_attr.port_num = factory_dev->ib_port_num;
+  if (RDMAFactory::is_roce(dev)) {
     attr.ah_attr.is_global = 1;
     attr.ah_attr.grh.dgid = remote_ctx->remote_gid;
     attr.ah_attr.grh.sgid_index = factory_dev->gid_idx;
     attr.ah_attr.grh.hop_limit = 0xff;
-    attr.ah_attr.grh.traffic_class = kTrafficClass;
+    attr.ah_attr.grh.traffic_class = ROCE_TRAFFIC_CLASS;
+    attr.ah_attr.sl = ROCE_SERVICE_LEVEL;
   } else {
     if (util_rdma_extract_local_subnet_prefix(
             factory_dev->gid.global.subnet_prefix) !=
@@ -1294,8 +1317,8 @@ static inline int modify_qp_rtr(struct ibv_qp* qp, int dev,
     }
     attr.ah_attr.is_global = 0;
     attr.ah_attr.dlid = remote_ctx->remote_port_attr.lid;
+    attr.ah_attr.sl = IB_SERVICE_LEVEL;
   }
-  attr.ah_attr.sl = kServiceLevel;
   attr.dest_qp_num = remote_qpn;
   attr.rq_psn = remote_psn;
 
@@ -1350,8 +1373,9 @@ static inline int modify_qp_rts(struct ibv_qp* qp, uint32_t local_psn,
 static inline void util_rdma_create_qp_seperate_cq(
     struct ibv_context* context, struct ibv_qp** qp, enum ibv_qp_type qp_type,
     bool cq_ex, bool ts, struct ibv_cq** scq, struct ibv_cq** rcq,
-    bool share_cq, uint32_t cqsize, struct ibv_pd* pd, uint32_t max_send_wr,
-    uint32_t max_recv_wr, uint32_t max_send_sge, uint32_t max_recv_sge) {
+    bool share_cq, uint32_t cqsize, struct ibv_pd* pd, int port,
+    uint32_t max_send_wr, uint32_t max_recv_wr, uint32_t max_send_sge,
+    uint32_t max_recv_sge) {
   // Creating SCQ and RCQ
   if (!share_cq) {
     if (cq_ex) {
@@ -1410,7 +1434,7 @@ static inline void util_rdma_create_qp_seperate_cq(
   memset(&qp_attr, 0, sizeof(qp_attr));
   qp_attr.qp_state = IBV_QPS_INIT;
   qp_attr.pkey_index = 0;
-  qp_attr.port_num = IB_PORT_NUM;
+  qp_attr.port_num = port;
   qp_attr.qp_access_flags =
       IBV_ACCESS_REMOTE_WRITE |
       ((qp_type == IBV_QPT_RC) ? IBV_ACCESS_REMOTE_READ : 0);
@@ -1422,7 +1446,7 @@ static inline void util_rdma_create_qp_seperate_cq(
 static inline void util_rdma_create_qp(
     struct ibv_context* context, struct ibv_qp** qp, enum ibv_qp_type qp_type,
     bool cq_ex, bool ts, struct ibv_cq** cq, bool share_cq, uint32_t cqsize,
-    struct ibv_pd* pd, struct ibv_mr** mr, void* addr, size_t mr_size,
+    struct ibv_pd* pd, int port, struct ibv_mr** mr, void* addr, size_t mr_size,
     uint32_t max_send_wr, uint32_t max_recv_wr, uint32_t max_send_sge,
     uint32_t max_recv_sge) {
   // Creating CQ
@@ -1489,7 +1513,7 @@ static inline void util_rdma_create_qp(
   memset(&qp_attr, 0, sizeof(qp_attr));
   qp_attr.qp_state = IBV_QPS_INIT;
   qp_attr.pkey_index = 0;
-  qp_attr.port_num = IB_PORT_NUM;
+  qp_attr.port_num = port;
   qp_attr.qp_access_flags =
       IBV_ACCESS_REMOTE_WRITE |
       ((qp_type == IBV_QPT_RC) ? IBV_ACCESS_REMOTE_READ : 0);
@@ -1522,18 +1546,6 @@ static inline int util_rdma_ib2eth_name(char const* ib_name,
   pclose(fp);
   // Remove newline character if present
   ethernet_name[strcspn(ethernet_name, "\n")] = '\0';
-  return 0;
-}
-
-/**
- * @brief This helper function gets the Infiniband name from the suffix.
- *
- * @param suffix
- * @param ib_name
- * @return int
- */
-static inline int util_rdma_get_ib_name_from_suffix(int suffix, char* ib_name) {
-  sprintf(ib_name, "%s%d", IB_DEVICE_NAME_PREFIX, suffix);
   return 0;
 }
 
@@ -1572,6 +1584,33 @@ static inline int util_rdma_get_mtu_from_ibv_mtu(ibv_mtu mtu) {
     default:
       return 0;
   }
+}
+
+static int ibvWidths[] = {1, 4, 8, 12, 2};
+static int ibvSpeeds[] = {2500,  /* SDR */
+                          5000,  /* DDR */
+                          10000, /* QDR */
+                          10000, /* QDR */
+                          14000, /* FDR */
+                          25000, /* EDR */
+                          50000, /* HDR */
+                          100000 /* NDR */};
+
+static int firstBitSet(int val, int max) {
+  int i = 0;
+  while (i < max && ((val & (1 << i)) == 0)) i++;
+  return i;
+}
+static int ncclIbWidth(int width) {
+  return ibvWidths[firstBitSet(width, sizeof(ibvWidths) / sizeof(int) - 1)];
+}
+static int ncclIbSpeed(int speed) {
+  return ibvSpeeds[firstBitSet(speed, sizeof(ibvSpeeds) / sizeof(int) - 1)];
+}
+
+static inline int util_rdma_get_link_speed_from_ibv_speed(int active_speed,
+                                                          int active_width) {
+  return (ncclIbSpeed(active_speed) * ncclIbWidth(active_width)) * 1e6 / 8;
 }
 
 }  // namespace uccl

@@ -270,6 +270,109 @@ void UcclRDMAEngine::handle_rx_work(void) {
   }
 }
 
+inline void RDMAEndpoint::initialize_resources(int total_num_engines) {
+  // Initialize all dynamic arrays
+  channel_vec_.resize(total_num_engines);
+  engine_vec_.resize(total_num_engines);
+  engine_load_vec_.resize(total_num_engines);
+  for (int i = 0; i < total_num_engines; i++) {
+    engine_load_vec_[i] = std::make_unique<std::atomic<uint32_t>>(0);
+  }
+  eqds_.resize(num_devices_);
+  test_listen_fds_.resize(num_devices_);
+
+  peer_map_.resize(num_devices_);
+  peer_map_mu_.resize(num_devices_);
+
+  for (int i = 0; i < 2; i++) {
+    peer_same_dev_map_[i].resize(num_devices_);
+    peer_same_dev_map_mu_[i].resize(num_devices_);
+  }
+
+  next_peer_id_.resize(num_devices_);
+
+  flow_id_spin_.resize(num_devices_);
+  next_flow_id_.resize(num_devices_);
+  for (int i = 0; i < num_devices_; i++) {
+    flow_id_spin_[i].resize(MAX_PEER);
+    next_flow_id_[i].resize(MAX_PEER);
+  }
+
+  active_flows_vec_.resize(num_devices_);
+  active_flows_spin_.resize(num_devices_);
+
+  printf("Initialized %d channels for %d devices with %d engines per device\n",
+         total_num_engines, num_devices_, num_engines_per_dev_);
+}
+
+void RDMAEndpoint::cleanup_resources() {
+  for (auto& flows : active_flows_vec_) {
+    for (auto* flow : flows) {
+      if (flow) {
+        delete flow;
+      }
+    }
+    flows.clear();
+  }
+  active_flows_vec_.clear();
+  active_flows_spin_.clear();
+
+  for (auto* channel : channel_vec_) {
+    if (channel) {
+      delete channel;
+    }
+  }
+  channel_vec_.clear();
+  engine_load_vec_.clear();
+  engine_vec_.clear();
+  engine_id_to_engine_map_.clear();
+
+  for (auto* eqds_ptr : eqds_) {
+    if (eqds_ptr) {
+      delete eqds_ptr;
+    }
+  }
+  eqds_.clear();
+
+  for (int fd : test_listen_fds_) {
+    if (fd >= 0) {
+      close(fd);
+    }
+  }
+  test_listen_fds_.clear();
+
+  peer_map_.clear();
+  peer_map_mu_.clear();
+  for (int i = 0; i < 2; i++) {
+    peer_same_dev_map_[i].clear();
+    peer_same_dev_map_mu_[i].clear();
+  }
+
+  next_peer_id_.clear();
+  for (auto& spins : flow_id_spin_) {
+    spins.clear();
+  }
+  flow_id_spin_.clear();
+  for (auto& flow_ids : next_flow_id_) {
+    flow_ids.clear();
+  }
+  next_flow_id_.clear();
+
+  for (auto& boostrap_fd : fd_vec_) {
+    close(boostrap_fd);
+  }
+  fd_vec_.clear();
+
+  if (ctx_pool_) {
+    delete ctx_pool_;
+    ctx_pool_ = nullptr;
+  }
+  if (ctx_pool_buf_) {
+    delete[] ctx_pool_buf_;
+    ctx_pool_buf_ = nullptr;
+  }
+}
+
 bool RDMAEndpoint::initialize_engine_by_dev(int dev,
                                             std::atomic<uint16_t>& port) {
   static std::once_flag flag_once;
@@ -394,7 +497,7 @@ void UcclRDMAEngine::periodic_process() {
 }
 
 void UcclRDMAEngine::handle_rto() {
-  if constexpr (kTestNoRTO) return;
+  if (is_no_rto()) return;
 
   auto expired_qp_vec = rto_tm_.check_expired();
 
@@ -578,57 +681,61 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
   qp_setup_thread.detach();
 }
 
-RDMAEndpoint::RDMAEndpoint(int num_devices, int num_engines_per_dev)
-    : num_devices_(num_devices),
-      num_engines_per_dev_(num_engines_per_dev),
+#ifdef LAZY_CREATE_ENGINE
+RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
+    : num_engines_per_dev_(num_engines_per_dev),
       stats_thread_([this]() { stats_thread_fn(); }) {
   static std::once_flag flag_once;
   std::call_once(flag_once, [&]() {
     rdma_ctl_ = rdma_ctl;
 
-    for (int i = 0; i < num_devices; i++) {
-      RDMAFactory::init_dev(DEVNAME_SUFFIX_LIST[i]);
-    }
+    num_devices_ = RDMAFactory::init_devs();
   });
   ctx_pool_ = new SharedPool<PollCtx*, true>(kMaxInflightMsg);
   ctx_pool_buf_ = new uint8_t[kMaxInflightMsg * sizeof(PollCtx)];
   for (int i = 0; i < kMaxInflightMsg; i++) {
     ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());
   }
-  int total_num_engines = num_devices * num_engines_per_dev;
+  int total_num_engines = num_devices_ * num_engines_per_dev;
+  initialize_resources(total_num_engines);
 
   for (int i = 0; i < total_num_engines; i++) channel_vec_[i] = new Channel();
 
   if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
     // Receiver-driven congestion control per device.
-    for (int i = 0; i < num_devices; i++) eqds_[i] = new eqds::EQDS(i);
+    for (int i = 0; i < num_devices; i++) {
+      auto factory_dev = RDMAFactory::get_factory_dev(i);
+      eqds_[i] = new eqds::EQDS(i, factory_dev->link_bw);
+    }
   }
 }
-
-RDMAEndpoint::RDMAEndpoint(uint8_t const* devname_suffix_list, int num_devices,
-                           int num_engines_per_dev)
-    : num_devices_(num_devices),
-      num_engines_per_dev_(num_engines_per_dev),
+#else
+RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
+    : num_engines_per_dev_(num_engines_per_dev),
       stats_thread_([this]() { stats_thread_fn(); }) {
   // Initialize all RDMA devices.
   static std::once_flag flag_once;
-  std::call_once(flag_once, [&]() {
-    for (int i = 0; i < num_devices; i++) {
-      RDMAFactory::init_dev(devname_suffix_list[i]);
-    }
-  });
+
+  std::call_once(flag_once, [&]() { num_devices_ = RDMAFactory::init_devs(); });
 
   rdma_ctl_ = rdma_ctl;
 
-  int total_num_engines = num_devices * num_engines_per_dev;
-
+  int total_num_engines = num_devices_ * num_engines_per_dev;
+  printf(
+      "Starting to initialize %d channels for %d devices with %d engines per "
+      "device\n",
+      total_num_engines, num_devices_, num_engines_per_dev_);
+  initialize_resources(total_num_engines);
   // Create multiple engines. Each engine has its own thread and channel to
   // let the endpoint communicate with.
   for (int i = 0; i < total_num_engines; i++) channel_vec_[i] = new Channel();
 
   if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
     // Receiver-driven congestion control per device.
-    for (int i = 0; i < num_devices; i++) eqds_[i] = new eqds::EQDS(i);
+    for (int i = 0; i < num_devices_; i++) {
+      auto factory_dev = RDMAFactory::get_factory_dev(i);
+      eqds_[i] = new eqds::EQDS(i, factory_dev->link_bw);
+    }
   }
 
   for (int engine_id = 0, engine_cpu_id; engine_id < total_num_engines;
@@ -657,16 +764,17 @@ RDMAEndpoint::RDMAEndpoint(uint8_t const* devname_suffix_list, int num_devices,
     ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());
   }
 
-  for (int i = 0; i < num_devices; i++) {
+  for (int i = 0; i < num_devices_; i++) {
     // Create listening sockets
     create_listen_socket(&test_listen_fds_[i], kTestListenPort + i);
   }
 }
+#endif
 
 inline uint32_t RDMAEndpoint::find_pot_load_engine_idx(int dev) {
   auto c1 = find_oblivious_engine_idx(dev);
   auto c2 = find_least_loaded_engine_idx(dev);
-  return engine_load_vec_[c1].load() < engine_load_vec_[c2].load() ? c1 : c2;
+  return engine_load_vec_[c1]->load() < engine_load_vec_[c2]->load() ? c1 : c2;
 }
 
 inline uint32_t RDMAEndpoint::find_least_loaded_engine_idx(int dev) {
@@ -676,7 +784,7 @@ inline uint32_t RDMAEndpoint::find_least_loaded_engine_idx(int dev) {
   uint32_t min_load = std::numeric_limits<uint32_t>::max();
   uint32_t candidate = 0;
   for (uint32_t i = first_engine_idx; i <= last_engine_idx; i++) {
-    uint32_t load = engine_load_vec_[i].load();
+    uint32_t load = engine_load_vec_[i]->load();
     if (load < min_load) {
       min_load = load;
       candidate = i;
@@ -709,39 +817,31 @@ RDMAEndpoint::~RDMAEndpoint() {
     engine->shutdown();
   }
 #else
-  for (auto& engine : engine_vec_) engine->shutdown();
+  for (auto& engine : engine_vec_) {
+    if (engine) {
+      engine->shutdown();
+    }
+  }
 #endif
 
-  for (auto& engine_th : engine_th_vec_) engine_th->join();
+  for (auto& engine_th : engine_th_vec_) {
+    if (engine_th) {
+      engine_th->join();
+    }
+  }
 #ifdef LAZY_CREATE_ENGINE
   for (auto& [engine_id, engine] : engine_id_to_engine_map_) {
     engine->release();
   }
 #else
-  for (auto& engine : engine_vec_) engine->release();
+  for (auto& engine : engine_vec_) {
+    if (engine) {
+      engine->release();
+    }
+  }
 #endif
 
-  for (int dev = 0; dev < num_devices_; dev++) {
-    for (auto& flow : active_flows_vec_[dev]) {
-      delete flow;
-    }
-    active_flows_vec_[dev].clear();
-
-    peer_map_[dev].clear();
-
-    close(test_listen_fds_[dev]);
-  }
-
-  for (int i = 0; i < num_devices_ * num_engines_per_dev_; i++)
-    delete channel_vec_[i];
-
-  delete ctx_pool_;
-  delete[] ctx_pool_buf_;
-
-  for (auto& boostrap_fd : fd_vec_) {
-    close(boostrap_fd);
-  }
-  fd_vec_.clear();
+  cleanup_resources();
 
   {
     std::lock_guard<std::mutex> lock(stats_mu_);
@@ -749,7 +849,9 @@ RDMAEndpoint::~RDMAEndpoint() {
     stats_cv_.notify_all();
   }
 
-  stats_thread_.join();
+  if (stats_thread_.joinable()) {
+    stats_thread_.join();
+  }
 }
 
 PollCtx* RDMAEndpoint::install_flow_on_engine(uint32_t engine_idx,
@@ -796,9 +898,9 @@ void RDMAEndpoint::same_dev_install_ctx(int dev, int bootstrap_fd,
                                         PeerID* peer_id,
                                         struct RemoteRDMAContext* remote_ctx) {
   auto* first_map = &peer_same_dev_map_[dev][0];
-  auto* first_lock = &peer_same_dev_map_mu_[dev][0];
+  auto* first_lock = peer_same_dev_map_mu_[dev][0].get();
   auto* second_map = &peer_same_dev_map_[dev][1];
-  auto* second_lock = &peer_same_dev_map_mu_[dev][1];
+  auto* second_lock = peer_same_dev_map_mu_[dev][1].get();
 
   if (local_lock_first) {
     first_lock->lock();
@@ -893,7 +995,7 @@ void RDMAEndpoint::safe_install_ctx(int dev, int bootstrap_fd,
                                     PeerID* peer_id,
                                     struct RemoteRDMAContext* remote_ctx) {
   if (local_lock_first) {
-    peer_map_mu_[dev].lock();
+    peer_map_mu_[dev]->lock();
     auto it = peer_map_[dev].find({remote_ip, remote_dev});
     if (it == peer_map_[dev].end()) {  // This device has not connected to
                                        // the remote device yet.
@@ -912,7 +1014,7 @@ void RDMAEndpoint::safe_install_ctx(int dev, int bootstrap_fd,
       // Wait until remote side releases its lock.
       wait_ready(bootstrap_fd);
       // Release the lock and tell remote side we have released the lock.
-      peer_map_mu_[dev].unlock();
+      peer_map_mu_[dev]->unlock();
       send_ready(bootstrap_fd);
     } else {
       // This device has connected to the remote device.
@@ -921,7 +1023,7 @@ void RDMAEndpoint::safe_install_ctx(int dev, int bootstrap_fd,
       remote_ctx->remote_port_attr = it->second.remote_port_attr;
       it->second.flow_cnt++;
       // Release the lock and tell remote side we have released the lock.
-      peer_map_mu_[dev].unlock();
+      peer_map_mu_[dev]->unlock();
       send_abort(bootstrap_fd);
     }
   } else {
@@ -929,17 +1031,17 @@ void RDMAEndpoint::safe_install_ctx(int dev, int bootstrap_fd,
     if (installed) {
       // Remote side tell us that this device has connected to the remote
       // device.
-      peer_map_mu_[dev].lock();
+      peer_map_mu_[dev]->lock();
       auto it = peer_map_[dev].find({remote_ip, remote_dev});
       DCHECK(it != peer_map_[dev].end());
       *peer_id = it->second.peer_id;
       remote_ctx->remote_gid = it->second.remote_gid;
       remote_ctx->remote_port_attr = it->second.remote_port_attr;
       it->second.flow_cnt++;
-      peer_map_mu_[dev].unlock();
+      peer_map_mu_[dev]->unlock();
     } else {
       // Hold the lock and tell remote side we have already held the lock.
-      peer_map_mu_[dev].lock();
+      peer_map_mu_[dev]->lock();
       auto it = peer_map_[dev].find({remote_ip, remote_dev});
       DCHECK(it == peer_map_[dev].end());
       send_ready(bootstrap_fd);
@@ -952,7 +1054,7 @@ void RDMAEndpoint::safe_install_ctx(int dev, int bootstrap_fd,
                              {*peer_id, remote_ctx->remote_gid,
                               remote_ctx->remote_port_attr, 1}});
       // Release the lock and tell remote side we have released the lock.
-      peer_map_mu_[dev].unlock();
+      peer_map_mu_[dev]->unlock();
       send_ready(bootstrap_fd);
       // Wait until remote side releases its lock.
       wait_ready(bootstrap_fd);

@@ -8,18 +8,20 @@
 // #define STATS
 // #define LAZY_CREATE_ENGINE
 
-/// Interface configuration.
-static char const* IB_DEVICE_NAME_PREFIX = "mlx5_";
+// TODO : Convert them to user definable configs
+#define ROCE_TRAFFIC_CLASS 3
+
+#define ROCE_SERVICE_LEVEL 135
+#define IB_SERVICE_LEVEL 0
+
+// DupAckThres equals to 1 means all duplicate acks are caused by
+// packet loss. This is true for flow-level ECMP, which is the common case. When
+// the network supports adaptive routing, duplicate acks may be caused by
+// adaptive routing. In this case, DupAckThres should be set to a
+// value greater than 0.
+#define ROCE_DUP_ACK_THRES 32
 
 #ifndef __HIP_PLATFORM_AMD__
-static constexpr bool ROCE_NET = true;
-// If SINGLE_CTRL_NIC is set, all devices will use the same IP.
-static std::string SINGLE_CTRL_NIC("enp164s0");
-static constexpr uint8_t DEVNAME_SUFFIX_LIST[8] = {1, 2, 3, 4, 5, 6, 7, 8};
-static constexpr uint8_t NUM_DEVICES = 8;
-// static constexpr uint8_t DEVNAME_SUFFIX_LIST[8] = {0, 2, 4, 6, 0, 0, 0, 0};
-// static constexpr uint8_t NUM_DEVICES = 4;
-static constexpr double LINK_BANDWIDTH = 400.0 * 1e9 / 8;  // 400Gbps
 // # of engines per device.
 static constexpr uint32_t NUM_ENGINES = 4;
 // Path/QP per engine. The total number is NUM_ENGINES * kPortEntropy.
@@ -27,27 +29,15 @@ static constexpr uint32_t kPortEntropy = 64;
 // Maximum chunk size (Bytes) for each WQE.
 static constexpr uint32_t kChunkSize = 32 << 10;
 #else
-static constexpr bool ROCE_NET = false;
-static std::string SINGLE_CTRL_NIC("eth0");
-static constexpr uint8_t NUM_DEVICES = 1;
-static constexpr uint8_t DEVNAME_SUFFIX_LIST[NUM_DEVICES] = {0};
-static constexpr double LINK_BANDWIDTH = 200.0 * 1e9 / 8;  // 200Gbps
 static constexpr uint32_t NUM_ENGINES = 1;
 static constexpr uint32_t kPortEntropy = 256;
 static constexpr uint32_t kChunkSize = 128 << 10;
 #endif
+static constexpr double DEFAULT_LINK_BW = 100.0 * 1e9 / 8;  // 100Gbps
 
 static constexpr uint32_t MAX_PEER = 256;
 // Maximum number of flows (one-way) on each engine.
 static constexpr uint32_t MAX_FLOW = 256;
-static constexpr uint8_t IB_PORT_NUM = 1;
-// Traffic class
-static constexpr uint8_t kTrafficClass = ROCE_NET ? 3 : 0;
-// Service level
-static constexpr uint8_t kServiceLevel = ROCE_NET ? 135 : 0;
-// GID Index
-static constexpr uint8_t GID_IDX = ROCE_NET ? 3 : 0;
-/// Interface configuration.
 
 static uint32_t NUM_CPUS = std::thread::hardware_concurrency();
 // Each dev use [ENGINE_CPU_START_LIST[dev], ENGINE_CPU_START_LIST[dev] +
@@ -179,12 +169,6 @@ static constexpr uint32_t kMAXRXOOO = 8;
 // Note that kSackBitmapSize must be <= half the maximum value of UINT_CSN.
 // E.g., UINT_CSN = 8bit, kSacBitmapSize <= 128.
 static constexpr std::size_t kSackBitmapSize = 64 << 1;
-// kFastRexmitDupAckThres equals to 1 means all duplicate acks are caused by
-// packet loss. This is true for flow-level ECMP, which is the common case. When
-// the network supports adaptive routing, duplicate acks may be caused by
-// adaptive routing. In this case, kFastRexmitDupAckThres should be set to a
-// value greater than 0.
-static constexpr std::size_t kFastRexmitDupAckThres = ROCE_NET ? 32 : 65536;
 
 // Maximum number of Retransmission Timeout (RTO) before aborting the flow.
 static constexpr uint32_t kRTOAbortThreshold = 50;
@@ -209,9 +193,3 @@ static constexpr bool kTestConstantRate = false;
 // Test lossy network.
 static constexpr bool kTestLoss = false;
 static constexpr double kTestLossRate = 0.0;
-// Disable RTO.
-static constexpr bool kTestNoRTO =
-    (ROCE_NET || kTestLoss)
-        ? false
-        : true;  // Infiniband is lossless, disable RTO even for UC.
-/// Debugging and testing.

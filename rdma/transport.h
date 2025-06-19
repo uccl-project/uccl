@@ -125,6 +125,10 @@ class UcclRDMAEngine {
         rto_tm_(kRTOUSec),
         kSlowTimerIntervalTsc_(us_to_cycles(kSlowTimerIntervalUs, freq_ghz)) {
     auto context = RDMAFactory::get_factory_dev(dev_)->context;
+    is_no_rto_ =
+        (RDMAFactory::is_roce(dev_) || kTestLoss)
+            ? false
+            : true;  // Infiniband is lossless, disable RTO even for UC.;
     struct ibv_values_ex values;
     values.comp_mask = IBV_VALUES_MASK_RAW_CLOCK;
     ibv_query_rt_values_ex(context, &values);
@@ -221,6 +225,8 @@ class UcclRDMAEngine {
     }
   }
 
+  inline bool is_no_rto() { return is_no_rto_; }
+
   // Called by application to shutdown the engine. App will need to join
   // the engine thread.
   inline void shutdown() { shutdown_ = true; }
@@ -269,7 +275,7 @@ class UcclRDMAEngine {
   uint64_t last_nic_clock_;
   double ratio_ = 0;
   double offset_ = 0;
-
+  bool is_no_rto_;
   // Whether shutdown is requested.
   std::atomic<bool> shutdown_{false};
 
@@ -326,50 +332,51 @@ class RDMAEndpoint {
 
   int num_engines_per_dev_;
   // Per-engine communication channel
-  Channel* channel_vec_[NUM_ENGINES * NUM_DEVICES];
+  std::vector<Channel*> channel_vec_;
   std::vector<std::unique_ptr<UcclRDMAEngine>> engine_vec_;
   std::unordered_map<int, std::unique_ptr<UcclRDMAEngine>>
       engine_id_to_engine_map_;
   std::vector<std::unique_ptr<std::thread>> engine_th_vec_;
 
   // Number of outstanding messages for each engine.
-  std::array<std::atomic<uint32_t>, NUM_ENGINES* NUM_DEVICES> engine_load_vec_ =
-      {};
+  std::vector<std::unique_ptr<std::atomic<uint32_t>>> engine_load_vec_;
 
   // Receiver-driven congestion control.
-  eqds::EQDS* eqds_[NUM_DEVICES] = {};
+  std::vector<eqds::EQDS*> eqds_;
 
   SharedPool<PollCtx*, true>* ctx_pool_;
   uint8_t* ctx_pool_buf_;
 
-  int test_listen_fds_[NUM_DEVICES];
+  std::vector<int> test_listen_fds_;
 
   std::mutex fd_vec_mu_;
   // Mapping from unique (within this engine) flow_id to the boostrap fd.
   std::vector<int> fd_vec_;
 
   // Peer map for connecting/accepting
-  std::unordered_map<UcclPeer, PeerInfo, UcclPeerHash> peer_map_[NUM_DEVICES];
-  std::mutex peer_map_mu_[NUM_DEVICES];
+  std::vector<std::unordered_map<UcclPeer, PeerInfo, UcclPeerHash>> peer_map_;
+  std::vector<std::unique_ptr<std::mutex>> peer_map_mu_;
 
-  std::unordered_map<UcclPeer, PeerInfo, UcclPeerHash>
-      peer_same_dev_map_[NUM_DEVICES][2];
-  std::mutex peer_same_dev_map_mu_[NUM_DEVICES][2];
+  std::vector<std::unordered_map<UcclPeer, PeerInfo, UcclPeerHash>>
+      peer_same_dev_map_[2];
+  std::vector<std::unique_ptr<std::mutex>> peer_same_dev_map_mu_[2];
 
-  std::atomic<PeerID> next_peer_id_[NUM_DEVICES] = {};
+  std::vector<std::unique_ptr<std::atomic<PeerID>>> next_peer_id_;
 
-  Spin flow_id_spin_[NUM_DEVICES][MAX_PEER];
-  FlowID next_flow_id_[NUM_DEVICES][MAX_PEER] = {};
+  std::vector<std::vector<Spin>> flow_id_spin_;
+  std::vector<std::vector<FlowID>> next_flow_id_;
 
-  std::vector<UcclFlow*> active_flows_vec_[NUM_DEVICES];
-  Spin active_flows_spin_[NUM_DEVICES];
+  std::vector<std::vector<UcclFlow*>> active_flows_vec_;
+  std::vector<Spin> active_flows_spin_;
 
  public:
-  RDMAEndpoint(uint8_t const* devname_suffix_list, int num_devices,
-               int num_engines_per_dev);
+  RDMAEndpoint(int num_engines_per_dev);
 
-  RDMAEndpoint(int num_devices, int num_engines_per_dev);
   ~RDMAEndpoint();
+
+  void initialize_resources(int total_num_engines);
+
+  void cleanup_resources();
 
   bool initialize_engine_by_dev(int dev, std::atomic<uint16_t>& port);
 
@@ -443,7 +450,7 @@ class RDMAEndpoint {
   }
 
   inline PeerID alloc_peer_id(int dev) {
-    return next_peer_id_[dev].fetch_add(1);
+    return next_peer_id_[dev]->fetch_add(1);
   }
 
  private:
@@ -486,11 +493,11 @@ class RDMAEndpoint {
                                UcclFlow* flow, bool is_send);
 
   inline void inc_load_on_engine(int engine_id) {
-    std::atomic_fetch_add(&engine_load_vec_[engine_id], 1);
+    engine_load_vec_[engine_id]->fetch_add(1);
   }
 
   inline void dec_load_on_engine(int engine_id) {
-    std::atomic_fetch_sub(&engine_load_vec_[engine_id], 1);
+    engine_load_vec_[engine_id]->fetch_sub(1);
   }
 
   // Find a least loaded engine and update the load for the given device.
@@ -551,8 +558,9 @@ class UcclFlow {
         remote_ip_(remote_ip),
         remote_dev_(remote_dev),
         is_send_(is_send) {
+    auto factory_dev = RDMAFactory::get_factory_dev(dev);
     for (int i = 0; i < NUM_ENGINES; i++) {
-      sub_flows_[i] = new SubUcclFlow(flow_id);
+      sub_flows_[i] = new SubUcclFlow(flow_id, factory_dev->link_bw);
     }
 
     memset(&send_comm_, 0, sizeof(send_comm_));
@@ -560,15 +568,13 @@ class UcclFlow {
 
     auto comm_base = is_send_ ? &send_comm_.base : &recv_comm_.base;
 
-    auto factory_dev = RDMAFactory::get_factory_dev(dev);
-
     // Fifo QP.
     comm_base->fifo_local_psn = BASE_PSN;
     util_rdma_create_qp(factory_dev->context, &comm_base->fifo_qp, IBV_QPT_RC,
                         false, false, &comm_base->flow_cq, false, kFifoCQSize,
-                        factory_dev->pd, &comm_base->fifo_mr, nullptr,
-                        kFifoMRSize, kMaxReq * kMaxRecv, kMaxReq * kMaxRecv, 1,
-                        1);
+                        factory_dev->pd, factory_dev->ib_port_num,
+                        &comm_base->fifo_mr, nullptr, kFifoMRSize,
+                        kMaxReq * kMaxRecv, kMaxReq * kMaxRecv, 1, 1);
     comm_base->fifo =
         reinterpret_cast<struct RemFifo*>(comm_base->fifo_mr->addr);
 
@@ -634,7 +640,7 @@ class UcclFlow {
     memset(&qpAttr, 0, sizeof(qpAttr));
     qpAttr.qp_state = IBV_QPS_INIT;
     qpAttr.pkey_index = 0;
-    qpAttr.port_num = IB_PORT_NUM;
+    qpAttr.port_num = factory_dev->ib_port_num;
     qpAttr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE;
 
     comm_base->rc_qp = ibv_create_qp(factory_dev->pd, &qp_init_attr);
@@ -670,11 +676,12 @@ class UcclFlow {
 
     // GPU flush QP for receiver.
     if (!is_send_) {
-      util_rdma_create_qp(
-          factory_dev->context, &recv_comm_.gpu_flush_qp, IBV_QPT_RC, false,
-          false, &comm_base->flow_cq, true, 0, factory_dev->pd,
-          &recv_comm_.gpu_flush_mr, &recv_comm_.gpu_flush, sizeof(int),
-          kMaxReq * kMaxRecv, kMaxReq * kMaxRecv, kMaxSge, kMaxSge);
+      util_rdma_create_qp(factory_dev->context, &recv_comm_.gpu_flush_qp,
+                          IBV_QPT_RC, false, false, &comm_base->flow_cq, true,
+                          0, factory_dev->pd, factory_dev->ib_port_num,
+                          &recv_comm_.gpu_flush_mr, &recv_comm_.gpu_flush,
+                          sizeof(int), kMaxReq * kMaxRecv, kMaxReq * kMaxRecv,
+                          kMaxSge, kMaxSge);
 
       recv_comm_.gpu_flush_sge.addr = (uint64_t)&recv_comm_.gpu_flush;
       recv_comm_.gpu_flush_sge.length = 1;
@@ -686,8 +693,9 @@ class UcclFlow {
                       "Failed to modify GPU flush QP to RTS");
     }
     // Avoid all flows using the same initial engine offset.
-    static std::atomic<uint32_t> off[NUM_DEVICES] = {};
-    next_engine_offset_ = off[dev].fetch_add(1) % NUM_ENGINES;
+    static std::vector<std::atomic<uint32_t>>* off =
+        new std::vector<std::atomic<uint32_t>>(num_devices);
+    next_engine_offset_ = (*off)[dev].fetch_add(1) % NUM_ENGINES;
   }
 
   ~UcclFlow() {
