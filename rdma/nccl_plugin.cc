@@ -199,7 +199,7 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
   serv_addr.sin_family = AF_INET;
   serv_addr.sin_addr.s_addr = INADDR_ANY;
 #ifdef LAZY_CREATE_ENGINE
-  serv_addr.sin_port = htons(listen_port.fetch_add(1) + dev * 1000);
+  serv_addr.sin_port = htons(listen_port.fetch_add(1) + dev * 500);
 #else
   serv_addr.sin_port = htons(listen_port.fetch_add(1));
 #endif
@@ -356,6 +356,7 @@ ncclResult_t pluginAccept(void* listenComm, void** recvComm,
 ncclResult_t pluginRegMr(void* collComm, void* data, size_t size, int type,
                          void** mhandle) {
   int ret;
+  printf("pluginRegMr, data: %p, size: %zu, type: %d\n", data, size, type);
   struct ucclBaseComm* base = (struct ucclBaseComm*)collComm;
   ret = ep->uccl_regmr((UcclFlow*)base->conn_id.context, data, size, type,
                        (struct Mhandle**)mhandle);
@@ -368,6 +369,9 @@ ncclResult_t pluginRegMrDmaBuf(void* collComm, void* data, size_t size,
                                int type, uint64_t offset, int fd,
                                void** mhandle) {
   int ret;
+  printf(
+      "pluginRegMrDmaBuf, data: %p, size: %zu, type: %d, offset: %lu, fd: %d\n",
+      data, size, type, offset, fd);
   struct ucclBaseComm* base = (struct ucclBaseComm*)collComm;
   ret = ep->uccl_regmr_dmabuf((UcclFlow*)base->conn_id.context, data, size,
                               type, offset, fd, (struct Mhandle**)mhandle);
