@@ -550,7 +550,8 @@ int RDMAContext::supply_rx_buff(struct ucclRequest* ureq) {
   memset(req->received_bytes, 0, sizeof(uint32_t) * kMaxRecv);
   req->fin_msg = 0;
 
-  UCCL_LOG_IO << "Really supply rx buff by posting buffers to FIFO QP.";
+  UCCL_LOG_IO << "Really supply rx buff by posting buffers to FIFO QP, rid#"
+              << get_recvreq_id(req);
 
   return 0;
 }
@@ -1708,7 +1709,7 @@ void RDMAContext::rx_rtx_data(struct list_head* ack_list) {
   auto req = get_recvreq_by_id(rid);
   if (req->type != RecvRequest::RECV || req->ureq->context != flow) {
     UCCL_LOG_IO << "Can't find corresponding request or this request is "
-                   "invalid for this retransmission chunk. Dropping.";
+                   "invalid for this retransmission chunk. Dropping. " << req->type;
     subflow->pcb.stats_retr_chunk_drop++;
     return;
   }
@@ -1818,7 +1819,7 @@ void RDMAContext::rc_rx_data(void) {
 
   if (req->type != RecvRequest::RECV || req->ureq->context != flow) {
     LOG(ERROR) << "Can't find corresponding request or this request is "
-                  "invalid for this chunk. Dropping.";
+                  "invalid for this chunk. Dropping. " << req->type;
     // This should never happen.
     CHECK(0);
     return;
@@ -1866,7 +1867,7 @@ void RDMAContext::rx_data(struct list_head* ack_list) {
   auto req = get_recvreq_by_id(rid);
   if (req->type != RecvRequest::RECV || req->ureq->context != flow) {
     UCCL_LOG_IO << "Can't find corresponding request or this request is "
-                   "invalid for this chunk. Dropping.";
+                   "invalid for this chunk. Dropping. ";
     subflow->pcb.stats_chunk_drop++;
     return;
   }

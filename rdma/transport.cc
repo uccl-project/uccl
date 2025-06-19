@@ -124,7 +124,7 @@ void UcclFlow::rc_recv(void* data, int size, struct Mhandle* mhandle,
   DCHECK(ibv_post_recv(comm_base->rc_qp, &recv_wr, &bad_recv_wr) == 0);
   flow_cq_cnt_++;
 
-  UCCL_LOG_EP << "rc_recv: provided buffer at recv slot" << slot;
+  UCCL_LOG_EP << "rc_recv: supplies buffer at recv slot: " << slot;
 
   rem_fifo->fifo_tail++;
 }
@@ -413,6 +413,15 @@ void UcclRDMAEngine::handle_rto() {
 /// TODO: handle error case
 void UcclRDMAEngine::process_ctl_reqs() {
   Channel::CtrlMsg ctrl_work;
+
+  // Process pending install flow works.
+  auto nr_pending_works = pending_install_flow_works_.size();
+  while (nr_pending_works--) {
+    auto ctrl_work = pending_install_flow_works_.front();
+    pending_install_flow_works_.pop_front();
+    handle_install_flow_on_engine(ctrl_work);
+  }
+
   while (jring_sc_dequeue_bulk(channel_->ctrl_cmdq_, &ctrl_work, 1, nullptr) ==
          1) {
     switch (ctrl_work.opcode) {
@@ -434,7 +443,11 @@ void UcclRDMAEngine::process_ctl_reqs() {
 
 void UcclRDMAEngine::handle_install_flow_on_engine(
     Channel::CtrlMsg& ctrl_work) {
-  DCHECK(rdma_ctx_map_.find(ctrl_work.peer_id) != rdma_ctx_map_.end());
+  
+  if (rdma_ctx_map_.find(ctrl_work.peer_id) == rdma_ctx_map_.end()) {
+    pending_install_flow_works_.push_back(ctrl_work);
+    return;
+  }
 
   auto* rdma_ctx = rdma_ctx_map_[ctrl_work.peer_id];
   auto* poll_ctx = ctrl_work.poll_ctx;
@@ -570,6 +583,10 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
 
       ret = modify_qp_rts(ctrl_qp, rdma_ctx->ctrl_local_psn_, false);
     }
+
+    UCCL_LOG_ENGINE << "Installed ctx: " << ctrl_work.peer_id
+                    << " on engine: " << engine_idx_
+                    << ", RDMAContext: " << rdma_ctx;
 
     uccl_wakeup(poll_ctx);
   });
@@ -787,6 +804,8 @@ PollCtx* RDMAEndpoint::install_ctx_on_engine(uint32_t engine_idx,
   while (jring_mp_enqueue_bulk(cmdq, &ctrl_msg, 1, nullptr) != 1) {
   }
 
+  UCCL_LOG_EP << "Request to install context on engine" << engine_idx << " for peer " << peer_id;
+
   return poll_ctx;
 }
 
@@ -815,7 +834,7 @@ void RDMAEndpoint::install_flow_on_engines(int dev, PeerID peer_id,
 }
 
 void RDMAEndpoint::install_ctx_on_engines(
-    int fd, int dev, PeerID peer_id, struct RemoteRDMAContext* remote_ctx) {
+    int fd, int dev, PeerID peer_id, std::string remote_ip, int remote_dev) {
   union CtrlMeta meta = {};
   auto* info = &meta.install_ctx;
 
@@ -833,22 +852,22 @@ void RDMAEndpoint::install_ctx_on_engines(
   ret = receive_message(fd, &info->remote_port_attr, sizeof(ibv_port_attr));
   DCHECK(ret == sizeof(ibv_port_attr)) << "Failed to receive PortAttr";
 
-  info->bootstrap_fd = fd;
+  // Update peer map. Let other connect() go ahead.
+  peer_map_mu_[dev].lock();
+  peer_map_[dev][{remote_ip, remote_dev}].ready = true;
+  peer_map_[dev][{remote_ip, remote_dev}].remote_gid = info->remote_gid;
+  peer_map_[dev][{remote_ip, remote_dev}].remote_port_attr =
+      info->remote_port_attr;
+  peer_map_mu_[dev].unlock();
 
-  std::vector<PollCtx*> poll_ctx_vec;
+  info->bootstrap_fd = fd;
 
   for (int i = 0; i < num_engines_per_dev_; i++) {
     auto engine_idx = find_first_engine_idx_on_dev(dev) + i;
     auto* poll_ctx = install_ctx_on_engine(engine_idx, peer_id, meta);
-    poll_ctx_vec.push_back(poll_ctx);
-  }
-
-  for (auto* poll_ctx : poll_ctx_vec) {
     uccl_poll(poll_ctx);
   }
 
-  remote_ctx->remote_gid = info->remote_gid;
-  remote_ctx->remote_port_attr = info->remote_port_attr;
 }
 
 ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
@@ -884,7 +903,7 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
 
   UCCL_LOG_EP << "connecting to "
               << "<" << remote_ip << ", " << remote_dev << ">:" << remote_port
-              << "local/remote gpuidx: " << local_gpuidx << "/"
+              << " local/remote gpuidx: " << local_gpuidx << "/"
               << remote_gpuidx;
 
   // Connect and set nonblocking and nodelay
@@ -898,8 +917,8 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   int flag = 1;
   setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
 
+  // 1. We only allocate a peer id when the first connect() is called.
   int first_call = 0;
-
   peer_map_mu_[dev].lock();
   auto it = peer_map_[dev].find({remote_ip, remote_dev});
   if (it == peer_map_[dev].end()) {
@@ -913,24 +932,21 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
 
   CHECK(peer_id < MAX_PEER);
 
+  // 2. For the first connect(), and should_install_ctx() returns true,
+  // we install RDMA context on all engines with the help of corresponding accept()
+  // at the other side.
   flag = first_call &&
          should_install_ctx(dev, local_gpuidx, factory_dev->local_ip_str,
                             remote_dev, remote_gpuidx, remote_ip);
 
+  // Send our dev, gpu and flag to the other side.
   int buf[3] = {dev, local_gpuidx, flag};
   ret = send_message(bootstrap_fd, buf, sizeof(int) * 3);
   DCHECK(ret == sizeof(int) * 3) << "uccl_connect: send_message()";
 
   if (flag) {
-    install_ctx_on_engines(bootstrap_fd, dev, peer_id, &remote_ctx);
-
-    // Update peer map.
-    peer_map_mu_[dev].lock();
-    peer_map_[dev][{remote_ip, remote_dev}].ready = true;
-    peer_map_[dev][{remote_ip, remote_dev}].remote_gid = remote_ctx.remote_gid;
-    peer_map_[dev][{remote_ip, remote_dev}].remote_port_attr =
-        remote_ctx.remote_port_attr;
-    peer_map_mu_[dev].unlock();
+    UCCL_LOG_EP << "connect: install_ctx_on_engines for dev/peer: " << dev << "/" << peer_id;
+    install_ctx_on_engines(bootstrap_fd, dev, peer_id, remote_ip, remote_dev);
   }
 
   {
@@ -949,9 +965,6 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   auto* flow =
       new UcclFlow(this, dev, peer_id, flow_id, remote_ip, remote_dev, true);
   DCHECK(flow);
-  active_flows_spin_[dev].Lock();
-  active_flows_vec_[dev].push_back(flow);
-  active_flows_spin_[dev].Unlock();
 
   install_flow_on_engines(dev, peer_id, flow_id, flow, true);
 
@@ -970,6 +983,10 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
     peer_map_mu_[dev].unlock();
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
+
+  active_flows_spin_[dev].Lock();
+  active_flows_vec_[dev].push_back(flow);
+  active_flows_spin_[dev].Unlock();
 
   flow->prepare_fifo(bootstrap_fd, dev, remote_ctx);
 
@@ -1024,15 +1041,8 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   }
 
   if (should_install_ctx) {
-    install_ctx_on_engines(bootstrap_fd, dev, peer_id, &remote_ctx);
-
-    // Update peer map.
-    peer_map_mu_[dev].lock();
-    peer_map_[dev][{remote_ip, *remote_dev}].ready = true;
-    peer_map_[dev][{remote_ip, *remote_dev}].remote_gid = remote_ctx.remote_gid;
-    peer_map_[dev][{remote_ip, *remote_dev}].remote_port_attr =
-        remote_ctx.remote_port_attr;
-    peer_map_mu_[dev].unlock();
+    UCCL_LOG_EP << "accept: install_ctx_on_engines for dev/peer: " << dev << "/" << peer_id;
+    install_ctx_on_engines(bootstrap_fd, dev, peer_id, remote_ip, *remote_dev);
   }
 
   // Negotiate FlowID with client.
@@ -1053,9 +1063,6 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   auto* flow =
       new UcclFlow(this, dev, peer_id, flow_id, remote_ip, *remote_dev, false);
   DCHECK(flow);
-  active_flows_spin_[dev].Lock();
-  active_flows_vec_[dev].push_back(flow);
-  active_flows_spin_[dev].Unlock();
 
   install_flow_on_engines(dev, peer_id, flow_id, flow, false);
 
@@ -1075,6 +1082,10 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
     peer_map_mu_[dev].unlock();
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
+
+  active_flows_spin_[dev].Lock();
+  active_flows_vec_[dev].push_back(flow);
+  active_flows_spin_[dev].Unlock();
 
   flow->prepare_fifo(bootstrap_fd, dev, remote_ctx);
 

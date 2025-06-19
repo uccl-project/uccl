@@ -258,6 +258,8 @@ class UcclRDMAEngine {
   // Pending tx work due to reaching the max outstanding bytes.
   std::deque<std::pair<RDMAContext*, struct ucclRequest*>> pending_tx_works_;
 
+  std::deque<Channel::CtrlMsg> pending_install_flow_works_;
+
   // Timestamp of last periodic process execution.
   uint64_t last_periodic_tsc_;
   // Slow timer interval in TSC.
@@ -469,7 +471,7 @@ class RDMAEndpoint {
                                   union CtrlMeta meta);
 
   void install_ctx_on_engines(int fd, int dev, PeerID peer_id,
-                              struct RemoteRDMAContext* remote_ctx);
+                              std::string remote_ip, int remote_dev);
 
   void install_flow_on_engines(int dev, PeerID peer_id, FlowID flow_id,
                                UcclFlow* flow, bool is_send);
@@ -603,7 +605,7 @@ class UcclFlow {
     auto fifo_rpsn = *reinterpret_cast<uint32_t*>(buf);
     auto fifo_rqpn = *reinterpret_cast<uint32_t*>(buf + sizeof(uint32_t));
 
-    UCCL_INIT_CHECK(modify_qp_rtr(comm_base->fifo_qp, dev, &remote_ctx_,
+    UCCL_INIT_CHECK(modify_qp_rtr(comm_base->fifo_qp, dev, &remote_ctx,
                                   fifo_rqpn, fifo_rpsn) == 0,
                     "Failed to modify Fifo QP to RTR");
     UCCL_INIT_CHECK(modify_qp_rts(comm_base->fifo_qp, fifo_lpsn, true) == 0,
@@ -673,7 +675,7 @@ class UcclFlow {
     auto rc_rpsn = *reinterpret_cast<uint32_t*>(buf);
     auto rc_rqpn = *reinterpret_cast<uint32_t*>(buf + sizeof(uint32_t));
 
-    UCCL_INIT_CHECK(modify_qp_rtr(comm_base->rc_qp, dev, &remote_ctx_, rc_rqpn,
+    UCCL_INIT_CHECK(modify_qp_rtr(comm_base->rc_qp, dev, &remote_ctx, rc_rqpn,
                                   rc_rpsn) == 0,
                     "Failed to modify RC QP to RTR");
 
@@ -775,7 +777,6 @@ class UcclFlow {
 
   int dev_;
   int remote_dev_;
-  struct RemoteRDMAContext remote_ctx_;
   std::string remote_ip_;
 
   /**
