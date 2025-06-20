@@ -3,7 +3,8 @@
 # Compiler and flags
 CXX := g++
 CXXFLAGS := -O3 -Wall -shared -std=c++17 -fPIC -I../include \
-	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable -Wno-comment
+	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable -Wno-comment \
+	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -lglog -lgflags -lgtest -lz -lelf -libverbs -lpthread
 
 # Python and pybind11 configuration
 PYTHON := python3
@@ -21,7 +22,7 @@ all: $(TARGET)
 
 # Build the shared library
 $(TARGET): $(OBJECTS)
-	$(CXX) $(CXXFLAGS) $(OBJECTS) -o $@ $(PYTHON_LDFLAGS)
+	$(CXX) $(OBJECTS) -o $@ $(PYTHON_LDFLAGS) $(CXXFLAGS)
 
 # Compile source files
 %.o: %.cc

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "util/cb.h"
 #include "util/jring.h"
 #include "util/util.h"
 #include <infiniband/verbs.h>
