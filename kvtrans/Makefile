@@ -2,7 +2,7 @@
 
 # Compiler and flags
 CXX := g++
-CXXFLAGS := -O3 -Wall -shared -std=c++11 -fPIC
+CXXFLAGS := -O3 -Wall -shared -std=c++11 -fPIC -I include/
 
 # Python and pybind11 configuration
 PYTHON := python3
