@@ -123,6 +123,7 @@ class UcclRDMAEngine {
         last_periodic_tsc_(rdtsc()),
         last_sync_clock_tsc_(rdtsc()),
         rto_tm_(kRTOUSec),
+        io_ctx_(dev),
         kSlowTimerIntervalTsc_(us_to_cycles(kSlowTimerIntervalUs, freq_ghz)) {
     auto context = RDMAFactory::get_factory_dev(dev_)->context;
     struct ibv_values_ex values;
@@ -259,6 +260,8 @@ class UcclRDMAEngine {
   std::deque<std::pair<RDMAContext*, struct ucclRequest*>> pending_tx_works_;
 
   std::deque<Channel::CtrlMsg> pending_install_flow_works_;
+
+  SharedIOContext io_ctx_;
 
   // Timestamp of last periodic process execution.
   uint64_t last_periodic_tsc_;

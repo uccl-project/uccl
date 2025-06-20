@@ -189,17 +189,17 @@ void UcclRDMAEngine::rc_handle_completion(void) {
     // Update ratio and offset
     it.second->update_clock(nic_ts_ratio_, nic_ts_offset_);
 
-    // Poll the CQ for data path QPs.
-    work += it.second->poll_rc_cq();
-
     if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
       work += it.second->poll_credit_cq();
       it.second->check_credit_rq(!work);
     }
-
-    // Foce check when there is no work.
-    it.second->check_srq(!work);
   }
+
+  io_ctx_.rc_poll_send_cq();
+
+  io_ctx_.rc_poll_recv_cq();
+
+  io_ctx_.check_srq(false);
 }
 
 void UcclRDMAEngine::uc_handle_completion(void) {
@@ -215,11 +215,11 @@ void UcclRDMAEngine::uc_handle_completion(void) {
       work += it.second->poll_credit_cq();
   }
 
+  io_ctx_.uc_poll_send_cq();
+  io_ctx_.uc_poll_recv_cq();
+
   for (auto& it : rdma_ctx_map_) {
-    // Poll the CQ for data path QPs.
-    work += it.second->poll_uc_cq();
     // Foce check when there is no work.
-    it.second->check_srq(!work);
     it.second->check_ctrl_rq(!work);
 
     it.second->poll_ctrl_cq();
@@ -227,6 +227,8 @@ void UcclRDMAEngine::uc_handle_completion(void) {
     if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS)
       it.second->check_credit_rq(!work);
   }
+
+  io_ctx_.check_srq(false);
 }
 
 void UcclRDMAEngine::handle_rx_work(void) {
@@ -505,7 +507,7 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
     // auto t1 = std::chrono::high_resolution_clock::now();
     rdma_ctx =
         RDMAFactory::CreateContext(&rto_tm_, &engine_outstanding_bytes_, eqds_,
-                                   dev, engine_idx_ % NUM_ENGINES, meta);
+                                   dev, engine_idx_ % NUM_ENGINES, meta, &io_ctx_);
     // auto t2 = std::chrono::high_resolution_clock::now();
     // std::cout << "create RDMAContext time: "
     //             << std::chrono::duration_cast<std::chrono::milliseconds>(t2 -
