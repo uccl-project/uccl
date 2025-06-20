@@ -1,168 +1,120 @@
-# PyBind11 Object-Oriented Hello World Project
+# KVTrans Engine - High-Performance RDMA KV Cache Transfer
 
-This project demonstrates how to use pybind11 to expose C++ classes to Python, creating a truly object-oriented API that maintains state and provides rich functionality.
+KVTrans Engine is a high-performance, RDMA-based KV cache transfer system designed for distributed machine learning and high-throughput data processing applications. It provides a Python API for seamless integration with NumPy arrays and other data structures while leveraging the performance of InfiniBand RDMA for ultra-low latency communication.
 
 ## Project Structure
 
 ```
 kvtrans/
-├── hello.h           # Header file with Greeter class declaration
-├── hello.cc          # C++ implementation file with Greeter class methods
-├── pybind_hello.cc   # pybind11 wrapper code to expose the class
+├── engine.h          # C++ Engine class header with RDMA functionality
+├── engine.cc         # C++ Engine implementation
+├── pybind_engine.cc  # pybind11 wrapper for Python integration
 ├── Makefile          # Build configuration
-├── test_hello.py     # Python test script demonstrating OOP usage
+├── test_engine.py    # Comprehensive test suite
+├── demo.py           # Usage demonstration
 └── README.md         # This file
 ```
 
-## Key Features
-
-### Object-Oriented Design
-- **C++ Class**: `Greeter` class with private state and public methods
-- **State Management**: Maintains greeting history and counts
-- **Encapsulation**: Private member variables with controlled access
-- **Python Integration**: Seamlessly exposes C++ objects to Python
-
-### Rich Functionality
-- **Customizable Greetings**: Default and custom greeting messages
-- **History Tracking**: Keeps track of all greetings performed
-- **Mathematical Operations**: Basic arithmetic with different data types
-- **State Inspection**: Methods to query and modify internal state
-
 ## Prerequisites
 
-- Python 3.x with development headers
+### System Requirements
+- Linux with InfiniBand support (optional for development)
+- Python 3.7+ with development headers
+- C++17 compatible compiler (GCC 7+ or Clang 5+)
 - pybind11 library
-- C++ compiler (g++) with C++11 support
+- NumPy (for array operations)
+
+### Optional Dependencies
+- InfiniBand drivers and libraries (`libibverbs-dev`)
+- RDMA-capable network hardware
 
 ## Installation
 
-1. Install pybind11 if not already installed:
+1. **Install Python dependencies:**
    ```bash
    make install-deps
    ```
 
-2. Build the module:
+2. **Build the module:**
    ```bash
    make
    ```
 
-3. Run the comprehensive tests:
+3. **Run tests:**
    ```bash
    make test
    ```
 
 ## Usage Examples
 
-### Basic Usage
+### Basic Engine Setup
 
 ```python
-import hello_module
+import kvtrans_engine
+import numpy as np
 
-# Create a greeter with default greeting
-greeter = hello_module.Greeter()
-print(greeter)  # Shows object representation
-
-# Create a greeter with custom greeting
-custom_greeter = hello_module.Greeter("Howdy")
-
-# Greet someone
-greeting = greeter.greet("World")
-print(greeting)  # Output: Hello, World! Welcome to pybind11 OOP!
-
-# Use custom greeting for specific call
-special_greeting = greeter.greet("Developer", "Welcome")
-print(special_greeting)  # Output: Welcome, Developer! Welcome to pybind11 OOP!
+# Create engine with network interface, CPUs, connections per CPU, and listen port
+engine = kvtrans_engine.Engine("eth0", ncpus=4, nconn_per_cpu=8, listen_port=12345)
 ```
 
-### State Management
+### Client-Side Connection
 
 ```python
-# Check greeting statistics
-count = greeter.get_greeting_count()
-history = greeter.get_greeting_history()
-
-# Modify default greeting
-greeter.set_default_greeting("Hi there")
-current_greeting = greeter.get_default_greeting()
-
-# Get comprehensive summary
-summary = greeter.get_summary()
-print(summary)
-
-# Clear history
-greeter.clear_history()
+# Connect to remote server
+success, conn_id = engine.connect("192.168.1.100", 12345)
+if success:
+    print(f"Connected with connection ID: {conn_id}")
 ```
 
-### Mathematical Operations
+### Server-Side Connection
 
 ```python
-# Integer arithmetic
-result = greeter.add_numbers(5, 3)
-print(result)  # Output: 8
-
-# Floating-point arithmetic
-product = greeter.multiply_numbers(2.5, 4.0)
-print(product)  # Output: 10.0
+# Accept incoming connection
+success, client_ip, client_port, conn_id = engine.accept()
+if success:
+    print(f"Accepted connection from {client_ip}:{client_port}")
 ```
 
-### Multiple Independent Objects
+### Key-Value Operations
 
 ```python
-# Create multiple greeters with different personalities
-formal_greeter = hello_module.Greeter("Good day")
-casual_greeter = hello_module.Greeter("Hey")
+# Create and register data
+data = np.array([1, 2, 3, 4, 5], dtype=np.float32)
+success, kv_id = engine.reg_kv(conn_id, data)
 
-# Each maintains its own state
-formal_greeter.greet("Professor")
-casual_greeter.greet("Friend")
-
-# Independent greeting counts
-print(f"Formal: {formal_greeter.get_greeting_count()}")
-print(f"Casual: {casual_greeter.get_greeting_count()}")
+# Send data
+if success:
+    engine.send_kv(kv_id, data)
+    
+# Receive data
+success, received_data = engine.recv_kv(kv_id, max_size=1024)
+if success:
+    print(f"Received: {received_data}")
 ```
 
-## Available Make Targets
+### NumPy Array Transfer
 
-- `make all` (default) - Build the pybind11 module
-- `make clean` - Remove build artifacts
-- `make test` - Run the comprehensive OOP test suite
-- `make install-deps` - Install pybind11 dependency
-- `make help` - Show available targets
+```python
+# Create large NumPy arrays
+large_array = np.random.rand(1000, 1000).astype(np.float32)
+weights = np.random.rand(256, 256).astype(np.float64)
 
-## Greeter Class API
+# Register arrays for RDMA transfer
+success1, kv_id1 = engine.reg_kv(conn_id, large_array)
+success2, kv_id2 = engine.reg_kv(conn_id, weights)
 
-### Constructor
-- `Greeter(default_greeting="Hello")` - Create a new greeter with optional default greeting
+# High-speed transfer
+engine.send_kv(kv_id1, large_array)
+engine.send_kv(kv_id2, weights)
+```
 
-### Greeting Methods
-- `greet(name, custom_greeting="")` - Greet someone with default or custom greeting
-- `get_greeting_count()` - Get the total number of greetings performed
-- `get_greeting_history()` - Get list of all greetings performed
+## Development and Testing
 
-### Configuration Methods
-- `set_default_greeting(new_greeting)` - Change the default greeting
-- `get_default_greeting()` - Get the current default greeting
-- `clear_history()` - Reset greeting history and count
-
-### Mathematical Methods
-- `add_numbers(a, b)` - Add two integers
-- `multiply_numbers(a, b)` - Multiply two floating-point numbers
-
-### Utility Methods
-- `get_summary()` - Get a formatted summary of the greeter's state
-
-## Object-Oriented Benefits
-
-1. **Encapsulation**: Internal state is protected and accessed through controlled methods
-2. **State Persistence**: Each greeter instance maintains its own history and configuration
-3. **Reusability**: Multiple greeter instances can coexist with different behaviors
-4. **Extensibility**: Easy to add new methods and functionality to the class
-5. **Pythonic**: Feels natural to Python developers while leveraging C++ performance
-
-## Design Patterns Demonstrated
-
-- **Constructor Overloading**: Default and custom initialization
-- **Method Overloading**: Methods with optional parameters
-- **State Management**: Private members with public accessors
-- **RAII**: Proper resource management through constructor/destructor
-- **Const Correctness**: Read-only methods marked as const 
+### Build Targets
+```bash
+make all          # Build the module
+make clean        # Clean build artifacts
+make test         # Run test suite
+make install-deps # Install dependencies
+make help         # Show help
+```

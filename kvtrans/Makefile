@@ -1,8 +1,8 @@
-# Makefile for pybind11 hello world project
+# Makefile for KVTrans Engine pybind11 project
 
 # Compiler and flags
 CXX := g++
-CXXFLAGS := -O3 -Wall -shared -std=c++11 -fPIC -I include/
+CXXFLAGS := -O3 -Wall -shared -std=c++17 -fPIC -I../include
 
 # Python and pybind11 configuration
 PYTHON := python3
@@ -11,8 +11,8 @@ PYBIND11_INCLUDES := $(shell $(PYTHON) -m pybind11 --includes)
 PYTHON_LDFLAGS := $(shell $(PYTHON_CONFIG) --ldflags)
 
 # Target and source files
-TARGET := hello_module$(shell $(PYTHON_CONFIG) --extension-suffix)
-SOURCES := hello.cc pybind_hello.cc
+TARGET := kvtrans_engine$(shell $(PYTHON_CONFIG) --extension-suffix)
+SOURCES := engine.cc pybind_engine.cc
 OBJECTS := $(SOURCES:.cc=.o)
 
 # Default target
@@ -32,7 +32,7 @@ clean:
 
 # Test the module
 test: $(TARGET)
-	$(PYTHON) test_hello.py
+	$(PYTHON) test_engine.py
 
 # Install pybind11 if not available
 install-deps:
