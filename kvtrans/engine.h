@@ -1,12 +1,70 @@
 #pragma once
 
 #include "util/jring.h"
+#include "util/util.h"
 #include <infiniband/verbs.h>
+#include <pybind11/pybind11.h>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <tuple>
 #include <unordered_map>
 #include <vector>
+
+namespace py = pybind11;
+
+// This is a workaround to avoid blocking the main thread.
+inline void long_running_func() {
+  py::gil_scoped_release release;
+  std::this_thread::sleep_for(std::chrono::seconds(2));
+}
+
+struct alignas(64) UcclRequest {
+  uint32_t ip_addr;
+  uint16_t port;
+  int conn_id;
+  uint64_t kv_id;
+  void* data;
+  size_t size;
+};
+
+struct alignas(64) UcclResponse {
+  uint32_t ip_addr;
+  uint16_t port;
+  int conn_id;
+  uint64_t kv_id;
+  bool success;
+};
+
+class Channel {
+  constexpr static uint32_t kChannelSize = 1024;
+
+ public:
+  struct alignas(64) CMD {
+    enum Opcode : uint8_t { kConnect, kAccept, kRegKV, kSendKV, kRecvKV };
+    Opcode opcode;
+    UcclRequest* ureq;
+    UcclResponse* uresp;
+    uccl::PollCtx* poll_ctx;
+  };
+  static_assert(sizeof(CMD) % 4 == 0, "Channel::CMD must be 32-bit aligned");
+
+  Channel() {
+    tx_cmdq_ = uccl::create_ring(sizeof(CMD), kChannelSize);
+    rx_cmdq_ = uccl::create_ring(sizeof(CMD), kChannelSize);
+    ctrl_cmdq_ = uccl::create_ring(sizeof(CMD), kChannelSize);
+  }
+
+  ~Channel() {
+    free(tx_cmdq_);
+    free(rx_cmdq_);
+    free(ctrl_cmdq_);
+  }
+
+  jring_t* tx_cmdq_;
+  jring_t* rx_cmdq_;
+  jring_t* ctrl_cmdq_;
+};
 
 struct MR {
   int mr_id_;
@@ -103,11 +161,13 @@ class Engine {
   uint32_t ncpus_;
   uint32_t nconn_per_cpu_;
   uint16_t listen_port_;
+  int listen_fd_;
 
+  std::mutex conn_id_to_conn_mutex_;
   std::unordered_map<int, Conn*> conn_id_to_conn_;
+  std::mutex kv_id_to_conn_and_mr_mutex_;
   std::unordered_map<uint64_t, std::tuple<Conn*, MR*>> kv_id_to_conn_and_mr_;
 
-  std::vector<jring_t> channels_;
+  std::vector<Channel*> channels_;
   std::vector<std::thread> engine_threads_;
-  std::thread tcp_listener_;
 };

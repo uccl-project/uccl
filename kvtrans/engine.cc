@@ -19,6 +19,9 @@ Engine::Engine(std::string const& if_name, const uint32_t ncpus,
             << ", CPUs: " << ncpus << ", connections per CPU: " << nconn_per_cpu
             << ", listen port: " << listen_port << std::endl;
 
+  // Create listen socket
+  uccl::create_listen_socket(&listen_fd_, listen_port);
+
   // Initialize channels and threads
   channels_.resize(ncpus);
   engine_threads_.reserve(ncpus);
@@ -27,8 +30,8 @@ Engine::Engine(std::string const& if_name, const uint32_t ncpus,
   // In a real implementation, you'd initialize InfiniBand resources here
   for (uint32_t i = 0; i < ncpus; ++i) {
     // Initialize ring buffer for each CPU
-    // jring_init(&channels_[i], 1024);  // Commented out as jring.h might not
-    // be available
+    Channel* channel = new Channel();
+    channels_[i] = channel;
 
     // Create engine threads
     engine_threads_.emplace_back(&Engine::engine_thread, this);
@@ -42,11 +45,22 @@ Engine::~Engine() {
 
   // Clean up connections
   for (auto& [conn_id, conn] : conn_id_to_conn_) {
-    if (conn) {
-      // Clean up InfiniBand resources
-      delete conn;
-    }
+    if (conn) delete conn;
   }
+
+  // Clean up MRs
+  for (auto& [kv_id, conn_and_mr] : kv_id_to_conn_and_mr_) {
+    auto mr = std::get<1>(conn_and_mr);
+    if (mr) delete mr;
+  }
+
+  // Clean up channels
+  for (auto& channel : channels_) {
+    delete channel;
+  }
+
+  // Clean up listen socket
+  close(listen_fd_);
 
   // Wait for threads to finish
   for (auto& thread : engine_threads_) {
@@ -70,12 +84,9 @@ bool Engine::connect(std::string const& ip_addr, uint16_t const& port,
   conn->conn_id_ = conn_id;
   conn->port_ = port;
 
-  // In a real implementation, you would:
-  // 1. Create TCP connection
-  // 2. Exchange RDMA connection parameters
-  // 3. Create InfiniBand QP, CQ, etc.
+  // TODO(Yang): passing information for engine threads and wait for engine
+  // threads finishing the connection building.
 
-  // For demo purposes, simulate successful connection
   conn_id_to_conn_[conn_id] = conn;
 
   std::cout << "Connected successfully with conn_id: " << conn_id << std::endl;

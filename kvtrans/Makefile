@@ -2,7 +2,8 @@
 
 # Compiler and flags
 CXX := g++
-CXXFLAGS := -O3 -Wall -shared -std=c++17 -fPIC -I../include
+CXXFLAGS := -O3 -Wall -shared -std=c++17 -fPIC -I../include \
+	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable -Wno-comment
 
 # Python and pybind11 configuration
 PYTHON := python3
