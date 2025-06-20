@@ -176,7 +176,8 @@ RDMAContext* RDMAFactory::CreateContext(TimerManager* rto,
                                         uint32_t* engine_unacked_bytes,
                                         eqds::EQDS* eqds, int dev,
                                         uint32_t engine_offset,
-                                        union CtrlMeta meta, SharedIOContext *io_ctx) {
+                                        union CtrlMeta meta,
+                                        SharedIOContext* io_ctx) {
   RDMAContext* ctx = nullptr;
 
   if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS)
@@ -195,7 +196,7 @@ RDMAContext* RDMAFactory::CreateContext(TimerManager* rto,
 
 RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
                          eqds::EQDS* eqds, int dev, uint32_t engine_offset,
-                         union CtrlMeta meta, SharedIOContext *io_ctx)
+                         union CtrlMeta meta, SharedIOContext* io_ctx)
     : rto_(rto),
       engine_unacked_bytes_(engine_unacked_bytes),
       eqds_(eqds),
@@ -938,7 +939,7 @@ void RDMAContext::uc_send_acks() {
   INIT_LIST_HEAD(&ack_list_);
 }
 
-void RDMAContext::rc_rx_ack(struct ibv_cq_ex *cq_ex) {
+void RDMAContext::rc_rx_ack(struct ibv_cq_ex* cq_ex) {
   auto now = rdtsc();
 
   auto wr_id = cq_ex->wr_id;
@@ -1047,38 +1048,39 @@ void RDMAContext::check_ctrl_rq(bool force) {
   }
 }
 
-void SharedIOContext::check_srq(bool force)
-{
+void SharedIOContext::check_srq(bool force) {
   auto n_post_srq = get_post_srq_cnt();
   if (!force && n_post_srq < kPostRQThreshold) return;
 
   int post_batch = std::min(kPostRQThreshold, (uint32_t)n_post_srq);
 
-    for (int i = 0; i < post_batch; i++) {
-        if constexpr (!kRCMode) {
-          auto chunk_addr = pop_retr_chunk();
-          dp_recv_wrs_.recv_sges[i].addr = chunk_addr;
-          dp_recv_wrs_.recv_sges[i].length = RetrChunkBuffPool::kRetrChunkSize;
-          dp_recv_wrs_.recv_sges[i].lkey = get_retr_chunk_lkey();
-          dp_recv_wrs_.recv_wrs[i].num_sge = 1;
-          dp_recv_wrs_.recv_wrs[i].sg_list = &dp_recv_wrs_.recv_sges[i];
-          dp_recv_wrs_.recv_wrs[i].next = (i == post_batch - 1) ? nullptr : &dp_recv_wrs_.recv_wrs[i + 1];
-          
-          CQEDesc *cqe_desc = pop_cqe_desc();
-          cqe_desc->data = (uint64_t)chunk_addr;
-          dp_recv_wrs_.recv_wrs[i].wr_id = (uint64_t)cqe_desc;
-        } else {
-          dp_recv_wrs_.recv_wrs[i].num_sge = 0;
-          dp_recv_wrs_.recv_wrs[i].sg_list = nullptr;
-          dp_recv_wrs_.recv_wrs[i].next = (i == post_batch - 1) ? nullptr : &dp_recv_wrs_.recv_wrs[i + 1];
-          dp_recv_wrs_.recv_wrs[i].wr_id = 0;
-        }
-    }
+  for (int i = 0; i < post_batch; i++) {
+    if constexpr (!kRCMode) {
+      auto chunk_addr = pop_retr_chunk();
+      dp_recv_wrs_.recv_sges[i].addr = chunk_addr;
+      dp_recv_wrs_.recv_sges[i].length = RetrChunkBuffPool::kRetrChunkSize;
+      dp_recv_wrs_.recv_sges[i].lkey = get_retr_chunk_lkey();
+      dp_recv_wrs_.recv_wrs[i].num_sge = 1;
+      dp_recv_wrs_.recv_wrs[i].sg_list = &dp_recv_wrs_.recv_sges[i];
+      dp_recv_wrs_.recv_wrs[i].next =
+          (i == post_batch - 1) ? nullptr : &dp_recv_wrs_.recv_wrs[i + 1];
 
-    struct ibv_recv_wr* bad_wr;
-    DCHECK(ibv_post_srq_recv(srq_, &dp_recv_wrs_.recv_wrs[0], &bad_wr) == 0);
-    UCCL_LOG_IO << "Posted " << post_batch << " recv requests for SRQ";
-    dec_post_srq(post_batch);
+      CQEDesc* cqe_desc = pop_cqe_desc();
+      cqe_desc->data = (uint64_t)chunk_addr;
+      dp_recv_wrs_.recv_wrs[i].wr_id = (uint64_t)cqe_desc;
+    } else {
+      dp_recv_wrs_.recv_wrs[i].num_sge = 0;
+      dp_recv_wrs_.recv_wrs[i].sg_list = nullptr;
+      dp_recv_wrs_.recv_wrs[i].next =
+          (i == post_batch - 1) ? nullptr : &dp_recv_wrs_.recv_wrs[i + 1];
+      dp_recv_wrs_.recv_wrs[i].wr_id = 0;
+    }
+  }
+
+  struct ibv_recv_wr* bad_wr;
+  DCHECK(ibv_post_srq_recv(srq_, &dp_recv_wrs_.recv_wrs[0], &bad_wr) == 0);
+  UCCL_LOG_IO << "Posted " << post_batch << " recv requests for SRQ";
+  dec_post_srq(post_batch);
 }
 
 void RDMAContext::drain_rtx_queue(SubUcclFlow* subflow) {
@@ -1449,8 +1451,8 @@ void RDMAContext::try_update_csn(SubUcclFlow* subflow) {
   }
 }
 
-void RDMAContext::uc_rx_rtx_chunk(struct ibv_cq_ex *cq_ex, uint64_t chunk_addr) {
-  
+void RDMAContext::uc_rx_rtx_chunk(struct ibv_cq_ex* cq_ex,
+                                  uint64_t chunk_addr) {
   UCCL_LOG_IO << "uc_rx_rtx_chunk";
   auto now = rdtsc();
 
@@ -1564,7 +1566,7 @@ void RDMAContext::uc_rx_rtx_chunk(struct ibv_cq_ex *cq_ex, uint64_t chunk_addr) 
   return;
 }
 
-void RDMAContext::rc_rx_chunk(struct ibv_cq_ex *cq_ex) {
+void RDMAContext::rc_rx_chunk(struct ibv_cq_ex* cq_ex) {
   auto byte_len = ibv_wc_read_byte_len(cq_ex);
   auto imm_data = IMMData(ntohl(ibv_wc_read_imm_data(cq_ex)));
 
@@ -1611,7 +1613,7 @@ void RDMAContext::rc_rx_chunk(struct ibv_cq_ex *cq_ex) {
   EventOnRxData(subflow, &imm_data);
 }
 
-void RDMAContext::uc_rx_chunk(struct ibv_cq_ex *cq_ex) {
+void RDMAContext::uc_rx_chunk(struct ibv_cq_ex* cq_ex) {
   auto now = rdtsc();
   auto byte_len = ibv_wc_read_byte_len(cq_ex);
   auto imm_data = IMMData(ntohl(ibv_wc_read_imm_data(cq_ex)));
@@ -1968,19 +1970,20 @@ int SharedIOContext::rc_poll_recv_cq(void) {
 
   while (1) {
     if (cq_ex->status != IBV_WC_SUCCESS) {
-      LOG(ERROR) << "data path CQ state error: " << cq_ex->status << " from QP:" << ibv_wc_read_qp_num(cq_ex);
+      LOG(ERROR) << "data path CQ state error: " << cq_ex->status
+                 << " from QP:" << ibv_wc_read_qp_num(cq_ex);
       ibv_next_poll(cq_ex);
     }
 
-    auto *cqe_desc = (CQEDesc*)cq_ex->wr_id;
-    auto *rdma_ctx = qpn_to_rdma_ctx(ibv_wc_read_qp_num(cq_ex));
-    
+    auto* cqe_desc = (CQEDesc*)cq_ex->wr_id;
+    auto* rdma_ctx = qpn_to_rdma_ctx(ibv_wc_read_qp_num(cq_ex));
+
     rdma_ctx->rc_rx_chunk(cq_ex);
-    
+
     inc_post_srq();
 
     push_cqe_desc(cqe_desc);
-    
+
     if (++cq_budget == kMaxBatchCQ || ibv_next_poll(cq_ex)) break;
   }
 
@@ -1998,13 +2001,14 @@ int SharedIOContext::rc_poll_send_cq(void) {
 
   while (1) {
     if (cq_ex->status != IBV_WC_SUCCESS) {
-      LOG(ERROR) << "data path CQ state error: " << cq_ex->status << " from QP:" << ibv_wc_read_qp_num(cq_ex);
+      LOG(ERROR) << "data path CQ state error: " << cq_ex->status
+                 << " from QP:" << ibv_wc_read_qp_num(cq_ex);
       ibv_next_poll(cq_ex);
     }
 
-    auto *cqe_desc = (CQEDesc*)cq_ex->wr_id;
-    auto *rdma_ctx = qpn_to_rdma_ctx(ibv_wc_read_qp_num(cq_ex));
-    
+    auto* cqe_desc = (CQEDesc*)cq_ex->wr_id;
+    auto* rdma_ctx = qpn_to_rdma_ctx(ibv_wc_read_qp_num(cq_ex));
+
     rdma_ctx->rc_rx_ack(cq_ex);
 
     push_cqe_desc(cqe_desc);
@@ -2025,11 +2029,12 @@ int SharedIOContext::uc_poll_send_cq(void) {
 
   while (1) {
     if (cq_ex->status != IBV_WC_SUCCESS) {
-      LOG(ERROR) << "data path CQ state error: " << cq_ex->status << " from QP:" << ibv_wc_read_qp_num(cq_ex);
+      LOG(ERROR) << "data path CQ state error: " << cq_ex->status
+                 << " from QP:" << ibv_wc_read_qp_num(cq_ex);
       ibv_next_poll(cq_ex);
     }
 
-    auto *cqe_desc = (CQEDesc *)cq_ex->wr_id;
+    auto* cqe_desc = (CQEDesc*)cq_ex->wr_id;
 
     if (cqe_desc) {
       auto retr_hdr = (uint64_t)cqe_desc->data;
@@ -2056,17 +2061,18 @@ int SharedIOContext::uc_poll_recv_cq(void) {
 
   while (1) {
     if (cq_ex->status != IBV_WC_SUCCESS) {
-      LOG(ERROR) << "data path CQ state error: " << cq_ex->status << " from QP:" << ibv_wc_read_qp_num(cq_ex);
+      LOG(ERROR) << "data path CQ state error: " << cq_ex->status
+                 << " from QP:" << ibv_wc_read_qp_num(cq_ex);
       ibv_next_poll(cq_ex);
     }
-    
+
     auto qp_num = ibv_wc_read_qp_num(cq_ex);
-    auto *rdma_ctx = qpn_to_rdma_ctx(qp_num);
-    
-    auto *cqe_desc = (CQEDesc *)cq_ex->wr_id;
+    auto* rdma_ctx = qpn_to_rdma_ctx(qp_num);
+
+    auto* cqe_desc = (CQEDesc*)cq_ex->wr_id;
     auto chunk_addr = (uint64_t)cqe_desc->data;
     auto opcode = ibv_wc_read_opcode(cq_ex);
-    
+
     if (likely(opcode == IBV_WC_RECV_RDMA_WITH_IMM)) {
       // Common case.
       rdma_ctx->uc_rx_chunk(cq_ex);
@@ -2078,7 +2084,7 @@ int SharedIOContext::uc_poll_recv_cq(void) {
     rdma_ctxs.push_back(rdma_ctx);
 
     push_retr_chunk(chunk_addr);
-    
+
     push_cqe_desc(cqe_desc);
 
     inc_post_srq();

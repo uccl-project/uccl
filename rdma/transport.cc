@@ -505,9 +505,9 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
   {
     DCHECK(rdma_ctx_map_.find(ctrl_work.peer_id) == rdma_ctx_map_.end());
     // auto t1 = std::chrono::high_resolution_clock::now();
-    rdma_ctx =
-        RDMAFactory::CreateContext(&rto_tm_, &engine_outstanding_bytes_, eqds_,
-                                   dev, engine_idx_ % NUM_ENGINES, meta, &io_ctx_);
+    rdma_ctx = RDMAFactory::CreateContext(&rto_tm_, &engine_outstanding_bytes_,
+                                          eqds_, dev, engine_idx_ % NUM_ENGINES,
+                                          meta, &io_ctx_);
     // auto t2 = std::chrono::high_resolution_clock::now();
     // std::cout << "create RDMAContext time: "
     //             << std::chrono::duration_cast<std::chrono::milliseconds>(t2 -

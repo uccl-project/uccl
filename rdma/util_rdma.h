@@ -78,11 +78,12 @@ struct CQEDesc {
 };
 
 class CQEDescPool : public BuffPool {
-public:
+ public:
   static constexpr uint32_t kDescSize = sizeof(struct CQEDesc);
   static constexpr uint32_t kNumDesc = 4 * 65536;
-  static_assert((kNumDesc & (kNumDesc - 1)) == 0, "kNumDesc must be power of 2");
-  CQEDescPool(struct ibv_mr *mr) : BuffPool(kNumDesc, kDescSize, mr) {}
+  static_assert((kNumDesc & (kNumDesc - 1)) == 0,
+                "kNumDesc must be power of 2");
+  CQEDescPool(struct ibv_mr* mr) : BuffPool(kNumDesc, kDescSize, mr) {}
 
   ~CQEDescPool() = default;
 };
@@ -582,11 +583,9 @@ class SharedIOContext;
  * PD, and MR.
  */
 class RDMAContext {
-
  private:
-  
   SharedIOContext* io_ctx_;
-  
+
   // Offset of the engine this context belongs to. 0, 1, ... kNumEngine - 1.
   uint32_t engine_offset_;
 
@@ -829,7 +828,7 @@ class RDMAContext {
    */
   void drain_rtx_queue(SubUcclFlow* subflow);
 
-  void uc_rx_chunk(struct ibv_cq_ex *cq_ex);
+  void uc_rx_chunk(struct ibv_cq_ex* cq_ex);
 
   void uc_send_acks();
 
@@ -839,7 +838,7 @@ class RDMAContext {
    */
   void rx_ack(uint64_t pkt_addr);
 
-  void uc_rx_rtx_chunk(struct ibv_cq_ex *cq_ex, uint64_t chunk_addr);
+  void uc_rx_rtx_chunk(struct ibv_cq_ex* cq_ex, uint64_t chunk_addr);
 
   /**
    * @brief Receive a credit.
@@ -936,14 +935,15 @@ class RDMAContext {
     }
   }
 
-  void rc_rx_ack(struct ibv_cq_ex *cq_ex);
+  void rc_rx_ack(struct ibv_cq_ex* cq_ex);
 
-  void rc_rx_chunk(struct ibv_cq_ex *cq_ex);
+  void rc_rx_chunk(struct ibv_cq_ex* cq_ex);
 
   std::string to_string();
 
   RDMAContext(TimerManager* rto, uint32_t* ob, eqds::EQDS* eqds, int dev,
-              uint32_t engine_offset, union CtrlMeta meta, SharedIOContext *io_ctx);
+              uint32_t engine_offset, union CtrlMeta meta,
+              SharedIOContext* io_ctx);
 
   ~RDMAContext(void);
 
@@ -1186,7 +1186,8 @@ class RDMAFactory {
                                     uint32_t* engine_unacked_bytes,
                                     eqds::EQDS* eqds, int dev,
                                     uint32_t engine_offset_,
-                                    union CtrlMeta meta, SharedIOContext *io_ctx);
+                                    union CtrlMeta meta,
+                                    SharedIOContext* io_ctx);
   static inline struct FactoryDevice* get_factory_dev(int dev) {
     DCHECK(dev >= 0 && dev < rdma_ctl->devices_.size());
     return &rdma_ctl->devices_[dev];
@@ -1492,12 +1493,14 @@ static inline struct ibv_srq* util_rdma_create_srq(struct ibv_pd* pd,
   return srq;
 }
 
-static inline struct ibv_mr *util_rdma_create_host_memory_mr(struct ibv_pd *pd, size_t size)
-{
-  struct ibv_mr *mr = nullptr;
-  void *addr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+static inline struct ibv_mr* util_rdma_create_host_memory_mr(struct ibv_pd* pd,
+                                                             size_t size) {
+  struct ibv_mr* mr = nullptr;
+  void* addr = mmap(nullptr, size, PROT_READ | PROT_WRITE,
+                    MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
   UCCL_INIT_CHECK(addr != MAP_FAILED, "mmap failed");
-  mr = ibv_reg_mr(pd, addr, size, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+  mr = ibv_reg_mr(pd, addr, size,
+                  IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
   UCCL_INIT_CHECK(mr != nullptr, "ibv_reg_mr failed");
   return mr;
 }
@@ -1613,7 +1616,7 @@ static inline int util_rdma_get_mtu_from_ibv_mtu(ibv_mtu mtu) {
 }
 
 class SharedIOContext {
-public:
+ public:
   constexpr static int kRetrMRSize =
       RetrChunkBuffPool::kRetrChunkSize * RetrChunkBuffPool::kNumChunk;
   SharedIOContext(int dev) {
@@ -1633,13 +1636,15 @@ public:
     UCCL_INIT_CHECK(srq_ != nullptr, "util_rdma_create_srq failed");
 
     retr_mr_ = util_rdma_create_host_memory_mr(pd, kRetrMRSize);
-    retr_hdr_mr_ = util_rdma_create_host_memory_mr(pd, RetrHdrBuffPool::kNumHdr * RetrHdrBuffPool::kHdrSize);
+    retr_hdr_mr_ = util_rdma_create_host_memory_mr(
+        pd, RetrHdrBuffPool::kNumHdr * RetrHdrBuffPool::kHdrSize);
 
     // Initialize retransmission chunk and header buffer pool.
     retr_chunk_pool_.emplace(retr_mr_);
     retr_hdr_pool_.emplace(retr_hdr_mr_);
 
-    cq_desc_mr_ = util_rdma_create_host_memory_mr(pd, CQEDescPool::kNumDesc * CQEDescPool::kDescSize);
+    cq_desc_mr_ = util_rdma_create_host_memory_mr(
+        pd, CQEDescPool::kNumDesc * CQEDescPool::kDescSize);
     cq_desc_pool_.emplace(cq_desc_mr_);
 
     // Populate recv work requests to SRQ for consuming immediate data.
@@ -1667,32 +1672,30 @@ public:
 
   void check_srq(bool force);
 
-  inline uint32_t get_retr_hdr_lkey(void) {
-    return retr_hdr_pool_->get_lkey();
-  }
+  inline uint32_t get_retr_hdr_lkey(void) { return retr_hdr_pool_->get_lkey(); }
 
   inline uint32_t get_retr_chunk_lkey(void) {
     return retr_chunk_pool_->get_lkey();
   }
 
-  inline void push_cqe_desc(CQEDesc *desc) {
+  inline void push_cqe_desc(CQEDesc* desc) {
     uint64_t addr = (uint64_t)desc;
     cq_desc_pool_->free_buff(addr);
   }
 
   inline CQEDesc* pop_cqe_desc() {
     uint64_t addr;
-    DCHECK(cq_desc_pool_->alloc_buff(&addr) == 0) << "Failed to allocate buffer for CQE descriptor";
-    return reinterpret_cast<CQEDesc *>(addr);
+    DCHECK(cq_desc_pool_->alloc_buff(&addr) == 0)
+        << "Failed to allocate buffer for CQE descriptor";
+    return reinterpret_cast<CQEDesc*>(addr);
   }
 
-  inline void push_retr_hdr(uint64_t addr) {
-    retr_hdr_pool_->free_buff(addr);
-  }
+  inline void push_retr_hdr(uint64_t addr) { retr_hdr_pool_->free_buff(addr); }
 
   inline uint64_t pop_retr_hdr() {
     uint64_t addr;
-    DCHECK(retr_hdr_pool_->alloc_buff(&addr) == 0) << "Failed to allocate buffer for retransmission header";
+    DCHECK(retr_hdr_pool_->alloc_buff(&addr) == 0)
+        << "Failed to allocate buffer for retransmission header";
     return addr;
   }
 
@@ -1702,7 +1705,8 @@ public:
 
   inline uint64_t pop_retr_chunk() {
     uint64_t addr;
-    DCHECK(retr_chunk_pool_->alloc_buff(&addr) == 0) << "Failed to allocate buffer for retransmission chunk";
+    DCHECK(retr_chunk_pool_->alloc_buff(&addr) == 0)
+        << "Failed to allocate buffer for retransmission chunk";
     return addr;
   }
 
@@ -1714,22 +1718,22 @@ public:
     qpn_to_rdma_ctx_map_[qp_num] = ctx;
   }
 
-  inline void inc_post_srq(void) {dp_recv_wrs_.post_rq_cnt++;}
+  inline void inc_post_srq(void) { dp_recv_wrs_.post_rq_cnt++; }
 
-  inline void inc_post_srq(int n) {dp_recv_wrs_.post_rq_cnt+=n;}
+  inline void inc_post_srq(int n) { dp_recv_wrs_.post_rq_cnt += n; }
 
-  inline void dec_post_srq(void) {dp_recv_wrs_.post_rq_cnt--;}
+  inline void dec_post_srq(void) { dp_recv_wrs_.post_rq_cnt--; }
 
-  inline void dec_post_srq(int n) {dp_recv_wrs_.post_rq_cnt-=n;}
+  inline void dec_post_srq(int n) { dp_recv_wrs_.post_rq_cnt -= n; }
 
-  inline int get_post_srq_cnt(void) {return dp_recv_wrs_.post_rq_cnt;}
+  inline int get_post_srq_cnt(void) { return dp_recv_wrs_.post_rq_cnt; }
 
-private:
-  struct ibv_cq_ex * send_cq_ex_;
-  struct ibv_cq_ex * recv_cq_ex_;
+ private:
+  struct ibv_cq_ex* send_cq_ex_;
+  struct ibv_cq_ex* recv_cq_ex_;
 
   // Shared SRQ for all data path QPs.
-  struct ibv_srq *srq_;
+  struct ibv_srq* srq_;
 
   // Buffer pool for retransmission chunks.
   std::optional<RetrChunkBuffPool> retr_chunk_pool_;
