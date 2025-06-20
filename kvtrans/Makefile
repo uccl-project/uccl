@@ -2,9 +2,10 @@
 
 # Compiler and flags
 CXX := g++
-CXXFLAGS := -O3 -Wall -shared -std=c++17 -fPIC -I../include \
-	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable -Wno-comment \
-	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -lglog -lgflags -lgtest -lz -lelf -libverbs -lpthread
+CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I../include -I../rdma \
+	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
+	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -lglog -lgflags -lgtest -lz -lelf -libverbs -lpthread \
+	-DLAZY_CREATE_ENGINE
 
 # Python and pybind11 configuration
 PYTHON := python3
@@ -21,8 +22,11 @@ OBJECTS := $(SOURCES:.cc=.o)
 all: $(TARGET)
 
 # Build the shared library
-$(TARGET): $(OBJECTS)
-	$(CXX) $(OBJECTS) -o $@ $(PYTHON_LDFLAGS) $(CXXFLAGS)
+$(TARGET): $(OBJECTS) ../rdma/librdma.a
+	$(CXX) $(OBJECTS) ../rdma/librdma.a -o $@ $(PYTHON_LDFLAGS) $(CXXFLAGS)
+
+../rdma/librdma.a: ../rdma/*.cc ../rdma/*.h
+	make CXXFLAGS=-DLAZY_CREATE_ENGINE -C ../rdma
 
 # Compile source files
 %.o: %.cc
@@ -31,6 +35,7 @@ $(TARGET): $(OBJECTS)
 # Clean build artifacts
 clean:
 	rm -f $(OBJECTS) $(TARGET)
+	make -C ../rdma clean
 
 # Test the module
 test: $(TARGET)

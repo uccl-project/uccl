@@ -80,14 +80,14 @@ if success:
 ```python
 # Create and register data
 data = np.array([1, 2, 3, 4, 5], dtype=np.float32)
-success, kv_id = engine.reg_kv(conn_id, data)
+success, mr_id = engine.reg_kv(conn_id, data)
 
 # Send data
 if success:
-    engine.send_kv(kv_id, data)
+    engine.send_kv(mr_id, data)
     
 # Receive data
-success, received_data = engine.recv_kv(kv_id, max_size=1024)
+success, received_data = engine.recv_kv(mr_id, max_size=1024)
 if success:
     print(f"Received: {received_data}")
 ```
@@ -100,12 +100,12 @@ large_array = np.random.rand(1000, 1000).astype(np.float32)
 weights = np.random.rand(256, 256).astype(np.float64)
 
 # Register arrays for RDMA transfer
-success1, kv_id1 = engine.reg_kv(conn_id, large_array)
-success2, kv_id2 = engine.reg_kv(conn_id, weights)
+success1, mr_id1 = engine.reg_kv(conn_id, large_array)
+success2, mr_id2 = engine.reg_kv(conn_id, weights)
 
 # High-speed transfer
-engine.send_kv(kv_id1, large_array)
-engine.send_kv(kv_id2, weights)
+engine.send_kv(mr_id1, large_array)
+engine.send_kv(mr_id2, weights)
 ```
 
 ## Development and Testing

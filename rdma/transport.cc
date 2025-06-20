@@ -1538,9 +1538,15 @@ void RDMAEndpoint::stats_thread_fn() {
 int RDMAEndpoint::uccl_regmr_dmabuf(UcclFlow* flow, void* addr, size_t len,
                                     int type, int offset, int fd,
                                     struct Mhandle** mhandle) {
-  auto factory_dev = RDMAFactory::get_factory_dev(flow->dev_);
-  *mhandle = new Mhandle();
+  return uccl_regmr_dmabuf(flow->dev_, addr, len, type, offset, fd, mhandle);
+}
 
+int RDMAEndpoint::uccl_regmr_dmabuf(int dev, void* addr, size_t len,
+                                    int type /*unsed for now*/, int offset,
+                                    int fd, struct Mhandle** mhandle) {
+  auto factory_dev = RDMAFactory::get_factory_dev(dev);
+
+  *mhandle = new Mhandle();
   (*mhandle)->mr = ibv_reg_dmabuf_mr(
       factory_dev->pd, offset, len, (uint64_t)addr, fd,
       IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
@@ -1552,7 +1558,13 @@ int RDMAEndpoint::uccl_regmr_dmabuf(UcclFlow* flow, void* addr, size_t len,
 int RDMAEndpoint::uccl_regmr(UcclFlow* flow, void* addr, size_t len,
                              int type /*unsed for now*/,
                              struct Mhandle** mhandle) {
-  auto factory_dev = RDMAFactory::get_factory_dev(flow->dev_);
+  return uccl_regmr(flow->dev_, addr, len, type, mhandle);
+}
+
+int RDMAEndpoint::uccl_regmr(int dev, void* addr, size_t len,
+                             int type /*unsed for now*/,
+                             struct Mhandle** mhandle) {
+  auto factory_dev = RDMAFactory::get_factory_dev(dev);
 
   *mhandle = new Mhandle();
   (*mhandle)->mr =
