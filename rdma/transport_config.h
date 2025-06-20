@@ -57,6 +57,10 @@ static uint32_t ENGINE_CPU_START_LIST[8] = {
     96, 96 + NUM_ENGINES, 96 + 2 * NUM_ENGINES, 96 + 3 * NUM_ENGINES,
 };
 
+static constexpr uint32_t QKEY = 0x1234;
+static constexpr uint32_t kMaxAckWRs = 8;
+static constexpr uint32_t UD_ADDITION = 40;
+
 // Use RC rather than UC.
 static constexpr bool kRCMode = false;
 // Bypass the pacing stage.
@@ -115,7 +119,7 @@ static constexpr enum engine_lb_policy kEngineLBPolicy = ENGINE_POLICY_RR;
 static uint32_t const PACER_CPU_START = 3 * NUM_CPUS / 4;
 
 constexpr static int kTotalQP =
-    kPortEntropy + 1 /* Credit QP */ + (kRCMode ? 0 : 1) /* Ctrl QP */;
+    kPortEntropy + 1 /* Credit QP */;
 // Recv buffer size smaller than kRCSize will be handled by RC directly.
 static constexpr uint32_t kRCSize = 8192;
 // static constexpr uint32_t kRCSize = 0;

@@ -198,7 +198,7 @@ class CtrlChunkBuffPool : public BuffPool {
  public:
   static constexpr uint32_t kPktSize = 32;
   static constexpr uint32_t kChunkSize = kPktSize * kMaxBatchCQ;
-  static constexpr uint32_t kNumChunk = kMaxBatchCQ << 6;
+  static constexpr uint32_t kNumChunk = 4096;
   static_assert((kNumChunk & (kNumChunk - 1)) == 0,
                 "kNumChunk must be power of 2");
 
@@ -256,6 +256,8 @@ struct RemFifo {
 struct RemoteRDMAContext {
   union ibv_gid remote_gid;
   struct ibv_port_attr remote_port_attr;
+  uint32_t remote_ctrl_qpn;
+  struct ibv_ah* dest_ah;
 };
 
 enum ReqType {
@@ -626,13 +628,6 @@ class RDMAContext {
   // (Pacer only) Memory region for credit messages.
   struct ibv_mr* pacer_credit_mr_;
 
-  // (high-priority) QP for control messages (e.g., ACK).
-  struct ibv_qp* ctrl_qp_;
-  // Dedicated CQ for control messages.
-  struct ibv_cq_ex* ctrl_cq_ex_;
-  // Memory region for control messages.
-  struct ibv_mr* ctrl_mr_;
-
   // Global timing wheel for all data path QPs.
   TimingWheel wheel_;
 
@@ -648,26 +643,14 @@ class RDMAContext {
   // (Pacer) Buffer pool for credit chunks.
   std::optional<eqds::CreditChunkBuffPool> pacer_credit_chunk_pool_;
 
-  // Buffer pool for control chunks.
-  std::optional<CtrlChunkBuffPool> ctrl_chunk_pool_;
-
   // Buffer pool for work request extension items.
   std::optional<WrExBuffPool> wr_ex_pool_;
-
-  // WQE for sending ACKs.
-  struct ibv_send_wr tx_ack_wr_;
 
   // Pre-allocated WQEs/SGEs for receiving credits.
   struct RecvWRs credit_recv_wrs_;
 
-  // Pre-allocated WQEs/SGEs for receiving ACKs.
-  struct RecvWRs ctrl_recv_wrs_;
-
   double nic_ts_ratio_;
   double nic_ts_offset_;
-
-  // Pending signals need to be polled.
-  uint32_t pending_signal_poll_ = 0;
 
   uint32_t consecutive_same_choice_bytes_ = 0;
   uint32_t last_qp_choice_ = 0;
@@ -701,11 +684,6 @@ class RDMAContext {
   }
 
  public:
-  constexpr static int kCtrlMRSize =
-      CtrlChunkBuffPool::kChunkSize * CtrlChunkBuffPool::kNumChunk;
-  /// TODO: How to determine the size of retransmission MR?
-  constexpr static int kRetrMRSize =
-      RetrChunkBuffPool::kRetrChunkSize * RetrChunkBuffPool::kNumChunk;
   // 256-bit SACK bitmask => we can track up to 256 packets
   static constexpr std::size_t kReassemblyMaxSeqnoDistance = kSackBitmapSize;
 
@@ -777,12 +755,6 @@ class RDMAContext {
   uint32_t select_qpidx_pot(uint32_t msize, void* subflow_context);
 
   /**
-   * @brief Poll the completion queue for the Ctrl QP.
-   * SQ and RQ use the same completion queue.
-   */
-  int poll_ctrl_cq(void);
-
-  /**
    * @brief Poll the completion queue for the Credit QP.
    * SQ and RQ use different completion queues.
    */
@@ -793,12 +765,6 @@ class RDMAContext {
    * @param force Force to post WQEs.
    */
   void check_credit_rq(bool force = false);
-
-  /**
-   * @brief Check if we need to post enough recv WQEs to the Ctrl QP.
-   * @param force Force to post WQEs.
-   */
-  void check_ctrl_rq(bool force = false);
 
   /**
    * @brief Retransmit a chunk for the given subUcclFlow.
@@ -819,13 +785,12 @@ class RDMAContext {
 
   void uc_rx_chunk(struct ibv_cq_ex* cq_ex);
 
-  void uc_send_acks();
+  void uc_post_acks();
 
   /**
    * @brief Rceive an ACK from the Ctrl QP.
-   * @param pkt_addr The position of the ACK packet in the ACK chunk.
    */
-  void rx_ack(uint64_t pkt_addr);
+  void uc_rx_ack(struct ibv_cq_ex* cq_ex, UcclSackHdr *ucclsackh);
 
   void uc_rx_rtx_chunk(struct ibv_cq_ex* cq_ex, uint64_t chunk_addr);
 
@@ -895,7 +860,7 @@ class RDMAContext {
    * @param num_ack
    * @param chunk_addr
    */
-  void flush_acks(int num_ack, uint64_t chunk_addr);
+  void try_post_acks(int num_ack, uint64_t chunk_addr, bool force);
 
   /**
    * @brief Transmit a batch of chunks queued in the timing wheel.
@@ -1463,6 +1428,12 @@ static inline void util_rdma_create_qp(
       IBV_ACCESS_REMOTE_WRITE |
       ((qp_type == IBV_QPT_RC) ? IBV_ACCESS_REMOTE_READ : 0);
 
+  if (qp_type == IBV_QPT_UD) {
+    qp_attr.qkey = QKEY;
+    attr_mask &= ~IBV_QP_ACCESS_FLAGS;
+    attr_mask |= IBV_QP_QKEY;
+  }
+
   UCCL_INIT_CHECK(ibv_modify_qp(*qp, &qp_attr, attr_mask) == 0,
                   "ibv_modify_qp failed");
 }
@@ -1479,6 +1450,29 @@ static inline struct ibv_srq* util_rdma_create_srq(struct ibv_pd* pd,
   srq_init_attr.attr.srq_limit = srq_limit;
   srq = ibv_create_srq(pd, &srq_init_attr);
   return srq;
+}
+
+static inline struct ibv_ah* create_ah(struct ibv_pd* pd, union ibv_gid remote_gid, struct ibv_port_attr remote_port_attr) {
+  struct ibv_ah_attr ah_attr = {};
+
+  if (ROCE_NET) {
+    ah_attr.is_global = 1;
+    ah_attr.grh.dgid = remote_gid;
+    ah_attr.grh.traffic_class = kTrafficClass;
+    ah_attr.grh.sgid_index = GID_IDX;
+    ah_attr.grh.flow_label = 0;
+    ah_attr.grh.hop_limit = 0xff;
+  } else {
+    ah_attr.is_global = 0;
+    ah_attr.dlid = remote_port_attr.lid;
+  }
+  
+  ah_attr.port_num = IB_PORT_NUM;
+  ah_attr.sl = kServiceLevel;
+  
+  struct ibv_ah* ah = ibv_create_ah(pd, &ah_attr);
+
+  return ah;
 }
 
 static inline struct ibv_mr* util_rdma_create_host_memory_mr(struct ibv_pd* pd,
@@ -1607,6 +1601,8 @@ class SharedIOContext {
  public:
   constexpr static int kRetrMRSize =
       RetrChunkBuffPool::kRetrChunkSize * RetrChunkBuffPool::kNumChunk;
+  constexpr static int kCtrlMRSize =
+      CtrlChunkBuffPool::kChunkSize * CtrlChunkBuffPool::kNumChunk;
   SharedIOContext(int dev) {
     auto context = RDMAFactory::get_factory_dev(dev)->context;
     auto pd = RDMAFactory::get_factory_dev(dev)->pd;
@@ -1640,6 +1636,48 @@ class SharedIOContext {
     while (get_post_srq_cnt() > 0) {
       check_srq(true);
     }
+
+    if constexpr (!kRCMode) {
+      // Create Ctrl QP, CQ, and MR.
+      util_rdma_create_qp(context, &ctrl_qp_, IBV_QPT_UD, true, true, (struct ibv_cq**)&ctrl_cq_ex_, false, kCQSize, pd, &ctrl_mr_, nullptr, kCtrlMRSize, CtrlChunkBuffPool::kNumChunk / 2,
+                        CtrlChunkBuffPool::kNumChunk / 2, 1, 1);
+
+      struct ibv_qp_attr attr = {};
+      attr.qp_state = IBV_QPS_RTR;
+      UCCL_INIT_CHECK(ibv_modify_qp(ctrl_qp_, &attr, IBV_QP_STATE) == 0, "ibv_modify_qp failed: ctrl qp rtr");
+
+      memset(&attr, 0, sizeof(attr));
+      attr.qp_state = IBV_QPS_RTS;
+      attr.sq_psn = BASE_PSN;
+      UCCL_INIT_CHECK(ibv_modify_qp(ctrl_qp_, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN) == 0, "ibv_modify_qp failed: ctrl qp rts");
+
+      // Initialize Control packet buffer pool.
+      ctrl_chunk_pool_.emplace(ctrl_mr_);
+
+      // Populate recv work requests on Ctrl QP for consuming control packets.
+      {
+        for (int i = 0; i < kPostRQThreshold; i++) {
+          ctrl_recv_wrs_.recv_sges[i].lkey = get_ctrl_chunk_lkey();
+          ctrl_recv_wrs_.recv_sges[i].length = CtrlChunkBuffPool::kChunkSize;
+          ctrl_recv_wrs_.recv_wrs[i].sg_list = &ctrl_recv_wrs_.recv_sges[i];
+          ctrl_recv_wrs_.recv_wrs[i].num_sge = 1;
+        }
+
+        inc_post_ctrl_rq(CtrlChunkBuffPool::kNumChunk / 2);
+        while (get_post_ctrl_rq_cnt() > 0) {
+          check_ctrl_rq(true);
+        }
+        for (int i = 0; i < kMaxAckWRs; i++) {
+          memset(&tx_ack_wr_[i], 0, sizeof(tx_ack_wr_[i]));
+          memset(&tx_ack_sge_[i], 0, sizeof(tx_ack_sge_[i]));
+          tx_ack_wr_[i].sg_list = &tx_ack_sge_[i];
+          tx_ack_wr_[i].num_sge = 1;
+          tx_ack_wr_[i].opcode = IBV_WR_SEND_WITH_IMM;
+          tx_ack_wr_[i].send_flags = IBV_SEND_SIGNALED;
+        }
+      }
+    }
+
   }
 
   ~SharedIOContext() {
@@ -1649,6 +1687,10 @@ class SharedIOContext {
     ibv_dereg_mr(retr_mr_);
     ibv_dereg_mr(retr_hdr_mr_);
   }
+
+  void flush_acks();
+
+  int poll_ctrl_cq(void);
 
   int uc_poll_send_cq(void);
 
@@ -1660,10 +1702,16 @@ class SharedIOContext {
 
   void check_srq(bool force);
 
+  void check_ctrl_rq(bool force = false);
+
   inline uint32_t get_retr_hdr_lkey(void) { return retr_hdr_pool_->get_lkey(); }
 
   inline uint32_t get_retr_chunk_lkey(void) {
     return retr_chunk_pool_->get_lkey();
+  }
+
+  inline uint32_t get_ctrl_chunk_lkey(void) {
+    return ctrl_chunk_pool_->get_lkey();
   }
 
   inline void push_cqe_desc(CQEDesc* desc) {
@@ -1679,22 +1727,25 @@ class SharedIOContext {
   }
 
   inline void push_retr_hdr(uint64_t addr) { retr_hdr_pool_->free_buff(addr); }
-
   inline uint64_t pop_retr_hdr() {
     uint64_t addr;
     DCHECK(retr_hdr_pool_->alloc_buff(&addr) == 0)
         << "Failed to allocate buffer for retransmission header";
     return addr;
   }
-
-  inline void push_retr_chunk(uint64_t addr) {
-    retr_chunk_pool_->free_buff(addr);
-  }
-
+  inline void push_retr_chunk(uint64_t addr) {retr_chunk_pool_->free_buff(addr);}
   inline uint64_t pop_retr_chunk() {
     uint64_t addr;
     DCHECK(retr_chunk_pool_->alloc_buff(&addr) == 0)
         << "Failed to allocate buffer for retransmission chunk";
+    return addr;
+  }
+
+  inline void push_ctrl_chunk(uint64_t addr) { ctrl_chunk_pool_->free_buff(addr); }
+  inline uint64_t pop_ctrl_chunk() {
+    uint64_t addr;
+    DCHECK(ctrl_chunk_pool_->alloc_buff(&addr) == 0)
+        << "Failed to allocate buffer for control chunk";
     return addr;
   }
 
@@ -1706,17 +1757,33 @@ class SharedIOContext {
     qpn_to_rdma_ctx_map_[qp_num] = ctx;
   }
 
+  inline RDMAContext* fid_to_rdma_ctx(uint32_t fid) {
+    return fid_to_rdma_ctx_map_[fid];
+  }
+
+  inline void record_fid_ctx_mapping(uint32_t fid, RDMAContext* ctx) {
+    fid_to_rdma_ctx_map_[fid] = ctx;
+  }
+
   inline void inc_post_srq(void) { dp_recv_wrs_.post_rq_cnt++; }
-
   inline void inc_post_srq(int n) { dp_recv_wrs_.post_rq_cnt += n; }
-
   inline void dec_post_srq(void) { dp_recv_wrs_.post_rq_cnt--; }
-
   inline void dec_post_srq(int n) { dp_recv_wrs_.post_rq_cnt -= n; }
-
   inline int get_post_srq_cnt(void) { return dp_recv_wrs_.post_rq_cnt; }
 
+  inline void inc_post_ctrl_rq(void) { ctrl_recv_wrs_.post_rq_cnt++; }
+  inline void inc_post_ctrl_rq(int n) { ctrl_recv_wrs_.post_rq_cnt += n; }
+  inline void dec_post_ctrl_rq(void) { ctrl_recv_wrs_.post_rq_cnt--; }
+  inline void dec_post_ctrl_rq(int n) { ctrl_recv_wrs_.post_rq_cnt -= n; }
+  inline int get_post_ctrl_rq_cnt(void) { return ctrl_recv_wrs_.post_rq_cnt; }
+
  private:
+
+  struct ibv_qp *ctrl_qp_;
+  struct ibv_cq_ex *ctrl_cq_ex_;
+  struct ibv_mr *ctrl_mr_;
+  
+  // Shared CQ for all data path QPs.
   struct ibv_cq_ex* send_cq_ex_;
   struct ibv_cq_ex* recv_cq_ex_;
 
@@ -1729,9 +1796,19 @@ class SharedIOContext {
   std::optional<RetrHdrBuffPool> retr_hdr_pool_;
   // Buffer pool for CQE descriptors.
   std::optional<CQEDescPool> cq_desc_pool_;
+  // Buffer pool for control chunks.
+  std::optional<CtrlChunkBuffPool> ctrl_chunk_pool_;
 
   // Pre-allocated WQEs for consuming immediate data.
   struct RecvWRs dp_recv_wrs_;
+
+  // Pre-allocated WQEs/SGEs for receiving ACKs.
+  struct RecvWRs ctrl_recv_wrs_;
+  
+  // WQE for sending ACKs.
+  struct ibv_send_wr tx_ack_wr_[kMaxAckWRs];
+  struct ibv_sge tx_ack_sge_[kMaxAckWRs];
+  uint32_t nr_tx_ack_wr_ = 0;
 
   // Memory region for retransmission.
   struct ibv_mr* retr_mr_;
@@ -1739,6 +1816,8 @@ class SharedIOContext {
   struct ibv_mr* cq_desc_mr_;
 
   std::unordered_map<int, RDMAContext*> qpn_to_rdma_ctx_map_;
+
+  std::unordered_map<uint32_t, RDMAContext*> fid_to_rdma_ctx_map_;
 
   friend class UcclRDMAEngine;
   friend class RDMAContext;

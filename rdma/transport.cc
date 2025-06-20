@@ -205,11 +205,12 @@ void UcclRDMAEngine::rc_handle_completion(void) {
 void UcclRDMAEngine::uc_handle_completion(void) {
   int work = 0;
   // First, poll the CQ for Ctrl QPs and Credit QPs.
+
+  io_ctx_.poll_ctrl_cq();
+
   for (auto& it : rdma_ctx_map_) {
     // Update ratio and offset
     it.second->update_clock(nic_ts_ratio_, nic_ts_offset_);
-
-    work += it.second->poll_ctrl_cq();
 
     if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS)
       work += it.second->poll_credit_cq();
@@ -219,14 +220,11 @@ void UcclRDMAEngine::uc_handle_completion(void) {
   io_ctx_.uc_poll_recv_cq();
 
   for (auto& it : rdma_ctx_map_) {
-    // Foce check when there is no work.
-    it.second->check_ctrl_rq(!work);
-
-    it.second->poll_ctrl_cq();
-
     if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS)
       it.second->check_credit_rq(!work);
   }
+
+  io_ctx_.check_ctrl_rq(false);
 
   io_ctx_.check_srq(false);
 }
@@ -458,8 +456,10 @@ void UcclRDMAEngine::handle_install_flow_on_engine(
 
   DCHECK(flow_id < MAX_FLOW);
 
-  if (is_send)
+  if (is_send) {
     rdma_ctx->add_sender_flow(flow, flow_id);
+    io_ctx_.record_fid_ctx_mapping(flow_id, rdma_ctx);
+  }
   else {
     rdma_ctx->add_receiver_flow(flow, flow_id);
     if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
@@ -504,16 +504,9 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
 
   {
     DCHECK(rdma_ctx_map_.find(ctrl_work.peer_id) == rdma_ctx_map_.end());
-    // auto t1 = std::chrono::high_resolution_clock::now();
     rdma_ctx = RDMAFactory::CreateContext(&rto_tm_, &engine_outstanding_bytes_,
                                           eqds_, dev, engine_idx_ % NUM_ENGINES,
                                           meta, &io_ctx_);
-    // auto t2 = std::chrono::high_resolution_clock::now();
-    // std::cout << "create RDMAContext time: "
-    //             << std::chrono::duration_cast<std::chrono::milliseconds>(t2 -
-    //             t1)
-    //                    .count()
-    //             << "ms on dev " << dev << "/" << engine_idx_ << std::endl;
     std::tie(std::ignore, ret) =
         rdma_ctx_map_.insert({ctrl_work.peer_id, rdma_ctx});
     DCHECK(ret);
@@ -525,9 +518,10 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
     auto meta = ctrl_work.meta;
     auto info = &meta.install_ctx;
     auto* poll_ctx = ctrl_work.poll_ctx;
-    // Send PSN, QPN to remote peer.
-    int const size = sizeof(uint32_t) + sizeof(uint32_t);
-    char buf[kTotalQP * size];
+    // Send QPN to remote peer.
+    int const size = sizeof(uint32_t);
+    auto total_size = kTotalQP * size + size /* ctrl qpn*/;
+    char buf[total_size];
     for (auto i = 0; i < kPortEntropy; i++) {
       memcpy(buf + i * size, &rdma_ctx->dp_qps_[i].qp->qp_num,
              sizeof(uint32_t));
@@ -536,10 +530,10 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
     memcpy(buf + kPortEntropy * size, &rdma_ctx->credit_qp_->qp_num,
            sizeof(uint32_t));
 
-    if constexpr (!kRCMode) {
-      memcpy(buf + (kPortEntropy + 1) * size, &rdma_ctx->ctrl_qp_->qp_num,
-             sizeof(uint32_t));
-    }
+    // Send ctrl qpn to remote peer.
+    memcpy(buf + kTotalQP * size, &io_ctx_.ctrl_qp_->qp_num,
+           sizeof(uint32_t));
+
     // Wait until our turn to use bootstrap fd.
     auto engine_offset = engine_idx_ % NUM_ENGINES;
     while (next_install_engine->load() != engine_offset) {
@@ -547,21 +541,12 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
       std::this_thread::yield();
     }
 
-    // auto t1 = std::chrono::high_resolution_clock::now();
+    int ret = send_message(bootstrap_fd, buf, total_size);
+    DCHECK(ret == total_size);
 
-    int ret = send_message(bootstrap_fd, buf, kTotalQP * size);
-    DCHECK(ret == kTotalQP * size);
-
-    // Receive PSN, QPN from remote peer.
-    ret = receive_message(bootstrap_fd, buf, kTotalQP * size);
-    DCHECK(ret == kTotalQP * size);
-
-    // auto t2 = std::chrono::high_resolution_clock::now();
-    // std::cout << "exchange PSN, QPN time: "
-    //             << std::chrono::duration_cast<std::chrono::milliseconds>(t2 -
-    //             t1)
-    //                    .count()
-    //             << "ms on dev " << dev << "/" << engine_idx_ << std::endl;
+    // Receive QPN from remote peer.
+    ret = receive_message(bootstrap_fd, buf, total_size);
+    DCHECK(ret == total_size);
 
     // Let other engines to use bootstrap fd.
     next_install_engine->store(next_install_engine->load() + 1);
@@ -586,16 +571,8 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
 
     ret = modify_qp_rts(credit_qp, false);
 
-    if constexpr (!kRCMode) {
-      auto ctrl_rqpn =
-          *reinterpret_cast<uint32_t*>(buf + (kPortEntropy + 1) * size);
-      auto ctrl_qp = rdma_ctx->ctrl_qp_;
-
-      ret = modify_qp_rtr(ctrl_qp, dev, &rdma_ctx->remote_ctx_, ctrl_rqpn);
-      DCHECK(ret == 0) << "Failed to modify Ctrl QP to RTR";
-
-      ret = modify_qp_rts(ctrl_qp, false);
-    }
+    auto ctrl_qpn = *reinterpret_cast<uint32_t*>(buf + kTotalQP * size);
+    rdma_ctx->remote_ctx_.remote_ctrl_qpn = ctrl_qpn;
 
     UCCL_LOG_ENGINE << "Installed ctx: " << ctrl_work.peer_id
                     << " on engine: " << engine_idx_
