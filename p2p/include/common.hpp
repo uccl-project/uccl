@@ -43,9 +43,9 @@
 #define kQueueSize 1024
 #define kQueueMask (kQueueSize - 1)
 #define kMaxInflight 32
-#define kBatchSize 4
+#define kBatchSize 16
 #define kIterations 1000000
-#define kNumThBlocks 1
+#define kNumThBlocks 4
 #define kNumThPerBlock 1
 #define kRemoteNVLinkBatchSize 512
 #define kObjectSize 8192  // 8 KB
@@ -58,6 +58,7 @@
 #define kRemoteBufferSize kBatchSize* kNumThBlocks* kObjectSize * 100
 #define MAIN_THREAD_CPU_IDX 31
 #define NUM_GPUS 8
+#define RECEIVER_BATCH_SIZE 8
 // #define SEPARATE_POLLING
 // Command structure for each transfer
 struct TransferCmd {
