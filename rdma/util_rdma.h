@@ -198,7 +198,7 @@ class CtrlChunkBuffPool : public BuffPool {
  public:
   static constexpr uint32_t kPktSize = 32;
   static constexpr uint32_t kChunkSize = kPktSize * kMaxBatchCQ;
-  static constexpr uint32_t kNumChunk = 4096;
+  static constexpr uint32_t kNumChunk = 65536;
   static_assert((kNumChunk & (kNumChunk - 1)) == 0,
                 "kNumChunk must be power of 2");
 
@@ -1069,6 +1069,7 @@ static inline int util_rdma_get_mtu_from_ibv_mtu(ibv_mtu mtu) {
   }
 }
 
+// Shared IO context for each UCCL engine.
 class SharedIOContext {
  public:
   constexpr static int kRetrMRSize =
@@ -1114,8 +1115,8 @@ class SharedIOContext {
       util_rdma_create_qp(context, &ctrl_qp_, IBV_QPT_UD, true, true,
                           (struct ibv_cq**)&ctrl_cq_ex_, false, kCQSize, pd,
                           &ctrl_mr_, nullptr, kCtrlMRSize,
-                          CtrlChunkBuffPool::kNumChunk / 2,
-                          CtrlChunkBuffPool::kNumChunk / 2, 1, 1);
+                          kMaxCtrlWRs,
+                          kMaxCtrlWRs, 1, 1);
 
       struct ibv_qp_attr attr = {};
       attr.qp_state = IBV_QPS_RTR;
@@ -1141,7 +1142,7 @@ class SharedIOContext {
           ctrl_recv_wrs_.recv_wrs[i].num_sge = 1;
         }
 
-        inc_post_ctrl_rq(CtrlChunkBuffPool::kNumChunk / 2);
+        inc_post_ctrl_rq(kMaxCtrlWRs);
         while (get_post_ctrl_rq_cnt() > 0) {
           check_ctrl_rq(true);
         }

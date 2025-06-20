@@ -420,9 +420,8 @@ int SharedIOContext::poll_ctrl_cq(void) {
 
     while (1) {
       if (cq_ex->status != IBV_WC_SUCCESS) {
-        LOG(ERROR) << "Ctrl CQ state error: " << cq_ex->status << ", "
-                   << ibv_wc_read_opcode(cq_ex);
-        ibv_next_poll(cq_ex);
+        DCHECK(false) << "Ctrl CQ state error: " << cq_ex->status << ", "
+                   << ibv_wc_read_opcode(cq_ex) << ", ctrl_chunk_pool_size: " << ctrl_chunk_pool_->size();
       }
 
       CQEDesc* cqe_desc = reinterpret_cast<CQEDesc*>(cq_ex->wr_id);
@@ -458,6 +457,8 @@ int SharedIOContext::poll_ctrl_cq(void) {
 
     work += cq_budget;
 
+    check_ctrl_rq(false);
+
     if (cq_budget < kMaxBatchCQ) break;
   }
 
@@ -487,9 +488,8 @@ int SharedIOContext::rc_poll_recv_cq(void) {
 
   while (1) {
     if (cq_ex->status != IBV_WC_SUCCESS) {
-      LOG(ERROR) << "data path CQ state error: " << cq_ex->status
+      DCHECK(false) << "data path CQ state error: " << cq_ex->status
                  << " from QP:" << ibv_wc_read_qp_num(cq_ex);
-      ibv_next_poll(cq_ex);
     }
 
     auto* cqe_desc = (CQEDesc*)cq_ex->wr_id;
@@ -518,9 +518,8 @@ int SharedIOContext::rc_poll_send_cq(void) {
 
   while (1) {
     if (cq_ex->status != IBV_WC_SUCCESS) {
-      LOG(ERROR) << "data path CQ state error: " << cq_ex->status
+      DCHECK(false) << "data path CQ state error: " << cq_ex->status
                  << " from QP:" << ibv_wc_read_qp_num(cq_ex);
-      ibv_next_poll(cq_ex);
     }
 
     auto* cqe_desc = (CQEDesc*)cq_ex->wr_id;
@@ -546,9 +545,8 @@ int SharedIOContext::uc_poll_send_cq(void) {
 
   while (1) {
     if (cq_ex->status != IBV_WC_SUCCESS) {
-      LOG(ERROR) << "data path CQ state error: " << cq_ex->status
+      DCHECK(false) << "data path CQ state error: " << cq_ex->status
                  << " from QP:" << ibv_wc_read_qp_num(cq_ex);
-      ibv_next_poll(cq_ex);
     }
 
     auto* cqe_desc = (CQEDesc*)cq_ex->wr_id;
@@ -578,9 +576,8 @@ int SharedIOContext::uc_poll_recv_cq(void) {
 
   while (1) {
     if (cq_ex->status != IBV_WC_SUCCESS) {
-      LOG(ERROR) << "data path CQ state error: " << cq_ex->status
+      DCHECK(false) << "data path CQ state error: " << cq_ex->status
                  << " from QP:" << ibv_wc_read_qp_num(cq_ex);
-      ibv_next_poll(cq_ex);
     }
 
     auto qp_num = ibv_wc_read_qp_num(cq_ex);

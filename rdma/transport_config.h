@@ -60,6 +60,7 @@ static uint32_t ENGINE_CPU_START_LIST[8] = {
 static constexpr uint32_t QKEY = 0x1234;
 static constexpr uint32_t kMaxAckWRs = 8;
 static constexpr uint32_t UD_ADDITION = 40;
+static constexpr uint32_t kMaxCtrlWRs = 2048;
 
 // Use RC rather than UC.
 static constexpr bool kRCMode = false;

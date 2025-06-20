@@ -51,6 +51,8 @@ class BuffPool {
 
   inline bool empty(void) { return head_ == tail_; }
 
+  inline uint32_t size(void) { return (tail_ - head_) & (num_elements_ - 1); }
+
   inline uint32_t get_lkey(void) {
     if (!mr_) return 0;
     return mr_->lkey;
