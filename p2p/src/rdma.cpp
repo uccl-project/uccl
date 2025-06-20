@@ -615,7 +615,8 @@ void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
   }
 
   for (size_t i = 0; i < num_wrs; ++i) {
-    int offset = kNumThBlocks > i ? i : (i % kNumThBlocks);
+    int wr = wrs_to_post[i];
+    int offset = wr % (kRemoteBufferSize / bytes);
     sges[i].addr = (uintptr_t)buf + offset * bytes;
     sges[i].length = (uint32_t)bytes;
     sges[i].lkey = mr->lkey;

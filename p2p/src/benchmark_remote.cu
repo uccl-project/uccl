@@ -134,7 +134,9 @@ int main(int argc, char** argv) {
 #endif
     printf("Total ops                         : %u\n", tot_ops);
     printf("End-to-end wall-clock time        : %.3f ms\n", wall_ms_gpu);
-    printf("Throughput                        : %.2f Mops\n", throughput);
+    printf("Ops Throughput                    : %.2f Mops\n", throughput);
+    printf("Total Throughput                  : %.2f Gbps\n",
+           throughput * 1e6 * kObjectSize * 8 / 1e9);
 
     cudaFreeHost(rbs);
     cudaCheckErrors("cudaFreeHost failed");
