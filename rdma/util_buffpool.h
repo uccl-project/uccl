@@ -26,7 +26,8 @@ class BuffPool {
       base_addr_ =
           mmap(nullptr, num_elements_ * element_size_, PROT_READ | PROT_WRITE,
                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-      UCCL_INIT_CHECK(base_addr_ != MAP_FAILED, "Failed to allocate memory for BuffPool");
+      UCCL_INIT_CHECK(base_addr_ != MAP_FAILED,
+                      "Failed to allocate memory for BuffPool");
     }
     buffer_pool_ = new uint64_t[num_elements_];
     head_ = tail_ = 0;

@@ -29,6 +29,7 @@ typedef uint64_t PeerID;
 
 class RDMAContext;
 class RDMAFactory;
+class TXTracking;
 extern std::shared_ptr<RDMAFactory> rdma_ctl;
 
 // LRH (Local Routing Header) + GRH (Global Routing Header) + BTH (Base
@@ -509,10 +510,10 @@ class SubUcclFlow {
 };
 
 /**
- * @brief UCQPWrapper is a wrapper for ibv_qp with additional information for
+ * @brief QPWrapper is a wrapper for ibv_qp with additional information for
  * implementing reliable data transfer.
  */
-struct UCQPWrapper {
+struct QPWrapper {
   struct ibv_qp* qp;
   uint32_t local_psn;
   // A counter for occasionally posting IBV_SEND_SIGNALED flag.
@@ -549,6 +550,12 @@ static_assert(CtrlChunkBuffPool::kPktSize >= kUcclSackHdrLen,
 
 class UcclEngine;
 
+struct RecvWRs {
+  struct ibv_recv_wr recv_wrs[kPostRQThreshold];
+  struct ibv_sge recv_sges[kPostRQThreshold];
+  uint32_t post_rq_cnt = 0;
+};
+
 /**
  * @brief RDMA context for a remote peer on an engine, which is produced by
  * RDMAFactory. It contains:
@@ -558,78 +565,35 @@ class UcclEngine;
  * PD, and MR.
  */
 class RDMAContext {
- public:
-  constexpr static int kCtrlMRSize =
-      CtrlChunkBuffPool::kChunkSize * CtrlChunkBuffPool::kNumChunk;
-  /// TODO: How to determine the size of retransmission MR?
-  constexpr static int kRetrMRSize =
-      RetrChunkBuffPool::kRetrChunkSize * RetrChunkBuffPool::kNumChunk;
-  // 256-bit SACK bitmask => we can track up to 256 packets
-  static constexpr std::size_t kReassemblyMaxSeqnoDistance = kSackBitmapSize;
-
+ private:
+  // Offset of the engine this context belongs to. 0, 1, ... kNumEngine - 1.
   uint32_t engine_offset_;
 
-  uint32_t flow_cnt_ = 0;
-
-  void* sender_flow_tbl_[MAX_FLOW] = {};
-  void* receiver_flow_tbl_[MAX_FLOW] = {};
-
-  // Track outstanding RECV requests.
-  struct RecvRequest reqs_[kMaxReq];
-
-  inline uint64_t get_recvreq_id(struct RecvRequest* req) {
-    return req - reqs_;
-  }
-
-  inline struct RecvRequest* get_recvreq_by_id(int id) { return &reqs_[id]; }
-
-  inline void free_recvreq(struct RecvRequest* req) {
-    VLOG(4) << "free_recvreq: " << req;
-    memset(req, 0, sizeof(struct RecvRequest));
-  }
-
-  /**
-   * @brief Get an unused request, if no request is available, return nullptr.
-   * @return struct RecvRequest*
-   */
-  inline struct RecvRequest* alloc_recvreq(void) {
-    for (int i = 0; i < kMaxReq; i++) {
-      auto* req = &reqs_[i];
-      if (req->type == RecvRequest::UNUSED) {
-        VLOG(4) << "alloc_recvreq: " << req;
-        return req;
-      }
-    }
-    VLOG(4) << "alloc_recvreq: nullptr";
-    return nullptr;
-  }
-
-  PeerID peer_id_;
-
-  TimerManager* rto_;
-
-  eqds::EQDS* eqds_;
-
-  // Try to arm a timer for the given flow. If the timer is already armed, do
-  // nothing.
-  void arm_timer_for_flow(void* context);
-
-  // Try to rearm a timer for the given flow. If the timer is not armed, arm
-  // it. If the timer is already armed, rearm it.
-  void rearm_timer_for_flow(void* context);
-
-  void mark_flow_timeout(void* context);
-
-  void disarm_timer_for_flow(void* context);
+  // Number of flows installed on this context.
+  uint32_t nr_flows_ = 0;
 
   // Remote RDMA context.
   struct RemoteRDMAContext remote_ctx_;
+
+  // Timer manager for RTO.
+  TimerManager* rto_;
+
+  // Track outstanding RECV requests.
+  // When a flow wants to receive message, it should allocate a request from
+  // this pool.
+  struct RecvRequest reqs_[kMaxReq];
+
+  // Track installed flows.
+  // When a flow is installed, it should be added to this table.
+  // Flows are split into two tables: sender and receiver.
+  void* sender_flow_tbl_[MAX_FLOW] = {};
+  void* receiver_flow_tbl_[MAX_FLOW] = {};
 
   // Protection domain for all RDMA resources.
   struct ibv_pd* pd_ = nullptr;
 
   // QPs for data transfer based on UC or RC.
-  struct UCQPWrapper dp_qps_[kPortEntropy];
+  struct QPWrapper dp_qps_[kPortEntropy];
 
   // Data path QPN to index mapping.
   std::unordered_map<uint32_t, int> qpn2idx_;
@@ -637,14 +601,14 @@ class RDMAContext {
   // Shared CQ for all data path QPs.
   struct ibv_cq_ex* send_cq_ex_;
   struct ibv_cq_ex* recv_cq_ex_;
+  // Shared SRQ for all data path QPs.
   struct ibv_srq* srq_;
 
   // (high-priority) QP for credit messages (e.g., pull of EQDS).
   struct ibv_qp* credit_qp_;
   // Local PSN for credit messages.
   uint32_t credit_local_psn_;
-  // Remote PSN for credit messages.
-  uint32_t credit_remote_psn_;
+
   // (Engine only) Dedicated CQ for credit messages.
   struct ibv_cq_ex* engine_credit_cq_ex_;
   // (Engine only) Memory region for credit messages.
@@ -654,14 +618,10 @@ class RDMAContext {
   // (Pacer only) Memory region for credit messages.
   struct ibv_mr* pacer_credit_mr_;
 
-  eqds::PacerCreditQPWrapper pc_qpw_;
-
   // (high-priority) QP for control messages (e.g., ACK).
   struct ibv_qp* ctrl_qp_;
   // Local PSN for control messages.
   uint32_t ctrl_local_psn_;
-  // Remote PSN for control messages.
-  uint32_t ctrl_remote_psn_;
   // Dedicated CQ for control messages.
   struct ibv_cq_ex* ctrl_cq_ex_;
   // Memory region for control messages.
@@ -674,16 +634,11 @@ class RDMAContext {
   // Global timing wheel for all data path QPs.
   TimingWheel wheel_;
 
-  // The device index that this context belongs to.
-  int dev_;
-
   // RDMA device context per device.
   struct ibv_context* context_;
-  // MTU of this device.
-  ibv_mtu mtu_;
+
+  // MTU of this device in bytes.
   uint32_t mtu_bytes_;
-  // GID index of this device.
-  uint8_t sgid_index_;
 
   // (Engine) Buffer pool for credit chunks.
   std::optional<eqds::CreditChunkBuffPool> engine_credit_chunk_pool_;
@@ -710,21 +665,16 @@ class RDMAContext {
   struct ibv_send_wr tx_ack_wr_;
 
   // Pre-allocated WQEs/SGEs for receiving credits.
-  struct ibv_recv_wr rx_credit_wrs_[kPostRQThreshold];
-  struct ibv_sge rx_credit_sges_[kPostRQThreshold];
-  uint32_t post_credit_rq_cnt_ = 0;
+  struct RecvWRs credit_recv_wrs_;
 
   // Pre-allocated WQEs/SGEs for receiving ACKs.
-  struct ibv_recv_wr rx_ack_wrs_[kPostRQThreshold];
-  struct ibv_sge rx_ack_sges_[kPostRQThreshold];
-  uint32_t post_ctrl_rq_cnt_ = 0;
+  struct RecvWRs ctrl_recv_wrs_;
 
   // Pre-allocated WQEs for consuming immediate data.
-  struct ibv_recv_wr imm_wrs_[kPostRQThreshold];
-  uint32_t post_srq_cnt_ = 0;
+  struct RecvWRs dp_recv_wrs_;
 
-  double ratio_;
-  double offset_;
+  double nic_ts_ratio_;
+  double nic_ts_offset_;
 
   // Pending signals need to be polled.
   uint32_t pending_signal_poll_ = 0;
@@ -734,14 +684,76 @@ class RDMAContext {
 
   uint32_t* engine_unacked_bytes_;
 
+  // Get an unused request, if no request is available, return nullptr.
+  inline struct RecvRequest* alloc_recvreq(void) {
+    for (int i = 0; i < kMaxReq; i++) {
+      auto* req = &reqs_[i];
+      if (req->type == RecvRequest::UNUSED) {
+        return req;
+      }
+    }
+    return nullptr;
+  }
+
+  // Get the ID of the request.
+  inline uint64_t get_recvreq_id(struct RecvRequest* req) {
+    return req - reqs_;
+  }
+
+  // Get the request by ID.
+  inline struct RecvRequest* get_recvreq_by_id(int id) { return &reqs_[id]; }
+
+  // Free the request.
+  inline void free_recvreq(struct RecvRequest* req) {
+    memset(req, 0, sizeof(struct RecvRequest));
+  }
+
+ public:
+  constexpr static int kCtrlMRSize =
+      CtrlChunkBuffPool::kChunkSize * CtrlChunkBuffPool::kNumChunk;
+  /// TODO: How to determine the size of retransmission MR?
+  constexpr static int kRetrMRSize =
+      RetrChunkBuffPool::kRetrChunkSize * RetrChunkBuffPool::kNumChunk;
+  // 256-bit SACK bitmask => we can track up to 256 packets
+  static constexpr std::size_t kReassemblyMaxSeqnoDistance = kSackBitmapSize;
+
+  // EQDS.
+  eqds::EQDS* eqds_;
+
+  inline void add_sender_flow(void* flow, uint32_t flow_id) {
+    sender_flow_tbl_[flow_id] = flow;
+    nr_flows_++;
+  }
+
+  inline void add_receiver_flow(void* flow, uint32_t flow_id) {
+    receiver_flow_tbl_[flow_id] = flow;
+    nr_flows_++;
+  }
+
+  eqds::PacerCreditQPWrapper pc_qpw_;
+
+  // Try to arm a timer for the given flow. If the timer is already armed, do
+  // nothing.
+  void arm_timer_for_flow(void* context);
+
+  // Try to rearm a timer for the given flow. If the timer is not armed, arm
+  // it. If the timer is already armed, rearm it.
+  void rearm_timer_for_flow(void* context);
+
+  // Mark the flow as timeout.
+  void mark_flow_timeout(void* context);
+
+  // Disarm the timer for the given flow.
+  void disarm_timer_for_flow(void* context);
+
   inline void update_clock(double ratio, double offset) {
-    ratio_ = ratio;
-    offset_ = offset;
+    nic_ts_ratio_ = ratio;
+    nic_ts_offset_ = offset;
   }
 
   // Convert NIC clock to host clock (TSC).
   inline uint64_t convert_nic_to_host(uint64_t nic_clock) {
-    return ratio_ * nic_clock + offset_;
+    return nic_ts_ratio_ * nic_clock + nic_ts_offset_;
   }
 
   inline bool can_use_last_choice(uint32_t msize) {
@@ -968,12 +980,22 @@ class RDMAContext {
 
   std::string to_string();
 
-  RDMAContext(PeerID peer_id, TimerManager* rto, uint32_t* ob, eqds::EQDS* eqds,
-              int dev, uint32_t engine_offset, union CtrlMeta meta);
+  RDMAContext(TimerManager* rto, uint32_t* ob, eqds::EQDS* eqds, int dev,
+              uint32_t engine_offset, union CtrlMeta meta);
 
   ~RDMAContext(void);
 
   friend class RDMAFactory;
+
+  friend class UcclRDMAEngine;
+
+  friend class TXTracking;
+
+  friend class TimelyRDMAContext;
+
+  friend class SwiftRDMAContext;
+
+  friend class EQDSRDMAContext;
 };
 
 class EQDSRDMAContext : public RDMAContext {
@@ -1197,13 +1219,8 @@ class RDMAFactory {
    * @brief Initialize RDMA device.
    */
   static void init_dev(int devname_suffix);
-  /**
-   * @brief Create a Context object for the given device using the given meta.
-   * @param dev
-   * @param meta
-   * @return RDMAContext*
-   */
-  static RDMAContext* CreateContext(PeerID peer_id, TimerManager* rto,
+
+  static RDMAContext* CreateContext(TimerManager* rto,
                                     uint32_t* engine_unacked_bytes,
                                     eqds::EQDS* eqds, int dev,
                                     uint32_t engine_offset_,
@@ -1499,8 +1516,10 @@ static inline void util_rdma_create_qp(
                   "ibv_modify_qp failed");
 }
 
-static inline struct ibv_srq* util_rdma_create_srq(struct ibv_pd*pd, uint32_t max_wr, uint32_t max_sge, uint32_t srq_limit)
-{
+static inline struct ibv_srq* util_rdma_create_srq(struct ibv_pd* pd,
+                                                   uint32_t max_wr,
+                                                   uint32_t max_sge,
+                                                   uint32_t srq_limit) {
   struct ibv_srq* srq = nullptr;
   struct ibv_srq_init_attr srq_init_attr;
   memset(&srq_init_attr, 0, sizeof(srq_init_attr));
@@ -1511,31 +1530,32 @@ static inline struct ibv_srq* util_rdma_create_srq(struct ibv_pd*pd, uint32_t ma
   return srq;
 }
 
-static inline struct ibv_cq_ex* util_rdma_create_cq_ex(struct ibv_context* context, uint32_t cqsize)
-{
-    struct ibv_cq_ex* cq_ex = nullptr;
-    struct ibv_cq_init_attr_ex cq_ex_attr;
-    cq_ex_attr.cqe = cqsize;
-    cq_ex_attr.cq_context = nullptr;
-    cq_ex_attr.channel = nullptr;
-    cq_ex_attr.comp_vector = 0;
-    cq_ex_attr.wc_flags =
-        IBV_WC_EX_WITH_BYTE_LEN | IBV_WC_EX_WITH_IMM | IBV_WC_EX_WITH_QP_NUM |
-        IBV_WC_EX_WITH_SRC_QP |
-        IBV_WC_EX_WITH_COMPLETION_TIMESTAMP;  // Timestamp support.
-    cq_ex_attr.comp_mask = IBV_CQ_INIT_ATTR_MASK_FLAGS;
-    cq_ex_attr.flags =
-        IBV_CREATE_CQ_ATTR_SINGLE_THREADED | IBV_CREATE_CQ_ATTR_IGNORE_OVERRUN;
+static inline struct ibv_cq_ex* util_rdma_create_cq_ex(
+    struct ibv_context* context, uint32_t cqsize) {
+  struct ibv_cq_ex* cq_ex = nullptr;
+  struct ibv_cq_init_attr_ex cq_ex_attr;
+  cq_ex_attr.cqe = cqsize;
+  cq_ex_attr.cq_context = nullptr;
+  cq_ex_attr.channel = nullptr;
+  cq_ex_attr.comp_vector = 0;
+  cq_ex_attr.wc_flags =
+      IBV_WC_EX_WITH_BYTE_LEN | IBV_WC_EX_WITH_IMM | IBV_WC_EX_WITH_QP_NUM |
+      IBV_WC_EX_WITH_SRC_QP |
+      IBV_WC_EX_WITH_COMPLETION_TIMESTAMP;  // Timestamp support.
+  cq_ex_attr.comp_mask = IBV_CQ_INIT_ATTR_MASK_FLAGS;
+  cq_ex_attr.flags =
+      IBV_CREATE_CQ_ATTR_SINGLE_THREADED | IBV_CREATE_CQ_ATTR_IGNORE_OVERRUN;
 
-    if constexpr (kTestNoHWTimestamp)
-      cq_ex_attr.wc_flags &= ~IBV_WC_EX_WITH_COMPLETION_TIMESTAMP;
+  if constexpr (kTestNoHWTimestamp)
+    cq_ex_attr.wc_flags &= ~IBV_WC_EX_WITH_COMPLETION_TIMESTAMP;
 
-    cq_ex = ibv_create_cq_ex(context, &cq_ex_attr);
-    return cq_ex;
+  cq_ex = ibv_create_cq_ex(context, &cq_ex_attr);
+  return cq_ex;
 }
 
-static inline int util_rdma_modify_cq_attr(struct ibv_cq_ex* cq_ex, uint32_t cq_count, uint32_t cq_period)
-{
+static inline int util_rdma_modify_cq_attr(struct ibv_cq_ex* cq_ex,
+                                           uint32_t cq_count,
+                                           uint32_t cq_period) {
   struct ibv_modify_cq_attr cq_attr;
   cq_attr.attr_mask = IBV_CQ_ATTR_MODERATE;
   cq_attr.moderate.cq_count = cq_count;
@@ -1543,8 +1563,6 @@ static inline int util_rdma_modify_cq_attr(struct ibv_cq_ex* cq_ex, uint32_t cq_
 
   return ibv_modify_cq(ibv_cq_ex_to_cq(cq_ex), &cq_attr);
 }
-
-
 
 /**
  * @brief This helper function converts an Infiniband name (e.g., mlx5_0) to an

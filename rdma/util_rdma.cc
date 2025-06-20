@@ -172,7 +172,7 @@ error:
  * @param meta
  * @return RDMAContext*
  */
-RDMAContext* RDMAFactory::CreateContext(PeerID peer_id, TimerManager* rto,
+RDMAContext* RDMAFactory::CreateContext(TimerManager* rto,
                                         uint32_t* engine_unacked_bytes,
                                         eqds::EQDS* eqds, int dev,
                                         uint32_t engine_offset,
@@ -180,27 +180,25 @@ RDMAContext* RDMAFactory::CreateContext(PeerID peer_id, TimerManager* rto,
   RDMAContext* ctx = nullptr;
 
   if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS)
-    ctx = new EQDSRDMAContext(peer_id, rto, engine_unacked_bytes, eqds, dev,
+    ctx = new EQDSRDMAContext(rto, engine_unacked_bytes, eqds, dev,
                               engine_offset, meta);
   else if constexpr (kSenderCCA == SENDER_CCA_TIMELY)
-    ctx = new TimelyRDMAContext(peer_id, rto, engine_unacked_bytes, eqds, dev,
+    ctx = new TimelyRDMAContext(rto, engine_unacked_bytes, eqds, dev,
                                 engine_offset, meta);
   else if constexpr (kSenderCCA == SENDER_CCA_SWIFT)
-    ctx = new SwiftRDMAContext(peer_id, rto, engine_unacked_bytes, eqds, dev,
+    ctx = new SwiftRDMAContext(rto, engine_unacked_bytes, eqds, dev,
                                engine_offset, meta);
 
   CHECK(ctx != nullptr);
   return ctx;
 }
 
-RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
-                         uint32_t* engine_unacked_bytes, eqds::EQDS* eqds,
-                         int dev, uint32_t engine_offset, union CtrlMeta meta)
-    : peer_id_(peer_id),
-      rto_(rto),
+RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
+                         eqds::EQDS* eqds, int dev, uint32_t engine_offset,
+                         union CtrlMeta meta)
+    : rto_(rto),
       engine_unacked_bytes_(engine_unacked_bytes),
       eqds_(eqds),
-      dev_(dev),
       engine_offset_(engine_offset),
       wheel_({freq_ghz, us_to_cycles(kWheelSlotWidthUs, freq_ghz),
               us_to_cycles(kWheelHorizonUs, freq_ghz), kBktPoolSize}) {
@@ -319,7 +317,8 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
     struct ibv_sge sge;
     for (int i = 0; i < (eqds::CreditChunkBuffPool::kNumChunk - 1) / 2; i++) {
       uint64_t chunk_addr;
-      UCCL_INIT_CHECK(engine_credit_chunk_pool_->alloc_buff(&chunk_addr) == 0, "Failed to allocate buffer for credit packet");
+      UCCL_INIT_CHECK(engine_credit_chunk_pool_->alloc_buff(&chunk_addr) == 0,
+                      "Failed to allocate buffer for credit packet");
       sge.addr = chunk_addr;
       sge.length = eqds::CreditChunkBuffPool::kChunkSize;
       sge.lkey = engine_credit_chunk_pool_->get_lkey();
@@ -328,7 +327,8 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
       wr.sg_list = &sge;
       wr.num_sge = 1;
       struct ibv_recv_wr* bad_wr;
-      UCCL_INIT_CHECK(ibv_post_recv(credit_qp_, &wr, &bad_wr) == 0, "ibv_post_recv failed");
+      UCCL_INIT_CHECK(ibv_post_recv(credit_qp_, &wr, &bad_wr) == 0,
+                      "ibv_post_recv failed");
     }
   }
 
@@ -373,7 +373,8 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
       struct ibv_sge sge;
       for (int i = 0; i < (CtrlChunkBuffPool::kNumChunk - 1) / 2; i++) {
         uint64_t chunk_addr;
-        UCCL_INIT_CHECK(ctrl_chunk_pool_->alloc_buff(&chunk_addr) == 0, "Failed to allocate buffer for control packet");
+        UCCL_INIT_CHECK(ctrl_chunk_pool_->alloc_buff(&chunk_addr) == 0,
+                        "Failed to allocate buffer for control packet");
         sge.addr = chunk_addr;
         sge.length = CtrlChunkBuffPool::kChunkSize;
         sge.lkey = ctrl_chunk_pool_->get_lkey();
@@ -382,7 +383,8 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
         wr.sg_list = &sge;
         wr.num_sge = 1;
         struct ibv_recv_wr* bad_wr;
-        UCCL_INIT_CHECK(ibv_post_recv(ctrl_qp_, &wr, &bad_wr) == 0, "ibv_post_recv failed");
+        UCCL_INIT_CHECK(ibv_post_recv(ctrl_qp_, &wr, &bad_wr) == 0,
+                        "ibv_post_recv failed");
       }
     }
 
@@ -393,12 +395,13 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
     }
 
     for (int i = 0; i < kPostRQThreshold; i++) {
-      rx_ack_sges_[i].lkey = ctrl_chunk_pool_->get_lkey();
-      rx_ack_sges_[i].length = CtrlChunkBuffPool::kChunkSize;
-      rx_ack_wrs_[i].sg_list = &rx_ack_sges_[i];
-      rx_ack_wrs_[i].num_sge = 1;
-      rx_ack_wrs_[i].next =
-          (i == kPostRQThreshold - 1) ? nullptr : &rx_ack_wrs_[i + 1];
+      ctrl_recv_wrs_.recv_sges[i].lkey = ctrl_chunk_pool_->get_lkey();
+      ctrl_recv_wrs_.recv_sges[i].length = CtrlChunkBuffPool::kChunkSize;
+      ctrl_recv_wrs_.recv_wrs[i].sg_list = &ctrl_recv_wrs_.recv_sges[i];
+      ctrl_recv_wrs_.recv_wrs[i].num_sge = 1;
+      ctrl_recv_wrs_.recv_wrs[i].next = (i == kPostRQThreshold - 1)
+                                            ? nullptr
+                                            : &ctrl_recv_wrs_.recv_wrs[i + 1];
     }
 
     tx_ack_wr_.num_sge = 1;
@@ -408,16 +411,19 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
   }
 
   for (int i = 0; i < kPostRQThreshold; i++) {
-    imm_wrs_[i].num_sge = 0;
-    imm_wrs_[i].sg_list = nullptr;
-    imm_wrs_[i].next = (i == kPostRQThreshold - 1) ? nullptr : &imm_wrs_[i + 1];
+    dp_recv_wrs_.recv_wrs[i].num_sge = 0;
+    dp_recv_wrs_.recv_wrs[i].sg_list = nullptr;
+    dp_recv_wrs_.recv_wrs[i].next =
+        (i == kPostRQThreshold - 1) ? nullptr : &dp_recv_wrs_.recv_wrs[i + 1];
 
-    rx_credit_sges_[i].lkey = engine_credit_chunk_pool_->get_lkey();
-    rx_credit_sges_[i].length = eqds::CreditChunkBuffPool::kChunkSize;
-    rx_credit_wrs_[i].sg_list = &rx_credit_sges_[i];
-    rx_credit_wrs_[i].num_sge = 1;
-    rx_credit_wrs_[i].next =
-        (i == kPostRQThreshold - 1) ? nullptr : &rx_credit_wrs_[i + 1];
+    credit_recv_wrs_.recv_sges[i].lkey = engine_credit_chunk_pool_->get_lkey();
+    credit_recv_wrs_.recv_sges[i].length =
+        eqds::CreditChunkBuffPool::kChunkSize;
+    credit_recv_wrs_.recv_wrs[i].sg_list = &credit_recv_wrs_.recv_sges[i];
+    credit_recv_wrs_.recv_wrs[i].num_sge = 1;
+    credit_recv_wrs_.recv_wrs[i].next = (i == kPostRQThreshold - 1)
+                                            ? nullptr
+                                            : &credit_recv_wrs_.recv_wrs[i + 1];
   }
 
   // Populate recv work requests to SRQ for consuming immediate data.
@@ -426,7 +432,8 @@ RDMAContext::RDMAContext(PeerID peer_id, TimerManager* rto,
     struct ibv_sge sge;
     if constexpr (!kRCMode) {
       uint64_t chunk_addr;
-      UCCL_INIT_CHECK(retr_chunk_pool_->alloc_buff(&chunk_addr) == 0, "Failed to allocate buffer for retransmission chunk");
+      UCCL_INIT_CHECK(retr_chunk_pool_->alloc_buff(&chunk_addr) == 0,
+                      "Failed to allocate buffer for retransmission chunk");
       sge.addr = chunk_addr;
       sge.length = RetrChunkBuffPool::kRetrChunkSize;
       sge.lkey = retr_chunk_pool_->get_lkey();
@@ -1001,7 +1008,7 @@ int RDMAContext::receiver_poll_rc_cq(void) {
   while (1) {
     if (cq_ex->status == IBV_WC_SUCCESS) {
       rc_rx_data();
-      post_srq_cnt_++;
+      dp_recv_wrs_.post_rq_cnt++;
     } else {
       LOG(ERROR) << "data path CQ state error: " << cq_ex->status
                  << " from QP:" << ibv_wc_read_qp_num(cq_ex);
@@ -1047,7 +1054,7 @@ int RDMAContext::receiver_poll_uc_cq(void) {
       auto chunk_addr = (uint64_t)cq_ex->wr_id;
       retr_chunk_pool_->free_buff(chunk_addr);
 
-      post_srq_cnt_++;
+      dp_recv_wrs_.post_rq_cnt++;
     } else {
       LOG(ERROR) << "data path CQ state error: " << cq_ex->status
                  << " from QP:" << ibv_wc_read_qp_num(cq_ex);
@@ -1166,74 +1173,77 @@ int RDMAContext::sender_poll_uc_cq(void) {
 
 void RDMAContext::check_credit_rq(bool force) {
   // Populate recv work requests for consuming credit packets.
-  while (post_credit_rq_cnt_ >= kPostRQThreshold) {
+  while (credit_recv_wrs_.post_rq_cnt >= kPostRQThreshold) {
     struct ibv_recv_wr* bad_wr;
     for (int i = 0; i < kPostRQThreshold; i++) {
       uint64_t chunk_addr;
       DCHECK(engine_credit_chunk_pool_->alloc_buff(&chunk_addr) == 0);
-      rx_credit_sges_[i].addr = chunk_addr;
-      rx_credit_wrs_[i].wr_id = chunk_addr;
+      credit_recv_wrs_.recv_sges[i].addr = chunk_addr;
+      credit_recv_wrs_.recv_wrs[i].wr_id = chunk_addr;
     }
-    DCHECK(ibv_post_recv(credit_qp_, &rx_credit_wrs_[0], &bad_wr) == 0);
-    UCCL_LOG_IO << "Posted " << post_credit_rq_cnt_
+    DCHECK(ibv_post_recv(credit_qp_, &credit_recv_wrs_.recv_wrs[0], &bad_wr) ==
+           0);
+    UCCL_LOG_IO << "Posted " << credit_recv_wrs_.post_rq_cnt
                 << " recv requests for Credit QP";
-    post_credit_rq_cnt_ -= kPostRQThreshold;
+    credit_recv_wrs_.post_rq_cnt -= kPostRQThreshold;
   }
 
-  if (force && post_credit_rq_cnt_) {
+  if (force && credit_recv_wrs_.post_rq_cnt) {
     struct ibv_recv_wr* bad_wr;
-    for (int i = 0; i < post_credit_rq_cnt_; i++) {
+    for (int i = 0; i < credit_recv_wrs_.post_rq_cnt; i++) {
       uint64_t chunk_addr;
       DCHECK(engine_credit_chunk_pool_->alloc_buff(&chunk_addr) == 0);
-      rx_credit_sges_[i].addr = chunk_addr;
-      rx_credit_wrs_[i].wr_id = chunk_addr;
+      credit_recv_wrs_.recv_sges[i].addr = chunk_addr;
+      credit_recv_wrs_.recv_wrs[i].wr_id = chunk_addr;
     }
-    rx_credit_wrs_[post_credit_rq_cnt_ - 1].next = nullptr;
-    DCHECK(ibv_post_recv(credit_qp_, &rx_credit_wrs_[0], &bad_wr) == 0);
-    UCCL_LOG_IO << "Posted " << post_credit_rq_cnt_
+    credit_recv_wrs_.recv_wrs[credit_recv_wrs_.post_rq_cnt - 1].next = nullptr;
+    DCHECK(ibv_post_recv(credit_qp_, &credit_recv_wrs_.recv_wrs[0], &bad_wr) ==
+           0);
+    UCCL_LOG_IO << "Posted " << credit_recv_wrs_.post_rq_cnt
                 << " recv requests for Credit QP";
-    rx_credit_wrs_[post_credit_rq_cnt_ - 1].next =
-        &rx_credit_wrs_[post_credit_rq_cnt_];
-    post_credit_rq_cnt_ = 0;
+    credit_recv_wrs_.recv_wrs[credit_recv_wrs_.post_rq_cnt - 1].next =
+        &credit_recv_wrs_.recv_wrs[credit_recv_wrs_.post_rq_cnt];
+    credit_recv_wrs_.post_rq_cnt = 0;
   }
 }
 
 void RDMAContext::check_ctrl_rq(bool force) {
   // Populate recv work requests for consuming control packets.
-  while (post_ctrl_rq_cnt_ >= kPostRQThreshold) {
+  while (ctrl_recv_wrs_.post_rq_cnt >= kPostRQThreshold) {
     struct ibv_recv_wr* bad_wr;
     for (int i = 0; i < kPostRQThreshold; i++) {
       uint64_t chunk_addr;
       DCHECK(ctrl_chunk_pool_->alloc_buff(&chunk_addr) == 0);
-      rx_ack_sges_[i].addr = chunk_addr;
-      rx_ack_wrs_[i].wr_id = chunk_addr;
+      ctrl_recv_wrs_.recv_sges[i].addr = chunk_addr;
+      ctrl_recv_wrs_.recv_wrs[i].wr_id = chunk_addr;
     }
-    DCHECK(ibv_post_recv(ctrl_qp_, &rx_ack_wrs_[0], &bad_wr) == 0);
-    UCCL_LOG_IO << "Posted " << post_ctrl_rq_cnt_
+    DCHECK(ibv_post_recv(ctrl_qp_, &ctrl_recv_wrs_.recv_wrs[0], &bad_wr) == 0);
+    UCCL_LOG_IO << "Posted " << ctrl_recv_wrs_.post_rq_cnt
                 << " recv requests for Ctrl QP";
-    post_ctrl_rq_cnt_ -= kPostRQThreshold;
+    ctrl_recv_wrs_.post_rq_cnt -= kPostRQThreshold;
   }
 
-  if (force && post_ctrl_rq_cnt_) {
+  if (force && ctrl_recv_wrs_.post_rq_cnt) {
     struct ibv_recv_wr* bad_wr;
-    for (int i = 0; i < post_ctrl_rq_cnt_; i++) {
+    for (int i = 0; i < ctrl_recv_wrs_.post_rq_cnt; i++) {
       uint64_t chunk_addr;
       DCHECK(ctrl_chunk_pool_->alloc_buff(&chunk_addr) == 0);
-      rx_ack_sges_[i].addr = chunk_addr;
-      rx_ack_wrs_[i].wr_id = chunk_addr;
+      ctrl_recv_wrs_.recv_sges[i].addr = chunk_addr;
+      ctrl_recv_wrs_.recv_wrs[i].wr_id = chunk_addr;
     }
-    rx_ack_wrs_[post_ctrl_rq_cnt_ - 1].next = nullptr;
-    DCHECK(ibv_post_recv(ctrl_qp_, &rx_ack_wrs_[0], &bad_wr) == 0);
-    UCCL_LOG_IO << "Posted " << post_ctrl_rq_cnt_
+    ctrl_recv_wrs_.recv_wrs[ctrl_recv_wrs_.post_rq_cnt - 1].next = nullptr;
+    DCHECK(ibv_post_recv(ctrl_qp_, &ctrl_recv_wrs_.recv_wrs[0], &bad_wr) == 0);
+    UCCL_LOG_IO << "Posted " << ctrl_recv_wrs_.post_rq_cnt
                 << " recv requests for Ctrl QP";
-    rx_ack_wrs_[post_ctrl_rq_cnt_ - 1].next = &rx_ack_wrs_[post_ctrl_rq_cnt_];
-    post_ctrl_rq_cnt_ = 0;
+    ctrl_recv_wrs_.recv_wrs[ctrl_recv_wrs_.post_rq_cnt - 1].next =
+        &ctrl_recv_wrs_.recv_wrs[ctrl_recv_wrs_.post_rq_cnt];
+    ctrl_recv_wrs_.post_rq_cnt = 0;
   }
 }
 
 void RDMAContext::check_srq(bool force) {
   struct ibv_sge sge[kPostRQThreshold];
-  while (post_srq_cnt_ >= kPostRQThreshold) {
+  while (dp_recv_wrs_.post_rq_cnt >= kPostRQThreshold) {
     struct ibv_recv_wr* bad_wr;
 
     if constexpr (!kRCMode) {
@@ -1243,37 +1253,39 @@ void RDMAContext::check_srq(bool force) {
         sge[i].addr = chunk_addr;
         sge[i].length = RetrChunkBuffPool::kRetrChunkSize;
         sge[i].lkey = retr_chunk_pool_->get_lkey();
-        imm_wrs_[i].sg_list = &sge[i];
-        imm_wrs_[i].num_sge = 1;
-        imm_wrs_[i].wr_id = chunk_addr;
+        dp_recv_wrs_.recv_wrs[i].sg_list = &sge[i];
+        dp_recv_wrs_.recv_wrs[i].num_sge = 1;
+        dp_recv_wrs_.recv_wrs[i].wr_id = chunk_addr;
       }
     }
 
-    DCHECK(ibv_post_srq_recv(srq_, &imm_wrs_[0], &bad_wr) == 0);
+    DCHECK(ibv_post_srq_recv(srq_, &dp_recv_wrs_.recv_wrs[0], &bad_wr) == 0);
     UCCL_LOG_IO << "Posted " << kPostRQThreshold << " recv requests for SRQ";
-    post_srq_cnt_ -= kPostRQThreshold;
+    dp_recv_wrs_.post_rq_cnt -= kPostRQThreshold;
   }
 
-  if (force && post_srq_cnt_) {
+  if (force && dp_recv_wrs_.post_rq_cnt) {
     struct ibv_recv_wr* bad_wr;
     if constexpr (!kRCMode) {
-      for (int i = 0; i < post_srq_cnt_; i++) {
+      for (int i = 0; i < dp_recv_wrs_.post_rq_cnt; i++) {
         uint64_t chunk_addr;
         DCHECK(retr_chunk_pool_->alloc_buff(&chunk_addr) == 0);
         sge[i].addr = chunk_addr;
         sge[i].length = RetrChunkBuffPool::kRetrChunkSize;
         sge[i].lkey = retr_chunk_pool_->get_lkey();
-        imm_wrs_[i].sg_list = &sge[i];
-        imm_wrs_[i].num_sge = 1;
-        imm_wrs_[i].wr_id = chunk_addr;
+        dp_recv_wrs_.recv_wrs[i].sg_list = &sge[i];
+        dp_recv_wrs_.recv_wrs[i].num_sge = 1;
+        dp_recv_wrs_.recv_wrs[i].wr_id = chunk_addr;
       }
     }
 
-    imm_wrs_[post_srq_cnt_ - 1].next = nullptr;
-    DCHECK(ibv_post_srq_recv(srq_, &imm_wrs_[0], &bad_wr) == 0);
-    UCCL_LOG_IO << "Posted " << post_srq_cnt_ << " recv requests for SRQ";
-    imm_wrs_[post_srq_cnt_ - 1].next = &imm_wrs_[post_srq_cnt_];
-    post_srq_cnt_ = 0;
+    dp_recv_wrs_.recv_wrs[dp_recv_wrs_.post_rq_cnt - 1].next = nullptr;
+    DCHECK(ibv_post_srq_recv(srq_, &dp_recv_wrs_.recv_wrs[0], &bad_wr) == 0);
+    UCCL_LOG_IO << "Posted " << dp_recv_wrs_.post_rq_cnt
+                << " recv requests for SRQ";
+    dp_recv_wrs_.recv_wrs[dp_recv_wrs_.post_rq_cnt - 1].next =
+        &dp_recv_wrs_.recv_wrs[dp_recv_wrs_.post_rq_cnt];
+    dp_recv_wrs_.post_rq_cnt = 0;
   }
 }
 
@@ -1497,7 +1509,7 @@ int RDMAContext::poll_credit_cq(void) {
         chunk_addr = cq_ex->wr_id;
         if (ibv_wc_read_opcode(cq_ex) == IBV_WC_RECV) {
           rx_credit(chunk_addr);
-          post_credit_rq_cnt_++;
+          credit_recv_wrs_.post_rq_cnt++;
         }
         engine_credit_chunk_pool_->free_buff(chunk_addr);
       } else {
@@ -1540,7 +1552,7 @@ int RDMAContext::poll_ctrl_cq(void) {
             auto pkt_addr = chunk_addr + i * CtrlChunkBuffPool::kPktSize;
             rx_ack(pkt_addr);
           }
-          post_ctrl_rq_cnt_++;
+          ctrl_recv_wrs_.post_rq_cnt++;
         }
         ctrl_chunk_pool_->free_buff(chunk_addr);
       } else {
@@ -2117,7 +2129,7 @@ std::string RDMAContext::to_string() {
   uint32_t stats_real_ooo = 0;
   uint32_t stats_maxooo = 0;
 
-  for (int fid = 0; fid < flow_cnt_; fid++) {
+  for (int fid = 0; fid < nr_flows_; fid++) {
     {
       // Sender flows
       auto* flow = reinterpret_cast<UcclFlow*>(receiver_flow_tbl_[fid]);

@@ -213,9 +213,9 @@ class UcclRDMAEngine {
       auto nic_clock = values.raw_clock.tv_sec * 1e9 + values.raw_clock.tv_nsec;
 
       // Update ratio and offset
-      ratio_ = (1.0 * (int64_t)host_clock - (int64_t)last_host_clock_) /
-               ((int64_t)nic_clock - (int64_t)last_nic_clock_);
-      offset_ = host_clock - ratio_ * nic_clock;
+      nic_ts_ratio_ = (1.0 * (int64_t)host_clock - (int64_t)last_host_clock_) /
+                      ((int64_t)nic_clock - (int64_t)last_nic_clock_);
+      nic_ts_offset_ = host_clock - nic_ts_ratio_ * nic_clock;
 
       last_sync_clock_tsc_ = host_clock;
     }
@@ -269,8 +269,8 @@ class UcclRDMAEngine {
   uint64_t last_sync_clock_tsc_;
   uint64_t last_host_clock_;
   uint64_t last_nic_clock_;
-  double ratio_ = 0;
-  double offset_ = 0;
+  double nic_ts_ratio_ = 0;
+  double nic_ts_offset_ = 0;
 
   // Whether shutdown is requested.
   std::atomic<bool> shutdown_{false};

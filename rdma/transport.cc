@@ -187,7 +187,7 @@ void UcclRDMAEngine::rc_handle_completion(void) {
   int work = 0;
   for (auto& it : rdma_ctx_map_) {
     // Update ratio and offset
-    it.second->update_clock(ratio_, offset_);
+    it.second->update_clock(nic_ts_ratio_, nic_ts_offset_);
 
     // Poll the CQ for data path QPs.
     work += it.second->poll_rc_cq();
@@ -207,7 +207,7 @@ void UcclRDMAEngine::uc_handle_completion(void) {
   // First, poll the CQ for Ctrl QPs and Credit QPs.
   for (auto& it : rdma_ctx_map_) {
     // Update ratio and offset
-    it.second->update_clock(ratio_, offset_);
+    it.second->update_clock(nic_ts_ratio_, nic_ts_offset_);
 
     work += it.second->poll_ctrl_cq();
 
@@ -457,9 +457,9 @@ void UcclRDMAEngine::handle_install_flow_on_engine(
   DCHECK(flow_id < MAX_FLOW);
 
   if (is_send)
-    rdma_ctx->sender_flow_tbl_[flow_id] = flow;
+    rdma_ctx->add_sender_flow(flow, flow_id);
   else {
-    rdma_ctx->receiver_flow_tbl_[flow_id] = flow;
+    rdma_ctx->add_receiver_flow(flow, flow_id);
     if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
       auto* subflow = flow->sub_flows_[engine_idx_ % NUM_ENGINES];
 
@@ -478,8 +478,6 @@ void UcclRDMAEngine::handle_install_flow_on_engine(
       eqds_->request_pull(&subflow->pcb.eqds_cc);
     }
   }
-
-  rdma_ctx->flow_cnt_++;
 
   UCCL_LOG_ENGINE << "Installed flow: " << flow_id
                   << ", peerid: " << ctrl_work.peer_id
@@ -505,12 +503,13 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
   {
     DCHECK(rdma_ctx_map_.find(ctrl_work.peer_id) == rdma_ctx_map_.end());
     // auto t1 = std::chrono::high_resolution_clock::now();
-    rdma_ctx = RDMAFactory::CreateContext(ctrl_work.peer_id, &rto_tm_,
-                                          &engine_outstanding_bytes_, eqds_,
-                                          dev, engine_idx_ % NUM_ENGINES, meta);
+    rdma_ctx =
+        RDMAFactory::CreateContext(&rto_tm_, &engine_outstanding_bytes_, eqds_,
+                                   dev, engine_idx_ % NUM_ENGINES, meta);
     // auto t2 = std::chrono::high_resolution_clock::now();
     // std::cout << "create RDMAContext time: "
-    //             << std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1)
+    //             << std::chrono::duration_cast<std::chrono::milliseconds>(t2 -
+    //             t1)
     //                    .count()
     //             << "ms on dev " << dev << "/" << engine_idx_ << std::endl;
     std::tie(std::ignore, ret) =
@@ -562,7 +561,8 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
 
     // auto t2 = std::chrono::high_resolution_clock::now();
     // std::cout << "exchange PSN, QPN time: "
-    //             << std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1)
+    //             << std::chrono::duration_cast<std::chrono::milliseconds>(t2 -
+    //             t1)
     //                    .count()
     //             << "ms on dev " << dev << "/" << engine_idx_ << std::endl;
 
@@ -985,9 +985,11 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
     install_ctx_on_engines(bootstrap_fd, dev, peer_id, remote_ip, remote_dev);
     // auto t2 = std::chrono::high_resolution_clock::now();
     // std::cout << "install_ctx_on_engines time: "
-    //             << std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1)
+    //             << std::chrono::duration_cast<std::chrono::milliseconds>(t2 -
+    //             t1)
     //                    .count()
-    //             << "ms on <dev, remote_dev>: " << dev << "/" << remote_dev << std::endl;
+    //             << "ms on <dev, remote_dev>: " << dev << "/" << remote_dev <<
+    //             std::endl;
   }
 
   {
