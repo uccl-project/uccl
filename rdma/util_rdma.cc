@@ -249,7 +249,6 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
                                       IBV_QP_PORT | IBV_QP_ACCESS_FLAGS) == 0,
                     "ibv_modify_qp failed");
 
-    dp_qps_[i].local_psn = BASE_PSN;
     dp_qps_[i].qp = qp;
     qpn2idx_.insert({qp->qp_num, i});
 
@@ -263,7 +262,6 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
   memset(&wr, 0, sizeof(wr));
 
   // Create Credit QP, SCQ/RCQ and MR for engine or pacer.
-  credit_local_psn_ = BASE_PSN;
   util_rdma_create_qp_seperate_cq(context_, &credit_qp_, IBV_QPT_UC, true,
                                   false, (struct ibv_cq**)&pacer_credit_cq_ex_,
                                   (struct ibv_cq**)&engine_credit_cq_ex_, false,
@@ -323,7 +321,6 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
   // Initialize resources needed when using UC.
   if constexpr (!kRCMode) {
     // Create Ctrl QP, CQ, and MR.
-    ctrl_local_psn_ = BASE_PSN;
     util_rdma_create_qp(context_, &ctrl_qp_, IBV_QPT_UC, true, true,
                         (struct ibv_cq**)&ctrl_cq_ex_, false, kCQSize, pd_,
                         &ctrl_mr_, nullptr, kCtrlMRSize,
@@ -351,12 +348,6 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
         UCCL_INIT_CHECK(ibv_post_recv(ctrl_qp_, &wr, &bad_wr) == 0,
                         "ibv_post_recv failed");
       }
-    }
-
-    for (int i = 0; i < kMaxBatchCQ; i++) {
-      retr_wrs_[i].num_sge = 1;
-      retr_wrs_[i].sg_list = nullptr;
-      retr_wrs_[i].next = (i == kMaxBatchCQ - 1) ? nullptr : &retr_wrs_[i + 1];
     }
 
     for (int i = 0; i < kPostRQThreshold; i++) {

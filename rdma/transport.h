@@ -581,7 +581,6 @@ class UcclFlow {
     auto factory_dev = RDMAFactory::get_factory_dev(dev);
 
     // Fifo QP.
-    comm_base->fifo_local_psn = BASE_PSN;
     util_rdma_create_qp(factory_dev->context, &comm_base->fifo_qp, IBV_QPT_RC,
                         false, false, &comm_base->flow_cq, false, kFifoCQSize,
                         factory_dev->pd, &comm_base->fifo_mr, nullptr,
@@ -590,28 +589,25 @@ class UcclFlow {
     comm_base->fifo =
         reinterpret_cast<struct RemFifo*>(comm_base->fifo_mr->addr);
 
-    // Exchange local PSN, QPN for Fifo QP with remote peer.
-    char buf[2 * sizeof(uint32_t)];
-    auto fifo_lpsn = comm_base->fifo_local_psn;
+    // Exchange local QPN for Fifo QP with remote peer.
+    char buf[sizeof(uint32_t)];
     auto fifo_lqpn = comm_base->fifo_qp->qp_num;
-    memcpy(buf, &fifo_lpsn, sizeof(uint32_t));
-    memcpy(buf + sizeof(uint32_t), &fifo_lqpn, sizeof(uint32_t));
+    memcpy(buf, &fifo_lqpn, sizeof(uint32_t));
 
-    UCCL_INIT_CHECK(send_message(bootstrap_fd, buf, 2 * sizeof(uint32_t)) ==
-                        2 * sizeof(uint32_t),
-                    "uccl_connect: send_message()");
+    UCCL_INIT_CHECK(
+        send_message(bootstrap_fd, buf, sizeof(uint32_t)) == sizeof(uint32_t),
+        "uccl_connect: send_message()");
 
-    UCCL_INIT_CHECK(receive_message(bootstrap_fd, buf, 2 * sizeof(uint32_t)) ==
-                        2 * sizeof(uint32_t),
+    UCCL_INIT_CHECK(receive_message(bootstrap_fd, buf, sizeof(uint32_t)) ==
+                        sizeof(uint32_t),
                     "uccl_connect: receive_message()");
 
-    auto fifo_rpsn = *reinterpret_cast<uint32_t*>(buf);
-    auto fifo_rqpn = *reinterpret_cast<uint32_t*>(buf + sizeof(uint32_t));
+    auto fifo_rqpn = *reinterpret_cast<uint32_t*>(buf);
 
-    UCCL_INIT_CHECK(modify_qp_rtr(comm_base->fifo_qp, dev, &remote_ctx,
-                                  fifo_rqpn, fifo_rpsn) == 0,
-                    "Failed to modify Fifo QP to RTR");
-    UCCL_INIT_CHECK(modify_qp_rts(comm_base->fifo_qp, fifo_lpsn, true) == 0,
+    UCCL_INIT_CHECK(
+        modify_qp_rtr(comm_base->fifo_qp, dev, &remote_ctx, fifo_rqpn) == 0,
+        "Failed to modify Fifo QP to RTR");
+    UCCL_INIT_CHECK(modify_qp_rts(comm_base->fifo_qp, true) == 0,
                     "Failed to modify Fifo QP to RTS");
 
     // Exchange addr and rkey for Fifo MR with remote peer.
@@ -663,28 +659,23 @@ class UcclFlow {
                                       IBV_QP_PORT | IBV_QP_ACCESS_FLAGS) == 0,
                     "Failed to modify RC QP to INIT");
 
-    comm_base->rc_local_psn = BASE_PSN;
+    // Send QPN to remote peer.
+    memcpy(buf, &comm_base->rc_qp->qp_num, sizeof(uint32_t));
+    int ret = send_message(bootstrap_fd, buf, sizeof(uint32_t));
+    DCHECK(ret == sizeof(uint32_t));
 
-    // Send PSN, QPN to remote peer.
-    memcpy(buf, &comm_base->rc_local_psn, sizeof(uint32_t));
-    memcpy(buf + sizeof(uint32_t), &comm_base->rc_qp->qp_num, sizeof(uint32_t));
-    int ret = send_message(bootstrap_fd, buf, 2 * sizeof(uint32_t));
-    DCHECK(ret == 2 * sizeof(uint32_t));
+    // Receive QPN from remote peer.
+    ret = receive_message(bootstrap_fd, buf, sizeof(uint32_t));
+    DCHECK(ret == sizeof(uint32_t));
 
-    // Receive PSN, QPN from remote peer.
-    ret = receive_message(bootstrap_fd, buf, 2 * sizeof(uint32_t));
-    DCHECK(ret == 2 * sizeof(uint32_t));
-
-    auto rc_rpsn = *reinterpret_cast<uint32_t*>(buf);
-    auto rc_rqpn = *reinterpret_cast<uint32_t*>(buf + sizeof(uint32_t));
-
-    UCCL_INIT_CHECK(modify_qp_rtr(comm_base->rc_qp, dev, &remote_ctx, rc_rqpn,
-                                  rc_rpsn) == 0,
-                    "Failed to modify RC QP to RTR");
+    auto rc_rqpn = *reinterpret_cast<uint32_t*>(buf);
 
     UCCL_INIT_CHECK(
-        modify_qp_rts(comm_base->rc_qp, comm_base->rc_local_psn, true) == 0,
-        "Failed to modify RC QP to RTS");
+        modify_qp_rtr(comm_base->rc_qp, dev, &remote_ctx, rc_rqpn) == 0,
+        "Failed to modify RC QP to RTR");
+
+    UCCL_INIT_CHECK(modify_qp_rts(comm_base->rc_qp, true) == 0,
+                    "Failed to modify RC QP to RTS");
 
     // GPU flush QP for receiver.
     if (!is_send_) {
@@ -700,7 +691,7 @@ class UcclFlow {
 
       UCCL_INIT_CHECK(modify_qp_rtr_gpuflush(recv_comm_.gpu_flush_qp, dev) == 0,
                       "Failed to modify GPU flush QP to RTR");
-      UCCL_INIT_CHECK(modify_qp_rts(recv_comm_.gpu_flush_qp, 0, true) == 0,
+      UCCL_INIT_CHECK(modify_qp_rts(recv_comm_.gpu_flush_qp, true) == 0,
                       "Failed to modify GPU flush QP to RTS");
     }
   }

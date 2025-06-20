@@ -339,14 +339,11 @@ struct alignas(32) NetCommBase {
 
   // Fifo QP based on Reliable Connection (RC).
   struct ibv_qp* fifo_qp;
-  // Local PSN for Fifo.
-  uint32_t fifo_local_psn;
   // Memory region for Fifo.
   struct ibv_mr* fifo_mr;
 
   // RC UP for small messages bypassing UcclEngine.
   struct ibv_qp* rc_qp;
-  uint32_t rc_local_psn;
 
   uint64_t remote_fifo_addr;
   uint32_t remote_fifo_rkey;
@@ -531,7 +528,6 @@ class SubUcclFlow {
  */
 struct QPWrapper {
   struct ibv_qp* qp;
-  uint32_t local_psn;
   // A counter for occasionally posting IBV_SEND_SIGNALED flag.
   uint32_t signal_cnt_ = 0;
 };
@@ -620,8 +616,6 @@ class RDMAContext {
 
   // (high-priority) QP for credit messages (e.g., pull of EQDS).
   struct ibv_qp* credit_qp_;
-  // Local PSN for credit messages.
-  uint32_t credit_local_psn_;
 
   // (Engine only) Dedicated CQ for credit messages.
   struct ibv_cq_ex* engine_credit_cq_ex_;
@@ -634,8 +628,6 @@ class RDMAContext {
 
   // (high-priority) QP for control messages (e.g., ACK).
   struct ibv_qp* ctrl_qp_;
-  // Local PSN for control messages.
-  uint32_t ctrl_local_psn_;
   // Dedicated CQ for control messages.
   struct ibv_cq_ex* ctrl_cq_ex_;
   // Memory region for control messages.
@@ -661,9 +653,6 @@ class RDMAContext {
 
   // Buffer pool for work request extension items.
   std::optional<WrExBuffPool> wr_ex_pool_;
-
-  // Pre-allocated WQEs for consuming retransmission chunks.
-  struct ibv_recv_wr retr_wrs_[kMaxBatchCQ];
 
   // WQE for sending ACKs.
   struct ibv_send_wr tx_ack_wr_;
@@ -1227,7 +1216,7 @@ static inline int modify_qp_rtr_gpuflush(struct ibv_qp* qp, int dev) {
 
   attr.ah_attr.port_num = IB_PORT_NUM;
   attr.dest_qp_num = qp->qp_num;
-  attr.rq_psn = 0;
+  attr.rq_psn = BASE_PSN;
 
   attr.min_rnr_timer = 12;
   attr.max_dest_rd_atomic = 1;
@@ -1249,7 +1238,7 @@ static inline int modify_qp_rtr_gpuflush(struct ibv_qp* qp, int dev) {
 
 static inline int modify_qp_rtr(struct ibv_qp* qp, int dev,
                                 struct RemoteRDMAContext* remote_ctx,
-                                uint32_t remote_qpn, uint32_t remote_psn) {
+                                uint32_t remote_qpn) {
   struct ibv_qp_attr attr;
   int attr_mask = IBV_QP_STATE | IBV_QP_PATH_MTU | IBV_QP_AV | IBV_QP_DEST_QPN |
                   IBV_QP_RQ_PSN;
@@ -1278,7 +1267,7 @@ static inline int modify_qp_rtr(struct ibv_qp* qp, int dev,
   }
   attr.ah_attr.sl = kServiceLevel;
   attr.dest_qp_num = remote_qpn;
-  attr.rq_psn = remote_psn;
+  attr.rq_psn = BASE_PSN;
 
   if (qp->qp_type == IBV_QPT_RC) {
     attr.min_rnr_timer = 12;
@@ -1300,13 +1289,12 @@ static inline int modify_qp_rtr(struct ibv_qp* qp, int dev,
   return ibv_modify_qp(qp, &attr, attr_mask);
 }
 
-static inline int modify_qp_rts(struct ibv_qp* qp, uint32_t local_psn,
-                                bool rc) {
+static inline int modify_qp_rts(struct ibv_qp* qp, bool rc) {
   struct ibv_qp_attr attr;
   int attr_mask = IBV_QP_STATE | IBV_QP_SQ_PSN;
   memset(&attr, 0, sizeof(attr));
   attr.qp_state = IBV_QPS_RTS;
-  attr.sq_psn = local_psn;
+  attr.sq_psn = BASE_PSN;
 
   if (rc) {
     attr.timeout = 14;

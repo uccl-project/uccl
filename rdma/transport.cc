@@ -529,21 +529,16 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
     int const size = sizeof(uint32_t) + sizeof(uint32_t);
     char buf[kTotalQP * size];
     for (auto i = 0; i < kPortEntropy; i++) {
-      memcpy(buf + i * size, &rdma_ctx->dp_qps_[i].local_psn, sizeof(uint32_t));
-      memcpy(buf + i * size + sizeof(uint32_t),
-             &rdma_ctx->dp_qps_[i].qp->qp_num, sizeof(uint32_t));
+      memcpy(buf + i * size, &rdma_ctx->dp_qps_[i].qp->qp_num,
+             sizeof(uint32_t));
     }
 
-    memcpy(buf + kPortEntropy * size, &rdma_ctx->credit_local_psn_,
+    memcpy(buf + kPortEntropy * size, &rdma_ctx->credit_qp_->qp_num,
            sizeof(uint32_t));
-    memcpy(buf + kPortEntropy * size + sizeof(uint32_t),
-           &rdma_ctx->credit_qp_->qp_num, sizeof(uint32_t));
 
     if constexpr (!kRCMode) {
-      memcpy(buf + (kPortEntropy + 1) * size, &rdma_ctx->ctrl_local_psn_,
+      memcpy(buf + (kPortEntropy + 1) * size, &rdma_ctx->ctrl_qp_->qp_num,
              sizeof(uint32_t));
-      memcpy(buf + (kPortEntropy + 1) * size + sizeof(uint32_t),
-             &rdma_ctx->ctrl_qp_->qp_num, sizeof(uint32_t));
     }
     // Wait until our turn to use bootstrap fd.
     auto engine_offset = engine_idx_ % NUM_ENGINES;
@@ -573,42 +568,33 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
 
     // Modify QPs to RTR and RTS.
     for (auto i = 0; i < kPortEntropy; i++) {
-      auto remote_psn = *reinterpret_cast<uint32_t*>(buf + i * size);
-      auto remote_qpn =
-          *reinterpret_cast<uint32_t*>(buf + i * size + sizeof(uint32_t));
+      auto remote_qpn = *reinterpret_cast<uint32_t*>(buf + i * size);
       auto qp = rdma_ctx->dp_qps_[i].qp;
 
-      ret = modify_qp_rtr(qp, dev, &rdma_ctx->remote_ctx_, remote_qpn,
-                          remote_psn);
+      ret = modify_qp_rtr(qp, dev, &rdma_ctx->remote_ctx_, remote_qpn);
       DCHECK(ret == 0) << "Failed to modify data path QP to RTR";
 
-      ret = modify_qp_rts(qp, rdma_ctx->dp_qps_[i].local_psn, kRCMode);
+      ret = modify_qp_rts(qp, kRCMode);
       DCHECK(ret == 0) << "Failed to modify data path QP to RTS";
     }
 
-    auto credit_rpsn = *reinterpret_cast<uint32_t*>(buf + kPortEntropy * size);
-    auto credit_rqpn = *reinterpret_cast<uint32_t*>(buf + kPortEntropy * size +
-                                                    sizeof(uint32_t));
+    auto credit_rqpn = *reinterpret_cast<uint32_t*>(buf + kPortEntropy * size);
     auto credit_qp = rdma_ctx->credit_qp_;
 
-    ret = modify_qp_rtr(credit_qp, dev, &rdma_ctx->remote_ctx_, credit_rqpn,
-                        credit_rpsn);
+    ret = modify_qp_rtr(credit_qp, dev, &rdma_ctx->remote_ctx_, credit_rqpn);
     DCHECK(ret == 0) << "Failed to modify Ctrl QP to RTR";
 
-    ret = modify_qp_rts(credit_qp, rdma_ctx->credit_local_psn_, false);
+    ret = modify_qp_rts(credit_qp, false);
 
     if constexpr (!kRCMode) {
-      auto ctrl_rpsn =
+      auto ctrl_rqpn =
           *reinterpret_cast<uint32_t*>(buf + (kPortEntropy + 1) * size);
-      auto ctrl_rqpn = *reinterpret_cast<uint32_t*>(
-          buf + (kPortEntropy + 1) * size + sizeof(uint32_t));
       auto ctrl_qp = rdma_ctx->ctrl_qp_;
 
-      ret = modify_qp_rtr(ctrl_qp, dev, &rdma_ctx->remote_ctx_, ctrl_rqpn,
-                          ctrl_rpsn);
+      ret = modify_qp_rtr(ctrl_qp, dev, &rdma_ctx->remote_ctx_, ctrl_rqpn);
       DCHECK(ret == 0) << "Failed to modify Ctrl QP to RTR";
 
-      ret = modify_qp_rts(ctrl_qp, rdma_ctx->ctrl_local_psn_, false);
+      ret = modify_qp_rts(ctrl_qp, false);
     }
 
     UCCL_LOG_ENGINE << "Installed ctx: " << ctrl_work.peer_id
