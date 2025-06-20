@@ -790,7 +790,7 @@ class RDMAContext {
   /**
    * @brief Rceive an ACK from the Ctrl QP.
    */
-  void uc_rx_ack(struct ibv_cq_ex* cq_ex, UcclSackHdr *ucclsackh);
+  void uc_rx_ack(struct ibv_cq_ex* cq_ex, UcclSackHdr* ucclsackh);
 
   void uc_rx_rtx_chunk(struct ibv_cq_ex* cq_ex, uint64_t chunk_addr);
 
@@ -1452,7 +1452,9 @@ static inline struct ibv_srq* util_rdma_create_srq(struct ibv_pd* pd,
   return srq;
 }
 
-static inline struct ibv_ah* create_ah(struct ibv_pd* pd, union ibv_gid remote_gid, struct ibv_port_attr remote_port_attr) {
+static inline struct ibv_ah* create_ah(struct ibv_pd* pd,
+                                       union ibv_gid remote_gid,
+                                       struct ibv_port_attr remote_port_attr) {
   struct ibv_ah_attr ah_attr = {};
 
   if (ROCE_NET) {
@@ -1466,10 +1468,10 @@ static inline struct ibv_ah* create_ah(struct ibv_pd* pd, union ibv_gid remote_g
     ah_attr.is_global = 0;
     ah_attr.dlid = remote_port_attr.lid;
   }
-  
+
   ah_attr.port_num = IB_PORT_NUM;
   ah_attr.sl = kServiceLevel;
-  
+
   struct ibv_ah* ah = ibv_create_ah(pd, &ah_attr);
 
   return ah;
@@ -1639,17 +1641,23 @@ class SharedIOContext {
 
     if constexpr (!kRCMode) {
       // Create Ctrl QP, CQ, and MR.
-      util_rdma_create_qp(context, &ctrl_qp_, IBV_QPT_UD, true, true, (struct ibv_cq**)&ctrl_cq_ex_, false, kCQSize, pd, &ctrl_mr_, nullptr, kCtrlMRSize, CtrlChunkBuffPool::kNumChunk / 2,
-                        CtrlChunkBuffPool::kNumChunk / 2, 1, 1);
+      util_rdma_create_qp(context, &ctrl_qp_, IBV_QPT_UD, true, true,
+                          (struct ibv_cq**)&ctrl_cq_ex_, false, kCQSize, pd,
+                          &ctrl_mr_, nullptr, kCtrlMRSize,
+                          CtrlChunkBuffPool::kNumChunk / 2,
+                          CtrlChunkBuffPool::kNumChunk / 2, 1, 1);
 
       struct ibv_qp_attr attr = {};
       attr.qp_state = IBV_QPS_RTR;
-      UCCL_INIT_CHECK(ibv_modify_qp(ctrl_qp_, &attr, IBV_QP_STATE) == 0, "ibv_modify_qp failed: ctrl qp rtr");
+      UCCL_INIT_CHECK(ibv_modify_qp(ctrl_qp_, &attr, IBV_QP_STATE) == 0,
+                      "ibv_modify_qp failed: ctrl qp rtr");
 
       memset(&attr, 0, sizeof(attr));
       attr.qp_state = IBV_QPS_RTS;
       attr.sq_psn = BASE_PSN;
-      UCCL_INIT_CHECK(ibv_modify_qp(ctrl_qp_, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN) == 0, "ibv_modify_qp failed: ctrl qp rts");
+      UCCL_INIT_CHECK(
+          ibv_modify_qp(ctrl_qp_, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN) == 0,
+          "ibv_modify_qp failed: ctrl qp rts");
 
       // Initialize Control packet buffer pool.
       ctrl_chunk_pool_.emplace(ctrl_mr_);
@@ -1677,7 +1685,6 @@ class SharedIOContext {
         }
       }
     }
-
   }
 
   ~SharedIOContext() {
@@ -1733,7 +1740,9 @@ class SharedIOContext {
         << "Failed to allocate buffer for retransmission header";
     return addr;
   }
-  inline void push_retr_chunk(uint64_t addr) {retr_chunk_pool_->free_buff(addr);}
+  inline void push_retr_chunk(uint64_t addr) {
+    retr_chunk_pool_->free_buff(addr);
+  }
   inline uint64_t pop_retr_chunk() {
     uint64_t addr;
     DCHECK(retr_chunk_pool_->alloc_buff(&addr) == 0)
@@ -1741,7 +1750,9 @@ class SharedIOContext {
     return addr;
   }
 
-  inline void push_ctrl_chunk(uint64_t addr) { ctrl_chunk_pool_->free_buff(addr); }
+  inline void push_ctrl_chunk(uint64_t addr) {
+    ctrl_chunk_pool_->free_buff(addr);
+  }
   inline uint64_t pop_ctrl_chunk() {
     uint64_t addr;
     DCHECK(ctrl_chunk_pool_->alloc_buff(&addr) == 0)
@@ -1778,11 +1789,10 @@ class SharedIOContext {
   inline int get_post_ctrl_rq_cnt(void) { return ctrl_recv_wrs_.post_rq_cnt; }
 
  private:
+  struct ibv_qp* ctrl_qp_;
+  struct ibv_cq_ex* ctrl_cq_ex_;
+  struct ibv_mr* ctrl_mr_;
 
-  struct ibv_qp *ctrl_qp_;
-  struct ibv_cq_ex *ctrl_cq_ex_;
-  struct ibv_mr *ctrl_mr_;
-  
   // Shared CQ for all data path QPs.
   struct ibv_cq_ex* send_cq_ex_;
   struct ibv_cq_ex* recv_cq_ex_;
@@ -1804,7 +1814,7 @@ class SharedIOContext {
 
   // Pre-allocated WQEs/SGEs for receiving ACKs.
   struct RecvWRs ctrl_recv_wrs_;
-  
+
   // WQE for sending ACKs.
   struct ibv_send_wr tx_ack_wr_[kMaxAckWRs];
   struct ibv_sge tx_ack_sge_[kMaxAckWRs];

@@ -212,7 +212,8 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
   remote_ctx_.remote_gid = meta.install_ctx.remote_gid;
   remote_ctx_.remote_port_attr = meta.install_ctx.remote_port_attr;
 
-  remote_ctx_.dest_ah = create_ah(factory_dev->pd, remote_ctx_.remote_gid, remote_ctx_.remote_port_attr);
+  remote_ctx_.dest_ah = create_ah(factory_dev->pd, remote_ctx_.remote_gid,
+                                  remote_ctx_.remote_port_attr);
   UCCL_INIT_CHECK(remote_ctx_.dest_ah != nullptr, "create_ah failed");
 
   mtu_bytes_ =
@@ -951,7 +952,6 @@ void RDMAContext::check_credit_rq(bool force) {
 }
 
 void SharedIOContext::check_ctrl_rq(bool force) {
-
   auto n_post_ctrl_rq = get_post_ctrl_rq_cnt();
   if (!force && n_post_ctrl_rq < kPostRQThreshold) return;
 
@@ -960,12 +960,12 @@ void SharedIOContext::check_ctrl_rq(bool force) {
   for (int i = 0; i < post_batch; i++) {
     auto chunk_addr = pop_ctrl_chunk();
     ctrl_recv_wrs_.recv_sges[i].addr = chunk_addr;
-    
+
     CQEDesc* cqe_desc = pop_cqe_desc();
     cqe_desc->data = (uint64_t)chunk_addr;
     ctrl_recv_wrs_.recv_wrs[i].wr_id = (uint64_t)cqe_desc;
-    ctrl_recv_wrs_.recv_wrs[i].next = (i == post_batch - 1) ? nullptr
-                                                            : &ctrl_recv_wrs_.recv_wrs[i + 1];
+    ctrl_recv_wrs_.recv_wrs[i].next =
+        (i == post_batch - 1) ? nullptr : &ctrl_recv_wrs_.recv_wrs[i + 1];
   }
 
   struct ibv_recv_wr* bad_wr;
@@ -1079,7 +1079,7 @@ void RDMAContext::rx_credit(uint64_t pkt_addr) {
   EventOnRxCredit(subflow, pullno);
 }
 
-void RDMAContext::uc_rx_ack(struct ibv_cq_ex* cq_ex, UcclSackHdr *ucclsackh) {
+void RDMAContext::uc_rx_ack(struct ibv_cq_ex* cq_ex, UcclSackHdr* ucclsackh) {
   uint64_t t5;
   auto t6 = rdtsc();
 
@@ -1102,7 +1102,8 @@ void RDMAContext::uc_rx_ack(struct ibv_cq_ex* cq_ex, UcclSackHdr *ucclsackh) {
                 << ", snd_nxt: " << subflow->pcb.snd_nxt.to_uint32()
                 << " for flow" << fid << " by Ctrl QP";
   } else if (UINT_CSN::uintcsn_seqno_eq(ackno, subflow->pcb.snd_una)) {
-    UCCL_LOG_IO << "Received duplicate ACK " << ackno << " for flow" << fid << ", snd_una: " << subflow->pcb.snd_una.to_uint32()
+    UCCL_LOG_IO << "Received duplicate ACK " << ackno << " for flow" << fid
+                << ", snd_una: " << subflow->pcb.snd_una.to_uint32()
                 << " by Ctrl QP";
 
     EventOnRxNACK(subflow, ucclsackh);
@@ -1246,10 +1247,9 @@ int RDMAContext::poll_credit_cq(void) {
 }
 
 int SharedIOContext::poll_ctrl_cq(void) {
-  
   auto cq_ex = ctrl_cq_ex_;
   int work = 0;
-  
+
   while (1) {
     struct ibv_poll_cq_attr poll_cq_attr = {};
     if (ibv_start_poll(cq_ex, &poll_cq_attr)) return work;
@@ -1257,7 +1257,8 @@ int SharedIOContext::poll_ctrl_cq(void) {
 
     while (1) {
       if (cq_ex->status != IBV_WC_SUCCESS) {
-        LOG(ERROR) << "Ctrl CQ state error: " << cq_ex->status << ", " << ibv_wc_read_opcode(cq_ex);
+        LOG(ERROR) << "Ctrl CQ state error: " << cq_ex->status << ", "
+                   << ibv_wc_read_opcode(cq_ex);
         ibv_next_poll(cq_ex);
       }
 
@@ -1269,20 +1270,21 @@ int SharedIOContext::poll_ctrl_cq(void) {
         auto imm_data = ntohl(ibv_wc_read_imm_data(cq_ex));
         auto num_ack = imm_data;
         UCCL_LOG_IO << "Receive " << num_ack
-                    << " ACKs in one CtrlChunk, Chunk addr: " << chunk_addr << ", byte_len: " << ibv_wc_read_byte_len(cq_ex);
+                    << " ACKs in one CtrlChunk, Chunk addr: " << chunk_addr
+                    << ", byte_len: " << ibv_wc_read_byte_len(cq_ex);
         chunk_addr += UD_ADDITION;
         for (int i = 0; i < num_ack; i++) {
           auto pkt_addr = chunk_addr + i * CtrlChunkBuffPool::kPktSize;
 
           auto* ucclsackh = reinterpret_cast<UcclSackHdr*>(pkt_addr);
           auto fid = ucclsackh->fid.value();
-          auto *rdma_ctx = fid_to_rdma_ctx(fid);
+          auto* rdma_ctx = fid_to_rdma_ctx(fid);
 
           rdma_ctx->uc_rx_ack(cq_ex, ucclsackh);
         }
         inc_post_ctrl_rq();
       }
-      
+
       push_ctrl_chunk(chunk_addr);
 
       push_cqe_desc(cqe_desc);
@@ -1653,7 +1655,7 @@ void SharedIOContext::flush_acks() {
   DCHECK(ret == 0) << ret << ", nr_tx_ack_wr_: " << nr_tx_ack_wr_;
 
   UCCL_LOG_IO << "Flush " << nr_tx_ack_wr_ << " ACKs";
-  
+
   nr_tx_ack_wr_ = 0;
 }
 
@@ -1666,7 +1668,7 @@ void RDMAContext::try_post_acks(int num_ack, uint64_t chunk_addr, bool force) {
   io_ctx_->tx_ack_sge_[idx].length = CtrlChunkBuffPool::kPktSize * num_ack;
   io_ctx_->tx_ack_sge_[idx].lkey = io_ctx_->get_ctrl_chunk_lkey();
 
-  CQEDesc *cqe_desc = io_ctx_->pop_cqe_desc();
+  CQEDesc* cqe_desc = io_ctx_->pop_cqe_desc();
   cqe_desc->data = chunk_addr;
   io_ctx_->tx_ack_wr_[idx].wr_id = (uint64_t)cqe_desc;
 
@@ -1676,14 +1678,14 @@ void RDMAContext::try_post_acks(int num_ack, uint64_t chunk_addr, bool force) {
   io_ctx_->tx_ack_wr_[idx].wr.ud.remote_qpn = remote_ctx_.remote_ctrl_qpn;
   io_ctx_->tx_ack_wr_[idx].wr.ud.remote_qkey = QKEY;
 
-  io_ctx_->tx_ack_wr_[idx].next = (idx == kMaxAckWRs - 1) ? nullptr : &io_ctx_->tx_ack_wr_[idx + 1];
+  io_ctx_->tx_ack_wr_[idx].next =
+      (idx == kMaxAckWRs - 1) ? nullptr : &io_ctx_->tx_ack_wr_[idx + 1];
 
   io_ctx_->nr_tx_ack_wr_++;
 
   UCCL_LOG_IO << "Post " << num_ack << " ACKs";
 
-  if (force || io_ctx_->nr_tx_ack_wr_ == kMaxAckWRs)
-    io_ctx_->flush_acks();
+  if (force || io_ctx_->nr_tx_ack_wr_ == kMaxAckWRs) io_ctx_->flush_acks();
 }
 
 void RDMAContext::craft_ack(SubUcclFlow* subflow, uint64_t chunk_addr,

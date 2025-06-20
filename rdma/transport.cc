@@ -459,8 +459,7 @@ void UcclRDMAEngine::handle_install_flow_on_engine(
   if (is_send) {
     rdma_ctx->add_sender_flow(flow, flow_id);
     io_ctx_.record_fid_ctx_mapping(flow_id, rdma_ctx);
-  }
-  else {
+  } else {
     rdma_ctx->add_receiver_flow(flow, flow_id);
     if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
       auto* subflow = flow->sub_flows_[engine_idx_ % NUM_ENGINES];
@@ -531,8 +530,7 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
            sizeof(uint32_t));
 
     // Send ctrl qpn to remote peer.
-    memcpy(buf + kTotalQP * size, &io_ctx_.ctrl_qp_->qp_num,
-           sizeof(uint32_t));
+    memcpy(buf + kTotalQP * size, &io_ctx_.ctrl_qp_->qp_num, sizeof(uint32_t));
 
     // Wait until our turn to use bootstrap fd.
     auto engine_offset = engine_idx_ % NUM_ENGINES;
