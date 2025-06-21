@@ -881,7 +881,7 @@ void RDMAEndpoint::install_ctx_on_engines(int fd, int dev, PeerID peer_id,
     poll_ctx_vec.push_back(poll_ctx);
   }
   for (auto* poll_ctx : poll_ctx_vec) {
-    uccl_poll(poll_ctx);
+    uccl_wait(poll_ctx);
   }
 }
 
@@ -1015,7 +1015,7 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   }
 
   for (auto* poll_ctx : poll_ctx_vec) {
-    uccl_poll(poll_ctx);
+    uccl_wait(poll_ctx);
   }
 
   return ConnID{
@@ -1121,7 +1121,7 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   }
 
   for (auto* poll_ctx : poll_ctx_vec) {
-    uccl_poll(poll_ctx);
+    uccl_wait(poll_ctx);
   }
 
   return ConnID{
