@@ -443,7 +443,8 @@ int SharedIOContext::poll_ctrl_cq(void) {
 
           auto* ucclsackh = reinterpret_cast<UcclSackHdr*>(pkt_addr);
           auto fid = ucclsackh->fid.value();
-          auto* rdma_ctx = fid_to_rdma_ctx(fid);
+          auto peer_id = ucclsackh->peer_id.value();
+          auto* rdma_ctx = find_rdma_ctx(peer_id, fid);
 
           rdma_ctx->uc_rx_ack(cq_ex, ucclsackh);
         }
@@ -559,6 +560,7 @@ int SharedIOContext::uc_poll_send_cq(void) {
     auto* cqe_desc = (CQEDesc*)cq_ex->wr_id;
 
     if (cqe_desc) {
+      // Completion signal from rtx.
       auto retr_hdr = (uint64_t)cqe_desc->data;
       push_retr_hdr(retr_hdr);
       push_cqe_desc(cqe_desc);
@@ -587,8 +589,7 @@ int SharedIOContext::uc_poll_recv_cq(void) {
                     << " from QP:" << ibv_wc_read_qp_num(cq_ex);
     }
 
-    auto qp_num = ibv_wc_read_qp_num(cq_ex);
-    auto* rdma_ctx = qpn_to_rdma_ctx(qp_num);
+    auto* rdma_ctx = qpn_to_rdma_ctx(ibv_wc_read_qp_num(cq_ex));
 
     auto* cqe_desc = (CQEDesc*)cq_ex->wr_id;
     auto chunk_addr = (uint64_t)cqe_desc->data;

@@ -57,7 +57,6 @@ static uint32_t ENGINE_CPU_START_LIST[8] = {
     96, 96 + NUM_ENGINES, 96 + 2 * NUM_ENGINES, 96 + 3 * NUM_ENGINES,
 };
 
-static constexpr uint32_t QKEY = 0x1234;
 static constexpr uint32_t kMaxAckWRs = 8;
 static constexpr uint32_t UD_ADDITION = 40;
 static constexpr uint32_t kMaxCtrlWRs = 2048;

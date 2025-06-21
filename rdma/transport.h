@@ -213,11 +213,13 @@ class RDMAContext {
   eqds::EQDS* eqds_;
 
   inline void add_sender_flow(void* flow, uint32_t flow_id) {
+    DCHECK(sender_flow_tbl_[flow_id] == nullptr) << flow_id;
     sender_flow_tbl_[flow_id] = flow;
     nr_flows_++;
   }
 
   inline void add_receiver_flow(void* flow, uint32_t flow_id) {
+    DCHECK(receiver_flow_tbl_[flow_id] == nullptr) << flow_id;
     receiver_flow_tbl_[flow_id] = flow;
     nr_flows_++;
   }
@@ -372,9 +374,9 @@ class RDMAContext {
    * @brief Craft an ACK for a subUcclFlow using the given WR index.
    *
    * @param chunk_addr
-   * @param num_sge
+   * @param idx_in_chunk
    */
-  void craft_ack(SubUcclFlow* subflow, uint64_t chunk_addr, int num_sge);
+  void craft_ack(SubUcclFlow* subflow, uint64_t chunk_addr, int idx_in_chunk);
 
   /**
    * @brief Flush all ACKs in the batch.

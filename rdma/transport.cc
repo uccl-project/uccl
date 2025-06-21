@@ -458,7 +458,7 @@ void UcclRDMAEngine::handle_install_flow_on_engine(
 
   if (is_send) {
     rdma_ctx->add_sender_flow(flow, flow_id);
-    io_ctx_.record_fid_ctx_mapping(flow_id, rdma_ctx);
+    io_ctx_.record_sender_ctx_mapping(ctrl_work.peer_id, flow_id, rdma_ctx);
   } else {
     rdma_ctx->add_receiver_flow(flow, flow_id);
     if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
@@ -522,7 +522,10 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
     int const size = sizeof(uint32_t);
     auto total_size = kTotalQP * size;
 
-    if constexpr (!kRCMode) total_size += size; /* ctrl qpn */
+    if constexpr (!kRCMode) {
+      total_size += size; /* ctrl qpn */
+      total_size += size; /* peer id */
+    }
 
     char buf[total_size];
     for (auto i = 0; i < kPortEntropy; i++) {
@@ -533,10 +536,13 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
     memcpy(buf + kPortEntropy * size, &rdma_ctx->credit_qp_->qp_num,
            sizeof(uint32_t));
 
-    // Send ctrl qpn to remote peer.
-    if constexpr (!kRCMode)
+    // Send ctrl qpn and our peer id to remote peer.
+    if constexpr (!kRCMode) {
       memcpy(buf + kTotalQP * size, &io_ctx_.ctrl_qp_->qp_num,
              sizeof(uint32_t));
+      memcpy(buf + kTotalQP * size + size, &ctrl_work.peer_id,
+             sizeof(uint32_t));
+    }
 
     // Wait until our turn to use bootstrap fd.
     auto engine_offset = engine_idx_ % NUM_ENGINES;
@@ -577,7 +583,10 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
 
     if constexpr (!kRCMode) {
       auto ctrl_qpn = *reinterpret_cast<uint32_t*>(buf + kTotalQP * size);
+      auto remote_peer_id =
+          *reinterpret_cast<uint32_t*>(buf + kTotalQP * size + size);
       rdma_ctx->remote_ctx_.remote_ctrl_qpn = ctrl_qpn;
+      rdma_ctx->remote_ctx_.remote_peer_id = remote_peer_id;
     }
 
     UCCL_LOG_ENGINE << "Installed ctx: " << ctrl_work.peer_id
@@ -1055,6 +1064,7 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   // Negotiate FlowID with client.
   flow_id_spin_[dev][peer_id].Lock();
   flow_id = next_flow_id_[dev][peer_id]++;
+  // flow_id = peer_id * 10 + next_flow_id_[dev][peer_id]++;
   flow_id_spin_[dev][peer_id].Unlock();
   {
     std::lock_guard<std::mutex> lock(fd_vec_mu_);
@@ -2567,6 +2577,7 @@ void RDMAContext::uc_rx_chunk(struct ibv_cq_ex* cq_ex) {
 
   DCHECK(fid < MAX_FLOW);
   auto* flow = reinterpret_cast<UcclFlow*>(receiver_flow_tbl_[fid]);
+  DCHECK(flow) << fid << ", RDMAContext ptr: " << this;
   auto* subflow = flow->sub_flows_[engine_offset_];
 
   UCCL_LOG_IO << "Received chunk: (byte_len, csn, rid, fid): " << byte_len
@@ -2668,7 +2679,7 @@ void RDMAContext::try_post_acks(int num_ack, uint64_t chunk_addr, bool force) {
 
   io_ctx_->tx_ack_wr_[idx].wr.ud.ah = remote_ctx_.dest_ah;
   io_ctx_->tx_ack_wr_[idx].wr.ud.remote_qpn = remote_ctx_.remote_ctrl_qpn;
-  io_ctx_->tx_ack_wr_[idx].wr.ud.remote_qkey = QKEY;
+  io_ctx_->tx_ack_wr_[idx].wr.ud.remote_qkey = remote_ctx_.remote_ctrl_qpn;
 
   io_ctx_->tx_ack_wr_[idx].next =
       (idx == kMaxAckWRs - 1) ? nullptr : &io_ctx_->tx_ack_wr_[idx + 1];
@@ -2681,12 +2692,13 @@ void RDMAContext::try_post_acks(int num_ack, uint64_t chunk_addr, bool force) {
 }
 
 void RDMAContext::craft_ack(SubUcclFlow* subflow, uint64_t chunk_addr,
-                            int num_sge) {
-  uint64_t pkt_addr = chunk_addr + CtrlChunkBuffPool::kPktSize * num_sge;
+                            int idx_in_chunk) {
+  uint64_t pkt_addr = chunk_addr + CtrlChunkBuffPool::kPktSize * idx_in_chunk;
   auto* ucclsackh = reinterpret_cast<UcclSackHdr*>(pkt_addr);
 
-  ucclsackh->ackno = be16_t(subflow->pcb.ackno().to_uint32());
+  ucclsackh->peer_id = be16_t(remote_ctx_.remote_peer_id);
   ucclsackh->fid = be16_t(subflow->fid_);
+  ucclsackh->ackno = be16_t(subflow->pcb.ackno().to_uint32());
   ucclsackh->path = be16_t(subflow->next_ack_path_);
 
   auto t4 = rdtsc();
@@ -2867,7 +2879,6 @@ std::string RDMAContext::to_string() {
 
   for (int fid = 0; fid < nr_flows_; fid++) {
     {
-      // Sender flows
       auto* flow = reinterpret_cast<UcclFlow*>(receiver_flow_tbl_[fid]);
       if (flow) {
         auto* subflow = flow->sub_flows_[engine_offset_];
@@ -2882,7 +2893,6 @@ std::string RDMAContext::to_string() {
       }
     }
     {
-      // Receiver flows
       auto* flow = reinterpret_cast<UcclFlow*>(sender_flow_tbl_[fid]);
       if (flow) {
         auto* subflow = flow->sub_flows_[engine_offset_];

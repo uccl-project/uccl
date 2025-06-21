@@ -196,7 +196,7 @@ class RetrHdrBuffPool : public BuffPool {
  */
 class CtrlChunkBuffPool : public BuffPool {
  public:
-  static constexpr uint32_t kPktSize = 32;
+  static constexpr uint32_t kPktSize = 36;
   static constexpr uint32_t kChunkSize = kPktSize * kMaxBatchCQ;
   static constexpr uint32_t kNumChunk = 65536;
   static_assert((kNumChunk & (kNumChunk - 1)) == 0,
@@ -257,6 +257,7 @@ struct RemoteRDMAContext {
   union ibv_gid remote_gid;
   struct ibv_port_attr remote_port_attr;
   uint32_t remote_ctrl_qpn;
+  uint32_t remote_peer_id;
   struct ibv_ah* dest_ah;
 };
 
@@ -539,11 +540,13 @@ struct QPWrapper {
  * Multiple SACKs are packed in a single packet transmitted through the Ctrl QP.
  */
 struct __attribute__((packed)) UcclSackHdr {
-  be16_t fid;  // Flow ID
+  be16_t peer_id;  // Peer ID
+  be16_t fid;      // Flow ID
   be16_t path;
   be16_t ackno;  // Sequence number to denote the packet counter in the flow.
   be16_t sack_bitmap_count;  // Length of the SACK bitmap [0-256].
-  be64_t remote_queueing;    // t_ack_sent (SW) - t_remote_nic_rx (HW)
+  be16_t padding;
+  be64_t remote_queueing;  // t_ack_sent (SW) - t_remote_nic_rx (HW)
   be64_t sack_bitmap[kSackBitmapSize /
                      PCB::kSackBitmapBucketSize];  // Bitmap of the
                                                    // SACKs received.
@@ -558,7 +561,7 @@ struct __attribute__((packed)) UcclPullHdr {
 };
 
 static size_t const kUcclSackHdrLen = sizeof(UcclSackHdr);
-static_assert(kUcclSackHdrLen == 32, "UcclSackHdr size mismatch");
+static_assert(kUcclSackHdrLen == 36, "UcclSackHdr size mismatch");
 static_assert(CtrlChunkBuffPool::kPktSize >= kUcclSackHdrLen,
               "CtrlChunkBuffPool::PktSize must be larger than UcclSackHdr");
 
@@ -899,7 +902,8 @@ static inline void util_rdma_create_qp(
       ((qp_type == IBV_QPT_RC) ? IBV_ACCESS_REMOTE_READ : 0);
 
   if (qp_type == IBV_QPT_UD) {
-    qp_attr.qkey = QKEY;
+    // Use QP number as qkey.
+    qp_attr.qkey = (*qp)->qp_num;
     attr_mask &= ~IBV_QP_ACCESS_FLAGS;
     attr_mask |= IBV_QP_QKEY;
   }
@@ -1069,6 +1073,13 @@ static inline int util_rdma_get_mtu_from_ibv_mtu(ibv_mtu mtu) {
   }
 }
 
+struct pair_hash {
+  template <class T1, class T2>
+  std::size_t operator()(std::pair<T1, T2> const& p) const {
+    return std::hash<T1>()(p.first) ^ std::hash<T2>()(p.second);
+  }
+};
+
 // Shared IO context for each UCCL engine.
 class SharedIOContext {
  public:
@@ -1235,15 +1246,21 @@ class SharedIOContext {
   }
 
   inline void record_qpn_ctx_mapping(int qp_num, RDMAContext* ctx) {
+    DCHECK(qpn_to_rdma_ctx_map_.find(qp_num) == qpn_to_rdma_ctx_map_.end())
+        << "QP " << qp_num << " already exists";
     qpn_to_rdma_ctx_map_[qp_num] = ctx;
   }
 
-  inline RDMAContext* fid_to_rdma_ctx(uint32_t fid) {
-    return fid_to_rdma_ctx_map_[fid];
+  inline RDMAContext* find_rdma_ctx(uint32_t peer_id, uint32_t fid) {
+    return fid_to_rdma_ctx_map_[std::make_pair(peer_id, fid)];
   }
 
-  inline void record_fid_ctx_mapping(uint32_t fid, RDMAContext* ctx) {
-    fid_to_rdma_ctx_map_[fid] = ctx;
+  inline void record_sender_ctx_mapping(uint32_t peer_id, uint32_t fid,
+                                        RDMAContext* ctx) {
+    DCHECK(fid_to_rdma_ctx_map_.find(std::make_pair(peer_id, fid)) ==
+           fid_to_rdma_ctx_map_.end())
+        << "FID " << fid << " already exists";
+    fid_to_rdma_ctx_map_[std::make_pair(peer_id, fid)] = ctx;
   }
 
   inline void inc_post_srq(void) { dp_recv_wrs_.post_rq_cnt++; }
@@ -1298,7 +1315,8 @@ class SharedIOContext {
 
   std::unordered_map<int, RDMAContext*> qpn_to_rdma_ctx_map_;
 
-  std::unordered_map<uint32_t, RDMAContext*> fid_to_rdma_ctx_map_;
+  std::unordered_map<std::pair<uint32_t, uint32_t>, RDMAContext*, pair_hash>
+      fid_to_rdma_ctx_map_;
 
   friend class UcclRDMAEngine;
   friend class RDMAContext;
