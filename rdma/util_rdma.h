@@ -616,10 +616,6 @@ class RDMAFactory {
                                     union CtrlMeta meta,
                                     SharedIOContext* io_ctx);
   static inline struct FactoryDevice* get_factory_dev(int dev) {
-    if (dev >= rdma_ctl->devices_.size()) {
-      fprintf(stderr, "Error: dev %d, devices_size: %zu\n", dev,
-              rdma_ctl->devices_.size());
-    }
     DCHECK(dev >= 0 && dev < rdma_ctl->devices_.size());
     return &rdma_ctl->devices_[dev];
   }
