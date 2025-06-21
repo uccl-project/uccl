@@ -413,6 +413,8 @@ int SharedIOContext::poll_ctrl_cq(void) {
   auto cq_ex = ctrl_cq_ex_;
   int work = 0;
 
+  int budget = kMaxBatchCQ << 1;
+
   while (1) {
     struct ibv_poll_cq_attr poll_cq_attr = {};
     if (ibv_start_poll(cq_ex, &poll_cq_attr)) return work;
@@ -421,7 +423,8 @@ int SharedIOContext::poll_ctrl_cq(void) {
     while (1) {
       if (cq_ex->status != IBV_WC_SUCCESS) {
         DCHECK(false) << "Ctrl CQ state error: " << cq_ex->status << ", "
-                   << ibv_wc_read_opcode(cq_ex) << ", ctrl_chunk_pool_size: " << ctrl_chunk_pool_->size();
+                      << ibv_wc_read_opcode(cq_ex)
+                      << ", ctrl_chunk_pool_size: " << ctrl_chunk_pool_->size();
       }
 
       CQEDesc* cqe_desc = reinterpret_cast<CQEDesc*>(cq_ex->wr_id);
@@ -432,11 +435,11 @@ int SharedIOContext::poll_ctrl_cq(void) {
         auto imm_data = ntohl(ibv_wc_read_imm_data(cq_ex));
         auto num_ack = imm_data;
         UCCL_LOG_IO << "Receive " << num_ack
-                    << " ACKs in one CtrlChunk, Chunk addr: " << chunk_addr
+                    << " ACKs, Chunk addr: " << chunk_addr
                     << ", byte_len: " << ibv_wc_read_byte_len(cq_ex);
-        chunk_addr += UD_ADDITION;
+        auto base_addr = chunk_addr + UD_ADDITION;
         for (int i = 0; i < num_ack; i++) {
-          auto pkt_addr = chunk_addr + i * CtrlChunkBuffPool::kPktSize;
+          auto pkt_addr = base_addr + i * CtrlChunkBuffPool::kPktSize;
 
           auto* ucclsackh = reinterpret_cast<UcclSackHdr*>(pkt_addr);
           auto fid = ucclsackh->fid.value();
@@ -445,13 +448,20 @@ int SharedIOContext::poll_ctrl_cq(void) {
           rdma_ctx->uc_rx_ack(cq_ex, ucclsackh);
         }
         inc_post_ctrl_rq();
+      } else {
+        inflight_ctrl_wrs_--;
       }
 
       push_ctrl_chunk(chunk_addr);
 
       push_cqe_desc(cqe_desc);
 
-      if (++cq_budget == kMaxBatchCQ || ibv_next_poll(cq_ex)) break;
+      if (++cq_budget == budget || ibv_next_poll(cq_ex)) break;
+
+      if (opcode == IBV_WC_SEND) {
+        // We don't count send WRs in budget.
+        cq_budget--;
+      }
     }
     ibv_end_poll(cq_ex);
 
@@ -459,7 +469,7 @@ int SharedIOContext::poll_ctrl_cq(void) {
 
     check_ctrl_rq(false);
 
-    if (cq_budget < kMaxBatchCQ) break;
+    if (cq_budget < budget) break;
   }
 
   return work;
@@ -476,6 +486,8 @@ void SharedIOContext::flush_acks() {
 
   UCCL_LOG_IO << "Flush " << nr_tx_ack_wr_ << " ACKs";
 
+  inflight_ctrl_wrs_ += nr_tx_ack_wr_;
+
   nr_tx_ack_wr_ = 0;
 }
 
@@ -489,17 +501,14 @@ int SharedIOContext::rc_poll_recv_cq(void) {
   while (1) {
     if (cq_ex->status != IBV_WC_SUCCESS) {
       DCHECK(false) << "data path CQ state error: " << cq_ex->status
-                 << " from QP:" << ibv_wc_read_qp_num(cq_ex);
+                    << " from QP:" << ibv_wc_read_qp_num(cq_ex);
     }
 
-    auto* cqe_desc = (CQEDesc*)cq_ex->wr_id;
     auto* rdma_ctx = qpn_to_rdma_ctx(ibv_wc_read_qp_num(cq_ex));
 
     rdma_ctx->rc_rx_chunk(cq_ex);
 
     inc_post_srq();
-
-    push_cqe_desc(cqe_desc);
 
     if (++cq_budget == kMaxBatchCQ || ibv_next_poll(cq_ex)) break;
   }
@@ -519,15 +528,12 @@ int SharedIOContext::rc_poll_send_cq(void) {
   while (1) {
     if (cq_ex->status != IBV_WC_SUCCESS) {
       DCHECK(false) << "data path CQ state error: " << cq_ex->status
-                 << " from QP:" << ibv_wc_read_qp_num(cq_ex);
+                    << " from QP:" << ibv_wc_read_qp_num(cq_ex);
     }
 
-    auto* cqe_desc = (CQEDesc*)cq_ex->wr_id;
     auto* rdma_ctx = qpn_to_rdma_ctx(ibv_wc_read_qp_num(cq_ex));
 
     rdma_ctx->rc_rx_ack(cq_ex);
-
-    push_cqe_desc(cqe_desc);
 
     if (++cq_budget == kMaxBatchCQ || ibv_next_poll(cq_ex)) break;
   }
@@ -539,6 +545,7 @@ int SharedIOContext::rc_poll_send_cq(void) {
 int SharedIOContext::uc_poll_send_cq(void) {
   auto cq_ex = send_cq_ex_;
   int cq_budget = 0;
+  int budget = kMaxBatchCQ << 1;
 
   struct ibv_poll_cq_attr poll_cq_attr = {};
   if (ibv_start_poll(cq_ex, &poll_cq_attr)) return 0;
@@ -546,7 +553,7 @@ int SharedIOContext::uc_poll_send_cq(void) {
   while (1) {
     if (cq_ex->status != IBV_WC_SUCCESS) {
       DCHECK(false) << "data path CQ state error: " << cq_ex->status
-                 << " from QP:" << ibv_wc_read_qp_num(cq_ex);
+                    << " from QP:" << ibv_wc_read_qp_num(cq_ex);
     }
 
     auto* cqe_desc = (CQEDesc*)cq_ex->wr_id;
@@ -557,7 +564,7 @@ int SharedIOContext::uc_poll_send_cq(void) {
       push_cqe_desc(cqe_desc);
     }
 
-    if (++cq_budget == kMaxBatchCQ || ibv_next_poll(cq_ex)) break;
+    if (++cq_budget == budget || ibv_next_poll(cq_ex)) break;
   }
 
   ibv_end_poll(cq_ex);
@@ -577,7 +584,7 @@ int SharedIOContext::uc_poll_recv_cq(void) {
   while (1) {
     if (cq_ex->status != IBV_WC_SUCCESS) {
       DCHECK(false) << "data path CQ state error: " << cq_ex->status
-                 << " from QP:" << ibv_wc_read_qp_num(cq_ex);
+                    << " from QP:" << ibv_wc_read_qp_num(cq_ex);
     }
 
     auto qp_num = ibv_wc_read_qp_num(cq_ex);

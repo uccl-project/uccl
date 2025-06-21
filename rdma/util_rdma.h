@@ -1114,8 +1114,7 @@ class SharedIOContext {
       // Create Ctrl QP, CQ, and MR.
       util_rdma_create_qp(context, &ctrl_qp_, IBV_QPT_UD, true, true,
                           (struct ibv_cq**)&ctrl_cq_ex_, false, kCQSize, pd,
-                          &ctrl_mr_, nullptr, kCtrlMRSize,
-                          kMaxCtrlWRs,
+                          &ctrl_mr_, nullptr, kCtrlMRSize, kMaxCtrlWRs,
                           kMaxCtrlWRs, 1, 1);
 
       struct ibv_qp_attr attr = {};
@@ -1290,6 +1289,7 @@ class SharedIOContext {
   struct ibv_send_wr tx_ack_wr_[kMaxAckWRs];
   struct ibv_sge tx_ack_sge_[kMaxAckWRs];
   uint32_t nr_tx_ack_wr_ = 0;
+  uint32_t inflight_ctrl_wrs_ = 0;
 
   // Memory region for retransmission.
   struct ibv_mr* retr_mr_;

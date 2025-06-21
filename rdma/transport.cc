@@ -514,12 +514,16 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
   // Create a thread to handle the QP setup to avoid blocking the engine.
   std::thread qp_setup_thread([this, ctrl_work, rdma_ctx, bootstrap_fd, dev,
                                next_install_engine]() {
+    UCCL_LOG_ENGINE << "Engine#" << engine_idx_ << " launched QP setup thread";
     auto meta = ctrl_work.meta;
     auto info = &meta.install_ctx;
     auto* poll_ctx = ctrl_work.poll_ctx;
     // Send QPN to remote peer.
     int const size = sizeof(uint32_t);
-    auto total_size = kTotalQP * size + size /* ctrl qpn*/;
+    auto total_size = kTotalQP * size;
+
+    if constexpr (!kRCMode) total_size += size; /* ctrl qpn */
+
     char buf[total_size];
     for (auto i = 0; i < kPortEntropy; i++) {
       memcpy(buf + i * size, &rdma_ctx->dp_qps_[i].qp->qp_num,
@@ -530,7 +534,9 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
            sizeof(uint32_t));
 
     // Send ctrl qpn to remote peer.
-    memcpy(buf + kTotalQP * size, &io_ctx_.ctrl_qp_->qp_num, sizeof(uint32_t));
+    if constexpr (!kRCMode)
+      memcpy(buf + kTotalQP * size, &io_ctx_.ctrl_qp_->qp_num,
+             sizeof(uint32_t));
 
     // Wait until our turn to use bootstrap fd.
     auto engine_offset = engine_idx_ % NUM_ENGINES;
@@ -569,8 +575,10 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
 
     ret = modify_qp_rts(credit_qp, false);
 
-    auto ctrl_qpn = *reinterpret_cast<uint32_t*>(buf + kTotalQP * size);
-    rdma_ctx->remote_ctx_.remote_ctrl_qpn = ctrl_qpn;
+    if constexpr (!kRCMode) {
+      auto ctrl_qpn = *reinterpret_cast<uint32_t*>(buf + kTotalQP * size);
+      rdma_ctx->remote_ctx_.remote_ctrl_qpn = ctrl_qpn;
+    }
 
     UCCL_LOG_ENGINE << "Installed ctx: " << ctrl_work.peer_id
                     << " on engine: " << engine_idx_
@@ -944,15 +952,7 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   if (flag) {
     UCCL_LOG_EP << "connect: install_ctx_on_engines for dev/peer: " << dev
                 << "/" << peer_id;
-    // auto t1 = std::chrono::high_resolution_clock::now();
     install_ctx_on_engines(bootstrap_fd, dev, peer_id, remote_ip, remote_dev);
-    // auto t2 = std::chrono::high_resolution_clock::now();
-    // std::cout << "install_ctx_on_engines time: "
-    //             << std::chrono::duration_cast<std::chrono::milliseconds>(t2 -
-    //             t1)
-    //                    .count()
-    //             << "ms on <dev, remote_dev>: " << dev << "/" << remote_dev <<
-    //             std::endl;
   }
 
   {
@@ -1854,7 +1854,7 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
 
       *sent_offset += chunk_size;
 
-      UCCL_LOG_IO << "Tx: flow#" << flow->flowid() << ", req id#"
+      UCCL_LOG_IO << "Tx: flow#" << flow->flowid() << "/" << flow << ", req id#"
                   << ureq->send.rid << ", msg id#" << ureq->mid
                   << ", csn:" << imm_data.GetCSN()
                   << ", remaining bytes:" << size - *sent_offset << " with QP#"
@@ -2069,7 +2069,6 @@ void RDMAContext::check_credit_rq(bool force) {
   }
 }
 
-
 void RDMAContext::drain_rtx_queue(SubUcclFlow* subflow) {
   fast_retransmit_for_flow(subflow);
 }
@@ -2155,15 +2154,16 @@ void RDMAContext::uc_rx_ack(struct ibv_cq_ex* cq_ex, UcclSackHdr* ucclsackh) {
   bool update_sackbitmap = false;
 
   if (UINT_CSN::uintcsn_seqno_lt(ackno, subflow->pcb.snd_una)) {
-    UCCL_LOG_IO << "Received old ACK " << ackno << " for flow" << fid
-                << " by Ctrl QP";
+    UCCL_LOG_IO << "Received old ACK " << ackno << " for flow" << fid << "/"
+                << flow << " by Ctrl QP";
   } else if (UINT_CSN::uintcsn_seqno_gt(ackno, subflow->pcb.snd_nxt)) {
     UCCL_LOG_IO << "Received ACK for untransmitted data "
                 << "ackno: " << ackno
                 << ", snd_nxt: " << subflow->pcb.snd_nxt.to_uint32()
-                << " for flow" << fid << " by Ctrl QP";
+                << " for flow" << fid << "/" << flow << " by Ctrl QP";
   } else if (UINT_CSN::uintcsn_seqno_eq(ackno, subflow->pcb.snd_una)) {
     UCCL_LOG_IO << "Received duplicate ACK " << ackno << " for flow" << fid
+                << "/" << flow
                 << ", snd_una: " << subflow->pcb.snd_una.to_uint32()
                 << " by Ctrl QP";
 
@@ -2221,8 +2221,8 @@ void RDMAContext::uc_rx_ack(struct ibv_cq_ex* cq_ex, UcclSackHdr* ucclsackh) {
     }
 
   } else {
-    UCCL_LOG_IO << "Received valid ACK " << ackno << " for flow" << fid
-                << " by Ctrl QP";
+    UCCL_LOG_IO << "Received valid ACK " << ackno << " for flow" << fid << "/"
+                << flow << " by Ctrl QP";
 
     EventOnRxACK(subflow, ucclsackh);
 
