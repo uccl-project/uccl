@@ -58,7 +58,7 @@
 #define kRemoteBufferSize kBatchSize* kNumThBlocks* kObjectSize * 100
 #define MAIN_THREAD_CPU_IDX 31
 #define NUM_GPUS 8
-#define RECEIVER_BATCH_SIZE 8
+#define RECEIVER_BATCH_SIZE 16
 // #define SEPARATE_POLLING
 // Command structure for each transfer
 struct TransferCmd {
