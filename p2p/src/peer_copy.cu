@@ -56,17 +56,14 @@ __global__ void peer_copy_kernel_vec(CopyTask const* __restrict__ tasks,
 }
 
 cudaError_t launch_peer_bulk_copy2(CopyTask const* host_tasks, int num_tasks,
-                                   cudaStream_t stream) {
-  CopyTask* d_tasks;
-  cudaMallocAsync(&d_tasks, num_tasks * sizeof(CopyTask), stream);
+                                   cudaStream_t stream, int src_device,
+                                   CopyTask*& d_tasks) {
   cudaMemcpyAsync(d_tasks, host_tasks, num_tasks * sizeof(CopyTask),
                   cudaMemcpyHostToDevice, stream);
-
   constexpr int threads_per_block = 256;
   dim3 blocks(num_tasks);
   peer_copy_kernel_vec<<<blocks, threads_per_block, 0, stream>>>(d_tasks,
                                                                  num_tasks);
 
-  cudaFreeAsync(d_tasks, stream);
   return cudaGetLastError();
 }

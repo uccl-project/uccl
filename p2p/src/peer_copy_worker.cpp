@@ -7,28 +7,37 @@ std::atomic<bool> g_run;
 thread_local uint64_t async_memcpy_count = 0;
 thread_local uint64_t async_memcpy_total_time = 0;
 int src_device = 0;
-std::once_flag peer_ok_flag[NUM_GPUS];
+std::once_flag peer_ok_flag[NUM_GPUS][NUM_GPUS];
 
 void maybe_enable_peer_access(int src_dev, int dst_dev) {
-  std::call_once(peer_ok_flag[dst_dev], [&]() {
+  if (src_dev == dst_dev) return;
+  std::call_once(peer_ok_flag[src_dev][dst_dev], [&]() {
     cudaSetDevice(dst_dev);
-    cudaDeviceEnablePeerAccess(src_dev, 0);  // enable from dst to src
+    cudaError_t err = cudaDeviceEnablePeerAccess(src_dev, 0);
+    if (err != cudaSuccess && err != cudaErrorPeerAccessAlreadyEnabled) {
+      fprintf(stderr, "Peer access from dst_dev=%d to src_dev=%d failed: %s\n",
+              dst_dev, src_dev, cudaGetErrorString(err));
+    }
+
     cudaSetDevice(src_dev);
-    cudaDeviceEnablePeerAccess(dst_dev, 0);  // enable from src to dst
+    err = cudaDeviceEnablePeerAccess(dst_dev, 0);
+    if (err != cudaSuccess && err != cudaErrorPeerAccessAlreadyEnabled) {
+      fprintf(stderr, "Peer access from src_dev=%d to dst_dev=%d failed: %s\n",
+              src_dev, dst_dev, cudaGetErrorString(err));
+    }
   });
 }
 
 void peer_copy_worker(CopyRing& g_ring, int idx) {
-  // one stream for this thread
-
   pin_thread_to_cpu(idx + 1 + MAIN_THREAD_CPU_IDX);
   printf("Peer copy worker %d started on CPU core %d\n", idx + 1,
          sched_getcpu());
 
   cudaStream_t stream;
-  cudaSetDevice(src_device);  // source GPU in your example
+  cudaSetDevice(src_device);
   cudaStreamCreate(&stream);
-
+  CopyTask* d_tasks;
+  cudaMallocAsync(&d_tasks, RECEIVER_BATCH_SIZE * sizeof(CopyTask), stream);
   while (g_run.load(std::memory_order_acquire)) {
     CopyTask t;
     std::vector<CopyTask> tasks;
@@ -65,19 +74,24 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
 
     auto st = std::chrono::high_resolution_clock::now();
     cudaError_t err;
+    std::string func_name;
 
     if (false) {
       err = cudaMemcpyPeerAsync(t.dst_ptr, t.dst_dev, t.src_ptr, src_device,
                                 t.bytes * copy_batch_size, stream);
+      func_name = "cudaMemcpyPeerAsync";
     } else if (false) {
       err = launch_peer_bulk_copy(t.dst_ptr, t.dst_dev, t.src_ptr, src_device,
                                   t.bytes * copy_batch_size, stream);
+      func_name = "launch_peer_bulk_copy";
     } else {
-      err = launch_peer_bulk_copy2(tasks.data(), tasks.size(), stream);
+      err = launch_peer_bulk_copy2(tasks.data(), tasks.size(), stream,
+                                   src_device, d_tasks);
+      func_name = "launch_peer_bulk_copy2";
     }
 
     if (err != cudaSuccess) {
-      fprintf(stderr, "cudaMemcpyPeerAsync failed (%s) wr_id=%llu\n",
+      fprintf(stderr, "%s failed (%s) wr_id=%llu\n", func_name.c_str(),
               cudaGetErrorString(err),
               static_cast<unsigned long long>(t.wr_id));
       std::abort();
@@ -97,7 +111,7 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::high_resolution_clock::now() - st)
             .count();
-    if (async_memcpy_count % 100000 == 0) {
+    if (false && async_memcpy_count % 100000 == 0) {
       printf("Total async memcpy calls: %lu\n", async_memcpy_count);
       if (async_memcpy_count == 0) {
         printf("No async memcpy calls were made.\n");
@@ -113,6 +127,7 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
       }
     }
   }
+  cudaFreeAsync(d_tasks, stream);
   cudaStreamSynchronize(stream);
   cudaStreamDestroy(stream);
 }

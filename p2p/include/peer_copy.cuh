@@ -9,4 +9,5 @@ cudaError_t launch_peer_bulk_copy(void* dst_ptr, int dst_dev, void* src_ptr,
                                   cudaStream_t stream = 0);
 
 cudaError_t launch_peer_bulk_copy2(CopyTask const* host_tasks, int num_tasks,
-                                   cudaStream_t stream);
+                                   cudaStream_t stream, int src_device,
+                                   CopyTask*& d_tasks);
