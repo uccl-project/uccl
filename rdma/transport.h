@@ -1008,8 +1008,9 @@ class RDMAEndpoint {
   void install_ctx_on_engines(int fd, int dev, PeerID peer_id,
                               std::string remote_ip, int remote_dev);
 
-  void install_flow_on_engines(int dev, PeerID peer_id, FlowID flow_id,
-                               UcclFlow* flow, bool is_send);
+  std::vector<PollCtx*> install_flow_on_engines(int dev, PeerID peer_id,
+                                                FlowID flow_id, UcclFlow* flow,
+                                                bool is_send);
 
   inline void inc_load_on_engine(int engine_id) {
     std::atomic_fetch_add(&engine_load_vec_[engine_id], 1);
@@ -1106,7 +1107,7 @@ class UcclFlow {
     }
   }
 
-  uint32_t create_fifo(int bootstrap_fd, int dev) {
+  uint32_t create_fifo_and_gpuflush(int bootstrap_fd, int dev) {
     auto comm_base = is_send_ ? &send_comm_.base : &recv_comm_.base;
 
     auto factory_dev = RDMAFactory::get_factory_dev(dev);
@@ -1153,6 +1154,24 @@ class UcclFlow {
     comm_base->remote_fifo_addr = *reinterpret_cast<uint64_t*>(buf2);
     comm_base->remote_fifo_rkey =
         *reinterpret_cast<uint32_t*>(buf2 + sizeof(uint64_t));
+
+    // GPU flush QP for receiver.
+    if (!is_send_) {
+      util_rdma_create_qp(
+          factory_dev->context, &recv_comm_.gpu_flush_qp, IBV_QPT_RC, false,
+          false, &comm_base->flow_cq, true, 0, factory_dev->pd,
+          &recv_comm_.gpu_flush_mr, &recv_comm_.gpu_flush, sizeof(int),
+          kMaxReq * kMaxRecv, kMaxReq * kMaxRecv, kMaxSge, kMaxSge);
+
+      recv_comm_.gpu_flush_sge.addr = (uint64_t)&recv_comm_.gpu_flush;
+      recv_comm_.gpu_flush_sge.length = 1;
+      recv_comm_.gpu_flush_sge.lkey = recv_comm_.gpu_flush_mr->lkey;
+
+      UCCL_INIT_CHECK(modify_qp_rtr_gpuflush(recv_comm_.gpu_flush_qp, dev) == 0,
+                      "Failed to modify GPU flush QP to RTR");
+      UCCL_INIT_CHECK(modify_qp_rts(recv_comm_.gpu_flush_qp, true) == 0,
+                      "Failed to modify GPU flush QP to RTS");
+    }
 
     return *reinterpret_cast<uint32_t*>(buf);
   }
@@ -1217,24 +1236,6 @@ class UcclFlow {
 
       UCCL_INIT_CHECK(modify_qp_rts(comm_base->rc_qp, true) == 0,
                       "Failed to modify RC QP to RTS");
-    }
-
-    // GPU flush QP for receiver.
-    if (!is_send_) {
-      util_rdma_create_qp(
-          factory_dev->context, &recv_comm_.gpu_flush_qp, IBV_QPT_RC, false,
-          false, &comm_base->flow_cq, true, 0, factory_dev->pd,
-          &recv_comm_.gpu_flush_mr, &recv_comm_.gpu_flush, sizeof(int),
-          kMaxReq * kMaxRecv, kMaxReq * kMaxRecv, kMaxSge, kMaxSge);
-
-      recv_comm_.gpu_flush_sge.addr = (uint64_t)&recv_comm_.gpu_flush;
-      recv_comm_.gpu_flush_sge.length = 1;
-      recv_comm_.gpu_flush_sge.lkey = recv_comm_.gpu_flush_mr->lkey;
-
-      UCCL_INIT_CHECK(modify_qp_rtr_gpuflush(recv_comm_.gpu_flush_qp, dev) == 0,
-                      "Failed to modify GPU flush QP to RTR");
-      UCCL_INIT_CHECK(modify_qp_rts(recv_comm_.gpu_flush_qp, true) == 0,
-                      "Failed to modify GPU flush QP to RTS");
     }
   }
 

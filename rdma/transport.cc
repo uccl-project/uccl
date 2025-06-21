@@ -821,9 +821,8 @@ PollCtx* RDMAEndpoint::install_ctx_on_engine(uint32_t engine_idx,
   return poll_ctx;
 }
 
-void RDMAEndpoint::install_flow_on_engines(int dev, PeerID peer_id,
-                                           FlowID flow_id, UcclFlow* flow,
-                                           bool is_send) {
+std::vector<PollCtx*> RDMAEndpoint::install_flow_on_engines(
+    int dev, PeerID peer_id, FlowID flow_id, UcclFlow* flow, bool is_send) {
   union CtrlMeta meta = {};
   auto* info = &meta.install_flow;
 
@@ -832,17 +831,14 @@ void RDMAEndpoint::install_flow_on_engines(int dev, PeerID peer_id,
   info->is_send = is_send;
 
   std::vector<PollCtx*> poll_ctx_vec;
-
   for (int i = 0; i < num_engines_per_dev_; i++) {
     auto engine_idx = find_first_engine_idx_on_dev(dev) + i;
     auto* poll_ctx = install_flow_on_engine(engine_idx, peer_id, meta);
     poll_ctx_vec.push_back(poll_ctx);
   }
-  for (auto* poll_ctx : poll_ctx_vec) {
-    uccl_poll(poll_ctx);
-  }
 
   UCCL_LOG_EP << "Installed flow " << flow_id << " on all engines";
+  return poll_ctx_vec;
 }
 
 void RDMAEndpoint::install_ctx_on_engines(int fd, int dev, PeerID peer_id,
@@ -970,11 +966,6 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
     install_ctx_on_engines(bootstrap_fd, dev, peer_id, remote_ip, remote_dev);
   }
 
-  {
-    std::lock_guard<std::mutex> lock(fd_vec_mu_);
-    fd_vec_.push_back(bootstrap_fd);
-  }
-
   // Negotiate FlowID with server.
   ret = receive_message(bootstrap_fd, &flow_id, sizeof(FlowID));
   DCHECK(ret == sizeof(FlowID)) << "uccl_connect: receive_message()";
@@ -987,9 +978,10 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
       new UcclFlow(this, dev, peer_id, flow_id, remote_ip, remote_dev, true);
   DCHECK(flow);
 
-  install_flow_on_engines(dev, peer_id, flow_id, flow, true);
+  auto poll_ctx_vec =
+      install_flow_on_engines(dev, peer_id, flow_id, flow, true);
 
-  auto remote_fifo_qpn = flow->create_fifo(bootstrap_fd, dev);
+  auto remote_fifo_qpn = flow->create_fifo_and_gpuflush(bootstrap_fd, dev);
 
   while (1) {
     peer_map_mu_[dev].lock();
@@ -1007,11 +999,20 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 
+  flow->modify_fifo(bootstrap_fd, dev, remote_ctx, remote_fifo_qpn);
+
   active_flows_spin_[dev].Lock();
   active_flows_vec_[dev].push_back(flow);
   active_flows_spin_[dev].Unlock();
 
-  flow->modify_fifo(bootstrap_fd, dev, remote_ctx, remote_fifo_qpn);
+  {
+    std::lock_guard<std::mutex> lock(fd_vec_mu_);
+    fd_vec_.push_back(bootstrap_fd);
+  }
+
+  for (auto* poll_ctx : poll_ctx_vec) {
+    uccl_poll(poll_ctx);
+  }
 
   return ConnID{
       .context = flow, .flow_id = flow_id, .peer_id = peer_id, .dev = dev};
@@ -1073,10 +1074,7 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   flow_id_spin_[dev][peer_id].Lock();
   flow_id = next_flow_id_[dev][peer_id]++;
   flow_id_spin_[dev][peer_id].Unlock();
-  {
-    std::lock_guard<std::mutex> lock(fd_vec_mu_);
-    fd_vec_.push_back(bootstrap_fd);
-  }
+
   ret = send_message(bootstrap_fd, &flow_id, sizeof(FlowID));
   DCHECK(ret == sizeof(FlowID));
 
@@ -1088,9 +1086,10 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
       new UcclFlow(this, dev, peer_id, flow_id, remote_ip, *remote_dev, false);
   DCHECK(flow);
 
-  install_flow_on_engines(dev, peer_id, flow_id, flow, false);
+  auto poll_ctx_vec =
+      install_flow_on_engines(dev, peer_id, flow_id, flow, false);
 
-  auto remote_fifo_qpn = flow->create_fifo(bootstrap_fd, dev);
+  auto remote_fifo_qpn = flow->create_fifo_and_gpuflush(bootstrap_fd, dev);
 
   while (1) {
     peer_map_mu_[dev].lock();
@@ -1109,11 +1108,20 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 
+  flow->modify_fifo(bootstrap_fd, dev, remote_ctx, remote_fifo_qpn);
+
   active_flows_spin_[dev].Lock();
   active_flows_vec_[dev].push_back(flow);
   active_flows_spin_[dev].Unlock();
 
-  flow->modify_fifo(bootstrap_fd, dev, remote_ctx, remote_fifo_qpn);
+  {
+    std::lock_guard<std::mutex> lock(fd_vec_mu_);
+    fd_vec_.push_back(bootstrap_fd);
+  }
+
+  for (auto* poll_ctx : poll_ctx_vec) {
+    uccl_poll(poll_ctx);
+  }
 
   return ConnID{
       .context = flow, .flow_id = flow_id, .peer_id = peer_id, .dev = dev};
