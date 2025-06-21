@@ -533,8 +533,10 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
              sizeof(uint32_t));
     }
 
-    memcpy(buf + kPortEntropy * size, &rdma_ctx->credit_qp_->qp_num,
-           sizeof(uint32_t));
+    if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
+      memcpy(buf + kPortEntropy * size, &rdma_ctx->credit_qp_->qp_num,
+             sizeof(uint32_t));
+    }
 
     // Send ctrl qpn and our peer id to remote peer.
     if constexpr (!kRCMode) {
@@ -573,13 +575,15 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
       DCHECK(ret == 0) << "Failed to modify data path QP to RTS";
     }
 
-    auto credit_rqpn = *reinterpret_cast<uint32_t*>(buf + kPortEntropy * size);
-    auto credit_qp = rdma_ctx->credit_qp_;
-
-    ret = modify_qp_rtr(credit_qp, dev, &rdma_ctx->remote_ctx_, credit_rqpn);
-    DCHECK(ret == 0) << "Failed to modify Ctrl QP to RTR";
-
-    ret = modify_qp_rts(credit_qp, false);
+    if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
+      auto credit_rqpn =
+          *reinterpret_cast<uint32_t*>(buf + kPortEntropy * size);
+      auto credit_qp = rdma_ctx->credit_qp_;
+      ret = modify_qp_rtr(credit_qp, dev, &rdma_ctx->remote_ctx_, credit_rqpn);
+      DCHECK(ret == 0) << "Failed to modify Ctrl QP to RTR";
+      ret = modify_qp_rts(credit_qp, false);
+      DCHECK(ret == 0) << "Failed to modify Ctrl QP to RTS";
+    }
 
     if constexpr (!kRCMode) {
       auto ctrl_qpn = *reinterpret_cast<uint32_t*>(buf + kTotalQP * size);
@@ -1549,72 +1553,76 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
   struct ibv_recv_wr wr;
   memset(&wr, 0, sizeof(wr));
 
-  // Create Credit QP, SCQ/RCQ and MR for engine or pacer.
-  util_rdma_create_qp_seperate_cq(context_, &credit_qp_, IBV_QPT_UC, true,
-                                  false, (struct ibv_cq**)&pacer_credit_cq_ex_,
-                                  (struct ibv_cq**)&engine_credit_cq_ex_, false,
-                                  kCQSize, pd_,
-                                  eqds::CreditChunkBuffPool::kNumChunk,
-                                  eqds::CreditChunkBuffPool::kNumChunk, 1, 1);
+  if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
+    // Create Credit QP, SCQ/RCQ and MR for engine or pacer.
+    util_rdma_create_qp_seperate_cq(
+        context_, &credit_qp_, IBV_QPT_UC, true, false,
+        (struct ibv_cq**)&pacer_credit_cq_ex_,
+        (struct ibv_cq**)&engine_credit_cq_ex_, false, kCQSize, pd_,
+        eqds::CreditChunkBuffPool::kNumChunk,
+        eqds::CreditChunkBuffPool::kNumChunk, 1, 1);
 
-  auto addr = mmap(nullptr, eqds::CreditChunkBuffPool::kCreditMRSize,
-                   PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-  UCCL_INIT_CHECK(addr != MAP_FAILED, "mmap failed");
-  engine_credit_mr_ =
-      ibv_reg_mr(pd_, addr, eqds::CreditChunkBuffPool::kCreditMRSize,
-                 IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
-  UCCL_INIT_CHECK(engine_credit_mr_ != nullptr,
-                  "ibv_reg_mr failed for engine credit MR");
+    auto addr =
+        mmap(nullptr, eqds::CreditChunkBuffPool::kCreditMRSize,
+             PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    UCCL_INIT_CHECK(addr != MAP_FAILED, "mmap failed");
+    engine_credit_mr_ =
+        ibv_reg_mr(pd_, addr, eqds::CreditChunkBuffPool::kCreditMRSize,
+                   IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+    UCCL_INIT_CHECK(engine_credit_mr_ != nullptr,
+                    "ibv_reg_mr failed for engine credit MR");
 
-  addr = mmap(nullptr, eqds::CreditChunkBuffPool::kCreditMRSize,
-              PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-  UCCL_INIT_CHECK(addr != MAP_FAILED, "mmap failed");
-  pacer_credit_mr_ =
-      ibv_reg_mr(pd_, addr, eqds::CreditChunkBuffPool::kCreditMRSize,
-                 IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
-  UCCL_INIT_CHECK(pacer_credit_mr_ != nullptr,
-                  "ibv_reg_mr failed for pacer credit MR");
+    addr = mmap(nullptr, eqds::CreditChunkBuffPool::kCreditMRSize,
+                PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    UCCL_INIT_CHECK(addr != MAP_FAILED, "mmap failed");
+    pacer_credit_mr_ =
+        ibv_reg_mr(pd_, addr, eqds::CreditChunkBuffPool::kCreditMRSize,
+                   IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+    UCCL_INIT_CHECK(pacer_credit_mr_ != nullptr,
+                    "ibv_reg_mr failed for pacer credit MR");
 
-  // Initialize Credit packet buffer pool for engine and pacer, respectively.
-  engine_credit_chunk_pool_.emplace(engine_credit_mr_);
-  pacer_credit_chunk_pool_.emplace(pacer_credit_mr_);
+    // Initialize Credit packet buffer pool for engine and pacer, respectively.
+    engine_credit_chunk_pool_.emplace(engine_credit_mr_);
+    pacer_credit_chunk_pool_.emplace(pacer_credit_mr_);
 
-  pc_qpw_.credit_qp_ = credit_qp_;
-  pc_qpw_.pacer_credit_cq_ = pacer_credit_cq_ex_;
-  pc_qpw_.pacer_credit_chunk_pool_ = &(*pacer_credit_chunk_pool_);
+    pc_qpw_.credit_qp_ = credit_qp_;
+    pc_qpw_.pacer_credit_cq_ = pacer_credit_cq_ex_;
+    pc_qpw_.pacer_credit_chunk_pool_ = &(*pacer_credit_chunk_pool_);
 
-  INIT_LIST_HEAD(&pc_qpw_.poll_item.poll_link);
-  pc_qpw_.poll_item.pc_qpw = &pc_qpw_;
+    INIT_LIST_HEAD(&pc_qpw_.poll_item.poll_link);
+    pc_qpw_.poll_item.pc_qpw = &pc_qpw_;
 
-  // Populate recv work requests on Credit QP for consuming credit packets.
-  {
-    struct ibv_sge sge;
-    for (int i = 0; i < (eqds::CreditChunkBuffPool::kNumChunk - 1) / 2; i++) {
-      uint64_t chunk_addr;
-      UCCL_INIT_CHECK(engine_credit_chunk_pool_->alloc_buff(&chunk_addr) == 0,
-                      "Failed to allocate buffer for credit packet");
-      sge.addr = chunk_addr;
-      sge.length = eqds::CreditChunkBuffPool::kChunkSize;
-      sge.lkey = engine_credit_chunk_pool_->get_lkey();
-      wr.wr_id = chunk_addr;
-      wr.next = nullptr;
-      wr.sg_list = &sge;
-      wr.num_sge = 1;
-      struct ibv_recv_wr* bad_wr;
-      UCCL_INIT_CHECK(ibv_post_recv(credit_qp_, &wr, &bad_wr) == 0,
-                      "ibv_post_recv failed");
+    // Populate recv work requests on Credit QP for consuming credit packets.
+    {
+      struct ibv_sge sge;
+      for (int i = 0; i < (eqds::CreditChunkBuffPool::kNumChunk - 1) / 2; i++) {
+        uint64_t chunk_addr;
+        UCCL_INIT_CHECK(engine_credit_chunk_pool_->alloc_buff(&chunk_addr) == 0,
+                        "Failed to allocate buffer for credit packet");
+        sge.addr = chunk_addr;
+        sge.length = eqds::CreditChunkBuffPool::kChunkSize;
+        sge.lkey = engine_credit_chunk_pool_->get_lkey();
+        wr.wr_id = chunk_addr;
+        wr.next = nullptr;
+        wr.sg_list = &sge;
+        wr.num_sge = 1;
+        struct ibv_recv_wr* bad_wr;
+        UCCL_INIT_CHECK(ibv_post_recv(credit_qp_, &wr, &bad_wr) == 0,
+                        "ibv_post_recv failed");
+      }
     }
-  }
 
-  for (int i = 0; i < kPostRQThreshold; i++) {
-    credit_recv_wrs_.recv_sges[i].lkey = engine_credit_chunk_pool_->get_lkey();
-    credit_recv_wrs_.recv_sges[i].length =
-        eqds::CreditChunkBuffPool::kChunkSize;
-    credit_recv_wrs_.recv_wrs[i].sg_list = &credit_recv_wrs_.recv_sges[i];
-    credit_recv_wrs_.recv_wrs[i].num_sge = 1;
-    credit_recv_wrs_.recv_wrs[i].next = (i == kPostRQThreshold - 1)
-                                            ? nullptr
-                                            : &credit_recv_wrs_.recv_wrs[i + 1];
+    for (int i = 0; i < kPostRQThreshold; i++) {
+      credit_recv_wrs_.recv_sges[i].lkey =
+          engine_credit_chunk_pool_->get_lkey();
+      credit_recv_wrs_.recv_sges[i].length =
+          eqds::CreditChunkBuffPool::kChunkSize;
+      credit_recv_wrs_.recv_wrs[i].sg_list = &credit_recv_wrs_.recv_sges[i];
+      credit_recv_wrs_.recv_wrs[i].num_sge = 1;
+      credit_recv_wrs_.recv_wrs[i].next =
+          (i == kPostRQThreshold - 1) ? nullptr
+                                      : &credit_recv_wrs_.recv_wrs[i + 1];
+    }
   }
 
   // Timing wheel.

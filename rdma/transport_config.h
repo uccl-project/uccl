@@ -118,7 +118,8 @@ static constexpr enum engine_lb_policy kEngineLBPolicy = ENGINE_POLICY_RR;
 
 static uint32_t const PACER_CPU_START = 3 * NUM_CPUS / 4;
 
-constexpr static int kTotalQP = kPortEntropy + 1 /* Credit QP */;
+constexpr static int kTotalQP =
+    kPortEntropy + (kReceiverCCA == RECEIVER_CCA_EQDS ? 1 : 0) /* Credit QP */;
 // Recv buffer size smaller than kRCSize will be handled by RC directly.
 static constexpr uint32_t kRCSize = 8192;
 // fallback to nccl
