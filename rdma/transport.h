@@ -836,7 +836,10 @@ struct PeerInfo {
   PeerID peer_id;
   ibv_gid remote_gid;
   struct ibv_port_attr remote_port_attr;
-  bool ready;
+  // -1: peer id is allocated by accept()
+  // 0:  peer id is allocated by connect()
+  // 1:  rdma context is ready.
+  int ready;
 };
 
 /**

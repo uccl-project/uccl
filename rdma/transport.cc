@@ -863,7 +863,7 @@ void RDMAEndpoint::install_ctx_on_engines(int fd, int dev, PeerID peer_id,
 
   // Update peer map. Let other connect() go ahead.
   peer_map_mu_[dev].lock();
-  peer_map_[dev][{remote_ip, remote_dev}].ready = true;
+  peer_map_[dev][{remote_ip, remote_dev}].ready = 1;
   peer_map_[dev][{remote_ip, remote_dev}].remote_gid = info->remote_gid;
   peer_map_[dev][{remote_ip, remote_dev}].remote_port_attr =
       info->remote_port_attr;
@@ -940,7 +940,11 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   if (it == peer_map_[dev].end()) {
     first_call = 1;
     peer_id = alloc_peer_id(dev);
-    peer_map_[dev].insert({{remote_ip, remote_dev}, {peer_id, {}, {}, false}});
+    peer_map_[dev].insert({{remote_ip, remote_dev}, {peer_id, {}, {}, 0}});
+  } else if (it->second.ready == -1) {
+    first_call = 1;
+    peer_map_[dev][{remote_ip, remote_dev}].ready = 0;
+    peer_id = it->second.peer_id;
   } else {
     peer_id = it->second.peer_id;
   }
@@ -988,7 +992,7 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
     auto it = peer_map_[dev].find({remote_ip, remote_dev});
     DCHECK(it != peer_map_[dev].end());
 
-    if (it->second.ready) {
+    if (it->second.ready == 1) {
       remote_ctx.remote_gid = it->second.remote_gid;
       remote_ctx.remote_port_attr = it->second.remote_port_attr;
       peer_map_mu_[dev].unlock();
@@ -1051,18 +1055,15 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   remote_gpuidx = buf[1];
   int should_install_ctx = buf[2];
 
-  // Wait until connect() is called and allocate a peer id.
-  while (1) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    peer_map_mu_[dev].lock();
-    auto it = peer_map_[dev].find({remote_ip, *remote_dev});
-    if (it != peer_map_[dev].end()) {
-      peer_id = it->second.peer_id;
-      peer_map_mu_[dev].unlock();
-      break;
-    }
-    peer_map_mu_[dev].unlock();
+  peer_map_mu_[dev].lock();
+  auto it = peer_map_[dev].find({remote_ip, *remote_dev});
+  if (it != peer_map_[dev].end()) {
+    peer_id = it->second.peer_id;
+  } else {
+    peer_id = alloc_peer_id(dev);
+    peer_map_[dev].insert({{remote_ip, *remote_dev}, {peer_id, {}, {}, -1}});
   }
+  peer_map_mu_[dev].unlock();
 
   if (should_install_ctx) {
     UCCL_LOG_EP << "accept: install_ctx_on_engines for dev/peer: " << dev << "/"
@@ -1097,7 +1098,7 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
     auto it = peer_map_[dev].find({remote_ip, *remote_dev});
     DCHECK(it != peer_map_[dev].end());
 
-    if (it->second.ready) {
+    if (it->second.ready == 1) {
       remote_ctx.remote_gid = it->second.remote_gid;
       remote_ctx.remote_port_attr = it->second.remote_port_attr;
       peer_map_mu_[dev].unlock();
