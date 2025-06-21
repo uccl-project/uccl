@@ -9,7 +9,7 @@
 // #define LAZY_CREATE_ENGINE
 
 /// Interface configuration.
-static char const* IB_DEVICE_NAME_PREFIX = "mlx5_";
+static char const* IB_DEVICE_NAME_PREFIX = "rdma";
 
 #ifndef __HIP_PLATFORM_AMD__
 static constexpr bool ROCE_NET = true;
@@ -27,14 +27,25 @@ static constexpr uint32_t kPortEntropy = 64;
 // Maximum chunk size (Bytes) for each WQE.
 static constexpr uint32_t kChunkSize = 32 << 10;
 #else
-static constexpr bool ROCE_NET = false;
-static std::string SINGLE_CTRL_NIC("eth0");
-static constexpr uint8_t NUM_DEVICES = 1;
-static constexpr uint8_t DEVNAME_SUFFIX_LIST[NUM_DEVICES] = {0};
-static constexpr double LINK_BANDWIDTH = 200.0 * 1e9 / 8;  // 200Gbps
-static constexpr uint32_t NUM_ENGINES = 1;
-static constexpr uint32_t kPortEntropy = 256;
-static constexpr uint32_t kChunkSize = 128 << 10;
+/*********** FOR AMD HPC CLUSTER ***********/
+// static constexpr bool ROCE_NET = false;
+// static std::string SINGLE_CTRL_NIC("eth0");
+// static constexpr uint8_t NUM_DEVICES = 1;
+// static constexpr uint8_t DEVNAME_SUFFIX_LIST[NUM_DEVICES] = {0};
+// static constexpr double LINK_BANDWIDTH = 200.0 * 1e9 / 8;  // 200Gbps
+// static constexpr uint32_t NUM_ENGINES = 1;
+// static constexpr uint32_t kPortEntropy = 256;
+// static constexpr uint32_t kChunkSize = 128 << 10;
+
+/*********** FOR AMD MI300x CLUSTER ***********/
+static constexpr bool ROCE_NET = true;
+static std::string SINGLE_CTRL_NIC("cni0");
+static constexpr uint8_t NUM_DEVICES = 8;
+static constexpr uint8_t DEVNAME_SUFFIX_LIST[NUM_DEVICES] = {0, 1, 2, 3, 4, 5, 6, 7};
+static constexpr double LINK_BANDWIDTH = 400.0 * 1e9 / 8;  // 400Gbps
+static constexpr uint32_t NUM_ENGINES = 4;
+static constexpr uint32_t kPortEntropy = 64;
+static constexpr uint32_t kChunkSize = 32 << 10;
 #endif
 
 static constexpr uint32_t MAX_PEER = 256;
@@ -58,7 +69,7 @@ static uint32_t ENGINE_CPU_START_LIST[8] = {
 };
 
 // Use RC rather than UC.
-static constexpr bool kRCMode = false;
+static constexpr bool kRCMode = true;
 // Bypass the pacing stage.
 static constexpr bool kBypassPacing = true;
 

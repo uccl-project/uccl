@@ -18,8 +18,10 @@ fi
 #   GPU 6,7 <-> mlx5_2
 # salloc -N 2 -n 2 -p mi2508x -t 00:30:00
 
-NODEFILE=nodes.txt
-scontrol show hostnames $SLURM_JOB_NODELIST >$NODEFILE
+# NODEFILE=nodes.txt
+# scontrol show hostnames $SLURM_JOB_NODELIST >$NODEFILE
+
+NODEFILE=${UCCL_HOME}/scripts/node_ips/amd_2.txt
 
 TEST=${1:-uccl}
 
@@ -34,22 +36,25 @@ else
     exit 1
 fi
 
-mpirun --bind-to none -np 2 -N 1 --hostfile $NODEFILE --map-by ppr:1:node \
+mpirun --prefix /usr/local/bin/ompi --bind-to none -np 2 -N 1 --hostfile $NODEFILE --map-by ppr:1:node \
     -x LD_LIBRARY_PATH=${UCCL_HOME}/thirdparty/rccl/build/release:${CONDA_LIB_HOME}:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH} \
     -x NCCL_NET_PLUGIN=${plugin_path} \
     -x GLOG_v=0 \
-    -x NCCL_DMABUF_ENABLE=1 \
     -x NCCL_P2P_DISABLE=1 \
     -x NCCL_SHM_DISABLE=1 \
     -x NCCL_NET_DISABLE=0 \
-    -x NCCL_NET_GDR_LEVEL=SYS \
+    -x NCCL_DMABUF_ENABLE=1 \
+    -x NCCL_IB_PCI_RELAXED_ORDERING=1 \
+    -x NCCL_P2P_NET_CHUNKSIZE=524288 \
+    -x NCCL_BUFFSIZE=8388608 \
     -x NCCL_IB_QPS_PER_CONNECTION=4 \
-    -x HIP_VISIBLE_DEVICES=0 \
-    -x NCCL_IB_HCA="mlx5_0:1" \
+    -x HIP_VISIBLE_DEVICES=0,1,2,4 \
     ${UCCL_HOME}/thirdparty/rccl-tests/build/all_reduce_perf \
-    -b 1K -e 1G -f 2 -w 5 -n 20 -c 1 -g 1 -t 1 |&
+    -b 1K -e 1G -f 2 -w 5 -n 20 -c 1 -g 1 -t 4 |&
     tee alltoall_debug.log
 
+# -x NCCL_IB_HCA="mlx5_0:1" \
+# -x NCCL_NET_GDR_LEVEL=SYS \
 # -x NCCL_DEBUG=INFO \
 
 # On mi2104x
