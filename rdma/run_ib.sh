@@ -9,7 +9,7 @@ NUM_PROCS=${2:-2}
 NUM_GPUS_PER_NODE=${3:-8}
 PROG_OPTION=${4:-0}
 PROCS_PER_NODE=${5:-1}
-HOSTNAME=${6:-"hosts_ib"}
+HOSTNAME=${6:-"hosts_ib_single_process"}
 
 HOSTFILE="$HOSTNAME"
 NODES=""

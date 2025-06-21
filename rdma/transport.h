@@ -870,7 +870,9 @@ class RDMAEndpoint {
   std::vector<std::unique_ptr<UcclRDMAEngine>> engine_vec_;
   std::unordered_map<int, std::unique_ptr<UcclRDMAEngine>>
       engine_id_to_engine_map_;
+  std::mutex engine_map_mu_;
   std::vector<std::unique_ptr<std::thread>> engine_th_vec_;
+  std::mutex engine_th_mu_;
 
   // Number of outstanding messages for each engine.
   std::array<std::atomic<uint32_t>, NUM_ENGINES* NUM_DEVICES> engine_load_vec_ =

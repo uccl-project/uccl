@@ -273,8 +273,8 @@ void UcclRDMAEngine::handle_rx_work(void) {
 }
 
 bool RDMAEndpoint::initialize_engine_by_dev(int dev) {
-  static std::once_flag flag_once;
-  std::call_once(flag_once, [this, dev]() {
+  static std::array<std::once_flag, NUM_DEVICES> flags_per_dev_;
+  std::call_once(flags_per_dev_[dev], [this, dev]() {
     int start_engine_idx = dev * num_engines_per_dev_;
     int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
 
@@ -283,20 +283,30 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev) {
       int engine_cpu_id =
           ENGINE_CPU_START_LIST[dev] + engine_id % num_engines_per_dev_;
       DCHECK(engine_cpu_id < NUM_CPUS) << engine_cpu_id << ", " << NUM_CPUS;
+      UcclRDMAEngine* engine_ptr;
+      {
+        std::lock_guard<std::mutex> lock(engine_map_mu_);
+        if (engine_id_to_engine_map_.find(engine_id) !=
+            engine_id_to_engine_map_.end()) {
+          UCCL_LOG_ENGINE << "Engine " << engine_id << " already exists.";
+          exit(EXIT_FAILURE);
+        }
+        engine_id_to_engine_map_[engine_id] = std::make_unique<UcclRDMAEngine>(
+            dev, engine_id, channel_vec_[engine_id], eqds_[dev]);
 
-      engine_id_to_engine_map_[engine_id] = std::make_unique<UcclRDMAEngine>(
-          dev, engine_id, channel_vec_[engine_id], eqds_[dev]);
-
-      UcclRDMAEngine* engine_ptr = engine_id_to_engine_map_[engine_id].get();
-      engine_th_vec_.emplace_back(std::make_unique<std::thread>(
-          [engine_ptr, engine_id, engine_cpu_id]() {
-            UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
-                            << "running on CPU " << engine_cpu_id;
-            pin_thread_to_cpu(engine_cpu_id);
-            engine_ptr->run();
-          }));
+        engine_ptr = engine_id_to_engine_map_[engine_id].get();
+      }
+      {
+        std::lock_guard<std::mutex> lock(engine_th_mu_);
+        engine_th_vec_.emplace_back(std::make_unique<std::thread>(
+            [engine_ptr, engine_id, engine_cpu_id]() {
+              UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
+                              << "running on CPU " << engine_cpu_id;
+              pin_thread_to_cpu(engine_cpu_id);
+              engine_ptr->run();
+            }));
+      }
     }
-
     create_listen_socket(&test_listen_fds_[dev], kTestListenPort + dev);
   });
 
