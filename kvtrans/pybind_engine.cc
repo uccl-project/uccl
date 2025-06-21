@@ -10,8 +10,8 @@ PYBIND11_MODULE(kvtrans_engine, m) {
 
   // Endpoint class binding
   py::class_<Endpoint>(m, "Endpoint")
-      .def(py::init<uint32_t, uint32_t>(),
-           "Create a new Engine instance", py::arg("gpu_idx"), py::arg("ncpus"))
+      .def(py::init<uint32_t, uint32_t>(), "Create a new Engine instance",
+           py::arg("gpu_idx"), py::arg("ncpus"))
       .def(
           "connect",
           [](Endpoint& self, std::string const& ip_addr, int remote_gpu_idx) {
@@ -19,12 +19,13 @@ PYBIND11_MODULE(kvtrans_engine, m) {
             bool success = self.connect(ip_addr, remote_gpu_idx, conn_id);
             return py::make_tuple(success, conn_id);
           },
-          "Connect to a remote server", py::arg("ip_addr"), py::arg("remote_gpu_idx"))
+          "Connect to a remote server", py::arg("ip_addr"),
+          py::arg("remote_gpu_idx"))
       .def(
           "accept",
           [](Endpoint& self) {
             std::string ip_addr;
-              int remote_gpu_idx;
+            int remote_gpu_idx;
             uint64_t conn_id;
             bool success = self.accept(ip_addr, remote_gpu_idx, conn_id);
             return py::make_tuple(success, ip_addr, remote_gpu_idx, conn_id);
@@ -42,17 +43,22 @@ PYBIND11_MODULE(kvtrans_engine, m) {
           "Register a key-value buffer", py::arg("buffer"))
       .def(
           "send_kv",
-          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, py::buffer buffer) {
+          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id,
+             py::buffer buffer) {
             py::buffer_info info = buffer.request();
-            return self.send_kv(conn_id, mr_id, info.ptr, info.size * info.itemsize);
+            return self.send_kv(conn_id, mr_id, info.ptr,
+                                info.size * info.itemsize);
           },
-          "Send a key-value buffer", py::arg("conn_id"), py::arg("mr_id"), py::arg("buffer"))
+          "Send a key-value buffer", py::arg("conn_id"), py::arg("mr_id"),
+          py::arg("buffer"))
       .def(
           "recv_kv",
-          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, size_t max_size) {
+          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id,
+             size_t max_size) {
             std::vector<uint8_t> data(max_size);
             size_t actual_size = max_size;
-            bool success = self.recv_kv(conn_id, mr_id, data.data(), actual_size);
+            bool success =
+                self.recv_kv(conn_id, mr_id, data.data(), actual_size);
             if (success) {
               data.resize(actual_size);
               return py::make_tuple(
@@ -62,7 +68,8 @@ PYBIND11_MODULE(kvtrans_engine, m) {
               return py::make_tuple(false, py::bytes());
             }
           },
-          "Receive a key-value buffer", py::arg("conn_id"), py::arg("mr_id"), py::arg("max_size"))
+          "Receive a key-value buffer", py::arg("conn_id"), py::arg("mr_id"),
+          py::arg("max_size"))
       .def("__repr__", [](Endpoint const& e) { return "<KVTrans Endpoint>"; });
 
   // Utility functions
