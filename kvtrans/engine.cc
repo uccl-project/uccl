@@ -18,8 +18,7 @@ Endpoint::Endpoint(const uint32_t gpu_idx, const uint32_t ncpus)
   ep_ = new uccl::RDMAEndpoint(NUM_DEVICES, ncpus);
 
   // Initialize the engine based on the GPU index.
-  static std::atomic<uint16_t> listen_port = 10000;
-  ep_->initialize_engine_by_dev(gpu_idx_, listen_port);
+  ep_->initialize_engine_by_dev(gpu_idx_);
 
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
