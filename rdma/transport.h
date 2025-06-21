@@ -1106,8 +1106,7 @@ class UcclFlow {
     }
   }
 
-  void prepare_fifo(int bootstrap_fd, int dev,
-                    struct RemoteRDMAContext remote_ctx) {
+  uint32_t create_fifo(int bootstrap_fd, int dev) {
     auto comm_base = is_send_ ? &send_comm_.base : &recv_comm_.base;
 
     auto factory_dev = RDMAFactory::get_factory_dev(dev);
@@ -1134,14 +1133,6 @@ class UcclFlow {
                         sizeof(uint32_t),
                     "uccl_connect: receive_message()");
 
-    auto fifo_rqpn = *reinterpret_cast<uint32_t*>(buf);
-
-    UCCL_INIT_CHECK(
-        modify_qp_rtr(comm_base->fifo_qp, dev, &remote_ctx, fifo_rqpn) == 0,
-        "Failed to modify Fifo QP to RTR");
-    UCCL_INIT_CHECK(modify_qp_rts(comm_base->fifo_qp, true) == 0,
-                    "Failed to modify Fifo QP to RTS");
-
     // Exchange addr and rkey for Fifo MR with remote peer.
     char buf2[sizeof(uint64_t) + sizeof(uint32_t)];
     auto fifo_laddr = reinterpret_cast<uint64_t>(comm_base->fifo_mr->addr);
@@ -1162,6 +1153,22 @@ class UcclFlow {
     comm_base->remote_fifo_addr = *reinterpret_cast<uint64_t*>(buf2);
     comm_base->remote_fifo_rkey =
         *reinterpret_cast<uint32_t*>(buf2 + sizeof(uint64_t));
+
+    return *reinterpret_cast<uint32_t*>(buf);
+  }
+
+  void modify_fifo(int bootstrap_fd, int dev,
+                   struct RemoteRDMAContext remote_ctx,
+                   uint32_t remote_fifo_qpn) {
+    auto comm_base = is_send_ ? &send_comm_.base : &recv_comm_.base;
+
+    auto factory_dev = RDMAFactory::get_factory_dev(dev);
+
+    UCCL_INIT_CHECK(modify_qp_rtr(comm_base->fifo_qp, dev, &remote_ctx,
+                                  remote_fifo_qpn) == 0,
+                    "Failed to modify Fifo QP to RTR");
+    UCCL_INIT_CHECK(modify_qp_rts(comm_base->fifo_qp, true) == 0,
+                    "Failed to modify Fifo QP to RTS");
 
     // RC QP
     if constexpr (kRCSize > 0) {
@@ -1192,6 +1199,7 @@ class UcclFlow {
                                         IBV_QP_PORT | IBV_QP_ACCESS_FLAGS) == 0,
                       "Failed to modify RC QP to INIT");
 
+      char buf[sizeof(uint32_t)];
       // Send QPN to remote peer.
       memcpy(buf, &comm_base->rc_qp->qp_num, sizeof(uint32_t));
       int ret = send_message(bootstrap_fd, buf, sizeof(uint32_t));

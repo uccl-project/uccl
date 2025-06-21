@@ -989,6 +989,8 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
 
   install_flow_on_engines(dev, peer_id, flow_id, flow, true);
 
+  auto remote_fifo_qpn = flow->create_fifo(bootstrap_fd, dev);
+
   while (1) {
     peer_map_mu_[dev].lock();
     auto it = peer_map_[dev].find({remote_ip, remote_dev});
@@ -1009,7 +1011,7 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   active_flows_vec_[dev].push_back(flow);
   active_flows_spin_[dev].Unlock();
 
-  flow->prepare_fifo(bootstrap_fd, dev, remote_ctx);
+  flow->modify_fifo(bootstrap_fd, dev, remote_ctx, remote_fifo_qpn);
 
   return ConnID{
       .context = flow, .flow_id = flow_id, .peer_id = peer_id, .dev = dev};
@@ -1088,6 +1090,8 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
 
   install_flow_on_engines(dev, peer_id, flow_id, flow, false);
 
+  auto remote_fifo_qpn = flow->create_fifo(bootstrap_fd, dev);
+
   while (1) {
     peer_map_mu_[dev].lock();
 
@@ -1109,7 +1113,7 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   active_flows_vec_[dev].push_back(flow);
   active_flows_spin_[dev].Unlock();
 
-  flow->prepare_fifo(bootstrap_fd, dev, remote_ctx);
+  flow->modify_fifo(bootstrap_fd, dev, remote_ctx, remote_fifo_qpn);
 
   return ConnID{
       .context = flow, .flow_id = flow_id, .peer_id = peer_id, .dev = dev};
