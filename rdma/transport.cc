@@ -454,7 +454,7 @@ void UcclRDMAEngine::handle_install_flow_on_engine(
   auto* flow = reinterpret_cast<UcclFlow*>(ctrl_work.meta.install_flow.context);
   auto is_send = ctrl_work.meta.install_flow.is_send;
 
-  DCHECK(flow_id < MAX_FLOW);
+  DCHECK(flow_id < MAX_FLOW) << flow_id << ", " << MAX_FLOW;
 
   if (is_send) {
     rdma_ctx->add_sender_flow(flow, flow_id);
@@ -1064,7 +1064,6 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   // Negotiate FlowID with client.
   flow_id_spin_[dev][peer_id].Lock();
   flow_id = next_flow_id_[dev][peer_id]++;
-  // flow_id = peer_id * 10 + next_flow_id_[dev][peer_id]++;
   flow_id_spin_[dev][peer_id].Unlock();
   {
     std::lock_guard<std::mutex> lock(fd_vec_mu_);

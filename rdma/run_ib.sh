@@ -121,6 +121,7 @@ echo -e "Details: NCCL_NCHANNELS=${NUM_CHUNNEL} \n\t NCCL_P2P_NET_CHUNKSIZE=${P2
     -x NCCL_CROSS_NIC=0 \
     ${UCCL_HOME}/thirdparty/nccl-tests/build/${PROG_NAME} \
     -f 2 \
+    -c 0 \
     --minbytes 1K --maxbytes 1G \
     --warmup_iters 0 --iters 1 \
     -g 1 -t ${NUM_GPUS_PER_NODE}
