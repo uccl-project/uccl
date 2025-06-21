@@ -1164,50 +1164,52 @@ class UcclFlow {
         *reinterpret_cast<uint32_t*>(buf2 + sizeof(uint64_t));
 
     // RC QP
-    struct ibv_qp_init_attr qp_init_attr;
-    memset(&qp_init_attr, 0, sizeof(qp_init_attr));
-    qp_init_attr.qp_context = this;
-    qp_init_attr.send_cq = comm_base->flow_cq;
-    qp_init_attr.recv_cq = comm_base->flow_cq;
-    qp_init_attr.qp_type = IBV_QPT_RC;
-    qp_init_attr.cap.max_send_wr = kMaxReq * kMaxRecv;
-    qp_init_attr.cap.max_recv_wr = kMaxReq * kMaxRecv;
-    qp_init_attr.cap.max_send_sge = kMaxSge;
-    qp_init_attr.cap.max_recv_sge = kMaxSge;
-    qp_init_attr.cap.max_inline_data = 0;
+    if constexpr (kRCSize > 0) {
+      struct ibv_qp_init_attr qp_init_attr;
+      memset(&qp_init_attr, 0, sizeof(qp_init_attr));
+      qp_init_attr.qp_context = this;
+      qp_init_attr.send_cq = comm_base->flow_cq;
+      qp_init_attr.recv_cq = comm_base->flow_cq;
+      qp_init_attr.qp_type = IBV_QPT_RC;
+      qp_init_attr.cap.max_send_wr = kMaxReq * kMaxRecv;
+      qp_init_attr.cap.max_recv_wr = kMaxReq * kMaxRecv;
+      qp_init_attr.cap.max_send_sge = kMaxSge;
+      qp_init_attr.cap.max_recv_sge = kMaxSge;
+      qp_init_attr.cap.max_inline_data = 0;
 
-    struct ibv_qp_attr qpAttr;
-    memset(&qpAttr, 0, sizeof(qpAttr));
-    qpAttr.qp_state = IBV_QPS_INIT;
-    qpAttr.pkey_index = 0;
-    qpAttr.port_num = IB_PORT_NUM;
-    qpAttr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE;
+      struct ibv_qp_attr qpAttr;
+      memset(&qpAttr, 0, sizeof(qpAttr));
+      qpAttr.qp_state = IBV_QPS_INIT;
+      qpAttr.pkey_index = 0;
+      qpAttr.port_num = IB_PORT_NUM;
+      qpAttr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE;
 
-    comm_base->rc_qp = ibv_create_qp(factory_dev->pd, &qp_init_attr);
-    UCCL_INIT_CHECK(comm_base->rc_qp != nullptr, "Failed to create RC QP");
+      comm_base->rc_qp = ibv_create_qp(factory_dev->pd, &qp_init_attr);
+      UCCL_INIT_CHECK(comm_base->rc_qp != nullptr, "Failed to create RC QP");
 
-    UCCL_INIT_CHECK(ibv_modify_qp(comm_base->rc_qp, &qpAttr,
-                                  IBV_QP_STATE | IBV_QP_PKEY_INDEX |
-                                      IBV_QP_PORT | IBV_QP_ACCESS_FLAGS) == 0,
-                    "Failed to modify RC QP to INIT");
+      UCCL_INIT_CHECK(ibv_modify_qp(comm_base->rc_qp, &qpAttr,
+                                    IBV_QP_STATE | IBV_QP_PKEY_INDEX |
+                                        IBV_QP_PORT | IBV_QP_ACCESS_FLAGS) == 0,
+                      "Failed to modify RC QP to INIT");
 
-    // Send QPN to remote peer.
-    memcpy(buf, &comm_base->rc_qp->qp_num, sizeof(uint32_t));
-    int ret = send_message(bootstrap_fd, buf, sizeof(uint32_t));
-    DCHECK(ret == sizeof(uint32_t));
+      // Send QPN to remote peer.
+      memcpy(buf, &comm_base->rc_qp->qp_num, sizeof(uint32_t));
+      int ret = send_message(bootstrap_fd, buf, sizeof(uint32_t));
+      DCHECK(ret == sizeof(uint32_t));
 
-    // Receive QPN from remote peer.
-    ret = receive_message(bootstrap_fd, buf, sizeof(uint32_t));
-    DCHECK(ret == sizeof(uint32_t));
+      // Receive QPN from remote peer.
+      ret = receive_message(bootstrap_fd, buf, sizeof(uint32_t));
+      DCHECK(ret == sizeof(uint32_t));
 
-    auto rc_rqpn = *reinterpret_cast<uint32_t*>(buf);
+      auto rc_rqpn = *reinterpret_cast<uint32_t*>(buf);
 
-    UCCL_INIT_CHECK(
-        modify_qp_rtr(comm_base->rc_qp, dev, &remote_ctx, rc_rqpn) == 0,
-        "Failed to modify RC QP to RTR");
+      UCCL_INIT_CHECK(
+          modify_qp_rtr(comm_base->rc_qp, dev, &remote_ctx, rc_rqpn) == 0,
+          "Failed to modify RC QP to RTR");
 
-    UCCL_INIT_CHECK(modify_qp_rts(comm_base->rc_qp, true) == 0,
-                    "Failed to modify RC QP to RTS");
+      UCCL_INIT_CHECK(modify_qp_rts(comm_base->rc_qp, true) == 0,
+                      "Failed to modify RC QP to RTS");
+    }
 
     // GPU flush QP for receiver.
     if (!is_send_) {

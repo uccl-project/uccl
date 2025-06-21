@@ -121,7 +121,8 @@ static uint32_t const PACER_CPU_START = 3 * NUM_CPUS / 4;
 constexpr static int kTotalQP =
     kPortEntropy + (kReceiverCCA == RECEIVER_CCA_EQDS ? 1 : 0) /* Credit QP */;
 // Recv buffer size smaller than kRCSize will be handled by RC directly.
-static constexpr uint32_t kRCSize = 8192;
+// static constexpr uint32_t kRCSize = 8192;
+static constexpr uint32_t kRCSize = 0;
 // fallback to nccl
 // static constexpr uint32_t kRCSize = 4000000;
 // Minimum post receive size in NCCL.
