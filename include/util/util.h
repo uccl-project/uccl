@@ -265,6 +265,15 @@ inline void uccl_wakeup(PollCtx* ctx) {
   ctx->cv.notify_one();
 }
 
+inline bool uccl_try_wakeup(PollCtx* ctx) {
+  if (--(ctx->num_unfinished) == 0) {
+    ctx->write_barrier();
+    uccl_wakeup(ctx);
+    return true;
+  }
+  return false;
+}
+
 template <class T>
 static inline T Percentile(std::vector<T>& vectorIn, double percent) {
   if (vectorIn.size() == 0) return (T)0;

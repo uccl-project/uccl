@@ -954,9 +954,13 @@ class RDMAEndpoint {
   // Register a memory region.
   int uccl_regmr(UcclFlow* flow, void* data, size_t len, int type,
                  struct Mhandle** mhandle);
+  int uccl_regmr(int dev, void* data, size_t len, int type,
+                 struct Mhandle** mhandle);
   // Register a DMA-BUF memory region.
   int uccl_regmr_dmabuf(UcclFlow* flow, void* data, size_t len, int type,
                         int offset, int fd, struct Mhandle** mhandle);
+  int uccl_regmr_dmabuf(int dev, void* data, size_t len, int type, int offset,
+                        int fd, struct Mhandle** mhandle);
   // Deregister a memory region.
   void uccl_deregmr(struct Mhandle* mhandle);
 
