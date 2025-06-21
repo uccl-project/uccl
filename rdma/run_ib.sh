@@ -123,5 +123,5 @@ echo -e "Details: NCCL_NCHANNELS=${NUM_CHUNNEL} \n\t NCCL_P2P_NET_CHUNKSIZE=${P2
     -f 2 \
     -c 0 \
     --minbytes 1K --maxbytes 1G \
-    --warmup_iters 0 --iters 1 \
+    --warmup_iters 20 --iters 20 \
     -g 1 -t ${NUM_GPUS_PER_NODE}

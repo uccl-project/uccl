@@ -2680,6 +2680,12 @@ void RDMAContext::try_post_acks(int num_ack, uint64_t chunk_addr, bool force) {
   io_ctx_->tx_ack_wr_[idx].wr.ud.remote_qpn = remote_ctx_.remote_ctrl_qpn;
   io_ctx_->tx_ack_wr_[idx].wr.ud.remote_qkey = remote_ctx_.remote_ctrl_qpn;
 
+  if (io_ctx_->tx_ack_sge_[idx].length <= kMaxInline) {
+    io_ctx_->tx_ack_wr_[idx].send_flags |= IBV_SEND_INLINE;
+  } else {
+    io_ctx_->tx_ack_wr_[idx].send_flags &= ~IBV_SEND_INLINE;
+  }
+
   io_ctx_->tx_ack_wr_[idx].next =
       (idx == kMaxAckWRs - 1) ? nullptr : &io_ctx_->tx_ack_wr_[idx + 1];
 
