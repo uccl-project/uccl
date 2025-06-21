@@ -36,22 +36,28 @@ else
     exit 1
 fi
 
+NVLINK_ON=0
+
+NVLINK_OFF=$((1 - NVLINK_ON))
+
 mpirun --prefix /usr/local/bin/ompi --bind-to none -np 2 -N 1 --hostfile $NODEFILE --map-by ppr:1:node \
     -x LD_LIBRARY_PATH=${UCCL_HOME}/thirdparty/rccl/build/release:${CONDA_LIB_HOME}:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH} \
     -x NCCL_NET_PLUGIN=${plugin_path} \
     -x GLOG_v=0 \
-    -x NCCL_P2P_DISABLE=1 \
-    -x NCCL_SHM_DISABLE=1 \
-    -x NCCL_NET_DISABLE=0 \
+    -x NCCL_P2P_DISABLE=${NVLINK_OFF} \
+    -x NCCL_SHM_DISABLE=${NVLINK_OFF} \
     -x NCCL_DMABUF_ENABLE=1 \
     -x NCCL_IB_PCI_RELAXED_ORDERING=1 \
     -x NCCL_P2P_NET_CHUNKSIZE=524288 \
     -x NCCL_BUFFSIZE=8388608 \
-    -x NCCL_IB_QPS_PER_CONNECTION=4 \
+    -x NCCL_NCHANNELS_PER_NET_PEER=4 \
+    -x NCCL_IB_QPS_PER_CONNECTION=1 \
+    -x NCCL_IB_SPLIT_DATA_ON_QPS=1 \
     -x HIP_VISIBLE_DEVICES=0,1,2,4 \
-    ${UCCL_HOME}/thirdparty/rccl-tests/build/all_reduce_perf \
+    ${UCCL_HOME}/thirdparty/rccl-tests/build/alltoall_perf \
     -b 1K -e 1G -f 2 -w 5 -n 20 -c 1 -g 1 -t 4 |&
     tee alltoall_debug.log
+
 
 # -x NCCL_IB_HCA="mlx5_0:1" \
 # -x NCCL_NET_GDR_LEVEL=SYS \
