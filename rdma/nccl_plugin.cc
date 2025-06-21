@@ -176,13 +176,6 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
   memset(handle, 0, sizeof(struct ucclHandle));
 
 #ifdef LAZY_CREATE_ENGINE
-  int gpu_idx = 0;
-  cudaGetDevice(&gpu_idx);
-  if (dev != gpu_idx) {
-    LOG_FIRST_N(INFO, 1) << "pluginListen detects different vdev " << dev
-                         << " vs. gpu_idx " << gpu_idx;
-    // dev = gpu_idx;
-  }
   ep->initialize_engine_by_dev(dev);
 #endif
 
@@ -248,16 +241,6 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
 ncclResult_t pluginConnect(int dev, void* opaque_handle, void** sendComm,
                            ncclNetDeviceHandle_v8_t** /*sendDevComm*/) {
   struct ucclHandle* handle = (struct ucclHandle*)opaque_handle;
-
-#ifdef LAZY_CREATE_ENGINE
-  int gpu_idx = 0;
-  cudaGetDevice(&gpu_idx);
-  if (dev != gpu_idx) {
-    LOG_FIRST_N(INFO, 1) << "pluginListen detects different vdev " << dev
-                         << " vs. gpu_idx " << gpu_idx;
-    // dev = gpu_idx;
-  }
-#endif
   int local_gpuidx;
 #ifndef __HIP_PLATFORM_AMD__
   cudaGetDevice(&local_gpuidx);

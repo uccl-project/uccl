@@ -153,7 +153,6 @@ void RDMAFactory::init_dev(int devname_suffix) {
 
   rdma_ctl->devices_.push_back(dev);
 
-  // printf("rdma_ctrl devices size: %ld\n", rdma_ctl->devices_.size());
   return;
 
 close_device:
