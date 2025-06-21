@@ -41,7 +41,8 @@ static constexpr uint32_t kChunkSize = 32 << 10;
 static constexpr bool ROCE_NET = true;
 static std::string SINGLE_CTRL_NIC("cni0");
 static constexpr uint8_t NUM_DEVICES = 8;
-static constexpr uint8_t DEVNAME_SUFFIX_LIST[NUM_DEVICES] = {0, 1, 2, 3, 4, 5, 6, 7};
+static constexpr uint8_t DEVNAME_SUFFIX_LIST[NUM_DEVICES] = {0, 1, 2, 3,
+                                                             4, 5, 6, 7};
 static constexpr double LINK_BANDWIDTH = 400.0 * 1e9 / 8;  // 400Gbps
 static constexpr uint32_t NUM_ENGINES = 4;
 static constexpr uint32_t kPortEntropy = 64;
