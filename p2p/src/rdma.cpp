@@ -1,5 +1,7 @@
 #include "rdma.hpp"
 #include "common.hpp"
+#include "copy_ring.hpp"
+#include "peer_copy_worker.hpp"
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <algorithm>
@@ -48,11 +50,6 @@ constexpr int TCP_PORT = 18515;
 static thread_local std::atomic<uint64_t> g_posted = 0;     // WRs posted
 static thread_local std::atomic<uint64_t> g_completed = 0;  // CQEs seen
 thread_local std::atomic<bool> g_progress_run{true};
-
-#ifdef ENABLE_PROXY_CUDA_MEMCPY
-thread_local uint64_t async_memcpy_count = 0;
-thread_local uint64_t async_memcpy_total_time = 0;
-#endif
 
 struct NicCtx {
   // ibv_context* ctx;
@@ -239,6 +236,7 @@ static std::string run_cmd(char const* cmd) {
 }
 
 int best_nic_pix(int gpu_index) {
+  printf("Picking best NIC (Expect some delay)...\n");
   std::string topo = run_cmd("nvidia-smi topo -m");
   if (topo.empty()) return -2;
 
@@ -583,6 +581,22 @@ void post_receive_buffer_for_imm() {
   }
 }
 
+uint32_t build_imm_data(int src_addr_offset, int destination_gpu,
+                        uint32_t destination_addr_offset) {
+  uint32_t imm_data = 0;
+  imm_data |= (src_addr_offset & 0xFF) << 24;      // 8 bits.
+  imm_data |= (destination_gpu & 0xFF) << 16;      // 8 bits.
+  imm_data |= (destination_addr_offset & 0xFFFF);  // 16 bits.
+  return imm_data;
+}
+
+void unpack_imm_data(int& src_addr_offset, int& destination_gpu,
+                     uint32_t& destination_addr_offset, uint32_t imm_data) {
+  src_addr_offset = (imm_data >> 24) & 0xFF;    // 8 bits
+  destination_gpu = (imm_data >> 16) & 0xFF;    // 8 bits
+  destination_addr_offset = imm_data & 0xFFFF;  // 16 bits
+}
+
 void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
                              std::vector<uint64_t> wrs_to_post, ibv_cq* cq,
                              std::unordered_set<uint64_t>& finished_wrs,
@@ -601,7 +615,8 @@ void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
   }
 
   for (size_t i = 0; i < num_wrs; ++i) {
-    int offset = kNumThBlocks > i ? i : (i % kNumThBlocks);
+    int wr = wrs_to_post[i];
+    int offset = wr % (kRemoteBufferSize / bytes);
     sges[i].addr = (uintptr_t)buf + offset * bytes;
     sges[i].length = (uint32_t)bytes;
     sges[i].lkey = mr->lkey;
@@ -617,7 +632,7 @@ void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
     wrs[i].wr_id = wrs_to_post[i];
 #ifdef ENABLE_WRITE_WITH_IMMEDIATE
     wrs[i].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-    wrs[i].imm_data = wrs[i].wr_id % NUM_GPUS;
+    wrs[i].imm_data = build_imm_data(0, wrs[i].wr_id % NUM_GPUS, 0);
 #else
     wrs[i].opcode = IBV_WR_RDMA_WRITE;
 #endif
@@ -835,7 +850,8 @@ void handle_peer_copy(uint64_t wr_id, int src_dev, int dst_dev, void* src_ptr,
   }
 }
 
-void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq) {
+void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq,
+                                         CopyRing& g_ring) {
   struct ibv_wc wc[kMaxOutstandingRecvs];
   struct ibv_sge sges[kMaxOutstandingRecvs];
   struct ibv_recv_wr wrs[kMaxOutstandingRecvs];
@@ -852,11 +868,20 @@ void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq) {
         fprintf(stderr, "Unexpected opcode: %d\n", wc[i].opcode);
         exit(1);
       }
+      int src_addr_offset;
+      int destination_gpu;
+      uint32_t destination_addr_offset;
 
-      if (wc[i].imm_data != wc[i].wr_id % NUM_GPUS) {
-        fprintf(stderr, "Unexpected immediate data: %u, wr_id: %lu\n",
-                wc[i].imm_data, wc[i].wr_id);
-        exit(1);
+      unpack_imm_data(src_addr_offset, destination_gpu, destination_addr_offset,
+                      wc[i].imm_data);
+
+      int wr_gpu = (int)(wc[i].wr_id % NUM_GPUS);
+      if (destination_gpu != wr_gpu) {
+        fprintf(stderr,
+                "Unexpected immediate data: dest=%u  wr_id%%NUM_GPUS=%d  full "
+                "wr_id=%lu\n",
+                destination_gpu, wr_gpu, wc[i].wr_id);
+        exit(EXIT_FAILURE);
       }
 
       pool_index = (pool_index + 1) % (kRemoteBufferSize / kObjectSize - 1);
@@ -880,12 +905,46 @@ void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq) {
     }
 
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
+    std::vector<CopyTask> task_vec(ne);
     for (int i = 0; i < ne; ++i) {
-      int forward_to_gpu_index = wc[i].imm_data % NUM_GPUS;
-      handle_peer_copy(wc[i].wr_id, 0, forward_to_gpu_index, mr->addr,
-                       per_GPU_device_buf[forward_to_gpu_index], kObjectSize);
+      int src_addr_offset;
+      int destination_gpu;
+      uint32_t destination_addr_offset;
+
+      unpack_imm_data(src_addr_offset, destination_gpu, destination_addr_offset,
+                      wc[i].imm_data);
+      // int forward_to_gpu_index = wc[i].imm_data % NUM_GPUS;
+      // handle_peer_copy(wc[i].wr_id, 0, forward_to_gpu_index, mr->addr,
+      //                  per_GPU_device_buf[forward_to_gpu_index],
+      //                  kObjectSize);
+
+      if (per_GPU_device_buf[destination_gpu] == nullptr) {
+        fprintf(stderr, "per_GPU_device_buf[%d] is null\n", destination_gpu);
+        std::abort();
+      }
+
+      if (wc[i].byte_len != kObjectSize) {
+        fprintf(stderr, "Unexpected byte length: %u, expected: %u\n",
+                wc[i].byte_len, kObjectSize);
+        std::abort();
+      }
+
+      CopyTask task{
+          .wr_id = wc[i].wr_id,
+          .dst_dev = destination_gpu,
+          .src_ptr = static_cast<char*>(mr->addr) + src_addr_offset,
+          .dst_ptr = static_cast<char*>(per_GPU_device_buf[destination_gpu]) +
+                     destination_addr_offset,
+          .bytes = wc[i].byte_len};
+      task_vec[i] = task;
+      // while (!g_ring.emplace(task)) {
+      //   std::this_thread::yield();
+      // }
     }
-    if (pool_index % 10000 == 0) print_average_async_memcpy_time();
+    while (!g_ring.emplace(task_vec)) {
+      ;
+      /* Busy spin. */
+    }
 #endif
   }
 }
