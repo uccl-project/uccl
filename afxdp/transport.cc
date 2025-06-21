@@ -121,7 +121,7 @@ RXTracking::ConsumeRet RXTracking::consume(swift::Pcb* pcb, FrameBuf* msgbuf) {
     return kOldPkt;
   }
 
-  const size_t distance = seqno - expected_seqno;
+  size_t const distance = seqno - expected_seqno;
   if (distance >= kReassemblyMaxSeqnoDistance) {
     VLOG(3) << "Packet too far ahead. Dropping as we can't handle SACK. "
             << "seqno: " << seqno << ", expected: " << expected_seqno;
@@ -435,9 +435,9 @@ void UcclFlow::process_ack(UcclPktHdr const* ucclh) {
 
       uint32_t index = 0;
       while (sack_bitmap_count && msgbuf && index < hard_budget) {
-        const size_t sack_bitmap_bucket_idx =
+        size_t const sack_bitmap_bucket_idx =
             index / swift::Pcb::kSackBitmapBucketSize;
-        const size_t sack_bitmap_idx_in_bucket =
+        size_t const sack_bitmap_idx_in_bucket =
             index % swift::Pcb::kSackBitmapBucketSize;
         auto sack_bitmap =
             ucclsackh->sack_bitmap[sack_bitmap_bucket_idx].value();
@@ -836,7 +836,7 @@ void UcclFlow::prepare_l4header(uint8_t* pkt_addr, uint32_t payload_bytes,
 
 void UcclFlow::prepare_datapacket(FrameBuf* msgbuf, uint32_t path_id,
                                   uint32_t seqno,
-                                  const UcclPktHdr::UcclFlags net_flags) {
+                                  UcclPktHdr::UcclFlags const net_flags) {
   // Header length after before the payload.
   uint32_t frame_len = msgbuf->get_frame_len();
   DCHECK_LE(frame_len, AFXDP_MTU);
@@ -870,8 +870,8 @@ void UcclFlow::prepare_datapacket(FrameBuf* msgbuf, uint32_t path_id,
 
 AFXDPSocket::frame_desc UcclFlow::craft_ackpacket(
     uint32_t path_id, uint16_t dst_port, uint32_t seqno, uint32_t ackno,
-    const UcclPktHdr::UcclFlags net_flags, uint64_t ts1, uint64_t ts2) {
-  const size_t kControlPayloadBytes = kUcclHdrLen + kUcclSackHdrLen;
+    UcclPktHdr::UcclFlags const net_flags, uint64_t ts1, uint64_t ts2) {
+  size_t const kControlPayloadBytes = kUcclHdrLen + kUcclSackHdrLen;
   auto frame_offset = socket_->pop_frame();
   auto msgbuf = FrameBuf::Create(frame_offset, socket_->umem_buffer_,
                                  kNetHdrLen + kControlPayloadBytes);
@@ -915,7 +915,7 @@ AFXDPSocket::frame_desc UcclFlow::craft_ackpacket(
 }
 
 AFXDPSocket::frame_desc UcclFlow::craft_rssprobe_packet(uint16_t dst_port) {
-  const size_t kRssProbePayloadBytes = kUcclHdrLen;
+  size_t const kRssProbePayloadBytes = kUcclHdrLen;
   auto frame_offset = socket_->pop_frame();
   auto msgbuf = FrameBuf::Create(frame_offset, socket_->umem_buffer_,
                                  kNetHdrLen + kRssProbePayloadBytes);
@@ -1163,7 +1163,9 @@ void UcclEngine::process_rx_msg(
     auto it = active_flows_map_.find(flow_id);
     if (it == active_flows_map_.end()) {
       LOG_EVERY_N(ERROR, 1000000)
-          << "process_rx_msg unknown flow " << std::hex << "0x" << flow_id;
+          << "process_rx_msg unknown flow " << std::hex << "0x" << flow_id
+          << " engine_id " << local_engine_idx_ << " pkt->engine_id "
+          << (int)ucclh->engine_id;
       for (auto [flow_id, flow] : active_flows_map_) {
         LOG_EVERY_N(ERROR, 1000000)
             << "                active flow " << std::hex << "0x" << flow_id;
@@ -1560,7 +1562,7 @@ ConnID Endpoint::uccl_accept(std::string& remote_ip) {
                 .boostrap_id = bootstrap_fd};
 }
 
-bool Endpoint::uccl_send(ConnID conn_id, void const* data, const size_t len,
+bool Endpoint::uccl_send(ConnID conn_id, void const* data, size_t const len,
                          bool busypoll) {
   auto* poll_ctx = uccl_send_async(conn_id, data, len);
   return busypoll ? uccl_poll(poll_ctx) : uccl_wait(poll_ctx);
@@ -1573,7 +1575,7 @@ bool Endpoint::uccl_recv(ConnID conn_id, void* data, size_t* len_p,
 }
 
 PollCtx* Endpoint::uccl_send_async(ConnID conn_id, void const* data,
-                                   const size_t len) {
+                                   size_t const len) {
   auto* poll_ctx = ctx_pool_->pop();
   Channel::Msg msg = {
       .opcode = Channel::Msg::Op::kTx,

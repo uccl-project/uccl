@@ -161,7 +161,11 @@ ncclResult_t pluginGetProperties(int dev, ncclNetProperties_v8_t* props) {
   return ncclSuccess;
 }
 
+<<<<<<< HEAD
 static std::atomic<uint16_t> listen_port = 20000;
+=======
+static std::atomic<uint16_t> listen_port = 5000;
+>>>>>>> 724593f52b6cea21aab56bf21b4f02e3db2782e5
 
 // To create a connection, NCCL will start by calling listen on the receiver
 // side. This function takes a device number as input argument, and should
@@ -295,8 +299,9 @@ ncclResult_t pluginConnect(int dev, void* opaque_handle, void** sendComm,
   }
 
   if (*sendComm) {
-    //  printf("Connected to %s/%d on dev:%d, %ld\n", remote_ip_str.c_str(),
-    //  handle->remote_dev, dev, scomm->base.conn_id.flow_id);
+    UCCL_LOG_PLUGIN << "Connected to " << remote_ip_str << "/"
+                    << handle->remote_dev << " on dev:" << dev << ", "
+                    << scomm->base.conn_id.flow_id;
   }
 
   return ncclSuccess;
@@ -345,9 +350,9 @@ ncclResult_t pluginAccept(void* listenComm, void** recvComm,
   }
 
   if (*recvComm) {
-    //  printf("Accepted from %s/%d on dev:%d, %ld\n",
-    //  rcomm->remote_ip_str.c_str(), rcomm->remote_dev, lcomm->dev,
-    //  rcomm->base.conn_id.flow_id);
+    UCCL_LOG_PLUGIN << "Accepted from " << rcomm->remote_ip_str << "/"
+                    << rcomm->remote_dev << " on dev:" << lcomm->dev << ", "
+                    << rcomm->base.conn_id.flow_id;
   }
 
   return ncclSuccess;

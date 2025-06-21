@@ -95,6 +95,538 @@ class UcclRDMAEngine;
 class RDMAEndpoint;
 
 /**
+ * @brief RDMA context for a remote peer on an engine, which is produced by
+ * RDMAFactory. It contains:
+ *   - (Data path QP): Multiple UC/RC QPs and a shared CQ. All data path QPs
+ * share the same SRQ.
+ *   - (Ctrl QP): A high-priority QP for control messages and a dedicated CQ,
+ * PD, and MR.
+ */
+class RDMAContext {
+ private:
+  SharedIOContext* io_ctx_;
+
+  // Offset of the engine this context belongs to. 0, 1, ... kNumEngine - 1.
+  uint32_t engine_offset_;
+
+  // Number of flows installed on this context.
+  uint32_t nr_flows_ = 0;
+
+  // Remote RDMA context.
+  struct RemoteRDMAContext remote_ctx_;
+
+  // Timer manager for RTO.
+  TimerManager* rto_;
+
+  // Track outstanding RECV requests.
+  // When a flow wants to receive message, it should allocate a request from
+  // this pool.
+  struct RecvRequest reqs_[kMaxReq];
+
+  // Track installed flows.
+  // When a flow is installed, it should be added to this table.
+  // Flows are split into two tables: sender and receiver.
+  void* sender_flow_tbl_[MAX_FLOW] = {};
+  void* receiver_flow_tbl_[MAX_FLOW] = {};
+
+  // Protection domain for all RDMA resources.
+  struct ibv_pd* pd_ = nullptr;
+
+  // QPs for data transfer based on UC or RC.
+  struct QPWrapper dp_qps_[kPortEntropy];
+
+  // Data path QPN to index mapping.
+  std::unordered_map<uint32_t, int> qpn2idx_;
+
+  // (high-priority) QP for credit messages (e.g., pull of EQDS).
+  struct ibv_qp* credit_qp_;
+
+  // (Engine only) Dedicated CQ for credit messages.
+  struct ibv_cq_ex* engine_credit_cq_ex_;
+  // (Engine only) Memory region for credit messages.
+  struct ibv_mr* engine_credit_mr_;
+  // (Pacer only) Dedicated CQ for credit messages.
+  struct ibv_cq_ex* pacer_credit_cq_ex_;
+  // (Pacer only) Memory region for credit messages.
+  struct ibv_mr* pacer_credit_mr_;
+
+  // Global timing wheel for all data path QPs.
+  TimingWheel wheel_;
+
+  // RDMA device context per device.
+  struct ibv_context* context_;
+
+  // MTU of this device in bytes.
+  uint32_t mtu_bytes_;
+
+  // (Engine) Buffer pool for credit chunks.
+  std::optional<eqds::CreditChunkBuffPool> engine_credit_chunk_pool_;
+
+  // (Pacer) Buffer pool for credit chunks.
+  std::optional<eqds::CreditChunkBuffPool> pacer_credit_chunk_pool_;
+
+  // Buffer pool for work request extension items.
+  std::optional<WrExBuffPool> wr_ex_pool_;
+
+  // Pre-allocated WQEs/SGEs for receiving credits.
+  struct RecvWRs credit_recv_wrs_;
+
+  double nic_ts_ratio_;
+  double nic_ts_offset_;
+
+  uint32_t consecutive_same_choice_bytes_ = 0;
+  uint32_t last_qp_choice_ = 0;
+
+  uint32_t* engine_unacked_bytes_;
+
+  LIST_HEAD(ack_list_);
+
+  // Get an unused request, if no request is available, return nullptr.
+  inline struct RecvRequest* alloc_recvreq(void) {
+    for (int i = 0; i < kMaxReq; i++) {
+      auto* req = &reqs_[i];
+      if (req->type == RecvRequest::UNUSED) {
+        return req;
+      }
+    }
+    return nullptr;
+  }
+
+  // Get the ID of the request.
+  inline uint64_t get_recvreq_id(struct RecvRequest* req) {
+    return req - reqs_;
+  }
+
+  // Get the request by ID.
+  inline struct RecvRequest* get_recvreq_by_id(int id) { return &reqs_[id]; }
+
+  // Free the request.
+  inline void free_recvreq(struct RecvRequest* req) {
+    memset(req, 0, sizeof(struct RecvRequest));
+  }
+
+ public:
+  // 256-bit SACK bitmask => we can track up to 256 packets
+  static constexpr std::size_t kReassemblyMaxSeqnoDistance = kSackBitmapSize;
+
+  // EQDS.
+  eqds::EQDS* eqds_;
+
+  inline void add_sender_flow(void* flow, uint32_t flow_id) {
+    DCHECK(sender_flow_tbl_[flow_id] == nullptr) << flow_id;
+    sender_flow_tbl_[flow_id] = flow;
+    nr_flows_++;
+  }
+
+  inline void add_receiver_flow(void* flow, uint32_t flow_id) {
+    DCHECK(receiver_flow_tbl_[flow_id] == nullptr) << flow_id;
+    receiver_flow_tbl_[flow_id] = flow;
+    nr_flows_++;
+  }
+
+  eqds::PacerCreditQPWrapper pc_qpw_;
+
+  // Try to arm a timer for the given flow. If the timer is already armed, do
+  // nothing.
+  void arm_timer_for_flow(void* context);
+
+  // Try to rearm a timer for the given flow. If the timer is not armed, arm
+  // it. If the timer is already armed, rearm it.
+  void rearm_timer_for_flow(void* context);
+
+  // Mark the flow as timeout.
+  void mark_flow_timeout(void* context);
+
+  // Disarm the timer for the given flow.
+  void disarm_timer_for_flow(void* context);
+
+  inline void update_clock(double ratio, double offset) {
+    nic_ts_ratio_ = ratio;
+    nic_ts_offset_ = offset;
+  }
+
+  // Convert NIC clock to host clock (TSC).
+  inline uint64_t convert_nic_to_host(uint64_t nic_clock) {
+    return nic_ts_ratio_ * nic_clock + nic_ts_offset_;
+  }
+
+  inline bool can_use_last_choice(uint32_t msize) {
+    bool cond1 = msize <= kMAXUseCacheQPSize;
+    bool cond2 = consecutive_same_choice_bytes_ + msize <=
+                 kMAXConsecutiveSameChoiceBytes;
+    if (cond1 && cond2) {
+      consecutive_same_choice_bytes_ += msize;
+      return true;
+    }
+    consecutive_same_choice_bytes_ = 0;
+    return false;
+  }
+
+  // Select a QP index in a round-robin manner.
+  inline uint32_t select_qpidx_rr(void) {
+    static uint32_t next_qp_idx = 0;
+    return next_qp_idx++ % kPortEntropy;
+  }
+
+  // Select a QP index randomly.
+  inline uint32_t select_qpidx_rand() {
+    static thread_local std::mt19937 generator(std::random_device{}());
+    std::uniform_int_distribution<uint32_t> distribution(0, kPortEntropy - 1);
+    return distribution(generator);
+  }
+
+  // Select a QP index in a power-of-two manner.
+  uint32_t select_qpidx_pot(uint32_t msize, void* subflow_context);
+
+  /**
+   * @brief Poll the completion queue for the Credit QP.
+   * SQ and RQ use different completion queues.
+   */
+  int poll_credit_cq(void);
+
+  /**
+   * @brief Check if we need to post enough recv WQEs to the Credit QP.
+   * @param force Force to post WQEs.
+   */
+  void check_credit_rq(bool force = false);
+
+  /**
+   * @brief Retransmit a chunk for the given subUcclFlow.
+   *
+   * @param subflow
+   * @param wr_ex
+   * @return true Retransmission is successful.
+   * @return false Retransmission is failed due to maximum outstanding
+   * retransmission chunks or lack of credits (Receiver-driven CC).
+   */
+  bool try_retransmit_chunk(SubUcclFlow* subflow, struct wr_ex* wr_ex);
+
+  /**
+   * @brief Try to drain the retransmission queue for the given subUcclFlow.
+   * @param subflow
+   */
+  void drain_rtx_queue(SubUcclFlow* subflow);
+
+  void uc_rx_chunk(struct ibv_cq_ex* cq_ex);
+
+  void uc_post_acks();
+
+  /**
+   * @brief Rceive an ACK from the Ctrl QP.
+   */
+  void uc_rx_ack(struct ibv_cq_ex* cq_ex, UcclSackHdr* ucclsackh);
+
+  void uc_rx_rtx_chunk(struct ibv_cq_ex* cq_ex, uint64_t chunk_addr);
+
+  /**
+   * @brief Receive a credit.
+   * @param pkt_addr The position of the Credit packet in the Credit chunk.
+   */
+  void rx_credit(uint64_t pkt_addr);
+
+  /**
+   * @brief Supply buffers for receiving data.
+   * @param ureq
+   * @return 0 success
+   * @return -1 fail
+   */
+  int supply_rx_buff(struct ucclRequest* ureq);
+
+  /**
+   * @brief Transmit a message.
+   * @param ureq
+   * @return true message is transmitted successfully.
+   * @return false message is not transmitted successfully.
+   */
+  bool tx_message(struct ucclRequest* ureq) {
+    if constexpr (kReceiverCCA != RECEIVER_CCA_NONE) {
+      return receiverCC_tx_message(ureq);
+    } else {
+      return senderCC_tx_message(ureq);
+    }
+  }
+  bool receiverCC_tx_message(struct ucclRequest* ureq);
+  bool senderCC_tx_message(struct ucclRequest* ureq);
+
+  virtual uint32_t EventOnSelectPath(SubUcclFlow* subflow,
+                                     uint32_t chunk_size) = 0;
+
+  virtual uint32_t EventOnChunkSize(SubUcclFlow* subflow,
+                                    uint32_t remaining_bytes) = 0;
+
+  virtual bool EventOnQueueData(SubUcclFlow* subflow, struct wr_ex* wr_ex,
+                                uint32_t full_chunk_size, uint64_t now) = 0;
+
+  virtual bool EventOnTxRTXData(SubUcclFlow* subflow, struct wr_ex* wr_ex) = 0;
+
+  virtual void EventOnRxRTXData(SubUcclFlow* subflow, IMMData* imm_data) = 0;
+
+  virtual void EventOnRxData(SubUcclFlow* subflow, IMMData* imm_data) = 0;
+
+  virtual void EventOnRxNACK(SubUcclFlow* subflow, UcclSackHdr* sack_hdr) = 0;
+
+  virtual void EventOnRxACK(SubUcclFlow* subflow, UcclSackHdr* sack_hdr) = 0;
+
+  virtual void EventOnRxCredit(SubUcclFlow* subflow,
+                               eqds::PullQuanta pullno) = 0;
+
+  /**
+   * @brief Craft an ACK for a subUcclFlow using the given WR index.
+   *
+   * @param chunk_addr
+   * @param idx_in_chunk
+   */
+  void craft_ack(SubUcclFlow* subflow, uint64_t chunk_addr, int idx_in_chunk);
+
+  /**
+   * @brief Flush all ACKs in the batch.
+   *
+   * @param num_ack
+   * @param chunk_addr
+   */
+  void try_post_acks(int num_ack, uint64_t chunk_addr, bool force);
+
+  /**
+   * @brief Transmit a batch of chunks queued in the timing wheel.
+   */
+  void burst_timing_wheel(void);
+
+  /**
+   * @brief Try to update the CSN for the given data path QP.
+   * @param qpw
+   */
+  void try_update_csn(SubUcclFlow* subflow);
+
+  /**
+   * @brief Retransmit chunks for the given subUcclFlow.
+   * @param rto triggered by RTO or not.
+   */
+  void __retransmit_for_flow(void* context, bool rto);
+  inline void fast_retransmit_for_flow(void* context) {
+    if constexpr (ROCE_NET || kTestLoss) {
+      __retransmit_for_flow(context, false);
+    }
+  }
+  inline void rto_retransmit_for_flow(void* context) {
+    if constexpr (ROCE_NET || kTestLoss) {
+      __retransmit_for_flow(context, true);
+    }
+  }
+
+  void rc_rx_ack(struct ibv_cq_ex* cq_ex);
+
+  void rc_rx_chunk(struct ibv_cq_ex* cq_ex);
+
+  std::string to_string();
+
+  RDMAContext(TimerManager* rto, uint32_t* ob, eqds::EQDS* eqds, int dev,
+              uint32_t engine_offset, union CtrlMeta meta,
+              SharedIOContext* io_ctx);
+
+  ~RDMAContext(void);
+
+  friend class RDMAFactory;
+
+  friend class UcclRDMAEngine;
+
+  friend class TXTracking;
+
+  friend class TimelyRDMAContext;
+
+  friend class SwiftRDMAContext;
+
+  friend class EQDSRDMAContext;
+};
+
+class EQDSRDMAContext : public RDMAContext {
+ public:
+  using RDMAContext::RDMAContext;
+
+  uint32_t EventOnSelectPath(SubUcclFlow* subflow,
+                             uint32_t chunk_size) override {
+    return select_qpidx_pot(chunk_size, subflow);
+  }
+
+  uint32_t EventOnChunkSize(SubUcclFlow* subflow,
+                            uint32_t remaining_bytes) override {
+    uint32_t chunk_size;
+
+    if constexpr (kSenderCCA != SENDER_CCA_NONE) {
+      if (subflow->unacked_bytes_ >= subflow->pcb.timely_cc.get_wnd()) return 0;
+    }
+
+    chunk_size = std::min(kChunkSize, subflow->pcb.eqds_cc.credit());
+    chunk_size = std::min(chunk_size, remaining_bytes);
+    if (!subflow->pcb.eqds_cc.spend_credit(chunk_size)) chunk_size = 0;
+
+    return chunk_size;
+  }
+
+  bool EventOnQueueData(SubUcclFlow* subflow, struct wr_ex* wr_ex,
+                        uint32_t full_chunk_size, uint64_t now) override {
+    return false;
+  }
+
+  void EventOnRxData(SubUcclFlow* subflow, IMMData* imm_data) override {
+    auto* imm = reinterpret_cast<IMMDataEQDS*>(imm_data);
+    if (subflow->pcb.eqds_cc.handle_pull_target(imm->GetTarget())) {
+      VLOG(5) << "Request pull for new target: " << (uint32_t)imm->GetTarget();
+      eqds_->request_pull(&subflow->pcb.eqds_cc);
+    }
+  }
+
+  bool EventOnTxRTXData(SubUcclFlow* subflow, struct wr_ex* wr_ex) override {
+    // We can't retransmit the chunk unless we have enough credits.
+    auto permitted_bytes = subflow->pcb.eqds_cc.credit();
+    if (permitted_bytes < wr_ex->sge.length ||
+        !subflow->pcb.eqds_cc.spend_credit(wr_ex->sge.length)) {
+      subflow->in_rtx = true;
+      VLOG(5) << "Cannot retransmit chunk due to insufficient credits";
+      return false;
+    }
+    // Re-compute pull target.
+    auto pull_target =
+        subflow->pcb.eqds_cc.compute_pull_target(subflow, wr_ex->sge.length);
+    auto imm_data = IMMDataEQDS(ntohl(wr_ex->wr.imm_data));
+    imm_data.SetTarget(pull_target);
+    wr_ex->wr.imm_data = htonl(imm_data.GetImmData());
+    return true;
+  }
+
+  void EventOnRxRTXData(SubUcclFlow* subflow, IMMData* imm_data) override {
+    EventOnRxData(subflow, imm_data);
+  }
+
+  void EventOnRxACK(SubUcclFlow* subflow, UcclSackHdr* sack_hdr) override {
+    // After receiving a valid ACK, we can exit the pending retransmission
+    // state.
+    subflow->in_rtx = false;
+    subflow->pcb.eqds_cc.stop_speculating();
+  }
+
+  void EventOnRxNACK(SubUcclFlow* subflow, UcclSackHdr* sack_hdr) override {}
+
+  void EventOnRxCredit(SubUcclFlow* subflow, eqds::PullQuanta pullno) override {
+    subflow->pcb.eqds_cc.stop_speculating();
+
+    VLOG(5) << "Received credit: " << (uint32_t)pullno;
+    if (subflow->pcb.eqds_cc.handle_pull(pullno)) {
+      // TODO: trigger transmission for this subflow immediately.
+    }
+
+    if (subflow->in_rtx) {
+      // We have pending retransmission chunks due to lack of credits.
+      // Try to drain the retransmission queue.
+      drain_rtx_queue(subflow);
+    }
+  }
+};
+
+class SwiftRDMAContext : public RDMAContext {
+ public:
+  using RDMAContext::RDMAContext;
+
+  uint32_t EventOnSelectPath(SubUcclFlow* subflow,
+                             uint32_t chunk_size) override {
+    return select_qpidx_pot(chunk_size, subflow);
+  }
+
+  uint32_t EventOnChunkSize(SubUcclFlow* subflow,
+                            uint32_t remaining_bytes) override {
+    if (remaining_bytes <= kChunkSize) return remaining_bytes;
+
+    auto hard_budget = kMaxUnAckedBytesPerEngineHigh - *engine_unacked_bytes_;
+    auto soft_budget = kMaxUnAckedBytesPerEngineLow - *engine_unacked_bytes_;
+    auto flow_budget = kMaxUnAckedBytesPerFlow - subflow->unacked_bytes_;
+
+    auto cc_budget = subflow->pcb.swift_cc.get_wnd() - subflow->unacked_bytes_;
+
+    // Enforce swift congestion control window.
+    auto ready_bytes = std::min(remaining_bytes, cc_budget);
+
+    // Chunking to kChunkSize.
+    ready_bytes = std::min(ready_bytes, kChunkSize);
+
+    // First, check if we have touched the hard budget.
+    if (ready_bytes > hard_budget) return 0;
+
+    // Second, check if we have touched the soft budget.
+    // If we havent touched our per-flow budget, we can ignore the soft budget.
+    if (ready_bytes <= soft_budget || ready_bytes <= flow_budget)
+      return ready_bytes;
+
+    return 0;
+  }
+
+  bool EventOnQueueData(SubUcclFlow* subflow, struct wr_ex* wr_ex,
+                        uint32_t full_chunk_size, uint64_t now) override {
+    return false;
+  }
+
+  void EventOnRxData(SubUcclFlow* subflow, IMMData* imm_data) override {}
+
+  bool EventOnTxRTXData(SubUcclFlow* subflow, struct wr_ex* wr_ex) override {
+    return true;
+  }
+
+  void EventOnRxRTXData(SubUcclFlow* subflow, IMMData* imm_data) override {}
+
+  void EventOnRxACK(SubUcclFlow* subflow, UcclSackHdr* sack_hdr) override {}
+
+  void EventOnRxNACK(SubUcclFlow* subflow, UcclSackHdr* sack_hdr) override {}
+
+  void EventOnRxCredit(SubUcclFlow* subflow, eqds::PullQuanta pullno) override {
+  }
+};
+
+class TimelyRDMAContext : public RDMAContext {
+ public:
+  using RDMAContext::RDMAContext;
+
+  uint32_t EventOnSelectPath(SubUcclFlow* subflow,
+                             uint32_t chunk_size) override {
+    return select_qpidx_pot(chunk_size, subflow);
+  }
+
+  uint32_t EventOnChunkSize(SubUcclFlow* subflow,
+                            uint32_t remaining_bytes) override {
+    auto ready_bytes = std::min(remaining_bytes, kChunkSize);
+
+    if (*engine_unacked_bytes_ + ready_bytes > kMaxUnAckedBytesPerEngineHigh)
+      return 0;
+
+    if (*engine_unacked_bytes_ + ready_bytes <= kMaxUnAckedBytesPerEngineLow ||
+        subflow->unacked_bytes_ + ready_bytes <= kMaxUnAckedBytesPerFlow) {
+      return ready_bytes;
+    }
+    return 0;
+  }
+
+  bool EventOnQueueData(SubUcclFlow* subflow, struct wr_ex* wr_ex,
+                        uint32_t full_chunk_size, uint64_t now) override {
+    return wheel_.queue_on_timing_wheel(
+        subflow->pcb.timely_cc.rate_,
+        &subflow->pcb.timely_cc.prev_desired_tx_tsc_, now, wr_ex,
+        full_chunk_size, subflow->in_wheel_cnt_ == 0);
+  }
+
+  void EventOnRxData(SubUcclFlow* subflow, IMMData* imm_data) override {}
+
+  bool EventOnTxRTXData(SubUcclFlow* subflow, struct wr_ex* wr_ex) override {
+    return true;
+  }
+
+  void EventOnRxRTXData(SubUcclFlow* subflow, IMMData* imm_data) override {}
+
+  void EventOnRxACK(SubUcclFlow* subflow, UcclSackHdr* sack_hdr) override {}
+
+  void EventOnRxNACK(SubUcclFlow* subflow, UcclSackHdr* sack_hdr) override {}
+
+  void EventOnRxCredit(SubUcclFlow* subflow, eqds::PullQuanta pullno) override {
+  }
+};
+
+/**
  * @brief Class `UcclRDMAEngine' abstracts the main Uccl engine which supports
  * RDMA. This engine contains all the functionality need to be run by the
  * stack's threads.
@@ -123,6 +655,7 @@ class UcclRDMAEngine {
         last_periodic_tsc_(rdtsc()),
         last_sync_clock_tsc_(rdtsc()),
         rto_tm_(kRTOUSec),
+        io_ctx_(dev),
         kSlowTimerIntervalTsc_(us_to_cycles(kSlowTimerIntervalUs, freq_ghz)) {
     auto context = RDMAFactory::get_factory_dev(dev_)->context;
     struct ibv_values_ex values;
@@ -213,9 +746,9 @@ class UcclRDMAEngine {
       auto nic_clock = values.raw_clock.tv_sec * 1e9 + values.raw_clock.tv_nsec;
 
       // Update ratio and offset
-      ratio_ = (1.0 * (int64_t)host_clock - (int64_t)last_host_clock_) /
-               ((int64_t)nic_clock - (int64_t)last_nic_clock_);
-      offset_ = host_clock - ratio_ * nic_clock;
+      nic_ts_ratio_ = (1.0 * (int64_t)host_clock - (int64_t)last_host_clock_) /
+                      ((int64_t)nic_clock - (int64_t)last_nic_clock_);
+      nic_ts_offset_ = host_clock - nic_ts_ratio_ * nic_clock;
 
       last_sync_clock_tsc_ = host_clock;
     }
@@ -258,6 +791,10 @@ class UcclRDMAEngine {
   // Pending tx work due to reaching the max outstanding bytes.
   std::deque<std::pair<RDMAContext*, struct ucclRequest*>> pending_tx_works_;
 
+  std::deque<Channel::CtrlMsg> pending_install_flow_works_;
+
+  SharedIOContext io_ctx_;
+
   // Timestamp of last periodic process execution.
   uint64_t last_periodic_tsc_;
   // Slow timer interval in TSC.
@@ -267,8 +804,8 @@ class UcclRDMAEngine {
   uint64_t last_sync_clock_tsc_;
   uint64_t last_host_clock_;
   uint64_t last_nic_clock_;
-  double ratio_ = 0;
-  double offset_ = 0;
+  double nic_ts_ratio_ = 0;
+  double nic_ts_offset_ = 0;
 
   // Whether shutdown is requested.
   std::atomic<bool> shutdown_{false};
@@ -299,7 +836,10 @@ struct PeerInfo {
   PeerID peer_id;
   ibv_gid remote_gid;
   struct ibv_port_attr remote_port_attr;
-  uint32_t flow_cnt;
+  // -1: peer id is allocated by accept()
+  // 0:  peer id is allocated by connect()
+  // 1:  rdma context is ready.
+  int ready;
 };
 
 /**
@@ -394,6 +934,21 @@ class RDMAEndpoint {
   ConnID uccl_accept(int dev, int listen_fd, int local_gpuidx,
                      std::string& remote_ip, int* remote_dev);
 
+  bool should_install_ctx(int ldev, int lgpu, std::string lip, int rdev,
+                          int rgpu, std::string rip) {
+    if (str_to_ip(lip.c_str()) < str_to_ip(rip.c_str())) {
+      return true;
+    } else if (str_to_ip(lip.c_str()) == str_to_ip(rip.c_str())) {
+      if (ldev < rdev)
+        return true;
+      else if (ldev == rdev) {
+        if (lgpu < rgpu) return true;
+        DCHECK(lgpu != rgpu);
+      }
+    }
+    return false;
+  }
+
   // Register a memory region.
   int uccl_regmr(UcclFlow* flow, void* data, size_t len, int type,
                  struct Mhandle** mhandle);
@@ -453,37 +1008,12 @@ class RDMAEndpoint {
   PollCtx* install_flow_on_engine(uint32_t engine_idx, PeerID peer_id,
                                   union CtrlMeta meta);
 
-  /**
-   * @brief Safely install context on all engines serving the device.
-   * When local_lock_first is true, the function will acquire local lock
-   * first, and then acquire remote lock. Otherwise, it will acquire remote
-   * lock first. When holding the two locks, and no context is installed for
-   * the remote peer before, the function will install the context on all
-   * engines serving the device. peer_id and remote_ctx are returned for
-   * creating UcclFlow.
-   *
-   * @param dev
-   * @param bootstrap_fd
-   * @param local_lock_first
-   * @param remote_ip
-   * @param remote_dev
-   * @param peer_id
-   * @param remote_ctx
-   */
-  void safe_install_ctx(int dev, int bootstrap_fd, bool local_lock_first,
-                        std::string& remote_ip, int remote_dev, PeerID* peer_id,
-                        struct RemoteRDMAContext* remote_ctx);
-
-  void same_dev_install_ctx(int dev, int bootstrap_fd, bool local_lock_first,
-                            bool is_send, std::string& remote_ip,
-                            int remote_dev, PeerID* peer_id,
-                            struct RemoteRDMAContext* remote_ctx);
-
   void install_ctx_on_engines(int fd, int dev, PeerID peer_id,
-                              struct RemoteRDMAContext* remote_ctx);
+                              std::string remote_ip, int remote_dev);
 
-  void install_flow_on_engines(int dev, PeerID peer_id, FlowID flow_id,
-                               UcclFlow* flow, bool is_send);
+  std::vector<PollCtx*> install_flow_on_engines(int dev, PeerID peer_id,
+                                                FlowID flow_id, UcclFlow* flow,
+                                                bool is_send);
 
   inline void inc_load_on_engine(int engine_id) {
     std::atomic_fetch_add(&engine_load_vec_[engine_id], 1);
@@ -540,14 +1070,12 @@ class UcclFlow {
  public:
   SubUcclFlow* sub_flows_[NUM_ENGINES];
 
-  UcclFlow(RDMAEndpoint* ep, int bootstrap_fd, int dev, PeerID peer_id,
-           FlowID flow_id, struct RemoteRDMAContext remote_ctx,
+  UcclFlow(RDMAEndpoint* ep, int dev, PeerID peer_id, FlowID flow_id,
            std::string remote_ip, int remote_dev, bool is_send)
       : ep_(ep),
         dev_(dev),
         peer_id_(peer_id),
         flow_id_(flow_id),
-        remote_ctx_(remote_ctx),
         remote_ip_(remote_ip),
         remote_dev_(remote_dev),
         is_send_(is_send) {
@@ -557,134 +1085,6 @@ class UcclFlow {
 
     memset(&send_comm_, 0, sizeof(send_comm_));
     memset(&recv_comm_, 0, sizeof(recv_comm_));
-
-    auto comm_base = is_send_ ? &send_comm_.base : &recv_comm_.base;
-
-    auto factory_dev = RDMAFactory::get_factory_dev(dev);
-
-    // Fifo QP.
-    comm_base->fifo_local_psn = BASE_PSN;
-    util_rdma_create_qp(factory_dev->context, &comm_base->fifo_qp, IBV_QPT_RC,
-                        false, false, &comm_base->flow_cq, false, kFifoCQSize,
-                        factory_dev->pd, &comm_base->fifo_mr, nullptr,
-                        kFifoMRSize, kMaxReq * kMaxRecv, kMaxReq * kMaxRecv, 1,
-                        1);
-    comm_base->fifo =
-        reinterpret_cast<struct RemFifo*>(comm_base->fifo_mr->addr);
-
-    // Exchange local PSN, QPN for Fifo QP with remote peer.
-    char buf[2 * sizeof(uint32_t)];
-    auto fifo_lpsn = comm_base->fifo_local_psn;
-    auto fifo_lqpn = comm_base->fifo_qp->qp_num;
-    memcpy(buf, &fifo_lpsn, sizeof(uint32_t));
-    memcpy(buf + sizeof(uint32_t), &fifo_lqpn, sizeof(uint32_t));
-
-    UCCL_INIT_CHECK(send_message(bootstrap_fd, buf, 2 * sizeof(uint32_t)) ==
-                        2 * sizeof(uint32_t),
-                    "uccl_connect: send_message()");
-
-    UCCL_INIT_CHECK(receive_message(bootstrap_fd, buf, 2 * sizeof(uint32_t)) ==
-                        2 * sizeof(uint32_t),
-                    "uccl_connect: receive_message()");
-
-    auto fifo_rpsn = *reinterpret_cast<uint32_t*>(buf);
-    auto fifo_rqpn = *reinterpret_cast<uint32_t*>(buf + sizeof(uint32_t));
-
-    UCCL_INIT_CHECK(modify_qp_rtr(comm_base->fifo_qp, dev, &remote_ctx_,
-                                  fifo_rqpn, fifo_rpsn) == 0,
-                    "Failed to modify Fifo QP to RTR");
-    UCCL_INIT_CHECK(modify_qp_rts(comm_base->fifo_qp, fifo_lpsn, true) == 0,
-                    "Failed to modify Fifo QP to RTS");
-
-    // Exchange addr and rkey for Fifo MR with remote peer.
-    char buf2[sizeof(uint64_t) + sizeof(uint32_t)];
-    auto fifo_laddr = reinterpret_cast<uint64_t>(comm_base->fifo_mr->addr);
-    auto fifo_lrkey = comm_base->fifo_mr->rkey;
-    memcpy(buf2, &fifo_laddr, sizeof(uint64_t));
-    memcpy(buf2 + sizeof(uint64_t), &fifo_lrkey, sizeof(uint32_t));
-
-    UCCL_INIT_CHECK(
-        send_message(bootstrap_fd, buf2, sizeof(uint64_t) + sizeof(uint32_t)) ==
-            sizeof(uint64_t) + sizeof(uint32_t),
-        "uccl_connect: send_message()");
-
-    UCCL_INIT_CHECK(receive_message(bootstrap_fd, buf2,
-                                    sizeof(uint64_t) + sizeof(uint32_t)) ==
-                        sizeof(uint64_t) + sizeof(uint32_t),
-                    "uccl_connect: receive_message()");
-
-    comm_base->remote_fifo_addr = *reinterpret_cast<uint64_t*>(buf2);
-    comm_base->remote_fifo_rkey =
-        *reinterpret_cast<uint32_t*>(buf2 + sizeof(uint64_t));
-
-    // RC QP
-    struct ibv_qp_init_attr qp_init_attr;
-    memset(&qp_init_attr, 0, sizeof(qp_init_attr));
-    qp_init_attr.qp_context = this;
-    qp_init_attr.send_cq = comm_base->flow_cq;
-    qp_init_attr.recv_cq = comm_base->flow_cq;
-    qp_init_attr.qp_type = IBV_QPT_RC;
-    qp_init_attr.cap.max_send_wr = kMaxReq * kMaxRecv;
-    qp_init_attr.cap.max_recv_wr = kMaxReq * kMaxRecv;
-    qp_init_attr.cap.max_send_sge = kMaxSge;
-    qp_init_attr.cap.max_recv_sge = kMaxSge;
-    qp_init_attr.cap.max_inline_data = 0;
-
-    struct ibv_qp_attr qpAttr;
-    memset(&qpAttr, 0, sizeof(qpAttr));
-    qpAttr.qp_state = IBV_QPS_INIT;
-    qpAttr.pkey_index = 0;
-    qpAttr.port_num = IB_PORT_NUM;
-    qpAttr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE;
-
-    comm_base->rc_qp = ibv_create_qp(factory_dev->pd, &qp_init_attr);
-    UCCL_INIT_CHECK(comm_base->rc_qp != nullptr, "Failed to create RC QP");
-
-    UCCL_INIT_CHECK(ibv_modify_qp(comm_base->rc_qp, &qpAttr,
-                                  IBV_QP_STATE | IBV_QP_PKEY_INDEX |
-                                      IBV_QP_PORT | IBV_QP_ACCESS_FLAGS) == 0,
-                    "Failed to modify RC QP to INIT");
-
-    comm_base->rc_local_psn = BASE_PSN;
-
-    // Send PSN, QPN to remote peer.
-    memcpy(buf, &comm_base->rc_local_psn, sizeof(uint32_t));
-    memcpy(buf + sizeof(uint32_t), &comm_base->rc_qp->qp_num, sizeof(uint32_t));
-    int ret = send_message(bootstrap_fd, buf, 2 * sizeof(uint32_t));
-    DCHECK(ret == 2 * sizeof(uint32_t));
-
-    // Receive PSN, QPN from remote peer.
-    ret = receive_message(bootstrap_fd, buf, 2 * sizeof(uint32_t));
-    DCHECK(ret == 2 * sizeof(uint32_t));
-
-    auto rc_rpsn = *reinterpret_cast<uint32_t*>(buf);
-    auto rc_rqpn = *reinterpret_cast<uint32_t*>(buf + sizeof(uint32_t));
-
-    UCCL_INIT_CHECK(modify_qp_rtr(comm_base->rc_qp, dev, &remote_ctx_, rc_rqpn,
-                                  rc_rpsn) == 0,
-                    "Failed to modify RC QP to RTR");
-
-    UCCL_INIT_CHECK(
-        modify_qp_rts(comm_base->rc_qp, comm_base->rc_local_psn, true) == 0,
-        "Failed to modify RC QP to RTS");
-
-    // GPU flush QP for receiver.
-    if (!is_send_) {
-      util_rdma_create_qp(
-          factory_dev->context, &recv_comm_.gpu_flush_qp, IBV_QPT_RC, false,
-          false, &comm_base->flow_cq, true, 0, factory_dev->pd,
-          &recv_comm_.gpu_flush_mr, &recv_comm_.gpu_flush, sizeof(int),
-          kMaxReq * kMaxRecv, kMaxReq * kMaxRecv, kMaxSge, kMaxSge);
-
-      recv_comm_.gpu_flush_sge.addr = (uint64_t)&recv_comm_.gpu_flush;
-      recv_comm_.gpu_flush_sge.length = 1;
-      recv_comm_.gpu_flush_sge.lkey = recv_comm_.gpu_flush_mr->lkey;
-
-      UCCL_INIT_CHECK(modify_qp_rtr_gpuflush(recv_comm_.gpu_flush_qp, dev) == 0,
-                      "Failed to modify GPU flush QP to RTR");
-      UCCL_INIT_CHECK(modify_qp_rts(recv_comm_.gpu_flush_qp, 0, true) == 0,
-                      "Failed to modify GPU flush QP to RTS");
-    }
     // Avoid all flows using the same initial engine offset.
     static std::atomic<uint32_t> off[NUM_DEVICES] = {};
     next_engine_offset_ = off[dev].fetch_add(1) % NUM_ENGINES;
@@ -707,6 +1107,138 @@ class UcclFlow {
 
     for (int i = 0; i < NUM_ENGINES; i++) {
       delete sub_flows_[i];
+    }
+  }
+
+  uint32_t create_fifo_and_gpuflush(int bootstrap_fd, int dev) {
+    auto comm_base = is_send_ ? &send_comm_.base : &recv_comm_.base;
+
+    auto factory_dev = RDMAFactory::get_factory_dev(dev);
+
+    // Fifo QP.
+    util_rdma_create_qp(factory_dev->context, &comm_base->fifo_qp, IBV_QPT_RC,
+                        false, false, &comm_base->flow_cq, false, kFifoCQSize,
+                        factory_dev->pd, &comm_base->fifo_mr, nullptr,
+                        kFifoMRSize, kMaxReq * kMaxRecv, kMaxReq * kMaxRecv, 1,
+                        1);
+    comm_base->fifo =
+        reinterpret_cast<struct RemFifo*>(comm_base->fifo_mr->addr);
+
+    // Exchange local QPN for Fifo QP with remote peer.
+    char buf[sizeof(uint32_t)];
+    auto fifo_lqpn = comm_base->fifo_qp->qp_num;
+    memcpy(buf, &fifo_lqpn, sizeof(uint32_t));
+
+    UCCL_INIT_CHECK(
+        send_message(bootstrap_fd, buf, sizeof(uint32_t)) == sizeof(uint32_t),
+        "uccl_connect: send_message()");
+
+    UCCL_INIT_CHECK(receive_message(bootstrap_fd, buf, sizeof(uint32_t)) ==
+                        sizeof(uint32_t),
+                    "uccl_connect: receive_message()");
+
+    // Exchange addr and rkey for Fifo MR with remote peer.
+    char buf2[sizeof(uint64_t) + sizeof(uint32_t)];
+    auto fifo_laddr = reinterpret_cast<uint64_t>(comm_base->fifo_mr->addr);
+    auto fifo_lrkey = comm_base->fifo_mr->rkey;
+    memcpy(buf2, &fifo_laddr, sizeof(uint64_t));
+    memcpy(buf2 + sizeof(uint64_t), &fifo_lrkey, sizeof(uint32_t));
+
+    UCCL_INIT_CHECK(
+        send_message(bootstrap_fd, buf2, sizeof(uint64_t) + sizeof(uint32_t)) ==
+            sizeof(uint64_t) + sizeof(uint32_t),
+        "uccl_connect: send_message()");
+
+    UCCL_INIT_CHECK(receive_message(bootstrap_fd, buf2,
+                                    sizeof(uint64_t) + sizeof(uint32_t)) ==
+                        sizeof(uint64_t) + sizeof(uint32_t),
+                    "uccl_connect: receive_message()");
+
+    comm_base->remote_fifo_addr = *reinterpret_cast<uint64_t*>(buf2);
+    comm_base->remote_fifo_rkey =
+        *reinterpret_cast<uint32_t*>(buf2 + sizeof(uint64_t));
+
+    // GPU flush QP for receiver.
+    if (!is_send_) {
+      util_rdma_create_qp(
+          factory_dev->context, &recv_comm_.gpu_flush_qp, IBV_QPT_RC, false,
+          false, &comm_base->flow_cq, true, 0, factory_dev->pd,
+          &recv_comm_.gpu_flush_mr, &recv_comm_.gpu_flush, sizeof(int),
+          kMaxReq * kMaxRecv, kMaxReq * kMaxRecv, kMaxSge, kMaxSge);
+
+      recv_comm_.gpu_flush_sge.addr = (uint64_t)&recv_comm_.gpu_flush;
+      recv_comm_.gpu_flush_sge.length = 1;
+      recv_comm_.gpu_flush_sge.lkey = recv_comm_.gpu_flush_mr->lkey;
+
+      UCCL_INIT_CHECK(modify_qp_rtr_gpuflush(recv_comm_.gpu_flush_qp, dev) == 0,
+                      "Failed to modify GPU flush QP to RTR");
+      UCCL_INIT_CHECK(modify_qp_rts(recv_comm_.gpu_flush_qp, true) == 0,
+                      "Failed to modify GPU flush QP to RTS");
+    }
+
+    return *reinterpret_cast<uint32_t*>(buf);
+  }
+
+  void modify_fifo(int bootstrap_fd, int dev,
+                   struct RemoteRDMAContext remote_ctx,
+                   uint32_t remote_fifo_qpn) {
+    auto comm_base = is_send_ ? &send_comm_.base : &recv_comm_.base;
+
+    auto factory_dev = RDMAFactory::get_factory_dev(dev);
+
+    UCCL_INIT_CHECK(modify_qp_rtr(comm_base->fifo_qp, dev, &remote_ctx,
+                                  remote_fifo_qpn) == 0,
+                    "Failed to modify Fifo QP to RTR");
+    UCCL_INIT_CHECK(modify_qp_rts(comm_base->fifo_qp, true) == 0,
+                    "Failed to modify Fifo QP to RTS");
+
+    // RC QP
+    if constexpr (kRCSize > 0) {
+      struct ibv_qp_init_attr qp_init_attr;
+      memset(&qp_init_attr, 0, sizeof(qp_init_attr));
+      qp_init_attr.qp_context = this;
+      qp_init_attr.send_cq = comm_base->flow_cq;
+      qp_init_attr.recv_cq = comm_base->flow_cq;
+      qp_init_attr.qp_type = IBV_QPT_RC;
+      qp_init_attr.cap.max_send_wr = kMaxReq * kMaxRecv;
+      qp_init_attr.cap.max_recv_wr = kMaxReq * kMaxRecv;
+      qp_init_attr.cap.max_send_sge = kMaxSge;
+      qp_init_attr.cap.max_recv_sge = kMaxSge;
+      qp_init_attr.cap.max_inline_data = 0;
+
+      struct ibv_qp_attr qpAttr;
+      memset(&qpAttr, 0, sizeof(qpAttr));
+      qpAttr.qp_state = IBV_QPS_INIT;
+      qpAttr.pkey_index = 0;
+      qpAttr.port_num = IB_PORT_NUM;
+      qpAttr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE;
+
+      comm_base->rc_qp = ibv_create_qp(factory_dev->pd, &qp_init_attr);
+      UCCL_INIT_CHECK(comm_base->rc_qp != nullptr, "Failed to create RC QP");
+
+      UCCL_INIT_CHECK(ibv_modify_qp(comm_base->rc_qp, &qpAttr,
+                                    IBV_QP_STATE | IBV_QP_PKEY_INDEX |
+                                        IBV_QP_PORT | IBV_QP_ACCESS_FLAGS) == 0,
+                      "Failed to modify RC QP to INIT");
+
+      char buf[sizeof(uint32_t)];
+      // Send QPN to remote peer.
+      memcpy(buf, &comm_base->rc_qp->qp_num, sizeof(uint32_t));
+      int ret = send_message(bootstrap_fd, buf, sizeof(uint32_t));
+      DCHECK(ret == sizeof(uint32_t));
+
+      // Receive QPN from remote peer.
+      ret = receive_message(bootstrap_fd, buf, sizeof(uint32_t));
+      DCHECK(ret == sizeof(uint32_t));
+
+      auto rc_rqpn = *reinterpret_cast<uint32_t*>(buf);
+
+      UCCL_INIT_CHECK(
+          modify_qp_rtr(comm_base->rc_qp, dev, &remote_ctx, rc_rqpn) == 0,
+          "Failed to modify RC QP to RTR");
+
+      UCCL_INIT_CHECK(modify_qp_rts(comm_base->rc_qp, true) == 0,
+                      "Failed to modify RC QP to RTS");
     }
   }
 
@@ -785,7 +1317,6 @@ class UcclFlow {
 
   int dev_;
   int remote_dev_;
-  struct RemoteRDMAContext remote_ctx_;
   std::string remote_ip_;
 
   /**
