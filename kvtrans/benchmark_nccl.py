@@ -132,12 +132,14 @@ def main():
     print("Message sizes:", ", ".join(_pretty_size(s) for s in args.sizes))
     print(f"Device: {args.device} | Local GPU idx: {args.local_gpu_idx} | Iters: {args.iters}")
 
-    if rank == 0:
-        _run_server(args)
-    else:
-        _run_client(args)
-
-
+    try:
+        if rank == 0:
+            _run_server(args)
+        else:
+            _run_client(args)
+    finally:
+        dist.destroy_process_group()
+    
 if __name__ == "__main__":
     try:
         main()

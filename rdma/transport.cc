@@ -666,7 +666,7 @@ RDMAEndpoint::RDMAEndpoint(uint8_t const* devname_suffix_list, int num_devices,
     // Receiver-driven congestion control per device.
     for (int i = 0; i < num_devices; i++) eqds_[i] = new eqds::EQDS(i);
   }
-
+#ifndef LAZY_CREATE_ENGINE
   for (int engine_id = 0, engine_cpu_id; engine_id < total_num_engines;
        engine_id++) {
     auto dev = engine_id / num_engines_per_dev;
@@ -686,17 +686,18 @@ RDMAEndpoint::RDMAEndpoint(uint8_t const* devname_suffix_list, int num_devices,
           engine_ptr->run();
         }));
   }
-
+#endif
   ctx_pool_ = new SharedPool<PollCtx*, true>(kMaxInflightMsg);
   ctx_pool_buf_ = new uint8_t[kMaxInflightMsg * sizeof(PollCtx)];
   for (int i = 0; i < kMaxInflightMsg; i++) {
     ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());
   }
-
+#ifndef LAZY_CREATE_ENGINE
   for (int i = 0; i < num_devices; i++) {
     // Create listening sockets
     create_listen_socket(&test_listen_fds_[i], kTestListenPort + i);
   }
+#endif
 }
 
 inline uint32_t RDMAEndpoint::find_pot_load_engine_idx(int dev) {
