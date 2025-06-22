@@ -50,6 +50,7 @@ constexpr int TCP_PORT = 18515;
 static thread_local std::atomic<uint64_t> g_posted = 0;     // WRs posted
 static thread_local std::atomic<uint64_t> g_completed = 0;  // CQEs seen
 thread_local std::atomic<bool> g_progress_run{true};
+thread_local std::unordered_map<uint32_t, uint32_t> wr_id_to_g_ring_head;
 
 struct NicCtx {
   // ibv_context* ctx;
@@ -945,6 +946,8 @@ void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq,
       ;
       /* Busy spin. */
     }
+    wr_id_to_g_ring_head[task_vec[task_vec.size() - 1].wr_id] =
+        g_ring.get_head();
 #endif
   }
 }

@@ -98,7 +98,7 @@ cudaError_t launch_peer_bulk_copy2(CopyTask const* host_tasks, int num_tasks,
   if (false) {
     peer_copy_kernel_vec<<<blocks, threads_per_block, 0, stream>>>(d_tasks,
                                                                    num_tasks);
-  } else if (false) {
+  } else if (true) {
     int tasks_per_block = num_tasks / NVLINK_SM_PER_PROCESS;
     peer_copy_kernel_vec_batched<<<blocks, threads_per_block, 0, stream>>>(
         d_tasks, num_tasks, tasks_per_block);

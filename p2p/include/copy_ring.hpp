@@ -25,9 +25,9 @@ struct CopyRing {
 
   bool emplace(CopyTask const& t) {
     uint32_t h = head.load(std::memory_order_relaxed);
-    uint32_t n = (h + 1) & (COPY_RING_CAP - 1);
+    uint32_t n = h + 1;
     if (n == tail.load(std::memory_order_acquire)) return false;  // full
-    buf[h] = t;
+    buf[h & (COPY_RING_CAP - 1)] = t;
     head.store(n, std::memory_order_release);
     emplace_count.fetch_add(1, std::memory_order_relaxed);
     return true;
@@ -38,14 +38,13 @@ struct CopyRing {
 
     uint32_t h = head.load(std::memory_order_relaxed);
     uint32_t t = tail.load(std::memory_order_acquire);
-    uint32_t cap = COPY_RING_CAP;
-    uint32_t free_slots = (t + cap - h - 1) & (cap - 1);
+    uint32_t free_slots = (t + COPY_RING_CAP - h - 1) & (COPY_RING_CAP - 1);
     if (tasks.size() > free_slots) return false;
 
     uint32_t idx = h;
     for (CopyTask const& task : tasks) {
-      buf[idx] = task;
-      idx = (idx + 1) & (cap - 1);
+      buf[idx & (COPY_RING_CAP - 1)] = task;
+      idx++;
     }
 
     head.store(idx, std::memory_order_release);
@@ -56,9 +55,9 @@ struct CopyRing {
 
   CopyTask* pop() {
     uint32_t t = tail.load(std::memory_order_relaxed);
-    if (t == head.load(std::memory_order_acquire)) return nullptr;  // empty
-    CopyTask* ret = &buf[t];
-    tail.store((t + 1) & (COPY_RING_CAP - 1), std::memory_order_release);
+    if (t == head.load(std::memory_order_acquire)) return nullptr;
+    CopyTask* ret = &buf[t & (COPY_RING_CAP - 1)];
+    tail.store(t + 1, std::memory_order_release);
     pop_count.fetch_add(1, std::memory_order_relaxed);
     return ret;
   }
@@ -74,12 +73,20 @@ struct CopyRing {
     size_t count = std::min(n, available);
 
     for (size_t i = 0; i < count; ++i) {
-      tasks.push_back(buf[t]);
-      t = (t + 1) & (COPY_RING_CAP - 1);  // Wraparound
+      tasks.push_back(buf[t & (COPY_RING_CAP - 1)]);
+      t = t + 1;
     }
     pop_count.fetch_add(static_cast<uint32_t>(count),
                         std::memory_order_relaxed);
     tail.store(t, std::memory_order_release);
     return count;
   }
+
+  bool has_completed(uint32_t idx) {
+    return tail.load(std::memory_order_acquire) >= idx;
+  }
+
+  uint32_t get_head() const { return head.load(std::memory_order_acquire); }
+
+  uint32_t get_tail() const { return tail.load(std::memory_order_acquire); }
 };
