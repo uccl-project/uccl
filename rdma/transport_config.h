@@ -6,7 +6,9 @@
 #include <unistd.h>
 
 // #define STATS
+#ifndef LAZY_CREATE_ENGINE
 #define LAZY_CREATE_ENGINE
+#endif
 
 /// Interface configuration.
 static char const* IB_DEVICE_NAME_PREFIX = "mlx5_";
