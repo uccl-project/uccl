@@ -15,12 +15,6 @@
 
 namespace py = pybind11;
 
-// This is a workaround to avoid blocking the main thread.
-inline void long_running_func() {
-  py::gil_scoped_release release;
-  std::this_thread::sleep_for(std::chrono::seconds(2));
-}
-
 struct MR {
   uint64_t mr_id_;
   uccl::Mhandle* mhandle_;
@@ -40,10 +34,10 @@ class Endpoint {
    * opens a TCP listening thread waiting for incoming connections.
    *
    * input:
-   *   gpu_idx: the GPU index to use for the engine
-   *   ncpus: the number of CPUs to use for the engine
+   *   local_gpu_idx: the GPU index to use for the engine
+   *   num_cpus: the number of CPUs to use for the engine
    */
-  Endpoint(const uint32_t gpu_idx, const uint32_t ncpus);
+  Endpoint(const uint32_t local_gpu_idx, const uint32_t num_cpus);
 
   ~Endpoint();
 
@@ -103,11 +97,12 @@ class Endpoint {
    *   data: the data to receive
    *   size: the size of the data
    */
-  bool recv_kv(uint64_t conn_id, uint64_t mr_id, void* data, size_t& size);
+  bool recv_kv(uint64_t conn_id, uint64_t mr_id, void* data, size_t max_size,
+               size_t& recv_size);
 
  private:
-  int gpu_idx_;
-  uint32_t ncpus_;
+  int local_gpu_idx_;
+  uint32_t num_cpus_;
 
   uccl::RDMAEndpoint* ep_;
 

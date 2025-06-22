@@ -11,83 +11,58 @@ PYBIND11_MODULE(kvtrans_engine, m) {
   // Endpoint class binding
   py::class_<Endpoint>(m, "Endpoint")
       .def(py::init<uint32_t, uint32_t>(), "Create a new Engine instance",
-           py::arg("gpu_idx"), py::arg("ncpus"))
+           py::arg("local_gpu_idx"), py::arg("num_cpus"))
       .def(
           "connect",
-          [](Endpoint& self, std::string const& ip_addr, int remote_gpu_idx) {
+          [](Endpoint& self, std::string const& remote_ip_addr,
+             int remote_gpu_idx) {
             uint64_t conn_id;
-            bool success = self.connect(ip_addr, remote_gpu_idx, conn_id);
+            bool success =
+                self.connect(remote_ip_addr, remote_gpu_idx, conn_id);
             return py::make_tuple(success, conn_id);
           },
-          "Connect to a remote server", py::arg("ip_addr"),
+          "Connect to a remote server", py::arg("remote_ip_addr"),
           py::arg("remote_gpu_idx"))
       .def(
           "accept",
           [](Endpoint& self) {
-            std::string ip_addr;
+            std::string remote_ip_addr;
             int remote_gpu_idx;
             uint64_t conn_id;
-            bool success = self.accept(ip_addr, remote_gpu_idx, conn_id);
-            return py::make_tuple(success, ip_addr, remote_gpu_idx, conn_id);
+            bool success = self.accept(remote_ip_addr, remote_gpu_idx, conn_id);
+            return py::make_tuple(success, remote_ip_addr, remote_gpu_idx,
+                                  conn_id);
           },
           "Accept an incoming connection")
       .def(
           "reg_kv",
-          [](Endpoint& self, py::buffer buffer) {
-            py::buffer_info info = buffer.request();
+          [](Endpoint& self, uint64_t ptr, size_t size) {
             uint64_t mr_id;
             bool success =
-                self.reg_kv(info.ptr, info.size * info.itemsize, mr_id);
+                self.reg_kv(reinterpret_cast<const void*>(ptr), size, mr_id);
             return py::make_tuple(success, mr_id);
           },
-          "Register a key-value buffer", py::arg("buffer"))
+          "Register a key-value buffer", py::arg("ptr"), py::arg("size"))
       .def(
           "send_kv",
-          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id,
-             py::buffer buffer) {
-            py::buffer_info info = buffer.request();
-            return self.send_kv(conn_id, mr_id, info.ptr,
-                                info.size * info.itemsize);
+          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
+             size_t size) {
+            return self.send_kv(conn_id, mr_id,
+                                reinterpret_cast<const void*>(ptr), size);
           },
           "Send a key-value buffer", py::arg("conn_id"), py::arg("mr_id"),
-          py::arg("buffer"))
+          py::arg("ptr"), py::arg("size"))
       .def(
           "recv_kv",
-          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id,
+          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
              size_t max_size) {
-            std::vector<uint8_t> data(max_size);
-            size_t actual_size = max_size;
+            size_t recv_size;
             bool success =
-                self.recv_kv(conn_id, mr_id, data.data(), actual_size);
-            if (success) {
-              data.resize(actual_size);
-              return py::make_tuple(
-                  success,
-                  py::bytes(reinterpret_cast<char*>(data.data()), actual_size));
-            } else {
-              return py::make_tuple(false, py::bytes());
-            }
+                self.recv_kv(conn_id, mr_id, reinterpret_cast<void*>(ptr),
+                             max_size, recv_size);
+            return py::make_tuple(success, recv_size);
           },
           "Receive a key-value buffer", py::arg("conn_id"), py::arg("mr_id"),
-          py::arg("max_size"))
+          py::arg("ptr"), py::arg("max_size"))
       .def("__repr__", [](Endpoint const& e) { return "<KVTrans Endpoint>"; });
-
-  // Utility functions
-  m.def(
-      "create_buffer",
-      [](size_t size, uint8_t fill_value = 0) {
-        std::string buffer(size, static_cast<char>(fill_value));
-        return py::bytearray(buffer);
-      },
-      "Create a buffer for testing", py::arg("size"),
-      py::arg("fill_value") = 0);
-
-  m.def(
-      "buffer_to_string",
-      [](py::buffer buffer) {
-        py::buffer_info info = buffer.request();
-        return std::string(static_cast<char*>(info.ptr),
-                           info.size * info.itemsize);
-      },
-      "Convert buffer to string", py::arg("buffer"));
 }
