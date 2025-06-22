@@ -59,6 +59,7 @@
 #define MAIN_THREAD_CPU_IDX 31
 #define NUM_GPUS 8
 #define RECEIVER_BATCH_SIZE 16
+#define NVLINK_SM_PER_PROCESS 2
 // #define SEPARATE_POLLING
 // Command structure for each transfer
 struct TransferCmd {

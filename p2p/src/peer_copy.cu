@@ -1,4 +1,5 @@
 // peer_copy.cu
+#include "common.hpp"
 #include "copy_ring.hpp"
 #include "peer_copy.cuh"
 #include <cstdio>
@@ -55,15 +56,48 @@ __global__ void peer_copy_kernel_vec(CopyTask const* __restrict__ tasks,
   }
 }
 
+__global__ void peer_copy_kernel_vec_batched(CopyTask const* __restrict__ tasks,
+                                             int num_tasks,
+                                             int tasks_per_block) {
+  int block_task_start = blockIdx.x * tasks_per_block;
+  int tid = threadIdx.x;
+
+  for (int i = 0; i < tasks_per_block; ++i) {
+    int task_id = block_task_start + i;
+    if (task_id >= num_tasks) return;
+
+    const CopyTask t = tasks[task_id];
+    char const* __restrict__ src = static_cast<char const*>(t.src_ptr);
+    char* __restrict__ dst = static_cast<char*>(t.dst_ptr);
+    size_t nbytes = t.bytes;
+
+    size_t offset = tid * 16;
+    for (; offset + 15 < nbytes; offset += blockDim.x * 16) {
+      copy128(src + offset, dst + offset);
+    }
+
+    if (tid == 0) {
+      for (size_t j = (nbytes & ~size_t(15)); j < nbytes; ++j) {
+        dst[j] = src[j];
+      }
+    }
+
+    __syncthreads();  // avoid interleaved accesses when multiple tasks per
+                      // block
+  }
+}
+
 cudaError_t launch_peer_bulk_copy2(CopyTask const* host_tasks, int num_tasks,
                                    cudaStream_t stream, int src_device,
                                    CopyTask*& d_tasks) {
   cudaMemcpyAsync(d_tasks, host_tasks, num_tasks * sizeof(CopyTask),
                   cudaMemcpyHostToDevice, stream);
   constexpr int threads_per_block = 256;
-  dim3 blocks(num_tasks);
-  peer_copy_kernel_vec<<<blocks, threads_per_block, 0, stream>>>(d_tasks,
-                                                                 num_tasks);
-
+  dim3 blocks(NVLINK_SM_PER_PROCESS);
+  // peer_copy_kernel_vec<<<blocks, threads_per_block, 0, stream>>>(d_tasks,
+  //                                                                num_tasks);
+  int tasks_per_block = num_tasks / NVLINK_SM_PER_PROCESS;
+  peer_copy_kernel_vec_batched<<<blocks, threads_per_block, 0, stream>>>(
+      d_tasks, num_tasks, tasks_per_block);
   return cudaGetLastError();
 }
