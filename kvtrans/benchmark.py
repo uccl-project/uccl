@@ -128,10 +128,10 @@ def main():
     p.add_argument("--device", choices=["cpu", "gpu"], default="cpu",
                    help="Buffer location (cpu or gpu)")
     p.add_argument("--sizes", type=parse_size_list,
-                   default=[256, 1024, 4096, 16384, 65536, 262144, 1048576],
+                   default=[256, 1024, 4096, 16384, 65536, 262144, 1048576, 10485760, 104857600],
                    help="Comma separated list of message sizes in bytes")
     p.add_argument("--iters", type=int, default=1000,
-                   help="Iterations per message size (excluding 1 warm‑up)")
+                   help="Iterations per message size (excluding 1 warm-up)")
     args = p.parse_args()
 
     print("KVTrans Benchmark — role:", args.role)
