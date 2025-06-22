@@ -947,7 +947,7 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   DCHECK(ret == sizeof(int) * 2) << "uccl_connect: send_message()";
 
   bool is_leader = is_local_leader(dev, local_gpuidx, factory_dev->local_ip_str,
-                                  remote_dev, remote_gpuidx, remote_ip);
+                                   remote_dev, remote_gpuidx, remote_ip);
 
   peer_map_mu_[dev].lock();
   auto it = peer_map_[dev].find({remote_ip, remote_dev});
@@ -969,7 +969,8 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
     ret = send_message(bootstrap_fd, &first_call, sizeof(bool));
     DCHECK(ret == sizeof(bool)) << "uccl_connect: send_message()";
   } else {
-    // We are not the leader, let the remote side to determine if we should install ctx.
+    // We are not the leader, let the remote side to determine if we should
+    // install ctx.
     ret = receive_message(bootstrap_fd, &should_install_ctx, sizeof(bool));
     DCHECK(ret == sizeof(bool)) << "uccl_connect: receive_message()";
   }
@@ -1044,7 +1045,7 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
 
   int remote_gpuidx;
 
-  auto *factory_dev = RDMAFactory::get_factory_dev(dev);
+  auto* factory_dev = RDMAFactory::get_factory_dev(dev);
 
   bootstrap_fd = accept(listen_fd, (struct sockaddr*)&cli_addr, &clien);
   DCHECK(bootstrap_fd >= 0) << "uccl_accept: accept()";
@@ -1066,7 +1067,7 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   remote_gpuidx = buf[1];
   bool is_leader = is_local_leader(dev, local_gpuidx, factory_dev->local_ip_str,
                                    *remote_dev, remote_gpuidx, remote_ip);
-  
+
   peer_map_mu_[dev].lock();
   auto it = peer_map_[dev].find({remote_ip, *remote_dev});
   if (it == peer_map_[dev].end()) {
@@ -1078,14 +1079,15 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
     first_call = false;
   }
   peer_map_mu_[dev].unlock();
-  
+
   if (is_leader) {
     // We are the leader, we can install ctx if we are the first call.
     should_install_ctx = first_call;
     ret = send_message(bootstrap_fd, &first_call, sizeof(bool));
     DCHECK(ret == sizeof(bool)) << "uccl_accept: send_message()";
   } else {
-    // We are not the leader, let the remote side to determine if we should install ctx.
+    // We are not the leader, let the remote side to determine if we should
+    // install ctx.
     ret = receive_message(bootstrap_fd, &should_install_ctx, sizeof(bool));
     DCHECK(ret == sizeof(bool)) << "uccl_accept: receive_message()";
   }
