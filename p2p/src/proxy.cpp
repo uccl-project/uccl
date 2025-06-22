@@ -1,5 +1,6 @@
 #include "proxy.hpp"
 #include "common.hpp"
+#include "copy_ring.hpp"
 #include "rdma.hpp"
 #include "ring_buffer.cuh"
 #include <algorithm>
@@ -25,13 +26,15 @@ inline uint64_t load_volatile_u64(uint64_t volatile* addr) {
 }
 
 void remote_cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
-                      size_t total_size, int rank, char const* peer_ip) {
+                      size_t total_size, int rank, char const* peer_ip,
+                      CopyRing& g_ring) {
   printf("Remote CPU thread for block %d started\n", block_idx + 1);
 
 #ifdef NUMA_AWARE_SCHEDULING
   int const nic_idx = pick_nic_index(block_idx);
   per_thread_rdma_init(gpu_buffer, total_size, rank, nic_idx);
-  pin_thread_to_nic_numa(nic_idx, block_idx);
+  // pin_thread_to_nic_numa(nic_idx, block_idx);
+  pin_thread_to_cpu(block_idx + 1);
 #else
   pin_thread_to_cpu(block_idx + 1);
 #endif
@@ -61,7 +64,7 @@ void remote_cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
 
 #ifdef ENABLE_WRITE_WITH_IMMEDIATE
   post_receive_buffer_for_imm();
-  cpu_proxy_poll_write_with_immediate(block_idx, cq);
+  cpu_proxy_poll_write_with_immediate(block_idx, cq, g_ring);
 #endif
 }
 

@@ -904,8 +904,6 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   struct RemoteRDMAContext remote_ctx;
   FlowID flow_id;
 
-  bool same_dev = false;
-
   bootstrap_fd = socket(AF_INET, SOCK_STREAM, 0);
   DCHECK(bootstrap_fd >= 0) << "uccl_connect: socket()";
 
@@ -940,39 +938,44 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   int flag = 1;
   setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
 
-  // We only allocate a peer id when the first connect() is called.
-  int first_call = 0;
+  bool first_call = false;
+  bool should_install_ctx = false;
+
+  // Send our dev, gpu to the other side.
+  int buf[2] = {dev, local_gpuidx};
+  ret = send_message(bootstrap_fd, buf, sizeof(int) * 2);
+  DCHECK(ret == sizeof(int) * 2) << "uccl_connect: send_message()";
+
+  bool is_leader = is_local_leader(dev, local_gpuidx, factory_dev->local_ip_str,
+                                   remote_dev, remote_gpuidx, remote_ip);
 
   peer_map_mu_[dev].lock();
   auto it = peer_map_[dev].find({remote_ip, remote_dev});
   if (it == peer_map_[dev].end()) {
-    first_call = 1;
     peer_id = alloc_peer_id(dev);
     peer_map_[dev].insert({{remote_ip, remote_dev}, {peer_id, {}, {}, 0}});
-  } else if (it->second.ready == -1) {
-    first_call = 1;
-    peer_map_[dev][{remote_ip, remote_dev}].ready = 0;
-    peer_id = it->second.peer_id;
+    first_call = true;
   } else {
     peer_id = it->second.peer_id;
+    first_call = false;
   }
   peer_map_mu_[dev].unlock();
 
   CHECK(peer_id < MAX_PEER);
 
-  // For the first connect(), and should_install_ctx() returns true,
-  // we install RDMA context on all engines with the help of corresponding
-  // accept() at the other side.
-  flag = first_call &&
-         should_install_ctx(dev, local_gpuidx, factory_dev->local_ip_str,
-                            remote_dev, remote_gpuidx, remote_ip);
+  if (is_leader) {
+    // We are the leader, we can install ctx if we are the first call.
+    should_install_ctx = first_call;
+    ret = send_message(bootstrap_fd, &first_call, sizeof(bool));
+    DCHECK(ret == sizeof(bool)) << "uccl_connect: send_message()";
+  } else {
+    // We are not the leader, let the remote side to determine if we should
+    // install ctx.
+    ret = receive_message(bootstrap_fd, &should_install_ctx, sizeof(bool));
+    DCHECK(ret == sizeof(bool)) << "uccl_connect: receive_message()";
+  }
 
-  // Send our dev, gpu and flag to the other side.
-  int buf[3] = {dev, local_gpuidx, flag};
-  ret = send_message(bootstrap_fd, buf, sizeof(int) * 3);
-  DCHECK(ret == sizeof(int) * 3) << "uccl_connect: send_message()";
-
-  if (flag) {
+  if (should_install_ctx) {
     UCCL_LOG_EP << "connect: install_ctx_on_engines for dev/peer: " << dev
                 << "/" << peer_id;
     install_ctx_on_engines(bootstrap_fd, dev, peer_id, remote_ip, remote_dev);
@@ -1036,14 +1039,13 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   socklen_t clien = sizeof(cli_addr);
   int bootstrap_fd;
   int ret;
-  bool local_lock_first = false;
   PeerID peer_id;
   struct RemoteRDMAContext remote_ctx;
   FlowID flow_id;
 
-  bool same_dev = false;
-
   int remote_gpuidx;
+
+  auto* factory_dev = RDMAFactory::get_factory_dev(dev);
 
   bootstrap_fd = accept(listen_fd, (struct sockaddr*)&cli_addr, &clien);
   DCHECK(bootstrap_fd >= 0) << "uccl_accept: accept()";
@@ -1055,23 +1057,40 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   int flag = 1;
   setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
 
-  int buf[3];
-  ret = receive_message(bootstrap_fd, buf, sizeof(int) * 3);
-  DCHECK(ret == sizeof(int) * 3) << "uccl_accept: receive_message()";
+  bool first_call = false;
+  bool should_install_ctx = false;
 
+  int buf[2];
+  ret = receive_message(bootstrap_fd, buf, sizeof(int) * 2);
+  DCHECK(ret == sizeof(int) * 2) << "uccl_accept: receive_message()";
   *remote_dev = buf[0];
   remote_gpuidx = buf[1];
-  int should_install_ctx = buf[2];
+  bool is_leader = is_local_leader(dev, local_gpuidx, factory_dev->local_ip_str,
+                                   *remote_dev, remote_gpuidx, remote_ip);
 
   peer_map_mu_[dev].lock();
   auto it = peer_map_[dev].find({remote_ip, *remote_dev});
-  if (it != peer_map_[dev].end()) {
-    peer_id = it->second.peer_id;
-  } else {
+  if (it == peer_map_[dev].end()) {
     peer_id = alloc_peer_id(dev);
-    peer_map_[dev].insert({{remote_ip, *remote_dev}, {peer_id, {}, {}, -1}});
+    peer_map_[dev].insert({{remote_ip, *remote_dev}, {peer_id, {}, {}, 0}});
+    first_call = true;
+  } else {
+    peer_id = it->second.peer_id;
+    first_call = false;
   }
   peer_map_mu_[dev].unlock();
+
+  if (is_leader) {
+    // We are the leader, we can install ctx if we are the first call.
+    should_install_ctx = first_call;
+    ret = send_message(bootstrap_fd, &first_call, sizeof(bool));
+    DCHECK(ret == sizeof(bool)) << "uccl_accept: send_message()";
+  } else {
+    // We are not the leader, let the remote side to determine if we should
+    // install ctx.
+    ret = receive_message(bootstrap_fd, &should_install_ctx, sizeof(bool));
+    DCHECK(ret == sizeof(bool)) << "uccl_accept: receive_message()";
+  }
 
   if (should_install_ctx) {
     UCCL_LOG_EP << "accept: install_ctx_on_engines for dev/peer: " << dev << "/"

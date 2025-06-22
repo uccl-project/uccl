@@ -39,7 +39,7 @@
 #define ENABLE_WRITE_WITH_IMMEDIATE
 #define ASSUME_WR_IN_ORDER
 #define NUMA_AWARE_SCHEDULING
-// #define ENABLE_PROXY_CUDA_MEMCPY
+#define ENABLE_PROXY_CUDA_MEMCPY
 #define kQueueSize 1024
 #define kQueueMask (kQueueSize - 1)
 #define kMaxInflight 32
@@ -47,6 +47,7 @@
 #define kIterations 1000000
 #define kNumThBlocks 4
 #define kNumThPerBlock 1
+#define kRemoteNVLinkBatchSize 512
 #define kObjectSize 8192  // 8 KB
 #define kMaxOutstandingSends 1024
 #define kMaxOutstandingRecvs 1024
@@ -57,6 +58,8 @@
 #define kRemoteBufferSize kBatchSize* kNumThBlocks* kObjectSize * 100
 #define MAIN_THREAD_CPU_IDX 31
 #define NUM_GPUS 8
+#define RECEIVER_BATCH_SIZE 16
+#define NVLINK_SM_PER_PROCESS 2
 // #define SEPARATE_POLLING
 // Command structure for each transfer
 struct TransferCmd {

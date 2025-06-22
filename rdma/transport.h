@@ -936,8 +936,8 @@ class RDMAEndpoint {
   ConnID uccl_accept(int dev, int listen_fd, int local_gpuidx,
                      std::string& remote_ip, int* remote_dev);
 
-  bool should_install_ctx(int ldev, int lgpu, std::string lip, int rdev,
-                          int rgpu, std::string rip) {
+  bool is_local_leader(int ldev, int lgpu, std::string lip, int rdev, int rgpu,
+                       std::string rip) {
     if (str_to_ip(lip.c_str()) < str_to_ip(rip.c_str())) {
       return true;
     } else if (str_to_ip(lip.c_str()) == str_to_ip(rip.c_str())) {
