@@ -9,6 +9,8 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+const uint8_t ib_cluster_dev_suffix_list[8] = {4, 5, 6, 7, 0, 1, 2, 3};
+
 Endpoint::Endpoint(const uint32_t local_gpu_idx, const uint32_t num_cpus)
     : local_gpu_idx_(local_gpu_idx), num_cpus_(num_cpus) {
   py::gil_scoped_release release;
@@ -16,10 +18,13 @@ Endpoint::Endpoint(const uint32_t local_gpu_idx, const uint32_t num_cpus)
             << ", CPUs: " << num_cpus << std::endl;
 
   // Initialize the RDMA endpoint with lazy creation.
-  ep_ = new uccl::RDMAEndpoint(NUM_DEVICES, num_cpus);
+  ep_ =
+      new uccl::RDMAEndpoint(ib_cluster_dev_suffix_list, NUM_DEVICES, num_cpus);
 
   // Initialize the engine based on the GPU index.
+#ifdef LAZY_CREATE_ENGINE
   ep_->initialize_engine_by_dev(local_gpu_idx_);
+#endif
 
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
