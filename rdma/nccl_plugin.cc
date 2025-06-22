@@ -5,7 +5,7 @@
 #include <atomic>
 #include <mutex>
 #include <thread>
-
+#include <unistd.h>
 using namespace uccl;
 
 char const* PLUGIN_NAME = "RDMA_Plugin";
@@ -82,7 +82,7 @@ struct ucclSendComm {
 };
 
 ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
-  std::cout << "Hello UCCL!" << std::endl;
+  std::cout << "Hello UCCL from PID: " << getpid() << std::endl;
 
 #ifdef LAZY_CREATE_ENGINE
   ep = std::make_shared<RDMAEndpoint>(NUM_DEVICES, NUM_ENGINES);
@@ -161,7 +161,7 @@ ncclResult_t pluginGetProperties(int dev, ncclNetProperties_v8_t* props) {
   return ncclSuccess;
 }
 
-static std::atomic<uint16_t> listen_port = 5000;
+static std::atomic<uint16_t> listen_port = 20000;
 
 // To create a connection, NCCL will start by calling listen on the receiver
 // side. This function takes a device number as input argument, and should
@@ -176,14 +176,7 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
   memset(handle, 0, sizeof(struct ucclHandle));
 
 #ifdef LAZY_CREATE_ENGINE
-  int gpu_idx = 0;
-  cudaGetDevice(&gpu_idx);
-  if (dev != gpu_idx) {
-    LOG_FIRST_N(INFO, 1) << "pluginListen detects different vdev " << dev
-                         << " vs. gpu_idx " << gpu_idx;
-    // dev = gpu_idx;
-  }
-  ep->initialize_engine_by_dev(dev, listen_port);
+  ep->initialize_engine_by_dev(dev);
 #endif
 
   // Create a listening socket.
@@ -198,8 +191,18 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
   bzero((char*)&serv_addr, sizeof(serv_addr));
   serv_addr.sin_family = AF_INET;
   serv_addr.sin_addr.s_addr = INADDR_ANY;
+#ifdef LAZY_CREATE_ENGINE
+  serv_addr.sin_port = htons(listen_port.fetch_add(1) + dev * 1000);
+#else
   serv_addr.sin_port = htons(listen_port.fetch_add(1));
+#endif
   ret = bind(listen_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
+  if (ret < 0) {
+    LOG(ERROR) << "ERROR: binding socket, ret: " << ret
+               << ", port: " << ntohs(serv_addr.sin_port) << ", dev: " << dev;
+    close(listen_fd);
+    return ncclInternalError;
+  }
   DCHECK(ret >= 0) << ret;
 
   ret = listen(listen_fd, 1);
@@ -238,16 +241,6 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
 ncclResult_t pluginConnect(int dev, void* opaque_handle, void** sendComm,
                            ncclNetDeviceHandle_v8_t** /*sendDevComm*/) {
   struct ucclHandle* handle = (struct ucclHandle*)opaque_handle;
-
-#ifdef LAZY_CREATE_ENGINE
-  int gpu_idx = 0;
-  cudaGetDevice(&gpu_idx);
-  if (dev != gpu_idx) {
-    LOG_FIRST_N(INFO, 1) << "pluginListen detects different vdev " << dev
-                         << " vs. gpu_idx " << gpu_idx;
-    // dev = gpu_idx;
-  }
-#endif
   int local_gpuidx;
 #ifndef __HIP_PLATFORM_AMD__
   cudaGetDevice(&local_gpuidx);
