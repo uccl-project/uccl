@@ -118,9 +118,7 @@ def main():
     p = argparse.ArgumentParser(description="Benchmark NCCL (torch.distributed) bandwidth")
     p.add_argument("--role", choices=["server", "client"], required=True)
     p.add_argument("--remote-ip", help="Server IP address for client")
-    p.add_argument("--remote-gpu-idx", type=int, default=0)  # kept for parity
     p.add_argument("--local-gpu-idx", type=int, default=0)
-    p.add_argument("--num-cpus", type=int, default=4)        # placeholder, unused
     p.add_argument("--device", choices=["cpu", "gpu"], default="gpu")
     p.add_argument("--sizes", type=parse_size_list,
                    default=[256, 1024, 4096, 16384, 65536, 262144, 1048576, 10485760, 104857600])
