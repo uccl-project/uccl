@@ -94,20 +94,26 @@ bool Endpoint::send_kv(uint64_t conn_id, uint64_t mr_id, void const* data,
                        size_t size) {
   py::gil_scoped_release release;
   DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
-  std::cout << "Sending KV with mr_id: " << mr_id << ", size: " << size
-            << " bytes" << std::endl;
+  // std::cout << "Sending KV with mr_id: " << mr_id << ", size: " << size
+  //           << " bytes" << std::endl;
   uccl::ucclRequest ureq;
 
   auto conn = conn_id_to_conn_[conn_id];
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
 
-  ep_->uccl_send_async(
-      static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle, data,
-      size, &ureq);
+  int rc;
+  do {
+    rc = ep_->uccl_send_async(
+        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
+        data, size, &ureq);
+    if (rc == -1) {
+      std::this_thread::yield();
+    }
+  } while (rc == -1);
 
   ep_->uccl_poll_ureq(&ureq);
 
-  std::cout << "KV sent successfully" << std::endl;
+  // std::cout << "KV sent successfully" << std::endl;
   return true;
 }
 

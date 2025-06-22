@@ -17,6 +17,7 @@ except ImportError as exc:
 _HAS_TORCH = False
 try:
     import torch
+    print("Torch imported")
 
     _HAS_TORCH = True
 except ModuleNotFoundError:
@@ -31,6 +32,7 @@ def _make_buffer(size_bytes: int, device: str, gpu_idx: int):
         if not _HAS_TORCH:
             raise RuntimeError("PyTorch is required for GPU buffers (install torch)")
         buf = torch.ones(n_elems, dtype=torch.float32, device=f"cuda:{gpu_idx}")
+        assert buf.is_contiguous()
         ptr = buf.data_ptr()
     else:  # cpu
         buf = np.ones(n_elems, dtype=np.float32)
@@ -142,4 +144,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n[Interrupted] Benchmark aborted by user.")
+        sys.exit(1)
