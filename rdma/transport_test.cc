@@ -394,15 +394,20 @@ static void client_worker(void) {
 
 // TO run on AMD:
 // LD_LIBRARY_PATH="/work1/yzhou/yangzhou/anaconda3/lib:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH}"
-// HIP_VISIBLE_DEVICES=6 ./rdma_test -server true
-// HIP_VISIBLE_DEVICES=6 ./rdma_test -serverip 10.0.100.114
+// HIP_VISIBLE_DEVICES=6 ./transport_test --server=true
+// HIP_VISIBLE_DEVICES=6 ./transport_test --serverip=10.0.100.114
 
 int main(int argc, char* argv[]) {
   google::InitGoogleLogging(argv[0]);
   google::InstallFailureSignalHandler();
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
+#ifdef LAZY_CREATE_ENGINE
+  ep.emplace(NUM_DEVICES, NUM_ENGINES);
+  ep->initialize_engine_by_dev(0);
+#else
   ep.emplace(DEVNAME_SUFFIX_LIST, NUM_DEVICES, NUM_ENGINES);
+#endif
 
   // Create a thread to print throughput every second
   std::thread t([&] {
