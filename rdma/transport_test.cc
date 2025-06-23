@@ -393,7 +393,7 @@ static void client_worker(void) {
 }
 
 // TO run on AMD:
-// LD_LIBRARY_PATH="/work1/yzhou/yangzhou/anaconda3/lib:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH}"
+// LD_LIBRARY_PATH="${CONDA_LIB_HOME}:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH}"
 // HIP_VISIBLE_DEVICES=6 ./transport_test --server=true
 // HIP_VISIBLE_DEVICES=6 ./transport_test --serverip=10.0.100.114
 

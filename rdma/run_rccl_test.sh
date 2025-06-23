@@ -53,7 +53,7 @@ mpirun --prefix /usr/local/bin/ompi --bind-to none -np 2 -N 1 --hostfile $NODEFI
     -x NCCL_NCHANNELS_PER_NET_PEER=4 \
     -x NCCL_IB_QPS_PER_CONNECTION=1 \
     -x NCCL_IB_SPLIT_DATA_ON_QPS=1 \
-    -x HIP_VISIBLE_DEVICES=0,1,2,4 \
+    -x HIP_VISIBLE_DEVICES=0,1,2,5 \
     ${UCCL_HOME}/thirdparty/rccl-tests/build/alltoall_perf \
     -b 1K -e 1G -f 2 -w 5 -n 20 -c 1 -g 1 -t 4 |&
     tee alltoall_debug.log
