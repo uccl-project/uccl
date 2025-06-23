@@ -892,7 +892,6 @@ void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq,
   struct ibv_sge sges[kMaxOutstandingRecvs];
   struct ibv_recv_wr wrs[kMaxOutstandingRecvs];
   size_t pool_index = 0;
-  std::vector<CopyTask> task_vec;
   while (g_progress_run.load(std::memory_order_acquire)) {
     int ne = ibv_poll_cq(cq, kMaxOutstandingRecvs, wc);
     if (ne == 0) continue;
