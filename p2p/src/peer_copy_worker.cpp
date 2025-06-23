@@ -1,6 +1,8 @@
 #include "peer_copy_worker.hpp"
 #include "common.hpp"
 #include "peer_copy.cuh"
+#include "proxy.hpp"
+#include "rdma.hpp"
 #include <mutex>
 
 std::atomic<bool> g_run;
@@ -63,14 +65,21 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
       fprintf(stderr, "Error: copy_batch_size is zero\n");
       std::abort();
     }
-    if (t.dst_dev == src_device) {
-      async_memcpy_count += copy_batch_size;
-      continue;
+
+    if (tasks.size() != (unsigned int)copy_batch_size) {
+      fprintf(stderr,
+              "Error: tasks.size() %zu does not match copy_batch_size %d\n",
+              tasks.size(), copy_batch_size);
+      std::abort();
     }
 
+    auto task_wrs = std::vector<uint64_t>(tasks.size());
     for (auto task : tasks) {
       maybe_enable_peer_access(src_device, task.dst_dev);
+      task_wrs.push_back(task.wr_id);
     }
+    // notify_sender_batch(g_ring.ack_qp, task_wrs, g_ring.ack_mr,
+    //                             g_ring.ack_buf);
 
     auto st = std::chrono::high_resolution_clock::now();
     cudaError_t err;

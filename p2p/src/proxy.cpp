@@ -62,6 +62,11 @@ void remote_cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
   remote_addr = remote_info.addr;
   remote_rkey = remote_info.rkey;
 
+  ensure_ack_sender_resources(pd, g_ring.ack_buf);
+  g_ring.ack_qp = qp;
+  g_ring.ack_mr = ack_mr;
+  printf("Remote CPU thread for block %d: ack_qp=%p,ack_mr=%p\n", block_idx + 1,
+         g_ring.ack_qp, g_ring.ack_mr);
 #ifdef ENABLE_WRITE_WITH_IMMEDIATE
   post_receive_buffer_for_imm();
   cpu_proxy_poll_write_with_immediate(block_idx, cq, g_ring);
@@ -248,6 +253,7 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
 
   modify_qp_to_rtr(&remote_info);
   modify_qp_to_rts(&local_info);
+  init_ack_recv_ring(pd, kSenderAckQueueDepth);
 
   remote_addr = remote_info.addr;
   remote_rkey = remote_info.rkey;

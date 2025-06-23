@@ -52,6 +52,7 @@
 #define kMaxOutstandingSends 1024
 #define kMaxOutstandingRecvs 1024
 #define kSignalledEvery 1
+#define kSenderAckQueueDepth 1024
 #define kNumPollingThreads 0  // Rely on CPU proxy to poll.
 #define kPollingThreadStartPort kNumThBlocks * 2
 #define kWarmupOps 10000

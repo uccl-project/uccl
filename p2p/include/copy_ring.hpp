@@ -1,4 +1,6 @@
 #pragma once
+#include "common.hpp"
+#include <infiniband/verbs.h>
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
@@ -22,6 +24,9 @@ struct CopyRing {
   std::atomic<uint32_t> tail{0};
   std::atomic<uint32_t> emplace_count{0};
   std::atomic<uint32_t> pop_count{0};
+  struct ibv_qp* ack_qp;
+  ibv_mr* ack_mr = nullptr;
+  uint64_t ack_buf[RECEIVER_BATCH_SIZE];
 
   bool emplace(CopyTask const& t) {
     uint32_t h = head.load(std::memory_order_relaxed);
@@ -33,16 +38,28 @@ struct CopyRing {
     return true;
   }
 
-  bool emplace(std::vector<CopyTask> const& tasks) {
+  bool emplace(std::vector<CopyTask> const& tasks, uint32_t count) {
     if (tasks.empty()) return true;
+    if (tasks.size() != count) {
+      fprintf(stderr, "Error: tasks.size() %zu does not match count %u\n",
+              tasks.size(), count);
+      std::abort();
+    }
 
     uint32_t h = head.load(std::memory_order_relaxed);
     uint32_t t = tail.load(std::memory_order_acquire);
-    uint32_t free_slots = (t + COPY_RING_CAP - h - 1) & (COPY_RING_CAP - 1);
-    if (tasks.size() > free_slots) return false;
+    uint32_t used = (h - t) & (COPY_RING_CAP - 1);
+    uint32_t free_slots = COPY_RING_CAP - used - 1;
+    if (count > free_slots) return false;
 
     uint32_t idx = h;
     for (CopyTask const& task : tasks) {
+      if (task.dst_dev < 0 || task.dst_dev >= NUM_GPUS) {
+        fprintf(stderr,
+                "Error: emplace task.dst_dev %d is out of range (0-%d)\n",
+                task.dst_dev, NUM_GPUS - 1);
+        std::abort();
+      }
       buf[idx & (COPY_RING_CAP - 1)] = task;
       idx++;
     }
@@ -75,6 +92,12 @@ struct CopyRing {
     for (size_t i = 0; i < count; ++i) {
       tasks.push_back(buf[t & (COPY_RING_CAP - 1)]);
       t = t + 1;
+
+      if (tasks.back().dst_dev < 0 || tasks.back().dst_dev >= NUM_GPUS) {
+        fprintf(stderr, "Error: popN task.dst_dev %d is out of range (0-%d)\n",
+                tasks.back().dst_dev, NUM_GPUS - 1);
+        std::abort();
+      }
     }
     pop_count.fetch_add(static_cast<uint32_t>(count),
                         std::memory_order_relaxed);
