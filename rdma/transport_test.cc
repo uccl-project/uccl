@@ -392,10 +392,9 @@ static void client_worker(void) {
   }
 }
 
-// TO run on AMD:
-// LD_LIBRARY_PATH="${CONDA_LIB_HOME}:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH}"
-// HIP_VISIBLE_DEVICES=6 ./transport_test --server=true
-// HIP_VISIBLE_DEVICES=6 ./transport_test --serverip=10.0.100.114
+// TO run on AMD HPC cluster:
+// LD_LIBRARY_PATH="${CONDA_LIB_HOME}:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH}" HIP_VISIBLE_DEVICES=0 ./transport_test --server=true
+// LD_LIBRARY_PATH="${CONDA_LIB_HOME}:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH}" HIP_VISIBLE_DEVICES=0 ./transport_test --serverip=10.0.100.114
 
 int main(int argc, char* argv[]) {
   google::InitGoogleLogging(argv[0]);
