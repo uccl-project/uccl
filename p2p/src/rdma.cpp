@@ -50,9 +50,7 @@ constexpr int TCP_PORT = 18515;
 static thread_local std::atomic<uint64_t> g_posted = 0;     // WRs posted
 static thread_local std::atomic<uint64_t> g_completed = 0;  // CQEs seen
 thread_local std::atomic<bool> g_progress_run{true};
-thread_local std::unordered_map<uint32_t, bool> wr_id_completed;
 
-thread_local ibv_mr* ack_mr = nullptr;
 thread_local std::vector<uint64_t> ack_recv_buf;
 thread_local struct ibv_mr* ack_recv_mr;
 
@@ -185,8 +183,8 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
 
-  printf("Rank %d exchanging RDMA connection info with peer %s, port: %d\n",
-         rank, peer_ip, TCP_PORT + tid);
+  printf("Rank %d exchanging RDMA connection info with peer %s\n", rank,
+         peer_ip);
   if (rank == 0) {
     // Listen
     int listenfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -752,8 +750,8 @@ bool GdrSupportInitOnce() {
 
 void poll_completions(ibv_cq* cq, std::unordered_set<uint64_t>& finished_wrs,
                       std::mutex& finished_wrs_mutex) {
-  struct ibv_wc wc[kMaxOutstandingSends * 2];  // batch poll
-  int ne = ibv_poll_cq(cq, kMaxOutstandingSends * 2, wc);
+  struct ibv_wc wc[kMaxOutstandingSends];  // batch poll
+  int ne = ibv_poll_cq(cq, kMaxOutstandingSends, wc);
   if (ne == 0) return;
   int write_ack = 0;
   for (int i = 0; i < ne; ++i) {
@@ -954,10 +952,16 @@ void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq,
           .dst_ptr = static_cast<char*>(per_GPU_device_buf[destination_gpu]) +
                      destination_addr_offset,
           .bytes = wc[i].byte_len};
-      task_vec[i] = task;
-      // while (!g_ring.emplace(task)) {
-      //   std::this_thread::yield();
-      // }
+      task_vec.push_back(task);
+#endif
+    }
+
+#ifdef ENABLE_PROXY_CUDA_MEMCPY
+    ibv_recv_wr* bad = nullptr;
+    int ret = ibv_post_recv(qp, &wrs[0], &bad);
+    if (ret) {
+      fprintf(stderr, "ibv_post_recv failed: %s\n", strerror(ret));
+      std::abort();
     }
     while (!g_ring.emplace(task_vec)) {
       ;
@@ -979,7 +983,8 @@ void print_average_async_memcpy_time() {
 }
 #endif
 
-void ensure_ack_sender_resources(ibv_pd* pd, uint64_t* ack_buf) {
+void ensure_ack_sender_resources(ibv_pd* pd, uint64_t* ack_buf,
+                                 ibv_mr*& ack_mr) {
   if (ack_mr) return;  // already done
   ack_mr = ibv_reg_mr(pd, ack_buf, sizeof(uint64_t) * RECEIVER_BATCH_SIZE,
                       IBV_ACCESS_LOCAL_WRITE);  // host-only

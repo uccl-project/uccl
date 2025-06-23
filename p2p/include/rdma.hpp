@@ -95,16 +95,14 @@ extern void* per_GPU_device_buf[NUM_GPUS];
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
 void print_average_async_memcpy_time();
 #endif
-extern thread_local std::unordered_map<uint32_t, bool> wr_id_completed;
-extern thread_local uint64_t ack_buf;
-extern thread_local ibv_mr* ack_mr;
 
 void notify_sender_that_wr_id_has_completed(struct ibv_qp* local_ack_qp,
                                             uint64_t& wr_id,
                                             ibv_mr* local_ack_mr,
                                             uint64_t* ack_buf);
 void init_ack_recv_ring(struct ibv_pd* pd, int depth);
-void ensure_ack_sender_resources(ibv_pd* pd, uint64_t* ack_buf);
+void ensure_ack_sender_resources(ibv_pd* pd, uint64_t* ack_buf,
+                                 ibv_mr*& ack_mr);
 void notify_sender_batch(struct ibv_qp* ack_qp,
                          std::vector<uint64_t> const& wr_ids, ibv_mr* ack_mr,
                          uint64_t* ack_buf);
