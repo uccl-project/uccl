@@ -918,7 +918,7 @@ static inline void pin_thread_to_cpu(int cpu) {
   }
 }
 
-inline void pin_thread_to_numa_node(int numa_node) {
+inline void pin_thread_to_numa(int numa_node) {
   std::string cpumap_path =
       Format("/sys/devices/system/node/node%d/cpulist", numa_node);
   std::ifstream cpumap_file(cpumap_path);

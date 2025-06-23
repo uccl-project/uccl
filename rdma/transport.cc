@@ -644,7 +644,7 @@ RDMAEndpoint::RDMAEndpoint(uint8_t const* devname_suffix_list, int num_devices,
 #ifdef PIN_TO_NUMA
           UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
                           << "running on NUMA node " << numa_node;
-          pin_thread_to_numa_node(numa_node);
+          pin_thread_to_numa(numa_node);
 #else
           UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
                           << "running on CPU " << engine_cpu_id;
@@ -698,7 +698,7 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev) {
 #ifdef PIN_TO_NUMA
               UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
                               << "running on NUMA node " << numa_node;
-              pin_thread_to_numa_node(numa_node);
+              pin_thread_to_numa(numa_node);
 #else
             UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
                             << "running on CPU " << engine_cpu_id;
