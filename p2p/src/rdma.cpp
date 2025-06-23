@@ -959,7 +959,7 @@ void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq,
       //   std::this_thread::yield();
       // }
     }
-    while (!g_ring.emplace(task_vec, ne)) {
+    while (!g_ring.emplace(task_vec)) {
       ;
       /* Busy spin. */
     }
