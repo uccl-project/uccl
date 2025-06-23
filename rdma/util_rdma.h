@@ -579,6 +579,7 @@ class SharedIOContext;
 struct FactoryDevice {
   char ib_name[64];
   std::string local_ip_str;
+  int numa_node;
 
   struct ibv_context* context;
   struct ibv_device_attr dev_attr;

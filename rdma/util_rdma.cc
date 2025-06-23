@@ -60,6 +60,8 @@ void RDMAFactory::init_dev(int devname_suffix) {
   else
     DCHECK(util_rdma_get_ip_from_ib_name(dev.ib_name, &dev.local_ip_str) == 0);
 
+  dev.numa_node = get_dev_numa_node(dev.ib_name);
+
   // Get the list of RDMA devices.
   device_list = ibv_get_device_list(&nb_devices);
   if (device_list == nullptr || nb_devices == 0) {

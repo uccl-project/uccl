@@ -272,47 +272,6 @@ void UcclRDMAEngine::handle_rx_work(void) {
   }
 }
 
-bool RDMAEndpoint::initialize_engine_by_dev(int dev) {
-  static std::array<std::once_flag, NUM_DEVICES> flags_per_dev_;
-  std::call_once(flags_per_dev_[dev], [this, dev]() {
-    int start_engine_idx = dev * num_engines_per_dev_;
-    int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
-
-    for (int engine_id = start_engine_idx; engine_id <= end_engine_idx;
-         engine_id++) {
-      int engine_cpu_id =
-          ENGINE_CPU_START_LIST[dev] + engine_id % num_engines_per_dev_;
-      DCHECK(engine_cpu_id < NUM_CPUS) << engine_cpu_id << ", " << NUM_CPUS;
-      UcclRDMAEngine* engine_ptr;
-      {
-        std::lock_guard<std::mutex> lock(engine_map_mu_);
-        if (engine_id_to_engine_map_.find(engine_id) !=
-            engine_id_to_engine_map_.end()) {
-          UCCL_LOG_ENGINE << "Engine " << engine_id << " already exists.";
-          exit(EXIT_FAILURE);
-        }
-        engine_id_to_engine_map_[engine_id] = std::make_unique<UcclRDMAEngine>(
-            dev, engine_id, channel_vec_[engine_id], eqds_[dev]);
-
-        engine_ptr = engine_id_to_engine_map_[engine_id].get();
-      }
-      {
-        std::lock_guard<std::mutex> lock(engine_th_mu_);
-        engine_th_vec_.emplace_back(std::make_unique<std::thread>(
-            [engine_ptr, engine_id, engine_cpu_id]() {
-              UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
-                              << "running on CPU " << engine_cpu_id;
-              pin_thread_to_cpu(engine_cpu_id);
-              engine_ptr->run();
-            }));
-      }
-    }
-    create_listen_socket(&test_listen_fds_[dev], kTestListenPort + dev);
-  });
-
-  return true;
-}
-
 void UcclRDMAEngine::handle_tx_work(void) {
   Channel::Msg tx_work;
   int budget;
@@ -670,6 +629,7 @@ RDMAEndpoint::RDMAEndpoint(uint8_t const* devname_suffix_list, int num_devices,
   for (int engine_id = 0, engine_cpu_id; engine_id < total_num_engines;
        engine_id++) {
     auto dev = engine_id / num_engines_per_dev;
+    int numa_node = RDMAFactory::get_factory_dev(dev)->numa_node;
 
     engine_cpu_id =
         ENGINE_CPU_START_LIST[dev] + engine_id % num_engines_per_dev;
@@ -678,11 +638,18 @@ RDMAEndpoint::RDMAEndpoint(uint8_t const* devname_suffix_list, int num_devices,
     engine_vec_.emplace_back(std::make_unique<UcclRDMAEngine>(
         dev, engine_id, channel_vec_[engine_id], eqds_[dev]));
 
-    engine_th_vec_.emplace_back(std::make_unique<std::thread>(
-        [engine_ptr = engine_vec_.back().get(), engine_id, engine_cpu_id]() {
+    engine_th_vec_.emplace_back(
+        std::make_unique<std::thread>([engine_ptr = engine_vec_.back().get(),
+                                       engine_id, engine_cpu_id, numa_node]() {
+#ifdef PIN_TO_NUMA
+          UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
+                          << "running on NUMA node " << numa_node;
+          pin_thread_to_numa_node(numa_node);
+#else
           UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
                           << "running on CPU " << engine_cpu_id;
           pin_thread_to_cpu(engine_cpu_id);
+#endif
           engine_ptr->run();
         }));
   }
@@ -697,6 +664,54 @@ RDMAEndpoint::RDMAEndpoint(uint8_t const* devname_suffix_list, int num_devices,
     // Create listening sockets
     create_listen_socket(&test_listen_fds_[i], kTestListenPort + i);
   }
+}
+
+bool RDMAEndpoint::initialize_engine_by_dev(int dev) {
+  static std::array<std::once_flag, NUM_DEVICES> flags_per_dev_;
+  std::call_once(flags_per_dev_[dev], [this, dev]() {
+    int start_engine_idx = dev * num_engines_per_dev_;
+    int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
+    int numa_node = RDMAFactory::get_factory_dev(dev)->numa_node;
+
+    for (int engine_id = start_engine_idx; engine_id <= end_engine_idx;
+         engine_id++) {
+      int engine_cpu_id =
+          ENGINE_CPU_START_LIST[dev] + engine_id % num_engines_per_dev_;
+      DCHECK(engine_cpu_id < NUM_CPUS) << engine_cpu_id << ", " << NUM_CPUS;
+      UcclRDMAEngine* engine_ptr;
+      {
+        std::lock_guard<std::mutex> lock(engine_map_mu_);
+        if (engine_id_to_engine_map_.find(engine_id) !=
+            engine_id_to_engine_map_.end()) {
+          UCCL_LOG_ENGINE << "Engine " << engine_id << " already exists.";
+          exit(EXIT_FAILURE);
+        }
+        engine_id_to_engine_map_[engine_id] = std::make_unique<UcclRDMAEngine>(
+            dev, engine_id, channel_vec_[engine_id], eqds_[dev]);
+
+        engine_ptr = engine_id_to_engine_map_[engine_id].get();
+      }
+      {
+        std::lock_guard<std::mutex> lock(engine_th_mu_);
+        engine_th_vec_.emplace_back(std::make_unique<std::thread>(
+            [engine_ptr, engine_id, engine_cpu_id, numa_node]() {
+#ifdef PIN_TO_NUMA
+              UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
+                              << "running on NUMA node " << numa_node;
+              pin_thread_to_numa_node(numa_node);
+#else
+            UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
+                            << "running on CPU " << engine_cpu_id;
+            pin_thread_to_cpu(engine_cpu_id);
+#endif
+              engine_ptr->run();
+            }));
+      }
+    }
+    create_listen_socket(&test_listen_fds_[dev], kTestListenPort + dev);
+  });
+
+  return true;
 }
 
 inline uint32_t RDMAEndpoint::find_pot_load_engine_idx(int dev) {
