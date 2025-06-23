@@ -307,14 +307,17 @@ class RDMAContext {
    */
   void drain_rtx_queue(SubUcclFlow* subflow);
 
-  void uc_rx_chunk(struct ibv_cq_ex* cq_ex);
-
   void uc_post_acks();
 
-  /**
-   * @brief Rceive an ACK from the Ctrl QP.
-   */
+  void uc_rx_chunk(struct ibv_wc* wc);
+
+  void uc_rx_chunk(struct ibv_cq_ex* cq_ex);
+
+  void uc_rx_ack(UcclSackHdr* ucclsackh);
+
   void uc_rx_ack(struct ibv_cq_ex* cq_ex, UcclSackHdr* ucclsackh);
+
+  void uc_rx_rtx_chunk(struct ibv_wc* wc, uint64_t chunk_addr);
 
   void uc_rx_rtx_chunk(struct ibv_cq_ex* cq_ex, uint64_t chunk_addr);
 
@@ -413,8 +416,10 @@ class RDMAContext {
     }
   }
 
+  void rc_rx_ack(struct ibv_wc* wc);
   void rc_rx_ack(struct ibv_cq_ex* cq_ex);
 
+  void rc_rx_chunk(uint32_t byte_len, uint32_t wc_imm_data);
   void rc_rx_chunk(struct ibv_cq_ex* cq_ex);
 
   std::string to_string();

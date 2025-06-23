@@ -8,6 +8,8 @@
 // #define STATS
 #define LAZY_CREATE_ENGINE
 
+// #define USE_CQ_EX
+
 /// Interface configuration.
 static char const* IB_DEVICE_NAME_PREFIX = "rdma";
 
@@ -165,7 +167,7 @@ static constexpr uint32_t kCQMODCount = 32;
 // CQ moderation period in microsecond.
 static constexpr uint32_t kCQMODPeriod = 100;
 // Maximum size of inline data.
-static constexpr uint32_t kMaxInline = 512;
+static constexpr uint32_t kMaxInline = 128;
 // Maximum number of SGEs in one WQE.
 static constexpr uint32_t kMaxSge = 2;
 // Maximum number of outstanding receive messages in one recv request.
