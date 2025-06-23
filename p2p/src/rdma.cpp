@@ -932,8 +932,23 @@ void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq,
                 .next = (i + 1 < ne) ? &wrs[i + 1] : nullptr,
                 .sg_list = &sges[i],
                 .num_sge = 1};
+    }
+    ibv_recv_wr* bad = nullptr;
+    int ret = ibv_post_recv(qp, &wrs[0], &bad);
+    if (ret) {
+      fprintf(stderr, "ibv_post_recv failed: %s\n", strerror(ret));
+      std::abort();
+    }
 
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
+    std::vector<CopyTask> task_vec(ne);
+    for (int i = 0; i < ne; ++i) {
+      int src_addr_offset;
+      int destination_gpu;
+      uint32_t destination_addr_offset;
+
+      unpack_imm_data(src_addr_offset, destination_gpu, destination_addr_offset,
+                      wc[i].imm_data);
       if (per_GPU_device_buf[destination_gpu] == nullptr) {
         fprintf(stderr, "per_GPU_device_buf[%d] is null\n", destination_gpu);
         std::abort();
@@ -952,20 +967,9 @@ void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq,
           .dst_ptr = static_cast<char*>(per_GPU_device_buf[destination_gpu]) +
                      destination_addr_offset,
           .bytes = wc[i].byte_len};
-      task_vec.push_back(task);
-#endif
+      task_vec[i] = task;
     }
-
-#ifdef ENABLE_PROXY_CUDA_MEMCPY
-    ibv_recv_wr* bad = nullptr;
-    int ret = ibv_post_recv(qp, &wrs[0], &bad);
-    if (ret) {
-      fprintf(stderr, "ibv_post_recv failed: %s\n", strerror(ret));
-      std::abort();
-    }
-    while (!g_ring.emplace(task_vec)) {
-      ;
-      /* Busy spin. */
+    while (!g_ring.emplace(task_vec)) { /* Busy spin. */
     }
 #endif
   }

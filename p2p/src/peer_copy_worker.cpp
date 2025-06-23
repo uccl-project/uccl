@@ -78,8 +78,7 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
       maybe_enable_peer_access(src_device, task.dst_dev);
       task_wrs.push_back(task.wr_id);
     }
-    // notify_sender_batch(g_ring.ack_qp, task_wrs, g_ring.ack_mr,
-    //                             g_ring.ack_buf);
+    notify_sender_batch(g_ring.ack_qp, task_wrs, g_ring.ack_mr, g_ring.ack_buf);
 
     auto st = std::chrono::high_resolution_clock::now();
     cudaError_t err;

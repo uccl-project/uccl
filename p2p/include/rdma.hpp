@@ -6,7 +6,6 @@
 #include <infiniband/verbs.h>
 #include <atomic>
 #include <mutex>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
