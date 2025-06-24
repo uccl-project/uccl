@@ -917,10 +917,6 @@ class RDMAEndpoint {
   std::vector<std::unordered_map<UcclPeer, PeerInfo, UcclPeerHash>> peer_map_;
   std::vector<std::unique_ptr<std::mutex>> peer_map_mu_;
 
-  std::vector<std::unordered_map<UcclPeer, PeerInfo, UcclPeerHash>>
-      peer_same_dev_map_[2];
-  std::vector<std::unique_ptr<std::mutex>> peer_same_dev_map_mu_[2];
-
   std::vector<std::unique_ptr<std::atomic<PeerID>>> next_peer_id_;
 
   std::vector<std::vector<Spin>> flow_id_spin_;
