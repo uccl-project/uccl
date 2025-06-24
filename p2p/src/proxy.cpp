@@ -48,7 +48,6 @@ void remote_cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
   printf("Created CQ for block %d: %p\n", block_idx + 1, cq);
   RDMAConnectionInfo local_info, remote_info;
   create_per_thread_qp(gpu_buffer, total_size, &local_info, rank, cq);
-  // create_per_thread_ack_qp(gpu_buffer, total_size, &local_info, rank, cq);
 
   modify_qp_to_init();
   printf("Local RDMA info: addr=0x%lx, rkey=0x%x\n", local_info.addr,
@@ -93,17 +92,21 @@ void notify_gpu_completion(std::unordered_set<uint64_t>& finished_wrs,
 #ifdef SYNCHRONOUS_COMPLETION
         if (has_received_ack && largest_completed_wr >= i) {
           finished_wrs.erase(i);
-          // printf(
-          //     "WR ID %lu is smaller than largest_completed_wr %lu, "
-          //     "completed\n",
-          //     i, largest_completed_wr);
+#ifdef DEBGU_PRINT
+          printf(
+              "WR ID %lu is smaller than largest_completed_wr %lu, "
+              "completed\n",
+              i, largest_completed_wr);
+#endif
         } else {
-          // printf(
-          //     "WR ID %lu is larger than largest_completed_wr %lu, "
-          //     "completed, largest_finished_wr: %lu, smallest_finished_wr:
-          //     %lu\n", i, largest_completed_wr,
-          //     *std::max_element(sorted_wrs.begin(), sorted_wrs.end()),
-          //     *std::min_element(sorted_wrs.begin(), sorted_wrs.end()));
+#ifdef DEBGU_PRINT
+          printf(
+              "WR ID %lu is larger than largest_completed_wr %lu, "
+              "completed, largest_finished_wr: %lu, smallest_finished_wr:
+                  % lu\n ", i, largest_completed_wr,
+                  * std::max_element(sorted_wrs.begin(), sorted_wrs.end()),
+              *std::min_element(sorted_wrs.begin(), sorted_wrs.end()));
+#endif
           continue;
         }
 #endif
@@ -267,7 +270,6 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
   ibv_cq* cq = create_per_thread_cq();
   RDMAConnectionInfo local_info, remote_info;
   create_per_thread_qp(gpu_buffer, total_size, &local_info, rank, cq);
-  // create_per_thread_ack_qp(gpu_buffer, total_size, &local_info, rank, cq);
 
   modify_qp_to_init();
   // printf("Local RDMA info: addr=0x%lx, rkey=0x%x\n", local_info.addr,

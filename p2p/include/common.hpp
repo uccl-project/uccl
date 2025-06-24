@@ -40,7 +40,7 @@
 #define ASSUME_WR_IN_ORDER
 #define NUMA_AWARE_SCHEDULING
 #define ENABLE_PROXY_CUDA_MEMCPY
-#define SYNCHRONOUS_COMPLETION
+// #define SYNCHRONOUS_COMPLETION
 #define kQueueSize 1024
 #define kQueueMask (kQueueSize - 1)
 #define kMaxInflight 32
@@ -65,8 +65,12 @@
 #define MAIN_THREAD_CPU_IDX 31
 #define NUM_GPUS 8
 #define RECEIVER_BATCH_SIZE 16
+#ifdef SYNCHRONOUS_COMPLETION
 #define NVLINK_SM_PER_PROCESS \
-  2  // Total number of SMs used is NVLINK_SM_PER_PROCESS * kNumThBlocks
+  1  // Total number of SMs used is NVLINK_SM_PER_PROCESS * kNumThBlocks
+#else
+#define NVLINK_SM_PER_PROCESS 2
+#endif
 // #define SEPARATE_POLLING
 // Command structure for each transfer
 struct TransferCmd {

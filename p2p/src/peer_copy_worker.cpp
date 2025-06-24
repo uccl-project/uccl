@@ -33,9 +33,8 @@ void maybe_enable_peer_access(int src_dev, int dst_dev) {
 }
 
 void sync_and_post(CopyRing& g_ring, cudaStream_t& stream, int idx) {
-  cudaError_t err;
   if (async_memcpy_count > prev_completed_async_memcpy_count) {
-    err = cudaStreamSynchronize(stream);
+    cudaError_t err = cudaStreamSynchronize(stream);
     if (err != cudaSuccess) {
       fprintf(stderr, "Kernel execution failed: %s\n", cudaGetErrorString(err));
       std::abort();
