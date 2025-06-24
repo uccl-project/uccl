@@ -1720,8 +1720,8 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
     util_rdma_create_qp_seperate_cq(
         context_, &credit_qp_, IBV_QPT_UC, true, false,
         (struct ibv_cq**)&pacer_credit_cq_ex_,
-        (struct ibv_cq**)&engine_credit_cq_ex_, false, kCQSize,
-        pd_, factory_dev->ib_port_num, eqds::CreditChunkBuffPool::kNumChunk,
+        (struct ibv_cq**)&engine_credit_cq_ex_, false, kCQSize, pd_,
+        factory_dev->ib_port_num, eqds::CreditChunkBuffPool::kNumChunk,
         eqds::CreditChunkBuffPool::kNumChunk, 1, 1);
 
     auto addr =
@@ -2088,7 +2088,7 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
       uint32_t hdr_overhead;
       if (likely(chunk_size == kChunkSize && mtu_bytes_ == 4096)) {
         hdr_overhead = roce ? MAX_CHUNK_IB_4096_HDR_OVERHEAD
-                                : MAX_CHUNK_ROCE_IPV4_4096_HDR_OVERHEAD;
+                            : MAX_CHUNK_ROCE_IPV4_4096_HDR_OVERHEAD;
       } else {
         auto num_mtu = (chunk_size + mtu_bytes_) / mtu_bytes_;
         hdr_overhead =
@@ -2494,8 +2494,10 @@ void RDMAContext::burst_timing_wheel(void) {
   wheel->reap(rdtsc());
 
   auto num_chunks = std::min(kMaxBurstTW, (uint32_t)wheel->ready_queue_.size());
-  auto kMaxUnAckedBytesPerEngineHigh = (is_roce()? kMaxUnAckedBytesPerEngineHighForRoCE : kMaxUnAckedBytesPerEngineHighForIB)
-  
+  auto kMaxUnAckedBytesPerEngineHigh =
+      (is_roce() ? kMaxUnAckedBytesPerEngineHighForRoCE
+                 : kMaxUnAckedBytesPerEngineHighForIB);
+
   for (auto i = 0; i < num_chunks; i++) {
     struct wr_ex* wr_ex =
         reinterpret_cast<struct wr_ex*>(wheel->ready_queue_.front().sslot_);

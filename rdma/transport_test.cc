@@ -405,7 +405,7 @@ int main(int argc, char* argv[]) {
   ep.emplace(NUM_ENGINES);
 #ifdef LAZY_CREATE_ENGINE
   ep->initialize_engine_by_dev(0);
-#else
+#endif
 
   // Create a thread to print throughput every second
   std::thread t([&] {

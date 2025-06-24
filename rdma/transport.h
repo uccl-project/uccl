@@ -541,9 +541,13 @@ class SwiftRDMAContext : public RDMAContext {
   uint32_t EventOnChunkSize(SubUcclFlow* subflow,
                             uint32_t remaining_bytes) override {
     if (remaining_bytes <= kChunkSize) return remaining_bytes;
-    
-    auto hard_budget = (is_roce()? kMaxUnAckedBytesPerEngineHighForRoCE : kMaxUnAckedBytesPerEngineHighForIB) - *engine_unacked_bytes_;
-    auto soft_budget = (is_roce()? kMaxUnAckedBytesPerEngineLowForRoCE : kMaxUnAckedBytesPerEngineLowForIB)  - *engine_unacked_bytes_;
+
+    auto hard_budget = (is_roce() ? kMaxUnAckedBytesPerEngineHighForRoCE
+                                  : kMaxUnAckedBytesPerEngineHighForIB) -
+                       *engine_unacked_bytes_;
+    auto soft_budget = (is_roce() ? kMaxUnAckedBytesPerEngineLowForRoCE
+                                  : kMaxUnAckedBytesPerEngineLowForIB) -
+                       *engine_unacked_bytes_;
     auto flow_budget = kMaxUnAckedBytesPerFlow - subflow->unacked_bytes_;
 
     auto cc_budget = subflow->pcb.swift_cc.get_wnd() - subflow->unacked_bytes_;
@@ -599,10 +603,14 @@ class TimelyRDMAContext : public RDMAContext {
                             uint32_t remaining_bytes) override {
     auto ready_bytes = std::min(remaining_bytes, kChunkSize);
 
-    if (*engine_unacked_bytes_ + ready_bytes > (is_roce()? kMaxUnAckedBytesPerEngineHighForRoCE : kMaxUnAckedBytesPerEngineHighForIB))
+    if (*engine_unacked_bytes_ + ready_bytes >
+        (is_roce() ? kMaxUnAckedBytesPerEngineHighForRoCE
+                   : kMaxUnAckedBytesPerEngineHighForIB))
       return 0;
 
-    if (*engine_unacked_bytes_ + ready_bytes <= (is_roce()? kMaxUnAckedBytesPerEngineLowForRoCE : kMaxUnAckedBytesPerEngineLowForIB) ||
+    if (*engine_unacked_bytes_ + ready_bytes <=
+            (is_roce() ? kMaxUnAckedBytesPerEngineLowForRoCE
+                       : kMaxUnAckedBytesPerEngineLowForIB) ||
         subflow->unacked_bytes_ + ready_bytes <= kMaxUnAckedBytesPerFlow) {
       return ready_bytes;
     }

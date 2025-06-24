@@ -973,7 +973,7 @@ static inline struct ibv_srq* util_rdma_create_srq(struct ibv_pd* pd,
   return srq;
 }
 
-static inline struct ibv_ah* create_ah(struct ibv_pd* pd, int dev, uint8_t port, 
+static inline struct ibv_ah* create_ah(struct ibv_pd* pd, int dev, uint8_t port,
                                        union ibv_gid remote_gid,
                                        struct ibv_port_attr remote_port_attr) {
   struct ibv_ah_attr ah_attr = {};
