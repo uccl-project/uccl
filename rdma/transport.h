@@ -133,7 +133,9 @@ class RDMAContext {
   struct ibv_pd* pd_ = nullptr;
 
   // QPs for data transfer based on UC or RC.
-  struct QPWrapper dp_qps_[kPortEntropy];
+  std::vector<QPWrapper> dp_qps_;
+
+  uint32_t port_entropy_;
 
   // Data path QPN to index mapping.
   std::unordered_map<uint32_t, int> qpn2idx_;
@@ -272,13 +274,13 @@ class RDMAContext {
   // Select a QP index in a round-robin manner.
   inline uint32_t select_qpidx_rr(void) {
     static uint32_t next_qp_idx = 0;
-    return next_qp_idx++ % kPortEntropy;
+    return next_qp_idx++ % port_entropy_;
   }
 
   // Select a QP index randomly.
   inline uint32_t select_qpidx_rand() {
     static thread_local std::mt19937 generator(std::random_device{}());
-    std::uniform_int_distribution<uint32_t> distribution(0, kPortEntropy - 1);
+    std::uniform_int_distribution<uint32_t> distribution(0, port_entropy_ - 1);
     return distribution(generator);
   }
 

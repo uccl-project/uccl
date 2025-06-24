@@ -515,6 +515,8 @@ class SubUcclFlow {
         pcb(link_bandwidth) {
     INIT_LIST_HEAD(&ack.ack_link);
     ack.subflow = this;
+
+    scoreboard_rtt_.resize(ucclParamPORT_ENTROPY());
   }
 
   ~SubUcclFlow() = default;
@@ -551,7 +553,7 @@ class SubUcclFlow {
   RXTracking rxtracking;
 
   // RTT scoreboard for each path.
-  double scoreboard_rtt_[kPortEntropy];
+  std::vector<double> scoreboard_rtt_;
 
   inline void update_scoreboard_rtt(uint64_t newrtt_tsc, uint32_t qpidx) {
     scoreboard_rtt_[qpidx] = (1 - kPPEwmaAlpha) * scoreboard_rtt_[qpidx] +

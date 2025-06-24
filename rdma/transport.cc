@@ -303,8 +303,10 @@ inline void RDMAEndpoint::initialize_resources(int total_num_engines) {
   active_flows_vec_.resize(num_devices_);
   active_flows_spin_.resize(num_devices_);
 
-  printf("Initialized %d channels for %d devices with %d engines per device\n",
-         total_num_engines, num_devices_, num_engines_per_dev_);
+  printf(
+      "Initialized %d engines for %d devices totally, with %d engines per "
+      "device\n",
+      total_num_engines, num_devices_, num_engines_per_dev_);
 }
 
 void RDMAEndpoint::cleanup_resources() {
@@ -615,9 +617,9 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
 
   {
     DCHECK(rdma_ctx_map_.find(ctrl_work.peer_id) == rdma_ctx_map_.end());
-    rdma_ctx = RDMAFactory::CreateContext(&rto_tm_, &engine_outstanding_bytes_,
-                                          eqds_, dev, engine_idx_ % ucclParamNUM_ENGINES(),
-                                          meta, &io_ctx_);
+    rdma_ctx = RDMAFactory::CreateContext(
+        &rto_tm_, &engine_outstanding_bytes_, eqds_, dev,
+        engine_idx_ % ucclParamNUM_ENGINES(), meta, &io_ctx_);
     std::tie(std::ignore, ret) =
         rdma_ctx_map_.insert({ctrl_work.peer_id, rdma_ctx});
     DCHECK(ret);
@@ -640,14 +642,14 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
     }
 
     char buf[total_size];
-    for (auto i = 0; i < kPortEntropy; i++) {
+    for (auto i = 0; i < ucclParamPORT_ENTROPY(); i++) {
       memcpy(buf + i * size, &rdma_ctx->dp_qps_[i].qp->qp_num,
              sizeof(uint32_t));
     }
 
     if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
-      memcpy(buf + kPortEntropy * size, &rdma_ctx->credit_qp_->qp_num,
-             sizeof(uint32_t));
+      memcpy(buf + ucclParamPORT_ENTROPY() * size,
+             &rdma_ctx->credit_qp_->qp_num, sizeof(uint32_t));
     }
 
     // Send ctrl qpn and our peer id to remote peer.
@@ -676,7 +678,7 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
     next_install_engine->store(next_install_engine->load() + 1);
 
     // Modify QPs to RTR and RTS.
-    for (auto i = 0; i < kPortEntropy; i++) {
+    for (auto i = 0; i < ucclParamPORT_ENTROPY(); i++) {
       auto remote_qpn = *reinterpret_cast<uint32_t*>(buf + i * size);
       auto qp = rdma_ctx->dp_qps_[i].qp;
 
@@ -689,7 +691,7 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
 
     if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
       auto credit_rqpn =
-          *reinterpret_cast<uint32_t*>(buf + kPortEntropy * size);
+          *reinterpret_cast<uint32_t*>(buf + ucclParamPORT_ENTROPY() * size);
       auto credit_qp = rdma_ctx->credit_qp_;
       ret = modify_qp_rtr(credit_qp, dev, &rdma_ctx->remote_ctx_, credit_rqpn);
       DCHECK(ret == 0) << "Failed to modify Ctrl QP to RTR";
@@ -1657,6 +1659,9 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
   context_ = factory_dev->context;
   gid_idx_ = factory_dev->gid_idx;
 
+  port_entropy_ = ucclParamPORT_ENTROPY();
+  dp_qps_.resize(port_entropy_);
+
   link_speed = util_rdma_get_link_speed_from_ibv_speed(
       factory_dev->port_attr.active_speed, factory_dev->port_attr.active_width);
   remote_ctx_.remote_gid = meta.install_ctx.remote_gid;
@@ -1694,7 +1699,7 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
   qpAttr.port_num = factory_dev->ib_port_num;
   qpAttr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE;
 
-  for (int i = 0; i < kPortEntropy; i++) {
+  for (int i = 0; i < ucclParamPORT_ENTROPY(); i++) {
     struct ibv_qp* qp = ibv_create_qp(pd_, &qp_init_attr);
     UCCL_INIT_CHECK(qp != nullptr, "ibv_create_qp failed for data path QP");
 
@@ -1807,7 +1812,7 @@ RDMAContext::~RDMAContext() {
     }
   }
 
-  for (int i = 0; i < kPortEntropy; i++) {
+  for (int i = 0; i < ucclParamPORT_ENTROPY(); i++) {
     ibv_destroy_qp(dp_qps_[i].qp);
   }
 
@@ -2291,7 +2296,7 @@ bool RDMAContext::try_retransmit_chunk(SubUcclFlow* subflow,
   DCHECK(ret == 0) << ret;
 
   UCCL_LOG_IO << "successfully retransmit chunk for QP#"
-              << (lossy_qpw - dp_qps_)
+              << std::distance(dp_qps_.begin(), dp_qps_.begin() + wr_ex->qpidx)
               << ", remote_addr: " << wr_ex->wr.wr.rdma.remote_addr
               << ", chunk_size: " << wr_ex->sge.length
               << ", csn: " << IMMData(ntohl(wr_ex->wr.imm_data)).GetCSN()
@@ -2423,7 +2428,7 @@ void RDMAContext::uc_rx_ack(struct ibv_cq_ex* cq_ex, UcclSackHdr* ucclsackh) {
         remote_queueing_tsc, &subflow->unacked_bytes_);
     reduced_bytes -= subflow->unacked_bytes_;
     *engine_unacked_bytes_ -= reduced_bytes;
-    if (qpidx < kPortEntropy)
+    if (qpidx < port_entropy_)
       subflow->update_scoreboard_rtt(newrtt_tsc, qpidx);
     else {
       // This ack is for retransmitted chunk.

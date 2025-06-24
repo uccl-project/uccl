@@ -18,13 +18,13 @@ UCCL_PARAM(ROCE_GID_IDX, "ROCE_GID_IDX", 3);
 #ifndef __HIP_PLATFORM_AMD__
 // # of engines per device.
 UCCL_PARAM(NUM_ENGINES, "NUM_ENGINES", 4);
-// Path/QP per engine. The total number is NUM_ENGINES * kPortEntropy.
-static constexpr uint32_t kPortEntropy = 32;
+// Path/QP per engine. The total number is NUM_ENGINES * PORT_ENTROPY.
+UCCL_PARAM(PORT_ENTROPY, "PORT_ENTROPY", 32);
 // Maximum chunk size (Bytes) for each WQE.
 static constexpr uint32_t kChunkSize = 32 << 10;
 #else
 UCCL_PARAM(NUM_ENGINES, "NUM_ENGINES", 1);
-static constexpr uint32_t kPortEntropy = 256;
+UCCL_PARAM(PORT_ENTROPY, "PORT_ENTROPY", 256);
 static constexpr uint32_t kChunkSize = 128 << 10;
 #endif
 
@@ -36,8 +36,14 @@ static uint32_t NUM_CPUS = std::thread::hardware_concurrency();
 // Each dev use [ENGINE_CPU_START_LIST[dev], ENGINE_CPU_START_LIST[dev] +
 // NUM_ENGINES)
 static int64_t ENGINE_CPU_START_LIST[8] = {
-    16, 16 + ucclParamNUM_ENGINES(), 16 + 2 * ucclParamNUM_ENGINES(), 16 + 3 * ucclParamNUM_ENGINES(),
-    96, 96 + ucclParamNUM_ENGINES(), 96 + 2 * ucclParamNUM_ENGINES(), 96 + 3 * ucclParamNUM_ENGINES(),
+    16,
+    16 + ucclParamNUM_ENGINES(),
+    16 + 2 * ucclParamNUM_ENGINES(),
+    16 + 3 * ucclParamNUM_ENGINES(),
+    96,
+    96 + ucclParamNUM_ENGINES(),
+    96 + 2 * ucclParamNUM_ENGINES(),
+    96 + 3 * ucclParamNUM_ENGINES(),
 };
 
 static constexpr uint32_t kMaxAckWRs = 8;
@@ -101,8 +107,9 @@ static constexpr enum engine_lb_policy kEngineLBPolicy = ENGINE_POLICY_RR;
 
 static uint32_t const PACER_CPU_START = 3 * NUM_CPUS / 4;
 
-constexpr static int kTotalQP =
-    kPortEntropy + (kReceiverCCA == RECEIVER_CCA_EQDS ? 1 : 0) /* Credit QP */;
+static int const kTotalQP =
+    ucclParamPORT_ENTROPY() +
+    (kReceiverCCA == RECEIVER_CCA_EQDS ? 1 : 0) /* Credit QP */;
 // Recv buffer size smaller than kRCSize will be handled by RC directly.
 // static constexpr uint32_t kRCSize = 8192;
 static constexpr uint32_t kRCSize = 0;
