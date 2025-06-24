@@ -40,10 +40,10 @@
 #define ASSUME_WR_IN_ORDER
 #define NUMA_AWARE_SCHEDULING
 #define ENABLE_PROXY_CUDA_MEMCPY
-// #define SYNCHRONOUS_COMPLETION
+#define SYNCHRONOUS_COMPLETION
 #define kQueueSize 1024
 #define kQueueMask (kQueueSize - 1)
-#define kMaxInflight 512
+#define kMaxInflight 32
 #define kBatchSize 16
 #define kIterations 1000000
 #define kNumThBlocks 4
