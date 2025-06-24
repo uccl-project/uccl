@@ -721,9 +721,7 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
     : num_engines_per_dev_(num_engines_per_dev),
       stats_thread_([this]() { stats_thread_fn(); }) {
   static std::once_flag flag_once;
-  std::call_once(flag_once, [&]() {
-    num_devices_ = RDMAFactory::init_devs();
-  });
+  std::call_once(flag_once, [&]() { num_devices_ = RDMAFactory::init_devs(); });
 
   rdma_ctl_ = rdma_ctl;
 
@@ -1657,12 +1655,13 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
 
   context_ = factory_dev->context;
   gid_idx_ = factory_dev->gid_idx;
-  
+
   remote_ctx_.remote_gid = meta.install_ctx.remote_gid;
   remote_ctx_.remote_port_attr = meta.install_ctx.remote_port_attr;
 
-  remote_ctx_.dest_ah = create_ah(factory_dev->pd, dev, factory_dev->ib_port_num,
-                                  remote_ctx_.remote_gid, remote_ctx_.remote_port_attr);
+  remote_ctx_.dest_ah =
+      create_ah(factory_dev->pd, dev, factory_dev->ib_port_num,
+                remote_ctx_.remote_gid, remote_ctx_.remote_port_attr);
   UCCL_INIT_CHECK(remote_ctx_.dest_ah != nullptr, "create_ah failed");
 
   mtu_bytes_ =

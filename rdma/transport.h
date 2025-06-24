@@ -159,7 +159,7 @@ class RDMAContext {
   // MTU of this device in bytes.
   uint32_t mtu_bytes_;
 
-  // GID Index of the device 
+  // GID Index of the device
   int gid_idx_;
 
   // (Engine) Buffer pool for credit chunks.
@@ -1140,8 +1140,8 @@ class UcclFlow {
     // Fifo QP.
     util_rdma_create_qp(factory_dev->context, &comm_base->fifo_qp, IBV_QPT_RC,
                         false, false, &comm_base->flow_cq, false, kFifoCQSize,
-                        factory_dev->pd, factory_dev->ib_port_num, 
-                        &comm_base->fifo_mr, nullptr, kFifoMRSize, 
+                        factory_dev->pd, factory_dev->ib_port_num,
+                        &comm_base->fifo_mr, nullptr, kFifoMRSize,
                         kMaxReq * kMaxRecv, kMaxReq * kMaxRecv, 1, 1);
     comm_base->fifo =
         reinterpret_cast<struct RemFifo*>(comm_base->fifo_mr->addr);
@@ -1182,11 +1182,12 @@ class UcclFlow {
 
     // GPU flush QP for receiver.
     if (!is_send_) {
-      util_rdma_create_qp(
-          factory_dev->context, &recv_comm_.gpu_flush_qp, IBV_QPT_RC, false,
-          false, &comm_base->flow_cq, true, 0, factory_dev->pd, factory_dev->ib_port_num,
-          &recv_comm_.gpu_flush_mr, &recv_comm_.gpu_flush, sizeof(int),
-          kMaxReq * kMaxRecv, kMaxReq * kMaxRecv, kMaxSge, kMaxSge);
+      util_rdma_create_qp(factory_dev->context, &recv_comm_.gpu_flush_qp,
+                          IBV_QPT_RC, false, false, &comm_base->flow_cq, true,
+                          0, factory_dev->pd, factory_dev->ib_port_num,
+                          &recv_comm_.gpu_flush_mr, &recv_comm_.gpu_flush,
+                          sizeof(int), kMaxReq * kMaxRecv, kMaxReq * kMaxRecv,
+                          kMaxSge, kMaxSge);
 
       recv_comm_.gpu_flush_sge.addr = (uint64_t)&recv_comm_.gpu_flush;
       recv_comm_.gpu_flush_sge.length = 1;
