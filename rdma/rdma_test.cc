@@ -23,17 +23,21 @@
 #include <unistd.h>
 
 //////////////////////////////////////////////////////////////////////
-#define DEV_INDEX 1           // mlx5_1-8
+#define DEV_INDEX 0           // mlx5_0-7
 #define USE_GPU 0             // GPU_0-7
 #define NUM_QPS 4             // Number of QPs.
 #define MSG_SIZE (1ul << 20)  // Message size.
 #define OUTSTNADING_MSG 4     // Number of outstanding messages.
 #define ITERATIONS 1000000    // Number of iterations.
-//#define MANAGED                     // Use cudaMallocManaged rather than
-// cudaMalloc
+#define ROCE_NET false        // true: RoCE, false: IB
+// #define MANAGED            // Use cudaMallocManaged not cudaMalloc
 //////////////////////////////////////////////////////////////////////
 
-#define GID_INDEX 3
+#if ROCE_NET
+static constexpr uint8_t GID_INDEX = 0;
+#else
+static constexpr uint8_t GID_INDEX = 3;
+#endif
 #define PORT_NUM 1
 #define QKEY 0x12345
 #define TCP_PORT 55555
@@ -55,6 +59,7 @@ struct metadata {
   uint32_t rkey;
   union ibv_gid gid;
   uint64_t addr;
+  uint16_t lid;
 };
 
 struct rdma_context {
@@ -196,16 +201,21 @@ void modify_qp_rtr(struct rdma_context* rdma) {
 
   attr.qp_state = IBV_QPS_RTR;
   attr.path_mtu = rdma->port_attr.active_mtu;
-  attr.ah_attr.port_num = PORT_NUM;
 
+#if ROCE_NET
   attr.ah_attr.is_global = 1;
   attr.ah_attr.grh.dgid = rdma->remote_meta.gid;
   attr.ah_attr.grh.sgid_index = GID_INDEX;
   attr.ah_attr.grh.hop_limit = 0xff;
   attr.ah_attr.grh.traffic_class = 0;
-  attr.ah_attr.sl = 0;
-  attr.rq_psn = BASE_PSN;
+#else
+  attr.ah_attr.is_global = 0;
+  attr.ah_attr.dlid = rdma->remote_meta.lid;
+#endif
 
+  attr.ah_attr.sl = 0;
+  attr.ah_attr.port_num = PORT_NUM;
+  attr.rq_psn = BASE_PSN;
   attr.min_rnr_timer = 12;
   attr.max_dest_rd_atomic = 1;
 
@@ -275,8 +285,9 @@ struct rdma_context* init_rdma(char const* server_ip) {
 
   DCHECK(rdma->port_attr.state == IBV_PORT_ACTIVE) << "Port is not active";
 
-  DCHECK(rdma->port_attr.link_layer == IBV_LINK_LAYER_ETHERNET)
-      << "RoCE is not supported";
+  DCHECK(rdma->port_attr.link_layer ==
+         (ROCE_NET ? IBV_LINK_LAYER_ETHERNET : IBV_LINK_LAYER_INFINIBAND))
+      << "Link layer error";
 
   DCHECK(ibv_query_gid(rdma->ctx, 1, GID_INDEX, &rdma->gid) == 0)
       << "Failed to query gid";
@@ -307,18 +318,20 @@ struct rdma_context* init_rdma(char const* server_ip) {
   DCHECK(cudaDeviceSynchronize() == cudaSuccess) << "Failed to synchronize";
 #endif
 
-  rdma->mr = ibv_reg_mr(rdma->pd, rdma->local_buf, OUTSTNADING_MSG * MSG_SIZE,
-                        IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                            IBV_ACCESS_REMOTE_READ);
+  rdma->mr =
+      ibv_reg_mr(rdma->pd, rdma->local_buf, OUTSTNADING_MSG * MSG_SIZE,
+                 IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                     IBV_ACCESS_REMOTE_READ | IBV_ACCESS_RELAXED_ORDERING);
 #else
   if (posix_memalign((void**)&rdma->local_buf, sysconf(_SC_PAGESIZE),
                      OUTSTNADING_MSG * MSG_SIZE)) {
     perror("Failed to allocate local buffer");
     exit(1);
   }
-  rdma->mr = ibv_reg_mr(rdma->pd, rdma->local_buf, OUTSTNADING_MSG * MSG_SIZE,
-                        IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                            IBV_ACCESS_REMOTE_READ);
+  rdma->mr =
+      ibv_reg_mr(rdma->pd, rdma->local_buf, OUTSTNADING_MSG * MSG_SIZE,
+                 IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                     IBV_ACCESS_REMOTE_READ | IBV_ACCESS_RELAXED_ORDERING);
 #endif
 
   DCHECK(rdma->mr) << "Failed to register memory regions";
@@ -340,6 +353,7 @@ struct rdma_context* init_rdma(char const* server_ip) {
   }
   local_meta.rkey = rdma->mr->rkey;
   local_meta.addr = (uint64_t)rdma->local_buf;
+  local_meta.lid = rdma->port_attr.lid;  // Only for IB
   memcpy(&local_meta.gid, &rdma->gid, sizeof(local_meta.gid));
 
   exchange_qpns(server_ip, &local_meta, &rdma->remote_meta);
@@ -541,6 +555,10 @@ void check_gdr_support() {
     printf("GPU%d GDR support: %d\n", i, attr);
   }
 }
+
+// TO RUN:
+// [client]: ./rdma_test
+// [server]: ./rdma_test 10.0.100.114
 
 int main(int argc, char* argv[]) {
   signal(SIGINT, signal_handler);
