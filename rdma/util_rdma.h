@@ -973,7 +973,7 @@ static inline struct ibv_srq* util_rdma_create_srq(struct ibv_pd* pd,
   return srq;
 }
 
-static inline struct ibv_ah* create_ah(struct ibv_pd* pd, int dev, uint8_t port,
+static inline struct ibv_ah* create_ah(struct ibv_pd* pd, int dev, uint8_t port, 
                                        union ibv_gid remote_gid,
                                        struct ibv_port_attr remote_port_attr) {
   struct ibv_ah_attr ah_attr = {};
@@ -982,14 +982,14 @@ static inline struct ibv_ah* create_ah(struct ibv_pd* pd, int dev, uint8_t port,
     ah_attr.is_global = 1;
     ah_attr.grh.dgid = remote_gid;
     ah_attr.grh.traffic_class = ROCE_TRAFFIC_CLASS;
-    ah_attr.grh.sgid_index = GID_IDX;
+    ah_attr.grh.sgid_index = ROCE_GID_IDX;
     ah_attr.grh.flow_label = 0;
     ah_attr.grh.hop_limit = 0xff;
     ah_attr.sl = ROCE_SERVICE_LEVEL;
   } else {
     ah_attr.is_global = 0;
     ah_attr.dlid = remote_port_attr.lid;
-    attr.ah_attr.sl = IB_SERVICE_LEVEL;
+    ah_attr.sl = IB_SERVICE_LEVEL;
   }
 
   ah_attr.port_num = port;

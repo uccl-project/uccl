@@ -62,12 +62,15 @@ static constexpr uint32_t kMaxUnAckedBytesPerFlow =
 // Limit the outstanding bytes on each engine.
 // Low means if a flow exceeds its own budget but doesn't exceed the Low
 // threshold, it can send until Low threshold.
-static constexpr uint32_t kMaxUnAckedBytesPerEngineLow =
-    (ROCE_NET ? 8 : 18) * std::max(kChunkSize, 32768u);
+static constexpr uint32_t kMaxUnAckedBytesPerEngineLowForRoCE =
+    (8) * std::max(kChunkSize, 32768u);
+static constexpr uint32_t kMaxUnAckedBytesPerEngineLowForIB =
+    (18) * std::max(kChunkSize, 32768u);
 // High means if all flows reach this threshold, all flows can't send any bytes.
-static constexpr uint32_t kMaxUnAckedBytesPerEngineHigh =
-    (ROCE_NET ? 12 : 24) * std::max(kChunkSize, 32768u);
-
+static constexpr uint32_t kMaxUnAckedBytesPerEngineHighForRoCE =
+    (12) * std::max(kChunkSize, 32768u);
+static constexpr uint32_t kMaxUnAckedBytesPerEngineHighForIB =
+    (24) * std::max(kChunkSize, 32768u);
 // Congestion control algorithm.
 enum SenderCCA {
   SENDER_CCA_NONE,

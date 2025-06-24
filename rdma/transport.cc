@@ -1228,7 +1228,7 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
     if (it->second.ready == 1) {
       remote_ctx.remote_gid = it->second.remote_gid;
       remote_ctx.remote_port_attr = it->second.remote_port_attr;
-      peer_map_mu_[dev].unlock();
+      peer_map_mu_[dev]->unlock();
       break;
     }
 
