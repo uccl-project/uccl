@@ -802,7 +802,6 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
     // Create listening sockets
     create_listen_socket(&test_listen_fds_[i], kTestListenPort + i);
   }
-#endif
 }
 #endif
 
