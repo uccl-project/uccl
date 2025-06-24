@@ -9,17 +9,25 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+const uint8_t ib_cluster_dev_suffix_list[8] = {4, 5, 6, 7, 0, 1, 2, 3};
+
 Endpoint::Endpoint(const uint32_t local_gpu_idx, const uint32_t num_cpus)
     : local_gpu_idx_(local_gpu_idx), num_cpus_(num_cpus) {
   py::gil_scoped_release release;
   std::cout << "Creating Engine with GPU index: " << local_gpu_idx
             << ", CPUs: " << num_cpus << std::endl;
 
+  google::InitGoogleLogging("kvtrans_engine");
+  google::InstallFailureSignalHandler();
+
   // Initialize the RDMA endpoint with lazy creation.
-  ep_ = new uccl::RDMAEndpoint(NUM_DEVICES, num_cpus);
+  ep_ =
+      new uccl::RDMAEndpoint(ib_cluster_dev_suffix_list, NUM_DEVICES, num_cpus);
 
   // Initialize the engine based on the GPU index.
+#ifdef LAZY_CREATE_ENGINE
   ep_->initialize_engine_by_dev(local_gpu_idx_);
+#endif
 
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
@@ -78,7 +86,6 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
 
 bool Endpoint::reg_kv(void const* data, size_t size, uint64_t& mr_id) {
   py::gil_scoped_release release;
-  std::cout << "Registering KV, size: " << size << " bytes" << std::endl;
 
   mr_id = next_mr_id_.fetch_add(1);
 
@@ -94,43 +101,47 @@ bool Endpoint::send_kv(uint64_t conn_id, uint64_t mr_id, void const* data,
                        size_t size) {
   py::gil_scoped_release release;
   DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
-  std::cout << "Sending KV with mr_id: " << mr_id << ", size: " << size
-            << " bytes" << std::endl;
   uccl::ucclRequest ureq;
 
   auto conn = conn_id_to_conn_[conn_id];
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
 
-  ep_->uccl_send_async(
-      static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle, data,
-      size, &ureq);
+  int rc;
+  do {
+    rc = ep_->uccl_send_async(
+        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
+        data, size, &ureq);
+    if (rc == -1) {
+      std::this_thread::yield();
+    }
+  } while (rc == -1);
 
   ep_->uccl_poll_ureq(&ureq);
 
-  std::cout << "KV sent successfully" << std::endl;
   return true;
 }
 
 bool Endpoint::recv_kv(uint64_t conn_id, uint64_t mr_id, void* data,
                        size_t max_size, size_t& recv_size) {
   py::gil_scoped_release release;
-
-  std::cout << "Receiving KV with mr_id: " << mr_id << std::endl;
   uccl::ucclRequest ureq;
 
   auto conn = conn_id_to_conn_[conn_id];
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
   int max_size_int = static_cast<int>(max_size);
 
-  ep_->uccl_recv_async(
-      static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
-      &data, &max_size_int, 1, &ureq);
+  int rc;
+  do {
+    rc = ep_->uccl_recv_async(
+        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
+        &data, &max_size_int, 1, &ureq);
+    if (rc == -1) {
+      std::this_thread::yield();
+    }
+  } while (rc == -1);
 
   ep_->uccl_poll_ureq(&ureq);
 
   recv_size = ureq.recv.data_len[0];
-
-  std::cout << "KV received successfully, size: " << recv_size << " bytes"
-            << std::endl;
   return true;
 }

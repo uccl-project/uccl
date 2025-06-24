@@ -773,7 +773,7 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
       eqds_[i] = new eqds::EQDS(i, factory_dev->link_bw);
     }
   }
-
+#ifndef LAZY_CREATE_ENGINE
   for (int engine_id = 0, engine_cpu_id; engine_id < total_num_engines;
        engine_id++) {
     auto dev = engine_id / num_engines_per_dev;
@@ -793,7 +793,7 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
           engine_ptr->run();
         }));
   }
-
+#endif
   ctx_pool_ = new SharedPool<PollCtx*, true>(kMaxInflightMsg);
   ctx_pool_buf_ = new uint8_t[kMaxInflightMsg * sizeof(PollCtx)];
   for (int i = 0; i < kMaxInflightMsg; i++) {
