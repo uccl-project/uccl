@@ -101,6 +101,7 @@ int RDMAFactory::init_devs() {
                0);
       }
 
+      dev.numa_node = get_dev_numa_node(dev.ib_name);
       dev.dev_attr = dev_attr;
       dev.port_attr = port_attr;
       dev.ib_port_num = port_num;

@@ -24,6 +24,6 @@ This benchmark is done on Azure [HBv2/HBrsv2](https://learn.microsoft.com/en-us/
 5. Run `sync_repo.sh` to copy this repo to all nodes. It will also compile `uccl/rdma` and `uccl/rdma/azure_perm_traffic`.
 6. ​Run the test by executing:
 
-```shell
+```bash
 ./run.sh <number_of_nodes>
 ```

@@ -34,7 +34,8 @@ static constexpr uint32_t kPortEntropy = 32;
 static constexpr uint32_t kChunkSize = 32 << 10;
 #else
 #ifdef HPC_FUND_CLUSTER
-// This cluster has low PCIe-CPU interconnect bw, therefore we use larger chunk size to reduce the number of WQEs.
+// This cluster has low PCIe-CPU interconnect bw, therefore we use larger chunk
+// size to reduce the number of WQEs.
 static constexpr uint32_t NUM_ENGINES = 1;
 static constexpr uint32_t kPortEntropy = 256;
 static constexpr uint32_t kChunkSize = 128 << 10;
@@ -43,7 +44,7 @@ static constexpr uint32_t NUM_ENGINES = 4;
 static constexpr uint32_t kPortEntropy = 32;
 static constexpr uint32_t kChunkSize = 32 << 10;
 #endif
-#endif  
+#endif
 
 // Broadcom NICs do not support ibv_cq_ex.
 #ifndef BROADCOM_NIC

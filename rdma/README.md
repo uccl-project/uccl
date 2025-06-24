@@ -18,7 +18,7 @@ HOSTNAME:               The MPI host file (e.g., hosts_single_process, hosts_mul
 
 CTRL_NIC:               The name of control NIC.
 
-Usage: ./run_nccl_test.sh [NCCL/UCCL: 0/1, default:1] [# of total processes, default:2] [# of GPUs per node, default:8] [allreduce/alltoall: 0/1] [# of processes per node, default:1] [MPI host file]
+Usage: ./run_nccl_test.sh [NCCL/UCCL: 0/1, default:1] [# of total processes, default:2] [# of GPUs per process, default:8] [allreduce/alltoall: 0/1] [# of processes per node, default:1] [MPI host file]
 ```
 
 ### run_rccl_test.sh: 
@@ -32,7 +32,7 @@ Usage: ./run_rccl_test.sh [RCCL/UCCLL: rccl/uccl, default:uccl]
 
 Build `nccl` and `nccl-tests`: 
 
-```shell
+```bash
 # Eg, /home/yangz/uccl
 export UCCL_HOME=<the absolute path of uccl>
 
@@ -46,21 +46,26 @@ cd $UCCL_HOME/thirdparty/nccl-tests
 make MPI=1 MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi CUDA_HOME=/usr/local/cuda NCCL_HOME=$UCCL_HOME/thirdparty/nccl/build -j
 ```
 
-Build `libnccl-net.so`
+Build `libnccl-net-uccl.so`
 
-```shell
+```bash
 cd $UCCL_HOME/rdma
 make -j
 ```
 
 Running `nccl-tests`:
 
-```shell
+```bash
 cd $UCCL_HOME/scripts
 python rsync.py
 
 cd $UCCL_HOME/rdma
+# Edit hosts_single_process/hosts_multi_process to fill up the node addresses. 
+
+# 1) 8 GPUs per process
 ./run_nccl_test.sh 1 2 8 1
+# 2) 1 GPU per process
+./run_nccl_test.sh 1 16 1 1 8 hosts_multi_process
 ```
 
 
@@ -71,13 +76,13 @@ This guide assumes under the [AMD HPC Fund cluster](https://amdresearch.github.i
 Prepare dependency: install and activate recent Anaconda to prepare necessary libraries such as `-lglog -lgflags -lgtest`. Consider installing it into `$WORK` directory as Anaconda is large. 
 
 Then inside the conda env, install libs that contains glog, gflags, and gtest: 
-```shell
+```bash
 pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3
 ```
 
 Build `rccl` and `rccl-tests`: 
 
-```shell
+```bash
 # Eg, /home1/yangzhou/uccl
 export UCCL_HOME=<the absolute path of uccl>
 # Eg, /work1/yzhou/yangzhou/anaconda3/lib
@@ -93,14 +98,14 @@ make MPI=1 MPI_HOME=/opt/ohpc/pub/mpi/openmpi4-gnu12/4.1.5 HIP_HOME=/opt/rocm-6.
 
 Build `librccl-net-uccl.so`
 
-```shell
+```bash
 cd $UCCL_HOME/rdma
 make -f Makefile_hip -j "CXXFLAGS=-DHPC_FUND_CLUSTER"
 ```
 
 Run `rccl-tests`:
 
-```shell
+```bash
 # Using slurm to allocate two AMD nodes
 salloc -N 2 -n 2 -p mi2104x -t 00:30:00
 
@@ -112,14 +117,14 @@ salloc -N 2 -n 2 -p mi2104x -t 00:30:00
 
 Using the following to build `librccl-net-uccl.so`
 
-```shell
+```bash
 cd $UCCL_HOME/rdma
 make -f Makefile_hip -j "CXXFLAGS=-DBROADCOM_NIC"
 ```
 
 Run `rccl-tests`:
 
-```shell
+```bash
 # Edit scripts/node_ips/amd.txt to fill up the node addresses. 
 
 # Usage: ./run_rccl_test.sh [rccl/uccl, default: uccl]
