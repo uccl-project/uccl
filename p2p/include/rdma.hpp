@@ -27,6 +27,8 @@ extern thread_local struct ibv_qp* ack_qp;
 extern thread_local uintptr_t remote_addr;
 extern thread_local uint32_t remote_rkey;
 extern thread_local std::atomic<bool> g_progress_run;
+extern thread_local uint64_t largest_completed_wr;
+extern thread_local bool has_received_ack;
 // extern thread_local std::unordered_set<uint64_t> finished_wrs;
 // extern thread_local std::mutex finished_wrs_mutex;
 // extern thread_local std::unordered_set<uint64_t> finished_wrs;
@@ -34,6 +36,8 @@ extern thread_local std::atomic<bool> g_progress_run;
 struct RDMAConnectionInfo {
   uint32_t qp_num;  // Queue pair number
   uint32_t psn;     // Packet sequence number
+  uint32_t ack_qp_num;
+  uint32_t ack_psn;
   uint32_t rkey;    // Memory region key
   uintptr_t addr;   // Buffer address
   uint16_t lid;     // Local ID
@@ -70,7 +74,6 @@ bool check_cq_completion();
 void local_poll_completions(ibv_cq* cq,
                             std::unordered_set<uint64_t>& finished_wrs,
                             std::mutex& finished_wrs_mutex);
-void local_poll_completions_plain(ibv_cq* cq);
 
 void global_rdma_init(void* gpu_buf, size_t bytes, RDMAConnectionInfo* local,
                       int rank);
@@ -101,7 +104,8 @@ void print_average_async_memcpy_time();
 void remote_notify_sender_that_wr_id_has_completed(struct ibv_qp* local_ack_qp,
                                                    uint64_t& wr_id,
                                                    ibv_mr* local_ack_mr,
-                                                   uint64_t* ack_buf);
+                                                   uint64_t* ack_buf,
+                                                   int worker_idx);
 void local_init_ack_recv_ring(struct ibv_pd* pd, int depth);
 void remote_ensure_ack_sender_resources(ibv_pd* pd, uint64_t* ack_buf,
                                         ibv_mr*& ack_mr);

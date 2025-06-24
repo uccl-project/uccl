@@ -87,7 +87,7 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
         // Post the last wr is enough.
         remote_notify_sender_that_wr_id_has_completed(
             g_ring.ack_qp, task_wrs[task_wrs.size() - 1], g_ring.ack_mr,
-            g_ring.ack_buf);
+            g_ring.ack_buf, idx);
       }
     }
 
@@ -128,7 +128,7 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
         // Post the last wr is enough.
         remote_notify_sender_that_wr_id_has_completed(
             g_ring.ack_qp, task_wrs[task_wrs.size() - 1], g_ring.ack_mr,
-            g_ring.ack_buf);
+            g_ring.ack_buf, idx);
       }
     }
 
