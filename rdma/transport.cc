@@ -1690,7 +1690,7 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
   memset(&qpAttr, 0, sizeof(qpAttr));
   qpAttr.qp_state = IBV_QPS_INIT;
   qpAttr.pkey_index = 0;
-  qpAttr.port_num = IB_PORT_NUM;
+  qpAttr.port_num = factory_dev->ib_port_num;
   qpAttr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE;
 
   for (int i = 0; i < kPortEntropy; i++) {
@@ -2494,7 +2494,8 @@ void RDMAContext::burst_timing_wheel(void) {
   wheel->reap(rdtsc());
 
   auto num_chunks = std::min(kMaxBurstTW, (uint32_t)wheel->ready_queue_.size());
-
+  auto kMaxUnAckedBytesPerEngineHigh = (is_roce()? kMaxUnAckedBytesPerEngineHighForRoCE : kMaxUnAckedBytesPerEngineHighForIB)
+  
   for (auto i = 0; i < num_chunks; i++) {
     struct wr_ex* wr_ex =
         reinterpret_cast<struct wr_ex*>(wheel->ready_queue_.front().sslot_);
