@@ -6,16 +6,19 @@
 #include <unistd.h>
 
 // #define STATS
-// #define LAZY_CREATE_ENGINE
+#define LAZY_CREATE_ENGINE
+
+// #define USE_CQ_EX
+#define PIN_TO_NUMA
 
 /// Interface configuration.
 static char const* IB_DEVICE_NAME_PREFIX = "rdma";
 
 #ifndef __HIP_PLATFORM_AMD__
-static constexpr bool ROCE_NET = true;
+static constexpr bool ROCE_NET = false;
 // If SINGLE_CTRL_NIC is set, all devices will use the same IP.
-static std::string SINGLE_CTRL_NIC("enp164s0");
-static constexpr uint8_t DEVNAME_SUFFIX_LIST[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+static std::string SINGLE_CTRL_NIC("ds-eap-");
+static constexpr uint8_t DEVNAME_SUFFIX_LIST[8] = {0, 1, 2, 3, 4, 5, 6, 7};
 static constexpr uint8_t NUM_DEVICES = 8;
 // static constexpr uint8_t DEVNAME_SUFFIX_LIST[8] = {0, 2, 4, 6, 0, 0, 0, 0};
 // static constexpr uint8_t NUM_DEVICES = 4;
@@ -23,7 +26,7 @@ static constexpr double LINK_BANDWIDTH = 400.0 * 1e9 / 8;  // 400Gbps
 // # of engines per device.
 static constexpr uint32_t NUM_ENGINES = 4;
 // Path/QP per engine. The total number is NUM_ENGINES * kPortEntropy.
-static constexpr uint32_t kPortEntropy = 64;
+static constexpr uint32_t kPortEntropy = 32;
 // Maximum chunk size (Bytes) for each WQE.
 static constexpr uint32_t kChunkSize = 32 << 10;
 #else
@@ -40,12 +43,12 @@ static constexpr uint32_t kChunkSize = 32 << 10;
 /*********** FOR AMD MI300x CLUSTER ***********/
 static constexpr bool ROCE_NET = true;
 static std::string SINGLE_CTRL_NIC("cni0");
-static constexpr uint8_t NUM_DEVICES = 8;
-static constexpr uint8_t DEVNAME_SUFFIX_LIST[NUM_DEVICES] = {0, 1, 2, 3,
-                                                             4, 5, 6, 7};
+static constexpr uint8_t NUM_DEVICES = 4;
+static constexpr uint8_t DEVNAME_SUFFIX_LIST[NUM_DEVICES] = {0, 2, 3, 4};
+// static constexpr uint8_t DEVNAME_SUFFIX_LIST[NUM_DEVICES] = {0};
 static constexpr double LINK_BANDWIDTH = 400.0 * 1e9 / 8;  // 400Gbps
 static constexpr uint32_t NUM_ENGINES = 4;
-static constexpr uint32_t kPortEntropy = 64;
+static constexpr uint32_t kPortEntropy = 32;
 static constexpr uint32_t kChunkSize = 32 << 10;
 #endif
 
@@ -69,6 +72,10 @@ static uint32_t ENGINE_CPU_START_LIST[8] = {
     96, 96 + NUM_ENGINES, 96 + 2 * NUM_ENGINES, 96 + 3 * NUM_ENGINES,
 };
 
+static constexpr uint32_t kMaxAckWRs = 8;
+static constexpr uint32_t UD_ADDITION = 40;
+static constexpr uint32_t kMaxCtrlWRs = 2048;
+
 // Use RC rather than UC.
 static constexpr bool kRCMode = true;
 // Bypass the pacing stage.
@@ -79,15 +86,12 @@ static constexpr uint32_t kMaxUnAckedBytesPerFlow =
     2 * std::max(kChunkSize, 32768u);
 // Limit the outstanding bytes on each engine.
 // Low means if a flow exceeds its own budget but doesn't exceed the Low
-// threshold, it can send until Low threshold. static constexpr uint32_t
-// kMaxUnAckedBytesPerEngineLow = 18 * std::max(kChunkSize, 32768u);
+// threshold, it can send until Low threshold.
 static constexpr uint32_t kMaxUnAckedBytesPerEngineLow =
-    8 * std::max(kChunkSize, 32768u);
+    (ROCE_NET ? 8 : 18) * std::max(kChunkSize, 32768u);
 // High means if all flows reach this threshold, all flows can't send any bytes.
-// static constexpr uint32_t kMaxUnAckedBytesPerEngineHigh = 24 *
-// std::max(kChunkSize, 32768u);
 static constexpr uint32_t kMaxUnAckedBytesPerEngineHigh =
-    12 * std::max(kChunkSize, 32768u);
+    (ROCE_NET ? 12 : 24) * std::max(kChunkSize, 32768u);
 
 // Congestion control algorithm.
 enum SenderCCA {
@@ -127,9 +131,10 @@ static constexpr enum engine_lb_policy kEngineLBPolicy = ENGINE_POLICY_RR;
 static uint32_t const PACER_CPU_START = 3 * NUM_CPUS / 4;
 
 constexpr static int kTotalQP =
-    kPortEntropy + 1 /* Credit QP */ + (kRCMode ? 0 : 1) /* Ctrl QP */;
+    kPortEntropy + (kReceiverCCA == RECEIVER_CCA_EQDS ? 1 : 0) /* Credit QP */;
 // Recv buffer size smaller than kRCSize will be handled by RC directly.
-static constexpr uint32_t kRCSize = 8192;
+// static constexpr uint32_t kRCSize = 8192;
+static constexpr uint32_t kRCSize = 0;
 // fallback to nccl
 // static constexpr uint32_t kRCSize = 4000000;
 // Minimum post receive size in NCCL.
@@ -164,7 +169,7 @@ static constexpr uint32_t kCQMODCount = 32;
 // CQ moderation period in microsecond.
 static constexpr uint32_t kCQMODPeriod = 100;
 // Maximum size of inline data.
-static constexpr uint32_t kMaxInline = 512;
+static constexpr uint32_t kMaxInline = 128;
 // Maximum number of SGEs in one WQE.
 static constexpr uint32_t kMaxSge = 2;
 // Maximum number of outstanding receive messages in one recv request.

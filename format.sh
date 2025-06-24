@@ -4,7 +4,7 @@
 set -e
 
 # Directories to format (excluding thirdparty/, scripts/, doc/, etc.)
-DIRECTORIES=("afxdp" "efa" "gpu_driven" "rdma" "misc" "p2p" "include")
+DIRECTORIES=("afxdp" "efa" "gpu_driven" "rdma" "misc" "p2p" "include" "kvtrans")
 EXTENSIONS=("cpp" "cxx" "cc" "h" "hpp" "cu" "cuh")
 EXCLUDE=("afxdp/lib")
 

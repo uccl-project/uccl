@@ -295,18 +295,7 @@ class EQDS {
     }
   }
 
-  EQDS(int dev) : dev_(dev), channel_() {
-    pacing_interval_tsc_ = us_to_cycles(kPacingIntervalUs, freq_ghz);
-
-    // Initialize the pacer thread.
-    pacer_th_ = std::thread([this] {
-      // Pin the pacer thread to a specific CPU.
-      pin_thread_to_cpu(PACER_CPU_START + dev_);
-      while (!shutdown_) {
-        run_pacer();
-      }
-    });
-  }
+  EQDS(int dev);
 
   ~EQDS() {}
 

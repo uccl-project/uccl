@@ -1,12 +1,31 @@
 #include "eqds.h"
 #include "transport_config.h"
 #include "util/list.h"
+#include "util_rdma.h"
 #include <glog/logging.h>
 #include <infiniband/verbs.h>
 
 namespace uccl {
 
 namespace eqds {
+
+EQDS(int dev) : dev_(dev), channel_() {
+  pacing_interval_tsc_ = us_to_cycles(kPacingIntervalUs, freq_ghz);
+  int numa_node = RDMAFactory::get_factory_dev(dev_)->numa_node;
+
+  // Initialize the pacer thread.
+  pacer_th_ = std::thread([this, numa_node] {
+#ifdef PIN_TO_NUMA
+    pin_thread_to_numa(numa_node);
+#else
+    // Pin the pacer thread to a specific CPU.
+    pin_thread_to_cpu(PACER_CPU_START + dev_);
+#endif
+    while (!shutdown_) {
+      run_pacer();
+    }
+  });
+}
 
 // Make progress on the pacer.
 void EQDS::run_pacer(void) {
