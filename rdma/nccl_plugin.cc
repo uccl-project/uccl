@@ -1,6 +1,7 @@
 #include "nccl_net.h"
 #include "transport.h"
 #include "transport_config.h"
+#include "util_rdma.h"
 #include <glog/logging.h>
 #include <atomic>
 #include <mutex>
@@ -84,17 +85,13 @@ struct ucclSendComm {
 ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
   std::cout << "Hello UCCL from PID: " << getpid() << std::endl;
 
-#ifdef LAZY_CREATE_ENGINE
-  ep = std::make_shared<RDMAEndpoint>(NUM_DEVICES, NUM_ENGINES);
-#else
-  ep = std::make_shared<RDMAEndpoint>(DEVNAME_SUFFIX_LIST, NUM_DEVICES,
-                                      NUM_ENGINES);
-#endif
+  ep = std::make_shared<RDMAEndpoint>(NUM_ENGINES);
+
   return ncclSuccess;
 }
 
 ncclResult_t pluginDevices(int* ndev) {
-  *ndev = NUM_DEVICES;
+  *ndev = num_devices;
   return ncclSuccess;
 }
 
@@ -124,7 +121,7 @@ ncclResult_t pluginGetProperties(int dev, ncclNetProperties_v8_t* props) {
   props->name = factory_dev->ib_name;
 
   // Speed in *Mbps*. 100000 means 100G
-  props->speed = LINK_BANDWIDTH * 8 / 1e6;
+  props->speed = factory_dev->link_bw * 8 / 1e6;
 
   pluginPciPath(factory_dev->ib_name, &props->pciPath);
 
@@ -147,7 +144,7 @@ ncclResult_t pluginGetProperties(int dev, ncclNetProperties_v8_t* props) {
   props->regIsGlobal = 0;
 
   // Port number, used in conjunction with guid
-  props->port = IB_PORT_NUM;
+  props->port = factory_dev->ib_port_num;
   // Custom latency (used to help tuning if latency is high. If set to 0, use
   // default NCCL values.
   props->latency = 0;

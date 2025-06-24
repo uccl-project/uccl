@@ -402,11 +402,9 @@ int main(int argc, char* argv[]) {
   google::InstallFailureSignalHandler();
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
+  ep.emplace(NUM_ENGINES);
 #ifdef LAZY_CREATE_ENGINE
-  ep.emplace(NUM_DEVICES, NUM_ENGINES);
   ep->initialize_engine_by_dev(0);
-#else
-  ep.emplace(DEVNAME_SUFFIX_LIST, NUM_DEVICES, NUM_ENGINES);
 #endif
 
   // Create a thread to print throughput every second

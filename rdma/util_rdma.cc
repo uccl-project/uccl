@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <vector>
 #include <sys/mman.h>
 
 namespace uccl {
@@ -17,149 +18,151 @@ namespace uccl {
 // RDMAFactory rdma_ctl;
 std::shared_ptr<RDMAFactory> rdma_ctl;
 
-static int ibvWidths[] = {1, 4, 8, 12, 2};
-static int ibvSpeeds[] = {2500,  /* SDR */
-                          5000,  /* DDR */
-                          10000, /* QDR */
-                          10000, /* QDR */
-                          14000, /* FDR */
-                          25000, /* EDR */
-                          50000, /* HDR */
-                          100000 /* NDR */};
-
-static int firstBitSet(int val, int max) {
-  int i = 0;
-  while (i < max && ((val & (1 << i)) == 0)) i++;
-  return i;
-}
-static int ncclIbWidth(int width) {
-  return ibvWidths[firstBitSet(width, sizeof(ibvWidths) / sizeof(int) - 1)];
-}
-static int ncclIbSpeed(int speed) {
-  return ibvSpeeds[firstBitSet(speed, sizeof(ibvSpeeds) / sizeof(int) - 1)];
-}
-
-void RDMAFactory::init_dev(int devname_suffix) {
-  struct FactoryDevice dev;
-  struct ibv_device** device_list;
-  struct ibv_context* context;
-  struct ibv_device_attr dev_attr;
-  struct ibv_port_attr port_attr;
-  int i, nb_devices;
+int RDMAFactory::init_devs() {
+  int num_devs;
+  struct ibv_device** devices;
 
   static std::once_flag init_flag;
   std::call_once(init_flag,
                  []() { rdma_ctl = std::make_shared<RDMAFactory>(); });
 
-  // Get Infiniband name from GID index.
-  DCHECK(util_rdma_get_ib_name_from_suffix(devname_suffix, dev.ib_name) == 0);
+  // TODO: Move env vars to a unified place
+  char* ib_hca = getenv("NCCL_IB_HCA");
+  char* if_name = getenv("NCCL_SOCKET_IFNAME");
 
-  // Get IP address from Infiniband name.
-  if (!SINGLE_CTRL_NIC.empty())
-    dev.local_ip_str = get_dev_ip(SINGLE_CTRL_NIC.c_str());
-  else
-    DCHECK(util_rdma_get_ip_from_ib_name(dev.ib_name, &dev.local_ip_str) == 0);
+  struct ib_dev user_ifs[MAX_IB_DEVS];
+  bool searchNot = ib_hca && ib_hca[0] == '^';
+  if (searchNot) ib_hca++;
 
-  // Get the list of RDMA devices.
-  device_list = ibv_get_device_list(&nb_devices);
-  if (device_list == nullptr || nb_devices == 0) {
+  bool searchExact = ib_hca && ib_hca[0] == '=';
+  if (searchExact) ib_hca++;
+
+  int num_ifs = parse_interfaces(ib_hca, user_ifs, MAX_IB_DEVS);
+  devices = ibv_get_device_list(&num_devs);
+  if (devices == nullptr || num_devs == 0) {
     perror("ibv_get_device_list");
     goto error;
   }
 
-  // Find the device by name.
-  for (i = 0; i < nb_devices; i++) {
-    if (strcmp(ibv_get_device_name(device_list[i]), dev.ib_name) == 0) {
-      break;
+  for (int d = 0; d < num_devs && num_devices < MAX_IB_DEVS; d++) {
+    struct ibv_context* context = ibv_open_device(devices[d]);
+    if (context == nullptr) {
+      printf("NET/IB : Unable to open device %s", devices[d]->name);
+      continue;
+    }
+
+    struct ibv_device_attr dev_attr;
+    memset(&dev_attr, 0, sizeof(dev_attr));
+    if (ibv_query_device(context, &dev_attr)) {
+      ibv_close_device(context);
+      continue;
+    }
+
+    for (int port_num = 1; port_num <= dev_attr.phys_port_cnt; port_num++) {
+      struct ibv_port_attr port_attr;
+      if (ibv_query_port(context, port_num, &port_attr)) {
+        printf("NET/IB : Unable to query port_num %d", port_num);
+        ibv_close_device(context);
+        continue;
+      }
+
+      // Check against user specified HCAs/ports
+      if (!(match_if_list(devices[d]->name, port_num, user_ifs, num_ifs,
+                          searchExact) ^
+            searchNot)) {
+        ibv_close_device(context);
+        continue;
+      }
+
+      if (port_attr.state != IBV_PORT_ACTIVE) {
+        ibv_close_device(context);
+        continue;
+      }
+
+      // Initialize Dev
+      struct FactoryDevice dev;
+      strncpy(dev.ib_name, devices[d]->name, sizeof(devices[d]->name));
+
+      if (if_name) {
+        // Iterate over all interfaces in the list
+        auto* if_name_dup = strdup(if_name);
+        char* next_intf = strtok(if_name_dup, ",");
+        while (next_intf) {
+          dev.local_ip_str = get_dev_ip(next_intf);
+          if (dev.local_ip_str != "") {
+            break;
+          }
+          next_intf = strtok(nullptr, ",");
+        }
+        UCCL_INIT_CHECK(dev.local_ip_str != "",
+                        "No IP address found for interface");
+      } else {
+        DCHECK(util_rdma_get_ip_from_ib_name(dev.ib_name, &dev.local_ip_str) ==
+               0);
+      }
+
+      dev.dev_attr = dev_attr;
+      dev.port_attr = port_attr;
+      dev.ib_port_num = port_num;
+
+      double link_bw = (ncclIbSpeed(port_attr.active_speed) *
+                        ncclIbWidth(port_attr.active_width)) *
+                       1e6 / 8;
+      dev.link_bw = link_bw;
+
+      if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
+        dev.gid_idx = ROCE_GID_IDX;
+      } else if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
+        dev.gid_idx = IB_GID_IDX;
+      } else {
+        printf("Unknown link layer: %d\n", port_attr.link_layer);
+        ibv_close_device(context);
+        continue;
+      }
+
+      dev.context = context;
+
+      if (ibv_query_gid(context, port_num, dev.gid_idx, &dev.gid)) {
+        perror("ibv_query_gid");
+        ibv_close_device(context);
+        continue;
+      }
+
+      // Allocate a PD for this device
+      dev.pd = ibv_alloc_pd(context);
+      if (dev.pd == nullptr) {
+        perror("ibv_alloc_pd");
+        ibv_close_device(context);
+        continue;
+      }
+
+      // Detect DMA-BUF support
+      {
+        struct ibv_pd* pd = ibv_alloc_pd(context);
+        if (pd == nullptr) {
+          perror("ibv_alloc_pd");
+          ibv_close_device(context);
+          continue;
+        }
+
+        // Test kernel DMA-BUF support with a dummy call (fd=-1)
+        (void)ibv_reg_dmabuf_mr(pd, 0ULL /*offset*/, 0ULL /*len*/,
+                                0ULL /*iova*/, -1 /*fd*/, 0 /*flags*/);
+        dev.dma_buf_support =
+            !((errno == EOPNOTSUPP) || (errno == EPROTONOSUPPORT));
+        ibv_dealloc_pd(pd);
+
+        UCCL_LOG_RE << "DMA-BUF support: " << dev.dma_buf_support;
+      }
+
+      rdma_ctl->devices_.push_back(dev);
+      printf("Initialized %s\n", devices[d]->name);
+      num_devices++;
     }
   }
-  if (i == nb_devices) {
-    fprintf(stderr, "No device found for %s\n", dev.ib_name);
-    goto free_devices;
-  }
+  ibv_free_device_list(devices);
+  return num_devices;
 
-  // Open the device.
-  memset(&dev_attr, 0, sizeof(dev_attr));
-  if ((context = ibv_open_device(device_list[i])) == nullptr) {
-    perror("ibv_open_device");
-    goto free_devices;
-  }
-
-  if (ibv_query_device(context, &dev_attr)) {
-    perror("ibv_query_device");
-    goto close_device;
-  }
-
-  // Currently, we only use one port.
-  if (dev_attr.phys_port_cnt != IB_PORT_NUM /* 1 */) {
-    fprintf(stderr, "Only one port is supported\n");
-    goto close_device;
-  }
-
-  // Port number starts from 1.
-  if (ibv_query_port(context, 1, &port_attr)) {
-    perror("ibv_query_port");
-    goto close_device;
-  }
-
-  if (port_attr.state != IBV_PORT_ACTIVE) {
-    fprintf(stderr, "Port is not active\n");
-    goto close_device;
-  }
-
-  if (ROCE_NET && port_attr.link_layer != IBV_LINK_LAYER_ETHERNET) {
-    fprintf(stderr, "RoCE is not supported\n");
-    goto close_device;
-  } else if (!ROCE_NET && port_attr.link_layer != IBV_LINK_LAYER_INFINIBAND) {
-    fprintf(stderr, "IB is not supported\n");
-    goto close_device;
-  }
-
-  dev.dev_attr = dev_attr;
-  dev.port_attr = port_attr;
-  dev.ib_port_num = IB_PORT_NUM;
-  dev.gid_idx = GID_IDX;
-  dev.context = context;
-
-  if (ibv_query_gid(context, IB_PORT_NUM, dev.gid_idx, &dev.gid)) {
-    perror("ibv_query_gid");
-    goto close_device;
-  }
-
-  // Allocate a PD for this device.
-  dev.pd = ibv_alloc_pd(context);
-  if (dev.pd == nullptr) {
-    perror("ibv_alloc_pd");
-    goto close_device;
-  }
-
-  // Detect DMA-BUF support.
-  {
-    struct ibv_pd* pd;
-    pd = ibv_alloc_pd(context);
-    if (pd == nullptr) {
-      perror("ibv_alloc_pd");
-      goto close_device;
-    }
-    // Test kernel DMA-BUF support with a dummy call (fd=-1)
-    (void)ibv_reg_dmabuf_mr(pd, 0ULL /*offset*/, 0ULL /*len*/, 0ULL /*iova*/,
-                            -1 /*fd*/, 0 /*flags*/);
-    dev.dma_buf_support =
-        !((errno == EOPNOTSUPP) || (errno == EPROTONOSUPPORT));
-    ibv_dealloc_pd(pd);
-
-    UCCL_LOG_RE << "DMA-BUF support: " << dev.dma_buf_support;
-  }
-
-  rdma_ctl->devices_.push_back(dev);
-
-  return;
-
-close_device:
-  ibv_close_device(context);
-
-free_devices:
-  ibv_free_device_list(device_list);
 error:
   throw std::runtime_error("Failed to initialize RDMAFactory");
 }
@@ -292,7 +295,7 @@ uint64_t TXTracking::ack_transmitted_chunks(void* subflow_context,
   auto fabric_delay_tsc = (t6 - t1) - endpoint_delay_tsc;
   // Make RTT independent of segment size.
   auto serial_delay_tsc =
-      us_to_cycles(seg_size * 1e6 / LINK_BANDWIDTH, freq_ghz);
+      us_to_cycles(seg_size * 1e6 / rdma_ctx->link_speed, freq_ghz);
   if (fabric_delay_tsc > serial_delay_tsc ||
       to_usec(fabric_delay_tsc, freq_ghz) < kMAXRTTUS)
     fabric_delay_tsc -= serial_delay_tsc;

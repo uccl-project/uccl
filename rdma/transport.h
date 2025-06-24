@@ -159,6 +159,12 @@ class RDMAContext {
   // MTU of this device in bytes.
   uint32_t mtu_bytes_;
 
+  // GID Index of the device
+  int gid_idx_;
+
+  // Link Speed of the device
+  double link_speed = 0;
+
   // (Engine) Buffer pool for credit chunks.
   std::optional<eqds::CreditChunkBuffPool> engine_credit_chunk_pool_;
 
@@ -181,6 +187,7 @@ class RDMAContext {
 
   LIST_HEAD(ack_list_);
 
+  inline bool is_roce() { return (gid_idx_ == ROCE_GID_IDX); }
   // Get an unused request, if no request is available, return nullptr.
   inline struct RecvRequest* alloc_recvreq(void) {
     for (int i = 0; i < kMaxReq; i++) {
@@ -403,12 +410,12 @@ class RDMAContext {
    */
   void __retransmit_for_flow(void* context, bool rto);
   inline void fast_retransmit_for_flow(void* context) {
-    if constexpr (ROCE_NET || kTestLoss) {
+    if (is_roce() || kTestLoss) {
       __retransmit_for_flow(context, false);
     }
   }
   inline void rto_retransmit_for_flow(void* context) {
-    if constexpr (ROCE_NET || kTestLoss) {
+    if (is_roce() || kTestLoss) {
       __retransmit_for_flow(context, true);
     }
   }
@@ -535,8 +542,12 @@ class SwiftRDMAContext : public RDMAContext {
                             uint32_t remaining_bytes) override {
     if (remaining_bytes <= kChunkSize) return remaining_bytes;
 
-    auto hard_budget = kMaxUnAckedBytesPerEngineHigh - *engine_unacked_bytes_;
-    auto soft_budget = kMaxUnAckedBytesPerEngineLow - *engine_unacked_bytes_;
+    auto hard_budget = (is_roce() ? kMaxUnAckedBytesPerEngineHighForRoCE
+                                  : kMaxUnAckedBytesPerEngineHighForIB) -
+                       *engine_unacked_bytes_;
+    auto soft_budget = (is_roce() ? kMaxUnAckedBytesPerEngineLowForRoCE
+                                  : kMaxUnAckedBytesPerEngineLowForIB) -
+                       *engine_unacked_bytes_;
     auto flow_budget = kMaxUnAckedBytesPerFlow - subflow->unacked_bytes_;
 
     auto cc_budget = subflow->pcb.swift_cc.get_wnd() - subflow->unacked_bytes_;
@@ -592,10 +603,14 @@ class TimelyRDMAContext : public RDMAContext {
                             uint32_t remaining_bytes) override {
     auto ready_bytes = std::min(remaining_bytes, kChunkSize);
 
-    if (*engine_unacked_bytes_ + ready_bytes > kMaxUnAckedBytesPerEngineHigh)
+    if (*engine_unacked_bytes_ + ready_bytes >
+        (is_roce() ? kMaxUnAckedBytesPerEngineHighForRoCE
+                   : kMaxUnAckedBytesPerEngineHighForIB))
       return 0;
 
-    if (*engine_unacked_bytes_ + ready_bytes <= kMaxUnAckedBytesPerEngineLow ||
+    if (*engine_unacked_bytes_ + ready_bytes <=
+            (is_roce() ? kMaxUnAckedBytesPerEngineLowForRoCE
+                       : kMaxUnAckedBytesPerEngineLowForIB) ||
         subflow->unacked_bytes_ + ready_bytes <= kMaxUnAckedBytesPerFlow) {
       return ready_bytes;
     }
@@ -658,6 +673,10 @@ class UcclRDMAEngine {
         io_ctx_(dev),
         kSlowTimerIntervalTsc_(us_to_cycles(kSlowTimerIntervalUs, freq_ghz)) {
     auto context = RDMAFactory::get_factory_dev(dev_)->context;
+    is_no_rto_ =
+        (RDMAFactory::is_roce(dev_) || kTestLoss)
+            ? false
+            : true;  // Infiniband is lossless, disable RTO even for UC.;
     struct ibv_values_ex values;
     values.comp_mask = IBV_VALUES_MASK_RAW_CLOCK;
     ibv_query_rt_values_ex(context, &values);
@@ -754,6 +773,8 @@ class UcclRDMAEngine {
     }
   }
 
+  inline bool is_no_rto() { return is_no_rto_; }
+
   // Called by application to shutdown the engine. App will need to join
   // the engine thread.
   inline void shutdown() { shutdown_ = true; }
@@ -804,6 +825,9 @@ class UcclRDMAEngine {
   uint64_t last_sync_clock_tsc_;
   uint64_t last_host_clock_;
   uint64_t last_nic_clock_;
+  // RTO disabled
+  bool is_no_rto_;
+
   double nic_ts_ratio_ = 0;
   double nic_ts_offset_ = 0;
 
@@ -866,7 +890,7 @@ class RDMAEndpoint {
 
   int num_engines_per_dev_;
   // Per-engine communication channel
-  Channel* channel_vec_[NUM_ENGINES * NUM_DEVICES];
+  std::vector<Channel*> channel_vec_;
   std::vector<std::unique_ptr<UcclRDMAEngine>> engine_vec_;
   std::unordered_map<int, std::unique_ptr<UcclRDMAEngine>>
       engine_id_to_engine_map_;
@@ -875,43 +899,44 @@ class RDMAEndpoint {
   std::mutex engine_th_mu_;
 
   // Number of outstanding messages for each engine.
-  std::array<std::atomic<uint32_t>, NUM_ENGINES* NUM_DEVICES> engine_load_vec_ =
-      {};
+  std::vector<std::unique_ptr<std::atomic<uint32_t>>> engine_load_vec_;
 
   // Receiver-driven congestion control.
-  eqds::EQDS* eqds_[NUM_DEVICES] = {};
+  std::vector<eqds::EQDS*> eqds_;
 
   SharedPool<PollCtx*, true>* ctx_pool_;
   uint8_t* ctx_pool_buf_;
 
-  int test_listen_fds_[NUM_DEVICES];
+  std::vector<int> test_listen_fds_;
 
   std::mutex fd_vec_mu_;
   // Mapping from unique (within this engine) flow_id to the boostrap fd.
   std::vector<int> fd_vec_;
 
   // Peer map for connecting/accepting
-  std::unordered_map<UcclPeer, PeerInfo, UcclPeerHash> peer_map_[NUM_DEVICES];
-  std::mutex peer_map_mu_[NUM_DEVICES];
+  std::vector<std::unordered_map<UcclPeer, PeerInfo, UcclPeerHash>> peer_map_;
+  std::vector<std::unique_ptr<std::mutex>> peer_map_mu_;
 
-  std::unordered_map<UcclPeer, PeerInfo, UcclPeerHash>
-      peer_same_dev_map_[NUM_DEVICES][2];
-  std::mutex peer_same_dev_map_mu_[NUM_DEVICES][2];
+  std::vector<std::unordered_map<UcclPeer, PeerInfo, UcclPeerHash>>
+      peer_same_dev_map_[2];
+  std::vector<std::unique_ptr<std::mutex>> peer_same_dev_map_mu_[2];
 
-  std::atomic<PeerID> next_peer_id_[NUM_DEVICES] = {};
+  std::vector<std::unique_ptr<std::atomic<PeerID>>> next_peer_id_;
 
-  Spin flow_id_spin_[NUM_DEVICES][MAX_PEER];
-  FlowID next_flow_id_[NUM_DEVICES][MAX_PEER] = {};
+  std::vector<std::vector<Spin>> flow_id_spin_;
+  std::vector<std::vector<FlowID>> next_flow_id_;
 
-  std::vector<UcclFlow*> active_flows_vec_[NUM_DEVICES];
-  Spin active_flows_spin_[NUM_DEVICES];
+  std::vector<std::vector<UcclFlow*>> active_flows_vec_;
+  std::vector<Spin> active_flows_spin_;
 
  public:
-  RDMAEndpoint(uint8_t const* devname_suffix_list, int num_devices,
-               int num_engines_per_dev);
+  RDMAEndpoint(int num_engines_per_dev);
 
-  RDMAEndpoint(int num_devices, int num_engines_per_dev);
   ~RDMAEndpoint();
+
+  void initialize_resources(int total_num_engines);
+
+  void cleanup_resources();
 
   bool initialize_engine_by_dev(int dev);
 
@@ -1004,7 +1029,7 @@ class RDMAEndpoint {
   }
 
   inline PeerID alloc_peer_id(int dev) {
-    return next_peer_id_[dev].fetch_add(1);
+    return next_peer_id_[dev]->fetch_add(1);
   }
 
  private:
@@ -1022,11 +1047,11 @@ class RDMAEndpoint {
                                                 bool is_send);
 
   inline void inc_load_on_engine(int engine_id) {
-    std::atomic_fetch_add(&engine_load_vec_[engine_id], 1);
+    engine_load_vec_[engine_id]->fetch_add(1);
   }
 
   inline void dec_load_on_engine(int engine_id) {
-    std::atomic_fetch_sub(&engine_load_vec_[engine_id], 1);
+    engine_load_vec_[engine_id]->fetch_sub(1);
   }
 
   // Find a least loaded engine and update the load for the given device.
@@ -1085,15 +1110,17 @@ class UcclFlow {
         remote_ip_(remote_ip),
         remote_dev_(remote_dev),
         is_send_(is_send) {
+    auto factory_dev = RDMAFactory::get_factory_dev(dev);
     for (int i = 0; i < NUM_ENGINES; i++) {
-      sub_flows_[i] = new SubUcclFlow(flow_id);
+      sub_flows_[i] = new SubUcclFlow(flow_id, factory_dev->link_bw);
     }
 
     memset(&send_comm_, 0, sizeof(send_comm_));
     memset(&recv_comm_, 0, sizeof(recv_comm_));
     // Avoid all flows using the same initial engine offset.
-    static std::atomic<uint32_t> off[NUM_DEVICES] = {};
-    next_engine_offset_ = off[dev].fetch_add(1) % NUM_ENGINES;
+    static std::vector<std::atomic<uint32_t>>* off =
+        new std::vector<std::atomic<uint32_t>>(num_devices);
+    next_engine_offset_ = (*off)[dev].fetch_add(1) % NUM_ENGINES;
   }
 
   ~UcclFlow() {
@@ -1124,9 +1151,9 @@ class UcclFlow {
     // Fifo QP.
     util_rdma_create_qp(factory_dev->context, &comm_base->fifo_qp, IBV_QPT_RC,
                         false, false, &comm_base->flow_cq, false, kFifoCQSize,
-                        factory_dev->pd, &comm_base->fifo_mr, nullptr,
-                        kFifoMRSize, kMaxReq * kMaxRecv, kMaxReq * kMaxRecv, 1,
-                        1);
+                        factory_dev->pd, factory_dev->ib_port_num,
+                        &comm_base->fifo_mr, nullptr, kFifoMRSize,
+                        kMaxReq * kMaxRecv, kMaxReq * kMaxRecv, 1, 1);
     comm_base->fifo =
         reinterpret_cast<struct RemFifo*>(comm_base->fifo_mr->addr);
 
@@ -1166,11 +1193,12 @@ class UcclFlow {
 
     // GPU flush QP for receiver.
     if (!is_send_) {
-      util_rdma_create_qp(
-          factory_dev->context, &recv_comm_.gpu_flush_qp, IBV_QPT_RC, false,
-          false, &comm_base->flow_cq, true, 0, factory_dev->pd,
-          &recv_comm_.gpu_flush_mr, &recv_comm_.gpu_flush, sizeof(int),
-          kMaxReq * kMaxRecv, kMaxReq * kMaxRecv, kMaxSge, kMaxSge);
+      util_rdma_create_qp(factory_dev->context, &recv_comm_.gpu_flush_qp,
+                          IBV_QPT_RC, false, false, &comm_base->flow_cq, true,
+                          0, factory_dev->pd, factory_dev->ib_port_num,
+                          &recv_comm_.gpu_flush_mr, &recv_comm_.gpu_flush,
+                          sizeof(int), kMaxReq * kMaxRecv, kMaxReq * kMaxRecv,
+                          kMaxSge, kMaxSge);
 
       recv_comm_.gpu_flush_sge.addr = (uint64_t)&recv_comm_.gpu_flush;
       recv_comm_.gpu_flush_sge.length = 1;
@@ -1216,7 +1244,7 @@ class UcclFlow {
       memset(&qpAttr, 0, sizeof(qpAttr));
       qpAttr.qp_state = IBV_QPS_INIT;
       qpAttr.pkey_index = 0;
-      qpAttr.port_num = IB_PORT_NUM;
+      qpAttr.port_num = factory_dev->ib_port_num;
       qpAttr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE;
 
       comm_base->rc_qp = ibv_create_qp(factory_dev->pd, &qp_init_attr);
