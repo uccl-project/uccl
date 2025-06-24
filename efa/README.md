@@ -18,7 +18,7 @@ sudo ./efa_installer.sh -y
 
 ```bash
 # Eg, /home/ubuntu/uccl
-export UCCL_HOME=<the absolute path of uccl>
+export UCCL_HOME=<the path of uccl>
 
 # Build libnccl-net.so
 cd $UCCL_HOME/efa

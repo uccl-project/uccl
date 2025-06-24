@@ -34,7 +34,7 @@ Build `nccl` and `nccl-tests`:
 
 ```bash
 # Eg, /home/yangz/uccl
-export UCCL_HOME=<the absolute path of uccl>
+export UCCL_HOME=<the path of uccl>
 
 # Build nccl (taking ~3min); assume H100 GPUs
 cd $UCCL_HOME/thirdparty/nccl
@@ -83,10 +83,10 @@ pip3 install torch torchvision torchaudio --index-url https://download.pytorch.o
 Build `rccl` and `rccl-tests`: 
 
 ```bash
-# Eg, /home1/yangzhou/uccl
-export UCCL_HOME=<the absolute path of uccl>
-# Eg, /work1/yzhou/yangzhou/anaconda3/lib
-export CONDA_LIB_HOME=<the absolute path of anaconda lib>
+# Export the path of uccl
+export UCCL_HOME="/home1/yangzhou/uccl"
+# Export the path of anaconda lib
+export CONDA_LIB_HOME="/work1/yzhou/yangzhou/anaconda3/lib"
 
 # Avoiding gfx950 as the HPC Fund cluster clang does not support it yet. Note this takes ~20min. 
 cd $UCCL_HOME/thirdparty/rccl
