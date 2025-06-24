@@ -574,7 +574,7 @@ void UcclRDMAEngine::handle_install_flow_on_engine(
   } else {
     rdma_ctx->add_receiver_flow(flow, flow_id);
     if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
-      auto* subflow = flow->sub_flows_[engine_idx_ % NUM_ENGINES];
+      auto* subflow = flow->sub_flows_[engine_idx_ % ucclParamNUM_ENGINES()];
 
       subflow->pcb.eqds_cc.set_fid(flow_id);
       // All subflows belong to the same RDMAContext share the same
@@ -616,7 +616,7 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
   {
     DCHECK(rdma_ctx_map_.find(ctrl_work.peer_id) == rdma_ctx_map_.end());
     rdma_ctx = RDMAFactory::CreateContext(&rto_tm_, &engine_outstanding_bytes_,
-                                          eqds_, dev, engine_idx_ % NUM_ENGINES,
+                                          eqds_, dev, engine_idx_ % ucclParamNUM_ENGINES(),
                                           meta, &io_ctx_);
     std::tie(std::ignore, ret) =
         rdma_ctx_map_.insert({ctrl_work.peer_id, rdma_ctx});
@@ -659,7 +659,7 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
     }
 
     // Wait until our turn to use bootstrap fd.
-    auto engine_offset = engine_idx_ % NUM_ENGINES;
+    auto engine_offset = engine_idx_ % ucclParamNUM_ENGINES();
     while (next_install_engine->load() != engine_offset) {
       // yield CPU
       std::this_thread::yield();
@@ -1319,7 +1319,7 @@ void UcclFlow::post_multi_send(struct ucclRequest** ureqs,
     return;
   }
 
-  DCHECK(engine_offset < NUM_ENGINES) << engine_offset;
+  DCHECK(engine_offset < ucclParamNUM_ENGINES()) << engine_offset;
 
   uint32_t engine_idx = ep_->find_first_engine_idx_on_dev(dev_) + engine_offset;
   auto txq = ep_->channel_vec_[engine_idx]->tx_cmdq_;
@@ -2416,7 +2416,7 @@ void RDMAContext::uc_rx_ack(struct ibv_cq_ex* cq_ex, UcclSackHdr* ucclsackh) {
     else
       t5 = convert_nic_to_host(ibv_wc_read_completion_ts(cq_ex));
 
-    DCHECK(engine_offset_ < NUM_ENGINES);
+    DCHECK(engine_offset_ < ucclParamNUM_ENGINES());
     auto reduced_bytes = subflow->unacked_bytes_;
     auto newrtt_tsc = subflow->txtracking.ack_transmitted_chunks(
         subflow, this, num_acked_chunks.to_uint32(), t5, t6,

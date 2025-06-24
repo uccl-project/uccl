@@ -1099,7 +1099,7 @@ class UcclFlow {
   static constexpr int kFifoCQSize = 4096;
 
  public:
-  SubUcclFlow* sub_flows_[NUM_ENGINES];
+  std::vector<SubUcclFlow*> sub_flows_;
 
   UcclFlow(RDMAEndpoint* ep, int dev, PeerID peer_id, FlowID flow_id,
            std::string remote_ip, int remote_dev, bool is_send)
@@ -1111,8 +1111,8 @@ class UcclFlow {
         remote_dev_(remote_dev),
         is_send_(is_send) {
     auto factory_dev = RDMAFactory::get_factory_dev(dev);
-    for (int i = 0; i < NUM_ENGINES; i++) {
-      sub_flows_[i] = new SubUcclFlow(flow_id, factory_dev->link_bw);
+    for (int i = 0; i < ucclParamNUM_ENGINES(); i++) {
+      sub_flows_.push_back(new SubUcclFlow(flow_id, factory_dev->link_bw));
     }
 
     memset(&send_comm_, 0, sizeof(send_comm_));
@@ -1120,7 +1120,7 @@ class UcclFlow {
     // Avoid all flows using the same initial engine offset.
     static std::vector<std::atomic<uint32_t>>* off =
         new std::vector<std::atomic<uint32_t>>(num_devices);
-    next_engine_offset_ = (*off)[dev].fetch_add(1) % NUM_ENGINES;
+    next_engine_offset_ = (*off)[dev].fetch_add(1) % ucclParamNUM_ENGINES();
   }
 
   ~UcclFlow() {
@@ -1138,7 +1138,7 @@ class UcclFlow {
       ibv_destroy_qp(recv_comm_.gpu_flush_qp);
     }
 
-    for (int i = 0; i < NUM_ENGINES; i++) {
+    for (int i = 0; i < ucclParamNUM_ENGINES(); i++) {
       delete sub_flows_[i];
     }
   }

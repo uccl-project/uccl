@@ -85,7 +85,7 @@ struct ucclSendComm {
 ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
   std::cout << "Hello UCCL from PID: " << getpid() << std::endl;
 
-  ep = std::make_shared<RDMAEndpoint>(NUM_ENGINES);
+  ep = std::make_shared<RDMAEndpoint>(ucclParamNUM_ENGINES());
 
   return ncclSuccess;
 }
