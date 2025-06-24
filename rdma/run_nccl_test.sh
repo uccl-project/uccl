@@ -88,7 +88,7 @@ mpirun --allow-run-as-root -np ${NUM_PROCS} -N ${PROCS_PER_NODE} \
     -x NCCL_IB_GID_INDEX=3 \
     -x NCCL_ALGO=Ring \
     -x CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-    -x NCCL_SOCKET_IFNAME=enp164s0 \
+    -x NCCL_SOCKET_IFNAME=${CTRL_NIC} \
     -x NCCL_IGNORE_CPU_AFFINITY=1 \
     -x NCCL_SOCKET_NTHREADS=2 \
     -x NCCL_CROSS_NIC=0 \
@@ -100,7 +100,7 @@ mpirun --allow-run-as-root -np ${NUM_PROCS} -N ${PROCS_PER_NODE} \
     -x NCCL_NVLS_ENABLE=0 \
     -x NCCL_NET_PLUGIN=$PLUGIN_LIB \
     --mca btl tcp,self \
-    --mca btl_tcp_if_include enp164s0 \
+    --mca btl_tcp_if_include ${CTRL_NIC} \
     ${UCCL_HOME}/thirdparty/nccl-tests/build/${PROG_NAME} -c 0 \
     -b 1K -e 1G \
     -f 2 -w 50 -n 50 \
