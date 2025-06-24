@@ -45,14 +45,14 @@
 #define kQueueMask (kQueueSize - 1)
 #define kMaxInflight 512
 #define kBatchSize 16
-#ifdef SYNCHRONOUS_COMPLETION
-#define kIterations 100000
-#else
 #define kIterations 1000000
-#endif
 #define kNumThBlocks 4
 #define kNumThPerBlock 1
-#define kRemoteNVLinkBatchSize 64
+#ifdef SYNCHRONOUS_COMPLETION
+#define kRemoteNVLinkBatchSize 1  // Immediately synchronize stream for latency.
+#else
+#define kRemoteNVLinkBatchSize 512
+#endif
 #define kObjectSize 8192  // 8 KB
 #define kMaxOutstandingSends 1024
 #define kMaxOutstandingRecvs 1024
@@ -65,7 +65,8 @@
 #define MAIN_THREAD_CPU_IDX 31
 #define NUM_GPUS 8
 #define RECEIVER_BATCH_SIZE 16
-#define NVLINK_SM_PER_PROCESS 1
+#define NVLINK_SM_PER_PROCESS \
+  2  // Total number of SMs used is NVLINK_SM_PER_PROCESS * kNumThBlocks
 // #define SEPARATE_POLLING
 // Command structure for each transfer
 struct TransferCmd {

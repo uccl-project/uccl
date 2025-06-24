@@ -93,10 +93,10 @@ void notify_gpu_completion(std::unordered_set<uint64_t>& finished_wrs,
 #ifdef SYNCHRONOUS_COMPLETION
         if (has_received_ack && largest_completed_wr >= i) {
           finished_wrs.erase(i);
-          printf(
-              "WR ID %lu is smaller than largest_completed_wr %lu, "
-              "completed\n",
-              i, largest_completed_wr);
+          // printf(
+          //     "WR ID %lu is smaller than largest_completed_wr %lu, "
+          //     "completed\n",
+          //     i, largest_completed_wr);
         } else {
           // printf(
           //     "WR ID %lu is larger than largest_completed_wr %lu, "

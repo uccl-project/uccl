@@ -1150,8 +1150,8 @@ void remote_notify_sender_that_wr_id_has_completed(struct ibv_qp* local_ack_qp,
     std::abort();
   }
 
-  printf("[ACK - %d]  wr_id=%lu posted to ACK sender\n", worker_idx,
-         static_cast<unsigned long>(wr_id));
+  // printf("[ACK - %d]  wr_id=%lu posted to ACK sender\n", worker_idx,
+  //        static_cast<unsigned long>(wr_id));
   // printf("[ACK] remote_notify_sender_that_wr_id_has_completed: %ld onflight
   // on peer, posted: %ld, completed: %ld\n", send_ack_posted -
   // send_ack_completed, send_ack_posted.load(), send_ack_completed.load());
