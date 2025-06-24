@@ -1,8 +1,11 @@
 # Makefile for KVTrans Engine pybind11 project
 
 # Compiler and flags
+CUDA_HOME ?= /usr/local/cuda
+CUDA_INC  := $(CUDA_HOME)/include
+CUDA_LIB  := $(CUDA_HOME)/lib64
 CXX := g++
-CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I../include -I../rdma \
+CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I../include -I../rdma -I$(CUDA_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
 	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -lglog -lgflags -lgtest -lz -lelf -libverbs -lpthread \
 	-DLAZY_CREATE_ENGINE
@@ -10,11 +13,12 @@ CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I../include -I../rdma \
 # Python and pybind11 configuration
 PYTHON := python3
 PYTHON_CONFIG := python3-config
+PYEXT           := $(shell $(PYTHON_CONFIG) --extension-suffix)
 PYBIND11_INCLUDES := $(shell $(PYTHON) -m pybind11 --includes)
 PYTHON_LDFLAGS := $(shell $(PYTHON_CONFIG) --ldflags)
 
 # Target and source files
-TARGET := kvtrans_engine$(shell $(PYTHON_CONFIG) --extension-suffix)
+TARGET   := kvtrans_engine$(PYEXT)
 SOURCES := engine.cc pybind_engine.cc
 OBJECTS := $(SOURCES:.cc=.o)
 
@@ -23,7 +27,11 @@ all: $(TARGET)
 
 # Build the shared library
 $(TARGET): $(OBJECTS) ../rdma/librdma.a
-	$(CXX) $(OBJECTS) ../rdma/librdma.a -o $@ $(PYTHON_LDFLAGS) $(CXXFLAGS)
+	$(CXX) $(OBJECTS) ../rdma/librdma.a \
+	      -L$(CUDA_LIB) -lcudart -lcuda \
+	      -o $@ $(PYTHON_LDFLAGS) $(CXXFLAGS) \
+	      -Wl,-rpath,$(CUDA_LIB)
+
 
 ../rdma/librdma.a: ../rdma/*.cc ../rdma/*.h
 	make CXXFLAGS=-DLAZY_CREATE_ENGINE -C ../rdma
