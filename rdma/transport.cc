@@ -737,7 +737,7 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
 
   if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
     // Receiver-driven congestion control per device.
-    for (int i = 0; i < num_devices; i++) {
+    for (int i = 0; i < get_num_devices(); i++) {
       auto factory_dev = RDMAFactory::get_factory_dev(i);
       eqds_[i] = new eqds::EQDS(i, factory_dev->link_bw);
     }

@@ -91,7 +91,7 @@ ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
 }
 
 ncclResult_t pluginDevices(int* ndev) {
-  *ndev = num_devices;
+  *ndev = ep->get_num_devices();
   return ncclSuccess;
 }
 

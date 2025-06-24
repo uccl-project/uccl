@@ -99,7 +99,7 @@ echo -e "Details: NCCL_NCHANNELS=${NUM_CHUNNEL} \n\t NCCL_P2P_NET_CHUNKSIZE=${P2
     -x NCCL_NET_PLUGIN=${PLUGIN_LIB} \
     -x NCCL_SOCKET_IFNAME=${CTRL_NIC} \
     -x GLOG_logtostderr=1 \
-    -x GLOG_v=0 \
+    -x GLOG_v=4 \
     -x NCCL_DEBUG=WARN \
     -x NCCL_DEBUG_SUBSYS=NET \
     -x NCCL_PROTO=${NCCL_PROTO} \

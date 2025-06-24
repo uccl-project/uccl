@@ -934,6 +934,8 @@ class RDMAEndpoint {
 
   ~RDMAEndpoint();
 
+  uint32_t get_num_devices() { return num_devices_; }
+
   void initialize_resources(int total_num_engines);
 
   void cleanup_resources();
@@ -1117,6 +1119,7 @@ class UcclFlow {
 
     memset(&send_comm_, 0, sizeof(send_comm_));
     memset(&recv_comm_, 0, sizeof(recv_comm_));
+    int num_devices = ep->get_num_devices();
     // Avoid all flows using the same initial engine offset.
     static std::vector<std::atomic<uint32_t>>* off =
         new std::vector<std::atomic<uint32_t>>(num_devices);
