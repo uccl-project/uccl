@@ -84,13 +84,18 @@ int RDMAFactory::init_devs() {
       strncpy(dev.ib_name, devices[d]->name, sizeof(devices[d]->name));
 
       if (if_name) {
-        // TODO: For now support a single control nic through configuration
-        char* first_intf = strtok(if_name, ",");
-        if (first_intf) {
-          dev.local_ip_str = get_dev_ip(first_intf);
-        } else {
-          dev.local_ip_str = get_dev_ip(if_name);
+        // Iterate over all interfaces in the list
+        auto* if_name_dup = strdup(if_name);
+        char* next_intf = strtok(if_name_dup, ",");
+        while (next_intf) {
+          dev.local_ip_str = get_dev_ip(next_intf);
+          if (dev.local_ip_str != "") {
+            break;
+          }
+          next_intf = strtok(nullptr, ",");
         }
+        UCCL_INIT_CHECK(dev.local_ip_str != "",
+                        "No IP address found for interface");
       } else {
         DCHECK(util_rdma_get_ip_from_ib_name(dev.ib_name, &dev.local_ip_str) ==
                0);
