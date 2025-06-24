@@ -818,7 +818,7 @@ bool GdrSupportInitOnce() {
 
 void local_poll_completions(ibv_cq* cq,
                             std::unordered_set<uint64_t>& finished_wrs,
-                            std::mutex& finished_wrs_mutex) {
+                            std::mutex& finished_wrs_mutex, int thread_idx) {
   struct ibv_wc wc[kMaxOutstandingSends];  // batch poll
   int ne = ibv_poll_cq(cq, kMaxOutstandingSends, wc);
   if (ne == 0) return;
@@ -845,8 +845,9 @@ void local_poll_completions(ibv_cq* cq,
           write_ack++;
 
           uint64_t wr_done = static_cast<uint64_t>(wc[i].imm_data);
-          printf("[ACK] Received ACK for WR %lu in slot %lu\n", wr_done, slot);
-          if (!has_received_ack || wr_done > largest_completed_wr) {
+          // printf("[ACK - %d] Received ACK for WR %lu in slot %lu\n",
+          // thread_idx, wr_done, slot);
+          if (!has_received_ack || wr_done >= largest_completed_wr) {
             largest_completed_wr = wr_done;
             has_received_ack = true;
             // printf("New largest completed WR: %lu\n", largest_completed_wr);
@@ -896,7 +897,7 @@ void per_thread_polling(int thread_idx, struct ibv_cq* per_thread_cq,
 
   while (g_progress_run.load(std::memory_order_acquire)) {
     local_poll_completions(per_thread_cq, *per_thread_finished_wrs,
-                           *per_thread_finished_wrs_mutex);
+                           *per_thread_finished_wrs_mutex, thread_idx);
   }
 }
 

@@ -83,7 +83,12 @@ void notify_gpu_completion(std::unordered_set<uint64_t>& finished_wrs,
       std::lock_guard<std::mutex> lock(finished_wrs_mutex);
       int check_i = 0;
       int actually_completed = 0;
-      std::unordered_set<uint64_t> finished_wrs_copy(std::move(finished_wrs));
+
+      /* To optimize (MaoZiming.)*/
+      // std::vector<uint64_t> sorted_wrs(finished_wrs.begin(),
+      // finished_wrs.end());
+      std::unordered_set finished_wrs_copy(finished_wrs);
+      // std::sort(sorted_wrs.begin(), sorted_wrs.end());
       for (auto i : finished_wrs_copy) {
 #ifdef SYNCHRONOUS_COMPLETION
         if (has_received_ack && largest_completed_wr >= i) {
@@ -93,11 +98,13 @@ void notify_gpu_completion(std::unordered_set<uint64_t>& finished_wrs,
               "completed\n",
               i, largest_completed_wr);
         } else {
-          printf(
-              "WR ID %lu is larger than largest_completed_wr %lu, "
-              "completed\n",
-              i, largest_completed_wr);
-          break;
+          // printf(
+          //     "WR ID %lu is larger than largest_completed_wr %lu, "
+          //     "completed, largest_finished_wr: %lu, smallest_finished_wr:
+          //     %lu\n", i, largest_completed_wr,
+          //     *std::max_element(sorted_wrs.begin(), sorted_wrs.end()),
+          //     *std::min_element(sorted_wrs.begin(), sorted_wrs.end()));
+          continue;
         }
 #endif
         actually_completed++;
@@ -294,7 +301,7 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
       std::chrono::duration<double, std::micro>::zero();
 
   for (size_t seen = 0; my_tail < kIterations;) {
-    local_poll_completions(cq, finished_wrs, finished_wrs_mutex);
+    local_poll_completions(cq, finished_wrs, finished_wrs_mutex, block_idx);
     notify_gpu_completion(finished_wrs, finished_wrs_mutex, rb, block_idx,
                           my_tail);
     post_gpu_command(rb, my_tail, seen, block_idx, gpu_buffer, cq, finished_wrs,
@@ -314,7 +321,7 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
     while (std::chrono::duration_cast<std::chrono::seconds>(
                std::chrono::high_resolution_clock::now() - start)
                .count() < 1) {
-      local_poll_completions(cq, finished_wrs, finished_wrs_mutex);
+      local_poll_completions(cq, finished_wrs, finished_wrs_mutex, block_idx);
       notify_gpu_completion(finished_wrs, finished_wrs_mutex, rb, block_idx,
                             my_tail);
     }

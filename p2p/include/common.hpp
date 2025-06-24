@@ -43,12 +43,16 @@
 // #define SYNCHRONOUS_COMPLETION
 #define kQueueSize 1024
 #define kQueueMask (kQueueSize - 1)
-#define kMaxInflight 32
+#define kMaxInflight 512
 #define kBatchSize 16
+#ifdef SYNCHRONOUS_COMPLETION
+#define kIterations 100000
+#else
 #define kIterations 1000000
+#endif
 #define kNumThBlocks 4
 #define kNumThPerBlock 1
-#define kRemoteNVLinkBatchSize 512
+#define kRemoteNVLinkBatchSize 64
 #define kObjectSize 8192  // 8 KB
 #define kMaxOutstandingSends 1024
 #define kMaxOutstandingRecvs 1024

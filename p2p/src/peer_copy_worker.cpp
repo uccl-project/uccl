@@ -7,7 +7,9 @@
 
 std::atomic<bool> g_run;
 thread_local uint64_t async_memcpy_count = 0;
+thread_local uint64_t prev_completed_async_memcpy_count = 0;
 thread_local uint64_t async_memcpy_total_time = 0;
+thread_local uint64_t highest_issued_wr_id = 0;
 int src_device = 0;
 std::once_flag peer_ok_flag[NUM_GPUS][NUM_GPUS];
 
@@ -30,6 +32,21 @@ void maybe_enable_peer_access(int src_dev, int dst_dev) {
   });
 }
 
+void sync_and_post(CopyRing& g_ring, cudaStream_t& stream, int idx) {
+  cudaError_t err;
+  if (async_memcpy_count > prev_completed_async_memcpy_count) {
+    err = cudaStreamSynchronize(stream);
+    if (err != cudaSuccess) {
+      fprintf(stderr, "Kernel execution failed: %s\n", cudaGetErrorString(err));
+      std::abort();
+    }
+    remote_notify_sender_that_wr_id_has_completed(
+        g_ring.ack_qp, highest_issued_wr_id, g_ring.ack_mr, g_ring.ack_buf,
+        idx);
+    prev_completed_async_memcpy_count = async_memcpy_count;
+  }
+}
+
 void peer_copy_worker(CopyRing& g_ring, int idx) {
   pin_thread_to_cpu(idx + 1 + MAIN_THREAD_CPU_IDX);
   printf("Peer copy worker %d started on CPU core %d\n", idx + 1,
@@ -47,6 +64,7 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
     if (RECEIVER_BATCH_SIZE == 1) {
       CopyTask* t_ptr = g_ring.pop();
       if (!t_ptr) {
+        sync_and_post(g_ring, stream, idx);
         continue;
       }
       t = *t_ptr;
@@ -55,6 +73,7 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
     } else {
       size_t n = g_ring.popN(tasks, RECEIVER_BATCH_SIZE);
       if (n == 0) {
+        sync_and_post(g_ring, stream, idx);
         continue;
       }
       t = tasks[0];
@@ -90,6 +109,8 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
             g_ring.ack_buf, idx);
       }
     }
+    highest_issued_wr_id =
+        std::max(highest_issued_wr_id, task_wrs[task_wrs.size() - 1]);
 
     auto st = std::chrono::high_resolution_clock::now();
     cudaError_t err;
@@ -116,7 +137,9 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
       std::abort();
     }
 
-    if (async_memcpy_count % kRemoteNVLinkBatchSize == 0) {
+    if (async_memcpy_count % kRemoteNVLinkBatchSize == 0 ||
+        async_memcpy_count - prev_completed_async_memcpy_count >=
+            kRemoteNVLinkBatchSize) {
       err = cudaStreamSynchronize(stream);
       if (err != cudaSuccess) {
         fprintf(stderr, "Kernel execution failed: %s\n",
@@ -130,6 +153,7 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
             g_ring.ack_qp, task_wrs[task_wrs.size() - 1], g_ring.ack_mr,
             g_ring.ack_buf, idx);
       }
+      prev_completed_async_memcpy_count = async_memcpy_count;
     }
 
     async_memcpy_count += copy_batch_size;

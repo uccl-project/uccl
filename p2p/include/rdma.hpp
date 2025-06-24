@@ -73,7 +73,7 @@ void modify_qp_to_init();
 bool check_cq_completion();
 void local_poll_completions(ibv_cq* cq,
                             std::unordered_set<uint64_t>& finished_wrs,
-                            std::mutex& finished_wrs_mutex);
+                            std::mutex& finished_wrs_mutex, int thread_idx);
 
 void global_rdma_init(void* gpu_buf, size_t bytes, RDMAConnectionInfo* local,
                       int rank);
