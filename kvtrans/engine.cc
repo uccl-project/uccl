@@ -90,7 +90,8 @@ bool Endpoint::reg_kv(void const* data, size_t size, uint64_t& mr_id) {
   mr_id = next_mr_id_.fetch_add(1);
 
   uccl::Mhandle* mhandle;
-  ep_->uccl_regmr(local_gpu_idx_, const_cast<void*>(data), size, 0, &mhandle);
+  ep_->uccl_regmr(gpu_to_dev[local_gpu_idx_], const_cast<void*>(data), size, 0,
+                  &mhandle);
 
   mr_id_to_mr_[mr_id] = new MR{mr_id, mhandle};
 
