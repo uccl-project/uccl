@@ -285,13 +285,12 @@ inline void RDMAEndpoint::initialize_resources(int total_num_engines) {
 
   peer_map_.resize(num_devices_);
   peer_map_mu_.resize(num_devices_);
-
-  for (int i = 0; i < 2; i++) {
-    peer_same_dev_map_[i].resize(num_devices_);
-    peer_same_dev_map_mu_[i].resize(num_devices_);
-  }
-
   next_peer_id_.resize(num_devices_);
+
+  for (int i = 0; i < num_devices_; i++) {
+    peer_map_mu_[i] = std::make_unique<std::mutex>();
+    next_peer_id_[i] = std::make_unique<std::atomic<PeerID>>(0);
+  }
 
   flow_id_spin_.resize(num_devices_);
   next_flow_id_.resize(num_devices_);
@@ -347,10 +346,6 @@ void RDMAEndpoint::cleanup_resources() {
 
   peer_map_.clear();
   peer_map_mu_.clear();
-  for (int i = 0; i < 2; i++) {
-    peer_same_dev_map_[i].clear();
-    peer_same_dev_map_mu_[i].clear();
-  }
 
   next_peer_id_.clear();
   for (auto& spins : flow_id_spin_) {
@@ -739,7 +734,7 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
 
   if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
     // Receiver-driven congestion control per device.
-    for (int i = 0; i < num_devices; i++) {
+    for (int i = 0; i < get_num_devices(); i++) {
       auto factory_dev = RDMAFactory::get_factory_dev(i);
       eqds_[i] = new eqds::EQDS(i, factory_dev->link_bw);
     }
@@ -960,6 +955,7 @@ void RDMAEndpoint::install_ctx_on_engines(int fd, int dev, PeerID peer_id,
   // synchronize GID and PortAttr with remote peer.
   int ret;
   auto factory_dev = RDMAFactory::get_factory_dev(dev);
+  DCHECK(factory_dev) << "install_ctx_on_engines: get_factory_dev()";
 
   ret = send_message(fd, &factory_dev->gid.raw, 16);
   DCHECK(ret == 16) << "Failed to send GID";
@@ -1016,6 +1012,7 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   sockaddr_in localaddr = {};
   localaddr.sin_family = AF_INET;
   auto* factory_dev = RDMAFactory::get_factory_dev(dev);
+  DCHECK(factory_dev) << "uccl_connect: get_factory_dev()";
   localaddr.sin_addr.s_addr = str_to_ip(factory_dev->local_ip_str.c_str());
   ret = bind(bootstrap_fd, (sockaddr*)&localaddr, sizeof(localaddr));
   DCHECK(ret == 0) << "uccl_connect: bind()";
@@ -1148,6 +1145,7 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   int remote_gpuidx;
 
   auto* factory_dev = RDMAFactory::get_factory_dev(dev);
+  DCHECK(factory_dev) << "uccl_accept: get_factory_dev()";
 
   bootstrap_fd = accept(listen_fd, (struct sockaddr*)&cli_addr, &clien);
   DCHECK(bootstrap_fd >= 0) << "uccl_accept: accept()";
@@ -1169,7 +1167,6 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   remote_gpuidx = buf[1];
   bool is_leader = is_local_leader(dev, local_gpuidx, factory_dev->local_ip_str,
                                    *remote_dev, remote_gpuidx, remote_ip);
-
   peer_map_mu_[dev]->lock();
   auto it = peer_map_[dev].find({remote_ip, *remote_dev});
   if (it == peer_map_[dev].end()) {

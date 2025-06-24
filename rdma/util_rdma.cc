@@ -44,7 +44,7 @@ int RDMAFactory::init_devs() {
     goto error;
   }
 
-  for (int d = 0; d < num_devs && num_devices < MAX_IB_DEVS; d++) {
+  for (int d = 0; d < num_devs && __num_devices < MAX_IB_DEVS; d++) {
     struct ibv_context* context = ibv_open_device(devices[d]);
     if (context == nullptr) {
       printf("NET/IB : Unable to open device %s", devices[d]->name);
@@ -157,11 +157,11 @@ int RDMAFactory::init_devs() {
 
       rdma_ctl->devices_.push_back(dev);
       printf("Initialized %s\n", devices[d]->name);
-      num_devices++;
+      __num_devices++;
     }
   }
   ibv_free_device_list(devices);
-  return num_devices;
+  return __num_devices;
 
 error:
   throw std::runtime_error("Failed to initialize RDMAFactory");

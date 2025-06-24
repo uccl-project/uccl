@@ -919,10 +919,6 @@ class RDMAEndpoint {
   std::vector<std::unordered_map<UcclPeer, PeerInfo, UcclPeerHash>> peer_map_;
   std::vector<std::unique_ptr<std::mutex>> peer_map_mu_;
 
-  std::vector<std::unordered_map<UcclPeer, PeerInfo, UcclPeerHash>>
-      peer_same_dev_map_[2];
-  std::vector<std::unique_ptr<std::mutex>> peer_same_dev_map_mu_[2];
-
   std::vector<std::unique_ptr<std::atomic<PeerID>>> next_peer_id_;
 
   std::vector<std::vector<Spin>> flow_id_spin_;
@@ -935,6 +931,8 @@ class RDMAEndpoint {
   RDMAEndpoint(int num_engines_per_dev);
 
   ~RDMAEndpoint();
+
+  uint32_t get_num_devices() { return num_devices_; }
 
   void initialize_resources(int total_num_engines);
 
@@ -1119,6 +1117,7 @@ class UcclFlow {
 
     memset(&send_comm_, 0, sizeof(send_comm_));
     memset(&recv_comm_, 0, sizeof(recv_comm_));
+    int num_devices = ep->get_num_devices();
     // Avoid all flows using the same initial engine offset.
     static std::vector<std::atomic<uint32_t>>* off =
         new std::vector<std::atomic<uint32_t>>(num_devices);
