@@ -232,3 +232,37 @@ python3 test_engine.py
 # Check if RDMA hardware is available
 # (This will work even without RDMA hardware for testing)
 ```
+
+### Benchmark KV Transfer Engines
+
+Benchmarking UCCL KVTrans: 
+
+```bash
+# On client
+NCCL_IB_HCA="mlx5_0:1,mlx5_1:1,mlx5_2:1,mlx5_3:1,mlx5_4:1,mlx5_5:1,mlx5_6:1,mlx5_7:1" \
+NCCL_SOCKET_IFNAME="ds-eap-1,ds-eap-2,ds-eap-3" \
+python benchmark.py \
+    --role client --remote-ip 192.168.0.100 --remote-gpu-idx 0 \
+    --local-gpu-idx 0 --num-cpus 4 \
+    --device gpu
+
+# On server
+NCCL_IB_HCA="mlx5_0:1,mlx5_1:1,mlx5_2:1,mlx5_3:1,mlx5_4:1,mlx5_5:1,mlx5_6:1,mlx5_7:1" \
+NCCL_SOCKET_IFNAME="ds-eap-1,ds-eap-2,ds-eap-3" \
+python benchmark.py --role server --local-gpu-idx 0 --num-cpus 4
+```
+
+Benchmarking NCCL sendrecv: 
+```bash
+# On client
+NCCL_NCHANNELS_PER_NET_PEER=4 \
+python benchmark_nccl.py \
+    --role client --remote-ip 192.168.0.100 \
+    --local-gpu-idx 0 \
+    --device gpu --iters 1000
+
+# On server
+NCCL_NCHANNELS_PER_NET_PEER=4 \
+python benchmark_nccl.py \
+    --role server --local-gpu-idx 0
+```
