@@ -939,12 +939,14 @@ class RDMAEndpoint {
   bool initialize_engine_by_dev(int dev);
 
   /// For testing easily.
-  ConnID test_uccl_connect(int dev, std::string remote_ip, int remote_dev) {
-    return uccl_connect(dev, dev, remote_dev, remote_dev, remote_ip,
+  ConnID test_uccl_connect(int dev, int gpu, int remote_dev, int remote_gpu,
+                           std::string remote_ip) {
+    return uccl_connect(dev, gpu, remote_dev, remote_gpu, remote_ip,
                         kTestListenPort + remote_dev);
   }
-  ConnID test_uccl_accept(int dev, std::string& remote_ip, int* remote_dev) {
-    return uccl_accept(dev, test_listen_fds_[dev], dev, remote_ip, remote_dev);
+  ConnID test_uccl_accept(int dev, int gpu, std::string& remote_ip,
+                          int* remote_dev) {
+    return uccl_accept(dev, test_listen_fds_[dev], gpu, remote_ip, remote_dev);
   }
   /// For testing easily.
 

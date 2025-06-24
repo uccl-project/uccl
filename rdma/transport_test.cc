@@ -297,7 +297,7 @@ static void server_worker(void) {
 
   for (int i = 0; i < FLAGS_nflow; i++) {
     int remote_dev;
-    auto conn_id = ep->test_uccl_accept(0, remote_ip, &remote_dev);
+    auto conn_id = ep->test_uccl_accept(0, 0, remote_ip, &remote_dev);
     printf("Server accepted connection from %s (flow#%d)\n", remote_ip.c_str(),
            i);
 #ifdef GPU
@@ -351,7 +351,7 @@ static void client_worker(void) {
   mhandles.resize(FLAGS_nflow);
 
   for (int i = 0; i < FLAGS_nflow; i++) {
-    auto conn_id = ep->test_uccl_connect(0, FLAGS_serverip, 0);
+    auto conn_id = ep->test_uccl_connect(0, 0, 0, 0, FLAGS_serverip);
     printf("Client connected to %s (flow#%d)\n", FLAGS_serverip.c_str(), i);
 #ifdef GPU
     void* data;
