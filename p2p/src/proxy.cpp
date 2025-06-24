@@ -48,6 +48,7 @@ void remote_cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
   printf("Created CQ for block %d: %p\n", block_idx + 1, cq);
   RDMAConnectionInfo local_info, remote_info;
   create_per_thread_qp(gpu_buffer, total_size, &local_info, rank, cq);
+  create_per_thread_ack_qp(gpu_buffer, total_size, &local_info, rank, cq);
 
   modify_qp_to_init();
   printf("Local RDMA info: addr=0x%lx, rkey=0x%x\n", local_info.addr,
@@ -62,13 +63,13 @@ void remote_cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
   remote_addr = remote_info.addr;
   remote_rkey = remote_info.rkey;
 
-  ensure_ack_sender_resources(pd, g_ring.ack_buf, g_ring.ack_mr);
-  g_ring.ack_qp = qp;
+  remote_ensure_ack_sender_resources(pd, g_ring.ack_buf, g_ring.ack_mr);
+  g_ring.ack_qp = ack_qp;
   printf("Remote CPU thread for block %d: ack_qp=%p,ack_mr=%p\n", block_idx + 1,
          g_ring.ack_qp, g_ring.ack_mr);
 #ifdef ENABLE_WRITE_WITH_IMMEDIATE
   post_receive_buffer_for_imm();
-  cpu_proxy_poll_write_with_immediate(block_idx, cq, g_ring);
+  remote_cpu_proxy_poll_write_with_immediate(block_idx, cq, g_ring);
 #endif
 }
 
@@ -239,6 +240,7 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
   ibv_cq* cq = create_per_thread_cq();
   RDMAConnectionInfo local_info, remote_info;
   create_per_thread_qp(gpu_buffer, total_size, &local_info, rank, cq);
+  create_per_thread_ack_qp(gpu_buffer, total_size, &local_info, rank, cq);
 
   modify_qp_to_init();
   // printf("Local RDMA info: addr=0x%lx, rkey=0x%x\n", local_info.addr,
@@ -252,7 +254,7 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
 
   modify_qp_to_rtr(&remote_info);
   modify_qp_to_rts(&local_info);
-  init_ack_recv_ring(pd, kSenderAckQueueDepth);
+  local_init_ack_recv_ring(pd, kSenderAckQueueDepth);
 
   remote_addr = remote_info.addr;
   remote_rkey = remote_info.rkey;
@@ -272,7 +274,7 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
       std::chrono::duration<double, std::micro>::zero();
 
   for (size_t seen = 0; my_tail < kIterations;) {
-    poll_completions(cq, finished_wrs, finished_wrs_mutex);
+    local_poll_completions(cq, finished_wrs, finished_wrs_mutex);
     notify_gpu_completion(finished_wrs, finished_wrs_mutex, rb, block_idx,
                           my_tail);
     post_gpu_command(rb, my_tail, seen, block_idx, gpu_buffer, cq, finished_wrs,
@@ -286,7 +288,18 @@ void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
   printf("Average rdma write duration: %.2f us\n",
          total_rdma_write_durations.count() / kIterations);
 
-  if (check_cq_completion()) g_progress_run.store(false);
+  if (check_cq_completion()) {
+    // poll completion for 1 seconds
+    auto start = std::chrono::high_resolution_clock::now();
+    while (std::chrono::duration_cast<std::chrono::seconds>(
+               std::chrono::high_resolution_clock::now() - start)
+               .count() < 1) {
+      local_poll_completions(cq, finished_wrs, finished_wrs_mutex);
+      notify_gpu_completion(finished_wrs, finished_wrs_mutex, rb, block_idx,
+                            my_tail);
+    }
+    g_progress_run.store(false);
+  }
 #ifdef SEPARATE_POLLING
   for (auto& t : cq_threads) {
     if (t.joinable()) {

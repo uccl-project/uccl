@@ -80,14 +80,14 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
     }
     if (false) {
       // This will fail.
-      notify_sender_batch(g_ring.ack_qp, task_wrs, g_ring.ack_mr,
-                          g_ring.ack_buf);
-    } else if (!task_wrs.empty()) {
+      remote_notify_sender_batch(g_ring.ack_qp, task_wrs, g_ring.ack_mr,
+                                 g_ring.ack_buf);
+    } else if (false && !task_wrs.empty()) {
       if (!task_wrs.empty()) {
         // Post the last wr is enough.
-        notify_sender_that_wr_id_has_completed(g_ring.ack_qp,
-                                               task_wrs[task_wrs.size() - 1],
-                                               g_ring.ack_mr, g_ring.ack_buf);
+        remote_notify_sender_that_wr_id_has_completed(
+            g_ring.ack_qp, task_wrs[task_wrs.size() - 1], g_ring.ack_mr,
+            g_ring.ack_buf);
       }
     }
 
@@ -126,9 +126,9 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
 
       if (!task_wrs.empty()) {
         // Post the last wr is enough.
-        notify_sender_that_wr_id_has_completed(g_ring.ack_qp,
-                                               task_wrs[task_wrs.size() - 1],
-                                               g_ring.ack_mr, g_ring.ack_buf);
+        remote_notify_sender_that_wr_id_has_completed(
+            g_ring.ack_qp, task_wrs[task_wrs.size() - 1], g_ring.ack_mr,
+            g_ring.ack_buf);
       }
     }
 
