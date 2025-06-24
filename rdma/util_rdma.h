@@ -981,17 +981,18 @@ static inline struct ibv_ah* create_ah(struct ibv_pd* pd, int dev, uint8_t port,
   if (RDMAFactory::is_roce(dev)) {
     ah_attr.is_global = 1;
     ah_attr.grh.dgid = remote_gid;
-    ah_attr.grh.traffic_class = kTrafficClass;
+    ah_attr.grh.traffic_class = ROCE_TRAFFIC_CLASS;
     ah_attr.grh.sgid_index = GID_IDX;
     ah_attr.grh.flow_label = 0;
     ah_attr.grh.hop_limit = 0xff;
+    ah_attr.sl = ROCE_SERVICE_LEVEL;
   } else {
     ah_attr.is_global = 0;
     ah_attr.dlid = remote_port_attr.lid;
+    attr.ah_attr.sl = IB_SERVICE_LEVEL;
   }
 
   ah_attr.port_num = port;
-  ah_attr.sl = kServiceLevel;
 
   struct ibv_ah* ah = ibv_create_ah(pd, &ah_attr);
 
@@ -1125,6 +1126,7 @@ class SharedIOContext {
   SharedIOContext(int dev) {
     auto context = RDMAFactory::get_factory_dev(dev)->context;
     auto pd = RDMAFactory::get_factory_dev(dev)->pd;
+    auto port = RDMAFactory::get_factory_dev(dev)->ib_port_num;
     send_cq_ex_ = util_rdma_create_cq_ex(context, kCQSize);
     UCCL_INIT_CHECK(send_cq_ex_ != nullptr, "util_rdma_create_cq_ex failed");
     recv_cq_ex_ = util_rdma_create_cq_ex(context, kCQSize);
@@ -1160,7 +1162,7 @@ class SharedIOContext {
       // Create Ctrl QP, CQ, and MR.
       util_rdma_create_qp(context, &ctrl_qp_, IBV_QPT_UD, true, true,
                           (struct ibv_cq**)&ctrl_cq_ex_, false, kCQSize, pd,
-                          &ctrl_mr_, nullptr, kCtrlMRSize, kMaxCtrlWRs,
+                          port, &ctrl_mr_, nullptr, kCtrlMRSize, kMaxCtrlWRs,
                           kMaxCtrlWRs, 1, 1);
 
       struct ibv_qp_attr attr = {};

@@ -162,6 +162,9 @@ class RDMAContext {
   // GID Index of the device
   int gid_idx_;
 
+  // Link Speed of the device
+  double link_speed = 0;
+
   // (Engine) Buffer pool for credit chunks.
   std::optional<eqds::CreditChunkBuffPool> engine_credit_chunk_pool_;
 
@@ -407,12 +410,12 @@ class RDMAContext {
    */
   void __retransmit_for_flow(void* context, bool rto);
   inline void fast_retransmit_for_flow(void* context) {
-    if constexpr (is_roce() || kTestLoss) {
+    if (is_roce() || kTestLoss) {
       __retransmit_for_flow(context, false);
     }
   }
   inline void rto_retransmit_for_flow(void* context) {
-    if constexpr (is_roce() || kTestLoss) {
+    if (is_roce() || kTestLoss) {
       __retransmit_for_flow(context, true);
     }
   }

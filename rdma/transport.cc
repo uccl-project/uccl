@@ -376,7 +376,7 @@ void RDMAEndpoint::cleanup_resources() {
 }
 
 bool RDMAEndpoint::initialize_engine_by_dev(int dev) {
-  static std::array<std::once_flag, NUM_DEVICES> flags_per_dev_;
+  static std::vector<std::once_flag> flags_per_dev_(num_devices_);
   std::call_once(flags_per_dev_[dev], [this, dev]() {
     int start_engine_idx = dev * num_engines_per_dev_;
     int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
@@ -970,12 +970,12 @@ void RDMAEndpoint::install_ctx_on_engines(int fd, int dev, PeerID peer_id,
   DCHECK(ret == sizeof(ibv_port_attr)) << "Failed to receive PortAttr";
 
   // Update peer map. Let other connect() go ahead.
-  peer_map_mu_[dev].lock();
+  peer_map_mu_[dev]->lock();
   peer_map_[dev][{remote_ip, remote_dev}].ready = 1;
   peer_map_[dev][{remote_ip, remote_dev}].remote_gid = info->remote_gid;
   peer_map_[dev][{remote_ip, remote_dev}].remote_port_attr =
       info->remote_port_attr;
-  peer_map_mu_[dev].unlock();
+  peer_map_mu_[dev]->unlock();
 
   std::atomic<int> next_install_engine = 0;
   info->next_install_engine = &next_install_engine;
@@ -1049,7 +1049,7 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   bool is_leader = is_local_leader(dev, local_gpuidx, factory_dev->local_ip_str,
                                    remote_dev, remote_gpuidx, remote_ip);
 
-  peer_map_mu_[dev].lock();
+  peer_map_mu_[dev]->lock();
   auto it = peer_map_[dev].find({remote_ip, remote_dev});
   if (it == peer_map_[dev].end()) {
     peer_id = alloc_peer_id(dev);
@@ -1059,7 +1059,7 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
     peer_id = it->second.peer_id;
     first_call = false;
   }
-  peer_map_mu_[dev].unlock();
+  peer_map_mu_[dev]->unlock();
 
   CHECK(peer_id < MAX_PEER);
 
@@ -1099,18 +1099,18 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   auto remote_fifo_qpn = flow->create_fifo_and_gpuflush(bootstrap_fd, dev);
 
   while (1) {
-    peer_map_mu_[dev].lock();
+    peer_map_mu_[dev]->lock();
     auto it = peer_map_[dev].find({remote_ip, remote_dev});
     DCHECK(it != peer_map_[dev].end());
 
     if (it->second.ready == 1) {
       remote_ctx.remote_gid = it->second.remote_gid;
       remote_ctx.remote_port_attr = it->second.remote_port_attr;
-      peer_map_mu_[dev].unlock();
+      peer_map_mu_[dev]->unlock();
       break;
     }
 
-    peer_map_mu_[dev].unlock();
+    peer_map_mu_[dev]->unlock();
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 
@@ -1168,7 +1168,7 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   bool is_leader = is_local_leader(dev, local_gpuidx, factory_dev->local_ip_str,
                                    *remote_dev, remote_gpuidx, remote_ip);
 
-  peer_map_mu_[dev].lock();
+  peer_map_mu_[dev]->lock();
   auto it = peer_map_[dev].find({remote_ip, *remote_dev});
   if (it == peer_map_[dev].end()) {
     peer_id = alloc_peer_id(dev);
@@ -1178,7 +1178,7 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
     peer_id = it->second.peer_id;
     first_call = false;
   }
-  peer_map_mu_[dev].unlock();
+  peer_map_mu_[dev]->unlock();
 
   if (is_leader) {
     // We are the leader, we can install ctx if we are the first call.
@@ -1220,7 +1220,7 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   auto remote_fifo_qpn = flow->create_fifo_and_gpuflush(bootstrap_fd, dev);
 
   while (1) {
-    peer_map_mu_[dev].lock();
+    peer_map_mu_[dev]->lock();
 
     auto it = peer_map_[dev].find({remote_ip, *remote_dev});
     DCHECK(it != peer_map_[dev].end());
@@ -1232,7 +1232,7 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
       break;
     }
 
-    peer_map_mu_[dev].unlock();
+    peer_map_mu_[dev]->unlock();
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 
@@ -1656,6 +1656,8 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
   context_ = factory_dev->context;
   gid_idx_ = factory_dev->gid_idx;
 
+  link_speed = util_rdma_get_link_speed_from_ibv_speed(
+      factory_dev->port_attr.active_speed, factory_dev->port_attr.active_width);
   remote_ctx_.remote_gid = meta.install_ctx.remote_gid;
   remote_ctx_.remote_port_attr = meta.install_ctx.remote_port_attr;
 
@@ -1718,8 +1720,8 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
     util_rdma_create_qp_seperate_cq(
         context_, &credit_qp_, IBV_QPT_UC, true, false,
         (struct ibv_cq**)&pacer_credit_cq_ex_,
-        (struct ibv_cq**)&engine_credit_cq_ex_, false, kCQSize, pd_,
-        eqds::CreditChunkBuffPool::kNumChunk,
+        (struct ibv_cq**)&engine_credit_cq_ex_, false, kCQSize,
+        pd_, factory_dev->ib_port_num, eqds::CreditChunkBuffPool::kNumChunk,
         eqds::CreditChunkBuffPool::kNumChunk, 1, 1);
 
     auto addr =
@@ -2080,17 +2082,17 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
       wr->wr_id = (1ULL * imm_data.GetCSN()) << 56 | (uint64_t)subflow;
     else
       wr->wr_id = 0;
-
+    bool roce = is_roce();
     {
       auto wheel = &wheel_;
       uint32_t hdr_overhead;
       if (likely(chunk_size == kChunkSize && mtu_bytes_ == 4096)) {
-        hdr_overhead = ROCE_NET ? MAX_CHUNK_IB_4096_HDR_OVERHEAD
+        hdr_overhead = roce ? MAX_CHUNK_IB_4096_HDR_OVERHEAD
                                 : MAX_CHUNK_ROCE_IPV4_4096_HDR_OVERHEAD;
       } else {
         auto num_mtu = (chunk_size + mtu_bytes_) / mtu_bytes_;
         hdr_overhead =
-            num_mtu * (ROCE_NET ? ROCE_IPV4_HDR_OVERHEAD : IB_HDR_OVERHEAD);
+            num_mtu * (roce ? ROCE_IPV4_HDR_OVERHEAD : IB_HDR_OVERHEAD);
       }
 
       // Enforce global cwnd.
@@ -2350,11 +2352,12 @@ void RDMAContext::uc_rx_ack(struct ibv_cq_ex* cq_ex, UcclSackHdr* ucclsackh) {
 
     subflow->pcb.duplicate_acks++;
     subflow->pcb.snd_ooo_acks = ucclsackh->sack_bitmap_count.value();
+    int fast_rexmit_thres = ((is_roce()) ? ROCE_DUP_ACK_THRES : 65536);
 
-    if (subflow->pcb.duplicate_acks < kFastRexmitDupAckThres) {
+    if (subflow->pcb.duplicate_acks < fast_rexmit_thres) {
       // We have not reached the threshold yet, so we do not do
       // retransmission.
-    } else if (subflow->pcb.duplicate_acks == kFastRexmitDupAckThres) {
+    } else if (subflow->pcb.duplicate_acks == fast_rexmit_thres) {
       // Fast retransmit.
       fast_retransmit_for_flow(subflow);
     } else {
