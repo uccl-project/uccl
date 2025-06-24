@@ -12,13 +12,8 @@
 UCCL_PARAM(ROCE_TRAFFIC_CLASS, "ROCE_TRAFFIC_CLASS", 3);
 UCCL_PARAM(ROCE_SERVICE_LEVEL, "ROCE_SERVICE_LEVEL", 135);
 UCCL_PARAM(IB_SERVICE_LEVEL, "IB_SERVICE_LEVEL", 0);
-
-// DupAckThres equals to 1 means all duplicate acks are caused by
-// packet loss. This is true for flow-level ECMP, which is the common case. When
-// the network supports adaptive routing, duplicate acks may be caused by
-// adaptive routing. In this case, DupAckThres should be set to a
-// value greater than 0.
-UCCL_PARAM(ROCE_DUP_ACK_THRES, "ROCE_DUP_ACK_THRES", 32);
+UCCL_PARAM(IB_GID_IDX, "IB_GID_IDX", 0);
+UCCL_PARAM(ROCE_GID_IDX, "ROCE_GID_IDX", 3);
 
 #ifndef __HIP_PLATFORM_AMD__
 // # of engines per device.
@@ -124,6 +119,13 @@ static constexpr uint32_t kMAXConsecutiveSameChoiceBytes = 16384;
 static constexpr uint32_t kMAXUseCacheQPSize = 8192;
 // Message size threshold for bypassing the timing wheel.
 static constexpr uint32_t kBypassTimingWheelThres = 9000;
+
+// DupAckThres equals to 1 means all duplicate acks are caused by
+// packet loss. This is true for flow-level ECMP, which is the common case. When
+// the network supports adaptive routing, duplicate acks may be caused by
+// adaptive routing. In this case, DupAckThres should be set to a
+// value greater than 0.
+static constexpr uint32_t ROCE_DUP_ACK_THRES = 32;
 
 // # of Tx work handled in one loop.
 static constexpr uint32_t kMaxTxWork = 4;

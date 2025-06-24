@@ -187,7 +187,7 @@ class RDMAContext {
 
   LIST_HEAD(ack_list_);
 
-  inline bool is_roce() { return (gid_idx_ == ROCE_GID_IDX); }
+  inline bool is_roce() { return (gid_idx_ == ucclParamROCE_GID_IDX()); }
   // Get an unused request, if no request is available, return nullptr.
   inline struct RecvRequest* alloc_recvreq(void) {
     for (int i = 0; i < kMaxReq; i++) {

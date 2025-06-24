@@ -25,9 +25,6 @@
 namespace uccl {
 #define MAX_IB_DEVS 32
 
-#define ROCE_GID_IDX 3
-#define IB_GID_IDX 0
-
 typedef uint64_t FlowID;
 typedef uint64_t PeerID;
 
@@ -662,7 +659,7 @@ class RDMAFactory {
 
   static inline bool is_roce(int dev) {
     DCHECK(dev >= 0 && dev < rdma_ctl->devices_.size());
-    return (rdma_ctl->devices_[dev].gid_idx == ROCE_GID_IDX);
+    return (rdma_ctl->devices_[dev].gid_idx == ucclParamROCE_GID_IDX());
   }
 
   std::string to_string(void) const;
@@ -982,7 +979,7 @@ static inline struct ibv_ah* create_ah(struct ibv_pd* pd, int dev, uint8_t port,
     ah_attr.is_global = 1;
     ah_attr.grh.dgid = remote_gid;
     ah_attr.grh.traffic_class = ucclParamROCE_TRAFFIC_CLASS();
-    ah_attr.grh.sgid_index = ROCE_GID_IDX;
+    ah_attr.grh.sgid_index = ucclParamROCE_GID_IDX();
     ah_attr.grh.flow_label = 0;
     ah_attr.grh.hop_limit = 0xff;
     ah_attr.sl = ucclParamROCE_SERVICE_LEVEL();

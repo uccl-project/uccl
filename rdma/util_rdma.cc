@@ -111,9 +111,9 @@ int RDMAFactory::init_devs() {
       dev.link_bw = link_bw;
 
       if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
-        dev.gid_idx = ROCE_GID_IDX;
+        dev.gid_idx = ucclParamROCE_GID_IDX();
       } else if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
-        dev.gid_idx = IB_GID_IDX;
+        dev.gid_idx = ucclParamIB_GID_IDX();
       } else {
         printf("Unknown link layer: %d\n", port_attr.link_layer);
         ibv_close_device(context);
