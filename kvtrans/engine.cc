@@ -9,25 +9,38 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+thread_local bool large_kv_meta_data_registered_ = false;
+thread_local LargeKVMetaData large_kv_meta_data_;
+thread_local uint64_t large_kv_meta_data_mr_id_ = 0;
+
 const uint8_t ib_cluster_dev_suffix_list[8] = {4, 5, 6, 7, 0, 1, 2, 3};
 
 Endpoint::Endpoint(const uint32_t local_gpu_idx, const uint32_t num_cpus)
     : local_gpu_idx_(local_gpu_idx), num_cpus_(num_cpus) {
-  py::gil_scoped_release release;
-  std::cout << "Creating Engine with GPU index: " << local_gpu_idx
-            << ", CPUs: " << num_cpus << std::endl;
+  {
+    py::gil_scoped_release release;
+    std::cout << "Creating Engine with GPU index: " << local_gpu_idx
+              << ", CPUs: " << num_cpus << std::endl;
 
-  google::InitGoogleLogging("kvtrans_engine");
-  google::InstallFailureSignalHandler();
+    google::InitGoogleLogging("kvtrans_engine");
+    google::InstallFailureSignalHandler();
 
-  // Initialize the RDMA endpoint with lazy creation.
-  ep_ =
-      new uccl::RDMAEndpoint(ib_cluster_dev_suffix_list, NUM_DEVICES, num_cpus);
+    // Initialize the RDMA endpoint with lazy creation.
+    ep_ = new uccl::RDMAEndpoint(ib_cluster_dev_suffix_list, NUM_DEVICES,
+                                 num_cpus);
 
-  // Initialize the engine based on the GPU index.
+    // Initialize the engine based on the GPU index.
 #ifdef LAZY_CREATE_ENGINE
-  ep_->initialize_engine_by_dev(local_gpu_idx_);
+    ep_->initialize_engine_by_dev(local_gpu_idx_);
 #endif
+  }
+
+  if (!large_kv_meta_data_registered_) {
+    bool rc = reg_kv(&large_kv_meta_data_, sizeof(LargeKVMetaData),
+                     large_kv_meta_data_mr_id_);
+    DCHECK(rc) << "Failed to register large KV meta data";
+    large_kv_meta_data_registered_ = true;
+  }
 
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
@@ -101,47 +114,102 @@ bool Endpoint::send_kv(uint64_t conn_id, uint64_t mr_id, void const* data,
                        size_t size) {
   py::gil_scoped_release release;
   DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
-  uccl::ucclRequest ureq;
 
   auto conn = conn_id_to_conn_[conn_id];
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
 
+  uccl::ucclRequest ureq[kMaxInflightChunks];
+  large_kv_meta_data_.total_size = size;
+  auto mhandle_meta = mr_id_to_mr_[large_kv_meta_data_mr_id_]->mhandle_;
+
   int rc;
   do {
     rc = ep_->uccl_send_async(
-        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
-        data, size, &ureq);
-    if (rc == -1) {
-      std::this_thread::yield();
-    }
+        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle_meta,
+        (void*)&large_kv_meta_data_, sizeof(LargeKVMetaData), &ureq[0]);
   } while (rc == -1);
+  ep_->uccl_poll_ureq(&ureq[0]);
 
-  ep_->uccl_poll_ureq(&ureq);
+  void* cur_data = const_cast<void*>(data);
+  size_t size_sent = 0;
+  int ureq_max = (size + kChunkSize - 1) / kChunkSize;
+  int ureq_issued = 0, ureq_finished = 0;
 
+  while (ureq_finished < ureq_max) {
+    while (ureq_issued - ureq_finished < kMaxInflightChunks &&
+           size_sent < size) {
+      size_t chunk_size = std::min(size - size_sent, kChunkSize);
+      auto rc = ep_->uccl_send_async(
+          static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
+          cur_data, chunk_size, &ureq[ureq_issued % kMaxInflightChunks]);
+      if (rc == -1) break;
+      cur_data += chunk_size;
+      size_sent += chunk_size;
+      ureq_issued++;
+    }
+    LOG_EVERY_N(INFO, 1000000000)
+        << "ureq_issued: " << ureq_issued
+        << ", ureq_finished: " << ureq_finished << " size_sent: " << size_sent
+        << " size: " << size;
+    for (int i = ureq_finished; i < ureq_issued; i++) {
+      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+        ureq_finished++;
+      }
+    }
+  }
   return true;
 }
 
 bool Endpoint::recv_kv(uint64_t conn_id, uint64_t mr_id, void* data,
                        size_t max_size, size_t& recv_size) {
   py::gil_scoped_release release;
-  uccl::ucclRequest ureq;
 
   auto conn = conn_id_to_conn_[conn_id];
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
-  int max_size_int = static_cast<int>(max_size);
+
+  uccl::ucclRequest ureq[kMaxInflightChunks];
+  auto mhandle_meta = mr_id_to_mr_[large_kv_meta_data_mr_id_]->mhandle_;
 
   int rc;
+  void* meta_addr = (void*)&large_kv_meta_data_;
+  int meta_size = sizeof(LargeKVMetaData);
   do {
     rc = ep_->uccl_recv_async(
-        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
-        &data, &max_size_int, 1, &ureq);
-    if (rc == -1) {
-      std::this_thread::yield();
-    }
+        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
+        &mhandle_meta, &meta_addr, &meta_size, 1, &ureq[0]);
   } while (rc == -1);
+  ep_->uccl_poll_ureq(&ureq[0]);
 
-  ep_->uccl_poll_ureq(&ureq);
+  size_t size_expected = large_kv_meta_data_.total_size;
+  void* cur_data = data;
+  size_t size_post_recv = 0;
+  int ureq_max = (size_expected + kChunkSize - 1) / kChunkSize;
+  int ureq_issued = 0, ureq_finished = 0;
 
-  recv_size = ureq.recv.data_len[0];
+  while (ureq_finished < ureq_max) {
+    while (ureq_issued - ureq_finished < kMaxInflightChunks &&
+           size_post_recv < size_expected) {
+      int chunk_size = std::min(size_expected - size_post_recv, kChunkSize);
+      auto rc = ep_->uccl_recv_async(
+          static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
+          &cur_data, &chunk_size, 1, &ureq[ureq_issued % kMaxInflightChunks]);
+      if (rc == -1) break;
+      cur_data += chunk_size;
+      size_post_recv += chunk_size;
+      ureq_issued++;
+    }
+    LOG_EVERY_N(INFO, 1000000000) << "ureq_issued: " << ureq_issued
+                                  << ", ureq_finished: " << ureq_finished
+                                  << " size_expected: " << size_expected
+                                  << " size_post_recv: " << size_post_recv;
+
+    for (int i = ureq_finished; i < ureq_issued; i++) {
+      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+        ureq_finished++;
+      }
+    }
+  }
+
+  recv_size = size_expected;
   return true;
 }
