@@ -1649,7 +1649,8 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
       io_ctx_(io_ctx),
       engine_offset_(engine_offset),
       wheel_({freq_ghz, us_to_cycles(kWheelSlotWidthUs, freq_ghz),
-              us_to_cycles(kWheelHorizonUs, freq_ghz), kBktPoolSize}) {
+              us_to_cycles(kWheelHorizonUs, freq_ghz), kBktPoolSize,
+              RDMAFactory::get_factory_dev(dev)->link_bw}) {
   int ret;
   auto* factory_dev = RDMAFactory::get_factory_dev(dev);
 

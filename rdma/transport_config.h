@@ -33,7 +33,6 @@ static constexpr uint32_t NUM_ENGINES = 1;
 static constexpr uint32_t kPortEntropy = 256;
 static constexpr uint32_t kChunkSize = 128 << 10;
 #endif
-static constexpr double DEFAULT_LINK_BW = 400.0 * 1e9 / 8;  // 400Gbps
 
 static constexpr uint32_t MAX_PEER = 256;
 // Maximum number of flows (one-way) on each engine.
