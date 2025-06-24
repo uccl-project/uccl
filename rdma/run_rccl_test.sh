@@ -9,7 +9,7 @@ else
   echo "CONDA_LIB_HOME is set to: ${CONDA_LIB_HOME}"
 fi
 
-NODEFILE=${UCCL_HOME}/scripts/node_ips/amd_2.txt
+NODEFILE=${UCCL_HOME}/scripts/node_ips/amd.txt
 
 TEST=${1:-uccl}
 

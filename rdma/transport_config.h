@@ -10,7 +10,6 @@
 #define LAZY_CREATE_ENGINE
 #endif
 
-// #define USE_CQ_EX
 #define PIN_TO_NUMA
 
 // TODO : Convert them to user definable configs
@@ -34,9 +33,21 @@ static constexpr uint32_t kPortEntropy = 32;
 // Maximum chunk size (Bytes) for each WQE.
 static constexpr uint32_t kChunkSize = 32 << 10;
 #else
+#ifdef HPC_FUND_CLUSTER
+// This cluster has low PCIe-CPU interconnect bw, therefore we use larger chunk size to reduce the number of WQEs.
 static constexpr uint32_t NUM_ENGINES = 1;
 static constexpr uint32_t kPortEntropy = 256;
 static constexpr uint32_t kChunkSize = 128 << 10;
+#else
+static constexpr uint32_t NUM_ENGINES = 4;
+static constexpr uint32_t kPortEntropy = 32;
+static constexpr uint32_t kChunkSize = 32 << 10;
+#endif
+#endif  
+
+// Broadcom NICs do not support ibv_cq_ex.
+#ifndef BROADCOM_NIC
+#define USE_CQ_EX
 #endif
 
 static constexpr uint32_t MAX_PEER = 256;

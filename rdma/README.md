@@ -95,10 +95,10 @@ Build `librccl-net-uccl.so`
 
 ```shell
 cd $UCCL_HOME/rdma
-make -f Makefile_hip -j
+make -f Makefile_hip -j "CXXFLAGS=-DHPC_FUND_CLUSTER"
 ```
 
-Running `rccl-tests`:
+Run `rccl-tests`:
 
 ```shell
 # Using slurm to allocate two AMD nodes
@@ -106,4 +106,22 @@ salloc -N 2 -n 2 -p mi2104x -t 00:30:00
 
 # Usage: ./run_rccl_test_hpcfund.sh [rccl/uccl, default: uccl]
 ./run_rccl_test_hpcfund.sh rccl
+```
+
+### If your are using Broadcom NICs
+
+Using the following to build `librccl-net-uccl.so`
+
+```shell
+cd $UCCL_HOME/rdma
+make -f Makefile_hip -j "CXXFLAGS=-DBROADCOM_NIC"
+```
+
+Run `rccl-tests`:
+
+```shell
+# Edit scripts/node_ips/amd.txt to fill up the node addresses. 
+
+# Usage: ./run_rccl_test.sh [rccl/uccl, default: uccl]
+./run_rccl_test.sh rccl
 ```
