@@ -1,5 +1,6 @@
 #pragma once
 
+#include "param.h"
 #include <cstdint>
 #include <string>
 #include <thread>
@@ -8,18 +9,16 @@
 // #define STATS
 #define LAZY_CREATE_ENGINE
 
-// TODO : Convert them to user definable configs
-#define ROCE_TRAFFIC_CLASS 3
-
-#define ROCE_SERVICE_LEVEL 135
-#define IB_SERVICE_LEVEL 0
+UCCL_PARAM(ROCE_TRAFFIC_CLASS, "ROCE_TRAFFIC_CLASS", 3);
+UCCL_PARAM(ROCE_SERVICE_LEVEL, "ROCE_SERVICE_LEVEL", 135);
+UCCL_PARAM(IB_SERVICE_LEVEL, "IB_SERVICE_LEVEL", 0);
 
 // DupAckThres equals to 1 means all duplicate acks are caused by
 // packet loss. This is true for flow-level ECMP, which is the common case. When
 // the network supports adaptive routing, duplicate acks may be caused by
 // adaptive routing. In this case, DupAckThres should be set to a
 // value greater than 0.
-#define ROCE_DUP_ACK_THRES 32
+UCCL_PARAM(ROCE_DUP_ACK_THRES, "ROCE_DUP_ACK_THRES", 32);
 
 #ifndef __HIP_PLATFORM_AMD__
 // # of engines per device.

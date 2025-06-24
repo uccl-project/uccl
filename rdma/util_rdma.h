@@ -689,12 +689,12 @@ static inline int modify_qp_rtr_gpuflush(struct ibv_qp* qp, int dev) {
     attr.ah_attr.grh.dgid = factory_dev->gid;
     attr.ah_attr.grh.sgid_index = factory_dev->gid_idx;
     attr.ah_attr.grh.hop_limit = 0xff;
-    attr.ah_attr.grh.traffic_class = ROCE_TRAFFIC_CLASS;
-    attr.ah_attr.sl = ROCE_SERVICE_LEVEL;
+    attr.ah_attr.grh.traffic_class = ucclParamROCE_TRAFFIC_CLASS();
+    attr.ah_attr.sl = ucclParamROCE_SERVICE_LEVEL();
   } else {
     attr.ah_attr.is_global = 0;
     attr.ah_attr.dlid = factory_dev->port_attr.lid;
-    attr.ah_attr.sl = IB_SERVICE_LEVEL;
+    attr.ah_attr.sl = ucclParamIB_SERVICE_LEVEL();
   }
 
   attr.ah_attr.port_num = factory_dev->ib_port_num;
@@ -737,8 +737,8 @@ static inline int modify_qp_rtr(struct ibv_qp* qp, int dev,
     attr.ah_attr.grh.dgid = remote_ctx->remote_gid;
     attr.ah_attr.grh.sgid_index = factory_dev->gid_idx;
     attr.ah_attr.grh.hop_limit = 0xff;
-    attr.ah_attr.grh.traffic_class = ROCE_TRAFFIC_CLASS;
-    attr.ah_attr.sl = ROCE_SERVICE_LEVEL;
+    attr.ah_attr.grh.traffic_class = ucclParamROCE_TRAFFIC_CLASS();
+    attr.ah_attr.sl = ucclParamROCE_SERVICE_LEVEL();
   } else {
     if (util_rdma_extract_local_subnet_prefix(
             factory_dev->gid.global.subnet_prefix) !=
@@ -748,7 +748,7 @@ static inline int modify_qp_rtr(struct ibv_qp* qp, int dev,
     }
     attr.ah_attr.is_global = 0;
     attr.ah_attr.dlid = remote_ctx->remote_port_attr.lid;
-    attr.ah_attr.sl = IB_SERVICE_LEVEL;
+    attr.ah_attr.sl = ucclParamIB_SERVICE_LEVEL();
   }
   attr.dest_qp_num = remote_qpn;
   attr.rq_psn = BASE_PSN;
@@ -981,15 +981,15 @@ static inline struct ibv_ah* create_ah(struct ibv_pd* pd, int dev, uint8_t port,
   if (RDMAFactory::is_roce(dev)) {
     ah_attr.is_global = 1;
     ah_attr.grh.dgid = remote_gid;
-    ah_attr.grh.traffic_class = ROCE_TRAFFIC_CLASS;
+    ah_attr.grh.traffic_class = ucclParamROCE_TRAFFIC_CLASS();
     ah_attr.grh.sgid_index = ROCE_GID_IDX;
     ah_attr.grh.flow_label = 0;
     ah_attr.grh.hop_limit = 0xff;
-    ah_attr.sl = ROCE_SERVICE_LEVEL;
+    ah_attr.sl = ucclParamROCE_SERVICE_LEVEL();
   } else {
     ah_attr.is_global = 0;
     ah_attr.dlid = remote_port_attr.lid;
-    ah_attr.sl = IB_SERVICE_LEVEL;
+    ah_attr.sl = ucclParamIB_SERVICE_LEVEL();
   }
 
   ah_attr.port_num = port;

@@ -2353,7 +2353,8 @@ void RDMAContext::uc_rx_ack(struct ibv_cq_ex* cq_ex, UcclSackHdr* ucclsackh) {
 
     subflow->pcb.duplicate_acks++;
     subflow->pcb.snd_ooo_acks = ucclsackh->sack_bitmap_count.value();
-    int fast_rexmit_thres = ((is_roce()) ? ROCE_DUP_ACK_THRES : 65536);
+    int fast_rexmit_thres =
+        ((is_roce()) ? ucclParamROCE_DUP_ACK_THRES() : 65536);
 
     if (subflow->pcb.duplicate_acks < fast_rexmit_thres) {
       // We have not reached the threshold yet, so we do not do
