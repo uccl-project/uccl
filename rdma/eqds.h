@@ -291,7 +291,7 @@ class EQDS {
     }
   }
 
-  EQDS(int dev);
+  EQDS(int dev, double link_bandwidth);
 
   ~EQDS() {}
 

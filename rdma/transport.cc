@@ -370,47 +370,6 @@ void RDMAEndpoint::cleanup_resources() {
   }
 }
 
-bool RDMAEndpoint::initialize_engine_by_dev(int dev) {
-  static std::vector<std::once_flag> flags_per_dev_(num_devices_);
-  std::call_once(flags_per_dev_[dev], [this, dev]() {
-    int start_engine_idx = dev * num_engines_per_dev_;
-    int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
-
-    for (int engine_id = start_engine_idx; engine_id <= end_engine_idx;
-         engine_id++) {
-      int engine_cpu_id =
-          ENGINE_CPU_START_LIST[dev] + engine_id % num_engines_per_dev_;
-      DCHECK(engine_cpu_id < NUM_CPUS) << engine_cpu_id << ", " << NUM_CPUS;
-      UcclRDMAEngine* engine_ptr;
-      {
-        std::lock_guard<std::mutex> lock(engine_map_mu_);
-        if (engine_id_to_engine_map_.find(engine_id) !=
-            engine_id_to_engine_map_.end()) {
-          UCCL_LOG_ENGINE << "Engine " << engine_id << " already exists.";
-          exit(EXIT_FAILURE);
-        }
-        engine_id_to_engine_map_[engine_id] = std::make_unique<UcclRDMAEngine>(
-            dev, engine_id, channel_vec_[engine_id], eqds_[dev]);
-
-        engine_ptr = engine_id_to_engine_map_[engine_id].get();
-      }
-      {
-        std::lock_guard<std::mutex> lock(engine_th_mu_);
-        engine_th_vec_.emplace_back(std::make_unique<std::thread>(
-            [engine_ptr, engine_id, engine_cpu_id]() {
-              UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
-                              << "running on CPU " << engine_cpu_id;
-              pin_thread_to_cpu(engine_cpu_id);
-              engine_ptr->run();
-            }));
-      }
-    }
-    create_listen_socket(&test_listen_fds_[dev], kTestListenPort + dev);
-  });
-
-  return true;
-}
-
 void UcclRDMAEngine::handle_tx_work(void) {
   Channel::Msg tx_work;
   int budget;
@@ -809,7 +768,7 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
 #endif
 
 bool RDMAEndpoint::initialize_engine_by_dev(int dev) {
-  static std::array<std::once_flag, NUM_DEVICES> flags_per_dev_;
+  static std::vector<std::once_flag> flags_per_dev_(num_devices_);
   std::call_once(flags_per_dev_[dev], [this, dev]() {
     int start_engine_idx = dev * num_engines_per_dev_;
     int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
@@ -2446,11 +2405,12 @@ void RDMAContext::uc_rx_ack(UcclSackHdr* ucclsackh) {
 
     subflow->pcb.duplicate_acks++;
     subflow->pcb.snd_ooo_acks = ucclsackh->sack_bitmap_count.value();
+    int fast_rexmit_thres = ((is_roce()) ? ROCE_DUP_ACK_THRES : 65536);
 
-    if (subflow->pcb.duplicate_acks < kFastRexmitDupAckThres) {
+    if (subflow->pcb.duplicate_acks < fast_rexmit_thres) {
       // We have not reached the threshold yet, so we do not do
       // retransmission.
-    } else if (subflow->pcb.duplicate_acks == kFastRexmitDupAckThres) {
+    } else if (subflow->pcb.duplicate_acks == fast_rexmit_thres) {
       // Fast retransmit.
       fast_retransmit_for_flow(subflow);
     } else {
