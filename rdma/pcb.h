@@ -19,9 +19,12 @@ namespace uccl {
  */
 struct PCB {
   static constexpr std::size_t kSackBitmapBucketSize = sizeof(uint64_t) * 8;
-  PCB()
-      : timely_cc(freq_ghz, LINK_BANDWIDTH),
-        swift_cc(freq_ghz, LINK_BANDWIDTH) {}
+
+  PCB() {}
+
+  PCB(double link_bandwidth)
+      : timely_cc(freq_ghz, link_bandwidth),
+        swift_cc(freq_ghz, link_bandwidth) {}
 
   timely::TimelyCC timely_cc;
 

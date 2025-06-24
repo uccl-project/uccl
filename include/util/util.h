@@ -310,8 +310,8 @@ static inline void apply_setsockopt(int xsk_fd) {
   int ret;
   int sock_opt;
 
+#ifdef SO_PREFER_BUSY_POLL
   sock_opt = 1;
-
   ret = setsockopt(xsk_fd, SOL_SOCKET, SO_PREFER_BUSY_POLL, (void*)&sock_opt,
                    sizeof(sock_opt));
   if (ret == -EPERM) {
@@ -321,13 +321,13 @@ static inline void apply_setsockopt(int xsk_fd) {
   } else if (ret < 0) {
     fprintf(stderr, "Ignore SO_PREFER_BUSY_POLL as it failed\n");
   }
-
+#endif
   sock_opt = 20;
   if (setsockopt(xsk_fd, SOL_SOCKET, SO_BUSY_POLL, (void*)&sock_opt,
                  sizeof(sock_opt)) < 0) {
     fprintf(stderr, "Ignore SO_BUSY_POLL as it failed\n");
   }
-
+#ifdef SO_BUSY_POLL_BUDGET
   sock_opt = 64;
   ret = setsockopt(xsk_fd, SOL_SOCKET, SO_BUSY_POLL_BUDGET, (void*)&sock_opt,
                    sizeof(sock_opt));
@@ -338,6 +338,7 @@ static inline void apply_setsockopt(int xsk_fd) {
   } else if (ret < 0) {
     fprintf(stderr, "Ignore SO_BUSY_POLL_BUDGET as it failed\n");
   }
+#endif
 }
 
 namespace detail {
@@ -880,6 +881,72 @@ inline uint64_t get_monotonic_time_ns() {
   return (uint64_t)ts.tv_sec * 1000000000LL + (uint64_t)ts.tv_nsec;
 }
 
+struct ib_dev {
+  char prefix[64];
+  int port;
+};
+
+static bool match_if(char const* string, char const* ref, bool matchExact) {
+  // Make sure to include '\0' in the exact case
+  int matchLen = matchExact ? strlen(string) + 1 : strlen(ref);
+  return strncmp(string, ref, matchLen) == 0;
+}
+
+static bool match_port(int const port1, int const port2) {
+  if (port1 == -1) return true;
+  if (port2 == -1) return true;
+  if (port1 == port2) return true;
+  return false;
+}
+
+static bool match_if_list(char const* string, int port, struct ib_dev* ifList,
+                          int listSize, bool matchExact) {
+  // Make an exception for the case where no user list is defined
+  if (listSize == 0) return true;
+
+  for (int i = 0; i < listSize; i++) {
+    if (match_if(string, ifList[i].prefix, matchExact) &&
+        match_port(port, ifList[i].port)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static inline int parse_interfaces(char const* string, struct ib_dev* ifList,
+                                   int maxList) {
+  if (!string) return 0;
+
+  char const* ptr = string;
+
+  int ifNum = 0;
+  int ifC = 0;
+  char c;
+  do {
+    c = *ptr;
+    if (c == ':') {
+      if (ifC > 0) {
+        ifList[ifNum].prefix[ifC] = '\0';
+        ifList[ifNum].port = atoi(ptr + 1);
+        ifNum++;
+        ifC = 0;
+      }
+      while (c != ',' && c != '\0') c = *(++ptr);
+    } else if (c == ',' || c == '\0') {
+      if (ifC > 0) {
+        ifList[ifNum].prefix[ifC] = '\0';
+        ifList[ifNum].port = -1;
+        ifNum++;
+        ifC = 0;
+      }
+    } else {
+      ifList[ifNum].prefix[ifC] = c;
+      ifC++;
+    }
+    ptr++;
+  } while (ifNum < maxList && c);
+  return ifNum;
+}
 typedef std::chrono::time_point<std::chrono::high_resolution_clock> TimePoint;
 
 #ifdef USE_CUDA

@@ -7,26 +7,10 @@ UCCL RDMA plugin for NCCL/RCCL.
 3. UCCL supports both Nvidia and AMD GPUs.
 
 ## Configuration
-### transport_config.h:
-Modify the below constants based on the environment.
-
-1. Network
-```
-ROCE_NET:               true (RoCE) or false (Infiniband)
-
-SINGLE_CTRL_NIC:        The device name of control NIC (can be just prefix). Set to empty string if each RDMA NIC has its own IP address. UCCL will detect them automatically.
-```
-
-2. NIC
-```
-NUM_DEVICES:            The number of physical NICs (use ibv_devices).
-
-IB_DEVICE_NAME_PREFIX:  The prefix of the device name (e.g., mlx5_).
-
-DEVNAME_SUFFIX_LIST:    The suffix of the device name (use ibv_devices).
-
-LINK_BANDWIDTH:         The bandwidth (bytes per second) of each NIC (use ibstat).
-```
+### Env Vars
+UCCL uses the following [NCCL](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html) environment variables to configure:
+1. NCCL_IB_HCA
+2. NCCL_SOCKET_IFNAME
 
 ### run_nccl_test.sh:
 ```
