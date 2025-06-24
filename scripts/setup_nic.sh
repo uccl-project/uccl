@@ -10,10 +10,15 @@ PLATFORM=$6
 echo "configuring ${NIC} with ${NQUEUE} nic queues ${NIRQCORE} irq cores ${MTU} MTU for ${MODE} on ${PLATFORM}"
 
 echo "unloading any xdp programs"
-sudo $UCCL_HOME/afxdp/lib/xdp-tools/xdp-loader/xdp-loader unload ${NIC} --all
+sudo ${UCCL_HOME}/afxdp/lib/xdp-tools/xdp-loader/xdp-loader unload ${NIC} --all
 
-echo "sudo ethtool -L ${NIC} combined ${NQUEUE}"
-sudo ethtool -L ${NIC} combined ${NQUEUE}
+if [ $PLATFORM = "tpu" ]; then
+    echo "sudo ethtool -L ${NIC} rx ${NQUEUE} tx ${NQUEUE}"
+    sudo ethtool -L ${NIC} rx ${NQUEUE} tx ${NQUEUE}
+else
+    echo "sudo ethtool -L ${NIC} combined ${NQUEUE}"
+    sudo ethtool -L ${NIC} combined ${NQUEUE}
+fi
 echo "sudo ifconfig ${NIC} mtu ${MTU} up"
 sudo ifconfig ${NIC} mtu ${MTU} up
 
@@ -23,6 +28,8 @@ if [ $MODE = "afxdp" ]; then
         sudo ethtool -C ${NIC} adaptive-rx off rx-usecs 0 tx-usecs 0
     elif [ $PLATFORM = "clab" ]; then
         sudo ethtool -C ${NIC} adaptive-rx off adaptive-tx off rx-usecs 0 rx-frames 1 tx-usecs 0 tx-frames 1
+    elif [ $PLATFORM = "tpu" ]; then
+        sudo ethtool -C ${NIC} rx-usecs 0 tx-usecs 0
     else
         echo "Invalid platform: ${PLATFORM}"
         exit 1
@@ -33,6 +40,8 @@ elif [ $MODE = "tcp" ]; then
         sudo ethtool -C ${NIC} adaptive-rx on rx-usecs 20 tx-usecs 60
     elif [ $PLATFORM = "clab" ]; then
         sudo ethtool -C ${NIC} adaptive-rx on adaptive-tx on rx-usecs 8 rx-frames 128 tx-usecs 8 tx-frames 128
+    elif [ $PLATFORM = "tpu" ]; then
+        sudo ethtool -C ${NIC} rx-usecs 20 tx-usecs 50
     else
         echo "Invalid platform: ${PLATFORM}"
         exit 1
@@ -43,13 +52,14 @@ else
 fi
 
 NCPU=$(nproc)
-
 # Starting from 3/4 of the CPUs to avoid conflicting with nccl proxy services.
 irq_start_cpu=$((NCPU / 4 * 3))
 
 # For AWS, just mapping irqs to the application cores
 if [ $PLATFORM = "aws" ]; then
     irq_start_cpu=$((NCPU / 4))
+elif [ $PLATFORM = "tpu" ]; then
+    irq_start_cpu=$((NCPU / 8))
 fi
 
 (
@@ -64,12 +74,12 @@ fi
         IRQs=($(grep -i "$pci_addr" /proc/interrupts | awk '{print $1}' | sed 's/://'))
     fi
     # Exclude the first IRQ, which is for the control plane
-    for IRQ in "${IRQs[@]:1}"; do
+    for IRQ in "${IRQs[@]:0}"; do
         let CPU=$(((cnt + irq_start_cpu) % NCPU))
         let cnt=$(((cnt + 1) % NIRQCORE))
         echo $IRQ '->' $CPU
         echo $CPU | sudo tee /proc/irq/$IRQ/smp_affinity_list >/dev/null
-    done    
+    done
 )
 
 # https://github.com/amzn/amzn-drivers/issues/334#issuecomment-2575417997; giving very bad improvements

@@ -75,7 +75,7 @@ UCCL-AFXDP currently supports AWS ENA NICs and IBM VirtIO NICs; support for Azur
         cd $UCCL_HOME/thirdparty/nccl-tests
         make MPI=1 MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi CUDA_HOME=/usr/local/cuda NCCL_HOME=$UCCL_HOME/nccl/build -j
         ```
-    * Edit `scripts/nodes.txt` to only include the two IPs of the VMs
+    * Edit `scripts/node_ips/default.txt` to only include the two IPs of the VMs
     * Build and setup UCCL on both VMs: 
         * `cd $UCCL_HOME/scripts; python setup_all.py --target aws_g4_afxdp`
         * Keep `setup_all.py` running

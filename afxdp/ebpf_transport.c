@@ -77,6 +77,9 @@ int ebpf_transport_filter(struct xdp_md *ctx) {
         default:
             break;
     }
+    // struct udphdr *udp = (void *)ip + sizeof(struct iphdr);
+    // if ((void *)udp + sizeof(struct udphdr) > data_end) return XDP_PASS;
+    // bpf_printk("%u %u\n", udp->dest, ctx->rx_queue_index);
 
     return bpf_redirect_map(&xsks_map, ctx->rx_queue_index, XDP_PASS);
 }

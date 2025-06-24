@@ -26,8 +26,8 @@ class BuffPool {
       base_addr_ =
           mmap(nullptr, num_elements_ * element_size_, PROT_READ | PROT_WRITE,
                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-      if (base_addr_ == MAP_FAILED)
-        throw std::runtime_error("Failed to allocate memory for BuffPool.");
+      UCCL_INIT_CHECK(base_addr_ != MAP_FAILED,
+                      "Failed to allocate memory for BuffPool");
     }
     buffer_pool_ = new uint64_t[num_elements_];
     head_ = tail_ = 0;
@@ -50,6 +50,8 @@ class BuffPool {
   }
 
   inline bool empty(void) { return head_ == tail_; }
+
+  inline uint32_t size(void) { return (tail_ - head_) & (num_elements_ - 1); }
 
   inline uint32_t get_lkey(void) {
     if (!mr_) return 0;
