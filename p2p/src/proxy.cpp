@@ -102,9 +102,10 @@ void notify_gpu_completion(std::unordered_set<uint64_t>& finished_wrs,
 #ifdef DEBGU_PRINT
           printf(
               "WR ID %lu is larger than largest_completed_wr %lu, "
-              "completed, largest_finished_wr: %lu, smallest_finished_wr:
-                  % lu\n ", i, largest_completed_wr,
-                  * std::max_element(sorted_wrs.begin(), sorted_wrs.end()),
+              "completed, largest_finished_wr: %lu, smallest_finished_wr:"
+              "% lu\n ",
+              i, largest_completed_wr,
+              *std::max_element(sorted_wrs.begin(), sorted_wrs.end()),
               *std::min_element(sorted_wrs.begin(), sorted_wrs.end()));
 #endif
           continue;
