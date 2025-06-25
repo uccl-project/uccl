@@ -26,7 +26,7 @@ OBJECTS := $(SOURCES:.cc=.o)
 all: $(TARGET)
 
 # Build the shared library
-$(TARGET): $(OBJECTS) ../rdma/librdma.a
+$(TARGET): $(OBJECTS) ../rdma/librdma.a *.h
 	$(CXX) $(OBJECTS) ../rdma/librdma.a \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(PYTHON_LDFLAGS) $(CXXFLAGS) \
