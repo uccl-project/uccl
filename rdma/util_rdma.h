@@ -1133,6 +1133,7 @@ class SharedIOContext {
       CtrlChunkBuffPool::kChunkSize * CtrlChunkBuffPool::kNumChunk;
   SharedIOContext(int dev) {
     rc_mode_ = ucclParamRCMode();
+    bypass_pacing_ = ucclParamBypassPacing();
     auto context = RDMAFactory::get_factory_dev(dev)->context;
     auto pd = RDMAFactory::get_factory_dev(dev)->pd;
     auto port = RDMAFactory::get_factory_dev(dev)->ib_port_num;
@@ -1235,6 +1236,8 @@ class SharedIOContext {
 
   inline bool is_rc_mode() { return rc_mode_; }
 
+  inline bool bypass_pacing() { return bypass_pacing_; }
+
   void flush_acks();
 
   int poll_ctrl_cq(void);
@@ -1336,6 +1339,8 @@ class SharedIOContext {
 
  private:
   bool rc_mode_;
+
+  bool bypass_pacing_;
 
   struct ibv_qp* ctrl_qp_;
   struct ibv_cq_ex* ctrl_cq_ex_;

@@ -67,7 +67,7 @@ UCCL_PARAM(RCMode, "RCMODE", false);
 #endif
 
 // Bypass the pacing stage.
-static constexpr bool kBypassPacing = true;
+UCCL_PARAM(BypassPacing, "BYPASS_PACING", true);
 
 // Limit the per-flow outstanding bytes on each engine.
 static constexpr uint32_t kMaxUnAckedBytesPerFlow =

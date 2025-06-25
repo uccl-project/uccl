@@ -418,7 +418,7 @@ void UcclRDMAEngine::handle_tx_work(void) {
 }
 
 void UcclRDMAEngine::handle_timing_wheel(void) {
-  if constexpr (kBypassPacing) return;
+  if (io_ctx_.bypass_pacing()) return;
   for (auto& it : rdma_ctx_map_) {
     it.second->burst_timing_wheel();
   }
@@ -1997,7 +1997,7 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
 
     if (chunk_size == 0 && size) return false;
 
-    if constexpr (kBypassPacing) {
+    if (io_ctx_->bypass_pacing()) {
       DCHECK(wr_ex_pool_->alloc_buff(&wr_addr) == 0);
       struct wr_ex* wr_ex = reinterpret_cast<struct wr_ex*>(wr_addr);
       auto wr = &wr_ex->wr;
