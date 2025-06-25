@@ -105,6 +105,7 @@ class WrExBuffPool : public BuffPool {
 
 struct CQEDesc {
   uint64_t data;
+  uint64_t ts;
 };
 
 class CQEDescPool : public BuffPool {
@@ -614,6 +615,7 @@ class SharedIOContext;
 struct FactoryDevice {
   char ib_name[64];
   std::string local_ip_str;
+  int numa_node;
 
   struct ibv_context* context;
   struct ibv_device_attr dev_attr;
@@ -1010,6 +1012,13 @@ static inline struct ibv_mr* util_rdma_create_host_memory_mr(struct ibv_pd* pd,
   return mr;
 }
 
+static inline struct ibv_cq* util_rdma_create_cq(struct ibv_context* context,
+                                                 uint32_t cqsize) {
+  struct ibv_cq* cq = nullptr;
+  cq = ibv_create_cq(context, cqsize, nullptr, nullptr, 0);
+  return cq;
+}
+
 static inline struct ibv_cq_ex* util_rdma_create_cq_ex(
     struct ibv_context* context, uint32_t cqsize) {
   struct ibv_cq_ex* cq_ex = nullptr;
@@ -1126,15 +1135,22 @@ class SharedIOContext {
     auto context = RDMAFactory::get_factory_dev(dev)->context;
     auto pd = RDMAFactory::get_factory_dev(dev)->pd;
     auto port = RDMAFactory::get_factory_dev(dev)->ib_port_num;
+#ifdef USE_CQ_EX
     send_cq_ex_ = util_rdma_create_cq_ex(context, kCQSize);
-    UCCL_INIT_CHECK(send_cq_ex_ != nullptr, "util_rdma_create_cq_ex failed");
     recv_cq_ex_ = util_rdma_create_cq_ex(context, kCQSize);
+#else
+    send_cq_ex_ = (struct ibv_cq_ex*)util_rdma_create_cq(context, kCQSize);
+    recv_cq_ex_ = (struct ibv_cq_ex*)util_rdma_create_cq(context, kCQSize);
+#endif
+    UCCL_INIT_CHECK(send_cq_ex_ != nullptr, "util_rdma_create_cq_ex failed");
     UCCL_INIT_CHECK(recv_cq_ex_ != nullptr, "util_rdma_create_cq_ex failed");
 
+#ifdef USE_CQ_EX
     int ret = util_rdma_modify_cq_attr(send_cq_ex_, kCQMODCount, kCQMODPeriod);
     UCCL_INIT_CHECK(ret == 0, "util_rdma_modify_cq_attr failed");
     ret = util_rdma_modify_cq_attr(recv_cq_ex_, kCQMODCount, kCQMODPeriod);
     UCCL_INIT_CHECK(ret == 0, "util_rdma_modify_cq_attr failed");
+#endif
 
     srq_ = util_rdma_create_srq(pd, kMaxSRQ, 1, 0);
     UCCL_INIT_CHECK(srq_ != nullptr, "util_rdma_create_srq failed");
@@ -1159,7 +1175,11 @@ class SharedIOContext {
 
     if constexpr (!kRCMode) {
       // Create Ctrl QP, CQ, and MR.
-      util_rdma_create_qp(context, &ctrl_qp_, IBV_QPT_UD, true, true,
+      bool use_cq_ex = false;
+#ifdef USE_CQ_EX
+      use_cq_ex = true;
+#endif
+      util_rdma_create_qp(context, &ctrl_qp_, IBV_QPT_UD, use_cq_ex, true,
                           (struct ibv_cq**)&ctrl_cq_ex_, false, kCQSize, pd,
                           port, &ctrl_mr_, nullptr, kCtrlMRSize, kMaxCtrlWRs,
                           kMaxCtrlWRs, 1, 1);

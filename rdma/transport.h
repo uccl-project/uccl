@@ -316,14 +316,17 @@ class RDMAContext {
    */
   void drain_rtx_queue(SubUcclFlow* subflow);
 
-  void uc_rx_chunk(struct ibv_cq_ex* cq_ex);
-
   void uc_post_acks();
 
-  /**
-   * @brief Rceive an ACK from the Ctrl QP.
-   */
+  void uc_rx_chunk(struct ibv_wc* wc);
+
+  void uc_rx_chunk(struct ibv_cq_ex* cq_ex);
+
+  void uc_rx_ack(UcclSackHdr* ucclsackh);
+
   void uc_rx_ack(struct ibv_cq_ex* cq_ex, UcclSackHdr* ucclsackh);
+
+  void uc_rx_rtx_chunk(struct ibv_wc* wc, uint64_t chunk_addr);
 
   void uc_rx_rtx_chunk(struct ibv_cq_ex* cq_ex, uint64_t chunk_addr);
 
@@ -422,8 +425,10 @@ class RDMAContext {
     }
   }
 
+  void rc_rx_ack(struct ibv_wc* wc);
   void rc_rx_ack(struct ibv_cq_ex* cq_ex);
 
+  void rc_rx_chunk(uint32_t byte_len, uint32_t wc_imm_data);
   void rc_rx_chunk(struct ibv_cq_ex* cq_ex);
 
   std::string to_string();
@@ -941,12 +946,14 @@ class RDMAEndpoint {
   bool initialize_engine_by_dev(int dev);
 
   /// For testing easily.
-  ConnID test_uccl_connect(int dev, std::string remote_ip, int remote_dev) {
-    return uccl_connect(dev, dev, remote_dev, remote_dev, remote_ip,
+  ConnID test_uccl_connect(int dev, int gpu, int remote_dev, int remote_gpu,
+                           std::string remote_ip) {
+    return uccl_connect(dev, gpu, remote_dev, remote_gpu, remote_ip,
                         kTestListenPort + remote_dev);
   }
-  ConnID test_uccl_accept(int dev, std::string& remote_ip, int* remote_dev) {
-    return uccl_accept(dev, test_listen_fds_[dev], dev, remote_ip, remote_dev);
+  ConnID test_uccl_accept(int dev, int gpu, std::string& remote_ip,
+                          int* remote_dev) {
+    return uccl_accept(dev, test_listen_fds_[dev], gpu, remote_ip, remote_dev);
   }
   /// For testing easily.
 

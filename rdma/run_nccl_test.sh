@@ -1,28 +1,17 @@
-# /usr/bin/bash
+# !/bin/bash
 
 source ../scripts/shared.sh
 
-# Usage ./run_nccl_test.sh [UCCL] [# of Nodes] [# of GPUs per node] [allreduce/alltoall: 0/1]
+# Usage ./run_nccl_test.sh [UCCL] [# of Nodes] [# of GPUs per process] [allreduce/alltoall: 0/1]
 
 UCCL=${1:-1}
 NUM_PROCS=${2:-2}
-NUM_GPUS_PER_NODE=${3:-8}
+NUM_GPUS_PER_PROC=${3:-8}
 PROG_OPTION=${4:-0}
 PROCS_PER_NODE=${5:-1}
 HOSTNAME=${6:-"hosts_single_process"}
 
-# IP of Nodes.
-NODES="192.168.102.190,192.168.102.191,192.168.102.192,192.168.102.193,192.168.102.194,192.168.102.195"
-# NODES="192.168.102.190,192.168.102.195"
-# Names of HCAs."
-
-# NCCL uses the following GPU-NIC mapping can achieve 47GB/s:
-#  0-7, 1-6, 2-5, 3-4, 4-3, 5-2, 6-1, 7-0
-# If mismatched, 30GB/s is expected.
-
-# The topology detected by UCCL is the same as NCCL. But UCCL using the above mapping only achieves ~5GB/s.
-# if mismatched, 30GB/s is expected. Occasionally, segmentation fault occurs.
-
+# Names of HCAs.
 HCA_NAMES="mlx5_1:1,mlx5_2:1,mlx5_3:1,mlx5_4:1,mlx5_5:1,mlx5_6:1,mlx5_7:1,mlx5_8:1"
 # Name of Control NIC.
 CTRL_NIC="enp164s0"
@@ -72,7 +61,7 @@ P2P_DISABLE=1
 SHM_DISABLE=1
 PXN_DISABLE=1
 
-echo "Running test: ${PROG_NAME}, $([ "${UCCL}" -eq 1 ] && echo "UCCL" || echo "NCCL"), ${NUM_PROCS} nodes, ${NUM_GPUS_PER_NODE} GPUs per node, $((NUM_PROCS * NUM_GPUS_PER_NODE)) GPUs in total."
+echo "Running test: ${PROG_NAME}, $([ "${UCCL}" -eq 1 ] && echo "UCCL" || echo "NCCL"), ${NUM_PROCS} nodes, ${NUM_GPUS_PER_PROC} GPUs per process, $((NUM_PROCS * NUM_GPUS_PER_PROC)) GPUs in total."
 
 echo -e "Details: NCCL_NCHANNELS=${NUM_CHUNNEL} \n\t NCCL_P2P_NET_CHUNKSIZE=${P2P_NET_CHUNKSIZE} \n\t NCCL_BUFFSIZE=${BUFFSIZE} \n\t NCCL_NCHANNELS_PER_NET_PEER=${CHANNELS_NET_PEER} \n\t NCCL_ALGO=${ALGO} \n\t NCCL_IB_QPS_PER_CONNECTION=${NUM_QPS_PER_CONNECTION} \n\t NCCL_IB_SPLIT_DATA_ON_QPS=${SPLIT_DATA_ON_QPS} \n\t NCCL_PXN_DISABLE=${PXN_DISABLE} \n\t NCCL_P2P_DISABLE=${P2P_DISABLE} \n\t NCCL_SHM_DISABLE=${SHM_DISABLE} \n\t NCCL_IB_HCA=${HCA_NAMES}"
 
@@ -104,4 +93,4 @@ mpirun --allow-run-as-root -np ${NUM_PROCS} -N ${PROCS_PER_NODE} \
     ${UCCL_HOME}/thirdparty/nccl-tests/build/${PROG_NAME} -c 0 \
     -b 1K -e 1G \
     -f 2 -w 50 -n 50 \
-    -g 1 -t ${NUM_GPUS_PER_NODE}
+    -g 1 -t ${NUM_GPUS_PER_PROC}

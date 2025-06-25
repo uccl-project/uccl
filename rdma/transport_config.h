@@ -11,6 +11,8 @@
 #define LAZY_CREATE_ENGINE
 #endif
 
+#define PIN_TO_NUMA
+
 UCCL_PARAM(ROCE_TRAFFIC_CLASS, "ROCE_TRAFFIC_CLASS", 3);
 UCCL_PARAM(ROCE_SERVICE_LEVEL, "ROCE_SERVICE_LEVEL", 135);
 UCCL_PARAM(IB_SERVICE_LEVEL, "IB_SERVICE_LEVEL", 0);
@@ -28,6 +30,16 @@ static constexpr uint32_t kChunkSize = 32 << 10;
 UCCL_PARAM(NUM_ENGINES, "NUM_ENGINES", 1);
 UCCL_PARAM(PORT_ENTROPY, "PORT_ENTROPY", 256);
 static constexpr uint32_t kChunkSize = 128 << 10;
+#else
+static constexpr uint32_t NUM_ENGINES = 4;
+static constexpr uint32_t kPortEntropy = 32;
+static constexpr uint32_t kChunkSize = 32 << 10;
+#endif
+#endif
+
+// Broadcom NICs do not support ibv_cq_ex.
+#ifndef BROADCOM_NIC
+#define USE_CQ_EX
 #endif
 
 static constexpr uint32_t MAX_PEER = 256;
@@ -53,7 +65,7 @@ static constexpr uint32_t UD_ADDITION = 40;
 static constexpr uint32_t kMaxCtrlWRs = 2048;
 
 // Use RC rather than UC.
-static constexpr bool kRCMode = false;
+static constexpr bool kRCMode = true;
 // Bypass the pacing stage.
 static constexpr bool kBypassPacing = true;
 
@@ -156,7 +168,7 @@ static constexpr uint32_t kCQMODCount = 32;
 // CQ moderation period in microsecond.
 static constexpr uint32_t kCQMODPeriod = 100;
 // Maximum size of inline data.
-static constexpr uint32_t kMaxInline = 512;
+static constexpr uint32_t kMaxInline = 128;
 // Maximum number of SGEs in one WQE.
 static constexpr uint32_t kMaxSge = 2;
 // Maximum number of outstanding receive messages in one recv request.

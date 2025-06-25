@@ -9,7 +9,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-const uint8_t ib_cluster_dev_suffix_list[8] = {4, 5, 6, 7, 0, 1, 2, 3};
+const uint8_t gpu_to_dev[8] = {4, 5, 6, 7, 0, 1, 2, 3};
 
 Endpoint::Endpoint(const uint32_t local_gpu_idx, const uint32_t num_cpus)
     : local_gpu_idx_(local_gpu_idx), num_cpus_(num_cpus) {
@@ -21,12 +21,11 @@ Endpoint::Endpoint(const uint32_t local_gpu_idx, const uint32_t num_cpus)
   google::InstallFailureSignalHandler();
 
   // Initialize the RDMA endpoint with lazy creation.
-  ep_ =
-      new uccl::RDMAEndpoint(ib_cluster_dev_suffix_list, NUM_DEVICES, num_cpus);
+  ep_ = new uccl::RDMAEndpoint(NUM_ENGINES);
 
   // Initialize the engine based on the GPU index.
 #ifdef LAZY_CREATE_ENGINE
-  ep_->initialize_engine_by_dev(local_gpu_idx_);
+  ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_]);
 #endif
 
   std::cout << "Endpoint initialized successfully" << std::endl;
@@ -56,8 +55,9 @@ bool Endpoint::connect(std::string const& ip_addr, int const& remote_gpu_idx,
   // Create a new connection ID
   conn_id = next_conn_id_.fetch_add(1);
 
-  uccl::ConnID uccl_conn_id =
-      ep_->test_uccl_connect(local_gpu_idx_, ip_addr, remote_gpu_idx);
+  uccl::ConnID uccl_conn_id = ep_->test_uccl_connect(
+      gpu_to_dev[local_gpu_idx_], local_gpu_idx_, gpu_to_dev[remote_gpu_idx],
+      remote_gpu_idx, ip_addr);
 
   // Store the connection ID.
   conn_id_to_conn_[conn_id] =
@@ -74,8 +74,8 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   // For demo purposes, simulate accepted connection
   conn_id = next_conn_id_.fetch_add(1);
 
-  uccl::ConnID uccl_conn_id =
-      ep_->test_uccl_accept(local_gpu_idx_, ip_addr, &remote_gpu_idx);
+  uccl::ConnID uccl_conn_id = ep_->test_uccl_accept(
+      gpu_to_dev[local_gpu_idx_], local_gpu_idx_, ip_addr, &remote_gpu_idx);
 
   // Store the connection ID.
   conn_id_to_conn_[conn_id] =
@@ -90,7 +90,8 @@ bool Endpoint::reg_kv(void const* data, size_t size, uint64_t& mr_id) {
   mr_id = next_mr_id_.fetch_add(1);
 
   uccl::Mhandle* mhandle;
-  ep_->uccl_regmr(local_gpu_idx_, const_cast<void*>(data), size, 0, &mhandle);
+  ep_->uccl_regmr(gpu_to_dev[local_gpu_idx_], const_cast<void*>(data), size, 0,
+                  &mhandle);
 
   mr_id_to_mr_[mr_id] = new MR{mr_id, mhandle};
 

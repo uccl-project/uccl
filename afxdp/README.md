@@ -28,7 +28,7 @@ UCCL-AFXDP currently supports AWS ENA NICs and IBM VirtIO NICs; support for Azur
     <details><summary>Click me</summary>
 
     * On Amazon VMs (Skip this step on other environments): Update AWS ENA driver to support zero-copy AF_XDP 
-        ```shell
+        ```bash
         # Install last ena driver with reboot persistent
         sudo apt-get install dkms
         git clone https://github.com/amzn/amzn-drivers.git -b ena_linux_2.13.0
@@ -54,7 +54,7 @@ UCCL-AFXDP currently supports AWS ENA NICs and IBM VirtIO NICs; support for Azur
         ```
     * On IBM VMs: Upgrade the Kernel to latest (>6.2) to support AF_XDP
         For example, on Ubuntu 22.04 image
-        ```shell
+        ```bash
         sudo apt update
         sudo apt install linux-image-generic-hwe-22.04
         sudo apt install -y linux-headers-$(uname -r) build-essential
@@ -66,7 +66,7 @@ UCCL-AFXDP currently supports AWS ENA NICs and IBM VirtIO NICs; support for Azur
     * Get the latest UCCL: `cd $UCCL_HOME; git pull`
     * Install BPF dependencies: `cd $UCCL_HOME/afxdp; make lib`
     * Build `nccl` and `nccl-tests`:
-        ```shell
+        ```bash
         cd $UCCL_HOME/thirdparty/nccl
         make src.build -j
         cp src/include/nccl_common.h build/include/

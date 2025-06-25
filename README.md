@@ -61,13 +61,13 @@ More UCCL features are under development in this repo, currently including:
 UCCL provides a drop-in replacement for any NCCL/RCCL application without code modification or compilation. 
 
 To get started, let's first clone the UCCL repo and init submodules. 
-```shell
+```bash
 git clone https://github.com/uccl-project/uccl.git --recursive
 export UCCL_HOME=$(pwd)/uccl
 ```
 
 Then install some common dependencies: 
-```shell
+```bash
 sudo apt update
 sudo apt install linux-tools-$(uname -r) clang llvm cmake m4 build-essential \
                  net-tools libgoogle-glog-dev libgtest-dev libgtest-dev \

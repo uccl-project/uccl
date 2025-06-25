@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <mutex>
@@ -291,19 +292,6 @@ static inline T Percentile(std::vector<T> const& vectorIn, double percent) {
   auto nth = vectorCopy.begin() + (percent * vectorCopy.size()) / 100;
   std::nth_element(vectorCopy.begin(), nth, vectorCopy.end());
   return *nth;
-}
-
-static inline bool pin_thread_to_cpu(int cpu) {
-  int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
-  if (cpu < 0 || cpu >= num_cpus) return false;
-
-  cpu_set_t cpuset;
-  CPU_ZERO(&cpuset);
-  CPU_SET(cpu, &cpuset);
-
-  pthread_t current_thread = pthread_self();
-
-  return !pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
 }
 
 static inline void apply_setsockopt(int xsk_fd) {
@@ -967,5 +955,73 @@ inline void checkMemoryLocation(void* ptr) {
   }
 }
 #endif
+
+inline int get_dev_numa_node(char const* dev_name) {
+  std::string cmd =
+      Format("cat /sys/class/infiniband/%s/device/numa_node", dev_name);
+  FILE* fp = popen(cmd.c_str(), "r");
+  DCHECK(fp != nullptr) << "Failed to open " << cmd;
+
+  char buffer[10];
+  DCHECK(fgets(buffer, sizeof(buffer), fp) != nullptr)
+      << "Failed to read " << cmd;
+  pclose(fp);
+
+  auto numa_node = atoi(buffer);
+  DCHECK(numa_node != -1) << "NUMA node is -1 for " << dev_name;
+  return numa_node;
+}
+
+static inline void pin_thread_to_cpu(int cpu) {
+  int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+  DCHECK(cpu >= 0 && cpu < num_cpus) << "CPU " << cpu << " is out of range";
+
+  cpu_set_t cpuset;
+  CPU_ZERO(&cpuset);
+  CPU_SET(cpu, &cpuset);
+
+  if (sched_setaffinity(0, sizeof(cpu_set_t), &cpuset)) {
+    LOG(ERROR) << "Failed to set thread affinity to CPU " << cpu;
+  }
+}
+
+inline void pin_thread_to_numa(int numa_node) {
+  std::string cpumap_path =
+      Format("/sys/devices/system/node/node%d/cpulist", numa_node);
+  std::ifstream cpumap_file(cpumap_path);
+  if (!cpumap_file.is_open()) {
+    LOG(ERROR) << "Failed to open " << cpumap_path;
+    return;
+  }
+
+  cpu_set_t cpuset;
+  CPU_ZERO(&cpuset);
+
+  std::string line;
+  std::getline(cpumap_file, line);
+
+  // Parse CPU ranges like "0-3,7-11"
+  std::stringstream ss(line);
+  std::string range;
+  while (std::getline(ss, range, ',')) {
+    size_t dash = range.find('-');
+    if (dash != std::string::npos) {
+      // Handle range like "0-3"
+      int start = std::stoi(range.substr(0, dash));
+      int end = std::stoi(range.substr(dash + 1));
+      for (int cpu = start; cpu <= end; cpu++) {
+        CPU_SET(cpu, &cpuset);
+      }
+    } else {
+      // Handle single CPU like "7"
+      int cpu = std::stoi(range);
+      CPU_SET(cpu, &cpuset);
+    }
+  }
+
+  if (sched_setaffinity(0, sizeof(cpu_set_t), &cpuset)) {
+    LOG(ERROR) << "Failed to set thread affinity to NUMA node " << numa_node;
+  }
+}
 
 }  // namespace uccl

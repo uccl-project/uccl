@@ -101,6 +101,7 @@ int RDMAFactory::init_devs() {
                0);
       }
 
+      dev.numa_node = get_dev_numa_node(dev.ib_name);
       dev.dev_attr = dev_attr;
       dev.port_attr = port_attr;
       dev.ib_port_num = port_num;
@@ -412,6 +413,7 @@ void SharedIOContext::check_srq(bool force) {
   dec_post_srq(post_batch);
 }
 
+#ifdef USE_CQ_EX
 int SharedIOContext::poll_ctrl_cq(void) {
   auto cq_ex = ctrl_cq_ex_;
   int work = 0;
@@ -478,6 +480,69 @@ int SharedIOContext::poll_ctrl_cq(void) {
 
   return work;
 }
+#else
+int SharedIOContext::poll_ctrl_cq(void) {
+  auto cq = ibv_cq_ex_to_cq(ctrl_cq_ex_);
+  struct ibv_wc wcs[kMaxBatchCQ];
+
+  int cq_budget = 0;
+  int budget = kMaxBatchCQ << 1;
+
+  while (1) {
+    int nr_wcs = ibv_poll_cq(cq, kMaxBatchCQ, wcs);
+    if (nr_wcs == 0) break;
+
+    for (int i = 0; i < nr_wcs; i++) {
+      auto* wc = wcs + i;
+      DCHECK(wc->status == IBV_WC_SUCCESS)
+          << "Ctrl CQ state error: " << wc->status;
+      CQEDesc* cqe_desc = (CQEDesc*)wc->wr_id;
+      auto chunk_addr = (uint64_t)cqe_desc->data;
+
+      auto opcode = wc->opcode;
+
+      if (opcode == IBV_WC_RECV) {
+        auto imm_data = ntohl(wc->imm_data);
+        auto num_ack = imm_data;
+        UCCL_LOG_IO << "Receive " << num_ack
+                    << " ACKs, Chunk addr: " << chunk_addr
+                    << ", byte_len: " << wc->byte_len;
+        auto base_addr = chunk_addr + UD_ADDITION;
+        for (int i = 0; i < num_ack; i++) {
+          auto pkt_addr = base_addr + i * CtrlChunkBuffPool::kPktSize;
+
+          auto* ucclsackh = reinterpret_cast<UcclSackHdr*>(pkt_addr);
+          auto fid = ucclsackh->fid.value();
+          auto peer_id = ucclsackh->peer_id.value();
+          auto* rdma_ctx = find_rdma_ctx(peer_id, fid);
+
+          rdma_ctx->uc_rx_ack(ucclsackh);
+        }
+        inc_post_ctrl_rq();
+      } else {
+        inflight_ctrl_wrs_--;
+      }
+
+      push_ctrl_chunk(chunk_addr);
+
+      push_cqe_desc(cqe_desc);
+
+      if (opcode == IBV_WC_SEND) {
+        // We don't count send WRs in budget.
+        cq_budget--;
+      }
+    }
+
+    cq_budget += nr_wcs;
+
+    check_ctrl_rq(false);
+
+    if (cq_budget >= budget) break;
+  }
+
+  return cq_budget;
+}
+#endif
 
 void SharedIOContext::flush_acks() {
   if (nr_tx_ack_wr_ == 0) return;
@@ -495,6 +560,7 @@ void SharedIOContext::flush_acks() {
   nr_tx_ack_wr_ = 0;
 }
 
+#ifdef USE_CQ_EX
 int SharedIOContext::rc_poll_recv_cq(void) {
   auto cq_ex = recv_cq_ex_;
   int cq_budget = 0;
@@ -626,5 +692,114 @@ int SharedIOContext::uc_poll_recv_cq(void) {
 
   return cq_budget;
 }
+#else
+int SharedIOContext::rc_poll_send_cq(void) {
+  struct ibv_wc wcs[kMaxBatchCQ];
+
+  auto* cq = ibv_cq_ex_to_cq(send_cq_ex_);
+
+  int nr_wcs = ibv_poll_cq(cq, kMaxBatchCQ, wcs);
+
+  for (int i = 0; i < nr_wcs; i++) {
+    auto* wc = wcs + i;
+    DCHECK(wc->status == IBV_WC_SUCCESS)
+        << "RC send CQ state error: " << wc->status;
+    auto* rdma_ctx = qpn_to_rdma_ctx(wc->qp_num);
+    rdma_ctx->rc_rx_ack(wc);
+  }
+
+  return nr_wcs;
+}
+
+int SharedIOContext::rc_poll_recv_cq(void) {
+  struct ibv_wc wcs[kMaxBatchCQ];
+
+  auto* cq = ibv_cq_ex_to_cq(recv_cq_ex_);
+
+  int nr_wcs = ibv_poll_cq(cq, kMaxBatchCQ, wcs);
+
+  for (int i = 0; i < nr_wcs; i++) {
+    auto* wc = wcs + i;
+    DCHECK(wc->status == IBV_WC_SUCCESS)
+        << "RC recv CQ state error: " << wc->status;
+    auto* cqe_desc = (CQEDesc*)wc->wr_id;
+    auto* rdma_ctx = qpn_to_rdma_ctx(wc->qp_num);
+    rdma_ctx->rc_rx_chunk(wc->byte_len, wc->imm_data);
+
+    inc_post_srq();
+  }
+
+  return nr_wcs;
+}
+
+int SharedIOContext::uc_poll_send_cq(void) {
+  struct ibv_wc wcs[kMaxBatchCQ];
+
+  auto* cq = ibv_cq_ex_to_cq(send_cq_ex_);
+
+  int nr_wcs = ibv_poll_cq(cq, kMaxBatchCQ, wcs);
+
+  for (int i = 0; i < nr_wcs; i++) {
+    auto* wc = wcs + i;
+    DCHECK(wc->status == IBV_WC_SUCCESS)
+        << "UC send CQ state error: " << wc->status;
+    auto* cqe_desc = (CQEDesc*)wc->wr_id;
+
+    if (cqe_desc) {
+      // Completion signal from rtx.
+      auto retr_hdr = (uint64_t)cqe_desc->data;
+      push_retr_hdr(retr_hdr);
+      push_cqe_desc(cqe_desc);
+    }
+  }
+
+  return nr_wcs;
+}
+
+int SharedIOContext::uc_poll_recv_cq(void) {
+  struct ibv_wc wcs[kMaxBatchCQ];
+
+  auto* cq = ibv_cq_ex_to_cq(recv_cq_ex_);
+
+  int nr_wcs = ibv_poll_cq(cq, kMaxBatchCQ, wcs);
+
+  std::vector<RDMAContext*> rdma_ctxs;
+
+  for (int i = 0; i < nr_wcs; i++) {
+    auto* wc = wcs + i;
+    DCHECK(wc->status == IBV_WC_SUCCESS)
+        << "UC recv CQ state error: " << wc->status;
+    auto* cqe_desc = (CQEDesc*)wc->wr_id;
+    auto* rdma_ctx = qpn_to_rdma_ctx(wc->qp_num);
+
+    auto chunk_addr = (uint64_t)cqe_desc->data;
+    auto opcode = wc->opcode;
+
+    if (likely(opcode == IBV_WC_RECV_RDMA_WITH_IMM)) {
+      // Common case.
+      rdma_ctx->uc_rx_chunk(wc);
+    } else {
+      // Rare case.
+      rdma_ctx->uc_rx_rtx_chunk(wc, chunk_addr);
+    }
+
+    rdma_ctxs.push_back(rdma_ctx);
+
+    push_retr_chunk(chunk_addr);
+
+    push_cqe_desc(cqe_desc);
+
+    inc_post_srq();
+  }
+
+  for (auto rdma_ctx : rdma_ctxs) {
+    rdma_ctx->uc_post_acks();
+  }
+
+  flush_acks();
+
+  return nr_wcs;
+}
+#endif
 
 }  // namespace uccl

@@ -1,12 +1,12 @@
-# /usr/bin/bash
+# !/bin/bash
 
 source ../scripts/shared.sh
 
-# Usage ./run_nccl_test.sh [UCCL] [# of Nodes] [# of GPUs per node] [allreduce/alltoall: 0/1]
+# Usage ./run_nccl_test.sh [UCCL] [# of Nodes] [# of GPUs per process] [allreduce/alltoall: 0/1]
 
 UCCL=${1:-1}
 NUM_PROCS=${2:-2}
-NUM_GPUS_PER_NODE=${3:-8}
+NUM_GPUS_PER_PROC=${3:-8}
 PROG_OPTION=${4:-0}
 PROCS_PER_NODE=${5:-1}
 HOSTNAME=${6:-"hosts_ib_single_process"}
@@ -86,7 +86,7 @@ NVLINK_OFF=1
 export NCCL_DEBUG=INFO
 export NCCL_DEBUG_SUBSYS=ALL
 
-echo "Running test: ${PROG_NAME}, $([ "${UCCL}" -eq 1 ] && echo "UCCL" || echo "NCCL"), ${NUM_PROCS} nodes, ${NUM_GPUS_PER_NODE} GPUs per node, $((NUM_PROCS * NUM_GPUS_PER_NODE)) GPUs in total."
+echo "Running test: ${PROG_NAME}, $([ "${UCCL}" -eq 1 ] && echo "UCCL" || echo "NCCL"), ${NUM_PROCS} nodes, ${NUM_GPUS_PER_PROC} GPUs per process, $((NUM_PROCS * NUM_GPUS_PER_PROC)) GPUs in total."
 
 echo -e "Details: NCCL_NCHANNELS=${NUM_CHUNNEL} \n\t NCCL_P2P_NET_CHUNKSIZE=${P2P_NET_CHUNKSIZE} \n\t NCCL_BUFFSIZE=${BUFFSIZE} \n\t NCCL_NCHANNELS_PER_NET_PEER=${CHANNELS_NET_PEER} \n\t NCCL_ALGO=${ALGO} \n\t NCCL_IB_QPS_PER_CONNECTION=${NUM_QPS_PER_CONNECTION} \n\t NCCL_IB_SPLIT_DATA_ON_QPS=${SPLIT_DATA_ON_QPS} \n\t NCCL_PXN_DISABLE=${NVLINK_OFF} \n\t NCCL_P2P_DISABLE=${NVLINK_OFF} \n\t NCCL_SHM_DISABLE=${NVLINK_OFF} \n\t NCCL_IB_HCA=${HCA_NAMES}"
 
@@ -124,4 +124,4 @@ echo -e "Details: NCCL_NCHANNELS=${NUM_CHUNNEL} \n\t NCCL_P2P_NET_CHUNKSIZE=${P2
     -c 0 \
     --minbytes 1K --maxbytes 1G \
     --warmup_iters 20 --iters 20 \
-    -g 1 -t ${NUM_GPUS_PER_NODE}
+    -g 1 -t ${NUM_GPUS_PER_PROC}
