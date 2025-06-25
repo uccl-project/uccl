@@ -11,7 +11,7 @@
 #define LAZY_CREATE_ENGINE
 #endif
 
-#define PIN_TO_NUMA
+UCCL_PARAM(PIN_TO_NUMA, "PIN_TO_NUMA", 1);
 
 UCCL_PARAM(ROCE_TRAFFIC_CLASS, "ROCE_TRAFFIC_CLASS", 3);
 UCCL_PARAM(ROCE_SERVICE_LEVEL, "ROCE_SERVICE_LEVEL", 135);
@@ -30,11 +30,6 @@ static constexpr uint32_t kChunkSize = 32 << 10;
 UCCL_PARAM(NUM_ENGINES, "NUM_ENGINES", 1);
 UCCL_PARAM(PORT_ENTROPY, "PORT_ENTROPY", 256);
 static constexpr uint32_t kChunkSize = 128 << 10;
-#else
-static constexpr uint32_t NUM_ENGINES = 4;
-static constexpr uint32_t kPortEntropy = 32;
-static constexpr uint32_t kChunkSize = 32 << 10;
-#endif
 #endif
 
 // Broadcom NICs do not support ibv_cq_ex.

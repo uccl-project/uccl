@@ -743,15 +743,16 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
     engine_th_vec_.emplace_back(
         std::make_unique<std::thread>([engine_ptr = engine_vec_.back().get(),
                                        engine_id, engine_cpu_id, numa_node]() {
-#ifdef PIN_TO_NUMA
-          UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
-                          << "running on NUMA node " << numa_node;
-          pin_thread_to_numa(numa_node);
-#else
-          UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
-                          << "running on CPU " << engine_cpu_id;
-          pin_thread_to_cpu(engine_cpu_id);
-#endif
+          if (ucclParamPIN_TO_NUMA()) {
+            UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
+                            << "running on NUMA node " << numa_node;
+            pin_thread_to_numa(numa_node);
+          } else {
+            UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
+                            << "running on CPU " << engine_cpu_id;
+            pin_thread_to_cpu(engine_cpu_id);
+          }
+
           engine_ptr->run();
         }));
   }
@@ -798,15 +799,15 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev) {
         std::lock_guard<std::mutex> lock(engine_th_mu_);
         engine_th_vec_.emplace_back(std::make_unique<std::thread>(
             [engine_ptr, engine_id, engine_cpu_id, numa_node]() {
-#ifdef PIN_TO_NUMA
-              UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
-                              << "running on NUMA node " << numa_node;
-              pin_thread_to_numa(numa_node);
-#else
-            UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
-                            << "running on CPU " << engine_cpu_id;
-            pin_thread_to_cpu(engine_cpu_id);
-#endif
+              if (ucclParamPIN_TO_NUMA()) {
+                UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
+                                << "running on NUMA node " << numa_node;
+                pin_thread_to_numa(numa_node);
+              } else {
+                UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
+                                << "running on CPU " << engine_cpu_id;
+                pin_thread_to_cpu(engine_cpu_id);
+              }
               engine_ptr->run();
             }));
       }
@@ -2471,14 +2472,14 @@ void RDMAContext::uc_rx_ack(UcclSackHdr* ucclsackh) {
 
     t5 = t6;
 
-    DCHECK(engine_offset_ < NUM_ENGINES);
+    DCHECK(engine_offset_ < ucclParamNUM_ENGINES());
     auto reduced_bytes = subflow->unacked_bytes_;
     auto newrtt_tsc = subflow->txtracking.ack_transmitted_chunks(
         subflow, this, num_acked_chunks.to_uint32(), t5, t6,
         remote_queueing_tsc, &subflow->unacked_bytes_);
     reduced_bytes -= subflow->unacked_bytes_;
     *engine_unacked_bytes_ -= reduced_bytes;
-    if (qpidx < kPortEntropy)
+    if (qpidx < port_entropy_)
       subflow->update_scoreboard_rtt(newrtt_tsc, qpidx);
     else {
       // This ack is for retransmitted chunk.
