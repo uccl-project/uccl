@@ -388,7 +388,7 @@ void SharedIOContext::check_srq(bool force) {
     if (!is_rc_mode()) {
       auto chunk_addr = pop_retr_chunk();
       dp_recv_wrs_.recv_sges[i].addr = chunk_addr;
-      dp_recv_wrs_.recv_sges[i].length = RetrChunkBuffPool::kRetrChunkSize;
+      dp_recv_wrs_.recv_sges[i].length = kRetrChunkSize;
       dp_recv_wrs_.recv_sges[i].lkey = get_retr_chunk_lkey();
       dp_recv_wrs_.recv_wrs[i].num_sge = 1;
       dp_recv_wrs_.recv_wrs[i].sg_list = &dp_recv_wrs_.recv_sges[i];

@@ -25,12 +25,15 @@ UCCL_PARAM(NUM_ENGINES, "NUM_ENGINES", 4);
 // Path/QP per engine. The total number is NUM_ENGINES * PORT_ENTROPY.
 UCCL_PARAM(PORT_ENTROPY, "PORT_ENTROPY", 32);
 // Maximum chunk size (Bytes) for each WQE.
-static constexpr uint32_t kChunkSize = 32 << 10;
+UCCL_PARAM(CHUNK_SIZE, "CHUNK_SIZE", 32 << 10);
 #else
 UCCL_PARAM(NUM_ENGINES, "NUM_ENGINES", 1);
 UCCL_PARAM(PORT_ENTROPY, "PORT_ENTROPY", 256);
-static constexpr uint32_t kChunkSize = 128 << 10;
+UCCL_PARAM(CHUNK_SIZE, "CHUNK_SIZE", 128 << 10);
 #endif
+
+static uint32_t kRetrChunkSize =
+    ucclParamCHUNK_SIZE() + 12 /*(sizeof(retr_chunk_hdr)) */;
 
 // Broadcom NICs do not support ibv_cq_ex.
 #ifndef BROADCOM_NIC
@@ -70,20 +73,20 @@ UCCL_PARAM(RCMode, "RCMODE", false);
 UCCL_PARAM(BypassPacing, "BYPASS_PACING", true);
 
 // Limit the per-flow outstanding bytes on each engine.
-static constexpr uint32_t kMaxUnAckedBytesPerFlow =
-    2 * std::max(kChunkSize, 32768u);
+static uint32_t kMaxUnAckedBytesPerFlow =
+    2 * std::max((uint32_t)ucclParamCHUNK_SIZE(), 32768u);
 // Limit the outstanding bytes on each engine.
 // Low means if a flow exceeds its own budget but doesn't exceed the Low
 // threshold, it can send until Low threshold.
-static constexpr uint32_t kMaxUnAckedBytesPerEngineLowForRoCE =
-    (8) * std::max(kChunkSize, 32768u);
-static constexpr uint32_t kMaxUnAckedBytesPerEngineLowForIB =
-    (18) * std::max(kChunkSize, 32768u);
+static uint32_t kMaxUnAckedBytesPerEngineLowForRoCE =
+    (8) * std::max((uint32_t)ucclParamCHUNK_SIZE(), 32768u);
+static uint32_t kMaxUnAckedBytesPerEngineLowForIB =
+    (18) * std::max((uint32_t)ucclParamCHUNK_SIZE(), 32768u);
 // High means if all flows reach this threshold, all flows can't send any bytes.
-static constexpr uint32_t kMaxUnAckedBytesPerEngineHighForRoCE =
-    (12) * std::max(kChunkSize, 32768u);
-static constexpr uint32_t kMaxUnAckedBytesPerEngineHighForIB =
-    (24) * std::max(kChunkSize, 32768u);
+static uint32_t kMaxUnAckedBytesPerEngineHighForRoCE =
+    (12) * std::max((uint32_t)ucclParamCHUNK_SIZE(), 32768u);
+static uint32_t kMaxUnAckedBytesPerEngineHighForIB =
+    (24) * std::max((uint32_t)ucclParamCHUNK_SIZE(), 32768u);
 // Congestion control algorithm.
 enum SenderCCA {
   SENDER_CCA_NONE,
@@ -151,7 +154,8 @@ static constexpr uint32_t ROCE_DUP_ACK_THRES = 32;
 // # of Tx work handled in one loop.
 static constexpr uint32_t kMaxTxWork = 4;
 // Maximum number of Tx bytes to be transmitted in one loop.
-static constexpr uint32_t kMaxTxBytesThres = 32 * std::max(kChunkSize, 32768u);
+static uint32_t kMaxTxBytesThres =
+    32 * std::max((uint32_t)ucclParamCHUNK_SIZE(), 32768u);
 // # of Rx work handled in one loop.
 static constexpr uint32_t kMaxRxWork = 8;
 // Completion queue (CQ) size.
@@ -185,7 +189,7 @@ static constexpr uint32_t kPostRQThreshold = kMaxBatchCQ;
 // 1 means always send immediate ack.
 static constexpr uint32_t kMAXCumWQE = 4;
 // When the cumulative bytes reach kMAXCumBytes, send immediate ack.
-static constexpr uint32_t kMAXCumBytes = kMAXCumWQE * kChunkSize;
+static uint32_t kMAXCumBytes = kMAXCumWQE * ucclParamCHUNK_SIZE();
 // Before reaching it, the receiver will not consider that it has encountered
 // OOO, and thus there is no immediate ack. This is to tolerate the OOO caused
 // by the sender's qp scheduling.

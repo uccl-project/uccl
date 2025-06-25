@@ -137,6 +137,8 @@ class RDMAContext {
 
   uint32_t port_entropy_;
 
+  uint32_t chunk_size_;
+
   // Data path QPN to index mapping.
   std::unordered_map<uint32_t, int> qpn2idx_;
 
@@ -469,7 +471,7 @@ class EQDSRDMAContext : public RDMAContext {
       if (subflow->unacked_bytes_ >= subflow->pcb.timely_cc.get_wnd()) return 0;
     }
 
-    chunk_size = std::min(kChunkSize, subflow->pcb.eqds_cc.credit());
+    chunk_size = std::min(chunk_size_, subflow->pcb.eqds_cc.credit());
     chunk_size = std::min(chunk_size, remaining_bytes);
     if (!subflow->pcb.eqds_cc.spend_credit(chunk_size)) chunk_size = 0;
 
@@ -547,7 +549,7 @@ class SwiftRDMAContext : public RDMAContext {
 
   uint32_t EventOnChunkSize(SubUcclFlow* subflow,
                             uint32_t remaining_bytes) override {
-    if (remaining_bytes <= kChunkSize) return remaining_bytes;
+    if (remaining_bytes <= chunk_size_) return remaining_bytes;
 
     auto hard_budget = (is_roce() ? kMaxUnAckedBytesPerEngineHighForRoCE
                                   : kMaxUnAckedBytesPerEngineHighForIB) -
@@ -562,8 +564,8 @@ class SwiftRDMAContext : public RDMAContext {
     // Enforce swift congestion control window.
     auto ready_bytes = std::min(remaining_bytes, cc_budget);
 
-    // Chunking to kChunkSize.
-    ready_bytes = std::min(ready_bytes, kChunkSize);
+    // Chunking to CHUNK_SIZE.
+    ready_bytes = std::min(ready_bytes, chunk_size_);
 
     // First, check if we have touched the hard budget.
     if (ready_bytes > hard_budget) return 0;
@@ -608,7 +610,7 @@ class TimelyRDMAContext : public RDMAContext {
 
   uint32_t EventOnChunkSize(SubUcclFlow* subflow,
                             uint32_t remaining_bytes) override {
-    auto ready_bytes = std::min(remaining_bytes, kChunkSize);
+    auto ready_bytes = std::min(remaining_bytes, chunk_size_);
 
     if (*engine_unacked_bytes_ + ready_bytes >
         (is_roce() ? kMaxUnAckedBytesPerEngineHighForRoCE

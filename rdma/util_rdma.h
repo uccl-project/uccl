@@ -44,12 +44,12 @@ static constexpr uint32_t ROCE_IPV6_HDR_OVERHEAD = (14 + 40 + 8 + 12);
 static constexpr uint32_t BASE_PSN = 0;
 
 // For quick computation at MTU 4096
-static constexpr uint32_t MAX_CHUNK_ROCE_IPV4_4096_HDR_OVERHEAD =
-    ((kChunkSize + 4096) / 4096) * ROCE_IPV4_HDR_OVERHEAD;
-static constexpr uint32_t MAX_CHUNK_ROCE_IPV6_4096_HDR_OVERHEAD =
-    ((kChunkSize + 4096) / 4096) * ROCE_IPV6_HDR_OVERHEAD;
-static constexpr uint32_t MAX_CHUNK_IB_4096_HDR_OVERHEAD =
-    ((kChunkSize + 4096) / 4096) * IB_HDR_OVERHEAD;
+static uint32_t MAX_CHUNK_ROCE_IPV4_4096_HDR_OVERHEAD =
+    ((ucclParamCHUNK_SIZE() + 4096) / 4096) * ROCE_IPV4_HDR_OVERHEAD;
+static uint32_t MAX_CHUNK_ROCE_IPV6_4096_HDR_OVERHEAD =
+    ((ucclParamCHUNK_SIZE() + 4096) / 4096) * ROCE_IPV6_HDR_OVERHEAD;
+static uint32_t MAX_CHUNK_IB_4096_HDR_OVERHEAD =
+    ((ucclParamCHUNK_SIZE() + 4096) / 4096) * IB_HDR_OVERHEAD;
 
 static int __num_devices = 0;
 
@@ -188,16 +188,17 @@ struct __attribute__((packed)) retr_chunk_hdr {
   uint64_t remote_addr;
   uint32_t imm_data;
 };
+static_assert(sizeof(struct retr_chunk_hdr) == 12,
+              "retr_chunk_hdr size is not 12 bytes");
 
 /**
  * @brief Buffer pool for retransmission chunks (original chunk + retransmission
  * header). Original chunk and retransmission header are transmitted through
  * scatter-gather list.
  */
+
 class RetrChunkBuffPool : public BuffPool {
  public:
-  static constexpr uint32_t kRetrChunkSize =
-      kChunkSize + sizeof(retr_chunk_hdr);
   static constexpr uint32_t kNumChunk = 4096;
   static_assert((kNumChunk & (kNumChunk - 1)) == 0,
                 "kNumChunk must be power of 2");
@@ -1127,10 +1128,6 @@ struct pair_hash {
 // Shared IO context for each UCCL engine.
 class SharedIOContext {
  public:
-  constexpr static int kRetrMRSize =
-      RetrChunkBuffPool::kRetrChunkSize * RetrChunkBuffPool::kNumChunk;
-  constexpr static int kCtrlMRSize =
-      CtrlChunkBuffPool::kChunkSize * CtrlChunkBuffPool::kNumChunk;
   SharedIOContext(int dev) {
     rc_mode_ = ucclParamRCMode();
     bypass_pacing_ = ucclParamBypassPacing();
@@ -1157,7 +1154,8 @@ class SharedIOContext {
     srq_ = util_rdma_create_srq(pd, kMaxSRQ, 1, 0);
     UCCL_INIT_CHECK(srq_ != nullptr, "util_rdma_create_srq failed");
 
-    retr_mr_ = util_rdma_create_host_memory_mr(pd, kRetrMRSize);
+    retr_mr_ = util_rdma_create_host_memory_mr(
+        pd, kRetrChunkSize * RetrChunkBuffPool::kNumChunk);
     retr_hdr_mr_ = util_rdma_create_host_memory_mr(
         pd, RetrHdrBuffPool::kNumHdr * RetrHdrBuffPool::kHdrSize);
 
@@ -1181,10 +1179,11 @@ class SharedIOContext {
 #ifdef USE_CQ_EX
       use_cq_ex = true;
 #endif
-      util_rdma_create_qp(context, &ctrl_qp_, IBV_QPT_UD, use_cq_ex, true,
-                          (struct ibv_cq**)&ctrl_cq_ex_, false, kCQSize, pd,
-                          port, &ctrl_mr_, nullptr, kCtrlMRSize, kMaxCtrlWRs,
-                          kMaxCtrlWRs, 1, 1);
+      util_rdma_create_qp(
+          context, &ctrl_qp_, IBV_QPT_UD, use_cq_ex, true,
+          (struct ibv_cq**)&ctrl_cq_ex_, false, kCQSize, pd, port, &ctrl_mr_,
+          nullptr, CtrlChunkBuffPool::kChunkSize * CtrlChunkBuffPool::kNumChunk,
+          kMaxCtrlWRs, kMaxCtrlWRs, 1, 1);
 
       struct ibv_qp_attr attr = {};
       attr.qp_state = IBV_QPS_RTR;

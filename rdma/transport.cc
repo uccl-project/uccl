@@ -1674,6 +1674,7 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
 
   port_entropy_ = ucclParamPORT_ENTROPY();
   dp_qps_.resize(port_entropy_);
+  chunk_size_ = ucclParamCHUNK_SIZE();
 
   link_speed = util_rdma_get_link_speed_from_ibv_speed(
       factory_dev->port_attr.active_speed, factory_dev->port_attr.active_width);
@@ -2105,7 +2106,7 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
     {
       auto wheel = &wheel_;
       uint32_t hdr_overhead;
-      if (likely(chunk_size == kChunkSize && mtu_bytes_ == 4096)) {
+      if (likely(chunk_size == chunk_size_ && mtu_bytes_ == 4096)) {
         hdr_overhead = roce ? MAX_CHUNK_IB_4096_HDR_OVERHEAD
                             : MAX_CHUNK_ROCE_IPV4_4096_HDR_OVERHEAD;
       } else {
