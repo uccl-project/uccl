@@ -60,7 +60,12 @@ static constexpr uint32_t UD_ADDITION = 40;
 static constexpr uint32_t kMaxCtrlWRs = 2048;
 
 // Use RC rather than UC.
-static constexpr bool kRCMode = true;
+#ifdef BROADCOM_NIC
+UCCL_PARAM(RCMode, "RCMODE", true);
+#else
+UCCL_PARAM(RCMode, "RCMODE", false);
+#endif
+
 // Bypass the pacing stage.
 static constexpr bool kBypassPacing = true;
 

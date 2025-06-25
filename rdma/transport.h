@@ -712,7 +712,7 @@ class UcclRDMAEngine {
   void rc_handle_completion(void);
 
   inline void handle_completion(void) {
-    if constexpr (!kRCMode)
+    if (!io_ctx_.is_rc_mode())
       uc_handle_completion();
     else
       rc_handle_completion();

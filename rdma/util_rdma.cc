@@ -385,7 +385,7 @@ void SharedIOContext::check_srq(bool force) {
   int post_batch = std::min(kPostRQThreshold, (uint32_t)n_post_srq);
 
   for (int i = 0; i < post_batch; i++) {
-    if constexpr (!kRCMode) {
+    if (!is_rc_mode()) {
       auto chunk_addr = pop_retr_chunk();
       dp_recv_wrs_.recv_sges[i].addr = chunk_addr;
       dp_recv_wrs_.recv_sges[i].length = RetrChunkBuffPool::kRetrChunkSize;

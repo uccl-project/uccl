@@ -455,7 +455,7 @@ void UcclRDMAEngine::run() {
  */
 void UcclRDMAEngine::periodic_process() {
   // Handle RTOs for all UC QPs.
-  if constexpr (!kRCMode) handle_rto();
+  if (!io_ctx_.is_rc_mode()) handle_rto();
 
   // Handle control plane requests.
   process_ctl_reqs();
@@ -590,7 +590,7 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
     int const size = sizeof(uint32_t);
     auto total_size = kTotalQP * size;
 
-    if constexpr (!kRCMode) {
+    if (!ucclParamRCMode()) {
       total_size += size; /* ctrl qpn */
       total_size += size; /* peer id */
     }
@@ -607,7 +607,7 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
     }
 
     // Send ctrl qpn and our peer id to remote peer.
-    if constexpr (!kRCMode) {
+    if (!ucclParamRCMode()) {
       memcpy(buf + kTotalQP * size, &io_ctx_.ctrl_qp_->qp_num,
              sizeof(uint32_t));
       memcpy(buf + kTotalQP * size + size, &ctrl_work.peer_id,
@@ -639,7 +639,7 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
       ret = modify_qp_rtr(qp, dev, &rdma_ctx->remote_ctx_, remote_qpn);
       DCHECK(ret == 0) << "Failed to modify data path QP to RTR";
 
-      ret = modify_qp_rts(qp, kRCMode);
+      ret = modify_qp_rts(qp, ucclParamRCMode());
       DCHECK(ret == 0) << "Failed to modify data path QP to RTS";
     }
 
@@ -653,7 +653,7 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
       DCHECK(ret == 0) << "Failed to modify Ctrl QP to RTS";
     }
 
-    if constexpr (!kRCMode) {
+    if (!ucclParamRCMode()) {
       auto ctrl_qpn = *reinterpret_cast<uint32_t*>(buf + kTotalQP * size);
       auto remote_peer_id =
           *reinterpret_cast<uint32_t*>(buf + kTotalQP * size + size);
@@ -1696,7 +1696,7 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
   qp_init_attr.qp_context = this;
   qp_init_attr.send_cq = ibv_cq_ex_to_cq(io_ctx->send_cq_ex_);
   qp_init_attr.recv_cq = ibv_cq_ex_to_cq(io_ctx->recv_cq_ex_);
-  if constexpr (!kRCMode)
+  if (!ucclParamRCMode())
     qp_init_attr.qp_type = IBV_QPT_UC;
   else
     qp_init_attr.qp_type = IBV_QPT_RC;
@@ -1811,7 +1811,7 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
 }
 
 RDMAContext::~RDMAContext() {
-  if constexpr (!kRCMode) {
+  if (!ucclParamRCMode()) {
     if (credit_qp_ != nullptr) {
       ibv_destroy_qp(credit_qp_);
     }
@@ -1929,7 +1929,7 @@ bool RDMAContext::receiverCC_tx_message(struct ucclRequest* ureq) {
 
     // We use high 8 bits of wr_id to store CSN.
     // Lower 56 bits to store subflow pointer.
-    if constexpr (kRCMode)
+    if (io_ctx_->is_rc_mode())
       wr->wr_id = (1ULL * imm_data.GetCSN()) << 56 | (uint64_t)subflow;
     else
       wr->wr_id = 0;
@@ -1950,7 +1950,7 @@ bool RDMAContext::receiverCC_tx_message(struct ucclRequest* ureq) {
     // Track this chunk.
     subflow->txtracking.track_chunk(ureq, wr_ex, now, imm_data.GetCSN(),
                                     imm_data.GetHINT());
-    if constexpr (!kRCMode) {
+    if (!io_ctx_->is_rc_mode()) {
       // Arm timer for TX
       arm_timer_for_flow(subflow);
     }
@@ -2024,7 +2024,7 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
 
       // We use high 8 bits of wr_id to store CSN.
       // Lower 56 bits to store subflow pointer.
-      if constexpr (kRCMode)
+      if (io_ctx_->is_rc_mode())
         wr->wr_id = (1ULL * imm_data.GetCSN()) << 56 | (uint64_t)subflow;
       else
         wr->wr_id = 0;
@@ -2045,7 +2045,7 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
       // Track this chunk.
       subflow->txtracking.track_chunk(ureq, wr_ex, now, imm_data.GetCSN(),
                                       imm_data.GetHINT());
-      if constexpr (!kRCMode) {
+      if (!io_ctx_->is_rc_mode()) {
         // Arm timer for TX
         arm_timer_for_flow(subflow);
       }
@@ -2097,7 +2097,7 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
 
     // We use high 8 bits of wr_id to store CSN.
     // Lower 56 bits to store subflow pointer.
-    if constexpr (kRCMode)
+    if (io_ctx_->is_rc_mode())
       wr->wr_id = (1ULL * imm_data.GetCSN()) << 56 | (uint64_t)subflow;
     else
       wr->wr_id = 0;
@@ -2145,7 +2145,7 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
         // Track this chunk.
         subflow->txtracking.track_chunk(ureq, wr_ex, now, imm_data.GetCSN(),
                                         imm_data.GetHINT());
-        if constexpr (!kRCMode) {
+        if (!io_ctx_->is_rc_mode()) {
           // Arm timer for TX
           arm_timer_for_flow(subflow);
         }
@@ -2711,7 +2711,7 @@ void RDMAContext::burst_timing_wheel(void) {
     // Track this chunk.
     subflow->txtracking.track_chunk(wr_ex->ureq, wr_ex, rdtsc(),
                                     imm_data.GetCSN(), imm_data.GetHINT());
-    if constexpr (!kRCMode) {
+    if (!io_ctx_->is_rc_mode()) {
       // Arm timer for TX
       arm_timer_for_flow(subflow);
     }
@@ -2758,7 +2758,7 @@ void RDMAContext::try_update_csn(SubUcclFlow* subflow) {
     UCCL_LOG_IO << "try_update_csn:"
                 << " rcv_nxt: " << subflow->pcb.rcv_nxt.to_uint32();
 
-    if constexpr (!kRCMode) {
+    if (!io_ctx_->is_rc_mode()) {
       subflow->pcb.sack_bitmap_shift_left_one();
     }
   }

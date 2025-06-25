@@ -1132,6 +1132,7 @@ class SharedIOContext {
   constexpr static int kCtrlMRSize =
       CtrlChunkBuffPool::kChunkSize * CtrlChunkBuffPool::kNumChunk;
   SharedIOContext(int dev) {
+    rc_mode_ = ucclParamRCMode();
     auto context = RDMAFactory::get_factory_dev(dev)->context;
     auto pd = RDMAFactory::get_factory_dev(dev)->pd;
     auto port = RDMAFactory::get_factory_dev(dev)->ib_port_num;
@@ -1173,7 +1174,7 @@ class SharedIOContext {
       check_srq(true);
     }
 
-    if constexpr (!kRCMode) {
+    if (!ucclParamRCMode()) {
       // Create Ctrl QP, CQ, and MR.
       bool use_cq_ex = false;
 #ifdef USE_CQ_EX
@@ -1231,6 +1232,8 @@ class SharedIOContext {
     ibv_dereg_mr(retr_mr_);
     ibv_dereg_mr(retr_hdr_mr_);
   }
+
+  inline bool is_rc_mode() { return rc_mode_; }
 
   void flush_acks();
 
@@ -1332,6 +1335,8 @@ class SharedIOContext {
   inline int get_post_ctrl_rq_cnt(void) { return ctrl_recv_wrs_.post_rq_cnt; }
 
  private:
+  bool rc_mode_;
+
   struct ibv_qp* ctrl_qp_;
   struct ibv_cq_ex* ctrl_cq_ex_;
   struct ibv_mr* ctrl_mr_;
