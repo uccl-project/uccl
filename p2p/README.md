@@ -42,8 +42,6 @@ p2p/                           # ← repo root
     └── rdma.cpp
 ```
 
-> **Tip:** All `.cuh` headers compile for both host and device by guarding CUDA-specific code inside `__CUDA_ARCH__` checks.
-
 ---
 
 ## Prerequisites
@@ -53,8 +51,7 @@ p2p/                           # ← repo root
 | **GPU**   | NVIDIA A100/H100 or any GPU that supports GPUDirect RDMA |
 | **Driver**| NVIDIA 535+ with `nvidia_peermem` (or legacy `nv_peer_mem`) loaded |
 | **NIC**   | Mellanox CX-5/6/7 or equivalent with RoCE/IB support |
-| **CUDA**  | 12.2 or newer (tested on 12.5) |
-| **OFED**  | MLNX_OFED 5.9+ |
+| **CUDA**  | 12.2 or newer (tested on 12.4) |
 | **OS**    | Linux 5.15+ |
 
 ---
@@ -68,7 +65,7 @@ make clean         # remove objects and binaries
 
 ## Running benchmarks
 
-### 1. Local Sanity Test (single machine)
+### 1. Local single-machine Test
 
 ```bash
 ./benchmark_local
@@ -86,4 +83,4 @@ make clean         # remove objects and binaries
 1.	Each rank pins its GPU buffer with GPUDirect RDMA and exchanges RDMAConnectionInfo.
 2.	Rank 0 writes batched copy commands into a host-mapped ring buffer.
 3.	A CPU proxy polls that ring, posts IBV_WR_RDMA_WRITE_WITH_IMM, and recycles WQEs on completion.
-4.	Rank 1’s proxy posts matching receives and funnels completed work into a peer-copy kernel (optional) that pushes data to additional GPUs.
+4.	Rank 1’s proxy posts matching receives and funnels completed work into a peer-copy kernel (optional) that pushes data to additional GPUs through NVLink.
