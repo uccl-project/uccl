@@ -31,7 +31,7 @@ static constexpr uint32_t NUM_ENGINES = 4;
 // Path/QP per engine. The total number is NUM_ENGINES * kPortEntropy.
 static constexpr uint32_t kPortEntropy = 32;
 // Maximum chunk size (Bytes) for each WQE.
-static constexpr uint32_t kChunkSize = 512 << 10;
+static constexpr uint32_t kChunkSize = 32 << 10;
 #else
 #ifdef HPC_FUND_CLUSTER
 // This cluster has low PCIe-CPU interconnect bw, therefore we use larger chunk
@@ -41,8 +41,8 @@ static constexpr uint32_t kPortEntropy = 256;
 static constexpr uint32_t kChunkSize = 128 << 10;
 #else
 static constexpr uint32_t NUM_ENGINES = 4;
-static constexpr uint32_t kPortEntropy = 32;
-static constexpr uint32_t kChunkSize = 512 << 10;
+static constexpr uint32_t kPortEntropy = 4;
+static constexpr uint32_t kChunkSize = 128 << 10;
 #endif
 #endif
 

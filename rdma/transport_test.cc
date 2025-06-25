@@ -393,9 +393,12 @@ static void client_worker(void) {
 }
 
 // clang-format off
-// TO run on AMD HPC cluster:
-// LD_LIBRARY_PATH="${CONDA_LIB_HOME}:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH}" HIP_VISIBLE_DEVICES=0 ./transport_test --server=true
-// LD_LIBRARY_PATH="${CONDA_LIB_HOME}:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH}" HIP_VISIBLE_DEVICES=0 ./transport_test --serverip=10.0.100.114
+// TO run on AMD cluster:
+// export NCCL_IB_HCA="rdma0:1,rdma2:1,rdma3:1,rdma4:1"
+// export HIP_VISIBLE_DEVICES=1,2,0,5
+// export NCCL_SOCKET_IFNAME="cni0"
+// LD_LIBRARY_PATH="${CONDA_LIB_HOME}:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH}" ./transport_test --server=true
+// LD_LIBRARY_PATH="${CONDA_LIB_HOME}:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH}" ./transport_test --serverip=10.0.100.114
 // clang-format on
 
 int main(int argc, char* argv[]) {
