@@ -1674,7 +1674,7 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
 
   port_entropy_ = ucclParamPORT_ENTROPY();
   dp_qps_.resize(port_entropy_);
-  chunk_size_ = ucclParamCHUNK_SIZE();
+  chunk_size_ = (ucclParamCHUNK_SIZE_KB() << 10);
 
   link_speed = util_rdma_get_link_speed_from_ibv_speed(
       factory_dev->port_attr.active_speed, factory_dev->port_attr.active_width);

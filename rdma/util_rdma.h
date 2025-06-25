@@ -45,11 +45,11 @@ static constexpr uint32_t BASE_PSN = 0;
 
 // For quick computation at MTU 4096
 static uint32_t MAX_CHUNK_ROCE_IPV4_4096_HDR_OVERHEAD =
-    ((ucclParamCHUNK_SIZE() + 4096) / 4096) * ROCE_IPV4_HDR_OVERHEAD;
+    (((ucclParamCHUNK_SIZE_KB() << 10) + 4096) / 4096) * ROCE_IPV4_HDR_OVERHEAD;
 static uint32_t MAX_CHUNK_ROCE_IPV6_4096_HDR_OVERHEAD =
-    ((ucclParamCHUNK_SIZE() + 4096) / 4096) * ROCE_IPV6_HDR_OVERHEAD;
+    (((ucclParamCHUNK_SIZE_KB() << 10) + 4096) / 4096) * ROCE_IPV6_HDR_OVERHEAD;
 static uint32_t MAX_CHUNK_IB_4096_HDR_OVERHEAD =
-    ((ucclParamCHUNK_SIZE() + 4096) / 4096) * IB_HDR_OVERHEAD;
+    (((ucclParamCHUNK_SIZE_KB() << 10) + 4096) / 4096) * IB_HDR_OVERHEAD;
 
 static int __num_devices = 0;
 
