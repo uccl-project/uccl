@@ -133,7 +133,11 @@ Run `rccl-tests`:
 
 ## Environment Variables in UCCL
 
-UCCL supports the following environment variables to configure. For example, one can enlarge the chunk size to 128KB by setting `UCCL_CHUNK_SIZE_KB=128`.
+UCCL supports the following environment variables to configure.
+
+For example, one can enlarge the chunk size to 128KB by setting `UCCL_CHUNK_SIZE_KB=128`. 
+
+Use `UCCL_PARAM()` to introduce new environment variables.
 
 | Environment Variable | Description | Default Value |
 |---------------------|-------------|---------------|
