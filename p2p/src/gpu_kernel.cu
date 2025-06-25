@@ -5,19 +5,12 @@
 #include <stdint.h>
 #include <stdio.h>
 
-__device__ __forceinline__ uint64_t ld_volatile(uint64_t* ptr) {
-  uint64_t ans;
-  asm volatile("ld.volatile.global.u64 %0, [%1];"
-               : "=l"(ans)
-               : "l"(ptr)
-               : "memory");
-  return ans;
-}
-
-__global__ void gpu_issue_batched_commands(RingBuffer* rbs) {
+__global__ void gpu_issue_batched_commands(
+    RingBuffer<TransferCmd, FlowDirection::DeviceToHost, kQueueSize>* rbs) {
   int const bid = blockIdx.x;
   int const tid = threadIdx.x;
-  RingBuffer* rb = &rbs[bid];
+  RingBuffer<TransferCmd, FlowDirection::DeviceToHost, kQueueSize>* rb =
+      &rbs[bid];
   if (tid != 0) {
     return;
   }
@@ -42,7 +35,7 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs) {
 #ifdef MEASURE_PER_OP_LATENCY
     // if (complete < my_hdr + todo) {
     uint32_t cidx = complete & kQueueMask;
-    cur_tail = ld_volatile(&rb->tail);
+    cur_tail = rb->volatile_tail();
     if (complete < cur_tail) {
       // __threadfence_system();
       for (int i = complete; i < cur_tail; ++i) {
@@ -76,7 +69,7 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs) {
     // Dynamically send the number of todos to send.
     // while (true) {
     uint64_t cur_head = rb->head;
-    cur_tail = ld_volatile(&rb->tail);
+    cur_tail = rb->volatile_tail();
     uint64_t free_slots = kMaxInflight - (cur_head - cur_tail);
 
     if (free_slots >= todo) {
@@ -105,7 +98,7 @@ __global__ void gpu_issue_batched_commands(RingBuffer* rbs) {
       rb->buf[idx].bytes = kObjectSize;
       start_cycle_smem[idx] = t0;
     }
-    __threadfence_system();
+    rb->commit();
     rb->head = my_hdr + todo;
 
     it += todo;

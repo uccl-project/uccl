@@ -10,16 +10,22 @@
 #include <immintrin.h>
 
 struct ProxyCtx {
-  RingBuffer* rb_host;  // host pointer (CPU visible address of RingBuffer)
-  int my_rank;          // rank id for this proxy (if simulating multiple)
+  RingBuffer<TransferCmd, FlowDirection::DeviceToHost, kQueueSize>*
+      rb_host;  // host pointer (CPU visible address of RingBuffer)
+  int my_rank;  // rank id for this proxy (if simulating multiple)
 };
 
-void cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
-               size_t total_size, int rank, char const* peer_ip);
-void cpu_proxy_local(RingBuffer* rb, int block_idx);
-void remote_cpu_proxy(RingBuffer* rb, int block_idx, void* gpu_buffer,
-                      size_t total_size, int rank, char const* peer_ip,
-                      CopyRing& g_ring);
+void cpu_proxy(
+    RingBuffer<TransferCmd, FlowDirection::DeviceToHost, kQueueSize>* rb,
+    int block_idx, void* gpu_buffer, size_t total_size, int rank,
+    char const* peer_ip);
+void cpu_proxy_local(
+    RingBuffer<TransferCmd, FlowDirection::DeviceToHost, kQueueSize>* rb,
+    int block_idx);
+void remote_cpu_proxy(
+    RingBuffer<TransferCmd, FlowDirection::DeviceToHost, kQueueSize>* rb,
+    int block_idx, void* gpu_buffer, size_t total_size, int rank,
+    char const* peer_ip, CopyRing& g_ring);
 
 // Proxy id to start time unordered_map
 extern thread_local std::unordered_map<

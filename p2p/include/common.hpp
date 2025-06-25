@@ -72,14 +72,6 @@
 #define NVLINK_SM_PER_PROCESS 2
 #endif
 // #define SEPARATE_POLLING
-// Command structure for each transfer
-struct TransferCmd {
-  uint64_t cmd;
-  uint32_t dst_rank;  // remote node id (MPI-style)
-  uint32_t dst_gpu;   // GPU id on remote node
-  void* src_ptr;      // device pointer to data
-  uint64_t bytes;     // transfer size
-};
 
 bool pin_thread_to_cpu(int cpu);
 
