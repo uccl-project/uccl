@@ -2,6 +2,7 @@
 #include "common.hpp"
 #include "copy_ring.hpp"
 #include "peer_copy.cuh"
+#include "ring_buffer.cuh"
 #include <cstdio>
 #include <cuda_pipeline.h>
 #include <cuda_runtime.h>
@@ -181,4 +182,146 @@ __global__ void peer_copy_kernel_vec_pipelined(
 
     __syncthreads();
   }
+}
+
+__device__ __forceinline__ unsigned long long atomicSubULL(
+    unsigned long long* addr, unsigned long long val) {
+  return atomicAdd(
+      reinterpret_cast<unsigned long long*>(addr),
+      static_cast<unsigned long long>(-static_cast<long long>(val)));
+}
+
+__device__ __forceinline__ bool pop_global(HostToDeviceNVlinkBuffer* rb,
+                                           CopyTask& out) {
+  // Reserve a slot atomically
+  const uint64_t my_tail =
+      atomicAdd(reinterpret_cast<unsigned long long*>(&rb->tail), 1ULL);
+
+  __threadfence_system();
+
+  // Check if we raced past the current head
+  if (my_tail >= rb->head) {
+    // undo reservation
+    atomicSubULL(reinterpret_cast<unsigned long long*>(&rb->tail), 1ULL);
+    return false;
+  }
+
+  out = rb->get_entry(my_tail);
+  return true;
+}
+
+__global__ void peer_copy_kernel_vec_many(HostToDeviceNVlinkBuffer* rb) {
+  unsigned const lane = threadIdx.x & 0x1F;  // 0–31
+
+  while (true) {
+    CopyTask task;
+    bool have = false;
+    if (lane == 0) have = pop_global(rb, task);
+    have = __shfl_sync(0xFFFFFFFF, have, 0);
+    if (!have) continue;
+
+    unsigned long long src_ll = 0, dst_ll = 0;
+    if (lane == 0) {
+      src_ll = (unsigned long long)task.src_ptr;
+      dst_ll = (unsigned long long)task.dst_ptr;
+    }
+    src_ll = __shfl_sync(0xFFFFFFFF, src_ll, 0);
+    dst_ll = __shfl_sync(0xFFFFFFFF, dst_ll, 0);
+    size_t nbytes = __shfl_sync(0xFFFFFFFF, task.bytes, 0);
+
+    char const* __restrict__ src = (char const*)src_ll;
+    char* __restrict__ dst = (char*)dst_ll;
+
+#if defined(DEBUG) || !defined(NDEBUG)
+    if (((uintptr_t)src & 0xF) || ((uintptr_t)dst & 0xF)) {
+      // rare – but don’t crash the whole grid
+      if (lane == 0)
+        for (size_t i = 0; i < nbytes; ++i) dst[i] = src[i];
+      continue;
+    }
+#endif
+
+    size_t offset = lane * 16;
+    for (; offset + 127 < nbytes; offset += 32 * 16)
+      copy128(src + offset, dst + offset);
+
+    if (lane == 0) {
+      for (size_t i = (nbytes & ~size_t(127)); i < nbytes; ++i) dst[i] = src[i];
+    }
+  }
+}
+
+__global__ void peer_copy_kernel_vec_persistent(HostToDeviceNVlinkBuffer* rb)
+// Only one thread polls task, doesn't work.
+{
+  __shared__ CopyTask sm_task;
+
+  while (true) {
+    if (threadIdx.x == 0) {
+      if (!rb->pop(sm_task)) sm_task.bytes = 0;
+    }
+    __syncthreads();
+    if (sm_task.bytes == 0) {
+      continue;
+    }
+
+    char const* __restrict__ src = static_cast<char const*>(sm_task.src_ptr);
+    char* __restrict__ dst = static_cast<char*>(sm_task.dst_ptr);
+    size_t nbytes = sm_task.bytes;
+
+    size_t offset = threadIdx.x * 16;
+    for (; offset + 127 < nbytes; offset += blockDim.x * 16)
+      copy128(src + offset, dst + offset);
+
+    if (threadIdx.x == 0) {
+      for (size_t i = (nbytes & ~size_t(127)); i < nbytes; ++i) dst[i] = src[i];
+    }
+    __syncthreads();
+  }
+}
+
+HostToDeviceNVlinkBuffer* initialize_ring_buffer_for_nvlink_forwarding(
+    cudaStream_t stream) {
+  HostToDeviceNVlinkBuffer* rb;
+  cudaError_t err =
+      cudaHostAlloc(reinterpret_cast<void**>(&rb),
+                    sizeof(HostToDeviceNVlinkBuffer), cudaHostAllocMapped);
+  if (err != cudaSuccess) {
+    fprintf(stderr, "Error allocating ring buffer for NVLink forwarding: %s\n",
+            cudaGetErrorString(err));
+    std::abort();
+  }
+
+  new (rb) HostToDeviceNVlinkBuffer{};
+  constexpr int threads_per_block = 256;
+  dim3 blocks(NVLINK_SM_PER_PROCESS);
+  peer_copy_kernel_vec_many<<<blocks, threads_per_block, 0, stream>>>(rb);
+  err = cudaGetLastError();
+  if (err != cudaSuccess) {
+    fprintf(stderr, "Error launching kernel for NVLink forwarding: %s\n",
+            cudaGetErrorString(err));
+    std::abort();
+  }
+  return rb;
+}
+
+bool post_copy_task(HostToDeviceNVlinkBuffer* rb, CopyTask const* host_tasks,
+                    int num_tasks, cudaStream_t stream, int src_device,
+                    CopyTask*& d_tasks) {
+  uint64_t cur_head = rb->head;
+  uint64_t cur_tail = rb->volatile_tail();
+
+  int free_slots = rb->capacity - (cur_head - cur_tail);
+  if (free_slots < num_tasks) {
+    printf(
+        "Not enough free slots in ring buffer: %d available, %d requested, "
+        "rb->capacity: %d, cur_head: %lu, cur_tail: %lu\n",
+        free_slots, num_tasks, rb->capacity, cur_head, cur_tail);
+    return false;
+  }
+  for (int i = 0; i < num_tasks; ++i) {
+    rb->set_buffer(cur_head + i, host_tasks[i]);
+  }
+  rb->commit_with_head(cur_head + num_tasks);
+  return true;
 }

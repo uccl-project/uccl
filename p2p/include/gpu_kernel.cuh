@@ -4,7 +4,6 @@
 #include "common.hpp"
 #include "ring_buffer.cuh"
 
-__global__ void gpu_issue_batched_commands(
-    RingBuffer<TransferCmd, FlowDirection::DeviceToHost, kQueueSize>* rbs);
+__global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs);
 
 #endif  // GPU_KERNEL_CUH

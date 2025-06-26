@@ -2,6 +2,7 @@
 #define RING_BUFFER_CUH
 
 #include "common.hpp"  // For TransferCmd, QUEUE_SIZE
+#include "copy_ring.hpp"
 #include <atomic>
 #include <cuda.h>
 
@@ -35,8 +36,10 @@ struct alignas(128) RingBuffer {
   uint64_t op_count;
   uint64_t cycle_start;
   uint64_t cycle_end;
+  uint32_t capacity = Capacity;
 
-  static constexpr uint32_t mask() { return Capacity - 1; }
+  __host__ __device__ static constexpr uint32_t mask() { return Capacity - 1; }
+
   __host__ __device__ __forceinline__ bool full() const {
     return head - tail == Capacity;
   }
@@ -45,20 +48,29 @@ struct alignas(128) RingBuffer {
     return head == tail;
   }
 
-  __host__ __device__ __forceinline__ bool push(const T& item) {
+  __host__ __device__ __forceinline__ void set_buffer(int idx, T entry) {
+    buf[idx & mask()] = entry;
+  }
+
+  __host__ __device__ __forceinline__ bool push(T const& item) {
     if (full()) return false;
     buf[head & mask()] = item;
     head++;
     return true;
   }
 
-  __host__ __device__ __forceinline__ void commit() {
+  __host__ __device__ __forceinline__ T get_entry(int idx) const {
+    return buf[idx & mask()];
+  }
+
+  __host__ __device__ __forceinline__ void commit_with_head(int new_head) {
 #if __CUDA_ARCH__
     if constexpr (Dir == FlowDirection::DeviceToHost) __threadfence_system();
 #else
     if constexpr (Dir == FlowDirection::DeviceToHost)
       std::atomic_thread_fence(std::memory_order_release);
 #endif
+    head = new_head;
   }
 
   __host__ __device__ __forceinline__ bool pop(T& out) {
@@ -72,21 +84,23 @@ struct alignas(128) RingBuffer {
     return true;
   }
 
-  __device__ __forceinline__ void record_cycles(unsigned long long start) {
+  __host__ __device__ __forceinline__ uint64_t volatile_tail() {
 #if __CUDA_ARCH__
-    if constexpr (Dir == FlowDirection::DeviceToHost) {
-      auto now = clock64();
-      cycle_accum += (now - start);
-      ++op_count;
-      if (!cycle_start) cycle_start = start;
-      cycle_end = now;
-    }
+    return ld_volatile(&tail);
+#else  // host compilation
+    // Ordinary C++: read through a `volatile` alias to prevent the
+    // compiler from reordering or eliding the load.
+    return *reinterpret_cast<volatile uint64_t const*>(&tail);
+    /*  an alternative with explicit atomics:
+        return __atomic_load_n(&tail, __ATOMIC_ACQUIRE);
+    */
 #endif
   }
-
-  __device__ __forceinline__ uint64_t volatile_tail() {
-    return ld_volatile(&tail);
-  }
 };
+
+typedef RingBuffer<TransferCmd, FlowDirection::DeviceToHost, kQueueSize>
+    DeviceToHostCmdBuffer;
+typedef RingBuffer<CopyTask, FlowDirection::HostToDevice, COPY_RING_CAP>
+    HostToDeviceNVlinkBuffer;
 
 #endif  // RING_BUFFER_CUH

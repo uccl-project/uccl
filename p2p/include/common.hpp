@@ -35,6 +35,7 @@
     }                                                         \
   } while (0)
 
+// #define REMOTE_PERSISTENT_KERNEL
 #define MEASURE_PER_OP_LATENCY
 #define ENABLE_WRITE_WITH_IMMEDIATE
 #define ASSUME_WR_IN_ORDER

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "copy_ring.hpp"
+#include "ring_buffer.cuh"
 #include <cuda_runtime.h>
 
 template <typename X, typename Y, typename Z = decltype(X() + Y())>
@@ -25,3 +26,10 @@ template <int PIPE_DEPTH,  // same as kPipelineDepth
           typename VecT>   // 16 B per transaction
 __global__ void peer_copy_kernel_vec_pipelined(
     CopyTask const* __restrict__ tasks, int num_tasks, int tasks_per_block);
+
+HostToDeviceNVlinkBuffer* initialize_ring_buffer_for_nvlink_forwarding(
+    cudaStream_t stream);
+
+bool post_copy_task(HostToDeviceNVlinkBuffer* rb, CopyTask const* host_tasks,
+                    int num_tasks, cudaStream_t stream, int src_device,
+                    CopyTask*& d_tasks);

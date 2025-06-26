@@ -43,12 +43,9 @@ int main(int argc, char** argv) {
   cudaGetDeviceProperties(&prop, 0);
   printf("clock rate: %d kHz\n", prop.clockRate);
 
-  RingBuffer<TransferCmd, FlowDirection::DeviceToHost, kQueueSize>* rbs;
-  cudaHostAlloc(
-      &rbs,
-      sizeof(RingBuffer<TransferCmd, FlowDirection::DeviceToHost, kQueueSize>) *
-          kNumThBlocks,
-      cudaHostAllocMapped);
+  DeviceToHostCmdBuffer* rbs;
+  cudaHostAlloc(&rbs, sizeof(DeviceToHostCmdBuffer) * kNumThBlocks,
+                cudaHostAllocMapped);
   for (int i = 0; i < kNumThBlocks; ++i) {
     rbs[i].head = 0;
     rbs[i].tail = 0;

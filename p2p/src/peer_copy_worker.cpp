@@ -58,6 +58,14 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
   cudaStreamCreate(&stream);
   CopyTask* d_tasks;
   cudaMallocAsync(&d_tasks, RECEIVER_BATCH_SIZE * sizeof(CopyTask), stream);
+
+#ifdef REMOTE_PERSISTENT_KERNEL
+  cudaStream_t persistent_stream;
+  cudaStreamCreate(&persistent_stream);
+  HostToDeviceNVlinkBuffer* rb =
+      initialize_ring_buffer_for_nvlink_forwarding(persistent_stream);
+#endif
+
   while (g_run.load(std::memory_order_acquire)) {
     CopyTask t;
     int copy_batch_size = 0;
@@ -105,13 +113,22 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
       err = launch_peer_bulk_copy(t.dst_ptr, t.dst_dev, t.src_ptr, src_device,
                                   t.bytes * copy_batch_size, stream);
       func_name = "launch_peer_bulk_copy";
+#ifdef REMOTE_PERSISTENT_KERNEL
+    } else if (false) {
+#else
     } else {
+#endif
+
       /* The fastest among the three. */
       err = launch_peer_bulk_copy2(tasks, copy_batch_size, stream, src_device,
                                    d_tasks);
       func_name = "launch_peer_bulk_copy2";
     }
-
+#ifdef REMOTE_PERSISTENT_KERNEL
+    else {
+      post_copy_task(rb, tasks, copy_batch_size, stream, src_device, d_tasks);
+    }
+#endif
     if (err != cudaSuccess) {
       fprintf(stderr, "%s failed (%s) wr_id=%llu\n", func_name.c_str(),
               cudaGetErrorString(err),
