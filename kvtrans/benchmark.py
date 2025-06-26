@@ -69,6 +69,7 @@ def _run_server(args):
         for _ in range(args.iters):
             ok, recv_sz = ep.recv_kv(conn_id, mr_id, ptr, size)
             if not ok or recv_sz != size:
+                print(f"[Server] recv_kv error: {ok} {recv_sz} {size}")
                 sys.exit("[Server] recv_kv error")
             total_recv += recv_sz
         elapsed = time.perf_counter() - start
@@ -128,7 +129,7 @@ def main():
     p.add_argument("--device", choices=["cpu", "gpu"], default="cpu",
                    help="Buffer location (cpu or gpu)")
     p.add_argument("--sizes", type=parse_size_list,
-                   default=[256, 1024, 4096, 16384, 65536, 262144, 1048576, 10485760, 104857600],
+                   default=[256, 1024, 4096, 16384, 65536, 262144, 1048576, 10485760, 20971520, 40943040],
                    help="Comma separated list of message sizes in bytes")
     p.add_argument("--iters", type=int, default=1000,
                    help="Iterations per message size (excluding 1 warm-up)")

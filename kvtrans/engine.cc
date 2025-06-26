@@ -138,7 +138,7 @@ bool Endpoint::send_kv(uint64_t conn_id, uint64_t mr_id, void const* data,
           static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
           cur_data, chunk_size, &ureq[ureq_issued % kMaxInflightChunks], kv_mhandle, (void*)&large_kv_meta_data_);
       // Only first call on uccl_send_async_kv will set kv_mhandle.
-      kv_mhandle == nullptr;
+      kv_mhandle = nullptr;
       if (rc == -1) break;
       cur_data += chunk_size;
       size_sent += chunk_size;
@@ -164,8 +164,10 @@ bool Endpoint::recv_kv(uint64_t conn_id, uint64_t mr_id, void* data,
   auto conn = conn_id_to_conn_[conn_id];
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
 
-  uccl::ucclRequest first_ureq;
+  uccl::ucclRequest first_ureq = {};
   uccl::ucclRequest ureq[kMaxInflightChunks];
+
+  bool first_ureq_poll_done = false;
 
   int rc;
   int max_size_int = static_cast<int>(max_size);
@@ -190,7 +192,7 @@ bool Endpoint::recv_kv(uint64_t conn_id, uint64_t mr_id, void* data,
   int ureq_max = (size_expected + kChunkSize - 1) / kChunkSize;
   int ureq_issued = 0, ureq_finished = 0;
 
-  while (ureq_finished < ureq_max) {
+  while (ureq_finished < ureq_max || !first_ureq_poll_done) {
     while (ureq_issued - ureq_finished < kMaxInflightChunks &&
            size_post_recv < size_expected) {
       int chunk_size = std::min(size_expected - size_post_recv, kChunkSize);
@@ -208,7 +210,10 @@ bool Endpoint::recv_kv(uint64_t conn_id, uint64_t mr_id, void* data,
                                   << " size_post_recv: " << size_post_recv;
 
     // Remember to poll the first ureq.
-    ep_->uccl_poll_ureq(&ureq[0]);
+    if (!first_ureq_poll_done) {
+      ep_->uccl_poll_ureq_once(&first_ureq);
+      first_ureq_poll_done = true;
+    }
     for (int i = ureq_finished; i < ureq_issued; i++) {
       if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
         ureq_finished++;
