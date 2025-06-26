@@ -133,7 +133,11 @@ class RDMAContext {
   struct ibv_pd* pd_ = nullptr;
 
   // QPs for data transfer based on UC or RC.
-  struct QPWrapper dp_qps_[kPortEntropy];
+  std::vector<QPWrapper> dp_qps_;
+
+  uint32_t port_entropy_;
+
+  uint32_t chunk_size_;
 
   // Data path QPN to index mapping.
   std::unordered_map<uint32_t, int> qpn2idx_;
@@ -187,7 +191,7 @@ class RDMAContext {
 
   LIST_HEAD(ack_list_);
 
-  inline bool is_roce() { return (gid_idx_ == ROCE_GID_IDX); }
+  inline bool is_roce() { return (gid_idx_ == ucclParamROCE_GID_IDX()); }
   // Get an unused request, if no request is available, return nullptr.
   inline struct RecvRequest* alloc_recvreq(void) {
     for (int i = 0; i < kMaxReq; i++) {
@@ -272,13 +276,13 @@ class RDMAContext {
   // Select a QP index in a round-robin manner.
   inline uint32_t select_qpidx_rr(void) {
     static uint32_t next_qp_idx = 0;
-    return next_qp_idx++ % kPortEntropy;
+    return next_qp_idx++ % port_entropy_;
   }
 
   // Select a QP index randomly.
   inline uint32_t select_qpidx_rand() {
     static thread_local std::mt19937 generator(std::random_device{}());
-    std::uniform_int_distribution<uint32_t> distribution(0, kPortEntropy - 1);
+    std::uniform_int_distribution<uint32_t> distribution(0, port_entropy_ - 1);
     return distribution(generator);
   }
 
@@ -467,7 +471,7 @@ class EQDSRDMAContext : public RDMAContext {
       if (subflow->unacked_bytes_ >= subflow->pcb.timely_cc.get_wnd()) return 0;
     }
 
-    chunk_size = std::min(kChunkSize, subflow->pcb.eqds_cc.credit());
+    chunk_size = std::min(chunk_size_, subflow->pcb.eqds_cc.credit());
     chunk_size = std::min(chunk_size, remaining_bytes);
     if (!subflow->pcb.eqds_cc.spend_credit(chunk_size)) chunk_size = 0;
 
@@ -545,7 +549,7 @@ class SwiftRDMAContext : public RDMAContext {
 
   uint32_t EventOnChunkSize(SubUcclFlow* subflow,
                             uint32_t remaining_bytes) override {
-    if (remaining_bytes <= kChunkSize) return remaining_bytes;
+    if (remaining_bytes <= chunk_size_) return remaining_bytes;
 
     auto hard_budget = (is_roce() ? kMaxUnAckedBytesPerEngineHighForRoCE
                                   : kMaxUnAckedBytesPerEngineHighForIB) -
@@ -560,8 +564,8 @@ class SwiftRDMAContext : public RDMAContext {
     // Enforce swift congestion control window.
     auto ready_bytes = std::min(remaining_bytes, cc_budget);
 
-    // Chunking to kChunkSize.
-    ready_bytes = std::min(ready_bytes, kChunkSize);
+    // Chunking to CHUNK_SIZE.
+    ready_bytes = std::min(ready_bytes, chunk_size_);
 
     // First, check if we have touched the hard budget.
     if (ready_bytes > hard_budget) return 0;
@@ -606,7 +610,7 @@ class TimelyRDMAContext : public RDMAContext {
 
   uint32_t EventOnChunkSize(SubUcclFlow* subflow,
                             uint32_t remaining_bytes) override {
-    auto ready_bytes = std::min(remaining_bytes, kChunkSize);
+    auto ready_bytes = std::min(remaining_bytes, chunk_size_);
 
     if (*engine_unacked_bytes_ + ready_bytes >
         (is_roce() ? kMaxUnAckedBytesPerEngineHighForRoCE
@@ -710,7 +714,7 @@ class UcclRDMAEngine {
   void rc_handle_completion(void);
 
   inline void handle_completion(void) {
-    if constexpr (!kRCMode)
+    if (!io_ctx_.is_rc_mode())
       uc_handle_completion();
     else
       rc_handle_completion();
@@ -1104,7 +1108,7 @@ class UcclFlow {
   static constexpr int kFifoCQSize = 4096;
 
  public:
-  SubUcclFlow* sub_flows_[NUM_ENGINES];
+  std::vector<SubUcclFlow*> sub_flows_;
 
   UcclFlow(RDMAEndpoint* ep, int dev, PeerID peer_id, FlowID flow_id,
            std::string remote_ip, int remote_dev, bool is_send)
@@ -1116,8 +1120,8 @@ class UcclFlow {
         remote_dev_(remote_dev),
         is_send_(is_send) {
     auto factory_dev = RDMAFactory::get_factory_dev(dev);
-    for (int i = 0; i < NUM_ENGINES; i++) {
-      sub_flows_[i] = new SubUcclFlow(flow_id, factory_dev->link_bw);
+    for (int i = 0; i < ucclParamNUM_ENGINES(); i++) {
+      sub_flows_.push_back(new SubUcclFlow(flow_id, factory_dev->link_bw));
     }
 
     memset(&send_comm_, 0, sizeof(send_comm_));
@@ -1126,7 +1130,7 @@ class UcclFlow {
     // Avoid all flows using the same initial engine offset.
     static std::vector<std::atomic<uint32_t>>* off =
         new std::vector<std::atomic<uint32_t>>(num_devices);
-    next_engine_offset_ = (*off)[dev].fetch_add(1) % NUM_ENGINES;
+    next_engine_offset_ = (*off)[dev].fetch_add(1) % ucclParamNUM_ENGINES();
   }
 
   ~UcclFlow() {
@@ -1144,7 +1148,7 @@ class UcclFlow {
       ibv_destroy_qp(recv_comm_.gpu_flush_qp);
     }
 
-    for (int i = 0; i < NUM_ENGINES; i++) {
+    for (int i = 0; i < ucclParamNUM_ENGINES(); i++) {
       delete sub_flows_[i];
     }
   }

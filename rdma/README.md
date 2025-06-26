@@ -130,3 +130,25 @@ Run `rccl-tests`:
 # Usage: ./run_rccl_test.sh [rccl/uccl, default: uccl]
 ./run_rccl_test.sh rccl
 ```
+
+## Environment Variables in UCCL
+
+UCCL supports the following environment variables to configure.
+
+For example, one can enlarge the chunk size to 128KB by setting `UCCL_CHUNK_SIZE_KB=128`. 
+
+Use `UCCL_PARAM()` to introduce new environment variables.
+
+| Environment Variable | Description | Default Value |
+|---------------------|-------------|---------------|
+| UCCL_PIN_TO_NUMA |Pin threads to the NUMA node | 1 |
+| UCCL_ROCE_TRAFFIC_CLASS | Traffic class for RoCE | 3 |
+| UCCL_ROCE_SERVICE_LEVEL | Service level for RoCE | 135 |
+| UCCL_ROCE_GID_IDX | GID index for RoCE | 3 |
+| UCCL_IB_SERVICE_LEVEL | Service level for IB | 0 |
+| UCCL_IB_GID_IDX | GID index for IB | 0 |
+| UCCL_RCMODE | Use RC for data transfer | true (Broadcom NIC), false (others) |
+| UCCL_BYPASS_PACING | Bypass the pacing stage | true |
+| UCCL_NUM_ENGINES | Number of engines per device | 4 (NVIDIA), 1 (AMD) |
+| UCCL_PORT_ENTROPY | Path/QP per engine | 32 (NVIDIA), 256 (AMD) |
+| UCCL_CHUNK_SIZE_KB | Maximum chunk size for each WQE | 64 (NVIDIA), 128 (AMD) |

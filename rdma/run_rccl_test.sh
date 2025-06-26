@@ -45,13 +45,14 @@ mpirun --prefix /usr/local/bin/ompi --bind-to none -np 2 -N 1 --hostfile $NODEFI
     -x HIP_VISIBLE_DEVICES=1,2,0,5 \
     -x NCCL_IB_HCA="rdma0:1,rdma2:1,rdma3:1,rdma4:1" \
     -x NCCL_SOCKET_IFNAME="cni0" \
+    -x UCCL_NUM_ENGINES=4 \
+    -x UCCL_PORT_ENTROPY=4 \
+    -x UCCL_CHUNK_SIZE_KB=128 \
     ${UCCL_HOME}/thirdparty/rccl-tests/build/alltoall_perf \
     -b 1K -e 1G -f 2 -w 5 -n 20 -c 1 -g 1 -t 4 |&
     tee alltoall_debug_${TEST}.log
 
 # alltoall_perf, all_reduce_perf
-# -x HIP_VISIBLE_DEVICES=1 \
-# -x NCCL_IB_HCA="rdma2:1" \
 # -x NCCL_DMABUF_ENABLE=1 \
 # -x NCCL_NET_GDR_LEVEL=SYS \
 # -x NCCL_DEBUG_SUBSYS=NET \

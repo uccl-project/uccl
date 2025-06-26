@@ -112,9 +112,9 @@ int RDMAFactory::init_devs() {
       dev.link_bw = link_bw;
 
       if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
-        dev.gid_idx = ROCE_GID_IDX;
+        dev.gid_idx = ucclParamROCE_GID_IDX();
       } else if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
-        dev.gid_idx = IB_GID_IDX;
+        dev.gid_idx = ucclParamIB_GID_IDX();
       } else {
         printf("Unknown link layer: %d\n", port_attr.link_layer);
         ibv_close_device(context);
@@ -385,10 +385,10 @@ void SharedIOContext::check_srq(bool force) {
   int post_batch = std::min(kPostRQThreshold, (uint32_t)n_post_srq);
 
   for (int i = 0; i < post_batch; i++) {
-    if constexpr (!kRCMode) {
+    if (!is_rc_mode()) {
       auto chunk_addr = pop_retr_chunk();
       dp_recv_wrs_.recv_sges[i].addr = chunk_addr;
-      dp_recv_wrs_.recv_sges[i].length = RetrChunkBuffPool::kRetrChunkSize;
+      dp_recv_wrs_.recv_sges[i].length = kRetrChunkSize;
       dp_recv_wrs_.recv_sges[i].lkey = get_retr_chunk_lkey();
       dp_recv_wrs_.recv_wrs[i].num_sge = 1;
       dp_recv_wrs_.recv_wrs[i].sg_list = &dp_recv_wrs_.recv_sges[i];

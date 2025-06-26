@@ -25,9 +25,6 @@
 namespace uccl {
 #define MAX_IB_DEVS 32
 
-#define ROCE_GID_IDX 3
-#define IB_GID_IDX 0
-
 typedef uint64_t FlowID;
 typedef uint64_t PeerID;
 
@@ -47,12 +44,12 @@ static constexpr uint32_t ROCE_IPV6_HDR_OVERHEAD = (14 + 40 + 8 + 12);
 static constexpr uint32_t BASE_PSN = 0;
 
 // For quick computation at MTU 4096
-static constexpr uint32_t MAX_CHUNK_ROCE_IPV4_4096_HDR_OVERHEAD =
-    ((kChunkSize + 4096) / 4096) * ROCE_IPV4_HDR_OVERHEAD;
-static constexpr uint32_t MAX_CHUNK_ROCE_IPV6_4096_HDR_OVERHEAD =
-    ((kChunkSize + 4096) / 4096) * ROCE_IPV6_HDR_OVERHEAD;
-static constexpr uint32_t MAX_CHUNK_IB_4096_HDR_OVERHEAD =
-    ((kChunkSize + 4096) / 4096) * IB_HDR_OVERHEAD;
+static uint32_t MAX_CHUNK_ROCE_IPV4_4096_HDR_OVERHEAD =
+    (((ucclParamCHUNK_SIZE_KB() << 10) + 4096) / 4096) * ROCE_IPV4_HDR_OVERHEAD;
+static uint32_t MAX_CHUNK_ROCE_IPV6_4096_HDR_OVERHEAD =
+    (((ucclParamCHUNK_SIZE_KB() << 10) + 4096) / 4096) * ROCE_IPV6_HDR_OVERHEAD;
+static uint32_t MAX_CHUNK_IB_4096_HDR_OVERHEAD =
+    (((ucclParamCHUNK_SIZE_KB() << 10) + 4096) / 4096) * IB_HDR_OVERHEAD;
 
 static int __num_devices = 0;
 
@@ -191,15 +188,17 @@ struct __attribute__((packed)) retr_chunk_hdr {
   uint64_t remote_addr;
   uint32_t imm_data;
 };
+static_assert(sizeof(struct retr_chunk_hdr) == 12,
+              "retr_chunk_hdr size is not 12 bytes");
 
 /**
  * @brief Buffer pool for retransmission chunks (original chunk + retransmission
  * header). Original chunk and retransmission header are transmitted through
  * scatter-gather list.
  */
+
 class RetrChunkBuffPool : public BuffPool {
  public:
-  static constexpr size_t kRetrChunkSize = kChunkSize + sizeof(retr_chunk_hdr);
   static constexpr uint32_t kNumChunk = 4096;
   static_assert((kNumChunk & (kNumChunk - 1)) == 0,
                 "kNumChunk must be power of 2");
@@ -518,6 +517,8 @@ class SubUcclFlow {
         pcb(link_bandwidth) {
     INIT_LIST_HEAD(&ack.ack_link);
     ack.subflow = this;
+
+    scoreboard_rtt_.resize(ucclParamPORT_ENTROPY());
   }
 
   ~SubUcclFlow() = default;
@@ -554,7 +555,7 @@ class SubUcclFlow {
   RXTracking rxtracking;
 
   // RTT scoreboard for each path.
-  double scoreboard_rtt_[kPortEntropy];
+  std::vector<double> scoreboard_rtt_;
 
   inline void update_scoreboard_rtt(uint64_t newrtt_tsc, uint32_t qpidx) {
     scoreboard_rtt_[qpidx] = (1 - kPPEwmaAlpha) * scoreboard_rtt_[qpidx] +
@@ -663,7 +664,7 @@ class RDMAFactory {
 
   static inline bool is_roce(int dev) {
     DCHECK(dev >= 0 && dev < rdma_ctl->devices_.size());
-    return (rdma_ctl->devices_[dev].gid_idx == ROCE_GID_IDX);
+    return (rdma_ctl->devices_[dev].gid_idx == ucclParamROCE_GID_IDX());
   }
 
   std::string to_string(void) const;
@@ -690,12 +691,12 @@ static inline int modify_qp_rtr_gpuflush(struct ibv_qp* qp, int dev) {
     attr.ah_attr.grh.dgid = factory_dev->gid;
     attr.ah_attr.grh.sgid_index = factory_dev->gid_idx;
     attr.ah_attr.grh.hop_limit = 0xff;
-    attr.ah_attr.grh.traffic_class = ROCE_TRAFFIC_CLASS;
-    attr.ah_attr.sl = ROCE_SERVICE_LEVEL;
+    attr.ah_attr.grh.traffic_class = ucclParamROCE_TRAFFIC_CLASS();
+    attr.ah_attr.sl = ucclParamROCE_SERVICE_LEVEL();
   } else {
     attr.ah_attr.is_global = 0;
     attr.ah_attr.dlid = factory_dev->port_attr.lid;
-    attr.ah_attr.sl = IB_SERVICE_LEVEL;
+    attr.ah_attr.sl = ucclParamIB_SERVICE_LEVEL();
   }
 
   attr.ah_attr.port_num = factory_dev->ib_port_num;
@@ -738,8 +739,8 @@ static inline int modify_qp_rtr(struct ibv_qp* qp, int dev,
     attr.ah_attr.grh.dgid = remote_ctx->remote_gid;
     attr.ah_attr.grh.sgid_index = factory_dev->gid_idx;
     attr.ah_attr.grh.hop_limit = 0xff;
-    attr.ah_attr.grh.traffic_class = ROCE_TRAFFIC_CLASS;
-    attr.ah_attr.sl = ROCE_SERVICE_LEVEL;
+    attr.ah_attr.grh.traffic_class = ucclParamROCE_TRAFFIC_CLASS();
+    attr.ah_attr.sl = ucclParamROCE_SERVICE_LEVEL();
   } else {
     if (util_rdma_extract_local_subnet_prefix(
             factory_dev->gid.global.subnet_prefix) !=
@@ -749,7 +750,7 @@ static inline int modify_qp_rtr(struct ibv_qp* qp, int dev,
     }
     attr.ah_attr.is_global = 0;
     attr.ah_attr.dlid = remote_ctx->remote_port_attr.lid;
-    attr.ah_attr.sl = IB_SERVICE_LEVEL;
+    attr.ah_attr.sl = ucclParamIB_SERVICE_LEVEL();
   }
   attr.dest_qp_num = remote_qpn;
   attr.rq_psn = BASE_PSN;
@@ -982,15 +983,15 @@ static inline struct ibv_ah* create_ah(struct ibv_pd* pd, int dev, uint8_t port,
   if (RDMAFactory::is_roce(dev)) {
     ah_attr.is_global = 1;
     ah_attr.grh.dgid = remote_gid;
-    ah_attr.grh.traffic_class = ROCE_TRAFFIC_CLASS;
-    ah_attr.grh.sgid_index = ROCE_GID_IDX;
+    ah_attr.grh.traffic_class = ucclParamROCE_TRAFFIC_CLASS();
+    ah_attr.grh.sgid_index = ucclParamROCE_GID_IDX();
     ah_attr.grh.flow_label = 0;
     ah_attr.grh.hop_limit = 0xff;
-    ah_attr.sl = ROCE_SERVICE_LEVEL;
+    ah_attr.sl = ucclParamROCE_SERVICE_LEVEL();
   } else {
     ah_attr.is_global = 0;
     ah_attr.dlid = remote_port_attr.lid;
-    ah_attr.sl = IB_SERVICE_LEVEL;
+    ah_attr.sl = ucclParamIB_SERVICE_LEVEL();
   }
 
   ah_attr.port_num = port;
@@ -1127,11 +1128,9 @@ struct pair_hash {
 // Shared IO context for each UCCL engine.
 class SharedIOContext {
  public:
-  constexpr static size_t kRetrMRSize =
-      RetrChunkBuffPool::kRetrChunkSize * RetrChunkBuffPool::kNumChunk;
-  constexpr static size_t kCtrlMRSize =
-      CtrlChunkBuffPool::kChunkSize * CtrlChunkBuffPool::kNumChunk;
   SharedIOContext(int dev) {
+    rc_mode_ = ucclParamRCMode();
+    bypass_pacing_ = ucclParamBypassPacing();
     auto context = RDMAFactory::get_factory_dev(dev)->context;
     auto pd = RDMAFactory::get_factory_dev(dev)->pd;
     auto port = RDMAFactory::get_factory_dev(dev)->ib_port_num;
@@ -1155,7 +1154,8 @@ class SharedIOContext {
     srq_ = util_rdma_create_srq(pd, kMaxSRQ, 1, 0);
     UCCL_INIT_CHECK(srq_ != nullptr, "util_rdma_create_srq failed");
 
-    retr_mr_ = util_rdma_create_host_memory_mr(pd, kRetrMRSize);
+    retr_mr_ = util_rdma_create_host_memory_mr(
+        pd, kRetrChunkSize * RetrChunkBuffPool::kNumChunk);
     retr_hdr_mr_ = util_rdma_create_host_memory_mr(
         pd, RetrHdrBuffPool::kNumHdr * RetrHdrBuffPool::kHdrSize);
 
@@ -1173,16 +1173,17 @@ class SharedIOContext {
       check_srq(true);
     }
 
-    if constexpr (!kRCMode) {
+    if (!ucclParamRCMode()) {
       // Create Ctrl QP, CQ, and MR.
       bool use_cq_ex = false;
 #ifdef USE_CQ_EX
       use_cq_ex = true;
 #endif
-      util_rdma_create_qp(context, &ctrl_qp_, IBV_QPT_UD, use_cq_ex, true,
-                          (struct ibv_cq**)&ctrl_cq_ex_, false, kCQSize, pd,
-                          port, &ctrl_mr_, nullptr, kCtrlMRSize, kMaxCtrlWRs,
-                          kMaxCtrlWRs, 1, 1);
+      util_rdma_create_qp(
+          context, &ctrl_qp_, IBV_QPT_UD, use_cq_ex, true,
+          (struct ibv_cq**)&ctrl_cq_ex_, false, kCQSize, pd, port, &ctrl_mr_,
+          nullptr, CtrlChunkBuffPool::kChunkSize * CtrlChunkBuffPool::kNumChunk,
+          kMaxCtrlWRs, kMaxCtrlWRs, 1, 1);
 
       struct ibv_qp_attr attr = {};
       attr.qp_state = IBV_QPS_RTR;
@@ -1231,6 +1232,10 @@ class SharedIOContext {
     ibv_dereg_mr(retr_mr_);
     ibv_dereg_mr(retr_hdr_mr_);
   }
+
+  inline bool is_rc_mode() { return rc_mode_; }
+
+  inline bool bypass_pacing() { return bypass_pacing_; }
 
   void flush_acks();
 
@@ -1332,6 +1337,10 @@ class SharedIOContext {
   inline int get_post_ctrl_rq_cnt(void) { return ctrl_recv_wrs_.post_rq_cnt; }
 
  private:
+  bool rc_mode_;
+
+  bool bypass_pacing_;
+
   struct ibv_qp* ctrl_qp_;
   struct ibv_cq_ex* ctrl_cq_ex_;
   struct ibv_mr* ctrl_mr_;

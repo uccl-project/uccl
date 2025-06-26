@@ -144,14 +144,10 @@ int main(int argc, char** argv) {
     cudaCheckErrors("cudaStreamDestroy failed");
   } else {
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
-    cudaDeviceProp p{};
-    cudaGetDeviceProperties(&p, 0);
-    printf("asyncEngineCount = %d\n", p.asyncEngineCount);
-    int num_copy_engine = p.asyncEngineCount;
+
+    int num_copy_engine = kNumThBlocks;
     std::vector<std::thread> copy_threads;
     copy_threads.reserve(num_copy_engine);
-
-    num_copy_engine = kNumThBlocks;  // Right now, 1 gives best perf.
 
     for (int t = 0; t < num_copy_engine; ++t) {
       copy_threads.emplace_back(peer_copy_worker, std::ref(g_rings[t]), t);

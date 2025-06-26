@@ -302,8 +302,10 @@ inline void RDMAEndpoint::initialize_resources(int total_num_engines) {
   active_flows_vec_.resize(num_devices_);
   active_flows_spin_.resize(num_devices_);
 
-  printf("Initialized %d channels for %d devices with %d engines per device\n",
-         total_num_engines, num_devices_, num_engines_per_dev_);
+  printf(
+      "Initialized %d engines for %d devices totally, with %d engines per "
+      "device\n",
+      total_num_engines, num_devices_, num_engines_per_dev_);
 }
 
 void RDMAEndpoint::cleanup_resources() {
@@ -416,7 +418,7 @@ void UcclRDMAEngine::handle_tx_work(void) {
 }
 
 void UcclRDMAEngine::handle_timing_wheel(void) {
-  if constexpr (kBypassPacing) return;
+  if (io_ctx_.bypass_pacing()) return;
   for (auto& it : rdma_ctx_map_) {
     it.second->burst_timing_wheel();
   }
@@ -453,7 +455,7 @@ void UcclRDMAEngine::run() {
  */
 void UcclRDMAEngine::periodic_process() {
   // Handle RTOs for all UC QPs.
-  if constexpr (!kRCMode) handle_rto();
+  if (!io_ctx_.is_rc_mode()) handle_rto();
 
   // Handle control plane requests.
   process_ctl_reqs();
@@ -528,7 +530,7 @@ void UcclRDMAEngine::handle_install_flow_on_engine(
   } else {
     rdma_ctx->add_receiver_flow(flow, flow_id);
     if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
-      auto* subflow = flow->sub_flows_[engine_idx_ % NUM_ENGINES];
+      auto* subflow = flow->sub_flows_[engine_idx_ % ucclParamNUM_ENGINES()];
 
       subflow->pcb.eqds_cc.set_fid(flow_id);
       // All subflows belong to the same RDMAContext share the same
@@ -569,9 +571,9 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
 
   {
     DCHECK(rdma_ctx_map_.find(ctrl_work.peer_id) == rdma_ctx_map_.end());
-    rdma_ctx = RDMAFactory::CreateContext(&rto_tm_, &engine_outstanding_bytes_,
-                                          eqds_, dev, engine_idx_ % NUM_ENGINES,
-                                          meta, &io_ctx_);
+    rdma_ctx = RDMAFactory::CreateContext(
+        &rto_tm_, &engine_outstanding_bytes_, eqds_, dev,
+        engine_idx_ % ucclParamNUM_ENGINES(), meta, &io_ctx_);
     std::tie(std::ignore, ret) =
         rdma_ctx_map_.insert({ctrl_work.peer_id, rdma_ctx});
     DCHECK(ret);
@@ -588,24 +590,24 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
     int const size = sizeof(uint32_t);
     auto total_size = kTotalQP * size;
 
-    if constexpr (!kRCMode) {
+    if (!ucclParamRCMode()) {
       total_size += size; /* ctrl qpn */
       total_size += size; /* peer id */
     }
 
     char buf[total_size];
-    for (auto i = 0; i < kPortEntropy; i++) {
+    for (auto i = 0; i < ucclParamPORT_ENTROPY(); i++) {
       memcpy(buf + i * size, &rdma_ctx->dp_qps_[i].qp->qp_num,
              sizeof(uint32_t));
     }
 
     if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
-      memcpy(buf + kPortEntropy * size, &rdma_ctx->credit_qp_->qp_num,
-             sizeof(uint32_t));
+      memcpy(buf + ucclParamPORT_ENTROPY() * size,
+             &rdma_ctx->credit_qp_->qp_num, sizeof(uint32_t));
     }
 
     // Send ctrl qpn and our peer id to remote peer.
-    if constexpr (!kRCMode) {
+    if (!ucclParamRCMode()) {
       memcpy(buf + kTotalQP * size, &io_ctx_.ctrl_qp_->qp_num,
              sizeof(uint32_t));
       memcpy(buf + kTotalQP * size + size, &ctrl_work.peer_id,
@@ -613,7 +615,7 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
     }
 
     // Wait until our turn to use bootstrap fd.
-    auto engine_offset = engine_idx_ % NUM_ENGINES;
+    auto engine_offset = engine_idx_ % ucclParamNUM_ENGINES();
     while (next_install_engine->load() != engine_offset) {
       // yield CPU
       std::this_thread::yield();
@@ -630,20 +632,20 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
     next_install_engine->store(next_install_engine->load() + 1);
 
     // Modify QPs to RTR and RTS.
-    for (auto i = 0; i < kPortEntropy; i++) {
+    for (auto i = 0; i < ucclParamPORT_ENTROPY(); i++) {
       auto remote_qpn = *reinterpret_cast<uint32_t*>(buf + i * size);
       auto qp = rdma_ctx->dp_qps_[i].qp;
 
       ret = modify_qp_rtr(qp, dev, &rdma_ctx->remote_ctx_, remote_qpn);
       DCHECK(ret == 0) << "Failed to modify data path QP to RTR";
 
-      ret = modify_qp_rts(qp, kRCMode);
+      ret = modify_qp_rts(qp, ucclParamRCMode());
       DCHECK(ret == 0) << "Failed to modify data path QP to RTS";
     }
 
     if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
       auto credit_rqpn =
-          *reinterpret_cast<uint32_t*>(buf + kPortEntropy * size);
+          *reinterpret_cast<uint32_t*>(buf + ucclParamPORT_ENTROPY() * size);
       auto credit_qp = rdma_ctx->credit_qp_;
       ret = modify_qp_rtr(credit_qp, dev, &rdma_ctx->remote_ctx_, credit_rqpn);
       DCHECK(ret == 0) << "Failed to modify Ctrl QP to RTR";
@@ -651,7 +653,7 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
       DCHECK(ret == 0) << "Failed to modify Ctrl QP to RTS";
     }
 
-    if constexpr (!kRCMode) {
+    if (!ucclParamRCMode()) {
       auto ctrl_qpn = *reinterpret_cast<uint32_t*>(buf + kTotalQP * size);
       auto remote_peer_id =
           *reinterpret_cast<uint32_t*>(buf + kTotalQP * size + size);
@@ -741,15 +743,16 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
     engine_th_vec_.emplace_back(
         std::make_unique<std::thread>([engine_ptr = engine_vec_.back().get(),
                                        engine_id, engine_cpu_id, numa_node]() {
-#ifdef PIN_TO_NUMA
-          UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
-                          << "running on NUMA node " << numa_node;
-          pin_thread_to_numa(numa_node);
-#else
-          UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
-                          << "running on CPU " << engine_cpu_id;
-          pin_thread_to_cpu(engine_cpu_id);
-#endif
+          if (ucclParamPIN_TO_NUMA()) {
+            UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
+                            << "running on NUMA node " << numa_node;
+            pin_thread_to_numa(numa_node);
+          } else {
+            UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
+                            << "running on CPU " << engine_cpu_id;
+            pin_thread_to_cpu(engine_cpu_id);
+          }
+
           engine_ptr->run();
         }));
   }
@@ -796,15 +799,15 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev) {
         std::lock_guard<std::mutex> lock(engine_th_mu_);
         engine_th_vec_.emplace_back(std::make_unique<std::thread>(
             [engine_ptr, engine_id, engine_cpu_id, numa_node]() {
-#ifdef PIN_TO_NUMA
-              UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
-                              << "running on NUMA node " << numa_node;
-              pin_thread_to_numa(numa_node);
-#else
-            UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
-                            << "running on CPU " << engine_cpu_id;
-            pin_thread_to_cpu(engine_cpu_id);
-#endif
+              if (ucclParamPIN_TO_NUMA()) {
+                UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
+                                << "running on NUMA node " << numa_node;
+                pin_thread_to_numa(numa_node);
+              } else {
+                UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
+                                << "running on CPU " << engine_cpu_id;
+                pin_thread_to_cpu(engine_cpu_id);
+              }
               engine_ptr->run();
             }));
       }
@@ -1331,7 +1334,7 @@ void UcclFlow::post_multi_send(struct ucclRequest** ureqs,
     return;
   }
 
-  DCHECK(engine_offset < NUM_ENGINES) << engine_offset;
+  DCHECK(engine_offset < ucclParamNUM_ENGINES()) << engine_offset;
 
   uint32_t engine_idx = ep_->find_first_engine_idx_on_dev(dev_) + engine_offset;
   auto txq = ep_->channel_vec_[engine_idx]->tx_cmdq_;
@@ -1669,6 +1672,10 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
   context_ = factory_dev->context;
   gid_idx_ = factory_dev->gid_idx;
 
+  port_entropy_ = ucclParamPORT_ENTROPY();
+  dp_qps_.resize(port_entropy_);
+  chunk_size_ = (ucclParamCHUNK_SIZE_KB() << 10);
+
   link_speed = util_rdma_get_link_speed_from_ibv_speed(
       factory_dev->port_attr.active_speed, factory_dev->port_attr.active_width);
   remote_ctx_.remote_gid = meta.install_ctx.remote_gid;
@@ -1690,7 +1697,7 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
   qp_init_attr.qp_context = this;
   qp_init_attr.send_cq = ibv_cq_ex_to_cq(io_ctx->send_cq_ex_);
   qp_init_attr.recv_cq = ibv_cq_ex_to_cq(io_ctx->recv_cq_ex_);
-  if constexpr (!kRCMode)
+  if (!ucclParamRCMode())
     qp_init_attr.qp_type = IBV_QPT_UC;
   else
     qp_init_attr.qp_type = IBV_QPT_RC;
@@ -1706,7 +1713,7 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
   qpAttr.port_num = factory_dev->ib_port_num;
   qpAttr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE;
 
-  for (int i = 0; i < kPortEntropy; i++) {
+  for (int i = 0; i < ucclParamPORT_ENTROPY(); i++) {
     struct ibv_qp* qp = ibv_create_qp(pd_, &qp_init_attr);
     UCCL_INIT_CHECK(qp != nullptr, "ibv_create_qp failed for data path QP");
 
@@ -1805,7 +1812,7 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
 }
 
 RDMAContext::~RDMAContext() {
-  if constexpr (!kRCMode) {
+  if (!ucclParamRCMode()) {
     if (credit_qp_ != nullptr) {
       ibv_destroy_qp(credit_qp_);
     }
@@ -1819,7 +1826,7 @@ RDMAContext::~RDMAContext() {
     }
   }
 
-  for (int i = 0; i < kPortEntropy; i++) {
+  for (int i = 0; i < ucclParamPORT_ENTROPY(); i++) {
     ibv_destroy_qp(dp_qps_[i].qp);
   }
 
@@ -1923,7 +1930,7 @@ bool RDMAContext::receiverCC_tx_message(struct ucclRequest* ureq) {
 
     // We use high 8 bits of wr_id to store CSN.
     // Lower 56 bits to store subflow pointer.
-    if constexpr (kRCMode)
+    if (io_ctx_->is_rc_mode())
       wr->wr_id = (1ULL * imm_data.GetCSN()) << 56 | (uint64_t)subflow;
     else
       wr->wr_id = 0;
@@ -1944,7 +1951,7 @@ bool RDMAContext::receiverCC_tx_message(struct ucclRequest* ureq) {
     // Track this chunk.
     subflow->txtracking.track_chunk(ureq, wr_ex, now, imm_data.GetCSN(),
                                     imm_data.GetHINT());
-    if constexpr (!kRCMode) {
+    if (!io_ctx_->is_rc_mode()) {
       // Arm timer for TX
       arm_timer_for_flow(subflow);
     }
@@ -1991,7 +1998,7 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
 
     if (chunk_size == 0 && size) return false;
 
-    if constexpr (kBypassPacing) {
+    if (io_ctx_->bypass_pacing()) {
       DCHECK(wr_ex_pool_->alloc_buff(&wr_addr) == 0);
       struct wr_ex* wr_ex = reinterpret_cast<struct wr_ex*>(wr_addr);
       auto wr = &wr_ex->wr;
@@ -2018,7 +2025,7 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
 
       // We use high 8 bits of wr_id to store CSN.
       // Lower 56 bits to store subflow pointer.
-      if constexpr (kRCMode)
+      if (io_ctx_->is_rc_mode())
         wr->wr_id = (1ULL * imm_data.GetCSN()) << 56 | (uint64_t)subflow;
       else
         wr->wr_id = 0;
@@ -2039,7 +2046,7 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
       // Track this chunk.
       subflow->txtracking.track_chunk(ureq, wr_ex, now, imm_data.GetCSN(),
                                       imm_data.GetHINT());
-      if constexpr (!kRCMode) {
+      if (!io_ctx_->is_rc_mode()) {
         // Arm timer for TX
         arm_timer_for_flow(subflow);
       }
@@ -2091,7 +2098,7 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
 
     // We use high 8 bits of wr_id to store CSN.
     // Lower 56 bits to store subflow pointer.
-    if constexpr (kRCMode)
+    if (io_ctx_->is_rc_mode())
       wr->wr_id = (1ULL * imm_data.GetCSN()) << 56 | (uint64_t)subflow;
     else
       wr->wr_id = 0;
@@ -2099,7 +2106,7 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
     {
       auto wheel = &wheel_;
       uint32_t hdr_overhead;
-      if (likely(chunk_size == kChunkSize && mtu_bytes_ == 4096)) {
+      if (likely(chunk_size == chunk_size_ && mtu_bytes_ == 4096)) {
         hdr_overhead = roce ? MAX_CHUNK_IB_4096_HDR_OVERHEAD
                             : MAX_CHUNK_ROCE_IPV4_4096_HDR_OVERHEAD;
       } else {
@@ -2139,7 +2146,7 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
         // Track this chunk.
         subflow->txtracking.track_chunk(ureq, wr_ex, now, imm_data.GetCSN(),
                                         imm_data.GetHINT());
-        if constexpr (!kRCMode) {
+        if (!io_ctx_->is_rc_mode()) {
           // Arm timer for TX
           arm_timer_for_flow(subflow);
         }
@@ -2343,7 +2350,7 @@ bool RDMAContext::try_retransmit_chunk(SubUcclFlow* subflow,
   DCHECK(ret == 0) << ret;
 
   UCCL_LOG_IO << "successfully retransmit chunk for QP#"
-              << (lossy_qpw - dp_qps_)
+              << std::distance(dp_qps_.begin(), dp_qps_.begin() + wr_ex->qpidx)
               << ", remote_addr: " << wr_ex->wr.wr.rdma.remote_addr
               << ", chunk_size: " << wr_ex->sge.length
               << ", csn: " << IMMData(ntohl(wr_ex->wr.imm_data)).GetCSN()
@@ -2466,14 +2473,14 @@ void RDMAContext::uc_rx_ack(UcclSackHdr* ucclsackh) {
 
     t5 = t6;
 
-    DCHECK(engine_offset_ < NUM_ENGINES);
+    DCHECK(engine_offset_ < ucclParamNUM_ENGINES());
     auto reduced_bytes = subflow->unacked_bytes_;
     auto newrtt_tsc = subflow->txtracking.ack_transmitted_chunks(
         subflow, this, num_acked_chunks.to_uint32(), t5, t6,
         remote_queueing_tsc, &subflow->unacked_bytes_);
     reduced_bytes -= subflow->unacked_bytes_;
     *engine_unacked_bytes_ -= reduced_bytes;
-    if (qpidx < kPortEntropy)
+    if (qpidx < port_entropy_)
       subflow->update_scoreboard_rtt(newrtt_tsc, qpidx);
     else {
       // This ack is for retransmitted chunk.
@@ -2599,14 +2606,14 @@ void RDMAContext::uc_rx_ack(struct ibv_cq_ex* cq_ex, UcclSackHdr* ucclsackh) {
     else
       t5 = convert_nic_to_host(ibv_wc_read_completion_ts(cq_ex));
 
-    DCHECK(engine_offset_ < NUM_ENGINES);
+    DCHECK(engine_offset_ < ucclParamNUM_ENGINES());
     auto reduced_bytes = subflow->unacked_bytes_;
     auto newrtt_tsc = subflow->txtracking.ack_transmitted_chunks(
         subflow, this, num_acked_chunks.to_uint32(), t5, t6,
         remote_queueing_tsc, &subflow->unacked_bytes_);
     reduced_bytes -= subflow->unacked_bytes_;
     *engine_unacked_bytes_ -= reduced_bytes;
-    if (qpidx < kPortEntropy)
+    if (qpidx < port_entropy_)
       subflow->update_scoreboard_rtt(newrtt_tsc, qpidx);
     else {
       // This ack is for retransmitted chunk.
@@ -2705,7 +2712,7 @@ void RDMAContext::burst_timing_wheel(void) {
     // Track this chunk.
     subflow->txtracking.track_chunk(wr_ex->ureq, wr_ex, rdtsc(),
                                     imm_data.GetCSN(), imm_data.GetHINT());
-    if constexpr (!kRCMode) {
+    if (!io_ctx_->is_rc_mode()) {
       // Arm timer for TX
       arm_timer_for_flow(subflow);
     }
@@ -2752,7 +2759,7 @@ void RDMAContext::try_update_csn(SubUcclFlow* subflow) {
     UCCL_LOG_IO << "try_update_csn:"
                 << " rcv_nxt: " << subflow->pcb.rcv_nxt.to_uint32();
 
-    if constexpr (!kRCMode) {
+    if (!io_ctx_->is_rc_mode()) {
       subflow->pcb.sack_bitmap_shift_left_one();
     }
   }

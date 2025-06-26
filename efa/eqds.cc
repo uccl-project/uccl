@@ -21,12 +21,12 @@ EQDS::EQDS(int dev, double link_bandwidth) : dev_(dev), channel_() {
 
   // Initialize the pacer thread.
   pacer_th_ = std::thread([this, numa_node] {
-#ifdef PIN_TO_NUMA
-    pin_thread_to_numa(numa_node);
-#else
-    // Pin the pacer thread to a specific CPU.
-    pin_thread_to_cpu(PACER_CPU_START + dev_);
-#endif
+    if (ucclParamPIN_TO_NUMA())
+      pin_thread_to_numa(numa_node);
+    else {
+      // Pin the pacer thread to a specific CPU.
+      pin_thread_to_cpu(PACER_CPU_START + dev_);
+    }
     while (!shutdown_) {
       run_pacer();
     }

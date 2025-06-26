@@ -406,7 +406,7 @@ int main(int argc, char* argv[]) {
   google::InstallFailureSignalHandler();
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
-  ep.emplace(NUM_ENGINES);
+  ep.emplace(ucclParamNUM_ENGINES());
 #ifdef LAZY_CREATE_ENGINE
   ep->initialize_engine_by_dev(0);
 #endif

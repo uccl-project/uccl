@@ -85,7 +85,7 @@ struct ucclSendComm {
 ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
   std::cout << "Hello UCCL from PID: " << getpid() << std::endl;
 
-  ep = std::make_shared<RDMAEndpoint>(NUM_ENGINES);
+  ep = std::make_shared<RDMAEndpoint>(ucclParamNUM_ENGINES());
 
   return ncclSuccess;
 }
@@ -109,7 +109,7 @@ ncclResult_t pluginPciPath(char const* ib_name, char** path) {
 }
 
 #define MAX_STR_LEN 255
-ncclResult_t ncclTopoGetStrFromSys(const char* path, const char* fileName,
+ncclResult_t ncclTopoGetStrFromSys(char const* path, char const* fileName,
                                    char* strValue) {
   char filePath[PATH_MAX];
   sprintf(filePath, "%s/%s", path, fileName);
@@ -124,15 +124,15 @@ ncclResult_t ncclTopoGetStrFromSys(const char* path, const char* fileName,
   }
   if (offset == 0) {
     strValue[0] = '\0';
-    LOG(INFO) << Format("Topology detection : could not read %s, ignoring",
-                        filePath);
+    UCCL_LOG_PLUGIN << Format(
+        "Topology detection : could not read %s, ignoring", filePath);
   } else {
     strValue[offset - 1] = '\0';
   }
   return ncclSuccess;
 }
 
-// NCCL_PARAM(IbPciRelaxedOrdering, "IB_PCI_RELAXED_ORDERING", 2);
+UCCL_PARAM(IbPciRelaxedOrdering, "IB_PCI_RELAXED_ORDERING", 2);
 
 // Detect whether GDR can work on a given NIC with the current CUDA device
 // Returns :
@@ -160,7 +160,7 @@ static void ibGdrSupportInitOnce() {
     while (memory_peers_paths[i]) {
       if (access(memory_peers_paths[i], F_OK) == 0) {
         ncclIbGdrModuleLoaded = 1;
-        LOG(INFO) << Format("Found %s", memory_peers_paths[i]);
+        UCCL_LOG_PLUGIN << Format("Found %s", memory_peers_paths[i]);
         break;
       } else {
         ncclIbGdrModuleLoaded = 0;
@@ -172,8 +172,7 @@ static void ibGdrSupportInitOnce() {
     ncclTopoGetStrFromSys("/sys/devices/virtual/dmi/id", "bios_version",
                           strValue);
     if (strncmp("Hyper-V UEFI Release", strValue, 20) == 0) {
-      // int roMode = ncclParamIbPciRelaxedOrdering();
-      int roMode = 2;
+      int roMode = ucclParamIbPciRelaxedOrdering();
       ncclTopoGetStrFromSys("/proc/sys/kernel", "numa_balancing", strValue);
       if (strcmp(strValue, "1") == 0 && roMode == 0) ncclIbGdrModuleLoaded = 0;
     }
@@ -186,14 +185,14 @@ static void ibGdrSupportInitOnce() {
       fp = fopen("/proc/kallsyms", "r");
 
       if (fp == NULL) {
-        LOG(INFO) << Format("Could not open /proc/kallsyms");
+        UCCL_LOG_PLUGIN << "Could not open /proc/kallsyms";
       } else {
         while (fgets(buf, sizeof(buf), fp) != NULL) {
           if (strstr(buf, "t ib_register_peer_memory_client") != NULL ||
               strstr(buf, "T ib_register_peer_memory_client") != NULL) {
             ncclIbGdrModuleLoaded = 1;
-            LOG(INFO) << Format(
-                "Found ib_register_peer_memory_client in /proc/kallsyms");
+            UCCL_LOG_PLUGIN
+                << "Found ib_register_peer_memory_client in /proc/kallsyms";
             break;
           }
         }

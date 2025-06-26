@@ -66,15 +66,15 @@ struct wheel_record_t {
 static constexpr double kWheelSlotWidthUs = .5;  ///< Duration per wheel slot
 static uint32_t const MAX_TIMING_WHEEL_PKTS = 1024;
 static constexpr size_t kSessionCredits = MAX_TIMING_WHEEL_PKTS;
-static constexpr double kWheelHorizonUs =
-    1000000 * (kSessionCredits * kChunkSize) / timely::TimelyCC::kMinRate;
+static double kWheelHorizonUs =
+    1000000 * (kSessionCredits * (ucclParamCHUNK_SIZE_KB() << 10)) /
+    timely::TimelyCC::kMinRate;
 
 // This ensures that packets for an sslot undergoing retransmission are rarely
 // in the wheel. This is recommended but not required.
 // static_assert(kWheelHorizonUs <= kRpcRTOUs, "");
 
-static constexpr size_t kWheelNumWslots =
-    1 + DIVUP(kWheelHorizonUs, kWheelSlotWidthUs);
+static size_t kWheelNumWslots = 1 + DIVUP(kWheelHorizonUs, kWheelSlotWidthUs);
 
 static constexpr bool kWheelRecord = false;  ///< Fast-record wheel actions
 
@@ -90,7 +90,7 @@ static constexpr size_t kWheelBucketCap = 5;  ///< Wheel entries per bucket
 static constexpr size_t kNumBktEntriesBits = 3;
 static_assert((1ull << kNumBktEntriesBits) > kWheelBucketCap, "");
 
-static constexpr size_t kBktPoolSize = kWheelNumWslots * kWheelBucketCap;
+static size_t kBktPoolSize = kWheelNumWslots * kWheelBucketCap;
 
 // TSC ticks per day = ~3 billion per second * 86400 seconds per day
 // Require that rollback happens only after server lifetime

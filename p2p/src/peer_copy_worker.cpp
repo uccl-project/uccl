@@ -1,13 +1,19 @@
 #include "peer_copy_worker.hpp"
 #include "common.hpp"
 #include "peer_copy.cuh"
+#include "proxy.hpp"
+#include "rdma.hpp"
 #include <mutex>
 
 std::atomic<bool> g_run;
 thread_local uint64_t async_memcpy_count = 0;
+thread_local uint64_t prev_completed_async_memcpy_count = 0;
 thread_local uint64_t async_memcpy_total_time = 0;
+thread_local uint64_t highest_issued_wr_id = 0;
 int src_device = 0;
 std::once_flag peer_ok_flag[NUM_GPUS][NUM_GPUS];
+thread_local CopyTask tasks[RECEIVER_BATCH_SIZE];
+thread_local uint64_t task_wrs[RECEIVER_BATCH_SIZE];
 
 void maybe_enable_peer_access(int src_dev, int dst_dev) {
   if (src_dev == dst_dev) return;
@@ -28,6 +34,20 @@ void maybe_enable_peer_access(int src_dev, int dst_dev) {
   });
 }
 
+void sync_and_post(CopyRing& g_ring, cudaStream_t& stream, int idx) {
+  if (async_memcpy_count > prev_completed_async_memcpy_count) {
+    cudaError_t err = cudaStreamSynchronize(stream);
+    if (err != cudaSuccess) {
+      fprintf(stderr, "Kernel execution failed: %s\n", cudaGetErrorString(err));
+      std::abort();
+    }
+    remote_notify_sender_that_wr_id_has_completed(
+        g_ring.ack_qp, highest_issued_wr_id, g_ring.ack_mr, g_ring.ack_buf,
+        idx);
+    prev_completed_async_memcpy_count = async_memcpy_count;
+  }
+}
+
 void peer_copy_worker(CopyRing& g_ring, int idx) {
   pin_thread_to_cpu(idx + 1 + MAIN_THREAD_CPU_IDX);
   printf("Peer copy worker %d started on CPU core %d\n", idx + 1,
@@ -40,19 +60,20 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
   cudaMallocAsync(&d_tasks, RECEIVER_BATCH_SIZE * sizeof(CopyTask), stream);
   while (g_run.load(std::memory_order_acquire)) {
     CopyTask t;
-    std::vector<CopyTask> tasks;
     int copy_batch_size = 0;
     if (RECEIVER_BATCH_SIZE == 1) {
       CopyTask* t_ptr = g_ring.pop();
       if (!t_ptr) {
+        sync_and_post(g_ring, stream, idx);
         continue;
       }
       t = *t_ptr;
       copy_batch_size = 1;
-      tasks.push_back(t);
+      tasks[0] = t;
     } else {
       size_t n = g_ring.popN(tasks, RECEIVER_BATCH_SIZE);
       if (n == 0) {
+        sync_and_post(g_ring, stream, idx);
         continue;
       }
       t = tasks[0];
@@ -63,14 +84,14 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
       fprintf(stderr, "Error: copy_batch_size is zero\n");
       std::abort();
     }
-    if (t.dst_dev == src_device) {
-      async_memcpy_count += copy_batch_size;
-      continue;
+
+    for (int i = 0; i < copy_batch_size; ++i) {
+      maybe_enable_peer_access(src_device, tasks[i].dst_dev);
+      task_wrs[i] = tasks[i].wr_id;
     }
 
-    for (auto task : tasks) {
-      maybe_enable_peer_access(src_device, task.dst_dev);
-    }
+    highest_issued_wr_id =
+        std::max(highest_issued_wr_id, task_wrs[copy_batch_size - 1]);
 
     auto st = std::chrono::high_resolution_clock::now();
     cudaError_t err;
@@ -85,8 +106,9 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
                                   t.bytes * copy_batch_size, stream);
       func_name = "launch_peer_bulk_copy";
     } else {
-      err = launch_peer_bulk_copy2(tasks.data(), tasks.size(), stream,
-                                   src_device, d_tasks);
+      /* The fastest among the three. */
+      err = launch_peer_bulk_copy2(tasks, copy_batch_size, stream, src_device,
+                                   d_tasks);
       func_name = "launch_peer_bulk_copy2";
     }
 
@@ -97,13 +119,23 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
       std::abort();
     }
 
-    if (async_memcpy_count % kRemoteNVLinkBatchSize == 0) {
+    if (async_memcpy_count % kRemoteNVLinkBatchSize == 0 ||
+        async_memcpy_count - prev_completed_async_memcpy_count >=
+            kRemoteNVLinkBatchSize) {
       err = cudaStreamSynchronize(stream);
       if (err != cudaSuccess) {
         fprintf(stderr, "Kernel execution failed: %s\n",
                 cudaGetErrorString(err));
         std::abort();
       }
+
+      if (copy_batch_size > 0) {
+        // Post the last wr is enough.
+        remote_notify_sender_that_wr_id_has_completed(
+            g_ring.ack_qp, highest_issued_wr_id, g_ring.ack_mr, g_ring.ack_buf,
+            idx);
+      }
+      prev_completed_async_memcpy_count = async_memcpy_count;
     }
 
     async_memcpy_count += copy_batch_size;
@@ -121,9 +153,9 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
         printf(
             "Ring size: %d, head: %u, tail: %u, emplace count: %u, pop count: "
             "%u, ratio: %d\n",
-            COPY_RING_CAP, g_ring.head.load(), g_ring.tail.load(),
-            g_ring.emplace_count.load(), g_ring.pop_count.load(),
-            g_ring.emplace_count.load() / g_ring.pop_count.load());
+            COPY_RING_CAP, g_ring.head.v.load(), g_ring.tail.v.load(),
+            g_ring.emplace_count.v.load(), g_ring.pop_count.v.load(),
+            g_ring.emplace_count.v.load() / g_ring.pop_count.v.load());
       }
     }
   }

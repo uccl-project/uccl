@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -43,6 +44,7 @@ uint32_t rkey = 0;
 
 // Define thread_local structs
 thread_local struct ibv_qp* qp = nullptr;
+thread_local struct ibv_qp* ack_qp = nullptr;
 thread_local uintptr_t remote_addr = 0;
 thread_local uint32_t remote_rkey = 0;
 
@@ -50,6 +52,12 @@ constexpr int TCP_PORT = 18515;
 static thread_local std::atomic<uint64_t> g_posted = 0;     // WRs posted
 static thread_local std::atomic<uint64_t> g_completed = 0;  // CQEs seen
 thread_local std::atomic<bool> g_progress_run{true};
+std::atomic<uint64_t> send_ack_posted{0}, send_ack_completed{0};
+
+thread_local std::vector<uint64_t> ack_recv_buf;
+thread_local struct ibv_mr* ack_recv_mr;
+thread_local uint64_t largest_completed_wr = 0;
+thread_local bool has_received_ack = false;
 
 struct NicCtx {
   // ibv_context* ctx;
@@ -201,14 +209,15 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
     close(listenfd);
   } else {
     // Connect
+    sleep(1);
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     int one = 1;
     setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
     addr.sin_family = AF_INET;
     addr.sin_port = htons(TCP_PORT + tid);
     inet_pton(AF_INET, peer_ip, &addr.sin_addr);
-    while (connect(sockfd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
-      sleep(1);  // retry
+    if (connect(sockfd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+      printf("Rank %d: connect failed, port: %d\n", rank, TCP_PORT + tid);
     }
   }
 
@@ -299,8 +308,9 @@ void per_thread_rdma_init(void* gpu_buf, size_t bytes, int rank,
 #ifdef NUMA_AWARE_SCHEDULING
   int dev = -1;
   cudaGetDevice(&dev);
-  int selected_idx = best_nic_pix(dev) + 1;
-  printf("[RDMA] Best NIC for GPU %d is %d\n", dev, selected_idx);
+  // int selected_idx = best_nic_pix(dev) + 1;
+  // printf("[RDMA] Best NIC for GPU %d is %d\n", dev, selected_idx);
+  int selected_idx = 5;
 #else
   selected_idx = 0;
 #endif
@@ -355,10 +365,33 @@ ibv_cq* create_per_thread_cq() {
   return cq;
 }
 
+void create_per_thread_ack_qp(void* gpu_buffer, size_t size,
+                              RDMAConnectionInfo* local_info, int rank,
+                              ibv_cq* cq) {
+  if (ack_qp) return;
+  struct ibv_qp_init_attr qp_init_attr = {};
+  qp_init_attr.send_cq = cq;
+  qp_init_attr.recv_cq = cq;
+  qp_init_attr.qp_type = IBV_QPT_RC;  // Reliable Connection
+  qp_init_attr.cap.max_send_wr =
+      kMaxOutstandingSends * 2;  // max outstanding sends
+  qp_init_attr.cap.max_recv_wr =
+      kMaxOutstandingSends * 2;  // max outstanding recvs
+  qp_init_attr.cap.max_send_sge = 1;
+  qp_init_attr.cap.max_recv_sge = 1;
+  qp_init_attr.sq_sig_all = 0;
+  ack_qp = ibv_create_qp(pd, &qp_init_attr);
+  if (!ack_qp) {
+    perror("Failed to create QP");
+    exit(1);
+  }
+}
+
 void create_per_thread_qp(void* gpu_buffer, size_t size,
                           RDMAConnectionInfo* local_info, int rank,
                           ibv_cq* cq) {
   if (qp) return;  // Already initialized for this thread
+  if (ack_qp) return;
   struct ibv_qp_init_attr qp_init_attr = {};
   qp_init_attr.send_cq = cq;
   qp_init_attr.recv_cq = cq;
@@ -377,6 +410,12 @@ void create_per_thread_qp(void* gpu_buffer, size_t size,
     exit(1);
   }
 
+  ack_qp = ibv_create_qp(pd, &qp_init_attr);
+  if (!ack_qp) {
+    perror("Failed to create Ack QP");
+    exit(1);
+  }
+
   // Query port
   struct ibv_port_attr port_attr;
   if (ibv_query_port(context, 1, &port_attr)) {
@@ -386,14 +425,18 @@ void create_per_thread_qp(void* gpu_buffer, size_t size,
   printf("Local LID: 0x%x\n", port_attr.lid);
   // Fill local connection info
   local_info->qp_num = qp->qp_num;
+  local_info->ack_qp_num = ack_qp->qp_num;
   local_info->lid = port_attr.lid;
   local_info->rkey = rkey;
   local_info->addr = reinterpret_cast<uintptr_t>(gpu_buffer);
-  local_info->psn = rand() & 0xffffff;  // random psn
+  local_info->psn = rand() & 0xffffff;      // random psn
+  local_info->ack_psn = rand() & 0xffffff;  // random ack psn
   memset(local_info->gid, 0, 16);
-  printf("Local RDMA info: addr=0x%lx, rkey=0x%x, qp_num=%u, psn=%u\n",
-         local_info->addr, local_info->rkey, local_info->qp_num,
-         local_info->psn);
+  printf(
+      "Local RDMA info: addr=0x%lx, rkey=0x%x, qp_num=%u, psn=%u, "
+      "ack_qp_num=%u, ack_psn: %u\n",
+      local_info->addr, local_info->rkey, local_info->qp_num, local_info->psn,
+      local_info->ack_qp_num, local_info->ack_psn);
 }
 
 void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info,
@@ -458,6 +501,15 @@ void modify_qp_to_init() {
   if (ibv_modify_qp(qp, &attr, flags)) {
     perror("Failed to modify QP to INIT");
     exit(1);
+  }
+
+  if (ack_qp) {
+    int ret = ibv_modify_qp(ack_qp, &attr, flags);
+    if (ret) {
+      perror("Failed to modify Ack QP to INIT");
+      fprintf(stderr, "errno: %d\n", errno);
+      exit(1);
+    }
   }
 
   printf("QP modified to INIT state\n");
@@ -532,8 +584,19 @@ void modify_qp_to_rtr(RDMAConnectionInfo* remote) {
     fprintf(stderr, "errno: %d\n", errno);
     exit(1);
   }
-
   printf("QP modified to RTR state\n");
+
+  if (ack_qp) {
+    attr.dest_qp_num = remote->ack_qp_num;
+    attr.rq_psn = remote->ack_psn;
+    ret = ibv_modify_qp(ack_qp, &attr, flags);
+    if (ret) {
+      perror("Failed to modify Ack QP to RTR");
+      fprintf(stderr, "errno: %d\n", errno);
+      exit(1);
+    }
+  }
+  printf("ACK-QP modified to RTR state\n");
 }
 
 void modify_qp_to_rts(RDMAConnectionInfo* local_info) {
@@ -553,8 +616,16 @@ void modify_qp_to_rts(RDMAConnectionInfo* local_info) {
     perror("Failed to modify QP to RTS");
     exit(1);
   }
-
   printf("QP modified to RTS state\n");
+
+  attr.sq_psn = local_info->ack_psn;
+  int ret = ibv_modify_qp(ack_qp, &attr, flags);
+  if (ret) {
+    perror("Failed to modify Ack QP to RTS");
+    fprintf(stderr, "errno: %d\n", errno);
+    exit(1);
+  }
+  printf("ACK-QP modified to RTS state\n");
 }
 
 void post_receive_buffer_for_imm() {
@@ -602,7 +673,7 @@ void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
                              std::unordered_set<uint64_t>& finished_wrs,
                              std::mutex& finished_wrs_mutex) {
   // while (g_posted.load() - g_completed.load() > kMaxOutstandingSends) {
-  //   poll_completions(cq, finished_wrs, finished_wrs_mutex);
+  //   local_poll_completions(cq, finished_wrs, finished_wrs_mutex);
   // }
 
   std::vector<struct ibv_sge> sges(num_wrs);
@@ -630,9 +701,11 @@ void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
     //        wrs_to_post[i], sges[i].addr, mr->rkey,
     //        wrs[i].wr.rdma.remote_addr);
     wrs[i].wr_id = wrs_to_post[i];
+    assert(wrs[i].wr_id <= kIterations);
 #ifdef ENABLE_WRITE_WITH_IMMEDIATE
     wrs[i].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-    wrs[i].imm_data = build_imm_data(0, wrs[i].wr_id % NUM_GPUS, 0);
+    // wrs[i].imm_data = build_imm_data(0, wrs[i].wr_id, 0);
+    wrs[i].imm_data = wrs[i].wr_id;  // Use WR ID as immediate data
 #else
     wrs[i].opcode = IBV_WR_RDMA_WRITE;
 #endif
@@ -671,7 +744,7 @@ void post_rdma_async(void* buf, size_t bytes, uint64_t wr_id, ibv_cq* cq,
                      std::mutex& finished_wrs_mutex) {
   /* Make it a closed loop to limit the maximum outstanding sends. */
   // while (g_posted.load() - g_completed.load() > kMaxOutstandingSends) {
-  //   poll_completions(cq, finished_wrs, finished_wrs_mutex);
+  //   local_poll_completions(cq, finished_wrs, finished_wrs_mutex);
   // }
 
   struct ibv_sge sge {
@@ -743,44 +816,74 @@ bool GdrSupportInitOnce() {
          KNL_MODULE_LOADED("/sys/module/nvidia_peermem/version");
 }
 
-void poll_completions(ibv_cq* cq, std::unordered_set<uint64_t>& finished_wrs,
-                      std::mutex& finished_wrs_mutex) {
+void local_poll_completions(ibv_cq* cq,
+                            std::unordered_set<uint64_t>& finished_wrs,
+                            std::mutex& finished_wrs_mutex, int thread_idx) {
   struct ibv_wc wc[kMaxOutstandingSends];  // batch poll
   int ne = ibv_poll_cq(cq, kMaxOutstandingSends, wc);
   if (ne == 0) return;
+  int write_ack = 0;
+
+  assert(ack_qp->send_cq == cq);
+  assert(ack_qp->recv_cq == cq);
   for (int i = 0; i < ne; ++i) {
     if (wc[i].status != IBV_WC_SUCCESS) {
       fprintf(stderr, "CQE error wr_id=%llu status=%s\n",
               (unsigned long long)wc[i].wr_id, ibv_wc_status_str(wc[i].status));
       std::abort();
     }
-    {
-      std::lock_guard<std::mutex> lock(finished_wrs_mutex);
-      finished_wrs.insert(wc[i].wr_id);
+
+    switch (wc[i].opcode) {
+      case IBV_WC_SEND:
+      case IBV_WC_RDMA_WRITE: {
+        std::lock_guard<std::mutex> lock(finished_wrs_mutex);
+        finished_wrs.insert(wc[i].wr_id);
+      } break;
+      case IBV_WC_RECV:
+        if (wc[i].wc_flags & IBV_WC_WITH_IMM) {
+          uint64_t slot = static_cast<uint64_t>(wc[i].wr_id);
+          write_ack++;
+
+          uint64_t wr_done = static_cast<uint64_t>(wc[i].imm_data);
+          // printf("[ACK - %d] Received ACK for WR %lu in slot %lu\n",
+          // thread_idx, wr_done, slot);
+          if (!has_received_ack || wr_done >= largest_completed_wr) {
+            largest_completed_wr = wr_done;
+            has_received_ack = true;
+            // printf("New largest completed WR: %lu\n", largest_completed_wr);
+          } else {
+            fprintf(stderr,
+                    "Warning: received ACK for WR %lu, but largest completed "
+                    "WR is %lu\n",
+                    wr_done, largest_completed_wr);
+            std::abort();
+          }
+
+          ibv_sge sge = {
+              .addr = reinterpret_cast<uintptr_t>(&ack_recv_buf[slot]),
+              .length = sizeof(uint64_t),
+              .lkey = ack_recv_mr->lkey,
+          };
+          ibv_recv_wr rwr = {};
+          ibv_recv_wr* bad = nullptr;
+          rwr.wr_id = static_cast<uint64_t>(slot);
+          rwr.sg_list = &sge;
+          rwr.num_sge = 1;
+          if (ibv_post_recv(ack_qp, &rwr, &bad)) {
+            perror("ibv_post_recv(repost ACK)");
+            std::abort();
+          }
+        }
+        break;
+
+      default:
+        break;
     }
   }
   g_completed.fetch_add(ne, std::memory_order_relaxed);
-}
-
-void poll_completions_plain(ibv_cq* cq) {
-  struct ibv_wc wc[kMaxOutstandingSends];  // batch poll
-
-  while (g_progress_run.load(std::memory_order_acquire)) {
-    int ne = ibv_poll_cq(cq, kMaxOutstandingSends, wc);
-    if (ne == 0) return;
-    for (int i = 0; i < ne; ++i) {
-      if (wc[i].status != IBV_WC_SUCCESS) {
-        fprintf(stderr, "CQE error wr_id=%llu status=%s\n",
-                (unsigned long long)wc[i].wr_id,
-                ibv_wc_status_str(wc[i].status));
-        std::abort();
-      }
-      if (wc[i].opcode != IBV_WC_RECV) {
-        fprintf(stderr, "Unexpected opcode: %d\n", wc[i].opcode);
-        exit(1);
-      }
-    }
-  }
+  // if (write_ack > 0) {
+  //   printf("[ACK] %d completed on peer\n", write_ack);
+  // }
 }
 
 void per_thread_polling(int thread_idx, struct ibv_cq* per_thread_cq,
@@ -793,8 +896,8 @@ void per_thread_polling(int thread_idx, struct ibv_cq* per_thread_cq,
   printf("Progress thread %d: cq=%p\n", thread_idx, per_thread_cq);
 
   while (g_progress_run.load(std::memory_order_acquire)) {
-    poll_completions(per_thread_cq, *per_thread_finished_wrs,
-                     *per_thread_finished_wrs_mutex);
+    local_poll_completions(per_thread_cq, *per_thread_finished_wrs,
+                           *per_thread_finished_wrs_mutex, thread_idx);
   }
 }
 
@@ -850,74 +953,97 @@ void handle_peer_copy(uint64_t wr_id, int src_dev, int dst_dev, void* src_ptr,
   }
 }
 
-void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq,
-                                         CopyRing& g_ring) {
+void remote_cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq,
+                                                CopyRing& g_ring) {
   struct ibv_wc wc[kMaxOutstandingRecvs];
   struct ibv_sge sges[kMaxOutstandingRecvs];
   struct ibv_recv_wr wrs[kMaxOutstandingRecvs];
   size_t pool_index = 0;
+  assert(ack_qp->send_cq == cq);
+  assert(qp->send_cq == cq);
   while (g_progress_run.load(std::memory_order_acquire)) {
     int ne = ibv_poll_cq(cq, kMaxOutstandingRecvs, wc);
     if (ne == 0) continue;
+    int num_wr_imm = 0;
     for (int i = 0; i < ne; ++i) {
       if (wc[i].status != IBV_WC_SUCCESS) {
+        // if (wc[i].status == IBV_WC_WR_FLUSH_ERR) {
+        //   std::abort();
+        // }
+        // if (wc[i].status == IBV_WC_RNR_RETRY_EXC_ERR) {
+        //   continue;
+        // }
         fprintf(stderr, "RDMA error: %s\n", ibv_wc_status_str(wc[i].status));
-        exit(1);
+        std::abort();
+      }
+      if (wc[i].opcode == IBV_WC_SEND) {
+        send_ack_completed++;
+        // printf("[ACK] remote_cpu_proxy_poll_write_with_immediate: %ld
+        // onflight on peer\n",
+        //        send_ack_posted - send_ack_completed);
+        continue;
       }
       if (wc[i].opcode != IBV_WC_RECV_RDMA_WITH_IMM) {
         fprintf(stderr, "Unexpected opcode: %d\n", wc[i].opcode);
         exit(1);
       }
-      int src_addr_offset;
-      int destination_gpu;
-      uint32_t destination_addr_offset;
+      // int src_addr_offset;
+      // int destination_gpu;
+      // uint32_t destination_addr_offset;
 
-      unpack_imm_data(src_addr_offset, destination_gpu, destination_addr_offset,
-                      wc[i].imm_data);
+      // unpack_imm_data(src_addr_offset, destination_gpu,
+      // destination_addr_offset,
+      //                 wc[i].imm_data);
 
-      int wr_gpu = (int)(wc[i].wr_id % NUM_GPUS);
-      if (destination_gpu != wr_gpu) {
-        fprintf(stderr,
-                "Unexpected immediate data: dest=%u  wr_id%%NUM_GPUS=%d  full "
-                "wr_id=%lu\n",
-                destination_gpu, wr_gpu, wc[i].wr_id);
-        exit(EXIT_FAILURE);
-      }
+      // int wr_gpu = (int)(wc[i].wr_id % NUM_GPUS);
+      // int wr_gpu = wc[i].imm_data
+      // if (destination_gpu != wr_gpu) {
+      //   fprintf(stderr,
+      //           "Unexpected immediate data: dest=%u  wr_id=%d  full "
+      //           "wr_id=%lu\n",
+      //           destination_gpu, wr_gpu, wc[i].wr_id);
+      //   exit(EXIT_FAILURE);
+      // }
 
       pool_index = (pool_index + 1) % (kRemoteBufferSize / kObjectSize - 1);
       char* next_buf = static_cast<char*>(mr->addr) + pool_index * kObjectSize;
 
-      sges[i] = {.addr = reinterpret_cast<uintptr_t>(next_buf),
-                 .length = kObjectSize,
-                 .lkey = mr->lkey};
+      sges[num_wr_imm] = {.addr = reinterpret_cast<uintptr_t>(next_buf),
+                          .length = kObjectSize,
+                          .lkey = mr->lkey};
 
-      wrs[i] = {.wr_id = wc[i].wr_id + 0x10000000ULL,
-                .next = (i + 1 < ne) ? &wrs[i + 1] : nullptr,
-                .sg_list = &sges[i],
-                .num_sge = 1};
+      wrs[num_wr_imm] = {.wr_id = wc[i].wr_id + 0x10000000ULL,
+                         .next = nullptr,
+                         .sg_list = &sges[num_wr_imm],
+                         .num_sge = 1};
+      if (num_wr_imm >= 1) {
+        wrs[num_wr_imm - 1].next = &wrs[num_wr_imm];
+      }
+      num_wr_imm++;
     }
-
     ibv_recv_wr* bad = nullptr;
-    int ret = ibv_post_recv(qp, &wrs[0], &bad);
-    if (ret) {
-      fprintf(stderr, "ibv_post_recv failed: %s\n", strerror(ret));
-      std::abort();
+    if (num_wr_imm > 0) {
+      int ret = ibv_post_recv(qp, &wrs[0], &bad);
+      if (ret) {
+        fprintf(stderr, "ibv_post_recv failed: %s\n", strerror(ret));
+        std::abort();
+      }
     }
 
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
-    std::vector<CopyTask> task_vec(ne);
+    std::vector<CopyTask> task_vec;
+    task_vec.reserve(num_wr_imm);
     for (int i = 0; i < ne; ++i) {
-      int src_addr_offset;
-      int destination_gpu;
-      uint32_t destination_addr_offset;
-
-      unpack_imm_data(src_addr_offset, destination_gpu, destination_addr_offset,
-                      wc[i].imm_data);
-      // int forward_to_gpu_index = wc[i].imm_data % NUM_GPUS;
-      // handle_peer_copy(wc[i].wr_id, 0, forward_to_gpu_index, mr->addr,
-      //                  per_GPU_device_buf[forward_to_gpu_index],
-      //                  kObjectSize);
-
+      int src_addr_offset = 0;
+      // int destination_gpu;
+      uint32_t destination_addr_offset = 0;
+      if (wc[i].opcode == IBV_WC_SEND) {
+        continue;
+      }
+      // unpack_imm_data(src_addr_offset, destination_gpu,
+      // destination_addr_offset,
+      //                 wc[i].imm_data);
+      int destination_gpu = wc[i].imm_data % NUM_GPUS;
       if (per_GPU_device_buf[destination_gpu] == nullptr) {
         fprintf(stderr, "per_GPU_device_buf[%d] is null\n", destination_gpu);
         std::abort();
@@ -928,22 +1054,23 @@ void cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq,
                 wc[i].byte_len, kObjectSize);
         std::abort();
       }
-
+      if (wc[i].imm_data > kIterations) {
+        fprintf(stderr, "Unexpected imm_data: %u, expected <= %d\n",
+                wc[i].imm_data, kIterations);
+        std::abort();
+      }
       CopyTask task{
-          .wr_id = wc[i].wr_id,
+          .wr_id = wc[i].imm_data,
           .dst_dev = destination_gpu,
           .src_ptr = static_cast<char*>(mr->addr) + src_addr_offset,
           .dst_ptr = static_cast<char*>(per_GPU_device_buf[destination_gpu]) +
                      destination_addr_offset,
           .bytes = wc[i].byte_len};
-      task_vec[i] = task;
-      // while (!g_ring.emplace(task)) {
-      //   std::this_thread::yield();
-      // }
+      task_vec.push_back(task);
     }
-    while (!g_ring.emplace(task_vec)) {
-      ;
-      /* Busy spin. */
+    if (!task_vec.empty()) {
+      while (!g_ring.emplace(task_vec)) { /* Busy spin. */
+      }
     }
 #endif
   }
@@ -960,3 +1087,155 @@ void print_average_async_memcpy_time() {
          async_memcpy_total_time / async_memcpy_count);
 }
 #endif
+
+void remote_ensure_ack_sender_resources(ibv_pd* pd, uint64_t* ack_buf,
+                                        ibv_mr*& ack_mr) {
+  if (ack_mr) return;  // already done
+  ack_mr = ibv_reg_mr(pd, ack_buf, sizeof(uint64_t) * RECEIVER_BATCH_SIZE,
+                      IBV_ACCESS_LOCAL_WRITE);  // host-only
+
+  if (!ack_mr) {
+    perror("ibv_reg_mr(ack_buf)");
+    std::abort();
+  }
+}
+
+void remote_notify_sender_that_wr_id_has_completed(struct ibv_qp* local_ack_qp,
+                                                   uint64_t& wr_id,
+                                                   ibv_mr* local_ack_mr,
+                                                   uint64_t* ack_buf,
+                                                   int worker_idx) {
+  if (!local_ack_qp || !local_ack_mr) {
+    if (!local_ack_qp) {
+      fprintf(stderr, "QP not initialised\n");
+      std::abort();
+    }
+    if (!local_ack_mr) {
+      fprintf(stderr, "ACK MR not initialised\n");
+      std::abort();
+    }
+    fprintf(stderr, "ACK resources not initialised\n");
+    std::abort();
+  }
+
+  *reinterpret_cast<uint64_t*>(ack_buf) = wr_id;
+  ibv_sge sge = {
+      .addr = reinterpret_cast<uintptr_t>(ack_buf),
+      .length = sizeof(uint64_t),
+      .lkey = local_ack_mr->lkey,
+  };
+
+  ibv_send_wr wr = {};
+  ibv_send_wr* bad = nullptr;
+  wr.wr_id = wr_id;
+  wr.sg_list = &sge;
+  wr.num_sge = 1;
+  wr.opcode = IBV_WR_SEND_WITH_IMM;
+  wr.send_flags = IBV_SEND_SIGNALED;  // generate a CQE
+  // wr.send_flags         = IBV_SEND_INLINE;
+  wr.imm_data = static_cast<uint32_t>(wr_id);
+
+  int ret = ibv_post_send(local_ack_qp, &wr, &bad);
+  send_ack_posted.fetch_add(1, std::memory_order_relaxed);
+
+  if (ret) {  // ret is already an errno value
+    fprintf(stderr, "ibv_post_send(SEND_WITH_IMM) failed: %d (%s)\n", ret,
+            strerror(ret));  // strerror(ret) gives the text
+    if (bad) {
+      fprintf(stderr,
+              "  first bad WR: wr_id=%llu  opcode=%u  addr=0x%llx  lkey=0x%x\n",
+              (unsigned long long)bad->wr_id, bad->opcode,
+              (unsigned long long)bad->sg_list[0].addr, bad->sg_list[0].lkey);
+    }
+    std::abort();
+  }
+
+  // printf("[ACK - %d]  wr_id=%lu posted to ACK sender\n", worker_idx,
+  //        static_cast<unsigned long>(wr_id));
+  // printf("[ACK] remote_notify_sender_that_wr_id_has_completed: %ld onflight
+  // on peer, posted: %ld, completed: %ld\n", send_ack_posted -
+  // send_ack_completed, send_ack_posted.load(), send_ack_completed.load());
+}
+
+void remote_notify_sender_batch(struct ibv_qp* ack_qp,
+                                std::vector<uint64_t> const& wr_ids,
+                                ibv_mr* ack_mr, uint64_t* ack_buf) {
+  if (!ack_qp || !ack_mr || wr_ids.empty()) {
+    fprintf(stderr, "ACK: bad arguments\n");
+    std::abort();
+  }
+  size_t const n = wr_ids.size();
+
+  std::vector<ibv_sge> sge(n);
+  std::vector<ibv_send_wr> wr(n);
+
+  for (size_t i = 0; i < n; ++i) {
+    ack_buf[i] = wr_ids[i];
+
+    sge[i].addr = reinterpret_cast<uintptr_t>(&ack_buf[i]);
+    sge[i].length = sizeof(uint64_t);
+    sge[i].lkey = ack_mr->lkey;
+
+    wr[i] = {};
+    wr[i].wr_id = wr_ids[i];
+    wr[i].opcode = IBV_WR_SEND_WITH_IMM;
+    wr[i].sg_list = &sge[i];
+    wr[i].num_sge = 1;
+    wr[i].imm_data = static_cast<uint32_t>(wr_ids[i]);
+    wr[i].send_flags = IBV_SEND_SIGNALED;
+    wr[i].next = (i + 1 < n) ? &wr[i + 1] : nullptr;
+  }
+
+  ibv_send_wr* bad = nullptr;
+  int ret = ibv_post_send(ack_qp, &wr[0], &bad);
+  send_ack_posted.fetch_add(n, std::memory_order_relaxed);
+  if (ret) {
+    fprintf(stderr, "ACK ibv_post_send failed: %d (%s)\n", ret, strerror(ret));
+    if (bad) {
+      fprintf(stderr, "  first bad wr_id=%llu\n",
+              static_cast<unsigned long long>(bad->wr_id));
+    }
+    std::abort();
+  } else {
+    printf("[ACK] %zu WRs posted to ACK sender\n", n);
+    printf("[ACK] %ld onflight on peer\n",
+           send_ack_posted - send_ack_completed);
+  }
+}
+
+void local_init_ack_recv_ring(struct ibv_pd* pd, int depth) {
+  printf("Initializing ACK receive ring with depth %d\n", depth);
+  ack_recv_buf.resize(static_cast<size_t>(depth), 0);
+  ack_recv_mr = ibv_reg_mr(pd, ack_recv_buf.data(),
+                           ack_recv_buf.size() * sizeof(uint64_t),
+                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+  assert(ack_qp->recv_cq != nullptr);
+  assert(ack_qp->send_cq != nullptr);
+
+  if (!ack_recv_mr) {
+    perror("ibv_reg_mr(ack_recv)");
+    std::abort();
+  }
+
+  for (int i = 0; i < depth; ++i) {
+    ibv_sge sge = {
+        .addr = reinterpret_cast<uintptr_t>(&ack_recv_buf[i]),
+        .length = sizeof(uint64_t),
+        .lkey = ack_recv_mr->lkey,
+    };
+
+    ibv_recv_wr rwr = {};
+    ibv_recv_wr* bad = nullptr;
+
+    rwr.wr_id = static_cast<uint64_t>(i);
+    rwr.sg_list = &sge;
+    rwr.num_sge = 1;
+
+    if (ibv_post_recv(ack_qp, &rwr, &bad)) {
+      perror("ibv_post_recv(ack)");
+      std::abort();
+    }
+    // printf("ack_qp ACK receive buffer %d initialized at %p\n", i,
+    //        &ack_recv_buf[i]);
+  }
+}
