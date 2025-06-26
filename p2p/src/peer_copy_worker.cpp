@@ -126,7 +126,10 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
     }
 #ifdef REMOTE_PERSISTENT_KERNEL
     else {
-      post_copy_task(rb, tasks, copy_batch_size, stream, src_device, d_tasks);
+      bool post_success = false;
+      while (!post_success)
+        post_success = post_copy_task(rb, tasks, copy_batch_size, stream,
+                                      src_device, d_tasks);
     }
 #endif
     if (err != cudaSuccess) {

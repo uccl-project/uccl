@@ -313,10 +313,10 @@ bool post_copy_task(HostToDeviceNVlinkBuffer* rb, CopyTask const* host_tasks,
 
   int free_slots = rb->capacity - (cur_head - cur_tail);
   if (free_slots < num_tasks) {
-    printf(
-        "Not enough free slots in ring buffer: %d available, %d requested, "
-        "rb->capacity: %d, cur_head: %lu, cur_tail: %lu\n",
-        free_slots, num_tasks, rb->capacity, cur_head, cur_tail);
+    // printf(
+    //     "Not enough free slots in ring buffer: %d available, %d requested, "
+    //     "rb->capacity: %d, cur_head: %lu, cur_tail: %lu\n",
+    //     free_slots, num_tasks, rb->capacity, cur_head, cur_tail);
     return false;
   }
   for (int i = 0; i < num_tasks; ++i) {
