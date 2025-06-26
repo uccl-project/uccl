@@ -603,7 +603,11 @@ int SharedIOContext::uc_poll_recv_cq(void) {
       rdma_ctx->uc_rx_chunk(cq_ex);
     } else {
       // Rare case.
-      rdma_ctx->uc_rx_rtx_chunk(cq_ex, chunk_addr);
+      if (ibv_wc_read_imm_data(cq_ex) == UINT32_MAX) {
+        rdma_ctx->uc_rx_kv_total_size(cq_ex, chunk_addr);
+      } else {
+        rdma_ctx->uc_rx_rtx_chunk(cq_ex, chunk_addr);
+      }
     }
 
     rdma_ctxs.push_back(rdma_ctx);

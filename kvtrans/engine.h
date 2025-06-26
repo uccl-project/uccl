@@ -30,7 +30,10 @@ struct Conn {
 // Used for large KV transfer.
 struct LargeKVMetaData {
   uint64_t total_size;
+  // Reserved for UCCL.
+  uint64_t reserved;
 };
+static_assert(sizeof(LargeKVMetaData) == 16, "LargeKVMetaData size is not 16");
 extern thread_local bool large_kv_meta_data_registered_;
 extern thread_local LargeKVMetaData large_kv_meta_data_;
 extern thread_local uint64_t large_kv_meta_data_mr_id_;

@@ -1336,6 +1336,89 @@ void UcclFlow::post_multi_send(struct ucclRequest** ureqs,
   UCCL_LOG_EP << "Enqueue tx work to engine " << engine_idx;
 }
 
+int RDMAEndpoint::uccl_send_async_kv(UcclFlow* flow, struct Mhandle* mhandle,
+                                  void const* data, size_t const size,
+                                  struct ucclRequest* ureq, struct Mhandle* kv_mhandle, void* kv_data) {
+  ureq->type = ReqTx;
+  ureq->send.data_len = size;
+
+  int slot, nmsg;
+
+  if (!flow->check_fifo_ready(&slot, &nmsg)) return -1;
+  DCHECK(slot < kMaxReq && nmsg <= kMaxRecv) << slot << ", nmsg" << nmsg;
+  auto send_comm = &flow->send_comm_;
+  auto ureqs = send_comm->fifo_ureqs[slot];
+  auto rem_fifo = send_comm->base.fifo;
+  volatile struct FifoItem* slots = rem_fifo->elems[slot];
+
+  for (int i = 0; i < nmsg; i++) {
+    if (ureqs[i] != nullptr) continue;
+    DCHECK(!(slots[i].size < 0 || slots[i].addr == 0 || slots[i].rkey == 0))
+        << slots[i].size << ", " << slots[i].addr << ", " << slots[i].rkey;
+
+    if (size > slots[i].size) {
+      // Can't send more than what the receiver can receive.
+      // Adjust data_len to the actual size sent.
+      ureq->send.data_len = slots[i].size;
+    }
+
+    if (kv_mhandle) {
+      ureq->send.kv_laddr = (uint64_t)kv_data;
+      ureq->send.kv_lkey = kv_mhandle->mr->lkey;
+      ureq->kv_total_size = *((uint64_t *)kv_data);
+    } else {
+      ureq->send.kv_laddr = 0;
+      ureq->send.kv_lkey = 0;
+      ureq->kv_total_size = 0;
+    }
+    
+    ureq->send.laddr = (uint64_t)data;
+    ureq->send.lkey = mhandle->mr->lkey;
+    ureq->send.raddr = slots[i].addr;
+    ureq->send.rkey = slots[i].rkey;
+    ureq->n = nmsg;
+    ureq->send.rid = slots[i].rid;
+    ureq->send.sent_offset = 0;
+    ureq->send.acked_bytes = 0;
+    if (slots[i].engine_offset == RDMAEndpoint::RC_MAGIC)
+      ureq->rc_or_flush_done = false;
+    else {
+      ureq->poll_ctx = ctx_pool_->pop();
+      if constexpr (kEngineLBPolicy >= ENGINE_POLICY_LOAD) {
+        ureq->engine_idx = slots[i].engine_offset;
+        inc_load_on_engine(ureq->engine_idx);
+      }
+    }
+    ureq->context = flow;
+    ureq->send.inc_backlog = 0;
+    // Track this request.
+    ureqs[i] = ureq;
+
+    // If this is a multi-recv, send only when all requests have matched.
+    for (int i = 0; i < nmsg; i++) {
+      if (ureqs[i] == nullptr) return 0;
+    }
+
+    // All requests have matched. Post works to the engine.
+    flow->post_multi_send(ureqs, slots[i].engine_offset);
+
+    // Move the head of the FIFO.
+    send_comm->fifo_head++;
+
+    memset((void*)slots, 0, sizeof(struct FifoItem));
+    memset(ureqs, 0, kMaxRecv * sizeof(struct ucclRequest*));
+
+    UCCL_LOG_EP << "send_async: posted " << nmsg << " requests"
+                << " on engine " << slots[i].engine_offset << " size: " << size
+                << " slot: " << slot << ", flow " << flow << ", flow->dev "
+                << flow->dev_;
+
+    return 0;
+  }
+
+  return 0;
+}
+
 int RDMAEndpoint::uccl_send_async(UcclFlow* flow, struct Mhandle* mhandle,
                                   void const* data, size_t const size,
                                   struct ucclRequest* ureq) {
@@ -1362,6 +1445,8 @@ int RDMAEndpoint::uccl_send_async(UcclFlow* flow, struct Mhandle* mhandle,
       ureq->send.data_len = slots[i].size;
     }
 
+    ureq->send.kv_lkey = 0;
+    ureq->send.kv_laddr = 0;
     ureq->send.laddr = (uint64_t)data;
     ureq->send.lkey = mhandle->mr->lkey;
     ureq->send.raddr = slots[i].addr;
@@ -1461,16 +1546,100 @@ int RDMAEndpoint::uccl_flush(UcclFlow* flow, struct Mhandle** mhandles,
   return 0;
 }
 
+int RDMAEndpoint::uccl_recv_async_kv(UcclFlow* flow, struct Mhandle** mhandles,
+                                  void** data, int* size, int n,
+                                  struct ucclRequest* ureq) {
+  uint32_t candidate;
+  auto dev = flow->dev_;
+
+  // Limit the maximum inflight requests for each flow.
+  if (!flow->check_room()) return -1;
+
+  ureq->recv.kv_poll_ctx = ctx_pool_->pop();
+  ureq->kv_total_size = 0;
+
+  flow->inc_outstanding_reqs();
+
+  if constexpr (kRCSize > 0) {
+    if (size[0] <= NCCL_MIN_POST_RECV && n == 1 &&
+        flow->get_last_rc_size() <= kRCSize) {
+      // set/get_last_rc_size is a workaround for NCCL using 65536 as the
+      // minimum post recv size. Therefore, the receiver cannot determine in
+      // advance whether the actual size of the message is <= kRCSize (and
+      // thus use RC for the message). This workaround is based on the fact
+      // that if a message <= kRCSize was sent previously, then the subsequent
+      // message with post recv size == 65536 is also likely to be <= kRCSize.
+      flow->rc_recv(data[0], size[0], mhandles[0], &ureq->recv.wr,
+                    &ureq->recv.sge, ureq);
+      ureq->type = ReqRxRC;
+      ureq->context = flow;
+      ureq->rc_or_flush_done = false;
+      ureq->n = 1;
+
+      flow->poll_flow_cq();
+      return 0;
+    }
+  }
+
+  // Select a engine to serve this request.
+  if constexpr (kEngineLBPolicy == ENGINE_POLICY_BIND) {
+    candidate = find_first_engine_idx_on_dev(dev) + flow->next_engine_offset_;
+  } else if constexpr (kEngineLBPolicy == ENGINE_POLICY_RR) {
+    candidate = find_rr_engine_idx(dev, &flow->next_engine_offset_);
+  } else if constexpr (kEngineLBPolicy == ENGINE_POLICY_OBLIVIOUS) {
+    candidate = find_oblivious_engine_idx(dev);
+  } else if constexpr (kEngineLBPolicy == ENGINE_POLICY_LOAD_POT) {
+    candidate = find_pot_load_engine_idx(dev);
+    inc_load_on_engine(candidate);
+    ureq->engine_idx = candidate;
+  } else if constexpr (kEngineLBPolicy == ENGINE_POLICY_LOAD) {
+    candidate = find_least_loaded_engine_idx(dev);
+    inc_load_on_engine(candidate);
+    ureq->engine_idx = candidate;
+  }
+
+  // Prepare to send recv buffer to sender.
+  // Note that the real transmission is triggered by engine.
+  auto elems = flow->post_fifo(candidate, data, size, n, mhandles,
+                               &ureq->recv.wr, &ureq->recv.sge);
+  ureq->type = ReqRx;
+  ureq->context = flow;
+  ureq->n = n;
+  for (int i = 0; i < n; i++) ureq->recv.data_len[i] = size[i];
+  ureq->poll_ctx = ctx_pool_->pop();
+  ureq->recv.elems = elems;
+  ureq->recv.qp = flow->recv_comm_.base.fifo_qp;
+
+  Channel::Msg msg = {
+      .opcode = Channel::Msg::Op::kRx,
+      .peer_id = flow->peer_id_,
+      .ureq = ureq,
+      .poll_ctx = ureq->poll_ctx,
+  };
+
+  auto rxq = channel_vec_[candidate]->rx_cmdq_;
+  while (jring_mp_enqueue_bulk(rxq, &msg, 1, nullptr) != 1) {
+  }
+
+  UCCL_LOG_EP << "recv_async: posted " << n << " requests"
+              << " on engine " << candidate << " size: " << size[0];
+
+  flow->poll_flow_cq();
+
+  return 0;
+}
+
 int RDMAEndpoint::uccl_recv_async(UcclFlow* flow, struct Mhandle** mhandles,
                                   void** data, int* size, int n,
                                   struct ucclRequest* ureq) {
   uint32_t candidate;
   auto dev = flow->dev_;
-  PollCtx* pacer_ctx;
 
   // Limit the maximum inflight requests for each flow.
   if (!flow->check_room()) return -1;
 
+  ureq->recv.kv_poll_ctx = nullptr;
+  
   flow->inc_outstanding_reqs();
 
   if constexpr (kRCSize > 0) {
@@ -1971,6 +2140,10 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
 
   auto now = rdtsc();
 
+  if (ureq->kv_total_size) {
+    send_kv_total_size(ureq);
+  }
+
   while (*sent_offset < size || size == 0 /* zero-length message */) {
     chunk_size = EventOnChunkSize(subflow, size - *sent_offset);
 
@@ -2149,6 +2322,39 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
   }
 
   return true;
+}
+
+void RDMAContext::send_kv_total_size(struct ucclRequest* ureq) {
+  auto* flow = reinterpret_cast<UcclFlow*>(ureq->context);
+  struct ibv_send_wr wr, *bad_wr;
+  struct ibv_sge sge;
+
+  // FIXME: Use which one?
+  auto qpw = &dp_qps_[0];
+
+  auto *meta = (uint64_t *)ureq->send.kv_laddr;
+  // Higher 32 bit for fid, lower 32 bit for rid;
+  meta[1] |= (flow->flowid() << 32);
+  meta[1] |= (ureq->send.rid & 0xffffffff);
+  
+  sge.addr = (uint64_t)ureq->send.kv_laddr;
+  sge.lkey = ureq->send.kv_lkey;
+  sge.length = 2 * sizeof(uint64_t);
+
+  wr.sg_list = &sge;
+  wr.num_sge = 1;
+  wr.next = nullptr;
+
+  // Magic number to indicate the CQE is for kv total size.
+  wr.imm_data = htonl(UINT32_MAX);
+  wr.wr_id = 0;
+  wr.opcode = IBV_WR_SEND_WITH_IMM;
+  wr.send_flags = IBV_SEND_SIGNALED;
+
+  auto ret = ibv_post_send(qpw->qp, &wr, &bad_wr);
+  DCHECK(ret == 0) << ret;
+
+  UCCL_LOG_IO << "Sent kv total size: " << ureq->kv_total_size;
 }
 
 void RDMAContext::uc_post_acks() {
@@ -2552,8 +2758,20 @@ void RDMAContext::try_update_csn(SubUcclFlow* subflow) {
       // Wakeup app thread.
       uccl_wakeup(req->ureq->poll_ctx);
       UCCL_LOG_IO << "Rx message complete.";
-      // Free the request.
-      free_recvreq(req);
+      if (req->ureq->recv.kv_poll_ctx == nullptr) {
+        // Free the request.
+        free_recvreq(req);
+      } else {
+        if (req->ureq->kv_total_size > 0) {
+          // We have received the kv total size.
+          // We can free the request safely.
+          free_recvreq(req);
+        } else {
+          // We can't free the request here because we haven't received the kv total size.
+          // But we should mark this request as completed.
+          req->kv_completed = true;
+        }
+      }
     }
 
     subflow->rxtracking.ready_csn_.erase(
@@ -2569,6 +2787,36 @@ void RDMAContext::try_update_csn(SubUcclFlow* subflow) {
     if constexpr (!kRCMode) {
       subflow->pcb.sack_bitmap_shift_left_one();
     }
+  }
+}
+
+void RDMAContext::uc_rx_kv_total_size(struct ibv_cq_ex* cq_ex, uint64_t chunk_addr) {
+  UCCL_LOG_IO << "uc_rx_kv_total_size";
+  
+  auto *meta = (uint64_t *)chunk_addr;
+
+  auto total_size = meta[0];
+  auto fid = (meta[1] >> 32) & 0xffffffff;
+  auto rid = meta[1] & 0xffffffff;
+
+  DCHECK(fid < MAX_FLOW);
+  auto* flow = reinterpret_cast<UcclFlow*>(receiver_flow_tbl_[fid]);
+
+  auto req = get_recvreq_by_id(rid);
+  if (req->type != RecvRequest::RECV || req->ureq->context != flow) {
+    UCCL_LOG_IO << "Can't find corresponding request or this request is "
+                   "invalid for this retransmission chunk. Dropping. "
+                << req->type;
+    return;
+  }
+
+  req->ureq->kv_total_size = total_size;
+  uccl_wakeup(req->ureq->recv.kv_poll_ctx);
+
+  if (req->kv_completed) {
+    // The kv total size is received after all the data is received.
+    // We can free the request here.
+    free_recvreq(req);
   }
 }
 

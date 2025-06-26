@@ -193,6 +193,7 @@ class RDMAContext {
     for (int i = 0; i < kMaxReq; i++) {
       auto* req = &reqs_[i];
       if (req->type == RecvRequest::UNUSED) {
+        req->kv_completed = false;
         return req;
       }
     }
@@ -325,6 +326,8 @@ class RDMAContext {
 
   void uc_rx_rtx_chunk(struct ibv_cq_ex* cq_ex, uint64_t chunk_addr);
 
+  void uc_rx_kv_total_size(struct ibv_cq_ex* cq_ex, uint64_t chunk_addr);
+
   /**
    * @brief Receive a credit.
    * @param pkt_addr The position of the Credit packet in the Credit chunk.
@@ -354,6 +357,8 @@ class RDMAContext {
   }
   bool receiverCC_tx_message(struct ucclRequest* ureq);
   bool senderCC_tx_message(struct ucclRequest* ureq);
+
+  void send_kv_total_size(struct ucclRequest* ureq);
 
   virtual uint32_t EventOnSelectPath(SubUcclFlow* subflow,
                                      uint32_t chunk_size) = 0;
@@ -993,8 +998,14 @@ class RDMAEndpoint {
   int uccl_send_async(UcclFlow* flow, struct Mhandle* mhandle, void const* data,
                       size_t const size, struct ucclRequest* ureq);
 
+  int uccl_send_async_kv(UcclFlow* flow, struct Mhandle* mhandle, void const* data,
+                      size_t const size, struct ucclRequest* ureq, struct Mhandle* kv_mhandle, void* kv_data);
+
   // Post n buffers to engine for receiving data asynchronously.
   int uccl_recv_async(UcclFlow* flow, struct Mhandle** mhandles, void** data,
+                      int* size, int n, struct ucclRequest* ureq);
+
+  int uccl_recv_async_kv(UcclFlow* flow, struct Mhandle** mhandles, void** data,
                       int* size, int n, struct ucclRequest* ureq);
 
   // Ensure that all received data is visible to GPU.
@@ -1005,6 +1016,12 @@ class RDMAEndpoint {
 
   inline bool uccl_poll_ureq(struct ucclRequest* ureq) {
     while (!uccl_poll_ureq_once(ureq)) {
+    }
+    return true;
+  }
+
+  inline bool uccl_poll_ureq_kv(struct ucclRequest* ureq) {
+    while (!uccl_poll_once(ureq->recv.kv_poll_ctx)) {
     }
     return true;
   }

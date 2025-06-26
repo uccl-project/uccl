@@ -331,6 +331,7 @@ struct ucclRequest {
       struct ibv_send_wr wr;
       struct ibv_sge sge;
       struct ibv_qp* qp;
+      PollCtx* kv_poll_ctx;
     } recv;
     struct {
       int data_len;
@@ -342,8 +343,11 @@ struct ucclRequest {
       uint32_t rid;
       uint32_t sent_offset;
       uint32_t acked_bytes;  // RC only.
+      uint32_t kv_lkey;
+      uint64_t kv_laddr;
     } send;
   };
+  uint32_t kv_total_size;
   uint64_t rtt_tsc;
 };
 
@@ -363,6 +367,7 @@ struct RecvRequest {
   struct ucclRequest* ureq;
   uint32_t received_bytes[kMaxRecv];
   uint32_t fin_msg;
+  bool kv_completed;
 };
 
 /// @ref ncclIbNetCommBase
