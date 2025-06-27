@@ -9,10 +9,10 @@
 	url = https://github.com/ROCm/rccl.git
 [submodule "thirdparty/rccl-tests"]
 	path = thirdparty/rccl-tests
-	url = git@github.com:ROCm/rccl-tests.git
+	url = https://github.com/ROCm/rccl-tests.git
 [submodule "thirdparty/nccl"]
 	path = thirdparty/nccl
-	url = git@github.com:NVIDIA/nccl.git
+	url = https://github.com/NVIDIA/nccl.git
 [submodule "thirdparty/nccl-tests"]
 	path = thirdparty/nccl-tests
-	url = git@github.com:NVIDIA/nccl-tests.git
+	url = https://github.com/NVIDIA/nccl-tests.git
