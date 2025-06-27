@@ -115,4 +115,8 @@ void remote_notify_sender_batch(struct ibv_qp* ack_qp,
 void create_per_thread_ack_qp(void* gpu_buffer, size_t size,
                               RDMAConnectionInfo* local_info, int rank,
                               ibv_cq* cq);
+void post_rdma_async_batched(void* buf, size_t bytes, size_t num_wrs,
+                             std::vector<uint64_t> wrs_to_post, ibv_cq* cq,
+                             std::unordered_set<uint64_t>& finished_wrs,
+                             std::mutex& finished_wrs_mutex);
 #endif  // RDMA_HPP

@@ -118,7 +118,6 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
 #else
     } else {
 #endif
-
       /* The fastest among the three. */
       err = launch_peer_bulk_copy2(tasks, copy_batch_size, stream, src_device,
                                    d_tasks);
@@ -126,7 +125,7 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
     }
 #ifdef REMOTE_PERSISTENT_KERNEL
     else {
-      bool post_success = false;
+      bool post_success = true;
       while (!post_success)
         post_success = post_copy_task(rb, tasks, copy_batch_size, stream,
                                       src_device, d_tasks);

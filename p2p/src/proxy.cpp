@@ -245,8 +245,13 @@ void post_gpu_command(
 
   if (!wrs_to_post.empty()) {
     auto start = std::chrono::high_resolution_clock::now();
+#ifdef RDMA_BATCH_TOKENS
+    post_rdma_async_batched(gpu_buffer, kObjectSize, batch_size, wrs_to_post,
+                            cq, finished_wrs, finished_wrs_mutex);
+#else
     post_rdma_async_chained(gpu_buffer, kObjectSize, batch_size, wrs_to_post,
                             cq, finished_wrs, finished_wrs_mutex);
+#endif
     auto end = std::chrono::high_resolution_clock::now();
     total_rdma_write_durations +=
         std::chrono::duration_cast<std::chrono::microseconds>(end - start);
