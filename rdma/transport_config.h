@@ -29,7 +29,7 @@ static constexpr uint32_t NUM_ENGINES = 4;
 // Path/QP per engine. The total number is NUM_ENGINES * kPortEntropy.
 static constexpr uint32_t kPortEntropy = 32;
 // Maximum chunk size (Bytes) for each WQE.
-static constexpr uint32_t kChunkSize = 32 << 10;
+static constexpr uint32_t kChunkSize = 64 << 10;
 #else
 static constexpr uint32_t NUM_ENGINES = 1;
 static constexpr uint32_t kPortEntropy = 256;

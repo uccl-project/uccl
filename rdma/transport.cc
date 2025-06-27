@@ -2334,6 +2334,7 @@ void RDMAContext::send_kv_total_size(struct ucclRequest* ureq) {
 
   auto *meta = (uint64_t *)ureq->send.kv_laddr;
   // Higher 32 bit for fid, lower 32 bit for rid;
+  meta[1] = 0;
   meta[1] |= (flow->flowid() << 32);
   meta[1] |= (ureq->send.rid & 0xffffffff);
   
@@ -2801,16 +2802,30 @@ void RDMAContext::uc_rx_kv_total_size(struct ibv_cq_ex* cq_ex, uint64_t chunk_ad
 
   DCHECK(fid < MAX_FLOW);
   auto* flow = reinterpret_cast<UcclFlow*>(receiver_flow_tbl_[fid]);
+  DCHECK(flow) << fid << ", RDMAContext ptr: " << this;
 
   auto req = get_recvreq_by_id(rid);
-  if (req->type != RecvRequest::RECV || req->ureq->context != flow) {
+  DCHECK(req) << rid << ", RDMAContext ptr: " << this;
+  if (req->type != RecvRequest::RECV) {
     UCCL_LOG_IO << "Can't find corresponding request or this request is "
                    "invalid for this retransmission chunk. Dropping. "
                 << req->type;
+    DCHECK(0) << "rid: " << rid << ", type: " << req->type;
+    return;
+  }
+
+  DCHECK(req->ureq);
+
+  if (req->ureq->context != flow) {
+    UCCL_LOG_IO << "Can't find corresponding request or this request is "
+                   "invalid for this retransmission chunk. Dropping. "
+                << req->type;
+    DCHECK(0);
     return;
   }
 
   req->ureq->kv_total_size = total_size;
+  DCHECK(req->ureq->recv.kv_poll_ctx);
   uccl_wakeup(req->ureq->recv.kv_poll_ctx);
 
   if (req->kv_completed) {

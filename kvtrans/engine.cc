@@ -127,22 +127,31 @@ bool Endpoint::send_kv(uint64_t conn_id, uint64_t mr_id, void const* data,
 
   void* cur_data = const_cast<void*>(data);
   size_t size_sent = 0;
-  int ureq_max = (size + kChunkSize - 1) / kChunkSize;
+  int ureq_max = (size + Endpoint::kChunkSize - 1) / Endpoint::kChunkSize;
   int ureq_issued = 0, ureq_finished = 0;
 
   while (ureq_finished < ureq_max) {
     while (ureq_issued - ureq_finished < kMaxInflightChunks &&
            size_sent < size) {
-      size_t chunk_size = std::min(size - size_sent, kChunkSize);
+      size_t chunk_size = std::min(size - size_sent, Endpoint::kChunkSize);
       auto rc = ep_->uccl_send_async_kv(
           static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
           cur_data, chunk_size, &ureq[ureq_issued % kMaxInflightChunks], kv_mhandle, (void*)&large_kv_meta_data_);
-      // Only first call on uccl_send_async_kv will set kv_mhandle.
+      if (rc == -1) {
+        break;
+      }
+      // Only first success call on uccl_send_async_kv will set kv_mhandle.
       kv_mhandle = nullptr;
-      if (rc == -1) break;
       cur_data += chunk_size;
       size_sent += chunk_size;
       ureq_issued++;
+
+      for (int i = ureq_finished; i < ureq_issued; i++) {
+        if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+          ureq_finished++;
+        }
+      }
+
     }
     LOG_EVERY_N(INFO, 1000000000)
         << "ureq_issued: " << ureq_issued
@@ -179,30 +188,45 @@ bool Endpoint::recv_kv(uint64_t conn_id, uint64_t mr_id, void* data,
 
   ep_->uccl_poll_ureq_kv(&first_ureq);
   auto total_size = first_ureq.kv_total_size;
-  if (total_size <= kChunkSize) {
+  if (total_size <= Endpoint::kChunkSize) {
     ep_->uccl_poll_ureq(&first_ureq);
     recv_size = total_size;
     return true;
   }
 
   // Continue to call uccl_recv_async() to receive the rest of the data.
-  size_t size_expected = total_size - kChunkSize;
-  void* cur_data = data + kChunkSize;
+  size_t size_expected = total_size - Endpoint::kChunkSize;
+  void* cur_data = data + Endpoint::kChunkSize;
   size_t size_post_recv = 0;
-  int ureq_max = (size_expected + kChunkSize - 1) / kChunkSize;
+  int ureq_max = (size_expected + Endpoint::kChunkSize - 1) / Endpoint::kChunkSize;
   int ureq_issued = 0, ureq_finished = 0;
 
   while (ureq_finished < ureq_max || !first_ureq_poll_done) {
     while (ureq_issued - ureq_finished < kMaxInflightChunks &&
            size_post_recv < size_expected) {
-      int chunk_size = std::min(size_expected - size_post_recv, kChunkSize);
+      int chunk_size = std::min(size_expected - size_post_recv, Endpoint::kChunkSize);
       auto rc = ep_->uccl_recv_async(
           static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
           &cur_data, &chunk_size, 1, &ureq[ureq_issued % kMaxInflightChunks]);
-      if (rc == -1) break;
+      if (rc == -1) {
+        break;
+      }
       cur_data += chunk_size;
       size_post_recv += chunk_size;
       ureq_issued++;
+
+      // Remember to poll the first ureq.
+      if (!first_ureq_poll_done) {
+        if (ep_->uccl_poll_ureq_once(&first_ureq)) {
+          first_ureq_poll_done = true;
+        }
+      }
+      for (int i = ureq_finished; i < ureq_issued; i++) {
+        if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+          ureq_finished++;
+        }
+      }
+
     }
     LOG_EVERY_N(INFO, 1000000000) << "ureq_issued: " << ureq_issued
                                   << ", ureq_finished: " << ureq_finished
@@ -211,8 +235,9 @@ bool Endpoint::recv_kv(uint64_t conn_id, uint64_t mr_id, void* data,
 
     // Remember to poll the first ureq.
     if (!first_ureq_poll_done) {
-      ep_->uccl_poll_ureq_once(&first_ureq);
-      first_ureq_poll_done = true;
+      if (ep_->uccl_poll_ureq_once(&first_ureq)) {
+        first_ureq_poll_done = true;
+      }
     }
     for (int i = ureq_finished; i < ureq_issued; i++) {
       if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
