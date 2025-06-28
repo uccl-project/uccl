@@ -22,13 +22,13 @@ UCCL is an efficient collective communication library for GPUs, focusing on:
 UCCL serves as a drop-in replacement for NCCL/RCCL (e.g., requiring no changes to your PyTorch code), and significantly outperforms them in both latency and throughput across various settings. 
 
 * On six HGX servers (across two racks) with 8x400G CX-7 RoCE NICs and 8xH100 GPUs, UCCL outperforms NCCL by up to **2.5x** for AllReduce:
-  <p align="left"> <img src="./doc/images/allreduce_6_hgx.png" alt="" width="500"> </p>
+  <p align="left"> <img src="./doc/images/allreduce_6_hgx.png" alt="" width="600"> </p>
 
 * On four AWS `p4d.24xlarge` instances with 4x100G EFA NICs and 8xA100 GPUs, UCCL outperforms NCCL by up to **3.3x** for AlltoAll: 
-  <p align="left"> <img src="./doc/images/alltoall_4_p4d.png" alt="" width="500"> </p>
+  <p align="left"> <img src="./doc/images/alltoall_4_p4d.png" alt="" width="600"> </p>
 
 * On two AWS `g4dn.8xlarge` instances with 1x50G ENA NICs and 1xT4 GPUs under the same cluster placement group, UCCL outperforms NCCL by up to **3.7x** for AllReduce: 
-  <p align="left"> <img src="./doc/images/allreduce_2_g4dn.png" alt="" width="500"> </p>
+  <p align="left"> <img src="./doc/images/allreduce_2_g4dn.png" alt="" width="600"> </p>
 
 
 More specifically, UCCL aims to: 
