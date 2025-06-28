@@ -22,7 +22,10 @@ This folder contains lightweight benchmarks that validate **multi-GPU** and **mu
 3. Optional: **UCCL** build that provides `librccl-net-uccl.so`.
 4. `torchvision` (only for `ddp_amd_test.py`).
 
-You can install 1,2, and 4 by `pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3`, while building 3 following [`rdma/`](../rdma/README.md).
+You can install prerequisite 1, 2, and 4 using the following command line, and build prerequisite 3 following [`rdma/README.md`](../rdma/README.md) 
+```bash
+pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3
+```
 
 Set the following when using UCCL:
 ```bash
