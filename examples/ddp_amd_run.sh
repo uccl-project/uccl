@@ -3,44 +3,18 @@
 # PyTorch Distributed Training Script for AMD GPUs
 # Supports both single-node multi-GPU and multi-node multi-GPU training
 
-# Parse command line arguments
-MODE=${1:-single}  # single or multi
-BACKEND=${2:-nccl} # nccl or uccl
+# Parse command line arguments (BACKEND first then MODE)
+BACKEND=${1:-nccl}  # nccl or uccl
+MODE=${2:-single}   # single or multi
 BATCH_SIZE=${3:-128}
 EPOCHS=${4:-10}
 
 # Configuration
-PROG="ddp_amd.py"
+PROG="ddp_amd_test.py"
 NUM_GPUS_PER_NODE=4
-DEVICES="0,1,2,5"
+DEVICES="0,1,2,5"  # Only these GPUs have NICs
 
-if [[ -z "${UCCL_HOME}" ]]; then
-    echo "UCCL_HOME is not set or is empty"
-    exit 1
-else
-    echo "UCCL_HOME is set to: ${UCCL_HOME}"
-fi
-
-if [[ -z "${CONDA_LIB_HOME}" ]]; then
-    echo "CONDA_LIB_HOME is not set or is empty"
-    exit 1
-else
-    echo "CONDA_LIB_HOME is set to: ${CONDA_LIB_HOME}"
-fi
-
-PLUGIN_PATH=""
-if [ "$BACKEND" = "uccl" ]; then
-    PLUGIN_PATH="${UCCL_HOME}/rdma/librccl-net-uccl.so"
-fi
-
-NVLINK_ON=0
-NVLINK_OFF=$((1 - NVLINK_ON))
-
-export LD_LIBRARY_PATH="${UCCL_HOME}/thirdparty/rccl/build/release:${CONDA_LIB_HOME}:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH}"
-export NCCL_NET_PLUGIN=${PLUGIN_PATH}
-export GLOG_v=0
-export NCCL_P2P_DISABLE=${NVLINK_OFF}
-export NCCL_SHM_DISABLE=${NVLINK_OFF}
+# ---------------- Common environment ----------------
 export NCCL_IB_PCI_RELAXED_ORDERING=1
 export NCCL_P2P_NET_CHUNKSIZE=524288
 export NCCL_BUFFSIZE=8388608
@@ -52,23 +26,38 @@ export NCCL_IB_SPLIT_DATA_ON_QPS=1
 export HIP_VISIBLE_DEVICES=${DEVICES}
 export NCCL_IB_HCA="rdma0:1,rdma2:1,rdma3:1,rdma4:1"
 export NCCL_SOCKET_IFNAME="cni0"
-export UCCL_NUM_ENGINES=4
-export UCCL_PORT_ENTROPY=8
-export UCCL_CHUNK_SIZE_KB=128
+
+# ---------------- UCCL-specific ----------------
+if [ "$BACKEND" = "uccl" ]; then
+    if [[ -z "${UCCL_HOME}" || -z "${CONDA_LIB_HOME}" ]]; then
+        echo "UCCL_HOME or CONDA_LIB_HOME is not set or empty"
+        exit 1
+    else
+        echo "UCCL_HOME = ${UCCL_HOME}"
+        echo "CONDA_LIB_HOME = ${CONDA_LIB_HOME}"
+    fi
+
+    export GLOG_v=0
+    export LD_LIBRARY_PATH="${CONDA_LIB_HOME}:${LD_LIBRARY_PATH}"
+    export NCCL_NET_PLUGIN="${UCCL_HOME}/rdma/librccl-net-uccl.so"
+    export UCCL_NUM_ENGINES=4
+    export UCCL_PORT_ENTROPY=8
+    export UCCL_CHUNK_SIZE_KB=128
+fi
 
 # Function to print usage
 print_usage() {
-    echo "Usage: $0 [MODE] [BACKEND] [BATCH_SIZE] [EPOCHS]"
+    echo "Usage: $0 [BACKEND] [MODE] [BATCH_SIZE] [EPOCHS]"
     echo ""
     echo "Parameters:"
-    echo "  MODE        : single (single-node) or multi (multi-node) [default: single]"
     echo "  BACKEND     : nccl or uccl [default: nccl]"
+    echo "  MODE        : single (single-node) or multi (multi-node) [default: single]"
     echo "  BATCH_SIZE  : batch size per GPU [default: 128]"
     echo "  EPOCHS      : number of training epochs [default: 10]"
     echo ""
     echo "Examples:"
-    echo "  Single-node training:    $0 single nccl 128 10"
-    echo "  Multi-node training:     $0 multi nccl 128 10"
+    echo "  Single-node training:    $0 nccl single 128 10"
+    echo "  Multi-node training:     $0 uccl multi 128 10"
     echo ""
     echo "For multi-node training, make sure to:"
     echo "1. Set MASTER_ADDR and MASTER_PORT environment variables"
@@ -76,45 +65,13 @@ print_usage() {
     echo "3. Set WORLD_SIZE to total number of nodes"
 }
 
-# Function to check ROCm installation
-check_rocm() {
-    if ! command -v rocm-smi &> /dev/null; then
-        echo "Warning: rocm-smi not found. Please ensure ROCm is properly installed."
-    else
-        echo "ROCm Status:"
-        rocm-smi --showproductname --showtemp --showuse
-    fi
-}
-
-# Function to check PyTorch ROCm support
-check_pytorch_rocm() {
-    python3 -c "
-import torch
-print(f'PyTorch version: {torch.__version__}')
-print(f'ROCm support: {torch.cuda.is_available()}')
-if torch.cuda.is_available():
-    print(f'Number of GPUs: {torch.cuda.device_count()}')
-    for i in range(torch.cuda.device_count()):
-        print(f'GPU {i}: {torch.cuda.get_device_name(i)}')
-else:
-    print('ROCm not available in PyTorch')
-    exit(1)
-"
-}
-
 # Main execution logic
 main() {
     echo "=== PyTorch Distributed Training for AMD GPUs ==="
-    echo "Mode: $MODE"
     echo "Backend: $BACKEND"
+    echo "Mode: $MODE"
     echo "Batch Size: $BATCH_SIZE"
     echo "Epochs: $EPOCHS"
-    echo ""
-
-    # Check system setup
-    check_rocm
-    echo ""
-    check_pytorch_rocm
     echo ""
 
     if [ "$MODE" = "single" ]; then
@@ -143,8 +100,8 @@ main() {
             echo "  WORLD_SIZE   : Total number of nodes"
             echo ""
             echo "Example setup for 2 nodes:"
-            echo "  Node 0 (Master): MASTER_ADDR=192.168.1.100 MASTER_PORT=12355 NODE_RANK=0 WORLD_SIZE=2 $0 multi nccl"
-            echo "  Node 1 (Worker): MASTER_ADDR=192.168.1.100 MASTER_PORT=12355 NODE_RANK=1 WORLD_SIZE=2 $0 multi nccl"
+            echo "  Node 0 (Master): MASTER_ADDR=192.168.1.100 MASTER_PORT=12355 NODE_RANK=0 WORLD_SIZE=2 $0 uccl multi"
+            echo "  Node 1 (Worker): MASTER_ADDR=192.168.1.100 MASTER_PORT=12355 NODE_RANK=1 WORLD_SIZE=2 $0 uccl multi"
             exit 1
         fi
 
