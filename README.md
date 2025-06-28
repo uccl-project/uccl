@@ -15,18 +15,8 @@
 
 ## About 
 
-UCCL is an efficient collective communication library for GPUs. 
-UCCL aims to 
-* rearchitect the CCL layer (while keeping NCCL APIs) to unleash the full potential of network hardware
-* rearchitect the network transport layer to be fast and extensible
-* support heterogeneous GPU and networking vendors such as Nvidia, AMD, and Broadcom
-* become an open and collaborative platform for GPU communication research
-
-UCCL has built a fast and extensible transport layer in software, with code released in this repo. 
-This transport layer has created many benefits. 
-For example, existing network transports under NCCL (i.e., kernel TCP and RDMA) leverage one or few network paths to stream huge data volumes, thus prone to congestion happening in datacenter networks. 
-Instead, UCCL employs packet spraying in software to leverage abundant network paths to avoid "single-path-of-congestion". 
-More benefits include: 1) packet spraying with 256 paths, 2) advanced congestion control such as latency-based and receiver-driven ones, 3) efficient loss recovery by selective repeat, and 4) widely usable in public clouds with legacy NICs and Ethernet. 
+UCCL is an efficient collective communication library for GPUs, designed to be open-source and vendor-neutral. 
+UCCL focuses on **flexibility** (for high performance in fast-evolving ML workloads) and **portability** (for connecting heterogeneous GPUs). 
 
 On six HGX servers (across two racks) with 8x400G CX-7 RoCE NICs and 8xH100 GPUs, UCCL outperforms NCCL by up to **2.5x** for AllReduce:
 
@@ -41,6 +31,19 @@ On two AWS `g4dn.8xlarge` instances with 1x50G ENA NICs and 1xT4 GPUs under the 
 <p align="center"> <img src="./doc/images/allreduce_2_g4dn.png" alt="" width="700"> </p>
 
 Feel free to check out our full [technical report](https://arxiv.org/pdf/2504.17307) and [slides](https://drive.google.com/file/d/1YsgMNPeCV797sYPiCWAT0AMfc0WgIhP0/view?usp=sharing).
+
+
+UCCL aims to 
+* rearchitect the CCL layer (while keeping NCCL APIs) to unleash the full potential of network hardware
+* rearchitect the network transport layer to be fast and extensible
+* support heterogeneous GPU and networking vendors such as Nvidia, AMD, and Broadcom
+* become an open and collaborative platform for GPU communication research
+
+UCCL has built a fast and extensible transport layer in software, with code released in this repo. 
+This transport layer has created many benefits. 
+For example, existing network transports under NCCL (i.e., kernel TCP and RDMA) leverage one or few network paths to stream huge data volumes, thus prone to congestion happening in datacenter networks. 
+Instead, UCCL employs packet spraying in software to leverage abundant network paths to avoid "single-path-of-congestion". 
+More benefits include: 1) packet spraying with 256 paths, 2) advanced congestion control such as latency-based and receiver-driven ones, 3) efficient loss recovery by selective repeat, and 4) widely usable in public clouds with legacy NICs and Ethernet. 
 
 ## Road Map
 
