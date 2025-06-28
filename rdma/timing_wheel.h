@@ -66,15 +66,15 @@ struct wheel_record_t {
 static constexpr double kWheelSlotWidthUs = .5;  ///< Duration per wheel slot
 static uint32_t const MAX_TIMING_WHEEL_PKTS = 1024;
 static constexpr size_t kSessionCredits = MAX_TIMING_WHEEL_PKTS;
-static constexpr double kWheelHorizonUs =
-    1000000 * (kSessionCredits * kChunkSize) / timely::TimelyCC::kMinRate;
+static double kWheelHorizonUs =
+    1000000 * (kSessionCredits * (ucclParamCHUNK_SIZE_KB() << 10)) /
+    timely::TimelyCC::kMinRate;
 
 // This ensures that packets for an sslot undergoing retransmission are rarely
 // in the wheel. This is recommended but not required.
 // static_assert(kWheelHorizonUs <= kRpcRTOUs, "");
 
-static constexpr size_t kWheelNumWslots =
-    1 + DIVUP(kWheelHorizonUs, kWheelSlotWidthUs);
+static size_t kWheelNumWslots = 1 + DIVUP(kWheelHorizonUs, kWheelSlotWidthUs);
 
 static constexpr bool kWheelRecord = false;  ///< Fast-record wheel actions
 
@@ -90,7 +90,7 @@ static constexpr size_t kWheelBucketCap = 5;  ///< Wheel entries per bucket
 static constexpr size_t kNumBktEntriesBits = 3;
 static_assert((1ull << kNumBktEntriesBits) > kWheelBucketCap, "");
 
-static constexpr size_t kBktPoolSize = kWheelNumWslots * kWheelBucketCap;
+static size_t kBktPoolSize = kWheelNumWslots * kWheelBucketCap;
 
 // TSC ticks per day = ~3 billion per second * 86400 seconds per day
 // Require that rollback happens only after server lifetime
@@ -114,6 +114,7 @@ struct timing_wheel_args_t {
   uint64_t wslot_width_tsc_;
   uint64_t horizon_tsc_;
   size_t bkt_pool_;
+  double link_bw_;
 };
 
 class TimingWheel {
@@ -122,7 +123,8 @@ class TimingWheel {
       : freq_ghz_(args.freq_ghz_),
         wslot_width_tsc_(args.wslot_width_tsc_),
         horizon_tsc_(args.horizon_tsc_),
-        bkt_pool_(args.bkt_pool_) {
+        bkt_pool_(args.bkt_pool_),
+        link_bw_(args.link_bw_) {
     wheel_buffer_ = new uint8_t[kWheelNumWslots * sizeof(wheel_bkt_t)];
 
     size_t base_tsc = rdtsc();
@@ -152,7 +154,7 @@ class TimingWheel {
                                     size_t* prev_desired_tx_tsc, size_t ref_tsc,
                                     void* wr, size_t chunk_size,
                                     bool allow_bypass) {
-    if constexpr (kTestConstantRate) target_rate = gbps_to_rate(LINK_BANDWIDTH);
+    if constexpr (kTestConstantRate) target_rate = gbps_to_rate(link_bw_);
 
     if (chunk_size < kBypassTimingWheelThres && allow_bypass) return false;
 
@@ -301,6 +303,8 @@ class TimingWheel {
   size_t cur_wslot_ = 0;
   CircularBuffer<wheel_bkt_t*, /*sync=*/false> bkt_pool_;
   uint8_t* bkt_pool_buf_;
+
+  double link_bw_;
 
  public:
   std::vector<wheel_record_t> record_vec_;  ///< Used only with kWheelRecord

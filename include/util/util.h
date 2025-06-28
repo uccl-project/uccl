@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <mutex>
@@ -265,6 +266,15 @@ inline void uccl_wakeup(PollCtx* ctx) {
   ctx->cv.notify_one();
 }
 
+inline bool uccl_try_wakeup(PollCtx* ctx) {
+  if (--(ctx->num_unfinished) == 0) {
+    ctx->write_barrier();
+    uccl_wakeup(ctx);
+    return true;
+  }
+  return false;
+}
+
 template <class T>
 static inline T Percentile(std::vector<T>& vectorIn, double percent) {
   if (vectorIn.size() == 0) return (T)0;
@@ -284,25 +294,12 @@ static inline T Percentile(std::vector<T> const& vectorIn, double percent) {
   return *nth;
 }
 
-static inline bool pin_thread_to_cpu(int cpu) {
-  int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
-  if (cpu < 0 || cpu >= num_cpus) return false;
-
-  cpu_set_t cpuset;
-  CPU_ZERO(&cpuset);
-  CPU_SET(cpu, &cpuset);
-
-  pthread_t current_thread = pthread_self();
-
-  return !pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
-}
-
 static inline void apply_setsockopt(int xsk_fd) {
   int ret;
   int sock_opt;
 
+#ifdef SO_PREFER_BUSY_POLL
   sock_opt = 1;
-
   ret = setsockopt(xsk_fd, SOL_SOCKET, SO_PREFER_BUSY_POLL, (void*)&sock_opt,
                    sizeof(sock_opt));
   if (ret == -EPERM) {
@@ -312,13 +309,13 @@ static inline void apply_setsockopt(int xsk_fd) {
   } else if (ret < 0) {
     fprintf(stderr, "Ignore SO_PREFER_BUSY_POLL as it failed\n");
   }
-
+#endif
   sock_opt = 20;
   if (setsockopt(xsk_fd, SOL_SOCKET, SO_BUSY_POLL, (void*)&sock_opt,
                  sizeof(sock_opt)) < 0) {
     fprintf(stderr, "Ignore SO_BUSY_POLL as it failed\n");
   }
-
+#ifdef SO_BUSY_POLL_BUDGET
   sock_opt = 64;
   ret = setsockopt(xsk_fd, SOL_SOCKET, SO_BUSY_POLL_BUDGET, (void*)&sock_opt,
                    sizeof(sock_opt));
@@ -329,6 +326,7 @@ static inline void apply_setsockopt(int xsk_fd) {
   } else if (ret < 0) {
     fprintf(stderr, "Ignore SO_BUSY_POLL_BUDGET as it failed\n");
   }
+#endif
 }
 
 namespace detail {
@@ -871,6 +869,72 @@ inline uint64_t get_monotonic_time_ns() {
   return (uint64_t)ts.tv_sec * 1000000000LL + (uint64_t)ts.tv_nsec;
 }
 
+struct ib_dev {
+  char prefix[64];
+  int port;
+};
+
+static bool match_if(char const* string, char const* ref, bool matchExact) {
+  // Make sure to include '\0' in the exact case
+  int matchLen = matchExact ? strlen(string) + 1 : strlen(ref);
+  return strncmp(string, ref, matchLen) == 0;
+}
+
+static bool match_port(int const port1, int const port2) {
+  if (port1 == -1) return true;
+  if (port2 == -1) return true;
+  if (port1 == port2) return true;
+  return false;
+}
+
+static bool match_if_list(char const* string, int port, struct ib_dev* ifList,
+                          int listSize, bool matchExact) {
+  // Make an exception for the case where no user list is defined
+  if (listSize == 0) return true;
+
+  for (int i = 0; i < listSize; i++) {
+    if (match_if(string, ifList[i].prefix, matchExact) &&
+        match_port(port, ifList[i].port)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static inline int parse_interfaces(char const* string, struct ib_dev* ifList,
+                                   int maxList) {
+  if (!string) return 0;
+
+  char const* ptr = string;
+
+  int ifNum = 0;
+  int ifC = 0;
+  char c;
+  do {
+    c = *ptr;
+    if (c == ':') {
+      if (ifC > 0) {
+        ifList[ifNum].prefix[ifC] = '\0';
+        ifList[ifNum].port = atoi(ptr + 1);
+        ifNum++;
+        ifC = 0;
+      }
+      while (c != ',' && c != '\0') c = *(++ptr);
+    } else if (c == ',' || c == '\0') {
+      if (ifC > 0) {
+        ifList[ifNum].prefix[ifC] = '\0';
+        ifList[ifNum].port = -1;
+        ifNum++;
+        ifC = 0;
+      }
+    } else {
+      ifList[ifNum].prefix[ifC] = c;
+      ifC++;
+    }
+    ptr++;
+  } while (ifNum < maxList && c);
+  return ifNum;
+}
 typedef std::chrono::time_point<std::chrono::high_resolution_clock> TimePoint;
 
 #ifdef USE_CUDA
@@ -891,5 +955,73 @@ inline void checkMemoryLocation(void* ptr) {
   }
 }
 #endif
+
+inline int get_dev_numa_node(char const* dev_name) {
+  std::string cmd =
+      Format("cat /sys/class/infiniband/%s/device/numa_node", dev_name);
+  FILE* fp = popen(cmd.c_str(), "r");
+  DCHECK(fp != nullptr) << "Failed to open " << cmd;
+
+  char buffer[10];
+  DCHECK(fgets(buffer, sizeof(buffer), fp) != nullptr)
+      << "Failed to read " << cmd;
+  pclose(fp);
+
+  auto numa_node = atoi(buffer);
+  DCHECK(numa_node != -1) << "NUMA node is -1 for " << dev_name;
+  return numa_node;
+}
+
+static inline void pin_thread_to_cpu(int cpu) {
+  int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+  DCHECK(cpu >= 0 && cpu < num_cpus) << "CPU " << cpu << " is out of range";
+
+  cpu_set_t cpuset;
+  CPU_ZERO(&cpuset);
+  CPU_SET(cpu, &cpuset);
+
+  if (sched_setaffinity(0, sizeof(cpu_set_t), &cpuset)) {
+    LOG(ERROR) << "Failed to set thread affinity to CPU " << cpu;
+  }
+}
+
+inline void pin_thread_to_numa(int numa_node) {
+  std::string cpumap_path =
+      Format("/sys/devices/system/node/node%d/cpulist", numa_node);
+  std::ifstream cpumap_file(cpumap_path);
+  if (!cpumap_file.is_open()) {
+    LOG(ERROR) << "Failed to open " << cpumap_path;
+    return;
+  }
+
+  cpu_set_t cpuset;
+  CPU_ZERO(&cpuset);
+
+  std::string line;
+  std::getline(cpumap_file, line);
+
+  // Parse CPU ranges like "0-3,7-11"
+  std::stringstream ss(line);
+  std::string range;
+  while (std::getline(ss, range, ',')) {
+    size_t dash = range.find('-');
+    if (dash != std::string::npos) {
+      // Handle range like "0-3"
+      int start = std::stoi(range.substr(0, dash));
+      int end = std::stoi(range.substr(dash + 1));
+      for (int cpu = start; cpu <= end; cpu++) {
+        CPU_SET(cpu, &cpuset);
+      }
+    } else {
+      // Handle single CPU like "7"
+      int cpu = std::stoi(range);
+      CPU_SET(cpu, &cpuset);
+    }
+  }
+
+  if (sched_setaffinity(0, sizeof(cpu_set_t), &cpuset)) {
+    LOG(ERROR) << "Failed to set thread affinity to NUMA node " << numa_node;
+  }
+}
 
 }  // namespace uccl

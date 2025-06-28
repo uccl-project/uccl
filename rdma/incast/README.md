@@ -11,6 +11,6 @@ Our results show severe interference between incast traffic and permutation traf
 3. Run `sync_repo.sh` to copy this repo to all nodes. It will also compile `uccl/rdma/incast`.
 4. ​Run the test by executing:
 
-```shell
+```bash
 ./run.sh
 ```

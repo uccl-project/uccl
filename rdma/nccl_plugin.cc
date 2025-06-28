@@ -1,11 +1,12 @@
 #include "nccl_net.h"
 #include "transport.h"
 #include "transport_config.h"
+#include "util_rdma.h"
 #include <glog/logging.h>
 #include <atomic>
 #include <mutex>
 #include <thread>
-
+#include <unistd.h>
 using namespace uccl;
 
 char const* PLUGIN_NAME = "RDMA_Plugin";
@@ -82,19 +83,15 @@ struct ucclSendComm {
 };
 
 ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
-  std::cout << "Hello UCCL!" << std::endl;
+  std::cout << "Hello UCCL from PID: " << getpid() << std::endl;
 
-#ifdef LAZY_CREATE_ENGINE
-  ep = std::make_shared<RDMAEndpoint>(NUM_DEVICES, NUM_ENGINES);
-#else
-  ep = std::make_shared<RDMAEndpoint>(DEVNAME_SUFFIX_LIST, NUM_DEVICES,
-                                      NUM_ENGINES);
-#endif
+  ep = std::make_shared<RDMAEndpoint>(ucclParamNUM_ENGINES());
+
   return ncclSuccess;
 }
 
 ncclResult_t pluginDevices(int* ndev) {
-  *ndev = NUM_DEVICES;
+  *ndev = ep->get_num_devices();
   return ncclSuccess;
 }
 
@@ -111,12 +108,111 @@ ncclResult_t pluginPciPath(char const* ib_name, char** path) {
   return ncclSuccess;
 }
 
+#define MAX_STR_LEN 255
+ncclResult_t ncclTopoGetStrFromSys(char const* path, char const* fileName,
+                                   char* strValue) {
+  char filePath[PATH_MAX];
+  sprintf(filePath, "%s/%s", path, fileName);
+  int offset = 0;
+  FILE* file;
+  if ((file = fopen(filePath, "r")) != NULL) {
+    while (feof(file) == 0 && ferror(file) == 0 && offset < MAX_STR_LEN) {
+      int len = fread(strValue + offset, 1, MAX_STR_LEN - offset, file);
+      offset += len;
+    }
+    fclose(file);
+  }
+  if (offset == 0) {
+    strValue[0] = '\0';
+    UCCL_LOG_PLUGIN << Format(
+        "Topology detection : could not read %s, ignoring", filePath);
+  } else {
+    strValue[offset - 1] = '\0';
+  }
+  return ncclSuccess;
+}
+
+UCCL_PARAM(IbPciRelaxedOrdering, "IB_PCI_RELAXED_ORDERING", 2);
+
+// Detect whether GDR can work on a given NIC with the current CUDA device
+// Returns :
+// ncclSuccess : GDR works
+// ncclSystemError : no module or module loaded but not supported by GPU
 #define KNL_MODULE_LOADED(a) ((access(a, F_OK) == -1) ? 0 : 1)
-static bool GdrSupportInitOnce() {
+static int ncclIbGdrModuleLoaded = 0;  // 1 = true, 0 = false
+static void ibGdrSupportInitOnce() {
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  if (ncclIbGdrModuleLoaded == 0) {
+    // Check for `memory_peers` directory containing `amdkfd/version`
+    // This `memory_peers` directory is created by NIC-GPU driver interaction
+    // On Linux kernel 5.15.0 (e.g. Ubuntu 22.04), `memory_peers` is created
+    // under `/sys/kernel/mm/` However, on newer kernels like Ubuntu 24.04.1
+    // (Linux kernel 6.8.0) or Ubuntu 22.04.4 HWE (Linux kernel 6.5.0), this
+    // `memory_peers` directory is either not created (go to else-if condition)
+    // or created under a different path like `/sys/kernel/` or `/sys/`
+    // (depending on your ib_peer_mem module)
+    char const* memory_peers_paths[] = {
+        "/sys/kernel/mm/memory_peers/amdkfd/version",
+        "/sys/kernel/memory_peers/amdkfd/version",
+        "/sys/memory_peers/amdkfd/version", NULL};
+    int i = 0;
+
+    while (memory_peers_paths[i]) {
+      if (access(memory_peers_paths[i], F_OK) == 0) {
+        ncclIbGdrModuleLoaded = 1;
+        UCCL_LOG_PLUGIN << Format("Found %s", memory_peers_paths[i]);
+        break;
+      } else {
+        ncclIbGdrModuleLoaded = 0;
+      }
+      ++i;
+    }
+
+    char strValue[MAX_STR_LEN];
+    ncclTopoGetStrFromSys("/sys/devices/virtual/dmi/id", "bios_version",
+                          strValue);
+    if (strncmp("Hyper-V UEFI Release", strValue, 20) == 0) {
+      int roMode = ucclParamIbPciRelaxedOrdering();
+      ncclTopoGetStrFromSys("/proc/sys/kernel", "numa_balancing", strValue);
+      if (strcmp(strValue, "1") == 0 && roMode == 0) ncclIbGdrModuleLoaded = 0;
+    }
+
+    if (ncclIbGdrModuleLoaded == 0) {
+      // Check for `ib_register_peer_memory_client` symbol in `/proc/kallsyms`
+      // if your system uses native OS ib_peer module
+      char buf[256];
+      FILE* fp = NULL;
+      fp = fopen("/proc/kallsyms", "r");
+
+      if (fp == NULL) {
+        UCCL_LOG_PLUGIN << "Could not open /proc/kallsyms";
+      } else {
+        while (fgets(buf, sizeof(buf), fp) != NULL) {
+          if (strstr(buf, "t ib_register_peer_memory_client") != NULL ||
+              strstr(buf, "T ib_register_peer_memory_client") != NULL) {
+            ncclIbGdrModuleLoaded = 1;
+            UCCL_LOG_PLUGIN
+                << "Found ib_register_peer_memory_client in /proc/kallsyms";
+            break;
+          }
+        }
+      }
+    }
+  }
+#else
   // Check for the nv_peer_mem module being loaded
-  return KNL_MODULE_LOADED("/sys/kernel/mm/memory_peers/nv_mem/version") ||
-         KNL_MODULE_LOADED("/sys/kernel/mm/memory_peers/nv_mem_nc/version") ||
-         KNL_MODULE_LOADED("/sys/module/nvidia_peermem/version");
+  ncclIbGdrModuleLoaded =
+      KNL_MODULE_LOADED("/sys/kernel/mm/memory_peers/nv_mem/version") ||
+      KNL_MODULE_LOADED("/sys/kernel/mm/memory_peers/nv_mem_nc/version") ||
+      KNL_MODULE_LOADED("/sys/module/nvidia_peermem/version");
+#endif
+}
+
+ncclResult_t ncclIbGdrSupport() {
+  static pthread_once_t once = PTHREAD_ONCE_INIT;
+  pthread_once(&once, ibGdrSupportInitOnce);
+  if (!ncclIbGdrModuleLoaded) return ncclSystemError;
+  return ncclSuccess;
 }
 
 ncclResult_t pluginGetProperties(int dev, ncclNetProperties_v8_t* props) {
@@ -124,7 +220,7 @@ ncclResult_t pluginGetProperties(int dev, ncclNetProperties_v8_t* props) {
   props->name = factory_dev->ib_name;
 
   // Speed in *Mbps*. 100000 means 100G
-  props->speed = LINK_BANDWIDTH * 8 / 1e6;
+  props->speed = factory_dev->link_bw * 8 / 1e6;
 
   pluginPciPath(factory_dev->ib_name, &props->pciPath);
 
@@ -134,7 +230,9 @@ ncclResult_t pluginGetProperties(int dev, ncclNetProperties_v8_t* props) {
   props->ptrSupport = NCCL_PTR_HOST;
 
   // TODO: make this configurable.
-  if (GdrSupportInitOnce()) props->ptrSupport |= NCCL_PTR_CUDA;
+  if (ncclIbGdrSupport() == ncclSuccess) {
+    props->ptrSupport |= NCCL_PTR_CUDA;
+  }
 
   if (factory_dev->dma_buf_support) props->ptrSupport |= NCCL_PTR_DMABUF;
 
@@ -147,7 +245,7 @@ ncclResult_t pluginGetProperties(int dev, ncclNetProperties_v8_t* props) {
   props->regIsGlobal = 0;
 
   // Port number, used in conjunction with guid
-  props->port = IB_PORT_NUM;
+  props->port = factory_dev->ib_port_num;
   // Custom latency (used to help tuning if latency is high. If set to 0, use
   // default NCCL values.
   props->latency = 0;
@@ -160,8 +258,6 @@ ncclResult_t pluginGetProperties(int dev, ncclNetProperties_v8_t* props) {
   props->netDeviceVersion = NCCL_NET_DEVICE_INVALID_VERSION;
   return ncclSuccess;
 }
-
-static std::atomic<uint16_t> listen_port = 10000;
 
 // To create a connection, NCCL will start by calling listen on the receiver
 // side. This function takes a device number as input argument, and should
@@ -176,14 +272,7 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
   memset(handle, 0, sizeof(struct ucclHandle));
 
 #ifdef LAZY_CREATE_ENGINE
-  int gpu_idx = 0;
-  cudaGetDevice(&gpu_idx);
-  if (dev != gpu_idx) {
-    LOG_FIRST_N(INFO, 1) << "pluginListen detects different vdev " << dev
-                         << " vs. gpu_idx " << gpu_idx;
-    // dev = gpu_idx;
-  }
-  ep->initialize_engine_by_dev(dev, listen_port);
+  ep->initialize_engine_by_dev(dev);
 #endif
 
   // Create a listening socket.
@@ -198,9 +287,19 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
   bzero((char*)&serv_addr, sizeof(serv_addr));
   serv_addr.sin_family = AF_INET;
   serv_addr.sin_addr.s_addr = INADDR_ANY;
-  serv_addr.sin_port = htons(listen_port.fetch_add(1));
+  serv_addr.sin_port = 0;  // Let OS assign a free ephemeral port
   ret = bind(listen_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
+  if (ret < 0) {
+    LOG(ERROR) << "ERROR: binding socket, ret: " << ret
+               << ", port: " << ntohs(serv_addr.sin_port) << ", dev: " << dev;
+    close(listen_fd);
+    return ncclInternalError;
+  }
   DCHECK(ret >= 0) << ret;
+
+  // Get the actual port assigned by the OS.
+  socklen_t len = sizeof(serv_addr);
+  getsockname(listen_fd, (struct sockaddr*)&serv_addr, &len);
 
   ret = listen(listen_fd, 1);
   DCHECK(ret == 0) << ret;
@@ -238,16 +337,6 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
 ncclResult_t pluginConnect(int dev, void* opaque_handle, void** sendComm,
                            ncclNetDeviceHandle_v8_t** /*sendDevComm*/) {
   struct ucclHandle* handle = (struct ucclHandle*)opaque_handle;
-
-#ifdef LAZY_CREATE_ENGINE
-  int gpu_idx = 0;
-  cudaGetDevice(&gpu_idx);
-  if (dev != gpu_idx) {
-    LOG_FIRST_N(INFO, 1) << "pluginListen detects different vdev " << dev
-                         << " vs. gpu_idx " << gpu_idx;
-    // dev = gpu_idx;
-  }
-#endif
   int local_gpuidx;
 #ifndef __HIP_PLATFORM_AMD__
   cudaGetDevice(&local_gpuidx);
@@ -285,8 +374,9 @@ ncclResult_t pluginConnect(int dev, void* opaque_handle, void** sendComm,
   }
 
   if (*sendComm) {
-    //  printf("Connected to %s/%d on dev:%d, %ld\n", remote_ip_str.c_str(),
-    //  handle->remote_dev, dev, scomm->base.conn_id.flow_id);
+    UCCL_LOG_PLUGIN << "Connected to " << remote_ip_str << "/"
+                    << handle->remote_dev << " on dev:" << dev << ", "
+                    << scomm->base.conn_id.flow_id;
   }
 
   return ncclSuccess;
@@ -335,9 +425,9 @@ ncclResult_t pluginAccept(void* listenComm, void** recvComm,
   }
 
   if (*recvComm) {
-    //  printf("Accepted from %s/%d on dev:%d, %ld\n",
-    //  rcomm->remote_ip_str.c_str(), rcomm->remote_dev, lcomm->dev,
-    //  rcomm->base.conn_id.flow_id);
+    UCCL_LOG_PLUGIN << "Accepted from " << rcomm->remote_ip_str << "/"
+                    << rcomm->remote_dev << " on dev:" << lcomm->dev << ", "
+                    << rcomm->base.conn_id.flow_id;
   }
 
   return ncclSuccess;
@@ -513,7 +603,7 @@ ncclResult_t pluginCloseListen(void* listenComm) {
   return ncclSuccess;
 }
 
-volatile ncclNet_v8_t ncclNetPlugin_v8 = {
+ncclNet_v8_t volatile ncclNetPlugin_v8 = {
     .name = PLUGIN_NAME,
     .init = pluginInit,
     .devices = pluginDevices,

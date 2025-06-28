@@ -30,7 +30,7 @@ struct swift_record_t {
   }
 };
 /// Implementation of the Swift congestion control protocol from SIGCOMM 20
-/// TODO: Implement pacing when cwnd < kChunkSize
+/// TODO: Implement pacing when cwnd < CHUNK_SIZE
 class SwiftCC {
  public:
   // Debugging

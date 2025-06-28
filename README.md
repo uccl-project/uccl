@@ -28,17 +28,17 @@ For example, existing network transports under NCCL (i.e., kernel TCP and RDMA) 
 Instead, UCCL employs packet spraying in software to leverage abundant network paths to avoid "single-path-of-congestion". 
 More benefits include: 1) packet spraying with 256 paths, 2) advanced congestion control such as latency-based and receiver-driven ones, 3) efficient loss recovery by selective repeat, and 4) widely usable in public clouds with legacy NICs and Ethernet. 
 
-On two AWS `g4dn.8xlarge` instances with 1x50G ENA NICs and 1xT4 GPUs under the same cluster placement group, UCCL outperforms NCCL by up to **3.7x** for AllReduce: 
+On six HGX servers (across two racks) with 8x400G CX-7 RoCE NICs and 8xH100 GPUs, UCCL outperforms NCCL by up to **2.5x** for AllReduce:
 
-<p align="center"> <img src="./doc/images/allreduce_2_g4dn.png" alt="" width="700"> </p>
+<p align="center"> <img src="./doc/images/allreduce_6_hgx.png" alt="" width="700"> </p>
 
 On four AWS `p4d.24xlarge` instances with 4x100G EFA NICs and 8xA100 GPUs, UCCL outperforms NCCL by up to **3.3x** for AlltoAll: 
 
 <p align="center"> <img src="./doc/images/alltoall_4_p4d.png" alt="" width="700"> </p>
 
-On six HGX servers (across two racks) with 8x400G CX-7 RoCE NICs and 8xH100 GPUs, UCCL outperforms NCCL by up to **2.5x** for AllReduce:
+On two AWS `g4dn.8xlarge` instances with 1x50G ENA NICs and 1xT4 GPUs under the same cluster placement group, UCCL outperforms NCCL by up to **3.7x** for AllReduce: 
 
-<p align="center"> <img src="./doc/images/allreduce_6_hgx.png" alt="" width="700"> </p>
+<p align="center"> <img src="./doc/images/allreduce_2_g4dn.png" alt="" width="700"> </p>
 
 Feel free to check out our full [technical report](https://arxiv.org/pdf/2504.17307) and [slides](https://drive.google.com/file/d/1YsgMNPeCV797sYPiCWAT0AMfc0WgIhP0/view?usp=sharing).
 
@@ -61,13 +61,13 @@ More UCCL features are under development in this repo, currently including:
 UCCL provides a drop-in replacement for any NCCL/RCCL application without code modification or compilation. 
 
 To get started, let's first clone the UCCL repo and init submodules. 
-```shell
+```bash
 git clone https://github.com/uccl-project/uccl.git --recursive
 export UCCL_HOME=$(pwd)/uccl
 ```
 
 Then install some common dependencies: 
-```shell
+```bash
 sudo apt update
 sudo apt install linux-tools-$(uname -r) clang llvm cmake m4 build-essential \
                  net-tools libgoogle-glog-dev libgtest-dev libgtest-dev \
@@ -88,7 +88,7 @@ conda install paramiko -y
 Next, you can dive into individual folders for various supports: 
 * [`afxdp/`](./afxdp/README.md): Non-RDMA NICs (currently support AWS ENA NICs and IBM VirtIO NICs)
 * [`efa/`](./efa/README.md): AWS EFA NIC (currently support p4d.24xlarge)
-* [`rdma/`](./rdma/README.md): Nvidia/AMD GPUs + IB/RoCE RDMA NICs (currently support Nvidia NICs)
+* [`rdma/`](./rdma/README.md): Nvidia/AMD GPUs + IB/RoCE RDMA NICs (currently support Nvidia and Broadcom NICs)
 
 ## Documentation
 

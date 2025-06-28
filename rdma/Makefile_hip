@@ -3,8 +3,8 @@ ABS_ROOT_PATH := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 RCCL_HOME:=../thirdparty/rccl
 HIP_HOME:=/opt/rocm-6.3.1
 
-INC = -I./ -I$(HIP_HOME)/include -I/work1/yzhou/yangzhou/anaconda3/include -L/work1/yzhou/yangzhou/anaconda3/lib
-LIBS = -lglog -lgflags -lgtest -lz -lelf -libverbs  -L ${HIP_HOME}/lib -lamdhip64
+INC = -I./ -I../include -I$(HIP_HOME)/include -I${CONDA_LIB_HOME}/../include -L${CONDA_LIB_HOME}
+LIBS = -lglog -lgflags -lgtest -lz -lelf -libverbs -L ${HIP_HOME}/lib -lamdhip64
 LIBS_SHARED = -lglog -lgflags -lgtest -lz -lelf -libverbs
 override CXXFLAGS += -O3 -g -std=c++17 -Wno-pointer-arith -Wno-interference-size -fPIC -D__HIP_PLATFORM_AMD__
 DEPS = *.h

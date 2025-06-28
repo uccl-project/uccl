@@ -115,7 +115,7 @@ void create_mr_and_buf(EFAContext& efa) {
   int alignment = 4096;
   int ret = posix_memalign(&(efa.recv_buffer_pool), (size_t)alignment,
                            MAX_RECV_WR * BUFFER_SIZE);
-  check_fi_call(ret, "ofi_memalign failed");
+  check_fi_call(ret, "posix_memalign failed");
 
   ret = fi_mr_reg(efa.domain, efa.recv_buffer_pool, MAX_RECV_WR * BUFFER_SIZE,
                   FI_SEND | FI_RECV, 0, MR_KEY, 0, &(efa.mr), NULL);

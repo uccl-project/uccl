@@ -26,8 +26,8 @@ class TimerManager {
 
   explicit TimerManager(double timeout_us = 1000)
       : timeout_(us_to_cycles(timeout_us, freq_ghz)) {
-    heap_.reserve(kPortEntropy * 64);
-    flow_map_.reserve(kPortEntropy * 64);
+    heap_.reserve(ucclParamPORT_ENTROPY() * 64);
+    flow_map_.reserve(ucclParamPORT_ENTROPY() * 64);
   }
 
   uint32_t size() const { return heap_.size(); }
