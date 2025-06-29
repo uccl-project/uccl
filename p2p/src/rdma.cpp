@@ -678,14 +678,18 @@ void post_rdma_async_batched(void* buf, size_t bytes, size_t num_wrs,
     .addr = (uintptr_t)buf /*+ start_offset * bytes*/,
     .length = (uint32_t)(bytes * num_wrs), .lkey = mr->lkey
   };
+  uint64_t largest_wr = wrs_to_post.back();
   struct ibv_send_wr wr {};
   wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
   wr.sg_list = &sge;
   wr.num_sge = 1;
   wr.wr.rdma.remote_addr = remote_addr /*+ start_offset * bytes*/;
   wr.wr.rdma.rkey = remote_rkey;
-  wr.wr_id = wrs_to_post[0];
-  if (wrs_to_post[0] % kSignalledEvery == 0)
+  wr.wr_id = largest_wr;
+#ifdef ENABLE_WRITE_WITH_IMMEDIATE
+  wr.imm_data = largest_wr;
+#endif
+  if (largest_wr % kSignalledEvery == 0)
     wr.send_flags = IBV_SEND_SIGNALED;
   else
     wr.send_flags = 0;
@@ -700,7 +704,12 @@ void post_rdma_async_batched(void* buf, size_t bytes, size_t num_wrs,
     exit(1);
   }
   g_posted.fetch_add(num_wrs, std::memory_order_relaxed);
-  wr_id_to_wr_ids[wrs_to_post[0]] = wrs_to_post;
+  if (wr_id_to_wr_ids.find(largest_wr) != wr_id_to_wr_ids.end()) {
+    fprintf(stderr, "Error: largest_wr %lu already exists in wr_id_to_wr_ids\n",
+            largest_wr);
+    exit(1);
+  }
+  wr_id_to_wr_ids[largest_wr] = wrs_to_post;
 }
 
 void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
@@ -867,6 +876,9 @@ void local_poll_completions(ibv_cq* cq,
         for (auto const& wr_id : wr_id_to_wr_ids[wc[i].wr_id]) {
           finished_wrs.insert(wr_id);
         }
+        // printf("[WR] %d completed on peer, wr_id=%llu, num_wrs=%zu\n",
+        //        thread_idx, (unsigned long long)wc[i].wr_id,
+        //        wr_id_to_wr_ids[wc[i].wr_id].size());
         wr_id_to_wr_ids.erase(wc[i].wr_id);
 #else
         finished_wrs.insert(wc[i].wr_id);
@@ -1081,12 +1093,13 @@ void remote_cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq,
         fprintf(stderr, "per_GPU_device_buf[%d] is null\n", destination_gpu);
         std::abort();
       }
-
+#ifndef RDMA_BATCH_TOKENS
       if (wc[i].byte_len != kObjectSize) {
         fprintf(stderr, "Unexpected byte length: %u, expected: %u\n",
                 wc[i].byte_len, kObjectSize);
         std::abort();
       }
+#endif
       if (wc[i].imm_data > kIterations) {
         fprintf(stderr, "Unexpected imm_data: %u, expected <= %d\n",
                 wc[i].imm_data, kIterations);

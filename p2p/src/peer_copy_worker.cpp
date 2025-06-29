@@ -35,6 +35,10 @@ void maybe_enable_peer_access(int src_dev, int dst_dev) {
 }
 
 void sync_and_post(CopyRing& g_ring, cudaStream_t& stream, int idx) {
+  // printf("async_memcpy_count: %lu, prev_completed_async_memcpy_count: %lu,
+  // highest_issued_wr_id: %lu\n",
+  //        async_memcpy_count, prev_completed_async_memcpy_count,
+  //        highest_issued_wr_id);
   if (async_memcpy_count > prev_completed_async_memcpy_count) {
     cudaError_t err = cudaStreamSynchronize(stream);
     if (err != cudaSuccess) {

@@ -42,11 +42,11 @@
 #define NUMA_AWARE_SCHEDULING
 #define ENABLE_PROXY_CUDA_MEMCPY
 #define SYNCHRONOUS_COMPLETION
-// #define RDMA_BATCH_TOKENS
+#define RDMA_BATCH_TOKENS
 #define kQueueSize 1024
 #define kQueueMask (kQueueSize - 1)
-#define kMaxInflight 48
-#define kBatchSize 16
+#define kMaxInflight 64
+#define kBatchSize 32
 #define kIterations 1000000
 #define kNumThBlocks 6
 #define kNumThPerBlock 1
