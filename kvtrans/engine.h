@@ -12,6 +12,9 @@
 #include <tuple>
 #include <unordered_map>
 #include <vector>
+#ifdef USE_REDIS
+#include <sw/redis++/redis++.h>
+#endif
 
 namespace py = pybind11;
 
@@ -25,6 +28,11 @@ struct Conn {
   uccl::ConnID uccl_conn_id_;
   std::string ip_addr_;
   int remote_gpu_idx_;
+};
+
+struct PeerInfo {
+  std::string ip_addr;
+  int gpu_idx;
 };
 
 class Endpoint {
@@ -100,7 +108,61 @@ class Endpoint {
   bool recv_kv(uint64_t conn_id, uint64_t mr_id, void* data, size_t max_size,
                size_t& recv_size);
 
+  /**
+   * Join a logical rendezvous group and connect to every other member.
+   *
+   * This helper publishes (ip, gpu_idx) to an external discovery service (e.g.,
+   * Redis, a Ray named actor, etc.) under the given @group_name.  All callers
+   * block until @world_size peers have registered.  Connections are then
+   * established in rank‑ascending order (lower rank initiates), guaranteeing a
+   * fully‑connected clique without duplicate dials.
+   *
+   * @param discovery_uri  URI for discovery backend. Examples:
+   *                       "redis://127.0.0.1:6379" or "ray://actor:Store".
+   * @param group_name     Logical namespace so multiple groups can coexist.
+   * @param world_size     Total number of expected ranks in the group.
+   * @param my_rank        Caller’s rank (0‑based). Must be unique.
+   * @param listen_port    TCP port already bound by this Endpoint’s listener.
+   *
+   * @returns true on success, false otherwise.
+   */
+  bool join_group(std::string const& discovery_uri,
+                  std::string const& group_name, int world_size, int my_rank,
+                  uint16_t listen_port);
+
+  /**
+   * Convenience constructor: create Endpoint and immediately join a group.
+   * You may prefer this factory in Ray where each actor knows its rank and the
+   * rendezvous, but not its peers’ IP addresses.
+   */
+  static std::unique_ptr<Endpoint> CreateAndJoin(
+      std::string const& discovery_uri, std::string const& group_name,
+      int world_size, int my_rank, uint32_t local_gpu_idx, uint32_t num_cpus);
+
+  /** Returns conn_id for @rank, or UINT64_MAX if unknown. */
+  uint64_t conn_id_of_rank(int rank) const;
+
+  /** Rank‑indexed view of established connections (read‑only). */
+  std::unordered_map<int, uint64_t> const& rank2conn() const {
+    return rank2conn_;
+  }
+
  private:
+#ifdef USE_REDIS
+  bool publish_redis(std::string const& redis_uri, std::string const& key,
+                     PeerInfo const& info);
+  bool fetch_all_redis(std::string const& redis_uri,
+                       std::string const& key_prefix, int world_size,
+                       std::vector<PeerInfo>& out);
+#endif
+
+  bool publish_peer(std::string const& discovery_uri,
+                    std::string const& group_name, int rank,
+                    PeerInfo const& info);
+  bool collect_peers(std::string const& discovery_uri,
+                     std::string const& group_name, int world_size,
+                     std::vector<PeerInfo>& out);
+
   int local_gpu_idx_;
   uint32_t num_cpus_;
 
@@ -110,6 +172,10 @@ class Endpoint {
   std::atomic<uint64_t> next_mr_id_ = 0;
 
   // TODO(yang): add mutex to protect the maps.
+  mutable std::mutex conn_mu_;
+
   std::unordered_map<uint64_t, Conn*> conn_id_to_conn_;
   std::unordered_map<uint64_t, MR*> mr_id_to_mr_;
+
+  std::unordered_map<int, uint64_t> rank2conn_;
 };
