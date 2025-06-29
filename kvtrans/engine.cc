@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "util/util.h"
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <chrono>
@@ -9,7 +10,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-const uint8_t gpu_to_dev[8] = {4, 5, 6, 7, 0, 1, 2, 3};
+int const kMaxNumGPUs = 8;
+// Assume the local and remote GPUs have the same GPU-NIC mapping.
+uint8_t gpu_to_dev[kMaxNumGPUs] = {0};
 
 Endpoint::Endpoint(const uint32_t local_gpu_idx, const uint32_t num_cpus)
     : local_gpu_idx_(local_gpu_idx), num_cpus_(num_cpus) {
@@ -22,6 +25,28 @@ Endpoint::Endpoint(const uint32_t local_gpu_idx, const uint32_t num_cpus)
 
   // Initialize the RDMA endpoint with lazy creation.
   ep_ = new uccl::RDMAEndpoint(ucclParamNUM_ENGINES());
+
+  auto gpu_cards = uccl::get_gpu_cards();
+  DCHECK(local_gpu_idx_ < gpu_cards.size() && gpu_cards.size() <= kMaxNumGPUs)
+      << "Local GPU index out of range";
+
+  auto ib_nics = uccl::get_rdma_nics();
+  // Find the RDMA NIC that is closest to each of the GPUs.
+  for (int i = 0; i < kMaxNumGPUs; i++) {
+    auto gpu_device_path = gpu_cards[i];
+    auto ib_nic_it = std::min_element(
+        ib_nics.begin(), ib_nics.end(), [&](auto const& a, auto const& b) {
+          return uccl::cal_pcie_distance(gpu_device_path, a.second) <
+                 uccl::cal_pcie_distance(gpu_device_path, b.second);
+        });
+    gpu_to_dev[i] = ib_nic_it - ib_nics.begin();
+  }
+  std::cout << "Detected best GPU-NIC mapping: " << std::endl;
+  for (int i = 0; i < kMaxNumGPUs; i++) {
+    std::cout << "\tGPU " << i << " -> NIC " << gpu_to_dev[i] << " ("
+              << ib_nics[gpu_to_dev[i]].first << ")" << std::endl;
+  }
+  std::cout << std::endl;
 
   // Initialize the engine based on the GPU index.
 #ifdef LAZY_CREATE_ENGINE
