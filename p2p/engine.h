@@ -12,6 +12,7 @@
 #include <tuple>
 #include <unordered_map>
 #include <vector>
+#define USE_REDIS
 #ifdef USE_REDIS
 #include <sw/redis++/redis++.h>
 #endif

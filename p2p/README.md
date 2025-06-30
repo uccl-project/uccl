@@ -30,6 +30,39 @@ p2p/
 - RDMA drivers and libraries (`libibverbs-dev`)
 - RDMA-capable network hardware (InfiniBand, RoCE)
 - CUDA (for GPU tensor operations)
+- Install Redis 
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+    build-essential \
+    cmake \
+    libhiredis-dev \
+    libuv1-dev \
+    pkg-config
+```
+and
+```bash
+git clone https://github.com/redis/hiredis.git
+cd hiredis
+mkdir build && cd build
+cmake -DCMAKE_BUILD_TYPE=Release ..
+make -j
+sudo make install
+cd ../..
+
+git clone https://github.com/sewenew/redis-plus-plus.git
+cd redis-plus-plus
+mkdir build && cd build
+cmake                                  \
+  -DCMAKE_BUILD_TYPE=Release           \
+  -DCMAKE_INSTALL_PREFIX=/usr/local    \
+  -DREDIS_PLUS_PLUS_CXX_STANDARD=17    \
+  -DREDIS_PLUS_PLUS_BUILD_ASYNC=libuv  \
+  ..
+make -j
+sudo make install
+```
 
 ## Installation
 

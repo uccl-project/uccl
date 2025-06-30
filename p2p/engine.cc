@@ -171,3 +171,160 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
   recv_size = ureq.recv.data_len[0];
   return true;
 }
+
+bool Endpoint::publish_peer(std::string const& discovery_uri,
+                            std::string const& group_name, int rank,
+                            PeerInfo const& info) {
+  if (discovery_uri.rfind("redis://", 0) == 0) {
+#ifdef USE_REDIS
+    std::string key = group_name + ":" + std::to_string(rank);
+    return publish_redis(discovery_uri, key, info);
+#else
+    std::cerr << "[publish_peer] Redis support not compiled in\n";
+    return false;
+#endif
+  } else {
+    std::cerr << "[publish_peer] Unsupported discovery backend: "
+              << discovery_uri << "\n";
+    return false;
+  }
+}
+
+bool Endpoint::collect_peers(std::string const& discovery_uri,
+                             std::string const& group_name, int world_size,
+                             std::vector<PeerInfo>& out) {
+  if (discovery_uri.rfind("redis://", 0) == 0) {
+#ifdef USE_REDIS
+    std::string key_prefix = group_name + ":";
+    return fetch_all_redis(discovery_uri, key_prefix, world_size, out);
+#else
+    std::cerr << "[collect_peers] Redis support not compiled in\n";
+    return false;
+#endif
+  } else {
+    std::cerr << "[collect_peers] Unsupported discovery backend: "
+              << discovery_uri << "\n";
+    return false;
+  }
+}
+
+uint64_t Endpoint::conn_id_of_rank(int rank) const {
+  auto it = rank2conn_.find(rank);
+  return it != rank2conn_.end() ? it->second : UINT64_MAX;
+}
+
+bool Endpoint::join_group(std::string const& discovery_uri,
+                          std::string const& group_name, int world_size,
+                          int my_rank, uint16_t listen_port) {
+  std::string local_ip;
+  {
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    sockaddr_in serv{};
+    serv.sin_family = AF_INET;
+    serv.sin_addr.s_addr = inet_addr("8.8.8.8");
+    serv.sin_port = htons(53);
+    ::connect(sock, (sockaddr*)&serv, sizeof(serv));
+    sockaddr_in name{};
+    socklen_t namelen = sizeof(name);
+    getsockname(sock, (sockaddr*)&name, &namelen);
+    char buf[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &name.sin_addr, buf, sizeof(buf));
+    local_ip = buf;
+    close(sock);
+  }
+
+  PeerInfo me{local_ip, static_cast<int>(local_gpu_idx_)};
+  if (!publish_peer(discovery_uri, group_name, my_rank, me)) {
+    std::cerr << "[join_group] failed to publish peer info\n";
+    return false;
+  }
+
+  std::vector<PeerInfo> peers;
+  if (!collect_peers(discovery_uri, group_name, world_size, peers)) {
+    std::cerr << "[join_group] failed to collect peers\n";
+    return false;
+  }
+
+  /* Low errank connect, higher rank accept. */
+  for (int r = 0; r < world_size; ++r) {
+    if (r == my_rank) continue;
+    uint64_t cid;
+    if (my_rank < r) {
+      if (!connect(peers[r].ip_addr, peers[r].gpu_idx, cid)) {
+        std::cerr << "[join_group] connect to rank " << r << " failed\n";
+        return false;
+      }
+    } else {
+      std::string peer_ip;
+      int peer_gpu;
+      if (!accept(peer_ip, peer_gpu, cid)) {
+        std::cerr << "[join_group] accept from rank " << r << " failed\n";
+        return false;
+      }
+    }
+    rank2conn_[r] = cid;
+  }
+  return true;
+}
+
+std::unique_ptr<Endpoint> Endpoint::CreateAndJoin(
+    std::string const& discovery_uri, std::string const& group_name,
+    int world_size, int my_rank, uint32_t local_gpu_idx, uint32_t num_cpus) {
+  auto ep = std::make_unique<Endpoint>(local_gpu_idx, num_cpus);
+  uint16_t dummy_listen_port = 0;  // not used in this stub
+  if (!ep->join_group(discovery_uri, group_name, world_size, my_rank,
+                      dummy_listen_port)) {
+    throw std::runtime_error("Endpoint::CreateAndJoin() failed");
+  }
+  return ep;
+}
+
+bool Endpoint::publish_redis(std::string const& redis_uri,
+                             std::string const& key, PeerInfo const& info) {
+  try {
+    auto redis = sw::redis::Redis(redis_uri);
+    std::ostringstream oss;
+    oss << info.ip_addr << "," << info.gpu_idx;
+    redis.set(key, oss.str());
+    return true;
+  } catch (sw::redis::Error const& e) {
+    std::cerr << "[publish_redis] Redis error: " << e.what() << "\n";
+    return false;
+  }
+}
+
+bool Endpoint::fetch_all_redis(std::string const& redis_uri,
+                               std::string const& key_prefix, int world_size,
+                               std::vector<PeerInfo>& out) {
+  try {
+    auto redis = sw::redis::Redis(redis_uri);
+    out.clear();
+    out.reserve(world_size);
+
+    for (int rank = 0; rank < world_size; ++rank) {
+      std::string key = key_prefix + std::to_string(rank);
+      std::optional<std::string> val;
+
+      while (true) {
+        val = redis.get(key);
+        if (val) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      }
+
+      auto const& s = *val;
+      auto comma = s.find(',');
+      if (comma == std::string::npos) {
+        std::cerr << "[fetch_all_redis] bad format for key " << key << "\n";
+        return false;
+      }
+      PeerInfo p;
+      p.ip_addr = s.substr(0, comma);
+      p.gpu_idx = std::stoi(s.substr(comma + 1));
+      out.push_back(p);
+    }
+    return true;
+  } catch (sw::redis::Error const& e) {
+    std::cerr << "[fetch_all_redis] Redis error: " << e.what() << "\n";
+    return false;
+  }
+}
