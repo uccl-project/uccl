@@ -1,4 +1,4 @@
-# Makefile for KVTrans Engine pybind11 project
+# Makefile for UCCL P2P Engine pybind11 project
 
 # Compiler and flags
 CUDA_HOME ?= /usr/local/cuda
@@ -18,7 +18,7 @@ PYBIND11_INCLUDES := $(shell $(PYTHON) -m pybind11 --includes)
 PYTHON_LDFLAGS := $(shell $(PYTHON_CONFIG) --ldflags)
 
 # Target and source files
-TARGET   := kvtrans_engine$(PYEXT)
+TARGET   := uccl_p2p$(PYEXT)
 SOURCES := engine.cc pybind_engine.cc
 OBJECTS := $(SOURCES:.cc=.o)
 
