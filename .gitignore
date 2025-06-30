@@ -82,3 +82,6 @@ compile_commands.json
 
 **/.DS_Store
 scripts/node_ips/default.txt
+
+uccl.egg-info/
+dist/
