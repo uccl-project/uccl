@@ -129,10 +129,10 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
   DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
   uccl::ucclRequest ureq;
 
-  printf(
-      "[Endpoint::send] conn_id: %lu, mr_id: %lu, data: %p, "
-      "size: %zu\n",
-      conn_id, mr_id, data, size);
+  // printf(
+  //     "[Endpoint::send] conn_id: %lu, mr_id: %lu, data: %p, "
+  //     "size: %zu\n",
+  //     conn_id, mr_id, data, size);
 
   auto conn = conn_id_to_conn_[conn_id];
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
@@ -161,16 +161,13 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
   int max_size_int = static_cast<int>(max_size);
 
-  printf(
-      "[Endpoint::recv] conn_id: %lu, mr_id: %lu, data: %p, "
-      "max_size: %zu\n",
-      conn_id, mr_id, data, max_size);
+  // printf(
+  //     "[Endpoint::recv] conn_id: %lu, mr_id: %lu, data: %p, "
+  //     "max_size: %zu\n",
+  //     conn_id, mr_id, data, max_size);
 
   int rc;
   do {
-    printf(
-        "[Endpoint::recv] Waiting to receive up to %d bytes on conn_id %lu\n",
-        max_size_int, conn_id);
     rc = ep_->uccl_recv_async(
         static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
         &data, &max_size_int, 1, &ureq);
@@ -228,7 +225,7 @@ uint64_t Endpoint::conn_id_of_rank(int rank) const {
 
 bool Endpoint::join_group(std::string const& discovery_uri,
                           std::string const& group_name, int world_size,
-                          int my_rank, uint16_t listen_port) {
+                          int my_rank, int remote_gpu_idx) {
   std::string local_ip;
   {
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -267,18 +264,16 @@ bool Endpoint::join_group(std::string const& discovery_uri,
     if (r == my_rank) continue;
     uint64_t cid;
     if (my_rank < r) {
-      if (!connect(peers[r].ip_addr, peers[r].gpu_idx, cid)) {
-        std::cerr << "[join_group] connect to rank " << r << " failed\n";
+      if (!accept(peers[r].ip_addr, peers[r].gpu_idx, cid)) {
+        std::cerr << "[join_group] accept to rank " << r << " failed\n";
         return false;
       } else {
-        std::cout << "[join_group] connected to rank " << r << " with conn_id "
+        std::cout << "[join_group] accepted to rank " << r << " with conn_id "
                   << cid << "\n";
       }
     } else {
-      std::string peer_ip;
-      int peer_gpu;
-      if (!accept(peer_ip, peer_gpu, cid)) {
-        std::cerr << "[join_group] accept from rank " << r << " failed\n";
+      if (!connect(peers[r].ip_addr, remote_gpu_idx, cid)) {
+        std::cerr << "[join_group] connect from rank " << r << " failed\n";
         return false;
       }
     }
@@ -289,11 +284,11 @@ bool Endpoint::join_group(std::string const& discovery_uri,
 
 std::unique_ptr<Endpoint> Endpoint::CreateAndJoin(
     std::string const& discovery_uri, std::string const& group_name,
-    int world_size, int my_rank, uint32_t local_gpu_idx, uint32_t num_cpus) {
+    int world_size, int my_rank, uint32_t local_gpu_idx, uint32_t num_cpus,
+    int remote_gpu_idx) {
   auto ep = std::make_unique<Endpoint>(local_gpu_idx, num_cpus);
-  uint16_t dummy_listen_port = 0;  // not used in this stub
   if (!ep->join_group(discovery_uri, group_name, world_size, my_rank,
-                      dummy_listen_port)) {
+                      remote_gpu_idx)) {
     throw std::runtime_error("Endpoint::CreateAndJoin() failed");
   }
   return ep;
@@ -337,6 +332,8 @@ bool Endpoint::fetch_all_redis(std::string const& redis_uri,
         std::cerr << "[fetch_all_redis] bad format for key " << key << "\n";
         return false;
       }
+      std::cout << "[fetch_all_redis] Peer " << rank << ": " << s << std::endl;
+
       PeerInfo p;
       p.ip_addr = s.substr(0, comma);
       p.gpu_idx = std::stoi(s.substr(comma + 1));

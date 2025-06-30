@@ -68,7 +68,7 @@ PYBIND11_MODULE(uccl_p2p, m) {
            "Join a rendezvous group: publish discovery info, wait for peers, "
            "and fully-connect",
            py::arg("discovery_uri"), py::arg("group_name"),
-           py::arg("world_size"), py::arg("my_rank"), py::arg("listen_port"))
+           py::arg("world_size"), py::arg("my_rank"), py::arg("remote_gpu_idx"))
       .def(
           "conn_id_of_rank", &Endpoint::conn_id_of_rank,
           "Get the connection ID for a given peer rank (or UINT64_MAX if none)",
@@ -77,6 +77,7 @@ PYBIND11_MODULE(uccl_p2p, m) {
                   "Create an Endpoint and immediately join a rendezvous group",
                   py::arg("discovery_uri"), py::arg("group_name"),
                   py::arg("world_size"), py::arg("my_rank"),
-                  py::arg("local_gpu_idx"), py::arg("num_cpus"))
+                  py::arg("local_gpu_idx"), py::arg("num_cpus"),
+                  py::arg("remote_gpu_idx"))
       .def("__repr__", [](Endpoint const& e) { return "<UCCL P2P Endpoint>"; });
 }

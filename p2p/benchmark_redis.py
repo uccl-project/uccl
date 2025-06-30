@@ -160,7 +160,8 @@ def main():
             args.world_size,
             args.my_rank,
             args.local_gpu_idx,
-            args.num_cpus
+            args.num_cpus,
+            args.remote_gpu_idx
         )
         # In a 2-node world, peer rank = the one ≠ my_rank
         peers = [r for r in range(args.world_size) if r != args.my_rank]

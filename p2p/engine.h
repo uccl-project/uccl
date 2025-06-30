@@ -124,13 +124,12 @@ class Endpoint {
    * @param group_name     Logical namespace so multiple groups can coexist.
    * @param world_size     Total number of expected ranks in the group.
    * @param my_rank        Caller’s rank (0‑based). Must be unique.
-   * @param listen_port    TCP port already bound by this Endpoint’s listener.
    *
    * @returns true on success, false otherwise.
    */
   bool join_group(std::string const& discovery_uri,
                   std::string const& group_name, int world_size, int my_rank,
-                  uint16_t listen_port);
+                  int remote_gpu_idx);
 
   /**
    * Convenience constructor: create Endpoint and immediately join a group.
@@ -139,7 +138,8 @@ class Endpoint {
    */
   static std::unique_ptr<Endpoint> CreateAndJoin(
       std::string const& discovery_uri, std::string const& group_name,
-      int world_size, int my_rank, uint32_t local_gpu_idx, uint32_t num_cpus);
+      int world_size, int my_rank, uint32_t local_gpu_idx, uint32_t num_cpus,
+      int remote_gpu_idx);
 
   /** Returns conn_id for @rank, or UINT64_MAX if unknown. */
   uint64_t conn_id_of_rank(int rank) const;
@@ -149,6 +149,10 @@ class Endpoint {
   std::unordered_map<int, uint64_t> const& rank2conn() const {
     return rank2conn_;
   }
+
+  int create_listen_socket(uint16_t port);
+
+  int listen_fd_ = -1;
 
 #ifdef USE_REDIS
   bool publish_redis(std::string const& redis_uri, std::string const& key,
