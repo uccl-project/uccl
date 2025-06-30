@@ -17,6 +17,15 @@ PYEXT           := $(shell $(PYTHON_CONFIG) --extension-suffix)
 PYBIND11_INCLUDES := $(shell $(PYTHON) -m pybind11 --includes)
 PYTHON_LDFLAGS := $(shell $(PYTHON_CONFIG) --ldflags)
 
+# Redis
+REDIS_PKGCONFIG := pkg-config
+REDIS_CFLAGS    := $(shell $(REDIS_PKGCONFIG) --cflags hiredis redis++)
+REDIS_LIBS      := $(shell $(REDIS_PKGCONFIG) --libs hiredis redis++)
+CXXFLAGS       += $(REDIS_CFLAGS)
+LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda $(REDIS_LIBS) \
+                  -Wl,-rpath,$(CUDA_LIB) -lglog -lgflags -lgtest \
+                  -lz -lelf -libverbs -lpthread
+
 # Target and source files
 TARGET   := uccl_p2p$(PYEXT)
 SOURCES := engine.cc pybind_engine.cc
@@ -29,7 +38,7 @@ all: $(TARGET)
 $(TARGET): $(OBJECTS) ../rdma/librdma.a
 	$(CXX) $(OBJECTS) ../rdma/librdma.a \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
-	      -o $@ $(PYTHON_LDFLAGS) $(CXXFLAGS) \
+	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB)
 
 
