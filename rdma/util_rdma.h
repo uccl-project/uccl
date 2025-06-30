@@ -80,29 +80,6 @@ static inline int util_rdma_get_link_speed_from_ibv_speed(int active_speed,
   return (ncclIbSpeed(active_speed) * ncclIbWidth(active_width)) * 1e6 / 8;
 }
 
-/**
- * @brief Buffer pool for work request extension.
- */
-class WrExBuffPool : public BuffPool {
-  static constexpr size_t kWrSize = sizeof(struct wr_ex);
-  static constexpr uint32_t kNumWr = 4096;
-  static_assert((kNumWr & (kNumWr - 1)) == 0, "kNumWr must be power of 2");
-
- public:
-  WrExBuffPool()
-      : BuffPool(kNumWr, kWrSize, nullptr, [](uint64_t buff) {
-          struct wr_ex* wr_ex = reinterpret_cast<struct wr_ex*>(buff);
-          auto wr = &wr_ex->wr;
-          wr->sg_list = &wr_ex->sge;
-          wr->num_sge = 1;
-          wr->next = nullptr;
-          wr->opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-          wr->wr_id = 0;
-        }) {}
-
-  ~WrExBuffPool() = default;
-};
-
 struct CQEDesc {
   uint64_t data;
   uint64_t ts;
@@ -117,70 +94,6 @@ class CQEDescPool : public BuffPool {
   CQEDescPool(struct ibv_mr* mr) : BuffPool(kNumDesc, kDescSize, mr) {}
 
   ~CQEDescPool() = default;
-};
-
-class IMMData {
- public:
-  // HINT: Indicates whether the last chunk of a message.
-  // CSN:  Chunk Sequence Number.
-  // RID:  Request ID.
-  // FID:  Flow Index.
-  // High-----------------32bit------------------Low
-  //  | HINT |  RESERVED  |  CSN  |  RID  |  FID  |
-  //    1bit      8bit       8bit    7bit    8bit
-  constexpr static int kFID = 0;
-  constexpr static int kRID = 8;
-  constexpr static int kCSN = 15;
-  constexpr static int kRESERVED = kCSN + UINT_CSN_BIT;
-  constexpr static int kHINT = kRESERVED + 8;
-
-  IMMData(uint32_t imm_data) : imm_data_(imm_data) {}
-
-  inline uint32_t GetHINT(void) { return (imm_data_ >> kHINT) & 0x1; }
-
-  inline uint32_t GetRESERVED(void) { return (imm_data_ >> kRESERVED) & 0xFF; }
-
-  inline uint32_t GetCSN(void) { return (imm_data_ >> kCSN) & UINT_CSN_MASK; }
-
-  inline uint32_t GetRID(void) { return (imm_data_ >> kRID) & 0x7F; }
-
-  inline uint32_t GetFID(void) { return (imm_data_ >> kFID) & 0xFF; }
-
-  inline void SetHINT(uint32_t hint) { imm_data_ |= (hint & 0x1) << kHINT; }
-
-  inline void SetRESERVED(uint32_t reserved) {
-    imm_data_ |= (reserved & 0xFF) << kRESERVED;
-  }
-
-  inline void SetCSN(uint32_t csn) {
-    imm_data_ |= (csn & UINT_CSN_MASK) << kCSN;
-  }
-
-  inline void SetRID(uint32_t rid) { imm_data_ |= (rid & 0x7F) << kRID; }
-
-  inline void SetFID(uint32_t fid) { imm_data_ |= (fid & 0xFF) << kFID; }
-
-  inline uint32_t GetImmData(void) { return imm_data_; }
-
- protected:
-  uint32_t imm_data_;
-};
-
-class IMMDataEQDS : public IMMData {
- public:
-  // PULL_TARGET: Target for pulling data.
-  // High-----------------32bit------------------Low
-  //  | HINT | PULL_TARGET |  CSN  |  RID  |  FID  |
-  //    1bit      8bit        8bit    7bit    8bit
-  constexpr static int kPULL_TARGET = kRESERVED;
-
-  IMMDataEQDS(uint32_t imm_data) : IMMData(imm_data) {}
-
-  inline uint32_t GetTarget(void) { return (imm_data_ >> kPULL_TARGET) & 0xFF; }
-
-  inline void SetTarget(uint32_t pull_target) {
-    imm_data_ |= (pull_target & 0xFF) << kPULL_TARGET;
-  }
 };
 
 struct __attribute__((packed)) retr_chunk_hdr {
