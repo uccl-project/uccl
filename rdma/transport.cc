@@ -1681,7 +1681,7 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
   dp_qps_.resize(port_entropy_);
   chunk_size_ = (ucclParamCHUNK_SIZE_KB() << 10);
 
-  link_speed = util_rdma_get_link_speed_from_ibv_speed(
+  link_speed_ = util_rdma_get_link_speed_from_ibv_speed(
       factory_dev->port_attr.active_speed, factory_dev->port_attr.active_width);
   remote_ctx_.remote_gid = meta.install_ctx.remote_gid;
   remote_ctx_.remote_port_attr = meta.install_ctx.remote_port_attr;

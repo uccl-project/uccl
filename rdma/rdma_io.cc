@@ -16,7 +16,6 @@
 
 namespace uccl {
 
-// RDMAFactory rdma_ctl;
 std::shared_ptr<RDMAFactory> rdma_ctl;
 
 int RDMAFactory::init_devs() {
@@ -303,7 +302,7 @@ uint64_t TXTracking::ack_transmitted_chunks(void* subflow_context,
   auto fabric_delay_tsc = (t6 - t1) - endpoint_delay_tsc;
   // Make RTT independent of segment size.
   auto serial_delay_tsc =
-      us_to_cycles(seg_size * 1e6 / rdma_ctx->link_speed, freq_ghz);
+      us_to_cycles(seg_size * 1e6 / rdma_ctx->link_speed_, freq_ghz);
   if (fabric_delay_tsc > serial_delay_tsc ||
       to_usec(fabric_delay_tsc, freq_ghz) < kMAXRTTUS)
     fabric_delay_tsc -= serial_delay_tsc;

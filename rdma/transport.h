@@ -192,6 +192,7 @@ class IMMDataEQDS : public IMMData {
  */
 class RDMAContext {
  private:
+  // Pointer to the IO context of each engine.
   SharedIOContext* io_ctx_;
 
   // Offset of the engine this context belongs to. 0, 1, ... kNumEngine - 1.
@@ -223,8 +224,10 @@ class RDMAContext {
   // QPs for data transfer based on UC or RC.
   std::vector<QPWrapper> dp_qps_;
 
+  // # of QPs used per engine for data transfer.
   uint32_t port_entropy_;
 
+  // Chunk size for data transfer.
   uint32_t chunk_size_;
 
   // Data path QPN to index mapping.
@@ -255,7 +258,7 @@ class RDMAContext {
   int gid_idx_;
 
   // Link Speed of the device
-  double link_speed = 0;
+  double link_speed_ = 0;
 
   // (Engine) Buffer pool for credit chunks.
   std::optional<eqds::CreditChunkBuffPool> engine_credit_chunk_pool_;

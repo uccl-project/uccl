@@ -398,15 +398,17 @@ class SubUcclFlow {
   // Next path used in the ACK.
   uint16_t next_ack_path_;
 
+  // Unacknowledged bytes.
   uint32_t unacked_bytes_ = 0;
-
-  uint32_t backlog_bytes_ = 0;
 
   // # of chunks in the timing wheel.
   uint32_t in_wheel_cnt_;
 
   // Protocol Control Block.
   PCB pcb;
+
+  // Used by EQDS.
+  uint32_t backlog_bytes_ = 0;
 
   // Whether RTO is armed for the flow.
   bool rto_armed = false;
