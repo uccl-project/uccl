@@ -1320,6 +1320,10 @@ void UcclFlow::rc_send(struct ucclRequest* ureq) {
 
   wr.send_flags = IBV_SEND_SIGNALED;
 
+  if (size <= kMaxInline) {
+    wr.send_flags |= IBV_SEND_INLINE;
+  }
+
   wr.wr_id = (uint64_t)&ureq->rc_or_flush_done;
 
   DCHECK(ibv_post_send(qp, &wr, &bad_wr) == 0) << "Failed to post send";
@@ -1943,6 +1947,9 @@ bool RDMAContext::receiverCC_tx_message(struct ucclRequest* ureq) {
     if (qpw->signal_cnt_++ % kSignalInterval == 0) {
       wr->send_flags = IBV_SEND_SIGNALED;
     }
+    if (size <= kMaxInline) {
+      wr->send_flags |= IBV_SEND_INLINE;
+    }
     wr_ex->qpidx = qpidx;
 
     struct ibv_send_wr* bad_wr;
@@ -2037,6 +2044,9 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
       wr->send_flags = 0;
       if (qpw->signal_cnt_++ % kSignalInterval == 0) {
         wr->send_flags = IBV_SEND_SIGNALED;
+      }
+      if (size <= kMaxInline) {
+        wr->send_flags |= IBV_SEND_INLINE;
       }
       wr_ex->qpidx = qpidx;
 
@@ -2137,6 +2147,9 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
         wr_ex->wr.send_flags = 0;
         if (qpw->signal_cnt_++ % kSignalInterval == 0) {
           wr_ex->wr.send_flags = IBV_SEND_SIGNALED;
+        }
+        if (size <= kMaxInline) {
+          wr_ex->wr.send_flags |= IBV_SEND_INLINE;
         }
         wr_ex->qpidx = qpidx;
         struct ibv_send_wr* bad_wr;

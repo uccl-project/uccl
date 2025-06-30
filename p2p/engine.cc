@@ -143,7 +143,7 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
 
   uccl::ucclRequest ureq[kMaxInflightChunks];
-  bool skip[kMaxInflightChunks] = {false};
+  bool done[kMaxInflightChunks] = {false};
   large_kv_meta_data_.total_size = size;
   auto mhandle_meta = mr_id_to_mr_[large_kv_meta_data_mr_id_]->mhandle_;
 
@@ -192,23 +192,23 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
       if (rc == -1) break;
       cur_data += chunk_size;
       size_sent += chunk_size;
-      skip[ureq_issued % kMaxInflightChunks] = false;
+      done[ureq_issued % kMaxInflightChunks] = false;
       ureq_issued++;
     }
     // First, poll all outstanding requests and mark which ones are done.
     for (int i = ureq_finished; i < ureq_issued; i++) {
-      if (skip[i % kMaxInflightChunks]) {
+      if (done[i % kMaxInflightChunks]) {
         continue;
       }
       if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
         // Just mark it as completed, DO NOT increment ureq_finished here.
-        skip[i % kMaxInflightChunks] = true;
+        done[i % kMaxInflightChunks] = true;
       }
     }
 
     // Now, advance the ureq_finished counter as far as possible.
     while (ureq_finished < ureq_issued &&
-           skip[ureq_finished % kMaxInflightChunks]) {
+           done[ureq_finished % kMaxInflightChunks]) {
       ureq_finished++;
     }
   }
@@ -225,7 +225,7 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
   int max_size_int = static_cast<int>(max_size);
 
   uccl::ucclRequest ureq[kMaxInflightChunks];
-  bool skip[kMaxInflightChunks] = {false};
+  bool done[kMaxInflightChunks] = {false};
   auto mhandle_meta = mr_id_to_mr_[large_kv_meta_data_mr_id_]->mhandle_;
 
   // To avoid wasting the first RTT, we call uccl_recv_async to try to receive
@@ -280,24 +280,24 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
       if (rc == -1) break;
       cur_data += chunk_size;
       size_post_recv += chunk_size;
-      skip[ureq_issued % kMaxInflightChunks] = false;
+      done[ureq_issued % kMaxInflightChunks] = false;
       ureq_issued++;
     }
 
     // First, poll all outstanding requests and mark which ones are done.
     for (int i = ureq_finished; i < ureq_issued; i++) {
-      if (skip[i % kMaxInflightChunks]) {
+      if (done[i % kMaxInflightChunks]) {
         continue;
       }
       if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
         // Just mark it as completed, DO NOT increment ureq_finished here.
-        skip[i % kMaxInflightChunks] = true;
+        done[i % kMaxInflightChunks] = true;
       }
     }
 
     // Now, advance the ureq_finished counter as far as possible.
     while (ureq_finished < ureq_issued &&
-           skip[ureq_finished % kMaxInflightChunks]) {
+           done[ureq_finished % kMaxInflightChunks]) {
       ureq_finished++;
     }
   }
