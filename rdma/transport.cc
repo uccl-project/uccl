@@ -1,4 +1,5 @@
 #include "transport.h"
+#include "rdma_io.h"
 #include "transport_config.h"
 #include "util/list.h"
 #include "util/util.h"
@@ -1320,6 +1321,10 @@ void UcclFlow::rc_send(struct ucclRequest* ureq) {
 
   wr.send_flags = IBV_SEND_SIGNALED;
 
+  if (size <= kMaxInline) {
+    wr.send_flags |= IBV_SEND_INLINE;
+  }
+
   wr.wr_id = (uint64_t)&ureq->rc_or_flush_done;
 
   DCHECK(ibv_post_send(qp, &wr, &bad_wr) == 0) << "Failed to post send";
@@ -1676,15 +1681,15 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
   dp_qps_.resize(port_entropy_);
   chunk_size_ = (ucclParamCHUNK_SIZE_KB() << 10);
 
-  link_speed = util_rdma_get_link_speed_from_ibv_speed(
+  link_speed_ = util_rdma_get_link_speed_from_ibv_speed(
       factory_dev->port_attr.active_speed, factory_dev->port_attr.active_width);
   remote_ctx_.remote_gid = meta.install_ctx.remote_gid;
   remote_ctx_.remote_port_attr = meta.install_ctx.remote_port_attr;
 
-  remote_ctx_.dest_ah =
-      create_ah(factory_dev->pd, dev, factory_dev->ib_port_num,
-                remote_ctx_.remote_gid, remote_ctx_.remote_port_attr);
-  UCCL_INIT_CHECK(remote_ctx_.dest_ah != nullptr, "create_ah failed");
+  remote_ctx_.dest_ah = util_rdma_create_ah(
+      factory_dev->pd, factory_dev->ib_port_num, remote_ctx_.remote_gid,
+      remote_ctx_.remote_port_attr, RDMAFactory::is_roce(dev));
+  UCCL_INIT_CHECK(remote_ctx_.dest_ah != nullptr, "util_rdma_create_ah failed");
 
   mtu_bytes_ =
       util_rdma_get_mtu_from_ibv_mtu(factory_dev->port_attr.active_mtu);
@@ -1943,6 +1948,9 @@ bool RDMAContext::receiverCC_tx_message(struct ucclRequest* ureq) {
     if (qpw->signal_cnt_++ % kSignalInterval == 0) {
       wr->send_flags = IBV_SEND_SIGNALED;
     }
+    if (size <= kMaxInline) {
+      wr->send_flags |= IBV_SEND_INLINE;
+    }
     wr_ex->qpidx = qpidx;
 
     struct ibv_send_wr* bad_wr;
@@ -2037,6 +2045,9 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
       wr->send_flags = 0;
       if (qpw->signal_cnt_++ % kSignalInterval == 0) {
         wr->send_flags = IBV_SEND_SIGNALED;
+      }
+      if (size <= kMaxInline) {
+        wr->send_flags |= IBV_SEND_INLINE;
       }
       wr_ex->qpidx = qpidx;
 
@@ -2137,6 +2148,9 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
         wr_ex->wr.send_flags = 0;
         if (qpw->signal_cnt_++ % kSignalInterval == 0) {
           wr_ex->wr.send_flags = IBV_SEND_SIGNALED;
+        }
+        if (size <= kMaxInline) {
+          wr_ex->wr.send_flags |= IBV_SEND_INLINE;
         }
         wr_ex->qpidx = qpidx;
         struct ibv_send_wr* bad_wr;

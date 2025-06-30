@@ -1,6 +1,7 @@
 #pragma once
 
 #include "eqds.h"
+#include "rdma_io.h"
 #include "transport_config.h"
 #include "util/latency.h"
 #include "util/shared_pool.h"
@@ -95,6 +96,93 @@ class UcclRDMAEngine;
 class RDMAEndpoint;
 
 /**
+ * @brief Buffer pool for work request extension.
+ */
+class WrExBuffPool : public BuffPool {
+  static constexpr size_t kWrSize = sizeof(struct wr_ex);
+  static constexpr uint32_t kNumWr = 4096;
+  static_assert((kNumWr & (kNumWr - 1)) == 0, "kNumWr must be power of 2");
+
+ public:
+  WrExBuffPool()
+      : BuffPool(kNumWr, kWrSize, nullptr, [](uint64_t buff) {
+          struct wr_ex* wr_ex = reinterpret_cast<struct wr_ex*>(buff);
+          auto wr = &wr_ex->wr;
+          wr->sg_list = &wr_ex->sge;
+          wr->num_sge = 1;
+          wr->next = nullptr;
+          wr->opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+          wr->wr_id = 0;
+        }) {}
+
+  ~WrExBuffPool() = default;
+};
+
+class IMMData {
+ public:
+  // HINT: Indicates whether the last chunk of a message.
+  // CSN:  Chunk Sequence Number.
+  // RID:  Request ID.
+  // FID:  Flow Index.
+  // High-----------------32bit------------------Low
+  //  | HINT |  RESERVED  |  CSN  |  RID  |  FID  |
+  //    1bit      8bit       8bit    7bit    8bit
+  constexpr static int kFID = 0;
+  constexpr static int kRID = 8;
+  constexpr static int kCSN = 15;
+  constexpr static int kRESERVED = kCSN + UINT_CSN_BIT;
+  constexpr static int kHINT = kRESERVED + 8;
+
+  IMMData(uint32_t imm_data) : imm_data_(imm_data) {}
+
+  inline uint32_t GetHINT(void) { return (imm_data_ >> kHINT) & 0x1; }
+
+  inline uint32_t GetRESERVED(void) { return (imm_data_ >> kRESERVED) & 0xFF; }
+
+  inline uint32_t GetCSN(void) { return (imm_data_ >> kCSN) & UINT_CSN_MASK; }
+
+  inline uint32_t GetRID(void) { return (imm_data_ >> kRID) & 0x7F; }
+
+  inline uint32_t GetFID(void) { return (imm_data_ >> kFID) & 0xFF; }
+
+  inline void SetHINT(uint32_t hint) { imm_data_ |= (hint & 0x1) << kHINT; }
+
+  inline void SetRESERVED(uint32_t reserved) {
+    imm_data_ |= (reserved & 0xFF) << kRESERVED;
+  }
+
+  inline void SetCSN(uint32_t csn) {
+    imm_data_ |= (csn & UINT_CSN_MASK) << kCSN;
+  }
+
+  inline void SetRID(uint32_t rid) { imm_data_ |= (rid & 0x7F) << kRID; }
+
+  inline void SetFID(uint32_t fid) { imm_data_ |= (fid & 0xFF) << kFID; }
+
+  inline uint32_t GetImmData(void) { return imm_data_; }
+
+ protected:
+  uint32_t imm_data_;
+};
+
+class IMMDataEQDS : public IMMData {
+ public:
+  // PULL_TARGET: Target for pulling data.
+  // High-----------------32bit------------------Low
+  //  | HINT | PULL_TARGET |  CSN  |  RID  |  FID  |
+  //    1bit      8bit        8bit    7bit    8bit
+  constexpr static int kPULL_TARGET = kRESERVED;
+
+  IMMDataEQDS(uint32_t imm_data) : IMMData(imm_data) {}
+
+  inline uint32_t GetTarget(void) { return (imm_data_ >> kPULL_TARGET) & 0xFF; }
+
+  inline void SetTarget(uint32_t pull_target) {
+    imm_data_ |= (pull_target & 0xFF) << kPULL_TARGET;
+  }
+};
+
+/**
  * @brief RDMA context for a remote peer on an engine, which is produced by
  * RDMAFactory. It contains:
  *   - (Data path QP): Multiple UC/RC QPs and a shared CQ. All data path QPs
@@ -104,6 +192,7 @@ class RDMAEndpoint;
  */
 class RDMAContext {
  private:
+  // Pointer to the IO context of each engine.
   SharedIOContext* io_ctx_;
 
   // Offset of the engine this context belongs to. 0, 1, ... kNumEngine - 1.
@@ -135,8 +224,10 @@ class RDMAContext {
   // QPs for data transfer based on UC or RC.
   std::vector<QPWrapper> dp_qps_;
 
+  // # of QPs used per engine for data transfer.
   uint32_t port_entropy_;
 
+  // Chunk size for data transfer.
   uint32_t chunk_size_;
 
   // Data path QPN to index mapping.
@@ -167,7 +258,7 @@ class RDMAContext {
   int gid_idx_;
 
   // Link Speed of the device
-  double link_speed = 0;
+  double link_speed_ = 0;
 
   // (Engine) Buffer pool for credit chunks.
   std::optional<eqds::CreditChunkBuffPool> engine_credit_chunk_pool_;
