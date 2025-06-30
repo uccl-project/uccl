@@ -2,6 +2,8 @@
 
 An efficient and simple prototype that demonstrates **end-to-end GPU-direct peer-to-peer (P2P) data communication** across machines using **GPUDirect RDMA** and a lightweight **CPU proxy**.  
 
+For UCCL's host/CPU-driven P2P engine, see [p2p](p2p/) folder.
+
 ## Overview
 1.	Each rank pins its GPU buffer with GPUDirect RDMA and exchanges RDMAConnectionInfo.
 2.	Rank 0 writes batched copy commands into a host-mapped ring buffer managed by local CPU proxy.
