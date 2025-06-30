@@ -196,10 +196,10 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
     }
 
     // Now, advance the ureq_finished counter as far as possible.
-    while (ureq_finished < ureq_issued &&
-           skip[ureq_finished % kMaxInflightChunks]) {
+    while (ureq_finished < ureq_issued && skip[ureq_finished % kMaxInflightChunks]) {
       ureq_finished++;
     }
+
   }
 
   return true;
@@ -271,27 +271,22 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
       skip[ureq_issued % kMaxInflightChunks] = false;
       ureq_issued++;
     }
-    // LOG_EVERY_N(INFO, 1000000000) << "ureq_issued: " << ureq_issued
-    //                               << ", ureq_finished: " << ureq_finished
-    //                               << " size_expected: " << size_expected
-    //                               << " size_post_recv: " << size_post_recv;
 
-    // First, poll all outstanding requests and mark which ones are done.
-    for (int i = ureq_finished; i < ureq_issued; i++) {
-      if (skip[i % kMaxInflightChunks]) {
-        continue;
-      }
-      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
-        // Just mark it as completed, DO NOT increment ureq_finished here.
-        skip[i % kMaxInflightChunks] = true;
-      }
+  // First, poll all outstanding requests and mark which ones are done.
+  for (int i = ureq_finished; i < ureq_issued; i++) {
+    if (skip[i % kMaxInflightChunks]) {
+      continue;
     }
+    if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+      // Just mark it as completed, DO NOT increment ureq_finished here.
+      skip[i % kMaxInflightChunks] = true;
+    }
+  }
 
-    // Now, advance the ureq_finished counter as far as possible.
-    while (ureq_finished < ureq_issued &&
-           skip[ureq_finished % kMaxInflightChunks]) {
-      ureq_finished++;
-    }
+  // Now, advance the ureq_finished counter as far as possible.
+  while (ureq_finished < ureq_issued && skip[ureq_finished % kMaxInflightChunks]) {
+    ureq_finished++;
+  }
   }
 
   recv_size = size_expected + first_actual_size;
