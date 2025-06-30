@@ -1,7 +1,6 @@
 #ifndef RDMA_IO_H
 #define RDMA_IO_H
 
-#include "util_rdma.h"
 #include "eqds.h"
 #include "pcb.h"
 #include "transport_config.h"
@@ -9,6 +8,7 @@
 #include "util/list.h"
 #include "util/util.h"
 #include "util_buffpool.h"
+#include "util_rdma.h"
 #include <glog/logging.h>
 #include <infiniband/verbs.h>
 #include <cstdint>

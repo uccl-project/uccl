@@ -1,9 +1,9 @@
 #include "rdma_io.h"
-#include "util_rdma.h"
 #include "eqds.h"
 #include "transport.h"
 #include "transport_config.h"
 #include "util/util.h"
+#include "util_rdma.h"
 #include "util_timer.h"
 #include <glog/logging.h>
 #include <infiniband/verbs.h>

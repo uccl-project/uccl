@@ -14,6 +14,8 @@ static constexpr uint32_t IB_HDR_OVERHEAD = (8 + 40 + 12);
 static constexpr uint32_t ROCE_IPV4_HDR_OVERHEAD = (14 + 20 + 8 + 12);
 // Ethernet + IPv6 + UDP + BTH
 static constexpr uint32_t ROCE_IPV6_HDR_OVERHEAD = (14 + 40 + 8 + 12);
+// Headroom for UD packets.
+static constexpr uint32_t UD_ADDITION = 40;
 
 static constexpr uint32_t BASE_PSN = 0;
 
@@ -230,9 +232,9 @@ static inline struct ibv_srq* util_rdma_create_srq(struct ibv_pd* pd,
   return srq;
 }
 
-static inline struct ibv_ah* util_rdma_create_ah(struct ibv_pd* pd, uint8_t port,
-                                       union ibv_gid remote_gid,
-                                       struct ibv_port_attr remote_port_attr, bool roce) {
+static inline struct ibv_ah* util_rdma_create_ah(
+    struct ibv_pd* pd, uint8_t port, union ibv_gid remote_gid,
+    struct ibv_port_attr remote_port_attr, bool roce) {
   struct ibv_ah_attr ah_attr = {};
 
   if (roce) {
@@ -373,6 +375,6 @@ static inline int util_rdma_get_mtu_from_ibv_mtu(ibv_mtu mtu) {
   }
 }
 
-} // namespace uccl
+}  // namespace uccl
 
 #endif

@@ -71,7 +71,6 @@ static int64_t ENGINE_CPU_START_LIST[8] = {
 };
 
 static constexpr uint32_t kMaxAckWRs = 8;
-static constexpr uint32_t UD_ADDITION = 40;
 static constexpr uint32_t kMaxCtrlWRs = 2048;
 
 // Limit the per-flow outstanding bytes on each engine.

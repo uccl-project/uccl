@@ -1,8 +1,8 @@
 #include "eqds.h"
+#include "rdma_io.h"
 #include "transport_config.h"
 #include "util/list.h"
 #include "util_rdma.h"
-#include "rdma_io.h"
 #include <glog/logging.h>
 #include <infiniband/verbs.h>
 
