@@ -1,52 +1,65 @@
-CUDA_PATH ?= /usr/local/cuda
-override CXX := /usr/bin/g++
-NVCC      := $(CUDA_PATH)/bin/nvcc
+# Makefile for UCCL P2P Engine pybind11 project
 
-CXXFLAGS  := -O3 -std=c++17 -Wall -pthread
-LDFLAGS   := -lpthread
+# Compiler and flags
+CUDA_HOME ?= /usr/local/cuda
+CUDA_INC  := $(CUDA_HOME)/include
+CUDA_LIB  := $(CUDA_HOME)/lib64
+CXX := g++
+CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I../include -I../rdma -I$(CUDA_INC) \
+	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
+	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -lglog -lgflags -lgtest -lz -lelf -libverbs -lpthread \
+	-DLAZY_CREATE_ENGINE
 
-CXXFLAGS  += -mclwb
-LDFLAGS   += -libverbs -lnl-3 -lnl-route-3
-NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread" -ccbin /usr/bin/g++
+# Python and pybind11 configuration
+PYTHON := python3
+PYTHON_CONFIG := python3-config
+PYEXT           := $(shell $(PYTHON_CONFIG) --extension-suffix)
+PYBIND11_INCLUDES := $(shell $(PYTHON) -m pybind11 --includes)
+PYTHON_LDFLAGS := $(shell $(PYTHON_CONFIG) --ldflags)
 
-INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include
+# Target and source files
+TARGET   := uccl_p2p$(PYEXT)
+SOURCES := engine.cc pybind_engine.cc
+OBJECTS := $(SOURCES:.cc=.o)
 
-SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp src/peer_copy_worker.cpp
-SRC_CU  := src/gpu_kernel.cu src/ring_buffer.cu src/peer_copy.cu
-SRC_LOCAL  := src/benchmark_local.cu
-SRC_REMOTE := src/benchmark_remote.cu
+# Default target
+all: $(TARGET)
 
-OBJ_CPP := $(SRC_CPP:.cpp=.o)
-OBJ_CU := $(SRC_CU:.cu=.o)
+# Build the shared library
+$(TARGET): $(OBJECTS) ../rdma/librdma.a
+	$(CXX) $(OBJECTS) ../rdma/librdma.a \
+	      -L$(CUDA_LIB) -lcudart -lcuda \
+	      -o $@ $(PYTHON_LDFLAGS) $(CXXFLAGS) \
+	      -Wl,-rpath,$(CUDA_LIB)
 
-OBJ_LOCAL  := $(OBJ_CPP) $(OBJ_CU) $(SRC_LOCAL:.cu=.o)
-OBJ_REMOTE := $(OBJ_CPP) $(OBJ_CU) $(SRC_REMOTE:.cu=.o)
 
-TARGET_LOCAL  := benchmark_local
-TARGET_REMOTE := benchmark_remote
+../rdma/librdma.a: ../rdma/*.cc ../rdma/*.h
+	make CXXFLAGS=-DLAZY_CREATE_ENGINE -C ../rdma
 
-all: $(TARGET_LOCAL) $(TARGET_REMOTE)
+# Compile source files
+%.o: %.cc
+	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -c $< -o $@
 
-# C++ compilation rule with dependency generation
-%.o: %.cpp
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
-
-# CUDA compilation rule with dependency generation
-%.o: %.cu
-	$(NVCC) -arch=sm_90 $(NVCCFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
-
-# Linking rules
-$(TARGET_LOCAL): $(OBJ_LOCAL)
-	$(NVCC) -arch=sm_90 $(NVCCFLAGS) $(INCLUDES) $(OBJ_LOCAL) -lcuda -lcudart $(LDFLAGS) -o $@
-
-$(TARGET_REMOTE): $(OBJ_REMOTE)
-	$(NVCC) -arch=sm_90 $(NVCCFLAGS) $(INCLUDES) $(OBJ_REMOTE) -lcuda -lcudart $(LDFLAGS) -o $@
-
-# Clean all generated files
+# Clean build artifacts
 clean:
-	rm -f $(OBJ_CPP) $(OBJ_CU) $(SRC_LOCAL:.cu=.o) $(SRC_REMOTE:.cu=.o) $(TARGET_LOCAL) $(TARGET_REMOTE) *.d src/*.d
+	rm -f $(OBJECTS) $(TARGET)
+	make -C ../rdma clean
 
-.PHONY: all clean
+# Test the module
+test: $(TARGET)
+	$(PYTHON) test_engine.py
 
-# Automatically include dependency files if they exist
--include $(OBJ_LOCAL:.o=.d) $(OBJ_REMOTE:.o=.d)
+# Install pybind11 if not available
+install-deps:
+	pip3 install pybind11
+
+# Help target
+help:
+	@echo "Available targets:"
+	@echo "  all          - Build the pybind11 module"
+	@echo "  clean        - Remove build artifacts"
+	@echo "  test         - Run the test script"
+	@echo "  install-deps - Install pybind11 dependency"
+	@echo "  help         - Show this help message"
+
+.PHONY: all clean test install-deps help 
