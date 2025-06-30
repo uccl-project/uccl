@@ -14,13 +14,13 @@ int const kMaxNumGPUs = 8;
 // Assume the local and remote GPUs have the same GPU-NIC mapping.
 uint8_t gpu_to_dev[kMaxNumGPUs] = {0};
 
-Endpoint::Endpoint(const uint32_t local_gpu_idx, const uint32_t num_cpus)
+Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
     : local_gpu_idx_(local_gpu_idx), num_cpus_(num_cpus) {
   py::gil_scoped_release release;
   std::cout << "Creating Engine with GPU index: " << local_gpu_idx
             << ", CPUs: " << num_cpus << std::endl;
 
-  google::InitGoogleLogging("kvtrans_engine");
+  google::InitGoogleLogging("uccl_p2p");
   google::InstallFailureSignalHandler();
 
   // Initialize the RDMA endpoint with lazy creation.
@@ -109,7 +109,7 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   return true;
 }
 
-bool Endpoint::reg_kv(void const* data, size_t size, uint64_t& mr_id) {
+bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
   py::gil_scoped_release release;
 
   mr_id = next_mr_id_.fetch_add(1);
@@ -123,8 +123,8 @@ bool Endpoint::reg_kv(void const* data, size_t size, uint64_t& mr_id) {
   return true;
 }
 
-bool Endpoint::send_kv(uint64_t conn_id, uint64_t mr_id, void const* data,
-                       size_t size) {
+bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
+                    size_t size) {
   py::gil_scoped_release release;
   DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
   uccl::ucclRequest ureq;
@@ -147,8 +147,8 @@ bool Endpoint::send_kv(uint64_t conn_id, uint64_t mr_id, void const* data,
   return true;
 }
 
-bool Endpoint::recv_kv(uint64_t conn_id, uint64_t mr_id, void* data,
-                       size_t max_size, size_t& recv_size) {
+bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
+                    size_t max_size, size_t& recv_size) {
   py::gil_scoped_release release;
   uccl::ucclRequest ureq;
 

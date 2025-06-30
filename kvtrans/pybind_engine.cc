@@ -5,7 +5,7 @@
 
 namespace py = pybind11;
 
-PYBIND11_MODULE(kvtrans_engine, m) {
+PYBIND11_MODULE(uccl_p2p, m) {
   m.doc() = "KVTrans Engine - High-performance RDMA-based key-value transport";
 
   // Endpoint class binding
@@ -35,34 +35,34 @@ PYBIND11_MODULE(kvtrans_engine, m) {
           },
           "Accept an incoming connection")
       .def(
-          "reg_kv",
+          "reg",
           [](Endpoint& self, uint64_t ptr, size_t size) {
             uint64_t mr_id;
             bool success =
-                self.reg_kv(reinterpret_cast<const void*>(ptr), size, mr_id);
+                self.reg(reinterpret_cast<void const*>(ptr), size, mr_id);
             return py::make_tuple(success, mr_id);
           },
-          "Register a key-value buffer", py::arg("ptr"), py::arg("size"))
+          "Register a data buffer", py::arg("ptr"), py::arg("size"))
       .def(
-          "send_kv",
+          "send",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
              size_t size) {
-            return self.send_kv(conn_id, mr_id,
-                                reinterpret_cast<const void*>(ptr), size);
+            return self.send(conn_id, mr_id, reinterpret_cast<void const*>(ptr),
+                             size);
           },
-          "Send a key-value buffer", py::arg("conn_id"), py::arg("mr_id"),
+          "Send a data buffer", py::arg("conn_id"), py::arg("mr_id"),
           py::arg("ptr"), py::arg("size"))
       .def(
-          "recv_kv",
+          "recv",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
              size_t max_size) {
             size_t recv_size;
             bool success =
-                self.recv_kv(conn_id, mr_id, reinterpret_cast<void*>(ptr),
-                             max_size, recv_size);
+                self.recv(conn_id, mr_id, reinterpret_cast<void*>(ptr),
+                          max_size, recv_size);
             return py::make_tuple(success, recv_size);
           },
           "Receive a key-value buffer", py::arg("conn_id"), py::arg("mr_id"),
           py::arg("ptr"), py::arg("max_size"))
-      .def("__repr__", [](Endpoint const& e) { return "<KVTrans Endpoint>"; });
+      .def("__repr__", [](Endpoint const& e) { return "<UCCL P2P Endpoint>"; });
 }

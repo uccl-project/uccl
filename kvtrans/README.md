@@ -1,6 +1,6 @@
-# KVTrans Engine - High-Performance RDMA KV Cache Transfer
+# UCCL P2P Engine - High-Performance RDMA P2P Transfer
 
-KVTrans Engine is a high-performance, RDMA-based KV cache transfer system designed for distributed machine learning and high-throughput data processing applications. It provides a Python API for seamless integration with PyTorch tensors, NumPy arrays, and other data structures while leveraging the performance of InfiniBand/RoCE RDMA for ultra-low latency communication.
+UCCL P2P Engine is a high-performance, RDMA-based P2P transfer system designed for distributed machine learning and high-throughput data processing applications. It provides a Python API for seamless integration with PyTorch tensors, NumPy arrays, and other data structures while leveraging the performance of InfiniBand/RoCE RDMA for ultra-low latency communication.
 
 ## Project Structure
 
@@ -48,7 +48,7 @@ kvtrans/
 
 ## Performance Benchmarks
 
-### Running kvtrans
+### Running UCCL P2P
 
 On client:
 ```bash
@@ -80,11 +80,11 @@ python benchmark_nccl.py --role server --local-gpu-idx 0
 ### Basic Endpoint Setup
 
 ```python
-import kvtrans_engine
+import uccl_p2p
 import torch
 
 # Create endpoint with local GPU index and number of CPUs
-endpoint = kvtrans_engine.Endpoint(local_gpu_idx=0, num_cpus=4)
+endpoint = uccl_p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
 ```
 
 ### Client-Server Communication
@@ -109,11 +109,11 @@ send_tensor = torch.ones(1024, dtype=torch.float32)
 assert send_tensor.is_contiguous()  # Ensure tensor is contiguous
 
 # Register tensor for RDMA
-success, mr_id = endpoint.reg_kv(send_tensor.data_ptr(), send_tensor.numel() * 4)
+success, mr_id = endpoint.reg(send_tensor.data_ptr(), send_tensor.numel() * 4)
 assert success
 
 # Send the tensor
-success = endpoint.send_kv(conn_id, mr_id, send_tensor.data_ptr(), send_tensor.numel() * 4)
+success = endpoint.send(conn_id, mr_id, send_tensor.data_ptr(), send_tensor.numel() * 4)
 assert success
 
 # Receiver side
@@ -121,11 +121,11 @@ recv_tensor = torch.zeros(1024, dtype=torch.float32)
 assert recv_tensor.is_contiguous()
 
 # Register receive buffer
-success, mr_id = endpoint.reg_kv(recv_tensor.data_ptr(), recv_tensor.numel() * 4)
+success, mr_id = endpoint.reg(recv_tensor.data_ptr(), recv_tensor.numel() * 4)
 assert success
 
 # Receive the tensor
-success, recv_size = endpoint.recv_kv(conn_id, mr_id, recv_tensor.data_ptr(), recv_tensor.numel() * 4)
+success, recv_size = endpoint.recv(conn_id, mr_id, recv_tensor.data_ptr(), recv_tensor.numel() * 4)
 assert success and recv_size == recv_tensor.numel() * 4
 ```
 
@@ -141,17 +141,17 @@ assert data.flags['C_CONTIGUOUS']  # Ensure array is contiguous
 # Register for RDMA
 ptr = data.ctypes.data
 size = data.nbytes
-success, mr_id = endpoint.reg_kv(ptr, size)
+success, mr_id = endpoint.reg(ptr, size)
 
 # Send array
 if success:
-    success = endpoint.send_kv(conn_id, mr_id, ptr, size)
+    success = endpoint.send(conn_id, mr_id, ptr, size)
     
 # Receive array
 recv_data = np.zeros_like(data)
 recv_ptr = recv_data.ctypes.data
-success, recv_mr_id = endpoint.reg_kv(recv_ptr, recv_data.nbytes)
-success, recv_size = endpoint.recv_kv(conn_id, recv_mr_id, recv_ptr, recv_data.nbytes)
+success, recv_mr_id = endpoint.reg(recv_ptr, recv_data.nbytes)
+success, recv_size = endpoint.recv(conn_id, recv_mr_id, recv_ptr, recv_data.nbytes)
 ```
 
 
@@ -198,7 +198,7 @@ Accept an incoming connection (blocking).
 #### Memory Registration
 
 ```python
-reg_kv(ptr, size) -> (success, mr_id)
+reg(ptr, size) -> (success, mr_id)
 ```
 Register a memory region for RDMA operations.
 
@@ -213,13 +213,13 @@ Register a memory region for RDMA operations.
 #### Data Transfer
 
 ```python
-send_kv(conn_id, mr_id, ptr, size) -> success
+send(conn_id, mr_id, ptr, size) -> success
 ```
 Send data to remote endpoint (blocking).
 
 **Parameters:**
 - `conn_id` (int): Connection ID from connect/accept
-- `mr_id` (int): Memory region ID from reg_kv
+- `mr_id` (int): Memory region ID from register
 - `ptr` (int): Pointer to data to send
 - `size` (int): Number of bytes to send
 
@@ -227,13 +227,13 @@ Send data to remote endpoint (blocking).
 - `success` (bool): Whether send completed successfully
 
 ```python
-recv_kv(conn_id, mr_id, ptr, max_size) -> (success, recv_size)
+recv(conn_id, mr_id, ptr, max_size) -> (success, recv_size)
 ```
 Receive data from remote endpoint (blocking).
 
 **Parameters:**
 - `conn_id` (int): Connection ID from connect/accept
-- `mr_id` (int): Memory region ID from reg_kv
+- `mr_id` (int): Memory region ID from register
 - `ptr` (int): Pointer to buffer for received data
 - `max_size` (int): Maximum number of bytes to receive
 

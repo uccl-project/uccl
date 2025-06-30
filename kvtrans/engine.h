@@ -37,7 +37,7 @@ class Endpoint {
    *   local_gpu_idx: the GPU index to use for the engine
    *   num_cpus: the number of CPUs to use for the engine
    */
-  Endpoint(const uint32_t local_gpu_idx, const uint32_t num_cpus);
+  Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus);
 
   ~Endpoint();
 
@@ -64,9 +64,10 @@ class Endpoint {
   bool accept(std::string& ip_addr, int& remote_gpu_idx, uint64_t& conn_id);
 
   /*
-   * Register the KV a specific interface. Typically, one KV residing on one GPU
-   * only needs to register to one NIC. Even if one KV registers to multiple
-   * NICs, the GPU wouldn't have enough PCIe bandwidth for multiple NICs.
+   * Register the data with a specific interface. Typically, one data residing
+   * on one GPU only needs to register to one NIC. Even if the data is
+   * registered to multiple NICs, the GPU wouldn't have enough PCIe bandwidth
+   * for multiple NICs.
    *
    * input:
    *   data: the data to register
@@ -74,31 +75,31 @@ class Endpoint {
    * output:
    *   mr_id: the ID of the MR
    */
-  bool reg_kv(void const* data, size_t size, uint64_t& mr_id);
+  bool reg(void const* data, size_t size, uint64_t& mr_id);
 
   /*
-   * Send a KV to the remote server. Blocking.
+   * Send data to the remote server. Blocking.
    *
    * input:
    *   conn_id: the ID of the connection
-   *   mr_id: the ID of the KV
+   *   mr_id: the ID of the data
    *   data: the data to send
    *   size: the size of the data
    */
-  bool send_kv(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size);
+  bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size);
 
   /*
-   * Receive a KV from the remote server. Blocking.
+   * Receive data from the remote server. Blocking.
    *
    * input:
    *   conn_id: the ID of the connection
-   *   mr_id: the ID of the KV
+   *   mr_id: the ID of the data
    * output:
    *   data: the data to receive
    *   size: the size of the data
    */
-  bool recv_kv(uint64_t conn_id, uint64_t mr_id, void* data, size_t max_size,
-               size_t& recv_size);
+  bool recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t max_size,
+            size_t& recv_size);
 
  private:
   int local_gpu_idx_;
