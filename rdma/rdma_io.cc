@@ -1,3 +1,4 @@
+#include "rdma_io.h"
 #include "util_rdma.h"
 #include "eqds.h"
 #include "transport.h"

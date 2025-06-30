@@ -3,6 +3,7 @@
 #include "util/list.h"
 #include "util/util.h"
 #include "util_rdma.h"
+#include "rdma_io.h"
 #include "util_timer.h"
 #include <infiniband/verbs.h>
 #include <cerrno>
@@ -1686,9 +1687,9 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
   remote_ctx_.remote_port_attr = meta.install_ctx.remote_port_attr;
 
   remote_ctx_.dest_ah =
-      create_ah(factory_dev->pd, dev, factory_dev->ib_port_num,
-                remote_ctx_.remote_gid, remote_ctx_.remote_port_attr);
-  UCCL_INIT_CHECK(remote_ctx_.dest_ah != nullptr, "create_ah failed");
+      util_rdma_create_ah(factory_dev->pd, factory_dev->ib_port_num,
+                remote_ctx_.remote_gid, remote_ctx_.remote_port_attr, RDMAFactory::is_roce(dev));
+  UCCL_INIT_CHECK(remote_ctx_.dest_ah != nullptr, "util_rdma_create_ah failed");
 
   mtu_bytes_ =
       util_rdma_get_mtu_from_ibv_mtu(factory_dev->port_attr.active_mtu);
