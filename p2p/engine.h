@@ -144,12 +144,12 @@ class Endpoint {
   /** Returns conn_id for @rank, or UINT64_MAX if unknown. */
   uint64_t conn_id_of_rank(int rank) const;
 
+ private:
   /** Rank‑indexed view of established connections (read‑only). */
   std::unordered_map<int, uint64_t> const& rank2conn() const {
     return rank2conn_;
   }
 
- private:
 #ifdef USE_REDIS
   bool publish_redis(std::string const& redis_uri, std::string const& key,
                      PeerInfo const& info);

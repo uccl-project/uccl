@@ -129,6 +129,11 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
   DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
   uccl::ucclRequest ureq;
 
+  printf(
+      "[Endpoint::send] conn_id: %lu, mr_id: %lu, data: %p, "
+      "size: %zu\n",
+      conn_id, mr_id, data, size);
+
   auto conn = conn_id_to_conn_[conn_id];
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
 
@@ -156,8 +161,16 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
   int max_size_int = static_cast<int>(max_size);
 
+  printf(
+      "[Endpoint::recv] conn_id: %lu, mr_id: %lu, data: %p, "
+      "max_size: %zu\n",
+      conn_id, mr_id, data, max_size);
+
   int rc;
   do {
+    printf(
+        "[Endpoint::recv] Waiting to receive up to %d bytes on conn_id %lu\n",
+        max_size_int, conn_id);
     rc = ep_->uccl_recv_async(
         static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
         &data, &max_size_int, 1, &ureq);
@@ -247,12 +260,19 @@ bool Endpoint::join_group(std::string const& discovery_uri,
 
   /* Low errank connect, higher rank accept. */
   for (int r = 0; r < world_size; ++r) {
+    std::cout << "[join_group] peer " << r << ": " << peers[r].ip_addr << ":"
+              << peers[r].gpu_idx << "\n";
+    std::cout << "[join_group] my rank: " << my_rank << ", peer rank: " << r
+              << ", world_size: " << world_size << "\n";
     if (r == my_rank) continue;
     uint64_t cid;
     if (my_rank < r) {
       if (!connect(peers[r].ip_addr, peers[r].gpu_idx, cid)) {
         std::cerr << "[join_group] connect to rank " << r << " failed\n";
         return false;
+      } else {
+        std::cout << "[join_group] connected to rank " << r << " with conn_id "
+                  << cid << "\n";
       }
     } else {
       std::string peer_ip;
