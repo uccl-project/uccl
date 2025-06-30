@@ -136,36 +136,26 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
   large_kv_meta_data_.total_size = size;
   auto mhandle_meta = mr_id_to_mr_[large_kv_meta_data_mr_id_]->mhandle_;
 
-<<<<<<< HEAD:p2p/engine.cc
   // To avoid wasting the first RTT, we call uccl_send_async to try to send as
   // much as possible.
-=======
-  // To avoid wasting the first RTT, we call uccl_send_async to try to send as much as possible.
->>>>>>> 923b58b (Overlap first RTT.):kvtrans/engine.cc
   int rc;
   int chunk_size = std::min(size, kChunkSize);
   do {
     rc = ep_->uccl_send_async(
         static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
         (void*)data, chunk_size, &ureq[0]);
-<<<<<<< HEAD:p2p/engine.cc
     if (rc == -1) {
       std::this_thread::yield();
     }
-=======
->>>>>>> 923b58b (Overlap first RTT.):kvtrans/engine.cc
   } while (rc == -1);
 
   do {
     rc = ep_->uccl_send_async(
         static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle_meta,
         (void*)&large_kv_meta_data_, sizeof(LargeKVMetaData), &ureq[1]);
-<<<<<<< HEAD:p2p/engine.cc
     if (rc == -1) {
       std::this_thread::yield();
     }
-=======
->>>>>>> 923b58b (Overlap first RTT.):kvtrans/engine.cc
   } while (rc == -1);
 
   ep_->uccl_poll_ureq(&ureq[0]);
@@ -194,13 +184,6 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
       skip[ureq_issued % kMaxInflightChunks] = false;
       ureq_issued++;
     }
-<<<<<<< HEAD:p2p/engine.cc
-=======
-    // LOG_EVERY_N(INFO, 1000000000)
-    //     << "ureq_issued: " << ureq_issued
-    //     << ", ureq_finished: " << ureq_finished << " size_sent: " << size_sent
-    //     << " size: " << size;
->>>>>>> 923b58b (Overlap first RTT.):kvtrans/engine.cc
     // First, poll all outstanding requests and mark which ones are done.
     for (int i = ureq_finished; i < ureq_issued; i++) {
       if (skip[i % kMaxInflightChunks]) {
@@ -213,10 +196,10 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
     }
 
     // Now, advance the ureq_finished counter as far as possible.
-    while (ureq_finished < ureq_issued && skip[ureq_finished % kMaxInflightChunks]) {
+    while (ureq_finished < ureq_issued &&
+           skip[ureq_finished % kMaxInflightChunks]) {
       ureq_finished++;
     }
-
   }
 
   return true;
@@ -234,24 +217,17 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
   bool skip[kMaxInflightChunks] = {false};
   auto mhandle_meta = mr_id_to_mr_[large_kv_meta_data_mr_id_]->mhandle_;
 
-<<<<<<< HEAD:p2p/engine.cc
   // To avoid wasting the first RTT, we call uccl_recv_async to try to receive
   // as much as possible.
-=======
-  // To avoid wasting the first RTT, we call uccl_recv_async to try to receive as much as possible.
->>>>>>> 923b58b (Overlap first RTT.):kvtrans/engine.cc
   int rc;
   do {
     int chunk_size = kChunkSize;
     rc = ep_->uccl_recv_async(
         static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
         &data, &chunk_size, 1, &ureq[0]);
-<<<<<<< HEAD:p2p/engine.cc
     if (rc == -1) {
       std::this_thread::yield();
     }
-=======
->>>>>>> 923b58b (Overlap first RTT.):kvtrans/engine.cc
   } while (rc == -1);
 
   void* meta_addr = (void*)&large_kv_meta_data_;
@@ -260,12 +236,9 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
     rc = ep_->uccl_recv_async(
         static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
         &mhandle_meta, &meta_addr, &meta_size, 1, &ureq[1]);
-<<<<<<< HEAD:p2p/engine.cc
     if (rc == -1) {
       std::this_thread::yield();
     }
-=======
->>>>>>> 923b58b (Overlap first RTT.):kvtrans/engine.cc
   } while (rc == -1);
 
   ep_->uccl_poll_ureq(&ureq[0]);
@@ -299,21 +272,22 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
       ureq_issued++;
     }
 
-  // First, poll all outstanding requests and mark which ones are done.
-  for (int i = ureq_finished; i < ureq_issued; i++) {
-    if (skip[i % kMaxInflightChunks]) {
-      continue;
+    // First, poll all outstanding requests and mark which ones are done.
+    for (int i = ureq_finished; i < ureq_issued; i++) {
+      if (skip[i % kMaxInflightChunks]) {
+        continue;
+      }
+      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+        // Just mark it as completed, DO NOT increment ureq_finished here.
+        skip[i % kMaxInflightChunks] = true;
+      }
     }
-    if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
-      // Just mark it as completed, DO NOT increment ureq_finished here.
-      skip[i % kMaxInflightChunks] = true;
-    }
-  }
 
-  // Now, advance the ureq_finished counter as far as possible.
-  while (ureq_finished < ureq_issued && skip[ureq_finished % kMaxInflightChunks]) {
-    ureq_finished++;
-  }
+    // Now, advance the ureq_finished counter as far as possible.
+    while (ureq_finished < ureq_issued &&
+           skip[ureq_finished % kMaxInflightChunks]) {
+      ureq_finished++;
+    }
   }
 
   recv_size = size_expected + first_actual_size;
