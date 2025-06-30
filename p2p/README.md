@@ -5,7 +5,7 @@ UCCL P2P Engine is a high-performance, RDMA-based P2P transfer system designed f
 ## Project Structure
 
 ```
-kvtrans/
+p2p/
 ├── engine.h          # C++ Endpoint class header with RDMA functionality
 ├── engine.cc         # C++ Endpoint implementation
 ├── pybind_engine.cc  # pybind11 wrapper for Python integration
