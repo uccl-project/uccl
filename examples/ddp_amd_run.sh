@@ -12,7 +12,7 @@ EPOCHS=${4:-10}
 # Configuration
 PROG="ddp_amd_test.py"
 NUM_GPUS_PER_NODE=4
-DEVICES="0,1,2,5"  # Only these GPUs have NICs
+DEVICES="0,1,3,5"  # Only these GPUs have NICs
 
 # ---------------- Common environment ----------------
 export NCCL_IB_PCI_RELAXED_ORDERING=1

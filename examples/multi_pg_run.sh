@@ -12,7 +12,7 @@ ITERS=${4:-100}
 TENSOR_SIZE=${5:-1024}
 
 PROG="multi_pg_test.py"
-DEVICES="0,1,2,5"  # Only these GPUs have corresponding NICs on the AMD cluster
+DEVICES="0,1,3,5"  # Only these GPUs have corresponding NICs on the AMD cluster
 
 # Common for both NCCL and UCCL on the AMD cluster
 export NCCL_IB_PCI_RELAXED_ORDERING=1
