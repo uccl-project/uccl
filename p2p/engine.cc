@@ -150,7 +150,7 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
   // To avoid wasting the first RTT, we call uccl_send_async to try to send as
   // much as possible.
   int rc;
-  int chunk_size = std::min(size, kChunkSize);
+  int chunk_size = std::min(size, kRTTBytes);
   do {
     rc = ep_->uccl_send_async(
         static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
@@ -169,8 +169,8 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
     }
   } while (rc == -1);
 
-  ep_->uccl_poll_ureq(&ureq[0]);
   ep_->uccl_poll_ureq(&ureq[1]);
+  ep_->uccl_poll_ureq(&ureq[0]);
 
   data += chunk_size;
   size -= chunk_size;
@@ -232,7 +232,7 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
   // as much as possible.
   int rc;
   do {
-    int chunk_size = kChunkSize;
+    int chunk_size = kRTTBytes;
     rc = ep_->uccl_recv_async(
         static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
         &data, &chunk_size, 1, &ureq[0]);
@@ -252,8 +252,9 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
     }
   } while (rc == -1);
 
-  ep_->uccl_poll_ureq(&ureq[0]);
   ep_->uccl_poll_ureq(&ureq[1]);
+  ep_->uccl_poll_ureq(&ureq[0]);
+
   auto first_actual_size = ureq[0].recv.data_len[0];
   size_t size_expected = large_kv_meta_data_.total_size;
   size_expected -= first_actual_size;
