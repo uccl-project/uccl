@@ -10,6 +10,10 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+thread_local bool large_kv_meta_data_registered_ = false;
+thread_local LargeKVMetaData large_kv_meta_data_;
+thread_local uint64_t large_kv_meta_data_mr_id_ = 0;
+
 int const kMaxNumGPUs = 8;
 // Assume the local and remote GPUs have the same GPU-NIC mapping.
 uint8_t gpu_to_dev[kMaxNumGPUs] = {0};
@@ -52,6 +56,13 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
 #ifdef LAZY_CREATE_ENGINE
   ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_]);
 #endif
+  if (!large_kv_meta_data_registered_) {
+    py::gil_scoped_acquire acquire;
+    bool rc = reg(&large_kv_meta_data_, sizeof(LargeKVMetaData),
+                  large_kv_meta_data_mr_id_);
+    DCHECK(rc) << "Failed to register large KV meta data";
+    large_kv_meta_data_registered_ = true;
+  }
 
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
