@@ -9,9 +9,9 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    import kvtrans_engine as ke
+    import uccl_p2p
 except ImportError as exc:
-    sys.stderr.write("Failed to import kvtrans_engine — did you run `make`?\n")
+    sys.stderr.write("Failed to import uccl_p2p — did you run `make`?\n")
     raise
 
 _HAS_TORCH = False
@@ -50,7 +50,7 @@ def _pretty_size(num_bytes: int) -> str:
     return f"{num_bytes} B"  # fallback
 
 def _run_server(args):
-    ep = ke.Endpoint(args.local_gpu_idx, args.num_cpus)
+    ep = uccl_p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
     print("[Server] Waiting for connection …", flush=True)
     ok, r_ip, r_gpu, conn_id = ep.accept()
     if not ok:
@@ -59,17 +59,17 @@ def _run_server(args):
 
     for size in args.sizes:
         buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx)
-        ok, mr_id = ep.reg_kv(ptr, size)
+        ok, mr_id = ep.reg(ptr, size)
         if not ok:
-            sys.exit("[Server] reg_kv failed")
+            sys.exit("[Server] register failed")
 
-        ep.recv_kv(conn_id, mr_id, ptr, size)
+        ep.recv(conn_id, mr_id, ptr, size)
         start = time.perf_counter()
         total_recv = 0
         for _ in range(args.iters):
-            ok, recv_sz = ep.recv_kv(conn_id, mr_id, ptr, size)
+            ok, recv_sz = ep.recv(conn_id, mr_id, ptr, size)
             if not ok or recv_sz != size:
-                sys.exit("[Server] recv_kv error")
+                sys.exit("[Server] recv error")
             total_recv += recv_sz
         elapsed = time.perf_counter() - start
         gbps = (total_recv * 8) / elapsed / 1e9  # bits per second → Gbps
@@ -81,7 +81,7 @@ def _run_server(args):
 def _run_client(args):
     if args.remote_ip is None:
         sys.exit("[Client] --remote-ip is required")
-    ep = ke.Endpoint(args.local_gpu_idx, args.num_cpus)
+    ep = uccl_p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
     ok, conn_id = ep.connect(args.remote_ip, args.remote_gpu_idx)
     if not ok:
         sys.exit("[Client] Failed to connect to server")
@@ -89,17 +89,17 @@ def _run_client(args):
 
     for size in args.sizes:
         buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx)
-        ok, mr_id = ep.reg_kv(ptr, size)
+        ok, mr_id = ep.reg(ptr, size)
         if not ok:
-            sys.exit("[Client] reg_kv failed")
+            sys.exit("[Client] register failed")
 
-        ep.send_kv(conn_id, mr_id, ptr, size)
+        ep.send(conn_id, mr_id, ptr, size)
         start = time.perf_counter()
         total_sent = 0
         for _ in range(args.iters):
-            ok = ep.send_kv(conn_id, mr_id, ptr, size)
+            ok = ep.send(conn_id, mr_id, ptr, size)
             if not ok:
-                sys.exit("[Client] send_kv error")
+                sys.exit("[Client] send error")
             total_sent += size
         elapsed = time.perf_counter() - start
         gbps = (total_sent * 8) / elapsed / 1e9
@@ -115,7 +115,7 @@ def parse_size_list(val: str) -> List[int]:
 
 
 def main():
-    p = argparse.ArgumentParser(description="Benchmark KVTrans Engine bandwidth")
+    p = argparse.ArgumentParser(description="Benchmark UCCL P2P Engine bandwidth")
     p.add_argument("--role", choices=["server", "client"], required=True,
                    help="Run as server (receiver) or client (sender)")
     p.add_argument("--remote-ip", help="Server IP address (client only)")
@@ -134,7 +134,7 @@ def main():
                    help="Iterations per message size (excluding 1 warm-up)")
     args = p.parse_args()
 
-    print("KVTrans Benchmark — role:", args.role)
+    print("UCCL P2P Benchmark — role:", args.role)
     print("Message sizes:", ", ".join(_pretty_size(s) for s in args.sizes))
     print(f"Device: {args.device} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}")
     if args.role == "server":

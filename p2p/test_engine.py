@@ -14,21 +14,21 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    import kvtrans_engine
+    import uccl_p2p
 
-    print("✓ Successfully imported kvtrans_engine")
+    print("✓ Successfully imported uccl_p2p")
 except ImportError as e:
-    print(f"✗ Failed to import kvtrans_engine: {e}")
+    print(f"✗ Failed to import uccl_p2p: {e}")
     print("Make sure to run 'make' first to build the module")
     sys.exit(1)
 
 
 def test_local():
-    """Test the KVTrans Engine"""
-    print("Running KVTrans Engine local test...")
+    """Test the UCCL P2P Engine"""
+    print("Running UCCL P2P Engine local test...")
 
     def server_process():
-        engine = kvtrans_engine.Endpoint(local_gpu_idx=0, num_cpus=4)
+        engine = uccl_p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
         success, remote_ip_addr, remote_gpu_idx, conn_id = engine.accept()
         assert success
         print(
@@ -38,10 +38,10 @@ def test_local():
         tensor = torch.zeros(1024, dtype=torch.float32)
         assert tensor.is_contiguous()
 
-        success, mr_id = engine.reg_kv(tensor.data_ptr(), tensor.numel() * 4)
+        success, mr_id = engine.reg(tensor.data_ptr(), tensor.numel() * 4)
         assert success
 
-        success, recv_size = engine.recv_kv(
+        success, recv_size = engine.recv(
             conn_id, mr_id, tensor.data_ptr(), max_size=tensor.numel() * 8
         )
         assert success
@@ -51,7 +51,7 @@ def test_local():
         return True
 
     def client_process():
-        engine = kvtrans_engine.Endpoint(local_gpu_idx=1, num_cpus=4)
+        engine = uccl_p2p.Endpoint(local_gpu_idx=1, num_cpus=4)
         success, conn_id = engine.connect(
             remote_ip_addr="127.0.0.1", remote_gpu_idx=0
         )
@@ -60,10 +60,10 @@ def test_local():
         tensor = torch.ones(1024, dtype=torch.float32)
         assert tensor.is_contiguous()
 
-        success, mr_id = engine.reg_kv(tensor.data_ptr(), tensor.numel() * 4)
+        success, mr_id = engine.reg(tensor.data_ptr(), tensor.numel() * 4)
         assert success
 
-        success = engine.send_kv(
+        success = engine.send(
             conn_id, mr_id, tensor.data_ptr(), tensor.numel() * 4
         )
         assert success
@@ -91,11 +91,11 @@ def test_local():
 
 def main():
     """Run all tests"""
-    print("Running KVTrans Engine tests...")
+    print("Running UCCL P2P Engine tests...")
 
     test_local()
 
-    print("\n=== All KVTrans Engine tests completed! ===")
+    print("\n=== All UCCL P2P Engine tests completed! ===")
 
 
 if __name__ == "__main__":
