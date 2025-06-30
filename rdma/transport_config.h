@@ -176,7 +176,7 @@ static constexpr uint32_t kCQMODCount = 32;
 // CQ moderation period in microsecond.
 static constexpr uint32_t kCQMODPeriod = 100;
 // Maximum size of inline data.
-static constexpr uint32_t kMaxInline = 128;
+static constexpr uint32_t kMaxInline = 64;
 // Maximum number of SGEs in one WQE.
 static constexpr uint32_t kMaxSge = 2;
 // Maximum number of outstanding receive messages in one recv request.
