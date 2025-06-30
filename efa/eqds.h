@@ -523,11 +523,17 @@ class EQDS {
     auto pacer_cpu = PACER_CPU_START[numa_node] + pdev_idx_ % 2;
 
     // Initialize the pacer thread.
-    pacer_th_ = std::thread([this, pacer_cpu] {
+    pacer_th_ = std::thread([this, pacer_cpu, numa_node] {
+#ifdef PIN_TO_NUMA
+      pin_thread_to_numa(numa_node);
+      LOG(INFO) << "[Pacer] thread " << pdev_idx_ << " running on NUMA node "
+                << numa_node;
+#else
       // Pin the pacer thread to a specific CPU.
       pin_thread_to_cpu(pacer_cpu);
       LOG(INFO) << "[Pacer] thread " << pdev_idx_ << " running on CPU "
                 << pacer_cpu;
+#endif
       while (!shutdown_) {
         run_pacer();
       }
