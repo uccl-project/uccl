@@ -26,9 +26,15 @@ int RDMAFactory::init_devs() {
   std::call_once(init_flag,
                  []() { rdma_ctl = std::make_shared<RDMAFactory>(); });
 
-  // TODO: Move env vars to a unified place
-  char* ib_hca = getenv("NCCL_IB_HCA");
-  char* if_name = getenv("NCCL_SOCKET_IFNAME");
+  // Use UCCL_XXX first, if not set, use NCCL_XXX
+  char* ib_hca = getenv("UCCL_IB_HCA");
+  char* if_name = getenv("UCCL_SOCKET_IFNAME");
+
+  if (!ib_hca) ib_hca = getenv("NCCL_IB_HCA");
+  if (!if_name) if_name = getenv("NCCL_SOCKET_IFNAME");
+
+  UCCL_INIT_CHECK(ib_hca && if_name,
+                  "UCCL_IB_HCA or UCCL_SOCKET_IFNAME is not set");
 
   struct ib_dev user_ifs[MAX_IB_DEVS];
   bool searchNot = ib_hca && ib_hca[0] == '^';

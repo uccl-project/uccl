@@ -8,9 +8,9 @@ UCCL RDMA plugin for NCCL/RCCL.
 
 ## Configuration
 ### Env Vars
-UCCL uses the following [NCCL](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html) environment variables to configure:
-1. NCCL_IB_HCA
-2. NCCL_SOCKET_IFNAME
+UCCL uses the following [NCCL](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html) environment variables to configure (NCCL_IB_HCA and NCCL_SOCKET_IFNAME are also supported):
+1. UCCL_IB_HCA
+2. UCCL_SOCKET_IFNAME
 
 ### run_nccl_test.sh:
 ```
