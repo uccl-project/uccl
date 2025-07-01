@@ -764,10 +764,10 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
     ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());
   }
 
-  for (int i = 0; i < num_devices_; i++) {
-    // Create listening sockets
-    create_listen_socket(&test_listen_fds_[i], kTestListenPort + i);
-  }
+  // for (int i = 0; i < num_devices_; i++) {
+  //   // Create listening sockets
+  //   create_listen_socket(&test_listen_fds_[i], kTestListenPort + i);
+  // }
 }
 #endif
 
@@ -813,7 +813,7 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev) {
             }));
       }
     }
-    create_listen_socket(&test_listen_fds_[dev], kTestListenPort + dev);
+    // create_listen_socket(&test_listen_fds_[dev], kTestListenPort + dev);
   });
 
   return true;
