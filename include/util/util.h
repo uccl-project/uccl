@@ -1068,22 +1068,32 @@ static std::vector<fs::path> get_gpu_cards() {
   std::vector<fs::path> gpu_cards;
   const fs::path drm_class{"/sys/class/drm"};
   const std::regex card_re(R"(card(\d+))");
-  for (auto const& entry : fs::directory_iterator(drm_class)) {
-    const std::string name = entry.path().filename();
-    std::smatch m;
-    if (!std::regex_match(name, m, card_re)) continue;
 
-    fs::path dev_path = fs::canonical(entry.path() / "device");
+  if (fs::exists(drm_class)) {
+    for (auto const& entry : fs::directory_iterator(drm_class)) {
+      const std::string name = entry.path().filename();
+      std::smatch m;
+      if (!std::regex_match(name, m, card_re)) continue;
 
-    // check vendor id
-    std::ifstream vf(dev_path / "vendor");
-    std::string vs;
-    if (!(vf >> vs)) continue;
-    uint32_t vendor = std::stoul(vs, nullptr, 0);  // handles "0x10de"
+      fs::path dev_path = fs::canonical(entry.path() / "device");
 
-    if (vendor != 0x10de && vendor != 0x1002) continue;  // NVIDIA or AMD
+      // check vendor id
+      std::ifstream vf(dev_path / "vendor");
+      std::string vs;
+      if (!(vf >> vs)) continue;
+      uint32_t vendor = std::stoul(vs, nullptr, 0);  // handles "0x10de"
 
-    gpu_cards.push_back(dev_path);
+      if (vendor != 0x10de && vendor != 0x1002) continue;  // NVIDIA or AMD
+
+      gpu_cards.push_back(dev_path);
+    }
+  }
+
+  const fs::path nvidia_gpus{"/proc/driver/nvidia/gpus"};
+  if (gpu_cards.empty() && fs::exists(nvidia_gpus)) {
+    for (auto const& entry : fs::directory_iterator(nvidia_gpus)) {
+      gpu_cards.push_back(entry.path());
+    }
   }
 
   std::sort(gpu_cards.begin(), gpu_cards.end(),
