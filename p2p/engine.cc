@@ -130,7 +130,11 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
   uccl::Mhandle* mhandle;
   ep_->uccl_regmr(gpu_to_dev[local_gpu_idx_], const_cast<void*>(data), size, 0,
                   &mhandle);
-
+  if (mhandle->mr == nullptr) {
+    std::cerr << "[Endpoint::reg] Failed to register memory region, "
+              << "mhandle->mr is null\n";
+    std::abort();
+  }
   mr_id_to_mr_[mr_id] = new MR{mr_id, mhandle};
 
   return true;
