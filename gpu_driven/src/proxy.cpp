@@ -21,7 +21,13 @@ thread_local uint64_t wr_time_total;
 
 inline uint64_t load_volatile_u64(uint64_t volatile* addr) {
   uint64_t val;
+#if defined(__x86_64__)
   asm volatile("movq %1, %0" : "=r"(val) : "m"(*addr) : "memory");
+#elif defined(__aarch64__)
+  asm volatile("ldr %0, [%1]" : "=r"(val) : "r"(addr) : "memory");
+#else
+#error "Unsupported architecture"
+#endif
   return val;
 }
 
@@ -168,8 +174,8 @@ void notify_gpu_completion(std::unordered_set<uint64_t>& finished_wrs,
   }
 #endif
     rb->tail = my_tail;
-    _mm_clwb(&(rb->tail));
-    _mm_sfence();
+    // _mm_clwb(&(rb->tail));
+    // _mm_sfence();
   }
 }
 
@@ -191,7 +197,7 @@ void post_gpu_command(
     }
 #endif
     /* spin */
-    // _mm_pause();
+    cpu_relax();
     return;
   }
 
@@ -375,7 +381,7 @@ void cpu_proxy_local(DeviceToHostCmdBuffer* rb, int block_idx) {
     uint64_t cmd;
     do {
       cmd = rb->buf[idx].cmd;
-      _mm_pause();  // Avoid hammering the cacheline.
+      cpu_relax();  // Avoid hammering the cacheline.
     } while (cmd == 0);
 
 #ifdef DEBUG_PRINT

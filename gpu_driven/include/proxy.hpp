@@ -7,8 +7,9 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
-
+#endif
 struct ProxyCtx {
   DeviceToHostCmdBuffer*
       rb_host;  // host pointer (CPU visible address of RingBuffer)

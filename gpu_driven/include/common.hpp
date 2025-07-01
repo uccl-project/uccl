@@ -78,4 +78,6 @@
 
 bool pin_thread_to_cpu(int cpu);
 
+void cpu_relax();
+
 #endif  // COMMON_HPP

@@ -30,7 +30,9 @@
 #include <vector>
 #include <assert.h>
 #include <cuda_pipeline.h>
+#if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
+#endif
 #include <stdint.h>
 #include <stdio.h>
 #include <unistd.h>

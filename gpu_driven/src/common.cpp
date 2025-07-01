@@ -11,3 +11,14 @@ bool pin_thread_to_cpu(int cpu) {
   pthread_t current_thread = pthread_self();
   return !pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
 }
+
+void cpu_relax() {
+#if defined(__x86_64__) || defined(__i386__)
+  _mm_pause();
+#elif defined(__aarch64__) || defined(__arm__)
+  asm volatile("yield" ::: "memory");
+#else
+  // Fallback
+  asm volatile("" ::: "memory");
+#endif
+}
