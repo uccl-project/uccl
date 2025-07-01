@@ -72,7 +72,7 @@ Then install some common dependencies:
 ```bash
 sudo apt update
 sudo apt install linux-tools-$(uname -r) clang llvm cmake m4 build-essential \
-                 net-tools libgoogle-glog-dev libgtest-dev libgtest-dev \
+                 net-tools libgoogle-glog-dev libgtest-dev libgflags-dev \
                  libelf-dev libpcap-dev libc6-dev-i386 \
                  libopenmpi-dev libibverbs-dev libpci-dev -y
 

@@ -10,11 +10,12 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/uccl-project/uccl",
     packages=find_packages(),
+    package_data={"uccl": ["lib/libnccl-net-uccl.so"]},
+    license="Apache-2.0",
     install_requires=[
     ],
     classifiers=[
         "Programming Language :: Python :: 3",
-        "License :: OSI Approved :: Apache Software License",
     ],
     python_requires='>=3.8',
 )
