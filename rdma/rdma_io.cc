@@ -1,8 +1,9 @@
-#include "util_rdma.h"
+#include "rdma_io.h"
 #include "eqds.h"
 #include "transport.h"
 #include "transport_config.h"
 #include "util/util.h"
+#include "util_rdma.h"
 #include "util_timer.h"
 #include <glog/logging.h>
 #include <infiniband/verbs.h>
@@ -15,7 +16,6 @@
 
 namespace uccl {
 
-// RDMAFactory rdma_ctl;
 std::shared_ptr<RDMAFactory> rdma_ctl;
 
 int RDMAFactory::init_devs() {
@@ -26,9 +26,15 @@ int RDMAFactory::init_devs() {
   std::call_once(init_flag,
                  []() { rdma_ctl = std::make_shared<RDMAFactory>(); });
 
-  // TODO: Move env vars to a unified place
-  char* ib_hca = getenv("NCCL_IB_HCA");
-  char* if_name = getenv("NCCL_SOCKET_IFNAME");
+  // Use UCCL_XXX first, if not set, use NCCL_XXX
+  char* ib_hca = getenv("UCCL_IB_HCA");
+  char* if_name = getenv("UCCL_SOCKET_IFNAME");
+
+  if (!ib_hca) ib_hca = getenv("NCCL_IB_HCA");
+  if (!if_name) if_name = getenv("NCCL_SOCKET_IFNAME");
+
+  UCCL_INIT_CHECK(ib_hca && if_name,
+                  "UCCL_IB_HCA or UCCL_SOCKET_IFNAME is not set");
 
   struct ib_dev user_ifs[MAX_IB_DEVS];
   bool searchNot = ib_hca && ib_hca[0] == '^';
@@ -296,7 +302,7 @@ uint64_t TXTracking::ack_transmitted_chunks(void* subflow_context,
   auto fabric_delay_tsc = (t6 - t1) - endpoint_delay_tsc;
   // Make RTT independent of segment size.
   auto serial_delay_tsc =
-      us_to_cycles(seg_size * 1e6 / rdma_ctx->link_speed, freq_ghz);
+      us_to_cycles(seg_size * 1e6 / rdma_ctx->link_speed_, freq_ghz);
   if (fabric_delay_tsc > serial_delay_tsc ||
       to_usec(fabric_delay_tsc, freq_ghz) < kMAXRTTUS)
     fabric_delay_tsc -= serial_delay_tsc;

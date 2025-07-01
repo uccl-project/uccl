@@ -13,11 +13,22 @@
 namespace uccl {
 
 /// Return the TSC
-static inline size_t rdtsc() {
-  uint64_t rax;
-  uint64_t rdx;
+static inline uint64_t rdtsc() {
+#if defined(__x86_64__) || defined(_M_X64)
+  uint64_t rax, rdx;
   asm volatile("rdtsc" : "=a"(rax), "=d"(rdx));
-  return static_cast<size_t>((rdx << 32) | rax);
+  return (rdx << 32) | rax;
+
+#elif defined(__aarch64__)
+  // ARM64: Read the virtual counter (CNTVCT_EL0)
+  uint64_t virtual_timer_value;
+  asm volatile("mrs %0, cntvct_el0" : "=r"(virtual_timer_value));
+  return virtual_timer_value;
+
+#else
+  // Fallback: Use std::chrono (nanoseconds since epoch)
+  return std::chrono::high_resolution_clock::now().time_since_epoch().count();
+#endif
 }
 
 /// An alias for rdtsc() to distinguish calls on the critical path
