@@ -551,8 +551,8 @@ ncclResult_t pluginIflush(void* recvComm, int n, void** data, int* sizes,
 
   *request = req;
 
-  UCCL_LOG_PLUGIN << "Iflush on dev: " << dev << ", " << sizes[0]
-                  << "B, ureq ptr:" << req;
+  // UCCL_LOG_PLUGIN << "Iflush on dev: " << dev << ", " << sizes[0]
+  //                 << "B, ureq ptr:" << req;
 
   return ncclSuccess;
 }
@@ -571,8 +571,8 @@ ncclResult_t pluginTest(void* request, int* done, int* size) {
                       << ", req->type:" << req->type;
     } else if (req->type == ReqFlush) {
       // Do nothing.
-      UCCL_LOG_PLUGIN << "Test Flush done, " << size[0]
-                      << "B, ureq ptr:" << req;
+      // UCCL_LOG_PLUGIN << "Test Flush done, " << size[0]
+      //                 << "B, ureq ptr:" << req;
     }
     {
       auto uccl_req_pool =

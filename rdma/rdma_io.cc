@@ -415,7 +415,7 @@ void SharedIOContext::check_srq(bool force) {
 
   struct ibv_recv_wr* bad_wr;
   DCHECK(ibv_post_srq_recv(srq_, &dp_recv_wrs_.recv_wrs[0], &bad_wr) == 0);
-  UCCL_LOG_IO << "Posted " << post_batch << " recv requests for SRQ";
+  // UCCL_LOG_IO << "Posted " << post_batch << " recv requests for SRQ";
   dec_post_srq(post_batch);
 }
 
