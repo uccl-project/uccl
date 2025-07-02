@@ -28,7 +28,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   google::InstallFailureSignalHandler();
 
   // Initialize the RDMA endpoint with lazy creation.
-  ep_ = new uccl::RDMAEndpoint(ucclParamNUM_ENGINES());
+  ep_ = new uccl::RDMAEndpoint(ucclParamNUM_ENGINES(), true);
 
   auto gpu_cards = uccl::get_gpu_cards();
   DCHECK(local_gpu_idx_ < gpu_cards.size() && gpu_cards.size() <= kMaxNumGPUs)
@@ -55,7 +55,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   // Initialize the engine based on the GPU index.
 #ifdef LAZY_CREATE_ENGINE
   printf("Lazy creation of engine, GPU index: %d\n", local_gpu_idx_);
-  ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_]);
+  ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_], true);
   printf("Engine initialized for GPU %d\n", local_gpu_idx_);
 #endif
   if (!large_kv_meta_data_registered_) {

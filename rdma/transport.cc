@@ -674,7 +674,7 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
 }
 
 #ifdef LAZY_CREATE_ENGINE
-RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
+RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev, bool testing)
     : num_engines_per_dev_(num_engines_per_dev),
       stats_thread_([this]() { stats_thread_fn(); }) {
   static std::once_flag flag_once;
@@ -701,7 +701,7 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
   }
 }
 #else
-RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
+RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev, bool testing)
     : num_engines_per_dev_(num_engines_per_dev),
       stats_thread_([this]() { stats_thread_fn(); }) {
   // Initialize all RDMA devices.
@@ -763,17 +763,18 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
   for (int i = 0; i < kMaxInflightMsg; i++) {
     ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());
   }
-
-  // for (int i = 0; i < num_devices_; i++) {
-  //   // Create listening sockets
-  //   create_listen_socket(&test_listen_fds_[i], kTestListenPort + i);
-  // }
+  if (testing) {
+    for (int i = 0; i < num_devices_; i++) {
+      // Create listening sockets
+      create_listen_socket(&test_listen_fds_[i], kTestListenPort + i);
+    }
+  }
 }
 #endif
 
-bool RDMAEndpoint::initialize_engine_by_dev(int dev) {
+bool RDMAEndpoint::initialize_engine_by_dev(int dev, bool testing) {
   static std::vector<std::once_flag> flags_per_dev_(num_devices_);
-  std::call_once(flags_per_dev_[dev], [this, dev]() {
+  std::call_once(flags_per_dev_[dev], [this, dev, testing]() {
     int start_engine_idx = dev * num_engines_per_dev_;
     int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
     int numa_node = RDMAFactory::get_factory_dev(dev)->numa_node;
@@ -813,7 +814,9 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev) {
             }));
       }
     }
-    // create_listen_socket(&test_listen_fds_[dev], kTestListenPort + dev);
+    if (testing) {
+      create_listen_socket(&test_listen_fds_[dev], kTestListenPort + dev);
+    }
   });
 
   return true;
