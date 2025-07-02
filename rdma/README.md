@@ -108,7 +108,7 @@ Build `librccl-net-uccl.so`
 
 ```bash
 cd $UCCL_HOME/rdma
-make -f Makefile_hip -j "CXXFLAGS=-DHPC_FUND_CLUSTER"
+make -f Makefile_hip -j
 ```
 
 Run `rccl-tests`:
