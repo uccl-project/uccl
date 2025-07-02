@@ -28,12 +28,12 @@ int main(int argc, char** argv) {
   printf("Rank %d: GPU NUMA node is %d\n", rank, numa_node);
   discover_nics(numa_node);
 #endif
-  if (!GdrSupportInitOnce()) {
-    printf(
-        "Error: GPUDirect RDMA module is not loaded. Please load "
-        "nvidia_peermem or nv_peer_mem!\n");
-    exit(1);
-  }
+  // if (!GdrSupportInitOnce()) {
+  //   printf(
+  //       "Error: GPUDirect RDMA module is not loaded. Please load "
+  //       "nvidia_peermem or nv_peer_mem!\n");
+  //   exit(1);
+  // }
 
   cudaStream_t stream1;
   cudaStreamCreate(&stream1);
@@ -56,7 +56,14 @@ int main(int argc, char** argv) {
 
   size_t total_size = kRemoteBufferSize;
   void* gpu_buffer = nullptr;
+#ifdef USE_GRACE_HOPPER
+  // GH200: use CPU-visible memory
+  cudaMallocHost(&gpu_buffer, total_size);
+#else
+  // x86 + discrete GPU: use device memory + peermem
   cudaMalloc(&gpu_buffer, total_size);
+#endif
+
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
   if (rank == 1) {
     for (int d = 0; d < NUM_GPUS; ++d) {

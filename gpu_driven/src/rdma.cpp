@@ -314,11 +314,10 @@ void per_thread_rdma_init(void* gpu_buf, size_t bytes, int rank,
   cudaGetDevice(&dev);
   // int selected_idx = best_nic_pix(dev) + 1;
   // printf("[RDMA] Best NIC for GPU %d is %d\n", dev, selected_idx);
-  int selected_idx = 5;
+  int selected_idx = 0;
 #else
   selected_idx = 0;
 #endif
-
   context = ibv_open_device(dev_list[selected_idx]);
   if (!context) {
     perror("Failed to open device");

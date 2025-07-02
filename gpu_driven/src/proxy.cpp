@@ -36,14 +36,8 @@ void remote_cpu_proxy(DeviceToHostCmdBuffer* rb, int block_idx,
                       char const* peer_ip, CopyRing& g_ring) {
   printf("Remote CPU thread for block %d started\n", block_idx + 1);
 
-#ifdef NUMA_AWARE_SCHEDULING
-  int const nic_idx = pick_nic_index(block_idx);
-  per_thread_rdma_init(gpu_buffer, total_size, rank, nic_idx);
-  // pin_thread_to_nic_numa(nic_idx, block_idx);
+  per_thread_rdma_init(gpu_buffer, total_size, rank, block_idx);
   pin_thread_to_cpu(block_idx + 1);
-#else
-  pin_thread_to_cpu(block_idx + 1);
-#endif
   int cpu = sched_getcpu();
   if (cpu == -1) {
     perror("sched_getcpu");
@@ -267,23 +261,22 @@ void post_gpu_command(
 void cpu_proxy(DeviceToHostCmdBuffer* rb, int block_idx, void* gpu_buffer,
                size_t total_size, int rank, char const* peer_ip) {
   printf("CPU thread for block %d started\n", block_idx + 1);
-#ifdef NUMA_AWARE_SCHEDULING
   per_thread_rdma_init(gpu_buffer, total_size, rank, block_idx);
-  int const nic_idx = pick_nic_index(block_idx);
-  pin_thread_to_nic_numa(nic_idx, block_idx);
-#else
+  printf("Pinned thread to CPU core %d\n", block_idx + 1);
   pin_thread_to_cpu(block_idx + 1);
-#endif
   int cpu = sched_getcpu();
   if (cpu == -1) {
     perror("sched_getcpu");
   } else {
     printf("Thread pinned to CPU core %d\n", cpu);
   }
+  printf("Before creating CQ for block %d\n", block_idx + 1);
   ibv_cq* cq = create_per_thread_cq();
   RDMAConnectionInfo local_info, remote_info;
-  create_per_thread_qp(gpu_buffer, total_size, &local_info, rank, cq);
 
+  printf("Created CQ for block %d: %p\n", block_idx + 1, cq);
+  create_per_thread_qp(gpu_buffer, total_size, &local_info, rank, cq);
+  printf("Created QP for block %d\n", block_idx + 1);
   modify_qp_to_init();
   // printf("Local RDMA info: addr=0x%lx, rkey=0x%x\n", local_info.addr,
   //        local_info.rkey);
