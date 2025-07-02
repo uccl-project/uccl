@@ -21,6 +21,7 @@ fi
 
 rm -r uccl.egg-info || true
 rm -r dist || true
+rm -r uccl/lib || true
 WHEEL_DIR="wheelhouse-${TARGET}"
 rm -r "${WHEEL_DIR}" || true
 mkdir -p "${WHEEL_DIR}"
@@ -45,7 +46,8 @@ if [[ $TARGET == "all" ]]; then
       set -euo pipefail
       ls -lh uccl/lib
       python3 -m build
-      auditwheel repair dist/uccl-*.whl -w /io/wheelhouse-${TARGET}
+      auditwheel repair dist/uccl-*.whl --exclude libibverbs.so.1 -w /io/wheelhouse-${TARGET}
+      auditwheel show /io/wheelhouse-${TARGET}/*.whl
     '
 
   echo "Done. $TARGET wheel is in wheelhouse-${TARGET}/."
@@ -75,7 +77,7 @@ docker run --rm --user "${HOST_UID}:${HOST_GID}" \
         TARGET_SO=libnccl-net-uccl.so
     else
         make clean -f Makefile_hip
-        make -j$(nproc) -f Makefile_hip
+        make -j$(nproc) -f Makefile_hip "CXXFLAGS=-DBROADCOM_NIC"
         TARGET_SO=librccl-net-uccl.so
     fi
     cd ..
@@ -84,7 +86,8 @@ docker run --rm --user "${HOST_UID}:${HOST_GID}" \
     cp rdma/${TARGET_SO} uccl/lib/
     python3 -m build
     echo "[container] Running auditwheel..."
-    auditwheel repair dist/uccl-*.whl -w /io/${WHEEL_DIR}
+    auditwheel repair dist/*.whl --exclude libibverbs.so.1 -w /io/${WHEEL_DIR}
+    auditwheel show /io/${WHEEL_DIR}/*.whl
   '
 
 # 3. Done

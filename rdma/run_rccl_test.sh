@@ -30,7 +30,7 @@ NVLINK_ON=0
 
 NVLINK_OFF=$((1 - NVLINK_ON))
 
-HCA_NAMES="rdma0:1,rdma2:1,rdma3:1,rdma4:1"
+HCA_NAMES="rdma0:1,rdma1:1,rdma2:1,rdma3:1,rdma4:1,rdma5:1,rdma6:1,rdma7:1"
 CTRL_NIC="cni0"
 
 mpirun --prefix /usr/local/bin/ompi --bind-to none -np 2 -N 1 --hostfile $NODEFILE --map-by ppr:1:node \
@@ -47,14 +47,14 @@ mpirun --prefix /usr/local/bin/ompi --bind-to none -np 2 -N 1 --hostfile $NODEFI
     -x NCCL_NCHANNELS_PER_NET_PEER=1 \
     -x NCCL_IB_QPS_PER_CONNECTION=4 \
     -x NCCL_IB_SPLIT_DATA_ON_QPS=1 \
-    -x HIP_VISIBLE_DEVICES=1,2,0,5 \
+    -x HIP_VISIBLE_DEVICES=0,1,3,4,5,6,7 \
     -x NCCL_IB_HCA=${HCA_NAMES} \
     -x NCCL_SOCKET_IFNAME=${CTRL_NIC} \
     -x UCCL_NUM_ENGINES=4 \
-    -x UCCL_PORT_ENTROPY=8 \
-    -x UCCL_CHUNK_SIZE_KB=128 \
+    -x UCCL_PORT_ENTROPY=1 \
+    -x UCCL_CHUNK_SIZE_KB=512 \
     ${UCCL_HOME}/thirdparty/rccl-tests/build/alltoall_perf \
-    -b 1K -e 1G -f 2 -w 5 -n 20 -c 1 -g 1 -t 4 |&
+    -b 1K -e 1G -f 2 -w 5 -n 20 -c 1 -g 1 -t 2 |&
     tee alltoall_debug_${TEST}.log
 
 # alltoall_perf, all_reduce_perf
