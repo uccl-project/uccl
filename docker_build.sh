@@ -77,7 +77,7 @@ docker run --rm --user "${HOST_UID}:${HOST_GID}" \
         TARGET_SO=libnccl-net-uccl.so
     else
         make clean -f Makefile_hip
-        make -j$(nproc) -f Makefile_hip "CXXFLAGS=-DBROADCOM_NIC"
+        make -j$(nproc) -f Makefile_hip
         TARGET_SO=librccl-net-uccl.so
     fi
     cd ..

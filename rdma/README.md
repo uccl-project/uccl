@@ -127,7 +127,7 @@ Using the following to build `librccl-net-uccl.so`
 
 ```bash
 cd $UCCL_HOME/rdma
-make -f Makefile_hip -j "CXXFLAGS=-DBROADCOM_NIC"
+make -f Makefile_hip -j
 ```
 
 Run `rccl-tests`:

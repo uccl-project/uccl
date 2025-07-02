@@ -108,6 +108,21 @@ int RDMAFactory::init_devs() {
       }
 
       dev.numa_node = get_dev_numa_node(dev.ib_name);
+
+      // Detecting if the dev support extend cq.
+      struct ibv_cq_init_attr_ex cq_attr = {
+          .cqe = 1,
+          .comp_mask = 0,
+      };
+      struct ibv_cq_ex* cq_ex = ibv_create_cq_ex(context, &cq_attr);
+      if (cq_ex) {
+        printf("cq_ex supported\n");
+        ibv_destroy_cq(ibv_cq_ex_to_cq(cq_ex));
+      } else {
+        printf("cq_ex NOT supported\n");
+      }
+      dev.support_cq_ex = cq_ex != nullptr;
+
       dev.dev_attr = dev_attr;
       dev.port_attr = port_attr;
       dev.ib_port_num = port_num;
@@ -419,8 +434,23 @@ void SharedIOContext::check_srq(bool force) {
   dec_post_srq(post_batch);
 }
 
-#ifdef USE_CQ_EX
-int SharedIOContext::poll_ctrl_cq(void) {
+void SharedIOContext::flush_acks() {
+  if (nr_tx_ack_wr_ == 0) return;
+
+  tx_ack_wr_[nr_tx_ack_wr_ - 1].next = nullptr;
+
+  struct ibv_send_wr* bad_wr;
+  int ret = ibv_post_send(ctrl_qp_, tx_ack_wr_, &bad_wr);
+  DCHECK(ret == 0) << ret << ", nr_tx_ack_wr_: " << nr_tx_ack_wr_;
+
+  UCCL_LOG_IO << "Flush " << nr_tx_ack_wr_ << " ACKs";
+
+  inflight_ctrl_wrs_ += nr_tx_ack_wr_;
+
+  nr_tx_ack_wr_ = 0;
+}
+
+int SharedIOContext::_poll_ctrl_cq_ex(void) {
   auto cq_ex = ctrl_cq_ex_;
   int work = 0;
 
@@ -486,8 +516,8 @@ int SharedIOContext::poll_ctrl_cq(void) {
 
   return work;
 }
-#else
-int SharedIOContext::poll_ctrl_cq(void) {
+
+int SharedIOContext::_poll_ctrl_cq_normal(void) {
   auto cq = ibv_cq_ex_to_cq(ctrl_cq_ex_);
   struct ibv_wc wcs[kMaxBatchCQ];
 
@@ -548,26 +578,8 @@ int SharedIOContext::poll_ctrl_cq(void) {
 
   return cq_budget;
 }
-#endif
 
-void SharedIOContext::flush_acks() {
-  if (nr_tx_ack_wr_ == 0) return;
-
-  tx_ack_wr_[nr_tx_ack_wr_ - 1].next = nullptr;
-
-  struct ibv_send_wr* bad_wr;
-  int ret = ibv_post_send(ctrl_qp_, tx_ack_wr_, &bad_wr);
-  DCHECK(ret == 0) << ret << ", nr_tx_ack_wr_: " << nr_tx_ack_wr_;
-
-  UCCL_LOG_IO << "Flush " << nr_tx_ack_wr_ << " ACKs";
-
-  inflight_ctrl_wrs_ += nr_tx_ack_wr_;
-
-  nr_tx_ack_wr_ = 0;
-}
-
-#ifdef USE_CQ_EX
-int SharedIOContext::rc_poll_recv_cq(void) {
+int SharedIOContext::_rc_poll_recv_cq_ex(void) {
   auto cq_ex = recv_cq_ex_;
   int cq_budget = 0;
 
@@ -594,7 +606,7 @@ int SharedIOContext::rc_poll_recv_cq(void) {
   return cq_budget;
 }
 
-int SharedIOContext::rc_poll_send_cq(void) {
+int SharedIOContext::_rc_poll_send_cq_ex(void) {
   auto cq_ex = send_cq_ex_;
   int cq_budget = 0;
 
@@ -618,7 +630,7 @@ int SharedIOContext::rc_poll_send_cq(void) {
   return cq_budget;
 }
 
-int SharedIOContext::uc_poll_send_cq(void) {
+int SharedIOContext::_uc_poll_send_cq_ex(void) {
   auto cq_ex = send_cq_ex_;
   int cq_budget = 0;
   int budget = kMaxBatchCQ << 1;
@@ -649,7 +661,7 @@ int SharedIOContext::uc_poll_send_cq(void) {
   return cq_budget;
 }
 
-int SharedIOContext::uc_poll_recv_cq(void) {
+int SharedIOContext::_uc_poll_recv_cq_ex(void) {
   auto cq_ex = recv_cq_ex_;
   int cq_budget = 0;
 
@@ -698,8 +710,8 @@ int SharedIOContext::uc_poll_recv_cq(void) {
 
   return cq_budget;
 }
-#else
-int SharedIOContext::rc_poll_send_cq(void) {
+
+int SharedIOContext::_rc_poll_send_cq_normal(void) {
   struct ibv_wc wcs[kMaxBatchCQ];
 
   auto* cq = ibv_cq_ex_to_cq(send_cq_ex_);
@@ -717,7 +729,7 @@ int SharedIOContext::rc_poll_send_cq(void) {
   return nr_wcs;
 }
 
-int SharedIOContext::rc_poll_recv_cq(void) {
+int SharedIOContext::_rc_poll_recv_cq_normal(void) {
   struct ibv_wc wcs[kMaxBatchCQ];
 
   auto* cq = ibv_cq_ex_to_cq(recv_cq_ex_);
@@ -738,7 +750,7 @@ int SharedIOContext::rc_poll_recv_cq(void) {
   return nr_wcs;
 }
 
-int SharedIOContext::uc_poll_send_cq(void) {
+int SharedIOContext::_uc_poll_send_cq_normal(void) {
   struct ibv_wc wcs[kMaxBatchCQ];
 
   auto* cq = ibv_cq_ex_to_cq(send_cq_ex_);
@@ -762,7 +774,7 @@ int SharedIOContext::uc_poll_send_cq(void) {
   return nr_wcs;
 }
 
-int SharedIOContext::uc_poll_recv_cq(void) {
+int SharedIOContext::_uc_poll_recv_cq_normal(void) {
   struct ibv_wc wcs[kMaxBatchCQ];
 
   auto* cq = ibv_cq_ex_to_cq(recv_cq_ex_);
@@ -806,6 +818,5 @@ int SharedIOContext::uc_poll_recv_cq(void) {
 
   return nr_wcs;
 }
-#endif
 
 }  // namespace uccl

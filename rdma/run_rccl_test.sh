@@ -18,8 +18,8 @@ if [ "$TEST" = "rccl" ]; then
     plugin_path=""
 elif [ "$TEST" = "uccl" ]; then
     echo "Running UCCL test"
-    # plugin_path="${UCCL_HOME}/rdma/librccl-net-uccl.so"
-    plugin_path=`python -c "import uccl; print(uccl.rccl_plugin_path())"`
+    plugin_path="${UCCL_HOME}/rdma/librccl-net-uccl.so"
+    # plugin_path=`python -c "import uccl; print(uccl.rccl_plugin_path())"`
     echo "plugin_path: ${plugin_path}"
 else
     echo "Unsupport benchmark type."
@@ -53,6 +53,7 @@ mpirun --prefix /usr/local/bin/ompi --bind-to none -np 2 -N 1 --hostfile $NODEFI
     -x UCCL_NUM_ENGINES=4 \
     -x UCCL_PORT_ENTROPY=1 \
     -x UCCL_CHUNK_SIZE_KB=512 \
+    -x UCCL_RCMODE=1 \
     ${UCCL_HOME}/thirdparty/rccl-tests/build/all_reduce_perf \
     -b 1K -e 1G -f 2 -w 5 -n 20 -c 1 -g 1 -t 7 |&
     tee alltoall_debug_${TEST}.log
