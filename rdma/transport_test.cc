@@ -406,9 +406,9 @@ int main(int argc, char* argv[]) {
   google::InstallFailureSignalHandler();
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
-  ep.emplace(ucclParamNUM_ENGINES());
+  ep.emplace(ucclParamNUM_ENGINES(), true);
 #ifdef LAZY_CREATE_ENGINE
-  ep->initialize_engine_by_dev(0);
+  ep->initialize_engine_by_dev(0, true);
 #endif
 
   // Create a thread to print throughput every second
