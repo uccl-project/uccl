@@ -2,20 +2,20 @@
 set -e
 
 # -----------------------
-# Build uccl wheels for CUDA (NVIDIA) and ROCm (AMD) back-ends
+# Build uccl wheels for CUDA (NVIDIA), ROCm (AMD), and CUDA (Grace-hopper) back-ends
 # The host machine does *not* need CUDA or ROCm – everything lives inside
 # a purpose-built Docker image derived from Ubuntu 22.04.
 #
 # Usage:
-#   ./docker_build.sh [cuda|rocm|all]
+#   ./docker_build.sh [cuda|rocm|all|gh]
 #
 # The wheels are written to ./wheelhouse/
 # -----------------------
 
 TARGET=${1:-cuda}
 
-if [[ $TARGET != "cuda" && $TARGET != "rocm" && $TARGET != "all" ]]; then
-  echo "Usage: $0 [cuda|rocm|all]" >&2
+if [[ $TARGET != "cuda" && $TARGET != "rocm" && $TARGET != "gh" && $TARGET != "all" ]]; then
+  echo "Usage: $0 [cuda|rocm|gh|all]" >&2
   exit 1
 fi
 
@@ -35,7 +35,12 @@ HOST_GID=$(id -g)
 if [[ $TARGET == "all" ]]; then
   # Build both backend-specific wheels first
   "$0" cuda
-  "$0" rocm
+  if [[ "$(uname -m)" != "aarch64" ]]; then
+    "$0" rocm
+  else
+    echo "Skipping ROCm build on Arm64."
+  fi
+  "$0" gh
 
   echo "### Packaging $TARGET wheel (contains both libs) ###"
   docker run --rm --user "${HOST_UID}:${HOST_GID}" \
@@ -59,7 +64,11 @@ IMAGE_NAME="uccl-builder-${TARGET}"
 
 # Build the builder image (contains toolchain + CUDA/ROCm)
 echo "[1/3] Building Docker image ${IMAGE_NAME} using ${DOCKERFILE}..."
-docker build -t "$IMAGE_NAME" -f "$DOCKERFILE" .
+if [[ "$TARGET" == "gh" ]]; then
+  docker build --platform=linux/arm64 -t "$IMAGE_NAME" -f "$DOCKERFILE" .
+else
+  docker build -t "$IMAGE_NAME" -f "$DOCKERFILE" .
+fi
 
 echo "[2/3] Running build inside container..."
 docker run --rm --user "${HOST_UID}:${HOST_GID}" \
@@ -72,7 +81,7 @@ docker run --rm --user "${HOST_UID}:${HOST_GID}" \
     echo "[container] Backend: $TARGET"
     echo "[container] Compiling native library…"
     cd rdma
-    if [[ "$TARGET" == cuda ]]; then
+    if [[ "$TARGET" == cuda || "$TARGET" == gh ]]; then
         make clean && make -j$(nproc)
         TARGET_SO=libnccl-net-uccl.so
     else
