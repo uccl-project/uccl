@@ -26,7 +26,7 @@ else
     exit 1
 fi
 
-NVLINK_ON=0
+NVLINK_ON=1
 
 NVLINK_OFF=$((1 - NVLINK_ON))
 
@@ -45,7 +45,7 @@ mpirun --prefix /usr/local/bin/ompi --bind-to none -np 2 -N 1 --hostfile $NODEFI
     -x NCCL_MIN_NCHANNELS=32 \
     -x NCCL_MAX_NCHANNELS=32 \
     -x NCCL_NCHANNELS_PER_NET_PEER=1 \
-    -x NCCL_IB_QPS_PER_CONNECTION=4 \
+    -x NCCL_IB_QPS_PER_CONNECTION=1 \
     -x NCCL_IB_SPLIT_DATA_ON_QPS=1 \
     -x HIP_VISIBLE_DEVICES=0,1,3,4,5,6,7 \
     -x NCCL_IB_HCA=${HCA_NAMES} \
@@ -53,8 +53,8 @@ mpirun --prefix /usr/local/bin/ompi --bind-to none -np 2 -N 1 --hostfile $NODEFI
     -x UCCL_NUM_ENGINES=4 \
     -x UCCL_PORT_ENTROPY=1 \
     -x UCCL_CHUNK_SIZE_KB=512 \
-    ${UCCL_HOME}/thirdparty/rccl-tests/build/alltoall_perf \
-    -b 1K -e 1G -f 2 -w 5 -n 20 -c 1 -g 1 -t 2 |&
+    ${UCCL_HOME}/thirdparty/rccl-tests/build/all_reduce_perf \
+    -b 1K -e 1G -f 2 -w 5 -n 20 -c 1 -g 1 -t 7 |&
     tee alltoall_debug_${TEST}.log
 
 # alltoall_perf, all_reduce_perf
