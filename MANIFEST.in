@@ -1,1 +1,1 @@
-include uccl/lib/libnccl-net-uccl.so
+include uccl/lib/*.so

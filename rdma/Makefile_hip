@@ -1,7 +1,8 @@
 ABS_ROOT_PATH := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
 RCCL_HOME:=../thirdparty/rccl
-HIP_HOME:=/opt/rocm-6.3.1
+HIP_HOME?=/opt/rocm
+CONDA_LIB_HOME?=/usr/lib
 
 INC = -I./ -I../include -I$(HIP_HOME)/include -I${CONDA_LIB_HOME}/../include -L${CONDA_LIB_HOME}
 LIBS = -lglog -lgflags -lgtest -lz -lelf -libverbs -L ${HIP_HOME}/lib -lamdhip64

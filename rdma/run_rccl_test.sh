@@ -18,7 +18,8 @@ if [ "$TEST" = "rccl" ]; then
     plugin_path=""
 elif [ "$TEST" = "uccl" ]; then
     echo "Running UCCL test"
-    plugin_path="${UCCL_HOME}/rdma/librccl-net-uccl.so"
+    # plugin_path="${UCCL_HOME}/rdma/librccl-net-uccl.so"
+    plugin_path="/home/yuankach@amd.com/anaconda3/envs/pypi-test/lib/python3.12/site-packages/uccl/lib/libnccl-net-uccl.so"
 else
     echo "Unsupport benchmark type."
     exit 1
