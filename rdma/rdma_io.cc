@@ -30,6 +30,9 @@ int RDMAFactory::init_devs() {
   char* ib_hca = getenv("UCCL_IB_HCA");
   char* if_name = getenv("UCCL_SOCKET_IFNAME");
 
+  printf("RDMAFactory::init_devs: UCCL_IB_HCA=%s, UCCL_SOCKET_IFNAME=%s\n",
+         ib_hca ? ib_hca : "NULL", if_name ? if_name : "NULL");
+
   if (!ib_hca) ib_hca = getenv("NCCL_IB_HCA");
   if (!if_name) if_name = getenv("NCCL_SOCKET_IFNAME");
 

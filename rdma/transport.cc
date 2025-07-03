@@ -275,6 +275,11 @@ void UcclRDMAEngine::handle_rx_work(void) {
 
 inline void RDMAEndpoint::initialize_resources(int total_num_engines) {
   // Initialize all dynamic arrays
+  if (num_devices_ <= 0) {
+    printf("num_devices_ is 0.");
+    exit(EXIT_FAILURE);
+  }
+
   channel_vec_.resize(total_num_engines);
   engine_vec_.resize(total_num_engines);
   engine_load_vec_.resize(total_num_engines);
@@ -678,7 +683,13 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
     : num_engines_per_dev_(num_engines_per_dev),
       stats_thread_([this]() { stats_thread_fn(); }) {
   static std::once_flag flag_once;
-  std::call_once(flag_once, [&]() { num_devices_ = RDMAFactory::init_devs(); });
+  std::call_once(flag_once, [&]() {
+    num_devices_ = RDMAFactory::init_devs();
+    if (num_devices_ <= 0) {
+      printf("Failed to initialize RDMA devices.\n");
+      exit(EXIT_FAILURE);
+    }
+  });
 
   rdma_ctl_ = rdma_ctl;
 

@@ -1,5 +1,3 @@
-#define PYBIND11_LIMITED_API  // Make it version-agnostic
-
 #include "engine.h"
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
