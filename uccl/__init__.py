@@ -1,6 +1,6 @@
 import os
 
-__version__ = "0.0.1.post7"
+__version__ = "0.0.1.post1"
 
 def nccl_plugin_path():
     """Returns absolute path to the NCCL plugin .so file"""

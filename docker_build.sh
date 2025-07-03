@@ -27,14 +27,31 @@ WHEEL_DIR="wheelhouse-${TARGET}"
 rm -r "${WHEEL_DIR}" || true
 mkdir -p "${WHEEL_DIR}"
 
-# If TARGET=all, orchestrate both builds
+# If TARGET=all, orchestrate builds for each backend and package **all** shared libraries
 if [[ $TARGET == "all" ]]; then
-  # Build both backend-specific wheels first
-  "$0" cuda
-  "$0" rocm
-  "$0" efa
+  # Temporary directory to accumulate .so files from each backend build
+  TEMP_LIB_DIR="uccl/lib_all"
+  rm -rf "${TEMP_LIB_DIR}" || true
+  mkdir -p "${TEMP_LIB_DIR}"
 
-  echo "### Packaging $TARGET wheel (contains both libs) ###"
+  echo "### Building CUDA backend and collecting its shared library ###"
+  "$0" cuda
+  cp uccl/lib/*.so "${TEMP_LIB_DIR}/" || true
+
+  echo "### Building ROCm backend and collecting its shared library ###"
+  "$0" rocm
+  cp uccl/lib/*.so "${TEMP_LIB_DIR}/" || true
+
+  echo "### Building EFA backend and collecting its shared library ###"
+  "$0" efa
+  cp uccl/lib/*.so "${TEMP_LIB_DIR}/" || true
+
+  # Prepare combined library directory
+  rm -rf uccl/lib || true
+  mkdir -p uccl/lib
+  cp "${TEMP_LIB_DIR}"/*.so uccl/lib/
+
+  echo "### Packaging $TARGET wheel (contains all libs) ###"
   docker run --rm --user "$(id -u):$(id -g)" \
     -v /etc/passwd:/etc/passwd:ro \
     -v /etc/group:/etc/group:ro \
@@ -98,7 +115,7 @@ else
             cd ../..
           fi
           cd rdma && make clean -f Makefile_hip && make -j$(nproc) -f Makefile_hip && cd ..
-          TARGET_SO=rdma/libnccl-net-uccl.so
+          TARGET_SO=rdma/librccl-net-uccl.so
       elif [[ "$TARGET" == efa ]]; then
           cd efa && make clean && make -j$(nproc) && cd ..
           TARGET_SO=efa/libnccl-net-efa.so
