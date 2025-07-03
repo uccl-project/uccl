@@ -70,8 +70,10 @@ Then, when running your PyTorch applications, set the environment variable accor
 ```bash
 # NCCL over IB/RoCE
 NCCL_NET_PLUGIN=`python -c "import uccl; print(uccl.nccl_plugin_path())"`
+
 # RCCL over IB/RoCE
 NCCL_NET_PLUGIN=`python -c "import uccl; print(uccl.rccl_plugin_path())"`
+
 # NCCL over AWS EFA NICs (p4d and p4de only)
 NCCL_NET_PLUGIN=`python -c "import uccl; print(uccl.efa_plugin_path())"`
 ```
