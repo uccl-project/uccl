@@ -36,6 +36,7 @@
   } while (0)
 
 // #define REMOTE_PERSISTENT_KERNEL
+#define USE_GRACE_HOPPER
 #define MEASURE_PER_OP_LATENCY
 #define ENABLE_WRITE_WITH_IMMEDIATE
 #define ASSUME_WR_IN_ORDER
@@ -66,7 +67,7 @@
 #define kWarmupOps 10000
 #define kRemoteBufferSize kBatchSize* kNumThBlocks* kObjectSize * 100
 #define MAIN_THREAD_CPU_IDX 31
-#define NUM_GPUS 8
+#define NUM_GPUS 1
 #define RECEIVER_BATCH_SIZE 16
 #ifdef SYNCHRONOUS_COMPLETION
 #define NVLINK_SM_PER_PROCESS \
@@ -77,5 +78,7 @@
 // #define SEPARATE_POLLING
 
 bool pin_thread_to_cpu(int cpu);
+
+void cpu_relax();
 
 #endif  // COMMON_HPP

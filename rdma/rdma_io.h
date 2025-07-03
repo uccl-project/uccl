@@ -489,6 +489,7 @@ struct FactoryDevice {
   std::string local_ip_str;
   int numa_node;
 
+  bool support_cq_ex;
   struct ibv_context* context;
   struct ibv_device_attr dev_attr;
   struct ibv_port_attr port_attr;
@@ -679,27 +680,29 @@ struct pair_hash {
 class SharedIOContext {
  public:
   SharedIOContext(int dev) {
+    support_cq_ex_ = RDMAFactory::get_factory_dev(dev)->support_cq_ex;
     rc_mode_ = ucclParamRCMode();
     bypass_pacing_ = ucclParamBypassPacing();
     auto context = RDMAFactory::get_factory_dev(dev)->context;
     auto pd = RDMAFactory::get_factory_dev(dev)->pd;
     auto port = RDMAFactory::get_factory_dev(dev)->ib_port_num;
-#ifdef USE_CQ_EX
-    send_cq_ex_ = util_rdma_create_cq_ex(context, kCQSize);
-    recv_cq_ex_ = util_rdma_create_cq_ex(context, kCQSize);
-#else
-    send_cq_ex_ = (struct ibv_cq_ex*)util_rdma_create_cq(context, kCQSize);
-    recv_cq_ex_ = (struct ibv_cq_ex*)util_rdma_create_cq(context, kCQSize);
-#endif
+    if (support_cq_ex_) {
+      send_cq_ex_ = util_rdma_create_cq_ex(context, kCQSize);
+      recv_cq_ex_ = util_rdma_create_cq_ex(context, kCQSize);
+    } else {
+      send_cq_ex_ = (struct ibv_cq_ex*)util_rdma_create_cq(context, kCQSize);
+      recv_cq_ex_ = (struct ibv_cq_ex*)util_rdma_create_cq(context, kCQSize);
+    }
     UCCL_INIT_CHECK(send_cq_ex_ != nullptr, "util_rdma_create_cq_ex failed");
     UCCL_INIT_CHECK(recv_cq_ex_ != nullptr, "util_rdma_create_cq_ex failed");
 
-#ifdef USE_CQ_EX
-    int ret = util_rdma_modify_cq_attr(send_cq_ex_, kCQMODCount, kCQMODPeriod);
-    UCCL_INIT_CHECK(ret == 0, "util_rdma_modify_cq_attr failed");
-    ret = util_rdma_modify_cq_attr(recv_cq_ex_, kCQMODCount, kCQMODPeriod);
-    UCCL_INIT_CHECK(ret == 0, "util_rdma_modify_cq_attr failed");
-#endif
+    if (support_cq_ex_) {
+      int ret =
+          util_rdma_modify_cq_attr(send_cq_ex_, kCQMODCount, kCQMODPeriod);
+      UCCL_INIT_CHECK(ret == 0, "util_rdma_modify_cq_attr failed");
+      ret = util_rdma_modify_cq_attr(recv_cq_ex_, kCQMODCount, kCQMODPeriod);
+      UCCL_INIT_CHECK(ret == 0, "util_rdma_modify_cq_attr failed");
+    }
 
     srq_ = util_rdma_create_srq(pd, kMaxSRQ, 1, 0);
     UCCL_INIT_CHECK(srq_ != nullptr, "util_rdma_create_srq failed");
@@ -725,12 +728,8 @@ class SharedIOContext {
 
     if (!ucclParamRCMode()) {
       // Create Ctrl QP, CQ, and MR.
-      bool use_cq_ex = false;
-#ifdef USE_CQ_EX
-      use_cq_ex = true;
-#endif
       util_rdma_create_qp(
-          context, &ctrl_qp_, IBV_QPT_UD, use_cq_ex, true,
+          context, &ctrl_qp_, IBV_QPT_UD, support_cq_ex_, true,
           (struct ibv_cq**)&ctrl_cq_ex_, false, kCQSize, pd, port, &ctrl_mr_,
           nullptr, CtrlChunkBuffPool::kChunkSize * CtrlChunkBuffPool::kNumChunk,
           kMaxCtrlWRs, kMaxCtrlWRs, 1, 1);
@@ -789,15 +788,37 @@ class SharedIOContext {
 
   void flush_acks();
 
-  int poll_ctrl_cq(void);
+  // This should be extremely fast, probably even faster than C func pointer.
+  int poll_ctrl_cq(void) {
+    return support_cq_ex_ ? _poll_ctrl_cq_ex() : _poll_ctrl_cq_normal();
+  }
+  int uc_poll_send_cq(void) {
+    return support_cq_ex_ ? _uc_poll_send_cq_ex() : _uc_poll_send_cq_normal();
+  }
+  int uc_poll_recv_cq(void) {
+    return support_cq_ex_ ? _uc_poll_recv_cq_ex() : _uc_poll_recv_cq_normal();
+  }
+  int rc_poll_send_cq(void) {
+    return support_cq_ex_ ? _rc_poll_send_cq_ex() : _rc_poll_send_cq_normal();
+  }
+  int rc_poll_recv_cq(void) {
+    return support_cq_ex_ ? _rc_poll_recv_cq_ex() : _rc_poll_recv_cq_normal();
+  }
 
-  int uc_poll_send_cq(void);
+  int _poll_ctrl_cq_normal(void);
+  int _poll_ctrl_cq_ex(void);
 
-  int uc_poll_recv_cq(void);
+  int _uc_poll_send_cq_normal(void);
+  int _uc_poll_send_cq_ex(void);
 
-  int rc_poll_send_cq(void);
+  int _uc_poll_recv_cq_normal(void);
+  int _uc_poll_recv_cq_ex(void);
 
-  int rc_poll_recv_cq(void);
+  int _rc_poll_send_cq_normal(void);
+  int _rc_poll_send_cq_ex(void);
+
+  int _rc_poll_recv_cq_normal(void);
+  int _rc_poll_recv_cq_ex(void);
 
   void check_srq(bool force);
 
@@ -887,6 +908,9 @@ class SharedIOContext {
   inline int get_post_ctrl_rq_cnt(void) { return ctrl_recv_wrs_.post_rq_cnt; }
 
  private:
+  // Whether the NIC supports CQ-EX. Mellanox NICs support CQ-EX.
+  bool support_cq_ex_;
+
   bool rc_mode_;
 
   bool bypass_pacing_;

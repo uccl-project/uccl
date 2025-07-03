@@ -23,7 +23,9 @@
 #include <vector>
 #include <cuda_runtime.h>
 #include <fcntl.h>
+#if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
+#endif
 #include <stdio.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -312,11 +314,10 @@ void per_thread_rdma_init(void* gpu_buf, size_t bytes, int rank,
   cudaGetDevice(&dev);
   // int selected_idx = best_nic_pix(dev) + 1;
   // printf("[RDMA] Best NIC for GPU %d is %d\n", dev, selected_idx);
-  int selected_idx = 5;
+  int selected_idx = 0;
 #else
   selected_idx = 0;
 #endif
-
   context = ibv_open_device(dev_list[selected_idx]);
   if (!context) {
     perror("Failed to open device");
@@ -937,7 +938,7 @@ void per_thread_polling(int thread_idx, struct ibv_cq* per_thread_cq,
   pin_thread_to_cpu(thread_idx);
   printf("Progress thread started on CPU %d\n", sched_getcpu());
 
-  while (per_thread_cq == nullptr && g_progress_run.load()) _mm_pause();
+  while (per_thread_cq == nullptr && g_progress_run.load()) cpu_relax();
   printf("Progress thread %d: cq=%p\n", thread_idx, per_thread_cq);
 
   while (g_progress_run.load(std::memory_order_acquire)) {

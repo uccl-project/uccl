@@ -5,7 +5,7 @@ NVCC      := $(CUDA_PATH)/bin/nvcc
 CXXFLAGS  := -O3 -std=c++17 -Wall -pthread
 LDFLAGS   := -lpthread
 
-CXXFLAGS  += -mclwb
+# CXXFLAGS  += -mclwb
 LDFLAGS   += -libverbs -lnl-3 -lnl-route-3
 NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread" -ccbin /usr/bin/g++
 
