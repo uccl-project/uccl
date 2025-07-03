@@ -1,6 +1,6 @@
 # UCCL-EFA
 
-AWS EFA support for UCCL. We are using Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.5 (Ubuntu 22.04) AMI on 4x`p4d.24xlarge` AWS VMs; latest AMI should also work. 
+AWS EFA support for UCCL. We are using Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.5 (Ubuntu 22.04) AMI on 4x`p4d.24xlarge` AWS VMs; latest AMI and `p4de.24xlarge` should also work. 
 Note that you need to enable all four EFA NICs in `p4d.24xlarge` instances. 
 
 ## Prerequisites

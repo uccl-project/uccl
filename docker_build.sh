@@ -18,6 +18,13 @@ if [[ $TARGET != "cuda" && $TARGET != "rocm" && $TARGET != "gh" && $TARGET != "e
   echo "Usage: $0 [cuda|rocm|gh|efa|all]" >&2
 fi
 
+ARCH="$(uname -m)"
+
+if [[ $TARGET == "gh" && "$ARCH" != "aarch64" ]]; then
+  echo "Skipping ARM build on x86 host. You need an ARM host to build ARM wheels."
+  exit 0
+fi
+
 rm -r uccl.egg-info || true
 rm -r dist || true
 rm -r uccl/lib || true
@@ -28,14 +35,6 @@ mkdir -p "${WHEEL_DIR}"
 
 # If TARGET=all, orchestrate builds for each backend and package **all** shared libraries
 if [[ $TARGET == "all" ]]; then
-  # Build both backend-specific wheels first
-  "$0" cuda
-  if [[ "$(uname -m)" != "aarch64" ]]; then
-    "$0" rocm
-  else
-    echo "Skipping ROCm build on Arm64."
-  fi
-  "$0" gh
   # Temporary directory to accumulate .so files from each backend build
   TEMP_LIB_DIR="uccl/lib_all"
   rm -rf "${TEMP_LIB_DIR}" || true
@@ -46,8 +45,13 @@ if [[ $TARGET == "all" ]]; then
   cp uccl/lib/*.so "${TEMP_LIB_DIR}/" || true
 
   echo "### Building ROCm backend and collecting its shared library ###"
-  "$0" rocm
-  cp uccl/lib/*.so "${TEMP_LIB_DIR}/" || true
+  if [[ "$ARCH" != "aarch64" ]]; then
+    "$0" rocm
+    cp uccl/lib/*.so "${TEMP_LIB_DIR}/" || true
+  else
+    echo "Skipping ROCm build on Arm64."
+    exit 0
+  fi
 
   echo "### Building EFA backend and collecting its shared library ###"
   "$0" efa
@@ -134,6 +138,10 @@ else
       elif [[ "$TARGET" == efa ]]; then
           cd efa && make clean && make -j$(nproc) && cd ..
           TARGET_SO=efa/libnccl-net-efa.so
+          # EFA requires a custom NCCL.
+          cd thirdparty/nccl-sg
+          make src.build -j NVCC_GENCODE="-gencode=arch=compute_80,code=sm_80"
+          cd ../..
       elif [[ "$TARGET" == gh ]]; then
           cd rdma && make clean && make -j$(nproc) && cd ..
           TARGET_SO=rdma/libnccl-net-uccl.so
@@ -144,7 +152,13 @@ else
 
       echo "[container] Packaging uccl..."
       mkdir -p uccl/lib
+
       cp ${TARGET_SO} uccl/lib/
+      if [[ "$TARGET" == efa ]]; then
+        cp thirdparty/nccl-sg/build/lib/libnccl.so uccl/lib/libnccl-efa.so
+      fi
+
+      ls -lh uccl/lib
       python3 -m build
 
       echo "[container] Running auditwheel..."

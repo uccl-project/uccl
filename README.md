@@ -68,13 +68,14 @@ pip install uccl
 
 Then, when running your PyTorch applications, set the environment variable accordingly: 
 ```bash
-# NCCL over IB/RoCE
+# NCCL over IB/RoCE on x86 or GH200 ARM hosts
 NCCL_NET_PLUGIN=`python -c "import uccl; print(uccl.nccl_plugin_path())"`
 
-# RCCL over IB/RoCE
+# RCCL over IB/RoCE on x86 hosts
 NCCL_NET_PLUGIN=`python -c "import uccl; print(uccl.rccl_plugin_path())"`
 
 # NCCL over AWS EFA NICs (p4d and p4de only)
+LR_PRELOAD=`python -c "import uccl; print(uccl.efa_nccl_path())"`
 NCCL_NET_PLUGIN=`python -c "import uccl; print(uccl.efa_plugin_path())"`
 ```
 
