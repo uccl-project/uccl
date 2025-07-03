@@ -27,11 +27,6 @@ WHEEL_DIR="wheelhouse-${TARGET}"
 rm -r "${WHEEL_DIR}" || true
 mkdir -p "${WHEEL_DIR}"
 
-# Determine host UID/GID once so we can use it everywhere (must come before
-# the early 'all' branch).
-HOST_UID=$(id -u)
-HOST_GID=$(id -g)
-
 # If TARGET=all, orchestrate both builds
 if [[ $TARGET == "all" ]]; then
   # Build both backend-specific wheels first
@@ -40,9 +35,12 @@ if [[ $TARGET == "all" ]]; then
   "$0" efa
 
   echo "### Packaging $TARGET wheel (contains both libs) ###"
-  docker run --rm --user "${HOST_UID}:${HOST_GID}" \
-    -e TARGET="${TARGET}" \
+  docker run --rm --user "$(id -u):$(id -g)" \
+    -v /etc/passwd:/etc/passwd:ro \
+    -v /etc/group:/etc/group:ro \
+    -v $HOME:$HOME \
     -v "$(pwd)":/io \
+    -e TARGET="${TARGET}" \
     -w /io \
     uccl-builder-cuda /bin/bash -c '
       set -euo pipefail
@@ -65,17 +63,23 @@ docker build -t "$IMAGE_NAME" -f "$DOCKERFILE" .
 
 echo "[2/3] Running build inside container..."
 if [[ $2 == "-it" ]]; then
-  docker run --rm --user "${HOST_UID}:${HOST_GID}" \
+  docker run -it --rm --user "$(id -u):$(id -g)" \
+    -v /etc/passwd:/etc/passwd:ro \
+    -v /etc/group:/etc/group:ro \
+    -v $HOME:$HOME \
+    -v "$(pwd)":/io \
     -e TARGET="${TARGET}" \
     -e WHEEL_DIR="${WHEEL_DIR}" \
-    -v "$(pwd)":/io \
     -w /io \
-    "$IMAGE_NAME" /bin/bash -it
+    "$IMAGE_NAME" /bin/bash
 else
-  docker run --rm --user "${HOST_UID}:${HOST_GID}" \
+  docker run --rm --user "$(id -u):$(id -g)" \
+    -v /etc/passwd:/etc/passwd:ro \
+    -v /etc/group:/etc/group:ro \
+    -v $HOME:$HOME \
+    -v "$(pwd)":/io \
     -e TARGET="${TARGET}" \
     -e WHEEL_DIR="${WHEEL_DIR}" \
-    -v "$(pwd)":/io \
     -w /io \
     "$IMAGE_NAME" /bin/bash -c '
       set -euo pipefail

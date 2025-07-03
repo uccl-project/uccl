@@ -57,7 +57,7 @@ if [ "$TEST" = "srd" ]; then
     LIBNCCL_PATH="${UCCL_HOME}/thirdparty/nccl/build/lib/libnccl.so"
     PLUGIN_PATH="/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu/libnccl-net.so"
 
-    mpirun --bind-to none -np ${NUM_PROCS} -N ${PROCS_PER_NODE} --hostfile hostname_single_proc \
+    mpirun --bind-to none -np ${NUM_PROCS} -N ${PROCS_PER_NODE} --hostfile hosts_single_proc \
         --tag-output --merge-stderr-to-stdout \
         --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
         --mca orte_base_help_aggregate 0 \
@@ -96,7 +96,7 @@ elif [ "$TEST" = "ud" ]; then
     LIBNCCL_PATH="${UCCL_HOME}/thirdparty/nccl-sg/build/lib/libnccl.so"
     PLUGIN_PATH="${UCCL_HOME}/efa/libnccl-net-efa.so"
 
-    mpirun --bind-to none -np ${NUM_PROCS} -N ${PROCS_PER_NODE} --hostfile hostname_single_proc \
+    mpirun --bind-to none -np ${NUM_PROCS} -N ${PROCS_PER_NODE} --hostfile hosts_single_proc \
         --tag-output --merge-stderr-to-stdout \
         --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
         --mca orte_base_help_aggregate 0 \

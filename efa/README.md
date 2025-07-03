@@ -14,6 +14,11 @@ tar -xf aws-efa-installer-1.34.0.tar.gz && cd aws-efa-installer
 sudo ./efa_installer.sh -y
 ```
 
+Make sure you haveed install docker. Then run the following and log back in. 
+```bash
+sudo usermod -aG docker $USER
+```
+
 ## Building EFA plugin
 
 ```bash

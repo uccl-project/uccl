@@ -57,7 +57,7 @@ if [ "$TEST" = "srd" ]; then
     LIBNCCL_PATH="${UCCL_HOME}/thirdparty/nccl/build/lib/libnccl.so"
     PLUGIN_PATH="/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu/libnccl-net.so"
 
-    mpirun --bind-to none -np ${NUM_PROCS} -N ${PROCS_PER_NODE} --hostfile hostname \
+    mpirun --bind-to none -np ${NUM_PROCS} -N ${PROCS_PER_NODE} --hostfile hosts \
         --tag-output --merge-stderr-to-stdout \
         --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
         --mca orte_base_help_aggregate 0 \
@@ -94,9 +94,11 @@ elif [ "$TEST" = "ud" ]; then
     done
 
     LIBNCCL_PATH="${UCCL_HOME}/thirdparty/nccl-sg/build/lib/libnccl.so"
-    PLUGIN_PATH="${UCCL_HOME}/efa/libnccl-net-efa.so"
+    # PLUGIN_PATH="${UCCL_HOME}/efa/libnccl-net-efa.so"
+    PLUGIN_PATH=`python -c "import uccl; print(uccl.efa_plugin_path())"`
+    echo "PLUGIN_PATH: ${PLUGIN_PATH}"
 
-    mpirun --bind-to none -np ${NUM_PROCS} -N ${PROCS_PER_NODE} --hostfile hostname \
+    mpirun --bind-to none -np ${NUM_PROCS} -N ${PROCS_PER_NODE} --hostfile hosts \
         --tag-output --merge-stderr-to-stdout \
         --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
         --mca orte_base_help_aggregate 0 \
