@@ -7,31 +7,26 @@ set -e
 # a purpose-built Docker image derived from Ubuntu 22.04.
 #
 # Usage:
-#   ./docker_build.sh [cuda|rocm|all|gh]
+#   ./docker_build.sh [cuda|rocm|efa|all|gh] [-it]
 #
-# The wheels are written to ./wheelhouse/
+# The wheels are written to ./wheelhouse-*/
 # -----------------------
 
 TARGET=${1:-cuda}
 
-if [[ $TARGET != "cuda" && $TARGET != "rocm" && $TARGET != "gh" && $TARGET != "all" ]]; then
-  echo "Usage: $0 [cuda|rocm|gh|all]" >&2
-  exit 1
+if [[ $TARGET != "cuda" && $TARGET != "rocm" && $TARGET != "gh" && $TARGET != "efa" && $TARGET != "all" ]]; then
+  echo "Usage: $0 [cuda|rocm|gh|efa|all]" >&2
 fi
 
 rm -r uccl.egg-info || true
 rm -r dist || true
 rm -r uccl/lib || true
+rm -r build || true
 WHEEL_DIR="wheelhouse-${TARGET}"
 rm -r "${WHEEL_DIR}" || true
 mkdir -p "${WHEEL_DIR}"
 
-# Determine host UID/GID once so we can use it everywhere (must come before
-# the early 'all' branch).
-HOST_UID=$(id -u)
-HOST_GID=$(id -g)
-
-# If TARGET=all, orchestrate both builds
+# If TARGET=all, orchestrate builds for each backend and package **all** shared libraries
 if [[ $TARGET == "all" ]]; then
   # Build both backend-specific wheels first
   "$0" cuda
@@ -41,13 +36,37 @@ if [[ $TARGET == "all" ]]; then
     echo "Skipping ROCm build on Arm64."
   fi
   "$0" gh
+  # Temporary directory to accumulate .so files from each backend build
+  TEMP_LIB_DIR="uccl/lib_all"
+  rm -rf "${TEMP_LIB_DIR}" || true
+  mkdir -p "${TEMP_LIB_DIR}"
 
-  echo "### Packaging $TARGET wheel (contains both libs) ###"
-  docker run --rm --user "${HOST_UID}:${HOST_GID}" \
-    -e TARGET="${TARGET}" \
+  echo "### Building CUDA backend and collecting its shared library ###"
+  "$0" cuda
+  cp uccl/lib/*.so "${TEMP_LIB_DIR}/" || true
+
+  echo "### Building ROCm backend and collecting its shared library ###"
+  "$0" rocm
+  cp uccl/lib/*.so "${TEMP_LIB_DIR}/" || true
+
+  echo "### Building EFA backend and collecting its shared library ###"
+  "$0" efa
+  cp uccl/lib/*.so "${TEMP_LIB_DIR}/" || true
+
+  # Prepare combined library directory
+  rm -rf uccl/lib || true
+  mkdir -p uccl/lib
+  cp "${TEMP_LIB_DIR}"/*.so uccl/lib/
+
+  echo "### Packaging $TARGET wheel (contains all libs) ###"
+  docker run --rm --user "$(id -u):$(id -g)" \
+    -v /etc/passwd:/etc/passwd:ro \
+    -v /etc/group:/etc/group:ro \
+    -v $HOME:$HOME \
     -v "$(pwd)":/io \
+    -e TARGET="${TARGET}" \
     -w /io \
-    uccl-builder-rocm /bin/bash -c '
+    uccl-builder-cuda /bin/bash -c '
       set -euo pipefail
       ls -lh uccl/lib
       python3 -m build
@@ -59,7 +78,7 @@ if [[ $TARGET == "all" ]]; then
   exit 0
 fi
 
-DOCKERFILE="Dockerfile.${TARGET}"
+DOCKERFILE="docker/Dockerfile.${TARGET}"
 IMAGE_NAME="uccl-builder-${TARGET}"
 
 # Build the builder image (contains toolchain + CUDA/ROCm)
@@ -71,33 +90,58 @@ else
 fi
 
 echo "[2/3] Running build inside container..."
-docker run --rm --user "${HOST_UID}:${HOST_GID}" \
-  -e TARGET="${TARGET}" \
-  -e WHEEL_DIR="${WHEEL_DIR}" \
-  -v "$(pwd)":/io \
-  -w /io \
-  "$IMAGE_NAME" /bin/bash -c '
-    set -euo pipefail
-    echo "[container] Backend: $TARGET"
-    echo "[container] Compiling native library…"
-    cd rdma
-    if [[ "$TARGET" == cuda || "$TARGET" == gh ]]; then
-        make clean && make -j$(nproc)
-        TARGET_SO=libnccl-net-uccl.so
-    else
-        make clean -f Makefile_hip
-        make -j$(nproc) -f Makefile_hip
-        TARGET_SO=librccl-net-uccl.so
-    fi
-    cd ..
-    echo "[container] Packaging uccl..."
-    mkdir -p uccl/lib
-    cp rdma/${TARGET_SO} uccl/lib/
-    python3 -m build
-    echo "[container] Running auditwheel..."
-    auditwheel repair dist/*.whl --exclude libibverbs.so.1 -w /io/${WHEEL_DIR}
-    auditwheel show /io/${WHEEL_DIR}/*.whl
-  '
+if [[ $2 == "-it" ]]; then
+  docker run -it --rm --user "$(id -u):$(id -g)" \
+    -v /etc/passwd:/etc/passwd:ro \
+    -v /etc/group:/etc/group:ro \
+    -v $HOME:$HOME \
+    -v "$(pwd)":/io \
+    -e TARGET="${TARGET}" \
+    -e WHEEL_DIR="${WHEEL_DIR}" \
+    -w /io \
+    "$IMAGE_NAME" /bin/bash
+else
+  docker run --rm --user "$(id -u):$(id -g)" \
+    -v /etc/passwd:/etc/passwd:ro \
+    -v /etc/group:/etc/group:ro \
+    -v $HOME:$HOME \
+    -v "$(pwd)":/io \
+    -e TARGET="${TARGET}" \
+    -e WHEEL_DIR="${WHEEL_DIR}" \
+    -w /io \
+    "$IMAGE_NAME" /bin/bash -c '
+      set -euo pipefail
+      echo "[container] Backend: $TARGET"
+      echo "[container] Compiling native library…"
+      
+      if [[ "$TARGET" == cuda ]]; then
+          cd rdma && make clean && make -j$(nproc) && cd ..
+          TARGET_SO=rdma/libnccl-net-uccl.so
+      elif [[ "$TARGET" == rocm ]]; then
+          # Unlike CUDA, ROCM does not include nccl.h. So we need to build rccl to get nccl.h.
+          if [[ ! -f "thirdparty/rccl/build/release/include/nccl.h" ]]; then
+            cd thirdparty/rccl
+            # Just to get nccl.h, not the whole library
+            CXX=/opt/rocm/bin/hipcc cmake -B build/release -S . -DCMAKE_EXPORT_COMPILE_COMMANDS=OFF >/dev/null 2>&1 || true
+            cd ../..
+          fi
+          cd rdma && make clean -f Makefile_hip && make -j$(nproc) -f Makefile_hip && cd ..
+          TARGET_SO=rdma/librccl-net-uccl.so
+      elif [[ "$TARGET" == efa ]]; then
+          cd efa && make clean && make -j$(nproc) && cd ..
+          TARGET_SO=efa/libnccl-net-efa.so
+      fi
+
+      echo "[container] Packaging uccl..."
+      mkdir -p uccl/lib
+      cp ${TARGET_SO} uccl/lib/
+      python3 -m build
+
+      echo "[container] Running auditwheel..."
+      auditwheel repair dist/*.whl --exclude libibverbs.so.1 -w /io/${WHEEL_DIR}
+      auditwheel show /io/${WHEEL_DIR}/*.whl
+    '
+  fi
 
 # 3. Done
 echo "[3/3] Wheel built successfully (stored in ${WHEEL_DIR}):"

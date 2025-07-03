@@ -27,7 +27,7 @@ sudo modprobe ib_uverbs
 
 # Environment variables for UCCL
 export LD_PRELOAD="${UCCL_HOME}/nccl/build/lib/libnccl.so"
-export NCCL_NET_PLUGIN="${UCCL_HOME}/efa/libnccl-net.so"
+export NCCL_NET_PLUGIN="${UCCL_HOME}/efa/libnccl-net-efa.so"
 export NCCL_DEBUG=INFO
 export NCCL_PROTO=Simple
 export NCCL_P2P_DISABLE=${NV_LINK_DISABLE}

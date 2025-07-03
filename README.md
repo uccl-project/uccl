@@ -6,8 +6,8 @@
 <p align="center">
     <a href="#about"><b>About</b></a> | 
     <a href="#road-map"><b>Road Map</b></a> | 
-    <a href="#getting-started"><b>Getting Started</b></a> | 
-    <a href="#documentation"><b>Documentation</b></a> | 
+    <a href="#quick-start"><b>Quick Start</b></a> | 
+    <a href="#dev-guide"><b>Dev Guide</b></a> | 
     <a href="#acknowledgement"><b>Acknowledgement</b></a> |
     <a href="#contact"><b>Contact</b></a>
 </p>
@@ -59,43 +59,30 @@ More UCCL features are under development in this repo, currently including:
   - [ ] Device kernels in vendor-agnostic Triton language
 
 
-## Getting Started
+## Quick Start
 
-UCCL provides a drop-in replacement for any NCCL/RCCL application without code modification or compilation. 
-
-To get started, let's first clone the UCCL repo and init submodules. 
+The easiest way to use UCCL is to first: 
 ```bash
-git clone https://github.com/uccl-project/uccl.git --recursive
-export UCCL_HOME=$(pwd)/uccl
+pip install uccl
 ```
 
-Then install some common dependencies: 
+Then, when running your PyTorch applications, set the environment variable accordingly: 
 ```bash
-sudo apt update
-sudo apt install linux-tools-$(uname -r) clang llvm cmake m4 build-essential \
-                 net-tools libgoogle-glog-dev libgtest-dev libgflags-dev \
-                 libelf-dev libpcap-dev libc6-dev-i386 \
-                 libopenmpi-dev libibverbs-dev libpci-dev -y
+# NCCL over IB/RoCE
+NCCL_NET_PLUGIN=`python -c "import uccl; print(uccl.nccl_plugin_path())"`
 
-# Install and activate Anaconda (you can choose any recent versions)
-wget https://repo.anaconda.com/archive/Anaconda3-2024.10-1-Linux-x86_64.sh
-bash ./Anaconda3-2024.10-1-Linux-x86_64.sh -b
-source ~/anaconda3/bin/activate
-source ~/.bashrc # or .zshrc and others
-conda init
+# RCCL over IB/RoCE
+NCCL_NET_PLUGIN=`python -c "import uccl; print(uccl.rccl_plugin_path())"`
 
-# Install python ssh lib into conda-default base env
-conda install paramiko -y
+# NCCL over AWS EFA NICs (p4d and p4de only)
+NCCL_NET_PLUGIN=`python -c "import uccl; print(uccl.efa_plugin_path())"`
 ```
 
-Next, you can dive into individual folders for various supports: 
-* [`afxdp/`](./afxdp/README.md): Non-RDMA NICs (currently support AWS ENA NICs and IBM VirtIO NICs)
-* [`efa/`](./efa/README.md): AWS EFA NIC (currently support p4d.24xlarge)
-* [`rdma/`](./rdma/README.md): Nvidia/AMD GPUs + IB/RoCE RDMA NICs (currently support Nvidia and Broadcom NICs)
+Now, you can just run your PyTorch applications and enjoy UCCL performance benefits! 
 
-## Documentation
+## Dev Guide
 
-Please refer to [doc/](./doc/README.md) for full documentation.
+Please refer to [doc/dev.md](doc/dev.md) for full development guide of UCCL.
 
 ## Citation
 The code in this repository is mostly described in the paper below. Please consider citing this work if you find the repository helpful. 

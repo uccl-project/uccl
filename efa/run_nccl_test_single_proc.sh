@@ -15,7 +15,7 @@ NIC=ens32
 PROCS_PER_NODE=1
 
 TEST=${1:-ud}
-NUM_PROCS=${2:-3}
+NUM_PROCS=${2:-4}
 PROG_NAME=${3:-0}
 
 # all_gather_perf  all_reduce_perf  alltoall_perf  broadcast_perf  gather_perf
@@ -45,7 +45,7 @@ if [ "$TEST" = "srd" ]; then
     BUFFSIZE=8388608
 fi
 
-NODES=$(get_nodes "../scripts/nodes.txt")
+NODES=$(get_nodes "../scripts/node_ips/p4d.txt")
 echo "Running test: ${TEST}, ${PROG_NAME}, ${NUM_PROCS} processes, NIC ${NIC}, uccl_quite ${UCCL_QUITE}, ${NODES}, ${CHANNELS} channels."
 
 if [ "$TEST" = "srd" ]; then
@@ -57,7 +57,7 @@ if [ "$TEST" = "srd" ]; then
     LIBNCCL_PATH="${UCCL_HOME}/thirdparty/nccl/build/lib/libnccl.so"
     PLUGIN_PATH="/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu/libnccl-net.so"
 
-    mpirun --bind-to none -np ${NUM_PROCS} -N ${PROCS_PER_NODE} --hostfile hostname_single_proc \
+    mpirun --bind-to none -np ${NUM_PROCS} -N ${PROCS_PER_NODE} --hostfile hosts_single_proc \
         --tag-output --merge-stderr-to-stdout \
         --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
         --mca orte_base_help_aggregate 0 \
@@ -94,9 +94,9 @@ elif [ "$TEST" = "ud" ]; then
     done
 
     LIBNCCL_PATH="${UCCL_HOME}/thirdparty/nccl-sg/build/lib/libnccl.so"
-    PLUGIN_PATH="${UCCL_HOME}/efa/libnccl-net.so"
+    PLUGIN_PATH="${UCCL_HOME}/efa/libnccl-net-efa.so"
 
-    mpirun --bind-to none -np ${NUM_PROCS} -N ${PROCS_PER_NODE} --hostfile hostname_single_proc \
+    mpirun --bind-to none -np ${NUM_PROCS} -N ${PROCS_PER_NODE} --hostfile hosts_single_proc \
         --tag-output --merge-stderr-to-stdout \
         --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
         --mca orte_base_help_aggregate 0 \
