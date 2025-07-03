@@ -7,7 +7,7 @@ set -e
 # a purpose-built Docker image derived from Ubuntu 22.04.
 #
 # Usage:
-#   ./docker_build.sh [cuda|rocm|efa|all|gh] [-it]
+#   ./docker_build.sh [cuda|rocm|gh|efa|all] [-it]
 #
 # The wheels are written to ./wheelhouse-*/
 # -----------------------
@@ -51,6 +51,10 @@ if [[ $TARGET == "all" ]]; then
 
   echo "### Building EFA backend and collecting its shared library ###"
   "$0" efa
+  cp uccl/lib/*.so "${TEMP_LIB_DIR}/" || true
+
+  echo "### Building Grace Hopper backend and collecting its shared library ###"
+  "$0" gh
   cp uccl/lib/*.so "${TEMP_LIB_DIR}/" || true
 
   # Prepare combined library directory
@@ -130,6 +134,12 @@ else
       elif [[ "$TARGET" == efa ]]; then
           cd efa && make clean && make -j$(nproc) && cd ..
           TARGET_SO=efa/libnccl-net-efa.so
+      elif [[ "$TARGET" == gh ]]; then
+          cd rdma && make clean && make -j$(nproc) && cd ..
+          TARGET_SO=rdma/libnccl-net-uccl.so
+      else 
+          echo "Unsupported target: $TARGET"
+          exit 1
       fi
 
       echo "[container] Packaging uccl..."
