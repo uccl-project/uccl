@@ -46,14 +46,14 @@ int RDMAFactory::init_devs() {
   int num_ifs = parse_interfaces(ib_hca, user_ifs, MAX_IB_DEVS);
   devices = ibv_get_device_list(&num_devs);
   if (devices == nullptr || num_devs == 0) {
-    perror("ibv_get_device_list");
+    UCCL_LOG_ERROR << "Unable to get device list";
     goto error;
   }
 
   for (int d = 0; d < num_devs && __num_devices < MAX_IB_DEVS; d++) {
     struct ibv_context* context = ibv_open_device(devices[d]);
     if (context == nullptr) {
-      printf("NET/IB : Unable to open device %s", devices[d]->name);
+      UCCL_LOG_ERROR << "Unable to open device " << devices[d]->name;
       continue;
     }
 
@@ -67,7 +67,7 @@ int RDMAFactory::init_devs() {
     for (int port_num = 1; port_num <= dev_attr.phys_port_cnt; port_num++) {
       struct ibv_port_attr port_attr;
       if (ibv_query_port(context, port_num, &port_attr)) {
-        printf("NET/IB : Unable to query port_num %d", port_num);
+        UCCL_LOG_ERROR << "Unable to query port_num " << port_num;
         ibv_close_device(context);
         continue;
       }
@@ -116,10 +116,10 @@ int RDMAFactory::init_devs() {
       };
       struct ibv_cq_ex* cq_ex = ibv_create_cq_ex(context, &cq_attr);
       if (cq_ex) {
-        printf("cq_ex supported\n");
+        UCCL_LOG_RE << "cq_ex supported on dev: " << devices[d]->name;
         ibv_destroy_cq(ibv_cq_ex_to_cq(cq_ex));
       } else {
-        printf("cq_ex NOT supported\n");
+        UCCL_LOG_RE << "cq_ex NOT supported on dev: " << devices[d]->name;
       }
       dev.support_cq_ex = cq_ex != nullptr;
 
@@ -137,7 +137,7 @@ int RDMAFactory::init_devs() {
       } else if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
         dev.gid_idx = ucclParamIB_GID_IDX();
       } else {
-        printf("Unknown link layer: %d\n", port_attr.link_layer);
+        UCCL_LOG_ERROR << "Unknown link layer: " << port_attr.link_layer;
         ibv_close_device(context);
         continue;
       }
@@ -145,7 +145,7 @@ int RDMAFactory::init_devs() {
       dev.context = context;
 
       if (ibv_query_gid(context, port_num, dev.gid_idx, &dev.gid)) {
-        perror("ibv_query_gid");
+        UCCL_LOG_ERROR << "Unable to query GID";
         ibv_close_device(context);
         continue;
       }
@@ -153,7 +153,7 @@ int RDMAFactory::init_devs() {
       // Allocate a PD for this device
       dev.pd = ibv_alloc_pd(context);
       if (dev.pd == nullptr) {
-        perror("ibv_alloc_pd");
+        UCCL_LOG_ERROR << "Unable to allocate PD";
         ibv_close_device(context);
         continue;
       }
@@ -162,7 +162,7 @@ int RDMAFactory::init_devs() {
       {
         struct ibv_pd* pd = ibv_alloc_pd(context);
         if (pd == nullptr) {
-          perror("ibv_alloc_pd");
+          UCCL_LOG_ERROR << "Unable to allocate PD";
           ibv_close_device(context);
           continue;
         }
@@ -174,11 +174,12 @@ int RDMAFactory::init_devs() {
             !((errno == EOPNOTSUPP) || (errno == EPROTONOSUPPORT));
         ibv_dealloc_pd(pd);
 
-        UCCL_LOG_RE << "DMA-BUF support: " << dev.dma_buf_support;
+        UCCL_LOG_RE << "DMA-BUF support: " << dev.dma_buf_support
+                    << " on dev: " << devices[d]->name;
       }
 
       rdma_ctl->devices_.push_back(dev);
-      printf("Initialized %s\n", devices[d]->name);
+      UCCL_LOG_RE << "Initialized " << devices[d]->name;
       __num_devices++;
     }
   }
@@ -186,7 +187,7 @@ int RDMAFactory::init_devs() {
   return __num_devices;
 
 error:
-  throw std::runtime_error("Failed to initialize RDMAFactory");
+  UCCL_INIT_CHECK(false, "Failed to initialize RDMAFactory");
 }
 
 /**
@@ -430,7 +431,7 @@ void SharedIOContext::check_srq(bool force) {
 
   struct ibv_recv_wr* bad_wr;
   DCHECK(ibv_post_srq_recv(srq_, &dp_recv_wrs_.recv_wrs[0], &bad_wr) == 0);
-  UCCL_LOG_IO << "Posted " << post_batch << " recv requests for SRQ";
+  // UCCL_LOG_IO << "Posted " << post_batch << " recv requests for SRQ";
   dec_post_srq(post_batch);
 }
 

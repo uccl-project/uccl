@@ -303,10 +303,10 @@ inline void RDMAEndpoint::initialize_resources(int total_num_engines) {
   active_flows_vec_.resize(num_devices_);
   active_flows_spin_.resize(num_devices_);
 
-  printf(
-      "Initialized %d engines for %d devices totally, with %d engines per "
-      "device\n",
-      total_num_engines, num_devices_, num_engines_per_dev_);
+  UCCL_LOG_EP << "Initialized " << total_num_engines
+                  << " engines for " << num_devices_
+                  << " devices totally, with " << num_engines_per_dev_
+                  << " engines per device";
 }
 
 void RDMAEndpoint::cleanup_resources() {
@@ -712,10 +712,10 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
   rdma_ctl_ = rdma_ctl;
 
   int total_num_engines = num_devices_ * num_engines_per_dev;
-  printf(
-      "Starting to initialize %d channels for %d devices with %d engines per "
-      "device\n",
-      total_num_engines, num_devices_, num_engines_per_dev_);
+  UCCL_LOG_EP << "Starting to initialize " << total_num_engines
+              << " channels for " << num_devices_
+              << " devices with " << num_engines_per_dev_ << " engines per "
+              << "device";
   initialize_resources(total_num_engines);
   // Create multiple engines. Each engine has its own thread and channel to
   // let the endpoint communicate with.

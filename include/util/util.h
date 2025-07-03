@@ -37,11 +37,12 @@
 
 namespace uccl {
 
+#define UCCL_LOG_RE VLOG(0) << "[Resource] "
 #define UCCL_LOG_PLUGIN VLOG(1) << "[Plugin] "
-#define UCCL_LOG_IO VLOG(2) << "[IO] "
-#define UCCL_LOG_EP VLOG(3) << "[Endpoint] "
-#define UCCL_LOG_RE VLOG(3) << "[Resource] "
-#define UCCL_LOG_ENGINE VLOG(4) << "[Engine] "
+#define UCCL_LOG_EP VLOG(2) << "[Endpoint] "
+#define UCCL_LOG_ENGINE VLOG(3) << "[Engine] "
+#define UCCL_LOG_IO VLOG(4) << "[IO] "
+#define UCCL_LOG_ERROR LOG(ERROR) << "[Error] "
 
 #define POISON_64 UINT64_MAX
 #define POISON_32 UINT32_MAX
