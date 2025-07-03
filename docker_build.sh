@@ -90,6 +90,13 @@ else
           cd rdma && make clean && make -j$(nproc) && cd ..
           TARGET_SO=rdma/libnccl-net-uccl.so
       elif [[ "$TARGET" == rocm ]]; then
+          # Unlike CUDA, ROCM does not include nccl.h. So we need to build rccl to get nccl.h.
+          if [[ ! -f "thirdparty/rccl/build/release/include/nccl.h" ]]; then
+            cd thirdparty/rccl
+            # Just to get nccl.h, not the whole library
+            CXX=/opt/rocm/bin/hipcc cmake -B build/release -S . -DCMAKE_EXPORT_COMPILE_COMMANDS=OFF >/dev/null 2>&1 || true
+            cd ../..
+          fi
           cd rdma && make clean -f Makefile_hip && make -j$(nproc) -f Makefile_hip && cd ..
           TARGET_SO=rdma/libnccl-net-uccl.so
       elif [[ "$TARGET" == efa ]]; then

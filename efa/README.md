@@ -46,7 +46,7 @@ make MPI=1 MPI_HOME=/opt/amazon/openmpi CUDA_HOME=/usr/local/cuda NCCL_HOME=$UCC
 ## Runing nccl-tests for UCCL
 
 Filling `$UCCL_HOME/scripts/node_ips/p4d.txt` with the ssh'able IP addresses of the nodes for rsync'ing all built libs. 
-Filling `$UCCL_HOME/efa/hostname` with the ssh'able IP addresses of the nodes for mpirun use. There, `slots` denotes the number of processes you want to run on each server; we currently only support 8. 
+Filling `$UCCL_HOME/efa/hosts` with the ssh'able IP addresses of the nodes for mpirun use. There, `slots` denotes the number of processes you want to run on each server; we currently only support 8. 
 
 ```bash
 cd $UCCL_HOME/scripts
