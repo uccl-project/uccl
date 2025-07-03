@@ -159,7 +159,7 @@ else
       echo "[container] Building uccl.p2p Python binding..."
       cd p2p
       make clean && make -j$(nproc)
-      mv p2p*.so ../uccl/p2p.so
+      mv p2p*.so ../uccl/
 
       cd ../
 
