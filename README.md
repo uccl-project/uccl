@@ -6,7 +6,7 @@
 <p align="center">
     <a href="#about"><b>About</b></a> | 
     <a href="#road-map"><b>Road Map</b></a> | 
-    <a href="#getting-started"><b>Getting Started</b></a> | 
+    <a href="#quick-start"><b>Quick Start</b></a> | 
     <a href="#dev-guide"><b>Dev Guide</b></a> | 
     <a href="#acknowledgement"><b>Acknowledgement</b></a> |
     <a href="#contact"><b>Contact</b></a>
@@ -59,9 +59,7 @@ More UCCL features are under development in this repo, currently including:
   - [ ] Device kernels in vendor-agnostic Triton language
 
 
-## Getting Started
-
-UCCL provides a drop-in replacement for any NCCL/RCCL application without code modification or compilation. 
+## Quick Start
 
 The easiest way to use UCCL is to first: 
 ```bash
@@ -74,7 +72,7 @@ Then, when running your PyTorch applications, set the environment variable accor
 NCCL_NET_PLUGIN=`python -c "import uccl; print(uccl.nccl_plugin_path())"`
 # RCCL over IB/RoCE
 NCCL_NET_PLUGIN=`python -c "import uccl; print(uccl.rccl_plugin_path())"`
-# NCCL over AWS EFA NICs
+# NCCL over AWS EFA NICs (p4d and p4de only)
 NCCL_NET_PLUGIN=`python -c "import uccl; print(uccl.efa_plugin_path())"`
 ```
 
