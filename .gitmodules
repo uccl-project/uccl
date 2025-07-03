@@ -16,3 +16,6 @@
 [submodule "thirdparty/nccl-tests"]
 	path = thirdparty/nccl-tests
 	url = https://github.com/NVIDIA/nccl-tests.git
+[submodule "thirdparty/nccl-mt"]
+	path = thirdparty/nccl-mt
+	url = git@github.com:uccl-project/nccl.git
