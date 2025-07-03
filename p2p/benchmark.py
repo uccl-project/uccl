@@ -9,9 +9,9 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    import uccl_p2p
+    from uccl import p2p
 except ImportError as exc:
-    sys.stderr.write("Failed to import uccl_p2p — did you run `make`?\n")
+    sys.stderr.write("Failed to import p2p\n")
     raise
 
 _HAS_TORCH = False
@@ -50,7 +50,7 @@ def _pretty_size(num_bytes: int) -> str:
     return f"{num_bytes} B"  # fallback
 
 def _run_server(args):
-    ep = uccl_p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
+    ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
     print("[Server] Waiting for connection …", flush=True)
     ok, r_ip, r_gpu, conn_id = ep.accept()
     if not ok:
@@ -81,7 +81,7 @@ def _run_server(args):
 def _run_client(args):
     if args.remote_ip is None:
         sys.exit("[Client] --remote-ip is required")
-    ep = uccl_p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
+    ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
     ok, conn_id = ep.connect(args.remote_ip, args.remote_gpu_idx)
     if not ok:
         sys.exit("[Client] Failed to connect to server")

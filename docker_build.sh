@@ -143,8 +143,17 @@ else
       fi
 
       echo "[container] Packaging uccl..."
+
       mkdir -p uccl/lib
       cp ${TARGET_SO} uccl/lib/
+
+      echo "[container] Building uccl.p2p Python binding..."
+      cd p2p
+      make clean && make -j$(nproc)
+      mv p2p*.so ../uccl
+
+      cd ../
+
       python3 -m build
 
       echo "[container] Running auditwheel..."

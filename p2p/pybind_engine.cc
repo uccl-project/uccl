@@ -1,3 +1,5 @@
+#define PYBIND11_LIMITED_API  // Make it version-agnostic
+
 #include "engine.h"
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
@@ -5,8 +7,8 @@
 
 namespace py = pybind11;
 
-PYBIND11_MODULE(uccl_p2p, m) {
-  m.doc() = "KVTrans Engine - High-performance RDMA-based key-value transport";
+PYBIND11_MODULE(p2p, m) {
+  m.doc() = "P2P Engine - High-performance RDMA-based peer-to-peer transport";
 
   // Endpoint class binding
   py::class_<Endpoint>(m, "Endpoint")

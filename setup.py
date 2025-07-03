@@ -9,7 +9,9 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/uccl-project/uccl",
     packages=find_packages(),
-    package_data={"uccl": ["lib/*.so"]},
+    package_data={
+        "uccl": ["lib/*.so", "p2p*.so"],
+    },
     license="Apache-2.0",
     install_requires=[
     ],

@@ -1,4 +1,5 @@
 import os
+from . import p2p
 
 __version__ = "0.0.1.post1"
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test script for the KVTrans Engine pybind11 extension
+Test script for the UCCL P2P Engine pybind11 extension
 """
 
 import sys
@@ -14,11 +14,11 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    import uccl_p2p
+    from . import p2p
 
-    print("✓ Successfully imported uccl_p2p")
+    print("✓ Successfully imported p2p")
 except ImportError as e:
-    print(f"✗ Failed to import uccl_p2p: {e}")
+    print(f"✗ Failed to import p2p: {e}")
     print("Make sure to run 'make' first to build the module")
     sys.exit(1)
 
@@ -28,7 +28,7 @@ def test_local():
     print("Running UCCL P2P Engine local test...")
 
     def server_process():
-        engine = uccl_p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
+        engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
         success, remote_ip_addr, remote_gpu_idx, conn_id = engine.accept()
         assert success
         print(

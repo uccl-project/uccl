@@ -27,7 +27,7 @@ LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda $(REDIS_LIBS) \
                   -lz -lelf -libverbs -lpthread
 
 # Target and source files
-TARGET   := uccl_p2p$(PYEXT)
+TARGET   := p2p$(PYEXT)
 SOURCES := engine.cc pybind_engine.cc
 OBJECTS := $(SOURCES:.cc=.o)
 
