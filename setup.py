@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="uccl",
-    version="0.0.1.post1",
+    version="0.0.1.post2",
     author="UCCL Team",
     description="UCCL: Ultra and Unified CCL",
     long_description=open("README.md").read(),

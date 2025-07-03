@@ -324,7 +324,7 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
 
   *listenComm = lcomm;
 
-  UCCL_LOG_PLUGIN << "Listen on dev: " << dev;
+  UCCL_LOG_PLUGIN << "Listen on dev: " << dev << " from PID: " << getpid();
 
   return ncclSuccess;
 }
@@ -376,7 +376,7 @@ ncclResult_t pluginConnect(int dev, void* opaque_handle, void** sendComm,
   if (*sendComm) {
     UCCL_LOG_PLUGIN << "Connected to " << remote_ip_str << "/"
                     << handle->remote_dev << " on dev:" << dev << ", "
-                    << scomm->base.conn_id.flow_id;
+                    << scomm->base.conn_id.flow_id << " from PID: " << getpid();
   }
 
   return ncclSuccess;
@@ -427,7 +427,7 @@ ncclResult_t pluginAccept(void* listenComm, void** recvComm,
   if (*recvComm) {
     UCCL_LOG_PLUGIN << "Accepted from " << rcomm->remote_ip_str << "/"
                     << rcomm->remote_dev << " on dev:" << lcomm->dev << ", "
-                    << rcomm->base.conn_id.flow_id;
+                    << rcomm->base.conn_id.flow_id << " from PID: " << getpid();
   }
 
   return ncclSuccess;
@@ -439,7 +439,8 @@ ncclResult_t pluginRegMr(void* collComm, void* data, size_t size, int type,
   struct ucclBaseComm* base = (struct ucclBaseComm*)collComm;
   ret = ep->uccl_regmr((UcclFlow*)base->conn_id.context, data, size, type,
                        (struct Mhandle**)mhandle);
-  UCCL_LOG_PLUGIN << "RegMr, " << size << ", " << base->conn_id.flow_id;
+  UCCL_LOG_PLUGIN << "RegMr, " << size << ", " << base->conn_id.flow_id
+                  << " from PID: " << getpid();
 
   return ret == 0 ? ncclSuccess : ncclInternalError;
 }
@@ -451,7 +452,8 @@ ncclResult_t pluginRegMrDmaBuf(void* collComm, void* data, size_t size,
   struct ucclBaseComm* base = (struct ucclBaseComm*)collComm;
   ret = ep->uccl_regmr_dmabuf((UcclFlow*)base->conn_id.context, data, size,
                               type, offset, fd, (struct Mhandle**)mhandle);
-  UCCL_LOG_PLUGIN << "RegMrDmaBuf, " << size << ", " << base->conn_id.flow_id;
+  UCCL_LOG_PLUGIN << "RegMrDmaBuf, " << size << ", " << base->conn_id.flow_id
+                  << " from PID: " << getpid();
 
   return ret == 0 ? ncclSuccess : ncclInternalError;
 }
@@ -488,7 +490,7 @@ ncclResult_t pluginIsend(void* sendComm, void* data, int size, int tag,
   *request = req;
 
   UCCL_LOG_PLUGIN << "Isend on dev: " << dev << ", " << size
-                  << "B, ureq ptr:" << req;
+                  << "B, ureq ptr:" << req << " from PID: " << getpid();
 
   return ncclSuccess;
 }
@@ -520,7 +522,7 @@ ncclResult_t pluginIrecv(void* recvComm, int n, void** data, int* sizes,
   *request = req;
 
   UCCL_LOG_PLUGIN << "Irecv on dev: " << dev << ", " << sizes[0]
-                  << "B, ureq ptr:" << req;
+                  << "B, ureq ptr:" << req << " from PID: " << getpid();
 
   return ncclSuccess;
 }
@@ -551,8 +553,8 @@ ncclResult_t pluginIflush(void* recvComm, int n, void** data, int* sizes,
 
   *request = req;
 
-  UCCL_LOG_PLUGIN << "Iflush on dev: " << dev << ", " << sizes[0]
-                  << "B, ureq ptr:" << req;
+  // UCCL_LOG_PLUGIN << "Iflush on dev: " << dev << ", " << sizes[0]
+  //                 << "B, ureq ptr:" << req << " from PID: " << getpid();
 
   return ncclSuccess;
 }
@@ -571,8 +573,8 @@ ncclResult_t pluginTest(void* request, int* done, int* size) {
                       << ", req->type:" << req->type;
     } else if (req->type == ReqFlush) {
       // Do nothing.
-      UCCL_LOG_PLUGIN << "Test Flush done, " << size[0]
-                      << "B, ureq ptr:" << req;
+      // UCCL_LOG_PLUGIN << "Test Flush done, " << size[0]
+      //                 << "B, ureq ptr:" << req;
     }
     {
       auto uccl_req_pool =

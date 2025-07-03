@@ -32,7 +32,7 @@ You can then dive into:
 
 ### Python Wheel Build
 
-Run the following to build Python wheels (you can replace `all` with `cuda`, `rocm`, `efa`, and more): 
+Run the following to build Python wheels (you can replace `all` with `cuda`, `rocm`, `efa`, and `gh`): 
 ```bash
 cd $UCCL_HOME
 ./docker_build.sh all
@@ -43,6 +43,8 @@ Run the following to install the wheels locally:
 cd $UCCL_HOME
 pip install wheelhouse-all/uccl-*.whl
 ```
+
+Note that you need ARM hosts to build ARM wheels. We do not support building ARM wheels on x86 hosts, as QEMU (`qemu-user-static`) cannot emulate CUDA or ROCm. 
 
 ### On Cloudlab CPU Machines
 

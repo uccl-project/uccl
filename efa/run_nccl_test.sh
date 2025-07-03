@@ -95,7 +95,9 @@ elif [ "$TEST" = "ud" ]; then
 
     LIBNCCL_PATH="${UCCL_HOME}/thirdparty/nccl-sg/build/lib/libnccl.so"
     PLUGIN_PATH="${UCCL_HOME}/efa/libnccl-net-efa.so"
+    # LIBNCCL_PATH=`python -c "import uccl; print(uccl.efa_nccl_path())"`
     # PLUGIN_PATH=`python -c "import uccl; print(uccl.efa_plugin_path())"`
+    echo "LIBNCCL_PATH: ${LIBNCCL_PATH}"
     echo "PLUGIN_PATH: ${PLUGIN_PATH}"
 
     mpirun --bind-to none -np ${NUM_PROCS} -N ${PROCS_PER_NODE} --hostfile hosts \
