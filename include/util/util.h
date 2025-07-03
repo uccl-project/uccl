@@ -37,7 +37,7 @@
 
 namespace uccl {
 
-#define UCCL_LOG_RE VLOG(0) << "[Resource] "
+#define UCCL_LOG_RE VLOG(1) << "[Resource] "
 #define UCCL_LOG_PLUGIN VLOG(1) << "[Plugin] "
 #define UCCL_LOG_EP VLOG(2) << "[Endpoint] "
 #define UCCL_LOG_ENGINE VLOG(3) << "[Engine] "
