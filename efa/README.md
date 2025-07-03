@@ -20,7 +20,7 @@ sudo ./efa_installer.sh -y
 # Eg, /home/ubuntu/uccl
 export UCCL_HOME=<the path of uccl>
 
-# Build libnccl-net.so
+# Build libnccl-net-efa.so
 cd $UCCL_HOME/efa
 make -j
 
@@ -40,7 +40,7 @@ make MPI=1 MPI_HOME=/opt/amazon/openmpi CUDA_HOME=/usr/local/cuda NCCL_HOME=$UCC
 
 ## Runing nccl-tests for UCCL
 
-Filling `$UCCL_HOME/scripts/nodes.txt` with the ssh'able IP addresses of the nodes for rsync'ing all built libs. 
+Filling `$UCCL_HOME/scripts/node_ips/p4d.txt` with the ssh'able IP addresses of the nodes for rsync'ing all built libs. 
 Filling `$UCCL_HOME/efa/hostname` with the ssh'able IP addresses of the nodes for mpirun use. There, `slots` denotes the number of processes you want to run on each server; we currently only support 8. 
 
 ```bash
@@ -57,7 +57,7 @@ cd $UCCL_HOME/efa
 Generally, the main environment variables to set for UCCL are: 
 ```bash
 LD_PRELOAD="${UCCL_HOME}/thirdparty/nccl-sg/build/lib/libnccl.so"
-NCCL_NET_PLUGIN="${UCCL_HOME}/efa/libnccl-net.so"
+NCCL_NET_PLUGIN="${UCCL_HOME}/efa/libnccl-net-efa.so"
 NCCL_PROTO=Simple
 ```
 Currently, UCCL only supports `Simple` protocol; support for `LL` and `LL128` is on the way. 

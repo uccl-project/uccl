@@ -15,7 +15,7 @@ NIC=ens32
 PROCS_PER_NODE=1
 
 TEST=${1:-ud}
-NUM_PROCS=${2:-3}
+NUM_PROCS=${2:-4}
 PROG_NAME=${3:-0}
 
 # all_gather_perf  all_reduce_perf  alltoall_perf  broadcast_perf  gather_perf
@@ -45,7 +45,7 @@ if [ "$TEST" = "srd" ]; then
     BUFFSIZE=8388608
 fi
 
-NODES=$(get_nodes "../scripts/nodes.txt")
+NODES=$(get_nodes "../scripts/node_ips/p4d.txt")
 echo "Running test: ${TEST}, ${PROG_NAME}, ${NUM_PROCS} processes, NIC ${NIC}, uccl_quite ${UCCL_QUITE}, ${NODES}, ${CHANNELS} channels."
 
 if [ "$TEST" = "srd" ]; then
@@ -94,7 +94,7 @@ elif [ "$TEST" = "ud" ]; then
     done
 
     LIBNCCL_PATH="${UCCL_HOME}/thirdparty/nccl-sg/build/lib/libnccl.so"
-    PLUGIN_PATH="${UCCL_HOME}/efa/libnccl-net.so"
+    PLUGIN_PATH="${UCCL_HOME}/efa/libnccl-net-efa.so"
 
     mpirun --bind-to none -np ${NUM_PROCS} -N ${PROCS_PER_NODE} --hostfile hostname_single_proc \
         --tag-output --merge-stderr-to-stdout \
