@@ -303,10 +303,9 @@ inline void RDMAEndpoint::initialize_resources(int total_num_engines) {
   active_flows_vec_.resize(num_devices_);
   active_flows_spin_.resize(num_devices_);
 
-  UCCL_LOG_EP << "Initialized " << total_num_engines
-                  << " engines for " << num_devices_
-                  << " devices totally, with " << num_engines_per_dev_
-                  << " engines per device";
+  UCCL_LOG_EP << "Initialized " << total_num_engines << " engines for "
+              << num_devices_ << " devices totally, with "
+              << num_engines_per_dev_ << " engines per device";
 }
 
 void RDMAEndpoint::cleanup_resources() {
@@ -713,8 +712,8 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
 
   int total_num_engines = num_devices_ * num_engines_per_dev;
   UCCL_LOG_EP << "Starting to initialize " << total_num_engines
-              << " channels for " << num_devices_
-              << " devices with " << num_engines_per_dev_ << " engines per "
+              << " channels for " << num_devices_ << " devices with "
+              << num_engines_per_dev_ << " engines per "
               << "device";
   initialize_resources(total_num_engines);
   // Create multiple engines. Each engine has its own thread and channel to
