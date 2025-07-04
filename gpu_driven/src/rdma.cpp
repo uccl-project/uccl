@@ -963,7 +963,7 @@ void print_average_async_memcpy_time() {
 
 void remote_ensure_ack_sender_resources(ibv_pd* pd, uint64_t* ack_buf,
                                         ibv_mr*& ack_mr) {
-  if (ack_mr) return;  // already done
+  if (ack_mr) return;
   ack_mr = ibv_reg_mr(pd, ack_buf, sizeof(uint64_t) * RECEIVER_BATCH_SIZE,
                       IBV_ACCESS_LOCAL_WRITE);  // host-only
 

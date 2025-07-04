@@ -132,7 +132,6 @@ int main(int argc, char** argv) {
     cudaCheckErrors("cudaStreamDestroy failed");
   } else {
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
-
     int num_copy_engine = kNumThBlocks;
     std::vector<std::thread> copy_threads;
     copy_threads.reserve(num_copy_engine);
