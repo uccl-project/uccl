@@ -9,7 +9,7 @@ LDFLAGS   := -lpthread
 LDFLAGS   += -libverbs -lnl-3 -lnl-route-3
 NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread" -ccbin /usr/bin/g++
 
-INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include
+INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../include
 
 SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp src/peer_copy_worker.cpp
 SRC_CU  := src/gpu_kernel.cu src/peer_copy.cu

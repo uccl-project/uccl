@@ -136,10 +136,8 @@ struct alignas(128) RingBuffer {
     if (avail == 0) return 0;
     int cnt = (n < static_cast<int>(avail)) ? n : static_cast<int>(avail);
 #if __CUDA_ARCH__
-    // host → device path: GPU consumer must see host writes
     if constexpr (Dir == FlowDirection::HostToDevice) __threadfence();
 #else
-    // host → host path: acquire fence pairs with producer's release
     if constexpr (Dir == FlowDirection::HostToHost) HOST_ACQUIRE();
 #endif
     for (int i = 0; i < cnt; ++i) out[i] = buf[(t + i) & mask()];
@@ -153,6 +151,20 @@ struct alignas(128) RingBuffer {
 #else
     return *reinterpret_cast<volatile uint64_t const*>(&tail);
 #endif
+  }
+
+  __host__ __device__ __forceinline__ uint64_t volatile_head() {
+    uint64_t val;
+#if defined(__CUDA_ARCH__)
+    return ld_volatile(&head);
+#elif defined(__x86_64__)
+    asm volatile("movq %1, %0" : "=r"(val) : "m"(head) : "memory");
+#elif defined(__aarch64__)
+    asm volatile("ldr %0, [%1]" : "=r"(val) : "r"(&head) : "memory");
+#else
+#error "Unsupported architecture"
+#endif
+    return val;
   }
 };
 
