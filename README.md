@@ -75,7 +75,7 @@ NCCL_NET_PLUGIN=`python -c "import uccl; print(uccl.nccl_plugin_path())"`
 NCCL_NET_PLUGIN=`python -c "import uccl; print(uccl.rccl_plugin_path())"`
 
 # NCCL over AWS EFA NICs (p4d and p4de only)
-LR_PRELOAD=`python -c "import uccl; print(uccl.efa_nccl_path())"`
+LD_PRELOAD=`python -c "import uccl; print(uccl.efa_nccl_path())"`
 NCCL_NET_PLUGIN=`python -c "import uccl; print(uccl.efa_plugin_path())"`
 ```
 
