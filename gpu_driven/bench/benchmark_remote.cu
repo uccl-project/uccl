@@ -1,5 +1,4 @@
 #include "common.hpp"
-#include "copy_ring.hpp"
 #include "gpu_kernel.cuh"
 #include "peer_copy_worker.hpp"
 #include "proxy.hpp"
@@ -83,7 +82,7 @@ int main(int argc, char** argv) {
   global_rdma_init(gpu_buffer, total_size, &local_info, rank);
 #endif
   std::vector<std::thread> cpu_threads;
-  std::vector<CopyRing> g_rings(kNumThBlocks);
+  std::vector<CopyRingBuffer> g_rings(kNumThBlocks);
   for (int i = 0; i < kNumThBlocks; ++i) {
     if (rank == 0)
       cpu_threads.emplace_back(cpu_proxy, &rbs[i], i, gpu_buffer,

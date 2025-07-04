@@ -1,6 +1,5 @@
 // peer_copy.cu
 #include "common.hpp"
-#include "copy_ring.hpp"
 #include "peer_copy.cuh"
 #include "ring_buffer.cuh"
 #include <cstdio>

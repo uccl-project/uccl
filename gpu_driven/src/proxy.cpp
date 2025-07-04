@@ -1,6 +1,5 @@
 #include "proxy.hpp"
 #include "common.hpp"
-#include "copy_ring.hpp"
 #include "rdma.hpp"
 #include "ring_buffer.cuh"
 #include <algorithm>
@@ -33,7 +32,7 @@ inline uint64_t load_volatile_u64(uint64_t volatile* addr) {
 
 void remote_cpu_proxy(DeviceToHostCmdBuffer* rb, int block_idx,
                       void* gpu_buffer, size_t total_size, int rank,
-                      char const* peer_ip, CopyRing& g_ring) {
+                      char const* peer_ip, CopyRingBuffer& g_ring) {
   printf("Remote CPU thread for block %d started\n", block_idx + 1);
 
   per_thread_rdma_init(gpu_buffer, total_size, rank, block_idx);

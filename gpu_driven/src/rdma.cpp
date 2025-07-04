@@ -1,6 +1,5 @@
 #include "rdma.hpp"
 #include "common.hpp"
-#include "copy_ring.hpp"
 #include "peer_copy_worker.hpp"
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -1017,7 +1016,7 @@ void handle_peer_copy(uint64_t wr_id, int src_dev, int dst_dev, void* src_ptr,
 }
 
 void remote_cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq,
-                                                CopyRing& g_ring) {
+                                                CopyRingBuffer& g_ring) {
   struct ibv_wc wc[kMaxOutstandingRecvs];
   struct ibv_sge sges[kMaxOutstandingRecvs];
   struct ibv_recv_wr wrs[kMaxOutstandingRecvs];
@@ -1133,7 +1132,7 @@ void remote_cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq,
       task_vec.push_back(task);
     }
     if (!task_vec.empty()) {
-      while (!g_ring.emplace(task_vec)) { /* Busy spin. */
+      while (!g_ring.pushN(task_vec.data(), task_vec.size())) { /* Busy spin. */
       }
     }
 #endif

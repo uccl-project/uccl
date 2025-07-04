@@ -1,7 +1,7 @@
 #ifndef RDMA_HPP
 #define RDMA_HPP
 #include "common.hpp"
-#include "copy_ring.hpp"
+#include "ring_buffer.cuh"
 #include "unistd.h"
 #include <infiniband/verbs.h>
 #include <atomic>
@@ -84,7 +84,7 @@ void per_thread_polling(int thread_idx, struct ibv_cq* per_thread_cq,
                         std::unordered_set<uint64_t>* per_thread_finished_wrs,
                         std::mutex* per_thread_finished_wrs_mutex);
 void remote_cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq,
-                                                CopyRing& g_ring);
+                                                CopyRingBuffer& g_ring);
 void handle_peer_copy(uint64_t wr_id, uint32_t imm, int src_dev, int dst_dev,
                       void* src_ptr, void* dst_ptr, size_t num_bytes);
 
