@@ -1,4 +1,5 @@
 FROM rocm/dev-ubuntu-22.04
+ARG PY_VER=3.13
 
 # Non-interactive APT
 ENV DEBIAN_FRONTEND=noninteractive
@@ -12,12 +13,36 @@ RUN apt-get update && \
         rdma-core libibverbs-dev \
         libgoogle-glog-dev libgflags-dev libgtest-dev libelf-dev \
         libnuma-dev libdrm-dev libdrm-amdgpu1 \
-        python3-pip python3-setuptools python3-wheel python-is-python3 python3-venv && \
+        pkg-config libhiredis-dev zlib1g-dev curl && \
+\
+# ───── Add Python ${PY_VER} PPA & install Python ${PY_VER} + setuptools ─────
+    add-apt-repository ppa:deadsnakes/ppa && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        python${PY_VER} python${PY_VER}-dev python${PY_VER}-venv python3-setuptools && \
+\
+# ───── Bootstrap pip for Python ${PY_VER} ─────
+    curl -sS https://bootstrap.pypa.io/get-pip.py | python${PY_VER} && \
+    ln -sf /usr/bin/pip${PY_VER} /usr/local/bin/pip && \
+    ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python${PY_VER} && \
+\
+# ───── Clean up apt cache ─────
     rm -rf /var/lib/apt/lists/*
 
-# Python build back-end
-RUN pip install --no-cache-dir build auditwheel
+# ─────────────────────────────────────────────────────────
+# Install Python build back-end (for Python ${PY_VER})
+# ─────────────────────────────────────────────────────────
+RUN python${PY_VER} -m pip install --no-cache-dir build auditwheel pybind11
 
+# ───── Set Python ${PY_VER} as default python3 and python3-config ─────
+RUN ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python3 && \
+    ln -sf /usr/bin/python${PY_VER}-config /usr/local/bin/python3-config
+
+RUN git clone --depth 1 https://github.com/sewenew/redis-plus-plus.git /tmp/redis-plus-plus && \
+    cd /tmp/redis-plus-plus && mkdir build && cd build && \
+    cmake .. && make -j && make install && \
+    rm -rf /tmp/redis-plus-plus
+    
 WORKDIR /io
 
 CMD ["bash"] 

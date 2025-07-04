@@ -13,6 +13,7 @@ set -e
 # -----------------------
 
 TARGET=${1:-cuda}
+PY_VER=${2:-3.13}
 
 if [[ $TARGET != "cuda" && $TARGET != "rocm" && $TARGET != "gh" && $TARGET != "efa" && $TARGET != "all" ]]; then
   echo "Usage: $0 [cuda|rocm|gh|efa|all]" >&2
@@ -91,14 +92,15 @@ IMAGE_NAME="uccl-builder-${TARGET}"
 
 # Build the builder image (contains toolchain + CUDA/ROCm)
 echo "[1/3] Building Docker image ${IMAGE_NAME} using ${DOCKERFILE}..."
+echo "Python version: ${PY_VER}"
 if [[ "$TARGET" == "gh" ]]; then
-  docker build --platform=linux/arm64 -t "$IMAGE_NAME" -f "$DOCKERFILE" .
+  docker build --platform=linux/arm64 --build-arg PY_VER="${PY_VER}" -t "$IMAGE_NAME" -f "$DOCKERFILE" .
 else
-  docker build -t "$IMAGE_NAME" -f "$DOCKERFILE" .
+  docker build --build-arg PY_VER="${PY_VER}" -t "$IMAGE_NAME" -f "$DOCKERFILE" .
 fi
 
 echo "[2/3] Running build inside container..."
-if [[ $2 == "-it" ]]; then
+if [[ $3 == "-it" ]]; then
   docker run -it --rm --user "$(id -u):$(id -g)" \
     -v /etc/passwd:/etc/passwd:ro \
     -v /etc/group:/etc/group:ro \
@@ -160,7 +162,7 @@ else
       cd p2p
       make clean && make -j$(nproc)
       rm -f ../uccl/p2p*.so
-      mv p2p*.so ../uccl/p2p.so
+      mv p2p*.so ../uccl
 
       cd ../
 
