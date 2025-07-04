@@ -30,6 +30,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#define MAX_RETRIES 20
+#define RETRY_DELAY_MS 200
+
 // Define globals
 #ifdef NUMA_AWARE_SCHEDULING
 thread_local struct ibv_context* context = nullptr;
@@ -213,16 +216,30 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
     close(listenfd);
   } else {
     // Connect
-    sleep(1);
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     int one = 1;
     setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
     addr.sin_family = AF_INET;
     addr.sin_port = htons(TCP_PORT + tid);
     inet_pton(AF_INET, peer_ip, &addr.sin_addr);
-    if (connect(sockfd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
-      printf("Rank %d: connect failed, port: %d\n", rank, TCP_PORT + tid);
+
+    int retry = 0;
+    while (connect(sockfd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+      if (errno == ECONNREFUSED || errno == ENETUNREACH) {
+        if (++retry > MAX_RETRIES) {
+          fprintf(stderr, "Rank %d: failed to connect after %d retries\n", rank,
+                  retry);
+          exit(1);
+        }
+        usleep(RETRY_DELAY_MS * 1000);  // sleep 200 ms
+        continue;
+      } else {
+        perror("connect failed");
+        exit(1);
+      }
     }
+    printf("Rank %d connected to peer %s on port %d\n", rank, peer_ip,
+           TCP_PORT + tid);
   }
 
   // Exchange info

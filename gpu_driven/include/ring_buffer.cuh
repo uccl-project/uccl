@@ -26,7 +26,6 @@ __device__ __forceinline__ uint64_t ld_volatile(uint64_t* ptr) {
   return ans;
 }
 
-// Host-pinned lock-free ring buffer
 template <typename T, FlowDirection Dir, uint32_t Capacity>
 struct alignas(128) RingBuffer {
   uint64_t head;
@@ -87,13 +86,8 @@ struct alignas(128) RingBuffer {
   __host__ __device__ __forceinline__ uint64_t volatile_tail() {
 #if __CUDA_ARCH__
     return ld_volatile(&tail);
-#else  // host compilation
-    // Ordinary C++: read through a `volatile` alias to prevent the
-    // compiler from reordering or eliding the load.
+#else
     return *reinterpret_cast<volatile uint64_t const*>(&tail);
-    /*  an alternative with explicit atomics:
-        return __atomic_load_n(&tail, __ATOMIC_ACQUIRE);
-    */
 #endif
   }
 };
