@@ -13,7 +13,6 @@ RUN apt-get update && \
         rdma-core libibverbs-dev \
         libgoogle-glog-dev libgflags-dev libgtest-dev libelf-dev \
         libnuma-dev libdrm-dev libdrm-amdgpu1 \
-        pkg-config libhiredis-dev zlib1g-dev curl \
         pkg-config libhiredis-dev zlib1g-dev curl && \
 \
 # ───── Add Python 3.13 PPA & install Python 3.13 + setuptools ─────
