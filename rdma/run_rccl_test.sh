@@ -30,13 +30,9 @@ NVLINK_ON=1
 
 NVLINK_OFF=$((1 - NVLINK_ON))
 
-HCA_NAMES="rdma0:1,rdma1:1,rdma2:1,rdma3:1,rdma4:1,rdma5:1,rdma6:1,rdma7:1"
-CTRL_NIC="cni0"
-
 mpirun --prefix /usr/local/bin/ompi --bind-to none -np 2 -N 1 --hostfile $NODEFILE --map-by ppr:1:node \
     -x LD_LIBRARY_PATH=${UCCL_HOME}/thirdparty/rccl/build/release:${CONDA_LIB_HOME}:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH} \
     -x NCCL_NET_PLUGIN=${plugin_path} \
-    -x GLOG_v=0 \
     -x NCCL_P2P_DISABLE=${NVLINK_OFF} \
     -x NCCL_SHM_DISABLE=${NVLINK_OFF} \
     -x NCCL_IB_PCI_RELAXED_ORDERING=1 \
@@ -48,8 +44,7 @@ mpirun --prefix /usr/local/bin/ompi --bind-to none -np 2 -N 1 --hostfile $NODEFI
     -x NCCL_IB_QPS_PER_CONNECTION=1 \
     -x NCCL_IB_SPLIT_DATA_ON_QPS=1 \
     -x HIP_VISIBLE_DEVICES=0,1,3,4,5,6,7 \
-    -x NCCL_IB_HCA=${HCA_NAMES} \
-    -x NCCL_SOCKET_IFNAME=${CTRL_NIC} \
+    -x GLOG_v=0 \
     -x UCCL_NUM_ENGINES=4 \
     -x UCCL_PORT_ENTROPY=1 \
     -x UCCL_CHUNK_SIZE_KB=512 \
@@ -63,3 +58,8 @@ mpirun --prefix /usr/local/bin/ompi --bind-to none -np 2 -N 1 --hostfile $NODEFI
 # -x NCCL_NET_GDR_LEVEL=SYS \
 # -x NCCL_DEBUG_SUBSYS=NET \
 # -x NCCL_DEBUG=INFO \
+
+# CTRL_NIC="cni0"
+# HCA_NAMES="rdma0:1,rdma1:1,rdma2:1,rdma3:1,rdma4:1,rdma5:1,rdma6:1,rdma7:1"
+# -x NCCL_SOCKET_IFNAME=${CTRL_NIC} \
+# -x NCCL_IB_HCA=${HCA_NAMES} \

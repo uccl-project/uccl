@@ -87,16 +87,12 @@ sudo make install
 
 On client:
 ```bash
-UCCL_IB_HCA="mlx5_0:1,mlx5_1:1,mlx5_2:1,mlx5_3:1,mlx5_4:1,mlx5_5:1,mlx5_6:1,mlx5_7:1" \
-UCCL_SOCKET_IFNAME="ds-eap-1,ds-eap-2,ds-eap-3" \
 python benchmark.py \
     --role client --remote-ip 192.168.0.100 --device gpu \
     --local-gpu-idx 0 --remote-gpu-idx 0 --num-cpus 4
 ```
 On server: 
 ```bash
-UCCL_IB_HCA="mlx5_0:1,mlx5_1:1,mlx5_2:1,mlx5_3:1,mlx5_4:1,mlx5_5:1,mlx5_6:1,mlx5_7:1" \
-UCCL_SOCKET_IFNAME="ds-eap-1,ds-eap-2,ds-eap-3" \
 python benchmark.py --role server --local-gpu-idx 0 --num-cpus 4
 ```
 
@@ -291,8 +287,6 @@ make help         # Show available targets
 ### Testing Your Setup
 ```bash
 # Run the included test suite
-NCCL_IB_HCA="mlx5_0:1,mlx5_1:1,mlx5_2:1,mlx5_3:1,mlx5_4:1,mlx5_5:1,mlx5_6:1,mlx5_7:1" \
-NCCL_SOCKET_IFNAME="ds-eap-1,ds-eap-2,ds-eap-3" \
 python3 test_engine.py
 
 # Check if RDMA hardware is available

@@ -2,6 +2,7 @@
 #include "eqds.h"
 #include "transport.h"
 #include "transport_config.h"
+#include "util/net.h"
 #include "util/util.h"
 #include "util_rdma.h"
 #include "util_timer.h"
@@ -18,6 +19,11 @@ namespace uccl {
 
 std::shared_ptr<RDMAFactory> rdma_ctl;
 
+static char uccl_ifname[MAX_IF_NAME_SIZE + 1];
+static union socketAddress uccl_ifaddr;
+
+static int __num_devices = 0;
+
 int RDMAFactory::init_devs() {
   int num_devs;
   struct ibv_device** devices;
@@ -26,24 +32,29 @@ int RDMAFactory::init_devs() {
   std::call_once(init_flag,
                  []() { rdma_ctl = std::make_shared<RDMAFactory>(); });
 
+  //  Find interface for connection setup.
+  int num_ifs = find_interfaces(uccl_ifname, &uccl_ifaddr, MAX_IF_NAME_SIZE, 1);
+  if (num_ifs != 1) UCCL_INIT_CHECK(false, "No IP interface found");
+  std::string oob_ip = get_dev_ip(uccl_ifname);
+  LOG(INFO) << "Using OOB interface " << std::string(uccl_ifname) << " with IP "
+            << oob_ip << " for connection setup";
+
   // Use UCCL_XXX first, if not set, use NCCL_XXX
   char* ib_hca = getenv("UCCL_IB_HCA");
-  char* if_name = getenv("UCCL_SOCKET_IFNAME");
+  LOG(INFO) << "UCCL_IB_HCA: " << ib_hca;
+  if (!ib_hca) {
+    ib_hca = getenv("NCCL_IB_HCA");
+    LOG(INFO) << "NCCL_IB_HCA: " << ib_hca;
+  }
 
-  if (!ib_hca) ib_hca = getenv("NCCL_IB_HCA");
-  if (!if_name) if_name = getenv("NCCL_SOCKET_IFNAME");
-
-  UCCL_INIT_CHECK(ib_hca && if_name,
-                  "UCCL_IB_HCA or UCCL_SOCKET_IFNAME is not set");
-
-  struct ib_dev user_ifs[MAX_IB_DEVS];
+  struct ib_dev user_ib_ifs[MAX_IB_DEVS];
   bool searchNot = ib_hca && ib_hca[0] == '^';
   if (searchNot) ib_hca++;
-
   bool searchExact = ib_hca && ib_hca[0] == '=';
   if (searchExact) ib_hca++;
 
-  int num_ifs = parse_interfaces(ib_hca, user_ifs, MAX_IB_DEVS);
+  int num_ib_ifs = parse_interfaces(ib_hca, user_ib_ifs, MAX_IB_DEVS);
+
   devices = ibv_get_device_list(&num_devs);
   if (devices == nullptr || num_devs == 0) {
     UCCL_LOG_ERROR << "Unable to get device list";
@@ -73,7 +84,7 @@ int RDMAFactory::init_devs() {
       }
 
       // Check against user specified HCAs/ports
-      if (!(match_if_list(devices[d]->name, port_num, user_ifs, num_ifs,
+      if (!(match_if_list(devices[d]->name, port_num, user_ib_ifs, num_ib_ifs,
                           searchExact) ^
             searchNot)) {
         ibv_close_device(context);
@@ -89,24 +100,7 @@ int RDMAFactory::init_devs() {
       struct FactoryDevice dev;
       strncpy(dev.ib_name, devices[d]->name, sizeof(devices[d]->name));
 
-      if (if_name) {
-        // Iterate over all interfaces in the list
-        auto* if_name_dup = strdup(if_name);
-        char* next_intf = strtok(if_name_dup, ",");
-        while (next_intf) {
-          dev.local_ip_str = get_dev_ip(next_intf);
-          if (dev.local_ip_str != "") {
-            break;
-          }
-          next_intf = strtok(nullptr, ",");
-        }
-        UCCL_INIT_CHECK(dev.local_ip_str != "",
-                        "No IP address found for interface");
-      } else {
-        DCHECK(util_rdma_get_ip_from_ib_name(dev.ib_name, &dev.local_ip_str) ==
-               0);
-      }
-
+      dev.local_ip_str = oob_ip;
       dev.numa_node = get_dev_numa_node(dev.ib_name);
 
       // Detecting if the dev support extend cq.
@@ -178,8 +172,13 @@ int RDMAFactory::init_devs() {
                     << " on dev: " << devices[d]->name;
       }
 
+      LOG(INFO) << "Found IB device #" << __num_devices << " :"
+                << devices[d]->name << " with port " << port_num << " / "
+                << (int)dev_attr.phys_port_cnt;
+
       rdma_ctl->devices_.push_back(dev);
       UCCL_LOG_RE << "Initialized " << devices[d]->name;
+
       __num_devices++;
     }
   }
