@@ -4,7 +4,9 @@
 #include <netinet/in.h>
 #include <chrono>
 #include <cstring>
+#include <future>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <thread>
 #include <sys/socket.h>
@@ -93,9 +95,19 @@ bool Endpoint::connect(std::string const& ip_addr, int const& remote_gpu_idx,
   // Create a new connection ID
   conn_id = next_conn_id_.fetch_add(1);
 
-  uccl::ConnID uccl_conn_id = ep_->test_uccl_connect(
-      gpu_to_dev[local_gpu_idx_], local_gpu_idx_, gpu_to_dev[remote_gpu_idx],
-      remote_gpu_idx, ip_addr);
+  std::future<uccl::ConnID> uccl_conn_id_future = std::async(
+      std::launch::async, [this, local_gpu_idx_, remote_gpu_idx, ip_addr]() {
+        return ep_->test_uccl_connect(
+            gpu_to_dev[local_gpu_idx_], local_gpu_idx_,
+            gpu_to_dev[remote_gpu_idx], remote_gpu_idx, ip_addr);
+      });
+
+  // Check for Python signals (eg, ctrl+c) while waiting for connection
+  while (uccl_conn_id_future.wait_for(std::chrono::seconds(1)) !=
+         std::future_status::ready) {
+    if (PyErr_CheckSignals() != 0) throw py::error_already_set();
+  }
+  uccl_conn_id = uccl_conn_id_future.get();
 
   // Store the connection ID.
   conn_id_to_conn_[conn_id] =
@@ -112,8 +124,18 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   // For demo purposes, simulate accepted connection
   conn_id = next_conn_id_.fetch_add(1);
 
-  uccl::ConnID uccl_conn_id = ep_->test_uccl_accept(
-      gpu_to_dev[local_gpu_idx_], local_gpu_idx_, ip_addr, &remote_gpu_idx);
+  std::future<uccl::ConnID> uccl_conn_id_future =
+      std::async(std::launch::async, [this, local_gpu_idx_, ip_addr]() {
+        return ep_->test_uccl_accept(gpu_to_dev[local_gpu_idx_], local_gpu_idx_,
+                                     ip_addr, &remote_gpu_idx);
+      });
+
+  // Check for Python signals (eg, ctrl+c) while waiting for connection
+  while (uccl_conn_id_future.wait_for(std::chrono::seconds(1)) !=
+         std::future_status::ready) {
+    if (PyErr_CheckSignals() != 0) throw py::error_already_set();
+  }
+  uccl_conn_id = uccl_conn_id_future.get();
 
   // Store the connection ID.
   conn_id_to_conn_[conn_id] =
