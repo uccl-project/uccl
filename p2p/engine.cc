@@ -20,11 +20,21 @@ int const kMaxNumGPUs = 8;
 // Assume the local and remote GPUs have the same GPU-NIC mapping.
 uint8_t gpu_to_dev[kMaxNumGPUs] = {0};
 
+inline void check_python_signals() {
+  PyGILState_STATE gstate = PyGILState_Ensure();
+  if (PyErr_CheckSignals() != 0) {
+    std::cerr << "Python signal caught, exiting..." << std::endl;
+    std::abort();
+  }
+  PyGILState_Release(gstate);
+}
+
 Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
     : local_gpu_idx_(local_gpu_idx), num_cpus_(num_cpus) {
   py::gil_scoped_release release;
   std::cout << "Creating Engine with GPU index: " << local_gpu_idx
             << ", CPUs: " << num_cpus << std::endl;
+  Py_Initialize();
 
   google::InitGoogleLogging("uccl_p2p");
   google::InstallFailureSignalHandler();
@@ -95,17 +105,18 @@ bool Endpoint::connect(std::string const& ip_addr, int const& remote_gpu_idx,
   // Create a new connection ID
   conn_id = next_conn_id_.fetch_add(1);
 
-  std::future<uccl::ConnID> uccl_conn_id_future = std::async(
-      std::launch::async, [this, remote_gpu_idx, &ip_addr]() {
+  std::future<uccl::ConnID> uccl_conn_id_future =
+      std::async(std::launch::async, [this, remote_gpu_idx, &ip_addr]() {
         return ep_->test_uccl_connect(
             gpu_to_dev[local_gpu_idx_], local_gpu_idx_,
             gpu_to_dev[remote_gpu_idx], remote_gpu_idx, ip_addr);
       });
 
   // Check for Python signals (eg, ctrl+c) while waiting for connection
-  while (uccl_conn_id_future.wait_for(std::chrono::seconds(1)) !=
+  while (uccl_conn_id_future.wait_for(std::chrono::seconds(0)) !=
          std::future_status::ready) {
-    // if (PyErr_CheckSignals() != 0) throw py::error_already_set();
+    check_python_signals();
+    std::this_thread::sleep_for(std::chrono::seconds(1));
   }
   uccl::ConnID uccl_conn_id = uccl_conn_id_future.get();
 
@@ -131,9 +142,10 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
       });
 
   // Check for Python signals (eg, ctrl+c) while waiting for connection
-  while (uccl_conn_id_future.wait_for(std::chrono::milliseconds(100)) !=
+  while (uccl_conn_id_future.wait_for(std::chrono::seconds(0)) !=
          std::future_status::ready) {
-    // if (PyErr_CheckSignals() != 0) throw py::error_already_set();
+    check_python_signals();
+    std::this_thread::sleep_for(std::chrono::seconds(1));
   }
   uccl::ConnID uccl_conn_id = uccl_conn_id_future.get();
 
@@ -189,6 +201,7 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
         static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
         (void*)data, chunk_size, &ureq[0]);
     if (rc == -1) {
+      check_python_signals();
       std::this_thread::yield();
     }
   } while (rc == -1);
@@ -198,12 +211,17 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
         static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle_meta,
         (void*)&large_kv_meta_data_, sizeof(LargeKVMetaData), &ureq[1]);
     if (rc == -1) {
+      check_python_signals();
       std::this_thread::yield();
     }
   } while (rc == -1);
 
-  ep_->uccl_poll_ureq(&ureq[1]);
-  ep_->uccl_poll_ureq(&ureq[0]);
+  while (!ep_->uccl_poll_ureq_once(&ureq[1])) {
+    check_python_signals();
+  }
+  while (!ep_->uccl_poll_ureq_once(&ureq[0])) {
+    check_python_signals();
+  }
 
   data += chunk_size;
   size -= chunk_size;
@@ -228,6 +246,8 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
       done[ureq_issued % kMaxInflightChunks] = false;
       ureq_issued++;
     }
+    check_python_signals();
+
     // First, poll all outstanding requests and mark which ones are done.
     for (int i = ureq_finished; i < ureq_issued; i++) {
       if (done[i % kMaxInflightChunks]) {
@@ -270,6 +290,7 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
         static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
         &data, &chunk_size, 1, &ureq[0]);
     if (rc == -1) {
+      check_python_signals();
       std::this_thread::yield();
     }
   } while (rc == -1);
@@ -281,12 +302,17 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
         static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
         &mhandle_meta, &meta_addr, &meta_size, 1, &ureq[1]);
     if (rc == -1) {
+      check_python_signals();
       std::this_thread::yield();
     }
   } while (rc == -1);
 
-  ep_->uccl_poll_ureq(&ureq[1]);
-  ep_->uccl_poll_ureq(&ureq[0]);
+  while (!ep_->uccl_poll_ureq_once(&ureq[1])) {
+    check_python_signals();
+  }
+  while (!ep_->uccl_poll_ureq_once(&ureq[0])) {
+    check_python_signals();
+  }
 
   auto first_actual_size = ureq[0].recv.data_len[0];
   size_t size_expected = large_kv_meta_data_.total_size;
@@ -316,6 +342,7 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
       done[ureq_issued % kMaxInflightChunks] = false;
       ureq_issued++;
     }
+    check_python_signals();
 
     // First, poll all outstanding requests and mark which ones are done.
     for (int i = ureq_finished; i < ureq_issued; i++) {
