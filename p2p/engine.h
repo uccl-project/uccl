@@ -36,14 +36,6 @@ struct PeerInfo {
   int gpu_idx;          // GPU index of the peer
 };
 
-// Used for large KV transfer.
-struct LargeKVMetaData {
-  uint64_t total_size;
-};
-extern thread_local bool large_kv_meta_data_registered_;
-extern thread_local LargeKVMetaData large_kv_meta_data_;
-extern thread_local uint64_t large_kv_meta_data_mr_id_;
-
 class Endpoint {
   const uint64_t kRTTBytes = 1024 * 1024;
   const uint64_t kChunkSize = 512 * 1024;
@@ -204,4 +196,21 @@ class Endpoint {
   std::unordered_map<uint64_t, MR*> mr_id_to_mr_;
 
   std::unordered_map<int, uint64_t> rank2conn_;
+
+  // Assuming 1TB GPU memory, 128KB KV block size.
+  static constexpr size_t kMaxNumChunksPerTransfer = 1024ul * 1024 * 1024 / 128;
+
+  // Used for large KV transfer.
+  class TransferMetaData {
+   public:
+    TransferMetaData() {
+      for (size_t i = 0; i < kMaxNumChunksPerTransfer; i++) {
+        chunk_size_v[i] = 0;
+      }
+    }
+    uint64_t chunk_size_v[kMaxNumChunksPerTransfer];
+  };
+
+  TransferMetaData* transfer_metadata_;
+  uint64_t transfer_metadata_mr_id_;
 };

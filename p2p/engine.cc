@@ -3,6 +3,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <chrono>
+#include <cstdint>
 #include <cstring>
 #include <future>
 #include <iostream>
@@ -11,10 +12,6 @@
 #include <thread>
 #include <sys/socket.h>
 #include <unistd.h>
-
-thread_local bool large_kv_meta_data_registered_ = false;
-thread_local LargeKVMetaData large_kv_meta_data_;
-thread_local uint64_t large_kv_meta_data_mr_id_ = 0;
 
 int const kMaxNumGPUs = 8;
 // Assume the local and remote GPUs have the same GPU-NIC mapping.
@@ -70,14 +67,14 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_]);
   printf("Engine initialized for GPU %d\n", local_gpu_idx_);
 #endif
-  if (!large_kv_meta_data_registered_) {
-    py::gil_scoped_acquire acquire;
-    bool rc = reg(&large_kv_meta_data_, sizeof(LargeKVMetaData),
-                  large_kv_meta_data_mr_id_);
-    DCHECK(rc) << "Failed to register large KV meta data";
-    large_kv_meta_data_registered_ = true;
-  }
 
+  {
+    transfer_metadata_ = new TransferMetaData();
+    py::gil_scoped_acquire acquire;
+    bool rc = reg(transfer_metadata_->chunk_size_v, sizeof(TransferMetaData),
+                  transfer_metadata_mr_id_);
+    DCHECK(rc) << "Failed to register large KV meta data";
+  }
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
 
@@ -92,7 +89,7 @@ Endpoint::~Endpoint() {
   for (auto& [mr_id, mr] : mr_id_to_mr_) {
     delete mr;
   }
-
+  delete transfer_metadata_;
   std::cout << "Engine destroyed" << std::endl;
 }
 
@@ -189,8 +186,8 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
 
   uccl::ucclRequest ureq[kMaxInflightChunks];
   bool done[kMaxInflightChunks] = {false};
-  large_kv_meta_data_.total_size = size;
-  auto mhandle_meta = mr_id_to_mr_[large_kv_meta_data_mr_id_]->mhandle_;
+  transfer_metadata_->chunk_size_v[0] = size;
+  auto mhandle_meta = mr_id_to_mr_[transfer_metadata_mr_id_]->mhandle_;
 
   // To avoid wasting the first RTT, we call uccl_send_async to try to send as
   // much as possible.
@@ -209,7 +206,7 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
   do {
     rc = ep_->uccl_send_async(
         static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle_meta,
-        (void*)&large_kv_meta_data_, sizeof(LargeKVMetaData), &ureq[1]);
+        (void*)transfer_metadata_->chunk_size_v, sizeof(uint64_t), &ureq[1]);
     if (rc == -1) {
       check_python_signals();
       std::this_thread::yield();
@@ -271,12 +268,12 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
 
 bool Endpoint::sendv(uint64_t conn_id, uint64_t* mr_id_v, void const** data_v,
                      size_t* size_v, size_t num_chunks) {
-    
   return true;
 }
 
 bool Endpoint::recvv(uint64_t conn_id, uint64_t* mr_id_v, void** data_v,
-                     size_t* max_size_v, size_t* recv_size_v, size_t num_chunks) {
+                     size_t* max_size_v, size_t* recv_size_v,
+                     size_t num_chunks) {
   return true;
 }
 
@@ -290,7 +287,7 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
 
   uccl::ucclRequest ureq[kMaxInflightChunks];
   bool done[kMaxInflightChunks] = {false};
-  auto mhandle_meta = mr_id_to_mr_[large_kv_meta_data_mr_id_]->mhandle_;
+  auto mhandle_meta = mr_id_to_mr_[transfer_metadata_mr_id_]->mhandle_;
 
   // To avoid wasting the first RTT, we call uccl_recv_async to try to receive
   // as much as possible.
@@ -306,8 +303,8 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
     }
   } while (rc == -1);
 
-  void* meta_addr = (void*)&large_kv_meta_data_;
-  int meta_size = sizeof(LargeKVMetaData);
+  void* meta_addr = (void*)transfer_metadata_->chunk_size_v;
+  int meta_size = sizeof(uint64_t);
   do {
     rc = ep_->uccl_recv_async(
         static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
@@ -326,7 +323,7 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
   }
 
   auto first_actual_size = ureq[0].recv.data_len[0];
-  size_t size_expected = large_kv_meta_data_.total_size;
+  size_t size_expected = transfer_metadata_->chunk_size_v[0];
   size_expected -= first_actual_size;
   data += first_actual_size;
 
