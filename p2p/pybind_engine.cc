@@ -59,7 +59,7 @@ PYBIND11_MODULE(uccl_p2p, m) {
             size_t recv_size;
             bool success =
                 self.recv(conn_id, mr_id, reinterpret_cast<void*>(ptr),
-                          max_size, recv_size);
+                          max_size, &recv_size);
             return py::make_tuple(success, recv_size);
           },
           "Receive a key-value buffer", py::arg("conn_id"), py::arg("mr_id"),

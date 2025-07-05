@@ -269,8 +269,19 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
   return true;
 }
 
+bool Endpoint::sendv(uint64_t conn_id, uint64_t* mr_id_v, void const** data_v,
+                     size_t* size_v, size_t num_chunks) {
+    
+  return true;
+}
+
+bool Endpoint::recvv(uint64_t conn_id, uint64_t* mr_id_v, void** data_v,
+                     size_t* max_size_v, size_t* recv_size_v, size_t num_chunks) {
+  return true;
+}
+
 bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
-                    size_t max_size, size_t& recv_size) {
+                    size_t max_size, size_t* recv_size) {
   py::gil_scoped_release release;
 
   auto conn = conn_id_to_conn_[conn_id];
@@ -320,7 +331,7 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
   data += first_actual_size;
 
   if (!size_expected) {
-    recv_size = first_actual_size;
+    *recv_size = first_actual_size;
     return true;
   }
 
@@ -362,7 +373,7 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
     }
   }
 
-  recv_size = size_expected + first_actual_size;
+  *recv_size = size_expected + first_actual_size;
   return true;
 }
 
