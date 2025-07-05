@@ -31,7 +31,7 @@ rm -r dist || true
 rm -r uccl/lib || true
 rm -r build || true
 WHEEL_DIR="wheelhouse-${TARGET}"
-rm -r "${WHEEL_DIR}" || true
+# rm -r "${WHEEL_DIR}" || true
 mkdir -p "${WHEEL_DIR}"
 
 # If TARGET=all, orchestrate builds for each backend and package **all** shared libraries
