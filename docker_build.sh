@@ -175,7 +175,9 @@ else
 
       echo "[container] Running auditwheel..."
       auditwheel repair dist/*.whl --exclude libibverbs.so.1 -w /io/${WHEEL_DIR}
-      auditwheel show /io/${WHEEL_DIR}/*.whl
+      for whl in /io/${WHEEL_DIR}/*.whl; do
+        auditwheel show "$whl"
+      done
     '
   fi
 
