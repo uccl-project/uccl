@@ -8,13 +8,14 @@ UCCL RDMA plugin for NCCL/RCCL.
 
 ## Configuration
 ### Env Vars
-UCCL requires only two parameters that must be specified:
+By default, UCCL auto-detects all necessary parameters, similar to NCCL/RCCL. 
+But you can overwrite these parameters, eg:
 ```
 UCCL_IB_HCA:          The names of IB devices you want to use.
 UCCL_SOCKET_IFNAME:   The control NIC name you want to use for bootstrapping.
 ```
 
-For convenience, the NCCL versions, NCCL_IB_HCA and NCCL_SOCKET_IFNAME, are also available.
+For convenience, the NCCL versions, i.e., NCCL_IB_HCA and NCCL_SOCKET_IFNAME, are also available.
 
 ### run_nccl_test.sh:
 ```
@@ -149,7 +150,9 @@ Use `UCCL_PARAM()` to introduce new environment variables.
 
 | Environment Variable | Description | Default Value |
 |---------------------|-------------|---------------|
-| UCCL_PIN_TO_NUMA |Pin threads to the NUMA node | 1 |
+| UCCL_IB_HCA | The names of IB devices used | (null) |
+| UCCL_SOCKET_IFNAME | The control NIC name used for bootstrapping | (null) |
+| UCCL_PIN_TO_NUMA | Pin threads to the NUMA node | 1 |
 | UCCL_ROCE_TRAFFIC_CLASS | Traffic class for RoCE | 3 |
 | UCCL_ROCE_SERVICE_LEVEL | Service level for RoCE | 135 |
 | UCCL_ROCE_GID_IDX | GID index for RoCE | 3 |

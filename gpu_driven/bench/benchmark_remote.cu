@@ -1,5 +1,4 @@
 #include "common.hpp"
-#include "copy_ring.hpp"
 #include "gpu_kernel.cuh"
 #include "peer_copy_worker.hpp"
 #include "proxy.hpp"
@@ -20,21 +19,6 @@ int main(int argc, char** argv) {
   char const* peer_ip = argv[2];
 
   pin_thread_to_cpu(MAIN_THREAD_CPU_IDX);
-#ifdef NUMA_AWARE_SCHEDULING
-  int dev = -1;
-  cudaGetDevice(&dev);
-  printf("About to launch on GPU %d\n", dev);
-  int numa_node = gpu_numa_node(dev);
-  printf("Rank %d: GPU NUMA node is %d\n", rank, numa_node);
-  discover_nics(numa_node);
-#endif
-  // if (!GdrSupportInitOnce()) {
-  //   printf(
-  //       "Error: GPUDirect RDMA module is not loaded. Please load "
-  //       "nvidia_peermem or nv_peer_mem!\n");
-  //   exit(1);
-  // }
-
   cudaStream_t stream1;
   cudaStreamCreate(&stream1);
   cudaCheckErrors("cudaStreamCreate failed");
@@ -78,12 +62,8 @@ int main(int argc, char** argv) {
   }
 #endif
 
-#ifndef NUMA_AWARE_SCHEDULING
-  RDMAConnectionInfo local_info;
-  global_rdma_init(gpu_buffer, total_size, &local_info, rank);
-#endif
   std::vector<std::thread> cpu_threads;
-  std::vector<CopyRing> g_rings(kNumThBlocks);
+  std::vector<CopyRingBuffer> g_rings(kNumThBlocks);
   for (int i = 0; i < kNumThBlocks; ++i) {
     if (rank == 0)
       cpu_threads.emplace_back(cpu_proxy, &rbs[i], i, gpu_buffer,
@@ -152,7 +132,6 @@ int main(int argc, char** argv) {
     cudaCheckErrors("cudaStreamDestroy failed");
   } else {
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
-
     int num_copy_engine = kNumThBlocks;
     std::vector<std::thread> copy_threads;
     copy_threads.reserve(num_copy_engine);

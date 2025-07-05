@@ -1,10 +1,17 @@
 #ifndef RING_BUFFER_CUH
 #define RING_BUFFER_CUH
 
-#include "common.hpp"  // For TransferCmd, QUEUE_SIZE
-#include "copy_ring.hpp"
+#include "common.hpp"
+#include <infiniband/verbs.h>
 #include <atomic>
+#include <cstdint>
+#include <cstdlib>
+#include <vector>
 #include <cuda.h>
+
+#ifndef COPY_RING_CAP
+#define COPY_RING_CAP 4096
+#endif
 
 // Command structure for each transfer
 struct TransferCmd {
@@ -15,7 +22,24 @@ struct TransferCmd {
   uint64_t bytes;     // transfer size
 };
 
-enum class FlowDirection { HostToDevice, DeviceToHost };
+struct CopyTask {
+  uint64_t wr_id;
+  int dst_dev;
+  void* src_ptr;
+  void* dst_ptr;
+  size_t bytes;
+};
+
+enum class FlowDirection { HostToDevice, DeviceToHost, HostToHost };
+
+#if !defined(__CUDA_ARCH__)
+#include <atomic>
+#define HOST_ACQUIRE() std::atomic_thread_fence(std::memory_order_acquire)
+#define HOST_RELEASE() std::atomic_thread_fence(std::memory_order_release)
+#else
+#define HOST_ACQUIRE()
+#define HOST_RELEASE()
+#endif
 
 __device__ __forceinline__ uint64_t ld_volatile(uint64_t* ptr) {
   uint64_t ans;
@@ -26,7 +50,6 @@ __device__ __forceinline__ uint64_t ld_volatile(uint64_t* ptr) {
   return ans;
 }
 
-// Host-pinned lock-free ring buffer
 template <typename T, FlowDirection Dir, uint32_t Capacity>
 struct alignas(128) RingBuffer {
   uint64_t head;
@@ -37,6 +60,11 @@ struct alignas(128) RingBuffer {
   uint64_t cycle_start;
   uint64_t cycle_end;
   uint32_t capacity = Capacity;
+
+  /* TODO(MaoZiming) to refactor */
+  struct ibv_qp* ack_qp;
+  ibv_mr* ack_mr = nullptr;
+  uint64_t ack_buf[RECEIVER_BATCH_SIZE];
 
   __host__ __device__ static constexpr uint32_t mask() { return Capacity - 1; }
 
@@ -55,7 +83,20 @@ struct alignas(128) RingBuffer {
   __host__ __device__ __forceinline__ bool push(T const& item) {
     if (full()) return false;
     buf[head & mask()] = item;
-    head++;
+    commit_with_head(head + 1);
+    return true;
+  }
+
+  __host__ __forceinline__ bool pushN(T const* items, int n) {
+    if (n <= 0) return true;
+    uint64_t h = head;
+    uint64_t t = tail;
+    uint64_t free_slots = capacity - (h - t);
+    if (n > static_cast<int>(free_slots)) return false;
+
+    for (int i = 0; i < n; ++i) buf[(h + i) & mask()] = items[i];
+
+    commit_with_head(h + n);
     return true;
   }
 
@@ -69,6 +110,7 @@ struct alignas(128) RingBuffer {
 #else
     if constexpr (Dir == FlowDirection::DeviceToHost)
       std::atomic_thread_fence(std::memory_order_release);
+    if constexpr (Dir == FlowDirection::HostToHost) HOST_RELEASE();
 #endif
     head = new_head;
   }
@@ -78,23 +120,51 @@ struct alignas(128) RingBuffer {
 
 #if __CUDA_ARCH__
     if constexpr (Dir == FlowDirection::HostToDevice) __threadfence();
+#else
+    if constexpr (Dir == FlowDirection::HostToHost) HOST_ACQUIRE();
 #endif
     out = buf[tail & mask()];
     tail++;
     return true;
   }
 
+  __host__ __device__ __forceinline__ int popN(T* out, int n) {
+    if (n <= 0) return 0;
+    uint64_t t = tail;
+    uint64_t h = head;
+    uint64_t avail = h - t;
+    if (avail == 0) return 0;
+    int cnt = (n < static_cast<int>(avail)) ? n : static_cast<int>(avail);
+#if __CUDA_ARCH__
+    if constexpr (Dir == FlowDirection::HostToDevice) __threadfence();
+#else
+    if constexpr (Dir == FlowDirection::HostToHost) HOST_ACQUIRE();
+#endif
+    for (int i = 0; i < cnt; ++i) out[i] = buf[(t + i) & mask()];
+    tail = t + cnt;
+    return cnt;
+  }
+
   __host__ __device__ __forceinline__ uint64_t volatile_tail() {
 #if __CUDA_ARCH__
     return ld_volatile(&tail);
-#else  // host compilation
-    // Ordinary C++: read through a `volatile` alias to prevent the
-    // compiler from reordering or eliding the load.
+#else
     return *reinterpret_cast<volatile uint64_t const*>(&tail);
-    /*  an alternative with explicit atomics:
-        return __atomic_load_n(&tail, __ATOMIC_ACQUIRE);
-    */
 #endif
+  }
+
+  __host__ __device__ __forceinline__ uint64_t volatile_head() {
+    uint64_t val;
+#if defined(__CUDA_ARCH__)
+    return ld_volatile(&head);
+#elif defined(__x86_64__)
+    asm volatile("movq %1, %0" : "=r"(val) : "m"(head) : "memory");
+#elif defined(__aarch64__)
+    asm volatile("ldr %0, [%1]" : "=r"(val) : "r"(&head) : "memory");
+#else
+#error "Unsupported architecture"
+#endif
+    return val;
   }
 };
 
@@ -102,5 +172,7 @@ typedef RingBuffer<TransferCmd, FlowDirection::DeviceToHost, kQueueSize>
     DeviceToHostCmdBuffer;
 typedef RingBuffer<CopyTask, FlowDirection::HostToDevice, COPY_RING_CAP>
     HostToDeviceNVlinkBuffer;
+typedef RingBuffer<CopyTask, FlowDirection::HostToHost, COPY_RING_CAP>
+    CopyRingBuffer;
 
 #endif  // RING_BUFFER_CUH

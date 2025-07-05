@@ -34,7 +34,7 @@ void maybe_enable_peer_access(int src_dev, int dst_dev) {
   });
 }
 
-void sync_and_post(CopyRing& g_ring, cudaStream_t& stream, int idx) {
+void sync_and_post(CopyRingBuffer& g_ring, cudaStream_t& stream, int idx) {
   // printf("async_memcpy_count: %lu, prev_completed_async_memcpy_count: %lu,
   // highest_issued_wr_id: %lu\n",
   //        async_memcpy_count, prev_completed_async_memcpy_count,
@@ -52,7 +52,7 @@ void sync_and_post(CopyRing& g_ring, cudaStream_t& stream, int idx) {
   }
 }
 
-void peer_copy_worker(CopyRing& g_ring, int idx) {
+void peer_copy_worker(CopyRingBuffer& g_ring, int idx) {
   pin_thread_to_cpu(idx + 1 + MAIN_THREAD_CPU_IDX);
   printf("Peer copy worker %d started on CPU core %d\n", idx + 1,
          sched_getcpu());
@@ -74,12 +74,10 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
     CopyTask t;
     int copy_batch_size = 0;
     if (RECEIVER_BATCH_SIZE == 1) {
-      CopyTask* t_ptr = g_ring.pop();
-      if (!t_ptr) {
+      if (!g_ring.pop(t)) {
         sync_and_post(g_ring, stream, idx);
         continue;
       }
-      t = *t_ptr;
       copy_batch_size = 1;
       tasks[0] = t;
     } else {
@@ -166,21 +164,6 @@ void peer_copy_worker(CopyRing& g_ring, int idx) {
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::high_resolution_clock::now() - st)
             .count();
-    if (false && async_memcpy_count % 100000 == 0) {
-      printf("Total async memcpy calls: %lu\n", async_memcpy_count);
-      if (async_memcpy_count == 0) {
-        printf("No async memcpy calls were made.\n");
-      } else {
-        printf("Average async memcpy time: %lu us\n",
-               async_memcpy_total_time / async_memcpy_count);
-        printf(
-            "Ring size: %d, head: %u, tail: %u, emplace count: %u, pop count: "
-            "%u, ratio: %d\n",
-            COPY_RING_CAP, g_ring.head.v.load(), g_ring.tail.v.load(),
-            g_ring.emplace_count.v.load(), g_ring.pop_count.v.load(),
-            g_ring.emplace_count.v.load() / g_ring.pop_count.v.load());
-      }
-    }
   }
   cudaFreeAsync(d_tasks, stream);
   cudaStreamSynchronize(stream);

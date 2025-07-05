@@ -1,7 +1,6 @@
 // peer_copy.cuh
 #pragma once
 
-#include "copy_ring.hpp"
 #include "ring_buffer.cuh"
 #include <cuda_runtime.h>
 

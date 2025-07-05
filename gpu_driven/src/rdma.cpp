@@ -1,6 +1,5 @@
 #include "rdma.hpp"
 #include "common.hpp"
-#include "copy_ring.hpp"
 #include "peer_copy_worker.hpp"
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -26,24 +25,18 @@
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
+#include "util/util.h"
 #include <stdio.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#define MAX_RETRIES 20
+#define RETRY_DELAY_MS 200
 
 // Define globals
-#ifdef NUMA_AWARE_SCHEDULING
 thread_local struct ibv_context* context = nullptr;
 thread_local struct ibv_pd* pd = nullptr;
 thread_local struct ibv_mr* mr = nullptr;
 thread_local uint32_t rkey = 0;
-#else
-struct ibv_context* context = nullptr;
-struct ibv_pd* pd = nullptr;
-struct ibv_mr* mr = nullptr;
-uint32_t rkey = 0;
-
-#endif
-
 // Define thread_local structs
 thread_local struct ibv_qp* qp = nullptr;
 thread_local struct ibv_qp* ack_qp = nullptr;
@@ -63,127 +56,7 @@ thread_local bool has_received_ack = false;
 thread_local std::unordered_map<uint64_t, std::vector<uint64_t>>
     wr_id_to_wr_ids;
 
-struct NicCtx {
-  // ibv_context* ctx;
-  int numa;          // NUMA node that owns the PCIe slot
-  std::string name;  // "mlx5_0" …
-};
-
 void* per_GPU_device_buf[NUM_GPUS];
-static std::vector<NicCtx> g_nics;
-
-int gpu_numa_node(int gpu_id) {
-  char bus_id[16];
-  cudaDeviceGetPCIBusId(bus_id, sizeof(bus_id), gpu_id);
-
-  /* convert to lower-case in place */
-  std::transform(bus_id, bus_id + strlen(bus_id), bus_id,
-                 [](unsigned char c) { return std::tolower(c); });
-
-  char path[128];
-  snprintf(path, sizeof(path), "/sys/bus/pci/devices/%s/numa_node", bus_id);
-
-  int fd = open(path, O_RDONLY);
-  if (fd < 0) {
-    /* -1 = unknown; treat as NUMA 0 */
-    return 0;
-  }
-  char buf[8]{};
-  if (read(fd, buf, sizeof(buf) - 1) <= 0) {
-    close(fd);
-    return 0;
-  }
-  close(fd);
-
-  int node = atoi(buf);
-  return (node < 0) ? 0 : node;
-}
-
-void discover_nics(int numa_node) {
-  int num = 0;
-  ibv_device** list = ibv_get_device_list(&num);
-  if (num == 0) throw std::runtime_error("No RDMA devices");
-
-  g_nics.reserve(num);
-  for (int i = 0; i < num; ++i) {
-    // auto* ctx = ibv_open_device(list[i]);
-    // if (!ctx) continue;
-
-    // read /sys/class/infiniband/<dev>/device/numa_node
-    char path[256];
-    sprintf(path, "/sys/class/infiniband/%s/device/numa_node",
-            ibv_get_device_name(list[i]));
-
-    int fd = open(path, O_RDONLY);
-    int numa = 0;
-    if (fd >= 0) {
-      char buf[8]{};
-      ssize_t n = read(fd, buf, sizeof(buf) - 1);
-      if (n <= 0) {
-        perror("read failed");
-        close(fd);
-        continue;
-      }
-      buf[n] = '\0';
-      numa = atoi(buf);  // -1 means “unknown” → treat as 0
-      close(fd);
-    }
-    if (numa < 0 || numa != numa_node) continue;
-    // g_nics.push_back({ctx, numa < 0 ? 0 : numa,
-    // ibv_get_device_name(list[i])});
-    g_nics.push_back({numa < 0 ? 0 : numa, ibv_get_device_name(list[i])});
-    printf("[init] found %s on NUMA node %d\n", g_nics.back().name.c_str(),
-           g_nics.back().numa);
-  }
-  ibv_free_device_list(list);
-}
-
-int pick_nic_index(int i) {
-  printf("[init] pick_nic_index(%d), numa: %d, name: %s\n", i,
-         g_nics[i % g_nics.size()].numa,
-         g_nics[i % g_nics.size()].name.c_str());
-  return i % g_nics.size();
-}
-
-void parse_cpulist(std::string const& s, std::vector<int>* out) {
-  size_t start = 0;
-  while (start < s.size()) {
-    size_t dash = s.find('-', start);
-    size_t comma = s.find(',', start);
-    if (comma == std::string::npos) comma = s.size();
-
-    if (dash != std::string::npos && dash < comma) {
-      int lo = std::stoi(s.substr(start, dash - start));
-      int hi = std::stoi(s.substr(dash + 1, comma - dash - 1));
-      for (int i = lo; i <= hi; ++i) out->push_back(i);
-    } else {
-      int val = std::stoi(s.substr(start, comma - start));
-      out->push_back(val);
-    }
-    start = comma + 1;
-  }
-}
-
-void pin_thread_to_nic_numa(int nic_idx, int core_offset = 0) {
-  int const node = g_nics[nic_idx].numa;
-  // read the CPU mask of that node, choose one core
-  cpu_set_t mask;
-  CPU_ZERO(&mask);
-
-  std::ifstream f("/sys/devices/system/node/node" + std::to_string(node) +
-                  "/cpulist");
-  std::string cpulist;
-  std::getline(f, cpulist);  // e.g. "16-31"
-  // pick the (core_offset)-th CPU inside that list
-
-  printf("Numa and cpu list: %d, %s\n", node, cpulist.c_str());
-  std::vector<int> cpus;
-  parse_cpulist(cpulist, &cpus);  // helper you implement
-  CPU_SET(cpus[core_offset % cpus.size()], &mask);
-
-  if (sched_setaffinity(0, sizeof(mask), &mask) != 0)
-    perror("sched_setaffinity");
-}
 
 void exchange_connection_info(int rank, char const* peer_ip, int tid,
                               RDMAConnectionInfo* local,
@@ -213,16 +86,30 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
     close(listenfd);
   } else {
     // Connect
-    sleep(1);
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     int one = 1;
     setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
     addr.sin_family = AF_INET;
     addr.sin_port = htons(TCP_PORT + tid);
     inet_pton(AF_INET, peer_ip, &addr.sin_addr);
-    if (connect(sockfd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
-      printf("Rank %d: connect failed, port: %d\n", rank, TCP_PORT + tid);
+
+    int retry = 0;
+    while (connect(sockfd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+      if (errno == ECONNREFUSED || errno == ENETUNREACH) {
+        if (++retry > MAX_RETRIES) {
+          fprintf(stderr, "Rank %d: failed to connect after %d retries\n", rank,
+                  retry);
+          exit(1);
+        }
+        usleep(RETRY_DELAY_MS * 1000);  // sleep 200 ms
+        continue;
+      } else {
+        perror("connect failed");
+        exit(1);
+      }
     }
+    printf("Rank %d connected to peer %s on port %d\n", rank, peer_ip,
+           TCP_PORT + tid);
   }
 
   // Exchange info
@@ -236,69 +123,6 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
       rank, remote->addr, remote->rkey, remote->qp_num, remote->psn);
 }
 
-static std::string run_cmd(char const* cmd) {
-  std::array<char, 2048> buf;
-  std::string out;
-  FILE* pipe = popen(cmd, "r");
-  if (!pipe) return "";
-  while (fgets(buf.data(), buf.size(), pipe)) {
-    out += buf.data();
-  }
-  pclose(pipe);
-  return out;
-}
-
-int best_nic_pix(int gpu_index) {
-  printf("Picking best NIC (Expect some delay)...\n");
-  std::string topo = run_cmd("nvidia-smi topo -m");
-  if (topo.empty()) return -2;
-
-  std::istringstream ss(topo);
-  std::string line;
-  std::string header_line;
-  std::vector<std::string> headers;
-  std::vector<std::string> gpu_values;
-  while (std::getline(ss, line)) {
-    if (header_line.empty()) {
-      header_line = line;
-      continue;
-    }
-    if (line.rfind("GPU" + std::to_string(gpu_index), 0) == 0) {
-      break;
-    }
-  }
-  std::istringstream hl(header_line);
-  std::string token;
-  while (hl >> token) {
-    headers.push_back(token);
-  }
-
-  std::istringstream l(line);
-  while (l >> token) {
-    gpu_values.push_back(token);
-  }
-
-  for (size_t i = 0; i < gpu_values.size(); ++i) {
-    if (gpu_values[i].find("PIX") != std::string::npos) {
-      if (i == 0) {
-        std::cerr << "This should not happen!" << gpu_index << std::endl;
-        return -1;
-      }
-      std::string header_str = headers[i - 1];
-      if (header_str.find("NIC") == std::string::npos) {
-        return -1;
-      } else {
-        char last_char = header_str.back();
-        if (!std::isdigit(last_char)) {
-          throw std::invalid_argument("Last character is not a digit");
-        }
-        return last_char - '0';
-      }
-    }
-  }
-  return -1;
-}
-
 void per_thread_rdma_init(void* gpu_buf, size_t bytes, int rank,
                           int block_idx) {
   if (context) return;  // already initialized
@@ -309,15 +133,20 @@ void per_thread_rdma_init(void* gpu_buf, size_t bytes, int rank,
     exit(1);
   }
 
-#ifdef NUMA_AWARE_SCHEDULING
-  int dev = -1;
-  cudaGetDevice(&dev);
-  // int selected_idx = best_nic_pix(dev) + 1;
-  // printf("[RDMA] Best NIC for GPU %d is %d\n", dev, selected_idx);
-  int selected_idx = 0;
-#else
-  selected_idx = 0;
-#endif
+  // Get GPU idx
+  int gpu_idx = 0;
+  auto gpu_cards = uccl::get_gpu_cards();
+  auto ib_nics = uccl::get_rdma_nics();
+  auto gpu_device_path = gpu_cards[gpu_idx];
+  auto ib_nic_it = std::min_element(
+      ib_nics.begin(), ib_nics.end(), [&](auto const& a, auto const& b) {
+        return uccl::cal_pcie_distance(gpu_device_path, a.second) <
+               uccl::cal_pcie_distance(gpu_device_path, b.second);
+      });
+  int selected_idx = ib_nic_it - ib_nics.begin();
+  printf("[RDMA] Selected NIC %s for GPU %s\n", ib_nic_it->first.c_str(),
+         gpu_device_path.c_str());
+
   context = ibv_open_device(dev_list[selected_idx]);
   if (!context) {
     perror("Failed to open device");
@@ -973,14 +802,11 @@ void handle_peer_copy(uint64_t wr_id, int src_dev, int dst_dev, void* src_ptr,
     peer_enabled[src_dev][dst_dev] = true;
     cudaSetDevice(src_dev);
   }
-
-  // Get Start Time
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
   auto start_time = std::chrono::high_resolution_clock::now();
   cudaError_t err = cudaMemcpyPeerAsync(dst_ptr, dst_dev, src_ptr, src_dev,
                                         num_bytes, copy_stream);
   async_memcpy_count++;
-  // Get End Time
   auto end_time = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
       end_time - start_time);
@@ -1000,7 +826,7 @@ void handle_peer_copy(uint64_t wr_id, int src_dev, int dst_dev, void* src_ptr,
 }
 
 void remote_cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq,
-                                                CopyRing& g_ring) {
+                                                CopyRingBuffer& g_ring) {
   struct ibv_wc wc[kMaxOutstandingRecvs];
   struct ibv_sge sges[kMaxOutstandingRecvs];
   struct ibv_recv_wr wrs[kMaxOutstandingRecvs];
@@ -1116,7 +942,7 @@ void remote_cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq,
       task_vec.push_back(task);
     }
     if (!task_vec.empty()) {
-      while (!g_ring.emplace(task_vec)) { /* Busy spin. */
+      while (!g_ring.pushN(task_vec.data(), task_vec.size())) { /* Busy spin. */
       }
     }
 #endif
@@ -1137,7 +963,7 @@ void print_average_async_memcpy_time() {
 
 void remote_ensure_ack_sender_resources(ibv_pd* pd, uint64_t* ack_buf,
                                         ibv_mr*& ack_mr) {
-  if (ack_mr) return;  // already done
+  if (ack_mr) return;
   ack_mr = ibv_reg_mr(pd, ack_buf, sizeof(uint64_t) * RECEIVER_BATCH_SIZE,
                       IBV_ACCESS_LOCAL_WRITE);  // host-only
 

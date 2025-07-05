@@ -1,7 +1,7 @@
 #ifndef RDMA_HPP
 #define RDMA_HPP
 #include "common.hpp"
-#include "copy_ring.hpp"
+#include "ring_buffer.cuh"
 #include "unistd.h"
 #include <infiniband/verbs.h>
 #include <atomic>
@@ -10,18 +10,10 @@
 #include <vector>
 
 // Global RDMA resources
-#ifdef NUMA_AWARE_SCHEDULING
 extern thread_local struct ibv_context* context;
 extern thread_local struct ibv_pd* pd;
 extern thread_local struct ibv_mr* mr;
 extern thread_local uint32_t rkey;
-#else
-extern struct ibv_context* context;
-extern struct ibv_pd* pd;
-extern struct ibv_mr* mr;
-extern uint32_t rkey;
-#endif
-
 extern thread_local struct ibv_qp* qp;
 extern thread_local struct ibv_qp* ack_qp;
 extern thread_local uintptr_t remote_addr;
@@ -84,16 +76,11 @@ void per_thread_polling(int thread_idx, struct ibv_cq* per_thread_cq,
                         std::unordered_set<uint64_t>* per_thread_finished_wrs,
                         std::mutex* per_thread_finished_wrs_mutex);
 void remote_cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq,
-                                                CopyRing& g_ring);
+                                                CopyRingBuffer& g_ring);
 void handle_peer_copy(uint64_t wr_id, uint32_t imm, int src_dev, int dst_dev,
                       void* src_ptr, void* dst_ptr, size_t num_bytes);
 
-void discover_nics(int numa_node);
-void parse_cpulist(std::string const& s, std::vector<int>* out);
-void pin_thread_to_nic_numa(int nic_idx, int core_offset);
-int pick_nic_index(int i);
 void per_thread_rdma_init(void* gpu_buf, size_t bytes, int rank, int block_idx);
-int gpu_numa_node(int gpu_id);
 
 extern void* per_GPU_device_buf[NUM_GPUS];
 

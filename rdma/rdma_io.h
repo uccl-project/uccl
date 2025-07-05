@@ -24,8 +24,6 @@
 #endif
 
 namespace uccl {
-#define MAX_IB_DEVS 32
-
 typedef uint64_t FlowID;
 typedef uint64_t PeerID;
 
@@ -33,8 +31,6 @@ class RDMAContext;
 class RDMAFactory;
 class TXTracking;
 extern std::shared_ptr<RDMAFactory> rdma_ctl;
-
-static int __num_devices = 0;
 
 struct CQEDesc {
   uint64_t data;

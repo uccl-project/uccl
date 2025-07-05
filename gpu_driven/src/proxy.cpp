@@ -1,6 +1,5 @@
 #include "proxy.hpp"
 #include "common.hpp"
-#include "copy_ring.hpp"
 #include "rdma.hpp"
 #include "ring_buffer.cuh"
 #include <algorithm>
@@ -19,21 +18,9 @@ thread_local std::unordered_map<int,
 thread_local uint64_t completion_count;
 thread_local uint64_t wr_time_total;
 
-inline uint64_t load_volatile_u64(uint64_t volatile* addr) {
-  uint64_t val;
-#if defined(__x86_64__)
-  asm volatile("movq %1, %0" : "=r"(val) : "m"(*addr) : "memory");
-#elif defined(__aarch64__)
-  asm volatile("ldr %0, [%1]" : "=r"(val) : "r"(addr) : "memory");
-#else
-#error "Unsupported architecture"
-#endif
-  return val;
-}
-
 void remote_cpu_proxy(DeviceToHostCmdBuffer* rb, int block_idx,
                       void* gpu_buffer, size_t total_size, int rank,
-                      char const* peer_ip, CopyRing& g_ring) {
+                      char const* peer_ip, CopyRingBuffer& g_ring) {
   printf("Remote CPU thread for block %d started\n", block_idx + 1);
 
   per_thread_rdma_init(gpu_buffer, total_size, rank, block_idx);
@@ -179,7 +166,7 @@ void post_gpu_command(
     std::mutex& finished_wrs_mutex,
     std::chrono::duration<double, std::micro>& total_rdma_write_durations) {
   // Force loading rb->head from DRAM.
-  uint64_t cur_head = load_volatile_u64(&rb->head);
+  uint64_t cur_head = rb->volatile_head();
 
   if (cur_head == my_tail) {
 #ifdef DEBUG_PRINT
