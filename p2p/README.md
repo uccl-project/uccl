@@ -87,6 +87,7 @@ sudo make install
 
 On client:
 ```bash
+# Note: if running atop GH200 with unified memory, use `--device cpu` or use `cudaMallocManaged`. 
 python benchmark.py \
     --role client --remote-ip 192.168.0.100 --device gpu \
     --local-gpu-idx 0 --remote-gpu-idx 0 --num-cpus 4
