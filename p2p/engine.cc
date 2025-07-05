@@ -96,7 +96,7 @@ bool Endpoint::connect(std::string const& ip_addr, int const& remote_gpu_idx,
   conn_id = next_conn_id_.fetch_add(1);
 
   std::future<uccl::ConnID> uccl_conn_id_future = std::async(
-      std::launch::async, [this, local_gpu_idx_, remote_gpu_idx, ip_addr]() {
+      std::launch::async, [this, remote_gpu_idx, &ip_addr]() {
         return ep_->test_uccl_connect(
             gpu_to_dev[local_gpu_idx_], local_gpu_idx_,
             gpu_to_dev[remote_gpu_idx], remote_gpu_idx, ip_addr);
@@ -105,9 +105,9 @@ bool Endpoint::connect(std::string const& ip_addr, int const& remote_gpu_idx,
   // Check for Python signals (eg, ctrl+c) while waiting for connection
   while (uccl_conn_id_future.wait_for(std::chrono::seconds(1)) !=
          std::future_status::ready) {
-    if (PyErr_CheckSignals() != 0) throw py::error_already_set();
+    // if (PyErr_CheckSignals() != 0) throw py::error_already_set();
   }
-  uccl_conn_id = uccl_conn_id_future.get();
+  uccl::ConnID uccl_conn_id = uccl_conn_id_future.get();
 
   // Store the connection ID.
   conn_id_to_conn_[conn_id] =
@@ -125,17 +125,17 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   conn_id = next_conn_id_.fetch_add(1);
 
   std::future<uccl::ConnID> uccl_conn_id_future =
-      std::async(std::launch::async, [this, local_gpu_idx_, ip_addr]() {
+      std::async(std::launch::async, [this, &ip_addr, &remote_gpu_idx]() {
         return ep_->test_uccl_accept(gpu_to_dev[local_gpu_idx_], local_gpu_idx_,
                                      ip_addr, &remote_gpu_idx);
       });
 
   // Check for Python signals (eg, ctrl+c) while waiting for connection
-  while (uccl_conn_id_future.wait_for(std::chrono::seconds(1)) !=
+  while (uccl_conn_id_future.wait_for(std::chrono::milliseconds(100)) !=
          std::future_status::ready) {
-    if (PyErr_CheckSignals() != 0) throw py::error_already_set();
+    // if (PyErr_CheckSignals() != 0) throw py::error_already_set();
   }
-  uccl_conn_id = uccl_conn_id_future.get();
+  uccl::ConnID uccl_conn_id = uccl_conn_id_future.get();
 
   // Store the connection ID.
   conn_id_to_conn_[conn_id] =
