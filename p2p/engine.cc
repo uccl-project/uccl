@@ -1,6 +1,7 @@
 #include "engine.h"
 #include "util/util.h"
 #include <arpa/inet.h>
+#include <glog/logging.h>
 #include <netinet/in.h>
 #include <chrono>
 #include <cstdint>
@@ -266,17 +267,6 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
   return true;
 }
 
-bool Endpoint::sendv(uint64_t conn_id, uint64_t* mr_id_v, void const** data_v,
-                     size_t* size_v, size_t num_chunks) {
-  return true;
-}
-
-bool Endpoint::recvv(uint64_t conn_id, uint64_t* mr_id_v, void** data_v,
-                     size_t* max_size_v, size_t* recv_size_v,
-                     size_t num_chunks) {
-  return true;
-}
-
 bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
                     size_t max_size, size_t* recv_size) {
   py::gil_scoped_release release;
@@ -371,6 +361,224 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
   }
 
   *recv_size = size_expected + first_actual_size;
+  return true;
+}
+
+bool Endpoint::sendv(uint64_t conn_id, uint64_t* mr_id_v, void const** data_v,
+                     size_t* size_v, size_t num_chunks) {
+  py::gil_scoped_release release;
+  auto conn = conn_id_to_conn_[conn_id];
+  auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
+
+  uccl::ucclRequest ureq[kMaxInflightChunks];
+  bool done[kMaxInflightChunks] = {false};
+
+  for (int i = 0; i < num_chunks; i++) {
+    transfer_metadata_->chunk_size_v[i] = size_v[i];
+  }
+
+  auto mhandle = mr_id_to_mr_[mr_id_v[0]]->mhandle_;
+  auto mhandle_meta = mr_id_to_mr_[transfer_metadata_mr_id_]->mhandle_;
+
+  int rc;
+  int chunk_size = std::min(size_v[0], kRTTBytes);
+  do {
+    rc = ep_->uccl_send_async(uccl_flow, mhandle, (void*)data_v[0], chunk_size,
+                              &ureq[0]);
+    if (rc == -1) {
+      check_python_signals();
+      std::this_thread::yield();
+    }
+  } while (rc == -1);
+
+  do {
+    rc = ep_->uccl_send_async(uccl_flow, mhandle_meta,
+                              (void*)transfer_metadata_->chunk_size_v,
+                              sizeof(uint64_t) * num_chunks, &ureq[1]);
+    if (rc == -1) {
+      check_python_signals();
+      std::this_thread::yield();
+    }
+  } while (rc == -1);
+
+  while (!ep_->uccl_poll_ureq_once(&ureq[1])) {
+    check_python_signals();
+  }
+
+  while (!ep_->uccl_poll_ureq_once(&ureq[0])) {
+    check_python_signals();
+  }
+
+  std::vector<void*> data_send_vec;
+  std::vector<size_t> size_send_vec;
+  std::vector<uccl::Mhandle*> mhandle_send_vec;
+
+  auto first_actual_size = chunk_size;
+  void* cur_data = data_v[0] + first_actual_size;
+  size_t cur_size_expected = size_v[0] - first_actual_size;
+  size_t cur_size_post_send = 0;
+  for (int i = 0; i < num_chunks; i++) {
+    if (i != 0) {
+      cur_data = data_v[i];
+      cur_size_expected = size_v[i];
+      cur_size_post_send = 0;
+    }
+    while (cur_size_post_send < cur_size_expected) {
+      int chunk_size =
+          std::min(cur_size_expected - cur_size_post_send, kChunkSize);
+      data_send_vec.push_back(cur_data);
+      size_send_vec.push_back(chunk_size);
+      mhandle_send_vec.push_back(mr_id_to_mr_[mr_id_v[i]]->mhandle_);
+      cur_data += chunk_size;
+      cur_size_post_send += chunk_size;
+    }
+  }
+
+  int ureq_max = data_send_vec.size();
+  int ureq_issued = 0, ureq_finished = 0;
+  LOG(INFO) << "Send ureq_max: " << ureq_max;
+
+  while (ureq_finished < ureq_max) {
+    while (ureq_issued - ureq_finished < kMaxInflightChunks &&
+           size_send_vec[ureq_issued] > 0) {
+      auto rc = ep_->uccl_send_async(uccl_flow, mhandle_send_vec[ureq_issued],
+                                     data_send_vec[ureq_issued],
+                                     &size_send_vec[ureq_issued], 1,
+                                     &ureq[ureq_issued % kMaxInflightChunks]);
+      if (rc == -1) break;
+      done[ureq_issued % kMaxInflightChunks] = false;
+      ureq_issued++;
+    }
+    check_python_signals();
+
+    for (int i = ureq_finished; i < ureq_issued; i++) {
+      if (done[i % kMaxInflightChunks]) {
+        continue;
+      }
+      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+        done[i % kMaxInflightChunks] = true;
+      }
+    }
+
+    while (ureq_finished < ureq_issued &&
+           done[ureq_finished % kMaxInflightChunks]) {
+      ureq_finished++;
+    }
+  }
+
+  return true;
+}
+
+bool Endpoint::recvv(uint64_t conn_id, uint64_t* mr_id_v, void** data_v,
+                     size_t* max_size_v, size_t* recv_size_v,
+                     size_t num_chunks) {
+  py::gil_scoped_release release;
+  auto conn = conn_id_to_conn_[conn_id];
+  auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
+
+  uccl::ucclRequest ureq[kMaxInflightChunks];
+  bool done[kMaxInflightChunks] = {false};
+
+  auto mhandle = mr_id_to_mr_[mr_id_v[0]]->mhandle_;
+  auto mhandle_meta = mr_id_to_mr_[transfer_metadata_mr_id_]->mhandle_;
+
+  int rc;
+  do {
+    int chunk_size = kRTTBytes;
+    rc = ep_->uccl_recv_async(uccl_flow, &mhandle, &data_v[0], &chunk_size, 1,
+                              &ureq[0]);
+    if (rc == -1) {
+      check_python_signals();
+      std::this_thread::yield();
+    }
+  } while (rc == -1);
+
+  void* meta_addr = (void*)transfer_metadata_->chunk_size_v;
+  int meta_size = sizeof(uint64_t) * num_chunks;
+  do {
+    rc = ep_->uccl_recv_async(uccl_flow, &mhandle_meta, &meta_addr, &meta_size,
+                              1, &ureq[1]);
+    if (rc == -1) {
+      check_python_signals();
+      std::this_thread::yield();
+    }
+  } while (rc == -1);
+
+  while (!ep_->uccl_poll_ureq_once(&ureq[1])) {
+    check_python_signals();
+  }
+
+  while (!ep_->uccl_poll_ureq_once(&ureq[0])) {
+    check_python_signals();
+  }
+
+  // Prepare the data, size, and mhandle vectors for the rest of the chunks.
+  std::vector<void*> data_recv_vec;
+  std::vector<size_t> size_recv_vec;
+  std::vector<uccl::Mhandle*> mhandle_recv_vec;
+
+  auto first_actual_size = ureq[0].recv.data_len[0];
+  void* cur_data = data_v[0] + first_actual_size;
+  size_t cur_size_expected =
+      transfer_metadata_->chunk_size_v[0] - first_actual_size;
+  size_t cur_size_post_recv = 0;
+  for (int i = 0; i < num_chunks; i++) {
+    if (i != 0) {
+      cur_data = data_v[i];
+      cur_size_expected = transfer_metadata_->chunk_size_v[i];
+      cur_size_post_recv = 0;
+    }
+    while (cur_size_post_recv < cur_size_expected) {
+      int chunk_size =
+          std::min(cur_size_expected - cur_size_post_recv, kChunkSize);
+      data_recv_vec.push_back(cur_data);
+      size_recv_vec.push_back(chunk_size);
+      mhandle_recv_vec.push_back(mr_id_to_mr_[mr_id_v[i]]->mhandle_);
+      cur_data += chunk_size;
+      cur_size_post_recv += chunk_size;
+    }
+  }
+
+  // Handle receiving the rest of the sub-chunks.
+  int ureq_max = data_recv_vec.size();
+  int ureq_issued = 0, ureq_finished = 0;
+  LOG(INFO) << "Recv ureq_max: " << ureq_max;
+
+  while (ureq_finished < ureq_max) {
+    while (ureq_issued - ureq_finished < kMaxInflightChunks &&
+           size_recv_vec[ureq_issued] > 0) {
+      auto rc = ep_->uccl_recv_async(uccl_flow, mhandle_recv_vec[ureq_issued],
+                                     data_recv_vec[ureq_issued],
+                                     &size_recv_vec[ureq_issued], 1,
+                                     &ureq[ureq_issued % kMaxInflightChunks]);
+      if (rc == -1) break;
+      done[ureq_issued % kMaxInflightChunks] = false;
+      ureq_issued++;
+    }
+    check_python_signals();
+
+    for (int i = ureq_finished; i < ureq_issued; i++) {
+      if (done[i % kMaxInflightChunks]) {
+        continue;
+      }
+      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+        done[i % kMaxInflightChunks] = true;
+      }
+    }
+
+    while (ureq_finished < ureq_issued &&
+           done[ureq_finished % kMaxInflightChunks]) {
+      ureq_finished++;
+    }
+  }
+
+  // Return the sizes of the received chunks.
+  for (int i = 0; i < num_chunks; i++) {
+    recv_size_v[i] = transfer_metadata_->chunk_size_v[i];
+    DCHECK(recv_size_v[i] <= max_size_v[i])
+        << "recv_size_v > max_size_v for chunk " << i;
+  }
+
   return true;
 }
 
