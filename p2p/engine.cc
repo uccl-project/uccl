@@ -414,12 +414,12 @@ bool Endpoint::sendv(uint64_t conn_id, uint64_t* mr_id_v, void const** data_v,
   std::vector<uccl::Mhandle*> mhandle_send_vec;
 
   auto first_actual_size = chunk_size;
-  void* cur_data = data_v[0] + first_actual_size;
+  void* cur_data = (void*)data_v[0] + first_actual_size;
   size_t cur_size_expected = size_v[0] - first_actual_size;
   size_t cur_size_post_send = 0;
   for (int i = 0; i < num_chunks; i++) {
     if (i != 0) {
-      cur_data = data_v[i];
+      cur_data = (void*)data_v[i];
       cur_size_expected = size_v[i];
       cur_size_post_send = 0;
     }
@@ -441,10 +441,9 @@ bool Endpoint::sendv(uint64_t conn_id, uint64_t* mr_id_v, void const** data_v,
   while (ureq_finished < ureq_max) {
     while (ureq_issued - ureq_finished < kMaxInflightChunks &&
            size_send_vec[ureq_issued] > 0) {
-      auto rc = ep_->uccl_send_async(uccl_flow, mhandle_send_vec[ureq_issued],
-                                     data_send_vec[ureq_issued],
-                                     &size_send_vec[ureq_issued], 1,
-                                     &ureq[ureq_issued % kMaxInflightChunks]);
+      auto rc = ep_->uccl_send_async(
+          uccl_flow, mhandle_send_vec[ureq_issued], data_send_vec[ureq_issued],
+          size_send_vec[ureq_issued], &ureq[ureq_issued % kMaxInflightChunks]);
       if (rc == -1) break;
       done[ureq_issued % kMaxInflightChunks] = false;
       ureq_issued++;
@@ -514,8 +513,10 @@ bool Endpoint::recvv(uint64_t conn_id, uint64_t* mr_id_v, void** data_v,
 
   // Prepare the data, size, and mhandle vectors for the rest of the chunks.
   std::vector<void*> data_recv_vec;
-  std::vector<size_t> size_recv_vec;
+  std::vector<void**> data_recv_ptr_vec;
+  std::vector<int> size_recv_vec;
   std::vector<uccl::Mhandle*> mhandle_recv_vec;
+  std::vector<uccl::Mhandle**> mhandle_recv_ptr_vec;
 
   auto first_actual_size = ureq[0].recv.data_len[0];
   void* cur_data = data_v[0] + first_actual_size;
@@ -532,8 +533,10 @@ bool Endpoint::recvv(uint64_t conn_id, uint64_t* mr_id_v, void** data_v,
       int chunk_size =
           std::min(cur_size_expected - cur_size_post_recv, kChunkSize);
       data_recv_vec.push_back(cur_data);
+      data_recv_ptr_vec.push_back(&data_recv_vec.back());
       size_recv_vec.push_back(chunk_size);
       mhandle_recv_vec.push_back(mr_id_to_mr_[mr_id_v[i]]->mhandle_);
+      mhandle_recv_ptr_vec.push_back(&mhandle_recv_vec.back());
       cur_data += chunk_size;
       cur_size_post_recv += chunk_size;
     }
@@ -547,10 +550,10 @@ bool Endpoint::recvv(uint64_t conn_id, uint64_t* mr_id_v, void** data_v,
   while (ureq_finished < ureq_max) {
     while (ureq_issued - ureq_finished < kMaxInflightChunks &&
            size_recv_vec[ureq_issued] > 0) {
-      auto rc = ep_->uccl_recv_async(uccl_flow, mhandle_recv_vec[ureq_issued],
-                                     data_recv_vec[ureq_issued],
-                                     &size_recv_vec[ureq_issued], 1,
-                                     &ureq[ureq_issued % kMaxInflightChunks]);
+      auto rc = ep_->uccl_recv_async(
+          uccl_flow, mhandle_recv_ptr_vec[ureq_issued],
+          data_recv_ptr_vec[ureq_issued], &size_recv_vec[ureq_issued], 1,
+          &ureq[ureq_issued % kMaxInflightChunks]);
       if (rc == -1) break;
       done[ureq_issued % kMaxInflightChunks] = false;
       ureq_issued++;
