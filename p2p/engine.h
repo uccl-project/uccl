@@ -102,8 +102,9 @@ class Endpoint {
   bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size);
 
   /* Send a vector of data chunks. Blocking. */
-  bool sendv(uint64_t conn_id, uint64_t* mr_id_v, void const** data_v,
-             size_t* size_v, size_t num_chunks);
+  bool sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+             std::vector<void const*> data_v, std::vector<size_t> size_v,
+             size_t num_iovs);
 
   /*
    * Receive data from the remote server. Blocking.
@@ -119,8 +120,9 @@ class Endpoint {
             size_t* recv_size);
 
   /* Receive a vector of data chunks. Blocking. */
-  bool recvv(uint64_t conn_id, uint64_t* mr_id_v, void** data_v,
-             size_t* max_size_v, size_t* recv_size_v, size_t num_chunks);
+  bool recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+             std::vector<void*> data_v, std::vector<size_t> max_size_v,
+             std::vector<size_t>& recv_size_v, size_t num_iovs);
 
   /**
    * Join a logical rendezvous group and connect to every other member.

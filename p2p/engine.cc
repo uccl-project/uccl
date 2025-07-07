@@ -364,8 +364,9 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
   return true;
 }
 
-bool Endpoint::sendv(uint64_t conn_id, uint64_t* mr_id_v, void const** data_v,
-                     size_t* size_v, size_t num_chunks) {
+bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                     std::vector<void const*> data_v,
+                     std::vector<size_t> size_v, size_t num_iovs) {
   py::gil_scoped_release release;
   auto conn = conn_id_to_conn_[conn_id];
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
@@ -373,8 +374,10 @@ bool Endpoint::sendv(uint64_t conn_id, uint64_t* mr_id_v, void const** data_v,
   uccl::ucclRequest ureq[kMaxInflightChunks];
   bool done[kMaxInflightChunks] = {false};
 
-  for (int i = 0; i < num_chunks; i++) {
+  int estimated_ureq_max = 0;
+  for (int i = 0; i < num_iovs; i++) {
     transfer_metadata_->chunk_size_v[i] = size_v[i];
+    estimated_ureq_max += (size_v[i] + kChunkSize - 1) / kChunkSize;
   }
 
   auto mhandle = mr_id_to_mr_[mr_id_v[0]]->mhandle_;
@@ -394,7 +397,7 @@ bool Endpoint::sendv(uint64_t conn_id, uint64_t* mr_id_v, void const** data_v,
   do {
     rc = ep_->uccl_send_async(uccl_flow, mhandle_meta,
                               (void*)transfer_metadata_->chunk_size_v,
-                              sizeof(uint64_t) * num_chunks, &ureq[1]);
+                              sizeof(uint64_t) * num_iovs, &ureq[1]);
     if (rc == -1) {
       check_python_signals();
       std::this_thread::yield();
@@ -412,12 +415,16 @@ bool Endpoint::sendv(uint64_t conn_id, uint64_t* mr_id_v, void const** data_v,
   std::vector<void*> data_send_vec;
   std::vector<size_t> size_send_vec;
   std::vector<uccl::Mhandle*> mhandle_send_vec;
+  // Avoid reallocations.
+  data_send_vec.reserve(estimated_ureq_max);
+  size_send_vec.reserve(estimated_ureq_max);
+  mhandle_send_vec.reserve(estimated_ureq_max);
 
   auto first_actual_size = chunk_size;
   void* cur_data = (void*)data_v[0] + first_actual_size;
   size_t cur_size_expected = size_v[0] - first_actual_size;
   size_t cur_size_post_send = 0;
-  for (int i = 0; i < num_chunks; i++) {
+  for (int i = 0; i < num_iovs; i++) {
     if (i != 0) {
       cur_data = (void*)data_v[i];
       cur_size_expected = size_v[i];
@@ -436,10 +443,10 @@ bool Endpoint::sendv(uint64_t conn_id, uint64_t* mr_id_v, void const** data_v,
 
   int ureq_max = data_send_vec.size();
   int ureq_issued = 0, ureq_finished = 0;
-  LOG(INFO) << "Send ureq_max: " << ureq_max;
 
   while (ureq_finished < ureq_max) {
-    while (ureq_issued - ureq_finished < kMaxInflightChunks &&
+    while (ureq_issued < ureq_max &&
+           ureq_issued - ureq_finished < kMaxInflightChunks &&
            size_send_vec[ureq_issued] > 0) {
       auto rc = ep_->uccl_send_async(
           uccl_flow, mhandle_send_vec[ureq_issued], data_send_vec[ureq_issued],
@@ -468,9 +475,9 @@ bool Endpoint::sendv(uint64_t conn_id, uint64_t* mr_id_v, void const** data_v,
   return true;
 }
 
-bool Endpoint::recvv(uint64_t conn_id, uint64_t* mr_id_v, void** data_v,
-                     size_t* max_size_v, size_t* recv_size_v,
-                     size_t num_chunks) {
+bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                     std::vector<void*> data_v, std::vector<size_t> max_size_v,
+                     std::vector<size_t>& recv_size_v, size_t num_iovs) {
   py::gil_scoped_release release;
   auto conn = conn_id_to_conn_[conn_id];
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
@@ -493,7 +500,7 @@ bool Endpoint::recvv(uint64_t conn_id, uint64_t* mr_id_v, void** data_v,
   } while (rc == -1);
 
   void* meta_addr = (void*)transfer_metadata_->chunk_size_v;
-  int meta_size = sizeof(uint64_t) * num_chunks;
+  int meta_size = sizeof(uint64_t) * num_iovs;
   do {
     rc = ep_->uccl_recv_async(uccl_flow, &mhandle_meta, &meta_addr, &meta_size,
                               1, &ureq[1]);
@@ -518,12 +525,23 @@ bool Endpoint::recvv(uint64_t conn_id, uint64_t* mr_id_v, void** data_v,
   std::vector<uccl::Mhandle*> mhandle_recv_vec;
   std::vector<uccl::Mhandle**> mhandle_recv_ptr_vec;
 
+  int estimated_ureq_max = 0;
+  for (int i = 0; i < num_iovs; i++) {
+    estimated_ureq_max += (max_size_v[i] + kChunkSize - 1) / kChunkSize;
+  }
+
+  data_recv_vec.reserve(estimated_ureq_max);
+  data_recv_ptr_vec.reserve(estimated_ureq_max);
+  size_recv_vec.reserve(estimated_ureq_max);
+  mhandle_recv_vec.reserve(estimated_ureq_max);
+  mhandle_recv_ptr_vec.reserve(estimated_ureq_max);
+
   auto first_actual_size = ureq[0].recv.data_len[0];
   void* cur_data = data_v[0] + first_actual_size;
   size_t cur_size_expected =
       transfer_metadata_->chunk_size_v[0] - first_actual_size;
   size_t cur_size_post_recv = 0;
-  for (int i = 0; i < num_chunks; i++) {
+  for (int i = 0; i < num_iovs; i++) {
     if (i != 0) {
       cur_data = data_v[i];
       cur_size_expected = transfer_metadata_->chunk_size_v[i];
@@ -545,10 +563,10 @@ bool Endpoint::recvv(uint64_t conn_id, uint64_t* mr_id_v, void** data_v,
   // Handle receiving the rest of the sub-chunks.
   int ureq_max = data_recv_vec.size();
   int ureq_issued = 0, ureq_finished = 0;
-  LOG(INFO) << "Recv ureq_max: " << ureq_max;
 
   while (ureq_finished < ureq_max) {
-    while (ureq_issued - ureq_finished < kMaxInflightChunks &&
+    while (ureq_issued < ureq_max &&
+           ureq_issued - ureq_finished < kMaxInflightChunks &&
            size_recv_vec[ureq_issued] > 0) {
       auto rc = ep_->uccl_recv_async(
           uccl_flow, mhandle_recv_ptr_vec[ureq_issued],
@@ -576,7 +594,7 @@ bool Endpoint::recvv(uint64_t conn_id, uint64_t* mr_id_v, void** data_v,
   }
 
   // Return the sizes of the received chunks.
-  for (int i = 0; i < num_chunks; i++) {
+  for (int i = 0; i < num_iovs; i++) {
     recv_size_v[i] = transfer_metadata_->chunk_size_v[i];
     DCHECK(recv_size_v[i] <= max_size_v[i])
         << "recv_size_v > max_size_v for chunk " << i;
