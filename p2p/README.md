@@ -186,6 +186,60 @@ success, recv_mr_id = endpoint.reg(recv_ptr, recv_data.nbytes)
 success, recv_size = endpoint.recv(conn_id, recv_mr_id, recv_ptr, recv_data.nbytes)
 ```
 
+### Vectorized Multi-Tensor Transfer
+
+```python
+# Sender side - send multiple tensors at once
+tensors = [
+    torch.ones(512, dtype=torch.float32),
+    torch.ones(1024, dtype=torch.float32),
+    torch.ones(256, dtype=torch.float32)
+]
+
+# Ensure all tensors are contiguous
+for tensor in tensors:
+    assert tensor.is_contiguous()
+
+# Register all tensors
+mr_ids = []
+for tensor in tensors:
+    success, mr_id = endpoint.reg(tensor.data_ptr(), tensor.numel() * 4)
+    assert success
+    mr_ids.append(mr_id)
+
+# Prepare data for vectorized send
+ptr_list = [tensor.data_ptr() for tensor in tensors]
+size_list = [tensor.numel() * 4 for tensor in tensors]
+num_iovs = len(tensors)
+
+# Send all tensors in one operation
+success = endpoint.sendv(conn_id, mr_ids, ptr_list, size_list, num_iovs)
+assert success
+
+# Receiver side - receive multiple tensors at once
+recv_tensors = [
+    torch.zeros(512, dtype=torch.float32),
+    torch.zeros(1024, dtype=torch.float32),
+    torch.zeros(256, dtype=torch.float32)
+]
+
+# Register receive buffers
+recv_mr_ids = []
+for tensor in recv_tensors:
+    success, mr_id = endpoint.reg(tensor.data_ptr(), tensor.numel() * 4)
+    assert success
+    recv_mr_ids.append(mr_id)
+
+# Prepare data for vectorized receive
+recv_ptr_list = [tensor.data_ptr() for tensor in recv_tensors]
+max_size_list = [tensor.numel() * 4 for tensor in recv_tensors]
+
+# Receive all tensors in one operation
+success, recv_size_list = endpoint.recvv(conn_id, recv_mr_ids, recv_ptr_list, max_size_list, num_iovs)
+assert success
+print(f"Received sizes: {recv_size_list}")
+```
+
 
 ## API Reference
 
@@ -272,6 +326,37 @@ Receive data from remote endpoint (blocking).
 **Returns:**
 - `success` (bool): Whether receive completed successfully
 - `recv_size` (int): Number of bytes actually received
+
+```python
+sendv(conn_id, mr_id_list, ptr_list, size_list, num_iovs) -> success
+```
+Send multiple memory regions to remote endpoint in a single operation (blocking).
+
+**Parameters:**
+- `conn_id` (int): Connection ID from connect/accept
+- `mr_id_list` (list[int]): List of memory region IDs from register
+- `ptr_list` (list[int]): List of pointers to data to send
+- `size_list` (list[int]): List of sizes in bytes for each memory region
+- `num_iovs` (int): Number of I/O vectors (length of the lists)
+
+**Returns:**
+- `success` (bool): Whether send completed successfully
+
+```python
+recvv(conn_id, mr_id_list, ptr_list, max_size_list, num_iovs) -> (success, recv_size_list)
+```
+Receive multiple memory regions from remote endpoint in a single operation (blocking).
+
+**Parameters:**
+- `conn_id` (int): Connection ID from connect/accept
+- `mr_id_list` (list[int]): List of memory region IDs from register
+- `ptr_list` (list[int]): List of pointers to buffers for received data
+- `max_size_list` (list[int]): List of maximum sizes in bytes for each memory region
+- `num_iovs` (int): Number of I/O vectors (length of the lists)
+
+**Returns:**
+- `success` (bool): Whether receive completed successfully
+- `recv_size_list` (list[int]): List of actual sizes received for each memory region
 
 
 ## Development and Testing
