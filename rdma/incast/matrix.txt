@@ -1,0 +1,18 @@
+Nodes 16
+Connections 4
+6->2 id 1 start 0 size 0
+2->6 id 2 start 0 size 0
+0->12 id 3 start 0 size 0
+12->0 id 4 start 0 size 0
+8->1 id 5 start 0 size 0
+1->8 id 6 start 0 size 0
+15->10 id 7 start 0 size 0
+10->15 id 8 start 0 size 0
+14->3 id 9 start 0 size 0
+3->14 id 10 start 0 size 0
+7->11 id 11 start 0 size 0
+11->7 id 12 start 0 size 0
+9->5 id 13 start 0 size 0
+5->9 id 14 start 0 size 0
+13->4 id 15 start 0 size 0
+4->13 id 16 start 0 size 0
