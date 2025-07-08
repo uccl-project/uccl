@@ -13,6 +13,8 @@ char const* PLUGIN_NAME = "RDMA_Plugin";
 
 bool volatile quit = false;
 
+std::atomic<bool> initialized[8] = {};
+
 void interrupt_handler(int signal) {
   (void)signal;
   quit = true;
@@ -252,7 +254,7 @@ ncclResult_t pluginGetProperties(int dev, ncclNetProperties_v8_t* props) {
   // Maximum number of comm objects we can create.
   props->maxComms = 1024 * 1024;
   // Maximum number of receive operations taken by irecv().
-  props->maxRecvs = kMaxRecv;
+  props->maxRecvs = 1;
   // Coupling with NCCL network device-side code.
   props->netDeviceType = NCCL_NET_DEVICE_HOST;
   props->netDeviceVersion = NCCL_NET_DEVICE_INVALID_VERSION;
@@ -272,7 +274,9 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
   memset(handle, 0, sizeof(struct ucclHandle));
 
 #ifdef LAZY_CREATE_ENGINE
-  ep->initialize_engine_by_dev(dev);
+  if (ep->initialize_engine_by_dev(dev)) {
+    initialized[dev].store(true);
+  }
 #endif
 
   // Create a listening socket.
@@ -324,7 +328,13 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
 
   *listenComm = lcomm;
 
-  UCCL_LOG_PLUGIN << "Listen on dev: " << dev;
+  int localgpu;
+#ifndef __HIP_PLATFORM_AMD__  
+  cudaGetDevice(&localgpu);
+#else
+  DCHECK(hipGetDevice(&localgpu) == hipSuccess);
+#endif
+  UCCL_LOG_PLUGIN << "Listen on dev: " << dev << " by GPU:" << localgpu;
 
   return ncclSuccess;
 }
@@ -343,6 +353,16 @@ ncclResult_t pluginConnect(int dev, void* opaque_handle, void** sendComm,
 #else
   DCHECK(hipGetDevice(&local_gpuidx) == hipSuccess);
 #endif
+
+  if (!initialized[dev].load()) {
+    if (ep->initialize_engine_by_dev(dev))
+      initialized[dev].store(true);
+  }
+
+  while (!initialized[dev].load()) {
+    // We must wait until engines are initialized.
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
 
   std::string remote_ip_str = ip_to_str(handle->ip_addr_u32);
 
