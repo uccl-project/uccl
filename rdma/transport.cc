@@ -746,7 +746,6 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
 
     engine_cpu_id =
         ENGINE_CPU_START_LIST[dev] + engine_id % num_engines_per_dev;
-    DCHECK(engine_cpu_id < NUM_CPUS) << engine_cpu_id << ", " << NUM_CPUS;
 
     engine_vec_.emplace_back(std::make_unique<UcclRDMAEngine>(
         dev, engine_id, channel_vec_[engine_id], eqds_[dev]));
@@ -759,6 +758,9 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
                             << "running on NUMA node " << numa_node;
             pin_thread_to_numa(numa_node);
           } else {
+            DCHECK(engine_cpu_id < NUM_CPUS)
+                << "The target CPU id " << engine_cpu_id
+                << " is out of range, available CPUs:" << NUM_CPUS;
             UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
                             << "running on CPU " << engine_cpu_id;
             pin_thread_to_cpu(engine_cpu_id);
@@ -792,7 +794,6 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev) {
          engine_id++) {
       int engine_cpu_id =
           ENGINE_CPU_START_LIST[dev] + engine_id % num_engines_per_dev_;
-      DCHECK(engine_cpu_id < NUM_CPUS) << engine_cpu_id << ", " << NUM_CPUS;
       UcclRDMAEngine* engine_ptr;
       {
         std::lock_guard<std::mutex> lock(engine_map_mu_);
@@ -815,6 +816,9 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev) {
                                 << "running on NUMA node " << numa_node;
                 pin_thread_to_numa(numa_node);
               } else {
+                DCHECK(engine_cpu_id < NUM_CPUS)
+                    << "The target CPU id " << engine_cpu_id
+                    << " is out of range, available CPUs:" << NUM_CPUS;
                 UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
                                 << "running on CPU " << engine_cpu_id;
                 pin_thread_to_cpu(engine_cpu_id);
