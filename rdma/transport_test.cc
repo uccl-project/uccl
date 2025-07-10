@@ -398,7 +398,7 @@ static void client_worker(void) {
 // export HIP_VISIBLE_DEVICES=1,2,0,5
 // export NCCL_SOCKET_IFNAME="cni0"
 // LD_LIBRARY_PATH="${CONDA_LIB_HOME}:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH}" ./transport_test --server=true
-// LD_LIBRARY_PATH="${CONDA_LIB_HOME}:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH}" ./transport_test --serverip=10.0.100.114
+// LD_LIBRARY_PATH="${CONDA_LIB_HOME}:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH}" ./transport_test --serverip=10.42.19.1
 // clang-format on
 
 int main(int argc, char* argv[]) {
