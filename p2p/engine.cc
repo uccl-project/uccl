@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "util/net.h"
 #include "util/util.h"
 #include <arpa/inet.h>
 #include <glog/logging.h>
@@ -17,6 +18,7 @@
 int const kMaxNumGPUs = 8;
 // Assume the local and remote GPUs have the same GPU-NIC mapping.
 uint8_t gpu_to_dev[kMaxNumGPUs] = {0};
+std::once_flag glog_init_once;
 
 inline void check_python_signals() {
   PyGILState_STATE gstate = PyGILState_Ensure();
@@ -32,9 +34,11 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   py::gil_scoped_release release;
   std::cout << "Creating Engine with GPU index: " << local_gpu_idx
             << ", CPUs: " << num_cpus << std::endl;
-  Py_Initialize();
+  // Py_Initialize();
 
-  google::InitGoogleLogging("uccl_p2p");
+  std::call_once(glog_init_once,
+                 []() { google::InitGoogleLogging("uccl_p2p"); });
+
   google::InstallFailureSignalHandler();
 
   // Initialize the RDMA endpoint with lazy creation.
@@ -265,6 +269,48 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
   }
 
   return true;
+}
+
+std::vector<uint8_t> Endpoint::get_endpoint_metadata() {
+  char uccl_ifname[MAX_IF_NAME_SIZE + 1];
+  uccl::socketAddress uccl_ifaddr;
+  int num_ifs =
+      uccl::find_interfaces(uccl_ifname, &uccl_ifaddr, MAX_IF_NAME_SIZE, 1);
+  if (num_ifs != 1) UCCL_INIT_CHECK(false, "No IP interface found");
+  std::string ip_str = uccl::get_dev_ip(uccl_ifname);
+  uint16_t port;
+  int listen_fd = uccl::open_ephemeral_port(port);
+
+  if (listen_fd < 0) {
+    throw std::runtime_error("Failed to open ephemeral port");
+  }
+
+  bool include_port = true;
+
+  std::vector<uint8_t> metadata;
+
+  bool is_ipv6 = ip_str.find(':') != std::string::npos;
+  size_t ip_len = is_ipv6 ? 16 : 4;
+  size_t total_len = ip_len + (include_port ? 2 : 0);
+
+  metadata.resize(total_len);
+  if (is_ipv6) {
+    struct in6_addr ip6_bin;
+    if (inet_pton(AF_INET6, ip_str.c_str(), &ip6_bin) != 1)
+      throw std::runtime_error("Invalid IPv6 address: " + ip_str);
+    std::memcpy(metadata.data(), &ip6_bin, 16);
+  } else {
+    struct in_addr ip4_bin;
+    if (inet_pton(AF_INET, ip_str.c_str(), &ip4_bin) != 1)
+      throw std::runtime_error("Invalid IPv4 address: " + ip_str);
+    std::memcpy(metadata.data(), &ip4_bin, 4);
+  }
+
+  if (include_port) {
+    uint16_t net_port = htons(port);
+    std::memcpy(metadata.data() + ip_len, &net_port, 2);
+  }
+  return metadata;
 }
 
 bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
