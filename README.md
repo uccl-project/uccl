@@ -85,6 +85,10 @@ Now, you can just run your PyTorch applications and enjoy UCCL performance benef
 
 Please refer to [doc/dev.md](doc/dev.md) for full development guide of UCCL.
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=uccl-project/uccl&type=Date&width=400&height=200)](https://www.star-history.com/#uccl-project/uccl&Date)
+
 ## Citation
 The code in this repository is mostly described in the paper below. Please consider citing this work if you find the repository helpful. 
 
