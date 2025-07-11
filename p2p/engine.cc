@@ -45,7 +45,8 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
       << "Local GPU index out of range";
 
   auto ib_nics = uccl::get_rdma_nics();
-  // Find the RDMA NIC that is closest to each of the GPUs, ensuring fair NIC allocation.
+  // Find the RDMA NIC that is closest to each of the GPUs,
+  // ensuring fair NIC allocation.
   std::vector<bool> nic_allocated(ib_nics.size(), false);
   for (int i = 0; i < gpu_cards.size(); i++) {
     auto gpu_device_path = gpu_cards[i];
