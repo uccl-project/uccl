@@ -659,6 +659,51 @@ static inline std::string get_dev_ip(char const* dev_name) {
   return std::string();
 }
 
+
+static inline int open_ephemeral_port(uint16_t& assigned_port) {
+  int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (listen_fd < 0) {
+    perror("socket");
+    return -1;
+  }
+
+  int opt = 1;
+  if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+    perror("setsockopt");
+    close(listen_fd);
+    return -1;
+  }
+
+  struct sockaddr_in addr;
+  std::memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = INADDR_ANY;
+  addr.sin_port = 0;  // Ask OS for an ephemeral port
+
+  if (bind(listen_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+    perror("bind");
+    close(listen_fd);
+    return -1;
+  }
+
+  if (listen(listen_fd, 1) < 0) {
+    perror("listen");
+    close(listen_fd);
+    return -1;
+  }
+
+  // Retrieve assigned port
+  socklen_t len = sizeof(addr);
+  if (getsockname(listen_fd, (struct sockaddr*)&addr, &len) < 0) {
+    perror("getsockname");
+    close(listen_fd);
+    return -1;
+  }
+
+  assigned_port = ntohs(addr.sin_port);
+  return listen_fd;
+}
+
 // Function to convert MAC string to hex char array
 static inline bool str_to_mac(std::string const& macStr, char mac[6]) {
   if (macStr.length() != 17) {

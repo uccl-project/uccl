@@ -111,5 +111,9 @@ PYBIND11_MODULE(p2p, m) {
                   py::arg("world_size"), py::arg("my_rank"),
                   py::arg("local_gpu_idx"), py::arg("num_cpus"),
                   py::arg("remote_gpu_idx"))
+      .def(
+          "get_endpoint_metadata",
+          static_cast<std::vector<uint8_t> (Endpoint::*)()>(&Endpoint::get_endpoint_metadata),
+          "Return endpoint metadata as a list of bytes")
       .def("__repr__", [](Endpoint const& e) { return "<UCCL P2P Endpoint>"; });
 }
