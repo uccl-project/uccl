@@ -113,7 +113,7 @@ python benchmark.py \
 On Server:
 ```bash
 UCX_TLS=cuda_ipc,cuda_copy,rc,tcp \
-python benchmark_nixl.py --role server --local-gpu-idx 0
+python benchmark_nixl.py --role server --device gpu --local-gpu-idx 0 
 ```
 
 On Client:

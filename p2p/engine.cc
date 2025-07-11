@@ -45,15 +45,33 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
       << "Local GPU index out of range";
 
   auto ib_nics = uccl::get_rdma_nics();
-  // Find the RDMA NIC that is closest to each of the GPUs.
+  // Find the RDMA NIC that is closest to each of the GPUs,
+  // ensuring fair NIC allocation.
+  std::vector<bool> nic_allocated(ib_nics.size(), false);
   for (int i = 0; i < gpu_cards.size(); i++) {
     auto gpu_device_path = gpu_cards[i];
-    auto ib_nic_it = std::min_element(
-        ib_nics.begin(), ib_nics.end(), [&](auto const& a, auto const& b) {
-          return uccl::cal_pcie_distance(gpu_device_path, a.second) <
-                 uccl::cal_pcie_distance(gpu_device_path, b.second);
-        });
-    gpu_to_dev[i] = ib_nic_it - ib_nics.begin();
+    int best_nic = -1;
+    int best_distance = std::numeric_limits<int>::max();
+    for (int j = 0; j < ib_nics.size(); ++j) {
+      if (nic_allocated[j]) continue;
+      int dist = uccl::cal_pcie_distance(gpu_device_path, ib_nics[j].second);
+      if (dist < best_distance) {
+        best_distance = dist;
+        best_nic = j;
+      }
+    }
+    if (best_nic != -1) {
+      gpu_to_dev[i] = best_nic;
+      nic_allocated[best_nic] = true;
+    } else {
+      // If all NICs are allocated, fallback to the closest
+      auto ib_nic_it = std::min_element(
+          ib_nics.begin(), ib_nics.end(), [&](auto const& a, auto const& b) {
+            return uccl::cal_pcie_distance(gpu_device_path, a.second) <
+                   uccl::cal_pcie_distance(gpu_device_path, b.second);
+          });
+      gpu_to_dev[i] = ib_nic_it - ib_nics.begin();
+    }
   }
   std::cout << "Detected best GPU-NIC mapping: " << std::endl;
   for (int i = 0; i < gpu_cards.size(); i++) {
