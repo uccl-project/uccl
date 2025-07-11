@@ -13,7 +13,7 @@ char const* PLUGIN_NAME = "RDMA_Plugin";
 
 bool volatile quit = false;
 
-std::atomic<bool> initialized[8] = {};
+static int gpu2dev[8] = {0, 1, 2, 3};
 
 void interrupt_handler(int signal) {
   (void)signal;
@@ -273,10 +273,20 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
   struct ucclHandle* handle = (struct ucclHandle*)opaqueHandle;
   memset(handle, 0, sizeof(struct ucclHandle));
 
-#ifdef LAZY_CREATE_ENGINE
-  if (ep->initialize_engine_by_dev(dev)) {
-    initialized[dev].store(true);
+#ifndef __HIP_PLATFORM_AMD__
+  int local_gpuidx;
+  cudaGetDevice(&local_gpuidx);
+#else
+  int local_gpuidx;
+  DCHECK(hipGetDevice(&local_gpuidx) == hipSuccess);
+#endif
+
+  if (dev != gpu2dev[local_gpuidx]) {
+    dev = gpu2dev[local_gpuidx];
   }
+
+#ifdef LAZY_CREATE_ENGINE
+  ep->initialize_engine_by_dev(dev);
 #endif
 
   // Create a listening socket.
@@ -329,7 +339,7 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
   *listenComm = lcomm;
 
   int localgpu;
-#ifndef __HIP_PLATFORM_AMD__  
+#ifndef __HIP_PLATFORM_AMD__
   cudaGetDevice(&localgpu);
 #else
   DCHECK(hipGetDevice(&localgpu) == hipSuccess);
@@ -353,15 +363,8 @@ ncclResult_t pluginConnect(int dev, void* opaque_handle, void** sendComm,
 #else
   DCHECK(hipGetDevice(&local_gpuidx) == hipSuccess);
 #endif
-
-  if (!initialized[dev].load()) {
-    if (ep->initialize_engine_by_dev(dev))
-      initialized[dev].store(true);
-  }
-
-  while (!initialized[dev].load()) {
-    // We must wait until engines are initialized.
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  if (dev != gpu2dev[local_gpuidx]) {
+    dev = gpu2dev[local_gpuidx];
   }
 
   std::string remote_ip_str = ip_to_str(handle->ip_addr_u32);

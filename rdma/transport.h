@@ -1026,7 +1026,7 @@ class RDMAEndpoint {
   std::vector<Spin> active_flows_spin_;
 
  public:
-  RDMAEndpoint(int num_engines_per_dev, bool testing=false);
+  RDMAEndpoint(int num_engines_per_dev, bool testing = false);
 
   ~RDMAEndpoint();
 
@@ -1036,7 +1036,7 @@ class RDMAEndpoint {
 
   void cleanup_resources();
 
-  bool initialize_engine_by_dev(int dev, bool testing=false);
+  bool initialize_engine_by_dev(int dev, bool testing = false);
 
   /// For testing easily.
   ConnID test_uccl_connect(int dev, int gpu, int remote_dev, int remote_gpu,

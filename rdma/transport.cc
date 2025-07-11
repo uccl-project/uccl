@@ -774,8 +774,7 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev, bool testing)
 
 bool RDMAEndpoint::initialize_engine_by_dev(int dev, bool testing) {
   static std::vector<std::once_flag> flags_per_dev_(num_devices_);
-  bool called = false;
-  std::call_once(flags_per_dev_[dev], [this, dev, testing, &called]() {
+  std::call_once(flags_per_dev_[dev], [this, dev, testing]() {
     int start_engine_idx = dev * num_engines_per_dev_;
     int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
     int numa_node = RDMAFactory::get_factory_dev(dev)->numa_node;
@@ -818,10 +817,9 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev, bool testing) {
     if (testing) {
       create_listen_socket(&test_listen_fds_[dev], kTestListenPort + dev);
     }
-    called = true;
   });
 
-  return called;
+  return true;
 }
 
 inline uint32_t RDMAEndpoint::find_pot_load_engine_idx(int dev) {
