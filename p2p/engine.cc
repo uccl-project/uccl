@@ -603,6 +603,70 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   return true;
 }
 
+bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
+                          size_t size, uint64_t* transfer_id) {
+  py::gil_scoped_release release;
+  auto conn = conn_id_to_conn_[conn_id];
+  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+
+  auto _transfer_id = next_transfer_id_.fetch_add(1);
+  auto* ureq = new uccl::ucclRequest();
+
+  *transfer_id = _transfer_id;
+  transfer_id_to_ureq_[_transfer_id] = ureq;
+
+  int rc;
+  do {
+    rc = ep_->uccl_send_async(
+        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
+        (void*)data, size, ureq);
+    if (rc == -1) {
+      check_python_signals();
+      std::this_thread::yield();
+    }
+  } while (rc == -1);
+
+  return true;
+}
+
+bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
+                          size_t size, uint64_t* transfer_id) {
+  py::gil_scoped_release release;
+  auto conn = conn_id_to_conn_[conn_id];
+  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+
+  auto _transfer_id = next_transfer_id_.fetch_add(1);
+  auto* ureq = new uccl::ucclRequest();
+
+  *transfer_id = _transfer_id;
+  transfer_id_to_ureq_[_transfer_id] = ureq;
+  int size_int = static_cast<int>(size);
+
+  int rc;
+  do {
+    rc = ep_->uccl_recv_async(
+        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
+        &data, &size_int, 1, ureq);
+    if (rc == -1) {
+      check_python_signals();
+      std::this_thread::yield();
+    }
+  } while (rc == -1);
+
+  return true;
+}
+
+bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
+  py::gil_scoped_release release;
+  auto* ureq = transfer_id_to_ureq_.at(transfer_id);
+  *is_done = ep_->uccl_poll_ureq_once(ureq);
+  if (*is_done) {
+    delete ureq;
+    transfer_id_to_ureq_.erase(transfer_id);
+  }
+  return true;
+}
+
 bool Endpoint::publish_peer(std::string const& discovery_uri,
                             std::string const& group_name, int rank,
                             PeerInfo const& info) {

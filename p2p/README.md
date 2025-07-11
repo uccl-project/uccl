@@ -391,6 +391,50 @@ Receive multiple memory regions from remote endpoint in a single operation (bloc
 - `success` (bool): Whether receive completed successfully
 - `recv_size_list` (list[int]): List of actual sizes received for each memory region
 
+#### Asynchronous Transfer Operations
+
+```python
+send_async(conn_id, mr_id, ptr, size) -> (success, transfer_id)
+```
+Send data to remote endpoint asynchronously (non-blocking).
+
+**Parameters:**
+- `conn_id` (int): Connection ID from connect/accept
+- `mr_id` (int): Memory region ID from register
+- `ptr` (int): Pointer to data to send
+- `size` (int): Number of bytes to send
+
+**Returns:**
+- `success` (bool): Whether send was initiated successfully
+- `transfer_id` (int): Transfer ID for polling completion
+
+```python
+recv_async(conn_id, mr_id, ptr, max_size) -> (success, transfer_id)
+```
+Receive data from remote endpoint asynchronously (non-blocking).
+
+**Parameters:**
+- `conn_id` (int): Connection ID from connect/accept
+- `mr_id` (int): Memory region ID from register
+- `ptr` (int): Pointer to buffer for received data
+- `size` (int): Exact number of bytes to receive
+
+**Returns:**
+- `success` (bool): Whether receive was initiated successfully
+- `transfer_id` (int): Transfer ID for polling completion
+
+```python
+poll_async(transfer_id) -> (success, is_done)
+```
+Poll the status of an asynchronous transfer operation.
+
+**Parameters:**
+- `transfer_id` (int): Transfer ID returned by send_async or recv_async
+
+**Returns:**
+- `success` (bool): Whether polling succeeded
+- `is_done` (bool): Whether the transfer has completed
+
 
 ## Development and Testing
 

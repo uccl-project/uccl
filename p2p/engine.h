@@ -106,6 +106,10 @@ class Endpoint {
              std::vector<void const*> data_v, std::vector<size_t> size_v,
              size_t num_iovs);
 
+  /* Send data to the remote server asynchronously. */
+  bool send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
+                  size_t size, uint64_t* transfer_id);
+
   /*
    * Receive data from the remote server. Blocking.
    *
@@ -123,6 +127,13 @@ class Endpoint {
   bool recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
              std::vector<void*> data_v, std::vector<size_t> max_size_v,
              std::vector<size_t>& recv_size_v, size_t num_iovs);
+
+  /* Receive data from the remote server asynchronously. */
+  bool recv_async(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
+                  uint64_t* transfer_id);
+
+  /* Poll the status of the asynchronous receive. */
+  bool poll_async(uint64_t transfer_id, bool* is_done);
 
   /**
    * Join a logical rendezvous group and connect to every other member.
@@ -190,12 +201,14 @@ class Endpoint {
 
   std::atomic<uint64_t> next_conn_id_ = 0;
   std::atomic<uint64_t> next_mr_id_ = 0;
+  std::atomic<uint64_t> next_transfer_id_ = 0;
 
   // TODO(yang): add mutex to protect the maps.
   mutable std::mutex conn_mu_;
 
   std::unordered_map<uint64_t, Conn*> conn_id_to_conn_;
   std::unordered_map<uint64_t, MR*> mr_id_to_mr_;
+  std::unordered_map<uint64_t, uccl::ucclRequest*> transfer_id_to_ureq_;
 
   std::unordered_map<int, uint64_t> rank2conn_;
 
