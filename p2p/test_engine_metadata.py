@@ -59,8 +59,13 @@ def test_local():
     """Test the UCCL P2P Engine local send/recv functionality"""
     print("Running test_local...")
 
-    def server_process():
+    metadata_queue = multiprocessing.Queue()
+
+    def server_process(q):
         engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
+        metadata = engine.get_endpoint_metadata()
+        q.put(bytes(metadata))  # ensure it's serialized as bytes
+
         success, remote_ip_addr, remote_gpu_idx, conn_id = engine.accept()
         assert success
         print(
@@ -82,11 +87,13 @@ def test_local():
         assert tensor.allclose(torch.ones(1024, dtype=torch.float32))
         print("✓ Server received correct data")
 
-    def client_process():
+    def client_process(q):
+        metadata = q.get(timeout=5)
+        ip, port = parse_metadata(metadata)
+        print(f"Client parsed server IP: {ip}, port: {port}")
+
         engine = p2p.Endpoint(local_gpu_idx=1, num_cpus=4)
-        success, conn_id = engine.connect(
-            remote_ip_addr="127.0.0.1", remote_gpu_idx=0
-        )
+        success, conn_id = engine.connect(remote_ip_addr=ip, remote_gpu_idx=0)
         assert success
         print(f"Client connected successfully: conn_id={conn_id}")
 
@@ -96,17 +103,15 @@ def test_local():
         success, mr_id = engine.reg(tensor.data_ptr(), tensor.numel() * 4)
         assert success
 
-        success = engine.send(
-            conn_id, mr_id, tensor.data_ptr(), tensor.numel() * 4
-        )
+        success = engine.send(conn_id, mr_id, tensor.data_ptr(), tensor.numel() * 4)
         assert success
         print("✓ Client sent data")
 
-    server = multiprocessing.Process(target=server_process)
+    server = multiprocessing.Process(target=server_process, args=(metadata_queue,))
     server.start()
     time.sleep(1)
 
-    client = multiprocessing.Process(target=client_process)
+    client = multiprocessing.Process(target=client_process, args=(metadata_queue,))
     client.start()
 
     try:

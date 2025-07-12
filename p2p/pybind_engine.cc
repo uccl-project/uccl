@@ -113,7 +113,11 @@ PYBIND11_MODULE(p2p, m) {
                   py::arg("remote_gpu_idx"))
       .def(
           "get_endpoint_metadata",
-          static_cast<std::vector<uint8_t> (Endpoint::*)()>(&Endpoint::get_endpoint_metadata),
+          [](Endpoint& self) {
+            std::vector<uint8_t> metadata = self.get_endpoint_metadata();
+            return py::bytes(reinterpret_cast<const char*>(metadata.data()),
+                             metadata.size());
+          },
           "Return endpoint metadata as a list of bytes")
       .def("__repr__", [](Endpoint const& e) { return "<UCCL P2P Endpoint>"; });
 }

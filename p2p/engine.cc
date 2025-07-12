@@ -1,6 +1,6 @@
 #include "engine.h"
-#include "util/util.h"
 #include "util/net.h"
+#include "util/util.h"
 #include <arpa/inet.h>
 #include <glog/logging.h>
 #include <netinet/in.h>
@@ -18,6 +18,7 @@
 int const kMaxNumGPUs = 8;
 // Assume the local and remote GPUs have the same GPU-NIC mapping.
 uint8_t gpu_to_dev[kMaxNumGPUs] = {0};
+std::once_flag glog_init_once;
 
 inline void check_python_signals() {
   PyGILState_STATE gstate = PyGILState_Ensure();
@@ -33,9 +34,11 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   py::gil_scoped_release release;
   std::cout << "Creating Engine with GPU index: " << local_gpu_idx
             << ", CPUs: " << num_cpus << std::endl;
-  Py_Initialize();
+  // Py_Initialize();
 
-  google::InitGoogleLogging("uccl_p2p");
+  std::call_once(glog_init_once,
+                 []() { google::InitGoogleLogging("uccl_p2p"); });
+
   google::InstallFailureSignalHandler();
 
   // Initialize the RDMA endpoint with lazy creation.
@@ -271,7 +274,8 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
 std::vector<uint8_t> Endpoint::get_endpoint_metadata() {
   char uccl_ifname[MAX_IF_NAME_SIZE + 1];
   uccl::socketAddress uccl_ifaddr;
-  int num_ifs = uccl::find_interfaces(uccl_ifname, &uccl_ifaddr, MAX_IF_NAME_SIZE, 1);
+  int num_ifs =
+      uccl::find_interfaces(uccl_ifname, &uccl_ifaddr, MAX_IF_NAME_SIZE, 1);
   if (num_ifs != 1) UCCL_INIT_CHECK(false, "No IP interface found");
   std::string ip_str = uccl::get_dev_ip(uccl_ifname);
   uint16_t port;
@@ -308,7 +312,6 @@ std::vector<uint8_t> Endpoint::get_endpoint_metadata() {
   }
   return metadata;
 }
-
 
 bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
                     size_t max_size, size_t* recv_size) {

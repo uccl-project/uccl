@@ -659,7 +659,6 @@ static inline std::string get_dev_ip(char const* dev_name) {
   return std::string();
 }
 
-
 static inline int open_ephemeral_port(uint16_t& assigned_port) {
   int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (listen_fd < 0) {
