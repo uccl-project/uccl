@@ -9,6 +9,8 @@ import numpy as np
 import multiprocessing
 import time
 import torch
+import socket
+import struct
 
 # Add current directory to path to import our module
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -22,9 +24,24 @@ except ImportError as e:
     print("Make sure to run 'make' first to build the module")
     sys.exit(1)
 
+def parse_metadata(metadata: bytes):
+    if len(metadata) == 6:
+        # IPv4: 4 bytes IP, 2 bytes port
+        ip_bytes = metadata[:4]
+        port_bytes = metadata[4:]
+        ip = socket.inet_ntop(socket.AF_INET, ip_bytes)
+        port = struct.unpack('!H', port_bytes)[0]
+    elif len(metadata) == 18:
+        # IPv6: 16 bytes IP, 2 bytes port
+        ip_bytes = metadata[:16]
+        port_bytes = metadata[16:]
+        ip = socket.inet_ntop(socket.AF_INET6, ip_bytes)
+        port = struct.unpack('!H', port_bytes)[0]
+    else:
+        raise ValueError(f"Unexpected metadata length: {len(metadata)}")
+    return ip, port
 
 def test_get_metadata():
-    """Test get_endpoint_metadata()"""
     print("Running test_get_metadata...")
 
     engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=1)
@@ -34,6 +51,9 @@ def test_get_metadata():
     print(f"Metadata bytes (hex): {metadata.hex()}")
     print(f"Metadata as list[int]: {list(metadata)}")
 
+    ip, port = parse_metadata(metadata)
+    print(f"Parsed IP: {ip}")
+    print(f"Parsed Port: {port}")
 
 def test_local():
     """Test the UCCL P2P Engine local send/recv functionality"""

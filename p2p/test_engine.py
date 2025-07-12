@@ -14,7 +14,7 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    from . import p2p
+    import p2p
 
     print("✓ Successfully imported p2p")
 except ImportError as e:
