@@ -1,7 +1,97 @@
 #include "util_efa.h"
 #include "transport_config.h"
+#include <ifaddrs.h>
+#include <sys/types.h>
+#include <algorithm>
+#include <cstdlib>
+#include <sstream>
+#include <mutex>
+#include <vector>
 
 namespace uccl {
+
+static std::vector<std::string> g_efa_device_names;
+static std::vector<std::string> g_ena_device_names;
+static std::once_flag g_devname_once;
+
+static std::vector<std::string> split_env_list(const char* env) {
+  std::vector<std::string> result;
+  if (!env) return result;
+  std::stringstream ss(env);
+  std::string item;
+  while (std::getline(ss, item, ',')) {
+    if (!item.empty()) result.push_back(item);
+  }
+  return result;
+}
+
+static void init_device_name_lists() {
+  const char* efa_env = std::getenv("UCCL_EFA_DEVICES");
+  const char* ena_env = std::getenv("UCCL_ENA_DEVICES");
+
+  g_efa_device_names = split_env_list(efa_env);
+  g_ena_device_names = split_env_list(ena_env);
+
+  if (g_efa_device_names.empty()) {
+    int nb_devices = 0;
+    struct ibv_device** list = ibv_get_device_list(&nb_devices);
+    if (list) {
+      for (int i = 0; i < nb_devices; ++i) {
+        const char* name = ibv_get_device_name(list[i]);
+        bool ok = false;
+        if (name && (strncmp(name, "rdmap", 5) == 0 || strncmp(name, "efa", 3) == 0)) {
+          ok = true;
+        }
+        struct ibv_context* ctx = ibv_open_device(list[i]);
+        if (ctx) {
+          struct ibv_device_attr attr;
+          if (ibv_query_device(ctx, &attr) == 0 && attr.vendor_id == 0x1d0f) {
+            ok = true;
+          }
+          ibv_close_device(ctx);
+        }
+        if (ok && name) g_efa_device_names.push_back(name);
+      }
+      ibv_free_device_list(list);
+    }
+  }
+
+  if (g_ena_device_names.empty()) {
+    struct ifaddrs* ifaddr = nullptr;
+    if (getifaddrs(&ifaddr) == 0) {
+      for (struct ifaddrs* ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
+        if (ifa->ifa_name && strncmp(ifa->ifa_name, "ens", 3) == 0) {
+          if (std::find(g_ena_device_names.begin(), g_ena_device_names.end(), ifa->ifa_name) == g_ena_device_names.end()) {
+            g_ena_device_names.push_back(ifa->ifa_name);
+          }
+        }
+      }
+      freeifaddrs(ifaddr);
+    }
+  }
+
+  if (g_efa_device_names.empty()) {
+    g_efa_device_names.assign(std::begin(EFA_DEVICE_NAME_LIST),
+                              std::end(EFA_DEVICE_NAME_LIST));
+    LOG(WARNING) << "Using fallback EFA device names";
+  }
+
+  if (g_ena_device_names.empty()) {
+    g_ena_device_names.assign(std::begin(ENA_DEVICE_NAME_LIST),
+                              std::end(ENA_DEVICE_NAME_LIST));
+    LOG(WARNING) << "Using fallback ENA device names";
+  }
+}
+
+const std::vector<std::string>& GetEfaDeviceNameList() {
+  std::call_once(g_devname_once, init_device_name_lists);
+  return g_efa_device_names;
+}
+
+const std::vector<std::string>& GetEnaDeviceNameList() {
+  std::call_once(g_devname_once, init_device_name_lists);
+  return g_ena_device_names;
+}
 
 EFAFactory efa_ctl;
 ProcessFileLock uccl_flock;

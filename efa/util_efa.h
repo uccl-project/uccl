@@ -21,6 +21,7 @@
 #include <memory>
 #include <mutex>
 #include <set>
+#include <vector>
 #include <assert.h>
 #include <cuda_runtime.h>
 #include <errno.h>
@@ -469,6 +470,10 @@ class EFASocket {
 
   friend class EFAFactory;
 };
+
+
+const std::vector<std::string>& GetEfaDeviceNameList();
+const std::vector<std::string>& GetEnaDeviceNameList();
 
 /**
  * @brief This helper function gets the Infiniband name from the dev index.
