@@ -500,3 +500,14 @@ static inline int util_efa_get_ip_from_dev_idx(int dev_idx, std::string* ip) {
 }
 
 }  // namespace uccl
+
+/**
+ * @brief Reset the device name lists for testing.
+ *
+ * @return void
+ */
+#ifdef UCCL_TESTING
+namespace uccl::_detail {
+void ResetDeviceNameListsForTest();
+}  // namespace uccl::_detail
+#endif

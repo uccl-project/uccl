@@ -20,6 +20,9 @@ static std::vector<std::string> split_env_list(const char* env) {
   std::stringstream ss(env);
   std::string item;
   while (std::getline(ss, item, ',')) {
+    // Trim whitespace from both ends
+    item.erase(0, item.find_first_not_of(" \t"));
+    item.erase(item.find_last_not_of(" \t") + 1);
     if (!item.empty()) result.push_back(item);
   }
   return result;
@@ -32,6 +35,7 @@ static void init_device_name_lists() {
   g_efa_device_names = split_env_list(efa_env);
   g_ena_device_names = split_env_list(ena_env);
 
+  // enumerate RDMA devices via ibv_get_device_list() and filter by rdmap*/efa*
   if (g_efa_device_names.empty()) {
     int nb_devices = 0;
     struct ibv_device** list = ibv_get_device_list(&nb_devices);
@@ -56,6 +60,7 @@ static void init_device_name_lists() {
     }
   }
 
+  // Enumerate NICs with getifaddrs() and collect ens* → ENA_DEVICE_NAME_LIST
   if (g_ena_device_names.empty()) {
     struct ifaddrs* ifaddr = nullptr;
     if (getifaddrs(&ifaddr) == 0) {
@@ -943,3 +948,22 @@ EFASocket::~EFASocket() {
   delete frame_desc_pool_;
 }
 }  // namespace uccl
+
+
+#ifdef UCCL_TESTING
+// Only when testing: expose private internals and add reset function
+namespace uccl::_detail {
+    // Expose the static variables by referencing them from the parent namespace
+    std::vector<std::string>& g_efa_device_names = ::uccl::g_efa_device_names;
+    std::vector<std::string>& g_ena_device_names = ::uccl::g_ena_device_names;
+    std::once_flag& g_devname_once = ::uccl::g_devname_once;
+
+  // Reset the device name lists for testing.
+  void ResetDeviceNameListsForTest() {
+    g_efa_device_names.clear();
+    g_ena_device_names.clear();
+    // Re-initialise the once_flag via placement new
+    new (&g_devname_once) std::once_flag;
+  }
+}  // namespace uccl::_detail
+#endif
