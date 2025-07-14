@@ -783,6 +783,39 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
 }
 #endif
 
+int try_bind_listen_socket(int* sock_fd, int base_port,
+                           int max_attempts = 100) {
+  struct sockaddr_in addr;
+  int port = base_port;
+
+  for (int attempt = 0; attempt < max_attempts; ++attempt, ++port) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+      perror("socket");
+      return -1;
+    }
+
+    int opt = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons(port);
+
+    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) == 0) {
+      if (listen(fd, 128) != 0) {
+        perror("listen");
+        close(fd);
+        return -1;
+      }
+      *sock_fd = fd;
+      return port;
+    }
+    close(fd);
+  }
+  return -1;
+}
+
 bool RDMAEndpoint::initialize_engine_by_dev(int dev) {
   static std::vector<std::once_flag> flags_per_dev_(num_devices_);
   std::call_once(flags_per_dev_[dev], [this, dev]() {
@@ -827,7 +860,14 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev) {
             }));
       }
     }
-    create_listen_socket(&test_listen_fds_[dev], kTestListenPort + dev);
+    // print port
+    int port =
+        try_bind_listen_socket(&test_listen_fds_[dev], kTestListenPort + dev);
+    if (port < 0) {
+      fprintf(stderr, "Failed to bind after trying many ports!\n");
+      exit(1);
+    }
+    printf("Listening on port %d\n", port);
   });
 
   return true;
@@ -1067,6 +1107,15 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   fcntl(bootstrap_fd, F_SETFL, O_NONBLOCK);
   int flag = 1;
   setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
+  uint16_t local_port = 0;
+  {
+    struct sockaddr_in local_addr_check = {};
+    socklen_t addr_len = sizeof(local_addr_check);
+    ret = getsockname(bootstrap_fd, (struct sockaddr*)&local_addr_check,
+                      &addr_len);
+    DCHECK(ret == 0) << "getsockname() failed";
+    local_port = ntohs(local_addr_check.sin_port);
+  }
 
   bool first_call = false;
   bool should_install_ctx = false;
@@ -1076,8 +1125,9 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   ret = send_message(bootstrap_fd, buf, sizeof(int) * 2);
   DCHECK(ret == sizeof(int) * 2) << "uccl_connect: send_message()";
 
-  bool is_leader = is_local_leader(dev, local_gpuidx, factory_dev->local_ip_str,
-                                   remote_dev, remote_gpuidx, remote_ip);
+  bool is_leader =
+      is_local_leader(dev, local_gpuidx, factory_dev->local_ip_str, local_port,
+                      remote_dev, remote_gpuidx, remote_ip, remote_port);
 
   peer_map_mu_[dev]->lock();
   auto it = peer_map_[dev].find({remote_ip, remote_dev});
@@ -1179,6 +1229,16 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   DCHECK(factory_dev) << "uccl_accept: get_factory_dev()";
 
   bootstrap_fd = accept(listen_fd, (struct sockaddr*)&cli_addr, &clien);
+
+  uint16_t local_port;
+  {
+    struct sockaddr_in local_addr = {};
+    socklen_t len = sizeof(local_addr);
+    int ret = getsockname(bootstrap_fd, (struct sockaddr*)&local_addr, &len);
+    DCHECK(ret == 0) << "getsockname() failed";
+    local_port = ntohs(local_addr.sin_port);
+  }
+
   DCHECK(bootstrap_fd >= 0) << "uccl_accept: accept()";
   remote_ip = ip_to_str(cli_addr.sin_addr.s_addr);
 
@@ -1196,8 +1256,10 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   DCHECK(ret == sizeof(int) * 2) << "uccl_accept: receive_message()";
   *remote_dev = buf[0];
   remote_gpuidx = buf[1];
-  bool is_leader = is_local_leader(dev, local_gpuidx, factory_dev->local_ip_str,
-                                   *remote_dev, remote_gpuidx, remote_ip);
+  uint16_t remote_port = ntohs(cli_addr.sin_port);
+  bool is_leader =
+      is_local_leader(dev, local_gpuidx, factory_dev->local_ip_str, local_port,
+                      *remote_dev, remote_gpuidx, remote_ip, remote_port);
   peer_map_mu_[dev]->lock();
   auto it = peer_map_[dev].find({remote_ip, *remote_dev});
   if (it == peer_map_[dev].end()) {

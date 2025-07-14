@@ -1061,18 +1061,26 @@ class RDMAEndpoint {
   ConnID uccl_accept(int dev, int listen_fd, int local_gpuidx,
                      std::string& remote_ip, int* remote_dev);
 
-  bool is_local_leader(int ldev, int lgpu, std::string lip, int rdev, int rgpu,
-                       std::string rip) {
-    if (str_to_ip(lip.c_str()) < str_to_ip(rip.c_str())) {
-      return true;
-    } else if (str_to_ip(lip.c_str()) == str_to_ip(rip.c_str())) {
-      if (ldev < rdev)
-        return true;
-      else if (ldev == rdev) {
-        if (lgpu < rgpu) return true;
-        DCHECK(lgpu != rgpu);
-      }
-    }
+  bool is_local_leader(int ldev, int lgpu, std::string lip, uint16_t lport,
+                       int rdev, int rgpu, std::string rip, uint16_t rport) {
+    auto lip_int = str_to_ip(lip.c_str());
+    auto rip_int = str_to_ip(rip.c_str());
+
+    if (lip_int < rip_int) return true;
+    if (lip_int > rip_int) return false;
+
+    if (ldev < rdev) return true;
+    if (ldev > rdev) return false;
+
+    if (lgpu < rgpu) return true;
+    if (lgpu > rgpu) return false;
+
+    // This is to handle an edge case where both p2p connections run on the same
+    // GPU (debug.)
+    if (lport < rport) return true;
+    if (lport > rport) return false;
+
+    // If all else is equal (very rare), default to false (non-leader)
     return false;
   }
 

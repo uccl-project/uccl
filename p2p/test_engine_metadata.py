@@ -41,20 +41,6 @@ def parse_metadata(metadata: bytes):
         raise ValueError(f"Unexpected metadata length: {len(metadata)}")
     return ip, port
 
-def test_get_metadata():
-    print("Running test_get_metadata...")
-
-    engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=1)
-    metadata = engine.get_endpoint_metadata()
-
-    print(f"Raw metadata (type={type(metadata)}): {metadata}")
-    print(f"Metadata bytes (hex): {metadata.hex()}")
-    print(f"Metadata as list[int]: {list(metadata)}")
-
-    ip, port = parse_metadata(metadata)
-    print(f"Parsed IP: {ip}")
-    print(f"Parsed Port: {port}")
-
 def test_local():
     """Test the UCCL P2P Engine local send/recv functionality"""
     print("Running test_local...")
@@ -64,6 +50,9 @@ def test_local():
     def server_process(q):
         engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
         metadata = engine.get_endpoint_metadata()
+        ip, port = parse_metadata(metadata)
+        print(f"Parsed IP: {ip}")
+        print(f"Parsed Port: {port}")
         q.put(bytes(metadata))  # ensure it's serialized as bytes
 
         success, remote_ip_addr, remote_gpu_idx, conn_id = engine.accept()
@@ -92,7 +81,7 @@ def test_local():
         ip, port = parse_metadata(metadata)
         print(f"Client parsed server IP: {ip}, port: {port}")
 
-        engine = p2p.Endpoint(local_gpu_idx=1, num_cpus=4)
+        engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
         success, conn_id = engine.connect(remote_ip_addr=ip, remote_gpu_idx=0)
         assert success
         print(f"Client connected successfully: conn_id={conn_id}")
@@ -129,11 +118,7 @@ def test_local():
 def main():
     """Run all tests"""
     print("=== Running UCCL P2P Engine tests ===\n")
-
-    test_get_metadata()
-    print()
     test_local()
-
     print("\n=== All UCCL P2P Engine tests completed! ===")
 
 
