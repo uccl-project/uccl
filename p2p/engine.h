@@ -40,6 +40,7 @@ class Endpoint {
   const uint64_t kRTTBytes = 1024 * 1024;
   const uint64_t kChunkSize = 512 * 1024;
   const uint32_t kMaxInflightChunks = 8;
+  constexpr static uint16_t kTestListenPort = 30000;
 
  public:
   /*
@@ -62,9 +63,10 @@ class Endpoint {
    *   remote_gpu_idx: the GPU index of the remote server
    * output:
    *   conn_id: the ID of the connection
+   *   remote_port: the port of the remote server (optional)
    */
   bool connect(std::string const& ip_addr, int const& remote_gpu_idx,
-               uint64_t& conn_id);
+               uint64_t& conn_id, int remote_port);
 
   /*
    * Accept an incoming connection via TCP, then build RDMA QP connections.

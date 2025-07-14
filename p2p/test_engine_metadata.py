@@ -25,21 +25,24 @@ except ImportError as e:
     sys.exit(1)
 
 def parse_metadata(metadata: bytes):
-    if len(metadata) == 6:
-        # IPv4: 4 bytes IP, 2 bytes port
+    if len(metadata) == 10:
+        # IPv4: 4 bytes IP, 2 bytes port, 4 bytes GPU idx
         ip_bytes = metadata[:4]
-        port_bytes = metadata[4:]
+        port_bytes = metadata[4:6]
+        gpu_idx_bytes = metadata[6:10]
         ip = socket.inet_ntop(socket.AF_INET, ip_bytes)
-        port = struct.unpack('!H', port_bytes)[0]
-    elif len(metadata) == 18:
-        # IPv6: 16 bytes IP, 2 bytes port
+    elif len(metadata) == 22:
+        # IPv6: 16 bytes IP, 2 bytes port, 4 bytes GPU idx
         ip_bytes = metadata[:16]
-        port_bytes = metadata[16:]
+        port_bytes = metadata[16:18]
+        gpu_idx_bytes = metadata[18:22]
         ip = socket.inet_ntop(socket.AF_INET6, ip_bytes)
-        port = struct.unpack('!H', port_bytes)[0]
     else:
         raise ValueError(f"Unexpected metadata length: {len(metadata)}")
-    return ip, port
+    
+    port = struct.unpack('!H', port_bytes)[0]
+    remote_gpu_idx = struct.unpack('i', gpu_idx_bytes)[0]  # host byte order
+    return ip, port, remote_gpu_idx
 
 def test_local():
     """Test the UCCL P2P Engine local send/recv functionality"""
@@ -50,9 +53,10 @@ def test_local():
     def server_process(q):
         engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
         metadata = engine.get_endpoint_metadata()
-        ip, port = parse_metadata(metadata)
+        ip, port, remote_gpu_idx = parse_metadata(metadata)
         print(f"Parsed IP: {ip}")
         print(f"Parsed Port: {port}")
+        print(f"Parsed Remote GPU Index: {remote_gpu_idx}")
         q.put(bytes(metadata))  # ensure it's serialized as bytes
 
         success, remote_ip_addr, remote_gpu_idx, conn_id = engine.accept()
@@ -78,11 +82,11 @@ def test_local():
 
     def client_process(q):
         metadata = q.get(timeout=5)
-        ip, port = parse_metadata(metadata)
-        print(f"Client parsed server IP: {ip}, port: {port}")
+        ip, port, remote_gpu_idx = parse_metadata(metadata)
+        print(f"Client parsed server IP: {ip}, port: {port}, remote_gpu_idx: {remote_gpu_idx}")
 
         engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
-        success, conn_id = engine.connect(remote_ip_addr=ip, remote_gpu_idx=0)
+        success, conn_id = engine.connect(remote_ip_addr=ip, remote_gpu_idx=remote_gpu_idx, remote_port=port)
         assert success
         print(f"Client connected successfully: conn_id={conn_id}")
 

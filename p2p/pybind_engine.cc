@@ -15,14 +15,14 @@ PYBIND11_MODULE(p2p, m) {
       .def(
           "connect",
           [](Endpoint& self, std::string const& remote_ip_addr,
-             int remote_gpu_idx) {
+             int remote_gpu_idx, int remote_port) {
             uint64_t conn_id;
-            bool success =
-                self.connect(remote_ip_addr, remote_gpu_idx, conn_id);
+            bool success = self.connect(remote_ip_addr, remote_gpu_idx, conn_id,
+                                        remote_port);
             return py::make_tuple(success, conn_id);
           },
           "Connect to a remote server", py::arg("remote_ip_addr"),
-          py::arg("remote_gpu_idx"))
+          py::arg("remote_gpu_idx"), py::arg("remote_port") = -1)
       .def(
           "accept",
           [](Endpoint& self) {

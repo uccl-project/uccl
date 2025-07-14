@@ -99,7 +99,7 @@ Endpoint::~Endpoint() {
 }
 
 bool Endpoint::connect(std::string const& ip_addr, int const& remote_gpu_idx,
-                       uint64_t& conn_id) {
+                       uint64_t& conn_id, int remote_port) {
   py::gil_scoped_release release;
   std::cout << "Attempting to connect to " << ip_addr << ":" << remote_gpu_idx
             << std::endl;
@@ -107,11 +107,17 @@ bool Endpoint::connect(std::string const& ip_addr, int const& remote_gpu_idx,
   // Create a new connection ID
   conn_id = next_conn_id_.fetch_add(1);
 
-  std::future<uccl::ConnID> uccl_conn_id_future =
-      std::async(std::launch::async, [this, remote_gpu_idx, &ip_addr]() {
-        return ep_->test_uccl_connect(
-            gpu_to_dev[local_gpu_idx_], local_gpu_idx_,
-            gpu_to_dev[remote_gpu_idx], remote_gpu_idx, ip_addr);
+  std::future<uccl::ConnID> uccl_conn_id_future = std::async(
+      std::launch::async, [this, remote_gpu_idx, &ip_addr, remote_port]() {
+        if (remote_port == -1) {
+          return ep_->test_uccl_connect(
+              gpu_to_dev[local_gpu_idx_], local_gpu_idx_,
+              gpu_to_dev[remote_gpu_idx], remote_gpu_idx, ip_addr);
+        } else {
+          return ep_->uccl_connect(gpu_to_dev[local_gpu_idx_], local_gpu_idx_,
+                                   gpu_to_dev[remote_gpu_idx], remote_gpu_idx,
+                                   ip_addr, remote_port);
+        }
       });
 
   // Check for Python signals (eg, ctrl+c) while waiting for connection
@@ -277,23 +283,22 @@ std::vector<uint8_t> Endpoint::get_endpoint_metadata() {
   int num_ifs =
       uccl::find_interfaces(uccl_ifname, &uccl_ifaddr, MAX_IF_NAME_SIZE, 1);
   if (num_ifs != 1) UCCL_INIT_CHECK(false, "No IP interface found");
+
   std::string ip_str = uccl::get_dev_ip(uccl_ifname);
-  uint16_t port;
-  int listen_fd = uccl::open_ephemeral_port(port);
-
-  if (listen_fd < 0) {
-    throw std::runtime_error("Failed to open ephemeral port");
-  }
-
-  bool include_port = true;
-
-  std::vector<uint8_t> metadata;
+  uint16_t port = kTestListenPort + local_gpu_idx_;
+  // int listen_fd = uccl::open_ephemeral_port(port);
+  // if (listen_fd < 0) {
+  //   throw std::runtime_error("Failed to open ephemeral port");
+  // }
 
   bool is_ipv6 = ip_str.find(':') != std::string::npos;
   size_t ip_len = is_ipv6 ? 16 : 4;
-  size_t total_len = ip_len + (include_port ? 2 : 0);
 
-  metadata.resize(total_len);
+  // Additional 2 bytes for port and 4 bytes for local_gpu_idx_
+  size_t total_len = ip_len + 2 + sizeof(int);
+  std::vector<uint8_t> metadata(total_len);
+
+  // Copy IP
   if (is_ipv6) {
     struct in6_addr ip6_bin;
     if (inet_pton(AF_INET6, ip_str.c_str(), &ip6_bin) != 1)
@@ -306,10 +311,13 @@ std::vector<uint8_t> Endpoint::get_endpoint_metadata() {
     std::memcpy(metadata.data(), &ip4_bin, 4);
   }
 
-  if (include_port) {
-    uint16_t net_port = htons(port);
-    std::memcpy(metadata.data() + ip_len, &net_port, 2);
-  }
+  // Copy port in network byte order
+  uint16_t net_port = htons(port);
+  std::memcpy(metadata.data() + ip_len, &net_port, 2);
+
+  // Copy local_gpu_idx_ in host byte order
+  std::memcpy(metadata.data() + ip_len + 2, &local_gpu_idx_, sizeof(int));
+
   return metadata;
 }
 
@@ -739,7 +747,7 @@ bool Endpoint::join_group(std::string const& discovery_uri,
                   << cid << "\n";
       }
     } else {
-      if (!connect(peers[r].ip_addr, remote_gpu_idx, cid)) {
+      if (!connect(peers[r].ip_addr, remote_gpu_idx, cid, -1)) {
         std::cerr << "[join_group] connect from rank " << r << " failed\n";
         return false;
       }
