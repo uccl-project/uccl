@@ -41,22 +41,21 @@ HCA_NAMES="mlx5_2:1,mlx5_3:1"
 # Name of Control NIC.
 CTRL_NIC="bond0"
 # Path of NCCL
-NCCL_PATH="${UCCL_HOME}/thirdparty/nccl/build/lib"
+NCCL_PATH="${UCCL_HOME}/thirdparty/nccl-mt/build/lib"
 
 # Number of chunnels.
 NUM_CHUNNEL=8
 # Chunk size.
 # 131072, 262144, 524288
-P2P_NET_CHUNKSIZE=524288
+P2P_NET_CHUNKSIZE=131072
 # Buffer size.
+# 4194304, 8388608
 BUFFSIZE=8388608
 # Number of chunnels per NET peer.
 CHANNELS_NET_PEER=4
-# Algorithm
-# TREE, RING
-ALGO=-1
 
-NCCL_PROTO=-1
+# We force allreduce to use Simple protocol to avoid outlier for both UCCL and NCCL.
+NCCL_PROTO=Simple
 
 # Multi-QP for NCCL.
 NUM_QPS_PER_CONNECTION=1
@@ -67,8 +66,6 @@ SPLIT_DATA_ON_QPS=1
 
 if [ "$PROG_OPTION" -eq 0 ]; then
     PROG_NAME=all_reduce_perf
-    # We force allreduce to use Simple protocol to avoid outlier for both UCCL and NCCL.
-    NCCL_PROTO="Simple"
 elif [ "$PROG_OPTION" -eq 1 ]; then
     PROG_NAME=alltoall_perf
 else
@@ -115,7 +112,6 @@ echo -e "Details: NCCL_NCHANNELS=${NUM_CHUNNEL} \n\t NCCL_P2P_NET_CHUNKSIZE=${P2
     -x NCCL_P2P_DISABLE=${NVLINK_OFF} \
     -x NCCL_SHM_DISABLE=${NVLINK_OFF} \
     -x NCCL_NET_DISABLE=0 \
-    -x NCCL_ALGO=${ALGO} \
     -x NCCL_MAX_NCHANNELS=${NUM_CHUNNEL} \
     -x NCCL_MIN_NCHANNELS=${NUM_CHUNNEL} \
     -x NCCL_NCHANNELS_PER_NET_PEER=${CHANNELS_NET_PEER} \
