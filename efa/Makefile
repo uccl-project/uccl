@@ -3,14 +3,14 @@ ABS_REPO_ROOT := $(shell realpath $(ABS_ROOT_PATH)/..)
 
 NCCL_HOME:=../thirdparty/nccl-sg
 CUDA_HOME:=/usr/local/cuda
-EFA_HOME:=/opt/amazon/efa
+EFA_HOME?=/opt/amazon/efa
 
 INC = -I./ -I$(CUDA_HOME)/include -I${EFA_HOME}/include -I$(ABS_REPO_ROOT)/include
 LIBS = -L ${CUDA_HOME}/lib64 -L ${EFA_HOME}/lib -libverbs -lefa -lcudart -lcuda -lpthread -lglog -lgflags -lgtest -lz -lelf
 LIBS_SHARED = ${LIBS}
 override CXXFLAGS += -O3 -g -std=c++17 -Wno-pointer-arith -Wno-interference-size -fPIC -DUSE_CUDA
 DEPS = *.h
-PLUGIN_SO = libnccl-net.so
+PLUGIN_SO = libnccl-net-efa.so
 
 lib_src = $(wildcard *.cc)
 lib_src := $(filter-out %_main.cc,$(lib_src))

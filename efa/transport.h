@@ -832,7 +832,6 @@ class UcclEngine {
  * its all queues.
  */
 class Endpoint {
-  constexpr static uint16_t kBootstrapPort = 5000;
   constexpr static uint32_t kStatsTimerIntervalSec = 2;
 
   Channel* channel_vec_[kNumEngines];
@@ -841,8 +840,6 @@ class Endpoint {
   std::mutex engine_map_mutex_;
   std::vector<std::unique_ptr<std::thread>> engine_th_vec_;
   std::vector<std::unique_ptr<std::thread>> copy_th_vec_;
-
-  std::atomic<uint16_t> listen_port_cur_ = {kBootstrapPort};
 
   // Number of flows on each engine, indexed by engine_idx.
   std::mutex engine_load_vec_mu_;

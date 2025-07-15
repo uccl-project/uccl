@@ -105,6 +105,14 @@ struct PCB {
     sack_bitmap_count--;
   }
 
+  // Check if the bit at the given index is set.
+  bool sack_bitmap_bit_is_set(const size_t index) const {
+    const size_t sack_bitmap_bucket_idx = index / kSackBitmapBucketSize;
+    const size_t sack_bitmap_idx_in_bucket = index % kSackBitmapBucketSize;
+    return sack_bitmap[sack_bitmap_bucket_idx] &
+           (1ULL << sack_bitmap_idx_in_bucket);
+  }
+  // Set the bit at the given index.
   void sack_bitmap_bit_set(const size_t index) {
     const size_t sack_bitmap_bucket_idx = index / kSackBitmapBucketSize;
     const size_t sack_bitmap_idx_in_bucket = index % kSackBitmapBucketSize;

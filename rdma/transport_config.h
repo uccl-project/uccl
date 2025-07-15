@@ -24,33 +24,18 @@ UCCL_PARAM(IB_SERVICE_LEVEL, "IB_SERVICE_LEVEL", 0);
 // GID index for IB.
 UCCL_PARAM(IB_GID_IDX, "IB_GID_IDX", 0);
 
-#ifdef BROADCOM_NIC
-UCCL_PARAM(RCMode, "RCMODE", true);
-#else
 // Use RC for data transfer.
 UCCL_PARAM(RCMode, "RCMODE", false);
-#endif
 
 // Bypass the pacing stage.
 UCCL_PARAM(BypassPacing, "BYPASS_PACING", true);
 
-#ifndef __HIP_PLATFORM_AMD__
 // # of engines per device.
 UCCL_PARAM(NUM_ENGINES, "NUM_ENGINES", 4);
 // Path/QP per engine.
 UCCL_PARAM(PORT_ENTROPY, "PORT_ENTROPY", 32);
 // Maximum chunk size for each WQE.
 UCCL_PARAM(CHUNK_SIZE_KB, "CHUNK_SIZE_KB", 64);
-#else
-UCCL_PARAM(NUM_ENGINES, "NUM_ENGINES", 1);
-UCCL_PARAM(PORT_ENTROPY, "PORT_ENTROPY", 256);
-UCCL_PARAM(CHUNK_SIZE_KB, "CHUNK_SIZE_KB", 128);
-#endif
-
-// Broadcom NICs do not support ibv_cq_ex.
-#ifndef BROADCOM_NIC
-#define USE_CQ_EX
-#endif
 
 static constexpr uint32_t MAX_PEER = 256;
 // Maximum number of flows (one-way) on each engine.
@@ -71,7 +56,6 @@ static int64_t ENGINE_CPU_START_LIST[8] = {
 };
 
 static constexpr uint32_t kMaxAckWRs = 8;
-static constexpr uint32_t UD_ADDITION = 40;
 static constexpr uint32_t kMaxCtrlWRs = 2048;
 
 // Limit the per-flow outstanding bytes on each engine.
@@ -177,7 +161,7 @@ static constexpr uint32_t kCQMODCount = 32;
 // CQ moderation period in microsecond.
 static constexpr uint32_t kCQMODPeriod = 100;
 // Maximum size of inline data.
-static constexpr uint32_t kMaxInline = 128;
+static constexpr uint32_t kMaxInline = 64;
 // Maximum number of SGEs in one WQE.
 static constexpr uint32_t kMaxSge = 2;
 // Maximum number of outstanding receive messages in one recv request.

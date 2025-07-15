@@ -1,4 +1,5 @@
 #include "transport.h"
+#include "rdma_io.h"
 #include "transport_config.h"
 #include "util/list.h"
 #include "util/util.h"
@@ -242,7 +243,7 @@ void UcclRDMAEngine::handle_rx_work(void) {
     auto ureq = it.second;
 
     UCCL_LOG_ENGINE << "Process rx work.";
-    if (rdma_ctx->supply_rx_buff(rx_work.ureq) == 0) {
+    if (rdma_ctx->supply_rx_buff(ureq) == 0) {
       pending_rx_works_.pop_front();
     } else {
       UCCL_LOG_ENGINE << "Too many inflight recv requests.";
@@ -274,6 +275,11 @@ void UcclRDMAEngine::handle_rx_work(void) {
 
 inline void RDMAEndpoint::initialize_resources(int total_num_engines) {
   // Initialize all dynamic arrays
+  if (num_devices_ <= 0) {
+    printf("num_devices_ is 0.");
+    exit(EXIT_FAILURE);
+  }
+
   channel_vec_.resize(total_num_engines);
   engine_vec_.resize(total_num_engines);
   engine_load_vec_.resize(total_num_engines);
@@ -302,10 +308,9 @@ inline void RDMAEndpoint::initialize_resources(int total_num_engines) {
   active_flows_vec_.resize(num_devices_);
   active_flows_spin_.resize(num_devices_);
 
-  printf(
-      "Initialized %d engines for %d devices totally, with %d engines per "
-      "device\n",
-      total_num_engines, num_devices_, num_engines_per_dev_);
+  UCCL_LOG_EP << "Initialized " << total_num_engines << " engines for "
+              << num_devices_ << " devices totally, with "
+              << num_engines_per_dev_ << " engines per device";
 }
 
 void RDMAEndpoint::cleanup_resources() {
@@ -677,7 +682,13 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
     : num_engines_per_dev_(num_engines_per_dev),
       stats_thread_([this]() { stats_thread_fn(); }) {
   static std::once_flag flag_once;
-  std::call_once(flag_once, [&]() { num_devices_ = RDMAFactory::init_devs(); });
+  std::call_once(flag_once, [&]() {
+    num_devices_ = RDMAFactory::init_devs();
+    if (num_devices_ <= 0) {
+      printf("Failed to initialize RDMA devices.\n");
+      exit(EXIT_FAILURE);
+    }
+  });
 
   rdma_ctl_ = rdma_ctl;
 
@@ -711,10 +722,10 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
   rdma_ctl_ = rdma_ctl;
 
   int total_num_engines = num_devices_ * num_engines_per_dev;
-  printf(
-      "Starting to initialize %d channels for %d devices with %d engines per "
-      "device\n",
-      total_num_engines, num_devices_, num_engines_per_dev_);
+  UCCL_LOG_EP << "Starting to initialize " << total_num_engines
+              << " channels for " << num_devices_ << " devices with "
+              << num_engines_per_dev_ << " engines per "
+              << "device";
   initialize_resources(total_num_engines);
   // Create multiple engines. Each engine has its own thread and channel to
   // let the endpoint communicate with.
@@ -735,7 +746,6 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
 
     engine_cpu_id =
         ENGINE_CPU_START_LIST[dev] + engine_id % num_engines_per_dev;
-    DCHECK(engine_cpu_id < NUM_CPUS) << engine_cpu_id << ", " << NUM_CPUS;
 
     engine_vec_.emplace_back(std::make_unique<UcclRDMAEngine>(
         dev, engine_id, channel_vec_[engine_id], eqds_[dev]));
@@ -748,6 +758,9 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
                             << "running on NUMA node " << numa_node;
             pin_thread_to_numa(numa_node);
           } else {
+            DCHECK(engine_cpu_id < NUM_CPUS)
+                << "The target CPU id " << engine_cpu_id
+                << " is out of range, available CPUs:" << NUM_CPUS;
             UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
                             << "running on CPU " << engine_cpu_id;
             pin_thread_to_cpu(engine_cpu_id);
@@ -781,7 +794,6 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev) {
          engine_id++) {
       int engine_cpu_id =
           ENGINE_CPU_START_LIST[dev] + engine_id % num_engines_per_dev_;
-      DCHECK(engine_cpu_id < NUM_CPUS) << engine_cpu_id << ", " << NUM_CPUS;
       UcclRDMAEngine* engine_ptr;
       {
         std::lock_guard<std::mutex> lock(engine_map_mu_);
@@ -804,6 +816,9 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev) {
                                 << "running on NUMA node " << numa_node;
                 pin_thread_to_numa(numa_node);
               } else {
+                DCHECK(engine_cpu_id < NUM_CPUS)
+                    << "The target CPU id " << engine_cpu_id
+                    << " is out of range, available CPUs:" << NUM_CPUS;
                 UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
                                 << "running on CPU " << engine_cpu_id;
                 pin_thread_to_cpu(engine_cpu_id);
@@ -1320,6 +1335,10 @@ void UcclFlow::rc_send(struct ucclRequest* ureq) {
 
   wr.send_flags = IBV_SEND_SIGNALED;
 
+  if (size <= kMaxInline) {
+    wr.send_flags |= IBV_SEND_INLINE;
+  }
+
   wr.wr_id = (uint64_t)&ureq->rc_or_flush_done;
 
   DCHECK(ibv_post_send(qp, &wr, &bad_wr) == 0) << "Failed to post send";
@@ -1676,15 +1695,15 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
   dp_qps_.resize(port_entropy_);
   chunk_size_ = (ucclParamCHUNK_SIZE_KB() << 10);
 
-  link_speed = util_rdma_get_link_speed_from_ibv_speed(
+  link_speed_ = util_rdma_get_link_speed_from_ibv_speed(
       factory_dev->port_attr.active_speed, factory_dev->port_attr.active_width);
   remote_ctx_.remote_gid = meta.install_ctx.remote_gid;
   remote_ctx_.remote_port_attr = meta.install_ctx.remote_port_attr;
 
-  remote_ctx_.dest_ah =
-      create_ah(factory_dev->pd, dev, factory_dev->ib_port_num,
-                remote_ctx_.remote_gid, remote_ctx_.remote_port_attr);
-  UCCL_INIT_CHECK(remote_ctx_.dest_ah != nullptr, "create_ah failed");
+  remote_ctx_.dest_ah = util_rdma_create_ah(
+      factory_dev->pd, factory_dev->ib_port_num, remote_ctx_.remote_gid,
+      remote_ctx_.remote_port_attr, RDMAFactory::is_roce(dev));
+  UCCL_INIT_CHECK(remote_ctx_.dest_ah != nullptr, "util_rdma_create_ah failed");
 
   mtu_bytes_ =
       util_rdma_get_mtu_from_ibv_mtu(factory_dev->port_attr.active_mtu);
@@ -1943,6 +1962,9 @@ bool RDMAContext::receiverCC_tx_message(struct ucclRequest* ureq) {
     if (qpw->signal_cnt_++ % kSignalInterval == 0) {
       wr->send_flags = IBV_SEND_SIGNALED;
     }
+    // if (size <= kMaxInline) {
+    //   wr->send_flags |= IBV_SEND_INLINE;
+    // }
     wr_ex->qpidx = qpidx;
 
     struct ibv_send_wr* bad_wr;
@@ -2038,6 +2060,9 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
       if (qpw->signal_cnt_++ % kSignalInterval == 0) {
         wr->send_flags = IBV_SEND_SIGNALED;
       }
+      // if (size <= kMaxInline) {
+      //   wr->send_flags |= IBV_SEND_INLINE;
+      // }
       wr_ex->qpidx = qpidx;
 
       struct ibv_send_wr* bad_wr;
@@ -2138,6 +2163,9 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
         if (qpw->signal_cnt_++ % kSignalInterval == 0) {
           wr_ex->wr.send_flags = IBV_SEND_SIGNALED;
         }
+        // if (size <= kMaxInline) {
+        //   wr_ex->wr.send_flags |= IBV_SEND_INLINE;
+        // }
         wr_ex->qpidx = qpidx;
         struct ibv_send_wr* bad_wr;
         auto ret = ibv_post_send(qpw->qp, wr, &bad_wr);
@@ -2819,12 +2847,7 @@ void RDMAContext::uc_rx_rtx_chunk(struct ibv_wc* wc, uint64_t chunk_addr) {
     return;
   }
 
-  auto bitmap_bucket_idx = distance.to_uint32() / PCB::kSackBitmapBucketSize;
-  auto cursor = distance.to_uint32() % PCB::kSackBitmapBucketSize;
-  auto sack_bitmap = &subflow->pcb.sack_bitmap[bitmap_bucket_idx];
-
-  if ((*sack_bitmap & (1ULL << cursor))) {
-    // Original chunk is already received.
+  if (subflow->pcb.sack_bitmap_bit_is_set(distance.to_uint32())) {
     UCCL_LOG_IO << "Original chunk is already received. Dropping "
                    "retransmission chunk for flow"
                 << fid;
@@ -2934,12 +2957,7 @@ void RDMAContext::uc_rx_rtx_chunk(struct ibv_cq_ex* cq_ex,
     return;
   }
 
-  auto bitmap_bucket_idx = distance.to_uint32() / PCB::kSackBitmapBucketSize;
-  auto cursor = distance.to_uint32() % PCB::kSackBitmapBucketSize;
-  auto sack_bitmap = &subflow->pcb.sack_bitmap[bitmap_bucket_idx];
-
-  if ((*sack_bitmap & (1ULL << cursor))) {
-    // Original chunk is already received.
+  if (subflow->pcb.sack_bitmap_bit_is_set(distance.to_uint32())) {
     UCCL_LOG_IO << "Original chunk is already received. Dropping "
                    "retransmission chunk for flow"
                 << fid;
@@ -3136,6 +3154,15 @@ void RDMAContext::uc_rx_chunk(struct ibv_wc* wc) {
     return;
   }
 
+  // It's impossible to receive duplicate OOO chunks in uc_rx_chunk().
+  // This is because the rtx chunk is retransmitted after the original chunk
+  // using the same QP. According to the nature of UC QP, if the original chunk
+  // is not lost, the original chunk is always handled before its corresponding
+  // rtx chunk. In addition, all rtx chunks are handled in uc_rx_rtx_chunk()
+  // rather than uc_rx_chunk(). Therefore, there is no need for us to check
+  // duplicate OOO chunks here. But uc_rx_rtx_chunk() needs to handle this case.
+  DCHECK(!subflow->pcb.sack_bitmap_bit_is_set(distance.to_uint32()));
+
   // Always use the latest timestamp.
   subflow->pcb.t_remote_nic_rx = now;
 
@@ -3231,6 +3258,15 @@ void RDMAContext::uc_rx_chunk(struct ibv_cq_ex* cq_ex) {
     subflow->pcb.stats_chunk_drop++;
     return;
   }
+
+  // It's impossible to receive duplicate OOO chunks in uc_rx_chunk().
+  // This is because the rtx chunk is retransmitted after the original chunk
+  // using the same QP. According to the nature of UC QP, if the original chunk
+  // is not lost, the original chunk is always handled before its corresponding
+  // rtx chunk. In addition, all rtx chunks are handled in uc_rx_rtx_chunk()
+  // rather than uc_rx_chunk(). Therefore, there is no need for us to check
+  // duplicate OOO chunks here. But uc_rx_rtx_chunk() needs to handle this case.
+  DCHECK(!subflow->pcb.sack_bitmap_bit_is_set(distance.to_uint32()));
 
   // Always use the latest timestamp.
   if constexpr (kTestNoHWTimestamp)

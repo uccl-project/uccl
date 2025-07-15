@@ -38,7 +38,7 @@ if [ "$TEST" = "srd" ]; then
 
 elif [ "$TEST" = "ud" ]; then
     LD_PRELOAD="${UCCL_HOME}/thirdparty/nccl-sg/build/lib/libnccl.so" \
-        NCCL_NET_PLUGIN="${UCCL_HOME}/efa/libnccl-net.so" \
+        NCCL_NET_PLUGIN="${UCCL_HOME}/efa/libnccl-net-efa.so" \
         NCCL_PROTO=Simple \
         NCCL_P2P_DISABLE=${NV_LINK_DISABLE} \
         NCCL_SHM_DISABLE=${NV_LINK_DISABLE} \

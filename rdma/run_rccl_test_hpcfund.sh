@@ -47,6 +47,9 @@ mpirun --bind-to none -np 2 -N 1 --hostfile $NODEFILE --map-by ppr:1:node \
     -x HIP_VISIBLE_DEVICES=0 \
     -x NCCL_IB_HCA="mlx5_0:1" \
     -x NCCL_SOCKET_IFNAME="eth0" \
+    -x UCCL_NUM_ENGINES=1 \
+    -x UCCL_PORT_ENTROPY=256 \
+    -x UCCL_CHUNK_SIZE_KB=128 \
     ${UCCL_HOME}/thirdparty/rccl-tests/build/all_reduce_perf \
     -b 1K -e 1G -f 2 -w 5 -n 20 -c 1 -g 1 -t 1 |&
     tee alltoall_debug.log
