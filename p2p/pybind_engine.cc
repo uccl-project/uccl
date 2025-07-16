@@ -96,6 +96,38 @@ PYBIND11_MODULE(p2p, m) {
           "Receive multiple data buffers", py::arg("conn_id"),
           py::arg("mr_id_v"), py::arg("data_ptr_v"), py::arg("max_size_v"),
           py::arg("num_iovs"))
+      .def(
+          "send_async",
+          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
+             size_t size) {
+            uint64_t transfer_id;
+            bool success = self.send_async(conn_id, mr_id,
+                                           reinterpret_cast<void const*>(ptr),
+                                           size, &transfer_id);
+            return py::make_tuple(success, transfer_id);
+          },
+          "Send data asynchronously", py::arg("conn_id"), py::arg("mr_id"),
+          py::arg("ptr"), py::arg("size"))
+      .def(
+          "recv_async",
+          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
+             size_t size) {
+            uint64_t transfer_id;
+            bool success =
+                self.recv_async(conn_id, mr_id, reinterpret_cast<void*>(ptr),
+                                size, &transfer_id);
+            return py::make_tuple(success, transfer_id);
+          },
+          "Receive data asynchronously", py::arg("conn_id"), py::arg("mr_id"),
+          py::arg("ptr"), py::arg("size"))
+      .def(
+          "poll_async",
+          [](Endpoint& self, uint64_t transfer_id) {
+            bool is_done;
+            bool success = self.poll_async(transfer_id, &is_done);
+            return py::make_tuple(success, is_done);
+          },
+          "Poll the status of an asynchronous transfer", py::arg("transfer_id"))
       .def("join_group", &Endpoint::join_group,
            "Join a rendezvous group: publish discovery info, wait for peers, "
            "and fully-connect",

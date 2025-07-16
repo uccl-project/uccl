@@ -49,15 +49,33 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
       << "Local GPU index out of range";
 
   auto ib_nics = uccl::get_rdma_nics();
-  // Find the RDMA NIC that is closest to each of the GPUs.
+  // Find the RDMA NIC that is closest to each of the GPUs,
+  // ensuring fair NIC allocation.
+  std::vector<bool> nic_allocated(ib_nics.size(), false);
   for (int i = 0; i < gpu_cards.size(); i++) {
     auto gpu_device_path = gpu_cards[i];
-    auto ib_nic_it = std::min_element(
-        ib_nics.begin(), ib_nics.end(), [&](auto const& a, auto const& b) {
-          return uccl::cal_pcie_distance(gpu_device_path, a.second) <
-                 uccl::cal_pcie_distance(gpu_device_path, b.second);
-        });
-    gpu_to_dev[i] = ib_nic_it - ib_nics.begin();
+    int best_nic = -1;
+    int best_distance = std::numeric_limits<int>::max();
+    for (int j = 0; j < ib_nics.size(); ++j) {
+      if (nic_allocated[j]) continue;
+      int dist = uccl::cal_pcie_distance(gpu_device_path, ib_nics[j].second);
+      if (dist < best_distance) {
+        best_distance = dist;
+        best_nic = j;
+      }
+    }
+    if (best_nic != -1) {
+      gpu_to_dev[i] = best_nic;
+      nic_allocated[best_nic] = true;
+    } else {
+      // If all NICs are allocated, fallback to the closest
+      auto ib_nic_it = std::min_element(
+          ib_nics.begin(), ib_nics.end(), [&](auto const& a, auto const& b) {
+            return uccl::cal_pcie_distance(gpu_device_path, a.second) <
+                   uccl::cal_pcie_distance(gpu_device_path, b.second);
+          });
+      gpu_to_dev[i] = ib_nic_it - ib_nics.begin();
+    }
   }
   std::cout << "Detected best GPU-NIC mapping: " << std::endl;
   for (int i = 0; i < gpu_cards.size(); i++) {
@@ -654,6 +672,70 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
         << "recv_size_v > max_size_v for chunk " << i;
   }
 
+  return true;
+}
+
+bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
+                          size_t size, uint64_t* transfer_id) {
+  py::gil_scoped_release release;
+  auto conn = conn_id_to_conn_[conn_id];
+  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+
+  auto _transfer_id = next_transfer_id_.fetch_add(1);
+  auto* ureq = new uccl::ucclRequest();
+
+  *transfer_id = _transfer_id;
+  transfer_id_to_ureq_[_transfer_id] = ureq;
+
+  int rc;
+  do {
+    rc = ep_->uccl_send_async(
+        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
+        (void*)data, size, ureq);
+    if (rc == -1) {
+      check_python_signals();
+      std::this_thread::yield();
+    }
+  } while (rc == -1);
+
+  return true;
+}
+
+bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
+                          size_t size, uint64_t* transfer_id) {
+  py::gil_scoped_release release;
+  auto conn = conn_id_to_conn_[conn_id];
+  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+
+  auto _transfer_id = next_transfer_id_.fetch_add(1);
+  auto* ureq = new uccl::ucclRequest();
+
+  *transfer_id = _transfer_id;
+  transfer_id_to_ureq_[_transfer_id] = ureq;
+  int size_int = static_cast<int>(size);
+
+  int rc;
+  do {
+    rc = ep_->uccl_recv_async(
+        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
+        &data, &size_int, 1, ureq);
+    if (rc == -1) {
+      check_python_signals();
+      std::this_thread::yield();
+    }
+  } while (rc == -1);
+
+  return true;
+}
+
+bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
+  py::gil_scoped_release release;
+  auto* ureq = transfer_id_to_ureq_.at(transfer_id);
+  *is_done = ep_->uccl_poll_ureq_once(ureq);
+  if (*is_done) {
+    delete ureq;
+    transfer_id_to_ureq_.erase(transfer_id);
+  }
   return true;
 }
 

@@ -1662,12 +1662,6 @@ bool Endpoint::create_engine_and_add_to_engine_future(
 }
 
 bool Endpoint::initialize_engine_by_gpu_idx(int gpu_idx) {
-  // TODO(MaoZiming): check only called once.
-  static std::once_flag flag_once;
-  std::call_once(flag_once, [this, gpu_idx]() {
-    listen_port_cur_.store(kBootstrapPort + gpu_idx * 1000);
-  });
-
   std::vector<std::future<std::unique_ptr<UcclEngine>>> engine_futures;
   for (int i = 0; i < kNumEnginesPerVdev; i++) {
     auto engine_idx = gpu_idx * kNumEnginesPerVdev + i;
@@ -1751,8 +1745,6 @@ Endpoint::Endpoint() : stats_thread_([this]() { stats_thread_fn(); }) {
 // TODO(MaoZiming): Deprecate this constructor. Use Endpoint()
 Endpoint::Endpoint(int gpu)
     : gpu_(gpu), stats_thread_([this]() { stats_thread_fn(); }) {
-  listen_port_cur_.store(kBootstrapPort + gpu_ * 1000);
-
   LOG(INFO) << "Creating EFAFactory";
   // Create UDS socket and get umem_fd and xsk_ids.
   static std::once_flag flag_once;
@@ -1857,13 +1849,13 @@ std::tuple<uint16_t, int> Endpoint::uccl_listen() {
          0)
       << "ERROR: setsockopt SO_REUSEADDR fails";
 
-  auto listen_port = listen_port_cur_.fetch_add(1);
+  auto listen_port = 0;  // Let OS assign a port.
 
   struct sockaddr_in serv_addr;
   bzero((char*)&serv_addr, sizeof(serv_addr));
   serv_addr.sin_family = AF_INET;
   serv_addr.sin_addr.s_addr = INADDR_ANY;
-  serv_addr.sin_port = htons(listen_port);
+  serv_addr.sin_port = listen_port;
 
   // Get the device currently assigned to this process
   int gpu;
@@ -1878,9 +1870,6 @@ std::tuple<uint16_t, int> Endpoint::uccl_listen() {
     localRank = gpu;  // fallback guess
   }
 
-  LOG(INFO) << "[Endpoint] Rank " << localRank << " trying to bind on port "
-            << listen_port << " (fd=" << listen_fd << ")";
-
   int bind_ret =
       bind(listen_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
   if (bind_ret < 0) {
@@ -1889,6 +1878,13 @@ std::tuple<uint16_t, int> Endpoint::uccl_listen() {
                << ")";
   }
   DCHECK(bind_ret >= 0) << "ERROR: binding";
+
+  // Get the actual port assigned by the OS.
+  socklen_t len = sizeof(serv_addr);
+  getsockname(listen_fd, (struct sockaddr*)&serv_addr, &len);
+  listen_port = ntohs(serv_addr.sin_port);
+  LOG(INFO) << "[Endpoint] Rank " << localRank << " bound on port "
+            << listen_port << " (fd=" << listen_fd << ")";
 
   DCHECK(!listen(listen_fd, 128)) << "ERROR: listen";
   LOG(INFO) << "[Endpoint] server ready, listening on port " << listen_port;

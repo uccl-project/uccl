@@ -68,28 +68,51 @@ def _run_server(args):
         for _ in range(args.num_kvblocks):
             buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx)
             ok, mr_id = ep.reg(ptr, size)
-            if not ok:
-                sys.exit("[Server] register failed")
+            assert ok, "[Server] register failed"
             buf_v.append(buf)
             mr_id_v.append(mr_id)
             data_ptr_v.append(ptr)
             size_v.append(size)
 
         if args.num_kvblocks == 1:
-            ep.recv(conn_id, mr_id_v[0], data_ptr_v[0], size_v[0])
+            if args.async_transfer:
+                ok, transfer_id = ep.recv_async(
+                    conn_id, mr_id_v[0], data_ptr_v[0], size_v[0]
+                )
+                assert ok, "[Server] recv_async error"
+                is_done = False
+                while not is_done:
+                    ok, is_done = ep.poll_async(transfer_id)
+                    assert ok, "[Server] poll_async error"
+            else:
+                ep.recv(conn_id, mr_id_v[0], data_ptr_v[0], size_v[0])
+
             start = time.perf_counter()
             total_recv = 0
             for _ in range(args.iters):
-                ok, recv_sz = ep.recv(
-                    conn_id, mr_id_v[0], data_ptr_v[0], size_v[0]
-                )
-                if not ok or recv_sz != size_v[0]:
-                    sys.exit("[Server] recv error")
-                total_recv += recv_sz
+                if args.async_transfer:
+                    ok, transfer_id = ep.recv_async(
+                        conn_id, mr_id_v[0], data_ptr_v[0], size_v[0]
+                    )
+                    assert ok, "[Server] recv_async error"
+                    is_done = False
+                    while not is_done:
+                        ok, is_done = ep.poll_async(transfer_id)
+                        assert ok, "[Server] poll_async error"
+                        # Now, we assume async recv knows the to-receive size in advance.
+                    total_recv += size_v[0]
+                else:
+                    ok, recv_sz = ep.recv(
+                        conn_id, mr_id_v[0], data_ptr_v[0], size_v[0]
+                    )
+                    assert ok, "[Server] recv error"
+                    assert recv_sz == size_v[0], "[Server] recv size mismatch"
+                    total_recv += recv_sz
             elapsed = time.perf_counter() - start
+
             gbps = (total_recv * 8) / elapsed / 1e9  # bits per second → Gbps
             gb_sec = total_recv / elapsed / 1e9  # bytes per second → GB/s
-            lat = elapsed/args.iters
+            lat = elapsed / args.iters
         else:
             ep.recvv(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
             start = time.perf_counter()
@@ -98,13 +121,13 @@ def _run_server(args):
                 ok, recv_sz_v = ep.recvv(
                     conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks
                 )
-                if not ok or recv_sz_v[0] != size_v[0]:
-                    sys.exit("[Server] recv error")
+                assert ok, "[Server] recv error"
+                assert recv_sz_v[0] == size_v[0], "[Server] recv size mismatch"
                 total_recv += sum(recv_sz_v)
             elapsed = time.perf_counter() - start
             gbps = (total_recv * 8) / elapsed / 1e9  # bits per second → Gbps
             gb_sec = total_recv / elapsed / 1e9  # bytes per second → GB/s
-            lat = elapsed/args.iters
+            lat = elapsed / args.iters
 
         print(
             f"[Server] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
@@ -117,8 +140,7 @@ def _run_client(args):
         sys.exit("[Client] --remote-ip is required")
     ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
     ok, conn_id = ep.connect(args.remote_ip, args.remote_gpu_idx)
-    if not ok:
-        sys.exit("[Client] Failed to connect to server")
+    assert ok, "[Client] Failed to connect to server"
     print(f"[Client] Connected to {args.remote_ip} conn_id={conn_id}")
 
     for size in args.sizes:
@@ -129,26 +151,46 @@ def _run_client(args):
         for _ in range(args.num_kvblocks):
             buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx)
             ok, mr_id = ep.reg(ptr, size)
-            if not ok:
-                sys.exit("[Client] register failed")
+            assert ok, "[Client] register failed"
             buf_v.append(buf)
             mr_id_v.append(mr_id)
             data_ptr_v.append(ptr)
             size_v.append(size)
 
         if args.num_kvblocks == 1:
-            ep.send(conn_id, mr_id_v[0], data_ptr_v[0], size_v[0])
+            if args.async_transfer:
+                ok, transfer_id = ep.send_async(
+                    conn_id, mr_id_v[0], data_ptr_v[0], size_v[0]
+                )
+                assert ok, "[Client] send_async error"
+                is_done = False
+                while not is_done:
+                    ok, is_done = ep.poll_async(transfer_id)
+                    assert ok, "[Client] poll_async error"
+            else:
+                ep.send(conn_id, mr_id_v[0], data_ptr_v[0], size_v[0])
+
             start = time.perf_counter()
             total_sent = 0
             for _ in range(args.iters):
-                ok = ep.send(conn_id, mr_id_v[0], data_ptr_v[0], size_v[0])
-                if not ok:
-                    sys.exit("[Client] send error")
+                if args.async_transfer:
+                    ok, transfer_id = ep.send_async(
+                        conn_id, mr_id_v[0], data_ptr_v[0], size_v[0]
+                    )
+                    assert ok, "[Client] send_async error"
+                    is_done = False
+                    while not is_done:
+                        ok, is_done = ep.poll_async(transfer_id)
+                        assert ok, "[Client] poll_async error"
+                else:
+                    ok = ep.send(conn_id, mr_id_v[0], data_ptr_v[0], size_v[0])
+                    assert ok, "[Client] send error"
                 total_sent += size_v[0]
             elapsed = time.perf_counter() - start
+
             gbps = (total_sent * 8) / elapsed / 1e9
             gb_sec = total_sent / elapsed / 1e9
-            lat = elapsed/args.iters
+            lat = elapsed / args.iters
         else:
             ep.sendv(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
             start = time.perf_counter()
@@ -157,14 +199,13 @@ def _run_client(args):
                 ok = ep.sendv(
                     conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks
                 )
-                if not ok:
-                    sys.exit("[Client] send error")
+                assert ok, "[Client] send error"
                 total_sent += sum(size_v)
             elapsed = time.perf_counter() - start
             gbps = (total_sent * 8) / elapsed / 1e9
             gb_sec = total_sent / elapsed / 1e9
-            lat = elapsed/args.iters
-            
+            lat = elapsed / args.iters
+
         print(
             f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
         )
@@ -240,7 +281,15 @@ def main():
         default=1,
         help="Number of key-value blocks to send/recv in a single call",
     )
+    p.add_argument(
+        "--async-transfer",
+        action="store_true",
+        help="Use asynchronous transfers",
+    )
     args = p.parse_args()
+
+    if args.async_transfer:
+        assert args.num_kvblocks == 1, "Async transfers only support one block"
 
     print("UCCL P2P Benchmark — role:", args.role)
     print("Message sizes:", ", ".join(_pretty_size(s) for s in args.sizes))

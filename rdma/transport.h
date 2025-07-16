@@ -981,7 +981,6 @@ class RDMAEndpoint {
   constexpr static uint16_t kTestListenPort = 30000;
   constexpr static uint32_t kStatsTimerIntervalSec = 2;
   constexpr static uint32_t RC_MAGIC = 0x12345678;
-  constexpr static uint16_t kBootstrapPort = 5000;
 
   std::shared_ptr<RDMAFactory> rdma_ctl_;
 

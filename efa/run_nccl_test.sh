@@ -32,7 +32,7 @@ else
     exit 1
 fi
 
-CHANNELS=4
+CHANNELS=8
 CHANNELS_NET_PEER=4
 
 # UCCL optimal parameters. Yang: for allreduce with nvlink, we need to use larger buffer to catch up with NCCL with larger buffers, and avoid outliers.
