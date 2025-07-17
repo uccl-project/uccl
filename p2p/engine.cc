@@ -303,7 +303,7 @@ std::vector<uint8_t> Endpoint::get_endpoint_metadata() {
   if (num_ifs != 1) UCCL_INIT_CHECK(false, "No IP interface found");
 
   std::string ip_str = uccl::get_dev_ip(uccl_ifname);
-  uint16_t port = kTestListenPort + local_gpu_idx_;
+  uint16_t port = ep_->get_port();
   // int listen_fd = uccl::open_ephemeral_port(port);
   // if (listen_fd < 0) {
   //   throw std::runtime_error("Failed to open ephemeral port");

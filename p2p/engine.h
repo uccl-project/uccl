@@ -40,7 +40,6 @@ class Endpoint {
   const uint64_t kRTTBytes = 1024 * 1024;
   const uint64_t kChunkSize = 512 * 1024;
   const uint32_t kMaxInflightChunks = 8;
-  constexpr static uint16_t kTestListenPort = 30000;
 
  public:
   /*

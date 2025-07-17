@@ -143,6 +143,38 @@ inline void create_listen_socket(int* listen_fd, uint16_t listen_port) {
   VLOG(5) << "[Endpoint] server ready, listening on port " << listen_port;
 }
 
+inline uint16_t create_listen_socket(int* listen_fd) {
+  *listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+  DCHECK(*listen_fd >= 0) << "ERROR: opening socket";
+
+  int flag = 1;
+  DCHECK(setsockopt(*listen_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) >=
+         0)
+      << "ERROR: setsockopt SO_REUSEADDR fails";
+
+  struct sockaddr_in serv_addr;
+  bzero((char*)&serv_addr, sizeof(serv_addr));
+  serv_addr.sin_family = AF_INET;
+  serv_addr.sin_addr.s_addr = INADDR_ANY;
+  serv_addr.sin_port = htons(0);  // Ask OS for ephemeral port
+
+  DCHECK(bind(*listen_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) >= 0)
+      << "ERROR: binding";
+
+  // Get the assigned port
+  socklen_t len = sizeof(serv_addr);
+  DCHECK(getsockname(*listen_fd, (struct sockaddr*)&serv_addr, &len) >= 0)
+      << "ERROR: getsockname";
+
+  uint16_t assigned_port = ntohs(serv_addr.sin_port);
+
+  DCHECK(!listen(*listen_fd, 128)) << "ERROR: listen";
+  VLOG(5) << "[Endpoint] server ready, listening on ephemeral port "
+          << assigned_port;
+
+  return assigned_port;
+}
+
 #define UINT_CSN_BIT 8
 #define UINT_CSN_MASK ((1 << UINT_CSN_BIT) - 1)
 

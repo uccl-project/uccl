@@ -986,6 +986,7 @@ class RDMAEndpoint {
 
   // RDMA devices.
   int num_devices_;
+  int port_;
 
   int num_engines_per_dev_;
   // Per-engine communication channel
@@ -1030,6 +1031,12 @@ class RDMAEndpoint {
   ~RDMAEndpoint();
 
   uint32_t get_num_devices() { return num_devices_; }
+  int get_port() {
+    if (port_ == 0) {
+      throw std::runtime_error("Error: port_ is not set.");
+    }
+    return port_;
+  }
 
   void initialize_resources(int total_num_engines);
 
