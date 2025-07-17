@@ -128,6 +128,7 @@ bool Endpoint::connect(std::string const& ip_addr, int const& remote_gpu_idx,
   std::future<uccl::ConnID> uccl_conn_id_future = std::async(
       std::launch::async, [this, remote_gpu_idx, &ip_addr, remote_port]() {
         if (remote_port == -1) {
+          throw std::runtime_error("Error: remote_port is not set.");
           return ep_->test_uccl_connect(
               gpu_to_dev[local_gpu_idx_], local_gpu_idx_,
               gpu_to_dev[remote_gpu_idx], remote_gpu_idx, ip_addr);

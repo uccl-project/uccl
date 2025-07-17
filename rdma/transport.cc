@@ -777,8 +777,6 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
   }
 
   for (int i = 0; i < num_devices_; i++) {
-    // Create listening sockets
-    // create_listen_socket(&test_listen_fds_[i], kTestListenPort + i);
     create_listen_socket(&test_listen_fds_[i]);
   }
 }
@@ -861,11 +859,6 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev) {
             }));
       }
     }
-    // print port
-    // int port =
-    //     try_bind_listen_socket(&test_listen_fds_[dev], kTestListenPort +
-    //     dev);
-
     port_ = create_listen_socket(&test_listen_fds_[dev]);
     if (port_ < 0) {
       fprintf(stderr, "Failed to bind after trying many ports!\n");
