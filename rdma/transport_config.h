@@ -196,7 +196,7 @@ static constexpr uint32_t kMAXRTTUS = 10000;
 // Constant/Dynamic RTO.
 static constexpr bool kConstRTO = true;
 // kConstRTO == true: Constant retransmission timeout in microseconds.
-static constexpr double kRTOUSec = 1000;
+static constexpr double kRTOUSec = 500;
 // kConstRTO == false: Minimum retransmission timeout in microseconds.
 static constexpr double kMinRTOUsec = 1000;
 static constexpr uint32_t kRTORTT = 4;  // RTO = kRTORTT RTTs

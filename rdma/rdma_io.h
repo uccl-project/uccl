@@ -80,7 +80,7 @@ class RetrChunkBuffPool : public BuffPool {
 class RetrHdrBuffPool : public BuffPool {
  public:
   static constexpr size_t kHdrSize = sizeof(struct retr_chunk_hdr);
-  static constexpr uint32_t kNumHdr = 1024;
+  static constexpr uint32_t kNumHdr = 4096;
   static_assert((kNumHdr & (kNumHdr - 1)) == 0, "kNumHdr must be power of 2");
 
   RetrHdrBuffPool(struct ibv_mr* mr) : BuffPool(kNumHdr, kHdrSize, mr) {}

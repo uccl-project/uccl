@@ -2367,7 +2367,9 @@ bool RDMAContext::try_retransmit_chunk(SubUcclFlow* subflow,
 
   retr_sge[1] = wr_ex->sge;
 
-  retr_wr.wr_id = retr_hdr;
+  auto* cqe_desc = io_ctx_->pop_cqe_desc();
+  cqe_desc->data = retr_hdr;
+  retr_wr.wr_id = (uint64_t)cqe_desc;
   retr_wr.sg_list = retr_sge;
   retr_wr.num_sge = 2;
   retr_wr.opcode = IBV_WR_SEND;
@@ -3392,8 +3394,7 @@ void RDMAContext::__retransmit_for_flow(void* context, bool rto) {
   }
 
   if (subflow->pcb.rto_rexmits_consectutive >= kRTOAbortThreshold) {
-    LOG_FIRST_N(ERROR, 1) << "RTO retransmission threshold reached."
-                          << subflow->fid_;
+    UCCL_LOG_IO << "RTO retransmission threshold reached." << subflow->fid_;
   }
 
   // Case#1: SACK bitmap at the sender side is empty. Retransmit the oldest
