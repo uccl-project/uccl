@@ -108,7 +108,7 @@ python benchmark.py \
     --local-gpu-idx 0 --remote-gpu-idx 0 --num-cpus 4
 ```
 
-### Running NIXL
+### Running NIXL (with UCX backend)
 
 On Server:
 ```bash
@@ -123,6 +123,18 @@ UCX_TLS=cuda_ipc,cuda_copy,rc,tcp python benchmark_nixl.py \
     --local-gpu-idx 0
 ```
 
+### Running NIXL (with Mooncake backend)
+
+On Server:
+```bash
+python benchmark_nixl.py --role server --device gpu --local-gpu-idx 0 --backend mooncake
+```
+
+On Client:
+```bash
+python benchmark_nixl.py --role client --remote-ip <Server IP> --device gpu \
+    --local-gpu-idx 0 --backend mooncake
+```
 
 ### Running NCCL
 
