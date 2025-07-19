@@ -87,7 +87,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   // Initialize the engine based on the GPU index.
 #ifdef LAZY_CREATE_ENGINE
   printf("Lazy creation of engine, GPU index: %d\n", local_gpu_idx_);
-  ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_]);
+  ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_], false);
   printf("Engine initialized for GPU %d\n", local_gpu_idx_);
 #endif
 

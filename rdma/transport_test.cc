@@ -351,6 +351,7 @@ static void client_worker(void) {
   mhandles.resize(FLAGS_nflow);
 
   for (int i = 0; i < FLAGS_nflow; i++) {
+    printf("Client connecting to %s (flow#%d)\n", FLAGS_serverip.c_str(), i);
     auto conn_id = ep->test_uccl_connect(0, 0, 0, 0, FLAGS_serverip);
     printf("Client connected to %s (flow#%d)\n", FLAGS_serverip.c_str(), i);
 #ifdef GPU
@@ -408,7 +409,7 @@ int main(int argc, char* argv[]) {
 
   ep.emplace(ucclParamNUM_ENGINES());
 #ifdef LAZY_CREATE_ENGINE
-  ep->initialize_engine_by_dev(0);
+  ep->initialize_engine_by_dev(0, true);
 #endif
 
   // Create a thread to print throughput every second

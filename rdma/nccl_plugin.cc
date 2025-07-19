@@ -272,7 +272,7 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
   memset(handle, 0, sizeof(struct ucclHandle));
 
 #ifdef LAZY_CREATE_ENGINE
-  ep->initialize_engine_by_dev(dev);
+  ep->initialize_engine_by_dev(dev, true);
 #endif
 
   // Create a listening socket.

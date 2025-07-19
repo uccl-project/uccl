@@ -1042,7 +1042,7 @@ class RDMAEndpoint {
 
   void cleanup_resources();
 
-  bool initialize_engine_by_dev(int dev);
+  bool initialize_engine_by_dev(int dev, bool test_create_listen_fd);
 
   /// For testing easily.
   ConnID test_uccl_connect(int dev, int gpu, int remote_dev, int remote_gpu,
