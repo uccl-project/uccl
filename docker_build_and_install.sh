@@ -9,5 +9,6 @@ if [[ $TARGET != "cuda" && $TARGET != "rocm" && $TARGET != "gh" && $TARGET != "e
   exit 1
 fi
 
+ARCH_SUFFIX=$(uname -m)
 ./docker_build.sh $TARGET $PY_VER
-pip install wheelhouse-$TARGET/uccl-0.0.1.post2-${PY_TAG}-${PY_TAG}-manylinux_2_35_aarch64.whl --force-reinstall
+pip install wheelhouse-$TARGET/uccl-0.0.1.post2-${PY_TAG}-${PY_TAG}-manylinux_2_35_${ARCH_SUFFIX}.whl --force-reinstall
