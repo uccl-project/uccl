@@ -11,4 +11,4 @@ fi
 
 ARCH_SUFFIX=$(uname -m)
 ./docker_build.sh $TARGET $PY_VER
-pip install wheelhouse-$TARGET/uccl-0.0.1.post2-${PY_TAG}-${PY_TAG}-manylinux_2_35_${ARCH_SUFFIX}.whl --force-reinstall
+pip install wheelhouse-$TARGET/uccl-0.0.1.post3-${PY_TAG}-${PY_TAG}-manylinux_2_35_${ARCH_SUFFIX}.whl --force-reinstall
