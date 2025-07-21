@@ -9,7 +9,7 @@ ext_modules = [
 
 setup(
     name="uccl",
-    version="0.0.1.post2",
+    version="0.0.1.post3",
     author="UCCL Team",
     description="UCCL: Ultra and Unified CCL",
     long_description=open("README.md").read(),
