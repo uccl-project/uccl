@@ -128,8 +128,10 @@ int RDMAFactory::init_devs() {
 
       if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
         dev.gid_idx = ucclParamROCE_GID_IDX();
+        dev.is_roce = true;
       } else if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
         dev.gid_idx = ucclParamIB_GID_IDX();
+        dev.is_roce = false;
       } else {
         UCCL_LOG_ERROR << "Unknown link layer: " << port_attr.link_layer;
         ibv_close_device(context);

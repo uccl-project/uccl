@@ -815,10 +815,10 @@ int try_bind_listen_socket(int* sock_fd, int base_port,
   return -1;
 }
 
-bool RDMAEndpoint::initialize_engine_by_dev(
-    int dev, bool test_create_listen_fd = false) {
+bool RDMAEndpoint::initialize_engine_by_dev(int dev,
+                                            bool use_test_listen_port = false) {
   static std::vector<std::once_flag> flags_per_dev_(num_devices_);
-  std::call_once(flags_per_dev_[dev], [this, dev, test_create_listen_fd]() {
+  std::call_once(flags_per_dev_[dev], [this, dev, use_test_listen_port]() {
     int start_engine_idx = dev * num_engines_per_dev_;
     int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
     int numa_node = RDMAFactory::get_factory_dev(dev)->numa_node;
@@ -860,15 +860,12 @@ bool RDMAEndpoint::initialize_engine_by_dev(
             }));
       }
     }
-    if (!test_create_listen_fd) {
-      port_ = create_listen_socket(&test_listen_fds_[dev]);
-      if (port_ < 0) {
-        fprintf(stderr, "Failed to bind after trying many ports!\n");
-        exit(1);
-      }
-    } else {
+    if (use_test_listen_port) {
       create_listen_socket(&test_listen_fds_[dev], kTestListenPort + dev);
       port_ = kTestListenPort + dev;
+    } else {
+      port_ = create_listen_socket(&test_listen_fds_[dev]);
+      DCHECK(port_ >= 0) << "Failed to bind after trying many ports!";
     }
     printf("Listening on port %d\n", port_);
   });
@@ -1755,6 +1752,7 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
 
   context_ = factory_dev->context;
   gid_idx_ = factory_dev->gid_idx;
+  is_roce_ = factory_dev->is_roce;
 
   port_entropy_ = ucclParamPORT_ENTROPY();
   dp_qps_.resize(port_entropy_);

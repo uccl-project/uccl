@@ -492,6 +492,7 @@ struct FactoryDevice {
 
   uint8_t ib_port_num;
   uint8_t gid_idx;
+  bool is_roce;
   union ibv_gid gid;
 
   double link_bw;
@@ -532,7 +533,7 @@ class RDMAFactory {
 
   static inline bool is_roce(int dev) {
     DCHECK(dev >= 0 && dev < rdma_ctl->devices_.size());
-    return (rdma_ctl->devices_[dev].gid_idx == ucclParamROCE_GID_IDX());
+    return rdma_ctl->devices_[dev].is_roce;
   }
 
   std::string to_string(void) const;

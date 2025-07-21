@@ -257,6 +257,9 @@ class RDMAContext {
   // GID Index of the device
   int gid_idx_;
 
+  // Whether RoCE or IB.
+  bool is_roce_;
+
   // Link Speed of the device
   double link_speed_ = 0;
 
@@ -282,7 +285,8 @@ class RDMAContext {
 
   LIST_HEAD(ack_list_);
 
-  inline bool is_roce() { return (gid_idx_ == ucclParamROCE_GID_IDX()); }
+  inline bool is_roce() { return is_roce_; }
+
   // Get an unused request, if no request is available, return nullptr.
   inline struct RecvRequest* alloc_recvreq(void) {
     for (int i = 0; i < kMaxReq; i++) {
@@ -1042,7 +1046,7 @@ class RDMAEndpoint {
 
   void cleanup_resources();
 
-  bool initialize_engine_by_dev(int dev, bool test_create_listen_fd);
+  bool initialize_engine_by_dev(int dev, bool use_test_listen_port);
 
   /// For testing easily.
   ConnID test_uccl_connect(int dev, int gpu, int remote_dev, int remote_gpu,
