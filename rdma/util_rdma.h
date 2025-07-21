@@ -236,14 +236,14 @@ static inline struct ibv_srq* util_rdma_create_srq(struct ibv_pd* pd,
 
 static inline struct ibv_ah* util_rdma_create_ah(
     struct ibv_pd* pd, uint8_t port, union ibv_gid remote_gid,
-    struct ibv_port_attr remote_port_attr, bool roce) {
+    struct ibv_port_attr remote_port_attr, bool roce, int gid_idx) {
   struct ibv_ah_attr ah_attr = {};
 
   if (roce) {
     ah_attr.is_global = 1;
     ah_attr.grh.dgid = remote_gid;
     ah_attr.grh.traffic_class = ucclParamROCE_TRAFFIC_CLASS();
-    ah_attr.grh.sgid_index = ucclParamROCE_GID_IDX();
+    ah_attr.grh.sgid_index = gid_idx;
     ah_attr.grh.flow_label = 0;
     ah_attr.grh.hop_limit = 0xff;
     ah_attr.sl = ucclParamROCE_SERVICE_LEVEL();

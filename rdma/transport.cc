@@ -1765,7 +1765,7 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
 
   remote_ctx_.dest_ah = util_rdma_create_ah(
       factory_dev->pd, factory_dev->ib_port_num, remote_ctx_.remote_gid,
-      remote_ctx_.remote_port_attr, RDMAFactory::is_roce(dev));
+      remote_ctx_.remote_port_attr, is_roce_, gid_idx_);
   UCCL_INIT_CHECK(remote_ctx_.dest_ah != nullptr, "util_rdma_create_ah failed");
 
   mtu_bytes_ =

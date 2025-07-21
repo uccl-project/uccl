@@ -491,7 +491,7 @@ struct FactoryDevice {
   struct ibv_port_attr port_attr;
 
   uint8_t ib_port_num;
-  uint8_t gid_idx;
+  int gid_idx;
   bool is_roce;
   union ibv_gid gid;
 
