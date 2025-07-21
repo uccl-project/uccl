@@ -46,16 +46,20 @@ if [[ $TARGET == "all" ]]; then
   cp uccl/lib/*.so "${TEMP_LIB_DIR}/" || true
 
   echo "### Building ROCm backend and collecting its shared library ###"
-  if [[ "$ARCH" != "aarch64" ]]; then
+  if [[ "$ARCH" == "aarch64" ]]; then
+    echo "Skipping ROCm build on Arm64."
+  else
     "$0" rocm
     cp uccl/lib/*.so "${TEMP_LIB_DIR}/" || true
-  else
-    echo "Skipping ROCm build on Arm64."
   fi
 
   echo "### Building EFA backend and collecting its shared library ###"
-  "$0" efa
-  cp uccl/lib/*.so "${TEMP_LIB_DIR}/" || true
+  if [[ "$ARCH" == "aarch64" ]]; then
+    echo "Skipping EFA build on Arm64."
+  else
+    "$0" efa
+    cp uccl/lib/*.so "${TEMP_LIB_DIR}/" || true
+  fi
 
   echo "### Building Grace Hopper backend and collecting its shared library ###"
   "$0" gh
