@@ -51,7 +51,6 @@ if [[ $TARGET == "all" ]]; then
     cp uccl/lib/*.so "${TEMP_LIB_DIR}/" || true
   else
     echo "Skipping ROCm build on Arm64."
-    exit 0
   fi
 
   echo "### Building EFA backend and collecting its shared library ###"
