@@ -154,6 +154,36 @@ bool Endpoint::connect(std::string const& ip_addr, int const& remote_gpu_idx,
   return true;
 }
 
+bool Endpoint::connect(py::bytes const& meta_bytes, uint64_t& conn_id) {
+  std::string buf = meta_bytes;
+  uint8_t const* data = reinterpret_cast<uint8_t const*>(buf.data());
+  const size_t n = buf.size();
+
+  std::string ip;
+  int port = -1;
+  int remote_gpu_idx = -1;
+
+  char ipstr[INET6_ADDRSTRLEN] = {0};
+
+  if (n == 10) {  // IPv4 format
+    std::memcpy(ipstr, data, 4);
+    inet_ntop(AF_INET, ipstr, ipstr, sizeof(ipstr));
+    ip = ipstr;
+    port = (data[4] << 8) | data[5];
+    std::memcpy(&remote_gpu_idx, data + 6, 4);  // host byte-order
+  } else if (n == 22) {                         // IPv6 format
+    std::memcpy(ipstr, data, 16);
+    inet_ntop(AF_INET6, ipstr, ipstr, sizeof(ipstr));
+    ip = ipstr;
+    port = (data[16] << 8) | data[17];
+    std::memcpy(&remote_gpu_idx, data + 18, 4);
+  } else {
+    throw std::runtime_error("Endpoint::connect(metadata): invalid blob size");
+  }
+
+  return this->connect(ip, remote_gpu_idx, conn_id, port);
+}
+
 bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
                       uint64_t& conn_id) {
   py::gil_scoped_release release;

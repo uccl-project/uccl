@@ -24,6 +24,15 @@ PYBIND11_MODULE(p2p, m) {
           "Connect to a remote server", py::arg("remote_ip_addr"),
           py::arg("remote_gpu_idx"), py::arg("remote_port") = -1)
       .def(
+          "connect",
+          [](Endpoint& self, py::bytes metadata) {
+            uint64_t conn_id;
+            bool success = self.connect(metadata, conn_id);
+            return py::make_tuple(success, conn_id);
+          },
+          "Connect to a remote server with endpoint-metadata blob",
+          py::arg("metadata"))
+      .def(
           "accept",
           [](Endpoint& self) {
             std::string remote_ip_addr;
