@@ -231,6 +231,37 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
   return true;
 }
 
+bool Endpoint::regv(std::vector<void const*> const& data_v,
+                    std::vector<size_t> const& size_v,
+                    std::vector<uint64_t>& mr_id_v) {
+  if (data_v.size() != size_v.size())
+    throw std::invalid_argument(
+        "[Endpoint::regv] data_v/size_v length mismatch");
+
+  py::gil_scoped_release release;
+  const size_t n = data_v.size();
+  mr_id_v.resize(n);
+
+  mr_id_to_mr_.reserve(mr_id_to_mr_.size() + n);
+
+  for (size_t i = 0; i < n; ++i) {
+    uint64_t id = next_mr_id_.fetch_add(1);
+    uccl::Mhandle* mhandle = nullptr;
+
+    ep_->uccl_regmr(gpu_to_dev[local_gpu_idx_], const_cast<void*>(data_v[i]),
+                    size_v[i], 0, &mhandle);
+
+    if (mhandle == nullptr || mhandle->mr == nullptr) {
+      std::cerr << "[Endpoint::regv] registration failed at i=" << i << '\n';
+      return false;
+    }
+
+    mr_id_to_mr_[id] = new MR{id, mhandle};
+    mr_id_v[i] = id;
+  }
+  return true;
+}
+
 bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
                     size_t size) {
   py::gil_scoped_release release;
