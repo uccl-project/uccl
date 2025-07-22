@@ -1924,12 +1924,15 @@ int RDMAContext::supply_rx_buff(struct ucclRequest* ureq) {
   auto* elems = ureq->recv.elems;
   DCHECK(elems);
 
-  auto req = alloc_recvreq();
+  auto* flow = reinterpret_cast<UcclFlow*>(ureq->context);
+  auto* subflow = flow->sub_flows_[engine_offset_];
+
+  auto req = subflow->alloc_recvreq();
   if (req == nullptr) return -1;
   DCHECK(ureq->n == 1);
   for (int i = 0; i < ureq->n; i++) {
     // For sender to encode the request id in the immediate data.
-    elems[i].rid = get_recvreq_id(req);
+    elems[i].rid = subflow->get_recvreq_id(req);
   }
 
   struct ibv_send_wr* bad_wr;
@@ -1941,7 +1944,7 @@ int RDMAContext::supply_rx_buff(struct ucclRequest* ureq) {
   req->fin_msg = 0;
 
   UCCL_LOG_IO << "Really supply rx buff by posting buffers to FIFO QP, rid#"
-              << get_recvreq_id(req);
+              << subflow->get_recvreq_id(req);
 
   return 0;
 }
@@ -2839,7 +2842,7 @@ void RDMAContext::try_update_csn(SubUcclFlow* subflow) {
       uccl_wakeup(req->ureq->poll_ctx);
       UCCL_LOG_IO << "Rx message complete.";
       // Free the request.
-      free_recvreq(req);
+      subflow->free_recvreq(req);
     }
 
     subflow->rxtracking.ready_csn_.erase(
@@ -2883,7 +2886,7 @@ void RDMAContext::uc_rx_rtx_chunk(struct ibv_wc* wc, uint64_t chunk_addr) {
 
   // Locate request by rid
   DCHECK(rid < kMaxReq);
-  auto req = get_recvreq_by_id(rid);
+  auto req = subflow->get_recvreq_by_id(rid);
   if (req->type != RecvRequest::RECV || req->ureq->context != flow) {
     UCCL_LOG_IO << "Can't find corresponding request or this request is "
                    "invalid for this retransmission chunk. Dropping. "
@@ -2993,7 +2996,7 @@ void RDMAContext::uc_rx_rtx_chunk(struct ibv_cq_ex* cq_ex,
 
   // Locate request by rid
   DCHECK(rid < kMaxReq);
-  auto req = get_recvreq_by_id(rid);
+  auto req = subflow->get_recvreq_by_id(rid);
   if (req->type != RecvRequest::RECV || req->ureq->context != flow) {
     UCCL_LOG_IO << "Can't find corresponding request or this request is "
                    "invalid for this retransmission chunk. Dropping. "
@@ -3095,7 +3098,7 @@ void RDMAContext::rc_rx_chunk(uint32_t byte_len, uint32_t wc_imm_data) {
 
   // Locate request by rid
   DCHECK(rid < kMaxReq);
-  auto req = get_recvreq_by_id(rid);
+  auto req = subflow->get_recvreq_by_id(rid);
   DCHECK(req->ureq);
 
   if (req->type != RecvRequest::RECV || req->ureq->context != flow) {
@@ -3142,7 +3145,7 @@ void RDMAContext::rc_rx_chunk(struct ibv_cq_ex* cq_ex) {
 
   // Locate request by rid
   DCHECK(rid < kMaxReq);
-  auto req = get_recvreq_by_id(rid);
+  auto req = subflow->get_recvreq_by_id(rid);
   DCHECK(req->ureq);
 
   if (req->type != RecvRequest::RECV || req->ureq->context != flow) {
@@ -3193,7 +3196,7 @@ void RDMAContext::uc_rx_chunk(struct ibv_wc* wc) {
 
   // Locate request by rid
   DCHECK(rid < kMaxReq);
-  auto req = get_recvreq_by_id(rid);
+  auto req = subflow->get_recvreq_by_id(rid);
   if (req->type != RecvRequest::RECV || req->ureq->context != flow) {
     UCCL_LOG_IO << "Can't find corresponding request or this request is "
                    "invalid for this chunk. Dropping. ";
@@ -3298,7 +3301,7 @@ void RDMAContext::uc_rx_chunk(struct ibv_cq_ex* cq_ex) {
 
   // Locate request by rid
   DCHECK(rid < kMaxReq);
-  auto req = get_recvreq_by_id(rid);
+  auto req = subflow->get_recvreq_by_id(rid);
   if (req->type != RecvRequest::RECV || req->ureq->context != flow) {
     UCCL_LOG_IO << "Can't find corresponding request or this request is "
                    "invalid for this chunk. Dropping. ";

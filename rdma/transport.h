@@ -207,11 +207,6 @@ class RDMAContext {
   // Timer manager for RTO.
   TimerManager* rto_;
 
-  // Track outstanding RECV requests.
-  // When a flow wants to receive message, it should allocate a request from
-  // this pool.
-  struct RecvRequest reqs_[kMaxReq];
-
   // Track installed flows.
   // When a flow is installed, it should be added to this table.
   // Flows are split into two tables: sender and receiver.
@@ -286,30 +281,6 @@ class RDMAContext {
   LIST_HEAD(ack_list_);
 
   inline bool is_roce() { return is_roce_; }
-
-  // Get an unused request, if no request is available, return nullptr.
-  inline struct RecvRequest* alloc_recvreq(void) {
-    for (int i = 0; i < kMaxReq; i++) {
-      auto* req = &reqs_[i];
-      if (req->type == RecvRequest::UNUSED) {
-        return req;
-      }
-    }
-    return nullptr;
-  }
-
-  // Get the ID of the request.
-  inline uint64_t get_recvreq_id(struct RecvRequest* req) {
-    return req - reqs_;
-  }
-
-  // Get the request by ID.
-  inline struct RecvRequest* get_recvreq_by_id(int id) { return &reqs_[id]; }
-
-  // Free the request.
-  inline void free_recvreq(struct RecvRequest* req) {
-    memset(req, 0, sizeof(struct RecvRequest));
-  }
 
  public:
   // 256-bit SACK bitmask => we can track up to 256 packets
