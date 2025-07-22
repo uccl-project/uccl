@@ -97,15 +97,15 @@ cd benchmarks
 
 On server: 
 ```bash
-python benchmark.py --role server --local-gpu-idx 0 --num-cpus 4
+python benchmark_uccl.py --role server --local-gpu-idx 0 --num-cpus 4
 ```
 
 On client:
 ```bash
 # Note: if running atop GH200 with unified memory, use `--device cpu` or use `cudaMallocManaged`. 
-python benchmark.py \
+python benchmark_uccl.py \
     --role client --remote-ip <Server IP> --device gpu \
-    --local-gpu-idx 0 --remote-gpu-idx 0 --num-cpus 4
+    --local-gpu-idx 0 --num-cpus 4
 ```
 
 ### Running NIXL
@@ -113,7 +113,7 @@ python benchmark.py \
 On Server:
 ```bash
 UCX_TLS=cuda_ipc,cuda_copy,rc,tcp \
-python benchmark_nixl.py --role server --device gpu --local-gpu-idx 0 
+python benchmark_nixl.py --role server --device gpu --local-gpu-idx 0
 ```
 
 On Client:
