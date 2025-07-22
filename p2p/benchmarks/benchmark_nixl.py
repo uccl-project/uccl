@@ -5,7 +5,8 @@ import sys
 import time
 from typing import List
 import traceback
-from datetime import datetime
+import io
+import sys
 
 try:
     from nixl._api import nixl_agent, nixl_agent_config
@@ -20,46 +21,39 @@ except ImportError as exc:
     raise
 
 
-import numpy as np
-
-
-def create_datasets(role, sizes, device, gpu_idx=0):
+def create_dataset(role, size, device, gpu_idx=0):
     """
     Create a dataset of tensors whose total size is at least size in bytes.
     """
-    datasets = []
-    for size in sizes:
-        dtype = torch.float32
-        num_blocks = 1
-        value = 0 if "server" in role else 1
+    dtype = torch.float32
+    num_blocks = 1
+    value = 0 if "server" in role else 1
 
-        element_size = torch.tensor([], dtype=dtype).element_size()
-        n_elems_per_block = size // (element_size * num_blocks)
-        if n_elems_per_block == 0:
-            n_elems_per_block = 1
+    element_size = torch.tensor([], dtype=dtype).element_size()
+    n_elems_per_block = size // (element_size * num_blocks)
+    if n_elems_per_block == 0:
+        n_elems_per_block = 1
 
-        dataset = []
-        if device == "gpu":
-            dev = f"cuda:{gpu_idx}"
-        else:
-            dev = "cpu"
-        for _ in range(num_blocks):
-            block = torch.full(
-                (n_elems_per_block,), value, device=dev, dtype=dtype
+    dataset = []
+    if device == "gpu":
+        dev = f"cuda:{gpu_idx}"
+    else:
+        dev = "cpu"
+    for _ in range(num_blocks):
+        block = torch.full((n_elems_per_block,), value, device=dev, dtype=dtype)
+        dataset.append(block)
+
+    # If total size is less than requested, add more elements to the last block
+    total_bytes = sum(t.numel() * t.element_size() for t in dataset)
+    if total_bytes < size:
+        extra_elems = (size - total_bytes) // element_size
+        if extra_elems > 0:
+            extra_block = torch.full(
+                (extra_elems,), value, device=device, dtype=dtype
             )
-            dataset.append(block)
+            dataset.append(extra_block)
 
-        # If total size is less than requested, add more elements to the last block
-        total_bytes = sum(t.numel() * t.element_size() for t in dataset)
-        if total_bytes < size:
-            extra_elems = (size - total_bytes) // element_size
-            if extra_elems > 0:
-                extra_block = torch.full(
-                    (extra_elems,), value, device=device, dtype=dtype
-                )
-                dataset.append(extra_block)
-        datasets.append(dataset)
-    return datasets
+    return dataset
 
 
 def initialize_xfer_metadata(
@@ -73,9 +67,10 @@ def initialize_xfer_metadata(
     """
     Initialize transfer metadata.
     """
-    register_descs = [desc.trim() for desc in register_descs]
+
+    local_xfer_descs = register_descs.trim()
     remote_xfer_descs = None
-    transfer_handles = []
+    transfer_handle = None
 
     if "server" in role:
         # Wait until there is a message from the creator
@@ -83,15 +78,12 @@ def initialize_xfer_metadata(
             continue
 
         # send the xfer descs to the peer
-        descs = agent.get_serialized_descs(register_descs)
-        agent.send_notif("client", descs)
-
-        transfer_handles = [None] * len(register_descs)
+        desc = agent.get_serialized_descs(local_xfer_descs)
+        agent.send_notif("client", desc)
 
     elif "client" in role:
         agent.fetch_remote_metadata("server", server_ip, server_port)
         agent.send_local_metadata(server_ip, server_port)
-
         # Wait until there is a message from the peer
         notifs = agent.get_new_notifs()
         while len(notifs) == 0:
@@ -100,21 +92,15 @@ def initialize_xfer_metadata(
         remote_xfer_descs = agent.deserialize_descs(notifs["server"][0])
         while not agent.check_remote_metadata("server"):
             continue
-        transfer_handles = [
-            agent.initialize_xfer(
-                operation,
-                register_descs[i],
-                remote_xfer_descs[i],
-                "server",
-                f"TRANSFER_{i}",
-            )
-            for i in range(len(register_descs))
-        ]
+        uid = "TRANSFER"
+        transfer_handle = agent.initialize_xfer(
+            operation, local_xfer_descs, remote_xfer_descs, "server", uid
+        )
 
-    return transfer_handles
+    return transfer_handle
 
 
-def create_nixl_agent(role: str, datasets):
+def create_nixl_agent(role: str, dataset):
     """
     Create Nixl agents based on the role.
     """
@@ -122,10 +108,8 @@ def create_nixl_agent(role: str, datasets):
     listen_port = port if role == "server" else 0
     config = nixl_agent_config(True, True, listen_port)
     agent = nixl_agent(role, config)
-    register_descs = []
-    for dataset in datasets:
-        descs = agent.get_reg_descs(dataset)
-        register_descs.append(agent.register_memory(descs))
+    descs = agent.get_reg_descs(dataset)
+    register_descs = agent.register_memory(descs)
     return agent, register_descs
 
 
@@ -133,7 +117,6 @@ def start_transfer(
     role: str,
     agent: nixl_agent,
     transfer_handle,
-    uid,
 ):
     if "client" in role:
         state = agent.transfer(transfer_handle)
@@ -147,21 +130,20 @@ def start_transfer(
                 print("Error in transfer")
                 break
     else:
+        uid = "TRANSFER"
         while not agent.check_remote_xfer_done("client", uid.encode("utf-8")):
             continue
 
 
 def cleanup_transfer(
     agent: nixl_agent,
-    transfer_handles,
+    transfer_handle,
     register_descs,
 ):
     # Cleanup the transfer handle and registered descriptors
-    for transfer_handle in transfer_handles:
-        if transfer_handle is not None:
-            agent.release_xfer_handle(transfer_handle)
-    for register_desc in register_descs:
-        agent.deregister_memory(register_desc)
+    if transfer_handle is not None:
+        agent.release_xfer_handle(transfer_handle)
+    agent.deregister_memory(register_descs)
 
 
 def cleanup_agent(
@@ -170,47 +152,45 @@ def cleanup_agent(
     agent.remove_remote_agent(agent.name)
 
 
-def start_agent_pair(sizes, args):
+def start_agent_pair(size, args):
     op = "WRITE"
     port = 9000
 
-    datasets = create_datasets(
-        args.role, sizes, args.device, args.local_gpu_idx
-    )
-
-    agent, register_descs = create_nixl_agent(args.role, datasets)
-
-    transfer_handles = initialize_xfer_metadata(
-        args.role, op, agent, register_descs, args.remote_ip, port
-    )
-
     try:
-        for i, size in enumerate(sizes):
-            total_size = 0
-            start = time.perf_counter()
-            for _ in range(args.iters):
-                start_transfer(
-                    args.role,
-                    agent,
-                    transfer_handles[i],
-                    f"TRANSFER_{i}",
-                )
-                total_size += size
-            end = time.perf_counter()
-            transfer_time = end - start
-            gbps = (
-                (total_size * 8) / transfer_time / 1e9
-            )  # bits per second → Gbps
-            gb_sec = total_size / transfer_time / 1e9  # bytes per second → GB/s
-            lat = transfer_time / args.iters
-            print(
-                f"[{args.role}] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s | {lat:6.6f} s"
+        dataset = create_dataset(
+            args.role, size, args.device, args.local_gpu_idx
+        )
+
+        # Getting rid of the annoying output from NIXL init every time.
+        save_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        agent, register_descs = create_nixl_agent(args.role, dataset)
+        sys.stdout = save_stdout
+
+        transfer_handle = initialize_xfer_metadata(
+            args.role, op, agent, register_descs, args.remote_ip, port
+        )
+
+        total_size = 0
+        start = time.perf_counter()
+        for n in range(args.iters):
+            start_transfer(
+                args.role,
+                agent,
+                transfer_handle,
             )
-            if "server" in args.role:
-                for i, block in enumerate(datasets[i]):
-                    assert (
-                        torch.mean(block) - 1 < 1e-8
-                    ), f"Block {i} not equal to 1"
+            total_size += size
+        end = time.perf_counter()
+        transfer_time = end - start
+        gbps = (total_size * 8) / transfer_time / 1e9  # bits per second → Gbps
+        gb_sec = total_size / transfer_time / 1e9  # bytes per second → GB/s
+        lat = transfer_time / args.iters
+        print(
+            f"[{args.role}] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s | {lat:6.6f} s"
+        )
+        if "server" in args.role:
+            for i, block in enumerate(dataset):
+                assert torch.mean(block) - 1 < 1e-8, f"Block {i} not equal to 1"
 
     except KeyboardInterrupt:
         return 0.0
@@ -220,7 +200,7 @@ def start_agent_pair(sizes, args):
     finally:
         cleanup_transfer(
             agent,
-            transfer_handles,
+            transfer_handle,
             register_descs,
         )
         cleanup_agent(agent)
@@ -305,7 +285,8 @@ def main():
     print(
         f"Device: {args.device} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}"
     )
-    start_agent_pair(args.sizes, args)
+    for size in args.sizes:
+        start_agent_pair(size, args)
 
 
 if __name__ == "__main__":
