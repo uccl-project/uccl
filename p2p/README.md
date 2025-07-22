@@ -97,20 +97,19 @@ cd benchmarks
 
 On server: 
 ```bash
-python benchmark_uccl.py --role server --local-gpu-idx 0 --num-cpus 4
+python benchmark_uccl.py --role server --device gpu --local-gpu-idx 0 --num-cpus 4
 ```
 
 On client:
 ```bash
 # Note: if running atop GH200 with unified memory, use `--device cpu` or use `cudaMallocManaged`. 
-python benchmark_uccl.py \
-    --role client --remote-ip <Server IP> --device gpu \
-    --local-gpu-idx 0 --num-cpus 4
+python benchmark_uccl.py --role client --device gpu --local-gpu-idx 0 --num-cpus 4 --remote-ip <Server IP>
 ```
 
 ### Running NIXL
 
 If you have not installed nixl with RDMA support, you can follow: 
+<details><summary>Click me</summary>
 
 ```bash
 sudo apt install build-essential cmake pkg-config 
@@ -121,6 +120,9 @@ git clone git@github.com:NVIDIA/gdrcopy.git
 cd gdrcopy
 sudo make prefix=/usr/local CUDA=/usr/local/cuda all install
 cd ..
+
+# Run these if you find there is no libcuda.so under /usr/local/cuda. Using GH200 as an example.
+sudo ln -s /usr/lib/aarch64-linux-gnu/libcuda.so.1 /usr/local/cuda/lib64/libcuda.so
 
 wget https://github.com/openucx/ucx/releases/download/v1.18.0/ucx-1.18.0.tar.gz
 tar xzf ucx-1.18.0.tar.gz
@@ -139,23 +141,26 @@ cd nixl
 meson setup build -Ducx_path=/usr/local/ucx
 cd build
 ninja
-ninja install
+yes | ninja install
 cd ..
 pip install .
 cd ..
+
+UCX_LIB_PATH="/usr/local/ucx/lib"
+export LD_LIBRARY_PATH="$UCX_LIB_PATH:$CONDA_PREFIX/lib/python3.13/site-packages/.nixl.mesonpy.libs/plugins:$LD_LIBRARY_PATH"
 ```
+</details>
 
 On Server:
 ```bash
-UCX_TLS=cuda_ipc,cuda_copy,rc,tcp \
-python benchmark_nixl.py --role server --device gpu --local-gpu-idx 0
+UCX_MAX_RMA_LANES=4 UCX_IB_PCI_RELAXED_ORDERING=on UCX_NET_DEVICES=mlx5_2:1 UCX_TLS=rc \
+    python benchmark_nixl.py --role server --device gpu --local-gpu-idx 0
 ```
 
 On Client:
 ```bash
-UCX_TLS=cuda_ipc,cuda_copy,rc,tcp python benchmark_nixl.py \
-    --role client --remote-ip <Server IP> --device gpu \
-    --local-gpu-idx 0
+UCX_MAX_RMA_LANES=4 UCX_IB_PCI_RELAXED_ORDERING=on UCX_NET_DEVICES=mlx5_2:1 UCX_TLS=rc \
+    python benchmark_nixl.py --role client --device gpu --local-gpu-idx 0 --remote-ip <Server IP>
 ```
 
 
@@ -164,14 +169,13 @@ UCX_TLS=cuda_ipc,cuda_copy,rc,tcp python benchmark_nixl.py \
 On Server:
 ```bash
 NCCL_NCHANNELS_PER_NET_PEER=4 \
-python benchmark_nccl.py --role server --local-gpu-idx 0
+python benchmark_nccl.py --role server --device gpu --local-gpu-idx 0
 ```
 
 On Client:
 ```bash
-NCCL_NCHANNELS_PER_NET_PEER=4 python benchmark_nccl.py \
-    --role client --remote-ip <Server IP> --device gpu \
-    --local-gpu-idx 0
+NCCL_NCHANNELS_PER_NET_PEER=4 \
+python benchmark_nccl.py --role client --device gpu --local-gpu-idx 0 --remote-ip <Server IP>
 ```
 
 
