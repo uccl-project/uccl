@@ -110,6 +110,41 @@ python benchmark_uccl.py \
 
 ### Running NIXL
 
+If you have not installed nixl with RDMA support, you can follow: 
+
+```bash
+sudo apt install build-essential cmake pkg-config 
+pip3 install meson
+pip3 install pybind11
+
+git clone git@github.com:NVIDIA/gdrcopy.git
+cd gdrcopy
+sudo make prefix=/usr/local CUDA=/usr/local/cuda all install
+cd ..
+
+wget https://github.com/openucx/ucx/releases/download/v1.18.0/ucx-1.18.0.tar.gz
+tar xzf ucx-1.18.0.tar.gz
+cd ucx-1.18.0
+./configure --prefix=/usr/local/ucx --enable-shared --disable-static \
+            --disable-doxygen-doc --enable-optimizations --enable-cma \
+            --enable-devel-headers --with-cuda=/usr/local/cuda \
+            --with-gdrcopy=/usr/local --with-verbs --with-dm --enable-mt
+make -j
+sudo make -j install-strip
+sudo ldconfig
+cd ..
+
+git clone https://github.com/ai-dynamo/nixl.git
+cd nixl
+meson setup build -Ducx_path=/usr/local/ucx
+cd build
+ninja
+ninja install
+cd ..
+pip install .
+cd ..
+```
+
 On Server:
 ```bash
 UCX_TLS=cuda_ipc,cuda_copy,rc,tcp \
