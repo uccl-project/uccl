@@ -15,14 +15,23 @@ PYBIND11_MODULE(p2p, m) {
       .def(
           "connect",
           [](Endpoint& self, std::string const& remote_ip_addr,
-             int remote_gpu_idx) {
+             int remote_gpu_idx, int remote_port) {
             uint64_t conn_id;
-            bool success =
-                self.connect(remote_ip_addr, remote_gpu_idx, conn_id);
+            bool success = self.connect(remote_ip_addr, remote_gpu_idx, conn_id,
+                                        remote_port);
             return py::make_tuple(success, conn_id);
           },
           "Connect to a remote server", py::arg("remote_ip_addr"),
-          py::arg("remote_gpu_idx"))
+          py::arg("remote_gpu_idx"), py::arg("remote_port") = -1)
+      .def(
+          "connect",
+          [](Endpoint& self, py::bytes metadata) {
+            uint64_t conn_id;
+            bool success = self.connect(metadata, conn_id);
+            return py::make_tuple(success, conn_id);
+          },
+          "Connect to a remote server with endpoint-metadata blob",
+          py::arg("metadata"))
       .def(
           "accept",
           [](Endpoint& self) {
@@ -143,5 +152,13 @@ PYBIND11_MODULE(p2p, m) {
                   py::arg("world_size"), py::arg("my_rank"),
                   py::arg("local_gpu_idx"), py::arg("num_cpus"),
                   py::arg("remote_gpu_idx"))
+      .def(
+          "get_endpoint_metadata",
+          [](Endpoint& self) {
+            std::vector<uint8_t> metadata = self.get_endpoint_metadata();
+            return py::bytes(reinterpret_cast<const char*>(metadata.data()),
+                             metadata.size());
+          },
+          "Return endpoint metadata as a list of bytes")
       .def("__repr__", [](Endpoint const& e) { return "<UCCL P2P Endpoint>"; });
 }

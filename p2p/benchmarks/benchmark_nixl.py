@@ -6,7 +6,8 @@ import time
 from typing import List
 import traceback
 import zmq
-from datetime import datetime
+import io
+import sys
 
 try:
     from nixl._api import nixl_agent, nixl_agent_config
@@ -20,15 +21,14 @@ except ImportError as exc:
     sys.stderr.write("Failed to import torch\n")
     raise
 
-
-import numpy as np
 listen_port = 9000
+
 def create_dataset(role, size, device, gpu_idx=0):
     """
     Create a dataset of tensors whose total size is at least size in bytes.
     """
-    dtype=torch.float32
-    num_blocks=1
+    dtype = torch.float32
+    num_blocks = 1
     value = 0 if "server" in role else 1
 
     element_size = torch.tensor([], dtype=dtype).element_size()
@@ -50,7 +50,9 @@ def create_dataset(role, size, device, gpu_idx=0):
     if total_bytes < size:
         extra_elems = (size - total_bytes) // element_size
         if extra_elems > 0:
-            extra_block = torch.full((extra_elems,), value, device=device, dtype=dtype)
+            extra_block = torch.full(
+                (extra_elems,), value, device=device, dtype=dtype
+            )
             dataset.append(extra_block)
 
     return dataset
@@ -71,12 +73,12 @@ def init_zmq(host, port, role):
     return zmq_socket
 
 def initialize_xfer_metadata_mc(
-        role: str,
-        operation: str, 
-        agent: nixl_agent, 
-        register_descs,
-        zmq_socket
-    ):
+    role: str,
+    operation: str, 
+    agent: nixl_agent, 
+    register_descs,
+    zmq_socket
+):
     """
     Initialize transfer metadata with zmq sockets for Mooncake
     """
@@ -106,21 +108,19 @@ def initialize_xfer_metadata_mc(
 
         uid = "TRANSFER"
         transfer_handle = agent.initialize_xfer(
-                operation,
-                local_xfer_descs,
-                remote_xfer_descs,
-                "server")
+                operation, local_xfer_descs, remote_xfer_descs, "server"
+            )
 
     return transfer_handle
 
 def initialize_xfer_metadata_ucx(
-        role: str,
-        operation: str, 
-        agent: nixl_agent, 
-        register_descs,
-        server_ip,
-        server_port
-    ):
+    role: str,
+    operation: str, 
+    agent: nixl_agent, 
+    register_descs,
+    server_ip,
+    server_port,
+):
     """
     Initialize transfer metadata.
     """
@@ -151,15 +151,12 @@ def initialize_xfer_metadata_ucx(
             continue
         uid = "TRANSFER"
         transfer_handle = agent.initialize_xfer(
-                operation,
-                local_xfer_descs,
-                remote_xfer_descs,
-                "server",
-                uid)
+            operation, local_xfer_descs, remote_xfer_descs, "server", uid
+        )
 
     return transfer_handle
 
-def create_nixl_agent_mc(role: str, dataset: np.ndarray, zmq_socket):
+def create_nixl_agent_mc(role: str, dataset, zmq_socket):
     """
     Create Nixl agents based on the role with Mooncake backend
     """
@@ -194,12 +191,12 @@ def create_nixl_agent_ucx(role: str, dataset):
     return agent, register_descs
 
 def start_transfer_mc(
-        role: str,
-        agent: nixl_agent,
-        transfer_handle,
-        zmq_socket,
-        uid="TRANSFER"
-    ):
+    role: str,
+    agent: nixl_agent,
+    transfer_handle,
+    zmq_socket,
+    uid="TRANSFER"
+):
     if "client" in role:
         state = agent.transfer(transfer_handle)
         if state == "ERR":
@@ -219,11 +216,11 @@ def start_transfer_mc(
                 break;
 
 def start_transfer_ucx(
-        role: str,
-        agent: nixl_agent,
-        transfer_handle,
-        uid="TRANSFER"
-    ):
+    role: str,
+    agent: nixl_agent,
+    transfer_handle,
+    uid="TRANSFER"
+):
     if "client" in role:
         state = agent.transfer(transfer_handle)
         if state == "ERR":
@@ -241,24 +238,24 @@ def start_transfer_ucx(
             continue
 
 
-
 def cleanup_transfer(
-        agent: nixl_agent,
-        transfer_handle,
-        register_descs,
-    ):
+    agent: nixl_agent,
+    transfer_handle,
+    register_descs,
+):
     # Cleanup the transfer handle and registered descriptors
     if transfer_handle is not None:
         agent.release_xfer_handle(transfer_handle)
     agent.deregister_memory(register_descs)
 
+
 def cleanup_agent(
-        agent: nixl_agent,
-    ):
+    agent: nixl_agent,
+):
     agent.remove_remote_agent(agent.name)
 
 def start_agent_pair(size, args):
-    op = 'READ'
+    op = 'WRITE'
     zmq_socket = None
     
     print(f"Backend : {args.backend}")
@@ -273,20 +270,11 @@ def start_agent_pair(size, args):
 
         if args.backend == "mooncake":
             transfer_handle = initialize_xfer_metadata_mc(
-                args.role,
-                op,
-                agent,
-                register_descs,
-                zmq_socket
-        )
+                args.role, op, agent, register_descs, zmq_socket
+            )
         else :
             transfer_handle = initialize_xfer_metadata_ucx(
-                args.role,
-                op,
-                agent,
-                register_descs,
-                args.remote_ip,
-                listen_port
+                args.role, op, agent, register_descs, args.remote_ip, listen_port
             )
         
         total_size = 0
@@ -295,18 +283,13 @@ def start_agent_pair(size, args):
         if args.backend == "mooncake":
             for n in range(args.iters):
                 start_transfer_mc(
-                    args.role,
-                    agent,
-                    transfer_handle,
-                    zmq_socket
+                    args.role, agent, transfer_handle, zmq_socket
                 )
                 total_size += size
         else:
             for n in range(args.iters):
                 start_transfer_ucx(
-                    args.role,
-                    agent,
-                    transfer_handle,
+                    args.role, agent, transfer_handle,
                 )
                 total_size += size
 
@@ -315,7 +298,7 @@ def start_agent_pair(size, args):
         transfer_time = end - start
         gbps = (total_size * 8) / transfer_time / 1e9  # bits per second → Gbps
         gb_sec = total_size / transfer_time / 1e9  # bytes per second → GB/s
-        lat = transfer_time/args.iters
+        lat = transfer_time / args.iters
         print(
             f"[{args.role}] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s | {lat:6.6f} s"
         )
@@ -338,6 +321,7 @@ def start_agent_pair(size, args):
         if args.backend == "mooncake":
             zmq_socket.close()
 
+
 def _pretty_size(num_bytes: int) -> str:
     units = ["B", "KB", "MB", "GB"]
     val = float(num_bytes)
@@ -346,6 +330,7 @@ def _pretty_size(num_bytes: int) -> str:
             return f"{val:.0f} {u}" if u == "B" else f"{val:.1f} {u}"
         val /= 1024
     return f"{num_bytes} B"  # fallback
+
 
 def parse_size_list(val: str) -> List[int]:
     try:
@@ -357,9 +342,7 @@ def parse_size_list(val: str) -> List[int]:
 
 
 def main():
-    p = argparse.ArgumentParser(
-        description="Benchmark NIXL/UCX bandwidth"
-    )
+    p = argparse.ArgumentParser(description="Benchmark NIXL/UCX bandwidth")
     p.add_argument(
         "--role",
         choices=["server", "client"],
@@ -370,12 +353,6 @@ def main():
         "--remote-ip",
         default="0.0.0.0",
         help="Server IP address (client only)",
-    )
-    p.add_argument(
-        "--remote-gpu-idx",
-        type=int,
-        default=0,
-        help="Server GPU index (client only)",
     )
     p.add_argument(
         "--local-gpu-idx",

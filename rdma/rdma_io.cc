@@ -126,10 +126,13 @@ int RDMAFactory::init_devs() {
                        1e6 / 8;
       dev.link_bw = link_bw;
 
+      DCHECK(ncclIbGetGidIndex(context, port_num, &port_attr, &dev.gid_idx));
+      UCCL_LOG_RE << devices[d]->name << " uses gid_idx " << dev.gid_idx;
+
       if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
-        dev.gid_idx = ucclParamROCE_GID_IDX();
+        dev.is_roce = true;
       } else if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
-        dev.gid_idx = ucclParamIB_GID_IDX();
+        dev.is_roce = false;
       } else {
         UCCL_LOG_ERROR << "Unknown link layer: " << port_attr.link_layer;
         ibv_close_device(context);

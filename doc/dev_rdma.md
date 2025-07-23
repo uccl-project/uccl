@@ -155,9 +155,7 @@ Use `UCCL_PARAM()` to introduce new environment variables.
 | UCCL_PIN_TO_NUMA | Pin threads to the NUMA node | 1 |
 | UCCL_ROCE_TRAFFIC_CLASS | Traffic class for RoCE | 3 |
 | UCCL_ROCE_SERVICE_LEVEL | Service level for RoCE | 135 |
-| UCCL_ROCE_GID_IDX | GID index for RoCE | 3 |
 | UCCL_IB_SERVICE_LEVEL | Service level for IB | 0 |
-| UCCL_IB_GID_IDX | GID index for IB | 0 |
 | UCCL_RCMODE | Use RC for data transfer | true (Broadcom NIC), false (others) |
 | UCCL_BYPASS_PACING | Bypass the pacing stage | true |
 | UCCL_NUM_ENGINES | Number of engines per device | 4 (NVIDIA), 1 (AMD) |

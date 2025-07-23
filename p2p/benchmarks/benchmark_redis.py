@@ -121,8 +121,6 @@ def main():
                    help="Run as server (receiver) or client (sender)")
     # Legacy args for direct connect/accept:
     p.add_argument("--remote-ip", help="Server IP address (client only)")
-    p.add_argument("--remote-gpu-idx", type=int, default=0,
-                   help="Server GPU index (client only)")
     # Rendezvous args:
     p.add_argument("--discovery-uri",
                    help="Discovery URI for rendezvous (e.g. redis://127.0.0.1:6379)")

@@ -777,15 +777,48 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
   }
 
   for (int i = 0; i < num_devices_; i++) {
-    // Create listening sockets
-    create_listen_socket(&test_listen_fds_[i], kTestListenPort + i);
+    create_listen_socket(&test_listen_fds_[i]);
   }
 }
 #endif
 
-bool RDMAEndpoint::initialize_engine_by_dev(int dev) {
+int try_bind_listen_socket(int* sock_fd, int base_port,
+                           int max_attempts = 100) {
+  struct sockaddr_in addr;
+  int port = base_port;
+
+  for (int attempt = 0; attempt < max_attempts; ++attempt, ++port) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+      perror("socket");
+      return -1;
+    }
+
+    int opt = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons(port);
+
+    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) == 0) {
+      if (listen(fd, 128) != 0) {
+        perror("listen");
+        close(fd);
+        return -1;
+      }
+      *sock_fd = fd;
+      return port;
+    }
+    close(fd);
+  }
+  return -1;
+}
+
+bool RDMAEndpoint::initialize_engine_by_dev(int dev,
+                                            bool use_test_listen_port = false) {
   static std::vector<std::once_flag> flags_per_dev_(num_devices_);
-  std::call_once(flags_per_dev_[dev], [this, dev]() {
+  std::call_once(flags_per_dev_[dev], [this, dev, use_test_listen_port]() {
     int start_engine_idx = dev * num_engines_per_dev_;
     int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
     int numa_node = RDMAFactory::get_factory_dev(dev)->numa_node;
@@ -827,7 +860,14 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev) {
             }));
       }
     }
-    create_listen_socket(&test_listen_fds_[dev], kTestListenPort + dev);
+    if (use_test_listen_port) {
+      create_listen_socket(&test_listen_fds_[dev], kTestListenPort + dev);
+      port_ = kTestListenPort + dev;
+    } else {
+      port_ = create_listen_socket(&test_listen_fds_[dev]);
+      DCHECK(port_ >= 0) << "Failed to bind after trying many ports!";
+    }
+    printf("Listening on port %d\n", port_);
   });
 
   return true;
@@ -1067,6 +1107,15 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   fcntl(bootstrap_fd, F_SETFL, O_NONBLOCK);
   int flag = 1;
   setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
+  uint16_t local_port = 0;
+  {
+    struct sockaddr_in local_addr_check = {};
+    socklen_t addr_len = sizeof(local_addr_check);
+    ret = getsockname(bootstrap_fd, (struct sockaddr*)&local_addr_check,
+                      &addr_len);
+    DCHECK(ret == 0) << "getsockname() failed";
+    local_port = ntohs(local_addr_check.sin_port);
+  }
 
   bool first_call = false;
   bool should_install_ctx = false;
@@ -1076,8 +1125,9 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   ret = send_message(bootstrap_fd, buf, sizeof(int) * 2);
   DCHECK(ret == sizeof(int) * 2) << "uccl_connect: send_message()";
 
-  bool is_leader = is_local_leader(dev, local_gpuidx, factory_dev->local_ip_str,
-                                   remote_dev, remote_gpuidx, remote_ip);
+  bool is_leader =
+      is_local_leader(dev, local_gpuidx, factory_dev->local_ip_str, local_port,
+                      remote_dev, remote_gpuidx, remote_ip, remote_port);
 
   peer_map_mu_[dev]->lock();
   auto it = peer_map_[dev].find({remote_ip, remote_dev});
@@ -1179,6 +1229,16 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   DCHECK(factory_dev) << "uccl_accept: get_factory_dev()";
 
   bootstrap_fd = accept(listen_fd, (struct sockaddr*)&cli_addr, &clien);
+
+  uint16_t local_port;
+  {
+    struct sockaddr_in local_addr = {};
+    socklen_t len = sizeof(local_addr);
+    int ret = getsockname(bootstrap_fd, (struct sockaddr*)&local_addr, &len);
+    DCHECK(ret == 0) << "getsockname() failed";
+    local_port = ntohs(local_addr.sin_port);
+  }
+
   DCHECK(bootstrap_fd >= 0) << "uccl_accept: accept()";
   remote_ip = ip_to_str(cli_addr.sin_addr.s_addr);
 
@@ -1196,8 +1256,10 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   DCHECK(ret == sizeof(int) * 2) << "uccl_accept: receive_message()";
   *remote_dev = buf[0];
   remote_gpuidx = buf[1];
-  bool is_leader = is_local_leader(dev, local_gpuidx, factory_dev->local_ip_str,
-                                   *remote_dev, remote_gpuidx, remote_ip);
+  uint16_t remote_port = ntohs(cli_addr.sin_port);
+  bool is_leader =
+      is_local_leader(dev, local_gpuidx, factory_dev->local_ip_str, local_port,
+                      *remote_dev, remote_gpuidx, remote_ip, remote_port);
   peer_map_mu_[dev]->lock();
   auto it = peer_map_[dev].find({remote_ip, *remote_dev});
   if (it == peer_map_[dev].end()) {
@@ -1690,6 +1752,7 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
 
   context_ = factory_dev->context;
   gid_idx_ = factory_dev->gid_idx;
+  is_roce_ = factory_dev->is_roce;
 
   port_entropy_ = ucclParamPORT_ENTROPY();
   dp_qps_.resize(port_entropy_);
@@ -1702,7 +1765,7 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
 
   remote_ctx_.dest_ah = util_rdma_create_ah(
       factory_dev->pd, factory_dev->ib_port_num, remote_ctx_.remote_gid,
-      remote_ctx_.remote_port_attr, RDMAFactory::is_roce(dev));
+      remote_ctx_.remote_port_attr, is_roce_, gid_idx_);
   UCCL_INIT_CHECK(remote_ctx_.dest_ah != nullptr, "util_rdma_create_ah failed");
 
   mtu_bytes_ =
@@ -1861,12 +1924,15 @@ int RDMAContext::supply_rx_buff(struct ucclRequest* ureq) {
   auto* elems = ureq->recv.elems;
   DCHECK(elems);
 
-  auto req = alloc_recvreq();
+  auto* flow = reinterpret_cast<UcclFlow*>(ureq->context);
+  auto* subflow = flow->sub_flows_[engine_offset_];
+
+  auto req = subflow->alloc_recvreq();
   if (req == nullptr) return -1;
   DCHECK(ureq->n == 1);
   for (int i = 0; i < ureq->n; i++) {
     // For sender to encode the request id in the immediate data.
-    elems[i].rid = get_recvreq_id(req);
+    elems[i].rid = subflow->get_recvreq_id(req);
   }
 
   struct ibv_send_wr* bad_wr;
@@ -1878,7 +1944,7 @@ int RDMAContext::supply_rx_buff(struct ucclRequest* ureq) {
   req->fin_msg = 0;
 
   UCCL_LOG_IO << "Really supply rx buff by posting buffers to FIFO QP, rid#"
-              << get_recvreq_id(req);
+              << subflow->get_recvreq_id(req);
 
   return 0;
 }
@@ -2776,7 +2842,7 @@ void RDMAContext::try_update_csn(SubUcclFlow* subflow) {
       uccl_wakeup(req->ureq->poll_ctx);
       UCCL_LOG_IO << "Rx message complete.";
       // Free the request.
-      free_recvreq(req);
+      subflow->free_recvreq(req);
     }
 
     subflow->rxtracking.ready_csn_.erase(
@@ -2820,7 +2886,7 @@ void RDMAContext::uc_rx_rtx_chunk(struct ibv_wc* wc, uint64_t chunk_addr) {
 
   // Locate request by rid
   DCHECK(rid < kMaxReq);
-  auto req = get_recvreq_by_id(rid);
+  auto req = subflow->get_recvreq_by_id(rid);
   if (req->type != RecvRequest::RECV || req->ureq->context != flow) {
     UCCL_LOG_IO << "Can't find corresponding request or this request is "
                    "invalid for this retransmission chunk. Dropping. "
@@ -2930,7 +2996,7 @@ void RDMAContext::uc_rx_rtx_chunk(struct ibv_cq_ex* cq_ex,
 
   // Locate request by rid
   DCHECK(rid < kMaxReq);
-  auto req = get_recvreq_by_id(rid);
+  auto req = subflow->get_recvreq_by_id(rid);
   if (req->type != RecvRequest::RECV || req->ureq->context != flow) {
     UCCL_LOG_IO << "Can't find corresponding request or this request is "
                    "invalid for this retransmission chunk. Dropping. "
@@ -3032,7 +3098,7 @@ void RDMAContext::rc_rx_chunk(uint32_t byte_len, uint32_t wc_imm_data) {
 
   // Locate request by rid
   DCHECK(rid < kMaxReq);
-  auto req = get_recvreq_by_id(rid);
+  auto req = subflow->get_recvreq_by_id(rid);
   DCHECK(req->ureq);
 
   if (req->type != RecvRequest::RECV || req->ureq->context != flow) {
@@ -3079,7 +3145,7 @@ void RDMAContext::rc_rx_chunk(struct ibv_cq_ex* cq_ex) {
 
   // Locate request by rid
   DCHECK(rid < kMaxReq);
-  auto req = get_recvreq_by_id(rid);
+  auto req = subflow->get_recvreq_by_id(rid);
   DCHECK(req->ureq);
 
   if (req->type != RecvRequest::RECV || req->ureq->context != flow) {
@@ -3130,7 +3196,7 @@ void RDMAContext::uc_rx_chunk(struct ibv_wc* wc) {
 
   // Locate request by rid
   DCHECK(rid < kMaxReq);
-  auto req = get_recvreq_by_id(rid);
+  auto req = subflow->get_recvreq_by_id(rid);
   if (req->type != RecvRequest::RECV || req->ureq->context != flow) {
     UCCL_LOG_IO << "Can't find corresponding request or this request is "
                    "invalid for this chunk. Dropping. ";
@@ -3235,7 +3301,7 @@ void RDMAContext::uc_rx_chunk(struct ibv_cq_ex* cq_ex) {
 
   // Locate request by rid
   DCHECK(rid < kMaxReq);
-  auto req = get_recvreq_by_id(rid);
+  auto req = subflow->get_recvreq_by_id(rid);
   if (req->type != RecvRequest::RECV || req->ureq->context != flow) {
     UCCL_LOG_IO << "Can't find corresponding request or this request is "
                    "invalid for this chunk. Dropping. ";

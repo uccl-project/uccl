@@ -6,8 +6,8 @@ Our results show severe interference between incast traffic and permutation traf
 ## Run benchmark
 
 0. Clone this repo on a master node.
-1. Build `uccl/rdma` per its [README](../README.md). 
-2. For Permutation Traffic, generate `matrix.txt` using the `gen_permutation_full_bisection.py` script
+1. Build `uccl/rdma` per its [README](../../README.md). 
+2. For Permutation Traffic, generate `matrix.txt` using `python gen_permutation_full_bisection.py matrix.txt 16 4`
 3. Run `sync_repo.sh` to copy this repo to all nodes. It will also compile `uccl/rdma/incast`.
 4. ​Run the test by executing:
 

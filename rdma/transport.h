@@ -122,13 +122,19 @@ class IMMData {
  public:
   // HINT: Indicates whether the last chunk of a message.
   // CSN:  Chunk Sequence Number.
-  // RID:  Request ID.
-  // FID:  Flow Index.
+  // RID:  Request ID (4 bits).
+  // FID:  Flow Index (11 bits).
   // High-----------------32bit------------------Low
-  //  | HINT |  RESERVED  |  CSN  |  RID  |  FID  |
-  //    1bit      8bit       8bit    7bit    8bit
+  //  | HINT |  RESERVED  |  CSN  |  RID  |   FID   |
+  //    1bit      8bit       8bit    4bit    11bit
+  // Bit layout:
+  // [31]      HINT (1 bit)
+  // [30:23]   RESERVED (8 bits)
+  // [22:15]   CSN (8 bits, or UINT_CSN_BIT)
+  // [14:11]   RID (4 bits)
+  // [10:0]    FID (11 bits)
   constexpr static int kFID = 0;
-  constexpr static int kRID = 8;
+  constexpr static int kRID = 11;
   constexpr static int kCSN = 15;
   constexpr static int kRESERVED = kCSN + UINT_CSN_BIT;
   constexpr static int kHINT = kRESERVED + 8;
@@ -141,9 +147,9 @@ class IMMData {
 
   inline uint32_t GetCSN(void) { return (imm_data_ >> kCSN) & UINT_CSN_MASK; }
 
-  inline uint32_t GetRID(void) { return (imm_data_ >> kRID) & 0x7F; }
+  inline uint32_t GetRID(void) { return (imm_data_ >> kRID) & 0xF; }
 
-  inline uint32_t GetFID(void) { return (imm_data_ >> kFID) & 0xFF; }
+  inline uint32_t GetFID(void) { return (imm_data_ >> kFID) & 0x7FF; }
 
   inline void SetHINT(uint32_t hint) { imm_data_ |= (hint & 0x1) << kHINT; }
 
@@ -155,9 +161,9 @@ class IMMData {
     imm_data_ |= (csn & UINT_CSN_MASK) << kCSN;
   }
 
-  inline void SetRID(uint32_t rid) { imm_data_ |= (rid & 0x7F) << kRID; }
+  inline void SetRID(uint32_t rid) { imm_data_ |= (rid & 0xF) << kRID; }
 
-  inline void SetFID(uint32_t fid) { imm_data_ |= (fid & 0xFF) << kFID; }
+  inline void SetFID(uint32_t fid) { imm_data_ |= (fid & 0x7FF) << kFID; }
 
   inline uint32_t GetImmData(void) { return imm_data_; }
 
@@ -207,11 +213,6 @@ class RDMAContext {
   // Timer manager for RTO.
   TimerManager* rto_;
 
-  // Track outstanding RECV requests.
-  // When a flow wants to receive message, it should allocate a request from
-  // this pool.
-  struct RecvRequest reqs_[kMaxReq];
-
   // Track installed flows.
   // When a flow is installed, it should be added to this table.
   // Flows are split into two tables: sender and receiver.
@@ -257,6 +258,9 @@ class RDMAContext {
   // GID Index of the device
   int gid_idx_;
 
+  // Whether RoCE or IB.
+  bool is_roce_;
+
   // Link Speed of the device
   double link_speed_ = 0;
 
@@ -282,30 +286,7 @@ class RDMAContext {
 
   LIST_HEAD(ack_list_);
 
-  inline bool is_roce() { return (gid_idx_ == ucclParamROCE_GID_IDX()); }
-  // Get an unused request, if no request is available, return nullptr.
-  inline struct RecvRequest* alloc_recvreq(void) {
-    for (int i = 0; i < kMaxReq; i++) {
-      auto* req = &reqs_[i];
-      if (req->type == RecvRequest::UNUSED) {
-        return req;
-      }
-    }
-    return nullptr;
-  }
-
-  // Get the ID of the request.
-  inline uint64_t get_recvreq_id(struct RecvRequest* req) {
-    return req - reqs_;
-  }
-
-  // Get the request by ID.
-  inline struct RecvRequest* get_recvreq_by_id(int id) { return &reqs_[id]; }
-
-  // Free the request.
-  inline void free_recvreq(struct RecvRequest* req) {
-    memset(req, 0, sizeof(struct RecvRequest));
-  }
+  inline bool is_roce() { return is_roce_; }
 
  public:
   // 256-bit SACK bitmask => we can track up to 256 packets
@@ -986,6 +967,7 @@ class RDMAEndpoint {
 
   // RDMA devices.
   int num_devices_;
+  int port_;
 
   int num_engines_per_dev_;
   // Per-engine communication channel
@@ -1030,12 +1012,18 @@ class RDMAEndpoint {
   ~RDMAEndpoint();
 
   uint32_t get_num_devices() { return num_devices_; }
+  int get_port() {
+    if (port_ == 0) {
+      throw std::runtime_error("Error: port_ is not set.");
+    }
+    return port_;
+  }
 
   void initialize_resources(int total_num_engines);
 
   void cleanup_resources();
 
-  bool initialize_engine_by_dev(int dev);
+  bool initialize_engine_by_dev(int dev, bool use_test_listen_port);
 
   /// For testing easily.
   ConnID test_uccl_connect(int dev, int gpu, int remote_dev, int remote_gpu,
@@ -1060,18 +1048,26 @@ class RDMAEndpoint {
   ConnID uccl_accept(int dev, int listen_fd, int local_gpuidx,
                      std::string& remote_ip, int* remote_dev);
 
-  bool is_local_leader(int ldev, int lgpu, std::string lip, int rdev, int rgpu,
-                       std::string rip) {
-    if (str_to_ip(lip.c_str()) < str_to_ip(rip.c_str())) {
-      return true;
-    } else if (str_to_ip(lip.c_str()) == str_to_ip(rip.c_str())) {
-      if (ldev < rdev)
-        return true;
-      else if (ldev == rdev) {
-        if (lgpu < rgpu) return true;
-        DCHECK(lgpu != rgpu);
-      }
-    }
+  bool is_local_leader(int ldev, int lgpu, std::string lip, uint16_t lport,
+                       int rdev, int rgpu, std::string rip, uint16_t rport) {
+    auto lip_int = str_to_ip(lip.c_str());
+    auto rip_int = str_to_ip(rip.c_str());
+
+    if (lip_int < rip_int) return true;
+    if (lip_int > rip_int) return false;
+
+    if (ldev < rdev) return true;
+    if (ldev > rdev) return false;
+
+    if (lgpu < rgpu) return true;
+    if (lgpu > rgpu) return false;
+
+    // This is to handle an edge case where both p2p connections run on the same
+    // GPU (debug.)
+    if (lport < rport) return true;
+    if (lport > rport) return false;
+
+    // If all else is equal (very rare), default to false (non-leader)
     return false;
   }
 

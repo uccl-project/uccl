@@ -424,6 +424,35 @@ class SubUcclFlow {
   // RTT scoreboard for each path.
   std::vector<double> scoreboard_rtt_;
 
+  // Track outstanding RECV requests.
+  // When a flow wants to receive message, it should allocate a request from
+  // this pool.
+  struct RecvRequest reqs_[kMaxReq];
+
+  // Get an unused request, if no request is available, return nullptr.
+  inline struct RecvRequest* alloc_recvreq(void) {
+    for (int i = 0; i < kMaxReq; i++) {
+      auto* req = &reqs_[i];
+      if (req->type == RecvRequest::UNUSED) {
+        return req;
+      }
+    }
+    return nullptr;
+  }
+
+  // Get the ID of the request.
+  inline uint64_t get_recvreq_id(struct RecvRequest* req) {
+    return req - reqs_;
+  }
+
+  // Get the request by ID.
+  inline struct RecvRequest* get_recvreq_by_id(int id) { return &reqs_[id]; }
+
+  // Free the request.
+  inline void free_recvreq(struct RecvRequest* req) {
+    memset(req, 0, sizeof(struct RecvRequest));
+  }
+
   inline void update_scoreboard_rtt(uint64_t newrtt_tsc, uint32_t qpidx) {
     scoreboard_rtt_[qpidx] = (1 - kPPEwmaAlpha) * scoreboard_rtt_[qpidx] +
                              kPPEwmaAlpha * to_usec(newrtt_tsc, freq_ghz);
@@ -491,7 +520,8 @@ struct FactoryDevice {
   struct ibv_port_attr port_attr;
 
   uint8_t ib_port_num;
-  uint8_t gid_idx;
+  int gid_idx;
+  bool is_roce;
   union ibv_gid gid;
 
   double link_bw;
@@ -532,7 +562,7 @@ class RDMAFactory {
 
   static inline bool is_roce(int dev) {
     DCHECK(dev >= 0 && dev < rdma_ctl->devices_.size());
-    return (rdma_ctl->devices_[dev].gid_idx == ucclParamROCE_GID_IDX());
+    return rdma_ctl->devices_[dev].is_roce;
   }
 
   std::string to_string(void) const;

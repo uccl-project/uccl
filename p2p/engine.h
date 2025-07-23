@@ -62,9 +62,12 @@ class Endpoint {
    *   remote_gpu_idx: the GPU index of the remote server
    * output:
    *   conn_id: the ID of the connection
+   *   remote_port: the port of the remote server (optional)
    */
   bool connect(std::string const& ip_addr, int const& remote_gpu_idx,
-               uint64_t& conn_id);
+               uint64_t& conn_id, int remote_port);
+
+  bool connect(py::bytes const& metadata, uint64_t& conn_id);
 
   /*
    * Accept an incoming connection via TCP, then build RDMA QP connections.
@@ -168,6 +171,8 @@ class Endpoint {
 
   /** Returns conn_id for @rank, or UINT64_MAX if unknown. */
   uint64_t conn_id_of_rank(int rank) const;
+
+  std::vector<uint8_t> get_endpoint_metadata();
 
  private:
   /** Rank‑indexed view of established connections (read‑only). */

@@ -31,7 +31,7 @@ rm -r dist || true
 rm -r uccl/lib || true
 rm -r build || true
 WHEEL_DIR="wheelhouse-${TARGET}"
-# rm -r "${WHEEL_DIR}" || true
+rm -r "${WHEEL_DIR}" || true
 mkdir -p "${WHEEL_DIR}"
 
 # If TARGET=all, orchestrate builds for each backend and package **all** shared libraries
@@ -46,17 +46,20 @@ if [[ $TARGET == "all" ]]; then
   cp uccl/lib/*.so "${TEMP_LIB_DIR}/" || true
 
   echo "### Building ROCm backend and collecting its shared library ###"
-  if [[ "$ARCH" != "aarch64" ]]; then
+  if [[ "$ARCH" == "aarch64" ]]; then
+    echo "Skipping ROCm build on Arm64."
+  else
     "$0" rocm
     cp uccl/lib/*.so "${TEMP_LIB_DIR}/" || true
-  else
-    echo "Skipping ROCm build on Arm64."
-    exit 0
   fi
 
   echo "### Building EFA backend and collecting its shared library ###"
-  "$0" efa
-  cp uccl/lib/*.so "${TEMP_LIB_DIR}/" || true
+  if [[ "$ARCH" == "aarch64" ]]; then
+    echo "Skipping EFA build on Arm64."
+  else
+    "$0" efa
+    cp uccl/lib/*.so "${TEMP_LIB_DIR}/" || true
+  fi
 
   echo "### Building Grace Hopper backend and collecting its shared library ###"
   "$0" gh
@@ -158,13 +161,17 @@ else
 
       cp ${TARGET_SO} uccl/lib/
 
-      echo "[container] Building uccl.p2p Python binding..."
-      cd p2p
-      make clean && make -j$(nproc)
-      rm -f ../uccl/p2p*.so
-      mv p2p*.so ../uccl
-
-      cd ../
+      # Not supporting p2p for EFA and ROCm now.
+      if [[ "$TARGET" == cuda || "$TARGET" == gh ]]; then
+        echo "[container] Building uccl.p2p Python binding..."
+        cd p2p
+        make clean && make -j$(nproc)
+        rm -f ../uccl/p2p*.so
+        mv p2p*.so ../uccl
+        cd ../
+      else
+        rm -f uccl/p2p*.so
+      fi
 
       if [[ "$TARGET" == efa ]]; then
         cp thirdparty/nccl-sg/build/lib/libnccl.so uccl/lib/libnccl-efa.so
