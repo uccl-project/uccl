@@ -113,7 +113,7 @@ def initialize_xfer_metadata_mc(
 
     return transfer_handle
 
-def initialize_xfer_metadata(
+def initialize_xfer_metadata_ucx(
         role: str,
         operation: str, 
         agent: nixl_agent, 
@@ -180,7 +180,7 @@ def create_nixl_agent_mc(role: str, dataset: np.ndarray, zmq_socket):
 
     return agent, register_descs
 
-def create_nixl_agent(role: str, dataset):
+def create_nixl_agent_ucx(role: str, dataset):
     """
     Create Nixl agents based on the role.
     """
@@ -218,7 +218,7 @@ def start_transfer_mc(
             if transfer_done.decode("utf-8") == uid:
                 break;
 
-def start_transfer(
+def start_transfer_ucx(
         role: str,
         agent: nixl_agent,
         transfer_handle,
@@ -262,16 +262,16 @@ def start_agent_pair(size, args):
     zmq_socket = None
     
     print(f"Backend : {args.backend}")
-    if args.backend in "mooncake":
+    if args.backend == "mooncake":
         zmq_socket = init_zmq(args.remote_ip, listen_port, args.role)
     try:
         dataset = create_dataset(args.role, size, args.device, args.local_gpu_idx)
-        if args.backend in "mooncake":
+        if args.backend == "mooncake":
             agent, register_descs = create_nixl_agent_mc(args.role, dataset, zmq_socket)
         else:
-            agent, register_descs = create_nixl_agent(args.role, dataset)
+            agent, register_descs = create_nixl_agent_ucx(args.role, dataset)
 
-        if args.backend in "mooncake":
+        if args.backend == "mooncake":
             transfer_handle = initialize_xfer_metadata_mc(
                 args.role,
                 op,
@@ -280,7 +280,7 @@ def start_agent_pair(size, args):
                 zmq_socket
         )
         else :
-            transfer_handle = initialize_xfer_metadata(
+            transfer_handle = initialize_xfer_metadata_ucx(
                 args.role,
                 op,
                 agent,
@@ -292,7 +292,7 @@ def start_agent_pair(size, args):
         total_size = 0
         start = time.perf_counter()
 
-        if args.backend in "mooncake":
+        if args.backend == "mooncake":
             for n in range(args.iters):
                 start_transfer_mc(
                     args.role,
@@ -303,7 +303,7 @@ def start_agent_pair(size, args):
                 total_size += size
         else:
             for n in range(args.iters):
-                start_transfer(
+                start_transfer_ucx(
                     args.role,
                     agent,
                     transfer_handle,
