@@ -5,6 +5,7 @@ import sys
 import time
 from typing import List
 import traceback
+import zmq
 import io
 import sys
 
@@ -20,6 +21,7 @@ except ImportError as exc:
     sys.stderr.write("Failed to import torch\n")
     raise
 
+listen_port = 9000
 
 def create_dataset(role, size, device, gpu_idx=0):
     """
@@ -55,11 +57,66 @@ def create_dataset(role, size, device, gpu_idx=0):
 
     return dataset
 
+def init_zmq(host, port, role):
+    """
+    Initialize the ZMQ socket for communication.
+    """
+    context = zmq.Context()
+    zmq_socket = context.socket(zmq.PAIR)
+    if "server" in role:
+        zmq_socket.bind(f"tcp://{host}:{port}")
+    else:
+        zmq_socket.connect(f"tcp://{host}:{port}")
+        # Ensure the socket is ready to receive messages
+        zmq_socket.setsockopt(zmq.LINGER, 0)
 
-def initialize_xfer_metadata(
+    return zmq_socket
+
+def initialize_xfer_metadata_mc(
     role: str,
-    operation: str,
-    agent: nixl_agent,
+    operation: str, 
+    agent: nixl_agent, 
+    register_descs,
+    zmq_socket
+):
+    """
+    Initialize transfer metadata with zmq sockets for Mooncake
+    """
+    local_xfer_descs = register_descs.trim()
+    remote_xfer_descs = None
+    transfer_handle = None
+
+    if "server" in role:
+        # Wait until there is a message from the creator
+        msg = zmq_socket.recv().decode("utf-8")
+        if msg == "START":
+            pass
+        else:
+            print(f"{role} received unexpected message: {msg}")
+            zmq_socket.close()
+            exit(0)
+
+        # send the xfer descs to the peer
+        zmq_socket.send(agent.get_serialized_descs(local_xfer_descs))
+
+    elif "client" in role:
+        zmq_socket.send("START".encode("utf-8"))
+
+        # Wait until there is a message from the peer
+        msg = zmq_socket.recv()
+        remote_xfer_descs = agent.deserialize_descs(msg)
+
+        uid = "TRANSFER"
+        transfer_handle = agent.initialize_xfer(
+                operation, local_xfer_descs, remote_xfer_descs, "server"
+            )
+
+    return transfer_handle
+
+def initialize_xfer_metadata_ucx(
+    role: str,
+    operation: str, 
+    agent: nixl_agent, 
     register_descs,
     server_ip,
     server_port,
@@ -99,24 +156,70 @@ def initialize_xfer_metadata(
 
     return transfer_handle
 
+def create_nixl_agent_mc(role: str, dataset, zmq_socket):
+    """
+    Create Nixl agents based on the role with Mooncake backend
+    """
+    config = nixl_agent_config(backends=["Mooncake"])
+    agent = nixl_agent(role, config)
+    descs = agent.get_reg_descs(dataset)
+    register_descs = agent.register_memory(descs)
+    local_meta = agent.get_agent_metadata()
 
-def create_nixl_agent(role: str, dataset):
+    if "client" in role:
+        zmq_socket.send(local_meta)
+        remote_meta = zmq_socket.recv()
+        agent.add_remote_agent(remote_meta).decode("utf-8")
+    elif "server" in role:
+        remote_meta = zmq_socket.recv()
+        agent.add_remote_agent(remote_meta).decode("utf-8")
+        zmq_socket.send(local_meta)
+
+    return agent, register_descs
+
+def create_nixl_agent_ucx(role: str, dataset):
     """
     Create Nixl agents based on the role.
     """
-    port = 9000
-    listen_port = port if role == "server" else 0
-    config = nixl_agent_config(True, True, listen_port)
+    port = listen_port
+    if role == "client":
+        port = 0
+    config = nixl_agent_config(True, True, port)
     agent = nixl_agent(role, config)
     descs = agent.get_reg_descs(dataset)
     register_descs = agent.register_memory(descs)
     return agent, register_descs
 
-
-def start_transfer(
+def start_transfer_mc(
     role: str,
     agent: nixl_agent,
     transfer_handle,
+    zmq_socket,
+    uid="TRANSFER"
+):
+    if "client" in role:
+        state = agent.transfer(transfer_handle)
+        if state == "ERR":
+            print("Error in transfer")
+        while True:
+            state = agent.check_xfer_state(transfer_handle)
+            if state == "DONE":
+                zmq_socket.send(uid.encode("utf-8"))
+                break
+            elif state == "ERR":
+                print("Error in transfer")
+                break
+    else:
+        while True:
+            transfer_done = zmq_socket.recv()
+            if transfer_done.decode("utf-8") == uid:
+                break;
+
+def start_transfer_ucx(
+    role: str,
+    agent: nixl_agent,
+    transfer_handle,
+    uid="TRANSFER"
 ):
     if "client" in role:
         state = agent.transfer(transfer_handle)
@@ -151,36 +254,47 @@ def cleanup_agent(
 ):
     agent.remove_remote_agent(agent.name)
 
-
 def start_agent_pair(size, args):
-    op = "WRITE"
-    port = 9000
-
+    op = 'WRITE'
+    zmq_socket = None
+    
+    print(f"Backend : {args.backend}")
+    if args.backend == "mooncake":
+        zmq_socket = init_zmq(args.remote_ip, listen_port, args.role)
     try:
-        dataset = create_dataset(
-            args.role, size, args.device, args.local_gpu_idx
-        )
+        dataset = create_dataset(args.role, size, args.device, args.local_gpu_idx)
+        if args.backend == "mooncake":
+            agent, register_descs = create_nixl_agent_mc(args.role, dataset, zmq_socket)
+        else:
+            agent, register_descs = create_nixl_agent_ucx(args.role, dataset)
 
-        # Getting rid of the annoying output from NIXL init every time.
-        save_stdout = sys.stdout
-        sys.stdout = io.StringIO()
-        agent, register_descs = create_nixl_agent(args.role, dataset)
-        sys.stdout = save_stdout
-
-        transfer_handle = initialize_xfer_metadata(
-            args.role, op, agent, register_descs, args.remote_ip, port
-        )
-
+        if args.backend == "mooncake":
+            transfer_handle = initialize_xfer_metadata_mc(
+                args.role, op, agent, register_descs, zmq_socket
+            )
+        else :
+            transfer_handle = initialize_xfer_metadata_ucx(
+                args.role, op, agent, register_descs, args.remote_ip, listen_port
+            )
+        
         total_size = 0
         start = time.perf_counter()
-        for n in range(args.iters):
-            start_transfer(
-                args.role,
-                agent,
-                transfer_handle,
-            )
-            total_size += size
+
+        if args.backend == "mooncake":
+            for n in range(args.iters):
+                start_transfer_mc(
+                    args.role, agent, transfer_handle, zmq_socket
+                )
+                total_size += size
+        else:
+            for n in range(args.iters):
+                start_transfer_ucx(
+                    args.role, agent, transfer_handle,
+                )
+                total_size += size
+
         end = time.perf_counter()
+
         transfer_time = end - start
         gbps = (total_size * 8) / transfer_time / 1e9  # bits per second → Gbps
         gb_sec = total_size / transfer_time / 1e9  # bytes per second → GB/s
@@ -204,6 +318,8 @@ def start_agent_pair(size, args):
             register_descs,
         )
         cleanup_agent(agent)
+        if args.backend == "mooncake":
+            zmq_socket.close()
 
 
 def _pretty_size(num_bytes: int) -> str:
@@ -277,6 +393,12 @@ def main():
         type=int,
         default=1,
         help="Number of key-value blocks to send/recv in a single call",
+    )
+    p.add_argument(
+        "--backend",
+        choices=["ucx", "mooncake"],
+        default="ucx",
+        help="Backend that nixl will use for the data transfer",
     )
     args = p.parse_args()
 
