@@ -35,7 +35,8 @@ UCCL_PARAM(CHUNK_SIZE_KB, "CHUNK_SIZE_KB", 64);
 
 static constexpr uint32_t MAX_PEER = 256;
 // Maximum number of flows (one-way) on each engine.
-static constexpr uint32_t MAX_FLOW = 256;
+static constexpr uint32_t MAX_FLOW =
+    2048;  // This should be aligned with FID in IMMData
 
 static uint32_t NUM_CPUS = std::thread::hardware_concurrency();
 // Each dev use [ENGINE_CPU_START_LIST[dev], ENGINE_CPU_START_LIST[dev] +
@@ -163,7 +164,8 @@ static constexpr uint32_t kMaxSge = 2;
 // Maximum number of outstanding receive messages in one recv request.
 static constexpr uint32_t kMaxRecv = 1;
 // Maximum number of outstanding receive requests in one engine.
-static constexpr uint32_t kMaxReq = 128;
+static constexpr uint32_t kMaxReq =
+    16;  // This should be aligned with RID in IMMData
 // Maximum number of WQEs in SRQ (Shared Receive Queue).
 static constexpr uint32_t kMaxSRQ = 16 * kMaxReq;
 // Maximum number of chunks can be transmitted from timing wheel in one loop.

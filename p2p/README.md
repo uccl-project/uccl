@@ -189,11 +189,7 @@ If you see errors like `message size truncated`, it is likely caused by NCCL ver
 LD_PRELOAD=<path to libnccl.so.2>
 ```
 
-To benchmark dual direction transfer: 
-```bash
-python benchmark_nccl_dual.py --role server --device gpu --local-gpu-idx 0
-python benchmark_nccl_dual.py --role client --device gpu --local-gpu-idx 0 --remote-ip <Server IP>
-```
+To benchmark dual direction transfer, you can run `benchmark_nccl_dual.py` with the same commands as above. 
 
 
 ## Usage Examples

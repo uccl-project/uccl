@@ -67,6 +67,8 @@ class Endpoint {
   bool connect(std::string const& ip_addr, int const& remote_gpu_idx,
                uint64_t& conn_id, int remote_port);
 
+  bool connect(py::bytes const& metadata, uint64_t& conn_id);
+
   /*
    * Accept an incoming connection via TCP, then build RDMA QP connections.
    *

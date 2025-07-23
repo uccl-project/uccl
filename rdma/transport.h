@@ -122,13 +122,19 @@ class IMMData {
  public:
   // HINT: Indicates whether the last chunk of a message.
   // CSN:  Chunk Sequence Number.
-  // RID:  Request ID.
-  // FID:  Flow Index.
+  // RID:  Request ID (4 bits).
+  // FID:  Flow Index (11 bits).
   // High-----------------32bit------------------Low
-  //  | HINT |  RESERVED  |  CSN  |  RID  |  FID  |
-  //    1bit      8bit       8bit    7bit    8bit
+  //  | HINT |  RESERVED  |  CSN  |  RID  |   FID   |
+  //    1bit      8bit       8bit    4bit    11bit
+  // Bit layout:
+  // [31]      HINT (1 bit)
+  // [30:23]   RESERVED (8 bits)
+  // [22:15]   CSN (8 bits, or UINT_CSN_BIT)
+  // [14:11]   RID (4 bits)
+  // [10:0]    FID (11 bits)
   constexpr static int kFID = 0;
-  constexpr static int kRID = 8;
+  constexpr static int kRID = 11;
   constexpr static int kCSN = 15;
   constexpr static int kRESERVED = kCSN + UINT_CSN_BIT;
   constexpr static int kHINT = kRESERVED + 8;
@@ -141,9 +147,9 @@ class IMMData {
 
   inline uint32_t GetCSN(void) { return (imm_data_ >> kCSN) & UINT_CSN_MASK; }
 
-  inline uint32_t GetRID(void) { return (imm_data_ >> kRID) & 0x7F; }
+  inline uint32_t GetRID(void) { return (imm_data_ >> kRID) & 0xF; }
 
-  inline uint32_t GetFID(void) { return (imm_data_ >> kFID) & 0xFF; }
+  inline uint32_t GetFID(void) { return (imm_data_ >> kFID) & 0x7FF; }
 
   inline void SetHINT(uint32_t hint) { imm_data_ |= (hint & 0x1) << kHINT; }
 
@@ -155,9 +161,9 @@ class IMMData {
     imm_data_ |= (csn & UINT_CSN_MASK) << kCSN;
   }
 
-  inline void SetRID(uint32_t rid) { imm_data_ |= (rid & 0x7F) << kRID; }
+  inline void SetRID(uint32_t rid) { imm_data_ |= (rid & 0xF) << kRID; }
 
-  inline void SetFID(uint32_t fid) { imm_data_ |= (fid & 0xFF) << kFID; }
+  inline void SetFID(uint32_t fid) { imm_data_ |= (fid & 0x7FF) << kFID; }
 
   inline uint32_t GetImmData(void) { return imm_data_; }
 
@@ -206,11 +212,6 @@ class RDMAContext {
 
   // Timer manager for RTO.
   TimerManager* rto_;
-
-  // Track outstanding RECV requests.
-  // When a flow wants to receive message, it should allocate a request from
-  // this pool.
-  struct RecvRequest reqs_[kMaxReq];
 
   // Track installed flows.
   // When a flow is installed, it should be added to this table.
@@ -286,30 +287,6 @@ class RDMAContext {
   LIST_HEAD(ack_list_);
 
   inline bool is_roce() { return is_roce_; }
-
-  // Get an unused request, if no request is available, return nullptr.
-  inline struct RecvRequest* alloc_recvreq(void) {
-    for (int i = 0; i < kMaxReq; i++) {
-      auto* req = &reqs_[i];
-      if (req->type == RecvRequest::UNUSED) {
-        return req;
-      }
-    }
-    return nullptr;
-  }
-
-  // Get the ID of the request.
-  inline uint64_t get_recvreq_id(struct RecvRequest* req) {
-    return req - reqs_;
-  }
-
-  // Get the request by ID.
-  inline struct RecvRequest* get_recvreq_by_id(int id) { return &reqs_[id]; }
-
-  // Free the request.
-  inline void free_recvreq(struct RecvRequest* req) {
-    memset(req, 0, sizeof(struct RecvRequest));
-  }
 
  public:
   // 256-bit SACK bitmask => we can track up to 256 packets
