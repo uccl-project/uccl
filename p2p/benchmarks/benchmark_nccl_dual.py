@@ -75,10 +75,11 @@ def _run_server(args):
         start = time.perf_counter()
         total = 0
         for _ in range(args.iters):
-            handle = _recv(tensor, src=peer, async_op=True)
-            handle2 = _send(tensor2, dst=peer, async_op=True)
-            handle.wait()
-            handle2.wait()
+            recv_op = dist.P2POp(dist.irecv, tensor, peer)
+            send_op = dist.P2POp(dist.isend, tensor2, peer)
+            reqs = dist.batch_isend_irecv([send_op, recv_op])
+            for req in reqs:
+                req.wait()
             total += size
         torch.cuda.synchronize() if isinstance(tensor, torch.Tensor) else None
         elapsed = time.perf_counter() - start
@@ -101,10 +102,11 @@ def _run_client(args):
         start = time.perf_counter()
         total = 0
         for _ in range(args.iters):
-            handle = _send(tensor, dst=peer, async_op=True)
-            handle2 = _recv(tensor2, src=peer, async_op=True)
-            handle.wait()
-            handle2.wait()
+            send_op = dist.P2POp(dist.isend, tensor, peer)
+            recv_op = dist.P2POp(dist.irecv, tensor2, peer)
+            reqs = dist.batch_isend_irecv([send_op, recv_op])
+            for req in reqs:
+                req.wait()
             total += size
         torch.cuda.synchronize() if isinstance(tensor, torch.Tensor) else None
         elapsed = time.perf_counter() - start
