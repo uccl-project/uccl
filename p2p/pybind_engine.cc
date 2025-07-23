@@ -62,6 +62,15 @@ PYBIND11_MODULE(p2p, m) {
           "Send a data buffer", py::arg("conn_id"), py::arg("mr_id"),
           py::arg("ptr"), py::arg("size"))
       .def(
+          "read",
+          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
+             size_t size) {
+            return self.read(conn_id, mr_id, reinterpret_cast<void*>(ptr),
+                             size);
+          },
+          "Read data into a local buffer", py::arg("conn_id"), py::arg("mr_id"),
+          py::arg("ptr"), py::arg("size"))
+      .def(
           "recv",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
              size_t max_size) {

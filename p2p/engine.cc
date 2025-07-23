@@ -231,6 +231,67 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
   return true;
 }
 
+bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size) {
+  py::gil_scoped_release release;
+  DCHECK(size <= 0xffffffff) << "size must be less than 4 GB";
+
+  auto conn = conn_id_to_conn_[conn_id];
+  auto* mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+
+  uccl::ucclRequest ureq[kMaxInflightChunks];
+  bool done[kMaxInflightChunks] = {false};
+  size_t first_chunk = std::min<size_t>(size, kRTTBytes);
+  int rc;
+  do {
+    rc = ep_->uccl_read_async(
+        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle, dst,
+        first_chunk, &ureq[0]);
+    if (rc == -1) {
+      check_python_signals();
+      std::this_thread::yield();
+    }
+  } while (rc == -1);
+
+  while (!ep_->uccl_poll_ureq_once(&ureq[0])) {
+    check_python_signals();
+  }
+
+  char* cur_dst = static_cast<char*>(dst) + first_chunk;
+  size_t bytes_pulled = first_chunk;
+
+  int const ureq_max = (size + kChunkSize - 1) / kChunkSize;
+  int ureq_issued = 1;
+  int ureq_finished = 0;
+
+  while (ureq_finished < ureq_max) {
+    while (ureq_issued - ureq_finished < kMaxInflightChunks &&
+           bytes_pulled < size) {
+      const size_t chunk = std::min<size_t>(size - bytes_pulled, kChunkSize);
+      rc = ep_->uccl_read_async(
+          static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
+          cur_dst, chunk, &ureq[ureq_issued % kMaxInflightChunks]);
+
+      if (rc == -1) break;
+      cur_dst += chunk;
+      bytes_pulled += chunk;
+      done[ureq_issued % kMaxInflightChunks] = false;
+      ++ureq_issued;
+    }
+    check_python_signals();
+    for (int i = ureq_finished; i < ureq_issued; ++i) {
+      if (!done[i % kMaxInflightChunks] &&
+          ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+        done[i % kMaxInflightChunks] = true;
+      }
+    }
+    while (ureq_finished < ureq_issued &&
+           done[ureq_finished % kMaxInflightChunks]) {
+      ++ureq_finished;
+    }
+  }
+  return true;
+}
+
 bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
                     size_t size) {
   py::gil_scoped_release release;

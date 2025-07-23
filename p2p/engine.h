@@ -104,6 +104,8 @@ class Endpoint {
    */
   bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size);
 
+  bool read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size);
+
   /* Send a vector of data chunks. Blocking. */
   bool sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
              std::vector<void const*> data_v, std::vector<size_t> size_v,
