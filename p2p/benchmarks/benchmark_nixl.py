@@ -335,7 +335,7 @@ def start_agent_pair(size, args):
             register_descs,
         )
         cleanup_agent(agent)
-        if args.backend in "mooncake":
+        if args.backend == "mooncake":
             zmq_socket.close()
 
 def _pretty_size(num_bytes: int) -> str:
