@@ -39,7 +39,8 @@ void uccl_engine_destroy(uccl_engine_t* engine);
  * @param remote_port   The port of the remote server.
  * @return              Connection handle, or NULL on failure.
  */
-uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, const char* ip_addr, int remote_gpu_idx, int remote_port);
+uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
+                                 int remote_gpu_idx, int remote_port);
 
 /**
  * Accept an incoming connection (blocking).
@@ -49,7 +50,8 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, const char* ip_addr, int
  * @param remote_gpu_idx Pointer to store the GPU index of the remote server.
  * @return              Connection handle, or NULL on failure.
  */
-uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf, size_t ip_addr_buf_len, int* remote_gpu_idx);
+uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
+                                size_t ip_addr_buf_len, int* remote_gpu_idx);
 
 /**
  * Register a memory region for RDMA.
@@ -68,7 +70,8 @@ uccl_mr_t* uccl_engine_reg(uccl_engine_t* engine, void* data, size_t size);
  * @param size          Size of the data.
  * @return              0 on success, non-zero on failure.
  */
-int uccl_engine_send(uccl_conn_t* conn, uccl_mr_t* mr, const void* data, size_t size);
+int uccl_engine_send(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
+                     size_t size);
 
 /**
  * Receive data (blocking).
@@ -79,7 +82,8 @@ int uccl_engine_send(uccl_conn_t* conn, uccl_mr_t* mr, const void* data, size_t 
  * @param recv_size     Pointer to store the actual received size.
  * @return              0 on success, non-zero on failure.
  */
-int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t* mr, void* data, size_t max_size, size_t* recv_size);
+int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t* mr, void* data,
+                     size_t max_size, size_t* recv_size);
 
 /**
  * Cleanup connection.
@@ -96,4 +100,4 @@ void uccl_engine_mr_destroy(uccl_mr_t* mr);
 #ifdef __cplusplus
 }
 #endif  // __cplusplus
-// ... existing code ...
+        // ... existing code ...

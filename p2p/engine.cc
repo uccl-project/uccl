@@ -20,7 +20,6 @@ int const kMaxNumGPUs = 8;
 uint8_t gpu_to_dev[kMaxNumGPUs] = {0};
 std::once_flag glog_init_once;
 
-
 inline void check_python_signals() {
 #ifdef WITH_PYTHON
   PyGILState_STATE gstate = PyGILState_Ensure();
@@ -31,7 +30,6 @@ inline void check_python_signals() {
   PyGILState_Release(gstate);
 #endif
 }
-
 
 Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
     : local_gpu_idx_(local_gpu_idx), num_cpus_(num_cpus) {
