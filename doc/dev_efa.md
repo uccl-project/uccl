@@ -65,13 +65,13 @@ LD_PRELOAD="${UCCL_HOME}/thirdparty/nccl-sg/build/lib/libnccl.so"
 NCCL_NET_PLUGIN="${UCCL_HOME}/efa/libnccl-net-efa.so"
 NCCL_PROTO=Simple
 ```
-Currently, UCCL only supports `Simple` protocol; support for `LL` and `LL128` is on the way. 
+UCCL currently only supports `Simple` protocol; support for `LL` and `LL128` is on the way. 
 
 You can launch distributed ResNet training by: 
 ```bash
 cd $UCCL_HOME/misc
 
-# Fill $UCCL_HOME/misc/hostfile the same as `$UCCL_HOME/scripts/node_ips/p4d.txt`
+# Fill in $UCCL_HOME/misc/hostfile the same as `$UCCL_HOME/scripts/node_ips/p4d.txt`
 
 # Benchmark UCCL
 bash run_resnet_uccl.sh
@@ -80,7 +80,7 @@ bash run_resnet_uccl.sh
 bash run_resnet_nccl.sh
 ```
 
-You can also Check [misc/run_ddp.sh](../misc/run_ddp.sh) for an example of running UCCL with PyTorch DDP applications. 
+You can also check [misc/run_ddp.sh](../misc/run_ddp.sh) for an example of running UCCL with PyTorch DDP applications. 
 ```bash
 cd $UCCL_HOME/misc
 
