@@ -78,7 +78,7 @@ install: $(TARGET) $(PLUGIN_SO)
 	install -m 644 $(HEADERS) $(INCDIR)/
 # Clean build artifacts
 clean:
-	rm -f $(OBJECTS) $(TARGET)
+	rm -f $(OBJECTS) $(TARGET) $(PLUGIN_SO)
 	make -C ../rdma clean
 
 # Test the module
