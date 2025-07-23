@@ -1716,11 +1716,11 @@ int RDMAEndpoint::uccl_regmr(int dev, void* addr, size_t len,
                  IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
                      IBV_ACCESS_REMOTE_READ | IBV_ACCESS_RELAXED_ORDERING);
   if (!(*mhandle)->mr) {
-      std::cerr << "ibv_reg_mr failed (" << strerror(errno)
-                << "), len=" << len << " addr=" << addr << "\n";
-      delete *mhandle;
-      *mhandle = nullptr;
-      return -1;
+    std::cerr << "ibv_reg_mr failed (" << strerror(errno) << "), len=" << len
+              << " addr=" << addr << "\n";
+    delete *mhandle;
+    *mhandle = nullptr;
+    return -1;
   }
   return 0;
 }
