@@ -63,7 +63,7 @@ $(PLUGIN_SO): $(CAPI_OBJECT) ../rdma/librdma.a
 
 
 ../rdma/librdma.a: $(filter-out ../rdma/nccl_plugin.cc, $(wildcard ../rdma/*.cc)) ../rdma/*.h
-	make CXXFLAGS=-DLAZY_CREATE_ENGINE -C ../rdma
+	make CXXFLAGS=-DLAZY_CREATE_ENGINE -C ../rdma librdma.a
 
 # Compile source files
 %.o: %.cc
