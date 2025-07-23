@@ -115,19 +115,11 @@ def _run_client_recv(args):
         buf, ptr = _make_buffer(sz, args.device, args.local_gpu_idx)
         ok, mr_id = ep.reg(ptr, sz); assert ok
 
-        if args.async_transfer:
-            ok, tid = ep.recv_async(conn_id, mr_id, ptr, sz); assert ok
-            while not ep.poll_async(tid)[1]: pass
-        else:
-            ep.recv(conn_id, mr_id, ptr, sz)
+        ok = ep.advertise(conn_id, mr_id, ptr, sz)
+        assert ok, "advertise failed"
 
         start = time.perf_counter(); total = 0
         for _ in range(args.iters):
-            if args.async_transfer:
-                ok, tid = ep.recv_async(conn_id, mr_id, ptr, sz); assert ok
-                while not ep.poll_async(tid)[1]: pass
-            else:
-                ok, got = ep.recv(conn_id, mr_id, ptr, sz); assert ok and got == sz
             total += sz
         elapsed = time.perf_counter() - start
 
