@@ -21,7 +21,7 @@ UCCL_PARAM(ROCE_SERVICE_LEVEL, "ROCE_SERVICE_LEVEL", 135);
 UCCL_PARAM(IB_SERVICE_LEVEL, "IB_SERVICE_LEVEL", 0);
 
 // Use RC for data transfer.
-UCCL_PARAM(RCMode, "RCMODE", false);
+UCCL_PARAM(RCMode, "RCMODE", true);
 
 // Bypass the pacing stage.
 UCCL_PARAM(BypassPacing, "BYPASS_PACING", true);

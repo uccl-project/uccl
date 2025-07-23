@@ -428,6 +428,7 @@ class RDMAContext {
     if constexpr (kReceiverCCA != RECEIVER_CCA_NONE) {
       return receiverCC_tx_message(ureq);
     } else {
+      printf("tx_message: %d", ureq->type);
       if (ureq->type == ReqRead) return senderCC_tx_read(ureq);
       return senderCC_tx_message(ureq);
     }
@@ -1346,7 +1347,7 @@ class UcclFlow {
       qpAttr.qp_state = IBV_QPS_INIT;
       qpAttr.pkey_index = 0;
       qpAttr.port_num = factory_dev->ib_port_num;
-      qpAttr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE;
+      qpAttr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ;
 
       comm_base->rc_qp = ibv_create_qp(factory_dev->pd, &qp_init_attr);
       UCCL_INIT_CHECK(comm_base->rc_qp != nullptr, "Failed to create RC QP");
@@ -1436,6 +1437,7 @@ class UcclFlow {
   void post_multi_read(struct ucclRequest** ureqs, uint32_t engine_offset);
 
   void rc_send(struct ucclRequest* ureq);
+  void rc_read(struct ucclRequest* ureq);
 
   inline bool check_room(void) { return outstanding_reqs_ < kMaxReq; }
 
