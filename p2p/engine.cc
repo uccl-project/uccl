@@ -698,6 +698,7 @@ bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
       std::this_thread::yield();
     }
   } while (rc == -1);
+  printf("send_async: transfer_id = %lu %p %p\n", _transfer_id, ureq, ureq->poll_ctx);
 
   return true;
 }
@@ -732,6 +733,8 @@ bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   py::gil_scoped_release release;
   auto* ureq = transfer_id_to_ureq_.at(transfer_id);
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  printf("poll_async: transfer_id = %lu %p %p %d\n", transfer_id, ureq, ureq->poll_ctx, *is_done);
   *is_done = ep_->uccl_poll_ureq_once(ureq);
   if (*is_done) {
     delete ureq;
