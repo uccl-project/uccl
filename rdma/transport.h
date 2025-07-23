@@ -51,7 +51,7 @@ class Channel {
 
  public:
   struct Msg {
-    enum Op : uint8_t { kTx, kRx };
+    enum Op : uint8_t { kTx, kRx, kRead };
     Op opcode;
     PeerID peer_id;
     struct ucclRequest* ureq;
@@ -428,11 +428,13 @@ class RDMAContext {
     if constexpr (kReceiverCCA != RECEIVER_CCA_NONE) {
       return receiverCC_tx_message(ureq);
     } else {
+      if (ureq->type == ReqRead) return senderCC_tx_read(ureq);
       return senderCC_tx_message(ureq);
     }
   }
   bool receiverCC_tx_message(struct ucclRequest* ureq);
   bool senderCC_tx_message(struct ucclRequest* ureq);
+  bool senderCC_tx_read(struct ucclRequest* ureq);
 
   virtual uint32_t EventOnSelectPath(SubUcclFlow* subflow,
                                      uint32_t chunk_size) = 0;
@@ -1088,6 +1090,9 @@ class RDMAEndpoint {
   int uccl_send_async(UcclFlow* flow, struct Mhandle* mhandle, void const* data,
                       size_t const size, struct ucclRequest* ureq);
 
+  int uccl_read_async(UcclFlow* flow, struct Mhandle* mhandle, void* data,
+                      size_t const size, struct ucclRequest* ureq);
+
   // Post n buffers to engine for receiving data asynchronously.
   int uccl_recv_async(UcclFlow* flow, struct Mhandle** mhandles, void** data,
                       int* size, int n, struct ucclRequest* ureq);
@@ -1427,6 +1432,8 @@ class UcclFlow {
    * receiver. 0 <= engine_offset < num_engines_per_dev_.
    */
   void post_multi_send(struct ucclRequest** ureqs, uint32_t engine_offset);
+
+  void post_multi_read(struct ucclRequest** ureqs, uint32_t engine_offset);
 
   void rc_send(struct ucclRequest* ureq);
 

@@ -158,13 +158,7 @@ struct RemoteRDMAContext {
   struct ibv_ah* dest_ah;
 };
 
-enum ReqType {
-  ReqTx,
-  ReqRx,
-  ReqFlush,
-  ReqTxRC,
-  ReqRxRC,
-};
+enum ReqType { ReqTx, ReqRx, ReqFlush, ReqTxRC, ReqRxRC, ReqRead };
 
 /**
  * @brief ucclRequest is a handle provided by the user to post a request to UCCL
