@@ -5,6 +5,7 @@ import os
 import socket
 import sys
 import time
+from tokenize import group
 from typing import List
 
 import numpy as np
@@ -30,20 +31,32 @@ def _pretty_size(num_bytes: int) -> str:
         val /= 1024
     return f"{num_bytes} B"
 
-def _send(tensor, dst):
+def _send(tensor, dst, async_op=False):
     if isinstance(tensor, torch.Tensor):
-        dist.send(tensor, dst=dst)
+        if async_op:
+            return dist.isend(tensor, dst=dst)
+        else:
+            dist.send(tensor, dst=dst)
     else:  # numpy array (gloo backend)
         t = torch.from_numpy(tensor)
-        dist.send(t, dst=dst)
+        if async_op:
+            return dist.isend(t, dst=dst)
+        else:
+            dist.send(t, dst=dst)
 
 
-def _recv(tensor, src):
+def _recv(tensor, src, async_op=False):
     if isinstance(tensor, torch.Tensor):
-        dist.recv(tensor, src=src)
+        if async_op:
+            return dist.irecv(tensor, src=src)
+        else:
+            dist.recv(tensor, src=src)
     else:
         t = torch.from_numpy(tensor)
-        dist.recv(t, src=src)
+        if async_op:
+            return dist.irecv(t, src=src)
+        else:
+            dist.recv(t, src=src)
         tensor[:] = t.cpu().numpy()
 
 ################################################################################
@@ -54,6 +67,7 @@ def _run_server(args):
     peer = 1  # client rank
     for size in args.sizes:
         tensor = _make_buffer(size, args.device, args.local_gpu_idx)
+        tensor2 = _make_buffer(size, args.device, args.local_gpu_idx)
         # Warm-up receive
         _recv(tensor, src=peer)
         torch.cuda.synchronize() if isinstance(tensor, torch.Tensor) else None
@@ -61,7 +75,10 @@ def _run_server(args):
         start = time.perf_counter()
         total = 0
         for _ in range(args.iters):
-            _recv(tensor, src=peer)
+            handle = _recv(tensor, src=peer, async_op=True)
+            handle2 = _send(tensor2, dst=peer, async_op=True)
+            handle.wait()
+            handle2.wait()
             total += size
         torch.cuda.synchronize() if isinstance(tensor, torch.Tensor) else None
         elapsed = time.perf_counter() - start
@@ -72,9 +89,11 @@ def _run_server(args):
 
 
 def _run_client(args):
+    
     peer = 0  # server rank
     for size in args.sizes:
         tensor = _make_buffer(size, args.device, args.local_gpu_idx)
+        tensor2 = _make_buffer(size, args.device, args.local_gpu_idx)
         # Warm-up send
         _send(tensor, dst=peer)
         torch.cuda.synchronize() if isinstance(tensor, torch.Tensor) else None
@@ -82,7 +101,10 @@ def _run_client(args):
         start = time.perf_counter()
         total = 0
         for _ in range(args.iters):
-            _send(tensor, dst=peer)
+            handle = _send(tensor, dst=peer, async_op=True)
+            handle2 = _recv(tensor2, src=peer, async_op=True)
+            handle.wait()
+            handle2.wait()
             total += size
         torch.cuda.synchronize() if isinstance(tensor, torch.Tensor) else None
         elapsed = time.perf_counter() - start

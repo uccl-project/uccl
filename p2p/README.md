@@ -106,6 +106,12 @@ On client:
 python benchmark_uccl.py --role client --device gpu --local-gpu-idx 0 --num-cpus 4 --remote-ip <Server IP>
 ```
 
+To benchmark dual direction transfer: 
+```bash
+python benchmark_uccl_dual.py --role server --device cpu --local-gpu-idx 0 --num-cpus 4 --remote-ip <Remote IP>
+python benchmark_uccl_dual.py --role client --device cpu --local-gpu-idx 0 --num-cpus 4 --remote-ip <Remote IP>
+```
+
 ### Running NIXL
 
 If you have not installed nixl with RDMA support, you can follow: 
@@ -154,28 +160,39 @@ export LD_LIBRARY_PATH="$UCX_LIB_PATH:$CONDA_PREFIX/lib/python3.13/site-packages
 On Server:
 ```bash
 UCX_MAX_RMA_LANES=4 UCX_IB_PCI_RELAXED_ORDERING=on UCX_NET_DEVICES=mlx5_2:1 UCX_TLS=rc \
-    python benchmark_nixl.py --role server --device gpu --local-gpu-idx 0
+python benchmark_nixl.py --role server --device gpu --local-gpu-idx 0
 ```
 
 On Client:
 ```bash
 UCX_MAX_RMA_LANES=4 UCX_IB_PCI_RELAXED_ORDERING=on UCX_NET_DEVICES=mlx5_2:1 UCX_TLS=rc \
-    python benchmark_nixl.py --role client --device gpu --local-gpu-idx 0 --remote-ip <Server IP>
+python benchmark_nixl.py --role client --device gpu --local-gpu-idx 0 --remote-ip <Server IP>
 ```
 
 
 ### Running NCCL
 
-On Server:
+On Server (assume only using mlx5_2 NIC):
 ```bash
-NCCL_NCHANNELS_PER_NET_PEER=4 \
+NCCL_IB_HCA=mlx5_2:1 NCCL_NCHANNELS_PER_NET_PEER=4 \
 python benchmark_nccl.py --role server --device gpu --local-gpu-idx 0
 ```
 
 On Client:
 ```bash
-NCCL_NCHANNELS_PER_NET_PEER=4 \
+NCCL_IB_HCA=mlx5_2:1 NCCL_NCHANNELS_PER_NET_PEER=4 \
 python benchmark_nccl.py --role client --device gpu --local-gpu-idx 0 --remote-ip <Server IP>
+```
+
+If you see errors like `message size truncated`, it is likely caused by NCCL version mismatch. We suggest specify
+```bash
+LD_PRELOAD=<path to libnccl.so.2>
+```
+
+To benchmark dual direction transfer: 
+```bash
+python benchmark_nccl_dual.py --role server --device gpu --local-gpu-idx 0
+python benchmark_nccl_dual.py --role client --device gpu --local-gpu-idx 0 --remote-ip <Server IP>
 ```
 
 
@@ -332,7 +349,9 @@ Create a new RDMA endpoint instance.
 ```python
 connect(remote_ip_addr, remote_gpu_idx) -> (success, conn_id)
 ```
-Connect to a remote endpoint.
+Connect to a remote endpoint. 
+Note that a connection is one direction, only allowing the client (that calls `connect()`) to send data to the server (that calls `accept()`). 
+If you want bi-directional communication, you should create two connections. 
 
 **Parameters:**
 - `remote_ip_addr` (str): IP address of remote server

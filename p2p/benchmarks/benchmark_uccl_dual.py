@@ -81,12 +81,19 @@ def _pretty_size(num_bytes: int) -> str:
 
 def _run_server(args):
     ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
-    send_oob(ep.get_endpoint_metadata(), args)
+    s = listen_oob(args)
+    send_oob(ep.get_endpoint_metadata(), s)
+    meta = recv_oob(args.remote_ip, args)
+    ip, port, r_gpu = parse_metadata(meta)
+
     print("[Server] Waiting for connection …", flush=True)
-    ok, r_ip, r_gpu, conn_id = ep.accept()
-    if not ok:
-        sys.exit("[Server] Failed to accept RDMA connection")
-    print(f"[Server] Connected to {r_ip} (GPU {r_gpu}) conn_id={conn_id}")
+    ok, r_ip, r_gpu2, conn_id = ep.accept()
+    assert ok, "[Server] Failed to accept RDMA connection"
+    print(f"[Server] Accept from {r_ip} (GPU {r_gpu2}) conn_id={conn_id}")
+
+    ok, conn_id2 = ep.connect(ip, r_gpu, remote_port=port)
+    assert ok, "[Server] Failed to connect to client"
+    print(f"[Server] Connected to {args.remote_ip} conn_id={conn_id2}")
 
     for size in args.sizes:
         buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx)
@@ -104,23 +111,19 @@ def _run_server(args):
         for _ in range(args.iters):
             transfer_ids = []
 
-            # ok, transfer_id = ep.recv_async(conn_id, mr_id, ptr, size)
-            # assert ok, "[Server] recv error"
-            # transfer_ids.append(transfer_id)
+            ok, transfer_id = ep.recv_async(conn_id, mr_id, ptr, size)
+            assert ok, "[Server] recv error"
+            transfer_ids.append(transfer_id)
 
-            # is_done = False
-            # while not is_done:
-            #     ok, is_done = ep.poll_async(transfer_id)
-            #     assert ok, "[Client] poll error"
-
-            ok, transfer_id2 = ep.send_async(conn_id, mr_id2, ptr2, size)
+            ok, transfer_id2 = ep.send_async(conn_id2, mr_id2, ptr2, size)
             assert ok, "[Server] send error"
             transfer_ids.append(transfer_id2)
 
-            is_done = False
-            while not is_done:
-                ok, is_done = ep.poll_async(transfer_id2)
-                assert ok, "[Server] poll error"
+            for transfer_id in transfer_ids:
+                is_done = False
+                while not is_done:
+                    ok, is_done = ep.poll_async(transfer_id)
+                    assert ok, "[Server] poll error"
 
             # ok = ep.send(conn_id, mr_id2, ptr2, size)
             # assert ok, "[Server] send error"
@@ -141,13 +144,20 @@ def _run_server(args):
 def _run_client(args):
     if args.remote_ip is None:
         sys.exit("[Client] --remote-ip is required")
-    meta = recv_oob(args.remote_ip, args)
-    ip, port, r_gpu = parse_metadata(meta)
 
     ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
+    s = listen_oob(args)
+    meta = recv_oob(args.remote_ip, args)
+    ip, port, r_gpu = parse_metadata(meta)
+    send_oob(ep.get_endpoint_metadata(), s)
+
     ok, conn_id = ep.connect(ip, r_gpu, remote_port=port)
     assert ok, "[Client] Failed to connect to server"
     print(f"[Client] Connected to {args.remote_ip} conn_id={conn_id}")
+
+    ok, r_ip, r_gpu2, conn_id2 = ep.accept()
+    assert ok, "[Client] Failed to accept RDMA connection"
+    print(f"[Client] Accept from {r_ip} (GPU {r_gpu2}) conn_id={conn_id2}")
 
     for size in args.sizes:
         buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx)
@@ -165,23 +175,19 @@ def _run_client(args):
         for _ in range(args.iters):
             transfer_ids = []
 
-            # ok, transfer_id = ep.send_async(conn_id, mr_id, ptr, size)
-            # assert ok, "[Client] send error"
-            # transfer_ids.append(transfer_id)
+            ok, transfer_id = ep.send_async(conn_id, mr_id, ptr, size)
+            assert ok, "[Client] send error"
+            transfer_ids.append(transfer_id)
 
-            # is_done = False
-            # while not is_done:
-            #     ok, is_done = ep.poll_async(transfer_id)
-            #     assert ok, "[Client] poll error"
-
-            ok, transfer_id2 = ep.recv_async(conn_id, mr_id2, ptr2, size)
+            ok, transfer_id2 = ep.recv_async(conn_id2, mr_id2, ptr2, size)
             assert ok, "[Client] recv error"
             transfer_ids.append(transfer_id2)
 
-            is_done = False
-            while not is_done:
-                ok, is_done = ep.poll_async(transfer_id2)
-                assert ok, "[Client] poll error"
+            for transfer_id in transfer_ids:
+                is_done = False
+                while not is_done:
+                    ok, is_done = ep.poll_async(transfer_id)
+                    assert ok, "[Client] poll error"
 
             # ok = ep.recv(conn_id, mr_id2, ptr2, size)
             # assert ok, "[Client] recv error"
@@ -208,19 +214,23 @@ def parse_size_list(val: str) -> List[int]:
         )
 
 
-def send_oob(metadata: bytes, args):
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(("0.0.0.0", args.oob_port))
-        s.listen(1)
-        print(
-            f"[Server] OOB channel listening on port {args.oob_port}",
-            flush=True,
-        )
-        conn, _ = s.accept()
-        with conn:
-            conn.sendall(metadata)
-            print("[Server] OOB metadata sent", flush=True)
+def listen_oob(args):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(("0.0.0.0", args.oob_port))
+    s.listen(1)
+    print(
+        f"[Server] OOB channel listening on port {args.oob_port}",
+        flush=True,
+    )
+    return s
+
+
+def send_oob(metadata: bytes, s):
+    conn, _ = s.accept()
+    with conn:
+        conn.sendall(metadata)
+        print("[Server] OOB metadata sent", flush=True)
 
 
 def recv_oob(server_ip: str, args) -> bytes:
