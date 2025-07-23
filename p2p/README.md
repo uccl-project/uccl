@@ -114,7 +114,7 @@ python benchmark_uccl_dual.py --role client --device cpu --local-gpu-idx 0 --num
 
 ### Running NIXL (with UCX backend)
 
-If you have not installed nixl with RDMA support, you can follow: 
+If you have not installed nixl with UCX backend, you can follow: 
 <details><summary>Click me</summary>
 
 ```bash
@@ -130,6 +130,7 @@ cd ..
 # Run these if you find there is no libcuda.so under /usr/local/cuda. Using GH200 as an example.
 sudo ln -s /usr/lib/aarch64-linux-gnu/libcuda.so.1 /usr/local/cuda/lib64/libcuda.so
 
+# Install UCX
 wget https://github.com/openucx/ucx/releases/download/v1.18.0/ucx-1.18.0.tar.gz
 tar xzf ucx-1.18.0.tar.gz
 cd ucx-1.18.0
@@ -170,6 +171,46 @@ python benchmark_nixl.py --role client --device gpu --local-gpu-idx 0 --remote-i
 ```
 
 ### Running NIXL (with Mooncake backend)
+
+If you have not installed nixl with Mooncake backend, you can follow:
+<details><summary>Click me</summary>
+
+```bash
+sudo apt install build-essential cmake pkg-config
+pip3 install meson
+pip3 install pybind11
+
+git clone git@github.com:NVIDIA/gdrcopy.git
+cd gdrcopy
+sudo make prefix=/usr/local CUDA=/usr/local/cuda all install
+cd ..
+
+# Run these if you find there is no libcuda.so under /usr/local/cuda. Using GH200 as an example.
+sudo ln -s /usr/lib/aarch64-linux-gnu/libcuda.so.1 /usr/local/cuda/lib64/libcuda.so
+
+# Install Mooncake
+git clone https://github.com/kvcache-ai/Mooncake.git
+cd Mooncake
+sudo bash dependencies.sh
+mkdir build && cd build
+cmake .. -DBUILD_SHARED_LIBS=ON
+make -j
+sudo make install
+cd ../..
+
+git clone https://github.com/ai-dynamo/nixl.git
+cd nixl
+meson setup build
+cd build
+ninja
+yes | ninja install
+cd ..
+pip install .
+cd ..
+
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib/python3.13/site-packages/.nixl.mesonpy.libs/plugins:$LD_LIBRARY_PATH"
+```
+</details>
 
 On Server:
 ```bash
