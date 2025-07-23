@@ -852,6 +852,7 @@ std::unique_ptr<Endpoint> Endpoint::CreateAndJoin(
   return ep;
 }
 
+#ifdef USE_REDIS
 bool Endpoint::publish_redis(std::string const& redis_uri,
                              std::string const& key, PeerInfo const& info) {
   try {
@@ -903,3 +904,4 @@ bool Endpoint::fetch_all_redis(std::string const& redis_uri,
     return false;
   }
 }
+#endif
