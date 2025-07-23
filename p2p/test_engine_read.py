@@ -64,11 +64,9 @@ def test_local():
         ok, mr_id = ep.reg(tensor.data_ptr(), tensor.numel()*4); assert ok
 
         # Advertise buffer so server can READ it
-        print("[Client] Posting receive descriptor …")
-        ok, recv_sz = ep.recv(conn_id, mr_id, tensor.data_ptr(),
-                              max_size=tensor.numel()*4)
-        assert ok and recv_sz == tensor.numel()*4
-        print("✓ Client posted receive descriptor")
+        ok = ep.advertise(conn_id, mr_id, tensor.data_ptr(), tensor.numel() * 4)
+        assert ok
+        print("Buffer exposed for RDMA READ")
 
     # run the two processes
     srv = multiprocessing.Process(target=server_proc, args=(meta_q,))

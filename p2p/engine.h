@@ -137,6 +137,8 @@ class Endpoint {
   bool recv_async(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
                   uint64_t* transfer_id);
 
+  bool advertise(uint64_t conn_id, uint64_t mr_id, void* addr, size_t len);
+
   /* Poll the status of the asynchronous receive. */
   bool poll_async(uint64_t transfer_id, bool* is_done);
 

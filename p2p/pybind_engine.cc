@@ -83,6 +83,15 @@ PYBIND11_MODULE(p2p, m) {
           "Receive a key-value buffer", py::arg("conn_id"), py::arg("mr_id"),
           py::arg("ptr"), py::arg("max_size"))
       .def(
+          "advertise",
+          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
+             size_t size) {
+            return self.advertise(conn_id, mr_id, reinterpret_cast<void*>(ptr),
+                                  size);
+          },
+          "Expose a registered buffer for the peer to RDMA-READ",
+          py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"))
+      .def(
           "sendv",
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
              std::vector<uint64_t> data_ptr_v, std::vector<size_t> size_v,

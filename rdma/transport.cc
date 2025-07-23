@@ -388,6 +388,11 @@ void UcclRDMAEngine::handle_tx_work(void) {
     pending_tx_works_.pop_front();
     auto rdma_ctx = it.first;
     auto ureq = it.second;
+    if (!ureq) {
+      fprintf(stderr, "[FATAL] Null ureq in tx work\n");
+      continue;
+    }
+    DCHECK(ureq->context) << "ureq->context is null";
     UCCL_LOG_ENGINE << "Process tx work.";
     printf("Processing pending tx work: %p, %p\n", rdma_ctx, ureq);
     if (!rdma_ctx->tx_message(ureq)) {
@@ -399,6 +404,7 @@ void UcclRDMAEngine::handle_tx_work(void) {
   while (budget--) {
     if (jring_sc_dequeue_bulk(channel_->tx_cmdq_, &tx_work, 1, nullptr) == 0)
       break;
+    printf("Processing tx work: %p, %p\n", tx_work.ureq, tx_work.poll_ctx);
     // Make data written by the app thread visible to the engine.
     std::ignore = std::atomic_load_explicit(&tx_work.poll_ctx->fence,
                                             std::memory_order_relaxed);
@@ -1485,7 +1491,10 @@ void UcclFlow::post_multi_read(ucclRequest** ureqs, uint32_t engine_offset) {
     ureqs[i]->mid = i;
     msgs[i].ureq = ureqs[i];
     msgs[i].poll_ctx = ureqs[i]->poll_ctx;
+    printf("ureqs[%d]->poll_ctx = %p\n", i, ureqs[i]->poll_ctx);
   }
+  printf("before jring_mp_enqueue_bulk, n: %d, engine_idx: %u\n", n,
+         engine_idx);
   while (jring_mp_enqueue_bulk(txq, msgs, n, nullptr) != n) {
   }
 }
@@ -1588,11 +1597,27 @@ int RDMAEndpoint::uccl_read_async(UcclFlow* flow, Mhandle* local_mh, void* dst,
     ureq->n = nmsg;
     ureq->send.rid = slots[i].rid;
 
-    ureq->poll_ctx = ctx_pool_->pop();
-    ureq->engine_idx = slots[i].engine_offset;
+    if (slots[i].engine_offset == RDMAEndpoint::RC_MAGIC) {
+      ureq->rc_or_flush_done = false;
+      printf("RC magic!\n");
+    } else {
+      if (ureq->poll_ctx == nullptr) {
+        ureq->poll_ctx = ctx_pool_->pop();
+        if (!ureq->poll_ctx) {
+          fprintf(stderr, "ERROR: ctx_pool_->pop() returned nullptr\n");
+          return -1;
+        }
+      }
+      if constexpr (kEngineLBPolicy >= ENGINE_POLICY_LOAD) {
+        ureq->engine_idx = slots[i].engine_offset;
+        inc_load_on_engine(ureq->engine_idx);
+      }
+      printf("Not RC magic, engine_offset: %u, ureq->poll_ctx = %p\n",
+             slots[i].engine_offset, ureq->poll_ctx);
+    }
     ureq->context = flow;
-    ureq->rc_or_flush_done = 0;
     ureqs[i] = ureq;
+    printf("ureqs[%d] set, ureq->poll_ctx = %p\n", i, ureq->poll_ctx);
   }
 
   for (int i = 0; i < nmsg; ++i)
@@ -1618,7 +1643,7 @@ bool RDMAEndpoint::uccl_poll_ureq_once(struct ucclRequest* ureq) {
   // printf("uccl_poll_ureq_once: ureq->type: %d, flow: %p\n", ureq->type,
   // flow);
   if (ureq->type == ReqTxRC || ureq->type == ReqRxRC ||
-      ureq->type == ReqFlush) {
+      ureq->type == ReqFlush || ureq->type == ReqRead) {
     flow->poll_flow_cq();
     ret = ureq->rc_or_flush_done;
   } else {

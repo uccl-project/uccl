@@ -793,6 +793,31 @@ bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
   return true;
 }
 
+bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
+                         size_t len) {
+  py::gil_scoped_release release;
+
+  auto* conn = conn_id_to_conn_[conn_id];
+  auto* data_mh = mr_id_to_mr_[mr_id]->mhandle_;
+  auto* meta_mh = mr_id_to_mr_[transfer_metadata_mr_id_]->mhandle_;
+
+  uccl::ucclRequest req_data;
+  int chunk = std::min<int>(len, kRTTBytes);
+  if (ep_->uccl_recv_async(
+          static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &data_mh,
+          &addr, &chunk, 1, &req_data) == -1)
+    return false;
+
+  uccl::ucclRequest req_meta;
+  void* meta_addr = reinterpret_cast<void*>(transfer_metadata_->chunk_size_v);
+  int meta_len = sizeof(uint64_t);
+  if (ep_->uccl_recv_async(
+          static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &meta_mh,
+          &meta_addr, &meta_len, 1, &req_meta) == -1)
+    return false;
+  return true;
+}
+
 bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
                           size_t size, uint64_t* transfer_id) {
   py::gil_scoped_release release;
