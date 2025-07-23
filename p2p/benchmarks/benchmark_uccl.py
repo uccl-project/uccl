@@ -252,7 +252,7 @@ def parse_size_list(val: str) -> List[int]:
 def send_oob(metadata: bytes, args):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(("localhost", args.oob_port))
+        s.bind(("0.0.0.0", args.oob_port))
         s.listen(1)
         print(f"[Server] OOB channel listening on port {args.oob_port}",
               flush=True)
@@ -330,7 +330,7 @@ def main():
     p.add_argument(
         "--oob-port",
         type=int,
-        default=50051,
+        default=19999,
         help="TCP port used to ship metadata (server listens, client fetches)",
     )
     args = p.parse_args()
