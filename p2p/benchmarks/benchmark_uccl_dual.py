@@ -217,7 +217,7 @@ def parse_size_list(val: str) -> List[int]:
 def listen_oob(args):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind(("0.0.0.0", args.oob_port))
+    s.bind(("localhost", args.oob_port))
     s.listen(1)
     print(
         f"[Server] OOB channel listening on port {args.oob_port}",
