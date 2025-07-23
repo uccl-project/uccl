@@ -67,7 +67,30 @@ NCCL_PROTO=Simple
 ```
 Currently, UCCL only supports `Simple` protocol; support for `LL` and `LL128` is on the way. 
 
-Check [misc/run_ddp.sh](../misc/run_ddp.sh) for an example of running UCCL with PyTorch DDP applications by `cd ../misc; ./run_ddp.sh`. Other applications such as DeepSpeed, vLLM, Megatron-LM, and PyTorch FSDP should work similarly. 
+You can launch distributed ResNet training by: 
+```bash
+cd $UCCL_HOME/misc
+
+# Fill $UCCL_HOME/misc/hostfile the same as `$UCCL_HOME/scripts/node_ips/p4d.txt`
+
+# Benchmark UCCL
+bash run_resnet_uccl.sh
+
+# Benchmark NCCL
+bash run_resnet_nccl.sh
+```
+
+You can also Check [misc/run_ddp.sh](../misc/run_ddp.sh) for an example of running UCCL with PyTorch DDP applications. 
+```bash
+cd $UCCL_HOME/misc
+
+# Run UCCL
+./run_ddp.sh ud
+
+# Run NCCL
+./run_ddp.sh srd
+```
+Other applications such as DeepSpeed, vLLM, Megatron-LM, and PyTorch FSDP should work similarly. 
 
 
 ## MISC
