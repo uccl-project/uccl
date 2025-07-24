@@ -709,6 +709,10 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
       eqds_[i] = new eqds::EQDS(i, factory_dev->link_bw);
     }
   }
+
+  ib_relaxed_ordering_enabled_ = ncclIbRelaxedOrderingCapable();
+  UCCL_LOG_EP << "IB relaxed ordering enabled: "
+              << ib_relaxed_ordering_enabled_;
 }
 #else
 RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
@@ -779,6 +783,10 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
   for (int i = 0; i < num_devices_; i++) {
     create_listen_socket(&test_listen_fds_[i]);
   }
+
+  ib_relaxed_ordering_enabled_ = ncclIbRelaxedOrderingCapable();
+  UCCL_LOG_EP << "IB relaxed ordering enabled: "
+              << ib_relaxed_ordering_enabled_;
 }
 #endif
 
@@ -1690,11 +1698,13 @@ int RDMAEndpoint::uccl_regmr_dmabuf(int dev, void* addr, size_t len,
                                     int fd, struct Mhandle** mhandle) {
   auto factory_dev = RDMAFactory::get_factory_dev(dev);
 
+  unsigned int flags =
+      IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ;
+  if (ib_relaxed_ordering_enabled_) flags |= IBV_ACCESS_RELAXED_ORDERING;
+
   *mhandle = new Mhandle();
-  (*mhandle)->mr = ibv_reg_dmabuf_mr(
-      factory_dev->pd, offset, len, (uint64_t)addr, fd,
-      IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-          IBV_ACCESS_REMOTE_READ | IBV_ACCESS_RELAXED_ORDERING);
+  (*mhandle)->mr = ibv_reg_dmabuf_mr(factory_dev->pd, offset, len,
+                                     (uint64_t)addr, fd, flags);
 
   return 0;
 }
@@ -1710,11 +1720,17 @@ int RDMAEndpoint::uccl_regmr(int dev, void* addr, size_t len,
                              struct Mhandle** mhandle) {
   auto factory_dev = RDMAFactory::get_factory_dev(dev);
 
+  unsigned int flags =
+      IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ;
+  if (ib_relaxed_ordering_enabled_) flags |= IBV_ACCESS_RELAXED_ORDERING;
+
   *mhandle = new Mhandle();
-  (*mhandle)->mr =
-      ibv_reg_mr(factory_dev->pd, addr, len,
-                 IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                     IBV_ACCESS_REMOTE_READ | IBV_ACCESS_RELAXED_ORDERING);
+  if (ib_relaxed_ordering_enabled_) {
+    (*mhandle)->mr =
+        ibv_reg_mr_iova2(factory_dev->pd, addr, len, (uint64_t)addr, flags);
+  } else {
+    (*mhandle)->mr = ibv_reg_mr(factory_dev->pd, addr, len, flags);
+  }
 
   return 0;
 }

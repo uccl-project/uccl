@@ -380,6 +380,7 @@ static inline int util_rdma_get_mtu_from_ibv_mtu(ibv_mtu mtu) {
 NCCL_PARAM(IbGidIndex, "IB_GID_INDEX", -1);
 NCCL_PARAM(IbRoutableFlidIbGidIndex, "IB_ROUTABLE_FLID_GID_INDEX", 1);
 NCCL_PARAM(IbRoceVersionNum, "IB_ROCE_VERSION_NUM", 2);
+NCCL_PARAM(IbPciRelaxedOrdering, "IB_PCI_RELAXED_ORDERING", 2);
 
 static sa_family_t envIbAddrFamily(void) {
   sa_family_t family = AF_INET;
@@ -647,6 +648,17 @@ static bool ncclIbGetGidIndex(struct ibv_context* context, uint8_t portNum,
   }
 
   return true;
+}
+
+// Determine whether RELAXED_ORDERING is enabled and possible
+static int ncclIbRelaxedOrderingCapable(void) {
+  int roMode = ncclParamIbPciRelaxedOrdering();
+  struct ibv_mr* r = NULL;
+  if (roMode == 1 || roMode == 2) {
+    // Query IBVERBS_1.8 API - needed for IBV_ACCESS_RELAXED_ORDERING support
+    r = ibv_reg_mr_iova2(NULL, NULL, 0, 0, 0);
+  }
+  return r == NULL ? 0 : 1;
 }
 
 }  // namespace uccl

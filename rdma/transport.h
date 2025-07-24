@@ -1006,6 +1006,8 @@ class RDMAEndpoint {
   std::vector<std::vector<UcclFlow*>> active_flows_vec_;
   std::vector<Spin> active_flows_spin_;
 
+  int ib_relaxed_ordering_enabled_;
+
  public:
   RDMAEndpoint(int num_engines_per_dev);
 
