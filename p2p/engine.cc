@@ -238,6 +238,7 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
   auto* conn = conn_id_to_conn_[conn_id];
   auto* mhandle = mr_id_to_mr_[mr_id]->mhandle_;
   uccl::ucclRequest ureq;
+  memset(&ureq, 0, sizeof(uccl::ucclRequest));
   printf(
       "[Endpoint::read] conn_id: %lu, mr_id: %lu, dst: %p, "
       "size: %zu\n",

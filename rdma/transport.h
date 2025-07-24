@@ -1126,6 +1126,8 @@ class RDMAEndpoint {
     return true;
   }
 
+  inline bool uccl_check_once(PollCtx* ctx) { return ctx->done.load(); }
+
   inline bool uccl_poll(PollCtx* ctx) {
     while (!uccl_poll_once(ctx)) {
     }
