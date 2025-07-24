@@ -1942,6 +1942,8 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
   qpAttr.pkey_index = 0;
   qpAttr.port_num = factory_dev->ib_port_num;
   qpAttr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ;
+  qpAttr.max_rd_atomic = 1;
+  qpAttr.max_dest_rd_atomic = 1;
 
   for (int i = 0; i < ucclParamPORT_ENTROPY(); i++) {
     struct ibv_qp* qp = ibv_create_qp(pd_, &qp_init_attr);
@@ -2424,7 +2426,8 @@ bool RDMAContext::senderCC_tx_read(struct ucclRequest* ureq) {
   auto rkey = ureq->send.rkey;
   uint32_t* off = &ureq->send.sent_offset;
 
-  printf("senderCC_tx_read, size: %d\n", size);
+  // printf("senderCC_tx_read, size: %d, ureq->rc_or_flush_done: %lu\n", size,
+  // ureq->rc_or_flush_done); DCHECK(!ureq->rc_or_flush_done);
   if (size == 0) {
     DCHECK(false) << "RDMA READ len 0";
     return true;
@@ -2506,6 +2509,8 @@ void RDMAContext::uc_post_acks() {
 void RDMAContext::rc_rx_ack(struct ibv_wc* wc) {
   auto opcode = wc->opcode;
   if (opcode == IBV_WC_RDMA_READ) {
+    // printf("rc_rx_ack Received RDMA READ completion with wr_id: %lu\n",
+    // wc->wr_id);
     auto* flag = reinterpret_cast<uint64_t*>(wc->wr_id);
     *flag = 1;
     return;
@@ -2552,6 +2557,8 @@ void RDMAContext::rc_rx_ack(struct ibv_wc* wc) {
 void RDMAContext::rc_rx_ack(struct ibv_cq_ex* cq_ex) {
   auto opcode = ibv_wc_read_opcode(cq_ex);
   if (opcode == IBV_WC_RDMA_READ) {
+    // printf("rc_rx_ack ibv_cq_ex Received RDMA READ completion with wr_id:
+    // %lu\n", cq_ex->wr_id);
     auto* flag = reinterpret_cast<uint64_t*>(cq_ex->wr_id);
     *flag = 1;
     return;
