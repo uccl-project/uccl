@@ -137,6 +137,9 @@ struct FifoItem {
 };
 static_assert(sizeof(struct FifoItem) == 64, "FifoItem size is not 64 bytes");
 
+void serialize_fifo_item(FifoItem const& item, char* buf);
+void deserialize_fifo_item(char const* buf, FifoItem* item);
+
 /**
  * @brief A FIFO queue for flow control.
  * Receiver posts a buffer to the FIFO queue for the sender to use RDMA WRITE.

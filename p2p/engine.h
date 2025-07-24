@@ -104,7 +104,8 @@ class Endpoint {
    */
   bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size);
 
-  bool read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size);
+  bool read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
+            uccl::FifoItem const& slot_item);
 
   /* Send a vector of data chunks. Blocking. */
   bool sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
@@ -137,7 +138,8 @@ class Endpoint {
   bool recv_async(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
                   uint64_t* transfer_id);
 
-  bool advertise(uint64_t conn_id, uint64_t mr_id, void* addr, size_t len);
+  bool advertise(uint64_t conn_id, uint64_t mr_id, void* addr, size_t len,
+                 char* out_buf);
 
   /* Poll the status of the asynchronous receive. */
   bool poll_async(uint64_t transfer_id, bool* is_done);

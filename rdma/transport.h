@@ -428,7 +428,7 @@ class RDMAContext {
     if constexpr (kReceiverCCA != RECEIVER_CCA_NONE) {
       return receiverCC_tx_message(ureq);
     } else {
-      printf("tx_message: %d", ureq->type);
+      printf("tx_message: %d\n", ureq->type);
       if (ureq->type == ReqRead) return senderCC_tx_read(ureq);
       return senderCC_tx_message(ureq);
     }
@@ -1091,8 +1091,11 @@ class RDMAEndpoint {
   int uccl_send_async(UcclFlow* flow, struct Mhandle* mhandle, void const* data,
                       size_t const size, struct ucclRequest* ureq);
 
-  int uccl_read_async(UcclFlow* flow, struct Mhandle* mhandle, void* data,
-                      size_t const size, struct ucclRequest* ureq);
+  int prepare_fifo_metadata(UcclFlow* flow, struct Mhandle** mhandles,
+                            void const* data, size_t size, char* out_buf);
+
+  int uccl_read_async(UcclFlow* flow, Mhandle* local_mh, void* dst, size_t size,
+                      FifoItem const& slot_item, ucclRequest* ureq);
 
   // Post n buffers to engine for receiving data asynchronously.
   int uccl_recv_async(UcclFlow* flow, struct Mhandle** mhandles, void** data,

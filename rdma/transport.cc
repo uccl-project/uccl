@@ -416,9 +416,14 @@ void UcclRDMAEngine::handle_tx_work(void) {
     auto rdma_ctx = it->second;
 
     UCCL_LOG_ENGINE << "Process tx work.";
-    printf("Processing pending tx work: %p, %p\n", rdma_ctx, tx_work.ureq);
+    printf(
+        "Processing pending tx work: %p, tx_work.ureq: %p, data_length: %u\n",
+        rdma_ctx, tx_work.ureq,
+        static_cast<unsigned>(tx_work.ureq->send.data_len));
     if (!rdma_ctx->tx_message(tx_work.ureq)) {
       // Push the message to the pending transmit queue.
+      printf("FAILED: Pushing tx work to pending queue: %p, %p\n", rdma_ctx,
+             tx_work.ureq);
       pending_tx_works_.push_back(std::make_pair(rdma_ctx, tx_work.ureq));
     }
 
@@ -1492,11 +1497,48 @@ void UcclFlow::post_multi_read(ucclRequest** ureqs, uint32_t engine_offset) {
     msgs[i].ureq = ureqs[i];
     msgs[i].poll_ctx = ureqs[i]->poll_ctx;
     printf("ureqs[%d]->poll_ctx = %p\n", i, ureqs[i]->poll_ctx);
+    printf("ureqs[i]->data_len = %u, ureqs[i]: %p\n", ureqs[i]->send.data_len,
+           ureqs[i]);
   }
   printf("before jring_mp_enqueue_bulk, n: %d, engine_idx: %u\n", n,
          engine_idx);
   while (jring_mp_enqueue_bulk(txq, msgs, n, nullptr) != n) {
   }
+}
+
+int RDMAEndpoint::prepare_fifo_metadata(UcclFlow* flow,
+                                        struct Mhandle** mhandles,
+                                        void const* data, size_t size,
+                                        char* out_buf) {
+  printf("prepare_fifo_metadata: data: %p, size: %zu\n", data, size);
+  void* data_arr[1] = {const_cast<void*>(data)};
+  int size_arr[1] = {static_cast<int>(size)};
+  struct ibv_send_wr wr;
+  struct ibv_sge sge;
+
+  uint32_t engine_idx = 0;
+  FifoItem* slots =
+      flow->post_fifo(engine_idx, data_arr, size_arr, 1, mhandles, &wr, &sge);
+  if (!slots) {
+    fprintf(stderr,
+            "prepare_fifo_metadata failed: post_fifo returned nullptr\n");
+    return -1;
+  }
+
+  // Serialize metadata into out_buf
+  FifoItem item;
+  item.addr = slots[0].addr;
+  item.size = size;
+  item.rkey = slots[0].rkey;
+  item.nmsgs = 1;
+  item.rid = slots[0].rid;
+  item.idx = slots[0].idx;
+  item.engine_offset = slots[0].engine_offset;
+  memset(item.padding, 0, sizeof(item.padding));
+
+  printf("item.addr: %lx, size: %d\n", item.addr, item.size);
+  serialize_fifo_item(item, out_buf);
+  return 0;
 }
 
 int RDMAEndpoint::uccl_send_async(UcclFlow* flow, struct Mhandle* mhandle,
@@ -1573,63 +1615,38 @@ int RDMAEndpoint::uccl_send_async(UcclFlow* flow, struct Mhandle* mhandle,
 }
 
 int RDMAEndpoint::uccl_read_async(UcclFlow* flow, Mhandle* local_mh, void* dst,
-                                  size_t size, struct ucclRequest* ureq) {
+                                  size_t size, FifoItem const& slot_item,
+                                  ucclRequest* ureq) {
   ureq->type = ReqRead;
-  ureq->send.data_len = size;
+  ureq->n = 1;
+  ureq->context = flow;
+  ureq->send.laddr = reinterpret_cast<uint64_t>(dst);
+  ureq->send.lkey = local_mh->mr->lkey;
+  ureq->send.raddr = slot_item.addr;
+  ureq->send.rkey = slot_item.rkey;
+  ureq->send.data_len =
+      std::min<uint32_t>(static_cast<uint32_t>(size), slot_item.size);
+  ureq->send.rid = slot_item.rid;
 
-  int slot, nmsg;
-  if (!flow->check_fifo_ready(&slot, &nmsg)) return -1;
-
-  auto send_comm = &flow->send_comm_;
-  auto ureqs = send_comm->fifo_ureqs[slot];
-  auto rem_fifo = send_comm->base.fifo;
-  FifoItem volatile* slots = rem_fifo->elems[slot];
-
-  for (int i = 0; i < nmsg; ++i) {
-    if (ureqs[i]) continue;
-
-    if (size > slots[i].size) ureq->send.data_len = slots[i].size;
-
-    ureq->send.laddr = (uint64_t)dst;
-    ureq->send.lkey = local_mh->mr->lkey;
-    ureq->send.raddr = slots[i].addr;
-    ureq->send.rkey = slots[i].rkey;
-    ureq->n = nmsg;
-    ureq->send.rid = slots[i].rid;
-
-    if (slots[i].engine_offset == RDMAEndpoint::RC_MAGIC) {
-      ureq->rc_or_flush_done = false;
-      printf("RC magic!\n");
-    } else {
-      if (ureq->poll_ctx == nullptr) {
-        ureq->poll_ctx = ctx_pool_->pop();
-        if (!ureq->poll_ctx) {
-          fprintf(stderr, "ERROR: ctx_pool_->pop() returned nullptr\n");
-          return -1;
-        }
-      }
-      if constexpr (kEngineLBPolicy >= ENGINE_POLICY_LOAD) {
-        ureq->engine_idx = slots[i].engine_offset;
-        inc_load_on_engine(ureq->engine_idx);
-      }
-      printf("Not RC magic, engine_offset: %u, ureq->poll_ctx = %p\n",
-             slots[i].engine_offset, ureq->poll_ctx);
-    }
-    ureq->context = flow;
-    ureqs[i] = ureq;
-    printf("ureqs[%d] set, ureq->poll_ctx = %p\n", i, ureq->poll_ctx);
+  printf("ureq->send.data_len: %u, slot_item.size: %u, ureq: %p\n",
+         ureq->send.data_len, slot_item.size, ureq);
+  if (slot_item.engine_offset == RDMAEndpoint::RC_MAGIC) {
+    ureq->rc_or_flush_done = 0;
+    flow->rc_read(ureq);
+    return 0;
   }
 
-  for (int i = 0; i < nmsg; ++i)
-    if (!ureqs[i]) return 0;
-
-  DCHECK(flow != nullptr);
-  flow->post_multi_read(ureqs, slots[0].engine_offset);
-
-  send_comm->fifo_head++;
-  memset((void*)slots, 0, sizeof(FifoItem));
-  memset(ureqs, 0, kMaxRecv * sizeof(ucclRequest*));
-
+  if (ureq->poll_ctx == nullptr) {
+    ureq->poll_ctx = ctx_pool_->pop();
+    if (!ureq->poll_ctx) {
+      fprintf(stderr, "uccl_read_async_direct: ctx_pool empty, cannot post\n");
+      return -1;
+    }
+  }
+  ureq->engine_idx = slot_item.engine_offset;
+  DCHECK(ureq->context) << "uccl_read_async_direct: ureq->context is null";
+  ucclRequest* one[1] = {ureq};
+  flow->post_multi_read(one, slot_item.engine_offset);
   return 0;
 }
 
@@ -1643,7 +1660,8 @@ bool RDMAEndpoint::uccl_poll_ureq_once(struct ucclRequest* ureq) {
   // printf("uccl_poll_ureq_once: ureq->type: %d, flow: %p\n", ureq->type,
   // flow);
   if (ureq->type == ReqTxRC || ureq->type == ReqRxRC ||
-      ureq->type == ReqFlush || ureq->type == ReqRead) {
+      ureq->type == ReqFlush ||
+      (ureq->type == ReqRead && ureq->poll_ctx == nullptr)) {
     flow->poll_flow_cq();
     ret = ureq->rc_or_flush_done;
   } else {
@@ -1836,6 +1854,9 @@ int RDMAEndpoint::uccl_regmr(int dev, void* addr, size_t len,
                              int type /*unsed for now*/,
                              struct Mhandle** mhandle) {
   auto factory_dev = RDMAFactory::get_factory_dev(dev);
+  cudaPointerAttributes attr;
+  cudaPointerGetAttributes(&attr, addr);
+  printf("ptr %p is on device %d, type %d\n", addr, attr.device, attr.type);
 
   *mhandle = new Mhandle();
   (*mhandle)->mr =
@@ -2403,10 +2424,14 @@ bool RDMAContext::senderCC_tx_read(struct ucclRequest* ureq) {
   auto rkey = ureq->send.rkey;
   uint32_t* off = &ureq->send.sent_offset;
 
-  printf("senderCC_tx_read\n");
+  printf("senderCC_tx_read, size: %d\n", size);
   if (size == 0) {
     DCHECK(false) << "RDMA READ len 0";
     return true;
+  }
+
+  if (size < 0) {
+    std::abort();
   }
 
   if (!ucclParamRCMode()) {
@@ -2438,14 +2463,21 @@ bool RDMAContext::senderCC_tx_read(struct ucclRequest* ureq) {
     wr_ex->qpidx = qpidx;
 
     struct ibv_send_wr* bad;
-    if (ibv_post_send(qpw.qp, wr, &bad)) return false;
-
+    int ret = ibv_post_send(qpw.qp, wr, &bad);
+    if (ret) {
+      fprintf(stderr,
+              "ibv_post_send failed: ret=%d (%s)   wr_id=%lu  lkey=0x%x "
+              "rkey=0x%x  len=%u\n",
+              ret, strerror(ret), wr->wr_id, wr_ex->sge.lkey, wr->wr.rdma.rkey,
+              wr_ex->sge.length);
+      return false;
+    }
     *off += chunk;
   }
 
   printf(
       "RDMA READ: flow#%lu, req id#%u, msg id#%u, size:%u, laddr:%ld, "
-      "raddr:%ld, lkey:%u, rkey:%u\n",
+      "raddr:%lx, lkey:%u, rkey:%u\n",
       flow->flowid(), ureq->send.rid, ureq->mid, size, laddr, raddr, lkey,
       rkey);
   return true;
