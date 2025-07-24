@@ -40,7 +40,6 @@ CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
 SOURCES := engine.cc pybind_engine.cc
-HEADERS := engine.h
 CORE_SOURCE := engine.cc
 CORE_OBJECT := $(CORE_SOURCE:.cc=.o)
 OBJECTS := $(SOURCES:.cc=.o)
@@ -75,7 +74,7 @@ install: $(TARGET) $(PLUGIN_SO)
 	@cp $(TARGET) $(INSTALL_DIR)/
 	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(TARGET)"
 	install -m 755 $(PLUGIN_SO) $(LIBDIR)/
-	install -m 644 $(HEADERS) $(INCDIR)/
+	install -m 644 $(CAPI_HEADER) $(INCDIR)/
 # Clean build artifacts
 clean:
 	rm -f $(OBJECTS) $(TARGET) $(PLUGIN_SO)

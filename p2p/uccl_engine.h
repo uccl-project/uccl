@@ -97,7 +97,20 @@ void uccl_engine_conn_destroy(uccl_conn_t* conn);
  */
 void uccl_engine_mr_destroy(uccl_mr_t* mr);
 
+/**
+ * Get endpoint metadata for connection establishment.
+ * @param engine        The engine instance.
+ * @param metadata      Pointer to store the metadata in string.
+ * @return              0 on success, non-zero on failure.
+ */
+int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata_str);
+
+/**
+ * Free endpoint metadata buffer.
+ * @param metadata      The metadata buffer to free.
+ */
+void uccl_engine_free_endpoint_metadata(uint8_t* metadata);
+
 #ifdef __cplusplus
 }
 #endif  // __cplusplus
-        // ... existing code ...

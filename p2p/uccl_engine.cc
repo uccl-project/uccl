@@ -1,6 +1,9 @@
 #include "uccl_engine.h"
 #include "engine.h"
+#include <arpa/inet.h>
 #include <cstring>
+#include <string>
+#include <vector>
 
 struct uccl_engine {
   Endpoint* endpoint;
@@ -98,3 +101,53 @@ int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t* mr, void* data,
 void uccl_engine_conn_destroy(uccl_conn_t* conn) { delete conn; }
 
 void uccl_engine_mr_destroy(uccl_mr_t* mr) { delete mr; }
+
+int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
+  if (!engine || !metadata) return -1;
+
+  try {
+    std::vector<uint8_t> metadata_vec =
+        engine->endpoint->get_endpoint_metadata();
+
+    // Build string representation
+    std::string result;
+    if (metadata_vec.size() == 10) {  // IPv4 format
+      std::string ip_addr = std::to_string(metadata_vec[0]) + "." +
+                            std::to_string(metadata_vec[1]) + "." +
+                            std::to_string(metadata_vec[2]) + "." +
+                            std::to_string(metadata_vec[3]);
+      uint16_t port = (metadata_vec[4] << 8) | metadata_vec[5];
+      int gpu_idx;
+      std::memcpy(&gpu_idx, &metadata_vec[6], sizeof(int));
+
+      result = "" + ip_addr + ":" + std::to_string(port) + "?" +
+               std::to_string(gpu_idx);
+    } else if (metadata_vec.size() == 22) {  // IPv6 format
+      char ip6_str[INET6_ADDRSTRLEN];
+      struct in6_addr ip6_addr;
+      std::memcpy(&ip6_addr, metadata_vec.data(), 16);
+      inet_ntop(AF_INET6, &ip6_addr, ip6_str, sizeof(ip6_str));
+
+      uint16_t port = (metadata_vec[16] << 8) | metadata_vec[17];
+      int gpu_idx;
+      std::memcpy(&gpu_idx, &metadata_vec[18], sizeof(int));
+
+      result = "" + std::string(ip6_str) + "]:" + std::to_string(port) + "?" +
+               std::to_string(gpu_idx);
+    } else {  // Fallback: return hex representation
+      result = "";
+      for (size_t i = 0; i < metadata_vec.size(); ++i) {
+        char hex[3];
+        snprintf(hex, sizeof(hex), "%02x", metadata_vec[i]);
+        result += hex;
+      }
+    }
+
+    *metadata = new char[result.length() + 1];
+    std::strcpy(*metadata, result.c_str());
+
+    return 0;
+  } catch (...) {
+    return -1;
+  }
+}
