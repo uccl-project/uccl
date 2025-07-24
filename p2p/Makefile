@@ -54,8 +54,8 @@ $(TARGET): $(OBJECTS) ../rdma/librdma.a
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) -DWITH_PYTHON \
 	      -Wl,-rpath,$(CUDA_LIB)
 
-$(PLUGIN_SO): $(CAPI_OBJECT) ../rdma/librdma.a
-	$(CXX) $(CAPI_OBJECT) ../rdma/librdma.a \
+$(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECT) ../rdma/librdma.a
+	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) ../rdma/librdma.a \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB)
