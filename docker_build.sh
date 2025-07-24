@@ -138,7 +138,7 @@ else
             CXX=/opt/rocm/bin/hipcc cmake -B build/release -S . -DCMAKE_EXPORT_COMPILE_COMMANDS=OFF >/dev/null 2>&1 || true
             cd ../..
           fi
-          cd rdma && make clean -f Makefile_hip && make -j$(nproc) -f Makefile_hip && cd ..
+          cd rdma && make clean -f MakefileHip && make -j$(nproc) -f MakefileHip && cd ..
           TARGET_SO=rdma/librccl-net-uccl.so
       elif [[ "$TARGET" == efa ]]; then
           cd efa && make clean && make -j$(nproc) && cd ..

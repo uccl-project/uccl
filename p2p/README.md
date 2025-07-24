@@ -112,6 +112,19 @@ python benchmark_uccl_dual.py --role server --device cpu --local-gpu-idx 0 --num
 python benchmark_uccl_dual.py --role client --device cpu --local-gpu-idx 0 --num-cpus 4 --remote-ip <Remote IP>
 ```
 
+To benchmark on AMD GPUs: 
+```bash
+make -j -f MakefileHip install
+
+export CONDA_LIB_HOME="/work1/yzhou/yangzhou/anaconda3/lib"
+export LD_LIBRARY_PATH=${CONDA_LIB_HOME}:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH}
+export UCCL_RCMODE=1
+
+python benchmark_uccl.py --role server --device gpu --local-gpu-idx 0 --num-cpus 4
+python benchmark_uccl.py --role client --device gpu --local-gpu-idx 0 --num-cpus 4 --remote-ip <Server IP>
+```
+
+
 ### Running NIXL (with UCX backend)
 
 If you have not installed nixl with RDMA support, you can follow: 
@@ -205,6 +218,8 @@ To benchmark dual direction transfer, you can run `benchmark_nccl_dual.py` with 
 
 
 ## Usage Examples
+
+<details><summary>Click me</summary>
 
 ### Basic Endpoint Setup
 
@@ -337,8 +352,12 @@ assert success
 print(f"Received sizes: {recv_size_list}")
 ```
 
+</details>
+
 
 ## API Reference
+
+<details><summary>Click me</summary>
 
 ### Endpoint Class
 
@@ -500,6 +519,8 @@ Poll the status of an asynchronous transfer operation.
 **Returns:**
 - `success` (bool): Whether polling succeeded
 - `is_done` (bool): Whether the transfer has completed
+
+</details>
 
 
 ## Development and Testing
