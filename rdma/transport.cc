@@ -1499,7 +1499,7 @@ void UcclFlow::post_multi_read(ucclRequest** ureqs, uint32_t engine_offset) {
     printf("ureqs[%d]->poll_ctx = %p\n", i, ureqs[i]->poll_ctx);
     printf("ureqs[i]->data_len = %u, ureqs[i]: %p\n", ureqs[i]->send.data_len,
            ureqs[i]);
-    printf("ureq->pollctx: %d\n", (ureqs[i]->poll_ctx)->done.load());
+    // printf("ureq->pollctx: %d\n", (ureqs[i]->poll_ctx)->done.load());
   }
   printf("before jring_mp_enqueue_bulk, n: %d, engine_idx: %u\n", n,
          engine_idx);
@@ -1644,7 +1644,7 @@ int RDMAEndpoint::uccl_read_async(UcclFlow* flow, Mhandle* local_mh, void* dst,
       return -1;
     }
   }
-  printf("ureq->pollctx: %d\n", (ureq->poll_ctx)->done.load());
+  // printf("ureq->pollctx: %d\n", (ureq->poll_ctx)->done.load());
   ureq->engine_idx = slot_item.engine_offset;
   DCHECK(ureq->context) << "uccl_read_async_direct: ureq->context is null";
   ucclRequest* one[1] = {ureq};
@@ -2475,7 +2475,7 @@ bool RDMAContext::senderCC_tx_read(struct ucclRequest* ureq) {
     wr->send_flags = IBV_SEND_SIGNALED;
     wr->wr_id = (uint64_t)ureq->poll_ctx;
 
-    printf("ureq->pollctx: %d\n", (ureq->poll_ctx)->done.load());
+    // printf("ureq->pollctx: %d\n", (ureq->poll_ctx)->done.load());
 
     uint32_t qpidx = select_qpidx_pot(chunk, flow->sub_flows_[engine_offset_]);
     auto& qpw = dp_qps_[qpidx];
