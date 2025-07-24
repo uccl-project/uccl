@@ -253,9 +253,6 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
     }
   } while (rc == -1);
 
-  // Will stuck.
-  // uccl_wakeup(ureq.poll_ctx);
-
   while (!ep_->uccl_poll_ureq_once(&ureq)) {
     check_python_signals();
   }

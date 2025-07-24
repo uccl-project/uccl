@@ -392,7 +392,7 @@ void UcclRDMAEngine::handle_tx_work(void) {
       fprintf(stderr, "[FATAL] Null ureq in tx work\n");
       continue;
     }
-    DCHECK(ureq->context) << "ureq->context is null";
+    // DCHECK(ureq->context) << "ureq->context is null";
     UCCL_LOG_ENGINE << "Process tx work.";
     printf("Processing pending tx work: %p, %p\n", rdma_ctx, ureq);
     if (!rdma_ctx->tx_message(ureq)) {
@@ -1662,9 +1662,14 @@ bool RDMAEndpoint::uccl_poll_ureq_once(struct ucclRequest* ureq) {
   if (ureq->type == ReqTxRC || ureq->type == ReqRxRC ||
       ureq->type == ReqFlush ||
       (ureq->type == ReqRead && ureq->poll_ctx == nullptr)) {
+    printf(
+        "uccl_poll_ureq_once: ureq->type: %d, flow: %p, rc_or_flush_done: "
+        "%ld\n",
+        ureq->type, flow, ureq->rc_or_flush_done);
     flow->poll_flow_cq();
     ret = ureq->rc_or_flush_done;
   } else {
+    printf("uccl_poll_ureq_once: ureq->type: %d, flow: %p\n", ureq->type, flow);
     ret = uccl_poll_once(ureq->poll_ctx);
   }
   if ((ureq->type == ReqRx || ureq->type == ReqRxRC) && ret) {
@@ -1942,8 +1947,8 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
   qpAttr.pkey_index = 0;
   qpAttr.port_num = factory_dev->ib_port_num;
   qpAttr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ;
-  qpAttr.max_rd_atomic = 1;
-  qpAttr.max_dest_rd_atomic = 1;
+  qpAttr.max_rd_atomic = 8;
+  qpAttr.max_dest_rd_atomic = 8;
 
   for (int i = 0; i < ucclParamPORT_ENTROPY(); i++) {
     struct ibv_qp* qp = ibv_create_qp(pd_, &qp_init_attr);
@@ -2459,7 +2464,7 @@ bool RDMAContext::senderCC_tx_read(struct ucclRequest* ureq) {
     wr->sg_list = &wr_ex->sge;
     wr->num_sge = 1;
     wr->send_flags = IBV_SEND_SIGNALED;
-    wr->wr_id = (uint64_t)&ureq->rc_or_flush_done;
+    wr->wr_id = (uint64_t)&ureq->poll_ctx;
 
     uint32_t qpidx = select_qpidx_pot(chunk, flow->sub_flows_[engine_offset_]);
     auto& qpw = dp_qps_[qpidx];
@@ -2509,10 +2514,10 @@ void RDMAContext::uc_post_acks() {
 void RDMAContext::rc_rx_ack(struct ibv_wc* wc) {
   auto opcode = wc->opcode;
   if (opcode == IBV_WC_RDMA_READ) {
-    // printf("rc_rx_ack Received RDMA READ completion with wr_id: %lu\n",
-    // wc->wr_id);
-    auto* flag = reinterpret_cast<uint64_t*>(wc->wr_id);
-    *flag = 1;
+    printf("rc_rx_ack Received RDMA READ completion with wr_id: %lu\n",
+           wc->wr_id);
+    auto poll_ctx = reinterpret_cast<PollCtx*>(wc->wr_id);
+    uccl_wakeup(poll_ctx);
     return;
   }
   auto now = rdtsc();
@@ -2557,10 +2562,11 @@ void RDMAContext::rc_rx_ack(struct ibv_wc* wc) {
 void RDMAContext::rc_rx_ack(struct ibv_cq_ex* cq_ex) {
   auto opcode = ibv_wc_read_opcode(cq_ex);
   if (opcode == IBV_WC_RDMA_READ) {
-    // printf("rc_rx_ack ibv_cq_ex Received RDMA READ completion with wr_id:
-    // %lu\n", cq_ex->wr_id);
-    auto* flag = reinterpret_cast<uint64_t*>(cq_ex->wr_id);
-    *flag = 1;
+    printf(
+        "rc_rx_ack ibv_cq_ex Received RDMA READ completion with wr_id: %lu\n",
+        cq_ex->wr_id);
+    auto poll_ctx = reinterpret_cast<PollCtx*>(cq_ex->wr_id);
+    uccl_wakeup(poll_ctx);
     return;
   }
   auto now = rdtsc();
