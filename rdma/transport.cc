@@ -2473,9 +2473,9 @@ bool RDMAContext::senderCC_tx_read(struct ucclRequest* ureq) {
     wr->sg_list = &wr_ex->sge;
     wr->num_sge = 1;
     wr->send_flags = IBV_SEND_SIGNALED;
-    wr->wr_id = (uint64_t)&ureq->poll_ctx;
+    wr->wr_id = (uint64_t)ureq->poll_ctx;
 
-    printf("ureq->pollctx: %d", (ureq->poll_ctx)->done.load());
+    printf("ureq->pollctx: %d\n", (ureq->poll_ctx)->done.load());
 
     uint32_t qpidx = select_qpidx_pot(chunk, flow->sub_flows_[engine_offset_]);
     auto& qpw = dp_qps_[qpidx];
