@@ -13,6 +13,8 @@ try:
 except ModuleNotFoundError:
     pass
 import numpy as np
+import os
+os.environ["UCCL_RCMODE"] = "1"
 
 def parse_metadata(meta: bytes):
     if len(meta) == 10:            # IPv4

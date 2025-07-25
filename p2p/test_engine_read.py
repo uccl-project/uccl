@@ -16,6 +16,8 @@ except ImportError as e:
     sys.exit(1)
 
 import torch
+import os
+os.environ["UCCL_RCMODE"] = "1"
 
 def parse_endpoint_meta(meta: bytes) -> Tuple[str, int, int]:
     """Return (ip, port, remote_gpu_idx)."""
