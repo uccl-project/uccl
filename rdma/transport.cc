@@ -2436,10 +2436,6 @@ bool RDMAContext::senderCC_tx_read(struct ucclRequest* ureq) {
     std::abort();
   }
 
-  if (!ucclParamRCMode()) {
-    DCHECK(false) << "RDMA READ is not supported in UC mode";
-  }
-
   while (*sent_offset < size || size == 0) {
     chunk_size = EventOnChunkSize(subflow, size - *sent_offset);
 

@@ -234,6 +234,12 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
 bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
                     uccl::FifoItem const& slot_item) {
   py::gil_scoped_release release;
+
+  if (!ucclParamRCMode()) {
+    DCHECK(false) << "RDMA READ is only supported in RC mode, toggle RCMODE to be True in transport_config.h";
+    std::abort();
+  }
+
   DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
   auto* conn = conn_id_to_conn_[conn_id];
   auto* mhandle = mr_id_to_mr_[mr_id]->mhandle_;
