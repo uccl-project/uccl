@@ -122,7 +122,7 @@ def main():
                    default=[256,1024,4096,16384,65536,262144,1048576,10485760])
     p.add_argument("--iters", type=int, default=1)
     p.add_argument("--async-transfer", action="store_true")
-    p.add_argument("--oob-port", type=int, default=19999)
+    p.add_argument("--oob-port", type=int, default=20000)
     args = p.parse_args()
 
     print("Sizes:", ", ".join(_pretty(s) for s in args.sizes))

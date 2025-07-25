@@ -109,7 +109,7 @@ Build `librccl-net-uccl.so`
 
 ```bash
 cd $UCCL_HOME/rdma
-make -f Makefile_hip -j
+make -f MakefileHip -j
 ```
 
 Run `rccl-tests`:
@@ -128,7 +128,7 @@ Using the following to build `librccl-net-uccl.so`
 
 ```bash
 cd $UCCL_HOME/rdma
-make -f Makefile_hip -j
+make -f MakefileHip -j
 ```
 
 Run `rccl-tests`:
@@ -156,7 +156,7 @@ Use `UCCL_PARAM()` to introduce new environment variables.
 | UCCL_ROCE_TRAFFIC_CLASS | Traffic class for RoCE | 3 |
 | UCCL_ROCE_SERVICE_LEVEL | Service level for RoCE | 135 |
 | UCCL_IB_SERVICE_LEVEL | Service level for IB | 0 |
-| UCCL_RCMODE | Use RC for data transfer | true (Broadcom NIC), false (others) |
+| UCCL_RCMODE | Use RC for data transfer | 1 (Broadcom NIC), 0 (others) |
 | UCCL_BYPASS_PACING | Bypass the pacing stage | true |
 | UCCL_NUM_ENGINES | Number of engines per device | 4 (NVIDIA), 1 (AMD) |
 | UCCL_PORT_ENTROPY | Path/QP per engine | 32 (NVIDIA), 256 (AMD) |

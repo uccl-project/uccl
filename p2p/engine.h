@@ -12,7 +12,7 @@
 #include <tuple>
 #include <unordered_map>
 #include <vector>
-#define USE_REDIS
+// #define USE_REDIS
 #ifdef USE_REDIS
 #include <sw/redis++/redis++.h>
 #endif
@@ -92,6 +92,9 @@ class Endpoint {
    *   mr_id: the ID of the MR
    */
   bool reg(void const* data, size_t size, uint64_t& mr_id);
+
+  bool regv(std::vector<void const*> const& data_v,
+            std::vector<size_t> const& size_v, std::vector<uint64_t>& mr_id_v);
 
   /*
    * Send data to the remote server. Blocking.

@@ -53,6 +53,24 @@ PYBIND11_MODULE(p2p, m) {
           },
           "Register a data buffer", py::arg("ptr"), py::arg("size"))
       .def(
+          "regv",
+          [](Endpoint& self, std::vector<uintptr_t> const& ptrs,
+             std::vector<size_t> const& sizes) {
+            if (ptrs.size() != sizes.size())
+              throw std::runtime_error("ptrs and sizes must match");
+
+            std::vector<void const*> data_v;
+            data_v.reserve(ptrs.size());
+            for (auto p : ptrs)
+              data_v.push_back(reinterpret_cast<void const*>(p));
+
+            std::vector<uint64_t> mr_ids;
+            bool ok = self.regv(data_v, sizes, mr_ids);
+            return py::make_tuple(ok, py::cast(mr_ids));
+          },
+          py::arg("ptrs"), py::arg("sizes"),
+          "Batch-register multiple memory regions and return [ok, mr_id_list]")
+      .def(
           "send",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
              size_t size) {
