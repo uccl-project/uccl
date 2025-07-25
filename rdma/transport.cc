@@ -5,18 +5,19 @@
 #include "util/util.h"
 #include "util_rdma.h"
 #include "util_timer.h"
-#include <infiniband/verbs.h>
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
+#include <endian.h>
+#include <infiniband/verbs.h>
 #include <string>
 #include <utility>
-#include <endian.h>
 
 namespace uccl {
 
 void UcclFlow::poll_flow_cq(void) {
-  if (!flow_cq_cnt_) return;
+  if (!flow_cq_cnt_)
+    return;
 
   auto comm_base = &recv_comm_.base;
   auto cq = comm_base->flow_cq;
@@ -29,30 +30,30 @@ void UcclFlow::poll_flow_cq(void) {
       // RC send completion.
       if constexpr (kRCSize > 0) {
         if (wcs[i].qp_num == comm_base->rc_qp->qp_num) {
-          auto* rc_or_flush_done = (uint64_t*)wcs[i].wr_id;
+          auto *rc_or_flush_done = (uint64_t *)wcs[i].wr_id;
           *rc_or_flush_done = true;
         }
       }
     } else if (opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
       // RC recv completion.
-      auto ureq = (struct ucclRequest*)wcs[i].wr_id;
+      auto ureq = (struct ucclRequest *)wcs[i].wr_id;
       ureq->recv.data_len[0] = ntohl(wcs[i].imm_data);
       ureq->rc_or_flush_done = true;
       if (ureq->recv.data_len[0] <= NCCL_MIN_POST_RECV) {
-        auto* flow = (UcclFlow*)ureq->context;
+        auto *flow = (UcclFlow *)ureq->context;
         flow->set_last_rc_size(ureq->recv.data_len[0]);
       }
     } else if (opcode == IBV_WC_RDMA_READ) {
       // GPU flush completion.
-      auto* rc_or_flush_done = (uint64_t*)wcs[i].wr_id;
+      auto *rc_or_flush_done = (uint64_t *)wcs[i].wr_id;
       *rc_or_flush_done = true;
     }
   }
   flow_cq_cnt_ -= nb_cqe;
 }
 
-void UcclFlow::post_flush(struct Mhandle** mhandles, void** data, int* size,
-                          int n, uint64_t* flush_done, int last) {
+void UcclFlow::post_flush(struct Mhandle **mhandles, void **data, int *size,
+                          int n, uint64_t *flush_done, int last) {
   struct ibv_send_wr wr = {};
   wr.wr_id = (uint64_t)flush_done;
   wr.wr.rdma.remote_addr = reinterpret_cast<uint64_t>(data[last]);
@@ -62,7 +63,7 @@ void UcclFlow::post_flush(struct Mhandle** mhandles, void** data, int* size,
   wr.opcode = IBV_WR_RDMA_READ;
   wr.send_flags = IBV_SEND_SIGNALED;
 
-  struct ibv_send_wr* bad_wr;
+  struct ibv_send_wr *bad_wr;
   DCHECK(ibv_post_send(recv_comm_.gpu_flush_qp, &wr, &bad_wr) == 0);
 
   flow_cq_cnt_++;
@@ -71,11 +72,11 @@ void UcclFlow::post_flush(struct Mhandle** mhandles, void** data, int* size,
               << ", rkey: " << wr.wr.rdma.rkey;
 }
 
-void UcclFlow::rc_recv(void* data, int size, struct Mhandle* mhandle,
-                       struct ibv_send_wr* wr, struct ibv_sge* sge,
-                       struct ucclRequest* ureq) {
-  auto* comm_base = &recv_comm_.base;
-  struct RemFifo* rem_fifo = comm_base->fifo;
+void UcclFlow::rc_recv(void *data, int size, struct Mhandle *mhandle,
+                       struct ibv_send_wr *wr, struct ibv_sge *sge,
+                       struct ucclRequest *ureq) {
+  auto *comm_base = &recv_comm_.base;
+  struct RemFifo *rem_fifo = comm_base->fifo;
   int slot = rem_fifo->fifo_tail % kMaxReq;
   auto elems = rem_fifo->elems[slot];
   auto qp = comm_base->fifo_qp;
@@ -114,7 +115,7 @@ void UcclFlow::rc_recv(void* data, int size, struct Mhandle* mhandle,
     flow_cq_cnt_++;
   }
 
-  struct ibv_send_wr* bad_wr;
+  struct ibv_send_wr *bad_wr;
   DCHECK(ibv_post_send(qp, wr, &bad_wr) == 0);
 
   // Post a recv buffer for consuming immedate data.
@@ -123,7 +124,7 @@ void UcclFlow::rc_recv(void* data, int size, struct Mhandle* mhandle,
   recv_wr.sg_list = nullptr;
   recv_wr.num_sge = 0;
   recv_wr.next = nullptr;
-  struct ibv_recv_wr* bad_recv_wr;
+  struct ibv_recv_wr *bad_recv_wr;
   DCHECK(ibv_post_recv(comm_base->rc_qp, &recv_wr, &bad_recv_wr) == 0);
   flow_cq_cnt_++;
 
@@ -132,13 +133,13 @@ void UcclFlow::rc_recv(void* data, int size, struct Mhandle* mhandle,
   rem_fifo->fifo_tail++;
 }
 
-struct FifoItem* UcclFlow::post_fifo(uint32_t engine_idx, void** data,
-                                     int* size, int n, struct Mhandle** mhandle,
-                                     struct ibv_send_wr* wr,
-                                     struct ibv_sge* sge) {
-  auto* comm_base = &recv_comm_.base;
+struct FifoItem *UcclFlow::post_fifo(uint32_t engine_idx, void **data,
+                                     int *size, int n, struct Mhandle **mhandle,
+                                     struct ibv_send_wr *wr,
+                                     struct ibv_sge *sge) {
+  auto *comm_base = &recv_comm_.base;
   memset(wr, 0, sizeof(*wr));
-  struct RemFifo* rem_fifo = comm_base->fifo;
+  struct RemFifo *rem_fifo = comm_base->fifo;
   int slot = rem_fifo->fifo_tail % kMaxReq;
   auto elems = rem_fifo->elems[slot];
 
@@ -188,7 +189,7 @@ struct FifoItem* UcclFlow::post_fifo(uint32_t engine_idx, void** data,
 
 void UcclRDMAEngine::rc_handle_completion(void) {
   int work = 0;
-  for (auto& it : rdma_ctx_map_) {
+  for (auto &it : rdma_ctx_map_) {
     // Update ratio and offset
     it.second->update_clock(nic_ts_ratio_, nic_ts_offset_);
 
@@ -211,7 +212,7 @@ void UcclRDMAEngine::uc_handle_completion(void) {
 
   io_ctx_.poll_ctrl_cq();
 
-  for (auto& it : rdma_ctx_map_) {
+  for (auto &it : rdma_ctx_map_) {
     // Update ratio and offset
     it.second->update_clock(nic_ts_ratio_, nic_ts_offset_);
 
@@ -222,7 +223,7 @@ void UcclRDMAEngine::uc_handle_completion(void) {
   io_ctx_.uc_poll_send_cq();
   io_ctx_.uc_poll_recv_cq();
 
-  for (auto& it : rdma_ctx_map_) {
+  for (auto &it : rdma_ctx_map_) {
     if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS)
       it.second->check_credit_rq(!work);
   }
@@ -251,7 +252,8 @@ void UcclRDMAEngine::handle_rx_work(void) {
     }
   }
 
-  if (budget < 0) return;
+  if (budget < 0)
+    return;
 
   while (budget--) {
     if (jring_sc_dequeue_bulk(channel_->rx_cmdq_, &rx_work, 1, nullptr) == 0)
@@ -314,8 +316,8 @@ inline void RDMAEndpoint::initialize_resources(int total_num_engines) {
 }
 
 void RDMAEndpoint::cleanup_resources() {
-  for (auto& flows : active_flows_vec_) {
-    for (auto* flow : flows) {
+  for (auto &flows : active_flows_vec_) {
+    for (auto *flow : flows) {
       if (flow) {
         delete flow;
       }
@@ -325,7 +327,7 @@ void RDMAEndpoint::cleanup_resources() {
   active_flows_vec_.clear();
   active_flows_spin_.clear();
 
-  for (auto* channel : channel_vec_) {
+  for (auto *channel : channel_vec_) {
     if (channel) {
       delete channel;
     }
@@ -335,7 +337,7 @@ void RDMAEndpoint::cleanup_resources() {
   engine_vec_.clear();
   engine_id_to_engine_map_.clear();
 
-  for (auto* eqds_ptr : eqds_) {
+  for (auto *eqds_ptr : eqds_) {
     if (eqds_ptr) {
       delete eqds_ptr;
     }
@@ -353,16 +355,16 @@ void RDMAEndpoint::cleanup_resources() {
   peer_map_mu_.clear();
 
   next_peer_id_.clear();
-  for (auto& spins : flow_id_spin_) {
+  for (auto &spins : flow_id_spin_) {
     spins.clear();
   }
   flow_id_spin_.clear();
-  for (auto& flow_ids : next_flow_id_) {
+  for (auto &flow_ids : next_flow_id_) {
     flow_ids.clear();
   }
   next_flow_id_.clear();
 
-  for (auto& boostrap_fd : fd_vec_) {
+  for (auto &boostrap_fd : fd_vec_) {
     close(boostrap_fd);
   }
   fd_vec_.clear();
@@ -418,13 +420,15 @@ void UcclRDMAEngine::handle_tx_work(void) {
 
     bytes += tx_work.ureq->send.data_len;
 
-    if (bytes >= kMaxTxBytesThres) break;
+    if (bytes >= kMaxTxBytesThres)
+      break;
   }
 }
 
 void UcclRDMAEngine::handle_timing_wheel(void) {
-  if (io_ctx_.bypass_pacing()) return;
-  for (auto& it : rdma_ctx_map_) {
+  if (io_ctx_.bypass_pacing())
+    return;
+  for (auto &it : rdma_ctx_map_) {
     it.second->burst_timing_wheel();
   }
 }
@@ -460,20 +464,22 @@ void UcclRDMAEngine::run() {
  */
 void UcclRDMAEngine::periodic_process() {
   // Handle RTOs for all UC QPs.
-  if (!io_ctx_.is_rc_mode()) handle_rto();
+  if (!io_ctx_.is_rc_mode())
+    handle_rto();
 
   // Handle control plane requests.
   process_ctl_reqs();
 }
 
 void UcclRDMAEngine::handle_rto() {
-  if (is_no_rto()) return;
+  if (is_no_rto())
+    return;
 
   auto expired_qp_vec = rto_tm_.check_expired();
 
   for (auto data : expired_qp_vec) {
-    auto* rdma_ctx = reinterpret_cast<struct RDMAContext*>(data.rdma_ctx);
-    auto* subflow = reinterpret_cast<struct SubUcclFlow*>(data.flow);
+    auto *rdma_ctx = reinterpret_cast<struct RDMAContext *>(data.rdma_ctx);
+    auto *subflow = reinterpret_cast<struct SubUcclFlow *>(data.flow);
 
     DCHECK(rdma_ctx && subflow);
 
@@ -498,33 +504,34 @@ void UcclRDMAEngine::process_ctl_reqs() {
   while (jring_sc_dequeue_bulk(channel_->ctrl_cmdq_, &ctrl_work, 1, nullptr) ==
          1) {
     switch (ctrl_work.opcode) {
-      case Channel::CtrlMsg::kInstallCtx:
-        UCCL_LOG_ENGINE << "[Engine#" << engine_idx_ << "] "
-                        << "kInstallCtx";
-        handle_install_ctx_on_engine(ctrl_work);
-        break;
-      case Channel::CtrlMsg::kInstallFlow:
-        UCCL_LOG_ENGINE << "[Engine#" << engine_idx_ << "] "
-                        << "kInstallFlow";
-        handle_install_flow_on_engine(ctrl_work);
-        break;
-      default:
-        break;
+    case Channel::CtrlMsg::kInstallCtx:
+      UCCL_LOG_ENGINE << "[Engine#" << engine_idx_ << "] "
+                      << "kInstallCtx";
+      handle_install_ctx_on_engine(ctrl_work);
+      break;
+    case Channel::CtrlMsg::kInstallFlow:
+      UCCL_LOG_ENGINE << "[Engine#" << engine_idx_ << "] "
+                      << "kInstallFlow";
+      handle_install_flow_on_engine(ctrl_work);
+      break;
+    default:
+      break;
     }
   }
 }
 
 void UcclRDMAEngine::handle_install_flow_on_engine(
-    Channel::CtrlMsg& ctrl_work) {
+    Channel::CtrlMsg &ctrl_work) {
   if (rdma_ctx_map_.find(ctrl_work.peer_id) == rdma_ctx_map_.end()) {
     pending_install_flow_works_.push_back(ctrl_work);
     return;
   }
 
-  auto* rdma_ctx = rdma_ctx_map_[ctrl_work.peer_id];
-  auto* poll_ctx = ctrl_work.poll_ctx;
+  auto *rdma_ctx = rdma_ctx_map_[ctrl_work.peer_id];
+  auto *poll_ctx = ctrl_work.poll_ctx;
   auto flow_id = ctrl_work.meta.install_flow.flow_id;
-  auto* flow = reinterpret_cast<UcclFlow*>(ctrl_work.meta.install_flow.context);
+  auto *flow =
+      reinterpret_cast<UcclFlow *>(ctrl_work.meta.install_flow.context);
   auto is_send = ctrl_work.meta.install_flow.is_send;
 
   DCHECK(flow_id < MAX_FLOW) << flow_id << ", " << MAX_FLOW;
@@ -535,7 +542,7 @@ void UcclRDMAEngine::handle_install_flow_on_engine(
   } else {
     rdma_ctx->add_receiver_flow(flow, flow_id);
     if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
-      auto* subflow = flow->sub_flows_[engine_idx_ % ucclParamNUM_ENGINES()];
+      auto *subflow = flow->sub_flows_[engine_idx_ % ucclParamNUM_ENGINES()];
 
       subflow->pcb.eqds_cc.set_fid(flow_id);
       // All subflows belong to the same RDMAContext share the same
@@ -562,7 +569,7 @@ void UcclRDMAEngine::handle_install_flow_on_engine(
   uccl_wakeup(poll_ctx);
 }
 
-void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
+void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg &ctrl_work) {
   int ret;
   auto meta = ctrl_work.meta;
   auto info = &meta.install_ctx;
@@ -570,9 +577,9 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
   int bootstrap_fd = info->bootstrap_fd;
   auto dev = dev_;
 
-  RDMAContext* rdma_ctx;
+  RDMAContext *rdma_ctx;
 
-  auto* next_install_engine = info->next_install_engine;
+  auto *next_install_engine = info->next_install_engine;
 
   {
     DCHECK(rdma_ctx_map_.find(ctrl_work.peer_id) == rdma_ctx_map_.end());
@@ -590,7 +597,7 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
     UCCL_LOG_ENGINE << "Engine#" << engine_idx_ << " launched QP setup thread";
     auto meta = ctrl_work.meta;
     auto info = &meta.install_ctx;
-    auto* poll_ctx = ctrl_work.poll_ctx;
+    auto *poll_ctx = ctrl_work.poll_ctx;
     // Send QPN to remote peer.
     int const size = sizeof(uint32_t);
     auto total_size = kTotalQP * size;
@@ -638,7 +645,7 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
 
     // Modify QPs to RTR and RTS.
     for (auto i = 0; i < ucclParamPORT_ENTROPY(); i++) {
-      auto remote_qpn = *reinterpret_cast<uint32_t*>(buf + i * size);
+      auto remote_qpn = *reinterpret_cast<uint32_t *>(buf + i * size);
       auto qp = rdma_ctx->dp_qps_[i].qp;
 
       ret = modify_qp_rtr(qp, dev, &rdma_ctx->remote_ctx_, remote_qpn);
@@ -650,7 +657,7 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
 
     if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
       auto credit_rqpn =
-          *reinterpret_cast<uint32_t*>(buf + ucclParamPORT_ENTROPY() * size);
+          *reinterpret_cast<uint32_t *>(buf + ucclParamPORT_ENTROPY() * size);
       auto credit_qp = rdma_ctx->credit_qp_;
       ret = modify_qp_rtr(credit_qp, dev, &rdma_ctx->remote_ctx_, credit_rqpn);
       DCHECK(ret == 0) << "Failed to modify Ctrl QP to RTR";
@@ -659,9 +666,9 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
     }
 
     if (!ucclParamRCMode()) {
-      auto ctrl_qpn = *reinterpret_cast<uint32_t*>(buf + kTotalQP * size);
+      auto ctrl_qpn = *reinterpret_cast<uint32_t *>(buf + kTotalQP * size);
       auto remote_peer_id =
-          *reinterpret_cast<uint32_t*>(buf + kTotalQP * size + size);
+          *reinterpret_cast<uint32_t *>(buf + kTotalQP * size + size);
       rdma_ctx->remote_ctx_.remote_ctrl_qpn = ctrl_qpn;
       rdma_ctx->remote_ctx_.remote_peer_id = remote_peer_id;
     }
@@ -692,7 +699,7 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
 
   rdma_ctl_ = rdma_ctl;
 
-  ctx_pool_ = new SharedPool<PollCtx*, true>(kMaxInflightMsg);
+  ctx_pool_ = new SharedPool<PollCtx *, true>(kMaxInflightMsg);
   ctx_pool_buf_ = new uint8_t[kMaxInflightMsg * sizeof(PollCtx)];
   for (int i = 0; i < kMaxInflightMsg; i++) {
     ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());
@@ -700,7 +707,8 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
   int total_num_engines = num_devices_ * num_engines_per_dev;
   initialize_resources(total_num_engines);
 
-  for (int i = 0; i < total_num_engines; i++) channel_vec_[i] = new Channel();
+  for (int i = 0; i < total_num_engines; i++)
+    channel_vec_[i] = new Channel();
 
   if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
     // Receiver-driven congestion control per device.
@@ -733,7 +741,8 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
   initialize_resources(total_num_engines);
   // Create multiple engines. Each engine has its own thread and channel to
   // let the endpoint communicate with.
-  for (int i = 0; i < total_num_engines; i++) channel_vec_[i] = new Channel();
+  for (int i = 0; i < total_num_engines; i++)
+    channel_vec_[i] = new Channel();
 
   if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
     // Receiver-driven congestion control per device.
@@ -774,7 +783,7 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
         }));
   }
 #endif
-  ctx_pool_ = new SharedPool<PollCtx*, true>(kMaxInflightMsg);
+  ctx_pool_ = new SharedPool<PollCtx *, true>(kMaxInflightMsg);
   ctx_pool_buf_ = new uint8_t[kMaxInflightMsg * sizeof(PollCtx)];
   for (int i = 0; i < kMaxInflightMsg; i++) {
     ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());
@@ -790,7 +799,7 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
 }
 #endif
 
-int try_bind_listen_socket(int* sock_fd, int base_port,
+int try_bind_listen_socket(int *sock_fd, int base_port,
                            int max_attempts = 100) {
   struct sockaddr_in addr;
   int port = base_port;
@@ -809,7 +818,7 @@ int try_bind_listen_socket(int* sock_fd, int base_port,
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(port);
 
-    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) == 0) {
+    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
       if (listen(fd, 128) != 0) {
         perror("listen");
         close(fd);
@@ -835,7 +844,7 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev,
          engine_id++) {
       int engine_cpu_id =
           ENGINE_CPU_START_LIST[dev] + engine_id % num_engines_per_dev_;
-      UcclRDMAEngine* engine_ptr;
+      UcclRDMAEngine *engine_ptr;
       {
         std::lock_guard<std::mutex> lock(engine_map_mu_);
         if (engine_id_to_engine_map_.find(engine_id) !=
@@ -908,14 +917,14 @@ inline uint32_t RDMAEndpoint::find_oblivious_engine_idx(int dev) {
 }
 
 inline uint32_t RDMAEndpoint::find_rr_engine_idx(int dev,
-                                                 uint32_t* next_candidate) {
+                                                 uint32_t *next_candidate) {
   uint32_t candidate = find_first_engine_idx_on_dev(dev) + *next_candidate;
   *next_candidate = (*next_candidate + 1) % num_engines_per_dev_;
   return candidate;
 }
 
 void UcclRDMAEngine::release() {
-  for (auto& it : rdma_ctx_map_) {
+  for (auto &it : rdma_ctx_map_) {
     delete it.second;
   }
   rdma_ctx_map_.clear();
@@ -923,28 +932,28 @@ void UcclRDMAEngine::release() {
 
 RDMAEndpoint::~RDMAEndpoint() {
 #ifdef LAZY_CREATE_ENGINE
-  for (auto& [engine_id, engine] : engine_id_to_engine_map_) {
+  for (auto &[engine_id, engine] : engine_id_to_engine_map_) {
     engine->shutdown();
   }
 #else
-  for (auto& engine : engine_vec_) {
+  for (auto &engine : engine_vec_) {
     if (engine) {
       engine->shutdown();
     }
   }
 #endif
 
-  for (auto& engine_th : engine_th_vec_) {
+  for (auto &engine_th : engine_th_vec_) {
     if (engine_th) {
       engine_th->join();
     }
   }
 #ifdef LAZY_CREATE_ENGINE
-  for (auto& [engine_id, engine] : engine_id_to_engine_map_) {
+  for (auto &[engine_id, engine] : engine_id_to_engine_map_) {
     engine->release();
   }
 #else
-  for (auto& engine : engine_vec_) {
+  for (auto &engine : engine_vec_) {
     if (engine) {
       engine->release();
     }
@@ -964,12 +973,12 @@ RDMAEndpoint::~RDMAEndpoint() {
   }
 }
 
-PollCtx* RDMAEndpoint::install_flow_on_engine(uint32_t engine_idx,
+PollCtx *RDMAEndpoint::install_flow_on_engine(uint32_t engine_idx,
                                               PeerID peer_id,
                                               union CtrlMeta meta) {
-  auto* cmdq = channel_vec_[engine_idx]->ctrl_cmdq_;
+  auto *cmdq = channel_vec_[engine_idx]->ctrl_cmdq_;
 
-  auto* poll_ctx = ctx_pool_->pop();
+  auto *poll_ctx = ctx_pool_->pop();
   Channel::CtrlMsg ctrl_msg = {
       .opcode = Channel::CtrlMsg::Op::kInstallFlow,
       .peer_id = peer_id,
@@ -983,12 +992,12 @@ PollCtx* RDMAEndpoint::install_flow_on_engine(uint32_t engine_idx,
   return poll_ctx;
 }
 
-PollCtx* RDMAEndpoint::install_ctx_on_engine(uint32_t engine_idx,
+PollCtx *RDMAEndpoint::install_ctx_on_engine(uint32_t engine_idx,
                                              PeerID peer_id,
                                              union CtrlMeta meta) {
-  auto* cmdq = channel_vec_[engine_idx]->ctrl_cmdq_;
+  auto *cmdq = channel_vec_[engine_idx]->ctrl_cmdq_;
 
-  auto* poll_ctx = ctx_pool_->pop();
+  auto *poll_ctx = ctx_pool_->pop();
   Channel::CtrlMsg ctrl_msg = {
       .opcode = Channel::CtrlMsg::Op::kInstallCtx,
       .peer_id = peer_id,
@@ -1005,19 +1014,20 @@ PollCtx* RDMAEndpoint::install_ctx_on_engine(uint32_t engine_idx,
   return poll_ctx;
 }
 
-std::vector<PollCtx*> RDMAEndpoint::install_flow_on_engines(
-    int dev, PeerID peer_id, FlowID flow_id, UcclFlow* flow, bool is_send) {
+std::vector<PollCtx *>
+RDMAEndpoint::install_flow_on_engines(int dev, PeerID peer_id, FlowID flow_id,
+                                      UcclFlow *flow, bool is_send) {
   union CtrlMeta meta = {};
-  auto* info = &meta.install_flow;
+  auto *info = &meta.install_flow;
 
   info->flow_id = flow_id;
   info->context = flow;
   info->is_send = is_send;
 
-  std::vector<PollCtx*> poll_ctx_vec;
+  std::vector<PollCtx *> poll_ctx_vec;
   for (int i = 0; i < num_engines_per_dev_; i++) {
     auto engine_idx = find_first_engine_idx_on_dev(dev) + i;
-    auto* poll_ctx = install_flow_on_engine(engine_idx, peer_id, meta);
+    auto *poll_ctx = install_flow_on_engine(engine_idx, peer_id, meta);
     poll_ctx_vec.push_back(poll_ctx);
   }
 
@@ -1029,7 +1039,7 @@ void RDMAEndpoint::install_ctx_on_engines(int fd, int dev, PeerID peer_id,
                                           std::string remote_ip,
                                           int remote_dev) {
   union CtrlMeta meta = {};
-  auto* info = &meta.install_ctx;
+  auto *info = &meta.install_ctx;
 
   // synchronize GID and PortAttr with remote peer.
   int ret;
@@ -1058,14 +1068,14 @@ void RDMAEndpoint::install_ctx_on_engines(int fd, int dev, PeerID peer_id,
   info->next_install_engine = &next_install_engine;
   info->bootstrap_fd = fd;
 
-  std::vector<PollCtx*> poll_ctx_vec;
+  std::vector<PollCtx *> poll_ctx_vec;
 
   for (int i = 0; i < num_engines_per_dev_; i++) {
     auto engine_idx = find_first_engine_idx_on_dev(dev) + i;
-    auto* poll_ctx = install_ctx_on_engine(engine_idx, peer_id, meta);
+    auto *poll_ctx = install_ctx_on_engine(engine_idx, peer_id, meta);
     poll_ctx_vec.push_back(poll_ctx);
   }
-  for (auto* poll_ctx : poll_ctx_vec) {
+  for (auto *poll_ctx : poll_ctx_vec) {
     uccl_wait(poll_ctx);
   }
 }
@@ -1074,7 +1084,7 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
                                   int remote_gpuidx, std::string remote_ip,
                                   uint16_t remote_port) {
   struct sockaddr_in serv_addr = {};
-  struct hostent* server;
+  struct hostent *server;
   int ret;
   int bootstrap_fd;
   PeerID peer_id;
@@ -1090,10 +1100,10 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   // Force the socket to bind to the local IP address.
   sockaddr_in localaddr = {};
   localaddr.sin_family = AF_INET;
-  auto* factory_dev = RDMAFactory::get_factory_dev(dev);
+  auto *factory_dev = RDMAFactory::get_factory_dev(dev);
   DCHECK(factory_dev) << "uccl_connect: get_factory_dev()";
   localaddr.sin_addr.s_addr = str_to_ip(factory_dev->local_ip_str.c_str());
-  ret = bind(bootstrap_fd, (sockaddr*)&localaddr, sizeof(localaddr));
+  ret = bind(bootstrap_fd, (sockaddr *)&localaddr, sizeof(localaddr));
   DCHECK(ret == 0) << "uccl_connect: bind()";
 
   serv_addr.sin_family = AF_INET;
@@ -1107,19 +1117,20 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
 
   // Connect and set nonblocking and nodelay
   while (
-      connect(bootstrap_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr))) {
+      connect(bootstrap_fd, (struct sockaddr *)&serv_addr, sizeof(serv_addr))) {
     UCCL_LOG_EP << "connecting... Make sure the server is up.";
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 
   fcntl(bootstrap_fd, F_SETFL, O_NONBLOCK);
   int flag = 1;
-  setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
+  setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void *)&flag,
+             sizeof(int));
   uint16_t local_port = 0;
   {
     struct sockaddr_in local_addr_check = {};
     socklen_t addr_len = sizeof(local_addr_check);
-    ret = getsockname(bootstrap_fd, (struct sockaddr*)&local_addr_check,
+    ret = getsockname(bootstrap_fd, (struct sockaddr *)&local_addr_check,
                       &addr_len);
     DCHECK(ret == 0) << "getsockname() failed";
     local_port = ntohs(local_addr_check.sin_port);
@@ -1177,7 +1188,7 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
               << flow_id << " for dev/peer: " << dev << "/" << peer_id;
 
   // Create a new UcclFlow.
-  auto* flow =
+  auto *flow =
       new UcclFlow(this, dev, peer_id, flow_id, remote_ip, remote_dev, true);
   DCHECK(flow);
 
@@ -1213,7 +1224,7 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
     fd_vec_.push_back(bootstrap_fd);
   }
 
-  for (auto* poll_ctx : poll_ctx_vec) {
+  for (auto *poll_ctx : poll_ctx_vec) {
     uccl_wait(poll_ctx);
   }
 
@@ -1222,7 +1233,7 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
 }
 
 ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
-                                 std::string& remote_ip, int* remote_dev) {
+                                 std::string &remote_ip, int *remote_dev) {
   struct sockaddr_in cli_addr;
   socklen_t clien = sizeof(cli_addr);
   int bootstrap_fd;
@@ -1233,16 +1244,16 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
 
   int remote_gpuidx;
 
-  auto* factory_dev = RDMAFactory::get_factory_dev(dev);
+  auto *factory_dev = RDMAFactory::get_factory_dev(dev);
   DCHECK(factory_dev) << "uccl_accept: get_factory_dev()";
 
-  bootstrap_fd = accept(listen_fd, (struct sockaddr*)&cli_addr, &clien);
+  bootstrap_fd = accept(listen_fd, (struct sockaddr *)&cli_addr, &clien);
 
   uint16_t local_port;
   {
     struct sockaddr_in local_addr = {};
     socklen_t len = sizeof(local_addr);
-    int ret = getsockname(bootstrap_fd, (struct sockaddr*)&local_addr, &len);
+    int ret = getsockname(bootstrap_fd, (struct sockaddr *)&local_addr, &len);
     DCHECK(ret == 0) << "getsockname() failed";
     local_port = ntohs(local_addr.sin_port);
   }
@@ -1254,7 +1265,8 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
 
   fcntl(bootstrap_fd, F_SETFL, O_NONBLOCK);
   int flag = 1;
-  setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
+  setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void *)&flag,
+             sizeof(int));
 
   bool first_call = false;
   bool should_install_ctx = false;
@@ -1310,7 +1322,7 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
               << " for dev/peer: " << dev << "/" << peer_id;
 
   // Create a new UcclFlow.
-  auto* flow =
+  auto *flow =
       new UcclFlow(this, dev, peer_id, flow_id, remote_ip, *remote_dev, false);
   DCHECK(flow);
 
@@ -1347,7 +1359,7 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
     fd_vec_.push_back(bootstrap_fd);
   }
 
-  for (auto* poll_ctx : poll_ctx_vec) {
+  for (auto *poll_ctx : poll_ctx_vec) {
     uccl_wait(poll_ctx);
   }
 
@@ -1355,13 +1367,14 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
       .context = flow, .flow_id = flow_id, .peer_id = peer_id, .dev = dev};
 }
 
-bool UcclFlow::check_fifo_ready(int* ret_slot, int* ret_nmsgs) {
+bool UcclFlow::check_fifo_ready(int *ret_slot, int *ret_nmsgs) {
   int slot = send_comm_.fifo_head % kMaxReq;
   auto rem_fifo = send_comm_.base.fifo;
-  volatile struct FifoItem* slots = rem_fifo->elems[slot];
+  volatile struct FifoItem *slots = rem_fifo->elems[slot];
 
   auto idx = send_comm_.fifo_head + 1;
-  if (slots[0].idx != idx) return false;
+  if (slots[0].idx != idx)
+    return false;
 
   // Wait until all slots are ready
   auto nmsgs = slots[0].nmsgs;
@@ -1379,8 +1392,8 @@ bool UcclFlow::check_fifo_ready(int* ret_slot, int* ret_nmsgs) {
   return true;
 }
 
-void UcclFlow::rc_send(struct ucclRequest* ureq) {
-  auto* qp = send_comm_.base.rc_qp;
+void UcclFlow::rc_send(struct ucclRequest *ureq) {
+  auto *qp = send_comm_.base.rc_qp;
   auto size = ureq->send.data_len;
   auto laddr = ureq->send.laddr;
   auto raddr = ureq->send.raddr;
@@ -1415,7 +1428,7 @@ void UcclFlow::rc_send(struct ucclRequest* ureq) {
   flow_cq_cnt_++;
 }
 
-void UcclFlow::post_multi_send(struct ucclRequest** ureqs,
+void UcclFlow::post_multi_send(struct ucclRequest **ureqs,
                                uint32_t engine_offset) {
   if (engine_offset == RDMAEndpoint::RC_MAGIC) {
     ureqs[0]->type = ReqTxRC;
@@ -1443,23 +1456,25 @@ void UcclFlow::post_multi_send(struct ucclRequest** ureqs,
   UCCL_LOG_EP << "Enqueue tx work to engine " << engine_idx;
 }
 
-int RDMAEndpoint::uccl_send_async(UcclFlow* flow, struct Mhandle* mhandle,
-                                  void const* data, size_t const size,
-                                  struct ucclRequest* ureq) {
+int RDMAEndpoint::uccl_send_async(UcclFlow *flow, struct Mhandle *mhandle,
+                                  void const *data, size_t const size,
+                                  struct ucclRequest *ureq) {
   ureq->type = ReqTx;
   ureq->send.data_len = size;
 
   int slot, nmsg;
 
-  if (!flow->check_fifo_ready(&slot, &nmsg)) return -1;
+  if (!flow->check_fifo_ready(&slot, &nmsg))
+    return -1;
   DCHECK(slot < kMaxReq && nmsg <= kMaxRecv) << slot << ", nmsg" << nmsg;
   auto send_comm = &flow->send_comm_;
   auto ureqs = send_comm->fifo_ureqs[slot];
   auto rem_fifo = send_comm->base.fifo;
-  volatile struct FifoItem* slots = rem_fifo->elems[slot];
+  volatile struct FifoItem *slots = rem_fifo->elems[slot];
 
   for (int i = 0; i < nmsg; i++) {
-    if (ureqs[i] != nullptr) continue;
+    if (ureqs[i] != nullptr)
+      continue;
     DCHECK(!(slots[i].size < 0 || slots[i].addr == 0 || slots[i].rkey == 0))
         << slots[i].size << ", " << slots[i].addr << ", " << slots[i].rkey;
 
@@ -1493,7 +1508,8 @@ int RDMAEndpoint::uccl_send_async(UcclFlow* flow, struct Mhandle* mhandle,
 
     // If this is a multi-recv, send only when all requests have matched.
     for (int i = 0; i < nmsg; i++) {
-      if (ureqs[i] == nullptr) return 0;
+      if (ureqs[i] == nullptr)
+        return 0;
     }
 
     // All requests have matched. Post works to the engine.
@@ -1502,8 +1518,8 @@ int RDMAEndpoint::uccl_send_async(UcclFlow* flow, struct Mhandle* mhandle,
     // Move the head of the FIFO.
     send_comm->fifo_head++;
 
-    memset((void*)slots, 0, sizeof(struct FifoItem));
-    memset(ureqs, 0, kMaxRecv * sizeof(struct ucclRequest*));
+    memset((void *)slots, 0, sizeof(struct FifoItem));
+    memset(ureqs, 0, kMaxRecv * sizeof(struct ucclRequest *));
 
     UCCL_LOG_EP << "send_async: posted " << nmsg << " requests"
                 << " on engine " << slots[i].engine_offset << " size: " << size
@@ -1516,13 +1532,14 @@ int RDMAEndpoint::uccl_send_async(UcclFlow* flow, struct Mhandle* mhandle,
   return 0;
 }
 
-bool RDMAEndpoint::uccl_poll_ureq_once(struct ucclRequest* ureq) {
+bool RDMAEndpoint::uccl_poll_ureq_once(struct ucclRequest *ureq) {
 #ifdef __HIP_PLATFORM_AMD__
-  if (ureq->type == ReqFlush) return true;
+  if (ureq->type == ReqFlush)
+    return true;
 #endif
 
   bool ret;
-  UcclFlow* flow = reinterpret_cast<UcclFlow*>(ureq->context);
+  UcclFlow *flow = reinterpret_cast<UcclFlow *>(ureq->context);
   if (ureq->type == ReqTxRC || ureq->type == ReqRxRC ||
       ureq->type == ReqFlush) {
     flow->poll_flow_cq();
@@ -1549,13 +1566,14 @@ bool RDMAEndpoint::uccl_poll_ureq_once(struct ucclRequest* ureq) {
   return ret;
 }
 
-int RDMAEndpoint::uccl_flush(UcclFlow* flow, struct Mhandle** mhandles,
-                             void** data, int* size, int n,
-                             struct ucclRequest* ureq) {
+int RDMAEndpoint::uccl_flush(UcclFlow *flow, struct Mhandle **mhandles,
+                             void **data, int *size, int n,
+                             struct ucclRequest *ureq) {
   flow->poll_flow_cq();
 
   int last = flow->check_need_flush(size, n);
-  if (last == -1) return 0;
+  if (last == -1)
+    return 0;
 
 #ifndef __HIP_PLATFORM_AMD__
   flow->post_flush(mhandles, data, size, n, &ureq->rc_or_flush_done, last);
@@ -1568,15 +1586,16 @@ int RDMAEndpoint::uccl_flush(UcclFlow* flow, struct Mhandle** mhandles,
   return 0;
 }
 
-int RDMAEndpoint::uccl_recv_async(UcclFlow* flow, struct Mhandle** mhandles,
-                                  void** data, int* size, int n,
-                                  struct ucclRequest* ureq) {
+int RDMAEndpoint::uccl_recv_async(UcclFlow *flow, struct Mhandle **mhandles,
+                                  void **data, int *size, int n,
+                                  struct ucclRequest *ureq) {
   uint32_t candidate;
   auto dev = flow->dev_;
-  PollCtx* pacer_ctx;
+  PollCtx *pacer_ctx;
 
   // Limit the maximum inflight requests for each flow.
-  if (!flow->check_room()) return -1;
+  if (!flow->check_room())
+    return -1;
 
   flow->inc_outstanding_reqs();
 
@@ -1625,7 +1644,8 @@ int RDMAEndpoint::uccl_recv_async(UcclFlow* flow, struct Mhandle** mhandles,
   ureq->type = ReqRx;
   ureq->context = flow;
   ureq->n = n;
-  for (int i = 0; i < n; i++) ureq->recv.data_len[i] = size[i];
+  for (int i = 0; i < n; i++)
+    ureq->recv.data_len[i] = size[i];
   ureq->poll_ctx = ctx_pool_->pop();
   ureq->recv.elems = elems;
   ureq->recv.qp = flow->recv_comm_.base.fifo_qp;
@@ -1650,7 +1670,8 @@ int RDMAEndpoint::uccl_recv_async(UcclFlow* flow, struct Mhandle** mhandles,
 }
 
 void RDMAEndpoint::stats_thread_fn() {
-  if (GetEnvVar("UCCL_ENGINE_QUIET") == "1") return;
+  if (GetEnvVar("UCCL_ENGINE_QUIET") == "1")
+    return;
 
   while (!shutdown_) {
     {
@@ -1658,7 +1679,8 @@ void RDMAEndpoint::stats_thread_fn() {
       bool shutdown =
           stats_cv_.wait_for(lock, std::chrono::seconds(kStatsTimerIntervalSec),
                              [this] { return shutdown_.load(); });
-      if (shutdown) break;
+      if (shutdown)
+        break;
     }
 
 #ifdef LAZY_CREATE_ENGINE
@@ -1667,14 +1689,15 @@ void RDMAEndpoint::stats_thread_fn() {
       continue;
     }
 #else
-    if (engine_vec_.empty()) continue;
+    if (engine_vec_.empty())
+      continue;
 #endif
     std::string s;
     uint32_t eidx = 0;
 #ifdef LAZY_CREATE_ENGINE
-    for (auto& [engine_id, engine] : engine_id_to_engine_map_) {
+    for (auto &[engine_id, engine] : engine_id_to_engine_map_) {
 #else
-    for (auto& engine : engine_vec_) {
+    for (auto &engine : engine_vec_) {
 #endif
 #ifdef STATS
       s = engine->status_to_string();
@@ -1687,20 +1710,21 @@ void RDMAEndpoint::stats_thread_fn() {
   }
 }
 
-int RDMAEndpoint::uccl_regmr_dmabuf(UcclFlow* flow, void* addr, size_t len,
+int RDMAEndpoint::uccl_regmr_dmabuf(UcclFlow *flow, void *addr, size_t len,
                                     int type, int offset, int fd,
-                                    struct Mhandle** mhandle) {
+                                    struct Mhandle **mhandle) {
   return uccl_regmr_dmabuf(flow->dev_, addr, len, type, offset, fd, mhandle);
 }
 
-int RDMAEndpoint::uccl_regmr_dmabuf(int dev, void* addr, size_t len,
+int RDMAEndpoint::uccl_regmr_dmabuf(int dev, void *addr, size_t len,
                                     int type /*unsed for now*/, int offset,
-                                    int fd, struct Mhandle** mhandle) {
+                                    int fd, struct Mhandle **mhandle) {
   auto factory_dev = RDMAFactory::get_factory_dev(dev);
 
   unsigned int flags =
       IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ;
-  if (ib_relaxed_ordering_enabled_) flags |= IBV_ACCESS_RELAXED_ORDERING;
+  if (ib_relaxed_ordering_enabled_)
+    flags |= IBV_ACCESS_RELAXED_ORDERING;
 
   *mhandle = new Mhandle();
   (*mhandle)->mr = ibv_reg_dmabuf_mr(factory_dev->pd, offset, len,
@@ -1709,20 +1733,21 @@ int RDMAEndpoint::uccl_regmr_dmabuf(int dev, void* addr, size_t len,
   return 0;
 }
 
-int RDMAEndpoint::uccl_regmr(UcclFlow* flow, void* addr, size_t len,
+int RDMAEndpoint::uccl_regmr(UcclFlow *flow, void *addr, size_t len,
                              int type /*unsed for now*/,
-                             struct Mhandle** mhandle) {
+                             struct Mhandle **mhandle) {
   return uccl_regmr(flow->dev_, addr, len, type, mhandle);
 }
 
-int RDMAEndpoint::uccl_regmr(int dev, void* addr, size_t len,
+int RDMAEndpoint::uccl_regmr(int dev, void *addr, size_t len,
                              int type /*unsed for now*/,
-                             struct Mhandle** mhandle) {
+                             struct Mhandle **mhandle) {
   auto factory_dev = RDMAFactory::get_factory_dev(dev);
 
   unsigned int flags =
       IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ;
-  if (ib_relaxed_ordering_enabled_) flags |= IBV_ACCESS_RELAXED_ORDERING;
+  if (ib_relaxed_ordering_enabled_)
+    flags |= IBV_ACCESS_RELAXED_ORDERING;
 
   *mhandle = new Mhandle();
   if (ib_relaxed_ordering_enabled_) {
@@ -1735,7 +1760,7 @@ int RDMAEndpoint::uccl_regmr(int dev, void* addr, size_t len,
   return 0;
 }
 
-void RDMAEndpoint::uccl_deregmr(struct Mhandle* mhandle) {
+void RDMAEndpoint::uccl_deregmr(struct Mhandle *mhandle) {
   ibv_dereg_mr(mhandle->mr);
   delete mhandle;
 }
@@ -1752,19 +1777,16 @@ std::string UcclRDMAEngine::status_to_string() {
   return s;
 }
 
-RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
-                         eqds::EQDS* eqds, int dev, uint32_t engine_offset,
-                         union CtrlMeta meta, SharedIOContext* io_ctx)
-    : rto_(rto),
-      engine_unacked_bytes_(engine_unacked_bytes),
-      eqds_(eqds),
-      io_ctx_(io_ctx),
-      engine_offset_(engine_offset),
+RDMAContext::RDMAContext(TimerManager *rto, uint32_t *engine_unacked_bytes,
+                         eqds::EQDS *eqds, int dev, uint32_t engine_offset,
+                         union CtrlMeta meta, SharedIOContext *io_ctx)
+    : rto_(rto), engine_unacked_bytes_(engine_unacked_bytes), eqds_(eqds),
+      io_ctx_(io_ctx), engine_offset_(engine_offset),
       wheel_({freq_ghz, us_to_cycles(kWheelSlotWidthUs, freq_ghz),
               us_to_cycles(kWheelHorizonUs, freq_ghz), kBktPoolSize,
               RDMAFactory::get_factory_dev(dev)->link_bw}) {
   int ret;
-  auto* factory_dev = RDMAFactory::get_factory_dev(dev);
+  auto *factory_dev = RDMAFactory::get_factory_dev(dev);
 
   context_ = factory_dev->context;
   gid_idx_ = factory_dev->gid_idx;
@@ -1812,7 +1834,7 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
   qpAttr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE;
 
   for (int i = 0; i < ucclParamPORT_ENTROPY(); i++) {
-    struct ibv_qp* qp = ibv_create_qp(pd_, &qp_init_attr);
+    struct ibv_qp *qp = ibv_create_qp(pd_, &qp_init_attr);
     UCCL_INIT_CHECK(qp != nullptr, "ibv_create_qp failed for data path QP");
 
     // Modify QP state to INIT.
@@ -1837,8 +1859,8 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
     // Create Credit QP, SCQ/RCQ and MR for engine or pacer.
     util_rdma_create_qp_seperate_cq(
         context_, &credit_qp_, IBV_QPT_UC, true, false,
-        (struct ibv_cq**)&pacer_credit_cq_ex_,
-        (struct ibv_cq**)&engine_credit_cq_ex_, false, kCQSize, pd_,
+        (struct ibv_cq **)&pacer_credit_cq_ex_,
+        (struct ibv_cq **)&engine_credit_cq_ex_, false, kCQSize, pd_,
         factory_dev->ib_port_num, eqds::CreditChunkBuffPool::kNumChunk,
         eqds::CreditChunkBuffPool::kNumChunk, 1, 1);
 
@@ -1886,7 +1908,7 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
         wr.next = nullptr;
         wr.sg_list = &sge;
         wr.num_sge = 1;
-        struct ibv_recv_wr* bad_wr;
+        struct ibv_recv_wr *bad_wr;
         UCCL_INIT_CHECK(ibv_post_recv(credit_qp_, &wr, &bad_wr) == 0,
                         "ibv_post_recv failed");
       }
@@ -1935,24 +1957,27 @@ RDMAContext::~RDMAContext() {
   UCCL_LOG_RE << "RDMAContext destroyed";
 }
 
-int RDMAContext::supply_rx_buff(struct ucclRequest* ureq) {
+int RDMAContext::supply_rx_buff(struct ucclRequest *ureq) {
   DCHECK(ureq);
-  auto* elems = ureq->recv.elems;
+  auto *elems = ureq->recv.elems;
   DCHECK(elems);
 
-  auto* flow = reinterpret_cast<UcclFlow*>(ureq->context);
-  auto* subflow = flow->sub_flows_[engine_offset_];
+  auto *flow = reinterpret_cast<UcclFlow *>(ureq->context);
+  auto *subflow = flow->sub_flows_[engine_offset_];
 
   auto req = subflow->alloc_recvreq();
-  if (req == nullptr) return -1;
+  if (req == nullptr)
+    return -1;
   DCHECK(ureq->n == 1);
   for (int i = 0; i < ureq->n; i++) {
     // For sender to encode the request id in the immediate data.
     elems[i].rid = subflow->get_recvreq_id(req);
   }
 
-  struct ibv_send_wr* bad_wr;
-  DCHECK(ibv_post_send(ureq->recv.qp, &ureq->recv.wr, &bad_wr) == 0);
+  int ret;
+  struct ibv_send_wr *bad_wr;
+  DCHECK((ret = ibv_post_send(ureq->recv.qp, &ureq->recv.wr, &bad_wr)) == 0)
+      << ret;
 
   req->type = RecvRequest::RECV;
   req->ureq = ureq;
@@ -1965,17 +1990,17 @@ int RDMAContext::supply_rx_buff(struct ucclRequest* ureq) {
   return 0;
 }
 
-bool RDMAContext::receiverCC_tx_message(struct ucclRequest* ureq) {
-  auto* flow = reinterpret_cast<UcclFlow*>(ureq->context);
-  auto* subflow = flow->sub_flows_[engine_offset_];
-  auto* eqds = &subflow->pcb.eqds_cc;
+bool RDMAContext::receiverCC_tx_message(struct ucclRequest *ureq) {
+  auto *flow = reinterpret_cast<UcclFlow *>(ureq->context);
+  auto *subflow = flow->sub_flows_[engine_offset_];
+  auto *eqds = &subflow->pcb.eqds_cc;
 
   auto size = ureq->send.data_len;
   auto laddr = ureq->send.laddr;
   auto raddr = ureq->send.raddr;
   auto lkey = ureq->send.lkey;
   auto rkey = ureq->send.rkey;
-  auto* sent_offset = &ureq->send.sent_offset;
+  auto *sent_offset = &ureq->send.sent_offset;
   uint64_t wr_addr;
   bool queued = false;
   uint32_t chunk_size;
@@ -1997,14 +2022,15 @@ bool RDMAContext::receiverCC_tx_message(struct ucclRequest* ureq) {
   while (*sent_offset < size || size == 0 /* zero-length message */) {
     chunk_size = EventOnChunkSize(subflow, size - *sent_offset);
 
-    if (chunk_size == 0 && size) return false;
+    if (chunk_size == 0 && size)
+      return false;
 
     subflow->backlog_bytes_ -= chunk_size;
 
     auto pull_target = eqds->compute_pull_target(subflow, chunk_size);
 
     DCHECK(wr_ex_pool_->alloc_buff(&wr_addr) == 0);
-    struct wr_ex* wr_ex = reinterpret_cast<struct wr_ex*>(wr_addr);
+    struct wr_ex *wr_ex = reinterpret_cast<struct wr_ex *>(wr_addr);
     auto wr = &wr_ex->wr;
 
     wr_ex->sge.addr = laddr + *sent_offset;
@@ -2049,7 +2075,7 @@ bool RDMAContext::receiverCC_tx_message(struct ucclRequest* ureq) {
     // }
     wr_ex->qpidx = qpidx;
 
-    struct ibv_send_wr* bad_wr;
+    struct ibv_send_wr *bad_wr;
     DCHECK(ibv_post_send(qpw->qp, wr, &bad_wr) == 0);
 
     // Track this chunk.
@@ -2073,23 +2099,24 @@ bool RDMAContext::receiverCC_tx_message(struct ucclRequest* ureq) {
     *engine_unacked_bytes_ += chunk_size;
 
     /* zero-length message */
-    if (size == 0) break;
+    if (size == 0)
+      break;
   }
 
   return true;
 }
 
-bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
-  auto* flow = reinterpret_cast<UcclFlow*>(ureq->context);
+bool RDMAContext::senderCC_tx_message(struct ucclRequest *ureq) {
+  auto *flow = reinterpret_cast<UcclFlow *>(ureq->context);
   DCHECK(flow);
-  auto* subflow = flow->sub_flows_[engine_offset_];
+  auto *subflow = flow->sub_flows_[engine_offset_];
 
   auto size = ureq->send.data_len;
   auto laddr = ureq->send.laddr;
   auto raddr = ureq->send.raddr;
   auto lkey = ureq->send.lkey;
   auto rkey = ureq->send.rkey;
-  auto* sent_offset = &ureq->send.sent_offset;
+  auto *sent_offset = &ureq->send.sent_offset;
   uint64_t wr_addr;
   bool queued = false;
   uint32_t chunk_size;
@@ -2100,11 +2127,12 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
   while (*sent_offset < size || size == 0 /* zero-length message */) {
     chunk_size = EventOnChunkSize(subflow, size - *sent_offset);
 
-    if (chunk_size == 0 && size) return false;
+    if (chunk_size == 0 && size)
+      return false;
 
     if (io_ctx_->bypass_pacing()) {
       DCHECK(wr_ex_pool_->alloc_buff(&wr_addr) == 0);
-      struct wr_ex* wr_ex = reinterpret_cast<struct wr_ex*>(wr_addr);
+      struct wr_ex *wr_ex = reinterpret_cast<struct wr_ex *>(wr_addr);
       auto wr = &wr_ex->wr;
 
       wr_ex->sge.addr = laddr + *sent_offset;
@@ -2147,7 +2175,7 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
       // }
       wr_ex->qpidx = qpidx;
 
-      struct ibv_send_wr* bad_wr;
+      struct ibv_send_wr *bad_wr;
       DCHECK(ibv_post_send(qpw->qp, wr, &bad_wr) == 0);
 
       // Track this chunk.
@@ -2169,14 +2197,15 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
       subflow->unacked_bytes_ += chunk_size;
       *engine_unacked_bytes_ += chunk_size;
       /* zero-length message */
-      if (size == 0) break;
+      if (size == 0)
+        break;
 
       continue;
     }
 
     // Prepare SGE.
     DCHECK(wr_ex_pool_->alloc_buff(&wr_addr) == 0);
-    struct wr_ex* wr_ex = reinterpret_cast<struct wr_ex*>(wr_addr);
+    struct wr_ex *wr_ex = reinterpret_cast<struct wr_ex *>(wr_addr);
     auto wr = &wr_ex->wr;
     wr_ex->sge.addr = laddr + *sent_offset;
     wr_ex->sge.lkey = lkey;
@@ -2249,7 +2278,7 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
         //   wr_ex->wr.send_flags |= IBV_SEND_INLINE;
         // }
         wr_ex->qpidx = qpidx;
-        struct ibv_send_wr* bad_wr;
+        struct ibv_send_wr *bad_wr;
         auto ret = ibv_post_send(qpw->qp, wr, &bad_wr);
         DCHECK(ret == 0) << ret;
 
@@ -2277,7 +2306,8 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
     subflow->unacked_bytes_ += chunk_size;
     *engine_unacked_bytes_ += chunk_size;
     /* zero-length message */
-    if (size == 0) break;
+    if (size == 0)
+      break;
   }
 
   return true;
@@ -2303,12 +2333,12 @@ void RDMAContext::uc_post_acks() {
   INIT_LIST_HEAD(&ack_list_);
 }
 
-void RDMAContext::rc_rx_ack(struct ibv_wc* wc) {
+void RDMAContext::rc_rx_ack(struct ibv_wc *wc) {
   auto now = rdtsc();
 
   auto wr_id = wc->wr_id;
   auto csn = (wr_id >> 56) & 0xff;
-  auto subflow = reinterpret_cast<SubUcclFlow*>((wr_id & 0xffffffffffffff));
+  auto subflow = reinterpret_cast<SubUcclFlow *>((wr_id & 0xffffffffffffff));
 
   auto pair = subflow->txtracking.ack_rc_transmitted_chunks(
       subflow, this, csn, now, &subflow->unacked_bytes_, engine_unacked_bytes_);
@@ -2343,12 +2373,12 @@ void RDMAContext::rc_rx_ack(struct ibv_wc* wc) {
   UCCL_LOG_IO << "Received ACK for csn: " << csn;
 }
 
-void RDMAContext::rc_rx_ack(struct ibv_cq_ex* cq_ex) {
+void RDMAContext::rc_rx_ack(struct ibv_cq_ex *cq_ex) {
   auto now = rdtsc();
 
   auto wr_id = cq_ex->wr_id;
   auto csn = (wr_id >> 56) & 0xff;
-  auto subflow = reinterpret_cast<SubUcclFlow*>((wr_id & 0xffffffffffffff));
+  auto subflow = reinterpret_cast<SubUcclFlow *>((wr_id & 0xffffffffffffff));
 
   auto pair = subflow->txtracking.ack_rc_transmitted_chunks(
       subflow, this, csn, now, &subflow->unacked_bytes_, engine_unacked_bytes_);
@@ -2385,7 +2415,7 @@ void RDMAContext::rc_rx_ack(struct ibv_cq_ex* cq_ex) {
 void RDMAContext::check_credit_rq(bool force) {
   // Populate recv work requests for consuming credit packets.
   while (credit_recv_wrs_.post_rq_cnt >= kPostRQThreshold) {
-    struct ibv_recv_wr* bad_wr;
+    struct ibv_recv_wr *bad_wr;
     for (int i = 0; i < kPostRQThreshold; i++) {
       uint64_t chunk_addr;
       DCHECK(engine_credit_chunk_pool_->alloc_buff(&chunk_addr) == 0);
@@ -2400,7 +2430,7 @@ void RDMAContext::check_credit_rq(bool force) {
   }
 
   if (force && credit_recv_wrs_.post_rq_cnt) {
-    struct ibv_recv_wr* bad_wr;
+    struct ibv_recv_wr *bad_wr;
     for (int i = 0; i < credit_recv_wrs_.post_rq_cnt; i++) {
       uint64_t chunk_addr;
       DCHECK(engine_credit_chunk_pool_->alloc_buff(&chunk_addr) == 0);
@@ -2418,15 +2448,16 @@ void RDMAContext::check_credit_rq(bool force) {
   }
 }
 
-void RDMAContext::drain_rtx_queue(SubUcclFlow* subflow) {
+void RDMAContext::drain_rtx_queue(SubUcclFlow *subflow) {
   fast_retransmit_for_flow(subflow);
 }
 
-bool RDMAContext::try_retransmit_chunk(SubUcclFlow* subflow,
-                                       struct wr_ex* wr_ex) {
-  if (!EventOnTxRTXData(subflow, wr_ex)) return false;
+bool RDMAContext::try_retransmit_chunk(SubUcclFlow *subflow,
+                                       struct wr_ex *wr_ex) {
+  if (!EventOnTxRTXData(subflow, wr_ex))
+    return false;
 
-  auto* lossy_qpw = &dp_qps_[wr_ex->qpidx];
+  auto *lossy_qpw = &dp_qps_[wr_ex->qpidx];
   struct ibv_send_wr retr_wr, *bad_wr;
 
   // Use SEND/RECV for retransmission through the original lossy QP.
@@ -2437,8 +2468,8 @@ bool RDMAContext::try_retransmit_chunk(SubUcclFlow* subflow,
 
   retr_hdr = io_ctx_->pop_retr_hdr();
 
-  struct retr_chunk_hdr* hdr =
-      reinterpret_cast<struct retr_chunk_hdr*>(retr_hdr);
+  struct retr_chunk_hdr *hdr =
+      reinterpret_cast<struct retr_chunk_hdr *>(retr_hdr);
   hdr->remote_addr = wr_ex->wr.wr.rdma.remote_addr;
   // Network byte order.
   hdr->imm_data = wr_ex->wr.imm_data;
@@ -2449,7 +2480,7 @@ bool RDMAContext::try_retransmit_chunk(SubUcclFlow* subflow,
 
   retr_sge[1] = wr_ex->sge;
 
-  auto* cqe_desc = io_ctx_->pop_cqe_desc();
+  auto *cqe_desc = io_ctx_->pop_cqe_desc();
   cqe_desc->data = retr_hdr;
   retr_wr.wr_id = (uint64_t)cqe_desc;
   retr_wr.sg_list = retr_sge;
@@ -2472,12 +2503,12 @@ bool RDMAContext::try_retransmit_chunk(SubUcclFlow* subflow,
 }
 
 void RDMAContext::rx_credit(uint64_t pkt_addr) {
-  auto* ucclpullh = reinterpret_cast<UcclPullHdr*>(pkt_addr);
+  auto *ucclpullh = reinterpret_cast<UcclPullHdr *>(pkt_addr);
 
   auto fid = ucclpullh->fid.value();
   auto pullno = ucclpullh->pullno.value();
 
-  auto* flow = reinterpret_cast<UcclFlow*>(sender_flow_tbl_[fid]);
+  auto *flow = reinterpret_cast<UcclFlow *>(sender_flow_tbl_[fid]);
 
   if (unlikely(!flow)) {
     // No Bug. This only happens during connection setup when the sender
@@ -2485,12 +2516,12 @@ void RDMAContext::rx_credit(uint64_t pkt_addr) {
     return;
   }
 
-  auto* subflow = flow->sub_flows_[engine_offset_];
+  auto *subflow = flow->sub_flows_[engine_offset_];
 
   EventOnRxCredit(subflow, pullno);
 }
 
-void RDMAContext::uc_rx_ack(UcclSackHdr* ucclsackh) {
+void RDMAContext::uc_rx_ack(UcclSackHdr *ucclsackh) {
   uint64_t t5;
   auto t6 = rdtsc();
 
@@ -2499,8 +2530,8 @@ void RDMAContext::uc_rx_ack(UcclSackHdr* ucclsackh) {
   auto ackno = ucclsackh->ackno.value();
 
   DCHECK(fid < MAX_FLOW);
-  auto* flow = reinterpret_cast<UcclFlow*>(sender_flow_tbl_[fid]);
-  auto* subflow = flow->sub_flows_[engine_offset_];
+  auto *flow = reinterpret_cast<UcclFlow *>(sender_flow_tbl_[fid]);
+  auto *subflow = flow->sub_flows_[engine_offset_];
 
   bool update_sackbitmap = false;
 
@@ -2621,7 +2652,7 @@ void RDMAContext::uc_rx_ack(UcclSackHdr* ucclsackh) {
   }
 }
 
-void RDMAContext::uc_rx_ack(struct ibv_cq_ex* cq_ex, UcclSackHdr* ucclsackh) {
+void RDMAContext::uc_rx_ack(struct ibv_cq_ex *cq_ex, UcclSackHdr *ucclsackh) {
   uint64_t t5;
   auto t6 = rdtsc();
 
@@ -2630,8 +2661,8 @@ void RDMAContext::uc_rx_ack(struct ibv_cq_ex* cq_ex, UcclSackHdr* ucclsackh) {
   auto ackno = ucclsackh->ackno.value();
 
   DCHECK(fid < MAX_FLOW);
-  auto* flow = reinterpret_cast<UcclFlow*>(sender_flow_tbl_[fid]);
-  auto* subflow = flow->sub_flows_[engine_offset_];
+  auto *flow = reinterpret_cast<UcclFlow *>(sender_flow_tbl_[fid]);
+  auto *subflow = flow->sub_flows_[engine_offset_];
 
   bool update_sackbitmap = false;
 
@@ -2760,7 +2791,8 @@ int RDMAContext::poll_credit_cq(void) {
   while (1) {
     struct ibv_poll_cq_attr poll_cq_attr = {};
     auto cq_ex = engine_credit_cq_ex_;
-    if (ibv_start_poll(cq_ex, &poll_cq_attr)) return work;
+    if (ibv_start_poll(cq_ex, &poll_cq_attr))
+      return work;
 
     int cq_budget = 0;
 
@@ -2777,14 +2809,16 @@ int RDMAContext::poll_credit_cq(void) {
         LOG(ERROR) << "Credit CQ state error: " << cq_ex->status;
       }
 
-      if (++cq_budget == kMaxBatchCQ || ibv_next_poll(cq_ex)) break;
+      if (++cq_budget == kMaxBatchCQ || ibv_next_poll(cq_ex))
+        break;
     }
 
     ibv_end_poll(cq_ex);
 
     work += cq_budget;
 
-    if (cq_budget < kMaxBatchCQ) break;
+    if (cq_budget < kMaxBatchCQ)
+      break;
   }
 
   return work;
@@ -2792,7 +2826,7 @@ int RDMAContext::poll_credit_cq(void) {
 
 void RDMAContext::burst_timing_wheel(void) {
   auto wheel = &wheel_;
-  struct ibv_send_wr* bad_wr;
+  struct ibv_send_wr *bad_wr;
 
   wheel->reap(rdtsc());
 
@@ -2802,11 +2836,11 @@ void RDMAContext::burst_timing_wheel(void) {
                  : kMaxUnAckedBytesPerEngineHighForIB);
 
   for (auto i = 0; i < num_chunks; i++) {
-    struct wr_ex* wr_ex =
-        reinterpret_cast<struct wr_ex*>(wheel->ready_queue_.front().sslot_);
-    auto* wr = &wr_ex->wr;
-    auto* flow = reinterpret_cast<UcclFlow*>(wr_ex->ureq->context);
-    auto* subflow = flow->sub_flows_[engine_offset_];
+    struct wr_ex *wr_ex =
+        reinterpret_cast<struct wr_ex *>(wheel->ready_queue_.front().sslot_);
+    auto *wr = &wr_ex->wr;
+    auto *flow = reinterpret_cast<UcclFlow *>(wr_ex->ureq->context);
+    auto *subflow = flow->sub_flows_[engine_offset_];
     // Select QP.
     auto qpidx = select_qpidx_pot(wr_ex->sge.length, subflow);
     auto qpw = &dp_qps_[qpidx];
@@ -2843,11 +2877,11 @@ void RDMAContext::burst_timing_wheel(void) {
   }
 }
 
-void RDMAContext::try_update_csn(SubUcclFlow* subflow) {
+void RDMAContext::try_update_csn(SubUcclFlow *subflow) {
   while (!subflow->rxtracking.ready_csn_.empty() &&
          subflow->rxtracking.ready_csn_.begin()->first.to_uint32() ==
              subflow->pcb.rcv_nxt.to_uint32()) {
-    struct RecvRequest* req = reinterpret_cast<struct RecvRequest*>(
+    struct RecvRequest *req = reinterpret_cast<struct RecvRequest *>(
         subflow->rxtracking.ready_csn_.begin()->second);
     if (req) {
       // This is the last chunk of a message whose size is mismatched with
@@ -2877,14 +2911,14 @@ void RDMAContext::try_update_csn(SubUcclFlow* subflow) {
   }
 }
 
-void RDMAContext::uc_rx_rtx_chunk(struct ibv_wc* wc, uint64_t chunk_addr) {
+void RDMAContext::uc_rx_rtx_chunk(struct ibv_wc *wc, uint64_t chunk_addr) {
   UCCL_LOG_IO << "uc_rx_rtx_chunk";
   auto now = rdtsc();
 
   auto chunk_len = wc->byte_len - sizeof(struct retr_chunk_hdr);
 
-  struct retr_chunk_hdr* hdr =
-      reinterpret_cast<struct retr_chunk_hdr*>(chunk_addr);
+  struct retr_chunk_hdr *hdr =
+      reinterpret_cast<struct retr_chunk_hdr *>(chunk_addr);
 
   auto imm_data = IMMData(ntohl(hdr->imm_data));
 
@@ -2894,8 +2928,8 @@ void RDMAContext::uc_rx_rtx_chunk(struct ibv_wc* wc, uint64_t chunk_addr) {
   auto fid = imm_data.GetFID();
 
   DCHECK(fid < MAX_FLOW);
-  auto* flow = reinterpret_cast<UcclFlow*>(receiver_flow_tbl_[fid]);
-  auto* subflow = flow->sub_flows_[engine_offset_];
+  auto *flow = reinterpret_cast<UcclFlow *>(receiver_flow_tbl_[fid]);
+  auto *subflow = flow->sub_flows_[engine_offset_];
 
   UCCL_LOG_IO << "Received retransmission chunk: (csn, rid, fid): " << csn
               << ", " << rid << ", " << fid;
@@ -2942,19 +2976,19 @@ void RDMAContext::uc_rx_rtx_chunk(struct ibv_wc* wc, uint64_t chunk_addr) {
   UCCL_LOG_IO << "This retransmission chunk is accepted!!!";
 // Accept this retransmission chunk.
 #ifdef CPU_MEMORY
-  memcpy(reinterpret_cast<void*>(hdr->remote_addr),
-         reinterpret_cast<void*>(chunk_addr + sizeof(struct retr_chunk_hdr)),
+  memcpy(reinterpret_cast<void *>(hdr->remote_addr),
+         reinterpret_cast<void *>(chunk_addr + sizeof(struct retr_chunk_hdr)),
          chunk_len);
 #else
 #ifndef __HIP_PLATFORM_AMD__
   cudaMemcpy(
-      reinterpret_cast<void*>(hdr->remote_addr),
-      reinterpret_cast<void*>(chunk_addr + sizeof(struct retr_chunk_hdr)),
+      reinterpret_cast<void *>(hdr->remote_addr),
+      reinterpret_cast<void *>(chunk_addr + sizeof(struct retr_chunk_hdr)),
       chunk_len, cudaMemcpyHostToDevice);
 #else
-  DCHECK(hipMemcpy(reinterpret_cast<void*>(hdr->remote_addr),
-                   reinterpret_cast<void*>(chunk_addr +
-                                           sizeof(struct retr_chunk_hdr)),
+  DCHECK(hipMemcpy(reinterpret_cast<void *>(hdr->remote_addr),
+                   reinterpret_cast<void *>(chunk_addr +
+                                            sizeof(struct retr_chunk_hdr)),
                    chunk_len, hipMemcpyHostToDevice) == hipSuccess);
 #endif
 #endif
@@ -2963,8 +2997,8 @@ void RDMAContext::uc_rx_rtx_chunk(struct ibv_wc* wc, uint64_t chunk_addr) {
 
   subflow->pcb.sack_bitmap_bit_set(distance.to_uint32());
 
-  auto* msg_size = &req->ureq->recv.elems[0].size;
-  uint32_t* received_bytes = req->received_bytes;
+  auto *msg_size = &req->ureq->recv.elems[0].size;
+  uint32_t *received_bytes = req->received_bytes;
   received_bytes[0] += chunk_len;
 
   if (!last_chunk) {
@@ -2986,15 +3020,15 @@ void RDMAContext::uc_rx_rtx_chunk(struct ibv_wc* wc, uint64_t chunk_addr) {
   return;
 }
 
-void RDMAContext::uc_rx_rtx_chunk(struct ibv_cq_ex* cq_ex,
+void RDMAContext::uc_rx_rtx_chunk(struct ibv_cq_ex *cq_ex,
                                   uint64_t chunk_addr) {
   UCCL_LOG_IO << "uc_rx_rtx_chunk";
   auto now = rdtsc();
 
   auto chunk_len = ibv_wc_read_byte_len(cq_ex) - sizeof(struct retr_chunk_hdr);
 
-  struct retr_chunk_hdr* hdr =
-      reinterpret_cast<struct retr_chunk_hdr*>(chunk_addr);
+  struct retr_chunk_hdr *hdr =
+      reinterpret_cast<struct retr_chunk_hdr *>(chunk_addr);
 
   auto imm_data = IMMData(ntohl(hdr->imm_data));
 
@@ -3004,8 +3038,8 @@ void RDMAContext::uc_rx_rtx_chunk(struct ibv_cq_ex* cq_ex,
   auto fid = imm_data.GetFID();
 
   DCHECK(fid < MAX_FLOW);
-  auto* flow = reinterpret_cast<UcclFlow*>(receiver_flow_tbl_[fid]);
-  auto* subflow = flow->sub_flows_[engine_offset_];
+  auto *flow = reinterpret_cast<UcclFlow *>(receiver_flow_tbl_[fid]);
+  auto *subflow = flow->sub_flows_[engine_offset_];
 
   UCCL_LOG_IO << "Received retransmission chunk: (csn, rid, fid): " << csn
               << ", " << rid << ", " << fid;
@@ -3052,19 +3086,19 @@ void RDMAContext::uc_rx_rtx_chunk(struct ibv_cq_ex* cq_ex,
   UCCL_LOG_IO << "This retransmission chunk is accepted!!!";
 // Accept this retransmission chunk.
 #ifdef CPU_MEMORY
-  memcpy(reinterpret_cast<void*>(hdr->remote_addr),
-         reinterpret_cast<void*>(chunk_addr + sizeof(struct retr_chunk_hdr)),
+  memcpy(reinterpret_cast<void *>(hdr->remote_addr),
+         reinterpret_cast<void *>(chunk_addr + sizeof(struct retr_chunk_hdr)),
          chunk_len);
 #else
 #ifndef __HIP_PLATFORM_AMD__
   cudaMemcpy(
-      reinterpret_cast<void*>(hdr->remote_addr),
-      reinterpret_cast<void*>(chunk_addr + sizeof(struct retr_chunk_hdr)),
+      reinterpret_cast<void *>(hdr->remote_addr),
+      reinterpret_cast<void *>(chunk_addr + sizeof(struct retr_chunk_hdr)),
       chunk_len, cudaMemcpyHostToDevice);
 #else
-  DCHECK(hipMemcpy(reinterpret_cast<void*>(hdr->remote_addr),
-                   reinterpret_cast<void*>(chunk_addr +
-                                           sizeof(struct retr_chunk_hdr)),
+  DCHECK(hipMemcpy(reinterpret_cast<void *>(hdr->remote_addr),
+                   reinterpret_cast<void *>(chunk_addr +
+                                            sizeof(struct retr_chunk_hdr)),
                    chunk_len, hipMemcpyHostToDevice) == hipSuccess);
 #endif
 #endif
@@ -3073,8 +3107,8 @@ void RDMAContext::uc_rx_rtx_chunk(struct ibv_cq_ex* cq_ex,
 
   subflow->pcb.sack_bitmap_bit_set(distance.to_uint32());
 
-  auto* msg_size = &req->ureq->recv.elems[0].size;
-  uint32_t* received_bytes = req->received_bytes;
+  auto *msg_size = &req->ureq->recv.elems[0].size;
+  uint32_t *received_bytes = req->received_bytes;
   received_bytes[0] += chunk_len;
 
   if (!last_chunk) {
@@ -3105,9 +3139,9 @@ void RDMAContext::rc_rx_chunk(uint32_t byte_len, uint32_t wc_imm_data) {
   auto fid = imm_data.GetFID();
 
   DCHECK(fid < MAX_FLOW);
-  auto* flow = reinterpret_cast<UcclFlow*>(receiver_flow_tbl_[fid]);
+  auto *flow = reinterpret_cast<UcclFlow *>(receiver_flow_tbl_[fid]);
   DCHECK(flow) << fid << ", RDMAContext ptr: " << this;
-  auto* subflow = flow->sub_flows_[engine_offset_];
+  auto *subflow = flow->sub_flows_[engine_offset_];
 
   UCCL_LOG_IO << "Received chunk: (byte_len, csn, rid, fid): " << byte_len
               << ", " << csn << ", " << rid << ", " << fid;
@@ -3127,8 +3161,8 @@ void RDMAContext::rc_rx_chunk(uint32_t byte_len, uint32_t wc_imm_data) {
   }
 
   // There is no need to check CSN as RC provides reliable delivery.
-  auto* msg_size = &req->ureq->recv.elems[0].size;
-  uint32_t* received_bytes = req->received_bytes;
+  auto *msg_size = &req->ureq->recv.elems[0].size;
+  uint32_t *received_bytes = req->received_bytes;
   received_bytes[0] += byte_len;
 
   if (!last_chunk) {
@@ -3142,7 +3176,7 @@ void RDMAContext::rc_rx_chunk(uint32_t byte_len, uint32_t wc_imm_data) {
   EventOnRxData(subflow, &imm_data);
 }
 
-void RDMAContext::rc_rx_chunk(struct ibv_cq_ex* cq_ex) {
+void RDMAContext::rc_rx_chunk(struct ibv_cq_ex *cq_ex) {
   auto byte_len = ibv_wc_read_byte_len(cq_ex);
   auto imm_data = IMMData(ntohl(ibv_wc_read_imm_data(cq_ex)));
 
@@ -3152,9 +3186,9 @@ void RDMAContext::rc_rx_chunk(struct ibv_cq_ex* cq_ex) {
   auto fid = imm_data.GetFID();
 
   DCHECK(fid < MAX_FLOW);
-  auto* flow = reinterpret_cast<UcclFlow*>(receiver_flow_tbl_[fid]);
+  auto *flow = reinterpret_cast<UcclFlow *>(receiver_flow_tbl_[fid]);
   DCHECK(flow) << fid << ", RDMAContext ptr: " << this;
-  auto* subflow = flow->sub_flows_[engine_offset_];
+  auto *subflow = flow->sub_flows_[engine_offset_];
 
   UCCL_LOG_IO << "Received chunk: (byte_len, csn, rid, fid): " << byte_len
               << ", " << csn << ", " << rid << ", " << fid;
@@ -3174,8 +3208,8 @@ void RDMAContext::rc_rx_chunk(struct ibv_cq_ex* cq_ex) {
   }
 
   // There is no need to check CSN as RC provides reliable delivery.
-  auto* msg_size = &req->ureq->recv.elems[0].size;
-  uint32_t* received_bytes = req->received_bytes;
+  auto *msg_size = &req->ureq->recv.elems[0].size;
+  uint32_t *received_bytes = req->received_bytes;
   received_bytes[0] += byte_len;
 
   if (!last_chunk) {
@@ -3189,7 +3223,7 @@ void RDMAContext::rc_rx_chunk(struct ibv_cq_ex* cq_ex) {
   EventOnRxData(subflow, &imm_data);
 }
 
-void RDMAContext::uc_rx_chunk(struct ibv_wc* wc) {
+void RDMAContext::uc_rx_chunk(struct ibv_wc *wc) {
   auto now = rdtsc();
   auto byte_len = wc->byte_len;
   auto imm_data = IMMData(ntohl(wc->imm_data));
@@ -3202,9 +3236,9 @@ void RDMAContext::uc_rx_chunk(struct ibv_wc* wc) {
   auto fid = imm_data.GetFID();
 
   DCHECK(fid < MAX_FLOW);
-  auto* flow = reinterpret_cast<UcclFlow*>(receiver_flow_tbl_[fid]);
+  auto *flow = reinterpret_cast<UcclFlow *>(receiver_flow_tbl_[fid]);
   DCHECK(flow) << fid << ", RDMAContext ptr: " << this;
-  auto* subflow = flow->sub_flows_[engine_offset_];
+  auto *subflow = flow->sub_flows_[engine_offset_];
 
   UCCL_LOG_IO << "Received chunk: (byte_len, csn, rid, fid): " << byte_len
               << ", " << csn << ", " << rid << ", " << fid << " from QP#"
@@ -3252,8 +3286,8 @@ void RDMAContext::uc_rx_chunk(struct ibv_wc* wc) {
 
   subflow->pcb.sack_bitmap_bit_set(distance.to_uint32());
 
-  auto* msg_size = &req->ureq->recv.elems[0].size;
-  uint32_t* received_bytes = req->received_bytes;
+  auto *msg_size = &req->ureq->recv.elems[0].size;
+  uint32_t *received_bytes = req->received_bytes;
   received_bytes[0] += byte_len;
 
   if (!last_chunk) {
@@ -3270,7 +3304,8 @@ void RDMAContext::uc_rx_chunk(struct ibv_wc* wc) {
     subflow->pcb.stats_ooo++;
     subflow->pcb.stats_maxooo =
         std::max(subflow->pcb.stats_maxooo, distance.to_uint32());
-    if (subflow->rxtracking.real_ooo()) subflow->pcb.stats_real_ooo++;
+    if (subflow->rxtracking.real_ooo())
+      subflow->pcb.stats_real_ooo++;
 #endif
   }
 
@@ -3294,7 +3329,7 @@ void RDMAContext::uc_rx_chunk(struct ibv_wc* wc) {
   EventOnRxData(subflow, &imm_data);
 }
 
-void RDMAContext::uc_rx_chunk(struct ibv_cq_ex* cq_ex) {
+void RDMAContext::uc_rx_chunk(struct ibv_cq_ex *cq_ex) {
   auto now = rdtsc();
   auto byte_len = ibv_wc_read_byte_len(cq_ex);
   auto imm_data = IMMData(ntohl(ibv_wc_read_imm_data(cq_ex)));
@@ -3307,9 +3342,9 @@ void RDMAContext::uc_rx_chunk(struct ibv_cq_ex* cq_ex) {
   auto fid = imm_data.GetFID();
 
   DCHECK(fid < MAX_FLOW);
-  auto* flow = reinterpret_cast<UcclFlow*>(receiver_flow_tbl_[fid]);
+  auto *flow = reinterpret_cast<UcclFlow *>(receiver_flow_tbl_[fid]);
   DCHECK(flow) << fid << ", RDMAContext ptr: " << this;
-  auto* subflow = flow->sub_flows_[engine_offset_];
+  auto *subflow = flow->sub_flows_[engine_offset_];
 
   UCCL_LOG_IO << "Received chunk: (byte_len, csn, rid, fid): " << byte_len
               << ", " << csn << ", " << rid << ", " << fid << " from QP#"
@@ -3360,8 +3395,8 @@ void RDMAContext::uc_rx_chunk(struct ibv_cq_ex* cq_ex) {
 
   subflow->pcb.sack_bitmap_bit_set(distance.to_uint32());
 
-  auto* msg_size = &req->ureq->recv.elems[0].size;
-  uint32_t* received_bytes = req->received_bytes;
+  auto *msg_size = &req->ureq->recv.elems[0].size;
+  uint32_t *received_bytes = req->received_bytes;
   received_bytes[0] += byte_len;
 
   if (!last_chunk) {
@@ -3378,7 +3413,8 @@ void RDMAContext::uc_rx_chunk(struct ibv_cq_ex* cq_ex) {
     subflow->pcb.stats_ooo++;
     subflow->pcb.stats_maxooo =
         std::max(subflow->pcb.stats_maxooo, distance.to_uint32());
-    if (subflow->rxtracking.real_ooo()) subflow->pcb.stats_real_ooo++;
+    if (subflow->rxtracking.real_ooo())
+      subflow->pcb.stats_real_ooo++;
 #endif
   }
 
@@ -3403,7 +3439,8 @@ void RDMAContext::uc_rx_chunk(struct ibv_cq_ex* cq_ex) {
 }
 
 void RDMAContext::try_post_acks(int num_ack, uint64_t chunk_addr, bool force) {
-  if (num_ack == 0) return;
+  if (num_ack == 0)
+    return;
 
   auto idx = io_ctx_->nr_tx_ack_wr_;
 
@@ -3411,7 +3448,7 @@ void RDMAContext::try_post_acks(int num_ack, uint64_t chunk_addr, bool force) {
   io_ctx_->tx_ack_sge_[idx].length = CtrlChunkBuffPool::kPktSize * num_ack;
   io_ctx_->tx_ack_sge_[idx].lkey = io_ctx_->get_ctrl_chunk_lkey();
 
-  CQEDesc* cqe_desc = io_ctx_->pop_cqe_desc();
+  CQEDesc *cqe_desc = io_ctx_->pop_cqe_desc();
   cqe_desc->data = chunk_addr;
   io_ctx_->tx_ack_wr_[idx].wr_id = (uint64_t)cqe_desc;
 
@@ -3434,13 +3471,14 @@ void RDMAContext::try_post_acks(int num_ack, uint64_t chunk_addr, bool force) {
 
   UCCL_LOG_IO << "Post " << num_ack << " ACKs";
 
-  if (force || io_ctx_->nr_tx_ack_wr_ == kMaxAckWRs) io_ctx_->flush_acks();
+  if (force || io_ctx_->nr_tx_ack_wr_ == kMaxAckWRs)
+    io_ctx_->flush_acks();
 }
 
-void RDMAContext::craft_ack(SubUcclFlow* subflow, uint64_t chunk_addr,
+void RDMAContext::craft_ack(SubUcclFlow *subflow, uint64_t chunk_addr,
                             int idx_in_chunk) {
   uint64_t pkt_addr = chunk_addr + CtrlChunkBuffPool::kPktSize * idx_in_chunk;
-  auto* ucclsackh = reinterpret_cast<UcclSackHdr*>(pkt_addr);
+  auto *ucclsackh = reinterpret_cast<UcclSackHdr *>(pkt_addr);
 
   ucclsackh->peer_id = be16_t(remote_ctx_.remote_peer_id);
   ucclsackh->fid = be16_t(subflow->fid_);
@@ -3467,8 +3505,8 @@ void RDMAContext::craft_ack(SubUcclFlow* subflow, uint64_t chunk_addr,
               << " for flow: " << subflow->fid_;
 }
 
-void RDMAContext::__retransmit_for_flow(void* context, bool rto) {
-  SubUcclFlow* subflow = reinterpret_cast<SubUcclFlow*>(context);
+void RDMAContext::__retransmit_for_flow(void *context, bool rto) {
+  SubUcclFlow *subflow = reinterpret_cast<SubUcclFlow *>(context);
 
   if (subflow->txtracking.empty()) {
     UCCL_LOG_IO << "No unacked chunk to retransmit for flow" << subflow->fid_;
@@ -3548,10 +3586,11 @@ void RDMAContext::__retransmit_for_flow(void* context, bool rto) {
   }
 }
 
-uint32_t RDMAContext::select_qpidx_pot(uint32_t msize, void* subflow_context) {
-  if (can_use_last_choice(msize)) return last_qp_choice_;
+uint32_t RDMAContext::select_qpidx_pot(uint32_t msize, void *subflow_context) {
+  if (can_use_last_choice(msize))
+    return last_qp_choice_;
 
-  auto* sublfow = reinterpret_cast<SubUcclFlow*>(subflow_context);
+  auto *sublfow = reinterpret_cast<SubUcclFlow *>(subflow_context);
   auto q1 = select_qpidx_rand();
   auto q2 = select_qpidx_rand();
 
@@ -3564,8 +3603,8 @@ uint32_t RDMAContext::select_qpidx_pot(uint32_t msize, void* subflow_context) {
 
 // Try to arm a timer for the given flow. If the timer is already armed, do
 // nothing.
-void RDMAContext::arm_timer_for_flow(void* context) {
-  auto* subflow = reinterpret_cast<SubUcclFlow*>(context);
+void RDMAContext::arm_timer_for_flow(void *context) {
+  auto *subflow = reinterpret_cast<SubUcclFlow *>(context);
   if (!subflow->rto_armed) {
     if constexpr (kConstRTO) {
       rto_->arm_timer({this, subflow});
@@ -3580,8 +3619,8 @@ void RDMAContext::arm_timer_for_flow(void* context) {
 
 // Try to rearm a timer for the given flow. If the timer is not armed, arm it.
 // If the timer is already armed, rearm it.
-void RDMAContext::rearm_timer_for_flow(void* context) {
-  auto* subflow = reinterpret_cast<SubUcclFlow*>(context);
+void RDMAContext::rearm_timer_for_flow(void *context) {
+  auto *subflow = reinterpret_cast<SubUcclFlow *>(context);
   if (subflow->rto_armed) {
     if constexpr (kConstRTO) {
       rto_->rearm_timer({this, subflow});
@@ -3595,13 +3634,13 @@ void RDMAContext::rearm_timer_for_flow(void* context) {
   }
 }
 
-void RDMAContext::mark_flow_timeout(void* context) {
-  auto* subflow = reinterpret_cast<SubUcclFlow*>(context);
+void RDMAContext::mark_flow_timeout(void *context) {
+  auto *subflow = reinterpret_cast<SubUcclFlow *>(context);
   subflow->rto_armed = false;
 }
 
-void RDMAContext::disarm_timer_for_flow(void* context) {
-  auto* subflow = reinterpret_cast<SubUcclFlow*>(context);
+void RDMAContext::disarm_timer_for_flow(void *context) {
+  auto *subflow = reinterpret_cast<SubUcclFlow *>(context);
   if (subflow->rto_armed) {
     rto_->disarm_timer({this, subflow});
     subflow->rto_armed = false;
@@ -3624,9 +3663,9 @@ std::string RDMAContext::to_string() {
 
   for (int fid = 0; fid < nr_flows_; fid++) {
     {
-      auto* flow = reinterpret_cast<UcclFlow*>(receiver_flow_tbl_[fid]);
+      auto *flow = reinterpret_cast<UcclFlow *>(receiver_flow_tbl_[fid]);
       if (flow) {
-        auto* subflow = flow->sub_flows_[engine_offset_];
+        auto *subflow = flow->sub_flows_[engine_offset_];
         stats_accept_retr += subflow->pcb.stats_accept_retr;
 
         stats_chunk_drop += subflow->pcb.stats_chunk_drop;
@@ -3634,13 +3673,13 @@ std::string RDMAContext::to_string() {
         stats_ooo += subflow->pcb.stats_ooo;
         stats_real_ooo += subflow->pcb.stats_real_ooo;
         stats_maxooo = std::max(stats_maxooo, subflow->pcb.stats_maxooo);
-        subflow->pcb.stats_maxooo = 0;  // Inaccurate is fine.
+        subflow->pcb.stats_maxooo = 0; // Inaccurate is fine.
       }
     }
     {
-      auto* flow = reinterpret_cast<UcclFlow*>(sender_flow_tbl_[fid]);
+      auto *flow = reinterpret_cast<UcclFlow *>(sender_flow_tbl_[fid]);
       if (flow) {
-        auto* subflow = flow->sub_flows_[engine_offset_];
+        auto *subflow = flow->sub_flows_[engine_offset_];
         stats_rto_rexmits += subflow->pcb.stats_rto_rexmits;
         stats_fast_rexmits += subflow->pcb.stats_fast_rexmits;
       }
@@ -3661,4 +3700,4 @@ std::string RDMAContext::to_string() {
   return s;
 }
 
-}  // namespace uccl
+} // namespace uccl
