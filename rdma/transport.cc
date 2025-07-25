@@ -2500,7 +2500,21 @@ bool RDMAContext::senderCC_tx_read(struct ucclRequest* ureq) {
               wr_ex->sge.length);
       return false;
     }
+    int hint = 0;
+    if (*sent_offset + chunk_size == size) {
+      // Last chunk of the message.
+      hint = 1;
+    }
+    subflow->txtracking.track_chunk(
+        ureq, wr_ex, rdtsc(), subflow->pcb.get_snd_nxt().to_uint32(), hint);
     *sent_offset += chunk_size;
+
+    subflow->unacked_bytes_ += chunk_size;
+    *engine_unacked_bytes_ += chunk_size;
+
+    if (size == 0) break;
+
+    continue;
   }
 
   printf(
