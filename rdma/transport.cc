@@ -1644,7 +1644,7 @@ int RDMAEndpoint::uccl_read_async(UcclFlow* flow, Mhandle* local_mh, void* dst,
       return -1;
     }
   }
-  // printf("ureq->pollctx: %d\n", (ureq->poll_ctx)->done.load());
+  printf("ureq->pollctx: %d\n", (ureq->poll_ctx)->done.load());
   ureq->engine_idx = slot_item.engine_offset;
   DCHECK(ureq->context) << "uccl_read_async_direct: ureq->context is null";
   ucclRequest* one[1] = {ureq};
@@ -2430,12 +2430,15 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
 
 bool RDMAContext::senderCC_tx_read(struct ucclRequest* ureq) {
   auto* flow = reinterpret_cast<UcclFlow*>(ureq->context);
+  auto* subflow = flow->sub_flows_[engine_offset_];
+
   auto size = ureq->send.data_len;
   auto laddr = ureq->send.laddr;
   auto raddr = ureq->send.raddr;
   auto lkey = ureq->send.lkey;
   auto rkey = ureq->send.rkey;
-  uint32_t* off = &ureq->send.sent_offset;
+  uint32_t* sent_offset = &ureq->send.sent_offset;
+  uint32_t chunk_size;
 
   printf(
       "senderCC_tx_read, size: %d, ureq->rc_or_flush_done: %lu, ureq: %p, "
@@ -2455,27 +2458,30 @@ bool RDMAContext::senderCC_tx_read(struct ucclRequest* ureq) {
     DCHECK(false) << "RDMA READ is not supported in UC mode";
   }
 
-  while (*off < size) {
-    uint32_t chunk = std::min<uint32_t>(chunk_size_, size - *off);
+  while (*sent_offset < size) {
+    uint32_t chunk = std::min<uint32_t>(chunk_size_, size - *sent_offset);
 
     uint64_t wr_buf;
     CHECK_EQ(wr_ex_pool_->alloc_buff(&wr_buf), 0);
     auto* wr_ex = reinterpret_cast<struct wr_ex*>(wr_buf);
     auto* wr = &wr_ex->wr;
 
-    wr_ex->sge.addr = laddr + *off;
+    wr_ex->sge.addr = laddr + *sent_offset;
     wr_ex->sge.length = chunk;
     wr_ex->sge.lkey = lkey;
 
     wr->opcode = IBV_WR_RDMA_READ;
-    wr->wr.rdma.remote_addr = raddr + *off;
+    wr->wr.rdma.remote_addr = raddr + *sent_offset;
     wr->wr.rdma.rkey = rkey;
     wr->sg_list = &wr_ex->sge;
     wr->num_sge = 1;
     wr->send_flags = IBV_SEND_SIGNALED;
-    wr->wr_id = (uint64_t)ureq->poll_ctx;
+    // wr->wr_id = (uint64_t)ureq->poll_ctx;
+    // We use high 8 bits of wr_id to store CSN.
+    // Lower 56 bits to store subflow pointer.
+    wr->wr_id = (1ULL * subflow->pcb.get_snd_nxt().to_uint32()) << 56 | (uint64_t)subflow;
 
-    // printf("ureq->pollctx: %d\n", (ureq->poll_ctx)->done.load());
+    printf("ureq->pollctx: %d\n", (ureq->poll_ctx)->done.load());
 
     uint32_t qpidx = select_qpidx_pot(chunk, flow->sub_flows_[engine_offset_]);
     auto& qpw = dp_qps_[qpidx];
@@ -2491,7 +2497,7 @@ bool RDMAContext::senderCC_tx_read(struct ucclRequest* ureq) {
               wr_ex->sge.length);
       return false;
     }
-    *off += chunk;
+    *sent_offset += chunk;
   }
 
   printf(
@@ -2523,15 +2529,15 @@ void RDMAContext::uc_post_acks() {
 }
 
 void RDMAContext::rc_rx_ack(struct ibv_wc* wc) {
-  auto opcode = wc->opcode;
-  if (opcode == IBV_WC_RDMA_READ) {
-    printf("rc_rx_ack Received RDMA READ completion with wr_id: %lu\n",
-           wc->wr_id);
-    auto poll_ctx = reinterpret_cast<PollCtx*>(wc->wr_id);
-    uccl_wakeup(poll_ctx);
-    printf("poll_ctx->done: %d\n", poll_ctx->done.load());
-    return;
-  }
+  // auto opcode = wc->opcode;
+  // if (opcode == IBV_WC_RDMA_READ) {
+  //   printf("rc_rx_ack Received RDMA READ completion with wr_id: %lu\n",
+  //          wc->wr_id);
+  //   auto poll_ctx = reinterpret_cast<PollCtx*>(wc->wr_id);
+  //   uccl_wakeup(poll_ctx);
+  //   printf("poll_ctx->done: %d\n", poll_ctx->done.load());
+  //   return;
+  // }
   auto now = rdtsc();
 
   auto wr_id = wc->wr_id;
@@ -2572,16 +2578,16 @@ void RDMAContext::rc_rx_ack(struct ibv_wc* wc) {
 }
 
 void RDMAContext::rc_rx_ack(struct ibv_cq_ex* cq_ex) {
-  auto opcode = ibv_wc_read_opcode(cq_ex);
-  if (opcode == IBV_WC_RDMA_READ) {
-    printf(
-        "rc_rx_ack ibv_cq_ex Received RDMA READ completion with wr_id: %lu\n",
-        cq_ex->wr_id);
-    auto poll_ctx = reinterpret_cast<PollCtx*>(cq_ex->wr_id);
-    uccl_wakeup(poll_ctx);
-    printf("poll_ctx->done: %d\n", poll_ctx->done.load());
-    return;
-  }
+  // auto opcode = ibv_wc_read_opcode(cq_ex);
+  // if (opcode == IBV_WC_RDMA_READ) {
+  //   printf(
+  //       "rc_rx_ack ibv_cq_ex Received RDMA READ completion with wr_id: %lu\n",
+  //       cq_ex->wr_id);
+  //   auto poll_ctx = reinterpret_cast<PollCtx*>(cq_ex->wr_id);
+  //   uccl_wakeup(poll_ctx);
+  //   printf("poll_ctx->done: %d\n", poll_ctx->done.load());
+  //   return;
+  // }
   auto now = rdtsc();
 
   auto wr_id = cq_ex->wr_id;
