@@ -6,6 +6,7 @@
 #include "util/util.h"
 #include <glog/logging.h>
 #include <infiniband/verbs.h>
+#include <dlfcn.h>
 #include <limits.h>
 
 namespace uccl {
@@ -650,15 +651,65 @@ static bool ncclIbGetGidIndex(struct ibv_context* context, uint8_t portNum,
   return true;
 }
 
+static int has_ibv_reg_mr_iova2() {
+  static void* ibvhandle = NULL;
+  void* tmp;
+  void** cast;
+
+  ibvhandle = dlopen("libibverbs.so", RTLD_NOW);
+  if (!ibvhandle) {
+    ibvhandle = dlopen("libibverbs.so.1", RTLD_NOW);
+    if (!ibvhandle) {
+      LOG(WARNING) << "Failed to open libibverbs.so[.1]";
+      return 0;
+    }
+  }
+
+#define IBVERBS_VERSION "IBVERBS_1.1"
+
+#define LOAD_SYM(handle, symbol, funcptr)                            \
+  do {                                                               \
+    cast = (void**)&funcptr;                                         \
+    tmp = dlvsym(handle, symbol, IBVERBS_VERSION);                   \
+    if (tmp == NULL) {                                               \
+      WARN("dlvsym failed on %s - %s version %s", symbol, dlerror(), \
+           IBVERBS_VERSION);                                         \
+      goto teardown;                                                 \
+    }                                                                \
+    *cast = tmp;                                                     \
+  } while (0)
+
+  // Attempt to load a specific symbol version - fail silently
+#define LOAD_SYM_VERSION(handle, symbol, funcptr, version) \
+  do {                                                     \
+    cast = (void**)&funcptr;                               \
+    *cast = dlvsym(handle, symbol, version);               \
+  } while (0)
+
+  struct ibv_mr* (*ibv_internal_reg_mr_iova2)(struct ibv_pd* pd, void* addr,
+                                              size_t length, uint64_t iova,
+                                              unsigned int access);
+
+  // Cherry-pick the ibv_reg_mr_iova2 API from IBVERBS 1.8
+  LOAD_SYM_VERSION(ibvhandle, "ibv_reg_mr_iova2", ibv_internal_reg_mr_iova2,
+                   "IBVERBS_1.8");
+
+  return ibv_internal_reg_mr_iova2 ? 1 : 0;
+
+teardown:
+  dlclose(ibvhandle);
+  return 0;
+}
+
 // Determine whether RELAXED_ORDERING is enabled and possible
 static int ncclIbRelaxedOrderingCapable(void) {
   int roMode = ncclParamIbPciRelaxedOrdering();
-  struct ibv_mr* r = NULL;
+  int ret = 0;
   if (roMode == 1 || roMode == 2) {
     // Query IBVERBS_1.8 API - needed for IBV_ACCESS_RELAXED_ORDERING support
-    r = ibv_reg_mr_iova2(NULL, NULL, 0, 0, 0);
+    ret = has_ibv_reg_mr_iova2();
   }
-  return r == NULL ? 0 : 1;
+  return ret;
 }
 
 }  // namespace uccl
