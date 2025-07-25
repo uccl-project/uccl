@@ -1951,10 +1951,9 @@ int RDMAContext::supply_rx_buff(struct ucclRequest* ureq) {
     elems[i].rid = subflow->get_recvreq_id(req);
   }
 
-  int ret;
   struct ibv_send_wr* bad_wr;
-  DCHECK((ret = ibv_post_send(ureq->recv.qp, &ureq->recv.wr, &bad_wr)) == 0)
-      << ret;
+  int ret = ibv_post_send(ureq->recv.qp, &ureq->recv.wr, &bad_wr);
+  DCHECK(ret == 0) << ret;
 
   req->type = RecvRequest::RECV;
   req->ureq = ureq;
