@@ -5,7 +5,7 @@ CUDA_HOME ?= /usr/local/cuda
 CUDA_INC  := $(CUDA_HOME)/include
 CUDA_LIB  := $(CUDA_HOME)/lib64
 CXX := g++
-CXXFLAGS := -O0 -g -shared -std=c++17 -fPIC -I../include -I../rdma -I$(CUDA_INC) \
+CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I../include -I../rdma -I$(CUDA_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
 	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -lglog -lgflags -lgtest -lz -lelf -libverbs -lpthread \
 	-DLAZY_CREATE_ENGINE
