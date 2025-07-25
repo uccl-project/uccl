@@ -7,6 +7,9 @@ from typing import List
 import os
 import socket
 import struct
+import torch
+import torch.distributed as dist
+import numpy as np
 
 try:
     from uccl import p2p
@@ -14,17 +17,6 @@ except ImportError as exc:
     sys.stderr.write("Failed to import p2p\n")
     raise
 
-_HAS_TORCH = False
-try:
-    import torch
-
-    print("Torch imported")
-
-    _HAS_TORCH = True
-except ModuleNotFoundError:
-    pass
-
-import numpy as np
 
 def parse_metadata(metadata: bytes):
     if len(metadata) == 10:
@@ -41,20 +33,16 @@ def parse_metadata(metadata: bytes):
         ip = socket.inet_ntop(socket.AF_INET6, ip_bytes)
     else:
         raise ValueError(f"Unexpected metadata length: {len(metadata)}")
-    
-    port = struct.unpack('!H', port_bytes)[0]
-    remote_gpu_idx = struct.unpack('i', gpu_idx_bytes)[0]  # host byte order
+
+    port = struct.unpack("!H", port_bytes)[0]
+    remote_gpu_idx = struct.unpack("i", gpu_idx_bytes)[0]  # host byte order
     return ip, port, remote_gpu_idx
+
 
 def _make_buffer(size_bytes: int, device: str, gpu_idx: int):
     """Allocate a contiguous buffer of *size_bytes* and return (buffer, ptr)."""
     n_elems = size_bytes // 4  # float32 elements
     if device == "gpu":
-        if not _HAS_TORCH:
-            raise RuntimeError(
-                "PyTorch is required for GPU buffers (install torch)"
-            )
-        
         buf = torch.ones(n_elems, dtype=torch.float32, device=f"cuda:{gpu_idx}")
         assert buf.is_contiguous()
         ptr = buf.data_ptr()
@@ -74,14 +62,10 @@ def _pretty_size(num_bytes: int) -> str:
     return f"{num_bytes} B"  # fallback
 
 
-def _run_server(args):
-    ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
-    send_oob(ep.get_endpoint_metadata(), args)
-    print("[Server] Waiting for connection …", flush=True)
+def _run_server(args, ep, remote_metadata):
     ok, r_ip, r_gpu, conn_id = ep.accept()
-    if not ok:
-        sys.exit("[Server] Failed to accept RDMA connection")
-    print(f"[Server] Connected to {r_ip} (GPU {r_gpu}) conn_id={conn_id}")
+    assert ok, "[Server] Failed to accept RDMA connection"
+    print(f"[Server] Accept from {r_ip} (GPU {r_gpu}) conn_id={conn_id}")
 
     for size in args.sizes:
         buf_v = []
@@ -158,16 +142,11 @@ def _run_server(args):
     print("[Server] Benchmark complete")
 
 
-def _run_client(args):
-    if args.remote_ip is None:
-        sys.exit("[Client] --remote-ip is required")
-    meta = recv_oob(args.remote_ip, args)
-    ip, port, r_gpu = parse_metadata(meta)
-    
-    ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
+def _run_client(args, ep, remote_metadata):
+    ip, port, r_gpu = parse_metadata(remote_metadata)
     ok, conn_id = ep.connect(ip, r_gpu, remote_port=port)
     assert ok, "[Client] Failed to connect to server"
-    print(f"[Client] Connected to {args.remote_ip} conn_id={conn_id}")
+    print(f"[Client] Connected to {ip}:{port} (GPU {r_gpu}) conn_id={conn_id}")
 
     for size in args.sizes:
         buf_v = []
@@ -246,36 +225,11 @@ def parse_size_list(val: str) -> List[int]:
             "sizes must be comma-separated integers"
         )
 
-def send_oob(metadata: bytes, args):
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(("0.0.0.0", args.oob_port))
-        s.listen(1)
-        print(f"[Server] OOB channel listening on port {args.oob_port}",
-              flush=True)
-        conn, _ = s.accept()
-        with conn:
-            conn.sendall(metadata)
-            print("[Server] OOB metadata sent", flush=True)
 
-def recv_oob(server_ip: str, args) -> bytes:
-    with socket.create_connection((server_ip, args.oob_port), timeout=10) as s:
-        data = s.recv(32)
-        if not data:
-            sys.exit("[Client] Empty OOB metadata")
-        return data
-    
 def main():
     p = argparse.ArgumentParser(
         description="Benchmark UCCL P2P Engine bandwidth"
     )
-    p.add_argument(
-        "--role",
-        choices=["server", "client"],
-        required=True,
-        help="Run as server (receiver) or client (sender)",
-    )
-    p.add_argument("--remote-ip", help="Server IP address (client only)")
     p.add_argument(
         "--local-gpu-idx",
         type=int,
@@ -324,26 +278,46 @@ def main():
         action="store_true",
         help="Use asynchronous transfers",
     )
-    p.add_argument(
-        "--oob-port",
-        type=int,
-        default=19999,
-        help="TCP port used to ship metadata (server listens, client fetches)",
-    )
     args = p.parse_args()
 
     if args.async_transfer:
         assert args.num_kvblocks == 1, "Async transfers only support one block"
 
-    print("UCCL P2P Benchmark — role:", args.role)
+    dist.init_process_group(backend="gloo")
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    assert world_size == 2, "This benchmark only supports 2 processes"
+
+    print("UCCL P2P Benchmark — role:", "client" if rank == 0 else "server")
     print("Message sizes:", ", ".join(_pretty_size(s) for s in args.sizes))
     print(
         f"Device: {args.device} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}"
     )
-    if args.role == "server":
-        _run_server(args)
+
+    ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
+    local_metadata = ep.get_endpoint_metadata()
+
+    if rank == 0:
+        dist.send(torch.ByteTensor(list(local_metadata)), dst=1)
+        remote_metadata_tensor = torch.zeros(
+            len(local_metadata), dtype=torch.uint8
+        )
+        dist.recv(remote_metadata_tensor, src=1)
+        remote_metadata = bytes(remote_metadata_tensor.tolist())
     else:
-        _run_client(args)
+        remote_metadata_tensor = torch.zeros(
+            len(local_metadata), dtype=torch.uint8
+        )
+        dist.recv(remote_metadata_tensor, src=0)
+        dist.send(torch.ByteTensor(list(local_metadata)), dst=0)
+        remote_metadata = bytes(remote_metadata_tensor.tolist())
+
+    if rank == 0:
+        _run_client(args, ep, remote_metadata)
+    elif rank == 1:
+        _run_server(args, ep, remote_metadata)
+
+    dist.destroy_process_group()
 
 
 if __name__ == "__main__":

@@ -95,34 +95,26 @@ cd benchmarks
 
 ### Running UCCL P2P
 
-On server: 
+On client: 
 ```bash
-python benchmark_uccl.py --role server --device gpu --local-gpu-idx 0 --num-cpus 4
+torchrun --nnodes=2 --nproc_per_node=1 --node-rank=0 --master_addr=<IP addr> \
+    benchmark_uccl.py --device gpu --local-gpu-idx 0 --num-cpus 4
 ```
 
-On client:
+On server:
 ```bash
-python benchmark_uccl.py --role client --device gpu --local-gpu-idx 0 --num-cpus 4 --remote-ip <Server IP>
+torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> \
+    benchmark_uccl.py --device gpu --local-gpu-idx 0 --num-cpus 4
 ```
+You may consider setting `GLOO_SOCKET_IFNAME=xxx` if triggering Gloo connectFullMesh failure.
 
-To benchmark dual direction transfer: 
-```bash
-python benchmark_uccl_dual.py --role server --device gpu --local-gpu-idx 0 --num-cpus 4 --remote-ip <Remote IP>
-python benchmark_uccl_dual.py --role client --device gpu --local-gpu-idx 0 --num-cpus 4 --remote-ip <Remote IP>
-```
-
-To benchmark on AMD GPUs: 
+To benchmark on AMD GPUs, do the following preparation: 
 ```bash
 make -j -f MakefileHip install
-
 export CONDA_LIB_HOME="/work1/yzhou/yangzhou/anaconda3/lib"
 export LD_LIBRARY_PATH=${CONDA_LIB_HOME}:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH}
 export UCCL_RCMODE=1
-
-python benchmark_uccl.py --role server --device gpu --local-gpu-idx 0 --num-cpus 4
-python benchmark_uccl.py --role client --device gpu --local-gpu-idx 0 --num-cpus 4 --remote-ip <Server IP>
 ```
-
 
 ### Running NIXL (with UCX backend)
 
