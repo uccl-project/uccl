@@ -54,9 +54,6 @@ def _make_buffer(size_bytes: int, device: str, gpu_idx: int):
             raise RuntimeError(
                 "PyTorch is required for GPU buffers (install torch)"
             )
-        gpu_name = torch.cuda.get_device_name(gpu_idx).lower()
-        if "gh200" in gpu_name:
-            raise RuntimeError("GPU buffer is not supported for GH200.")
         
         buf = torch.ones(n_elems, dtype=torch.float32, device=f"cuda:{gpu_idx}")
         assert buf.is_contiguous()

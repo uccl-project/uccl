@@ -822,4 +822,28 @@ int SharedIOContext::_uc_poll_recv_cq_normal(void) {
   return nr_wcs;
 }
 
+void serialize_fifo_item(FifoItem const& item, char* buf) {
+  static_assert(sizeof(FifoItem) == 64, "FifoItem must be 64 bytes");
+
+  std::memcpy(buf + 0, &item.addr, sizeof(uint64_t));
+  std::memcpy(buf + 8, &item.size, sizeof(uint32_t));
+  std::memcpy(buf + 12, &item.rkey, sizeof(uint32_t));
+  std::memcpy(buf + 16, &item.nmsgs, sizeof(uint32_t));
+  std::memcpy(buf + 20, &item.rid, sizeof(uint32_t));
+  std::memcpy(buf + 24, &item.idx, sizeof(uint64_t));
+  std::memcpy(buf + 32, &item.engine_offset, sizeof(uint32_t));
+  std::memcpy(buf + 36, &item.padding, sizeof(item.padding));
+}
+
+void deserialize_fifo_item(char const* buf, FifoItem* item) {
+  std::memcpy(&item->addr, buf + 0, sizeof(uint64_t));
+  std::memcpy(&item->size, buf + 8, sizeof(uint32_t));
+  std::memcpy(&item->rkey, buf + 12, sizeof(uint32_t));
+  std::memcpy(&item->nmsgs, buf + 16, sizeof(uint32_t));
+  std::memcpy(&item->rid, buf + 20, sizeof(uint32_t));
+  std::memcpy(&item->idx, buf + 24, sizeof(uint64_t));
+  std::memcpy(&item->engine_offset, buf + 32, sizeof(uint32_t));
+  std::memcpy(&item->padding, buf + 36, sizeof(item->padding));
+}
+
 }  // namespace uccl

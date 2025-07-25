@@ -53,6 +53,24 @@ PYBIND11_MODULE(p2p, m) {
           },
           "Register a data buffer", py::arg("ptr"), py::arg("size"))
       .def(
+          "regv",
+          [](Endpoint& self, std::vector<uintptr_t> const& ptrs,
+             std::vector<size_t> const& sizes) {
+            if (ptrs.size() != sizes.size())
+              throw std::runtime_error("ptrs and sizes must match");
+
+            std::vector<void const*> data_v;
+            data_v.reserve(ptrs.size());
+            for (auto p : ptrs)
+              data_v.push_back(reinterpret_cast<void const*>(p));
+
+            std::vector<uint64_t> mr_ids;
+            bool ok = self.regv(data_v, sizes, mr_ids);
+            return py::make_tuple(ok, py::cast(mr_ids));
+          },
+          py::arg("ptrs"), py::arg("sizes"),
+          "Batch-register multiple memory regions and return [ok, mr_id_list]")
+      .def(
           "send",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
              size_t size) {
@@ -61,6 +79,24 @@ PYBIND11_MODULE(p2p, m) {
           },
           "Send a data buffer", py::arg("conn_id"), py::arg("mr_id"),
           py::arg("ptr"), py::arg("size"))
+      .def(
+          "read",
+          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
+             size_t size, py::bytes meta_blob) {
+            std::string buf = meta_blob;
+            if (buf.size() != sizeof(uccl::FifoItem))
+              throw std::runtime_error(
+                  "meta must be exactly 64 bytes (serialized FifoItem)");
+
+            uccl::FifoItem item;
+            uccl::deserialize_fifo_item(buf.data(), &item);
+            return self.read(conn_id, mr_id, reinterpret_cast<void*>(ptr), size,
+                             item);
+          },
+          "RDMA-READ into a local buffer using metadata from advertise(); "
+          "`meta` is the 64-byte serialized FifoItem returned by the peer",
+          py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"),
+          py::arg("meta"))
       .def(
           "recv",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
@@ -73,6 +109,24 @@ PYBIND11_MODULE(p2p, m) {
           },
           "Receive a key-value buffer", py::arg("conn_id"), py::arg("mr_id"),
           py::arg("ptr"), py::arg("max_size"))
+      .def(
+          "advertise",
+          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id,
+             uint64_t ptr,  // raw pointer passed from Python
+             size_t size) {
+            char
+                serialized[sizeof(uccl::FifoItem)]{};  // 64-byte scratch buffer
+
+            bool ok = self.advertise(
+                conn_id, mr_id, reinterpret_cast<void*>(ptr), size, serialized);
+
+            /* return (success, bytes) — empty bytes when failed */
+            return py::make_tuple(
+                ok, ok ? py::bytes(serialized, sizeof(uccl::FifoItem))
+                       : py::bytes());
+          },
+          "Expose a registered buffer for the peer to RDMA-READ",
+          py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"))
       .def(
           "sendv",
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,

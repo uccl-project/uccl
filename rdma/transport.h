@@ -51,7 +51,7 @@ class Channel {
 
  public:
   struct Msg {
-    enum Op : uint8_t { kTx, kRx };
+    enum Op : uint8_t { kTx, kRx, kRead };
     Op opcode;
     PeerID peer_id;
     struct ucclRequest* ureq;
@@ -428,11 +428,13 @@ class RDMAContext {
     if constexpr (kReceiverCCA != RECEIVER_CCA_NONE) {
       return receiverCC_tx_message(ureq);
     } else {
+      if (ureq->type == ReqRead) return senderCC_tx_read(ureq);
       return senderCC_tx_message(ureq);
     }
   }
   bool receiverCC_tx_message(struct ucclRequest* ureq);
   bool senderCC_tx_message(struct ucclRequest* ureq);
+  bool senderCC_tx_read(struct ucclRequest* ureq);
 
   virtual uint32_t EventOnSelectPath(SubUcclFlow* subflow,
                                      uint32_t chunk_size) = 0;
@@ -1006,6 +1008,8 @@ class RDMAEndpoint {
   std::vector<std::vector<UcclFlow*>> active_flows_vec_;
   std::vector<Spin> active_flows_spin_;
 
+  int ib_relaxed_ordering_enabled_;
+
  public:
   RDMAEndpoint(int num_engines_per_dev);
 
@@ -1088,6 +1092,12 @@ class RDMAEndpoint {
   int uccl_send_async(UcclFlow* flow, struct Mhandle* mhandle, void const* data,
                       size_t const size, struct ucclRequest* ureq);
 
+  int prepare_fifo_metadata(UcclFlow* flow, struct Mhandle** mhandles,
+                            void const* data, size_t size, char* out_buf);
+
+  int uccl_read_async(UcclFlow* flow, Mhandle* local_mh, void* dst, size_t size,
+                      FifoItem const& slot_item, ucclRequest* ureq);
+
   // Post n buffers to engine for receiving data asynchronously.
   int uccl_recv_async(UcclFlow* flow, struct Mhandle** mhandles, void** data,
                       int* size, int n, struct ucclRequest* ureq);
@@ -1116,6 +1126,8 @@ class RDMAEndpoint {
     fence_and_clean_ctx(ctx);
     return true;
   }
+
+  inline bool uccl_check_once(PollCtx* ctx) { return ctx->done.load(); }
 
   inline bool uccl_poll(PollCtx* ctx) {
     while (!uccl_poll_once(ctx)) {
@@ -1341,7 +1353,7 @@ class UcclFlow {
       qpAttr.qp_state = IBV_QPS_INIT;
       qpAttr.pkey_index = 0;
       qpAttr.port_num = factory_dev->ib_port_num;
-      qpAttr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE;
+      qpAttr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ;
 
       comm_base->rc_qp = ibv_create_qp(factory_dev->pd, &qp_init_attr);
       UCCL_INIT_CHECK(comm_base->rc_qp != nullptr, "Failed to create RC QP");
@@ -1428,7 +1440,10 @@ class UcclFlow {
    */
   void post_multi_send(struct ucclRequest** ureqs, uint32_t engine_offset);
 
+  void post_multi_read(struct ucclRequest** ureqs, uint32_t engine_offset);
+
   void rc_send(struct ucclRequest* ureq);
+  void rc_read(struct ucclRequest* ureq);
 
   inline bool check_room(void) { return outstanding_reqs_ < kMaxReq; }
 

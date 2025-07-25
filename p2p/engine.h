@@ -12,7 +12,7 @@
 #include <tuple>
 #include <unordered_map>
 #include <vector>
-#define USE_REDIS
+// #define USE_REDIS
 #ifdef USE_REDIS
 #include <sw/redis++/redis++.h>
 #endif
@@ -93,6 +93,9 @@ class Endpoint {
    */
   bool reg(void const* data, size_t size, uint64_t& mr_id);
 
+  bool regv(std::vector<void const*> const& data_v,
+            std::vector<size_t> const& size_v, std::vector<uint64_t>& mr_id_v);
+
   /*
    * Send data to the remote server. Blocking.
    *
@@ -103,6 +106,9 @@ class Endpoint {
    *   size: the size of the data
    */
   bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size);
+
+  bool read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
+            uccl::FifoItem const& slot_item);
 
   /* Send a vector of data chunks. Blocking. */
   bool sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
@@ -134,6 +140,9 @@ class Endpoint {
   /* Receive data from the remote server asynchronously. */
   bool recv_async(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
                   uint64_t* transfer_id);
+
+  bool advertise(uint64_t conn_id, uint64_t mr_id, void* addr, size_t len,
+                 char* out_buf);
 
   /* Poll the status of the asynchronous receive. */
   bool poll_async(uint64_t transfer_id, bool* is_done);
