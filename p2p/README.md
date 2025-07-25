@@ -20,17 +20,22 @@ p2p/
 ## Prerequisites
 
 ### System Requirements
-- Linux with RDMA support (optional for development)
+- Linux with RDMA support
 - Python 3.7+ with development headers
-- C++17 compatible compiler (GCC 7+ or Clang 5+)
+- C++17 compatible compiler
 - pybind11 library
-- PyTorch or NumPy (for tensor/array operations)
+- PyTorch (for tensor/array operations)
+
+```bash
+sudo apt install build-essential net-tools libelf-dev libibverbs-dev \
+                 libgoogle-glog-dev libgtest-dev libgflags-dev -y
+```
 
 ### Optional Dependencies
-- RDMA drivers and libraries (`libibverbs-dev`)
-- RDMA-capable network hardware (InfiniBand, RoCE)
+<details><summary>Click me</summary>
+
 - CUDA (for GPU tensor operations)
-- Install Redis 
+- Install Redis
 
 ```bash
 sudo apt-get update
@@ -63,6 +68,9 @@ cmake                                  \
 make -j
 sudo make install
 ```
+
+</details>
+
 
 ## Installation
 
