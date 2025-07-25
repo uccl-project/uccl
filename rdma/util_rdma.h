@@ -686,7 +686,7 @@ static int has_ibv_reg_mr_iova2() {
     *cast = dlvsym(handle, symbol, version);               \
   } while (0)
 
-  struct ibv_mr* (*ibv_internal_reg_mr_iova2)(struct ibv_pd* pd, void* addr,
+  struct ibv_mr* (*ibv_internal_reg_mr_iova2)(struct ibv_pd * pd, void* addr,
                                               size_t length, uint64_t iova,
                                               unsigned int access);
 

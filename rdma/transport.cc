@@ -389,7 +389,7 @@ void UcclRDMAEngine::handle_tx_work(void) {
     auto rdma_ctx = it.first;
     auto ureq = it.second;
     if (!ureq) {
-      fprintf(stderr, "[FATAL] Null ureq in tx work\n");
+      UCCL_LOG_ERROR << "Null ureq in tx work\n";
       continue;
     }
     // DCHECK(ureq->context) << "ureq->context is null";
