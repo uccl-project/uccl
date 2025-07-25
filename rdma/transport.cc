@@ -2438,6 +2438,7 @@ bool RDMAContext::senderCC_tx_read(struct ucclRequest* ureq) {
   auto lkey = ureq->send.lkey;
   auto rkey = ureq->send.rkey;
   uint32_t* sent_offset = &ureq->send.sent_offset;
+  uint64_t wr_addr;
   uint32_t chunk_size;
 
   printf(
@@ -2458,17 +2459,18 @@ bool RDMAContext::senderCC_tx_read(struct ucclRequest* ureq) {
     DCHECK(false) << "RDMA READ is not supported in UC mode";
   }
 
-  while (*sent_offset < size) {
-    uint32_t chunk = std::min<uint32_t>(chunk_size_, size - *sent_offset);
+  while (*sent_offset < size || size == 0) {
+    chunk_size = EventOnChunkSize(subflow, size - *sent_offset);
 
-    uint64_t wr_buf;
-    CHECK_EQ(wr_ex_pool_->alloc_buff(&wr_buf), 0);
-    auto* wr_ex = reinterpret_cast<struct wr_ex*>(wr_buf);
+    if (chunk_size == 0 && size) return false;
+
+    CHECK_EQ(wr_ex_pool_->alloc_buff(&wr_addr), 0);
+    struct wr_ex* wr_ex = reinterpret_cast<struct wr_ex*>(wr_addr);
     auto* wr = &wr_ex->wr;
 
     wr_ex->sge.addr = laddr + *sent_offset;
-    wr_ex->sge.length = chunk;
     wr_ex->sge.lkey = lkey;
+    wr_ex->sge.length = chunk_size;
 
     wr->opcode = IBV_WR_RDMA_READ;
     wr->wr.rdma.remote_addr = raddr + *sent_offset;
@@ -2479,11 +2481,12 @@ bool RDMAContext::senderCC_tx_read(struct ucclRequest* ureq) {
     // wr->wr_id = (uint64_t)ureq->poll_ctx;
     // We use high 8 bits of wr_id to store CSN.
     // Lower 56 bits to store subflow pointer.
-    wr->wr_id = (1ULL * subflow->pcb.get_snd_nxt().to_uint32()) << 56 | (uint64_t)subflow;
+    wr->wr_id = (1ULL * subflow->pcb.get_snd_nxt().to_uint32()) << 56 |
+                (uint64_t)subflow;
 
     printf("ureq->pollctx: %d\n", (ureq->poll_ctx)->done.load());
 
-    uint32_t qpidx = select_qpidx_pot(chunk, flow->sub_flows_[engine_offset_]);
+    uint32_t qpidx = select_qpidx_pot(chunk_size, subflow);
     auto& qpw = dp_qps_[qpidx];
     wr_ex->qpidx = qpidx;
 
@@ -2497,7 +2500,7 @@ bool RDMAContext::senderCC_tx_read(struct ucclRequest* ureq) {
               wr_ex->sge.length);
       return false;
     }
-    *sent_offset += chunk;
+    *sent_offset += chunk_size;
   }
 
   printf(
@@ -2538,7 +2541,9 @@ void RDMAContext::rc_rx_ack(struct ibv_wc* wc) {
   //   printf("poll_ctx->done: %d\n", poll_ctx->done.load());
   //   return;
   // }
+  printf("Before rdtsc\n");
   auto now = rdtsc();
+  printf("After rdtsc\n");
 
   auto wr_id = wc->wr_id;
   auto csn = (wr_id >> 56) & 0xff;
@@ -2573,6 +2578,7 @@ void RDMAContext::rc_rx_ack(struct ibv_wc* wc) {
 #endif
 
   subflow->update_scoreboard_rtt(pair.first, pair.second);
+  printf("After update_scoreboard_rtt\n");
 
   UCCL_LOG_IO << "Received ACK for csn: " << csn;
 }
@@ -2581,8 +2587,8 @@ void RDMAContext::rc_rx_ack(struct ibv_cq_ex* cq_ex) {
   // auto opcode = ibv_wc_read_opcode(cq_ex);
   // if (opcode == IBV_WC_RDMA_READ) {
   //   printf(
-  //       "rc_rx_ack ibv_cq_ex Received RDMA READ completion with wr_id: %lu\n",
-  //       cq_ex->wr_id);
+  //       "rc_rx_ack ibv_cq_ex Received RDMA READ completion with wr_id:
+  //       %lu\n", cq_ex->wr_id);
   //   auto poll_ctx = reinterpret_cast<PollCtx*>(cq_ex->wr_id);
   //   uccl_wakeup(poll_ctx);
   //   printf("poll_ctx->done: %d\n", poll_ctx->done.load());
