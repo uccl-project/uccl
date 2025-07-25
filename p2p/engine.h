@@ -5,7 +5,9 @@
 #include "util/shared_pool.h"
 #include "util/util.h"
 #include <infiniband/verbs.h>
+#ifdef WITH_PYTHON
 #include <pybind11/pybind11.h>
+#endif
 #include <mutex>
 #include <string>
 #include <thread>
@@ -17,7 +19,9 @@
 #include <sw/redis++/redis++.h>
 #endif
 
+#ifdef WITH_PYTHON
 namespace py = pybind11;
+#endif
 
 struct MR {
   uint64_t mr_id_;
