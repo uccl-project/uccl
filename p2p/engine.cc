@@ -239,10 +239,6 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
   auto* mhandle = mr_id_to_mr_[mr_id]->mhandle_;
   uccl::ucclRequest ureq;
   memset(&ureq, 0, sizeof(uccl::ucclRequest));
-  printf(
-      "[Endpoint::read] conn_id: %lu, mr_id: %lu, dst: %p, "
-      "size: %zu\n",
-      conn_id, mr_id, dst, size);
   int rc;
   do {
     rc = ep_->uccl_read_async(
@@ -258,7 +254,6 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
     check_python_signals();
   }
 
-  printf("Read finished!\n");
   return true;
 }
 

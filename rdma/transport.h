@@ -428,7 +428,6 @@ class RDMAContext {
     if constexpr (kReceiverCCA != RECEIVER_CCA_NONE) {
       return receiverCC_tx_message(ureq);
     } else {
-      printf("tx_message: %d\n", ureq->type);
       if (ureq->type == ReqRead) return senderCC_tx_read(ureq);
       return senderCC_tx_message(ureq);
     }

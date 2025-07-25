@@ -72,13 +72,6 @@ PYBIND11_MODULE(p2p, m) {
 
             uccl::FifoItem item;
             uccl::deserialize_fifo_item(buf.data(), &item);
-
-            std::cout << "RDMA-READ item: addr=0x" << std::hex << item.addr
-                      << ", size=" << std::dec << item.size
-                      << ", rkey=" << std::dec << item.rkey
-                      << ", nmsgs=" << std::dec << item.nmsgs
-                      << ", rid=" << item.rid << ", idx=" << item.idx
-                      << ", engine_offset=" << item.engine_offset << "\n";
             return self.read(conn_id, mr_id, reinterpret_cast<void*>(ptr), size,
                              item);
           },
