@@ -392,7 +392,6 @@ void UcclRDMAEngine::handle_tx_work(void) {
       UCCL_LOG_ERROR << "Null ureq in tx work\n";
       continue;
     }
-    // DCHECK(ureq->context) << "ureq->context is null";
     UCCL_LOG_ENGINE << "Process tx work.";
     if (!rdma_ctx->tx_message(ureq)) {
       pending_tx_works_.push_back(std::make_pair(rdma_ctx, ureq));
@@ -1632,7 +1631,6 @@ int RDMAEndpoint::uccl_read_async(UcclFlow* flow, Mhandle* local_mh, void* dst,
       return -1;
     }
   }
-  // printf("ureq->pollctx: %d\n", (ureq->poll_ctx)->done.load());
   ureq->engine_idx = slot_item.engine_offset;
   DCHECK(ureq->context) << "uccl_read_async_direct: ureq->context is null";
   ucclRequest* one[1] = {ureq};
@@ -1647,8 +1645,6 @@ bool RDMAEndpoint::uccl_poll_ureq_once(struct ucclRequest* ureq) {
 
   bool ret;
   UcclFlow* flow = reinterpret_cast<UcclFlow*>(ureq->context);
-  // printf("uccl_poll_ureq_once: ureq->type: %d, flow: %p\n", ureq->type,
-  // flow);
   flow->poll_flow_cq();
   if (ureq->type == ReqTxRC || ureq->type == ReqRxRC ||
       ureq->type == ReqFlush||
@@ -2462,8 +2458,6 @@ bool RDMAContext::senderCC_tx_read(struct ucclRequest* ureq) {
     int csn = subflow->pcb.get_snd_nxt().to_uint32();
     wr->wr_id = (1ULL * csn) << 56 | (uint64_t)subflow;
 
-    // printf("ureq->pollctx: %d\n", (ureq->poll_ctx)->done.load());
-
     uint32_t qpidx = select_qpidx_pot(chunk_size, subflow);
     auto& qpw = dp_qps_[qpidx];
     wr_ex->qpidx = qpidx;
@@ -2518,18 +2512,7 @@ void RDMAContext::uc_post_acks() {
 }
 
 void RDMAContext::rc_rx_ack(struct ibv_wc* wc) {
-  // auto opcode = wc->opcode;
-  // if (opcode == IBV_WC_RDMA_READ) {
-  //   printf("rc_rx_ack Received RDMA READ completion with wr_id: %lu\n",
-  //          wc->wr_id);
-  //   auto poll_ctx = reinterpret_cast<PollCtx*>(wc->wr_id);
-  //   uccl_wakeup(poll_ctx);
-  //   printf("poll_ctx->done: %d\n", poll_ctx->done.load());
-  //   return;
-  // }
-  printf("Before rdtsc\n");
   auto now = rdtsc();
-  printf("After rdtsc\n");
 
   auto wr_id = wc->wr_id;
   auto csn = (wr_id >> 56) & 0xff;
@@ -2564,22 +2547,11 @@ void RDMAContext::rc_rx_ack(struct ibv_wc* wc) {
 #endif
 
   subflow->update_scoreboard_rtt(pair.first, pair.second);
-  printf("After update_scoreboard_rtt\n");
 
   UCCL_LOG_IO << "Received ACK for csn: " << csn;
 }
 
 void RDMAContext::rc_rx_ack(struct ibv_cq_ex* cq_ex) {
-  // auto opcode = ibv_wc_read_opcode(cq_ex);
-  // if (opcode == IBV_WC_RDMA_READ) {
-  //   printf(
-  //       "rc_rx_ack ibv_cq_ex Received RDMA READ completion with wr_id:
-  //       %lu\n", cq_ex->wr_id);
-  //   auto poll_ctx = reinterpret_cast<PollCtx*>(cq_ex->wr_id);
-  //   uccl_wakeup(poll_ctx);
-  //   printf("poll_ctx->done: %d\n", poll_ctx->done.load());
-  //   return;
-  // }
   auto now = rdtsc();
 
   auto wr_id = cq_ex->wr_id;
