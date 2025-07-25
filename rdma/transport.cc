@@ -1649,10 +1649,10 @@ bool RDMAEndpoint::uccl_poll_ureq_once(struct ucclRequest* ureq) {
   UcclFlow* flow = reinterpret_cast<UcclFlow*>(ureq->context);
   // printf("uccl_poll_ureq_once: ureq->type: %d, flow: %p\n", ureq->type,
   // flow);
+  flow->poll_flow_cq();
   if (ureq->type == ReqTxRC || ureq->type == ReqRxRC ||
-      ureq->type == ReqFlush ||
+      ureq->type == ReqFlush||
       (ureq->type == ReqRead && ureq->poll_ctx == nullptr)) {
-    flow->poll_flow_cq();
     ret = ureq->rc_or_flush_done;
   } else {
     ret = uccl_poll_once(ureq->poll_ctx);
@@ -2083,7 +2083,8 @@ int RDMAContext::supply_rx_buff(struct ucclRequest* ureq) {
   }
 
   struct ibv_send_wr* bad_wr;
-  DCHECK(ibv_post_send(ureq->recv.qp, &ureq->recv.wr, &bad_wr) == 0);
+  int ret = ibv_post_send(ureq->recv.qp, &ureq->recv.wr, &bad_wr);
+  DCHECK(ret == 0) << ret;
 
   req->type = RecvRequest::RECV;
   req->ureq = ureq;

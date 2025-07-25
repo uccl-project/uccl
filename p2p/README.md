@@ -102,14 +102,13 @@ python benchmark_uccl.py --role server --device gpu --local-gpu-idx 0 --num-cpus
 
 On client:
 ```bash
-# Note: if running atop GH200 with unified memory, use `--device cpu` or use `cudaMallocManaged`. 
 python benchmark_uccl.py --role client --device gpu --local-gpu-idx 0 --num-cpus 4 --remote-ip <Server IP>
 ```
 
 To benchmark dual direction transfer: 
 ```bash
-python benchmark_uccl_dual.py --role server --device cpu --local-gpu-idx 0 --num-cpus 4 --remote-ip <Remote IP>
-python benchmark_uccl_dual.py --role client --device cpu --local-gpu-idx 0 --num-cpus 4 --remote-ip <Remote IP>
+python benchmark_uccl_dual.py --role server --device gpu --local-gpu-idx 0 --num-cpus 4 --remote-ip <Remote IP>
+python benchmark_uccl_dual.py --role client --device gpu --local-gpu-idx 0 --num-cpus 4 --remote-ip <Remote IP>
 ```
 
 To benchmark on AMD GPUs: 
