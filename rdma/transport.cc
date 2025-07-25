@@ -1523,9 +1523,9 @@ bool RDMAEndpoint::uccl_poll_ureq_once(struct ucclRequest* ureq) {
 
   bool ret;
   UcclFlow* flow = reinterpret_cast<UcclFlow*>(ureq->context);
+  flow->poll_flow_cq();
   if (ureq->type == ReqTxRC || ureq->type == ReqRxRC ||
       ureq->type == ReqFlush) {
-    flow->poll_flow_cq();
     ret = ureq->rc_or_flush_done;
   } else {
     ret = uccl_poll_once(ureq->poll_ctx);
