@@ -22,7 +22,7 @@ if [[ $TARGET != "cuda" && $TARGET != "rocm" ]]; then
 fi
 
 if [[ $ARCH == "aarch64" && $TARGET == "rocm" ]]; then
-  echo "Skipping ROCm build on Arm64."
+  echo "Skipping ROCm build on Arm64 (no ROCm toolchain)."
   exit 1
 fi
 
@@ -40,14 +40,14 @@ build_rdma() {
   local IS_EFA="$3"
 
   set -euo pipefail
-  echo "[container] Target: $TARGET"
+  echo "[container] build_rdma Target: $TARGET"
   
   if [[ "$TARGET" == "cuda" ]]; then
     cd rdma && make clean && make -j$(nproc) && cd ..
     TARGET_SO=rdma/libnccl-net-uccl.so
   elif [[ "$TARGET" == "rocm" ]]; then
     if [[ "$ARCH" == "aarch64" ]]; then
-      echo "Skipping ROCm build on Arm64."
+      echo "Skipping ROCm build on Arm64 (no ROCm toolchain)."
       return
     fi
     # Unlike CUDA, ROCM does not include nccl.h. So we need to build rccl to get nccl.h.
@@ -72,10 +72,10 @@ build_efa() {
   local IS_EFA="$3"
 
   set -euo pipefail
-  echo "[container] Target: $TARGET"
+  echo "[container] build_efa Target: $TARGET"
 
-  if [[ "$ARCH" == "aarch64" ]]; then
-    echo "Skipping EFA build on Arm64."
+  if [[ "$ARCH" == "aarch64" || "$TARGET" == "rocm" ]]; then
+    echo "Skipping EFA build on Arm64 (no EFA installer) or ROCm (no CUDA)."
     return
   fi
   cd efa && make clean && make -j$(nproc) && cd ..
@@ -97,10 +97,10 @@ build_p2p() {
   local IS_EFA="$3"
 
   set -euo pipefail
-  echo "[container] Target: $TARGET"
+  echo "[container] build_p2p Target: $TARGET"
 
   if [[ -n "$IS_EFA" ]]; then
-    echo "Skipping P2P build on EFA. We do not support P2P on EFA for now."
+    echo "Skipping P2P build on EFA (EFA P2P not supported yet)."
     return
   fi
 
