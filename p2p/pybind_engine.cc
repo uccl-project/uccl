@@ -87,13 +87,12 @@ PYBIND11_MODULE(p2p, m) {
 
               uccl::FifoItem item;
               uccl::deserialize_fifo_item(buf.data(), &item);
-              return self.py_send(conn_id, mr_id,
+              return self.send(conn_id, mr_id,
                                   reinterpret_cast<void const*>(ptr), size,
                                   item);
             } else {
-              return self.py_send(conn_id, mr_id,
-                                  reinterpret_cast<void const*>(ptr), size,
-                                  std::nullopt);
+              return self.send(conn_id, mr_id,
+                                  reinterpret_cast<void const*>(ptr), size);
             }
           },
           "Send a data buffer, optionally using metadata (serialized FifoItem)",

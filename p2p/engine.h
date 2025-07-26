@@ -104,8 +104,6 @@ class Endpoint {
   bool regv(std::vector<void const*> const& data_v,
             std::vector<size_t> const& size_v, std::vector<uint64_t>& mr_id_v);
 
-  bool py_send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
-               std::optional<uccl::FifoItem> slot_item);
   bool send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
                 void const* meta, size_t meta_len);
   /*

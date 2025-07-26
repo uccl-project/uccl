@@ -346,15 +346,6 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
   return true;
 }
 
-bool Endpoint::py_send(uint64_t conn_id, uint64_t mr_id, void const* data,
-                       size_t size, std::optional<uccl::FifoItem> slot_item) {
-  py::gil_scoped_release release;
-  if (slot_item.has_value())
-    return send(conn_id, mr_id, data, size, slot_item.value());
-  else
-    return send(conn_id, mr_id, data, size);
-}
-
 bool Endpoint::send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
                         size_t size, void const* meta, size_t meta_len) {
   py::gil_scoped_release release;
