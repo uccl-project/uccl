@@ -1,7 +1,7 @@
 import os
 from . import p2p
 
-__version__ = "0.0.1.post2"
+__version__ = "0.0.1.post3"
 
 def nccl_plugin_path():
     """Returns absolute path to the NCCL plugin .so file"""
