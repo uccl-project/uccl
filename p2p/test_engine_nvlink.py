@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 """
 Test script for the UCCL P2P Engine pybind11 extension
+using torch.distributed for inter-process communication.
+
+Run with:
+  torchrun --nproc_per_node=2 test_engine_nvlink.py
+or:
+  python -m torch.distributed.run --nproc_per_node=2 test_engine_nvlink.py
 """
 
 import sys
 import os
-import numpy as np
-import multiprocessing
 import time
-import torch
-import socket
 import struct
+import socket
+import numpy as np
+
+import torch
+import torch.distributed as dist
 
 try:
     from uccl import p2p
@@ -25,110 +32,129 @@ except ImportError as e:
 def parse_metadata(metadata: bytes):
     if len(metadata) == 10:
         # IPv4: 4 bytes IP, 2 bytes port, 4 bytes GPU idx
-        ip_bytes = metadata[:4]
-        port_bytes = metadata[4:6]
-        gpu_idx_bytes = metadata[6:10]
-        ip = socket.inet_ntop(socket.AF_INET, ip_bytes)
+        ip_b, port_b, gpu_b = metadata[:4], metadata[4:6], metadata[6:10]
+        ip = socket.inet_ntop(socket.AF_INET, ip_b)
     elif len(metadata) == 22:
         # IPv6: 16 bytes IP, 2 bytes port, 4 bytes GPU idx
-        ip_bytes = metadata[:16]
-        port_bytes = metadata[16:18]
-        gpu_idx_bytes = metadata[18:22]
-        ip = socket.inet_ntop(socket.AF_INET6, ip_bytes)
+        ip_b, port_b, gpu_b = metadata[:16], metadata[16:18], metadata[18:22]
+        ip = socket.inet_ntop(socket.AF_INET6, ip_b)
     else:
         raise ValueError(f"Unexpected metadata length: {len(metadata)}")
 
-    port = struct.unpack("!H", port_bytes)[0]
-    remote_gpu_idx = struct.unpack("i", gpu_idx_bytes)[0]  # host byte order
+    port = struct.unpack("!H", port_b)[0]
+    remote_gpu_idx = struct.unpack("i", gpu_b)[0]
     return ip, port, remote_gpu_idx
 
 
-def test_local():
-    """Test the UCCL P2P Engine local send/recv functionality"""
-    print("Running test_local...")
+def _send_int(value: int, dst: int):
+    t = torch.tensor([int(value)], dtype=torch.uint64)
+    dist.send(t, dst=dst)
 
-    metadata_queue = multiprocessing.Queue()
-    connection_id_queue = multiprocessing.Queue()
 
-    def server_process(q):
+def _recv_int(src: int) -> int:
+    t = torch.empty(1, dtype=torch.uint64)
+    dist.recv(t, src=src)
+    return int(t.item())
+
+
+def _send_bytes(payload: bytes, dst: int):
+    n = len(payload)
+    _send_int(n, dst)
+    if n == 0:
+        return
+    mv = memoryview(bytearray(payload))  # copies once, writable
+    buf = torch.frombuffer(mv, dtype=torch.uint8)  # no warning
+    dist.send(buf, dst=dst)
+
+
+def _recv_bytes(src: int) -> bytes:
+    n = _recv_int(src)
+    if n == 0:
+        return b""
+    buf = torch.empty(n, dtype=torch.uint8)
+    dist.recv(buf, src=src)
+    return buf.numpy().tobytes()
+
+
+def test_local_dist():
+    """Two-process local test: rank 0 = server, rank 1 = client."""
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    assert world_size == 2, "This benchmark only supports 2 processes"
+
+    if torch.cuda.is_available():
+        torch.cuda.set_device(0)
+
+    if rank == 0:
+        print("Running test_local (server)…")
+
         engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
         metadata = engine.get_endpoint_metadata()
         ip, port, remote_gpu_idx = parse_metadata(metadata)
-        print(f"Parsed IP: {ip}")
-        print(f"Parsed Port: {port}")
-        print(f"Parsed Remote GPU Index: {remote_gpu_idx}")
-        q.put(bytes(metadata))  # ensure it's serialized as bytes
+        print(f"[server] Parsed IP: {ip}")
+        print(f"[server] Parsed Port: {port}")
+        print(f"[server] Parsed Remote GPU Index: {remote_gpu_idx}")
 
-        conn_id = connection_id_queue.get(timeout=5)  # wait for client to connect
-        assert isinstance(conn_id, int)
+        _send_bytes(bytes(metadata), dst=1)
+
+        conn_id = _recv_int(src=1)
+        print(f"[server] Received conn_id={conn_id} from client")
 
         tensor = torch.zeros(1024, dtype=torch.float32, device="cuda:0")
         assert tensor.is_contiguous()
-
         mr_id = 0
         ok, fifo_blob = engine.advertise(
             conn_id, mr_id, tensor.data_ptr(), tensor.numel() * 4
         )
-        assert isinstance(fifo_blob, (bytes, bytearray)) and len(fifo_blob) == 64
-        print("Buffer exposed for RDMA READ")
+        assert ok and isinstance(fifo_blob, (bytes, bytearray)) and len(fifo_blob) == 64
+        print("[server] Buffer exposed for RDMA READ")
 
-        q.put(bytes(fifo_blob))
-        time.sleep(1)
+        _send_bytes(bytes(fifo_blob), dst=1)
+        time.sleep(1.0)
 
         assert tensor.allclose(torch.ones(1024, dtype=torch.float32, device="cuda:0"))
-        print("✓ Server received correct data")
+        print("[server] Received correct data")
 
-    def client_process(q):
-        metadata = q.get(timeout=5)
+    else:
+        print("Running test_local (client)…")
+
+        metadata = _recv_bytes(src=0)
         ip, port, remote_gpu_idx = parse_metadata(metadata)
         print(
-            f"Client parsed server IP: {ip}, port: {port}, remote_gpu_idx: {remote_gpu_idx}"
+            f"[client] Parsed server IP: {ip}, port: {port}, remote_gpu_idx: {remote_gpu_idx}"
         )
 
         engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
         success, conn_id = engine.connect(metadata)
         assert success
-        print(f"Client connected successfully: conn_id={conn_id}")
-        connection_id_queue.put(conn_id)  # notify server of connection
+        print(f"[client] Connected successfully: conn_id={conn_id}")
+        _send_int(conn_id, dst=0)
 
         tensor = torch.ones(1024, dtype=torch.float32, device="cuda:0")
         assert tensor.is_contiguous()
 
-        fifo_blob = q.get(timeout=10)
-        print("Received FIFO blob from server")
-        assert isinstance(fifo_blob, (bytes, bytearray)) and len(fifo_blob)
+        fifo_blob = _recv_bytes(src=0)
+        print("[client] Received FIFO blob from server")
+        assert isinstance(fifo_blob, (bytes, bytearray)) and len(fifo_blob) == 64
 
         mr_id = 0
         success = engine.send(
             conn_id, mr_id, tensor.data_ptr(), tensor.numel() * 4, fifo_blob
         )
         assert success
-        print("✓ Client sent data")
-
-    server = multiprocessing.Process(target=server_process, args=(metadata_queue,))
-    server.start()
-    time.sleep(1)
-
-    client = multiprocessing.Process(target=client_process, args=(metadata_queue,))
-    client.start()
-
-    try:
-        server.join()
-        client.join()
-    except KeyboardInterrupt:
-        print("\nReceived keyboard interrupt, terminating processes...")
-        server.terminate()
-        client.terminate()
-        server.join()
-        client.join()
-        raise
+        print("[client] Sent data")
 
 
 def main():
-    """Run all tests"""
-    print("=== Running UCCL P2P Engine tests ===\n")
-    test_local()
-    print("\n=== All UCCL P2P Engine tests completed! ===")
+    dist.init_process_group(backend="gloo")
+    try:
+        print(f"=== UCCL P2P test (rank {dist.get_rank()}/{dist.get_world_size()}) ===")
+        test_local_dist()
+        dist.barrier()
+        if dist.get_rank() == 0:
+            print("\n=== All UCCL P2P Engine tests completed! ===")
+    finally:
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":
