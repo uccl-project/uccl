@@ -1,4 +1,5 @@
 import re
+import os
 from setuptools import setup, find_packages, Extension
 
 
@@ -17,9 +18,14 @@ def get_version():
 ext_modules = [
     Extension(
         name="uccl.p2p",
-        sources=["p2p/engine.cc", "p2p/engine.h", "p2p/pybind_engine.cc"],
+        sources=[],
     )
 ]
+
+is_efa = "rdmap" in " ".join(os.listdir("/sys/class/infiniband/"))
+if is_efa:
+    ext_modules = []
+
 
 setup(
     name="uccl",
