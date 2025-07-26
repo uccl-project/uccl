@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "util/cuda.h"
 #include "util/net.h"
 #include "util/util.h"
 #include <arpa/inet.h>
@@ -19,6 +20,8 @@ int const kMaxNumGPUs = 8;
 // Assume the local and remote GPUs have the same GPU-NIC mapping.
 uint8_t gpu_to_dev[kMaxNumGPUs] = {0};
 std::once_flag glog_init_once;
+constexpr uint64_t kNvlinkConn = UINT64_MAX;
+constexpr uint32_t kCudaStreamId = 0;
 
 inline void check_python_signals() {
   PyGILState_STATE gstate = PyGILState_Ensure();
@@ -35,6 +38,12 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   std::cout << "Creating Engine with GPU index: " << local_gpu_idx
             << ", CPUs: " << num_cpus << std::endl;
   // Py_Initialize();
+
+  int n_streams = std::max(1, (int)ucclParamNumCudaStreams());
+  streams_.resize(n_streams);
+  for (int i = 0; i < n_streams; ++i) {
+    CUDA_CHECK(cudaStreamCreateWithFlags(&streams_[i], cudaStreamNonBlocking));
+  }
 
   std::call_once(glog_init_once,
                  []() { google::InitGoogleLogging("uccl_p2p"); });
@@ -112,6 +121,12 @@ Endpoint::~Endpoint() {
   for (auto& [mr_id, mr] : mr_id_to_mr_) {
     delete mr;
   }
+  if (!streams_.empty()) {
+    CUDA_CHECK(cudaSetDevice(local_gpu_idx_));
+    for (auto s : streams_)
+      if (s) cudaStreamDestroy(s);
+  }
+
   delete transfer_metadata_;
   std::cout << "Engine destroyed" << std::endl;
 }
@@ -154,6 +169,28 @@ bool Endpoint::connect(std::string const& ip_addr, int const& remote_gpu_idx,
   return true;
 }
 
+bool is_nvlink_peer(int local_gpu, int remote_gpu) {
+  int accessible = 0;
+  CUDA_CHECK(cudaDeviceCanAccessPeer(&accessible, local_gpu, remote_gpu));
+  if (!accessible) return false;
+
+#ifdef HAS_NVML
+  nvmlDevice_t local_dev, remote_dev;
+  nvmlDeviceGetHandleByIndex(local_gpu, &local_dev);
+  nvmlDeviceGetHandleByIndex(remote_gpu, &remote_dev);
+  nvmlP2PStatus_t status;
+  if (nvmlDeviceGetP2PStatus(local_dev, remote_dev, NVML_P2P_CAPS_INDEX_NVLINK,
+                             &status) == NVML_SUCCESS &&
+      status == NVML_P2P_STATUS_OK) {
+    return true;
+  } else {
+    return false;
+  }
+#else
+  return true;
+#endif
+}
+
 bool Endpoint::connect(py::bytes const& meta_bytes, uint64_t& conn_id) {
   std::string buf = meta_bytes;
   uint8_t const* data = reinterpret_cast<uint8_t const*>(buf.data());
@@ -161,8 +198,6 @@ bool Endpoint::connect(py::bytes const& meta_bytes, uint64_t& conn_id) {
 
   std::string ip;
   int port = -1;
-  int remote_gpu_idx = -1;
-
   char ipstr[INET6_ADDRSTRLEN] = {0};
 
   if (n == 10) {  // IPv4 format
@@ -170,18 +205,27 @@ bool Endpoint::connect(py::bytes const& meta_bytes, uint64_t& conn_id) {
     inet_ntop(AF_INET, ipstr, ipstr, sizeof(ipstr));
     ip = ipstr;
     port = (data[4] << 8) | data[5];
-    std::memcpy(&remote_gpu_idx, data + 6, 4);  // host byte-order
-  } else if (n == 22) {                         // IPv6 format
+    std::memcpy(&remote_gpu_idx_, data + 6, 4);  // host byte-order
+  } else if (n == 22) {                          // IPv6 format
     std::memcpy(ipstr, data, 16);
     inet_ntop(AF_INET6, ipstr, ipstr, sizeof(ipstr));
     ip = ipstr;
     port = (data[16] << 8) | data[17];
-    std::memcpy(&remote_gpu_idx, data + 18, 4);
+    std::memcpy(&remote_gpu_idx_, data + 18, 4);
   } else {
     throw std::runtime_error("Endpoint::connect(metadata): invalid blob size");
   }
 
-  return this->connect(ip, remote_gpu_idx, conn_id, port);
+  if (uccl::is_local_ip(ip)) {
+    if (is_nvlink_peer(local_gpu_idx_, remote_gpu_idx_)) {
+      conn_id = kNvlinkConn;
+      return true;
+    }
+    throw std::runtime_error(
+        "is_local_ip() returned true, "
+        "but remote GPU is not a NVLink peer");
+  }
+  return this->connect(ip, remote_gpu_idx_, conn_id, port);
 }
 
 bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
@@ -292,6 +336,28 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
     mr_id_v[i] = id;
   }
   return true;
+}
+
+bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
+                    size_t size, uccl::FifoItem const& slot_item) {
+  py::gil_scoped_release release;
+  DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
+
+  if (conn_id == kNvlinkConn) {
+    auto* mr = mr_id_to_mr_[mr_id];
+    int dst_gpu = remote_gpu_idx_;
+    int src_gpu = local_gpu_idx_;
+    static std::once_flag once;
+    std::call_once(once, [&] {
+      CUDA_CHECK(cudaSetDevice(src_gpu));
+      CUDA_CHECK(cudaDeviceEnablePeerAccess(dst_gpu, 0));
+    });
+    cudaStream_t s = pick_stream();
+    CUDA_CHECK(cudaMemcpyPeerAsync(reinterpret_cast<void*>(slot_item.addr),
+                                   dst_gpu, data, src_gpu, size, s));
+    return true;
+  }
+  return send(conn_id, mr_id, data, size);
 }
 
 bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
