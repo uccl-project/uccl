@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Test script for the UCCL P2P Engine pybind11 extension
-using torch.distributed for inter-process communication.
+Test script for the UCCL P2P Engine
+using NVLink for inter-process communication.
 
 Run with:
   torchrun --nproc_per_node=2 test_engine_nvlink.py
