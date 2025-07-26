@@ -23,6 +23,7 @@ except ImportError as exc:
 
 listen_port = 9000
 
+
 def create_dataset(role, size, device, gpu_idx=0):
     """
     Create a dataset of tensors whose total size is at least size in bytes.
@@ -50,12 +51,11 @@ def create_dataset(role, size, device, gpu_idx=0):
     if total_bytes < size:
         extra_elems = (size - total_bytes) // element_size
         if extra_elems > 0:
-            extra_block = torch.full(
-                (extra_elems,), value, device=device, dtype=dtype
-            )
+            extra_block = torch.full((extra_elems,), value, device=device, dtype=dtype)
             dataset.append(extra_block)
 
     return dataset
+
 
 def init_zmq(host, port, role):
     """
@@ -72,12 +72,9 @@ def init_zmq(host, port, role):
 
     return zmq_socket
 
+
 def initialize_xfer_metadata_mc(
-    role: str,
-    operation: str, 
-    agent: nixl_agent, 
-    register_descs,
-    zmq_socket
+    role: str, operation: str, agent: nixl_agent, register_descs, zmq_socket
 ):
     """
     Initialize transfer metadata with zmq sockets for Mooncake
@@ -108,15 +105,16 @@ def initialize_xfer_metadata_mc(
 
         uid = "TRANSFER"
         transfer_handle = agent.initialize_xfer(
-                operation, local_xfer_descs, remote_xfer_descs, "server"
-            )
+            operation, local_xfer_descs, remote_xfer_descs, "server"
+        )
 
     return transfer_handle
 
+
 def initialize_xfer_metadata_ucx(
     role: str,
-    operation: str, 
-    agent: nixl_agent, 
+    operation: str,
+    agent: nixl_agent,
     register_descs,
     server_ip,
     server_port,
@@ -156,6 +154,7 @@ def initialize_xfer_metadata_ucx(
 
     return transfer_handle
 
+
 def create_nixl_agent_mc(role: str, dataset, zmq_socket):
     """
     Create Nixl agents based on the role with Mooncake backend
@@ -177,6 +176,7 @@ def create_nixl_agent_mc(role: str, dataset, zmq_socket):
 
     return agent, register_descs
 
+
 def create_nixl_agent_ucx(role: str, dataset):
     """
     Create Nixl agents based on the role.
@@ -190,12 +190,9 @@ def create_nixl_agent_ucx(role: str, dataset):
     register_descs = agent.register_memory(descs)
     return agent, register_descs
 
+
 def start_transfer_mc(
-    role: str,
-    agent: nixl_agent,
-    transfer_handle,
-    zmq_socket,
-    uid="TRANSFER"
+    role: str, agent: nixl_agent, transfer_handle, zmq_socket, uid="TRANSFER"
 ):
     if "client" in role:
         state = agent.transfer(transfer_handle)
@@ -213,14 +210,10 @@ def start_transfer_mc(
         while True:
             transfer_done = zmq_socket.recv()
             if transfer_done.decode("utf-8") == uid:
-                break;
+                break
 
-def start_transfer_ucx(
-    role: str,
-    agent: nixl_agent,
-    transfer_handle,
-    uid="TRANSFER"
-):
+
+def start_transfer_ucx(role: str, agent: nixl_agent, transfer_handle, uid="TRANSFER"):
     if "client" in role:
         state = agent.transfer(transfer_handle)
         if state == "ERR":
@@ -254,10 +247,11 @@ def cleanup_agent(
 ):
     agent.remove_remote_agent(agent.name)
 
+
 def start_agent_pair(size, args):
-    op = 'WRITE'
+    op = "WRITE"
     zmq_socket = None
-    
+
     print(f"Backend : {args.backend}")
     if args.backend == "mooncake":
         zmq_socket = init_zmq(args.remote_ip, listen_port, args.role)
@@ -272,24 +266,24 @@ def start_agent_pair(size, args):
             transfer_handle = initialize_xfer_metadata_mc(
                 args.role, op, agent, register_descs, zmq_socket
             )
-        else :
+        else:
             transfer_handle = initialize_xfer_metadata_ucx(
                 args.role, op, agent, register_descs, args.remote_ip, listen_port
             )
-        
+
         total_size = 0
         start = time.perf_counter()
 
         if args.backend == "mooncake":
             for n in range(args.iters):
-                start_transfer_mc(
-                    args.role, agent, transfer_handle, zmq_socket
-                )
+                start_transfer_mc(args.role, agent, transfer_handle, zmq_socket)
                 total_size += size
         else:
             for n in range(args.iters):
                 start_transfer_ucx(
-                    args.role, agent, transfer_handle,
+                    args.role,
+                    agent,
+                    transfer_handle,
                 )
                 total_size += size
 
@@ -336,9 +330,7 @@ def parse_size_list(val: str) -> List[int]:
     try:
         return [int(s) for s in val.split(",") if s]
     except ValueError:
-        raise argparse.ArgumentTypeError(
-            "sizes must be comma-separated integers"
-        )
+        raise argparse.ArgumentTypeError("sizes must be comma-separated integers")
 
 
 def main():

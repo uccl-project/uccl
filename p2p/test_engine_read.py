@@ -9,7 +9,7 @@ import sys, os, time, socket, struct, multiprocessing
 from typing import Tuple
 
 try:
-    from uccl import p2p          # ← your pybind11 module
+    from uccl import p2p  # ← your pybind11 module
 except ImportError as e:
     sys.stderr.write(f"Failed to import p2p: {e}\n")
     sys.stderr.write("Build the pybind11 extension first (make)\n")
@@ -17,21 +17,24 @@ except ImportError as e:
 
 import torch
 import os
+
 os.environ["UCCL_RCMODE"] = "1"
+
 
 def parse_endpoint_meta(meta: bytes) -> Tuple[str, int, int]:
     """Return (ip, port, remote_gpu_idx)."""
-    if len(meta) == 10:                       # IPv4
+    if len(meta) == 10:  # IPv4
         ip_b, port_b, gpu_b = meta[:4], meta[4:6], meta[6:10]
         ip = socket.inet_ntop(socket.AF_INET, ip_b)
-    elif len(meta) == 22:                     # IPv6
+    elif len(meta) == 22:  # IPv6
         ip_b, port_b, gpu_b = meta[:16], meta[16:18], meta[18:22]
         ip = socket.inet_ntop(socket.AF_INET6, ip_b)
     else:
         raise ValueError(f"Unexpected endpoint-metadata length {len(meta)}")
     port = struct.unpack("!H", port_b)[0]
-    gpu  = struct.unpack("i",  gpu_b)[0]
+    gpu = struct.unpack("i", gpu_b)[0]
     return ip, port, gpu
+
 
 def test_local():
     print("Running RDMA-READ local test")
@@ -54,14 +57,10 @@ def test_local():
         fifo_meta = fifo_meta_q.get(timeout=10)
         assert isinstance(fifo_meta, (bytes, bytearray)) and len(fifo_meta) == 64
 
-        ok = ep.read(conn_id,
-                     mr_id,
-                     tensor.data_ptr(),
-                     tensor.numel() * 4,
-                     fifo_meta)
+        ok = ep.read(conn_id, mr_id, tensor.data_ptr(), tensor.numel() * 4, fifo_meta)
         assert ok, "read failed"
-        
-        torch.cuda.synchronize() 
+
+        torch.cuda.synchronize()
         print("tensor[:8]:", tensor[:8])
         assert torch.allclose(tensor, torch.ones_like(tensor))
         print("✓ Server read data correctly")
@@ -82,10 +81,9 @@ def test_local():
         assert ok
         time.sleep(0.1)
         print("advertise data pointer hex", hex(tensor.data_ptr()))
-        ok, fifo_blob = ep.advertise(conn_id,
-                                 mr_id,
-                                 tensor.data_ptr(),
-                                 tensor.numel() * 4)
+        ok, fifo_blob = ep.advertise(
+            conn_id, mr_id, tensor.data_ptr(), tensor.numel() * 4
+        )
         assert isinstance(fifo_blob, (bytes, bytearray)) and len(fifo_blob) == 64
         print("Buffer exposed for RDMA READ")
 
@@ -93,9 +91,12 @@ def test_local():
         time.sleep(1)
 
     srv = multiprocessing.Process(target=server_proc, args=(meta_q, fifo_q))
-    cli = multiprocessing.Process(target=client_proc,  args=(meta_q, fifo_q))
-    srv.start(); time.sleep(1); cli.start()
-    srv.join(); cli.join()
+    cli = multiprocessing.Process(target=client_proc, args=(meta_q, fifo_q))
+    srv.start()
+    time.sleep(1)
+    cli.start()
+    srv.join()
+    cli.join()
     print("Local RDMA-READ test passed\n")
 
 

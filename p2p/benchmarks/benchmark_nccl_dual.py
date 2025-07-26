@@ -12,6 +12,7 @@ import numpy as np
 import torch
 import torch.distributed as dist
 
+
 def _make_buffer(size_bytes: int, device: str, gpu_idx: int):
     """Allocate a contiguous tensor/array of *size_bytes* and return it."""
     n_elems = size_bytes // 4  # float32
@@ -30,6 +31,7 @@ def _pretty_size(num_bytes: int) -> str:
             return f"{val:.0f} {u}" if u == "B" else f"{val:.1f} {u}"
         val /= 1024
     return f"{num_bytes} B"
+
 
 def _send(tensor, dst, async_op=False):
     if isinstance(tensor, torch.Tensor):
@@ -59,9 +61,11 @@ def _recv(tensor, src, async_op=False):
             dist.recv(t, src=src)
         tensor[:] = t.cpu().numpy()
 
+
 ################################################################################
 # Benchmark roles
 ################################################################################
+
 
 def _run_server(args):
     peer = 1  # client rank
@@ -85,12 +89,14 @@ def _run_server(args):
         elapsed = time.perf_counter() - start
         gbps = (total * 8) / elapsed / 1e9
         gb_sec = total / elapsed / 1e9
-        print(f"[Server] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s")
+        print(
+            f"[Server] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
+        )
     print("[Server] Benchmark complete")
 
 
 def _run_client(args):
-    
+
     peer = 0  # server rank
     for size in args.sizes:
         tensor = _make_buffer(size, args.device, args.local_gpu_idx)
@@ -112,7 +118,9 @@ def _run_client(args):
         elapsed = time.perf_counter() - start
         gbps = (total * 8) / elapsed / 1e9
         gb_sec = total / elapsed / 1e9
-        print(f"[Client] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s")
+        print(
+            f"[Client] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
+        )
     print("[Client] Benchmark complete")
 
 
@@ -139,13 +147,18 @@ def _init_process_group(args, rank: int):
 
 
 def main():
-    p = argparse.ArgumentParser(description="Benchmark NCCL (torch.distributed) bandwidth")
+    p = argparse.ArgumentParser(
+        description="Benchmark NCCL (torch.distributed) bandwidth"
+    )
     p.add_argument("--role", choices=["server", "client"], required=True)
     p.add_argument("--remote-ip", help="Server IP address for client")
     p.add_argument("--local-gpu-idx", type=int, default=0)
     p.add_argument("--device", choices=["cpu", "gpu"], default="gpu")
-    p.add_argument("--sizes", type=parse_size_list,
-                   default=[256, 1024, 4096, 16384, 65536, 262144, 1048576, 10485760, 104857600])
+    p.add_argument(
+        "--sizes",
+        type=parse_size_list,
+        default=[256, 1024, 4096, 16384, 65536, 262144, 1048576, 10485760, 104857600],
+    )
     p.add_argument("--iters", type=int, default=1000)
     args = p.parse_args()
 
@@ -154,7 +167,9 @@ def main():
 
     print("NCCL Benchmark —", args.role)
     print("Message sizes:", ", ".join(_pretty_size(s) for s in args.sizes))
-    print(f"Device: {args.device} | Local GPU idx: {args.local_gpu_idx} | Iters: {args.iters}")
+    print(
+        f"Device: {args.device} | Local GPU idx: {args.local_gpu_idx} | Iters: {args.iters}"
+    )
 
     try:
         if rank == 0:
@@ -163,7 +178,8 @@ def main():
             _run_client(args)
     finally:
         dist.destroy_process_group()
-    
+
+
 if __name__ == "__main__":
     try:
         main()

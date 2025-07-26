@@ -40,9 +40,7 @@ def create_datasets(role, sizes, device, gpu_idx=0):
         else:
             dev = "cpu"
         for _ in range(num_blocks):
-            block = torch.full(
-                (n_elems_per_block,), value, device=dev, dtype=dtype
-            )
+            block = torch.full((n_elems_per_block,), value, device=dev, dtype=dtype)
             dataset.append(block)
 
         # If total size is less than requested, add more elements to the last block
@@ -170,9 +168,7 @@ def start_agent_pair(sizes, args):
     op = "WRITE"
     port = 9000
 
-    datasets = create_datasets(
-        args.role, sizes, args.device, args.local_gpu_idx
-    )
+    datasets = create_datasets(args.role, sizes, args.device, args.local_gpu_idx)
 
     agent, register_descs = create_nixl_agent(args.role, datasets)
 
@@ -194,9 +190,7 @@ def start_agent_pair(sizes, args):
                 total_size += size
             end = time.perf_counter()
             transfer_time = end - start
-            gbps = (
-                (total_size * 8) / transfer_time / 1e9
-            )  # bits per second → Gbps
+            gbps = (total_size * 8) / transfer_time / 1e9  # bits per second → Gbps
             gb_sec = total_size / transfer_time / 1e9  # bytes per second → GB/s
             lat = transfer_time / args.iters
             print(
@@ -204,9 +198,7 @@ def start_agent_pair(sizes, args):
             )
             if "server" in args.role:
                 for i, block in enumerate(datasets[i]):
-                    assert (
-                        torch.mean(block) - 1 < 1e-8
-                    ), f"Block {i} not equal to 1"
+                    assert torch.mean(block) - 1 < 1e-8, f"Block {i} not equal to 1"
 
     except KeyboardInterrupt:
         return 0.0
@@ -236,9 +228,7 @@ def parse_size_list(val: str) -> List[int]:
     try:
         return [int(s) for s in val.split(",") if s]
     except ValueError:
-        raise argparse.ArgumentTypeError(
-            "sizes must be comma-separated integers"
-        )
+        raise argparse.ArgumentTypeError("sizes must be comma-separated integers")
 
 
 def main():

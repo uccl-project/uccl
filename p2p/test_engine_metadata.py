@@ -24,6 +24,7 @@ except ImportError as e:
     print("Make sure to run 'make' first to build the module")
     sys.exit(1)
 
+
 def parse_metadata(metadata: bytes):
     if len(metadata) == 10:
         # IPv4: 4 bytes IP, 2 bytes port, 4 bytes GPU idx
@@ -39,10 +40,11 @@ def parse_metadata(metadata: bytes):
         ip = socket.inet_ntop(socket.AF_INET6, ip_bytes)
     else:
         raise ValueError(f"Unexpected metadata length: {len(metadata)}")
-    
-    port = struct.unpack('!H', port_bytes)[0]
-    remote_gpu_idx = struct.unpack('i', gpu_idx_bytes)[0]  # host byte order
+
+    port = struct.unpack("!H", port_bytes)[0]
+    remote_gpu_idx = struct.unpack("i", gpu_idx_bytes)[0]  # host byte order
     return ip, port, remote_gpu_idx
+
 
 def test_local():
     """Test the UCCL P2P Engine local send/recv functionality"""
@@ -83,10 +85,14 @@ def test_local():
     def client_process(q):
         metadata = q.get(timeout=5)
         ip, port, remote_gpu_idx = parse_metadata(metadata)
-        print(f"Client parsed server IP: {ip}, port: {port}, remote_gpu_idx: {remote_gpu_idx}")
+        print(
+            f"Client parsed server IP: {ip}, port: {port}, remote_gpu_idx: {remote_gpu_idx}"
+        )
 
         engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
-        success, conn_id = engine.connect(remote_ip_addr=ip, remote_gpu_idx=remote_gpu_idx, remote_port=port)
+        success, conn_id = engine.connect(
+            remote_ip_addr=ip, remote_gpu_idx=remote_gpu_idx, remote_port=port
+        )
         assert success
         print(f"Client connected successfully: conn_id={conn_id}")
 
