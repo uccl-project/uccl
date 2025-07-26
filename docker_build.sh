@@ -21,6 +21,11 @@ if [[ $TARGET != "cuda" && $TARGET != "rocm" ]]; then
   echo "Usage: $0 [cuda|rocm]" >&2
 fi
 
+if [[ $ARCH == "aarch64" && $TARGET == "rocm" ]]; then
+  echo "Skipping ROCm build on Arm64."
+  exit 1
+fi
+
 rm -r uccl.egg-info >/dev/null 2>&1 || true
 rm -r dist >/dev/null 2>&1 || true
 rm -r uccl/lib >/dev/null 2>&1 || true
@@ -37,10 +42,10 @@ build_rdma() {
   set -euo pipefail
   echo "[container] Target: $TARGET"
   
-  if [[ "$TARGET" == cuda ]]; then
+  if [[ "$TARGET" == "cuda" ]]; then
     cd rdma && make clean && make -j$(nproc) && cd ..
     TARGET_SO=rdma/libnccl-net-uccl.so
-  elif [[ "$TARGET" == rocm ]]; then
+  elif [[ "$TARGET" == "rocm" ]]; then
     if [[ "$ARCH" == "aarch64" ]]; then
       echo "Skipping ROCm build on Arm64."
       return
@@ -100,9 +105,9 @@ build_p2p() {
   fi
 
   cd p2p
-  if [[ "$TARGET" == cuda ]]; then
+  if [[ "$TARGET" == "cuda" ]]; then
     make clean && make -j$(nproc)
-  elif [[ "$TARGET" == rocm ]]; then
+  elif [[ "$TARGET" == "rocm" ]]; then
     make clean -f MakefileHip && make -j$(nproc) -f MakefileHip
   fi
   cd ..
@@ -113,7 +118,7 @@ build_p2p() {
 }
 
 # Determine the Docker image to use based on the target and architecture
-if [[ $TARGET == cuda ]]; then
+if [[ $TARGET == "cuda" ]]; then
   if [[ "$ARCH" == "aarch64" ]]; then
     DOCKERFILE="docker/Dockerfile.gh"
     IMAGE_NAME="uccl-builder-gh"
@@ -124,7 +129,7 @@ if [[ $TARGET == cuda ]]; then
     DOCKERFILE="docker/Dockerfile.cuda"
     IMAGE_NAME="uccl-builder-cuda"
   fi
-elif [[ $TARGET == rocm ]]; then
+elif [[ $TARGET == "rocm" ]]; then
   DOCKERFILE="docker/Dockerfile.rocm"
   IMAGE_NAME="uccl-builder-rocm"
 fi
