@@ -54,4 +54,19 @@ for FILE in "${FILES[@]}"; do
     clang-format -i "$FILE"
 done
 
+echo "Formatting Python files with black..."
+
+PYTHON_DIRS=("p2p")  # Adjust as needed
+BLACK_EXCLUDES=("thirdparty" "doc" "build")
+
+# Convert to exclude args
+BLACK_EXCLUDE_ARGS=$(IFS="|"; echo "${BLACK_EXCLUDES[*]}")
+
+for DIR in "${PYTHON_DIRS[@]}"; do
+    if [ -d "$DIR" ]; then
+        echo "  → $DIR"
+        black "$DIR" --exclude "$BLACK_EXCLUDE_ARGS"
+    fi
+done
+
 echo "Formatting complete."

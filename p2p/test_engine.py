@@ -52,9 +52,7 @@ def test_local():
 
     def client_process():
         engine = uccl_p2p.Endpoint(local_gpu_idx=1, num_cpus=4)
-        success, conn_id = engine.connect(
-            remote_ip_addr="127.0.0.1", remote_gpu_idx=0
-        )
+        success, conn_id = engine.connect(remote_ip_addr="127.0.0.1", remote_gpu_idx=0)
         print(f"Client connected successfully: conn_id={conn_id}")
 
         tensor = torch.ones(1024, dtype=torch.float32)
@@ -63,9 +61,7 @@ def test_local():
         success, mr_id = engine.reg(tensor.data_ptr(), tensor.numel() * 4)
         assert success
 
-        success = engine.send(
-            conn_id, mr_id, tensor.data_ptr(), tensor.numel() * 4
-        )
+        success = engine.send(conn_id, mr_id, tensor.data_ptr(), tensor.numel() * 4)
         assert success
 
         return True

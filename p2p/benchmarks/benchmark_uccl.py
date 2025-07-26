@@ -109,9 +109,7 @@ def _run_server(args, ep, remote_metadata):
                         # Now, we assume async recv knows the to-receive size in advance.
                     total_recv += size_v[0]
                 else:
-                    ok, recv_sz = ep.recv(
-                        conn_id, mr_id_v[0], data_ptr_v[0], size_v[0]
-                    )
+                    ok, recv_sz = ep.recv(conn_id, mr_id_v[0], data_ptr_v[0], size_v[0])
                     assert ok, "[Server] recv error"
                     assert recv_sz == size_v[0], "[Server] recv size mismatch"
                     total_recv += recv_sz
@@ -201,9 +199,7 @@ def _run_client(args, ep, remote_metadata):
             start = time.perf_counter()
             total_sent = 0
             for _ in range(args.iters):
-                ok = ep.sendv(
-                    conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks
-                )
+                ok = ep.sendv(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
                 assert ok, "[Client] send error"
                 total_sent += sum(size_v)
             elapsed = time.perf_counter() - start
@@ -221,24 +217,18 @@ def parse_size_list(val: str) -> List[int]:
     try:
         return [int(s) for s in val.split(",") if s]
     except ValueError:
-        raise argparse.ArgumentTypeError(
-            "sizes must be comma-separated integers"
-        )
+        raise argparse.ArgumentTypeError("sizes must be comma-separated integers")
 
 
 def main():
-    p = argparse.ArgumentParser(
-        description="Benchmark UCCL P2P Engine bandwidth"
-    )
+    p = argparse.ArgumentParser(description="Benchmark UCCL P2P Engine bandwidth")
     p.add_argument(
         "--local-gpu-idx",
         type=int,
         default=0,
         help="Local GPU index to bind buffers",
     )
-    p.add_argument(
-        "--num-cpus", type=int, default=4, help="#CPU threads for RDMA ops"
-    )
+    p.add_argument("--num-cpus", type=int, default=4, help="#CPU threads for RDMA ops")
     p.add_argument(
         "--device",
         choices=["cpu", "gpu"],
@@ -299,15 +289,11 @@ def main():
 
     if rank == 0:
         dist.send(torch.ByteTensor(list(local_metadata)), dst=1)
-        remote_metadata_tensor = torch.zeros(
-            len(local_metadata), dtype=torch.uint8
-        )
+        remote_metadata_tensor = torch.zeros(len(local_metadata), dtype=torch.uint8)
         dist.recv(remote_metadata_tensor, src=1)
         remote_metadata = bytes(remote_metadata_tensor.tolist())
     else:
-        remote_metadata_tensor = torch.zeros(
-            len(local_metadata), dtype=torch.uint8
-        )
+        remote_metadata_tensor = torch.zeros(len(local_metadata), dtype=torch.uint8)
         dist.recv(remote_metadata_tensor, src=0)
         dist.send(torch.ByteTensor(list(local_metadata)), dst=0)
         remote_metadata = bytes(remote_metadata_tensor.tolist())

@@ -181,24 +181,18 @@ def parse_size_list(val: str) -> List[int]:
     try:
         return [int(s) for s in val.split(",") if s]
     except ValueError:
-        raise argparse.ArgumentTypeError(
-            "sizes must be comma-separated integers"
-        )
+        raise argparse.ArgumentTypeError("sizes must be comma-separated integers")
 
 
 def main():
-    p = argparse.ArgumentParser(
-        description="Benchmark UCCL P2P Engine bandwidth"
-    )
+    p = argparse.ArgumentParser(description="Benchmark UCCL P2P Engine bandwidth")
     p.add_argument(
         "--local-gpu-idx",
         type=int,
         default=0,
         help="Local GPU index to bind buffers",
     )
-    p.add_argument(
-        "--num-cpus", type=int, default=4, help="#CPU threads for RDMA ops"
-    )
+    p.add_argument("--num-cpus", type=int, default=4, help="#CPU threads for RDMA ops")
     p.add_argument(
         "--device",
         choices=["cpu", "gpu"],
@@ -250,15 +244,11 @@ def main():
 
     if rank == 0:
         dist.send(torch.ByteTensor(list(local_metadata)), dst=1)
-        remote_metadata_tensor = torch.zeros(
-            len(local_metadata), dtype=torch.uint8
-        )
+        remote_metadata_tensor = torch.zeros(len(local_metadata), dtype=torch.uint8)
         dist.recv(remote_metadata_tensor, src=1)
         remote_metadata = bytes(remote_metadata_tensor.tolist())
     else:
-        remote_metadata_tensor = torch.zeros(
-            len(local_metadata), dtype=torch.uint8
-        )
+        remote_metadata_tensor = torch.zeros(len(local_metadata), dtype=torch.uint8)
         dist.recv(remote_metadata_tensor, src=0)
         dist.send(torch.ByteTensor(list(local_metadata)), dst=0)
         remote_metadata = bytes(remote_metadata_tensor.tolist())

@@ -17,6 +17,7 @@ except ImportError as exc:
 _HAS_TORCH = False
 try:
     import torch
+
     print("Torch imported")
     _HAS_TORCH = True
 except ModuleNotFoundError:
@@ -72,9 +73,11 @@ def _run_server(args, ep: uccl_p2p.Endpoint, conn_id: int):
             total_recv += recv_sz
         elapsed = time.perf_counter() - start
 
-        gbps  = (total_recv * 8) / elapsed / 1e9
+        gbps = (total_recv * 8) / elapsed / 1e9
         gbsec = total_recv / elapsed / 1e9
-        print(f"[Server] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gbsec:6.2f} GB/s")
+        print(
+            f"[Server] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gbsec:6.2f} GB/s"
+        )
     print("[Server] Benchmark complete")
 
 
@@ -100,9 +103,11 @@ def _run_client(args, ep: uccl_p2p.Endpoint, conn_id: int):
             total_sent += size
         elapsed = time.perf_counter() - start
 
-        gbps  = (total_sent * 8) / elapsed / 1e9
+        gbps = (total_sent * 8) / elapsed / 1e9
         gbsec = total_sent / elapsed / 1e9
-        print(f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gbsec:6.2f} GB/s")
+        print(
+            f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gbsec:6.2f} GB/s"
+        )
     print("[Client] Benchmark complete")
 
 
@@ -114,40 +119,60 @@ def parse_size_list(val: str) -> List[int]:
 
 
 def main():
-    p = argparse.ArgumentParser(
-        description="Benchmark UCCL P2P Engine bandwidth"
+    p = argparse.ArgumentParser(description="Benchmark UCCL P2P Engine bandwidth")
+    p.add_argument(
+        "--role",
+        choices=["server", "client"],
+        required=True,
+        help="Run as server (receiver) or client (sender)",
     )
-    p.add_argument("--role", choices=["server", "client"], required=True,
-                   help="Run as server (receiver) or client (sender)")
     # Legacy args for direct connect/accept:
     p.add_argument("--remote-ip", help="Server IP address (client only)")
     # Rendezvous args:
-    p.add_argument("--discovery-uri",
-                   help="Discovery URI for rendezvous (e.g. redis://127.0.0.1:6379)")
+    p.add_argument(
+        "--discovery-uri",
+        help="Discovery URI for rendezvous (e.g. redis://127.0.0.1:6379)",
+    )
     p.add_argument("--group-name", help="Logical group name for rendezvous")
-    p.add_argument("--world-size", type=int,
-                   help="Total number of ranks in rendezvous")
-    p.add_argument("--my-rank", type=int,
-                   help="This process’s rank (0-based) for rendezvous")
-    p.add_argument("--listen-port", type=int, default=12345,
-                   help="TCP port bound by this process (passed to join_group)")
-    p.add_argument("--local-gpu-idx", type=int, default=0,
-                   help="Local GPU index to bind buffers")
-    p.add_argument("--num-cpus", type=int, default=4,
-                   help="#CPU threads for RDMA ops")
-    p.add_argument("--device", choices=["cpu", "gpu"], default="cpu",
-                   help="Buffer location (cpu or gpu)")
-    p.add_argument("--sizes", type=parse_size_list,
-                   default=[256, 1024, 4096, 16384, 65536,
-                            262144, 1048576, 10485760, 104857600],
-                   help="Comma separated list of message sizes in bytes")
-    p.add_argument("--iters", type=int, default=1000,
-                   help="Iterations per message size (excluding warm-up)")
+    p.add_argument("--world-size", type=int, help="Total number of ranks in rendezvous")
+    p.add_argument(
+        "--my-rank", type=int, help="This process’s rank (0-based) for rendezvous"
+    )
+    p.add_argument(
+        "--listen-port",
+        type=int,
+        default=12345,
+        help="TCP port bound by this process (passed to join_group)",
+    )
+    p.add_argument(
+        "--local-gpu-idx", type=int, default=0, help="Local GPU index to bind buffers"
+    )
+    p.add_argument("--num-cpus", type=int, default=4, help="#CPU threads for RDMA ops")
+    p.add_argument(
+        "--device",
+        choices=["cpu", "gpu"],
+        default="cpu",
+        help="Buffer location (cpu or gpu)",
+    )
+    p.add_argument(
+        "--sizes",
+        type=parse_size_list,
+        default=[256, 1024, 4096, 16384, 65536, 262144, 1048576, 10485760, 104857600],
+        help="Comma separated list of message sizes in bytes",
+    )
+    p.add_argument(
+        "--iters",
+        type=int,
+        default=1000,
+        help="Iterations per message size (excluding warm-up)",
+    )
     args = p.parse_args()
 
     print("UCCL P2P Benchmark — role:", args.role)
     print("Message sizes:", ", ".join(_pretty_size(s) for s in args.sizes))
-    print(f"Device: {args.device} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}")
+    print(
+        f"Device: {args.device} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}"
+    )
 
     # 1) Create & connect via rendezvous, or fallback to legacy
     if args.discovery_uri:
@@ -159,7 +184,7 @@ def main():
             args.my_rank,
             args.local_gpu_idx,
             args.num_cpus,
-            args.remote_gpu_idx
+            args.remote_gpu_idx,
         )
         # In a 2-node world, peer rank = the one ≠ my_rank
         peers = [r for r in range(args.world_size) if r != args.my_rank]
