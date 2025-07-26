@@ -454,7 +454,7 @@ static bool parse_ip(std::string const& ip, sockaddr_storage* out,
   return false;
 }
 
-bool is_local_ip(std::string const& ip) {
+static bool is_local_ip(std::string const& ip) {
   sockaddr_storage target;
   socklen_t tlen = 0;
   int tfam = 0;

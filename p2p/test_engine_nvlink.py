@@ -45,6 +45,7 @@ def test_local():
     print("Running test_local...")
 
     metadata_queue = multiprocessing.Queue()
+    connection_id_queue = multiprocessing.Queue()
 
     def server_process(q):
         engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
@@ -54,26 +55,27 @@ def test_local():
         print(f"Parsed Port: {port}")
         print(f"Parsed Remote GPU Index: {remote_gpu_idx}")
         q.put(bytes(metadata))  # ensure it's serialized as bytes
-
-        success, remote_ip_addr, remote_gpu_idx, conn_id = engine.accept()
-        assert success
-        print(
-            f"Server accepted connection from {remote_ip_addr}, GPU {remote_gpu_idx}, conn_id={conn_id}"
-        )
-
-        tensor = torch.zeros(1024, dtype=torch.float32)
+        
+        conn_id = connection_id_queue.get(timeout=5)  # wait for client to connect
+        assert isinstance(conn_id, int)
+        
+        tensor = torch.zeros(1024, dtype=torch.float32, device='cuda:0')
         assert tensor.is_contiguous()
 
         success, mr_id = engine.reg(tensor.data_ptr(), tensor.numel() * 4)
         assert success
 
-        success, recv_size = engine.recv(
-            conn_id, mr_id, tensor.data_ptr(), max_size=tensor.numel() * 8
-        )
-        assert success
-        assert recv_size == tensor.numel() * 4, f"recv_size={recv_size}"
+        ok, fifo_blob = engine.advertise(conn_id,
+                                 mr_id,
+                                 tensor.data_ptr(),
+                                 tensor.numel() * 4)
+        assert isinstance(fifo_blob, (bytes, bytearray)) and len(fifo_blob) == 64
+        print("Buffer exposed for RDMA READ")
 
-        assert tensor.allclose(torch.ones(1024, dtype=torch.float32))
+        q.put(bytes(fifo_blob))
+        time.sleep(1)
+
+        assert tensor.allclose(torch.ones(1024, dtype=torch.float32, device='cuda:0'))
         print("✓ Server received correct data")
 
     def client_process(q):
@@ -82,17 +84,22 @@ def test_local():
         print(f"Client parsed server IP: {ip}, port: {port}, remote_gpu_idx: {remote_gpu_idx}")
 
         engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
-        success, conn_id = engine.connect(remote_ip_addr=ip, remote_gpu_idx=remote_gpu_idx, remote_port=port)
+        success, conn_id = engine.connect(metadata)
         assert success
         print(f"Client connected successfully: conn_id={conn_id}")
+        connection_id_queue.put(conn_id)  # notify server of connection
 
-        tensor = torch.ones(1024, dtype=torch.float32)
+        tensor = torch.ones(1024, dtype=torch.float32, device='cuda:0')
         assert tensor.is_contiguous()
 
         success, mr_id = engine.reg(tensor.data_ptr(), tensor.numel() * 4)
         assert success
 
-        success = engine.send(conn_id, mr_id, tensor.data_ptr(), tensor.numel() * 4)
+        fifo_blob = q.get(timeout=10)
+        print("Received FIFO blob from server")
+        assert isinstance(fifo_blob, (bytes, bytearray)) and len(fifo_blob)
+
+        success = engine.send(conn_id, mr_id, tensor.data_ptr(), tensor.numel() * 4, fifo_blob)
         assert success
         print("✓ Client sent data")
 

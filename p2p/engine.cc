@@ -20,7 +20,6 @@ int const kMaxNumGPUs = 8;
 // Assume the local and remote GPUs have the same GPU-NIC mapping.
 uint8_t gpu_to_dev[kMaxNumGPUs] = {0};
 std::once_flag glog_init_once;
-constexpr uint64_t kNvlinkConn = UINT64_MAX;
 constexpr uint32_t kCudaStreamId = 0;
 
 inline void check_python_signals() {
@@ -217,6 +216,15 @@ bool Endpoint::connect(py::bytes const& meta_bytes, uint64_t& conn_id) {
   }
 
   if (uccl::is_local_ip(ip)) {
+    if (local_gpu_idx_ == remote_gpu_idx_) {
+      // If the local GPU is the same as the remote GPU, we can use a special
+      // connection ID to indicate this.
+      conn_id = kNvlinkConn;
+      std::cout << "Connecting to self (local GPU is same as remote GPU), "
+                   "using NVLink connection ID."
+                << std::endl;
+      return true;
+    }
     if (is_nvlink_peer(local_gpu_idx_, remote_gpu_idx_)) {
       conn_id = kNvlinkConn;
       return true;
@@ -338,23 +346,87 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
   return true;
 }
 
+bool Endpoint::py_send(uint64_t conn_id, uint64_t mr_id, void const* data,
+                       size_t size, std::optional<uccl::FifoItem> slot_item) {
+  py::gil_scoped_release release;
+  if (slot_item.has_value())
+    return send(conn_id, mr_id, data, size, slot_item.value());
+  else
+    return send(conn_id, mr_id, data, size);
+}
+
+bool Endpoint::send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
+                        size_t size, void const* meta, size_t meta_len) {
+  py::gil_scoped_release release;
+  DCHECK(size <= 0xffffffff);
+
+  DCHECK(meta_len == sizeof(cudaIpcMemHandle_t));
+  cudaIpcMemHandle_t handle{};
+  std::memcpy(&handle, meta, sizeof(handle));
+
+  // The destination allocation lives on the *remote* GPU ordinal.
+  void* dst_ptr = nullptr;
+
+  // The current device must be set to the device that owns the handle.
+  CUDA_CHECK(cudaSetDevice(remote_gpu_idx_));
+  CUDA_CHECK(
+      cudaIpcOpenMemHandle(&dst_ptr, handle, cudaIpcMemLazyEnablePeerAccess));
+
+  cudaStream_t s = pick_stream();
+  if (local_gpu_idx_ == remote_gpu_idx_) {
+    // Same GPU (two processes): D2D copy
+    CUDA_CHECK(
+        cudaMemcpyAsync(dst_ptr, data, size, cudaMemcpyDeviceToDevice, s));
+  } else {
+    // Cross-GPU (two processes): P2P copy
+    int can = 0;
+    CUDA_CHECK(cudaDeviceCanAccessPeer(&can, local_gpu_idx_, remote_gpu_idx_));
+    if (can) {
+      // Enable peer access once per pair if needed
+      CUDA_CHECK(cudaSetDevice(local_gpu_idx_));
+      (void)cudaDeviceEnablePeerAccess(remote_gpu_idx_, 0);
+
+      CUDA_CHECK(cudaMemcpyPeerAsync(/*dst*/ dst_ptr, remote_gpu_idx_,
+                                     /*src*/ data, local_gpu_idx_, size, s));
+    } else {
+      std::cerr << "Cannot access remote GPU " << remote_gpu_idx_
+                << " from local GPU " << local_gpu_idx_ << std::endl;
+      return false;
+    }
+  }
+
+  // Ensure the copy finished before closing the IPC mapping
+  CUDA_CHECK(cudaStreamSynchronize(s));
+  CUDA_CHECK(cudaSetDevice(remote_gpu_idx_));
+  CUDA_CHECK(cudaIpcCloseMemHandle(dst_ptr));
+  return true;
+}
+
 bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
                     size_t size, uccl::FifoItem const& slot_item) {
-  py::gil_scoped_release release;
-  DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
-
+  DCHECK(size <= 0xffffffff);
+  printf("Sending data of size %zu to conn_id %lu, mr_id %lu\n", size, conn_id,
+         mr_id);
   if (conn_id == kNvlinkConn) {
     auto* mr = mr_id_to_mr_[mr_id];
     int dst_gpu = remote_gpu_idx_;
     int src_gpu = local_gpu_idx_;
-    static std::once_flag once;
-    std::call_once(once, [&] {
-      CUDA_CHECK(cudaSetDevice(src_gpu));
-      CUDA_CHECK(cudaDeviceEnablePeerAccess(dst_gpu, 0));
-    });
     cudaStream_t s = pick_stream();
-    CUDA_CHECK(cudaMemcpyPeerAsync(reinterpret_cast<void*>(slot_item.addr),
-                                   dst_gpu, data, src_gpu, size, s));
+
+    if (src_gpu == dst_gpu) {
+      CUDA_CHECK(cudaSetDevice(src_gpu));
+      CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(slot_item.addr), data,
+                                 size, cudaMemcpyDeviceToDevice, s));
+    } else {
+      static std::once_flag once;
+      std::call_once(once, [&] {
+        CUDA_CHECK(cudaSetDevice(src_gpu));
+        CUDA_CHECK(cudaDeviceEnablePeerAccess(dst_gpu, 0));
+      });
+      CUDA_CHECK(cudaMemcpyPeerAsync(reinterpret_cast<void*>(slot_item.addr),
+                                     dst_gpu, data, src_gpu, size, s));
+    }
+
     return true;
   }
   return send(conn_id, mr_id, data, size);
@@ -362,13 +434,7 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
 
 bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
                     size_t size) {
-  py::gil_scoped_release release;
   DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
-
-  // printf(
-  //     "[Endpoint::send] conn_id: %lu, mr_id: %lu, data: %p, "
-  //     "size: %zu\n",
-  //     conn_id, mr_id, data, size);
 
   auto conn = conn_id_to_conn_[conn_id];
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
@@ -864,6 +930,14 @@ bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
 bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
                          size_t len, char* out_buf) {
   py::gil_scoped_release release;
+
+  if (conn_id == kNvlinkConn) {
+    CUDA_CHECK(cudaSetDevice(local_gpu_idx_));
+    cudaIpcMemHandle_t handle{};
+    CUDA_CHECK(cudaIpcGetMemHandle(&handle, addr));
+    std::memcpy(out_buf, &handle, sizeof(handle));
+    return true;
+  }
   auto* conn = conn_id_to_conn_[conn_id];
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
   uccl::ucclRequest req_data;
