@@ -62,9 +62,7 @@ def test_local():
         tensor = torch.zeros(1024, dtype=torch.float32, device='cuda:0')
         assert tensor.is_contiguous()
 
-        success, mr_id = engine.reg(tensor.data_ptr(), tensor.numel() * 4)
-        assert success
-
+        mr_id = 0
         ok, fifo_blob = engine.advertise(conn_id,
                                  mr_id,
                                  tensor.data_ptr(),
@@ -92,13 +90,11 @@ def test_local():
         tensor = torch.ones(1024, dtype=torch.float32, device='cuda:0')
         assert tensor.is_contiguous()
 
-        success, mr_id = engine.reg(tensor.data_ptr(), tensor.numel() * 4)
-        assert success
-
         fifo_blob = q.get(timeout=10)
         print("Received FIFO blob from server")
         assert isinstance(fifo_blob, (bytes, bytearray)) and len(fifo_blob)
 
+        mr_id = 0
         success = engine.send(conn_id, mr_id, tensor.data_ptr(), tensor.numel() * 4, fifo_blob)
         assert success
         print("✓ Client sent data")
