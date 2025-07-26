@@ -18,6 +18,7 @@
 #endif
 
 namespace py = pybind11;
+constexpr uint64_t kNvlinkConn = UINT64_MAX;
 
 struct MR {
   uint64_t mr_id_;
@@ -42,6 +43,13 @@ class Endpoint {
   const uint32_t kMaxInflightChunks = 8;
 
  public:
+  cudaStream_t pick_stream() {
+    if (streams_.empty()) return nullptr;
+    uint32_t i =
+        rr_stream_.fetch_add(1, std::memory_order_relaxed) % streams_.size();
+    return streams_[i];
+  }
+
   /*
    * Create engine threads running in background for a single interface. It also
    * opens a TCP listening thread waiting for incoming connections.
@@ -96,6 +104,8 @@ class Endpoint {
   bool regv(std::vector<void const*> const& data_v,
             std::vector<size_t> const& size_v, std::vector<uint64_t>& mr_id_v);
 
+  bool send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
+                void const* meta, size_t meta_len);
   /*
    * Send data to the remote server. Blocking.
    *
@@ -106,6 +116,9 @@ class Endpoint {
    *   size: the size of the data
    */
   bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size);
+
+  bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
+            uccl::FifoItem const& slot_item);
 
   bool read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
             uccl::FifoItem const& slot_item);
@@ -209,6 +222,7 @@ class Endpoint {
                      std::vector<PeerInfo>& out);
 
   int local_gpu_idx_;
+  int remote_gpu_idx_;
   uint32_t num_cpus_;
 
   uccl::RDMAEndpoint* ep_;
@@ -228,6 +242,8 @@ class Endpoint {
 
   // Assuming 1TB GPU memory, 128KB KV block size.
   static constexpr size_t kMaxNumChunksPerTransfer = 1024ul * 1024 * 1024 / 128;
+  std::atomic<uint32_t> rr_stream_{0};
+  std::vector<cudaStream_t> streams_;
 
   // Used for large KV transfer.
   class TransferMetaData {

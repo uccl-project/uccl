@@ -9,7 +9,7 @@ import sys, os, time, socket, struct, multiprocessing
 from typing import Tuple
 
 try:
-    from uccl import p2p  # ← your pybind11 module
+    from uccl import p2p
 except ImportError as e:
     sys.stderr.write(f"Failed to import p2p: {e}\n")
     sys.stderr.write("Build the pybind11 extension first (make)\n")

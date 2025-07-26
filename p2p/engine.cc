@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "util/cuda.h"
 #include "util/net.h"
 #include "util/util.h"
 #include <arpa/inet.h>
@@ -19,6 +20,7 @@ int const kMaxNumGPUs = 8;
 // Assume the local and remote GPUs have the same GPU-NIC mapping.
 uint8_t gpu_to_dev[kMaxNumGPUs] = {0};
 std::once_flag glog_init_once;
+constexpr uint32_t kCudaStreamId = 0;
 
 inline void check_python_signals() {
   PyGILState_STATE gstate = PyGILState_Ensure();
@@ -35,6 +37,12 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   std::cout << "Creating Engine with GPU index: " << local_gpu_idx
             << ", CPUs: " << num_cpus << std::endl;
   // Py_Initialize();
+
+  int n_streams = std::max(1, (int)ucclParamNumCudaStreams());
+  streams_.resize(n_streams);
+  for (int i = 0; i < n_streams; ++i) {
+    CUDA_CHECK(cudaStreamCreateWithFlags(&streams_[i], cudaStreamNonBlocking));
+  }
 
   std::call_once(glog_init_once,
                  []() { google::InitGoogleLogging("uccl_p2p"); });
@@ -112,6 +120,12 @@ Endpoint::~Endpoint() {
   for (auto& [mr_id, mr] : mr_id_to_mr_) {
     delete mr;
   }
+  if (!streams_.empty()) {
+    CUDA_CHECK(cudaSetDevice(local_gpu_idx_));
+    for (auto s : streams_)
+      if (s) cudaStreamDestroy(s);
+  }
+
   delete transfer_metadata_;
   std::cout << "Engine destroyed" << std::endl;
 }
@@ -154,6 +168,28 @@ bool Endpoint::connect(std::string const& ip_addr, int const& remote_gpu_idx,
   return true;
 }
 
+bool is_nvlink_peer(int local_gpu, int remote_gpu) {
+  int accessible = 0;
+  CUDA_CHECK(cudaDeviceCanAccessPeer(&accessible, local_gpu, remote_gpu));
+  if (!accessible) return false;
+
+#ifdef HAS_NVML
+  nvmlDevice_t local_dev, remote_dev;
+  nvmlDeviceGetHandleByIndex(local_gpu, &local_dev);
+  nvmlDeviceGetHandleByIndex(remote_gpu, &remote_dev);
+  nvmlP2PStatus_t status;
+  if (nvmlDeviceGetP2PStatus(local_dev, remote_dev, NVML_P2P_CAPS_INDEX_NVLINK,
+                             &status) == NVML_SUCCESS &&
+      status == NVML_P2P_STATUS_OK) {
+    return true;
+  } else {
+    return false;
+  }
+#else
+  return true;
+#endif
+}
+
 bool Endpoint::connect(py::bytes const& meta_bytes, uint64_t& conn_id) {
   std::string buf = meta_bytes;
   uint8_t const* data = reinterpret_cast<uint8_t const*>(buf.data());
@@ -161,8 +197,6 @@ bool Endpoint::connect(py::bytes const& meta_bytes, uint64_t& conn_id) {
 
   std::string ip;
   int port = -1;
-  int remote_gpu_idx = -1;
-
   char ipstr[INET6_ADDRSTRLEN] = {0};
 
   if (n == 10) {  // IPv4 format
@@ -170,18 +204,36 @@ bool Endpoint::connect(py::bytes const& meta_bytes, uint64_t& conn_id) {
     inet_ntop(AF_INET, ipstr, ipstr, sizeof(ipstr));
     ip = ipstr;
     port = (data[4] << 8) | data[5];
-    std::memcpy(&remote_gpu_idx, data + 6, 4);  // host byte-order
-  } else if (n == 22) {                         // IPv6 format
+    std::memcpy(&remote_gpu_idx_, data + 6, 4);  // host byte-order
+  } else if (n == 22) {                          // IPv6 format
     std::memcpy(ipstr, data, 16);
     inet_ntop(AF_INET6, ipstr, ipstr, sizeof(ipstr));
     ip = ipstr;
     port = (data[16] << 8) | data[17];
-    std::memcpy(&remote_gpu_idx, data + 18, 4);
+    std::memcpy(&remote_gpu_idx_, data + 18, 4);
   } else {
     throw std::runtime_error("Endpoint::connect(metadata): invalid blob size");
   }
 
-  return this->connect(ip, remote_gpu_idx, conn_id, port);
+  if (uccl::is_local_ip(ip)) {
+    if (local_gpu_idx_ == remote_gpu_idx_) {
+      // If the local GPU is the same as the remote GPU, we can use a special
+      // connection ID to indicate this.
+      conn_id = kNvlinkConn;
+      std::cout << "Connecting to self (local GPU is same as remote GPU), "
+                   "using NVLink connection ID."
+                << std::endl;
+      return true;
+    }
+    if (is_nvlink_peer(local_gpu_idx_, remote_gpu_idx_)) {
+      conn_id = kNvlinkConn;
+      return true;
+    }
+    throw std::runtime_error(
+        "is_local_ip() returned true, "
+        "but remote GPU is not a NVLink peer");
+  }
+  return this->connect(ip, remote_gpu_idx_, conn_id, port);
 }
 
 bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
@@ -294,15 +346,86 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
   return true;
 }
 
+bool Endpoint::send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
+                        size_t size, void const* meta, size_t meta_len) {
+  py::gil_scoped_release release;
+  DCHECK(size <= 0xffffffff);
+
+  DCHECK(meta_len == sizeof(cudaIpcMemHandle_t));
+  cudaIpcMemHandle_t handle{};
+  std::memcpy(&handle, meta, sizeof(handle));
+
+  // The destination allocation lives on the *remote* GPU ordinal.
+  void* dst_ptr = nullptr;
+
+  // The current device must be set to the device that owns the handle.
+  CUDA_CHECK(cudaSetDevice(remote_gpu_idx_));
+  CUDA_CHECK(
+      cudaIpcOpenMemHandle(&dst_ptr, handle, cudaIpcMemLazyEnablePeerAccess));
+
+  cudaStream_t s = pick_stream();
+  if (local_gpu_idx_ == remote_gpu_idx_) {
+    // Same GPU (two processes): D2D copy
+    CUDA_CHECK(
+        cudaMemcpyAsync(dst_ptr, data, size, cudaMemcpyDeviceToDevice, s));
+  } else {
+    // Cross-GPU (two processes): P2P copy
+    int can = 0;
+    CUDA_CHECK(cudaDeviceCanAccessPeer(&can, local_gpu_idx_, remote_gpu_idx_));
+    if (can) {
+      // Enable peer access once per pair if needed
+      CUDA_CHECK(cudaSetDevice(local_gpu_idx_));
+      (void)cudaDeviceEnablePeerAccess(remote_gpu_idx_, 0);
+
+      CUDA_CHECK(cudaMemcpyPeerAsync(/*dst*/ dst_ptr, remote_gpu_idx_,
+                                     /*src*/ data, local_gpu_idx_, size, s));
+    } else {
+      std::cerr << "Cannot access remote GPU " << remote_gpu_idx_
+                << " from local GPU " << local_gpu_idx_ << std::endl;
+      return false;
+    }
+  }
+
+  // Ensure the copy finished before closing the IPC mapping
+  CUDA_CHECK(cudaStreamSynchronize(s));
+  CUDA_CHECK(cudaSetDevice(remote_gpu_idx_));
+  CUDA_CHECK(cudaIpcCloseMemHandle(dst_ptr));
+  return true;
+}
+
+bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
+                    size_t size, uccl::FifoItem const& slot_item) {
+  DCHECK(size <= 0xffffffff);
+  printf("Sending data of size %zu to conn_id %lu, mr_id %lu\n", size, conn_id,
+         mr_id);
+  if (conn_id == kNvlinkConn) {
+    auto* mr = mr_id_to_mr_[mr_id];
+    int dst_gpu = remote_gpu_idx_;
+    int src_gpu = local_gpu_idx_;
+    cudaStream_t s = pick_stream();
+
+    if (src_gpu == dst_gpu) {
+      CUDA_CHECK(cudaSetDevice(src_gpu));
+      CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(slot_item.addr), data,
+                                 size, cudaMemcpyDeviceToDevice, s));
+    } else {
+      static std::once_flag once;
+      std::call_once(once, [&] {
+        CUDA_CHECK(cudaSetDevice(src_gpu));
+        CUDA_CHECK(cudaDeviceEnablePeerAccess(dst_gpu, 0));
+      });
+      CUDA_CHECK(cudaMemcpyPeerAsync(reinterpret_cast<void*>(slot_item.addr),
+                                     dst_gpu, data, src_gpu, size, s));
+    }
+
+    return true;
+  }
+  return send(conn_id, mr_id, data, size);
+}
+
 bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
                     size_t size) {
-  py::gil_scoped_release release;
   DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
-
-  // printf(
-  //     "[Endpoint::send] conn_id: %lu, mr_id: %lu, data: %p, "
-  //     "size: %zu\n",
-  //     conn_id, mr_id, data, size);
 
   auto conn = conn_id_to_conn_[conn_id];
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
@@ -798,6 +921,14 @@ bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
 bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
                          size_t len, char* out_buf) {
   py::gil_scoped_release release;
+
+  if (conn_id == kNvlinkConn) {
+    CUDA_CHECK(cudaSetDevice(local_gpu_idx_));
+    cudaIpcMemHandle_t handle{};
+    CUDA_CHECK(cudaIpcGetMemHandle(&handle, addr));
+    std::memcpy(out_buf, &handle, sizeof(handle));
+    return true;
+  }
   auto* conn = conn_id_to_conn_[conn_id];
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
   uccl::ucclRequest req_data;

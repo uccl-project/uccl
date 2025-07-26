@@ -12,11 +12,8 @@ import torch
 import socket
 import struct
 
-# Add current directory to path to import our module
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 try:
-    import p2p
+    from uccl import p2p
 
     print("✓ Successfully imported p2p")
 except ImportError as e:

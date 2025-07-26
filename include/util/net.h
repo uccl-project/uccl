@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <ifaddrs.h>
 #include <netdb.h>
 #include <sys/socket.h>
@@ -435,6 +436,56 @@ static int find_interfaces(char* ifNames, union socketAddress* ifAddrs,
                              maxIfs);
   }
   return nIfs;
+}
+
+static bool parse_ip(std::string const& ip, sockaddr_storage* out,
+                     socklen_t* outlen, int* family) {
+  std::memset(out, 0, sizeof(*out));
+  if (inet_pton(AF_INET, ip.c_str(), &((sockaddr_in*)out)->sin_addr) == 1) {
+    *family = AF_INET;
+    *outlen = sizeof(sockaddr_in);
+    return true;
+  }
+  if (inet_pton(AF_INET6, ip.c_str(), &((sockaddr_in6*)out)->sin6_addr) == 1) {
+    *family = AF_INET6;
+    *outlen = sizeof(sockaddr_in6);
+    return true;
+  }
+  return false;
+}
+
+static bool is_local_ip(std::string const& ip) {
+  sockaddr_storage target;
+  socklen_t tlen = 0;
+  int tfam = 0;
+  if (!parse_ip(ip, &target, &tlen, &tfam)) return false;
+
+  ifaddrs* ifs = nullptr;
+  if (getifaddrs(&ifs) != 0) return false;
+
+  bool found = false;
+  for (auto* it = ifs; it != nullptr; it = it->ifa_next) {
+    if (!it->ifa_addr) continue;
+    if (it->ifa_addr->sa_family != tfam) continue;
+
+    if (tfam == AF_INET) {
+      auto* a = (sockaddr_in*)it->ifa_addr;
+      auto* b = (sockaddr_in*)&target;
+      if (std::memcmp(&a->sin_addr, &b->sin_addr, sizeof(in_addr)) == 0) {
+        found = true;
+        break;
+      }
+    } else if (tfam == AF_INET6) {
+      auto* a = (sockaddr_in6*)it->ifa_addr;
+      auto* b = (sockaddr_in6*)&target;
+      if (std::memcmp(&a->sin6_addr, &b->sin6_addr, sizeof(in6_addr)) == 0) {
+        found = true;
+        break;
+      }
+    }
+  }
+  freeifaddrs(ifs);
+  return found;
 }
 
 }  // namespace uccl

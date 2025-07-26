@@ -73,12 +73,30 @@ PYBIND11_MODULE(p2p, m) {
       .def(
           "send",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
-             size_t size) {
-            return self.send(conn_id, mr_id, reinterpret_cast<void const*>(ptr),
-                             size);
+             size_t size, py::object meta_blob = py::none()) {
+            std::string buf = py::cast<py::bytes>(meta_blob);
+            if (conn_id == kNvlinkConn) {
+              return self.send_ipc(conn_id, mr_id,
+                                   reinterpret_cast<void const*>(ptr), size,
+                                   buf.data(), buf.size());
+            }
+            if (!meta_blob.is_none()) {
+              if (buf.size() != sizeof(uccl::FifoItem))
+                throw std::runtime_error(
+                    "meta must be exactly 64 bytes (serialized FifoItem)");
+
+              uccl::FifoItem item;
+              uccl::deserialize_fifo_item(buf.data(), &item);
+              return self.send(conn_id, mr_id,
+                               reinterpret_cast<void const*>(ptr), size, item);
+            } else {
+              return self.send(conn_id, mr_id,
+                               reinterpret_cast<void const*>(ptr), size);
+            }
           },
-          "Send a data buffer", py::arg("conn_id"), py::arg("mr_id"),
-          py::arg("ptr"), py::arg("size"))
+          "Send a data buffer, optionally using metadata (serialized FifoItem)",
+          py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"),
+          py::arg("meta") = py::none())
       .def(
           "read",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
