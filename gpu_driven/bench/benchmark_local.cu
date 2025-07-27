@@ -8,11 +8,8 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "Usage: ./benchmark_local\n");
     return 1;
   }
-
   BenchEnv env;
   init_env(env);
-
-  // Launch local proxies
   std::vector<std::thread> threads;
   threads.reserve(env.blocks);
   for (int i = 0; i < env.blocks; ++i) {
@@ -21,8 +18,6 @@ int main(int argc, char** argv) {
       p.run_local();
     });
   }
-
-  // Issue commands
   auto t0 = std::chrono::high_resolution_clock::now();
   const size_t shmem_bytes = kQueueSize * sizeof(unsigned long long);
   gpu_issue_batched_commands<<<env.blocks, kNumThPerBlock, shmem_bytes,

@@ -60,7 +60,6 @@ inline void destroy_env(BenchEnv& env) {
   }
 }
 
-/** Convenience config builder (works for all modes) */
 inline Proxy::Config make_cfg(BenchEnv const& env, int block_idx, int rank,
                               char const* peer_ip, void* gpu_buffer = nullptr,
                               size_t total_size = 0,
@@ -78,7 +77,6 @@ inline Proxy::Config make_cfg(BenchEnv const& env, int block_idx, int rank,
   return cfg;
 }
 
-/** Shared-memory sizing helpers (avoid re-typing formulas) */
 inline size_t shmem_bytes_local() {
   return kQueueSize * sizeof(unsigned long long);
 }
@@ -86,12 +84,10 @@ inline size_t shmem_bytes_remote() {
   return kQueueSize * 2 * sizeof(unsigned long long);
 }
 
-/** Convert Mops to Gbps based on kObjectSize */
 inline double mops_to_gbps(double mops) {
   return mops * 1e6 * kObjectSize * 8 / 1e9;
 }
 
-/** GH200-aware GPU buffer helpers */
 inline void* alloc_gpu_buffer(size_t total_size) {
   void* p = nullptr;
 #ifdef USE_GRACE_HOPPER
@@ -137,7 +133,6 @@ inline Stats compute_stats(BenchEnv const& env,
   s.wall_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
 #ifdef MEASURE_PER_OP_LATENCY
-  // Derive GPU-wall time from GPU cycle counters if present.
   s.wall_ms_gpu = (env.rbs[0].cycle_end - env.rbs[0].cycle_start) * 1000.0 /
                   static_cast<double>(env.prop.clockRate) / 1000.0;
 

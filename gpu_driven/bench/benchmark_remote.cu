@@ -43,11 +43,7 @@ int main(int argc, char** argv) {
     cudaSetDevice(0);
   }
 #endif
-
-  // One CopyRingBuffer per block (used by remote for ack/copy)
   std::vector<CopyRingBuffer> rings(env.blocks);
-
-  // Launch one proxy thread per block
   std::vector<std::thread> cpu_threads;
   cpu_threads.reserve(env.blocks);
   for (int i = 0; i < env.blocks; ++i) {
@@ -67,8 +63,6 @@ int main(int argc, char** argv) {
   if (rank == 0) {
     std::printf("Waiting for 2 seconds before issuing commands...\n");
     ::sleep(2);
-
-    // Issue commands
     auto t0 = std::chrono::high_resolution_clock::now();
     const size_t shmem_bytes = kQueueSize * 2 * sizeof(unsigned long long);
     gpu_issue_batched_commands<<<env.blocks, kNumThPerBlock, shmem_bytes,
@@ -79,13 +73,9 @@ int main(int argc, char** argv) {
     auto t1 = std::chrono::high_resolution_clock::now();
 
     for (auto& t : cpu_threads) t.join();
-
-    // Reporting with helpers
     print_block_latencies(env);
     const Stats s = compute_stats(env, t0, t1);
     print_summary(env, s);
-
-    // Cleanup
     destroy_env(env);
 #ifdef USE_GRACE_HOPPER
     cudaFreeHost(gpu_buffer);

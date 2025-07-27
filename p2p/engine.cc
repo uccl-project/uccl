@@ -41,7 +41,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   int n_streams = std::max(1, (int)ucclParamNumCudaStreams());
   streams_.resize(n_streams);
   for (int i = 0; i < n_streams; ++i) {
-    CUDA_CHECK(cudaStreamCreateWithFlags(&streams_[i], cudaStreamNonBlocking));
+    CHECK_CUDA(cudaStreamCreateWithFlags(&streams_[i], cudaStreamNonBlocking));
   }
 
   std::call_once(glog_init_once,
@@ -121,7 +121,7 @@ Endpoint::~Endpoint() {
     delete mr;
   }
   if (!streams_.empty()) {
-    CUDA_CHECK(cudaSetDevice(local_gpu_idx_));
+    CHECK_CUDA(cudaSetDevice(local_gpu_idx_));
     for (auto s : streams_)
       if (s) cudaStreamDestroy(s);
   }
@@ -170,7 +170,7 @@ bool Endpoint::connect(std::string const& ip_addr, int const& remote_gpu_idx,
 
 bool is_nvlink_peer(int local_gpu, int remote_gpu) {
   int accessible = 0;
-  CUDA_CHECK(cudaDeviceCanAccessPeer(&accessible, local_gpu, remote_gpu));
+  CHECK_CUDA(cudaDeviceCanAccessPeer(&accessible, local_gpu, remote_gpu));
   if (!accessible) return false;
 
 #ifdef HAS_NVML
@@ -353,22 +353,22 @@ bool Endpoint::send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
   std::memcpy(&handle, meta, sizeof(handle));
 
   void* dst_ptr = nullptr;
-  CUDA_CHECK(cudaSetDevice(remote_gpu_idx_));
-  CUDA_CHECK(
+  CHECK_CUDA(cudaSetDevice(remote_gpu_idx_));
+  CHECK_CUDA(
       cudaIpcOpenMemHandle(&dst_ptr, handle, cudaIpcMemLazyEnablePeerAccess));
 
   cudaStream_t s = pick_stream();
   if (local_gpu_idx_ == remote_gpu_idx_) {
-    CUDA_CHECK(
+    CHECK_CUDA(
         cudaMemcpyAsync(dst_ptr, data, size, cudaMemcpyDeviceToDevice, s));
   } else {
     int can = 0;
-    CUDA_CHECK(cudaDeviceCanAccessPeer(&can, local_gpu_idx_, remote_gpu_idx_));
+    CHECK_CUDA(cudaDeviceCanAccessPeer(&can, local_gpu_idx_, remote_gpu_idx_));
     if (can) {
-      CUDA_CHECK(cudaSetDevice(local_gpu_idx_));
+      CHECK_CUDA(cudaSetDevice(local_gpu_idx_));
       (void)cudaDeviceEnablePeerAccess(remote_gpu_idx_, 0);
 
-      CUDA_CHECK(cudaMemcpyPeerAsync(dst_ptr, remote_gpu_idx_, data,
+      CHECK_CUDA(cudaMemcpyPeerAsync(dst_ptr, remote_gpu_idx_, data,
                                      local_gpu_idx_, size, s));
     } else {
       std::cerr << "Cannot access remote GPU " << remote_gpu_idx_
@@ -376,9 +376,9 @@ bool Endpoint::send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
       return false;
     }
   }
-  CUDA_CHECK(cudaStreamSynchronize(s));
-  CUDA_CHECK(cudaSetDevice(remote_gpu_idx_));
-  CUDA_CHECK(cudaIpcCloseMemHandle(dst_ptr));
+  CHECK_CUDA(cudaStreamSynchronize(s));
+  CHECK_CUDA(cudaSetDevice(remote_gpu_idx_));
+  CHECK_CUDA(cudaIpcCloseMemHandle(dst_ptr));
   return true;
 }
 
@@ -888,9 +888,9 @@ bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
   py::gil_scoped_release release;
 
   if (conn_id == kNvlinkConn) {
-    CUDA_CHECK(cudaSetDevice(local_gpu_idx_));
+    CHECK_CUDA(cudaSetDevice(local_gpu_idx_));
     cudaIpcMemHandle_t handle{};
-    CUDA_CHECK(cudaIpcGetMemHandle(&handle, addr));
+    CHECK_CUDA(cudaIpcGetMemHandle(&handle, addr));
     std::memcpy(out_buf, &handle, sizeof(handle));
     return true;
   }
