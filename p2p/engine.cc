@@ -385,27 +385,6 @@ bool Endpoint::send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
 bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
                     size_t size, uccl::FifoItem const& slot_item) {
   DCHECK(size <= 0xffffffff);
-  if (conn_id == kNvlinkConn) {
-    auto* mr = mr_id_to_mr_[mr_id];
-    int dst_gpu = remote_gpu_idx_;
-    int src_gpu = local_gpu_idx_;
-    cudaStream_t s = pick_stream();
-
-    if (src_gpu == dst_gpu) {
-      CUDA_CHECK(cudaSetDevice(src_gpu));
-      CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(slot_item.addr), data,
-                                 size, cudaMemcpyDeviceToDevice, s));
-    } else {
-      static std::once_flag once;
-      std::call_once(once, [&] {
-        CUDA_CHECK(cudaSetDevice(src_gpu));
-        CUDA_CHECK(cudaDeviceEnablePeerAccess(dst_gpu, 0));
-      });
-      CUDA_CHECK(cudaMemcpyPeerAsync(reinterpret_cast<void*>(slot_item.addr),
-                                     dst_gpu, data, src_gpu, size, s));
-    }
-    return true;
-  }
   return send(conn_id, mr_id, data, size);
 }
 
