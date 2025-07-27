@@ -15,18 +15,6 @@ def get_version():
     raise RuntimeError("Unable to find version string in uccl/__init__.py")
 
 
-ext_modules = [
-    Extension(
-        name="uccl.p2p",
-        sources=[],
-    )
-]
-
-is_efa = "rdmap" in " ".join(os.listdir("/sys/class/infiniband/"))
-if is_efa:
-    ext_modules = []
-
-
 setup(
     name="uccl",
     version=get_version(),
@@ -39,7 +27,6 @@ setup(
     package_data={
         "uccl": ["lib/*.so", "p2p*.so"],
     },
-    ext_modules=ext_modules,
     license="Apache-2.0",
     install_requires=[],
     classifiers=[

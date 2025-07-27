@@ -33,16 +33,16 @@ You can then dive into:
 
 ### Python Wheel Build
 
-Run the following to build Python wheels (you can replace `all` with `cuda`, `rocm`, `efa`, and `gh`): 
+Run the following to build Python wheels: 
 ```bash
 cd $UCCL_HOME
-./docker_build.sh all
+./docker_build.sh [cuda|rocm]
 ```
 
 Run the following to install the wheels locally: 
 ```bash
 cd $UCCL_HOME
-pip install wheelhouse-all/uccl-*.whl
+pip install wheelhouse-[cuda/rocm]/uccl-*.whl
 ```
 
 Note that you need ARM hosts to build ARM wheels. We do not support building ARM wheels on x86 hosts, as QEMU (`qemu-user-static`) cannot emulate CUDA or ROCm. 

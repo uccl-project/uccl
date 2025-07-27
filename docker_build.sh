@@ -13,7 +13,7 @@ set -e
 # -----------------------
 
 TARGET=${1:-cuda}
-PY_VER=${2:-3.13}
+PY_VER=${2:-$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")}
 ARCH="$(uname -m)"
 IS_EFA=$(ls /sys/class/infiniband/ | grep rdmap || true)
 
@@ -167,6 +167,30 @@ docker run --rm --user "$(id -u):$(id -g)" \
     ls -lh uccl/lib/
     python3 -m build
     auditwheel repair dist/uccl-*.whl --exclude libibverbs.so.1 -w /io/${WHEEL_DIR}
+    
+    # Add backend tag to wheel filename using local version identifier
+    cd /io/${WHEEL_DIR}
+    for wheel in uccl-*.whl; do
+        if [[ -f "$wheel" ]]; then
+            # Extract wheel name components: uccl-version-python-abi-platform.whl
+            if [[ "$wheel" =~ ^(uccl-)([^-]+)-([^-]+-[^-]+-[^.]+)(\.whl)$ ]]; then
+                name="${BASH_REMATCH[1]}"
+                version="${BASH_REMATCH[2]}"
+                python_abi_platform="${BASH_REMATCH[3]}"
+                suffix="${BASH_REMATCH[4]}"
+                
+                # Add backend to version using local identifier: uccl-version+backend-python-abi-platform.whl
+                new_wheel="${name}${version}+${TARGET}-${python_abi_platform}${suffix}"
+                
+                echo "Renaming wheel: $wheel -> $new_wheel"
+                mv "$wheel" "$new_wheel"
+            else
+                echo "Warning: Could not parse wheel filename: $wheel"
+            fi
+        fi
+    done
+    cd /io
+    
     auditwheel show /io/${WHEEL_DIR}/*.whl
   '
 
