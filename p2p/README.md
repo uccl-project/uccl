@@ -19,7 +19,15 @@ p2p/
 
 ## Prerequisites
 
-Note if you are using docker+wheel build, there is no need to install the following dependencies. 
+The easiest way is to: 
+```
+git clone https://github.com/uccl-project/uccl.git --recursive
+cd uccl && bash build_and_install.sh [cuda|rocm]
+```
+
+Alternatively, you can setup your local dev environment by: 
+
+<details><summary>Click me</summary>
 
 ### System Requirements
 - Linux with RDMA support
@@ -34,7 +42,6 @@ sudo apt install build-essential net-tools libelf-dev libibverbs-dev \
 ```
 
 ### Optional Dependencies
-<details><summary>Click me</summary>
 
 - CUDA (for GPU tensor operations)
 - Install Redis
@@ -71,10 +78,7 @@ make -j
 sudo make install
 ```
 
-</details>
-
-
-## Installation
+### Installation
 
 1. **Install Python dependencies:**
    ```bash
@@ -95,13 +99,13 @@ sudo make install
    ```bash
    make install
    ```
+
+</details>
+
+
 ## Performance Benchmarks
 
-Navigate to benchmarks directory:
-
-```bash
-cd benchmarks
-```
+Navigate to `benchmarks` directory: 
 
 ### Running UCCL P2P
 

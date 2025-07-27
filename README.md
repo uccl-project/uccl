@@ -64,7 +64,7 @@ More UCCL features are under development in this repo, currently including:
 The easiest way to use UCCL is to first build based on your platform and py version (eg, 3.13): 
 ```bash
 git clone https://github.com/uccl-project/uccl.git --recursive
-bash docker_build_and_install.sh [cuda|rocm]
+cd uccl && bash build_and_install.sh [cuda|rocm]
 ```
 
 Then, when running your PyTorch applications, set the environment variable accordingly: 
