@@ -1,4 +1,19 @@
+import re
+import os
 from setuptools import setup, find_packages, Extension
+
+
+def get_version():
+    """Parse version from uccl/__init__.py without importing."""
+    with open("uccl/__init__.py", "r") as f:
+        content = f.read()
+    match = re.search(
+        r'^__version__\s*=\s*["\']([^"\']+)["\']', content, re.MULTILINE
+    )
+    if match:
+        return match.group(1)
+    raise RuntimeError("Unable to find version string in uccl/__init__.py")
+
 
 ext_modules = [
     Extension(
@@ -7,9 +22,14 @@ ext_modules = [
     )
 ]
 
+is_efa = "rdmap" in " ".join(os.listdir("/sys/class/infiniband/"))
+if is_efa:
+    ext_modules = []
+
+
 setup(
     name="uccl",
-    version="0.0.1.post3",
+    version=get_version(),
     author="UCCL Team",
     description="UCCL: Ultra and Unified CCL",
     long_description=open("README.md").read(),
@@ -21,12 +41,11 @@ setup(
     },
     ext_modules=ext_modules,
     license="Apache-2.0",
-    install_requires=[
-    ],
+    install_requires=[],
     classifiers=[
         "Programming Language :: Python :: 3",
     ],
-    python_requires='>=3.8',
+    python_requires=">=3.8",
     extras_require={
         "cuda": [],
         "rocm": [],

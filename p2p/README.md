@@ -19,6 +19,8 @@ p2p/
 
 ## Prerequisites
 
+Note if you are using docker+wheel build, there is no need to install the following dependencies. 
+
 ### System Requirements
 - Linux with RDMA support
 - Python 3.7+ with development headers
@@ -114,15 +116,10 @@ On server:
 torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> \
     benchmark_uccl.py --device gpu --local-gpu-idx 0 --num-cpus 4
 ```
+
 You may consider setting `GLOO_SOCKET_IFNAME=xxx` if triggering Gloo connectFullMesh failure.
 
-To benchmark on AMD GPUs, do the following preparation: 
-```bash
-make -j -f MakefileHip install
-export CONDA_LIB_HOME="/work1/yzhou/yangzhou/anaconda3/lib"
-export LD_LIBRARY_PATH=${CONDA_LIB_HOME}:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH}
-export UCCL_RCMODE=1
-```
+To benchmark on AMD GPUs, you need to specify `UCCL_RCMODE=1`.
 
 ### Running NIXL (with UCX backend)
 
