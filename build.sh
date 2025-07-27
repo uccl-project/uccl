@@ -169,27 +169,29 @@ docker run --rm --user "$(id -u):$(id -g)" \
     auditwheel repair dist/uccl-*.whl --exclude libibverbs.so.1 -w /io/${WHEEL_DIR}
     
     # Add backend tag to wheel filename using local version identifier
-    cd /io/${WHEEL_DIR}
-    for wheel in uccl-*.whl; do
+    if [[ "$TARGET" == "rocm" ]]; then
+      cd /io/${WHEEL_DIR}
+      for wheel in uccl-*.whl; do
         if [[ -f "$wheel" ]]; then
-            # Extract wheel name components: uccl-version-python-abi-platform.whl
-            if [[ "$wheel" =~ ^(uccl-)([^-]+)-([^-]+-[^-]+-[^.]+)(\.whl)$ ]]; then
-                name="${BASH_REMATCH[1]}"
-                version="${BASH_REMATCH[2]}"
-                python_abi_platform="${BASH_REMATCH[3]}"
-                suffix="${BASH_REMATCH[4]}"
-                
-                # Add backend to version using local identifier: uccl-version+backend-python-abi-platform.whl
-                new_wheel="${name}${version}+${TARGET}-${python_abi_platform}${suffix}"
-                
-                echo "Renaming wheel: $wheel -> $new_wheel"
-                mv "$wheel" "$new_wheel"
-            else
-                echo "Warning: Could not parse wheel filename: $wheel"
-            fi
+          # Extract wheel name components: uccl-version-python-abi-platform.whl
+          if [[ "$wheel" =~ ^(uccl-)([^-]+)-([^-]+-[^-]+-[^.]+)(\.whl)$ ]]; then
+            name="${BASH_REMATCH[1]}"
+            version="${BASH_REMATCH[2]}"
+            python_abi_platform="${BASH_REMATCH[3]}"
+            suffix="${BASH_REMATCH[4]}"
+            
+            # Add backend to version using local identifier: uccl-version+backend-python-abi-platform.whl
+            new_wheel="${name}${version}+${TARGET}-${python_abi_platform}${suffix}"
+            
+            echo "Renaming wheel: $wheel -> $new_wheel"
+            mv "$wheel" "$new_wheel"
+          else
+            echo "Warning: Could not parse wheel filename: $wheel"
+          fi
         fi
-    done
-    cd /io
+      done
+      cd /io
+    fi
     
     auditwheel show /io/${WHEEL_DIR}/*.whl
   '
