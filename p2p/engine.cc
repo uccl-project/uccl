@@ -352,38 +352,30 @@ bool Endpoint::send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
   cudaIpcMemHandle_t handle{};
   std::memcpy(&handle, meta, sizeof(handle));
 
-  // The destination allocation lives on the *remote* GPU ordinal.
   void* dst_ptr = nullptr;
-
-  // The current device must be set to the device that owns the handle.
   CUDA_CHECK(cudaSetDevice(remote_gpu_idx_));
   CUDA_CHECK(
       cudaIpcOpenMemHandle(&dst_ptr, handle, cudaIpcMemLazyEnablePeerAccess));
 
   cudaStream_t s = pick_stream();
   if (local_gpu_idx_ == remote_gpu_idx_) {
-    // Same GPU (two processes): D2D copy
     CUDA_CHECK(
         cudaMemcpyAsync(dst_ptr, data, size, cudaMemcpyDeviceToDevice, s));
   } else {
-    // Cross-GPU (two processes): P2P copy
     int can = 0;
     CUDA_CHECK(cudaDeviceCanAccessPeer(&can, local_gpu_idx_, remote_gpu_idx_));
     if (can) {
-      // Enable peer access once per pair if needed
       CUDA_CHECK(cudaSetDevice(local_gpu_idx_));
       (void)cudaDeviceEnablePeerAccess(remote_gpu_idx_, 0);
 
-      CUDA_CHECK(cudaMemcpyPeerAsync(/*dst*/ dst_ptr, remote_gpu_idx_,
-                                     /*src*/ data, local_gpu_idx_, size, s));
+      CUDA_CHECK(cudaMemcpyPeerAsync(dst_ptr, remote_gpu_idx_, data,
+                                     local_gpu_idx_, size, s));
     } else {
       std::cerr << "Cannot access remote GPU " << remote_gpu_idx_
                 << " from local GPU " << local_gpu_idx_ << std::endl;
       return false;
     }
   }
-
-  // Ensure the copy finished before closing the IPC mapping
   CUDA_CHECK(cudaStreamSynchronize(s));
   CUDA_CHECK(cudaSetDevice(remote_gpu_idx_));
   CUDA_CHECK(cudaIpcCloseMemHandle(dst_ptr));
