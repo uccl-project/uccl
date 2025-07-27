@@ -4,7 +4,7 @@ Test script for the UCCL P2P Engine
 using NVLink for inter-process communication.
 
 Run with:
-  torchrun --nproc_per_node=2 test_engine_nvlink.py
+  OMP_NUM_THREADS=4 torchrun --nproc_per_node=2 test_engine_nvlink.py
 or:
   python -m torch.distributed.run --nproc_per_node=2 test_engine_nvlink.py
 """
@@ -110,7 +110,9 @@ def test_local_dist():
         print("[server] Buffer exposed for RDMA READ")
 
         _send_bytes(bytes(fifo_blob), dst=1)
-        time.sleep(1.0)
+
+        success = _recv_int(src=1)
+        assert success
 
         assert tensor.allclose(torch.ones(1024, dtype=torch.float32, device="cuda:0"))
         print("[server] Received correct data")
@@ -143,6 +145,8 @@ def test_local_dist():
         )
         assert success
         print("[client] Sent data")
+
+        _send_int(success, dst=0)
 
 
 def main():

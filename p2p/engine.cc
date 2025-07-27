@@ -220,9 +220,6 @@ bool Endpoint::connect(py::bytes const& meta_bytes, uint64_t& conn_id) {
       // If the local GPU is the same as the remote GPU, we can use a special
       // connection ID to indicate this.
       conn_id = kNvlinkConn;
-      std::cout << "Connecting to self (local GPU is same as remote GPU), "
-                   "using NVLink connection ID."
-                << std::endl;
       return true;
     }
     if (is_nvlink_peer(local_gpu_idx_, remote_gpu_idx_)) {
@@ -396,8 +393,6 @@ bool Endpoint::send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
 bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
                     size_t size, uccl::FifoItem const& slot_item) {
   DCHECK(size <= 0xffffffff);
-  printf("Sending data of size %zu to conn_id %lu, mr_id %lu\n", size, conn_id,
-         mr_id);
   if (conn_id == kNvlinkConn) {
     auto* mr = mr_id_to_mr_[mr_id];
     int dst_gpu = remote_gpu_idx_;
@@ -417,7 +412,6 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
       CUDA_CHECK(cudaMemcpyPeerAsync(reinterpret_cast<void*>(slot_item.addr),
                                      dst_gpu, data, src_gpu, size, s));
     }
-
     return true;
   }
   return send(conn_id, mr_id, data, size);
