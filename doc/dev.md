@@ -8,6 +8,7 @@ export UCCL_HOME=$(pwd)/uccl
 
 Then install some common dependencies: 
 ```bash
+# Note if you are using docker+wheel build, there is no need to install the following dependencies. 
 sudo apt update
 sudo apt install linux-tools-$(uname -r) clang llvm cmake m4 build-essential \
                  net-tools libgoogle-glog-dev libgtest-dev libgflags-dev \
