@@ -38,7 +38,6 @@
 // #define REMOTE_PERSISTENT_KERNEL
 #define USE_GRACE_HOPPER
 #define MEASURE_PER_OP_LATENCY
-#define ENABLE_WRITE_WITH_IMMEDIATE
 #define ASSUME_WR_IN_ORDER
 #define ENABLE_PROXY_CUDA_MEMCPY
 #define SYNCHRONOUS_COMPLETION
@@ -74,7 +73,6 @@
 #else
 #define NVLINK_SM_PER_PROCESS 2
 #endif
-// #define SEPARATE_POLLING
 
 bool pin_thread_to_cpu(int cpu);
 
