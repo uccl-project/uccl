@@ -36,7 +36,7 @@ You can then dive into:
 Run the following to build Python wheels: 
 ```bash
 cd $UCCL_HOME
-./docker_build.sh [cuda|rocm]
+./build.sh [cuda|rocm]
 ```
 
 Run the following to install the wheels locally: 
@@ -45,7 +45,17 @@ cd $UCCL_HOME
 pip install wheelhouse-[cuda/rocm]/uccl-*.whl
 ```
 
-Note that you need ARM hosts to build ARM wheels. We do not support building ARM wheels on x86 hosts, as QEMU (`qemu-user-static`) cannot emulate CUDA or ROCm. 
+The cross-compilation matrix is as follows:
+
+| Platform/Feature   | rdma-cuda | rdma-rocm | rdma-arm | p2p-cuda | p2p-rocm | p2p-arm | efa |
+|--------------------|-----------|-----------|----------|----------|----------|---------|-----|
+| cuda + x86         | ✓         | ✓         | x        | ✓        | ✓        | x       | ✓   |
+| cuda + arm (gh200) | ✓         | x         | x        | ✓        | x        | x       | x   |
+| rocm + x86         | ✓         | ✓         | ✓        | ✓        | ✓        | ✓       | x   |
+| aws p4d/p4de       | ✓         | ✓         | x        | x        | x        | x       | ✓   |
+
+Note that you need ARM hosts to build ARM wheels, as cross-compilation tool `qemu-user-static` cannot emulate CUDA or ROCm. 
+
 
 ### On Cloudlab CPU Machines
 

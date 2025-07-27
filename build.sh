@@ -7,7 +7,7 @@ set -e
 # a purpose-built Docker image derived from Ubuntu 22.04.
 #
 # Usage:
-#   ./docker_build.sh [cuda|rocm] [3.13]
+#   ./build.sh [cuda|rocm] [3.13]
 #
 # The wheels are written to wheelhouse-[cuda|rocm]
 # -----------------------
