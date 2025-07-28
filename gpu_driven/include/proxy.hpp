@@ -27,7 +27,7 @@ struct ProxyCtx {
 
 class Proxy {
  public:
-  enum class Mode { Sender, Remote, Local };
+  enum class Mode { Sender, Remote, Local, Dual };
 
   struct Config {
     DeviceToHostCmdBuffer* rb = nullptr;
@@ -53,6 +53,7 @@ class Proxy {
   void run_sender();
   void run_remote();
   void run_local();
+  void run_dual();
 
   double avg_rdma_write_us() const;
   double avg_wr_latency_us() const;

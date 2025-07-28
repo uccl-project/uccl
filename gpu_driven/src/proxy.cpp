@@ -77,6 +77,100 @@ void Proxy::run_remote() {
   remote_cpu_proxy_poll_write_with_immediate(cfg_.block_idx, cq_, *cfg_.ring);
 }
 
+void Proxy::run_dual() {
+  printf("Dual (single-thread) proxy for block %d starting\n",
+         cfg_.block_idx + 1);
+  per_thread_rdma_init(cfg_.gpu_buffer, cfg_.total_size, cfg_.rank,
+                       cfg_.block_idx);
+  if (cfg_.pin_thread) {
+    pin_thread_to_cpu(cfg_.block_idx + 1);
+    int cpu = sched_getcpu();
+    if (cpu == -1) {
+      perror("sched_getcpu");
+    } else {
+      printf("Thread pinned to CPU core %d\n", cpu);
+    }
+  }
+  cq_ = create_per_thread_cq();
+  create_per_thread_qp(cfg_.gpu_buffer, cfg_.total_size, &local_info_,
+                       cfg_.rank, cq_);
+  modify_qp_to_init();
+  exchange_connection_info(cfg_.rank, cfg_.peer_ip, cfg_.block_idx,
+                           &local_info_, &remote_info_);
+  modify_qp_to_rtr(&remote_info_);
+  modify_qp_to_rts(&local_info_);
+  remote_addr = remote_info_.addr;
+  remote_rkey = remote_info_.rkey;
+
+  // == sender-only bits:
+  local_init_ack_recv_ring(pd, kSenderAckQueueDepth);
+
+  // == remote-only bits:
+  if (cfg_.ring) {
+    remote_ensure_ack_sender_resources(pd, cfg_.ring->ack_buf,
+                                       cfg_.ring->ack_mr);
+    cfg_.ring->ack_qp = ack_qp;
+    post_receive_buffer_for_imm();
+    printf("Dual proxy block %d: ack_qp=%p, ack_mr=%p\n", cfg_.block_idx + 1,
+           (void*)ack_qp, (void*)cfg_.ring->ack_mr);
+  } else {
+    // If you expect remote traffic, ring must be provided.
+    printf("Warning: Dual proxy block %d has no ring; RX path disabled.\n",
+           cfg_.block_idx + 1);
+    std::abort();
+  }
+
+  // ---- Interleaved TX/RX loop in one thread ----
+  uint64_t my_tail = 0;
+  size_t seen = 0;
+
+  for (; my_tail < kIterations;) {
+    // 1) TX completions (sender side)
+    // local_poll_completions(cq_, finished_wrs_, finished_wrs_mutex_,
+    //                        cfg_.block_idx);
+
+    // 2) RX (remote write-with-immediate) — non-blocking
+    if (cfg_.ring) {
+      poll_cq_dual(cq_, finished_wrs_, finished_wrs_mutex_, cfg_.block_idx,
+                   *cfg_.ring);
+      // must return quickly
+    }
+
+    // 3) Notify GPU of completed WRs (advances tail, clears cmds)
+    notify_gpu_completion(my_tail);
+
+    // 4) Post new RDMA writes for any newly seen commands
+    post_gpu_command(my_tail, seen);
+  }
+
+  printf("Dual proxy block %d consumed %d cmds, my_tail=%lu\n", cfg_.block_idx,
+         kIterations, my_tail);
+
+  // ---- Drain a bit after finishing to harvest late completions ----
+  printf("Average rdma write duration: %.2f us\n", avg_rdma_write_us());
+
+  if (check_cq_completion()) {
+    auto start = std::chrono::high_resolution_clock::now();
+    while (std::chrono::duration_cast<std::chrono::seconds>(
+               std::chrono::high_resolution_clock::now() - start)
+               .count() < 1) {
+      // local_poll_completions(cq_, finished_wrs_, finished_wrs_mutex_,
+      //                        cfg_.block_idx);
+      if (cfg_.ring) {
+        poll_cq_dual(cq_, finished_wrs_, finished_wrs_mutex_, cfg_.block_idx,
+                     *cfg_.ring);
+      }
+      notify_gpu_completion(my_tail);
+    }
+    g_progress_run.store(false, std::memory_order_release);
+  }
+
+  printf(
+      "Dual proxy block %d done. Avg RDMA write: %.2f us, avg WR latency: %.2f "
+      "us, completed: %lu\n",
+      cfg_.block_idx, avg_rdma_write_us(), avg_wr_latency_us(), completed_wr());
+}
+
 void Proxy::sender_loop() {
   uint64_t my_tail = 0;
   size_t seen = 0;
@@ -213,15 +307,9 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 
   if (!wrs_to_post.empty()) {
     auto start = std::chrono::high_resolution_clock::now();
-#ifdef RDMA_BATCH_TOKENS
     post_rdma_async_batched(cfg_.gpu_buffer, kObjectSize, batch_size,
                             wrs_to_post, cq_, finished_wrs_,
                             finished_wrs_mutex_);
-#else
-    post_rdma_async_chained(cfg_.gpu_buffer, kObjectSize, batch_size,
-                            wrs_to_post, cq_, finished_wrs_,
-                            finished_wrs_mutex_);
-#endif
     auto end = std::chrono::high_resolution_clock::now();
     total_rdma_write_durations_ +=
         std::chrono::duration_cast<std::chrono::microseconds>(end - start);

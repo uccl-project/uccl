@@ -21,9 +21,6 @@ extern thread_local uint32_t remote_rkey;
 extern thread_local std::atomic<bool> g_progress_run;
 extern thread_local uint64_t largest_completed_wr;
 extern thread_local bool has_received_ack;
-// extern thread_local std::unordered_set<uint64_t> finished_wrs;
-// extern thread_local std::mutex finished_wrs_mutex;
-// extern thread_local std::unordered_set<uint64_t> finished_wrs;
 
 struct RDMAConnectionInfo {
   uint32_t qp_num;  // Queue pair number
@@ -79,7 +76,9 @@ void remote_cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq,
                                                 CopyRingBuffer& g_ring);
 void handle_peer_copy(uint64_t wr_id, uint32_t imm, int src_dev, int dst_dev,
                       void* src_ptr, void* dst_ptr, size_t num_bytes);
-
+void poll_cq_dual(ibv_cq* cq, std::unordered_set<uint64_t>& finished_wrs,
+                  std::mutex& finished_wrs_mutex, int thread_idx,
+                  CopyRingBuffer& g_ring);
 void per_thread_rdma_init(void* gpu_buf, size_t bytes, int rank, int block_idx);
 
 extern void* per_GPU_device_buf[NUM_GPUS];
