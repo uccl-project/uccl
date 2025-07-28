@@ -92,7 +92,8 @@ def _run_server(args, ep, remote_metadata):
                     ok, is_done = ep.poll_async(transfer_id)
                     assert ok, "[Server] poll_async error"
             else:
-                ep.recv(conn_id, mr_id_v[0], data_ptr_v[0], size_v[0])
+                ok = ep.recv(conn_id, mr_id_v[0], data_ptr_v[0], size_v[0])
+                assert ok, "[Server] recv error"
 
             start = time.perf_counter()
             total_recv = 0
@@ -109,10 +110,9 @@ def _run_server(args, ep, remote_metadata):
                         # Now, we assume async recv knows the to-receive size in advance.
                     total_recv += size_v[0]
                 else:
-                    ok, recv_sz = ep.recv(conn_id, mr_id_v[0], data_ptr_v[0], size_v[0])
+                    ok = ep.recv(conn_id, mr_id_v[0], data_ptr_v[0], size_v[0])
                     assert ok, "[Server] recv error"
-                    assert recv_sz == size_v[0], "[Server] recv size mismatch"
-                    total_recv += recv_sz
+                    total_recv += size_v[0]
             elapsed = time.perf_counter() - start
 
             gbps = (total_recv * 8) / elapsed / 1e9  # bits per second → Gbps
@@ -123,12 +123,9 @@ def _run_server(args, ep, remote_metadata):
             start = time.perf_counter()
             total_recv = 0
             for _ in range(args.iters):
-                ok, recv_sz_v = ep.recvv(
-                    conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks
-                )
+                ok = ep.recvv(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
                 assert ok, "[Server] recv error"
-                assert recv_sz_v[0] == size_v[0], "[Server] recv size mismatch"
-                total_recv += sum(recv_sz_v)
+                total_recv += sum(size_v)
             elapsed = time.perf_counter() - start
             gbps = (total_recv * 8) / elapsed / 1e9  # bits per second → Gbps
             gb_sec = total_recv / elapsed / 1e9  # bytes per second → GB/s

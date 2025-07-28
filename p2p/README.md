@@ -22,7 +22,7 @@ p2p/
 The easiest way is to: 
 ```
 git clone https://github.com/uccl-project/uccl.git --recursive
-cd uccl && bash build_and_install.sh [cuda|rocm]
+cd uccl && bash build_and_install.sh [cuda|rocm] p2p
 ```
 
 Alternatively, you can setup your local dev environment by: 
@@ -269,8 +269,8 @@ success, mr_id = endpoint.reg(recv_tensor.data_ptr(), recv_tensor.numel() * 4)
 assert success
 
 # Receive the tensor
-success, recv_size = endpoint.recv(conn_id, mr_id, recv_tensor.data_ptr(), recv_tensor.numel() * 4)
-assert success and recv_size == recv_tensor.numel() * 4
+success = endpoint.recv(conn_id, mr_id, recv_tensor.data_ptr(), recv_tensor.numel() * 4)
+assert success
 ```
 
 ### NumPy Array Transfer
@@ -295,7 +295,7 @@ if success:
 recv_data = np.zeros_like(data)
 recv_ptr = recv_data.ctypes.data
 success, recv_mr_id = endpoint.reg(recv_ptr, recv_data.nbytes)
-success, recv_size = endpoint.recv(conn_id, recv_mr_id, recv_ptr, recv_data.nbytes)
+success = endpoint.recv(conn_id, recv_mr_id, recv_ptr, recv_data.nbytes)
 ```
 
 ### Vectorized Multi-Tensor Transfer
@@ -344,12 +344,11 @@ for tensor in recv_tensors:
 
 # Prepare data for vectorized receive
 recv_ptr_list = [tensor.data_ptr() for tensor in recv_tensors]
-max_size_list = [tensor.numel() * 4 for tensor in recv_tensors]
+size_list = [tensor.numel() * 4 for tensor in recv_tensors]
 
 # Receive all tensors in one operation
-success, recv_size_list = endpoint.recvv(conn_id, recv_mr_ids, recv_ptr_list, max_size_list, num_iovs)
+success = endpoint.recvv(conn_id, recv_mr_ids, recv_ptr_list, size_list, num_iovs)
 assert success
-print(f"Received sizes: {recv_size_list}")
 ```
 
 </details>
@@ -431,7 +430,7 @@ Send data to remote endpoint (blocking).
 - `success` (bool): Whether send completed successfully
 
 ```python
-recv(conn_id, mr_id, ptr, max_size) -> (success, recv_size)
+recv(conn_id, mr_id, ptr, size) -> success
 ```
 Receive data from remote endpoint (blocking).
 
@@ -439,11 +438,10 @@ Receive data from remote endpoint (blocking).
 - `conn_id` (int): Connection ID from connect/accept
 - `mr_id` (int): Memory region ID from register
 - `ptr` (int): Pointer to buffer for received data
-- `max_size` (int): Maximum number of bytes to receive
+- `size` (int): Number of bytes to receive
 
 **Returns:**
 - `success` (bool): Whether receive completed successfully
-- `recv_size` (int): Number of bytes actually received
 
 ```python
 sendv(conn_id, mr_id_list, ptr_list, size_list, num_iovs) -> success
@@ -461,7 +459,7 @@ Send multiple memory regions to remote endpoint in a single operation (blocking)
 - `success` (bool): Whether send completed successfully
 
 ```python
-recvv(conn_id, mr_id_list, ptr_list, max_size_list, num_iovs) -> (success, recv_size_list)
+recvv(conn_id, mr_id_list, ptr_list, size_list, num_iovs) -> success
 ```
 Receive multiple memory regions from remote endpoint in a single operation (blocking).
 
@@ -469,12 +467,11 @@ Receive multiple memory regions from remote endpoint in a single operation (bloc
 - `conn_id` (int): Connection ID from connect/accept
 - `mr_id_list` (list[int]): List of memory region IDs from register
 - `ptr_list` (list[int]): List of pointers to buffers for received data
-- `max_size_list` (list[int]): List of maximum sizes in bytes for each memory region
+- `size_list` (list[int]): List of sizes in bytes for each memory region
 - `num_iovs` (int): Number of I/O vectors (length of the lists)
 
 **Returns:**
 - `success` (bool): Whether receive completed successfully
-- `recv_size_list` (list[int]): List of actual sizes received for each memory region
 
 #### Asynchronous Transfer Operations
 
@@ -494,7 +491,7 @@ Send data to remote endpoint asynchronously (non-blocking).
 - `transfer_id` (int): Transfer ID for polling completion
 
 ```python
-recv_async(conn_id, mr_id, ptr, max_size) -> (success, transfer_id)
+recv_async(conn_id, mr_id, ptr, size) -> (success, transfer_id)
 ```
 Receive data from remote endpoint asynchronously (non-blocking).
 
