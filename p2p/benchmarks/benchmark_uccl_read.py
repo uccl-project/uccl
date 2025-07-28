@@ -119,7 +119,7 @@ def main():
             262144,
             1048576,
             10485760,
-            10485760,
+            104857600,
         ],
     )
     p.add_argument("--iters", type=int, default=1)
