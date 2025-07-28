@@ -68,7 +68,7 @@ def _recv(tensor, src, async_op=False):
 
 
 def _run_server(args):
-    peer = 1  # client rank
+    peer = 0  # client rank
     for size in args.sizes:
         tensor = _make_buffer(size, args.device, args.local_gpu_idx)
         tensor2 = _make_buffer(size, args.device, args.local_gpu_idx)
@@ -97,7 +97,7 @@ def _run_server(args):
 
 def _run_client(args):
 
-    peer = 0  # server rank
+    peer = 1  # server rank
     for size in args.sizes:
         tensor = _make_buffer(size, args.device, args.local_gpu_idx)
         tensor2 = _make_buffer(size, args.device, args.local_gpu_idx)
@@ -131,41 +131,38 @@ def parse_size_list(val: str) -> List[int]:
         raise argparse.ArgumentTypeError("sizes must be comma-separated integers")
 
 
-def _init_process_group(args, rank: int):
-    os.environ.setdefault("MASTER_PORT", "29500")
-    backend = "nccl" if args.device == "gpu" else "gloo"
-
-    if rank == 0:
-        # server: determine local IP to use as MASTER_ADDR
-        master_addr = socket.gethostbyname(socket.gethostname())
-    else:
-        if args.remote_ip is None:
-            sys.exit("[Client] --remote-ip is required")
-        master_addr = args.remote_ip
-    os.environ["MASTER_ADDR"] = master_addr
-    dist.init_process_group(backend=backend, rank=rank, world_size=2)
-
-
 def main():
     p = argparse.ArgumentParser(
         description="Benchmark NCCL (torch.distributed) bandwidth"
     )
-    p.add_argument("--role", choices=["server", "client"], required=True)
-    p.add_argument("--remote-ip", help="Server IP address for client")
     p.add_argument("--local-gpu-idx", type=int, default=0)
     p.add_argument("--device", choices=["cpu", "gpu"], default="gpu")
     p.add_argument(
         "--sizes",
         type=parse_size_list,
-        default=[256, 1024, 4096, 16384, 65536, 262144, 1048576, 10485760, 104857600],
+        default=[
+            256,
+            1024,
+            4096,
+            16384,
+            65536,
+            262144,
+            1048576,
+            10485760,
+            104857600,
+        ],
     )
     p.add_argument("--iters", type=int, default=1000)
     args = p.parse_args()
 
-    rank = 0 if args.role == "server" else 1
-    _init_process_group(args, rank)
+    backend = "nccl" if args.device == "gpu" else "gloo"
+    dist.init_process_group(backend=backend)
 
-    print("NCCL Benchmark —", args.role)
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    assert world_size == 2, "This benchmark only supports 2 processes"
+
+    print("NCCL Benchmark — role:", "client" if rank == 0 else "server")
     print("Message sizes:", ", ".join(_pretty_size(s) for s in args.sizes))
     print(
         f"Device: {args.device} | Local GPU idx: {args.local_gpu_idx} | Iters: {args.iters}"
@@ -173,9 +170,9 @@ def main():
 
     try:
         if rank == 0:
-            _run_server(args)
-        else:
             _run_client(args)
+        else:
+            _run_server(args)
     finally:
         dist.destroy_process_group()
 

@@ -121,11 +121,32 @@ torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> \
     benchmark_uccl.py --device gpu --local-gpu-idx 0 --num-cpus 4
 ```
 
-You may consider setting `GLOO_SOCKET_IFNAME=xxx` if triggering Gloo connectFullMesh failure.
+Notes: 
+* You may consider exporting `GLOO_SOCKET_IFNAME=xxx` if triggering Gloo connectFullMesh failure.
+* To benchmark on AMD GPUs, you need to specify `UCCL_RCMODE=1`.
 
-To benchmark on AMD GPUs, you need to specify `UCCL_RCMODE=1`.
+### Running NCCL
 
-### Running NIXL (with UCX backend)
+On Client:
+```bash
+NCCL_NCHANNELS_PER_NET_PEER=4 \
+torchrun --nnodes=2 --nproc_per_node=1 --node-rank=0 --master_addr=<IP addr> \
+    benchmark_nccl.py --device gpu --local-gpu-idx 0
+```
+
+On Server:
+```bash
+NCCL_NCHANNELS_PER_NET_PEER=4 \
+torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> \
+    benchmark_nccl.py --device gpu --local-gpu-idx 0
+```
+
+Notes: 
+* You can specify `NCCL_IB_HCA=mlx5_2:1` to control which NIC and port to use. 
+* If you see errors like `message size truncated`, it is likely caused by NCCL version mismatch. We suggest specifying `LD_PRELOAD=<path to libnccl.so.2>`. 
+* To benchmark dual direction transfer, you can run `benchmark_nccl_dual.py` with the same commands as above. 
+
+### Running NIXL with UCX backend
 
 If you have not installed nixl with RDMA support, you can follow: 
 <details><summary>Click me</summary>
@@ -182,7 +203,7 @@ UCX_MAX_RMA_LANES=4 UCX_IB_PCI_RELAXED_ORDERING=on UCX_NET_DEVICES=mlx5_2:1 UCX_
 python benchmark_nixl.py --role client --device gpu --local-gpu-idx 0 --remote-ip <Server IP>
 ```
 
-### Running NIXL (with Mooncake backend)
+### Running NIXL with Mooncake backend
 
 On Server:
 ```bash
@@ -194,27 +215,6 @@ On Client:
 python benchmark_nixl.py --role client --remote-ip <Server IP> --device gpu \
     --local-gpu-idx 0 --backend mooncake
 ```
-
-### Running NCCL
-
-On Server (assume only using mlx5_2 NIC):
-```bash
-NCCL_IB_HCA=mlx5_2:1 NCCL_NCHANNELS_PER_NET_PEER=4 \
-python benchmark_nccl.py --role server --device gpu --local-gpu-idx 0
-```
-
-On Client:
-```bash
-NCCL_IB_HCA=mlx5_2:1 NCCL_NCHANNELS_PER_NET_PEER=4 \
-python benchmark_nccl.py --role client --device gpu --local-gpu-idx 0 --remote-ip <Server IP>
-```
-
-If you see errors like `message size truncated`, it is likely caused by NCCL version mismatch. We suggest specify
-```bash
-LD_PRELOAD=<path to libnccl.so.2>
-```
-
-To benchmark dual direction transfer, you can run `benchmark_nccl_dual.py` with the same commands as above. 
 
 
 ## Usage Examples
