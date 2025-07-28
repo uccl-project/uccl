@@ -22,7 +22,7 @@ p2p/
 The easiest way is to: 
 ```
 git clone https://github.com/uccl-project/uccl.git --recursive
-cd uccl && bash build_and_install.sh [cuda|rocm]
+cd uccl && bash build_and_install.sh [cuda|rocm] p2p
 ```
 
 Alternatively, you can setup your local dev environment by: 
@@ -121,11 +121,35 @@ torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> \
     benchmark_uccl.py --device gpu --local-gpu-idx 0 --num-cpus 4
 ```
 
-You may consider setting `GLOO_SOCKET_IFNAME=xxx` if triggering Gloo connectFullMesh failure.
+Notes: 
+* You may consider exporting `GLOO_SOCKET_IFNAME=xxx` if triggering Gloo connectFullMesh failure.
+* To benchmark on AMD GPUs, you need to specify `UCCL_RCMODE=1`.
+* To benchmark dual direction transfer, you can run `benchmark_uccl_dual.py` with the same commands as above. 
+* To benchmark one-sided READ transfer, you can run `benchmark_uccl_read.py`.
 
-To benchmark on AMD GPUs, you need to specify `UCCL_RCMODE=1`.
+### Running NCCL
 
-### Running NIXL (with UCX backend)
+On Client:
+```bash
+NCCL_NCHANNELS_PER_NET_PEER=4 \
+torchrun --nnodes=2 --nproc_per_node=1 --node-rank=0 --master_addr=<IP addr> \
+    benchmark_nccl.py --device gpu --local-gpu-idx 0
+```
+
+On Server:
+```bash
+NCCL_NCHANNELS_PER_NET_PEER=4 \
+torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> \
+    benchmark_nccl.py --device gpu --local-gpu-idx 0
+```
+
+Notes: 
+* You can specify `NCCL_IB_HCA=mlx5_2:1` to control which NIC and port to use. 
+* If you see errors like `message size truncated`, it is likely caused by NCCL version mismatch. We suggest specifying `LD_PRELOAD=<path to libnccl.so.2>`. 
+* To benchmark dual direction transfer, you can run `benchmark_nccl_dual.py`. 
+* This also works for AMD GPUs.
+
+### Running NIXL with UCX backend
 
 If you have not installed nixl with RDMA support, you can follow: 
 <details><summary>Click me</summary>
@@ -172,17 +196,20 @@ export LD_LIBRARY_PATH="$UCX_LIB_PATH:$CONDA_PREFIX/lib/python3.13/site-packages
 
 On Server:
 ```bash
-UCX_MAX_RMA_LANES=4 UCX_IB_PCI_RELAXED_ORDERING=on UCX_NET_DEVICES=mlx5_2:1 UCX_TLS=rc \
+UCX_MAX_RMA_LANES=4 UCX_IB_PCI_RELAXED_ORDERING=on UCX_NET_DEVICES=mlx5_2:1 UCX_TLS=cuda,rc \
 python benchmark_nixl.py --role server --device gpu --local-gpu-idx 0
 ```
 
 On Client:
 ```bash
-UCX_MAX_RMA_LANES=4 UCX_IB_PCI_RELAXED_ORDERING=on UCX_NET_DEVICES=mlx5_2:1 UCX_TLS=rc \
+UCX_MAX_RMA_LANES=4 UCX_IB_PCI_RELAXED_ORDERING=on UCX_NET_DEVICES=mlx5_2:1 UCX_TLS=cuda,rc \
 python benchmark_nixl.py --role client --device gpu --local-gpu-idx 0 --remote-ip <Server IP>
 ```
 
-### Running NIXL (with Mooncake backend)
+Notes: 
+* You can specify `--op-type read` to benchmark one-sided READ transfer in NIXL. On GH200, we find NIXL READ over GPU memory is extremely slow with 1GB/s out of 25, while NIXL READ over CPU memory is better but only max at 9GB/s. 
+
+### Running NIXL with Mooncake backend
 
 On Server:
 ```bash
@@ -194,27 +221,6 @@ On Client:
 python benchmark_nixl.py --role client --remote-ip <Server IP> --device gpu \
     --local-gpu-idx 0 --backend mooncake
 ```
-
-### Running NCCL
-
-On Server (assume only using mlx5_2 NIC):
-```bash
-NCCL_IB_HCA=mlx5_2:1 NCCL_NCHANNELS_PER_NET_PEER=4 \
-python benchmark_nccl.py --role server --device gpu --local-gpu-idx 0
-```
-
-On Client:
-```bash
-NCCL_IB_HCA=mlx5_2:1 NCCL_NCHANNELS_PER_NET_PEER=4 \
-python benchmark_nccl.py --role client --device gpu --local-gpu-idx 0 --remote-ip <Server IP>
-```
-
-If you see errors like `message size truncated`, it is likely caused by NCCL version mismatch. We suggest specify
-```bash
-LD_PRELOAD=<path to libnccl.so.2>
-```
-
-To benchmark dual direction transfer, you can run `benchmark_nccl_dual.py` with the same commands as above. 
 
 
 ## Usage Examples
@@ -269,8 +275,8 @@ success, mr_id = endpoint.reg(recv_tensor.data_ptr(), recv_tensor.numel() * 4)
 assert success
 
 # Receive the tensor
-success, recv_size = endpoint.recv(conn_id, mr_id, recv_tensor.data_ptr(), recv_tensor.numel() * 4)
-assert success and recv_size == recv_tensor.numel() * 4
+success = endpoint.recv(conn_id, mr_id, recv_tensor.data_ptr(), recv_tensor.numel() * 4)
+assert success
 ```
 
 ### NumPy Array Transfer
@@ -295,7 +301,7 @@ if success:
 recv_data = np.zeros_like(data)
 recv_ptr = recv_data.ctypes.data
 success, recv_mr_id = endpoint.reg(recv_ptr, recv_data.nbytes)
-success, recv_size = endpoint.recv(conn_id, recv_mr_id, recv_ptr, recv_data.nbytes)
+success = endpoint.recv(conn_id, recv_mr_id, recv_ptr, recv_data.nbytes)
 ```
 
 ### Vectorized Multi-Tensor Transfer
@@ -344,12 +350,11 @@ for tensor in recv_tensors:
 
 # Prepare data for vectorized receive
 recv_ptr_list = [tensor.data_ptr() for tensor in recv_tensors]
-max_size_list = [tensor.numel() * 4 for tensor in recv_tensors]
+size_list = [tensor.numel() * 4 for tensor in recv_tensors]
 
 # Receive all tensors in one operation
-success, recv_size_list = endpoint.recvv(conn_id, recv_mr_ids, recv_ptr_list, max_size_list, num_iovs)
+success = endpoint.recvv(conn_id, recv_mr_ids, recv_ptr_list, size_list, num_iovs)
 assert success
-print(f"Received sizes: {recv_size_list}")
 ```
 
 </details>
@@ -431,7 +436,7 @@ Send data to remote endpoint (blocking).
 - `success` (bool): Whether send completed successfully
 
 ```python
-recv(conn_id, mr_id, ptr, max_size) -> (success, recv_size)
+recv(conn_id, mr_id, ptr, size) -> success
 ```
 Receive data from remote endpoint (blocking).
 
@@ -439,11 +444,10 @@ Receive data from remote endpoint (blocking).
 - `conn_id` (int): Connection ID from connect/accept
 - `mr_id` (int): Memory region ID from register
 - `ptr` (int): Pointer to buffer for received data
-- `max_size` (int): Maximum number of bytes to receive
+- `size` (int): Number of bytes to receive
 
 **Returns:**
 - `success` (bool): Whether receive completed successfully
-- `recv_size` (int): Number of bytes actually received
 
 ```python
 sendv(conn_id, mr_id_list, ptr_list, size_list, num_iovs) -> success
@@ -461,7 +465,7 @@ Send multiple memory regions to remote endpoint in a single operation (blocking)
 - `success` (bool): Whether send completed successfully
 
 ```python
-recvv(conn_id, mr_id_list, ptr_list, max_size_list, num_iovs) -> (success, recv_size_list)
+recvv(conn_id, mr_id_list, ptr_list, size_list, num_iovs) -> success
 ```
 Receive multiple memory regions from remote endpoint in a single operation (blocking).
 
@@ -469,12 +473,11 @@ Receive multiple memory regions from remote endpoint in a single operation (bloc
 - `conn_id` (int): Connection ID from connect/accept
 - `mr_id_list` (list[int]): List of memory region IDs from register
 - `ptr_list` (list[int]): List of pointers to buffers for received data
-- `max_size_list` (list[int]): List of maximum sizes in bytes for each memory region
+- `size_list` (list[int]): List of sizes in bytes for each memory region
 - `num_iovs` (int): Number of I/O vectors (length of the lists)
 
 **Returns:**
 - `success` (bool): Whether receive completed successfully
-- `recv_size_list` (list[int]): List of actual sizes received for each memory region
 
 #### Asynchronous Transfer Operations
 
@@ -494,7 +497,7 @@ Send data to remote endpoint asynchronously (non-blocking).
 - `transfer_id` (int): Transfer ID for polling completion
 
 ```python
-recv_async(conn_id, mr_id, ptr, max_size) -> (success, transfer_id)
+recv_async(conn_id, mr_id, ptr, size) -> (success, transfer_id)
 ```
 Receive data from remote endpoint asynchronously (non-blocking).
 

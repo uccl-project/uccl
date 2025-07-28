@@ -74,13 +74,18 @@ PYBIND11_MODULE(p2p, m) {
           "send",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
              size_t size, py::object meta_blob = py::none()) {
-            std::string buf = py::cast<py::bytes>(meta_blob);
             if (conn_id == kNvlinkConn) {
+              if (meta_blob.is_none()) {
+                throw std::runtime_error(
+                    "meta must be provided for nvlink connections");
+              }
+              std::string buf = py::cast<py::bytes>(meta_blob);
               return self.send_ipc(conn_id, mr_id,
                                    reinterpret_cast<void const*>(ptr), size,
                                    buf.data(), buf.size());
             }
             if (!meta_blob.is_none()) {
+              std::string buf = py::cast<py::bytes>(meta_blob);
               if (buf.size() != sizeof(uccl::FifoItem))
                 throw std::runtime_error(
                     "meta must be exactly 64 bytes (serialized FifoItem)");
@@ -118,15 +123,13 @@ PYBIND11_MODULE(p2p, m) {
       .def(
           "recv",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
-             size_t max_size) {
-            size_t recv_size;
+             size_t size) {
             bool success =
-                self.recv(conn_id, mr_id, reinterpret_cast<void*>(ptr),
-                          max_size, &recv_size);
-            return py::make_tuple(success, recv_size);
+                self.recv(conn_id, mr_id, reinterpret_cast<void*>(ptr), size);
+            return success;
           },
           "Receive a key-value buffer", py::arg("conn_id"), py::arg("mr_id"),
-          py::arg("ptr"), py::arg("max_size"))
+          py::arg("ptr"), py::arg("size"))
       .def(
           "advertise",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id,
@@ -162,20 +165,19 @@ PYBIND11_MODULE(p2p, m) {
       .def(
           "recvv",
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-             std::vector<uint64_t> data_ptr_v, std::vector<size_t> max_size_v,
+             std::vector<uint64_t> data_ptr_v, std::vector<size_t> size_v,
              size_t num_iovs) {
             std::vector<void*> data_v;
             data_v.reserve(data_ptr_v.size());
             for (uint64_t ptr : data_ptr_v) {
               data_v.push_back(reinterpret_cast<void*>(ptr));
             }
-            std::vector<size_t> recv_size_v(num_iovs);
-            bool success = self.recvv(conn_id, mr_id_v, data_v, max_size_v,
-                                      recv_size_v, num_iovs);
-            return py::make_tuple(success, recv_size_v);
+            bool success =
+                self.recvv(conn_id, mr_id_v, data_v, size_v, num_iovs);
+            return success;
           },
           "Receive multiple data buffers", py::arg("conn_id"),
-          py::arg("mr_id_v"), py::arg("data_ptr_v"), py::arg("max_size_v"),
+          py::arg("mr_id_v"), py::arg("data_ptr_v"), py::arg("size_v"),
           py::arg("num_iovs"))
       .def(
           "send_async",
@@ -228,7 +230,7 @@ PYBIND11_MODULE(p2p, m) {
           "get_endpoint_metadata",
           [](Endpoint& self) {
             std::vector<uint8_t> metadata = self.get_endpoint_metadata();
-            return py::bytes(reinterpret_cast<const char*>(metadata.data()),
+            return py::bytes(reinterpret_cast<char const*>(metadata.data()),
                              metadata.size());
           },
           "Return endpoint metadata as a list of bytes")

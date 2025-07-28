@@ -41,13 +41,16 @@ def parse_metadata(metadata: bytes):
 
 def _make_buffer(size_bytes: int, device: str, gpu_idx: int):
     """Allocate a contiguous buffer of *size_bytes* and return (buffer, ptr)."""
-    n_elems = size_bytes // 4  # float32 elements
     if device == "gpu":
-        buf = torch.ones(n_elems, dtype=torch.float32, device=f"cuda:{gpu_idx}")
+        dtype = torch.float32 if size_bytes >= 4 else torch.uint8
+        n_elems = size_bytes // dtype.itemsize
+        buf = torch.ones(n_elems, dtype=dtype, device=f"cuda:{gpu_idx}")
         assert buf.is_contiguous()
         ptr = buf.data_ptr()
     else:  # cpu
-        buf = np.ones(n_elems, dtype=np.float32)
+        dtype = np.float32 if size_bytes >= 4 else np.uint8
+        n_elems = size_bytes // dtype.itemsize
+        buf = np.ones(n_elems, dtype=dtype)
         ptr = buf.ctypes.data
     return buf, ptr
 
@@ -68,18 +71,19 @@ def _run_server(args, ep, remote_metadata):
     print(f"[Server] Accept from {r_ip} (GPU {r_gpu}) conn_id={conn_id}")
 
     for size in args.sizes:
+        size_per_block = size // args.num_kvblocks
         buf_v = []
         mr_id_v = []
         data_ptr_v = []
         size_v = []
         for _ in range(args.num_kvblocks):
-            buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx)
-            ok, mr_id = ep.reg(ptr, size)
+            buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+            ok, mr_id = ep.reg(ptr, size_per_block)
             assert ok, "[Server] register failed"
             buf_v.append(buf)
             mr_id_v.append(mr_id)
             data_ptr_v.append(ptr)
-            size_v.append(size)
+            size_v.append(size_per_block)
 
         if args.num_kvblocks == 1:
             if args.async_transfer:
@@ -92,7 +96,8 @@ def _run_server(args, ep, remote_metadata):
                     ok, is_done = ep.poll_async(transfer_id)
                     assert ok, "[Server] poll_async error"
             else:
-                ep.recv(conn_id, mr_id_v[0], data_ptr_v[0], size_v[0])
+                ok = ep.recv(conn_id, mr_id_v[0], data_ptr_v[0], size_v[0])
+                assert ok, "[Server] recv error"
 
             start = time.perf_counter()
             total_recv = 0
@@ -109,10 +114,9 @@ def _run_server(args, ep, remote_metadata):
                         # Now, we assume async recv knows the to-receive size in advance.
                     total_recv += size_v[0]
                 else:
-                    ok, recv_sz = ep.recv(conn_id, mr_id_v[0], data_ptr_v[0], size_v[0])
+                    ok = ep.recv(conn_id, mr_id_v[0], data_ptr_v[0], size_v[0])
                     assert ok, "[Server] recv error"
-                    assert recv_sz == size_v[0], "[Server] recv size mismatch"
-                    total_recv += recv_sz
+                    total_recv += size_v[0]
             elapsed = time.perf_counter() - start
 
             gbps = (total_recv * 8) / elapsed / 1e9  # bits per second → Gbps
@@ -123,12 +127,9 @@ def _run_server(args, ep, remote_metadata):
             start = time.perf_counter()
             total_recv = 0
             for _ in range(args.iters):
-                ok, recv_sz_v = ep.recvv(
-                    conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks
-                )
+                ok = ep.recvv(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
                 assert ok, "[Server] recv error"
-                assert recv_sz_v[0] == size_v[0], "[Server] recv size mismatch"
-                total_recv += sum(recv_sz_v)
+                total_recv += sum(size_v)
             elapsed = time.perf_counter() - start
             gbps = (total_recv * 8) / elapsed / 1e9  # bits per second → Gbps
             gb_sec = total_recv / elapsed / 1e9  # bytes per second → GB/s
@@ -147,18 +148,19 @@ def _run_client(args, ep, remote_metadata):
     print(f"[Client] Connected to {ip}:{port} (GPU {r_gpu}) conn_id={conn_id}")
 
     for size in args.sizes:
+        size_per_block = size // args.num_kvblocks
         buf_v = []
         mr_id_v = []
         data_ptr_v = []
         size_v = []
         for _ in range(args.num_kvblocks):
-            buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx)
-            ok, mr_id = ep.reg(ptr, size)
+            buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+            ok, mr_id = ep.reg(ptr, size_per_block)
             assert ok, "[Client] register failed"
             buf_v.append(buf)
             mr_id_v.append(mr_id)
             data_ptr_v.append(ptr)
-            size_v.append(size)
+            size_v.append(size_per_block)
 
         if args.num_kvblocks == 1:
             if args.async_transfer:
@@ -279,6 +281,7 @@ def main():
     assert world_size == 2, "This benchmark only supports 2 processes"
 
     print("UCCL P2P Benchmark — role:", "client" if rank == 0 else "server")
+    print("Number of key-value blocks per message:", args.num_kvblocks)
     print("Message sizes:", ", ".join(_pretty_size(s) for s in args.sizes))
     print(
         f"Device: {args.device} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}"

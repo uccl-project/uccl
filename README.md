@@ -61,7 +61,7 @@ More UCCL features are under development in this repo, currently including:
 
 ## Quick Start
 
-The easiest way to use UCCL is to first build based on your platform and py version (eg, 3.13): 
+The easiest way to use UCCL is to first build based on your platform: 
 ```bash
 git clone https://github.com/uccl-project/uccl.git --recursive
 cd uccl && bash build_and_install.sh [cuda|rocm]
