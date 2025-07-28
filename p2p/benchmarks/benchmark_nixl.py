@@ -237,7 +237,7 @@ def cleanup_transfer(
 
 
 def start_transfer(size, num_kvblocks, args):
-    op = "WRITE"
+    op = "WRITE" if args.op_type == "write" else "READ"
     zmq_socket = None
 
     if args.backend == "mooncake":
@@ -384,6 +384,12 @@ def main():
         choices=["ucx", "mooncake"],
         default="ucx",
         help="Backend that nixl will use for the data transfer",
+    )
+    p.add_argument(
+        "--op-type",
+        choices=["write", "read"],
+        default="write",
+        help="Operation that nixl will use for the data transfer",
     )
     args = p.parse_args()
 
