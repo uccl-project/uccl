@@ -5,17 +5,12 @@ import sys
 import time
 from typing import List
 import traceback
+import torch
 
 try:
     from nixl._api import nixl_agent, nixl_agent_config
 except ImportError as exc:
     sys.stderr.write("Failed to import NIXL\n")
-    raise
-
-try:
-    import torch
-except ImportError as exc:
-    sys.stderr.write("Failed to import torch\n")
     raise
 
 
@@ -25,11 +20,14 @@ def create_datasets(role, sizes, device, gpu_idx=0):
     """
     datasets = []
     for size in sizes:
-        dtype = torch.float32
+        dtype = torch.float32 if size >= 4 else torch.uint8
         num_blocks = 1
         value = 0 if "server" in role else 1
 
         element_size = torch.tensor([], dtype=dtype).element_size()
+        assert (
+            size % (element_size * num_blocks) == 0
+        ), "Size must be divisible by element size and number of blocks"
         n_elems_per_block = size // (element_size * num_blocks)
         if n_elems_per_block == 0:
             n_elems_per_block = 1
@@ -43,20 +41,11 @@ def create_datasets(role, sizes, device, gpu_idx=0):
             block = torch.full((n_elems_per_block,), value, device=dev, dtype=dtype)
             dataset.append(block)
 
-        # If total size is less than requested, add more elements to the last block
-        total_bytes = sum(t.numel() * t.element_size() for t in dataset)
-        if total_bytes < size:
-            extra_elems = (size - total_bytes) // element_size
-            if extra_elems > 0:
-                extra_block = torch.full(
-                    (extra_elems,), value, device=device, dtype=dtype
-                )
-                dataset.append(extra_block)
         datasets.append(dataset)
     return datasets
 
 
-def initialize_xfer_metadata(
+def init_transfer_metadata(
     role: str,
     operation: str,
     agent: nixl_agent,
@@ -123,7 +112,13 @@ def create_nixl_agent(role: str, datasets):
     return agent, register_descs
 
 
-def start_transfer(
+def cleanup_agent(
+    agent: nixl_agent,
+):
+    agent.remove_remote_agent(agent.name)
+
+
+def do_transfer(
     role: str,
     agent: nixl_agent,
     transfer_handle,
@@ -131,14 +126,11 @@ def start_transfer(
 ):
     if "client" in role:
         state = agent.transfer(transfer_handle)
-        if state == "ERR":
-            print("Error in transfer")
+        assert state != "ERR", "Error in transfer"
         while True:
             state = agent.check_xfer_state(transfer_handle)
+            assert state != "ERR", "Error in transfer"
             if state == "DONE":
-                break
-            elif state == "ERR":
-                print("Error in transfer")
                 break
     else:
         while not agent.check_remote_xfer_done("client", uid):
@@ -158,13 +150,7 @@ def cleanup_transfer(
         agent.deregister_memory(register_desc)
 
 
-def cleanup_agent(
-    agent: nixl_agent,
-):
-    agent.remove_remote_agent(agent.name)
-
-
-def start_agent_pair(sizes, args):
+def start_transfer(sizes, args):
     op = "WRITE"
     port = 9000
 
@@ -172,7 +158,7 @@ def start_agent_pair(sizes, args):
 
     agent, register_descs = create_nixl_agent(args.role, datasets)
 
-    transfer_handles = initialize_xfer_metadata(
+    transfer_handles = init_transfer_metadata(
         args.role, op, agent, register_descs, args.remote_ip, port
     )
 
@@ -181,7 +167,7 @@ def start_agent_pair(sizes, args):
             total_size = 0
             start = time.perf_counter()
             for _ in range(args.iters):
-                start_transfer(
+                do_transfer(
                     args.role,
                     agent,
                     transfer_handles[i],
@@ -278,12 +264,6 @@ def main():
         default=1000,
         help="Iterations per message size (excluding 1 warm-up)",
     )
-    p.add_argument(
-        "--num-kvblocks",
-        type=int,
-        default=1,
-        help="Number of key-value blocks to send/recv in a single call",
-    )
     args = p.parse_args()
 
     print("NIXL P2P Benchmark — role:", args.role)
@@ -291,7 +271,7 @@ def main():
     print(
         f"Device: {args.device} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}"
     )
-    start_agent_pair(args.sizes, args)
+    start_transfer(args.sizes, args)
 
 
 if __name__ == "__main__":

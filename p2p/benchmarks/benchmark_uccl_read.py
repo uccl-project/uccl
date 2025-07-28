@@ -1,24 +1,19 @@
 from __future__ import annotations
 import argparse, sys, time, socket, struct
 from typing import List
+import torch.distributed as dist
+import torch
+import numpy as np
+import os
+
+# UCCL P2P read requires RC mode, as RDMA UC does not support one-sided read.
+os.environ["UCCL_RCMODE"] = "1"
 
 try:
     from uccl import p2p
 except ImportError:
     sys.stderr.write("Failed to import p2p\n")
     raise
-
-_HAS_TORCH = False
-try:
-    import torch
-
-    _HAS_TORCH = True
-except ModuleNotFoundError:
-    pass
-import numpy as np
-import os
-
-os.environ["UCCL_RCMODE"] = "1"
 
 
 def parse_metadata(meta: bytes):
@@ -36,13 +31,9 @@ def parse_metadata(meta: bytes):
 def _make_buffer(n_bytes: int, device: str, gpu: int):
     n = n_bytes // 4
     if device == "gpu":
-        if not _HAS_TORCH:
-            raise RuntimeError("Install torch for GPU buffers")
         buf = torch.ones(n, dtype=torch.float32, device=f"cuda:{gpu}")
         ptr = buf.data_ptr()
     else:
-        if not _HAS_TORCH:
-            raise RuntimeError("Install torch for pinned host buffers")
         buf = torch.ones(n, dtype=torch.float32, pin_memory=True)
         ptr = buf.data_ptr()
     return buf, ptr
@@ -56,33 +47,8 @@ def _pretty(num: int):
         val /= 1024
 
 
-def send_oob(payload: bytes, port: int):
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(("0.0.0.0", port))
-        s.listen(1)
-        conn, _ = s.accept()
-        with conn:
-            conn.sendall(payload)
-
-
-def recv_oob(ip: str, port: int) -> bytes:
-    for i in range(20):
-        try:
-            with socket.create_connection((ip, port), timeout=2) as s:
-                data = s.recv(64)
-                if not data:
-                    sys.exit("[Client] Empty OOB metadata")
-                return data
-        except (ConnectionRefusedError, socket.timeout):
-            time.sleep(0.1)
-    raise RuntimeError(f"Failed to connect to OOB server at {ip}:{port}")
-
-
-def _run_server_read(args):
-    ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
-    send_oob(ep.get_endpoint_metadata(), args.oob_port)
-
+def _run_server_read(args, ep, remote_metadata):
+    peer = 0
     print("[Server] Waiting for connection …")
     ok, r_ip, r_gpu, conn_id = ep.accept()
     assert ok
@@ -93,18 +59,13 @@ def _run_server_read(args):
         assert ok
         ok, fifo_blob = ep.advertise(conn_id, mr_id, ptr, sz)
         assert ok and len(fifo_blob) == 64
-        send_oob(fifo_blob, args.oob_port + 1)
+        dist.send(torch.ByteTensor(list(fifo_blob)), dst=peer)
     print("[Server] Benchmark complete")
 
 
-def _run_client_recv(args):
-    if args.remote_ip is None:
-        sys.exit("--remote-ip required")
-
-    ep_meta = recv_oob(args.remote_ip, args.oob_port)
-    ip, port, r_gpu = parse_metadata(ep_meta)
-
-    ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
+def _run_client_recv(args, ep, remote_metadata):
+    peer = 1
+    ip, port, r_gpu = parse_metadata(remote_metadata)
     ok, conn_id = ep.connect(ip, r_gpu, remote_port=port)
     assert ok
     print(f"[Client] Connected to {ip}:{port} id={conn_id}")
@@ -113,7 +74,9 @@ def _run_client_recv(args):
         buf, ptr = _make_buffer(sz, args.device, args.local_gpu_idx)
         ok, mr_id = ep.reg(ptr, sz)
         assert ok
-        fifo_blob = recv_oob(args.remote_ip, args.oob_port + 1)
+        fifo_blob = torch.zeros(64, dtype=torch.uint8)
+        dist.recv(fifo_blob, src=peer)
+        fifo_blob = bytes(fifo_blob.tolist())
         start = time.perf_counter()
         total = 0
         ep.read(conn_id, mr_id, ptr, sz, fifo_blob)
@@ -141,29 +104,57 @@ def parse_sizes(v: str) -> List[int]:
 
 def main():
     p = argparse.ArgumentParser("UCCL READ benchmark (one-sided)")
-    p.add_argument("--role", choices=["server", "client"], required=True)
-    p.add_argument("--remote-ip")
     p.add_argument("--local-gpu-idx", type=int, default=0)
     p.add_argument("--num-cpus", type=int, default=4)
     p.add_argument("--device", choices=["cpu", "gpu"], default="cpu")
     p.add_argument(
         "--sizes",
         type=parse_sizes,
-        default=[256, 1024, 4096, 16384, 65536, 262144, 1048576, 10485760],
+        default=[
+            256,
+            1024,
+            4096,
+            16384,
+            65536,
+            262144,
+            1048576,
+            10485760,
+            10485760,
+        ],
     )
     p.add_argument("--iters", type=int, default=1)
     p.add_argument("--async-transfer", action="store_true")
-    p.add_argument("--oob-port", type=int, default=20000)
     args = p.parse_args()
 
     print("Sizes:", ", ".join(_pretty(s) for s in args.sizes))
     if args.async_transfer:
         print("Async path enabled")
 
-    if args.role == "server":
-        _run_server_read(args)
+    dist.init_process_group(backend="gloo")
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    assert world_size == 2, "This benchmark only supports 2 processes"
+
+    ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
+    local_metadata = ep.get_endpoint_metadata()
+
+    if rank == 0:
+        dist.send(torch.ByteTensor(list(local_metadata)), dst=1)
+        remote_metadata_tensor = torch.zeros(len(local_metadata), dtype=torch.uint8)
+        dist.recv(remote_metadata_tensor, src=1)
+        remote_metadata = bytes(remote_metadata_tensor.tolist())
     else:
-        _run_client_recv(args)
+        remote_metadata_tensor = torch.zeros(len(local_metadata), dtype=torch.uint8)
+        dist.recv(remote_metadata_tensor, src=0)
+        dist.send(torch.ByteTensor(list(local_metadata)), dst=0)
+        remote_metadata = bytes(remote_metadata_tensor.tolist())
+
+    if rank == 0:
+        _run_client_recv(args, ep, remote_metadata)
+    elif rank == 1:
+        _run_server_read(args, ep, remote_metadata)
+
+    dist.destroy_process_group()
 
 
 if __name__ == "__main__":

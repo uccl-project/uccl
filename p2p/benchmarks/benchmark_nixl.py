@@ -8,17 +8,12 @@ import traceback
 import zmq
 import io
 import sys
+import torch
 
 try:
     from nixl._api import nixl_agent, nixl_agent_config
 except ImportError as exc:
     sys.stderr.write("Failed to import NIXL\n")
-    raise
-
-try:
-    import torch
-except ImportError as exc:
-    sys.stderr.write("Failed to import torch\n")
     raise
 
 listen_port = 9000
