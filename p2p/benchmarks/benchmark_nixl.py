@@ -24,16 +24,15 @@ except ImportError as exc:
 listen_port = 9000
 
 
-def create_dataset(role, size, device, gpu_idx=0):
+def create_dataset(role, size, num_kvblocks, device, gpu_idx=0):
     """
     Create a dataset of tensors whose total size is at least size in bytes.
     """
-    dtype = torch.float32
-    num_blocks = 1
+    dtype = torch.float32 if size >= 4 else torch.uint8
     value = 0 if "server" in role else 1
 
     element_size = torch.tensor([], dtype=dtype).element_size()
-    n_elems_per_block = size // (element_size * num_blocks)
+    n_elems_per_block = size // (element_size * num_kvblocks)
     if n_elems_per_block == 0:
         n_elems_per_block = 1
 
@@ -42,7 +41,7 @@ def create_dataset(role, size, device, gpu_idx=0):
         dev = f"cuda:{gpu_idx}"
     else:
         dev = "cpu"
-    for _ in range(num_blocks):
+    for _ in range(num_kvblocks):
         block = torch.full((n_elems_per_block,), value, device=dev, dtype=dtype)
         dataset.append(block)
 
@@ -73,7 +72,7 @@ def init_zmq(host, port, role):
     return zmq_socket
 
 
-def initialize_xfer_metadata_mc(
+def init_transfer_metadata_mc(
     role: str, operation: str, agent: nixl_agent, register_descs, zmq_socket
 ):
     """
@@ -111,7 +110,7 @@ def initialize_xfer_metadata_mc(
     return transfer_handle
 
 
-def initialize_xfer_metadata_ucx(
+def init_transfer_metadata_ucx(
     role: str,
     operation: str,
     agent: nixl_agent,
@@ -191,20 +190,23 @@ def create_nixl_agent_ucx(role: str, dataset):
     return agent, register_descs
 
 
-def start_transfer_mc(
+def cleanup_agent(
+    agent: nixl_agent,
+):
+    agent.remove_remote_agent(agent.name)
+
+
+def do_transfer_mc(
     role: str, agent: nixl_agent, transfer_handle, zmq_socket, uid="TRANSFER"
 ):
     if "client" in role:
         state = agent.transfer(transfer_handle)
-        if state == "ERR":
-            print("Error in transfer")
+        assert state != "ERR", "Error in transfer"
         while True:
             state = agent.check_xfer_state(transfer_handle)
+            assert state != "ERR", "Error in transfer"
             if state == "DONE":
                 zmq_socket.send(uid.encode("utf-8"))
-                break
-            elif state == "ERR":
-                print("Error in transfer")
                 break
     else:
         while True:
@@ -213,17 +215,14 @@ def start_transfer_mc(
                 break
 
 
-def start_transfer_ucx(role: str, agent: nixl_agent, transfer_handle, uid="TRANSFER"):
+def do_transfer_ucx(role: str, agent: nixl_agent, transfer_handle, uid="TRANSFER"):
     if "client" in role:
         state = agent.transfer(transfer_handle)
-        if state == "ERR":
-            print("Error in transfer")
+        assert state != "ERR", "Error in transfer"
         while True:
             state = agent.check_xfer_state(transfer_handle)
+            assert state != "ERR", "Error in transfer"
             if state == "DONE":
-                break
-            elif state == "ERR":
-                print("Error in transfer")
                 break
     else:
         uid = "TRANSFER"
@@ -242,32 +241,29 @@ def cleanup_transfer(
     agent.deregister_memory(register_descs)
 
 
-def cleanup_agent(
-    agent: nixl_agent,
-):
-    agent.remove_remote_agent(agent.name)
-
-
-def start_agent_pair(size, args):
+def start_transfer(size, num_kvblocks, args):
     op = "WRITE"
     zmq_socket = None
 
     if args.backend == "mooncake":
         zmq_socket = init_zmq(args.remote_ip, listen_port, args.role)
+
     try:
-        dataset = create_dataset(args.role, size, args.device, args.local_gpu_idx)
+        dataset = create_dataset(
+            args.role, size, num_kvblocks, args.device, args.local_gpu_idx
+        )
 
         # Suppress stdout for better output
         old_stdout = sys.stdout
         sys.stdout = io.StringIO()
         if args.backend == "mooncake":
             agent, register_descs = create_nixl_agent_mc(args.role, dataset, zmq_socket)
-            transfer_handle = initialize_xfer_metadata_mc(
+            transfer_handle = init_transfer_metadata_mc(
                 args.role, op, agent, register_descs, zmq_socket
             )
         else:
             agent, register_descs = create_nixl_agent_ucx(args.role, dataset)
-            transfer_handle = initialize_xfer_metadata_ucx(
+            transfer_handle = init_transfer_metadata_ucx(
                 args.role,
                 op,
                 agent,
@@ -281,16 +277,12 @@ def start_agent_pair(size, args):
         start = time.perf_counter()
 
         if args.backend == "mooncake":
-            for n in range(args.iters):
-                start_transfer_mc(args.role, agent, transfer_handle, zmq_socket)
+            for _ in range(args.iters):
+                do_transfer_mc(args.role, agent, transfer_handle, zmq_socket)
                 total_size += size
         else:
-            for n in range(args.iters):
-                start_transfer_ucx(
-                    args.role,
-                    agent,
-                    transfer_handle,
-                )
+            for _ in range(args.iters):
+                do_transfer_ucx(args.role, agent, transfer_handle)
                 total_size += size
 
         end = time.perf_counter()
@@ -402,11 +394,12 @@ def main():
 
     print("NIXL P2P Benchmark — role:", args.role)
     print("Message sizes:", ", ".join(_pretty_size(s) for s in args.sizes))
+    print("Number of key-value blocks per message:", args.num_kvblocks)
     print(
         f"Device: {args.device} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}"
     )
     for size in args.sizes:
-        start_agent_pair(size, args)
+        start_transfer(size, args.num_kvblocks, args)
 
 
 if __name__ == "__main__":
