@@ -8,17 +8,16 @@ from __future__ import annotations
 import sys, os, time, socket, struct, multiprocessing
 from typing import Tuple
 
+# You must first import torch before importing uccl for AMD GPUs
+import torch
+
+os.environ["UCCL_RCMODE"] = "1"
+
 try:
     from uccl import p2p
 except ImportError as e:
     sys.stderr.write(f"Failed to import p2p: {e}\n")
-    sys.stderr.write("Build the pybind11 extension first (make)\n")
-    sys.exit(1)
-
-import torch
-import os
-
-os.environ["UCCL_RCMODE"] = "1"
+    raise
 
 
 def parse_endpoint_meta(meta: bytes) -> Tuple[str, int, int]:
@@ -50,7 +49,7 @@ def test_local():
         assert ok, "connect failed"
         print(f"[Server] connected (conn_id={conn_id})")
 
-        tensor = torch.zeros(1024, dtype=torch.float32, pin_memory=True)
+        tensor = torch.ones(1024, dtype=torch.float32, device="cuda:0")
         ok, mr_id = ep.reg(tensor.data_ptr(), tensor.numel() * 4)
         assert ok
 
@@ -73,8 +72,8 @@ def test_local():
         assert ok, "accept failed"
         print(f"[Client] accepted (conn_id={conn_id})")
 
-        # GH200 only supports host-pinned CPU memory
-        tensor = torch.ones(1024, dtype=torch.float32, pin_memory=True)
+        tensor = torch.ones(1024, dtype=torch.float32, device="cuda:0")
+
         print("data pointer hex", hex(tensor.data_ptr()))
         torch.cuda.synchronize()
         ok, mr_id = ep.reg(tensor.data_ptr(), tensor.numel() * 4)

@@ -12,8 +12,8 @@ p2p/
 ├── engine.cc         # C++ Endpoint implementation
 ├── pybind_engine.cc  # pybind11 wrapper for Python integration
 ├── Makefile          # Build configuration
-├── test_engine.py    # Comprehensive test suite
-├── demo.py           # Usage demonstration
+├── tests/            # Comprehensive test suite
+├── benchmarks/       # Comprehensive benchmark suite
 └── README.md         # This file
 ```
 
@@ -21,6 +21,7 @@ p2p/
 
 The easiest way is to: 
 ```
+pip install pybind11
 git clone https://github.com/uccl-project/uccl.git --recursive
 cd uccl && bash build_and_install.sh [cuda|rocm] p2p
 ```
@@ -87,15 +88,10 @@ sudo make install
 
 2. **Build the UCCL P2P module:**
    ```bash
-   make
+   make -j
    ```
 
-3. **Run tests:**
-   ```bash
-   make test
-   ```
-
-4. **Install the UCCL P2P module:**
+3. **Install the UCCL P2P module:**
    ```bash
    make install
    ```
@@ -123,7 +119,8 @@ torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> \
 
 Notes: 
 * You may consider exporting `GLOO_SOCKET_IFNAME=xxx` if triggering Gloo connectFullMesh failure.
-* To benchmark on AMD GPUs, you need to specify `UCCL_RCMODE=1`.
+* To benchmark on AMD GPUs, you need to specify `UCCL_RCMODE=1`. 
+* **You must first import `torch` before importing `uccl.p2p` for AMD GPUs**, otherwise, `RuntimeError: No HIP GPUs are available` will occur. We guess this is because torch does some extra init for AMD GPUs, in order for Pybind-C++ code to use AMD GPUs. 
 * To benchmark dual direction transfer, you can run `benchmark_uccl_dual.py` with the same commands as above. 
 * To benchmark one-sided READ transfer, you can run `benchmark_uccl_read.py`.
 
@@ -526,23 +523,11 @@ Poll the status of an asynchronous transfer operation.
 </details>
 
 
-## Development and Testing
+## Testing
 
-### Build Targets
 ```bash
-make all          # Build the module
-make install      # Installs the module in python package path
-make clean        # Clean build artifacts  
-make test         # Run test suite
-make install-deps # Install Python dependencies
-make help         # Show available targets
-```
-
-### Testing Your Setup
-```bash
-# Run the included test suite
-python3 test_engine.py
-
-# Check if RDMA hardware is available
-# (This will work even without RDMA hardware for testing)
+python tests/test_engine.py
+python tests/test_engine_read.py
+python tests/test_engine_metadata.py
+torchrun --nnodes=1 --nproc_per_node=2 tests/test_engine_nvlink.py
 ```

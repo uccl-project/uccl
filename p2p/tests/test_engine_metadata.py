@@ -12,6 +12,8 @@ import torch
 import socket
 import struct
 
+os.environ["UCCL_RCMODE"] = "1"
+
 try:
     from uccl import p2p
 
@@ -70,11 +72,10 @@ def test_local():
         success, mr_id = engine.reg(tensor.data_ptr(), tensor.numel() * 4)
         assert success
 
-        success, recv_size = engine.recv(
-            conn_id, mr_id, tensor.data_ptr(), max_size=tensor.numel() * 8
+        success = engine.recv(
+            conn_id, mr_id, tensor.data_ptr(), size=tensor.numel() * 8
         )
         assert success
-        assert recv_size == tensor.numel() * 4, f"recv_size={recv_size}"
 
         assert tensor.allclose(torch.ones(1024, dtype=torch.float32))
         print("✓ Server received correct data")
