@@ -252,24 +252,30 @@ def start_agent_pair(size, args):
     op = "WRITE"
     zmq_socket = None
 
-    print(f"Backend : {args.backend}")
     if args.backend == "mooncake":
         zmq_socket = init_zmq(args.remote_ip, listen_port, args.role)
     try:
         dataset = create_dataset(args.role, size, args.device, args.local_gpu_idx)
+
+        # Suppress stdout for better output
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
         if args.backend == "mooncake":
             agent, register_descs = create_nixl_agent_mc(args.role, dataset, zmq_socket)
-        else:
-            agent, register_descs = create_nixl_agent_ucx(args.role, dataset)
-
-        if args.backend == "mooncake":
             transfer_handle = initialize_xfer_metadata_mc(
                 args.role, op, agent, register_descs, zmq_socket
             )
         else:
+            agent, register_descs = create_nixl_agent_ucx(args.role, dataset)
             transfer_handle = initialize_xfer_metadata_ucx(
-                args.role, op, agent, register_descs, args.remote_ip, listen_port
+                args.role,
+                op,
+                agent,
+                register_descs,
+                args.remote_ip,
+                listen_port,
             )
+        sys.stdout = old_stdout
 
         total_size = 0
         start = time.perf_counter()

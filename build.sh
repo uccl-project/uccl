@@ -177,7 +177,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
     ls -lh uccl/
     ls -lh uccl/lib/
     python3 -m build
-    auditwheel repair dist/uccl-*.whl --exclude libibverbs.so.1 --exclude libamdhip64.so.6 -w /io/${WHEEL_DIR}
+    auditwheel repair dist/uccl-*.whl --exclude libibverbs.so.1 --exclude libcudart.so.12 --exclude libamdhip64.so.6 -w /io/${WHEEL_DIR}
     
     # Add backend tag to wheel filename using local version identifier
     if [[ "$TARGET" == "rocm" ]]; then
