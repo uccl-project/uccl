@@ -37,12 +37,11 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
             << ", CPUs: " << num_cpus << std::endl;
   // Py_Initialize();
 
-  // int n_streams = std::max(1, (int)ucclParamNumGpuRtStreams());
-  // streams_.resize(n_streams);
-  // for (int i = 0; i < n_streams; ++i) {
-  //   GPU_RT_CHECK(gpuStreamCreateWithFlags(&streams_[i],
-  //   gpuStreamNonBlocking));
-  // }
+  int n_streams = std::max(1, (int)ucclParamNumGpuRtStreams());
+  streams_.resize(n_streams);
+  for (int i = 0; i < n_streams; ++i) {
+    GPU_RT_CHECK(gpuStreamCreateWithFlags(&streams_[i], gpuStreamNonBlocking));
+  }
 
   std::call_once(glog_init_once,
                  []() { google::InitGoogleLogging("uccl_p2p"); });
@@ -113,11 +112,11 @@ Endpoint::~Endpoint() {
   for (auto& [mr_id, mr] : mr_id_to_mr_) {
     delete mr;
   }
-  // if (!streams_.empty()) {
-  //   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-  //   for (auto s : streams_)
-  //     if (s) GPU_RT_CHECK(gpuStreamDestroy(s));
-  // }
+  if (!streams_.empty()) {
+    GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+    for (auto s : streams_)
+      if (s) GPU_RT_CHECK(gpuStreamDestroy(s));
+  }
 
   std::cout << "Engine destroyed" << std::endl;
 }
