@@ -49,7 +49,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   google::InstallFailureSignalHandler();
 
   // Initialize the RDMA endpoint with lazy creation.
-  ep_ = new uccl::RDMAEndpoint(ucclParamNUM_ENGINES());
+  ep_ = new uccl::RDMAEndpoint(num_cpus_);
 
   auto gpu_cards = uccl::get_gpu_cards();
   DCHECK(local_gpu_idx_ < gpu_cards.size() && gpu_cards.size() <= kMaxNumGPUs)
