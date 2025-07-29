@@ -838,8 +838,8 @@ void remote_send_ack(struct ibv_qp* local_ack_qp, uint64_t& wr_id,
     std::abort();
   }
 
-  printf("[ACK - %d]  wr_id=%lu posted to ACK sender\n", worker_idx,
-         static_cast<unsigned long>(wr_id));
+  // printf("[ACK - %d]  wr_id=%lu posted to ACK sender\n", worker_idx,
+  //        static_cast<unsigned long>(wr_id));
 }
 
 void local_init_ack_recv_ring(struct ibv_pd* pd, int depth) {

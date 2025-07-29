@@ -120,10 +120,8 @@ void peer_copy_worker(CopyRingBuffer& g_ring, int idx) {
     } else {
 #endif
       /* The fastest among the three. */
-      printf("Before launch_peer_bulk_copy2\n");
       err = launch_peer_bulk_copy2(tasks, copy_batch_size, stream, src_device,
                                    d_tasks);
-      printf("After launch_peer_bulk_copy2\n");
       func_name = "launch_peer_bulk_copy2";
     }
 #ifdef REMOTE_PERSISTENT_KERNEL

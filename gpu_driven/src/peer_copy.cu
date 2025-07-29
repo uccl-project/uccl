@@ -111,14 +111,19 @@ cudaError_t launch_peer_bulk_copy2(CopyTask const* host_tasks, int num_tasks,
   if (st != cudaSuccess) std::abort();
   constexpr int threads_per_block = 256;
   dim3 blocks(NVLINK_SM_PER_PROCESS);
-  if (false) {
+  if (true) {
     peer_copy_kernel_vec<<<blocks, threads_per_block, 0, stream>>>(d_tasks,
                                                                    num_tasks);
   } else if (true) {
     int tasks_per_block = num_tasks / NVLINK_SM_PER_PROCESS;
     if (tasks_per_block == 0) tasks_per_block = 1;
+    printf("Before peer_copy_kernel_vec_batched\n");
     peer_copy_kernel_vec_batched<<<blocks, threads_per_block, 0, stream>>>(
         d_tasks, num_tasks, tasks_per_block);
+    cudaError_t st = cudaPeekAtLastError();
+    if (st != cudaSuccess)
+      fprintf(stderr, "launch error: %s\n", cudaGetErrorString(st));
+    printf("After peer_copy_kernel_vec_batched\n");
   } else {
     int tasks_per_block = num_tasks / NVLINK_SM_PER_PROCESS;
     size_t shmem = threads_per_block * 2 /*PIPE_DEPTH*/ * sizeof(int4);
