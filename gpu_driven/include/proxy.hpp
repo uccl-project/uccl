@@ -1,7 +1,7 @@
 #ifndef PROXY_HPP
 #define PROXY_HPP
 
-#include "ring_buffer.cuh"
+#include "ring_buffer.hip.h"
 #include <chrono>
 #include <thread>
 #include <unordered_map>

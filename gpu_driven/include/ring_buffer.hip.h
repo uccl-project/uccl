@@ -1,5 +1,5 @@
-#ifndef RING_BUFFER_CUH
-#define RING_BUFFER_CUH
+#ifndef RING_BUFFER_HIP
+#define RING_BUFFER_HIP
 
 #include "common.hpp"
 #include <infiniband/verbs.h>
@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <vector>
-#include <cuda.h>
+#include <hip/hip_runtime.h>
 
 #ifndef COPY_RING_CAP
 #define COPY_RING_CAP 4096
@@ -32,7 +32,7 @@ struct CopyTask {
 
 enum class FlowDirection { HostToDevice, DeviceToHost, HostToHost };
 
-#if !defined(__CUDA_ARCH__)
+#if !defined(__HIP_DEVICE_COMPILE__)
 #include <atomic>
 #define HOST_ACQUIRE() std::atomic_thread_fence(std::memory_order_acquire)
 #define HOST_RELEASE() std::atomic_thread_fence(std::memory_order_release)
@@ -42,11 +42,13 @@ enum class FlowDirection { HostToDevice, DeviceToHost, HostToHost };
 #endif
 
 __device__ __forceinline__ uint64_t ld_volatile(uint64_t* ptr) {
-  uint64_t ans;
-  asm volatile("ld.volatile.global.u64 %0, [%1];"
-               : "=l"(ans)
-               : "l"(ptr)
-               : "memory");
+  // Use standard volatile load for HIP compatibility
+  // This provides the memory ordering guarantees we need
+  volatile uint64_t* vptr = reinterpret_cast<volatile uint64_t*>(ptr);
+  uint64_t ans = *vptr;
+#if defined(__HIP_DEVICE_COMPILE__)
+  __threadfence_system(); // Ensure memory ordering
+#endif
   return ans;
 }
 
@@ -105,7 +107,7 @@ struct alignas(128) RingBuffer {
   }
 
   __host__ __device__ __forceinline__ void commit_with_head(int new_head) {
-#if __CUDA_ARCH__
+#if defined(__HIP_DEVICE_COMPILE__)
     if constexpr (Dir == FlowDirection::DeviceToHost) __threadfence_system();
 #else
     if constexpr (Dir == FlowDirection::DeviceToHost)
@@ -118,7 +120,7 @@ struct alignas(128) RingBuffer {
   __host__ __device__ __forceinline__ bool pop(T& out) {
     if (empty()) return false;
 
-#if __CUDA_ARCH__
+#if defined(__HIP_DEVICE_COMPILE__)
     if constexpr (Dir == FlowDirection::HostToDevice) __threadfence();
 #else
     if constexpr (Dir == FlowDirection::HostToHost) HOST_ACQUIRE();
@@ -135,7 +137,7 @@ struct alignas(128) RingBuffer {
     uint64_t avail = h - t;
     if (avail == 0) return 0;
     int cnt = (n < static_cast<int>(avail)) ? n : static_cast<int>(avail);
-#if __CUDA_ARCH__
+#if defined(__HIP_DEVICE_COMPILE__)
     if constexpr (Dir == FlowDirection::HostToDevice) __threadfence();
 #else
     if constexpr (Dir == FlowDirection::HostToHost) HOST_ACQUIRE();
@@ -146,7 +148,7 @@ struct alignas(128) RingBuffer {
   }
 
   __host__ __device__ __forceinline__ uint64_t volatile_tail() {
-#if __CUDA_ARCH__
+#if defined(__HIP_DEVICE_COMPILE__)
     return ld_volatile(&tail);
 #else
     return *reinterpret_cast<volatile uint64_t const*>(&tail);
@@ -155,7 +157,7 @@ struct alignas(128) RingBuffer {
 
   __host__ __device__ __forceinline__ uint64_t volatile_head() {
     uint64_t val;
-#if defined(__CUDA_ARCH__)
+#if defined(__HIP_DEVICE_COMPILE__)
     return ld_volatile(&head);
 #elif defined(__x86_64__)
     asm volatile("movq %1, %0" : "=r"(val) : "m"(head) : "memory");
@@ -175,4 +177,4 @@ typedef RingBuffer<CopyTask, FlowDirection::HostToDevice, COPY_RING_CAP>
 typedef RingBuffer<CopyTask, FlowDirection::HostToHost, COPY_RING_CAP>
     CopyRingBuffer;
 
-#endif  // RING_BUFFER_CUH
+#endif  // RING_BUFFER_HIP

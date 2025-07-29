@@ -2,17 +2,17 @@
 #include <tuple>
 #include <vector>
 #include <assert.h>
-#include <cuda_pipeline.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <hip/hip_runtime.h>
 
-#define cudaCheckErrors(msg)                                  \
+#define hipCheckErrors(msg)                                   \
   do {                                                        \
-    cudaError_t __err = cudaGetLastError();                   \
-    if (__err != cudaSuccess) {                               \
+    hipError_t __err = hipGetLastError();                     \
+    if (__err != hipSuccess) {                                \
       fprintf(stderr, "Fatal error: %s (%s at %s:%d)\n", msg, \
-              cudaGetErrorString(__err), __FILE__, __LINE__); \
+              hipGetErrorString(__err), __FILE__, __LINE__);  \
       fprintf(stderr, "*** FAILED - ABORTING\n");             \
       exit(1);                                                \
     }                                                         \
@@ -20,29 +20,25 @@
 
 __device__ __forceinline__ uint64_t ld_volatile(uint64_t* ptr) {
   uint64_t ans;
-  asm volatile("ld.volatile.global.u64 %0, [%1];"
-               : "=l"(ans)
-               : "l"(ptr)
+  asm volatile("global_load_dwordx2 %0, %1 glc slc"
+               : "=v"(ans)
+               : "v"(ptr)
                : "memory");
   return ans;
 }
 
 __device__ __forceinline__ void fence_acq_rel_sys() {
-#if __CUDA_ARCH__ >= 700
-  asm volatile("fence.acq_rel.sys;" ::: "memory");
-#else
-  asm volatile("membar.sys;" ::: "memory");
-#endif
+  // Use AMD equivalent fence
+  asm volatile("s_waitcnt vmcnt(0) lgkmcnt(0)" ::: "memory");
+  __threadfence_system();
 }
 
 __device__ __forceinline__ void st_relaxed_sys(uint64_t* ptr, uint64_t val) {
-#if __CUDA_ARCH__ >= 700
-  asm volatile("st.relaxed.sys.global.u64 [%0], %1;" ::"l"(ptr), "l"(val)
+  // Use AMD equivalent relaxed store
+  asm volatile("global_store_dwordx2 %0, %1"
+               :
+               : "v"(ptr), "v"(val)
                : "memory");
-#else
-  asm volatile("st.volatile.global.u64 [%0], %1;" ::"l"(ptr), "l"(val)
-               : "memory");
-#endif
 }
 
 template <typename X, typename Y, typename Z = decltype(X() + Y())>
@@ -99,6 +95,25 @@ __device__ __forceinline__ void copyGlobalMemory(void* dst, void* src,
       *(uint8_t*)(dst_addr + i) = *(uint8_t*)(src_addr + i);
     }
   }
+}
+
+// Manual pipeline implementation for HIP
+__device__ __forceinline__ void manual_pipeline_memcpy_async(void* smem_ptr, 
+                                                            const void* gmem_ptr, 
+                                                            size_t size) {
+  // Stage data through shared memory since HIP doesn't have __pipeline_memcpy_async
+  // This is a simplified staging approach
+  memcpy(smem_ptr, gmem_ptr, size);
+}
+
+__device__ __forceinline__ void manual_pipeline_commit() {
+  // Synchronize threads to simulate pipeline commit
+  __syncthreads();
+}
+
+__device__ __forceinline__ void manual_pipeline_wait_prior(int n) {
+  // Wait for all prior operations - simplified with syncthreads
+  __syncthreads();
 }
 
 __device__ void kernelScatteredMemcpy(struct Iov* iov) {
@@ -165,11 +180,11 @@ __device__ void kernelScatteredMemcpy(struct Iov* iov) {
 
       void* smemBytePtr = (void*)&smem[tid + nthreads * depth++];
       void const* gmemBytePtr = (void const*)&src_T[j];
-      __pipeline_memcpy_async(smemBytePtr, gmemBytePtr, sizeof(T));
+      manual_pipeline_memcpy_async(smemBytePtr, gmemBytePtr, sizeof(T));
 
       if (depth == kCpAsycDepth || j + nthreads_per_iov >= num_full) {
-        __pipeline_commit();
-        __pipeline_wait_prior(0);
+        manual_pipeline_commit();
+        manual_pipeline_wait_prior(0);
         // Copy the data from shared memory to global memory
         for (int k = 0; k < depth; k++) {
           dst_T[j - (depth - 1 - k) * nthreads_per_iov] =
@@ -244,14 +259,14 @@ __global__ void persistKernel(struct IovFifo** fifo_vec) {
     unsigned long long start = 0;
     unsigned long long end = 0;
     if (tid == 0) {
-      start = clock64();
+      start = wall_clock64();
     }
 #endif
     kernelScatteredMemcpy(cur_iov);
 
 #ifdef MEASURE_KERNEL_TIME
     if (tid == 0) {
-      end = clock64();
+      end = wall_clock64();
     }
 #endif
     __syncthreads();
@@ -278,8 +293,8 @@ class iovMultiFifo {
  public:
   iovMultiFifo(int num_fifo) : num_fifo_(num_fifo) {
     for (int i = 0; i < num_fifo; i++) {
-      cudaHostAlloc(&fifo_vec_[i], sizeof(struct IovFifo), cudaHostAllocMapped);
-      cudaCheckErrors("cudaMallocManaged failed");
+      hipHostMalloc(&fifo_vec_[i], sizeof(struct IovFifo), hipHostMallocMapped);
+      hipCheckErrors("hipHostMalloc failed");
     }
     init();
   }
@@ -302,8 +317,8 @@ class iovMultiFifo {
 
   ~iovMultiFifo() {
     for (int i = 0; i < num_fifo_; i++) {
-      cudaFreeHost((void*)fifo_vec_[i]);
-      cudaCheckErrors("cudaFreeHost failed");
+      hipHostFree((void*)fifo_vec_[i]);
+      hipCheckErrors("hipHostFree failed");
     }
   }
 
@@ -336,30 +351,30 @@ class iovMultiFifo {
 };
 
 void fill_data(void** srcs_gpu, int iov_n, int* lens, uint8_t value,
-               cudaStream_t stream) {
+               hipStream_t stream) {
   // make a CPU buffer, then copy to GPU
   uint8_t* cpu_buf = (uint8_t*)malloc(kCopySize);
   for (int i = 0; i < kCopySize / sizeof(uint8_t); i++) {
     cpu_buf[i] = value;
   }
   for (int i = 0; i < iov_n; i++) {
-    cudaMemcpyAsync(srcs_gpu[i], cpu_buf, lens[i], cudaMemcpyHostToDevice,
+    hipMemcpyAsync(srcs_gpu[i], cpu_buf, lens[i], hipMemcpyHostToDevice,
                     stream);
-    cudaStreamSynchronize(stream);
-    cudaCheckErrors("cudaMemcpy failed");
+    hipStreamSynchronize(stream);
+    hipCheckErrors("hipMemcpy failed");
   }
   free(cpu_buf);
 }
 
 void check_data(void** dsts_gpu, int iov_n, int* lens, uint8_t value,
-                cudaStream_t stream) {
+                hipStream_t stream) {
   // check the data
   uint8_t* cpu_buf = (uint8_t*)malloc(kCopySize);
   for (int i = 0; i < iov_n; i++) {
-    cudaMemcpyAsync(cpu_buf, dsts_gpu[i], lens[i], cudaMemcpyDeviceToHost,
+    hipMemcpyAsync(cpu_buf, dsts_gpu[i], lens[i], hipMemcpyDeviceToHost,
                     stream);
-    cudaStreamSynchronize(stream);
-    cudaCheckErrors("cudaMemcpy failed");
+    hipStreamSynchronize(stream);
+    hipCheckErrors("hipMemcpy failed");
     for (int j = 0; j < lens[i] / sizeof(uint8_t); j++) {
       assert(cpu_buf[j] == value);
     }
@@ -368,17 +383,17 @@ void check_data(void** dsts_gpu, int iov_n, int* lens, uint8_t value,
 }
 
 // make -j
-// CUDA_MODULE_LOADING=EAGER ./pcie_bench
+// ./pcie_bench
 // 11 us for 1 test iov, 82 us for 128 test iovs
 int main() {
-  cudaStream_t stream1, stream2;
-  cudaStreamCreate(&stream1);
-  cudaCheckErrors("cudaStreamCreate failed");
-  cudaStreamCreate(&stream2);
-  cudaCheckErrors("cudaStreamCreate failed");
+  hipStream_t stream1, stream2;
+  hipStreamCreate(&stream1);
+  hipCheckErrors("hipStreamCreate failed");
+  hipStreamCreate(&stream2);
+  hipCheckErrors("hipStreamCreate failed");
 
-  cudaDeviceProp prop;
-  cudaGetDeviceProperties(&prop, 0);
+  hipDeviceProp_t prop;
+  hipGetDeviceProperties(&prop, 0);
   // Use printf for clock rate
   printf("clock rate: %d\n", prop.clockRate);
 
@@ -386,8 +401,8 @@ int main() {
   struct Iov* cpu_iov = (struct Iov*)malloc(sizeof(struct Iov));
   int copy_size_once = 0;
   for (int i = 0; i < kTestIovs; i++) {
-    cudaMalloc(&cpu_iov->srcs[i], kCopySize);
-    cudaMalloc(&cpu_iov->dsts[i], kCopySize);
+    hipMalloc(&cpu_iov->srcs[i], kCopySize);
+    hipMalloc(&cpu_iov->dsts[i], kCopySize);
     cpu_iov->lens[i] = kCopySize - rand() % 2048;
     copy_size_once += cpu_iov->lens[i];
   }
@@ -397,9 +412,9 @@ int main() {
   iovMultiFifo* fifo = new iovMultiFifo(kNumThBlocks);
 
   // Launch the persist kernel.
-  persistKernel<<<kNumThBlocks, kNumThPerBlock, 0, stream1>>>(
-      fifo->get_fifo_vec());
-  cudaCheckErrors("persistKernel failed");
+  hipLaunchKernelGGL(persistKernel, kNumThBlocks, kNumThPerBlock, 0, stream1,
+                     fifo->get_fifo_vec());
+  hipCheckErrors("persistKernel failed");
 
   for (int i = 0; i < kTestIters; i += kTestSteps) {
     std::vector<std::tuple<uint64_t, uint64_t>> poll_handlers;
@@ -421,12 +436,12 @@ int main() {
       fifo->dispatch_task(fifo_idx);
 
       // for (int j = 0; j < kTestIovs; j++) {
-      //     cudaMemcpyAsync(gpu_iov->dsts[j], gpu_iov->srcs[j],
+      //     hipMemcpyAsync(gpu_iov->dsts[j], gpu_iov->srcs[j],
       //                     gpu_iov->lens[j],
-      //                     cudaMemcpyDeviceToDevice, stream2);
-      //     cudaCheckErrors("cudaMemcpyAsync failed");
+      //                     hipMemcpyDeviceToDevice, stream2);
+      //     hipCheckErrors("hipMemcpyAsync failed");
       // }
-      // cudaStreamSynchronize(stream2);
+      // hipStreamSynchronize(stream2);
 
       poll_handlers.push_back(std::make_tuple(fifo_idx, slot_idx));
     }
@@ -457,8 +472,8 @@ int main() {
   for (int i = 0; i < kNumThBlocks; i++) {
     fifo->abort(i);
   }
-  cudaStreamSynchronize(stream1);
-  cudaCheckErrors("cudaStreamSynchronize failed");
+  hipStreamSynchronize(stream1);
+  hipCheckErrors("hipStreamSynchronize failed");
   auto end = std::chrono::high_resolution_clock::now();
   auto elapsed_us =
       std::chrono::duration_cast<std::chrono::microseconds>(end - start);

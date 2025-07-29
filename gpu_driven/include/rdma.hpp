@@ -1,7 +1,7 @@
 #ifndef RDMA_HPP
 #define RDMA_HPP
 #include "common.hpp"
-#include "ring_buffer.cuh"
+#include "ring_buffer.hip.h"
 #include "unistd.h"
 #include <infiniband/verbs.h>
 #include <atomic>
@@ -84,7 +84,7 @@ void per_thread_rdma_init(void* gpu_buf, size_t bytes, int rank, int block_idx);
 
 extern void* per_GPU_device_buf[NUM_GPUS];
 
-#ifdef ENABLE_PROXY_CUDA_MEMCPY
+#ifdef ENABLE_PROXY_HIP_MEMCPY
 void print_average_async_memcpy_time();
 #endif
 

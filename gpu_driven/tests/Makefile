@@ -1,21 +1,23 @@
-CUDA_HOME:=/usr/local/cuda
+HIP_HOME?=/opt/rocm
 EFA_HOME:=/opt/amazon/efa
-CXXFLAGS = -I${EFA_HOME}/include -L${EFA_HOME}/lib -I$(CUDA_HOME)/include -L ${CUDA_HOME}/lib64 -libverbs -lcudart -lcuda -lpthread -std=c++17
-# CUDAFLAGS = -arch=sm_80 # for A100
-CUDAFLAGS = -arch=sm_90 # for H100
+HIPCC=${HIP_HOME}/bin/hipcc
 
-NVCC=${CUDA_HOME}/bin/nvcc
-CUDA_BIN = pcie_bench gpu_to_cpu_bench batched_gpu_to_cpu_bench
-all: $(CUDA_BIN)
+CXXFLAGS = -I${EFA_HOME}/include -L${EFA_HOME}/lib -I$(HIP_HOME)/include -L ${HIP_HOME}/lib -libverbs -lamdhip64 -lpthread -std=c++17 -D__HIP_PLATFORM_AMD__
+HIPFLAGS = --offload-arch=gfx90a # for MI200 series, adjust for your GPU
 
-pcie_bench: pcie_bench.cu
-	${NVCC} -O3 -g pcie_bench.cu -o pcie_bench $(CXXFLAGS) $(CUDAFLAGS)
+HIP_BIN = pcie_bench gpu_to_cpu_bench batched_gpu_to_cpu_bench
+all: $(HIP_BIN)
 
-gpu_to_cpu_bench: gpu_to_cpu_bench.cu
-	${NVCC} -O3 -g gpu_to_cpu_bench.cu -o gpu_to_cpu_bench $(CXXFLAGS) $(CUDAFLAGS)
+pcie_bench: pcie_bench.hip
+	${HIPCC} -O3 -g pcie_bench.hip -o pcie_bench $(CXXFLAGS) $(HIPFLAGS)
 
-batched_gpu_to_cpu_bench: batched_gpu_to_cpu_bench.cu
-	${NVCC} -O3 -g batched_gpu_to_cpu_bench.cu -o batched_gpu_to_cpu_bench $(CXXFLAGS) $(CUDAFLAGS)
+gpu_to_cpu_bench: gpu_to_cpu_bench.hip
+	${HIPCC} -O3 -g gpu_to_cpu_bench.hip -o gpu_to_cpu_bench $(CXXFLAGS) $(HIPFLAGS)
+
+batched_gpu_to_cpu_bench: batched_gpu_to_cpu_bench.hip
+	${HIPCC} -O3 -g batched_gpu_to_cpu_bench.hip -o batched_gpu_to_cpu_bench $(CXXFLAGS) $(HIPFLAGS)
 
 clean:
-	rm $(CUDA_BIN)
+	rm -f $(HIP_BIN)
+
+.PHONY: all clean

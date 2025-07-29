@@ -1,4 +1,7 @@
 #include "common.hpp"
+#if defined(__x86_64__) || defined(__i386__)
+#include <immintrin.h>
+#endif
 
 bool pin_thread_to_cpu(int cpu) {
   int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
