@@ -20,12 +20,12 @@
 #include <thread>
 #include <unordered_set>
 #include <vector>
-#include <cuda_runtime.h>
+#include <hip/hip_runtime.h>
 #include <fcntl.h>
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
-#include "util/util.h"
+#include "util/util_simple.h"
 #include <stdio.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -789,22 +789,22 @@ void handle_peer_copy(uint64_t wr_id, int src_dev, int dst_dev, void* src_ptr,
   if (src_dev == dst_dev) {
     return;
   }
-  static thread_local cudaStream_t copy_stream = nullptr;
+  static thread_local hipStream_t copy_stream = nullptr;
   if (copy_stream == nullptr) {
-    cudaStreamCreate(&copy_stream);
+    hipStreamCreate(&copy_stream);
   }
 
   static thread_local bool peer_enabled[NUM_GPUS][NUM_GPUS] = {};
   if (!peer_enabled[src_dev][dst_dev]) {
-    cudaDeviceEnablePeerAccess(dst_dev, 0);
-    cudaSetDevice(dst_dev);
-    cudaDeviceEnablePeerAccess(src_dev, 0);
+    hipDeviceEnablePeerAccess(dst_dev, 0);
+    hipSetDevice(dst_dev);
+    hipDeviceEnablePeerAccess(src_dev, 0);
     peer_enabled[src_dev][dst_dev] = true;
-    cudaSetDevice(src_dev);
+    hipSetDevice(src_dev);
   }
-#ifdef ENABLE_PROXY_CUDA_MEMCPY
+#ifdef ENABLE_PROXY_HIP_MEMCPY
   auto start_time = std::chrono::high_resolution_clock::now();
-  cudaError_t err = cudaMemcpyPeerAsync(dst_ptr, dst_dev, src_ptr, src_dev,
+  hipError_t err = hipMemcpyPeerAsync(dst_ptr, dst_dev, src_ptr, src_dev,
                                         num_bytes, copy_stream);
   async_memcpy_count++;
   auto end_time = std::chrono::high_resolution_clock::now();
@@ -812,14 +812,14 @@ void handle_peer_copy(uint64_t wr_id, int src_dev, int dst_dev, void* src_ptr,
       end_time - start_time);
   async_memcpy_total_time += duration.count();
 #else
-  cudaError_t err = cudaMemcpyPeerAsync(dst_ptr, dst_dev, src_ptr, src_dev,
+  hipError_t err = hipMemcpyPeerAsync(dst_ptr, dst_dev, src_ptr, src_dev,
                                         num_bytes, copy_stream);
 #endif
-  if (err != cudaSuccess) {
+  if (err != hipSuccess) {
     fprintf(stderr,
-            "cudaMemcpyPeerAsync failed (%s)\n"
+            "hipMemcpyPeerAsync failed (%s)\n"
             "  wr_id=%llu  %zu B  GPU%d→GPU%d\n",
-            cudaGetErrorString(err), (unsigned long long)wr_id, num_bytes,
+            hipGetErrorString(err), (unsigned long long)wr_id, num_bytes,
             src_dev, dst_dev);
     std::abort();
   }
@@ -902,7 +902,7 @@ void remote_cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq,
       }
     }
 
-#ifdef ENABLE_PROXY_CUDA_MEMCPY
+#ifdef ENABLE_PROXY_HIP_MEMCPY
     std::vector<CopyTask> task_vec;
     task_vec.reserve(num_wr_imm);
     for (int i = 0; i < ne; ++i) {
@@ -949,7 +949,7 @@ void remote_cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq,
   }
 }
 
-#ifdef ENABLE_PROXY_CUDA_MEMCPY
+#ifdef ENABLE_PROXY_HIP_MEMCPY
 void print_average_async_memcpy_time() {
   printf("Total async memcpy calls: %lu\n", async_memcpy_count);
   if (async_memcpy_count == 0) {

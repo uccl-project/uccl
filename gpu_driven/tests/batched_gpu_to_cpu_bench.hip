@@ -1,10 +1,10 @@
-/* batched_gpu_to_cpu_bench.cu
+/* batched_gpu_to_cpu_bench.hip
  *
  * make
- * CUDA_MODULE_LOADING=EAGER ./batched_gpu_to_cpu_bench
+ * ./batched_gpu_to_cpu_bench
  *
  * clock rate: 1410000 kHz
-
+ *
  * Per-block avg latency:
  * Block 0 : 6.976 µs over 10000000 ops
  * Block 1 : 6.633 µs over 10000000 ops
@@ -14,7 +14,7 @@
  * Block 5 : 6.936 µs over 10000000 ops
  * Block 6 : 6.912 µs over 10000000 ops
  * Block 7 : 6.906 µs over 10000000 ops
-
+ *
  * Overall avg GPU-measured latency  : 6.849 µs
  * Total cycles                       : 772522054232
  * Total ops                          : 80000000
@@ -29,13 +29,13 @@
 #include <tuple>
 #include <vector>
 #include <assert.h>
-#include <cuda_pipeline.h>
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
 #include <stdint.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <hip/hip_runtime.h>
 
 static constexpr int kNumThBlocks = 8;
 static constexpr int kNumThPerBlock = 1;
@@ -48,12 +48,12 @@ static constexpr uint32_t kQueueMask = kQueueSize - 1;
 #define MEASURE_PER_OP_LATENCY
 // #define DEBUG_PRINT
 
-#define cudaCheckErrors(msg)                                  \
+#define hipCheckErrors(msg)                                   \
   do {                                                        \
-    cudaError_t __err = cudaGetLastError();                   \
-    if (__err != cudaSuccess) {                               \
+    hipError_t __err = hipGetLastError();                     \
+    if (__err != hipSuccess) {                                \
       fprintf(stderr, "Fatal error: %s (%s at %s:%d)\n", msg, \
-              cudaGetErrorString(__err), __FILE__, __LINE__); \
+              hipGetErrorString(__err), __FILE__, __LINE__);  \
       fprintf(stderr, "*** FAILED - ABORTING\n");             \
       exit(1);                                                \
     }                                                         \
@@ -68,9 +68,9 @@ struct alignas(128) Fifo {
 
 __device__ __forceinline__ uint64_t ld_volatile(uint64_t* ptr) {
   uint64_t ans;
-  asm volatile("ld.volatile.global.u64 %0, [%1];"
-               : "=l"(ans)
-               : "l"(ptr)
+  asm volatile("global_load_dwordx2 %0, %1 glc slc"
+               : "=v"(ans)
+               : "v"(ptr)
                : "memory");
   return ans;
 }
@@ -79,6 +79,14 @@ __device__ __forceinline__ uint64_t ld_volatile(uint64_t* ptr) {
 __device__ unsigned long long cycle_accum[kNumThBlocks] = {0};
 __device__ unsigned int op_count[kNumThBlocks] = {0};
 #endif
+
+// Manual pipeline implementation for HIP since __pipeline_* functions are CUDA-specific
+__device__ __forceinline__ void pipeline_stage_data(unsigned long long* smem_storage, 
+                                                    unsigned long long idx,
+                                                    unsigned long long start_time) {
+  smem_storage[idx] = start_time;
+  __syncthreads();
+}
 
 __global__ void gpu_issue_batched_commands(Fifo* fifos) {
   int const bid = blockIdx.x;
@@ -123,7 +131,7 @@ __global__ void gpu_issue_batched_commands(Fifo* fifos) {
 #pragma unroll
     for (int i = 0; i < todo; ++i) {
       unsigned long long idx = (my_hdr + i) & kQueueMask;
-      unsigned long long t0 = clock64();
+      unsigned long long t0 = wall_clock64();
       unsigned long long cmd =
           (static_cast<uint64_t>(bid) << 32) | (it + i + 1);
 
@@ -135,7 +143,7 @@ __global__ void gpu_issue_batched_commands(Fifo* fifos) {
     while (complete < my_hdr + todo) {
       uint32_t cidx = complete & kQueueMask;
       if (complete < my_fifo->tail) {
-        unsigned long long t1 = clock64();
+        unsigned long long t1 = wall_clock64();
         unsigned long long cycles = t1 - start_cycle_smem[cidx];
         cycle_accum_smem += cycles;
         op_count_smem++;
@@ -152,7 +160,7 @@ __global__ void gpu_issue_batched_commands(Fifo* fifos) {
     while (complete >= my_fifo->tail) { /* spin */
     }
 
-    unsigned long long t1 = clock64();
+    unsigned long long t1 = wall_clock64();
     cycle_accum_smem += (t1 - start_cycle_smem[cidx]);
     ++op_count_smem;
     ++complete;
@@ -226,16 +234,16 @@ void cpu_proxy(Fifo* fifo, int block_idx) {
 }
 
 int main() {
-  cudaStream_t stream1;
-  cudaStreamCreate(&stream1);
-  cudaCheckErrors("cudaStreamCreate failed");
+  hipStream_t stream1;
+  hipStreamCreate(&stream1);
+  hipCheckErrors("hipStreamCreate failed");
 
-  cudaDeviceProp prop;
-  cudaGetDeviceProperties(&prop, 0);
+  hipDeviceProp_t prop;
+  hipGetDeviceProperties(&prop, 0);
   printf("clock rate: %d kHz\n", prop.clockRate);
 
   Fifo* fifos;
-  cudaHostAlloc(&fifos, sizeof(Fifo) * kNumThBlocks, cudaHostAllocMapped);
+  hipHostMalloc(&fifos, sizeof(Fifo) * kNumThBlocks, hipHostMallocMapped);
 
   for (int i = 0; i < kNumThBlocks; ++i) {
     fifos[i].head = 0;
@@ -252,12 +260,12 @@ int main() {
   }
   auto t0 = std::chrono::high_resolution_clock::now();
   size_t shmem_bytes = kQueueSize * sizeof(unsigned long long);
-  gpu_issue_batched_commands<<<kNumThBlocks, kNumThPerBlock, shmem_bytes,
-                               stream1>>>(fifos);
-  cudaCheckErrors("gpu_issue_command kernel failed");
+  hipLaunchKernelGGL(gpu_issue_batched_commands, kNumThBlocks, kNumThPerBlock, shmem_bytes,
+                     stream1, fifos);
+  hipCheckErrors("gpu_issue_command kernel failed");
 
-  cudaStreamSynchronize(stream1);
-  cudaCheckErrors("cudaStreamSynchronize failed");
+  hipStreamSynchronize(stream1);
+  hipCheckErrors("hipStreamSynchronize failed");
   auto t1 = std::chrono::high_resolution_clock::now();
 
   for (auto& t : cpu_threads) {
@@ -267,8 +275,8 @@ int main() {
 #ifdef MEASURE_PER_OP_LATENCY
   unsigned long long h_cycles[kNumThBlocks];
   unsigned int h_ops[kNumThBlocks];
-  cudaMemcpyFromSymbol(h_cycles, cycle_accum, sizeof(h_cycles));
-  cudaMemcpyFromSymbol(h_ops, op_count, sizeof(h_ops));
+  hipMemcpyFromSymbol(h_cycles, HIP_SYMBOL(cycle_accum), sizeof(h_cycles));
+  hipMemcpyFromSymbol(h_ops, HIP_SYMBOL(op_count), sizeof(h_ops));
 #endif
 
   unsigned int tot_ops = 0;
@@ -298,8 +306,8 @@ int main() {
   printf("End-to-end Wall-clock time        : %.3f ms\n", wall_ms);
   printf("Throughput                        : %.2f Mops/s\n", throughput);
 
-  cudaFreeHost(fifos);
-  cudaCheckErrors("cudaFreeHost failed");
-  cudaStreamDestroy(stream1);
-  cudaCheckErrors("cudaStreamDestroy failed");
+  hipHostFree(fifos);
+  hipCheckErrors("hipHostFree failed");
+  hipStreamDestroy(stream1);
+  hipCheckErrors("hipStreamDestroy failed");
 }

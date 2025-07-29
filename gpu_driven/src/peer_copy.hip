@@ -1,10 +1,9 @@
-// peer_copy.cu
+// peer_copy.hip
 #include "common.hpp"
-#include "peer_copy.cuh"
-#include "ring_buffer.cuh"
+#include "peer_copy.hip.h"
+#include "ring_buffer.hip.h"
 #include <cstdio>
-#include <cuda_pipeline.h>
-#include <cuda_runtime.h>
+#include <hip/hip_runtime.h>
 
 __global__ void peer_copy_kernel(char const* __restrict__ src,
                                  char* __restrict__ dst, size_t num_bytes) {
@@ -16,9 +15,9 @@ __global__ void peer_copy_kernel(char const* __restrict__ src,
   }
 }
 
-cudaError_t launch_peer_bulk_copy(void* dst_ptr, int dst_dev, void* src_ptr,
+hipError_t launch_peer_bulk_copy(void* dst_ptr, int dst_dev, void* src_ptr,
                                   int src_dev, size_t bytes,
-                                  cudaStream_t stream) {
+                                  hipStream_t stream) {
   constexpr int threads_per_block = 256;
   size_t total_threads = (bytes + threads_per_block - 1) / threads_per_block;
   dim3 blocks;
@@ -26,15 +25,25 @@ cudaError_t launch_peer_bulk_copy(void* dst_ptr, int dst_dev, void* src_ptr,
                                      : static_cast<unsigned int>(total_threads);
   blocks.y = (total_threads + 65534) / 65535;
 
-  peer_copy_kernel<<<blocks, threads_per_block, 0, stream>>>(
+  hipLaunchKernelGGL(peer_copy_kernel, blocks, threads_per_block, 0, stream,
       static_cast<char const*>(src_ptr), static_cast<char*>(dst_ptr), bytes);
 
-  return cudaGetLastError();
+  return hipGetLastError();
 }
 
 __device__ inline void copy128(char const* __restrict__ src,
                                char* __restrict__ dst) {
-  *reinterpret_cast<uint4*>(dst) = *reinterpret_cast<uint4 const*>(src);
+  // HIP equivalent of CUDA's uint4 vectorized copy
+#if defined(__AMDGCN__)
+  // Use AMD's vector load/store instructions
+  typedef struct { uint32_t x, y, z, w; } uint4_hip;
+  *reinterpret_cast<uint4_hip*>(dst) = *reinterpret_cast<uint4_hip const*>(src);
+#else
+  // Fallback implementation
+  for (int i = 0; i < 16; ++i) {
+    dst[i] = src[i];
+  }
+#endif
 }
 
 __global__ void peer_copy_kernel_vec(CopyTask const* __restrict__ tasks,
@@ -88,30 +97,31 @@ __global__ void peer_copy_kernel_vec_batched(CopyTask const* __restrict__ tasks,
   }
 }
 
-cudaError_t launch_peer_bulk_copy2(CopyTask const* host_tasks, int num_tasks,
-                                   cudaStream_t stream, int src_device,
+hipError_t launch_peer_bulk_copy2(CopyTask const* host_tasks, int num_tasks,
+                                   hipStream_t stream, int src_device,
                                    CopyTask*& d_tasks) {
-  cudaMemcpyAsync(d_tasks, host_tasks, num_tasks * sizeof(CopyTask),
-                  cudaMemcpyHostToDevice, stream);
+  hipMemcpyAsync(d_tasks, host_tasks, num_tasks * sizeof(CopyTask),
+                  hipMemcpyHostToDevice, stream);
   constexpr int threads_per_block = 256;
   dim3 blocks(NVLINK_SM_PER_PROCESS);
   if (false) {
-    peer_copy_kernel_vec<<<blocks, threads_per_block, 0, stream>>>(d_tasks,
-                                                                   num_tasks);
+    hipLaunchKernelGGL(peer_copy_kernel_vec, blocks, threads_per_block, 0, stream,
+                       d_tasks, num_tasks);
   } else if (true) {
     int tasks_per_block = num_tasks / NVLINK_SM_PER_PROCESS;
-    peer_copy_kernel_vec_batched<<<blocks, threads_per_block, 0, stream>>>(
+    hipLaunchKernelGGL(peer_copy_kernel_vec_batched, blocks, threads_per_block, 0, stream,
         d_tasks, num_tasks, tasks_per_block);
   } else {
     int tasks_per_block = num_tasks / NVLINK_SM_PER_PROCESS;
     size_t shmem = threads_per_block * 2 /*PIPE_DEPTH*/ * sizeof(int4);
-    peer_copy_kernel_vec_pipelined<2, int4>
-        <<<blocks, threads_per_block, shmem, stream>>>(d_tasks, num_tasks,
-                                                       tasks_per_block);
+    hipLaunchKernelGGL(HIP_KERNEL_NAME(peer_copy_kernel_vec_pipelined<2, int4>),
+        blocks, threads_per_block, shmem, stream, d_tasks, num_tasks, tasks_per_block);
   }
-  return cudaGetLastError();
+  return hipGetLastError();
 }
 
+// Manual implementation of pipeline functionality for HIP
+// Since HIP doesn't have __pipeline_* functions, we implement a simplified version
 template <int PIPE_DEPTH = 2, typename VecT = int4>
 __global__ void peer_copy_kernel_vec_pipelined(
     CopyTask const* __restrict__ tasks, int num_tasks, int tasks_per_block) {
@@ -136,27 +146,25 @@ __global__ void peer_copy_kernel_vec_pipelined(
     const size_t myFirst = tid * vecPerThread;
     const size_t myLast = min(myFirst + vecPerThread, nVec);
 
-    /* Two-slot ring-buffer in shared memory, one slot per outstanding
-       transaction.  Each thread owns one VecT element inside every slot. */
-
-    // wr: slot we will find next
-    // rd: slot index we will retire to global memory next
-    // issued: how many DMAs that are still inflight.
+    // Manual pipelining implementation for HIP
+    // Since we don't have __pipeline_* functions, we use a simple staging approach
     int wr = 0, rd = 0, issued = 0;
 
     for (size_t v = myFirst; v < myLast; ++v) {
-      /* stage 1: async L2→shmem fetch */
-      void const* gptr = src + v * sizeof(VecT);
-      void* sptr = &ring[wr * nThreads + tid];
-      __pipeline_memcpy_async(sptr, gptr, sizeof(VecT));
-      __pipeline_commit();
+      // Stage 1: Manual copy from global memory to shared memory
+      VecT const* gptr = reinterpret_cast<VecT const*>(src + v * sizeof(VecT));
+      VecT* sptr = &ring[wr * nThreads + tid];
+      
+      // Manual copy instead of __pipeline_memcpy_async
+      *sptr = *gptr;
+      __threadfence_block(); // Ensure shared memory write is visible
 
       ++issued;
       wr = (wr + 1) % PIPE_DEPTH;
 
-      /* stage 2: retire oldest when PIPE_DEPTH requests in flight */
+      // Stage 2: retire oldest when PIPE_DEPTH requests in flight
       if (issued == PIPE_DEPTH) {
-        __pipeline_wait_prior(PIPE_DEPTH - 1);
+        __syncthreads(); // Manual synchronization instead of __pipeline_wait_prior
         size_t dstIdx = v - (PIPE_DEPTH - 1);
         *reinterpret_cast<VecT*>(dst + dstIdx * sizeof(VecT)) =
             ring[rd * nThreads + tid];
@@ -165,10 +173,10 @@ __global__ void peer_copy_kernel_vec_pipelined(
       }
     }
 
-    /* drain remaining inflight transactions */
+    // drain remaining inflight transactions
     while (issued) {
       --issued;
-      __pipeline_wait_prior(issued);
+      __syncthreads(); // Manual synchronization
       size_t dstIdx = myLast - issued;
       *reinterpret_cast<VecT*>(dst + dstIdx * sizeof(VecT)) =
           ring[rd * nThreads + tid];
@@ -216,7 +224,7 @@ __global__ void peer_copy_kernel_vec_many(HostToDeviceNVlinkBuffer* rb) {
     CopyTask task;
     bool have = false;
     if (lane == 0) have = pop_global(rb, task);
-    have = __shfl_sync(0xFFFFFFFF, have, 0);
+    have = __shfl(have, 0);
     if (!have) continue;
 
     unsigned long long src_ll = 0, dst_ll = 0;
@@ -224,16 +232,16 @@ __global__ void peer_copy_kernel_vec_many(HostToDeviceNVlinkBuffer* rb) {
       src_ll = (unsigned long long)task.src_ptr;
       dst_ll = (unsigned long long)task.dst_ptr;
     }
-    src_ll = __shfl_sync(0xFFFFFFFF, src_ll, 0);
-    dst_ll = __shfl_sync(0xFFFFFFFF, dst_ll, 0);
-    size_t nbytes = __shfl_sync(0xFFFFFFFF, task.bytes, 0);
+    src_ll = __shfl(src_ll, 0);
+    dst_ll = __shfl(dst_ll, 0);
+    size_t nbytes = __shfl(task.bytes, 0);
 
     char const* __restrict__ src = (char const*)src_ll;
     char* __restrict__ dst = (char*)dst_ll;
 
 #if defined(DEBUG) || !defined(NDEBUG)
     if (((uintptr_t)src & 0xF) || ((uintptr_t)dst & 0xF)) {
-      // rare – but don’t crash the whole grid
+      // rare – but don't crash the whole grid
       if (lane == 0)
         for (size_t i = 0; i < nbytes; ++i) dst[i] = src[i];
       continue;
@@ -280,32 +288,32 @@ __global__ void peer_copy_kernel_vec_persistent(HostToDeviceNVlinkBuffer* rb)
 }
 
 HostToDeviceNVlinkBuffer* initialize_ring_buffer_for_nvlink_forwarding(
-    cudaStream_t stream) {
+    hipStream_t stream) {
   HostToDeviceNVlinkBuffer* rb;
-  cudaError_t err =
-      cudaHostAlloc(reinterpret_cast<void**>(&rb),
-                    sizeof(HostToDeviceNVlinkBuffer), cudaHostAllocMapped);
-  if (err != cudaSuccess) {
+  hipError_t err =
+      hipHostMalloc(reinterpret_cast<void**>(&rb),
+                    sizeof(HostToDeviceNVlinkBuffer));
+  if (err != hipSuccess) {
     fprintf(stderr, "Error allocating ring buffer for NVLink forwarding: %s\n",
-            cudaGetErrorString(err));
+            hipGetErrorString(err));
     std::abort();
   }
 
   new (rb) HostToDeviceNVlinkBuffer{};
   constexpr int threads_per_block = 256;
   dim3 blocks(NVLINK_SM_PER_PROCESS);
-  peer_copy_kernel_vec_many<<<blocks, threads_per_block, 0, stream>>>(rb);
-  err = cudaGetLastError();
-  if (err != cudaSuccess) {
+  hipLaunchKernelGGL(peer_copy_kernel_vec_many, blocks, threads_per_block, 0, stream, rb);
+  err = hipGetLastError();
+  if (err != hipSuccess) {
     fprintf(stderr, "Error launching kernel for NVLink forwarding: %s\n",
-            cudaGetErrorString(err));
+            hipGetErrorString(err));
     std::abort();
   }
   return rb;
 }
 
 bool post_copy_task(HostToDeviceNVlinkBuffer* rb, CopyTask const* host_tasks,
-                    int num_tasks, cudaStream_t stream, int src_device,
+                    int num_tasks, hipStream_t stream, int src_device,
                     CopyTask*& d_tasks) {
   uint64_t cur_head = rb->head;
   uint64_t cur_tail = rb->volatile_tail();

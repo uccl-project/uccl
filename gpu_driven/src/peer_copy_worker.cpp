@@ -1,6 +1,6 @@
 #include "peer_copy_worker.hpp"
 #include "common.hpp"
-#include "peer_copy.cuh"
+#include "peer_copy.hip.h"
 #include "proxy.hpp"
 #include "rdma.hpp"
 #include <mutex>
@@ -18,31 +18,31 @@ thread_local uint64_t task_wrs[RECEIVER_BATCH_SIZE];
 void maybe_enable_peer_access(int src_dev, int dst_dev) {
   if (src_dev == dst_dev) return;
   std::call_once(peer_ok_flag[src_dev][dst_dev], [&]() {
-    cudaSetDevice(dst_dev);
-    cudaError_t err = cudaDeviceEnablePeerAccess(src_dev, 0);
-    if (err != cudaSuccess && err != cudaErrorPeerAccessAlreadyEnabled) {
+    hipSetDevice(dst_dev);
+    hipError_t err = hipDeviceEnablePeerAccess(src_dev, 0);
+    if (err != hipSuccess && err != hipErrorPeerAccessAlreadyEnabled) {
       fprintf(stderr, "Peer access from dst_dev=%d to src_dev=%d failed: %s\n",
-              dst_dev, src_dev, cudaGetErrorString(err));
+              dst_dev, src_dev, hipGetErrorString(err));
     }
 
-    cudaSetDevice(src_dev);
-    err = cudaDeviceEnablePeerAccess(dst_dev, 0);
-    if (err != cudaSuccess && err != cudaErrorPeerAccessAlreadyEnabled) {
+    hipSetDevice(src_dev);
+    err = hipDeviceEnablePeerAccess(dst_dev, 0);
+    if (err != hipSuccess && err != hipErrorPeerAccessAlreadyEnabled) {
       fprintf(stderr, "Peer access from src_dev=%d to dst_dev=%d failed: %s\n",
-              src_dev, dst_dev, cudaGetErrorString(err));
+              src_dev, dst_dev, hipGetErrorString(err));
     }
   });
 }
 
-void sync_and_post(CopyRingBuffer& g_ring, cudaStream_t& stream, int idx) {
+void sync_and_post(CopyRingBuffer& g_ring, hipStream_t& stream, int idx) {
   // printf("async_memcpy_count: %lu, prev_completed_async_memcpy_count: %lu,
   // highest_issued_wr_id: %lu\n",
   //        async_memcpy_count, prev_completed_async_memcpy_count,
   //        highest_issued_wr_id);
   if (async_memcpy_count > prev_completed_async_memcpy_count) {
-    cudaError_t err = cudaStreamSynchronize(stream);
-    if (err != cudaSuccess) {
-      fprintf(stderr, "Kernel execution failed: %s\n", cudaGetErrorString(err));
+    hipError_t err = hipStreamSynchronize(stream);
+    if (err != hipSuccess) {
+      fprintf(stderr, "Kernel execution failed: %s\n", hipGetErrorString(err));
       std::abort();
     }
     remote_notify_sender_that_wr_id_has_completed(
@@ -57,15 +57,15 @@ void peer_copy_worker(CopyRingBuffer& g_ring, int idx) {
   printf("Peer copy worker %d started on CPU core %d\n", idx + 1,
          sched_getcpu());
 
-  cudaStream_t stream;
-  cudaSetDevice(src_device);
-  cudaStreamCreate(&stream);
+  hipStream_t stream;
+  hipSetDevice(src_device);
+  hipStreamCreate(&stream);
   CopyTask* d_tasks;
-  cudaMallocAsync(&d_tasks, RECEIVER_BATCH_SIZE * sizeof(CopyTask), stream);
+  hipMallocAsync(&d_tasks, RECEIVER_BATCH_SIZE * sizeof(CopyTask), stream);
 
 #ifdef REMOTE_PERSISTENT_KERNEL
-  cudaStream_t persistent_stream;
-  cudaStreamCreate(&persistent_stream);
+  hipStream_t persistent_stream;
+  hipStreamCreate(&persistent_stream);
   HostToDeviceNVlinkBuffer* rb =
       initialize_ring_buffer_for_nvlink_forwarding(persistent_stream);
 #endif
@@ -104,13 +104,13 @@ void peer_copy_worker(CopyRingBuffer& g_ring, int idx) {
         std::max(highest_issued_wr_id, task_wrs[copy_batch_size - 1]);
 
     auto st = std::chrono::high_resolution_clock::now();
-    cudaError_t err;
+    hipError_t err;
     std::string func_name;
 
     if (false) {
-      err = cudaMemcpyPeerAsync(t.dst_ptr, t.dst_dev, t.src_ptr, src_device,
+      err = hipMemcpyPeerAsync(t.dst_ptr, t.dst_dev, t.src_ptr, src_device,
                                 t.bytes * copy_batch_size, stream);
-      func_name = "cudaMemcpyPeerAsync";
+      func_name = "hipMemcpyPeerAsync";
     } else if (false) {
       err = launch_peer_bulk_copy(t.dst_ptr, t.dst_dev, t.src_ptr, src_device,
                                   t.bytes * copy_batch_size, stream);
@@ -133,9 +133,9 @@ void peer_copy_worker(CopyRingBuffer& g_ring, int idx) {
                                       src_device, d_tasks);
     }
 #endif
-    if (err != cudaSuccess) {
+    if (err != hipSuccess) {
       fprintf(stderr, "%s failed (%s) wr_id=%llu\n", func_name.c_str(),
-              cudaGetErrorString(err),
+              hipGetErrorString(err),
               static_cast<unsigned long long>(t.wr_id));
       std::abort();
     }
@@ -143,10 +143,10 @@ void peer_copy_worker(CopyRingBuffer& g_ring, int idx) {
     if (async_memcpy_count % kRemoteNVLinkBatchSize == 0 ||
         async_memcpy_count - prev_completed_async_memcpy_count >=
             kRemoteNVLinkBatchSize) {
-      err = cudaStreamSynchronize(stream);
-      if (err != cudaSuccess) {
+      err = hipStreamSynchronize(stream);
+      if (err != hipSuccess) {
         fprintf(stderr, "Kernel execution failed: %s\n",
-                cudaGetErrorString(err));
+                hipGetErrorString(err));
         std::abort();
       }
 
@@ -165,7 +165,7 @@ void peer_copy_worker(CopyRingBuffer& g_ring, int idx) {
             std::chrono::high_resolution_clock::now() - st)
             .count();
   }
-  cudaFreeAsync(d_tasks, stream);
-  cudaStreamSynchronize(stream);
-  cudaStreamDestroy(stream);
+  hipFreeAsync(d_tasks, stream);
+  hipStreamSynchronize(stream);
+  hipStreamDestroy(stream);
 }

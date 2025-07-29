@@ -1,9 +1,22 @@
 #include "common.hpp"
-#include "gpu_kernel.cuh"
-#include "ring_buffer.cuh"
-#include <cuda_pipeline.h>
+#include "gpu_kernel.hip.h"
+#include "ring_buffer.hip.h"
+#include <hip/hip_runtime.h>
 #include <stdint.h>
 #include <stdio.h>
+
+// HIP equivalent of clock64() - using wall clock time
+__device__ __forceinline__ unsigned long long hip_clock64() {
+#if defined(__AMDGCN__)
+  // AMD specific clock implementation
+  unsigned long long clock_val;
+  asm volatile("s_memrealtime %0" : "=s"(clock_val));
+  return clock_val;
+#else
+  // Fallback implementation
+  return static_cast<unsigned long long>(clock());
+#endif
+}
 
 __global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs) {
   int const bid = blockIdx.x;
@@ -42,7 +55,7 @@ __global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs) {
           return;
         }
         if (complete >= kWarmupOps) {
-          unsigned long long t1 = clock64();
+          unsigned long long t1 = hip_clock64();
           unsigned long long cycles =
               t1 - start_cycle_smem[complete & kQueueMask];
           cycle_accum_smem += cycles;
@@ -73,7 +86,7 @@ __global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs) {
     }
 
     for (int i = 0; i < todo; ++i) {
-      unsigned long long t0 = clock64();
+      unsigned long long t0 = hip_clock64();
       start_cycle_smem[(my_hdr + i) & kQueueMask] = t0;
       rb->set_buffer(
           my_hdr + i,
@@ -98,7 +111,7 @@ __global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs) {
 #ifdef MEASURE_PER_OP_LATENCY
   while (complete < kIterations) {
     if (complete >= kWarmupOps && complete < ld_volatile(&rb->tail)) {
-      unsigned long long t1 = clock64();
+      unsigned long long t1 = hip_clock64();
       cycle_accum_smem += (t1 - start_cycle_smem[complete & kQueueMask]);
       ++op_count_smem;
     } else {
@@ -110,6 +123,6 @@ __global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs) {
   rb->cycle_accum = cycle_accum_smem;
   rb->op_count = op_count_smem;
 #endif
-  rb->cycle_end = clock64();
+  rb->cycle_end = hip_clock64();
   printf("Device Block %d done\n", bid);
 }

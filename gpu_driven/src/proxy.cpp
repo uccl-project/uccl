@@ -1,14 +1,14 @@
 #include "proxy.hpp"
 #include "common.hpp"
 #include "rdma.hpp"
-#include "ring_buffer.cuh"
+#include "ring_buffer.hip.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <mutex>
 #include <vector>
 #include <assert.h>
-#include <cuda_runtime.h>
+#include <hip/hip_runtime.h>
 #include <stdio.h>
 #include <unistd.h>
 

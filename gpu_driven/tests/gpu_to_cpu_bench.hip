@@ -3,20 +3,20 @@
 #include <tuple>
 #include <vector>
 #include <assert.h>
-#include <cuda_pipeline.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <hip/hip_runtime.h>
 
 static constexpr int kNumThBlocks = 8;
 static constexpr int kNumThPerBlock = 512;
 
-#define cudaCheckErrors(msg)                                  \
+#define hipCheckErrors(msg)                                   \
   do {                                                        \
-    cudaError_t __err = cudaGetLastError();                   \
-    if (__err != cudaSuccess) {                               \
+    hipError_t __err = hipGetLastError();                     \
+    if (__err != hipSuccess) {                                \
       fprintf(stderr, "Fatal error: %s (%s at %s:%d)\n", msg, \
-              cudaGetErrorString(__err), __FILE__, __LINE__); \
+              hipGetErrorString(__err), __FILE__, __LINE__);  \
       fprintf(stderr, "*** FAILED - ABORTING\n");             \
       exit(1);                                                \
     }                                                         \
@@ -39,14 +39,14 @@ __global__ void gpu_issue_command(GPUSignal* signals, int iterations) {
 
   if (tid == 0) {
     for (int i = 0; i < iterations; i++) {
-      unsigned long long start = clock64();
+      unsigned long long start = wall_clock64();
       signal->cmd = i + 1;
 
       while (signal->ack != (i + 1)) {
         // __nanosleep(10);
         ;
       }
-      unsigned long long end = clock64();
+      unsigned long long end = wall_clock64();
       // printf("Block %d: Command %d issued, acked in %llu cycles\n", bid, i +
       // 1, end - start);
       cycle_accum[bid] += (end - start);
@@ -67,20 +67,20 @@ void cpu_polling(GPUSignal* signal, int iterations, int block_id) {
 }
 
 // make -j
-// CUDA_MODULE_LOADING=EAGER ./gpu_to_cpu_bench
+// ./gpu_to_cpu_bench
 // Block 0: Average latency = 3.82 us over 1000 iterations, avg_cycles: 5391.95
 int main() {
-  cudaStream_t stream1;
-  cudaStreamCreate(&stream1);
-  cudaCheckErrors("cudaStreamCreate failed");
+  hipStream_t stream1;
+  hipStreamCreate(&stream1);
+  hipCheckErrors("hipStreamCreate failed");
 
-  cudaDeviceProp prop;
-  cudaGetDeviceProperties(&prop, 0);
+  hipDeviceProp_t prop;
+  hipGetDeviceProperties(&prop, 0);
   printf("clock rate: %d kHz\n", prop.clockRate);
 
   GPUSignal* signals;
-  cudaHostAlloc(&signals, sizeof(GPUSignal) * kNumThBlocks,
-                cudaHostAllocMapped);
+  hipHostMalloc(&signals, sizeof(GPUSignal) * kNumThBlocks,
+                hipHostMallocMapped);
 
   for (int i = 0; i < kNumThBlocks; ++i) {
     signals[i].cmd = 0;
@@ -95,12 +95,12 @@ int main() {
     cpu_threads.emplace_back(cpu_polling, &signals[i], iterations, i);
   }
 
-  gpu_issue_command<<<kNumThBlocks, kNumThPerBlock, 0, stream1>>>(signals,
-                                                                  iterations);
-  cudaCheckErrors("gpu_issue_command kernel failed");
+  hipLaunchKernelGGL(gpu_issue_command, kNumThBlocks, kNumThPerBlock, 0, stream1,
+                     signals, iterations);
+  hipCheckErrors("gpu_issue_command kernel failed");
 
-  cudaStreamSynchronize(stream1);
-  cudaCheckErrors("cudaStreamSynchronize failed");
+  hipStreamSynchronize(stream1);
+  hipCheckErrors("hipStreamSynchronize failed");
 
   for (auto& t : cpu_threads) {
     t.join();
@@ -108,9 +108,9 @@ int main() {
 
   unsigned long long host_cycle_accum[kNumThBlocks];
   unsigned int host_op_count[kNumThBlocks];
-  cudaMemcpyFromSymbol(host_cycle_accum, cycle_accum, sizeof(host_cycle_accum));
-  cudaMemcpyFromSymbol(host_op_count, op_count, sizeof(host_op_count));
-  cudaCheckErrors("cudaMemcpyFromSymbol failed");
+  hipMemcpyFromSymbol(host_cycle_accum, HIP_SYMBOL(cycle_accum), sizeof(host_cycle_accum));
+  hipMemcpyFromSymbol(host_op_count, HIP_SYMBOL(op_count), sizeof(host_op_count));
+  hipCheckErrors("hipMemcpyFromSymbol failed");
 
   for (int i = 0; i < kNumThBlocks; ++i) {
     double avg_cycles =
@@ -122,8 +122,8 @@ int main() {
         i, avg_latency_us, host_op_count[i], avg_cycles);
   }
 
-  cudaFreeHost(signals);
-  cudaCheckErrors("cudaFreeHost failed");
-  cudaStreamDestroy(stream1);
-  cudaCheckErrors("cudaStreamDestroy failed");
+  hipHostFree(signals);
+  hipCheckErrors("hipHostFree failed");
+  hipStreamDestroy(stream1);
+  hipCheckErrors("hipStreamDestroy failed");
 }
