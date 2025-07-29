@@ -479,8 +479,7 @@ void post_receive_buffer_for_imm() {
   std::vector<ibv_sge> sges(kMaxOutstandingRecvs);
 
   for (size_t i = 0; i < kMaxOutstandingRecvs; ++i) {
-    const size_t RX_SLOTS = kRemoteBufferSize / kObjectSize;
-    int offset = i % RX_SLOTS;
+    int offset = kNumThBlocks > i ? i : (i % kNumThBlocks);
 
     sges[i] = {.addr = (uintptr_t)mr->addr + offset * kObjectSize,
                .length = kObjectSize,

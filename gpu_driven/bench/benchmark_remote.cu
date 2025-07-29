@@ -31,7 +31,6 @@ int main(int argc, char** argv) {
   cudaCheckErrors("gpu_buffer allocation failed");
 
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
-  // Optional per-GPU staging on rank 1 (unchanged)
   if (rank == 1) {
     for (int d = 0; d < NUM_GPUS; ++d) {
       cudaSetDevice(d);
