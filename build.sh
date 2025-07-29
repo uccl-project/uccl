@@ -7,18 +7,19 @@ set -e
 # a purpose-built Docker image derived from Ubuntu 22.04.
 #
 # Usage:
-#   ./build.sh [cuda|rocm] [3.13]
+#   ./build.sh [cuda|rocm] [all|rdma|p2p|efa] [3.13]
 #
 # The wheels are written to wheelhouse-[cuda|rocm]
 # -----------------------
 
 TARGET=${1:-cuda}
-PY_VER=${2:-$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")}
+BUILD_TYPE=${2:-all}
+PY_VER=${3:-$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")}
 ARCH="$(uname -m)"
 IS_EFA=$(ls /sys/class/infiniband/ | grep rdmap || true)
 
 if [[ $TARGET != "cuda" && $TARGET != "rocm" ]]; then
-  echo "Usage: $0 [cuda|rocm]" >&2
+  echo "Usage: $0 [cuda|rocm] [all|rdma|p2p|efa] [PY_VER]" >&2
 fi
 
 if [[ $ARCH == "aarch64" && $TARGET == "rocm" ]]; then
@@ -114,6 +115,7 @@ build_p2p() {
 
   echo "[container] Copying P2P .so to uccl/"
   mkdir -p uccl
+  mkdir -p uccl/lib
   cp p2p/p2p.*.so uccl/
 }
 
@@ -153,20 +155,29 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -e ARCH="${ARCH}" \
   -e IS_EFA="${IS_EFA}" \
   -e WHEEL_DIR="${WHEEL_DIR}" \
+  -e BUILD_TYPE="${BUILD_TYPE}" \
   -e FUNCTION_DEF="$(declare -f build_rdma build_efa build_p2p)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
     set -euo pipefail
 
     eval "$FUNCTION_DEF"
-    build_rdma "$TARGET" "$ARCH" "$IS_EFA"
-    build_efa "$TARGET" "$ARCH" "$IS_EFA"
-    build_p2p "$TARGET" "$ARCH" "$IS_EFA"
+    if [[ "$BUILD_TYPE" == "rdma" ]]; then
+      build_rdma "$TARGET" "$ARCH" "$IS_EFA"
+    elif [[ "$BUILD_TYPE" == "efa" ]]; then
+      build_efa "$TARGET" "$ARCH" "$IS_EFA"
+    elif [[ "$BUILD_TYPE" == "p2p" ]]; then
+      build_p2p "$TARGET" "$ARCH" "$IS_EFA"
+    elif [[ "$BUILD_TYPE" == "all" ]]; then
+      build_rdma "$TARGET" "$ARCH" "$IS_EFA"
+      build_efa "$TARGET" "$ARCH" "$IS_EFA"
+      build_p2p "$TARGET" "$ARCH" "$IS_EFA"
+    fi
 
     ls -lh uccl/
     ls -lh uccl/lib/
     python3 -m build
-    auditwheel repair dist/uccl-*.whl --exclude libibverbs.so.1 -w /io/${WHEEL_DIR}
+    auditwheel repair dist/uccl-*.whl --exclude libibverbs.so.1 --exclude libcudart.so.12 --exclude libamdhip64.so.6 -w /io/${WHEEL_DIR}
     
     # Add backend tag to wheel filename using local version identifier
     if [[ "$TARGET" == "rocm" ]]; then

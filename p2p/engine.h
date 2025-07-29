@@ -1,6 +1,7 @@
 #pragma once
 
 #include "transport.h"
+#include "util/gpu_rt.h"
 #include "util/jring.h"
 #include "util/shared_pool.h"
 #include "util/util.h"
@@ -43,7 +44,7 @@ class Endpoint {
   const uint32_t kMaxInflightChunks = 8;
 
  public:
-  cudaStream_t pick_stream() {
+  gpuStream_t pick_stream() {
     if (streams_.empty()) return nullptr;
     uint32_t i =
         rr_stream_.fetch_add(1, std::memory_order_relaxed) % streams_.size();
@@ -142,13 +143,12 @@ class Endpoint {
    *   data: the data to receive
    *   size: the size of the data
    */
-  bool recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t max_size,
-            size_t* recv_size);
+  bool recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size);
 
   /* Receive a vector of data chunks. Blocking. */
   bool recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-             std::vector<void*> data_v, std::vector<size_t> max_size_v,
-             std::vector<size_t>& recv_size_v, size_t num_iovs);
+             std::vector<void*> data_v, std::vector<size_t> size_v,
+             size_t num_iovs);
 
   /* Receive data from the remote server asynchronously. */
   bool recv_async(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
@@ -202,10 +202,6 @@ class Endpoint {
     return rank2conn_;
   }
 
-  int create_listen_socket(uint16_t port);
-
-  int listen_fd_ = -1;
-
 #ifdef USE_REDIS
   bool publish_redis(std::string const& redis_uri, std::string const& key,
                      PeerInfo const& info);
@@ -243,19 +239,5 @@ class Endpoint {
   // Assuming 1TB GPU memory, 128KB KV block size.
   static constexpr size_t kMaxNumChunksPerTransfer = 1024ul * 1024 * 1024 / 128;
   std::atomic<uint32_t> rr_stream_{0};
-  std::vector<cudaStream_t> streams_;
-
-  // Used for large KV transfer.
-  class TransferMetaData {
-   public:
-    TransferMetaData() {
-      for (size_t i = 0; i < kMaxNumChunksPerTransfer; i++) {
-        chunk_size_v[i] = 0;
-      }
-    }
-    uint64_t chunk_size_v[kMaxNumChunksPerTransfer];
-  };
-
-  TransferMetaData* transfer_metadata_;
-  uint64_t transfer_metadata_mr_id_;
+  std::vector<gpuStream_t> streams_;
 };

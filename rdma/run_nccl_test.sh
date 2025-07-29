@@ -18,14 +18,14 @@ CTRL_NIC="enp164s0"
 # Path of NCCL
 NCCL_PATH="${UCCL_HOME}/thirdparty/nccl/build/lib"
 
-# Number of chunnels.
-NUM_CHUNNEL=8
+# Number of channels.
+NUM_CHANNELS=8
 # Chunk size.
 # 131072, 262144, 524288
 P2P_NET_CHUNKSIZE=524288
 # Buffer size.
 BUFFSIZE=8388608
-# Number of chunnels per NET peer.
+# Number of channels per NET peer.
 # CHANNELS_NET_PEER=-1
 CHANNELS_NET_PEER=8
 # Algorithm
@@ -54,11 +54,11 @@ fi
 
 if [ "$TEST" = "rccl" ]; then
     echo "Running RCCL test"
-    plugin_path=""
+    PLUGIN_PATH=""
 elif [ "$TEST" = "uccl" ]; then
     echo "Running UCCL test"
-    plugin_path=`python -c "import uccl; print(uccl.nccl_plugin_path())"`
-    echo "plugin_path: ${plugin_path}"
+    PLUGIN_PATH=`python -c "import uccl; print(uccl.nccl_PLUGIN_PATH())"`
+    echo "PLUGIN_PATH: ${PLUGIN_PATH}"
 else
     echo "Unsupport benchmark type."
     exit 1
@@ -70,7 +70,7 @@ PXN_DISABLE=1
 
 echo "Running test: ${PROG_NAME}, ${TEST}, ${NUM_PROCS} nodes, ${NUM_GPUS_PER_PROC} GPUs per process, $((NUM_PROCS * NUM_GPUS_PER_PROC)) GPUs in total."
 
-echo -e "Details: NCCL_NCHANNELS=${NUM_CHUNNEL} \n\t NCCL_P2P_NET_CHUNKSIZE=${P2P_NET_CHUNKSIZE} \n\t NCCL_BUFFSIZE=${BUFFSIZE} \n\t NCCL_NCHANNELS_PER_NET_PEER=${CHANNELS_NET_PEER} \n\t NCCL_ALGO=${ALGO} \n\t NCCL_IB_QPS_PER_CONNECTION=${NUM_QPS_PER_CONNECTION} \n\t NCCL_IB_SPLIT_DATA_ON_QPS=${SPLIT_DATA_ON_QPS} \n\t NCCL_PXN_DISABLE=${PXN_DISABLE} \n\t NCCL_P2P_DISABLE=${P2P_DISABLE} \n\t NCCL_SHM_DISABLE=${SHM_DISABLE} \n\t NCCL_IB_HCA=${HCA_NAMES}"
+echo -e "Details: NCCL_NCHANNELS=${NUM_CHANNELS} \n\t NCCL_P2P_NET_CHUNKSIZE=${P2P_NET_CHUNKSIZE} \n\t NCCL_BUFFSIZE=${BUFFSIZE} \n\t NCCL_NCHANNELS_PER_NET_PEER=${CHANNELS_NET_PEER} \n\t NCCL_ALGO=${ALGO} \n\t NCCL_IB_QPS_PER_CONNECTION=${NUM_QPS_PER_CONNECTION} \n\t NCCL_IB_SPLIT_DATA_ON_QPS=${SPLIT_DATA_ON_QPS} \n\t NCCL_PXN_DISABLE=${PXN_DISABLE} \n\t NCCL_P2P_DISABLE=${P2P_DISABLE} \n\t NCCL_SHM_DISABLE=${SHM_DISABLE} \n\t NCCL_IB_HCA=${HCA_NAMES}"
 
 echo $NUM_PROCS
 echo $PROCS_PER_NODE
@@ -83,6 +83,8 @@ mpirun --allow-run-as-root -np ${NUM_PROCS} -N ${PROCS_PER_NODE} \
     -x NCCL_IB_PCI_RELAXED_ORDERING=1 \
     -x NCCL_IB_GID_INDEX=3 \
     -x NCCL_ALGO=Ring \
+    -x NCCL_MAX_NCHANNELS=${NUM_CHANNELS} \
+    -x NCCL_MIN_NCHANNELS=${NUM_CHANNELS} \
     -x CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
     -x NCCL_SOCKET_IFNAME=${CTRL_NIC} \
     -x NCCL_IGNORE_CPU_AFFINITY=1 \
@@ -94,7 +96,7 @@ mpirun --allow-run-as-root -np ${NUM_PROCS} -N ${PROCS_PER_NODE} \
     -x LD_LIBRARY_PATH=${NCCL_PATH}:${LD_LIBRARY_PATH} \
     -x NCCL_IB_MERGE_NICS=0 \
     -x NCCL_NVLS_ENABLE=0 \
-    -x NCCL_NET_PLUGIN=$plugin_path \
+    -x NCCL_NET_PLUGIN=${PLUGIN_PATH} \
     --mca btl tcp,self \
     --mca btl_tcp_if_include ${CTRL_NIC} \
     ${UCCL_HOME}/thirdparty/nccl-tests/build/${PROG_NAME} -c 0 \
