@@ -240,7 +240,7 @@ if __name__ == "__main__":
         device=device,
     )
 
-    data = run_fcp_p2p(
+    data = run_ring_p2p(
         block_size=args.block_size,
         num_qo_heads=args.num_qo_heads,
         gqa_group_size=args.gqa_group_size,
