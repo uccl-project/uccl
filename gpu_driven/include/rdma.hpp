@@ -81,6 +81,7 @@ void handle_peer_copy(uint64_t wr_id, uint32_t imm, int src_dev, int dst_dev,
                       void* src_ptr, void* dst_ptr, size_t num_bytes);
 
 void per_thread_rdma_init(void* gpu_buf, size_t bytes, int rank, int block_idx);
+void fill_local_gid(RDMAConnectionInfo* local_info);
 
 extern void* per_GPU_device_buf[NUM_GPUS];
 

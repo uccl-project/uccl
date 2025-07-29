@@ -108,11 +108,11 @@ hipError_t launch_peer_bulk_copy2(CopyTask const* host_tasks, int num_tasks,
     hipLaunchKernelGGL(peer_copy_kernel_vec, blocks, threads_per_block, 0, stream,
                        d_tasks, num_tasks);
   } else if (true) {
-    int tasks_per_block = num_tasks / NVLINK_SM_PER_PROCESS;
+    int tasks_per_block = (num_tasks + NVLINK_SM_PER_PROCESS - 1) / NVLINK_SM_PER_PROCESS;
     hipLaunchKernelGGL(peer_copy_kernel_vec_batched, blocks, threads_per_block, 0, stream,
         d_tasks, num_tasks, tasks_per_block);
   } else {
-    int tasks_per_block = num_tasks / NVLINK_SM_PER_PROCESS;
+    int tasks_per_block = (num_tasks + NVLINK_SM_PER_PROCESS - 1) / NVLINK_SM_PER_PROCESS;
     size_t shmem = threads_per_block * 2 /*PIPE_DEPTH*/ * sizeof(int4);
     hipLaunchKernelGGL(HIP_KERNEL_NAME(peer_copy_kernel_vec_pipelined<2, int4>),
         blocks, threads_per_block, shmem, stream, d_tasks, num_tasks, tasks_per_block);

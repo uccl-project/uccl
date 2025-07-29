@@ -23,6 +23,15 @@
     }                                                               \
   } while (0)
 
+#define HIP_CHECK(cmd)                                                                             \
+    do {                                                                                           \
+        hipError_t err = cmd;                                                                      \
+        if (err != hipSuccess) {                                                                   \
+            fprintf(stderr, "HIP error (%s:%d): %s\n", __FILE__, __LINE__, hipGetErrorString(err)); \
+            exit(EXIT_FAILURE);                                                                    \
+        }                                                                                          \
+    } while (0)
+
 #define hipCheckErrors(msg)                                  \
   do {                                                        \
     hipError_t __err = hipGetLastError();                   \

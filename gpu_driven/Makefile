@@ -8,9 +8,10 @@ INC = -I./ -I../include -I$(HIP_HOME)/include -I${CONDA_LIB_HOME}/../include -L$
 LIBS = -lz -lelf -libverbs -L ${HIP_HOME}/lib -lamdhip64
 LIBS_SHARED = -lglog -lgflags -lgtest -lz -lelf -libverbs
 override CXXFLAGS += -O3 -g -std=c++17 -Wno-pointer-arith -Wno-interference-size -fPIC -D__HIP_PLATFORM_AMD__
+override HIPFLAGS += -O3 -g -std=c++17 -Wno-pointer-arith -Wno-interference-size -fPIC -D__HIP_PLATFORM_AMD__ --offload-arch=gfx942
 DEPS = *.h
-PLUGIN_SO = librccl-net-uccl.so
-NCCL_INC:= -I$(RCCL_HOME)/build/release/include -I$(RCCL_HOME)/src/include -I$(HIP_HOME)/include
+# PLUGIN_SO = librccl-net-uccl.so
+# NCCL_INC:= -I$(RCCL_HOME)/build/release/include -I$(RCCL_HOME)/src/include -I$(HIP_HOME)/include
 
 # HIP compiler
 HIPCC := $(HIP_HOME)/bin/hipcc
@@ -48,7 +49,7 @@ TARGET_LOCAL := benchmark_local
 TARGET_REMOTE := benchmark_remote
 
 .PHONY: build
-build: $(test_bin) $(lib_obj) $(PLUGIN_SO) librdma_hip.a $(TARGET_LOCAL) $(TARGET_REMOTE)
+build: $(test_bin) $(lib_obj) librdma_hip.a $(TARGET_LOCAL) $(TARGET_REMOTE)
 
 # Test binary compilation
 %_test: %_test.cc $(DEPS) $(lib_obj)
@@ -64,11 +65,11 @@ build: $(test_bin) $(lib_obj) $(PLUGIN_SO) librdma_hip.a $(TARGET_LOCAL) $(TARGE
 
 # HIP compilation rule
 %.o: %.hip
-	$(HIPCC) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+	$(HIPCC) $(HIPFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
-# Plugin shared library
-$(PLUGIN_SO): nccl_plugin.cc $(DEPS) $(lib_obj)
-	g++ $(NCCL_INC) -fPIC -shared -o $@ -Wl,-soname,$(PLUGIN_SO) nccl_plugin.cc $(lib_obj) $(INC) $(LIBS_SHARED) $(CXXFLAGS)
+# Plugin shared library - commented out as NCCL plugin is not part of this project
+# $(PLUGIN_SO): nccl_plugin.cc $(DEPS) $(lib_obj)
+# 	g++ $(NCCL_INC) -fPIC -shared -o $@ -Wl,-soname,$(PLUGIN_SO) nccl_plugin.cc $(lib_obj) $(INC) $(LIBS_SHARED) $(CXXFLAGS)
 
 # Static library
 librdma_hip.a: $(lib_obj)
@@ -76,15 +77,15 @@ librdma_hip.a: $(lib_obj)
 
 # Benchmark targets - linking with HIP
 $(TARGET_LOCAL): $(OBJ_LOCAL)
-	$(HIPCC) $(CXXFLAGS) $(INCLUDES) $(OBJ_LOCAL) $(LIBS) -o $@
+	$(HIPCC) $(HIPFLAGS) $(INCLUDES) $(OBJ_LOCAL) $(LIBS) -o $@
 
 $(TARGET_REMOTE): $(OBJ_REMOTE)
-	$(HIPCC) $(CXXFLAGS) $(INCLUDES) $(OBJ_REMOTE) $(LIBS) -o $@
+	$(HIPCC) $(HIPFLAGS) $(INCLUDES) $(OBJ_REMOTE) $(LIBS) -o $@
 
 # Clean all generated files
 .PHONY: clean
 clean:
-	rm -f *.o $(test_bin) $(PLUGIN_SO) librdma_hip.a $(TARGET_LOCAL) $(TARGET_REMOTE) *.d src/*.d bench/*.d
+	rm -f *.o $(test_bin) librdma_hip.a $(TARGET_LOCAL) $(TARGET_REMOTE) *.d src/*.d bench/*.d
 
 # Automatically include dependency files if they exist
 -include $(OBJ_LOCAL:.o=.d) $(OBJ_REMOTE:.o=.d)

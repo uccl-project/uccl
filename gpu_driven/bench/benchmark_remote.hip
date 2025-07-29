@@ -49,6 +49,25 @@ int main(int argc, char** argv) {
 
   printf("Allocated %zu bytes of GPU buffer at %p\n", total_size, gpu_buffer);
 
+  // Initialize per_GPU_device_buf array
+  for (int d = 0; d < NUM_GPUS; ++d) {
+    per_GPU_device_buf[d] = nullptr;
+  }
+
+  // Initialize per_GPU_device_buf for remote node
+  if (rank == 1) {
+    for (int d = 0; d < NUM_GPUS; ++d) {
+      hipSetDevice(d);
+      hipMalloc(&per_GPU_device_buf[d], total_size);
+      if (per_GPU_device_buf[d] == nullptr) {
+        fprintf(stderr, "Failed to allocate GPU buffer on GPU %d\n", d);
+        exit(1);
+      }
+      printf("Allocated %zu bytes for per_GPU_device_buf[%d] at %p\n", total_size, d, per_GPU_device_buf[d]);
+    }
+    hipSetDevice(0);
+  }
+
   // Initialize global RDMA resources
   RDMAConnectionInfo local_info;
   global_rdma_init(gpu_buffer, total_size, &local_info, rank);

@@ -7,11 +7,14 @@
 
 // HIP equivalent of clock64() - using wall clock time
 __device__ __forceinline__ unsigned long long hip_clock64() {
-#if defined(__AMDGCN__)
-  // AMD specific clock implementation
+#if defined(__AMDGCN__) && defined(__GFX942__)
+  // AMD specific clock implementation for gfx942
   unsigned long long clock_val;
   asm volatile("s_memrealtime %0" : "=s"(clock_val));
   return clock_val;
+#elif defined(__AMDGCN__)
+  // More compatible AMD implementation
+  return __builtin_amdgcn_s_memrealtime();
 #else
   // Fallback implementation
   return static_cast<unsigned long long>(clock());

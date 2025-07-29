@@ -25,7 +25,7 @@
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
-#include "util/util_simple.h"
+#include "util_simple.h"
 #include <stdio.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -127,6 +127,16 @@ void per_thread_rdma_init(void* gpu_buf, size_t bytes, int rank,
                           int block_idx) {
   if (context) return;  // already initialized
 
+  hipError_t err = hipSetDevice(0);
+  int current_device;
+  hipGetDevice(&current_device);
+  printf("Thread %d: Current device: %d\n", block_idx, current_device);
+  if (err != hipSuccess) {
+    fprintf(stderr, "Thread %d: Failed to set device to GPU 0. Error: %s\n", 
+            block_idx, hipGetErrorString(err));
+    exit(1);
+}
+
   struct ibv_device** dev_list = ibv_get_device_list(NULL);
   if (!dev_list) {
     perror("Failed to get IB devices list");
@@ -163,18 +173,70 @@ void per_thread_rdma_init(void* gpu_buf, size_t bytes, int rank,
     exit(1);
   }
   mr = ibv_reg_mr(pd, gpu_buf, bytes,
-                  IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                      IBV_ACCESS_RELAXED_ORDERING);
+                  IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
 
   if (!mr) {
     perror("ibv_reg_mr failed");
     exit(1);
   }
 
+  printf("[Receiver Thread %d] Registered MR. Start: %p, Size: %zu, End: %p\n",
+    block_idx, mr->addr, mr->length, (char*)mr->addr + mr->length);
+
   if (rkey != 0) {
     fprintf(stderr, "Warning: rkey already set (%x), overwriting\n", rkey);
   }
   rkey = mr->rkey;
+}
+
+void fill_local_gid(RDMAConnectionInfo* local_info) {
+  if (!context) {
+    fprintf(stderr, "Error: context not initialized when filling GID\n");
+    exit(1);
+  }
+  
+  // Query port attributes to determine if this is RoCE (Ethernet) or InfiniBand
+  struct ibv_port_attr port_attr;
+  if (ibv_query_port(context, 1, &port_attr)) {
+    perror("Failed to query port for GID");
+    exit(1);
+  }
+  
+  // For RoCE (Ethernet), we need to fill the GID
+  
+  if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
+    union ibv_gid local_gid;
+    int gid_index = 1;
+    if (ibv_query_gid(context, 1, gid_index, &local_gid)) {
+      perror("Failed to query GID");
+      exit(1);
+    }
+    
+    // Copy the GID to the connection info
+    memcpy(local_info->gid, &local_gid, 16);
+    printf("[RDMA] Local GID filled for RoCE (Ethernet) connection: "
+           "%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x\n",
+           local_info->gid[0], local_info->gid[1], local_info->gid[2], local_info->gid[3],
+           local_info->gid[4], local_info->gid[5], local_info->gid[6], local_info->gid[7],
+           local_info->gid[8], local_info->gid[9], local_info->gid[10], local_info->gid[11],
+           local_info->gid[12], local_info->gid[13], local_info->gid[14], local_info->gid[15]);
+  } else {
+    // For InfiniBand, GID is not strictly required, but we can still fill it
+    union ibv_gid local_gid;
+    if (ibv_query_gid(context, 1, 0, &local_gid) == 0) {
+      memcpy(local_info->gid, &local_gid, 16);
+      printf("[RDMA] Local GID filled for InfiniBand connection: "
+             "%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x\n",
+             local_info->gid[0], local_info->gid[1], local_info->gid[2], local_info->gid[3],
+             local_info->gid[4], local_info->gid[5], local_info->gid[6], local_info->gid[7],
+             local_info->gid[8], local_info->gid[9], local_info->gid[10], local_info->gid[11],
+             local_info->gid[12], local_info->gid[13], local_info->gid[14], local_info->gid[15]);
+    } else {
+      // If GID query fails for InfiniBand, zero it out
+      memset(local_info->gid, 0, 16);
+      printf("[RDMA] GID zeroed for InfiniBand connection (GID query failed)\n");
+    }
+  }
 }
 
 void global_rdma_init(void* gpu_buf, size_t bytes, RDMAConnectionInfo* local,
@@ -263,7 +325,9 @@ void create_per_thread_qp(void* gpu_buffer, size_t size,
   local_info->addr = reinterpret_cast<uintptr_t>(gpu_buffer);
   local_info->psn = rand() & 0xffffff;      // random psn
   local_info->ack_psn = rand() & 0xffffff;  // random ack psn
-  memset(local_info->gid, 0, 16);
+  
+  // Fill the local GID properly for RoCE/Ethernet environments
+  fill_local_gid(local_info);
   printf(
       "Local RDMA info: addr=0x%lx, rkey=0x%x, qp_num=%u, psn=%u, "
       "ack_qp_num=%u, ack_psn: %u\n",
@@ -303,8 +367,7 @@ void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info,
 
   // 3. Register the GPU memory
   mr = ibv_reg_mr(pd, gpu_buffer, size,
-                  IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                      IBV_ACCESS_RELAXED_ORDERING);
+                  IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
 
   if (!mr) {
     perror("ibv_reg_mr (GPUDirect) failed");
@@ -384,7 +447,7 @@ void modify_qp_to_rtr(RDMAConnectionInfo* remote) {
     attr.ah_attr.grh.hop_limit = 1;
     // Fill GID from remote_info
     memcpy(&attr.ah_attr.grh.dgid, remote->gid, 16);
-    attr.ah_attr.grh.sgid_index = 0;  // Assume GID index 0
+    attr.ah_attr.grh.sgid_index = 1;  // Assume GID index 0
   } else {
     attr.ah_attr.is_global = 0;
     attr.ah_attr.dlid = remote->lid;
@@ -561,7 +624,10 @@ void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
     sges[i].addr = (uintptr_t)buf + offset * bytes;
     sges[i].length = (uint32_t)bytes;
     sges[i].lkey = mr->lkey;
-
+    uintptr_t target_remote_addr = remote_addr + offset * bytes;
+    printf("[Sender Thread %d] Posting write to remote addr: %p (base: %p + offset_bytes: %lu)\n",
+           -1, /* block_idx is not available here, use a placeholder */
+           (void*)target_remote_addr, (void*)remote_addr, offset * bytes);
     wrs[i].sg_list = &sges[i];
     wrs[i].num_sge = 1;
     wrs[i].wr.rdma.remote_addr = remote_addr + offset * bytes;
@@ -674,12 +740,12 @@ void rdma_write_stub(void* local_dev_ptr, size_t bytes) {
 }
 
 #define KNL_MODULE_LOADED(a) ((access(a, F_OK) == -1) ? 0 : 1)
-bool GdrSupportInitOnce() {
-  // Check for the nv_peer_mem module being loaded
-  return KNL_MODULE_LOADED("/sys/kernel/mm/memory_peers/nv_mem/version") ||
-         KNL_MODULE_LOADED("/sys/kernel/mm/memory_peers/nv_mem_nc/version") ||
-         KNL_MODULE_LOADED("/sys/module/nvidia_peermem/version");
-}
+// bool GdrSupportInitOnce() {
+//   // Check for the nv_peer_mem module being loaded
+//   return KNL_MODULE_LOADED("/sys/kernel/mm/memory_peers/nv_mem/version") ||
+//          KNL_MODULE_LOADED("/sys/kernel/mm/memory_peers/nv_mem_nc/version") ||
+//          KNL_MODULE_LOADED("/sys/module/nvidia_peermem/version");
+// }
 
 void local_poll_completions(ibv_cq* cq,
                             std::unordered_set<uint64_t>& finished_wrs,

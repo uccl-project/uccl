@@ -15,13 +15,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  GdrSupportInitOnce();
-  if (!GdrSupportInitOnce()) {
-    printf(
-        "Error: GPUDirect RDMA module is not loaded. Please load "
-        "amdgpu or rocm_smi modules!\n");
-    exit(1);
-  }
+
 
   hipStream_t stream1;
   hipStreamCreate(&stream1);
