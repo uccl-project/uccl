@@ -33,15 +33,16 @@
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
+#include "common.hpp"
 #include <stdint.h>
 #include <stdio.h>
 #include <unistd.h>
-#include "common.hpp"
 
 // static constexpr int kNumThBlocks = 8;
 // static constexpr int kNumThPerBlock = 1;
 // static constexpr int kIterations = 10000000;
-// static constexpr int kBatchSize = 8;  // Higher throughput but higher latency.
+// static constexpr int kBatchSize = 8;  // Higher throughput but higher
+// latency.
 
 // static constexpr uint32_t kQueueSize = 128;
 // static constexpr uint32_t kQueueMask = kQueueSize - 1;
