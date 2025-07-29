@@ -1,26 +1,6 @@
 /* batched_gpu_to_cpu_bench.cu
- *
  * make
  * CUDA_MODULE_LOADING=EAGER ./batched_gpu_to_cpu_bench
- *
- * clock rate: 1410000 kHz
-
- * Per-block avg latency:
- * Block 0 : 6.976 µs over 10000000 ops
- * Block 1 : 6.633 µs over 10000000 ops
- * Block 2 : 6.809 µs over 10000000 ops
- * Block 3 : 6.975 µs over 10000000 ops
- * Block 4 : 6.642 µs over 10000000 ops
- * Block 5 : 6.936 µs over 10000000 ops
- * Block 6 : 6.912 µs over 10000000 ops
- * Block 7 : 6.906 µs over 10000000 ops
-
- * Overall avg GPU-measured latency  : 6.849 µs
- * Total cycles                       : 772522054232
- * Total ops                          : 80000000
- * End-to-end Wall-clock time        : 11481.282 ms
- * Throughput                        : 6.97 Mops/s
- *
  */
 
 #include <atomic>
@@ -37,17 +17,6 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <unistd.h>
-
-// static constexpr int kNumThBlocks = 8;
-// static constexpr int kNumThPerBlock = 1;
-// static constexpr int kIterations = 10000000;
-// static constexpr int kBatchSize = 8;  // Higher throughput but higher
-// latency.
-
-// static constexpr uint32_t kQueueSize = 128;
-// static constexpr uint32_t kQueueMask = kQueueSize - 1;
-
-// #define DEBUG_PRINT
 
 struct alignas(128) Fifo {
   // Using volatile and avoiding atomics.
