@@ -64,8 +64,7 @@ inline int receive_message(int sockfd, void* buffer, size_t n_bytes) {
   int bytes_read = 0;
   int r;
   while (bytes_read < static_cast<int>(n_bytes)) {
-    r = read(sockfd,
-             static_cast<char*>(buffer) + bytes_read,
+    r = read(sockfd, static_cast<char*>(buffer) + bytes_read,
              static_cast<size_t>(n_bytes - bytes_read));
     if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
       CHECK(false) << "ERROR reading from socket";
@@ -82,7 +81,8 @@ inline int send_message(int sockfd, void const* buffer, size_t n_bytes) {
   int r;
   while (bytes_sent < static_cast<int>(n_bytes)) {
     // Make sure we write exactly n_bytes
-    r = write(sockfd, static_cast<const char*>(buffer) + bytes_sent, n_bytes - bytes_sent);
+    r = write(sockfd, static_cast<char const*>(buffer) + bytes_sent,
+              n_bytes - bytes_sent);
     if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
       CHECK(false) << "ERROR writing to socket";
     }
