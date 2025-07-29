@@ -91,8 +91,24 @@ __global__ void peer_copy_kernel_vec_batched(CopyTask const* __restrict__ tasks,
 cudaError_t launch_peer_bulk_copy2(CopyTask const* host_tasks, int num_tasks,
                                    cudaStream_t stream, int src_device,
                                    CopyTask*& d_tasks) {
-  cudaMemcpyAsync(d_tasks, host_tasks, num_tasks * sizeof(CopyTask),
-                  cudaMemcpyHostToDevice, stream);
+  if (num_tasks <= 0) return cudaSuccess;
+
+  // Make sure current device matches the device of d_tasks (and stream)
+  cudaPointerAttributes attr{};
+  cudaError_t st = cudaPointerGetAttributes(&attr, d_tasks);
+  if (st != cudaSuccess) std::abort();
+
+  int cur_dev = -1;
+  cudaGetDevice(&cur_dev);
+  if (cur_dev != attr.device) {
+    st = cudaSetDevice(attr.device);
+    if (st != cudaSuccess) std::abort();
+  }
+
+  st = cudaMemcpyAsync(d_tasks, host_tasks,
+                       static_cast<size_t>(num_tasks) * sizeof(CopyTask),
+                       cudaMemcpyHostToDevice, stream);
+  if (st != cudaSuccess) std::abort();
   constexpr int threads_per_block = 256;
   dim3 blocks(NVLINK_SM_PER_PROCESS);
   if (false) {
@@ -100,6 +116,7 @@ cudaError_t launch_peer_bulk_copy2(CopyTask const* host_tasks, int num_tasks,
                                                                    num_tasks);
   } else if (true) {
     int tasks_per_block = num_tasks / NVLINK_SM_PER_PROCESS;
+    if (tasks_per_block == 0) tasks_per_block = 1;
     peer_copy_kernel_vec_batched<<<blocks, threads_per_block, 0, stream>>>(
         d_tasks, num_tasks, tasks_per_block);
   } else {

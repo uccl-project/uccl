@@ -74,7 +74,9 @@ void Proxy::run_remote() {
   printf("Remote CPU thread for block %d: ack_qp=%p, ack_mr=%p\n",
          cfg_.block_idx + 1, (void*)ack_qp,
          (void*)(cfg_.ring ? cfg_.ring->ack_mr : nullptr));
-  remote_cpu_proxy_poll_write_with_immediate(cfg_.block_idx, cq_, *cfg_.ring);
+  while (g_progress_run.load(std::memory_order_acquire)) {
+    remote_poll_completions(cfg_.block_idx, cq_, *cfg_.ring);
+  }
 }
 
 void Proxy::run_dual() {
@@ -125,21 +127,9 @@ void Proxy::run_dual() {
   size_t seen = 0;
 
   for (; my_tail < kIterations;) {
-    // 1) TX completions (sender side)
-    // local_poll_completions(cq_, finished_wrs_, finished_wrs_mutex_,
-    //                        cfg_.block_idx);
-
-    // 2) RX (remote write-with-immediate) — non-blocking
-    if (cfg_.ring) {
-      poll_cq_dual(cq_, finished_wrs_, finished_wrs_mutex_, cfg_.block_idx,
-                   *cfg_.ring);
-      // must return quickly
-    }
-
-    // 3) Notify GPU of completed WRs (advances tail, clears cmds)
+    poll_cq_dual(cq_, finished_wrs_, finished_wrs_mutex_, cfg_.block_idx,
+                 *cfg_.ring);
     notify_gpu_completion(my_tail);
-
-    // 4) Post new RDMA writes for any newly seen commands
     post_gpu_command(my_tail, seen);
   }
 
@@ -156,10 +146,8 @@ void Proxy::run_dual() {
                .count() < 1) {
       // local_poll_completions(cq_, finished_wrs_, finished_wrs_mutex_,
       //                        cfg_.block_idx);
-      if (cfg_.ring) {
-        poll_cq_dual(cq_, finished_wrs_, finished_wrs_mutex_, cfg_.block_idx,
-                     *cfg_.ring);
-      }
+      poll_cq_dual(cq_, finished_wrs_, finished_wrs_mutex_, cfg_.block_idx,
+                   *cfg_.ring);
       notify_gpu_completion(my_tail);
     }
     g_progress_run.store(false, std::memory_order_release);
@@ -264,17 +252,19 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
 void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
   // Force load head from DRAM
   uint64_t cur_head = cfg_.rb->volatile_head();
-  if (cur_head == my_tail) {
+  size_t batch_size = cur_head - seen;
+
+  if (cur_head == my_tail || batch_size == 0) {
     cpu_relax();
     return;
   }
-
-  size_t batch_size = cur_head - seen;
   if (batch_size > static_cast<size_t>(kMaxInflight)) {
     fprintf(stderr, "Error: batch_size %zu exceeds kMaxInflight %d\n",
             batch_size, kMaxInflight);
     std::abort();
   }
+  // printf("Post GPU command: my_tail=%lu, seen=%zu, batch_size: %zu\n",
+  // my_tail, seen, batch_size);
 
   std::vector<uint64_t> wrs_to_post;
   wrs_to_post.reserve(batch_size);

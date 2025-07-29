@@ -18,6 +18,7 @@ int main(int argc, char** argv) {
   char const* peer_ip = argv[2];
 
   pin_thread_to_cpu(MAIN_THREAD_CPU_IDX);
+  cudaSetDeviceFlags(cudaDeviceMapHost);
 
   // Common CUDA + rbs setup
   BenchEnv env;
@@ -62,21 +63,6 @@ int main(int argc, char** argv) {
     });
   }
 
-  // Small barrier so both peers are up before issuing commands
-  std::printf("[rank %d] Waiting 2s before issuing commands...\n", rank);
-  ::sleep(2);
-
-  // Issue commands from GPU on BOTH ranks in duplex
-  auto t0 = std::chrono::high_resolution_clock::now();
-  const size_t shmem_bytes =
-      shmem_bytes_remote();  // kQueueSize * 2 * sizeof(ull)
-  gpu_issue_batched_commands<<<env.blocks, kNumThPerBlock, shmem_bytes,
-                               env.stream>>>(env.rbs);
-  cudaCheckErrors("gpu_issue_batched_commands kernel failed");
-  cudaStreamSynchronize(env.stream);
-  cudaCheckErrors("cudaStreamSynchronize failed");
-  auto t1 = std::chrono::high_resolution_clock::now();
-
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
   // Optional copy engines that consume CopyRingBuffer tasks (both ranks)
   std::vector<std::thread> copy_threads;
@@ -86,6 +72,23 @@ int main(int argc, char** argv) {
   }
   g_run.store(true, std::memory_order_release);
 #endif
+  std::printf("[rank %d] Waiting 2s before issuing commands...\n", rank);
+  ::sleep(2);
+
+  // Issue commands from GPU on BOTH ranks in duplex
+  auto t0 = std::chrono::high_resolution_clock::now();
+  gpu_issue_batched_commands<<<env.blocks, kNumThPerBlock, shmem_bytes_remote(),
+                               env.stream>>>(env.rbs);
+  cudaCheckErrors("gpu_issue_batched_commands kernel failed");
+  cudaStreamSynchronize(env.stream);
+  cudaCheckErrors("cudaStreamSynchronize failed");
+  auto t1 = std::chrono::high_resolution_clock::now();
+
+  // Reporting
+  print_block_latencies(env);
+  const Stats s = compute_stats(env, t0, t1);
+  print_summary(env, s);
+  ::sleep(30);
 
   // Join proxy threads
   for (auto& t : cpu_threads) t.join();
@@ -94,11 +97,6 @@ int main(int argc, char** argv) {
   g_run.store(false, std::memory_order_release);
   for (auto& th : copy_threads) th.join();
 #endif
-
-  // Reporting
-  print_block_latencies(env);
-  const Stats s = compute_stats(env, t0, t1);
-  print_summary(env, s);
 
   // Cleanup
   destroy_env(env);
@@ -109,6 +107,5 @@ int main(int argc, char** argv) {
 #endif
   cudaCheckErrors("free gpu_buffer failed");
 
-  ::sleep(1);
   return 0;
 }
