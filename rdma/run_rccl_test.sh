@@ -18,8 +18,8 @@ if [ "$TEST" = "rccl" ]; then
     plugin_path=""
 elif [ "$TEST" = "uccl" ]; then
     echo "Running UCCL test"
-    plugin_path="${UCCL_HOME}/rdma/librccl-net-uccl.so"
-    # plugin_path=`python -c "import uccl; print(uccl.rccl_plugin_path())"`
+    # plugin_path="${UCCL_HOME}/rdma/librccl-net-uccl.so"
+    plugin_path=`python -c "import uccl; print(uccl.rccl_plugin_path())"`
     echo "plugin_path: ${plugin_path}"
 else
     echo "Unsupport benchmark type."
@@ -30,7 +30,7 @@ NVLINK_ON=1
 
 NVLINK_OFF=$((1 - NVLINK_ON))
 
-mpirun --prefix /usr/local/bin/ompi --bind-to none -np 2 -N 1 --hostfile $NODEFILE --map-by ppr:1:node \
+mpirun --prefix /usr/local/bin/ompi --bind-to none -np 4 -N 1 --hostfile $NODEFILE --map-by ppr:1:node \
     -x LD_LIBRARY_PATH=${UCCL_HOME}/thirdparty/rccl/build/release:${CONDA_LIB_HOME}:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH} \
     -x NCCL_NET_PLUGIN=${plugin_path} \
     -x NCCL_P2P_DISABLE=${NVLINK_OFF} \
@@ -43,14 +43,14 @@ mpirun --prefix /usr/local/bin/ompi --bind-to none -np 2 -N 1 --hostfile $NODEFI
     -x NCCL_NCHANNELS_PER_NET_PEER=1 \
     -x NCCL_IB_QPS_PER_CONNECTION=4 \
     -x NCCL_IB_SPLIT_DATA_ON_QPS=0 \
-    -x HIP_VISIBLE_DEVICES=0,1,3,4,5,6,7 \
+    -x HIP_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
     -x GLOG_v=0 \
     -x UCCL_NUM_ENGINES=4 \
-    -x UCCL_PORT_ENTROPY=32 \
+    -x UCCL_PORT_ENTROPY=8 \
     -x UCCL_CHUNK_SIZE_KB=32 \
     -x UCCL_RCMODE=1 \
     ${UCCL_HOME}/thirdparty/rccl-tests/build/alltoall_perf \
-    -b 1K -e 1G -f 2 -w 5 -n 20 -c 1 -g 1 -t 7 |&
+    -b 1K -e 1G -f 2 -w 5 -n 20 -c 1 -g 1 -t 8 |&
     tee alltoall_debug_${TEST}.log
 
 # alltoall_perf, all_reduce_perf
