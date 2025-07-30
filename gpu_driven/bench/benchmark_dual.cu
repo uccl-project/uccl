@@ -49,7 +49,8 @@ int main(int argc, char** argv) {
 
     auto proxy = std::make_unique<Proxy>(std::move(cfg));
 
-    // Start the proxy thread; capture raw pointer to ensure lifetime via proxies[]
+    // Start the proxy thread; capture raw pointer to ensure lifetime via
+    // proxies[]
     cpu_threads.emplace_back([rank, p = proxy.get()]() {
       if (rank == 0) {
         p->run_sender();
@@ -69,15 +70,13 @@ int main(int argc, char** argv) {
   PeerCopyShared shared;
 
   if (rank != 0) {
-    shared.src_device = 0;                     // choose your source GPU
+    shared.src_device = 0;  // choose your source GPU
     workers.reserve(env.blocks);
     worker_ctx.resize(env.blocks);
 
     for (int i = 0; i < env.blocks; ++i) {
-      workers.emplace_back(peer_copy_worker,
-                           std::ref(shared),
-                           std::ref(worker_ctx[i]),
-                           std::ref(proxies[i]->ring),
+      workers.emplace_back(peer_copy_worker, std::ref(shared),
+                           std::ref(worker_ctx[i]), std::ref(proxies[i]->ring),
                            i);
     }
   }
@@ -90,7 +89,8 @@ int main(int argc, char** argv) {
     // Launch the GPU kernel that produces commands into env.rbs
     auto t0 = std::chrono::high_resolution_clock::now();
     const size_t shmem_bytes = kQueueSize * 2 * sizeof(unsigned long long);
-    gpu_issue_batched_commands<<<env.blocks, kNumThPerBlock, shmem_bytes, env.stream>>>(env.rbs);
+    gpu_issue_batched_commands<<<env.blocks, kNumThPerBlock, shmem_bytes,
+                                 env.stream>>>(env.rbs);
     cudaCheckErrors("gpu_issue_batched_commands kernel failed");
     cudaStreamSynchronize(env.stream);
     cudaCheckErrors("cudaStreamSynchronize failed");

@@ -115,7 +115,7 @@ void Proxy::run_dual() {
   ring.ack_qp = ctx_.ack_qp;
   post_receive_buffer_for_imm(ctx_);
   printf("Dual proxy block %d: ack_qp=%p, ack_mr=%p\n", cfg_.block_idx + 1,
-          (void*)ring.ack_qp, (void*)ring.ack_mr);
+         (void*)ring.ack_qp, (void*)ring.ack_mr);
 
   // ---- Interleaved TX/RX loop in one thread ----
   uint64_t my_tail = 0;
