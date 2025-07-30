@@ -516,9 +516,7 @@ void post_rdma_async_batched(void* buf, size_t bytes, size_t num_wrs,
   wr.wr.rdma.remote_addr = remote_addr /*+ start_offset * bytes*/;
   wr.wr.rdma.rkey = remote_rkey;
   wr.wr_id = largest_wr;
-#ifdef ENABLE_WRITE_WITH_IMMEDIATE
   wr.imm_data = largest_wr;
-#endif
   if (largest_wr % kSignalledEvery == 0)
     wr.send_flags = IBV_SEND_SIGNALED;
   else
@@ -568,12 +566,8 @@ void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
     wrs[i].wr.rdma.rkey = remote_rkey;
     wrs[i].wr_id = wrs_to_post[i];
     assert(wrs[i].wr_id <= kIterations);
-#ifdef ENABLE_WRITE_WITH_IMMEDIATE
     wrs[i].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
     wrs[i].imm_data = wrs[i].wr_id;
-#else
-    wrs[i].opcode = IBV_WR_RDMA_WRITE;
-#endif
     if ((i + 1) % kSignalledEvery == 0)
       wrs[i].send_flags = IBV_SEND_SIGNALED;
     else

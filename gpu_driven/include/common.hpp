@@ -1,6 +1,7 @@
 #ifndef COMMON_HPP
 #define COMMON_HPP
 
+#include "util/cuda.h"
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -13,32 +14,10 @@
 #include <unistd.h>
 
 // #define DEBUG_PRINT
-// CUDA error checking macro
-#define CHECK_CUDA(call)                                            \
-  do {                                                              \
-    cudaError_t _e = (call);                                        \
-    if (_e != cudaSuccess) {                                        \
-      fprintf(stderr, "CUDA error %s:%d: %s\n", __FILE__, __LINE__, \
-              cudaGetErrorString(_e));                              \
-      std::exit(EXIT_FAILURE);                                      \
-    }                                                               \
-  } while (0)
-
-#define cudaCheckErrors(msg)                                  \
-  do {                                                        \
-    cudaError_t __err = cudaGetLastError();                   \
-    if (__err != cudaSuccess) {                               \
-      fprintf(stderr, "Fatal error: %s (%s at %s:%d)\n", msg, \
-              cudaGetErrorString(__err), __FILE__, __LINE__); \
-      fprintf(stderr, "*** FAILED - ABORTING\n");             \
-      exit(1);                                                \
-    }                                                         \
-  } while (0)
 
 // #define REMOTE_PERSISTENT_KERNEL
 #define USE_GRACE_HOPPER
 #define MEASURE_PER_OP_LATENCY
-#define ENABLE_WRITE_WITH_IMMEDIATE
 #define ASSUME_WR_IN_ORDER
 #define ENABLE_PROXY_CUDA_MEMCPY
 #define SYNCHRONOUS_COMPLETION
@@ -74,7 +53,6 @@
 #else
 #define NVLINK_SM_PER_PROCESS 2
 #endif
-// #define SEPARATE_POLLING
 
 bool pin_thread_to_cpu(int cpu);
 

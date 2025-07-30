@@ -19,6 +19,7 @@ int const kMaxNumGPUs = 8;
 // Assume the local and remote GPUs have the same GPU-NIC mapping.
 uint8_t gpu_to_dev[kMaxNumGPUs] = {0};
 std::once_flag glog_init_once;
+constexpr uint32_t kGpuStreamId = 0;
 
 inline void check_python_signals() {
 #ifdef WITH_PYTHON
@@ -40,13 +41,19 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
             << ", CPUs: " << num_cpus << std::endl;
   // Py_Initialize();
 
+  int n_streams = std::max(1, (int)ucclParamNumGpuRtStreams());
+  streams_.resize(n_streams);
+  for (int i = 0; i < n_streams; ++i) {
+    GPU_RT_CHECK(gpuStreamCreateWithFlags(&streams_[i], gpuStreamNonBlocking));
+  }
+
   std::call_once(glog_init_once,
                  []() { google::InitGoogleLogging("uccl_p2p"); });
 
   google::InstallFailureSignalHandler();
 
   // Initialize the RDMA endpoint with lazy creation.
-  ep_ = new uccl::RDMAEndpoint(ucclParamNUM_ENGINES());
+  ep_ = new uccl::RDMAEndpoint(num_cpus_);
 
   auto gpu_cards = uccl::get_gpu_cards();
   DCHECK(local_gpu_idx_ < gpu_cards.size() && gpu_cards.size() <= kMaxNumGPUs)
@@ -95,15 +102,6 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   printf("Engine initialized for GPU %d\n", local_gpu_idx_);
 #endif
 
-  {
-    transfer_metadata_ = new TransferMetaData();
-#ifdef WITH_PYTHON
-    py::gil_scoped_acquire acquire;
-#endif
-    bool rc = reg(transfer_metadata_->chunk_size_v, sizeof(TransferMetaData),
-                  transfer_metadata_mr_id_);
-    DCHECK(rc) << "Failed to register large KV meta data";
-  }
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
 
@@ -120,7 +118,12 @@ Endpoint::~Endpoint() {
   for (auto& [mr_id, mr] : mr_id_to_mr_) {
     delete mr;
   }
-  delete transfer_metadata_;
+  if (!streams_.empty()) {
+    GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+    for (auto s : streams_)
+      if (s) GPU_RT_CHECK(gpuStreamDestroy(s));
+  }
+
   std::cout << "Engine destroyed" << std::endl;
 }
 
@@ -162,6 +165,71 @@ bool Endpoint::connect(std::string const& ip_addr, int const& remote_gpu_idx,
       new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
 
   return true;
+}
+
+bool is_nvlink_peer(int local_gpu, int remote_gpu) {
+  int accessible = 0;
+  GPU_RT_CHECK(gpuDeviceCanAccessPeer(&accessible, local_gpu, remote_gpu));
+  if (!accessible) return false;
+
+#ifdef HAS_NVML
+  nvmlDevice_t local_dev, remote_dev;
+  nvmlDeviceGetHandleByIndex(local_gpu, &local_dev);
+  nvmlDeviceGetHandleByIndex(remote_gpu, &remote_dev);
+  nvmlP2PStatus_t status;
+  if (nvmlDeviceGetP2PStatus(local_dev, remote_dev, NVML_P2P_CAPS_INDEX_NVLINK,
+                             &status) == NVML_SUCCESS &&
+      status == NVML_P2P_STATUS_OK) {
+    return true;
+  } else {
+    return false;
+  }
+#else
+  return true;
+#endif
+}
+
+bool Endpoint::connect(py::bytes const& meta_bytes, uint64_t& conn_id) {
+  std::string buf = meta_bytes;
+  uint8_t const* data = reinterpret_cast<uint8_t const*>(buf.data());
+  size_t const n = buf.size();
+
+  std::string ip;
+  int port = -1;
+  char ipstr[INET6_ADDRSTRLEN] = {0};
+
+  if (n == 10) {  // IPv4 format
+    std::memcpy(ipstr, data, 4);
+    inet_ntop(AF_INET, ipstr, ipstr, sizeof(ipstr));
+    ip = ipstr;
+    port = (data[4] << 8) | data[5];
+    std::memcpy(&remote_gpu_idx_, data + 6, 4);  // host byte-order
+  } else if (n == 22) {                          // IPv6 format
+    std::memcpy(ipstr, data, 16);
+    inet_ntop(AF_INET6, ipstr, ipstr, sizeof(ipstr));
+    ip = ipstr;
+    port = (data[16] << 8) | data[17];
+    std::memcpy(&remote_gpu_idx_, data + 18, 4);
+  } else {
+    throw std::runtime_error("Endpoint::connect(metadata): invalid blob size");
+  }
+
+  if (uccl::is_local_ip(ip)) {
+    if (local_gpu_idx_ == remote_gpu_idx_) {
+      // If the local GPU is the same as the remote GPU, we can use a special
+      // connection ID to indicate this.
+      conn_id = kNvlinkConn;
+      return true;
+    }
+    if (is_nvlink_peer(local_gpu_idx_, remote_gpu_idx_)) {
+      conn_id = kNvlinkConn;
+      return true;
+    }
+    throw std::runtime_error(
+        "is_local_ip() returned true, "
+        "but remote GPU is not a NVLink peer");
+  }
+  return this->connect(ip, remote_gpu_idx_, conn_id, port);
 }
 
 bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
@@ -214,61 +282,126 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
   return true;
 }
 
-bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
-                    size_t size) {
+bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
+                    uccl::FifoItem const& slot_item) {
 #ifdef WITH_PYTHON
   py::gil_scoped_release release;
 #endif
-  DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
 
-  // printf(
-  //     "[Endpoint::send] conn_id: %lu, mr_id: %lu, data: %p, "
-  //     "size: %zu\n",
-  //     conn_id, mr_id, data, size);
+
+  if (!ucclParamRCMode()) {
+    DCHECK(false) << "RDMA READ is only supported in RC mode, toggle RCMODE to "
+                     "be True in transport_config.h";
+    std::abort();
+  }
+
+  DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
+  auto* conn = conn_id_to_conn_[conn_id];
+  auto* mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  uccl::ucclRequest ureq;
+  memset(&ureq, 0, sizeof(uccl::ucclRequest));
+  int rc;
+  do {
+    rc = ep_->uccl_read_async(
+        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle, dst,
+        size, slot_item, &ureq);
+    if (rc == -1) {
+      check_python_signals();
+      std::this_thread::yield();
+    }
+  } while (rc == -1);
+
+  while (!ep_->uccl_poll_ureq_once(&ureq)) {
+    check_python_signals();
+  }
+  return true;
+}
+
+bool Endpoint::regv(std::vector<void const*> const& data_v,
+                    std::vector<size_t> const& size_v,
+                    std::vector<uint64_t>& mr_id_v) {
+  if (data_v.size() != size_v.size())
+    throw std::invalid_argument(
+        "[Endpoint::regv] data_v/size_v length mismatch");
+
+  py::gil_scoped_release release;
+  size_t const n = data_v.size();
+  mr_id_v.resize(n);
+
+  mr_id_to_mr_.reserve(mr_id_to_mr_.size() + n);
+
+  for (size_t i = 0; i < n; ++i) {
+    uint64_t id = next_mr_id_.fetch_add(1);
+    uccl::Mhandle* mhandle = nullptr;
+
+    ep_->uccl_regmr(gpu_to_dev[local_gpu_idx_], const_cast<void*>(data_v[i]),
+                    size_v[i], 0, &mhandle);
+
+    if (mhandle == nullptr || mhandle->mr == nullptr) {
+      std::cerr << "[Endpoint::regv] registration failed at i=" << i << '\n';
+      return false;
+    }
+
+    mr_id_to_mr_[id] = new MR{id, mhandle};
+    mr_id_v[i] = id;
+  }
+  return true;
+}
+
+bool Endpoint::send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
+                        size_t size, void const* meta, size_t meta_len) {
+  py::gil_scoped_release release;
+  DCHECK(size <= 0xffffffff);
+
+  DCHECK(meta_len == sizeof(gpuIpcMemHandle_t));
+  gpuIpcMemHandle_t handle{};
+  std::memcpy(&handle, meta, sizeof(handle));
+
+  void* dst_ptr = nullptr;
+  GPU_RT_CHECK(gpuSetDevice(remote_gpu_idx_));
+  GPU_RT_CHECK(
+      gpuIpcOpenMemHandle(&dst_ptr, handle, gpuIpcMemLazyEnablePeerAccess));
+
+  gpuStream_t s = pick_stream();
+  if (local_gpu_idx_ == remote_gpu_idx_) {
+    GPU_RT_CHECK(
+        gpuMemcpyAsync(dst_ptr, data, size, gpuMemcpyDeviceToDevice, s));
+  } else {
+    int can = 0;
+    GPU_RT_CHECK(gpuDeviceCanAccessPeer(&can, local_gpu_idx_, remote_gpu_idx_));
+    if (can) {
+      GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+      (void)gpuDeviceEnablePeerAccess(remote_gpu_idx_, 0);
+
+      GPU_RT_CHECK(gpuMemcpyPeerAsync(dst_ptr, remote_gpu_idx_, data,
+                                      local_gpu_idx_, size, s));
+    } else {
+      std::cerr << "Cannot access remote GPU " << remote_gpu_idx_
+                << " from local GPU " << local_gpu_idx_ << std::endl;
+      return false;
+    }
+  }
+  GPU_RT_CHECK(gpuStreamSynchronize(s));
+  GPU_RT_CHECK(gpuSetDevice(remote_gpu_idx_));
+  GPU_RT_CHECK(gpuIpcCloseMemHandle(dst_ptr));
+  return true;
+}
+
+bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
+                    size_t size, uccl::FifoItem const& slot_item) {
+  DCHECK(size <= 0xffffffff);
+  return send(conn_id, mr_id, data, size);
+}
+
+bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
+                    size_t size) {
+  DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
 
   auto conn = conn_id_to_conn_[conn_id];
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
 
   uccl::ucclRequest ureq[kMaxInflightChunks];
   bool done[kMaxInflightChunks] = {false};
-  transfer_metadata_->chunk_size_v[0] = size;
-  auto mhandle_meta = mr_id_to_mr_[transfer_metadata_mr_id_]->mhandle_;
-
-  // To avoid wasting the first RTT, we call uccl_send_async to try to send as
-  // much as possible.
-  int rc;
-  int chunk_size = std::min(size, kRTTBytes);
-  do {
-    rc = ep_->uccl_send_async(
-        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
-        (void*)data, chunk_size, &ureq[0]);
-    if (rc == -1) {
-      check_python_signals();
-      std::this_thread::yield();
-    }
-  } while (rc == -1);
-
-  do {
-    rc = ep_->uccl_send_async(
-        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle_meta,
-        (void*)transfer_metadata_->chunk_size_v, sizeof(uint64_t), &ureq[1]);
-    if (rc == -1) {
-      check_python_signals();
-      std::this_thread::yield();
-    }
-  } while (rc == -1);
-
-  while (!ep_->uccl_poll_ureq_once(&ureq[1])) {
-    check_python_signals();
-  }
-  while (!ep_->uccl_poll_ureq_once(&ureq[0])) {
-    check_python_signals();
-  }
-
-  data += chunk_size;
-  size -= chunk_size;
-
-  if (size == 0) return true;
 
   void* cur_data = const_cast<void*>(data);
   size_t size_sent = 0;
@@ -311,115 +444,26 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
   return true;
 }
 
-std::vector<uint8_t> Endpoint::get_endpoint_metadata() {
-  char uccl_ifname[MAX_IF_NAME_SIZE + 1];
-  uccl::socketAddress uccl_ifaddr;
-  int num_ifs =
-      uccl::find_interfaces(uccl_ifname, &uccl_ifaddr, MAX_IF_NAME_SIZE, 1);
-  if (num_ifs != 1) UCCL_INIT_CHECK(false, "No IP interface found");
-
-  std::string ip_str = uccl::get_dev_ip(uccl_ifname);
-  uint16_t port = ep_->get_port();
-  // int listen_fd = uccl::open_ephemeral_port(port);
-  // if (listen_fd < 0) {
-  //   throw std::runtime_error("Failed to open ephemeral port");
-  // }
-
-  bool is_ipv6 = ip_str.find(':') != std::string::npos;
-  size_t ip_len = is_ipv6 ? 16 : 4;
-
-  // Additional 2 bytes for port and 4 bytes for local_gpu_idx_
-  size_t total_len = ip_len + 2 + sizeof(int);
-  std::vector<uint8_t> metadata(total_len);
-
-  // Copy IP
-  if (is_ipv6) {
-    struct in6_addr ip6_bin;
-    if (inet_pton(AF_INET6, ip_str.c_str(), &ip6_bin) != 1)
-      throw std::runtime_error("Invalid IPv6 address: " + ip_str);
-    std::memcpy(metadata.data(), &ip6_bin, 16);
-  } else {
-    struct in_addr ip4_bin;
-    if (inet_pton(AF_INET, ip_str.c_str(), &ip4_bin) != 1)
-      throw std::runtime_error("Invalid IPv4 address: " + ip_str);
-    std::memcpy(metadata.data(), &ip4_bin, 4);
-  }
-
-  // Copy port in network byte order
-  uint16_t net_port = htons(port);
-  std::memcpy(metadata.data() + ip_len, &net_port, 2);
-
-  // Copy local_gpu_idx_ in host byte order
-  std::memcpy(metadata.data() + ip_len + 2, &local_gpu_idx_, sizeof(int));
-
-  return metadata;
-}
-
-bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
-                    size_t max_size, size_t* recv_size) {
+bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
 #ifdef WITH_PYTHON
   py::gil_scoped_release release;
 #endif
   auto conn = conn_id_to_conn_[conn_id];
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
-  int max_size_int = static_cast<int>(max_size);
+  int size_int = static_cast<int>(size);
 
   uccl::ucclRequest ureq[kMaxInflightChunks];
   bool done[kMaxInflightChunks] = {false};
-  auto mhandle_meta = mr_id_to_mr_[transfer_metadata_mr_id_]->mhandle_;
-
-  // To avoid wasting the first RTT, we call uccl_recv_async to try to receive
-  // as much as possible.
-  int rc;
-  do {
-    int chunk_size = kRTTBytes;
-    rc = ep_->uccl_recv_async(
-        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
-        &data, &chunk_size, 1, &ureq[0]);
-    if (rc == -1) {
-      check_python_signals();
-      std::this_thread::yield();
-    }
-  } while (rc == -1);
-
-  void* meta_addr = (void*)transfer_metadata_->chunk_size_v;
-  int meta_size = sizeof(uint64_t);
-  do {
-    rc = ep_->uccl_recv_async(
-        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
-        &mhandle_meta, &meta_addr, &meta_size, 1, &ureq[1]);
-    if (rc == -1) {
-      check_python_signals();
-      std::this_thread::yield();
-    }
-  } while (rc == -1);
-
-  while (!ep_->uccl_poll_ureq_once(&ureq[1])) {
-    check_python_signals();
-  }
-  while (!ep_->uccl_poll_ureq_once(&ureq[0])) {
-    check_python_signals();
-  }
-
-  auto first_actual_size = ureq[0].recv.data_len[0];
-  size_t size_expected = transfer_metadata_->chunk_size_v[0];
-  size_expected -= first_actual_size;
-  data += first_actual_size;
-
-  if (!size_expected) {
-    *recv_size = first_actual_size;
-    return true;
-  }
 
   void* cur_data = data;
   size_t size_post_recv = 0;
-  int ureq_max = (size_expected + kChunkSize - 1) / kChunkSize;
+  int ureq_max = (size + kChunkSize - 1) / kChunkSize;
   int ureq_issued = 0, ureq_finished = 0;
 
   while (ureq_finished < ureq_max) {
     while (ureq_issued - ureq_finished < kMaxInflightChunks &&
-           size_post_recv < size_expected) {
-      int chunk_size = std::min(size_expected - size_post_recv, kChunkSize);
+           size_post_recv < size) {
+      int chunk_size = std::min(size - size_post_recv, kChunkSize);
       auto rc = ep_->uccl_recv_async(
           static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
           &cur_data, &chunk_size, 1, &ureq[ureq_issued % kMaxInflightChunks]);
@@ -449,7 +493,6 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data,
     }
   }
 
-  *recv_size = size_expected + first_actual_size;
   return true;
 }
 
@@ -467,40 +510,7 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
   int estimated_ureq_max = 0;
   for (int i = 0; i < num_iovs; i++) {
-    transfer_metadata_->chunk_size_v[i] = size_v[i];
     estimated_ureq_max += (size_v[i] + kChunkSize - 1) / kChunkSize;
-  }
-
-  auto mhandle = mr_id_to_mr_[mr_id_v[0]]->mhandle_;
-  auto mhandle_meta = mr_id_to_mr_[transfer_metadata_mr_id_]->mhandle_;
-
-  int rc;
-  int chunk_size = std::min(size_v[0], kRTTBytes);
-  do {
-    rc = ep_->uccl_send_async(uccl_flow, mhandle, (void*)data_v[0], chunk_size,
-                              &ureq[0]);
-    if (rc == -1) {
-      check_python_signals();
-      std::this_thread::yield();
-    }
-  } while (rc == -1);
-
-  do {
-    rc = ep_->uccl_send_async(uccl_flow, mhandle_meta,
-                              (void*)transfer_metadata_->chunk_size_v,
-                              sizeof(uint64_t) * num_iovs, &ureq[1]);
-    if (rc == -1) {
-      check_python_signals();
-      std::this_thread::yield();
-    }
-  } while (rc == -1);
-
-  while (!ep_->uccl_poll_ureq_once(&ureq[1])) {
-    check_python_signals();
-  }
-
-  while (!ep_->uccl_poll_ureq_once(&ureq[0])) {
-    check_python_signals();
   }
 
   std::vector<void*> data_send_vec;
@@ -511,16 +521,11 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   size_send_vec.reserve(estimated_ureq_max);
   mhandle_send_vec.reserve(estimated_ureq_max);
 
-  auto first_actual_size = chunk_size;
-  void* cur_data = (void*)data_v[0] + first_actual_size;
-  size_t cur_size_expected = size_v[0] - first_actual_size;
-  size_t cur_size_post_send = 0;
   for (int i = 0; i < num_iovs; i++) {
-    if (i != 0) {
-      cur_data = (void*)data_v[i];
-      cur_size_expected = size_v[i];
-      cur_size_post_send = 0;
-    }
+    void* cur_data = (void*)data_v[i];
+    size_t cur_size_expected = size_v[i];
+
+    size_t cur_size_post_send = 0;
     while (cur_size_post_send < cur_size_expected) {
       int chunk_size =
           std::min(cur_size_expected - cur_size_post_send, kChunkSize);
@@ -567,8 +572,8 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 }
 
 bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-                     std::vector<void*> data_v, std::vector<size_t> max_size_v,
-                     std::vector<size_t>& recv_size_v, size_t num_iovs) {
+                     std::vector<void*> data_v, std::vector<size_t> size_v,
+                     size_t num_iovs) {
 #ifdef WITH_PYTHON
   py::gil_scoped_release release;
 #endif
@@ -577,39 +582,6 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
   uccl::ucclRequest ureq[kMaxInflightChunks];
   bool done[kMaxInflightChunks] = {false};
-
-  auto mhandle = mr_id_to_mr_[mr_id_v[0]]->mhandle_;
-  auto mhandle_meta = mr_id_to_mr_[transfer_metadata_mr_id_]->mhandle_;
-
-  int rc;
-  do {
-    int chunk_size = kRTTBytes;
-    rc = ep_->uccl_recv_async(uccl_flow, &mhandle, &data_v[0], &chunk_size, 1,
-                              &ureq[0]);
-    if (rc == -1) {
-      check_python_signals();
-      std::this_thread::yield();
-    }
-  } while (rc == -1);
-
-  void* meta_addr = (void*)transfer_metadata_->chunk_size_v;
-  int meta_size = sizeof(uint64_t) * num_iovs;
-  do {
-    rc = ep_->uccl_recv_async(uccl_flow, &mhandle_meta, &meta_addr, &meta_size,
-                              1, &ureq[1]);
-    if (rc == -1) {
-      check_python_signals();
-      std::this_thread::yield();
-    }
-  } while (rc == -1);
-
-  while (!ep_->uccl_poll_ureq_once(&ureq[1])) {
-    check_python_signals();
-  }
-
-  while (!ep_->uccl_poll_ureq_once(&ureq[0])) {
-    check_python_signals();
-  }
 
   // Prepare the data, size, and mhandle vectors for the rest of the chunks.
   std::vector<void*> data_recv_vec;
@@ -620,7 +592,7 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
   int estimated_ureq_max = 0;
   for (int i = 0; i < num_iovs; i++) {
-    estimated_ureq_max += (max_size_v[i] + kChunkSize - 1) / kChunkSize;
+    estimated_ureq_max += (size_v[i] + kChunkSize - 1) / kChunkSize;
   }
 
   data_recv_vec.reserve(estimated_ureq_max);
@@ -629,17 +601,11 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   mhandle_recv_vec.reserve(estimated_ureq_max);
   mhandle_recv_ptr_vec.reserve(estimated_ureq_max);
 
-  auto first_actual_size = ureq[0].recv.data_len[0];
-  void* cur_data = data_v[0] + first_actual_size;
-  size_t cur_size_expected =
-      transfer_metadata_->chunk_size_v[0] - first_actual_size;
-  size_t cur_size_post_recv = 0;
   for (int i = 0; i < num_iovs; i++) {
-    if (i != 0) {
-      cur_data = data_v[i];
-      cur_size_expected = transfer_metadata_->chunk_size_v[i];
-      cur_size_post_recv = 0;
-    }
+    void* cur_data = data_v[i];
+    size_t cur_size_expected = size_v[i];
+
+    size_t cur_size_post_recv = 0;
     while (cur_size_post_recv < cur_size_expected) {
       int chunk_size =
           std::min(cur_size_expected - cur_size_post_recv, kChunkSize);
@@ -684,13 +650,6 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
            done[ureq_finished % kMaxInflightChunks]) {
       ureq_finished++;
     }
-  }
-
-  // Return the sizes of the received chunks.
-  for (int i = 0; i < num_iovs; i++) {
-    recv_size_v[i] = transfer_metadata_->chunk_size_v[i];
-    DCHECK(recv_size_v[i] <= max_size_v[i])
-        << "recv_size_v > max_size_v for chunk " << i;
   }
 
   return true;
@@ -753,6 +712,27 @@ bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
   return true;
 }
 
+bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
+                         size_t len, char* out_buf) {
+  py::gil_scoped_release release;
+
+  if (conn_id == kNvlinkConn) {
+    GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+    gpuIpcMemHandle_t handle{};
+    GPU_RT_CHECK(gpuIpcGetMemHandle(&handle, addr));
+    std::memcpy(out_buf, &handle, sizeof(handle));
+    return true;
+  }
+  auto* conn = conn_id_to_conn_[conn_id];
+  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  uccl::ucclRequest req_data;
+  if (ep_->prepare_fifo_metadata(
+          static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
+          addr, len, out_buf) == -1)
+    return false;
+  return true;
+}
+
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
 #ifdef WITH_PYTHON
   py::gil_scoped_release release;
@@ -764,47 +744,6 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
     transfer_id_to_ureq_.erase(transfer_id);
   }
   return true;
-}
-
-bool Endpoint::publish_peer(std::string const& discovery_uri,
-                            std::string const& group_name, int rank,
-                            PeerInfo const& info) {
-  if (discovery_uri.rfind("redis://", 0) == 0) {
-#ifdef USE_REDIS
-    std::string key = group_name + ":" + std::to_string(rank);
-    return publish_redis(discovery_uri, key, info);
-#else
-    std::cerr << "[publish_peer] Redis support not compiled in\n";
-    return false;
-#endif
-  } else {
-    std::cerr << "[publish_peer] Unsupported discovery backend: "
-              << discovery_uri << "\n";
-    return false;
-  }
-}
-
-bool Endpoint::collect_peers(std::string const& discovery_uri,
-                             std::string const& group_name, int world_size,
-                             std::vector<PeerInfo>& out) {
-  if (discovery_uri.rfind("redis://", 0) == 0) {
-#ifdef USE_REDIS
-    std::string key_prefix = group_name + ":";
-    return fetch_all_redis(discovery_uri, key_prefix, world_size, out);
-#else
-    std::cerr << "[collect_peers] Redis support not compiled in\n";
-    return false;
-#endif
-  } else {
-    std::cerr << "[collect_peers] Unsupported discovery backend: "
-              << discovery_uri << "\n";
-    return false;
-  }
-}
-
-uint64_t Endpoint::conn_id_of_rank(int rank) const {
-  auto it = rank2conn_.find(rank);
-  return it != rank2conn_.end() ? it->second : UINT64_MAX;
 }
 
 bool Endpoint::join_group(std::string const& discovery_uri,
@@ -878,6 +817,56 @@ std::unique_ptr<Endpoint> Endpoint::CreateAndJoin(
   return ep;
 }
 
+uint64_t Endpoint::conn_id_of_rank(int rank) const {
+  auto it = rank2conn_.find(rank);
+  return it != rank2conn_.end() ? it->second : UINT64_MAX;
+}
+
+std::vector<uint8_t> Endpoint::get_endpoint_metadata() {
+  char uccl_ifname[MAX_IF_NAME_SIZE + 1];
+  uccl::socketAddress uccl_ifaddr;
+  int num_ifs =
+      uccl::find_interfaces(uccl_ifname, &uccl_ifaddr, MAX_IF_NAME_SIZE, 1);
+  if (num_ifs != 1) UCCL_INIT_CHECK(false, "No IP interface found");
+
+  std::string ip_str = uccl::get_dev_ip(uccl_ifname);
+  uint16_t port = ep_->get_port();
+  // int listen_fd = uccl::open_ephemeral_port(port);
+  // if (listen_fd < 0) {
+  //   throw std::runtime_error("Failed to open ephemeral port");
+  // }
+
+  bool is_ipv6 = ip_str.find(':') != std::string::npos;
+  size_t ip_len = is_ipv6 ? 16 : 4;
+
+  // Additional 2 bytes for port and 4 bytes for local_gpu_idx_
+  size_t total_len = ip_len + 2 + sizeof(int);
+  std::vector<uint8_t> metadata(total_len);
+
+  // Copy IP
+  if (is_ipv6) {
+    struct in6_addr ip6_bin;
+    if (inet_pton(AF_INET6, ip_str.c_str(), &ip6_bin) != 1)
+      throw std::runtime_error("Invalid IPv6 address: " + ip_str);
+    std::memcpy(metadata.data(), &ip6_bin, 16);
+  } else {
+    struct in_addr ip4_bin;
+    if (inet_pton(AF_INET, ip_str.c_str(), &ip4_bin) != 1)
+      throw std::runtime_error("Invalid IPv4 address: " + ip_str);
+    std::memcpy(metadata.data(), &ip4_bin, 4);
+  }
+
+  // Copy port in network byte order
+  uint16_t net_port = htons(port);
+  std::memcpy(metadata.data() + ip_len, &net_port, 2);
+
+  // Copy local_gpu_idx_ in host byte order
+  std::memcpy(metadata.data() + ip_len + 2, &local_gpu_idx_, sizeof(int));
+
+  return metadata;
+}
+
+#ifdef USE_REDIS
 bool Endpoint::publish_redis(std::string const& redis_uri,
                              std::string const& key, PeerInfo const& info) {
   try {
@@ -926,6 +915,43 @@ bool Endpoint::fetch_all_redis(std::string const& redis_uri,
     return true;
   } catch (sw::redis::Error const& e) {
     std::cerr << "[fetch_all_redis] Redis error: " << e.what() << "\n";
+    return false;
+  }
+}
+#endif
+
+bool Endpoint::publish_peer(std::string const& discovery_uri,
+                            std::string const& group_name, int rank,
+                            PeerInfo const& info) {
+  if (discovery_uri.rfind("redis://", 0) == 0) {
+#ifdef USE_REDIS
+    std::string key = group_name + ":" + std::to_string(rank);
+    return publish_redis(discovery_uri, key, info);
+#else
+    std::cerr << "[publish_peer] Redis support not compiled in\n";
+    return false;
+#endif
+  } else {
+    std::cerr << "[publish_peer] Unsupported discovery backend: "
+              << discovery_uri << "\n";
+    return false;
+  }
+}
+
+bool Endpoint::collect_peers(std::string const& discovery_uri,
+                             std::string const& group_name, int world_size,
+                             std::vector<PeerInfo>& out) {
+  if (discovery_uri.rfind("redis://", 0) == 0) {
+#ifdef USE_REDIS
+    std::string key_prefix = group_name + ":";
+    return fetch_all_redis(discovery_uri, key_prefix, world_size, out);
+#else
+    std::cerr << "[collect_peers] Redis support not compiled in\n";
+    return false;
+#endif
+  } else {
+    std::cerr << "[collect_peers] Unsupported discovery backend: "
+              << discovery_uri << "\n";
     return false;
   }
 }

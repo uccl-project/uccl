@@ -34,6 +34,7 @@ if [ "$TEST" = "srd" ]; then
         NCCL_NCHANNELS_PER_NET_PEER=${CHANNELS_NET_PEER} \
         NCCL_P2P_NET_CHUNKSIZE=${CHUNK_SIZE} \
         NCCL_BUFFSIZE=${BUFFSIZE} \
+        OMP_NUM_THREADS=1 \
         torchrun --nproc_per_node=${NUM_DEVS} ${PROG} --batch_size 128 --epochs 10
 
 elif [ "$TEST" = "ud" ]; then
@@ -55,5 +56,6 @@ elif [ "$TEST" = "ud" ]; then
         NCCL_PXN_DISABLE=1 \
         UCCL_ENGINE_QUIET=${UCCL_QUITE} \
         GLOG_logtostderr=0 \
+        OMP_NUM_THREADS=1 \
         torchrun --nproc_per_node=${NUM_DEVS} ${PROG} --batch_size 128 --epochs 10
 fi

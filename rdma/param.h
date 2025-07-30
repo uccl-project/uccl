@@ -27,4 +27,19 @@ void ucclLoadParam(char const* env, int64_t deftVal, int64_t uninitialized,
     return cache;                                                       \
   }
 
+// Mainly used by UCCL plugin to get NCCL env parameters.
+#define NCCL_PARAM(name, env, deftVal)                                  \
+  static inline int64_t ncclParam##name() {                             \
+    constexpr int64_t uninitialized = INT64_MIN;                        \
+    static_assert(deftVal != uninitialized,                             \
+                  "default value cannot be the uninitialized value.");  \
+    static int64_t cache = uninitialized;                               \
+    if (__builtin_expect(                                               \
+            __atomic_load_n(&cache, __ATOMIC_RELAXED) == uninitialized, \
+            false)) {                                                   \
+      ucclLoadParam("NCCL_" env, deftVal, uninitialized, &cache);       \
+    }                                                                   \
+    return cache;                                                       \
+  }
+
 #endif

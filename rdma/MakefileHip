@@ -23,7 +23,7 @@ test_src := $(filter-out rdma_test.cc,$(test_src))
 test_bin = $(test_src:.cc=)
 
 .PHONY: build
-build: $(test_bin) $(lib_obj) $(PLUGIN_SO)
+build: $(test_bin) $(lib_obj) $(PLUGIN_SO) librdma_hip.a
 
 %_test: %_test.cc $(DEPS) $(lib_obj)
 	g++ $< -o $@ $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
@@ -34,6 +34,9 @@ build: $(test_bin) $(lib_obj) $(PLUGIN_SO)
 $(PLUGIN_SO): nccl_plugin.cc $(DEPS) $(lib_obj)
 	g++ $(NCCL_INC) -fPIC -shared -o $@ -Wl,-soname,$(PLUGIN_SO) nccl_plugin.cc $(lib_obj) $(INC) $(LIBS_SHARED) $(CXXFLAGS)
 
+librdma_hip.a: $(lib_obj)
+	ar rcs $@ $(lib_obj)
+
 .PHONY: clean
 clean:
-	rm -f *.o $(test_bin) $(PLUGIN_SO)
+	rm -f *.o $(test_bin) $(PLUGIN_SO) librdma_hip.a

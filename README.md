@@ -61,9 +61,10 @@ More UCCL features are under development in this repo, currently including:
 
 ## Quick Start
 
-The easiest way to use UCCL is to first: 
+The easiest way to use UCCL is to first build based on your platform: 
 ```bash
-pip install uccl
+git clone https://github.com/uccl-project/uccl.git --recursive
+cd uccl && bash build_and_install.sh [cuda|rocm]
 ```
 
 Then, when running your PyTorch applications, set the environment variable accordingly: 

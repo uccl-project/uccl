@@ -63,9 +63,9 @@ inline double gbps_to_rate(double r) { return (r / 8) * (1000 * 1000 * 1000); }
 inline int receive_message(int sockfd, void* buffer, size_t n_bytes) {
   int bytes_read = 0;
   int r;
-  while (bytes_read < n_bytes) {
-    // Make sure we read exactly n_bytes
-    r = read(sockfd, buffer + bytes_read, n_bytes - bytes_read);
+  while (bytes_read < static_cast<int>(n_bytes)) {
+    r = read(sockfd, static_cast<char*>(buffer) + bytes_read,
+             static_cast<size_t>(n_bytes - bytes_read));
     if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
       CHECK(false) << "ERROR reading from socket";
     }
@@ -79,9 +79,10 @@ inline int receive_message(int sockfd, void* buffer, size_t n_bytes) {
 inline int send_message(int sockfd, void const* buffer, size_t n_bytes) {
   int bytes_sent = 0;
   int r;
-  while (bytes_sent < n_bytes) {
+  while (bytes_sent < static_cast<int>(n_bytes)) {
     // Make sure we write exactly n_bytes
-    r = write(sockfd, buffer + bytes_sent, n_bytes - bytes_sent);
+    r = write(sockfd, static_cast<char const*>(buffer) + bytes_sent,
+              n_bytes - bytes_sent);
     if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
       CHECK(false) << "ERROR writing to socket";
     }
@@ -404,18 +405,20 @@ class Spin {
 #define unlikely(X) __builtin_expect(!!(X), 0)
 #endif
 
-// #define barrier() asm volatile("" ::: "memory")
-// #define load_acquire(p)                   \
-//     ({                                    \
-//         typeof(*p) __p = ACCESS_ONCE(*p); \
-//         barrier();                        \
-//         __p;                              \
-//     })
-// #define store_release(p, v)  \
-//     do {                     \
-//         barrier();           \
-//         ACCESS_ONCE(*p) = v; \
-//     } while (0)
+/*
+#define barrier() asm volatile("" ::: "memory")
+#define load_acquire(p)                   \
+    ({                                    \
+        typeof(*p) __p = ACCESS_ONCE(*p); \
+        barrier();                        \
+        __p;                              \
+    })
+#define store_release(p, v)  \
+    do {                     \
+        barrier();           \
+        ACCESS_ONCE(*p) = v; \
+    } while (0)
+*/
 
 #define load_acquire(X) __atomic_load_n(X, __ATOMIC_ACQUIRE)
 #define store_release(X, Y) __atomic_store_n(X, Y, __ATOMIC_RELEASE)
@@ -643,7 +646,6 @@ static inline int get_dev_index(char const* dev_name) {
   for (struct ifaddrs* iap = addrs; iap != NULL; iap = iap->ifa_next) {
     if (iap->ifa_addr && (iap->ifa_flags & IFF_UP) &&
         iap->ifa_addr->sa_family == AF_INET) {
-      struct sockaddr_in* sa = (struct sockaddr_in*)iap->ifa_addr;
       if (strcmp(dev_name, iap->ifa_name) == 0) {
         VLOG(5) << "found network interface: " << iap->ifa_name;
         ret = if_nametoindex(iap->ifa_name);

@@ -8,6 +8,7 @@ export UCCL_HOME=$(pwd)/uccl
 
 Then install some common dependencies: 
 ```bash
+# Note if you are using docker+wheel build, there is no need to install the following dependencies. 
 sudo apt update
 sudo apt install linux-tools-$(uname -r) clang llvm cmake m4 build-essential \
                  net-tools libgoogle-glog-dev libgtest-dev libgflags-dev \
@@ -32,19 +33,29 @@ You can then dive into:
 
 ### Python Wheel Build
 
-Run the following to build Python wheels (you can replace `all` with `cuda`, `rocm`, `efa`, and `gh`): 
+Run the following to build Python wheels: 
 ```bash
 cd $UCCL_HOME
-./docker_build.sh all
+./build.sh [cuda|rocm]
 ```
 
 Run the following to install the wheels locally: 
 ```bash
 cd $UCCL_HOME
-pip install wheelhouse-all/uccl-*.whl
+pip install wheelhouse-[cuda/rocm]/uccl-*.whl
 ```
 
-Note that you need ARM hosts to build ARM wheels. We do not support building ARM wheels on x86 hosts, as QEMU (`qemu-user-static`) cannot emulate CUDA or ROCm. 
+The cross-compilation matrix is as follows:
+
+| Platform/Feature   | rdma-cuda | rdma-rocm | rdma-arm | p2p-cuda | p2p-rocm | p2p-arm | efa |
+|--------------------|-----------|-----------|----------|----------|----------|---------|-----|
+| cuda + x86         | ✓         | ✓         | x        | ✓        | ✓        | x       | ✓   |
+| cuda + arm (gh200) | ✓         | x         | x        | ✓        | x        | x       | x   |
+| rocm + x86         | ✓         | ✓         | ✓        | ✓        | ✓        | ✓       | x   |
+| aws p4d/p4de       | ✓         | ✓         | x        | x        | x        | x       | ✓   |
+
+Note that you need ARM hosts to build ARM wheels, as cross-compilation tool `qemu-user-static` cannot emulate CUDA or ROCm. 
+
 
 ### On Cloudlab CPU Machines
 

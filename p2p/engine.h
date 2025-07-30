@@ -1,6 +1,7 @@
 #pragma once
 
 #include "transport.h"
+#include "util/gpu_rt.h"
 #include "util/jring.h"
 #include "util/shared_pool.h"
 #include "util/util.h"
@@ -14,7 +15,7 @@
 #include <tuple>
 #include <unordered_map>
 #include <vector>
-#define USE_REDIS
+// #define USE_REDIS
 #ifdef USE_REDIS
 #include <sw/redis++/redis++.h>
 #endif
@@ -22,6 +23,8 @@
 #ifdef WITH_PYTHON
 namespace py = pybind11;
 #endif
+
+constexpr uint64_t kNvlinkConn = UINT64_MAX;
 
 struct MR {
   uint64_t mr_id_;
@@ -46,6 +49,13 @@ class Endpoint {
   const uint32_t kMaxInflightChunks = 8;
 
  public:
+  gpuStream_t pick_stream() {
+    if (streams_.empty()) return nullptr;
+    uint32_t i =
+        rr_stream_.fetch_add(1, std::memory_order_relaxed) % streams_.size();
+    return streams_[i];
+  }
+
   /*
    * Create engine threads running in background for a single interface. It also
    * opens a TCP listening thread waiting for incoming connections.
@@ -71,6 +81,8 @@ class Endpoint {
   bool connect(std::string const& ip_addr, int const& remote_gpu_idx,
                uint64_t& conn_id, int remote_port);
 
+  bool connect(py::bytes const& metadata, uint64_t& conn_id);
+
   /*
    * Accept an incoming connection via TCP, then build RDMA QP connections.
    *
@@ -95,6 +107,11 @@ class Endpoint {
    */
   bool reg(void const* data, size_t size, uint64_t& mr_id);
 
+  bool regv(std::vector<void const*> const& data_v,
+            std::vector<size_t> const& size_v, std::vector<uint64_t>& mr_id_v);
+
+  bool send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
+                void const* meta, size_t meta_len);
   /*
    * Send data to the remote server. Blocking.
    *
@@ -105,6 +122,12 @@ class Endpoint {
    *   size: the size of the data
    */
   bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size);
+
+  bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
+            uccl::FifoItem const& slot_item);
+
+  bool read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
+            uccl::FifoItem const& slot_item);
 
   /* Send a vector of data chunks. Blocking. */
   bool sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
@@ -125,17 +148,19 @@ class Endpoint {
    *   data: the data to receive
    *   size: the size of the data
    */
-  bool recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t max_size,
-            size_t* recv_size);
+  bool recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size);
 
   /* Receive a vector of data chunks. Blocking. */
   bool recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-             std::vector<void*> data_v, std::vector<size_t> max_size_v,
-             std::vector<size_t>& recv_size_v, size_t num_iovs);
+             std::vector<void*> data_v, std::vector<size_t> size_v,
+             size_t num_iovs);
 
   /* Receive data from the remote server asynchronously. */
   bool recv_async(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
                   uint64_t* transfer_id);
+
+  bool advertise(uint64_t conn_id, uint64_t mr_id, void* addr, size_t len,
+                 char* out_buf);
 
   /* Poll the status of the asynchronous receive. */
   bool poll_async(uint64_t transfer_id, bool* is_done);
@@ -182,10 +207,6 @@ class Endpoint {
     return rank2conn_;
   }
 
-  int create_listen_socket(uint16_t port);
-
-  int listen_fd_ = -1;
-
 #ifdef USE_REDIS
   bool publish_redis(std::string const& redis_uri, std::string const& key,
                      PeerInfo const& info);
@@ -202,6 +223,7 @@ class Endpoint {
                      std::vector<PeerInfo>& out);
 
   int local_gpu_idx_;
+  int remote_gpu_idx_;
   uint32_t num_cpus_;
 
   uccl::RDMAEndpoint* ep_;
@@ -221,18 +243,6 @@ class Endpoint {
 
   // Assuming 1TB GPU memory, 128KB KV block size.
   static constexpr size_t kMaxNumChunksPerTransfer = 1024ul * 1024 * 1024 / 128;
-
-  // Used for large KV transfer.
-  class TransferMetaData {
-   public:
-    TransferMetaData() {
-      for (size_t i = 0; i < kMaxNumChunksPerTransfer; i++) {
-        chunk_size_v[i] = 0;
-      }
-    }
-    uint64_t chunk_size_v[kMaxNumChunksPerTransfer];
-  };
-
-  TransferMetaData* transfer_metadata_;
-  uint64_t transfer_metadata_mr_id_;
+  std::atomic<uint32_t> rr_stream_{0};
+  std::vector<gpuStream_t> streams_;
 };

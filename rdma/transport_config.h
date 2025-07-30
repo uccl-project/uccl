@@ -17,12 +17,8 @@ UCCL_PARAM(PIN_TO_NUMA, "PIN_TO_NUMA", 1);
 UCCL_PARAM(ROCE_TRAFFIC_CLASS, "ROCE_TRAFFIC_CLASS", 3);
 // Service level for RoCE.
 UCCL_PARAM(ROCE_SERVICE_LEVEL, "ROCE_SERVICE_LEVEL", 135);
-// GID index for RoCE.
-UCCL_PARAM(ROCE_GID_IDX, "ROCE_GID_IDX", 3);
 // Service level for IB.
 UCCL_PARAM(IB_SERVICE_LEVEL, "IB_SERVICE_LEVEL", 0);
-// GID index for IB.
-UCCL_PARAM(IB_GID_IDX, "IB_GID_IDX", 0);
 
 // Use RC for data transfer.
 UCCL_PARAM(RCMode, "RCMODE", false);
@@ -36,10 +32,13 @@ UCCL_PARAM(NUM_ENGINES, "NUM_ENGINES", 4);
 UCCL_PARAM(PORT_ENTROPY, "PORT_ENTROPY", 32);
 // Maximum chunk size for each WQE.
 UCCL_PARAM(CHUNK_SIZE_KB, "CHUNK_SIZE_KB", 64);
+// Number of CUDA/HIP streams per engine.
+UCCL_PARAM(NumGpuRtStreams, "NUM_GPU_RT_STREAMS", 8);
 
 static constexpr uint32_t MAX_PEER = 256;
 // Maximum number of flows (one-way) on each engine.
-static constexpr uint32_t MAX_FLOW = 256;
+static constexpr uint32_t MAX_FLOW =
+    2048;  // This should be aligned with FID in IMMData
 
 static uint32_t NUM_CPUS = std::thread::hardware_concurrency();
 // Each dev use [ENGINE_CPU_START_LIST[dev], ENGINE_CPU_START_LIST[dev] +
@@ -167,7 +166,8 @@ static constexpr uint32_t kMaxSge = 2;
 // Maximum number of outstanding receive messages in one recv request.
 static constexpr uint32_t kMaxRecv = 1;
 // Maximum number of outstanding receive requests in one engine.
-static constexpr uint32_t kMaxReq = 128;
+static constexpr uint32_t kMaxReq =
+    16;  // This should be aligned with RID in IMMData
 // Maximum number of WQEs in SRQ (Shared Receive Queue).
 static constexpr uint32_t kMaxSRQ = 16 * kMaxReq;
 // Maximum number of chunks can be transmitted from timing wheel in one loop.

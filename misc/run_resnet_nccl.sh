@@ -19,23 +19,15 @@ cleanup() {
 # 注册信号处理程序
 trap cleanup EXIT SIGINT SIGTERM
 
-UCCL_HOME="/opt/uccl_rdma_zc"
+UCCL_HOME="/home/ubuntu/uccl_yang"
 NV_LINK_DISABLE=1
 CHANNELS=16
 CHANNELS_NET_PEER=4
 CHUNK_SIZE=524288
 BUFFSIZE=8388608
 
-# Memory settings for EFA
-sudo sysctl -w vm.max_map_count=1048576
-sudo sysctl -w vm.nr_hugepages=2048
-
-# Clean up any existing RDMA resources
-sudo rmmod ib_uverbs || true
-sudo modprobe ib_uverbs
-
 # Environment variables for NCCL
-export LD_PRELOAD="/opt/uccl_rdma/nccl/build/lib/libnccl.so"
+export NCCL_LD_PRELOAD="${UCCL_HOME}/thirdparty/nccl/build/lib/libnccl.so"
 export NCCL_NET_PLUGIN="/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu/libnccl-net.so"
 export NCCL_DEBUG=
 export NCCL_PROTO=Simple
@@ -50,7 +42,6 @@ export NCCL_P2P_NET_CHUNKSIZE=${CHUNK_SIZE}
 export NCCL_BUFFSIZE=${BUFFSIZE}
 
 # Additional settings for async communication
-export NCCL_ASYNC_ERROR_HANDLING=1
 export NCCL_LAUNCH_MODE=PARALLEL
 
 # 读取hostfile配置
@@ -117,12 +108,8 @@ for ((i=1; i<${#HOSTS[@]}; i++)); do
     export CHANNELS_NET_PEER=4 && \
     export CHUNK_SIZE=524288 && \
     export BUFFSIZE=8388608 && \
-    sudo sysctl -w vm.max_map_count=1048576 && \
-    sudo sysctl -w vm.nr_hugepages=2048 && \
-    sudo rmmod ib_uverbs || true && \
-    sudo modprobe ib_uverbs && \
-    export LD_PRELOAD="${UCCL_HOME}/nccl/build/lib/libnccl.so" && \
-    export NCCL_NET_PLUGIN="/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu/libnccl-net.so" && \
+    export LD_PRELOAD=${NCCL_LD_PRELOAD} && \
+    export NCCL_NET_PLUGIN=${NCCL_NET_PLUGIN} && \
     export NCCL_DEBUG= && \
     export NCCL_PROTO=Simple && \
     export NCCL_P2P_DISABLE=${NV_LINK_DISABLE} && \
@@ -133,6 +120,7 @@ for ((i=1; i<${#HOSTS[@]}; i++)); do
     export NCCL_NCHANNELS_PER_NET_PEER=${CHANNELS_NET_PEER} && \
     export NCCL_P2P_NET_CHUNKSIZE=${CHUNK_SIZE} && \
     export NCCL_BUFFSIZE=${BUFFSIZE} && \
+    export OMP_NUM_THREADS=1 && \
 
     $TORCHRUN_PATH \
       --nnodes=$NUM_NODES \
@@ -176,12 +164,8 @@ export CHANNELS=16 && \
 export CHANNELS_NET_PEER=4 && \
 export CHUNK_SIZE=524288 && \
 export BUFFSIZE=8388608 && \
-sudo sysctl -w vm.max_map_count=1048576 && \
-sudo sysctl -w vm.nr_hugepages=2048 && \
-sudo rmmod ib_uverbs || true && \
-sudo modprobe ib_uverbs && \
-export LD_PRELOAD="${UCCL_HOME}/nccl/build/lib/libnccl.so" && \
-export NCCL_NET_PLUGIN="/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu/libnccl-net.so" && \
+export LD_PRELOAD=${NCCL_LD_PRELOAD} && \
+export NCCL_NET_PLUGIN=${NCCL_NET_PLUGIN} && \
 export NCCL_DEBUG= && \
 export NCCL_PROTO=Simple && \
 export NCCL_P2P_DISABLE=${NV_LINK_DISABLE} && \
@@ -192,6 +176,7 @@ export NCCL_MIN_NCHANNELS=${CHANNELS} && \
 export NCCL_NCHANNELS_PER_NET_PEER=${CHANNELS_NET_PEER} && \
 export NCCL_P2P_NET_CHUNKSIZE=${CHUNK_SIZE} && \
 export NCCL_BUFFSIZE=${BUFFSIZE} && \
+export OMP_NUM_THREADS=1 && \
 $TORCHRUN_PATH \
   --nnodes=$NUM_NODES \
   --nproc_per_node=$NUM_GPUS_PER_NODE \
@@ -201,15 +186,15 @@ $TORCHRUN_PATH \
   $SCRIPT_PATH \
   --batch_size 128 \
   --epochs 10 \
-  --lr 0.1 2>&1 2>&1 | sed 's/^/[NODE-$NODE_RANK] /'"
+  --lr 0.1 2>&1 | sed 's/^/[NODE-$NODE_RANK] /'"
 
 # 在当前节点是rank 0时，直接在前台执行；否则，通过ssh执行
 if [ "$(hostname)" == "$HOST" ] || [ "$(hostname -i)" == "$HOST" ]; then
-    # 直接在前台执行，并添加节点前缀
-    eval "$CMD" | sed "s/^/[NODE-$NODE_RANK] /" &
+    # 直接在前台执行
+    eval "$CMD"
 else
-    # 通过ssh执行并添加节点前缀
-    ssh $HOST "$CMD" | sed "s/^/[NODE-$NODE_RANK] /" &
+    # 通过ssh执行
+    ssh $HOST "$CMD"
 fi
 
 # 等待任意一个前台进程结束

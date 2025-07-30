@@ -51,7 +51,7 @@ class Channel {
 
  public:
   struct Msg {
-    enum Op : uint8_t { kTx, kRx };
+    enum Op : uint8_t { kTx, kRx, kRead };
     Op opcode;
     PeerID peer_id;
     struct ucclRequest* ureq;
@@ -122,13 +122,19 @@ class IMMData {
  public:
   // HINT: Indicates whether the last chunk of a message.
   // CSN:  Chunk Sequence Number.
-  // RID:  Request ID.
-  // FID:  Flow Index.
+  // RID:  Request ID (4 bits).
+  // FID:  Flow Index (11 bits).
   // High-----------------32bit------------------Low
-  //  | HINT |  RESERVED  |  CSN  |  RID  |  FID  |
-  //    1bit      8bit       8bit    7bit    8bit
+  //  | HINT |  RESERVED  |  CSN  |  RID  |   FID   |
+  //    1bit      8bit       8bit    4bit    11bit
+  // Bit layout:
+  // [31]      HINT (1 bit)
+  // [30:23]   RESERVED (8 bits)
+  // [22:15]   CSN (8 bits, or UINT_CSN_BIT)
+  // [14:11]   RID (4 bits)
+  // [10:0]    FID (11 bits)
   constexpr static int kFID = 0;
-  constexpr static int kRID = 8;
+  constexpr static int kRID = 11;
   constexpr static int kCSN = 15;
   constexpr static int kRESERVED = kCSN + UINT_CSN_BIT;
   constexpr static int kHINT = kRESERVED + 8;
@@ -141,9 +147,9 @@ class IMMData {
 
   inline uint32_t GetCSN(void) { return (imm_data_ >> kCSN) & UINT_CSN_MASK; }
 
-  inline uint32_t GetRID(void) { return (imm_data_ >> kRID) & 0x7F; }
+  inline uint32_t GetRID(void) { return (imm_data_ >> kRID) & 0xF; }
 
-  inline uint32_t GetFID(void) { return (imm_data_ >> kFID) & 0xFF; }
+  inline uint32_t GetFID(void) { return (imm_data_ >> kFID) & 0x7FF; }
 
   inline void SetHINT(uint32_t hint) { imm_data_ |= (hint & 0x1) << kHINT; }
 
@@ -155,9 +161,9 @@ class IMMData {
     imm_data_ |= (csn & UINT_CSN_MASK) << kCSN;
   }
 
-  inline void SetRID(uint32_t rid) { imm_data_ |= (rid & 0x7F) << kRID; }
+  inline void SetRID(uint32_t rid) { imm_data_ |= (rid & 0xF) << kRID; }
 
-  inline void SetFID(uint32_t fid) { imm_data_ |= (fid & 0xFF) << kFID; }
+  inline void SetFID(uint32_t fid) { imm_data_ |= (fid & 0x7FF) << kFID; }
 
   inline uint32_t GetImmData(void) { return imm_data_; }
 
@@ -207,11 +213,6 @@ class RDMAContext {
   // Timer manager for RTO.
   TimerManager* rto_;
 
-  // Track outstanding RECV requests.
-  // When a flow wants to receive message, it should allocate a request from
-  // this pool.
-  struct RecvRequest reqs_[kMaxReq];
-
   // Track installed flows.
   // When a flow is installed, it should be added to this table.
   // Flows are split into two tables: sender and receiver.
@@ -257,6 +258,9 @@ class RDMAContext {
   // GID Index of the device
   int gid_idx_;
 
+  // Whether RoCE or IB.
+  bool is_roce_;
+
   // Link Speed of the device
   double link_speed_ = 0;
 
@@ -282,30 +286,7 @@ class RDMAContext {
 
   LIST_HEAD(ack_list_);
 
-  inline bool is_roce() { return (gid_idx_ == ucclParamROCE_GID_IDX()); }
-  // Get an unused request, if no request is available, return nullptr.
-  inline struct RecvRequest* alloc_recvreq(void) {
-    for (int i = 0; i < kMaxReq; i++) {
-      auto* req = &reqs_[i];
-      if (req->type == RecvRequest::UNUSED) {
-        return req;
-      }
-    }
-    return nullptr;
-  }
-
-  // Get the ID of the request.
-  inline uint64_t get_recvreq_id(struct RecvRequest* req) {
-    return req - reqs_;
-  }
-
-  // Get the request by ID.
-  inline struct RecvRequest* get_recvreq_by_id(int id) { return &reqs_[id]; }
-
-  // Free the request.
-  inline void free_recvreq(struct RecvRequest* req) {
-    memset(req, 0, sizeof(struct RecvRequest));
-  }
+  inline bool is_roce() { return is_roce_; }
 
  public:
   // 256-bit SACK bitmask => we can track up to 256 packets
@@ -447,11 +428,13 @@ class RDMAContext {
     if constexpr (kReceiverCCA != RECEIVER_CCA_NONE) {
       return receiverCC_tx_message(ureq);
     } else {
+      if (ureq->type == ReqRead) return senderCC_tx_read(ureq);
       return senderCC_tx_message(ureq);
     }
   }
   bool receiverCC_tx_message(struct ucclRequest* ureq);
   bool senderCC_tx_message(struct ucclRequest* ureq);
+  bool senderCC_tx_read(struct ucclRequest* ureq);
 
   virtual uint32_t EventOnSelectPath(SubUcclFlow* subflow,
                                      uint32_t chunk_size) = 0;
@@ -1025,6 +1008,8 @@ class RDMAEndpoint {
   std::vector<std::vector<UcclFlow*>> active_flows_vec_;
   std::vector<Spin> active_flows_spin_;
 
+  int ib_relaxed_ordering_enabled_;
+
  public:
   RDMAEndpoint(int num_engines_per_dev);
 
@@ -1042,7 +1027,7 @@ class RDMAEndpoint {
 
   void cleanup_resources();
 
-  bool initialize_engine_by_dev(int dev, bool test_create_listen_fd);
+  bool initialize_engine_by_dev(int dev, bool use_test_listen_port);
 
   /// For testing easily.
   ConnID test_uccl_connect(int dev, int gpu, int remote_dev, int remote_gpu,
@@ -1107,6 +1092,12 @@ class RDMAEndpoint {
   int uccl_send_async(UcclFlow* flow, struct Mhandle* mhandle, void const* data,
                       size_t const size, struct ucclRequest* ureq);
 
+  int prepare_fifo_metadata(UcclFlow* flow, struct Mhandle** mhandles,
+                            void const* data, size_t size, char* out_buf);
+
+  int uccl_read_async(UcclFlow* flow, Mhandle* local_mh, void* dst, size_t size,
+                      FifoItem const& slot_item, ucclRequest* ureq);
+
   // Post n buffers to engine for receiving data asynchronously.
   int uccl_recv_async(UcclFlow* flow, struct Mhandle** mhandles, void** data,
                       int* size, int n, struct ucclRequest* ureq);
@@ -1135,6 +1126,8 @@ class RDMAEndpoint {
     fence_and_clean_ctx(ctx);
     return true;
   }
+
+  inline bool uccl_check_once(PollCtx* ctx) { return ctx->done.load(); }
 
   inline bool uccl_poll(PollCtx* ctx) {
     while (!uccl_poll_once(ctx)) {
@@ -1360,7 +1353,7 @@ class UcclFlow {
       qpAttr.qp_state = IBV_QPS_INIT;
       qpAttr.pkey_index = 0;
       qpAttr.port_num = factory_dev->ib_port_num;
-      qpAttr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE;
+      qpAttr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ;
 
       comm_base->rc_qp = ibv_create_qp(factory_dev->pd, &qp_init_attr);
       UCCL_INIT_CHECK(comm_base->rc_qp != nullptr, "Failed to create RC QP");
@@ -1447,7 +1440,10 @@ class UcclFlow {
    */
   void post_multi_send(struct ucclRequest** ureqs, uint32_t engine_offset);
 
+  void post_multi_read(struct ucclRequest** ureqs, uint32_t engine_offset);
+
   void rc_send(struct ucclRequest* ureq);
+  void rc_read(struct ucclRequest* ureq);
 
   inline bool check_room(void) { return outstanding_reqs_ < kMaxReq; }
 

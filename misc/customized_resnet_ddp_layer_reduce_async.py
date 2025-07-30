@@ -10,6 +10,8 @@ import torch.distributed as dist
 import argparse
 from collections import OrderedDict
 import torch.autograd.profiler as profiler
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -21,9 +23,9 @@ def parse_args():
 class AsyncCustomDistributedResNet(nn.Module):
     def __init__(self, local_rank):
         super().__init__()
-        # self.model = torchvision.models.resnet152(num_classes=10)
+        self.model = torchvision.models.resnet152(num_classes=10)
         # self.model = torchvision.models.resnet101(num_classes=10)
-        self.model = torchvision.models.resnet50(num_classes=10)
+        # self.model = torchvision.models.resnet50(num_classes=10)
         self.model = self.model.to(torch.float32)
         self.model.to(f'cuda:{local_rank}')
         

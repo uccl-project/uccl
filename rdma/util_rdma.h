@@ -1,10 +1,13 @@
 #ifndef UTIL_RDMA_H
 #define UTIL_RDMA_H
 
+#include "param.h"
 #include "transport_config.h"
 #include "util/util.h"
 #include <glog/logging.h>
 #include <infiniband/verbs.h>
+#include <dlfcn.h>
+#include <limits.h>
 
 namespace uccl {
 // LRH (Local Routing Header) + GRH (Global Routing Header) + BTH (Base
@@ -234,14 +237,14 @@ static inline struct ibv_srq* util_rdma_create_srq(struct ibv_pd* pd,
 
 static inline struct ibv_ah* util_rdma_create_ah(
     struct ibv_pd* pd, uint8_t port, union ibv_gid remote_gid,
-    struct ibv_port_attr remote_port_attr, bool roce) {
+    struct ibv_port_attr remote_port_attr, bool roce, int gid_idx) {
   struct ibv_ah_attr ah_attr = {};
 
   if (roce) {
     ah_attr.is_global = 1;
     ah_attr.grh.dgid = remote_gid;
     ah_attr.grh.traffic_class = ucclParamROCE_TRAFFIC_CLASS();
-    ah_attr.grh.sgid_index = ucclParamROCE_GID_IDX();
+    ah_attr.grh.sgid_index = gid_idx;
     ah_attr.grh.flow_label = 0;
     ah_attr.grh.hop_limit = 0xff;
     ah_attr.sl = ucclParamROCE_SERVICE_LEVEL();
@@ -373,6 +376,340 @@ static inline int util_rdma_get_mtu_from_ibv_mtu(ibv_mtu mtu) {
     default:
       return 0;
   }
+}
+
+NCCL_PARAM(IbGidIndex, "IB_GID_INDEX", -1);
+NCCL_PARAM(IbRoutableFlidIbGidIndex, "IB_ROUTABLE_FLID_GID_INDEX", 1);
+NCCL_PARAM(IbRoceVersionNum, "IB_ROCE_VERSION_NUM", 2);
+NCCL_PARAM(IbPciRelaxedOrdering, "IB_PCI_RELAXED_ORDERING", 2);
+
+static sa_family_t envIbAddrFamily(void) {
+  sa_family_t family = AF_INET;
+  char const* env = ucclGetEnv("NCCL_IB_ADDR_FAMILY");
+  if (env == NULL || strlen(env) == 0) {
+    return family;
+  }
+
+  LOG(INFO) << "NCCL_IB_ADDR_FAMILY set by environment to " << env;
+
+  if (strcmp(env, "AF_INET") == 0) {
+    family = AF_INET;
+  } else if (strcmp(env, "AF_INET6") == 0) {
+    family = AF_INET6;
+  }
+
+  return family;
+}
+
+static void* envIbAddrRange(sa_family_t af, int* mask) {
+  *mask = 0;
+  static struct in_addr addr;
+  static struct in6_addr addr6;
+  void* ret = (af == AF_INET) ? (void*)&addr : (void*)&addr6;
+
+  char const* env = ucclGetEnv("NCCL_IB_ADDR_RANGE");
+  if (NULL == env || strlen(env) == 0) {
+    return NULL;
+  }
+
+  LOG(INFO) << "NCCL_IB_ADDR_RANGE set by environment to " << env;
+
+  char addrString[128] = {0};
+  snprintf(addrString, 128, "%s", env);
+  char* addrStrPtr = addrString;
+  char* maskStrPtr = strstr(addrString, "/");
+  if (NULL == maskStrPtr) {
+    return NULL;
+  }
+  *(maskStrPtr++) = '\0';
+
+  if (inet_pton(af, addrStrPtr, ret) == 0) {
+    LOG(WARNING) << "NET/IB: Ip address '" << addrStrPtr
+                 << "' is invalid for family "
+                 << ((af == AF_INET) ? "AF_INET" : "AF_INET6")
+                 << ", ignoring address";
+    return NULL;
+  }
+
+  *mask = (int)strtol(maskStrPtr, NULL, 10);
+  if (af == AF_INET && *mask > 32) {
+    LOG(WARNING) << "NET/IB: Ip address mask '" << *mask
+                 << "' is invalid for family "
+                 << ((af == AF_INET) ? "AF_INET" : "AF_INET6")
+                 << ", ignoring mask";
+    *mask = 0;
+    ret = NULL;
+  } else if (af == AF_INET6 && *mask > 128) {
+    LOG(WARNING) << "NET/IB: Ip address mask '" << *mask
+                 << "' is invalid for family "
+                 << ((af == AF_INET) ? "AF_INET" : "AF_INET6")
+                 << ", ignoring mask";
+    *mask = 0;
+    ret = NULL;
+  }
+
+  return ret;
+}
+
+static sa_family_t getGidAddrFamily(union ibv_gid* gid) {
+  const struct in6_addr* a = (struct in6_addr*)gid->raw;
+  bool isIpV4Mapped = ((a->s6_addr32[0] | a->s6_addr32[1]) |
+                       (a->s6_addr32[2] ^ htonl(0x0000ffff))) == 0UL;
+  bool isIpV4MappedMulticast =
+      (a->s6_addr32[0] == htonl(0xff0e0000) &&
+       ((a->s6_addr32[1] | (a->s6_addr32[2] ^ htonl(0x0000ffff))) == 0UL));
+  return (isIpV4Mapped || isIpV4MappedMulticast) ? AF_INET : AF_INET6;
+}
+
+static bool matchGidAddrPrefix(sa_family_t af, void* prefix, int prefixlen,
+                               union ibv_gid* gid) {
+  struct in_addr* base = NULL;
+  struct in6_addr* base6 = NULL;
+  struct in6_addr* addr6 = NULL;
+  ;
+  if (af == AF_INET) {
+    base = (struct in_addr*)prefix;
+  } else {
+    base6 = (struct in6_addr*)prefix;
+  }
+  addr6 = (struct in6_addr*)gid->raw;
+
+#define NETMASK(bits) (htonl(0xffffffff ^ ((1 << (32 - bits)) - 1)))
+
+  int i = 0;
+  while (prefixlen > 0 && i < 4) {
+    if (af == AF_INET) {
+      int mask = NETMASK(prefixlen);
+      if ((base->s_addr & mask) ^ (addr6->s6_addr32[3] & mask)) {
+        break;
+      }
+      prefixlen = 0;
+      break;
+    } else {
+      if (prefixlen >= 32) {
+        if (base6->s6_addr32[i] ^ addr6->s6_addr32[i]) {
+          break;
+        }
+        prefixlen -= 32;
+        ++i;
+      } else {
+        int mask = NETMASK(prefixlen);
+        if ((base6->s6_addr32[i] & mask) ^ (addr6->s6_addr32[i] & mask)) {
+          break;
+        }
+        prefixlen = 0;
+      }
+    }
+  }
+
+  return (prefixlen == 0) ? true : false;
+}
+
+static bool configuredGid(union ibv_gid* gid) {
+  const struct in6_addr* a = (struct in6_addr*)gid->raw;
+  int trailer = (a->s6_addr32[1] | a->s6_addr32[2] | a->s6_addr32[3]);
+  if (((a->s6_addr32[0] | trailer) == 0UL) ||
+      ((a->s6_addr32[0] == htonl(0xfe800000)) && (trailer == 0UL))) {
+    return false;
+  }
+  return true;
+}
+
+static bool linkLocalGid(union ibv_gid* gid) {
+  const struct in6_addr* a = (struct in6_addr*)gid->raw;
+  if (a->s6_addr32[0] == htonl(0xfe800000) && a->s6_addr32[1] == 0UL) {
+    return true;
+  }
+  return false;
+}
+
+static bool validGid(union ibv_gid* gid) {
+  return (configuredGid(gid) && !linkLocalGid(gid));
+}
+
+static bool ncclIbRoceGetVersionNum(char const* deviceName, int portNum,
+                                    int gidIndex, int* version) {
+  char gidRoceVerStr[16] = {0};
+  char roceTypePath[PATH_MAX] = {0};
+  sprintf(roceTypePath, "/sys/class/infiniband/%s/ports/%d/gid_attrs/types/%d",
+          deviceName, portNum, gidIndex);
+
+  int fd = open(roceTypePath, O_RDONLY);
+  if (fd == -1) {
+    LOG(WARNING) << "NET/IB: open failed in ncclIbRoceGetVersionNum: "
+                 << strerror(errno);
+    return false;
+  }
+  int ret = read(fd, gidRoceVerStr, 15);
+  close(fd);
+
+  if (ret == -1) {
+    LOG(WARNING) << "NET/IB: read failed in ncclIbRoceGetVersionNum: "
+                 << strerror(errno);
+    return false;
+  }
+
+  if (strlen(gidRoceVerStr)) {
+    if (strncmp(gidRoceVerStr, "IB/RoCE v1", strlen("IB/RoCE v1")) == 0 ||
+        strncmp(gidRoceVerStr, "RoCE v1", strlen("RoCE v1")) == 0) {
+      *version = 1;
+    } else if (strncmp(gidRoceVerStr, "RoCE v2", strlen("RoCE v2")) == 0) {
+      *version = 2;
+    }
+  }
+
+  return true;
+}
+
+static bool ncclUpdateGidIndex(struct ibv_context* context, uint8_t portNum,
+                               sa_family_t af, void* prefix, int prefixlen,
+                               int roceVer, int gidIndexCandidate,
+                               int* gidIndex) {
+  union ibv_gid gid, gidCandidate;
+  DCHECK(ibv_query_gid(context, portNum, *gidIndex, &gid) == 0);
+  DCHECK(ibv_query_gid(context, portNum, gidIndexCandidate, &gidCandidate) ==
+         0);
+
+  sa_family_t usrFam = af;
+  sa_family_t gidFam = getGidAddrFamily(&gid);
+  sa_family_t gidCandidateFam = getGidAddrFamily(&gidCandidate);
+  bool gidCandidateMatchSubnet =
+      matchGidAddrPrefix(usrFam, prefix, prefixlen, &gidCandidate);
+
+  if (gidCandidateFam != gidFam && gidCandidateFam == usrFam &&
+      gidCandidateMatchSubnet) {
+    *gidIndex = gidIndexCandidate;
+  } else {
+    if (gidCandidateFam != usrFam || !validGid(&gidCandidate) ||
+        !gidCandidateMatchSubnet) {
+      return true;
+    }
+    int usrRoceVer = roceVer;
+    int gidRoceVerNum, gidRoceVerNumCandidate;
+    char const* deviceName = ibv_get_device_name(context->device);
+    DCHECK(ncclIbRoceGetVersionNum(deviceName, portNum, *gidIndex,
+                                   &gidRoceVerNum));
+    DCHECK(ncclIbRoceGetVersionNum(deviceName, portNum, gidIndexCandidate,
+                                   &gidRoceVerNumCandidate));
+    if ((gidRoceVerNum != gidRoceVerNumCandidate || !validGid(&gid)) &&
+        gidRoceVerNumCandidate == usrRoceVer) {
+      *gidIndex = gidIndexCandidate;
+    }
+  }
+
+  return true;
+}
+
+// GID Format
+// global: |              64b  - subnet-prefix                | 64b - EUI |
+// raw   : | 10b fixed | 22b 0 | 16b FLID | 16b subnet-prefix | 64b - EUI |
+static uint16_t ncclIbExtractLocalSubnetPrefix(uint64_t subnet_prefix) {
+  return (be64toh(subnet_prefix) & 0xffff);
+}
+
+static int ncclIbExtractFlid(union ibv_gid* gid) {
+  return ntohs(*((uint16_t*)((uintptr_t)(gid->raw) + 4)));
+}
+
+static bool ncclIbGetGidIndex(struct ibv_context* context, uint8_t portNum,
+                              struct ibv_port_attr* portAttr, int* gidIndex) {
+  int gidTblLen = portAttr->gid_tbl_len;
+
+  // for IB, choose GID Index that will have routable FLID if present
+  if (portAttr->link_layer == IBV_LINK_LAYER_INFINIBAND) {
+    union ibv_gid gid;
+    int routableGidIndex = ncclParamIbRoutableFlidIbGidIndex();
+    if (routableGidIndex < gidTblLen) {
+      DCHECK(ibv_query_gid(context, portNum, routableGidIndex, &gid) == 0);
+      if (ncclIbExtractFlid(&gid) != 0) {
+        *gidIndex = routableGidIndex;
+        return true;
+      }
+    }
+    *gidIndex = 0;
+    return true;
+  }
+
+  // for ROCE
+  *gidIndex = ncclParamIbGidIndex();
+  if (*gidIndex >= 0) {
+    return true;
+  }
+
+  sa_family_t userAddrFamily = envIbAddrFamily();
+  int userRoceVersion = ncclParamIbRoceVersionNum();
+  int prefixlen;
+  void* prefix = envIbAddrRange(userAddrFamily, &prefixlen);
+
+  *gidIndex = 0;
+  for (int gidIndexNext = 1; gidIndexNext < gidTblLen; ++gidIndexNext) {
+    DCHECK(ncclUpdateGidIndex(context, portNum, userAddrFamily, prefix,
+                              prefixlen, userRoceVersion, gidIndexNext,
+                              gidIndex));
+  }
+
+  return true;
+}
+
+static int has_ibv_reg_mr_iova2() {
+  static void* ibvhandle = NULL;
+  void* tmp;
+  void** cast;
+
+  ibvhandle = dlopen("libibverbs.so", RTLD_NOW);
+  if (!ibvhandle) {
+    ibvhandle = dlopen("libibverbs.so.1", RTLD_NOW);
+    if (!ibvhandle) {
+      LOG(WARNING) << "Failed to open libibverbs.so[.1]";
+      return 0;
+    }
+  }
+
+#define IBVERBS_VERSION "IBVERBS_1.1"
+
+#define LOAD_SYM(handle, symbol, funcptr)                            \
+  do {                                                               \
+    cast = (void**)&funcptr;                                         \
+    tmp = dlvsym(handle, symbol, IBVERBS_VERSION);                   \
+    if (tmp == NULL) {                                               \
+      WARN("dlvsym failed on %s - %s version %s", symbol, dlerror(), \
+           IBVERBS_VERSION);                                         \
+      goto teardown;                                                 \
+    }                                                                \
+    *cast = tmp;                                                     \
+  } while (0)
+
+  // Attempt to load a specific symbol version - fail silently
+#define LOAD_SYM_VERSION(handle, symbol, funcptr, version) \
+  do {                                                     \
+    cast = (void**)&funcptr;                               \
+    *cast = dlvsym(handle, symbol, version);               \
+  } while (0)
+
+  struct ibv_mr* (*ibv_internal_reg_mr_iova2)(struct ibv_pd * pd, void* addr,
+                                              size_t length, uint64_t iova,
+                                              unsigned int access);
+
+  // Cherry-pick the ibv_reg_mr_iova2 API from IBVERBS 1.8
+  LOAD_SYM_VERSION(ibvhandle, "ibv_reg_mr_iova2", ibv_internal_reg_mr_iova2,
+                   "IBVERBS_1.8");
+
+  return ibv_internal_reg_mr_iova2 ? 1 : 0;
+
+teardown:
+  dlclose(ibvhandle);
+  return 0;
+}
+
+// Determine whether RELAXED_ORDERING is enabled and possible
+static int ncclIbRelaxedOrderingCapable(void) {
+  int roMode = ncclParamIbPciRelaxedOrdering();
+  int ret = 0;
+  if (roMode == 1 || roMode == 2) {
+    // Query IBVERBS_1.8 API - needed for IBV_ACCESS_RELAXED_ORDERING support
+    ret = has_ibv_reg_mr_iova2();
+  }
+  return ret;
 }
 
 }  // namespace uccl

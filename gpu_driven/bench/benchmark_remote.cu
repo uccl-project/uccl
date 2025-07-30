@@ -1,9 +1,8 @@
-#include "common.hpp"
+#include "bench_utils.hpp"
 #include "gpu_kernel.cuh"
 #include "peer_copy_worker.hpp"
 #include "proxy.hpp"
 #include "rdma.hpp"
-#include "ring_buffer.cuh"
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
@@ -15,137 +14,88 @@ int main(int argc, char** argv) {
     std::cerr << "Usage: ./benchmark_remote <rank> <peer_ip>\n";
     return 1;
   }
-  int rank = std::atoi(argv[1]);
+  int const rank = std::atoi(argv[1]);
   char const* peer_ip = argv[2];
 
   pin_thread_to_cpu(MAIN_THREAD_CPU_IDX);
-  cudaStream_t stream1;
-  cudaStreamCreate(&stream1);
-  cudaCheckErrors("cudaStreamCreate failed");
 
-  cudaDeviceProp prop;
-  cudaGetDeviceProperties(&prop, 0);
-  printf("clock rate: %d kHz\n", prop.clockRate);
-
-  DeviceToHostCmdBuffer* rbs;
-  cudaHostAlloc(&rbs, sizeof(DeviceToHostCmdBuffer) * kNumThBlocks,
-                cudaHostAllocMapped);
-  for (int i = 0; i < kNumThBlocks; ++i) {
-    rbs[i].head = 0;
-    rbs[i].tail = 0;
-    for (uint32_t j = 0; j < kQueueSize; ++j) {
-      rbs[i].buf[j].cmd = 0;
-    }
-  }
-
-  size_t total_size = kRemoteBufferSize;
+  BenchEnv env;
+  init_env(env);
+  const size_t total_size = kRemoteBufferSize;
   void* gpu_buffer = nullptr;
 #ifdef USE_GRACE_HOPPER
-  // GH200: use CPU-visible memory
   cudaMallocHost(&gpu_buffer, total_size);
 #else
-  // x86 + discrete GPU: use device memory + peermem
   cudaMalloc(&gpu_buffer, total_size);
 #endif
+  cudaCheckErrors("gpu_buffer allocation failed");
 
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
   if (rank == 1) {
     for (int d = 0; d < NUM_GPUS; ++d) {
       cudaSetDevice(d);
-      cudaMalloc(&per_GPU_device_buf[d], total_size);
-      if (per_GPU_device_buf[d] == nullptr) {
-        fprintf(stderr, "Failed to allocate GPU buffer on GPU %d\n", d);
-        exit(1);
-      }
+      void* buf = nullptr;
+      cudaMalloc(&buf, total_size);
+      cudaCheckErrors("cudaMalloc per_GPU_device_buf failed");
+      per_GPU_device_buf[d] = buf;
     }
     cudaSetDevice(0);
   }
 #endif
-
+  std::vector<CopyRingBuffer> rings(env.blocks);
   std::vector<std::thread> cpu_threads;
-  std::vector<CopyRingBuffer> g_rings(kNumThBlocks);
-  for (int i = 0; i < kNumThBlocks; ++i) {
-    if (rank == 0)
-      cpu_threads.emplace_back(cpu_proxy, &rbs[i], i, gpu_buffer,
-                               kRemoteBufferSize, rank, peer_ip);
-    else {
-      cpu_threads.emplace_back(remote_cpu_proxy, &rbs[i], i, gpu_buffer,
-                               kRemoteBufferSize, rank, peer_ip,
-                               std::ref(g_rings[i]));
-    }
+  cpu_threads.reserve(env.blocks);
+  for (int i = 0; i < env.blocks; ++i) {
+    cpu_threads.emplace_back([&, i]() {
+      Proxy p{make_cfg(env, i, rank, peer_ip,
+                       /*gpu_buffer*/ gpu_buffer,
+                       /*total_size*/ total_size,
+                       /*ring*/ (rank == 0) ? nullptr : &rings[i],
+                       /*pin_thread*/ true)};
+      if (rank == 0)
+        p.run_sender();
+      else
+        p.run_remote();
+    });
   }
+
   if (rank == 0) {
-    printf("Waiting for 2 seconds before issuing commands...\n");
-    sleep(2);
-
+    std::printf("Waiting for 2 seconds before issuing commands...\n");
+    ::sleep(2);
     auto t0 = std::chrono::high_resolution_clock::now();
-    size_t shmem_bytes = kQueueSize * 2 * sizeof(unsigned long long);
-    gpu_issue_batched_commands<<<kNumThBlocks, kNumThPerBlock, shmem_bytes,
-                                 stream1>>>(rbs);
+    const size_t shmem_bytes = kQueueSize * 2 * sizeof(unsigned long long);
+    gpu_issue_batched_commands<<<env.blocks, kNumThPerBlock, shmem_bytes,
+                                 env.stream>>>(env.rbs);
     cudaCheckErrors("gpu_issue_batched_commands kernel failed");
-
-    cudaStreamSynchronize(stream1);
+    cudaStreamSynchronize(env.stream);
     cudaCheckErrors("cudaStreamSynchronize failed");
     auto t1 = std::chrono::high_resolution_clock::now();
 
-    printf("Before cpu_threads join\n");
-    for (auto& t : cpu_threads) {
-      t.join();
-    }
-    printf("After cpu_threads join\n");
-
-    unsigned int tot_ops = 0;
-#ifdef MEASURE_PER_OP_LATENCY
-    double total_us = 0;
-    unsigned long long tot_cycles = 0;
-    printf("\nPer-block avg latency:\n");
-    for (int b = 0; b < kNumThBlocks; ++b) {
-      double us = (double)rbs[b].cycle_accum * 1000.0 / prop.clockRate /
-                  rbs[b].op_count;
-      printf("  Block %d : %.3f µs over %lu ops\n", b, us, rbs[b].op_count);
-      total_us += us;
-      tot_cycles += rbs[b].cycle_accum;
-      tot_ops += rbs[b].op_count;
-    }
+    for (auto& t : cpu_threads) t.join();
+    print_block_latencies(env);
+    const Stats s = compute_stats(env, t0, t1);
+    print_summary(env, s);
+    destroy_env(env);
+#ifdef USE_GRACE_HOPPER
+    cudaFreeHost(gpu_buffer);
 #else
-    tot_ops = kNumThBlocks * kIterations;
+    cudaFree(gpu_buffer);
 #endif
-    double wall_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    double wall_ms_gpu = (rbs[0].cycle_end - rbs[0].cycle_start) * 1000.0 /
-                         prop.clockRate / 1000.0;
-    double throughput = (double)(tot_ops) / (wall_ms_gpu * 1000.0);
+    cudaCheckErrors("free gpu_buffer failed");
 
-#ifdef MEASURE_PER_OP_LATENCY
-    printf("\nOverall avg GPU-measured latency  : %.3f µs\n",
-           (double)tot_cycles * 1000.0 / prop.clockRate / tot_ops);
-    printf("Total cycles                      : %llu\n", tot_cycles);
-#endif
-    printf("Total ops                         : %u\n", tot_ops);
-    printf("End-to-end wall-clock time        : %.3f ms\n", wall_ms_gpu);
-    printf("Ops Throughput                    : %.2f Mops\n", throughput);
-    printf("Total Throughput                  : %.2f Gbps\n",
-           throughput * 1e6 * kObjectSize * 8 / 1e9);
-
-    cudaFreeHost(rbs);
-    cudaCheckErrors("cudaFreeHost failed");
-    cudaStreamDestroy(stream1);
-    cudaCheckErrors("cudaStreamDestroy failed");
   } else {
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
-    int num_copy_engine = kNumThBlocks;
+    int const num_copy_engine = env.blocks;
     std::vector<std::thread> copy_threads;
     copy_threads.reserve(num_copy_engine);
-
     for (int t = 0; t < num_copy_engine; ++t) {
-      copy_threads.emplace_back(peer_copy_worker, std::ref(g_rings[t]), t);
+      copy_threads.emplace_back(peer_copy_worker, std::ref(rings[t]), t);
     }
     g_run.store(true, std::memory_order_release);
 #endif
-    int i = 0;
-    while (i < 60) {
+    for (int i = 0; i < 60; ++i) {
       std::this_thread::sleep_for(std::chrono::seconds(1));
-      printf("Rank %d is waiting...\n", rank);
-      i++;
+      std::printf("Rank %d is waiting...\n", rank);
     }
     g_progress_run.store(false);
 
@@ -153,8 +103,16 @@ int main(int argc, char** argv) {
     g_run.store(false, std::memory_order_release);
     for (auto& th : copy_threads) th.join();
 #endif
-
-    exit(0);
+    destroy_env(env);
+#ifdef USE_GRACE_HOPPER
+    cudaFreeHost(gpu_buffer);
+#else
+    cudaFree(gpu_buffer);
+#endif
+    cudaCheckErrors("free gpu_buffer failed");
+    return 0;
   }
-  sleep(1);
+
+  ::sleep(1);
+  return 0;
 }

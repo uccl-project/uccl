@@ -12,25 +12,40 @@ p2p/
 ├── engine.cc         # C++ Endpoint implementation
 ├── pybind_engine.cc  # pybind11 wrapper for Python integration
 ├── Makefile          # Build configuration
-├── test_engine.py    # Comprehensive test suite
-├── demo.py           # Usage demonstration
+├── tests/            # Comprehensive test suite
+├── benchmarks/       # Comprehensive benchmark suite
 └── README.md         # This file
 ```
 
 ## Prerequisites
 
+The easiest way is to: 
+```
+pip install pybind11
+git clone https://github.com/uccl-project/uccl.git --recursive
+cd uccl && bash build_and_install.sh [cuda|rocm] p2p
+```
+
+Alternatively, you can setup your local dev environment by: 
+
+<details><summary>Click me</summary>
+
 ### System Requirements
-- Linux with RDMA support (optional for development)
+- Linux with RDMA support
 - Python 3.7+ with development headers
-- C++17 compatible compiler (GCC 7+ or Clang 5+)
+- C++17 compatible compiler
 - pybind11 library
-- PyTorch or NumPy (for tensor/array operations)
+- PyTorch (for tensor/array operations)
+
+```bash
+sudo apt install build-essential net-tools libelf-dev libibverbs-dev \
+                 libgoogle-glog-dev libgtest-dev libgflags-dev -y
+```
 
 ### Optional Dependencies
-- RDMA drivers and libraries (`libibverbs-dev`)
-- RDMA-capable network hardware (InfiniBand, RoCE)
+
 - CUDA (for GPU tensor operations)
-- Install Redis 
+- Install Redis
 
 ```bash
 sudo apt-get update
@@ -64,7 +79,7 @@ make -j
 sudo make install
 ```
 
-## Installation
+### Installation
 
 1. **Install Python dependencies:**
    ```bash
@@ -73,74 +88,182 @@ sudo make install
 
 2. **Build the UCCL P2P module:**
    ```bash
-   make
+   make -j
    ```
 
-3. **Run tests:**
-   ```bash
-   make test
-   ```
-
-4. **Install the UCCL P2P module:**
+3. **Install the UCCL P2P module:**
    ```bash
    make install
    ```
+
+</details>
+
+
 ## Performance Benchmarks
 
-Navigate to benchmarks directory:
-
-```bash
-cd benchmarks
-```
+Navigate to `benchmarks` directory: 
 
 ### Running UCCL P2P
 
-On server: 
+On client: 
 ```bash
-python benchmark.py --role server --local-gpu-idx 0 --num-cpus 4
+torchrun --nnodes=2 --nproc_per_node=1 --node-rank=0 --master_addr=<IP addr> \
+    benchmark_uccl.py --device gpu --local-gpu-idx 0 --num-cpus 4
 ```
 
-On client:
+On server:
 ```bash
-# Note: if running atop GH200 with unified memory, use `--device cpu` or use `cudaMallocManaged`. 
-python benchmark.py \
-    --role client --remote-ip <Server IP> --device gpu \
-    --local-gpu-idx 0 --remote-gpu-idx 0 --num-cpus 4
+torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> \
+    benchmark_uccl.py --device gpu --local-gpu-idx 0 --num-cpus 4
 ```
 
-### Running NIXL
+Notes: 
+* You may consider exporting `GLOO_SOCKET_IFNAME=xxx` if triggering Gloo connectFullMesh failure.
+* To benchmark on AMD GPUs, you need to specify `UCCL_RCMODE=1`. 
+* **You must first import `torch` before importing `uccl.p2p` for AMD GPUs**, otherwise, `RuntimeError: No HIP GPUs are available` will occur. We guess this is because torch does some extra init for AMD GPUs, in order for Pybind-C++ code to use AMD GPUs. 
+* To benchmark dual direction transfer, you can run `benchmark_uccl_dual.py` with the same commands as above. 
+* To benchmark one-sided READ transfer, you can run `benchmark_uccl_read.py`.
 
-On Server:
-```bash
-UCX_TLS=cuda_ipc,cuda_copy,rc,tcp \
-python benchmark_nixl.py --role server --device gpu --local-gpu-idx 0 
-```
+### Running NCCL
 
 On Client:
 ```bash
-UCX_TLS=cuda_ipc,cuda_copy,rc,tcp python benchmark_nixl.py \
-    --role client --remote-ip <Server IP> --device gpu \
-    --local-gpu-idx 0
+NCCL_NCHANNELS_PER_NET_PEER=4 \
+torchrun --nnodes=2 --nproc_per_node=1 --node-rank=0 --master_addr=<IP addr> \
+    benchmark_nccl.py --device gpu --local-gpu-idx 0
 ```
-
-
-### Running NCCL
 
 On Server:
 ```bash
 NCCL_NCHANNELS_PER_NET_PEER=4 \
-python benchmark_nccl.py --role server --local-gpu-idx 0
+torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> \
+    benchmark_nccl.py --device gpu --local-gpu-idx 0
+```
+
+Notes: 
+* You can specify `NCCL_IB_HCA=mlx5_2:1` to control which NIC and port to use. 
+* If you see errors like `message size truncated`, it is likely caused by NCCL version mismatch. We suggest specifying `LD_PRELOAD=<path to libnccl.so.2>`. 
+* To benchmark dual direction transfer, you can run `benchmark_nccl_dual.py`. 
+* This also works for AMD GPUs.
+
+### Running NIXL with UCX backend
+
+If you have not installed nixl with UCX backend, you can follow: 
+<details><summary>Click me</summary>
+
+```bash
+sudo apt install build-essential cmake pkg-config 
+pip3 install meson
+pip3 install pybind11
+
+git clone git@github.com:NVIDIA/gdrcopy.git
+cd gdrcopy
+sudo make prefix=/usr/local CUDA=/usr/local/cuda all install
+cd ..
+
+# Run these if you find there is no libcuda.so under /usr/local/cuda. Using GH200 as an example.
+sudo ln -s /usr/lib/aarch64-linux-gnu/libcuda.so.1 /usr/local/cuda/lib64/libcuda.so
+
+# Install UCX
+wget https://github.com/openucx/ucx/releases/download/v1.18.0/ucx-1.18.0.tar.gz
+tar xzf ucx-1.18.0.tar.gz
+cd ucx-1.18.0
+./configure --prefix=/usr/local/ucx --enable-shared --disable-static \
+            --disable-doxygen-doc --enable-optimizations --enable-cma \
+            --enable-devel-headers --with-cuda=/usr/local/cuda \
+            --with-gdrcopy=/usr/local --with-verbs --with-dm --enable-mt
+make -j
+sudo make -j install-strip
+sudo ldconfig
+cd ..
+
+git clone https://github.com/ai-dynamo/nixl.git
+cd nixl
+meson setup build -Ducx_path=/usr/local/ucx
+cd build
+ninja
+yes | ninja install
+cd ..
+pip install .
+cd ..
+
+UCX_LIB_PATH="/usr/local/ucx/lib"
+export LD_LIBRARY_PATH="$UCX_LIB_PATH:$CONDA_PREFIX/lib/python3.13/site-packages/.nixl.mesonpy.libs/plugins:$LD_LIBRARY_PATH"
+```
+</details>
+
+On Server:
+```bash
+UCX_MAX_RMA_LANES=4 UCX_IB_PCI_RELAXED_ORDERING=on UCX_NET_DEVICES=mlx5_2:1 UCX_TLS=cuda,rc \
+python benchmark_nixl.py --role server --device gpu --local-gpu-idx 0
 ```
 
 On Client:
 ```bash
-NCCL_NCHANNELS_PER_NET_PEER=4 python benchmark_nccl.py \
-    --role client --remote-ip <Server IP> --device gpu \
-    --local-gpu-idx 0
+UCX_MAX_RMA_LANES=4 UCX_IB_PCI_RELAXED_ORDERING=on UCX_NET_DEVICES=mlx5_2:1 UCX_TLS=cuda,rc \
+python benchmark_nixl.py --role client --device gpu --local-gpu-idx 0 --remote-ip <Server IP>
+```
+
+Notes: 
+* You can specify `--op-type read` to benchmark one-sided READ transfer in NIXL. On GH200, we find NIXL READ over GPU memory is extremely slow with 1GB/s out of 25, while NIXL READ over CPU memory is better but only max at 9GB/s. 
+
+### Running NIXL with Mooncake backend
+
+If you have not installed nixl with Mooncake backend, you can follow:
+<details><summary>Click me</summary>
+
+```bash
+sudo apt install build-essential cmake pkg-config
+pip3 install meson
+pip3 install pybind11
+
+git clone git@github.com:NVIDIA/gdrcopy.git
+cd gdrcopy
+sudo make prefix=/usr/local CUDA=/usr/local/cuda all install
+cd ..
+
+# Run these if you find there is no libcuda.so under /usr/local/cuda. Using GH200 as an example.
+sudo ln -s /usr/lib/aarch64-linux-gnu/libcuda.so.1 /usr/local/cuda/lib64/libcuda.so
+
+# Install Mooncake
+git clone https://github.com/kvcache-ai/Mooncake.git
+cd Mooncake
+sudo bash dependencies.sh
+mkdir build && cd build
+cmake .. -DBUILD_SHARED_LIBS=ON
+make -j
+sudo make install
+cd ../..
+
+git clone https://github.com/ai-dynamo/nixl.git
+cd nixl
+meson setup build
+cd build
+ninja
+yes | ninja install
+cd ..
+pip install .
+cd ..
+
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib/python3.13/site-packages/.nixl.mesonpy.libs/plugins:$LD_LIBRARY_PATH"
+```
+</details>
+
+On Server:
+```bash
+python benchmark_nixl.py --role server --device gpu --local-gpu-idx 0 --backend mooncake
+```
+
+On Client:
+```bash
+python benchmark_nixl.py --role client --remote-ip <Server IP> --device gpu \
+    --local-gpu-idx 0 --backend mooncake
 ```
 
 
 ## Usage Examples
+
+<details><summary>Click me</summary>
 
 ### Basic Endpoint Setup
 
@@ -190,8 +313,8 @@ success, mr_id = endpoint.reg(recv_tensor.data_ptr(), recv_tensor.numel() * 4)
 assert success
 
 # Receive the tensor
-success, recv_size = endpoint.recv(conn_id, mr_id, recv_tensor.data_ptr(), recv_tensor.numel() * 4)
-assert success and recv_size == recv_tensor.numel() * 4
+success = endpoint.recv(conn_id, mr_id, recv_tensor.data_ptr(), recv_tensor.numel() * 4)
+assert success
 ```
 
 ### NumPy Array Transfer
@@ -216,7 +339,7 @@ if success:
 recv_data = np.zeros_like(data)
 recv_ptr = recv_data.ctypes.data
 success, recv_mr_id = endpoint.reg(recv_ptr, recv_data.nbytes)
-success, recv_size = endpoint.recv(conn_id, recv_mr_id, recv_ptr, recv_data.nbytes)
+success = endpoint.recv(conn_id, recv_mr_id, recv_ptr, recv_data.nbytes)
 ```
 
 ### Vectorized Multi-Tensor Transfer
@@ -265,16 +388,19 @@ for tensor in recv_tensors:
 
 # Prepare data for vectorized receive
 recv_ptr_list = [tensor.data_ptr() for tensor in recv_tensors]
-max_size_list = [tensor.numel() * 4 for tensor in recv_tensors]
+size_list = [tensor.numel() * 4 for tensor in recv_tensors]
 
 # Receive all tensors in one operation
-success, recv_size_list = endpoint.recvv(conn_id, recv_mr_ids, recv_ptr_list, max_size_list, num_iovs)
+success = endpoint.recvv(conn_id, recv_mr_ids, recv_ptr_list, size_list, num_iovs)
 assert success
-print(f"Received sizes: {recv_size_list}")
 ```
+
+</details>
 
 
 ## API Reference
+
+<details><summary>Click me</summary>
 
 ### Endpoint Class
 
@@ -293,7 +419,9 @@ Create a new RDMA endpoint instance.
 ```python
 connect(remote_ip_addr, remote_gpu_idx) -> (success, conn_id)
 ```
-Connect to a remote endpoint.
+Connect to a remote endpoint. 
+Note that a connection is one direction, only allowing the client (that calls `connect()`) to send data to the server (that calls `accept()`). 
+If you want bi-directional communication, you should create two connections. 
 
 **Parameters:**
 - `remote_ip_addr` (str): IP address of remote server
@@ -346,7 +474,7 @@ Send data to remote endpoint (blocking).
 - `success` (bool): Whether send completed successfully
 
 ```python
-recv(conn_id, mr_id, ptr, max_size) -> (success, recv_size)
+recv(conn_id, mr_id, ptr, size) -> success
 ```
 Receive data from remote endpoint (blocking).
 
@@ -354,11 +482,10 @@ Receive data from remote endpoint (blocking).
 - `conn_id` (int): Connection ID from connect/accept
 - `mr_id` (int): Memory region ID from register
 - `ptr` (int): Pointer to buffer for received data
-- `max_size` (int): Maximum number of bytes to receive
+- `size` (int): Number of bytes to receive
 
 **Returns:**
 - `success` (bool): Whether receive completed successfully
-- `recv_size` (int): Number of bytes actually received
 
 ```python
 sendv(conn_id, mr_id_list, ptr_list, size_list, num_iovs) -> success
@@ -376,7 +503,7 @@ Send multiple memory regions to remote endpoint in a single operation (blocking)
 - `success` (bool): Whether send completed successfully
 
 ```python
-recvv(conn_id, mr_id_list, ptr_list, max_size_list, num_iovs) -> (success, recv_size_list)
+recvv(conn_id, mr_id_list, ptr_list, size_list, num_iovs) -> success
 ```
 Receive multiple memory regions from remote endpoint in a single operation (blocking).
 
@@ -384,12 +511,11 @@ Receive multiple memory regions from remote endpoint in a single operation (bloc
 - `conn_id` (int): Connection ID from connect/accept
 - `mr_id_list` (list[int]): List of memory region IDs from register
 - `ptr_list` (list[int]): List of pointers to buffers for received data
-- `max_size_list` (list[int]): List of maximum sizes in bytes for each memory region
+- `size_list` (list[int]): List of sizes in bytes for each memory region
 - `num_iovs` (int): Number of I/O vectors (length of the lists)
 
 **Returns:**
 - `success` (bool): Whether receive completed successfully
-- `recv_size_list` (list[int]): List of actual sizes received for each memory region
 
 #### Asynchronous Transfer Operations
 
@@ -409,7 +535,7 @@ Send data to remote endpoint asynchronously (non-blocking).
 - `transfer_id` (int): Transfer ID for polling completion
 
 ```python
-recv_async(conn_id, mr_id, ptr, max_size) -> (success, transfer_id)
+recv_async(conn_id, mr_id, ptr, size) -> (success, transfer_id)
 ```
 Receive data from remote endpoint asynchronously (non-blocking).
 
@@ -435,24 +561,14 @@ Poll the status of an asynchronous transfer operation.
 - `success` (bool): Whether polling succeeded
 - `is_done` (bool): Whether the transfer has completed
 
+</details>
 
-## Development and Testing
 
-### Build Targets
+## Testing
+
 ```bash
-make all          # Build the module
-make install      # Installs the module in python package path
-make clean        # Clean build artifacts  
-make test         # Run test suite
-make install-deps # Install Python dependencies
-make help         # Show available targets
-```
-
-### Testing Your Setup
-```bash
-# Run the included test suite
-python3 test_engine.py
-
-# Check if RDMA hardware is available
-# (This will work even without RDMA hardware for testing)
+python tests/test_engine.py
+python tests/test_engine_read.py
+python tests/test_engine_metadata.py
+torchrun --nnodes=1 --nproc_per_node=2 tests/test_engine_nvlink.py
 ```
