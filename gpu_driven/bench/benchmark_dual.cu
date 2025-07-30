@@ -90,6 +90,8 @@ int main(int argc, char** argv) {
   const Stats s = compute_stats(env, t0, t1);
   print_summary(env, s);
 
+  // Sleep
+  ::sleep(2);
   for (int i = 0; i < env.blocks; ++i) {
     proxies[i]->set_progress_run(false);
   }

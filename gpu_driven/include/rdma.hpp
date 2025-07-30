@@ -10,23 +10,11 @@
 #include <unordered_set>
 #include <vector>
 
-// Global RDMA resources
-extern thread_local struct ibv_context* context;
-extern thread_local struct ibv_pd* pd;
-extern thread_local struct ibv_mr* mr;
-extern thread_local uint32_t rkey;
-extern thread_local struct ibv_qp* qp;
-extern thread_local struct ibv_qp* ack_qp;
-extern thread_local uintptr_t remote_addr;
-extern thread_local uint32_t remote_rkey;
-extern thread_local std::atomic<bool> g_progress_run;
-extern thread_local uint64_t largest_completed_wr;
-extern thread_local bool has_received_ack;
-
 struct RDMAConnectionInfo {
   uint32_t qp_num;  // Queue pair number
   uint32_t psn;     // Packet sequence number
   uint32_t ack_qp_num;
+  uint32_t recv_ack_qp_num;
   uint32_t ack_psn;
   uint32_t rkey;    // Memory region key
   uintptr_t addr;   // Buffer address
@@ -61,7 +49,7 @@ ibv_cq* create_per_thread_cq(ProxyCtx& S);
 void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring);
 void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
                           int block_idx);
-void remote_send_ack(struct ibv_qp* local_ack_qp, uint64_t& wr_id,
+void remote_send_ack(struct ibv_qp* ack_qp, uint64_t& wr_id,
                      ibv_mr* local_ack_mr, uint64_t* ack_buf, int worker_idx);
 void local_post_ack_buf(ProxyCtx& S, int depth);
 void remote_reg_ack_buf(ibv_pd* pd, uint64_t* ack_buf, ibv_mr*& ack_mr);

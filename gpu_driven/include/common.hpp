@@ -51,7 +51,6 @@
 #else
 #define NVLINK_SM_PER_PROCESS 2
 #endif
-
 bool pin_thread_to_cpu(int cpu);
 void cpu_relax();
 

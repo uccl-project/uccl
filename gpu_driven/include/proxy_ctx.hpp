@@ -13,6 +13,7 @@ struct ProxyCtx {
   ibv_cq* cq = nullptr;
   ibv_qp* qp = nullptr;
   ibv_qp* ack_qp = nullptr;
+  ibv_qp* recv_ack_qp = nullptr;
 
   // Remote memory
   uintptr_t remote_addr = 0;
