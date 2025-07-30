@@ -45,9 +45,8 @@ void sync_and_post(CopyRingBuffer& g_ring, cudaStream_t& stream, int idx) {
       fprintf(stderr, "Kernel execution failed: %s\n", cudaGetErrorString(err));
       std::abort();
     }
-    remote_notify_sender_that_wr_id_has_completed(
-        g_ring.ack_qp, highest_issued_wr_id, g_ring.ack_mr, g_ring.ack_buf,
-        idx);
+    remote_send_ack(g_ring.ack_qp, highest_issued_wr_id, g_ring.ack_mr,
+                    g_ring.ack_buf, idx);
     prev_completed_async_memcpy_count = async_memcpy_count;
   }
 }
@@ -152,9 +151,8 @@ void peer_copy_worker(CopyRingBuffer& g_ring, int idx) {
 
       if (copy_batch_size > 0) {
         // Post the last wr is enough.
-        remote_notify_sender_that_wr_id_has_completed(
-            g_ring.ack_qp, highest_issued_wr_id, g_ring.ack_mr, g_ring.ack_buf,
-            idx);
+        remote_send_ack(g_ring.ack_qp, highest_issued_wr_id, g_ring.ack_mr,
+                        g_ring.ack_buf, idx);
       }
       prev_completed_async_memcpy_count = async_memcpy_count;
     }

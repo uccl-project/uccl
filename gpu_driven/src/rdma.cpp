@@ -58,6 +58,21 @@ thread_local std::unordered_map<uint64_t, std::vector<uint64_t>>
 
 void* per_GPU_device_buf[NUM_GPUS];
 
+static inline char const* wc_op_str(int op) {
+  switch (op) {
+    case IBV_WC_SEND:
+      return "SEND(0)";
+    case IBV_WC_RDMA_WRITE:
+      return "WRITE(1)";
+    case IBV_WC_RECV:
+      return "RECV(128)";
+    case IBV_WC_RECV_RDMA_WITH_IMM:
+      return "RECV_W_IMM(129)";
+    default:
+      return "UNKNOWN";
+  }
+}
+
 void exchange_connection_info(int rank, char const* peer_ip, int tid,
                               RDMAConnectionInfo* local,
                               RDMAConnectionInfo* remote) {
@@ -517,10 +532,7 @@ void post_rdma_async_batched(void* buf, size_t bytes, size_t num_wrs,
   wr.wr.rdma.rkey = remote_rkey;
   wr.wr_id = largest_wr;
   wr.imm_data = largest_wr;
-  if (largest_wr % kSignalledEvery == 0)
-    wr.send_flags = IBV_SEND_SIGNALED;
-  else
-    wr.send_flags = 0;
+  wr.send_flags = IBV_SEND_SIGNALED;
 
   ibv_send_wr* bad = nullptr;
   int ret = ibv_post_send(qp, &wr, &bad);
@@ -538,64 +550,6 @@ void post_rdma_async_batched(void* buf, size_t bytes, size_t num_wrs,
     exit(1);
   }
   wr_id_to_wr_ids[largest_wr] = wrs_to_post;
-}
-
-void post_rdma_async_chained(void* buf, size_t bytes, size_t num_wrs,
-                             std::vector<uint64_t> wrs_to_post, ibv_cq* cq,
-                             std::unordered_set<uint64_t>& finished_wrs,
-                             std::mutex& finished_wrs_mutex) {
-  std::vector<struct ibv_sge> sges(num_wrs);
-  std::vector<struct ibv_send_wr> wrs(num_wrs);
-  if (num_wrs != wrs_to_post.size()) {
-    fprintf(stderr,
-            "Error: num_wrs (%ld) does not match wrs_to_post size (%zu)\n",
-            num_wrs, wrs_to_post.size());
-    exit(1);
-  }
-
-  for (size_t i = 0; i < num_wrs; ++i) {
-    int wr = wrs_to_post[i];
-    int offset = wr % (kRemoteBufferSize / bytes);
-    sges[i].addr = (uintptr_t)buf + offset * bytes;
-    sges[i].length = (uint32_t)bytes;
-    sges[i].lkey = mr->lkey;
-
-    wrs[i].sg_list = &sges[i];
-    wrs[i].num_sge = 1;
-    wrs[i].wr.rdma.remote_addr = remote_addr + offset * bytes;
-    wrs[i].wr.rdma.rkey = remote_rkey;
-    wrs[i].wr_id = wrs_to_post[i];
-    assert(wrs[i].wr_id <= kIterations);
-    wrs[i].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-    wrs[i].imm_data = wrs[i].wr_id;
-    if ((i + 1) % kSignalledEvery == 0)
-      wrs[i].send_flags = IBV_SEND_SIGNALED;
-    else
-      wrs[i].send_flags = 0;
-
-    if (i < num_wrs - 1) {
-      wrs[i].next = &wrs[i + 1];
-    } else {
-      wrs[i].next = nullptr;
-    }
-  }
-  ibv_send_wr* bad = nullptr;
-  int ret = ibv_post_send(qp, &wrs[0], &bad);
-  if (ret) {
-    fprintf(stderr,
-            "ibv_post_send failed: %s (ret=%d), num_wrs: %ld, g_posted: %ld. "
-            "g_completed: %ld\n",
-            strerror(ret), ret, num_wrs, g_posted.load(), g_completed.load());
-    uint64_t inflight = g_posted.load(std::memory_order_acquire) -
-                        g_completed.load(std::memory_order_acquire);
-    printf("Currently outstanding send WRs: %lu\n", inflight);
-
-    if (bad) {
-      fprintf(stderr, "Bad WR at address: %p\n", bad);
-    }
-    exit(1);
-  }
-  g_posted.fetch_add(num_wrs, std::memory_order_relaxed);
 }
 
 void post_rdma_async(void* buf, size_t bytes, uint64_t wr_id, ibv_cq* cq,
@@ -675,13 +629,12 @@ bool GdrSupportInitOnce() {
          KNL_MODULE_LOADED("/sys/module/nvidia_peermem/version");
 }
 
-void local_poll_completions(ibv_cq* cq,
-                            std::unordered_set<uint64_t>& finished_wrs,
-                            std::mutex& finished_wrs_mutex, int thread_idx) {
-  struct ibv_wc wc[kMaxOutstandingSends];  // batch poll
-  int ne = ibv_poll_cq(cq, kMaxOutstandingSends, wc);
+void local_process_completions(ibv_cq* cq,
+                               std::unordered_set<uint64_t>& finished_wrs,
+                               std::mutex& finished_wrs_mutex, int thread_idx,
+                               ibv_wc* wc, int ne) {
   if (ne == 0) return;
-  int write_ack = 0;
+  int send_completed = 0;
 
   assert(ack_qp->send_cq == cq);
   assert(ack_qp->recv_cq == cq);
@@ -693,26 +646,20 @@ void local_poll_completions(ibv_cq* cq,
     }
 
     switch (wc[i].opcode) {
-      case IBV_WC_SEND:
       case IBV_WC_RDMA_WRITE: {
         std::lock_guard<std::mutex> lock(finished_wrs_mutex);
-#ifdef RDMA_BATCH_TOKENS
         for (auto const& wr_id : wr_id_to_wr_ids[wc[i].wr_id]) {
           finished_wrs.insert(wr_id);
+          send_completed++;
         }
         // printf("[WR] %d completed on peer, wr_id=%llu, num_wrs=%zu\n",
         //        thread_idx, (unsigned long long)wc[i].wr_id,
         //        wr_id_to_wr_ids[wc[i].wr_id].size());
         wr_id_to_wr_ids.erase(wc[i].wr_id);
-#else
-        finished_wrs.insert(wc[i].wr_id);
-#endif
       } break;
       case IBV_WC_RECV:
         if (wc[i].wc_flags & IBV_WC_WITH_IMM) {
           uint64_t slot = static_cast<uint64_t>(wc[i].wr_id);
-          write_ack++;
-
           uint64_t wr_done = static_cast<uint64_t>(wc[i].imm_data);
           // printf("[ACK - %d] Received ACK for WR %lu in slot %lu\n",
           // thread_idx, wr_done, slot);
@@ -741,6 +688,8 @@ void local_poll_completions(ibv_cq* cq,
           if (ibv_post_recv(ack_qp, &rwr, &bad)) {
             perror("ibv_post_recv(repost ACK)");
             std::abort();
+          } else {
+            std::abort();
           }
         }
         break;
@@ -749,10 +698,16 @@ void local_poll_completions(ibv_cq* cq,
         break;
     }
   }
-  g_completed.fetch_add(ne, std::memory_order_relaxed);
-  // if (write_ack > 0) {
-  //   printf("[ACK] %d completed on peer\n", write_ack);
-  // }
+  g_completed.fetch_add(send_completed, std::memory_order_relaxed);
+}
+
+void local_poll_completions(ibv_cq* cq,
+                            std::unordered_set<uint64_t>& finished_wrs,
+                            std::mutex& finished_wrs_mutex, int thread_idx) {
+  struct ibv_wc wc[kMaxOutstandingSends];  // batch poll
+  int ne = ibv_poll_cq(cq, kMaxOutstandingSends, wc);
+  local_process_completions(cq, finished_wrs, finished_wrs_mutex, thread_idx,
+                            wc, ne);
 }
 
 void per_thread_polling(int thread_idx, struct ibv_cq* per_thread_cq,
@@ -819,66 +774,29 @@ void handle_peer_copy(uint64_t wr_id, int src_dev, int dst_dev, void* src_ptr,
   }
 }
 
-void remote_cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq,
-                                                CopyRingBuffer& g_ring) {
-  struct ibv_wc wc[kMaxOutstandingRecvs];
+void remote_process_completions(int idx, ibv_cq* cq, CopyRingBuffer& g_ring,
+                                int ne, ibv_wc* wc) {
   struct ibv_sge sges[kMaxOutstandingRecvs];
   struct ibv_recv_wr wrs[kMaxOutstandingRecvs];
-  size_t pool_index = 0;
-  assert(ack_qp->send_cq == cq);
-  assert(qp->send_cq == cq);
-  while (g_progress_run.load(std::memory_order_acquire)) {
-    int ne = ibv_poll_cq(cq, kMaxOutstandingRecvs, wc);
-    if (ne == 0) continue;
-    int num_wr_imm = 0;
-    for (int i = 0; i < ne; ++i) {
-      if (wc[i].status != IBV_WC_SUCCESS) {
-        // if (wc[i].status == IBV_WC_WR_FLUSH_ERR) {
-        //   std::abort();
-        // }
-        // if (wc[i].status == IBV_WC_RNR_RETRY_EXC_ERR) {
-        //   continue;
-        // }
-        fprintf(stderr, "RDMA error: %s\n", ibv_wc_status_str(wc[i].status));
-        std::abort();
-      }
-      if (wc[i].opcode == IBV_WC_SEND) {
-        send_ack_completed++;
-        // printf("[ACK] remote_cpu_proxy_poll_write_with_immediate: %ld
-        // onflight on peer\n",
-        //        send_ack_posted - send_ack_completed);
-        continue;
-      }
-      if (wc[i].opcode != IBV_WC_RECV_RDMA_WITH_IMM) {
-        fprintf(stderr, "Unexpected opcode: %d\n", wc[i].opcode);
-        exit(1);
-      }
-      // int src_addr_offset;
-      // int destination_gpu;
-      // uint32_t destination_addr_offset;
-
-      // unpack_imm_data(src_addr_offset, destination_gpu,
-      // destination_addr_offset,
-      //                 wc[i].imm_data);
-
-      // int wr_gpu = (int)(wc[i].wr_id % NUM_GPUS);
-      // int wr_gpu = wc[i].imm_data
-      // if (destination_gpu != wr_gpu) {
-      //   fprintf(stderr,
-      //           "Unexpected immediate data: dest=%u  wr_id=%d  full "
-      //           "wr_id=%lu\n",
-      //           destination_gpu, wr_gpu, wc[i].wr_id);
-      //   exit(EXIT_FAILURE);
-      // }
-
+  static thread_local size_t pool_index = 0;
+  if (ne == 0) return;
+  int num_wr_imm = 0;
+  for (int i = 0; i < ne; ++i) {
+    if (wc[i].status != IBV_WC_SUCCESS) {
+      fprintf(stderr, "RDMA error: %s\n", ibv_wc_status_str(wc[i].status));
+      std::abort();
+    }
+    if (wc[i].opcode == IBV_WC_SEND) {
+      send_ack_completed++;
+      continue;
+    }
+    if (wc[i].opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
       pool_index = (pool_index + 1) % (kRemoteBufferSize / kObjectSize - 1);
-      char* next_buf = static_cast<char*>(mr->addr) + pool_index * kObjectSize;
-
-      sges[num_wr_imm] = {.addr = reinterpret_cast<uintptr_t>(next_buf),
-                          .length = kObjectSize,
+      sges[num_wr_imm] = {.addr = reinterpret_cast<uintptr_t>(nullptr),
+                          .length = 0,
                           .lkey = mr->lkey};
-
-      wrs[num_wr_imm] = {.wr_id = wc[i].wr_id + 0x10000000ULL,
+      const uint64_t slot_id = pool_index;
+      wrs[num_wr_imm] = {.wr_id = slot_id,
                          .next = nullptr,
                          .sg_list = &sges[num_wr_imm],
                          .num_sge = 1};
@@ -887,60 +805,50 @@ void remote_cpu_proxy_poll_write_with_immediate(int idx, ibv_cq* cq,
       }
       num_wr_imm++;
     }
-    ibv_recv_wr* bad = nullptr;
-    if (num_wr_imm > 0) {
-      int ret = ibv_post_recv(qp, &wrs[0], &bad);
-      if (ret) {
-        fprintf(stderr, "ibv_post_recv failed: %s\n", strerror(ret));
-        std::abort();
-      }
+  }
+  ibv_recv_wr* bad = nullptr;
+  if (num_wr_imm > 0) {
+    int ret = ibv_post_recv(qp, &wrs[0], &bad);
+    if (ret) {
+      fprintf(stderr, "ibv_post_recv failed: %s\n", strerror(ret));
+      std::abort();
     }
+  }
 
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
-    std::vector<CopyTask> task_vec;
-    task_vec.reserve(num_wr_imm);
-    for (int i = 0; i < ne; ++i) {
-      int src_addr_offset = 0;
-      // int destination_gpu;
-      uint32_t destination_addr_offset = 0;
-      if (wc[i].opcode == IBV_WC_SEND) {
-        continue;
-      }
-      // unpack_imm_data(src_addr_offset, destination_gpu,
-      // destination_addr_offset,
-      //                 wc[i].imm_data);
-      int destination_gpu = wc[i].imm_data % NUM_GPUS;
-      if (per_GPU_device_buf[destination_gpu] == nullptr) {
-        fprintf(stderr, "per_GPU_device_buf[%d] is null\n", destination_gpu);
-        std::abort();
-      }
-#ifndef RDMA_BATCH_TOKENS
-      if (wc[i].byte_len != kObjectSize) {
-        fprintf(stderr, "Unexpected byte length: %u, expected: %u\n",
-                wc[i].byte_len, kObjectSize);
-        std::abort();
-      }
-#endif
-      if (wc[i].imm_data > kIterations) {
-        fprintf(stderr, "Unexpected imm_data: %u, expected <= %d\n",
-                wc[i].imm_data, kIterations);
-        std::abort();
-      }
-      CopyTask task{
-          .wr_id = wc[i].imm_data,
-          .dst_dev = destination_gpu,
-          .src_ptr = static_cast<char*>(mr->addr) + src_addr_offset,
-          .dst_ptr = static_cast<char*>(per_GPU_device_buf[destination_gpu]) +
-                     destination_addr_offset,
-          .bytes = wc[i].byte_len};
-      task_vec.push_back(task);
+  std::vector<CopyTask> task_vec;
+  task_vec.reserve(num_wr_imm);
+  for (int i = 0; i < ne; ++i) {
+    int src_addr_offset = 0;
+    // int destination_gpu;
+    uint32_t destination_addr_offset = 0;
+    if (wc[i].opcode != IBV_WC_RECV_RDMA_WITH_IMM) {
+      continue;
     }
-    if (!task_vec.empty()) {
-      while (!g_ring.pushN(task_vec.data(), task_vec.size())) { /* Busy spin. */
-      }
+    int destination_gpu = wc[i].imm_data % NUM_GPUS;
+    if (per_GPU_device_buf[destination_gpu] == nullptr) {
+      fprintf(stderr, "per_GPU_device_buf[%d] is null\n", destination_gpu);
+      std::abort();
     }
-#endif
+    if (wc[i].imm_data > kIterations) {
+      fprintf(stderr, "Unexpected imm_data: %u, expected <= %d\n",
+              wc[i].imm_data, kIterations);
+      std::abort();
+    }
+    CopyTask task{
+        .wr_id = wc[i].imm_data,
+        .dst_dev = destination_gpu,
+        .src_ptr = static_cast<char*>(mr->addr) + src_addr_offset,
+        .dst_ptr = static_cast<char*>(per_GPU_device_buf[destination_gpu]) +
+                   destination_addr_offset,
+        .bytes = wc[i].byte_len};
+    task_vec.push_back(task);
   }
+  if (!task_vec.empty()) {
+    while (!g_ring.pushN(task_vec.data(), task_vec.size())) { /* Busy spin. */
+    }
+  }
+#endif
 }
 
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
@@ -955,6 +863,15 @@ void print_average_async_memcpy_time() {
 }
 #endif
 
+void remote_poll_completions(int idx, ibv_cq* cq, CopyRingBuffer& g_ring) {
+  struct ibv_wc wc[kMaxOutstandingRecvs];
+
+  assert(ack_qp->send_cq == cq);
+  assert(qp->send_cq == cq);
+  int ne = ibv_poll_cq(cq, kMaxOutstandingRecvs, wc);
+  remote_process_completions(idx, cq, g_ring, ne, wc);
+}
+
 void remote_ensure_ack_sender_resources(ibv_pd* pd, uint64_t* ack_buf,
                                         ibv_mr*& ack_mr) {
   if (ack_mr) return;
@@ -967,11 +884,8 @@ void remote_ensure_ack_sender_resources(ibv_pd* pd, uint64_t* ack_buf,
   }
 }
 
-void remote_notify_sender_that_wr_id_has_completed(struct ibv_qp* local_ack_qp,
-                                                   uint64_t& wr_id,
-                                                   ibv_mr* local_ack_mr,
-                                                   uint64_t* ack_buf,
-                                                   int worker_idx) {
+void remote_send_ack(struct ibv_qp* local_ack_qp, uint64_t& wr_id,
+                     ibv_mr* local_ack_mr, uint64_t* ack_buf, int worker_idx) {
   if (!local_ack_qp || !local_ack_mr) {
     if (!local_ack_qp) {
       fprintf(stderr, "QP not initialised\n");
@@ -1019,7 +933,7 @@ void remote_notify_sender_that_wr_id_has_completed(struct ibv_qp* local_ack_qp,
 
   // printf("[ACK - %d]  wr_id=%lu posted to ACK sender\n", worker_idx,
   //        static_cast<unsigned long>(wr_id));
-  // printf("[ACK] remote_notify_sender_that_wr_id_has_completed: %ld onflight
+  // printf("[ACK] remote_send_ack: %ld onflight
   // on peer, posted: %ld, completed: %ld\n", send_ack_posted -
   // send_ack_completed, send_ack_posted.load(), send_ack_completed.load());
 }

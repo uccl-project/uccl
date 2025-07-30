@@ -74,7 +74,9 @@ void Proxy::run_remote() {
   printf("Remote CPU thread for block %d: ack_qp=%p, ack_mr=%p\n",
          cfg_.block_idx + 1, (void*)ack_qp,
          (void*)(cfg_.ring ? cfg_.ring->ack_mr : nullptr));
-  remote_cpu_proxy_poll_write_with_immediate(cfg_.block_idx, cq_, *cfg_.ring);
+  while (g_progress_run.load(std::memory_order_acquire)) {
+    remote_poll_completions(cfg_.block_idx, cq_, *cfg_.ring);
+  }
 }
 
 void Proxy::sender_loop() {
@@ -213,15 +215,9 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 
   if (!wrs_to_post.empty()) {
     auto start = std::chrono::high_resolution_clock::now();
-#ifdef RDMA_BATCH_TOKENS
     post_rdma_async_batched(cfg_.gpu_buffer, kObjectSize, batch_size,
                             wrs_to_post, cq_, finished_wrs_,
                             finished_wrs_mutex_);
-#else
-    post_rdma_async_chained(cfg_.gpu_buffer, kObjectSize, batch_size,
-                            wrs_to_post, cq_, finished_wrs_,
-                            finished_wrs_mutex_);
-#endif
     auto end = std::chrono::high_resolution_clock::now();
     total_rdma_write_durations_ +=
         std::chrono::duration_cast<std::chrono::microseconds>(end - start);
