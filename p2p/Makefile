@@ -66,7 +66,7 @@ clean:
 
 # Test the module
 test: $(TARGET)
-	$(PYTHON) tests/test_engine.py
+	$(PYTHON) tests/test_engine_write.py
 
 # Install pybind11 if not available
 install-deps:

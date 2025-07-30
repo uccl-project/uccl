@@ -567,7 +567,7 @@ Poll the status of an asynchronous transfer operation.
 ## Testing
 
 ```bash
-python tests/test_engine.py
+python tests/test_engine_write.py
 python tests/test_engine_read.py
 python tests/test_engine_metadata.py
 torchrun --nnodes=1 --nproc_per_node=2 tests/test_engine_nvlink.py
