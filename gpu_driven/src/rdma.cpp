@@ -558,16 +558,11 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
     }
     if (wc[i].opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
       S.pool_index = (S.pool_index + 1) % (kRemoteBufferSize / kObjectSize - 1);
-      sges[num_wr_imm] = {.addr = reinterpret_cast<uintptr_t>(nullptr),
-                          .length = 0,
-                          .lkey = S.mr->lkey};
       wrs[num_wr_imm] = {.wr_id = S.pool_index,
                          .next = nullptr,
-                         .sg_list = &sges[num_wr_imm],
-                         .num_sge = 1};
-      if (num_wr_imm >= 1) {
-        wrs[num_wr_imm - 1].next = &wrs[num_wr_imm];
-      }
+                         .sg_list = nullptr,
+                         .num_sge = 0};
+      if (num_wr_imm >= 1) wrs[num_wr_imm - 1].next = &wrs[num_wr_imm];
       num_wr_imm++;
     }
   }

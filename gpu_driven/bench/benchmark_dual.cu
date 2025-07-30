@@ -13,7 +13,8 @@
 
 int main(int argc, char** argv) {
   if (argc < 3) {
-    std::cerr << "Usage: ./benchmark_dual <rank> <peer_ip>\n";
+    std::cerr << "Usage: CUDA_MODULE_LOADING=EAGER ./benchmark_dual <rank> "
+                 "<peer_ip>\n";
     return 1;
   }
   int const rank = std::atoi(argv[1]);
