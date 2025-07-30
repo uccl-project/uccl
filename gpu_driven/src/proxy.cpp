@@ -82,38 +82,9 @@ void Proxy::run_remote() {
 void Proxy::run_dual() {
   printf("Dual (single-thread) proxy for block %d starting\n",
          cfg_.block_idx + 1);
-  per_thread_rdma_init(ctx_, cfg_.gpu_buffer, cfg_.total_size, cfg_.rank,
-                       cfg_.block_idx);
-  if (cfg_.pin_thread) {
-    pin_thread_to_cpu(cfg_.block_idx + 1);
-    int cpu = sched_getcpu();
-    if (cpu == -1) {
-      perror("sched_getcpu");
-    } else {
-      printf("Thread pinned to CPU core %d\n", cpu);
-    }
-  }
-  ctx_.cq = create_per_thread_cq(ctx_);
-  create_per_thread_qp(ctx_, cfg_.gpu_buffer, cfg_.total_size, &local_info_,
-                       cfg_.rank);
-
-  modify_qp_to_init(ctx_);
-  exchange_connection_info(cfg_.rank, cfg_.peer_ip, cfg_.block_idx,
-                           &local_info_, &remote_info_);
-  modify_qp_to_rtr(ctx_, &remote_info_);
-  modify_qp_to_rts(ctx_, &local_info_);
-
-  ctx_.remote_addr = remote_info_.addr;
-  ctx_.remote_rkey = remote_info_.rkey;
-
+  init_remote();
   // == sender-only bits:
   local_post_ack_buf(ctx_, kSenderAckQueueDepth);
-
-  // == remote-only bits:
-  remote_reg_ack_buf(ctx_.pd, ring.ack_buf, ring.ack_mr);
-
-  ring.ack_qp = ctx_.ack_qp;
-  post_receive_buffer_for_imm(ctx_);
 
   uint64_t my_tail = 0;
   size_t seen = 0;
@@ -179,12 +150,12 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
 void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
   // Force load head from DRAM
   uint64_t cur_head = cfg_.rb->volatile_head();
-  size_t batch_size = cur_head - seen;
-
   if (cur_head == my_tail) {
     cpu_relax();
     return;
   }
+
+  size_t batch_size = cur_head - seen;
   if (batch_size > static_cast<size_t>(kMaxInflight)) {
     fprintf(stderr, "Error: batch_size %zu exceeds kMaxInflight %d\n",
             batch_size, kMaxInflight);
