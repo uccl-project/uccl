@@ -126,7 +126,7 @@ void Proxy::run_dual() {
   uint64_t my_tail = 0;
   size_t seen = 0;
 
-  while (my_tail < kIterations ||
+  while (my_tail < kIterations &&
          g_progress_run.load(std::memory_order_acquire)) {
     poll_cq_dual(cq_, finished_wrs_, finished_wrs_mutex_, cfg_.block_idx,
                  *cfg_.ring);
@@ -153,7 +153,6 @@ void Proxy::run_dual() {
                    *cfg_.ring);
       notify_gpu_completion(my_tail);
     }
-    g_progress_run.store(false, std::memory_order_release);
   }
 
   printf(

@@ -89,13 +89,16 @@ int main(int argc, char** argv) {
   const Stats s = compute_stats(env, t0, t1);
   print_summary(env, s);
   ::sleep(30);
-
+  g_progress_run.store(false);
+  printf("sleep finished\n");
   // Join proxy threads
   for (auto& t : cpu_threads) t.join();
+  printf("cpu_threads joined\n");
 
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
   g_run.store(false, std::memory_order_release);
   for (auto& th : copy_threads) th.join();
+  printf("copy_threads joined\n");
 #endif
 
   // Cleanup
