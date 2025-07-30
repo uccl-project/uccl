@@ -39,7 +39,6 @@ void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info,
                 int rank);
 
 // Post an RDMA write
-bool GdrSupportInitOnce();
 void post_receive_buffer_for_imm(ProxyCtx& S);
 
 void exchange_connection_info(int rank, char const* peer_ip, int tid,

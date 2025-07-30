@@ -435,14 +435,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t bytes,
   S.wr_id_to_wr_ids[largest_wr] = wrs_to_post;
 }
 
-#define KNL_MODULE_LOADED(a) ((access(a, F_OK) == -1) ? 0 : 1)
-bool GdrSupportInitOnce() {
-  // Check for the nv_peer_mem module being loaded
-  return KNL_MODULE_LOADED("/sys/kernel/mm/memory_peers/nv_mem/version") ||
-         KNL_MODULE_LOADED("/sys/kernel/mm/memory_peers/nv_mem_nc/version") ||
-         KNL_MODULE_LOADED("/sys/module/nvidia_peermem/version");
-}
-
 void local_process_completions(ProxyCtx& S,
                                std::unordered_set<uint64_t>& finished_wrs,
                                std::mutex& finished_wrs_mutex, int thread_idx,

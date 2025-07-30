@@ -35,14 +35,6 @@ class Proxy {
   };
 
   explicit Proxy(Config const& cfg) : cfg_(cfg) {
-    bool const gdr_ok = GdrSupportInitOnce();
-    if (!gdr_ok) {
-      std::fprintf(stderr,
-                   "Error: GPUDirect RDMA module is not loaded. Please load "
-                   "nvidia_peermem or nv_peer_mem!\n");
-      std::abort();
-    }
-
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
     const size_t total_size = kRemoteBufferSize;
     for (int d = 0; d < NUM_GPUS; ++d) {
