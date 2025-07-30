@@ -22,17 +22,21 @@ std::once_flag glog_init_once;
 constexpr uint32_t kGpuStreamId = 0;
 
 inline void check_python_signals() {
+#ifdef WITH_PYTHON
   PyGILState_STATE gstate = PyGILState_Ensure();
   if (PyErr_CheckSignals() != 0) {
     std::cerr << "Python signal caught, exiting..." << std::endl;
     std::abort();
   }
   PyGILState_Release(gstate);
+#endif
 }
 
 Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
     : local_gpu_idx_(local_gpu_idx), num_cpus_(num_cpus) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
+#endif
   std::cout << "Creating Engine with GPU index: " << local_gpu_idx
             << ", CPUs: " << num_cpus << std::endl;
   // Py_Initialize();
@@ -102,7 +106,9 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
 }
 
 Endpoint::~Endpoint() {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
+#endif
   std::cout << "Destroying Engine..." << std::endl;
   delete ep_;
 
@@ -123,7 +129,9 @@ Endpoint::~Endpoint() {
 
 bool Endpoint::connect(std::string const& ip_addr, int const& remote_gpu_idx,
                        uint64_t& conn_id, int remote_port) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
+#endif
   std::cout << "Attempting to connect to " << ip_addr << ":" << remote_gpu_idx
             << std::endl;
 
@@ -226,7 +234,9 @@ bool Endpoint::connect(py::bytes const& meta_bytes, uint64_t& conn_id) {
 
 bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
                       uint64_t& conn_id) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
+#endif
   std::cout << "Waiting to accept incoming connection..." << std::endl;
 
   // For demo purposes, simulate accepted connection
@@ -254,8 +264,9 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
 }
 
 bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
-
+#endif
   mr_id = next_mr_id_.fetch_add(1);
 
   uccl::Mhandle* mhandle;
@@ -273,7 +284,9 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
 
 bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
                     uccl::FifoItem const& slot_item) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
+#endif
 
   if (!ucclParamRCMode()) {
     DCHECK(false) << "RDMA READ is only supported in RC mode, toggle RCMODE to "
@@ -431,8 +444,9 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
 }
 
 bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
-
+#endif
   auto conn = conn_id_to_conn_[conn_id];
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
   int size_int = static_cast<int>(size);
@@ -484,7 +498,9 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
 bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void const*> data_v,
                      std::vector<size_t> size_v, size_t num_iovs) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
+#endif
   auto conn = conn_id_to_conn_[conn_id];
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
@@ -557,7 +573,9 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void*> data_v, std::vector<size_t> size_v,
                      size_t num_iovs) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
+#endif
   auto conn = conn_id_to_conn_[conn_id];
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
@@ -638,7 +656,9 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
 bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
                           size_t size, uint64_t* transfer_id) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
+#endif
   auto conn = conn_id_to_conn_[conn_id];
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
 
@@ -664,7 +684,9 @@ bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
 
 bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
                           size_t size, uint64_t* transfer_id) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
+#endif
   auto conn = conn_id_to_conn_[conn_id];
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
 
@@ -711,7 +733,9 @@ bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
 }
 
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
+#endif
   auto* ureq = transfer_id_to_ureq_.at(transfer_id);
   *is_done = ep_->uccl_poll_ureq_once(ureq);
   if (*is_done) {
