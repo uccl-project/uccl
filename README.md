@@ -113,4 +113,4 @@ UCCL is generously supported by (in alphabetical order):
 [Mibura](https://www.mibura.com/).
 
 ## Contact
-Feel free to raise issues or contact us if you have any questions or suggestions. 
+Feel free to raise GitHub issues if you have any questions or suggestions. 
