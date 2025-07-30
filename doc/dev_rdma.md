@@ -141,7 +141,7 @@ salloc -N 2 -n 2 -p mi2104x -t 00:30:00
 ./run_rccl_test_hpcfund.sh rccl
 ```
 
-### If your are using Broadcom NICs
+### For Broadcom NICs
 
 Using the following to run `rccl-tests`:
 
