@@ -64,6 +64,10 @@ int main(int argc, char** argv) {
     cudaCheckErrors("cudaStreamSynchronize failed");
     auto t1 = std::chrono::high_resolution_clock::now();
 
+    for (int i = 0; i < env.blocks; ++i) {
+      proxies[i]->set_progress_run(false);
+    }
+
     for (auto& t : cpu_threads) t.join();
     print_block_latencies(env);
     const Stats s = compute_stats(env, t0, t1);
@@ -90,16 +94,15 @@ int main(int argc, char** argv) {
                            std::ref(worker_ctx[i]), std::ref(proxies[i]->ring),
                            i);
     }
-
 #endif
-    for (int i = 0; i < 60; ++i) {
+    for (int i = 0; i < 10; ++i) {
       std::this_thread::sleep_for(std::chrono::seconds(1));
       std::printf("Rank %d is waiting...\n", rank);
     }
     for (int i = 0; i < env.blocks; ++i) {
       proxies[i]->set_progress_run(false);
     }
-
+    for (auto& t : cpu_threads) t.join();
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
     shared.run.store(false, std::memory_order_release);
     for (auto& th : workers) th.join();
