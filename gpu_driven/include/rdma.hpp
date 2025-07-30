@@ -1,6 +1,7 @@
 #ifndef RDMA_HPP
 #define RDMA_HPP
 #include "common.hpp"
+#include "proxy_ctx.hpp"
 #include "ring_buffer.cuh"
 #include "unistd.h"
 #include <infiniband/verbs.h>
@@ -39,35 +40,29 @@ void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info,
 
 // Post an RDMA write
 bool GdrSupportInitOnce();
-void post_receive_buffer_for_imm();
+void post_receive_buffer_for_imm(ProxyCtx& S);
 
 void exchange_connection_info(int rank, char const* peer_ip, int tid,
                               RDMAConnectionInfo* local,
                               RDMAConnectionInfo* remote);
 
-void modify_qp_to_rtr(RDMAConnectionInfo* remote);
+void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote);
 
-void modify_qp_to_rts(RDMAConnectionInfo* local_info);
+void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info);
 
-void modify_qp_to_init();
-bool check_cq_completion();
-void local_poll_completions(ibv_cq* cq,
+void modify_qp_to_init(ProxyCtx& S);
+bool check_cq_completion(ProxyCtx& S);
+void local_poll_completions(ProxyCtx& S,
                             std::unordered_set<uint64_t>& finished_wrs,
                             std::mutex& finished_wrs_mutex, int thread_idx);
-void remote_process_completions(int idx, ibv_cq* cq, CopyRingBuffer& g_ring,
+void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& ring,
                                 int ne, ibv_wc* wc);
-void global_rdma_init(void* gpu_buf, size_t bytes, RDMAConnectionInfo* local,
-                      int rank);
-void create_per_thread_qp(void* gpu_buffer, size_t size,
-                          RDMAConnectionInfo* local_info, int rank, ibv_cq* cq);
-ibv_cq* create_per_thread_cq();
-void per_thread_polling(int thread_idx, struct ibv_cq* per_thread_cq,
-                        std::unordered_set<uint64_t>* per_thread_finished_wrs,
-                        std::mutex* per_thread_finished_wrs_mutex);
-void remote_poll_completions(int idx, ibv_cq* cq, CopyRingBuffer& g_ring);
-void per_thread_rdma_init(void* gpu_buf, size_t bytes, int rank, int block_idx);
-
-extern void* per_GPU_device_buf[NUM_GPUS];
+void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
+                          RDMAConnectionInfo* local_info, int rank);
+ibv_cq* create_per_thread_cq(ProxyCtx& S);
+void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring);
+void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
+                          int block_idx);
 
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
 void print_average_async_memcpy_time();
@@ -75,15 +70,17 @@ void print_average_async_memcpy_time();
 
 void remote_send_ack(struct ibv_qp* local_ack_qp, uint64_t& wr_id,
                      ibv_mr* local_ack_mr, uint64_t* ack_buf, int worker_idx);
-void local_init_ack_recv_ring(struct ibv_pd* pd, int depth);
+void local_init_ack_recv_ring(ProxyCtx& S, int depth);
 void remote_ensure_ack_sender_resources(ibv_pd* pd, uint64_t* ack_buf,
                                         ibv_mr*& ack_mr);
 
-void create_per_thread_ack_qp(void* gpu_buffer, size_t size,
-                              RDMAConnectionInfo* local_info, int rank,
-                              ibv_cq* cq);
-void post_rdma_async_batched(void* buf, size_t bytes, size_t num_wrs,
-                             std::vector<uint64_t> wrs_to_post, ibv_cq* cq,
+void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t bytes,
+                             size_t num_wrs, std::vector<uint64_t> wrs_to_post,
                              std::unordered_set<uint64_t>& finished_wrs,
                              std::mutex& finished_wrs_mutex);
+
+void local_process_completions(ProxyCtx& S,
+                               std::unordered_set<uint64_t>& finished_wrs,
+                               std::mutex& finished_wrs_mutex, int thread_idx,
+                               ibv_wc* wc, int ne);
 #endif  // RDMA_HPP

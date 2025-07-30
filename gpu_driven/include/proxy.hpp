@@ -2,6 +2,7 @@
 #define PROXY_HPP
 
 #include "common.hpp"
+#include "proxy_ctx.hpp"
 #include "rdma.hpp"
 #include "ring_buffer.cuh"
 #include <algorithm>
@@ -18,12 +19,6 @@
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
-
-struct ProxyCtx {
-  DeviceToHostCmdBuffer*
-      rb_host;  // host pointer (CPU visible address of RingBuffer)
-  int my_rank;  // rank id for this proxy (if simulating multiple)
-};
 
 class Proxy {
  public:
@@ -48,6 +43,22 @@ class Proxy {
                    "nvidia_peermem or nv_peer_mem!\n");
       std::abort();
     }
+
+#ifdef ENABLE_PROXY_CUDA_MEMCPY
+    const size_t total_size = kRemoteBufferSize;
+    for (int d = 0; d < NUM_GPUS; ++d) {
+      cudaSetDevice(d);
+      void* buf = nullptr;
+      cudaMalloc(&buf, total_size);
+      cudaCheckErrors("cudaMalloc per_GPU_device_buf failed");
+      ctx_.per_gpu_device_buf[d] = buf;
+    }
+    cudaSetDevice(0);
+#endif
+  }
+
+  void set_progress_run(bool run) {
+    ctx_.progress_run.store(run, std::memory_order_release);
   }
 
   void run_sender();
@@ -59,6 +70,7 @@ class Proxy {
   uint64_t completed_wr() const;
 
  private:
+  ProxyCtx ctx_;
   void init_common();
   void init_sender();
   void init_remote();
@@ -68,7 +80,6 @@ class Proxy {
   void post_gpu_command(uint64_t& my_tail, size_t& seen);
 
   Config cfg_;
-  ibv_cq* cq_ = nullptr;
   RDMAConnectionInfo local_info_{}, remote_info_{};
 
   // Completion tracking
