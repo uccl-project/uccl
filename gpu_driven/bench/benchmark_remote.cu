@@ -78,13 +78,19 @@ int main(int argc, char** argv) {
 
   } else {
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
-    std::vector<std::thread> copy_threads;
-    copy_threads.reserve(env.blocks);
-    for (int t = 0; t < env.blocks; ++t) {
-      copy_threads.emplace_back(peer_copy_worker, std::ref(proxies[t]->ring),
-                                t);
+
+    PeerCopyShared shared;
+    shared.src_device = 0;
+    std::vector<PeerWorkerCtx> worker_ctx(env.blocks);
+    std::vector<std::thread> workers;
+    workers.reserve(env.blocks);
+
+    for (int i = 0; i < env.blocks; ++i) {
+      workers.emplace_back(peer_copy_worker, std::ref(shared),
+                           std::ref(worker_ctx[i]), std::ref(proxies[i]->ring),
+                           i);
     }
-    g_run.store(true, std::memory_order_release);
+
 #endif
     for (int i = 0; i < 60; ++i) {
       std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -95,8 +101,8 @@ int main(int argc, char** argv) {
     }
 
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
-    g_run.store(false, std::memory_order_release);
-    for (auto& th : copy_threads) th.join();
+    shared.run.store(false, std::memory_order_release);
+    for (auto& th : workers) th.join();
 #endif
     destroy_env(env);
 #ifdef USE_GRACE_HOPPER

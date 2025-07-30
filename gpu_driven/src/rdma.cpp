@@ -532,47 +532,6 @@ bool check_cq_completion(ProxyCtx& S) {
   return completed * kSignalledEvery == posted && kIterations == completed;
 }
 
-void handle_peer_copy(uint64_t wr_id, int src_dev, int dst_dev, void* src_ptr,
-                      void* dst_ptr, size_t num_bytes) {
-  if (src_dev == dst_dev) {
-    return;
-  }
-  static thread_local cudaStream_t copy_stream = nullptr;
-  if (copy_stream == nullptr) {
-    cudaStreamCreate(&copy_stream);
-  }
-
-  static thread_local bool peer_enabled[NUM_GPUS][NUM_GPUS] = {};
-  if (!peer_enabled[src_dev][dst_dev]) {
-    cudaDeviceEnablePeerAccess(dst_dev, 0);
-    cudaSetDevice(dst_dev);
-    cudaDeviceEnablePeerAccess(src_dev, 0);
-    peer_enabled[src_dev][dst_dev] = true;
-    cudaSetDevice(src_dev);
-  }
-#ifdef ENABLE_PROXY_CUDA_MEMCPY
-  auto start_time = std::chrono::high_resolution_clock::now();
-  cudaError_t err = cudaMemcpyPeerAsync(dst_ptr, dst_dev, src_ptr, src_dev,
-                                        num_bytes, copy_stream);
-  async_memcpy_count++;
-  auto end_time = std::chrono::high_resolution_clock::now();
-  auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
-      end_time - start_time);
-  async_memcpy_total_time += duration.count();
-#else
-  cudaError_t err = cudaMemcpyPeerAsync(dst_ptr, dst_dev, src_ptr, src_dev,
-                                        num_bytes, copy_stream);
-#endif
-  if (err != cudaSuccess) {
-    fprintf(stderr,
-            "cudaMemcpyPeerAsync failed (%s)\n"
-            "  wr_id=%llu  %zu B  GPU%d→GPU%d\n",
-            cudaGetErrorString(err), (unsigned long long)wr_id, num_bytes,
-            src_dev, dst_dev);
-    std::abort();
-  }
-}
-
 void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                                 int ne, ibv_wc* wc) {
   struct ibv_sge sges[kMaxOutstandingRecvs];
@@ -649,14 +608,14 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
 }
 
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
-void print_average_async_memcpy_time() {
-  printf("Total async memcpy calls: %lu\n", async_memcpy_count);
-  if (async_memcpy_count == 0) {
+void print_average_async_memcpy_time(PeerWorkerCtx& ctx) {
+  printf("Total async memcpy calls: %lu\n", ctx.async_memcpy_count);
+  if (ctx.async_memcpy_count == 0) {
     printf("No async memcpy calls were made.\n");
     return;
   }
   printf("Average async memcpy time: %lu us\n",
-         async_memcpy_total_time / async_memcpy_count);
+         ctx.async_memcpy_total_time / ctx.async_memcpy_count);
 }
 #endif
 
