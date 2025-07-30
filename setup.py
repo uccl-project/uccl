@@ -28,7 +28,7 @@ setup(
         "uccl": ["lib/*.so", "p2p*.so"],
     },
     license="Apache-2.0",
-    install_requires=[],
+    install_requires=["paramiko"],
     classifiers=[
         "Programming Language :: Python :: 3",
     ],

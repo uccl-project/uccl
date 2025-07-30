@@ -1,12 +1,14 @@
 # UCCL Dev Guide
 
-To get started, let's first clone the UCCL repo and init submodules. 
+First clone the UCCL repo and init submodules: 
 ```bash
 git clone https://github.com/uccl-project/uccl.git --recursive
 export UCCL_HOME=$(pwd)/uccl
 ```
 
-Then install some common dependencies: 
+To build UCCL for development, you need to install some common dependencies: 
+<details><summary>Click me</summary>
+
 ```bash
 # Note if you are using docker+wheel build, there is no need to install the following dependencies. 
 sudo apt update
@@ -23,10 +25,11 @@ source ~/.bashrc # or .zshrc and others
 conda init
 
 # Install python ssh lib into conda-default base env
-conda install paramiko -y
+pip install paramiko
 ```
+</details>
 
-You can then dive into: 
+For quick installation with docker, you can directly dive into: 
 * [`dev_rdma.md`](dev_rdma.md): Nvidia/AMD GPUs + IB/RoCE RDMA NICs (currently support Nvidia and Broadcom NICs)
 * [`dev_efa.md`](dev_efa.md): AWS EFA NIC (currently support p4d.24xlarge)
 * [`dev_afxdp.md`](dev_afxdp.md): Non-RDMA NICs (currently support AWS ENA NICs and IBM VirtIO NICs)

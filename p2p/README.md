@@ -20,7 +20,7 @@ p2p/
 ## Prerequisites
 
 The easiest way is to: 
-```
+```bash
 pip install pybind11
 git clone https://github.com/uccl-project/uccl.git --recursive
 cd uccl && bash build_and_install.sh [cuda|rocm] p2p
