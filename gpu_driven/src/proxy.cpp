@@ -50,10 +50,8 @@ void Proxy::init_sender() {
 void Proxy::init_remote() {
   init_common();
   // Remote side ensures ack sender resources (legacy globals)
-  if (!cfg_.ring) return;  // safe-guard
-  remote_ensure_ack_sender_resources(ctx_.pd, cfg_.ring->ack_buf,
-                                     cfg_.ring->ack_mr);
-  cfg_.ring->ack_qp = ctx_.ack_qp;
+  remote_ensure_ack_sender_resources(ctx_.pd, ring.ack_buf, ring.ack_mr);
+  ring.ack_qp = ctx_.ack_qp;
   post_receive_buffer_for_imm(ctx_);
 }
 
@@ -71,12 +69,8 @@ void Proxy::run_sender() {
 void Proxy::run_remote() {
   printf("Remote CPU thread for block %d started\n", cfg_.block_idx + 1);
   init_remote();
-
-  printf("Remote CPU thread for block %d: ack_qp=%p, ack_mr=%p\n",
-         cfg_.block_idx + 1, (void*)ctx_.ack_qp,
-         (void*)(cfg_.ring ? cfg_.ring->ack_mr : nullptr));
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    remote_poll_completions(ctx_, cfg_.block_idx, *cfg_.ring);
+    remote_poll_completions(ctx_, cfg_.block_idx, ring);
   }
 }
 

@@ -5,6 +5,7 @@
 #include "rdma.hpp"
 #include <chrono>
 #include <cstdlib>
+#include <functional>
 #include <iostream>
 #include <thread>
 #include <vector>
@@ -29,7 +30,6 @@ int main(int argc, char** argv) {
   cudaMalloc(&gpu_buffer, total_size);
 #endif
   cudaCheckErrors("gpu_buffer allocation failed");
-  std::vector<CopyRingBuffer> rings(env.blocks);
   std::vector<std::thread> cpu_threads;
   std::vector<std::unique_ptr<Proxy>> proxies;
   cpu_threads.reserve(env.blocks);
@@ -37,7 +37,6 @@ int main(int argc, char** argv) {
 
   for (int i = 0; i < env.blocks; ++i) {
     auto cfg = make_cfg(env, i, rank, peer_ip, gpu_buffer, total_size,
-                        (rank == 0) ? nullptr : &rings[i],
                         /*pin_thread=*/true);
 
     auto proxy = std::make_unique<Proxy>(std::move(cfg));
@@ -79,11 +78,11 @@ int main(int argc, char** argv) {
 
   } else {
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
-    int const num_copy_engine = env.blocks;
     std::vector<std::thread> copy_threads;
-    copy_threads.reserve(num_copy_engine);
-    for (int t = 0; t < num_copy_engine; ++t) {
-      copy_threads.emplace_back(peer_copy_worker, std::ref(rings[t]), t);
+    copy_threads.reserve(env.blocks);
+    for (int t = 0; t < env.blocks; ++t) {
+      copy_threads.emplace_back(peer_copy_worker, std::ref(proxies[t]->ring),
+                                t);
     }
     g_run.store(true, std::memory_order_release);
 #endif

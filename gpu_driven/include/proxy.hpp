@@ -31,7 +31,6 @@ class Proxy {
     size_t total_size = 0;
     int rank = 0;
     char const* peer_ip = nullptr;
-    CopyRingBuffer* ring = nullptr;
     bool pin_thread = true;
   };
 
@@ -68,6 +67,7 @@ class Proxy {
   double avg_rdma_write_us() const;
   double avg_wr_latency_us() const;
   uint64_t completed_wr() const;
+  CopyRingBuffer ring;
 
  private:
   ProxyCtx ctx_;
