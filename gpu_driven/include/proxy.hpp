@@ -55,6 +55,7 @@ class Proxy {
   void run_sender();
   void run_remote();
   void run_local();
+  void pin_thread();
 
   double avg_rdma_write_us() const;
   double avg_wr_latency_us() const;
@@ -67,7 +68,6 @@ class Proxy {
   void init_sender();
   void init_remote();
 
-  void sender_loop();
   void notify_gpu_completion(uint64_t& my_tail);
   void post_gpu_command(uint64_t& my_tail, size_t& seen);
 

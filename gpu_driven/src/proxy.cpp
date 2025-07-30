@@ -13,18 +13,22 @@ double Proxy::avg_wr_latency_us() const {
 
 uint64_t Proxy::completed_wr() const { return completion_count_; }
 
-void Proxy::init_common() {
-  per_thread_rdma_init(ctx_, cfg_.gpu_buffer, cfg_.total_size, cfg_.rank,
-                       cfg_.block_idx);
+void Proxy::pin_thread() {
   if (cfg_.pin_thread) {
     pin_thread_to_cpu(cfg_.block_idx + 1);
     int cpu = sched_getcpu();
     if (cpu == -1) {
       perror("sched_getcpu");
     } else {
-      printf("Thread pinned to CPU core %d\n", cpu);
+      printf("Local CPU thread pinned to core %d\n", cpu);
     }
   }
+}
+
+void Proxy::init_common() {
+  per_thread_rdma_init(ctx_, cfg_.gpu_buffer, cfg_.total_size, cfg_.rank,
+                       cfg_.block_idx);
+  pin_thread();
 
   // CQ + QP creation
   ctx_.cq = create_per_thread_cq(ctx_);
@@ -44,13 +48,13 @@ void Proxy::init_common() {
 void Proxy::init_sender() {
   init_common();
   // sender ACK receive ring (your existing code)
-  local_init_ack_recv_ring(ctx_, kSenderAckQueueDepth);
+  local_post_ack_buf(ctx_, kSenderAckQueueDepth);
 }
 
 void Proxy::init_remote() {
   init_common();
   // Remote side ensures ack sender resources (legacy globals)
-  remote_ensure_ack_sender_resources(ctx_.pd, ring.ack_buf, ring.ack_mr);
+  remote_reg_ack_buf(ctx_.pd, ring.ack_buf, ring.ack_mr);
   ring.ack_qp = ctx_.ack_qp;
   post_receive_buffer_for_imm(ctx_);
 }
@@ -58,12 +62,13 @@ void Proxy::init_remote() {
 void Proxy::run_sender() {
   printf("CPU sender thread for block %d started\n", cfg_.block_idx + 1);
   init_sender();
-  sender_loop();
-
-  printf(
-      "Sender block %d done. Avg RDMA write: %.2f us, avg WR latency: %.2f us, "
-      "completed: %lu\n",
-      cfg_.block_idx, avg_rdma_write_us(), avg_wr_latency_us(), completed_wr());
+  size_t seen = 0;
+  while (ctx_.progress_run.load(std::memory_order_acquire)) {
+    local_poll_completions(ctx_, finished_wrs_, finished_wrs_mutex_,
+                           cfg_.block_idx);
+    notify_gpu_completion(cfg_.rb->tail);
+    post_gpu_command(cfg_.rb->tail, seen);
+  }
 }
 
 void Proxy::run_remote() {
@@ -72,41 +77,6 @@ void Proxy::run_remote() {
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     remote_poll_completions(ctx_, cfg_.block_idx, ring);
   }
-}
-
-void Proxy::sender_loop() {
-  uint64_t my_tail = 0;
-  size_t seen = 0;
-
-  for (; my_tail < kIterations;) {
-    local_poll_completions(ctx_, finished_wrs_, finished_wrs_mutex_,
-                           cfg_.block_idx);
-    notify_gpu_completion(my_tail);
-    post_gpu_command(my_tail, seen);
-  }
-
-  printf(
-      "CPU sender thread for block %d finished consuming %d commands, my_tail: "
-      "%lu\n",
-      cfg_.block_idx, kIterations, my_tail);
-
-  printf("Average rdma write duration: %.2f us\n", avg_rdma_write_us());
-
-  if (check_cq_completion(ctx_)) {
-    // Drain for 1s
-    auto start = std::chrono::high_resolution_clock::now();
-    while (std::chrono::duration_cast<std::chrono::seconds>(
-               std::chrono::high_resolution_clock::now() - start)
-               .count() < 1) {
-      local_poll_completions(ctx_, finished_wrs_, finished_wrs_mutex_,
-                             cfg_.block_idx);
-      notify_gpu_completion(my_tail);
-    }
-    ctx_.progress_run.store(false);
-  }
-
-  printf("Per-wr time: %.2f us, total wr time: %lu us, completion count: %lu\n",
-         avg_wr_latency_us(), wr_time_total_us_, completion_count_);
 }
 
 void Proxy::notify_gpu_completion(uint64_t& my_tail) {
@@ -153,12 +123,8 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
 #endif
   cfg_.rb->tail = my_tail;
 #else
-  // Non-ordered NIC path (EFA)
-  // NOTE: cur_head isn’t directly available here; the ordered path assumes
-  // contiguity. If you need this branch, pass cur_head in or compute/track
-  // differently. Keeping identical structure to your original else-branch would
-  // require refactoring the loop to carry cur_head. (Most deployments here use
-  // ASSUME_WR_IN_ORDER.)
+  printf("ASSUME_WR_IN_ORDER is not defined. This is not supported.\n");
+  std::abort();
 #endif
 }
 
@@ -217,19 +183,8 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 }
 
 void Proxy::run_local() {
-  // Local mode: purely consumes GPU -> CPU ring, no RDMA.
-  if (cfg_.pin_thread) {
-    pin_thread_to_cpu(cfg_.block_idx + 1);
-    int cpu = sched_getcpu();
-    if (cpu == -1) {
-      perror("sched_getcpu");
-    } else {
-      printf("Local CPU thread pinned to core %d\n", cpu);
-    }
-  }
-
+  pin_thread();
   uint64_t my_tail = 0;
-
   for (int seen = 0; seen < kIterations; ++seen) {
     // Prefer volatile read to defeat CPU cache stale head.
     // If your ring already has volatile_head(), use it; otherwise keep

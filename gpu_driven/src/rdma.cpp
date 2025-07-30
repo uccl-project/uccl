@@ -1,6 +1,7 @@
 #include "rdma.hpp"
 #include "common.hpp"
 #include "peer_copy_worker.hpp"
+#include "rdma_util.hpp"
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <algorithm>
@@ -150,64 +151,6 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     fprintf(stderr, "Warning: rkey already set (%x), overwriting\n", S.rkey);
   }
   S.rkey = S.mr->rkey;
-}
-
-void fill_local_gid(ProxyCtx& S, RDMAConnectionInfo* local_info) {
-  if (!S.context) {
-    fprintf(stderr, "Error: context not initialized when filling GID\n");
-    exit(1);
-  }
-
-  // Query port attributes to determine if this is RoCE (Ethernet) or InfiniBand
-  struct ibv_port_attr port_attr;
-  if (ibv_query_port(S.context, 1, &port_attr)) {
-    perror("Failed to query port for GID");
-    exit(1);
-  }
-
-  // For RoCE (Ethernet), we need to fill the GID
-  if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
-    union ibv_gid local_gid;
-    int gid_index = 1;
-    if (ibv_query_gid(S.context, 1, gid_index, &local_gid)) {
-      perror("Failed to query GID");
-      exit(1);
-    }
-
-    // Copy the GID to the connection info
-    memcpy(local_info->gid, &local_gid, 16);
-    printf(
-        "[RDMA] Local GID filled for RoCE (Ethernet) connection: "
-        "%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%"
-        "02x\n",
-        local_info->gid[0], local_info->gid[1], local_info->gid[2],
-        local_info->gid[3], local_info->gid[4], local_info->gid[5],
-        local_info->gid[6], local_info->gid[7], local_info->gid[8],
-        local_info->gid[9], local_info->gid[10], local_info->gid[11],
-        local_info->gid[12], local_info->gid[13], local_info->gid[14],
-        local_info->gid[15]);
-  } else {
-    // For InfiniBand, GID is not strictly required, but we can still fill it
-    union ibv_gid local_gid;
-    if (ibv_query_gid(S.context, 1, 0, &local_gid) == 0) {
-      memcpy(local_info->gid, &local_gid, 16);
-      printf(
-          "[RDMA] Local GID filled for InfiniBand connection: "
-          "%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%"
-          "02x\n",
-          local_info->gid[0], local_info->gid[1], local_info->gid[2],
-          local_info->gid[3], local_info->gid[4], local_info->gid[5],
-          local_info->gid[6], local_info->gid[7], local_info->gid[8],
-          local_info->gid[9], local_info->gid[10], local_info->gid[11],
-          local_info->gid[12], local_info->gid[13], local_info->gid[14],
-          local_info->gid[15]);
-    } else {
-      // If GID query fails for InfiniBand, zero it out
-      memset(local_info->gid, 0, 16);
-      printf(
-          "[RDMA] GID zeroed for InfiniBand connection (GID query failed)\n");
-    }
-  }
 }
 
 ibv_cq* create_per_thread_cq(ProxyCtx& S) {
@@ -426,7 +369,7 @@ void post_receive_buffer_for_imm(ProxyCtx& S) {
     sges[i] = {.addr = (uintptr_t)S.mr->addr + offset * kObjectSize,
                .length = kObjectSize,
                .lkey = S.mr->lkey};
-    wrs[i] = {.wr_id = i,  // choose something meaningful
+    wrs[i] = {.wr_id = i,
               .next = (i + 1 < kMaxOutstandingRecvs) ? &wrs[i + 1] : nullptr,
               .sg_list = &sges[i],
               .num_sge = 1};
@@ -438,22 +381,6 @@ void post_receive_buffer_for_imm(ProxyCtx& S) {
     perror("ibv_post_recv");
     abort();
   }
-}
-
-uint32_t build_imm_data(int src_addr_offset, int destination_gpu,
-                        uint32_t destination_addr_offset) {
-  uint32_t imm_data = 0;
-  imm_data |= (src_addr_offset & 0xFF) << 24;      // 8 bits.
-  imm_data |= (destination_gpu & 0xFF) << 16;      // 8 bits.
-  imm_data |= (destination_addr_offset & 0xFFFF);  // 16 bits.
-  return imm_data;
-}
-
-void unpack_imm_data(int& src_addr_offset, int& destination_gpu,
-                     uint32_t& destination_addr_offset, uint32_t imm_data) {
-  src_addr_offset = (imm_data >> 24) & 0xFF;    // 8 bits
-  destination_gpu = (imm_data >> 16) & 0xFF;    // 8 bits
-  destination_addr_offset = imm_data & 0xFFFF;  // 16 bits
 }
 
 void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t bytes,
@@ -516,21 +443,15 @@ void local_process_completions(ProxyCtx& S,
           finished_wrs.insert(wr_id);
           send_completed++;
         }
-        // printf("[WR] %d completed on peer, wr_id=%llu, num_wrs=%zu\n",
-        //        thread_idx, (unsigned long long)wc[i].wr_id,
-        //        wr_id_to_wr_ids[wc[i].wr_id].size());
         S.wr_id_to_wr_ids.erase(wc[i].wr_id);
       } break;
       case IBV_WC_RECV:
         if (wc[i].wc_flags & IBV_WC_WITH_IMM) {
           uint64_t slot = static_cast<uint64_t>(wc[i].wr_id);
           uint64_t wr_done = static_cast<uint64_t>(wc[i].imm_data);
-          // printf("[ACK - %d] Received ACK for WR %lu in slot %lu\n",
-          // thread_idx, wr_done, slot);
           if (!S.has_received_ack || wr_done >= S.largest_completed_wr) {
             S.largest_completed_wr = wr_done;
             S.has_received_ack = true;
-            // printf("New largest completed WR: %lu\n", largest_completed_wr);
           } else {
             fprintf(stderr,
                     "Warning: received ACK for WR %lu, but largest completed "
@@ -538,7 +459,6 @@ void local_process_completions(ProxyCtx& S,
                     wr_done, S.largest_completed_wr);
             std::abort();
           }
-
           ibv_sge sge = {
               .addr = reinterpret_cast<uintptr_t>(&S.ack_recv_buf[slot]),
               .length = sizeof(uint64_t),
@@ -568,18 +488,10 @@ void local_process_completions(ProxyCtx& S,
 void local_poll_completions(ProxyCtx& S,
                             std::unordered_set<uint64_t>& finished_wrs,
                             std::mutex& finished_wrs_mutex, int thread_idx) {
-  struct ibv_wc wc[kMaxOutstandingSends];  // batch poll
+  struct ibv_wc wc[kMaxOutstandingSends];
   int ne = ibv_poll_cq(S.cq, kMaxOutstandingSends, wc);
   local_process_completions(S, finished_wrs, finished_wrs_mutex, thread_idx, wc,
                             ne);
-}
-
-bool check_cq_completion(ProxyCtx& S) {
-  uint64_t posted = S.posted.load(std::memory_order_acquire);
-  uint64_t completed = S.completed.load(std::memory_order_acquire);
-  printf("check_cq_completion: g_completed: %ld, g_posted: %ld, total: %d\n",
-         completed, posted, kIterations * kNumThBlocks);
-  return completed * kSignalledEvery == posted && kIterations == completed;
 }
 
 void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
@@ -657,18 +569,6 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
 #endif
 }
 
-#ifdef ENABLE_PROXY_CUDA_MEMCPY
-void print_average_async_memcpy_time(PeerWorkerCtx& ctx) {
-  printf("Total async memcpy calls: %lu\n", ctx.async_memcpy_count);
-  if (ctx.async_memcpy_count == 0) {
-    printf("No async memcpy calls were made.\n");
-    return;
-  }
-  printf("Average async memcpy time: %lu us\n",
-         ctx.async_memcpy_total_time / ctx.async_memcpy_count);
-}
-#endif
-
 void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring) {
   struct ibv_wc wc[kMaxOutstandingRecvs];
 
@@ -678,8 +578,7 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring) {
   remote_process_completions(S, idx, g_ring, ne, wc);
 }
 
-void remote_ensure_ack_sender_resources(ibv_pd* pd, uint64_t* ack_buf,
-                                        ibv_mr*& ack_mr) {
+void remote_reg_ack_buf(ibv_pd* pd, uint64_t* ack_buf, ibv_mr*& ack_mr) {
   if (ack_mr) return;
   ack_mr = ibv_reg_mr(pd, ack_buf, sizeof(uint64_t) * RECEIVER_BATCH_SIZE,
                       IBV_ACCESS_LOCAL_WRITE);  // host-only
@@ -719,7 +618,6 @@ void remote_send_ack(struct ibv_qp* local_ack_qp, uint64_t& wr_id,
   wr.num_sge = 1;
   wr.opcode = IBV_WR_SEND_WITH_IMM;
   wr.send_flags = IBV_SEND_SIGNALED;  // generate a CQE
-  // wr.send_flags         = IBV_SEND_INLINE;
   wr.imm_data = static_cast<uint32_t>(wr_id);
 
   int ret = ibv_post_send(local_ack_qp, &wr, &bad);
@@ -737,37 +635,29 @@ void remote_send_ack(struct ibv_qp* local_ack_qp, uint64_t& wr_id,
   }
 }
 
-void local_init_ack_recv_ring(ProxyCtx& S, int depth) {
-  printf("Initializing ACK receive ring with depth %d\n", depth);
+void local_post_ack_buf(ProxyCtx& S, int depth) {
   S.ack_recv_buf.resize(static_cast<size_t>(depth), 0);
   S.ack_recv_mr = ibv_reg_mr(S.pd, S.ack_recv_buf.data(),
                              S.ack_recv_buf.size() * sizeof(uint64_t),
                              IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
-
   if (!S.ack_recv_mr) {
     perror("ibv_reg_mr(ack_recv)");
     std::abort();
   }
-
   for (int i = 0; i < depth; ++i) {
     ibv_sge sge = {
         .addr = reinterpret_cast<uintptr_t>(&S.ack_recv_buf[i]),
         .length = sizeof(uint64_t),
         .lkey = S.ack_recv_mr->lkey,
     };
-
     ibv_recv_wr rwr = {};
     ibv_recv_wr* bad = nullptr;
-
     rwr.wr_id = static_cast<uint64_t>(i);
     rwr.sg_list = &sge;
     rwr.num_sge = 1;
-
     if (ibv_post_recv(S.ack_qp, &rwr, &bad)) {
       perror("ibv_post_recv(ack)");
       std::abort();
     }
-    // printf("ack_qp ACK receive buffer %d initialized at %p\n", i,
-    //        &ack_recv_buf[i]);
   }
 }
