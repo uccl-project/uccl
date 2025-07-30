@@ -33,21 +33,6 @@
 #define RETRY_DELAY_MS 200
 #define TCP_PORT 18515
 
-static inline char const* wc_op_str(int op) {
-  switch (op) {
-    case IBV_WC_SEND:
-      return "SEND(0)";
-    case IBV_WC_RDMA_WRITE:
-      return "WRITE(1)";
-    case IBV_WC_RECV:
-      return "RECV(128)";
-    case IBV_WC_RECV_RDMA_WITH_IMM:
-      return "RECV_W_IMM(129)";
-    default:
-      return "UNKNOWN";
-  }
-}
-
 void exchange_connection_info(int rank, char const* peer_ip, int tid,
                               RDMAConnectionInfo* local,
                               RDMAConnectionInfo* remote) {

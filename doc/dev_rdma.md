@@ -39,7 +39,7 @@ Usage: ./run_rccl_test.sh [RCCL/UCCLL: rccl/uccl, default:uccl]
 
 ## Building and running UCCL for Nvidia GPUs
 
-Build `nccl` and `nccl-tests`: 
+### Build `nccl` and `nccl-tests`: 
 
 ```bash
 # Eg, /home/yangz/uccl
@@ -55,14 +55,23 @@ cd $UCCL_HOME/thirdparty/nccl-tests
 make MPI=1 MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi CUDA_HOME=/usr/local/cuda NCCL_HOME=$UCCL_HOME/thirdparty/nccl/build -j
 ```
 
-Build `libnccl-net-uccl.so`
+### Build `libnccl-net-uccl.so`
+
+The easiest way is to use docker, which packs all needed external libraries into a python wheel and install into your local python env: 
+```bash
+cd $UCCL_HOME && bash build_and_install.sh cuda rdma
+```
+
+The following alternative is best for development where you have installed all needed external libraries: 
+<details><summary>Click me</summary>
 
 ```bash
 cd $UCCL_HOME/rdma
 make -j
 ```
+</details>
 
-Running `nccl-tests`:
+### Running `nccl-tests`:
 
 ```bash
 cd $UCCL_HOME/scripts
@@ -82,14 +91,7 @@ cd $UCCL_HOME/rdma
 
 This guide assumes under the [AMD HPC Fund cluster](https://amdresearch.github.io/hpcfund/hardware.html), without any root access. 
 
-Prepare dependency: install and activate recent Anaconda to prepare necessary libraries such as `-lglog -lgflags -lgtest`. Consider installing it into `$WORK` directory as Anaconda is large. 
-
-Then inside the conda env, install libs that contains glog, gflags, and gtest: 
-```bash
-pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3
-```
-
-Build `rccl` and `rccl-tests`: 
+### Build `rccl` and `rccl-tests`: 
 
 ```bash
 # Export the path of uccl
@@ -105,14 +107,31 @@ cd $UCCL_HOME/thirdparty/rccl-tests
 make MPI=1 MPI_HOME=/opt/ohpc/pub/mpi/openmpi4-gnu12/4.1.5 HIP_HOME=/opt/rocm-6.3.1 NCCL_HOME=/opt/rocm-6.3.1/include/rccl CUSTOM_RCCL_LIB=/opt/rocm-6.3.1/lib/librccl.so -j
 ```
 
-Build `librccl-net-uccl.so`
+### Build `librccl-net-uccl.so`
 
+The easiest way is to use docker: 
+```bash
+cd $UCCL_HOME && bash build_and_install.sh rocm rdma
+```
+
+The following alternative is best for development where you have installed all needed external libraries:
+<details><summary>Click me</summary>
+
+Install and activate recent Anaconda to prepare necessary libraries. Consider installing it into `$WORK` directory as Anaconda is large. 
+
+Inside the conda env, install libs that contains libglog, libgflags, and libgtest: 
+```bash
+pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3
+```
+
+Then build: 
 ```bash
 cd $UCCL_HOME/rdma
 make -f MakefileHip -j
 ```
+</details>
 
-Run `rccl-tests`:
+### Run `rccl-tests`
 
 ```bash
 # Using slurm to allocate two AMD nodes
@@ -122,16 +141,9 @@ salloc -N 2 -n 2 -p mi2104x -t 00:30:00
 ./run_rccl_test_hpcfund.sh rccl
 ```
 
-### If your are using Broadcom NICs
+### For Broadcom NICs
 
-Using the following to build `librccl-net-uccl.so`
-
-```bash
-cd $UCCL_HOME/rdma
-make -f MakefileHip -j
-```
-
-Run `rccl-tests`:
+Using the following to run `rccl-tests`:
 
 ```bash
 # Edit scripts/node_ips/amd.txt to fill up the node addresses. 

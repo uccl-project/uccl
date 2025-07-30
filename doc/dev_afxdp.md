@@ -63,6 +63,7 @@ UCCL-AFXDP currently supports AWS ENA NICs and IBM VirtIO NICs; support for Azur
 
 
 3. Run UCCL transport tests on `VM1`:
+    * Set UCCL home: `export UCCL_HOME=<the path of uccl>`
     * Get the latest UCCL: `cd $UCCL_HOME; git pull`
     * Install BPF dependencies: `cd $UCCL_HOME/afxdp; make lib`
     * Build `nccl` and `nccl-tests`:

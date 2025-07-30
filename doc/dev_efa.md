@@ -19,15 +19,11 @@ Make sure you haveed install docker. Then run the following and log back in.
 sudo usermod -aG docker $USER
 ```
 
-## Building EFA plugin
+## Building NCCL and NCCL-tests
 
 ```bash
 # Eg, /home/ubuntu/uccl
 export UCCL_HOME=<the path of uccl>
-
-# Build libnccl-net-efa.so
-cd $UCCL_HOME/efa
-make -j
 
 # Build nccl-sg for UCCL (taking ~3min); assume A100 GPUs
 cd $UCCL_HOME/thirdparty/nccl-sg
@@ -42,6 +38,24 @@ make src.build -j NVCC_GENCODE="-gencode=arch=compute_80,code=sm_80"
 cd $UCCL_HOME/thirdparty/nccl-tests
 make MPI=1 MPI_HOME=/opt/amazon/openmpi CUDA_HOME=/usr/local/cuda NCCL_HOME=$UCCL_HOME/thirdparty/nccl-sg/build -j
 ```
+
+## Building EFA plugin
+
+The easiest way is to use docker, which packs all needed external libraries into a python wheel and install into your local python env: 
+```bash
+cd $UCCL_HOME && bash build_and_install.sh cuda efa
+```
+
+The following alternative is best for development where you have installed all needed external libraries: 
+<details><summary>Click me</summary>
+
+```bash
+# Build libnccl-net-efa.so
+cd $UCCL_HOME/efa
+make -j
+```
+</details>
+
 
 ## Runing nccl-tests for UCCL
 
@@ -61,8 +75,8 @@ cd $UCCL_HOME/efa
 
 Generally, the main environment variables to set for UCCL are: 
 ```bash
-LD_PRELOAD="${UCCL_HOME}/thirdparty/nccl-sg/build/lib/libnccl.so"
-NCCL_NET_PLUGIN="${UCCL_HOME}/efa/libnccl-net-efa.so"
+LD_PRELOAD=`python -c "import uccl; print(uccl.efa_nccl_path())"`
+NCCL_NET_PLUGIN=`python -c "import uccl; print(uccl.efa_plugin_path())"`
 NCCL_PROTO=Simple
 ```
 UCCL currently only supports `Simple` protocol; support for `LL` and `LL128` is on the way. 
@@ -94,6 +108,8 @@ Other applications such as DeepSpeed, vLLM, Megatron-LM, and PyTorch FSDP should
 
 
 ## MISC
+
+<details><summary>Click me</summary>
 
 ### Install lastest perftest with patches to benchmark EFA NICs
 
@@ -129,3 +145,4 @@ ib_send_lat -d rdmap16s27 --report_gbits -x 0 -c UD -F <serverip>
 ./transport_test --logtostderr --test=bimq --clientip=<clientip>
 ./transport_test --logtostderr --test=bimq --serverip=<serverip>
 ```
+</details>

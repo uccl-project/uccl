@@ -93,10 +93,10 @@ elif [ "$TEST" = "ud" ]; then
         >"nccl_test_outputs/output_rank_$rank.log"
     done
 
-    LIBNCCL_PATH="${UCCL_HOME}/thirdparty/nccl-sg/build/lib/libnccl.so"
-    PLUGIN_PATH="${UCCL_HOME}/efa/libnccl-net-efa.so"
-    # LIBNCCL_PATH=`python -c "import uccl; print(uccl.efa_nccl_path())"`
-    # PLUGIN_PATH=`python -c "import uccl; print(uccl.efa_plugin_path())"`
+    # LIBNCCL_PATH="${UCCL_HOME}/thirdparty/nccl-sg/build/lib/libnccl.so"
+    # PLUGIN_PATH="${UCCL_HOME}/efa/libnccl-net-efa.so"
+    LIBNCCL_PATH=`python -c "import uccl; print(uccl.efa_nccl_path())"`
+    PLUGIN_PATH=`python -c "import uccl; print(uccl.efa_plugin_path())"`
     echo "LIBNCCL_PATH: ${LIBNCCL_PATH}"
     echo "PLUGIN_PATH: ${PLUGIN_PATH}"
 

@@ -28,7 +28,7 @@ setup(
         "uccl": ["lib/*.so", "p2p*.so"],
     },
     license="Apache-2.0",
-    install_requires=[],
+    install_requires=["pybind11>=2.6.0", "paramiko"],
     classifiers=[
         "Programming Language :: Python :: 3",
     ],

@@ -27,23 +27,18 @@ void Proxy::init_common() {
   }
 
   // CQ + QP creation
-  printf("Creating CQ for block %d\n", cfg_.block_idx + 1);
   ctx_.cq = create_per_thread_cq(ctx_);
   create_per_thread_qp(ctx_, cfg_.gpu_buffer, cfg_.total_size, &local_info_,
                        cfg_.rank);
-  printf("Creating QP for block %d\n", cfg_.block_idx + 1);
 
   modify_qp_to_init(ctx_);
-  printf("Modifying QP to INIT for block %d\n", cfg_.block_idx + 1);
   exchange_connection_info(cfg_.rank, cfg_.peer_ip, cfg_.block_idx,
                            &local_info_, &remote_info_);
-  printf("Exchanged RDMA connection info for block %d\n", cfg_.block_idx + 1);
   modify_qp_to_rtr(ctx_, &remote_info_);
   modify_qp_to_rts(ctx_, &local_info_);
-  printf("Modified QP to RTR and RTS for block %d\n", cfg_.block_idx + 1);
+
   ctx_.remote_addr = remote_info_.addr;
   ctx_.remote_rkey = remote_info_.rkey;
-  printf("Init common finished.\n");
 }
 
 void Proxy::init_sender() {
