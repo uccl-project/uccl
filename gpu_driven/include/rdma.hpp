@@ -65,9 +65,6 @@ void per_thread_polling(int thread_idx, struct ibv_cq* per_thread_cq,
                         std::unordered_set<uint64_t>* per_thread_finished_wrs,
                         std::mutex* per_thread_finished_wrs_mutex);
 void remote_poll_completions(int idx, ibv_cq* cq, CopyRingBuffer& g_ring);
-void poll_cq_dual(ibv_cq* cq, std::unordered_set<uint64_t>& finished_wrs,
-                  std::mutex& finished_wrs_mutex, int thread_idx,
-                  CopyRingBuffer& g_ring);
 void per_thread_rdma_init(void* gpu_buf, size_t bytes, int rank, int block_idx);
 
 extern void* per_GPU_device_buf[NUM_GPUS];

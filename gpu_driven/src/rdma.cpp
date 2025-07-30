@@ -688,9 +688,9 @@ void local_process_completions(ibv_cq* cq,
           if (ibv_post_recv(ack_qp, &rwr, &bad)) {
             perror("ibv_post_recv(repost ACK)");
             std::abort();
-          } else {
-            std::abort();
           }
+        } else {
+          std::abort();
         }
         break;
 
@@ -795,8 +795,7 @@ void remote_process_completions(int idx, ibv_cq* cq, CopyRingBuffer& g_ring,
       sges[num_wr_imm] = {.addr = reinterpret_cast<uintptr_t>(nullptr),
                           .length = 0,
                           .lkey = mr->lkey};
-      const uint64_t slot_id = pool_index;
-      wrs[num_wr_imm] = {.wr_id = slot_id,
+      wrs[num_wr_imm] = {.wr_id = pool_index,
                          .next = nullptr,
                          .sg_list = &sges[num_wr_imm],
                          .num_sge = 1};
