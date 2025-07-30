@@ -28,7 +28,9 @@ if [ "$TEST" = "rccl" ]; then
     plugin_path=""
 elif [ "$TEST" = "uccl" ]; then
     echo "Running UCCL test"
-    plugin_path="${UCCL_HOME}/rdma/librccl-net-uccl.so"
+    # plugin_path="${UCCL_HOME}/rdma/librccl-net-uccl.so"
+    plugin_path=`python -c "import uccl; print(uccl.rccl_plugin_path())"`
+    echo "plugin_path: ${plugin_path}"
 else
     echo "Unsupport benchmark type."
     exit 1

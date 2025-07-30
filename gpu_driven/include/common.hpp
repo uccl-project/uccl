@@ -13,8 +13,6 @@
 #include <stdio.h>
 #include <unistd.h>
 
-// #define DEBUG_PRINT
-
 // #define REMOTE_PERSISTENT_KERNEL
 #define USE_GRACE_HOPPER
 #define MEASURE_PER_OP_LATENCY
@@ -53,9 +51,7 @@
 #else
 #define NVLINK_SM_PER_PROCESS 2
 #endif
-
 bool pin_thread_to_cpu(int cpu);
-
 void cpu_relax();
 
 #endif  // COMMON_HPP

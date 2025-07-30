@@ -15,6 +15,7 @@ SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp src/peer_copy_worker.cpp
 SRC_CU  := src/gpu_kernel.cu src/peer_copy.cu
 SRC_LOCAL  := bench/benchmark_local.cu
 SRC_REMOTE := bench/benchmark_remote.cu
+SRC_DUAL	:= bench/benchmark_dual.cu
 
 OBJ_CPP := $(SRC_CPP:.cpp=.o)
 OBJ_CU := $(SRC_CU:.cu=.o)
@@ -24,8 +25,8 @@ OBJ_REMOTE := $(OBJ_CPP) $(OBJ_CU) $(SRC_REMOTE:.cu=.o)
 
 TARGET_LOCAL  := benchmark_local
 TARGET_REMOTE := benchmark_remote
-
-all: $(TARGET_LOCAL) $(TARGET_REMOTE)
+TARGET_DUAL   := benchmark_dual
+all: $(TARGET_LOCAL) $(TARGET_REMOTE) $(TARGET_DUAL)	
 
 # C++ compilation rule with dependency generation
 %.o: %.cpp
@@ -42,9 +43,12 @@ $(TARGET_LOCAL): $(OBJ_LOCAL)
 $(TARGET_REMOTE): $(OBJ_REMOTE)
 	$(NVCC) -arch=sm_90 $(NVCCFLAGS) $(INCLUDES) $(OBJ_REMOTE) -lcuda -lcudart $(LDFLAGS) -o $@
 
+$(TARGET_DUAL): $(OBJ_CPP) $(OBJ_CU) $(SRC_DUAL:.cu=.o)
+	$(NVCC) -arch=sm_90 $(NVCCFLAGS) $(INCLUDES) $(OBJ_CPP) $(OBJ_CU) $(SRC_DUAL:.cu=.o) -lcuda -lcudart $(LDFLAGS) -o $@
+
 # Clean all generated files
 clean:
-	rm -f $(OBJ_CPP) $(OBJ_CU) $(SRC_LOCAL:.cu=.o) $(SRC_REMOTE:.cu=.o) $(TARGET_LOCAL) $(TARGET_REMOTE) *.d src/*.d
+	rm -f $(OBJ_CPP) $(OBJ_CU) $(SRC_LOCAL:.cu=.o) $(SRC_REMOTE:.cu=.o) $(TARGET_LOCAL) $(TARGET_REMOTE) $(TARGET_DUAL) *.d src/*.d
 
 .PHONY: all clean
 

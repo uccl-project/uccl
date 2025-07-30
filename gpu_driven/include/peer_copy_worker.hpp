@@ -2,14 +2,37 @@
 #include "common.hpp"
 #include "ring_buffer.cuh"
 #include <atomic>
+#include <mutex>
 #include <thread>
 #include <cuda_runtime.h>
 
-extern std::atomic<bool> g_run;
-#ifdef ENABLE_PROXY_CUDA_MEMCPY
-extern thread_local uint64_t async_memcpy_count;
-extern thread_local uint64_t async_memcpy_total_time;
-#endif
-extern int src_device;
+// Shared across all peer-copy workers on a process
+struct PeerCopyShared {
+  // Controls the worker loop
+  std::atomic<bool> run{true};
 
-void peer_copy_worker(CopyRingBuffer& g_ring, int idx);
+  // P2P enable flags (once per GPU pair)
+  std::once_flag peer_ok_flag[NUM_GPUS][NUM_GPUS];
+
+  // Source GPU for receiving host-side staging to device
+  int src_device = 0;
+};
+
+struct PeerWorkerCtx {
+  // Counters / timings
+  uint64_t async_memcpy_count = 0;
+  uint64_t prev_completed_async_memcpy_count = 0;
+  uint64_t async_memcpy_total_time = 0;
+  uint64_t highest_issued_wr_id = 0;
+
+  // Batch buffers
+  CopyTask tasks[RECEIVER_BATCH_SIZE];
+  uint64_t task_wrs[RECEIVER_BATCH_SIZE];
+
+  // CUDA resources
+  cudaStream_t stream = nullptr;
+  CopyTask* d_tasks = nullptr;  // device buffer for tasks
+};
+
+void peer_copy_worker(PeerCopyShared& shared, PeerWorkerCtx& ctx,
+                      CopyRingBuffer& ring, int idx);

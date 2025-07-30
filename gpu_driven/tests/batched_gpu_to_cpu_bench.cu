@@ -123,15 +123,7 @@ void cpu_proxy(Fifo* fifo, int block_idx) {
     // TODO: here, if CPU caches fifo->head, it may not see the updates from
     // GPU.
     while (fifo->head == my_tail) {
-#ifdef DEBUG_PRINT
-      if (block_idx == 0) {
-        printf(
-            "CPU thread for block %d, waiting for head to advance: my_tail: "
-            "%lu, head: %llu\n",
-            block_idx, my_tail, fifo->head);
-      }
-#endif
-      /* spin */
+      cpu_relax();
     }
     uint64_t idx = my_tail & kQueueMask;
     uint64_t cmd;
@@ -139,14 +131,6 @@ void cpu_proxy(Fifo* fifo, int block_idx) {
       cmd = fifo->buf[idx];
       cpu_relax();  // Avoid hammering the cacheline.
     } while (cmd == 0);
-
-#ifdef DEBUG_PRINT
-    printf(
-        "CPU thread for block %d, seen: %d, my_head: %llu, my_tail: %lu, "
-        "consuming cmd %llu\n",
-        block_idx, seen, fifo->head, my_tail,
-        static_cast<unsigned long long>(cmd));
-#endif
     uint64_t expected_cmd =
         (static_cast<uint64_t>(block_idx) << 32) | (seen + 1);
     if (cmd != expected_cmd) {
