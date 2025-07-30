@@ -5,6 +5,7 @@
 #include "rdma.hpp"
 #include <chrono>
 #include <cstdlib>
+#include <functional>
 #include <iostream>
 #include <thread>
 #include <vector>
@@ -29,34 +30,26 @@ int main(int argc, char** argv) {
   cudaMalloc(&gpu_buffer, total_size);
 #endif
   cudaCheckErrors("gpu_buffer allocation failed");
-
-#ifdef ENABLE_PROXY_CUDA_MEMCPY
-  if (rank == 1) {
-    for (int d = 0; d < NUM_GPUS; ++d) {
-      cudaSetDevice(d);
-      void* buf = nullptr;
-      cudaMalloc(&buf, total_size);
-      cudaCheckErrors("cudaMalloc per_GPU_device_buf failed");
-      per_GPU_device_buf[d] = buf;
-    }
-    cudaSetDevice(0);
-  }
-#endif
-  std::vector<CopyRingBuffer> rings(env.blocks);
   std::vector<std::thread> cpu_threads;
+  std::vector<std::unique_ptr<Proxy>> proxies;
   cpu_threads.reserve(env.blocks);
+  proxies.reserve(env.blocks);
+
   for (int i = 0; i < env.blocks; ++i) {
-    cpu_threads.emplace_back([&, i]() {
-      Proxy p{make_cfg(env, i, rank, peer_ip,
-                       /*gpu_buffer*/ gpu_buffer,
-                       /*total_size*/ total_size,
-                       /*ring*/ (rank == 0) ? nullptr : &rings[i],
-                       /*pin_thread*/ true)};
+    auto cfg = make_cfg(env, i, rank, peer_ip, gpu_buffer, total_size,
+                        /*pin_thread=*/true);
+
+    auto proxy = std::make_unique<Proxy>(std::move(cfg));
+
+    // Capture by move into the thread
+    cpu_threads.emplace_back([rank, p = proxy.get()]() {
       if (rank == 0)
-        p.run_sender();
+        p->run_sender();
       else
-        p.run_remote();
+        p->run_remote();
     });
+
+    proxies.emplace_back(std::move(proxy));
   }
 
   if (rank == 0) {
@@ -85,23 +78,31 @@ int main(int argc, char** argv) {
 
   } else {
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
-    int const num_copy_engine = env.blocks;
-    std::vector<std::thread> copy_threads;
-    copy_threads.reserve(num_copy_engine);
-    for (int t = 0; t < num_copy_engine; ++t) {
-      copy_threads.emplace_back(peer_copy_worker, std::ref(rings[t]), t);
+
+    PeerCopyShared shared;
+    shared.src_device = 0;
+    std::vector<PeerWorkerCtx> worker_ctx(env.blocks);
+    std::vector<std::thread> workers;
+    workers.reserve(env.blocks);
+
+    for (int i = 0; i < env.blocks; ++i) {
+      workers.emplace_back(peer_copy_worker, std::ref(shared),
+                           std::ref(worker_ctx[i]), std::ref(proxies[i]->ring),
+                           i);
     }
-    g_run.store(true, std::memory_order_release);
+
 #endif
     for (int i = 0; i < 60; ++i) {
       std::this_thread::sleep_for(std::chrono::seconds(1));
       std::printf("Rank %d is waiting...\n", rank);
     }
-    g_progress_run.store(false);
+    for (int i = 0; i < env.blocks; ++i) {
+      proxies[i]->set_progress_run(false);
+    }
 
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
-    g_run.store(false, std::memory_order_release);
-    for (auto& th : copy_threads) th.join();
+    shared.run.store(false, std::memory_order_release);
+    for (auto& th : workers) th.join();
 #endif
     destroy_env(env);
 #ifdef USE_GRACE_HOPPER
