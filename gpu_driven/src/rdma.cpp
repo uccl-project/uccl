@@ -150,7 +150,6 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     fprintf(stderr, "Warning: rkey already set (%x), overwriting\n", S.rkey);
   }
   S.rkey = S.mr->rkey;
-  printf("Finished!\n");
 }
 
 void fill_local_gid(ProxyCtx& S, RDMAConnectionInfo* local_info) {
@@ -691,10 +690,6 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring) {
 
 void remote_ensure_ack_sender_resources(ibv_pd* pd, uint64_t* ack_buf,
                                         ibv_mr*& ack_mr) {
-  if (!ack_buf) {
-    printf("ACK buffer not initialized\n");
-    std::abort();
-  }
   if (ack_mr) return;
   ack_mr = ibv_reg_mr(pd, ack_buf, sizeof(uint64_t) * RECEIVER_BATCH_SIZE,
                       IBV_ACCESS_LOCAL_WRITE);  // host-only
@@ -729,7 +724,7 @@ void remote_send_ack(struct ibv_qp* local_ack_qp, uint64_t& wr_id,
 
   ibv_send_wr wr = {};
   ibv_send_wr* bad = nullptr;
-  wr.wr_id = 0;  // Use this to distinguish the ACK WR.
+  wr.wr_id = wr_id;
   wr.sg_list = &sge;
   wr.num_sge = 1;
   wr.opcode = IBV_WR_SEND_WITH_IMM;

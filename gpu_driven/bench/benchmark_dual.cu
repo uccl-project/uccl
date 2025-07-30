@@ -41,9 +41,9 @@ int main(int argc, char** argv) {
   proxies.reserve(env.blocks);
   for (int i = 0; i < env.blocks; ++i) {
     Proxy::Config cfg{};
-    cfg.rb = &env.rbs[i];            // ring for this block
+    cfg.rb = &env.rbs[i];  // ring for this block
     cfg.block_idx = i;
-    cfg.gpu_buffer = gpu_buffer;     // RDMA-visible region
+    cfg.gpu_buffer = gpu_buffer;  // RDMA-visible region
     cfg.total_size = total_size;
     cfg.rank = rank;
     cfg.peer_ip = peer_ip;
@@ -56,9 +56,7 @@ int main(int argc, char** argv) {
   std::vector<std::thread> cpu_threads;
   cpu_threads.reserve(env.blocks);
   for (int i = 0; i < env.blocks; ++i) {
-    cpu_threads.emplace_back([&, i]() {
-      proxies[i]->run_dual();
-    });
+    cpu_threads.emplace_back([&, i]() { proxies[i]->run_dual(); });
   }
 
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
@@ -70,13 +68,13 @@ int main(int argc, char** argv) {
 
   for (int i = 0; i < env.blocks; ++i) {
     workers.emplace_back(peer_copy_worker, std::ref(shared),
-                          std::ref(worker_ctx[i]), std::ref(proxies[i]->ring),
-                          i);
+                         std::ref(worker_ctx[i]), std::ref(proxies[i]->ring),
+                         i);
   }
 #endif
 
   std::printf("[rank %d] Waiting 2s before issuing commands...\n", rank);
-  ::sleep(2); // give both ranks time to bring QPs up
+  ::sleep(2);  // give both ranks time to bring QPs up
 
   // Issue commands from GPU on BOTH ranks in duplex
   auto t0 = std::chrono::high_resolution_clock::now();

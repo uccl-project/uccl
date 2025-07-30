@@ -242,9 +242,7 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
 void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
   // Force load head from DRAM
   uint64_t cur_head = cfg_.rb->volatile_head();
-  size_t batch_size = cur_head - seen;
-
-  if (cur_head == my_tail || batch_size == 0) {
+  if (cur_head == my_tail) {
     cpu_relax();
     return;
   }
@@ -253,8 +251,6 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
             batch_size, kMaxInflight);
     std::abort();
   }
-  // printf("Post GPU command: my_tail=%lu, seen=%zu, batch_size: %zu\n",
-  // my_tail, seen, batch_size);
 
   std::vector<uint64_t> wrs_to_post;
   wrs_to_post.reserve(batch_size);
