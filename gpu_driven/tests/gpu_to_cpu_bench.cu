@@ -4,7 +4,6 @@
 #include <tuple>
 #include <vector>
 #include <assert.h>
-#include <cuda_pipeline.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <unistd.h>

@@ -35,6 +35,8 @@
 #define gpuFree cudaFree
 #define gpuMallocAsync cudaMallocAsync
 #define gpuFreeAsync cudaFreeAsync
+#define gpuMemcpyHostToDevice cudaMemcpyHostToDevice
+#define gpuMemcpyDeviceToHost cudaMemcpyDeviceToHost
 #define gpuMemcpy cudaMemcpy
 #define gpuMemcpyAsync cudaMemcpyAsync
 #define gpuMemcpyPeerAsync cudaMemcpyPeerAsync
@@ -42,7 +44,6 @@
 #define gpuMemcpyFromSymbol cudaMemcpyFromSymbol
 #define gpuGetLastError cudaGetLastError
 #define gpuErrorPeerAccessAlreadyEnabled cudaErrorPeerAccessAlreadyEnabled
-#define __GPU_ARCH__ __CUDA_ARCH__
 #else
 #include <hip/hip_runtime.h>
 #define gpuSuccess hipSuccess
@@ -77,6 +78,8 @@
 #define gpuFree hipFree
 #define gpuMallocAsync hipMallocAsync
 #define gpuFreeAsync hipFreeAsync
+#define gpuMemcpyHostToDevice hipMemcpyHostToDevice
+#define gpuMemcpyDeviceToHost hipMemcpyDeviceToHost
 #define gpuMemcpy hipMemcpy
 #define gpuMemcpyAsync hipMemcpyAsync
 #define gpuMemcpyPeerAsync hipMemcpyPeerAsync
@@ -84,7 +87,6 @@
 #define gpuMemcpyFromSymbol hipMemcpyFromSymbol
 #define gpuGetLastError hipGetLastError
 #define gpuErrorPeerAccessAlreadyEnabled hipErrorPeerAccessAlreadyEnabled
-#define __GPU_ARCH__ __HIP_ARCH__
 #endif
 
 #define GPU_RT_CHECK(call)                                         \

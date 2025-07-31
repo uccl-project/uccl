@@ -24,7 +24,7 @@ __device__ __forceinline__ uint64_t ld_volatile(uint64_t* ptr) {
 }
 
 __device__ __forceinline__ void fence_acq_rel_sys() {
-#if __GPU_ARCH__ >= 700
+#if __CUDA_ARCH__ >= 700 || __HIP_DEVICE_COMPILE__ >= 700
   asm volatile("fence.acq_rel.sys;" ::: "memory");
 #else
   asm volatile("membar.sys;" ::: "memory");
@@ -32,7 +32,7 @@ __device__ __forceinline__ void fence_acq_rel_sys() {
 }
 
 __device__ __forceinline__ void st_relaxed_sys(uint64_t* ptr, uint64_t val) {
-#if __GPU_ARCH__ >= 700
+#if __CUDA_ARCH__ >= 700 || __HIP_DEVICE_COMPILE__ >= 700
   asm volatile("st.relaxed.sys.global.u64 [%0], %1;" ::"l"(ptr), "l"(val)
                : "memory");
 #else
