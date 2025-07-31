@@ -138,6 +138,20 @@ class PyBench {
     init_env(env_);  // sets env_.blocks, env_.stream, env_.rbs, etc.
   }
 
+  void timing_start() {
+    t0_ = std::chrono::high_resolution_clock::now();
+    have_t0_ = true;
+  }
+  void timing_stop() {
+    t1_ = std::chrono::high_resolution_clock::now();
+    have_t1_ = true;
+  }
+
+  uintptr_t ring_addr(int i) const {
+    if (i < 0 || i >= env_.blocks) throw std::out_of_range("ring index");
+    return reinterpret_cast<uintptr_t>(&env_.rbs[i]);
+  }
+
   ~PyBench() {
     try {
       join_proxies();
@@ -262,6 +276,25 @@ PYBIND11_MODULE(pyproxy, m) {
         "Allocate pinned DeviceToHostCmdBuffer and return its address");
   m.def("free_cmd_ring", &free_cmd_ring,
         "Destroy and free a pinned DeviceToHostCmdBuffer by address");
+  m.def("launch_gpu_issue_kernel", [](int blocks, int threads_per_block,
+                                      uintptr_t stream_ptr, uintptr_t rb_ptr) {
+    const size_t shmem_bytes = kQueueSize * sizeof(unsigned long long);
+    auto* stream = reinterpret_cast<cudaStream_t>(stream_ptr);
+    auto* rbs = reinterpret_cast<DeviceToHostCmdBuffer*>(rb_ptr);
+    auto st = launch_gpu_issue_batched_commands_shim(blocks, threads_per_block,
+                                                     shmem_bytes, stream, rbs);
+    if (st != cudaSuccess) {
+      throw std::runtime_error("Kernel launch failed: " +
+                               std::string(cudaGetErrorString(st)));
+    }
+  });
+  m.def("sync_stream", []() {
+    auto st = cudaDeviceSynchronize();  // Or use a shared stream if needed
+    if (st != cudaSuccess) {
+      throw std::runtime_error(std::string("cudaDeviceSynchronize failed: ") +
+                               cudaGetErrorString(st));
+    }
+  });
 
   // Opaque Stats type (so we can pass/return it without exposing fields)
   py::class_<Stats>(m, "Stats");
@@ -287,6 +320,9 @@ PYBIND11_MODULE(pyproxy, m) {
       .def(py::init<>())
       .def("env_info", &PyBench::env_info)
       .def("blocks", &PyBench::blocks)
+      .def("ring_addr", &PyBench::ring_addr)
+      .def("timing_start", &PyBench::timing_start)
+      .def("timing_stop", &PyBench::timing_stop)
       .def("is_running", &PyBench::is_running)
       .def("start_local_proxies", &PyBench::start_local_proxies,
            py::arg("rank") = 0, py::arg("peer_ip") = std::string(),
