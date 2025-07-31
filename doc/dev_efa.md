@@ -98,8 +98,8 @@ ib_send_lat -d rdmap16s27 --report_gbits -x 0 -c UD -F <serverip>
 ### Run transport tests
 
 ```bash
-./util_efa_test --logtostderr
-./util_efa_test --logtostderr <serverip>
+./util_efa_test --logtostderr            # server
+./util_efa_test --logtostderr <serverip> # client
 ```
 
 ```bash

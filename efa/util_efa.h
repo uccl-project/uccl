@@ -484,7 +484,11 @@ const std::vector<std::string>& GetEnaDeviceNameList();
  */
 static inline int util_efa_get_ib_name_from_dev_idx(int dev_idx,
                                                     char* ib_name) {
-  sprintf(ib_name, "%s", EFA_DEVICE_NAME_LIST[dev_idx].c_str());
+  const auto &efa_list = GetEfaDeviceNameList();
+  DCHECK_GE(dev_idx, 0);
+  DCHECK_LT(static_cast<size_t>(dev_idx), efa_list.size())
+      << "dev_idx " << dev_idx << " out of range; NUM_DEVICES mismatch";
+  sprintf(ib_name, "%s", efa_list[dev_idx].c_str());
   return 0;
 }
 
@@ -495,14 +499,19 @@ static inline int util_efa_get_ib_name_from_dev_idx(int dev_idx,
  * @return int
  */
 static inline int util_efa_get_ip_from_dev_idx(int dev_idx, std::string* ip) {
-  *ip = get_dev_ip(ENA_DEVICE_NAME_LIST[dev_idx].c_str());
-  return *ip == "" ? -1 : 0;
+  const auto &ena_list = GetEnaDeviceNameList();
+  DCHECK_GE(dev_idx, 0);
+  DCHECK_LT(static_cast<size_t>(dev_idx), ena_list.size())
+      << "dev_idx " << dev_idx << " out of range; NUM_DEVICES mismatch";
+  *ip = get_dev_ip(ena_list[dev_idx].c_str());
+  return ip->empty() ? -1 : 0;
 }
 
 }  // namespace uccl
 
 /**
- * @brief Reset the device name lists for testing.
+ * @brief Exposes private variables g_efa_device_names and g_ena_device_names
+ * for testing purposes.
  *
  * @return void
  */
