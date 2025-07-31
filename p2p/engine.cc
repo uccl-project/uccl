@@ -92,11 +92,9 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   std::cout << std::endl;
 
   // Initialize the engine based on the GPU index.
-#ifdef LAZY_CREATE_ENGINE
   printf("Lazy creation of engine, GPU index: %d\n", local_gpu_idx_);
-  ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_], false);
+  ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_], true);
   printf("Engine initialized for GPU %d\n", local_gpu_idx_);
-#endif
 
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
@@ -132,16 +130,9 @@ bool Endpoint::connect(std::string const& ip_addr, int const& remote_gpu_idx,
 
   std::future<uccl::ConnID> uccl_conn_id_future = std::async(
       std::launch::async, [this, remote_gpu_idx, &ip_addr, remote_port]() {
-        if (remote_port == -1) {
-          throw std::runtime_error("Error: remote_port is not set.");
-          return ep_->test_uccl_connect(
-              gpu_to_dev[local_gpu_idx_], local_gpu_idx_,
-              gpu_to_dev[remote_gpu_idx], remote_gpu_idx, ip_addr);
-        } else {
-          return ep_->uccl_connect(gpu_to_dev[local_gpu_idx_], local_gpu_idx_,
-                                   gpu_to_dev[remote_gpu_idx], remote_gpu_idx,
-                                   ip_addr, remote_port);
-        }
+        return ep_->uccl_connect(gpu_to_dev[local_gpu_idx_], local_gpu_idx_,
+                                 gpu_to_dev[remote_gpu_idx], remote_gpu_idx,
+                                 ip_addr, remote_port);
       });
 
   // Check for Python signals (eg, ctrl+c) while waiting for connection
@@ -234,8 +225,10 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
 
   std::future<uccl::ConnID> uccl_conn_id_future =
       std::async(std::launch::async, [this, &ip_addr, &remote_gpu_idx]() {
-        return ep_->test_uccl_accept(gpu_to_dev[local_gpu_idx_], local_gpu_idx_,
-                                     ip_addr, &remote_gpu_idx);
+        auto rnic_idx = gpu_to_dev[local_gpu_idx_];
+        auto p2p_listen_port = ep_->get_p2p_listen_port(rnic_idx);
+        return ep_->uccl_accept(rnic_idx, p2p_listen_port, local_gpu_idx_,
+                                ip_addr, &remote_gpu_idx);
       });
 
   // Check for Python signals (eg, ctrl+c) while waiting for connection
@@ -805,11 +798,7 @@ std::vector<uint8_t> Endpoint::get_endpoint_metadata() {
   if (num_ifs != 1) UCCL_INIT_CHECK(false, "No IP interface found");
 
   std::string ip_str = uccl::get_dev_ip(uccl_ifname);
-  uint16_t port = ep_->get_port();
-  // int listen_fd = uccl::open_ephemeral_port(port);
-  // if (listen_fd < 0) {
-  //   throw std::runtime_error("Failed to open ephemeral port");
-  // }
+  uint16_t port = ep_->get_p2p_listen_port(gpu_to_dev[local_gpu_idx_]);
 
   bool is_ipv6 = ip_str.find(':') != std::string::npos;
   size_t ip_len = is_ipv6 ? 16 : 4;

@@ -4,12 +4,14 @@
  */
 
 #include "transport.h"
+#include <cstdint>
 #ifndef __HIP_PLATFORM_AMD__
 #include "cuda_runtime.h"
 #else
 #include "hip/hip_runtime.h"
 #endif
 #include "transport_config.h"
+#include "util/util.h"
 #include "util_timer.h"
 #include <gflags/gflags.h>
 #include <glog/logging.h>
@@ -24,6 +26,14 @@ using namespace uccl;
 static bool volatile quit = false;
 
 std::optional<RDMAEndpoint> ep;
+struct {
+  uint32_t port;
+  uint32_t ip;
+} local_p2p_listen;
+struct {
+  uint32_t port;
+  uint32_t ip;
+} remote_p2p_listen;
 
 DEFINE_bool(server, false, "Whether this is a server receiving traffic.");
 DEFINE_string(serverip, "", "Server IP address the client tries to connect.");
@@ -36,6 +46,7 @@ DEFINE_uint32(msize, 1000000, "Size of message.");
 DEFINE_uint32(iterations, 1000000, "Number of iterations to run.");
 DEFINE_bool(flush, false, "Whether to flush after receiving.");
 DEFINE_bool(bi, false, "Whether to run bidirectional test.");
+DEFINE_uint32(oobport, 19999, "OOB port to use for bootstrapping.");
 
 static void server_basic(ConnID conn_id, struct Mhandle* mhandle, void* data) {
   for (int i = 0; i < FLAGS_iterations; i++) {
@@ -351,9 +362,14 @@ static void client_worker(void) {
   mhandles.resize(FLAGS_nflow);
 
   for (int i = 0; i < FLAGS_nflow; i++) {
-    printf("Client connecting to %s (flow#%d)\n", FLAGS_serverip.c_str(), i);
-    auto conn_id = ep->test_uccl_connect(0, 0, 0, 0, FLAGS_serverip);
-    printf("Client connected to %s (flow#%d)\n", FLAGS_serverip.c_str(), i);
+    std::string dataplane_remote_ip = ip_to_str(remote_p2p_listen.ip);
+    int dataplane_remote_port = remote_p2p_listen.port;
+    printf("Client connecting to %s:%d (flow#%d)\n",
+           dataplane_remote_ip.c_str(), dataplane_remote_port, i);
+    auto conn_id = ep->test_uccl_connect(0, 0, 0, 0, dataplane_remote_ip,
+                                         dataplane_remote_port);
+    printf("Client connected to %s:%d (flow#%d)\n", dataplane_remote_ip.c_str(),
+           dataplane_remote_port, i);
 #ifdef GPU
     void* data;
 #ifndef __HIP_PLATFORM_AMD__
@@ -397,7 +413,6 @@ static void client_worker(void) {
 // TO run on AMD cluster:
 // export NCCL_IB_HCA="rdma0:1,rdma2:1,rdma3:1,rdma4:1"
 // export HIP_VISIBLE_DEVICES=1,2,0,5
-// export NCCL_SOCKET_IFNAME="cni0"
 // LD_LIBRARY_PATH="${CONDA_LIB_HOME}:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH}" ./transport_test --server=true
 // LD_LIBRARY_PATH="${CONDA_LIB_HOME}:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH}" ./transport_test --serverip=10.42.19.1
 // clang-format on
@@ -408,9 +423,9 @@ int main(int argc, char* argv[]) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
   ep.emplace(ucclParamNUM_ENGINES());
-#ifdef LAZY_CREATE_ENGINE
   ep->initialize_engine_by_dev(0, true);
-#endif
+  local_p2p_listen.port = ep->get_p2p_listen_port(0);
+  local_p2p_listen.ip = str_to_ip(ep->get_p2p_listen_ip(0));
 
   // Create a thread to print throughput every second
   std::thread t([&] {
@@ -430,15 +445,34 @@ int main(int argc, char* argv[]) {
 
   if (FLAGS_bi) {
     CHECK(!FLAGS_serverip.empty()) << "Server IP address is required.";
+
+    std::thread listen_thread([&] {
+      listen_accept_exchange(FLAGS_oobport, &local_p2p_listen,
+                             sizeof(local_p2p_listen), &remote_p2p_listen,
+                             sizeof(remote_p2p_listen));
+    });
+    std::thread connect_thread([&] {
+      connect_exchange(FLAGS_oobport, FLAGS_serverip, &local_p2p_listen,
+                       sizeof(local_p2p_listen), &remote_p2p_listen,
+                       sizeof(remote_p2p_listen));
+    });
+    listen_thread.join();
+    connect_thread.join();
+
     std::thread server_thread(server_worker);
     std::thread client_thread(client_worker);
-
     server_thread.join();
     client_thread.join();
   } else if (FLAGS_server) {
+    listen_accept_exchange(FLAGS_oobport, &local_p2p_listen,
+                           sizeof(local_p2p_listen), &remote_p2p_listen,
+                           sizeof(remote_p2p_listen));
     server_worker();
   } else {
     CHECK(!FLAGS_serverip.empty()) << "Server IP address is required.";
+    connect_exchange(FLAGS_oobport, FLAGS_serverip, &local_p2p_listen,
+                     sizeof(local_p2p_listen), &remote_p2p_listen,
+                     sizeof(remote_p2p_listen));
     client_worker();
   }
 

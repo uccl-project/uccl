@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 #include <glog/logging.h>
 #include <linux/in.h>
+#include <linux/tcp.h>
 #include <net/if.h>
 #include <algorithm>
 #include <atomic>
@@ -22,6 +23,7 @@
 #include <random>
 #include <regex>
 #include <sstream>
+#include <thread>
 #include <vector>
 #include <fcntl.h>
 #include <ifaddrs.h>
@@ -174,6 +176,70 @@ inline uint16_t create_listen_socket(int* listen_fd) {
           << assigned_port;
 
   return assigned_port;
+}
+
+inline static void listen_accept_exchange(int oobport, void* send_data,
+                                          int send_size, void* recv_data,
+                                          int recv_size) {
+  int listen_fd;
+  create_listen_socket(&listen_fd, oobport);
+  CHECK(listen_fd >= 0) << "Failed to listen on port " << oobport;
+  VLOG(5) << "[listen_accept_exchange] server ready, listening on port "
+          << oobport;
+
+  struct sockaddr_in client_addr;
+  socklen_t client_len = sizeof(client_addr);
+
+  int client_fd =
+      accept(listen_fd, (struct sockaddr*)&client_addr, &client_len);
+  CHECK(client_fd >= 0) << "Failed to accept connection";
+
+  // Set nonblocking and nodelay
+  int flags = fcntl(client_fd, F_GETFL);
+  fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
+  int flag = 1;
+  setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
+
+  char client_ip[INET_ADDRSTRLEN];
+  inet_ntop(AF_INET, &(client_addr.sin_addr), client_ip, INET_ADDRSTRLEN);
+  VLOG(5) << "[listen_accept_exchange] accepted connection from " << client_ip;
+
+  send_message(client_fd, send_data, send_size);
+  receive_message(client_fd, recv_data, recv_size);
+
+  close(listen_fd);
+  close(client_fd);
+}
+
+inline static void connect_exchange(int oobport, std::string oob_ip,
+                                    void* send_data, int send_size,
+                                    void* recv_data, int recv_size) {
+  int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+  CHECK(sockfd >= 0) << "Failed to create socket";
+
+  struct sockaddr_in server_addr;
+  server_addr.sin_family = AF_INET;
+  server_addr.sin_port = htons(oobport);
+  server_addr.sin_addr.s_addr = inet_addr(oob_ip.c_str());
+
+  while (connect(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr)) <
+         0) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    VLOG(5) << "[connect_exchange] connecting to " << oob_ip << ":" << oobport;
+  }
+
+  // Set nonblocking and nodelay
+  int flags = fcntl(sockfd, F_GETFL);
+  fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
+  int flag = 1;
+  setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
+
+  VLOG(5) << "[connect_exchange] connected to " << oob_ip << ":" << oobport;
+
+  send_message(sockfd, send_data, send_size);
+  receive_message(sockfd, recv_data, recv_size);
+
+  close(sockfd);
 }
 
 #define UINT_CSN_BIT 8
