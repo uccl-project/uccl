@@ -25,17 +25,23 @@ struct alignas(128) Fifo {
 };
 
 __device__ __forceinline__ uint64_t ld_volatile(uint64_t* ptr) {
-#ifndef __HIP_PLATFORM_AMD__
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+#ifdef __CUDA_ARCH__
   uint64_t ans;
   asm volatile("ld.volatile.global.u64 %0, [%1];"
                : "=l"(ans)
                : "l"(ptr)
                : "memory");
   return ans;
-#else
+#elif defined(__HIP_DEVICE_COMPILE__)
   uint64_t ans;
   ans = __builtin_nontemporal_load(ptr);
   return ans;
+#else
+#error "Not supported"
+#endif
+#else
+  return *((volatile uint64_t const*)ptr);
 #endif
 }
 
