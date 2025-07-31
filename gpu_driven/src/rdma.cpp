@@ -543,7 +543,6 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
 
 void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                                 int ne, ibv_wc* wc) {
-  struct ibv_sge sges[kMaxOutstandingRecvs];
   struct ibv_recv_wr wrs[kMaxOutstandingRecvs];
   if (ne == 0) return;
   int num_wr_imm = 0;
