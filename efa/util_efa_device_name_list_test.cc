@@ -1,4 +1,7 @@
-#define UCCL_TESTING     // must precede any header that pulls in util_efa.h
+#ifndef UCCL_TESTING
+#define UCCL_TESTING
+#endif
+
 #include "util_efa.h"
 #include <gtest/gtest.h>
 #include <cstdlib>

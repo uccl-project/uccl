@@ -54,7 +54,10 @@ static void init_device_name_lists() {
           }
           ibv_close_device(ctx);
         }
-        if (ok && name) g_efa_device_names.push_back(name);
+        if (ok && name) {
+          g_efa_device_names.push_back(name);
+          LOG(INFO) << "Discovered EFA device " << name;
+        }
       }
       ibv_free_device_list(list);
     }
@@ -68,6 +71,7 @@ static void init_device_name_lists() {
         if (ifa->ifa_name && strncmp(ifa->ifa_name, "ens", 3) == 0) {
           if (std::find(g_ena_device_names.begin(), g_ena_device_names.end(), ifa->ifa_name) == g_ena_device_names.end()) {
             g_ena_device_names.push_back(ifa->ifa_name);
+            LOG(INFO) << "Discovered ENA device " << ifa->ifa_name;
           }
         }
       }
