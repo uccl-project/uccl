@@ -288,7 +288,9 @@ inline void RDMAEndpoint::initialize_resources(int total_num_engines) {
   }
   eqds_.resize(num_devices_);
   p2p_listen_ports_.resize(num_devices_);
+  std::fill(p2p_listen_ports_.begin(), p2p_listen_ports_.end(), 0);
   p2p_listen_fds_.resize(num_devices_);
+  std::fill(p2p_listen_fds_.begin(), p2p_listen_fds_.end(), 0);
 
   peer_map_.resize(num_devices_);
   peer_map_mu_.resize(num_devices_);
@@ -1153,7 +1155,7 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
     struct sockaddr_in local_addr = {};
     socklen_t len = sizeof(local_addr);
     int ret = getsockname(bootstrap_fd, (struct sockaddr*)&local_addr, &len);
-    DCHECK(ret == 0) << "getsockname() failed";
+    DCHECK(ret == 0) << "getsockname() failed ";
     local_port = ntohs(local_addr.sin_port);
   }
 

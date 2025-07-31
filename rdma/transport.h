@@ -988,7 +988,7 @@ class RDMAEndpoint {
   SharedPool<PollCtx*, true>* ctx_pool_;
   uint8_t* ctx_pool_buf_;
 
-  std::vector<int> p2p_listen_ports_;
+  std::vector<uint16_t> p2p_listen_ports_;
   std::vector<int> p2p_listen_fds_;
 
   std::mutex fd_vec_mu_;
@@ -1016,13 +1016,19 @@ class RDMAEndpoint {
 
   uint32_t get_num_devices() { return num_devices_; }
 
-  int get_p2p_listen_port(int dev) {
+  inline uint16_t get_p2p_listen_port(int dev) {
     CHECK(p2p_listen_ports_[dev] != 0)
         << "Error: p2p_listen_ports_[" << dev << "] is not set.";
     return p2p_listen_ports_[dev];
   }
 
-  std::string get_p2p_listen_ip(int dev) {
+  inline int get_p2p_listen_fd(int dev) {
+    CHECK(p2p_listen_fds_[dev] != 0)
+        << "Error: p2p_listen_fds_[" << dev << "] is not set.";
+    return p2p_listen_fds_[dev];
+  }
+
+  inline std::string get_p2p_listen_ip(int dev) {
     auto factory_dev = RDMAFactory::get_factory_dev(dev);
     CHECK(factory_dev) << "get_p2p_listen_ip: get_factory_dev()";
     return factory_dev->local_ip_str;
