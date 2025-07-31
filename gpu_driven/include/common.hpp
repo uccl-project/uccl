@@ -1,15 +1,13 @@
 #ifndef COMMON_HPP
 #define COMMON_HPP
 
-#include "util/cuda.h"
+#include "util/gpu_rt.h"
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <thread>
-#include <cuda.h>
-#include <cuda_runtime.h>
 #include <stdio.h>
 #include <unistd.h>
 

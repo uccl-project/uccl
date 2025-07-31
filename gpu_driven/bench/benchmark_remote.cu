@@ -25,11 +25,10 @@ int main(int argc, char** argv) {
   const size_t total_size = kRemoteBufferSize;
   void* gpu_buffer = nullptr;
 #ifdef USE_GRACE_HOPPER
-  cudaMallocHost(&gpu_buffer, total_size);
+  GPU_RT_CHECK(gpuHostMalloc(&gpu_buffer, total_size));
 #else
-  cudaMalloc(&gpu_buffer, total_size);
+  GPU_RT_CHECK(gpuMalloc(&gpu_buffer, total_size));
 #endif
-  cudaCheckErrors("gpu_buffer allocation failed");
   std::vector<std::thread> cpu_threads;
   std::vector<std::unique_ptr<Proxy>> proxies;
   cpu_threads.reserve(env.blocks);
@@ -59,9 +58,8 @@ int main(int argc, char** argv) {
     const size_t shmem_bytes = kQueueSize * 2 * sizeof(unsigned long long);
     gpu_issue_batched_commands<<<env.blocks, kNumThPerBlock, shmem_bytes,
                                  env.stream>>>(env.rbs);
-    cudaCheckErrors("gpu_issue_batched_commands kernel failed");
-    cudaStreamSynchronize(env.stream);
-    cudaCheckErrors("cudaStreamSynchronize failed");
+    GPU_RT_CHECK_ERRORS("gpu_issue_batched_commands kernel failed");
+    GPU_RT_CHECK(gpuStreamSynchronize(env.stream));
     auto t1 = std::chrono::high_resolution_clock::now();
 
     for (int i = 0; i < env.blocks; ++i) {
@@ -74,11 +72,10 @@ int main(int argc, char** argv) {
     print_summary(env, s);
     destroy_env(env);
 #ifdef USE_GRACE_HOPPER
-    cudaFreeHost(gpu_buffer);
+    GPU_RT_CHECK(gpuHostFree(gpu_buffer));
 #else
-    cudaFree(gpu_buffer);
+    GPU_RT_CHECK(gpuFree(gpu_buffer));
 #endif
-    cudaCheckErrors("free gpu_buffer failed");
 
   } else {
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
@@ -109,11 +106,10 @@ int main(int argc, char** argv) {
 #endif
     destroy_env(env);
 #ifdef USE_GRACE_HOPPER
-    cudaFreeHost(gpu_buffer);
+    GPU_RT_CHECK(gpuHostFree(gpu_buffer));
 #else
-    cudaFree(gpu_buffer);
+    GPU_RT_CHECK(gpuFree(gpu_buffer));
 #endif
-    cudaCheckErrors("free gpu_buffer failed");
     return 0;
   }
 

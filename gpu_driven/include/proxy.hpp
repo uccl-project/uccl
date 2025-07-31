@@ -5,6 +5,7 @@
 #include "proxy_ctx.hpp"
 #include "rdma.hpp"
 #include "ring_buffer.cuh"
+#include "util/gpu_rt.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -13,7 +14,6 @@
 #include <unordered_map>
 #include <vector>
 #include <assert.h>
-#include <cuda_runtime.h>
 #include <stdio.h>
 #include <unistd.h>
 #if defined(__x86_64__) || defined(__i386__)
@@ -38,13 +38,12 @@ class Proxy {
 #ifdef ENABLE_PROXY_CUDA_MEMCPY
     const size_t total_size = kRemoteBufferSize;
     for (int d = 0; d < NUM_GPUS; ++d) {
-      cudaSetDevice(d);
+      GPU_RT_CHECK(gpuSetDevice(d));
       void* buf = nullptr;
-      cudaMalloc(&buf, total_size);
-      cudaCheckErrors("cudaMalloc per_GPU_device_buf failed");
+      GPU_RT_CHECK(gpuMalloc(&buf, total_size));
       ctx_.per_gpu_device_buf[d] = buf;
     }
-    cudaSetDevice(0);
+    GPU_RT_CHECK(gpuSetDevice(0));
 #endif
   }
 

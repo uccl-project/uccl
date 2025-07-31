@@ -1,9 +1,9 @@
 #pragma once
+#include "util/gpu_rt.h"
 #include <infiniband/verbs.h>
 #include <atomic>
 #include <unordered_map>
 #include <vector>
-#include <cuda_runtime.h>
 
 struct ProxyCtx {
   // RDMA objects
@@ -39,7 +39,7 @@ struct ProxyCtx {
   std::atomic<uint64_t> send_ack_completed{0};
 
   // GPU copy helpers (moved from function-static thread_local)
-  cudaStream_t copy_stream = nullptr;
+  gpuStream_t copy_stream = nullptr;
   bool peer_enabled[NUM_GPUS][NUM_GPUS] = {};
   size_t pool_index = 0;
 

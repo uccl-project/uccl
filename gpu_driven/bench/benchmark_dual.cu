@@ -3,6 +3,7 @@
 #include "peer_copy_worker.hpp"
 #include "proxy.hpp"
 #include "rdma.hpp"
+#include "util/gpu_rt.h"
 #include <chrono>
 #include <cstdlib>
 #include <functional>
@@ -21,7 +22,7 @@ int main(int argc, char** argv) {
   char const* peer_ip = argv[2];
 
   pin_thread_to_cpu(MAIN_THREAD_CPU_IDX);
-  cudaSetDeviceFlags(cudaDeviceMapHost);
+  GPU_RT_CHECK(gpuSetDeviceFlags(gpuDeviceMapHost));
 
   // Common CUDA + ring-buffers setup
   BenchEnv env;
@@ -31,11 +32,10 @@ int main(int argc, char** argv) {
   const size_t total_size = kRemoteBufferSize;
   void* gpu_buffer = nullptr;
 #ifdef USE_GRACE_HOPPER
-  cudaMallocHost(&gpu_buffer, total_size);
+  GPU_RT_CHECK(gpuHostMalloc(&gpu_buffer, total_size));
 #else
-  cudaMalloc(&gpu_buffer, total_size);
+  GPU_RT_CHECK(gpuMalloc(&gpu_buffer, total_size));
 #endif
-  cudaCheckErrors("gpu_buffer allocation failed");
 
   // Build Proxies (one per block), each bound to its ring buffer
   std::vector<std::unique_ptr<Proxy>> proxies;
@@ -81,9 +81,8 @@ int main(int argc, char** argv) {
   auto t0 = std::chrono::high_resolution_clock::now();
   gpu_issue_batched_commands<<<env.blocks, kNumThPerBlock, shmem_bytes_remote(),
                                env.stream>>>(env.rbs);
-  cudaCheckErrors("gpu_issue_batched_commands kernel failed");
-  cudaStreamSynchronize(env.stream);
-  cudaCheckErrors("cudaStreamSynchronize failed");
+  GPU_RT_CHECK_ERRORS("gpu_issue_batched_commands kernel failed");
+  GPU_RT_CHECK(gpuStreamSynchronize(env.stream));
   auto t1 = std::chrono::high_resolution_clock::now();
 
   // Reporting
@@ -110,11 +109,10 @@ int main(int argc, char** argv) {
   // Cleanup
   destroy_env(env);
 #ifdef USE_GRACE_HOPPER
-  cudaFreeHost(gpu_buffer);
+  GPU_RT_CHECK(gpuHostFree(gpu_buffer));
 #else
-  cudaFree(gpu_buffer);
+  GPU_RT_CHECK(gpuFree(gpu_buffer));
 #endif
-  cudaCheckErrors("free gpu_buffer failed");
 
   return 0;
 }

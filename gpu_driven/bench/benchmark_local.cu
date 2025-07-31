@@ -22,9 +22,8 @@ int main(int argc, char** argv) {
   const size_t shmem_bytes = kQueueSize * sizeof(unsigned long long);
   gpu_issue_batched_commands<<<env.blocks, kNumThPerBlock, shmem_bytes,
                                env.stream>>>(env.rbs);
-  cudaCheckErrors("gpu_issue_batched_commands failed");
-  cudaStreamSynchronize(env.stream);
-  cudaCheckErrors("cudaStreamSynchronize failed");
+  GPU_RT_CHECK_ERRORS("gpu_issue_batched_commands failed");
+  GPU_RT_CHECK(gpuStreamSynchronize(env.stream));
   auto t1 = std::chrono::high_resolution_clock::now();
 
   for (auto& t : threads) t.join();

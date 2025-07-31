@@ -2,6 +2,7 @@
 #include "common.hpp"
 #include "peer_copy_worker.hpp"
 #include "rdma_util.hpp"
+#include "util/gpu_rt.h"
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <algorithm>
@@ -21,7 +22,6 @@
 #include <thread>
 #include <unordered_set>
 #include <vector>
-#include <cuda_runtime.h>
 #include <fcntl.h>
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
@@ -543,7 +543,7 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
 
 void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                                 int ne, ibv_wc* wc) {
-  struct ibv_sge sges[kMaxOutstandingRecvs];
+  // struct ibv_sge sges[kMaxOutstandingRecvs];
   struct ibv_recv_wr wrs[kMaxOutstandingRecvs];
   if (ne == 0) return;
   int num_wr_imm = 0;
