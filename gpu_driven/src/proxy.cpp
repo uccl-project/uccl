@@ -63,11 +63,13 @@ void Proxy::run_sender() {
   printf("CPU sender thread for block %d started\n", cfg_.block_idx + 1);
   init_sender();
   size_t seen = 0;
+  int loop_count = 0;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     local_poll_completions(ctx_, finished_wrs_, finished_wrs_mutex_,
                            cfg_.block_idx);
     notify_gpu_completion(cfg_.rb->tail);
     post_gpu_command(cfg_.rb->tail, seen);
+    
   }
 }
 

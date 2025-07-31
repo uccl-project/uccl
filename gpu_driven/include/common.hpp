@@ -22,7 +22,7 @@
 #define kQueueMask (kQueueSize - 1)
 #define kMaxInflight 64
 #define kBatchSize 32
-#define kIterations 1000000
+#define kIterations 40000
 #define kNumThBlocks 6
 #define kNumThPerBlock 1
 #ifdef SYNCHRONOUS_COMPLETION
@@ -41,7 +41,7 @@
 #define kWarmupOps 10000
 #define kRemoteBufferSize kBatchSize* kNumThBlocks* kObjectSize * 100
 #define MAIN_THREAD_CPU_IDX 31
-#define NUM_GPUS 1
+#define NUM_GPUS 8
 #define RECEIVER_BATCH_SIZE 16
 #ifdef SYNCHRONOUS_COMPLETION
 #define NVLINK_SM_PER_PROCESS \

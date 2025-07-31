@@ -64,19 +64,19 @@ __device__ __forceinline__ uint64_t ld_volatile(uint64_t* ptr) {
 
 template <typename T, FlowDirection Dir, uint32_t Capacity>
 struct alignas(128) RingBuffer {
-  uint64_t head;
-  uint64_t tail;
+  uint64_t head = 0;
+  uint64_t tail = 0;
   T buf[Capacity];
-  uint64_t cycle_accum;
-  uint64_t op_count;
-  uint64_t cycle_start;
-  uint64_t cycle_end;
+  uint64_t cycle_accum = 0;
+  uint64_t op_count = 0;
+  uint64_t cycle_start = 0;
+  uint64_t cycle_end = 0;
   uint32_t capacity = Capacity;
 
   /* TODO(MaoZiming) to refactor */
-  struct ibv_qp* ack_qp;
+  struct ibv_qp* ack_qp = nullptr;
   ibv_mr* ack_mr = nullptr;
-  uint64_t ack_buf[RECEIVER_BATCH_SIZE];
+  uint64_t ack_buf[RECEIVER_BATCH_SIZE] = {0};
 
   __host__ __device__ static constexpr uint32_t mask() { return Capacity - 1; }
 

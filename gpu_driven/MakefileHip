@@ -3,12 +3,12 @@ override CXX := /usr/bin/g++
 HIPCC      := $(HIP_HOME)/bin/hipcc
 CONDA_LIB_HOME?=/usr/lib
 
-CXXFLAGS  := -O3 -std=c++17 -Wall -pthread -D__HIP_PLATFORM_AMD__ -I${CONDA_LIB_HOME}/../include
+CXXFLAGS  := -O0 -std=c++17 -Wall -pthread -D__HIP_PLATFORM_AMD__ -I${CONDA_LIB_HOME}/../include
 LDFLAGS   := -lpthread -L${CONDA_LIB_HOME} -lglog -lgflags -lgtest -lz -lelf
 
 # CXXFLAGS  += -mclwb
 LDFLAGS   += -libverbs -lnl-3 -lnl-route-3
-HIPCCFLAGS := -O3 -std=c++17 -D__HIP_PLATFORM_AMD__ --offload-arch=gfx942
+HIPCCFLAGS := -g -O0 -std=c++17 -D__HIP_PLATFORM_AMD__ --offload-arch=gfx942
 
 INCLUDES := -Iinclude -I$(HIP_HOME)/include -I/usr/include -I../include
 
