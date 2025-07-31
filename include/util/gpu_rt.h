@@ -46,6 +46,7 @@
 #define gpuErrorPeerAccessAlreadyEnabled cudaErrorPeerAccessAlreadyEnabled
 #else
 #include <hip/hip_runtime.h>
+#include <hip/hip_runtime_api.h>
 #define gpuSuccess hipSuccess
 #define gpuError_t hipError_t
 #define gpuGetErrorString hipGetErrorString

@@ -12,7 +12,7 @@ __device__ __forceinline__ uint64_t ld_volatile(uint64_t* ptr) {
 #ifndef __HIP_PLATFORM_AMD__
   uint64_t ans;
   asm volatile("ld.volatile.global.u64 %0, [%1];"
-               : "=r"(ans)
+               : "=l"(ans)
                : "l"(ptr)
                : "memory");
   return ans;
