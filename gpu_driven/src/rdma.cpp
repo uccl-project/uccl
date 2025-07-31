@@ -153,7 +153,6 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   S.rkey = S.mr->rkey;
 }
 
-
 ibv_cq* create_per_thread_cq(ProxyCtx& S) {
   int cq_depth = kMaxOutstandingSends * 2;
   S.cq =

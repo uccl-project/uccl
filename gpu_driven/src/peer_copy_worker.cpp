@@ -88,9 +88,8 @@ void peer_copy_worker(PeerCopyShared& shared, PeerWorkerCtx& ctx,
       ctx.task_wrs[i] = ctx.tasks[i].wr_id;
     }
 
-      ctx.highest_issued_wr_id =
-          std::max(ctx.highest_issued_wr_id, ctx.task_wrs[copy_batch_size - 1]);
- 
+    ctx.highest_issued_wr_id =
+        std::max(ctx.highest_issued_wr_id, ctx.task_wrs[copy_batch_size - 1]);
 
     auto st = std::chrono::high_resolution_clock::now();
     gpuError_t err;

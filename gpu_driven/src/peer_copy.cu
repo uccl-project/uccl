@@ -93,7 +93,6 @@ __global__ void peer_copy_kernel_vec_batched(CopyTask const* __restrict__ tasks,
 gpuError_t launch_peer_bulk_copy2(CopyTask const* host_tasks, int num_tasks,
                                   gpuStream_t stream, int src_device,
                                   CopyTask*& d_tasks) {
-                                                                
   GPU_RT_CHECK(gpuMemcpyAsync(d_tasks, host_tasks, num_tasks * sizeof(CopyTask),
                               gpuMemcpyHostToDevice, stream));
   constexpr int threads_per_block = 256;

@@ -69,7 +69,6 @@ void Proxy::run_sender() {
                            cfg_.block_idx);
     notify_gpu_completion(cfg_.rb->tail);
     post_gpu_command(cfg_.rb->tail, seen);
-    
   }
 }
 
