@@ -47,7 +47,7 @@ inline void init_env(BenchEnv& env, int blocks = kNumThBlocks, int device = 0,
 
 inline void destroy_env(BenchEnv& env) {
   if (env.rbs) {
-    GPU_RT_CHECK(gpuHostFree(env.rbs));
+    GPU_RT_CHECK(gpuFreeHost(env.rbs));
     env.rbs = nullptr;
   }
   if (env.stream) {
@@ -93,7 +93,7 @@ inline void* alloc_gpu_buffer(size_t total_size) {
 inline void free_gpu_buffer(void* p) {
   if (!p) return;
 #ifdef USE_GRACE_HOPPER
-  GPU_RT_CHECK(gpuHostFree(p));
+  GPU_RT_CHECK(gpuFreeHost(p));
 #else
   GPU_RT_CHECK(gpuFree(p));
 #endif

@@ -304,7 +304,7 @@ class iovMultiFifo {
 
   ~iovMultiFifo() {
     for (int i = 0; i < num_fifo_; i++) {
-      GPU_RT_CHECK(gpuHostFree((void*)fifo_vec_[i]));
+      GPU_RT_CHECK(gpuFreeHost((void*)fifo_vec_[i]));
     }
   }
 

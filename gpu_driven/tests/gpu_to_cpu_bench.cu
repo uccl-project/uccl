@@ -108,6 +108,6 @@ int main() {
         i, avg_latency_us, host_op_count[i], avg_cycles);
   }
 
-  GPU_RT_CHECK(gpuHostFree(signals));
+  GPU_RT_CHECK(gpuFreeHost(signals));
   GPU_RT_CHECK(gpuStreamDestroy(stream1));
 }

@@ -109,7 +109,7 @@ int main(int argc, char** argv) {
   // Cleanup
   destroy_env(env);
 #ifdef USE_GRACE_HOPPER
-  GPU_RT_CHECK(gpuHostFree(gpu_buffer));
+  GPU_RT_CHECK(gpuFreeHost(gpu_buffer));
 #else
   GPU_RT_CHECK(gpuFree(gpu_buffer));
 #endif

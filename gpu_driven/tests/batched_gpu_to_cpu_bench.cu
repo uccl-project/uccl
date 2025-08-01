@@ -221,6 +221,6 @@ int main() {
   printf("End-to-end Wall-clock time        : %.3f ms\n", wall_ms);
   printf("Throughput                        : %.2f Mops/s\n", throughput);
 
-  GPU_RT_CHECK(gpuHostFree(fifos));
+  GPU_RT_CHECK(gpuFreeHost(fifos));
   GPU_RT_CHECK(gpuStreamDestroy(stream1));
 }

@@ -28,7 +28,6 @@
 #define gpuIpcCloseMemHandle cudaIpcCloseMemHandle
 #define gpuHostMalloc cudaHostMalloc
 #define gpuHostAlloc cudaHostAlloc
-#define gpuHostFree cudaHostFree
 #define gpuHostAllocMapped cudaHostAllocMapped
 #define gpuFreeHost cudaFreeHost
 #define gpuMalloc cudaMalloc

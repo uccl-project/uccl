@@ -72,7 +72,7 @@ int main(int argc, char** argv) {
     print_summary(env, s);
     destroy_env(env);
 #ifdef USE_GRACE_HOPPER
-    GPU_RT_CHECK(gpuHostFree(gpu_buffer));
+    GPU_RT_CHECK(gpuFreeHost(gpu_buffer));
 #else
     GPU_RT_CHECK(gpuFree(gpu_buffer));
 #endif
@@ -106,7 +106,7 @@ int main(int argc, char** argv) {
 #endif
     destroy_env(env);
 #ifdef USE_GRACE_HOPPER
-    GPU_RT_CHECK(gpuHostFree(gpu_buffer));
+    GPU_RT_CHECK(gpuFreeHost(gpu_buffer));
 #else
     GPU_RT_CHECK(gpuFree(gpu_buffer));
 #endif
