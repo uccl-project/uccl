@@ -4,7 +4,9 @@
 #include "ring_buffer.cuh"
 #include "util/gpu_rt.h"
 #include <cstdio>
+#ifndef __HIP_PLATFORM_AMD__
 #include <cuda_pipeline.h>
+#endif
 
 __global__ void peer_copy_kernel(char const* __restrict__ src,
                                  char* __restrict__ dst, size_t num_bytes) {
