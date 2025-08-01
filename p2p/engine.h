@@ -69,12 +69,12 @@ class Endpoint {
    * input:
    *   ip_addr: the IP address of the remote server
    *   remote_gpu_idx: the GPU index of the remote server
+   *   remote_port: the port of the remote server (optional)
    * output:
    *   conn_id: the ID of the connection
-   *   remote_port: the port of the remote server (optional)
    */
-  bool connect(std::string const& ip_addr, int const& remote_gpu_idx,
-               uint64_t& conn_id, int remote_port);
+  bool connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
+               uint64_t& conn_id);
 
   bool connect(py::bytes const& metadata, uint64_t& conn_id);
 
@@ -186,7 +186,7 @@ class Endpoint {
    * You may prefer this factory in Ray where each actor knows its rank and the
    * rendezvous, but not its peers’ IP addresses.
    */
-  static std::unique_ptr<Endpoint> CreateAndJoin(
+  static std::unique_ptr<Endpoint> create_and_join(
       std::string const& discovery_uri, std::string const& group_name,
       int world_size, int my_rank, uint32_t local_gpu_idx, uint32_t num_cpus,
       int remote_gpu_idx);

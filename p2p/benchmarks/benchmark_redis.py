@@ -176,8 +176,8 @@ def main():
 
     # 1) Create & connect via rendezvous, or fallback to legacy
     if args.discovery_uri:
-        # Rendezvous: static CreateAndJoin already publishes, waits, and connects
-        ep = uccl_p2p.Endpoint.CreateAndJoin(
+        # Rendezvous: static create_and_join already publishes, waits, and connects
+        ep = uccl_p2p.Endpoint.create_and_join(
             args.discovery_uri,
             args.group_name,
             args.world_size,

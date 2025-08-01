@@ -17,8 +17,8 @@ PYBIND11_MODULE(p2p, m) {
           [](Endpoint& self, std::string const& remote_ip_addr,
              int remote_gpu_idx, int remote_port) {
             uint64_t conn_id;
-            bool success = self.connect(remote_ip_addr, remote_gpu_idx, conn_id,
-                                        remote_port);
+            bool success = self.connect(remote_ip_addr, remote_gpu_idx,
+                                        remote_port, conn_id);
             return py::make_tuple(success, conn_id);
           },
           "Connect to a remote server", py::arg("remote_ip_addr"),
@@ -216,16 +216,16 @@ PYBIND11_MODULE(p2p, m) {
            "and fully-connect",
            py::arg("discovery_uri"), py::arg("group_name"),
            py::arg("world_size"), py::arg("my_rank"), py::arg("remote_gpu_idx"))
-      .def(
-          "conn_id_of_rank", &Endpoint::conn_id_of_rank,
-          "Get the connection ID for a given peer rank (or UINT64_MAX if none)",
-          py::arg("rank"))
-      .def_static("CreateAndJoin", &Endpoint::CreateAndJoin,
+      .def_static("create_and_join", &Endpoint::create_and_join,
                   "Create an Endpoint and immediately join a rendezvous group",
                   py::arg("discovery_uri"), py::arg("group_name"),
                   py::arg("world_size"), py::arg("my_rank"),
                   py::arg("local_gpu_idx"), py::arg("num_cpus"),
                   py::arg("remote_gpu_idx"))
+      .def(
+          "conn_id_of_rank", &Endpoint::conn_id_of_rank,
+          "Get the connection ID for a given peer rank (or UINT64_MAX if none)",
+          py::arg("rank"))
       .def(
           "get_endpoint_metadata",
           [](Endpoint& self) {

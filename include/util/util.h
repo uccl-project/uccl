@@ -1211,4 +1211,26 @@ static std::vector<std::pair<std::string, fs::path>> get_rdma_nics() {
   return ib_nics;
 }
 
+static inline bool is_nvlink_peer(int local_gpu, int remote_gpu) {
+  int accessible = 0;
+  GPU_RT_CHECK(gpuDeviceCanAccessPeer(&accessible, local_gpu, remote_gpu));
+  if (!accessible) return false;
+
+#ifdef HAS_NVML
+  nvmlDevice_t local_dev, remote_dev;
+  nvmlDeviceGetHandleByIndex(local_gpu, &local_dev);
+  nvmlDeviceGetHandleByIndex(remote_gpu, &remote_dev);
+  nvmlP2PStatus_t status;
+  if (nvmlDeviceGetP2PStatus(local_dev, remote_dev, NVML_P2P_CAPS_INDEX_NVLINK,
+                             &status) == NVML_SUCCESS &&
+      status == NVML_P2P_STATUS_OK) {
+    return true;
+  } else {
+    return false;
+  }
+#else
+  return true;
+#endif
+}
+
 }  // namespace uccl
