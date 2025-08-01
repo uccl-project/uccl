@@ -25,7 +25,7 @@ int main(int argc, char** argv) {
   const size_t total_size = kRemoteBufferSize;
   void* gpu_buffer = nullptr;
 #ifdef USE_GRACE_HOPPER
-  GPU_RT_CHECK(gpuHostMalloc(&gpu_buffer, total_size));
+  GPU_RT_CHECK(gpuHostAlloc(&gpu_buffer, total_size, 0));
 #else
   GPU_RT_CHECK(gpuMalloc(&gpu_buffer, total_size));
 #endif

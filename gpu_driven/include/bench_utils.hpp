@@ -84,7 +84,7 @@ inline double mops_to_gbps(double mops) {
 inline void* alloc_gpu_buffer(size_t total_size) {
   void* p = nullptr;
 #ifdef USE_GRACE_HOPPER
-  GPU_RT_CHECK(gpuHostMalloc(&p, total_size));
+  GPU_RT_CHECK(gpuHostAlloc(&p, total_size, 0));
 #else
   GPU_RT_CHECK(gpuMalloc(&p, total_size));
 #endif

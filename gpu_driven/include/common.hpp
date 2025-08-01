@@ -41,7 +41,7 @@
 #define kWarmupOps 10000
 #define kRemoteBufferSize kBatchSize* kNumThBlocks* kObjectSize * 100
 #define MAIN_THREAD_CPU_IDX 31
-#define NUM_GPUS 8
+#define NUM_GPUS 1
 #define RECEIVER_BATCH_SIZE 16
 #ifdef SYNCHRONOUS_COMPLETION
 #define NVLINK_SM_PER_PROCESS \
