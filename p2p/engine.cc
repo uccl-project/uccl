@@ -242,38 +242,6 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
   return true;
 }
 
-bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
-                    uccl::FifoItem const& slot_item) {
-  py::gil_scoped_release release;
-
-  if (!ucclParamRCMode()) {
-    DCHECK(false) << "RDMA READ is only supported in RC mode, toggle RCMODE to "
-                     "be True in transport_config.h";
-    std::abort();
-  }
-
-  DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
-  auto* conn = conn_id_to_conn_[conn_id];
-  auto* mhandle = mr_id_to_mr_[mr_id]->mhandle_;
-  uccl::ucclRequest ureq;
-  memset(&ureq, 0, sizeof(uccl::ucclRequest));
-  int rc;
-  do {
-    rc = ep_->uccl_read_async(
-        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle, dst,
-        size, slot_item, &ureq);
-    if (rc == -1) {
-      check_python_signals();
-      std::this_thread::yield();
-    }
-  } while (rc == -1);
-
-  while (!ep_->uccl_poll_ureq_once(&ureq)) {
-    check_python_signals();
-  }
-  return true;
-}
-
 bool Endpoint::regv(std::vector<void const*> const& data_v,
                     std::vector<size_t> const& size_v,
                     std::vector<uint64_t>& mr_id_v) {
@@ -303,51 +271,6 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
     mr_id_v[i] = id;
   }
   return true;
-}
-
-bool Endpoint::send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
-                        size_t size, void const* meta, size_t meta_len) {
-  py::gil_scoped_release release;
-  DCHECK(size <= 0xffffffff);
-
-  DCHECK(meta_len == sizeof(gpuIpcMemHandle_t));
-  gpuIpcMemHandle_t handle{};
-  std::memcpy(&handle, meta, sizeof(handle));
-
-  void* dst_ptr = nullptr;
-  GPU_RT_CHECK(gpuSetDevice(remote_gpu_idx_));
-  GPU_RT_CHECK(
-      gpuIpcOpenMemHandle(&dst_ptr, handle, gpuIpcMemLazyEnablePeerAccess));
-
-  gpuStream_t s = pick_stream();
-  if (local_gpu_idx_ == remote_gpu_idx_) {
-    GPU_RT_CHECK(
-        gpuMemcpyAsync(dst_ptr, data, size, gpuMemcpyDeviceToDevice, s));
-  } else {
-    int can = 0;
-    GPU_RT_CHECK(gpuDeviceCanAccessPeer(&can, local_gpu_idx_, remote_gpu_idx_));
-    if (can) {
-      GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-      (void)gpuDeviceEnablePeerAccess(remote_gpu_idx_, 0);
-
-      GPU_RT_CHECK(gpuMemcpyPeerAsync(dst_ptr, remote_gpu_idx_, data,
-                                      local_gpu_idx_, size, s));
-    } else {
-      std::cerr << "Cannot access remote GPU " << remote_gpu_idx_
-                << " from local GPU " << local_gpu_idx_ << std::endl;
-      return false;
-    }
-  }
-  GPU_RT_CHECK(gpuStreamSynchronize(s));
-  GPU_RT_CHECK(gpuSetDevice(remote_gpu_idx_));
-  GPU_RT_CHECK(gpuIpcCloseMemHandle(dst_ptr));
-  return true;
-}
-
-bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
-                    size_t size, uccl::FifoItem const& slot_item) {
-  DCHECK(size <= 0xffffffff);
-  return send(conn_id, mr_id, data, size);
 }
 
 bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
@@ -399,6 +322,12 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
   }
 
   return true;
+}
+
+bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
+                    size_t size, uccl::FifoItem const& slot_item) {
+  DCHECK(size <= 0xffffffff);
+  return send(conn_id, mr_id, data, size);
 }
 
 bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
@@ -657,6 +586,104 @@ bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
     }
   } while (rc == -1);
 
+  return true;
+}
+
+bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
+                    uccl::FifoItem const& slot_item) {
+  py::gil_scoped_release release;
+
+  if (!ucclParamRCMode()) {
+    DCHECK(false) << "RDMA READ is only supported in RC mode, toggle RCMODE to "
+                     "be True in transport_config.h";
+    std::abort();
+  }
+
+  DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
+  auto* conn = conn_id_to_conn_[conn_id];
+  auto* mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  uccl::ucclRequest ureq;
+  memset(&ureq, 0, sizeof(uccl::ucclRequest));
+  int rc;
+  do {
+    rc = ep_->uccl_read_async(
+        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle, dst,
+        size, slot_item, &ureq);
+    if (rc == -1) {
+      check_python_signals();
+      std::this_thread::yield();
+    }
+  } while (rc == -1);
+
+  while (!ep_->uccl_poll_ureq_once(&ureq)) {
+    check_python_signals();
+  }
+  return true;
+}
+
+bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
+                          size_t size, uccl::FifoItem const& slot_item,
+                          uint64_t* transfer_id) {
+  py::gil_scoped_release release;
+  auto conn = conn_id_to_conn_[conn_id];
+  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+
+  auto _transfer_id = next_transfer_id_.fetch_add(1);
+  auto* ureq = new uccl::ucclRequest();
+
+  *transfer_id = _transfer_id;
+  transfer_id_to_ureq_[_transfer_id] = ureq;
+
+  int rc;
+  do {
+    rc = ep_->uccl_read_async(
+        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle, dst,
+        size, slot_item, ureq);
+    if (rc == -1) {
+      check_python_signals();
+      std::this_thread::yield();
+    }
+  } while (rc == -1);
+
+  return true;
+}
+
+bool Endpoint::send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
+                        size_t size, void const* meta, size_t meta_len) {
+  py::gil_scoped_release release;
+  DCHECK(size <= 0xffffffff);
+
+  DCHECK(meta_len == sizeof(gpuIpcMemHandle_t));
+  gpuIpcMemHandle_t handle{};
+  std::memcpy(&handle, meta, sizeof(handle));
+
+  void* dst_ptr = nullptr;
+  GPU_RT_CHECK(gpuSetDevice(remote_gpu_idx_));
+  GPU_RT_CHECK(
+      gpuIpcOpenMemHandle(&dst_ptr, handle, gpuIpcMemLazyEnablePeerAccess));
+
+  gpuStream_t s = pick_stream();
+  if (local_gpu_idx_ == remote_gpu_idx_) {
+    GPU_RT_CHECK(
+        gpuMemcpyAsync(dst_ptr, data, size, gpuMemcpyDeviceToDevice, s));
+  } else {
+    int can = 0;
+    GPU_RT_CHECK(gpuDeviceCanAccessPeer(&can, local_gpu_idx_, remote_gpu_idx_));
+    if (can) {
+      GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+      (void)gpuDeviceEnablePeerAccess(remote_gpu_idx_, 0);
+
+      GPU_RT_CHECK(gpuMemcpyPeerAsync(dst_ptr, remote_gpu_idx_, data,
+                                      local_gpu_idx_, size, s));
+    } else {
+      std::cerr << "Cannot access remote GPU " << remote_gpu_idx_
+                << " from local GPU " << local_gpu_idx_ << std::endl;
+      return false;
+    }
+  }
+  GPU_RT_CHECK(gpuStreamSynchronize(s));
+  GPU_RT_CHECK(gpuSetDevice(remote_gpu_idx_));
+  GPU_RT_CHECK(gpuIpcCloseMemHandle(dst_ptr));
   return true;
 }
 

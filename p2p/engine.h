@@ -105,8 +105,6 @@ class Endpoint {
   bool regv(std::vector<void const*> const& data_v,
             std::vector<size_t> const& size_v, std::vector<uint64_t>& mr_id_v);
 
-  bool send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
-                void const* meta, size_t meta_len);
   /*
    * Send data to the remote server. Blocking.
    *
@@ -121,9 +119,6 @@ class Endpoint {
   bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
             uccl::FifoItem const& slot_item);
 
-  bool read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
-            uccl::FifoItem const& slot_item);
-
   /* Send a vector of data chunks. Blocking. */
   bool sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
              std::vector<void const*> data_v, std::vector<size_t> size_v,
@@ -133,6 +128,8 @@ class Endpoint {
   bool send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
                   size_t size, uint64_t* transfer_id);
 
+  bool send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
+                void const* meta, size_t meta_len);
   /*
    * Receive data from the remote server. Blocking.
    *
@@ -153,6 +150,22 @@ class Endpoint {
   /* Receive data from the remote server asynchronously. */
   bool recv_async(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
                   uint64_t* transfer_id);
+
+  /* Read data from the remote server. Blocking.
+   *
+   * input:
+   *   conn_id: the ID of the connection
+   *   mr_id: the ID of the data
+   *   dst: the destination buffer
+   *   size: the size of the data
+   *   slot_item: the slot item to use for the transfer
+   */
+  bool read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
+            uccl::FifoItem const& slot_item);
+
+  /* Read data from the remote server asynchronously. */
+  bool read_async(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
+                  uccl::FifoItem const& slot_item, uint64_t* transfer_id);
 
   bool advertise(uint64_t conn_id, uint64_t mr_id, void* addr, size_t len,
                  char* out_buf);

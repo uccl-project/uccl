@@ -103,24 +103,6 @@ PYBIND11_MODULE(p2p, m) {
           py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"),
           py::arg("meta") = py::none())
       .def(
-          "read",
-          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
-             size_t size, py::bytes meta_blob) {
-            std::string buf = meta_blob;
-            if (buf.size() != sizeof(uccl::FifoItem))
-              throw std::runtime_error(
-                  "meta must be exactly 64 bytes (serialized FifoItem)");
-
-            uccl::FifoItem item;
-            uccl::deserialize_fifo_item(buf.data(), &item);
-            return self.read(conn_id, mr_id, reinterpret_cast<void*>(ptr), size,
-                             item);
-          },
-          "RDMA-READ into a local buffer using metadata from advertise(); "
-          "`meta` is the 64-byte serialized FifoItem returned by the peer",
-          py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"),
-          py::arg("meta"))
-      .def(
           "recv",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
              size_t size) {
@@ -130,24 +112,6 @@ PYBIND11_MODULE(p2p, m) {
           },
           "Receive a key-value buffer", py::arg("conn_id"), py::arg("mr_id"),
           py::arg("ptr"), py::arg("size"))
-      .def(
-          "advertise",
-          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id,
-             uint64_t ptr,  // raw pointer passed from Python
-             size_t size) {
-            char
-                serialized[sizeof(uccl::FifoItem)]{};  // 64-byte scratch buffer
-
-            bool ok = self.advertise(
-                conn_id, mr_id, reinterpret_cast<void*>(ptr), size, serialized);
-
-            /* return (success, bytes) — empty bytes when failed */
-            return py::make_tuple(
-                ok, ok ? py::bytes(serialized, sizeof(uccl::FifoItem))
-                       : py::bytes());
-          },
-          "Expose a registered buffer for the peer to RDMA-READ",
-          py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"))
       .def(
           "sendv",
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
@@ -204,6 +168,45 @@ PYBIND11_MODULE(p2p, m) {
           "Receive data asynchronously", py::arg("conn_id"), py::arg("mr_id"),
           py::arg("ptr"), py::arg("size"))
       .def(
+          "read",
+          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
+             size_t size, py::bytes meta_blob) {
+            std::string buf = meta_blob;
+            if (buf.size() != sizeof(uccl::FifoItem))
+              throw std::runtime_error(
+                  "meta must be exactly 64 bytes (serialized FifoItem)");
+
+            uccl::FifoItem item;
+            uccl::deserialize_fifo_item(buf.data(), &item);
+            return self.read(conn_id, mr_id, reinterpret_cast<void*>(ptr), size,
+                             item);
+          },
+          "RDMA-READ into a local buffer using metadata from advertise(); "
+          "`meta` is the 64-byte serialized FifoItem returned by the peer",
+          py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"),
+          py::arg("meta"))
+      .def(
+          "read_async",
+          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
+             size_t size, py::bytes meta_blob) {
+            std::string buf = meta_blob;
+            if (buf.size() != sizeof(uccl::FifoItem))
+              throw std::runtime_error(
+                  "meta must be exactly 64 bytes (serialized FifoItem)");
+
+            uccl::FifoItem item;
+            uccl::deserialize_fifo_item(buf.data(), &item);
+            uint64_t transfer_id;
+            bool success =
+                self.read_async(conn_id, mr_id, reinterpret_cast<void*>(ptr),
+                                size, item, &transfer_id);
+            return py::make_tuple(success, transfer_id);
+          },
+          "RDMA-READ into a local buffer using metadata from advertise(); "
+          "`meta` is the 64-byte serialized FifoItem returned by the peer",
+          py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"),
+          py::arg("meta"))
+      .def(
           "poll_async",
           [](Endpoint& self, uint64_t transfer_id) {
             bool is_done;
@@ -211,6 +214,24 @@ PYBIND11_MODULE(p2p, m) {
             return py::make_tuple(success, is_done);
           },
           "Poll the status of an asynchronous transfer", py::arg("transfer_id"))
+      .def(
+          "advertise",
+          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id,
+             uint64_t ptr,  // raw pointer passed from Python
+             size_t size) {
+            char
+                serialized[sizeof(uccl::FifoItem)]{};  // 64-byte scratch buffer
+
+            bool ok = self.advertise(
+                conn_id, mr_id, reinterpret_cast<void*>(ptr), size, serialized);
+
+            /* return (success, bytes) — empty bytes when failed */
+            return py::make_tuple(
+                ok, ok ? py::bytes(serialized, sizeof(uccl::FifoItem))
+                       : py::bytes());
+          },
+          "Expose a registered buffer for the peer to RDMA-READ",
+          py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"))
       .def("join_group", &Endpoint::join_group,
            "Join a rendezvous group: publish discovery info, wait for peers, "
            "and fully-connect",
