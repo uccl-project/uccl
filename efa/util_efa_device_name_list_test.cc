@@ -37,5 +37,3 @@ TEST_F(EnaDevice, RespectsEnvVariable) {
   auto const& list = GetEnaDeviceNameList();
   EXPECT_EQ(list, std::vector<std::string>({"ena0", "ena1", "ens42"}));
 }
-
-

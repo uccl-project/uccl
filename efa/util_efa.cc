@@ -82,11 +82,13 @@ static void init_device_name_lists() {
   }
 
   if (g_efa_device_names.empty()) {
-    LOG(ERROR) << "No EFA devices discovered via environment variables or hardware enumeration";
+    LOG(ERROR) << "No EFA devices discovered via environment variables or "
+                  "hardware enumeration";
   }
 
   if (g_ena_device_names.empty()) {
-    LOG(ERROR) << "No ENA devices discovered via environment variables or hardware enumeration";
+    LOG(ERROR) << "No ENA devices discovered via environment variables or "
+                  "hardware enumeration";
   }
 }
 
