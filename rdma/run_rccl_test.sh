@@ -30,7 +30,7 @@ NVLINK_ON=1
 
 NVLINK_OFF=$((1 - NVLINK_ON))
 
-mpirun --prefix /usr/local/bin/ompi --bind-to none -np 2 -N 1 --hostfile $NODEFILE --map-by ppr:1:node \
+mpirun --prefix /usr/local/bin/ompi --bind-to none -np 4 -N 1 --hostfile $NODEFILE --map-by ppr:1:node \
     -x LD_LIBRARY_PATH=${UCCL_HOME}/thirdparty/rccl/build/release:${CONDA_LIB_HOME}:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH} \
     -x NCCL_NET_PLUGIN=${plugin_path} \
     -x NCCL_P2P_DISABLE=${NVLINK_OFF} \
@@ -46,7 +46,7 @@ mpirun --prefix /usr/local/bin/ompi --bind-to none -np 2 -N 1 --hostfile $NODEFI
     -x HIP_VISIBLE_DEVICES=0,1,3,4,5,6,7 \
     -x GLOG_v=0 \
     -x UCCL_NUM_ENGINES=4 \
-    -x UCCL_PORT_ENTROPY=32 \
+    -x UCCL_PORT_ENTROPY=16 \
     -x UCCL_CHUNK_SIZE_KB=32 \
     -x UCCL_RCMODE=1 \
     ${UCCL_HOME}/thirdparty/rccl-tests/build/alltoall_perf \

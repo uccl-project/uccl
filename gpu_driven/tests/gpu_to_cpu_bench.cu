@@ -1,26 +1,15 @@
+#include "util/gpu_rt.h"
 #include <chrono>
 #include <thread>
 #include <tuple>
 #include <vector>
 #include <assert.h>
-#include <cuda_pipeline.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <unistd.h>
 
 static constexpr int kNumThBlocks = 8;
 static constexpr int kNumThPerBlock = 512;
-
-#define cudaCheckErrors(msg)                                  \
-  do {                                                        \
-    cudaError_t __err = cudaGetLastError();                   \
-    if (__err != cudaSuccess) {                               \
-      fprintf(stderr, "Fatal error: %s (%s at %s:%d)\n", msg, \
-              cudaGetErrorString(__err), __FILE__, __LINE__); \
-      fprintf(stderr, "*** FAILED - ABORTING\n");             \
-      exit(1);                                                \
-    }                                                         \
-  } while (0)
 
 struct alignas(128) GPUSignal {
   volatile uint64_t cmd;
@@ -70,17 +59,15 @@ void cpu_polling(GPUSignal* signal, int iterations, int block_id) {
 // CUDA_MODULE_LOADING=EAGER ./gpu_to_cpu_bench
 // Block 0: Average latency = 3.82 us over 1000 iterations, avg_cycles: 5391.95
 int main() {
-  cudaStream_t stream1;
-  cudaStreamCreate(&stream1);
-  cudaCheckErrors("cudaStreamCreate failed");
+  gpuStream_t stream1;
+  GPU_RT_CHECK(gpuStreamCreate(&stream1));
 
-  cudaDeviceProp prop;
-  cudaGetDeviceProperties(&prop, 0);
+  gpuDeviceProp prop;
+  gpuGetDeviceProperties(&prop, 0);
   printf("clock rate: %d kHz\n", prop.clockRate);
 
   GPUSignal* signals;
-  cudaHostAlloc(&signals, sizeof(GPUSignal) * kNumThBlocks,
-                cudaHostAllocMapped);
+  gpuHostAlloc(&signals, sizeof(GPUSignal) * kNumThBlocks, gpuHostAllocMapped);
 
   for (int i = 0; i < kNumThBlocks; ++i) {
     signals[i].cmd = 0;
@@ -97,10 +84,8 @@ int main() {
 
   gpu_issue_command<<<kNumThBlocks, kNumThPerBlock, 0, stream1>>>(signals,
                                                                   iterations);
-  cudaCheckErrors("gpu_issue_command kernel failed");
-
-  cudaStreamSynchronize(stream1);
-  cudaCheckErrors("cudaStreamSynchronize failed");
+  GPU_RT_CHECK_ERRORS("gpu_issue_command kernel failed");
+  GPU_RT_CHECK(gpuStreamSynchronize(stream1));
 
   for (auto& t : cpu_threads) {
     t.join();
@@ -108,9 +93,10 @@ int main() {
 
   unsigned long long host_cycle_accum[kNumThBlocks];
   unsigned int host_op_count[kNumThBlocks];
-  cudaMemcpyFromSymbol(host_cycle_accum, cycle_accum, sizeof(host_cycle_accum));
-  cudaMemcpyFromSymbol(host_op_count, op_count, sizeof(host_op_count));
-  cudaCheckErrors("cudaMemcpyFromSymbol failed");
+  GPU_RT_CHECK(gpuMemcpyFromSymbol(host_cycle_accum, cycle_accum,
+                                   sizeof(host_cycle_accum)));
+  GPU_RT_CHECK(
+      gpuMemcpyFromSymbol(host_op_count, op_count, sizeof(host_op_count)));
 
   for (int i = 0; i < kNumThBlocks; ++i) {
     double avg_cycles =
@@ -122,8 +108,6 @@ int main() {
         i, avg_latency_us, host_op_count[i], avg_cycles);
   }
 
-  cudaFreeHost(signals);
-  cudaCheckErrors("cudaFreeHost failed");
-  cudaStreamDestroy(stream1);
-  cudaCheckErrors("cudaStreamDestroy failed");
+  GPU_RT_CHECK(gpuFreeHost(signals));
+  GPU_RT_CHECK(gpuStreamDestroy(stream1));
 }

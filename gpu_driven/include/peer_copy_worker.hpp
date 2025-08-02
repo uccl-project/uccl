@@ -4,7 +4,6 @@
 #include <atomic>
 #include <mutex>
 #include <thread>
-#include <cuda_runtime.h>
 
 // Shared across all peer-copy workers on a process
 struct PeerCopyShared {
@@ -30,7 +29,7 @@ struct PeerWorkerCtx {
   uint64_t task_wrs[RECEIVER_BATCH_SIZE];
 
   // CUDA resources
-  cudaStream_t stream = nullptr;
+  gpuStream_t stream = nullptr;
   CopyTask* d_tasks = nullptr;  // device buffer for tasks
 };
 

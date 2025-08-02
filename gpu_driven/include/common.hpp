@@ -1,15 +1,13 @@
 #ifndef COMMON_HPP
 #define COMMON_HPP
 
-#include "util/cuda.h"
+#include "util/gpu_rt.h"
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <thread>
-#include <cuda.h>
-#include <cuda_runtime.h>
 #include <stdio.h>
 #include <unistd.h>
 
@@ -24,7 +22,7 @@
 #define kQueueMask (kQueueSize - 1)
 #define kMaxInflight 64
 #define kBatchSize 32
-#define kIterations 1000000
+#define kIterations 40000
 #define kNumThBlocks 6
 #define kNumThPerBlock 1
 #ifdef SYNCHRONOUS_COMPLETION

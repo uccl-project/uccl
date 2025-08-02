@@ -2,6 +2,7 @@
 #include "common.hpp"
 #include "peer_copy_worker.hpp"
 #include "rdma_util.hpp"
+#include "util/gpu_rt.h"
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <algorithm>
@@ -21,7 +22,6 @@
 #include <thread>
 #include <unordered_set>
 #include <vector>
-#include <cuda_runtime.h>
 #include <fcntl.h>
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
@@ -300,7 +300,7 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote) {
     attr.ah_attr.grh.hop_limit = 1;
     // Fill GID from remote_info
     memcpy(&attr.ah_attr.grh.dgid, remote->gid, 16);
-    attr.ah_attr.grh.sgid_index = 0;  // Assume GID index 0
+    attr.ah_attr.grh.sgid_index = 1;  // Assume GID index 0
   } else {
     attr.ah_attr.is_global = 0;
     attr.ah_attr.dlid = remote->lid;

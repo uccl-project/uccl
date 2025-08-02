@@ -2,37 +2,33 @@
 #include "common.hpp"
 #include "proxy.hpp"
 #include "ring_buffer.cuh"
+#include "util/gpu_rt.h"
 #include <chrono>
 #include <cstdio>
 #include <thread>
 #include <vector>
-#include <cuda_runtime.h>
 
 struct BenchEnv {
   DeviceToHostCmdBuffer* rbs = nullptr;
   int blocks = kNumThBlocks;
-  cudaStream_t stream = nullptr;
-  cudaDeviceProp prop{};
+  gpuStream_t stream = nullptr;
+  gpuDeviceProp prop{};
 };
 
 inline void init_env(BenchEnv& env, int blocks = kNumThBlocks, int device = 0,
                      bool quiet = false) {
   env.blocks = blocks;
-  cudaSetDevice(device);
-  cudaCheckErrors("cudaSetDevice failed");
-  cudaGetDeviceProperties(&env.prop, device);
-  cudaCheckErrors("cudaGetDeviceProperties failed");
+  GPU_RT_CHECK(gpuSetDevice(device));
+  GPU_RT_CHECK(gpuGetDeviceProperties(&env.prop, device));
   if (!quiet) {
     std::printf("clock rate: %d kHz\n", env.prop.clockRate);
   }
 
-  cudaStreamCreate(&env.stream);
-  cudaCheckErrors("cudaStreamCreate failed");
+  GPU_RT_CHECK(gpuStreamCreate(&env.stream));
 
-  cudaHostAlloc(&env.rbs,
-                sizeof(DeviceToHostCmdBuffer) * static_cast<size_t>(blocks),
-                cudaHostAllocMapped);
-  cudaCheckErrors("cudaHostAlloc failed");
+  GPU_RT_CHECK(gpuHostAlloc(
+      &env.rbs, sizeof(DeviceToHostCmdBuffer) * static_cast<size_t>(blocks),
+      gpuHostAllocMapped));
 
   for (int i = 0; i < blocks; ++i) {
     env.rbs[i].head = 0;
@@ -51,11 +47,11 @@ inline void init_env(BenchEnv& env, int blocks = kNumThBlocks, int device = 0,
 
 inline void destroy_env(BenchEnv& env) {
   if (env.rbs) {
-    cudaFreeHost(env.rbs);
+    GPU_RT_CHECK(gpuFreeHost(env.rbs));
     env.rbs = nullptr;
   }
   if (env.stream) {
-    cudaStreamDestroy(env.stream);
+    GPU_RT_CHECK(gpuStreamDestroy(env.stream));
     env.stream = nullptr;
   }
 }
@@ -88,21 +84,19 @@ inline double mops_to_gbps(double mops) {
 inline void* alloc_gpu_buffer(size_t total_size) {
   void* p = nullptr;
 #ifdef USE_GRACE_HOPPER
-  cudaMallocHost(&p, total_size);
+  GPU_RT_CHECK(gpuHostAlloc(&p, total_size, 0));
 #else
-  cudaMalloc(&p, total_size);
+  GPU_RT_CHECK(gpuMalloc(&p, total_size));
 #endif
-  cudaCheckErrors("alloc_gpu_buffer failed");
   return p;
 }
 inline void free_gpu_buffer(void* p) {
   if (!p) return;
 #ifdef USE_GRACE_HOPPER
-  cudaFreeHost(p);
+  GPU_RT_CHECK(gpuFreeHost(p));
 #else
-  cudaFree(p);
+  GPU_RT_CHECK(gpuFree(p));
 #endif
-  cudaCheckErrors("free gpu_buffer failed");
 }
 
 struct Stats {

@@ -9,7 +9,7 @@ For UCCL's host/CPU-driven P2P engine, see [p2p](../p2p/) folder.
 2.	Rank 0 writes batched copy commands into a host-mapped ring buffer managed by local CPU proxy.
 3.	The CPU proxy polls that ring, posts `IBV_WR_RDMA_WRITE_WITH_IMM`, and recycles WQEs on completion.
 4.	Rank 1’s proxy (on the remote node) posts matching receives and funnels completed work into a peer-copy kernel (optional) that pushes data to additional GPUs through NVLink. This step mimicks the requirements in MoE models where a token can be routed to multiple experts on the remote node.
-
+5.  Modify NUM_GPUS in uccl/gpu_driven/include/common.hpp based on your testbed.
 ---
 
 ## Folder Structure

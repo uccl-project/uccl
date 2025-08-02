@@ -151,7 +151,7 @@ If you have not installed nixl with UCX backend, you can follow:
 <details><summary>Click me</summary>
 
 ```bash
-sudo apt install build-essential cmake pkg-config 
+sudo apt install build-essential cmake pkg-config autoconf automake libtool -y
 pip3 install meson
 pip3 install pybind11
 
@@ -164,9 +164,8 @@ cd ..
 sudo ln -s /usr/lib/aarch64-linux-gnu/libcuda.so.1 /usr/local/cuda/lib64/libcuda.so
 
 # Install UCX
-wget https://github.com/openucx/ucx/releases/download/v1.18.0/ucx-1.18.0.tar.gz
-tar xzf ucx-1.18.0.tar.gz
-cd ucx-1.18.0
+git clone https://github.com/openucx/ucx.git && cd ucx
+./autogen.sh
 ./configure --prefix=/usr/local/ucx --enable-shared --disable-static \
             --disable-doxygen-doc --enable-optimizations --enable-cma \
             --enable-devel-headers --with-cuda=/usr/local/cuda \

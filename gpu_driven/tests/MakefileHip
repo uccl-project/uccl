@@ -1,0 +1,40 @@
+# Paths
+HIP_HOME ?= /opt/rocm
+EFA_HOME := /opt/amazon/efa
+CONDA_LIB_HOME?=/usr/lib
+
+# Tools
+HIPCC := $(HIP_HOME)/bin/hipcc
+CXX := g++
+
+# Flags
+INCLUDES := -I../include -I../../include -I$(HIP_HOME)/include -I$(EFA_HOME)/include -I${CONDA_LIB_HOME}/../include
+LDFLAGS := -L$(HIP_HOME)/lib64 -L$(EFA_HOME)/lib -lamdhip64 -libverbs -lpthread -L${CONDA_LIB_HOME} -lglog -lgflags -lgtest -lz -lelf
+CXXFLAGS := -O3 -g -std=c++17 $(INCLUDES) -D__HIP_PLATFORM_AMD__
+HIPFLAGS := --offload-arch=gfx942 -D__HIP_PLATFORM_AMD__
+
+# Files
+COMMON_SRC := ../src/common.cpp
+COMMON_OBJ := ../src/common.o
+
+# Binaries
+AMD_BIN := pcie_bench gpu_to_cpu_bench batched_gpu_to_cpu_bench
+
+all: $(AMD_BIN)
+
+# Object file
+$(COMMON_OBJ): $(COMMON_SRC) ../include/common.hpp
+	$(CXX) -c $(CXXFLAGS) $(COMMON_SRC) -o $@
+
+# Test benchmarks
+pcie_bench: pcie_bench.cu $(COMMON_OBJ)
+	$(HIPCC) $(HIPFLAGS) $(CXXFLAGS) pcie_bench.cu $(COMMON_OBJ) -o $@ $(LDFLAGS)
+
+gpu_to_cpu_bench: gpu_to_cpu_bench.cu $(COMMON_OBJ)
+	$(HIPCC) $(HIPFLAGS) $(CXXFLAGS) gpu_to_cpu_bench.cu $(COMMON_OBJ) -o $@ $(LDFLAGS)
+
+batched_gpu_to_cpu_bench: batched_gpu_to_cpu_bench.cu $(COMMON_OBJ)
+	$(HIPCC) $(HIPFLAGS) $(CXXFLAGS) batched_gpu_to_cpu_bench.cu $(COMMON_OBJ) -o $@ $(LDFLAGS)
+
+clean:
+	rm -f $(AMD_BIN) $(COMMON_OBJ)
