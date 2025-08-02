@@ -138,9 +138,10 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     perror("Failed to allocate PD");
     exit(1);
   }
-  S.mr = ibv_reg_mr(S.pd, gpu_buf, bytes,
-                    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                        IBV_ACCESS_RELAXED_ORDERING);
+  uint64_t iova = (uintptr_t)gpu_buf;
+  S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
+                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                              IBV_ACCESS_RELAXED_ORDERING);
 
   if (!S.mr) {
     perror("ibv_reg_mr failed");

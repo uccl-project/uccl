@@ -1,4 +1,3 @@
-import time
 import threading
 import torch
 import pyproxy
@@ -6,9 +5,7 @@ import pyproxy
 
 def test_bench():
     bench = pyproxy.Bench()
-
-    bench.start_local_proxies(rank=0, peer_ip="", pin_thread=True)
-
+    bench.start_local_proxies()
     bench.launch_gpu_issue_batched_commands()
     bench.sync_stream()
     bench.join_proxies()
@@ -17,55 +14,7 @@ def test_bench():
     stats = bench.compute_stats()
     bench.print_summary(stats)
     bench.print_summary_last()
-
     print("elapsed_ms:", bench.last_elapsed_ms())
-
-
-def run_thread_with_kernel(block_idx, gpu_tensor, stream_ptr, rbs_ptr, num_blocks):
-    proxy, rb_addr = (
-        pyproxy.Proxy(
-            rb_addr=pyproxy.alloc_cmd_ring(),
-            block_idx=block_idx,
-            gpu_buffer_addr=gpu_tensor.data_ptr(),
-            total_size=gpu_tensor.numel(),
-            rank=0,
-            peer_ip="",
-            pin_thread=True,
-        ),
-        pyproxy.alloc_cmd_ring(),
-    )
-
-    proxy.start_local()
-
-    if block_idx == 0:
-        pyproxy.launch_gpu_issue_kernel(num_blocks, 1, stream_ptr, rbs_ptr)
-        pyproxy.sync_stream()
-
-    proxy.stop()
-    print(f"[Block {block_idx}] WRs completed: {proxy.completed_wr()}")
-    pyproxy.free_cmd_ring(rb_addr)
-
-
-def run_proxy_thread(block_idx, gpu_tensor):
-    num_blocks = 4
-    gpu_tensor = torch.empty(1 << 24, dtype=torch.uint8, device="cuda")
-
-    bench = pyproxy.Bench()
-    env = bench.env_info()
-    stream_ptr = env["stream_addr"]
-    rbs_ptr = env["rbs_addr"]
-
-    threads = []
-    for i in range(num_blocks):
-        t = threading.Thread(
-            target=run_thread_with_kernel,
-            args=(i, gpu_tensor, stream_ptr, rbs_ptr, num_blocks),
-        )
-        t.start()
-        threads.append(t)
-
-    for t in threads:
-        t.join()
 
 
 def test_proxy():
@@ -87,9 +36,6 @@ def test_proxy():
             block_idx=i,
             gpu_buffer_addr=gpu_addr,
             total_size=nbytes,
-            rank=0,
-            peer_ip="",
-            pin_thread=True,
         )
         p.start_local()
         proxies.append(p)
