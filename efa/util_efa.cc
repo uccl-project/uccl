@@ -82,15 +82,11 @@ static void init_device_name_lists() {
   }
 
   if (g_efa_device_names.empty()) {
-    g_efa_device_names.assign(std::begin(EFA_DEVICE_NAME_LIST),
-                              std::end(EFA_DEVICE_NAME_LIST));
-    LOG(WARNING) << "Using fallback EFA device names";
+    LOG(ERROR) << "No EFA devices discovered via environment variables or hardware enumeration";
   }
 
   if (g_ena_device_names.empty()) {
-    g_ena_device_names.assign(std::begin(ENA_DEVICE_NAME_LIST),
-                              std::end(ENA_DEVICE_NAME_LIST));
-    LOG(WARNING) << "Using fallback ENA device names";
+    LOG(ERROR) << "No ENA devices discovered via environment variables or hardware enumeration";
   }
 }
 
