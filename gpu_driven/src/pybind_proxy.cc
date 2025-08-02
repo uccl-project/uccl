@@ -16,6 +16,9 @@
 #include <thread>
 #include <vector>
 #include <cuda_runtime.h>
+#ifdef ENABLE_PROXY_CUDA_MEMCPY
+#include "peer_copy_worker.hpp"
+#endif
 
 namespace py = pybind11;
 
@@ -41,6 +44,8 @@ void free_cmd_ring(uintptr_t addr) {
 }
 
 class UcclProxy {
+  friend class PeerCopyManager;
+
  public:
   UcclProxy(uintptr_t rb_addr, int block_idx, uintptr_t gpu_buffer_addr,
             size_t total_size, int rank,
@@ -271,6 +276,44 @@ class Bench {
   cudaEvent_t done_evt_;
 };
 
+#ifdef ENABLE_PROXY_CUDA_MEMCPY
+class PeerCopyManager {
+ public:
+  explicit PeerCopyManager(int src_device = 0) {
+    shared_.src_device = src_device;
+    shared_.run.store(true, std::memory_order_release);
+  }
+  ~PeerCopyManager() { stop(); }
+
+  // Start one peer_copy_worker per proxy
+  void start_for_proxies(std::vector<UcclProxy*> const& proxies) {
+    int const n = static_cast<int>(proxies.size());
+    if (n <= 0) return;
+    ctxs_.resize(n);
+    threads_.reserve(n);
+    for (int i = 0; i < n; ++i) {
+      // Access the underlying Proxy's ring; UcclProxy declared us as a friend.
+      threads_.emplace_back(peer_copy_worker, std::ref(shared_),
+                            std::ref(ctxs_[i]),
+                            std::ref(proxies[i]->proxy_->ring), i);
+    }
+  }
+
+  void stop() {
+    if (threads_.empty()) return;
+    shared_.run.store(false, std::memory_order_release);
+    for (auto& t : threads_)
+      if (t.joinable()) t.join();
+    threads_.clear();
+    ctxs_.clear();
+  }
+
+ private:
+  PeerCopyShared shared_;
+  std::vector<PeerWorkerCtx> ctxs_;
+  std::vector<std::thread> threads_;
+};
+#endif
 PYBIND11_MODULE(pyproxy, m) {
   m.doc() = "Python bindings for RDMA proxy and granular benchmark control";
   m.def("alloc_cmd_ring", &alloc_cmd_ring,
@@ -372,4 +415,18 @@ PYBIND11_MODULE(pyproxy, m) {
       .def("print_summary", &Bench::print_summary)
       .def("print_summary_last", &Bench::print_summary_last)
       .def("last_elapsed_ms", &Bench::last_elapsed_ms);
+
+#ifdef ENABLE_PROXY_CUDA_MEMCPY
+  py::class_<PeerCopyManager>(m, "PeerCopyManager")
+      .def(py::init<int>(), py::arg("src_device") = 0)
+      .def("start_for_proxies",
+           [](PeerCopyManager& mgr, py::iterable proxy_list) {
+             std::vector<UcclProxy*> vec;
+             for (py::handle h : proxy_list) {
+               vec.push_back(h.cast<UcclProxy*>());
+             }
+             mgr.start_for_proxies(vec);
+           })
+      .def("stop", &PeerCopyManager::stop);
+#endif
 }
