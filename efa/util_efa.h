@@ -471,9 +471,8 @@ class EFASocket {
   friend class EFAFactory;
 };
 
-
-const std::vector<std::string>& GetEfaDeviceNameList();
-const std::vector<std::string>& GetEnaDeviceNameList();
+std::vector<std::string> const& GetEfaDeviceNameList();
+std::vector<std::string> const& GetEnaDeviceNameList();
 
 /**
  * @brief This helper function gets the Infiniband name from the dev index.
@@ -484,7 +483,7 @@ const std::vector<std::string>& GetEnaDeviceNameList();
  */
 static inline int util_efa_get_ib_name_from_dev_idx(int dev_idx,
                                                     char* ib_name) {
-  const auto &efa_list = GetEfaDeviceNameList();
+  auto const& efa_list = GetEfaDeviceNameList();
   DCHECK_GE(dev_idx, 0);
   DCHECK_LT(static_cast<size_t>(dev_idx), efa_list.size())
       << "dev_idx " << dev_idx << " out of range; NUM_DEVICES mismatch";
@@ -499,7 +498,7 @@ static inline int util_efa_get_ib_name_from_dev_idx(int dev_idx,
  * @return int
  */
 static inline int util_efa_get_ip_from_dev_idx(int dev_idx, std::string* ip) {
-  const auto &ena_list = GetEnaDeviceNameList();
+  auto const& ena_list = GetEnaDeviceNameList();
   DCHECK_GE(dev_idx, 0);
   DCHECK_LT(static_cast<size_t>(dev_idx), ena_list.size())
       << "dev_idx " << dev_idx << " out of range; NUM_DEVICES mismatch";

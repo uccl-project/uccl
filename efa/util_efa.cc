@@ -1,12 +1,12 @@
 #include "util_efa.h"
 #include "transport_config.h"
-#include <ifaddrs.h>
-#include <sys/types.h>
 #include <algorithm>
 #include <cstdlib>
-#include <sstream>
 #include <mutex>
+#include <sstream>
 #include <vector>
+#include <ifaddrs.h>
+#include <sys/types.h>
 
 namespace uccl {
 
@@ -14,7 +14,7 @@ static std::vector<std::string> g_efa_device_names;
 static std::vector<std::string> g_ena_device_names;
 static std::once_flag g_devname_once;
 
-static std::vector<std::string> split_env_list(const char* env) {
+static std::vector<std::string> split_env_list(char const* env) {
   std::vector<std::string> result;
   if (!env) return result;
   std::stringstream ss(env);
@@ -29,8 +29,8 @@ static std::vector<std::string> split_env_list(const char* env) {
 }
 
 static void init_device_name_lists() {
-  const char* efa_env = std::getenv("UCCL_EFA_DEVICES");
-  const char* ena_env = std::getenv("UCCL_ENA_DEVICES");
+  char const* efa_env = std::getenv("UCCL_EFA_DEVICES");
+  char const* ena_env = std::getenv("UCCL_ENA_DEVICES");
 
   g_efa_device_names = split_env_list(efa_env);
   g_ena_device_names = split_env_list(ena_env);
@@ -41,9 +41,10 @@ static void init_device_name_lists() {
     struct ibv_device** list = ibv_get_device_list(&nb_devices);
     if (list) {
       for (int i = 0; i < nb_devices; ++i) {
-        const char* name = ibv_get_device_name(list[i]);
+        char const* name = ibv_get_device_name(list[i]);
         bool ok = false;
-        if (name && (strncmp(name, "rdmap", 5) == 0 || strncmp(name, "efa", 3) == 0)) {
+        if (name &&
+            (strncmp(name, "rdmap", 5) == 0 || strncmp(name, "efa", 3) == 0)) {
           ok = true;
         }
         struct ibv_context* ctx = ibv_open_device(list[i]);
@@ -69,7 +70,8 @@ static void init_device_name_lists() {
     if (getifaddrs(&ifaddr) == 0) {
       for (struct ifaddrs* ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
         if (ifa->ifa_name && strncmp(ifa->ifa_name, "ens", 3) == 0) {
-          if (std::find(g_ena_device_names.begin(), g_ena_device_names.end(), ifa->ifa_name) == g_ena_device_names.end()) {
+          if (std::find(g_ena_device_names.begin(), g_ena_device_names.end(),
+                        ifa->ifa_name) == g_ena_device_names.end()) {
             g_ena_device_names.push_back(ifa->ifa_name);
             LOG(INFO) << "Discovered ENA device " << ifa->ifa_name;
           }
@@ -92,12 +94,12 @@ static void init_device_name_lists() {
   }
 }
 
-const std::vector<std::string>& GetEfaDeviceNameList() {
+std::vector<std::string> const& GetEfaDeviceNameList() {
   std::call_once(g_devname_once, init_device_name_lists);
   return g_efa_device_names;
 }
 
-const std::vector<std::string>& GetEnaDeviceNameList() {
+std::vector<std::string> const& GetEnaDeviceNameList() {
   std::call_once(g_devname_once, init_device_name_lists);
   return g_ena_device_names;
 }
@@ -953,21 +955,20 @@ EFASocket::~EFASocket() {
 }
 }  // namespace uccl
 
-
 #ifdef UCCL_TESTING
 // Only when testing: expose private internals and add reset function
 namespace uccl::_detail {
-    // Expose the static variables by referencing them from the parent namespace
-    std::vector<std::string>& g_efa_device_names = ::uccl::g_efa_device_names;
-    std::vector<std::string>& g_ena_device_names = ::uccl::g_ena_device_names;
-    std::once_flag& g_devname_once = ::uccl::g_devname_once;
+// Expose the static variables by referencing them from the parent namespace
+std::vector<std::string>& g_efa_device_names = ::uccl::g_efa_device_names;
+std::vector<std::string>& g_ena_device_names = ::uccl::g_ena_device_names;
+std::once_flag& g_devname_once = ::uccl::g_devname_once;
 
-  // Reset the device name lists for testing.
-  void ResetDeviceNameListsForTest() {
-    g_efa_device_names.clear();
-    g_ena_device_names.clear();
-    // Re-initialise the once_flag via placement new
-    new (&g_devname_once) std::once_flag;
-  }
+// Reset the device name lists for testing.
+void ResetDeviceNameListsForTest() {
+  g_efa_device_names.clear();
+  g_ena_device_names.clear();
+  // Re-initialise the once_flag via placement new
+  new (&g_devname_once) std::once_flag;
+}
 }  // namespace uccl::_detail
 #endif

@@ -8,10 +8,10 @@ DIRECTORIES=("afxdp" "efa" "gpu_driven" "rdma" "misc" "p2p" "include")
 EXTENSIONS=("cpp" "cxx" "cc" "h" "hpp" "cu" "cuh")
 EXCLUDE=("afxdp/lib")
 
-# Check if clang-format is installed
+Check if clang-format is installed
 if ! command -v clang-format &> /dev/null; then
-    echo "clang-format could not be found. Please install it first."
-    exit 1
+   echo "clang-format could not be found. Please install it first."
+   exit 1
 fi
 
 # Ensure clang-format version is 14
@@ -21,8 +21,8 @@ REQUIRED_VERSION="14"
 INSTALLED_VERSION=$(clang-format --version | grep -oP '[0-9]+\.[0-9]+\.[0-9]+' | head -1 | cut -d. -f1)
 
 if [ "$INSTALLED_VERSION" != "$REQUIRED_VERSION" ]; then
-    echo "clang-format version $REQUIRED_VERSION is required. Found version: $INSTALLED_VERSION."
-    exit 1
+   echo "clang-format version $REQUIRED_VERSION is required. Found version: $INSTALLED_VERSION."
+   exit 1
 fi
 
 echo "Formatting C++ files..."
