@@ -4,28 +4,6 @@
 #include <stdint.h>
 #include <stdio.h>
 
-__device__ __forceinline__ bool check_completion(DeviceToHostCmdBuffer* rb,
-                                                 uint64_t cmd_idx) {
-  uint64_t cur_tail = rb->volatile_tail();
-  if (cmd_idx < cur_tail) {
-    return true;
-  }
-  return false;
-}
-
-__device__ __forceinline__ void post_command(DeviceToHostCmdBuffer* rb,
-                                             uint64_t cmd_idx,
-                                             uint64_t cmd_val) {
-  TransferCmd c;
-  c.cmd = cmd_val;
-  c.dst_rank = 0;
-  c.dst_gpu = 0;
-  c.src_ptr = nullptr;
-  c.bytes = kObjectSize;
-
-  rb->set_buffer(cmd_idx, c);
-}
-
 __global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs) {
   int const bid = blockIdx.x;
   int const tid = threadIdx.x;
@@ -52,7 +30,7 @@ __global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs) {
 
 #ifdef MEASURE_PER_OP_LATENCY
     cur_tail = rb->volatile_tail();
-    if (check_completion(rb, complete)) {
+    if (complete < cur_tail) {
       // __threadfence_system();
       for (int i = complete; i < cur_tail; ++i) {
         if (rb->get_entry(complete).cmd != 0) {
@@ -96,9 +74,14 @@ __global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs) {
     for (int i = 0; i < todo; ++i) {
       unsigned long long t0 = clock64();
       start_cycle_smem[(my_hdr + i) & kQueueMask] = t0;
-      uint64_t cmd_idx = my_hdr + i;
-      uint64_t cmd = (static_cast<uint64_t>(bid) << 32) | (it + i + 1);
-      post_command(rb, cmd_idx, cmd);
+      rb->set_buffer(
+          my_hdr + i,
+          TransferCmd{.cmd = (static_cast<uint64_t>(bid) << 32) | (it + i + 1),
+                      .dst_rank = static_cast<uint32_t>(bid),
+                      .dst_gpu = 0,
+                      .src_ptr = reinterpret_cast<void*>(
+                          static_cast<uintptr_t>(it + i + 1)),
+                      .bytes = kObjectSize});
     }
     rb->commit_with_head(my_hdr + todo);
 
