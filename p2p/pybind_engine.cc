@@ -84,20 +84,8 @@ PYBIND11_MODULE(p2p, m) {
                                    reinterpret_cast<void const*>(ptr), size,
                                    buf.data(), buf.size());
             }
-            if (!meta_blob.is_none()) {
-              std::string buf = py::cast<py::bytes>(meta_blob);
-              if (buf.size() != sizeof(uccl::FifoItem))
-                throw std::runtime_error(
-                    "meta must be exactly 64 bytes (serialized FifoItem)");
-
-              uccl::FifoItem item;
-              uccl::deserialize_fifo_item(buf.data(), &item);
-              return self.send(conn_id, mr_id,
-                               reinterpret_cast<void const*>(ptr), size, item);
-            } else {
-              return self.send(conn_id, mr_id,
-                               reinterpret_cast<void const*>(ptr), size);
-            }
+            return self.send(conn_id, mr_id, reinterpret_cast<void const*>(ptr),
+                             size);
           },
           "Send a data buffer, optionally using metadata (serialized FifoItem)",
           py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"),
@@ -111,6 +99,30 @@ PYBIND11_MODULE(p2p, m) {
             return success;
           },
           "Receive a key-value buffer", py::arg("conn_id"), py::arg("mr_id"),
+          py::arg("ptr"), py::arg("size"))
+      .def(
+          "send_async",
+          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
+             size_t size) {
+            uint64_t transfer_id;
+            bool success = self.send_async(conn_id, mr_id,
+                                           reinterpret_cast<void const*>(ptr),
+                                           size, &transfer_id);
+            return py::make_tuple(success, transfer_id);
+          },
+          "Send data asynchronously", py::arg("conn_id"), py::arg("mr_id"),
+          py::arg("ptr"), py::arg("size"))
+      .def(
+          "recv_async",
+          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
+             size_t size) {
+            uint64_t transfer_id;
+            bool success =
+                self.recv_async(conn_id, mr_id, reinterpret_cast<void*>(ptr),
+                                size, &transfer_id);
+            return py::make_tuple(success, transfer_id);
+          },
+          "Receive data asynchronously", py::arg("conn_id"), py::arg("mr_id"),
           py::arg("ptr"), py::arg("size"))
       .def(
           "sendv",
@@ -143,30 +155,6 @@ PYBIND11_MODULE(p2p, m) {
           "Receive multiple data buffers", py::arg("conn_id"),
           py::arg("mr_id_v"), py::arg("data_ptr_v"), py::arg("size_v"),
           py::arg("num_iovs"))
-      .def(
-          "send_async",
-          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
-             size_t size) {
-            uint64_t transfer_id;
-            bool success = self.send_async(conn_id, mr_id,
-                                           reinterpret_cast<void const*>(ptr),
-                                           size, &transfer_id);
-            return py::make_tuple(success, transfer_id);
-          },
-          "Send data asynchronously", py::arg("conn_id"), py::arg("mr_id"),
-          py::arg("ptr"), py::arg("size"))
-      .def(
-          "recv_async",
-          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
-             size_t size) {
-            uint64_t transfer_id;
-            bool success =
-                self.recv_async(conn_id, mr_id, reinterpret_cast<void*>(ptr),
-                                size, &transfer_id);
-            return py::make_tuple(success, transfer_id);
-          },
-          "Receive data asynchronously", py::arg("conn_id"), py::arg("mr_id"),
-          py::arg("ptr"), py::arg("size"))
       .def(
           "read",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,

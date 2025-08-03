@@ -116,20 +116,6 @@ class Endpoint {
    */
   bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size);
 
-  bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
-            uccl::FifoItem const& slot_item);
-
-  /* Send a vector of data chunks. Blocking. */
-  bool sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-             std::vector<void const*> data_v, std::vector<size_t> size_v,
-             size_t num_iovs);
-
-  /* Send data to the remote server asynchronously. */
-  bool send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
-                  size_t size, uint64_t* transfer_id);
-
-  bool send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
-                void const* meta, size_t meta_len);
   /*
    * Receive data from the remote server. Blocking.
    *
@@ -142,14 +128,26 @@ class Endpoint {
    */
   bool recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size);
 
-  /* Receive a vector of data chunks. Blocking. */
-  bool recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-             std::vector<void*> data_v, std::vector<size_t> size_v,
-             size_t num_iovs);
+  bool send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
+                void const* meta, size_t meta_len);
+
+  /* Send data to the remote server asynchronously. */
+  bool send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
+                  size_t size, uint64_t* transfer_id);
 
   /* Receive data from the remote server asynchronously. */
   bool recv_async(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
                   uint64_t* transfer_id);
+
+  /* Send a vector of data chunks. Blocking. */
+  bool sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+             std::vector<void const*> data_v, std::vector<size_t> size_v,
+             size_t num_iovs);
+
+  /* Receive a vector of data chunks. Blocking. */
+  bool recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+             std::vector<void*> data_v, std::vector<size_t> size_v,
+             size_t num_iovs);
 
   /* Read data from the remote server. Blocking.
    *
