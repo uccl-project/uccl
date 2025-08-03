@@ -224,7 +224,8 @@ PYBIND11_MODULE(p2p, m) {
            "Join a rendezvous group: publish discovery info, wait for peers, "
            "and fully-connect",
            py::arg("discovery_uri"), py::arg("group_name"),
-           py::arg("world_size"), py::arg("my_rank"), py::arg("remote_gpu_idx"))
+           py::arg("world_size"), py::arg("my_rank"), py::arg("remote_gpu_idx"),
+           py::arg("remote_port"))
       .def_static("create_and_join", &Endpoint::create_and_join,
                   "Create an Endpoint and immediately join a rendezvous group",
                   py::arg("discovery_uri"), py::arg("group_name"),

@@ -113,10 +113,11 @@ build_p2p() {
   fi
   cd ..
 
-  echo "[container] Copying P2P .so to uccl/"
+  echo "[container] Copying P2P .so and collective.py to uccl/"
   mkdir -p uccl
   mkdir -p uccl/lib
   cp p2p/p2p.*.so uccl/
+  cp p2p/collective.py uccl/
 }
 
 # Determine the Docker image to use based on the target and architecture

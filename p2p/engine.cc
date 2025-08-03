@@ -182,7 +182,7 @@ bool Endpoint::connect(py::bytes const& meta_bytes, uint64_t& conn_id) {
       conn_id = kNvlinkConn;
       return true;
     }
-    if (is_nvlink_peer(local_gpu_idx_, remote_gpu_idx_)) {
+    if (uccl::is_nvlink_peer(local_gpu_idx_, remote_gpu_idx_)) {
       conn_id = kNvlinkConn;
       return true;
     }
@@ -190,7 +190,7 @@ bool Endpoint::connect(py::bytes const& meta_bytes, uint64_t& conn_id) {
         "is_local_ip() returned true, "
         "but remote GPU is not a NVLink peer");
   }
-  return this->connect(ip, remote_gpu_idx_, conn_id, port);
+  return this->connect(ip, remote_gpu_idx_, port, conn_id);
 }
 
 bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
@@ -715,7 +715,8 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
 
 bool Endpoint::join_group(std::string const& discovery_uri,
                           std::string const& group_name, int world_size,
-                          int my_rank, int remote_gpu_idx) {
+                          int my_rank, int remote_gpu_idx,
+                          uint16_t remote_port) {
   std::string local_ip;
   {
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -762,7 +763,7 @@ bool Endpoint::join_group(std::string const& discovery_uri,
                   << cid << "\n";
       }
     } else {
-      if (!connect(peers[r].ip_addr, remote_gpu_idx, cid, -1)) {
+      if (!connect(peers[r].ip_addr, remote_gpu_idx, remote_port, cid)) {
         std::cerr << "[join_group] connect from rank " << r << " failed\n";
         return false;
       }
@@ -777,8 +778,9 @@ std::unique_ptr<Endpoint> Endpoint::create_and_join(
     int world_size, int my_rank, uint32_t local_gpu_idx, uint32_t num_cpus,
     int remote_gpu_idx) {
   auto ep = std::make_unique<Endpoint>(local_gpu_idx, num_cpus);
+  uint16_t port = ep->ep_->get_p2p_listen_port(gpu_to_dev[local_gpu_idx]);
   if (!ep->join_group(discovery_uri, group_name, world_size, my_rank,
-                      remote_gpu_idx)) {
+                      remote_gpu_idx, port)) {
     throw std::runtime_error("Endpoint::create_and_join() failed");
   }
   return ep;

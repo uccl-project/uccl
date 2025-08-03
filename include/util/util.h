@@ -2,6 +2,7 @@
 #ifdef USE_CUDA
 #include "cuda_runtime.h"
 #endif
+#include "util/gpu_rt.h"
 #include "util/jring.h"
 #include <arpa/inet.h>
 #include <glog/logging.h>

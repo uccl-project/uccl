@@ -10,7 +10,6 @@ The API automatically handles:
 - Async operation polling
 - Resource cleanup
 """
-
 from __future__ import annotations
 
 import struct
@@ -32,78 +31,70 @@ except ImportError:
 class CollectiveContext:
     """
     High-level collective communication context that wraps the UCCL p2p engine.
-
+    
     Provides NCCL-like send/recv interface with automatic connection management.
     """
-
+    
     def __init__(self, num_cpus: int = 4, local_gpu_idx: Optional[int] = None):
         """
         Initialize collective context with automatic GPU index derivation from torch.distributed.
-
+        
         Args:
             num_cpus: Number of CPU threads for RDMA operations
             local_gpu_idx: Optional override for local GPU index. If None, will be derived from torch.distributed
         """
         if not dist.is_initialized():
-            raise RuntimeError(
-                "torch.distributed must be initialized before creating CollectiveContext"
-            )
+            raise RuntimeError("torch.distributed must be initialized before creating CollectiveContext")
 
         if dist.get_backend() != "gloo":
-            raise RuntimeError(
-                "CollectiveContext requires torch.distributed to use 'gloo' backend"
-            )
-
+            raise RuntimeError("CollectiveContext requires torch.distributed to use 'gloo' backend")
+            
         self.num_cpus = num_cpus
         self.rank = dist.get_rank()
         self.world_size = dist.get_world_size()
-
+        
         # Derive local GPU index from distributed context
         if local_gpu_idx is not None:
             self.local_gpu_idx = local_gpu_idx
         else:
             self.local_gpu_idx = self._get_local_gpu_idx()
-
+            
         self.ep = None
-        self.send_connections: Dict[int, int] = (
-            {}
-        )  # rank -> conn_id for sending TO that rank
-        self.recv_connections: Dict[int, int] = (
-            {}
-        )  # rank -> conn_id for receiving FROM that rank
-        self.memory_regions: Dict[int, int] = {}  # ptr -> mr_id
+        self.send_connections: Dict[int, int] = {}  # rank -> conn_id for sending TO that rank
+        self.recv_connections: Dict[int, int] = {}  # rank -> conn_id for receiving FROM that rank  
+        self.memory_regions: Dict[int, int] = {}  # ptr -> mr_id 
         self.initialized = False
-
+        
     def _get_local_gpu_idx(self) -> int:
         """
         Derive local GPU index from torch.distributed context.
-
+        
         This method attempts to get the local rank in the following order:
         1. LOCAL_RANK environment variable (common in torchrun/distributed launchers)
         2. Calculate from global rank assuming equal distribution across nodes
         3. Fall back to global rank (single node case)
         """
         import os
-
+        
         # Method 1: Check LOCAL_RANK environment variable (most reliable)
-        local_rank_env = os.environ.get("LOCAL_RANK")
+        local_rank_env = os.environ.get('LOCAL_RANK')
         if local_rank_env is not None:
             try:
                 return int(local_rank_env)
             except ValueError:
                 pass
-
+                
         # Method 2: Try to get from torch.distributed if available
         try:
             # This requires torch.distributed to have local rank support
-            if hasattr(dist, "get_local_rank"):
+            if hasattr(dist, 'get_local_rank'):
                 return dist.get_local_rank()
         except (AttributeError, RuntimeError):
             pass
-
+            
         # Method 3: Check RANK and LOCAL_WORLD_SIZE for calculation
-        rank_env = os.environ.get("RANK")
-        local_world_size_env = os.environ.get("LOCAL_WORLD_SIZE")
+        rank_env = os.environ.get('RANK')
+        local_world_size_env = os.environ.get('LOCAL_WORLD_SIZE')
         if rank_env is not None and local_world_size_env is not None:
             try:
                 global_rank = int(rank_env)
@@ -111,37 +102,35 @@ class CollectiveContext:
                 return global_rank % local_world_size
             except ValueError:
                 pass
-
+                
         # Method 4: Fall back to global rank (assumes single node or user manages GPU mapping)
         return self.rank
-
+        
     def init(self):
         """Initialize the collective context and establish connections with all peers."""
         if self.initialized:
             warnings.warn("CollectiveContext already initialized")
             return
-
+        
         # Create endpoint
         self.ep = p2p.Endpoint(self.local_gpu_idx, self.num_cpus)
         local_metadata = self.ep.get_endpoint_metadata()
-
+        
         # Exchange metadata with all peers using torch.distributed
         all_metadata = [None] * self.world_size
-
+        
         # Gather all metadata
         metadata_tensor = torch.ByteTensor(list(local_metadata))
-        gathered_tensors = [
-            torch.zeros_like(metadata_tensor) for _ in range(self.world_size)
-        ]
+        gathered_tensors = [torch.zeros_like(metadata_tensor) for _ in range(self.world_size)]
         dist.all_gather(gathered_tensors, metadata_tensor)
-
+        
         for i, tensor in enumerate(gathered_tensors):
             all_metadata[i] = bytes(tensor.tolist())
-
+        
         # Establish connections with all other ranks
         self._establish_connections(all_metadata)
         self.initialized = True
-
+        
     def _parse_metadata(self, metadata: bytes) -> Tuple[str, int, int]:
         """Parse endpoint metadata to extract IP, port, and GPU index."""
         if len(metadata) == 10:
@@ -162,14 +151,14 @@ class CollectiveContext:
         port = struct.unpack("!H", port_bytes)[0]
         remote_gpu_idx = struct.unpack("i", gpu_idx_bytes)[0]
         return ip, port, remote_gpu_idx
-
+        
     def _establish_connections(self, all_metadata: list):
         """Establish full mesh connections with all peers using concurrent threads."""
         import concurrent.futures
-
+        
         connect_errors = []
         accept_errors = []
-
+        
         def connect_to_peer(peer_rank):
             """Connect to a specific peer for sending data TO that peer."""
             try:
@@ -178,59 +167,51 @@ class CollectiveContext:
                 if not ok:
                     raise RuntimeError(f"Failed to connect to rank {peer_rank}")
                 self.send_connections[peer_rank] = conn_id
-                print(
-                    f"[Rank {self.rank}] Connected to rank {peer_rank} for sending (conn_id={conn_id})"
-                )
+                print(f"[Rank {self.rank}] Connected to rank {peer_rank} for sending (conn_id={conn_id})")
             except Exception as e:
                 connect_errors.append(f"Connect to rank {peer_rank}: {e}")
-
+        
         def accept_from_peer(expected_peer_rank):
             """Accept connection from a specific peer for receiving data FROM that peer."""
             try:
                 ok, r_ip, r_gpu, conn_id = self.ep.accept()
                 if not ok:
                     raise RuntimeError(f"Failed to accept connection")
-                # Note: We can't always guarantee which peer connects first,
+                # Note: We can't always guarantee which peer connects first, 
                 # so we'll store by the actual connecting peer's info
                 # For now, we'll use the connection ID and map it later if needed
                 self.recv_connections[expected_peer_rank] = conn_id
-                print(
-                    f"[Rank {self.rank}] Accepted connection from rank {expected_peer_rank} for receiving (conn_id={conn_id})"
-                )
+                print(f"[Rank {self.rank}] Accepted connection from rank {expected_peer_rank} for receiving (conn_id={conn_id})")
             except Exception as e:
                 accept_errors.append(f"Accept from rank {expected_peer_rank}: {e}")
-
+        
         # Create thread pools for concurrent operations
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=self.world_size
-        ) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.world_size) as executor:
             # Submit connect tasks for all other ranks (for sending TO them)
             connect_futures = []
             for peer_rank in range(self.world_size):
                 if peer_rank != self.rank:
                     future = executor.submit(connect_to_peer, peer_rank)
                     connect_futures.append(future)
-
-            # Submit accept tasks for all other ranks (for receiving FROM them)
+            
+            # Submit accept tasks for all other ranks (for receiving FROM them)  
             accept_futures = []
             for peer_rank in range(self.world_size):
                 if peer_rank != self.rank:
                     future = executor.submit(accept_from_peer, peer_rank)
                     accept_futures.append(future)
-
+            
             # Wait for all connections to complete
             concurrent.futures.wait(connect_futures + accept_futures)
-
+        
         # Check for any errors
         if connect_errors:
             raise RuntimeError(f"Connect errors: {'; '.join(connect_errors)}")
         if accept_errors:
             raise RuntimeError(f"Accept errors: {'; '.join(accept_errors)}")
-
-        print(
-            f"[Rank {self.rank}] Full mesh established: {len(self.send_connections)} send connections, {len(self.recv_connections)} recv connections"
-        )
-
+            
+        print(f"[Rank {self.rank}] Full mesh established: {len(self.send_connections)} send connections, {len(self.recv_connections)} recv connections")
+            
     def _get_buffer_info(self, tensor: torch.Tensor) -> Tuple[int, int]:
         """Get buffer pointer and size from tensor."""
         if not tensor.is_contiguous():
@@ -238,61 +219,59 @@ class CollectiveContext:
         ptr = tensor.data_ptr()
         size = tensor.numel() * tensor.element_size()
         return ptr, size
-
+        
     def _register_memory(self, ptr: int, size: int) -> int:
         """Register memory and cache the memory region ID."""
         if ptr in self.memory_regions:
             return self.memory_regions[ptr]
-
+            
         ok, mr_id = self.ep.reg(ptr, size)
         if not ok:
             raise RuntimeError("Failed to register memory")
         self.memory_regions[ptr] = mr_id
         return mr_id
-
+        
     def register_tensor(self, tensor: torch.Tensor):
         """
         Register a tensor for efficient memory access.
-
+        
         Args:
             tensor: Tensor to register
         """
         if not self.initialized:
             raise RuntimeError("CollectiveContext not initialized. Call init() first.")
-
+            
         ptr, size = self._get_buffer_info(tensor)
         self._register_memory(ptr, size)
-
+        
     def send(self, tensor: torch.Tensor, dst: int):
         """
         Send tensor to destination rank (synchronous).
-
+        
         Args:
             tensor: Tensor to send
             dst: Destination rank
         """
         if not self.initialized:
             raise RuntimeError("CollectiveContext not initialized. Call init() first.")
-
+            
         if dst == self.rank:
             return  # No-op for self-send
-
+            
         if dst not in self.send_connections:
             raise ValueError(f"No send connection to rank {dst}")
-
+            
         ptr, size = self._get_buffer_info(tensor)
         if ptr not in self.memory_regions:
-            raise RuntimeError(
-                f"Tensor memory not registered. Call register_tensor() first."
-            )
+            raise RuntimeError(f"Tensor memory not registered. Call register_tensor() first.")
         mr_id = self.memory_regions[ptr]
         conn_id = self.send_connections[dst]
-
+        
         # Perform async send and poll until complete
         ok, transfer_id = self.ep.send_async(conn_id, mr_id, ptr, size)
         if not ok:
             raise RuntimeError(f"Failed to initiate send to rank {dst}")
-
+            
         # Poll until complete
         while True:
             ok, is_done = self.ep.poll_async(transfer_id)
@@ -300,37 +279,35 @@ class CollectiveContext:
                 raise RuntimeError(f"Error polling send to rank {dst}")
             if is_done:
                 break
-
+                
     def recv(self, tensor: torch.Tensor, src: int):
         """
         Receive tensor from source rank (synchronous).
-
+        
         Args:
             tensor: Tensor to receive into
             src: Source rank
         """
         if not self.initialized:
             raise RuntimeError("CollectiveContext not initialized. Call init() first.")
-
+            
         if src == self.rank:
             return  # No-op for self-recv
-
+            
         if src not in self.recv_connections:
             raise ValueError(f"No recv connection from rank {src}")
-
+            
         ptr, size = self._get_buffer_info(tensor)
         if ptr not in self.memory_regions:
-            raise RuntimeError(
-                f"Tensor memory not registered. Call register_tensor() first."
-            )
+            raise RuntimeError(f"Tensor memory not registered. Call register_tensor() first.")
         mr_id = self.memory_regions[ptr]
         conn_id = self.recv_connections[src]
-
+        
         # Perform async recv and poll until complete
         ok, transfer_id = self.ep.recv_async(conn_id, mr_id, ptr, size)
         if not ok:
             raise RuntimeError(f"Failed to initiate recv from rank {src}")
-
+            
         # Poll until complete
         while True:
             ok, is_done = self.ep.poll_async(transfer_id)
@@ -338,113 +315,109 @@ class CollectiveContext:
                 raise RuntimeError(f"Error polling recv from rank {src}")
             if is_done:
                 break
-
+                
     def isend(self, tensor: torch.Tensor, dst: int) -> int:
         """
         Initiate asynchronous send (non-blocking).
-
+        
         Args:
             tensor: Tensor to send
             dst: Destination rank
-
+            
         Returns:
             transfer_id: ID to poll for completion
         """
         if not self.initialized:
             raise RuntimeError("CollectiveContext not initialized. Call init() first.")
-
+            
         if dst == self.rank:
             return -1  # Return dummy ID for self-send
-
+            
         if dst not in self.send_connections:
             raise ValueError(f"No send connection to rank {dst}")
-
+            
         ptr, size = self._get_buffer_info(tensor)
         if ptr not in self.memory_regions:
-            raise RuntimeError(
-                f"Tensor memory not registered. Call register_tensor() first."
-            )
+            raise RuntimeError(f"Tensor memory not registered. Call register_tensor() first.")
         mr_id = self.memory_regions[ptr]
         conn_id = self.send_connections[dst]
-
+        
         ok, transfer_id = self.ep.send_async(conn_id, mr_id, ptr, size)
         if not ok:
             raise RuntimeError(f"Failed to initiate async send to rank {dst}")
         return transfer_id
-
+        
     def irecv(self, tensor: torch.Tensor, src: int) -> int:
         """
         Initiate asynchronous receive (non-blocking).
-
+        
         Args:
             tensor: Tensor to receive into
             src: Source rank
-
+            
         Returns:
             transfer_id: ID to poll for completion
         """
         if not self.initialized:
             raise RuntimeError("CollectiveContext not initialized. Call init() first.")
-
+            
         if src == self.rank:
             return -1  # Return dummy ID for self-recv
-
+            
         if src not in self.recv_connections:
             raise ValueError(f"No recv connection from rank {src}")
-
+            
         ptr, size = self._get_buffer_info(tensor)
         if ptr not in self.memory_regions:
-            raise RuntimeError(
-                f"Tensor memory not registered. Call register_tensor() first."
-            )
+            raise RuntimeError(f"Tensor memory not registered. Call register_tensor() first.")
         mr_id = self.memory_regions[ptr]
         conn_id = self.recv_connections[src]
-
+        
         ok, transfer_id = self.ep.recv_async(conn_id, mr_id, ptr, size)
         if not ok:
             raise RuntimeError(f"Failed to initiate async recv from rank {src}")
         return transfer_id
-
+        
     def wait(self, transfer_id: int):
         """
         Wait for asynchronous operation to complete.
-
+        
         Args:
             transfer_id: Transfer ID returned by isend/irecv
         """
         if transfer_id == -1:
             return  # No-op for dummy self-transfer
-
+            
         while True:
             ok, is_done = self.ep.poll_async(transfer_id)
             if not ok:
                 raise RuntimeError(f"Error polling transfer {transfer_id}")
             if is_done:
                 break
-
+                
     def test(self, transfer_id: int) -> bool:
         """
         Test if asynchronous operation is complete (non-blocking).
-
+        
         Args:
             transfer_id: Transfer ID returned by isend/irecv
-
+            
         Returns:
             True if complete, False otherwise
         """
         if transfer_id == -1:
             return True  # Self-transfers are always complete
-
+            
         ok, is_done = self.ep.poll_async(transfer_id)
         if not ok:
             raise RuntimeError(f"Error polling transfer {transfer_id}")
         return is_done
-
+        
     def finalize(self):
         """Clean up resources and close connections."""
         if not self.initialized:
             return
-
+            
         # Note: The p2p endpoint should handle cleanup automatically
         # when it goes out of scope, but we can add explicit cleanup here if needed
         self.send_connections.clear()
@@ -461,7 +434,7 @@ _default_context: Optional[CollectiveContext] = None
 def init_collective(num_cpus: int = 4, local_gpu_idx: Optional[int] = None):
     """
     Initialize the default collective context with automatic GPU index derivation.
-
+    
     Args:
         num_cpus: Number of CPU threads for RDMA operations
         local_gpu_idx: Optional override for local GPU index. If None, will be derived from torch.distributed

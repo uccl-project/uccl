@@ -190,7 +190,7 @@ class Endpoint {
    */
   bool join_group(std::string const& discovery_uri,
                   std::string const& group_name, int world_size, int my_rank,
-                  int remote_gpu_idx);
+                  int remote_gpu_idx, uint16_t remote_port);
 
   /**
    * Convenience constructor: create Endpoint and immediately join a group.
