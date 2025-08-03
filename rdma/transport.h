@@ -961,7 +961,6 @@ struct PeerInfo {
  */
 class RDMAEndpoint {
   constexpr static uint32_t kMaxInflightMsg = 1024 * 256;
-  constexpr static uint16_t kTestListenPort = 30000;
   constexpr static uint32_t kStatsTimerIntervalSec = 2;
   constexpr static uint32_t RC_MAGIC = 0x12345678;
 
@@ -969,7 +968,6 @@ class RDMAEndpoint {
 
   // RDMA devices.
   int num_devices_;
-  int port_;
 
   int num_engines_per_dev_;
   // Per-engine communication channel
@@ -990,7 +988,8 @@ class RDMAEndpoint {
   SharedPool<PollCtx*, true>* ctx_pool_;
   uint8_t* ctx_pool_buf_;
 
-  std::vector<int> test_listen_fds_;
+  std::vector<uint16_t> p2p_listen_ports_;
+  std::vector<int> p2p_listen_fds_;
 
   std::mutex fd_vec_mu_;
   // Mapping from unique (within this engine) flow_id to the boostrap fd.
@@ -1016,28 +1015,40 @@ class RDMAEndpoint {
   ~RDMAEndpoint();
 
   uint32_t get_num_devices() { return num_devices_; }
-  int get_port() {
-    if (port_ == 0) {
-      throw std::runtime_error("Error: port_ is not set.");
-    }
-    return port_;
+
+  inline uint16_t get_p2p_listen_port(int dev) {
+    CHECK(p2p_listen_ports_[dev] != 0)
+        << "Error: p2p_listen_ports_[" << dev << "] is not set.";
+    return p2p_listen_ports_[dev];
+  }
+
+  inline int get_p2p_listen_fd(int dev) {
+    CHECK(p2p_listen_fds_[dev] != 0)
+        << "Error: p2p_listen_fds_[" << dev << "] is not set.";
+    return p2p_listen_fds_[dev];
+  }
+
+  inline std::string get_p2p_listen_ip(int dev) {
+    auto factory_dev = RDMAFactory::get_factory_dev(dev);
+    CHECK(factory_dev) << "get_p2p_listen_ip: get_factory_dev()";
+    return factory_dev->local_ip_str;
   }
 
   void initialize_resources(int total_num_engines);
 
   void cleanup_resources();
 
-  bool initialize_engine_by_dev(int dev, bool use_test_listen_port);
+  bool initialize_engine_by_dev(int dev, bool enable_p2p_listen);
 
   /// For testing easily.
   ConnID test_uccl_connect(int dev, int gpu, int remote_dev, int remote_gpu,
-                           std::string remote_ip) {
+                           std::string remote_ip, int remote_port) {
     return uccl_connect(dev, gpu, remote_dev, remote_gpu, remote_ip,
-                        kTestListenPort + remote_dev);
+                        remote_port);
   }
   ConnID test_uccl_accept(int dev, int gpu, std::string& remote_ip,
                           int* remote_dev) {
-    return uccl_accept(dev, test_listen_fds_[dev], gpu, remote_ip, remote_dev);
+    return uccl_accept(dev, p2p_listen_fds_[dev], gpu, remote_ip, remote_dev);
   }
   /// For testing easily.
 

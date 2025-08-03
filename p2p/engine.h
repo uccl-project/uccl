@@ -69,12 +69,12 @@ class Endpoint {
    * input:
    *   ip_addr: the IP address of the remote server
    *   remote_gpu_idx: the GPU index of the remote server
+   *   remote_port: the port of the remote server (optional)
    * output:
    *   conn_id: the ID of the connection
-   *   remote_port: the port of the remote server (optional)
    */
-  bool connect(std::string const& ip_addr, int const& remote_gpu_idx,
-               uint64_t& conn_id, int remote_port);
+  bool connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
+               uint64_t& conn_id);
 
   bool connect(py::bytes const& metadata, uint64_t& conn_id);
 
@@ -105,8 +105,6 @@ class Endpoint {
   bool regv(std::vector<void const*> const& data_v,
             std::vector<size_t> const& size_v, std::vector<uint64_t>& mr_id_v);
 
-  bool send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
-                void const* meta, size_t meta_len);
   /*
    * Send data to the remote server. Blocking.
    *
@@ -117,21 +115,6 @@ class Endpoint {
    *   size: the size of the data
    */
   bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size);
-
-  bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
-            uccl::FifoItem const& slot_item);
-
-  bool read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
-            uccl::FifoItem const& slot_item);
-
-  /* Send a vector of data chunks. Blocking. */
-  bool sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-             std::vector<void const*> data_v, std::vector<size_t> size_v,
-             size_t num_iovs);
-
-  /* Send data to the remote server asynchronously. */
-  bool send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
-                  size_t size, uint64_t* transfer_id);
 
   /*
    * Receive data from the remote server. Blocking.
@@ -145,14 +128,42 @@ class Endpoint {
    */
   bool recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size);
 
+  bool send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
+                void const* meta, size_t meta_len);
+
+  /* Send data to the remote server asynchronously. */
+  bool send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
+                  size_t size, uint64_t* transfer_id);
+
+  /* Receive data from the remote server asynchronously. */
+  bool recv_async(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
+                  uint64_t* transfer_id);
+
+  /* Send a vector of data chunks. Blocking. */
+  bool sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+             std::vector<void const*> data_v, std::vector<size_t> size_v,
+             size_t num_iovs);
+
   /* Receive a vector of data chunks. Blocking. */
   bool recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
              std::vector<void*> data_v, std::vector<size_t> size_v,
              size_t num_iovs);
 
-  /* Receive data from the remote server asynchronously. */
-  bool recv_async(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
-                  uint64_t* transfer_id);
+  /* Read data from the remote server. Blocking.
+   *
+   * input:
+   *   conn_id: the ID of the connection
+   *   mr_id: the ID of the data
+   *   dst: the destination buffer
+   *   size: the size of the data
+   *   slot_item: the slot item to use for the transfer
+   */
+  bool read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
+            uccl::FifoItem const& slot_item);
+
+  /* Read data from the remote server asynchronously. */
+  bool read_async(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
+                  uccl::FifoItem const& slot_item, uint64_t* transfer_id);
 
   bool advertise(uint64_t conn_id, uint64_t mr_id, void* addr, size_t len,
                  char* out_buf);
@@ -186,7 +197,7 @@ class Endpoint {
    * You may prefer this factory in Ray where each actor knows its rank and the
    * rendezvous, but not its peers’ IP addresses.
    */
-  static std::unique_ptr<Endpoint> CreateAndJoin(
+  static std::unique_ptr<Endpoint> create_and_join(
       std::string const& discovery_uri, std::string const& group_name,
       int world_size, int my_rank, uint32_t local_gpu_idx, uint32_t num_cpus,
       int remote_gpu_idx);

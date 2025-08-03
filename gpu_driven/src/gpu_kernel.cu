@@ -1,7 +1,6 @@
 #include "common.hpp"
 #include "gpu_kernel.cuh"
 #include "ring_buffer.cuh"
-#include <cuda_pipeline.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -37,7 +36,7 @@ __global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs) {
         if (rb->get_entry(complete).cmd != 0) {
           printf(
               "Device Block %d: Error at complete %u, rb->tail:%lu, expected "
-              "0, got %llu\n",
+              "0, got %lu\n",
               bid, complete, rb->tail, rb->get_entry(complete).cmd);
           return;
         }

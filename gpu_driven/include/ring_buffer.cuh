@@ -2,12 +2,12 @@
 #define RING_BUFFER_CUH
 
 #include "common.hpp"
+#include "util/gpu_rt.h"
 #include <infiniband/verbs.h>
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <vector>
-#include <cuda.h>
 
 #ifndef COPY_RING_CAP
 #define COPY_RING_CAP 4096
@@ -32,7 +32,7 @@ struct CopyTask {
 
 enum class FlowDirection { HostToDevice, DeviceToHost, HostToHost };
 
-#if !defined(__CUDA_ARCH__)
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__)
 #include <atomic>
 #define HOST_ACQUIRE() std::atomic_thread_fence(std::memory_order_acquire)
 #define HOST_RELEASE() std::atomic_thread_fence(std::memory_order_release)
@@ -42,29 +42,41 @@ enum class FlowDirection { HostToDevice, DeviceToHost, HostToHost };
 #endif
 
 __device__ __forceinline__ uint64_t ld_volatile(uint64_t* ptr) {
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+#ifdef __CUDA_ARCH__
   uint64_t ans;
   asm volatile("ld.volatile.global.u64 %0, [%1];"
                : "=l"(ans)
                : "l"(ptr)
                : "memory");
   return ans;
+#elif defined(__HIP_DEVICE_COMPILE__)
+  uint64_t ans;
+  ans = __builtin_nontemporal_load(ptr);
+  return ans;
+#else
+#error "Not supported"
+#endif
+#else
+  return *((volatile uint64_t const*)ptr);
+#endif
 }
 
 template <typename T, FlowDirection Dir, uint32_t Capacity>
 struct alignas(128) RingBuffer {
-  uint64_t head;
-  uint64_t tail;
+  uint64_t head = 0;
+  uint64_t tail = 0;
   T buf[Capacity];
-  uint64_t cycle_accum;
-  uint64_t op_count;
-  uint64_t cycle_start;
-  uint64_t cycle_end;
+  uint64_t cycle_accum = 0;
+  uint64_t op_count = 0;
+  uint64_t cycle_start = 0;
+  uint64_t cycle_end = 0;
   uint32_t capacity = Capacity;
 
   /* TODO(MaoZiming) to refactor */
-  struct ibv_qp* ack_qp;
+  struct ibv_qp* ack_qp = nullptr;
   ibv_mr* ack_mr = nullptr;
-  uint64_t ack_buf[RECEIVER_BATCH_SIZE];
+  uint64_t ack_buf[RECEIVER_BATCH_SIZE] = {0};
 
   __host__ __device__ static constexpr uint32_t mask() { return Capacity - 1; }
 
@@ -105,7 +117,7 @@ struct alignas(128) RingBuffer {
   }
 
   __host__ __device__ __forceinline__ void commit_with_head(int new_head) {
-#if __CUDA_ARCH__
+#if __CUDA_ARCH__ || __HIP_DEVICE_COMPILE__
     if constexpr (Dir == FlowDirection::DeviceToHost) __threadfence_system();
 #else
     if constexpr (Dir == FlowDirection::DeviceToHost)
@@ -118,7 +130,7 @@ struct alignas(128) RingBuffer {
   __host__ __device__ __forceinline__ bool pop(T& out) {
     if (empty()) return false;
 
-#if __CUDA_ARCH__
+#if __CUDA_ARCH__ || __HIP_DEVICE_COMPILE__
     if constexpr (Dir == FlowDirection::HostToDevice) __threadfence();
 #else
     if constexpr (Dir == FlowDirection::HostToHost) HOST_ACQUIRE();
@@ -135,7 +147,7 @@ struct alignas(128) RingBuffer {
     uint64_t avail = h - t;
     if (avail == 0) return 0;
     int cnt = (n < static_cast<int>(avail)) ? n : static_cast<int>(avail);
-#if __CUDA_ARCH__
+#if __CUDA_ARCH__ || __HIP_DEVICE_COMPILE__
     if constexpr (Dir == FlowDirection::HostToDevice) __threadfence();
 #else
     if constexpr (Dir == FlowDirection::HostToHost) HOST_ACQUIRE();
@@ -146,7 +158,7 @@ struct alignas(128) RingBuffer {
   }
 
   __host__ __device__ __forceinline__ uint64_t volatile_tail() {
-#if __CUDA_ARCH__
+#if __CUDA_ARCH__ || __HIP_DEVICE_COMPILE__
     return ld_volatile(&tail);
 #else
     return *reinterpret_cast<volatile uint64_t const*>(&tail);
@@ -155,7 +167,7 @@ struct alignas(128) RingBuffer {
 
   __host__ __device__ __forceinline__ uint64_t volatile_head() {
     uint64_t val;
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
     return ld_volatile(&head);
 #elif defined(__x86_64__)
     asm volatile("movq %1, %0" : "=r"(val) : "m"(head) : "memory");

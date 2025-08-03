@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 #include <glog/logging.h>
 #include <linux/in.h>
+#include <linux/tcp.h>
 #include <net/if.h>
 #include <algorithm>
 #include <atomic>
@@ -22,6 +23,7 @@
 #include <random>
 #include <regex>
 #include <sstream>
+#include <thread>
 #include <vector>
 #include <fcntl.h>
 #include <ifaddrs.h>
@@ -63,9 +65,9 @@ inline double gbps_to_rate(double r) { return (r / 8) * (1000 * 1000 * 1000); }
 inline int receive_message(int sockfd, void* buffer, size_t n_bytes) {
   int bytes_read = 0;
   int r;
-  while (bytes_read < n_bytes) {
-    // Make sure we read exactly n_bytes
-    r = read(sockfd, buffer + bytes_read, n_bytes - bytes_read);
+  while (bytes_read < static_cast<int>(n_bytes)) {
+    r = read(sockfd, static_cast<char*>(buffer) + bytes_read,
+             static_cast<size_t>(n_bytes - bytes_read));
     if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
       CHECK(false) << "ERROR reading from socket";
     }
@@ -79,9 +81,10 @@ inline int receive_message(int sockfd, void* buffer, size_t n_bytes) {
 inline int send_message(int sockfd, void const* buffer, size_t n_bytes) {
   int bytes_sent = 0;
   int r;
-  while (bytes_sent < n_bytes) {
+  while (bytes_sent < static_cast<int>(n_bytes)) {
     // Make sure we write exactly n_bytes
-    r = write(sockfd, buffer + bytes_sent, n_bytes - bytes_sent);
+    r = write(sockfd, static_cast<char const*>(buffer) + bytes_sent,
+              n_bytes - bytes_sent);
     if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
       CHECK(false) << "ERROR writing to socket";
     }
@@ -173,6 +176,70 @@ inline uint16_t create_listen_socket(int* listen_fd) {
           << assigned_port;
 
   return assigned_port;
+}
+
+inline static void listen_accept_exchange(int oobport, void* send_data,
+                                          int send_size, void* recv_data,
+                                          int recv_size) {
+  int listen_fd;
+  create_listen_socket(&listen_fd, oobport);
+  CHECK(listen_fd >= 0) << "Failed to listen on port " << oobport;
+  VLOG(5) << "[listen_accept_exchange] server ready, listening on port "
+          << oobport;
+
+  struct sockaddr_in client_addr;
+  socklen_t client_len = sizeof(client_addr);
+
+  int client_fd =
+      accept(listen_fd, (struct sockaddr*)&client_addr, &client_len);
+  CHECK(client_fd >= 0) << "Failed to accept connection";
+
+  // Set nonblocking and nodelay
+  int flags = fcntl(client_fd, F_GETFL);
+  fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
+  int flag = 1;
+  setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
+
+  char client_ip[INET_ADDRSTRLEN];
+  inet_ntop(AF_INET, &(client_addr.sin_addr), client_ip, INET_ADDRSTRLEN);
+  VLOG(5) << "[listen_accept_exchange] accepted connection from " << client_ip;
+
+  send_message(client_fd, send_data, send_size);
+  receive_message(client_fd, recv_data, recv_size);
+
+  close(listen_fd);
+  close(client_fd);
+}
+
+inline static void connect_exchange(int oobport, std::string oob_ip,
+                                    void* send_data, int send_size,
+                                    void* recv_data, int recv_size) {
+  int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+  CHECK(sockfd >= 0) << "Failed to create socket";
+
+  struct sockaddr_in server_addr;
+  server_addr.sin_family = AF_INET;
+  server_addr.sin_port = htons(oobport);
+  server_addr.sin_addr.s_addr = inet_addr(oob_ip.c_str());
+
+  while (connect(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr)) <
+         0) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    VLOG(5) << "[connect_exchange] connecting to " << oob_ip << ":" << oobport;
+  }
+
+  // Set nonblocking and nodelay
+  int flags = fcntl(sockfd, F_GETFL);
+  fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
+  int flag = 1;
+  setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
+
+  VLOG(5) << "[connect_exchange] connected to " << oob_ip << ":" << oobport;
+
+  send_message(sockfd, send_data, send_size);
+  receive_message(sockfd, recv_data, recv_size);
+
+  close(sockfd);
 }
 
 #define UINT_CSN_BIT 8
@@ -404,18 +471,20 @@ class Spin {
 #define unlikely(X) __builtin_expect(!!(X), 0)
 #endif
 
-// #define barrier() asm volatile("" ::: "memory")
-// #define load_acquire(p)                   \
-//     ({                                    \
-//         typeof(*p) __p = ACCESS_ONCE(*p); \
-//         barrier();                        \
-//         __p;                              \
-//     })
-// #define store_release(p, v)  \
-//     do {                     \
-//         barrier();           \
-//         ACCESS_ONCE(*p) = v; \
-//     } while (0)
+/*
+#define barrier() asm volatile("" ::: "memory")
+#define load_acquire(p)                   \
+    ({                                    \
+        typeof(*p) __p = ACCESS_ONCE(*p); \
+        barrier();                        \
+        __p;                              \
+    })
+#define store_release(p, v)  \
+    do {                     \
+        barrier();           \
+        ACCESS_ONCE(*p) = v; \
+    } while (0)
+*/
 
 #define load_acquire(X) __atomic_load_n(X, __ATOMIC_ACQUIRE)
 #define store_release(X, Y) __atomic_store_n(X, Y, __ATOMIC_RELEASE)
@@ -643,7 +712,6 @@ static inline int get_dev_index(char const* dev_name) {
   for (struct ifaddrs* iap = addrs; iap != NULL; iap = iap->ifa_next) {
     if (iap->ifa_addr && (iap->ifa_flags & IFF_UP) &&
         iap->ifa_addr->sa_family == AF_INET) {
-      struct sockaddr_in* sa = (struct sockaddr_in*)iap->ifa_addr;
       if (strcmp(dev_name, iap->ifa_name) == 0) {
         VLOG(5) << "found network interface: " << iap->ifa_name;
         ret = if_nametoindex(iap->ifa_name);
@@ -1141,6 +1209,28 @@ static std::vector<std::pair<std::string, fs::path>> get_rdma_nics() {
               return a.first < b.first;
             });
   return ib_nics;
+}
+
+static inline bool is_nvlink_peer(int local_gpu, int remote_gpu) {
+  int accessible = 0;
+  GPU_RT_CHECK(gpuDeviceCanAccessPeer(&accessible, local_gpu, remote_gpu));
+  if (!accessible) return false;
+
+#ifdef HAS_NVML
+  nvmlDevice_t local_dev, remote_dev;
+  nvmlDeviceGetHandleByIndex(local_gpu, &local_dev);
+  nvmlDeviceGetHandleByIndex(remote_gpu, &remote_dev);
+  nvmlP2PStatus_t status;
+  if (nvmlDeviceGetP2PStatus(local_dev, remote_dev, NVML_P2P_CAPS_INDEX_NVLINK,
+                             &status) == NVML_SUCCESS &&
+      status == NVML_P2P_STATUS_OK) {
+    return true;
+  } else {
+    return false;
+  }
+#else
+  return true;
+#endif
 }
 
 }  // namespace uccl

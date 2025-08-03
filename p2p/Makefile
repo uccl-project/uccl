@@ -7,8 +7,7 @@ CUDA_LIB  := $(CUDA_HOME)/lib64
 CXX := g++
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I../include -I../rdma -I$(CUDA_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
-	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -lglog -lgflags -lgtest -lz -lelf -libverbs -lpthread \
-	-DLAZY_CREATE_ENGINE
+	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -lglog -lgflags -lgtest -lz -lelf -libverbs -lpthread
 
 # Python and pybind11 configuration
 PYTHON          ?= python3
@@ -47,7 +46,7 @@ $(TARGET): $(OBJECTS) ../rdma/librdma.a
 
 
 ../rdma/librdma.a: ../rdma/*.cc ../rdma/*.h
-	make CXXFLAGS=-DLAZY_CREATE_ENGINE -C ../rdma
+	make -C ../rdma
 
 # Compile source files
 %.o: %.cc
@@ -66,7 +65,7 @@ clean:
 
 # Test the module
 test: $(TARGET)
-	$(PYTHON) tests/test_engine.py
+	$(PYTHON) tests/test_engine_write.py
 
 # Install pybind11 if not available
 install-deps:

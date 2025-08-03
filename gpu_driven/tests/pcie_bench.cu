@@ -1,3 +1,4 @@
+#include "util/gpu_rt.h"
 #include <chrono>
 #include <tuple>
 #include <vector>
@@ -7,28 +8,29 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#define cudaCheckErrors(msg)                                  \
-  do {                                                        \
-    cudaError_t __err = cudaGetLastError();                   \
-    if (__err != cudaSuccess) {                               \
-      fprintf(stderr, "Fatal error: %s (%s at %s:%d)\n", msg, \
-              cudaGetErrorString(__err), __FILE__, __LINE__); \
-      fprintf(stderr, "*** FAILED - ABORTING\n");             \
-      exit(1);                                                \
-    }                                                         \
-  } while (0)
-
 __device__ __forceinline__ uint64_t ld_volatile(uint64_t* ptr) {
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+#ifdef __CUDA_ARCH__
   uint64_t ans;
   asm volatile("ld.volatile.global.u64 %0, [%1];"
                : "=l"(ans)
                : "l"(ptr)
                : "memory");
   return ans;
+#elif defined(__HIP_DEVICE_COMPILE__)
+  uint64_t ans;
+  ans = __builtin_nontemporal_load(ptr);
+  return ans;
+#else
+#error "Not supported"
+#endif
+#else
+  return *((volatile uint64_t const*)ptr);
+#endif
 }
 
 __device__ __forceinline__ void fence_acq_rel_sys() {
-#if __CUDA_ARCH__ >= 700
+#if __CUDA_ARCH__ >= 700 || __HIP_DEVICE_COMPILE__ >= 700
   asm volatile("fence.acq_rel.sys;" ::: "memory");
 #else
   asm volatile("membar.sys;" ::: "memory");
@@ -36,7 +38,7 @@ __device__ __forceinline__ void fence_acq_rel_sys() {
 }
 
 __device__ __forceinline__ void st_relaxed_sys(uint64_t* ptr, uint64_t val) {
-#if __CUDA_ARCH__ >= 700
+#if __CUDA_ARCH__ >= 700 || __HIP_DEVICE_COMPILE__ >= 700
   asm volatile("st.relaxed.sys.global.u64 [%0], %1;" ::"l"(ptr), "l"(val)
                : "memory");
 #else
@@ -278,8 +280,8 @@ class iovMultiFifo {
  public:
   iovMultiFifo(int num_fifo) : num_fifo_(num_fifo) {
     for (int i = 0; i < num_fifo; i++) {
-      cudaHostAlloc(&fifo_vec_[i], sizeof(struct IovFifo), cudaHostAllocMapped);
-      cudaCheckErrors("cudaMallocManaged failed");
+      GPU_RT_CHECK(gpuHostAlloc(&fifo_vec_[i], sizeof(struct IovFifo),
+                                gpuHostAllocMapped));
     }
     init();
   }
@@ -302,8 +304,7 @@ class iovMultiFifo {
 
   ~iovMultiFifo() {
     for (int i = 0; i < num_fifo_; i++) {
-      cudaFreeHost((void*)fifo_vec_[i]);
-      cudaCheckErrors("cudaFreeHost failed");
+      GPU_RT_CHECK(gpuFreeHost((void*)fifo_vec_[i]));
     }
   }
 
@@ -336,30 +337,28 @@ class iovMultiFifo {
 };
 
 void fill_data(void** srcs_gpu, int iov_n, int* lens, uint8_t value,
-               cudaStream_t stream) {
+               gpuStream_t stream) {
   // make a CPU buffer, then copy to GPU
   uint8_t* cpu_buf = (uint8_t*)malloc(kCopySize);
   for (int i = 0; i < kCopySize / sizeof(uint8_t); i++) {
     cpu_buf[i] = value;
   }
   for (int i = 0; i < iov_n; i++) {
-    cudaMemcpyAsync(srcs_gpu[i], cpu_buf, lens[i], cudaMemcpyHostToDevice,
-                    stream);
-    cudaStreamSynchronize(stream);
-    cudaCheckErrors("cudaMemcpy failed");
+    GPU_RT_CHECK(gpuMemcpyAsync(srcs_gpu[i], cpu_buf, lens[i],
+                                gpuMemcpyHostToDevice, stream));
+    GPU_RT_CHECK(gpuStreamSynchronize(stream));
   }
   free(cpu_buf);
 }
 
 void check_data(void** dsts_gpu, int iov_n, int* lens, uint8_t value,
-                cudaStream_t stream) {
+                gpuStream_t stream) {
   // check the data
   uint8_t* cpu_buf = (uint8_t*)malloc(kCopySize);
   for (int i = 0; i < iov_n; i++) {
-    cudaMemcpyAsync(cpu_buf, dsts_gpu[i], lens[i], cudaMemcpyDeviceToHost,
-                    stream);
-    cudaStreamSynchronize(stream);
-    cudaCheckErrors("cudaMemcpy failed");
+    GPU_RT_CHECK(gpuMemcpyAsync(cpu_buf, dsts_gpu[i], lens[i],
+                                gpuMemcpyDeviceToHost, stream));
+    GPU_RT_CHECK(gpuStreamSynchronize(stream));
     for (int j = 0; j < lens[i] / sizeof(uint8_t); j++) {
       assert(cpu_buf[j] == value);
     }
@@ -371,14 +370,12 @@ void check_data(void** dsts_gpu, int iov_n, int* lens, uint8_t value,
 // CUDA_MODULE_LOADING=EAGER ./pcie_bench
 // 11 us for 1 test iov, 82 us for 128 test iovs
 int main() {
-  cudaStream_t stream1, stream2;
-  cudaStreamCreate(&stream1);
-  cudaCheckErrors("cudaStreamCreate failed");
-  cudaStreamCreate(&stream2);
-  cudaCheckErrors("cudaStreamCreate failed");
+  gpuStream_t stream1, stream2;
+  GPU_RT_CHECK(gpuStreamCreate(&stream1));
+  GPU_RT_CHECK(gpuStreamCreate(&stream2));
 
-  cudaDeviceProp prop;
-  cudaGetDeviceProperties(&prop, 0);
+  gpuDeviceProp prop;
+  gpuGetDeviceProperties(&prop, 0);
   // Use printf for clock rate
   printf("clock rate: %d\n", prop.clockRate);
 
@@ -386,8 +383,8 @@ int main() {
   struct Iov* cpu_iov = (struct Iov*)malloc(sizeof(struct Iov));
   int copy_size_once = 0;
   for (int i = 0; i < kTestIovs; i++) {
-    cudaMalloc(&cpu_iov->srcs[i], kCopySize);
-    cudaMalloc(&cpu_iov->dsts[i], kCopySize);
+    gpuMalloc(&cpu_iov->srcs[i], kCopySize);
+    gpuMalloc(&cpu_iov->dsts[i], kCopySize);
     cpu_iov->lens[i] = kCopySize - rand() % 2048;
     copy_size_once += cpu_iov->lens[i];
   }
@@ -399,7 +396,7 @@ int main() {
   // Launch the persist kernel.
   persistKernel<<<kNumThBlocks, kNumThPerBlock, 0, stream1>>>(
       fifo->get_fifo_vec());
-  cudaCheckErrors("persistKernel failed");
+  GPU_RT_CHECK_ERRORS("persistKernel failed");
 
   for (int i = 0; i < kTestIters; i += kTestSteps) {
     std::vector<std::tuple<uint64_t, uint64_t>> poll_handlers;
@@ -421,12 +418,11 @@ int main() {
       fifo->dispatch_task(fifo_idx);
 
       // for (int j = 0; j < kTestIovs; j++) {
-      //     cudaMemcpyAsync(gpu_iov->dsts[j], gpu_iov->srcs[j],
+      //     GPU_RT_CHECK(gpuMemcpyAsync(gpu_iov->dsts[j], gpu_iov->srcs[j],
       //                     gpu_iov->lens[j],
-      //                     cudaMemcpyDeviceToDevice, stream2);
-      //     cudaCheckErrors("cudaMemcpyAsync failed");
+      //                     gpuMemcpyDeviceToDevice, stream2));
       // }
-      // cudaStreamSynchronize(stream2);
+      // gpuStreamSynchronize(stream2);
 
       poll_handlers.push_back(std::make_tuple(fifo_idx, slot_idx));
     }
@@ -457,8 +453,7 @@ int main() {
   for (int i = 0; i < kNumThBlocks; i++) {
     fifo->abort(i);
   }
-  cudaStreamSynchronize(stream1);
-  cudaCheckErrors("cudaStreamSynchronize failed");
+  GPU_RT_CHECK(gpuStreamSynchronize(stream1));
   auto end = std::chrono::high_resolution_clock::now();
   auto elapsed_us =
       std::chrono::duration_cast<std::chrono::microseconds>(end - start);

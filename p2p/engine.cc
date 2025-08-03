@@ -92,11 +92,9 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   std::cout << std::endl;
 
   // Initialize the engine based on the GPU index.
-#ifdef LAZY_CREATE_ENGINE
   printf("Lazy creation of engine, GPU index: %d\n", local_gpu_idx_);
-  ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_], false);
+  ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_], true);
   printf("Engine initialized for GPU %d\n", local_gpu_idx_);
-#endif
 
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
@@ -121,8 +119,8 @@ Endpoint::~Endpoint() {
   std::cout << "Engine destroyed" << std::endl;
 }
 
-bool Endpoint::connect(std::string const& ip_addr, int const& remote_gpu_idx,
-                       uint64_t& conn_id, int remote_port) {
+bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
+                       uint64_t& conn_id) {
   py::gil_scoped_release release;
   std::cout << "Attempting to connect to " << ip_addr << ":" << remote_gpu_idx
             << std::endl;
@@ -132,16 +130,9 @@ bool Endpoint::connect(std::string const& ip_addr, int const& remote_gpu_idx,
 
   std::future<uccl::ConnID> uccl_conn_id_future = std::async(
       std::launch::async, [this, remote_gpu_idx, &ip_addr, remote_port]() {
-        if (remote_port == -1) {
-          throw std::runtime_error("Error: remote_port is not set.");
-          return ep_->test_uccl_connect(
-              gpu_to_dev[local_gpu_idx_], local_gpu_idx_,
-              gpu_to_dev[remote_gpu_idx], remote_gpu_idx, ip_addr);
-        } else {
-          return ep_->uccl_connect(gpu_to_dev[local_gpu_idx_], local_gpu_idx_,
-                                   gpu_to_dev[remote_gpu_idx], remote_gpu_idx,
-                                   ip_addr, remote_port);
-        }
+        return ep_->uccl_connect(gpu_to_dev[local_gpu_idx_], local_gpu_idx_,
+                                 gpu_to_dev[remote_gpu_idx], remote_gpu_idx,
+                                 ip_addr, remote_port);
       });
 
   // Check for Python signals (eg, ctrl+c) while waiting for connection
@@ -157,28 +148,6 @@ bool Endpoint::connect(std::string const& ip_addr, int const& remote_gpu_idx,
       new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
 
   return true;
-}
-
-bool is_nvlink_peer(int local_gpu, int remote_gpu) {
-  int accessible = 0;
-  GPU_RT_CHECK(gpuDeviceCanAccessPeer(&accessible, local_gpu, remote_gpu));
-  if (!accessible) return false;
-
-#ifdef HAS_NVML
-  nvmlDevice_t local_dev, remote_dev;
-  nvmlDeviceGetHandleByIndex(local_gpu, &local_dev);
-  nvmlDeviceGetHandleByIndex(remote_gpu, &remote_dev);
-  nvmlP2PStatus_t status;
-  if (nvmlDeviceGetP2PStatus(local_dev, remote_dev, NVML_P2P_CAPS_INDEX_NVLINK,
-                             &status) == NVML_SUCCESS &&
-      status == NVML_P2P_STATUS_OK) {
-    return true;
-  } else {
-    return false;
-  }
-#else
-  return true;
-#endif
 }
 
 bool Endpoint::connect(py::bytes const& meta_bytes, uint64_t& conn_id) {
@@ -234,8 +203,10 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
 
   std::future<uccl::ConnID> uccl_conn_id_future =
       std::async(std::launch::async, [this, &ip_addr, &remote_gpu_idx]() {
-        return ep_->test_uccl_accept(gpu_to_dev[local_gpu_idx_], local_gpu_idx_,
-                                     ip_addr, &remote_gpu_idx);
+        auto dev_idx = gpu_to_dev[local_gpu_idx_];
+        auto p2p_listen_fd = ep_->get_p2p_listen_fd(dev_idx);
+        return ep_->uccl_accept(dev_idx, p2p_listen_fd, local_gpu_idx_, ip_addr,
+                                &remote_gpu_idx);
       });
 
   // Check for Python signals (eg, ctrl+c) while waiting for connection
@@ -271,38 +242,6 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
   return true;
 }
 
-bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
-                    uccl::FifoItem const& slot_item) {
-  py::gil_scoped_release release;
-
-  if (!ucclParamRCMode()) {
-    DCHECK(false) << "RDMA READ is only supported in RC mode, toggle RCMODE to "
-                     "be True in transport_config.h";
-    std::abort();
-  }
-
-  DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
-  auto* conn = conn_id_to_conn_[conn_id];
-  auto* mhandle = mr_id_to_mr_[mr_id]->mhandle_;
-  uccl::ucclRequest ureq;
-  memset(&ureq, 0, sizeof(uccl::ucclRequest));
-  int rc;
-  do {
-    rc = ep_->uccl_read_async(
-        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle, dst,
-        size, slot_item, &ureq);
-    if (rc == -1) {
-      check_python_signals();
-      std::this_thread::yield();
-    }
-  } while (rc == -1);
-
-  while (!ep_->uccl_poll_ureq_once(&ureq)) {
-    check_python_signals();
-  }
-  return true;
-}
-
 bool Endpoint::regv(std::vector<void const*> const& data_v,
                     std::vector<size_t> const& size_v,
                     std::vector<uint64_t>& mr_id_v) {
@@ -332,51 +271,6 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
     mr_id_v[i] = id;
   }
   return true;
-}
-
-bool Endpoint::send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
-                        size_t size, void const* meta, size_t meta_len) {
-  py::gil_scoped_release release;
-  DCHECK(size <= 0xffffffff);
-
-  DCHECK(meta_len == sizeof(gpuIpcMemHandle_t));
-  gpuIpcMemHandle_t handle{};
-  std::memcpy(&handle, meta, sizeof(handle));
-
-  void* dst_ptr = nullptr;
-  GPU_RT_CHECK(gpuSetDevice(remote_gpu_idx_));
-  GPU_RT_CHECK(
-      gpuIpcOpenMemHandle(&dst_ptr, handle, gpuIpcMemLazyEnablePeerAccess));
-
-  gpuStream_t s = pick_stream();
-  if (local_gpu_idx_ == remote_gpu_idx_) {
-    GPU_RT_CHECK(
-        gpuMemcpyAsync(dst_ptr, data, size, gpuMemcpyDeviceToDevice, s));
-  } else {
-    int can = 0;
-    GPU_RT_CHECK(gpuDeviceCanAccessPeer(&can, local_gpu_idx_, remote_gpu_idx_));
-    if (can) {
-      GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-      (void)gpuDeviceEnablePeerAccess(remote_gpu_idx_, 0);
-
-      GPU_RT_CHECK(gpuMemcpyPeerAsync(dst_ptr, remote_gpu_idx_, data,
-                                      local_gpu_idx_, size, s));
-    } else {
-      std::cerr << "Cannot access remote GPU " << remote_gpu_idx_
-                << " from local GPU " << local_gpu_idx_ << std::endl;
-      return false;
-    }
-  }
-  GPU_RT_CHECK(gpuStreamSynchronize(s));
-  GPU_RT_CHECK(gpuSetDevice(remote_gpu_idx_));
-  GPU_RT_CHECK(gpuIpcCloseMemHandle(dst_ptr));
-  return true;
-}
-
-bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
-                    size_t size, uccl::FifoItem const& slot_item) {
-  DCHECK(size <= 0xffffffff);
-  return send(conn_id, mr_id, data, size);
 }
 
 bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
@@ -477,6 +371,98 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
       ureq_finished++;
     }
   }
+
+  return true;
+}
+
+bool Endpoint::send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
+                        size_t size, void const* meta, size_t meta_len) {
+  py::gil_scoped_release release;
+  DCHECK(size <= 0xffffffff);
+
+  DCHECK(meta_len == sizeof(gpuIpcMemHandle_t));
+  gpuIpcMemHandle_t handle{};
+  std::memcpy(&handle, meta, sizeof(handle));
+
+  void* dst_ptr = nullptr;
+  GPU_RT_CHECK(gpuSetDevice(remote_gpu_idx_));
+  GPU_RT_CHECK(
+      gpuIpcOpenMemHandle(&dst_ptr, handle, gpuIpcMemLazyEnablePeerAccess));
+
+  gpuStream_t s = pick_stream();
+  if (local_gpu_idx_ == remote_gpu_idx_) {
+    GPU_RT_CHECK(
+        gpuMemcpyAsync(dst_ptr, data, size, gpuMemcpyDeviceToDevice, s));
+  } else {
+    int can = 0;
+    GPU_RT_CHECK(gpuDeviceCanAccessPeer(&can, local_gpu_idx_, remote_gpu_idx_));
+    if (can) {
+      GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+      (void)gpuDeviceEnablePeerAccess(remote_gpu_idx_, 0);
+
+      GPU_RT_CHECK(gpuMemcpyPeerAsync(dst_ptr, remote_gpu_idx_, data,
+                                      local_gpu_idx_, size, s));
+    } else {
+      std::cerr << "Cannot access remote GPU " << remote_gpu_idx_
+                << " from local GPU " << local_gpu_idx_ << std::endl;
+      return false;
+    }
+  }
+  GPU_RT_CHECK(gpuStreamSynchronize(s));
+  GPU_RT_CHECK(gpuSetDevice(remote_gpu_idx_));
+  GPU_RT_CHECK(gpuIpcCloseMemHandle(dst_ptr));
+  return true;
+}
+
+bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
+                          size_t size, uint64_t* transfer_id) {
+  py::gil_scoped_release release;
+  auto conn = conn_id_to_conn_[conn_id];
+  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+
+  auto _transfer_id = next_transfer_id_.fetch_add(1);
+  auto* ureq = new uccl::ucclRequest();
+
+  *transfer_id = _transfer_id;
+  transfer_id_to_ureq_[_transfer_id] = ureq;
+
+  int rc;
+  do {
+    rc = ep_->uccl_send_async(
+        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
+        (void*)data, size, ureq);
+    if (rc == -1) {
+      check_python_signals();
+      std::this_thread::yield();
+    }
+  } while (rc == -1);
+
+  return true;
+}
+
+bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
+                          size_t size, uint64_t* transfer_id) {
+  py::gil_scoped_release release;
+  auto conn = conn_id_to_conn_[conn_id];
+  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+
+  auto _transfer_id = next_transfer_id_.fetch_add(1);
+  auto* ureq = new uccl::ucclRequest();
+
+  *transfer_id = _transfer_id;
+  transfer_id_to_ureq_[_transfer_id] = ureq;
+  int size_int = static_cast<int>(size);
+
+  int rc;
+  do {
+    rc = ep_->uccl_recv_async(
+        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
+        &data, &size_int, 1, ureq);
+    if (rc == -1) {
+      check_python_signals();
+      std::this_thread::yield();
+    }
+  } while (rc == -1);
 
   return true;
 }
@@ -636,34 +622,41 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   return true;
 }
 
-bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
-                          size_t size, uint64_t* transfer_id) {
+bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
+                    uccl::FifoItem const& slot_item) {
   py::gil_scoped_release release;
-  auto conn = conn_id_to_conn_[conn_id];
-  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
 
-  auto _transfer_id = next_transfer_id_.fetch_add(1);
-  auto* ureq = new uccl::ucclRequest();
+  if (!ucclParamRCMode()) {
+    DCHECK(false) << "RDMA READ is only supported in RC mode, toggle RCMODE to "
+                     "be True in transport_config.h";
+    std::abort();
+  }
 
-  *transfer_id = _transfer_id;
-  transfer_id_to_ureq_[_transfer_id] = ureq;
-
+  DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
+  auto* conn = conn_id_to_conn_[conn_id];
+  auto* mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  uccl::ucclRequest ureq;
+  memset(&ureq, 0, sizeof(uccl::ucclRequest));
   int rc;
   do {
-    rc = ep_->uccl_send_async(
-        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
-        (void*)data, size, ureq);
+    rc = ep_->uccl_read_async(
+        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle, dst,
+        size, slot_item, &ureq);
     if (rc == -1) {
       check_python_signals();
       std::this_thread::yield();
     }
   } while (rc == -1);
 
+  while (!ep_->uccl_poll_ureq_once(&ureq)) {
+    check_python_signals();
+  }
   return true;
 }
 
-bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
-                          size_t size, uint64_t* transfer_id) {
+bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
+                          size_t size, uccl::FifoItem const& slot_item,
+                          uint64_t* transfer_id) {
   py::gil_scoped_release release;
   auto conn = conn_id_to_conn_[conn_id];
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
@@ -673,13 +666,12 @@ bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
 
   *transfer_id = _transfer_id;
   transfer_id_to_ureq_[_transfer_id] = ureq;
-  int size_int = static_cast<int>(size);
 
   int rc;
   do {
-    rc = ep_->uccl_recv_async(
-        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
-        &data, &size_int, 1, ureq);
+    rc = ep_->uccl_read_async(
+        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle, dst,
+        size, slot_item, ureq);
     if (rc == -1) {
       check_python_signals();
       std::this_thread::yield();
@@ -780,14 +772,14 @@ bool Endpoint::join_group(std::string const& discovery_uri,
   return true;
 }
 
-std::unique_ptr<Endpoint> Endpoint::CreateAndJoin(
+std::unique_ptr<Endpoint> Endpoint::create_and_join(
     std::string const& discovery_uri, std::string const& group_name,
     int world_size, int my_rank, uint32_t local_gpu_idx, uint32_t num_cpus,
     int remote_gpu_idx) {
   auto ep = std::make_unique<Endpoint>(local_gpu_idx, num_cpus);
   if (!ep->join_group(discovery_uri, group_name, world_size, my_rank,
                       remote_gpu_idx)) {
-    throw std::runtime_error("Endpoint::CreateAndJoin() failed");
+    throw std::runtime_error("Endpoint::create_and_join() failed");
   }
   return ep;
 }
@@ -805,11 +797,7 @@ std::vector<uint8_t> Endpoint::get_endpoint_metadata() {
   if (num_ifs != 1) UCCL_INIT_CHECK(false, "No IP interface found");
 
   std::string ip_str = uccl::get_dev_ip(uccl_ifname);
-  uint16_t port = ep_->get_port();
-  // int listen_fd = uccl::open_ephemeral_port(port);
-  // if (listen_fd < 0) {
-  //   throw std::runtime_error("Failed to open ephemeral port");
-  // }
+  uint16_t port = ep_->get_p2p_listen_port(gpu_to_dev[local_gpu_idx_]);
 
   bool is_ipv6 = ip_str.find(':') != std::string::npos;
   size_t ip_len = is_ipv6 ? 16 : 4;

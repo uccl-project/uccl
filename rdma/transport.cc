@@ -287,7 +287,10 @@ inline void RDMAEndpoint::initialize_resources(int total_num_engines) {
     engine_load_vec_[i] = std::make_unique<std::atomic<uint32_t>>(0);
   }
   eqds_.resize(num_devices_);
-  test_listen_fds_.resize(num_devices_);
+  p2p_listen_ports_.resize(num_devices_);
+  std::fill(p2p_listen_ports_.begin(), p2p_listen_ports_.end(), 0);
+  p2p_listen_fds_.resize(num_devices_);
+  std::fill(p2p_listen_fds_.begin(), p2p_listen_fds_.end(), 0);
 
   peer_map_.resize(num_devices_);
   peer_map_mu_.resize(num_devices_);
@@ -342,12 +345,13 @@ void RDMAEndpoint::cleanup_resources() {
   }
   eqds_.clear();
 
-  for (int fd : test_listen_fds_) {
+  for (int fd : p2p_listen_fds_) {
     if (fd >= 0) {
       close(fd);
     }
   }
-  test_listen_fds_.clear();
+  p2p_listen_fds_.clear();
+  p2p_listen_ports_.clear();
 
   peer_map_.clear();
   peer_map_mu_.clear();
@@ -679,7 +683,6 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
   qp_setup_thread.detach();
 }
 
-#ifdef LAZY_CREATE_ENGINE
 RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
     : num_engines_per_dev_(num_engines_per_dev),
       stats_thread_([this]() { stats_thread_fn(); }) {
@@ -716,81 +719,6 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
   UCCL_LOG_EP << "IB relaxed ordering enabled: "
               << ib_relaxed_ordering_enabled_;
 }
-#else
-RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
-    : num_engines_per_dev_(num_engines_per_dev),
-      stats_thread_([this]() { stats_thread_fn(); }) {
-  // Initialize all RDMA devices.
-  static std::once_flag flag_once;
-
-  std::call_once(flag_once, [&]() { num_devices_ = RDMAFactory::init_devs(); });
-
-  rdma_ctl_ = rdma_ctl;
-
-  int total_num_engines = num_devices_ * num_engines_per_dev;
-  UCCL_LOG_EP << "Starting to initialize " << total_num_engines
-              << " channels for " << num_devices_ << " devices with "
-              << num_engines_per_dev_ << " engines per "
-              << "device";
-  initialize_resources(total_num_engines);
-  // Create multiple engines. Each engine has its own thread and channel to
-  // let the endpoint communicate with.
-  for (int i = 0; i < total_num_engines; i++) channel_vec_[i] = new Channel();
-
-  if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
-    // Receiver-driven congestion control per device.
-    for (int i = 0; i < num_devices_; i++) {
-      auto factory_dev = RDMAFactory::get_factory_dev(i);
-      eqds_[i] = new eqds::EQDS(i, factory_dev->link_bw);
-    }
-  }
-#ifndef LAZY_CREATE_ENGINE
-  for (int engine_id = 0, engine_cpu_id; engine_id < total_num_engines;
-       engine_id++) {
-    auto dev = engine_id / num_engines_per_dev;
-    int numa_node = RDMAFactory::get_factory_dev(dev)->numa_node;
-
-    engine_cpu_id =
-        ENGINE_CPU_START_LIST[dev] + engine_id % num_engines_per_dev;
-
-    engine_vec_.emplace_back(std::make_unique<UcclRDMAEngine>(
-        dev, engine_id, channel_vec_[engine_id], eqds_[dev]));
-
-    engine_th_vec_.emplace_back(
-        std::make_unique<std::thread>([engine_ptr = engine_vec_.back().get(),
-                                       engine_id, engine_cpu_id, numa_node]() {
-          if (ucclParamPIN_TO_NUMA()) {
-            UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
-                            << "running on NUMA node " << numa_node;
-            pin_thread_to_numa(numa_node);
-          } else {
-            DCHECK(engine_cpu_id < NUM_CPUS)
-                << "The target CPU id " << engine_cpu_id
-                << " is out of range, available CPUs:" << NUM_CPUS;
-            UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
-                            << "running on CPU " << engine_cpu_id;
-            pin_thread_to_cpu(engine_cpu_id);
-          }
-
-          engine_ptr->run();
-        }));
-  }
-#endif
-  ctx_pool_ = new SharedPool<PollCtx*, true>(kMaxInflightMsg);
-  ctx_pool_buf_ = new uint8_t[kMaxInflightMsg * sizeof(PollCtx)];
-  for (int i = 0; i < kMaxInflightMsg; i++) {
-    ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());
-  }
-
-  for (int i = 0; i < num_devices_; i++) {
-    create_listen_socket(&test_listen_fds_[i]);
-  }
-
-  ib_relaxed_ordering_enabled_ = ncclIbRelaxedOrderingCapable();
-  UCCL_LOG_EP << "IB relaxed ordering enabled: "
-              << ib_relaxed_ordering_enabled_;
-}
-#endif
 
 int try_bind_listen_socket(int* sock_fd, int base_port,
                            int max_attempts = 100) {
@@ -826,9 +754,9 @@ int try_bind_listen_socket(int* sock_fd, int base_port,
 }
 
 bool RDMAEndpoint::initialize_engine_by_dev(int dev,
-                                            bool use_test_listen_port = false) {
+                                            bool enable_p2p_listen = false) {
   static std::vector<std::once_flag> flags_per_dev_(num_devices_);
-  std::call_once(flags_per_dev_[dev], [this, dev, use_test_listen_port]() {
+  std::call_once(flags_per_dev_[dev], [this, dev, enable_p2p_listen]() {
     int start_engine_idx = dev * num_engines_per_dev_;
     int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
     int numa_node = RDMAFactory::get_factory_dev(dev)->numa_node;
@@ -870,14 +798,12 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev,
             }));
       }
     }
-    if (use_test_listen_port) {
-      create_listen_socket(&test_listen_fds_[dev], kTestListenPort + dev);
-      port_ = kTestListenPort + dev;
-    } else {
-      port_ = create_listen_socket(&test_listen_fds_[dev]);
-      DCHECK(port_ >= 0) << "Failed to bind after trying many ports!";
+    if (enable_p2p_listen) {
+      p2p_listen_ports_[dev] = create_listen_socket(&p2p_listen_fds_[dev]);
+      DCHECK(p2p_listen_ports_[dev] >= 0)
+          << "Failed to bind after trying many ports!";
+      printf("P2P listening on port %d\n", p2p_listen_ports_[dev]);
     }
-    printf("Listening on port %d\n", port_);
   });
 
   return true;
@@ -924,34 +850,18 @@ void UcclRDMAEngine::release() {
 }
 
 RDMAEndpoint::~RDMAEndpoint() {
-#ifdef LAZY_CREATE_ENGINE
   for (auto& [engine_id, engine] : engine_id_to_engine_map_) {
     engine->shutdown();
   }
-#else
-  for (auto& engine : engine_vec_) {
-    if (engine) {
-      engine->shutdown();
-    }
-  }
-#endif
 
   for (auto& engine_th : engine_th_vec_) {
     if (engine_th) {
       engine_th->join();
     }
   }
-#ifdef LAZY_CREATE_ENGINE
   for (auto& [engine_id, engine] : engine_id_to_engine_map_) {
     engine->release();
   }
-#else
-  for (auto& engine : engine_vec_) {
-    if (engine) {
-      engine->release();
-    }
-  }
-#endif
 
   cleanup_resources();
 
@@ -1245,7 +1155,7 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
     struct sockaddr_in local_addr = {};
     socklen_t len = sizeof(local_addr);
     int ret = getsockname(bootstrap_fd, (struct sockaddr*)&local_addr, &len);
-    DCHECK(ret == 0) << "getsockname() failed";
+    DCHECK(ret == 0) << "getsockname() failed ";
     local_port = ntohs(local_addr.sin_port);
   }
 
@@ -1784,21 +1694,13 @@ void RDMAEndpoint::stats_thread_fn() {
       if (shutdown) break;
     }
 
-#ifdef LAZY_CREATE_ENGINE
     if (engine_id_to_engine_map_.empty()) {
       // No engines created yet, skip stats.
       continue;
     }
-#else
-    if (engine_vec_.empty()) continue;
-#endif
     std::string s;
     uint32_t eidx = 0;
-#ifdef LAZY_CREATE_ENGINE
     for (auto& [engine_id, engine] : engine_id_to_engine_map_) {
-#else
-    for (auto& engine : engine_vec_) {
-#endif
 #ifdef STATS
       s = engine->status_to_string();
       if (!s.empty()) {
