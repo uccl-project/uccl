@@ -512,6 +512,7 @@ struct FactoryDevice {
   int numa_node;
 
   bool support_cq_ex;
+  bool support_uc;
   struct ibv_context* context;
   struct ibv_device_attr dev_attr;
   struct ibv_port_attr port_attr;
@@ -705,6 +706,9 @@ class SharedIOContext {
   SharedIOContext(int dev) {
     support_cq_ex_ = RDMAFactory::get_factory_dev(dev)->support_cq_ex;
     rc_mode_ = ucclParamRCMode();
+    if (!rc_mode_ && !RDMAFactory::get_factory_dev(dev)->support_uc) {
+      rc_mode_ = true;
+    }
     bypass_pacing_ = ucclParamBypassPacing();
     auto context = RDMAFactory::get_factory_dev(dev)->context;
     auto pd = RDMAFactory::get_factory_dev(dev)->pd;
@@ -749,7 +753,7 @@ class SharedIOContext {
       check_srq(true);
     }
 
-    if (!ucclParamRCMode()) {
+    if (!rc_mode_) {
       // Create Ctrl QP, CQ, and MR.
       util_rdma_create_qp(
           context, &ctrl_qp_, IBV_QPT_UD, support_cq_ex_, true,

@@ -102,21 +102,6 @@ int RDMAFactory::init_devs() {
 
       dev.local_ip_str = oob_ip;
       dev.numa_node = get_dev_numa_node(dev.ib_name);
-
-      // Detecting if the dev support extend cq.
-      struct ibv_cq_init_attr_ex cq_attr = {
-          .cqe = 1,
-          .comp_mask = 0,
-      };
-      struct ibv_cq_ex* cq_ex = ibv_create_cq_ex(context, &cq_attr);
-      if (cq_ex) {
-        UCCL_LOG_RE << "cq_ex supported on dev: " << devices[d]->name;
-        ibv_destroy_cq(ibv_cq_ex_to_cq(cq_ex));
-      } else {
-        UCCL_LOG_RE << "cq_ex NOT supported on dev: " << devices[d]->name;
-      }
-      dev.support_cq_ex = cq_ex != nullptr;
-
       dev.dev_attr = dev_attr;
       dev.port_attr = port_attr;
       dev.ib_port_num = port_num;
@@ -153,6 +138,45 @@ int RDMAFactory::init_devs() {
         UCCL_LOG_ERROR << "Unable to allocate PD";
         ibv_close_device(context);
         continue;
+      }
+
+      // Detecting if the dev support extend cq.
+      {
+        struct ibv_cq_init_attr_ex cq_attr = {
+            .cqe = 1,
+            .comp_mask = 0,
+        };
+        struct ibv_cq_ex* cq_ex = ibv_create_cq_ex(context, &cq_attr);
+        if (cq_ex) {
+          UCCL_LOG_RE << "cq_ex supported on dev: " << devices[d]->name;
+          ibv_destroy_cq(ibv_cq_ex_to_cq(cq_ex));
+        } else {
+          UCCL_LOG_RE << "cq_ex NOT supported on dev: " << devices[d]->name;
+        }
+        dev.support_cq_ex = cq_ex != nullptr;
+      }
+
+      // Detect UC support by trying to create a dummy UC QP
+      {
+        struct ibv_qp_init_attr qp_init_attr = {};
+        qp_init_attr.qp_type = IBV_QPT_UC;
+        qp_init_attr.send_cq = ibv_create_cq(context, 1, nullptr, nullptr, 0);
+        qp_init_attr.recv_cq = qp_init_attr.send_cq;
+        qp_init_attr.cap.max_send_wr = 1;
+        qp_init_attr.cap.max_recv_wr = 1;
+        qp_init_attr.cap.max_send_sge = 1;
+        qp_init_attr.cap.max_recv_sge = 1;
+
+        struct ibv_qp* uc_qp = ibv_create_qp(dev.pd, &qp_init_attr);
+        if (uc_qp) {
+          UCCL_LOG_RE << "UC supported on dev: " << devices[d]->name;
+          ibv_destroy_qp(uc_qp);
+          dev.support_uc = true;
+        } else {
+          UCCL_LOG_RE << "UC NOT supported on dev: " << devices[d]->name;
+          dev.support_uc = false;
+        }
+        ibv_destroy_cq(qp_init_attr.send_cq);
       }
 
       // Detect DMA-BUF support

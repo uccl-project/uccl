@@ -288,6 +288,8 @@ class RDMAContext {
 
   inline bool is_roce() { return is_roce_; }
 
+  inline bool rc_mode() { return io_ctx_->rc_mode_; }
+
  public:
   // 256-bit SACK bitmask => we can track up to 256 packets
   static constexpr std::size_t kReassemblyMaxSeqnoDistance = kSackBitmapSize;

@@ -601,7 +601,7 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
     int const size = sizeof(uint32_t);
     auto total_size = kTotalQP * size;
 
-    if (!ucclParamRCMode()) {
+    if (!rdma_ctx->rc_mode()) {
       total_size += size; /* ctrl qpn */
       total_size += size; /* peer id */
     }
@@ -618,7 +618,7 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
     }
 
     // Send ctrl qpn and our peer id to remote peer.
-    if (!ucclParamRCMode()) {
+    if (!rdma_ctx->rc_mode()) {
       memcpy(buf + kTotalQP * size, &io_ctx_.ctrl_qp_->qp_num,
              sizeof(uint32_t));
       memcpy(buf + kTotalQP * size + size, &ctrl_work.peer_id,
@@ -650,7 +650,7 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
       ret = modify_qp_rtr(qp, dev, &rdma_ctx->remote_ctx_, remote_qpn);
       DCHECK(ret == 0) << "Failed to modify data path QP to RTR";
 
-      ret = modify_qp_rts(qp, ucclParamRCMode());
+      ret = modify_qp_rts(qp, rdma_ctx->rc_mode());
       DCHECK(ret == 0) << "Failed to modify data path QP to RTS";
     }
 
@@ -664,7 +664,7 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
       DCHECK(ret == 0) << "Failed to modify Ctrl QP to RTS";
     }
 
-    if (!ucclParamRCMode()) {
+    if (!rdma_ctx->rc_mode()) {
       auto ctrl_qpn = *reinterpret_cast<uint32_t*>(buf + kTotalQP * size);
       auto remote_peer_id =
           *reinterpret_cast<uint32_t*>(buf + kTotalQP * size + size);
@@ -1826,7 +1826,7 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
   qp_init_attr.qp_context = this;
   qp_init_attr.send_cq = ibv_cq_ex_to_cq(io_ctx->send_cq_ex_);
   qp_init_attr.recv_cq = ibv_cq_ex_to_cq(io_ctx->recv_cq_ex_);
-  if (!ucclParamRCMode())
+  if (!rc_mode())
     qp_init_attr.qp_type = IBV_QPT_UC;
   else
     qp_init_attr.qp_type = IBV_QPT_RC;
@@ -1943,7 +1943,7 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
 }
 
 RDMAContext::~RDMAContext() {
-  if (!ucclParamRCMode()) {
+  if (!rc_mode()) {
     if (credit_qp_ != nullptr) {
       ibv_destroy_qp(credit_qp_);
     }
