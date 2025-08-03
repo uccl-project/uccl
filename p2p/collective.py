@@ -6,7 +6,7 @@ p2p engine and provides simple send/recv operations similar to NCCL.
 
 The API automatically handles:
 - Connection setup and metadata exchange via torch.distributed
-- Memory registration and management  
+- Memory registration and management
 - Async operation polling
 - Resource cleanup
 """
