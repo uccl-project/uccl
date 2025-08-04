@@ -13,10 +13,6 @@ import time
 import torch
 from typing import Tuple
 
-# Add current directory to path to import our module
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-os.environ["UCCL_RCMODE"] = "1"
-
 try:
     from uccl import p2p
 

@@ -17,8 +17,6 @@ import torch.distributed as dist
 
 import os
 
-os.environ["UCCL_RCMODE"] = "1"
-
 from uccl import collective
 
 
