@@ -196,7 +196,7 @@ def main():
     p.add_argument(
         "--device",
         choices=["cpu", "gpu"],
-        default="cpu",
+        default="gpu",
         help="Buffer location (cpu or gpu)",
     )
     p.add_argument(
