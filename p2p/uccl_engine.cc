@@ -115,12 +115,6 @@ uccl_engine_t* uccl_engine_create(int local_gpu_idx, int num_cpus) {
 }
 
 void uccl_engine_destroy(uccl_engine_t* engine) {
-  if (conn) {
-    uccl_engine_stop_listener(conn);
-    delete conn->recv_thread_pool;
-    delete conn;
-  }
-
   if (engine) {
     delete engine->endpoint;
     delete engine;
@@ -240,6 +234,14 @@ int uccl_engine_stop_listener(uccl_conn_t* conn) {
   conn->listener_thread = nullptr;
 
   return 0;
+}
+
+void uccl_engine_conn_destroy(uccl_conn_t* conn) {
+  if (conn) {
+    uccl_engine_stop_listener(conn);
+    delete conn->recv_thread_pool;
+    delete conn;
+  }
 }
 
 void uccl_engine_mr_destroy(uccl_mr_t* mr) {
