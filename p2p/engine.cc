@@ -189,6 +189,7 @@ bool is_nvlink_peer(int local_gpu, int remote_gpu) {
 #endif
 }
 
+#ifdef WITH_PYTHON
 bool Endpoint::connect(py::bytes const& meta_bytes, uint64_t& conn_id) {
   std::string buf = meta_bytes;
   uint8_t const* data = reinterpret_cast<uint8_t const*>(buf.data());
@@ -231,6 +232,7 @@ bool Endpoint::connect(py::bytes const& meta_bytes, uint64_t& conn_id) {
   }
   return this->connect(ip, remote_gpu_idx_, conn_id, port);
 }
+#endif
 
 bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
                       uint64_t& conn_id) {
@@ -322,8 +324,9 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
   if (data_v.size() != size_v.size())
     throw std::invalid_argument(
         "[Endpoint::regv] data_v/size_v length mismatch");
-
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
+#endif
   size_t const n = data_v.size();
   mr_id_v.resize(n);
 
@@ -349,7 +352,9 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
 
 bool Endpoint::send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
                         size_t size, void const* meta, size_t meta_len) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
+#endif
   DCHECK(size <= 0xffffffff);
 
   DCHECK(meta_len == sizeof(gpuIpcMemHandle_t));
@@ -472,6 +477,7 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
       done[ureq_issued % kMaxInflightChunks] = false;
       ureq_issued++;
     }
+
     check_python_signals();
 
     // First, poll all outstanding requests and mark which ones are done.
@@ -713,8 +719,9 @@ bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
 
 bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
                          size_t len, char* out_buf) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
-
+#endif
   if (conn_id == kNvlinkConn) {
     GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
     gpuIpcMemHandle_t handle{};
@@ -814,6 +821,14 @@ std::unique_ptr<Endpoint> Endpoint::CreateAndJoin(
     throw std::runtime_error("Endpoint::CreateAndJoin() failed");
   }
   return ep;
+}
+
+int Endpoint::get_sock_fd(uint64_t conn_id) const {
+  auto it = conn_id_to_conn_.find(conn_id);
+  if (it == conn_id_to_conn_.end()) {
+    return -1;
+  }
+  return it->second->uccl_conn_id_.sock_fd;
 }
 
 uint64_t Endpoint::conn_id_of_rank(int rank) const {

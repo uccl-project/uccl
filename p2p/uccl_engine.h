@@ -17,6 +17,11 @@ typedef struct uccl_conn uccl_conn_t;
 // Handle for a memory region
 typedef struct uccl_mr uccl_mr_t;
 
+typedef struct metadata {
+  uint64_t data_ptr;  // Memory address for data reception
+  size_t data_size;   // Size of data to receive
+} metadata_t;
+
 /**
  * Create and initialize an engine instance.
  * @param local_gpu_idx The GPU index to use for the engine.
@@ -41,7 +46,12 @@ void uccl_engine_destroy(uccl_engine_t* engine);
  */
 uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
                                  int remote_gpu_idx, int remote_port);
-
+/**
+ * Start the listener thread for the connection.
+ * @param conn          Connection handle.
+ * @return              0 on success, non-zero on failure.
+ */
+int uccl_engine_start_listener(uccl_conn_t* conn);
 /**
  * Accept an incoming connection (blocking).
  * @param engine        The engine instance.
@@ -60,7 +70,7 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
  * @param size          Size of the data.
  * @return              Memory region handle, or NULL on failure.
  */
-uccl_mr_t* uccl_engine_reg(uccl_engine_t* engine, void* data, size_t size);
+uccl_mr_t* uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size);
 
 /**
  * Send data (blocking).
@@ -79,11 +89,10 @@ int uccl_engine_send(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
  * @param mr            Memory region handle.
  * @param data          Pointer to the buffer to receive data.
  * @param max_size      Maximum size of the buffer.
- * @param recv_size     Pointer to store the actual received size.
  * @return              0 on success, non-zero on failure.
  */
 int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t* mr, void* data,
-                     size_t max_size, size_t* recv_size);
+                     size_t max_size);
 
 /**
  * Cleanup connection.
@@ -104,6 +113,13 @@ void uccl_engine_mr_destroy(uccl_mr_t* mr);
  * @return              0 on success, non-zero on failure.
  */
 int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata_str);
+
+/**
+ * Get socket file descriptor for a connection.
+ * @param conn          Connection handle.
+ * @return              Socket file descriptor, or -1 on failure.
+ */
+int uccl_engine_get_sock_fd(uccl_conn_t* conn);
 
 /**
  * Free endpoint metadata buffer.

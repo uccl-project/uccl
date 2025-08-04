@@ -80,9 +80,9 @@ class Endpoint {
    */
   bool connect(std::string const& ip_addr, int const& remote_gpu_idx,
                uint64_t& conn_id, int remote_port);
-
+#ifdef WITH_PYTHON
   bool connect(py::bytes const& metadata, uint64_t& conn_id);
-
+#endif
   /*
    * Accept an incoming connection via TCP, then build RDMA QP connections.
    *
@@ -195,6 +195,8 @@ class Endpoint {
       std::string const& discovery_uri, std::string const& group_name,
       int world_size, int my_rank, uint32_t local_gpu_idx, uint32_t num_cpus,
       int remote_gpu_idx);
+
+  int get_sock_fd(uint64_t conn_id) const;
 
   /** Returns conn_id for @rank, or UINT64_MAX if unknown. */
   uint64_t conn_id_of_rank(int rank) const;
