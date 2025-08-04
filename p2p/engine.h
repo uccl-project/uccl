@@ -8,7 +8,7 @@
 #include <infiniband/verbs.h>
 #include <pybind11/pybind11.h>
 #include <atomic>
-#include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <thread>
 #include <tuple>
@@ -115,7 +115,8 @@ class Endpoint {
    *   data: the data to send
    *   size: the size of the data
    */
-  bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size);
+  bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
+            bool inside_python = true);
 
   /*
    * Receive data from the remote server. Blocking.
@@ -127,7 +128,8 @@ class Endpoint {
    *   data: the data to receive
    *   size: the size of the data
    */
-  bool recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size);
+  bool recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
+            bool inside_python = true);
 
   bool send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
                 void const* meta, size_t meta_len);
@@ -241,9 +243,9 @@ class Endpoint {
   std::atomic<uint64_t> next_transfer_id_ = 0;
 
   // Accessed by both app thread and proxy thread.
-  mutable std::mutex conn_mu_;
+  mutable std::shared_mutex conn_mu_;
   std::unordered_map<uint64_t, Conn*> conn_id_to_conn_;
-  mutable std::mutex mr_mu_;
+  mutable std::shared_mutex mr_mu_;
   std::unordered_map<uint64_t, MR*> mr_id_to_mr_;
 
   // Single-threaded.
