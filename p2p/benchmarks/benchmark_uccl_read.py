@@ -79,11 +79,27 @@ def _run_client_recv(args, ep, remote_metadata):
         fifo_blob = bytes(fifo_blob.tolist())
         start = time.perf_counter()
         total = 0
-        ep.read(conn_id, mr_id, ptr, sz, fifo_blob)
+        if args.async_api:
+            ok, transfer_id = ep.read_async(conn_id, mr_id, ptr, sz, fifo_blob)
+            assert ok
+            is_done = False
+            while not is_done:
+                ok, is_done = ep.poll_async(transfer_id)
+                assert ok
+        else:
+            ep.read(conn_id, mr_id, ptr, sz, fifo_blob)
         start = time.perf_counter()
         total = 0
         for _ in range(args.iters):
-            ep.read(conn_id, mr_id, ptr, sz, fifo_blob)
+            if args.async_api:
+                ok, transfer_id = ep.read_async(conn_id, mr_id, ptr, sz, fifo_blob)
+                assert ok
+                is_done = False
+                while not is_done:
+                    ok, is_done = ep.poll_async(transfer_id)
+                    assert ok
+            else:
+                ep.read(conn_id, mr_id, ptr, sz, fifo_blob)
             total += sz
         elapsed = time.perf_counter() - start
         print(
@@ -123,11 +139,11 @@ def main():
         ],
     )
     p.add_argument("--iters", type=int, default=1)
-    p.add_argument("--async-transfer", action="store_true")
+    p.add_argument("--async-api", action="store_true")
     args = p.parse_args()
 
     print("Sizes:", ", ".join(_pretty(s) for s in args.sizes))
-    if args.async_transfer:
+    if args.async_api:
         print("Async path enabled")
 
     dist.init_process_group(backend="gloo")

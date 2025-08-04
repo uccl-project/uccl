@@ -221,11 +221,6 @@ def main():
         default=1000,
         help="Iterations per message size (excluding 1 warm-up)",
     )
-    p.add_argument(
-        "--async-transfer",
-        action="store_true",
-        help="Use asynchronous transfers",
-    )
     args = p.parse_args()
 
     dist.init_process_group(backend="gloo")

@@ -42,7 +42,7 @@ struct PeerInfo {
 class Endpoint {
   const uint64_t kRTTBytes = 1024 * 1024;
   const uint64_t kChunkSize = 512 * 1024;
-  const uint32_t kMaxInflightChunks = 8;
+  const uint32_t kMaxInflightChunks = 32;
 
  public:
   gpuStream_t pick_stream() {
@@ -162,7 +162,7 @@ class Endpoint {
    *   slot_item: the slot item to use for the transfer
    */
   bool read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
-            uccl::FifoItem const& slot_item);
+            uccl::FifoItem const& slot_item, bool inside_python = true);
 
   /* Read data from the remote server asynchronously. */
   bool read_async(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
@@ -249,7 +249,6 @@ class Endpoint {
   std::unordered_map<uint64_t, MR*> mr_id_to_mr_;
 
   // Single-threaded.
-  std::unordered_map<uint64_t, uccl::ucclRequest*> transfer_id_to_ureq_;
   std::unordered_map<int, uint64_t> rank2conn_;
 
   // Assuming 1TB GPU memory, 128KB KV block size.
@@ -259,7 +258,14 @@ class Endpoint {
 
   static constexpr size_t kTaskRingSize = 1024;
 
+  enum class TaskType {
+    SEND,
+    RECV,
+    READ,
+  };
+
   struct alignas(64) Task {
+    TaskType type;
     void* data;
     size_t size;
     uint64_t conn_id;
@@ -269,8 +275,21 @@ class Endpoint {
     Task* self_ptr;
   };
 
+  struct alignas(64) ReadTask {
+    TaskType type;
+    void* data;
+    size_t size;
+    uint64_t conn_id;
+    uint64_t mr_id;
+    std::atomic<bool> done;
+    // For proxy to access the task.done
+    ReadTask* self_ptr;
+    uccl::FifoItem slot_item;
+  };
+
   jring_t* send_task_ring_;
   jring_t* recv_task_ring_;
+  jring_t* read_task_ring_;
 
   std::atomic<bool> stop_{false};
   std::thread send_proxy_thread_;

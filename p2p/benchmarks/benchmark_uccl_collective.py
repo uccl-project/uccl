@@ -172,8 +172,7 @@ def _run_dual_benchmark(args):
         # Warm-up: simultaneous send and receive
         send_req = collective.isend(send_tensor, dst=peer)
         recv_req = collective.irecv(recv_tensor, src=peer)
-        collective.wait(send_req)
-        collective.wait(recv_req)
+        collective.wait_all([send_req, recv_req])
 
         start = time.perf_counter()
         total_sent = 0
@@ -185,8 +184,7 @@ def _run_dual_benchmark(args):
             recv_req = collective.irecv(recv_tensor, src=peer)
 
             # Wait for both to complete
-            collective.wait(send_req)
-            collective.wait(recv_req)
+            collective.wait_all([send_req, recv_req])
 
             total_sent += size
             total_recv += size
@@ -201,7 +199,7 @@ def _run_dual_benchmark(args):
         recv_gb_sec = total_recv / elapsed / 1e9
 
         print(
-            f"[{role_name} Dual Send/Recv] {_pretty_size(size):>9} : {send_gbps:6.2f} / {recv_gbps:6.2f} Gbps | {send_gb_sec:5.2f} / {recv_gb_sec:5.2f} GB/s"
+            f"[{role_name} Dual Send Recv] {_pretty_size(size):>9} : {(send_gbps + recv_gbps) / 2:6.2f} Gbps | {(send_gb_sec + recv_gb_sec) / 2:5.2f} GB/s"
         )
 
     role_name = "Client" if rank == 0 else "Server"
@@ -232,6 +230,7 @@ def main():
             262144,
             1048576,
             10485760,
+            16 * 1024 * 1024,
             104857600,
         ],
     )
@@ -244,7 +243,7 @@ def main():
     p.add_argument(
         "--dual",
         action="store_true",
-        help="Test bidirectional communication (simultaneous isend and irecv). Requires --async-api.",
+        help="Test bidirectional communication (simultaneous isend and irecv).",
     )
     args = p.parse_args()
 

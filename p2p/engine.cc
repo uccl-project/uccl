@@ -67,6 +67,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
 
   send_task_ring_ = uccl::create_ring(sizeof(Task), kTaskRingSize);
   recv_task_ring_ = uccl::create_ring(sizeof(Task), kTaskRingSize);
+  read_task_ring_ = uccl::create_ring(sizeof(ReadTask), kTaskRingSize);
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
 
@@ -84,6 +85,7 @@ Endpoint::~Endpoint() {
 
   free(send_task_ring_);
   free(recv_task_ring_);
+  free(read_task_ring_);
 
   delete ep_;
 
@@ -445,6 +447,7 @@ bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
   py::gil_scoped_release release;
 
   Task* task = new Task{
+      .type = TaskType::SEND,
       .data = const_cast<void*>(data),
       .size = size,
       .conn_id = conn_id,
@@ -462,27 +465,12 @@ bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
   return true;
 }
 
-void Endpoint::send_proxy_thread_func() {
-  uccl::pin_thread_to_numa(numa_node_);
-  Task task;
-
-  while (!stop_.load(std::memory_order_acquire)) {
-    while (jring_sc_dequeue_bulk(send_task_ring_, &task, 1, nullptr) != 1) {
-      if (stop_.load(std::memory_order_acquire)) {
-        return;
-      }
-    }
-
-    send(task.conn_id, task.mr_id, task.data, task.size, false);
-    task.self_ptr->done.store(true, std::memory_order_release);
-  }
-}
-
 bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
                           size_t size, uint64_t* transfer_id) {
   py::gil_scoped_release release;
 
   Task* task = new Task{
+      .type = TaskType::RECV,
       .data = data,
       .size = size,
       .conn_id = conn_id,
@@ -498,22 +486,6 @@ bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
   }
 
   return true;
-}
-
-void Endpoint::recv_proxy_thread_func() {
-  uccl::pin_thread_to_numa(numa_node_);
-  Task task;
-
-  while (!stop_.load(std::memory_order_acquire)) {
-    while (jring_sc_dequeue_bulk(recv_task_ring_, &task, 1, nullptr) != 1) {
-      if (stop_.load(std::memory_order_acquire)) {
-        return;
-      }
-    }
-
-    recv(task.conn_id, task.mr_id, task.data, task.size, false);
-    task.self_ptr->done.store(true, std::memory_order_release);
-  }
 }
 
 bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
@@ -672,8 +644,8 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 }
 
 bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
-                    uccl::FifoItem const& slot_item) {
-  py::gil_scoped_release release;
+                    uccl::FifoItem const& slot_item, bool inside_python) {
+  auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
 
   if (!ucclParamRCMode()) {
     DCHECK(false) << "RDMA READ is only supported in RC mode, toggle RCMODE to "
@@ -692,13 +664,13 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
         static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle, dst,
         size, slot_item, &ureq);
     if (rc == -1) {
-      check_python_signals();
+      auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
       std::this_thread::yield();
     }
   } while (rc == -1);
 
   while (!ep_->uccl_poll_ureq_once(&ureq)) {
-    check_python_signals();
+    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
   }
   return true;
 }
@@ -707,25 +679,23 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
                           size_t size, uccl::FifoItem const& slot_item,
                           uint64_t* transfer_id) {
   py::gil_scoped_release release;
-  auto conn = conn_id_to_conn_[conn_id];
-  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
 
-  auto _transfer_id = next_transfer_id_.fetch_add(1);
-  auto* ureq = new uccl::ucclRequest();
+  ReadTask* read_task = new ReadTask{
+      .type = TaskType::READ,
+      .data = dst,
+      .size = size,
+      .conn_id = conn_id,
+      .mr_id = mr_id,
+      .done = false,
+      .self_ptr = nullptr,
+      .slot_item = slot_item,
+  };
+  read_task->self_ptr = read_task;
 
-  *transfer_id = _transfer_id;
-  transfer_id_to_ureq_[_transfer_id] = ureq;
+  *transfer_id = reinterpret_cast<uint64_t>(read_task);
 
-  int rc;
-  do {
-    rc = ep_->uccl_read_async(
-        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle, dst,
-        size, slot_item, ureq);
-    if (rc == -1) {
-      check_python_signals();
-      std::this_thread::yield();
-    }
-  } while (rc == -1);
+  while (jring_mp_enqueue_bulk(read_task_ring_, read_task, 1, nullptr) != 1) {
+  }
 
   return true;
 }
@@ -751,18 +721,51 @@ bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
   return true;
 }
 
+void Endpoint::send_proxy_thread_func() {
+  uccl::pin_thread_to_numa(numa_node_);
+  Task task;
+  ReadTask read_task;
+
+  while (!stop_.load(std::memory_order_acquire)) {
+    if (jring_sc_dequeue_bulk(send_task_ring_, &task, 1, nullptr) == 1) {
+      send(task.conn_id, task.mr_id, task.data, task.size, false);
+      task.self_ptr->done.store(true, std::memory_order_release);
+    }
+
+    if (jring_sc_dequeue_bulk(read_task_ring_, &read_task, 1, nullptr) == 1) {
+      read(read_task.conn_id, read_task.mr_id, read_task.data, read_task.size,
+           read_task.slot_item, false);
+      read_task.self_ptr->done.store(true, std::memory_order_release);
+    }
+  }
+}
+
+void Endpoint::recv_proxy_thread_func() {
+  uccl::pin_thread_to_numa(numa_node_);
+  Task task;
+
+  while (!stop_.load(std::memory_order_acquire)) {
+    if (jring_sc_dequeue_bulk(recv_task_ring_, &task, 1, nullptr) == 1) {
+      recv(task.conn_id, task.mr_id, task.data, task.size, false);
+      task.self_ptr->done.store(true, std::memory_order_release);
+    }
+  }
+}
+
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   py::gil_scoped_release release;
-  // auto* ureq = transfer_id_to_ureq_.at(transfer_id);
-  // *is_done = ep_->uccl_poll_ureq_once(ureq);
-  // if (*is_done) {
-  //   delete ureq;
-  //   transfer_id_to_ureq_.erase(transfer_id);
-  // }
   auto task = reinterpret_cast<Task*>(transfer_id);
-  *is_done = task->done.load(std::memory_order_acquire);
-  if (*is_done) {
-    delete task;
+  if (task->type == TaskType::READ) {
+    auto read_task = reinterpret_cast<ReadTask*>(transfer_id);
+    *is_done = read_task->done.load(std::memory_order_acquire);
+    if (*is_done) {
+      delete read_task;
+    }
+  } else {
+    *is_done = task->done.load(std::memory_order_acquire);
+    if (*is_done) {
+      delete task;
+    }
   }
   return true;
 }

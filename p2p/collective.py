@@ -15,9 +15,7 @@ from __future__ import annotations
 
 import struct
 import socket
-import time
-import threading
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, List
 import warnings
 
 import torch
@@ -485,6 +483,12 @@ def irecv(tensor: torch.Tensor, src: int) -> int:
 def wait(transfer_id: int):
     """Wait for async operation using the default collective context."""
     get_collective().wait(transfer_id)
+
+
+def wait_all(transfer_ids: List[int]):
+    """Wait for all async operations using the default collective context."""
+    for transfer_id in transfer_ids:
+        get_collective().wait(transfer_id)
 
 
 def test(transfer_id: int) -> bool:

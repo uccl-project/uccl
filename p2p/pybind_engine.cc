@@ -156,6 +156,24 @@ PYBIND11_MODULE(p2p, m) {
           py::arg("mr_id_v"), py::arg("data_ptr_v"), py::arg("size_v"),
           py::arg("num_iovs"))
       .def(
+          "advertise",
+          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id,
+             uint64_t ptr,  // raw pointer passed from Python
+             size_t size) {
+            char
+                serialized[sizeof(uccl::FifoItem)]{};  // 64-byte scratch buffer
+
+            bool ok = self.advertise(
+                conn_id, mr_id, reinterpret_cast<void*>(ptr), size, serialized);
+
+            /* return (success, bytes) — empty bytes when failed */
+            return py::make_tuple(
+                ok, ok ? py::bytes(serialized, sizeof(uccl::FifoItem))
+                       : py::bytes());
+          },
+          "Expose a registered buffer for the peer to RDMA-READ",
+          py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"))
+      .def(
           "read",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
              size_t size, py::bytes meta_blob) {
@@ -202,24 +220,6 @@ PYBIND11_MODULE(p2p, m) {
             return py::make_tuple(success, is_done);
           },
           "Poll the status of an asynchronous transfer", py::arg("transfer_id"))
-      .def(
-          "advertise",
-          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id,
-             uint64_t ptr,  // raw pointer passed from Python
-             size_t size) {
-            char
-                serialized[sizeof(uccl::FifoItem)]{};  // 64-byte scratch buffer
-
-            bool ok = self.advertise(
-                conn_id, mr_id, reinterpret_cast<void*>(ptr), size, serialized);
-
-            /* return (success, bytes) — empty bytes when failed */
-            return py::make_tuple(
-                ok, ok ? py::bytes(serialized, sizeof(uccl::FifoItem))
-                       : py::bytes());
-          },
-          "Expose a registered buffer for the peer to RDMA-READ",
-          py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"))
       .def("join_group", &Endpoint::join_group,
            "Join a rendezvous group: publish discovery info, wait for peers, "
            "and fully-connect",

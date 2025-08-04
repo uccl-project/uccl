@@ -86,7 +86,7 @@ def _run_server(args, ep, remote_metadata):
             size_v.append(size_per_block)
 
         if args.num_kvblocks == 1:
-            if args.async_transfer:
+            if args.async_api:
                 ok, transfer_id = ep.recv_async(
                     conn_id, mr_id_v[0], data_ptr_v[0], size_v[0]
                 )
@@ -102,7 +102,7 @@ def _run_server(args, ep, remote_metadata):
             start = time.perf_counter()
             total_recv = 0
             for _ in range(args.iters):
-                if args.async_transfer:
+                if args.async_api:
                     ok, transfer_id = ep.recv_async(
                         conn_id, mr_id_v[0], data_ptr_v[0], size_v[0]
                     )
@@ -163,7 +163,7 @@ def _run_client(args, ep, remote_metadata):
             size_v.append(size_per_block)
 
         if args.num_kvblocks == 1:
-            if args.async_transfer:
+            if args.async_api:
                 ok, transfer_id = ep.send_async(
                     conn_id, mr_id_v[0], data_ptr_v[0], size_v[0]
                 )
@@ -178,7 +178,7 @@ def _run_client(args, ep, remote_metadata):
             start = time.perf_counter()
             total_sent = 0
             for _ in range(args.iters):
-                if args.async_transfer:
+                if args.async_api:
                     ok, transfer_id = ep.send_async(
                         conn_id, mr_id_v[0], data_ptr_v[0], size_v[0]
                     )
@@ -266,13 +266,13 @@ def main():
         help="Number of key-value blocks to send/recv in a single call",
     )
     p.add_argument(
-        "--async-transfer",
+        "--async-api",
         action="store_true",
         help="Use asynchronous transfers",
     )
     args = p.parse_args()
 
-    if args.async_transfer:
+    if args.async_api:
         assert args.num_kvblocks == 1, "Async transfers only support one block"
 
     dist.init_process_group(backend="gloo")
