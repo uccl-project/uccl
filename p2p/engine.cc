@@ -6,6 +6,7 @@
 #include <netinet/in.h>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <future>
 #include <iostream>
@@ -54,6 +55,8 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   for (int i = 0; i < kMaxNumGPUs; i++) {
     gpu_to_dev[i] = ep_->get_best_dev_idx(i);
   }
+  numa_node_ =
+      uccl::RDMAFactory::get_factory_dev(gpu_to_dev[local_gpu_idx_])->numa_node;
 
   // Initialize the engine based on the GPU index.
   std::cout << "Lazy creation of engine, GPU index: " << local_gpu_idx_
@@ -61,20 +64,41 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_], true);
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
 
+  send_task_ring_ = uccl::create_ring(sizeof(Task), kTaskRingSize);
+  recv_task_ring_ = uccl::create_ring(sizeof(Task), kTaskRingSize);
+  send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
+  recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
+
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
 
 Endpoint::~Endpoint() {
   py::gil_scoped_release release;
   std::cout << "Destroying Engine..." << std::endl;
+
+  stop_.store(true, std::memory_order_release);
+
+  send_proxy_thread_.join();
+  recv_proxy_thread_.join();
+
+  free(send_task_ring_);
+  free(recv_task_ring_);
+
   delete ep_;
 
-  for (auto& [conn_id, conn] : conn_id_to_conn_) {
-    delete conn;
+  {
+    std::lock_guard<std::mutex> lock(conn_mu_);
+    for (auto& [conn_id, conn] : conn_id_to_conn_) {
+      delete conn;
+    }
   }
-  for (auto& [mr_id, mr] : mr_id_to_mr_) {
-    delete mr;
+  {
+    std::lock_guard<std::mutex> lock(mr_mu_);
+    for (auto& [mr_id, mr] : mr_id_to_mr_) {
+      delete mr;
+    }
   }
+
   if (!streams_.empty()) {
     GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
     for (auto s : streams_)
@@ -109,9 +133,11 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
   uccl::ConnID uccl_conn_id = uccl_conn_id_future.get();
 
   // Store the connection ID.
-  conn_id_to_conn_[conn_id] =
-      new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
-
+  {
+    std::lock_guard<std::mutex> lock(conn_mu_);
+    conn_id_to_conn_[conn_id] =
+        new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
+  }
   return true;
 }
 
@@ -183,8 +209,11 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   uccl::ConnID uccl_conn_id = uccl_conn_id_future.get();
 
   // Store the connection ID.
-  conn_id_to_conn_[conn_id] =
-      new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
+  {
+    std::lock_guard<std::mutex> lock(conn_mu_);
+    conn_id_to_conn_[conn_id] =
+        new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
+  }
 
   return true;
 }
@@ -202,7 +231,10 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
               << "mhandle->mr is null\n";
     std::abort();
   }
-  mr_id_to_mr_[mr_id] = new MR{mr_id, mhandle};
+  {
+    std::lock_guard<std::mutex> lock(mr_mu_);
+    mr_id_to_mr_[mr_id] = new MR{mr_id, mhandle};
+  }
 
   return true;
 }
@@ -218,7 +250,10 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
   size_t const n = data_v.size();
   mr_id_v.resize(n);
 
-  mr_id_to_mr_.reserve(mr_id_to_mr_.size() + n);
+  {
+    std::lock_guard<std::mutex> lock(mr_mu_);
+    mr_id_to_mr_.reserve(mr_id_to_mr_.size() + n);
+  }
 
   for (size_t i = 0; i < n; ++i) {
     uint64_t id = next_mr_id_.fetch_add(1);
@@ -232,7 +267,10 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
       return false;
     }
 
-    mr_id_to_mr_[id] = new MR{id, mhandle};
+    {
+      std::lock_guard<std::mutex> lock(mr_mu_);
+      mr_id_to_mr_[id] = new MR{id, mhandle};
+    }
     mr_id_v[i] = id;
   }
   return true;
@@ -241,9 +279,20 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
 bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
                     size_t size) {
   DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
+  // TODO(yang): Add it back for app directly calling send.
+  // py::gil_scoped_release release;
 
-  auto conn = conn_id_to_conn_[conn_id];
-  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  Conn* conn;
+  {
+    std::lock_guard<std::mutex> lock(conn_mu_);
+    conn = conn_id_to_conn_[conn_id];
+  }
+
+  uccl::Mhandle* mhandle;
+  {
+    std::lock_guard<std::mutex> lock(mr_mu_);
+    mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  }
 
   uccl::ucclRequest ureq[kMaxInflightChunks];
   bool done[kMaxInflightChunks] = {false};
@@ -290,10 +339,20 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
 }
 
 bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
-  py::gil_scoped_release release;
+  // TODO(yang): Add it back for app directly calling recv.
+  // py::gil_scoped_release release;
 
-  auto conn = conn_id_to_conn_[conn_id];
-  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  Conn* conn;
+  {
+    std::lock_guard<std::mutex> lock(conn_mu_);
+    conn = conn_id_to_conn_[conn_id];
+  }
+
+  uccl::Mhandle* mhandle;
+  {
+    std::lock_guard<std::mutex> lock(mr_mu_);
+    mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  }
   int size_int = static_cast<int>(size);
 
   uccl::ucclRequest ureq[kMaxInflightChunks];
@@ -381,55 +440,121 @@ bool Endpoint::send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
 
 bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
                           size_t size, uint64_t* transfer_id) {
+  // py::gil_scoped_release release;
+  // auto conn = conn_id_to_conn_[conn_id];
+  // auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+
+  // auto _transfer_id = next_transfer_id_.fetch_add(1);
+  // auto* ureq = new uccl::ucclRequest();
+
+  // *transfer_id = _transfer_id;
+  // transfer_id_to_ureq_[_transfer_id] = ureq;
+
+  // int rc;
+  // do {
+  //   rc = ep_->uccl_send_async(
+  //       static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
+  //       (void*)data, size, ureq);
+  //   if (rc == -1) {
+  //     check_python_signals();
+  //     std::this_thread::yield();
+  //   }
+  // } while (rc == -1);
+
   py::gil_scoped_release release;
-  auto conn = conn_id_to_conn_[conn_id];
-  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
 
-  auto _transfer_id = next_transfer_id_.fetch_add(1);
-  auto* ureq = new uccl::ucclRequest();
+  Task* task = new Task{
+      .data = const_cast<void*>(data),
+      .size = size,
+      .conn_id = conn_id,
+      .mr_id = mr_id,
+      .done = false,
+      .self_ptr = nullptr,
+  };
+  task->self_ptr = task;
 
-  *transfer_id = _transfer_id;
-  transfer_id_to_ureq_[_transfer_id] = ureq;
+  *transfer_id = reinterpret_cast<uint64_t>(task);
 
-  int rc;
-  do {
-    rc = ep_->uccl_send_async(
-        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
-        (void*)data, size, ureq);
-    if (rc == -1) {
-      check_python_signals();
-      std::this_thread::yield();
-    }
-  } while (rc == -1);
+  while (jring_mp_enqueue_bulk(send_task_ring_, task, 1, nullptr) != 1) {
+  }
 
   return true;
 }
 
+void Endpoint::send_proxy_thread_func() {
+  uccl::pin_thread_to_numa(numa_node_);
+  Task task;
+
+  while (!stop_.load(std::memory_order_acquire)) {
+    while (jring_sc_dequeue_bulk(send_task_ring_, &task, 1, nullptr) != 1) {
+      if (stop_.load(std::memory_order_acquire)) {
+        return;
+      }
+    }
+
+    send(task.conn_id, task.mr_id, task.data, task.size);
+    task.self_ptr->done.store(true, std::memory_order_release);
+  }
+}
+
 bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
                           size_t size, uint64_t* transfer_id) {
+  // py::gil_scoped_release release;
+  // auto conn = conn_id_to_conn_[conn_id];
+  // auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+
+  // auto _transfer_id = next_transfer_id_.fetch_add(1);
+  // auto* ureq = new uccl::ucclRequest();
+
+  // *transfer_id = _transfer_id;
+  // transfer_id_to_ureq_[_transfer_id] = ureq;
+  // int size_int = static_cast<int>(size);
+
+  // int rc;
+  // do {
+  //   rc = ep_->uccl_recv_async(
+  //       static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
+  //       &data, &size_int, 1, ureq);
+  //   if (rc == -1) {
+  //     check_python_signals();
+  //     std::this_thread::yield();
+  //   }
+  // } while (rc == -1);
+
   py::gil_scoped_release release;
-  auto conn = conn_id_to_conn_[conn_id];
-  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
 
-  auto _transfer_id = next_transfer_id_.fetch_add(1);
-  auto* ureq = new uccl::ucclRequest();
+  Task* task = new Task{
+      .data = data,
+      .size = size,
+      .conn_id = conn_id,
+      .mr_id = mr_id,
+      .done = false,
+      .self_ptr = nullptr,
+  };
+  task->self_ptr = task;
 
-  *transfer_id = _transfer_id;
-  transfer_id_to_ureq_[_transfer_id] = ureq;
-  int size_int = static_cast<int>(size);
+  *transfer_id = reinterpret_cast<uint64_t>(task);
 
-  int rc;
-  do {
-    rc = ep_->uccl_recv_async(
-        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
-        &data, &size_int, 1, ureq);
-    if (rc == -1) {
-      check_python_signals();
-      std::this_thread::yield();
-    }
-  } while (rc == -1);
+  while (jring_mp_enqueue_bulk(recv_task_ring_, task, 1, nullptr) != 1) {
+  }
 
   return true;
+}
+
+void Endpoint::recv_proxy_thread_func() {
+  uccl::pin_thread_to_numa(numa_node_);
+  Task task;
+
+  while (!stop_.load(std::memory_order_acquire)) {
+    while (jring_sc_dequeue_bulk(recv_task_ring_, &task, 1, nullptr) != 1) {
+      if (stop_.load(std::memory_order_acquire)) {
+        return;
+      }
+    }
+
+    recv(task.conn_id, task.mr_id, task.data, task.size);
+    task.self_ptr->done.store(true, std::memory_order_release);
+  }
 }
 
 bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
@@ -669,11 +794,16 @@ bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
 
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   py::gil_scoped_release release;
-  auto* ureq = transfer_id_to_ureq_.at(transfer_id);
-  *is_done = ep_->uccl_poll_ureq_once(ureq);
+  // auto* ureq = transfer_id_to_ureq_.at(transfer_id);
+  // *is_done = ep_->uccl_poll_ureq_once(ureq);
+  // if (*is_done) {
+  //   delete ureq;
+  //   transfer_id_to_ureq_.erase(transfer_id);
+  // }
+  auto task = reinterpret_cast<Task*>(transfer_id);
+  *is_done = task->done.load(std::memory_order_acquire);
   if (*is_done) {
-    delete ureq;
-    transfer_id_to_ureq_.erase(transfer_id);
+    delete task;
   }
   return true;
 }
