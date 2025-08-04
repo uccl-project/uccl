@@ -65,12 +65,10 @@ class CollectiveContext:
             self.local_gpu_idx = self._get_local_gpu_idx()
 
         self.ep = None
-        self.send_connections: Dict[int, int] = (
-            {}
-        )  # rank -> conn_id for sending TO that rank
-        self.recv_connections: Dict[int, int] = (
-            {}
-        )  # rank -> conn_id for receiving FROM that rank
+        self.send_connections = None  # array indexed by rank for sending TO that rank
+        self.recv_connections = (
+            None  # array indexed by rank for receiving FROM that rank
+        )
         self.memory_regions: Dict[int, int] = {}  # ptr -> mr_id
         self.initialized = False
 
@@ -124,6 +122,10 @@ class CollectiveContext:
         # Create endpoint
         self.ep = p2p.Endpoint(self.local_gpu_idx, self.num_cpus)
         local_metadata = self.ep.get_endpoint_metadata()
+
+        # Initialize connection arrays
+        self.send_connections = [None] * self.world_size  # indexed by rank
+        self.recv_connections = [None] * self.world_size  # indexed by rank
 
         # Exchange metadata with all peers using torch.distributed
         all_metadata = [None] * self.world_size
@@ -277,7 +279,7 @@ class CollectiveContext:
         if dst == self.rank:
             return  # No-op for self-send
 
-        if dst not in self.send_connections:
+        if dst >= self.world_size or self.send_connections[dst] is None:
             raise ValueError(f"No send connection to rank {dst}")
 
         ptr, size = self._get_buffer_info(tensor)
@@ -288,18 +290,9 @@ class CollectiveContext:
         mr_id = self.memory_regions[ptr]
         conn_id = self.send_connections[dst]
 
-        # Perform async send and poll until complete
-        ok, transfer_id = self.ep.send_async(conn_id, mr_id, ptr, size)
+        ok = self.ep.send(conn_id, mr_id, ptr, size)
         if not ok:
             raise RuntimeError(f"Failed to initiate send to rank {dst}")
-
-        # Poll until complete
-        while True:
-            ok, is_done = self.ep.poll_async(transfer_id)
-            if not ok:
-                raise RuntimeError(f"Error polling send to rank {dst}")
-            if is_done:
-                break
 
     def recv(self, tensor: torch.Tensor, src: int):
         """
@@ -315,7 +308,7 @@ class CollectiveContext:
         if src == self.rank:
             return  # No-op for self-recv
 
-        if src not in self.recv_connections:
+        if src >= self.world_size or self.recv_connections[src] is None:
             raise ValueError(f"No recv connection from rank {src}")
 
         ptr, size = self._get_buffer_info(tensor)
@@ -326,18 +319,9 @@ class CollectiveContext:
         mr_id = self.memory_regions[ptr]
         conn_id = self.recv_connections[src]
 
-        # Perform async recv and poll until complete
-        ok, transfer_id = self.ep.recv_async(conn_id, mr_id, ptr, size)
+        ok = self.ep.recv(conn_id, mr_id, ptr, size)
         if not ok:
             raise RuntimeError(f"Failed to initiate recv from rank {src}")
-
-        # Poll until complete
-        while True:
-            ok, is_done = self.ep.poll_async(transfer_id)
-            if not ok:
-                raise RuntimeError(f"Error polling recv from rank {src}")
-            if is_done:
-                break
 
     def isend(self, tensor: torch.Tensor, dst: int) -> int:
         """
@@ -356,7 +340,7 @@ class CollectiveContext:
         if dst == self.rank:
             return -1  # Return dummy ID for self-send
 
-        if dst not in self.send_connections:
+        if dst >= self.world_size or self.send_connections[dst] is None:
             raise ValueError(f"No send connection to rank {dst}")
 
         ptr, size = self._get_buffer_info(tensor)
@@ -389,7 +373,7 @@ class CollectiveContext:
         if src == self.rank:
             return -1  # Return dummy ID for self-recv
 
-        if src not in self.recv_connections:
+        if src >= self.world_size or self.recv_connections[src] is None:
             raise ValueError(f"No recv connection from rank {src}")
 
         ptr, size = self._get_buffer_info(tensor)
@@ -447,8 +431,8 @@ class CollectiveContext:
 
         # Note: The p2p endpoint should handle cleanup automatically
         # when it goes out of scope, but we can add explicit cleanup here if needed
-        self.send_connections.clear()
-        self.recv_connections.clear()
+        self.send_connections = None
+        self.recv_connections = None
         self.memory_regions.clear()
         self.ep = None
         self.initialized = False

@@ -106,7 +106,7 @@ def main():
     p = argparse.ArgumentParser("UCCL READ benchmark (one-sided)")
     p.add_argument("--local-gpu-idx", type=int, default=0)
     p.add_argument("--num-cpus", type=int, default=4)
-    p.add_argument("--device", choices=["cpu", "gpu"], default="cpu")
+    p.add_argument("--device", choices=["cpu", "gpu"], default="gpu")
     p.add_argument(
         "--sizes",
         type=parse_sizes,
