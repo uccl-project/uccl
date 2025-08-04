@@ -216,6 +216,17 @@ ncclResult_t ncclIbGdrSupport() {
 }
 
 ncclResult_t pluginGetProperties(int dev, ncclNetProperties_v8_t* props) {
+  
+//   #ifndef __HIP_PLATFORM_AMD__
+//   int local_gpuidx;
+//   cudaGetDevice(&local_gpuidx);
+// #else
+//   int local_gpuidx;
+//   DCHECK(hipGetDevice(&local_gpuidx) == hipSuccess);
+// #endif
+
+//   dev = ep->get_best_dev_idx(local_gpuidx);
+  
   auto factory_dev = RDMAFactory::get_factory_dev(dev);
   props->name = factory_dev->ib_name;
 
@@ -270,6 +281,16 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
   int ret = 0;
   struct ucclHandle* handle = (struct ucclHandle*)opaqueHandle;
   memset(handle, 0, sizeof(struct ucclHandle));
+
+#ifndef __HIP_PLATFORM_AMD__
+  int local_gpuidx;
+  cudaGetDevice(&local_gpuidx);
+#else
+  int local_gpuidx;
+  DCHECK(hipGetDevice(&local_gpuidx) == hipSuccess);
+#endif
+
+  dev = ep->get_best_dev_idx(local_gpuidx);
 
   ep->initialize_engine_by_dev(dev, false);
 
@@ -341,6 +362,7 @@ ncclResult_t pluginConnect(int dev, void* opaque_handle, void** sendComm,
 #else
   DCHECK(hipGetDevice(&local_gpuidx) == hipSuccess);
 #endif
+  dev = ep->get_best_dev_idx(local_gpuidx);
 
   std::string remote_ip_str = ip_to_str(handle->ip_addr_u32);
 
