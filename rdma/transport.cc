@@ -1219,8 +1219,11 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
     uccl_wait(poll_ctx);
   }
 
-  return ConnID{
-      .context = flow, .flow_id = flow_id, .peer_id = peer_id, .dev = dev};
+  return ConnID{.context = flow,
+                .sock_fd = bootstrap_fd,
+                .flow_id = flow_id,
+                .peer_id = peer_id,
+                .dev = dev};
 }
 
 ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
@@ -1353,8 +1356,11 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
     uccl_wait(poll_ctx);
   }
 
-  return ConnID{
-      .context = flow, .flow_id = flow_id, .peer_id = peer_id, .dev = dev};
+  return ConnID{.context = flow,
+                .sock_fd = bootstrap_fd,
+                .flow_id = flow_id,
+                .peer_id = peer_id,
+                .dev = dev};
 }
 
 bool UcclFlow::check_fifo_ready(int* ret_slot, int* ret_nmsgs) {

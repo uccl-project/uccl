@@ -31,6 +31,7 @@ namespace uccl {
 
 struct ConnID {
   void* context;
+  int sock_fd;     // Used for further coordination if necessary.
   FlowID flow_id;  // Used for RDMAEndpoint to look up UcclFlow.
   PeerID peer_id;  // Used for UcclEngine to look up RDMAContext.
   int dev;
