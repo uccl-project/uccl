@@ -25,6 +25,7 @@
 #include <regex>
 #include <sstream>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 #include <fcntl.h>
 #include <ifaddrs.h>
@@ -1129,8 +1130,18 @@ static int cal_pcie_distance(fs::path const& devA, fs::path const& devB) {
     return chain; /* self → root */
   };
 
-  auto chainA = build_chain(devA_parent);
-  auto chainB = build_chain(devB_parent);
+  static std::unordered_map<fs::path, std::vector<std::string>>
+      dev_to_chain_cache;
+
+  if (dev_to_chain_cache.find(devA_parent) == dev_to_chain_cache.end()) {
+    dev_to_chain_cache[devA_parent] = build_chain(devA_parent);
+  }
+  if (dev_to_chain_cache.find(devB_parent) == dev_to_chain_cache.end()) {
+    dev_to_chain_cache[devB_parent] = build_chain(devB_parent);
+  }
+
+  auto chainA = dev_to_chain_cache[devA_parent];
+  auto chainB = dev_to_chain_cache[devB_parent];
 
   // Walk back from root until paths diverge
   size_t i = chainA.size();
@@ -1210,6 +1221,43 @@ static std::vector<std::pair<std::string, fs::path>> get_rdma_nics() {
               return a.first < b.first;
             });
   return ib_nics;
+}
+
+static inline std::map<int, int> map_gpu_to_dev(
+    std::vector<fs::path> const& gpu_cards,
+    std::vector<std::pair<std::string, fs::path>> const& ib_nics) {
+  std::map<int, int> gpu_to_dev;
+  std::vector<bool> nic_allocated(ib_nics.size(), false);
+
+  // Find the RDMA NIC that is closest to each of the GPUs,
+  // ensuring fair NIC allocation.
+  for (int i = 0; i < gpu_cards.size(); i++) {
+    auto gpu_device_path = gpu_cards[i];
+    int best_nic = -1;
+    int best_distance = std::numeric_limits<int>::max();
+    for (int j = 0; j < ib_nics.size(); ++j) {
+      if (nic_allocated[j]) continue;
+      int dist = uccl::cal_pcie_distance(gpu_device_path, ib_nics[j].second);
+      if (dist < best_distance) {
+        best_distance = dist;
+        best_nic = j;
+      }
+    }
+    if (best_nic != -1) {
+      gpu_to_dev[i] = best_nic;
+      nic_allocated[best_nic] = true;
+    } else {
+      // If all NICs are allocated, fallback to the closest
+      auto ib_nic_it = std::min_element(
+          ib_nics.begin(), ib_nics.end(), [&](auto const& a, auto const& b) {
+            return uccl::cal_pcie_distance(gpu_device_path, a.second) <
+                   uccl::cal_pcie_distance(gpu_device_path, b.second);
+          });
+      gpu_to_dev[i] = ib_nic_it - ib_nics.begin();
+    }
+  }
+
+  return gpu_to_dev;
 }
 
 static inline bool is_nvlink_peer(int local_gpu, int remote_gpu) {

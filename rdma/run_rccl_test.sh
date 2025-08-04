@@ -39,7 +39,7 @@ UCCL_ENTROPY=16
 # QP_SCALING=4
 # UCCL_ENTROPY=32
 
-mpirun --prefix /usr/local/bin/ompi --bind-to none -np 6 -N 1 --hostfile $NODEFILE --map-by ppr:1:node \
+mpirun --prefix /usr/local/bin/ompi --bind-to none -np 2 -N 1 --hostfile $NODEFILE --map-by ppr:1:node \
     -x LD_LIBRARY_PATH=${UCCL_HOME}/thirdparty/rccl/build/release:${CONDA_LIB_HOME}:/opt/rocm-6.3.1/lib:${LD_LIBRARY_PATH} \
     -x NCCL_NET_PLUGIN=${plugin_path} \
     -x NCCL_P2P_DISABLE=${NVLINK_OFF} \

@@ -1018,6 +1018,10 @@ class RDMAEndpoint {
 
   uint32_t get_num_devices() { return num_devices_; }
 
+  int get_best_dev_idx(int gpu_idx) {
+    return RDMAFactory::get_best_dev_idx(gpu_idx);
+  }
+
   inline uint16_t get_p2p_listen_port(int dev) {
     CHECK(p2p_listen_ports_[dev] != 0)
         << "Error: p2p_listen_ports_[" << dev << "] is not set.";

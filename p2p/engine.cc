@@ -51,50 +51,15 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   // Initialize the RDMA endpoint with lazy creation.
   ep_ = new uccl::RDMAEndpoint(num_cpus_);
 
-  auto gpu_cards = uccl::get_gpu_cards();
-  DCHECK(local_gpu_idx_ < gpu_cards.size() && gpu_cards.size() <= kMaxNumGPUs)
-      << "Local GPU index out of range";
-
-  auto ib_nics = uccl::get_rdma_nics();
-  // Find the RDMA NIC that is closest to each of the GPUs,
-  // ensuring fair NIC allocation.
-  std::vector<bool> nic_allocated(ib_nics.size(), false);
-  for (int i = 0; i < gpu_cards.size(); i++) {
-    auto gpu_device_path = gpu_cards[i];
-    int best_nic = -1;
-    int best_distance = std::numeric_limits<int>::max();
-    for (int j = 0; j < ib_nics.size(); ++j) {
-      if (nic_allocated[j]) continue;
-      int dist = uccl::cal_pcie_distance(gpu_device_path, ib_nics[j].second);
-      if (dist < best_distance) {
-        best_distance = dist;
-        best_nic = j;
-      }
-    }
-    if (best_nic != -1) {
-      gpu_to_dev[i] = best_nic;
-      nic_allocated[best_nic] = true;
-    } else {
-      // If all NICs are allocated, fallback to the closest
-      auto ib_nic_it = std::min_element(
-          ib_nics.begin(), ib_nics.end(), [&](auto const& a, auto const& b) {
-            return uccl::cal_pcie_distance(gpu_device_path, a.second) <
-                   uccl::cal_pcie_distance(gpu_device_path, b.second);
-          });
-      gpu_to_dev[i] = ib_nic_it - ib_nics.begin();
-    }
+  for (int i = 0; i < kMaxNumGPUs; i++) {
+    gpu_to_dev[i] = ep_->get_best_dev_idx(i);
   }
-  std::cout << "Detected best GPU-NIC mapping: " << std::endl;
-  for (int i = 0; i < gpu_cards.size(); i++) {
-    std::cout << "\tGPU " << i << " -> NIC " << gpu_to_dev[i] << " ("
-              << ib_nics[gpu_to_dev[i]].first << ")" << std::endl;
-  }
-  std::cout << std::endl;
 
   // Initialize the engine based on the GPU index.
-  printf("Lazy creation of engine, GPU index: %d\n", local_gpu_idx_);
+  std::cout << "Lazy creation of engine, GPU index: " << local_gpu_idx_
+            << std::endl;
   ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_], true);
-  printf("Engine initialized for GPU %d\n", local_gpu_idx_);
+  std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
 
   std::cout << "Endpoint initialized successfully" << std::endl;
 }

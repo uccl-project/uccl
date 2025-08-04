@@ -8,6 +8,7 @@
 #include "util_timer.h"
 #include <glog/logging.h>
 #include <infiniband/verbs.h>
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -22,11 +23,11 @@ std::shared_ptr<RDMAFactory> rdma_ctl;
 static char uccl_ifname[MAX_IF_NAME_SIZE + 1];
 static union socketAddress uccl_ifaddr;
 
-static int __num_devices = 0;
-
 int RDMAFactory::init_devs() {
   int num_devs;
   struct ibv_device** devices;
+  std::vector<fs::path> gpu_cards;
+  std::vector<std::pair<std::string, fs::path>> ib_nics;
 
   static std::once_flag init_flag;
   std::call_once(init_flag,
@@ -61,7 +62,32 @@ int RDMAFactory::init_devs() {
     goto error;
   }
 
-  for (int d = 0; d < num_devs && __num_devices < MAX_IB_DEVS; d++) {
+  // Get the GPUs, RDMA NICs, and their best mapping.
+  {
+    // Sorted by the GPU name.
+    gpu_cards = get_gpu_cards();
+    printf("Found %ld GPUs\n", gpu_cards.size());
+    for (auto const& gpu_card : gpu_cards) {
+      printf("\tGPU %s\n", gpu_card.c_str());
+    }
+
+    // Sorted by the RDMA NIC name.
+    ib_nics = get_rdma_nics();
+    printf("Found %ld RDMA NICs\n", ib_nics.size());
+    for (auto const& [ib_name, ib_path] : ib_nics) {
+      printf("\tRDMA NIC %s: %s\n", ib_name.c_str(), ib_path.c_str());
+    }
+
+    // Mapping GPU idx to RDMA NIC idx.
+    rdma_ctl->gpu_to_dev_idx_ = map_gpu_to_dev(gpu_cards, ib_nics);
+    printf("Detected best GPU-NIC mapping: \n");
+    for (auto const& [gpu_idx, dev_idx] : rdma_ctl->gpu_to_dev_idx_) {
+      printf("\tGPU %d -> NIC %s\n", gpu_idx, ib_nics[dev_idx].first.c_str());
+    }
+  }
+
+  rdma_ctl->devices_.resize(MAX_IB_DEVS);
+  for (int d = 0; d < num_devs && rdma_ctl->__num_devices < MAX_IB_DEVS; d++) {
     struct ibv_context* context = ibv_open_device(devices[d]);
     if (context == nullptr) {
       UCCL_LOG_ERROR << "Unable to open device " << devices[d]->name;
@@ -199,18 +225,34 @@ int RDMAFactory::init_devs() {
                     << " on dev: " << devices[d]->name;
       }
 
-      LOG(INFO) << "Found IB device #" << __num_devices << " :"
+      LOG(INFO) << "Found IB device #" << rdma_ctl->__num_devices << " :"
                 << devices[d]->name << " with port " << port_num << " / "
                 << (int)dev_attr.phys_port_cnt;
 
-      rdma_ctl->devices_.push_back(dev);
+      // Assign each RDMA NIC with a unique index ranked by their name.
+      auto dev_it = std::find_if(
+          ib_nics.begin(), ib_nics.end(),
+          [&](auto const& ib_nic) { return ib_nic.first == devices[d]->name; });
+      if (dev_it == ib_nics.end()) {
+        DCHECK(false) << "RDMA NIC " << devices[d]->name
+                      << " not found in devs got from get_rdma_nics(): ";
+        for (auto const& ib_nic : ib_nics) {
+          printf("\t%s\n", ib_nic.first.c_str());
+        }
+        continue;
+      }
+      int dev_idx = std::distance(ib_nics.begin(), dev_it);
+      DCHECK(dev_idx < MAX_IB_DEVS)
+          << "dev_idx: " << dev_idx << " >= MAX_IB_DEVS: " << MAX_IB_DEVS;
+
+      rdma_ctl->devices_[dev_idx] = dev;
       UCCL_LOG_RE << "Initialized " << devices[d]->name;
 
-      __num_devices++;
+      rdma_ctl->__num_devices++;
     }
   }
   ibv_free_device_list(devices);
-  return __num_devices;
+  return rdma_ctl->__num_devices;
 
 error:
   UCCL_INIT_CHECK(false, "Failed to initialize RDMAFactory");
