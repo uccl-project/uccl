@@ -19,23 +19,28 @@ import time
 from typing import List
 
 import torch
-import pyproxy
+
+try:
+    from uccl import gpu_driven
+except ImportError as exc:
+    sys.stderr.write("Failed to import gpu_driven\n")
+    raise
 
 
 def make_proxies(
-    bench: pyproxy.Bench,
+    bench: gpu_driven.Bench,
     buf_addr: int,
     total_size: int,
     rank: int,
     peer_ip: str,
     mode: str,
-) -> List[pyproxy.Proxy]:
+) -> List[gpu_driven.Proxy]:
     env = bench.env_info()
     num_blocks = int(env["blocks"])
-    proxies: List[pyproxy.Proxy] = []
+    proxies: List[gpu_driven.Proxy] = []
     for i in range(num_blocks):
         rb_i = bench.ring_addr(i)
-        p = pyproxy.Proxy(
+        p = gpu_driven.Proxy(
             rb_addr=rb_i,
             block_idx=i,
             gpu_buffer_addr=buf_addr,
@@ -53,7 +58,9 @@ def make_proxies(
     return proxies
 
 
-def stop_proxies_gracefully(proxies: List[pyproxy.Proxy], join_ms: int = 500) -> None:
+def stop_proxies_gracefully(
+    proxies: List[gpu_driven.Proxy], join_ms: int = 500
+) -> None:
     for p in proxies:
         try:
             if hasattr(p, "request_stop"):
@@ -74,10 +81,10 @@ def stop_proxies_gracefully(proxies: List[pyproxy.Proxy], join_ms: int = 500) ->
 
 def run_rank0_sender(args):
     dev = torch.cuda.current_device()
-    pyproxy.set_device(dev)
+    gpu_driven.set_device(dev)
     print(f"[py] Using CUDA device {dev}: {torch.cuda.get_device_name(dev)}")
 
-    bench = pyproxy.Bench()
+    bench = gpu_driven.Bench()
     env = bench.env_info()
 
     nbytes = int(args.size_mb) << 20
@@ -137,10 +144,10 @@ def run_rank0_sender(args):
 
 def run_rank1_remote(args):
     dev = torch.cuda.current_device()
-    pyproxy.set_device(dev)
+    gpu_driven.set_device(dev)
     print(f"Using CUDA device {dev}: {torch.cuda.get_device_name(dev)}")
 
-    bench = pyproxy.Bench()
+    bench = gpu_driven.Bench()
     env = bench.env_info()
 
     nbytes = int(args.size_mb) << 20
@@ -156,9 +163,9 @@ def run_rank1_remote(args):
         bench, buf_addr, nbytes, rank=1, peer_ip=args.peer_ip, mode="remote"
     )
     workers = None
-    if hasattr(pyproxy, "PeerCopyManager"):
+    if hasattr(gpu_driven, "PeerCopyManager"):
         try:
-            workers = pyproxy.PeerCopyManager(src_device=0)
+            workers = gpu_driven.PeerCopyManager(src_device=0)
             workers.start_for_proxies(proxies)
             print("[rank 1] PeerCopyManager started.")
         except Exception as e:
@@ -220,7 +227,7 @@ def main():
 
     args = parse_args()
     dev = torch.cuda.current_device()
-    pyproxy.set_device(dev)
+    gpu_driven.set_device(dev)
     print(f"[py] Using CUDA device {dev}: {torch.cuda.get_device_name(dev)}")
 
     if args.rank == 0:

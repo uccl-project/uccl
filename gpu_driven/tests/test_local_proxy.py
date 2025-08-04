@@ -1,10 +1,15 @@
 import threading
 import torch
-import pyproxy
+
+try:
+    from uccl import gpu_driven
+except ImportError as exc:
+    sys.stderr.write("Failed to import gpu_driven\n")
+    raise
 
 
 def test_bench():
-    bench = pyproxy.Bench()
+    bench = gpu_driven.Bench()
     bench.start_local_proxies()
     bench.launch_gpu_issue_batched_commands()
     bench.sync_stream()
@@ -18,7 +23,7 @@ def test_bench():
 
 
 def test_proxy():
-    bench = pyproxy.Bench()
+    bench = gpu_driven.Bench()
     env = bench.env_info()
     num_blocks = int(env["blocks"])
     stream_ptr = env["stream_addr"]
@@ -31,7 +36,7 @@ def test_proxy():
     proxies = []
     for i in range(num_blocks):
         rb_i = bench.ring_addr(i)
-        p = pyproxy.Proxy(
+        p = gpu_driven.Proxy(
             rb_addr=rb_i,
             block_idx=i,
             gpu_buffer_addr=gpu_addr,
@@ -40,10 +45,10 @@ def test_proxy():
         p.start_local()
         proxies.append(p)
     bench.timing_start()
-    pyproxy.launch_gpu_issue_kernel(
+    gpu_driven.launch_gpu_issue_kernel(
         num_blocks, int(env["threads_per_block"]), stream_ptr, rbs_ptr
     )
-    pyproxy.sync_stream()
+    gpu_driven.sync_stream()
     bench.timing_stop()
 
     for p in proxies:

@@ -36,7 +36,7 @@ PYBIND_OBJ := $(PYBIND_SRC:.cc=.o)
 TARGET_LOCAL  := benchmark_local
 TARGET_REMOTE := benchmark_remote
 TARGET_DUAL   := benchmark_dual
-PYTARGET      := pyproxy$(EXT_SUFFIX)
+PYTARGET      := gpu_driven$(EXT_SUFFIX)
 
 .PHONY: all py clean
 

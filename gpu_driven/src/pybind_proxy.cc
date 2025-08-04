@@ -314,7 +314,7 @@ class PeerCopyManager {
   std::vector<std::thread> threads_;
 };
 #endif
-PYBIND11_MODULE(pyproxy, m) {
+PYBIND11_MODULE(gpu_driven, m) {
   m.doc() = "Python bindings for RDMA proxy and granular benchmark control";
   m.def("alloc_cmd_ring", &alloc_cmd_ring,
         "Allocate pinned DeviceToHostCmdBuffer and return its address");
