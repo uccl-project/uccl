@@ -22,16 +22,23 @@ std::shared_ptr<RDMAFactory> rdma_ctl;
 static char uccl_ifname[MAX_IF_NAME_SIZE + 1];
 static union socketAddress uccl_ifaddr;
 
+#ifndef DISABLE_CALL_ONCE_STATIC
 static int __num_devices = 0;
-
+#else
+int __num_devices = 0;
+#endif
 int RDMAFactory::init_devs() {
   int num_devs;
   struct ibv_device** devices;
 
+#ifndef DISABLE_CALL_ONCE_STATIC
   static std::once_flag init_flag;
-  std::call_once(init_flag,
-                 []() { rdma_ctl = std::make_shared<RDMAFactory>(); });
-
+  std::call_once(init_flag, []() {
+#endif
+    rdma_ctl = std::make_shared<RDMAFactory>();
+#ifndef DISABLE_CALL_ONCE_STATIC
+  });
+#endif
   //  Find interface for connection setup.
   int num_ifs = find_interfaces(uccl_ifname, &uccl_ifaddr, MAX_IF_NAME_SIZE, 1);
   if (num_ifs != 1) UCCL_INIT_CHECK(false, "No IP interface found");

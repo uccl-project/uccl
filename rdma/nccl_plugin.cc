@@ -324,7 +324,9 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
 
   *listenComm = lcomm;
 
-  UCCL_LOG_PLUGIN << "Listen on dev: " << dev << " from PID: " << getpid();
+  UCCL_LOG_PLUGIN << "Listen on dev: " << dev << " from PID: " << getpid()
+                  << ", listen_fd: " << listen_fd
+                  << ", port: " << ntohs(serv_addr.sin_port);
 
   return ncclSuccess;
 }
@@ -390,6 +392,9 @@ ncclResult_t pluginAccept(void* listenComm, void** recvComm,
                           ncclNetDeviceHandle_v8_t** /*recvDevComm*/) {
   struct ucclListenComm* lcomm = (struct ucclListenComm*)listenComm;
 
+  UCCL_LOG_PLUGIN << "pluginAccept: listen_fd: " << lcomm->listen_fd
+                  << ", dev: " << lcomm->dev << ", state: " << lcomm->state;
+
   struct ucclRecvComm* rcomm =
       (struct ucclRecvComm*)calloc(1, sizeof(struct ucclRecvComm));
 
@@ -399,6 +404,8 @@ ncclResult_t pluginAccept(void* listenComm, void** recvComm,
     std::thread t = std::thread([lcomm] {
       std::string remote_ip_str;
       int remote_dev;
+      UCCL_LOG_PLUGIN << "Thread calling uccl_accept with listen_fd: "
+                      << lcomm->listen_fd;
       lcomm->accept_buffer.base.conn_id =
           ep->uccl_accept(lcomm->dev, lcomm->listen_fd, lcomm->gpuidx,
                           remote_ip_str, &remote_dev);

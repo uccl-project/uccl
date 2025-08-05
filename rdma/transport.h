@@ -1227,8 +1227,14 @@ class UcclFlow {
     memset(&recv_comm_, 0, sizeof(recv_comm_));
     int num_devices = ep->get_num_devices();
     // Avoid all flows using the same initial engine offset.
+
+#ifdef DISABLE_CALL_ONCE_STATIC
+    std::vector<std::atomic<uint32_t>>* off =
+        new std::vector<std::atomic<uint32_t>>(num_devices);
+#else
     static std::vector<std::atomic<uint32_t>>* off =
         new std::vector<std::atomic<uint32_t>>(num_devices);
+#endif
     next_engine_offset_ = (*off)[dev].fetch_add(1) % ucclParamNUM_ENGINES();
   }
 
@@ -1265,6 +1271,9 @@ class UcclFlow {
                         kMaxReq * kMaxRecv, kMaxReq * kMaxRecv, 1, 1);
     comm_base->fifo =
         reinterpret_cast<struct RemFifo*>(comm_base->fifo_mr->addr);
+
+    // Initialize FIFO memory to zero to ensure clean state
+    memset(comm_base->fifo, 0, kFifoMRSize);
 
     // Exchange local QPN for Fifo QP with remote peer.
     char buf[sizeof(uint32_t)];

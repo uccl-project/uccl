@@ -41,7 +41,7 @@ CAPI_HEADER := uccl_engine.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
 SOURCES := engine.cc pybind_engine.cc
 CORE_SOURCE := engine.cc
-CORE_OBJECT := $(CORE_SOURCE:.cc=.o)
+CORE_OBJECT := engine_plugin.o
 OBJECTS := $(SOURCES:.cc=.o)
 
 # Default target
@@ -57,16 +57,24 @@ $(TARGET): $(OBJECTS) ../rdma/librdma.a
 $(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECT) ../rdma/librdma.a
 	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) ../rdma/librdma.a \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
-	      -o $@ $(LDFLAGS) $(CXXFLAGS) \
+	      -o $@ $(LDFLAGS) $(CXXFLAGS) -DDISABLE_CALL_ONCE_STATIC \
 	      -Wl,-rpath,$(CUDA_LIB)
 
 
 ../rdma/librdma.a: $(filter-out ../rdma/nccl_plugin.cc, $(wildcard ../rdma/*.cc)) ../rdma/*.h
-	make CXXFLAGS=-DLAZY_CREATE_ENGINE -C ../rdma librdma.a
+	make CXXFLAGS="-DLAZY_CREATE_ENGINE -DDISABLE_CALL_ONCE_STATIC" -C ../rdma librdma.a
 
 # Compile source files
 %.o: %.cc
-	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -DWITH_PYTHON -c $< -o $@
+
+# Compile engine.cc for plugin (without Python flags)
+engine_plugin.o: engine.cc
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Compile CAPI source file (without Python flags)
+$(CAPI_OBJECT): $(CAPI_SOURCE) $(CAPI_HEADER)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # Install the module
 install: $(TARGET) $(PLUGIN_SO)
@@ -77,7 +85,7 @@ install: $(TARGET) $(PLUGIN_SO)
 	install -m 644 $(CAPI_HEADER) $(INCDIR)/
 # Clean build artifacts
 clean:
-	rm -f $(OBJECTS) $(TARGET) $(PLUGIN_SO)
+	rm -f $(OBJECTS) $(CORE_OBJECT) $(CAPI_OBJECT) $(TARGET) $(PLUGIN_SO)
 	make -C ../rdma clean
 
 # Test the module

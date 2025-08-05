@@ -7,6 +7,7 @@
 #include <condition_variable>
 #include <cstring>
 #include <functional>
+#include <future>
 #include <mutex>
 #include <queue>
 #include <string>
@@ -54,6 +55,22 @@ class ThreadPool {
     condition.notify_all();
     for (std::thread& worker : workers) {
       if (worker.joinable()) worker.join();
+    }
+  }
+
+  // Force destroy without waiting for threads to finish
+  void force_destroy() {
+    {
+      std::unique_lock<std::mutex> lock(queue_mutex);
+      stop_flag = true;
+    }
+    condition.notify_all();
+
+    // Detach all threads instead of joining
+    for (std::thread& worker : workers) {
+      if (worker.joinable()) {
+        worker.detach();
+      }
     }
   }
 
@@ -224,9 +241,24 @@ int uccl_engine_stop_listener(uccl_conn_t* conn) {
   // Signal the thread to stop
   conn->listener_running = false;
 
-  // Wait for the thread to finish
+  // Close the socket to unblock the recv() call
+  if (conn->sock_fd >= 0) {
+    close(conn->sock_fd);
+    conn->sock_fd = -1;
+  }
+
+  // Wait for the thread to finish with a timeout
   if (conn->listener_thread && conn->listener_thread->joinable()) {
-    conn->listener_thread->join();
+    // Try to join with a timeout
+    auto future = std::async(std::launch::async,
+                             [conn]() { conn->listener_thread->join(); });
+
+    if (future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
+      // Thread is stuck, detach it and let it die naturally
+      std::cout << "Warning: Listener thread not responding, detaching..."
+                << std::endl;
+      conn->listener_thread->detach();
+    }
   }
 
   // Clean up
@@ -239,7 +271,10 @@ int uccl_engine_stop_listener(uccl_conn_t* conn) {
 void uccl_engine_conn_destroy(uccl_conn_t* conn) {
   if (conn) {
     uccl_engine_stop_listener(conn);
-    delete conn->recv_thread_pool;
+    if (conn->recv_thread_pool) {
+      conn->recv_thread_pool->force_destroy();
+      delete conn->recv_thread_pool;
+    }
     delete conn;
   }
 }
@@ -258,12 +293,22 @@ void uccl_engine_mr_destroy(uccl_mr_t* mr) {
 void listener_thread_func(uccl_conn_t* conn) {
   const size_t buffer_size = 4096;  // 4KB buffer for receiving messages
   char* buffer = new char[buffer_size];
+  std::cout << "Listener thread: Waiting for metadata." << std::endl;
 
-  while (1) {
+  while (conn->listener_running) {
+    // Set socket to non-blocking mode with timeout
+    struct timeval timeout;
+    timeout.tv_sec = 1;
+    timeout.tv_usec = 0;
+    setsockopt(conn->sock_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout,
+               sizeof(timeout));
+
     metadata_t md;
-    std::cout << "Listener thread: Waiting for metadata" << std::endl;
     ssize_t recv_size = recv(conn->sock_fd, &md, sizeof(metadata_t), 0);
     if (recv_size != sizeof(metadata_t)) {
+      if (!conn->listener_running) {
+        break;
+      }
       // Error receiving metadata or incomplete metadata, sleep briefly before
       // retrying
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
