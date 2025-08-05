@@ -1155,11 +1155,24 @@ static int cal_pcie_distance(fs::path const& devA, fs::path const& devB) {
 }
 
 static std::vector<fs::path> get_gpu_cards() {
-  // Discover GPU BDF using /sys/class/drm/cardX/device symlinks
+  // Get the device properties
+  int num_gpus;
+  GPU_RT_CHECK(gpuGetDeviceCount(&num_gpus));
+  char bdf[32];
+  std::vector<std::string> gpu_cards_ranked;
+  gpu_cards_ranked.reserve(num_gpus);
+  for (int i = 0; i < num_gpus; i++) {
+    // This order is aligned with PyTorch's GPU rank order.
+    GPU_RT_CHECK(gpuDeviceGetPCIBusId(bdf, sizeof(bdf), i));
+    gpu_cards_ranked.push_back(bdf);
+  }
+
   std::vector<fs::path> gpu_cards;
+  std::unordered_map<fs::path, int> gpu_cards_rank_map;
+
+  // Discover GPU BDF using /sys/class/drm/cardX/device symlinks
   const fs::path drm_class{"/sys/class/drm"};
   const std::regex card_re(R"(card(\d+))");
-
   if (fs::exists(drm_class)) {
     for (auto const& entry : fs::directory_iterator(drm_class)) {
       const std::string name = entry.path().filename();
@@ -1172,10 +1185,17 @@ static std::vector<fs::path> get_gpu_cards() {
       std::ifstream vf(dev_path / "vendor");
       std::string vs;
       if (!(vf >> vs)) continue;
-      uint32_t vendor = std::stoul(vs, nullptr, 0);  // handles "0x10de"
-
+      uint32_t vendor = std::stoul(vs, nullptr, 0);        // handles "0x10de"
       if (vendor != 0x10de && vendor != 0x1002) continue;  // NVIDIA or AMD
 
+      // Extract PCI bus ID from the last component of the device path
+      std::string pci_busid = dev_path.filename();
+      auto it = std::find(gpu_cards_ranked.begin(), gpu_cards_ranked.end(),
+                          pci_busid);
+      CHECK(it != gpu_cards_ranked.end())
+          << "GPU card " << pci_busid << " not found in ranked list";
+      auto distance = std::distance(gpu_cards_ranked.begin(), it);
+      gpu_cards_rank_map[dev_path] = distance;
       gpu_cards.push_back(dev_path);
     }
   }
@@ -1183,13 +1203,21 @@ static std::vector<fs::path> get_gpu_cards() {
   const fs::path nvidia_gpus{"/proc/driver/nvidia/gpus"};
   if (gpu_cards.empty() && fs::exists(nvidia_gpus)) {
     for (auto const& entry : fs::directory_iterator(nvidia_gpus)) {
-      gpu_cards.push_back(entry.path());
+      fs::path dev_path = fs::canonical(entry.path());
+      std::string pci_busid = dev_path.filename();
+      auto it = std::find(gpu_cards_ranked.begin(), gpu_cards_ranked.end(),
+                          pci_busid);
+      CHECK(it != gpu_cards_ranked.end())
+          << "GPU card " << pci_busid << " not found in ranked list";
+      auto distance = std::distance(gpu_cards_ranked.begin(), it);
+      gpu_cards_rank_map[dev_path] = distance;
+      gpu_cards.push_back(dev_path);
     }
   }
 
   std::sort(gpu_cards.begin(), gpu_cards.end(),
-            [](fs::path const& a, fs::path const& b) {
-              return a.filename() < b.filename();
+            [&gpu_cards_rank_map](fs::path const& a, fs::path const& b) {
+              return gpu_cards_rank_map[a] < gpu_cards_rank_map[b];
             });
 
   return gpu_cards;

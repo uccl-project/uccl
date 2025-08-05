@@ -228,7 +228,7 @@ class CollectiveContext:
             raise RuntimeError(f"Accept errors: {'; '.join(accept_errors)}")
 
         print(
-            f"[Rank {self.rank}] Full mesh established: {len(self.send_connections)} send connections, {len(self.recv_connections)} recv connections"
+            f"[Rank {self.rank}] Full mesh established: {len(self.send_connections) - 1} send connections, {len(self.recv_connections) - 1} recv connections"
         )
 
     def _get_buffer_info(self, tensor: torch.Tensor) -> Tuple[int, int]:

@@ -19,6 +19,7 @@
 #define gpuGetDevice cudaGetDevice
 #define gpuGetDeviceCount cudaGetDeviceCount
 #define gpuGetDeviceProperties cudaGetDeviceProperties
+#define gpuDeviceGetPCIBusId cudaDeviceGetPCIBusId
 #define gpuDeviceCanAccessPeer cudaDeviceCanAccessPeer
 #define gpuDeviceEnablePeerAccess cudaDeviceEnablePeerAccess
 #define gpuIpcMemHandle_t cudaIpcMemHandle_t
@@ -62,6 +63,7 @@
 #define gpuGetDeviceCount hipGetDeviceCount
 #define gpuGetDeviceProperties hipGetDeviceProperties
 #define gpuDeviceProp hipDeviceProp_t
+#define gpuDeviceGetPCIBusId hipDeviceGetPCIBusId
 #define gpuDeviceCanAccessPeer hipDeviceCanAccessPeer
 #define gpuDeviceEnablePeerAccess hipDeviceEnablePeerAccess
 #define gpuIpcMemHandle_t hipIpcMemHandle_t

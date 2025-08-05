@@ -46,7 +46,7 @@ $(TARGET): $(OBJECTS) ../rdma/librdma.a
 
 
 ../rdma/librdma.a: ../rdma/*.cc ../rdma/*.h
-	make -C ../rdma
+	make -C ../rdma -j$(nproc)
 
 # Compile source files
 %.o: %.cc
@@ -61,7 +61,7 @@ install: $(TARGET)
 # Clean build artifacts
 clean:
 	rm -f $(OBJECTS) $(TARGET)
-	make -C ../rdma clean
+	make -C ../rdma clean -j$(nproc)
 
 # Test the module
 test: $(TARGET)

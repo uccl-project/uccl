@@ -47,7 +47,7 @@ $(TARGET): $(OBJECTS) ../rdma/librdma_hip.a
 
 
 ../rdma/librdma_hip.a: ../rdma/*.cc ../rdma/*.h
-	make -C ../rdma -f MakefileHip
+	make -C ../rdma -f MakefileHip -j$(nproc)
 
 # Compile source files
 %.o: %.cc
@@ -62,7 +62,7 @@ install: $(TARGET)
 # Clean build artifacts
 clean:
 	rm -f $(OBJECTS) $(TARGET)
-	make -C ../rdma clean
+	make -C ../rdma -f MakefileHip clean -j$(nproc)
 
 # Test the module
 test: $(TARGET)

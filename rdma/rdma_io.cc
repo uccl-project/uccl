@@ -66,14 +66,15 @@ int RDMAFactory::init_devs() {
   {
     // Sorted by the GPU name.
     gpu_cards = get_gpu_cards();
-    printf("Found %ld GPUs\n", gpu_cards.size());
+    printf("Found %ld GPUs (ordered by GPU rank):\n", gpu_cards.size());
+    int i = 0;
     for (auto const& gpu_card : gpu_cards) {
-      printf("\tGPU %s\n", gpu_card.c_str());
+      printf("\tGPU %d: %s\n", i++, gpu_card.c_str());
     }
 
     // Sorted by the RDMA NIC name.
     ib_nics = get_rdma_nics();
-    printf("Found %ld RDMA NICs\n", ib_nics.size());
+    printf("Found %ld RDMA NICs (ordered by NIC name):\n", ib_nics.size());
     for (auto const& [ib_name, ib_path] : ib_nics) {
       printf("\tRDMA NIC %s: %s\n", ib_name.c_str(), ib_path.c_str());
     }
