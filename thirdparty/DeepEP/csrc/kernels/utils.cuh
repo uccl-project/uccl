@@ -158,7 +158,7 @@ __device__  __forceinline__ int64_t ld_volatile_global(const uint64_t *ptr) {
 #ifndef DISABLE_AGGRESSIVE_PTX_INSTRS
 #define LD_NC_FUNC "ld.global.nc.L1::no_allocate.L2::256B"
 #else
-#define LD_NC_FUNC "ld.volatile.global.L2::256B"
+#define LD_NC_FUNC "ld.volatile.global"
 #endif
 
 // `ld.global.nc.L1::no_allocate` will be translated into `LDG.E.NA.[width].CONSTANT` in SASS
