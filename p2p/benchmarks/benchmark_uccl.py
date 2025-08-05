@@ -44,7 +44,8 @@ def _make_buffer(size_bytes: int, device: str, gpu_idx: int):
     if device == "gpu":
         dtype = torch.float32 if size_bytes >= 4 else torch.uint8
         n_elems = size_bytes // dtype.itemsize
-        buf = torch.ones(n_elems, dtype=dtype, device=f"cuda:{gpu_idx}")
+        buf = torch.ones(n_elems, dtype=dtype).cuda()
+        assert buf.device.type == "cuda"
         assert buf.is_contiguous()
         ptr = buf.data_ptr()
     else:  # cpu
@@ -215,6 +216,121 @@ def _run_client(args, ep, remote_metadata):
     print("[Client] Benchmark complete")
 
 
+def _run_server_dual(args, ep, remote_metadata):
+    ip, port, r_gpu = parse_metadata(remote_metadata)
+
+    print("[Server] Waiting for connection …", flush=True)
+    ok, r_ip, r_gpu2, conn_id = ep.accept()
+    assert ok, "[Server] Failed to accept RDMA connection"
+    print(f"[Server] Accept from {r_ip} (GPU {r_gpu2}) conn_id={conn_id}")
+
+    ok, conn_id2 = ep.connect(ip, r_gpu, remote_port=port)
+    assert ok, "[Server] Failed to connect to client"
+    print(f"[Server] Connected to {ip}:{port} (GPU {r_gpu}) conn_id={conn_id2}")
+
+    for size in args.sizes:
+        buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx)
+        ok, mr_id = ep.reg(ptr, size)
+        assert ok, "[Server] register failed"
+        # ep.recv(conn_id, mr_id, ptr, size)
+
+        buf2, ptr2 = _make_buffer(size, args.device, args.local_gpu_idx)
+        ok, mr_id2 = ep.reg(ptr2, size)
+        assert ok, "[Server] register failed"
+        # ep.send(conn_id, mr_id2, ptr2, size)
+
+        start = time.perf_counter()
+        total_recv = 0
+        for _ in range(args.iters):
+            transfer_ids = []
+
+            ok, transfer_id = ep.recv_async(conn_id, mr_id, ptr, size)
+            assert ok, "[Server] recv error"
+            transfer_ids.append(transfer_id)
+
+            ok, transfer_id2 = ep.send_async(conn_id2, mr_id2, ptr2, size)
+            assert ok, "[Server] send error"
+            transfer_ids.append(transfer_id2)
+
+            for transfer_id in transfer_ids:
+                is_done = False
+                while not is_done:
+                    ok, is_done = ep.poll_async(transfer_id)
+                    assert ok, "[Server] poll error"
+
+            # ok = ep.send(conn_id, mr_id2, ptr2, size)
+            # assert ok, "[Server] send error"
+
+            total_recv += size
+        elapsed = time.perf_counter() - start
+
+        gbps = (total_recv * 8) / elapsed / 1e9  # bits per second → Gbps
+        gb_sec = total_recv / elapsed / 1e9  # bytes per second → GB/s
+        lat = elapsed / args.iters
+
+        print(
+            f"[Server] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
+        )
+    print("[Server] Benchmark complete")
+
+
+def _run_client_dual(args, ep, remote_metadata):
+    ip, port, r_gpu = parse_metadata(remote_metadata)
+
+    ok, conn_id = ep.connect(ip, r_gpu, remote_port=port)
+    assert ok, "[Client] Failed to connect to server"
+    print(f"[Client] Connected to {ip}:{port} (GPU {r_gpu}) conn_id={conn_id}")
+
+    ok, r_ip, r_gpu2, conn_id2 = ep.accept()
+    assert ok, "[Client] Failed to accept RDMA connection"
+    print(f"[Client] Accept from {r_ip} (GPU {r_gpu2}) conn_id={conn_id2}")
+
+    for size in args.sizes:
+        buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx)
+        ok, mr_id = ep.reg(ptr, size)
+        assert ok, "[Client] register failed"
+        # ep.send(conn_id, mr_id, ptr, size)
+
+        buf2, ptr2 = _make_buffer(size, args.device, args.local_gpu_idx)
+        ok, mr_id2 = ep.reg(ptr2, size)
+        assert ok, "[Client] register failed"
+        # ep.recv(conn_id, mr_id2, ptr2, size)
+
+        start = time.perf_counter()
+        total_sent = 0
+        for _ in range(args.iters):
+            transfer_ids = []
+
+            ok, transfer_id = ep.send_async(conn_id, mr_id, ptr, size)
+            assert ok, "[Client] send error"
+            transfer_ids.append(transfer_id)
+
+            ok, transfer_id2 = ep.recv_async(conn_id2, mr_id2, ptr2, size)
+            assert ok, "[Client] recv error"
+            transfer_ids.append(transfer_id2)
+
+            for transfer_id in transfer_ids:
+                is_done = False
+                while not is_done:
+                    ok, is_done = ep.poll_async(transfer_id)
+                    assert ok, "[Client] poll error"
+
+            # ok = ep.recv(conn_id, mr_id2, ptr2, size)
+            # assert ok, "[Client] recv error"
+
+            total_sent += size
+        elapsed = time.perf_counter() - start
+
+        gbps = (total_sent * 8) / elapsed / 1e9
+        gb_sec = total_sent / elapsed / 1e9
+        lat = elapsed / args.iters
+
+        print(
+            f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
+        )
+    print("[Client] Benchmark complete")
+
+
 def parse_size_list(val: str) -> List[int]:
     try:
         return [int(s) for s in val.split(",") if s]
@@ -249,6 +365,7 @@ def main():
             262144,
             1048576,
             10485760,
+            16 * 1024 * 1024,
             104857600,
         ],
         help="Comma separated list of message sizes in bytes",
@@ -270,6 +387,11 @@ def main():
         action="store_true",
         help="Use asynchronous transfers",
     )
+    p.add_argument(
+        "--dual",
+        action="store_true",
+        help="Run dual benchmark",
+    )
     args = p.parse_args()
 
     if args.async_api:
@@ -286,6 +408,7 @@ def main():
     print(
         f"Device: {args.device} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}"
     )
+    torch.cuda.set_device(f"cuda:{args.local_gpu_idx}")
 
     ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
     local_metadata = ep.get_endpoint_metadata()
@@ -301,10 +424,16 @@ def main():
         dist.send(torch.ByteTensor(list(local_metadata)), dst=0)
         remote_metadata = bytes(remote_metadata_tensor.tolist())
 
-    if rank == 0:
-        _run_client(args, ep, remote_metadata)
-    elif rank == 1:
-        _run_server(args, ep, remote_metadata)
+    if args.dual:
+        if rank == 0:
+            _run_client_dual(args, ep, remote_metadata)
+        else:
+            _run_server_dual(args, ep, remote_metadata)
+    else:
+        if rank == 0:
+            _run_client(args, ep, remote_metadata)
+        else:
+            _run_server(args, ep, remote_metadata)
 
     dist.destroy_process_group()
 

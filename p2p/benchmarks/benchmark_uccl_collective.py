@@ -23,7 +23,8 @@ from uccl import collective
 def _make_buffer(size_bytes: int):
     """Allocate a contiguous GPU tensor of *size_bytes* and return it."""
     n_elems = size_bytes // 4  # float32
-    tensor = torch.ones(n_elems, dtype=torch.float32)
+    tensor = torch.ones(n_elems, dtype=torch.float32).cuda()
+    assert tensor.device.type == "cuda"
     return tensor
 
 

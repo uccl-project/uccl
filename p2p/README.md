@@ -106,43 +106,38 @@ Navigate to `benchmarks` directory:
 
 On client: 
 ```bash
-torchrun --nnodes=2 --nproc_per_node=1 --node-rank=0 --master_addr=<IP addr> \
-    benchmark_uccl.py --device gpu --local-gpu-idx 0 --num-cpus 4
+torchrun --nnodes=2 --nproc_per_node=1 --node-rank=0 --master_addr=<IP addr> benchmark_uccl.py
 ```
 
 On server:
 ```bash
-torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> \
-    benchmark_uccl.py --device gpu --local-gpu-idx 0 --num-cpus 4
+torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> benchmark_uccl.py
 ```
 
 Notes: 
 * You may consider exporting `GLOO_SOCKET_IFNAME=xxx` if triggering Gloo connectFullMesh failure.
 * To benchmark on AMD GPUs, you need to specify `UCCL_RCMODE=1`. 
 * **You must first import `torch` before importing `uccl.p2p` for AMD GPUs**, otherwise, `RuntimeError: No HIP GPUs are available` will occur. We guess this is because torch does some extra init for AMD GPUs, in order for Pybind-C++ code to use AMD GPUs. 
-* To benchmark dual direction transfer, you can run `benchmark_uccl_dual.py` with the same commands as above. 
+* To benchmark dual direction transfer, you can add `--dual` with the same commands as above. 
 * To benchmark one-sided READ transfer, you can run `benchmark_uccl_read.py`.
+* To benchmark UCCL copy-only collectives, you can run `benchmark_uccl_collective.py`
 
 ### Running NCCL
 
 On Client:
 ```bash
-NCCL_NCHANNELS_PER_NET_PEER=4 \
-torchrun --nnodes=2 --nproc_per_node=1 --node-rank=0 --master_addr=<IP addr> \
-    benchmark_nccl.py --device gpu --local-gpu-idx 0
+NCCL_NCHANNELS_PER_NET_PEER=4 torchrun --nnodes=2 --nproc_per_node=1 --node-rank=0 --master_addr=<IP addr> benchmark_nccl.py
 ```
 
 On Server:
 ```bash
-NCCL_NCHANNELS_PER_NET_PEER=4 \
-torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> \
-    benchmark_nccl.py --device gpu --local-gpu-idx 0
+NCCL_NCHANNELS_PER_NET_PEER=4 torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> benchmark_nccl.py
 ```
 
 Notes: 
 * You can specify `NCCL_IB_HCA=mlx5_2:1` to control which NIC and port to use. 
 * If you see errors like `message size truncated`, it is likely caused by NCCL version mismatch. We suggest specifying `LD_PRELOAD=<path to libnccl.so.2>`. 
-* To benchmark dual direction transfer, you can run `benchmark_nccl_dual.py`. 
+* To benchmark dual direction transfer, you can add `--dual`. 
 * This also works for AMD GPUs.
 
 ### Running NIXL with UCX backend
@@ -193,13 +188,13 @@ export LD_LIBRARY_PATH="$UCX_LIB_PATH:$CONDA_PREFIX/lib/python3.13/site-packages
 On Server:
 ```bash
 UCX_MAX_RMA_LANES=4 UCX_IB_PCI_RELAXED_ORDERING=on UCX_NET_DEVICES=mlx5_2:1 UCX_TLS=cuda,rc \
-python benchmark_nixl.py --role server --device gpu --local-gpu-idx 0
+python benchmark_nixl.py --role server
 ```
 
 On Client:
 ```bash
 UCX_MAX_RMA_LANES=4 UCX_IB_PCI_RELAXED_ORDERING=on UCX_NET_DEVICES=mlx5_2:1 UCX_TLS=cuda,rc \
-python benchmark_nixl.py --role client --device gpu --local-gpu-idx 0 --remote-ip <Server IP>
+python benchmark_nixl.py --role client --remote-ip <Server IP>
 ```
 
 Notes: 
@@ -249,13 +244,12 @@ export LD_LIBRARY_PATH="$CONDA_PREFIX/lib/python3.13/site-packages/.nixl.mesonpy
 
 On Server:
 ```bash
-python benchmark_nixl.py --role server --device gpu --local-gpu-idx 0 --backend mooncake
+python benchmark_nixl.py --role server --backend mooncake
 ```
 
 On Client:
 ```bash
-python benchmark_nixl.py --role client --remote-ip <Server IP> --device gpu \
-    --local-gpu-idx 0 --backend mooncake
+python benchmark_nixl.py --role client --remote-ip <Server IP> --backend mooncake
 ```
 
 
