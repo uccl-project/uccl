@@ -49,10 +49,10 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
             print("[simple-test] ✓ Buffer created successfully", flush=True)
 
         # Test low-latency dispatch
-        num_max_dispatch_tokens_per_rank = 256
-        buffer.clean_low_latency_buffer(
-            num_max_dispatch_tokens_per_rank, hidden, num_experts
-        )
+        # num_max_dispatch_tokens_per_rank = 256
+        # buffer.clean_low_latency_buffer(
+        #     num_max_dispatch_tokens_per_rank, hidden, num_experts
+        # )
 
         cumulative_local_expert_recv_stats = torch.zeros(
             (num_experts // num_ranks,), dtype=torch.int, device="cuda"
@@ -67,8 +67,9 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
             use_ue8m0=False,
             cumulative_local_expert_recv_stats=cumulative_local_expert_recv_stats,
             async_finish=False,
-            return_recv_hook=False,
+            return_recv_hook=True,
         )
+        hook()
 
         if rank == 0:
             print("[simple-test] ✓ Low-latency dispatch completed", flush=True)
@@ -86,8 +87,9 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
             use_logfmt=False,
             zero_copy=False,
             async_finish=False,
-            return_recv_hook=False,
+            return_recv_hook=True,
         )
+        combine_hook()
 
         if rank == 0:
             print("[simple-test] ✓ Low-latency combine completed", flush=True)
