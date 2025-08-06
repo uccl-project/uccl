@@ -1,4 +1,5 @@
-FROM rocm/dev-ubuntu-22.04
+# FROM rocm/dev-ubuntu-22.04
+FROM yuankaichenamd/megatron_rocm_private:v25.5.1.uccl.2
 ARG PY_VER=3.13
 
 ARG UID=300168
