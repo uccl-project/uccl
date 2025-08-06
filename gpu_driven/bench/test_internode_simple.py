@@ -7,7 +7,17 @@ import argparse
 import os
 import torch
 import torch.distributed as dist
-import deep_ep
+
+# import deep_ep as ep
+try:
+    from uccl import uccl_ep as ep
+except ImportError as exc:
+    import sys
+
+    sys.stderr.write("Failed to import uccl_ep\n")
+    raise
+
+
 from utils import init_dist
 
 
@@ -36,7 +46,7 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
 
     try:
         # Use only RDMA buffer, no NVLink buffer to avoid IPC issues
-        buffer = deep_ep.Buffer(
+        buffer = ep.Buffer(
             group,
             0,
             int(1e9),
