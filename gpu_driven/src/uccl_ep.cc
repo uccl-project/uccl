@@ -50,7 +50,8 @@ class Buffer {
     }
 
     py::object none = py::none();
-    py::object hook = py::cpp_function([]() {});
+    py::object hook =
+        py::cpp_function([]() { py::print("Dispatch hook is invoked"); });
     return py::make_tuple(recv_x, recv_count, py::int_(h), none,
                           return_recv_hook ? hook : py::none());
   }
@@ -74,7 +75,8 @@ class Buffer {
                             py::arg("device") = recv_x.attr("device"),
                             py::arg("dtype") = recv_x.attr("dtype"));
     py::object none = py::none();
-    py::object hook = py::cpp_function([]() {});
+    py::object hook =
+        py::cpp_function([]() { py::print("Combine is invoked"); });
     return py::make_tuple(combined, none, return_recv_hook ? hook : py::none());
   }
 
