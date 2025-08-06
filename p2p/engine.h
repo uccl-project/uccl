@@ -9,8 +9,8 @@
 #ifdef WITH_PYTHON
 #include <pybind11/pybind11.h>
 #endif
-#include <mutex>
 #include <atomic>
+#include <mutex>
 #include <shared_mutex>
 #include <string>
 #include <thread>
