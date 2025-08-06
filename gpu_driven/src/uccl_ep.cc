@@ -21,18 +21,22 @@ static std::unordered_map<long, Ctx> g_ctx;
 
 class Buffer {
  public:
-  Buffer(py::object group, int device_index, long bytes, bool llm, int qps,
+  Buffer(py::object group, long num_nvl_bytes, long num_rdma_bytes,
+         bool low_latency_mode, int num_qps_per_rank,
+         bool allow_nvlink_for_low_latency_mode, bool allow_mnnvl,
          bool explicitly_destroy)
-      : group_(std::move(group)), device_index_(device_index) {
+      : group_(std::move(group)), device_index_(-1) {
     std::lock_guard<std::mutex> lk(g_proxy_mu);
-    auto it = g_proxy_by_dev.find(device_index_);
+    auto device_index = group_.attr("rank")().cast<int>();
+    auto it = g_proxy_by_dev.find(device_index);
     if (it == g_proxy_by_dev.end() || it->second.is_none()) {
       throw std::runtime_error(
           "uccl_ep.Buffer: no UcclProxy registered for device " +
-          std::to_string(device_index_) +
+          std::to_string(device_index) +
           ". Call uccl.uccl_ep.register_proxy(device_index, proxy) first.");
     }
     proxy_ = it->second;
+    device_index_ = device_index;
   }
 
   void destroy() {}
@@ -90,8 +94,6 @@ class Buffer {
       py::object combine_wait_recv_cost_stats = py::none()) {
     py::object torch = py::module::import("torch");
     auto shape = x.attr("shape").cast<py::tuple>();
-    long const num_tokens = shape[0].cast<long>();
-    long const hidden = shape[1].cast<long>();
     py::object dev = x.attr("device");
     py::object dtype = x.attr("dtype");
     long h = handle.cast<py::tuple>()[0].cast<long>();
@@ -163,10 +165,13 @@ PYBIND11_MODULE(uccl_ep, m) {
 
   py::class_<EventOverlap>(m, "EventOverlap").def(py::init<>());
   py::class_<Buffer>(m, "Buffer")
-      .def(py::init<py::object, int, long, bool, int, bool>(), py::arg("group"),
-           py::arg("device_index"), py::arg("bytes"),
-           py::arg("low_latency_mode") = true, py::arg("num_qps_per_rank") = 1,
-           py::arg("explicitly_destroy") = true)
+      .def(py::init<py::object, long, long, bool, int, bool, bool, bool>(),
+           py::arg("group"), py::arg("num_nvl_bytes") = 0,
+           py::arg("num_rdma_bytes") = 0, py::arg("low_latency_mode") = false,
+           py::arg("num_qps_per_rank") = 24,
+           py::arg("allow_nvlink_for_low_latency_mode") = true,
+           py::arg("allow_mnnvl") = false,
+           py::arg("explicitly_destroy") = false)
       .def("destroy", &Buffer::destroy)
       .def("low_latency_dispatch", &Buffer::low_latency_dispatch, py::arg("x"),
            py::arg("topk_idx"), py::arg("num_max_dispatch_tokens_per_rank"),
