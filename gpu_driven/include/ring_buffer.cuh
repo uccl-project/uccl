@@ -7,8 +7,8 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
+#include <stdexcept>
 #include <vector>
-
 #ifndef COPY_RING_CAP
 #define COPY_RING_CAP 4096
 #endif
@@ -186,5 +186,26 @@ typedef RingBuffer<CopyTask, FlowDirection::HostToDevice, COPY_RING_CAP>
     HostToDeviceNVlinkBuffer;
 typedef RingBuffer<CopyTask, FlowDirection::HostToHost, COPY_RING_CAP>
     CopyRingBuffer;
+
+static inline uintptr_t alloc_cmd_ring() {
+  void* raw = nullptr;
+  auto err = cudaMallocHost(&raw, sizeof(DeviceToHostCmdBuffer));
+  if (err != cudaSuccess || raw == nullptr) {
+    throw std::runtime_error("cudaMallocHost(DeviceToHostCmdBuffer) failed");
+  }
+  auto* rb = static_cast<DeviceToHostCmdBuffer*>(raw);
+  new (rb) DeviceToHostCmdBuffer{};
+  return reinterpret_cast<uintptr_t>(rb);
+}
+
+static inline void free_cmd_ring(uintptr_t addr) {
+  if (!addr) return;
+  auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(addr);
+  rb->~DeviceToHostCmdBuffer();
+  auto err = cudaFreeHost(static_cast<void*>(rb));
+  if (err != cudaSuccess) {
+    throw std::runtime_error("cudaFreeHost(DeviceToHostCmdBuffer) failed");
+  }
+}
 
 #endif  // RING_BUFFER_CUH
