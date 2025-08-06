@@ -697,7 +697,8 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
 
   rdma_ctl_ = rdma_ctl;
 
-  ctx_pool_ = new SharedPool<PollCtx*, true>(kMaxInflightMsg);
+  ctx_pool_ = new SharedPool<PollCtx*, true>(
+      kMaxInflightMsg, [](PollCtx* ctx) { ctx->clear(); });
   ctx_pool_buf_ = new uint8_t[kMaxInflightMsg * sizeof(PollCtx)];
   for (int i = 0; i < kMaxInflightMsg; i++) {
     ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());

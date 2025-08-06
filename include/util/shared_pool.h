@@ -49,9 +49,11 @@ class SharedPool {
   Spin global_spin_;
   global_pool_t global_pool_;
   static thread_local inline ThreadCache th_cache_;
+  std::function<void(T)> cleanup_;
 
  public:
-  SharedPool(uint32_t capacity) : global_pool_(capacity) {}
+  SharedPool(uint32_t capacity, std::function<void(T)> cleanup)
+      : global_pool_(capacity), cleanup_(cleanup) {}
   ~SharedPool() { shutdown_ = true; }
   void push(T item) {
     if constexpr (Sync) {
@@ -101,6 +103,7 @@ class SharedPool {
       cache.set_global_pool_ptr(global_pool_);
       T item;
       while (cache.pop_front(&item)) {
+        cleanup_(item);
         global_pool_.push_front(item);
       }
     }
