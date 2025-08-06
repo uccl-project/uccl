@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <sstream>
 #include <vector>
 #include <sys/mman.h>
 
@@ -28,6 +29,8 @@ int RDMAFactory::init_devs() {
   struct ibv_device** devices;
   std::vector<fs::path> gpu_cards;
   std::vector<std::pair<std::string, fs::path>> ib_nics;
+  std::stringstream ib_devs_log;
+  std::string ib_devs_log_str;
 
   static std::once_flag init_flag;
   std::call_once(init_flag,
@@ -87,8 +90,9 @@ int RDMAFactory::init_devs() {
     }
   }
 
+  ib_devs_log << "Found IB devices: ";
   rdma_ctl->devices_.resize(MAX_IB_DEVS);
-  for (int d = 0; d < num_devs && rdma_ctl->__num_devices < MAX_IB_DEVS; d++) {
+  for (int d = 0; d < num_devs && rdma_ctl->num_devices < MAX_IB_DEVS; d++) {
     struct ibv_context* context = ibv_open_device(devices[d]);
     if (context == nullptr) {
       UCCL_LOG_ERROR << "Unable to open device " << devices[d]->name;
@@ -226,9 +230,9 @@ int RDMAFactory::init_devs() {
                     << " on dev: " << devices[d]->name;
       }
 
-      LOG(INFO) << "Found IB device #" << rdma_ctl->__num_devices << " :"
-                << devices[d]->name << " with port " << port_num << " / "
-                << (int)dev_attr.phys_port_cnt;
+      ib_devs_log << "#" << rdma_ctl->num_devices << "-" << devices[d]->name
+                  << ":" << port_num << "/" << (int)dev_attr.phys_port_cnt
+                  << ",";
 
       // Assign each RDMA NIC with a unique index ranked by their name.
       auto dev_it = std::find_if(
@@ -249,11 +253,16 @@ int RDMAFactory::init_devs() {
       rdma_ctl->devices_[dev_idx] = dev;
       UCCL_LOG_RE << "Initialized " << devices[d]->name;
 
-      rdma_ctl->__num_devices++;
+      rdma_ctl->num_devices++;
     }
   }
+  ib_devs_log_str = ib_devs_log.str();
+  if (ib_devs_log_str.back() == ',') {
+    ib_devs_log_str.erase(ib_devs_log_str.length() - 1, 1);
+  }
+  LOG(INFO) << ib_devs_log_str;
   ibv_free_device_list(devices);
-  return rdma_ctl->__num_devices;
+  return rdma_ctl->num_devices;
 
 error:
   UCCL_INIT_CHECK(false, "Failed to initialize RDMAFactory");
