@@ -150,7 +150,7 @@ sudo apt install build-essential cmake pkg-config autoconf automake libtool -y
 pip3 install meson
 pip3 install pybind11
 
-git clone git@github.com:NVIDIA/gdrcopy.git
+git clone https://github.com/NVIDIA/gdrcopy.git
 cd gdrcopy
 sudo make prefix=/usr/local CUDA=/usr/local/cuda all install
 cd ..
@@ -172,7 +172,7 @@ cd ..
 
 git clone https://github.com/ai-dynamo/nixl.git
 cd nixl
-meson setup build -Ducx_path=/usr/local/ucx
+meson setup build --prefix=/usr/local/nixl -Ducx_path=/usr/local/ucx -Ddisable_gds_backend=true 
 cd build
 ninja
 yes | ninja install
@@ -181,7 +181,7 @@ pip install .
 cd ..
 
 UCX_LIB_PATH="/usr/local/ucx/lib"
-export LD_LIBRARY_PATH="$UCX_LIB_PATH:$CONDA_PREFIX/lib/python3.13/site-packages/.nixl.mesonpy.libs/plugins:$LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH="/usr/local/nixl/lib/`uname -m`-linux-gnu/plugins:$UCX_LIB_PATH:$LD_LIBRARY_PATH"
 ```
 </details>
 
@@ -210,7 +210,7 @@ sudo apt install build-essential cmake pkg-config
 pip3 install meson
 pip3 install pybind11
 
-git clone git@github.com:NVIDIA/gdrcopy.git
+git clone https://github.com/NVIDIA/gdrcopy.git
 cd gdrcopy
 sudo make prefix=/usr/local CUDA=/usr/local/cuda all install
 cd ..

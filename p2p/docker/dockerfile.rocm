@@ -1,0 +1,51 @@
+FROM rocm/dev-ubuntu-22.04:6.4-complete
+ARG PY_VER=3.13
+ARG USER=nixl
+
+# Non-interactive APT
+ENV DEBIAN_FRONTEND=noninteractive
+
+# ---------------------------------------------------------------------------
+# Basic build & runtime dependencies (minus CUDA which is already in base)
+# ---------------------------------------------------------------------------
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    software-properties-common \
+    build-essential cmake git ninja-build g++ make patchelf \
+    rdma-core libibverbs-dev ibverbs-utils net-tools infiniband-diags \
+    libgoogle-glog-dev libgflags-dev libgtest-dev libelf-dev \
+    libnuma-dev libdrm-dev libdrm-amdgpu1 \
+    pkg-config libhiredis-dev zlib1g-dev curl \
+    autoconf automake libtool linux-headers-$(uname -r) && \
+\
+# ───── Add Python ${PY_VER} PPA & install Python ${PY_VER} + setuptools ─────
+    add-apt-repository ppa:deadsnakes/ppa && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+    python${PY_VER} python${PY_VER}-dev python${PY_VER}-venv python3-setuptools && \
+\
+# ───── Bootstrap pip for Python ${PY_VER} ─────
+    curl -sS https://bootstrap.pypa.io/get-pip.py | python${PY_VER} && \
+    ln -sf /usr/bin/pip${PY_VER} /usr/local/bin/pip && \
+    ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python${PY_VER} && \
+\
+# ───── Clean up apt cache ─────
+    rm -rf /var/lib/apt/lists/*
+
+# ─────────────────────────────────────────────────────────
+# Install Python build back-end (for Python ${PY_VER})
+# ─────────────────────────────────────────────────────────
+RUN python${PY_VER} -m pip install --no-cache-dir build auditwheel pybind11 meson
+
+# ───── Set Python ${PY_VER} as default python3 and python3-config ─────
+RUN ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python3 && \
+    ln -sf /usr/bin/python${PY_VER}-config /usr/local/bin/python3-config
+
+RUN apt update && apt install -y sudo && \
+    echo "${USER} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
+    useradd -m -s /bin/bash -G sudo ${USER}
+
+ENV LD_LIBRARY_PATH=/usr/local/lib
+ENV PATH=/usr/local/bin:$PATH
+
+CMD ["bash"]
