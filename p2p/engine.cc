@@ -459,8 +459,9 @@ bool Endpoint::send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
 
 bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
                           size_t size, uint64_t* transfer_id) {
+#ifdef WITH_PYTHON                          
   py::gil_scoped_release release;
-
+#endif
   Task* task = new Task{
       .type = TaskType::SEND,
       .data = const_cast<void*>(data),
@@ -751,13 +752,13 @@ void Endpoint::send_proxy_thread_func() {
 
   while (!stop_.load(std::memory_order_acquire)) {
     if (jring_sc_dequeue_bulk(send_task_ring_, &task, 1, nullptr) == 1) {
-      send(task.conn_id, task.mr_id, task.data, task.size, false);
+      send(task.conn_id, task.mr_id, task.data, task.size);
       task.self_ptr->done.store(true, std::memory_order_release);
     }
 
     if (jring_sc_dequeue_bulk(read_task_ring_, &read_task, 1, nullptr) == 1) {
       read(read_task.conn_id, read_task.mr_id, read_task.data, read_task.size,
-           read_task.slot_item, false);
+           read_task.slot_item);
       read_task.self_ptr->done.store(true, std::memory_order_release);
     }
   }
@@ -769,7 +770,7 @@ void Endpoint::recv_proxy_thread_func() {
 
   while (!stop_.load(std::memory_order_acquire)) {
     if (jring_sc_dequeue_bulk(recv_task_ring_, &task, 1, nullptr) == 1) {
-      recv(task.conn_id, task.mr_id, task.data, task.size, false);
+      recv(task.conn_id, task.mr_id, task.data, task.size);
       task.self_ptr->done.store(true, std::memory_order_release);
     }
   }

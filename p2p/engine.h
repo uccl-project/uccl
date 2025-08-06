@@ -121,8 +121,7 @@ class Endpoint {
    *   data: the data to send
    *   size: the size of the data
    */
-  bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
-            bool inside_python = true);
+  bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size);
 
   /*
    * Receive data from the remote server. Blocking.
@@ -134,8 +133,7 @@ class Endpoint {
    *   data: the data to receive
    *   size: the size of the data
    */
-  bool recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
-            bool inside_python = true);
+  bool recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size);
 
   bool send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
                 void const* meta, size_t meta_len);
@@ -168,7 +166,7 @@ class Endpoint {
    *   slot_item: the slot item to use for the transfer
    */
   bool read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
-            uccl::FifoItem const& slot_item, bool inside_python = true);
+            uccl::FifoItem const& slot_item);
 
   /* Read data from the remote server asynchronously. */
   bool read_async(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
