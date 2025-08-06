@@ -1,3 +1,5 @@
+#include "ep_util.hpp"
+#include <ATen/cuda/CUDAContext.h>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/pytypes.h>
@@ -7,9 +9,6 @@
 #include <mutex>
 #include <unordered_map>
 #include <vector>
-
-// TODO
-#include <ATen/cuda/CUDAContext.h>
 #include <cuda_runtime.h>
 namespace py = pybind11;
 
@@ -54,18 +53,104 @@ class Buffer {
         num_nvl_bytes_(num_nvl_bytes),
         num_rdma_bytes_(num_rdma_bytes),
         low_latency_mode_(low_latency_mode),
-        explicitly_destroy_(explicitly_destroy) {
-    // TODO(MaoZiming)
-    std::lock_guard<std::mutex> lk(g_proxies_mu);
-    cudaGetDevice(&device_index_);
-    auto it = g_proxies_by_dev.find(device_index_);
-    if (it == g_proxies_by_dev.end() || it->second.empty()) {
-      throw std::runtime_error(
-          "uccl_ep.Buffer: no UcclProxy registered for device " +
-          std::to_string(device_index_) +
-          ". Call uccl.uccl_ep.register_proxy(device_index_, proxies) first.");
+        explicitly_destroy_(explicitly_destroy),
+        comm_stream_(at::cuda::getStreamFromPool(isHighPriority = true)) {
+    // TODO(MaoZiming): Double check. I copied from deep_ep.cpp.
+    {
+      std::lock_guard<std::mutex> lk(g_proxies_mu);
+      CUDA_CHECK(cudaGetDevice(&device_index_));
+      auto it = g_proxies_by_dev.find(device_index_);
+      if (it == g_proxies_by_dev.end() || it->second.empty()) {
+        throw std::runtime_error(
+            "uccl_ep.Buffer: no UcclProxy registered for device " +
+            std::to_string(device_index_) +
+            ". Call uccl.uccl_ep.register_proxy(device_index, proxies) first.");
+      }
     }
-    proxies_ = it->second;
+
+    const int64_t barrier_signal_bytes = NUM_MAX_NVL_PEERS * sizeof(int);
+    const int64_t buffer_ptr_bytes = NUM_MAX_NVL_PEERS * sizeof(void*);
+    const int64_t barrier_signal_ptr_bytes = NUM_MAX_NVL_PEERS * sizeof(int*);
+
+    EP_HOST_ASSERT(num_nvl_bytes_ % NUM_BUFFER_ALIGNMENT_BYTES == 0 &&
+                   (num_nvl_bytes_ <= std::numeric_limits<int>::max() ||
+                    num_rdma_bytes_ == 0));
+    EP_HOST_ASSERT(num_rdma_bytes_ % NUM_BUFFER_ALIGNMENT_BYTES == 0 &&
+                   (low_latency_mode_ ||
+                    num_rdma_bytes_ <= std::numeric_limits<int>::max()));
+    EP_HOST_ASSERT(0 <= rank_ && rank_ < num_ranks_ &&
+                   (num_ranks_ <= NUM_MAX_NVL_PEERS * NUM_MAX_RDMA_PEERS ||
+                    low_latency_mode_));
+    EP_HOST_ASSERT(num_ranks_ < NUM_MAX_NVL_PEERS ||
+                   (num_ranks_ % NUM_MAX_NVL_PEERS) == 0);
+    if (num_rdma_bytes_ > 0)
+      EP_HOST_ASSERT(num_ranks_ > NUM_MAX_NVL_PEERS || low_latency_mode_);
+
+    rdma_rank_ = rank_ / NUM_MAX_NVL_PEERS;
+    nvl_rank_ = rank_ % NUM_MAX_NVL_PEERS;
+    num_rdma_ranks_ = std::max(1, num_ranks_ / NUM_MAX_NVL_PEERS);
+    num_nvl_ranks_ = std::min(num_ranks_, NUM_MAX_NVL_PEERS);
+
+    cudaDeviceProp prop{};
+    CUDA_CHECK(cudaGetDeviceProperties(&prop, device_index_));
+    num_device_sms_ = prop.multiProcessorCount;
+
+    if (num_nvl_bytes_ > 0) {
+      size_t total_bytes = static_cast<size_t>(num_nvl_bytes_) +
+                           static_cast<size_t>(barrier_signal_bytes) +
+                           static_cast<size_t>(buffer_ptr_bytes) +
+                           static_cast<size_t>(barrier_signal_ptr_bytes);
+
+      CUDA_CHECK(cudaMalloc(&buffer_ptrs_[nvl_rank_], total_bytes));
+      CUDA_CHECK(cudaIpcGetMemHandle(&ipc_handles_[nvl_rank_],
+                                     buffer_ptrs_[nvl_rank_]));
+
+      buffer_ptrs_gpu_ = reinterpret_cast<void**>(
+          static_cast<uint8_t*>(buffer_ptrs_[nvl_rank_]) + num_nvl_bytes_ +
+          barrier_signal_bytes);
+
+      barrier_signal_ptrs_[nvl_rank_] = reinterpret_cast<int*>(
+          static_cast<uint8_t*>(buffer_ptrs_[nvl_rank_]) + num_nvl_bytes_);
+
+      barrier_signal_ptrs_gpu_ = reinterpret_cast<int**>(
+          static_cast<uint8_t*>(buffer_ptrs_[nvl_rank_]) + num_nvl_bytes_ +
+          barrier_signal_bytes + buffer_ptr_bytes);
+
+      CUDA_CHECK(cudaMemsetAsync(barrier_signal_ptrs_[nvl_rank_], 0,
+                                 barrier_signal_bytes, comm_stream_));
+    }
+
+    CUDA_CHECK(cudaMalloc(&workspace_, NUM_WORKSPACE_BYTES));
+    CUDA_CHECK(
+        cudaMemsetAsync(workspace_, 0, NUM_WORKSPACE_BYTES, comm_stream_));
+    CUDA_CHECK(cudaMallocHost(&moe_recv_counter_, sizeof(int64_t),
+                              cudaHostAllocMapped));
+    CUDA_CHECK(cudaHostGetDevicePointer(
+        reinterpret_cast<void**>(&moe_recv_counter_mapped_), moe_recv_counter_,
+        0));
+    *moe_recv_counter_ = -1;
+
+    CUDA_CHECK(cudaMallocHost(&moe_recv_expert_counter_,
+                              sizeof(int) * NUM_MAX_LOCAL_EXPERTS,
+                              cudaHostAllocMapped));
+    CUDA_CHECK(cudaHostGetDevicePointer(
+        reinterpret_cast<void**>(&moe_recv_expert_counter_mapped_),
+        moe_recv_expert_counter_, 0));
+    for (int i = 0; i < NUM_MAX_LOCAL_EXPERTS; ++i)
+      moe_recv_expert_counter_[i] = -1;
+
+    if (num_rdma_ranks_ > 0) {
+      CUDA_CHECK(cudaMallocHost(&moe_recv_rdma_counter_, sizeof(int),
+                                cudaHostAllocMapped));
+      CUDA_CHECK(cudaHostGetDevicePointer(
+          reinterpret_cast<void**>(&moe_recv_rdma_counter_mapped_),
+          moe_recv_rdma_counter_, 0));
+      *moe_recv_rdma_counter_ = -1;
+    }
+    printf(
+        "Buffer created for rank %d, num_ranks %d, num_nvl_bytes %ld, "
+        "num_rdma_bytes %ld, low_latency_mode %d\n",
+        rank_, num_ranks_, num_nvl_bytes_, num_rdma_bytes_, low_latency_mode_);
   }
 
   void destroy() {}
@@ -181,6 +266,35 @@ class Buffer {
   int rdma_rank;
   int num_rdma_ranks, nvl_rank;
   cudaIpcMemHandle_t ipc_handles[NUM_MAX_NVL_PEERS];
+
+  // device / ranks
+  int rdma_rank_{0}, nvl_rank_{0};
+  int num_rdma_ranks_{1}, num_nvl_ranks_{1};
+  int num_device_sms_{0};
+
+  // stream & workspace
+  at::cuda::CUDAStream comm_stream_;
+  void* workspace_{nullptr};
+
+  // NVLink (IPC) area
+  static constexpr int NUM_MAX_NVL_PEERS = /* your value, e.g. 8 or 16 */;
+  static constexpr int NUM_MAX_RDMA_PEERS = /* your value, e.g. 16 */;
+  static constexpr int NUM_WORKSPACE_BYTES = 32 * 1024 * 1024;  // 32 MiB
+  static constexpr int NUM_BUFFER_ALIGNMENT_BYTES = 256;
+
+  cudaIpcMemHandle_t ipc_handles_[NUM_MAX_NVL_PEERS]{};
+  void* buffer_ptrs_[NUM_MAX_NVL_PEERS]{};
+  int* barrier_signal_ptrs_[NUM_MAX_NVL_PEERS]{};
+  void** buffer_ptrs_gpu_{nullptr};
+  int** barrier_signal_ptrs_gpu_{nullptr};
+
+  // MoE counters (host mapped)
+  int64_t* moe_recv_counter_{nullptr};
+  int64_t* moe_recv_counter_mapped_{nullptr};  // device pointer
+  int* moe_recv_expert_counter_{nullptr};
+  int* moe_recv_expert_counter_mapped_{nullptr};
+  int* moe_recv_rdma_counter_{nullptr};
+  int* moe_recv_rdma_counter_mapped_{nullptr};
 };
 
 PYBIND11_MODULE(uccl_ep, m) {
