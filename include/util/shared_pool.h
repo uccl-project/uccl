@@ -93,7 +93,7 @@ class SharedPool {
     } else {
       T item;
       DCHECK(global_pool_.pop_front(&item));
-      cleanup_(migrated);
+      cleanup_(item);
       return item;
     }
   }
