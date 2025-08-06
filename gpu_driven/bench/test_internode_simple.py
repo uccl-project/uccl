@@ -27,7 +27,6 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
     num_experts = 64
     num_topk = 4
     device_index = 0
-    bytes_needed = int(1e9)
 
     peer_ip = get_peer_ip(rank, num_ranks, group)
 
@@ -41,32 +40,36 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
             flush=True,
         )
     torch.manual_seed(rank)
-    x = torch.randn((num_tokens, hidden), dtype=torch.bfloat16, device="cuda")
-    topk_idx = torch.randint(0, num_experts, (num_tokens, num_topk), device="cuda")
+    x = torch.randn(
+        (num_tokens, hidden), dtype=torch.bfloat16, device=f"cuda:{device_index}"
+    )
+    x_bytes = x.numel() * x.element_size()
+    topk_idx = torch.randint(
+        0, num_experts, (num_tokens, num_topk), device=f"cuda:{device_index}"
+    )
     num_device_sms = torch.cuda.get_device_properties(0).multi_processor_count
 
     bench = gpu_driven.Bench()
-    buf = torch.empty(bytes_needed, device=f"cuda:{device_index}", dtype=torch.uint8)
-    buf_ptr = buf.data_ptr()
+    x_ptr = x.data_ptr()
     proxies = []
     for i in range(bench.blocks()):
         proxy = gpu_driven.Proxy(
             rb_addr=bench.ring_addr(i),
             block_idx=i,
-            gpu_buffer_addr=buf_ptr,
-            total_size=bytes_needed,
+            gpu_buffer_addr=x_ptr,
+            total_size=x_bytes,
             rank=rank,
             peer_ip=peer_ip,
         )
         proxy.start_dual()
         proxies.append(proxy)
-    ep.register_proxy(device_index, proxies[0])
+    ep.register_proxies(device_index, proxies)
 
     try:
         buffer = ep.Buffer(
             group=group,
             num_nvl_bytes=0,
-            num_rdma_bytes=bytes_needed,
+            num_rdma_bytes=x_bytes,
             low_latency_mode=True,
             num_qps_per_rank=num_device_sms,
             allow_nvlink_for_low_latency_mode=True,

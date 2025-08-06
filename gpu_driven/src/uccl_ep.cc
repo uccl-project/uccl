@@ -5,10 +5,11 @@
 #include <atomic>
 #include <mutex>
 #include <unordered_map>
+#include <vector>
 namespace py = pybind11;
 
-static std::mutex g_proxy_mu;
-static std::unordered_map<int, py::object> g_proxy_by_dev;
+static std::mutex g_proxies_mu;
+static std::unordered_map<int, std::vector<py::object>> g_proxies_by_dev;
 
 struct EventOverlap {};
 struct Ctx {
@@ -26,16 +27,16 @@ class Buffer {
          bool allow_nvlink_for_low_latency_mode, bool allow_mnnvl,
          bool explicitly_destroy)
       : group_(std::move(group)), device_index_(-1) {
-    std::lock_guard<std::mutex> lk(g_proxy_mu);
+    std::lock_guard<std::mutex> lk(g_proxies_mu);
     auto device_index = group_.attr("rank")().cast<int>();
-    auto it = g_proxy_by_dev.find(device_index);
-    if (it == g_proxy_by_dev.end() || it->second.is_none()) {
+    auto it = g_proxies_by_dev.find(device_index);
+    if (it == g_proxies_by_dev.end() || it->second.empty()) {
       throw std::runtime_error(
           "uccl_ep.Buffer: no UcclProxy registered for device " +
           std::to_string(device_index) +
-          ". Call uccl.uccl_ep.register_proxy(device_index, proxy) first.");
+          ". Call uccl.uccl_ep.register_proxy(device_index, proxies) first.");
     }
-    proxy_ = it->second;
+    proxies_ = it->second;
     device_index_ = device_index;
   }
 
@@ -125,7 +126,7 @@ class Buffer {
  private:
   py::object group_;
   int device_index_{-1};
-  py::object proxy_;
+  std::vector<py::object> proxies_;
 };
 
 PYBIND11_MODULE(uccl_ep, m) {
@@ -133,34 +134,46 @@ PYBIND11_MODULE(uccl_ep, m) {
   m.def(
       "register_proxy",
       [](int device_index, py::object proxy) {
-        std::lock_guard<std::mutex> lk(g_proxy_mu);
-        g_proxy_by_dev[device_index] = std::move(proxy);
+        std::lock_guard<std::mutex> lk(g_proxies_mu);
+        g_proxies_by_dev[device_index].push_back(std::move(proxy));
       },
       py::arg("device_index"), py::arg("proxy"));
   m.def(
+      "register_proxies",
+      [](int device_index, std::vector<py::object> proxies) {
+        std::lock_guard<std::mutex> lk(g_proxies_mu);
+        auto& vec = g_proxies_by_dev[device_index];
+        for (auto& proxy : proxies) {
+          vec.push_back(std::move(proxy));
+        }
+      },
+      py::arg("device_index"), py::arg("proxies"));
+  m.def(
       "unregister_proxy",
       [](int device_index) {
-        std::lock_guard<std::mutex> lk(g_proxy_mu);
-        g_proxy_by_dev.erase(device_index);
+        std::lock_guard<std::mutex> lk(g_proxies_mu);
+        g_proxies_by_dev.erase(device_index);
       },
       py::arg("device_index"));
   m.def(
       "has_proxy",
       [](int device_index) {
-        std::lock_guard<std::mutex> lk(g_proxy_mu);
-        auto it = g_proxy_by_dev.find(device_index);
-        return it != g_proxy_by_dev.end() && !it->second.is_none();
+        std::lock_guard<std::mutex> lk(g_proxies_mu);
+        auto it = g_proxies_by_dev.find(device_index);
+        return it != g_proxies_by_dev.end() && !it->second.empty();
       },
       py::arg("device_index"));
   m.def("stop_all_registered_proxies", []() {
-    std::lock_guard<std::mutex> lk(g_proxy_mu);
-    for (auto& kv : g_proxy_by_dev) {
-      try {
-        kv.second.attr("stop")();
-      } catch (...) {
+    std::lock_guard<std::mutex> lk(g_proxies_mu);
+    for (auto& kv : g_proxies_by_dev) {
+      for (auto& proxy : kv.second) {
+        try {
+          proxy.attr("stop")();
+        } catch (...) {
+        }
       }
     }
-    g_proxy_by_dev.clear();
+    g_proxies_by_dev.clear();
   });
 
   py::class_<EventOverlap>(m, "EventOverlap").def(py::init<>());
