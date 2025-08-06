@@ -152,33 +152,32 @@ pip3 install pybind11
 
 git clone https://github.com/NVIDIA/gdrcopy.git
 cd gdrcopy
-sudo make prefix=/usr/local CUDA=/usr/local/cuda all install
+sudo make prefix=/usr/local/gdrcopy CUDA=/usr/local/cuda all install
 cd ..
 
 # Run these if you find there is no libcuda.so under /usr/local/cuda. Using GH200 as an example.
 sudo ln -s /usr/lib/aarch64-linux-gnu/libcuda.so.1 /usr/local/cuda/lib64/libcuda.so
 
 # Install UCX
-git clone https://github.com/openucx/ucx.git && cd ucx
+pushd ../thirdparty/ucx
 ./autogen.sh
 ./configure --prefix=/usr/local/ucx --enable-shared --disable-static \
             --disable-doxygen-doc --enable-optimizations --enable-cma \
             --enable-devel-headers --with-cuda=/usr/local/cuda \
-            --with-gdrcopy=/usr/local --with-verbs --with-dm --enable-mt
+            --with-gdrcopy=/usr/local/gdrcopy --with-verbs --with-dm --enable-mt
 make -j
 sudo make -j install-strip
 sudo ldconfig
-cd ..
+popd
 
-git clone https://github.com/ai-dynamo/nixl.git
-cd nixl
+pushd ../thirdparty/nixl
 meson setup build --prefix=/usr/local/nixl -Ducx_path=/usr/local/ucx -Ddisable_gds_backend=true 
-cd build
+pushd build
 ninja
 yes | ninja install
-cd ..
+popd
 pip install .
-cd ..
+popd
 
 UCX_LIB_PATH="/usr/local/ucx/lib"
 export LD_LIBRARY_PATH="/usr/local/nixl/lib/`uname -m`-linux-gnu/plugins:$UCX_LIB_PATH:$LD_LIBRARY_PATH"
@@ -212,7 +211,7 @@ pip3 install pybind11
 
 git clone https://github.com/NVIDIA/gdrcopy.git
 cd gdrcopy
-sudo make prefix=/usr/local CUDA=/usr/local/cuda all install
+sudo make prefix=/usr/local/gdrcopy CUDA=/usr/local/cuda all install
 cd ..
 
 # Run these if you find there is no libcuda.so under /usr/local/cuda. Using GH200 as an example.
