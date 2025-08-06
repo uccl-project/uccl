@@ -201,7 +201,7 @@ class Buffer {
 };
 
 PYBIND11_MODULE(uccl_ep, m) {
-  m.doc() = "Minimal DeepEP-compatible shim without libtorch linkage";
+  m.doc() = "Minimal DeepEP-compatible shim with UCCL";
   m.def(
       "register_proxy",
       [](int device_index, py::object proxy) {
