@@ -1,8 +1,8 @@
 #pragma once
 
+#include "peer_copy_worker.hpp"
 #include <thread>
 #include <vector>
-#include "peer_copy_worker.hpp"
 class UcclProxy;
 
 class PeerCopyManager {
@@ -10,7 +10,7 @@ class PeerCopyManager {
   explicit PeerCopyManager(int src_device = 0);
   ~PeerCopyManager();
 
-  void start_for_proxies(const std::vector<UcclProxy*>& proxies);
+  void start_for_proxies(std::vector<UcclProxy*> const& proxies);
   void stop();
 
  private:

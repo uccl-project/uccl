@@ -32,4 +32,5 @@ class UcclProxy {
   std::thread thread_;
   Mode mode_;
   std::atomic<bool> running_;
+  DeviceToHostCmdBuffer* rb_;
 };
