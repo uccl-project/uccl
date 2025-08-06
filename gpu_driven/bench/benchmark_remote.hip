@@ -78,8 +78,6 @@ int main(int argc, char** argv) {
 #endif
 
   } else {
-#ifdef ENABLE_PROXY_CUDA_MEMCPY
-
     PeerCopyShared shared;
     shared.src_device = 0;
     std::vector<PeerWorkerCtx> worker_ctx(env.blocks);
@@ -91,7 +89,6 @@ int main(int argc, char** argv) {
                            std::ref(worker_ctx[i]), std::ref(proxies[i]->ring),
                            i);
     }
-#endif
     for (int i = 0; i < 10; ++i) {
       std::this_thread::sleep_for(std::chrono::seconds(1));
       std::printf("Rank %d is waiting...\n", rank);
@@ -100,10 +97,8 @@ int main(int argc, char** argv) {
       proxies[i]->set_progress_run(false);
     }
     for (auto& t : cpu_threads) t.join();
-#ifdef ENABLE_PROXY_CUDA_MEMCPY
     shared.run.store(false, std::memory_order_release);
     for (auto& th : workers) th.join();
-#endif
     destroy_env(env);
 #ifdef USE_GRACE_HOPPER
     GPU_RT_CHECK(gpuFreeHost(gpu_buffer));

@@ -35,7 +35,6 @@ class Proxy {
   };
 
   explicit Proxy(Config const& cfg) : cfg_(cfg) {
-#ifdef ENABLE_PROXY_CUDA_MEMCPY
     const size_t total_size = kRemoteBufferSize;
     for (int d = 0; d < NUM_GPUS; ++d) {
       GPU_RT_CHECK(gpuSetDevice(d));
@@ -44,7 +43,6 @@ class Proxy {
       ctx_.per_gpu_device_buf[d] = buf;
     }
     GPU_RT_CHECK(gpuSetDevice(0));
-#endif
   }
 
   void set_progress_run(bool run) {
