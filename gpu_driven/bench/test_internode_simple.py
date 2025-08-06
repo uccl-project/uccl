@@ -101,6 +101,7 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
             async_finish=False,
             return_recv_hook=True,
         )
+        recv_x = recv_x[0]
         hook()
 
         if rank == 0:
