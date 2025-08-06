@@ -1,6 +1,8 @@
-FROM rocm/dev-ubuntu-22.04:6.4-complete
+FROM rocm/dev-ubuntu-22.04
 ARG PY_VER=3.13
-ARG USER=nixl
+
+ARG UID=300168
+ARG GID=300168
 
 # Non-interactive APT
 ENV DEBIAN_FRONTEND=noninteractive
@@ -41,11 +43,12 @@ RUN python${PY_VER} -m pip install --no-cache-dir build auditwheel pybind11 meso
 RUN ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python3 && \
     ln -sf /usr/bin/python${PY_VER}-config /usr/local/bin/python3-config
 
-RUN apt update && apt install -y sudo && \
-    echo "${USER} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
-    useradd -m -s /bin/bash -G sudo ${USER}
-
 ENV LD_LIBRARY_PATH=/usr/local/lib
 ENV PATH=/usr/local/bin:$PATH
 
+RUN apt update && apt install -y sudo && \
+    echo "hostuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
+    groupadd -g ${GID} hostgrp && useradd -u ${UID} -g ${GID} -m -s /bin/bash -G sudo hostuser
+
+USER hostuser
 CMD ["bash"]
