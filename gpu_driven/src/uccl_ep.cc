@@ -98,7 +98,6 @@ class Buffer {
   py::object proxy_;
 };
 
-// ---- pybind ----
 PYBIND11_MODULE(uccl_ep, m) {
   m.doc() = "Minimal DeepEP-compatible shim without libtorch linkage";
   m.def(
