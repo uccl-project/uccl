@@ -7,7 +7,6 @@
 
 namespace py = pybind11;
 
-// ---- Global device->proxy registry (process-local) ----
 static std::mutex g_proxy_mu;
 static std::unordered_map<int, py::object> g_proxy_by_dev;
 
@@ -38,7 +37,6 @@ class Buffer {
 
   void destroy() {}
 
-  // ... your low_latency_dispatch / low_latency_combine unchanged ...
   py::tuple low_latency_dispatch(py::object x, py::object topk_idx,
                                  long num_tokens, long num_experts,
                                  bool use_fp8 = false, bool round_scale = false,
