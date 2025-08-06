@@ -13,6 +13,9 @@ char const* PLUGIN_NAME = "RDMA_Plugin";
 
 bool volatile quit = false;
 
+std::atomic<bool> init_dev[8] = {false, false, false, false,
+                                 false, false, false, false};
+
 void interrupt_handler(int signal) {
   (void)signal;
   quit = true;
@@ -271,7 +274,11 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
   struct ucclHandle* handle = (struct ucclHandle*)opaqueHandle;
   memset(handle, 0, sizeof(struct ucclHandle));
 
-  ep->initialize_engine_by_dev(dev, false);
+  if (!init_dev[dev].load()) {
+    if (ep->initialize_engine_by_dev(dev, false)) {
+      init_dev[dev].store(true);
+    }
+  }
 
   // Create a listening socket.
   int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -342,6 +349,14 @@ ncclResult_t pluginConnect(int dev, void* opaque_handle, void** sendComm,
   DCHECK(hipGetDevice(&local_gpuidx) == hipSuccess);
 #endif
 
+  while (!init_dev[dev].load()) {
+    if (ep->initialize_engine_by_dev(dev, false)) {
+      init_dev[dev].store(true);
+    }
+    // yield
+    std::this_thread::yield();
+  }
+
   std::string remote_ip_str = ip_to_str(handle->ip_addr_u32);
 
   struct ucclSendComm* scomm =
@@ -372,9 +387,11 @@ ncclResult_t pluginConnect(int dev, void* opaque_handle, void** sendComm,
   }
 
   if (*sendComm) {
-    UCCL_LOG_PLUGIN << "Connected to " << remote_ip_str << "/"
-                    << handle->remote_dev << " on dev:" << dev << ", "
-                    << scomm->base.conn_id.flow_id << " from PID: " << getpid();
+    auto factory_dev = RDMAFactory::get_factory_dev(dev);
+    UCCL_LOG_PLUGIN << factory_dev->local_ip_str << " Connected to "
+                    << remote_ip_str << "/" << handle->remote_dev
+                    << " on dev:" << dev << ", " << scomm->base.conn_id.flow_id
+                    << " from PID: " << getpid();
   }
 
   return ncclSuccess;
