@@ -83,6 +83,7 @@ class SharedPool {
         for (uint32_t i = 0; i < kNumCachedItemsPerCPU; i++) {
           T migrated;
           DCHECK(global_pool_.pop_front(&migrated));
+          cleanup_(migrated);
           DCHECK(cache.push_front(migrated));
         }
       }
@@ -92,6 +93,7 @@ class SharedPool {
     } else {
       T item;
       DCHECK(global_pool_.pop_front(&item));
+      cleanup_(migrated);
       return item;
     }
   }
@@ -103,7 +105,6 @@ class SharedPool {
       cache.set_global_pool_ptr(global_pool_);
       T item;
       while (cache.pop_front(&item)) {
-        cleanup_(item);
         global_pool_.push_front(item);
       }
     }
