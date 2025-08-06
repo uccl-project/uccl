@@ -100,10 +100,17 @@ The code in this repository is mostly described in the paper below. Please consi
 
 ## Acknowledgement
 
-UCCL is being actively developed at [UC Berkeley Sky Computing Lab](https://sky.cs.berkeley.edu/). We welcome open-source developers. 
+UCCL is being actively developed at [UC Berkeley Sky Computing Lab](https://sky.cs.berkeley.edu/) and [UC Davis ArtSy lab](https://github.com/artsy-lab). We enthusiastically welcome open-source developers joining us! 
+
+UCCL is generously supported by (in alphabetical order): 
+[AMD](https://www.amd.com/en.html), 
+[AWS](https://aws.amazon.com/), 
+[Broadcom](https://www.broadcom.com/), 
+[CloudLab](https://www.cloudlab.us/), 
+[Google Cloud](https://cloud.google.com/), 
+[IBM](https://www.ibm.com/), 
+[Lambda](https://lambda.ai/),
+[Mibura](https://www.mibura.com/).
 
 ## Contact
-Feel free to raise issues or contact us if you have any questions or suggestions. You can reach us at: 
-* Yang Zhou (yangzhou.rpc@gmail.com)
-* Zhongjie Chen (chenzhjthu@gmail.com)
-* Ziming Mao (ziming.mao@berkeley.edu)
+Feel free to raise GitHub issues if you have any questions or suggestions. 

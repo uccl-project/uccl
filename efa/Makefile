@@ -32,6 +32,9 @@ transport_test: transport_test.cc $(DEPS) $(lib_obj)
 util_efa_test: util_efa_test.cc $(DEPS) $(lib_obj)
 	g++ util_efa_test.cc -o util_efa_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
+util_efa_device_name_list_test: util_efa_device_name_list_test.cc util_efa.cc $(DEPS) $(filter-out util_efa.o,$(lib_obj))
+	g++ -DUCCL_TESTING util_efa_device_name_list_test.cc util_efa.cc -o util_efa_device_name_list_test $(filter-out util_efa.o,$(lib_obj)) $(INC) $(LIBS) $(CXXFLAGS) -lgtest_main
+
 timely_test: timely_test.cc $(DEPS) $(lib_obj)
 	g++ timely_test.cc -o timely_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 

@@ -32,20 +32,32 @@ def _pretty_size(num_bytes: int) -> str:
     return f"{num_bytes} B"
 
 
-def _send(tensor, dst):
+def _send(tensor, dst, async_op=False):
     if isinstance(tensor, torch.Tensor):
-        dist.send(tensor, dst=dst)
+        if async_op:
+            return dist.isend(tensor, dst=dst)
+        else:
+            dist.send(tensor, dst=dst)
     else:  # numpy array (gloo backend)
         t = torch.from_numpy(tensor)
-        dist.send(t, dst=dst)
+        if async_op:
+            return dist.isend(t, dst=dst)
+        else:
+            dist.send(t, dst=dst)
 
 
-def _recv(tensor, src):
+def _recv(tensor, src, async_op=False):
     if isinstance(tensor, torch.Tensor):
-        dist.recv(tensor, src=src)
+        if async_op:
+            return dist.irecv(tensor, src=src)
+        else:
+            dist.recv(tensor, src=src)
     else:
         t = torch.from_numpy(tensor)
-        dist.recv(t, src=src)
+        if async_op:
+            return dist.irecv(t, src=src)
+        else:
+            dist.recv(t, src=src)
         tensor[:] = t.cpu().numpy()
 
 
@@ -100,6 +112,63 @@ def _run_client(args):
     print("[Client] Benchmark complete")
 
 
+def _run_server_dual(args):
+    peer = 0  # client rank
+    for size in args.sizes:
+        tensor = _make_buffer(size, args.device, args.local_gpu_idx)
+        tensor2 = _make_buffer(size, args.device, args.local_gpu_idx)
+        # Warm-up receive
+        _recv(tensor, src=peer)
+        torch.cuda.synchronize() if isinstance(tensor, torch.Tensor) else None
+
+        start = time.perf_counter()
+        total = 0
+        for _ in range(args.iters):
+            recv_op = dist.P2POp(dist.irecv, tensor, peer)
+            send_op = dist.P2POp(dist.isend, tensor2, peer)
+            reqs = dist.batch_isend_irecv([send_op, recv_op])
+            for req in reqs:
+                req.wait()
+            total += size
+        torch.cuda.synchronize() if isinstance(tensor, torch.Tensor) else None
+        elapsed = time.perf_counter() - start
+        gbps = (total * 8) / elapsed / 1e9
+        gb_sec = total / elapsed / 1e9
+        print(
+            f"[Server] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
+        )
+    print("[Server] Benchmark complete")
+
+
+def _run_client_dual(args):
+
+    peer = 1  # server rank
+    for size in args.sizes:
+        tensor = _make_buffer(size, args.device, args.local_gpu_idx)
+        tensor2 = _make_buffer(size, args.device, args.local_gpu_idx)
+        # Warm-up send
+        _send(tensor, dst=peer)
+        torch.cuda.synchronize() if isinstance(tensor, torch.Tensor) else None
+
+        start = time.perf_counter()
+        total = 0
+        for _ in range(args.iters):
+            send_op = dist.P2POp(dist.isend, tensor, peer)
+            recv_op = dist.P2POp(dist.irecv, tensor2, peer)
+            reqs = dist.batch_isend_irecv([send_op, recv_op])
+            for req in reqs:
+                req.wait()
+            total += size
+        torch.cuda.synchronize() if isinstance(tensor, torch.Tensor) else None
+        elapsed = time.perf_counter() - start
+        gbps = (total * 8) / elapsed / 1e9
+        gb_sec = total / elapsed / 1e9
+        print(
+            f"[Client] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
+        )
+    print("[Client] Benchmark complete")
+
+
 def parse_size_list(val: str) -> List[int]:
     try:
         return [int(s) for s in val.split(",") if s]
@@ -125,10 +194,16 @@ def main():
             262144,
             1048576,
             10485760,
+            16 * 1024 * 1024,
             104857600,
         ],
     )
     p.add_argument("--iters", type=int, default=1000)
+    p.add_argument(
+        "--dual",
+        action="store_true",
+        help="Run dual benchmark",
+    )
     args = p.parse_args()
 
     backend = "nccl" if args.device == "gpu" else "gloo"
@@ -145,10 +220,16 @@ def main():
     )
 
     try:
-        if rank == 0:
-            _run_client(args)
+        if args.dual:
+            if rank == 0:
+                _run_client_dual(args)
+            else:
+                _run_server_dual(args)
         else:
-            _run_server(args)
+            if rank == 0:
+                _run_client(args)
+            else:
+                _run_server(args)
     finally:
         dist.destroy_process_group()
 

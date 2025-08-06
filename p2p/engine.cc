@@ -5,7 +5,9 @@
 #include <glog/logging.h>
 #include <netinet/in.h>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <future>
 #include <iostream>
@@ -55,52 +57,23 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   // Initialize the RDMA endpoint with lazy creation.
   ep_ = new uccl::RDMAEndpoint(num_cpus_);
 
-  auto gpu_cards = uccl::get_gpu_cards();
-  DCHECK(local_gpu_idx_ < gpu_cards.size() && gpu_cards.size() <= kMaxNumGPUs)
-      << "Local GPU index out of range";
-
-  auto ib_nics = uccl::get_rdma_nics();
-  // Find the RDMA NIC that is closest to each of the GPUs,
-  // ensuring fair NIC allocation.
-  std::vector<bool> nic_allocated(ib_nics.size(), false);
-  for (int i = 0; i < gpu_cards.size(); i++) {
-    auto gpu_device_path = gpu_cards[i];
-    int best_nic = -1;
-    int best_distance = std::numeric_limits<int>::max();
-    for (int j = 0; j < ib_nics.size(); ++j) {
-      if (nic_allocated[j]) continue;
-      int dist = uccl::cal_pcie_distance(gpu_device_path, ib_nics[j].second);
-      if (dist < best_distance) {
-        best_distance = dist;
-        best_nic = j;
-      }
-    }
-    if (best_nic != -1) {
-      gpu_to_dev[i] = best_nic;
-      nic_allocated[best_nic] = true;
-    } else {
-      // If all NICs are allocated, fallback to the closest
-      auto ib_nic_it = std::min_element(
-          ib_nics.begin(), ib_nics.end(), [&](auto const& a, auto const& b) {
-            return uccl::cal_pcie_distance(gpu_device_path, a.second) <
-                   uccl::cal_pcie_distance(gpu_device_path, b.second);
-          });
-      gpu_to_dev[i] = ib_nic_it - ib_nics.begin();
-    }
+  for (int i = 0; i < kMaxNumGPUs; i++) {
+    gpu_to_dev[i] = ep_->get_best_dev_idx(i);
   }
-  std::cout << "Detected best GPU-NIC mapping: " << std::endl;
-  for (int i = 0; i < gpu_cards.size(); i++) {
-    std::cout << "\tGPU " << i << " -> NIC " << gpu_to_dev[i] << " ("
-              << ib_nics[gpu_to_dev[i]].first << ")" << std::endl;
-  }
-  std::cout << std::endl;
+  numa_node_ =
+      uccl::RDMAFactory::get_factory_dev(gpu_to_dev[local_gpu_idx_])->numa_node;
 
   // Initialize the engine based on the GPU index.
-#ifdef LAZY_CREATE_ENGINE
-  printf("Lazy creation of engine, GPU index: %d\n", local_gpu_idx_);
-  ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_], false);
-  printf("Engine initialized for GPU %d\n", local_gpu_idx_);
-#endif
+  std::cout << "Lazy creation of engine, GPU index: " << local_gpu_idx_
+            << std::endl;
+  ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_], true);
+  std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
+
+  send_task_ring_ = uccl::create_ring(sizeof(Task), kTaskRingSize);
+  recv_task_ring_ = uccl::create_ring(sizeof(Task), kTaskRingSize);
+  read_task_ring_ = uccl::create_ring(sizeof(ReadTask), kTaskRingSize);
+  send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
+  recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
 
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
@@ -110,14 +83,31 @@ Endpoint::~Endpoint() {
   py::gil_scoped_release release;
 #endif
   std::cout << "Destroying Engine..." << std::endl;
+
+  stop_.store(true, std::memory_order_release);
+
+  send_proxy_thread_.join();
+  recv_proxy_thread_.join();
+
+  free(send_task_ring_);
+  free(recv_task_ring_);
+  free(read_task_ring_);
+
   delete ep_;
 
-  for (auto& [conn_id, conn] : conn_id_to_conn_) {
-    delete conn;
+  {
+    std::shared_lock<std::shared_mutex> lock(conn_mu_);
+    for (auto& [conn_id, conn] : conn_id_to_conn_) {
+      delete conn;
+    }
   }
-  for (auto& [mr_id, mr] : mr_id_to_mr_) {
-    delete mr;
+  {
+    std::shared_lock<std::shared_mutex> lock(mr_mu_);
+    for (auto& [mr_id, mr] : mr_id_to_mr_) {
+      delete mr;
+    }
   }
+
   if (!streams_.empty()) {
     GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
     for (auto s : streams_)
@@ -127,9 +117,8 @@ Endpoint::~Endpoint() {
   std::cout << "Engine destroyed" << std::endl;
 }
 
-bool Endpoint::connect(std::string const& ip_addr, int const& remote_gpu_idx,
-                       uint64_t& conn_id, int remote_port) {
-#ifdef WITH_PYTHON
+bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
+                       uint64_t& conn_id) {
   py::gil_scoped_release release;
 #endif
   std::cout << "Attempting to connect to " << ip_addr << ":" << remote_gpu_idx
@@ -140,16 +129,9 @@ bool Endpoint::connect(std::string const& ip_addr, int const& remote_gpu_idx,
 
   std::future<uccl::ConnID> uccl_conn_id_future = std::async(
       std::launch::async, [this, remote_gpu_idx, &ip_addr, remote_port]() {
-        if (remote_port == -1) {
-          throw std::runtime_error("Error: remote_port is not set.");
-          return ep_->test_uccl_connect(
-              gpu_to_dev[local_gpu_idx_], local_gpu_idx_,
-              gpu_to_dev[remote_gpu_idx], remote_gpu_idx, ip_addr);
-        } else {
-          return ep_->uccl_connect(gpu_to_dev[local_gpu_idx_], local_gpu_idx_,
-                                   gpu_to_dev[remote_gpu_idx], remote_gpu_idx,
-                                   ip_addr, remote_port);
-        }
+        return ep_->uccl_connect(gpu_to_dev[local_gpu_idx_], local_gpu_idx_,
+                                 gpu_to_dev[remote_gpu_idx], remote_gpu_idx,
+                                 ip_addr, remote_port);
       });
 
   // Check for Python signals (eg, ctrl+c) while waiting for connection
@@ -161,32 +143,12 @@ bool Endpoint::connect(std::string const& ip_addr, int const& remote_gpu_idx,
   uccl::ConnID uccl_conn_id = uccl_conn_id_future.get();
 
   // Store the connection ID.
-  conn_id_to_conn_[conn_id] =
-      new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
-
-  return true;
-}
-
-bool is_nvlink_peer(int local_gpu, int remote_gpu) {
-  int accessible = 0;
-  GPU_RT_CHECK(gpuDeviceCanAccessPeer(&accessible, local_gpu, remote_gpu));
-  if (!accessible) return false;
-
-#ifdef HAS_NVML
-  nvmlDevice_t local_dev, remote_dev;
-  nvmlDeviceGetHandleByIndex(local_gpu, &local_dev);
-  nvmlDeviceGetHandleByIndex(remote_gpu, &remote_dev);
-  nvmlP2PStatus_t status;
-  if (nvmlDeviceGetP2PStatus(local_dev, remote_dev, NVML_P2P_CAPS_INDEX_NVLINK,
-                             &status) == NVML_SUCCESS &&
-      status == NVML_P2P_STATUS_OK) {
-    return true;
-  } else {
-    return false;
+  {
+    std::unique_lock<std::shared_mutex> lock(conn_mu_);
+    conn_id_to_conn_[conn_id] =
+        new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
   }
-#else
   return true;
-#endif
 }
 
 #ifdef WITH_PYTHON
@@ -222,7 +184,7 @@ bool Endpoint::connect(py::bytes const& meta_bytes, uint64_t& conn_id) {
       conn_id = kNvlinkConn;
       return true;
     }
-    if (is_nvlink_peer(local_gpu_idx_, remote_gpu_idx_)) {
+    if (uccl::is_nvlink_peer(local_gpu_idx_, remote_gpu_idx_)) {
       conn_id = kNvlinkConn;
       return true;
     }
@@ -230,7 +192,7 @@ bool Endpoint::connect(py::bytes const& meta_bytes, uint64_t& conn_id) {
         "is_local_ip() returned true, "
         "but remote GPU is not a NVLink peer");
   }
-  return this->connect(ip, remote_gpu_idx_, conn_id, port);
+  return this->connect(ip, remote_gpu_idx_, port, conn_id);
 }
 #endif
 
@@ -246,8 +208,10 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
 
   std::future<uccl::ConnID> uccl_conn_id_future =
       std::async(std::launch::async, [this, &ip_addr, &remote_gpu_idx]() {
-        return ep_->test_uccl_accept(gpu_to_dev[local_gpu_idx_], local_gpu_idx_,
-                                     ip_addr, &remote_gpu_idx);
+        auto dev_idx = gpu_to_dev[local_gpu_idx_];
+        auto p2p_listen_fd = ep_->get_p2p_listen_fd(dev_idx);
+        return ep_->uccl_accept(dev_idx, p2p_listen_fd, local_gpu_idx_, ip_addr,
+                                &remote_gpu_idx);
       });
 
   // Check for Python signals (eg, ctrl+c) while waiting for connection
@@ -259,8 +223,11 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   uccl::ConnID uccl_conn_id = uccl_conn_id_future.get();
 
   // Store the connection ID.
-  conn_id_to_conn_[conn_id] =
-      new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
+  {
+    std::unique_lock<std::shared_mutex> lock(conn_mu_);
+    conn_id_to_conn_[conn_id] =
+        new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
+  }
 
   return true;
 }
@@ -279,42 +246,11 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
               << "mhandle->mr is null\n";
     std::abort();
   }
-  mr_id_to_mr_[mr_id] = new MR{mr_id, mhandle};
-
-  return true;
-}
-
-bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
-                    uccl::FifoItem const& slot_item) {
-#ifdef WITH_PYTHON
-  py::gil_scoped_release release;
-#endif
-
-  if (!ucclParamRCMode()) {
-    DCHECK(false) << "RDMA READ is only supported in RC mode, toggle RCMODE to "
-                     "be True in transport_config.h";
-    std::abort();
+  {
+    std::unique_lock<std::shared_mutex> lock(mr_mu_);
+    mr_id_to_mr_[mr_id] = new MR{mr_id, mhandle};
   }
 
-  DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
-  auto* conn = conn_id_to_conn_[conn_id];
-  auto* mhandle = mr_id_to_mr_[mr_id]->mhandle_;
-  uccl::ucclRequest ureq;
-  memset(&ureq, 0, sizeof(uccl::ucclRequest));
-  int rc;
-  do {
-    rc = ep_->uccl_read_async(
-        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle, dst,
-        size, slot_item, &ureq);
-    if (rc == -1) {
-      check_python_signals();
-      std::this_thread::yield();
-    }
-  } while (rc == -1);
-
-  while (!ep_->uccl_poll_ureq_once(&ureq)) {
-    check_python_signals();
-  }
   return true;
 }
 
@@ -330,7 +266,10 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
   size_t const n = data_v.size();
   mr_id_v.resize(n);
 
-  mr_id_to_mr_.reserve(mr_id_to_mr_.size() + n);
+  {
+    std::unique_lock<std::shared_mutex> lock(mr_mu_);
+    mr_id_to_mr_.reserve(mr_id_to_mr_.size() + n);
+  }
 
   for (size_t i = 0; i < n; ++i) {
     uint64_t id = next_mr_id_.fetch_add(1);
@@ -344,9 +283,136 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
       return false;
     }
 
-    mr_id_to_mr_[id] = new MR{id, mhandle};
+    {
+      std::unique_lock<std::shared_mutex> lock(mr_mu_);
+      mr_id_to_mr_[id] = new MR{id, mhandle};
+    }
     mr_id_v[i] = id;
   }
+  return true;
+}
+
+bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
+                    size_t size, bool inside_python) {
+  DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
+  [[maybe_unused]] auto _ =
+      inside_python ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
+  Conn* conn;
+  {
+    std::shared_lock<std::shared_mutex> lock(conn_mu_);
+    conn = conn_id_to_conn_[conn_id];
+  }
+
+  uccl::Mhandle* mhandle;
+  {
+    std::shared_lock<std::shared_mutex> lock(mr_mu_);
+    mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  }
+
+  uccl::ucclRequest ureq[kMaxInflightChunks];
+  bool done[kMaxInflightChunks] = {false};
+
+  void* cur_data = const_cast<void*>(data);
+  size_t size_sent = 0;
+  int ureq_max = (size + kChunkSize - 1) / kChunkSize;
+  int ureq_issued = 0, ureq_finished = 0;
+
+  while (ureq_finished < ureq_max) {
+    while (ureq_issued - ureq_finished < kMaxInflightChunks &&
+           size_sent < size) {
+      size_t chunk_size = std::min(size - size_sent, kChunkSize);
+      auto rc = ep_->uccl_send_async(
+          static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
+          cur_data, chunk_size, &ureq[ureq_issued % kMaxInflightChunks]);
+      if (rc == -1) break;
+      cur_data += chunk_size;
+      size_sent += chunk_size;
+      done[ureq_issued % kMaxInflightChunks] = false;
+      ureq_issued++;
+    }
+    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+
+    // First, poll all outstanding requests and mark which ones are done.
+    for (int i = ureq_finished; i < ureq_issued; i++) {
+      if (done[i % kMaxInflightChunks]) {
+        continue;
+      }
+      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+        // Just mark it as completed, DO NOT increment ureq_finished here.
+        done[i % kMaxInflightChunks] = true;
+      }
+    }
+
+    // Now, advance the ureq_finished counter as far as possible.
+    while (ureq_finished < ureq_issued &&
+           done[ureq_finished % kMaxInflightChunks]) {
+      ureq_finished++;
+    }
+  }
+
+  return true;
+}
+
+bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
+                    bool inside_python) {
+  [[maybe_unused]] auto _ =
+      inside_python ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
+  Conn* conn;
+  {
+    std::shared_lock<std::shared_mutex> lock(conn_mu_);
+    conn = conn_id_to_conn_[conn_id];
+  }
+
+  uccl::Mhandle* mhandle;
+  {
+    std::shared_lock<std::shared_mutex> lock(mr_mu_);
+    mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  }
+  int size_int = static_cast<int>(size);
+
+  uccl::ucclRequest ureq[kMaxInflightChunks];
+  bool done[kMaxInflightChunks] = {false};
+
+  void* cur_data = data;
+  size_t size_post_recv = 0;
+  int ureq_max = (size + kChunkSize - 1) / kChunkSize;
+  int ureq_issued = 0, ureq_finished = 0;
+
+  while (ureq_finished < ureq_max) {
+    while (ureq_issued - ureq_finished < kMaxInflightChunks &&
+           size_post_recv < size) {
+      int chunk_size = std::min(size - size_post_recv, kChunkSize);
+      auto rc = ep_->uccl_recv_async(
+          static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
+          &cur_data, &chunk_size, 1, &ureq[ureq_issued % kMaxInflightChunks]);
+      if (rc == -1) break;
+      cur_data += chunk_size;
+      size_post_recv += chunk_size;
+      done[ureq_issued % kMaxInflightChunks] = false;
+      ureq_issued++;
+    }
+    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+
+    // First, poll all outstanding requests and mark which ones are done.
+    for (int i = ureq_finished; i < ureq_issued; i++) {
+      if (done[i % kMaxInflightChunks]) {
+        continue;
+      }
+      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+        // Just mark it as completed, DO NOT increment ureq_finished here.
+        done[i % kMaxInflightChunks] = true;
+      }
+    }
+
+    // Now, advance the ureq_finished counter as far as possible.
+    while (ureq_finished < ureq_issued &&
+           done[ureq_finished % kMaxInflightChunks]) {
+      ureq_finished++;
+    }
+  }
+
   return true;
 }
 
@@ -391,111 +457,48 @@ bool Endpoint::send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
   return true;
 }
 
-bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
-                    size_t size, uccl::FifoItem const& slot_item) {
-  DCHECK(size <= 0xffffffff);
-  return send(conn_id, mr_id, data, size);
-}
+bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
+                          size_t size, uint64_t* transfer_id) {
+  py::gil_scoped_release release;
 
-bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
-                    size_t size) {
-  DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
+  Task* task = new Task{
+      .type = TaskType::SEND,
+      .data = const_cast<void*>(data),
+      .size = size,
+      .conn_id = conn_id,
+      .mr_id = mr_id,
+      .done = false,
+      .self_ptr = nullptr,
+  };
+  task->self_ptr = task;
 
-  auto conn = conn_id_to_conn_[conn_id];
-  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  *transfer_id = reinterpret_cast<uint64_t>(task);
 
-  uccl::ucclRequest ureq[kMaxInflightChunks];
-  bool done[kMaxInflightChunks] = {false};
-
-  void* cur_data = const_cast<void*>(data);
-  size_t size_sent = 0;
-  int ureq_max = (size + kChunkSize - 1) / kChunkSize;
-  int ureq_issued = 0, ureq_finished = 0;
-
-  while (ureq_finished < ureq_max) {
-    while (ureq_issued - ureq_finished < kMaxInflightChunks &&
-           size_sent < size) {
-      size_t chunk_size = std::min(size - size_sent, kChunkSize);
-      auto rc = ep_->uccl_send_async(
-          static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
-          cur_data, chunk_size, &ureq[ureq_issued % kMaxInflightChunks]);
-      if (rc == -1) break;
-      cur_data += chunk_size;
-      size_sent += chunk_size;
-      done[ureq_issued % kMaxInflightChunks] = false;
-      ureq_issued++;
-    }
-    check_python_signals();
-
-    // First, poll all outstanding requests and mark which ones are done.
-    for (int i = ureq_finished; i < ureq_issued; i++) {
-      if (done[i % kMaxInflightChunks]) {
-        continue;
-      }
-      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
-        // Just mark it as completed, DO NOT increment ureq_finished here.
-        done[i % kMaxInflightChunks] = true;
-      }
-    }
-
-    // Now, advance the ureq_finished counter as far as possible.
-    while (ureq_finished < ureq_issued &&
-           done[ureq_finished % kMaxInflightChunks]) {
-      ureq_finished++;
-    }
+  while (jring_mp_enqueue_bulk(send_task_ring_, task, 1, nullptr) != 1) {
   }
 
   return true;
 }
 
-bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
+bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
+                          size_t size, uint64_t* transfer_id) {
 #ifdef WITH_PYTHON
   py::gil_scoped_release release;
 #endif
-  auto conn = conn_id_to_conn_[conn_id];
-  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
-  int size_int = static_cast<int>(size);
+  Task* task = new Task{
+      .type = TaskType::RECV,
+      .data = data,
+      .size = size,
+      .conn_id = conn_id,
+      .mr_id = mr_id,
+      .done = false,
+      .self_ptr = nullptr,
+  };
+  task->self_ptr = task;
 
-  uccl::ucclRequest ureq[kMaxInflightChunks];
-  bool done[kMaxInflightChunks] = {false};
+  *transfer_id = reinterpret_cast<uint64_t>(task);
 
-  void* cur_data = data;
-  size_t size_post_recv = 0;
-  int ureq_max = (size + kChunkSize - 1) / kChunkSize;
-  int ureq_issued = 0, ureq_finished = 0;
-
-  while (ureq_finished < ureq_max) {
-    while (ureq_issued - ureq_finished < kMaxInflightChunks &&
-           size_post_recv < size) {
-      int chunk_size = std::min(size - size_post_recv, kChunkSize);
-      auto rc = ep_->uccl_recv_async(
-          static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
-          &cur_data, &chunk_size, 1, &ureq[ureq_issued % kMaxInflightChunks]);
-      if (rc == -1) break;
-      cur_data += chunk_size;
-      size_post_recv += chunk_size;
-      done[ureq_issued % kMaxInflightChunks] = false;
-      ureq_issued++;
-    }
-
-    check_python_signals();
-
-    // First, poll all outstanding requests and mark which ones are done.
-    for (int i = ureq_finished; i < ureq_issued; i++) {
-      if (done[i % kMaxInflightChunks]) {
-        continue;
-      }
-      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
-        // Just mark it as completed, DO NOT increment ureq_finished here.
-        done[i % kMaxInflightChunks] = true;
-      }
-    }
-
-    // Now, advance the ureq_finished counter as far as possible.
-    while (ureq_finished < ureq_issued &&
-           done[ureq_finished % kMaxInflightChunks]) {
-      ureq_finished++;
-    }
+  while (jring_mp_enqueue_bulk(recv_task_ring_, task, 1, nullptr) != 1) {
   }
 
   return true;
@@ -660,59 +663,60 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   return true;
 }
 
-bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
-                          size_t size, uint64_t* transfer_id) {
-#ifdef WITH_PYTHON
-  py::gil_scoped_release release;
-#endif
-  auto conn = conn_id_to_conn_[conn_id];
-  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
+                    uccl::FifoItem const& slot_item, bool inside_python) {
+  auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
 
-  auto _transfer_id = next_transfer_id_.fetch_add(1);
-  auto* ureq = new uccl::ucclRequest();
+  if (!ucclParamRCMode()) {
+    DCHECK(false) << "RDMA READ is only supported in RC mode, toggle RCMODE to "
+                     "be True in transport_config.h";
+    std::abort();
+  }
 
-  *transfer_id = _transfer_id;
-  transfer_id_to_ureq_[_transfer_id] = ureq;
-
+  DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
+  auto* conn = conn_id_to_conn_[conn_id];
+  auto* mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  uccl::ucclRequest ureq;
+  memset(&ureq, 0, sizeof(uccl::ucclRequest));
   int rc;
   do {
-    rc = ep_->uccl_send_async(
-        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
-        (void*)data, size, ureq);
+    rc = ep_->uccl_read_async(
+        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle, dst,
+        size, slot_item, &ureq);
     if (rc == -1) {
-      check_python_signals();
+      auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
       std::this_thread::yield();
     }
   } while (rc == -1);
 
+  while (!ep_->uccl_poll_ureq_once(&ureq)) {
+    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+  }
   return true;
 }
 
-bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
-                          size_t size, uint64_t* transfer_id) {
+bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
+                          size_t size, uccl::FifoItem const& slot_item,
+                          uint64_t* transfer_id) {
 #ifdef WITH_PYTHON
   py::gil_scoped_release release;
 #endif
-  auto conn = conn_id_to_conn_[conn_id];
-  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  ReadTask* read_task = new ReadTask{
+      .type = TaskType::READ,
+      .data = dst,
+      .size = size,
+      .conn_id = conn_id,
+      .mr_id = mr_id,
+      .done = false,
+      .self_ptr = nullptr,
+      .slot_item = slot_item,
+  };
+  read_task->self_ptr = read_task;
 
-  auto _transfer_id = next_transfer_id_.fetch_add(1);
-  auto* ureq = new uccl::ucclRequest();
+  *transfer_id = reinterpret_cast<uint64_t>(read_task);
 
-  *transfer_id = _transfer_id;
-  transfer_id_to_ureq_[_transfer_id] = ureq;
-  int size_int = static_cast<int>(size);
-
-  int rc;
-  do {
-    rc = ep_->uccl_recv_async(
-        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
-        &data, &size_int, 1, ureq);
-    if (rc == -1) {
-      check_python_signals();
-      std::this_thread::yield();
-    }
-  } while (rc == -1);
+  while (jring_mp_enqueue_bulk(read_task_ring_, read_task, 1, nullptr) != 1) {
+  }
 
   return true;
 }
@@ -739,22 +743,61 @@ bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
   return true;
 }
 
+void Endpoint::send_proxy_thread_func() {
+  uccl::pin_thread_to_numa(numa_node_);
+  Task task;
+  ReadTask read_task;
+
+  while (!stop_.load(std::memory_order_acquire)) {
+    if (jring_sc_dequeue_bulk(send_task_ring_, &task, 1, nullptr) == 1) {
+      send(task.conn_id, task.mr_id, task.data, task.size, false);
+      task.self_ptr->done.store(true, std::memory_order_release);
+    }
+
+    if (jring_sc_dequeue_bulk(read_task_ring_, &read_task, 1, nullptr) == 1) {
+      read(read_task.conn_id, read_task.mr_id, read_task.data, read_task.size,
+           read_task.slot_item, false);
+      read_task.self_ptr->done.store(true, std::memory_order_release);
+    }
+  }
+}
+
+void Endpoint::recv_proxy_thread_func() {
+  uccl::pin_thread_to_numa(numa_node_);
+  Task task;
+
+  while (!stop_.load(std::memory_order_acquire)) {
+    if (jring_sc_dequeue_bulk(recv_task_ring_, &task, 1, nullptr) == 1) {
+      recv(task.conn_id, task.mr_id, task.data, task.size, false);
+      task.self_ptr->done.store(true, std::memory_order_release);
+    }
+  }
+}
+
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
 #ifdef WITH_PYTHON
   py::gil_scoped_release release;
 #endif
-  auto* ureq = transfer_id_to_ureq_.at(transfer_id);
-  *is_done = ep_->uccl_poll_ureq_once(ureq);
-  if (*is_done) {
-    delete ureq;
-    transfer_id_to_ureq_.erase(transfer_id);
+  auto task = reinterpret_cast<Task*>(transfer_id);
+  if (task->type == TaskType::READ) {
+    auto read_task = reinterpret_cast<ReadTask*>(transfer_id);
+    *is_done = read_task->done.load(std::memory_order_acquire);
+    if (*is_done) {
+      delete read_task;
+    }
+  } else {
+    *is_done = task->done.load(std::memory_order_acquire);
+    if (*is_done) {
+      delete task;
+    }
   }
   return true;
 }
 
 bool Endpoint::join_group(std::string const& discovery_uri,
                           std::string const& group_name, int world_size,
-                          int my_rank, int remote_gpu_idx) {
+                          int my_rank, int remote_gpu_idx,
+                          uint16_t remote_port) {
   std::string local_ip;
   {
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -801,7 +844,7 @@ bool Endpoint::join_group(std::string const& discovery_uri,
                   << cid << "\n";
       }
     } else {
-      if (!connect(peers[r].ip_addr, remote_gpu_idx, cid, -1)) {
+      if (!connect(peers[r].ip_addr, remote_gpu_idx, remote_port, cid)) {
         std::cerr << "[join_group] connect from rank " << r << " failed\n";
         return false;
       }
@@ -811,14 +854,15 @@ bool Endpoint::join_group(std::string const& discovery_uri,
   return true;
 }
 
-std::unique_ptr<Endpoint> Endpoint::CreateAndJoin(
+std::unique_ptr<Endpoint> Endpoint::create_and_join(
     std::string const& discovery_uri, std::string const& group_name,
     int world_size, int my_rank, uint32_t local_gpu_idx, uint32_t num_cpus,
     int remote_gpu_idx) {
   auto ep = std::make_unique<Endpoint>(local_gpu_idx, num_cpus);
+  uint16_t port = ep->ep_->get_p2p_listen_port(gpu_to_dev[local_gpu_idx]);
   if (!ep->join_group(discovery_uri, group_name, world_size, my_rank,
-                      remote_gpu_idx)) {
-    throw std::runtime_error("Endpoint::CreateAndJoin() failed");
+                      remote_gpu_idx, port)) {
+    throw std::runtime_error("Endpoint::create_and_join() failed");
   }
   return ep;
 }
@@ -844,11 +888,7 @@ std::vector<uint8_t> Endpoint::get_endpoint_metadata() {
   if (num_ifs != 1) UCCL_INIT_CHECK(false, "No IP interface found");
 
   std::string ip_str = uccl::get_dev_ip(uccl_ifname);
-  uint16_t port = ep_->get_port();
-  // int listen_fd = uccl::open_ephemeral_port(port);
-  // if (listen_fd < 0) {
-  //   throw std::runtime_error("Failed to open ephemeral port");
-  // }
+  uint16_t port = ep_->get_p2p_listen_port(gpu_to_dev[local_gpu_idx_]);
 
   bool is_ipv6 = ip_str.find(':') != std::string::npos;
   size_t ip_len = is_ipv6 ? 16 : 4;

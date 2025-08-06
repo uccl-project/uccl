@@ -2,9 +2,11 @@
 #include "common.hpp"
 #include "peer_copy.cuh"
 #include "ring_buffer.cuh"
+#include "util/gpu_rt.h"
 #include <cstdio>
+#ifndef __HIP_PLATFORM_AMD__
 #include <cuda_pipeline.h>
-#include <cuda_runtime.h>
+#endif
 
 __global__ void peer_copy_kernel(char const* __restrict__ src,
                                  char* __restrict__ dst, size_t num_bytes) {
@@ -16,9 +18,9 @@ __global__ void peer_copy_kernel(char const* __restrict__ src,
   }
 }
 
-cudaError_t launch_peer_bulk_copy(void* dst_ptr, int dst_dev, void* src_ptr,
-                                  int src_dev, size_t bytes,
-                                  cudaStream_t stream) {
+gpuError_t launch_peer_bulk_copy(void* dst_ptr, int dst_dev, void* src_ptr,
+                                 int src_dev, size_t bytes,
+                                 gpuStream_t stream) {
   constexpr int threads_per_block = 256;
   size_t total_threads = (bytes + threads_per_block - 1) / threads_per_block;
   dim3 blocks;
@@ -29,7 +31,7 @@ cudaError_t launch_peer_bulk_copy(void* dst_ptr, int dst_dev, void* src_ptr,
   peer_copy_kernel<<<blocks, threads_per_block, 0, stream>>>(
       static_cast<char const*>(src_ptr), static_cast<char*>(dst_ptr), bytes);
 
-  return cudaGetLastError();
+  return gpuGetLastError();
 }
 
 __device__ inline void copy128(char const* __restrict__ src,
@@ -88,11 +90,11 @@ __global__ void peer_copy_kernel_vec_batched(CopyTask const* __restrict__ tasks,
   }
 }
 
-cudaError_t launch_peer_bulk_copy2(CopyTask const* host_tasks, int num_tasks,
-                                   cudaStream_t stream, int src_device,
-                                   CopyTask*& d_tasks) {
-  cudaMemcpyAsync(d_tasks, host_tasks, num_tasks * sizeof(CopyTask),
-                  cudaMemcpyHostToDevice, stream);
+gpuError_t launch_peer_bulk_copy2(CopyTask const* host_tasks, int num_tasks,
+                                  gpuStream_t stream, int src_device,
+                                  CopyTask*& d_tasks) {
+  GPU_RT_CHECK(gpuMemcpyAsync(d_tasks, host_tasks, num_tasks * sizeof(CopyTask),
+                              gpuMemcpyHostToDevice, stream));
   constexpr int threads_per_block = 256;
   dim3 blocks(NVLINK_SM_PER_PROCESS);
   if (false) {
@@ -109,9 +111,10 @@ cudaError_t launch_peer_bulk_copy2(CopyTask const* host_tasks, int num_tasks,
         <<<blocks, threads_per_block, shmem, stream>>>(d_tasks, num_tasks,
                                                        tasks_per_block);
   }
-  return cudaGetLastError();
+  return gpuGetLastError();
 }
 
+#ifndef __HIP_PLATFORM_AMD__
 template <int PIPE_DEPTH = 2, typename VecT = int4>
 __global__ void peer_copy_kernel_vec_pipelined(
     CopyTask const* __restrict__ tasks, int num_tasks, int tasks_per_block) {
@@ -182,6 +185,81 @@ __global__ void peer_copy_kernel_vec_pipelined(
     __syncthreads();
   }
 }
+#else
+// Manual implementation of pipeline functionality for HIP
+// Since HIP doesn't have __pipeline_* functions, we implement a simplified
+// version
+template <int PIPE_DEPTH = 2, typename VecT = int4>
+__global__ void peer_copy_kernel_vec_pipelined(
+    CopyTask const* __restrict__ tasks, int num_tasks, int tasks_per_block) {
+  extern __shared__ uint8_t shmem_raw[];
+  VecT* __restrict__ ring = reinterpret_cast<VecT*>(shmem_raw);
+
+  int const nThreads = blockDim.x;
+  int const tid = threadIdx.x;
+  int const blockTask0 = blockIdx.x * tasks_per_block;
+
+  for (int local = 0; local < tasks_per_block; ++local) {
+    int const task_id = blockTask0 + local;
+    if (task_id >= num_tasks) return;
+
+    CopyTask t = tasks[task_id];
+    char const* __restrict__ src = static_cast<char const*>(t.src_ptr);
+    char* __restrict__ dst = static_cast<char*>(t.dst_ptr);
+    const size_t nbytes = t.bytes;
+
+    const size_t nVec = nbytes / sizeof(VecT);
+    const size_t vecPerThread = divUp(nVec, nThreads);
+    const size_t myFirst = tid * vecPerThread;
+    const size_t myLast = min(myFirst + vecPerThread, nVec);
+
+    // Manual pipelining implementation for HIP
+    // Since we don't have __pipeline_* functions, we use a simple staging
+    // approach
+    int wr = 0, rd = 0, issued = 0;
+
+    for (size_t v = myFirst; v < myLast; ++v) {
+      // Stage 1: Manual copy from global memory to shared memory
+      VecT const* gptr = reinterpret_cast<VecT const*>(src + v * sizeof(VecT));
+      VecT* sptr = &ring[wr * nThreads + tid];
+
+      // Manual copy instead of __pipeline_memcpy_async
+      *sptr = *gptr;
+      __threadfence_block();  // Ensure shared memory write is visible
+
+      ++issued;
+      wr = (wr + 1) % PIPE_DEPTH;
+
+      // Stage 2: retire oldest when PIPE_DEPTH requests in flight
+      if (issued == PIPE_DEPTH) {
+        __syncthreads();  // Manual synchronization instead of
+                          // __pipeline_wait_prior
+        size_t dstIdx = v - (PIPE_DEPTH - 1);
+        *reinterpret_cast<VecT*>(dst + dstIdx * sizeof(VecT)) =
+            ring[rd * nThreads + tid];
+        rd = (rd + 1) % PIPE_DEPTH;
+        --issued;
+      }
+    }
+
+    // drain remaining inflight transactions
+    while (issued) {
+      --issued;
+      __syncthreads();  // Manual synchronization
+      size_t dstIdx = myLast - issued;
+      *reinterpret_cast<VecT*>(dst + dstIdx * sizeof(VecT)) =
+          ring[rd * nThreads + tid];
+      rd = (rd + 1) % PIPE_DEPTH;
+    }
+
+    if (tid == 0) {
+      for (size_t j = nVec * sizeof(VecT); j < nbytes; ++j) dst[j] = src[j];
+    }
+
+    __syncthreads();
+  }
+}
+#endif
 
 __device__ __forceinline__ unsigned long long atomicSubULL(
     unsigned long long* addr, unsigned long long val) {
@@ -216,7 +294,11 @@ __global__ void peer_copy_kernel_vec_many(HostToDeviceNVlinkBuffer* rb) {
     CopyTask task;
     bool have = false;
     if (lane == 0) have = pop_global(rb, task);
+#ifndef __HIP_PLATFORM_AMD__
     have = __shfl_sync(0xFFFFFFFF, have, 0);
+#else
+    have = __shfl(have, 0);
+#endif
     if (!have) continue;
 
     unsigned long long src_ll = 0, dst_ll = 0;
@@ -224,9 +306,15 @@ __global__ void peer_copy_kernel_vec_many(HostToDeviceNVlinkBuffer* rb) {
       src_ll = (unsigned long long)task.src_ptr;
       dst_ll = (unsigned long long)task.dst_ptr;
     }
+#ifndef __HIP_PLATFORM_AMD__
     src_ll = __shfl_sync(0xFFFFFFFF, src_ll, 0);
     dst_ll = __shfl_sync(0xFFFFFFFF, dst_ll, 0);
     size_t nbytes = __shfl_sync(0xFFFFFFFF, task.bytes, 0);
+#else
+    src_ll = __shfl(src_ll, 0);
+    dst_ll = __shfl(dst_ll, 0);
+    size_t nbytes = __shfl(task.bytes, 0);
+#endif
 
     char const* __restrict__ src = (char const*)src_ll;
     char* __restrict__ dst = (char*)dst_ll;
@@ -280,14 +368,14 @@ __global__ void peer_copy_kernel_vec_persistent(HostToDeviceNVlinkBuffer* rb)
 }
 
 HostToDeviceNVlinkBuffer* initialize_ring_buffer_for_nvlink_forwarding(
-    cudaStream_t stream) {
+    gpuStream_t stream) {
   HostToDeviceNVlinkBuffer* rb;
-  cudaError_t err =
-      cudaHostAlloc(reinterpret_cast<void**>(&rb),
-                    sizeof(HostToDeviceNVlinkBuffer), cudaHostAllocMapped);
-  if (err != cudaSuccess) {
+  gpuError_t err =
+      gpuHostAlloc(reinterpret_cast<void**>(&rb),
+                   sizeof(HostToDeviceNVlinkBuffer), gpuHostAllocMapped);
+  if (err != gpuSuccess) {
     fprintf(stderr, "Error allocating ring buffer for NVLink forwarding: %s\n",
-            cudaGetErrorString(err));
+            gpuGetErrorString(err));
     std::abort();
   }
 
@@ -295,17 +383,17 @@ HostToDeviceNVlinkBuffer* initialize_ring_buffer_for_nvlink_forwarding(
   constexpr int threads_per_block = 256;
   dim3 blocks(NVLINK_SM_PER_PROCESS);
   peer_copy_kernel_vec_many<<<blocks, threads_per_block, 0, stream>>>(rb);
-  err = cudaGetLastError();
-  if (err != cudaSuccess) {
+  err = gpuGetLastError();
+  if (err != gpuSuccess) {
     fprintf(stderr, "Error launching kernel for NVLink forwarding: %s\n",
-            cudaGetErrorString(err));
+            gpuGetErrorString(err));
     std::abort();
   }
   return rb;
 }
 
 bool post_copy_task(HostToDeviceNVlinkBuffer* rb, CopyTask const* host_tasks,
-                    int num_tasks, cudaStream_t stream, int src_device,
+                    int num_tasks, gpuStream_t stream, int src_device,
                     CopyTask*& d_tasks) {
   uint64_t cur_head = rb->head;
   uint64_t cur_tail = rb->volatile_tail();

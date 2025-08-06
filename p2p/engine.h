@@ -10,6 +10,8 @@
 #include <pybind11/pybind11.h>
 #endif
 #include <mutex>
+#include <atomic>
+#include <shared_mutex>
 #include <string>
 #include <thread>
 #include <tuple>
@@ -74,13 +76,13 @@ class Endpoint {
    * input:
    *   ip_addr: the IP address of the remote server
    *   remote_gpu_idx: the GPU index of the remote server
+   *   remote_port: the port of the remote server (optional)
    * output:
    *   conn_id: the ID of the connection
-   *   remote_port: the port of the remote server (optional)
    */
-  bool connect(std::string const& ip_addr, int const& remote_gpu_idx,
-               uint64_t& conn_id, int remote_port);
-#ifdef WITH_PYTHON
+  bool connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
+               uint64_t& conn_id);
+
   bool connect(py::bytes const& metadata, uint64_t& conn_id);
 #endif
   /*
@@ -110,8 +112,6 @@ class Endpoint {
   bool regv(std::vector<void const*> const& data_v,
             std::vector<size_t> const& size_v, std::vector<uint64_t>& mr_id_v);
 
-  bool send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
-                void const* meta, size_t meta_len);
   /*
    * Send data to the remote server. Blocking.
    *
@@ -121,22 +121,8 @@ class Endpoint {
    *   data: the data to send
    *   size: the size of the data
    */
-  bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size);
-
   bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
-            uccl::FifoItem const& slot_item);
-
-  bool read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
-            uccl::FifoItem const& slot_item);
-
-  /* Send a vector of data chunks. Blocking. */
-  bool sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-             std::vector<void const*> data_v, std::vector<size_t> size_v,
-             size_t num_iovs);
-
-  /* Send data to the remote server asynchronously. */
-  bool send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
-                  size_t size, uint64_t* transfer_id);
+            bool inside_python = true);
 
   /*
    * Receive data from the remote server. Blocking.
@@ -148,16 +134,45 @@ class Endpoint {
    *   data: the data to receive
    *   size: the size of the data
    */
-  bool recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size);
+  bool recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
+            bool inside_python = true);
+
+  bool send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
+                void const* meta, size_t meta_len);
+
+  /* Send data to the remote server asynchronously. */
+  bool send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
+                  size_t size, uint64_t* transfer_id);
+
+  /* Receive data from the remote server asynchronously. */
+  bool recv_async(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
+                  uint64_t* transfer_id);
+
+  /* Send a vector of data chunks. Blocking. */
+  bool sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+             std::vector<void const*> data_v, std::vector<size_t> size_v,
+             size_t num_iovs);
 
   /* Receive a vector of data chunks. Blocking. */
   bool recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
              std::vector<void*> data_v, std::vector<size_t> size_v,
              size_t num_iovs);
 
-  /* Receive data from the remote server asynchronously. */
-  bool recv_async(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
-                  uint64_t* transfer_id);
+  /* Read data from the remote server. Blocking.
+   *
+   * input:
+   *   conn_id: the ID of the connection
+   *   mr_id: the ID of the data
+   *   dst: the destination buffer
+   *   size: the size of the data
+   *   slot_item: the slot item to use for the transfer
+   */
+  bool read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
+            uccl::FifoItem const& slot_item, bool inside_python = true);
+
+  /* Read data from the remote server asynchronously. */
+  bool read_async(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
+                  uccl::FifoItem const& slot_item, uint64_t* transfer_id);
 
   bool advertise(uint64_t conn_id, uint64_t mr_id, void* addr, size_t len,
                  char* out_buf);
@@ -184,14 +199,14 @@ class Endpoint {
    */
   bool join_group(std::string const& discovery_uri,
                   std::string const& group_name, int world_size, int my_rank,
-                  int remote_gpu_idx);
+                  int remote_gpu_idx, uint16_t remote_port);
 
   /**
    * Convenience constructor: create Endpoint and immediately join a group.
    * You may prefer this factory in Ray where each actor knows its rank and the
    * rendezvous, but not its peers’ IP addresses.
    */
-  static std::unique_ptr<Endpoint> CreateAndJoin(
+  static std::unique_ptr<Endpoint> create_and_join(
       std::string const& discovery_uri, std::string const& group_name,
       int world_size, int my_rank, uint32_t local_gpu_idx, uint32_t num_cpus,
       int remote_gpu_idx);
@@ -227,6 +242,7 @@ class Endpoint {
   int local_gpu_idx_;
   int remote_gpu_idx_;
   uint32_t num_cpus_;
+  int numa_node_;
 
   uccl::RDMAEndpoint* ep_;
 
@@ -234,17 +250,58 @@ class Endpoint {
   std::atomic<uint64_t> next_mr_id_ = 0;
   std::atomic<uint64_t> next_transfer_id_ = 0;
 
-  // TODO(yang): add mutex to protect the maps.
-  mutable std::mutex conn_mu_;
-
+  // Accessed by both app thread and proxy thread.
+  mutable std::shared_mutex conn_mu_;
   std::unordered_map<uint64_t, Conn*> conn_id_to_conn_;
+  mutable std::shared_mutex mr_mu_;
   std::unordered_map<uint64_t, MR*> mr_id_to_mr_;
-  std::unordered_map<uint64_t, uccl::ucclRequest*> transfer_id_to_ureq_;
 
+  // Single-threaded.
   std::unordered_map<int, uint64_t> rank2conn_;
 
   // Assuming 1TB GPU memory, 128KB KV block size.
   static constexpr size_t kMaxNumChunksPerTransfer = 1024ul * 1024 * 1024 / 128;
   std::atomic<uint32_t> rr_stream_{0};
   std::vector<gpuStream_t> streams_;
+
+  static constexpr size_t kTaskRingSize = 1024;
+
+  enum class TaskType {
+    SEND,
+    RECV,
+    READ,
+  };
+
+  struct alignas(64) Task {
+    TaskType type;
+    void* data;
+    size_t size;
+    uint64_t conn_id;
+    uint64_t mr_id;
+    std::atomic<bool> done;
+    // For proxy to access the task.done
+    Task* self_ptr;
+  };
+
+  struct alignas(64) ReadTask {
+    TaskType type;
+    void* data;
+    size_t size;
+    uint64_t conn_id;
+    uint64_t mr_id;
+    std::atomic<bool> done;
+    // For proxy to access the task.done
+    ReadTask* self_ptr;
+    uccl::FifoItem slot_item;
+  };
+
+  jring_t* send_task_ring_;
+  jring_t* recv_task_ring_;
+  jring_t* read_task_ring_;
+
+  std::atomic<bool> stop_{false};
+  std::thread send_proxy_thread_;
+  std::thread recv_proxy_thread_;
+  void send_proxy_thread_func();
+  void recv_proxy_thread_func();
 };

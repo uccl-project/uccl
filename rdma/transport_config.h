@@ -7,9 +7,6 @@
 #include <unistd.h>
 
 // #define STATS
-#ifndef LAZY_CREATE_ENGINE
-#define LAZY_CREATE_ENGINE
-#endif
 
 // Whether to pin the thread to the NUMA node.
 UCCL_PARAM(PIN_TO_NUMA, "PIN_TO_NUMA", 1);

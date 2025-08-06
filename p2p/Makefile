@@ -7,8 +7,7 @@ CUDA_LIB  := $(CUDA_HOME)/lib64
 CXX := g++
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I../include -I../rdma -I$(CUDA_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
-	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -lglog -lgflags -lgtest -lz -lelf -libverbs -lpthread \
-	-DLAZY_CREATE_ENGINE
+	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -lglog -lgflags -lgtest -lz -lelf -libverbs -lpthread
 
 # Python and pybind11 configuration
 PYTHON          ?= python3
@@ -62,7 +61,7 @@ $(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECT) ../rdma/librdma.a
 
 
 ../rdma/librdma.a: $(filter-out ../rdma/nccl_plugin.cc, $(wildcard ../rdma/*.cc)) ../rdma/*.h
-	make CXXFLAGS="-DLAZY_CREATE_ENGINE -DDISABLE_CALL_ONCE_STATIC" -C ../rdma librdma.a
+	make CXXFLAGS="-DLAZY_CREATE_ENGINE -DDISABLE_CALL_ONCE_STATIC" -C ../rdma librdma.a -j$(nproc)
 
 # Compile source files
 %.o: %.cc
@@ -86,11 +85,11 @@ install: $(TARGET) $(PLUGIN_SO)
 # Clean build artifacts
 clean:
 	rm -f $(OBJECTS) $(CORE_OBJECT) $(CAPI_OBJECT) $(TARGET) $(PLUGIN_SO)
-	make -C ../rdma clean
+	make -C ../rdma clean -j$(nproc)
 
 # Test the module
 test: $(TARGET)
-	$(PYTHON) tests/test_engine.py
+	$(PYTHON) tests/test_engine_write.py
 
 # Install pybind11 if not available
 install-deps:

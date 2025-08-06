@@ -2,10 +2,12 @@
 #ifdef USE_CUDA
 #include "cuda_runtime.h"
 #endif
+#include "util/gpu_rt.h"
 #include "util/jring.h"
 #include <arpa/inet.h>
 #include <glog/logging.h>
 #include <linux/in.h>
+#include <linux/tcp.h>
 #include <net/if.h>
 #include <algorithm>
 #include <atomic>
@@ -22,6 +24,8 @@
 #include <random>
 #include <regex>
 #include <sstream>
+#include <thread>
+#include <unordered_map>
 #include <vector>
 #include <fcntl.h>
 #include <ifaddrs.h>
@@ -174,6 +178,70 @@ inline uint16_t create_listen_socket(int* listen_fd) {
           << assigned_port;
 
   return assigned_port;
+}
+
+inline static void listen_accept_exchange(int oobport, void* send_data,
+                                          int send_size, void* recv_data,
+                                          int recv_size) {
+  int listen_fd;
+  create_listen_socket(&listen_fd, oobport);
+  CHECK(listen_fd >= 0) << "Failed to listen on port " << oobport;
+  VLOG(5) << "[listen_accept_exchange] server ready, listening on port "
+          << oobport;
+
+  struct sockaddr_in client_addr;
+  socklen_t client_len = sizeof(client_addr);
+
+  int client_fd =
+      accept(listen_fd, (struct sockaddr*)&client_addr, &client_len);
+  CHECK(client_fd >= 0) << "Failed to accept connection";
+
+  // Set nonblocking and nodelay
+  int flags = fcntl(client_fd, F_GETFL);
+  fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
+  int flag = 1;
+  setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
+
+  char client_ip[INET_ADDRSTRLEN];
+  inet_ntop(AF_INET, &(client_addr.sin_addr), client_ip, INET_ADDRSTRLEN);
+  VLOG(5) << "[listen_accept_exchange] accepted connection from " << client_ip;
+
+  send_message(client_fd, send_data, send_size);
+  receive_message(client_fd, recv_data, recv_size);
+
+  close(listen_fd);
+  close(client_fd);
+}
+
+inline static void connect_exchange(int oobport, std::string oob_ip,
+                                    void* send_data, int send_size,
+                                    void* recv_data, int recv_size) {
+  int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+  CHECK(sockfd >= 0) << "Failed to create socket";
+
+  struct sockaddr_in server_addr;
+  server_addr.sin_family = AF_INET;
+  server_addr.sin_port = htons(oobport);
+  server_addr.sin_addr.s_addr = inet_addr(oob_ip.c_str());
+
+  while (connect(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr)) <
+         0) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    VLOG(5) << "[connect_exchange] connecting to " << oob_ip << ":" << oobport;
+  }
+
+  // Set nonblocking and nodelay
+  int flags = fcntl(sockfd, F_GETFL);
+  fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
+  int flag = 1;
+  setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
+
+  VLOG(5) << "[connect_exchange] connected to " << oob_ip << ":" << oobport;
+
+  send_message(sockfd, send_data, send_size);
+  receive_message(sockfd, recv_data, recv_size);
+
+  close(sockfd);
 }
 
 #define UINT_CSN_BIT 8
@@ -1062,8 +1130,18 @@ static int cal_pcie_distance(fs::path const& devA, fs::path const& devB) {
     return chain; /* self → root */
   };
 
-  auto chainA = build_chain(devA_parent);
-  auto chainB = build_chain(devB_parent);
+  static std::unordered_map<fs::path, std::vector<std::string>>
+      dev_to_chain_cache;
+
+  if (dev_to_chain_cache.find(devA_parent) == dev_to_chain_cache.end()) {
+    dev_to_chain_cache[devA_parent] = build_chain(devA_parent);
+  }
+  if (dev_to_chain_cache.find(devB_parent) == dev_to_chain_cache.end()) {
+    dev_to_chain_cache[devB_parent] = build_chain(devB_parent);
+  }
+
+  auto chainA = dev_to_chain_cache[devA_parent];
+  auto chainB = dev_to_chain_cache[devB_parent];
 
   // Walk back from root until paths diverge
   size_t i = chainA.size();
@@ -1077,11 +1155,24 @@ static int cal_pcie_distance(fs::path const& devA, fs::path const& devB) {
 }
 
 static std::vector<fs::path> get_gpu_cards() {
-  // Discover GPU BDF using /sys/class/drm/cardX/device symlinks
+  // Get the device properties
+  int num_gpus;
+  GPU_RT_CHECK(gpuGetDeviceCount(&num_gpus));
+  char bdf[32];
+  std::vector<std::string> gpu_cards_ranked;
+  gpu_cards_ranked.reserve(num_gpus);
+  for (int i = 0; i < num_gpus; i++) {
+    // This order is aligned with PyTorch's GPU rank order.
+    GPU_RT_CHECK(gpuDeviceGetPCIBusId(bdf, sizeof(bdf), i));
+    gpu_cards_ranked.push_back(bdf);
+  }
+
   std::vector<fs::path> gpu_cards;
+  std::unordered_map<fs::path, int> gpu_cards_rank_map;
+
+  // Discover GPU BDF using /sys/class/drm/cardX/device symlinks
   const fs::path drm_class{"/sys/class/drm"};
   const std::regex card_re(R"(card(\d+))");
-
   if (fs::exists(drm_class)) {
     for (auto const& entry : fs::directory_iterator(drm_class)) {
       const std::string name = entry.path().filename();
@@ -1094,10 +1185,17 @@ static std::vector<fs::path> get_gpu_cards() {
       std::ifstream vf(dev_path / "vendor");
       std::string vs;
       if (!(vf >> vs)) continue;
-      uint32_t vendor = std::stoul(vs, nullptr, 0);  // handles "0x10de"
-
+      uint32_t vendor = std::stoul(vs, nullptr, 0);        // handles "0x10de"
       if (vendor != 0x10de && vendor != 0x1002) continue;  // NVIDIA or AMD
 
+      // Extract PCI bus ID from the last component of the device path
+      std::string pci_busid = dev_path.filename();
+      auto it = std::find(gpu_cards_ranked.begin(), gpu_cards_ranked.end(),
+                          pci_busid);
+      CHECK(it != gpu_cards_ranked.end())
+          << "GPU card " << pci_busid << " not found in ranked list";
+      auto distance = std::distance(gpu_cards_ranked.begin(), it);
+      gpu_cards_rank_map[dev_path] = distance;
       gpu_cards.push_back(dev_path);
     }
   }
@@ -1105,13 +1203,21 @@ static std::vector<fs::path> get_gpu_cards() {
   const fs::path nvidia_gpus{"/proc/driver/nvidia/gpus"};
   if (gpu_cards.empty() && fs::exists(nvidia_gpus)) {
     for (auto const& entry : fs::directory_iterator(nvidia_gpus)) {
-      gpu_cards.push_back(entry.path());
+      fs::path dev_path = fs::canonical(entry.path());
+      std::string pci_busid = dev_path.filename();
+      auto it = std::find(gpu_cards_ranked.begin(), gpu_cards_ranked.end(),
+                          pci_busid);
+      CHECK(it != gpu_cards_ranked.end())
+          << "GPU card " << pci_busid << " not found in ranked list";
+      auto distance = std::distance(gpu_cards_ranked.begin(), it);
+      gpu_cards_rank_map[dev_path] = distance;
+      gpu_cards.push_back(dev_path);
     }
   }
 
   std::sort(gpu_cards.begin(), gpu_cards.end(),
-            [](fs::path const& a, fs::path const& b) {
-              return a.filename() < b.filename();
+            [&gpu_cards_rank_map](fs::path const& a, fs::path const& b) {
+              return gpu_cards_rank_map[a] < gpu_cards_rank_map[b];
             });
 
   return gpu_cards;
@@ -1143,6 +1249,65 @@ static std::vector<std::pair<std::string, fs::path>> get_rdma_nics() {
               return a.first < b.first;
             });
   return ib_nics;
+}
+
+static inline std::map<int, int> map_gpu_to_dev(
+    std::vector<fs::path> const& gpu_cards,
+    std::vector<std::pair<std::string, fs::path>> const& ib_nics) {
+  std::map<int, int> gpu_to_dev;
+  std::vector<bool> nic_allocated(ib_nics.size(), false);
+
+  // Find the RDMA NIC that is closest to each of the GPUs,
+  // ensuring fair NIC allocation.
+  for (size_t i = 0; i < gpu_cards.size(); i++) {
+    auto gpu_device_path = gpu_cards[i];
+    int best_nic = -1;
+    int best_distance = std::numeric_limits<int>::max();
+    for (size_t j = 0; j < ib_nics.size(); ++j) {
+      if (nic_allocated[j]) continue;
+      int dist = uccl::cal_pcie_distance(gpu_device_path, ib_nics[j].second);
+      if (dist < best_distance) {
+        best_distance = dist;
+        best_nic = j;
+      }
+    }
+    if (best_nic != -1) {
+      gpu_to_dev[i] = best_nic;
+      nic_allocated[best_nic] = true;
+    } else {
+      // If all NICs are allocated, fallback to the closest
+      auto ib_nic_it = std::min_element(
+          ib_nics.begin(), ib_nics.end(), [&](auto const& a, auto const& b) {
+            return uccl::cal_pcie_distance(gpu_device_path, a.second) <
+                   uccl::cal_pcie_distance(gpu_device_path, b.second);
+          });
+      gpu_to_dev[i] = ib_nic_it - ib_nics.begin();
+    }
+  }
+
+  return gpu_to_dev;
+}
+
+static inline bool is_nvlink_peer(int local_gpu, int remote_gpu) {
+  int accessible = 0;
+  GPU_RT_CHECK(gpuDeviceCanAccessPeer(&accessible, local_gpu, remote_gpu));
+  if (!accessible) return false;
+
+#ifdef HAS_NVML
+  nvmlDevice_t local_dev, remote_dev;
+  nvmlDeviceGetHandleByIndex(local_gpu, &local_dev);
+  nvmlDeviceGetHandleByIndex(remote_gpu, &remote_dev);
+  nvmlP2PStatus_t status;
+  if (nvmlDeviceGetP2PStatus(local_dev, remote_dev, NVML_P2P_CAPS_INDEX_NVLINK,
+                             &status) == NVML_SUCCESS &&
+      status == NVML_P2P_STATUS_OK) {
+    return true;
+  } else {
+    return false;
+  }
+#else
+  return true;
+#endif
 }
 
 }  // namespace uccl

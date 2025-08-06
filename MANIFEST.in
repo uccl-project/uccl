@@ -1,1 +1,2 @@
 include uccl/lib/*.so
+include uccl/*.so

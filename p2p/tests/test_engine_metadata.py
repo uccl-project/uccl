@@ -12,8 +12,6 @@ import torch
 import socket
 import struct
 
-os.environ["UCCL_RCMODE"] = "1"
-
 try:
     from uccl import p2p
 

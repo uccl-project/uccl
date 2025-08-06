@@ -1,19 +1,15 @@
 #ifndef COMMON_HPP
 #define COMMON_HPP
 
-#include "util/cuda.h"
+#include "util/gpu_rt.h"
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <thread>
-#include <cuda.h>
-#include <cuda_runtime.h>
 #include <stdio.h>
 #include <unistd.h>
-
-// #define DEBUG_PRINT
 
 // #define REMOTE_PERSISTENT_KERNEL
 #define USE_GRACE_HOPPER
@@ -26,7 +22,7 @@
 #define kQueueMask (kQueueSize - 1)
 #define kMaxInflight 64
 #define kBatchSize 32
-#define kIterations 1000000
+#define kIterations 40000
 #define kNumThBlocks 6
 #define kNumThPerBlock 1
 #ifdef SYNCHRONOUS_COMPLETION
@@ -53,9 +49,7 @@
 #else
 #define NVLINK_SM_PER_PROCESS 2
 #endif
-
 bool pin_thread_to_cpu(int cpu);
-
 void cpu_relax();
 
 #endif  // COMMON_HPP

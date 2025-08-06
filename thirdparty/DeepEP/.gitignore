@@ -1,0 +1,8 @@
+compile_commands.json
+.idea
+.DS_Store
+*.pyc
+build/
+.cache/
+.vscode/
+*/cmake-build-*/

@@ -19,7 +19,7 @@ ARCH="$(uname -m)"
 IS_EFA=$(ls /sys/class/infiniband/ | grep rdmap || true)
 
 if [[ $TARGET != "cuda" && $TARGET != "rocm" ]]; then
-  echo "Usage: $0 [cuda|rocm] [all|rdma|p2p|efa] [PY_VER]" >&2
+  echo "Usage: $0 [cuda|rocm] [all|rdma|p2p|efa|gpudriven] [PY_VER]" >&2
 fi
 
 if [[ $ARCH == "aarch64" && $TARGET == "rocm" ]]; then
@@ -83,7 +83,7 @@ build_efa() {
 
   # EFA requires a custom NCCL.
   cd thirdparty/nccl-sg
-  make src.build -j NVCC_GENCODE="-gencode=arch=compute_80,code=sm_80"
+  make src.build -j$(nproc) NVCC_GENCODE="-gencode=arch=compute_80,code=sm_80"
   cd ../..
 
   echo "[container] Copying EFA .so to uccl/lib/"
@@ -113,10 +113,26 @@ build_p2p() {
   fi
   cd ..
 
-  echo "[container] Copying P2P .so to uccl/"
+  echo "[container] Copying P2P .so and collective.py to uccl/"
   mkdir -p uccl
   mkdir -p uccl/lib
   cp p2p/p2p.*.so uccl/
+  cp p2p/collective.py uccl/
+}
+
+build_gpu_driven() {
+  local TARGET="$1"
+  local ARCH="$2"
+  local IS_EFA="$3"
+
+  set -euo pipefail
+  echo "[container] build_gpu_driven Target: $TARGET"
+
+  cd gpu_driven && make clean && make -j$(nproc) && cd ..
+
+  echo "[container] Copying GPU-driven .so to uccl/"
+  mkdir -p uccl/lib
+  cp gpu_driven/*.so uccl/
 }
 
 # Determine the Docker image to use based on the target and architecture
@@ -156,7 +172,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -e IS_EFA="${IS_EFA}" \
   -e WHEEL_DIR="${WHEEL_DIR}" \
   -e BUILD_TYPE="${BUILD_TYPE}" \
-  -e FUNCTION_DEF="$(declare -f build_rdma build_efa build_p2p)" \
+  -e FUNCTION_DEF="$(declare -f build_rdma build_efa build_p2p build_gpu_driven)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
     set -euo pipefail
@@ -168,10 +184,13 @@ docker run --rm --user "$(id -u):$(id -g)" \
       build_efa "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "p2p" ]]; then
       build_p2p "$TARGET" "$ARCH" "$IS_EFA"
+    elif [[ "$BUILD_TYPE" == "gpudriven" ]]; then
+      build_gpu_driven "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "all" ]]; then
       build_rdma "$TARGET" "$ARCH" "$IS_EFA"
       build_efa "$TARGET" "$ARCH" "$IS_EFA"
       build_p2p "$TARGET" "$ARCH" "$IS_EFA"
+      build_gpu_driven "$TARGET" "$ARCH" "$IS_EFA"
     fi
 
     ls -lh uccl/

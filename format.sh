@@ -56,7 +56,7 @@ done
 
 echo "Formatting Python files with black..."
 
-PYTHON_DIRS=("p2p")  # Adjust as needed
+PYTHON_DIRS=("p2p" "gpu_driven")  # Adjust as needed
 BLACK_EXCLUDES=("thirdparty" "doc" "build")
 
 # Convert to exclude args

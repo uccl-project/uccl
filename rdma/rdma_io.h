@@ -512,6 +512,7 @@ struct FactoryDevice {
   int numa_node;
 
   bool support_cq_ex;
+  bool support_uc;
   struct ibv_context* context;
   struct ibv_device_attr dev_attr;
   struct ibv_port_attr port_attr;
@@ -536,6 +537,8 @@ struct FactoryDevice {
  */
 class RDMAFactory {
   std::vector<struct FactoryDevice> devices_;
+  std::map<int, int> gpu_to_dev_idx_;
+  int __num_devices = 0;
 
  public:
   ~RDMAFactory() { devices_.clear(); }
@@ -560,6 +563,13 @@ class RDMAFactory {
   static inline bool is_roce(int dev) {
     DCHECK(dev >= 0 && dev < rdma_ctl->devices_.size());
     return rdma_ctl->devices_[dev].is_roce;
+  }
+
+  static inline int get_best_dev_idx(int gpu_idx) {
+    auto it = rdma_ctl->gpu_to_dev_idx_.find(gpu_idx);
+    CHECK(it != rdma_ctl->gpu_to_dev_idx_.end())
+        << "Error: gpu_to_dev_idx_[" << gpu_idx << "] is not set.";
+    return it->second;
   }
 
   std::string to_string(void) const;
@@ -705,6 +715,18 @@ class SharedIOContext {
   SharedIOContext(int dev) {
     support_cq_ex_ = RDMAFactory::get_factory_dev(dev)->support_cq_ex;
     rc_mode_ = ucclParamRCMode();
+    auto support_uc = RDMAFactory::get_factory_dev(dev)->support_uc;
+    auto ib_name = RDMAFactory::get_factory_dev(dev)->ib_name;
+    if (rc_mode_) {
+      if (support_uc) {
+        printf(
+            "Using RC on dev %s (per UCCL_RCMODE=1). Note it supports UC, so "
+            "using RC may give less optimized/scalable performance.\n",
+            ib_name);
+      }
+    } else {
+      rc_mode_ = !support_uc;
+    }
     bypass_pacing_ = ucclParamBypassPacing();
     auto context = RDMAFactory::get_factory_dev(dev)->context;
     auto pd = RDMAFactory::get_factory_dev(dev)->pd;
@@ -749,7 +771,7 @@ class SharedIOContext {
       check_srq(true);
     }
 
-    if (!ucclParamRCMode()) {
+    if (!rc_mode_) {
       // Create Ctrl QP, CQ, and MR.
       util_rdma_create_qp(
           context, &ctrl_qp_, IBV_QPT_UD, support_cq_ex_, true,

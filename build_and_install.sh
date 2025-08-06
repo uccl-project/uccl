@@ -11,4 +11,5 @@ fi
 
 ARCH_SUFFIX=$(uname -m)
 ./build.sh $TARGET $BUILD_TYPE $PY_VER
-pip install wheelhouse-$TARGET/uccl-*.whl --force-reinstall
+pip install -r requirements.txt
+pip install wheelhouse-$TARGET/uccl-*.whl --force-reinstall --no-deps

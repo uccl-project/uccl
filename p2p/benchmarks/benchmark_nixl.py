@@ -350,7 +350,7 @@ def main():
     p.add_argument(
         "--device",
         choices=["cpu", "gpu"],
-        default="cpu",
+        default="gpu",
         help="Buffer location (cpu or gpu)",
     )
     p.add_argument(
@@ -365,6 +365,7 @@ def main():
             262144,
             1048576,
             10485760,
+            16 * 1024 * 1024,
             104857600,
         ],
         help="Comma separated list of message sizes in bytes",

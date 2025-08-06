@@ -80,7 +80,7 @@ jobs:
 
     - name: Check Python formatting
       run: |
-        PYTHON_DIRS=("p2p")
+        PYTHON_DIRS=("p2p" "gpu_driven")
         EXCLUDES="thirdparty|doc|build"
 
         for DIR in "${PYTHON_DIRS[@]}"; do

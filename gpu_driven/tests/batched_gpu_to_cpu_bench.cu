@@ -9,7 +9,6 @@
 #include <tuple>
 #include <vector>
 #include <assert.h>
-#include <cuda_pipeline.h>
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
@@ -26,12 +25,24 @@ struct alignas(128) Fifo {
 };
 
 __device__ __forceinline__ uint64_t ld_volatile(uint64_t* ptr) {
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+#ifdef __CUDA_ARCH__
   uint64_t ans;
   asm volatile("ld.volatile.global.u64 %0, [%1];"
                : "=l"(ans)
                : "l"(ptr)
                : "memory");
   return ans;
+#elif defined(__HIP_DEVICE_COMPILE__)
+  uint64_t ans;
+  ans = __builtin_nontemporal_load(ptr);
+  return ans;
+#else
+#error "Not supported"
+#endif
+#else
+  return *((volatile uint64_t const*)ptr);
+#endif
 }
 
 __device__ unsigned long long cycle_accum[kNumThBlocks] = {0};
@@ -123,15 +134,7 @@ void cpu_proxy(Fifo* fifo, int block_idx) {
     // TODO: here, if CPU caches fifo->head, it may not see the updates from
     // GPU.
     while (fifo->head == my_tail) {
-#ifdef DEBUG_PRINT
-      if (block_idx == 0) {
-        printf(
-            "CPU thread for block %d, waiting for head to advance: my_tail: "
-            "%lu, head: %llu\n",
-            block_idx, my_tail, fifo->head);
-      }
-#endif
-      /* spin */
+      cpu_relax();
     }
     uint64_t idx = my_tail & kQueueMask;
     uint64_t cmd;
@@ -139,14 +142,6 @@ void cpu_proxy(Fifo* fifo, int block_idx) {
       cmd = fifo->buf[idx];
       cpu_relax();  // Avoid hammering the cacheline.
     } while (cmd == 0);
-
-#ifdef DEBUG_PRINT
-    printf(
-        "CPU thread for block %d, seen: %d, my_head: %llu, my_tail: %lu, "
-        "consuming cmd %llu\n",
-        block_idx, seen, fifo->head, my_tail,
-        static_cast<unsigned long long>(cmd));
-#endif
     uint64_t expected_cmd =
         (static_cast<uint64_t>(block_idx) << 32) | (seen + 1);
     if (cmd != expected_cmd) {
@@ -164,16 +159,16 @@ void cpu_proxy(Fifo* fifo, int block_idx) {
 }
 
 int main() {
-  cudaStream_t stream1;
-  cudaStreamCreate(&stream1);
-  cudaCheckErrors("cudaStreamCreate failed");
+  gpuStream_t stream1;
+  GPU_RT_CHECK(gpuStreamCreate(&stream1));
 
-  cudaDeviceProp prop;
-  cudaGetDeviceProperties(&prop, 0);
+  gpuDeviceProp prop;
+  gpuGetDeviceProperties(&prop, 0);
   printf("clock rate: %d kHz\n", prop.clockRate);
 
   Fifo* fifos;
-  cudaHostAlloc(&fifos, sizeof(Fifo) * kNumThBlocks, cudaHostAllocMapped);
+  GPU_RT_CHECK(
+      gpuHostAlloc(&fifos, sizeof(Fifo) * kNumThBlocks, gpuHostAllocMapped));
 
   for (int i = 0; i < kNumThBlocks; ++i) {
     fifos[i].head = 0;
@@ -192,10 +187,8 @@ int main() {
   size_t shmem_bytes = kQueueSize * sizeof(unsigned long long);
   gpu_issue_batched_commands<<<kNumThBlocks, kNumThPerBlock, shmem_bytes,
                                stream1>>>(fifos);
-  cudaCheckErrors("gpu_issue_command kernel failed");
-
-  cudaStreamSynchronize(stream1);
-  cudaCheckErrors("cudaStreamSynchronize failed");
+  GPU_RT_CHECK_ERRORS("gpu_issue_command kernel failed");
+  GPU_RT_CHECK(gpuStreamSynchronize(stream1));
   auto t1 = std::chrono::high_resolution_clock::now();
 
   for (auto& t : cpu_threads) {
@@ -204,8 +197,8 @@ int main() {
 
   unsigned long long h_cycles[kNumThBlocks];
   unsigned int h_ops[kNumThBlocks];
-  cudaMemcpyFromSymbol(h_cycles, cycle_accum, sizeof(h_cycles));
-  cudaMemcpyFromSymbol(h_ops, op_count, sizeof(h_ops));
+  gpuMemcpyFromSymbol(h_cycles, cycle_accum, sizeof(h_cycles));
+  gpuMemcpyFromSymbol(h_ops, op_count, sizeof(h_ops));
 
   unsigned int tot_ops = 0;
   double total_us = 0;
@@ -228,8 +221,6 @@ int main() {
   printf("End-to-end Wall-clock time        : %.3f ms\n", wall_ms);
   printf("Throughput                        : %.2f Mops/s\n", throughput);
 
-  cudaFreeHost(fifos);
-  cudaCheckErrors("cudaFreeHost failed");
-  cudaStreamDestroy(stream1);
-  cudaCheckErrors("cudaStreamDestroy failed");
+  GPU_RT_CHECK(gpuFreeHost(fifos));
+  GPU_RT_CHECK(gpuStreamDestroy(stream1));
 }
