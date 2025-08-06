@@ -1929,7 +1929,6 @@ ConnID Endpoint::uccl_connect(int local_vdev, int remote_vdev,
   LOG(INFO) << "[Endpoint] connected to <" << remote_ip << ", " << remote_vdev
             << ">:" << listen_port << " bootstrap_fd " << bootstrap_fd;
 
-  fcntl(bootstrap_fd, F_SETFL, O_NONBLOCK);
   int flag = 1;
   setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
 
@@ -1992,7 +1991,6 @@ ConnID Endpoint::uccl_accept(int local_vdev, int* remote_vdev,
   LOG(INFO) << "[Endpoint] accept from " << remote_ip << ":"
             << cli_addr.sin_port << " bootstrap_fd " << bootstrap_fd;
 
-  fcntl(bootstrap_fd, F_SETFL, O_NONBLOCK);
   int flag = 1;
   setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
 

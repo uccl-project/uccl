@@ -1466,7 +1466,6 @@ ConnID Endpoint::uccl_connect(std::string remote_ip) {
     sleep(1);
   }
 
-  fcntl(bootstrap_fd, F_SETFL, O_NONBLOCK);
   int flag = 1;
   setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
 
@@ -1514,7 +1513,6 @@ ConnID Endpoint::uccl_accept(std::string& remote_ip) {
   LOG(INFO) << "[Endpoint] accept from " << remote_ip << ":"
             << cli_addr.sin_port;
 
-  fcntl(bootstrap_fd, F_SETFL, O_NONBLOCK);
   int flag = 1;
   setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
 

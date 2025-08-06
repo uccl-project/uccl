@@ -70,7 +70,7 @@ inline int receive_message(int sockfd, void* buffer, size_t n_bytes) {
   while (bytes_read < static_cast<int>(n_bytes)) {
     r = read(sockfd, static_cast<char*>(buffer) + bytes_read,
              static_cast<size_t>(n_bytes - bytes_read));
-    if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
+    if (r < 0 && !(errno == EINTR)) {
       CHECK(false) << "ERROR reading from socket";
     }
     if (r > 0) {
@@ -87,7 +87,7 @@ inline int send_message(int sockfd, void const* buffer, size_t n_bytes) {
     // Make sure we write exactly n_bytes
     r = write(sockfd, static_cast<char const*>(buffer) + bytes_sent,
               n_bytes - bytes_sent);
-    if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
+    if (r < 0 && !(errno == EINTR)) {
       CHECK(false) << "ERROR writing to socket";
     }
     if (r > 0) {
@@ -196,9 +196,7 @@ inline static void listen_accept_exchange(int oobport, void* send_data,
       accept(listen_fd, (struct sockaddr*)&client_addr, &client_len);
   CHECK(client_fd >= 0) << "Failed to accept connection";
 
-  // Set nonblocking and nodelay
-  int flags = fcntl(client_fd, F_GETFL);
-  fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
+  // Set nodelay
   int flag = 1;
   setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
 
@@ -230,9 +228,7 @@ inline static void connect_exchange(int oobport, std::string oob_ip,
     VLOG(5) << "[connect_exchange] connecting to " << oob_ip << ":" << oobport;
   }
 
-  // Set nonblocking and nodelay
-  int flags = fcntl(sockfd, F_GETFL);
-  fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
+  // Set nodelay
   int flag = 1;
   setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
 

@@ -1025,7 +1025,6 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 
-  fcntl(bootstrap_fd, F_SETFL, O_NONBLOCK);
   int flag = 1;
   setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
   uint16_t local_port = 0;
@@ -1165,7 +1164,6 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
 
   UCCL_LOG_EP << "accept from " << remote_ip << ":" << cli_addr.sin_port;
 
-  fcntl(bootstrap_fd, F_SETFL, O_NONBLOCK);
   int flag = 1;
   setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
 
