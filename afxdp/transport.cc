@@ -1376,7 +1376,8 @@ Endpoint::Endpoint(char const* interface_name, int num_queues,
   }
 #endif
 
-  ctx_pool_ = new SharedPool<PollCtx*, true>(kMaxInflightMsg);
+  ctx_pool_ = new SharedPool<PollCtx*, true>(
+      kMaxInflightMsg, [](PollCtx* ctx) { ctx->clear(); });
   ctx_pool_buf_ = new uint8_t[kMaxInflightMsg * sizeof(PollCtx)];
   for (int i = 0; i < kMaxInflightMsg; i++) {
     ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());
@@ -1688,7 +1689,6 @@ inline int Endpoint::find_least_loaded_engine_idx_and_update() {
 inline void Endpoint::fence_and_clean_ctx(PollCtx* ctx) {
   // Make the data written by the engine thread visible to the app thread.
   ctx->read_barrier();
-  ctx->clear();
   ctx_pool_->push(ctx);
 }
 

@@ -1199,7 +1199,6 @@ class RDMAEndpoint {
         std::atomic_load_explicit(&ctx->fence, std::memory_order_relaxed);
     std::atomic_thread_fence(std::memory_order_acquire);
 
-    ctx->clear();
     ctx_pool_->push(ctx);
   }
 

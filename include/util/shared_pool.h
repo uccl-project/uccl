@@ -56,6 +56,7 @@ class SharedPool {
       : global_pool_(capacity), cleanup_(cleanup) {}
   ~SharedPool() { shutdown_ = true; }
   void push(T item) {
+    cleanup_(item);
     if constexpr (Sync) {
       auto& cache = th_cache_;
       if (unlikely(cache.size() == kNumCachedItemsPerCPU)) {
@@ -83,7 +84,6 @@ class SharedPool {
         for (uint32_t i = 0; i < kNumCachedItemsPerCPU; i++) {
           T migrated;
           DCHECK(global_pool_.pop_front(&migrated));
-          cleanup_(migrated);
           DCHECK(cache.push_front(migrated));
         }
       }
@@ -93,7 +93,6 @@ class SharedPool {
     } else {
       T item;
       DCHECK(global_pool_.pop_front(&item));
-      cleanup_(item);
       return item;
     }
   }

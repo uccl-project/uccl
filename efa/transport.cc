@@ -1714,9 +1714,9 @@ Endpoint::Endpoint() : stats_thread_([this]() { stats_thread_fn(); }) {
   }
 #endif
 
-  ctx_pool_ = new SharedPool<PollCtx*, true>(NUM_FRAMES * 4);
+  ctx_pool_ = new SharedPool<PollCtx*, true>(
+      NUM_FRAMES * 4, [](PollCtx* ctx) { ctx->clear(); });
   ctx_pool_buf_ = new uint8_t[NUM_FRAMES * 4 * sizeof(PollCtx)];
-
   for (int i = 0; i < NUM_FRAMES * 4; i++) {
     ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());
   }
@@ -1776,7 +1776,8 @@ Endpoint::Endpoint(int gpu)
     engines.push_back(engine_vec_.back().get());
   }
 
-  ctx_pool_ = new SharedPool<PollCtx*, true>(NUM_FRAMES * 4);
+  ctx_pool_ = new SharedPool<PollCtx*, true>(
+      NUM_FRAMES * 4, [](PollCtx* ctx) { ctx->clear(); });
   ctx_pool_buf_ = new uint8_t[NUM_FRAMES * 4 * sizeof(PollCtx)];
   for (int i = 0; i < NUM_FRAMES * 4; i++) {
     ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());
@@ -2338,7 +2339,6 @@ inline int Endpoint::find_least_loaded_engine_idx_and_update(int vdev_idx,
 inline void Endpoint::fence_and_clean_ctx(PollCtx* ctx) {
   // Make the data written by the engine thread visible to the app thread.
   ctx->read_barrier();
-  ctx->clear();
   ctx_pool_->push(ctx);
 }
 
