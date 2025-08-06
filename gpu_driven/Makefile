@@ -9,9 +9,9 @@ EXT_SUFFIX        := $(shell $(PYTHON) -c "import sysconfig as s; print(s.get_co
 # GPU arch (override with: make SM=90)
 SM ?= 90
 
-CXXFLAGS  := -O3 -std=c++17 -Wall -pthread -fPIC
+CXXFLAGS  := -O3 -std=c++17 -Wall -pthread -fPIC -fvisibility=hidden
 LDFLAGS := -lpthread -lglog -libverbs -lnl-3 -lnl-route-3 -Xlinker -rpath -Xlinker $(CUDA_PATH)/lib64
-NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread -fPIC" -ccbin /usr/bin/g++
+NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread -fPIC -fvisibility=hidden" -ccbin /usr/bin/g++
 
 INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../include
 

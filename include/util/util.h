@@ -1259,11 +1259,11 @@ static inline std::map<int, int> map_gpu_to_dev(
 
   // Find the RDMA NIC that is closest to each of the GPUs,
   // ensuring fair NIC allocation.
-  for (int i = 0; i < gpu_cards.size(); i++) {
+  for (size_t i = 0; i < gpu_cards.size(); i++) {
     auto gpu_device_path = gpu_cards[i];
     int best_nic = -1;
     int best_distance = std::numeric_limits<int>::max();
-    for (int j = 0; j < ib_nics.size(); ++j) {
+    for (size_t j = 0; j < ib_nics.size(); ++j) {
       if (nic_allocated[j]) continue;
       int dist = uccl::cal_pcie_distance(gpu_device_path, ib_nics[j].second);
       if (dist < best_distance) {

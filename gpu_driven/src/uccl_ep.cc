@@ -1,4 +1,3 @@
-// src/uccl_ep.cc
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <atomic>
@@ -7,7 +6,6 @@
 
 namespace py = pybind11;
 
-// Minimal handle context (Python-only; no Tensor types in C++).
 struct Ctx {
   long num_tokens{0};
   long hidden{0};
@@ -19,28 +17,26 @@ static std::unordered_map<long, Ctx> g_ctx;
 
 class Buffer {
  public:
-  Buffer(py::object group, int /*device_index*/, long /*bytes*/, bool /*llm*/,
-         int /*qps*/, bool /*explicitly_destroy*/)
+  Buffer(py::object group, int device_index, long bytes, bool llm, int qps,
+         bool explicitly_destroy)
       : group_(std::move(group)) {}
 
   void destroy() {}
 
-  // Returns: (recv_x, recv_count, handle, event, hook)
-  py::tuple low_latency_dispatch(
-      py::object x, py::object topk_idx, long num_tokens, long num_experts,
-      bool /*use_fp8*/ = false, bool /*round_scale*/ = false,
-      bool /*use_ue8m0*/ = false, py::object /*cum_stats*/ = py::none(),
-      bool /*async_finish*/ = false, bool return_recv_hook = true) {
-    // infer hidden from x.shape[1]
+  py::tuple low_latency_dispatch(py::object x, py::object topk_idx,
+                                 long num_tokens, long num_experts,
+                                 bool use_fp8 = false, bool round_scale = false,
+                                 bool use_ue8m0 = false,
+                                 py::object cum_stats = py::none(),
+                                 bool async_finish = false,
+                                 bool return_recv_hook = true) {
     auto hidden = x.attr("shape").cast<py::tuple>()[1].cast<long>();
 
-    // recv_x: empty tensor [0, hidden] on same device/dtype as x
     py::object torch = py::module::import("torch");
     py::object recv_x = torch.attr("empty")(
         py::make_tuple(0, hidden), py::arg("device") = x.attr("device"),
         py::arg("dtype") = x.attr("dtype"));
 
-    // recv_count: zeros for local experts = num_experts // world_size
     long world = group_.attr("size")().cast<long>();
     long local_E = std::max<long>(1, num_experts / std::max<long>(1, world));
     py::object recv_count = torch.attr("zeros")(
@@ -59,12 +55,10 @@ class Buffer {
                           return_recv_hook ? hook : py::none());
   }
 
-  // Returns: (combined_x, event, hook)
-  py::tuple low_latency_combine(py::object recv_x, py::object /*topk_idx*/,
-                                py::object /*topk_weights*/, py::object handle,
-                                bool /*use_logfmt*/ = false,
-                                bool /*zero_copy*/ = false,
-                                bool /*async_finish*/ = false,
+  py::tuple low_latency_combine(py::object recv_x, py::object topk_idx,
+                                py::object topk_weights, py::object handle,
+                                bool use_logfmt = false, bool zero_copy = false,
+                                bool async_finish = false,
                                 bool return_recv_hook = true) {
     long h = handle.cast<long>();
     Ctx c{};
