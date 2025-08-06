@@ -119,6 +119,7 @@ Endpoint::~Endpoint() {
 
 bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
                        uint64_t& conn_id) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
 #endif
   std::cout << "Attempting to connect to " << ip_addr << ":" << remote_gpu_idx
@@ -293,11 +294,11 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
 }
 
 bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
-                    size_t size, bool inside_python) {
+                    size_t size) {
   DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
-  [[maybe_unused]] auto _ =
-      inside_python ? (py::gil_scoped_release{}, nullptr) : nullptr;
-
+#ifdef WITH_PYTHON
+  py::gil_scoped_release release;
+#endif
   Conn* conn;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
@@ -331,7 +332,7 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
       done[ureq_issued % kMaxInflightChunks] = false;
       ureq_issued++;
     }
-    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+    check_python_signals();
 
     // First, poll all outstanding requests and mark which ones are done.
     for (int i = ureq_finished; i < ureq_issued; i++) {
@@ -354,11 +355,10 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
   return true;
 }
 
-bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
-                    bool inside_python) {
-  [[maybe_unused]] auto _ =
-      inside_python ? (py::gil_scoped_release{}, nullptr) : nullptr;
-
+bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
+#ifdef WITH_PYTHON
+  py::gil_scoped_release release;
+#endif
   Conn* conn;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
@@ -393,7 +393,7 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
       done[ureq_issued % kMaxInflightChunks] = false;
       ureq_issued++;
     }
-    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+    check_python_signals();
 
     // First, poll all outstanding requests and mark which ones are done.
     for (int i = ureq_finished; i < ureq_issued; i++) {
@@ -664,9 +664,10 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 }
 
 bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
-                    uccl::FifoItem const& slot_item, bool inside_python) {
-  auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
-
+                    uccl::FifoItem const& slot_item) {
+#ifdef WITH_PYTHON
+  py::gil_scoped_release release;
+#endif
   if (!ucclParamRCMode()) {
     DCHECK(false) << "RDMA READ is only supported in RC mode, toggle RCMODE to "
                      "be True in transport_config.h";
@@ -684,13 +685,13 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
         static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle, dst,
         size, slot_item, &ureq);
     if (rc == -1) {
-      auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+      check_python_signals();
       std::this_thread::yield();
     }
   } while (rc == -1);
 
   while (!ep_->uccl_poll_ureq_once(&ureq)) {
-    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+    check_python_signals();
   }
   return true;
 }

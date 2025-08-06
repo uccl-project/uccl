@@ -201,8 +201,7 @@ uccl_mr_t* uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size) {
 int uccl_engine_send(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
                      size_t size) {
   if (!conn || !mr || !data) return -1;
-  return conn->engine->endpoint->send(conn->conn_id, mr->mr_id, data, size,
-                                      true)
+  return conn->engine->endpoint->send(conn->conn_id, mr->mr_id, data, size)
              ? 0
              : -1;
 }
@@ -210,8 +209,7 @@ int uccl_engine_send(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
 int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t* mr, void* data,
                      size_t data_size) {
   if (!conn || !mr || !data) return -1;
-  return conn->engine->endpoint->recv(conn->conn_id, mr->mr_id, data, data_size,
-                                      true)
+  return conn->engine->endpoint->recv(conn->conn_id, mr->mr_id, data, data_size)
              ? 0
              : -1;
 }
