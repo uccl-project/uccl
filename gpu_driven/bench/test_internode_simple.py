@@ -7,6 +7,8 @@ import argparse
 import torch
 import torch.distributed as dist
 
+from buffer import Buffer
+
 # import deep_ep as ep
 try:
     from uccl import gpu_driven
@@ -66,7 +68,7 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
     ep.register_proxies(device_index, proxies)
 
     try:
-        buffer = ep.Buffer(
+        buffer = Buffer(
             group=group,
             num_nvl_bytes=0,
             num_rdma_bytes=x_bytes,
