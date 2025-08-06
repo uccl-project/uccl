@@ -38,3 +38,40 @@ def init_dist(local_rank: int, num_local_ranks: int):
         dist.get_world_size(),
         dist.new_group(list(range(num_local_ranks * num_nodes))),
     )
+
+
+def _discover_local_ip():
+    # Try to infer the IP that can reach MASTER_ADDR (works in most clusters)
+    import socket, os
+
+    master = os.environ.get("MASTER_ADDR", "127.0.0.1")
+    port = int(os.environ.get("MASTER_PORT", "29500"))
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # UDP connect doesn't send packets; just selects a route/interface
+        s.connect((master, port))
+        return s.getsockname()[0]
+    finally:
+        s.close()
+
+
+def _gather_peer_ips(group):
+    # Gather local IP strings across ranks
+    rank = dist.get_rank(group)
+    world = dist.get_world_size(group)
+    my_ip = _discover_local_ip()
+    ips = [None] * world
+    dist.all_gather_object(ips, my_ip, group=group)
+    return ips
+
+
+def get_peer_ip(rank: int, num_ranks: int, group: dist.ProcessGroup):
+
+    if num_ranks == 1:
+        # single-process local test: okay to leave blank (or 127.0.0.1)
+        peer_ip = ""
+    else:
+        ips = _gather_peer_ips(group)
+        # simple ring: next rank is your peer
+        peer_ip = ips[(rank + 1) % num_ranks]
+    return peer_ip if peer_ip else ""

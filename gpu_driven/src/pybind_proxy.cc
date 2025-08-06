@@ -71,17 +71,31 @@ class UcclProxy {
     }
   }
 
-  void start_sender() { start(Mode::Sender); }
-  void start_remote() { start(Mode::Remote); }
-  void start_local() { start(Mode::Local); }
-  void start_dual() { start(Mode::Dual); }
+  void start_sender() {
+    start(Mode::Sender);
+    printf("UcclProxy started as Sender\n");
+  }
+  void start_remote() {
+    start(Mode::Remote);
+    printf("UcclProxy started as Remote\n");
+  }
+  void start_local() {
+    start(Mode::Local);
+    printf("UcclProxy started as Local\n");
+  }
+  void start_dual() {
+    start(Mode::Dual);
+    printf("UcclProxy started as Dual\n");
+  }
 
   void stop() {
     if (!running_.load(std::memory_order_acquire)) return;
     proxy_->set_progress_run(false);
     {
       py::gil_scoped_release release;
+      printf("UcclProxy stopping...\n");
       if (thread_.joinable()) thread_.join();
+      printf("UcclProxy stopped\n");
     }
     running_.store(false, std::memory_order_release);
   }
@@ -98,6 +112,11 @@ class UcclProxy {
     running_.store(true, std::memory_order_release);
 
     thread_ = std::thread([this]() {
+      if (peer_ip_storage_.empty()) {
+        printf("UcclProxy: no peer IP set, running in local mode\n");
+        proxy_->run_local();
+        return;
+      }
       switch (mode_) {
         case Mode::Sender:
           proxy_->run_sender();
@@ -285,14 +304,12 @@ class PeerCopyManager {
   }
   ~PeerCopyManager() { stop(); }
 
-  // Start one peer_copy_worker per proxy
   void start_for_proxies(std::vector<UcclProxy*> const& proxies) {
     int const n = static_cast<int>(proxies.size());
     if (n <= 0) return;
     ctxs_.resize(n);
     threads_.reserve(n);
     for (int i = 0; i < n; ++i) {
-      // Access the underlying Proxy's ring; UcclProxy declared us as a friend.
       threads_.emplace_back(peer_copy_worker, std::ref(shared_),
                             std::ref(ctxs_[i]),
                             std::ref(proxies[i]->proxy_->ring), i);

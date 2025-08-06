@@ -1,10 +1,15 @@
 #include <pybind11/pybind11.h>
+#include <pybind11/pytypes.h>
 #include <pybind11/stl.h>
 #include <atomic>
 #include <mutex>
 #include <unordered_map>
 
 namespace py = pybind11;
+
+// ---- Global device->proxy registry (process-local) ----
+static std::mutex g_proxy_mu;
+static std::unordered_map<int, py::object> g_proxy_by_dev;
 
 struct Ctx {
   long num_tokens{0};
@@ -19,10 +24,21 @@ class Buffer {
  public:
   Buffer(py::object group, int device_index, long bytes, bool llm, int qps,
          bool explicitly_destroy)
-      : group_(std::move(group)) {}
+      : group_(std::move(group)), device_index_(device_index) {
+    std::lock_guard<std::mutex> lk(g_proxy_mu);
+    auto it = g_proxy_by_dev.find(device_index_);
+    if (it == g_proxy_by_dev.end() || it->second.is_none()) {
+      throw std::runtime_error(
+          "uccl_ep.Buffer: no UcclProxy registered for device " +
+          std::to_string(device_index_) +
+          ". Call uccl.uccl_ep.register_proxy(device_index, proxy) first.");
+    }
+    proxy_ = it->second;
+  }
 
   void destroy() {}
 
+  // ... your low_latency_dispatch / low_latency_combine unchanged ...
   py::tuple low_latency_dispatch(py::object x, py::object topk_idx,
                                  long num_tokens, long num_experts,
                                  bool use_fp8 = false, bool round_scale = false,
@@ -31,24 +47,20 @@ class Buffer {
                                  bool async_finish = false,
                                  bool return_recv_hook = true) {
     auto hidden = x.attr("shape").cast<py::tuple>()[1].cast<long>();
-
     py::object torch = py::module::import("torch");
     py::object recv_x = torch.attr("empty")(
         py::make_tuple(0, hidden), py::arg("device") = x.attr("device"),
         py::arg("dtype") = x.attr("dtype"));
-
     long world = group_.attr("size")().cast<long>();
     long local_E = std::max<long>(1, num_experts / std::max<long>(1, world));
     py::object recv_count = torch.attr("zeros")(
         py::make_tuple(local_E), py::arg("device") = x.attr("device"),
         py::arg("dtype") = torch.attr("int32"));
-
     long h = g_next.fetch_add(1);
     {
       std::lock_guard<std::mutex> lk(g_mu);
       g_ctx.emplace(h, Ctx{num_tokens, hidden});
     }
-
     py::object none = py::none();
     py::object hook =
         py::cpp_function([]() { py::print("Dispatch hook is invoked"); });
@@ -82,10 +94,55 @@ class Buffer {
 
  private:
   py::object group_;
+  int device_index_{-1};
+  py::object proxy_;
 };
 
+// ---- pybind ----
 PYBIND11_MODULE(uccl_ep, m) {
   m.doc() = "Minimal DeepEP-compatible shim without libtorch linkage";
+  m.def(
+      "register_proxy",
+      [](int device_index, py::object proxy) {
+        std::lock_guard<std::mutex> lk(g_proxy_mu);
+        g_proxy_by_dev[device_index] = std::move(proxy);
+      },
+      py::arg("device_index"), py::arg("proxy"),
+      "Register a running proxy object for a CUDA device.");
+
+  m.def(
+      "unregister_proxy",
+      [](int device_index) {
+        std::lock_guard<std::mutex> lk(g_proxy_mu);
+        g_proxy_by_dev.erase(device_index);
+      },
+      py::arg("device_index"),
+      "Remove the proxy mapping for a CUDA device (does not stop it).");
+
+  m.def(
+      "has_proxy",
+      [](int device_index) {
+        std::lock_guard<std::mutex> lk(g_proxy_mu);
+        auto it = g_proxy_by_dev.find(device_index);
+        return it != g_proxy_by_dev.end() && !it->second.is_none();
+      },
+      py::arg("device_index"));
+
+  m.def(
+      "stop_all_registered_proxies",
+      []() {
+        std::lock_guard<std::mutex> lk(g_proxy_mu);
+        for (auto& kv : g_proxy_by_dev) {
+          auto& proxy = kv.second;
+          try {
+            proxy.attr("stop")();
+          } catch (...) {
+          }
+        }
+        g_proxy_by_dev.clear();
+      },
+      "Calls .stop() on all registered proxies and clears the map.");
+
   py::class_<Buffer>(m, "Buffer")
       .def(py::init<py::object, int, long, bool, int, bool>(), py::arg("group"),
            py::arg("device_index"), py::arg("bytes"),
