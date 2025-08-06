@@ -150,35 +150,15 @@ class Buffer {
     return {combined, evt, hook};
   }
 
-  int get_local_device_id() {
-    // TODO(MaoZiming)
-    return device_index_;
-  }
+  int get_local_device_id() { return device_index_; }
 
   py::object get_local_ipc_handle() const {
-    // TODO(MaoZiming)
-    return py::none();
+    return {ipc_handles[nvl_rank].reserved, CUDA_IPC_HANDLE_SIZE};
   }
 
-  int get_num_rdma_ranks() const {
-    // TODO(MaoZiming)
-    return 1;
-  }
+  int get_num_rdma_ranks() const { return num_rdma_ranks; }
 
-  int get_rdma_rank() const {
-    // TODO(MaoZiming)
-    return 0;
-  }
-
-  py::object get_local_nvshmem_unique_id() const {
-    // TODO(MaoZiming)
-    return py::bytes("nvshmem-uid");
-  }
-
-  int get_root_rdma_rank(bool* with_low_latency) const {
-    // TODO(MaoZiming)
-    return 0;
-  }
+  int get_rdma_rank() const { return rdma_rank; }
 
   void sync(py::object device_ids, py::object ipc_handles,
             py::object root_unique_id) {
@@ -198,6 +178,9 @@ class Buffer {
   int device_index_{0};
   std::vector<py::object> proxies_;
   bool available_{false};
+  int rdma_rank;
+  int num_rdma_ranks, nvl_rank;
+  cudaIpcMemHandle_t ipc_handles[NUM_MAX_NVL_PEERS];
 };
 
 PYBIND11_MODULE(uccl_ep, m) {
@@ -270,9 +253,6 @@ PYBIND11_MODULE(uccl_ep, m) {
       .def("get_local_ipc_handle", &Buffer::get_local_ipc_handle)
       .def("get_num_rdma_ranks", &Buffer::get_num_rdma_ranks)
       .def("get_rdma_rank", &Buffer::get_rdma_rank)
-      .def("get_local_nvshmem_unique_id", &Buffer::get_local_nvshmem_unique_id)
-      .def("get_root_rdma_rank", &Buffer::get_root_rdma_rank,
-           py::arg("with_low_latency"))
       .def("sync", &Buffer::sync, py::arg("device_ids"), py::arg("ipc_handles"),
            py::arg("root_unique_id"))
       .def("is_available", &Buffer::is_available)
