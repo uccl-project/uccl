@@ -15,7 +15,7 @@ NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread -fPIC -fvisibility=hidden
 
 INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../include
 
-SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp src/peer_copy_worker.cpp
+SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp src/peer_copy_worker.cpp src/uccl_proxy.cpp src/uccl_bench.cpp src/peer_copy_manager.cpp
 SRC_CU  := src/gpu_kernel.cu src/peer_copy.cu src/py_cuda_shims.cu
 
 SRC_LOCAL  := bench/benchmark_local.cu
@@ -47,8 +47,7 @@ all: $(TARGET_LOCAL) $(TARGET_REMOTE) $(TARGET_DUAL) $(PYTARGET) $(UCCL_EP_EXT)
 
 # C++ compilation rule with dependency generation
 %.o: %.cpp
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
-
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $(PYBIND11_INCLUDES) -MMD -MP -c $< -o $@
 # CUDA compilation rule with dependency generation
 %.o: %.cu
 	$(NVCC) -arch=sm_$(SM) $(NVCCFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@

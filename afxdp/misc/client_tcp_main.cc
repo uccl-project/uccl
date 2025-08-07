@@ -209,7 +209,6 @@ int main(int argc, char* argv[]) {
   if (connect(sockfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
     error("ERROR connecting");
   }
-  fcntl(sockfd, F_SETFL, O_NONBLOCK);
   int flag = 1;
   setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
   config.sockfds[0] = sockfd;

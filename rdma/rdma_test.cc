@@ -87,12 +87,6 @@ static bool force_exit = false;
 
 void signal_handler(int signal) { force_exit = true; }
 
-int set_nonblocking(int fd) {
-  int flags = fcntl(fd, F_GETFL, 0);
-  if (flags == -1) return -1;
-  return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-}
-
 // Exchange QPNs and GIDs via TCP
 void exchange_qpns(char const* peer_ip, metadata* local_meta,
                    metadata* remote_meta) {
@@ -104,8 +98,6 @@ void exchange_qpns(char const* peer_ip, metadata* local_meta,
   int opt = 1;
   setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt,
              sizeof(opt));  // Avoid port conflicts
-
-  set_nonblocking(sock);
 
   addr.sin_family = AF_INET;
   addr.sin_port = htons(TCP_PORT);

@@ -574,8 +574,6 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       std::abort();
     }
   }
-
-#ifdef ENABLE_PROXY_CUDA_MEMCPY
   std::vector<CopyTask> task_vec;
   task_vec.reserve(num_wr_imm);
   for (int i = 0; i < ne; ++i) {
@@ -608,7 +606,6 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
     while (!g_ring.pushN(task_vec.data(), task_vec.size())) { /* Busy spin. */
     }
   }
-#endif
 }
 
 void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring) {

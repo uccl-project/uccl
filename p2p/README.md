@@ -147,32 +147,30 @@ If you have not installed nixl with UCX backend, you can follow:
 
 ```bash
 sudo apt install build-essential cmake pkg-config autoconf automake libtool -y
-pip3 install meson
-pip3 install pybind11
+pip3 install meson pybind11
 
-git clone git@github.com:NVIDIA/gdrcopy.git
+git clone https://github.com/NVIDIA/gdrcopy.git
 cd gdrcopy
-sudo make prefix=/usr/local CUDA=/usr/local/cuda all install
+sudo make prefix=/usr/local/gdrcopy CUDA=/usr/local/cuda all install
 cd ..
 
 # Run these if you find there is no libcuda.so under /usr/local/cuda. Using GH200 as an example.
 sudo ln -s /usr/lib/aarch64-linux-gnu/libcuda.so.1 /usr/local/cuda/lib64/libcuda.so
 
 # Install UCX
-git clone https://github.com/openucx/ucx.git && cd ucx
+git clone https://github.com/openucx/ucx.git && cd ucx && git checkout v1.19.x
 ./autogen.sh
 ./configure --prefix=/usr/local/ucx --enable-shared --disable-static \
             --disable-doxygen-doc --enable-optimizations --enable-cma \
             --enable-devel-headers --with-cuda=/usr/local/cuda \
-            --with-gdrcopy=/usr/local --with-verbs --with-dm --enable-mt
+            --with-gdrcopy=/usr/local/gdrcopy --with-verbs --with-dm --enable-mt
 make -j
 sudo make -j install-strip
 sudo ldconfig
 cd ..
 
-git clone https://github.com/ai-dynamo/nixl.git
-cd nixl
-meson setup build -Ducx_path=/usr/local/ucx
+git clone https://github.com/ai-dynamo/nixl.git && cd nixl && git checkout 0.5.0
+meson setup build --prefix=/usr/local/nixl -Ducx_path=/usr/local/ucx -Ddisable_gds_backend=true 
 cd build
 ninja
 yes | ninja install
@@ -180,8 +178,7 @@ cd ..
 pip install .
 cd ..
 
-UCX_LIB_PATH="/usr/local/ucx/lib"
-export LD_LIBRARY_PATH="$UCX_LIB_PATH:$CONDA_PREFIX/lib/python3.13/site-packages/.nixl.mesonpy.libs/plugins:$LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH="/usr/local/nixl/lib/`uname -m`-linux-gnu/plugins:/usr/local/ucx/lib:$LD_LIBRARY_PATH"
 ```
 </details>
 
@@ -206,13 +203,12 @@ If you have not installed nixl with Mooncake backend, you can follow:
 <details><summary>Click me</summary>
 
 ```bash
-sudo apt install build-essential cmake pkg-config
-pip3 install meson
-pip3 install pybind11
+sudo apt install build-essential cmake pkg-config autoconf automake libtool -y
+pip3 install meson pybind11
 
-git clone git@github.com:NVIDIA/gdrcopy.git
+git clone https://github.com/NVIDIA/gdrcopy.git
 cd gdrcopy
-sudo make prefix=/usr/local CUDA=/usr/local/cuda all install
+sudo make prefix=/usr/local/gdrcopy CUDA=/usr/local/cuda all install
 cd ..
 
 # Run these if you find there is no libcuda.so under /usr/local/cuda. Using GH200 as an example.
@@ -228,9 +224,8 @@ make -j
 sudo make install
 cd ../..
 
-git clone https://github.com/ai-dynamo/nixl.git
-cd nixl
-meson setup build
+git clone https://github.com/ai-dynamo/nixl.git && cd nixl && git checkout 0.5.0
+meson setup build --prefix=/usr/local/nixl
 cd build
 ninja
 yes | ninja install
@@ -238,7 +233,7 @@ cd ..
 pip install .
 cd ..
 
-export LD_LIBRARY_PATH="$CONDA_PREFIX/lib/python3.13/site-packages/.nixl.mesonpy.libs/plugins:$LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH="/usr/local/nixl/lib/`uname -m`-linux-gnu/plugins:$LD_LIBRARY_PATH"
 ```
 </details>
 
@@ -250,6 +245,17 @@ python benchmark_nixl.py --role server --backend mooncake
 On Client:
 ```bash
 python benchmark_nixl.py --role client --remote-ip <Server IP> --backend mooncake
+```
+
+### Running NIXL on AMD+Broadcom
+
+First `./docker_run.sh` to launch a container on two servers; then inside the container, run the following: 
+```bash
+# On server
+UCX_MAX_RMA_LANES=4 UCX_NET_DEVICES=rdma3:1 UCX_TLS=rocm,rc python benchmark_nixl.py --role server
+
+# On client
+UCX_MAX_RMA_LANES=4 UCX_NET_DEVICES=rdma3:1 UCX_TLS=rocm,rc python benchmark_nixl.py --role client --remote-ip <Server IP>
 ```
 
 
