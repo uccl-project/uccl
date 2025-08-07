@@ -6,9 +6,6 @@
                 "${workspaceFolder}/**",
                 "/usr/include/",
                 "/usr/local/include/",
-                "/home/yangzhou_ucberkeley/miniconda3/envs/ziming/lib/python3.11/site-packages/torch/include",
-                "/home/yangzhou_ucberkeley/miniconda3/envs/ziming/lib/python3.11/site-packages/torch/include/torch/csrc/api/include",
-                "/home/yangzhou_ucberkeley/miniconda3/envs/ziming/lib/python3.11/site-packages/torch/include/ATen",
                 "/usr/local/cuda/include"
             ],
             "defines": [],
