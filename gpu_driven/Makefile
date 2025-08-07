@@ -10,6 +10,7 @@ TORCH_INCLUDE      := $(shell $(PYTHON) -c "import torch, pathlib; p=pathlib.Pat
 TORCH_INCLUDE_API  := $(shell $(PYTHON) -c "import torch, pathlib; p=pathlib.Path(torch.__file__).parent; print(p/'include/torch/csrc/api/include')")
 TORCH_LIBDIR       := $(shell $(PYTHON) -c "import torch, pathlib; p=pathlib.Path(torch.__file__).parent; print(p/'lib')")
 TORCH_ABI          := $(shell $(PYTHON) -c "import torch; print(int(torch._C._GLIBCXX_USE_CXX11_ABI))")
+TORCH_INCS := -I$(TORCH_INCLUDE) -I$(TORCH_INCLUDE_API)
 
 # GPU arch (override with: make SM=90)
 SM ?= 90
@@ -59,14 +60,14 @@ all: $(TARGET_LOCAL) $(TARGET_REMOTE) $(TARGET_DUAL) $(PYTARGET) $(UCCL_EP_EXT)
 
 # C++ compilation rule with dependency generation
 %.o: %.cpp
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $(PYBIND11_INCLUDES) -MMD -MP -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(TORCH_INCS) $(INCLUDES) $(PYBIND11_INCLUDES) -MMD -MP -c $< -o $@
 # CUDA compilation rule with dependency generation
 %.o: %.cu
-	$(NVCC) -arch=sm_$(SM) $(NVCCFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+	$(NVCC) -arch=sm_$(SM) $(NVCCFLAGS) $(TORCH_INCS) $(INCLUDES) -MMD -MP -c $< -o $@
 
 # Linking rules
 %.o: %.cc
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $(PYBIND11_INCLUDES) -MMD -MP -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(TORCH_INCS) $(INCLUDES) $(PYBIND11_INCLUDES) -MMD -MP -c $< -o $@
 
 $(TARGET_LOCAL): $(OBJ_LOCAL)
 	$(NVCC) -arch=sm_$(SM) $(NVCCFLAGS) $(INCLUDES) $(OBJ_LOCAL) -lcuda -lcudart $(LDFLAGS) -o $@

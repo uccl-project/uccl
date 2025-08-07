@@ -308,21 +308,112 @@ class Buffer {
       bool zero_copy, bool async, bool return_recv_hook,
       std::optional<torch::Tensor> const& out) {
     // TODO(MaoZiming)
-    TORCH_CHECK(x.dim() == 2 || x.dim() == 3, "x must be 2D or 3D");
-    auto const hidden = x.size(x.dim() - 1);
-    auto const num_combined = topk_idx.size(0);
+#ifndef DISABLE_NVSHMEM
+    EP_HOST_ASSERT(low_latency_mode);
 
-    torch::Tensor combined =
-        out.has_value() ? *out
-                        : torch::zeros({num_combined, hidden}, x.options());
+    // Tensor checks
+    EP_HOST_ASSERT(x.dim() == 3 and x.is_contiguous() and
+                   x.scalar_type() == torch::kBFloat16);
+    EP_HOST_ASSERT(x.size(0) == num_experts / num_ranks);
+    EP_HOST_ASSERT(x.size(1) == num_ranks * num_max_dispatch_tokens_per_rank);
+    EP_HOST_ASSERT(x.size(2) % sizeof(int4) == 0 and x.size(2) % 128 == 0);
+    EP_HOST_ASSERT(topk_idx.dim() == 2 and topk_idx.is_contiguous());
+    EP_HOST_ASSERT(topk_idx.size(0) == topk_weights.size(0) and
+                   topk_idx.size(1) == topk_weights.size(1));
+    EP_HOST_ASSERT(topk_idx.scalar_type() == torch::kInt64);
+    EP_HOST_ASSERT(topk_weights.dim() == 2 and topk_weights.is_contiguous());
+    EP_HOST_ASSERT(topk_weights.size(0) <= num_max_dispatch_tokens_per_rank);
+    EP_HOST_ASSERT(topk_weights.scalar_type() == torch::kFloat32);
+    EP_HOST_ASSERT(src_info.dim() == 2 and src_info.is_contiguous());
+    EP_HOST_ASSERT(src_info.scalar_type() == torch::kInt32 and
+                   x.size(0) == src_info.size(0));
+    EP_HOST_ASSERT(layout_range.dim() == 2 and layout_range.is_contiguous());
+    EP_HOST_ASSERT(layout_range.scalar_type() == torch::kInt64);
+    EP_HOST_ASSERT(layout_range.size(0) == num_experts / num_ranks and
+                   layout_range.size(1) == num_ranks);
 
-    std::optional<EventHandle> evt;
-    if (async) evt.emplace();
+    if (combine_wait_recv_cost_stats.has_value()) {
+      EP_HOST_ASSERT(combine_wait_recv_cost_stats->scalar_type() ==
+                     torch::kInt64);
+      EP_HOST_ASSERT(combine_wait_recv_cost_stats->dim() == 1 and
+                     combine_wait_recv_cost_stats->is_contiguous());
+      EP_HOST_ASSERT(combine_wait_recv_cost_stats->size(0) == num_ranks);
+    }
 
-    std::optional<std::function<void()>> hook;
-    if (return_recv_hook) hook.emplace([]() { /* no-op hook */ });
+    auto hidden = static_cast<int>(x.size(2));
+    auto num_topk = static_cast<int>(topk_weights.size(1));
+    auto num_combined_tokens = static_cast<int>(topk_weights.size(0));
 
-    return {combined, evt, hook};
+    // Buffer control
+    LowLatencyLayout layout(rdma_buffer_ptr, num_max_dispatch_tokens_per_rank,
+                            hidden, num_ranks, num_experts);
+    EP_HOST_ASSERT(layout.total_bytes <=
+                   static_cast<std::size_t>(num_rdma_bytes));
+    auto buffer = layout.buffers[low_latency_buffer_idx];
+    auto next_buffer = layout.buffers[low_latency_buffer_idx ^= 1];
+
+    // Wait previous tasks to be finished
+    // NOTES: the hook mode will always use the default stream
+    auto compute_stream = at::cuda::getCurrentCUDAStream();
+    auto launch_stream = return_recv_hook ? compute_stream : comm_stream;
+    EP_HOST_ASSERT(not(async and return_recv_hook));
+    if (not return_recv_hook) stream_wait(launch_stream, compute_stream);
+
+    // Allocate output tensor
+    torch::Tensor combined_x;
+    if (out.has_value()) {
+      EP_HOST_ASSERT(out->dim() == 2 and out->is_contiguous());
+      EP_HOST_ASSERT(out->size(0) == num_combined_tokens and
+                     out->size(1) == hidden);
+      EP_HOST_ASSERT(out->scalar_type() == x.scalar_type());
+      combined_x = out.value();
+    } else {
+      combined_x = torch::empty({num_combined_tokens, hidden}, x.options());
+    }
+
+    // Kernel launch
+    auto next_clean_meta = next_buffer.clean_meta();
+    auto launcher = [=](int phases) {
+      uccl::internode_ll::combine(
+          combined_x.data_ptr(), buffer.combine_rdma_recv_data_buffer,
+          buffer.combine_rdma_recv_flag_buffer, buffer.combine_rdma_send_buffer,
+          x.data_ptr(), topk_idx.data_ptr<int64_t>(),
+          topk_weights.data_ptr<float>(), src_info.data_ptr<int>(),
+          layout_range.data_ptr<int64_t>(),
+          combine_wait_recv_cost_stats.has_value()
+              ? combine_wait_recv_cost_stats->data_ptr<int64_t>()
+              : nullptr,
+          next_clean_meta.first, next_clean_meta.second, num_combined_tokens,
+          hidden, num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
+          num_ranks, use_logfmt, workspace, num_device_sms, launch_stream,
+          phases, zero_copy);
+    };
+    launcher(return_recv_hook
+                 ? LOW_LATENCY_SEND_PHASE
+                 : (LOW_LATENCY_SEND_PHASE | LOW_LATENCY_RECV_PHASE));
+
+    // Wait streams
+    std::optional<EventHandle> event;
+    if (async) {
+      // NOTES: we must ensure the all tensors will not be deallocated before
+      // the stream-wait happens, so in Python API, we must wrap all tensors
+      // into the event handle.
+      event = EventHandle(launch_stream);
+    } else if (not return_recv_hook) {
+      stream_wait(compute_stream, launch_stream);
+    }
+
+    // Receiver callback
+    std::optional<std::function<void()>> recv_hook = std::nullopt;
+    if (return_recv_hook)
+      recv_hook = [=]() { launcher(LOW_LATENCY_RECV_PHASE); };
+
+    // Return values
+    return {combined_x, event, recv_hook};
+#else
+    EP_HOST_ASSERT(false and "NVSHMEM is disabled during compilation");
+    return {};
+#endif
   }
 
   int get_local_device_id() { return device_index; }
