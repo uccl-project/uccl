@@ -6,7 +6,7 @@
                 "${workspaceFolder}/**",
                 "/usr/include/",
                 "/usr/local/include/",
-                "/usr/local/cuda/include"
+                "/usr/local/cuda/include/"
             ],
             "defines": [],
             "compilerPath": "/usr/bin/g++",

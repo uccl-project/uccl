@@ -168,7 +168,7 @@ class Buffer {
       std::optional<torch::Tensor> const& cumulative_local_expert_recv_stats,
       std::optional<torch::Tensor> const& dispatch_wait_recv_cost_stats,
       int num_max_dispatch_tokens_per_rank, int num_experts, bool use_fp8,
-      bool round_scale, bool use_ue8m0, bool async_finish,
+      bool round_scale, bool use_ue8m0, bool async,
       bool return_recv_hook) {
     // TODO(MaoZiming)
     TORCH_CHECK(x.dim() == 2, "x must be [num_tokens, hidden]");
@@ -204,7 +204,7 @@ class Buffer {
       torch::Tensor layout_range = torch::tensor(
           lrvals, torch::TensorOptions().device(x.device()).dtype(torch::kInt));
       std::optional<EventHandle> evt;
-      if (async_finish) evt.emplace();
+      if (async) evt.emplace();
       std::optional<std::function<void()>> hook;
       if (return_recv_hook) hook.emplace([]() { /* no-op */ });
       return {recv_x,       opt_scales, recv_count, src_info,
@@ -220,7 +220,7 @@ class Buffer {
       torch::Tensor const& layout_range,
       std::optional<torch::Tensor> const& combine_wait_recv_cost_stats,
       int num_max_dispatch_tokens_per_rank, int num_experts, bool use_logfmt,
-      bool zero_copy, bool async_finish, bool return_recv_hook,
+      bool zero_copy, bool async, bool return_recv_hook,
       std::optional<torch::Tensor> const& out) {
     // TODO(MaoZiming)
     TORCH_CHECK(x.dim() == 2 || x.dim() == 3, "x must be 2D or 3D");
@@ -232,7 +232,7 @@ class Buffer {
                         : torch::zeros({num_combined, hidden}, x.options());
 
     std::optional<EventHandle> evt;
-    if (async_finish) evt.emplace();
+    if (async) evt.emplace();
 
     std::optional<std::function<void()>> hook;
     if (return_recv_hook) hook.emplace([]() { /* no-op hook */ });
@@ -365,7 +365,7 @@ PYBIND11_MODULE(uccl_ep, m) {
            py::arg("num_max_dispatch_tokens_per_rank") = 0,
            py::arg("num_experts") = 1, py::arg("use_fp8") = true,
            py::arg("round_scale") = false, py::arg("use_ue8m0") = false,
-           py::arg("async_finish") = false, py::arg("return_recv_hook") = false)
+           py::arg("async") = false, py::arg("return_recv_hook") = false)
       .def("get_local_device_id", &Buffer::get_local_device_id)
       .def("get_local_ipc_handle", &Buffer::get_local_ipc_handle)
       .def("get_num_rdma_ranks", &Buffer::get_num_rdma_ranks)
@@ -379,6 +379,6 @@ PYBIND11_MODULE(uccl_ep, m) {
            py::arg("combine_wait_recv_cost_stats") = py::none(),
            py::arg("num_max_dispatch_tokens_per_rank") = 0,
            py::arg("num_experts") = 1, py::arg("use_logfmt") = false,
-           py::arg("zero_copy") = false, py::arg("async_finish") = false,
+           py::arg("zero_copy") = false, py::arg("async") = false,
            py::arg("return_recv_hook") = false, py::arg("out") = py::none());
 }

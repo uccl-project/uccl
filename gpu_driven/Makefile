@@ -90,10 +90,6 @@ $(PYTARGET): $(OBJ_CPP) $(OBJ_CU) src/pybind_proxy.o
 	$(NVCC) -arch=sm_$(SM) $(NVCCFLAGS) -shared -Xcompiler "-fPIC" \
 	  $(INCLUDES) $(PYBIND11_INCLUDES) $^ -lcuda -lcudart $(LDFLAGS) -o $@
 
-# $(UCCL_EP_EXT): $(UCCL_EP_OBJ)
-# 	$(CXX) $(CXXFLAGS) -shared -fPIC $(INCLUDES) $(PYBIND11_INCLUDES) \
-# 	-DHAVE_UCCL $^ -o $@
-
 py: $(PYTARGET) $(UCCL_EP_EXT)
 
 # Clean all generated files
