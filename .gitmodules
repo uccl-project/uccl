@@ -16,9 +16,3 @@
 [submodule "thirdparty/nccl-tests"]
 	path = thirdparty/nccl-tests
 	url = https://github.com/NVIDIA/nccl-tests.git
-[submodule "thirdparty/ucx"]
-	path = thirdparty/ucx
-	url = https://github.com/openucx/ucx.git
-[submodule "thirdparty/nixl"]
-	path = thirdparty/nixl
-	url = https://github.com/ai-dynamo/nixl.git

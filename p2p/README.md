@@ -251,29 +251,15 @@ On Client:
 python benchmark_nixl.py --role client --remote-ip <Server IP> --backend mooncake
 ```
 
-### Running NIXL on AMD
+### Running NIXL on AMD+Broadcom
 
-First `./docker_run.sh` to login to a container, then install more dependencies: 
+First `./docker_run.sh` to launch a container on two servers; then inside the container, run the following: 
 ```bash
-cd /usr/local/src/nixl
-python3 -m venv venv
-source venv/bin/activate
-pip install .
-pip install zmq
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3 --force
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source $HOME/.local/bin/env
+# On server
+UCX_MAX_RMA_LANES=4 UCX_NET_DEVICES=rdma3:1 UCX_TLS=rocm,rc python benchmark_nixl.py --role server
 
-UCX_PLUGINS_DIR="/usr/local/src/nixl/venv/lib/python3.10/site-packages/.nixl.mesonpy.libs/plugins"
-NIXL_PLUGINS_DIR="/usr/local/lib/x86_64-linux-gnu/plugins/"
-./contrib/build-wheel.sh --ucx-plugins-dir $UCX_PLUGINS_DIR --nixl-plugins-dir $NIXL_PLUGINS_DIR
-```
-
-Inside the container: 
-```bash
-cd ~/yang/uccl_yang/p2p/benchmarks
-UCX_MAX_RMA_LANES=4 UCX_IB_PCI_RELAXED_ORDERING=on UCX_NET_DEVICES=rdma3:1 UCX_TLS=rocm,rc python benchmark_nixl.py --role server
-UCX_MAX_RMA_LANES=4 UCX_IB_PCI_RELAXED_ORDERING=on UCX_NET_DEVICES=rdma3:1 UCX_TLS=rocm,rc python benchmark_nixl.py --role client --remote-ip <Server IP>
+# On client
+UCX_MAX_RMA_LANES=4 UCX_NET_DEVICES=rdma3:1 UCX_TLS=rocm,rc python benchmark_nixl.py --role client --remote-ip <Server IP>
 ```
 
 

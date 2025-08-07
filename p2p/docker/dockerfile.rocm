@@ -51,5 +51,58 @@ RUN apt update && apt install -y sudo && \
     echo "hostuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
     groupadd -g ${GID} hostgrp && useradd -u ${UID} -g ${GID} -m -s /bin/bash -G sudo hostuser
 
+# This is inconsistent with the host one, which we will use. Already fixed in the new container image.
+# sudo mv /usr/lib/x86_64-linux-gnu/libibverbs/libbnxt_re-rdmav34.so /usr/lib/x86_64-linux-gnu/libibverbs/libbnxt_re-rdmav34.so.bak
+  
+RUN cd /tmp && \
+    git clone https://github.com/openucx/ucx.git && \
+    cd ucx && git checkout v1.19.x && \
+    ./autogen.sh && ./configure     \
+    --prefix=/usr/local/ucx         \
+    --enable-shared                 \
+    --disable-static                \
+    --disable-doxygen-doc           \
+    --enable-optimizations          \
+    --enable-cma                    \
+    --enable-devel-headers          \
+    --with-rocm=/opt/rocm           \
+    --with-verbs                    \
+    --with-efa                      \
+    --with-dm                       \
+    --enable-mt &&                  \
+    make -j &&                      \
+    make -j install-strip &&   \
+    ldconfig
+
+RUN cd /tmp && \
+    git clone https://github.com/google/googletest.git && \
+    cd googletest && \
+    cmake -S . -B build \
+    -DBUILD_GMOCK=ON -DBUILD_GTEST=ON \
+    -DBUILD_SHARED_LIBS=ON \
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/usr/local && \
+    cmake --build build -j && \
+    cmake --install build
+
+RUN cd /tmp && \
+    git clone https://github.com/ai-dynamo/nixl.git && \
+    cd nixl && git checkout 0.5.0 && \
+    pip3 install meson -U && \
+    mkdir build && \
+    meson setup build/ --prefix=/usr/local/nixl -Ddisable_gds_backend=true -Ducx_path=/usr/local/ucx && \
+    cd build/ && \
+    ninja && \
+    ninja install
+
+RUN cd /tmp/nixl && \
+    pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3 && \
+    pip3 install pyzmq && \
+    pip3 install .
+
+ENV LD_LIBRARY_PATH="/usr/local/nixl/lib/`uname -m`-linux-gnu/plugins:/usr/local/ucx/lib:$LD_LIBRARY_PATH"
+
+WORKDIR /io/p2p/benchmarks
 USER hostuser
 CMD ["bash"]
