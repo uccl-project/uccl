@@ -4,12 +4,17 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/pytypes.h>
 #include <pybind11/stl.h>
+#include <torch/extension.h>
 #include <torch/torch.h>
 #include <atomic>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 #include <vector>
 #include <cuda_runtime.h>
+
+#define NUM_MAX_LOCAL_EXPERTS 1024
+
 namespace py = pybind11;
 
 static std::mutex g_proxies_mu;
@@ -54,7 +59,7 @@ class Buffer {
         num_rdma_bytes_(num_rdma_bytes),
         low_latency_mode_(low_latency_mode),
         explicitly_destroy_(explicitly_destroy),
-        comm_stream_(at::cuda::getStreamFromPool(isHighPriority = true)) {
+        comm_stream_(at::cuda::getStreamFromPool(/*isHighPriority=*/true)) {
     // TODO(MaoZiming): Double check. I copied from deep_ep.cpp.
     {
       std::lock_guard<std::mutex> lk(g_proxies_mu);
@@ -163,7 +168,8 @@ class Buffer {
       std::optional<torch::Tensor> const& cumulative_local_expert_recv_stats,
       std::optional<torch::Tensor> const& dispatch_wait_recv_cost_stats,
       int num_max_dispatch_tokens_per_rank, int num_experts, bool use_fp8,
-      bool round_scale, bool use_ue8m0, bool async, bool return_recv_hook) {
+      bool round_scale, bool use_ue8m0, bool async_finish,
+      bool return_recv_hook) {
     // TODO(MaoZiming)
     TORCH_CHECK(x.dim() == 2, "x must be [num_tokens, hidden]");
     auto const num_tokens = x.size(0);
@@ -198,10 +204,9 @@ class Buffer {
       torch::Tensor layout_range = torch::tensor(
           lrvals, torch::TensorOptions().device(x.device()).dtype(torch::kInt));
       std::optional<EventHandle> evt;
-      if (async) evt.emplace();
+      if (async_finish) evt.emplace();
       std::optional<std::function<void()>> hook;
-      if (return_recv_hook) hook.emplace([]() { no - op });
-
+      if (return_recv_hook) hook.emplace([]() { /* no-op */ });
       return {recv_x,       opt_scales, recv_count, src_info,
               layout_range, evt,        hook};
     }
@@ -215,7 +220,7 @@ class Buffer {
       torch::Tensor const& layout_range,
       std::optional<torch::Tensor> const& combine_wait_recv_cost_stats,
       int num_max_dispatch_tokens_per_rank, int num_experts, bool use_logfmt,
-      bool zero_copy, bool async, bool return_recv_hook,
+      bool zero_copy, bool async_finish, bool return_recv_hook,
       std::optional<torch::Tensor> const& out) {
     // TODO(MaoZiming)
     TORCH_CHECK(x.dim() == 2 || x.dim() == 3, "x must be 2D or 3D");
@@ -227,10 +232,10 @@ class Buffer {
                         : torch::zeros({num_combined, hidden}, x.options());
 
     std::optional<EventHandle> evt;
-    if (async) evt.emplace();
+    if (async_finish) evt.emplace();
 
     std::optional<std::function<void()>> hook;
-    if (return_recv_hook) hook.emplace([]() { no - op hook });
+    if (return_recv_hook) hook.emplace([]() { /* no-op hook */ });
 
     return {combined, evt, hook};
   }
@@ -238,12 +243,13 @@ class Buffer {
   int get_local_device_id() { return device_index_; }
 
   py::object get_local_ipc_handle() const {
-    return {ipc_handles[nvl_rank].reserved, CUDA_IPC_HANDLE_SIZE};
+    return py::bytes(
+        reinterpret_cast<char const*>(ipc_handles_[nvl_rank_].reserved),
+        CUDA_IPC_HANDLE_SIZE);
   }
 
-  int get_num_rdma_ranks() const { return num_rdma_ranks; }
-
-  int get_rdma_rank() const { return rdma_rank; }
+  int get_num_rdma_ranks() const { return num_rdma_ranks_; }
+  int get_rdma_rank() const { return rdma_rank_; }
 
   void sync(py::object device_ids, py::object ipc_handles,
             py::object root_unique_id) {
@@ -263,9 +269,6 @@ class Buffer {
   int device_index_{0};
   std::vector<py::object> proxies_;
   bool available_{false};
-  int rdma_rank;
-  int num_rdma_ranks, nvl_rank;
-  cudaIpcMemHandle_t ipc_handles[NUM_MAX_NVL_PEERS];
 
   // device / ranks
   int rdma_rank_{0}, nvl_rank_{0};
@@ -277,8 +280,8 @@ class Buffer {
   void* workspace_{nullptr};
 
   // NVLink (IPC) area
-  static constexpr int NUM_MAX_NVL_PEERS = /* your value, e.g. 8 or 16 */;
-  static constexpr int NUM_MAX_RDMA_PEERS = /* your value, e.g. 16 */;
+  static constexpr int NUM_MAX_NVL_PEERS = 8;
+  static constexpr int NUM_MAX_RDMA_PEERS = 16;
   static constexpr int NUM_WORKSPACE_BYTES = 32 * 1024 * 1024;  // 32 MiB
   static constexpr int NUM_BUFFER_ALIGNMENT_BYTES = 256;
 
@@ -362,7 +365,7 @@ PYBIND11_MODULE(uccl_ep, m) {
            py::arg("num_max_dispatch_tokens_per_rank") = 0,
            py::arg("num_experts") = 1, py::arg("use_fp8") = true,
            py::arg("round_scale") = false, py::arg("use_ue8m0") = false,
-           py::arg("async") = false, py::arg("return_recv_hook") = false)
+           py::arg("async_finish") = false, py::arg("return_recv_hook") = false)
       .def("get_local_device_id", &Buffer::get_local_device_id)
       .def("get_local_ipc_handle", &Buffer::get_local_ipc_handle)
       .def("get_num_rdma_ranks", &Buffer::get_num_rdma_ranks)
@@ -376,6 +379,6 @@ PYBIND11_MODULE(uccl_ep, m) {
            py::arg("combine_wait_recv_cost_stats") = py::none(),
            py::arg("num_max_dispatch_tokens_per_rank") = 0,
            py::arg("num_experts") = 1, py::arg("use_logfmt") = false,
-           py::arg("zero_copy") = false, py::arg("async") = false,
+           py::arg("zero_copy") = false, py::arg("async_finish") = false,
            py::arg("return_recv_hook") = false, py::arg("out") = py::none());
 }

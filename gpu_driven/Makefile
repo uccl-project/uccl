@@ -38,8 +38,8 @@ OBJ_DUAL   := $(OBJ_CPP) $(OBJ_CU) $(SRC_DUAL:.cu=.o)
 PYBIND_OBJ := $(PYBIND_SRC:.cc=.o)
 
 UCCL_EP_SRC := src/uccl_ep.cc
-# UCCL_EP_OBJ := $(UCCL_EP_SRC:.cc=.o)
-# UCCL_EP_EXT := uccl_ep$(EXT_SUFFIX)
+UCCL_EP_OBJ := $(UCCL_EP_SRC:.cc=.o)
+UCCL_EP_EXT := uccl_ep$(EXT_SUFFIX)
 
 $(UCCL_EP_OBJ): $(UCCL_EP_SRC)
 	$(CXX) $(CXXFLAGS) -D_GLIBCXX_USE_CXX11_ABI=$(TORCH_ABI) \
@@ -51,7 +51,8 @@ $(UCCL_EP_EXT): $(UCCL_EP_OBJ)
 	    -D_GLIBCXX_USE_CXX11_ABI=$(TORCH_ABI) \
 	    $(INCLUDES) $(PYBIND11_INCLUDES) $^ \
 	    -L$(TORCH_LIBDIR) -Wl,-rpath,$(TORCH_LIBDIR) \
-	    -ltorch -ltorch_cpu -lc10 -ltorch_cuda -lc10_cuda \
+	    -ltorch_python \
+	    -ltorch -ltorch_cpu -ltorch_cuda -lc10 -lc10_cuda \
 	    -o $@
 
 TARGET_LOCAL  := benchmark_local
@@ -89,9 +90,9 @@ $(PYTARGET): $(OBJ_CPP) $(OBJ_CU) src/pybind_proxy.o
 	$(NVCC) -arch=sm_$(SM) $(NVCCFLAGS) -shared -Xcompiler "-fPIC" \
 	  $(INCLUDES) $(PYBIND11_INCLUDES) $^ -lcuda -lcudart $(LDFLAGS) -o $@
 
-$(UCCL_EP_EXT): $(UCCL_EP_OBJ)
-	$(CXX) $(CXXFLAGS) -shared -fPIC $(INCLUDES) $(PYBIND11_INCLUDES) \
-	-DHAVE_UCCL $^ -o $@
+# $(UCCL_EP_EXT): $(UCCL_EP_OBJ)
+# 	$(CXX) $(CXXFLAGS) -shared -fPIC $(INCLUDES) $(PYBIND11_INCLUDES) \
+# 	-DHAVE_UCCL $^ -o $@
 
 py: $(PYTARGET) $(UCCL_EP_EXT)
 

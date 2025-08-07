@@ -1,5 +1,20 @@
 #pragma once
+#include <string>
 #include <cuda_runtime.h>
+
+class EPException : public std::exception {
+ private:
+  std::string message = {};
+
+ public:
+  explicit EPException(char const* name, char const* file, int const line,
+                       std::string const& error) {
+    message = std::string("Failed: ") + name + " error " + file + ":" +
+              std::to_string(line) + " '" + error + "'";
+  }
+
+  char const* what() const noexcept override { return message.c_str(); }
+};
 
 #ifndef CUDA_CHECK
 #define CUDA_CHECK(cmd)                                                     \
