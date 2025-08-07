@@ -168,8 +168,7 @@ class Buffer {
       std::optional<torch::Tensor> const& cumulative_local_expert_recv_stats,
       std::optional<torch::Tensor> const& dispatch_wait_recv_cost_stats,
       int num_max_dispatch_tokens_per_rank, int num_experts, bool use_fp8,
-      bool round_scale, bool use_ue8m0, bool async,
-      bool return_recv_hook) {
+      bool round_scale, bool use_ue8m0, bool async, bool return_recv_hook) {
     // TODO(MaoZiming)
     TORCH_CHECK(x.dim() == 2, "x must be [num_tokens, hidden]");
     auto const num_tokens = x.size(0);
