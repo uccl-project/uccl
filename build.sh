@@ -128,7 +128,7 @@ build_gpu_driven() {
   set -euo pipefail
   echo "[container] build_gpu_driven Target: $TARGET"
 
-  cd gpu_driven && make clean && make -j$(nproc) && cd ..
+  cd gpu_driven && make clean && make -j$(nproc) all && cd ..
 
   echo "[container] Copying GPU-driven .so to uccl/"
   mkdir -p uccl/lib
@@ -196,8 +196,8 @@ docker run --rm --user "$(id -u):$(id -g)" \
     ls -lh uccl/
     ls -lh uccl/lib/
     python3 -m build
-    auditwheel repair dist/uccl-*.whl --exclude libibverbs.so.1 --exclude libcudart.so.12 --exclude libamdhip64.so.6 -w /io/${WHEEL_DIR}
-    
+    auditwheel repair dist/uccl-*.whl --exclude "libtorch*.so" --exclude "libc10*.so" --exclude "libibverbs.so.1" --exclude "libcudart.so.12" --exclude "libamdhip64.so.6" -w /io/${WHEEL_DIR}
+
     # Add backend tag to wheel filename using local version identifier
     if [[ "$TARGET" == "rocm" ]]; then
       cd /io/${WHEEL_DIR}
