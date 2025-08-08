@@ -101,6 +101,8 @@ class Buffer:
         if self.runtime.get_num_rdma_ranks() > 1 or low_latency_mode:
             # Enable IBGDA
             assert num_qps_per_rank > 0
+
+            # TODO(MaoZiming): Fix the NVSHMEM environment variables.
             os.environ["NVSHMEM_DISABLE_P2P"] = (
                 "0" if allow_nvlink_for_low_latency_mode else "1"
             )
@@ -122,7 +124,7 @@ class Buffer:
                 os.environ["NVSHMEM_DISABLE_MNNVL"] = "1"
 
             # Synchronize using the root ID
-            # TODO(MaoZiming)
+            # TODO(MaoZiming): Renaming, eventually to uccl-related once we drop nvshmem dependency.
             uccl_shmem_unique_ids = [
                 None,
             ] * self.group_size
