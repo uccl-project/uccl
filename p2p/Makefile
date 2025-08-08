@@ -56,7 +56,7 @@ $(TARGET): $(OBJECTS) ../rdma/librdma.a
 $(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECT) ../rdma/librdma.a
 	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) ../rdma/librdma.a \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
-	      -o $@ $(LDFLAGS) $(CXXFLAGS) -DDISABLE_CALL_ONCE_STATIC \
+	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) -DWITH_PYTHON \
 	      -Wl,-rpath,$(CUDA_LIB)
 
 
