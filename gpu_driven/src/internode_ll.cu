@@ -42,6 +42,9 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
             << std::endl;
 }
 
+
+// TODO(MaoZiming): This corresponds to DeepEP/csrc/kernels/runtime.cu
+// They use nvshmem, but we don't have that in our environment.
 int init(std::vector<uint8_t> const& root_unique_id_val, int rank,
          int num_ranks, bool low_latency_mode) {
   // TODO(MaoZiming): Fix.
