@@ -1,6 +1,8 @@
 #pragma once
 #include "ep_util.hpp"
 
+// TODO(MaoZiming): The whole thing is very nvidia-specific.
+
 __forceinline__ __device__ int get_lane_id() {
   int lane_id;
   asm("mov.s32 %0, %laneid;" : "=r"(lane_id));
