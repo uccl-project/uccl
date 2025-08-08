@@ -122,20 +122,18 @@ class Buffer:
                 os.environ["NVSHMEM_DISABLE_MNNVL"] = "1"
 
             # Synchronize using the root ID
-            # nvshmem_unique_ids = [
-            #     None,
-            # ] * self.group_size
-            # if (low_latency_mode and self.rank == 0) or (
-            #     not low_latency_mode and self.runtime.get_rdma_rank() == 0
-            # ):
-            #     root_unique_id = self.runtime.get_local_nvshmem_unique_id()
-            # dist.all_gather_object(nvshmem_unique_ids, root_unique_id, group)
-            # root_unique_id = nvshmem_unique_ids[
-            #     0 if low_latency_mode else self.runtime.get_root_rdma_rank(True)
-            # ]
-
             # TODO(MaoZiming)
-            root_unique_id = [0] * self.group_size
+            uccl_shmem_unique_ids = [
+                None,
+            ] * self.group_size
+            if (low_latency_mode and self.rank == 0) or (
+                not low_latency_mode and self.runtime.get_rdma_rank() == 0
+            ):
+                root_unique_id = self.runtime.get_local_uccl_shmem_unique_id()
+            dist.all_gather_object(uccl_shmem_unique_ids, root_unique_id, group)
+            root_unique_id = uccl_shmem_unique_ids[
+                0 if low_latency_mode else self.runtime.get_root_rdma_rank(True)
+            ]
 
         # Make CPP runtime available
         self.runtime.sync(device_ids, ipc_handles, root_unique_id)

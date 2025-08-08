@@ -421,6 +421,14 @@ class Buffer {
 
   int get_num_rdma_ranks() const { return num_rdma_ranks; }
   int get_rdma_rank() const { return rdma_rank; }
+  int get_root_rdma_rank(bool global) const { return global ? nvl_rank : 0; }
+
+  pybind11::bytearray get_local_uccl_shmem_unique_id() const {
+    EP_HOST_ASSERT(rdma_rank == 0 and
+                   "Only RDMA rank 0 can get UCCL unique ID");
+    auto unique_id = uccl::internode_ll::get_unique_id();
+    return {reinterpret_cast<char const*>(unique_id.data()), unique_id.size()};
+  }
 
   void sync(std::vector<int> const& device_ids,
             std::vector<std::optional<pybind11::bytearray>> const&
@@ -610,6 +618,9 @@ PYBIND11_MODULE(uccl_ep, m) {
       .def("get_local_ipc_handle", &Buffer::get_local_ipc_handle)
       .def("get_num_rdma_ranks", &Buffer::get_num_rdma_ranks)
       .def("get_rdma_rank", &Buffer::get_rdma_rank)
+      .def("get_root_rdma_rank", &Buffer::get_root_rdma_rank)
+      .def("get_local_uccl_shmem_unique_id",
+           &Buffer::get_local_uccl_shmem_unique_id)
       .def("sync", &Buffer::sync, py::arg("device_ids"),
            py::arg("all_gathered_handles"),
            py::arg("root_unique_id_opt") = py::none())

@@ -36,5 +36,6 @@ int init(std::vector<uint8_t> const& root_unique_id_val, int rank,
 
 void* alloc(size_t size, size_t alignment);
 void barrier();
+std::vector<uint8_t> get_unique_id();
 }  // namespace internode_ll
 }  // namespace uccl

@@ -1,5 +1,4 @@
 #include "internode_ll.cuh"
-// #include <ATen/cuda/CUDAContext.h>
 #include <iostream>
 #include <vector>
 
@@ -42,7 +41,6 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
             << std::endl;
 }
 
-
 // TODO(MaoZiming): This corresponds to DeepEP/csrc/kernels/runtime.cu
 // They use nvshmem, but we don't have that in our environment.
 int init(std::vector<uint8_t> const& root_unique_id_val, int rank,
@@ -63,6 +61,11 @@ void barrier() {
   std::cout << "[uccl::internode_ll::barrier] dummy barrier invoked"
             << std::endl;
   return;
+}
+
+std::vector<uint8_t> get_unique_id() {
+  // TODO(MaoZiming): Fix.
+  return std::vector<uint8_t>(64, 0);  // Dummy unique ID
 }
 
 }  // namespace internode_ll
