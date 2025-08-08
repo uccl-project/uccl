@@ -30,12 +30,5 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
              int num_experts, int rank, int num_ranks, bool use_logfmt,
              void* workspace, int num_device_sms, cudaStream_t stream,
              int phases, bool zero_copy);
-
-int init(std::vector<uint8_t> const& root_unique_id_val, int rank,
-         int num_ranks, bool low_latency_mode);
-
-void* alloc(size_t size, size_t alignment);
-void barrier();
-std::vector<uint8_t> get_unique_id();
 }  // namespace internode_ll
 }  // namespace uccl

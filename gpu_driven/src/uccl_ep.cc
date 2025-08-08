@@ -2,6 +2,7 @@
 // #include "config.hpp"
 #include "ep_config.hpp"
 #include "ep_event.hpp"
+#include "ep_runtime.cuh"
 #include "internode_ll.cuh"
 #include <ATen/cuda/CUDAContext.h>
 #include <pybind11/functional.h>
@@ -112,29 +113,28 @@ class Buffer {
     CUDA_CHECK(cudaMalloc(&workspace_, NUM_WORKSPACE_BYTES));
     CUDA_CHECK(
         cudaMemsetAsync(workspace_, 0, NUM_WORKSPACE_BYTES, comm_stream));
-    CUDA_CHECK(cudaMallocHost(&moe_recv_counter_, sizeof(int64_t),
+    CUDA_CHECK(cudaMallocHost(&moe_recv_counter, sizeof(int64_t),
                               cudaHostAllocMapped));
-    CUDA_CHECK(cudaHostGetDevicePointer(
-        reinterpret_cast<void**>(&moe_recv_counter_mapped_), moe_recv_counter_,
-        0));
-    *moe_recv_counter_ = -1;
+    CUDA_CHECK(cudaHostGetDevicePointer(&moe_recv_counter_mapped,
+                                        const_cast<int*>(moe_recv_counter), 0));
+    *moe_recv_counter = -1;
 
-    CUDA_CHECK(cudaMallocHost(&moe_recv_expert_counter_,
+    CUDA_CHECK(cudaMallocHost(&moe_recv_expert_counter,
                               sizeof(int) * NUM_MAX_LOCAL_EXPERTS,
                               cudaHostAllocMapped));
     CUDA_CHECK(cudaHostGetDevicePointer(
-        reinterpret_cast<void**>(&moe_recv_expert_counter_mapped_),
-        moe_recv_expert_counter_, 0));
+        reinterpret_cast<void**>(&moe_recv_expert_counter_mapped),
+        moe_recv_expert_counter, 0));
     for (int i = 0; i < NUM_MAX_LOCAL_EXPERTS; ++i)
-      moe_recv_expert_counter_[i] = -1;
+      moe_recv_expert_counter[i] = -1;
 
     if (num_rdma_ranks > 0) {
-      CUDA_CHECK(cudaMallocHost(&moe_recv_rdma_counter_, sizeof(int),
+      CUDA_CHECK(cudaMallocHost(&moe_recv_rdma_counter, sizeof(int),
                                 cudaHostAllocMapped));
       CUDA_CHECK(cudaHostGetDevicePointer(
-          reinterpret_cast<void**>(&moe_recv_rdma_counter_mapped_),
-          moe_recv_rdma_counter_, 0));
-      *moe_recv_rdma_counter_ = -1;
+          reinterpret_cast<void**>(&moe_recv_rdma_counter_mapped),
+          moe_recv_rdma_counter, 0));
+      *moe_recv_rdma_counter = -1;
     }
     printf(
         "Buffer created for rank %d, num_ranks %d, num_nvl_bytes %ld, "
@@ -142,7 +142,48 @@ class Buffer {
         rank, num_ranks, num_nvl_bytes, num_rdma_bytes, low_latency_mode);
   }
 
-  void destroy() {}
+  void destroy() {
+    EP_HOST_ASSERT(not destroyed);
+
+    // Synchronize
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    if (num_nvl_bytes > 0) {
+      // Barrier
+      intranode::barrier(barrier_signal_ptrs_gpu, nvl_rank, num_nvl_ranks,
+                         comm_stream);
+      CUDA_CHECK(cudaDeviceSynchronize());
+
+      // Close remote IPC
+      if (is_available()) {
+        for (int i = 0; i < num_nvl_ranks; ++i)
+          if (i != nvl_rank) CUDA_CHECK(cudaIpcCloseMemHandle(buffer_ptrs[i]));
+      }
+
+      // Free local buffer and error flag
+      CUDA_CHECK(cudaFree(buffer_ptrs[nvl_rank]));
+    }
+
+    // Free NVSHMEM
+#ifndef DISABLE_NVSHMEM
+    if (is_available() and num_rdma_bytes > 0) {
+      CUDA_CHECK(cudaDeviceSynchronize());
+      internode::barrier();
+      internode::free(rdma_buffer_ptr);
+      internode::finalize();
+    }
+#endif
+
+    // Free workspace and MoE counter
+    CUDA_CHECK(cudaFree(workspace));
+    CUDA_CHECK(cudaFreeHost(const_cast<int*>(moe_recv_counter)));
+
+    // Free chunked mode staffs
+    CUDA_CHECK(cudaFreeHost(const_cast<int*>(moe_recv_expert_counter)));
+
+    destroyed = true;
+    available = false;
+  }
 
   std::tuple<torch::Tensor, std::optional<torch::Tensor>, torch::Tensor,
              torch::Tensor, torch::Tensor, std::optional<EventHandle>,
@@ -482,20 +523,20 @@ class Buffer {
                   root_unique_id_opt->size());
       auto nvshmem_rank = low_latency_mode ? rank : rdma_rank;
       auto num_nvshmem_ranks = low_latency_mode ? num_ranks : num_rdma_ranks;
-      EP_HOST_ASSERT(nvshmem_rank == uccl::internode_ll::init(
-                                         root_unique_id, nvshmem_rank,
-                                         num_nvshmem_ranks, low_latency_mode));
-      uccl::internode_ll::barrier();
+      EP_HOST_ASSERT(nvshmem_rank ==
+                     internode::init(root_unique_id, nvshmem_rank,
+                                     num_nvshmem_ranks, low_latency_mode));
+      internode::barrier();
 
       // Allocate
       rdma_buffer_ptr =
-          uccl::internode_ll::alloc(num_rdma_bytes, NUM_BUFFER_ALIGNMENT_BYTES);
+          internode::alloc(num_rdma_bytes, NUM_BUFFER_ALIGNMENT_BYTES);
 
       // Clean buffer (mainly for low-latency mode)
       CUDA_CHECK(cudaMemset(rdma_buffer_ptr, 0, num_rdma_bytes));
 
       // Barrier
-      uccl::internode_ll::barrier();
+      internode::barrier();
       CUDA_CHECK(cudaDeviceSynchronize());
     }
 
@@ -541,12 +582,14 @@ class Buffer {
   int** barrier_signal_ptrs_gpu{nullptr};
 
   // MoE counters (host mapped)
-  int64_t* moe_recv_counter_{nullptr};
-  int64_t* moe_recv_counter_mapped_{nullptr};  // device pointer
-  int* moe_recv_expert_counter_{nullptr};
-  int* moe_recv_expert_counter_mapped_{nullptr};
-  int* moe_recv_rdma_counter_{nullptr};
-  int* moe_recv_rdma_counter_mapped_{nullptr};
+  int volatile* moe_recv_counter = nullptr;
+  int64_t* moe_recv_counter_mapped{nullptr};  // device pointer
+  int* moe_recv_expert_counter{nullptr};
+  int* moe_recv_expert_counter_mapped{nullptr};
+  int* moe_recv_rdma_counter{nullptr};
+  int* moe_recv_rdma_counter_mapped{nullptr};
+
+  bool destroyed = false;
 };
 
 PYBIND11_MODULE(uccl_ep, m) {

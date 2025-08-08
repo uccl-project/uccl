@@ -1,30 +1,25 @@
 #pragma once
-#include <iostream>
+#include <cstddef>
+#include <cstdint>
 #include <vector>
+#include <cuda_runtime_api.h>
 
-// TODO(MaoZiming): This corresponds to DeepEP/csrc/kernels/runtime.cu
-// They use nvshmem, but we don't have that in our environment.
+namespace internode {
 int init(std::vector<uint8_t> const& root_unique_id_val, int rank,
-         int num_ranks, bool low_latency_mode) {
-  // TODO(MaoZiming): Fix.
-  std::cout << "[uccl::internode_ll::init] dummy init invoked" << std::endl;
-  return 0;  // Return success
-}
+         int num_ranks, bool low_latency_mode);
+void* alloc(std::size_t size, std::size_t alignment);
+void finalize();
+void barrier();
+void free(void* ptr);
+}  // namespace internode
 
-void* alloc(size_t size, size_t alignment) {
-  // TODO(MaoZiming): Fix.
-  std::cout << "[uccl::internode_ll::alloc] dummy alloc invoked" << std::endl;
-  return nullptr;
-}
+// global (if callers expect it global)
+std::vector<uint8_t> get_unique_id();
 
-void barrier() {
-  // TODO(MaoZiming): Fix.
-  std::cout << "[uccl::internode_ll::barrier] dummy barrier invoked"
-            << std::endl;
-  return;
-}
+namespace intranode {
+template <int kNumRanks>
+__global__ void barrier(int** barrier_signal_ptrs, int rank);
 
-std::vector<uint8_t> get_unique_id() {
-  // TODO(MaoZiming): Fix.
-  return std::vector<uint8_t>(64, 0);  // Dummy unique ID
-}
+void barrier(int** barrier_signal_ptrs, int rank, int num_ranks,
+             cudaStream_t stream);
+}  // namespace intranode

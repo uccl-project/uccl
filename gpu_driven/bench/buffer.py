@@ -31,6 +31,7 @@ class Buffer:
         runtime: the C++ runtime.
     """
 
+    # TODO(MaoZiming): Reduce SMs.
     num_sms: int = 20
 
     def __init__(
