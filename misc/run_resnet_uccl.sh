@@ -19,7 +19,7 @@ cleanup() {
 # 注册信号处理程序
 trap cleanup EXIT SIGINT SIGTERM
 
-UCCL_HOME="/home/ubuntu/uccl_yang"
+UCCL_HOME="/home/ubuntu/uccl"
 NV_LINK_DISABLE=1
 CHANNELS=16
 CHANNELS_NET_PEER=4
@@ -50,7 +50,7 @@ export GLOG_logtostderr=0
 export NCCL_LAUNCH_MODE=PARALLEL
 
 # 读取hostfile配置
-HOSTFILE="./hostfile"
+HOSTFILE="$UCCL_HOME/scripts/node_ips/p4d.txt"
 if [ ! -f "$HOSTFILE" ]; then
     echo "错误: hostfile不存在 ($HOSTFILE)"
     exit 1
