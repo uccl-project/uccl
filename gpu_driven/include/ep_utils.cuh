@@ -1,0 +1,189 @@
+#pragma once
+
+__forceinline__ __device__ int get_lane_id() {
+  int lane_id;
+  asm("mov.s32 %0, %laneid;" : "=r"(lane_id));
+  return lane_id;
+}
+
+template <typename dtype_t>
+__host__ __device__ constexpr dtype_t ceil_div(dtype_t a, dtype_t b) {
+  return (a + b - 1) / b;
+}
+
+constexpr float kFP8Margin = 1e-4;
+constexpr float kFinfoAmaxE4M3 = 448.0f;
+constexpr float kFinfoAmaxInvE4M3 = 1 / 448.0f;
+
+template <int kBytes>
+struct VecInt {};
+template <>
+struct VecInt<1> {
+  using vec_t = int8_t;
+};
+template <>
+struct VecInt<2> {
+  using vec_t = int16_t;
+};
+template <>
+struct VecInt<4> {
+  using vec_t = int;
+};
+template <>
+struct VecInt<8> {
+  using vec_t = int64_t;
+};
+template <>
+struct VecInt<16> {
+  using vec_t = int4;
+};
+
+// Unified reduction function
+template <uint32_t kNumLanes, typename T, typename Op>
+__forceinline__ __device__ T warp_reduce(T value, Op op) {
+  EP_STATIC_ASSERT(kNumLanes == 32 or kNumLanes == 16 or kNumLanes == 8 or
+                       kNumLanes == 4 or kNumLanes == 2 or kNumLanes == 1,
+                   "Invalid number of lanes");
+
+  if constexpr (kNumLanes >= 32)
+    value = op(value, __shfl_xor_sync(0xffffffff, value, 16));
+  if constexpr (kNumLanes >= 16)
+    value = op(value, __shfl_xor_sync(0xffffffff, value, 8));
+  if constexpr (kNumLanes >= 8)
+    value = op(value, __shfl_xor_sync(0xffffffff, value, 4));
+  if constexpr (kNumLanes >= 4)
+    value = op(value, __shfl_xor_sync(0xffffffff, value, 2));
+  if constexpr (kNumLanes >= 2)
+    value = op(value, __shfl_xor_sync(0xffffffff, value, 1));
+  return value;
+}
+
+template <typename T>
+struct ReduceSum {
+  __device__ T operator()(T a, T b) const { return a + b; }
+};
+template <typename T>
+struct ReduceMax {
+  __device__ T operator()(T a, T b) const { return a > b ? a : b; }
+};
+template <typename T>
+struct ReduceMin {
+  __device__ T operator()(T a, T b) const { return a < b ? a : b; }
+};
+
+template <uint32_t kNumLanes = 32, typename T>
+__forceinline__ __device__ T warp_reduce_max(T value) {
+  return warp_reduce<kNumLanes, T>(value, ReduceMax<T>{});
+}
+
+__forceinline__ __device__ int fast_log2_ceil(float x) {
+  auto bits_x = *reinterpret_cast<uint32_t*>(&x);
+  auto exp_x = (bits_x >> 23) & 0xff;
+  auto man_bits = bits_x & ((1 << 23) - 1);
+  return exp_x - 127 + (man_bits != 0);
+}
+
+__forceinline__ __device__ float fast_pow2(int x) {
+  // We can ensure `-126 <= x and x <= 127`
+  uint32_t bits_x = (x + 127) << 23;
+  return *reinterpret_cast<float*>(&bits_x);
+}
+
+__forceinline__ __device__ void calculate_fp8_scales(float amax, float& scale,
+                                                     float& scale_inv,
+                                                     bool round_scale) {
+  if (round_scale) {
+    auto exp_scale_inv = fast_log2_ceil(amax * kFinfoAmaxInvE4M3);
+    scale = fast_pow2(-exp_scale_inv);
+    scale_inv = fast_pow2(exp_scale_inv);
+  } else {
+    scale_inv = amax * kFinfoAmaxInvE4M3;
+    scale = kFinfoAmaxE4M3 / amax;
+  }
+}
+
+// `ld.global.nc.L1::no_allocate` will be translated into
+// `LDG.E.NA.[width].CONSTANT` in SASS
+template <typename dtype_t>
+__device__ __forceinline__ dtype_t ld_nc_global(dtype_t const* ptr) {
+  auto ret = ld_nc_global(
+      reinterpret_cast<const typename VecInt<sizeof(dtype_t)>::vec_t*>(ptr));
+  return *reinterpret_cast<dtype_t*>(&ret);
+}
+
+template <typename dtype_t>
+__device__ __forceinline__ void st_na_global(dtype_t const* ptr,
+                                             dtype_t const& value) {
+  st_na_global(
+      reinterpret_cast<const typename VecInt<sizeof(dtype_t)>::vec_t*>(ptr),
+      *reinterpret_cast<const typename VecInt<sizeof(dtype_t)>::vec_t*>(
+          &value));
+}
+
+__device__ __forceinline__ int ld_acquire_sys_global(int const* ptr) {
+  int ret;
+  asm volatile("ld.acquire.sys.global.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
+  return ret;
+}
+
+template <typename dtype_a_t, typename dtype_b_t>
+__device__ __forceinline__ dtype_b_t pack2(dtype_a_t const& x,
+                                           dtype_a_t const& y) {
+  EP_STATIC_ASSERT(sizeof(dtype_a_t) * 2 == sizeof(dtype_b_t),
+                   "Invalid dtypes");
+  dtype_b_t packed;
+  auto unpacked_ptr = reinterpret_cast<dtype_a_t*>(&packed);
+  unpacked_ptr[0] = x, unpacked_ptr[1] = y;
+  return packed;
+}
+
+template <bool kIsUE8M0,
+          typename out_dtype_t = std::conditional_t<kIsUE8M0, uint8_t, float>>
+__forceinline__ __device__ out_dtype_t
+extract_required_scale_format(float value) {
+  if constexpr (kIsUE8M0) {
+    return static_cast<uint8_t>((*reinterpret_cast<uint32_t*>(&value)) >> 23);
+  } else {
+    return value;
+  }
+}
+
+__device__ __forceinline__ uint64_t ld_acquire_sys_global(uint64_t const* ptr) {
+  uint64_t ret;
+  asm volatile("ld.acquire.sys.global.u64 %0, [%1];" : "=l"(ret) : "l"(ptr));
+  return ret;
+}
+
+template <typename dtype_t>
+__host__ __device__ constexpr dtype_t align(dtype_t a, dtype_t b) {
+  return ceil_div<dtype_t>(a, b) * b;
+}
+
+#define UNROLLED_WARP_COPY(UNROLL_FACTOR, LANE_ID, N, DST, SRC, LD_FUNC,     \
+                           ST_FUNC)                                          \
+  {                                                                          \
+    constexpr int kLoopStride = 32 * (UNROLL_FACTOR);                        \
+    typename std::remove_reference<decltype(LD_FUNC((SRC) + 0))>::type       \
+        unrolled_values[(UNROLL_FACTOR)];                                    \
+    auto __src = (SRC);                                                      \
+    auto __dst = (DST);                                                      \
+    for (int __i = (LANE_ID); __i < ((N) / kLoopStride) * kLoopStride;       \
+         __i += kLoopStride) {                                               \
+      _Pragma("unroll") for (int __j = 0; __j < (UNROLL_FACTOR); ++__j)      \
+          unrolled_values[__j] = LD_FUNC(__src + __i + __j * 32);            \
+      _Pragma("unroll") for (int __j = 0; __j < (UNROLL_FACTOR); ++__j)      \
+          ST_FUNC(__dst + __i + __j * 32, unrolled_values[__j]);             \
+    }                                                                        \
+    for (int __i = ((N) / kLoopStride) * kLoopStride + (LANE_ID); __i < (N); \
+         __i += 32)                                                          \
+      ST_FUNC(__dst + __i, LD_FUNC(__src + __i));                            \
+  }
+
+__device__ __forceinline__ int atomic_add_release_global(int const* ptr,
+                                                         int value) {
+  int ret;
+  asm volatile("atom.add.release.gpu.global.s32 %0, [%1], %2;"
+               : "=r"(ret)
+               : "l"(ptr), "r"(value));
+  return ret;
+}
