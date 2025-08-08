@@ -1,5 +1,6 @@
 #include "ep_configs.cuh"
 #include "ep_launch.cuh"
+#include "ep_runtime.cuh"
 #include "ep_util.hpp"
 #include "ep_utils.cuh"
 #include "internode_ll.cuh"
@@ -7,8 +8,8 @@
 #include <iostream>
 #include <vector>
 #include <cooperative_groups.h>
-namespace cg = cooperative_groups;
 
+namespace cg = cooperative_groups;
 namespace uccl {
 namespace internode_ll {
 
@@ -842,33 +843,6 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
   SETUP_LAUNCH_CONFIG(num_sms, num_warps * 32, stream);
   SWITCH_HIDDEN(COMBINE_LAUNCH_CASE);
 #undef COMBINE_LAUNCH_CASE
-}
-
-// TODO(MaoZiming): This corresponds to DeepEP/csrc/kernels/runtime.cu
-// They use nvshmem, but we don't have that in our environment.
-int init(std::vector<uint8_t> const& root_unique_id_val, int rank,
-         int num_ranks, bool low_latency_mode) {
-  // TODO(MaoZiming): Fix.
-  std::cout << "[uccl::internode_ll::init] dummy init invoked" << std::endl;
-  return 0;  // Return success
-}
-
-void* alloc(size_t size, size_t alignment) {
-  // TODO(MaoZiming): Fix.
-  std::cout << "[uccl::internode_ll::alloc] dummy alloc invoked" << std::endl;
-  return nullptr;
-}
-
-void barrier() {
-  // TODO(MaoZiming): Fix.
-  std::cout << "[uccl::internode_ll::barrier] dummy barrier invoked"
-            << std::endl;
-  return;
-}
-
-std::vector<uint8_t> get_unique_id() {
-  // TODO(MaoZiming): Fix.
-  return std::vector<uint8_t>(64, 0);  // Dummy unique ID
 }
 
 }  // namespace internode_ll
