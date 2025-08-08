@@ -349,9 +349,18 @@ void listener_thread_func(uccl_conn_t* conn) {
     std::cout << "Local memory registered for address: " << md.data_ptr
               << std::endl;
     auto mr_id = local_mem_iter->second;
-
+    char out_buf[sizeof(uccl::FifoItem)];
     switch (md.op) {
       case UCCL_READ:
+        conn->engine->endpoint->advertise(
+            conn->conn_id, mr_id, (void*)md.data_ptr, md.data_size, out_buf);
+        ssize_t result =
+            send(conn->sock_fd, out_buf, sizeof(uccl::FifoItem), 0);
+        if (result < 0) {
+          std::cerr << "Failed to send FifoItem data: " << strerror(errno)
+                    << std::endl;
+          break;
+        }
         break;
       case UCCL_WRITE:
         // Submit async receive task to thread pool
