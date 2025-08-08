@@ -264,39 +264,44 @@ def start_transfer(size, num_kvblocks, args):
             agent, register_descs = create_nixl_agent_mc(
                 args.role, dataset, zmq_socket, args.backend
             )
-            transfer_handle = init_transfer_metadata_mc(
-                args.role, op, agent, register_descs, zmq_socket
-            )
         else:
             agent, register_descs = create_nixl_agent_ucx(args.role, dataset)
-            transfer_handle = init_transfer_metadata_ucx(
-                args.role,
-                op,
-                agent,
-                register_descs,
-                args.remote_ip,
-                listen_port,
-            )
         sys.stdout = old_stdout
 
         total_size = 0
-        start = time.perf_counter()
+        total_transfer_time = 0.0
 
-        if args.backend == "mooncake" or args.backend == "uccl":
-            for _ in range(args.iters):
+        for _ in range(args.iters):
+            if args.backend == "mooncake" or args.backend == "uccl":
+                transfer_handle = init_transfer_metadata_mc(
+                    args.role, op, agent, register_descs, zmq_socket
+                )
+            else:
+                transfer_handle = init_transfer_metadata_ucx(
+                    args.role,
+                    op,
+                    agent,
+                    register_descs,
+                    args.remote_ip,
+                    listen_port,
+                )
+            start = time.perf_counter()
+            if args.backend == "mooncake" or args.backend == "uccl":
                 do_transfer_mc(args.role, agent, transfer_handle, zmq_socket)
                 total_size += size
-        else:
-            for _ in range(args.iters):
+            else:
                 do_transfer_ucx(args.role, agent, transfer_handle)
                 total_size += size
 
-        end = time.perf_counter()
+            end = time.perf_counter()
+            transfer_time = end - start
+            total_transfer_time += transfer_time
 
-        transfer_time = end - start
-        gbps = (total_size * 8) / transfer_time / 1e9  # bits per second → Gbps
-        gb_sec = total_size / transfer_time / 1e9  # bytes per second → GB/s
-        lat = transfer_time / args.iters
+        avg_transfer_time = total_transfer_time / args.iters
+        gbps = (total_size * 8) / total_transfer_time / 1e9  # bits per second → Gbps
+        gb_sec = total_size / total_transfer_time / 1e9  # bytes per second → GB/s
+        lat = avg_transfer_time  # Average latency per transfer
+
         print(
             f"[{args.role}] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s | {lat:6.6f} s"
         )
@@ -382,7 +387,7 @@ def main():
     p.add_argument(
         "--iters",
         type=int,
-        default=1,
+        default=1000,
         help="Iterations per message size (excluding 1 warm-up)",
     )
     p.add_argument(
