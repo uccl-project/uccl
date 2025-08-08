@@ -30,6 +30,8 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     uint64_t req_rptr, uint64_t req_lptr, size_t bytes, int dst_pe, int qp_id,
     int lane_id, int message_idx) {
   // no-op
+
+  // TODO(MaoZiming): This should go through the proxy.
 }
 
 // TODO(MaoZiming): Fix.
@@ -44,6 +46,8 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
   (void)rptr;
   (void)value;
   (void)is_local_copy;
+
+  // TODO(MaoZiming): Reverse proxy (remote -> local) acknowldgement.
 }
 
 // TODO(MaoZiming): Fix.
