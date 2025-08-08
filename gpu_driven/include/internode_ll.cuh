@@ -1,6 +1,9 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>  // int64_t
+#include <vector>
+#include <cuda_runtime_api.h>
 // #include <torch/extension.h>
 
 namespace uccl {
@@ -28,5 +31,10 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
              void* workspace, int num_device_sms, cudaStream_t stream,
              int phases, bool zero_copy);
 
+int init(std::vector<uint8_t> const& root_unique_id_val, int rank,
+         int num_ranks, bool low_latency_mode);
+
+void* alloc(size_t size, size_t alignment);
+void barrier();
 }  // namespace internode_ll
 }  // namespace uccl

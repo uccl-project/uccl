@@ -1,6 +1,7 @@
 #include "internode_ll.cuh"
 // #include <ATen/cuda/CUDAContext.h>
 #include <iostream>
+#include <vector>
 
 namespace uccl {
 namespace internode_ll {
@@ -40,5 +41,26 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
   std::cout << "[uccl::internode_ll::combine] dummy launch invoked"
             << std::endl;
 }
+
+int init(std::vector<uint8_t> const& root_unique_id_val, int rank,
+         int num_ranks, bool low_latency_mode) {
+  // TODO(MaoZiming): Fix.
+  std::cout << "[uccl::internode_ll::init] dummy init invoked" << std::endl;
+  return 0;  // Return success
+}
+
+void* alloc(size_t size, size_t alignment) {
+  // TODO(MaoZiming): Fix.
+  std::cout << "[uccl::internode_ll::alloc] dummy alloc invoked" << std::endl;
+  return nullptr;
+}
+
+void barrier() {
+  // TODO(MaoZiming): Fix.
+  std::cout << "[uccl::internode_ll::barrier] dummy barrier invoked"
+            << std::endl;
+  return;
+}
+
 }  // namespace internode_ll
 }  // namespace uccl
