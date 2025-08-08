@@ -87,6 +87,16 @@ RUN cd /tmp && \
     cmake --install build
 
 RUN cd /tmp && \
+    git clone https://github.com/kvcache-ai/Mooncake.git && \
+    cd Mooncake && git checkout 975eef1 && \
+    bash dependencies.sh && \
+    mkdir build && cd build && \
+    pip install --upgrade cmake && \
+    /opt/conda/envs/py_3.10/bin/cmake .. -DBUILD_SHARED_LIBS=ON -DBUILD_UNIT_TESTS=OFF -DBUILD_EXAMPLES=OFF -DWITH_STORE=OFF && \
+    make -j && \
+    make install
+
+RUN cd /tmp && \
     git clone https://github.com/ai-dynamo/nixl.git && \
     cd nixl && git checkout 0.5.0 && \
     pip3 install meson -U && \
@@ -100,16 +110,6 @@ RUN cd /tmp/nixl && \
     pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3 && \
     pip3 install pyzmq && \
     pip3 install .
-
-RUN cd /tmp && \
-    git clone https://github.com/kvcache-ai/Mooncake.git && \
-    cd Mooncake && git checkout 975eef1 && \
-    bash dependencies.sh && \
-    mkdir build && cd build && \
-    pip install --upgrade cmake && \
-    /opt/conda/envs/py_3.10/bin/cmake .. -DBUILD_SHARED_LIBS=ON -DBUILD_UNIT_TESTS=OFF -DBUILD_EXAMPLES=OFF -DWITH_STORE=OFF && \
-    make -j && \
-    make install
 
 ENV LD_LIBRARY_PATH="/usr/local/nixl/lib/`uname -m`-linux-gnu/plugins:/usr/local/ucx/lib:$LD_LIBRARY_PATH"
 
