@@ -8,9 +8,7 @@ ARG GID=300168
 # Non-interactive APT
 ENV DEBIAN_FRONTEND=noninteractive
 
-# ---------------------------------------------------------------------------
-# Basic build & runtime dependencies (minus CUDA which is already in base)
-# ---------------------------------------------------------------------------
+# Basic build & runtime dependencies (minus ROCM which is already in base)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     software-properties-common \
@@ -20,27 +18,17 @@ RUN apt-get update && \
     libnuma-dev libdrm-dev libdrm-amdgpu1 \
     pkg-config libhiredis-dev zlib1g-dev curl \
     autoconf automake libtool linux-headers-$(uname -r) && \
-\
-# ───── Add Python ${PY_VER} PPA & install Python ${PY_VER} + setuptools ─────
     add-apt-repository ppa:deadsnakes/ppa && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
     python${PY_VER} python${PY_VER}-dev python${PY_VER}-venv python3-setuptools && \
-\
-# ───── Bootstrap pip for Python ${PY_VER} ─────
     curl -sS https://bootstrap.pypa.io/get-pip.py | python${PY_VER} && \
     ln -sf /usr/bin/pip${PY_VER} /usr/local/bin/pip && \
     ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python${PY_VER} && \
-\
-# ───── Clean up apt cache ─────
     rm -rf /var/lib/apt/lists/*
 
-# ─────────────────────────────────────────────────────────
-# Install Python build back-end (for Python ${PY_VER})
-# ─────────────────────────────────────────────────────────
 RUN python${PY_VER} -m pip install --no-cache-dir build auditwheel pybind11 meson
 
-# ───── Set Python ${PY_VER} as default python3 and python3-config ─────
 RUN ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python3 && \
     ln -sf /usr/bin/python${PY_VER}-config /usr/local/bin/python3-config
 
@@ -92,7 +80,7 @@ RUN cd /tmp && \
     bash dependencies.sh && \
     mkdir build && cd build && \
     pip install --upgrade cmake && \
-    /opt/conda/envs/py_3.10/bin/cmake .. -DBUILD_SHARED_LIBS=ON -DBUILD_UNIT_TESTS=OFF -DBUILD_EXAMPLES=OFF -DWITH_STORE=OFF && \
+    /opt/conda/envs/py_3.10/bin/cmake .. -DBUILD_SHARED_LIBS=ON -DBUILD_UNIT_TESTS=OFF -DWITH_STORE=OFF && \
     make -j && \
     make install
 
@@ -112,6 +100,18 @@ RUN cd /tmp/nixl && \
     pip3 install .
 
 ENV LD_LIBRARY_PATH="/usr/local/nixl/lib/`uname -m`-linux-gnu/plugins:/usr/local/ucx/lib:$LD_LIBRARY_PATH"
+
+RUN cd /tmp && \
+    GO_VER=1.23.0 && \
+    wget https://go.dev/dl/go${GO_VER}.linux-amd64.tar.gz && \
+    rm -rf /usr/local/go && \
+    tar -C /usr/local -xzf go${GO_VER}.linux-amd64.tar.gz
+
+ENV PATH=/usr/local/go/bin:$PATH
+
+RUN chown -R hostuser:hostgrp /tmp/Mooncake/ && \
+    chown -R hostuser:hostgrp /tmp/nixl/ && \
+    chown -R hostuser:hostgrp /tmp/ucx/
 
 WORKDIR /io/p2p/benchmarks
 USER hostuser
