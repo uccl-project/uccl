@@ -738,7 +738,6 @@ LOW_LATENCY_COMBINE_RECV:
     }
   }
 
-  // TODO(MaoZiming): Fix.
   cg::this_grid().sync();
 
   // Reduce tokens
