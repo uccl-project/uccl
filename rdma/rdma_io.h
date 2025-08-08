@@ -538,7 +538,7 @@ struct FactoryDevice {
 class RDMAFactory {
   std::vector<struct FactoryDevice> devices_;
   std::map<int, int> gpu_to_dev_idx_;
-  int __num_devices = 0;
+  int num_devices = 0;
 
  public:
   ~RDMAFactory() { devices_.clear(); }

@@ -1714,9 +1714,9 @@ Endpoint::Endpoint() : stats_thread_([this]() { stats_thread_fn(); }) {
   }
 #endif
 
-  ctx_pool_ = new SharedPool<PollCtx*, true>(NUM_FRAMES * 4);
+  ctx_pool_ = new SharedPool<PollCtx*, true>(
+      NUM_FRAMES * 4, [](PollCtx* ctx) { ctx->clear(); });
   ctx_pool_buf_ = new uint8_t[NUM_FRAMES * 4 * sizeof(PollCtx)];
-
   for (int i = 0; i < NUM_FRAMES * 4; i++) {
     ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());
   }
@@ -1776,7 +1776,8 @@ Endpoint::Endpoint(int gpu)
     engines.push_back(engine_vec_.back().get());
   }
 
-  ctx_pool_ = new SharedPool<PollCtx*, true>(NUM_FRAMES * 4);
+  ctx_pool_ = new SharedPool<PollCtx*, true>(
+      NUM_FRAMES * 4, [](PollCtx* ctx) { ctx->clear(); });
   ctx_pool_buf_ = new uint8_t[NUM_FRAMES * 4 * sizeof(PollCtx)];
   for (int i = 0; i < NUM_FRAMES * 4; i++) {
     ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());
@@ -1928,7 +1929,6 @@ ConnID Endpoint::uccl_connect(int local_vdev, int remote_vdev,
   LOG(INFO) << "[Endpoint] connected to <" << remote_ip << ", " << remote_vdev
             << ">:" << listen_port << " bootstrap_fd " << bootstrap_fd;
 
-  fcntl(bootstrap_fd, F_SETFL, O_NONBLOCK);
   int flag = 1;
   setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
 
@@ -1991,7 +1991,6 @@ ConnID Endpoint::uccl_accept(int local_vdev, int* remote_vdev,
   LOG(INFO) << "[Endpoint] accept from " << remote_ip << ":"
             << cli_addr.sin_port << " bootstrap_fd " << bootstrap_fd;
 
-  fcntl(bootstrap_fd, F_SETFL, O_NONBLOCK);
   int flag = 1;
   setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
 
@@ -2338,7 +2337,6 @@ inline int Endpoint::find_least_loaded_engine_idx_and_update(int vdev_idx,
 inline void Endpoint::fence_and_clean_ctx(PollCtx* ctx) {
   // Make the data written by the engine thread visible to the app thread.
   ctx->read_barrier();
-  ctx->clear();
   ctx_pool_->push(ctx);
 }
 

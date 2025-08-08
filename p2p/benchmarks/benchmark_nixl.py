@@ -189,6 +189,8 @@ def create_nixl_agent_ucx(role: str, dataset):
 def cleanup_agent(
     agent: nixl_agent,
 ):
+    if agent is None:
+        return
     agent.remove_remote_agent(agent.name)
 
 
@@ -231,10 +233,13 @@ def cleanup_transfer(
     transfer_handle,
     register_descs,
 ):
+    if agent is None:
+        return
     # Cleanup the transfer handle and registered descriptors
     if transfer_handle is not None:
         agent.release_xfer_handle(transfer_handle)
-    agent.deregister_memory(register_descs)
+    if register_descs is not None:
+        agent.deregister_memory(register_descs)
 
 
 def start_transfer(size, num_kvblocks, args):
@@ -247,6 +252,10 @@ def start_transfer(size, num_kvblocks, args):
         dataset = create_dataset(
             args.role, size, num_kvblocks, args.device, args.local_gpu_idx
         )
+
+        agent = None
+        transfer_handle = None
+        register_descs = None
 
         # Suppress stdout for better output
         old_stdout = sys.stdout

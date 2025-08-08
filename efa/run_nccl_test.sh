@@ -45,7 +45,8 @@ if [ "$TEST" = "srd" ]; then
     BUFFSIZE=8388608
 fi
 
-NODES=$(get_nodes "../scripts/node_ips/p4d.txt")
+NODEFILE="../scripts/node_ips/p4d.txt"
+NODES=$(get_nodes $NODEFILE)
 echo "Running test: ${TEST}, ${PROG_NAME}, ${NUM_PROCS} processes, NIC ${NIC}, uccl_quite ${UCCL_QUITE}, ${NODES}, ${CHANNELS} channels."
 
 if [ "$TEST" = "srd" ]; then
@@ -57,7 +58,7 @@ if [ "$TEST" = "srd" ]; then
     LIBNCCL_PATH="${UCCL_HOME}/thirdparty/nccl/build/lib/libnccl.so"
     PLUGIN_PATH="/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu/libnccl-net.so"
 
-    mpirun --bind-to none -np ${NUM_PROCS} -N ${PROCS_PER_NODE} --hostfile hosts \
+    mpirun --bind-to none -np ${NUM_PROCS} -N ${PROCS_PER_NODE} --hostfile $NODEFILE --map-by ppr:8:node \
         --tag-output --merge-stderr-to-stdout \
         --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
         --mca orte_base_help_aggregate 0 \
@@ -100,7 +101,7 @@ elif [ "$TEST" = "ud" ]; then
     echo "LIBNCCL_PATH: ${LIBNCCL_PATH}"
     echo "PLUGIN_PATH: ${PLUGIN_PATH}"
 
-    mpirun --bind-to none -np ${NUM_PROCS} -N ${PROCS_PER_NODE} --hostfile hosts \
+    mpirun --bind-to none -np ${NUM_PROCS} -N ${PROCS_PER_NODE} --hostfile $NODEFILE --map-by ppr:8:node \
         --tag-output --merge-stderr-to-stdout \
         --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
         --mca orte_base_help_aggregate 0 \

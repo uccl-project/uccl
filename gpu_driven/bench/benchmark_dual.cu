@@ -59,8 +59,6 @@ int main(int argc, char** argv) {
   for (int i = 0; i < env.blocks; ++i) {
     cpu_threads.emplace_back([&, i]() { proxies[i]->run_dual(); });
   }
-
-#ifdef ENABLE_PROXY_CUDA_MEMCPY
   PeerCopyShared shared;
   shared.src_device = 0;
   std::vector<PeerWorkerCtx> worker_ctx(env.blocks);
@@ -72,7 +70,6 @@ int main(int argc, char** argv) {
                          std::ref(worker_ctx[i]), std::ref(proxies[i]->ring),
                          i);
   }
-#endif
 
   std::printf("[rank %d] Waiting 2s before issuing commands...\n", rank);
   ::sleep(2);  // give both ranks time to bring QPs up
@@ -99,12 +96,10 @@ int main(int argc, char** argv) {
   for (auto& t : cpu_threads) t.join();
   std::printf("proxy threads joined\n");
 
-#ifdef ENABLE_PROXY_CUDA_MEMCPY
   // Stop copy workers and join
   shared.run.store(false, std::memory_order_release);
   for (auto& th : workers) th.join();
   std::printf("copy threads joined\n");
-#endif
 
   // Cleanup
   destroy_env(env);

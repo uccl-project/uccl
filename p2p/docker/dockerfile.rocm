@@ -1,0 +1,108 @@
+# FROM rocm/dev-ubuntu-22.04
+FROM yuankaichenamd/megatron_rocm_private:v25.5.1.uccl.2
+ARG PY_VER=3.13
+
+ARG UID=300168
+ARG GID=300168
+
+# Non-interactive APT
+ENV DEBIAN_FRONTEND=noninteractive
+
+# ---------------------------------------------------------------------------
+# Basic build & runtime dependencies (minus CUDA which is already in base)
+# ---------------------------------------------------------------------------
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    software-properties-common \
+    build-essential cmake git ninja-build g++ make patchelf \
+    rdma-core libibverbs-dev ibverbs-utils net-tools infiniband-diags \
+    libgoogle-glog-dev libgflags-dev libgtest-dev libelf-dev \
+    libnuma-dev libdrm-dev libdrm-amdgpu1 \
+    pkg-config libhiredis-dev zlib1g-dev curl \
+    autoconf automake libtool linux-headers-$(uname -r) && \
+\
+# ───── Add Python ${PY_VER} PPA & install Python ${PY_VER} + setuptools ─────
+    add-apt-repository ppa:deadsnakes/ppa && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+    python${PY_VER} python${PY_VER}-dev python${PY_VER}-venv python3-setuptools && \
+\
+# ───── Bootstrap pip for Python ${PY_VER} ─────
+    curl -sS https://bootstrap.pypa.io/get-pip.py | python${PY_VER} && \
+    ln -sf /usr/bin/pip${PY_VER} /usr/local/bin/pip && \
+    ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python${PY_VER} && \
+\
+# ───── Clean up apt cache ─────
+    rm -rf /var/lib/apt/lists/*
+
+# ─────────────────────────────────────────────────────────
+# Install Python build back-end (for Python ${PY_VER})
+# ─────────────────────────────────────────────────────────
+RUN python${PY_VER} -m pip install --no-cache-dir build auditwheel pybind11 meson
+
+# ───── Set Python ${PY_VER} as default python3 and python3-config ─────
+RUN ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python3 && \
+    ln -sf /usr/bin/python${PY_VER}-config /usr/local/bin/python3-config
+
+ENV LD_LIBRARY_PATH=/usr/local/lib
+ENV PATH=/usr/local/bin:$PATH
+
+RUN apt update && apt install -y sudo && \
+    echo "hostuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
+    groupadd -g ${GID} hostgrp && useradd -u ${UID} -g ${GID} -m -s /bin/bash -G sudo hostuser
+
+# This is inconsistent with the host one, which we will use. Already fixed in the new container image.
+# sudo mv /usr/lib/x86_64-linux-gnu/libibverbs/libbnxt_re-rdmav34.so /usr/lib/x86_64-linux-gnu/libibverbs/libbnxt_re-rdmav34.so.bak
+  
+RUN cd /tmp && \
+    git clone https://github.com/openucx/ucx.git && \
+    cd ucx && git checkout v1.19.x && \
+    ./autogen.sh && ./configure     \
+    --prefix=/usr/local/ucx         \
+    --enable-shared                 \
+    --disable-static                \
+    --disable-doxygen-doc           \
+    --enable-optimizations          \
+    --enable-cma                    \
+    --enable-devel-headers          \
+    --with-rocm=/opt/rocm           \
+    --with-verbs                    \
+    --with-efa                      \
+    --with-dm                       \
+    --enable-mt &&                  \
+    make -j &&                      \
+    make -j install-strip &&   \
+    ldconfig
+
+RUN cd /tmp && \
+    git clone https://github.com/google/googletest.git && \
+    cd googletest && \
+    cmake -S . -B build \
+    -DBUILD_GMOCK=ON -DBUILD_GTEST=ON \
+    -DBUILD_SHARED_LIBS=ON \
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/usr/local && \
+    cmake --build build -j && \
+    cmake --install build
+
+RUN cd /tmp && \
+    git clone https://github.com/ai-dynamo/nixl.git && \
+    cd nixl && git checkout 0.5.0 && \
+    pip3 install meson -U && \
+    mkdir build && \
+    meson setup build/ --prefix=/usr/local/nixl -Ddisable_gds_backend=true -Ducx_path=/usr/local/ucx && \
+    cd build/ && \
+    ninja && \
+    ninja install
+
+RUN cd /tmp/nixl && \
+    pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3 && \
+    pip3 install pyzmq && \
+    pip3 install .
+
+ENV LD_LIBRARY_PATH="/usr/local/nixl/lib/`uname -m`-linux-gnu/plugins:/usr/local/ucx/lib:$LD_LIBRARY_PATH"
+
+WORKDIR /io/p2p/benchmarks
+USER hostuser
+CMD ["bash"]

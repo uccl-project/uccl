@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.3.2-devel-ubuntu22.04
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
 ARG PY_VER=3.13
 
 # Non-interactive APT
@@ -12,8 +12,8 @@ RUN apt-get update && \
         software-properties-common \
         build-essential cmake git ninja-build g++ make patchelf \
         rdma-core libibverbs-dev \
-        libgoogle-glog-dev libgflags-dev libgtest-dev libelf-dev \
-        libnuma-dev libdrm-dev libdrm-amdgpu1 \
+        libgoogle-glog-dev libgflags-dev libgtest-dev libgomp1 libelf-dev \
+        libnuma-dev libdrm-dev libdrm-amdgpu1 libgfortran5 \
         pkg-config libhiredis-dev zlib1g-dev curl && \
 \
 # ───── Add Python ${PY_VER} PPA & install Python ${PY_VER} + setuptools ─────
@@ -33,11 +33,13 @@ RUN apt-get update && \
 # ─────────────────────────────────────────────────────────
 # Install Python build back-end (for Python ${PY_VER})
 # ─────────────────────────────────────────────────────────
-RUN python${PY_VER} -m pip install --no-cache-dir build auditwheel pybind11
+RUN python${PY_VER} -m pip install --no-cache-dir build auditwheel pybind11 numpy
 
 # ───── Set Python ${PY_VER} as default python3 and python3-config ─────
 RUN ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python3 && \
     ln -sf /usr/bin/python${PY_VER}-config /usr/local/bin/python3-config
+
+RUN python${PY_VER} -m pip install --no-cache-dir torch==2.6.0+cu126 --index-url https://download.pytorch.org/whl/cu126
 
 # ─────────────────────────────────────────────────────────
 # Build and install redis-plus-plus

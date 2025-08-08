@@ -205,8 +205,8 @@ int server_init(struct server_t* server, char const* interface_name) {
     }
     // apply_setsockopt(xsk_socket__fd(server->socket[i].xsk));
 
-    server->socket[i].frame_pool =
-        std::make_unique<SharedPool<uint64_t, true>>(NUM_FRAMES);
+    server->socket[i].frame_pool = std::make_unique<SharedPool<uint64_t, true>>(
+        NUM_FRAMES, [](uint64_t frame) {});
     // initialize frame allocator
     for (int j = 0; j < NUM_FRAMES; j++) {
       server->socket[i].frame_pool->push(j * FRAME_SIZE + XDP_PACKET_HEADROOM);

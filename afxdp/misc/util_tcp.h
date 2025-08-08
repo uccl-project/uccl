@@ -83,7 +83,7 @@ int receive_message(size_t n_bytes, int sockfd, uint8_t* buffer,
   while (bytes_read < n_bytes && !(*quit)) {
     // Make sure we read exactly n_bytes
     r = read(sockfd, buffer + bytes_read, n_bytes - bytes_read);
-    if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
+    if (r < 0 && !(errno == EINTR)) {
       panic("ERROR reading from socket");
     }
     if (r > 0) {
@@ -97,7 +97,7 @@ int receive_message_early_return(size_t n_bytes, int sockfd, uint8_t* buffer,
                                  bool volatile* quit) {
   int r = read(sockfd, buffer, n_bytes);
   // Indicate this read would block.
-  if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+  if (r < 0 && (errno == EINTR)) {
     return 0;
   }
   return r + receive_message(n_bytes - r, sockfd, buffer + r, quit);
@@ -111,7 +111,7 @@ int send_message(size_t n_bytes, int sockfd, uint8_t* buffer,
   while (bytes_sent < n_bytes && !(*quit)) {
     // Make sure we write exactly n_bytes
     r = write(sockfd, buffer + bytes_sent, n_bytes - bytes_sent);
-    if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
+    if (r < 0 && !(errno == EINTR)) {
       panic("ERROR writing to socket");
     }
     if (r > 0) {
@@ -125,7 +125,7 @@ int send_message_early_return(size_t n_bytes, int sockfd, uint8_t* buffer,
                               bool volatile* quit) {
   int r = write(sockfd, buffer, n_bytes);
   // Indicate this write would block.
-  if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+  if (r < 0 && (errno == EINTR)) {
     return 0;
   }
   return r + send_message(n_bytes - r, sockfd, buffer + r, quit);

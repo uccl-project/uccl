@@ -205,6 +205,11 @@ void Proxy::run_local() {
   pin_thread();
   uint64_t my_tail = 0;
   for (int seen = 0; seen < kIterations; ++seen) {
+    if (!ctx_.progress_run.load(std::memory_order_acquire)) {
+      printf("Local block %d stopping early at seen=%d\n", cfg_.block_idx + 1,
+             seen);
+      return;
+    }
     // Prefer volatile read to defeat CPU cache stale head.
     // If your ring already has volatile_head(), use it; otherwise keep
     // rb->head.
@@ -216,6 +221,11 @@ void Proxy::run_local() {
       }
 #endif
       cpu_relax();
+      if (!ctx_.progress_run.load(std::memory_order_acquire)) {
+        printf("Local block %d stopping early at seen=%d\n", cfg_.block_idx + 1,
+               seen);
+        return;
+      }
     }
 
     const uint64_t idx = my_tail & kQueueMask;
@@ -223,6 +233,11 @@ void Proxy::run_local() {
     do {
       cmd = cfg_.rb->buf[idx].cmd;
       cpu_relax();  // avoid hammering cacheline
+      if (!ctx_.progress_run.load(std::memory_order_acquire)) {
+        printf("Local block %d stopping early at seen=%d\n", cfg_.block_idx + 1,
+               seen);
+        return;
+      }
     } while (cmd == 0);
 
 #ifdef DEBUG_PRINT
