@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdbool>
 #include <cstring>
 #include <functional>
 #include <future>
@@ -198,10 +199,25 @@ uccl_mr_t* uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size) {
   return mr;
 }
 
-int uccl_engine_send(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
-                     size_t size) {
+int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
+                     size_t size, void* slot_item_ptr, uint64_t* transfer_id) {
   if (!conn || !mr || !data) return -1;
-  return conn->engine->endpoint->send(conn->conn_id, mr->mr_id, data, size)
+
+  uccl::FifoItem slot_item;
+  slot_item = *static_cast<uccl::FifoItem*>(slot_item_ptr);
+
+  return conn->engine->endpoint->read_async(conn->conn_id, mr->mr_id,
+                                            const_cast<void*>(data), size,
+                                            slot_item, transfer_id)
+             ? 0
+             : -1;
+}
+
+int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
+                      size_t size, uint64_t* transfer_id) {
+  if (!conn || !mr || !data) return -1;
+  return conn->engine->endpoint->send_async(conn->conn_id, mr->mr_id, data,
+                                            size, transfer_id)
              ? 0
              : -1;
 }
@@ -209,9 +225,17 @@ int uccl_engine_send(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
 int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t* mr, void* data,
                      size_t data_size) {
   if (!conn || !mr || !data) return -1;
-  return conn->engine->endpoint->recv(conn->conn_id, mr->mr_id, data, data_size)
+  uint64_t transfer_id;
+  return conn->engine->endpoint->recv_async(conn->conn_id, mr->mr_id, data,
+                                            data_size, &transfer_id)
              ? 0
              : -1;
+}
+
+bool uccl_engine_xfer_status(uccl_conn_t* conn, uint64_t transfer_id) {
+  bool is_done;
+  conn->engine->endpoint->poll_async(transfer_id, &is_done);
+  return is_done;
 }
 
 int uccl_engine_start_listener(uccl_conn_t* conn) {
@@ -314,8 +338,8 @@ void listener_thread_func(uccl_conn_t* conn) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       continue;
     }
-    std::cout << "Received metadata: " << md.data_ptr << " " << md.data_size
-              << std::endl;
+    std::cout << "Received metadata: " << md.op << " " << md.data_ptr << " "
+              << md.data_size << std::endl;
     auto local_mem_iter = mem_reg_info.find(md.data_ptr);
     if (local_mem_iter == mem_reg_info.end()) {
       std::cerr << "Local memory not registered for address: " << md.data_ptr
@@ -326,9 +350,18 @@ void listener_thread_func(uccl_conn_t* conn) {
               << std::endl;
     auto mr_id = local_mem_iter->second;
 
-    // Submit async receive task to thread pool
-    conn->recv_thread_pool->enqueue(async_recv_worker, conn, mr_id,
-                                    (void*)md.data_ptr, md.data_size);
+    switch (md.op) {
+      case UCCL_READ:
+        break;
+      case UCCL_WRITE:
+        // Submit async receive task to thread pool
+        conn->recv_thread_pool->enqueue(async_recv_worker, conn, mr_id,
+                                        (void*)md.data_ptr, md.data_size);
+        break;
+      default:
+        std::cerr << "Invalid operation type: " << md.op << std::endl;
+        continue;
+    }
   }
 
   delete[] buffer;

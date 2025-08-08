@@ -17,7 +17,11 @@ typedef struct uccl_conn uccl_conn_t;
 // Handle for a memory region
 typedef struct uccl_mr uccl_mr_t;
 
+// UCCL operation types
+enum uccl_op_type { UCCL_READ = 0, UCCL_WRITE = 1 };
+
 typedef struct metadata {
+  uccl_op_type op;    // READ/WRITE
   uint64_t data_ptr;  // Memory address for data reception
   size_t data_size;   // Size of data to receive
 } metadata_t;
@@ -73,15 +77,29 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
 uccl_mr_t* uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size);
 
 /**
- * Send data (blocking).
+ * Read data (Non blocking).
  * @param conn          Connection handle.
  * @param mr            Memory region handle.
  * @param data          Pointer to the data to send.
  * @param size          Size of the data.
+ * @param slot_item     Pointer to FifoItem for RDMA read.
+ * @param transfer_id   Pointer to store the transfer ID.
  * @return              0 on success, non-zero on failure.
  */
-int uccl_engine_send(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
-                     size_t size);
+int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
+                     size_t size, void* slot_item, uint64_t* transfer_id);
+
+/**
+ * Send data (Non blocking).
+ * @param conn          Connection handle.
+ * @param mr            Memory region handle.
+ * @param data          Pointer to the data to send.
+ * @param size          Size of the data.
+ * @param transfer_id   Pointer to store the transfer ID.
+ * @return              0 on success, non-zero on failure.
+ */
+int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
+                      size_t size, uint64_t* transfer_id);
 
 /**
  * Receive data (blocking).
@@ -93,7 +111,13 @@ int uccl_engine_send(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
  */
 int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t* mr, void* data,
                      size_t max_size);
-
+/**
+ * Check the status of a transfer.
+ * @param conn          Connection handle.
+ * @param transfer_id   Transfer ID.
+ * @return              True if the transfer is done, false otherwise.
+ */
+bool uccl_engine_xfer_status(uccl_conn_t* conn, uint64_t transfer_id);
 /**
  * Cleanup connection.
  * @param conn          Connection handle to destroy.

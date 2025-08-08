@@ -459,7 +459,7 @@ bool Endpoint::send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
 
 bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
                           size_t size, uint64_t* transfer_id) {
-#ifdef WITH_PYTHON                          
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
 #endif
   Task* task = new Task{
