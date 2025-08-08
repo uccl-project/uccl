@@ -1288,9 +1288,6 @@ class UcclFlow {
     comm_base->fifo =
         reinterpret_cast<struct RemFifo*>(comm_base->fifo_mr->addr);
 
-    // Initialize FIFO memory to zero to ensure clean state
-    memset(comm_base->fifo, 0, kFifoMRSize);
-
     // Exchange local QPN for Fifo QP with remote peer.
     char buf[sizeof(uint32_t)];
     auto fifo_lqpn = comm_base->fifo_qp->qp_num;
