@@ -1,6 +1,7 @@
 #include "ep_util.hpp"
 // #include "config.hpp"
 #include "ep_config.hpp"
+#include "ep_event.hpp"
 #include "internode_ll.cuh"
 #include <ATen/cuda/CUDAContext.h>
 #include <pybind11/functional.h>

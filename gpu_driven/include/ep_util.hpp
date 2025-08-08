@@ -52,12 +52,6 @@ class EPException : public std::exception {
   } while (0)
 #endif
 
-// Convenience aliases
-template <uint32_t kNumLanes = 32, typename T>
-__forceinline__ __device__ T warp_reduce_sum(T value) {
-  return warp_reduce<kNumLanes, T>(value, ReduceSum<T>{});
-}
-
 __device__ __forceinline__ int ld_acquire_global(int const* ptr) {
   int ret;
   asm volatile("ld.acquire.gpu.global.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));

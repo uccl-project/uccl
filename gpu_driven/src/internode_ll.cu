@@ -6,6 +6,8 @@
 #include "uccl_ibgda.cuh"
 #include <iostream>
 #include <vector>
+#include <cooperative_groups.h>
+namespace cg = cooperative_groups;
 
 namespace uccl {
 namespace internode_ll {
@@ -260,8 +262,7 @@ LOW_LATENCY_DISPATCH_RECV:
   // For send-and-recv kernels, we need a grid sync for making
   // `packed_recv_count` visible
   // TODO(MaoZiming): Fix this.
-  // if (phases & LOW_LATENCY_SEND_PHASE)
-  //     cg::this_grid().sync();
+  if (phases & LOW_LATENCY_SEND_PHASE) cg::this_grid().sync();
 
   // Receiving and packing
   if (responsible_expert_idx < num_experts) {
@@ -411,7 +412,385 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
   if (use_ue8m0)
     EP_HOST_ASSERT(round_scale and "UE8M0 SF requires `round_scale=True`");
 
-  // TODO(MaoZiming): Fix the launch configuration
+#define DISPATCH_LAUNCH_CASE(hidden)                                           \
+  {                                                                            \
+    auto dispatch_func = dispatch<false, false, hidden>;                       \
+    if (use_fp8 and not use_ue8m0)                                             \
+      dispatch_func = dispatch<true, false, hidden>;                           \
+    if (use_fp8 and use_ue8m0) dispatch_func = dispatch<true, true, hidden>;   \
+    LAUNCH_KERNEL(                                                             \
+        &cfg, dispatch_func, packed_recv_x, packed_recv_x_scales,              \
+        packed_recv_src_info, packed_recv_layout_range, packed_recv_count,     \
+        cumulative_local_expert_recv_stats, dispatch_wait_recv_cost_stats,     \
+        rdma_recv_x, rdma_recv_count, rdma_x, x, topk_idx,                     \
+        atomic_counter_per_expert, atomic_finish_counter_per_expert,           \
+        next_clean, num_next_clean_int, num_tokens,                            \
+        num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,         \
+        num_ranks, num_warp_groups, num_warps_per_group, round_scale, phases); \
+  }                                                                            \
+  break
+
+  SETUP_LAUNCH_CONFIG(num_sms, num_warps * 32, stream);
+  SWITCH_HIDDEN(DISPATCH_LAUNCH_CASE);
+#undef DISPATCH_LAUNCH_CASE
+}
+
+template <bool kUseLogFMT, int kHidden, int kNumMaxTopk>
+__global__ __launch_bounds__(1024, 1) void combine(
+    void* combined_x, void* rdma_recv_x, int* rdma_recv_flag, void* rdma_send_x,
+    void const* x, int64_t const* topk_idx, float const* topk_weights,
+    int const* src_info, int64_t const* layout_range,
+    int64_t* combine_wait_recv_cost_stats, int* next_clean,
+    int num_next_clean_int, int* atomic_clean_flag, int num_combined_tokens,
+    int hidden, int num_topk, int num_max_dispatch_tokens_per_rank,
+    int num_experts, int rank, int num_ranks, int num_warp_groups,
+    int num_warps_per_group, int phases, bool zero_copy) {
+  auto const sm_id = static_cast<int>(blockIdx.x);
+  auto const num_sms = static_cast<int>(gridDim.x);
+  auto const thread_id = static_cast<int>(threadIdx.x);
+  auto const num_threads = static_cast<int>(blockDim.x);
+  auto const warp_id = thread_id / 32, lane_id = get_lane_id();
+  auto const num_local_experts = num_experts / num_ranks;
+  auto const warp_group_id = warp_id / num_warps_per_group;
+  auto const sub_warp_id = warp_id % num_warps_per_group;
+  auto const responsible_expert_idx = sm_id * num_warp_groups + warp_group_id;
+
+  // Data type staffs
+  constexpr int kNumElemsPerInt4 = sizeof(int4) / sizeof(nv_bfloat16);
+  constexpr int64_t hidden_bf16_int4 = kHidden / kNumElemsPerInt4;
+  constexpr int kNumUnrolls = 4;
+  constexpr int hidden_bf16_int4_pad =
+      align(static_cast<int>(hidden_bf16_int4), 32 * kNumUnrolls);
+  EP_STATIC_ASSERT(hidden_bf16_int4 % kNumUnrolls == 0, "Invalid hidden");
+  EP_STATIC_ASSERT(kNumUnrolls == 1 or kNumUnrolls == 2 or kNumUnrolls == 4,
+                   "Invalid unrolling factors");
+
+  // Message package
+  constexpr size_t num_bytes_per_slot = kHidden * sizeof(nv_bfloat16);
+  EP_STATIC_ASSERT(num_bytes_per_slot % sizeof(int4) == 0,
+                   "Invalid vectorization");
+
+  // Sending phase
+  if ((phases & LOW_LATENCY_SEND_PHASE) == 0) goto LOW_LATENCY_COMBINE_RECV;
+
+  // Clean up next buffer
+  if (sm_id == 0 and warp_group_id == 0 and sub_warp_id == 0) {
+#pragma unroll
+    for (int i = lane_id; i < num_next_clean_int; i += 32) next_clean[i] = 0;
+
+    // Notify before executing `int_p`
+    __syncwarp();
+    if (lane_id == 0) atomic_add_release_global(atomic_clean_flag, num_experts);
+  }
+
+  // Issue IBGDA sends
+  if (responsible_expert_idx < num_experts) {
+    auto const dst_rank = responsible_expert_idx / num_local_experts;
+    auto const local_expert_idx = responsible_expert_idx % num_local_experts;
+    auto const global_expert_idx = rank * num_local_experts + local_expert_idx;
+    auto const layout =
+        __ldg(layout_range + local_expert_idx * num_ranks + dst_rank);
+    auto const local_x =
+        static_cast<int4 const*>(x) + local_expert_idx * num_ranks *
+                                          num_max_dispatch_tokens_per_rank *
+                                          hidden_bf16_int4;
+    auto const local_src_info = src_info + local_expert_idx * num_ranks *
+                                               num_max_dispatch_tokens_per_rank;
+    auto const rdma_send_x_vec = static_cast<uint8_t*>(rdma_send_x) +
+                                 local_expert_idx * num_ranks *
+                                     num_max_dispatch_tokens_per_rank *
+                                     num_bytes_per_slot;
+
+    // Unpack layout
+    int offset, num_tokens_to_send;
+    unpack2(layout, num_tokens_to_send, offset);
+
+    // TMA stuffs
+    constexpr int kNumTMABufferBytes = sizeof(int4) * 32 * kNumUnrolls;
+    constexpr int kNumStages = 3;
+    constexpr int kNumPrefetch = 1;
+    EP_STATIC_ASSERT(kNumStages == 3 and kNumPrefetch == 1, "Invalid stages");
+
+    extern __shared__ __align__(1024) uint8_t smem_buffer[];
+    auto smem_ptr =
+        smem_buffer + warp_id * kNumStages * (kNumTMABufferBytes + 16);
+    uint32_t tma_phase[kNumStages] = {};
+    auto tma_buffer = PatternVisitor([=](int const& i) {
+      return reinterpret_cast<int4*>(smem_ptr + i * (kNumTMABufferBytes + 16));
+    });
+    auto tma_mbarrier = PatternVisitor([=](int const& i) {
+      return reinterpret_cast<uint64_t*>(
+          smem_ptr + i * (kNumTMABufferBytes + 16) + kNumTMABufferBytes);
+    });
+    EP_STATIC_ASSERT(kNumUnrolls * kNumStages <= 12,
+                     "TMA buffer size exceed limit");
+
+    // Initialize m-barriers
+    if (lane_id < kNumStages) {
+      mbarrier_init(tma_mbarrier[lane_id], 1);
+      fence_view_async_shared();
+      fence_barrier_init();
+    }
+    __syncwarp();
+
+    constexpr int kNumIters = hidden_bf16_int4_pad / (32 * kNumUnrolls);
+    auto tma_load_and_arrive = [&](int const& stage_idx, int4 const* gmem_ptr,
+                                   int const& num_bytes) {
+      tma_load_1d(tma_buffer[stage_idx], gmem_ptr, tma_mbarrier[stage_idx],
+                  num_bytes);
+      mbarrier_arrive_and_expect_tx(tma_mbarrier[stage_idx], num_bytes);
+    };
+    auto get_num_tma_bytes = [&](int const& offset_int4) {
+      return min(
+          kNumTMABufferBytes,
+          static_cast<int>((hidden_bf16_int4 - offset_int4) * sizeof(int4)));
+    };
+
+    // Issue IBGDA send
+    for (int token_idx = offset + sub_warp_id;
+         token_idx < offset + num_tokens_to_send;
+         token_idx += num_warps_per_group) {
+      auto const x_int4 = local_x + token_idx * hidden_bf16_int4;
+      auto const rdma_send_type_row = reinterpret_cast<int*>(
+          rdma_send_x_vec + token_idx * num_bytes_per_slot);
+      auto const rdma_send_x_vec_row =
+          reinterpret_cast<uint8_t*>(rdma_send_type_row);
+
+      // Copy directly to local rank, or copy to buffer and issue RDMA
+      auto const src_idx =
+          __shfl_sync(0xffffffff, __ldg(local_src_info + token_idx), 0);
+      auto const buf_ptr = reinterpret_cast<int64_t>(rdma_send_x_vec_row);
+      auto const dst_ptr =
+          reinterpret_cast<uint64_t>(rdma_recv_x) +
+          (global_expert_idx * num_max_dispatch_tokens_per_rank + src_idx) *
+              num_bytes_per_slot;
+      auto const dst_p2p_ptr = nvshmemi_get_p2p_ptr(dst_ptr, rank, dst_rank);
+
+      if (not zero_copy or dst_p2p_ptr != 0) {
+        // Read from `cpy_src_int4_ptr` and copy into `cpy_dst_int4_ptr`
+        auto const cpy_src_int4_ptr =
+            zero_copy ? reinterpret_cast<int4*>(buf_ptr) : x_int4;
+        auto const cpy_dst_int4_ptr =
+            dst_p2p_ptr == 0 ? reinterpret_cast<int4*>(buf_ptr)
+                             : reinterpret_cast<int4*>(dst_p2p_ptr);
+
+        // Prefetch
+        if (elect_one_sync(lane_id))
+          tma_load_and_arrive(0, cpy_src_int4_ptr, get_num_tma_bytes(0));
+        __syncwarp();
+
+#pragma unroll
+        for (int i = lane_id * kNumUnrolls, iter_idx = 0;
+             i < hidden_bf16_int4_pad; i += 32 * kNumUnrolls, ++iter_idx) {
+          // Read
+          int4 int4_values[kNumUnrolls] = {0};
+          auto uint32_values = reinterpret_cast<uint32_t*>(int4_values);
+
+          // Load the next iteration
+          // TODO: try `elect_one_sync`
+          int const& stage_idx = iter_idx % kNumStages;
+          int const& next_stage_idx = (iter_idx + 1) % kNumStages;
+          tma_store_wait<kNumStages - kNumPrefetch - 1>();
+          if (iter_idx + 1 < kNumIters and elect_one_sync(lane_id)) {
+            auto const& offset_int4 = i + 32 * kNumUnrolls;
+            tma_load_and_arrive(next_stage_idx, cpy_src_int4_ptr + offset_int4,
+                                get_num_tma_bytes(offset_int4));
+          }
+          __syncwarp();
+
+          // Wait the current TMA arrival
+          mbarrier_wait(tma_mbarrier[stage_idx], tma_phase[stage_idx]);
+          auto const& uint32_buffer = reinterpret_cast<uint32_t*>(
+              tma_buffer[stage_idx] + lane_id * kNumUnrolls);
+
+          // Simulated cast
+          if constexpr (kUseLogFMT) {
+            constexpr float kThreshold = 1;
+            constexpr float kMinClip = 32;  // `== log_2(2 ^ (2 ^ 5))`
+            constexpr int kNumBits = 10;
+            constexpr int kNumValues = 1 << (kNumBits - 1);
+            EP_STATIC_ASSERT(kHidden % (kNumElemsPerInt4 * 32) == 0 and
+                                 kNumElemsPerInt4 == 8,
+                             "Invalid hidden");
+
+            // Local log amax
+            float log_abs_values[kNumElemsPerInt4 * kNumUnrolls], log_amax,
+                log_amin, amax;
+            auto log_aminmax = [&](int const& j, float const& value) {
+              log_abs_values[j] = log2f_approx(fabsf(value));
+              amax = j == 0 ? value : fmaxf(amax, fabsf(value));
+              log_amax = j == 0 ? log_abs_values[j]
+                                : fmaxf(log_amax, log_abs_values[j]);
+              log_amin = value != 0
+                             ? (j == 0 ? log_abs_values[j]
+                                       : fminf(log_amin, log_abs_values[j]))
+                             : log_amin;
+            };
+#pragma unroll
+            for (int k = 0; k < kNumUnrolls * 4; ++k) {
+              uint32_values[k] = uint32_buffer[k ^ (lane_id * kNumUnrolls / 8)];
+              auto bf162_values =
+                  *reinterpret_cast<__nv_bfloat162*>(uint32_values + k);
+              auto float2_values = __bfloat1622float2(bf162_values);
+              log_aminmax(k * 2, float2_values.x);
+              log_aminmax(k * 2 + 1, float2_values.y);
+            }
+
+            // Reduce per 128 channels
+            amax = warp_reduce_max<(16 / kNumUnrolls)>(amax);
+            log_amax = warp_reduce_max<(16 / kNumUnrolls)>(log_amax);
+            log_amin = fmaxf(warp_reduce_min<(16 / kNumUnrolls)>(log_amin),
+                             log_amax - kMinClip);
+
+            auto const step =
+                (log_amax - log_amin) / static_cast<float>(kNumValues - 2);
+            auto const step_inv = 1.0f / step;
+            auto const rounding =
+                2.0f -
+                log2f_approx((1.0f + exp2f_approx(step)) * 0.5f) * step_inv;
+
+            // Use LogFMT only with `amax <= kThreshold` (maybe not all
+            // quarter-warps)
+            if (amax <= kThreshold and log_amin < log_amax) {
+              // Transform
+              auto transform = [=](float const& log_abs_value) -> nv_bfloat16 {
+                const auto encoded =
+                    floorf((log_abs_value - log_amin) * step_inv + rounding);
+                const auto decoded =
+                    exp2f_approx((encoded - 1) * step + log_amin);
+                return decoded;
+              };
+#pragma unroll
+              for (int k = 0; k < kNumUnrolls * 4; ++k) {
+                auto bf162_pack =
+                    __nv_bfloat162(transform(log_abs_values[k * 2]),
+                                   transform(log_abs_values[k * 2 + 1]));
+                auto uint32_pack = *reinterpret_cast<uint32_t*>(&bf162_pack);
+                uint32_buffer[k ^ (lane_id * kNumUnrolls / 8)] =
+                    (uint32_values[k] & 0x80008000) | uint32_pack;
+              }
+            }
+            tma_store_fence();
+          }
+          __syncwarp();
+
+          // Store
+          if (elect_one_sync(lane_id))
+            tma_store_1d(tma_buffer[stage_idx], cpy_dst_int4_ptr + i,
+                         get_num_tma_bytes(i));
+          __syncwarp();
+        }
+      }
+
+      // Flush all stores
+      tma_store_wait();
+      __syncwarp();
+
+      // Issue RDMA
+      // NOTES: for zero-copy mode, we assume the data is already in the send
+      // buffer
+      if (dst_p2p_ptr == 0)
+        nvshmemi_ibgda_put_nbi_warp(
+            dst_ptr, buf_ptr, hidden * sizeof(nv_bfloat16), dst_rank,
+            local_expert_idx, lane_id, token_idx - offset);
+    }
+
+    // Put the finishing flag
+    EP_DEVICE_ASSERT(num_warps_per_group > 1 and num_warp_groups < 16);
+    asm volatile("bar.sync %0, %1;" ::"r"(warp_group_id + 1),
+                 "r"(num_warps_per_group * 32));
+    if (sub_warp_id == 1 and lane_id == 0) {
+      while (ld_acquire_global(atomic_clean_flag) == 0)
+        ;
+      auto dst_ptr =
+          reinterpret_cast<uint64_t>(rdma_recv_flag + global_expert_idx);
+      auto dst_p2p_ptr = nvshmemi_get_p2p_ptr(dst_ptr, rank, dst_rank);
+      if (dst_p2p_ptr == 0) {
+        nvshmemi_ibgda_amo_nonfetch_add(reinterpret_cast<int*>(dst_ptr), 1,
+                                        dst_rank, local_expert_idx);
+      } else {
+        st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr), 1);
+      }
+      atomic_add_release_global(atomic_clean_flag, -1);
+    }
+    __syncwarp();
+  }
+
+// Receiving phase
+LOW_LATENCY_COMBINE_RECV:
+  if ((phases & LOW_LATENCY_RECV_PHASE) == 0) return;
+
+  // Wait all ranks to arrive
+  if (responsible_expert_idx < num_experts) {
+    EP_DEVICE_ASSERT(num_warps_per_group > 1);
+    if (sub_warp_id == 0 and lane_id == 0) {
+      auto start_time = clock64();
+      while (ld_acquire_sys_global(rdma_recv_flag + responsible_expert_idx) ==
+             0)
+        ;
+      auto wait_recv_cost = clock64() - start_time;
+      if (combine_wait_recv_cost_stats != nullptr) {
+        auto const& src_rank = responsible_expert_idx / num_local_experts;
+        atomicAdd(reinterpret_cast<unsigned long long*>(
+                      combine_wait_recv_cost_stats + src_rank),
+                  wait_recv_cost);
+      }
+    }
+  }
+
+  // TODO(MaoZiming): Fix.
+  cg::this_grid().sync();
+
+  // Reduce tokens
+  EP_DEVICE_ASSERT(num_topk <= 32);
+  EP_STATIC_ASSERT(kHidden % (32 * kNumElemsPerInt4) == 0,
+                   "Invalid vectorization");
+  for (int hidden_idx = thread_id; hidden_idx < hidden_bf16_int4;
+       hidden_idx += num_threads) {
+    for (int token_idx = sm_id; token_idx < num_combined_tokens;
+         token_idx += num_sms) {
+      // Read top-k indices and weights
+      int reg_topk_idx[kNumMaxTopk];
+      float reg_topk_weights[kNumMaxTopk];
+#pragma unroll
+      for (int i = 0; i < num_topk; ++i) {
+        reg_topk_idx[i] =
+            static_cast<int>(__ldg(topk_idx + token_idx * num_topk + i));
+        reg_topk_weights[i] = __ldg(topk_weights + token_idx * num_topk + i);
+      }
+
+      float combined_values[kNumElemsPerInt4] = {0.0f};
+#pragma unroll
+      for (int i = 0; i < num_topk; ++i)
+        if (reg_topk_idx[i] >= 0) {
+          // Read from sources
+          auto rdma_buffer_type = reinterpret_cast<int const*>(
+              static_cast<uint8_t*>(rdma_recv_x) +
+              (reg_topk_idx[i] * num_max_dispatch_tokens_per_rank + token_idx) *
+                  num_bytes_per_slot);
+          auto rdma_buffer_row =
+              reinterpret_cast<uint8_t const*>(rdma_buffer_type);
+
+          // Reduce
+          auto x_vec = ld_nc_global(
+              reinterpret_cast<int4 const*>(rdma_buffer_row) + hidden_idx);
+          auto const x_bf16 = reinterpret_cast<nv_bfloat16*>(&x_vec);
+#pragma unroll
+          for (int j = 0; j < kNumElemsPerInt4; ++j)
+            combined_values[j] +=
+                static_cast<float>(x_bf16[j]) * reg_topk_weights[i];
+        }
+
+      // Write results
+      int4& combined_int4 = *reinterpret_cast<int4*>(combined_values);
+      auto combined_bf16 = reinterpret_cast<nv_bfloat16*>(&combined_values);
+#pragma unroll
+      for (int j = 0; j < kNumElemsPerInt4; ++j)
+        combined_bf16[j] = static_cast<nv_bfloat16>(combined_values[j]);
+      (static_cast<int4*>(combined_x) +
+       token_idx * hidden_bf16_int4)[hidden_idx] = combined_int4;
+    }
+  }
 }
 
 void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
@@ -426,6 +805,44 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
   // TODO(MaoZiming): Fix.
   std::cout << "[uccl::internode_ll::combine] dummy launch invoked"
             << std::endl;
+
+  constexpr int kNumMaxTopk = 9;
+  int const num_warp_groups = ceil_div(num_experts, num_device_sms);
+  int const num_warps_per_group = 32 / num_warp_groups;
+  EP_HOST_ASSERT(num_warp_groups > 0 and num_warps_per_group > 0);
+
+  auto const num_warps = num_warp_groups * num_warps_per_group;
+  auto const num_sms = ceil_div(num_experts, num_warp_groups);
+
+  // Check workspace
+  auto atomic_clean_flag = static_cast<int*>(workspace);
+  EP_HOST_ASSERT(sizeof(int) <= NUM_WORKSPACE_BYTES);
+  EP_HOST_ASSERT(num_topk <= kNumMaxTopk);
+
+  // Online cast cannot use zero-copy
+  EP_HOST_ASSERT(not(zero_copy and use_logfmt));
+
+  constexpr int kNumTMABytesPerWarp = 12 * (512 + 16);
+  int const smem_size = kNumTMABytesPerWarp * num_warps;
+
+#define COMBINE_LAUNCH_CASE(hidden)                                            \
+  {                                                                            \
+    auto combine_func = use_logfmt ? combine<true, hidden, kNumMaxTopk>        \
+                                   : combine<false, hidden, kNumMaxTopk>;      \
+    SET_SHARED_MEMORY_FOR_TMA(combine_func);                                   \
+    LAUNCH_KERNEL(&cfg, combine_func, combined_x, rdma_recv_x, rdma_recv_flag, \
+                  rdma_send_x, x, topk_idx, topk_weights, src_info,            \
+                  layout_range, combine_wait_recv_cost_stats, next_clean,      \
+                  num_next_clean_int, atomic_clean_flag, num_combined_tokens,  \
+                  hidden, num_topk, num_max_dispatch_tokens_per_rank,          \
+                  num_experts, rank, num_ranks, num_warp_groups,               \
+                  num_warps_per_group, phases, zero_copy);                     \
+  }                                                                            \
+  break
+
+  SETUP_LAUNCH_CONFIG(num_sms, num_warps * 32, stream);
+  SWITCH_HIDDEN(COMBINE_LAUNCH_CASE);
+#undef COMBINE_LAUNCH_CASE
 }
 
 // TODO(MaoZiming): This corresponds to DeepEP/csrc/kernels/runtime.cu

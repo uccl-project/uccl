@@ -1,4 +1,5 @@
 #pragma once
+#include "ep_util.hpp"
 
 __forceinline__ __device__ int get_lane_id() {
   int lane_id;
@@ -72,8 +73,124 @@ struct ReduceMin {
 };
 
 template <uint32_t kNumLanes = 32, typename T>
+__forceinline__ __device__ T warp_reduce_min(T value) {
+  return warp_reduce<kNumLanes, T>(value, ReduceMin<T>{});
+}
+
+template <uint32_t kNumLanes = 32, typename T>
 __forceinline__ __device__ T warp_reduce_max(T value) {
   return warp_reduce<kNumLanes, T>(value, ReduceMax<T>{});
+}
+
+__device__ __forceinline__ float log2f_approx(float const& x) {
+  float ret;
+  asm volatile("lg2.approx.f32 %0, %1;" : "=f"(ret) : "f"(x));
+  return ret;
+}
+
+__device__ __forceinline__ void tma_store_fence() {
+  asm volatile("fence.proxy.async.shared::cta;");
+}
+
+template <int N = 0>
+__device__ __forceinline__ void tma_store_wait() {
+  asm volatile("cp.async.bulk.wait_group.read %0;" ::"n"(N) : "memory");
+}
+
+__device__ __forceinline__ void fence_view_async_shared() {
+  asm volatile("fence.proxy.async.shared::cta; \n" ::);
+}
+
+__device__ __forceinline__ void fence_barrier_init() {
+  asm volatile("fence.mbarrier_init.release.cluster; \n" ::);
+}
+
+template <typename dtype_a_t, typename dtype_b_t>
+__device__ __forceinline__ void unpack2(dtype_b_t const& packed, dtype_a_t& x,
+                                        dtype_a_t& y) {
+  EP_STATIC_ASSERT(sizeof(dtype_a_t) * 2 == sizeof(dtype_b_t),
+                   "Invalid dtypes");
+  auto unpacked_ptr = reinterpret_cast<dtype_a_t const*>(&packed);
+  x = unpacked_ptr[0], y = unpacked_ptr[1];
+}
+
+template <typename FuncT>
+struct PatternVisitor {
+  FuncT func;
+
+  __device__ __host__ explicit PatternVisitor(FuncT&& func)
+      : func(std::forward<FuncT>(func)) {}
+
+  __device__ __host__ auto operator[](uint32_t const& i) { return func(i); }
+};
+
+constexpr uint64_t kEvictFirst = 0x12f0000000000000;
+constexpr uint64_t kEvictNormal = 0x1000000000000000;
+
+__device__ __forceinline__ void mbarrier_arrive_and_expect_tx(
+    uint64_t* mbar_ptr, int num_bytes) {
+  auto mbar_int_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(mbar_ptr));
+  asm volatile(
+      "mbarrier.arrive.expect_tx.shared::cta.b64 _, [%1], %0; \n\t" ::"r"(
+          num_bytes),
+      "r"(mbar_int_ptr));
+}
+
+__device__ __forceinline__ void mbarrier_wait(uint64_t* mbar_ptr,
+                                              uint32_t& phase) {
+  auto mbar_int_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(mbar_ptr));
+  asm volatile(
+      "{\n\t"
+      ".reg .pred       P1; \n\t"
+      "LAB_WAIT: \n\t"
+      "mbarrier.try_wait.parity.shared::cta.b64 P1, [%0], %1, %2; \n\t"
+      "@P1 bra DONE; \n\t"
+      "bra     LAB_WAIT; \n\t"
+      "DONE: \n\t"
+      "}" ::"r"(mbar_int_ptr),
+      "r"(phase), "r"(0x989680));
+  phase ^= 1;
+}
+
+__device__ __forceinline__ void tma_store_1d(void const* smem_ptr,
+                                             void const* gmem_ptr,
+                                             int num_bytes,
+                                             bool evict_first = true) {
+  auto smem_int_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(smem_ptr));
+  auto const cache_hint = evict_first ? kEvictFirst : kEvictNormal;
+  asm volatile(
+      "cp.async.bulk.global.shared::cta.bulk_group.L2::cache_hint [%0], [%1], "
+      "%2, %3;\n" ::"l"(gmem_ptr),
+      "r"(smem_int_ptr), "r"(num_bytes), "l"(cache_hint)
+      : "memory");
+  asm volatile("cp.async.bulk.commit_group;");
+}
+
+__device__ __forceinline__ void tma_load_1d(void const* smem_ptr,
+                                            void const* gmem_ptr,
+                                            uint64_t* mbar_ptr, int num_bytes,
+                                            bool evict_first = true) {
+  auto mbar_int_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(mbar_ptr));
+  auto smem_int_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(smem_ptr));
+  auto const cache_hint = evict_first ? kEvictFirst : kEvictNormal;
+  asm volatile(
+      "cp.async.bulk.shared::cluster.global.mbarrier::complete_tx::bytes.L2::"
+      "cache_hint [%0], [%1], %2, [%3], %4;\n" ::"r"(smem_int_ptr),
+      "l"(gmem_ptr), "r"(num_bytes), "r"(mbar_int_ptr), "l"(cache_hint)
+      : "memory");
+}
+
+__device__ __forceinline__ void mbarrier_init(uint64_t* mbar_ptr,
+                                              uint32_t arrive_count) {
+  auto mbar_int_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(mbar_ptr));
+  asm volatile("mbarrier.init.shared::cta.b64 [%1], %0;" ::"r"(arrive_count),
+               "r"(mbar_int_ptr));
+}
+
+// Convenience aliases
+template <uint32_t kNumLanes = 32, typename T>
+__forceinline__ __device__ T warp_reduce_sum(T value) {
+  return warp_reduce<kNumLanes, T>(value, ReduceSum<T>{});
 }
 
 __forceinline__ __device__ int fast_log2_ceil(float x) {
@@ -81,6 +198,12 @@ __forceinline__ __device__ int fast_log2_ceil(float x) {
   auto exp_x = (bits_x >> 23) & 0xff;
   auto man_bits = bits_x & ((1 << 23) - 1);
   return exp_x - 127 + (man_bits != 0);
+}
+
+__device__ __forceinline__ float exp2f_approx(float const& x) {
+  float ret;
+  asm volatile("ex2.approx.f32 %0, %1;" : "=f"(ret) : "f"(x));
+  return ret;
 }
 
 __forceinline__ __device__ float fast_pow2(int x) {
@@ -187,3 +310,22 @@ __device__ __forceinline__ int atomic_add_release_global(int const* ptr,
                : "l"(ptr), "r"(value));
   return ret;
 }
+
+#ifndef DISABLE_SM90_FEATURES
+
+__device__ __forceinline__ uint32_t elect_one_sync(int lane_id) {
+  uint32_t pred = 0;
+  asm volatile(
+      "{\n"
+      ".reg .b32 %%rx;\n"
+      ".reg .pred %%px;\n"
+      "      elect.sync %%rx|%%px, %2;\n"
+      "@%%px mov.s32 %1, 1;\n"
+      "      mov.s32 %0, %%rx;\n"
+      "}\n"
+      : "+r"(lane_id), "+r"(pred)
+      : "r"(0xffffffff));
+  return pred;
+}
+
+#endif

@@ -21,7 +21,8 @@ struct nvshmemi_ibgda_device_state_t {
   int _unused{0};
   uint32_t num_rc_per_pe{0};
 };
-extern __device__ nvshmemi_ibgda_device_state_t nvshmemi_ibgda_device_state_d;
+// TODO(MaoZiming): Fix.
+__device__ nvshmemi_ibgda_device_state_t nvshmemi_ibgda_device_state_d;
 
 // TODO(MaoZiming): Fix.
 template <bool kAlwaysDoPostSend = false>
