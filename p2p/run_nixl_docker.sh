@@ -30,11 +30,11 @@ if [ "$ARCH" == "aarch64" ]; then
 fi
 
 # Check if image already exists
-# if docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
-#   echo "Image $IMAGE_NAME already exists, skipping build"
-# else
+if docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
+  echo "Image $IMAGE_NAME already exists, skipping build"
+else
   docker build $PLATFORM_OPT --build-arg PY_VER="${PY_VER}" --build-arg UID="${_UID}" --build-arg GID="${_GID}" -t "$IMAGE_NAME" -f "$DOCKERFILE" .
-# fi
+fi
 
 docker run --rm \
   --device /dev/dri \
