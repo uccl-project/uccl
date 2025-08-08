@@ -351,7 +351,7 @@ void listener_thread_func(uccl_conn_t* conn) {
     auto mr_id = local_mem_iter->second;
     char out_buf[sizeof(uccl::FifoItem)];
     switch (md.op) {
-      case UCCL_READ:
+      case UCCL_READ: {
         conn->engine->endpoint->advertise(
             conn->conn_id, mr_id, (void*)md.data_ptr, md.data_size, out_buf);
         ssize_t result =
@@ -359,9 +359,9 @@ void listener_thread_func(uccl_conn_t* conn) {
         if (result < 0) {
           std::cerr << "Failed to send FifoItem data: " << strerror(errno)
                     << std::endl;
-          break;
         }
         break;
+      }
       case UCCL_WRITE:
         // Submit async receive task to thread pool
         conn->recv_thread_pool->enqueue(async_recv_worker, conn, mr_id,
