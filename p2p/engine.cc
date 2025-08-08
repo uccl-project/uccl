@@ -24,17 +24,21 @@ std::once_flag glog_init_once;
 constexpr uint32_t kGpuStreamId = 0;
 
 inline void check_python_signals() {
+#ifdef WITH_PYTHON
   PyGILState_STATE gstate = PyGILState_Ensure();
   if (PyErr_CheckSignals() != 0) {
     std::cerr << "Python signal caught, exiting..." << std::endl;
     std::abort();
   }
   PyGILState_Release(gstate);
+#endif
 }
 
 Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
     : local_gpu_idx_(local_gpu_idx), num_cpus_(num_cpus) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
+#endif
   std::cout << "Creating Engine with GPU index: " << local_gpu_idx
             << ", CPUs: " << num_cpus << std::endl;
   // Py_Initialize();
@@ -75,7 +79,9 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
 }
 
 Endpoint::~Endpoint() {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
+#endif
   std::cout << "Destroying Engine..." << std::endl;
 
   stop_.store(true, std::memory_order_release);
@@ -113,7 +119,9 @@ Endpoint::~Endpoint() {
 
 bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
                        uint64_t& conn_id) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
+#endif
   std::cout << "Attempting to connect to " << ip_addr << ":" << remote_gpu_idx
             << std::endl;
 
@@ -144,6 +152,7 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
   return true;
 }
 
+#ifdef WITH_PYTHON
 bool Endpoint::connect(py::bytes const& meta_bytes, uint64_t& conn_id) {
   std::string buf = meta_bytes;
   uint8_t const* data = reinterpret_cast<uint8_t const*>(buf.data());
@@ -186,10 +195,13 @@ bool Endpoint::connect(py::bytes const& meta_bytes, uint64_t& conn_id) {
   }
   return this->connect(ip, remote_gpu_idx_, port, conn_id);
 }
+#endif
 
 bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
                       uint64_t& conn_id) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
+#endif
   std::cout << "Waiting to accept incoming connection..." << std::endl;
 
   // For demo purposes, simulate accepted connection
@@ -222,8 +234,9 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
 }
 
 bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
-
+#endif
   mr_id = next_mr_id_.fetch_add(1);
 
   uccl::Mhandle* mhandle;
@@ -248,8 +261,9 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
   if (data_v.size() != size_v.size())
     throw std::invalid_argument(
         "[Endpoint::regv] data_v/size_v length mismatch");
-
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
+#endif
   size_t const n = data_v.size();
   mr_id_v.resize(n);
 
@@ -280,11 +294,11 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
 }
 
 bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
-                    size_t size, bool inside_python) {
+                    size_t size) {
   DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
-  [[maybe_unused]] auto _ =
-      inside_python ? (py::gil_scoped_release{}, nullptr) : nullptr;
-
+#ifdef WITH_PYTHON
+  py::gil_scoped_release release;
+#endif
   Conn* conn;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
@@ -318,7 +332,7 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
       done[ureq_issued % kMaxInflightChunks] = false;
       ureq_issued++;
     }
-    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+    check_python_signals();
 
     // First, poll all outstanding requests and mark which ones are done.
     for (int i = ureq_finished; i < ureq_issued; i++) {
@@ -341,11 +355,10 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
   return true;
 }
 
-bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
-                    bool inside_python) {
-  [[maybe_unused]] auto _ =
-      inside_python ? (py::gil_scoped_release{}, nullptr) : nullptr;
-
+bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
+#ifdef WITH_PYTHON
+  py::gil_scoped_release release;
+#endif
   Conn* conn;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
@@ -380,7 +393,7 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
       done[ureq_issued % kMaxInflightChunks] = false;
       ureq_issued++;
     }
-    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+    check_python_signals();
 
     // First, poll all outstanding requests and mark which ones are done.
     for (int i = ureq_finished; i < ureq_issued; i++) {
@@ -405,7 +418,9 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
 
 bool Endpoint::send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
                         size_t size, void const* meta, size_t meta_len) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
+#endif
   DCHECK(size <= 0xffffffff);
 
   DCHECK(meta_len == sizeof(gpuIpcMemHandle_t));
@@ -444,8 +459,9 @@ bool Endpoint::send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
 
 bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
                           size_t size, uint64_t* transfer_id) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
-
+#endif
   Task* task = new Task{
       .type = TaskType::SEND,
       .data = const_cast<void*>(data),
@@ -467,8 +483,9 @@ bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
 
 bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
                           size_t size, uint64_t* transfer_id) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
-
+#endif
   Task* task = new Task{
       .type = TaskType::RECV,
       .data = data,
@@ -491,7 +508,9 @@ bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
 bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void const*> data_v,
                      std::vector<size_t> size_v, size_t num_iovs) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
+#endif
   auto conn = conn_id_to_conn_[conn_id];
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
@@ -564,7 +583,9 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void*> data_v, std::vector<size_t> size_v,
                      size_t num_iovs) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
+#endif
   auto conn = conn_id_to_conn_[conn_id];
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
@@ -644,9 +665,10 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 }
 
 bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
-                    uccl::FifoItem const& slot_item, bool inside_python) {
-  auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
-
+                    uccl::FifoItem const& slot_item) {
+#ifdef WITH_PYTHON
+  py::gil_scoped_release release;
+#endif
   if (!ucclParamRCMode()) {
     DCHECK(false) << "RDMA READ is only supported in RC mode, toggle RCMODE to "
                      "be True in transport_config.h";
@@ -664,13 +686,13 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
         static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle, dst,
         size, slot_item, &ureq);
     if (rc == -1) {
-      auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+      check_python_signals();
       std::this_thread::yield();
     }
   } while (rc == -1);
 
   while (!ep_->uccl_poll_ureq_once(&ureq)) {
-    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+    check_python_signals();
   }
   return true;
 }
@@ -678,8 +700,9 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
 bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
                           size_t size, uccl::FifoItem const& slot_item,
                           uint64_t* transfer_id) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
-
+#endif
   ReadTask* read_task = new ReadTask{
       .type = TaskType::READ,
       .data = dst,
@@ -702,8 +725,9 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
 
 bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
                          size_t len, char* out_buf) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
-
+#endif
   if (conn_id == kNvlinkConn) {
     GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
     gpuIpcMemHandle_t handle{};
@@ -728,13 +752,13 @@ void Endpoint::send_proxy_thread_func() {
 
   while (!stop_.load(std::memory_order_acquire)) {
     if (jring_sc_dequeue_bulk(send_task_ring_, &task, 1, nullptr) == 1) {
-      send(task.conn_id, task.mr_id, task.data, task.size, false);
+      send(task.conn_id, task.mr_id, task.data, task.size);
       task.self_ptr->done.store(true, std::memory_order_release);
     }
 
     if (jring_sc_dequeue_bulk(read_task_ring_, &read_task, 1, nullptr) == 1) {
       read(read_task.conn_id, read_task.mr_id, read_task.data, read_task.size,
-           read_task.slot_item, false);
+           read_task.slot_item);
       read_task.self_ptr->done.store(true, std::memory_order_release);
     }
   }
@@ -746,14 +770,16 @@ void Endpoint::recv_proxy_thread_func() {
 
   while (!stop_.load(std::memory_order_acquire)) {
     if (jring_sc_dequeue_bulk(recv_task_ring_, &task, 1, nullptr) == 1) {
-      recv(task.conn_id, task.mr_id, task.data, task.size, false);
+      recv(task.conn_id, task.mr_id, task.data, task.size);
       task.self_ptr->done.store(true, std::memory_order_release);
     }
   }
 }
 
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
+#ifdef WITH_PYTHON
   py::gil_scoped_release release;
+#endif
   auto task = reinterpret_cast<Task*>(transfer_id);
   if (task->type == TaskType::READ) {
     auto read_task = reinterpret_cast<ReadTask*>(transfer_id);
@@ -841,6 +867,14 @@ std::unique_ptr<Endpoint> Endpoint::create_and_join(
     throw std::runtime_error("Endpoint::create_and_join() failed");
   }
   return ep;
+}
+
+int Endpoint::get_sock_fd(uint64_t conn_id) const {
+  auto it = conn_id_to_conn_.find(conn_id);
+  if (it == conn_id_to_conn_.end()) {
+    return -1;
+  }
+  return it->second->uccl_conn_id_.sock_fd;
 }
 
 uint64_t Endpoint::conn_id_of_rank(int rank) const {

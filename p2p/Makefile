@@ -16,9 +16,12 @@ PYEXT           := $(shell $(PYTHON_CONFIG) --extension-suffix)
 PYBIND11_INCLUDES := $(shell $(PYTHON) -m pybind11 --includes)
 PYTHON_LDFLAGS := $(shell $(PYTHON_CONFIG) --ldflags)
 
-# Python installation path
+# Installation path
 PYTHON_SITE_PACKAGES := $(shell $(PYTHON) -c "import site; print(site.getsitepackages()[0])")
 INSTALL_DIR          := $(PYTHON_SITE_PACKAGES)/uccl
+PREFIX ?= /usr/local
+LIBDIR ?= $(PREFIX)/lib
+INCDIR ?= $(PREFIX)/include
 
 # Redis
 REDIS_PKGCONFIG := pkg-config
@@ -31,36 +34,57 @@ LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda $(REDIS_LIBS) \
 
 # Target and source files
 TARGET   := p2p$(PYEXT)
+PLUGIN_SO := libuccl_engine.so
+CAPI_SOURCE := uccl_engine.cc
+CAPI_HEADER := uccl_engine.h
+CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
 SOURCES := engine.cc pybind_engine.cc
+CORE_SOURCE := engine.cc
+CORE_OBJECT := engine_plugin.o
 OBJECTS := $(SOURCES:.cc=.o)
 
 # Default target
-all: $(TARGET)
+all: $(TARGET) $(PLUGIN_SO)
 
-# Build the shared library
+# Build the shared libraries
 $(TARGET): $(OBJECTS) ../rdma/librdma.a
 	$(CXX) $(OBJECTS) ../rdma/librdma.a \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
-	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
+	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) -DWITH_PYTHON \
+	      -Wl,-rpath,$(CUDA_LIB)
+
+$(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECT) ../rdma/librdma.a
+	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) ../rdma/librdma.a \
+	      -L$(CUDA_LIB) -lcudart -lcuda \
+	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) -DWITH_PYTHON \
 	      -Wl,-rpath,$(CUDA_LIB)
 
 
-../rdma/librdma.a: ../rdma/*.cc ../rdma/*.h
-	make -C ../rdma -j$(nproc)
+../rdma/librdma.a: $(filter-out ../rdma/nccl_plugin.cc, $(wildcard ../rdma/*.cc)) ../rdma/*.h
+	make CXXFLAGS="-DLAZY_CREATE_ENGINE -DDISABLE_CALL_ONCE_STATIC" -C ../rdma librdma.a -j$(nproc)
 
 # Compile source files
 %.o: %.cc
-	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -DWITH_PYTHON -c $< -o $@
+
+# Compile engine.cc for plugin (without Python flags)
+engine_plugin.o: engine.cc
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Compile CAPI source file (without Python flags)
+$(CAPI_OBJECT): $(CAPI_SOURCE) $(CAPI_HEADER)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # Install the module
-install: $(TARGET)
+install: $(TARGET) $(PLUGIN_SO)
 	@mkdir -p $(INSTALL_DIR)
 	@cp $(TARGET) $(INSTALL_DIR)/
 	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(TARGET)"
-
+	install -m 755 $(PLUGIN_SO) $(LIBDIR)/
+	install -m 644 $(CAPI_HEADER) $(INCDIR)/
 # Clean build artifacts
 clean:
-	rm -f $(OBJECTS) $(TARGET)
+	rm -f $(OBJECTS) $(CORE_OBJECT) $(CAPI_OBJECT) $(TARGET) $(PLUGIN_SO)
 	make -C ../rdma clean -j$(nproc)
 
 # Test the module

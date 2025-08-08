@@ -325,6 +325,7 @@ void RDMAEndpoint::cleanup_resources() {
     }
     flows.clear();
   }
+
   active_flows_vec_.clear();
   active_flows_spin_.clear();
 
@@ -686,14 +687,18 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
 RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
     : num_engines_per_dev_(num_engines_per_dev),
       stats_thread_([this]() { stats_thread_fn(); }) {
+#ifndef DISABLE_CALL_ONCE_STATIC
   static std::once_flag flag_once;
   std::call_once(flag_once, [&]() {
+#endif
     num_devices_ = RDMAFactory::init_devs();
     if (num_devices_ <= 0) {
       printf("Failed to initialize RDMA devices.\n");
       exit(EXIT_FAILURE);
     }
+#ifndef DISABLE_CALL_ONCE_STATIC
   });
+#endif
 
   rdma_ctl_ = rdma_ctl;
 
@@ -756,8 +761,10 @@ int try_bind_listen_socket(int* sock_fd, int base_port,
 
 bool RDMAEndpoint::initialize_engine_by_dev(int dev,
                                             bool enable_p2p_listen = false) {
+#ifndef DISABLE_CALL_ONCE_STATIC
   static std::vector<std::once_flag> flags_per_dev_(num_devices_);
   std::call_once(flags_per_dev_[dev], [this, dev, enable_p2p_listen]() {
+#endif
     int start_engine_idx = dev * num_engines_per_dev_;
     int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
     int numa_node = RDMAFactory::get_factory_dev(dev)->numa_node;
@@ -805,8 +812,9 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev,
           << "Failed to bind after trying many ports!";
       printf("P2P listening on port %d\n", p2p_listen_ports_[dev]);
     }
+#ifndef DISABLE_CALL_ONCE_STATIC
   });
-
+#endif
   return true;
 }
 
@@ -1129,8 +1137,11 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
     uccl_wait(poll_ctx);
   }
 
-  return ConnID{
-      .context = flow, .flow_id = flow_id, .peer_id = peer_id, .dev = dev};
+  return ConnID{.context = flow,
+                .sock_fd = bootstrap_fd,
+                .flow_id = flow_id,
+                .peer_id = peer_id,
+                .dev = dev};
 }
 
 ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
@@ -1148,7 +1159,26 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   auto* factory_dev = RDMAFactory::get_factory_dev(dev);
   DCHECK(factory_dev) << "uccl_accept: get_factory_dev()";
 
+  // Debug: Check if listen_fd is valid
+  if (listen_fd < 0) {
+    LOG(ERROR) << "uccl_accept: Invalid listen_fd: " << listen_fd;
+  } else {
+    // Check socket state
+    int optval;
+    socklen_t optlen = sizeof(optval);
+    if (getsockopt(listen_fd, SOL_SOCKET, SO_ACCEPTCONN, &optval, &optlen) ==
+        0) {
+      LOG(INFO) << "uccl_accept: listen_fd " << listen_fd
+                << " acceptconn: " << optval;
+    }
+  }
+
   bootstrap_fd = accept(listen_fd, (struct sockaddr*)&cli_addr, &clien);
+  if (bootstrap_fd < 0) {
+    LOG(ERROR) << "uccl_accept: accept() failed with errno: " << errno << " ("
+               << strerror(errno) << "), listen_fd: " << listen_fd;
+  }
+  DCHECK(bootstrap_fd >= 0) << "uccl_accept: accept()";
 
   uint16_t local_port;
   {
@@ -1158,8 +1188,6 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
     DCHECK(ret == 0) << "getsockname() failed ";
     local_port = ntohs(local_addr.sin_port);
   }
-
-  DCHECK(bootstrap_fd >= 0) << "uccl_accept: accept()";
   remote_ip = ip_to_str(cli_addr.sin_addr.s_addr);
 
   UCCL_LOG_EP << "accept from " << remote_ip << ":" << cli_addr.sin_port;
@@ -1262,8 +1290,11 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
     uccl_wait(poll_ctx);
   }
 
-  return ConnID{
-      .context = flow, .flow_id = flow_id, .peer_id = peer_id, .dev = dev};
+  return ConnID{.context = flow,
+                .sock_fd = bootstrap_fd,
+                .flow_id = flow_id,
+                .peer_id = peer_id,
+                .dev = dev};
 }
 
 bool UcclFlow::check_fifo_ready(int* ret_slot, int* ret_nmsgs) {
@@ -1272,6 +1303,7 @@ bool UcclFlow::check_fifo_ready(int* ret_slot, int* ret_nmsgs) {
   volatile struct FifoItem* slots = rem_fifo->elems[slot];
 
   auto idx = send_comm_.fifo_head + 1;
+
   if (slots[0].idx != idx) return false;
 
   // Wait until all slots are ready
