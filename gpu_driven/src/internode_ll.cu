@@ -261,7 +261,6 @@ LOW_LATENCY_DISPATCH_RECV:
 
   // For send-and-recv kernels, we need a grid sync for making
   // `packed_recv_count` visible
-  // TODO(MaoZiming): Fix this.
   if (phases & LOW_LATENCY_SEND_PHASE) cg::this_grid().sync();
 
   // Receiving and packing
