@@ -63,7 +63,7 @@ Filling `$UCCL_HOME/scripts/node_ips/p4d.txt` with the ssh'able IP addresses of 
 
 ```bash
 cd $UCCL_HOME/scripts
-python rsync.py
+python rsync.py -n node_ips/p4d.txt
 
 # Assume four p4d.24xlarge instances each with 8 A100 GPUs. 
 cd $UCCL_HOME/efa

@@ -9,9 +9,8 @@ NUM_PROCS=${2:-2}
 NUM_GPUS_PER_PROC=${3:-8}
 PROG_OPTION=${4:-0}
 PROCS_PER_NODE=${5:-1}
-HOSTNAME=${6:-"hosts_gh_200"}
+HOSTFILE="${UCCL_HOME}/scripts/node_ips/gh_200.txt"
 
-HOSTFILE="$HOSTNAME"
 NODES=""
 while IFS= read -r line || [[ -n "$line" ]]; do
   [[ -z "$line" || "$line" =~ ^# ]] && continue
@@ -99,7 +98,7 @@ echo "Running test: ${PROG_NAME}, ${TEST}, ${NUM_PROCS} nodes, ${NUM_GPUS_PER_PR
 echo -e "Details: NCCL_NCHANNELS=${NUM_CHUNNEL} \n\t NCCL_P2P_NET_CHUNKSIZE=${P2P_NET_CHUNKSIZE} \n\t NCCL_BUFFSIZE=${BUFFSIZE} \n\t NCCL_NCHANNELS_PER_NET_PEER=${CHANNELS_NET_PEER} \n\t NCCL_ALGO=${ALGO} \n\t NCCL_IB_QPS_PER_CONNECTION=${NUM_QPS_PER_CONNECTION} \n\t NCCL_IB_SPLIT_DATA_ON_QPS=${SPLIT_DATA_ON_QPS} \n\t NCCL_PXN_DISABLE=${NVLINK_OFF} \n\t NCCL_P2P_DISABLE=${NVLINK_OFF} \n\t NCCL_SHM_DISABLE=${NVLINK_OFF} \n\t NCCL_IB_HCA=${HCA_NAMES}"
 
 /usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun --prefix /usr/mpi/gcc/openmpi-4.1.7rc1 --bind-to none -np ${NUM_PROCS} -N ${PROCS_PER_NODE} \
-    -hostfile ${HOSTNAME} \
+    -hostfile ${HOSTFILE} --map-by ppr:${PROCS_PER_NODE}:node \
     --mca btl_tcp_if_include ${CTRL_NIC} \
     --mca plm_rsh_args "-o StrictHostKeyChecking=no" \
     --mca orte_base_help_aggregate 0 \
