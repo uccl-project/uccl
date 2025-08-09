@@ -34,12 +34,8 @@ NVLINK_OFF=$((1 - NVLINK_ON))
 TEST_BIN=alltoall_perf
 QP_SCALING=4
 UCCL_ENTROPY=1
-# QP_SCALING=8
-# UCCL_ENTROPY=8
-# QP_SCALING=4
-# UCCL_ENTROPY=32
 
-mpirun --bind-to none -np 2 -N 1 --hostfile $NODEFILE --map-by ppr:1:node \
+mpirun --bind-to none -np 3 -N 1 --hostfile $NODEFILE --map-by ppr:1:node \
     -x LD_LIBRARY_PATH=${UCCL_HOME}/thirdparty/rccl/build/release:${CONDA_LIB_HOME}:/opt/rocm/lib:${LD_LIBRARY_PATH} \
     --mca btl tcp,self \
     --mca btl_tcp_if_include ens51f1np1 \
