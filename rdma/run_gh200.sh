@@ -9,7 +9,7 @@ NUM_PROCS=${2:-2}
 NUM_GPUS_PER_PROC=${3:-8}
 PROG_OPTION=${4:-0}
 PROCS_PER_NODE=${5:-1}
-HOSTFILE="${UCCL_HOME}/scripts/node_ips/gh_200.txt"
+HOSTFILE="${UCCL_HOME}/scripts/node_ips/gh200.txt"
 
 NODES=""
 while IFS= read -r line || [[ -n "$line" ]]; do

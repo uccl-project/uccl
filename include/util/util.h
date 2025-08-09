@@ -1188,8 +1188,7 @@ static std::vector<fs::path> get_gpu_cards() {
       std::string pci_busid = dev_path.filename();
       auto it = std::find(gpu_cards_ranked.begin(), gpu_cards_ranked.end(),
                           pci_busid);
-      CHECK(it != gpu_cards_ranked.end())
-          << "GPU card " << pci_busid << " not found in ranked list";
+      if (it == gpu_cards_ranked.end()) continue;
       auto distance = std::distance(gpu_cards_ranked.begin(), it);
       gpu_cards_rank_map[dev_path] = distance;
       gpu_cards.push_back(dev_path);
@@ -1203,8 +1202,7 @@ static std::vector<fs::path> get_gpu_cards() {
       std::string pci_busid = dev_path.filename();
       auto it = std::find(gpu_cards_ranked.begin(), gpu_cards_ranked.end(),
                           pci_busid);
-      CHECK(it != gpu_cards_ranked.end())
-          << "GPU card " << pci_busid << " not found in ranked list";
+      if (it == gpu_cards_ranked.end()) continue;
       auto distance = std::distance(gpu_cards_ranked.begin(), it);
       gpu_cards_rank_map[dev_path] = distance;
       gpu_cards.push_back(dev_path);

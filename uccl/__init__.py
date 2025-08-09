@@ -2,8 +2,11 @@ import os
 
 is_efa = "rdmap" in " ".join(os.listdir("/sys/class/infiniband/"))
 if not is_efa:
-    from . import p2p
-    from . import collective
+    try:
+        from . import p2p
+        from . import collective
+    except ImportError:
+        pass
 
 __version__ = "0.0.1.post3"
 
