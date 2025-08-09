@@ -59,16 +59,15 @@ make -j
 
 ## Runing nccl-tests for UCCL
 
-Filling `$UCCL_HOME/scripts/node_ips/p4d.txt` with the ssh'able IP addresses of the nodes for rsync'ing all built libs. 
-Filling `$UCCL_HOME/efa/hosts` with the ssh'able IP addresses of the nodes for mpirun use. There, `slots` denotes the number of processes you want to run on each server; we currently only support 8. 
+Filling `$UCCL_HOME/scripts/node_ips/p4d.txt` with the ssh'able IP addresses of the nodes for rsync'ing all built libs and running mpi. 
 
 ```bash
 cd $UCCL_HOME/scripts
-python rsync.py
+python rsync.py -n node_ips/p4d.txt
 
 # Assume four p4d.24xlarge instances each with 8 A100 GPUs. 
 cd $UCCL_HOME/efa
-./run_nccl_test.sh ud 32 0
+./run_nccl_test.sh ud 32
 ``` 
 
 ## Running UCCL for PyTorch Applications
@@ -84,8 +83,6 @@ UCCL currently only supports `Simple` protocol; support for `LL` and `LL128` is 
 You can launch distributed ResNet training by: 
 ```bash
 cd $UCCL_HOME/misc
-
-# Fill in $UCCL_HOME/misc/hostfile the same as `$UCCL_HOME/scripts/node_ips/p4d.txt`
 
 # Benchmark UCCL
 bash run_resnet_uccl.sh

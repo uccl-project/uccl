@@ -81,7 +81,6 @@ compile_commands.json
 *.sqlite
 
 **/.DS_Store
-scripts/node_ips/default.txt
 
 uccl.egg-info/
 dist/

@@ -91,7 +91,6 @@ int RDMAFactory::init_devs() {
   }
 
   ib_devs_log << "Found IB devices: ";
-  rdma_ctl->devices_.resize(MAX_IB_DEVS);
   for (int d = 0; d < num_devs && rdma_ctl->num_devices < MAX_IB_DEVS; d++) {
     struct ibv_context* context = ibv_open_device(devices[d]);
     if (context == nullptr) {
@@ -234,28 +233,18 @@ int RDMAFactory::init_devs() {
                   << ":" << port_num << "/" << (int)dev_attr.phys_port_cnt
                   << ",";
 
-      // Assign each RDMA NIC with a unique index ranked by their name.
-      auto dev_it = std::find_if(
-          ib_nics.begin(), ib_nics.end(),
-          [&](auto const& ib_nic) { return ib_nic.first == devices[d]->name; });
-      if (dev_it == ib_nics.end()) {
-        DCHECK(false) << "RDMA NIC " << devices[d]->name
-                      << " not found in devs got from get_rdma_nics(): ";
-        for (auto const& ib_nic : ib_nics) {
-          printf("\t%s\n", ib_nic.first.c_str());
-        }
-        continue;
-      }
-      int dev_idx = std::distance(ib_nics.begin(), dev_it);
-      DCHECK(dev_idx < MAX_IB_DEVS)
-          << "dev_idx: " << dev_idx << " >= MAX_IB_DEVS: " << MAX_IB_DEVS;
-
-      rdma_ctl->devices_[dev_idx] = dev;
-      UCCL_LOG_RE << "Initialized " << devices[d]->name;
+      rdma_ctl->devices_.push_back(dev);
+      UCCL_LOG_RE << "Initialized " << devices[d]->name
+                  << " dev_idx: " << rdma_ctl->num_devices;
 
       rdma_ctl->num_devices++;
     }
   }
+  std::sort(rdma_ctl->devices_.begin(), rdma_ctl->devices_.end(),
+            [](auto const& a, auto const& b) {
+              return strcmp(a.ib_name, b.ib_name) < 0;
+            });
+
   ib_devs_log_str = ib_devs_log.str();
   if (ib_devs_log_str.back() == ',') {
     ib_devs_log_str.erase(ib_devs_log_str.length() - 1, 1);

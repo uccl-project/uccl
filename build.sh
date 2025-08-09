@@ -29,7 +29,6 @@ fi
 
 rm -r uccl.egg-info >/dev/null 2>&1 || true
 rm -r dist >/dev/null 2>&1 || true
-rm -r uccl/lib >/dev/null 2>&1 || true
 rm -r build >/dev/null 2>&1 || true
 WHEEL_DIR="wheelhouse-${TARGET}"
 rm -r "${WHEEL_DIR}" >/dev/null 2>&1 || true
@@ -128,7 +127,12 @@ build_gpu_driven() {
   set -euo pipefail
   echo "[container] build_gpu_driven Target: $TARGET"
 
-  cd gpu_driven && make clean && make -j$(nproc) && cd ..
+  if [[ "$TARGET" == "rocm" ]]; then
+    echo "Skipping GPU-driven build on ROCm (no GPU-driven support yet)."
+    return
+  fi
+
+  cd gpu_driven && make clean && make -j$(nproc) all && cd ..
 
   echo "[container] Copying GPU-driven .so to uccl/"
   mkdir -p uccl/lib
@@ -196,8 +200,8 @@ docker run --rm --user "$(id -u):$(id -g)" \
     ls -lh uccl/
     ls -lh uccl/lib/
     python3 -m build
-    auditwheel repair dist/uccl-*.whl --exclude libibverbs.so.1 --exclude libcudart.so.12 --exclude libamdhip64.so.6 -w /io/${WHEEL_DIR}
-    
+    auditwheel repair dist/uccl-*.whl --exclude "libtorch*.so" --exclude "libc10*.so" --exclude "libibverbs.so.1" --exclude "libcudart.so.12" --exclude "libamdhip64.so.6" -w /io/${WHEEL_DIR}
+
     # Add backend tag to wheel filename using local version identifier
     if [[ "$TARGET" == "rocm" ]]; then
       cd /io/${WHEEL_DIR}
