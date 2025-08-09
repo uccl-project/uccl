@@ -13,9 +13,6 @@ char const* PLUGIN_NAME = "RDMA_Plugin";
 
 bool volatile quit = false;
 
-std::atomic<bool> init_dev[8] = {false, false, false, false,
-                                 false, false, false, false};
-
 void interrupt_handler(int signal) {
   (void)signal;
   quit = true;
@@ -276,17 +273,16 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
 
   int local_gpuidx;
   GPU_RT_CHECK(gpuGetDevice(&local_gpuidx));
+
+  // UCCL does not support PXN for now where each GPU process will create
+  // connections on all NICs. Thefore, we just ignore PXN at the plugin level by
+  // using the same dev corresponding to the GPU managed by the current process.
   auto best_dev = ep->get_best_dev_idx(local_gpuidx);
   if (dev != best_dev) dev = best_dev;
 
-  if (!init_dev[dev].load()) {
-    if (ep->initialize_engine_by_dev(dev, false)) {
-      printf(
-          "pluginListen initialize_engine_by_dev pid: %d, dev: %d, "
-          "local_gpuidx: %d\n",
-          getpid(), dev, local_gpuidx);
-      init_dev[dev].store(true);
-    }
+  if (ep->initialize_engine_by_dev(dev, false)) {
+    UCCL_LOG_PLUGIN << "pluginListen initialize_engine_by_dev pid: " << getpid()
+                    << ", dev: " << dev << ", local_gpuidx: " << local_gpuidx;
   }
 
   // Create a listening socket.
@@ -335,8 +331,6 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
   *listenComm = lcomm;
 
   UCCL_LOG_PLUGIN << "Listen on dev: " << dev << " from PID: " << getpid();
-  printf("pluginListen pid: %d, dev: %d, local_gpuidx: %d\n", getpid(), dev,
-         handle->remote_gpuidx);
 
   return ncclSuccess;
 }
@@ -351,19 +345,16 @@ ncclResult_t pluginConnect(int dev, void* opaque_handle, void** sendComm,
   struct ucclHandle* handle = (struct ucclHandle*)opaque_handle;
   int local_gpuidx;
   GPU_RT_CHECK(gpuGetDevice(&local_gpuidx));
+
+  // Similar to pluginListen, we ignore PXN at the plugin level by using the
+  // same dev corresponding to the GPU managed by the current process.
   auto best_dev = ep->get_best_dev_idx(local_gpuidx);
   if (dev != best_dev) dev = best_dev;
 
-  while (!init_dev[dev].load()) {
-    if (ep->initialize_engine_by_dev(dev, false)) {
-      printf(
-          "pluginConnect initialize_engine_by_dev pid: %d, dev: %d, "
-          "local_gpuidx: %d\n",
-          getpid(), dev, local_gpuidx);
-      init_dev[dev].store(true);
-    }
-    // yield
-    std::this_thread::yield();
+  if (ep->initialize_engine_by_dev(dev, false)) {
+    UCCL_LOG_PLUGIN << "pluginConnect initialize_engine_by_dev pid: "
+                    << getpid() << ", dev: " << dev
+                    << ", local_gpuidx: " << local_gpuidx;
   }
 
   std::string remote_ip_str = ip_to_str(handle->ip_addr_u32);
@@ -395,8 +386,6 @@ ncclResult_t pluginConnect(int dev, void* opaque_handle, void** sendComm,
                     << remote_ip_str << "/" << handle->remote_dev
                     << " on dev:" << dev << ", " << scomm->base.conn_id.flow_id
                     << " from PID: " << getpid();
-    printf("pluginConnect pid: %d, dev: %d, local_gpuidx: %d\n", getpid(), dev,
-           local_gpuidx);
   }
 
   return ncclSuccess;
