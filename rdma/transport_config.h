@@ -32,7 +32,7 @@ UCCL_PARAM(CHUNK_SIZE_KB, "CHUNK_SIZE_KB", 64);
 // Number of CUDA/HIP streams per engine.
 UCCL_PARAM(NumGpuRtStreams, "NUM_GPU_RT_STREAMS", 8);
 
-static constexpr uint32_t MAX_PEER = 256;
+static constexpr uint32_t MAX_PEER = 2048;
 // Maximum number of flows (one-way) on each engine.
 static constexpr uint32_t MAX_FLOW =
     2048;  // This should be aligned with FID in IMMData

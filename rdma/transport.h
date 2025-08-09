@@ -928,16 +928,19 @@ class UcclRDMAEngine {
 struct UcclPeer {
   std::string remote_ip;
   int remote_dev;
+  int remote_gpuidx;
 };
 
 static bool operator==(UcclPeer const& lhs, UcclPeer const& rhs) {
-  return lhs.remote_ip == rhs.remote_ip && lhs.remote_dev == rhs.remote_dev;
+  return lhs.remote_ip == rhs.remote_ip && lhs.remote_dev == rhs.remote_dev &&
+         lhs.remote_gpuidx == rhs.remote_gpuidx;
 }
 
 struct UcclPeerHash {
   std::size_t operator()(UcclPeer const& peer) const {
     return std::hash<std::string>()(peer.remote_ip) ^
-           std::hash<int>()(peer.remote_dev);
+           std::hash<int>()(peer.remote_dev) ^
+           std::hash<int>()(peer.remote_gpuidx);
   }
 };
 
@@ -1001,7 +1004,7 @@ class RDMAEndpoint {
   std::vector<std::unordered_map<UcclPeer, PeerInfo, UcclPeerHash>> peer_map_;
   std::vector<std::unique_ptr<std::mutex>> peer_map_mu_;
 
-  std::vector<std::unique_ptr<std::atomic<PeerID>>> next_peer_id_;
+  std::atomic<PeerID> next_peer_id_ = 1;
 
   std::vector<std::vector<Spin>> flow_id_spin_;
   std::vector<std::vector<FlowID>> next_flow_id_;
@@ -1152,9 +1155,7 @@ class RDMAEndpoint {
     return true;
   }
 
-  inline PeerID alloc_peer_id(int dev) {
-    return next_peer_id_[dev]->fetch_add(1);
-  }
+  inline PeerID alloc_peer_id() { return next_peer_id_.fetch_add(1); }
 
  private:
   PollCtx* install_ctx_on_engine(uint32_t engine_idx, PeerID peer_id,
@@ -1164,7 +1165,8 @@ class RDMAEndpoint {
                                   union CtrlMeta meta);
 
   void install_ctx_on_engines(int fd, int dev, PeerID peer_id,
-                              std::string remote_ip, int remote_dev);
+                              std::string remote_ip, int remote_dev,
+                              int remote_gpuidx);
 
   std::vector<PollCtx*> install_flow_on_engines(int dev, PeerID peer_id,
                                                 FlowID flow_id, UcclFlow* flow,

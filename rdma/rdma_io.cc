@@ -29,8 +29,8 @@ int RDMAFactory::init_devs() {
   struct ibv_device** devices;
   std::vector<fs::path> gpu_cards;
   std::vector<std::pair<std::string, fs::path>> ib_nics;
-  std::stringstream ib_devs_log;
-  std::string ib_devs_log_str;
+  std::vector<std::tuple<std::string, fs::path, int>> ib_nics_with_dev_idx;
+  std::stringstream init_devs_log;
 
   static std::once_flag init_flag;
   std::call_once(init_flag,
@@ -65,32 +65,8 @@ int RDMAFactory::init_devs() {
     goto error;
   }
 
-  // Get the GPUs, RDMA NICs, and their best mapping.
-  {
-    // Sorted by the GPU name.
-    gpu_cards = get_gpu_cards();
-    printf("Found %ld GPUs (ordered by GPU rank):\n", gpu_cards.size());
-    int i = 0;
-    for (auto const& gpu_card : gpu_cards) {
-      printf("\tGPU %d: %s\n", i++, gpu_card.c_str());
-    }
-
-    // Sorted by the RDMA NIC name.
-    ib_nics = get_rdma_nics();
-    printf("Found %ld RDMA NICs (ordered by NIC name):\n", ib_nics.size());
-    for (auto const& [ib_name, ib_path] : ib_nics) {
-      printf("\tRDMA NIC %s: %s\n", ib_name.c_str(), ib_path.c_str());
-    }
-
-    // Mapping GPU idx to RDMA NIC idx.
-    rdma_ctl->gpu_to_dev_idx_ = map_gpu_to_dev(gpu_cards, ib_nics);
-    printf("Detected best GPU-NIC mapping: \n");
-    for (auto const& [gpu_idx, dev_idx] : rdma_ctl->gpu_to_dev_idx_) {
-      printf("\tGPU %d -> NIC %s\n", gpu_idx, ib_nics[dev_idx].first.c_str());
-    }
-  }
-
-  ib_devs_log << "Found IB devices: ";
+  init_devs_log << "Found IB devices (ibv_get_device_list + NCCL_IB_HCA "
+                   "filter, ordered by libibverbs):\n";
   for (int d = 0; d < num_devs && rdma_ctl->num_devices < MAX_IB_DEVS; d++) {
     struct ibv_context* context = ibv_open_device(devices[d]);
     if (context == nullptr) {
@@ -229,9 +205,9 @@ int RDMAFactory::init_devs() {
                     << " on dev: " << devices[d]->name;
       }
 
-      ib_devs_log << "#" << rdma_ctl->num_devices << "-" << devices[d]->name
-                  << ":" << port_num << "/" << (int)dev_attr.phys_port_cnt
-                  << ",";
+      init_devs_log << "\tdev_idx " << rdma_ctl->num_devices << ": "
+                    << devices[d]->name << " (" << port_num << "/"
+                    << (int)dev_attr.phys_port_cnt << ")\n";
 
       rdma_ctl->devices_.push_back(dev);
       UCCL_LOG_RE << "Initialized " << devices[d]->name
@@ -240,17 +216,61 @@ int RDMAFactory::init_devs() {
       rdma_ctl->num_devices++;
     }
   }
-  std::sort(rdma_ctl->devices_.begin(), rdma_ctl->devices_.end(),
-            [](auto const& a, auto const& b) {
-              return strcmp(a.ib_name, b.ib_name) < 0;
-            });
-
-  ib_devs_log_str = ib_devs_log.str();
-  if (ib_devs_log_str.back() == ',') {
-    ib_devs_log_str.erase(ib_devs_log_str.length() - 1, 1);
-  }
-  LOG(INFO) << ib_devs_log_str;
   ibv_free_device_list(devices);
+
+  // Get the GPUs, RDMA NICs, and their best mapping.
+  {
+    // Sorted by the GPU name.
+    gpu_cards = get_gpu_cards();
+    init_devs_log << "Found " << gpu_cards.size()
+                  << " GPUs (get_gpu_cards, ordered by GPU rank):\n";
+    int i = 0;
+    for (auto const& gpu_card : gpu_cards) {
+      init_devs_log << "\tGPU " << i++ << ": " << gpu_card.string() << "\n";
+    }
+
+    // Sorted by the RDMA NIC name.
+    ib_nics = get_rdma_nics();
+    for (auto const& [ib_name, ib_path] : ib_nics) {
+      auto it =
+          std::find_if(rdma_ctl->devices_.begin(), rdma_ctl->devices_.end(),
+                       [ib_name](auto const& dev) {
+                         return strcmp(dev.ib_name, ib_name.c_str()) == 0;
+                       });
+      // This ib_nic was excluded by the user.
+      if (it == rdma_ctl->devices_.end()) continue;
+
+      ib_nics_with_dev_idx.push_back(
+          std::make_tuple(ib_name, ib_path, it - rdma_ctl->devices_.begin()));
+    }
+    // Sort by the dev_idx in rdma_ctl->devices_.
+    std::sort(ib_nics_with_dev_idx.begin(), ib_nics_with_dev_idx.end(),
+              [](auto const& a, auto const& b) {
+                return std::get<2>(a) < std::get<2>(b);
+              });
+    init_devs_log << "Found " << ib_nics_with_dev_idx.size()
+                  << " RDMA NICs (get_rdma_nics + NCCL_IB_HCA filter, ordered "
+                     "by dev_idx in rdma_ctl->devices_[]):\n";
+    for (auto const& [ib_name, ib_path, dev_idx] : ib_nics_with_dev_idx) {
+      init_devs_log << "\tRDMA NIC " << ib_name << ": " << ib_path.string()
+                    << ", dev_idx: " << dev_idx << "\n";
+    }
+
+    // Make sure both have the same number of NICs.
+    CHECK(ib_nics_with_dev_idx.size() == rdma_ctl->num_devices);
+
+    // Mapping GPU idx to dev_idx in rdma_ctl->devices_.
+    rdma_ctl->gpu_to_dev_idx_ = map_gpu_to_dev(gpu_cards, ib_nics_with_dev_idx);
+    init_devs_log << "Detected best GPU-NIC mapping: \n";
+    for (auto const& [gpu_idx, dev_idx] : rdma_ctl->gpu_to_dev_idx_) {
+      init_devs_log << "\tGPU " << gpu_idx << " -> NIC "
+                    << std::get<0>(ib_nics_with_dev_idx[dev_idx])
+                    << ", dev_idx: " << dev_idx << "\n";
+    }
+  }
+  // Forcily output the log for better debugging in case of error.
+  printf("%s", init_devs_log.str().c_str());
+
   return rdma_ctl->num_devices;
 
 error:
