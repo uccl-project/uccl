@@ -2,6 +2,7 @@
 #include "rdma_io.h"
 #include "transport_config.h"
 #include "util/list.h"
+#include "util/net.h"
 #include "util/util.h"
 #include "util_rdma.h"
 #include "util_timer.h"
@@ -756,7 +757,7 @@ int try_bind_listen_socket(int* sock_fd, int base_port,
 
 bool RDMAEndpoint::initialize_engine_by_dev(int dev,
                                             bool enable_p2p_listen = false) {
-  static std::vector<std::once_flag> flags_per_dev_(num_devices_);
+  static std::vector<std::once_flag> flags_per_dev_(MAX_IB_DEVS);
   bool called = false;
   std::call_once(flags_per_dev_[dev], [this, dev, enable_p2p_listen,
                                        &called]() {
