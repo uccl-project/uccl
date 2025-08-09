@@ -276,10 +276,8 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
 
   int local_gpuidx;
   GPU_RT_CHECK(gpuGetDevice(&local_gpuidx));
-
-  if (dev != local_gpuidx) {
-    dev = local_gpuidx;
-  }
+  auto best_dev = ep->get_best_dev_idx(local_gpuidx);
+  if (dev != best_dev) dev = best_dev;
 
   if (!init_dev[dev].load()) {
     if (ep->initialize_engine_by_dev(dev, false)) {
@@ -325,7 +323,7 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
   handle->ip_addr_u32 = str_to_ip(factory_dev->local_ip_str);
   handle->listen_port = ntohs(serv_addr.sin_port);
   handle->remote_dev = dev;
-  GPU_RT_CHECK(gpuGetDevice(&handle->remote_gpuidx));
+  handle->remote_gpuidx = local_gpuidx;
 
   struct ucclListenComm* lcomm =
       (struct ucclListenComm*)calloc(1, sizeof(struct ucclListenComm));
@@ -353,10 +351,8 @@ ncclResult_t pluginConnect(int dev, void* opaque_handle, void** sendComm,
   struct ucclHandle* handle = (struct ucclHandle*)opaque_handle;
   int local_gpuidx;
   GPU_RT_CHECK(gpuGetDevice(&local_gpuidx));
-
-  if (dev != local_gpuidx) {
-    dev = local_gpuidx;
-  }
+  auto best_dev = ep->get_best_dev_idx(local_gpuidx);
+  if (dev != best_dev) dev = best_dev;
 
   while (!init_dev[dev].load()) {
     if (ep->initialize_engine_by_dev(dev, false)) {

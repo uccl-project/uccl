@@ -1151,7 +1151,7 @@ static int cal_pcie_distance(fs::path const& devA, fs::path const& devB) {
 }
 
 static std::vector<fs::path> get_gpu_cards() {
-  // Get the device properties
+  // Get the device properties, conforming to CUDA_VISIBLE_DEVICES
   int num_gpus;
   GPU_RT_CHECK(gpuGetDeviceCount(&num_gpus));
   char bdf[32];
@@ -1247,7 +1247,7 @@ static std::vector<std::pair<std::string, fs::path>> get_rdma_nics() {
 
 static inline std::map<int, int> map_gpu_to_dev(
     std::vector<fs::path> const& gpu_cards,
-    std::vector<std::pair<std::string, fs::path>> const& ib_nics) {
+    std::vector<std::tuple<std::string, fs::path, int>> const& ib_nics) {
   std::map<int, int> gpu_to_dev;
   std::vector<bool> nic_allocated(ib_nics.size(), false);
 
@@ -1259,7 +1259,8 @@ static inline std::map<int, int> map_gpu_to_dev(
     int best_distance = std::numeric_limits<int>::max();
     for (size_t j = 0; j < ib_nics.size(); ++j) {
       if (nic_allocated[j]) continue;
-      int dist = uccl::cal_pcie_distance(gpu_device_path, ib_nics[j].second);
+      int dist =
+          uccl::cal_pcie_distance(gpu_device_path, std::get<1>(ib_nics[j]));
       if (dist < best_distance) {
         best_distance = dist;
         best_nic = j;
@@ -1272,10 +1273,13 @@ static inline std::map<int, int> map_gpu_to_dev(
       // If all NICs are allocated, fallback to the closest
       auto ib_nic_it = std::min_element(
           ib_nics.begin(), ib_nics.end(), [&](auto const& a, auto const& b) {
-            return uccl::cal_pcie_distance(gpu_device_path, a.second) <
-                   uccl::cal_pcie_distance(gpu_device_path, b.second);
+            return uccl::cal_pcie_distance(gpu_device_path, std::get<1>(a)) <
+                   uccl::cal_pcie_distance(gpu_device_path, std::get<1>(b));
           });
       gpu_to_dev[i] = ib_nic_it - ib_nics.begin();
+      CHECK(gpu_to_dev[i] == std::get<2>(*ib_nic_it))
+          << "gpu_to_dev[i]: " << gpu_to_dev[i]
+          << ", std::get<2>(*ib_nic_it): " << std::get<2>(*ib_nic_it);
     }
   }
 
