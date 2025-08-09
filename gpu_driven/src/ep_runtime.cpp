@@ -26,9 +26,9 @@ void free(void* ptr) {
   std::cout << "[internode::free] dummy free invoked" << std::endl;
 }
 
-}  // namespace internode
-
 std::vector<uint8_t> get_unique_id() { return std::vector<uint8_t>(64, 0); }
+
+}  // namespace internode
 
 namespace intranode {
 
