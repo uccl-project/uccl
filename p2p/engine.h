@@ -3,6 +3,7 @@
 #include "transport.h"
 #include "util/gpu_rt.h"
 #include "util/jring.h"
+#include "util/net.h"
 #include "util/shared_pool.h"
 #include "util/util.h"
 #include <infiniband/verbs.h>
@@ -38,6 +39,15 @@ struct PeerInfo {
   std::string ip_addr;  // IP address of the peer
   int gpu_idx;          // GPU index of the peer
 };
+
+static inline std::string get_oob_ip() {
+  char uccl_ifname[MAX_IF_NAME_SIZE + 1];
+  uccl::socketAddress uccl_ifaddr;
+  int num_ifs =
+      uccl::find_interfaces(uccl_ifname, &uccl_ifaddr, MAX_IF_NAME_SIZE, 1);
+  CHECK(num_ifs == 1) << "No IP interface found";
+  return uccl::get_dev_ip(uccl_ifname);
+}
 
 class Endpoint {
   const uint64_t kRTTBytes = 1024 * 1024;

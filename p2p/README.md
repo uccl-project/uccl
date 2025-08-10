@@ -197,6 +197,20 @@ python benchmark_nixl.py --role client --remote-ip <Server IP>
 Notes: 
 * You can specify `--op-type read` to benchmark one-sided READ transfer in NIXL. On GH200, we find NIXL READ over GPU memory is extremely slow with 1GB/s out of 25, while NIXL READ over CPU memory is better but only max at 9GB/s. 
 
+### Running NIXL on AMD+Broadcom
+
+Run `./run_container.sh` to launch containers on two servers; then inside the container, run the following: 
+```bash
+# On server
+UCX_MAX_RMA_LANES=4 UCX_NET_DEVICES=rdma3:1 UCX_TLS=rocm,rc python benchmark_nixl.py --role server
+
+# On client
+UCX_MAX_RMA_LANES=4 UCX_NET_DEVICES=rdma3:1 UCX_TLS=rocm,rc python benchmark_nixl.py --role client --remote-ip <Server IP>
+```
+
+Notes: 
+* You can specify `--dual --remote-ip <Remote IP>` to benchmark dual-direction NIXL transfer. 
+
 ### Running NIXL with Mooncake backend
 
 If you have not installed nixl with Mooncake backend, you can follow:
@@ -269,17 +283,6 @@ for bs in 256 1024 4096 16384 65536 262144 1048576 10485760 16777216 104857600; 
         --segment_id=my_target --local_server_name=my_initiator --device_name=rdma3 \
         --batch_size=1 --threads=1 --operation=write --block_size=$bs >> /io/p2p/mooncake.txt 2>&1
 done
-```
-
-### Running NIXL on AMD+Broadcom
-
-Run `./run_container.sh` to launch containers on two servers; then inside the container, run the following: 
-```bash
-# On server
-UCX_MAX_RMA_LANES=4 UCX_NET_DEVICES=rdma3:1 UCX_TLS=rocm,rc python benchmark_nixl.py --role server
-
-# On client
-UCX_MAX_RMA_LANES=4 UCX_NET_DEVICES=rdma3:1 UCX_TLS=rocm,rc python benchmark_nixl.py --role client --remote-ip <Server IP>
 ```
 
 
