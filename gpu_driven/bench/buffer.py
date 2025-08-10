@@ -31,7 +31,7 @@ class Buffer:
         runtime: the C++ runtime.
     """
 
-    # TODO(MaoZiming): Reduce SMs.
+    # TODO(MaoZiming): Reduce SMs. UCCL Proxy should reduce the usage of SMs.
     num_sms: int = 20
 
     def __init__(

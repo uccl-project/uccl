@@ -45,7 +45,7 @@ class Buffer {
         low_latency_mode(low_latency_mode),
         explicitly_destroy(explicitly_destroy),
         comm_stream(at::cuda::getStreamFromPool(/*isHighPriority=*/true)) {
-    // TODO(MaoZiming): Double check. I copied from deep_ep.cpp.
+    // TODO(MaoZiming): Initialize UCCL proxy processes. 
     {
       std::lock_guard<std::mutex> lk(g_proxies_mu);
       CUDA_CHECK(cudaGetDevice(&device_index));
@@ -193,7 +193,6 @@ class Buffer {
       std::optional<torch::Tensor> const& dispatch_wait_recv_cost_stats,
       int num_max_dispatch_tokens_per_rank, int num_experts, bool use_fp8,
       bool round_scale, bool use_ue8m0, bool async, bool return_recv_hook) {
-    // TODO(MaoZiming)
     EP_HOST_ASSERT(low_latency_mode);
 
     // Tensor checks
@@ -347,7 +346,6 @@ class Buffer {
       int num_max_dispatch_tokens_per_rank, int num_experts, bool use_logfmt,
       bool zero_copy, bool async, bool return_recv_hook,
       std::optional<torch::Tensor> const& out) {
-    // TODO(MaoZiming)
     EP_HOST_ASSERT(low_latency_mode);
 
     // Tensor checks
@@ -508,7 +506,7 @@ class Buffer {
     }
 
     // Sync NVSHMEM handles and allocate memory
-    // TODO(MaoZiming): replace nvshmem.
+    // NOTE(MaoZiming): drop nvshmem. we directly allocate rdma_buffer_ptr. 
     if (num_rdma_bytes > 0) {
 #if false
       // Initialize NVSHMEM

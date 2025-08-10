@@ -10,7 +10,7 @@ int init(std::vector<uint8_t> const& root_unique_id_val, int rank,
 }
 
 void* alloc(std::size_t size, std::size_t alignment) {
-  // TODO(MaoZiming): alignment is ignored here since cudaMalloc already aligns
+  // NOTE(MaoZiming): alignment is ignored here since cudaMalloc already aligns
   // to at least 256 bytes
   void* ptr = nullptr;
   cudaError_t err = cudaMalloc(&ptr, size);
