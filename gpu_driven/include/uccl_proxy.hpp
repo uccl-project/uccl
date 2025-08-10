@@ -22,6 +22,9 @@ class UcclProxy {
   void start_local();
   void start_dual();
   void stop();
+  uintptr_t rb_addr() const noexcept { return rb_; }
+  int block_idx() const noexcept { return block_idx_; }
+  void* gpu_buffer_addr() const noexcept { return gpu_buffer_addr_; }
 
  private:
   enum class Mode { None, Sender, Remote, Local, Dual };
@@ -32,5 +35,7 @@ class UcclProxy {
   std::thread thread_;
   Mode mode_;
   std::atomic<bool> running_;
-  DeviceToHostCmdBuffer* rb_;
+  uintptr_t rb_;
+  int block_idx_;
+  void* gpu_buffer_addr_;
 };

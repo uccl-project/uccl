@@ -54,7 +54,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   const size_t num_bytes_per_msg =
       sizeof(int4) + (kUseFP8 ? (kHidden + num_scales * sizeof(float))
                               : (kHidden * sizeof(nv_bfloat16)));
-  const size_t num_int4_per_msg = num_bytes_per_msg / sizeof(int4);
+  // const size_t num_int4_per_msg = num_bytes_per_msg / sizeof(int4);  //
+  // NOTE(MaoZiming): not used
   EP_DEVICE_ASSERT(num_bytes_per_msg % sizeof(int4) == 0);
 
   // Expert counts
@@ -507,10 +508,11 @@ __global__ __launch_bounds__(1024, 1) void combine(
     auto const global_expert_idx = rank * num_local_experts + local_expert_idx;
     auto const layout =
         __ldg(layout_range + local_expert_idx * num_ranks + dst_rank);
-    auto const local_x =
-        static_cast<int4 const*>(x) + local_expert_idx * num_ranks *
-                                          num_max_dispatch_tokens_per_rank *
-                                          hidden_bf16_int4;
+    // auto const local_x =
+    //     static_cast<int4 const*>(x) + local_expert_idx * num_ranks *
+    //                                       num_max_dispatch_tokens_per_rank *
+    //                                       hidden_bf16_int4;  //
+    //                                       NOTE(MaoZiming): not used
     auto const local_src_info = src_info + local_expert_idx * num_ranks *
                                                num_max_dispatch_tokens_per_rank;
     auto const rdma_send_x_vec = static_cast<uint8_t*>(rdma_send_x) +
@@ -531,7 +533,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
     extern __shared__ __align__(1024) uint8_t smem_buffer[];
     auto smem_ptr =
         smem_buffer + warp_id * kNumStages * (kNumTMABufferBytes + 16);
-    uint32_t tma_phase[kNumStages] = {};
+    // uint32_t tma_phase[kNumStages] = {};  // NOTE(MaoZiming): not used
     auto tma_buffer = PatternVisitor([=](int const& i) {
       return reinterpret_cast<int4*>(smem_ptr + i * (kNumTMABufferBytes + 16));
     });
@@ -550,7 +552,8 @@ __global__ __launch_bounds__(1024, 1) void combine(
     }
     __syncwarp();
 
-    constexpr int kNumIters = hidden_bf16_int4_pad / (32 * kNumUnrolls);
+    // constexpr int kNumIters = hidden_bf16_int4_pad / (32 * kNumUnrolls);  //
+    // NOTE(MaoZiming): not used
     auto tma_load_and_arrive = [&](int const& stage_idx, int4 const* gmem_ptr,
                                    int const& num_bytes) {
       tma_load_1d(tma_buffer[stage_idx], gmem_ptr, tma_mbarrier[stage_idx],
@@ -567,7 +570,8 @@ __global__ __launch_bounds__(1024, 1) void combine(
     for (int token_idx = offset + sub_warp_id;
          token_idx < offset + num_tokens_to_send;
          token_idx += num_warps_per_group) {
-      auto const x_int4 = local_x + token_idx * hidden_bf16_int4;
+      // auto const x_int4 = local_x + token_idx * hidden_bf16_int4; //
+      // NOTE(MaoZiming): not used
       auto const rdma_send_type_row = reinterpret_cast<int*>(
           rdma_send_x_vec + token_idx * num_bytes_per_slot);
       auto const rdma_send_x_vec_row =
@@ -582,7 +586,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
           (global_expert_idx * num_max_dispatch_tokens_per_rank + src_idx) *
               num_bytes_per_slot;
 
-      // NOTE(MaoZiming): we don't have nvshmem-style p2p mapping.
+      // NOTE(MaoZiming): we don't have nvshmem-style intra-node p2p mapping.
       // TODO(MaoZiming): understand the optimizations here.
 #ifdef false
       auto const dst_p2p_ptr = nvshmemi_get_p2p_ptr(dst_ptr, rank, dst_rank);

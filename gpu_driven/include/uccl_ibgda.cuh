@@ -38,7 +38,8 @@ struct nvshmemi_ibgda_device_state_t {
 };
 #endif
 
-// TODO(MaoZiming): Fix. Reverse proxy (remote -> local) acknowldgement.
+// TODO(MaoZiming): Fix. This should be a non-fetch add operation. This could be
+// implemented with CPU proxy.
 __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     void* rptr, int const& value, int pe, int qp_id,
     bool is_local_copy = false) {

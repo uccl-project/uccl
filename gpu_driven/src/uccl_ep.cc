@@ -1,8 +1,8 @@
-#include "ep_util.hpp"
-// #include "config.hpp"
 #include "ep_config.hpp"
 #include "ep_event.hpp"
+#include "ep_proxy_registry.hpp"
 #include "ep_runtime.cuh"
+#include "ep_util.hpp"
 #include "internode_ll.cuh"
 #include <ATen/cuda/CUDAContext.h>
 #include <pybind11/functional.h>
@@ -18,12 +18,19 @@
 #include <vector>
 #include <cuda_runtime.h>
 
+namespace uccl {
+std::unordered_map<int, std::vector<py::object>> g_proxies_by_dev;
+
+std::unordered_map<int, std::vector<py::object>>& proxies_by_dev() {
+  return g_proxies_by_dev;
+}
+}  // namespace uccl
+
 #define NUM_MAX_LOCAL_EXPERTS 1024
 
 namespace py = pybind11;
 
 static std::mutex g_proxies_mu;
-static std::unordered_map<int, std::vector<py::object>> g_proxies_by_dev;
 
 struct EventOverlap {};
 struct Ctx {
@@ -33,6 +40,18 @@ struct Ctx {
 static std::atomic<long> g_next{1};
 static std::mutex g_mu;
 static std::unordered_map<long, Ctx> g_ctx;
+
+static std::vector<uint64_t> collect_ring_addrs_for_device(int device_index) {
+  std::lock_guard<std::mutex> lk(g_proxies_mu);
+  auto it = uccl::g_proxies_by_dev.find(device_index);
+  EP_HOST_ASSERT(it != uccl::g_proxies_by_dev.end() && !it->second.empty());
+  std::vector<uint64_t> addrs;
+  addrs.reserve(it->second.size());
+  for (auto& proxy : it->second) {
+    addrs.push_back(proxy.attr("rb_addr").cast<uint64_t>());
+  }
+  return addrs;
+}
 
 class Buffer {
  public:
@@ -47,14 +66,33 @@ class Buffer {
         comm_stream(at::cuda::getStreamFromPool(/*isHighPriority=*/true)) {
     // TODO(MaoZiming): Initialize UCCL proxy processes.
     {
-      std::lock_guard<std::mutex> lk(g_proxies_mu);
-      CUDA_CHECK(cudaGetDevice(&device_index));
-      auto it = g_proxies_by_dev.find(device_index);
-      if (it == g_proxies_by_dev.end() || it->second.empty()) {
-        throw std::runtime_error(
-            "uccl_ep.Buffer: no UcclProxy registered for device " +
-            std::to_string(device_index) +
-            ". Call uccl.uccl_ep.register_proxy(device_index, proxies) first.");
+      printf(
+          "Buffer initializing for rank %d, num_ranks %d, num_nvl_bytes %ld, "
+          "num_rdma_bytes %ld\n",
+          rank, num_ranks, num_nvl_bytes, num_rdma_bytes);
+      {
+        std::lock_guard<std::mutex> lk(g_proxies_mu);
+        CUDA_CHECK(cudaGetDevice(&device_index));
+        auto it = uccl::g_proxies_by_dev.find(device_index);
+        if (it == uccl::g_proxies_by_dev.end() || it->second.empty()) {
+          throw std::runtime_error(
+              "uccl_ep.Buffer: no UcclProxy registered for device " +
+              std::to_string(device_index) +
+              ". Call uccl.uccl_ep.register_proxy(device_index, proxies) "
+              "first.");
+        }
+      }
+
+      {
+        auto addrs = collect_ring_addrs_for_device(device_index);
+        num_ring_addrs = static_cast<int>(addrs.size());
+        EP_HOST_ASSERT(num_ring_addrs > 0);
+        ring_addrs.resize(num_ring_addrs);
+        for (int i = 0; i < num_ring_addrs; ++i) {
+          ring_addrs[i] = addrs[i];
+        }
+        printf("Buffer: device %d, num_ring_addrs %d\n", device_index,
+               num_ring_addrs);
       }
     }
 
@@ -586,6 +624,10 @@ class Buffer {
   int* moe_recv_rdma_counter_mapped{nullptr};
 
   bool destroyed = false;
+
+  // Ring buffers
+  int num_ring_addrs{0};
+  std::vector<uint64_t> ring_addrs{};
 };
 
 PYBIND11_MODULE(uccl_ep, m) {
@@ -594,14 +636,14 @@ PYBIND11_MODULE(uccl_ep, m) {
       "register_proxy",
       [](int device_index, py::object proxy) {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
-        g_proxies_by_dev[device_index].push_back(std::move(proxy));
+        uccl::g_proxies_by_dev[device_index].push_back(std::move(proxy));
       },
       py::arg("device_index"), py::arg("proxy"));
   m.def(
       "register_proxies",
       [](int device_index, std::vector<py::object> proxies) {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
-        auto& vec = g_proxies_by_dev[device_index];
+        auto& vec = uccl::g_proxies_by_dev[device_index];
         for (auto& proxy : proxies) {
           vec.push_back(std::move(proxy));
         }
@@ -611,20 +653,20 @@ PYBIND11_MODULE(uccl_ep, m) {
       "unregister_proxy",
       [](int device_index) {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
-        g_proxies_by_dev.erase(device_index);
+        uccl::g_proxies_by_dev.erase(device_index);
       },
       py::arg("device_index"));
   m.def(
       "has_proxy",
       [](int device_index) {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
-        auto it = g_proxies_by_dev.find(device_index);
-        return it != g_proxies_by_dev.end() && !it->second.empty();
+        auto it = uccl::g_proxies_by_dev.find(device_index);
+        return it != uccl::g_proxies_by_dev.end() && !it->second.empty();
       },
       py::arg("device_index"));
   m.def("stop_all_registered_proxies", []() {
     std::lock_guard<std::mutex> lk(g_proxies_mu);
-    for (auto& kv : g_proxies_by_dev) {
+    for (auto& kv : uccl::g_proxies_by_dev) {
       for (auto& proxy : kv.second) {
         try {
           proxy.attr("stop")();
@@ -632,7 +674,7 @@ PYBIND11_MODULE(uccl_ep, m) {
         }
       }
     }
-    g_proxies_by_dev.clear();
+    uccl::g_proxies_by_dev.clear();
   });
 
   py::class_<EventHandle>(m, "EventHandle")
