@@ -24,7 +24,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     int* next_clean, int num_next_clean_int, int num_tokens,
     int num_max_dispatch_tokens_per_rank, int num_topk, int num_experts,
     int rank, int num_ranks, int num_warp_groups, int num_warps_per_group,
-    bool round_scale, int phases) {
+    bool round_scale, int phases, const uint64_t* ring_addrs, int num_ring_addrs) {
   auto const sm_id = static_cast<int>(blockIdx.x);
   auto const thread_id = static_cast<int>(threadIdx.x);
   auto const warp_id = thread_id / 32, lane_id = get_lane_id();
@@ -409,7 +409,7 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
               int num_tokens, int hidden, int num_max_dispatch_tokens_per_rank,
               int num_topk, int num_experts, int rank, int num_ranks,
               bool use_fp8, bool round_scale, bool use_ue8m0, void* workspace,
-              int num_device_sms, cudaStream_t stream, int phases) {
+              int num_device_sms, cudaStream_t stream, int phases, const uint64_t* ring_addrs, int num_ring_addrs) {
   constexpr int kNumMaxTopK = 9;
   int const num_warp_groups = ceil_div(num_experts, num_device_sms);
   int const num_warps_per_group = 32 / num_warp_groups;
@@ -444,7 +444,8 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
         atomic_counter_per_expert, atomic_finish_counter_per_expert,           \
         next_clean, num_next_clean_int, num_tokens,                            \
         num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,         \
-        num_ranks, num_warp_groups, num_warps_per_group, round_scale, phases); \
+        num_ranks, num_warp_groups, num_warps_per_group, round_scale, phases,  \
+        ring_addrs, num_ring_addrs);                                            \
   }                                                                            \
   break
 
@@ -462,7 +463,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
     int num_next_clean_int, int* atomic_clean_flag, int num_combined_tokens,
     int hidden, int num_topk, int num_max_dispatch_tokens_per_rank,
     int num_experts, int rank, int num_ranks, int num_warp_groups,
-    int num_warps_per_group, int phases, bool zero_copy) {
+    int num_warps_per_group, int phases, bool zero_copy, const uint64_t* ring_addrs, int num_ring_addrs) {
   auto const sm_id = static_cast<int>(blockIdx.x);
   auto const num_sms = static_cast<int>(gridDim.x);
   auto const thread_id = static_cast<int>(threadIdx.x);
@@ -832,7 +833,7 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
              int hidden, int num_max_dispatch_tokens_per_rank, int num_topk,
              int num_experts, int rank, int num_ranks, bool use_logfmt,
              void* workspace, int num_device_sms, cudaStream_t stream,
-             int phases, bool zero_copy) {
+             int phases, bool zero_copy, const uint64_t* ring_addrs, int num_ring_addrs) {
   constexpr int kNumMaxTopk = 9;
   int const num_warp_groups = ceil_div(num_experts, num_device_sms);
   int const num_warps_per_group = 32 / num_warp_groups;
@@ -863,7 +864,7 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
                   num_next_clean_int, atomic_clean_flag, num_combined_tokens,  \
                   hidden, num_topk, num_max_dispatch_tokens_per_rank,          \
                   num_experts, rank, num_ranks, num_warp_groups,               \
-                  num_warps_per_group, phases, zero_copy);                     \
+                  num_warps_per_group, phases, zero_copy, ring_addrs, num_ring_addrs);                     \
   }                                                                            \
   break
 

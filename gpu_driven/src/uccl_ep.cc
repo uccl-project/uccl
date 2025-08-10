@@ -87,10 +87,10 @@ class Buffer {
         auto addrs = collect_ring_addrs_for_device(device_index);
         num_ring_addrs = static_cast<int>(addrs.size());
         EP_HOST_ASSERT(num_ring_addrs > 0);
-        ring_addrs.resize(num_ring_addrs);
-        for (int i = 0; i < num_ring_addrs; ++i) {
-          ring_addrs[i] = addrs[i];
-        }
+        CUDA_CHECK(cudaMallocManaged(&d_ring_addrs, num_ring_addrs * sizeof(uint64_t)));
+        std::memcpy(d_ring_addrs, addrs.data(), num_ring_addrs * sizeof(uint64_t));
+        CUDA_CHECK(cudaDeviceSynchronize()); // ensure visibility before launch
+
         printf("Buffer: device %d, num_ring_addrs %d\n", device_index,
                num_ring_addrs);
       }
@@ -342,7 +342,8 @@ class Buffer {
           next_clean_meta.second, num_tokens, hidden,
           num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
           num_ranks, use_fp8, round_scale, use_ue8m0, workspace, num_device_sms,
-          launch_stream, phases);
+          launch_stream, phases,d_ring_addrs, num_ring_addrs
+        );  // NOTE(MaoZiming): adding UCCL ring buffers
     };
     launcher(return_recv_hook
                  ? LOW_LATENCY_SEND_PHASE
@@ -461,7 +462,7 @@ class Buffer {
           next_clean_meta.first, next_clean_meta.second, num_combined_tokens,
           hidden, num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
           num_ranks, use_logfmt, workspace, num_device_sms, launch_stream,
-          phases, zero_copy);
+          phases, zero_copy, d_ring_addrs, num_ring_addrs); // NOTE(MaoZiming): adding UCCL ring buffers
     };
     launcher(return_recv_hook
                  ? LOW_LATENCY_SEND_PHASE
@@ -627,7 +628,7 @@ class Buffer {
 
   // Ring buffers
   int num_ring_addrs{0};
-  std::vector<uint64_t> ring_addrs{};
+  uint64_t* d_ring_addrs{nullptr};
 };
 
 PYBIND11_MODULE(uccl_ep, m) {
