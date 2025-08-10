@@ -142,27 +142,6 @@ class CollectiveContext:
         self._establish_connections(all_metadata)
         self.initialized = True
 
-    def _parse_metadata(self, metadata: bytes) -> Tuple[str, int, int]:
-        """Parse endpoint metadata to extract IP, port, and GPU index."""
-        if len(metadata) == 10:
-            # IPv4: 4 bytes IP, 2 bytes port, 4 bytes GPU idx
-            ip_bytes = metadata[:4]
-            port_bytes = metadata[4:6]
-            gpu_idx_bytes = metadata[6:10]
-            ip = socket.inet_ntop(socket.AF_INET, ip_bytes)
-        elif len(metadata) == 22:
-            # IPv6: 16 bytes IP, 2 bytes port, 4 bytes GPU idx
-            ip_bytes = metadata[:16]
-            port_bytes = metadata[16:18]
-            gpu_idx_bytes = metadata[18:22]
-            ip = socket.inet_ntop(socket.AF_INET6, ip_bytes)
-        else:
-            raise ValueError(f"Unexpected metadata length: {len(metadata)}")
-
-        port = struct.unpack("!H", port_bytes)[0]
-        remote_gpu_idx = struct.unpack("i", gpu_idx_bytes)[0]
-        return ip, port, remote_gpu_idx
-
     def _establish_connections(self, all_metadata: list):
         """Establish full mesh connections with all peers using concurrent threads."""
         import concurrent.futures
@@ -173,7 +152,7 @@ class CollectiveContext:
         def connect_to_peer(peer_rank):
             """Connect to a specific peer for sending data TO that peer."""
             try:
-                ip, port, gpu_idx = self._parse_metadata(all_metadata[peer_rank])
+                ip, port, gpu_idx = p2p.Endpoint.parse_metadata(all_metadata[peer_rank])
                 ok, conn_id = self.ep.connect(ip, gpu_idx, remote_port=port)
                 if not ok:
                     raise RuntimeError(f"Failed to connect to rank {peer_rank}")
@@ -184,7 +163,7 @@ class CollectiveContext:
             except Exception as e:
                 connect_errors.append(f"Connect to rank {peer_rank}: {e}")
 
-        def accept_from_peer(expected_peer_rank):
+        def accept_from_peer():
             """Accept connection from a specific peer for receiving data FROM that peer."""
             try:
                 ok, r_ip, r_gpu, conn_id = self.ep.accept()
@@ -193,12 +172,12 @@ class CollectiveContext:
                 # Note: We can't always guarantee which peer connects first,
                 # so we'll store by the actual connecting peer's info
                 # For now, we'll use the connection ID and map it later if needed
-                self.recv_connections[expected_peer_rank] = conn_id
+                self.recv_connections[r_gpu] = conn_id
                 print(
-                    f"[Rank {self.rank}] Accepted connection from rank {expected_peer_rank} for receiving (conn_id={conn_id})"
+                    f"[Rank {self.rank}] Accepted connection from rank {r_gpu} for receiving (conn_id={conn_id})"
                 )
             except Exception as e:
-                accept_errors.append(f"Accept from rank {expected_peer_rank}: {e}")
+                accept_errors.append(f"Accept from rank {r_gpu}: {e}")
 
         # Create thread pools for concurrent operations
         with concurrent.futures.ThreadPoolExecutor(
@@ -215,7 +194,7 @@ class CollectiveContext:
             accept_futures = []
             for peer_rank in range(self.world_size):
                 if peer_rank != self.rank:
-                    future = executor.submit(accept_from_peer, peer_rank)
+                    future = executor.submit(accept_from_peer)
                     accept_futures.append(future)
 
             # Wait for all connections to complete

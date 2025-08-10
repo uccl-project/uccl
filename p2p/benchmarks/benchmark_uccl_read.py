@@ -16,16 +16,7 @@ except ImportError:
     raise
 
 
-def parse_metadata(meta: bytes):
-    if len(meta) == 10:  # IPv4
-        ip_b, port_b, gpu_b = meta[:4], meta[4:6], meta[6:10]
-        ip = socket.inet_ntop(socket.AF_INET, ip_b)
-    elif len(meta) == 22:  # IPv6
-        ip_b, port_b, gpu_b = meta[:16], meta[16:18], meta[18:22]
-        ip = socket.inet_ntop(socket.AF_INET6, ip_b)
-    else:
-        raise ValueError(f"Unexpected metadata length {len(meta)}")
-    return ip, struct.unpack("!H", port_b)[0], struct.unpack("i", gpu_b)[0]
+# parse_metadata is now provided by the C++ layer via p2p.Endpoint.parse_metadata()
 
 
 def _make_buffer(n_bytes: int, device: str, gpu: int):
@@ -65,7 +56,7 @@ def _run_server_read(args, ep, remote_metadata):
 
 def _run_client_recv(args, ep, remote_metadata):
     peer = 1
-    ip, port, r_gpu = parse_metadata(remote_metadata)
+    ip, port, r_gpu = p2p.Endpoint.parse_metadata(remote_metadata)
     ok, conn_id = ep.connect(ip, r_gpu, remote_port=port)
     assert ok
     print(f"[Client] Connected to {ip}:{port} id={conn_id}")

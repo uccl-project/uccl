@@ -14,6 +14,7 @@
 #include <sstream>
 #include <thread>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 int const kMaxNumGPUs = 8;
@@ -70,6 +71,9 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
 
+  // Initialize UDS socket for local connections
+  init_uds_socket();
+
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
 
@@ -91,6 +95,10 @@ Endpoint::~Endpoint() {
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
     for (auto& [conn_id, conn] : conn_id_to_conn_) {
+      // Close UDS socket if it exists
+      if (conn->uds_sockfd_ >= 0) {
+        close(conn->uds_sockfd_);
+      }
       delete conn;
     }
   }
@@ -106,6 +114,9 @@ Endpoint::~Endpoint() {
     for (auto s : streams_)
       if (s) GPU_RT_CHECK(gpuStreamDestroy(s));
   }
+
+  // Cleanup UDS socket
+  cleanup_uds_socket();
 
   std::cout << "Engine destroyed" << std::endl;
 }
@@ -727,7 +738,11 @@ void Endpoint::send_proxy_thread_func() {
 
   while (!stop_.load(std::memory_order_acquire)) {
     if (jring_sc_dequeue_bulk(send_task_ring_, &task, 1, nullptr) == 1) {
-      send(task.conn_id, task.mr_id, task.data, task.size, false);
+      if (task.type == TaskType::SEND_IPC) {
+        send_ipc(task.conn_id, task.data, task.size, false);
+      } else {
+        send(task.conn_id, task.mr_id, task.data, task.size, false);
+      }
       task.self_ptr->done.store(true, std::memory_order_release);
     }
 
@@ -745,7 +760,11 @@ void Endpoint::recv_proxy_thread_func() {
 
   while (!stop_.load(std::memory_order_acquire)) {
     if (jring_sc_dequeue_bulk(recv_task_ring_, &task, 1, nullptr) == 1) {
-      recv(task.conn_id, task.mr_id, task.data, task.size, false);
+      if (task.type == TaskType::RECV_IPC) {
+        recv_ipc(task.conn_id, task.data, task.size, false);
+      } else {
+        recv(task.conn_id, task.mr_id, task.data, task.size, false);
+      }
       task.self_ptr->done.store(true, std::memory_order_release);
     }
   }
@@ -881,6 +900,46 @@ std::vector<uint8_t> Endpoint::get_endpoint_metadata() {
   return metadata;
 }
 
+std::tuple<std::string, uint16_t, int> Endpoint::parse_metadata(
+    std::vector<uint8_t> const& metadata) {
+  if (metadata.size() == 10) {
+    // IPv4: 4 bytes IP, 2 bytes port, 4 bytes GPU idx
+    char ip_str[INET_ADDRSTRLEN];
+    if (inet_ntop(AF_INET, metadata.data(), ip_str, sizeof(ip_str)) ==
+        nullptr) {
+      throw std::runtime_error("Failed to parse IPv4 address from metadata");
+    }
+
+    uint16_t net_port;
+    std::memcpy(&net_port, metadata.data() + 4, 2);
+    uint16_t port = ntohs(net_port);
+
+    int gpu_idx;
+    std::memcpy(&gpu_idx, metadata.data() + 6, 4);
+
+    return std::make_tuple(std::string(ip_str), port, gpu_idx);
+  } else if (metadata.size() == 22) {
+    // IPv6: 16 bytes IP, 2 bytes port, 4 bytes GPU idx
+    char ip_str[INET6_ADDRSTRLEN];
+    if (inet_ntop(AF_INET6, metadata.data(), ip_str, sizeof(ip_str)) ==
+        nullptr) {
+      throw std::runtime_error("Failed to parse IPv6 address from metadata");
+    }
+
+    uint16_t net_port;
+    std::memcpy(&net_port, metadata.data() + 16, 2);
+    uint16_t port = ntohs(net_port);
+
+    int gpu_idx;
+    std::memcpy(&gpu_idx, metadata.data() + 18, 4);
+
+    return std::make_tuple(std::string(ip_str), port, gpu_idx);
+  } else {
+    throw std::runtime_error("Unexpected metadata length: " +
+                             std::to_string(metadata.size()));
+  }
+}
+
 #ifdef USE_REDIS
 bool Endpoint::publish_redis(std::string const& redis_uri,
                              std::string const& key, PeerInfo const& info) {
@@ -969,4 +1028,397 @@ bool Endpoint::collect_peers(std::string const& discovery_uri,
               << discovery_uri << "\n";
     return false;
   }
+}
+
+std::string Endpoint::get_uds_socket_path(int gpu_idx) const {
+  return "/tmp/uccl_gpu_" + std::to_string(gpu_idx) + ".sock";
+}
+
+void Endpoint::init_uds_socket() {
+  // Create UDS socket path based on local GPU index
+  uds_socket_path_ = get_uds_socket_path(local_gpu_idx_);
+
+  // Remove existing socket file if it exists
+  unlink(uds_socket_path_.c_str());
+
+  // Create socket
+  uds_listen_fd_ = socket(AF_UNIX, SOCK_STREAM, 0);
+  if (uds_listen_fd_ < 0) {
+    std::cerr << "Failed to create UDS socket: " << strerror(errno)
+              << std::endl;
+    return;
+  }
+
+  // Set up socket address
+  struct sockaddr_un addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sun_family = AF_UNIX;
+  strncpy(addr.sun_path, uds_socket_path_.c_str(), sizeof(addr.sun_path) - 1);
+
+  // Bind socket
+  if (bind(uds_listen_fd_, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+    std::cerr << "Failed to bind UDS socket to " << uds_socket_path_ << ": "
+              << strerror(errno) << std::endl;
+    close(uds_listen_fd_);
+    uds_listen_fd_ = -1;
+    return;
+  }
+
+  // Start listening
+  if (listen(uds_listen_fd_, 5) < 0) {
+    std::cerr << "Failed to listen on UDS socket: " << strerror(errno)
+              << std::endl;
+    close(uds_listen_fd_);
+    uds_listen_fd_ = -1;
+    unlink(uds_socket_path_.c_str());
+    return;
+  }
+
+  std::cout << "UDS socket initialized at " << uds_socket_path_ << std::endl;
+}
+
+void Endpoint::cleanup_uds_socket() {
+  if (uds_listen_fd_ >= 0) {
+    close(uds_listen_fd_);
+    uds_listen_fd_ = -1;
+  }
+
+  if (!uds_socket_path_.empty()) {
+    unlink(uds_socket_path_.c_str());
+    uds_socket_path_.clear();
+  }
+}
+
+bool Endpoint::connect_local(int remote_gpu_idx, uint64_t& conn_id) {
+  py::gil_scoped_release release;
+
+  std::string remote_socket_path = get_uds_socket_path(remote_gpu_idx);
+
+  // Create socket for connection
+  int sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
+  if (sockfd < 0) {
+    std::cerr << "Failed to create UDS socket for connection: "
+              << strerror(errno) << std::endl;
+    return false;
+  }
+
+  // Set up socket address
+  struct sockaddr_un addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sun_family = AF_UNIX;
+  strncpy(addr.sun_path, remote_socket_path.c_str(), sizeof(addr.sun_path) - 1);
+
+  // Connect to remote socket
+  if (::connect(sockfd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+    std::cerr << "Failed to connect to UDS socket " << remote_socket_path
+              << ": " << strerror(errno) << std::endl;
+    close(sockfd);
+    return false;
+  }
+
+  // Send our GPU index to the remote endpoint
+  if (::send(sockfd, static_cast<void const*>(&local_gpu_idx_),
+             sizeof(local_gpu_idx_), 0) < 0) {
+    std::cerr << "Failed to send local GPU index: " << strerror(errno)
+              << std::endl;
+    close(sockfd);
+    return false;
+  }
+
+  // Create a new connection ID for this local connection
+  conn_id = next_conn_id_.fetch_add(1);
+
+  // Create a special connection entry for local UDS connection with persistent
+  // socket
+  {
+    std::unique_lock<std::shared_mutex> lock(conn_mu_);
+    uccl::ConnID dummy_conn_id{nullptr, 0, 0, 0};
+    conn_id_to_conn_[conn_id] =
+        new Conn{conn_id, dummy_conn_id, "localhost", remote_gpu_idx, sockfd};
+  }
+
+  return true;
+}
+
+bool Endpoint::accept_local(int& remote_gpu_idx, uint64_t& conn_id) {
+  py::gil_scoped_release release;
+
+  if (uds_listen_fd_ < 0) {
+    std::cerr << "UDS socket not initialized" << std::endl;
+    return false;
+  }
+
+  // Accept incoming connection
+  struct sockaddr_un client_addr;
+  socklen_t client_len = sizeof(client_addr);
+  int client_fd =
+      ::accept(uds_listen_fd_, (struct sockaddr*)&client_addr, &client_len);
+
+  if (client_fd < 0) {
+    std::cerr << "Failed to accept UDS connection: " << strerror(errno)
+              << std::endl;
+    return false;
+  }
+
+  // Receive remote GPU index
+  if (::recv(client_fd, static_cast<void*>(&remote_gpu_idx),
+             sizeof(remote_gpu_idx), 0) < 0) {
+    std::cerr << "Failed to receive remote GPU index: " << strerror(errno)
+              << std::endl;
+    close(client_fd);
+    return false;
+  }
+
+  // Create connection ID
+  conn_id = next_conn_id_.fetch_add(1);
+
+  // Store the connection with persistent socket
+  {
+    std::unique_lock<std::shared_mutex> lock(conn_mu_);
+    uccl::ConnID dummy_conn_id{nullptr, 0, 0, 0};
+    conn_id_to_conn_[conn_id] = new Conn{conn_id, dummy_conn_id, "localhost",
+                                         remote_gpu_idx, client_fd};
+  }
+
+  return true;
+}
+
+bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size,
+                        bool inside_python) {
+  auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
+
+  // Get connection info
+  Conn* conn;
+  {
+    std::shared_lock<std::shared_mutex> lock(conn_mu_);
+    auto it = conn_id_to_conn_.find(conn_id);
+    if (it == conn_id_to_conn_.end()) {
+      std::cerr << "Connection not found for conn_id: " << conn_id << std::endl;
+      return false;
+    }
+    conn = it->second;
+  }
+
+  // Check if we have a valid persistent UDS socket (faster than string
+  // comparison)
+  if (conn->uds_sockfd_ < 0) {
+    std::cerr
+        << "send_ipc only supports local connections with valid UDS socket"
+        << std::endl;
+    return false;
+  }
+
+  // Use the persistent UDS connection
+  int sockfd = conn->uds_sockfd_;
+
+  // Send transfer request to receiver to get their IPC handle
+  struct IpcTransferInfo {
+    gpuIpcMemHandle_t handle;
+    size_t size;
+    uint32_t operation;  // 0 = send_ipc request, 1 = recv_ipc response
+  } transfer_info;
+
+  transfer_info.size = size;
+  transfer_info.operation = 0;  // send operation request
+
+  if (::send(sockfd, static_cast<void const*>(&transfer_info),
+             sizeof(transfer_info), 0) < 0) {
+    std::cerr << "Failed to send IPC transfer request: " << strerror(errno)
+              << std::endl;
+    return false;
+  }
+
+  // Wait for receiver's IPC handle response
+  if (::recv(sockfd, static_cast<void*>(&transfer_info), sizeof(transfer_info),
+             0) < 0) {
+    std::cerr << "Failed to receive IPC handle from receiver: "
+              << strerror(errno) << std::endl;
+    return false;
+  }
+
+  if (transfer_info.operation != 1) {
+    std::cerr << "Invalid response from receiver" << std::endl;
+    return false;
+  }
+
+  // Now perform the actual memory copy using receiver's IPC handle
+  void* dst_ptr = nullptr;
+  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+  GPU_RT_CHECK(gpuIpcOpenMemHandle(&dst_ptr, transfer_info.handle,
+                                   gpuIpcMemLazyEnablePeerAccess));
+
+  // Perform the memory copy from our data to receiver's memory
+  gpuStream_t s = pick_stream();
+  if (local_gpu_idx_ == conn->remote_gpu_idx_) {
+    GPU_RT_CHECK(
+        gpuMemcpyAsync(dst_ptr, data, size, gpuMemcpyDeviceToDevice, s));
+  } else {
+    int can = 0;
+    GPU_RT_CHECK(
+        gpuDeviceCanAccessPeer(&can, local_gpu_idx_, conn->remote_gpu_idx_));
+    if (can) {
+      GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+      (void)gpuDeviceEnablePeerAccess(conn->remote_gpu_idx_, 0);
+      GPU_RT_CHECK(gpuMemcpyPeerAsync(dst_ptr, conn->remote_gpu_idx_, data,
+                                      local_gpu_idx_, size, s));
+    } else {
+      std::cerr << "Cannot access remote GPU " << conn->remote_gpu_idx_
+                << " from local GPU " << local_gpu_idx_ << std::endl;
+      GPU_RT_CHECK(gpuIpcCloseMemHandle(dst_ptr));
+      return false;
+    }
+  }
+
+  GPU_RT_CHECK(gpuStreamSynchronize(s));
+  GPU_RT_CHECK(gpuIpcCloseMemHandle(dst_ptr));
+
+  // Send completion notification to receiver
+  uint32_t completion = 1;
+  if (::send(sockfd, static_cast<void const*>(&completion), sizeof(completion),
+             0) < 0) {
+    std::cerr << "Failed to send completion notification: " << strerror(errno)
+              << std::endl;
+    return false;
+  }
+
+  return true;
+}
+
+bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size,
+                        bool inside_python) {
+  auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
+
+  // Get connection info
+  Conn* conn;
+  {
+    std::shared_lock<std::shared_mutex> lock(conn_mu_);
+    auto it = conn_id_to_conn_.find(conn_id);
+    if (it == conn_id_to_conn_.end()) {
+      std::cerr << "Connection not found for conn_id: " << conn_id << std::endl;
+      return false;
+    }
+    conn = it->second;
+  }
+
+  // Check if we have a valid persistent UDS socket (faster than string
+  // comparison)
+  if (conn->uds_sockfd_ < 0) {
+    std::cerr
+        << "recv_ipc only supports local connections with valid UDS socket"
+        << std::endl;
+    return false;
+  }
+
+  // Use the persistent UDS connection
+  int client_fd = conn->uds_sockfd_;
+
+  // Receive IPC transfer request
+  struct IpcTransferInfo {
+    gpuIpcMemHandle_t handle;
+    size_t size;
+    uint32_t operation;
+  } transfer_info;
+
+  if (::recv(client_fd, static_cast<void*>(&transfer_info),
+             sizeof(transfer_info), 0) < 0) {
+    std::cerr << "Failed to receive IPC transfer request: " << strerror(errno)
+              << std::endl;
+    return false;
+  }
+
+  // Validate the transfer request
+  if (transfer_info.operation != 0) {
+    std::cerr << "Invalid IPC operation received" << std::endl;
+    return false;
+  }
+
+  if (transfer_info.size != size) {
+    std::cerr << "Size mismatch: expected " << size << ", got "
+              << transfer_info.size << std::endl;
+    return false;
+  }
+
+  // Generate IPC memory handle for our receive buffer
+  gpuIpcMemHandle_t handle{};
+  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+  GPU_RT_CHECK(gpuIpcGetMemHandle(&handle, data));
+
+  // Send our IPC handle back to the sender
+  transfer_info.handle = handle;
+  transfer_info.operation = 1;  // response
+
+  if (::send(client_fd, static_cast<void const*>(&transfer_info),
+             sizeof(transfer_info), 0) < 0) {
+    std::cerr << "Failed to send IPC handle to sender: " << strerror(errno)
+              << std::endl;
+    return false;
+  }
+
+  // Wait for completion notification from sender
+  uint32_t completion = 0;
+  if (::recv(client_fd, static_cast<void*>(&completion), sizeof(completion),
+             0) < 0) {
+    std::cerr << "Failed to receive completion notification: "
+              << strerror(errno) << std::endl;
+    return false;
+  }
+
+  if (completion != 1) {
+    std::cerr << "Sender failed to complete IPC transfer" << std::endl;
+    return false;
+  }
+
+  return true;
+}
+
+bool Endpoint::send_ipc_async(uint64_t conn_id, void const* data, size_t size,
+                              uint64_t* transfer_id) {
+  py::gil_scoped_release release;
+
+  // Create a task for IPC send operation
+  Task* task = new Task{
+      .type = TaskType::SEND_IPC,
+      .data = const_cast<void*>(data),
+      .size = size,
+      .conn_id = conn_id,
+      .mr_id = 0,  // Not used for IPC
+      .done = false,
+      .self_ptr = nullptr,
+  };
+  task->self_ptr = task;
+
+  *transfer_id = reinterpret_cast<uint64_t>(task);
+
+  // For now, we'll use the existing async infrastructure but call our IPC
+  // function In a real implementation, you might want a separate IPC task ring
+  while (jring_mp_enqueue_bulk(send_task_ring_, task, 1, nullptr) != 1) {
+  }
+
+  return true;
+}
+
+bool Endpoint::recv_ipc_async(uint64_t conn_id, void* data, size_t size,
+                              uint64_t* transfer_id) {
+  py::gil_scoped_release release;
+
+  // Create a task for IPC receive operation
+  Task* task = new Task{
+      .type = TaskType::RECV_IPC,
+      .data = data,
+      .size = size,
+      .conn_id = conn_id,
+      .mr_id = 0,  // Not used for IPC
+      .done = false,
+      .self_ptr = nullptr,
+  };
+  task->self_ptr = task;
+
+  *transfer_id = reinterpret_cast<uint64_t>(task);
+
+  // For now, we'll use the existing async infrastructure but call our IPC
+  // function In a real implementation, you might want a separate IPC task ring
+  while (jring_mp_enqueue_bulk(recv_task_ring_, task, 1, nullptr) != 1) {
+  }
+
+  return true;
 }
