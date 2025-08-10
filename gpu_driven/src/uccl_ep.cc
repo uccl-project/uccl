@@ -468,7 +468,7 @@ class Buffer {
   pybind11::bytearray get_local_uccl_shmem_unique_id() const {
     EP_HOST_ASSERT(rdma_rank == 0 and
                    "Only RDMA rank 0 can get UCCL unique ID");
-    auto unique_id = uccl::internode_ll::get_unique_id();
+    auto unique_id = internode::get_unique_id();
     return {reinterpret_cast<char const*>(unique_id.data()), unique_id.size()};
   }
 

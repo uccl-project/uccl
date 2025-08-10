@@ -11,10 +11,9 @@ void* alloc(std::size_t size, std::size_t alignment);
 void finalize();
 void barrier();
 void free(void* ptr);
-}  // namespace internode
-
-// global (if callers expect it global)
 std::vector<uint8_t> get_unique_id();
+
+}  // namespace internode
 
 namespace intranode {
 template <int kNumRanks>
