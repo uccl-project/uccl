@@ -32,6 +32,13 @@ class CollectiveContext:
     High-level collective communication context that wraps the UCCL p2p engine.
 
     Provides NCCL-like send/recv interface with automatic connection management.
+
+    Features:
+    - Automatically detects local vs remote peers based on IP addresses
+    - Uses IPC (Inter-Process Communication) for local GPU-to-GPU transfers
+    - Uses RDMA for remote GPU-to-GPU transfers
+    - Memory registration is only required for remote connections
+    - Transparent API - applications don't need to know if peers are local or remote
     """
 
     def __init__(self, num_cpus: int = 4, local_gpu_idx: Optional[int] = None):
@@ -66,6 +73,9 @@ class CollectiveContext:
         self.send_connections = None  # array indexed by rank for sending TO that rank
         self.recv_connections = (
             None  # array indexed by rank for receiving FROM that rank
+        )
+        self.local_connections = (
+            None  # array indexed by rank - True if local, False if remote
         )
         self.memory_regions: Dict[int, int] = {}  # ptr -> mr_id
         self.initialized = False
@@ -124,6 +134,7 @@ class CollectiveContext:
         # Initialize connection arrays
         self.send_connections = [None] * self.world_size  # indexed by rank
         self.recv_connections = [None] * self.world_size  # indexed by rank
+        self.local_connections = [False] * self.world_size  # indexed by rank
 
         # Exchange metadata with all peers using torch.distributed
         all_metadata = [None] * self.world_size
@@ -146,38 +157,120 @@ class CollectiveContext:
         """Establish full mesh connections with all peers using concurrent threads."""
         import concurrent.futures
 
+        # First, determine which connections are local vs remote
+        local_ip, _, _ = p2p.Endpoint.parse_metadata(all_metadata[self.rank])
+
+        for peer_rank in range(self.world_size):
+            if peer_rank != self.rank:
+                peer_ip, _, _ = p2p.Endpoint.parse_metadata(all_metadata[peer_rank])
+                self.local_connections[peer_rank] = peer_ip == local_ip
+                connection_type = (
+                    "local" if self.local_connections[peer_rank] else "remote"
+                )
+                print(
+                    f"[Rank {self.rank}] Rank {peer_rank} is {connection_type} (IP: {peer_ip})"
+                )
+
         connect_errors = []
         accept_errors = []
 
         def connect_to_peer(peer_rank):
             """Connect to a specific peer for sending data TO that peer."""
             try:
-                ip, port, gpu_idx = p2p.Endpoint.parse_metadata(all_metadata[peer_rank])
-                ok, conn_id = self.ep.connect(ip, gpu_idx, remote_port=port)
-                if not ok:
-                    raise RuntimeError(f"Failed to connect to rank {peer_rank}")
-                self.send_connections[peer_rank] = conn_id
-                print(
-                    f"[Rank {self.rank}] Connected to rank {peer_rank} for sending (conn_id={conn_id})"
-                )
+                if self.local_connections[peer_rank]:
+                    # Use local IPC connection
+                    _, _, gpu_idx = p2p.Endpoint.parse_metadata(all_metadata[peer_rank])
+                    ok, conn_id = self.ep.connect_local(gpu_idx)
+                    if not ok:
+                        raise RuntimeError(
+                            f"Failed to connect locally to rank {peer_rank}"
+                        )
+                    self.send_connections[peer_rank] = conn_id
+                    print(
+                        f"[Rank {self.rank}] Connected locally to rank {peer_rank} for sending (conn_id={conn_id})"
+                    )
+                else:
+                    # Use remote RDMA connection
+                    ip, port, gpu_idx = p2p.Endpoint.parse_metadata(
+                        all_metadata[peer_rank]
+                    )
+                    ok, conn_id = self.ep.connect(ip, gpu_idx, remote_port=port)
+                    if not ok:
+                        raise RuntimeError(
+                            f"Failed to connect remotely to rank {peer_rank}"
+                        )
+                    self.send_connections[peer_rank] = conn_id
+                    print(
+                        f"[Rank {self.rank}] Connected remotely to rank {peer_rank} for sending (conn_id={conn_id})"
+                    )
             except Exception as e:
                 connect_errors.append(f"Connect to rank {peer_rank}: {e}")
 
         def accept_from_peer():
             """Accept connection from a specific peer for receiving data FROM that peer."""
             try:
-                ok, r_ip, r_gpu, conn_id = self.ep.accept()
-                if not ok:
-                    raise RuntimeError(f"Failed to accept connection")
-                # Note: We can't always guarantee which peer connects first,
-                # so we'll store by the actual connecting peer's info
-                # For now, we'll use the connection ID and map it later if needed
-                self.recv_connections[r_gpu] = conn_id
-                print(
-                    f"[Rank {self.rank}] Accepted connection from rank {r_gpu} for receiving (conn_id={conn_id})"
+                # We need to accept both local and remote connections
+                # For local connections, we can only accept local ones
+                # For remote connections, we accept regular ones
+                # We'll need to track which type we're expecting based on remaining connections
+
+                # Count how many local vs remote connections we still need to accept
+                remaining_local = sum(
+                    1
+                    for rank in range(self.world_size)
+                    if rank != self.rank
+                    and self.local_connections[rank]
+                    and self.recv_connections[rank] is None
                 )
+                remaining_remote = sum(
+                    1
+                    for rank in range(self.world_size)
+                    if rank != self.rank
+                    and not self.local_connections[rank]
+                    and self.recv_connections[rank] is None
+                )
+
+                if remaining_local > 0:
+                    # Try to accept a local connection first
+                    ok, r_gpu, conn_id = self.ep.accept_local()
+                    if ok:
+                        # Find the rank that corresponds to this GPU index
+                        for rank in range(self.world_size):
+                            if rank != self.rank and self.local_connections[rank]:
+                                _, _, gpu_idx = p2p.Endpoint.parse_metadata(
+                                    all_metadata[rank]
+                                )
+                                if gpu_idx == r_gpu:
+                                    self.recv_connections[rank] = conn_id
+                                    print(
+                                        f"[Rank {self.rank}] Accepted local connection from rank {rank} (GPU {r_gpu}) for receiving (conn_id={conn_id})"
+                                    )
+                                    return
+                        raise RuntimeError(f"Could not map local GPU {r_gpu} to a rank")
+
+                if remaining_remote > 0:
+                    # Accept a remote connection
+                    ok, r_ip, r_gpu, conn_id = self.ep.accept()
+                    if ok:
+                        # Find the rank that corresponds to this IP/GPU combination
+                        for rank in range(self.world_size):
+                            if rank != self.rank and not self.local_connections[rank]:
+                                ip, _, gpu_idx = p2p.Endpoint.parse_metadata(
+                                    all_metadata[rank]
+                                )
+                                if ip == r_ip and gpu_idx == r_gpu:
+                                    self.recv_connections[rank] = conn_id
+                                    print(
+                                        f"[Rank {self.rank}] Accepted remote connection from rank {rank} (IP {r_ip}, GPU {r_gpu}) for receiving (conn_id={conn_id})"
+                                    )
+                                    return
+                        raise RuntimeError(
+                            f"Could not map remote IP {r_ip}, GPU {r_gpu} to a rank"
+                        )
+
+                raise RuntimeError("No connections to accept or accept failed")
             except Exception as e:
-                accept_errors.append(f"Accept from rank {r_gpu}: {e}")
+                accept_errors.append(f"Accept connection: {e}")
 
         # Create thread pools for concurrent operations
         with concurrent.futures.ThreadPoolExecutor(
@@ -206,8 +299,11 @@ class CollectiveContext:
         if accept_errors:
             raise RuntimeError(f"Accept errors: {'; '.join(accept_errors)}")
 
+        # Count local vs remote connections
+        local_count = sum(1 for is_local in self.local_connections if is_local)
+        remote_count = self.world_size - 1 - local_count
         print(
-            f"[Rank {self.rank}] Full mesh established: {len(self.send_connections) - 1} send connections, {len(self.recv_connections) - 1} recv connections"
+            f"[Rank {self.rank}] Full mesh established: {local_count} local connections, {remote_count} remote connections"
         )
 
     def _get_buffer_info(self, tensor: torch.Tensor) -> Tuple[int, int]:
@@ -232,6 +328,9 @@ class CollectiveContext:
     def register_tensor(self, tensor: torch.Tensor):
         """
         Register a tensor for efficient memory access.
+
+        Note: Registration is only required for tensors used with remote (RDMA) connections.
+        Local IPC connections do not require memory registration.
 
         Args:
             tensor: Tensor to register
@@ -260,16 +359,24 @@ class CollectiveContext:
             raise ValueError(f"No send connection to rank {dst}")
 
         ptr, size = self._get_buffer_info(tensor)
-        if ptr not in self.memory_regions:
-            raise RuntimeError(
-                f"Tensor memory not registered. Call register_tensor() first."
-            )
-        mr_id = self.memory_regions[ptr]
         conn_id = self.send_connections[dst]
 
-        ok = self.ep.send(conn_id, mr_id, ptr, size)
-        if not ok:
-            raise RuntimeError(f"Failed to initiate send to rank {dst}")
+        if self.local_connections[dst]:
+            # Use IPC for local connection (no memory registration needed)
+            ok = self.ep.send_ipc(conn_id, ptr, size)
+            if not ok:
+                raise RuntimeError(f"Failed to initiate IPC send to rank {dst}")
+        else:
+            # Use RDMA for remote connection (requires memory registration)
+            if ptr not in self.memory_regions:
+                raise RuntimeError(
+                    f"Tensor memory not registered for remote communication with rank {dst}. "
+                    f"Call register_tensor() first for tensors used with remote ranks."
+                )
+            mr_id = self.memory_regions[ptr]
+            ok = self.ep.send(conn_id, mr_id, ptr, size)
+            if not ok:
+                raise RuntimeError(f"Failed to initiate RDMA send to rank {dst}")
 
     def recv(self, tensor: torch.Tensor, src: int):
         """
@@ -289,16 +396,24 @@ class CollectiveContext:
             raise ValueError(f"No recv connection from rank {src}")
 
         ptr, size = self._get_buffer_info(tensor)
-        if ptr not in self.memory_regions:
-            raise RuntimeError(
-                f"Tensor memory not registered. Call register_tensor() first."
-            )
-        mr_id = self.memory_regions[ptr]
         conn_id = self.recv_connections[src]
 
-        ok = self.ep.recv(conn_id, mr_id, ptr, size)
-        if not ok:
-            raise RuntimeError(f"Failed to initiate recv from rank {src}")
+        if self.local_connections[src]:
+            # Use IPC for local connection (no memory registration needed)
+            ok = self.ep.recv_ipc(conn_id, ptr, size)
+            if not ok:
+                raise RuntimeError(f"Failed to initiate IPC recv from rank {src}")
+        else:
+            # Use RDMA for remote connection (requires memory registration)
+            if ptr not in self.memory_regions:
+                raise RuntimeError(
+                    f"Tensor memory not registered for remote communication with rank {src}. "
+                    f"Call register_tensor() first for tensors used with remote ranks."
+                )
+            mr_id = self.memory_regions[ptr]
+            ok = self.ep.recv(conn_id, mr_id, ptr, size)
+            if not ok:
+                raise RuntimeError(f"Failed to initiate RDMA recv from rank {src}")
 
     def isend(self, tensor: torch.Tensor, dst: int) -> int:
         """
@@ -321,17 +436,26 @@ class CollectiveContext:
             raise ValueError(f"No send connection to rank {dst}")
 
         ptr, size = self._get_buffer_info(tensor)
-        if ptr not in self.memory_regions:
-            raise RuntimeError(
-                f"Tensor memory not registered. Call register_tensor() first."
-            )
-        mr_id = self.memory_regions[ptr]
         conn_id = self.send_connections[dst]
 
-        ok, transfer_id = self.ep.send_async(conn_id, mr_id, ptr, size)
-        if not ok:
-            raise RuntimeError(f"Failed to initiate async send to rank {dst}")
-        return transfer_id
+        if self.local_connections[dst]:
+            # Use IPC async for local connection (no memory registration needed)
+            ok, transfer_id = self.ep.send_ipc_async(conn_id, ptr, size)
+            if not ok:
+                raise RuntimeError(f"Failed to initiate async IPC send to rank {dst}")
+            return transfer_id
+        else:
+            # Use RDMA async for remote connection (requires memory registration)
+            if ptr not in self.memory_regions:
+                raise RuntimeError(
+                    f"Tensor memory not registered for remote communication with rank {dst}. "
+                    f"Call register_tensor() first for tensors used with remote ranks."
+                )
+            mr_id = self.memory_regions[ptr]
+            ok, transfer_id = self.ep.send_async(conn_id, mr_id, ptr, size)
+            if not ok:
+                raise RuntimeError(f"Failed to initiate async RDMA send to rank {dst}")
+            return transfer_id
 
     def irecv(self, tensor: torch.Tensor, src: int) -> int:
         """
@@ -354,17 +478,28 @@ class CollectiveContext:
             raise ValueError(f"No recv connection from rank {src}")
 
         ptr, size = self._get_buffer_info(tensor)
-        if ptr not in self.memory_regions:
-            raise RuntimeError(
-                f"Tensor memory not registered. Call register_tensor() first."
-            )
-        mr_id = self.memory_regions[ptr]
         conn_id = self.recv_connections[src]
 
-        ok, transfer_id = self.ep.recv_async(conn_id, mr_id, ptr, size)
-        if not ok:
-            raise RuntimeError(f"Failed to initiate async recv from rank {src}")
-        return transfer_id
+        if self.local_connections[src]:
+            # Use IPC async for local connection (no memory registration needed)
+            ok, transfer_id = self.ep.recv_ipc_async(conn_id, ptr, size)
+            if not ok:
+                raise RuntimeError(f"Failed to initiate async IPC recv from rank {src}")
+            return transfer_id
+        else:
+            # Use RDMA async for remote connection (requires memory registration)
+            if ptr not in self.memory_regions:
+                raise RuntimeError(
+                    f"Tensor memory not registered for remote communication with rank {src}. "
+                    f"Call register_tensor() first for tensors used with remote ranks."
+                )
+            mr_id = self.memory_regions[ptr]
+            ok, transfer_id = self.ep.recv_async(conn_id, mr_id, ptr, size)
+            if not ok:
+                raise RuntimeError(
+                    f"Failed to initiate async RDMA recv from rank {src}"
+                )
+            return transfer_id
 
     def wait(self, transfer_id: int):
         """
@@ -410,6 +545,7 @@ class CollectiveContext:
         # when it goes out of scope, but we can add explicit cleanup here if needed
         self.send_connections = None
         self.recv_connections = None
+        self.local_connections = None
         self.memory_regions.clear()
         self.ep = None
         self.initialized = False

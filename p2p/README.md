@@ -121,6 +121,7 @@ Notes:
 * To benchmark dual direction transfer, you can add `--dual` with the same commands as above. 
 * To benchmark one-sided READ transfer, you can run `benchmark_uccl_read.py`.
 * To benchmark UCCL copy-only collectives, you can run `benchmark_uccl_collective.py`.
+    * To benchmark UCCL collectives over CUDA/HIP IPC, `torchrun --nnodes=1 --nproc_per_node=2 benchmark_uccl_collective.py`
 * To benchmark UCCL intra-node transfer via CUDA/HIP IPC, you can run the above on the same node with `--ipc --local-gpu-idx=0/1`.
 
 ### Running NCCL
