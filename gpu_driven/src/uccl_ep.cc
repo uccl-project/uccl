@@ -45,7 +45,7 @@ class Buffer {
         low_latency_mode(low_latency_mode),
         explicitly_destroy(explicitly_destroy),
         comm_stream(at::cuda::getStreamFromPool(/*isHighPriority=*/true)) {
-    // TODO(MaoZiming): Initialize UCCL proxy processes. 
+    // TODO(MaoZiming): Initialize UCCL proxy processes.
     {
       std::lock_guard<std::mutex> lk(g_proxies_mu);
       CUDA_CHECK(cudaGetDevice(&device_index));
@@ -506,7 +506,7 @@ class Buffer {
     }
 
     // Sync NVSHMEM handles and allocate memory
-    // NOTE(MaoZiming): drop nvshmem. we directly allocate rdma_buffer_ptr. 
+    // NOTE(MaoZiming): drop nvshmem. we directly allocate rdma_buffer_ptr.
     if (num_rdma_bytes > 0) {
 #if false
       // Initialize NVSHMEM
