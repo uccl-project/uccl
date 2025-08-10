@@ -74,7 +74,7 @@ MASTER_ADDR=${HOSTS[0]}
 # 主节点端口
 MASTER_PORT=29500
 # Python脚本路径
-SCRIPT_PATH="customized_resnet_ddp_layer_reduce_async.py"
+SCRIPT_PATH="resnet_ddp_layer_reduce_async.py"
 # torchrun完整路径
 TORCHRUN_PATH="python /opt/conda/bin/torchrun"
 
