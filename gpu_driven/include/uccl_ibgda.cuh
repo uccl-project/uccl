@@ -21,7 +21,14 @@ template <bool kAlwaysDoPostSend = false>
 __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     uint64_t req_rptr, uint64_t req_lptr, size_t bytes, int dst_pe, int qp_id,
     int lane_id, int message_idx) {
-  // no-op
+  unsigned long long rptr_val = static_cast<unsigned long long>(req_rptr);
+  unsigned long long lptr_val = static_cast<unsigned long long>(req_lptr);
+  unsigned long long bytes_val = static_cast<unsigned long long>(bytes);
+
+  printf(
+      "[ibgda_put_nbi_warp] req_rptr: %llu, req_lptr: %llu, bytes: %llu, "
+      "dst_pe: %d, qp_id: %d, lane_id: %d, message_idx: %d\n",
+      rptr_val, lptr_val, bytes_val, dst_pe, qp_id, lane_id, message_idx);
 }
 
 // NOTE(MaoZiming): Remove this. We don't need nvshmem and igbda.
@@ -46,6 +53,13 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
   (void)rptr;
   (void)value;
   (void)is_local_copy;
+  printf(
+      "[ibgda_amo_nonfetch_add] rptr: %p, value: %d, pe: %d, qp_id: %d, "
+      "is_local_copy: %d\n",
+      rptr, value, pe, qp_id);
+  // TODO(MaoZiming): Implement it with a remote atomic operation.
+  atomicAdd(reinterpret_cast<int*>(rptr), value);
+  __threadfence_system();
 }
 
 #ifdef false

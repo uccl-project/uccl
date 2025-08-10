@@ -84,15 +84,21 @@ class Buffer {
       }
 
       {
-        auto addrs = collect_ring_addrs_for_device(device_index);
-        num_ring_addrs = static_cast<int>(addrs.size());
+        CUDA_CHECK(cudaSetDevice(device_index));
+        auto host_addrs = collect_ring_addrs_for_device(device_index);
+        num_ring_addrs = static_cast<int>(host_addrs.size());
         EP_HOST_ASSERT(num_ring_addrs > 0);
-        CUDA_CHECK(cudaMallocManaged(&d_ring_addrs, num_ring_addrs * sizeof(uint64_t)));
-        std::memcpy(d_ring_addrs, addrs.data(), num_ring_addrs * sizeof(uint64_t));
-        CUDA_CHECK(cudaDeviceSynchronize()); // ensure visibility before launch
 
-        printf("Buffer: device %d, num_ring_addrs %d\n", device_index,
-               num_ring_addrs);
+        CUDA_CHECK(cudaMallocManaged(&d_ring_addrs,
+                                     num_ring_addrs * sizeof(uint64_t)));
+
+        for (int i = 0; i < num_ring_addrs; ++i) {
+          void* host_ptr = reinterpret_cast<void*>(host_addrs[i]);
+          void* dev_ptr = nullptr;
+          CUDA_CHECK(cudaHostGetDevicePointer(&dev_ptr, host_ptr, 0));
+          d_ring_addrs[i] = reinterpret_cast<uint64_t>(dev_ptr);
+        }
+        CUDA_CHECK(cudaDeviceSynchronize());
       }
     }
 
@@ -179,11 +185,36 @@ class Buffer {
         rank, num_ranks, num_nvl_bytes, num_rdma_bytes, low_latency_mode);
   }
 
+  ~Buffer() noexcept(false) {
+    if (not explicitly_destroy) {
+      destroy();
+    } else if (not destroyed) {
+      printf(
+          "WARNING: destroy() was not called before DeepEP buffer destruction, "
+          "which can leak resources.\n");
+      fflush(stdout);
+    }
+  }
+
   void destroy() {
     EP_HOST_ASSERT(not destroyed);
 
+    auto cur = at::cuda::getCurrentCUDAStream();
+    auto q_cur = cudaStreamQuery(cur);
+    fprintf(stderr, "current_stream: %s\n",
+            q_cur == cudaSuccess
+                ? "idle"
+                : (q_cur == cudaErrorNotReady ? "busy"
+                                              : cudaGetErrorString(q_cur)));
+
+    printf("Before cudaStreamSynchronize comm_stream\n");
+    CUDA_CHECK(cudaStreamSynchronize(comm_stream));
+    printf("After cudaStreamSynchronize comm_stream\n");
+
     // Synchronize
+    printf("Before cudaDeviceSynchronize\n");
     CUDA_CHECK(cudaDeviceSynchronize());
+    printf("After cudaDeviceSynchronize\n");
 
     if (num_nvl_bytes > 0) {
       // Barrier
@@ -342,8 +373,8 @@ class Buffer {
           next_clean_meta.second, num_tokens, hidden,
           num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
           num_ranks, use_fp8, round_scale, use_ue8m0, workspace, num_device_sms,
-          launch_stream, phases,d_ring_addrs, num_ring_addrs
-        );  // NOTE(MaoZiming): adding UCCL ring buffers
+          launch_stream, phases, d_ring_addrs,
+          num_ring_addrs);  // NOTE(MaoZiming): adding UCCL ring buffers
     };
     launcher(return_recv_hook
                  ? LOW_LATENCY_SEND_PHASE
@@ -462,7 +493,8 @@ class Buffer {
           next_clean_meta.first, next_clean_meta.second, num_combined_tokens,
           hidden, num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
           num_ranks, use_logfmt, workspace, num_device_sms, launch_stream,
-          phases, zero_copy, d_ring_addrs, num_ring_addrs); // NOTE(MaoZiming): adding UCCL ring buffers
+          phases, zero_copy, d_ring_addrs,
+          num_ring_addrs);  // NOTE(MaoZiming): adding UCCL ring buffers
     };
     launcher(return_recv_hook
                  ? LOW_LATENCY_SEND_PHASE
@@ -574,6 +606,9 @@ class Buffer {
 #else
       rdma_buffer_ptr =
           internode::alloc(num_rdma_bytes, NUM_BUFFER_ALIGNMENT_BYTES);
+      CUDA_CHECK(
+          cudaMemsetAsync(rdma_buffer_ptr, 0, num_rdma_bytes, comm_stream));
+      CUDA_CHECK(cudaStreamSynchronize(comm_stream));
 #endif
     }
     // Ready to use

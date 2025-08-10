@@ -127,6 +127,9 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
             )
             print("[simple-test] ✓ All tests passed!", flush=True)
 
+        print("[simple-test] Synchronizing streams...", flush=True)
+        torch.cuda.current_stream().synchronize()
+        print("[simple-test] ✓ Streams synchronized", flush=True)
         try:
             buffer.destroy()
         except Exception:
@@ -152,7 +155,11 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
 
     except Exception as e:
         if rank == 0:
-            print(f"[simple-test] ✗ Error: {e}", flush=True)
+            import traceback
+
+            print(f"[simple-test] ✗ Error: {repr(e)}", flush=True)
+            traceback.print_exc()
+
         raise
 
 
