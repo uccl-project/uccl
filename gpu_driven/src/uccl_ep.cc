@@ -199,22 +199,8 @@ class Buffer {
   void destroy() {
     EP_HOST_ASSERT(not destroyed);
 
-    auto cur = at::cuda::getCurrentCUDAStream();
-    auto q_cur = cudaStreamQuery(cur);
-    fprintf(stderr, "current_stream: %s\n",
-            q_cur == cudaSuccess
-                ? "idle"
-                : (q_cur == cudaErrorNotReady ? "busy"
-                                              : cudaGetErrorString(q_cur)));
-
-    printf("Before cudaStreamSynchronize comm_stream\n");
-    CUDA_CHECK(cudaStreamSynchronize(comm_stream));
-    printf("After cudaStreamSynchronize comm_stream\n");
-
     // Synchronize
-    printf("Before cudaDeviceSynchronize\n");
     CUDA_CHECK(cudaDeviceSynchronize());
-    printf("After cudaDeviceSynchronize\n");
 
     if (num_nvl_bytes > 0) {
       // Barrier

@@ -127,9 +127,6 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
             )
             print("[simple-test] ✓ All tests passed!", flush=True)
 
-        print("[simple-test] Synchronizing streams...", flush=True)
-        torch.cuda.current_stream().synchronize()
-        print("[simple-test] ✓ Streams synchronized", flush=True)
         try:
             buffer.destroy()
         except Exception:
