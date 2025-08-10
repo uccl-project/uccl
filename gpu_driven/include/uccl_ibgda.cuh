@@ -16,45 +16,42 @@
 
 namespace uccl {
 
-// TODO(MaoZiming): Fix.
-struct nvshmemi_ibgda_device_state_t {
-  int _unused{0};
-  uint32_t num_rc_per_pe{0};
-};
-// TODO(MaoZiming): Fix.
-__device__ nvshmemi_ibgda_device_state_t nvshmemi_ibgda_device_state_d;
-
-// TODO(MaoZiming): Fix.
+// TODO(MaoZiming): Fix. This should go through the proxy.
 template <bool kAlwaysDoPostSend = false>
 __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     uint64_t req_rptr, uint64_t req_lptr, size_t bytes, int dst_pe, int qp_id,
     int lane_id, int message_idx) {
   // no-op
-
-  // TODO(MaoZiming): This should go through the proxy.
 }
 
-// TODO(MaoZiming): Fix.
+// NOTE(MaoZiming): Remove this. We don't need nvshmem and igbda.
+#ifdef false
 __device__ __forceinline__ nvshmemi_ibgda_device_state_t* ibgda_get_state() {
   return &nvshmemi_ibgda_device_state_d;
 }
 
-// TODO(MaoZiming): Fix.
+__device__ nvshmemi_ibgda_device_state_t nvshmemi_ibgda_device_state_d;
+
+struct nvshmemi_ibgda_device_state_t {
+  int _unused{0};
+  uint32_t num_rc_per_pe{0};
+};
+#endif
+
+// TODO(MaoZiming): Fix. Reverse proxy (remote -> local) acknowldgement.
 __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     void* rptr, int const& value, int pe, int qp_id,
     bool is_local_copy = false) {
   (void)rptr;
   (void)value;
   (void)is_local_copy;
-
-  // TODO(MaoZiming): Reverse proxy (remote -> local) acknowldgement.
 }
 
-// TODO(MaoZiming): Fix.
+#ifdef false
 __device__ __forceinline__ uint64_t nvshmemi_get_p2p_ptr(uint64_t const& ptr,
                                                          int const& rank,
                                                          int const& dst_rank) {
   return ptr;
 }
-
+#endif
 }  // namespace uccl

@@ -153,6 +153,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                 num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
             rank * num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
             slot_idx * num_bytes_per_msg;
+#ifdef false
         auto const dst_p2p_ptr =
             uccl::nvshmemi_get_p2p_ptr(dst_ptr, rank, dst_rank);
         if (dst_p2p_ptr == 0) {
@@ -166,7 +167,12 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           UNROLLED_WARP_COPY(8, lane_id, num_int4_per_msg, dst_int4_ptr,
                              src_int4_ptr, ld_nc_global, st_na_global);
         }
-
+#else
+        // NOTE(MaoZiming): Without nvshmem, we can only use network send.
+        uccl::nvshmemi_ibgda_put_nbi_warp(dst_ptr, src_ptr, num_bytes_per_msg,
+                                          dst_rank, dst_expert_local_idx,
+                                          lane_id, slot_idx);
+#endif
         // Increase counter after finishing
         __syncwarp();
         lane_id == 0 ? atomic_add_release_global(
@@ -175,8 +181,10 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       }
     }
   } else if (warp_id == num_warps - 1) {
-    // EP_DEVICE_ASSERT(num_sms > 1); // TODO(MaoZiming)
+    // EP_DEVICE_ASSERT(num_sms > 1);
+    // NOTE(MaoZiming): These checks are ibgda specific.
     if (sm_id == 0) {
+#ifdef false
       // The first SM is also responsible for checking QPs
       if (num_ranks > 1 && gridDim.x > 1) {
         // The first SM is also responsible for checking QPs (multi-rank,
@@ -185,6 +193,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         EP_DEVICE_ASSERT(uccl::ibgda_get_state()->num_rc_per_pe >=
                          num_local_experts);
       }
+#endif
 
 // The first SM is also responsible for cleaning the next buffer
 #pragma unroll
@@ -242,6 +251,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       ;
     auto dst_ptr = reinterpret_cast<uint64_t>(
         rdma_recv_count + dst_expert_local_idx * num_ranks + rank);
+#ifdef false
     auto dst_p2p_ptr = nvshmemi_get_p2p_ptr(dst_ptr, rank, dst_rank);
     if (dst_p2p_ptr == 0) {
       uccl::nvshmemi_ibgda_amo_nonfetch_add(reinterpret_cast<int*>(dst_ptr),
@@ -251,7 +261,12 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr),
                             -num_tokens_sent - 1);
     }
-
+#else
+    // NOTE(MaoZiming): Without ibgda, we can only use atomic add.
+    uccl::nvshmemi_ibgda_amo_nonfetch_add(reinterpret_cast<int*>(dst_ptr),
+                                          -num_tokens_sent - 1, dst_rank,
+                                          dst_expert_local_idx);
+#endif
     // Clean workspace for next use
     atomic_counter_per_expert[responsible_expert_idx] = 0;
     atomic_finish_counter_per_expert[responsible_expert_idx] = 0;
@@ -565,6 +580,10 @@ __global__ __launch_bounds__(1024, 1) void combine(
           reinterpret_cast<uint64_t>(rdma_recv_x) +
           (global_expert_idx * num_max_dispatch_tokens_per_rank + src_idx) *
               num_bytes_per_slot;
+
+      // NOTE(MaoZiming): we don't have nvshmem-style p2p mapping.
+      // TODO(MaoZiming): understand the optimizations here.
+#ifdef false
       auto const dst_p2p_ptr = nvshmemi_get_p2p_ptr(dst_ptr, rank, dst_rank);
 
       if (not zero_copy or dst_p2p_ptr != 0) {
@@ -682,7 +701,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
           __syncwarp();
         }
       }
-
+#endif
       // Flush all stores
       tma_store_wait();
       __syncwarp();
@@ -690,10 +709,11 @@ __global__ __launch_bounds__(1024, 1) void combine(
       // Issue RDMA
       // NOTES: for zero-copy mode, we assume the data is already in the send
       // buffer
-      if (dst_p2p_ptr == 0)
-        nvshmemi_ibgda_put_nbi_warp(
-            dst_ptr, buf_ptr, hidden * sizeof(nv_bfloat16), dst_rank,
-            local_expert_idx, lane_id, token_idx - offset);
+      // NOTE(MaoZiming): Use direct rdma write.
+      // if (dst_p2p_ptr == 0)
+      nvshmemi_ibgda_put_nbi_warp(
+          dst_ptr, buf_ptr, hidden * sizeof(nv_bfloat16), dst_rank,
+          local_expert_idx, lane_id, token_idx - offset);
     }
 
     // Put the finishing flag
@@ -705,6 +725,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
         ;
       auto dst_ptr =
           reinterpret_cast<uint64_t>(rdma_recv_flag + global_expert_idx);
+#ifdef false
       auto dst_p2p_ptr = nvshmemi_get_p2p_ptr(dst_ptr, rank, dst_rank);
       if (dst_p2p_ptr == 0) {
         nvshmemi_ibgda_amo_nonfetch_add(reinterpret_cast<int*>(dst_ptr), 1,
@@ -712,6 +733,11 @@ __global__ __launch_bounds__(1024, 1) void combine(
       } else {
         st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr), 1);
       }
+#else
+      // NOTE(MaoZiming): Without ibgda, we can only use atomic add
+      nvshmemi_ibgda_amo_nonfetch_add(reinterpret_cast<int*>(dst_ptr), 1,
+                                      dst_rank, local_expert_idx);
+#endif
       atomic_add_release_global(atomic_clean_flag, -1);
     }
     __syncwarp();
