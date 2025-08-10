@@ -99,11 +99,11 @@ class Buffer:
 
         # Synchronize NVSHMEM unique IDs
         root_unique_id = None
+        # TODO(MaoZiming): Remove the NVSHMEM dependencies here. We do not need to set the NVSHMEM environment variables. There is also no need to sync a root unique id to join the nvshmem job. Eventually, if this is needed, it should be negotiated by the CPU proxy.
+        """
         if self.runtime.get_num_rdma_ranks() > 1 or low_latency_mode:
             # Enable IBGDA
             assert num_qps_per_rank > 0
-
-            # TODO(MaoZiming): Fix the NVSHMEM environment variables.
             os.environ["NVSHMEM_DISABLE_P2P"] = (
                 "0" if allow_nvlink_for_low_latency_mode else "1"
             )
@@ -125,7 +125,6 @@ class Buffer:
                 os.environ["NVSHMEM_DISABLE_MNNVL"] = "1"
 
             # Synchronize using the root ID
-            # TODO(MaoZiming): Renaming, eventually to uccl-related once we drop nvshmem dependency.
             uccl_shmem_unique_ids = [
                 None,
             ] * self.group_size
@@ -137,7 +136,7 @@ class Buffer:
             root_unique_id = uccl_shmem_unique_ids[
                 0 if low_latency_mode else self.runtime.get_root_rdma_rank(True)
             ]
-
+        """
         # Make CPP runtime available
         self.runtime.sync(device_ids, ipc_handles, root_unique_id)
         assert self.runtime.is_available()

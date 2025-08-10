@@ -10,8 +10,18 @@ int init(std::vector<uint8_t> const& root_unique_id_val, int rank,
 }
 
 void* alloc(std::size_t size, std::size_t alignment) {
-  std::cout << "[internode::alloc] dummy alloc invoked" << std::endl;
-  return nullptr;
+  // TODO(MaoZiming): alignment is ignored here since cudaMalloc already aligns
+  // to at least 256 bytes
+  void* ptr = nullptr;
+  cudaError_t err = cudaMalloc(&ptr, size);
+  if (err != cudaSuccess) {
+    std::cerr << "[internode::alloc] cudaMalloc failed: "
+              << cudaGetErrorString(err) << std::endl;
+    return nullptr;
+  }
+  std::cout << "[internode::alloc] allocated " << size << " bytes at " << ptr
+            << std::endl;
+  return ptr;
 }
 
 void finalize() {
@@ -24,6 +34,14 @@ void barrier() {
 
 void free(void* ptr) {
   std::cout << "[internode::free] dummy free invoked" << std::endl;
+  // free
+  cudaError_t err = cudaFree(ptr);
+  if (err != cudaSuccess) {
+    std::cerr << "[internode::free] cudaFree failed: "
+              << cudaGetErrorString(err) << std::endl;
+  } else {
+    std::cout << "[internode::free] freed memory at " << ptr << std::endl;
+  }
 }
 
 std::vector<uint8_t> get_unique_id() { return std::vector<uint8_t>(64, 0); }

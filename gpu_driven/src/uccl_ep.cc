@@ -110,9 +110,8 @@ class Buffer {
                                  barrier_signal_bytes, comm_stream));
     }
 
-    CUDA_CHECK(cudaMalloc(&workspace_, NUM_WORKSPACE_BYTES));
-    CUDA_CHECK(
-        cudaMemsetAsync(workspace_, 0, NUM_WORKSPACE_BYTES, comm_stream));
+    CUDA_CHECK(cudaMalloc(&workspace, NUM_WORKSPACE_BYTES));
+    CUDA_CHECK(cudaMemsetAsync(workspace, 0, NUM_WORKSPACE_BYTES, comm_stream));
     CUDA_CHECK(cudaMallocHost(&moe_recv_counter, sizeof(int64_t),
                               cudaHostAllocMapped));
     CUDA_CHECK(cudaHostGetDevicePointer(&moe_recv_counter_mapped,
@@ -287,7 +286,6 @@ class Buffer {
 
     // Kernel launch
     auto next_clean_meta = next_buffer.clean_meta();
-    // TODO(MaoZiming): Can I simplify this?
     auto launcher = [=](int phases) {
       uccl::internode_ll::dispatch(
           packed_recv_x.data_ptr(), packed_recv_x_scales_ptr,
@@ -455,10 +453,8 @@ class Buffer {
 
   int get_local_device_id() { return device_index; }
 
-  py::object get_local_ipc_handle() const {
-    return py::bytes(
-        reinterpret_cast<char const*>(ipc_handles[nvl_rank].reserved),
-        CUDA_IPC_HANDLE_SIZE);
+  pybind11::bytearray get_local_ipc_handle() const {
+    return {ipc_handles[nvl_rank].reserved, CUDA_IPC_HANDLE_SIZE};
   }
 
   int get_num_rdma_ranks() const { return num_rdma_ranks; }
@@ -476,7 +472,6 @@ class Buffer {
             std::vector<std::optional<pybind11::bytearray>> const&
                 all_gathered_handles,
             std::optional<pybind11::bytearray> const& root_unique_id_opt) {
-    // TODO(MaoZiming)
     EP_HOST_ASSERT(not is_available());
 
     // Sync IPC handles
@@ -515,6 +510,7 @@ class Buffer {
     // Sync NVSHMEM handles and allocate memory
     // TODO(MaoZiming): replace nvshmem.
     if (num_rdma_bytes > 0) {
+#if false
       // Initialize NVSHMEM
       EP_HOST_ASSERT(root_unique_id_opt.has_value());
       std::vector<uint8_t> root_unique_id(root_unique_id_opt->size());
@@ -538,8 +534,11 @@ class Buffer {
       // Barrier
       internode::barrier();
       CUDA_CHECK(cudaDeviceSynchronize());
+#else
+      rdma_buffer_ptr =
+          internode::alloc(num_rdma_bytes, NUM_BUFFER_ALIGNMENT_BYTES);
+#endif
     }
-
     // Ready to use
     available = true;
   }
@@ -567,7 +566,6 @@ class Buffer {
 
   // stream & workspace
   at::cuda::CUDAStream comm_stream;
-  void* workspace_{nullptr};
 
   // NVLink (IPC) area
   static constexpr int NUM_MAX_NVL_PEERS = 8;

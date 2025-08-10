@@ -175,11 +175,16 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       }
     }
   } else if (warp_id == num_warps - 1) {
-    EP_DEVICE_ASSERT(num_sms > 1);
+    // EP_DEVICE_ASSERT(num_sms > 1); // TODO(MaoZiming)
     if (sm_id == 0) {
       // The first SM is also responsible for checking QPs
-      EP_DEVICE_ASSERT(uccl::ibgda_get_state()->num_rc_per_pe >=
-                       num_local_experts);
+      if (num_ranks > 1 && gridDim.x > 1) {
+        // The first SM is also responsible for checking QPs (multi-rank,
+        // multi-SM only)
+        EP_DEVICE_ASSERT(uccl::ibgda_get_state() != nullptr);
+        EP_DEVICE_ASSERT(uccl::ibgda_get_state()->num_rc_per_pe >=
+                         num_local_experts);
+      }
 
 // The first SM is also responsible for cleaning the next buffer
 #pragma unroll
@@ -388,10 +393,6 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
               int num_topk, int num_experts, int rank, int num_ranks,
               bool use_fp8, bool round_scale, bool use_ue8m0, void* workspace,
               int num_device_sms, cudaStream_t stream, int phases) {
-  // TODO(MaoZiming): Fix.
-  std::cout << "[uccl::internode_ll::dispatch] dummy launch invoked"
-            << std::endl;
-
   constexpr int kNumMaxTopK = 9;
   int const num_warp_groups = ceil_div(num_experts, num_device_sms);
   int const num_warps_per_group = 32 / num_warp_groups;
@@ -801,10 +802,6 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
              int num_experts, int rank, int num_ranks, bool use_logfmt,
              void* workspace, int num_device_sms, cudaStream_t stream,
              int phases, bool zero_copy) {
-  // TODO(MaoZiming): Fix.
-  std::cout << "[uccl::internode_ll::combine] dummy launch invoked"
-            << std::endl;
-
   constexpr int kNumMaxTopk = 9;
   int const num_warp_groups = ceil_div(num_experts, num_device_sms);
   int const num_warps_per_group = 32 / num_warp_groups;
