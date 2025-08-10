@@ -93,7 +93,7 @@ clean:
 	      $(PYBIND_OBJ) \
 	      $(TARGET_LOCAL) $(TARGET_REMOTE) $(TARGET_DUAL) \
 	      $(PYTARGET) $(UCCL_EP_EXT) \
-	      *.d src/*.d bench/*.d
+	      *.d src/*.d bench/*.d src/*.o
 
 # Automatically include dependency files if they exist
 DEPS := $(OBJ_CPP:.o=.d) $(OBJ_CU:.o=.d) \

@@ -31,25 +31,27 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   unsigned long long lptr_val = static_cast<unsigned long long>(req_lptr);
   unsigned long long bytes_val = static_cast<unsigned long long>(bytes);
 
-  printf(
-      "[ibgda_put_nbi_warp] req_rptr: %llu, req_lptr: %llu, bytes: %llu, "
-      "dst_pe: %d, qp_id: %d, lane_id: %d, message_idx: %d, num_ring_addrs: "
-      "%d\n",
-      rptr_val, lptr_val, bytes_val, dst_pe, qp_id, lane_id, message_idx,
-      num_ring_addrs);
-
   auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
       static_cast<uintptr_t>(ring_addrs[ring_idx]));
 
+  uint64_t cur_head = rb->head;
+  uint64_t cur_tail = rb->volatile_tail();
+  uint64_t inflight = cur_head - cur_tail;
+  printf(
+      "[ibgda_put_nbi_warp] req_rptr: %llu, req_lptr: %llu, bytes: %llu, "
+      "dst_pe: %d, qp_id: %d, lane_id: %d, message_idx: %d, num_ring_addrs: "
+      "%d, cur_head: %llu, cur_tail: %llu, inflight: %llu\n",
+      rptr_val, lptr_val, bytes_val, dst_pe, qp_id, lane_id, message_idx,
+      num_ring_addrs, cur_head, cur_tail, inflight);
+
   // NOTE(MaoZiming): Spins until there is a free slot in the ring buffer.
   while (true) {
-    uint64_t cur_head = rb->head;
-    uint64_t cur_tail = rb->volatile_tail();
-    uint64_t inflight = cur_head - cur_tail;
     if (inflight < kMaxInflight) {
       uint64_t slot = cur_head;
       TransferCmd cmd{};
       // TODO(MaoZiming): Check fields here.
+      cmd.cmd =
+          (static_cast<uint64_t>(qp_id) << 32) | (message_idx & 0xFFFFFFFF);
       cmd.req_rptr = rptr_val;
       cmd.req_lptr = lptr_val;
       cmd.bytes = bytes_val;
@@ -61,6 +63,11 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       rb->set_buffer(slot, cmd);
       __threadfence_system();
       rb->commit_with_head(slot + 1);
+      printf(
+          "[ibgda_put_nbi_warp] Pushed cmd to ring buffer: rb: %p, slot: %llu, "
+          "cur_head: %llu\n",
+          rb, slot, rb->head);
+      break;
     }
   }
 }

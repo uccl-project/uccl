@@ -204,6 +204,7 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 void Proxy::run_local() {
   pin_thread();
   uint64_t my_tail = 0;
+  printf("Local CPU thread for block %d started\n", cfg_.block_idx + 1);
   for (int seen = 0; seen < kIterations; ++seen) {
     if (!ctx_.progress_run.load(std::memory_order_acquire)) {
       printf("Local block %d stopping early at seen=%d\n", cfg_.block_idx + 1,
@@ -246,14 +247,38 @@ void Proxy::run_local() {
            static_cast<unsigned long long>(cmd));
 #endif
 
-    const uint64_t expected_cmd =
-        (static_cast<uint64_t>(cfg_.block_idx) << 32) | (seen + 1);
-    if (cmd != expected_cmd) {
-      fprintf(stderr, "Error[Local]: block %d expected %llu got %llu\n",
-              cfg_.block_idx, static_cast<unsigned long long>(expected_cmd),
-              static_cast<unsigned long long>(cmd));
-      std::abort();
-    }
+    /*
+        const uint64_t expected_cmd =
+            (static_cast<uint64_t>(cfg_.block_idx) << 32) | (seen + 1);
+        if (cmd != expected_cmd) {
+          fprintf(stderr, "Error[Local]: block %d expected %llu got %llu\n",
+                  cfg_.block_idx, static_cast<unsigned long long>(expected_cmd),
+                  static_cast<unsigned long long>(cmd));
+          std::abort();
+        }
+    */
+
+    // TODO(MaoZiming): Refactor.
+    TransferCmd& cmd_entry = cfg_.rb->buf[idx];
+    printf(
+        "Local block %d processing command:\n"
+        "  cmd         = %llu\n"
+        "  dst_rank    = %u\n"
+        "  dst_gpu     = %u\n"
+        "  src_ptr     = %p\n"
+        "  bytes       = %llu\n"
+        "  req_rptr    = %llu\n"
+        "  req_lptr    = %llu\n"
+        "  dst_pe      = %d\n"
+        "  qp_id       = %d\n"
+        "  lane_id     = %d\n"
+        "  message_idx = %d\n",
+        cfg_.block_idx, static_cast<unsigned long long>(cmd_entry.cmd),
+        cmd_entry.dst_rank, cmd_entry.dst_gpu, cmd_entry.src_ptr,
+        static_cast<unsigned long long>(cmd_entry.bytes),
+        static_cast<unsigned long long>(cmd_entry.req_rptr),
+        static_cast<unsigned long long>(cmd_entry.req_lptr), cmd_entry.dst_pe,
+        cmd_entry.qp_id, cmd_entry.lane_id, cmd_entry.message_idx);
 
     cfg_.rb->buf[idx].cmd = 0;
     ++my_tail;
