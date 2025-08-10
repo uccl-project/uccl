@@ -168,7 +168,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                              src_int4_ptr, ld_nc_global, st_na_global);
         }
 #else
-        // NOTE(MaoZiming): Without nvshmem, we can only use network send.
+        // NOTE(MaoZiming): Without nvshmem, we can only use network send. Also, the above path only applies to intra-node. 
         uccl::nvshmemi_ibgda_put_nbi_warp(dst_ptr, src_ptr, num_bytes_per_msg,
                                           dst_rank, dst_expert_local_idx,
                                           lane_id, slot_idx);
