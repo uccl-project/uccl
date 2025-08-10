@@ -172,9 +172,9 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 #else
         // NOTE(MaoZiming): Without nvshmem, we can only use network send. Also,
         // the above path only applies to intra-node.
-        uccl::nvshmemi_ibgda_put_nbi_warp(dst_ptr, src_ptr, num_bytes_per_msg,
-                                          dst_rank, dst_expert_local_idx,
-                                          lane_id, slot_idx);
+        uccl::nvshmemi_ibgda_put_nbi_warp(
+            dst_ptr, src_ptr, num_bytes_per_msg, dst_rank, dst_expert_local_idx,
+            lane_id, slot_idx, ring_addrs, num_ring_addrs);
 #endif
         // Increase counter after finishing
         __syncwarp();
@@ -726,9 +726,10 @@ __global__ __launch_bounds__(1024, 1) void combine(
       // buffer
       // NOTE(MaoZiming): Use direct rdma write.
       // if (dst_p2p_ptr == 0)
-      nvshmemi_ibgda_put_nbi_warp(
-          dst_ptr, buf_ptr, hidden * sizeof(nv_bfloat16), dst_rank,
-          local_expert_idx, lane_id, token_idx - offset);
+      nvshmemi_ibgda_put_nbi_warp(dst_ptr, buf_ptr,
+                                  hidden * sizeof(nv_bfloat16), dst_rank,
+                                  local_expert_idx, lane_id, token_idx - offset,
+                                  ring_addrs, num_ring_addrs);
     }
 
     // Put the finishing flag

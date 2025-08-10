@@ -20,6 +20,14 @@ struct TransferCmd {
   uint32_t dst_gpu;   // GPU id on remote node
   void* src_ptr;      // device pointer to data
   uint64_t bytes;     // transfer size
+
+  // TODO(MaoZiming): Put the DeepEP fields here. Refactor.
+  uint64_t req_rptr;
+  uint64_t req_lptr;
+  int dst_pe;
+  int qp_id;
+  int lane_id;
+  int message_idx;
 };
 
 struct CopyTask {

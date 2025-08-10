@@ -1,7 +1,7 @@
 #pragma once
+#include "ring_buffer.cuh"
 #include <cstddef>
 #include <cstdint>
-
 #ifdef __CUDACC__
 #include <cuda_runtime.h>
 #else
@@ -16,22 +16,56 @@
 
 namespace uccl {
 
-// TODO(MaoZiming): Fix. This should go through the proxy.
 template <bool kAlwaysDoPostSend = false>
 __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     uint64_t req_rptr, uint64_t req_lptr, size_t bytes, int dst_pe, int qp_id,
-    int lane_id, int message_idx) {
+    int lane_id, int message_idx, uint64_t const* ring_addrs,
+    int num_ring_addrs) {
+  if (lane_id != 0)
+    return;  // TODO(MaoZiming): Currently ring buffer is single writer. This
+             // might not be good for the DeepEP optimization.
+  int safe_n = num_ring_addrs > 0 ? num_ring_addrs : 1;
+  int ring_idx = (qp_id >= 0 ? qp_id : 0) % safe_n;
+
   unsigned long long rptr_val = static_cast<unsigned long long>(req_rptr);
   unsigned long long lptr_val = static_cast<unsigned long long>(req_lptr);
   unsigned long long bytes_val = static_cast<unsigned long long>(bytes);
 
   printf(
       "[ibgda_put_nbi_warp] req_rptr: %llu, req_lptr: %llu, bytes: %llu, "
-      "dst_pe: %d, qp_id: %d, lane_id: %d, message_idx: %d\n",
-      rptr_val, lptr_val, bytes_val, dst_pe, qp_id, lane_id, message_idx);
+      "dst_pe: %d, qp_id: %d, lane_id: %d, message_idx: %d, num_ring_addrs: "
+      "%d\n",
+      rptr_val, lptr_val, bytes_val, dst_pe, qp_id, lane_id, message_idx,
+      num_ring_addrs);
+
+  auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
+      static_cast<uintptr_t>(ring_addrs[ring_idx]));
+
+  // NOTE(MaoZiming): Spins until there is a free slot in the ring buffer.
+  while (true) {
+    uint64_t cur_head = rb->head;
+    uint64_t cur_tail = rb->volatile_tail();
+    uint64_t inflight = cur_head - cur_tail;
+    if (inflight < kMaxInflight) {
+      uint64_t slot = cur_head;
+      TransferCmd cmd{};
+      // TODO(MaoZiming): Check fields here.
+      cmd.req_rptr = rptr_val;
+      cmd.req_lptr = lptr_val;
+      cmd.bytes = bytes_val;
+      cmd.dst_pe = dst_pe;
+      cmd.qp_id = qp_id;
+      cmd.lane_id = lane_id;
+      cmd.message_idx = message_idx;
+
+      rb->set_buffer(slot, cmd);
+      __threadfence_system();
+      rb->commit_with_head(slot + 1);
+    }
+  }
 }
 
-// NOTE(MaoZiming): Remove this. We don't need nvshmem and igbda.
+// NOTE(MaoZiming): Remove this. We don't need nvshmem and ibgda.
 #ifdef false
 __device__ __forceinline__ nvshmemi_ibgda_device_state_t* ibgda_get_state() {
   return &nvshmemi_ibgda_device_state_d;
@@ -56,7 +90,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
   printf(
       "[ibgda_amo_nonfetch_add] rptr: %p, value: %d, pe: %d, qp_id: %d, "
       "is_local_copy: %d\n",
-      rptr, value, pe, qp_id);
+      rptr, value, pe, qp_id, is_local_copy);
   // TODO(MaoZiming): Implement it with a remote atomic operation.
   atomicAdd(reinterpret_cast<int*>(rptr), value);
   __threadfence_system();
