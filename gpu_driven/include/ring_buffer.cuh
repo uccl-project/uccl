@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <vector>
+
 #ifndef COPY_RING_CAP
 #define COPY_RING_CAP 4096
 #endif
@@ -92,6 +93,15 @@ struct alignas(128) RingBuffer {
   struct ibv_qp* ack_qp = nullptr;
   ibv_mr* ack_mr = nullptr;
   uint64_t ack_buf[RECEIVER_BATCH_SIZE] = {0};
+
+  inline void cpu_volatile_store_tail(uint64_t new_tail) {
+    // NOTE(MaoZiming): proxy needs this.
+    __atomic_store_n(&tail, new_tail, __ATOMIC_RELEASE);
+  }
+
+  inline uint64_t volatile_load_cmd(int idx) const {
+    return __atomic_load_n(&buf[idx & mask()].cmd, __ATOMIC_ACQUIRE);
+  }
 
   __host__ __device__ static constexpr uint32_t mask() { return Capacity - 1; }
 

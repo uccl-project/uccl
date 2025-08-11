@@ -28,7 +28,9 @@ inline void init_env(BenchEnv& env, int blocks = kNumThBlocks, int device = 0,
 
   GPU_RT_CHECK(gpuHostAlloc(
       &env.rbs, sizeof(DeviceToHostCmdBuffer) * static_cast<size_t>(blocks),
-      gpuHostAllocMapped));
+      gpuHostAllocMapped |
+          cudaHostAllocWriteCombined));  // TODO(MaoZiming): fix. This is to
+                                         // force the host not cache the cmd.
 
   for (int i = 0; i < blocks; ++i) {
     env.rbs[i].head = 0;

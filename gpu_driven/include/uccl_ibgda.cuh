@@ -51,14 +51,20 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       num_ring_addrs, cur_head, cur_tail, inflight);
 
   // NOTE(MaoZiming): Spins until there is a free slot in the ring buffer.
+  auto last_print = clock64();
   while (true) {
+    // NOTE(MaoZiming): update the view.
+    cur_head = rb->head;
+    cur_tail = rb->volatile_tail();
+    inflight = cur_head - cur_tail;
     if (inflight < kMaxInflight) {
       uint64_t slot = cur_head;
       TransferCmd cmd{};
       // TODO(MaoZiming): Check fields here.
       // NOTE(MaoZiming): cmd is needed for proxy to process the command.
-      cmd.cmd =
-          (static_cast<uint64_t>(sm_id) << 32) | (message_idx & 0xFFFFFFFF);
+      cmd.cmd = (static_cast<uint64_t>(sm_id + 1) << 32) |
+                (message_idx & 0xFFFFFFFF);  // NOTE(MaoZiming): Use sm_id + 1
+                                             // to avoid 0 as a valid command.
       cmd.req_rptr = rptr_val;
       cmd.req_lptr = lptr_val;
       cmd.bytes = bytes_val;
@@ -71,9 +77,21 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       // __threadfence_system();
       // rb->commit_with_head(slot + 1);
       rb->atomic_set_and_commit(cmd, &slot);
-      printf("Pushed cmd to ring buffer %p at slot %llu, cmd.cmd: %llu\n", rb,
-             slot, cmd.cmd);
+      printf(
+          "Pushed cmd to ring buffer %p at slot %llu, cmd.cmd: %llu, cmd: "
+          "%llu\n",
+          rb, slot, cmd.cmd, rb->buf[slot & rb->mask()].cmd);
       break;
+    } else {
+      auto now = clock64();
+      if (now - last_print > 10 * 1e9) {
+        uint64_t tail_cmd = rb->buf[cur_tail & rb->mask()].cmd;
+        printf(
+            "[ibgda_put_nbi_warp] %p waiting sm_id: %d, lane_id: %d, cur_head: "
+            "%llu, cur_tail: %llu, inflight: %llu, tail_cmd: %llu\n",
+            rb, sm_id, lane_id, cur_head, cur_tail, inflight, tail_cmd);
+        last_print = now;
+      }
     }
   }
 }

@@ -237,9 +237,22 @@ void Proxy::run_local() {
 
     const uint64_t idx = my_tail & kQueueMask;
     uint64_t cmd;
+    auto last_print = std::chrono::steady_clock::now();
+    size_t spin_count = 0;
     do {
-      cmd = cfg_.rb->buf[idx].cmd;
+      cmd = cfg_.rb->volatile_load_cmd(idx);
       cpu_relax();  // avoid hammering cacheline
+
+      auto now = std::chrono::steady_clock::now();
+      if (now - last_print > std::chrono::seconds(10)) {
+        printf(
+            "Still waiting at block %d, seen=%d, spin_count=%zu, my_tail=%lu, "
+            "cmd: %lu\n",
+            cfg_.block_idx + 1, seen, spin_count, my_tail, cmd);
+        last_print = now;
+        spin_count++;
+      }
+
       if (!ctx_.progress_run.load(std::memory_order_acquire)) {
         printf("Local block %d stopping early at seen=%d\n", cfg_.block_idx + 1,
                seen);
@@ -278,7 +291,9 @@ void Proxy::run_local() {
 
     cfg_.rb->buf[idx].cmd = 0;
     ++my_tail;
-    cfg_.rb->tail = my_tail;
+    // cfg_.rb->tail = my_tail;
+    cfg_.rb->cpu_volatile_store_tail(my_tail);
+    seen++;
   }
 
   printf("Local block %d finished %d commands, tail=%lu\n", cfg_.block_idx,
