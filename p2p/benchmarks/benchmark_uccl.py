@@ -352,7 +352,7 @@ def _run_server_ipc(args, ep):
 
         gbps = (total_recv * 8) / elapsed / 1e9  # bits per second → Gbps
         gb_sec = total_recv / elapsed / 1e9  # bytes per second → GB/s
-        lat = elapsed / args.iters
+        lat = elapsed / args.iters if args.iters > 0 else 0
 
         print(
             f"[Server] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
@@ -399,7 +399,7 @@ def _run_client_ipc(args, ep, remote_gpu_idx):
 
         gbps = (total_sent * 8) / elapsed / 1e9
         gb_sec = total_sent / elapsed / 1e9
-        lat = elapsed / args.iters
+        lat = elapsed / args.iters if args.iters > 0 else 0
 
         print(
             f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"

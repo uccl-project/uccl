@@ -44,6 +44,20 @@
 #define gpuMemcpyFromSymbol cudaMemcpyFromSymbol
 #define gpuGetLastError cudaGetLastError
 #define gpuErrorPeerAccessAlreadyEnabled cudaErrorPeerAccessAlreadyEnabled
+#define gpuEvent_t cudaEvent_t
+#define gpuEventCreate cudaEventCreate
+#define gpuEventDestroy cudaEventDestroy
+#define gpuEventRecord cudaEventRecord
+#define gpuEventSynchronize cudaEventSynchronize
+#define gpuStreamWaitEvent cudaStreamWaitEvent
+#define gpuEventCreateWithFlags cudaEventCreateWithFlags
+#define gpuEventDefault cudaEventDefault
+#define gpuEventDisableTiming cudaEventDisableTiming
+#define gpuEventInterprocess cudaEventInterprocess
+#define gpuIpcEventHandle_t cudaIpcEventHandle_t
+#define gpuIpcGetEventHandle cudaIpcGetEventHandle
+#define gpuIpcOpenEventHandle cudaIpcOpenEventHandle
+#define gpuIpcCloseEventHandle cudaIpcCloseEventHandle
 #else
 #include <hip/hip_runtime.h>
 #include <hip/hip_runtime_api.h>
@@ -89,6 +103,20 @@
 #define gpuMemcpyFromSymbol hipMemcpyFromSymbol
 #define gpuGetLastError hipGetLastError
 #define gpuErrorPeerAccessAlreadyEnabled hipErrorPeerAccessAlreadyEnabled
+#define gpuEvent_t hipEvent_t
+#define gpuEventCreate hipEventCreate
+#define gpuEventDestroy hipEventDestroy
+#define gpuEventRecord hipEventRecord
+#define gpuEventSynchronize hipEventSynchronize
+#define gpuStreamWaitEvent hipStreamWaitEvent
+#define gpuEventCreateWithFlags hipEventCreateWithFlags
+#define gpuEventDefault hipEventDefault
+#define gpuEventDisableTiming hipEventDisableTiming
+#define gpuEventInterprocess hipEventInterprocess
+#define gpuIpcEventHandle_t hipIpcEventHandle_t
+#define gpuIpcGetEventHandle hipIpcGetEventHandle
+#define gpuIpcOpenEventHandle hipIpcOpenEventHandle
+#define gpuIpcCloseEventHandle(handle) (gpuSuccess)
 #endif
 
 #define GPU_RT_CHECK(call)                                         \
