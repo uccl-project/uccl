@@ -15,6 +15,8 @@
 
 // Command structure for each transfer
 struct TransferCmd {
+  // NOTE(MaoZiming): cmd is used to identify the command type and needs to be
+  // set in order for proxy to process the command.
   uint64_t cmd;
   uint32_t dst_rank;  // remote node id (MPI-style)
   uint32_t dst_gpu;   // GPU id on remote node
@@ -24,8 +26,7 @@ struct TransferCmd {
   // TODO(MaoZiming): Put the DeepEP fields here. Refactor.
   uint64_t req_rptr;
   uint64_t req_lptr;
-  int dst_pe;
-  int qp_id;
+  int sm_id;
   int lane_id;
   int message_idx;
 };
@@ -80,6 +81,12 @@ struct alignas(128) RingBuffer {
   uint64_t cycle_start = 0;
   uint64_t cycle_end = 0;
   uint32_t capacity = Capacity;
+
+  RingBuffer() {
+    for (uint32_t i = 0; i < Capacity; i++) {
+      buf[i] = {};
+    }
+  }
 
   /* TODO(MaoZiming) to refactor */
   struct ibv_qp* ack_qp = nullptr;
@@ -185,6 +192,60 @@ struct alignas(128) RingBuffer {
 #error "Unsupported architecture"
 #endif
     return val;
+  }
+
+  __host__ __device__ inline bool atomic_set_and_commit(
+      const T& item, uint64_t* out_slot = nullptr) {
+    uint64_t slot;
+    while (true) {
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+      uint64_t h = ld_volatile(&head);
+      uint64_t t = ld_volatile(&tail);
+      if (h - t == Capacity) {
+        __nanosleep(64);
+        continue;
+      }
+      unsigned long long prev =
+          atomicCAS((unsigned long long*)&head, (unsigned long long)h,
+                    (unsigned long long)(h + 1));
+      if (prev == h) {
+        slot = h;
+        break;
+      }
+#else
+      uint64_t h = __atomic_load_n(&head, __ATOMIC_RELAXED);
+      uint64_t t = __atomic_load_n(&tail, __ATOMIC_RELAXED);
+      if (h - t == Capacity) {
+        cpu_relax();
+        continue;
+      }
+      uint64_t expected = h;
+      if (__atomic_compare_exchange_n(&head, &expected, h + 1, true,
+                                      __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+        slot = h;
+        break;
+      }
+#endif
+    }
+    uint32_t idx = (uint32_t)slot & mask();
+
+    T tmp = item;
+    auto saved_cmd = tmp.cmd;
+    tmp.cmd = 0;
+    buf[idx] = tmp;
+
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+    if constexpr (Dir == FlowDirection::DeviceToHost)
+      __threadfence_system();
+    else
+      __threadfence();
+#else
+    std::atomic_thread_fence(std::memory_order_release);
+#endif
+
+    buf[idx].cmd = saved_cmd;
+    if (out_slot) *out_slot = slot;
+    return true;
   }
 };
 

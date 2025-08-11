@@ -16,16 +16,22 @@
 
 namespace uccl {
 
-template <bool kAlwaysDoPostSend = false>
+// template <bool kAlwaysDoPostSend = false>
+// Note(MaoZiming): the qp_id here is actually the sm_id, which is used to tell
+// which ring buffer to use. However, we still have an issue: the total SMs can
+// be say 64 (= number of experts), but the number of ring buffers is small (say
+// 6).
 __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
-    uint64_t req_rptr, uint64_t req_lptr, size_t bytes, int dst_pe, int qp_id,
+    uint64_t req_rptr, uint64_t req_lptr, size_t bytes, int dst_rank, int sm_id,
     int lane_id, int message_idx, uint64_t const* ring_addrs,
     int num_ring_addrs) {
+  // NOTE(MaoZiming): different from the nvshmemi_ibgda_put_nbi_warp in
+  // ibgda_device.cuh, we don't do warp-cooperation.
   if (lane_id != 0)
     return;  // TODO(MaoZiming): Currently ring buffer is single writer. This
              // might not be good for the DeepEP optimization.
   int safe_n = num_ring_addrs > 0 ? num_ring_addrs : 1;
-  int ring_idx = (qp_id >= 0 ? qp_id : 0) % safe_n;
+  int ring_idx = (sm_id >= 0 ? sm_id : 0) % safe_n;
 
   unsigned long long rptr_val = static_cast<unsigned long long>(req_rptr);
   unsigned long long lptr_val = static_cast<unsigned long long>(req_lptr);
@@ -39,9 +45,9 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   uint64_t inflight = cur_head - cur_tail;
   printf(
       "[ibgda_put_nbi_warp] req_rptr: %llu, req_lptr: %llu, bytes: %llu, "
-      "dst_pe: %d, qp_id: %d, lane_id: %d, message_idx: %d, num_ring_addrs: "
+      "dst_rank: %d, sm_id: %d, lane_id: %d, message_idx: %d, num_ring_addrs: "
       "%d, cur_head: %llu, cur_tail: %llu, inflight: %llu\n",
-      rptr_val, lptr_val, bytes_val, dst_pe, qp_id, lane_id, message_idx,
+      rptr_val, lptr_val, bytes_val, dst_rank, sm_id, lane_id, message_idx,
       num_ring_addrs, cur_head, cur_tail, inflight);
 
   // NOTE(MaoZiming): Spins until there is a free slot in the ring buffer.
@@ -50,23 +56,23 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       uint64_t slot = cur_head;
       TransferCmd cmd{};
       // TODO(MaoZiming): Check fields here.
+      // NOTE(MaoZiming): cmd is needed for proxy to process the command.
       cmd.cmd =
-          (static_cast<uint64_t>(qp_id) << 32) | (message_idx & 0xFFFFFFFF);
+          (static_cast<uint64_t>(sm_id) << 32) | (message_idx & 0xFFFFFFFF);
       cmd.req_rptr = rptr_val;
       cmd.req_lptr = lptr_val;
       cmd.bytes = bytes_val;
-      cmd.dst_pe = dst_pe;
-      cmd.qp_id = qp_id;
+      cmd.dst_rank = dst_rank;
+      cmd.sm_id = sm_id;
       cmd.lane_id = lane_id;
       cmd.message_idx = message_idx;
 
-      rb->set_buffer(slot, cmd);
-      __threadfence_system();
-      rb->commit_with_head(slot + 1);
-      printf(
-          "[ibgda_put_nbi_warp] Pushed cmd to ring buffer: rb: %p, slot: %llu, "
-          "cur_head: %llu\n",
-          rb, slot, rb->head);
+      // rb->set_buffer(slot, cmd);
+      // __threadfence_system();
+      // rb->commit_with_head(slot + 1);
+      rb->atomic_set_and_commit(cmd, &slot);
+      printf("Pushed cmd to ring buffer %p at slot %llu, cmd.cmd: %llu\n", rb,
+             slot, cmd.cmd);
       break;
     }
   }

@@ -205,7 +205,9 @@ void Proxy::run_local() {
   pin_thread();
   uint64_t my_tail = 0;
   printf("Local CPU thread for block %d started\n", cfg_.block_idx + 1);
-  for (int seen = 0; seen < kIterations; ++seen) {
+  // for (int seen = 0; seen < kIterations; ++seen) {
+  int seen = 0;
+  while (true) {
     if (!ctx_.progress_run.load(std::memory_order_acquire)) {
       printf("Local block %d stopping early at seen=%d\n", cfg_.block_idx + 1,
              seen);
@@ -214,6 +216,9 @@ void Proxy::run_local() {
     // Prefer volatile read to defeat CPU cache stale head.
     // If your ring already has volatile_head(), use it; otherwise keep
     // rb->head.
+
+    // TODO(MaoZiming): Check.
+    /*
     while (cfg_.rb->volatile_head() == my_tail) {
 #ifdef DEBUG_PRINT
       if (cfg_.block_idx == 0) {
@@ -228,6 +233,7 @@ void Proxy::run_local() {
         return;
       }
     }
+    */
 
     const uint64_t idx = my_tail & kQueueMask;
     uint64_t cmd;
@@ -257,28 +263,18 @@ void Proxy::run_local() {
           std::abort();
         }
     */
+    std::atomic_thread_fence(std::memory_order_acquire);
 
     // TODO(MaoZiming): Refactor.
     TransferCmd& cmd_entry = cfg_.rb->buf[idx];
     printf(
-        "Local block %d processing command:\n"
-        "  cmd         = %llu\n"
-        "  dst_rank    = %u\n"
-        "  dst_gpu     = %u\n"
-        "  src_ptr     = %p\n"
-        "  bytes       = %llu\n"
-        "  req_rptr    = %llu\n"
-        "  req_lptr    = %llu\n"
-        "  dst_pe      = %d\n"
-        "  qp_id       = %d\n"
-        "  lane_id     = %d\n"
-        "  message_idx = %d\n",
-        cfg_.block_idx, static_cast<unsigned long long>(cmd_entry.cmd),
-        cmd_entry.dst_rank, cmd_entry.dst_gpu, cmd_entry.src_ptr,
-        static_cast<unsigned long long>(cmd_entry.bytes),
-        static_cast<unsigned long long>(cmd_entry.req_rptr),
-        static_cast<unsigned long long>(cmd_entry.req_lptr), cmd_entry.dst_pe,
-        cmd_entry.qp_id, cmd_entry.lane_id, cmd_entry.message_idx);
+        "[blk %d] cmd=%llu dst=%u/%u bytes=%llu src=%p rptr=0x%llx lptr=0x%llx "
+        "sm=%d lane=%d msg=%d\n",
+        cfg_.block_idx, (unsigned long long)cmd_entry.cmd, cmd_entry.dst_rank,
+        cmd_entry.dst_gpu, (unsigned long long)cmd_entry.bytes,
+        cmd_entry.src_ptr, (unsigned long long)cmd_entry.req_rptr,
+        (unsigned long long)cmd_entry.req_lptr, cmd_entry.sm_id,
+        cmd_entry.lane_id, cmd_entry.message_idx);
 
     cfg_.rb->buf[idx].cmd = 0;
     ++my_tail;

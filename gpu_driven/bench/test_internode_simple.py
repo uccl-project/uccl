@@ -26,7 +26,7 @@ from utils import init_dist, get_peer_ip
 def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
     num_tokens = 512
     hidden = 2048
-    num_experts = 64
+    num_experts = 6  # TODO(MaoZiming): change the number of experts.
     num_topk = 4
     device_index = 0
 
