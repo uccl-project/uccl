@@ -217,8 +217,6 @@ void Proxy::run_local() {
     // If your ring already has volatile_head(), use it; otherwise keep
     // rb->head.
 
-    // TODO(MaoZiming): Check.
-    /*
     while (cfg_.rb->volatile_head() == my_tail) {
 #ifdef DEBUG_PRINT
       if (cfg_.block_idx == 0) {
@@ -233,7 +231,6 @@ void Proxy::run_local() {
         return;
       }
     }
-    */
 
     const uint64_t idx = my_tail & kQueueMask;
     uint64_t cmd;
@@ -278,7 +275,6 @@ void Proxy::run_local() {
     */
     std::atomic_thread_fence(std::memory_order_acquire);
 
-    // TODO(MaoZiming): Refactor.
     TransferCmd& cmd_entry = cfg_.rb->buf[idx];
     printf(
         "[blk %d] cmd=%llu dst=%u/%u bytes=%llu src=%p rptr=0x%llx lptr=0x%llx "

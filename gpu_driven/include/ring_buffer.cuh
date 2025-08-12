@@ -9,7 +9,6 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <vector>
-
 #ifndef COPY_RING_CAP
 #define COPY_RING_CAP 4096
 #endif
