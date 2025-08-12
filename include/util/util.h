@@ -1150,6 +1150,13 @@ static int cal_pcie_distance(fs::path const& devA, fs::path const& devB) {
   return static_cast<int>(i + j);
 }
 
+static inline std::string normalize_pci_bus_id(std::string const& pci_bus_id) {
+  std::string normalized = pci_bus_id;
+  std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                 ::tolower);
+  return normalized;
+}
+
 static std::vector<fs::path> get_gpu_cards() {
   // Get the device properties, conforming to CUDA_VISIBLE_DEVICES
   int num_gpus;
@@ -1160,7 +1167,8 @@ static std::vector<fs::path> get_gpu_cards() {
   for (int i = 0; i < num_gpus; i++) {
     // This order is aligned with PyTorch's GPU rank order.
     GPU_RT_CHECK(gpuDeviceGetPCIBusId(bdf, sizeof(bdf), i));
-    gpu_cards_ranked.push_back(bdf);
+    std::string normalized_bdf = normalize_pci_bus_id(bdf);
+    gpu_cards_ranked.push_back(normalized_bdf);
   }
 
   std::vector<fs::path> gpu_cards;
@@ -1186,8 +1194,10 @@ static std::vector<fs::path> get_gpu_cards() {
 
       // Extract PCI bus ID from the last component of the device path
       std::string pci_busid = dev_path.filename();
+      std::string normalized_pci_busid = normalize_pci_bus_id(pci_busid);
+
       auto it = std::find(gpu_cards_ranked.begin(), gpu_cards_ranked.end(),
-                          pci_busid);
+                          normalized_pci_busid);
       if (it == gpu_cards_ranked.end()) continue;
       auto distance = std::distance(gpu_cards_ranked.begin(), it);
       gpu_cards_rank_map[dev_path] = distance;
@@ -1200,8 +1210,10 @@ static std::vector<fs::path> get_gpu_cards() {
     for (auto const& entry : fs::directory_iterator(nvidia_gpus)) {
       fs::path dev_path = fs::canonical(entry.path());
       std::string pci_busid = dev_path.filename();
+      std::string normalized_pci_busid = normalize_pci_bus_id(pci_busid);
+
       auto it = std::find(gpu_cards_ranked.begin(), gpu_cards_ranked.end(),
-                          pci_busid);
+                          normalized_pci_busid);
       if (it == gpu_cards_ranked.end()) continue;
       auto distance = std::distance(gpu_cards_ranked.begin(), it);
       gpu_cards_rank_map[dev_path] = distance;
