@@ -1209,14 +1209,11 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size,
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
   void* dst_ptr = nullptr;
-  // !!! It should be set to the exporter GPU, but I find it must set to the
-  // importer GPU to make it work on AMD GPUs.
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
   GPU_RT_CHECK(gpuIpcOpenMemHandle(&dst_ptr, transfer_info.handle,
                                    gpuIpcMemLazyEnablePeerAccess));
 
   // Perform the memory copy from our data to receiver's memory
-  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
   gpuStream_t s = pick_stream();
   if (local_gpu_idx_ == conn->remote_gpu_idx_) {
     GPU_RT_CHECK(
@@ -1227,9 +1224,7 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size,
   }
   // Synchronize to ensure the copy is complete
   GPU_RT_CHECK(gpuStreamSynchronize(s));
-
   // Close IPC handles
-  GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
   GPU_RT_CHECK(gpuIpcCloseMemHandle(dst_ptr));
 
   // Send completion notification to receiver
