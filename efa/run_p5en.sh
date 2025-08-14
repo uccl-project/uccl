@@ -8,9 +8,9 @@ source ../scripts/shared.sh
 # Visible GPUs to application.
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 # Disable NVLink.
-NV_LINK_DISABLE=1
+NV_LINK_DISABLE=0
 MULTI_GROUP=0
-NIC=enp73s0,enp72s0
+NIC=10.3.0.0/16
 # Processes/Ranks/GPUs per node.
 PROCS_PER_NODE=8
 
@@ -23,17 +23,17 @@ PROG_NAME=${3:-0}
 if [ "$PROG_NAME" -eq 0 ]; then
     PROG_NAME="alltoall_perf"
 elif [ "$PROG_NAME" -eq 1 ]; then
-    PROG_NAME="all_gather_perf"
-elif [ "$PROG_NAME" -eq 2 ]; then
     PROG_NAME="all_reduce_perf"
+elif [ "$PROG_NAME" -eq 2 ]; then
+    PROG_NAME="alltoall_perf"
     MULTI_GROUP=0x7
 else
     echo "Invalid program name: ${PROG_NAME}"
     exit 1
 fi
 
-CHANNELS=8
-CHANNELS_NET_PEER=4
+CHANNELS=32
+CHANNELS_NET_PEER=1
 
 # UCCL optimal parameters. Yang: for allreduce with nvlink, we need to use larger buffer to catch up with NCCL with larger buffers, and avoid outliers.
 CHUNK_SIZE=131072
