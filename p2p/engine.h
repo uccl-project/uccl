@@ -7,7 +7,9 @@
 #include "util/shared_pool.h"
 #include "util/util.h"
 #include <infiniband/verbs.h>
+#ifdef WITH_PYTHON
 #include <pybind11/pybind11.h>
+#endif
 #include <atomic>
 #include <shared_mutex>
 #include <string>
@@ -20,7 +22,10 @@
 #include <sw/redis++/redis++.h>
 #endif
 
+#ifdef WITH_PYTHON
 namespace py = pybind11;
+#endif
+
 constexpr uint64_t kNvlinkConn = UINT64_MAX;
 
 struct MR {
@@ -86,9 +91,9 @@ class Endpoint {
    */
   bool connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
                uint64_t& conn_id);
-
+#ifdef WITH_PYTHON
   bool connect(py::bytes const& metadata, uint64_t& conn_id);
-
+#endif
   /*
    * Accept an incoming connection via TCP, then build RDMA QP connections.
    *
@@ -125,8 +130,7 @@ class Endpoint {
    *   data: the data to send
    *   size: the size of the data
    */
-  bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
-            bool inside_python = true);
+  bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size);
 
   /*
    * Receive data from the remote server. Blocking.
@@ -138,8 +142,7 @@ class Endpoint {
    *   data: the data to receive
    *   size: the size of the data
    */
-  bool recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
-            bool inside_python = true);
+  bool recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size);
 
   bool send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
                 void const* meta, size_t meta_len);
@@ -172,7 +175,7 @@ class Endpoint {
    *   slot_item: the slot item to use for the transfer
    */
   bool read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
-            uccl::FifoItem const& slot_item, bool inside_python = true);
+            uccl::FifoItem const& slot_item);
 
   /* Read data from the remote server asynchronously. */
   bool read_async(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
@@ -214,6 +217,8 @@ class Endpoint {
       std::string const& discovery_uri, std::string const& group_name,
       int world_size, int my_rank, uint32_t local_gpu_idx, uint32_t num_cpus,
       int remote_gpu_idx);
+
+  int get_sock_fd(uint64_t conn_id) const;
 
   /** Returns conn_id for @rank, or UINT64_MAX if unknown. */
   uint64_t conn_id_of_rank(int rank) const;
