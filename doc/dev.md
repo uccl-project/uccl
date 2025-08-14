@@ -18,8 +18,8 @@ sudo apt install linux-tools-$(uname -r) clang llvm cmake m4 build-essential \
                  libopenmpi-dev libibverbs-dev libpci-dev -y
 
 # Install and activate Anaconda (you can choose any recent versions)
-wget https://repo.anaconda.com/archive/Anaconda3-2024.10-1-Linux-x86_64.sh
-bash ./Anaconda3-2024.10-1-Linux-x86_64.sh -b
+wget https://repo.anaconda.com/archive/Anaconda3-2025.06-1-Linux-x86_64.sh
+bash ./Anaconda3-2025.06-1-Linux-x86_64.sh -b
 source ~/anaconda3/bin/activate
 source ~/.bashrc # or .zshrc and others
 conda init

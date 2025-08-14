@@ -71,7 +71,9 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
         buffer = Buffer(
             group=group,
             num_nvl_bytes=0,
-            num_rdma_bytes=x_bytes,
+            num_rdma_bytes=int(
+                1e9
+            ),  # TODO(MaoZiming): How does num_rdma_bytes relate to the size of x?
             low_latency_mode=True,
             num_qps_per_rank=num_device_sms,
             allow_nvlink_for_low_latency_mode=True,
@@ -97,7 +99,6 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
             async_finish=False,
             return_recv_hook=True,
         )
-        recv_x = recv_x[0]
         hook()
 
         if rank == 0:
@@ -151,7 +152,11 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
 
     except Exception as e:
         if rank == 0:
-            print(f"[simple-test] ✗ Error: {e}", flush=True)
+            import traceback
+
+            print(f"[simple-test] ✗ Error: {repr(e)}", flush=True)
+            traceback.print_exc()
+
         raise
 
 

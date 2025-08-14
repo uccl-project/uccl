@@ -85,7 +85,10 @@ PYBIND11_MODULE(gpu_driven, m) {
       .def("start_remote", &UcclProxy::start_remote)
       .def("start_local", &UcclProxy::start_local)
       .def("start_dual", &UcclProxy::start_dual)
-      .def("stop", &UcclProxy::stop);
+      .def("stop", &UcclProxy::stop)
+      .def_property_readonly("rb_addr", &UcclProxy::rb_addr)
+      .def_property_readonly("block_idx", &UcclProxy::block_idx)
+      .def_property_readonly("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr);
 
   py::class_<Bench>(m, "Bench")
       .def(py::init<>())

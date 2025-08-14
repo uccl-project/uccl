@@ -365,7 +365,7 @@ def main():
             262144,
             1048576,
             10485760,
-            16 * 1024 * 1024,
+            16777216,
             104857600,
         ],
         help="Comma separated list of message sizes in bytes",

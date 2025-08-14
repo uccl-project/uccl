@@ -1,8 +1,6 @@
 #pragma once
 #include <ATen/cuda/CUDAContext.h>
 #include <ATen/cuda/CUDAEvent.h>
-#include <torch/extension.h>
-#include <torch/torch.h>
 #include <string>
 #include <cuda_runtime.h>
 
@@ -39,39 +37,28 @@ class EPException : public std::exception {
   } while (0)
 #endif
 
-struct EventHandle {
-  std::shared_ptr<torch::Event> event;
+#ifndef EP_STATIC_ASSERT
+#define EP_STATIC_ASSERT(cond, reason) static_assert(cond, reason)
+#endif
 
-  EventHandle() {
-    event = std::make_shared<torch::Event>(torch::kCUDA);
-    event->record(at::cuda::getCurrentCUDAStream());
-  }
+#ifndef EP_DEVICE_ASSERT
+#define EP_DEVICE_ASSERT(cond)                                               \
+  do {                                                                       \
+    if (not(cond)) {                                                         \
+      printf("Assertion failed: %s:%d, condition: %s\n", __FILE__, __LINE__, \
+             #cond);                                                         \
+      asm("trap;");                                                          \
+    }                                                                        \
+  } while (0)
+#endif
 
-  explicit EventHandle(at::cuda::CUDAStream const& stream) {
-    event = std::make_shared<torch::Event>(torch::kCUDA);
-    event->record(stream);
-  }
-
-  EventHandle(EventHandle const& other) = default;
-
-  void current_stream_wait() const {
-    at::cuda::getCurrentCUDAStream().unwrap().wait(*event);
-  }
-};
-
-inline torch::Event create_event(at::cuda::CUDAStream const& s) {
-  auto event = torch::Event(torch::kCUDA);
-  event.record(s);
-  return event;
+__device__ __forceinline__ int ld_acquire_global(int const* ptr) {
+  int ret;
+  asm volatile("ld.acquire.gpu.global.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
+  return ret;
 }
 
-inline void stream_wait(at::cuda::CUDAStream const& s_0,
-                        at::cuda::CUDAStream const& s_1) {
-  EP_HOST_ASSERT(s_0.id() != s_1.id());
-  s_0.unwrap().wait(create_event(s_1));
-}
-
-inline void stream_wait(at::cuda::CUDAStream const& s,
-                        EventHandle const& event) {
-  s.unwrap().wait(*event.event);
+__device__ __forceinline__ void st_release_sys_global(int const* ptr, int val) {
+  asm volatile("st.release.sys.global.s32 [%0], %1;" ::"l"(ptr), "r"(val)
+               : "memory");
 }

@@ -271,7 +271,19 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
   struct ucclHandle* handle = (struct ucclHandle*)opaqueHandle;
   memset(handle, 0, sizeof(struct ucclHandle));
 
-  ep->initialize_engine_by_dev(dev, false);
+  int local_gpuidx;
+  GPU_RT_CHECK(gpuGetDevice(&local_gpuidx));
+
+  // UCCL does not support PXN for now where each GPU process will create
+  // connections on all NICs. Thefore, we just ignore PXN at the plugin level by
+  // using the same dev corresponding to the GPU managed by the current process.
+  auto best_dev = ep->get_best_dev_idx(local_gpuidx);
+  if (dev != best_dev) dev = best_dev;
+
+  if (ep->initialize_engine_by_dev(dev, false)) {
+    UCCL_LOG_PLUGIN << "pluginListen initialize_engine_by_dev pid: " << getpid()
+                    << ", dev: " << dev << ", local_gpuidx: " << local_gpuidx;
+  }
 
   // Create a listening socket.
   int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -307,11 +319,7 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
   handle->ip_addr_u32 = str_to_ip(factory_dev->local_ip_str);
   handle->listen_port = ntohs(serv_addr.sin_port);
   handle->remote_dev = dev;
-#ifndef __HIP_PLATFORM_AMD__
-  cudaGetDevice(&handle->remote_gpuidx);
-#else
-  DCHECK(hipGetDevice(&handle->remote_gpuidx) == hipSuccess);
-#endif
+  handle->remote_gpuidx = local_gpuidx;
 
   struct ucclListenComm* lcomm =
       (struct ucclListenComm*)calloc(1, sizeof(struct ucclListenComm));
@@ -336,16 +344,20 @@ ncclResult_t pluginConnect(int dev, void* opaque_handle, void** sendComm,
                            ncclNetDeviceHandle_v8_t** /*sendDevComm*/) {
   struct ucclHandle* handle = (struct ucclHandle*)opaque_handle;
   int local_gpuidx;
-#ifndef __HIP_PLATFORM_AMD__
-  cudaGetDevice(&local_gpuidx);
-#else
-  DCHECK(hipGetDevice(&local_gpuidx) == hipSuccess);
-#endif
+  GPU_RT_CHECK(gpuGetDevice(&local_gpuidx));
+
+  // Similar to pluginListen, we ignore PXN at the plugin level by using the
+  // same dev corresponding to the GPU managed by the current process.
+  auto best_dev = ep->get_best_dev_idx(local_gpuidx);
+  if (dev != best_dev) dev = best_dev;
+
+  if (ep->initialize_engine_by_dev(dev, false)) {
+    UCCL_LOG_PLUGIN << "pluginConnect initialize_engine_by_dev pid: "
+                    << getpid() << ", dev: " << dev
+                    << ", local_gpuidx: " << local_gpuidx;
+  }
 
   std::string remote_ip_str = ip_to_str(handle->ip_addr_u32);
-
-  struct ucclSendComm* scomm =
-      (struct ucclSendComm*)calloc(1, sizeof(struct ucclSendComm));
 
   if (handle->state == kConnInit) {
     handle->state = kConnConnecting;
@@ -360,21 +372,20 @@ ncclResult_t pluginConnect(int dev, void* opaque_handle, void** sendComm,
     });
     t.detach();
     *sendComm = nullptr;
-    free(scomm);
   } else if (handle->state == kConnConnecting) {
     *sendComm = nullptr;
-    free(scomm);
   } else {
     DCHECK(handle->state == kConnConnected);
+    struct ucclSendComm* scomm =
+        (struct ucclSendComm*)calloc(1, sizeof(struct ucclSendComm));
     scomm->base = handle->connect_buffer.base;
     scomm->base.uccl_req_pool = std::make_shared<ucclRequestBuffPool>();
     *sendComm = scomm;
-  }
-
-  if (*sendComm) {
-    UCCL_LOG_PLUGIN << "Connected to " << remote_ip_str << "/"
-                    << handle->remote_dev << " on dev:" << dev << ", "
-                    << scomm->base.conn_id.flow_id << " from PID: " << getpid();
+    auto factory_dev = RDMAFactory::get_factory_dev(dev);
+    UCCL_LOG_PLUGIN << factory_dev->local_ip_str << " Connected to "
+                    << remote_ip_str << "/" << handle->remote_dev
+                    << " on dev:" << dev << ", " << scomm->base.conn_id.flow_id
+                    << " from PID: " << getpid();
   }
 
   return ncclSuccess;
@@ -387,9 +398,6 @@ ncclResult_t pluginConnect(int dev, void* opaque_handle, void** sendComm,
 ncclResult_t pluginAccept(void* listenComm, void** recvComm,
                           ncclNetDeviceHandle_v8_t** /*recvDevComm*/) {
   struct ucclListenComm* lcomm = (struct ucclListenComm*)listenComm;
-
-  struct ucclRecvComm* rcomm =
-      (struct ucclRecvComm*)calloc(1, sizeof(struct ucclRecvComm));
 
   if (lcomm->state == kConnInit) {
     lcomm->state = kConnConnecting;
@@ -409,20 +417,17 @@ ncclResult_t pluginAccept(void* listenComm, void** recvComm,
     });
     t.detach();
     *recvComm = nullptr;
-    free(rcomm);
   } else if (lcomm->state == kConnConnecting) {
     *recvComm = nullptr;
-    free(rcomm);
   } else {
     DCHECK(lcomm->state == kConnConnected);
+    struct ucclRecvComm* rcomm =
+        (struct ucclRecvComm*)calloc(1, sizeof(struct ucclRecvComm));
     rcomm->base = lcomm->accept_buffer.base;
     rcomm->base.uccl_req_pool = std::make_shared<ucclRequestBuffPool>();
     rcomm->remote_ip_str = lcomm->accept_buffer.remote_ip_str;
     rcomm->remote_dev = lcomm->accept_buffer.remote_dev;
     *recvComm = rcomm;
-  }
-
-  if (*recvComm) {
     UCCL_LOG_PLUGIN << "Accepted from " << rcomm->remote_ip_str << "/"
                     << rcomm->remote_dev << " on dev:" << lcomm->dev << ", "
                     << rcomm->base.conn_id.flow_id << " from PID: " << getpid();

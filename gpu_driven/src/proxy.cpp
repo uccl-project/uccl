@@ -204,7 +204,10 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 void Proxy::run_local() {
   pin_thread();
   uint64_t my_tail = 0;
-  for (int seen = 0; seen < kIterations; ++seen) {
+  printf("Local CPU thread for block %d started\n", cfg_.block_idx + 1);
+  // for (int seen = 0; seen < kIterations; ++seen) {
+  int seen = 0;
+  while (true) {
     if (!ctx_.progress_run.load(std::memory_order_acquire)) {
       printf("Local block %d stopping early at seen=%d\n", cfg_.block_idx + 1,
              seen);
@@ -213,6 +216,7 @@ void Proxy::run_local() {
     // Prefer volatile read to defeat CPU cache stale head.
     // If your ring already has volatile_head(), use it; otherwise keep
     // rb->head.
+
     while (cfg_.rb->volatile_head() == my_tail) {
 #ifdef DEBUG_PRINT
       if (cfg_.block_idx == 0) {
@@ -230,9 +234,22 @@ void Proxy::run_local() {
 
     const uint64_t idx = my_tail & kQueueMask;
     uint64_t cmd;
+    auto last_print = std::chrono::steady_clock::now();
+    size_t spin_count = 0;
     do {
-      cmd = cfg_.rb->buf[idx].cmd;
+      cmd = cfg_.rb->volatile_load_cmd(idx);
       cpu_relax();  // avoid hammering cacheline
+
+      auto now = std::chrono::steady_clock::now();
+      if (now - last_print > std::chrono::seconds(10)) {
+        printf(
+            "Still waiting at block %d, seen=%d, spin_count=%zu, my_tail=%lu, "
+            "cmd: %lu\n",
+            cfg_.block_idx + 1, seen, spin_count, my_tail, cmd);
+        last_print = now;
+        spin_count++;
+      }
+
       if (!ctx_.progress_run.load(std::memory_order_acquire)) {
         printf("Local block %d stopping early at seen=%d\n", cfg_.block_idx + 1,
                seen);
@@ -246,18 +263,33 @@ void Proxy::run_local() {
            static_cast<unsigned long long>(cmd));
 #endif
 
-    const uint64_t expected_cmd =
-        (static_cast<uint64_t>(cfg_.block_idx) << 32) | (seen + 1);
-    if (cmd != expected_cmd) {
-      fprintf(stderr, "Error[Local]: block %d expected %llu got %llu\n",
-              cfg_.block_idx, static_cast<unsigned long long>(expected_cmd),
-              static_cast<unsigned long long>(cmd));
-      std::abort();
-    }
+    /*
+        const uint64_t expected_cmd =
+            (static_cast<uint64_t>(cfg_.block_idx) << 32) | (seen + 1);
+        if (cmd != expected_cmd) {
+          fprintf(stderr, "Error[Local]: block %d expected %llu got %llu\n",
+                  cfg_.block_idx, static_cast<unsigned long long>(expected_cmd),
+                  static_cast<unsigned long long>(cmd));
+          std::abort();
+        }
+    */
+    std::atomic_thread_fence(std::memory_order_acquire);
+
+    TransferCmd& cmd_entry = cfg_.rb->buf[idx];
+    printf(
+        "[blk %d] cmd=%llu dst=%u/%u bytes=%llu src=%p rptr=0x%llx lptr=0x%llx "
+        "sm=%d lane=%d msg=%d\n",
+        cfg_.block_idx, (unsigned long long)cmd_entry.cmd, cmd_entry.dst_rank,
+        cmd_entry.dst_gpu, (unsigned long long)cmd_entry.bytes,
+        cmd_entry.src_ptr, (unsigned long long)cmd_entry.req_rptr,
+        (unsigned long long)cmd_entry.req_lptr, cmd_entry.sm_id,
+        cmd_entry.lane_id, cmd_entry.message_idx);
 
     cfg_.rb->buf[idx].cmd = 0;
     ++my_tail;
-    cfg_.rb->tail = my_tail;
+    // cfg_.rb->tail = my_tail;
+    cfg_.rb->cpu_volatile_store_tail(my_tail);
+    seen++;
   }
 
   printf("Local block %d finished %d commands, tail=%lu\n", cfg_.block_idx,

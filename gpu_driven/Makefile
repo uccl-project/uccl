@@ -38,7 +38,7 @@ OBJ_DUAL   := $(OBJ_CPP) $(OBJ_CU) $(SRC_DUAL:.cu=.o)
 
 PYBIND_OBJ := $(PYBIND_SRC:.cc=.o)
 
-UCCL_EP_OBJS := src/uccl_ep.o src/internode_ll.o
+UCCL_EP_OBJS := src/uccl_ep.o src/internode_ll.o src/ep_runtime.o
 UCCL_EP_EXT  := uccl_ep$(EXT_SUFFIX)
 
 $(UCCL_EP_EXT): $(UCCL_EP_OBJS)
@@ -93,7 +93,7 @@ clean:
 	      $(PYBIND_OBJ) \
 	      $(TARGET_LOCAL) $(TARGET_REMOTE) $(TARGET_DUAL) \
 	      $(PYTARGET) $(UCCL_EP_EXT) \
-	      *.d src/*.d bench/*.d
+	      *.d src/*.d bench/*.d src/*.o
 
 # Automatically include dependency files if they exist
 DEPS := $(OBJ_CPP:.o=.d) $(OBJ_CU:.o=.d) \

@@ -1,5 +1,4 @@
 #include "engine.h"
-#include "util/net.h"
 #include "util/util.h"
 #include <arpa/inet.h>
 #include <glog/logging.h>
@@ -883,13 +882,7 @@ uint64_t Endpoint::conn_id_of_rank(int rank) const {
 }
 
 std::vector<uint8_t> Endpoint::get_endpoint_metadata() {
-  char uccl_ifname[MAX_IF_NAME_SIZE + 1];
-  uccl::socketAddress uccl_ifaddr;
-  int num_ifs =
-      uccl::find_interfaces(uccl_ifname, &uccl_ifaddr, MAX_IF_NAME_SIZE, 1);
-  if (num_ifs != 1) UCCL_INIT_CHECK(false, "No IP interface found");
-
-  std::string ip_str = uccl::get_dev_ip(uccl_ifname);
+  std::string ip_str = get_oob_ip();
   uint16_t port = ep_->get_p2p_listen_port(gpu_to_dev[local_gpu_idx_]);
 
   bool is_ipv6 = ip_str.find(':') != std::string::npos;

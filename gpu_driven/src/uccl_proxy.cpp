@@ -7,8 +7,11 @@ UcclProxy::UcclProxy(uintptr_t rb_addr, int block_idx,
                      std::string const& peer_ip)
     : peer_ip_storage_{peer_ip}, thread_{}, mode_{Mode::None}, running_{false} {
   Proxy::Config cfg;
-  cfg.rb = reinterpret_cast<DeviceToHostCmdBuffer*>(rb_addr);
-  rb_ = cfg.rb;
+  // cfg.rb = reinterpret_cast<DeviceToHostCmdBuffer*>(rb_addr);
+  rb_ = rb_addr;
+  block_idx_ = block_idx;
+  gpu_buffer_addr_ = reinterpret_cast<void*>(gpu_buffer_addr);
+  cfg.rb = reinterpret_cast<DeviceToHostCmdBuffer*>(rb_);
   cfg.block_idx = block_idx;
   cfg.gpu_buffer = reinterpret_cast<void*>(gpu_buffer_addr);
   cfg.total_size = total_size;

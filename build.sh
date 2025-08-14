@@ -29,7 +29,6 @@ fi
 
 rm -r uccl.egg-info >/dev/null 2>&1 || true
 rm -r dist >/dev/null 2>&1 || true
-rm -r uccl/lib >/dev/null 2>&1 || true
 rm -r build >/dev/null 2>&1 || true
 WHEEL_DIR="wheelhouse-${TARGET}"
 rm -r "${WHEEL_DIR}" >/dev/null 2>&1 || true
@@ -127,6 +126,11 @@ build_gpu_driven() {
 
   set -euo pipefail
   echo "[container] build_gpu_driven Target: $TARGET"
+
+  if [[ "$TARGET" == "rocm" ]]; then
+    echo "Skipping GPU-driven build on ROCm (no GPU-driven support yet)."
+    return
+  fi
 
   cd gpu_driven && make clean && make -j$(nproc) all && cd ..
 
