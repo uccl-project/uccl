@@ -64,7 +64,7 @@ def _run_server(args):
         elapsed = time.perf_counter() - start
 
         # check if tensor is filled with size
-        if not tensor.allclose(torch.tensor(size, dtype=torch.int32).cuda()):
+        if not tensor.allclose(torch.tensor(size, dtype=torch.float32).cuda()):
             print(f"[Server] WARNING: Tensor is not filled with {size}")
             print(f"[Server] Tensor: {tensor}")
             print(f"[Server] Tensor size: {tensor.size()}")

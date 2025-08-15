@@ -326,6 +326,7 @@ class Endpoint {
   static constexpr size_t kMaxNumChunksPerTransfer = 1024ul * 1024 * 1024 / 128;
   std::atomic<uint32_t> rr_stream_{0};
   std::vector<gpuStream_t> streams_;
+  std::vector<gpuStream_t> ipc_streams_;
 
   static constexpr uint64_t kIpcAlignment = 1ul << 20;
   // Prepare transfer info structure for receiving IPC handle
