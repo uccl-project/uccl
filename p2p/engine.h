@@ -327,11 +327,17 @@ class Endpoint {
   std::atomic<uint32_t> rr_stream_{0};
   std::vector<gpuStream_t> streams_;
 
+  static constexpr uint64_t kIpcAlignment = 1ul << 20;
   // Prepare transfer info structure for receiving IPC handle
   struct IpcTransferInfo {
     gpuIpcMemHandle_t handle;
+    uintptr_t offset;
     size_t size;
     uint32_t operation;  // 0 = send_ipc request, 1 = recv_ipc response
+  };
+
+  struct IpcEventInfo {
+    gpuIpcEventHandle_t event_handle;
   };
 
   static constexpr size_t kTaskRingSize = 1024;

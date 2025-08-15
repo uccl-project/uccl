@@ -42,12 +42,14 @@
 #define gpuMemcpyPeerAsync cudaMemcpyPeerAsync
 #define gpuMemcpyDeviceToDevice cudaMemcpyDeviceToDevice
 #define gpuMemcpyFromSymbol cudaMemcpyFromSymbol
+#define gpuMemsetAsync cudaMemsetAsync
 #define gpuGetLastError cudaGetLastError
 #define gpuErrorPeerAccessAlreadyEnabled cudaErrorPeerAccessAlreadyEnabled
 #define gpuEvent_t cudaEvent_t
 #define gpuEventCreate cudaEventCreate
 #define gpuEventDestroy cudaEventDestroy
 #define gpuEventRecord cudaEventRecord
+#define gpuEventQuery cudaEventQuery
 #define gpuEventSynchronize cudaEventSynchronize
 #define gpuStreamWaitEvent cudaStreamWaitEvent
 #define gpuEventCreateWithFlags cudaEventCreateWithFlags
@@ -101,6 +103,7 @@
 #define gpuMemcpyPeerAsync hipMemcpyPeerAsync
 #define gpuMemcpyDeviceToDevice hipMemcpyDeviceToDevice
 #define gpuMemcpyFromSymbol hipMemcpyFromSymbol
+#define gpuMemsetAsync hipMemsetAsync
 #define gpuGetLastError hipGetLastError
 #define gpuErrorPeerAccessAlreadyEnabled hipErrorPeerAccessAlreadyEnabled
 #define gpuEvent_t hipEvent_t
@@ -108,6 +111,7 @@
 #define gpuEventDestroy hipEventDestroy
 #define gpuEventRecord hipEventRecord
 #define gpuEventSynchronize hipEventSynchronize
+#define gpuEventQuery hipEventQuery
 #define gpuStreamWaitEvent hipStreamWaitEvent
 #define gpuEventCreateWithFlags hipEventCreateWithFlags
 #define gpuEventDefault hipEventDefault

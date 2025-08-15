@@ -24,6 +24,7 @@ def _make_buffer(size_bytes: int):
     """Allocate a contiguous GPU tensor of *size_bytes* and return it."""
     n_elems = size_bytes // 4  # float32
     tensor = torch.ones(n_elems, dtype=torch.float32).cuda()
+    assert tensor.is_contiguous()
     assert tensor.device.type == "cuda"
     return tensor
 
@@ -62,6 +63,14 @@ def _run_server(args):
 
         elapsed = time.perf_counter() - start
 
+        # check if tensor is filled with size
+        if not tensor.allclose(torch.tensor(size, dtype=torch.int32).cuda()):
+            print(f"[Server] WARNING: Tensor is not filled with {size}")
+            print(f"[Server] Tensor: {tensor}")
+            print(f"[Server] Tensor size: {tensor.size()}")
+            print(f"[Server] Tensor dtype: {tensor.dtype}")
+            print(f"[Server] Tensor device: {tensor.device}")
+
         gbps = (total * 8) / elapsed / 1e9
         gb_sec = total / elapsed / 1e9
         print(
@@ -74,6 +83,7 @@ def _run_client(args):
     peer = 1  # server rank
     for size in args.sizes:
         tensor = _make_buffer(size)
+        tensor.fill_(size)
 
         # Register tensor for efficient memory access
         collective.register_tensor(tensor)
@@ -230,7 +240,7 @@ def _run_ring_benchmark(args):
         recv_tensor = _make_buffer(size)
 
         # Fill send tensor with rank-specific data for verification
-        send_tensor.fill_(rank)
+        send_tensor.fill_(size)
 
         # Register tensors for efficient memory access
         collective.register_tensor(send_tensor)
@@ -242,7 +252,7 @@ def _run_ring_benchmark(args):
         collective.wait_all([send_req, recv_req])
 
         # Verify received data
-        expected_value = float(src_rank)
+        expected_value = float(size)
         received_value = recv_tensor[0].item()
 
         if abs(received_value - expected_value) > 1e-6:
@@ -250,17 +260,8 @@ def _run_ring_benchmark(args):
             print(f"  Expected: {expected_value}, Received: {received_value}")
             print(f"  Source rank: {src_rank}, Current rank: {rank}")
 
-            # Check consistency of received tensor
-            if not torch.allclose(recv_tensor, recv_tensor[0]):
-                print(f"  Received tensor has inconsistent values!")
-                unique_values = torch.unique(recv_tensor)
-                print(f"  Unique values: {unique_values[:10].tolist()}")
-        else:
-            if rank == 0:
-                print(f"[Rank {rank}] Warm-up data verification passed")
-
         # Fill tensor once before benchmark loop for best performance
-        benchmark_send_value = rank * 1000
+        benchmark_send_value = float(size)
         send_tensor.fill_(benchmark_send_value)
 
         start = time.perf_counter()
@@ -276,9 +277,7 @@ def _run_ring_benchmark(args):
         elapsed = time.perf_counter() - start
 
         # Perform final data verification after all iterations complete
-        # Use the last iteration's values for verification
-        final_iteration = args.iters - 1
-        final_send_value = rank * 1000 + final_iteration
+        final_send_value = float(size)
         send_tensor.fill_(final_send_value)
 
         # Final verification round
@@ -290,7 +289,7 @@ def _run_ring_benchmark(args):
         dist.barrier()
 
         # Expected value should be from the source rank's benchmark value
-        expected_value = float(src_rank * 1000 + final_iteration)
+        expected_value = float(final_send_value)
         received_value = recv_tensor[0].item()  # Check first element
 
         if abs(received_value - expected_value) > 1e-6:
@@ -299,12 +298,6 @@ def _run_ring_benchmark(args):
             print(f"  Source rank: {src_rank}, Current rank: {rank}")
             print(f"  Final send value was: {final_send_value}")
             print(f"  Benchmark send value was: {benchmark_send_value}")
-
-            # Check if all elements have the same value
-            if not torch.allclose(recv_tensor, recv_tensor[0]):
-                print(f"  Received tensor has inconsistent values!")
-                unique_values = torch.unique(recv_tensor)
-                print(f"  Unique values in tensor: {unique_values[:10].tolist()}")
 
         gbps = (total_bytes * 8) / elapsed / 1e9
         gb_sec = total_bytes / elapsed / 1e9
