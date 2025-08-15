@@ -1279,7 +1279,7 @@ class UcclFlow {
                         false, false, &comm_base->flow_cq, false, kFifoCQSize,
                         factory_dev->pd, factory_dev->ib_port_num,
                         &comm_base->fifo_mr, nullptr, kFifoMRSize,
-                        kMaxReq * kMaxRecv, kMaxReq * kMaxRecv, 1, 1);
+                        kMaxSendRecvWR, kMaxSendRecvWR, 1, 1);
     comm_base->fifo =
         reinterpret_cast<struct RemFifo*>(comm_base->fifo_mr->addr);
 
@@ -1323,8 +1323,8 @@ class UcclFlow {
                           IBV_QPT_RC, false, false, &comm_base->flow_cq, true,
                           0, factory_dev->pd, factory_dev->ib_port_num,
                           &recv_comm_.gpu_flush_mr, &recv_comm_.gpu_flush,
-                          sizeof(int), kMaxReq * kMaxRecv, kMaxReq * kMaxRecv,
-                          kMaxSge, kMaxSge);
+                          sizeof(int), kMaxSendRecvWR, kMaxSendRecvWR, kMaxSge,
+                          kMaxSge);
 
       recv_comm_.gpu_flush_sge.addr = (uint64_t)&recv_comm_.gpu_flush;
       recv_comm_.gpu_flush_sge.length = 1;
@@ -1360,8 +1360,8 @@ class UcclFlow {
       qp_init_attr.send_cq = comm_base->flow_cq;
       qp_init_attr.recv_cq = comm_base->flow_cq;
       qp_init_attr.qp_type = IBV_QPT_RC;
-      qp_init_attr.cap.max_send_wr = kMaxReq * kMaxRecv;
-      qp_init_attr.cap.max_recv_wr = kMaxReq * kMaxRecv;
+      qp_init_attr.cap.max_send_wr = kMaxSendRecvWR;
+      qp_init_attr.cap.max_recv_wr = kMaxSendRecvWR;
       qp_init_attr.cap.max_send_sge = kMaxSge;
       qp_init_attr.cap.max_recv_sge = kMaxSge;
       qp_init_attr.cap.max_inline_data = 0;
