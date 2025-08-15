@@ -97,6 +97,40 @@ inline int send_message(int sockfd, void const* buffer, size_t n_bytes) {
   return bytes_sent;
 }
 
+inline int receive_message_nonblock(int sockfd, void* buffer, size_t n_bytes) {
+  int bytes_read = 0;
+  int r;
+  while (bytes_read < static_cast<int>(n_bytes)) {
+    r = read(sockfd, static_cast<char*>(buffer) + bytes_read,
+             static_cast<size_t>(n_bytes - bytes_read));
+    if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
+      CHECK(false) << "ERROR reading from socket";
+    }
+    if (r > 0) {
+      bytes_read += r;
+    }
+  }
+  return bytes_read;
+}
+
+inline int send_message_nonblock(int sockfd, void const* buffer,
+                                 size_t n_bytes) {
+  int bytes_sent = 0;
+  int r;
+  while (bytes_sent < static_cast<int>(n_bytes)) {
+    // Make sure we write exactly n_bytes
+    r = write(sockfd, static_cast<char const*>(buffer) + bytes_sent,
+              n_bytes - bytes_sent);
+    if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
+      CHECK(false) << "ERROR writing to socket";
+    }
+    if (r > 0) {
+      bytes_sent += r;
+    }
+  }
+  return bytes_sent;
+}
+
 inline void send_ready(int bootstrap_fd) {
   bool ready = true;
   int ret = send_message(bootstrap_fd, &ready, sizeof(bool));

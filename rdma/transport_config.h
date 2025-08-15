@@ -30,7 +30,7 @@ UCCL_PARAM(PORT_ENTROPY, "PORT_ENTROPY", 32);
 // Maximum chunk size for each WQE.
 UCCL_PARAM(CHUNK_SIZE_KB, "CHUNK_SIZE_KB", 64);
 // Number of CUDA/HIP streams per engine.
-UCCL_PARAM(NumGpuRtStreams, "NUM_GPU_RT_STREAMS", 8);
+UCCL_PARAM(NumGpuRtStreams, "NUM_GPU_RT_STREAMS", 4);
 
 static constexpr uint32_t MAX_PEER = 2048;
 // Maximum number of flows (one-way) on each engine.

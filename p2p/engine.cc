@@ -39,17 +39,21 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
             << ", CPUs: " << num_cpus << std::endl;
   // Py_Initialize();
 
+  int n_streams = std::max(1, (int)ucclParamNumGpuRtStreams());
+
   int ngpus = 0;
   GPU_RT_CHECK(gpuGetDeviceCount(&ngpus));
   ipc_streams_.resize(ngpus);
   for (int i = 0; i < ngpus; ++i) {
     GPU_RT_CHECK(gpuSetDevice(i));
-    GPU_RT_CHECK(
-        gpuStreamCreateWithFlags(&ipc_streams_[i], gpuStreamNonBlocking));
+    ipc_streams_[i].resize(n_streams);
+    for (int j = 0; j < n_streams; ++j) {
+      GPU_RT_CHECK(
+          gpuStreamCreateWithFlags(&ipc_streams_[i][j], gpuStreamNonBlocking));
+    }
   }
 
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-  int n_streams = std::max(1, (int)ucclParamNumGpuRtStreams());
   streams_.resize(n_streams);
   for (int i = 0; i < n_streams; ++i) {
     GPU_RT_CHECK(gpuStreamCreateWithFlags(&streams_[i], gpuStreamNonBlocking));
@@ -1109,6 +1113,7 @@ bool Endpoint::connect_local(int remote_gpu_idx, uint64_t& conn_id) {
   int sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
   CHECK_GE(sockfd, 0) << "Failed to create UDS socket for connection: "
                       << strerror(errno);
+  fcntl(sockfd, F_SETFL, fcntl(sockfd, F_GETFL) | O_NONBLOCK);
 
   // Set up socket address
   struct sockaddr_un addr;
@@ -1122,8 +1127,9 @@ bool Endpoint::connect_local(int remote_gpu_idx, uint64_t& conn_id) {
                    << ": " << strerror(errno);
 
   // Send our GPU index to the remote endpoint
-  ret = uccl::send_message(sockfd, static_cast<void const*>(&local_gpu_idx_),
-                           sizeof(local_gpu_idx_));
+  ret = uccl::send_message_nonblock(sockfd,
+                                    static_cast<void const*>(&local_gpu_idx_),
+                                    sizeof(local_gpu_idx_));
   CHECK_EQ(ret, sizeof(local_gpu_idx_)) << "Failed to send local GPU index";
 
   // Create a new connection ID for this local connection
@@ -1152,12 +1158,13 @@ bool Endpoint::accept_local(int& remote_gpu_idx, uint64_t& conn_id) {
   socklen_t client_len = sizeof(client_addr);
   int client_fd =
       ::accept(uds_listen_fd_, (struct sockaddr*)&client_addr, &client_len);
-
   CHECK_GE(client_fd, 0) << "Failed to accept UDS connection: "
                          << strerror(errno);
 
+  fcntl(client_fd, F_SETFL, fcntl(client_fd, F_GETFL) | O_NONBLOCK);
+
   // Receive remote GPU index
-  auto ret = uccl::receive_message(
+  auto ret = uccl::receive_message_nonblock(
       client_fd, static_cast<void*>(&remote_gpu_idx), sizeof(remote_gpu_idx));
   CHECK_EQ(ret, sizeof(remote_gpu_idx)) << "Failed to receive remote GPU index";
 
@@ -1199,21 +1206,20 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size,
   // Use the persistent UDS connection
   int sockfd = conn->uds_sockfd_;
 
-  IpcTransferInfo transfer_info = {};  // Initialize to zero
+  int orig_device;
+  GPU_RT_CHECK(gpuGetDevice(&orig_device));
+  auto dev_reset =
+      uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
+  IpcTransferInfo transfer_info = {};  // Initialize to zero
   // Wait for receiver's IPC handle (receiver will send this proactively)
-  auto ret = uccl::receive_message(sockfd, static_cast<void*>(&transfer_info),
-                                   sizeof(transfer_info));
+  auto ret = uccl::receive_message_nonblock(
+      sockfd, static_cast<void*>(&transfer_info), sizeof(transfer_info));
   CHECK_EQ(ret, sizeof(transfer_info))
       << "Failed to receive IPC handle from receiver";
   CHECK_EQ(transfer_info.operation, 1) << "Invalid response from receiver";
   CHECK_EQ(transfer_info.size, size)
       << "Size mismatch: expected " << size << ", got " << transfer_info.size;
-
-  int orig_device;
-  GPU_RT_CHECK(gpuGetDevice(&orig_device));
-  auto dev_reset =
-      uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
   void* raw_dst_ptr = nullptr;
   GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
@@ -1222,20 +1228,31 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size,
   void* dst_ptr = reinterpret_cast<void*>(
       reinterpret_cast<uintptr_t>(raw_dst_ptr) + transfer_info.offset);
 
-  gpuStream_t dst_stream = ipc_streams_[conn->remote_gpu_idx_];
-  if (local_gpu_idx_ == conn->remote_gpu_idx_) {
-    GPU_RT_CHECK(gpuMemcpyAsync(dst_ptr, data, size, gpuMemcpyDeviceToDevice,
-                                dst_stream));
-  } else {
-    GPU_RT_CHECK(gpuMemcpyPeerAsync(dst_ptr, conn->remote_gpu_idx_, data,
-                                    local_gpu_idx_, size, dst_stream));
+  std::vector<gpuStream_t>& dst_streams = ipc_streams_[conn->remote_gpu_idx_];
+  int num_streams =
+      std::min(dst_streams.size(),
+               size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
+  size_t chunk_size = size / num_streams;
+  for (int i = 0; i < num_streams; ++i) {
+    // Split data and dst_ptr into n_streams chunks
+    void* chunk_data = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(data) + i * chunk_size);
+    void* chunk_dst_ptr = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(dst_ptr) + i * chunk_size);
+    auto copy_size = i == num_streams - 1 ? size - i * chunk_size : chunk_size;
+    // Works for both intra-GPU and inter-GPU copy
+    GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst_ptr, chunk_data, copy_size,
+                                gpuMemcpyDeviceToDevice, dst_streams[i]));
   }
-  GPU_RT_CHECK(gpuStreamSynchronize(dst_stream));
+
+  for (auto& stream : dst_streams) {
+    GPU_RT_CHECK(gpuStreamSynchronize(stream));
+  }
 
   // Notify receiver of completion
   uint32_t completion = 1;
-  ret = uccl::send_message(sockfd, static_cast<void const*>(&completion),
-                           sizeof(completion));
+  ret = uccl::send_message_nonblock(
+      sockfd, static_cast<void const*>(&completion), sizeof(completion));
   CHECK_EQ(ret, sizeof(completion)) << "Failed to send completion ack";
 
   // Now it is safe to clean up
@@ -1285,15 +1302,15 @@ bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size,
   GPU_RT_CHECK(gpuIpcGetMemHandle(&transfer_info.handle,
                                   reinterpret_cast<void*>(data_aligned)));
 
-  auto ret =
-      uccl::send_message(client_fd, static_cast<void const*>(&transfer_info),
-                         sizeof(transfer_info));
+  auto ret = uccl::send_message_nonblock(
+      client_fd, static_cast<void const*>(&transfer_info),
+      sizeof(transfer_info));
   CHECK_EQ(ret, sizeof(transfer_info)) << "Failed to send IPC handle to sender";
 
   // Notify sender of completion
   uint32_t completion = 0;
-  ret = uccl::receive_message(client_fd, static_cast<void*>(&completion),
-                              sizeof(completion));
+  ret = uccl::receive_message_nonblock(
+      client_fd, static_cast<void*>(&completion), sizeof(completion));
   CHECK_EQ(ret, sizeof(completion))
       << "Failed to receive completion notification";
   CHECK_EQ(completion, 1) << "Sender reported failure";
