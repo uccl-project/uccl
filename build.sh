@@ -99,11 +99,6 @@ build_p2p() {
   set -euo pipefail
   echo "[container] build_p2p Target: $TARGET"
 
-  if [[ -n "$IS_EFA" ]]; then
-    echo "Skipping P2P build on EFA (EFA P2P not supported yet)."
-    return
-  fi
-
   cd p2p
   if [[ "$TARGET" == "cuda" ]]; then
     make clean && make -j$(nproc)
@@ -194,7 +189,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
       build_rdma "$TARGET" "$ARCH" "$IS_EFA"
       build_efa "$TARGET" "$ARCH" "$IS_EFA"
       build_p2p "$TARGET" "$ARCH" "$IS_EFA"
-      build_gpu_driven "$TARGET" "$ARCH" "$IS_EFA"
+      # build_gpu_driven "$TARGET" "$ARCH" "$IS_EFA"
     fi
 
     ls -lh uccl/
