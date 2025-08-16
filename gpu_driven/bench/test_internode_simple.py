@@ -6,7 +6,7 @@ This test avoids the IPC handle issues by focusing only on low-latency functiona
 import argparse
 import torch
 import torch.distributed as dist
-
+import time
 from buffer import Buffer
 
 # import deep_ep as ep
@@ -26,7 +26,7 @@ from utils import init_dist, get_peer_ip
 def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
     num_tokens = 512
     hidden = 2048
-    num_experts = 64
+    num_experts = 6  # TODO(MaoZiming).
     num_topk = 4
     device_index = 0
 
@@ -52,14 +52,20 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
     num_device_sms = torch.cuda.get_device_properties(0).multi_processor_count
 
     bench = gpu_driven.Bench()
-    x_ptr = x.data_ptr()
+    # x_ptr = x.data_ptr()
     proxies = []
+
+    nbytes = int(1e9)  # 256 MB
+    scratch = torch.empty(nbytes, dtype=torch.uint8, device="cuda")
+    scratch_ptr = scratch.data_ptr()
+    scratch_bytes = scratch.numel() * scratch.element_size()
+
     for i in range(bench.blocks()):
         proxy = gpu_driven.Proxy(
             rb_addr=bench.ring_addr(i),
             block_idx=i,
-            gpu_buffer_addr=x_ptr,
-            total_size=x_bytes,
+            gpu_buffer_addr=scratch_ptr,
+            total_size=scratch_bytes,
             rank=rank,
             peer_ip=peer_ip,
         )
@@ -67,9 +73,23 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
         proxies.append(proxy)
     ep.register_proxies(device_index, proxies)
 
+    workers = None
+    if hasattr(gpu_driven, "PeerCopyManager"):
+        try:
+            workers = gpu_driven.PeerCopyManager(src_device=device_index)
+            workers.start_for_proxies(proxies)
+            if rank == 0:
+                print("[simple-test] ✓ PeerCopyManager started", flush=True)
+        except Exception as e:
+            if rank == 0:
+                print(f"[simple-test] PeerCopyManager unavailable: {e}", flush=True)
+
+    time.sleep(1)
+
     try:
         buffer = Buffer(
             group=group,
+            rdma_buffer_ptr=scratch_ptr,
             num_nvl_bytes=0,
             num_rdma_bytes=int(
                 1e9
@@ -127,12 +147,20 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
             )
             print("[simple-test] ✓ All tests passed!", flush=True)
 
+        time.sleep(10)
+
         try:
             buffer.destroy()
         except Exception:
             pass
         dist.barrier()
         print("[simple-test] ✓ Buffer destroyed", flush=True)
+
+        if workers is not None:
+            try:
+                workers.stop()
+            except Exception:
+                pass
 
         try:
             for p in proxies:

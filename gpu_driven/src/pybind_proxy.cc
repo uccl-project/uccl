@@ -1,3 +1,7 @@
+#include "bench_utils.hpp"
+#include "peer_copy_manager.hpp"
+#include "py_cuda_shims.hpp"
+#include "ring_buffer.cuh"
 #include "uccl_bench.hpp"
 #include "uccl_proxy.hpp"
 #include <pybind11/chrono.h>
@@ -7,12 +11,6 @@
 #include <stdexcept>
 #include <string>
 #include <cuda_runtime.h>
-#ifdef ENABLE_PROXY_CUDA_MEMCPY
-#include "peer_copy_manager.hpp"
-#endif
-#include "bench_utils.hpp"
-#include "py_cuda_shims.hpp"
-#include "ring_buffer.cuh"
 
 namespace py = pybind11;
 
@@ -112,8 +110,6 @@ PYBIND11_MODULE(gpu_driven, m) {
       .def("print_summary", &Bench::print_summary)
       .def("print_summary_last", &Bench::print_summary_last)
       .def("last_elapsed_ms", &Bench::last_elapsed_ms);
-
-#ifdef ENABLE_PROXY_CUDA_MEMCPY
   py::class_<PeerCopyManager>(m, "PeerCopyManager")
       .def(py::init<int>(), py::arg("src_device") = 0)
       .def("start_for_proxies",
@@ -124,5 +120,4 @@ PYBIND11_MODULE(gpu_driven, m) {
              mgr.start_for_proxies(vec);
            })
       .def("stop", &PeerCopyManager::stop);
-#endif
 }
