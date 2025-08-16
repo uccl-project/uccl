@@ -116,7 +116,6 @@ torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> ben
 
 Notes: 
 * You may consider exporting `GLOO_SOCKET_IFNAME=xxx` if triggering Gloo connectFullMesh failure.
-* To benchmark on AMD GPUs, you need to specify `UCCL_RCMODE=1`. 
 * **You must first import `torch` before importing `uccl.p2p` for AMD GPUs**, otherwise, `RuntimeError: No HIP GPUs are available` will occur. We guess this is because torch does some extra init for AMD GPUs, in order for Pybind-C++ code to use AMD GPUs. 
 * To benchmark dual direction transfer, you can add `--dual` with the same commands as above. 
 * To benchmark one-sided READ transfer, you can run `benchmark_uccl_read.py`.

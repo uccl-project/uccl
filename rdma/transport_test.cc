@@ -308,7 +308,9 @@ static void server_worker(void) {
 
   for (int i = 0; i < FLAGS_nflow; i++) {
     int remote_dev;
-    auto conn_id = ep->test_uccl_accept(0, 0, remote_ip, &remote_dev);
+    int remote_gpuidx;
+    auto conn_id =
+        ep->test_uccl_accept(0, 0, remote_ip, &remote_dev, &remote_gpuidx);
     printf("Server accepted connection from %s (flow#%d)\n", remote_ip.c_str(),
            i);
 #ifdef GPU

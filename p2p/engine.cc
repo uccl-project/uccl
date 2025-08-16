@@ -223,8 +223,9 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
       std::async(std::launch::async, [this, &ip_addr, &remote_gpu_idx]() {
         auto dev_idx = gpu_to_dev[local_gpu_idx_];
         auto p2p_listen_fd = ep_->get_p2p_listen_fd(dev_idx);
+        int remote_dev_idx;
         return ep_->uccl_accept(dev_idx, p2p_listen_fd, local_gpu_idx_, ip_addr,
-                                &remote_gpu_idx);
+                                &remote_dev_idx, &remote_gpu_idx);
       });
 
   // Check for Python signals (eg, ctrl+c) while waiting for connection

@@ -1056,8 +1056,9 @@ class RDMAEndpoint {
                         remote_port);
   }
   ConnID test_uccl_accept(int dev, int gpu, std::string& remote_ip,
-                          int* remote_dev) {
-    return uccl_accept(dev, p2p_listen_fds_[dev], gpu, remote_ip, remote_dev);
+                          int* remote_dev, int* remote_gpuidx) {
+    return uccl_accept(dev, p2p_listen_fds_[dev], gpu, remote_ip, remote_dev,
+                       remote_gpuidx);
   }
   /// For testing easily.
 
@@ -1070,7 +1071,8 @@ class RDMAEndpoint {
   // Accept a connection using the given listen_fd. <remote_ip, remote_dev> is
   // returned. This function is thread-safe.
   ConnID uccl_accept(int dev, int listen_fd, int local_gpuidx,
-                     std::string& remote_ip, int* remote_dev);
+                     std::string& remote_ip, int* remote_dev,
+                     int* remote_gpuidx);
 
   bool is_local_leader(int ldev, int lgpu, std::string lip, uint16_t lport,
                        int rdev, int rgpu, std::string rip, uint16_t rport) {
