@@ -58,7 +58,12 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t bytes,
                              size_t num_wrs, std::vector<uint64_t> wrs_to_post,
                              std::unordered_set<uint64_t>& finished_wrs,
                              std::mutex& finished_wrs_mutex);
-
+void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t bytes,
+                             size_t num_wrs,
+                             std::vector<uint64_t> const& wrs_to_post,
+                             std::unordered_set<uint64_t>& finished_wrs,
+                             std::mutex& finished_wrs_mutex,
+                             std::vector<TransferCmd> const& cmds_to_post);
 void local_process_completions(ProxyCtx& S,
                                std::unordered_set<uint64_t>& finished_wrs,
                                std::mutex& finished_wrs_mutex, int thread_idx,

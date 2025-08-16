@@ -148,12 +148,13 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         slot_idx = __shfl_sync(0xffffffff, slot_idx, 0);
         auto const dst_rank = dst_expert_idx / num_local_experts;
         auto const dst_expert_local_idx = dst_expert_idx % num_local_experts;
-        if (lane_id == 0)
-          printf(
-              "dst_expert_idx: %d, num_local_experts: %d, sm_id: %d, num_sms: "
-              "%d, num_threads: %d, thread_id: %d, warp_id: %d\n",
-              dst_expert_idx, num_local_experts, sm_id, num_sms, num_threads,
-              thread_id, warp_id);
+        // if (lane_id == 0)
+        //   printf(
+        //       "dst_expert_idx: %d, num_local_experts: %d, sm_id: %d, num_sms:
+        //       "
+        //       "%d, num_threads: %d, thread_id: %d, warp_id: %d\n",
+        //       dst_expert_idx, num_local_experts, sm_id, num_sms, num_threads,
+        //       thread_id, warp_id);
         auto const src_ptr = reinterpret_cast<uint64_t>(rdma_x_src_idx);
         auto const dst_ptr =
             reinterpret_cast<uint64_t>(rdma_recv_x) +
@@ -273,9 +274,9 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     }
 #else
     // NOTE(MaoZiming): Without ibgda, we can only use atomic add.
-    uccl::nvshmemi_ibgda_amo_nonfetch_add(reinterpret_cast<int*>(dst_ptr),
-                                          -num_tokens_sent - 1, dst_rank,
-                                          dst_expert_local_idx);
+    uccl::nvshmemi_ibgda_amo_nonfetch_add(
+        reinterpret_cast<int*>(dst_ptr), -num_tokens_sent - 1, dst_rank, sm_id,
+        dst_expert_local_idx, false, ring_addrs, num_ring_addrs);
 #endif
     // Clean workspace for next use
     atomic_counter_per_expert[responsible_expert_idx] = 0;
@@ -759,7 +760,8 @@ __global__ __launch_bounds__(1024, 1) void combine(
 #else
       // NOTE(MaoZiming): Without ibgda, we can only use atomic add
       nvshmemi_ibgda_amo_nonfetch_add(reinterpret_cast<int*>(dst_ptr), 1,
-                                      dst_rank, local_expert_idx);
+                                      dst_rank, sm_id, local_expert_idx, false,
+                                      ring_addrs, num_ring_addrs);
 #endif
       atomic_add_release_global(atomic_clean_flag, -1);
     }

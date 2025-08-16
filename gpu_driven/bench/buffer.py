@@ -37,6 +37,7 @@ class Buffer:
     def __init__(
         self,
         group: dist.ProcessGroup,
+        rdma_buffer_ptr: Optional[torch.Tensor] = None,
         num_nvl_bytes: int = 0,
         num_rdma_bytes: int = 0,
         low_latency_mode: bool = False,
@@ -82,6 +83,7 @@ class Buffer:
             low_latency_mode,
             explicitly_destroy,
         )
+        self.runtime.set_rdma_buffer_raw(rdma_buffer_ptr)
 
         # Synchronize device IDs
         device_ids = [

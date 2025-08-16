@@ -101,6 +101,8 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
 
 void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
                           int block_idx) {
+  printf("Rank %d, Block %d: Initializing RDMA for GPU buffer %p, size %zu\n",
+         rank, block_idx, gpu_buf, bytes);
   if (S.context) return;  // already initialized
 
   struct ibv_device** dev_list = ibv_get_device_list(NULL);
@@ -420,6 +422,89 @@ void post_receive_buffer_for_imm(ProxyCtx& S) {
 }
 
 void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t bytes,
+                             size_t num_wrs,
+                             std::vector<uint64_t> const& wrs_to_post,
+                             std::unordered_set<uint64_t>& finished_wrs,
+                             std::mutex& finished_wrs_mutex,
+                             std::vector<TransferCmd> const& cmds_to_post) {
+  if (num_wrs == 0) return;
+  if (wrs_to_post.size() != num_wrs || cmds_to_post.size() != num_wrs) {
+    fprintf(stderr,
+            "post_rdma_async_batched: size mismatch (num_wrs=%zu, wr_ids=%zu, "
+            "cmds=%zu)\n",
+            num_wrs, wrs_to_post.size(), cmds_to_post.size());
+    std::abort();
+  }
+
+  std::vector<ibv_sge> sges(num_wrs);
+  std::vector<ibv_send_wr> wrs(num_wrs);
+
+  for (size_t i = 0; i < num_wrs; ++i) {
+    auto const& cmd = cmds_to_post[i];
+
+    // NOTE(MaoZiming): cmd.leq_lptr is correct, since we have synced buffer
+    // with rdma_buffer in LowLatencyLayout.
+    sges[i].addr = cmd.req_lptr ? cmd.req_lptr
+                                : reinterpret_cast<uintptr_t>(buf) + i * bytes;
+    // sges[i].addr = reinterpret_cast<uintptr_t>(buf) + i * bytes;
+    // sges[i].addr = (uintptr_t)buf + i * bytes;
+    // sges[i].length = static_cast<uint32_t>(cmd.bytes);
+    sges[i].length = bytes;
+    sges[i].lkey = S.mr->lkey;
+
+    std::memset(&wrs[i], 0, sizeof(wrs[i]));
+    wrs[i].sg_list = &sges[i];
+    wrs[i].num_sge = 1;
+    wrs[i].wr_id = wrs_to_post[i];
+    // wrs[i].wr.rdma.remote_addr = cmd.req_rptr ? cmd.req_rptr : S.remote_addr;
+    // TODO(MaoZiming): fix address translation.
+    // NOTE(MaoZiming): cmd.req_rptr is not correct. Because uccl_ep has not yet
+    // done rdma handshake, so it doesn't know the remote address.
+    wrs[i].wr.rdma.remote_addr = S.remote_addr + i * bytes;
+    wrs[i].wr.rdma.rkey = S.remote_rkey;
+    wrs[i].opcode = IBV_WR_RDMA_WRITE;
+    wrs[i].send_flags = 0;
+    wrs[i].next = (i + 1 < num_wrs) ? &wrs[i + 1] : nullptr;
+
+    printf(
+        "[WR %zu/%zu] wr_id=%lu opcode=%s sge.addr=0x%lx len=%u lkey=0x%x "
+        "remote_addr=0x%lx S.remote_addr=0x%lx rkey=0x%x cmd.cmd=%lu "
+        "bytes=%lu\n",
+        i, num_wrs, wrs[i].wr_id,
+        (wrs[i].opcode == IBV_WR_RDMA_WRITE) ? "WRITE" : "WRITE_WITH_IMM",
+        (unsigned long)sges[i].addr, sges[i].length, sges[i].lkey,
+        (unsigned long)wrs[i].wr.rdma.remote_addr, S.remote_addr,
+        wrs[i].wr.rdma.rkey, cmd.cmd, cmd.bytes);
+  }
+  const size_t last = num_wrs - 1;
+  const uint64_t largest_wr = wrs_to_post[last];
+  wrs[last].send_flags |= IBV_SEND_SIGNALED;
+  wrs[last].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+  wrs[last].imm_data = htonl(static_cast<uint32_t>(largest_wr));
+
+  printf("[WR %zu/%zu] (last) wr_id=%lu opcode=WRITE_WITH_IMM imm_data=%u\n",
+         last, num_wrs, wrs[last].wr_id, ntohl(wrs[last].imm_data));
+
+  ibv_send_wr* bad = nullptr;
+  int ret = ibv_post_send(S.qp, &wrs[0], &bad);
+  if (ret) {
+    fprintf(stderr, "ibv_post_send failed: %s (ret=%d)\n", strerror(ret), ret);
+    if (bad)
+      fprintf(stderr, "Bad WR at %p (wr_id=%lu)\n", (void*)bad, bad->wr_id);
+    std::abort();
+  }
+  S.posted.fetch_add(num_wrs, std::memory_order_relaxed);
+  if (S.wr_id_to_wr_ids.find(largest_wr) != S.wr_id_to_wr_ids.end()) {
+    fprintf(stderr, "Error: largest_wr %lu already exists in wr_id_to_wr_ids\n",
+            largest_wr);
+    std::abort();
+  }
+  S.wr_id_to_wr_ids[largest_wr] = wrs_to_post;
+  printf("Posted %zu WRs (chain) last_wr=%lu remote_rkey=0x%x\n", num_wrs,
+         largest_wr, S.remote_rkey);
+}
+
+void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t bytes,
                              size_t num_wrs, std::vector<uint64_t> wrs_to_post,
                              std::unordered_set<uint64_t>& finished_wrs,
                              std::mutex& finished_wrs_mutex) {
@@ -454,6 +539,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t bytes,
     exit(1);
   }
   S.wr_id_to_wr_ids[largest_wr] = wrs_to_post;
+  printf("Posted %ld WRs with largest_wr %lu\n", num_wrs, largest_wr);
 }
 
 void local_process_completions(ProxyCtx& S,
@@ -467,10 +553,16 @@ void local_process_completions(ProxyCtx& S,
   assert(S.ack_qp->recv_cq == S.cq);
   assert(S.recv_ack_qp->send_cq == S.cq);
   assert(S.recv_ack_qp->recv_cq == S.cq);
+
+  // printf("Local thread %d processing %d completions\n", thread_idx, ne);
   for (int i = 0; i < ne; ++i) {
     if (wc[i].status != IBV_WC_SUCCESS) {
-      fprintf(stderr, "CQE error wr_id=%llu status=%s\n",
-              (unsigned long long)wc[i].wr_id, ibv_wc_status_str(wc[i].status));
+      fprintf(stderr,
+              "CQE ERROR wr_id=%llu status=%d(%s) opcode=%d byte_len=%u "
+              "vendor_err=0x%x qp_num=0x%x\n",
+              (unsigned long long)wc[i].wr_id, wc[i].status,
+              ibv_wc_status_str(wc[i].status), wc[i].opcode, wc[i].byte_len,
+              wc[i].vendor_err, wc[i].qp_num);
       std::abort();
     }
 
@@ -490,6 +582,8 @@ void local_process_completions(ProxyCtx& S,
           if (!S.has_received_ack || wr_done >= S.largest_completed_wr) {
             S.largest_completed_wr = wr_done;
             S.has_received_ack = true;
+            printf("Local thread %d received ACK for WR %lu\n", thread_idx,
+                   wr_done);
           } else {
             fprintf(stderr,
                     "Warning: received ACK for WR %lu, but largest completed "
@@ -546,6 +640,8 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                                 int ne, ibv_wc* wc) {
   struct ibv_recv_wr wrs[kMaxOutstandingRecvs];
   if (ne == 0) return;
+
+  // printf("Remote thread %d processing %d completions\n", idx, ne);
   int num_wr_imm = 0;
   for (int i = 0; i < ne; ++i) {
     if (wc[i].status != IBV_WC_SUCCESS) {
@@ -588,11 +684,11 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       fprintf(stderr, "per_gpu_device_buf[%d] is null\n", destination_gpu);
       std::abort();
     }
-    if (wc[i].imm_data > kIterations) {
-      fprintf(stderr, "Unexpected imm_data: %u, expected <= %d\n",
-              wc[i].imm_data, kIterations);
-      std::abort();
-    }
+    // if (wc[i].imm_data > kIterations) {
+    //   fprintf(stderr, "Unexpected imm_data: %u, expected <= %d\n",
+    //           wc[i].imm_data, kIterations);
+    //   std::abort();
+    // }
     CopyTask task{
         .wr_id = wc[i].imm_data,
         .dst_dev = destination_gpu,
@@ -605,6 +701,8 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
   if (!task_vec.empty()) {
     while (!g_ring.pushN(task_vec.data(), task_vec.size())) { /* Busy spin. */
     }
+    // printf("Remote thread %d pushed %zu tasks to ring buffer\n", idx,
+    //        task_vec.size());
   }
 }
 
@@ -674,6 +772,7 @@ void remote_send_ack(struct ibv_qp* ack_qp, uint64_t& wr_id,
     }
     std::abort();
   }
+  // printf("Remote thread %d posted ACK for WR %lu\n", worker_idx, wr_id);
 }
 
 void local_post_ack_buf(ProxyCtx& S, int depth) {

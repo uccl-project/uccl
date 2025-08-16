@@ -74,6 +74,7 @@ void peer_copy_worker(PeerCopyShared& shared, PeerWorkerCtx& ctx,
         sync_and_post(ctx, ring, stream, idx);
         continue;
       }
+      // printf("Worker %d popped %d tasks\n", idx, n);
       t = ctx.tasks[0];
       copy_batch_size = n;
     }
@@ -111,9 +112,10 @@ void peer_copy_worker(PeerCopyShared& shared, PeerWorkerCtx& ctx,
 #ifdef REMOTE_PERSISTENT_KERNEL
     } else if (false) {
 #else
-    } else {
+    } else if (false) {
 #endif
       /* The fastest among the three. */
+      // TODO(MaoZiming): enable this.
       err = launch_peer_bulk_copy2(ctx.tasks, copy_batch_size, stream,
                                    shared.src_device, d_tasks);
       func_name = "launch_peer_bulk_copy2";

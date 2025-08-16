@@ -284,6 +284,7 @@ class Buffer {
     auto num_local_experts = num_experts / num_ranks;
 
     // Buffer control
+    // TODO(MaoZiming)
     LowLatencyLayout layout(rdma_buffer_ptr, num_max_dispatch_tokens_per_rank,
                             hidden, num_ranks, num_experts);
     EP_HOST_ASSERT(layout.total_bytes <=
@@ -438,6 +439,7 @@ class Buffer {
     auto num_combined_tokens = static_cast<int>(topk_weights.size(0));
 
     // Buffer control
+    // TODO(MaoZiming)
     LowLatencyLayout layout(rdma_buffer_ptr, num_max_dispatch_tokens_per_rank,
                             hidden, num_ranks, num_experts);
     EP_HOST_ASSERT(layout.total_bytes <=
@@ -590,8 +592,20 @@ class Buffer {
       internode::barrier();
       CUDA_CHECK(cudaDeviceSynchronize());
 #else
-      rdma_buffer_ptr =
-          internode::alloc(num_rdma_bytes, NUM_BUFFER_ALIGNMENT_BYTES);
+      // TODO(MaoZiming): this needs to be allocated by proxy.
+      if (!rdma_buffer_ptr) {
+        fprintf(stderr,
+                "WARNING: rdma_buffer_ptr is not set, allocating %ld bytes "
+                "for RDMA buffer.\n",
+                num_rdma_bytes);
+        fflush(stderr);
+        std::abort();
+        rdma_buffer_ptr =
+            internode::alloc(num_rdma_bytes, NUM_BUFFER_ALIGNMENT_BYTES);
+      } else {
+        printf("rdma_buffer_ptr is set, using existing buffer: %p\n",
+               rdma_buffer_ptr);
+      }
       CUDA_CHECK(
           cudaMemsetAsync(rdma_buffer_ptr, 0, num_rdma_bytes, comm_stream));
       CUDA_CHECK(cudaStreamSynchronize(comm_stream));
@@ -599,6 +613,13 @@ class Buffer {
     }
     // Ready to use
     available = true;
+  }
+
+  void set_rdma_buffer_raw(void* ptr) {
+    if (ptr == nullptr) {
+      throw std::invalid_argument("set_rdma_buffer_raw: ptr null");
+    }
+    rdma_buffer_ptr = ptr;
   }
 
   bool is_available() const { return available; }
@@ -710,6 +731,13 @@ PYBIND11_MODULE(uccl_ep, m) {
            py::arg("num_rdma_bytes") = 0, py::arg("low_latency_mode") = false,
            py::arg("explicitly_destroy") = false)
       .def("destroy", &Buffer::destroy)
+      .def(
+          "set_rdma_buffer_raw",
+          [](Buffer& self, std::uintptr_t addr) {
+            self.set_rdma_buffer_raw(reinterpret_cast<void*>(addr));
+          },
+          py::arg("addr"),
+          R"doc(Set RDMA buffer from a raw address. Caller must keep the memory alive.)doc")
       .def("low_latency_dispatch", &Buffer::low_latency_dispatch, py::arg("x"),
            py::arg("topk_idx"),
            py::arg("cumulative_local_expert_recv_stats") = py::none(),

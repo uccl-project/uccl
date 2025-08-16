@@ -42,6 +42,8 @@ void Proxy::init_common() {
   modify_qp_to_rts(ctx_, &local_info_);
 
   ctx_.remote_addr = remote_info_.addr;
+  printf("Remote address: %p, RKey: %u\n", (void*)ctx_.remote_addr,
+         remote_info_.rkey);
   ctx_.remote_rkey = remote_info_.rkey;
 }
 
@@ -88,12 +90,22 @@ void Proxy::run_dual() {
 
   uint64_t my_tail = 0;
   size_t seen = 0;
+  auto last_print = std::chrono::steady_clock::now();
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     poll_cq_dual(ctx_, finished_wrs_, finished_wrs_mutex_, cfg_.block_idx,
                  ring);
-    if (my_tail < kIterations) {
-      notify_gpu_completion(my_tail);
-      post_gpu_command(my_tail, seen);
+    notify_gpu_completion(my_tail);
+    post_gpu_command(my_tail, seen);
+
+    auto now = std::chrono::steady_clock::now();
+    if (now - last_print >= std::chrono::seconds(10)) {
+      uint64_t head = cfg_.rb->head;
+      uint64_t tail = cfg_.rb->volatile_tail();
+      printf("[block %d] head=%llu tail=%llu inflight=%llu\n", cfg_.block_idx,
+             static_cast<unsigned long long>(head),
+             static_cast<unsigned long long>(tail),
+             static_cast<unsigned long long>(head - tail));
+      last_print = now;
     }
   }
 }
@@ -140,7 +152,8 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
 #ifndef SYNCHRONOUS_COMPLETION
   finished_wrs_.clear();
 #endif
-  cfg_.rb->tail = my_tail;
+  // cfg_.rb->tail = my_tail;
+  cfg_.rb->cpu_volatile_store_tail(my_tail);
 #else
   printf("ASSUME_WR_IN_ORDER is not defined. This is not supported.\n");
   std::abort();
@@ -156,22 +169,63 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
   }
 
   size_t batch_size = cur_head - seen;
+  /*
   if (batch_size > static_cast<size_t>(kMaxInflight)) {
     fprintf(stderr, "Error: batch_size %zu exceeds kMaxInflight %d\n",
             batch_size, kMaxInflight);
     std::abort();
   }
+    */
 
   std::vector<uint64_t> wrs_to_post;
   wrs_to_post.reserve(batch_size);
+  std::vector<TransferCmd> cmds_to_post;
+  cmds_to_post.reserve(batch_size);
 
   for (size_t i = seen; i < cur_head; ++i) {
+    /*
     uint64_t cmd = cfg_.rb->buf[i & kQueueMask].cmd;
     if (cmd == 0) {
       fprintf(stderr, "Error: cmd at index %zu is zero, my_tail: %lu\n", i,
               my_tail);
       std::abort();
     }
+    */
+
+    uint64_t cmd;
+    auto last_print = std::chrono::steady_clock::now();
+    size_t spin_count = 0;
+    do {
+      cmd = cfg_.rb->volatile_load_cmd(i);
+      cpu_relax();  // avoid hammering cacheline
+
+      auto now = std::chrono::steady_clock::now();
+      if (now - last_print > std::chrono::seconds(10)) {
+        printf(
+            "Still waiting at block %d, seen=%ld, spin_count=%zu, my_tail=%lu, "
+            "cmd: %lu\n",
+            cfg_.block_idx + 1, seen, spin_count, my_tail, cmd);
+        last_print = now;
+        spin_count++;
+      }
+
+      if (!ctx_.progress_run.load(std::memory_order_acquire)) {
+        printf("Local block %d stopping early at seen=%ld\n",
+               cfg_.block_idx + 1, seen);
+        return;
+      }
+    } while (cmd == 0);
+
+    TransferCmd& cmd_entry = cfg_.rb->buf[i];
+    // printf(
+    //     "[blk %d] cmd=%llu dst=%u/%u bytes=%llu src=%p rptr=0x%llx
+    //     lptr=0x%llx " "sm=%d lane=%d msg=%d\n", cfg_.block_idx, (unsigned
+    //     long long)cmd_entry.cmd, cmd_entry.dst_rank, cmd_entry.dst_gpu,
+    //     (unsigned long long)cmd_entry.bytes, cmd_entry.src_ptr, (unsigned
+    //     long long)cmd_entry.req_rptr, (unsigned long long)cmd_entry.req_lptr,
+    //     cmd_entry.sm_id, cmd_entry.lane_id, cmd_entry.message_idx);
+
+    /*
     uint64_t expected_cmd =
         (static_cast<uint64_t>(cfg_.block_idx) << 32) | (i + 1);
     if (cmd != expected_cmd) {
@@ -180,7 +234,9 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
               static_cast<unsigned long long>(cmd));
       std::abort();
     }
+    */
     wrs_to_post.push_back(i);
+    cmds_to_post.push_back(cmd_entry);
     wr_id_to_start_time_[i] = std::chrono::high_resolution_clock::now();
   }
   seen = cur_head;
@@ -193,8 +249,12 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 
   if (!wrs_to_post.empty()) {
     auto start = std::chrono::high_resolution_clock::now();
+    // post_rdma_async_batched(ctx_, cfg_.gpu_buffer, kObjectSize, batch_size,
+    //                         wrs_to_post, finished_wrs_, finished_wrs_mutex_,
+    //                         cmds_to_post);
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, kObjectSize, batch_size,
-                            wrs_to_post, finished_wrs_, finished_wrs_mutex_);
+                            wrs_to_post, finished_wrs_, finished_wrs_mutex_,
+                            cmds_to_post);
     auto end = std::chrono::high_resolution_clock::now();
     total_rdma_write_durations_ +=
         std::chrono::duration_cast<std::chrono::microseconds>(end - start);
@@ -274,16 +334,19 @@ void Proxy::run_local() {
         }
     */
     std::atomic_thread_fence(std::memory_order_acquire);
-
-    TransferCmd& cmd_entry = cfg_.rb->buf[idx];
-    printf(
-        "[blk %d] cmd=%llu dst=%u/%u bytes=%llu src=%p rptr=0x%llx lptr=0x%llx "
-        "sm=%d lane=%d msg=%d\n",
-        cfg_.block_idx, (unsigned long long)cmd_entry.cmd, cmd_entry.dst_rank,
-        cmd_entry.dst_gpu, (unsigned long long)cmd_entry.bytes,
-        cmd_entry.src_ptr, (unsigned long long)cmd_entry.req_rptr,
-        (unsigned long long)cmd_entry.req_lptr, cmd_entry.sm_id,
-        cmd_entry.lane_id, cmd_entry.message_idx);
+    if (cmd == 1) {
+      TransferCmd& cmd_entry = cfg_.rb->buf[idx];
+      printf("Received command 1: block %d, seen=%d, value: %d\n",
+             cfg_.block_idx + 1, seen, cmd_entry.value);
+    }
+    // TransferCmd& cmd_entry = cfg_.rb->buf[idx];
+    // printf(
+    //     "[blk %d] cmd=%llu dst=%u/%u bytes=%llu src=%p rptr=0x%llx
+    //     lptr=0x%llx " "sm=%d lane=%d msg=%d\n", cfg_.block_idx, (unsigned
+    //     long long)cmd_entry.cmd, cmd_entry.dst_rank, cmd_entry.dst_gpu,
+    //     (unsigned long long)cmd_entry.bytes, cmd_entry.src_ptr, (unsigned
+    //     long long)cmd_entry.req_rptr, (unsigned long long)cmd_entry.req_lptr,
+    //     cmd_entry.sm_id, cmd_entry.lane_id, cmd_entry.message_idx);
 
     cfg_.rb->buf[idx].cmd = 0;
     ++my_tail;
