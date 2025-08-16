@@ -165,6 +165,7 @@ static constexpr uint32_t kMaxRecv = 1;
 // Maximum number of outstanding receive requests in one engine.
 static constexpr uint32_t kMaxReq =
     16;  // This should be aligned with RID in IMMData
+static constexpr uint32_t kMaxSendRecvWR = kMaxRecv * kMaxReq * 4;
 // Maximum number of WQEs in SRQ (Shared Receive Queue).
 static constexpr uint32_t kMaxSRQ = 16 * kMaxReq;
 // Maximum number of chunks can be transmitted from timing wheel in one loop.
