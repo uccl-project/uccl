@@ -762,10 +762,13 @@ int try_bind_listen_socket(int* sock_fd, int base_port,
 
 bool RDMAEndpoint::initialize_engine_by_dev(int dev,
                                             bool enable_p2p_listen = false) {
+  bool called = false;
 #ifndef DISABLE_CALL_ONCE_STATIC
   static std::vector<std::once_flag> flags_per_dev_(MAX_IB_DEVS);
-  std::call_once(flags_per_dev_[dev], [this, dev, enable_p2p_listen]() {
+  std::call_once(flags_per_dev_[dev], [this, dev, enable_p2p_listen,
+                                       &called]() {
 #endif
+    called = true;
     int start_engine_idx = dev * num_engines_per_dev_;
     int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
     int numa_node = RDMAFactory::get_factory_dev(dev)->numa_node;
@@ -816,7 +819,7 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev,
 #ifndef DISABLE_CALL_ONCE_STATIC
   });
 #endif
-  return true;
+  return called;
 }
 
 inline uint32_t RDMAEndpoint::find_pot_load_engine_idx(int dev) {
@@ -959,9 +962,19 @@ void RDMAEndpoint::install_ctx_on_engines(int fd, int dev, PeerID peer_id,
   DCHECK(factory_dev) << "install_ctx_on_engines: get_factory_dev()";
 
   ret = send_message(fd, &factory_dev->gid.raw, 16);
+  printf("Sent  factory dev raw: %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x\n",
+    factory_dev->gid.raw[0], factory_dev->gid.raw[1], factory_dev->gid.raw[2], factory_dev->gid.raw[3], 
+    factory_dev->gid.raw[4], factory_dev->gid.raw[5], factory_dev->gid.raw[6], factory_dev->gid.raw[7], 
+    factory_dev->gid.raw[8], factory_dev->gid.raw[9], factory_dev->gid.raw[10], factory_dev->gid.raw[11], 
+    factory_dev->gid.raw[12], factory_dev->gid.raw[13], factory_dev->gid.raw[14], factory_dev->gid.raw[15]);
   DCHECK(ret == 16) << "Failed to send GID";
   ret = receive_message(fd, &info->remote_gid.raw, 16);
   DCHECK(ret == 16) << "Failed to receive GID";
+  printf("Received  remote_gid raw: %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x\n",
+    remote_gid.raw[0], remote_gid.raw[1], remote_gid.raw[2], remote_gid.raw[3], 
+    remote_gid.raw[4], remote_gid.raw[5], remote_gid.raw[6], remote_gid.raw[7], 
+    remote_gid.raw[8], remote_gid.raw[9], remote_gid.raw[10], remote_gid.raw[11], 
+    remote_gid.raw[12], remote_gid.raw[13], remote_gid.raw[14], remote_gid.raw[15]);
 
   ret = send_message(fd, &factory_dev->port_attr, sizeof(ibv_port_attr));
   DCHECK(ret == sizeof(ibv_port_attr)) << "Failed to send PortAttr";

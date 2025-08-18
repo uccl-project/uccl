@@ -90,8 +90,8 @@ def create_nixl_agent_mc(role: str, dataset, zmq_socket, backend):
         agent.add_remote_agent(remote_meta).decode("utf-8")
     elif "server" in role:
         remote_meta = zmq_socket.recv()
-        agent.add_remote_agent(remote_meta).decode("utf-8")
         zmq_socket.send(local_meta)
+        agent.add_remote_agent(remote_meta).decode("utf-8")
 
     return agent, register_descs
 
