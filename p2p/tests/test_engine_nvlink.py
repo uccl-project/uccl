@@ -29,21 +29,7 @@ except ImportError as e:
     sys.exit(1)
 
 
-def parse_metadata(metadata: bytes):
-    if len(metadata) == 10:
-        # IPv4: 4 bytes IP, 2 bytes port, 4 bytes GPU idx
-        ip_b, port_b, gpu_b = metadata[:4], metadata[4:6], metadata[6:10]
-        ip = socket.inet_ntop(socket.AF_INET, ip_b)
-    elif len(metadata) == 22:
-        # IPv6: 16 bytes IP, 2 bytes port, 4 bytes GPU idx
-        ip_b, port_b, gpu_b = metadata[:16], metadata[16:18], metadata[18:22]
-        ip = socket.inet_ntop(socket.AF_INET6, ip_b)
-    else:
-        raise ValueError(f"Unexpected metadata length: {len(metadata)}")
-
-    port = struct.unpack("!H", port_b)[0]
-    remote_gpu_idx = struct.unpack("i", gpu_b)[0]
-    return ip, port, remote_gpu_idx
+# parse_metadata is now provided by the C++ layer via p2p.Endpoint.parse_metadata()
 
 
 def _send_int(value: int, dst: int):
@@ -90,7 +76,7 @@ def test_local_dist():
 
         engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
         metadata = engine.get_endpoint_metadata()
-        ip, port, remote_gpu_idx = parse_metadata(metadata)
+        ip, port, remote_gpu_idx = p2p.Endpoint.parse_metadata(metadata)
         print(f"[server] Parsed IP: {ip}")
         print(f"[server] Parsed Port: {port}")
         print(f"[server] Parsed Remote GPU Index: {remote_gpu_idx}")
@@ -121,7 +107,7 @@ def test_local_dist():
         print("Running test_local (client)…")
 
         metadata = _recv_bytes(src=0)
-        ip, port, remote_gpu_idx = parse_metadata(metadata)
+        ip, port, remote_gpu_idx = p2p.Endpoint.parse_metadata(metadata)
         print(
             f"[client] Parsed server IP: {ip}, port: {port}, remote_gpu_idx: {remote_gpu_idx}"
         )

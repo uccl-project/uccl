@@ -246,5 +246,75 @@ PYBIND11_MODULE(p2p, m) {
                              metadata.size());
           },
           "Return endpoint metadata as a list of bytes")
+      // IPC-specific functions for local connections via Unix Domain Sockets
+      .def(
+          "connect_local",
+          [](Endpoint& self, int remote_gpu_idx) {
+            uint64_t conn_id;
+            bool success = self.connect_local(remote_gpu_idx, conn_id);
+            return py::make_tuple(success, conn_id);
+          },
+          "Connect to a local process via Unix Domain Socket",
+          py::arg("remote_gpu_idx"))
+      .def(
+          "accept_local",
+          [](Endpoint& self) {
+            int remote_gpu_idx;
+            uint64_t conn_id;
+            bool success = self.accept_local(remote_gpu_idx, conn_id);
+            return py::make_tuple(success, remote_gpu_idx, conn_id);
+          },
+          "Accept an incoming local connection via Unix Domain Socket")
+      .def(
+          "send_ipc",
+          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
+            bool success =
+                self.send_ipc(conn_id, reinterpret_cast<void*>(ptr), size);
+            return success;
+          },
+          "Send data via IPC (Inter-Process Communication) using CUDA/HIP "
+          "memory handles",
+          py::arg("conn_id"), py::arg("ptr"), py::arg("size"))
+      .def(
+          "recv_ipc",
+          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
+            bool success =
+                self.recv_ipc(conn_id, reinterpret_cast<void*>(ptr), size);
+            return success;
+          },
+          "Receive data via IPC (Inter-Process Communication) using CUDA/HIP "
+          "memory handles",
+          py::arg("conn_id"), py::arg("ptr"), py::arg("size"))
+      .def(
+          "send_ipc_async",
+          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
+            uint64_t transfer_id;
+            bool success =
+                self.send_ipc_async(conn_id, reinterpret_cast<void const*>(ptr),
+                                    size, &transfer_id);
+            return py::make_tuple(success, transfer_id);
+          },
+          "Send data asynchronously via IPC using CUDA/HIP memory handles",
+          py::arg("conn_id"), py::arg("ptr"), py::arg("size"))
+      .def(
+          "recv_ipc_async",
+          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
+            uint64_t transfer_id;
+            bool success = self.recv_ipc_async(
+                conn_id, reinterpret_cast<void*>(ptr), size, &transfer_id);
+            return py::make_tuple(success, transfer_id);
+          },
+          "Receive data asynchronously via IPC using CUDA/HIP memory handles",
+          py::arg("conn_id"), py::arg("ptr"), py::arg("size"))
+      .def_static(
+          "parse_metadata",
+          [](py::bytes metadata_bytes) {
+            std::string buf = metadata_bytes;
+            std::vector<uint8_t> metadata(buf.begin(), buf.end());
+            auto [ip, port, gpu_idx] = Endpoint::parse_metadata(metadata);
+            return py::make_tuple(ip, port, gpu_idx);
+          },
+          "Parse endpoint metadata to extract IP address, port, and GPU index",
+          py::arg("metadata"))
       .def("__repr__", [](Endpoint const& e) { return "<UCCL P2P Endpoint>"; });
 }

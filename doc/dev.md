@@ -55,7 +55,7 @@ The cross-compilation matrix is as follows:
 | cuda + x86         | ✓         | ✓         | x        | ✓        | ✓        | x       | ✓   |
 | cuda + arm (gh200) | ✓         | x         | x        | ✓        | x        | x       | x   |
 | rocm + x86         | ✓         | ✓         | ✓        | ✓        | ✓        | ✓       | x   |
-| aws p4d/p4de       | ✓         | ✓         | x        | x        | x        | x       | ✓   |
+| aws p4d/p4de       | ✓         | ✓         | x        | ✓        | x        | x       | ✓   |
 
 Note that you need ARM hosts to build ARM wheels, as cross-compilation tool `qemu-user-static` cannot emulate CUDA or ROCm. 
 

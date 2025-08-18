@@ -40,23 +40,24 @@ export NCCL_NCHANNELS_PER_NET_PEER=${CHANNELS_NET_PEER}
 export NCCL_P2P_NET_CHUNKSIZE=${CHUNK_SIZE}
 export NCCL_BUFFSIZE=${BUFFSIZE}
 export NCCL_NET_GDR_LEVEL=SYS
-# export CUDA_MODULE_LOADING=EAGER
 export NCCL_TOPO_FILE=${UCCL_HOME}/efa/p4d-24xl-topo.xml
-# export NCCL_PXN_DISABLE=1
 export UCCL_ENGINE_QUIET=1
 export GLOG_logtostderr=0
 
+# Additional settings for async communication
+export NCCL_ASYNC_ERROR_HANDLING=1
+export NCCL_LAUNCH_MODE=PARALLEL
 
 # Run the training script
-echo "Starting training with layer-wise reduction..."
+echo "Starting training with async layer-wise reduction..."
 torchrun \
     --nproc_per_node=4 \
     --master_port=29500 \
     --node_rank=0 \
     --nnodes=1 \
-    customized_resnet_ddp_layer_reduce.py \
+    resnet_ddp_layer_reduce_async.py \
     --batch_size ${BATCH_SIZE} \
     --epochs ${EPOCHS} \
     --lr ${LEARNING_RATE}
 
-echo "Training completed!"
+echo "Training completed!" 

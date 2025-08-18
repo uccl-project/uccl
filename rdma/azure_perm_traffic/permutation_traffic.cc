@@ -120,8 +120,9 @@ class NodeInfo {
 static void server_setup_agent(int target_rank, std::string ip,
                                struct CommHandle* recv_comm) {
   int remote_dev;
-  auto conn_id =
-      ep->uccl_accept(DEV, nodes[target_rank].listen_fd_, DEV, ip, &remote_dev);
+  int remote_gpuidx;
+  auto conn_id = ep->uccl_accept(DEV, nodes[target_rank].listen_fd_, DEV, ip,
+                                 &remote_dev, &remote_gpuidx);
 
   recv_comm->conn_id = conn_id;
 

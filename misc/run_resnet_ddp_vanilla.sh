@@ -40,7 +40,7 @@ torchrun \
     --master_port=29500 \
     --node_rank=0 \
     --nnodes=1 \
-    customized_resnet_ddp.py \
+    resnet_ddp_vanilla.py \
     --batch_size ${BATCH_SIZE} \
     --epochs ${EPOCHS} \
     --lr ${LEARNING_RATE}
