@@ -184,13 +184,18 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                  reinterpret_cast<uint64_t>(rdma_recv_x) + dst_offset);
         }
         
-#ifdef false
-        auto const dst_p2p_ptr =
-            uccl::nvshmemi_get_p2p_ptr(dst_ptr, rank, dst_rank);
-        if (dst_p2p_ptr == 0) {
-          uccl::nvshmemi_ibgda_put_nbi_warp(dst_ptr, src_ptr, num_bytes_per_msg,
-                                            dst_rank, dst_expert_local_idx,
-                                            lane_id, slot_idx);
+#ifdef true
+        // auto const dst_p2p_ptr =
+        //     uccl::nvshmemi_get_p2p_ptr(dst_ptr, rank, dst_rank);
+        if (dst_rank != rank) {
+          // uccl::nvshmemi_ibgda_put_nbi_warp(dst_ptr, src_ptr, num_bytes_per_msg,
+          //                                   dst_rank, dst_expert_local_idx,
+          //                                   lane_id, slot_idx);
+          // 
+          uccl::nvshmemi_ibgda_put_nbi_warp(
+            dst_offset, src_ptr, num_bytes_per_msg, dst_rank,
+            sm_id,  
+            lane_id, slot_idx, ring_addrs, num_ring_addrs);
         } else {
           // NOTES: only 2 load iterations for 7K hidden with 8 unrolls
           auto const* src_int4_ptr = reinterpret_cast<int4 const*>(src_ptr);
@@ -292,12 +297,15 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     auto dst_offset = reinterpret_cast<uint64_t>(
         rdma_recv_count + dst_expert_local_idx * num_ranks + rank) - 
         reinterpret_cast<uint64_t>(rdma_recv_count);
-#ifdef false
-    auto dst_p2p_ptr = nvshmemi_get_p2p_ptr(dst_ptr, rank, dst_rank);
-    if (dst_p2p_ptr == 0) {
-      uccl::nvshmemi_ibgda_amo_nonfetch_add(reinterpret_cast<int*>(dst_ptr),
-                                            -num_tokens_sent - 1, dst_rank,
-                                            dst_expert_local_idx);
+#ifdef true
+    // auto dst_p2p_ptr = nvshmemi_get_p2p_ptr(dst_ptr, rank, dst_rank);
+    if (dst_rank != rank) {
+      // uccl::nvshmemi_ibgda_amo_nonfetch_add(reinterpret_cast<int*>(dst_ptr),
+      //                                       -num_tokens_sent - 1, dst_rank,
+      //                                       dst_expert_local_idx);
+      uccl::nvshmemi_ibgda_amo_nonfetch_add(
+        reinterpret_cast<int*>(dst_offset), -num_tokens_sent - 1, dst_rank, sm_id,
+        dst_expert_local_idx, false, ring_addrs, num_ring_addrs);
     } else {
       st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr),
                             -num_tokens_sent - 1);
@@ -646,10 +654,10 @@ __global__ __launch_bounds__(1024, 1) void combine(
 
       // NOTE(MaoZiming): we don't have nvshmem-style intra-node p2p mapping.
       // TODO(MaoZiming): understand the optimizations here.
-#ifdef false
-      auto const dst_p2p_ptr = nvshmemi_get_p2p_ptr(dst_ptr, rank, dst_rank);
+#ifdef true
+      // auto const dst_p2p_ptr = nvshmemi_get_p2p_ptr(dst_ptr, rank, dst_rank);
 
-      if (not zero_copy or dst_p2p_ptr != 0) {
+      if (not zero_copy or dst_rank == rank) {
         // Read from `cpy_src_int4_ptr` and copy into `cpy_dst_int4_ptr`
         auto const cpy_src_int4_ptr =
             zero_copy ? reinterpret_cast<int4*>(buf_ptr) : x_int4;
@@ -792,11 +800,14 @@ __global__ __launch_bounds__(1024, 1) void combine(
         ;
       auto dst_ptr =
           reinterpret_cast<uint64_t>(rdma_recv_flag + global_expert_idx);
-#ifdef false
-      auto dst_p2p_ptr = nvshmemi_get_p2p_ptr(dst_ptr, rank, dst_rank);
-      if (dst_p2p_ptr == 0) {
+#ifdef true
+      // auto dst_p2p_ptr = nvshmemi_get_p2p_ptr(dst_ptr, rank, dst_rank);
+      if (dst_rank != rank) {
+        // nvshmemi_ibgda_amo_nonfetch_add(reinterpret_cast<int*>(dst_ptr), 1,
+        //                                 dst_rank, local_expert_idx);
         nvshmemi_ibgda_amo_nonfetch_add(reinterpret_cast<int*>(dst_ptr), 1,
-                                        dst_rank, local_expert_idx);
+                                      dst_rank, sm_id, local_expert_idx, false,
+                                      ring_addrs, num_ring_addrs);
       } else {
         st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr), 1);
       }
