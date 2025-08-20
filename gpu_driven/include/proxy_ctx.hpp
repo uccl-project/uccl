@@ -16,9 +16,12 @@ struct ProxyCtx {
   ibv_qp* recv_ack_qp = nullptr;
 
   // Remote memory
-  uintptr_t remote_addr = 0;
+  uintptr_t remote_addr = 0;  // Base address of remote rdma_buffer
   uint32_t remote_rkey = 0;
   uint32_t rkey = 0;
+  
+  // Buffer offset within rdma_buffer for address translation
+  uintptr_t dispatch_recv_data_offset = 0;  // offset of dispatch_rdma_recv_data_buffer from rdma_buffer base
 
   // Progress/accounting
   std::atomic<uint64_t> posted{0};

@@ -104,6 +104,31 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
         if rank == 0:
             print("[simple-test] ✓ Buffer created successfully", flush=True)
 
+        # Calculate and set dispatch_recv_data_offset for all proxies
+        # This offset corresponds to dispatch_rdma_recv_data_buffer within rdma_buffer
+        # Based on LowLatencyLayout: offset = signaling_buffer_bytes_aligned * 2 + send_buffer_bytes * 2
+        
+        # Calculate layout parameters (same logic as ep_config.hpp)
+        num_scales = hidden // 128
+        num_bytes_per_dispatch_msg = 4 + max(hidden * 2, hidden + num_scales * 4)  # sizeof(int4) + max(hidden*sizeof(bfloat16), hidden + scales*sizeof(float))
+        
+        dispatch_send_buffer_bytes = num_tokens * num_bytes_per_dispatch_msg
+        combine_send_buffer_bytes = num_experts * num_tokens * hidden * 2  # sizeof(bfloat16)
+        send_buffer_bytes = max(dispatch_send_buffer_bytes, combine_send_buffer_bytes)
+        
+        dispatch_recv_count_buffer_bytes = num_experts * 4  # sizeof(int)
+        signaling_buffer_bytes_aligned = ((dispatch_recv_count_buffer_bytes + 127) // 128) * 128  # align to 128
+        
+        # Calculate offset for buffer[0]
+        dispatch_recv_data_offset = signaling_buffer_bytes_aligned * 2 + send_buffer_bytes * 2
+        
+        # Set the offset for all proxies
+        for proxy in proxies:
+            proxy.set_dispatch_recv_data_offset(dispatch_recv_data_offset)
+        
+        if rank == 0:
+            print(f"[simple-test] Set dispatch_recv_data_offset: {dispatch_recv_data_offset}", flush=True)
+
         cumulative_local_expert_recv_stats = torch.zeros(
             (num_experts // num_ranks,), dtype=torch.int, device="cuda"
         )

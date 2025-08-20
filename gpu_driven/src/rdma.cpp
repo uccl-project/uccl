@@ -463,7 +463,9 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t bytes,
     // wrs[i].wr.rdma.remote_addr = cmd.req_rptr ? cmd.req_rptr : S.remote_addr;
     // wrs[i].wr.rdma.remote_addr = S.remote_addr + i * bytes;
     
-    wrs[i].wr.rdma.remote_addr = S.remote_addr + cmd.req_rptr;
+    // FIXED: GPU passes offset relative to dispatch_rdma_recv_data_buffer
+    // S.remote_addr points to rdma_buffer base. Add the stored offset of dispatch_rdma_recv_data_buffer.
+    wrs[i].wr.rdma.remote_addr = S.remote_addr + S.dispatch_recv_data_offset + cmd.req_rptr;
     
     wrs[i].wr.rdma.rkey = S.remote_rkey;
     wrs[i].opcode = IBV_WR_RDMA_WRITE;

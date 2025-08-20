@@ -165,14 +165,10 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         //     rank * num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
         //     slot_idx * num_bytes_per_msg;
         
-        // NEW APPROACH: Calculate offset within entire LowLatencyLayout buffer for CPU proxy translation
-        // The CPU proxy's S.remote_addr points to the base of the remote rdma_buffer,
-        // so we need to calculate the offset from rdma_buffer base to the target location in rdma_recv_x
-        // From LowLatencyLayout: rdma_recv_x = rdma_buffer + signaling_buffer_bytes_aligned * 2 + send_buffer_bytes * 2 + recv_buffer_bytes * i
-        // For the current buffer (i=0), we need to add this base offset plus the message offset
+        // Pass offset relative to dispatch_rdma_recv_data_buffer (rdma_recv_x)
+        // CPU proxy will add the base offset of dispatch_rdma_recv_data_buffer within rdma_buffer
         auto const dst_offset =
-            dst_expert_local_idx * num_ranks *
-                num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
+            dst_expert_local_idx * num_ranks * num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
             rank * num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
             slot_idx * num_bytes_per_msg;
         

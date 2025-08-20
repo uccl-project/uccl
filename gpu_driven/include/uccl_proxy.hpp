@@ -22,6 +22,12 @@ class UcclProxy {
   void start_local();
   void start_dual();
   void stop();
+  
+  // Set the offset of dispatch_rdma_recv_data_buffer within rdma_buffer
+  void set_dispatch_recv_data_offset(uintptr_t offset) {
+    proxy_->set_dispatch_recv_data_offset(offset);
+  }
+  
   uintptr_t rb_addr() const noexcept { return rb_; }
   int block_idx() const noexcept { return block_idx_; }
   void* gpu_buffer_addr() const noexcept { return gpu_buffer_addr_; }
