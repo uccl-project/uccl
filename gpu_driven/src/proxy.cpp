@@ -47,7 +47,8 @@ void Proxy::init_common() {
   // Add to debug file for core issue tracking
   FILE* debug_file = fopen("/tmp/uccl_debug.txt", "a");
   if (debug_file) {
-    fprintf(debug_file, "[PROXY_INIT] Block %d: remote_addr=0x%lx, local_buffer=0x%lx\n", 
+    fprintf(debug_file,
+            "[PROXY_INIT] Block %d: remote_addr=0x%lx, local_buffer=0x%lx\n",
             cfg_.block_idx, ctx_.remote_addr, (uintptr_t)cfg_.gpu_buffer);
     fclose(debug_file);
   }
@@ -97,23 +98,11 @@ void Proxy::run_dual() {
 
   uint64_t my_tail = 0;
   size_t seen = 0;
-  auto last_print = std::chrono::steady_clock::now();
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     poll_cq_dual(ctx_, finished_wrs_, finished_wrs_mutex_, cfg_.block_idx,
                  ring);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
-
-    auto now = std::chrono::steady_clock::now();
-    if (now - last_print >= std::chrono::seconds(10)) {
-      uint64_t head = cfg_.rb->head;
-      uint64_t tail = cfg_.rb->volatile_tail();
-      // printf("[block %d] head=%llu tail=%llu inflight=%llu\n", cfg_.block_idx,
-      //        static_cast<unsigned long long>(head),
-      //        static_cast<unsigned long long>(tail),
-      //        static_cast<unsigned long long>(head - tail));
-      last_print = now;
-    }
   }
 }
 
@@ -190,16 +179,12 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
   cmds_to_post.reserve(batch_size);
 
   for (size_t i = seen; i < cur_head; ++i) {
-    
     uint64_t cmd = cfg_.rb->buf[i & kQueueMask].cmd;
     if (cmd == 0) {
       fprintf(stderr, "Error: cmd at index %zu is zero, my_tail: %lu\n", i,
               my_tail);
       std::abort();
     }
-    
-
-    uint64_t cmd;
     auto last_print = std::chrono::steady_clock::now();
     size_t spin_count = 0;
     do {
@@ -338,14 +323,6 @@ void Proxy::run_local() {
       printf("Received command 1: block %d, seen=%d, value: %d\n",
              cfg_.block_idx + 1, seen, cmd_entry.value);
     }
-    // TransferCmd& cmd_entry = cfg_.rb->buf[idx];
-    // printf(
-    //     "[blk %d] cmd=%llu dst=%u/%u bytes=%llu src=%p rptr=0x%llx
-    //     lptr=0x%llx " "sm=%d lane=%d msg=%d\n", cfg_.block_idx, (unsigned
-    //     long long)cmd_entry.cmd, cmd_entry.dst_rank, cmd_entry.dst_gpu,
-    //     (unsigned long long)cmd_entry.bytes, cmd_entry.src_ptr, (unsigned
-    //     long long)cmd_entry.req_rptr, (unsigned long long)cmd_entry.req_lptr,
-    //     cmd_entry.sm_id, cmd_entry.lane_id, cmd_entry.message_idx);
 
     cfg_.rb->buf[idx].cmd = 0;
     ++my_tail;
