@@ -1540,13 +1540,13 @@ int RDMAEndpoint::uccl_send_async(UcclFlow* flow, struct Mhandle* mhandle,
   return 0;
 }
 
-int RDMAEndpoint::uccl_write_async(UcclFlow* flow, Mhandle* local_mh, void* dst,
+int RDMAEndpoint::uccl_write_async(UcclFlow* flow, Mhandle* local_mh, void* src,
                                    size_t size, FifoItem const& slot_item,
                                    ucclRequest* ureq) {
   ureq->type = ReqWrite;
   ureq->n = 1;
   ureq->context = flow;
-  ureq->send.laddr = reinterpret_cast<uint64_t>(dst);
+  ureq->send.laddr = reinterpret_cast<uint64_t>(src);
   ureq->send.lkey = local_mh->mr->lkey;
   ureq->send.raddr = slot_item.addr;
   ureq->send.rkey = slot_item.rkey;
@@ -2386,7 +2386,7 @@ bool RDMAContext::senderCC_tx_write(struct ucclRequest* ureq) {
     return true;
   }
 
-  DCHECK(size < 0) << "RDMA WRITE size < 0";
+  DCHECK(size > 0) << "RDMA WRITE size: " << size;
 
   while (*sent_offset < size || size == 0) {
     chunk_size = EventOnChunkSize(subflow, size - *sent_offset);
@@ -2463,7 +2463,7 @@ bool RDMAContext::senderCC_tx_read(struct ucclRequest* ureq) {
     return true;
   }
 
-  DCHECK(size < 0) << "RDMA READ size < 0";
+  DCHECK(size > 0) << "RDMA READ size: " << size;
 
   while (*sent_offset < size || size == 0) {
     chunk_size = EventOnChunkSize(subflow, size - *sent_offset);

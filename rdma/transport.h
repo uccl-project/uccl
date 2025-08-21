@@ -1124,7 +1124,7 @@ class RDMAEndpoint {
   int uccl_read_async(UcclFlow* flow, Mhandle* local_mh, void* dst, size_t size,
                       FifoItem const& slot_item, ucclRequest* ureq);
 
-  int uccl_write_async(UcclFlow* flow, Mhandle* local_mh, void* dst,
+  int uccl_write_async(UcclFlow* flow, Mhandle* local_mh, void* src,
                        size_t size, FifoItem const& slot_item,
                        ucclRequest* ureq);
 
