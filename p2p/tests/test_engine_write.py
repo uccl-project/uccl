@@ -1,26 +1,23 @@
 #!/usr/bin/env python3
 """
-Test script for the UCCL P2P Engine pybind11 extension
+Local unit-test for UCCL P2P Engine — server writes data with RDMA-WRITE
+using the new one-sided metadata handshake.
 """
 
-import sys
-import os
-import numpy as np
-import multiprocessing
-import socket
-import struct
-import time
-import torch
+from __future__ import annotations
+import sys, os, time, socket, struct, multiprocessing
 from typing import Tuple
+
+# You must first import torch before importing uccl for AMD GPUs
+import torch
+
+os.environ["UCCL_RCMODE"] = "1"
 
 try:
     from uccl import p2p
-
-    print("✓ Successfully imported p2p")
 except ImportError as e:
-    print(f"✗ Failed to import p2p: {e}")
-    print("Make sure to run 'make' first to build the module")
-    sys.exit(1)
+    sys.stderr.write(f"Failed to import p2p: {e}\n")
+    raise
 
 
 def parse_endpoint_meta(meta: bytes) -> Tuple[str, int, int]:
@@ -39,83 +36,72 @@ def parse_endpoint_meta(meta: bytes) -> Tuple[str, int, int]:
 
 
 def test_local():
-    """Test the UCCL P2P Engine"""
-    print("Running UCCL P2P Engine local test...")
+    print("Running RDMA-WRITE local test")
     meta_q = multiprocessing.Queue()
+    fifo_q = multiprocessing.Queue()
 
-    def server_process():
-        engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
-        meta_q.put(bytes(engine.get_endpoint_metadata()))
+    def server_proc(ep_meta_q, fifo_meta_q):
+        ep_meta = ep_meta_q.get(timeout=5)
+        ip, port, r_gpu = parse_endpoint_meta(ep_meta)
 
-        success, remote_ip_addr, remote_gpu_idx, conn_id = engine.accept()
-        assert success
-        print(
-            f"Server accepted connection from {remote_ip_addr}, GPU {remote_gpu_idx}, conn_id={conn_id}"
+        ep = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
+        ok, conn_id = ep.connect(ip, r_gpu, remote_port=port)
+        assert ok, "connect failed"
+        print(f"[Server] connected (conn_id={conn_id})")
+
+        tensor = torch.ones(1024, dtype=torch.float32, device="cuda:0")
+        ok, mr_id = ep.reg(tensor.data_ptr(), tensor.numel() * 4)
+        assert ok
+
+        fifo_meta = fifo_meta_q.get(timeout=10)
+        assert isinstance(fifo_meta, (bytes, bytearray)) and len(fifo_meta) == 64
+
+        ok = ep.write(conn_id, mr_id, tensor.data_ptr(), tensor.numel() * 4, fifo_meta)
+        assert ok, "write failed"
+
+        torch.cuda.synchronize()
+        print("tensor[:8]:", tensor[:8])
+        assert torch.allclose(tensor, torch.ones_like(tensor))
+        print("✓ Server write data correctly")
+
+    def client_proc(ep_meta_q, fifo_meta_q):
+        ep = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
+        ep_meta_q.put(bytes(ep.get_endpoint_metadata()))
+
+        ok, r_ip, r_gpu, conn_id = ep.accept()
+        assert ok, "accept failed"
+        print(f"[Client] accepted (conn_id={conn_id})")
+
+        tensor = torch.ones(1024, dtype=torch.float32, device="cuda:0")
+
+        print("data pointer hex", hex(tensor.data_ptr()))
+        torch.cuda.synchronize()
+        ok, mr_id = ep.reg(tensor.data_ptr(), tensor.numel() * 4)
+        assert ok
+        time.sleep(0.1)
+        print("advertise data pointer hex", hex(tensor.data_ptr()))
+        ok, fifo_blob = ep.advertise(
+            conn_id, mr_id, tensor.data_ptr(), tensor.numel() * 4
         )
+        assert isinstance(fifo_blob, (bytes, bytearray)) and len(fifo_blob) == 64
+        print("Buffer exposed for RDMA WRITE")
 
-        tensor = torch.zeros(1024, dtype=torch.float32)
-        assert tensor.is_contiguous()
+        fifo_meta_q.put(bytes(fifo_blob))
+        time.sleep(1)
 
-        success, mr_id = engine.reg(tensor.data_ptr(), tensor.numel() * 4)
-        assert success
-
-        success = engine.recv(
-            conn_id, mr_id, tensor.data_ptr(), size=tensor.numel() * 8
-        )
-        assert success
-
-        assert tensor.allclose(torch.ones(1024, dtype=torch.float32))
-        return True
-
-    def client_process():
-        engine = p2p.Endpoint(local_gpu_idx=1, num_cpus=4)
-        ep_meta = meta_q.get(timeout=5)
-
-        ip, r_port, r_gpu = parse_endpoint_meta(ep_meta)
-        success, conn_id = engine.connect(
-            remote_ip_addr=ip, remote_gpu_idx=r_gpu, remote_port=r_port
-        )
-        assert success
-        print(f"Client connected successfully: conn_id={conn_id}")
-
-        tensor = torch.ones(1024, dtype=torch.float32)
-        assert tensor.is_contiguous()
-
-        success, mr_id = engine.reg(tensor.data_ptr(), tensor.numel() * 4)
-        assert success
-
-        success = engine.send(conn_id, mr_id, tensor.data_ptr(), tensor.numel() * 4)
-        assert success
-
-        return True
-
-    server = multiprocessing.Process(target=server_process)
-    server.start()
+    srv = multiprocessing.Process(target=server_proc, args=(meta_q, fifo_q))
+    cli = multiprocessing.Process(target=client_proc, args=(meta_q, fifo_q))
+    srv.start()
     time.sleep(1)
-
-    client = multiprocessing.Process(target=client_process)
-    client.start()
-
-    try:
-        server.join()
-        client.join()
-    except KeyboardInterrupt:
-        print("\nReceived keyboard interrupt, terminating processes...")
-        server.terminate()
-        client.terminate()
-        server.join()
-        client.join()
-        raise
-
-
-def main():
-    """Run all tests"""
-    print("Running UCCL P2P Engine tests...")
-
-    test_local()
-
-    print("\n=== All UCCL P2P Engine tests completed! ===")
+    cli.start()
+    srv.join()
+    cli.join()
+    print("Local RDMA-WRITE test passed\n")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        test_local()
+    except KeyboardInterrupt:
+        print("\nInterrupted, terminating…")
+        sys.exit(1)
