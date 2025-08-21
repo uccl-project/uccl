@@ -96,7 +96,9 @@ def _run_client_recv(args, ep, remote_metadata):
         start = time.perf_counter()
         total = 0
         if args.async_api:
-            ok, transfer_id = ep.read_async(conn_id, mr_id_v[0], ptr_v[0], size_v[0], fifo_blob_v[0])
+            ok, transfer_id = ep.read_async(
+                conn_id, mr_id_v[0], ptr_v[0], size_v[0], fifo_blob_v[0]
+            )
             assert ok
             is_done = False
             while not is_done:
@@ -108,7 +110,9 @@ def _run_client_recv(args, ep, remote_metadata):
         total = 0
         for _ in range(args.iters):
             if args.async_api:
-                ok, transfer_id = ep.read_async(conn_id, mr_id_v[0], ptr_v[0], size_v[0], fifo_blob_v[0])
+                ok, transfer_id = ep.read_async(
+                    conn_id, mr_id_v[0], ptr_v[0], size_v[0], fifo_blob_v[0]
+                )
                 assert ok
                 is_done = False
                 while not is_done:

@@ -189,7 +189,8 @@ class Endpoint {
 
   /* Advertise a vector of data chunks. */
   bool advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-    std::vector<void*> addr_v, std::vector<size_t> len_v, std::vector<char*> out_buf_v, size_t num_iovs);
+                  std::vector<void*> addr_v, std::vector<size_t> len_v,
+                  std::vector<char*> out_buf_v, size_t num_iovs);
 
   /* Write data to the remote server. Blocking. */
   bool write(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
@@ -201,8 +202,8 @@ class Endpoint {
 
   /* Write a vector of data chunks. */
   bool writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-             std::vector<void*> dst_v, std::vector<size_t> size_v,
-             std::vector<uccl::FifoItem> slot_item_v, size_t num_iovs);
+              std::vector<void*> dst_v, std::vector<size_t> size_v,
+              std::vector<uccl::FifoItem> slot_item_v, size_t num_iovs);
 
   /* Poll the status of the asynchronous receive. */
   bool poll_async(uint64_t transfer_id, bool* is_done);
