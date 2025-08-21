@@ -18,25 +18,7 @@ except ImportError as exc:
     raise
 
 
-def parse_metadata(metadata: bytes):
-    if len(metadata) == 10:
-        # IPv4: 4 bytes IP, 2 bytes port, 4 bytes GPU idx
-        ip_bytes = metadata[:4]
-        port_bytes = metadata[4:6]
-        gpu_idx_bytes = metadata[6:10]
-        ip = socket.inet_ntop(socket.AF_INET, ip_bytes)
-    elif len(metadata) == 22:
-        # IPv6: 16 bytes IP, 2 bytes port, 4 bytes GPU idx
-        ip_bytes = metadata[:16]
-        port_bytes = metadata[16:18]
-        gpu_idx_bytes = metadata[18:22]
-        ip = socket.inet_ntop(socket.AF_INET6, ip_bytes)
-    else:
-        raise ValueError(f"Unexpected metadata length: {len(metadata)}")
-
-    port = struct.unpack("!H", port_bytes)[0]
-    remote_gpu_idx = struct.unpack("i", gpu_idx_bytes)[0]  # host byte order
-    return ip, port, remote_gpu_idx
+# parse_metadata is now provided by the C++ layer via p2p.Endpoint.parse_metadata()
 
 
 def _make_buffer(size_bytes: int, device: str, gpu_idx: int):
@@ -143,7 +125,7 @@ def _run_server(args, ep, remote_metadata):
 
 
 def _run_client(args, ep, remote_metadata):
-    ip, port, r_gpu = parse_metadata(remote_metadata)
+    ip, port, r_gpu = p2p.Endpoint.parse_metadata(remote_metadata)
     ok, conn_id = ep.connect(ip, r_gpu, remote_port=port)
     assert ok, "[Client] Failed to connect to server"
     print(f"[Client] Connected to {ip}:{port} (GPU {r_gpu}) conn_id={conn_id}")
@@ -217,7 +199,7 @@ def _run_client(args, ep, remote_metadata):
 
 
 def _run_server_dual(args, ep, remote_metadata):
-    ip, port, r_gpu = parse_metadata(remote_metadata)
+    ip, port, r_gpu = p2p.Endpoint.parse_metadata(remote_metadata)
 
     print("[Server] Waiting for connection …", flush=True)
     ok, r_ip, r_gpu2, conn_id = ep.accept()
@@ -275,7 +257,7 @@ def _run_server_dual(args, ep, remote_metadata):
 
 
 def _run_client_dual(args, ep, remote_metadata):
-    ip, port, r_gpu = parse_metadata(remote_metadata)
+    ip, port, r_gpu = p2p.Endpoint.parse_metadata(remote_metadata)
 
     ok, conn_id = ep.connect(ip, r_gpu, remote_port=port)
     assert ok, "[Client] Failed to connect to server"
@@ -329,6 +311,100 @@ def _run_client_dual(args, ep, remote_metadata):
             f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
         )
     print("[Client] Benchmark complete")
+
+
+def _run_server_ipc(args, ep):
+    """Run IPC benchmark server - waits for local connection and receives data"""
+    ok, remote_gpu_idx, conn_id = ep.accept_local()
+    assert ok, "[Server] Failed to accept local IPC connection"
+
+    for size in args.sizes:
+        # Allocate receive buffer - no memory registration needed for IPC
+        buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx)
+
+        # Warm-up transfer
+        if args.async_api:
+            ok, transfer_id = ep.recv_ipc_async(conn_id, ptr, size)
+            assert ok, "[Server] recv_ipc_async error"
+            is_done = False
+            while not is_done:
+                ok, is_done = ep.poll_async(transfer_id)
+                assert ok, "[Server] poll_async error"
+        else:
+            ok = ep.recv_ipc(conn_id, ptr, size)
+            assert ok, "[Server] recv_ipc error"
+
+        start = time.perf_counter()
+        total_recv = 0
+        for _ in range(args.iters):
+            if args.async_api:
+                ok, transfer_id = ep.recv_ipc_async(conn_id, ptr, size)
+                assert ok, "[Server] recv_ipc_async error"
+                is_done = False
+                while not is_done:
+                    ok, is_done = ep.poll_async(transfer_id)
+                    assert ok, "[Server] poll_async error"
+            else:
+                ok = ep.recv_ipc(conn_id, ptr, size)
+                assert ok, "[Server] recv_ipc error"
+            total_recv += size
+        elapsed = time.perf_counter() - start
+
+        gbps = (total_recv * 8) / elapsed / 1e9  # bits per second → Gbps
+        gb_sec = total_recv / elapsed / 1e9  # bytes per second → GB/s
+        lat = elapsed / args.iters if args.iters > 0 else 0
+
+        print(
+            f"[Server] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
+        )
+    print("[Server] IPC Benchmark complete")
+
+
+def _run_client_ipc(args, ep, remote_gpu_idx):
+    """Run IPC benchmark client - connects to local server and sends data"""
+    ok, conn_id = ep.connect_local(remote_gpu_idx)
+    assert ok, "[Client] Failed to connect to local server via IPC"
+
+    for size in args.sizes:
+        # Allocate send buffer - no memory registration needed for IPC
+        buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx)
+
+        # Warm-up transfer
+        if args.async_api:
+            ok, transfer_id = ep.send_ipc_async(conn_id, ptr, size)
+            assert ok, "[Client] send_ipc_async error"
+            is_done = False
+            while not is_done:
+                ok, is_done = ep.poll_async(transfer_id)
+                assert ok, "[Client] poll_async error"
+        else:
+            ok = ep.send_ipc(conn_id, ptr, size)
+            assert ok, "[Client] send_ipc error"
+
+        start = time.perf_counter()
+        total_sent = 0
+        for _ in range(args.iters):
+            if args.async_api:
+                ok, transfer_id = ep.send_ipc_async(conn_id, ptr, size)
+                assert ok, "[Client] send_ipc_async error"
+                is_done = False
+                while not is_done:
+                    ok, is_done = ep.poll_async(transfer_id)
+                    assert ok, "[Client] poll_async error"
+            else:
+                ok = ep.send_ipc(conn_id, ptr, size)
+                assert ok, "[Client] send_ipc error"
+            total_sent += size
+        elapsed = time.perf_counter() - start
+
+        gbps = (total_sent * 8) / elapsed / 1e9
+        gb_sec = total_sent / elapsed / 1e9
+        lat = elapsed / args.iters if args.iters > 0 else 0
+
+        print(
+            f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
+        )
+    print("[Client] IPC Benchmark complete")
 
 
 def parse_size_list(val: str) -> List[int]:
@@ -392,18 +468,33 @@ def main():
         action="store_true",
         help="Run dual benchmark",
     )
+    p.add_argument(
+        "--ipc",
+        action="store_true",
+        help="Run IPC benchmark using Unix Domain Sockets and CUDA/HIP memory handles",
+    )
     args = p.parse_args()
 
     if args.async_api:
         assert args.num_kvblocks == 1, "Async transfers only support one block"
+
+    # Check for incompatible options
+    if args.dual and args.ipc:
+        print("Error: --dual and --ipc options are incompatible")
+        sys.exit(1)
 
     dist.init_process_group(backend="gloo")
     rank = dist.get_rank()
     world_size = dist.get_world_size()
     assert world_size == 2, "This benchmark only supports 2 processes"
 
-    print("UCCL P2P Benchmark — role:", "client" if rank == 0 else "server")
-    print("Number of key-value blocks per message:", args.num_kvblocks)
+    mode = "IPC" if args.ipc else ("Dual" if args.dual else "Standard")
+    print(
+        f"UCCL P2P Benchmark — mode: {mode} | role:",
+        "client" if rank == 0 else "server",
+    )
+    if not args.ipc:
+        print("Number of key-value blocks per message:", args.num_kvblocks)
     print("Message sizes:", ", ".join(_pretty_size(s) for s in args.sizes))
     print(
         f"Device: {args.device} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}"
@@ -413,6 +504,7 @@ def main():
     ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
     local_metadata = ep.get_endpoint_metadata()
 
+    # This also serves as a barrier to guarantee both processes have created the endpoint
     if rank == 0:
         dist.send(torch.ByteTensor(list(local_metadata)), dst=1)
         remote_metadata_tensor = torch.zeros(len(local_metadata), dtype=torch.uint8)
@@ -429,6 +521,13 @@ def main():
             _run_client_dual(args, ep, remote_metadata)
         else:
             _run_server_dual(args, ep, remote_metadata)
+    elif args.ipc:
+        _, _, remote_gpu_idx = p2p.Endpoint.parse_metadata(remote_metadata)
+
+        if rank == 0:
+            _run_client_ipc(args, ep, remote_gpu_idx)
+        else:
+            _run_server_ipc(args, ep)
     else:
         if rank == 0:
             _run_client(args, ep, remote_metadata)

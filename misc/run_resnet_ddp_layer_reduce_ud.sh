@@ -1,14 +1,16 @@
 #!/bin/bash
 
+# Set strict error handling
 set -e
 set -x
 
 # Configuration variables
+UCCL_HOME="/opt/uccl_rdma_mp"
 NV_LINK_DISABLE=1
 CHANNELS=4
 CHANNELS_NET_PEER=4
-CHUNK_SIZE=524288
-BUFFSIZE=8388608
+CHUNK_SIZE=131072
+BUFFSIZE=1048576
 
 # Default parameters for training
 BATCH_SIZE=128
@@ -23,9 +25,9 @@ sudo sysctl -w vm.nr_hugepages=2048
 sudo rmmod ib_uverbs || true
 sudo modprobe ib_uverbs
 
-# Environment variables for NCCL
-export LD_PRELOAD="/opt/uccl_rdma_zc/nccl/build/lib/libnccl.so"
-export NCCL_NET_PLUGIN="/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu/libnccl-net.so"
+# Environment variables for UCCL
+export LD_PRELOAD="${UCCL_HOME}/nccl/build/lib/libnccl.so"
+export NCCL_NET_PLUGIN="${UCCL_HOME}/efa/libnccl-net-efa.so"
 export NCCL_DEBUG=INFO
 export NCCL_PROTO=Simple
 export NCCL_P2P_DISABLE=${NV_LINK_DISABLE}
@@ -37,19 +39,22 @@ export CUDA_VISIBLE_DEVICES=0,2,4,6
 export NCCL_NCHANNELS_PER_NET_PEER=${CHANNELS_NET_PEER}
 export NCCL_P2P_NET_CHUNKSIZE=${CHUNK_SIZE}
 export NCCL_BUFFSIZE=${BUFFSIZE}
+export NCCL_NET_GDR_LEVEL=SYS
+# export CUDA_MODULE_LOADING=EAGER
+export NCCL_TOPO_FILE=${UCCL_HOME}/efa/p4d-24xl-topo.xml
+# export NCCL_PXN_DISABLE=1
+export UCCL_ENGINE_QUIET=1
+export GLOG_logtostderr=0
 
-# Additional settings for async communication
-export NCCL_ASYNC_ERROR_HANDLING=1
-export NCCL_LAUNCH_MODE=PARALLEL
 
 # Run the training script
-echo "Starting training with async reduction..."
+echo "Starting training with layer-wise reduction..."
 torchrun \
     --nproc_per_node=4 \
     --master_port=29500 \
     --node_rank=0 \
     --nnodes=1 \
-    customized_resnet_ddp_layer_reduce_async.py \
+    resnet_ddp_layer_reduce.py \
     --batch_size ${BATCH_SIZE} \
     --epochs ${EPOCHS} \
     --lr ${LEARNING_RATE}

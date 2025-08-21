@@ -219,7 +219,8 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   local_info->addr = reinterpret_cast<uintptr_t>(gpu_buffer);
   local_info->psn = rand() & 0xffffff;      // random psn
   local_info->ack_psn = rand() & 0xffffff;  // random ack psn
-  // printf("[DEBUG] Rank %d: Registering local buffer addr=0x%lx, size=%zu bytes\n", 
+  // printf("[DEBUG] Rank %d: Registering local buffer addr=0x%lx, size=%zu
+  // bytes\n",
   //        rank, local_info->addr, size);
   fill_local_gid(S, local_info);
   printf(
@@ -462,14 +463,13 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t bytes,
     // ORIGINAL CODE: Incorrect address calculation ignoring cmd.req_rptr
     // wrs[i].wr.rdma.remote_addr = cmd.req_rptr ? cmd.req_rptr : S.remote_addr;
     // wrs[i].wr.rdma.remote_addr = S.remote_addr + i * bytes;
-    
+
     wrs[i].wr.rdma.remote_addr = S.remote_addr + cmd.req_rptr;
-    
+
     wrs[i].wr.rdma.rkey = S.remote_rkey;
     wrs[i].opcode = IBV_WR_RDMA_WRITE;
     wrs[i].send_flags = 0;
     wrs[i].next = (i + 1 < num_wrs) ? &wrs[i + 1] : nullptr;
-
   }
   const size_t last = num_wrs - 1;
   const uint64_t largest_wr = wrs_to_post[last];
@@ -534,7 +534,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t bytes,
     exit(1);
   }
   S.wr_id_to_wr_ids[largest_wr] = wrs_to_post;
-  //printf("Posted %ld WRs with largest_wr %lu\n", num_wrs, largest_wr);
+  // printf("Posted %ld WRs with largest_wr %lu\n", num_wrs, largest_wr);
 }
 
 void local_process_completions(ProxyCtx& S,
@@ -552,12 +552,13 @@ void local_process_completions(ProxyCtx& S,
   // printf("Local thread %d processing %d completions\n", thread_idx, ne);
   for (int i = 0; i < ne; ++i) {
     if (wc[i].status != IBV_WC_SUCCESS) {
-      fprintf(stderr,
-              "CQE ERROR wr_id=%llu status=%d(%s) opcode=%d byte_len=%u "
-              "vendor_err=0x%x qp_num=0x%x\n",
-              (unsigned long long)wc[i].wr_id, wc[i].status,
-              ibv_wc_status_str(wc[i].status), wc[i].opcode, wc[i].byte_len,
-              wc[i].vendor_err, wc[i].qp_num);
+      fprintf(
+          stderr,
+          "here!： CQE ERROR wr_id=%llu status=%d(%s) opcode=%d byte_len=%u "
+          "vendor_err=0x%x qp_num=0x%x\n",
+          (unsigned long long)wc[i].wr_id, wc[i].status,
+          ibv_wc_status_str(wc[i].status), wc[i].opcode, wc[i].byte_len,
+          wc[i].vendor_err, wc[i].qp_num);
       std::abort();
     }
 

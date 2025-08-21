@@ -6,6 +6,7 @@
 #include "util/jring.h"
 #include <arpa/inet.h>
 #include <glog/logging.h>
+#include <infiniband/verbs.h>
 #include <linux/in.h>
 #include <linux/tcp.h>
 #include <net/if.h>
@@ -88,6 +89,40 @@ inline int send_message(int sockfd, void const* buffer, size_t n_bytes) {
     r = write(sockfd, static_cast<char const*>(buffer) + bytes_sent,
               n_bytes - bytes_sent);
     if (r < 0 && !(errno == EINTR)) {
+      CHECK(false) << "ERROR writing to socket";
+    }
+    if (r > 0) {
+      bytes_sent += r;
+    }
+  }
+  return bytes_sent;
+}
+
+inline int receive_message_nonblock(int sockfd, void* buffer, size_t n_bytes) {
+  int bytes_read = 0;
+  int r;
+  while (bytes_read < static_cast<int>(n_bytes)) {
+    r = read(sockfd, static_cast<char*>(buffer) + bytes_read,
+             static_cast<size_t>(n_bytes - bytes_read));
+    if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
+      CHECK(false) << "ERROR reading from socket";
+    }
+    if (r > 0) {
+      bytes_read += r;
+    }
+  }
+  return bytes_read;
+}
+
+inline int send_message_nonblock(int sockfd, void const* buffer,
+                                 size_t n_bytes) {
+  int bytes_sent = 0;
+  int r;
+  while (bytes_sent < static_cast<int>(n_bytes)) {
+    // Make sure we write exactly n_bytes
+    r = write(sockfd, static_cast<char const*>(buffer) + bytes_sent,
+              n_bytes - bytes_sent);
+    if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
       CHECK(false) << "ERROR writing to socket";
     }
     if (r > 0) {
@@ -1150,99 +1185,171 @@ static int cal_pcie_distance(fs::path const& devA, fs::path const& devB) {
   return static_cast<int>(i + j);
 }
 
+static inline std::string normalize_pci_bus_id(std::string const& pci_bus_id) {
+  std::string normalized = pci_bus_id;
+  std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                 ::tolower);
+  return normalized;
+}
+
+static fs::path sysfs_pci_path_from_bdf(std::string const& bdf_lower) {
+  fs::path link = fs::path("/sys/bus/pci/devices") / bdf_lower;
+  try {
+    return fs::canonical(link);  // -> /sys/devices/.../pci.../<bdf>
+  } catch (...) {
+    return link;  // still valid for accessing sysfs files via the symlink
+  }
+}
+
 static std::vector<fs::path> get_gpu_cards() {
-  // Get the device properties, conforming to CUDA_VISIBLE_DEVICES
-  int num_gpus;
+  // 1) Collect visible GPUs (ranked) and their normalized BDFs
+  int num_gpus = 0;
   GPU_RT_CHECK(gpuGetDeviceCount(&num_gpus));
-  char bdf[32];
-  std::vector<std::string> gpu_cards_ranked;
-  gpu_cards_ranked.reserve(num_gpus);
-  for (int i = 0; i < num_gpus; i++) {
-    // This order is aligned with PyTorch's GPU rank order.
-    GPU_RT_CHECK(gpuDeviceGetPCIBusId(bdf, sizeof(bdf), i));
-    gpu_cards_ranked.push_back(bdf);
+  std::vector<std::string> gpu_bdfs_ranked;
+  gpu_bdfs_ranked.reserve(num_gpus);
+
+  char bdf[64];
+  for (int i = 0; i < num_gpus; ++i) {
+    GPU_RT_CHECK(gpuDeviceGetPCIBusId(bdf, sizeof(bdf), i));  // full BDF
+    gpu_bdfs_ranked.emplace_back(normalize_pci_bus_id(bdf));
   }
 
+  // 2) Map each BDF -> canonical sysfs PCI path
   std::vector<fs::path> gpu_cards;
-  std::unordered_map<fs::path, int> gpu_cards_rank_map;
+  gpu_cards.reserve(num_gpus);
+  std::unordered_map<fs::path, int> rank_map;
 
-  // Discover GPU BDF using /sys/class/drm/cardX/device symlinks
-  const fs::path drm_class{"/sys/class/drm"};
-  const std::regex card_re(R"(card(\d+))");
-  if (fs::exists(drm_class)) {
-    for (auto const& entry : fs::directory_iterator(drm_class)) {
-      const std::string name = entry.path().filename();
-      std::smatch m;
-      if (!std::regex_match(name, m, card_re)) continue;
+  for (int rank = 0; rank < (int)gpu_bdfs_ranked.size(); ++rank) {
+    std::string const& bdf_lower = gpu_bdfs_ranked[rank];
+    fs::path pci_path = sysfs_pci_path_from_bdf(bdf_lower);
 
-      fs::path dev_path = fs::canonical(entry.path() / "device");
-
-      // check vendor id
-      std::ifstream vf(dev_path / "vendor");
+    // Optional sanity check: ensure it's actually a GPU (NVIDIA=0x10de,
+    // AMD=0x1002)
+    bool ok = true;
+    try {
+      std::ifstream vf(pci_path / "vendor");
       std::string vs;
-      if (!(vf >> vs)) continue;
-      uint32_t vendor = std::stoul(vs, nullptr, 0);        // handles "0x10de"
-      if (vendor != 0x10de && vendor != 0x1002) continue;  // NVIDIA or AMD
-
-      // Extract PCI bus ID from the last component of the device path
-      std::string pci_busid = dev_path.filename();
-      auto it = std::find(gpu_cards_ranked.begin(), gpu_cards_ranked.end(),
-                          pci_busid);
-      if (it == gpu_cards_ranked.end()) continue;
-      auto distance = std::distance(gpu_cards_ranked.begin(), it);
-      gpu_cards_rank_map[dev_path] = distance;
-      gpu_cards.push_back(dev_path);
+      if (vf >> vs) {
+        // vs may be "0x10de" or "0x1002"
+        uint32_t vendor = std::stoul(vs, nullptr, 0);
+        if (!(vendor == 0x10de || vendor == 0x1002)) ok = false;
+      }
+    } catch (...) {
+      // If vendor check fails due to restricted sysfs, keep going.
     }
+    if (!ok) continue;
+
+    rank_map[pci_path] = rank;
+    gpu_cards.push_back(pci_path);
   }
 
-  const fs::path nvidia_gpus{"/proc/driver/nvidia/gpus"};
-  if (gpu_cards.empty() && fs::exists(nvidia_gpus)) {
-    for (auto const& entry : fs::directory_iterator(nvidia_gpus)) {
-      fs::path dev_path = fs::canonical(entry.path());
-      std::string pci_busid = dev_path.filename();
-      auto it = std::find(gpu_cards_ranked.begin(), gpu_cards_ranked.end(),
-                          pci_busid);
-      if (it == gpu_cards_ranked.end()) continue;
-      auto distance = std::distance(gpu_cards_ranked.begin(), it);
-      gpu_cards_rank_map[dev_path] = distance;
-      gpu_cards.push_back(dev_path);
+  // 3) Fallbacks (only if needed): DRM class (cardX) or
+  // /proc/driver/nvidia/gpus
+  if (gpu_cards.empty()) {
+    const fs::path drm_class{"/sys/class/drm"};
+    const std::regex card_re(R"(card(\d+))");
+    if (fs::exists(drm_class)) {
+      for (auto const& entry : fs::directory_iterator(drm_class)) {
+        const std::string name = entry.path().filename().string();
+        std::smatch m;
+        if (!std::regex_match(name, m, card_re)) continue;
+        fs::path dev_path;
+        try {
+          dev_path = fs::canonical(entry.path() / "device");
+        } catch (...) {
+          continue;
+        }
+        // Extract BDF and try to match ranks
+        std::string bdf_name = dev_path.filename().string();
+        std::string nbdf = normalize_pci_bus_id(bdf_name);
+        auto it =
+            std::find(gpu_bdfs_ranked.begin(), gpu_bdfs_ranked.end(), nbdf);
+        if (it == gpu_bdfs_ranked.end()) continue;
+        rank_map[dev_path] = int(std::distance(gpu_bdfs_ranked.begin(), it));
+        gpu_cards.push_back(dev_path);
+      }
     }
+#ifndef __HIP_PLATFORM_AMD__
+    if (gpu_cards.empty()) {
+      const fs::path nvidia_gpus{"/proc/driver/nvidia/gpus"};
+      if (fs::exists(nvidia_gpus)) {
+        for (auto const& entry : fs::directory_iterator(nvidia_gpus)) {
+          fs::path dev_path;
+          try {
+            dev_path = fs::canonical(entry.path());
+          } catch (...) {
+            continue;
+          }
+          std::string bdf_name = dev_path.filename().string();  // already BDF
+          std::string nbdf = normalize_pci_bus_id(bdf_name);
+          auto it =
+              std::find(gpu_bdfs_ranked.begin(), gpu_bdfs_ranked.end(), nbdf);
+          if (it == gpu_bdfs_ranked.end()) continue;
+          rank_map[dev_path] = int(std::distance(gpu_bdfs_ranked.begin(), it));
+          gpu_cards.push_back(dev_path);
+        }
+      }
+    }
+#endif
   }
 
+  // 4) Sort by original runtime rank
   std::sort(gpu_cards.begin(), gpu_cards.end(),
-            [&gpu_cards_rank_map](fs::path const& a, fs::path const& b) {
-              return gpu_cards_rank_map[a] < gpu_cards_rank_map[b];
+            [&rank_map](fs::path const& a, fs::path const& b) {
+              return rank_map[a] < rank_map[b];
             });
 
   return gpu_cards;
 }
 
 static std::vector<std::pair<std::string, fs::path>> get_rdma_nics() {
-  // Discover RDMA NICs under /sys/class/infiniband
-  std::vector<std::pair<std::string, fs::path>> ib_nics;
-  const fs::path ib_class{"/sys/class/infiniband"};
-  if (!fs::exists(ib_class)) {
-    std::cerr << "No /sys/class/infiniband directory found. Are RDMA drivers "
-                 "loaded?\n";
-    return ib_nics;
+  std::vector<std::pair<std::string, fs::path>> rdma_nics;
+
+  int num_devices = 0;
+  ibv_device** dev_list = ibv_get_device_list(&num_devices);
+  if (!dev_list) {
+    std::cerr << "Failed to get RDMA device list (is rdma-core installed?).\n";
+    return rdma_nics;
   }
 
-  for (auto const& ib_entry : fs::directory_iterator(ib_class)) {
-    std::string ibdev = ib_entry.path().filename();
-    fs::path ib_device_path = fs::canonical(ib_entry.path() / "device");
+  for (int i = 0; i < num_devices; ++i) {
+    ibv_device* dev = dev_list[i];
+    char const* dev_name = ibv_get_device_name(dev);  // e.g. "mlx5_0", "efa_0"
 
-    // Collect interface names under RDMA device
-    fs::path netdir = ib_device_path / "net";
-    if (fs::exists(netdir) && fs::is_directory(netdir)) {
-      ib_nics.push_back(std::make_pair(ibdev, ib_device_path));
+    // dev->ibdev_path is something like: /sys/class/infiniband/mlx5_0
+    fs::path dev_sysfs = fs::path(dev->ibdev_path) / "device";
+
+    // Resolve symlink to get PCI path
+    char link_target[PATH_MAX];
+    ssize_t len =
+        readlink(dev_sysfs.c_str(), link_target, sizeof(link_target) - 1);
+    if (len < 0) {
+      perror("readlink");
+      continue;
     }
+    link_target[len] = '\0';
+
+    fs::path pci_path;
+    if (link_target[0] == '/') {
+      pci_path = fs::path(link_target);
+    } else {
+      // Relative symlink — resolve relative to parent directory
+      pci_path = fs::canonical(dev_sysfs.parent_path() / link_target);
+    }
+
+    // The last component of pci_path is the full BDF: 0000:3b:00.0
+    std::string pci_bdf = pci_path.filename().string();
+
+    // Store as { device_name, full_pci_path }
+    rdma_nics.emplace_back(dev_name, pci_path);
   }
-  std::sort(ib_nics.begin(), ib_nics.end(),
-            [](std::pair<std::string, fs::path> const& a,
-               std::pair<std::string, fs::path> const& b) {
-              return a.first < b.first;
-            });
-  return ib_nics;
+
+  ibv_free_device_list(dev_list);
+
+  std::sort(rdma_nics.begin(), rdma_nics.end(),
+            [](auto const& a, auto const& b) { return a.first < b.first; });
+
+  return rdma_nics;
 }
 
 static inline std::map<int, int> map_gpu_to_dev(

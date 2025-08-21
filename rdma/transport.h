@@ -1056,8 +1056,9 @@ class RDMAEndpoint {
                         remote_port);
   }
   ConnID test_uccl_accept(int dev, int gpu, std::string& remote_ip,
-                          int* remote_dev) {
-    return uccl_accept(dev, p2p_listen_fds_[dev], gpu, remote_ip, remote_dev);
+                          int* remote_dev, int* remote_gpuidx) {
+    return uccl_accept(dev, p2p_listen_fds_[dev], gpu, remote_ip, remote_dev,
+                       remote_gpuidx);
   }
   /// For testing easily.
 
@@ -1070,7 +1071,8 @@ class RDMAEndpoint {
   // Accept a connection using the given listen_fd. <remote_ip, remote_dev> is
   // returned. This function is thread-safe.
   ConnID uccl_accept(int dev, int listen_fd, int local_gpuidx,
-                     std::string& remote_ip, int* remote_dev);
+                     std::string& remote_ip, int* remote_dev,
+                     int* remote_gpuidx);
 
   bool is_local_leader(int ldev, int lgpu, std::string lip, uint16_t lport,
                        int rdev, int rgpu, std::string rip, uint16_t rport) {
@@ -1279,7 +1281,7 @@ class UcclFlow {
                         false, false, &comm_base->flow_cq, false, kFifoCQSize,
                         factory_dev->pd, factory_dev->ib_port_num,
                         &comm_base->fifo_mr, nullptr, kFifoMRSize,
-                        kMaxReq * kMaxRecv, kMaxReq * kMaxRecv, 1, 1);
+                        kMaxSendRecvWR, kMaxSendRecvWR, 1, 1);
     comm_base->fifo =
         reinterpret_cast<struct RemFifo*>(comm_base->fifo_mr->addr);
 
@@ -1323,8 +1325,8 @@ class UcclFlow {
                           IBV_QPT_RC, false, false, &comm_base->flow_cq, true,
                           0, factory_dev->pd, factory_dev->ib_port_num,
                           &recv_comm_.gpu_flush_mr, &recv_comm_.gpu_flush,
-                          sizeof(int), kMaxReq * kMaxRecv, kMaxReq * kMaxRecv,
-                          kMaxSge, kMaxSge);
+                          sizeof(int), kMaxSendRecvWR, kMaxSendRecvWR, kMaxSge,
+                          kMaxSge);
 
       recv_comm_.gpu_flush_sge.addr = (uint64_t)&recv_comm_.gpu_flush;
       recv_comm_.gpu_flush_sge.length = 1;
@@ -1360,8 +1362,8 @@ class UcclFlow {
       qp_init_attr.send_cq = comm_base->flow_cq;
       qp_init_attr.recv_cq = comm_base->flow_cq;
       qp_init_attr.qp_type = IBV_QPT_RC;
-      qp_init_attr.cap.max_send_wr = kMaxReq * kMaxRecv;
-      qp_init_attr.cap.max_recv_wr = kMaxReq * kMaxRecv;
+      qp_init_attr.cap.max_send_wr = kMaxSendRecvWR;
+      qp_init_attr.cap.max_recv_wr = kMaxSendRecvWR;
       qp_init_attr.cap.max_send_sge = kMaxSge;
       qp_init_attr.cap.max_recv_sge = kMaxSge;
       qp_init_attr.cap.max_inline_data = 0;
