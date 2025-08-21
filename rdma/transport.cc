@@ -2382,7 +2382,7 @@ bool RDMAContext::senderCC_tx_write(struct ucclRequest* ureq) {
   uint64_t wr_addr;
   uint32_t chunk_size;
   if (size == 0) {
-    DCHECK(false) << "RDMA READ len 0";
+    DCHECK(false) << "RDMA WRITE len 0";
     return true;
   }
 
