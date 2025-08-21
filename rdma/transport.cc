@@ -962,19 +962,9 @@ void RDMAEndpoint::install_ctx_on_engines(int fd, int dev, PeerID peer_id,
   DCHECK(factory_dev) << "install_ctx_on_engines: get_factory_dev()";
 
   ret = send_message(fd, &factory_dev->gid.raw, 16);
-  printf("Sent  factory dev raw: %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x\n",
-    factory_dev->gid.raw[0], factory_dev->gid.raw[1], factory_dev->gid.raw[2], factory_dev->gid.raw[3], 
-    factory_dev->gid.raw[4], factory_dev->gid.raw[5], factory_dev->gid.raw[6], factory_dev->gid.raw[7], 
-    factory_dev->gid.raw[8], factory_dev->gid.raw[9], factory_dev->gid.raw[10], factory_dev->gid.raw[11], 
-    factory_dev->gid.raw[12], factory_dev->gid.raw[13], factory_dev->gid.raw[14], factory_dev->gid.raw[15]);
   DCHECK(ret == 16) << "Failed to send GID";
   ret = receive_message(fd, &info->remote_gid.raw, 16);
   DCHECK(ret == 16) << "Failed to receive GID";
-  printf("Received  remote_gid raw: %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x\n",
-    remote_gid.raw[0], remote_gid.raw[1], remote_gid.raw[2], remote_gid.raw[3], 
-    remote_gid.raw[4], remote_gid.raw[5], remote_gid.raw[6], remote_gid.raw[7], 
-    remote_gid.raw[8], remote_gid.raw[9], remote_gid.raw[10], remote_gid.raw[11], 
-    remote_gid.raw[12], remote_gid.raw[13], remote_gid.raw[14], remote_gid.raw[15]);
 
   ret = send_message(fd, &factory_dev->port_attr, sizeof(ibv_port_attr));
   DCHECK(ret == sizeof(ibv_port_attr)) << "Failed to send PortAttr";

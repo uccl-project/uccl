@@ -50,13 +50,13 @@ all: $(TARGET) $(PLUGIN_SO)
 $(TARGET): $(OBJECTS) ../rdma/librdma.a
 	$(CXX) $(OBJECTS) ../rdma/librdma.a \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
-	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) -DWITH_PYTHON \
+	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB)
 
 $(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECT) ../rdma/librdma.a
 	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) ../rdma/librdma.a \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
-	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) -DWITH_PYTHON \
+	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB)
 
 
@@ -65,7 +65,7 @@ $(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECT) ../rdma/librdma.a
 
 # Compile source files
 %.o: %.cc
-	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -DWITH_PYTHON -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -c $< -o $@
 
 # Compile engine.cc for plugin (without Python flags)
 engine_plugin.o: engine.cc
