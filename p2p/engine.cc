@@ -319,8 +319,9 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
 bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
                     size_t size, bool inside_python) {
   DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
-  [[maybe_unused]] auto _ =
-      inside_python && PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+  [[maybe_unused]] auto _ = inside_python && PyGILState_Check()
+                                ? (py::gil_scoped_release{}, nullptr)
+                                : nullptr;
 
   Conn* conn;
   {
@@ -380,8 +381,9 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
 
 bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
                     bool inside_python) {
-  [[maybe_unused]] auto _ =
-      inside_python && PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+  [[maybe_unused]] auto _ = inside_python && PyGILState_Check()
+                                ? (py::gil_scoped_release{}, nullptr)
+                                : nullptr;
 
   Conn* conn;
   {
