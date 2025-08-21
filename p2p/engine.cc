@@ -81,7 +81,8 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
 
   send_task_ring_ = uccl::create_ring(sizeof(Task), kTaskRingSize);
   recv_task_ring_ = uccl::create_ring(sizeof(Task), kTaskRingSize);
-  read_task_ring_ = uccl::create_ring(sizeof(ReadTask), kTaskRingSize);
+  read_task_ring_ = uccl::create_ring(sizeof(RWTask), kTaskRingSize);
+  write_task_ring_ = uccl::create_ring(sizeof(RWTask), kTaskRingSize);
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
 
@@ -103,6 +104,7 @@ Endpoint::~Endpoint() {
   free(send_task_ring_);
   free(recv_task_ring_);
   free(read_task_ring_);
+  free(write_task_ring_);
 
   delete ep_;
 
@@ -705,7 +707,7 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
                           uint64_t* transfer_id) {
   py::gil_scoped_release release;
 
-  ReadTask* read_task = new ReadTask{
+  RWTask* rw_task = new RWTask{
       .type = TaskType::READ,
       .data = dst,
       .size = size,
@@ -715,18 +717,43 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
       .self_ptr = nullptr,
       .slot_item = slot_item,
   };
-  read_task->self_ptr = read_task;
+  rw_task->self_ptr = rw_task;
 
-  *transfer_id = reinterpret_cast<uint64_t>(read_task);
+  *transfer_id = reinterpret_cast<uint64_t>(rw_task);
 
-  while (jring_mp_enqueue_bulk(read_task_ring_, read_task, 1, nullptr) != 1) {
+  while (jring_mp_enqueue_bulk(read_task_ring_, rw_task, 1, nullptr) != 1) {
+  }
+
+  return true;
+}
+
+bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* dst,
+                           size_t size, uccl::FifoItem const& slot_item,
+                           uint64_t* transfer_id) {
+  py::gil_scoped_release release;
+
+  RWTask* rw_task = new RWTask{
+      .type = TaskType::WRITE,
+      .data = dst,
+      .size = size,
+      .conn_id = conn_id,
+      .mr_id = mr_id,
+      .done = false,
+      .self_ptr = nullptr,
+      .slot_item = slot_item,
+  };
+  rw_task->self_ptr = rw_task;
+
+  *transfer_id = reinterpret_cast<uint64_t>(rw_task);
+
+  while (jring_mp_enqueue_bulk(write_task_ring_, rw_task, 1, nullptr) != 1) {
   }
 
   return true;
 }
 
 bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
-  uccl::FifoItem const& slot_item, bool inside_python) {
+                     uccl::FifoItem const& slot_item, bool inside_python) {
   auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
 
   if (!ucclParamRCMode()) {
@@ -742,16 +769,16 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
   int rc;
   do {
     rc = ep_->uccl_write_async(
-    static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle, dst,
-    size, slot_item, &ureq);
+        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle, dst,
+        size, slot_item, &ureq);
     if (rc == -1) {
-    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
-    std::this_thread::yield();
+      auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+      std::this_thread::yield();
     }
   } while (rc == -1);
 
   while (!ep_->uccl_poll_ureq_once(&ureq)) {
-  auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
   }
   return true;
 }
@@ -780,7 +807,7 @@ bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
 void Endpoint::send_proxy_thread_func() {
   uccl::pin_thread_to_numa(numa_node_);
   Task task;
-  ReadTask read_task;
+  RWTask rw_task;
 
   while (!stop_.load(std::memory_order_acquire)) {
     if (jring_sc_dequeue_bulk(send_task_ring_, &task, 1, nullptr) == 1) {
@@ -792,10 +819,16 @@ void Endpoint::send_proxy_thread_func() {
       task.self_ptr->done.store(true, std::memory_order_release);
     }
 
-    if (jring_sc_dequeue_bulk(read_task_ring_, &read_task, 1, nullptr) == 1) {
-      read(read_task.conn_id, read_task.mr_id, read_task.data, read_task.size,
-           read_task.slot_item, false);
-      read_task.self_ptr->done.store(true, std::memory_order_release);
+    if (jring_sc_dequeue_bulk(read_task_ring_, &rw_task, 1, nullptr) == 1) {
+      read(rw_task.conn_id, rw_task.mr_id, rw_task.data, rw_task.size,
+           rw_task.slot_item, false);
+      rw_task.self_ptr->done.store(true, std::memory_order_release);
+    }
+
+    if (jring_sc_dequeue_bulk(write_task_ring_, &rw_task, 1, nullptr) == 1) {
+      write(rw_task.conn_id, rw_task.mr_id, rw_task.data, rw_task.size,
+            rw_task.slot_item, false);
+      rw_task.self_ptr->done.store(true, std::memory_order_release);
     }
   }
 }
@@ -820,10 +853,10 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   py::gil_scoped_release release;
   auto task = reinterpret_cast<Task*>(transfer_id);
   if (task->type == TaskType::READ) {
-    auto read_task = reinterpret_cast<ReadTask*>(transfer_id);
-    *is_done = read_task->done.load(std::memory_order_acquire);
+    auto rw_task = reinterpret_cast<RWTask*>(transfer_id);
+    *is_done = rw_task->done.load(std::memory_order_acquire);
     if (*is_done) {
-      delete read_task;
+      delete rw_task;
     }
   } else {
     *is_done = task->done.load(std::memory_order_acquire);

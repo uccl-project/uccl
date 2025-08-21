@@ -1397,7 +1397,8 @@ void UcclFlow::rc_read(struct ucclRequest* ureq) {
       laddr, raddr, size, lkey, rkey);
 }
 
-void UcclFlow::post_multi_write(struct ucclRequest** ureqs, uint32_t engine_offset) {
+void UcclFlow::post_multi_write(struct ucclRequest** ureqs,
+                                uint32_t engine_offset) {
   DCHECK(engine_offset != RDMAEndpoint::RC_MAGIC);
   uint32_t engine_idx = ep_->find_first_engine_idx_on_dev(dev_) + engine_offset;
   auto txq = ep_->channel_vec_[engine_idx]->tx_cmdq_;
@@ -1540,33 +1541,33 @@ int RDMAEndpoint::uccl_send_async(UcclFlow* flow, struct Mhandle* mhandle,
 }
 
 int RDMAEndpoint::uccl_write_async(UcclFlow* flow, Mhandle* local_mh, void* dst,
-  size_t size, FifoItem const& slot_item,
-  ucclRequest* ureq) {
-    ureq->type = ReqWrite;
-    ureq->n = 1;
-    ureq->context = flow;
-    ureq->send.laddr = reinterpret_cast<uint64_t>(dst);
-    ureq->send.lkey = local_mh->mr->lkey;
-    ureq->send.raddr = slot_item.addr;
-    ureq->send.rkey = slot_item.rkey;
-    ureq->send.data_len =
-        std::min<uint32_t>(static_cast<uint32_t>(size), slot_item.size);
-    ureq->send.rid = slot_item.rid;
-  
-    DCHECK(slot_item.engine_offset != RDMAEndpoint::RC_MAGIC);
-  
-    if (ureq->poll_ctx == nullptr) {
-      ureq->poll_ctx = ctx_pool_->pop();
-      if (!ureq->poll_ctx) {
-        fprintf(stderr, "uccl_write_async: ctx_pool empty, cannot post\n");
-        return -1;
-      }
+                                   size_t size, FifoItem const& slot_item,
+                                   ucclRequest* ureq) {
+  ureq->type = ReqWrite;
+  ureq->n = 1;
+  ureq->context = flow;
+  ureq->send.laddr = reinterpret_cast<uint64_t>(dst);
+  ureq->send.lkey = local_mh->mr->lkey;
+  ureq->send.raddr = slot_item.addr;
+  ureq->send.rkey = slot_item.rkey;
+  ureq->send.data_len =
+      std::min<uint32_t>(static_cast<uint32_t>(size), slot_item.size);
+  ureq->send.rid = slot_item.rid;
+
+  DCHECK(slot_item.engine_offset != RDMAEndpoint::RC_MAGIC);
+
+  if (ureq->poll_ctx == nullptr) {
+    ureq->poll_ctx = ctx_pool_->pop();
+    if (!ureq->poll_ctx) {
+      fprintf(stderr, "uccl_write_async: ctx_pool empty, cannot post\n");
+      return -1;
     }
-    ureq->engine_idx = slot_item.engine_offset;
-    DCHECK(ureq->context) << "uccl_write_async: ureq->context is null";
-    ucclRequest* one[1] = {ureq};
-    flow->post_multi_write(one, slot_item.engine_offset);
-    return 0;
+  }
+  ureq->engine_idx = slot_item.engine_offset;
+  DCHECK(ureq->context) << "uccl_write_async: ureq->context is null";
+  ucclRequest* one[1] = {ureq};
+  flow->post_multi_write(one, slot_item.engine_offset);
+  return 0;
 }
 
 int RDMAEndpoint::uccl_read_async(UcclFlow* flow, Mhandle* local_mh, void* dst,
