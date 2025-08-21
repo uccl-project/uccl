@@ -60,15 +60,11 @@ $(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECT) ../rdma/librdma.a
 
 
 ../rdma/librdma.a: $(filter-out ../rdma/nccl_plugin.cc, $(wildcard ../rdma/*.cc)) ../rdma/*.h
-	make CXXFLAGS="-DLAZY_CREATE_ENGINE -DDISABLE_CALL_ONCE_STATIC" -C ../rdma librdma.a -j$(nproc)
+	make CXXFLAGS="-DDISABLE_CALL_ONCE_STATIC" -C ../rdma librdma.a -j$(nproc)
 
 # Compile source files
 %.o: %.cc
 	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -c $< -o $@
-
-# Compile CAPI source file (without Python flags)
-$(CAPI_OBJECT): $(CAPI_SOURCE) $(CAPI_HEADER)
-	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # Install the module
 install: $(TARGET) $(PLUGIN_SO)
