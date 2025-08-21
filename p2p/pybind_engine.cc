@@ -173,7 +173,7 @@ PYBIND11_MODULE(p2p, m) {
                 ok, ok ? py::bytes(serialized, sizeof(uccl::FifoItem))
                        : py::bytes());
           },
-          "Expose a registered buffer for the peer to RDMA-READ",
+          "Expose a registered buffer for the peer to RDMA-READ or RDMA-WRITE",
           py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"))
       .def(
           "read",
@@ -211,6 +211,45 @@ PYBIND11_MODULE(p2p, m) {
             return py::make_tuple(success, transfer_id);
           },
           "RDMA-READ into a local buffer using metadata from advertise(); "
+          "`meta` is the 64-byte serialized FifoItem returned by the peer",
+          py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"),
+          py::arg("meta"))
+      .def(
+          "write",
+          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
+             size_t size, py::bytes meta_blob) {
+            std::string buf = meta_blob;
+            if (buf.size() != sizeof(uccl::FifoItem))
+              throw std::runtime_error(
+                  "meta must be exactly 64 bytes (serialized FifoItem)");
+
+            uccl::FifoItem item;
+            uccl::deserialize_fifo_item(buf.data(), &item);
+            return self.write(conn_id, mr_id, reinterpret_cast<void*>(ptr),
+                              size, item);
+          },
+          "RDMA-WRITE into a remote buffer using metadata from advertise(); "
+          "`meta` is the 64-byte serialized FifoItem returned by the peer",
+          py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"),
+          py::arg("meta"))
+      .def(
+          "write_async",
+          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
+             size_t size, py::bytes meta_blob) {
+            std::string buf = meta_blob;
+            if (buf.size() != sizeof(uccl::FifoItem))
+              throw std::runtime_error(
+                  "meta must be exactly 64 bytes (serialized FifoItem)");
+
+            uccl::FifoItem item;
+            uccl::deserialize_fifo_item(buf.data(), &item);
+            uint64_t transfer_id;
+            bool success =
+                self.write_async(conn_id, mr_id, reinterpret_cast<void*>(ptr),
+                                 size, item, &transfer_id);
+            return py::make_tuple(success, transfer_id);
+          },
+          "RDMA-WRITE into a remote buffer using metadata from advertise(); "
           "`meta` is the 64-byte serialized FifoItem returned by the peer",
           py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"),
           py::arg("meta"))
