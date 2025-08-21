@@ -324,7 +324,7 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
     mhandle = mr_id_to_mr_[mr_id]->mhandle_;
   }
 
-  uccl::ucclRequest ureq[kMaxInflightChunks];
+  uccl::ucclRequest ureq[kMaxInflightChunks] = {};
   bool done[kMaxInflightChunks] = {false};
 
   void* cur_data = const_cast<void*>(data);
@@ -386,7 +386,7 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
   }
   int size_int = static_cast<int>(size);
 
-  uccl::ucclRequest ureq[kMaxInflightChunks];
+  uccl::ucclRequest ureq[kMaxInflightChunks] = {};
   bool done[kMaxInflightChunks] = {false};
 
   void* cur_data = data;
@@ -522,7 +522,7 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   auto conn = conn_id_to_conn_[conn_id];
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
-  uccl::ucclRequest ureq[kMaxInflightChunks];
+  uccl::ucclRequest ureq[kMaxInflightChunks] = {};
   bool done[kMaxInflightChunks] = {false};
 
   int estimated_ureq_max = 0;
@@ -595,7 +595,7 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   auto conn = conn_id_to_conn_[conn_id];
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
-  uccl::ucclRequest ureq[kMaxInflightChunks];
+  uccl::ucclRequest ureq[kMaxInflightChunks] = {};
   bool done[kMaxInflightChunks] = {false};
 
   // Prepare the data, size, and mhandle vectors for the rest of the chunks.
@@ -683,22 +683,76 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
   DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
   auto* conn = conn_id_to_conn_[conn_id];
   auto* mhandle = mr_id_to_mr_[mr_id]->mhandle_;
-  uccl::ucclRequest ureq;
-  memset(&ureq, 0, sizeof(uccl::ucclRequest));
-  int rc;
-  do {
-    rc = ep_->uccl_read_async(
-        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle, dst,
-        size, slot_item, &ureq);
-    if (rc == -1) {
-      auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
-      std::this_thread::yield();
-    }
-  } while (rc == -1);
 
-  while (!ep_->uccl_poll_ureq_once(&ureq)) {
+  uccl::ucclRequest ureq[kMaxInflightChunks] = {};
+  uccl::FifoItem curr_slot_item[kMaxInflightChunks] = {};
+  bool done[kMaxInflightChunks] = {false};
+
+  void* cur_data = dst;
+  size_t size_read = 0;
+  int ureq_max = (size + kChunkSize - 1) / kChunkSize;
+  int ureq_issued = 0, ureq_finished = 0;
+
+  auto num_engines = ucclParamNUM_ENGINES();
+
+  while (ureq_finished < ureq_max) {
+    while (ureq_issued - ureq_finished < kMaxInflightChunks &&
+           size_read < size) {
+      size_t chunk_size = std::min(size - size_read, kChunkSize);
+      curr_slot_item[ureq_issued % kMaxInflightChunks] = slot_item;
+      curr_slot_item[ureq_issued % kMaxInflightChunks].addr += size_read;
+      curr_slot_item[ureq_issued % kMaxInflightChunks].size = chunk_size;
+      curr_slot_item[ureq_issued % kMaxInflightChunks].engine_offset =
+          ureq_issued % num_engines;
+      memset(&ureq[ureq_issued % kMaxInflightChunks], 0,
+             sizeof(uccl::ucclRequest));
+      auto rc = ep_->uccl_read_async(
+          static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
+          cur_data, chunk_size,
+          curr_slot_item[ureq_issued % kMaxInflightChunks],
+          &ureq[ureq_issued % kMaxInflightChunks]);
+      if (rc == -1) break;
+      cur_data += chunk_size;
+      size_read += chunk_size;
+      done[ureq_issued % kMaxInflightChunks] = false;
+      ureq_issued++;
+    }
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+
+    // First, poll all outstanding requests and mark which ones are done.
+    for (int i = ureq_finished; i < ureq_issued; i++) {
+      if (done[i % kMaxInflightChunks]) {
+        continue;
+      }
+      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+        // Just mark it as completed, DO NOT increment ureq_finished here.
+        done[i % kMaxInflightChunks] = true;
+      }
+    }
+
+    // Now, advance the ureq_finished counter as far as possible.
+    while (ureq_finished < ureq_issued &&
+           done[ureq_finished % kMaxInflightChunks]) {
+      ureq_finished++;
+    }
   }
+
+  // uccl::ucclRequest ureq;
+  // memset(&ureq, 0, sizeof(uccl::ucclRequest));
+  // int rc;
+  // do {
+  //   rc = ep_->uccl_read_async(
+  //       static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
+  //       dst, size, slot_item, &ureq);
+  //   if (rc == -1) {
+  //     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+  //     std::this_thread::yield();
+  //   }
+  // } while (rc == -1);
+
+  // while (!ep_->uccl_poll_ureq_once(&ureq)) {
+  //   auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+  // }
   return true;
 }
 
@@ -764,21 +818,58 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
   DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
   auto* conn = conn_id_to_conn_[conn_id];
   auto* mhandle = mr_id_to_mr_[mr_id]->mhandle_;
-  uccl::ucclRequest ureq;
-  memset(&ureq, 0, sizeof(uccl::ucclRequest));
-  int rc;
-  do {
-    rc = ep_->uccl_write_async(
-        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle, dst,
-        size, slot_item, &ureq);
-    if (rc == -1) {
-      auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
-      std::this_thread::yield();
-    }
-  } while (rc == -1);
 
-  while (!ep_->uccl_poll_ureq_once(&ureq)) {
+  uccl::ucclRequest ureq[kMaxInflightChunks] = {};
+  uccl::FifoItem curr_slot_item[kMaxInflightChunks] = {};
+  bool done[kMaxInflightChunks] = {false};
+
+  void* cur_data = dst;
+  size_t size_write = 0;
+  int ureq_max = (size + kChunkSize - 1) / kChunkSize;
+  int ureq_issued = 0, ureq_finished = 0;
+
+  auto num_engines = ucclParamNUM_ENGINES();
+
+  while (ureq_finished < ureq_max) {
+    while (ureq_issued - ureq_finished < kMaxInflightChunks &&
+           size_write < size) {
+      size_t chunk_size = std::min(size - size_write, kChunkSize);
+      curr_slot_item[ureq_issued % kMaxInflightChunks] = slot_item;
+      curr_slot_item[ureq_issued % kMaxInflightChunks].addr += size_write;
+      curr_slot_item[ureq_issued % kMaxInflightChunks].size = chunk_size;
+      curr_slot_item[ureq_issued % kMaxInflightChunks].engine_offset =
+          ureq_issued % num_engines;
+      memset(&ureq[ureq_issued % kMaxInflightChunks], 0,
+             sizeof(uccl::ucclRequest));
+      auto rc = ep_->uccl_write_async(
+          static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
+          cur_data, chunk_size,
+          curr_slot_item[ureq_issued % kMaxInflightChunks],
+          &ureq[ureq_issued % kMaxInflightChunks]);
+      if (rc == -1) break;
+      cur_data += chunk_size;
+      size_write += chunk_size;
+      done[ureq_issued % kMaxInflightChunks] = false;
+      ureq_issued++;
+    }
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+
+    // First, poll all outstanding requests and mark which ones are done.
+    for (int i = ureq_finished; i < ureq_issued; i++) {
+      if (done[i % kMaxInflightChunks]) {
+        continue;
+      }
+      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+        // Just mark it as completed, DO NOT increment ureq_finished here.
+        done[i % kMaxInflightChunks] = true;
+      }
+    }
+
+    // Now, advance the ureq_finished counter as far as possible.
+    while (ureq_finished < ureq_issued &&
+           done[ureq_finished % kMaxInflightChunks]) {
+      ureq_finished++;
+    }
   }
   return true;
 }

@@ -52,7 +52,7 @@ static inline std::string get_oob_ip() {
 
 class Endpoint {
   const uint64_t kRTTBytes = 1024 * 1024;
-  const uint64_t kChunkSize = 512 * 1024;
+  const uint64_t kChunkSize = 1024 * 1024;
   const uint32_t kMaxInflightChunks = 8;
 
  public:
