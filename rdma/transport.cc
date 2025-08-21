@@ -1169,26 +1169,7 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   auto* factory_dev = RDMAFactory::get_factory_dev(dev);
   DCHECK(factory_dev) << "uccl_accept: get_factory_dev()";
 
-  // Debug: Check if listen_fd is valid
-  if (listen_fd < 0) {
-    LOG(ERROR) << "uccl_accept: Invalid listen_fd: " << listen_fd;
-  } else {
-    // Check socket state
-    int optval;
-    socklen_t optlen = sizeof(optval);
-    if (getsockopt(listen_fd, SOL_SOCKET, SO_ACCEPTCONN, &optval, &optlen) ==
-        0) {
-      LOG(INFO) << "uccl_accept: listen_fd " << listen_fd
-                << " acceptconn: " << optval;
-    }
-  }
-
   bootstrap_fd = accept(listen_fd, (struct sockaddr*)&cli_addr, &clien);
-  if (bootstrap_fd < 0) {
-    LOG(ERROR) << "uccl_accept: accept() failed with errno: " << errno << " ("
-               << strerror(errno) << "), listen_fd: " << listen_fd;
-  }
-  DCHECK(bootstrap_fd >= 0) << "uccl_accept: accept()";
 
   uint16_t local_port;
   {
@@ -1198,6 +1179,8 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
     DCHECK(ret == 0) << "getsockname() failed ";
     local_port = ntohs(local_addr.sin_port);
   }
+
+  DCHECK(bootstrap_fd >= 0) << "uccl_accept: accept()";
   remote_ip = ip_to_str(cli_addr.sin_addr.s_addr);
 
   UCCL_LOG_EP << "accept from " << remote_ip << ":" << cli_addr.sin_port;
@@ -1315,7 +1298,6 @@ bool UcclFlow::check_fifo_ready(int* ret_slot, int* ret_nmsgs) {
   volatile struct FifoItem* slots = rem_fifo->elems[slot];
 
   auto idx = send_comm_.fifo_head + 1;
-
   if (slots[0].idx != idx) return false;
 
   // Wait until all slots are ready
