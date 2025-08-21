@@ -156,11 +156,11 @@ def main():
             262144,
             1048576,
             10485760,
-            16777216,
+            67108864,
             104857600,
         ],
     )
-    p.add_argument("--iters", type=int, default=1)
+    p.add_argument("--iters", type=int, default=100)
     p.add_argument("--async-api", action="store_true")
     p.add_argument(
         "--num-iovs",

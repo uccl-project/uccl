@@ -300,6 +300,42 @@ PYBIND11_MODULE(p2p, m) {
           py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"),
           py::arg("meta"))
       .def(
+          "writev",
+          [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+             std::vector<uint64_t> ptr_v, std::vector<size_t> size_v,
+             py::list meta_blob_v, size_t num_iovs) {
+            if (mr_id_v.size() != num_iovs || ptr_v.size() != num_iovs ||
+                size_v.size() != num_iovs || py::len(meta_blob_v) != num_iovs) {
+              throw std::runtime_error(
+                  "All input vectors/lists must have length num_iovs");
+            }
+            std::vector<uccl::FifoItem> item_v;
+            item_v.reserve(num_iovs);
+            for (size_t i = 0; i < num_iovs; ++i) {
+              std::string buf = py::cast<py::bytes>(meta_blob_v[i]);
+              if (buf.size() != sizeof(uccl::FifoItem))
+                throw std::runtime_error(
+                    "meta must be exactly 64 bytes (serialized FifoItem)");
+              uccl::FifoItem item;
+              uccl::deserialize_fifo_item(buf.data(), &item);
+              item_v.push_back(item);
+            }
+            std::vector<void*> data_v;
+            data_v.reserve(num_iovs);
+            for (size_t i = 0; i < num_iovs; ++i) {
+              data_v.push_back(reinterpret_cast<void*>(ptr_v[i]));
+            }
+            bool ok =
+                self.writev(conn_id, mr_id_v, data_v, size_v, item_v, num_iovs);
+            return ok;
+          },
+          "RDMA-WRITE into multiple remote buffers using metadata from "
+          "advertisev(); "
+          "`meta_blob_v` is a list of 64-byte serialized FifoItem returned by "
+          "the peer",
+          py::arg("conn_id"), py::arg("mr_id_v"), py::arg("ptr_v"),
+          py::arg("size_v"), py::arg("meta_blob_v"), py::arg("num_iovs"))
+      .def(
           "write_async",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
              size_t size, py::bytes meta_blob) {

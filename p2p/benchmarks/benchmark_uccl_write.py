@@ -105,7 +105,7 @@ def _run_client_write(args, ep, remote_metadata):
                 ok, is_done = ep.poll_async(transfer_id)
                 assert ok
         else:
-            ep.readv(conn_id, mr_id_v, ptr_v, size_v, fifo_blob_v, args.num_iovs)
+            ep.writev(conn_id, mr_id_v, ptr_v, size_v, fifo_blob_v, args.num_iovs)
         start = time.perf_counter()
         total = 0
         for _ in range(args.iters):
@@ -120,7 +120,7 @@ def _run_client_write(args, ep, remote_metadata):
                     assert ok
                 total += size_v[0]
             else:
-                ep.readv(conn_id, mr_id_v, ptr_v, size_v, fifo_blob_v, args.num_iovs)
+                ep.writev(conn_id, mr_id_v, ptr_v, size_v, fifo_blob_v, args.num_iovs)
                 total += sum(size_v)
         elapsed = time.perf_counter() - start
         print(
@@ -156,11 +156,11 @@ def main():
             262144,
             1048576,
             10485760,
-            16777216,
+            67108864,
             104857600,
         ],
     )
-    p.add_argument("--iters", type=int, default=1)
+    p.add_argument("--iters", type=int, default=100)
     p.add_argument("--async-api", action="store_true")
     p.add_argument(
         "--num-iovs",
