@@ -588,6 +588,133 @@ Poll the status of an asynchronous transfer operation.
 - `success` (bool): Whether polling succeeded
 - `is_done` (bool): Whether the transfer has completed
 
+#### One-Sided RDMA Operations
+
+```python
+read(conn_id, mr_id, dst, size, slot_item) -> success
+```
+Read data from remote endpoint using one-sided RDMA READ operation (blocking).
+
+**Parameters:**
+- `conn_id` (int): Connection ID from connect/accept
+- `mr_id` (int): Memory region ID of remote data to read
+- `dst` (int): Pointer to local destination buffer
+- `size` (int): Number of bytes to read
+- `slot_item` (FifoItem): Slot item for RDMA operation coordination (contains the remote address to read from)
+
+**Returns:**
+- `success` (bool): Whether read completed successfully
+
+```python
+read_async(conn_id, mr_id, dst, size, slot_item) -> (success, transfer_id)
+```
+Read data from remote endpoint using one-sided RDMA READ operation asynchronously (non-blocking).
+
+**Parameters:**
+- `conn_id` (int): Connection ID from connect/accept
+- `mr_id` (int): Memory region ID of remote data to read
+- `dst` (int): Pointer to local destination buffer
+- `size` (int): Number of bytes to read
+- `slot_item` (FifoItem): Slot item for RDMA operation coordination (contains the remote address to read from)
+
+**Returns:**
+- `success` (bool): Whether read was initiated successfully
+- `transfer_id` (int): Transfer ID for polling completion
+
+```python
+readv(conn_id, mr_id_list, dst_list, size_list, slot_item_list, num_iovs) -> success
+```
+Read multiple memory regions from remote endpoint using one-sided RDMA READ operations in a single operation (blocking).
+
+**Parameters:**
+- `conn_id` (int): Connection ID from connect/accept
+- `mr_id_list` (list[int]): List of memory region IDs of remote data to read
+- `dst_list` (list[int]): List of pointers to local destination buffers
+- `size_list` (list[int]): List of sizes in bytes for each memory region
+- `slot_item_list` (list[FifoItem]): List of slot items for RDMA operation coordination (contains the remote address to read from)
+- `num_iovs` (int): Number of I/O vectors (length of the lists)
+
+**Returns:**
+- `success` (bool): Whether read completed successfully
+
+```python
+advertise(conn_id, mr_id, addr, len, out_buf) -> success
+```
+Advertise memory region information to remote endpoint for one-sided RDMA operations.
+
+**Parameters:**
+- `conn_id` (int): Connection ID from connect/accept
+- `mr_id` (int): Memory region ID to advertise
+- `addr` (int): Pointer to the memory region
+- `len` (int): Size of the memory region in bytes
+- `out_buf` (str): Output buffer to store advertisement metadata
+
+**Returns:**
+- `success` (bool): Whether advertisement completed successfully
+
+```python
+advertisev(conn_id, mr_id_list, addr_list, len_list, out_buf_list, num_iovs) -> success
+```
+Advertise multiple memory regions to remote endpoint for one-sided RDMA operations in a single operation.
+
+**Parameters:**
+- `conn_id` (int): Connection ID from connect/accept
+- `mr_id_list` (list[int]): List of memory region IDs to advertise
+- `addr_list` (list[int]): List of pointers to memory regions
+- `len_list` (list[int]): List of sizes in bytes for each memory region
+- `out_buf_list` (list[str]): List of output buffers to store advertisement metadata
+- `num_iovs` (int): Number of I/O vectors (length of the lists)
+
+**Returns:**
+- `success` (bool): Whether advertisement completed successfully
+
+```python
+write(conn_id, mr_id, src, size, slot_item) -> success
+```
+Write data to remote endpoint using one-sided RDMA WRITE operation (blocking).
+
+**Parameters:**
+- `conn_id` (int): Connection ID from connect/accept
+- `mr_id` (int): Memory region ID of remote destination
+- `src` (int): Pointer to local buffer
+- `size` (int): Number of bytes to write
+- `slot_item` (FifoItem): Slot item for RDMA operation coordination (contains the remote address to write to)
+
+**Returns:**
+- `success` (bool): Whether write completed successfully
+
+```python
+write_async(conn_id, mr_id, src, size, slot_item) -> (success, transfer_id)
+```
+Write data to remote endpoint using one-sided RDMA WRITE operation asynchronously (non-blocking).
+
+**Parameters:**
+- `conn_id` (int): Connection ID from connect/accept
+- `mr_id` (int): Memory region ID of remote destination
+- `src` (int): Pointer to local buffer
+- `size` (int): Number of bytes to write
+- `slot_item` (FifoItem): Slot item for RDMA operation coordination (contains the remote address to write to)
+
+**Returns:**
+- `success` (bool): Whether write was initiated successfully
+- `transfer_id` (int): Transfer ID for polling completion
+
+```python
+writev(conn_id, mr_id_list, src_list, size_list, slot_item_list, num_iovs) -> success
+```
+Write multiple memory regions to remote endpoint using one-sided RDMA WRITE operations in a single operation (blocking).
+
+**Parameters:**
+- `conn_id` (int): Connection ID from connect/accept
+- `mr_id_list` (list[int]): List of memory region IDs of remote destinations
+- `src_list` (list[int]): List of pointers to local buffers
+- `size_list` (list[int]): List of sizes in bytes for each memory region
+- `slot_item_list` (list[FifoItem]): List of slot items for RDMA operation coordination (contains the remote address to write to)
+- `num_iovs` (int): Number of I/O vectors (length of the lists)
+
+**Returns:**
+- `success` (bool): Whether write completed successfully
+
 </details>
 
 

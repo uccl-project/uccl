@@ -855,14 +855,14 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
   return true;
 }
 
-bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* dst,
+bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
                            size_t size, uccl::FifoItem const& slot_item,
                            uint64_t* transfer_id) {
   py::gil_scoped_release release;
 
   RWTask* rw_task = new RWTask{
       .type = TaskType::WRITE,
-      .data = dst,
+      .data = src,
       .size = size,
       .conn_id = conn_id,
       .mr_id = mr_id,
@@ -881,7 +881,7 @@ bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* dst,
 }
 
 bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-                      std::vector<void*> dst_v, std::vector<size_t> size_v,
+                      std::vector<void*> src_v, std::vector<size_t> size_v,
                       std::vector<uccl::FifoItem> slot_item_v,
                       size_t num_iovs) {
   py::gil_scoped_release release;
@@ -908,7 +908,7 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   slot_item_vec.reserve(estimated_ureq_max);
 
   for (int i = 0; i < num_iovs; i++) {
-    void* cur_data = dst_v[i];
+    void* cur_data = src_v[i];
     size_t cur_size_expected = size_v[i];
     size_t cur_size_post_write = 0;
     uccl::FifoItem base_slot_item = slot_item_v[i];
@@ -972,7 +972,7 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   return true;
 }
 
-bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
+bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
                      uccl::FifoItem const& slot_item, bool inside_python) {
   auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
 
@@ -989,7 +989,7 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
   uccl::FifoItem curr_slot_item[kMaxInflightChunks] = {};
   bool done[kMaxInflightChunks] = {false};
 
-  void* cur_data = dst;
+  void* cur_data = src;
   size_t size_write = 0;
   int ureq_max = (size + kChunkSize - 1) / kChunkSize;
   int ureq_issued = 0, ureq_finished = 0;
