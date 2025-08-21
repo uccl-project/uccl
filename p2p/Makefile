@@ -39,8 +39,7 @@ CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
 SOURCES := engine.cc pybind_engine.cc
-CORE_SOURCE := engine.cc
-CORE_OBJECT := engine_plugin.o
+CORE_OBJECT := engine.o
 OBJECTS := $(SOURCES:.cc=.o)
 
 # Default target
@@ -66,10 +65,6 @@ $(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECT) ../rdma/librdma.a
 # Compile source files
 %.o: %.cc
 	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -c $< -o $@
-
-# Compile engine.cc for plugin (without Python flags)
-engine_plugin.o: engine.cc
-	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # Compile CAPI source file (without Python flags)
 $(CAPI_OBJECT): $(CAPI_SOURCE) $(CAPI_HEADER)

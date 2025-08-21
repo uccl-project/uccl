@@ -248,6 +248,7 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
 
 bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
   py::gil_scoped_release release;
+
   mr_id = next_mr_id_.fetch_add(1);
 
   uccl::Mhandle* mhandle;
@@ -272,6 +273,7 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
   if (data_v.size() != size_v.size())
     throw std::invalid_argument(
         "[Endpoint::regv] data_v/size_v length mismatch");
+
   py::gil_scoped_release release;
   size_t const n = data_v.size();
   mr_id_v.resize(n);
@@ -307,6 +309,7 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
   DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
   [[maybe_unused]] auto _ =
       inside_python ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
   Conn* conn;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
@@ -341,7 +344,6 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
       ureq_issued++;
     }
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
-    check_python_signals();
 
     // First, poll all outstanding requests and mark which ones are done.
     for (int i = ureq_finished; i < ureq_issued; i++) {
@@ -404,7 +406,6 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
       ureq_issued++;
     }
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
-    check_python_signals();
 
     // First, poll all outstanding requests and mark which ones are done.
     for (int i = ureq_finished; i < ureq_issued; i++) {
@@ -666,8 +667,9 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 }
 
 bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
-                    uccl::FifoItem const& slot_item) {
-  py::gil_scoped_release release;
+                    uccl::FifoItem const& slot_item, bool inside_python) {
+  auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
+
   if (!ucclParamRCMode()) {
     DCHECK(false) << "RDMA READ is only supported in RC mode, toggle RCMODE to "
                      "be True in transport_config.h";
@@ -685,13 +687,13 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
         static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle, dst,
         size, slot_item, &ureq);
     if (rc == -1) {
-      check_python_signals();
+      auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
       std::this_thread::yield();
     }
   } while (rc == -1);
 
   while (!ep_->uccl_poll_ureq_once(&ureq)) {
-    check_python_signals();
+    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
   }
   return true;
 }
@@ -700,6 +702,7 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
                           size_t size, uccl::FifoItem const& slot_item,
                           uint64_t* transfer_id) {
   py::gil_scoped_release release;
+
   ReadTask* read_task = new ReadTask{
       .type = TaskType::READ,
       .data = dst,
@@ -723,6 +726,7 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
 bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
                          size_t len, char* out_buf) {
   py::gil_scoped_release release;
+
   if (conn_id == kNvlinkConn) {
     GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
     gpuIpcMemHandle_t handle{};
@@ -757,7 +761,7 @@ void Endpoint::send_proxy_thread_func() {
 
     if (jring_sc_dequeue_bulk(read_task_ring_, &read_task, 1, nullptr) == 1) {
       read(read_task.conn_id, read_task.mr_id, read_task.data, read_task.size,
-           read_task.slot_item);
+           read_task.slot_item, false);
       read_task.self_ptr->done.store(true, std::memory_order_release);
     }
   }
@@ -780,9 +784,8 @@ void Endpoint::recv_proxy_thread_func() {
 }
 
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
-#ifdef WITH_PYTHON
   py::gil_scoped_release release;
-#endif
+
   auto task = reinterpret_cast<Task*>(transfer_id);
   if (task->type == TaskType::READ) {
     auto read_task = reinterpret_cast<ReadTask*>(transfer_id);

@@ -21,7 +21,6 @@
 #endif
 
 namespace py = pybind11;
-
 constexpr uint64_t kNvlinkConn = UINT64_MAX;
 
 struct MR {
@@ -88,7 +87,9 @@ class Endpoint {
    */
   bool connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
                uint64_t& conn_id);
+
   bool connect(py::bytes const& metadata, uint64_t& conn_id);
+  
   /*
    * Accept an incoming connection via TCP, then build RDMA QP connections.
    *
