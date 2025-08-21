@@ -670,6 +670,93 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   return true;
 }
 
+bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                     std::vector<void*> dst_v, std::vector<size_t> size_v,
+                     std::vector<uccl::FifoItem> slot_item_v, size_t num_iovs) {
+  py::gil_scoped_release release;
+  auto conn = conn_id_to_conn_[conn_id];
+  auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
+
+  uccl::ucclRequest ureq[kMaxInflightChunks] = {};
+  uccl::FifoItem curr_slot_item[kMaxInflightChunks] = {};
+  bool done[kMaxInflightChunks] = {false};
+
+  int estimated_ureq_max = 0;
+  for (int i = 0; i < num_iovs; i++) {
+    estimated_ureq_max += (size_v[i] + kChunkSize - 1) / kChunkSize;
+  }
+
+  std::vector<void*> data_read_vec;
+  std::vector<size_t> size_read_vec;
+  std::vector<uccl::Mhandle*> mhandle_read_vec;
+  std::vector<uccl::FifoItem> slot_item_vec;
+  // Avoid reallocations.
+  data_read_vec.reserve(estimated_ureq_max);
+  size_read_vec.reserve(estimated_ureq_max);
+  mhandle_read_vec.reserve(estimated_ureq_max);
+  slot_item_vec.reserve(estimated_ureq_max);
+
+  for (int i = 0; i < num_iovs; i++) {
+    void* cur_data = dst_v[i];
+    size_t cur_size_expected = size_v[i];
+    size_t cur_size_post_read = 0;
+    uccl::FifoItem base_slot_item = slot_item_v[i];
+    auto mhandle = mr_id_to_mr_[mr_id_v[i]]->mhandle_;
+
+    while (cur_size_post_read < cur_size_expected) {
+      size_t chunk_size = std::min(cur_size_expected - cur_size_post_read, (size_t)kChunkSize);
+      uccl::FifoItem chunk_slot_item = base_slot_item;
+      chunk_slot_item.addr += cur_size_post_read;
+      chunk_slot_item.size = chunk_size;
+      // engine_offset will be set later
+      data_read_vec.push_back(cur_data);
+      size_read_vec.push_back(chunk_size);
+      mhandle_read_vec.push_back(mhandle);
+      slot_item_vec.push_back(chunk_slot_item);
+      cur_data = (void*)((char*)cur_data + chunk_size);
+      cur_size_post_read += chunk_size;
+    }
+  }
+
+  int ureq_max = data_read_vec.size();
+  int ureq_issued = 0, ureq_finished = 0;
+  auto num_engines = ucclParamNUM_ENGINES();
+
+  while (ureq_finished < ureq_max) {
+    while (ureq_issued < ureq_max &&
+            ureq_issued - ureq_finished < kMaxInflightChunks &&
+            size_read_vec[ureq_issued] > 0) {
+      slot_item_vec[ureq_issued].engine_offset = ureq_issued % num_engines;
+      curr_slot_item[ureq_issued % kMaxInflightChunks] = slot_item_vec[ureq_issued];
+      memset(&ureq[ureq_issued % kMaxInflightChunks], 0, sizeof(uccl::ucclRequest));
+      auto rc = ep_->uccl_read_async(
+          uccl_flow, mhandle_read_vec[ureq_issued], data_read_vec[ureq_issued],
+          size_read_vec[ureq_issued], curr_slot_item[ureq_issued % kMaxInflightChunks],
+          &ureq[ureq_issued % kMaxInflightChunks]);
+      if (rc == -1) break;
+      done[ureq_issued % kMaxInflightChunks] = false;
+      ureq_issued++;
+    }
+    check_python_signals();
+
+    for (int i = ureq_finished; i < ureq_issued; i++) {
+      if (done[i % kMaxInflightChunks]) {
+        continue;
+      }
+      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+        done[i % kMaxInflightChunks] = true;
+      }
+    }
+
+    while (ureq_finished < ureq_issued &&
+            done[ureq_finished % kMaxInflightChunks]) {
+      ureq_finished++;
+    }
+  }
+
+  return true;
+}
+
 bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
                     uccl::FifoItem const& slot_item, bool inside_python) {
   auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
@@ -736,23 +823,6 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
       ureq_finished++;
     }
   }
-
-  // uccl::ucclRequest ureq;
-  // memset(&ureq, 0, sizeof(uccl::ucclRequest));
-  // int rc;
-  // do {
-  //   rc = ep_->uccl_read_async(
-  //       static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
-  //       dst, size, slot_item, &ureq);
-  //   if (rc == -1) {
-  //     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
-  //     std::this_thread::yield();
-  //   }
-  // } while (rc == -1);
-
-  // while (!ep_->uccl_poll_ureq_once(&ureq)) {
-  //   auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
-  // }
   return true;
 }
 
@@ -801,6 +871,93 @@ bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* dst,
   *transfer_id = reinterpret_cast<uint64_t>(rw_task);
 
   while (jring_mp_enqueue_bulk(write_task_ring_, rw_task, 1, nullptr) != 1) {
+  }
+
+  return true;
+}
+
+bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                     std::vector<void*> dst_v, std::vector<size_t> size_v,
+                     std::vector<uccl::FifoItem> slot_item_v, size_t num_iovs) {
+  py::gil_scoped_release release;
+  auto conn = conn_id_to_conn_[conn_id];
+  auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
+
+  uccl::ucclRequest ureq[kMaxInflightChunks] = {};
+  uccl::FifoItem curr_slot_item[kMaxInflightChunks] = {};
+  bool done[kMaxInflightChunks] = {false};
+
+  int estimated_ureq_max = 0;
+  for (int i = 0; i < num_iovs; i++) {
+    estimated_ureq_max += (size_v[i] + kChunkSize - 1) / kChunkSize;
+  }
+
+  std::vector<void*> data_write_vec;
+  std::vector<size_t> size_write_vec;
+  std::vector<uccl::Mhandle*> mhandle_write_vec;
+  std::vector<uccl::FifoItem> slot_item_vec;
+  // Avoid reallocations.
+  data_write_vec.reserve(estimated_ureq_max);
+  size_write_vec.reserve(estimated_ureq_max);
+  mhandle_write_vec.reserve(estimated_ureq_max);
+  slot_item_vec.reserve(estimated_ureq_max);
+
+  for (int i = 0; i < num_iovs; i++) {
+    void* cur_data = dst_v[i];
+    size_t cur_size_expected = size_v[i];
+    size_t cur_size_post_write = 0;
+    uccl::FifoItem base_slot_item = slot_item_v[i];
+    auto mhandle = mr_id_to_mr_[mr_id_v[i]]->mhandle_;
+
+    while (cur_size_post_write < cur_size_expected) {
+      size_t chunk_size = std::min(cur_size_expected - cur_size_post_write, (size_t)kChunkSize);
+      uccl::FifoItem chunk_slot_item = base_slot_item;
+      chunk_slot_item.addr += cur_size_post_write;
+      chunk_slot_item.size = chunk_size;
+      // engine_offset will be set later
+      data_write_vec.push_back(cur_data);
+      size_write_vec.push_back(chunk_size);
+      mhandle_write_vec.push_back(mhandle);
+      slot_item_vec.push_back(chunk_slot_item);
+      cur_data = (void*)((char*)cur_data + chunk_size);
+      cur_size_post_write += chunk_size;
+    }
+  }
+
+  int ureq_max = data_write_vec.size();
+  int ureq_issued = 0, ureq_finished = 0;
+  auto num_engines = ucclParamNUM_ENGINES();
+
+  while (ureq_finished < ureq_max) {
+    while (ureq_issued < ureq_max &&
+           ureq_issued - ureq_finished < kMaxInflightChunks &&
+           size_write_vec[ureq_issued] > 0) {
+      slot_item_vec[ureq_issued].engine_offset = ureq_issued % num_engines;
+      curr_slot_item[ureq_issued % kMaxInflightChunks] = slot_item_vec[ureq_issued];
+      memset(&ureq[ureq_issued % kMaxInflightChunks], 0, sizeof(uccl::ucclRequest));
+      auto rc = ep_->uccl_write_async(
+          uccl_flow, mhandle_write_vec[ureq_issued], data_write_vec[ureq_issued],
+          size_write_vec[ureq_issued], curr_slot_item[ureq_issued % kMaxInflightChunks],
+          &ureq[ureq_issued % kMaxInflightChunks]);
+      if (rc == -1) break;
+      done[ureq_issued % kMaxInflightChunks] = false;
+      ureq_issued++;
+    }
+    check_python_signals();
+
+    for (int i = ureq_finished; i < ureq_issued; i++) {
+      if (done[i % kMaxInflightChunks]) {
+        continue;
+      }
+      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+        done[i % kMaxInflightChunks] = true;
+      }
+    }
+
+    while (ureq_finished < ureq_issued &&
+           done[ureq_finished % kMaxInflightChunks]) {
+      ureq_finished++;
+    }
   }
 
   return true;
@@ -869,6 +1026,30 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
     while (ureq_finished < ureq_issued &&
            done[ureq_finished % kMaxInflightChunks]) {
       ureq_finished++;
+    }
+  }
+  return true;
+}
+
+bool Endpoint::advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                          std::vector<void*> addr_v, std::vector<size_t> len_v, std::vector<char*> out_buf_v, size_t num_iovs) {
+  py::gil_scoped_release release;
+  if (conn_id == kNvlinkConn) {
+    GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+    for (size_t i = 0; i < num_iovs; ++i) {
+      gpuIpcMemHandle_t handle{};
+      GPU_RT_CHECK(gpuIpcGetMemHandle(&handle, addr_v[i]));
+      std::memcpy(out_buf_v[i], &handle, sizeof(handle));
+    }
+    return true;
+  }
+  auto* conn = conn_id_to_conn_[conn_id];
+  for (size_t i = 0; i < num_iovs; ++i) {
+    auto mhandle = mr_id_to_mr_[mr_id_v[i]]->mhandle_;
+    if (ep_->prepare_fifo_metadata(
+            static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
+            &mhandle, addr_v[i], len_v[i], out_buf_v[i]) == -1) {
+      return false;
     }
   }
   return true;

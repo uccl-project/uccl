@@ -179,8 +179,17 @@ class Endpoint {
   bool read_async(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
                   uccl::FifoItem const& slot_item, uint64_t* transfer_id);
 
+  /* Read a vector of data chunks. */
+  bool readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+             std::vector<void*> dst_v, std::vector<size_t> size_v,
+             std::vector<uccl::FifoItem> slot_item_v, size_t num_iovs);
+
   bool advertise(uint64_t conn_id, uint64_t mr_id, void* addr, size_t len,
                  char* out_buf);
+
+  /* Advertise a vector of data chunks. */
+  bool advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+    std::vector<void*> addr_v, std::vector<size_t> len_v, std::vector<char*> out_buf_v, size_t num_iovs);
 
   /* Write data to the remote server. Blocking. */
   bool write(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
@@ -189,6 +198,11 @@ class Endpoint {
   /* Write data to the remote server asynchronously. */
   bool write_async(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
                    uccl::FifoItem const& slot_item, uint64_t* transfer_id);
+
+  /* Write a vector of data chunks. */
+  bool writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+             std::vector<void*> dst_v, std::vector<size_t> size_v,
+             std::vector<uccl::FifoItem> slot_item_v, size_t num_iovs);
 
   /* Poll the status of the asynchronous receive. */
   bool poll_async(uint64_t transfer_id, bool* is_done);

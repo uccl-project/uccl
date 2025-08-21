@@ -38,19 +38,32 @@ def _pretty(num: int):
         val /= 1024
 
 
-def _run_server_advertise(args, ep, remote_metadata):
+def _run_server_adv(args, ep, remote_metadata):
     peer = 0
     print("[Server] Waiting for connection …")
     ok, r_ip, r_gpu, conn_id = ep.accept()
     assert ok
     print(f"[Server] Connected to {r_ip} (GPU {r_gpu}) id={conn_id}")
     for sz in args.sizes:
-        buf, ptr = _make_buffer(sz, args.device, args.local_gpu_idx)
-        ok, mr_id = ep.reg(ptr, sz)
-        assert ok
-        ok, fifo_blob = ep.advertise(conn_id, mr_id, ptr, sz)
-        assert ok and len(fifo_blob) == 64
-        dist.send(torch.ByteTensor(list(fifo_blob)), dst=peer)
+        size_per_block = sz // args.num_iovs
+        buf_v = []
+        ptr_v = []
+        mr_id_v = []
+        size_v = []
+        for _ in range(args.num_iovs):
+            buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+            ok, mr_id = ep.reg(ptr, size_per_block)
+            assert ok
+            buf_v.append(buf)
+            ptr_v.append(ptr)
+            mr_id_v.append(mr_id)
+            size_v.append(size_per_block)
+        # Use advertisev to advertise all blocks at once
+        ok, fifo_blob_v = ep.advertisev(conn_id, mr_id_v, ptr_v, size_v, args.num_iovs)
+        assert ok and all(len(fifo_blob) == 64 for fifo_blob in fifo_blob_v)
+        # Send all fifo_blobs to peer
+        for fifo_blob in fifo_blob_v:
+            dist.send(torch.ByteTensor(list(fifo_blob)), dst=peer)
     print("[Server] Benchmark complete")
 
 
@@ -62,36 +75,49 @@ def _run_client_write(args, ep, remote_metadata):
     print(f"[Client] Connected to {ip}:{port} id={conn_id}")
 
     for sz in args.sizes:
-        buf, ptr = _make_buffer(sz, args.device, args.local_gpu_idx)
-        ok, mr_id = ep.reg(ptr, sz)
-        assert ok
-        fifo_blob = torch.zeros(64, dtype=torch.uint8)
-        dist.recv(fifo_blob, src=peer)
-        fifo_blob = bytes(fifo_blob.tolist())
+        size_per_block = sz // args.num_iovs
+        buf_v = []
+        ptr_v = []
+        mr_id_v = []
+        size_v = []
+        fifo_blob_v = []
+        for _ in range(args.num_iovs):
+            buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+            ok, mr_id = ep.reg(ptr, size_per_block)
+            assert ok
+            buf_v.append(buf)
+            ptr_v.append(ptr)
+            mr_id_v.append(mr_id)
+            size_v.append(size_per_block)
+        for _ in range(args.num_iovs):
+            fifo_blob = torch.zeros(64, dtype=torch.uint8)
+            dist.recv(fifo_blob, src=peer)
+            fifo_blob_v.append(bytes(fifo_blob.tolist()))
         start = time.perf_counter()
         total = 0
         if args.async_api:
-            ok, transfer_id = ep.write_async(conn_id, mr_id, ptr, sz, fifo_blob)
+            ok, transfer_id = ep.write_async(conn_id, mr_id_v[0], ptr_v[0], size_v[0], fifo_blob_v[0])
             assert ok
             is_done = False
             while not is_done:
                 ok, is_done = ep.poll_async(transfer_id)
                 assert ok
         else:
-            ep.write(conn_id, mr_id, ptr, sz, fifo_blob)
+            ep.readv(conn_id, mr_id_v, ptr_v, size_v, fifo_blob_v, args.num_iovs)
         start = time.perf_counter()
         total = 0
         for _ in range(args.iters):
             if args.async_api:
-                ok, transfer_id = ep.write_async(conn_id, mr_id, ptr, sz, fifo_blob)
+                ok, transfer_id = ep.write_async(conn_id, mr_id_v[0], ptr_v[0], size_v[0], fifo_blob_v[0])
                 assert ok
                 is_done = False
                 while not is_done:
                     ok, is_done = ep.poll_async(transfer_id)
                     assert ok
+                total += size_v[0]
             else:
-                ep.write(conn_id, mr_id, ptr, sz, fifo_blob)
-            total += sz
+                ep.readv(conn_id, mr_id_v, ptr_v, size_v, fifo_blob_v, args.num_iovs)
+                total += sum(size_v)
         elapsed = time.perf_counter() - start
         print(
             f"[Client] {_pretty(sz):>8} : "
@@ -125,8 +151,6 @@ def main():
             65536,
             262144,
             1048576,
-            4194304,
-            8388608,
             10485760,
             16777216,
             104857600,
@@ -134,7 +158,16 @@ def main():
     )
     p.add_argument("--iters", type=int, default=1)
     p.add_argument("--async-api", action="store_true")
+    p.add_argument(
+        "--num-iovs",
+        type=int,
+        default=1,
+        help="Number of iovs to write in a single call",
+    )
     args = p.parse_args()
+
+    if args.async_api:
+        assert args.num_iovs == 1, "Async transfers only support one iov"
 
     print("Sizes:", ", ".join(_pretty(s) for s in args.sizes))
     if args.async_api:
@@ -162,7 +195,7 @@ def main():
     if rank == 0:
         _run_client_write(args, ep, remote_metadata)
     elif rank == 1:
-        _run_server_advertise(args, ep, remote_metadata)
+        _run_server_adv(args, ep, remote_metadata)
 
     dist.destroy_process_group()
 
