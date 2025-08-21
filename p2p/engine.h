@@ -181,6 +181,14 @@ class Endpoint {
 
   bool advertise(uint64_t conn_id, uint64_t mr_id, void* addr, size_t len,
                  char* out_buf);
+  
+  /* Write data to the remote server. Blocking. */
+  bool write(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
+            uccl::FifoItem const&slot_item, bool inside_python = true);
+  
+  /* Write data to the remote server asynchronously. */
+  bool write_async(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
+    uccl::FifoItem const& slot_item, uint64_t* transfer_id);
 
   /* Poll the status of the asynchronous receive. */
   bool poll_async(uint64_t transfer_id, bool* is_done);

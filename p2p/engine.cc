@@ -725,6 +725,37 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
   return true;
 }
 
+bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
+  uccl::FifoItem const& slot_item, bool inside_python) {
+  auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
+
+  if (!ucclParamRCMode()) {
+    DCHECK(false) << "We only support RC mode for now.";
+    std::abort();
+  }
+
+  DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
+  auto* conn = conn_id_to_conn_[conn_id];
+  auto* mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  uccl::ucclRequest ureq;
+  memset(&ureq, 0, sizeof(uccl::ucclRequest));
+  int rc;
+  do {
+    rc = ep_->uccl_write_async(
+    static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle, dst,
+    size, slot_item, &ureq);
+    if (rc == -1) {
+    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+    std::this_thread::yield();
+    }
+  } while (rc == -1);
+
+  while (!ep_->uccl_poll_ureq_once(&ureq)) {
+  auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+  }
+  return true;
+}
+
 bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
                          size_t len, char* out_buf) {
   py::gil_scoped_release release;
