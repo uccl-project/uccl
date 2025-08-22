@@ -68,15 +68,32 @@ void peer_copy_worker(PeerCopyShared& shared, PeerWorkerCtx& ctx,
       }
       copy_batch_size = 1;
       ctx.tasks[0] = t;
+      
+      // Check for atomic tasks in single task mode
+      uint64_t wr_id = t.wr_id;
+      uint64_t masked = wr_id & 0xFFFF000000000000ULL;
+      if (masked == 0xa70a000000000000ULL) {
+        printf("*** ATOMIC_TASK_DETECTED *** worker=%d, task=0, wr_id=0x%lx ***\n", 
+               idx, wr_id);
+      }
     } else {
       int n = ring.popN(ctx.tasks, RECEIVER_BATCH_SIZE);
       if (n == 0) {
         sync_and_post(ctx, ring, stream, idx);
         continue;
       }
-      // printf("Worker %d popped %d tasks\n", idx, n);
       t = ctx.tasks[0];
       copy_batch_size = n;
+      
+      // Check for atomic tasks 
+      for (int i = 0; i < n; i++) {
+        uint64_t wr_id = ctx.tasks[i].wr_id;
+        uint64_t masked = wr_id & 0xFFFF000000000000ULL;
+        if (masked == 0xa70a000000000000ULL) {
+          printf("*** ATOMIC_TASK_DETECTED *** worker=%d, task=%d, wr_id=0x%lx ***\n", 
+                 idx, i, wr_id);
+        }
+      }
     }
 
     if (copy_batch_size == 0) {
@@ -116,9 +133,13 @@ void peer_copy_worker(PeerCopyShared& shared, PeerWorkerCtx& ctx,
 #endif
       /* The fastest among the three. */
       // TODO(MaoZiming): enable this.
+      printf("*** CALLING_LAUNCH_PEER_BULK_COPY2 *** worker=%d, batch_size=%d ***\n", 
+             idx, copy_batch_size);
       err = launch_peer_bulk_copy2(ctx.tasks, copy_batch_size, stream,
                                    shared.src_device, d_tasks);
       func_name = "launch_peer_bulk_copy2";
+      printf("*** LAUNCH_PEER_BULK_COPY2_COMPLETED *** worker=%d, err=%d ***\n", 
+             idx, err);
     }
 #ifdef REMOTE_PERSISTENT_KERNEL
     else {

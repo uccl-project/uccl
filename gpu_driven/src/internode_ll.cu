@@ -268,6 +268,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   // Issue count sends
   if (responsible_expert_idx < num_experts and sub_warp_id == 0 and
       lane_id == 0) {
+    printf("[ATOMIC_CHECK] About to execute atomic operation: responsible_expert_idx=%d, num_experts=%d, sub_warp_id=%d, lane_id=%d\n", 
+           responsible_expert_idx, num_experts, sub_warp_id, lane_id);
     auto const dst_rank = responsible_expert_idx / num_local_experts;
     auto const dst_expert_local_idx =
         responsible_expert_idx % num_local_experts;
@@ -285,9 +287,11 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     //     rdma_recv_count + dst_expert_local_idx * num_ranks + rank);
     
     // NEW APPROACH: Calculate offset within LowLatencyLayout buffer for CPU proxy translation
+    // Calculate offset relative to dispatch_rdma_recv_data_buffer (rdma_recv_x)
+    // CPU proxy will translate this to the correct dispatch_rdma_recv_count_buffer address
     auto dst_offset = reinterpret_cast<uint64_t>(
         rdma_recv_count + dst_expert_local_idx * num_ranks + rank) - 
-        reinterpret_cast<uint64_t>(rdma_recv_count);
+        reinterpret_cast<uint64_t>(rdma_recv_x);
 #ifdef false
     auto dst_p2p_ptr = nvshmemi_get_p2p_ptr(dst_ptr, rank, dst_rank);
     if (dst_p2p_ptr == 0) {
@@ -300,7 +304,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     }
 #else
     // NOTE(MaoZiming): Without ibgda, we can only use atomic add.
-    // CHANGE: Pass offset instead of absolute address to CPU proxy for atomic operation
+    // CHANGE: Pass offset to CPU proxy for atomic operation
     uccl::nvshmemi_ibgda_amo_nonfetch_add(
         reinterpret_cast<int*>(dst_offset), -num_tokens_sent - 1, dst_rank, sm_id,
         dst_expert_local_idx, false, ring_addrs, num_ring_addrs);

@@ -576,17 +576,27 @@ void local_process_completions(ProxyCtx& S,
         if (wc[i].wc_flags & IBV_WC_WITH_IMM) {
           uint64_t slot = static_cast<uint64_t>(wc[i].wr_id);
           uint64_t wr_done = static_cast<uint64_t>(wc[i].imm_data);
-          if (!S.has_received_ack || wr_done >= S.largest_completed_wr) {
-            S.largest_completed_wr = wr_done;
-            S.has_received_ack = true;
-            // printf("Local thread %d received ACK for WR %lu\n", thread_idx,
-            //        wr_done);
+          
+          // Check if this is an atomic operation ACK (special WR ID format)
+          bool is_atomic_wr = (wr_done & 0xFFFF000000000000ULL) == 0xa70a000000000000ULL;
+          
+          if (is_atomic_wr) {
+            // Handle atomic operation ACK separately - no need to track in sequence
+            // printf("Local thread %d received atomic ACK for WR %lu\n", thread_idx, wr_done);
           } else {
-            fprintf(stderr,
-                    "Warning: received ACK for WR %lu, but largest completed "
-                    "WR is %lu\n",
-                    wr_done, S.largest_completed_wr);
-            std::abort();
+            // Handle regular operation ACK with sequential tracking
+            if (!S.has_received_ack || wr_done >= S.largest_completed_wr) {
+              S.largest_completed_wr = wr_done;
+              S.has_received_ack = true;
+              // printf("Local thread %d received ACK for WR %lu\n", thread_idx,
+              //        wr_done);
+            } else {
+              fprintf(stderr,
+                      "Warning: received ACK for WR %lu, but largest completed "
+                      "WR is %lu\n",
+                      wr_done, S.largest_completed_wr);
+              std::abort();
+            }
           }
           ibv_sge sge = {
               .addr = reinterpret_cast<uintptr_t>(&S.ack_recv_buf[slot]),
@@ -676,6 +686,85 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
     if (wc[i].opcode != IBV_WC_RECV_RDMA_WITH_IMM) {
       continue;
     }
+    
+    // Check if this is an atomic operation by examining immediate data
+    uint32_t immediate_data = ntohl(wc[i].imm_data);
+    bool is_atomic_operation = (immediate_data & (1U << 31)) != 0;
+    
+    // printf("[DEBUG] Completion: wr_id=%lu, byte_len=%d, immediate_data=0x%x, is_atomic=%d\n",
+    //        wc[i].wr_id, wc[i].byte_len, immediate_data, is_atomic_operation);
+    
+    if (is_atomic_operation && wc[i].byte_len == 0) {
+      printf("[ATOMIC_DEBUG] Processing atomic operation...\n");
+      
+      // Decode immediate data:
+      // Bit 31: atomic flag (already checked)
+      // Bit 30-24: target offset index (7 bits)
+      // Bit 23-0: atomic value (24 bits, signed)
+      uint32_t target_index = (immediate_data >> 24) & 0x7F;
+      uint32_t value_24bit = immediate_data & 0xFFFFFF;
+      
+      // Sign-extend atomic value from 24 bits to 32 bits
+      int32_t atomic_value = (value_24bit & 0x800000) ?
+                            static_cast<int32_t>(value_24bit | 0xFF000000) :
+                            static_cast<int32_t>(value_24bit);
+      
+      printf("[ATOMIC_DEBUG] immediate_data=0x%x, target_index=%u, value_24bit=0x%x, atomic_value=%d\n", 
+             immediate_data, target_index, value_24bit, atomic_value);
+      
+      // Calculate target address from index
+      uint64_t target_offset = target_index * sizeof(int);
+      uintptr_t local_target_addr = (uintptr_t)S.mr->addr + target_offset;
+      
+      printf("[ATOMIC_DEBUG] target_index=%u, target_offset=%lu, S.mr->addr=%p, local_target_addr=0x%lx\n", 
+             target_index, target_offset, S.mr->addr, local_target_addr);
+      
+      // Check if target address is within valid range
+      if (target_offset + sizeof(int32_t) > S.mr->length) {
+        printf("[ATOMIC_DEBUG] ERROR: target offset %lu + %zu exceeds memory region size %zu\n", 
+               target_offset, sizeof(int32_t), S.mr->length);
+        continue;
+      }
+      
+      int* target_counter = reinterpret_cast<int*>(local_target_addr);
+      printf("[ATOMIC_DEBUG] target_counter=%p\n", target_counter);
+      
+      // Additional safety checks
+      printf("[ATOMIC_DEBUG] Memory region: start=%p, end=%p, length=%zu\n", 
+             S.mr->addr, (void*)((uintptr_t)S.mr->addr + S.mr->length), S.mr->length);
+      printf("[ATOMIC_DEBUG] Target address alignment check: addr=0x%lx, aligned=%d\n",
+             local_target_addr, (local_target_addr % sizeof(int) == 0));
+      
+      // Use the same mechanism as regular data transfer
+      // Create an AtomicTask and push it to the ring buffer for GPU processing
+      
+      printf("[ATOMIC_DEBUG] Creating atomic task for GPU processing\n");
+      printf("[ATOMIC_DEBUG] Target GPU memory: 0x%lx, atomic value: %d\n", 
+             local_target_addr, atomic_value);
+      
+      // Create atomic task similar to CopyTask
+      CopyTask atomic_task{
+          .wr_id = (0xa70a000000000000ULL | static_cast<uint64_t>(target_index & 0xFFFF)),  // Special marker for atomic ops
+          .dst_dev = 0,  // Assume device 0 for now
+          .src_ptr = reinterpret_cast<void*>(static_cast<uintptr_t>(atomic_value)),  // Store atomic value in src_ptr
+          .dst_ptr = reinterpret_cast<void*>(local_target_addr),  // Target GPU memory address
+          .bytes = sizeof(int)  // Size of atomic operation
+      };
+      
+      // Push to ring buffer for GPU processing (same as regular data transfer)
+      std::vector<CopyTask> atomic_tasks = {atomic_task};
+      while (!g_ring.pushN(atomic_tasks.data(), atomic_tasks.size())) {
+          // Busy spin 
+      }
+      
+      printf("[ATOMIC_DEBUG] Atomic task pushed to GPU ring buffer: wr_id=0x%lx\n", atomic_task.wr_id);
+      
+      printf("[ATOMIC_DEBUG] Atomic operation completed successfully\n");
+      
+      continue; // Skip regular data processing for atomic operations
+    }
+    
+    // Regular data transfer processing
     int destination_gpu = wc[i].imm_data % NUM_GPUS;
     if (S.per_gpu_device_buf[destination_gpu] == nullptr) {
       fprintf(stderr, "per_gpu_device_buf[%d] is null\n", destination_gpu);

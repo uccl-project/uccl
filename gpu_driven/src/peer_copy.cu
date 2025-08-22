@@ -45,6 +45,38 @@ __global__ void peer_copy_kernel_vec(CopyTask const* __restrict__ tasks,
   if (task_id >= num_tasks) return;
 
   const CopyTask t = tasks[task_id];
+  
+  if (threadIdx.x == 0) {
+    printf("*** GPU_KERNEL_VEC_START *** task_id=%d, wr_id=0x%lx ***\n", task_id, t.wr_id);
+  }
+  
+  // Check if this is an atomic operation (special wr_id marker)
+  if ((t.wr_id & 0xFFFF000000000000ULL) == 0xa70a000000000000ULL) {
+    if (threadIdx.x == 0) {  // Only one thread performs the atomic operation
+      // For atomic operations:
+      // - src_ptr contains the atomic value (cast from uintptr_t)
+      // - dst_ptr contains the target address
+      // - bytes should be sizeof(int) = 4
+      int atomic_value = static_cast<int>(reinterpret_cast<uintptr_t>(t.src_ptr));
+      int* target_counter = static_cast<int*>(t.dst_ptr);
+      
+      // Perform atomic add operation on GPU
+      atomicAdd(target_counter, atomic_value);
+      
+      // Debug output - make it very visible
+      printf("*** GPU_ATOMIC_SUCCESS *** target=%p, value=%d, wr_id=0x%lx ***\n", 
+             target_counter, atomic_value, t.wr_id);
+    }
+    return;  // Skip regular copy for atomic operations
+  }
+  
+  // Regular copy operation
+  if (threadIdx.x == 0) {
+    printf("*** GPU_REGULAR_COPY_VEC *** task_id=%d, src=%p, dst=%p, bytes=%zu ***\n", 
+           task_id, t.src_ptr, t.dst_ptr, t.bytes);
+  }
+  
+  // Regular copy operation
   char const* __restrict__ src = static_cast<char const*>(t.src_ptr);
   char* __restrict__ dst = static_cast<char*>(t.dst_ptr);
   size_t nbytes = t.bytes;
@@ -64,12 +96,36 @@ __global__ void peer_copy_kernel_vec_batched(CopyTask const* __restrict__ tasks,
                                              int tasks_per_block) {
   int block_task_start = blockIdx.x * tasks_per_block;
   int tid = threadIdx.x;
+  
+  if (tid == 0 && blockIdx.x == 0) {
+    printf("*** GPU_KERNEL_BATCHED_START *** num_tasks=%d, tasks_per_block=%d ***\n", 
+           num_tasks, tasks_per_block);
+  }
 
   for (int i = 0; i < tasks_per_block; ++i) {
     int task_id = block_task_start + i;
     if (task_id >= num_tasks) return;
 
     const CopyTask t = tasks[task_id];
+    
+    // Check if this is an atomic operation
+    if ((t.wr_id & 0xFFFF000000000000ULL) == 0xa70a000000000000ULL) {
+      if (tid == 0) {  // Only one thread performs the atomic operation
+        int atomic_value = static_cast<int>(reinterpret_cast<uintptr_t>(t.src_ptr));
+        int* target_counter = static_cast<int*>(t.dst_ptr);
+        atomicAdd(target_counter, atomic_value);
+        printf("*** GPU_ATOMIC_BATCHED_SUCCESS *** target=%p, value=%d, wr_id=0x%lx ***\n", 
+               target_counter, atomic_value, t.wr_id);
+      }
+      continue;  // Skip regular copy for atomic operations
+    }
+    
+    // Regular copy operation - add debug for first task only
+    if (tid == 0 && i == 0) {
+      printf("*** GPU_REGULAR_COPY_BATCHED *** task=%d, src=%p, dst=%p, bytes=%zu, wr_id=0x%lx ***\n", 
+             task_id, t.src_ptr, t.dst_ptr, t.bytes, t.wr_id);
+    }
+    
     char const* __restrict__ src = static_cast<char const*>(t.src_ptr);
     char* __restrict__ dst = static_cast<char*>(t.dst_ptr);
     size_t nbytes = t.bytes;
@@ -102,6 +158,8 @@ gpuError_t launch_peer_bulk_copy2(CopyTask const* host_tasks, int num_tasks,
                                                                    num_tasks);
   } else if (true) {
     int tasks_per_block = num_tasks / NVLINK_SM_PER_PROCESS;
+    printf("*** LAUNCHING_GPU_KERNEL_BATCHED *** num_tasks=%d, tasks_per_block=%d, blocks=%d ***\n", 
+           num_tasks, tasks_per_block, NVLINK_SM_PER_PROCESS);
     peer_copy_kernel_vec_batched<<<blocks, threads_per_block, 0, stream>>>(
         d_tasks, num_tasks, tasks_per_block);
   } else {

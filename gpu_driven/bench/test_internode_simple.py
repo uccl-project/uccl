@@ -154,7 +154,7 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
             print("[simple-test] ✓ All tests passed!", flush=True)
 
         time.sleep(10)
-
+        print("[simple-test] ✓ before destory!", flush=True)
         try:
             buffer.destroy()
         except Exception:

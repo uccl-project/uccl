@@ -84,14 +84,15 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       auto now = clock64();
       if (now - last_print > 10 * 1e9) {
         uint64_t tail_cmd = rb->buf[cur_tail & rb->mask()].cmd;
-        printf(
-            "[ibgda_put_nbi_warp] %p waiting sm_id: %d, lane_id: %d, cur_head: "
-            "%llu, cur_tail: %llu, inflight: %llu, tail_cmd: %llu\n",
-            rb, sm_id, lane_id, cur_head, cur_tail, inflight, tail_cmd);
+        // printf(
+        //     "[ibgda_put_nbi_warp] %p waiting sm_id: %d, lane_id: %d, cur_head: "
+        //     "%llu, cur_tail: %llu, inflight: %llu, tail_cmd: %llu\n",
+        //     rb, sm_id, lane_id, cur_head, cur_tail, inflight, tail_cmd);
         last_print = now;
       }
     }
   }
+
 }
 
 // NOTE(MaoZiming): Remove this. We don't need nvshmem and ibgda.
