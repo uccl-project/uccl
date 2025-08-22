@@ -809,7 +809,7 @@ int SharedIOContext::_rc_poll_send_cq_normal(void) {
   for (int i = 0; i < nr_wcs; i++) {
     auto* wc = wcs + i;
     DCHECK(wc->status == IBV_WC_SUCCESS)
-        << "RC send CQ state error: " << wc->status;
+        << "RC send CQ state error: " << wc->status << ", " << wc->byte_len;
     auto* rdma_ctx = qpn_to_rdma_ctx(wc->qp_num);
     rdma_ctx->rc_rx_ack(wc);
   }

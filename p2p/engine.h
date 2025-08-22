@@ -33,6 +33,7 @@ struct Conn {
   uccl::ConnID uccl_conn_id_;
   std::string ip_addr_;
   int remote_gpu_idx_;
+  int uds_sockfd_ = -1;  // Unix Domain Socket file descriptor for local IPC
 };
 
 struct PeerInfo {
@@ -51,7 +52,7 @@ static inline std::string get_oob_ip() {
 
 class Endpoint {
   const uint64_t kRTTBytes = 1024 * 1024;
-  const uint64_t kChunkSize = 512 * 1024;
+  const uint64_t kChunkSize = 1024 * 1024;
   const uint32_t kMaxInflightChunks = 8;
 
  public:
@@ -178,8 +179,31 @@ class Endpoint {
   bool read_async(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
                   uccl::FifoItem const& slot_item, uint64_t* transfer_id);
 
+  /* Read a vector of data chunks. */
+  bool readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+             std::vector<void*> dst_v, std::vector<size_t> size_v,
+             std::vector<uccl::FifoItem> slot_item_v, size_t num_iovs);
+
   bool advertise(uint64_t conn_id, uint64_t mr_id, void* addr, size_t len,
                  char* out_buf);
+
+  /* Advertise a vector of data chunks. */
+  bool advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                  std::vector<void*> addr_v, std::vector<size_t> len_v,
+                  std::vector<char*> out_buf_v, size_t num_iovs);
+
+  /* Write data to the remote server. Blocking. */
+  bool write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
+             uccl::FifoItem const& slot_item, bool inside_python = true);
+
+  /* Write data to the remote server asynchronously. */
+  bool write_async(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
+                   uccl::FifoItem const& slot_item, uint64_t* transfer_id);
+
+  /* Write a vector of data chunks. */
+  bool writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+              std::vector<void*> src_v, std::vector<size_t> size_v,
+              std::vector<uccl::FifoItem> slot_item_v, size_t num_iovs);
 
   /* Poll the status of the asynchronous receive. */
   bool poll_async(uint64_t transfer_id, bool* is_done);
@@ -197,7 +221,7 @@ class Endpoint {
    *                       "redis://127.0.0.1:6379" or "ray://actor:Store".
    * @param group_name     Logical namespace so multiple groups can coexist.
    * @param world_size     Total number of expected ranks in the group.
-   * @param my_rank        Caller’s rank (0‑based). Must be unique.
+   * @param my_rank        Caller's rank (0‑based). Must be unique.
    *
    * @returns true on success, false otherwise.
    */
@@ -208,7 +232,7 @@ class Endpoint {
   /**
    * Convenience constructor: create Endpoint and immediately join a group.
    * You may prefer this factory in Ray where each actor knows its rank and the
-   * rendezvous, but not its peers’ IP addresses.
+   * rendezvous, but not its peers' IP addresses.
    */
   static std::unique_ptr<Endpoint> create_and_join(
       std::string const& discovery_uri, std::string const& group_name,
@@ -220,11 +244,67 @@ class Endpoint {
 
   std::vector<uint8_t> get_endpoint_metadata();
 
+  /*
+   * Parse endpoint metadata to extract IP address, port, and GPU index.
+   * Returns a tuple of (ip_address, port, gpu_index).
+   */
+  static std::tuple<std::string, uint16_t, int> parse_metadata(
+      std::vector<uint8_t> const& metadata);
+
+  /*
+   * Connect to a local process via Unix Domain Socket.
+   *
+   * input:
+   *   remote_gpu_idx: the GPU index of the remote process
+   * output:
+   *   conn_id: the ID of the connection
+   */
+  bool connect_local(int remote_gpu_idx, uint64_t& conn_id);
+
+  /*
+   * Accept an incoming local connection via Unix Domain Socket.
+   *
+   * output:
+   *   remote_gpu_idx: the GPU index of the remote process
+   *   conn_id: the ID of the connection
+   */
+  bool accept_local(int& remote_gpu_idx, uint64_t& conn_id);
+
+  /* Send data to the remote server via CUDA/HIP IPC. Blocking. The
+   * gpuIpcMemHandle_t will be passed via UDS from recv_ipc to send_ipc
+   * function. */
+  bool send_ipc(uint64_t conn_id, void* data, size_t size,
+                bool inside_python = true);
+
+  bool recv_ipc(uint64_t conn_id, void* data, size_t size,
+                bool inside_python = true);
+
+  bool send_ipc_async(uint64_t conn_id, void const* data, size_t size,
+                      uint64_t* transfer_id);
+
+  bool recv_ipc_async(uint64_t conn_id, void* data, size_t size,
+                      uint64_t* transfer_id);
+
  private:
   /** Rank‑indexed view of established connections (read‑only). */
   std::unordered_map<int, uint64_t> const& rank2conn() const {
     return rank2conn_;
   }
+
+  /*
+   * Create UDS socket path based on GPU index.
+   */
+  std::string get_uds_socket_path(int gpu_idx) const;
+
+  /*
+   * Initialize UDS socket for listening.
+   */
+  void init_uds_socket();
+
+  /*
+   * Cleanup UDS socket resources.
+   */
+  void cleanup_uds_socket();
 
 #ifdef USE_REDIS
   bool publish_redis(std::string const& redis_uri, std::string const& key,
@@ -261,10 +341,29 @@ class Endpoint {
   // Single-threaded.
   std::unordered_map<int, uint64_t> rank2conn_;
 
+  // UDS socket for local connections
+  int uds_listen_fd_ = -1;
+  std::string uds_socket_path_;
+
   // Assuming 1TB GPU memory, 128KB KV block size.
   static constexpr size_t kMaxNumChunksPerTransfer = 1024ul * 1024 * 1024 / 128;
   std::atomic<uint32_t> rr_stream_{0};
   std::vector<gpuStream_t> streams_;
+  std::vector<std::vector<gpuStream_t>> ipc_streams_;
+
+  static constexpr size_t kIpcAlignment = 1ul << 20;
+  static constexpr size_t kIpcSizePerEngine = 1ul << 20;
+  // Prepare transfer info structure for receiving IPC handle
+  struct IpcTransferInfo {
+    gpuIpcMemHandle_t handle;
+    uintptr_t offset;
+    size_t size;
+    uint32_t operation;  // 0 = send_ipc request, 1 = recv_ipc response
+  };
+
+  struct IpcEventInfo {
+    gpuIpcEventHandle_t event_handle;
+  };
 
   static constexpr size_t kTaskRingSize = 1024;
 
@@ -272,6 +371,9 @@ class Endpoint {
     SEND,
     RECV,
     READ,
+    WRITE,
+    SEND_IPC,
+    RECV_IPC,
   };
 
   struct alignas(64) Task {
@@ -285,7 +387,7 @@ class Endpoint {
     Task* self_ptr;
   };
 
-  struct alignas(64) ReadTask {
+  struct alignas(64) RWTask {
     TaskType type;
     void* data;
     size_t size;
@@ -293,13 +395,14 @@ class Endpoint {
     uint64_t mr_id;
     std::atomic<bool> done;
     // For proxy to access the task.done
-    ReadTask* self_ptr;
+    RWTask* self_ptr;
     uccl::FifoItem slot_item;
   };
 
   jring_t* send_task_ring_;
   jring_t* recv_task_ring_;
   jring_t* read_task_ring_;
+  jring_t* write_task_ring_;
 
   std::atomic<bool> stop_{false};
   std::thread send_proxy_thread_;

@@ -173,8 +173,39 @@ PYBIND11_MODULE(p2p, m) {
                 ok, ok ? py::bytes(serialized, sizeof(uccl::FifoItem))
                        : py::bytes());
           },
-          "Expose a registered buffer for the peer to RDMA-READ",
+          "Expose a registered buffer for the peer to RDMA-READ or RDMA-WRITE",
           py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"))
+      .def(
+          "advertisev",
+          [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+             std::vector<uint64_t> ptr_v, std::vector<size_t> size_v,
+             size_t num_iovs) {
+            std::vector<char*> serialized_vec(num_iovs);
+            for (size_t i = 0; i < num_iovs; ++i) {
+              serialized_vec[i] = new char[sizeof(uccl::FifoItem)];
+              memset(serialized_vec[i], 0, sizeof(uccl::FifoItem));
+            }
+            std::vector<void*> data_v;
+            data_v.reserve(ptr_v.size());
+            for (uint64_t ptr : ptr_v) {
+              data_v.push_back(reinterpret_cast<void*>(ptr));
+            }
+            bool ok = self.advertisev(conn_id, mr_id_v, data_v, size_v,
+                                      serialized_vec, num_iovs);
+            py::list py_bytes_list;
+            for (size_t i = 0; i < num_iovs; ++i) {
+              py_bytes_list.append(
+                  py::bytes(serialized_vec[i], sizeof(uccl::FifoItem)));
+            }
+            for (size_t i = 0; i < num_iovs; ++i) {
+              delete[] serialized_vec[i];
+            }
+            return py::make_tuple(ok, py_bytes_list);
+          },
+          "Expose multiple registered buffers for the peer to RDMA-READ or "
+          "RDMA-WRITE",
+          py::arg("conn_id"), py::arg("mr_id_v"), py::arg("ptr_v"),
+          py::arg("size_v"), py::arg("num_iovs"))
       .def(
           "read",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
@@ -194,6 +225,42 @@ PYBIND11_MODULE(p2p, m) {
           py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"),
           py::arg("meta"))
       .def(
+          "readv",
+          [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+             std::vector<uint64_t> ptr_v, std::vector<size_t> size_v,
+             py::list meta_blob_v, size_t num_iovs) {
+            if (mr_id_v.size() != num_iovs || ptr_v.size() != num_iovs ||
+                size_v.size() != num_iovs || py::len(meta_blob_v) != num_iovs) {
+              throw std::runtime_error(
+                  "All input vectors/lists must have length num_iovs");
+            }
+            std::vector<uccl::FifoItem> item_v;
+            item_v.reserve(num_iovs);
+            for (size_t i = 0; i < num_iovs; ++i) {
+              std::string buf = py::cast<py::bytes>(meta_blob_v[i]);
+              if (buf.size() != sizeof(uccl::FifoItem))
+                throw std::runtime_error(
+                    "meta must be exactly 64 bytes (serialized FifoItem)");
+              uccl::FifoItem item;
+              uccl::deserialize_fifo_item(buf.data(), &item);
+              item_v.push_back(item);
+            }
+            std::vector<void*> data_v;
+            data_v.reserve(num_iovs);
+            for (size_t i = 0; i < num_iovs; ++i) {
+              data_v.push_back(reinterpret_cast<void*>(ptr_v[i]));
+            }
+            bool ok =
+                self.readv(conn_id, mr_id_v, data_v, size_v, item_v, num_iovs);
+            return ok;
+          },
+          "RDMA-READ into multiple local buffers using metadata from "
+          "advertisev(); "
+          "`meta_blob_v` is a list of 64-byte serialized FifoItem returned by "
+          "the peer",
+          py::arg("conn_id"), py::arg("mr_id_v"), py::arg("ptr_v"),
+          py::arg("size_v"), py::arg("meta_blob_v"), py::arg("num_iovs"))
+      .def(
           "read_async",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
              size_t size, py::bytes meta_blob) {
@@ -211,6 +278,81 @@ PYBIND11_MODULE(p2p, m) {
             return py::make_tuple(success, transfer_id);
           },
           "RDMA-READ into a local buffer using metadata from advertise(); "
+          "`meta` is the 64-byte serialized FifoItem returned by the peer",
+          py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"),
+          py::arg("meta"))
+      .def(
+          "write",
+          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
+             size_t size, py::bytes meta_blob) {
+            std::string buf = meta_blob;
+            if (buf.size() != sizeof(uccl::FifoItem))
+              throw std::runtime_error(
+                  "meta must be exactly 64 bytes (serialized FifoItem)");
+
+            uccl::FifoItem item;
+            uccl::deserialize_fifo_item(buf.data(), &item);
+            return self.write(conn_id, mr_id, reinterpret_cast<void*>(ptr),
+                              size, item);
+          },
+          "RDMA-WRITE into a remote buffer using metadata from advertise(); "
+          "`meta` is the 64-byte serialized FifoItem returned by the peer",
+          py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"),
+          py::arg("meta"))
+      .def(
+          "writev",
+          [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+             std::vector<uint64_t> ptr_v, std::vector<size_t> size_v,
+             py::list meta_blob_v, size_t num_iovs) {
+            if (mr_id_v.size() != num_iovs || ptr_v.size() != num_iovs ||
+                size_v.size() != num_iovs || py::len(meta_blob_v) != num_iovs) {
+              throw std::runtime_error(
+                  "All input vectors/lists must have length num_iovs");
+            }
+            std::vector<uccl::FifoItem> item_v;
+            item_v.reserve(num_iovs);
+            for (size_t i = 0; i < num_iovs; ++i) {
+              std::string buf = py::cast<py::bytes>(meta_blob_v[i]);
+              if (buf.size() != sizeof(uccl::FifoItem))
+                throw std::runtime_error(
+                    "meta must be exactly 64 bytes (serialized FifoItem)");
+              uccl::FifoItem item;
+              uccl::deserialize_fifo_item(buf.data(), &item);
+              item_v.push_back(item);
+            }
+            std::vector<void*> data_v;
+            data_v.reserve(num_iovs);
+            for (size_t i = 0; i < num_iovs; ++i) {
+              data_v.push_back(reinterpret_cast<void*>(ptr_v[i]));
+            }
+            bool ok =
+                self.writev(conn_id, mr_id_v, data_v, size_v, item_v, num_iovs);
+            return ok;
+          },
+          "RDMA-WRITE into multiple remote buffers using metadata from "
+          "advertisev(); "
+          "`meta_blob_v` is a list of 64-byte serialized FifoItem returned by "
+          "the peer",
+          py::arg("conn_id"), py::arg("mr_id_v"), py::arg("ptr_v"),
+          py::arg("size_v"), py::arg("meta_blob_v"), py::arg("num_iovs"))
+      .def(
+          "write_async",
+          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
+             size_t size, py::bytes meta_blob) {
+            std::string buf = meta_blob;
+            if (buf.size() != sizeof(uccl::FifoItem))
+              throw std::runtime_error(
+                  "meta must be exactly 64 bytes (serialized FifoItem)");
+
+            uccl::FifoItem item;
+            uccl::deserialize_fifo_item(buf.data(), &item);
+            uint64_t transfer_id;
+            bool success =
+                self.write_async(conn_id, mr_id, reinterpret_cast<void*>(ptr),
+                                 size, item, &transfer_id);
+            return py::make_tuple(success, transfer_id);
+          },
+          "RDMA-WRITE into a remote buffer using metadata from advertise(); "
           "`meta` is the 64-byte serialized FifoItem returned by the peer",
           py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"),
           py::arg("meta"))
@@ -246,5 +388,75 @@ PYBIND11_MODULE(p2p, m) {
                              metadata.size());
           },
           "Return endpoint metadata as a list of bytes")
+      // IPC-specific functions for local connections via Unix Domain Sockets
+      .def(
+          "connect_local",
+          [](Endpoint& self, int remote_gpu_idx) {
+            uint64_t conn_id;
+            bool success = self.connect_local(remote_gpu_idx, conn_id);
+            return py::make_tuple(success, conn_id);
+          },
+          "Connect to a local process via Unix Domain Socket",
+          py::arg("remote_gpu_idx"))
+      .def(
+          "accept_local",
+          [](Endpoint& self) {
+            int remote_gpu_idx;
+            uint64_t conn_id;
+            bool success = self.accept_local(remote_gpu_idx, conn_id);
+            return py::make_tuple(success, remote_gpu_idx, conn_id);
+          },
+          "Accept an incoming local connection via Unix Domain Socket")
+      .def(
+          "send_ipc",
+          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
+            bool success =
+                self.send_ipc(conn_id, reinterpret_cast<void*>(ptr), size);
+            return success;
+          },
+          "Send data via IPC (Inter-Process Communication) using CUDA/HIP "
+          "memory handles",
+          py::arg("conn_id"), py::arg("ptr"), py::arg("size"))
+      .def(
+          "recv_ipc",
+          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
+            bool success =
+                self.recv_ipc(conn_id, reinterpret_cast<void*>(ptr), size);
+            return success;
+          },
+          "Receive data via IPC (Inter-Process Communication) using CUDA/HIP "
+          "memory handles",
+          py::arg("conn_id"), py::arg("ptr"), py::arg("size"))
+      .def(
+          "send_ipc_async",
+          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
+            uint64_t transfer_id;
+            bool success =
+                self.send_ipc_async(conn_id, reinterpret_cast<void const*>(ptr),
+                                    size, &transfer_id);
+            return py::make_tuple(success, transfer_id);
+          },
+          "Send data asynchronously via IPC using CUDA/HIP memory handles",
+          py::arg("conn_id"), py::arg("ptr"), py::arg("size"))
+      .def(
+          "recv_ipc_async",
+          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
+            uint64_t transfer_id;
+            bool success = self.recv_ipc_async(
+                conn_id, reinterpret_cast<void*>(ptr), size, &transfer_id);
+            return py::make_tuple(success, transfer_id);
+          },
+          "Receive data asynchronously via IPC using CUDA/HIP memory handles",
+          py::arg("conn_id"), py::arg("ptr"), py::arg("size"))
+      .def_static(
+          "parse_metadata",
+          [](py::bytes metadata_bytes) {
+            std::string buf = metadata_bytes;
+            std::vector<uint8_t> metadata(buf.begin(), buf.end());
+            auto [ip, port, gpu_idx] = Endpoint::parse_metadata(metadata);
+            return py::make_tuple(ip, port, gpu_idx);
+          },
+          "Parse endpoint metadata to extract IP address, port, and GPU index",
+          py::arg("metadata"))
       .def("__repr__", [](Endpoint const& e) { return "<UCCL P2P Endpoint>"; });
 }

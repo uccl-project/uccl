@@ -1,0 +1,24 @@
+ABS_ROOT_PATH := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
+ABS_REPO_ROOT := $(shell realpath $(ABS_ROOT_PATH)/../..)
+
+HIP_HOME?=/opt/rocm
+CONDA_LIB_HOME?=/usr/lib
+
+INC = -I$(ABS_REPO_ROOT)/include -I$(HIP_HOME)/include -I${CONDA_LIB_HOME}/../include -L${CONDA_LIB_HOME}
+LIBS = -lglog -lgflags -lz -lelf -libverbs -L $(HIP_HOME)/lib -lamdhip64 -lpthread
+override CXXFLAGS += -O3 -g -std=c++17 -Wno-pointer-arith -Wno-interference-size -fPIC -D__HIP_PLATFORM_AMD__
+
+DEPS = *.h
+
+test_src = $(wildcard *_test.cc)
+test_bin = $(test_src:.cc=)
+
+.PHONY: build
+build: $(test_bin)
+
+%_test: %_test.cc $(DEPS)
+	g++ $< -o $@ $(INC) $(LIBS) $(CXXFLAGS)
+
+.PHONY: clean
+clean:
+	rm -f $(test_bin)

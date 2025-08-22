@@ -24,6 +24,7 @@ def _make_buffer(size_bytes: int):
     """Allocate a contiguous GPU tensor of *size_bytes* and return it."""
     n_elems = size_bytes // 4  # float32
     tensor = torch.ones(n_elems, dtype=torch.float32).cuda()
+    assert tensor.is_contiguous()
     assert tensor.device.type == "cuda"
     return tensor
 
@@ -62,6 +63,14 @@ def _run_server(args):
 
         elapsed = time.perf_counter() - start
 
+        # check if tensor is filled with size
+        if not tensor.allclose(torch.tensor(size, dtype=torch.float32).cuda()):
+            print(f"[Server] WARNING: Tensor is not filled with {size}")
+            print(f"[Server] Tensor: {tensor}")
+            print(f"[Server] Tensor size: {tensor.size()}")
+            print(f"[Server] Tensor dtype: {tensor.dtype}")
+            print(f"[Server] Tensor device: {tensor.device}")
+
         gbps = (total * 8) / elapsed / 1e9
         gb_sec = total / elapsed / 1e9
         print(
@@ -74,6 +83,7 @@ def _run_client(args):
     peer = 1  # server rank
     for size in args.sizes:
         tensor = _make_buffer(size)
+        tensor.fill_(size)
 
         # Register tensor for efficient memory access
         collective.register_tensor(tensor)
@@ -160,6 +170,11 @@ def _run_async_client(args):
 def _run_dual_benchmark(args):
     """Demonstrate dual-direction async communication (both isend and irecv simultaneously)."""
     rank = dist.get_rank()
+    world_size = dist.get_world_size()
+
+    if world_size != 2:
+        raise RuntimeError("Dual benchmark only supports exactly 2 processes")
+
     peer = 1 - rank  # peer rank (0 <-> 1)
 
     for size in args.sizes:
@@ -207,6 +222,92 @@ def _run_dual_benchmark(args):
     print(f"[{role_name} Dual] Benchmark complete")
 
 
+def _run_ring_benchmark(args):
+    """Ring communication: each rank sends to next rank in a ring pattern."""
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+
+    # Ring pattern: rank i sends to rank (i+1) % world_size
+    dst_rank = (rank + 1) % world_size
+    src_rank = (rank - 1 + world_size) % world_size
+
+    print(
+        f"[Rank {rank}] Ring pattern: receiving from rank {src_rank}, sending to rank {dst_rank}"
+    )
+
+    for size in args.sizes:
+        send_tensor = _make_buffer(size)
+        recv_tensor = _make_buffer(size)
+
+        # Fill send tensor with rank-specific data for verification
+        send_tensor.fill_(size)
+
+        # Register tensors for efficient memory access
+        collective.register_tensor(send_tensor)
+        collective.register_tensor(recv_tensor)
+
+        # Warm-up
+        send_req = collective.isend(send_tensor, dst=dst_rank)
+        recv_req = collective.irecv(recv_tensor, src=src_rank)
+        collective.wait_all([send_req, recv_req])
+
+        # Verify received data
+        expected_value = float(size)
+        received_value = recv_tensor[0].item()
+
+        if abs(received_value - expected_value) > 1e-6:
+            print(f"[Rank {rank}] WARNING: Data verification failed for warm-up")
+            print(f"  Expected: {expected_value}, Received: {received_value}")
+            print(f"  Source rank: {src_rank}, Current rank: {rank}")
+
+        # Fill tensor once before benchmark loop for best performance
+        benchmark_send_value = float(size)
+        send_tensor.fill_(benchmark_send_value)
+
+        start = time.perf_counter()
+        total_bytes = 0
+
+        for iteration in range(args.iters):
+            # Use async operations for better performance (no fill overhead)
+            send_req = collective.isend(send_tensor, dst=dst_rank)
+            recv_req = collective.irecv(recv_tensor, src=src_rank)
+            collective.wait_all([send_req, recv_req])
+            total_bytes += size
+
+        elapsed = time.perf_counter() - start
+
+        # Perform final data verification after all iterations complete
+        final_send_value = float(size)
+        send_tensor.fill_(final_send_value)
+
+        # Final verification round
+        send_req = collective.isend(send_tensor, dst=dst_rank)
+        recv_req = collective.irecv(recv_tensor, src=src_rank)
+        collective.wait_all([send_req, recv_req])
+
+        # Synchronize all ranks before verification
+        dist.barrier()
+
+        # Expected value should be from the source rank's benchmark value
+        expected_value = float(final_send_value)
+        received_value = recv_tensor[0].item()  # Check first element
+
+        if abs(received_value - expected_value) > 1e-6:
+            print(f"[Rank {rank}] WARNING: Final data verification failed")
+            print(f"  Expected: {expected_value}, Received: {received_value}")
+            print(f"  Source rank: {src_rank}, Current rank: {rank}")
+            print(f"  Final send value was: {final_send_value}")
+            print(f"  Benchmark send value was: {benchmark_send_value}")
+
+        gbps = (total_bytes * 8) / elapsed / 1e9
+        gb_sec = total_bytes / elapsed / 1e9
+        print(
+            f"[Rank {rank}] Ring Async {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
+        )
+
+    print(f"[Rank {rank}] Ring async benchmark complete")
+
+
 def parse_size_list(val: str) -> List[int]:
     try:
         return [int(s) for s in val.split(",") if s]
@@ -246,6 +347,11 @@ def main():
         action="store_true",
         help="Test bidirectional communication (simultaneous isend and irecv).",
     )
+    p.add_argument(
+        "--ring",
+        action="store_true",
+        help="Test ring communication pattern (rank i sends to rank (i+1) % world_size).",
+    )
     args = p.parse_args()
 
     # Initialize torch.distributed with gloo backend for coordination
@@ -253,7 +359,27 @@ def main():
 
     rank = dist.get_rank()
     world_size = dist.get_world_size()
-    assert world_size == 2, "This benchmark only supports 2 processes"
+
+    # Check for incompatible options
+    if args.dual and args.ring:
+        print("ERROR: --dual and --ring options are mutually exclusive")
+        sys.exit(1)
+
+    # Validate world size for specific benchmarks
+    if args.dual and world_size != 2:
+        print("ERROR: --dual benchmark requires exactly 2 processes")
+        sys.exit(1)
+
+    if args.ring and world_size < 2:
+        print("ERROR: --ring benchmark requires at least 2 processes")
+        sys.exit(1)
+
+    # Default client-server benchmark still requires exactly 2 processes
+    if not args.dual and not args.ring and world_size != 2:
+        print(
+            "ERROR: Default client-server benchmark requires exactly 2 processes. Use --ring for multi-process scenarios."
+        )
+        sys.exit(1)
 
     try:
         # Initialize UCCL collective context (local_gpu_idx auto-detected from torch.distributed)
@@ -264,20 +390,30 @@ def main():
         local_gpu_idx = ctx.local_gpu_idx
         torch.cuda.set_device(local_gpu_idx)
 
-        print(
-            "UCCL Collective Benchmark — role:",
-            "client" if rank == 0 else "server",
-        )
+        if args.ring:
+            print(f"[Rank {rank}/{world_size}] UCCL Collective Ring Benchmark")
+        else:
+            print(
+                "UCCL Collective Benchmark — role:",
+                "client" if rank == 0 else "server",
+            )
         print("Message sizes:", ", ".join(_pretty_size(s) for s in args.sizes))
         print(f"Device: GPU | Local GPU idx: {local_gpu_idx} | Iters: {args.iters}")
-        if args.dual:
+        if args.ring:
+            print(f"[Rank {rank}] Using async ring communication pattern (isend/irecv)")
+        elif args.dual:
             print("Using dual-direction mode (simultaneous isend/irecv)")
         elif args.async_api:
             print("Using async API (isend/irecv/wait)")
         else:
             print("Using synchronous API (send/recv)")
 
-        if args.dual:
+        # Synchronize all ranks before starting benchmark
+        dist.barrier()
+
+        if args.ring:
+            _run_ring_benchmark(args)
+        elif args.dual:
             _run_dual_benchmark(args)
         elif args.async_api:
             if rank == 0:
@@ -289,6 +425,13 @@ def main():
                 _run_client(args)
             else:
                 _run_server(args)
+
+        # Synchronize all ranks before finishing
+        dist.barrier()
+        if args.ring:
+            print(f"[Rank {rank}] Ring benchmark completed successfully!")
+        else:
+            print("Benchmark completed successfully!")
     finally:
         collective.finalize_collective()
         dist.destroy_process_group()
