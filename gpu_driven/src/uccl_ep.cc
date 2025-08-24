@@ -99,10 +99,12 @@ class Buffer {
           d_ring_addrs[i] = reinterpret_cast<uint64_t>(dev_ptr);
         }
         CUDA_CHECK(cudaDeviceSynchronize());
-        
+
         // Allocate device memory for IPC base pointers
-        CUDA_CHECK(cudaMalloc(&d_ipc_base_ptrs, NUM_MAX_NVL_PEERS * sizeof(void*)));
-        CUDA_CHECK(cudaMemset(d_ipc_base_ptrs, 0, NUM_MAX_NVL_PEERS * sizeof(void*)));
+        CUDA_CHECK(
+            cudaMalloc(&d_ipc_base_ptrs, NUM_MAX_NVL_PEERS * sizeof(void*)));
+        CUDA_CHECK(
+            cudaMemset(d_ipc_base_ptrs, 0, NUM_MAX_NVL_PEERS * sizeof(void*)));
       }
     }
 
@@ -367,8 +369,8 @@ class Buffer {
           next_clean_meta.second, num_tokens, hidden,
           num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
           num_ranks, use_fp8, round_scale, use_ue8m0, workspace, num_device_sms,
-          launch_stream, phases, d_ring_addrs,
-          num_ring_addrs, d_ipc_base_ptrs);  // Added IPC base pointers
+          launch_stream, phases, d_ring_addrs, num_ring_addrs,
+          d_ipc_base_ptrs);  // Added IPC base pointers
     };
     launcher(return_recv_hook
                  ? LOW_LATENCY_SEND_PHASE
@@ -488,8 +490,8 @@ class Buffer {
           next_clean_meta.first, next_clean_meta.second, num_combined_tokens,
           hidden, num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
           num_ranks, use_logfmt, workspace, num_device_sms, launch_stream,
-          phases, zero_copy, d_ring_addrs,
-          num_ring_addrs, d_ipc_base_ptrs);  // Added IPC base pointers
+          phases, zero_copy, d_ring_addrs, num_ring_addrs,
+          d_ipc_base_ptrs);  // Added IPC base pointers
     };
     launcher(return_recv_hook
                  ? LOW_LATENCY_SEND_PHASE
@@ -568,7 +570,7 @@ class Buffer {
       CUDA_CHECK(cudaMemcpy(barrier_signal_ptrs_gpu, barrier_signal_ptrs,
                             sizeof(int*) * NUM_MAX_NVL_PEERS,
                             cudaMemcpyHostToDevice));
-      
+
       // Copy IPC base pointers for GPU access (for P2P operations)
       if (d_ipc_base_ptrs != nullptr) {
         // For RDMA buffer access, we'll use the rdma_buffer_ptr as the base
@@ -577,7 +579,7 @@ class Buffer {
                               sizeof(void*) * NUM_MAX_NVL_PEERS,
                               cudaMemcpyHostToDevice));
       }
-      
+
       CUDA_CHECK(cudaDeviceSynchronize());
     }
 
@@ -690,9 +692,10 @@ class Buffer {
   // Ring buffers
   int num_ring_addrs{0};
   uint64_t* d_ring_addrs{nullptr};
-  
+
   // IPC base pointers for GPU access (for replacing nvshmemi_get_p2p_ptr)
-  void** d_ipc_base_ptrs{nullptr};  // Device pointer to array of IPC base addresses
+  void** d_ipc_base_ptrs{
+      nullptr};  // Device pointer to array of IPC base addresses
 };
 
 PYBIND11_MODULE(uccl_ep, m) {

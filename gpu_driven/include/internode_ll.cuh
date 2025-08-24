@@ -20,7 +20,8 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
               int num_topk, int num_experts, int rank, int num_ranks,
               bool use_fp8, bool round_scale, bool use_ue8m0, void* workspace,
               int num_device_sms, cudaStream_t stream, int phases,
-              uint64_t const* ring_addrs, int num_ring_addrs, void** ipc_base_ptrs = nullptr);
+              uint64_t const* ring_addrs, int num_ring_addrs,
+              void** ipc_base_ptrs = nullptr);
 
 void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
              void* rdma_send_x, void const* x, int64_t const* topk_idx,
