@@ -167,13 +167,13 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         // signaling_buffer_bytes_aligned * 2 + send_buffer_bytes * 2 +
         // recv_buffer_bytes * i For the current buffer (i=0), we need to add
         // this base offset plus the message offset
-        auto const rdma_recv_x_offset_in_buffer =
-            reinterpret_cast<uint64_t>(rdma_recv_x) -
-            reinterpret_cast<uint64_t>(rdma_recv_x) +
-            (dst_expert_local_idx * num_ranks *
-                 num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
-             rank * num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
-             slot_idx * num_bytes_per_msg);
+        // auto const rdma_recv_x_offset_in_buffer =
+        //     reinterpret_cast<uint64_t>(rdma_recv_x) -
+        //     reinterpret_cast<uint64_t>(rdma_recv_x) +
+        //     (dst_expert_local_idx * num_ranks *
+        //          num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
+        //      rank * num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
+        //      slot_idx * num_bytes_per_msg);
         // Actually, let's use the original approach but document that
         // S.remote_addr should point to rdma_recv_x base
         auto const dst_offset =

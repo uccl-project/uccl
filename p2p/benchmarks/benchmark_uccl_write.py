@@ -6,7 +6,7 @@ import torch
 import numpy as np
 import os
 
-# UCCL P2P read requires RC mode, as RDMA UC does not support one-sided read.
+# Only RC mode is supported for now.
 os.environ["UCCL_RCMODE"] = "1"
 
 try:
@@ -38,7 +38,7 @@ def _pretty(num: int):
         val /= 1024
 
 
-def _run_server_read(args, ep, remote_metadata):
+def _run_server_adv(args, ep, remote_metadata):
     peer = 0
     print("[Server] Waiting for connection …")
     ok, r_ip, r_gpu, conn_id = ep.accept()
@@ -67,7 +67,7 @@ def _run_server_read(args, ep, remote_metadata):
     print("[Server] Benchmark complete")
 
 
-def _run_client_recv(args, ep, remote_metadata):
+def _run_client_write(args, ep, remote_metadata):
     peer = 1
     ip, port, r_gpu = p2p.Endpoint.parse_metadata(remote_metadata)
     ok, conn_id = ep.connect(ip, r_gpu, remote_port=port)
@@ -96,7 +96,7 @@ def _run_client_recv(args, ep, remote_metadata):
         start = time.perf_counter()
         total = 0
         if args.async_api:
-            ok, transfer_id = ep.read_async(
+            ok, transfer_id = ep.write_async(
                 conn_id, mr_id_v[0], ptr_v[0], size_v[0], fifo_blob_v[0]
             )
             assert ok
@@ -105,12 +105,12 @@ def _run_client_recv(args, ep, remote_metadata):
                 ok, is_done = ep.poll_async(transfer_id)
                 assert ok
         else:
-            ep.readv(conn_id, mr_id_v, ptr_v, size_v, fifo_blob_v, args.num_iovs)
+            ep.writev(conn_id, mr_id_v, ptr_v, size_v, fifo_blob_v, args.num_iovs)
         start = time.perf_counter()
         total = 0
         for _ in range(args.iters):
             if args.async_api:
-                ok, transfer_id = ep.read_async(
+                ok, transfer_id = ep.write_async(
                     conn_id, mr_id_v[0], ptr_v[0], size_v[0], fifo_blob_v[0]
                 )
                 assert ok
@@ -120,7 +120,7 @@ def _run_client_recv(args, ep, remote_metadata):
                     assert ok
                 total += size_v[0]
             else:
-                ep.readv(conn_id, mr_id_v, ptr_v, size_v, fifo_blob_v, args.num_iovs)
+                ep.writev(conn_id, mr_id_v, ptr_v, size_v, fifo_blob_v, args.num_iovs)
                 total += sum(size_v)
         elapsed = time.perf_counter() - start
         print(
@@ -140,7 +140,7 @@ def parse_sizes(v: str) -> List[int]:
 
 
 def main():
-    p = argparse.ArgumentParser("UCCL READ benchmark (one-sided)")
+    p = argparse.ArgumentParser("UCCL WRITE benchmark (one-sided)")
     p.add_argument("--local-gpu-idx", type=int, default=0)
     p.add_argument("--num-cpus", type=int, default=4)
     p.add_argument("--device", choices=["cpu", "gpu"], default="gpu")
@@ -166,7 +166,7 @@ def main():
         "--num-iovs",
         type=int,
         default=1,
-        help="Number of iovs to read in a single call",
+        help="Number of iovs to write in a single call",
     )
     args = p.parse_args()
 
@@ -197,9 +197,9 @@ def main():
         remote_metadata = bytes(remote_metadata_tensor.tolist())
 
     if rank == 0:
-        _run_client_recv(args, ep, remote_metadata)
+        _run_client_write(args, ep, remote_metadata)
     elif rank == 1:
-        _run_server_read(args, ep, remote_metadata)
+        _run_server_adv(args, ep, remote_metadata)
 
     dist.destroy_process_group()
 

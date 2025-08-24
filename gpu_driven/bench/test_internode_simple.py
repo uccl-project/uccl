@@ -1,13 +1,22 @@
 """
 Simple internode test for DeepEP low-latency kernels.
 This test avoids the IPC handle issues by focusing only on low-latency functionality.
+On first node:
+torchrun --nnodes=2 --nproc_per_node=1 --node_rank=0 \
+  --master_addr=10.141.1.1 --master_port=12356 \
+  bench/test_internode_simple.py
+
+On second node:
+torchrun --nnodes=2 --nproc_per_node=1 --node_rank=1 \
+  --master_addr=10.141.1.1 --master_port=12356 \
+  bench/test_internode_simple.py
 """
 
-import argparse
 import torch
 import torch.distributed as dist
 import time
 from buffer import Buffer
+import os
 
 # import deep_ep as ep
 try:
@@ -188,7 +197,7 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
         raise
 
 
-def test_worker(local_rank: int, num_local_ranks: int, args):
+def test_worker(local_rank: int, num_local_ranks: int):
     rank, num_ranks, group = init_dist(local_rank, num_local_ranks)
 
     try:
@@ -199,16 +208,8 @@ def test_worker(local_rank: int, num_local_ranks: int, args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Simple DeepEP internode test")
-    parser.add_argument(
-        "--num-processes",
-        type=int,
-        default=1,
-        help="Number of processes per node (default: 1)",
-    )
-    args = parser.parse_args()
 
     print("Simple internode test starting...")
-    torch.multiprocessing.spawn(
-        test_worker, args=(args.num_processes, args), nprocs=args.num_processes
-    )
+    local_rank = int(os.environ["LOCAL_RANK"])
+    num_local_ranks = int(os.environ["LOCAL_WORLD_SIZE"])
+    test_worker(local_rank, num_local_ranks)
