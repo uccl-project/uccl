@@ -29,7 +29,7 @@ except ImportError as exc:
     raise
 
 
-from utils import init_dist, get_peer_ip
+from utils import init_dist, get_peer_ip, detect_ib_hca
 
 
 def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
@@ -208,7 +208,9 @@ def test_worker(local_rank: int, num_local_ranks: int):
 
 
 if __name__ == "__main__":
-
+    ib_dev = detect_ib_hca()
+    os.environ["NCCL_IB_HCA"] = ib_dev
+    print(f"Set NCCL_IB_HCA={ib_dev}")
     print("Simple internode test starting...")
     local_rank = int(os.environ["LOCAL_RANK"])
     num_local_ranks = int(os.environ["LOCAL_WORLD_SIZE"])
