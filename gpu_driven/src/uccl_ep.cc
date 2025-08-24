@@ -99,6 +99,10 @@ class Buffer {
           d_ring_addrs[i] = reinterpret_cast<uint64_t>(dev_ptr);
         }
         CUDA_CHECK(cudaDeviceSynchronize());
+        
+        // Allocate device memory for IPC base pointers
+        CUDA_CHECK(cudaMalloc(&d_ipc_base_ptrs, NUM_MAX_NVL_PEERS * sizeof(void*)));
+        CUDA_CHECK(cudaMemset(d_ipc_base_ptrs, 0, NUM_MAX_NVL_PEERS * sizeof(void*)));
       }
     }
 
@@ -230,6 +234,9 @@ class Buffer {
 
     // Free workspace and MoE counter
     CUDA_CHECK(cudaFree(workspace));
+    if (d_ipc_base_ptrs != nullptr) {
+      CUDA_CHECK(cudaFree(d_ipc_base_ptrs));
+    }
     CUDA_CHECK(cudaFreeHost(const_cast<int*>(moe_recv_counter)));
 
     // Free chunked mode staffs
@@ -361,7 +368,7 @@ class Buffer {
           num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
           num_ranks, use_fp8, round_scale, use_ue8m0, workspace, num_device_sms,
           launch_stream, phases, d_ring_addrs,
-          num_ring_addrs);  // NOTE(MaoZiming): adding UCCL ring buffers
+          num_ring_addrs, d_ipc_base_ptrs);  // Added IPC base pointers
     };
     launcher(return_recv_hook
                  ? LOW_LATENCY_SEND_PHASE
@@ -482,7 +489,7 @@ class Buffer {
           hidden, num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
           num_ranks, use_logfmt, workspace, num_device_sms, launch_stream,
           phases, zero_copy, d_ring_addrs,
-          num_ring_addrs);  // NOTE(MaoZiming): adding UCCL ring buffers
+          num_ring_addrs, d_ipc_base_ptrs);  // Added IPC base pointers
     };
     launcher(return_recv_hook
                  ? LOW_LATENCY_SEND_PHASE
@@ -561,6 +568,16 @@ class Buffer {
       CUDA_CHECK(cudaMemcpy(barrier_signal_ptrs_gpu, barrier_signal_ptrs,
                             sizeof(int*) * NUM_MAX_NVL_PEERS,
                             cudaMemcpyHostToDevice));
+      
+      // Copy IPC base pointers for GPU access (for P2P operations)
+      if (d_ipc_base_ptrs != nullptr) {
+        // For RDMA buffer access, we'll use the rdma_buffer_ptr as the base
+        // Note: This assumes rdma_buffer_ptr is set up properly for each rank
+        CUDA_CHECK(cudaMemcpy(d_ipc_base_ptrs, buffer_ptrs,
+                              sizeof(void*) * NUM_MAX_NVL_PEERS,
+                              cudaMemcpyHostToDevice));
+      }
+      
       CUDA_CHECK(cudaDeviceSynchronize());
     }
 
@@ -581,9 +598,11 @@ class Buffer {
                                      num_nvshmem_ranks, low_latency_mode));
       internode::barrier();
 
-      // Allocate
-      rdma_buffer_ptr =
-          internode::alloc(num_rdma_bytes, NUM_BUFFER_ALIGNMENT_BYTES);
+      // Allocate RDMA buffer
+      if (!rdma_buffer_ptr) {
+        rdma_buffer_ptr =
+            internode::alloc(num_rdma_bytes, NUM_BUFFER_ALIGNMENT_BYTES);
+      }
 
       // Clean buffer (mainly for low-latency mode)
       CUDA_CHECK(cudaMemset(rdma_buffer_ptr, 0, num_rdma_bytes));
@@ -671,6 +690,9 @@ class Buffer {
   // Ring buffers
   int num_ring_addrs{0};
   uint64_t* d_ring_addrs{nullptr};
+  
+  // IPC base pointers for GPU access (for replacing nvshmemi_get_p2p_ptr)
+  void** d_ipc_base_ptrs{nullptr};  // Device pointer to array of IPC base addresses
 };
 
 PYBIND11_MODULE(uccl_ep, m) {
