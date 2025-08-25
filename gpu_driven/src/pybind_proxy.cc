@@ -87,7 +87,13 @@ PYBIND11_MODULE(gpu_driven, m) {
       .def_property_readonly("rb_addr", &UcclProxy::rb_addr)
       .def_property_readonly("block_idx", &UcclProxy::block_idx)
       .def_property_readonly("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr);
-
+  py::class_<EnvInfo>(m, "EnvInfo")
+      .def_readonly("blocks", &EnvInfo::blocks)
+      .def_readonly("queue_size", &EnvInfo::queue_size)
+      .def_readonly("threads_per_block", &EnvInfo::threads_per_block)
+      .def_readonly("iterations", &EnvInfo::iterations)
+      .def_readonly("stream_addr", &EnvInfo::stream_addr)
+      .def_readonly("rbs_addr", &EnvInfo::rbs_addr);
   py::class_<Bench>(m, "Bench")
       .def(py::init<>())
       .def("env_info", &Bench::env_info)

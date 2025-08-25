@@ -464,8 +464,8 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t bytes,
     // wrs[i].wr.rdma.remote_addr = cmd.req_rptr ? cmd.req_rptr : S.remote_addr;
     // wrs[i].wr.rdma.remote_addr = S.remote_addr + i * bytes;
 
-    wrs[i].wr.rdma.remote_addr = S.remote_addr + cmd.req_rptr;
-
+    wrs[i].wr.rdma.remote_addr =
+        S.remote_addr + (cmd.req_rptr ? cmd.req_rptr : i * bytes);
     wrs[i].wr.rdma.rkey = S.remote_rkey;
     wrs[i].opcode = IBV_WR_RDMA_WRITE;
     wrs[i].send_flags = 0;
@@ -476,9 +476,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t bytes,
   wrs[last].send_flags |= IBV_SEND_SIGNALED;
   wrs[last].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
   wrs[last].imm_data = htonl(static_cast<uint32_t>(largest_wr));
-
-  // printf("[WR %zu/%zu] (last) wr_id=%lu opcode=WRITE_WITH_IMM imm_data=%u\n",
-  //        last, num_wrs, wrs[last].wr_id, ntohl(wrs[last].imm_data));
 
   ibv_send_wr* bad = nullptr;
   int ret = ibv_post_send(S.qp, &wrs[0], &bad);
