@@ -52,15 +52,18 @@ $(TARGET): $(OBJECTS) ../rdma/librdma.a
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB)
 
-$(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECT) ../rdma/librdma.a
-	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) ../rdma/librdma.a \
+$(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECT) ../rdma/librdma_plugin.a
+	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) ../rdma/librdma_plugin.a \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB)
 
 
 ../rdma/librdma.a: $(filter-out ../rdma/nccl_plugin.cc, $(wildcard ../rdma/*.cc)) ../rdma/*.h
-	make CXXFLAGS="-DDISABLE_CALL_ONCE_STATIC" -C ../rdma librdma.a -j$(nproc)
+	make -C ../rdma librdma.a -j$(nproc)
+
+../rdma/librdma_plugin.a: $(filter-out ../rdma/nccl_plugin.cc, $(wildcard ../rdma/*.cc)) ../rdma/*.h
+	make CXXFLAGS="-DDISABLE_CALL_ONCE_STATIC" -C ../rdma librdma_plugin.a
 
 # Compile source files
 %.o: %.cc

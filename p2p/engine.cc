@@ -34,9 +34,9 @@ inline void check_python_signals() {
 
 Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
     : local_gpu_idx_(local_gpu_idx), num_cpus_(num_cpus) {
-  if (PyGILState_Check()) {
-    py::gil_scoped_release release;
-  }
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
   std::cout << "Creating Engine with GPU index: " << local_gpu_idx
             << ", CPUs: " << num_cpus << std::endl;
   // Py_Initialize();
@@ -94,9 +94,9 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
 }
 
 Endpoint::~Endpoint() {
-  if (PyGILState_Check()) {
-    py::gil_scoped_release release;
-  }
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
   std::cout << "Destroying Engine..." << std::endl;
 
   stop_.store(true, std::memory_order_release);
@@ -141,9 +141,9 @@ Endpoint::~Endpoint() {
 
 bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
                        uint64_t& conn_id) {
-  if (PyGILState_Check()) {
-    py::gil_scoped_release release;
-  }
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
   std::cout << "Attempting to connect to " << ip_addr << ":" << remote_gpu_idx
             << std::endl;
 
@@ -219,9 +219,9 @@ bool Endpoint::connect(py::bytes const& meta_bytes, uint64_t& conn_id) {
 
 bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
                       uint64_t& conn_id) {
-  if (PyGILState_Check()) {
-    py::gil_scoped_release release;
-  }
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
   std::cout << "Waiting to accept incoming connection..." << std::endl;
 
   // For demo purposes, simulate accepted connection
@@ -255,9 +255,8 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
 }
 
 bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
-  if (PyGILState_Check()) {
-    py::gil_scoped_release release;
-  }
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
   mr_id = next_mr_id_.fetch_add(1);
 
@@ -284,9 +283,9 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
     throw std::invalid_argument(
         "[Endpoint::regv] data_v/size_v length mismatch");
 
-  if (PyGILState_Check()) {
-    py::gil_scoped_release release;
-  }
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
   size_t const n = data_v.size();
   mr_id_v.resize(n);
 
@@ -483,9 +482,8 @@ bool Endpoint::send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
 
 bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
                           size_t size, uint64_t* transfer_id) {
-  if (PyGILState_Check()) {
-    py::gil_scoped_release release;
-  }
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
   Task* task = new Task{
       .type = TaskType::SEND,
@@ -508,9 +506,8 @@ bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
 
 bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
                           size_t size, uint64_t* transfer_id) {
-  if (PyGILState_Check()) {
-    py::gil_scoped_release release;
-  }
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
   Task* task = new Task{
       .type = TaskType::RECV,
@@ -534,9 +531,9 @@ bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
 bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void const*> data_v,
                      std::vector<size_t> size_v, size_t num_iovs) {
-  if (PyGILState_Check()) {
-    py::gil_scoped_release release;
-  }
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
   auto conn = conn_id_to_conn_[conn_id];
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
