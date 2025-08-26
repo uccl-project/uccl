@@ -1,7 +1,24 @@
 #!/bin/bash
 set -e
 
-# Check if pip is installed
+CONDA_ENV_NAME="${1}"
+if [ -z "$CONDA_ENV_NAME" ]; then
+    echo "Please provide the conda environment name as the first argument, e.g., bash install_deps.sh myenv"
+    exit 1
+fi
+
+# Ensure conda is available
+if ! command -v conda &> /dev/null; then
+    echo "Conda is not installed. Please install Anaconda or Miniconda first."
+    exit 1
+fi
+
+# Activate conda environment
+echo "Activating conda environment: $CONDA_ENV_NAME"
+eval "$(conda shell.bash hook)"
+conda activate $CONDA_ENV_NAME
+
+# Check if pip is installed in the environment
 if ! command -v pip3 &> /dev/null; then
     echo "Installing pip3..."
     sudo apt update
@@ -43,8 +60,8 @@ if check_cuda; then
     
     pip3 install torch torchvision torchaudio --index-url "https://download.pytorch.org/whl/$PYTORCH_SUFFIX"
 else
-    echo "No CUDA detected, installing CPU version of PyTorch..."
-    pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+    echo "No CUDA detected"
+    exit 1
 fi
 
 # Verify PyTorch installation
@@ -70,4 +87,3 @@ export LD_LIBRARY_PATH="$TORCH_LIB:$LD_LIBRARY_PATH"
 
 # Compilation instructions
 echo "All dependencies installed and environment configured"
-    

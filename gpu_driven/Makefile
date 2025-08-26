@@ -12,6 +12,10 @@ TORCH_LIBDIR       := $(shell $(PYTHON) -c "import torch, pathlib; p=pathlib.Pat
 TORCH_ABI          := $(shell $(PYTHON) -c "import torch; print(int(torch._C._GLIBCXX_USE_CXX11_ABI))")
 TORCH_INCS := -I$(TORCH_INCLUDE) -I$(TORCH_INCLUDE_API)
 
+# Python installation path
+PYTHON_SITE_PACKAGES := $(shell $(PYTHON) -c "import site; print(site.getsitepackages()[0])")
+INSTALL_DIR          := $(PYTHON_SITE_PACKAGES)/uccl
+
 # GPU arch (override with: make SM=90)
 SM ?= 90
 
@@ -85,6 +89,12 @@ $(PYTARGET): $(OBJ_CPP) $(OBJ_CU) src/pybind_proxy.o
 	  $(INCLUDES) $(PYBIND11_INCLUDES) $^ -lcuda -lcudart $(LDFLAGS) -o $@
 
 py: $(PYTARGET) $(UCCL_EP_EXT)
+
+# Install the module
+install: $(PYTARGET)
+	@mkdir -p $(INSTALL_DIR)
+	@cp $(PYTARGET) $(INSTALL_DIR)/
+	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(PYTARGET)"
 
 # Clean all generated files
 clean:
