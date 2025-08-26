@@ -25,3 +25,22 @@ void cpu_relax() {
   asm volatile("" ::: "memory");
 #endif
 }
+
+void maybe_enable_peer_access(int src_dev, int dst_dev) {
+  if (src_dev == dst_dev) return;
+  std::call_once(peer_ok_flag[src_dev][dst_dev], [&]() {
+    GPU_RT_CHECK(gpuSetDevice(dst_dev));
+    gpuError_t err = gpuDeviceEnablePeerAccess(src_dev, 0);
+    if (err != gpuSuccess && err != gpuErrorPeerAccessAlreadyEnabled) {
+      fprintf(stderr, "Peer access from dst_dev=%d to src_dev=%d failed: %s\n",
+              dst_dev, src_dev, gpuGetErrorString(err));
+    }
+
+    GPU_RT_CHECK(gpuSetDevice(src_dev));
+    err = gpuDeviceEnablePeerAccess(dst_dev, 0);
+    if (err != gpuSuccess && err != gpuErrorPeerAccessAlreadyEnabled) {
+      fprintf(stderr, "Peer access from src_dev=%d to dst_dev=%d failed: %s\n",
+              src_dev, dst_dev, gpuGetErrorString(err));
+    }
+  });
+}

@@ -5,25 +5,6 @@
 #include "rdma.hpp"
 #include <mutex>
 
-void maybe_enable_peer_access(PeerCopyShared& shared, int dst_dev) {
-  if (shared.src_device == dst_dev) return;
-  std::call_once(shared.peer_ok_flag[shared.src_device][dst_dev], [&]() {
-    GPU_RT_CHECK(gpuSetDevice(dst_dev));
-    gpuError_t err = gpuDeviceEnablePeerAccess(shared.src_device, 0);
-    if (err != gpuSuccess && err != gpuErrorPeerAccessAlreadyEnabled) {
-      fprintf(stderr, "Peer access from dst_dev=%d to src_dev=%d failed: %s\n",
-              dst_dev, shared.src_device, gpuGetErrorString(err));
-    }
-
-    GPU_RT_CHECK(gpuSetDevice(shared.src_device));
-    err = gpuDeviceEnablePeerAccess(dst_dev, 0);
-    if (err != gpuSuccess && err != gpuErrorPeerAccessAlreadyEnabled) {
-      fprintf(stderr, "Peer access from src_dev=%d to dst_dev=%d failed: %s\n",
-              shared.src_device, dst_dev, gpuGetErrorString(err));
-    }
-  });
-}
-
 void sync_and_post(PeerWorkerCtx& ctx, CopyRingBuffer& ring,
                    gpuStream_t& stream, int idx) {
   if (ctx.async_memcpy_count > ctx.prev_completed_async_memcpy_count) {
@@ -70,7 +51,7 @@ void peer_copy_worker(PeerCopyShared& shared, PeerWorkerCtx& ctx,
       copy_batch_size = n;
     }
     for (int i = 0; i < copy_batch_size; ++i) {
-      maybe_enable_peer_access(shared, ctx.tasks[i].dst_dev);
+      maybe_enable_peer_access(shared.src_device, ctx.tasks[i].dst_dev);
       ctx.task_wrs[i] = ctx.tasks[i].wr_id;
     }
     ctx.highest_issued_wr_id =

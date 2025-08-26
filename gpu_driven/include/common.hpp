@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <thread>
 #include <stdio.h>
 #include <unistd.h>
@@ -37,7 +38,12 @@
 #define MAX_NUM_GPUS 8
 #define RECEIVER_BATCH_SIZE 16
 #define NVLINK_SM_PER_PROCESS 1
+
+// P2P enable flags (once per GPU pair)
+std::once_flag peer_ok_flag[MAX_NUM_GPUS][MAX_NUM_GPUS];
 bool pin_thread_to_cpu(int cpu);
 void cpu_relax();
+
+void maybe_enable_peer_access(int src_dev, int dst_dev);
 
 #endif  // COMMON_HPP
