@@ -33,6 +33,9 @@
 #define MAX_RETRIES 20
 #define RETRY_DELAY_MS 200
 #define TCP_PORT 18515
+#define QKEY 0
+
+#define EFA
 
 void exchange_connection_info(int rank, char const* peer_ip, int tid,
                               RDMAConnectionInfo* local,
@@ -176,7 +179,6 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   struct ibv_qp_init_attr qp_init_attr = {};
   qp_init_attr.send_cq = S.cq;
   qp_init_attr.recv_cq = S.cq;
-  #define EFA
   #ifdef EFA
   qp_init_attr.qp_type = IBV_QPT_DRIVER;
   #else
@@ -192,14 +194,18 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
 
   #ifdef EFA
   S.qp = efadv_create_driver_qp(S.pd, &qp_init_attr, EFADV_QP_DRIVER_TYPE_SRD);
+  S.ack_qp = efadv_create_driver_qp(S.pd, &qp_init_attr, EFADV_QP_DRIVER_TYPE_SRD);
+  S.recv_ack_qp = efadv_create_driver_qp(S.pd, &qp_init_attr, EFADV_QP_DRIVER_TYPE_SRD);
+  if (!S.qp || !S.ack_qp || !S.recv_ack_qp) {
+    perror("Failed to create QPs for EFA");
+    exit(1);
+  }
   #else
   S.qp = ibv_create_qp(S.pd, &qp_init_attr);
   if (!S.qp) {
     perror("Failed to create QP");
     exit(1);
   }
-  #endif
-
   S.ack_qp = ibv_create_qp(S.pd, &qp_init_attr);
   if (!S.ack_qp) {
     perror("Failed to create Ack QP");
@@ -211,6 +217,7 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
     perror("Failed to create Receive Ack QP");
     exit(1);
   }
+  #endif
 
   // Query port
   struct ibv_port_attr port_attr;
@@ -246,11 +253,16 @@ void modify_qp_to_init(ProxyCtx& S) {
   attr.qp_state = IBV_QPS_INIT;
   attr.port_num = 1;  // HCA port you use
   attr.pkey_index = 0;
+  attr.qkey = QKEY;
+  #ifndef EFA
   attr.qp_access_flags =
       IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
+  #endif
 
-  int flags =
-      IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS;
+  int flags = IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_QKEY;
+  #ifndef EFA
+  flags |= IBV_QP_ACCESS_FLAGS;
+  #endif
 
   if (ibv_modify_qp(S.qp, &attr, flags)) {
     perror("Failed to modify QP to INIT");
