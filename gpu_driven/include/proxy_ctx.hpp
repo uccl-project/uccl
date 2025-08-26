@@ -40,9 +40,9 @@ struct ProxyCtx {
 
   // GPU copy helpers (moved from function-static thread_local)
   gpuStream_t copy_stream = nullptr;
-  bool peer_enabled[NUM_GPUS][NUM_GPUS] = {};
+  bool peer_enabled[MAX_NUM_GPUS][MAX_NUM_GPUS] = {};
   size_t pool_index = 0;
 
   // Optional: per-GPU destination buffers if you previously used a global
-  void* per_gpu_device_buf[NUM_GPUS] = {nullptr};
+  void* per_gpu_device_buf[MAX_NUM_GPUS] = {nullptr};
 };

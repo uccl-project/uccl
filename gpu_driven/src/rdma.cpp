@@ -665,6 +665,12 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
   }
   std::vector<CopyTask> task_vec;
   task_vec.reserve(num_wr_imm);
+  int nDevices;
+  cudaError_t err = cudaGetDeviceCount(&nDevices);
+  if (err != cudaSuccess) {
+      printf("CUDA error: %s\n", cudaGetErrorString(err));
+      std::abort();
+  }
   for (int i = 0; i < ne; ++i) {
     int src_addr_offset = 0;
     // int destination_gpu;
@@ -672,7 +678,7 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
     if (wc[i].opcode != IBV_WC_RECV_RDMA_WITH_IMM) {
       continue;
     }
-    int destination_gpu = wc[i].imm_data % NUM_GPUS;
+    int destination_gpu = wc[i].imm_data % nDevices;
     if (S.per_gpu_device_buf[destination_gpu] == nullptr) {
       fprintf(stderr, "per_gpu_device_buf[%d] is null\n", destination_gpu);
       std::abort();

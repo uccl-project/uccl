@@ -11,7 +11,7 @@ struct PeerCopyShared {
   std::atomic<bool> run{true};
 
   // P2P enable flags (once per GPU pair)
-  std::once_flag peer_ok_flag[NUM_GPUS][NUM_GPUS];
+  std::once_flag peer_ok_flag[MAX_NUM_GPUS][MAX_NUM_GPUS];
 
   // Source GPU for receiving host-side staging to device
   int src_device = 0;

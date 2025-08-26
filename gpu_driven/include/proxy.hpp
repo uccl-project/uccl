@@ -36,7 +36,13 @@ class Proxy {
 
   explicit Proxy(Config const& cfg) : cfg_(cfg) {
     const size_t total_size = kRemoteBufferSize;
-    for (int d = 0; d < NUM_GPUS; ++d) {
+    int nDevices;
+    cudaError_t err = cudaGetDeviceCount(&nDevices);
+    if (err != cudaSuccess) {
+        printf("CUDA error: %s\n", cudaGetErrorString(err));
+        std::abort();
+    }
+    for (int d = 0; d < nDevices; ++d) {
       GPU_RT_CHECK(gpuSetDevice(d));
       void* buf = nullptr;
       GPU_RT_CHECK(gpuMalloc(&buf, total_size));
