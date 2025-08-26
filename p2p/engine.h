@@ -367,6 +367,11 @@ class Endpoint {
     gpuIpcEventHandle_t event_handle;
   };
 
+  // todo
+  // MR cache
+
+  // Ipc mem handle cache
+
   static constexpr size_t kTaskRingSize = 1024;
 
   enum class TaskType {
