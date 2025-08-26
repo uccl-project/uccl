@@ -3,6 +3,8 @@
 #include <immintrin.h>
 #endif
 
+std::once_flag peer_ok_flag[MAX_NUM_GPUS][MAX_NUM_GPUS];
+
 bool pin_thread_to_cpu(int cpu) {
   int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
   if (cpu < 0 || cpu >= num_cpus) return false;

@@ -36,7 +36,6 @@ void peer_copy_worker(PeerCopyShared& shared, PeerWorkerCtx& ctx,
     int copy_batch_size = 0;
     if (RECEIVER_BATCH_SIZE == 1) {
       if (!ring.pop(t)) {
-        sync_and_post(ctx, ring, stream, idx);
         continue;
       }
       copy_batch_size = 1;
@@ -44,7 +43,6 @@ void peer_copy_worker(PeerCopyShared& shared, PeerWorkerCtx& ctx,
     } else {
       int n = ring.popN(ctx.tasks, RECEIVER_BATCH_SIZE);
       if (n == 0) {
-        sync_and_post(ctx, ring, stream, idx);
         continue;
       }
       t = ctx.tasks[0];
@@ -67,24 +65,8 @@ void peer_copy_worker(PeerCopyShared& shared, PeerWorkerCtx& ctx,
               gpuGetErrorString(err), static_cast<unsigned long long>(t.wr_id));
       std::abort();
     }
-
-    if (ctx.async_memcpy_count % kRemoteNVLinkBatchSize == 0 ||
-        ctx.async_memcpy_count - ctx.prev_completed_async_memcpy_count >=
-            kRemoteNVLinkBatchSize) {
-      err = gpuStreamSynchronize(stream);
-      if (err != gpuSuccess) {
-        fprintf(stderr, "Kernel execution failed: %s\n",
-                gpuGetErrorString(err));
-        std::abort();
-      }
-      if (copy_batch_size > 0) {
-        // Post the last wr is enough.
-        remote_send_ack(ring.ack_qp, ctx.highest_issued_wr_id, ring.ack_mr,
-                        ring.ack_buf, idx);
-      }
-      ctx.prev_completed_async_memcpy_count = ctx.async_memcpy_count;
-    }
     ctx.async_memcpy_count += copy_batch_size;
+    sync_and_post(ctx, ring, stream, idx);
   }
   GPU_RT_CHECK(gpuFreeAsync(d_tasks, stream));
   GPU_RT_CHECK(gpuStreamSynchronize(stream));

@@ -24,7 +24,6 @@
 #define kIterations 40000
 #define kNumThBlocks 6
 #define kNumThPerBlock 1
-#define kRemoteNVLinkBatchSize 16
 #define kObjectSize 10752  // 10.5 KB
 #define kMaxOutstandingSends 2048
 #define kMaxOutstandingRecvs 2048
@@ -40,7 +39,7 @@
 #define NVLINK_SM_PER_PROCESS 1
 
 // P2P enable flags (once per GPU pair)
-std::once_flag peer_ok_flag[MAX_NUM_GPUS][MAX_NUM_GPUS];
+extern std::once_flag peer_ok_flag[MAX_NUM_GPUS][MAX_NUM_GPUS];
 bool pin_thread_to_cpu(int cpu);
 void cpu_relax();
 
