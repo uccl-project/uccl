@@ -176,7 +176,12 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   struct ibv_qp_init_attr qp_init_attr = {};
   qp_init_attr.send_cq = S.cq;
   qp_init_attr.recv_cq = S.cq;
+  #define EFA
+  #ifdef EFA
+  qp_init_attr.qp_type = IBV_QPT_DRIVER;
+  #else
   qp_init_attr.qp_type = IBV_QPT_RC;  // Reliable Connection
+  #endif
   qp_init_attr.cap.max_send_wr =
       kMaxOutstandingSends * 2;  // max outstanding sends
   qp_init_attr.cap.max_recv_wr =
@@ -185,11 +190,15 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   qp_init_attr.cap.max_recv_sge = 1;
   qp_init_attr.sq_sig_all = 0;
 
+  #ifdef EFA
+  S.qp = efadv_create_driver_qp(S.pd, &qp_init_attr, EFADV_QP_DRIVER_TYPE_SRD);
+  #else
   S.qp = ibv_create_qp(S.pd, &qp_init_attr);
   if (!S.qp) {
     perror("Failed to create QP");
     exit(1);
   }
+  #endif
 
   S.ack_qp = ibv_create_qp(S.pd, &qp_init_attr);
   if (!S.ack_qp) {

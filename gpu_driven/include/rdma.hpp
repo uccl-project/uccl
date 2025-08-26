@@ -4,6 +4,7 @@
 #include "proxy_ctx.hpp"
 #include "ring_buffer.cuh"
 #include "unistd.h"
+#include <infiniband/efadv.h>
 #include <infiniband/verbs.h>
 #include <atomic>
 #include <mutex>
