@@ -668,8 +668,8 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
   int nDevices;
   cudaError_t err = cudaGetDeviceCount(&nDevices);
   if (err != cudaSuccess) {
-      printf("CUDA error: %s\n", cudaGetErrorString(err));
-      std::abort();
+    printf("CUDA error: %s\n", cudaGetErrorString(err));
+    std::abort();
   }
   for (int i = 0; i < ne; ++i) {
     int src_addr_offset = 0;

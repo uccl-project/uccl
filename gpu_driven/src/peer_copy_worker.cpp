@@ -86,29 +86,12 @@ void peer_copy_worker(PeerCopyShared& shared, PeerWorkerCtx& ctx,
         std::max(ctx.highest_issued_wr_id, ctx.task_wrs[copy_batch_size - 1]);
 
     auto st = std::chrono::high_resolution_clock::now();
-    gpuError_t err;
-    std::string func_name;
-
-    if (false) {
-      /* This works with dual mode. */
-      /* I suspect there is contention with application kernel and copy kernel
-       * in launch_peer_bulk_copy2 */
-      err =
-          gpuMemcpyPeerAsync(t.dst_ptr, t.dst_dev, t.src_ptr, shared.src_device,
-                             t.bytes * copy_batch_size, stream);
-      func_name = "gpuMemcpyPeerAsync";
-    } else if (false) {
-      err = launch_peer_bulk_copy(t.dst_ptr, t.dst_dev, t.src_ptr,
-                                  shared.src_device, t.bytes * copy_batch_size,
-                                  stream);
-      func_name = "launch_peer_bulk_copy";
-    } else if (false) {
-      /* The fastest among the three. */
-      // TODO(MaoZiming): enable this.
-      err = launch_peer_bulk_copy2(ctx.tasks, copy_batch_size, stream,
-                                   shared.src_device, d_tasks);
-      func_name = "launch_peer_bulk_copy2";
-    }
+    // NOTE(MaoZiming): peer_copy.cu has some kernels such as
+    // launch_peer_bulk_copy2 that might be good.
+    gpuError_t err =
+        gpuMemcpyPeerAsync(t.dst_ptr, t.dst_dev, t.src_ptr, shared.src_device,
+                           t.bytes * copy_batch_size, stream);
+    std::string func_name = "gpuMemcpyPeerAsync";
     if (err != gpuSuccess) {
       fprintf(stderr, "%s failed (%s) wr_id=%llu\n", func_name.c_str(),
               gpuGetErrorString(err), static_cast<unsigned long long>(t.wr_id));

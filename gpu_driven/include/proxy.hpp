@@ -39,8 +39,8 @@ class Proxy {
     int nDevices;
     cudaError_t err = cudaGetDeviceCount(&nDevices);
     if (err != cudaSuccess) {
-        printf("CUDA error: %s\n", cudaGetErrorString(err));
-        std::abort();
+      printf("CUDA error: %s\n", cudaGetErrorString(err));
+      std::abort();
     }
     for (int d = 0; d < nDevices; ++d) {
       GPU_RT_CHECK(gpuSetDevice(d));
