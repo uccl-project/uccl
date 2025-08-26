@@ -51,13 +51,6 @@ void peer_copy_worker(PeerCopyShared& shared, PeerWorkerCtx& ctx,
   GPU_RT_CHECK(
       gpuMallocAsync(&d_tasks, RECEIVER_BATCH_SIZE * sizeof(CopyTask), stream));
 
-#ifdef REMOTE_PERSISTENT_KERNEL
-  gpuStream_t persistent_stream;
-  GPU_RT_CHECK(gpuStreamCreate(&persistent_stream));
-  HostToDeviceNVlinkBuffer* rb =
-      initialize_ring_buffer_for_nvlink_forwarding(persistent_stream);
-#endif
-
   while (shared.run.load(std::memory_order_acquire)) {
     CopyTask t;
     int copy_batch_size = 0;
@@ -109,25 +102,13 @@ void peer_copy_worker(PeerCopyShared& shared, PeerWorkerCtx& ctx,
                                   shared.src_device, t.bytes * copy_batch_size,
                                   stream);
       func_name = "launch_peer_bulk_copy";
-#ifdef REMOTE_PERSISTENT_KERNEL
     } else if (false) {
-#else
-    } else if (false) {
-#endif
       /* The fastest among the three. */
       // TODO(MaoZiming): enable this.
       err = launch_peer_bulk_copy2(ctx.tasks, copy_batch_size, stream,
                                    shared.src_device, d_tasks);
       func_name = "launch_peer_bulk_copy2";
     }
-#ifdef REMOTE_PERSISTENT_KERNEL
-    else {
-      bool post_success = true;
-      while (!post_success)
-        post_success = post_copy_task(rb, ctx.tasks, copy_batch_size, stream,
-                                      shared.src_device, d_tasks);
-    }
-#endif
     if (err != gpuSuccess) {
       fprintf(stderr, "%s failed (%s) wr_id=%llu\n", func_name.c_str(),
               gpuGetErrorString(err), static_cast<unsigned long long>(t.wr_id));

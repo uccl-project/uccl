@@ -11,7 +11,6 @@
 #include <stdio.h>
 #include <unistd.h>
 
-// #define REMOTE_PERSISTENT_KERNEL
 #define USE_GRACE_HOPPER
 #define MEASURE_PER_OP_LATENCY
 #define ASSUME_WR_IN_ORDER
@@ -24,12 +23,7 @@
 #define kIterations 40000
 #define kNumThBlocks 6
 #define kNumThPerBlock 1
-#ifdef SYNCHRONOUS_COMPLETION
-#define kRemoteNVLinkBatchSize \
-  16  // Immediately synchronize stream for latency.
-#else
-#define kRemoteNVLinkBatchSize 512
-#endif
+#define kRemoteNVLinkBatchSize 16
 #define kObjectSize 10752  // 10.5 KB
 #define kMaxOutstandingSends 2048
 #define kMaxOutstandingRecvs 2048
@@ -42,12 +36,7 @@
 #define MAIN_THREAD_CPU_IDX 31
 #define NUM_GPUS 1
 #define RECEIVER_BATCH_SIZE 16
-#ifdef SYNCHRONOUS_COMPLETION
-#define NVLINK_SM_PER_PROCESS \
-  1  // Total number of SMs used is NVLINK_SM_PER_PROCESS * kNumThBlocks
-#else
-#define NVLINK_SM_PER_PROCESS 2
-#endif
+#define NVLINK_SM_PER_PROCESS 1
 bool pin_thread_to_cpu(int cpu);
 void cpu_relax();
 
