@@ -43,7 +43,6 @@ void peer_copy_worker(PeerCopyShared& shared, PeerWorkerCtx& ctx,
   pin_thread_to_cpu(idx + 1 + MAIN_THREAD_CPU_IDX);
   printf("Peer copy worker %d started on CPU core %d\n", idx + 1,
          sched_getcpu());
-
   gpuStream_t stream;
   GPU_RT_CHECK(gpuSetDevice(shared.src_device));
   GPU_RT_CHECK(gpuStreamCreate(&stream));
@@ -67,25 +66,15 @@ void peer_copy_worker(PeerCopyShared& shared, PeerWorkerCtx& ctx,
         sync_and_post(ctx, ring, stream, idx);
         continue;
       }
-      // printf("Worker %d popped %d tasks\n", idx, n);
       t = ctx.tasks[0];
       copy_batch_size = n;
     }
-
-    if (copy_batch_size == 0) {
-      fprintf(stderr, "Error: copy_batch_size is zero\n");
-      std::abort();
-    }
-
     for (int i = 0; i < copy_batch_size; ++i) {
       maybe_enable_peer_access(shared, ctx.tasks[i].dst_dev);
       ctx.task_wrs[i] = ctx.tasks[i].wr_id;
     }
-
     ctx.highest_issued_wr_id =
         std::max(ctx.highest_issued_wr_id, ctx.task_wrs[copy_batch_size - 1]);
-
-    auto st = std::chrono::high_resolution_clock::now();
     // NOTE(MaoZiming): peer_copy.cu has some kernels such as
     // launch_peer_bulk_copy2 that might be good.
     gpuError_t err =
@@ -107,7 +96,6 @@ void peer_copy_worker(PeerCopyShared& shared, PeerWorkerCtx& ctx,
                 gpuGetErrorString(err));
         std::abort();
       }
-
       if (copy_batch_size > 0) {
         // Post the last wr is enough.
         remote_send_ack(ring.ack_qp, ctx.highest_issued_wr_id, ring.ack_mr,
@@ -115,12 +103,7 @@ void peer_copy_worker(PeerCopyShared& shared, PeerWorkerCtx& ctx,
       }
       ctx.prev_completed_async_memcpy_count = ctx.async_memcpy_count;
     }
-
     ctx.async_memcpy_count += copy_batch_size;
-    ctx.async_memcpy_total_time +=
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::high_resolution_clock::now() - st)
-            .count();
   }
   GPU_RT_CHECK(gpuFreeAsync(d_tasks, stream));
   GPU_RT_CHECK(gpuStreamSynchronize(stream));

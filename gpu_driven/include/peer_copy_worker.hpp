@@ -21,7 +21,6 @@ struct PeerWorkerCtx {
   // Counters / timings
   uint64_t async_memcpy_count = 0;
   uint64_t prev_completed_async_memcpy_count = 0;
-  uint64_t async_memcpy_total_time = 0;
   uint64_t highest_issued_wr_id = 0;
 
   // Batch buffers
