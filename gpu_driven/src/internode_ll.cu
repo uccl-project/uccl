@@ -185,7 +185,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         auto const dst_p2p_ptr =
             ipc_base_ptrs
                 ? uccl::get_ipc_p2p_ptr(
-                      reinterpret_cast<void*>(rdma_recv_x + dst_offset),
+                      reinterpret_cast<void*>(reinterpret_cast<char*>(rdma_recv_x) + dst_offset),
                       ipc_base_ptrs, rank, dst_rank, NUM_MAX_NVL_PEERS, 0)
                 : nullptr;
 
@@ -449,7 +449,7 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
               int num_topk, int num_experts, int rank, int num_ranks,
               bool use_fp8, bool round_scale, bool use_ue8m0, void* workspace,
               int num_device_sms, cudaStream_t stream, int phases,
-              uint64_t const* ring_addrs, int num_ring_addrs) {
+              uint64_t const* ring_addrs, int num_ring_addrs, void** ipc_base_ptrs) {
   constexpr int kNumMaxTopK = 9;
   int const num_warp_groups = ceil_div(num_experts, num_device_sms);
   int const num_warps_per_group = 32 / num_warp_groups;
@@ -510,7 +510,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
     int hidden, int num_topk, int num_max_dispatch_tokens_per_rank,
     int num_experts, int rank, int num_ranks, int num_warp_groups,
     int num_warps_per_group, int phases, bool zero_copy,
-    uint64_t const* ring_addrs, int num_ring_addrs) {
+    uint64_t const* ring_addrs, int num_ring_addrs, void** ipc_base_ptrs = nullptr) {
   auto const sm_id = static_cast<int>(blockIdx.x);
   auto const num_sms = static_cast<int>(gridDim.x);
   auto const thread_id = static_cast<int>(threadIdx.x);
@@ -646,7 +646,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
       auto const dst_p2p_ptr =
           ipc_base_ptrs
               ? uccl::get_ipc_p2p_ptr(
-                    reinterpret_cast<void*>(rdma_recv_x + dst_offset),
+                    reinterpret_cast<void*>(reinterpret_cast<char*>(rdma_recv_x) + dst_offset),
                     ipc_base_ptrs, rank, dst_rank, NUM_MAX_NVL_PEERS, 0)
               : nullptr;
 
