@@ -587,11 +587,11 @@ void init_atomic_buffer(struct rdma_context* rdma) {
   for (int i = 0; i < ATOMIC_BUFFER_SIZE; i++) {
     host_init_data[i] = i;
   }
-  DCHECK(cudaMemcpy(rdma->atomic_local_buf, host_init_data, 
-                    ATOMIC_BUFFER_SIZE * sizeof(uint64_t), 
+  DCHECK(cudaMemcpy(rdma->atomic_local_buf, host_init_data,
+                    ATOMIC_BUFFER_SIZE * sizeof(uint64_t),
                     cudaMemcpyHostToDevice) == cudaSuccess)
       << "Failed to initialize GPU atomic buffer";
-  DCHECK(cudaDeviceSynchronize() == cudaSuccess) 
+  DCHECK(cudaDeviceSynchronize() == cudaSuccess)
       << "Failed to synchronize after atomic buffer initialization";
 #else
   // For host memory, direct access is fine
@@ -697,7 +697,7 @@ void run_atomic_server(struct rdma_context* rdma) {
                     ATOMIC_BUFFER_SIZE * sizeof(uint64_t),
                     cudaMemcpyDeviceToHost) == cudaSuccess)
       << "Failed to read GPU atomic buffer";
-  DCHECK(cudaDeviceSynchronize() == cudaSuccess) 
+  DCHECK(cudaDeviceSynchronize() == cudaSuccess)
       << "Failed to synchronize after reading atomic buffer";
   for (int i = 0; i < ATOMIC_BUFFER_SIZE; i++) {
     printf("  atomic_buf[%d] = %lu\n", i, host_final_data[i]);
