@@ -62,6 +62,8 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
 
     socklen_t len = sizeof(addr);
     sockfd = accept(listenfd, (struct sockaddr*)&addr, &len);
+    printf("Rank %d accepted connection from peer %s on port %d\n", rank, peer_ip,
+           TCP_PORT + tid);
     close(listenfd);
   } else {
     // Connect
@@ -171,6 +173,77 @@ ibv_cq* create_per_thread_cq(ProxyCtx& S) {
   return S.cq;
 }
 
+struct ibv_qp* create_srd_qp_ex(ProxyCtx& S) 
+{
+  struct ibv_qp_init_attr_ex qp_attr_ex = {};
+  struct efadv_qp_init_attr efa_attr = {};
+  
+  qp_attr_ex.comp_mask = IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_SEND_OPS_FLAGS;
+
+  qp_attr_ex.send_ops_flags = IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM;
+
+  qp_attr_ex.cap.max_send_wr = kMaxOutstandingSends * 2;
+  qp_attr_ex.cap.max_recv_wr = kMaxOutstandingSends * 2; 
+  qp_attr_ex.cap.max_send_sge = 1;
+  qp_attr_ex.cap.max_recv_sge = 1;
+  qp_attr_ex.cap.max_inline_data = 0;
+
+  qp_attr_ex.pd = S.pd;
+  qp_attr_ex.qp_context = S.context;
+  qp_attr_ex.sq_sig_all = 1;
+
+  qp_attr_ex.send_cq = S.cq;
+  qp_attr_ex.recv_cq = S.cq;
+
+  qp_attr_ex.qp_type = IBV_QPT_DRIVER;
+
+  efa_attr.driver_qp_type = EFADV_QP_DRIVER_TYPE_SRD;
+  #define EFA_QP_LOW_LATENCY_SERVICE_LEVEL 8
+  efa_attr.sl = EFA_QP_LOW_LATENCY_SERVICE_LEVEL;
+  efa_attr.flags = 0;
+  // If set, Receive WRs will not be consumed for RDMA write with imm.
+  // Zhongjie: if not set, sender cannot poll the completion of RDMA write with imm.
+  efa_attr.flags |= EFADV_QP_FLAGS_UNSOLICITED_WRITE_RECV;
+
+  struct ibv_qp *qp = efadv_create_qp_ex(
+    S.context, &qp_attr_ex, &efa_attr,
+    sizeof(struct efadv_qp_init_attr));
+
+  if (!qp) {
+      perror("Failed to create QP");
+      exit(1);
+  }
+
+  struct ibv_qp_attr attr = {};
+  attr.qp_state = IBV_QPS_INIT;
+  attr.pkey_index = 0;
+  attr.port_num = 1;
+  attr.qkey = QKEY;
+  if (ibv_modify_qp(
+          qp, &attr,
+          IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_QKEY)) {
+      perror("Failed to modify QP to INIT");
+      exit(1);
+  }
+
+  memset(&attr, 0, sizeof(attr));
+  attr.qp_state = IBV_QPS_RTR;
+  if (ibv_modify_qp(qp, &attr, IBV_QP_STATE)) {
+      perror("Failed to modify QP to RTR");
+      exit(1);
+  }
+
+  memset(&attr, 0, sizeof(attr));
+  attr.qp_state = IBV_QPS_RTS;
+  attr.sq_psn = 0;
+  if (ibv_modify_qp(qp, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN)) {
+      perror("Failed to modify QP to RTS");
+      exit(1);
+  }
+
+  return qp;
+}
+
 void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
                           RDMAConnectionInfo* local_info, int rank) {
   if (S.qp) return;  // Already initialized for this thread
@@ -179,11 +252,7 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   struct ibv_qp_init_attr qp_init_attr = {};
   qp_init_attr.send_cq = S.cq;
   qp_init_attr.recv_cq = S.cq;
-  #ifdef EFA
-  qp_init_attr.qp_type = IBV_QPT_DRIVER;
-  #else
   qp_init_attr.qp_type = IBV_QPT_RC;  // Reliable Connection
-  #endif
   qp_init_attr.cap.max_send_wr =
       kMaxOutstandingSends * 2;  // max outstanding sends
   qp_init_attr.cap.max_recv_wr =
@@ -193,9 +262,10 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   qp_init_attr.sq_sig_all = 0;
 
   #ifdef EFA
-  S.qp = efadv_create_driver_qp(S.pd, &qp_init_attr, EFADV_QP_DRIVER_TYPE_SRD);
-  S.ack_qp = efadv_create_driver_qp(S.pd, &qp_init_attr, EFADV_QP_DRIVER_TYPE_SRD);
-  S.recv_ack_qp = efadv_create_driver_qp(S.pd, &qp_init_attr, EFADV_QP_DRIVER_TYPE_SRD);
+  (void)qp_init_attr;
+  S.qp = create_srd_qp_ex(S);
+  S.ack_qp = create_srd_qp_ex(S);
+  S.recv_ack_qp = create_srd_qp_ex(S);
   if (!S.qp || !S.ack_qp || !S.recv_ack_qp) {
     perror("Failed to create QPs for EFA");
     exit(1);
@@ -247,6 +317,9 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
 }
 
 void modify_qp_to_init(ProxyCtx& S) {
+  #ifdef EFA
+  return;
+  #endif
   struct ibv_qp_attr attr;
   memset(&attr, 0, sizeof(attr));
 
@@ -291,6 +364,11 @@ void modify_qp_to_init(ProxyCtx& S) {
 }
 
 void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote) {
+
+  #ifdef EFA
+  return;
+  #endif
+
   int is_roce = 0;
 
   struct ibv_port_attr port_attr;
@@ -305,7 +383,8 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote) {
   } else if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
     printf("InfiniBand detected\n");
     is_roce = 0;
-  } else {
+  }
+  else {
     printf("Unknown link layer: %d\n", port_attr.link_layer);
     exit(1);
   }
@@ -386,9 +465,32 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote) {
 }
 
 void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
+  #ifdef EFA
+  return;
+  #endif
   struct ibv_qp_attr attr;
   memset(&attr, 0, sizeof(attr));
   attr.qp_state = IBV_QPS_RTS;
+
+  #ifdef EFA
+  attr.sq_psn = 0;
+  if (ibv_modify_qp(S.qp, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN)) {
+    perror("Failed to modify QP to RTS");
+    exit(1);
+  }
+  if (ibv_modify_qp(S.ack_qp, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN)) {
+    perror("Failed to modify Ack QP to RTS");
+    exit(1);
+  }
+  if (ibv_modify_qp(S.recv_ack_qp, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN)) {
+    perror("Failed to modify Receive Ack QP to RTS");
+    exit(1);
+  }
+  printf("QP modified to RTS state\n");
+  return;
+  #endif
+
+
   attr.timeout = 14;
   attr.retry_cnt = 7;
   attr.rnr_retry = 7;
@@ -445,6 +547,56 @@ void post_receive_buffer_for_imm(ProxyCtx& S) {
   }
 }
 
+#ifdef EFA
+void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t bytes,
+  size_t num_wrs,
+  std::vector<uint64_t> const& wrs_to_post,
+  std::unordered_set<uint64_t>& finished_wrs,
+  std::mutex& finished_wrs_mutex,
+  std::vector<TransferCmd> const& cmds_to_post) {
+    if (num_wrs == 0) return;
+    if (wrs_to_post.size() != num_wrs || cmds_to_post.size() != num_wrs) {
+    fprintf(stderr,
+    "post_rdma_async_batched: size mismatch (num_wrs=%zu, wr_ids=%zu, "
+    "cmds=%zu)\n",
+    num_wrs, wrs_to_post.size(), cmds_to_post.size());
+    std::abort();
+    }
+
+    auto qpx = ibv_qp_to_qp_ex(S.qp);
+
+    ibv_wr_start(qpx);
+
+    for (size_t i = 0; i < num_wrs; ++i) {
+      auto const& cmd = cmds_to_post[i];
+
+      qpx->wr_id = wrs_to_post[i];
+      qpx->comp_mask = 0;
+      qpx->wr_flags = i == num_wrs - 1 ? IBV_SEND_SIGNALED : 0;
+
+      ibv_wr_set_sge(qpx, S.mr->lkey, cmd.req_lptr ? cmd.req_lptr
+        : reinterpret_cast<uintptr_t>(buf) + i * bytes, bytes);
+      if (i == num_wrs - 1) {
+        ibv_wr_rdma_write_imm(qpx, S.remote_rkey, S.remote_addr + (cmd.req_rptr ? cmd.req_rptr : i * bytes), htonl(static_cast<uint32_t>(wrs_to_post[i])));
+      }
+      else
+        ibv_wr_rdma_write(qpx, S.remote_rkey, S.remote_addr + (cmd.req_rptr ? cmd.req_rptr : i * bytes));
+    }
+
+    ibv_wr_complete(qpx);
+
+    const size_t last = num_wrs - 1;
+    const uint64_t largest_wr = wrs_to_post[last];
+
+    S.posted.fetch_add(num_wrs, std::memory_order_relaxed);
+    if (S.wr_id_to_wr_ids.find(largest_wr) != S.wr_id_to_wr_ids.end()) {
+      fprintf(stderr, "Error: largest_wr %lu already exists in wr_id_to_wr_ids\n",
+      largest_wr);
+      std::abort();
+    }
+    S.wr_id_to_wr_ids[largest_wr] = wrs_to_post;
+}
+#else
 void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t bytes,
                              size_t num_wrs,
                              std::vector<uint64_t> const& wrs_to_post,
@@ -516,6 +668,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t bytes,
   // printf("Posted %zu WRs (chain) last_wr=%lu remote_rkey=0x%x\n", num_wrs,
   //        largest_wr, S.remote_rkey);
 }
+#endif
 
 void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t bytes,
                              size_t num_wrs, std::vector<uint64_t> wrs_to_post,
