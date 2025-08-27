@@ -92,6 +92,7 @@ struct alignas(128) RingBuffer {
 
   /* TODO(MaoZiming) to refactor */
   struct ibv_qp* ack_qp = nullptr;
+  void* ctx = nullptr;
   ibv_mr* ack_mr = nullptr;
   uint64_t ack_buf[RECEIVER_BATCH_SIZE] = {0};
 

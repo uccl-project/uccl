@@ -66,6 +66,7 @@ void Proxy::init_remote() {
   // Remote side ensures ack sender resources (legacy globals)
   remote_reg_ack_buf(ctx_.pd, ring.ack_buf, ring.ack_mr);
   ring.ack_qp = ctx_.ack_qp;
+  ring.ctx = &ctx_;
   post_receive_buffer_for_imm(ctx_);
 }
 
