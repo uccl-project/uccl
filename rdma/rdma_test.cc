@@ -581,9 +581,24 @@ void init_atomic_buffer(struct rdma_context* rdma) {
 #endif
 
   // Initialize atomic buffer with known values
+#if USE_GPU
+  // For GPU memory, we need to use cudaMemcpy
+  uint64_t host_init_data[ATOMIC_BUFFER_SIZE];
+  for (int i = 0; i < ATOMIC_BUFFER_SIZE; i++) {
+    host_init_data[i] = i;
+  }
+  DCHECK(cudaMemcpy(rdma->atomic_local_buf, host_init_data, 
+                    ATOMIC_BUFFER_SIZE * sizeof(uint64_t), 
+                    cudaMemcpyHostToDevice) == cudaSuccess)
+      << "Failed to initialize GPU atomic buffer";
+  DCHECK(cudaDeviceSynchronize() == cudaSuccess) 
+      << "Failed to synchronize after atomic buffer initialization";
+#else
+  // For host memory, direct access is fine
   for (int i = 0; i < ATOMIC_BUFFER_SIZE; i++) {
     rdma->atomic_local_buf[i] = i;
   }
+#endif
 
   // Register atomic memory region
   rdma->atomic_mr = ibv_reg_mr(
@@ -675,9 +690,24 @@ void run_atomic_server(struct rdma_context* rdma) {
   }
 
   printf("Atomic server completed. Final atomic values:\n");
+#if USE_GPU
+  // For GPU memory, copy to host before reading
+  uint64_t host_final_data[ATOMIC_BUFFER_SIZE];
+  DCHECK(cudaMemcpy(host_final_data, rdma->atomic_local_buf,
+                    ATOMIC_BUFFER_SIZE * sizeof(uint64_t),
+                    cudaMemcpyDeviceToHost) == cudaSuccess)
+      << "Failed to read GPU atomic buffer";
+  DCHECK(cudaDeviceSynchronize() == cudaSuccess) 
+      << "Failed to synchronize after reading atomic buffer";
+  for (int i = 0; i < ATOMIC_BUFFER_SIZE; i++) {
+    printf("  atomic_buf[%d] = %lu\n", i, host_final_data[i]);
+  }
+#else
+  // For host memory, direct access is fine
   for (int i = 0; i < ATOMIC_BUFFER_SIZE; i++) {
     printf("  atomic_buf[%d] = %lu\n", i, rdma->atomic_local_buf[i]);
   }
+#endif
 }
 
 void run_atomic_client(struct rdma_context* rdma) {
