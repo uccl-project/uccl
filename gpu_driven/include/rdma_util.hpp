@@ -22,9 +22,13 @@ void fill_local_gid(ProxyCtx& S, RDMAConnectionInfo* local_info) {
   }
 
   // For RoCE (Ethernet), we need to fill the GID
-  if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
+  if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET || port_attr.link_layer == IBV_LINK_LAYER_UNSPECIFIED) {
     union ibv_gid local_gid;
     int gid_index = 1;
+    // EFA:
+    if (port_attr.link_layer == IBV_LINK_LAYER_UNSPECIFIED)
+      gid_index = 0;
+    
     if (ibv_query_gid(S.context, 1, gid_index, &local_gid)) {
       perror("Failed to query GID");
       exit(1);
