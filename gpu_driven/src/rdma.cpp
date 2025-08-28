@@ -1,5 +1,6 @@
 #include "rdma.hpp"
 #include "common.hpp"
+#include "peer_copy.cuh"
 #include "peer_copy_worker.hpp"
 #include "rdma_util.hpp"
 #include "util/gpu_rt.h"
@@ -27,6 +28,10 @@
 #include <immintrin.h>
 #endif
 #include "util/util.h"
+
+// Forward declaration of the CUDA function (implemented in peer_copy.cu)
+extern "C" void launch_async_atomic_add(int* gpu_target, int atomic_value,
+                                        cudaStream_t stream);
 #include <stdio.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -143,6 +148,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   uint64_t iova = (uintptr_t)gpu_buf;
   S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                              IBV_ACCESS_REMOTE_ATOMIC |
                               IBV_ACCESS_RELAXED_ORDERING);
 
   if (!S.mr) {
@@ -219,9 +225,8 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   local_info->addr = reinterpret_cast<uintptr_t>(gpu_buffer);
   local_info->psn = rand() & 0xffffff;      // random psn
   local_info->ack_psn = rand() & 0xffffff;  // random ack psn
-
-  // printf("[DEBUG] Rank %d: Registering local buffer addr=0x%lx, size=%zu bytes\n", 
-
+  // printf("[DEBUG] Rank %d: Registering local buffer addr=0x%lx, size=%zu
+  // bytes\n",
   //        rank, local_info->addr, size);
   fill_local_gid(S, local_info);
   printf(
@@ -238,8 +243,8 @@ void modify_qp_to_init(ProxyCtx& S) {
   attr.qp_state = IBV_QPS_INIT;
   attr.port_num = 1;  // HCA port you use
   attr.pkey_index = 0;
-  attr.qp_access_flags =
-      IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
+  attr.qp_access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ |
+                         IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
 
   int flags =
       IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS;
@@ -374,9 +379,11 @@ void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
   attr.rnr_retry = 7;
   attr.sq_psn = local_info->psn;
   attr.max_rd_atomic = 1;
+  attr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
 
   int flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT |
-              IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC;
+              IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC |
+              IBV_QP_ACCESS_FLAGS;
 
   if (ibv_modify_qp(S.qp, &attr, flags)) {
     perror("Failed to modify QP to RTS");
@@ -465,17 +472,16 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t bytes,
     // wrs[i].wr.rdma.remote_addr = cmd.req_rptr ? cmd.req_rptr : S.remote_addr;
     // wrs[i].wr.rdma.remote_addr = S.remote_addr + i * bytes;
 
-    
     // FIXED: GPU passes offset relative to dispatch_rdma_recv_data_buffer
-    // S.remote_addr points to rdma_buffer base. Add the stored offset of dispatch_rdma_recv_data_buffer.
-    wrs[i].wr.rdma.remote_addr = S.remote_addr + S.dispatch_recv_data_offset + cmd.req_rptr;
-    
+    // S.remote_addr points to rdma_buffer base. Add the stored offset of
+    // dispatch_rdma_recv_data_buffer.
+    wrs[i].wr.rdma.remote_addr =
+        S.remote_addr + S.dispatch_recv_data_offset + cmd.req_rptr;
 
     wrs[i].wr.rdma.rkey = S.remote_rkey;
     wrs[i].opcode = IBV_WR_RDMA_WRITE;
     wrs[i].send_flags = 0;
     wrs[i].next = (i + 1 < num_wrs) ? &wrs[i + 1] : nullptr;
-
   }
   const size_t last = num_wrs - 1;
   const uint64_t largest_wr = wrs_to_post[last];
@@ -558,14 +564,12 @@ void local_process_completions(ProxyCtx& S,
   // printf("Local thread %d processing %d completions\n", thread_idx, ne);
   for (int i = 0; i < ne; ++i) {
     if (wc[i].status != IBV_WC_SUCCESS) {
-
       fprintf(stderr,
               "CQE ERROR wr_id=%llu status=%d(%s) opcode=%d byte_len=%u "
               "vendor_err=0x%x qp_num=0x%x\n",
               (unsigned long long)wc[i].wr_id, wc[i].status,
               ibv_wc_status_str(wc[i].status), wc[i].opcode, wc[i].byte_len,
               wc[i].vendor_err, wc[i].qp_num);
-
       std::abort();
     }
 
@@ -582,14 +586,15 @@ void local_process_completions(ProxyCtx& S,
         if (wc[i].wc_flags & IBV_WC_WITH_IMM) {
           uint64_t slot = static_cast<uint64_t>(wc[i].wr_id);
           uint64_t wr_done = static_cast<uint64_t>(wc[i].imm_data);
-          
-          // Check if this is an atomic operation ACK (special WR ID format)
-          bool is_atomic_wr = (wr_done & 0xFFFF000000000000ULL) == 0xa70a000000000000ULL;
-          
-          if (is_atomic_wr) {
-            // Handle atomic operation ACK separately - no need to track in sequence
-            // printf("Local thread %d received atomic ACK for WR %lu\n", thread_idx, wr_done);
 
+          // Check if this is an atomic operation ACK (special WR ID format)
+          bool is_atomic_wr =
+              (wr_done & 0xFFFF000000000000ULL) == 0xa70a000000000000ULL;
+
+          if (is_atomic_wr) {
+            // Handle atomic operation ACK separately - no need to track in
+            // sequence printf("Local thread %d received atomic ACK for WR
+            // %lu\n", thread_idx, wr_done);
           } else {
             // Handle regular operation ACK with sequential tracking
             if (!S.has_received_ack || wr_done >= S.largest_completed_wr) {
@@ -693,84 +698,7 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
     if (wc[i].opcode != IBV_WC_RECV_RDMA_WITH_IMM) {
       continue;
     }
-    
-    // Check if this is an atomic operation by examining immediate data
-    uint32_t immediate_data = ntohl(wc[i].imm_data);
-    bool is_atomic_operation = (immediate_data & (1U << 31)) != 0;
-    
-    // printf("[DEBUG] Completion: wr_id=%lu, byte_len=%d, immediate_data=0x%x, is_atomic=%d\n",
-    //        wc[i].wr_id, wc[i].byte_len, immediate_data, is_atomic_operation);
-    
-    if (is_atomic_operation && wc[i].byte_len == 0) {
-      printf("[ATOMIC_DEBUG] Processing atomic operation...\n");
-      
-      // Decode immediate data:
-      // Bit 31: atomic flag (already checked)
-      // Bit 30-24: target offset index (7 bits)
-      // Bit 23-0: atomic value (24 bits, signed)
-      uint32_t target_index = (immediate_data >> 24) & 0x7F;
-      uint32_t value_24bit = immediate_data & 0xFFFFFF;
-      
-      // Sign-extend atomic value from 24 bits to 32 bits
-      int32_t atomic_value = (value_24bit & 0x800000) ?
-                            static_cast<int32_t>(value_24bit | 0xFF000000) :
-                            static_cast<int32_t>(value_24bit);
-      
-      printf("[ATOMIC_DEBUG] immediate_data=0x%x, target_index=%u, value_24bit=0x%x, atomic_value=%d\n", 
-             immediate_data, target_index, value_24bit, atomic_value);
-      
-      // Calculate target address from index
-      uint64_t target_offset = target_index * sizeof(int);
-      uintptr_t local_target_addr = (uintptr_t)S.mr->addr + target_offset;
-      
-      printf("[ATOMIC_DEBUG] target_index=%u, target_offset=%lu, S.mr->addr=%p, local_target_addr=0x%lx\n", 
-             target_index, target_offset, S.mr->addr, local_target_addr);
-      
-      // Check if target address is within valid range
-      if (target_offset + sizeof(int32_t) > S.mr->length) {
-        printf("[ATOMIC_DEBUG] ERROR: target offset %lu + %zu exceeds memory region size %zu\n", 
-               target_offset, sizeof(int32_t), S.mr->length);
-        continue;
-      }
-      
-      int* target_counter = reinterpret_cast<int*>(local_target_addr);
-      printf("[ATOMIC_DEBUG] target_counter=%p\n", target_counter);
-      
-      // Additional safety checks
-      printf("[ATOMIC_DEBUG] Memory region: start=%p, end=%p, length=%zu\n", 
-             S.mr->addr, (void*)((uintptr_t)S.mr->addr + S.mr->length), S.mr->length);
-      printf("[ATOMIC_DEBUG] Target address alignment check: addr=0x%lx, aligned=%d\n",
-             local_target_addr, (local_target_addr % sizeof(int) == 0));
-      
-      // Use the same mechanism as regular data transfer
-      // Create an AtomicTask and push it to the ring buffer for GPU processing
-      
-      printf("[ATOMIC_DEBUG] Creating atomic task for GPU processing\n");
-      printf("[ATOMIC_DEBUG] Target GPU memory: 0x%lx, atomic value: %d\n", 
-             local_target_addr, atomic_value);
-      
-      // Create atomic task similar to CopyTask
-      CopyTask atomic_task{
-          .wr_id = (0xa70a000000000000ULL | static_cast<uint64_t>(target_index & 0xFFFF)),  // Special marker for atomic ops
-          .dst_dev = 0,  // Assume device 0 for now
-          .src_ptr = reinterpret_cast<void*>(static_cast<uintptr_t>(atomic_value)),  // Store atomic value in src_ptr
-          .dst_ptr = reinterpret_cast<void*>(local_target_addr),  // Target GPU memory address
-          .bytes = sizeof(int)  // Size of atomic operation
-      };
-      
-      // Push to ring buffer for GPU processing (same as regular data transfer)
-      std::vector<CopyTask> atomic_tasks = {atomic_task};
-      while (!g_ring.pushN(atomic_tasks.data(), atomic_tasks.size())) {
-          // Busy spin 
-      }
-      
-      printf("[ATOMIC_DEBUG] Atomic task pushed to GPU ring buffer: wr_id=0x%lx\n", atomic_task.wr_id);
-      
-      printf("[ATOMIC_DEBUG] Atomic operation completed successfully\n");
-      
-      continue; // Skip regular data processing for atomic operations
-    }
-    
+
     // Regular data transfer processing
     int destination_gpu = wc[i].imm_data % NUM_GPUS;
     if (S.per_gpu_device_buf[destination_gpu] == nullptr) {
