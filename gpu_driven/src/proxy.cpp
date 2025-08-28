@@ -1,5 +1,7 @@
 #include "proxy.hpp"
 #include <arpa/inet.h>  // for htonl, ntohl
+#include <chrono>
+#include <thread>
 
 double Proxy::avg_rdma_write_us() const {
   if (kIterations == 0) return 0.0;
@@ -31,6 +33,21 @@ void Proxy::init_common() {
                        cfg_.block_idx);
   pin_thread();
 
+  // Allocate GPU buffer for atomic old values (within the main GPU buffer)
+  // Use a small section at the end of the GPU buffer
+  size_t atomic_buf_size = ProxyCtx::kMaxAtomicOps * sizeof(uint32_t);
+  if (cfg_.total_size < atomic_buf_size) {
+    fprintf(stderr, "GPU buffer too small for atomic operations buffer\n");
+    std::abort();
+  }
+  // Place atomic buffer at the end of the GPU buffer
+  ctx_.atomic_old_values_buf =
+      reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(cfg_.gpu_buffer) +
+                                  cfg_.total_size - atomic_buf_size);
+
+  printf("[PROXY_INIT] Atomic buffer at %p, size %zu bytes\n",
+         ctx_.atomic_old_values_buf, atomic_buf_size);
+
   // CQ + QP creation
   ctx_.cq = create_per_thread_cq(ctx_);
   create_per_thread_qp(ctx_, cfg_.gpu_buffer, cfg_.total_size, &local_info_,
@@ -50,7 +67,6 @@ void Proxy::init_common() {
   if (debug_file) {
     fprintf(debug_file,
             "[PROXY_INIT] Block %d: remote_addr=0x%lx, local_buffer=0x%lx\n",
-
             cfg_.block_idx, ctx_.remote_addr, (uintptr_t)cfg_.gpu_buffer);
     fclose(debug_file);
   }
@@ -111,13 +127,13 @@ void Proxy::run_dual() {
     if (now - last_print >= std::chrono::seconds(10)) {
       uint64_t head = cfg_.rb->head;
       uint64_t tail = cfg_.rb->volatile_tail();
-      // printf("[block %d] head=%llu tail=%llu inflight=%llu\n", cfg_.block_idx,
+      // printf("[block %d] head=%llu tail=%llu inflight=%llu\n",
+      // cfg_.block_idx,
       //        static_cast<unsigned long long>(head),
       //        static_cast<unsigned long long>(tail),
       //        static_cast<unsigned long long>(head - tail));
       last_print = now;
     }
-
   }
 }
 
@@ -194,13 +210,14 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
   cmds_to_post.reserve(batch_size);
 
   for (size_t i = seen; i < cur_head; ++i) {
+    // uint64_t cmd = cfg_.rb->buf[i & kQueueMask].cmd;
+    // if (cmd == 0) {
+    //   fprintf(stderr, "Error: cmd at index %zu is zero, my_tail: %lu\n", i,
+    //           my_tail);
+    //   std::abort();
+    // }
 
-    uint64_t cmd = cfg_.rb->buf[i & kQueueMask].cmd;
-    if (cmd == 0) {
-      fprintf(stderr, "Error: cmd at index %zu is zero, my_tail: %lu\n", i,
-              my_tail);
-      std::abort();
-    }
+    uint64_t cmd;
     auto last_print = std::chrono::steady_clock::now();
     size_t spin_count = 0;
     do {
@@ -251,7 +268,6 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
     auto start = std::chrono::high_resolution_clock::now();
     // Handle both regular RDMA writes and atomic operations
     post_gpu_commands_mixed(wrs_to_post, cmds_to_post);
-
     auto end = std::chrono::high_resolution_clock::now();
     total_rdma_write_durations_ +=
         std::chrono::duration_cast<std::chrono::microseconds>(end - start);
@@ -336,6 +352,14 @@ void Proxy::run_local() {
       printf("Received command 1: block %d, seen=%d, value: %d\n",
              cfg_.block_idx + 1, seen, cmd_entry.value);
     }
+    // TransferCmd& cmd_entry = cfg_.rb->buf[idx];
+    // printf(
+    //     "[blk %d] cmd=%llu dst=%u/%u bytes=%llu src=%p rptr=0x%llx
+    //     lptr=0x%llx " "sm=%d lane=%d msg=%d\n", cfg_.block_idx, (unsigned
+    //     long long)cmd_entry.cmd, cmd_entry.dst_rank, cmd_entry.dst_gpu,
+    //     (unsigned long long)cmd_entry.bytes, cmd_entry.src_ptr, (unsigned
+    //     long long)cmd_entry.req_rptr, (unsigned long long)cmd_entry.req_lptr,
+    //     cmd_entry.sm_id, cmd_entry.lane_id, cmd_entry.message_idx);
 
     cfg_.rb->buf[idx].cmd = 0;
     ++my_tail;
@@ -348,12 +372,13 @@ void Proxy::run_local() {
          kIterations, my_tail);
 }
 
-void Proxy::post_gpu_commands_mixed(const std::vector<uint64_t>& wrs_to_post,
-                                  const std::vector<TransferCmd>& cmds_to_post) {
+void Proxy::post_gpu_commands_mixed(
+    std::vector<uint64_t> const& wrs_to_post,
+    std::vector<TransferCmd> const& cmds_to_post) {
   // Separate atomic operations from regular RDMA writes
   std::vector<uint64_t> rdma_wrs, atomic_wrs;
   std::vector<TransferCmd> rdma_cmds, atomic_cmds;
-  
+
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
     if (cmds_to_post[i].cmd == 1) {
       // Atomic operation (cmd.cmd == 1)
@@ -365,96 +390,121 @@ void Proxy::post_gpu_commands_mixed(const std::vector<uint64_t>& wrs_to_post,
       rdma_cmds.push_back(cmds_to_post[i]);
     }
   }
-  
+
   // Handle regular RDMA writes
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, kObjectSize, rdma_wrs.size(),
                             rdma_wrs, finished_wrs_, finished_wrs_mutex_,
                             rdma_cmds);
   }
-  
+
   // Handle atomic operations
   if (!atomic_wrs.empty()) {
     post_atomic_operations(atomic_wrs, atomic_cmds);
   }
 }
 
-void Proxy::post_atomic_operations(const std::vector<uint64_t>& wrs_to_post,
-                                 const std::vector<TransferCmd>& cmds_to_post) {
-  // Send atomic operations as zero-byte RDMA writes with immediate data
-  // The atomic value is encoded in the immediate data field
-  
+void Proxy::post_atomic_operations(
+    std::vector<uint64_t> const& wrs_to_post,
+    std::vector<TransferCmd> const& cmds_to_post) {
+  // Use RDMA hardware atomic operations directly on remote GPU memory
+
+  if (cmds_to_post.size() > ProxyCtx::kMaxAtomicOps) {
+    fprintf(stderr, "Too many atomic operations: %zu > %zu\n",
+            cmds_to_post.size(), ProxyCtx::kMaxAtomicOps);
+    std::abort();
+  }
+
   std::vector<ibv_send_wr> wrs(cmds_to_post.size());
-  
+  std::vector<ibv_sge> sges(cmds_to_post.size());
+
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
     auto const& cmd = cmds_to_post[i];
-    
-    std::memset(&wrs[i], 0, sizeof(wrs[i]));
-    wrs[i].wr_id = wrs_to_post[i];  // Use original wr_id 
-    wrs[i].sg_list = nullptr;  // Zero-byte transfer
-    wrs[i].num_sge = 0;
-    
-    // target address for atomic operation
-    // cmd.req_rptr contains offset relative to dispatch_rdma_recv_data_buffer
-    // cpu proxy add dispatch_recv_data_offset to get correct address in rdma_buffer
-    wrs[i].wr.rdma.remote_addr = ctx_.remote_addr + ctx_.dispatch_recv_data_offset + cmd.req_rptr;
-    wrs[i].wr.rdma.rkey = ctx_.remote_rkey;
-    wrs[i].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-    wrs[i].send_flags = IBV_SEND_SIGNALED;
-    
-    // Bit 31: atomic operation flag (1)
-    // Bit 30-0: atomic value (31 bits, supports full int32 range)
-    printf("[ATOMIC_DEBUG] Before encoding: cmd.req_rptr=0x%lx (signed: %ld), cmd.value=%d\n", 
-           cmd.req_rptr, static_cast<int64_t>(cmd.req_rptr), cmd.value);
-    printf("[ATOMIC_DEBUG] Address calculation: ctx_.remote_addr=0x%lx, ctx_.dispatch_recv_data_offset=%zu, final_remote_addr=0x%lx\n",
-           ctx_.remote_addr, ctx_.dispatch_recv_data_offset, wrs[i].wr.rdma.remote_addr);
-    
-    // Encode address offset index and atomic value in immediate data
-    // Bit 31: atomic operation flag (1)
-    // Bit 30-24: target offset index (7 bits->128 targets, each int is 4 bytes apart)
-    // Bit 23-0: atomic value
-    
-    uint64_t full_target_offset = ctx_.dispatch_recv_data_offset + cmd.req_rptr;
-    uint32_t target_index = static_cast<uint32_t>(full_target_offset / sizeof(int)) & 0x7F;
-    
-    // Check if atomic value fits in 24 bits
-    if (cmd.value < -8388608 || cmd.value > 8388607) {
-      printf("[ATOMIC_ERROR] Atomic value %d exceeds 24-bit range [-8388608, 8388607]\n", cmd.value);
-      continue;
+
+    // SGE for receiving the old value, using GPU memory
+    // Place atomic buffers safely within MR bounds, starting from the end
+    uint64_t mr_start = reinterpret_cast<uintptr_t>(ctx_.mr->addr);
+    uint64_t mr_end = mr_start + ctx_.mr->length;
+
+    // TODO:yihan: might modify the size later. Reserve 16KB at the end for
+    // atomic operations (sufficient for all threads, )
+    uint64_t atomic_region_start = mr_end - 16384;   // 16KB for atomic ops
+    uint64_t thread_offset = cfg_.block_idx * 1024;  // 1KB per thread (reduced)
+    uint64_t sge_addr = atomic_region_start + thread_offset +
+                        i * sizeof(uint64_t);  // 64-bit aligned
+
+    sges[i] = {.addr = sge_addr,
+               .length = sizeof(uint64_t),  // 8-byte atomic operations
+               .lkey = ctx_.mr->lkey};
+
+    // Verify atomic buffer is within bounds
+    if (sge_addr < mr_start || sge_addr + sizeof(uint64_t) > mr_end) {
+      printf("[ERROR] SGE addr 0x%lx exceeds MR bounds - ABORTING\n", sge_addr);
+      std::abort();
     }
-    
-    // Encode atomic value (24 bits)
-    uint32_t value_24bit = static_cast<uint32_t>(cmd.value) & 0xFFFFFF;
-    uint32_t atomic_immediate = (1U << 31) | (target_index << 24) | value_24bit;
-    
-    printf("[ATOMIC_DEBUG] Encoded: target_index=%u, atomic_value=%d, value_24bit=0x%x, atomic_immediate=0x%x\n", 
-           target_index, cmd.value, value_24bit, atomic_immediate);
-    wrs[i].imm_data = htonl(atomic_immediate);
+
+    std::memset(&wrs[i], 0, sizeof(wrs[i]));
+    wrs[i].wr_id = wrs_to_post[i];
+    wrs[i].sg_list = &sges[i];
+    wrs[i].num_sge = 1;
+
+    // Use RDMA atomic fetch_and_add
+    wrs[i].opcode = IBV_WR_ATOMIC_FETCH_AND_ADD;
+
+    int64_t signed_offset = static_cast<int64_t>(cmd.req_rptr);
+    bool is_combine_op = (cmd.value == 1);
+
+    // Tell apart dispatch or combine, use different buffer addr
+    uint64_t target_addr;
+    if (is_combine_op) {
+      target_addr = ctx_.remote_addr + signed_offset;
+    } else {
+      // Dispatch operations: use offset from dispatch_recv_data_offset
+      target_addr =
+          ctx_.remote_addr + ctx_.dispatch_recv_data_offset + signed_offset;
+    }
+
+    // Validate target address
+    uint64_t remote_mr_end = ctx_.remote_addr + ctx_.mr->length;
+    if (target_addr < ctx_.remote_addr ||
+        target_addr + sizeof(uint64_t) > remote_mr_end) {
+      printf("[ERROR] Atomic target 0x%lx outside MR bounds - ABORTING\n",
+             target_addr);
+      std::abort();
+    }
+
+    if (target_addr % sizeof(uint64_t) != 0) {
+      printf("[ERROR] Atomic target 0x%lx not 8-byte aligned - ABORTING\n",
+             target_addr);
+      std::abort();
+    }
+
+    wrs[i].wr.atomic.remote_addr = target_addr;
+    wrs[i].wr.atomic.rkey = ctx_.remote_rkey;
+    // For 64-bit atomic operations with signed values
+    // RDMA fetch_and_add supports signed addition - negative values are valid
+    // Convert signed int to unsigned 64-bit while preserving the bit pattern
+    // This allows negative values to be correctly added by RDMA hardware
+    uint64_t increment_value =
+        static_cast<uint64_t>(static_cast<int64_t>(cmd.value));
+
+    wrs[i].wr.atomic.compare_add = increment_value;
+    wrs[i].send_flags = IBV_SEND_SIGNALED;
     wrs[i].next = (i + 1 < cmds_to_post.size()) ? &wrs[i + 1] : nullptr;
-    
-    // todo:yihan For debugging, remove later
-    printf("[ATOMIC_DEBUG] Posting atomic operation: original_wr_id=%lu, encoded_wr_id=0x%lx, offset=0x%x, remote_addr=0x%lx, value=%d\n",
-           wrs_to_post[i], wrs[i].wr_id, static_cast<uint32_t>(cmd.req_rptr), wrs[i].wr.rdma.remote_addr, cmd.value);
+
+    // debuginfo: check send
+    printf("[ATOMIC_SEND] → 0x%lx: %d\n", wrs[i].wr.atomic.remote_addr,
+           cmd.value);
   }
-  
-  
+
   ibv_send_wr* bad = nullptr;
   int ret = ibv_post_send(ctx_.qp, &wrs[0], &bad);
   if (ret) {
-    fprintf(stderr, "ibv_post_send failed for atomic operations: %s (ret=%d)\n", 
+    fprintf(stderr, "RDMA atomic operations failed: %s (ret=%d)\n",
             strerror(ret), ret);
     if (bad)
-      fprintf(stderr, "Bad WR at %p (wr_id=%lu)\n", (void*)bad, bad->wr_id);
+      fprintf(stderr, "Bad atomic WR at %p (wr_id=%lu)\n", (void*)bad,
+              bad->wr_id);
     std::abort();
   }
-  
-  // Track completion
-  {
-    std::lock_guard<std::mutex> lock(finished_wrs_mutex_);
-    for (auto wr_id : wrs_to_post) {
-      finished_wrs_.insert(wr_id);
-    }
-  }
-  
-  printf("[ATOMIC_DEBUG] Posted %zu atomic operations\n", cmds_to_post.size());
 }
