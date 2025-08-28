@@ -36,7 +36,7 @@ def make_proxies(
     mode: str,
 ) -> List[gpu_driven.Proxy]:
     env = bench.env_info()
-    num_blocks = int(env["blocks"])
+    num_blocks = int(env.blocks)
     proxies: List[gpu_driven.Proxy] = []
     for i in range(num_blocks):
         rb_i = bench.ring_addr(i)
@@ -92,8 +92,8 @@ def run_rank0_sender(args):
     buf_addr = buf.data_ptr()
 
     print(
-        f"[rank 0] peer={args.peer_ip} blocks={int(env['blocks'])} "
-        f"tpb={int(env['threads_per_block'])} iters={int(env['iterations'])} "
+        f"[rank 0] peer={args.peer_ip} blocks={int(env.blocks)} "
+        f"tpb={int(env.threads_per_block)} iters={int(env.iterations)} "
         f"size={args.size_mb} MiB"
     )
 
@@ -155,8 +155,8 @@ def run_rank1_remote(args):
     buf_addr = buf.data_ptr()
 
     print(
-        f"[rank 1] peer={args.peer_ip} blocks={int(env['blocks'])} "
-        f"tpb={int(env['threads_per_block'])} iters={int(env['iterations'])} "
+        f"[rank 1] peer={args.peer_ip} blocks={int(env.blocks)} "
+        f"tpb={int(env.threads_per_block)} iters={int(env.iterations)} "
         f"size={args.size_mb} MiB"
     )
     proxies = make_proxies(

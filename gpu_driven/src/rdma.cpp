@@ -472,11 +472,13 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t bytes,
     // wrs[i].wr.rdma.remote_addr = cmd.req_rptr ? cmd.req_rptr : S.remote_addr;
     // wrs[i].wr.rdma.remote_addr = S.remote_addr + i * bytes;
 
+
     // FIXED: GPU passes offset relative to dispatch_rdma_recv_data_buffer
     // S.remote_addr points to rdma_buffer base. Add the stored offset of
     // dispatch_rdma_recv_data_buffer.
     wrs[i].wr.rdma.remote_addr =
         S.remote_addr + S.dispatch_recv_data_offset + cmd.req_rptr;
+
 
     wrs[i].wr.rdma.rkey = S.remote_rkey;
     wrs[i].opcode = IBV_WR_RDMA_WRITE;
@@ -488,9 +490,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t bytes,
   wrs[last].send_flags |= IBV_SEND_SIGNALED;
   wrs[last].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
   wrs[last].imm_data = htonl(static_cast<uint32_t>(largest_wr));
-
-  // printf("[WR %zu/%zu] (last) wr_id=%lu opcode=WRITE_WITH_IMM imm_data=%u\n",
-  //        last, num_wrs, wrs[last].wr_id, ntohl(wrs[last].imm_data));
 
   ibv_send_wr* bad = nullptr;
   int ret = ibv_post_send(S.qp, &wrs[0], &bad);
@@ -691,6 +690,12 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
   }
   std::vector<CopyTask> task_vec;
   task_vec.reserve(num_wr_imm);
+  int nDevices;
+  cudaError_t err = cudaGetDeviceCount(&nDevices);
+  if (err != cudaSuccess) {
+    printf("CUDA error: %s\n", cudaGetErrorString(err));
+    std::abort();
+  }
   for (int i = 0; i < ne; ++i) {
     int src_addr_offset = 0;
     // int destination_gpu;
@@ -699,8 +704,8 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       continue;
     }
 
-    // Regular data transfer processing
-    int destination_gpu = wc[i].imm_data % NUM_GPUS;
+    int destination_gpu = wc[i].imm_data % nDevices;
+
     if (S.per_gpu_device_buf[destination_gpu] == nullptr) {
       fprintf(stderr, "per_gpu_device_buf[%d] is null\n", destination_gpu);
       std::abort();

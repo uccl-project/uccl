@@ -34,7 +34,9 @@ inline void check_python_signals() {
 
 Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
     : local_gpu_idx_(local_gpu_idx), num_cpus_(num_cpus) {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
   std::cout << "Creating Engine with GPU index: " << local_gpu_idx
             << ", CPUs: " << num_cpus << std::endl;
   // Py_Initialize();
@@ -93,7 +95,9 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
 }
 
 Endpoint::~Endpoint() {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
   std::cout << "Destroying Engine..." << std::endl;
 
   stop_.store(true, std::memory_order_release);
@@ -139,7 +143,9 @@ Endpoint::~Endpoint() {
 
 bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
                        uint64_t& conn_id) {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
   std::cout << "Attempting to connect to " << ip_addr << ":" << remote_gpu_idx
             << std::endl;
 
@@ -215,7 +221,9 @@ bool Endpoint::connect(py::bytes const& meta_bytes, uint64_t& conn_id) {
 
 bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
                       uint64_t& conn_id) {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
   std::cout << "Waiting to accept incoming connection..." << std::endl;
 
   // For demo purposes, simulate accepted connection
@@ -249,7 +257,8 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
 }
 
 bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
   mr_id = next_mr_id_.fetch_add(1);
 
@@ -276,7 +285,9 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
     throw std::invalid_argument(
         "[Endpoint::regv] data_v/size_v length mismatch");
 
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
   size_t const n = data_v.size();
   mr_id_v.resize(n);
 
@@ -309,8 +320,9 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
 bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
                     size_t size, bool inside_python) {
   DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
-  [[maybe_unused]] auto _ =
-      inside_python ? (py::gil_scoped_release{}, nullptr) : nullptr;
+  [[maybe_unused]] auto _ = inside_python && PyGILState_Check()
+                                ? (py::gil_scoped_release{}, nullptr)
+                                : nullptr;
 
   Conn* conn;
   {
@@ -370,8 +382,9 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
 
 bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
                     bool inside_python) {
-  [[maybe_unused]] auto _ =
-      inside_python ? (py::gil_scoped_release{}, nullptr) : nullptr;
+  [[maybe_unused]] auto _ = inside_python && PyGILState_Check()
+                                ? (py::gil_scoped_release{}, nullptr)
+                                : nullptr;
 
   Conn* conn;
   {
@@ -471,7 +484,8 @@ bool Endpoint::send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
 
 bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
                           size_t size, uint64_t* transfer_id) {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
   Task* task = new Task{
       .type = TaskType::SEND,
@@ -494,7 +508,8 @@ bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
 
 bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
                           size_t size, uint64_t* transfer_id) {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
   Task* task = new Task{
       .type = TaskType::RECV,
@@ -518,7 +533,9 @@ bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
 bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void const*> data_v,
                      std::vector<size_t> size_v, size_t num_iovs) {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
   auto conn = conn_id_to_conn_[conn_id];
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
@@ -1133,6 +1150,7 @@ void Endpoint::recv_proxy_thread_func() {
 
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   py::gil_scoped_release release;
+
   auto task = reinterpret_cast<Task*>(transfer_id);
   if (task->type == TaskType::READ) {
     auto rw_task = reinterpret_cast<RWTask*>(transfer_id);
@@ -1220,6 +1238,15 @@ std::unique_ptr<Endpoint> Endpoint::create_and_join(
     throw std::runtime_error("Endpoint::create_and_join() failed");
   }
   return ep;
+}
+
+int Endpoint::get_sock_fd(uint64_t conn_id) const {
+  auto it = conn_id_to_conn_.find(conn_id);
+  if (it == conn_id_to_conn_.end()) {
+    return -1;
+  }
+
+  return it->second->uccl_conn_id_.sock_fd;
 }
 
 uint64_t Endpoint::conn_id_of_rank(int rank) const {

@@ -165,9 +165,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         //     rank * num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
         //     slot_idx * num_bytes_per_msg;
 
-        // Pass offset relative to dispatch_rdma_recv_data_buffer (rdma_recv_x)
-        // CPU proxy will add the base offset of dispatch_rdma_recv_data_buffer
-        // within rdma_buffer
+
         auto const dst_offset =
             dst_expert_local_idx * num_ranks *
                 num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
