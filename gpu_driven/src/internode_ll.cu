@@ -1,4 +1,4 @@
-#include "ep_configs.cuh"  // Includes NUM_MAX_NVL_PEERS definition
+#include "ep_configs.cuh"
 #include "ep_launch.cuh"
 #include "ep_runtime.cuh"
 #include "ep_util.hpp"
@@ -25,7 +25,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     int num_max_dispatch_tokens_per_rank, int num_topk, int num_experts,
     int rank, int num_ranks, int num_warp_groups, int num_warps_per_group,
     bool round_scale, int phases, uint64_t const* ring_addrs,
-    int num_ring_addrs, void** ipc_base_ptrs = nullptr) {
+    int num_ring_addrs, int max_nvl_peers, void** ipc_base_ptrs = nullptr) {
   auto const sm_id = static_cast<int>(blockIdx.x);
   auto const thread_id = static_cast<int>(threadIdx.x);
   auto const warp_id = thread_id / 32, lane_id = get_lane_id();
@@ -187,7 +187,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                 ? uccl::get_ipc_p2p_ptr(
                       reinterpret_cast<void*>(
                           reinterpret_cast<char*>(rdma_recv_x) + dst_offset),
-                      ipc_base_ptrs, rank, dst_rank, NUM_MAX_NVL_PEERS, 0)
+                      ipc_base_ptrs, rank, dst_rank, max_nvl_peers, 0)
                 : nullptr;
 
         if (dst_p2p_ptr != nullptr) {
@@ -296,7 +296,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                             reinterpret_cast<void*>(
                                 rdma_recv_count +
                                 dst_expert_local_idx * num_ranks + rank),
-                            ipc_base_ptrs, rank, dst_rank, NUM_MAX_NVL_PEERS, 0)
+                            ipc_base_ptrs, rank, dst_rank, max_nvl_peers, 0)
                       : nullptr;
 
     if (dst_p2p_ptr != nullptr) {
@@ -450,7 +450,7 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
               int num_topk, int num_experts, int rank, int num_ranks,
               bool use_fp8, bool round_scale, bool use_ue8m0, void* workspace,
               int num_device_sms, cudaStream_t stream, int phases,
-              uint64_t const* ring_addrs, int num_ring_addrs,
+              uint64_t const* ring_addrs, int num_ring_addrs, int max_nvl_peers,
               void** ipc_base_ptrs) {
   constexpr int kNumMaxTopK = 9;
   int const num_warp_groups = ceil_div(num_experts, num_device_sms);
@@ -487,7 +487,7 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
         next_clean, num_next_clean_int, num_tokens,                           \
         num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,        \
         num_ranks, num_warp_groups, num_warps_per_group, round_scale, phases, \
-        ring_addrs, num_ring_addrs, ipc_base_ptrs);                           \
+        ring_addrs, num_ring_addrs, max_nvl_peers, ipc_base_ptrs);            \
   }                                                                           \
   break
 
@@ -512,7 +512,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
     int hidden, int num_topk, int num_max_dispatch_tokens_per_rank,
     int num_experts, int rank, int num_ranks, int num_warp_groups,
     int num_warps_per_group, int phases, bool zero_copy,
-    uint64_t const* ring_addrs, int num_ring_addrs,
+    uint64_t const* ring_addrs, int num_ring_addrs, int max_nvl_peers,
     void** ipc_base_ptrs = nullptr) {
   auto const sm_id = static_cast<int>(blockIdx.x);
   auto const num_sms = static_cast<int>(gridDim.x);
@@ -651,11 +651,8 @@ __global__ __launch_bounds__(1024, 1) void combine(
               ? uccl::get_ipc_p2p_ptr(
                     reinterpret_cast<void*>(
                         reinterpret_cast<char*>(rdma_recv_x) + dst_offset),
-                    ipc_base_ptrs, rank, dst_rank, NUM_MAX_NVL_PEERS, 0)
+                    ipc_base_ptrs, rank, dst_rank, max_nvl_peers, 0)
               : nullptr;
-
-      auto const node_id = rank / NUM_MAX_NVL_PEERS;
-      auto const dst_node_id = dst_rank / NUM_MAX_NVL_PEERS;
 
       if (not zero_copy or dst_p2p_ptr != nullptr) {
         // Read from `cpy_src_int4_ptr` and copy into `cpy_dst_int4_ptr`
@@ -801,7 +798,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
           ipc_base_ptrs
               ? uccl::get_ipc_p2p_ptr(
                     reinterpret_cast<void*>(rdma_recv_flag + global_expert_idx),
-                    ipc_base_ptrs, rank, dst_rank, NUM_MAX_NVL_PEERS, 0)
+                    ipc_base_ptrs, rank, dst_rank, max_nvl_peers, 0)
               : nullptr;
 
       if (dst_p2p_ptr_flag != nullptr) {
@@ -903,7 +900,7 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
              int num_experts, int rank, int num_ranks, bool use_logfmt,
              void* workspace, int num_device_sms, cudaStream_t stream,
              int phases, bool zero_copy, uint64_t const* ring_addrs,
-             int num_ring_addrs, void** ipc_base_ptrs) {
+             int num_ring_addrs, int max_nvl_peers, void** ipc_base_ptrs) {
   constexpr int kNumMaxTopk = 9;
   int const num_warp_groups = ceil_div(num_experts, num_device_sms);
   int const num_warps_per_group = 32 / num_warp_groups;
@@ -935,7 +932,7 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
                   hidden, num_topk, num_max_dispatch_tokens_per_rank,          \
                   num_experts, rank, num_ranks, num_warp_groups,               \
                   num_warps_per_group, phases, zero_copy, ring_addrs,          \
-                  num_ring_addrs, ipc_base_ptrs);                              \
+                  num_ring_addrs, max_nvl_peers, ipc_base_ptrs);               \
   }                                                                            \
   break
 

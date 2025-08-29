@@ -50,5 +50,6 @@
 #endif
 bool pin_thread_to_cpu(int cpu);
 void cpu_relax();
+int get_num_max_nvl_peers();
 
 #endif  // COMMON_HPP

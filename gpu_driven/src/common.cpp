@@ -25,3 +25,12 @@ void cpu_relax() {
   asm volatile("" ::: "memory");
 #endif
 }
+
+int get_num_max_nvl_peers() {
+  int deviceCount = 0;
+  cudaError_t err = cudaGetDeviceCount(&deviceCount);
+  if (err != cudaSuccess) {
+    std::abort();
+  }
+  return deviceCount;
+}
