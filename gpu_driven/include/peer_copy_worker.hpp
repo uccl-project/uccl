@@ -10,9 +10,6 @@ struct PeerCopyShared {
   // Controls the worker loop
   std::atomic<bool> run{true};
 
-  // P2P enable flags (once per GPU pair)
-  std::once_flag peer_ok_flag[NUM_GPUS][NUM_GPUS];
-
   // Source GPU for receiving host-side staging to device
   int src_device = 0;
 };
@@ -21,7 +18,6 @@ struct PeerWorkerCtx {
   // Counters / timings
   uint64_t async_memcpy_count = 0;
   uint64_t prev_completed_async_memcpy_count = 0;
-  uint64_t async_memcpy_total_time = 0;
   uint64_t highest_issued_wr_id = 0;
 
   // Batch buffers

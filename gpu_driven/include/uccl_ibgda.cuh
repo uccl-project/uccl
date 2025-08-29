@@ -66,16 +66,6 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       cmd.message_idx = message_idx;
       rb->atomic_set_and_commit(cmd, &slot);
       break;
-    } else {
-      auto now = clock64();
-      if (now - last_print > 10 * 1e9) {
-        uint64_t tail_cmd = rb->buf[cur_tail & rb->mask()].cmd;
-        printf(
-            "[ibgda_put_nbi_warp] %p waiting sm_id: %d, lane_id: %d, cur_head: "
-            "%llu, cur_tail: %llu, inflight: %llu, tail_cmd: %llu\n",
-            rb, sm_id, lane_id, cur_head, cur_tail, inflight, tail_cmd);
-        last_print = now;
-      }
     }
   }
 }
@@ -129,10 +119,6 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
         cmd.sm_id = sm_id;
         cmd.value = value;
         cmd.req_rptr = reinterpret_cast<uint64_t>(rptr);
-
-        // rb->set_buffer(slot, cmd);
-        // __threadfence_system();
-        // rb->commit_with_head(slot + 1);
         rb->atomic_set_and_commit(cmd, &slot);
         break;
       } else {

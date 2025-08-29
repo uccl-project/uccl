@@ -31,6 +31,7 @@ namespace uccl {
 
 struct ConnID {
   void* context;
+  int sock_fd;     // Used for further coordination if necessary.
   FlowID flow_id;  // Used for RDMAEndpoint to look up UcclFlow.
   PeerID peer_id;  // Used for UcclEngine to look up RDMAContext.
   int dev;
@@ -1254,8 +1255,14 @@ class UcclFlow {
     memset(&recv_comm_, 0, sizeof(recv_comm_));
     int num_devices = ep->get_num_devices();
     // Avoid all flows using the same initial engine offset.
+
+#ifdef DISABLE_CALL_ONCE_STATIC
+    std::vector<std::atomic<uint32_t>>* off =
+        new std::vector<std::atomic<uint32_t>>(num_devices);
+#else
     static std::vector<std::atomic<uint32_t>>* off =
         new std::vector<std::atomic<uint32_t>>(num_devices);
+#endif
     next_engine_offset_ = (*off)[dev].fetch_add(1) % ucclParamNUM_ENGINES();
   }
 

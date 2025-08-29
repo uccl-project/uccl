@@ -29,7 +29,7 @@ except ImportError as exc:
     raise
 
 
-from utils import init_dist, get_peer_ip
+from utils import init_dist, get_peer_ip, detect_ib_hca
 
 
 def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
@@ -113,6 +113,17 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
         if rank == 0:
             print("[simple-test] ✓ Buffer created successfully", flush=True)
 
+        for proxy in proxies:
+            proxy.calculate_and_set_dispatch_recv_data_offset(
+                num_tokens, hidden, num_experts
+            )
+
+        if rank == 0:
+            print(
+                "[simple-test] ✓ dispatch_recv_data_offset calculated and set by CPU proxy",
+                flush=True,
+            )
+
         cumulative_local_expert_recv_stats = torch.zeros(
             (num_experts // num_ranks,), dtype=torch.int, device="cuda"
         )
@@ -157,6 +168,8 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
             print("[simple-test] ✓ All tests passed!", flush=True)
 
         time.sleep(10)
+
+        print("[simple-test] ✓ before destory!", flush=True)
 
         try:
             buffer.destroy()
@@ -208,7 +221,9 @@ def test_worker(local_rank: int, num_local_ranks: int):
 
 
 if __name__ == "__main__":
-
+    ib_dev = detect_ib_hca()
+    os.environ["NCCL_IB_HCA"] = ib_dev
+    print(f"Set NCCL_IB_HCA={ib_dev}")
     print("Simple internode test starting...")
     local_rank = int(os.environ["LOCAL_RANK"])
     num_local_ranks = int(os.environ["LOCAL_WORLD_SIZE"])

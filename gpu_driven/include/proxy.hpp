@@ -36,7 +36,13 @@ class Proxy {
 
   explicit Proxy(Config const& cfg) : cfg_(cfg) {
     const size_t total_size = kRemoteBufferSize;
-    for (int d = 0; d < NUM_GPUS; ++d) {
+    int nDevices;
+    cudaError_t err = cudaGetDeviceCount(&nDevices);
+    if (err != cudaSuccess) {
+      printf("CUDA error: %s\n", cudaGetErrorString(err));
+      std::abort();
+    }
+    for (int d = 0; d < nDevices; ++d) {
       GPU_RT_CHECK(gpuSetDevice(d));
       void* buf = nullptr;
       GPU_RT_CHECK(gpuMalloc(&buf, total_size));
@@ -47,6 +53,11 @@ class Proxy {
 
   void set_progress_run(bool run) {
     ctx_.progress_run.store(run, std::memory_order_release);
+  }
+
+  // Set the offset of dispatch_rdma_recv_data_buffer within rdma_buffer
+  void set_dispatch_recv_data_offset(uintptr_t offset) {
+    ctx_.dispatch_recv_data_offset = offset;
   }
 
   void run_sender();
@@ -68,6 +79,10 @@ class Proxy {
 
   void notify_gpu_completion(uint64_t& my_tail);
   void post_gpu_command(uint64_t& my_tail, size_t& seen);
+  void post_gpu_commands_mixed(std::vector<uint64_t> const& wrs_to_post,
+                               std::vector<TransferCmd> const& cmds_to_post);
+  void post_atomic_operations(std::vector<uint64_t> const& wrs_to_post,
+                              std::vector<TransferCmd> const& cmds_to_post);
 
   Config cfg_;
   RDMAConnectionInfo local_info_{}, remote_info_{};

@@ -4,6 +4,7 @@ import os
 import torch
 import torch.distributed as dist
 from typing import Optional
+import glob
 
 from uccl.uccl_ep import EventHandle
 
@@ -180,3 +181,13 @@ class EventOverlap:
         """
         if self.event is not None:
             self.event.current_stream_wait()
+
+
+def detect_ib_hca():
+    # List all mlx5 devices under /sys/class/infiniband
+    devices = sorted(glob.glob("/sys/class/infiniband/mlx5_*"))
+    if not devices:
+        raise RuntimeError("No mlx5 devices found under /sys/class/infiniband")
+    # Just take the first one for now
+    dev_name = os.path.basename(devices[0])
+    return dev_name
