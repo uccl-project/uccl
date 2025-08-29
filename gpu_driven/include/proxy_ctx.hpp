@@ -23,6 +23,10 @@ struct ProxyCtx {
   // Buffer offset within rdma_buffer for address translation
   uintptr_t dispatch_recv_data_offset = 0;  // offset of dispatch_rdma_recv_data_buffer from rdma_buffer base
 
+  // Atomic operations buffer (GPU memory for receiving old values)
+  uint32_t* atomic_old_values_buf = nullptr;  // GPU buffer for atomic old values
+  static constexpr size_t kMaxAtomicOps = 1024;  // Maximum concurrent atomic operations
+
   // Progress/accounting
   std::atomic<uint64_t> posted{0};
   std::atomic<uint64_t> completed{0};
@@ -43,9 +47,9 @@ struct ProxyCtx {
 
   // GPU copy helpers (moved from function-static thread_local)
   gpuStream_t copy_stream = nullptr;
-  bool peer_enabled[MAX_NUM_GPUS][MAX_NUM_GPUS] = {};
+  bool peer_enabled[NUM_GPUS][NUM_GPUS] = {};
   size_t pool_index = 0;
 
   // Optional: per-GPU destination buffers if you previously used a global
-  void* per_gpu_device_buf[MAX_NUM_GPUS] = {nullptr};
+  void* per_gpu_device_buf[NUM_GPUS] = {nullptr};
 };
