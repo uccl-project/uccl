@@ -68,7 +68,7 @@ void peer_copy_worker(PeerCopyShared& shared, PeerWorkerCtx& ctx,
       }
       copy_batch_size = 1;
       ctx.tasks[0] = t;
-      
+
     } else {
       int n = ring.popN(ctx.tasks, RECEIVER_BATCH_SIZE);
       if (n == 0) {

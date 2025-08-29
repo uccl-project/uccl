@@ -64,18 +64,8 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       cmd.sm_id = sm_id;
       cmd.lane_id = lane_id;
       cmd.message_idx = message_idx;
-
-      // rb->set_buffer(slot, cmd);
-      // __threadfence_system();
-      // rb->commit_with_head(slot + 1);
       rb->atomic_set_and_commit(cmd, &slot);
       break;
-    } else {
-      auto now = clock64();
-      if (now - last_print > 10 * 1e9) {
-        uint64_t tail_cmd = rb->buf[cur_tail & rb->mask()].cmd;
-        last_print = now;
-      }
     }
   }
 }
@@ -103,19 +93,9 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
   (void)rptr;
   (void)value;
   (void)is_local_copy;
-  // printf(
-  //     "[ibgda_amo_nonfetch_add] rptr: %p, value: %d, pe: %d, qp_id: %d, "
-  //     "is_local_copy: %d\n",
-  //     rptr, value, pe, qp_id, is_local_copy);
   if (is_local_copy) {
     atomicAdd(reinterpret_cast<int*>(rptr), value);
   } else {
-    // TODO(MaoZiming): Implement it with a remote atomic operation.
-    // printf(
-    //     "[ibgda_amo_nonfetch_add] Remote atomic operation not implemented yet. "
-    //     "rptr: %p, value: %d, pe: %d, qp_id: %d\n",
-    //     rptr, value, pe, qp_id);
-
     int safe_n = num_ring_addrs > 0 ? num_ring_addrs : 1;
     int ring_idx = (sm_id >= 0 ? sm_id : 0) % safe_n;
 
@@ -139,17 +119,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
         cmd.sm_id = sm_id;
         cmd.value = value;
         cmd.req_rptr = reinterpret_cast<uint64_t>(rptr);
-
-        // rb->set_buffer(slot, cmd);
-        // __threadfence_system();
-        // rb->commit_with_head(slot + 1);
         rb->atomic_set_and_commit(cmd, &slot);
-        // printf(
-        //     "Pushed amo cmd to ring buffer %p at slot %llu, sm_id: %d, "
-        //     "cmd.cmd: %llu, cmd: "
-        //     "%llu, cur_head: %llu, cur_tail: %llu, inflight: %llu\n",
-        //     rb, slot, cmd.sm_id, cmd.cmd, rb->buf[slot & rb->mask()].cmd,
-        //     rb->head, rb->volatile_tail(), rb->head - rb->volatile_tail());
         break;
       } else {
         auto now = clock64();

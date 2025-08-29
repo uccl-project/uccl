@@ -114,10 +114,15 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
             print("[simple-test] ✓ Buffer created successfully", flush=True)
 
         for proxy in proxies:
-            proxy.calculate_and_set_dispatch_recv_data_offset(num_tokens, hidden, num_experts)
-        
+            proxy.calculate_and_set_dispatch_recv_data_offset(
+                num_tokens, hidden, num_experts
+            )
+
         if rank == 0:
-            print("[simple-test] ✓ dispatch_recv_data_offset calculated and set by CPU proxy", flush=True)
+            print(
+                "[simple-test] ✓ dispatch_recv_data_offset calculated and set by CPU proxy",
+                flush=True,
+            )
 
         cumulative_local_expert_recv_stats = torch.zeros(
             (num_experts // num_ranks,), dtype=torch.int, device="cuda"
