@@ -116,19 +116,11 @@ void Proxy::run_dual() {
 
   uint64_t my_tail = 0;
   size_t seen = 0;
-  auto last_print = std::chrono::steady_clock::now();
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     poll_cq_dual(ctx_, finished_wrs_, finished_wrs_mutex_, cfg_.block_idx,
                  ring);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
-
-    auto now = std::chrono::steady_clock::now();
-    if (now - last_print >= std::chrono::seconds(10)) {
-      uint64_t head = cfg_.rb->head;
-      uint64_t tail = cfg_.rb->volatile_tail();
-      last_print = now;
-    }
   }
 }
 
