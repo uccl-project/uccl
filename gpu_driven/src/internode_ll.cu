@@ -157,7 +157,6 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
             rank * num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
             slot_idx * num_bytes_per_msg;
 
-
         // Try to use IPC for intra-node communication
 
         auto const dst_p2p_ptr =
@@ -255,8 +254,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 
     // Wait local sends issued and send expert counts
     while (ld_acquire_global(atomic_finish_counter_per_expert +
-                             responsible_expert_idx) != FINISHED_SUM_TAG * 2)
-      ;
+                             responsible_expert_idx) != FINISHED_SUM_TAG * 2);
     // TODO(yihan): Mark here for future debugging check.
     // Calculate offset within LowLatencyLayout buffer for CPU proxy translation
     // Calculate offset relative to dispatch_rdma_recv_data_buffer (rdma_recv_x)
@@ -268,7 +266,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     auto count_index = dst_expert_local_idx * num_ranks + rank;
     auto aligned_count_addr = reinterpret_cast<uint64_t>(rdma_recv_count) +
                               count_index * sizeof(uint64_t);
-    auto dst_offset = aligned_count_addr - reinterpret_cast<uint64_t>(rdma_recv_x);
+    auto dst_offset =
+        aligned_count_addr - reinterpret_cast<uint64_t>(rdma_recv_x);
 
     // Try to use IPC for intra-node atomic operations
     auto const dst_p2p_ptr =
@@ -348,8 +347,7 @@ LOW_LATENCY_DISPATCH_RECV:
                                 count_index * sizeof(uint64_t);
       int* count_addr = reinterpret_cast<int*>(aligned_count_addr);
 
-      while ((num_recv_tokens = ld_acquire_sys_global(count_addr)) == 0)
-        ;
+      while ((num_recv_tokens = ld_acquire_sys_global(count_addr)) == 0);
 
       printf(
           "[RECV_COUNT_SUCCESS] Received non-zero count: %d at addr=%p "
@@ -788,8 +786,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
     asm volatile("bar.sync %0, %1;" ::"r"(warp_group_id + 1),
                  "r"(num_warps_per_group * 32));
     if (sub_warp_id == 1 and lane_id == 0) {
-      while (ld_acquire_global(atomic_clean_flag) == 0)
-        ;
+      while (ld_acquire_global(atomic_clean_flag) == 0);
       // Calculate offset from data buffer to flag buffer (similar to dispatch
       // phase) rdma_recv_flag corresponds to combine_rdma_recv_flag_buffer We
       // need to calculate the offset from rdma_recv_x (data buffer) to the flag
@@ -813,7 +810,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
                     reinterpret_cast<void*>(rdma_recv_flag + global_expert_idx),
                     ipc_base_ptrs, rank, dst_rank, NUM_MAX_NVL_PEERS, 0)
               : nullptr;
-      
+
       if (dst_p2p_ptr_flag != nullptr) {
         // Intra-node: use direct atomic operation
         st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr_flag), 1);
@@ -822,9 +819,9 @@ __global__ __launch_bounds__(1024, 1) void combine(
         // NOTE(MaoZiming): Without ibgda, we can only use atomic add
         // Pass offset to CPU proxy for atomic operation (similar to dispatch
         // phase)
-      nvshmemi_ibgda_amo_nonfetch_add(reinterpret_cast<int*>(dst_offset), 1,
-                                      dst_rank, sm_id, local_expert_idx, false,
-                                      ring_addrs, num_ring_addrs);
+        nvshmemi_ibgda_amo_nonfetch_add(reinterpret_cast<int*>(dst_offset), 1,
+                                        dst_rank, sm_id, local_expert_idx,
+                                        false, ring_addrs, num_ring_addrs);
       }
       atomic_add_release_global(atomic_clean_flag, -1);
     }
@@ -841,8 +838,7 @@ LOW_LATENCY_COMBINE_RECV:
     if (sub_warp_id == 0 and lane_id == 0) {
       auto start_time = clock64();
       while (ld_acquire_sys_global(rdma_recv_flag + responsible_expert_idx) ==
-             0)
-        ;
+             0);
       auto wait_recv_cost = clock64() - start_time;
       if (combine_wait_recv_cost_stats != nullptr) {
         auto const& src_rank = responsible_expert_idx / num_local_experts;
