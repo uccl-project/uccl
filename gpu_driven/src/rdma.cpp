@@ -1,5 +1,6 @@
 #include "rdma.hpp"
 #include "common.hpp"
+#include "peer_copy.cuh"
 #include "peer_copy_worker.hpp"
 #include "rdma_util.hpp"
 #include "util/gpu_rt.h"
@@ -27,6 +28,10 @@
 #include <immintrin.h>
 #endif
 #include "util/util.h"
+
+// Forward declaration of the CUDA function (implemented in peer_copy.cu)
+extern "C" void launch_async_atomic_add(int* gpu_target, int atomic_value,
+                                        cudaStream_t stream);
 #include <stdio.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -143,6 +148,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   uint64_t iova = (uintptr_t)gpu_buf;
   S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                              IBV_ACCESS_REMOTE_ATOMIC |
                               IBV_ACCESS_RELAXED_ORDERING);
 
   if (!S.mr) {
@@ -237,8 +243,8 @@ void modify_qp_to_init(ProxyCtx& S) {
   attr.qp_state = IBV_QPS_INIT;
   attr.port_num = 1;  // HCA port you use
   attr.pkey_index = 0;
-  attr.qp_access_flags =
-      IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
+  attr.qp_access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ |
+                         IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
 
   int flags =
       IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS;
@@ -373,9 +379,11 @@ void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
   attr.rnr_retry = 7;
   attr.sq_psn = local_info->psn;
   attr.max_rd_atomic = 1;
+  attr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
 
   int flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT |
-              IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC;
+              IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC |
+              IBV_QP_ACCESS_FLAGS;
 
   if (ibv_modify_qp(S.qp, &attr, flags)) {
     perror("Failed to modify QP to RTS");
@@ -464,7 +472,11 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t bytes,
     // wrs[i].wr.rdma.remote_addr = cmd.req_rptr ? cmd.req_rptr : S.remote_addr;
     // wrs[i].wr.rdma.remote_addr = S.remote_addr + i * bytes;
 
-    wrs[i].wr.rdma.remote_addr = S.remote_addr + cmd.req_rptr;
+    // FIXED: GPU passes offset relative to dispatch_rdma_recv_data_buffer
+    // S.remote_addr points to rdma_buffer base. Add the stored offset of
+    // dispatch_rdma_recv_data_buffer.
+    wrs[i].wr.rdma.remote_addr =
+        S.remote_addr + S.dispatch_recv_data_offset + cmd.req_rptr;
 
     wrs[i].wr.rdma.rkey = S.remote_rkey;
     wrs[i].opcode = IBV_WR_RDMA_WRITE;
@@ -476,9 +488,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t bytes,
   wrs[last].send_flags |= IBV_SEND_SIGNALED;
   wrs[last].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
   wrs[last].imm_data = htonl(static_cast<uint32_t>(largest_wr));
-
-  // printf("[WR %zu/%zu] (last) wr_id=%lu opcode=WRITE_WITH_IMM imm_data=%u\n",
-  //        last, num_wrs, wrs[last].wr_id, ntohl(wrs[last].imm_data));
 
   ibv_send_wr* bad = nullptr;
   int ret = ibv_post_send(S.qp, &wrs[0], &bad);
@@ -552,13 +561,12 @@ void local_process_completions(ProxyCtx& S,
   // printf("Local thread %d processing %d completions\n", thread_idx, ne);
   for (int i = 0; i < ne; ++i) {
     if (wc[i].status != IBV_WC_SUCCESS) {
-      fprintf(
-          stderr,
-          "here!： CQE ERROR wr_id=%llu status=%d(%s) opcode=%d byte_len=%u "
-          "vendor_err=0x%x qp_num=0x%x\n",
-          (unsigned long long)wc[i].wr_id, wc[i].status,
-          ibv_wc_status_str(wc[i].status), wc[i].opcode, wc[i].byte_len,
-          wc[i].vendor_err, wc[i].qp_num);
+      fprintf(stderr,
+              "CQE ERROR wr_id=%llu status=%d(%s) opcode=%d byte_len=%u "
+              "vendor_err=0x%x qp_num=0x%x\n",
+              (unsigned long long)wc[i].wr_id, wc[i].status,
+              ibv_wc_status_str(wc[i].status), wc[i].opcode, wc[i].byte_len,
+              wc[i].vendor_err, wc[i].qp_num);
       std::abort();
     }
 
@@ -575,17 +583,29 @@ void local_process_completions(ProxyCtx& S,
         if (wc[i].wc_flags & IBV_WC_WITH_IMM) {
           uint64_t slot = static_cast<uint64_t>(wc[i].wr_id);
           uint64_t wr_done = static_cast<uint64_t>(wc[i].imm_data);
-          if (!S.has_received_ack || wr_done >= S.largest_completed_wr) {
-            S.largest_completed_wr = wr_done;
-            S.has_received_ack = true;
-            // printf("Local thread %d received ACK for WR %lu\n", thread_idx,
-            //        wr_done);
+
+          // Check if this is an atomic operation ACK (special WR ID format)
+          bool is_atomic_wr =
+              (wr_done & 0xFFFF000000000000ULL) == 0xa70a000000000000ULL;
+
+          if (is_atomic_wr) {
+            // Handle atomic operation ACK separately - no need to track in
+            // sequence printf("Local thread %d received atomic ACK for WR
+            // %lu\n", thread_idx, wr_done);
           } else {
-            fprintf(stderr,
-                    "Warning: received ACK for WR %lu, but largest completed "
-                    "WR is %lu\n",
-                    wr_done, S.largest_completed_wr);
-            std::abort();
+            // Handle regular operation ACK with sequential tracking
+            if (!S.has_received_ack || wr_done >= S.largest_completed_wr) {
+              S.largest_completed_wr = wr_done;
+              S.has_received_ack = true;
+              // printf("Local thread %d received ACK for WR %lu\n", thread_idx,
+              //        wr_done);
+            } else {
+              fprintf(stderr,
+                      "Warning: received ACK for WR %lu, but largest completed "
+                      "WR is %lu\n",
+                      wr_done, S.largest_completed_wr);
+              std::abort();
+            }
           }
           ibv_sge sge = {
               .addr = reinterpret_cast<uintptr_t>(&S.ack_recv_buf[slot]),
@@ -668,6 +688,12 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
   }
   std::vector<CopyTask> task_vec;
   task_vec.reserve(num_wr_imm);
+  int nDevices;
+  cudaError_t err = cudaGetDeviceCount(&nDevices);
+  if (err != cudaSuccess) {
+    printf("CUDA error: %s\n", cudaGetErrorString(err));
+    std::abort();
+  }
   for (int i = 0; i < ne; ++i) {
     int src_addr_offset = 0;
     // int destination_gpu;
@@ -675,7 +701,9 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
     if (wc[i].opcode != IBV_WC_RECV_RDMA_WITH_IMM) {
       continue;
     }
-    int destination_gpu = wc[i].imm_data % NUM_GPUS;
+
+    int destination_gpu = wc[i].imm_data % nDevices;
+
     if (S.per_gpu_device_buf[destination_gpu] == nullptr) {
       fprintf(stderr, "per_gpu_device_buf[%d] is null\n", destination_gpu);
       std::abort();

@@ -7,11 +7,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <thread>
 #include <stdio.h>
 #include <unistd.h>
 
-// #define REMOTE_PERSISTENT_KERNEL
 #define USE_GRACE_HOPPER
 #define MEASURE_PER_OP_LATENCY
 #define ASSUME_WR_IN_ORDER
@@ -24,12 +24,6 @@
 #define kIterations 40000
 #define kNumThBlocks 6
 #define kNumThPerBlock 1
-#ifdef SYNCHRONOUS_COMPLETION
-#define kRemoteNVLinkBatchSize \
-  16  // Immediately synchronize stream for latency.
-#else
-#define kRemoteNVLinkBatchSize 512
-#endif
 #define kObjectSize 10752  // 10.5 KB
 #define kMaxOutstandingSends 2048
 #define kMaxOutstandingRecvs 2048
@@ -40,15 +34,15 @@
 #define kWarmupOps 10000
 #define kRemoteBufferSize kBatchSize* kNumThBlocks* kObjectSize * 100
 #define MAIN_THREAD_CPU_IDX 31
-#define NUM_GPUS 1
+#define MAX_NUM_GPUS 8
 #define RECEIVER_BATCH_SIZE 16
-#ifdef SYNCHRONOUS_COMPLETION
-#define NVLINK_SM_PER_PROCESS \
-  1  // Total number of SMs used is NVLINK_SM_PER_PROCESS * kNumThBlocks
-#else
-#define NVLINK_SM_PER_PROCESS 2
-#endif
+#define NVLINK_SM_PER_PROCESS 1
+
+// P2P enable flags (once per GPU pair)
+extern std::once_flag peer_ok_flag[MAX_NUM_GPUS][MAX_NUM_GPUS];
 bool pin_thread_to_cpu(int cpu);
 void cpu_relax();
+
+void maybe_enable_peer_access(int src_dev, int dst_dev);
 
 #endif  // COMMON_HPP

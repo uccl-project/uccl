@@ -104,6 +104,12 @@ struct alignas(128) RingBuffer {
     return __atomic_load_n(&buf[idx & mask()].cmd, __ATOMIC_ACQUIRE);
   }
 
+  inline T& load_cmd_entry(int idx) { return buf[idx & mask()]; }
+
+  inline void volatile_store_cmd(int idx, uint64_t val) {
+    __atomic_store_n(&buf[idx & mask()].cmd, val, __ATOMIC_RELEASE);
+  }
+
   __host__ __device__ static constexpr uint32_t mask() { return Capacity - 1; }
 
   __host__ __device__ __forceinline__ bool full() const {

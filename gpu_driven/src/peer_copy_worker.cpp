@@ -68,13 +68,13 @@ void peer_copy_worker(PeerCopyShared& shared, PeerWorkerCtx& ctx,
       }
       copy_batch_size = 1;
       ctx.tasks[0] = t;
+
     } else {
       int n = ring.popN(ctx.tasks, RECEIVER_BATCH_SIZE);
       if (n == 0) {
         sync_and_post(ctx, ring, stream, idx);
         continue;
       }
-      // printf("Worker %d popped %d tasks\n", idx, n);
       t = ctx.tasks[0];
       copy_batch_size = n;
     }
@@ -91,7 +91,6 @@ void peer_copy_worker(PeerCopyShared& shared, PeerWorkerCtx& ctx,
 
     ctx.highest_issued_wr_id =
         std::max(ctx.highest_issued_wr_id, ctx.task_wrs[copy_batch_size - 1]);
-
     auto st = std::chrono::high_resolution_clock::now();
     gpuError_t err;
     std::string func_name;

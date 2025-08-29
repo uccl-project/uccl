@@ -324,6 +324,7 @@ void RDMAEndpoint::cleanup_resources() {
     }
     flows.clear();
   }
+
   active_flows_vec_.clear();
   active_flows_spin_.clear();
 
@@ -687,14 +688,18 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
 RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
     : num_engines_per_dev_(num_engines_per_dev),
       stats_thread_([this]() { stats_thread_fn(); }) {
+#ifndef DISABLE_CALL_ONCE_STATIC
   static std::once_flag flag_once;
   std::call_once(flag_once, [&]() {
+#endif
     num_devices_ = RDMAFactory::init_devs();
     if (num_devices_ <= 0) {
       printf("Failed to initialize RDMA devices.\n");
       exit(EXIT_FAILURE);
     }
+#ifndef DISABLE_CALL_ONCE_STATIC
   });
+#endif
 
   rdma_ctl_ = rdma_ctl;
 
@@ -757,10 +762,12 @@ int try_bind_listen_socket(int* sock_fd, int base_port,
 
 bool RDMAEndpoint::initialize_engine_by_dev(int dev,
                                             bool enable_p2p_listen = false) {
-  static std::vector<std::once_flag> flags_per_dev_(MAX_IB_DEVS);
   bool called = false;
+#ifndef DISABLE_CALL_ONCE_STATIC
+  static std::vector<std::once_flag> flags_per_dev_(MAX_IB_DEVS);
   std::call_once(flags_per_dev_[dev], [this, dev, enable_p2p_listen,
                                        &called]() {
+#endif
     called = true;
     int start_engine_idx = dev * num_engines_per_dev_;
     int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
@@ -809,8 +816,9 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev,
           << "Failed to bind after trying many ports!";
       printf("P2P listening on port %d\n", p2p_listen_ports_[dev]);
     }
+#ifndef DISABLE_CALL_ONCE_STATIC
   });
-
+#endif
   return called;
 }
 
@@ -1140,8 +1148,11 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
     uccl_wait(poll_ctx);
   }
 
-  return ConnID{
-      .context = flow, .flow_id = flow_id, .peer_id = peer_id, .dev = dev};
+  return ConnID{.context = flow,
+                .sock_fd = bootstrap_fd,
+                .flow_id = flow_id,
+                .peer_id = peer_id,
+                .dev = dev};
 }
 
 ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
@@ -1274,8 +1285,11 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
     uccl_wait(poll_ctx);
   }
 
-  return ConnID{
-      .context = flow, .flow_id = flow_id, .peer_id = peer_id, .dev = dev};
+  return ConnID{.context = flow,
+                .sock_fd = bootstrap_fd,
+                .flow_id = flow_id,
+                .peer_id = peer_id,
+                .dev = dev};
 }
 
 bool UcclFlow::check_fifo_ready(int* ret_slot, int* ret_nmsgs) {
