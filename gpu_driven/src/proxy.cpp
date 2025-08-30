@@ -220,6 +220,9 @@ void Proxy::run_dual() {
     auto& ctx_ptr = ctxs_for_all_ranks_[peer];
     if (!ctx_ptr) continue;
     local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
+    remote_reg_ack_buf(ctx_ptr->pd, ring.ack_buf, ring.ack_mr);
+    ring.ack_qp = ctx_ptr->ack_qp;
+    post_receive_buffer_for_imm(*ctx_ptr);
   }
   uint64_t my_tail = 0;
   size_t seen = 0;
@@ -304,7 +307,7 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
       cpu_relax();
 
       auto now = std::chrono::steady_clock::now();
-      if (now - last_print > std::chrono::seconds(10)) {
+      if (now - last_print > std::chrono::seconds(1)) {
         printf(
             "Still waiting at block %d, seen=%ld, spin_count=%zu, my_tail=%lu, "
             "cmd: %lu\n",
@@ -457,6 +460,7 @@ void Proxy::post_gpu_commands_mixed(
 
   // Handle atomic operations
   if (!atomic_wrs.empty()) {
+    printf("Posting atomic operations\n");
     post_atomic_operations(atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
                            cfg_.rank);
   }
@@ -478,6 +482,7 @@ void Proxy::post_atomic_operations(std::vector<uint64_t> const& wrs_to_post,
   for (size_t i = 0; i < wrs_to_post.size(); ++i) {
     if (cmds_to_post[i].dst_rank == static_cast<uint32_t>(my_rank)) {
       // NOTE(MaoZiming): this should not happen.
+      std::abort();
       continue;
     } else {
       dst_rank_wr_ids[cmds_to_post[i].dst_rank].push_back(i);

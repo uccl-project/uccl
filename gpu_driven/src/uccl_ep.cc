@@ -207,7 +207,9 @@ class Buffer {
     EP_HOST_ASSERT(not destroyed);
 
     // Synchronize
+    printf("Before cudaDeviceSynchronize\n");
     CUDA_CHECK(cudaDeviceSynchronize());
+    printf("After cudaDeviceSynchronize\n");
 
     if (num_nvl_bytes > 0) {
       // Barrier
@@ -259,6 +261,8 @@ class Buffer {
       int num_max_dispatch_tokens_per_rank, int num_experts, bool use_fp8,
       bool round_scale, bool use_ue8m0, bool async, bool return_recv_hook) {
     EP_HOST_ASSERT(low_latency_mode);
+
+    printf("low_latency_dispatch called\n");
 
     // Tensor checks
     // By default using `ptp128c` FP8 cast

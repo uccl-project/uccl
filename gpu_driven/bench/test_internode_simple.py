@@ -136,6 +136,7 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
         cumulative_local_expert_recv_stats = torch.zeros(
             (num_experts // num_ranks,), dtype=torch.int, device="cuda"
         )
+        print("Python low_latency_dispatch")
         recv_x, recv_count, handle, event, hook = buffer.low_latency_dispatch(
             x=x,
             topk_idx=topk_idx,
@@ -176,9 +177,9 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
             )
             print("[simple-test] ✓ All tests passed!", flush=True)
 
-        time.sleep(10)
+        time.sleep(20)
 
-        print("[simple-test] ✓ before destory!", flush=True)
+        print("[simple-test] ✓ before destroy!", flush=True)
 
         try:
             buffer.destroy()

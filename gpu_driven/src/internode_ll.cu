@@ -262,7 +262,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     // CPU proxy will translate this to the correct
     // dispatch_rdma_recv_count_buffer address
 
-    // FIX: Ensure 8-byte alignment for 64-bit atomic operations
+    // TODO: Ensure 8-byte alignment for 64-bit atomic operations
     // Calculate index, multiply by 8 instead of 4, then add to base
     auto count_index = dst_expert_local_idx * num_ranks + rank;
     auto aligned_count_addr = reinterpret_cast<uint64_t>(rdma_recv_count) +
@@ -300,7 +300,11 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 
 // Receiving phase
 LOW_LATENCY_DISPATCH_RECV:
-  if ((phases & LOW_LATENCY_RECV_PHASE) == 0) return;
+  if ((phases & LOW_LATENCY_RECV_PHASE) == 0) {
+    if (blockIdx.x == 0 && threadIdx.x == 0)
+      printf("[dispatch] SEND finished\n");
+    return;
+  }
 
   // For send-and-recv kernels, we need a grid sync for making
   // `packed_recv_count` visible
@@ -348,14 +352,9 @@ LOW_LATENCY_DISPATCH_RECV:
                                 count_index * sizeof(uint64_t);
       int* count_addr = reinterpret_cast<int*>(aligned_count_addr);
 
+      printf("Before waiting for tokens\n");
       while ((num_recv_tokens = ld_acquire_sys_global(count_addr)) == 0)
         ;
-
-      printf(
-          "[RECV_COUNT_SUCCESS] Received non-zero count: %d at addr=%p "
-          "[ATOMIC_WORKED!]\n",
-          num_recv_tokens, count_addr);
-
       auto wait_recv_cost = clock64() - start_time;
       num_recv_tokens = -num_recv_tokens - 1;
 
@@ -433,6 +432,8 @@ LOW_LATENCY_DISPATCH_RECV:
         }
       }
     }
+    if (blockIdx.x == 0 && threadIdx.x == 0)
+      printf("[dispatch] RECV finished\n");
   }
 }
 
@@ -468,6 +469,7 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
   if (use_ue8m0)
     EP_HOST_ASSERT(round_scale and "UE8M0 SF requires `round_scale=True`");
 
+  printf("Launch dispatch kernel\n");
 #define DISPATCH_LAUNCH_CASE(hidden)                                          \
   {                                                                           \
     auto dispatch_func = dispatch<false, false, hidden>;                      \
@@ -536,6 +538,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
                    "Invalid vectorization");
 
   // Sending phase
+  printf("Combine started\n");
   if ((phases & LOW_LATENCY_SEND_PHASE) == 0) goto LOW_LATENCY_COMBINE_RECV;
 
   // Clean up next buffer
@@ -773,6 +776,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
       // NOTES: for zero-copy mode, we assume the data is already in the send
       // buffer
       if (dst_p2p_ptr == nullptr) {
+        printf("Before nvshmemi_ibgda_put_nbi_warp\n");
         nvshmemi_ibgda_put_nbi_warp(
             dst_offset, buf_ptr, hidden * sizeof(nv_bfloat16), dst_rank,
             sm_id,  // NOTE(MaoZiming): use sm_id for rb
@@ -782,11 +786,15 @@ __global__ __launch_bounds__(1024, 1) void combine(
 
     // Put the finishing flag
     EP_DEVICE_ASSERT(num_warps_per_group > 1 and num_warp_groups < 16);
+    printf("Before bar.sync\n");
     asm volatile("bar.sync %0, %1;" ::"r"(warp_group_id + 1),
                  "r"(num_warps_per_group * 32));
     if (sub_warp_id == 1 and lane_id == 0) {
+      printf("Before ld_acquire_global(atomic_clean_flag) \n");
       while (ld_acquire_global(atomic_clean_flag) == 0)
         ;
+
+      printf("After ld_acquire_global(atomic_clean_flag) \n");
       // Calculate offset from data buffer to flag buffer (similar to dispatch
       // phase) rdma_recv_flag corresponds to combine_rdma_recv_flag_buffer We
       // need to calculate the offset from rdma_recv_x (data buffer) to the flag
@@ -827,16 +835,25 @@ __global__ __launch_bounds__(1024, 1) void combine(
 
 // Receiving phase
 LOW_LATENCY_COMBINE_RECV:
-  if ((phases & LOW_LATENCY_RECV_PHASE) == 0) return;
-
+  if ((phases & LOW_LATENCY_RECV_PHASE) == 0) {
+    if (blockIdx.x == 0 && threadIdx.x == 0)
+      printf("[combine] SEND finished\n");
+    return;
+  }
   // Wait all ranks to arrive
   if (responsible_expert_idx < num_experts) {
     EP_DEVICE_ASSERT(num_warps_per_group > 1);
     if (sub_warp_id == 0 and lane_id == 0) {
       auto start_time = clock64();
+      printf(
+          "Before ld_acquire_sys_global(rdma_recv_flag + "
+          "responsible_expert_idx) \n");
       while (ld_acquire_sys_global(rdma_recv_flag + responsible_expert_idx) ==
              0)
         ;
+      printf(
+          "After ld_acquire_sys_global(rdma_recv_flag + "
+          "responsible_expert_idx) \n");
       auto wait_recv_cost = clock64() - start_time;
       if (combine_wait_recv_cost_stats != nullptr) {
         auto const& src_rank = responsible_expert_idx / num_local_experts;
@@ -848,6 +865,8 @@ LOW_LATENCY_COMBINE_RECV:
   }
 
   cg::this_grid().sync();
+  if (blockIdx.x == 0 && threadIdx.x == 0)
+    printf("After cg::this_grid().sync()\n");
 
   // Reduce tokens
   EP_DEVICE_ASSERT(num_topk <= 32);
@@ -929,11 +948,62 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
 
   constexpr int kNumTMABytesPerWarp = 12 * (512 + 16);
   int const smem_size = kNumTMABytesPerWarp * num_warps;
+  int const block_threads = num_warps * 32;
+  const size_t dyn_smem = (size_t)kNumTMABytesPerWarp * (size_t)num_warps;
 
 #define COMBINE_LAUNCH_CASE(hidden)                                            \
   {                                                                            \
     auto combine_func = use_logfmt ? combine<true, hidden, kNumMaxTopk>        \
                                    : combine<false, hidden, kNumMaxTopk>;      \
+                                                                               \
+    int dev = 0;                                                               \
+    cudaGetDevice(&dev);                                                       \
+    cudaDeviceProp prop{};                                                     \
+    cudaGetDeviceProperties(&prop, dev);                                       \
+                                                                               \
+    cudaFuncSetAttribute(                                                      \
+        combine_func, cudaFuncAttributeMaxDynamicSharedMemorySize, dyn_smem);  \
+                                                                               \
+    cudaFuncAttributes attr{};                                                 \
+    cudaFuncGetAttributes(&attr, combine_func);                                \
+    size_t maxDynAllowed =                                                     \
+        (size_t)prop.sharedMemPerBlockOptin > attr.sharedSizeBytes             \
+            ? (size_t)prop.sharedMemPerBlockOptin - attr.sharedSizeBytes       \
+            : 0;                                                               \
+                                                                               \
+    printf(                                                                    \
+        "[combine] grid=%d block=%d dyn_smem=%zuB; SMs=%d coop=%d "            \
+        "sharedOptIn=%zuB staticSmem=%zuB maxDynAllowed=%zuB\n",               \
+        num_sms, block_threads, (size_t)dyn_smem, prop.multiProcessorCount,    \
+        (int)prop.cooperativeLaunch, (size_t)prop.sharedMemPerBlockOptin,      \
+        (size_t)attr.sharedSizeBytes, (size_t)maxDynAllowed);                  \
+                                                                               \
+    if (dyn_smem > maxDynAllowed) {                                            \
+      printf(                                                                  \
+          "[combine] ERROR: dyn_smem exceeds opt-in limit. Reduce kNumUnrolls" \
+          " or kNumStages, or lower TMA buffer size.\n");                      \
+      return;                                                                  \
+    }                                                                          \
+                                                                               \
+    int maxBlocksPerSM = 0;                                                    \
+    cudaError_t occ = cudaOccupancyMaxActiveBlocksPerMultiprocessor(           \
+        &maxBlocksPerSM, combine_func, block_threads, dyn_smem);               \
+    printf("[combine] maxBlocksPerSM=%d -> maxCoopGrid=%d (rc=%d)\n",          \
+           maxBlocksPerSM, maxBlocksPerSM* prop.multiProcessorCount,           \
+           (int)occ);                                                          \
+                                                                               \
+    if (maxBlocksPerSM == 0) {                                                 \
+      printf(                                                                  \
+          "[combine] ERROR: occupancy=0 even after opt-in. Likely still "      \
+          "over limits (regs/smem) for block= %d, dyn_smem=%zuB.\n",           \
+          block_threads, (size_t)dyn_smem);                                    \
+      return;                                                                  \
+    }                                                                          \
+    if (num_sms > maxBlocksPerSM * prop.multiProcessorCount) {                 \
+      printf("[combine] ERROR: gridDim too large for cooperative launch!\n");  \
+      return;                                                                  \
+    }                                                                          \
+                                                                               \
     SET_SHARED_MEMORY_FOR_TMA(combine_func);                                   \
     LAUNCH_KERNEL(&cfg, combine_func, combined_x, rdma_recv_x, rdma_recv_flag, \
                   rdma_send_x, x, topk_idx, topk_weights, src_info,            \

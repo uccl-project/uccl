@@ -522,6 +522,7 @@ void local_process_completions(
     std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx) {
   if (ne == 0) return;
   int send_completed = 0;
+  // printf("Local thread %d received %d completions\n", thread_idx, ne);
 
   for (int i = 0; i < ne; ++i) {
     if (wc[i].status != IBV_WC_SUCCESS) {
@@ -561,8 +562,6 @@ void local_process_completions(
             if (!S.has_received_ack || wr_done >= S.largest_completed_wr) {
               S.largest_completed_wr = wr_done;
               S.has_received_ack = true;
-              // printf("Local thread %d received ACK for WR %lu\n", thread_idx,
-              //        wr_done);
             } else {
               fprintf(stderr,
                       "Warning: received ACK for WR %lu, but largest completed "
@@ -613,7 +612,7 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
                   std::mutex& finished_wrs_mutex, int thread_idx,
                   CopyRingBuffer& g_ring,
                   std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx) {
-  struct ibv_wc wc[kMaxOutstandingSends];  // batch poll
+  struct ibv_wc wc[kMaxOutstandingSends];
   int ne = ibv_poll_cq(S.cq, kMaxOutstandingSends, wc);
   local_process_completions(S, finished_wrs, finished_wrs_mutex, thread_idx, wc,
                             ne, qpn2ctx);

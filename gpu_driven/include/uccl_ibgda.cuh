@@ -67,6 +67,15 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       rb->atomic_set_and_commit(cmd, &slot);
       break;
     }
+    if ((clock64() - last_print) > 1000000000ULL) {
+      if (threadIdx.x == 0 && blockIdx.x == 0) {
+        printf(
+            "[dispatch] stuck waiting, inflight=%ld (cur_head=%lu "
+            "cur_tail=%lu)\n",
+            (long)inflight, (unsigned long)cur_head, (unsigned long)cur_tail);
+      }
+      last_print = clock64();
+    }
   }
 }
 
@@ -87,7 +96,7 @@ struct nvshmemi_ibgda_device_state_t {
 // TODO(MaoZiming): Fix. This should be a non-fetch add operation. This could be
 // implemented with CPU proxy.
 __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
-    void* rptr, int const& value, int pe, int qp_id, int sm_id,
+    void* rptr, int const& value, int dst_rank, int qp_id, int sm_id,
     bool is_local_copy = false, uint64_t const* ring_addrs = nullptr,
     int num_ring_addrs = 0) {
   (void)rptr;
@@ -118,13 +127,14 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
         cmd.cmd = 1;  // to avoid 0 as a valid command.
         cmd.sm_id = sm_id;
         cmd.value = value;
+        cmd.dst_rank = dst_rank;
         cmd.is_atomic = true;
         cmd.req_rptr = reinterpret_cast<uint64_t>(rptr);
         rb->atomic_set_and_commit(cmd, &slot);
         break;
       } else {
         auto now = clock64();
-        if (now - last_print > 10 * 1e9) {
+        if (now - last_print > 1000000000ULL) {
           uint64_t tail_cmd = rb->buf[cur_tail & rb->mask()].cmd;
           printf(
               "[nvshmemi_ibgda_amo_nonfetch_add] %p waiting sm_id: %d, "
