@@ -33,6 +33,7 @@ EnvInfo Bench::env_info() const {
 }
 
 int Bench::blocks() const { return env_.blocks; }
+int Bench::num_proxies() const { return env_.blocks; }
 bool Bench::is_running() const {
   return running_.load(std::memory_order_acquire);
 }

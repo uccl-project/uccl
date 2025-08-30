@@ -25,7 +25,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     int num_max_dispatch_tokens_per_rank, int num_topk, int num_experts,
     int rank, int num_ranks, int num_warp_groups, int num_warps_per_group,
     bool round_scale, int phases, uint64_t const* ring_addrs,
-    int num_ring_addrs) {
+    int num_ring_addrs, int max_nvl_peers, void** ipc_base_ptrs = nullptr) {
   auto const sm_id = static_cast<int>(blockIdx.x);
   auto const thread_id = static_cast<int>(threadIdx.x);
   auto const warp_id = thread_id / 32, lane_id = get_lane_id();
@@ -45,18 +45,17 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   // FP8 staffs
   constexpr int kNumPerChannels = 128;
   int const num_scales = kHidden / kNumPerChannels;
-  const size_t hidden_bytes =
+  size_t const hidden_bytes =
       kHidden * (kUseFP8 ? sizeof(__nv_fp8_storage_t) : sizeof(nv_bfloat16));
-  const size_t hidden_int4 = hidden_bytes / sizeof(int4);
+  size_t const hidden_int4 = hidden_bytes / sizeof(int4);
 
   // Message package: hidden data, FP8 scales, index at source
   // NOTES: currently we have 3 reserved int fields for future use
   using vec_t = typename std::conditional<kUseFP8, int2, int4>::type;
-  const size_t num_bytes_per_msg =
+  size_t const num_bytes_per_msg =
       sizeof(int4) + (kUseFP8 ? (kHidden + num_scales * sizeof(float))
                               : (kHidden * sizeof(nv_bfloat16)));
-  // const size_t num_int4_per_msg = num_bytes_per_msg / sizeof(int4);  //
-  // NOTE(MaoZiming): not used
+  size_t const num_int4_per_msg = num_bytes_per_msg / sizeof(int4);
   EP_DEVICE_ASSERT(num_bytes_per_msg % sizeof(int4) == 0);
 
   // Expert counts
@@ -76,7 +75,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     EP_STATIC_ASSERT(kNumElemsPerRead * 32 % kNumPerChannels == 0,
                      "Invalid vectorization");
     auto const num_threads = (num_warps - 1) * 32;
-    const size_t hidden_bf16_int4 = kHidden / kNumElemsPerRead;
+    size_t const hidden_bf16_int4 = kHidden / kNumElemsPerRead;
 
     for (int token_idx = sm_id; token_idx < num_tokens; token_idx += num_sms) {
       auto const x_int4 =
@@ -157,30 +156,30 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                 num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
             rank * num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
             slot_idx * num_bytes_per_msg;
-#ifdef false
+
+        // Try to use IPC for intra-node communication
+
         auto const dst_p2p_ptr =
-            uccl::nvshmemi_get_p2p_ptr(dst_ptr, rank, dst_rank);
-        if (dst_p2p_ptr == 0) {
-          uccl::nvshmemi_ibgda_put_nbi_warp(dst_ptr, src_ptr, num_bytes_per_msg,
-                                            dst_rank, dst_expert_local_idx,
-                                            lane_id, slot_idx);
-        } else {
-          // NOTES: only 2 load iterations for 7K hidden with 8 unrolls
+            ipc_base_ptrs
+                ? uccl::get_ipc_p2p_ptr(
+                      reinterpret_cast<void*>(
+                          reinterpret_cast<char*>(rdma_recv_x) + dst_offset),
+                      ipc_base_ptrs, rank, dst_rank, max_nvl_peers, 0)
+                : nullptr;
+
+        if (dst_p2p_ptr != nullptr) {
+          // Intra-node: use direct memory copy via IPC
           auto const* src_int4_ptr = reinterpret_cast<int4 const*>(src_ptr);
-          auto const* dst_int4_ptr = reinterpret_cast<int4*>(dst_p2p_ptr);
+          auto* dst_int4_ptr = reinterpret_cast<int4*>(dst_p2p_ptr);
           UNROLLED_WARP_COPY(8, lane_id, num_int4_per_msg, dst_int4_ptr,
                              src_int4_ptr, ld_nc_global, st_na_global);
+        } else {
+          // Inter-node or no IPC: use IBGDA
+          uccl::nvshmemi_ibgda_put_nbi_warp(
+              dst_offset, src_ptr, num_bytes_per_msg, dst_rank,
+              sm_id,  // NOTE(MaoZiming): use sm_id for rb.
+              lane_id, slot_idx, ring_addrs, num_ring_addrs);
         }
-#else
-        // NOTE(MaoZiming): Without nvshmem, we can only use network send. Also,
-        // the above path only applies to intra-node.
-        // TODO(yihan): Mark here for future debugging check, just pass offset
-        // here for ibgda send.
-        uccl::nvshmemi_ibgda_put_nbi_warp(
-            dst_offset, src_ptr, num_bytes_per_msg, dst_rank,
-            sm_id,  // NOTE(MaoZiming): use sm_id for rb.
-            lane_id, slot_idx, ring_addrs, num_ring_addrs);
-#endif
         // Increase counter after finishing
         __syncwarp();
         lane_id == 0 ? atomic_add_release_global(
@@ -270,22 +269,26 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                               count_index * sizeof(uint64_t);
     auto dst_offset =
         aligned_count_addr - reinterpret_cast<uint64_t>(rdma_recv_x);
-#ifdef false
-    auto dst_p2p_ptr = nvshmemi_get_p2p_ptr(dst_ptr, rank, dst_rank);
-    if (dst_p2p_ptr == 0) {
-      uccl::nvshmemi_ibgda_amo_nonfetch_add(reinterpret_cast<int*>(dst_ptr),
-                                            -num_tokens_sent - 1, dst_rank,
-                                            dst_expert_local_idx);
-    } else {
+
+    // Try to use IPC for intra-node atomic operations
+    auto const dst_p2p_ptr =
+        ipc_base_ptrs ? uccl::get_ipc_p2p_ptr(
+                            reinterpret_cast<void*>(
+                                rdma_recv_count +
+                                dst_expert_local_idx * num_ranks + rank),
+                            ipc_base_ptrs, rank, dst_rank, max_nvl_peers, 0)
+                      : nullptr;
+
+    if (dst_p2p_ptr != nullptr) {
+      // Intra-node: use direct atomic operation
       st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr),
                             -num_tokens_sent - 1);
+    } else {
+      // Inter-node or no IPC: use IBGDA atomic
+      uccl::nvshmemi_ibgda_amo_nonfetch_add(
+          reinterpret_cast<int*>(dst_offset), -num_tokens_sent - 1, dst_rank,
+          sm_id, dst_expert_local_idx, false, ring_addrs, num_ring_addrs);
     }
-#else
-    // Pass offset to CPU proxy for atomic operation
-    uccl::nvshmemi_ibgda_amo_nonfetch_add(
-        reinterpret_cast<int*>(dst_offset), -num_tokens_sent - 1, dst_rank,
-        sm_id, dst_expert_local_idx, false, ring_addrs, num_ring_addrs);
-#endif
     // Clean workspace for next use
     atomic_counter_per_expert[responsible_expert_idx] = 0;
     atomic_finish_counter_per_expert[responsible_expert_idx] = 0;
@@ -443,7 +446,8 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
               int num_topk, int num_experts, int rank, int num_ranks,
               bool use_fp8, bool round_scale, bool use_ue8m0, void* workspace,
               int num_device_sms, cudaStream_t stream, int phases,
-              uint64_t const* ring_addrs, int num_ring_addrs) {
+              uint64_t const* ring_addrs, int num_ring_addrs, int max_nvl_peers,
+              void** ipc_base_ptrs) {
   constexpr int kNumMaxTopK = 9;
   int const num_warp_groups = ceil_div(num_experts, num_device_sms);
   int const num_warps_per_group = 32 / num_warp_groups;
@@ -464,23 +468,23 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
   if (use_ue8m0)
     EP_HOST_ASSERT(round_scale and "UE8M0 SF requires `round_scale=True`");
 
-#define DISPATCH_LAUNCH_CASE(hidden)                                           \
-  {                                                                            \
-    auto dispatch_func = dispatch<false, false, hidden>;                       \
-    if (use_fp8 and not use_ue8m0)                                             \
-      dispatch_func = dispatch<true, false, hidden>;                           \
-    if (use_fp8 and use_ue8m0) dispatch_func = dispatch<true, true, hidden>;   \
-    LAUNCH_KERNEL(&cfg, dispatch_func, packed_recv_x, packed_recv_x_scales,    \
-                  packed_recv_src_info, packed_recv_layout_range,              \
-                  packed_recv_count, cumulative_local_expert_recv_stats,       \
-                  dispatch_wait_recv_cost_stats, rdma_recv_x, rdma_recv_count, \
-                  rdma_x, x, topk_idx, atomic_counter_per_expert,              \
-                  atomic_finish_counter_per_expert, next_clean,                \
-                  num_next_clean_int, num_tokens,                              \
-                  num_max_dispatch_tokens_per_rank, num_topk, num_experts,     \
-                  rank, num_ranks, num_warp_groups, num_warps_per_group,       \
-                  round_scale, phases, ring_addrs, num_ring_addrs);            \
-  }                                                                            \
+#define DISPATCH_LAUNCH_CASE(hidden)                                          \
+  {                                                                           \
+    auto dispatch_func = dispatch<false, false, hidden>;                      \
+    if (use_fp8 and not use_ue8m0)                                            \
+      dispatch_func = dispatch<true, false, hidden>;                          \
+    if (use_fp8 and use_ue8m0) dispatch_func = dispatch<true, true, hidden>;  \
+    LAUNCH_KERNEL(                                                            \
+        &cfg, dispatch_func, packed_recv_x, packed_recv_x_scales,             \
+        packed_recv_src_info, packed_recv_layout_range, packed_recv_count,    \
+        cumulative_local_expert_recv_stats, dispatch_wait_recv_cost_stats,    \
+        rdma_recv_x, rdma_recv_count, rdma_x, x, topk_idx,                    \
+        atomic_counter_per_expert, atomic_finish_counter_per_expert,          \
+        next_clean, num_next_clean_int, num_tokens,                           \
+        num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,        \
+        num_ranks, num_warp_groups, num_warps_per_group, round_scale, phases, \
+        ring_addrs, num_ring_addrs, max_nvl_peers, ipc_base_ptrs);            \
+  }                                                                           \
   break
 
   SETUP_LAUNCH_CONFIG(num_sms, num_warps * 32, stream);
@@ -504,7 +508,8 @@ __global__ __launch_bounds__(1024, 1) void combine(
     int hidden, int num_topk, int num_max_dispatch_tokens_per_rank,
     int num_experts, int rank, int num_ranks, int num_warp_groups,
     int num_warps_per_group, int phases, bool zero_copy,
-    uint64_t const* ring_addrs, int num_ring_addrs) {
+    uint64_t const* ring_addrs, int num_ring_addrs, int max_nvl_peers,
+    void** ipc_base_ptrs = nullptr) {
   auto const sm_id = static_cast<int>(blockIdx.x);
   auto const num_sms = static_cast<int>(gridDim.x);
   auto const thread_id = static_cast<int>(threadIdx.x);
@@ -575,7 +580,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
     extern __shared__ __align__(1024) uint8_t smem_buffer[];
     auto smem_ptr =
         smem_buffer + warp_id * kNumStages * (kNumTMABufferBytes + 16);
-    // uint32_t tma_phase[kNumStages] = {};  // NOTE(MaoZiming): not used
+    uint32_t tma_phase[kNumStages] = {};
     auto tma_buffer = PatternVisitor([=](int const& i) {
       return reinterpret_cast<int4*>(smem_ptr + i * (kNumTMABufferBytes + 16));
     });
@@ -594,8 +599,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
     }
     __syncwarp();
 
-    // constexpr int kNumIters = hidden_bf16_int4_pad / (32 * kNumUnrolls);  //
-    // NOTE(MaoZiming): not used
+    constexpr int kNumIters = hidden_bf16_int4_pad / (32 * kNumUnrolls);
     auto tma_load_and_arrive = [&](int const& stage_idx, int4 const* gmem_ptr,
                                    int const& num_bytes) {
       tma_load_1d(tma_buffer[stage_idx], gmem_ptr, tma_mbarrier[stage_idx],
@@ -612,8 +616,6 @@ __global__ __launch_bounds__(1024, 1) void combine(
     for (int token_idx = offset + sub_warp_id;
          token_idx < offset + num_tokens_to_send;
          token_idx += num_warps_per_group) {
-      // auto const x_int4 = local_x + token_idx * hidden_bf16_int4; //
-      // NOTE(MaoZiming): not used
       auto const rdma_send_type_row = reinterpret_cast<int*>(
           rdma_send_x_vec + token_idx * num_bytes_per_slot);
       auto const rdma_send_x_vec_row =
@@ -622,6 +624,8 @@ __global__ __launch_bounds__(1024, 1) void combine(
       // Copy directly to local rank, or copy to buffer and issue RDMA
       auto const src_idx =
           __shfl_sync(0xffffffff, __ldg(local_src_info + token_idx), 0);
+      auto const x_int4 =
+          static_cast<int4 const*>(x) + src_idx * hidden_bf16_int4;
       auto const buf_ptr = reinterpret_cast<int64_t>(rdma_send_x_vec_row);
 
       // TODO(yihan): Mark here for future debugging check.
@@ -637,18 +641,22 @@ __global__ __launch_bounds__(1024, 1) void combine(
           (global_expert_idx * num_max_dispatch_tokens_per_rank + src_idx) *
           num_bytes_per_slot;
 
-      // NOTE(MaoZiming): we don't have nvshmem-style intra-node p2p mapping.
-      // TODO(MaoZiming): understand the optimizations here.
-#ifdef false
-      auto const dst_p2p_ptr = nvshmemi_get_p2p_ptr(dst_ptr, rank, dst_rank);
+      // Use IPC for intra-node P2P mapping when available
+      auto const dst_p2p_ptr =
+          ipc_base_ptrs
+              ? uccl::get_ipc_p2p_ptr(
+                    reinterpret_cast<void*>(
+                        reinterpret_cast<char*>(rdma_recv_x) + dst_offset),
+                    ipc_base_ptrs, rank, dst_rank, max_nvl_peers, 0)
+              : nullptr;
 
-      if (not zero_copy or dst_p2p_ptr != 0) {
+      if (not zero_copy or dst_p2p_ptr != nullptr) {
         // Read from `cpy_src_int4_ptr` and copy into `cpy_dst_int4_ptr`
         auto const cpy_src_int4_ptr =
             zero_copy ? reinterpret_cast<int4*>(buf_ptr) : x_int4;
         auto const cpy_dst_int4_ptr =
-            dst_p2p_ptr == 0 ? reinterpret_cast<int4*>(buf_ptr)
-                             : reinterpret_cast<int4*>(dst_p2p_ptr);
+            dst_p2p_ptr == nullptr ? reinterpret_cast<int4*>(buf_ptr)
+                                   : reinterpret_cast<int4*>(dst_p2p_ptr);
 
         // Prefetch
         if (elect_one_sync(lane_id))
@@ -730,9 +738,9 @@ __global__ __launch_bounds__(1024, 1) void combine(
             if (amax <= kThreshold and log_amin < log_amax) {
               // Transform
               auto transform = [=](float const& log_abs_value) -> nv_bfloat16 {
-                const auto encoded =
+                auto const encoded =
                     floorf((log_abs_value - log_amin) * step_inv + rounding);
-                const auto decoded =
+                auto const decoded =
                     exp2f_approx((encoded - 1) * step + log_amin);
                 return decoded;
               };
@@ -757,22 +765,19 @@ __global__ __launch_bounds__(1024, 1) void combine(
           __syncwarp();
         }
       }
-#endif
       // Flush all stores
       tma_store_wait();
       __syncwarp();
 
-      // Issue RDMA
+      // Issue RDMA only if we couldn't use IPC
       // NOTES: for zero-copy mode, we assume the data is already in the send
       // buffer
-      // NOTE(MaoZiming): Use direct rdma write.
-      // if (dst_p2p_ptr == 0)
-      // CHANGE: Pass offset instead of absolute address to CPU proxy
-      // TODO(yihan): Mark here for future debugging check, just pass offset.
-      nvshmemi_ibgda_put_nbi_warp(
-          dst_offset, buf_ptr, hidden * sizeof(nv_bfloat16), dst_rank,
-          sm_id,  // NOTE(MaoZiming): use sm_id for rb
-          lane_id, token_idx - offset, ring_addrs, num_ring_addrs);
+      if (dst_p2p_ptr == nullptr) {
+        nvshmemi_ibgda_put_nbi_warp(
+            dst_offset, buf_ptr, hidden * sizeof(nv_bfloat16), dst_rank,
+            sm_id,  // NOTE(MaoZiming): use sm_id for rb
+            lane_id, token_idx - offset, ring_addrs, num_ring_addrs);
+      }
     }
 
     // Put the finishing flag
@@ -795,24 +800,26 @@ __global__ __launch_bounds__(1024, 1) void combine(
           "global_expert_idx=%d, dst_offset=0x%lx\n",
           rdma_recv_flag, rdma_recv_x, global_expert_idx, dst_offset);
 
-#ifdef false
-      auto dst_ptr =
-          reinterpret_cast<uint64_t>(rdma_recv_flag + global_expert_idx);
-      auto dst_p2p_ptr = nvshmemi_get_p2p_ptr(dst_ptr, rank, dst_rank);
-      if (dst_p2p_ptr == 0) {
-        nvshmemi_ibgda_amo_nonfetch_add(reinterpret_cast<int*>(dst_ptr), 1,
-                                        dst_rank, local_expert_idx);
+      // Try to use IPC for intra-node atomic operations
+      auto const dst_p2p_ptr_flag =
+          ipc_base_ptrs
+              ? uccl::get_ipc_p2p_ptr(
+                    reinterpret_cast<void*>(rdma_recv_flag + global_expert_idx),
+                    ipc_base_ptrs, rank, dst_rank, max_nvl_peers, 0)
+              : nullptr;
+
+      if (dst_p2p_ptr_flag != nullptr) {
+        // Intra-node: use direct atomic operation
+        st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr_flag), 1);
       } else {
-        st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr), 1);
+        // Inter-node or no IPC: use IBGDA atomic
+        // NOTE(MaoZiming): Without ibgda, we can only use atomic add
+        // Pass offset to CPU proxy for atomic operation (similar to dispatch
+        // phase)
+        nvshmemi_ibgda_amo_nonfetch_add(reinterpret_cast<int*>(dst_offset), 1,
+                                        dst_rank, sm_id, local_expert_idx,
+                                        false, ring_addrs, num_ring_addrs);
       }
-#else
-      // NOTE(MaoZiming): Without ibgda, we can only use atomic add
-      // Pass offset to CPU proxy for atomic operation (similar to dispatch
-      // phase)
-      nvshmemi_ibgda_amo_nonfetch_add(reinterpret_cast<int*>(dst_offset), 1,
-                                      dst_rank, sm_id, local_expert_idx, false,
-                                      ring_addrs, num_ring_addrs);
-#endif
       atomic_add_release_global(atomic_clean_flag, -1);
     }
     __syncwarp();
@@ -903,7 +910,7 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
              int num_experts, int rank, int num_ranks, bool use_logfmt,
              void* workspace, int num_device_sms, cudaStream_t stream,
              int phases, bool zero_copy, uint64_t const* ring_addrs,
-             int num_ring_addrs) {
+             int num_ring_addrs, int max_nvl_peers, void** ipc_base_ptrs) {
   constexpr int kNumMaxTopk = 9;
   int const num_warp_groups = ceil_div(num_experts, num_device_sms);
   int const num_warps_per_group = 32 / num_warp_groups;
@@ -935,7 +942,7 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
                   hidden, num_topk, num_max_dispatch_tokens_per_rank,          \
                   num_experts, rank, num_ranks, num_warp_groups,               \
                   num_warps_per_group, phases, zero_copy, ring_addrs,          \
-                  num_ring_addrs);                                             \
+                  num_ring_addrs, max_nvl_peers, ipc_base_ptrs);               \
   }                                                                            \
   break
 

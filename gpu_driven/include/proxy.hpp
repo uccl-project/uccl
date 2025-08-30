@@ -19,6 +19,12 @@
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
+struct PeerMeta {
+  int rank;
+  uintptr_t ptr;
+  size_t nbytes;
+  std::string ip;
+};
 
 class Proxy {
  public:
@@ -69,6 +75,9 @@ class Proxy {
   double avg_rdma_write_us() const;
   double avg_wr_latency_us() const;
   uint64_t completed_wr() const;
+
+  void set_peers_meta(std::vector<PeerMeta> const& peers);
+
   CopyRingBuffer ring;
 
  private:
@@ -82,7 +91,9 @@ class Proxy {
   void post_gpu_commands_mixed(std::vector<uint64_t> const& wrs_to_post,
                                std::vector<TransferCmd> const& cmds_to_post);
   void post_atomic_operations(std::vector<uint64_t> const& wrs_to_post,
-                              std::vector<TransferCmd> const& cmds_to_post);
+                              std::vector<TransferCmd> const& cmds_to_post,
+                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
+                              int my_rank);
 
   Config cfg_;
   RDMAConnectionInfo local_info_{}, remote_info_{};
@@ -99,6 +110,11 @@ class Proxy {
   // Sender loop aggregates
   std::chrono::duration<double, std::micro> total_rdma_write_durations_ =
       std::chrono::duration<double, std::micro>::zero();
+
+  std::vector<PeerMeta> peers_;
+  std::vector<std::unique_ptr<ProxyCtx>> ctxs_for_all_ranks_;
+  std::unordered_map<uint32_t, ProxyCtx*> qpn2ctx_;
+  std::vector<RDMAConnectionInfo> local_infos_, remote_infos_;
 };
 
 #endif  // PROXY_HPP

@@ -53,6 +53,7 @@ class UcclProxy {
   uintptr_t rb_addr() const noexcept { return rb_; }
   int block_idx() const noexcept { return block_idx_; }
   void* gpu_buffer_addr() const noexcept { return gpu_buffer_addr_; }
+  void set_peers_meta(std::vector<PeerMeta> const& peers);
 
  private:
   enum class Mode { None, Sender, Remote, Local, Dual };
@@ -66,4 +67,6 @@ class UcclProxy {
   uintptr_t rb_;
   int block_idx_;
   void* gpu_buffer_addr_;
+  std::vector<PeerMeta> peers_;
+  int local_rank_;
 };

@@ -28,6 +28,15 @@ void cpu_relax() {
 #endif
 }
 
+int get_num_max_nvl_peers() {
+  int deviceCount = 0;
+  cudaError_t err = cudaGetDeviceCount(&deviceCount);
+  if (err != cudaSuccess) {
+    std::abort();
+  }
+  return deviceCount;
+}
+
 void maybe_enable_peer_access(int src_dev, int dst_dev) {
   if (src_dev == dst_dev) return;
   std::call_once(peer_ok_flag[src_dev][dst_dev], [&]() {

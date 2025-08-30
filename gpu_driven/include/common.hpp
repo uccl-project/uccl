@@ -42,6 +42,7 @@
 extern std::once_flag peer_ok_flag[MAX_NUM_GPUS][MAX_NUM_GPUS];
 bool pin_thread_to_cpu(int cpu);
 void cpu_relax();
+int get_num_max_nvl_peers();
 
 void maybe_enable_peer_access(int src_dev, int dst_dev);
 

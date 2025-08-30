@@ -77,7 +77,7 @@ __global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs) {
       rb->set_buffer(
           my_hdr + i,
           TransferCmd{.cmd = (static_cast<uint64_t>(bid) << 32) | (it + i + 1),
-                      .dst_rank = static_cast<uint32_t>(bid),
+                      .dst_rank = 1,
                       .dst_gpu = 0,
                       .src_ptr = reinterpret_cast<void*>(
                           static_cast<uintptr_t>(it + i + 1)),

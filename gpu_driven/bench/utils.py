@@ -55,7 +55,6 @@ def _discover_local_ip():
 
 def _gather_peer_ips(group):
     # Gather local IP strings across ranks
-    rank = dist.get_rank(group)
     world = dist.get_world_size(group)
     my_ip = _discover_local_ip()
     ips = [None] * world
@@ -73,6 +72,20 @@ def get_peer_ip(rank: int, num_ranks: int, group: dist.ProcessGroup):
         # simple ring: next rank is your peer
         peer_ip = ips[(rank + 1) % num_ranks]
     return peer_ip if peer_ip else ""
+
+
+def get_cpu_proxies_meta(rank, scratch_ptr, scratch_bytes, num_ranks, group):
+    meta = {
+        "rank": rank,
+        "ptr": int(scratch_ptr),
+        "nbytes": int(scratch_bytes),
+        "ip": _discover_local_ip(),
+    }
+    all_meta = [None] * num_ranks
+    dist.all_gather_object(all_meta, meta)
+    dist.barrier(group)
+    rank2meta = {m["rank"]: m for m in all_meta}
+    return rank2meta
 
 
 def check_nvlink_connections(group: dist.ProcessGroup):

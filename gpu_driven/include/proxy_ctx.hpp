@@ -44,15 +44,11 @@ struct ProxyCtx {
   // For batched WR bookkeeping (largest_wr -> component wr_ids)
   std::unordered_map<uint64_t, std::vector<uint64_t>> wr_id_to_wr_ids;
 
-  // ACK send counters (optional atomics)
-  std::atomic<uint64_t> send_ack_posted{0};
-  std::atomic<uint64_t> send_ack_completed{0};
-
   // GPU copy helpers (moved from function-static thread_local)
   gpuStream_t copy_stream = nullptr;
-  bool peer_enabled[NUM_GPUS][NUM_GPUS] = {};
+  bool peer_enabled[MAX_NUM_GPUS][MAX_NUM_GPUS] = {};
   size_t pool_index = 0;
 
   // Optional: per-GPU destination buffers if you previously used a global
-  void* per_gpu_device_buf[NUM_GPUS] = {nullptr};
+  void* per_gpu_device_buf[MAX_NUM_GPUS] = {nullptr};
 };

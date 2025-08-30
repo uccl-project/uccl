@@ -29,15 +29,16 @@ except ImportError as exc:
     raise
 
 
-from utils import init_dist, get_peer_ip, detect_ib_hca
+from utils import init_dist, get_peer_ip, detect_ib_hca, get_cpu_proxies_meta
 
 
 def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
     num_tokens = 512
     hidden = 2048
-    num_experts = 6  # TODO(MaoZiming).
+    num_experts = 3 * num_ranks
     num_topk = 4
-    device_index = 0
+    device_index = int(os.environ["LOCAL_RANK"])
+    print(f"[simple-test] Running on device {device_index}", flush=True)
 
     peer_ip = get_peer_ip(rank, num_ranks, group)
 
@@ -54,22 +55,28 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
     x = torch.randn(
         (num_tokens, hidden), dtype=torch.bfloat16, device=f"cuda:{device_index}"
     )
-    x_bytes = x.numel() * x.element_size()
     topk_idx = torch.randint(
         0, num_experts, (num_tokens, num_topk), device=f"cuda:{device_index}"
     )
-    num_device_sms = torch.cuda.get_device_properties(0).multi_processor_count
+    num_device_sms = torch.cuda.get_device_properties(
+        device_index
+    ).multi_processor_count
 
     bench = gpu_driven.Bench()
     # x_ptr = x.data_ptr()
     proxies = []
 
-    nbytes = int(1e9)  # 256 MB
-    scratch = torch.empty(nbytes, dtype=torch.uint8, device="cuda")
+    scratch_nbytes = int(1e9)  # 256 MB
+    scratch = torch.empty(
+        scratch_nbytes, dtype=torch.uint8, device=f"cuda:{device_index}"
+    )
     scratch_ptr = scratch.data_ptr()
     scratch_bytes = scratch.numel() * scratch.element_size()
 
-    for i in range(bench.blocks()):
+    rank2meta = get_cpu_proxies_meta(rank, scratch_ptr, scratch_bytes, num_ranks, group)
+    peers_meta_list = [rank2meta[r] for r in range(num_ranks)]
+
+    for i in range(bench.num_proxies()):
         proxy = gpu_driven.Proxy(
             rb_addr=bench.ring_addr(i),
             block_idx=i,
@@ -78,9 +85,13 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
             rank=rank,
             peer_ip=peer_ip,
         )
-        proxy.start_dual()
+        proxy.set_peers_meta(peers_meta_list)
         proxies.append(proxy)
     ep.register_proxies(device_index, proxies)
+
+    dist.barrier(group)
+    for i in range(bench.num_proxies()):
+        proxies[i].start_dual()
 
     workers = None
     if hasattr(gpu_driven, "PeerCopyManager"):
@@ -100,9 +111,7 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
             group=group,
             rdma_buffer_ptr=scratch_ptr,
             num_nvl_bytes=0,
-            num_rdma_bytes=int(
-                1e9
-            ),  # TODO(MaoZiming): How does num_rdma_bytes relate to the size of x?
+            num_rdma_bytes=int(scratch_nbytes),
             low_latency_mode=True,
             num_qps_per_rank=num_device_sms,
             allow_nvlink_for_low_latency_mode=True,

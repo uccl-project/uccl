@@ -26,8 +26,12 @@ In `bench` folder:
 
 ```bash
 # On **sender** node (rank 0)
-python benchmark_remote.py --rank 1 --peer-ip <rank_1_ip> --size-mb 256
+torchrun --nnodes=2 --nproc_per_node=1 --node_rank=0 \
+  --master_addr=<master_ip> --master_port=<master_port> \
+  benchmark_remote.py
 
 # On **receiver** node (rank 1)
-python benchmark_remote.py --rank 0 --peer-ip <rank_0_ip> --size-mb 256 --wait-sec 2
+torchrun --nnodes=2 --nproc_per_node=1 --node_rank=1 \
+  --master_addr=<master_ip> --master_port=<master_port> \
+  benchmark_remote.py
 ```
