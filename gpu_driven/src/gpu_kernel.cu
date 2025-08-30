@@ -52,7 +52,6 @@ __global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs) {
         }
       }
       complete = cur_tail;
-      printf("bid: %d completed: %u\n", bid, complete);
     }
 #endif
 
