@@ -118,6 +118,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
         cmd.cmd = 1;  // to avoid 0 as a valid command.
         cmd.sm_id = sm_id;
         cmd.value = value;
+        cmd.is_atomic = true;
         cmd.req_rptr = reinterpret_cast<uint64_t>(rptr);
         rb->atomic_set_and_commit(cmd, &slot);
         break;

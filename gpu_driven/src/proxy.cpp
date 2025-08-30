@@ -449,8 +449,6 @@ void Proxy::post_gpu_commands_mixed(
       rdma_cmds.push_back(cmds_to_post[i]);
     }
   }
-
-  printf("Posting RDMA writes: %zu, %zu\n", rdma_wrs.size(), rdma_cmds.size());
   // Handle regular RDMA writes
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
@@ -459,15 +457,15 @@ void Proxy::post_gpu_commands_mixed(
 
   // Handle atomic operations
   if (!atomic_wrs.empty()) {
-    std::abort();
-    post_atomic_operations(atomic_wrs, atomic_cmds);
+    post_atomic_operations(atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
+                           cfg_.rank);
   }
 }
 
-void Proxy::post_atomic_operations(
-    std::vector<uint64_t> const& wrs_to_post,
-    std::vector<TransferCmd> const& cmds_to_post) {
-  // TODO(MaoZiming): use ctxes
+void Proxy::post_atomic_operations(std::vector<uint64_t> const& wrs_to_post,
+                                   std::vector<TransferCmd> const& cmds_to_post,
+                                   std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
+                                   int my_rank) {
   // Use RDMA hardware atomic operations directly on remote GPU memory
 
   if (cmds_to_post.size() > ProxyCtx::kMaxAtomicOps) {
@@ -476,103 +474,126 @@ void Proxy::post_atomic_operations(
     std::abort();
   }
 
-  std::vector<ibv_send_wr> wrs(cmds_to_post.size());
-  std::vector<ibv_sge> sges(cmds_to_post.size());
-
-  for (size_t i = 0; i < cmds_to_post.size(); ++i) {
-    auto const& cmd = cmds_to_post[i];
-
-    // SGE for receiving the old value, using GPU memory!
-    // Place atomic buffers safely within MR bounds, starting from the end
-    uint64_t mr_start = reinterpret_cast<uintptr_t>(ctx_.mr->addr);
-    uint64_t mr_end = mr_start + ctx_.mr->length;
-
-    // TODO:yihan: modify the size later. Reserve 16KB at the end for atomic
-    // operations (sufficient for all threads, )
-    uint64_t atomic_region_start = mr_end - 16384;   // 16KB for atomic ops
-    uint64_t thread_offset = cfg_.block_idx * 1024;  // 1KB per thread (reduced)
-    uint64_t sge_addr = atomic_region_start + thread_offset +
-                        i * sizeof(uint64_t);  // 64-bit aligned
-
-    sges[i] = {
-        .addr = sge_addr,
-        .length =
-            sizeof(uint64_t),  // 8-byte atomic operations (like rdma_test.cc)
-        .lkey = ctx_.mr->lkey  // Now this matches - our own MR's lkey
-    };
-
-    // Verify atomic buffer is within bounds
-    if (sge_addr < mr_start || sge_addr + sizeof(uint64_t) > mr_end) {
-      printf("[ERROR] SGE addr 0x%lx exceeds MR bounds - ABORTING\n", sge_addr);
-      std::abort();
-    }
-
-    std::memset(&wrs[i], 0, sizeof(wrs[i]));
-    wrs[i].wr_id = wrs_to_post[i];
-    wrs[i].sg_list = &sges[i];
-    wrs[i].num_sge = 1;
-
-    // Use RDMA atomic fetch_and_add
-    wrs[i].opcode = IBV_WR_ATOMIC_FETCH_AND_ADD;
-
-    int64_t signed_offset = static_cast<int64_t>(cmd.req_rptr);
-    bool is_combine_op = (cmd.value == 1);
-
-    uint64_t target_addr;
-    if (is_combine_op) {
-      // Combine operations: use direct offset from remote base
-      target_addr = ctx_.remote_addr + signed_offset;
+  std::unordered_map<int, std::vector<size_t>> dst_rank_wr_ids;
+  for (size_t i = 0; i < wrs_to_post.size(); ++i) {
+    if (cmds_to_post[i].dst_rank == static_cast<uint32_t>(my_rank)) {
+      // NOTE(MaoZiming): this should not happen.
+      continue;
     } else {
-      // Dispatch operations: use offset from dispatch_recv_data_offset
-      target_addr =
-          ctx_.remote_addr + ctx_.dispatch_recv_data_offset + signed_offset;
+      dst_rank_wr_ids[cmds_to_post[i].dst_rank].push_back(i);
     }
-
-    // Validate target address
-    uint64_t remote_mr_end = ctx_.remote_addr + ctx_.mr->length;
-    if (target_addr < ctx_.remote_addr ||
-        target_addr + sizeof(uint64_t) > remote_mr_end) {
-      printf("[ERROR] Atomic target 0x%lx outside MR bounds - ABORTING\n",
-             target_addr);
-      std::abort();
-    }
-
-    if (target_addr % sizeof(uint64_t) != 0) {
-      printf("[ERROR] Atomic target 0x%lx not 8-byte aligned - ABORTING\n",
-             target_addr);
-      std::abort();
-    }
-
-    wrs[i].wr.atomic.remote_addr = target_addr;
-    wrs[i].wr.atomic.rkey = ctx_.remote_rkey;
-    // For 64-bit atomic operations with signed values
-    // RDMA fetch_and_add supports signed addition - negative values are part of
-    // the protocol! Negative values indicate token counts: -num_tokens_sent - 1
-    // The receiver expects negative values to detect completion and recover
-    // token count
-
-    // Convert signed int to unsigned 64-bit while preserving the bit pattern
-    // This allows negative values to be correctly added by RDMA hardware
-    uint64_t increment_value =
-        static_cast<uint64_t>(static_cast<int64_t>(cmd.value));
-
-    wrs[i].wr.atomic.compare_add = increment_value;
-    wrs[i].send_flags = IBV_SEND_SIGNALED;
-    wrs[i].next = (i + 1 < cmds_to_post.size()) ? &wrs[i + 1] : nullptr;
-
-    // Key info: what we're sending where
-    printf("[ATOMIC_SEND] → 0x%lx: %d\n", wrs[i].wr.atomic.remote_addr,
-           cmd.value);
   }
 
-  ibv_send_wr* bad = nullptr;
-  int ret = ibv_post_send(ctx_.qp, &wrs[0], &bad);
-  if (ret) {
-    fprintf(stderr, "RDMA atomic operations failed: %s (ret=%d)\n",
-            strerror(ret), ret);
-    if (bad)
-      fprintf(stderr, "Bad atomic WR at %p (wr_id=%lu)\n", (void*)bad,
-              bad->wr_id);
-    std::abort();
+  for (auto& [dst_rank, wr_ids] : dst_rank_wr_ids) {
+    if (wr_ids.empty()) continue;
+
+    ProxyCtx* ctx = ctxs[dst_rank].get();
+    if (!ctx || !ctx->qp || !ctx->mr) {
+      fprintf(stderr, "Destination ctx missing fields for dst=%d\n", dst_rank);
+      std::abort();
+    }
+
+    const size_t k = wr_ids.size();
+    std::vector<ibv_send_wr> wrs(k);
+    std::vector<ibv_sge> sges(k);
+
+    for (size_t i = 0; i < k; ++i) {
+      auto const& cmd = cmds_to_post[wr_ids[i]];
+
+      // SGE for receiving the old value, using GPU memory!
+      // Place atomic buffers safely within MR bounds, starting from the end
+      uint64_t mr_start = reinterpret_cast<uintptr_t>(ctx->mr->addr);
+      uint64_t mr_end = mr_start + ctx->mr->length;
+
+      // TODO:yihan: modify the size later. Reserve 16KB at the end for atomic
+      // operations (sufficient for all threads, )
+      uint64_t atomic_region_start = mr_end - 16384;  // 16KB for atomic ops
+      uint64_t thread_offset =
+          cfg_.block_idx * 1024;  // 1KB per thread (reduced)
+      uint64_t sge_addr = atomic_region_start + thread_offset +
+                          i * sizeof(uint64_t);  // 64-bit aligned
+
+      sges[i] = {
+          .addr = sge_addr,
+          .length =
+              sizeof(uint64_t),  // 8-byte atomic operations (like rdma_test.cc)
+          .lkey = ctx->mr->lkey  // Now this matches - our own MR's lkey
+      };
+
+      // Verify atomic buffer is within bounds
+      if (sge_addr < mr_start || sge_addr + sizeof(uint64_t) > mr_end) {
+        printf("[ERROR] SGE addr 0x%lx exceeds MR bounds - ABORTING\n",
+               sge_addr);
+        std::abort();
+      }
+
+      std::memset(&wrs[i], 0, sizeof(wrs[i]));
+      wrs[i].wr_id = wrs_to_post[i];
+      wrs[i].sg_list = &sges[i];
+      wrs[i].num_sge = 1;
+
+      // Use RDMA atomic fetch_and_add
+      wrs[i].opcode = IBV_WR_ATOMIC_FETCH_AND_ADD;
+
+      int64_t signed_offset = static_cast<int64_t>(cmd.req_rptr);
+      bool is_combine_op = (cmd.value == 1);
+
+      uint64_t target_addr;
+      if (is_combine_op) {
+        // Combine operations: use direct offset from remote base
+        target_addr = ctx->remote_addr + signed_offset;
+      } else {
+        // Dispatch operations: use offset from dispatch_recv_data_offset
+        target_addr =
+            ctx->remote_addr + ctx_.dispatch_recv_data_offset + signed_offset;
+      }
+
+      // Validate target address
+      uint64_t remote_mr_end = ctx->remote_addr + ctx->mr->length;
+      if (target_addr < ctx->remote_addr ||
+          target_addr + sizeof(uint64_t) > remote_mr_end) {
+        printf("[ERROR] Atomic target 0x%lx outside MR bounds - ABORTING\n",
+               target_addr);
+        std::abort();
+      }
+
+      if (target_addr % sizeof(uint64_t) != 0) {
+        printf("[ERROR] Atomic target 0x%lx not 8-byte aligned - ABORTING\n",
+               target_addr);
+        std::abort();
+      }
+
+      wrs[i].wr.atomic.remote_addr = target_addr;
+      wrs[i].wr.atomic.rkey = ctx->remote_rkey;
+      // For 64-bit atomic operations with signed values
+      // RDMA fetch_and_add supports signed addition - negative values are part
+      // of the protocol! Negative values indicate token counts:
+      // -num_tokens_sent - 1 The receiver expects negative values to detect
+      // completion and recover token count
+
+      // Convert signed int to unsigned 64-bit while preserving the bit pattern
+      // This allows negative values to be correctly added by RDMA hardware
+      uint64_t increment_value =
+          static_cast<uint64_t>(static_cast<int64_t>(cmd.value));
+
+      wrs[i].wr.atomic.compare_add = increment_value;
+      wrs[i].send_flags = IBV_SEND_SIGNALED;
+      wrs[i].next = (i + 1 < cmds_to_post.size()) ? &wrs[i + 1] : nullptr;
+
+      // Key info: what we're sending where
+      printf("[ATOMIC_SEND] → 0x%lx: %d\n", wrs[i].wr.atomic.remote_addr,
+             cmd.value);
+    }
+
+    ibv_send_wr* bad = nullptr;
+    int ret = ibv_post_send(ctx->qp, &wrs[0], &bad);
+    if (ret) {
+      fprintf(stderr, "RDMA atomic operations failed: %s (ret=%d)\n",
+              strerror(ret), ret);
+      if (bad)
+        fprintf(stderr, "Bad atomic WR at %p (wr_id=%lu)\n", (void*)bad,
+                bad->wr_id);
+      std::abort();
+    }
   }
 }
