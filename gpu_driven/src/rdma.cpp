@@ -28,10 +28,6 @@
 #include <immintrin.h>
 #endif
 #include "util/util.h"
-
-// Forward declaration of the CUDA function (implemented in peer_copy.cu)
-extern "C" void launch_async_atomic_add(int* gpu_target, int atomic_value,
-                                        cudaStream_t stream);
 #include <stdio.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -548,27 +544,16 @@ void local_process_completions(
         if (wc[i].wc_flags & IBV_WC_WITH_IMM) {
           uint64_t slot = static_cast<uint64_t>(wc[i].wr_id);
           uint64_t wr_done = static_cast<uint64_t>(wc[i].imm_data);
-
-          // Check if this is an atomic operation ACK (special WR ID format)
-          bool is_atomic_wr =
-              (wr_done & 0xFFFF000000000000ULL) == 0xa70a000000000000ULL;
-
-          if (is_atomic_wr) {
-            // Handle atomic operation ACK separately - no need to track in
-            // sequence printf("Local thread %d received atomic ACK for WR
-            // %lu\n", thread_idx, wr_done);
+          // Handle regular operation ACK with sequential tracking
+          if (!S.has_received_ack || wr_done >= S.largest_completed_wr) {
+            S.largest_completed_wr = wr_done;
+            S.has_received_ack = true;
           } else {
-            // Handle regular operation ACK with sequential tracking
-            if (!S.has_received_ack || wr_done >= S.largest_completed_wr) {
-              S.largest_completed_wr = wr_done;
-              S.has_received_ack = true;
-            } else {
-              fprintf(stderr,
-                      "Warning: received ACK for WR %lu, but largest completed "
-                      "WR is %lu\n",
-                      wr_done, S.largest_completed_wr);
-              std::abort();
-            }
+            fprintf(stderr,
+                    "Warning: received ACK for WR %lu, but largest completed "
+                    "WR is %lu\n",
+                    wr_done, S.largest_completed_wr);
+            std::abort();
           }
           uint32_t qpn = wc[i].qp_num;
           ProxyCtx& S_ack = *qpn2ctx.at(qpn);
@@ -590,7 +575,13 @@ void local_process_completions(
           std::abort();
         }
         break;
-
+      case IBV_WC_FETCH_ADD: {
+        uint64_t wrid = wc[i].wr_id;
+        // If you encode a tag, check it here (see fix #3 below)
+        printf("Local thread %d: atomic completed (wr_id=0x%lx)\n", thread_idx,
+               wrid);
+        send_completed++;
+      } break;
       default:
         break;
     }

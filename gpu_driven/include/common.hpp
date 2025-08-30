@@ -37,7 +37,7 @@
 #define MAX_NUM_GPUS 8
 #define RECEIVER_BATCH_SIZE 16
 #define NVLINK_SM_PER_PROCESS 1
-
+#define kAtomicWrTag 0xa70a000000000000ULL
 // P2P enable flags (once per GPU pair)
 extern std::once_flag peer_ok_flag[MAX_NUM_GPUS][MAX_NUM_GPUS];
 bool pin_thread_to_cpu(int cpu);

@@ -533,7 +533,7 @@ void Proxy::post_atomic_operations(std::vector<uint64_t> const& wrs_to_post,
       }
 
       std::memset(&wrs[i], 0, sizeof(wrs[i]));
-      wrs[i].wr_id = wrs_to_post[i];
+      wrs[i].wr_id = kAtomicWrTag;
       wrs[i].sg_list = &sges[i];
       wrs[i].num_sge = 1;
 
