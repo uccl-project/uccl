@@ -17,7 +17,7 @@ struct ProxyCtx {
 
   uint32_t dst_qpn;
   uint32_t dst_ack_qpn;
-  struct ibv_ah * dst_ah = nullptr;
+  struct ibv_ah* dst_ah = nullptr;
 
   // Remote memory
   uintptr_t remote_addr = 0;
