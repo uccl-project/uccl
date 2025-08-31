@@ -776,7 +776,7 @@ void local_process_completions(ProxyCtx& S,
     if (wc[i].status != IBV_WC_SUCCESS) {
       fprintf(
           stderr,
-          "here!： CQE ERROR wr_id=%llu status=%d(%s) opcode=%d byte_len=%u "
+          "here!: CQE ERROR wr_id=%llu status=%d(%s) opcode=%d byte_len=%u "
           "vendor_err=0x%x qp_num=0x%x\n",
           (unsigned long long)wc[i].wr_id, wc[i].status,
           ibv_wc_status_str(wc[i].status), wc[i].opcode, wc[i].byte_len,
@@ -803,11 +803,13 @@ void local_process_completions(ProxyCtx& S,
             // printf("Local thread %d received ACK for WR %lu\n", thread_idx,
             //        wr_done);
           } else {
-            fprintf(stderr,
-                    "Warning: received ACK for WR %lu, but largest completed "
-                    "WR is %lu\n",
-                    wr_done, S.largest_completed_wr);
-            std::abort();
+            // fprintf(stderr,
+            //         "Warning: (thread %d) received ACK for WR %lu, but largest completed "
+            //         "WR is %lu\n",
+            //         thread_idx, wr_done, S.largest_completed_wr);
+            // std::abort();
+            S.largest_completed_wr = std::max(S.largest_completed_wr, wr_done);
+            S.has_received_ack = true;
           }
           ibv_sge sge = {
               .addr = reinterpret_cast<uintptr_t>(&S.ack_recv_buf[slot]),
