@@ -67,7 +67,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       rb->atomic_set_and_commit(cmd, &slot);
       break;
     }
-    if ((clock64() - last_print) > 1000000000ULL) {
+    if ((clock64() - last_print) > kPrintCycleInterval) {
       if (threadIdx.x == 0 && blockIdx.x == 0) {
         printf(
             "[dispatch] stuck waiting, inflight=%ld (cur_head=%lu "
@@ -134,7 +134,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
         break;
       } else {
         auto now = clock64();
-        if (now - last_print > 1000000000ULL) {
+        if (now - last_print > kPrintCycleInterval) {
           uint64_t tail_cmd = rb->buf[cur_tail & rb->mask()].cmd;
           printf(
               "[nvshmemi_ibgda_amo_nonfetch_add] %p waiting sm_id: %d, "
