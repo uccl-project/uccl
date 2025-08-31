@@ -33,6 +33,6 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
              void* workspace, int num_device_sms, cudaStream_t stream,
              int phases, bool zero_copy, uint64_t const* ring_addrs,
              int num_ring_addrs, int max_nvl_peers,
-             void** ipc_base_ptrs = nullptr);
+             void** ipc_base_ptrs = nullptr, void* rdma_buffer_ptr = nullptr);
 }  // namespace internode_ll
 }  // namespace uccl
