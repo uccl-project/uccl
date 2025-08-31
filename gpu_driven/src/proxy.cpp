@@ -556,8 +556,10 @@ void Proxy::post_atomic_operations(std::vector<uint64_t> const& wrs_to_post,
       uint64_t remote_mr_end = ctx->remote_addr + ctx->mr->length;
       if (target_addr < ctx->remote_addr ||
           target_addr + sizeof(uint64_t) > remote_mr_end) {
-        printf("[ERROR] Atomic target 0x%lx outside MR bounds - ABORTING\n",
-               target_addr);
+        printf(
+            "[ERROR] Atomic target 0x%lx outside MR bounds [0x%lx - 0x%lx] - "
+            "ABORTING\n",
+            target_addr, ctx->remote_addr, remote_mr_end);
         std::abort();
       }
 

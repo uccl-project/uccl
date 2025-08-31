@@ -273,10 +273,13 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 
     // Try to use IPC for intra-node atomic operations
     auto const dst_p2p_ptr =
+        // NOTE(Ziming): it seems there is a mismatch from aligned_count_addr
+        // before.
         ipc_base_ptrs ? uccl::get_ipc_p2p_ptr(
-                            reinterpret_cast<void*>(
-                                rdma_recv_count +
-                                dst_expert_local_idx * num_ranks + rank),
+                            // reinterpret_cast<void*>(
+                            // rdma_recv_count +
+                            // dst_expert_local_idx * num_ranks + rank),
+                            reinterpret_cast<void*>(aligned_count_addr),
                             ipc_base_ptrs, rank, dst_rank, max_nvl_peers, 0)
                       : nullptr;
 
