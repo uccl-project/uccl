@@ -93,10 +93,11 @@ $(PYTARGET): $(OBJ_CPP) $(OBJ_CU) src/pybind_proxy.o
 py: $(PYTARGET) $(UCCL_EP_EXT)
 
 # Install the module
-install: $(PYTARGET)
+install: $(PYTARGET) $(UCCL_EP_EXT)
 	@mkdir -p $(INSTALL_DIR)
 	@cp $(PYTARGET) $(INSTALL_DIR)/
-	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(PYTARGET)"
+	@cp $(UCCL_EP_EXT) $(INSTALL_DIR)/
+	@echo "Installation complete. Modules installed as: $(INSTALL_DIR)/$(PYTARGET), $(INSTALL_DIR)/$(UCCL_EP_EXT)"
 
 # Clean all generated files
 clean:

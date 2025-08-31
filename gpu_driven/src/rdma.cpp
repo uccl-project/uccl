@@ -157,7 +157,9 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   uint64_t iova = (uintptr_t)gpu_buf;
   S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+#ifndef EFA
                               IBV_ACCESS_REMOTE_ATOMIC |
+#endif
                               IBV_ACCESS_RELAXED_ORDERING);
 
   if (!S.mr) {
@@ -592,7 +594,6 @@ void post_receive_buffer_for_imm(ProxyCtx& S) {
   }
 }
 
-
 void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              std::vector<uint64_t> const& wrs_to_post,
                              std::vector<TransferCmd> const& cmds_to_post,
@@ -632,6 +633,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
     for (size_t j = 0; j < k; ++j) {
       size_t i = wr_ids[j];
       auto const& cmd = cmds_to_post[i];
+      wr_ids[j] = wrs_to_post[i];
       qpx->wr_id = wrs_to_post[i];
       qpx->comp_mask = 0;
       qpx->wr_flags = (j + 1 == k) ? IBV_SEND_SIGNALED : 0;
@@ -640,18 +642,17 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              (cmd.req_rptr ? cmd.req_rptr : 0);
 
       if (j + 1 == k) {
-        ibv_wr_rdma_write_imm(qpx,
-                              ctx->remote_rkey,
-                              remote_addr,
+        ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr,
                               htonl(static_cast<uint32_t>(qpx->wr_id)));
       } else {
         ibv_wr_rdma_write(qpx, ctx->remote_rkey, remote_addr);
       }
 
       uintptr_t laddr = cmd.req_lptr
-                          ? cmd.req_lptr
-                          : reinterpret_cast<uintptr_t>(buf) + i * cmd.bytes;
-      ibv_wr_set_sge(qpx, ctx->mr->lkey, laddr, static_cast<uint32_t>(cmd.bytes));
+                            ? cmd.req_lptr
+                            : reinterpret_cast<uintptr_t>(buf) + i * cmd.bytes;
+      ibv_wr_set_sge(qpx, ctx->mr->lkey, laddr,
+                     static_cast<uint32_t>(cmd.bytes));
 
       // Addressing for EFA SRD/UD
       // Assumes ctx->ah and ctx->dst_qpn are initialized; QKEY must be defined.
@@ -663,8 +664,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
               dst_rank, strerror(ret), ret);
       std::abort();
     }
-    const size_t last = k - 1;
-    const uint64_t batch_tail_wr = wr_ids[last];
+    const uint64_t batch_tail_wr = wr_ids.back();
 #else
     const size_t k = wr_ids.size();
     std::vector<ibv_sge> sges(k);
@@ -736,6 +736,9 @@ void local_process_completions(
     }
 
     switch (wc[i].opcode) {
+#ifdef EFA
+      case IBV_WC_SEND:
+#endif
       case IBV_WC_RDMA_WRITE: {
         std::lock_guard<std::mutex> lock(finished_wrs_mutex);
         for (auto const& wr_id : S.wr_id_to_wr_ids[wc[i].wr_id]) {
@@ -869,8 +872,6 @@ void remote_process_completions(
     ProxyCtx& S, int idx, CopyRingBuffer& g_ring, int ne, ibv_wc* wc,
     std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx) {
   if (ne == 0) return;
-
-  // printf("Remote thread %d received %d completions\n", idx, ne);
   std::unordered_map<uint32_t, std::vector<ibv_recv_wr>> per_qp;
   per_qp.reserve(8);
 
@@ -944,11 +945,6 @@ void remote_poll_completions(
     std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx) {
   struct ibv_wc wc[kMaxOutstandingRecvs];
   int ne = 0;
-  assert(S.ack_qp->send_cq == S.cq);
-  assert(S.qp->send_cq == S.cq);
-  assert(S.recv_ack_qp->send_cq == S.cq);
-  assert(S.recv_ack_qp->recv_cq == S.cq);
-
 #ifdef EFA
   auto cqx = (struct ibv_cq_ex*)(S.cq);
   struct ibv_poll_cq_attr poll_cq_attr = {.comp_mask = 0};
@@ -961,7 +957,6 @@ void remote_poll_completions(
     wc[ne].wc_flags = ibv_wc_read_wc_flags(cqx);
     wc[ne].imm_data = ibv_wc_read_imm_data(cqx);
     wc[ne].byte_len = ibv_wc_read_byte_len(cqx);
-    // printf("remote_poll_completions(%d), opcode = %d, wr_id = %ld, imm_data = %d\n", ne, wc[ne].opcode, wc[ne].wr_id, ntohl(wc[ne].imm_data));
     ne++;
     if (ne >= kMaxOutstandingRecvs) break;
     ret = ibv_next_poll(cqx);
