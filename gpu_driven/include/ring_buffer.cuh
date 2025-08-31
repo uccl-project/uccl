@@ -29,7 +29,7 @@ struct TransferCmd {
   int sm_id;
   int lane_id;
   int message_idx;
-
+  bool is_atomic;
   int value;
 };
 

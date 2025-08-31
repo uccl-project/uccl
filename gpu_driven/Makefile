@@ -44,7 +44,7 @@ OBJ_DUAL   := $(OBJ_CPP) $(OBJ_CU) $(SRC_DUAL:.cu=.o)
 
 PYBIND_OBJ := $(PYBIND_SRC:.cc=.o)
 
-UCCL_EP_OBJS := src/uccl_ep.o src/internode_ll.o src/ep_runtime.o
+UCCL_EP_OBJS := src/uccl_ep.o src/internode_ll.o src/ep_runtime.o src/common.o
 UCCL_EP_EXT  := uccl_ep$(EXT_SUFFIX)
 
 $(UCCL_EP_EXT): $(UCCL_EP_OBJS)

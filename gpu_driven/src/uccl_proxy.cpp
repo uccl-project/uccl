@@ -18,6 +18,7 @@ UcclProxy::UcclProxy(uintptr_t rb_addr, int block_idx,
   cfg.rank = rank;
   cfg.peer_ip = peer_ip_storage_.empty() ? nullptr : peer_ip_storage_.c_str();
   proxy_ = std::make_unique<Proxy>(cfg);
+  local_rank_ = rank;
 }
 
 UcclProxy::~UcclProxy() {
@@ -25,6 +26,11 @@ UcclProxy::~UcclProxy() {
     stop();
   } catch (...) {
   }
+}
+
+void UcclProxy::set_peers_meta(std::vector<PeerMeta> const& peers) {
+  peers_ = peers;
+  proxy_->set_peers_meta(peers);
 }
 
 void UcclProxy::start_sender() {

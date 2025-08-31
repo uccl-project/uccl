@@ -3,6 +3,8 @@
 #include <immintrin.h>
 #endif
 
+std::once_flag peer_ok_flag[MAX_NUM_GPUS][MAX_NUM_GPUS];
+
 bool pin_thread_to_cpu(int cpu) {
   int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
   if (cpu < 0 || cpu >= num_cpus) return false;
@@ -24,4 +26,32 @@ void cpu_relax() {
   // Fallback
   asm volatile("" ::: "memory");
 #endif
+}
+
+int get_num_max_nvl_peers() {
+  int deviceCount = 0;
+  cudaError_t err = cudaGetDeviceCount(&deviceCount);
+  if (err != cudaSuccess) {
+    std::abort();
+  }
+  return deviceCount;
+}
+
+void maybe_enable_peer_access(int src_dev, int dst_dev) {
+  if (src_dev == dst_dev) return;
+  std::call_once(peer_ok_flag[src_dev][dst_dev], [&]() {
+    GPU_RT_CHECK(gpuSetDevice(dst_dev));
+    gpuError_t err = gpuDeviceEnablePeerAccess(src_dev, 0);
+    if (err != gpuSuccess && err != gpuErrorPeerAccessAlreadyEnabled) {
+      fprintf(stderr, "Peer access from dst_dev=%d to src_dev=%d failed: %s\n",
+              dst_dev, src_dev, gpuGetErrorString(err));
+    }
+
+    GPU_RT_CHECK(gpuSetDevice(src_dev));
+    err = gpuDeviceEnablePeerAccess(dst_dev, 0);
+    if (err != gpuSuccess && err != gpuErrorPeerAccessAlreadyEnabled) {
+      fprintf(stderr, "Peer access from src_dev=%d to dst_dev=%d failed: %s\n",
+              src_dev, dst_dev, gpuGetErrorString(err));
+    }
+  });
 }

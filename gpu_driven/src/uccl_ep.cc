@@ -1,4 +1,6 @@
+#include "common.hpp"
 #include "ep_config.hpp"
+#include "ep_configs.cuh"
 #include "ep_event.hpp"
 #include "ep_proxy_registry.hpp"
 #include "ep_runtime.cuh"
@@ -64,7 +66,7 @@ class Buffer {
         low_latency_mode(low_latency_mode),
         explicitly_destroy(explicitly_destroy),
         comm_stream(at::cuda::getStreamFromPool(/*isHighPriority=*/true)) {
-    // TODO(MaoZiming): Initialize UCCL proxy processes.
+    int max_nvl_peers = get_num_max_nvl_peers();
     {
       printf(
           "Buffer initializing for rank %d, num_ranks %d, num_nvl_bytes %ld, "
@@ -99,12 +101,17 @@ class Buffer {
           d_ring_addrs[i] = reinterpret_cast<uint64_t>(dev_ptr);
         }
         CUDA_CHECK(cudaDeviceSynchronize());
+
+        // Allocate device memory for IPC base pointers
+        CUDA_CHECK(cudaMalloc(&d_ipc_base_ptrs, max_nvl_peers * sizeof(void*)));
+        CUDA_CHECK(
+            cudaMemset(d_ipc_base_ptrs, 0, max_nvl_peers * sizeof(void*)));
       }
     }
 
-    int64_t const barrier_signal_bytes = NUM_MAX_NVL_PEERS * sizeof(int);
-    int64_t const buffer_ptr_bytes = NUM_MAX_NVL_PEERS * sizeof(void*);
-    int64_t const barrier_signal_ptr_bytes = NUM_MAX_NVL_PEERS * sizeof(int*);
+    int64_t const barrier_signal_bytes = max_nvl_peers * sizeof(int);
+    int64_t const buffer_ptr_bytes = max_nvl_peers * sizeof(void*);
+    int64_t const barrier_signal_ptr_bytes = max_nvl_peers * sizeof(int*);
 
     EP_HOST_ASSERT(num_nvl_bytes % NUM_BUFFER_ALIGNMENT_BYTES == 0 &&
                    (num_nvl_bytes <= std::numeric_limits<int>::max() ||
@@ -112,18 +119,18 @@ class Buffer {
     EP_HOST_ASSERT(num_rdma_bytes % NUM_BUFFER_ALIGNMENT_BYTES == 0 &&
                    (low_latency_mode ||
                     num_rdma_bytes <= std::numeric_limits<int>::max()));
-    EP_HOST_ASSERT(0 <= rank && rank < num_ranks &&
-                   (num_ranks <= NUM_MAX_NVL_PEERS * NUM_MAX_RDMA_PEERS ||
-                    low_latency_mode));
-    EP_HOST_ASSERT(num_ranks < NUM_MAX_NVL_PEERS ||
-                   (num_ranks % NUM_MAX_NVL_PEERS) == 0);
+    EP_HOST_ASSERT(
+        0 <= rank && rank < num_ranks &&
+        (num_ranks <= max_nvl_peers * NUM_MAX_RDMA_PEERS || low_latency_mode));
+    EP_HOST_ASSERT(num_ranks < max_nvl_peers ||
+                   (num_ranks % max_nvl_peers) == 0);
     if (num_rdma_bytes > 0)
-      EP_HOST_ASSERT(num_ranks > NUM_MAX_NVL_PEERS || low_latency_mode);
+      EP_HOST_ASSERT(num_ranks > max_nvl_peers || low_latency_mode);
 
-    rdma_rank = rank / NUM_MAX_NVL_PEERS;
-    nvl_rank = rank % NUM_MAX_NVL_PEERS;
-    num_rdma_ranks = std::max(1, num_ranks / NUM_MAX_NVL_PEERS);
-    num_nvl_ranks = std::min(num_ranks, NUM_MAX_NVL_PEERS);
+    rdma_rank = rank / max_nvl_peers;
+    nvl_rank = rank % max_nvl_peers;
+    num_rdma_ranks = std::max(1, num_ranks / max_nvl_peers);
+    num_nvl_ranks = std::min(num_ranks, max_nvl_peers);
 
     cudaDeviceProp prop{};
     CUDA_CHECK(cudaGetDeviceProperties(&prop, device_index));
@@ -230,6 +237,9 @@ class Buffer {
 
     // Free workspace and MoE counter
     CUDA_CHECK(cudaFree(workspace));
+    if (d_ipc_base_ptrs != nullptr) {
+      CUDA_CHECK(cudaFree(d_ipc_base_ptrs));
+    }
     CUDA_CHECK(cudaFreeHost(const_cast<int*>(moe_recv_counter)));
 
     // Free chunked mode staffs
@@ -360,8 +370,9 @@ class Buffer {
           next_clean_meta.second, num_tokens, hidden,
           num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
           num_ranks, use_fp8, round_scale, use_ue8m0, workspace, num_device_sms,
-          launch_stream, phases, d_ring_addrs,
-          num_ring_addrs);  // NOTE(MaoZiming): adding UCCL ring buffers
+          launch_stream, phases, d_ring_addrs, num_ring_addrs,
+          get_num_max_nvl_peers(),
+          d_ipc_base_ptrs);  // Added IPC base pointers
     };
     launcher(return_recv_hook
                  ? LOW_LATENCY_SEND_PHASE
@@ -481,8 +492,9 @@ class Buffer {
           next_clean_meta.first, next_clean_meta.second, num_combined_tokens,
           hidden, num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
           num_ranks, use_logfmt, workspace, num_device_sms, launch_stream,
-          phases, zero_copy, d_ring_addrs,
-          num_ring_addrs);  // NOTE(MaoZiming): adding UCCL ring buffers
+          phases, zero_copy, d_ring_addrs, num_ring_addrs,
+          get_num_max_nvl_peers(),
+          d_ipc_base_ptrs);  // Added IPC base pointers
     };
     launcher(return_recv_hook
                  ? LOW_LATENCY_SEND_PHASE
@@ -530,7 +542,7 @@ class Buffer {
                 all_gathered_handles,
             std::optional<pybind11::bytearray> const& root_unique_id_opt) {
     EP_HOST_ASSERT(not is_available());
-
+    int max_nvl_peers = get_num_max_nvl_peers();
     // Sync IPC handles
     if (num_nvl_bytes > 0) {
       EP_HOST_ASSERT(static_cast<std::size_t>(num_ranks) == device_ids.size());
@@ -556,11 +568,21 @@ class Buffer {
 
       // Copy all buffer and barrier signal pointers to GPU
       CUDA_CHECK(cudaMemcpy(buffer_ptrs_gpu, buffer_ptrs,
-                            sizeof(void*) * NUM_MAX_NVL_PEERS,
+                            sizeof(void*) * max_nvl_peers,
                             cudaMemcpyHostToDevice));
       CUDA_CHECK(cudaMemcpy(barrier_signal_ptrs_gpu, barrier_signal_ptrs,
-                            sizeof(int*) * NUM_MAX_NVL_PEERS,
+                            sizeof(int*) * max_nvl_peers,
                             cudaMemcpyHostToDevice));
+
+      // Copy IPC base pointers for GPU access (for P2P operations)
+      if (d_ipc_base_ptrs != nullptr) {
+        // For RDMA buffer access, we'll use the rdma_buffer_ptr as the base
+        // Note: This assumes rdma_buffer_ptr is set up properly for each rank
+        CUDA_CHECK(cudaMemcpy(d_ipc_base_ptrs, buffer_ptrs,
+                              sizeof(void*) * max_nvl_peers,
+                              cudaMemcpyHostToDevice));
+      }
+
       CUDA_CHECK(cudaDeviceSynchronize());
     }
 
@@ -581,9 +603,11 @@ class Buffer {
                                      num_nvshmem_ranks, low_latency_mode));
       internode::barrier();
 
-      // Allocate
-      rdma_buffer_ptr =
-          internode::alloc(num_rdma_bytes, NUM_BUFFER_ALIGNMENT_BYTES);
+      // Allocate RDMA buffer
+      if (!rdma_buffer_ptr) {
+        rdma_buffer_ptr =
+            internode::alloc(num_rdma_bytes, NUM_BUFFER_ALIGNMENT_BYTES);
+      }
 
       // Clean buffer (mainly for low-latency mode)
       CUDA_CHECK(cudaMemset(rdma_buffer_ptr, 0, num_rdma_bytes));
@@ -646,12 +670,6 @@ class Buffer {
   // stream & workspace
   at::cuda::CUDAStream comm_stream;
 
-  // NVLink (IPC) area
-  static constexpr int NUM_MAX_NVL_PEERS = 8;
-  static constexpr int NUM_MAX_RDMA_PEERS = 16;
-  static constexpr int NUM_WORKSPACE_BYTES = 32 * 1024 * 1024;  // 32 MiB
-  static constexpr int NUM_BUFFER_ALIGNMENT_BYTES = 256;
-
   cudaIpcMemHandle_t ipc_handles[NUM_MAX_NVL_PEERS]{};
   void* buffer_ptrs[NUM_MAX_NVL_PEERS]{};
   int* barrier_signal_ptrs[NUM_MAX_NVL_PEERS]{};
@@ -671,6 +689,10 @@ class Buffer {
   // Ring buffers
   int num_ring_addrs{0};
   uint64_t* d_ring_addrs{nullptr};
+
+  // IPC base pointers for GPU access (for replacing nvshmemi_get_p2p_ptr)
+  void** d_ipc_base_ptrs{
+      nullptr};  // Device pointer to array of IPC base addresses
 };
 
 PYBIND11_MODULE(uccl_ep, m) {
@@ -679,7 +701,14 @@ PYBIND11_MODULE(uccl_ep, m) {
       "register_proxy",
       [](int device_index, py::object proxy) {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
-        uccl::g_proxies_by_dev[device_index].push_back(std::move(proxy));
+        auto& vec = uccl::g_proxies_by_dev[device_index];
+        if (!vec.empty()) {
+          fprintf(stderr,
+                  "WARNING: overwriting existing proxies for device %d\n",
+                  device_index);
+          std::abort();
+        }
+        vec.push_back(std::move(proxy));
       },
       py::arg("device_index"), py::arg("proxy"));
   m.def(
@@ -687,6 +716,12 @@ PYBIND11_MODULE(uccl_ep, m) {
       [](int device_index, std::vector<py::object> proxies) {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
         auto& vec = uccl::g_proxies_by_dev[device_index];
+        if (!vec.empty()) {
+          fprintf(stderr,
+                  "WARNING: overwriting existing proxies for device %d\n",
+                  device_index);
+          std::abort();
+        }
         for (auto& proxy : proxies) {
           vec.push_back(std::move(proxy));
         }

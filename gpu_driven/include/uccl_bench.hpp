@@ -27,6 +27,7 @@ class Bench {
 
   EnvInfo env_info() const;
   int blocks() const;
+  int num_proxies() const;
   bool is_running() const;
   uintptr_t ring_addr(int i) const;
 

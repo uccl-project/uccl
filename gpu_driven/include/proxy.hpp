@@ -19,6 +19,12 @@
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
+struct PeerMeta {
+  int rank;
+  uintptr_t ptr;
+  size_t nbytes;
+  std::string ip;
+};
 
 class Proxy {
  public:
@@ -36,7 +42,13 @@ class Proxy {
 
   explicit Proxy(Config const& cfg) : cfg_(cfg) {
     const size_t total_size = kRemoteBufferSize;
-    for (int d = 0; d < NUM_GPUS; ++d) {
+    int nDevices;
+    cudaError_t err = cudaGetDeviceCount(&nDevices);
+    if (err != cudaSuccess) {
+      printf("CUDA error: %s\n", cudaGetErrorString(err));
+      std::abort();
+    }
+    for (int d = 0; d < nDevices; ++d) {
       GPU_RT_CHECK(gpuSetDevice(d));
       void* buf = nullptr;
       GPU_RT_CHECK(gpuMalloc(&buf, total_size));
@@ -49,6 +61,11 @@ class Proxy {
     ctx_.progress_run.store(run, std::memory_order_release);
   }
 
+  // Set the offset of dispatch_rdma_recv_data_buffer within rdma_buffer
+  void set_dispatch_recv_data_offset(uintptr_t offset) {
+    ctx_.dispatch_recv_data_offset = offset;
+  }
+
   void run_sender();
   void run_remote();
   void run_local();
@@ -58,6 +75,9 @@ class Proxy {
   double avg_rdma_write_us() const;
   double avg_wr_latency_us() const;
   uint64_t completed_wr() const;
+
+  void set_peers_meta(std::vector<PeerMeta> const& peers);
+
   CopyRingBuffer ring;
 
  private:
@@ -68,6 +88,12 @@ class Proxy {
 
   void notify_gpu_completion(uint64_t& my_tail);
   void post_gpu_command(uint64_t& my_tail, size_t& seen);
+  void post_gpu_commands_mixed(std::vector<uint64_t> const& wrs_to_post,
+                               std::vector<TransferCmd> const& cmds_to_post);
+  void post_atomic_operations(std::vector<uint64_t> const& wrs_to_post,
+                              std::vector<TransferCmd> const& cmds_to_post,
+                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
+                              int my_rank);
 
   Config cfg_;
   RDMAConnectionInfo local_info_{}, remote_info_{};
@@ -84,6 +110,11 @@ class Proxy {
   // Sender loop aggregates
   std::chrono::duration<double, std::micro> total_rdma_write_durations_ =
       std::chrono::duration<double, std::micro>::zero();
+
+  std::vector<PeerMeta> peers_;
+  std::vector<std::unique_ptr<ProxyCtx>> ctxs_for_all_ranks_;
+  std::unordered_map<uint32_t, ProxyCtx*> qpn2ctx_;
+  std::vector<RDMAConnectionInfo> local_infos_, remote_infos_;
 };
 
 #endif  // PROXY_HPP
