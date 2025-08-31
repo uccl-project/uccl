@@ -22,7 +22,6 @@
 #define kMaxInflight 64
 #define kBatchSize 32
 #define kIterations 40000
-// #define kNumThBlocks 6
 #define kNumThBlocks 1
 #define kNumThPerBlock 1
 #ifdef SYNCHRONOUS_COMPLETION

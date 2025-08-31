@@ -610,6 +610,8 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t bytes,
     qpx->comp_mask = 0;
     qpx->wr_flags = i == num_wrs - 1 ? IBV_SEND_SIGNALED : 0;
 
+    // printf("%ld wr_id:%ld, imm_data:%d\n", i, wrs_to_post[i], (static_cast<uint32_t>(wrs_to_post[i])));
+
     if (i == num_wrs - 1) {
       ibv_wr_rdma_write_imm(
           qpx, S.remote_rkey,
@@ -632,7 +634,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t bytes,
     fprintf(stderr, "ibv_wr_complete failed: %d (%s)\n", ret, strerror(ret));
     std::abort();
   }
-  printf("post RDMA num_wrs: %ld, bytes: %zu\n", num_wrs, bytes);
+  // printf("post RDMA num_wrs: %ld\n", num_wrs);
 
   const size_t last = num_wrs - 1;
   const uint64_t largest_wr = wrs_to_post[last];
@@ -794,7 +796,7 @@ void local_process_completions(ProxyCtx& S,
       case IBV_WC_RECV:
         if (wc[i].wc_flags & IBV_WC_WITH_IMM) {
           uint64_t slot = static_cast<uint64_t>(wc[i].wr_id);
-          uint64_t wr_done = static_cast<uint64_t>(wc[i].imm_data);
+          uint64_t wr_done = static_cast<uint64_t>(ntohl(wc[i].imm_data));
           if (!S.has_received_ack || wr_done >= S.largest_completed_wr) {
             S.largest_completed_wr = wr_done;
             S.has_received_ack = true;
@@ -859,7 +861,7 @@ void local_poll_completions(ProxyCtx& S,
 #else
   ne = ibv_poll_cq(S.cq, kMaxOutstandingSends, wc);
 #endif
-  printf("Local poll thread %d polled %d completions\n", thread_idx, ne);
+  // printf("Local poll thread %d polled %d completions\n", thread_idx, ne);
   local_process_completions(S, finished_wrs, finished_wrs_mutex, thread_idx, wc,
                             ne);
 }
@@ -939,7 +941,7 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
     if (wc[i].opcode != IBV_WC_RECV_RDMA_WITH_IMM) {
       continue;
     }
-    int destination_gpu = wc[i].imm_data % NUM_GPUS;
+    int destination_gpu = ntohl(wc[i].imm_data) % NUM_GPUS;
     if (S.per_gpu_device_buf[destination_gpu] == nullptr) {
       fprintf(stderr, "per_gpu_device_buf[%d] is null\n", destination_gpu);
       std::abort();
@@ -950,7 +952,7 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
     //   std::abort();
     // }
     CopyTask task{
-        .wr_id = wc[i].imm_data,
+        .wr_id = ntohl(wc[i].imm_data),
         .dst_dev = destination_gpu,
         .src_ptr = static_cast<char*>(S.mr->addr) + src_addr_offset,
         .dst_ptr = static_cast<char*>(S.per_gpu_device_buf[destination_gpu]) +
@@ -986,6 +988,7 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring) {
     wc[ne].wc_flags = ibv_wc_read_wc_flags(cqx);
     wc[ne].imm_data = ibv_wc_read_imm_data(cqx);
     wc[ne].byte_len = ibv_wc_read_byte_len(cqx);
+    // printf("remote_poll_completions(%d), opcode = %d, wr_id = %ld, imm_data = %d\n", ne, wc[ne].opcode, wc[ne].wr_id, ntohl(wc[ne].imm_data));
     ne++;
     if (ne >= kMaxOutstandingRecvs) break;
     ret = ibv_next_poll(cqx);
@@ -995,7 +998,7 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring) {
 #else
   ne = ibv_poll_cq(S.cq, kMaxOutstandingRecvs, wc);
 #endif
-  printf("Remote poll thread %d polled %d completions\n", idx, ne);
+  // printf("Remote poll thread %d polled %d completions\n", idx, ne);
   remote_process_completions(S, idx, g_ring, ne, wc);
 }
 
@@ -1040,7 +1043,7 @@ void remote_send_ack(ProxyCtx* ctx, struct ibv_qp* ack_qp, uint64_t& wr_id,
   qpx->wr_flags = IBV_SEND_SIGNALED;
   qpx->wr_id = wr_id;
 
-  ibv_wr_send_imm(qpx, static_cast<uint32_t>(wr_id));
+  ibv_wr_send_imm(qpx, htonl(static_cast<uint32_t>(wr_id)));
   ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_ack_qpn, QKEY);
   ibv_wr_set_sge(qpx, sge.lkey, sge.addr, sge.length);
 
@@ -1059,7 +1062,7 @@ void remote_send_ack(ProxyCtx* ctx, struct ibv_qp* ack_qp, uint64_t& wr_id,
   wr.num_sge = 1;
   wr.opcode = IBV_WR_SEND_WITH_IMM;
   wr.send_flags = IBV_SEND_SIGNALED;  // generate a CQE
-  wr.imm_data = static_cast<uint32_t>(wr_id);
+  wr.imm_data = htonl(static_cast<uint32_t>(wr_id));
 
   int ret = ibv_post_send(ack_qp, &wr, &bad);
 
@@ -1075,7 +1078,7 @@ void remote_send_ack(ProxyCtx* ctx, struct ibv_qp* ack_qp, uint64_t& wr_id,
     std::abort();
   }
 #endif
-  printf("Remote thread %d posted ACK for WR %lu\n", worker_idx, wr_id);
+  // printf("Remote thread %d posted ACK for WR %lu\n", worker_idx, wr_id);
 }
 
 void local_post_ack_buf(ProxyCtx& S, int depth) {
