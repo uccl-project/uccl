@@ -855,6 +855,7 @@ void local_poll_completions(ProxyCtx& S,
     ret = ibv_next_poll(cqx);
     if (ret) break;
   }
+  ibv_end_poll(cqx);
 #else
   ne = ibv_poll_cq(S.cq, kMaxOutstandingSends, wc);
 #endif
@@ -885,6 +886,7 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
     ret = ibv_next_poll(cqx);
     if (ret) break;
   }
+  ibv_end_poll(cqx);
 #else
   ne = ibv_poll_cq(S.cq, kMaxOutstandingSends, wc);
 #endif
@@ -989,6 +991,7 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring) {
     ret = ibv_next_poll(cqx);
     if (ret) break;
   }
+  ibv_end_poll(cqx);
 #else
   ne = ibv_poll_cq(S.cq, kMaxOutstandingRecvs, wc);
 #endif
