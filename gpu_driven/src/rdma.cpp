@@ -28,17 +28,13 @@
 #include <immintrin.h>
 #endif
 #include "util/util.h"
-
-// Forward declaration of the CUDA function (implemented in peer_copy.cu)
-extern "C" void launch_async_atomic_add(int* gpu_target, int atomic_value,
-                                        cudaStream_t stream);
 #include <stdio.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #define MAX_RETRIES 20
 #define RETRY_DELAY_MS 200
 #define TCP_PORT 18515
-#define QKEY 0
+#define QKEY 0x11111111u
 
 #define EFA
 
@@ -155,12 +151,16 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     exit(1);
   }
   uint64_t iova = (uintptr_t)gpu_buf;
+#ifndef EFA
   S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-#ifndef EFA
                               IBV_ACCESS_REMOTE_ATOMIC |
-#endif
                               IBV_ACCESS_RELAXED_ORDERING);
+#else
+  S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
+                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                          IBV_ACCESS_RELAXED_ORDERING);
+#endif
 
   if (!S.mr) {
     perror("ibv_reg_mr failed");
@@ -651,12 +651,9 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       uintptr_t laddr = cmd.req_lptr
                             ? cmd.req_lptr
                             : reinterpret_cast<uintptr_t>(buf) + i * cmd.bytes;
+      ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_qpn, QKEY);
       ibv_wr_set_sge(qpx, ctx->mr->lkey, laddr,
                      static_cast<uint32_t>(cmd.bytes));
-
-      // Addressing for EFA SRD/UD
-      // Assumes ctx->ah and ctx->dst_qpn are initialized; QKEY must be defined.
-      ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_qpn, QKEY);
     }
     int ret = ibv_wr_complete(qpx);
     if (ret) {
@@ -722,6 +719,7 @@ void local_process_completions(
     std::mutex& finished_wrs_mutex, int thread_idx, ibv_wc* wc, int ne,
     std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx) {
   if (ne == 0) return;
+  printf("local_process_completions: thread %d, ne=%d\n", thread_idx, ne);
   int send_completed = 0;
 
   for (int i = 0; i < ne; ++i) {
@@ -736,10 +734,8 @@ void local_process_completions(
     }
 
     switch (wc[i].opcode) {
-#ifdef EFA
-      case IBV_WC_SEND:
-#endif
-      case IBV_WC_RDMA_WRITE: {
+      case IBV_WC_RDMA_WRITE:
+      case IBV_WC_SEND: {
         std::lock_guard<std::mutex> lock(finished_wrs_mutex);
         for (auto const& wr_id : S.wr_id_to_wr_ids[wc[i].wr_id]) {
           finished_wrs.insert(wr_id);
@@ -750,7 +746,7 @@ void local_process_completions(
       case IBV_WC_RECV:
         if (wc[i].wc_flags & IBV_WC_WITH_IMM) {
           uint64_t slot = static_cast<uint64_t>(wc[i].wr_id);
-          uint64_t wr_done = static_cast<uint64_t>(wc[i].imm_data);
+          uint64_t wr_done = static_cast<uint64_t>(ntohl(wc[i].imm_data));
 
           // Check if this is an atomic operation ACK (special WR ID format)
           bool is_atomic_wr =
@@ -758,21 +754,18 @@ void local_process_completions(
 
           if (is_atomic_wr) {
             // Handle atomic operation ACK separately - no need to track in
-            // sequence printf("Local thread %d received atomic ACK for WR
-            // %lu\n", thread_idx, wr_done);
+            // sequence
+            printf("Local thread %d received atomic ACK for WR %lu\n", thread_idx, wr_done);
           } else {
             // Handle regular operation ACK with sequential tracking
             if (!S.has_received_ack || wr_done >= S.largest_completed_wr) {
               S.largest_completed_wr = wr_done;
               S.has_received_ack = true;
-              // printf("Local thread %d received ACK for WR %lu\n", thread_idx,
-              //        wr_done);
+              printf("Local thread %d received ACK for WR %lu\n", thread_idx,
+                     wr_done);
             } else {
-              fprintf(stderr,
-                      "Warning: received ACK for WR %lu, but largest completed "
-                      "WR is %lu\n",
-                      wr_done, S.largest_completed_wr);
-              std::abort();
+              S.largest_completed_wr = std::max(S.largest_completed_wr, wr_done);
+              S.has_received_ack = true;
             }
           }
           uint32_t qpn = wc[i].qp_num;
@@ -914,7 +907,13 @@ void remote_process_completions(
                       .src_ptr = static_cast<char*>(S.mr->addr) + src_offset,
                       .dst_ptr = nullptr,
                       .bytes = kObjectSize};
-        task_vec.push_back(task);
+        if (task.dst_ptr && task.bytes) {
+          task_vec.push_back(task);
+        } else {
+          ProxyCtx* peer_ctx = qpn2ctx.at(wc[i].qp_num);
+          remote_send_ack(peer_ctx, peer_ctx->ack_qp,
+            task.wr_id, g_ring.ack_mr, g_ring.ack_buf, idx);
+        }
       }
     }
   }
@@ -1045,7 +1044,7 @@ void remote_send_ack(ProxyCtx* ctx, struct ibv_qp* ack_qp, uint64_t& wr_id,
     std::abort();
   }
 #endif
-  // printf("Remote thread %d posted ACK for WR %lu\n", worker_idx, wr_id);
+  printf("Remote thread %d posted ACK for WR %lu\n", worker_idx, wr_id);
 }
 
 void local_post_ack_buf(ProxyCtx& S, int depth) {
