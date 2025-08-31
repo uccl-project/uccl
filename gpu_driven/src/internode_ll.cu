@@ -264,6 +264,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 
     // TODO: Ensure 8-byte alignment for 64-bit atomic operations
     // Calculate index, multiply by 8 instead of 4, then add to base
+    // NOTE: index by source rank.
     auto count_index = dst_expert_local_idx * num_ranks + rank;
     auto aligned_count_addr = reinterpret_cast<uint64_t>(rdma_recv_count) +
                               count_index * sizeof(uint64_t);
@@ -279,6 +280,11 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                             ipc_base_ptrs, rank, dst_rank, max_nvl_peers, 0)
                       : nullptr;
 
+    printf("get_ipc_p2p_ptr=0x%" PRIxPTR ", dst_offset=%" PRId64
+           ", src_rank=%d, dst_rank=%d, ranks_per_node=%d, count_index: %d, "
+           "expert_idx=%d\n",
+           (uintptr_t)dst_p2p_ptr, dst_offset, rank, dst_rank, max_nvl_peers,
+           count_index, responsible_expert_idx);
     if (dst_p2p_ptr != nullptr) {
       // Intra-node: use direct atomic operation
       st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr),
@@ -344,7 +350,7 @@ LOW_LATENCY_DISPATCH_RECV:
     EP_DEVICE_ASSERT(num_warps_per_group > 1 and num_warp_groups < 15);
     if (sub_warp_id == 1 and lane_id == 0) {
       auto start_time = clock64();
-      // FIX: Use same 8-byte aligned address calculation as sender
+      // TODO: Use same 8-byte aligned address calculation as sender
       // Fixed: Calculate index, multiply by 8, then cast to int* for
       // compatibility
       auto count_index = local_expert_idx * num_ranks + src_rank;
@@ -352,16 +358,17 @@ LOW_LATENCY_DISPATCH_RECV:
                                 count_index * sizeof(uint64_t);
       int* count_addr = reinterpret_cast<int*>(aligned_count_addr);
 
-      printf("Before waiting for tokens\n");
+      printf("Before waiting for tokens, count_addr: %p\n", (void*)count_addr);
       while ((num_recv_tokens = ld_acquire_sys_global(count_addr)) == 0)
         ;
+      printf("num_recv_tokens: %d, count_addr: %p\n", num_recv_tokens,
+             (void*)count_addr);
       auto wait_recv_cost = clock64() - start_time;
       num_recv_tokens = -num_recv_tokens - 1;
-
       printf(
           "[RECV_COUNT_DECODED] Decoded token count: %d (from received value "
-          "%d)\n",
-          num_recv_tokens, -num_recv_tokens - 1);
+          "%d), count_addr; %p\n",
+          num_recv_tokens, -num_recv_tokens - 1, (void*)count_addr);
       recv_token_begin_idx =
           atomicAdd(packed_recv_count + local_expert_idx, num_recv_tokens);
       shared_num_recv_tokens[warp_group_id] = num_recv_tokens;

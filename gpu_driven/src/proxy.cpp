@@ -460,7 +460,6 @@ void Proxy::post_gpu_commands_mixed(
 
   // Handle atomic operations
   if (!atomic_wrs.empty()) {
-    printf("Posting atomic operations\n");
     post_atomic_operations(atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
                            cfg_.rank);
   }
