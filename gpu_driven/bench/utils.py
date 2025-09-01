@@ -197,10 +197,11 @@ class EventOverlap:
 
 
 def detect_ib_hca():
-    # List all mlx5 devices under /sys/class/infiniband
-    devices = sorted(glob.glob("/sys/class/infiniband/mlx5_*"))
+    devices = sorted(glob.glob("/sys/class/infiniband/*"))
     if not devices:
-        raise RuntimeError("No mlx5 devices found under /sys/class/infiniband")
-    # Just take the first one for now
-    dev_name = os.path.basename(devices[0])
-    return dev_name
+        raise RuntimeError("No devices found under /sys/class/infiniband")
+
+    ib_devs = [os.path.basename(d) for d in devices if os.path.basename(d).startswith("mlx5")]
+    if not ib_devs:
+        return None
+    return ib_devs[0]
