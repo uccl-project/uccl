@@ -659,11 +659,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       else
         remote_addr = ctx->remote_addr + S.dispatch_recv_data_offset +
                       (cmd.req_rptr ? cmd.req_rptr : 0);
-
-      // printf("cmd.is_combine: %d, cmd.req_rptr: %lu, remote_addr: 0x%llx\n",
-      //       cmd.is_combine, cmd.req_rptr,
-      //       (unsigned long long)remote_addr);
-
       uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
 
       if (remote_addr < ctx->remote_addr ||
@@ -729,8 +724,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         wrs[j].wr.rdma.remote_addr =
             ctx->remote_addr + S.dispatch_recv_data_offset + cmd.req_rptr;
 
-      // printf("cmd.is_combine: %d, wrs[j].wr.rdma.remote_addr: %lu\n",
-      // cmd.is_combine, wrs[j].wr.rdma.remote_addr);
       wrs[j].wr.rdma.rkey = ctx->remote_rkey;
       wrs[j].opcode = IBV_WR_RDMA_WRITE;
       wrs[j].send_flags = 0;

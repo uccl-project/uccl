@@ -291,14 +291,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
            count_index, responsible_expert_idx);
     if (dst_p2p_ptr != nullptr) {
       // Intra-node: use direct atomic operation
-      printf("Before st_release_sys_global: %d, %p\n",
-             ld_acquire_sys_global(reinterpret_cast<int*>(dst_p2p_ptr)),
-             dst_p2p_ptr);
       st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr),
                             -num_tokens_sent - 1);
-      printf("After st_release_sys_global: %d, %p\n",
-             ld_acquire_sys_global(reinterpret_cast<int*>(dst_p2p_ptr)),
-             dst_p2p_ptr);
     } else {
       // Inter-node or no IPC: use IBGDA atomic
       uccl::nvshmemi_ibgda_amo_nonfetch_add(
@@ -539,8 +533,6 @@ __global__ __launch_bounds__(1024, 1) void combine(
   auto const warp_group_id = warp_id / num_warps_per_group;
   auto const sub_warp_id = warp_id % num_warps_per_group;
   auto const responsible_expert_idx = sm_id * num_warp_groups + warp_group_id;
-  // printf("sm_id: %d, num_warp_groups: %d, warp_group_id: %d\n",
-  //        sm_id, num_warp_groups, warp_group_id);
   // Data type staffs
   constexpr int kNumElemsPerInt4 = sizeof(int4) / sizeof(nv_bfloat16);
   constexpr int64_t hidden_bf16_int4 = kHidden / kNumElemsPerInt4;
@@ -583,7 +575,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
     auto const local_src_info = src_info + local_expert_idx * num_ranks *
                                                num_max_dispatch_tokens_per_rank;
 
-    // NOTE(NEW):
+    // NOTE(NEW): !!! Check logic. This differs from DeepEP.
     int const slice_len = num_max_dispatch_tokens_per_rank;
     auto const rdma_send_x_vec =
         static_cast<uint8_t*>(rdma_send_x) +
@@ -639,6 +631,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
     for (int token_idx = offset + sub_warp_id;
          token_idx < offset + num_tokens_to_send;
          token_idx += num_warps_per_group) {
+      // NOTE(NEW): !!! Check logic. This differs from DeepEP.
       // const auto x_int4 = local_x + token_idx * hidden_bf16_int4;
       auto const rdma_send_type_row = reinterpret_cast<int*>(
           rdma_send_x_vec + token_idx * num_bytes_per_slot);
@@ -813,28 +806,6 @@ __global__ __launch_bounds__(1024, 1) void combine(
       // NOTES: for zero-copy mode, we assume the data is already in the send
       // buffer
       if (dst_p2p_ptr == nullptr) {
-        // printf(
-        //     "Before nvshmemi_ibgda_put_nbi_warp: "
-        //     "  dst_off=%llu,"
-        //     "  dst_offset=0x%llx,"
-        //     "  base_diff=0x%llx,"
-        //     "  global_expert_idx=%d rank=%d ,"
-        //     "  num_ranks=%d num_max_dispatch_tokens_per_rank=%d
-        //     num_bytes_per_slot=%lu," "  token_idx=%d local_src_info=%p
-        //     addr=%p src_idx=%d\n", (unsigned long long)dst_off, (unsigned
-        //     long long)dst_offset, (unsigned long
-        //     long)(reinterpret_cast<uint64_t>(rdma_recv_x) -
-        //                         reinterpret_cast<uint64_t>(rdma_buffer_ptr)),
-        //     global_expert_idx,
-        //     rank,
-        //     num_ranks,
-        //     num_max_dispatch_tokens_per_rank,
-        //     (unsigned long)num_bytes_per_slot,
-        //     token_idx,
-        //     (void*)local_src_info,
-        //     (void*)(local_src_info + token_idx),
-        //     src_idx);
-
         nvshmemi_ibgda_put_nbi_warp(
             dst_off, buf_ptr, hidden * sizeof(nv_bfloat16), dst_rank,
             sm_id,  // NOTE(MaoZiming): use sm_id for rb
@@ -847,7 +818,6 @@ __global__ __launch_bounds__(1024, 1) void combine(
     asm volatile("bar.sync %0, %1;" ::"r"(warp_group_id + 1),
                  "r"(num_warps_per_group * 32));
     if (sub_warp_id == 1 and lane_id == 0) {
-      printf("print here!\n");
       while (ld_acquire_global(atomic_clean_flag) == 0)
         ;
       // Calculate offset from data buffer to flag buffer (similar to dispatch
@@ -924,11 +894,9 @@ LOW_LATENCY_COMBINE_RECV:
                       combine_wait_recv_cost_stats + src_rank),
                   wait_recv_cost);
       }
-      printf("Finished responsible_expert_idx < num_experts\n");
     }
   }
   cg::this_grid().sync();
-  // printf("Combine after sync\n");
 
   // Reduce tokens
   EP_DEVICE_ASSERT(num_topk <= 32);

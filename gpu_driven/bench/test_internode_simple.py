@@ -139,7 +139,7 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
         cumulative_local_expert_recv_stats = torch.zeros(
             (num_experts // num_ranks,), dtype=torch.int, device="cuda"
         )
-        recv_x, recv_count, handle, event, hook = buffer.low_latency_dispatch(
+        recv_x, recv_count, handle, event, dispatch_hook = buffer.low_latency_dispatch(
             x=x,
             topk_idx=topk_idx,
             num_max_dispatch_tokens_per_rank=num_tokens,
@@ -148,10 +148,10 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
             round_scale=False,
             use_ue8m0=False,
             cumulative_local_expert_recv_stats=cumulative_local_expert_recv_stats,
-            async_finish=True,
-            return_recv_hook=False,
+            async_finish=False,
+            return_recv_hook=True,
         )
-        event.current_stream_wait()
+        dispatch_hook()
 
         print("[simple-test] ✓ Low-latency dispatch completed", flush=True)
         print(f"[simple-test] Received tensor shape: {recv_x.shape}", flush=True)
@@ -166,10 +166,10 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
             handle=handle,
             use_logfmt=False,
             zero_copy=False,
-            async_finish=True,
-            return_recv_hook=False,
+            async_finish=False,
+            return_recv_hook=True,
         )
-        event.current_stream_wait()
+        combine_hook()
 
         print("[simple-test] ✓ Low-latency combine completed", flush=True)
         print(f"[simple-test] Combined tensor shape: {combined_x.shape}", flush=True)
