@@ -23,8 +23,10 @@ import torch.distributed as dist
 
 try:
     from . import p2p
+    from . import utils
 except ImportError:
     import p2p
+    import utils
 
 
 class CollectiveContext:
@@ -79,6 +81,9 @@ class CollectiveContext:
         )
         self.memory_regions: Dict[int, int] = {}  # ptr -> mr_id
         self.initialized = False
+
+        # check and setup fd limit and somaxconn for UDS
+        utils.set_files_limit()
 
     def _get_local_gpu_idx(self) -> int:
         """

@@ -1495,6 +1495,8 @@ void Endpoint::cleanup_uds_socket() {
 }
 
 bool Endpoint::connect_local(int remote_gpu_idx, uint64_t& conn_id) {
+  int retries = 5;
+  int ret = -1;
   py::gil_scoped_release release;
   std::cout << "Connecting to remote GPU " << remote_gpu_idx << std::endl;
 
@@ -1513,9 +1515,18 @@ bool Endpoint::connect_local(int remote_gpu_idx, uint64_t& conn_id) {
   strncpy(addr.sun_path, remote_socket_path.c_str(), sizeof(addr.sun_path) - 1);
 
   // Connect to remote socket
-  auto ret = ::connect(sockfd, (struct sockaddr*)&addr, sizeof(addr));
-  CHECK_EQ(ret, 0) << "Failed to connect to UDS socket " << remote_socket_path
-                   << ": " << strerror(errno);
+  for (int i = 0; i < retries; ++i) {
+    ret = ::connect(sockfd, (struct sockaddr*)&addr, sizeof(addr));
+    if (ret == 0) break;
+
+    if (errno == ECONNREFUSED || errno == EAGAIN) {
+      std::cerr << "Connect failed: " << strerror(errno) << ", retry "
+                << (i + 1) << "/" << retries << std::endl;
+      std::this_thread::sleep_for(std::chrono::milliseconds(200 * (i + 1)));
+      continue;
+    }
+    break;
+  }
 
   // Send our GPU index to the remote endpoint
   ret = uccl::send_message_nonblock(sockfd,
