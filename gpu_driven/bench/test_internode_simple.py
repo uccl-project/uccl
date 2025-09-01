@@ -231,7 +231,7 @@ def test_worker(local_rank: int, num_local_ranks: int):
 
 if __name__ == "__main__":
     ib_dev = detect_ib_hca()
-    if ib_dev and ib_dev.startswith("mlx"):   # Mellanox IB devices show up like mlx5_0
+    if ib_dev and ib_dev.startswith("mlx"):  # Mellanox IB devices show up like mlx5_0
         os.environ["NCCL_IB_HCA"] = ib_dev
         print(f"Set NCCL_IB_HCA={ib_dev}")
     else:

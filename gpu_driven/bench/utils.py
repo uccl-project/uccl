@@ -201,7 +201,9 @@ def detect_ib_hca():
     if not devices:
         raise RuntimeError("No devices found under /sys/class/infiniband")
 
-    ib_devs = [os.path.basename(d) for d in devices if os.path.basename(d).startswith("mlx5")]
+    ib_devs = [
+        os.path.basename(d) for d in devices if os.path.basename(d).startswith("mlx5")
+    ]
     if not ib_devs:
         return None
     return ib_devs[0]
