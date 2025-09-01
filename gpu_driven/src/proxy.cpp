@@ -15,7 +15,6 @@ double Proxy::avg_wr_latency_us() const {
 }
 
 uint64_t Proxy::completed_wr() const { return completion_count_; }
-
 void Proxy::pin_thread() {
   if (cfg_.pin_thread) {
     pin_thread_to_cpu(cfg_.block_idx + 1);
@@ -91,9 +90,18 @@ void Proxy::init_common() {
   local_infos_.assign(num_ranks, RDMAConnectionInfo{});
   remote_infos_.assign(num_ranks, RDMAConnectionInfo{});
 
+  uint32_t next_tag = 1;
+  ctx_by_tag_.clear();
+  ctx_by_tag_.resize(ctxs_for_all_ranks_.size() + 1, nullptr);
+
   // Per peer QP initialization
   for (int peer = 0; peer < num_ranks; ++peer) {
     auto& c = *ctxs_for_all_ranks_[peer];
+
+    c.tag = next_tag++;
+    if (c.tag >= ctx_by_tag_.size()) ctx_by_tag_.resize(c.tag + 1, nullptr);
+    ctx_by_tag_[c.tag] = &c;
+
     c.context = ctx_.context;
     c.pd = ctx_.pd;
     c.mr = ctx_.mr;
@@ -196,7 +204,7 @@ void Proxy::run_sender() {
   uint64_t my_tail = 0;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     local_poll_completions(ctx_, finished_wrs_, finished_wrs_mutex_,
-                           cfg_.block_idx, qpn2ctx_);
+                           cfg_.block_idx, qpn2ctx_, ctx_by_tag_);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
   }
@@ -207,7 +215,7 @@ void Proxy::run_remote() {
   init_remote();
   printf("Finished\n");
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    remote_poll_completions(ctx_, cfg_.block_idx, ring, qpn2ctx_);
+    remote_poll_completions(ctx_, cfg_.block_idx, ring, qpn2ctx_, ctx_by_tag_);
   }
 }
 
@@ -226,7 +234,7 @@ void Proxy::run_dual() {
   printf("run_dual initialization complete\n");
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     poll_cq_dual(ctx_, finished_wrs_, finished_wrs_mutex_, cfg_.block_idx, ring,
-                 qpn2ctx_);
+                 qpn2ctx_, ctx_by_tag_);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
   }

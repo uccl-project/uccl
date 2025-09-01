@@ -55,4 +55,6 @@ struct ProxyCtx {
 
   // Optional: per-GPU destination buffers if you previously used a global
   void* per_gpu_device_buf[MAX_NUM_GPUS] = {nullptr};
+
+  uint32_t tag = 0;
 };

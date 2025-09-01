@@ -159,7 +159,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
 #else
   S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                          IBV_ACCESS_RELAXED_ORDERING);
+                              IBV_ACCESS_RELAXED_ORDERING);
 #endif
 
   if (!S.mr) {
@@ -580,7 +580,7 @@ void post_receive_buffer_for_imm(ProxyCtx& S) {
     sges[i] = {.addr = (uintptr_t)S.mr->addr + offset * kObjectSize,
                .length = kObjectSize,
                .lkey = S.mr->lkey};
-    wrs[i] = {.wr_id = i,
+    wrs[i] = {.wr_id = make_wr_id(S.tag, static_cast<uint32_t>(i)),
               .next = (i + 1 < kMaxOutstandingRecvs) ? &wrs[i + 1] : nullptr,
               .sg_list = &sges[i],
               .num_sge = 1};
@@ -717,9 +717,9 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
 void local_process_completions(
     ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
     std::mutex& finished_wrs_mutex, int thread_idx, ibv_wc* wc, int ne,
-    std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx) {
+    std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx,
+    std::vector<ProxyCtx*>& ctx_by_tag) {
   if (ne == 0) return;
-  printf("local_process_completions: thread %d, ne=%d\n", thread_idx, ne);
   int send_completed = 0;
 
   for (int i = 0; i < ne; ++i) {
@@ -745,7 +745,7 @@ void local_process_completions(
       } break;
       case IBV_WC_RECV:
         if (wc[i].wc_flags & IBV_WC_WITH_IMM) {
-          uint64_t slot = static_cast<uint64_t>(wc[i].wr_id);
+          const uint32_t slot = wr_slot(wc[i].wr_id);
           uint64_t wr_done = static_cast<uint64_t>(ntohl(wc[i].imm_data));
 
           // Check if this is an atomic operation ACK (special WR ID format)
@@ -755,21 +755,21 @@ void local_process_completions(
           if (is_atomic_wr) {
             // Handle atomic operation ACK separately - no need to track in
             // sequence
-            printf("Local thread %d received atomic ACK for WR %lu\n", thread_idx, wr_done);
+            printf("Local thread %d received atomic ACK for WR %lu\n",
+                   thread_idx, wr_done);
           } else {
             // Handle regular operation ACK with sequential tracking
             if (!S.has_received_ack || wr_done >= S.largest_completed_wr) {
               S.largest_completed_wr = wr_done;
               S.has_received_ack = true;
-              printf("Local thread %d received ACK for WR %lu\n", thread_idx,
-                     wr_done);
             } else {
-              S.largest_completed_wr = std::max(S.largest_completed_wr, wr_done);
+              S.largest_completed_wr =
+                  std::max(S.largest_completed_wr, wr_done);
               S.has_received_ack = true;
             }
           }
-          uint32_t qpn = wc[i].qp_num;
-          ProxyCtx& S_ack = *qpn2ctx.at(qpn);
+          const uint32_t tag = wr_tag(wc[i].wr_id);
+          ProxyCtx& S_ack = *ctx_by_tag[tag];
           ibv_sge sge = {
               .addr = reinterpret_cast<uintptr_t>(&S_ack.ack_recv_buf[slot]),
               .length = sizeof(uint64_t),
@@ -777,7 +777,7 @@ void local_process_completions(
           };
           ibv_recv_wr rwr = {};
           ibv_recv_wr* bad = nullptr;
-          rwr.wr_id = static_cast<uint64_t>(slot);
+          rwr.wr_id = make_wr_id(tag, slot);
           rwr.sg_list = &sge;
           rwr.num_sge = 1;
           if (ibv_post_recv(S_ack.recv_ack_qp, &rwr, &bad)) {
@@ -799,7 +799,8 @@ void local_process_completions(
 void local_poll_completions(
     ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
     std::mutex& finished_wrs_mutex, int thread_idx,
-    std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx) {
+    std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx,
+    std::vector<ProxyCtx*>& ctx_by_tag) {
   struct ibv_wc wc[kMaxOutstandingSends];
   int ne = 0;
 #ifdef EFA
@@ -825,13 +826,14 @@ void local_poll_completions(
 #endif
   // printf("Local poll thread %d polled %d completions\n", thread_idx, ne);
   local_process_completions(S, finished_wrs, finished_wrs_mutex, thread_idx, wc,
-                            ne, qpn2ctx);
+                            ne, qpn2ctx, ctx_by_tag);
 }
 
 void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
                   std::mutex& finished_wrs_mutex, int thread_idx,
                   CopyRingBuffer& g_ring,
-                  std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx) {
+                  std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx,
+                  std::vector<ProxyCtx*>& ctx_by_tag) {
   struct ibv_wc wc[kMaxOutstandingSends];  // batch poll
   int ne = 0;
 #ifdef EFA
@@ -857,16 +859,18 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
 #endif
   printf("Poll CQ Dual thread %d polled %d completions\n", thread_idx, ne);
   local_process_completions(S, finished_wrs, finished_wrs_mutex, thread_idx, wc,
-                            ne, qpn2ctx);
-  remote_process_completions(S, thread_idx, g_ring, ne, wc, qpn2ctx);
+                            ne, qpn2ctx, ctx_by_tag);
+  remote_process_completions(S, thread_idx, g_ring, ne, wc, qpn2ctx,
+                             ctx_by_tag);
 }
 
 void remote_process_completions(
     ProxyCtx& S, int idx, CopyRingBuffer& g_ring, int ne, ibv_wc* wc,
-    std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx) {
+    std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx,
+    std::vector<ProxyCtx*>& ctx_by_tag) {
   if (ne == 0) return;
-  std::unordered_map<uint32_t, std::vector<ibv_recv_wr>> per_qp;
-  per_qp.reserve(8);
+  std::unordered_map<uint32_t, std::vector<ibv_recv_wr>> per_tag;
+  per_tag.reserve(8);
 
   std::vector<CopyTask> task_vec;
   task_vec.reserve(ne);
@@ -886,11 +890,11 @@ void remote_process_completions(
       continue;
     }
     if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM || cqe.opcode == IBV_WC_RECV) {
-      uint32_t qpn = wc[i].qp_num;
-      auto& batch = per_qp[qpn];
+      const uint32_t tag = wr_tag(cqe.wr_id);
+      auto& batch = per_tag[tag];
       ibv_recv_wr wr{};
       S.pool_index = (S.pool_index + 1) % (kRemoteBufferSize / kObjectSize - 1);
-      wr.wr_id = S.pool_index;
+      wr.wr_id = make_wr_id(wr_tag(cqe.wr_id), S.pool_index);
       wr.sg_list = nullptr;
       wr.num_sge = 0;
       wr.next = nullptr;
@@ -910,24 +914,24 @@ void remote_process_completions(
         if (task.dst_ptr && task.bytes) {
           task_vec.push_back(task);
         } else {
-          ProxyCtx* peer_ctx = qpn2ctx.at(wc[i].qp_num);
-          remote_send_ack(peer_ctx, peer_ctx->ack_qp,
-            task.wr_id, g_ring.ack_mr, g_ring.ack_buf, idx);
+          ProxyCtx* peer_ctx = ctx_by_tag[tag];
+          remote_send_ack(peer_ctx, peer_ctx->ack_qp, task.wr_id, g_ring.ack_mr,
+                          g_ring.ack_buf, idx);
         }
       }
     }
   }
-  for (auto& [qpn, batch] : per_qp) {
+  for (auto& [tag, batch] : per_tag) {
     if (batch.empty()) continue;
     for (size_t i = 0; i + 1 < batch.size(); ++i) {
       batch[i].next = &batch[i + 1];
     }
     ibv_recv_wr* first = batch.data();
     ibv_recv_wr* bad = nullptr;
-    ProxyCtx& S_ack = *qpn2ctx.at(qpn);
+    ProxyCtx& S_ack = *ctx_by_tag[tag];
     int ret = ibv_post_recv(S_ack.qp, first, &bad);
     if (ret) {
-      fprintf(stderr, "ibv_post_recv failed for qpn=%u: %s\n", qpn,
+      fprintf(stderr, "ibv_post_recv failed for tag=%u: %s\n", tag,
               strerror(ret));
       std::abort();
     }
@@ -941,7 +945,8 @@ void remote_process_completions(
 
 void remote_poll_completions(
     ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
-    std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx) {
+    std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx,
+    std::vector<ProxyCtx*>& ctx_by_tag) {
   struct ibv_wc wc[kMaxOutstandingRecvs];
   int ne = 0;
 #ifdef EFA
@@ -965,7 +970,7 @@ void remote_poll_completions(
 #else
   ne = ibv_poll_cq(S.cq, kMaxOutstandingRecvs, wc);
 #endif
-  remote_process_completions(S, idx, g_ring, ne, wc, qpn2ctx);
+  remote_process_completions(S, idx, g_ring, ne, wc, qpn2ctx, ctx_by_tag);
 }
 
 void remote_reg_ack_buf(ibv_pd* pd, uint64_t* ack_buf, ibv_mr*& ack_mr) {
@@ -1044,7 +1049,6 @@ void remote_send_ack(ProxyCtx* ctx, struct ibv_qp* ack_qp, uint64_t& wr_id,
     std::abort();
   }
 #endif
-  printf("Remote thread %d posted ACK for WR %lu\n", worker_idx, wr_id);
 }
 
 void local_post_ack_buf(ProxyCtx& S, int depth) {
@@ -1070,7 +1074,7 @@ void local_post_ack_buf(ProxyCtx& S, int depth) {
     };
     ibv_recv_wr rwr = {};
     ibv_recv_wr* bad = nullptr;
-    rwr.wr_id = static_cast<uint64_t>(i);
+    rwr.wr_id = make_wr_id(S.tag, static_cast<uint32_t>(i));
     rwr.sg_list = &sge;
     rwr.num_sge = 1;
     if (ibv_post_recv(S.recv_ack_qp, &rwr, &bad)) {
