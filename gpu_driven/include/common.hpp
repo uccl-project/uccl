@@ -12,12 +12,12 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#define EFA
 #define USE_GRACE_HOPPER
 #define MEASURE_PER_OP_LATENCY
 #define ASSUME_WR_IN_ORDER
 #define SYNCHRONOUS_COMPLETION
 #define RDMA_BATCH_TOKENS
+#define kAtomicBufferSize 1024
 #define kQueueSize 1024
 #define kQueueMask (kQueueSize - 1)
 #define kMaxInflight 64

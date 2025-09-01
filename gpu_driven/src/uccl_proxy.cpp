@@ -19,6 +19,14 @@ UcclProxy::UcclProxy(uintptr_t rb_addr, int block_idx,
   cfg.peer_ip = peer_ip_storage_.empty() ? nullptr : peer_ip_storage_.c_str();
   proxy_ = std::make_unique<Proxy>(cfg);
   local_rank_ = rank;
+
+  if (block_idx == 0) {
+    // size_t atomic_buffer_bytes = 2 * align<size_t>(num_experts * sizeof(int),
+    // 128);
+    // TODO(MaoZiming)
+    cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize, cudaHostAllocMapped);
+    proxy_->set_atomic_buffer_ptr(atomic_buffer_ptr_);
+  }
 }
 
 UcclProxy::~UcclProxy() {

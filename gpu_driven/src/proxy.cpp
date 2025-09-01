@@ -93,11 +93,12 @@ void Proxy::init_common() {
   uint32_t next_tag = 1;
   ctx_by_tag_.clear();
   ctx_by_tag_.resize(ctxs_for_all_ranks_.size() + 1, nullptr);
-  cudaError_t err = cudaStreamCreateWithFlags(&ctx_.atomic_stream, cudaStreamNonBlocking);
+  cudaError_t err =
+      cudaStreamCreateWithFlags(&ctx_.atomic_stream, cudaStreamNonBlocking);
   if (err != cudaSuccess) {
-      fprintf(stderr, "cudaStreamCreateWithFlags failed: %s\n",
-              cudaGetErrorString(err));
-      std::abort();
+    fprintf(stderr, "cudaStreamCreateWithFlags failed: %s\n",
+            cudaGetErrorString(err));
+    std::abort();
   }
   // Per peer QP initialization
   for (int peer = 0; peer < num_ranks; ++peer) {
@@ -115,7 +116,6 @@ void Proxy::init_common() {
     // but the qp must be different.
     c.cq = ctx_.cq;
     c.atomic_stream = ctx_.atomic_stream;
-
 
     create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
                          &local_infos_[peer], my_rank);
@@ -214,7 +214,8 @@ void Proxy::run_remote() {
   init_remote();
   printf("Finished\n");
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    remote_poll_completions(ctx_, cfg_.block_idx, ring, ctx_by_tag_);
+    remote_poll_completions(ctx_, cfg_.block_idx, ring, ctx_by_tag_,
+                            atomic_buffer_ptr_);
   }
 }
 
@@ -236,7 +237,7 @@ void Proxy::run_dual() {
   printf("run_dual initialization complete\n");
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     poll_cq_dual(ctx_, finished_wrs_, finished_wrs_mutex_, cfg_.block_idx, ring,
-                 ctx_by_tag_);
+                 ctx_by_tag_, atomic_buffer_ptr_);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
   }
@@ -467,8 +468,8 @@ void Proxy::post_gpu_commands_mixed(
   }
   if (!atomic_wrs.empty()) {
 #ifdef EFA
-    post_atomic_operations_efa(ctx_, atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
-                                cfg_.rank);
+    post_atomic_operations_efa(ctx_, atomic_wrs, atomic_cmds,
+                               ctxs_for_all_ranks_, cfg_.rank);
 #else
     post_atomic_operations(atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
                            cfg_.rank);

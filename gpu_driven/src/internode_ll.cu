@@ -269,7 +269,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     auto aligned_count_addr = reinterpret_cast<uint64_t>(rdma_recv_count) +
                               count_index * sizeof(uint64_t);
     auto dst_offset =
-        aligned_count_addr - reinterpret_cast<uint64_t>(rdma_recv_x);
+        aligned_count_addr - reinterpret_cast<uint64_t>(rdma_recv_count);
 
     // Try to use IPC for intra-node atomic operations
     auto const dst_p2p_ptr =
@@ -290,8 +290,14 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
            count_index, responsible_expert_idx);
     if (dst_p2p_ptr != nullptr) {
       // Intra-node: use direct atomic operation
+      printf("Before st_release_sys_global: %d, %p\n",
+             ld_acquire_sys_global(reinterpret_cast<int*>(dst_p2p_ptr)),
+             dst_p2p_ptr);
       st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr),
                             -num_tokens_sent - 1);
+      printf("After st_release_sys_global: %d, %p\n",
+             ld_acquire_sys_global(reinterpret_cast<int*>(dst_p2p_ptr)),
+             dst_p2p_ptr);
     } else {
       // Inter-node or no IPC: use IBGDA atomic
       uccl::nvshmemi_ibgda_amo_nonfetch_add(
@@ -805,12 +811,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
       auto dst_offset =
           reinterpret_cast<uint64_t>(rdma_recv_flag +
                                      global_expert_idx * sizeof(uint64_t)) -
-          reinterpret_cast<uint64_t>(rdma_buffer_ptr);
-
-      printf(
-          "[GPU_COMBINE_ATOMIC_DEBUG] rdma_recv_flag=%p, rdma_recv_x=%p, "
-          "global_expert_idx=%d, dst_offset=0x%lx\n",
-          rdma_recv_flag, rdma_buffer_ptr, global_expert_idx, dst_offset);
+          reinterpret_cast<uint64_t>(rdma_recv_flag);
 
       // Try to use IPC for intra-node atomic operations
       auto const dst_p2p_ptr_flag =
@@ -820,6 +821,12 @@ __global__ __launch_bounds__(1024, 1) void combine(
                         rdma_recv_flag + global_expert_idx * sizeof(uint64_t)),
                     ipc_base_ptrs, rank, dst_rank, max_nvl_peers, 0)
               : nullptr;
+
+      printf("Combine dst_p2p_ptr_flag=0x%" PRIxPTR ", dst_offset=%" PRId64
+             ", src_rank=%d, dst_rank=%d, ranks_per_node=%d, "
+             "global_expert_idx: %d\n",
+             (uintptr_t)dst_p2p_ptr_flag, dst_offset, rank, dst_rank,
+             max_nvl_peers, global_expert_idx);
 
       if (dst_p2p_ptr_flag != nullptr) {
         // Intra-node: use direct atomic operation

@@ -84,6 +84,8 @@ PYBIND11_MODULE(gpu_driven, m) {
       .def("start_local", &UcclProxy::start_local)
       .def("start_dual", &UcclProxy::start_dual)
       .def("stop", &UcclProxy::stop)
+      .def("get_atomic_buffer_ptr", &UcclProxy::get_atomic_buffer_ptr)
+      .def("set_atomic_buffer_ptr", &UcclProxy::set_atomic_buffer_ptr)
       .def("set_dispatch_recv_data_offset",
            &UcclProxy::set_dispatch_recv_data_offset, py::arg("offset"))
       .def("calculate_and_set_dispatch_recv_data_offset",

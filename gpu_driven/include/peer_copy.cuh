@@ -33,4 +33,5 @@ bool post_copy_task(HostToDeviceNVlinkBuffer* rb, CopyTask const* host_tasks,
                     int num_tasks, gpuStream_t stream, int src_device,
                     CopyTask*& d_tasks);
 
-extern "C" void launch_read_and_set_sys(int* addr, int new_val, cudaStream_t stream);
+extern "C" void launch_read_and_set_sys(int* addr, int new_val,
+                                        cudaStream_t stream);

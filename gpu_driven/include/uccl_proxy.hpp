@@ -29,6 +29,17 @@ class UcclProxy {
     proxy_->set_dispatch_recv_data_offset(offset);
   }
 
+  void* get_atomic_buffer_ptr() {
+    if (!atomic_buffer_ptr_) std::abort();
+    return atomic_buffer_ptr_;
+  }
+
+  void set_atomic_buffer_ptr(void* ptr) {
+    printf("Set atomic_buffer_ptr_ to %p\n", ptr);
+    atomic_buffer_ptr_ = ptr;
+    proxy_->set_atomic_buffer_ptr(atomic_buffer_ptr_);
+  }
+
   // Calculate and set dispatch_recv_data_offset automatically based on layout
   // parameters
   void calculate_and_set_dispatch_recv_data_offset(int num_tokens, int hidden,
@@ -69,4 +80,5 @@ class UcclProxy {
   void* gpu_buffer_addr_;
   std::vector<PeerMeta> peers_;
   int local_rank_;
+  void* atomic_buffer_ptr_;
 };

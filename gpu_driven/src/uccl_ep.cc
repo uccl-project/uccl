@@ -6,6 +6,7 @@
 #include "ep_runtime.cuh"
 #include "ep_util.hpp"
 #include "internode_ll.cuh"
+#include "uccl_proxy.hpp"
 #include <ATen/cuda/CUDAContext.h>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
@@ -300,7 +301,7 @@ class Buffer {
     // Buffer control
     // TODO(MaoZiming)
     LowLatencyLayout layout(rdma_buffer_ptr, num_max_dispatch_tokens_per_rank,
-                            hidden, num_ranks, num_experts);
+                            hidden, num_ranks, num_experts, atomic_buffer_ptr);
     EP_HOST_ASSERT(layout.total_bytes <=
                    static_cast<std::size_t>(num_rdma_bytes));
     auto buffer = layout.buffers[low_latency_buffer_idx];
@@ -456,7 +457,7 @@ class Buffer {
     // Buffer control
     // TODO(MaoZiming)
     LowLatencyLayout layout(rdma_buffer_ptr, num_max_dispatch_tokens_per_rank,
-                            hidden, num_ranks, num_experts);
+                            hidden, num_ranks, num_experts, atomic_buffer_ptr);
     EP_HOST_ASSERT(layout.total_bytes <=
                    static_cast<std::size_t>(num_rdma_bytes));
     auto buffer = layout.buffers[low_latency_buffer_idx];
@@ -654,6 +655,7 @@ class Buffer {
     if (ptr == nullptr) {
       throw std::invalid_argument("set_atomic_buffer_ptr: ptr null");
     }
+    printf("Buffer atomic_buffer_ptr=%p\n", ptr);
     atomic_buffer_ptr = ptr;
   }
 
@@ -670,7 +672,7 @@ class Buffer {
   std::vector<py::object> proxies_;
   bool available{false};
   void* rdma_buffer_ptr = nullptr;
-  void *atomic_buffer_ptr = nullptr;
+  void* atomic_buffer_ptr = nullptr;
   int low_latency_buffer_idx = 0;
   void* workspace = nullptr;
 
@@ -771,6 +773,10 @@ PYBIND11_MODULE(uccl_ep, m) {
       .def(py::init<>())
       .def("current_stream_wait", &EventHandle::current_stream_wait);
 
+  m.def("connect_atomic_buffer", [](UcclProxy& p, Buffer& b) {
+    b.set_atomic_buffer_ptr(p.get_atomic_buffer_ptr());
+  });
+
   py::class_<EventOverlap>(m, "EventOverlap").def(py::init<>());
   py::class_<Buffer>(m, "Buffer")
       .def(py::init<int, int, long, long, bool, bool>(), py::arg("rank"),
@@ -785,7 +791,6 @@ PYBIND11_MODULE(uccl_ep, m) {
           },
           py::arg("addr"),
           R"doc(Set RDMA buffer from a raw address. Caller must keep the memory alive.)doc")
-      .def("set_atomic_buffer_ptr", &Buffer::set_atomic_buffer_ptr, py::arg("ptr"))
       .def("low_latency_dispatch", &Buffer::low_latency_dispatch, py::arg("x"),
            py::arg("topk_idx"),
            py::arg("cumulative_local_expert_recv_stats") = py::none(),

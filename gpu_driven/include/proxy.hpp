@@ -66,6 +66,8 @@ class Proxy {
     ctx_.dispatch_recv_data_offset = offset;
   }
 
+  void set_atomic_buffer_ptr(void* ptr) { atomic_buffer_ptr_ = ptr; }
+
   void run_sender();
   void run_remote();
   void run_local();
@@ -114,6 +116,7 @@ class Proxy {
   std::vector<std::unique_ptr<ProxyCtx>> ctxs_for_all_ranks_;
   std::vector<RDMAConnectionInfo> local_infos_, remote_infos_;
   std::vector<ProxyCtx*> ctx_by_tag_;
+  void* atomic_buffer_ptr_;
 };
 
 #endif  // PROXY_HPP

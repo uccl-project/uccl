@@ -58,5 +58,5 @@ struct ProxyCtx {
 
   uint32_t tag = 0;
 
-    cudaStream_t atomic_stream = nullptr;
+  cudaStream_t atomic_stream = nullptr;
 };

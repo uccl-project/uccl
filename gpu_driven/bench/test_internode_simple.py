@@ -118,6 +118,7 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
             allow_mnnvl=False,
             explicitly_destroy=True,
         )
+        buffer.connect_atomic_buffer(proxies[0])
 
         if rank == 0:
             print("[simple-test] ✓ Buffer created successfully", flush=True)
@@ -126,6 +127,7 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
             proxy.calculate_and_set_dispatch_recv_data_offset(
                 num_tokens, hidden, num_experts
             )
+            proxy.set_atomic_buffer_ptr(proxies[0].get_atomic_buffer_ptr())
 
         if rank == 0:
             print(

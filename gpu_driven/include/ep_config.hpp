@@ -51,7 +51,8 @@ struct LowLatencyLayout {
   }
 
   LowLatencyLayout(void* rdma_buffer, int num_max_dispatch_tokens_per_rank,
-                   int hidden, int num_ranks, int num_experts) {
+                   int hidden, int num_ranks, int num_experts,
+                   void* atomic_buffer_ptr) {
     int const num_scales = hidden / 128;
 
     // Dispatch and combine layout:
@@ -122,6 +123,13 @@ struct LowLatencyLayout {
           advance(rdma_buffer,
                   signaling_buffer_bytes_aligned * 2 + send_buffer_bytes * i),
           num_bytes_per_combine_msg};
+    }
+
+    for (int i = 0; i < 2; ++i) {
+      buffers[i].dispatch_rdma_recv_count_buffer = reinterpret_cast<int*>(
+          (uint8_t*)atomic_buffer_ptr + i * signaling_buffer_bytes_aligned);
+      buffers[i].combine_rdma_recv_flag_buffer =
+          buffers[i].dispatch_rdma_recv_count_buffer;
     }
   }
 };

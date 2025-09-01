@@ -143,6 +143,9 @@ class Buffer:
         self.runtime.sync(device_ids, ipc_handles, root_unique_id)
         assert self.runtime.is_available()
 
+    def connect_atomic_buffer(self, proxy: "ep.UcclProxy"):
+        ep.connect_atomic_buffer(proxy, self.runtime)
+
     def destroy(self):
         """
         Destroy the cpp runtime and release resources.

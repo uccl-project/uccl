@@ -36,6 +36,21 @@
 #define TCP_PORT 18515
 #define QKEY 0x11111111u
 
+inline uint32_t pack_imm(bool is_combine, int v15, uint16_t off16) {
+  // v15 must be in [-16384, 16383]
+  uint32_t vfield = static_cast<uint32_t>(v15) & 0x7FFF;
+  return (static_cast<uint32_t>(is_combine) << 31) | (vfield << 16) | off16;
+}
+
+inline int unpack_v(int32_t imm) {
+  // Layout: [31]=kind, [30:16]=v(15b), [15:0]=off
+  // Drop kind (<<1), then arithmetic >>17 to sign-extend bit30
+  return (imm << 1) >> 17;
+}
+
+inline bool unpack_kind(uint32_t imm) { return (imm >> 31) & 0x1; }
+inline uint16_t unpack_off(uint32_t imm) { return imm & 0xFFFFu; }
+
 void exchange_connection_info(int rank, char const* peer_ip, int tid,
                               RDMAConnectionInfo* local,
                               RDMAConnectionInfo* remote) {
@@ -743,7 +758,8 @@ void local_process_completions(ProxyCtx& S,
         S.wr_id_to_wr_ids.erase(wc[i].wr_id);
       } break;
       case IBV_WC_RECV:
-        if (wc[i].wc_flags & IBV_WC_WITH_IMM && !((ntohl(wc[i].imm_data) >> 31) & 0x1)) {
+        if (wc[i].wc_flags & IBV_WC_WITH_IMM &&
+            !((ntohl(wc[i].imm_data) >> 31) & 0x1)) {
           const uint32_t slot = wr_slot(wc[i].wr_id);
           uint64_t wr_done = static_cast<uint64_t>(ntohl(wc[i].imm_data));
           // Handle regular operation ACK with sequential tracking
@@ -754,7 +770,7 @@ void local_process_completions(ProxyCtx& S,
             S.largest_completed_wr = std::max(S.largest_completed_wr, wr_done);
             S.has_received_ack = true;
           }
-          printf("wr_done: %lu\n", wr_done);
+          // printf("wr_done: %lu\n", wr_done);
           const uint32_t tag = wr_tag(wc[i].wr_id);
           ProxyCtx& S_ack = *ctx_by_tag[tag];
           ibv_sge sge = {
@@ -771,7 +787,7 @@ void local_process_completions(ProxyCtx& S,
             perror("ibv_post_recv(repost ACK)");
             std::abort();
           }
-        } 
+        }
         break;
       case IBV_WC_FETCH_ADD: {
         uint64_t wrid = wc[i].wr_id;
@@ -821,7 +837,8 @@ void local_poll_completions(ProxyCtx& S,
 
 void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
                   std::mutex& finished_wrs_mutex, int thread_idx,
-                  CopyRingBuffer& g_ring, std::vector<ProxyCtx*>& ctx_by_tag) {
+                  CopyRingBuffer& g_ring, std::vector<ProxyCtx*>& ctx_by_tag,
+                  void* atomic_buffer_ptr) {
   struct ibv_wc wc[kMaxOutstandingSends];  // batch poll
   int ne = 0;
 #ifdef EFA
@@ -845,15 +862,17 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
 #else
   ne = ibv_poll_cq(S.cq, kMaxOutstandingSends, wc);
 #endif
-  printf("Poll CQ Dual thread %d polled %d completions\n", thread_idx, ne);
+  // printf("Poll CQ Dual thread %d polled %d completions\n", thread_idx, ne);
   local_process_completions(S, finished_wrs, finished_wrs_mutex, thread_idx, wc,
                             ne, ctx_by_tag);
-  remote_process_completions(S, thread_idx, g_ring, ne, wc, ctx_by_tag);
+  remote_process_completions(S, thread_idx, g_ring, ne, wc, ctx_by_tag,
+                             atomic_buffer_ptr);
 }
 
 void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                                 int ne, ibv_wc* wc,
-                                std::vector<ProxyCtx*>& ctx_by_tag) {
+                                std::vector<ProxyCtx*>& ctx_by_tag,
+                                void* atomic_buffer_ptr) {
   if (ne == 0) return;
   std::unordered_map<uint32_t, std::vector<ibv_recv_wr>> per_tag;
   per_tag.reserve(8);
@@ -876,33 +895,26 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       continue;
     }
 #ifdef EFA
-    if (cqe.opcode == IBV_WC_RECV && (cqe.wc_flags & IBV_WC_WITH_IMM) && ((ntohl(cqe.imm_data) >> 31) & 0x1)) {
+    if (cqe.opcode == IBV_WC_RECV && (cqe.wc_flags & IBV_WC_WITH_IMM) &&
+        ((ntohl(cqe.imm_data) >> 31) & 0x1)) {
       uint32_t imm = ntohl(cqe.imm_data);
 
       // Decode imm: [31] kind, [30:16] value (signed 15-bit), [15:0] offset
-      bool is_combine = (imm >> 31) & 0x1;
-      int16_t v15     = static_cast<int16_t>((imm >> 16) & 0x7FFF);
-      int value       = static_cast<int>(v15);
-      uint32_t offset = imm & 0xFFFFu;
-      auto* dev_ptr = static_cast<uint64_t*>(S.mr->addr);
-      size_t index = offset / sizeof(uint64_t);
+      bool is_combine = unpack_kind(imm);
+      int value = unpack_v(static_cast<int32_t>(imm));
+      uint32_t offset = unpack_off(imm);
+      size_t index = offset / sizeof(int);
+      printf(
+          "[EFA_RECV_IMM] kind=%u value=%d offset=%u index=%zu addr=0x%llx "
+          "imm=0x%08x\n",
+          (unsigned)is_combine, value, offset, index,
+          (unsigned long long)((uintptr_t)atomic_buffer_ptr +
+                               index * sizeof(int)),
+          imm);
 
-      printf("[EFA_RECV_IMM] kind=%u value=%d offset=%u index=%zu addr=0x%llx\n",
-            (unsigned)is_combine, value, offset, index,
-            (unsigned long long)((uintptr_t)dev_ptr + index * sizeof(uint64_t)));
-
-      auto* addr = reinterpret_cast<int*>(
-          reinterpret_cast<char*>(S.mr->addr) + index * sizeof(uint64_t));
-      
-      // NOTE(MaoZiming): This kernel doesn't seem to run. 
-      launch_read_and_set_sys(addr, value, S.atomic_stream);
-
-      cudaError_t e = cudaGetLastError();
-      if (e != cudaSuccess) {
-          printf("Kernel launch failed: %s\n", cudaGetErrorString(e));
-      }
-      cudaStreamSynchronize(S.atomic_stream);
-      printf("cudaStreamSynchronize done\n");
+      auto* addr32 =
+          reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
+      addr32->fetch_add(value, std::memory_order_relaxed);
     }
 #endif
     if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM || cqe.opcode == IBV_WC_RECV) {
@@ -960,7 +972,8 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
 }
 
 void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
-                             std::vector<ProxyCtx*>& ctx_by_tag) {
+                             std::vector<ProxyCtx*>& ctx_by_tag,
+                             void* atomic_buffer_ptr) {
   struct ibv_wc wc[kMaxOutstandingRecvs];
   int ne = 0;
 #ifdef EFA
@@ -984,7 +997,8 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
 #else
   ne = ibv_poll_cq(S.cq, kMaxOutstandingRecvs, wc);
 #endif
-  remote_process_completions(S, idx, g_ring, ne, wc, ctx_by_tag);
+  remote_process_completions(S, idx, g_ring, ne, wc, ctx_by_tag,
+                             atomic_buffer_ptr);
 }
 
 void remote_reg_ack_buf(ibv_pd* pd, uint64_t* ack_buf, ibv_mr*& ack_mr) {
@@ -1098,10 +1112,11 @@ void local_post_ack_buf(ProxyCtx& S, int depth) {
   }
 }
 
-void post_atomic_operations_efa(ProxyCtx& S, std::vector<uint64_t> const& wrs_to_post,
-                                       std::vector<TransferCmd> const& cmds_to_post,
-                                       std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                                       int my_rank) {
+void post_atomic_operations_efa(ProxyCtx& S,
+                                std::vector<uint64_t> const& wrs_to_post,
+                                std::vector<TransferCmd> const& cmds_to_post,
+                                std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
+                                int my_rank) {
   if (cmds_to_post.size() > ProxyCtx::kMaxAtomicOps) {
     fprintf(stderr, "Too many atomic operations: %zu > %zu\n",
             cmds_to_post.size(), ProxyCtx::kMaxAtomicOps);
@@ -1125,7 +1140,7 @@ void post_atomic_operations_efa(ProxyCtx& S, std::vector<uint64_t> const& wrs_to
 
     for (size_t i = 0; i < k; ++i) {
       auto const& cmd = cmds_to_post[wr_ids[i]];
-      const bool is_combine = (cmd.value == 1);
+      bool const is_combine = (cmd.value == 1);
 
       // Pack control into 32-bit imm:
       // [31] kind (1=combine, 0=dispatch)
@@ -1133,28 +1148,31 @@ void post_atomic_operations_efa(ProxyCtx& S, std::vector<uint64_t> const& wrs_to
       // [15:0]  slot/seq (here: lower 16 bits of wr index)
       int v = static_cast<int>(cmd.value);
       if (v < -16384 || v > 16383) {
-        fprintf(stderr, "[EFA] value=%d won't fit in 15 bits; "
-                        "use an inline payload scheme instead.\n", v);
+        fprintf(stderr,
+                "[EFA] value=%d won't fit in 15 bits; "
+                "use an inline payload scheme instead.\n",
+                v);
         std::abort();
       }
 
-      uint32_t offset;
-      if (is_combine) {
-        offset = static_cast<uint32_t>(cmd.req_rptr);
-      } else {
-        offset = S.dispatch_recv_data_offset + static_cast<int64_t>(cmd.req_rptr);
-      }
-      uint32_t imm  = (static_cast<uint32_t>(1) << 31)
-                    | (static_cast<uint32_t>(v & 0x7FFF) << 16)
-                    | offset;
-      std::memset(&wrs[i], 0, sizeof(wrs[i]));
-      wrs[i].wr_id      = kAtomicWrTag;
-      wrs[i].opcode     = IBV_WR_SEND_WITH_IMM;
-      wrs[i].send_flags = IBV_SEND_SIGNALED;
-      wrs[i].imm_data   = htonl(imm);
+      uint32_t offset = static_cast<int64_t>(cmd.req_rptr);
+      // if (is_combine) {
+      //   offset = static_cast<uint32_t>(cmd.req_rptr);
+      // } else {
+      //   offset = S.dispatch_recv_data_offset +
+      //   static_cast<int64_t>(cmd.req_rptr);
+      // }
+      uint32_t imm =
+          pack_imm(/*is_combine=*/true, v, static_cast<uint16_t>(offset));
 
-      wrs[i].wr.ud.ah          = ctx->dst_ah;
-      wrs[i].wr.ud.remote_qpn  = ctx->dst_qpn;
+      std::memset(&wrs[i], 0, sizeof(wrs[i]));
+      wrs[i].wr_id = kAtomicWrTag;
+      wrs[i].opcode = IBV_WR_SEND_WITH_IMM;
+      wrs[i].send_flags = IBV_SEND_SIGNALED;
+      wrs[i].imm_data = htonl(imm);
+
+      wrs[i].wr.ud.ah = ctx->dst_ah;
+      wrs[i].wr.ud.remote_qpn = ctx->dst_qpn;
       wrs[i].wr.ud.remote_qkey = QKEY;
 
       wrs[i].sg_list = nullptr;
@@ -1169,8 +1187,10 @@ void post_atomic_operations_efa(ProxyCtx& S, std::vector<uint64_t> const& wrs_to
     ibv_send_wr* bad = nullptr;
     int ret = ibv_post_send(ctx->qp, &wrs[0], &bad);
     if (ret) {
-      fprintf(stderr, "[EFA] post_send failed: %s (ret=%d)\n", strerror(ret), ret);
-      if (bad) fprintf(stderr, "Bad WR at %p (wr_id=%lu)\n", (void*)bad, bad->wr_id);
+      fprintf(stderr, "[EFA] post_send failed: %s (ret=%d)\n", strerror(ret),
+              ret);
+      if (bad)
+        fprintf(stderr, "Bad WR at %p (wr_id=%lu)\n", (void*)bad, bad->wr_id);
       std::abort();
     }
   }
