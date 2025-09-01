@@ -299,29 +299,6 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 
   for (size_t i = seen; i < cur_head; ++i) {
     uint64_t cmd = cfg_.rb->volatile_load_cmd(i);
-    // auto last_print = std::chrono::steady_clock::now();
-    // size_t spin_count = 0;
-    // do {
-    //   cmd = cfg_.rb->volatile_load_cmd(i);
-    //   cpu_relax();
-
-    //   auto now = std::chrono::steady_clock::now();
-    //   if (now - last_print > std::chrono::seconds(1)) {
-    //     printf(
-    //         "Still waiting at block %d, seen=%ld, spin_count=%zu,
-    //         my_tail=%lu, " "cmd: %lu\n", cfg_.block_idx + 1, seen,
-    //         spin_count, my_tail, cmd);
-    //     last_print = now;
-    //     spin_count++;
-    //   }
-
-    //   if (!ctx_.progress_run.load(std::memory_order_acquire)) {
-    //     printf("Local block %d stopping early at seen=%ld\n",
-    //            cfg_.block_idx + 1, seen);
-    //     return;
-    //   }
-    // } while (cmd == 0);
-
     // NOTE(MaoZiming): Non-blocking. prevent local and remote both while loop.
     if (cmd == 0) break;
 
@@ -331,12 +308,6 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
     wr_id_to_start_time_[i] = std::chrono::high_resolution_clock::now();
     seen = i + 1;
   }
-
-  // if (wrs_to_post.size() != batch_size) {
-  //   fprintf(stderr, "Error: wrs_to_post size %zu != batch_size %zu\n",
-  //           wrs_to_post.size(), batch_size);
-  //   std::abort();
-  // }
   if (!wrs_to_post.empty()) {
     auto start = std::chrono::high_resolution_clock::now();
     post_gpu_commands_mixed(wrs_to_post, cmds_to_post);
