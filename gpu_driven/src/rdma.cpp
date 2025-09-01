@@ -36,8 +36,6 @@
 #define TCP_PORT 18515
 #define QKEY 0x11111111u
 
-#define EFA
-
 void exchange_connection_info(int rank, char const* peer_ip, int tid,
                               RDMAConnectionInfo* local,
                               RDMAConnectionInfo* remote) {

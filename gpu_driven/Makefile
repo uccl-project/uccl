@@ -4,6 +4,16 @@ NVCC      := $(CUDA_PATH)/bin/nvcc
 
 EFA_HOME?=/opt/amazon/efa
 
+ifeq ($(wildcard $(EFA_HOME)),)
+  $(warning EFA not detected, building without EFA)
+  EFA_CFLAGS :=
+  EFA_LDFLAGS :=
+else
+  $(info EFA detected, building with EFA)
+  EFA_CFLAGS := -DEFA -I$(EFA_HOME)/include
+  EFA_LDFLAGS := -L$(EFA_HOME)/lib -lefa
+endif
+
 PYTHON            ?= python3
 PYBIND11_INCLUDES := $(shell $(PYTHON) -m pybind11 --includes)
 EXT_SUFFIX        := $(shell $(PYTHON) -c "import sysconfig as s; print(s.get_config_var('EXT_SUFFIX') or '.so')")
@@ -22,10 +32,14 @@ INSTALL_DIR          := $(PYTHON_SITE_PACKAGES)/uccl
 SM ?= 90
 
 CXXFLAGS  := -O3 -std=c++17 -Wall -pthread -fPIC -fvisibility=hidden
-LDFLAGS := -lpthread -lglog -libverbs -lnl-3 -lnl-route-3 -Xlinker -rpath -Xlinker $(CUDA_PATH)/lib64 -L$(EFA_HOME)/lib -lefa
+LDFLAGS := -lpthread -lglog -libverbs -lnl-3 -lnl-route-3 -Xlinker -rpath -Xlinker $(CUDA_PATH)/lib64
 NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread -fPIC -fvisibility=hidden" -ccbin /usr/bin/g++
+INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../include -I../thirdparty/DeepEP/csrc
 
-INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../include -I../thirdparty/DeepEP/csrc -I$(EFA_HOME)/include
+CXXFLAGS  += $(EFA_CFLAGS)
+NVCCFLAGS += $(EFA_CFLAGS)
+LDFLAGS   += $(EFA_LDFLAGS)
+INCLUDES  += $(EFA_CFLAGS)
 
 SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp src/peer_copy_worker.cpp src/uccl_proxy.cpp src/uccl_bench.cpp src/peer_copy_manager.cpp
 SRC_CU  := src/gpu_kernel.cu src/peer_copy.cu src/py_cuda_shims.cu 
