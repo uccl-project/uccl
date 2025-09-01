@@ -376,8 +376,8 @@ class Buffer {
           num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
           num_ranks, use_fp8, round_scale, use_ue8m0, workspace, num_device_sms,
           launch_stream, phases, d_ring_addrs, num_ring_addrs,
-          get_num_max_nvl_peers(),
-          d_ipc_base_ptrs);  // Added IPC base pointers
+          get_num_max_nvl_peers(), d_ipc_base_ptrs,
+          atomic_buffer_ptr);  // Added IPC base pointers
     };
     launcher(return_recv_hook
                  ? LOW_LATENCY_SEND_PHASE
@@ -498,8 +498,8 @@ class Buffer {
           hidden, num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
           num_ranks, use_logfmt, workspace, num_device_sms, launch_stream,
           phases, zero_copy, d_ring_addrs, num_ring_addrs,
-          get_num_max_nvl_peers(), d_ipc_base_ptrs,
-          rdma_buffer_ptr);  // Added IPC base pointers
+          get_num_max_nvl_peers(), d_ipc_base_ptrs, rdma_buffer_ptr,
+          atomic_buffer_ptr);  // Added IPC base pointers
     };
     launcher(return_recv_hook
                  ? LOW_LATENCY_SEND_PHASE

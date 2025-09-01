@@ -915,6 +915,20 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       auto* addr32 =
           reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
       addr32->fetch_add(value, std::memory_order_relaxed);
+
+      ibv_recv_wr rwr = {};
+      const uint32_t tag = wr_tag(cqe.wr_id);
+      S.pool_index = (S.pool_index + 1) % (kRemoteBufferSize / kObjectSize - 1);
+      rwr.wr_id = make_wr_id(wr_tag(cqe.wr_id), S.pool_index);
+      rwr.sg_list = nullptr;
+      rwr.num_sge = 0;
+      ibv_recv_wr* bad = nullptr;
+      ProxyCtx& S_atomic = *ctx_by_tag[tag];
+      if (ibv_post_recv(S_atomic.qp, &rwr, &bad)) {
+        perror("ibv_post_recv (IMM replenish)");
+        std::abort();
+      }
+      continue;
     }
 #endif
     if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM || cqe.opcode == IBV_WC_RECV) {

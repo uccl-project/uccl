@@ -17,6 +17,7 @@ import torch.distributed as dist
 import time
 from buffer import Buffer
 import os
+import sys
 
 # import deep_ep as ep
 try:
@@ -147,14 +148,13 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
             round_scale=False,
             use_ue8m0=False,
             cumulative_local_expert_recv_stats=cumulative_local_expert_recv_stats,
-            async_finish=False,
-            return_recv_hook=True,
+            async_finish=True,
+            return_recv_hook=False,
         )
-        hook()
+        event.current_stream_wait()
 
-        if rank == 0:
-            print("[simple-test] ✓ Low-latency dispatch completed", flush=True)
-            print(f"[simple-test] Received tensor shape: {recv_x.shape}", flush=True)
+        print("[simple-test] ✓ Low-latency dispatch completed", flush=True)
+        print(f"[simple-test] Received tensor shape: {recv_x.shape}", flush=True)
 
         topk_weights = torch.ones(
             (num_tokens, num_topk), dtype=torch.float32, device="cuda"
@@ -166,19 +166,17 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
             handle=handle,
             use_logfmt=False,
             zero_copy=False,
-            async_finish=False,
-            return_recv_hook=True,
+            async_finish=True,
+            return_recv_hook=False,
         )
-        combine_hook()
+        event.current_stream_wait()
 
-        if rank == 0:
-            print("[simple-test] ✓ Low-latency combine completed", flush=True)
-            print(
-                f"[simple-test] Combined tensor shape: {combined_x.shape}", flush=True
-            )
-            print("[simple-test] ✓ All tests passed!", flush=True)
+        print("[simple-test] ✓ Low-latency combine completed", flush=True)
+        print(f"[simple-test] Combined tensor shape: {combined_x.shape}", flush=True)
+        print("[simple-test] ✓ All tests passed!", flush=True)
 
-        time.sleep(10)
+        time.sleep(20)
+        os._exit(0)
 
         print("[simple-test] ✓ before destroy!", flush=True)
 

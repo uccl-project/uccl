@@ -17,7 +17,7 @@
 #define ASSUME_WR_IN_ORDER
 #define SYNCHRONOUS_COMPLETION
 #define RDMA_BATCH_TOKENS
-#define kAtomicBufferSize 1024
+#define kAtomicBufferSize 8196
 #define kQueueSize 1024
 #define kQueueMask (kQueueSize - 1)
 #define kMaxInflight 64

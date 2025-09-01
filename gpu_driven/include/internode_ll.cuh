@@ -21,7 +21,8 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
               bool use_fp8, bool round_scale, bool use_ue8m0, void* workspace,
               int num_device_sms, cudaStream_t stream, int phases,
               uint64_t const* ring_addrs, int num_ring_addrs, int max_nvl_peers,
-              void** ipc_base_ptrs = nullptr);
+              void** ipc_base_ptrs = nullptr,
+              void* atomic_buffer_ptr = nullptr);
 
 void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
              void* rdma_send_x, void const* x, int64_t const* topk_idx,
@@ -33,6 +34,7 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
              void* workspace, int num_device_sms, cudaStream_t stream,
              int phases, bool zero_copy, uint64_t const* ring_addrs,
              int num_ring_addrs, int max_nvl_peers,
-             void** ipc_base_ptrs = nullptr, void* rdma_buffer_ptr = nullptr);
+             void** ipc_base_ptrs = nullptr, void* rdma_buffer_ptr = nullptr,
+             void* atomic_buffer_ptr = nullptr);
 }  // namespace internode_ll
 }  // namespace uccl
