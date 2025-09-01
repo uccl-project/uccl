@@ -112,15 +112,6 @@ void Proxy::init_common() {
     create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
                          &local_infos_[peer], my_rank);
     modify_qp_to_init(c);
-    qpn2ctx_[c.qp->qp_num] = &c;
-    qpn2ctx_[c.ack_qp->qp_num] = &c;
-    qpn2ctx_[c.recv_ack_qp->qp_num] = &c;
-    printf("c.qp->qp_num=%u, c=%p added to qpn2ctx_\n", c.qp->qp_num,
-           (void*)&c);
-    printf("c.ack_qp->qp_num=%u, c=%p added to qpn2ctx_\n", c.ack_qp->qp_num,
-           (void*)&c);
-    printf("c.recv_ack_qp->qp_num=%u, c=%p added to qpn2ctx_\n",
-           c.recv_ack_qp->qp_num, (void*)&c);
   }
 
   usleep(50 * 1000);
@@ -204,7 +195,7 @@ void Proxy::run_sender() {
   uint64_t my_tail = 0;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     local_poll_completions(ctx_, finished_wrs_, finished_wrs_mutex_,
-                           cfg_.block_idx, qpn2ctx_, ctx_by_tag_);
+                           cfg_.block_idx, ctx_by_tag_);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
   }
@@ -215,7 +206,7 @@ void Proxy::run_remote() {
   init_remote();
   printf("Finished\n");
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    remote_poll_completions(ctx_, cfg_.block_idx, ring, qpn2ctx_, ctx_by_tag_);
+    remote_poll_completions(ctx_, cfg_.block_idx, ring, ctx_by_tag_);
   }
 }
 
@@ -234,7 +225,7 @@ void Proxy::run_dual() {
   printf("run_dual initialization complete\n");
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     poll_cq_dual(ctx_, finished_wrs_, finished_wrs_mutex_, cfg_.block_idx, ring,
-                 qpn2ctx_, ctx_by_tag_);
+                 ctx_by_tag_);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
   }

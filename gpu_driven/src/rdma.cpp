@@ -714,11 +714,11 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
   }
 }
 
-void local_process_completions(
-    ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
-    std::mutex& finished_wrs_mutex, int thread_idx, ibv_wc* wc, int ne,
-    std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx,
-    std::vector<ProxyCtx*>& ctx_by_tag) {
+void local_process_completions(ProxyCtx& S,
+                               std::unordered_set<uint64_t>& finished_wrs,
+                               std::mutex& finished_wrs_mutex, int thread_idx,
+                               ibv_wc* wc, int ne,
+                               std::vector<ProxyCtx*>& ctx_by_tag) {
   if (ne == 0) return;
   int send_completed = 0;
 
@@ -796,11 +796,10 @@ void local_process_completions(
   S.completed.fetch_add(send_completed, std::memory_order_relaxed);
 }
 
-void local_poll_completions(
-    ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
-    std::mutex& finished_wrs_mutex, int thread_idx,
-    std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx,
-    std::vector<ProxyCtx*>& ctx_by_tag) {
+void local_poll_completions(ProxyCtx& S,
+                            std::unordered_set<uint64_t>& finished_wrs,
+                            std::mutex& finished_wrs_mutex, int thread_idx,
+                            std::vector<ProxyCtx*>& ctx_by_tag) {
   struct ibv_wc wc[kMaxOutstandingSends];
   int ne = 0;
 #ifdef EFA
@@ -826,14 +825,12 @@ void local_poll_completions(
 #endif
   // printf("Local poll thread %d polled %d completions\n", thread_idx, ne);
   local_process_completions(S, finished_wrs, finished_wrs_mutex, thread_idx, wc,
-                            ne, qpn2ctx, ctx_by_tag);
+                            ne, ctx_by_tag);
 }
 
 void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
                   std::mutex& finished_wrs_mutex, int thread_idx,
-                  CopyRingBuffer& g_ring,
-                  std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx,
-                  std::vector<ProxyCtx*>& ctx_by_tag) {
+                  CopyRingBuffer& g_ring, std::vector<ProxyCtx*>& ctx_by_tag) {
   struct ibv_wc wc[kMaxOutstandingSends];  // batch poll
   int ne = 0;
 #ifdef EFA
@@ -859,15 +856,13 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
 #endif
   printf("Poll CQ Dual thread %d polled %d completions\n", thread_idx, ne);
   local_process_completions(S, finished_wrs, finished_wrs_mutex, thread_idx, wc,
-                            ne, qpn2ctx, ctx_by_tag);
-  remote_process_completions(S, thread_idx, g_ring, ne, wc, qpn2ctx,
-                             ctx_by_tag);
+                            ne, ctx_by_tag);
+  remote_process_completions(S, thread_idx, g_ring, ne, wc, ctx_by_tag);
 }
 
-void remote_process_completions(
-    ProxyCtx& S, int idx, CopyRingBuffer& g_ring, int ne, ibv_wc* wc,
-    std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx,
-    std::vector<ProxyCtx*>& ctx_by_tag) {
+void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
+                                int ne, ibv_wc* wc,
+                                std::vector<ProxyCtx*>& ctx_by_tag) {
   if (ne == 0) return;
   std::unordered_map<uint32_t, std::vector<ibv_recv_wr>> per_tag;
   per_tag.reserve(8);
@@ -943,10 +938,8 @@ void remote_process_completions(
   }
 }
 
-void remote_poll_completions(
-    ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
-    std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx,
-    std::vector<ProxyCtx*>& ctx_by_tag) {
+void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
+                             std::vector<ProxyCtx*>& ctx_by_tag) {
   struct ibv_wc wc[kMaxOutstandingRecvs];
   int ne = 0;
 #ifdef EFA
@@ -970,7 +963,7 @@ void remote_poll_completions(
 #else
   ne = ibv_poll_cq(S.cq, kMaxOutstandingRecvs, wc);
 #endif
-  remote_process_completions(S, idx, g_ring, ne, wc, qpn2ctx, ctx_by_tag);
+  remote_process_completions(S, idx, g_ring, ne, wc, ctx_by_tag);
 }
 
 void remote_reg_ack_buf(ibv_pd* pd, uint64_t* ack_buf, ibv_mr*& ack_mr) {
