@@ -412,3 +412,21 @@ bool post_copy_task(HostToDeviceNVlinkBuffer* rb, CopyTask const* host_tasks,
   rb->commit_with_head(cur_head + num_tasks);
   return true;
 }
+
+__device__ __forceinline__ void st_release_sys_global(int* ptr, int val) {
+    asm volatile("st.release.sys.global.s32 [%0], %1;"
+                 :: "l"(ptr), "r"(val) : "memory");
+}
+
+__global__ void read_and_set_sys(int* addr, int new_val) {
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+        printf("addr: %p\n", addr);
+        int old = *addr;
+        printf("Before st_release_sys_global %p, new: %d\n", addr, old + new_val);
+        st_release_sys_global(addr, old + new_val);
+    }
+}
+
+extern "C" void launch_read_and_set_sys(int* addr, int new_val, cudaStream_t stream) {
+    read_and_set_sys<<<1,1,0,stream>>>(addr, new_val);
+}

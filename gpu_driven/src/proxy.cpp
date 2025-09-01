@@ -93,7 +93,12 @@ void Proxy::init_common() {
   uint32_t next_tag = 1;
   ctx_by_tag_.clear();
   ctx_by_tag_.resize(ctxs_for_all_ranks_.size() + 1, nullptr);
-
+  cudaError_t err = cudaStreamCreateWithFlags(&ctx_.atomic_stream, cudaStreamNonBlocking);
+  if (err != cudaSuccess) {
+      fprintf(stderr, "cudaStreamCreateWithFlags failed: %s\n",
+              cudaGetErrorString(err));
+      std::abort();
+  }
   // Per peer QP initialization
   for (int peer = 0; peer < num_ranks; ++peer) {
     auto& c = *ctxs_for_all_ranks_[peer];
@@ -109,6 +114,9 @@ void Proxy::init_common() {
     // NOTE(MaoZiming): each context can share the same cq, pd, mr.
     // but the qp must be different.
     c.cq = ctx_.cq;
+    c.atomic_stream = ctx_.atomic_stream;
+
+
     create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
                          &local_infos_[peer], my_rank);
     modify_qp_to_init(c);
@@ -445,11 +453,9 @@ void Proxy::post_gpu_commands_mixed(
 
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
     if (cmds_to_post[i].is_atomic) {
-      // Atomic operation (cmd.cmd == 1)
       atomic_wrs.push_back(wrs_to_post[i]);
       atomic_cmds.push_back(cmds_to_post[i]);
     } else {
-      // Regular RDMA write
       rdma_wrs.push_back(wrs_to_post[i]);
       rdma_cmds.push_back(cmds_to_post[i]);
     }
@@ -459,11 +465,14 @@ void Proxy::post_gpu_commands_mixed(
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
                             rdma_cmds, ctxs_for_all_ranks_, cfg_.rank);
   }
-
-  // Handle atomic operations
   if (!atomic_wrs.empty()) {
+#ifdef EFA
+    post_atomic_operations_efa(ctx_, atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
+                                cfg_.rank);
+#else
     post_atomic_operations(atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
                            cfg_.rank);
+#endif
   }
 }
 

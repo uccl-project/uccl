@@ -650,6 +650,13 @@ class Buffer {
     rdma_buffer_ptr = ptr;
   }
 
+  void set_atomic_buffer_ptr(void* ptr) {
+    if (ptr == nullptr) {
+      throw std::invalid_argument("set_atomic_buffer_ptr: ptr null");
+    }
+    atomic_buffer_ptr = ptr;
+  }
+
   bool is_available() const { return available; }
 
  private:
@@ -663,6 +670,7 @@ class Buffer {
   std::vector<py::object> proxies_;
   bool available{false};
   void* rdma_buffer_ptr = nullptr;
+  void *atomic_buffer_ptr = nullptr;
   int low_latency_buffer_idx = 0;
   void* workspace = nullptr;
 
@@ -777,6 +785,7 @@ PYBIND11_MODULE(uccl_ep, m) {
           },
           py::arg("addr"),
           R"doc(Set RDMA buffer from a raw address. Caller must keep the memory alive.)doc")
+      .def("set_atomic_buffer_ptr", &Buffer::set_atomic_buffer_ptr, py::arg("ptr"))
       .def("low_latency_dispatch", &Buffer::low_latency_dispatch, py::arg("x"),
            py::arg("topk_idx"),
            py::arg("cumulative_local_expert_recv_stats") = py::none(),

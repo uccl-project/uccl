@@ -94,7 +94,6 @@ class Proxy {
                               std::vector<TransferCmd> const& cmds_to_post,
                               std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
                               int my_rank);
-
   Config cfg_;
   RDMAConnectionInfo local_info_{}, remote_info_{};
 
@@ -113,7 +112,6 @@ class Proxy {
 
   std::vector<PeerMeta> peers_;
   std::vector<std::unique_ptr<ProxyCtx>> ctxs_for_all_ranks_;
-  std::unordered_map<uint32_t, ProxyCtx*> qpn2ctx_;
   std::vector<RDMAConnectionInfo> local_infos_, remote_infos_;
   std::vector<ProxyCtx*> ctx_by_tag_;
 };

@@ -57,4 +57,6 @@ struct ProxyCtx {
   void* per_gpu_device_buf[MAX_NUM_GPUS] = {nullptr};
 
   uint32_t tag = 0;
+
+    cudaStream_t atomic_stream = nullptr;
 };

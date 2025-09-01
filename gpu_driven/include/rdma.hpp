@@ -70,4 +70,8 @@ void local_process_completions(ProxyCtx& S,
 void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
                   std::mutex& finished_wrs_mutex, int thread_idx,
                   CopyRingBuffer& g_ring, std::vector<ProxyCtx*>& ctx_by_tag);
+void post_atomic_operations_efa(ProxyCtx& S, std::vector<uint64_t> const& wrs_to_post,
+                                       std::vector<TransferCmd> const& cmds_to_post,
+                                       std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
+                                       int my_rank);
 #endif  // RDMA_HPP

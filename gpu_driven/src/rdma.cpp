@@ -743,7 +743,7 @@ void local_process_completions(ProxyCtx& S,
         S.wr_id_to_wr_ids.erase(wc[i].wr_id);
       } break;
       case IBV_WC_RECV:
-        if (wc[i].wc_flags & IBV_WC_WITH_IMM) {
+        if (wc[i].wc_flags & IBV_WC_WITH_IMM && !((ntohl(wc[i].imm_data) >> 31) & 0x1)) {
           const uint32_t slot = wr_slot(wc[i].wr_id);
           uint64_t wr_done = static_cast<uint64_t>(ntohl(wc[i].imm_data));
           // Handle regular operation ACK with sequential tracking
@@ -754,6 +754,7 @@ void local_process_completions(ProxyCtx& S,
             S.largest_completed_wr = std::max(S.largest_completed_wr, wr_done);
             S.has_received_ack = true;
           }
+          printf("wr_done: %lu\n", wr_done);
           const uint32_t tag = wr_tag(wc[i].wr_id);
           ProxyCtx& S_ack = *ctx_by_tag[tag];
           ibv_sge sge = {
@@ -770,9 +771,7 @@ void local_process_completions(ProxyCtx& S,
             perror("ibv_post_recv(repost ACK)");
             std::abort();
           }
-        } else {
-          std::abort();
-        }
+        } 
         break;
       case IBV_WC_FETCH_ADD: {
         uint64_t wrid = wc[i].wr_id;
@@ -876,6 +875,36 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
     if (cqe.opcode == IBV_WC_SEND) {
       continue;
     }
+#ifdef EFA
+    if (cqe.opcode == IBV_WC_RECV && (cqe.wc_flags & IBV_WC_WITH_IMM) && ((ntohl(cqe.imm_data) >> 31) & 0x1)) {
+      uint32_t imm = ntohl(cqe.imm_data);
+
+      // Decode imm: [31] kind, [30:16] value (signed 15-bit), [15:0] offset
+      bool is_combine = (imm >> 31) & 0x1;
+      int16_t v15     = static_cast<int16_t>((imm >> 16) & 0x7FFF);
+      int value       = static_cast<int>(v15);
+      uint32_t offset = imm & 0xFFFFu;
+      auto* dev_ptr = static_cast<uint64_t*>(S.mr->addr);
+      size_t index = offset / sizeof(uint64_t);
+
+      printf("[EFA_RECV_IMM] kind=%u value=%d offset=%u index=%zu addr=0x%llx\n",
+            (unsigned)is_combine, value, offset, index,
+            (unsigned long long)((uintptr_t)dev_ptr + index * sizeof(uint64_t)));
+
+      auto* addr = reinterpret_cast<int*>(
+          reinterpret_cast<char*>(S.mr->addr) + index * sizeof(uint64_t));
+      
+      // NOTE(MaoZiming): This kernel doesn't seem to run. 
+      launch_read_and_set_sys(addr, value, S.atomic_stream);
+
+      cudaError_t e = cudaGetLastError();
+      if (e != cudaSuccess) {
+          printf("Kernel launch failed: %s\n", cudaGetErrorString(e));
+      }
+      cudaStreamSynchronize(S.atomic_stream);
+      printf("cudaStreamSynchronize done\n");
+    }
+#endif
     if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM || cqe.opcode == IBV_WC_RECV) {
       const uint32_t tag = wr_tag(cqe.wr_id);
       auto& batch = per_tag[tag];
@@ -1064,6 +1093,84 @@ void local_post_ack_buf(ProxyCtx& S, int depth) {
     rwr.num_sge = 1;
     if (ibv_post_recv(S.recv_ack_qp, &rwr, &bad)) {
       perror("ibv_post_recv(ack)");
+      std::abort();
+    }
+  }
+}
+
+void post_atomic_operations_efa(ProxyCtx& S, std::vector<uint64_t> const& wrs_to_post,
+                                       std::vector<TransferCmd> const& cmds_to_post,
+                                       std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
+                                       int my_rank) {
+  if (cmds_to_post.size() > ProxyCtx::kMaxAtomicOps) {
+    fprintf(stderr, "Too many atomic operations: %zu > %zu\n",
+            cmds_to_post.size(), ProxyCtx::kMaxAtomicOps);
+    std::abort();
+  }
+
+  std::unordered_map<int, std::vector<size_t>> dst_rank_wr_ids;
+  dst_rank_wr_ids.reserve(cmds_to_post.size());
+  for (size_t i = 0; i < wrs_to_post.size(); ++i) {
+    int dst = static_cast<int>(cmds_to_post[i].dst_rank);
+    if (dst == my_rank) std::abort();
+    dst_rank_wr_ids[dst].push_back(i);
+  }
+
+  for (auto& [dst_rank, wr_ids] : dst_rank_wr_ids) {
+    if (wr_ids.empty()) continue;
+
+    ProxyCtx* ctx = ctxs[dst_rank].get();
+    const size_t k = wr_ids.size();
+    std::vector<ibv_send_wr> wrs(k);
+
+    for (size_t i = 0; i < k; ++i) {
+      auto const& cmd = cmds_to_post[wr_ids[i]];
+      const bool is_combine = (cmd.value == 1);
+
+      // Pack control into 32-bit imm:
+      // [31] kind (1=combine, 0=dispatch)
+      // [30:16] signed 15-bit value (two's complement)  <-- ensure it fits
+      // [15:0]  slot/seq (here: lower 16 bits of wr index)
+      int v = static_cast<int>(cmd.value);
+      if (v < -16384 || v > 16383) {
+        fprintf(stderr, "[EFA] value=%d won't fit in 15 bits; "
+                        "use an inline payload scheme instead.\n", v);
+        std::abort();
+      }
+
+      uint32_t offset;
+      if (is_combine) {
+        offset = static_cast<uint32_t>(cmd.req_rptr);
+      } else {
+        offset = S.dispatch_recv_data_offset + static_cast<int64_t>(cmd.req_rptr);
+      }
+      uint32_t imm  = (static_cast<uint32_t>(1) << 31)
+                    | (static_cast<uint32_t>(v & 0x7FFF) << 16)
+                    | offset;
+      std::memset(&wrs[i], 0, sizeof(wrs[i]));
+      wrs[i].wr_id      = kAtomicWrTag;
+      wrs[i].opcode     = IBV_WR_SEND_WITH_IMM;
+      wrs[i].send_flags = IBV_SEND_SIGNALED;
+      wrs[i].imm_data   = htonl(imm);
+
+      wrs[i].wr.ud.ah          = ctx->dst_ah;
+      wrs[i].wr.ud.remote_qpn  = ctx->dst_qpn;
+      wrs[i].wr.ud.remote_qkey = QKEY;
+
+      wrs[i].sg_list = nullptr;
+      wrs[i].num_sge = 0;
+
+      wrs[i].next = (i + 1 < k) ? &wrs[i + 1] : nullptr;
+
+      printf("[EFA_EMPTY_IMM] dst=%d kind=%u val=%d offset=%u imm=0x%08x\n",
+             dst_rank, static_cast<unsigned>(is_combine), v, offset, imm);
+    }
+
+    ibv_send_wr* bad = nullptr;
+    int ret = ibv_post_send(ctx->qp, &wrs[0], &bad);
+    if (ret) {
+      fprintf(stderr, "[EFA] post_send failed: %s (ret=%d)\n", strerror(ret), ret);
+      if (bad) fprintf(stderr, "Bad WR at %p (wr_id=%lu)\n", (void*)bad, bad->wr_id);
       std::abort();
     }
   }
