@@ -34,6 +34,9 @@
 #define MAX_RETRIES 20
 #define RETRY_DELAY_MS 200
 #define TCP_PORT 18515
+#define QKEY 0x11111111u
+
+#define EFA
 
 void exchange_connection_info(int rank, char const* peer_ip, int tid,
                               RDMAConnectionInfo* local,
@@ -62,6 +65,8 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
 
     socklen_t len = sizeof(addr);
     sockfd = accept(listenfd, (struct sockaddr*)&addr, &len);
+    printf("Rank %d accepted connection from peer %s on port %d\n", rank,
+           peer_ip, TCP_PORT + tid);
     close(listenfd);
   } else {
     // Connect
@@ -92,8 +97,10 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
   }
 
   // Exchange info
-  send(sockfd, local, sizeof(*local), 0);
-  recv(sockfd, remote, sizeof(*remote), MSG_WAITALL);
+  // send(sockfd, local, sizeof(*local), 0);
+  // recv(sockfd, remote, sizeof(*remote), MSG_WAITALL);
+  uccl::send_message(sockfd, local, sizeof(*local));
+  uccl::receive_message(sockfd, remote, sizeof(*remote));
   close(sockfd);
 
   printf(
@@ -144,10 +151,16 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     exit(1);
   }
   uint64_t iova = (uintptr_t)gpu_buf;
+#ifndef EFA
   S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
                               IBV_ACCESS_REMOTE_ATOMIC |
                               IBV_ACCESS_RELAXED_ORDERING);
+#else
+  S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
+                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                              IBV_ACCESS_RELAXED_ORDERING);
+#endif
 
   if (!S.mr) {
     perror("ibv_reg_mr failed");
@@ -162,9 +175,26 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
 
 ibv_cq* create_per_thread_cq(ProxyCtx& S) {
   int cq_depth = kMaxOutstandingSends * 2;
+#ifdef EFA
+  struct ibv_cq_init_attr_ex cq_ex_attr = {};
+  cq_ex_attr.cqe = cq_depth;
+  cq_ex_attr.cq_context = nullptr;
+  cq_ex_attr.channel = nullptr;
+  cq_ex_attr.comp_vector = 0;
+  // cq_ex_attr.wc_flags =
+  //     IBV_WC_EX_WITH_COMPLETION_TIMESTAMP;  // Timestamp support.
+  cq_ex_attr.comp_mask = 0;
+  cq_ex_attr.flags = 0;
+  // EFA requires these values for wc_flags and comp_mask.
+  // See `efa_create_cq_ex` in rdma-core.
+  cq_ex_attr.wc_flags = IBV_WC_STANDARD_FLAGS;
+
+  S.cq = (struct ibv_cq*)ibv_create_cq_ex(S.context, &cq_ex_attr);
+#else
   S.cq =
       ibv_create_cq(S.context, /* cqe */ cq_depth, /* user_context */ nullptr,
                     /* channel */ nullptr, /* comp_vector */ 0);
+#endif
   if (!S.cq) {
     perror("Failed to create CQ");
     exit(1);
@@ -172,11 +202,90 @@ ibv_cq* create_per_thread_cq(ProxyCtx& S) {
   return S.cq;
 }
 
+struct ibv_qp* create_srd_qp_ex(ProxyCtx& S) {
+  struct ibv_qp_init_attr_ex qp_attr_ex = {};
+  struct efadv_qp_init_attr efa_attr = {};
+
+  qp_attr_ex.comp_mask = IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_SEND_OPS_FLAGS;
+
+  qp_attr_ex.send_ops_flags = IBV_QP_EX_WITH_RDMA_WRITE |
+                              IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM |
+                              IBV_QP_EX_WITH_SEND_WITH_IMM;
+
+  qp_attr_ex.cap.max_send_wr = kMaxOutstandingSends * 2;
+  qp_attr_ex.cap.max_recv_wr = kMaxOutstandingSends * 2;
+  qp_attr_ex.cap.max_send_sge = 1;
+  qp_attr_ex.cap.max_recv_sge = 1;
+  qp_attr_ex.cap.max_inline_data = 0;
+
+  qp_attr_ex.pd = S.pd;
+  qp_attr_ex.qp_context = S.context;
+  qp_attr_ex.sq_sig_all = 1;
+
+  qp_attr_ex.send_cq = S.cq;
+  qp_attr_ex.recv_cq = S.cq;
+
+  qp_attr_ex.qp_type = IBV_QPT_DRIVER;
+
+  efa_attr.driver_qp_type = EFADV_QP_DRIVER_TYPE_SRD;
+#define EFA_QP_LOW_LATENCY_SERVICE_LEVEL 8
+  efa_attr.sl = EFA_QP_LOW_LATENCY_SERVICE_LEVEL;
+  efa_attr.flags = 0;
+  // If set, Receive WRs will not be consumed for RDMA write with imm.
+  // efa_attr.flags |= EFADV_QP_FLAGS_UNSOLICITED_WRITE_RECV;
+
+  struct ibv_qp* qp = efadv_create_qp_ex(S.context, &qp_attr_ex, &efa_attr,
+                                         sizeof(struct efadv_qp_init_attr));
+
+  if (!qp) {
+    perror("Failed to create QP");
+    exit(1);
+  }
+
+  struct ibv_qp_attr attr = {};
+  attr.qp_state = IBV_QPS_INIT;
+  attr.pkey_index = 0;
+  attr.port_num = 1;
+  attr.qkey = QKEY;
+  if (ibv_modify_qp(
+          qp, &attr,
+          IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_QKEY)) {
+    perror("Failed to modify QP to INIT");
+    exit(1);
+  }
+
+  memset(&attr, 0, sizeof(attr));
+  attr.qp_state = IBV_QPS_RTR;
+  if (ibv_modify_qp(qp, &attr, IBV_QP_STATE)) {
+    perror("Failed to modify QP to RTR");
+    exit(1);
+  }
+
+  memset(&attr, 0, sizeof(attr));
+  attr.qp_state = IBV_QPS_RTS;
+  attr.sq_psn = 0;
+  if (ibv_modify_qp(qp, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN)) {
+    perror("Failed to modify QP to RTS");
+    exit(1);
+  }
+
+  return qp;
+}
+
 void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
                           RDMAConnectionInfo* local_info, int rank) {
   if (S.qp) return;  // Already initialized for this thread
   if (S.ack_qp) return;
   if (S.recv_ack_qp) return;
+#ifdef EFA
+  S.qp = create_srd_qp_ex(S);
+  S.ack_qp = create_srd_qp_ex(S);
+  S.recv_ack_qp = create_srd_qp_ex(S);
+  if (!S.qp || !S.ack_qp || !S.recv_ack_qp) {
+    perror("Failed to create QPs for EFA");
+    exit(1);
+  }
+#else
   struct ibv_qp_init_attr qp_init_attr = {};
   qp_init_attr.send_cq = S.cq;
   qp_init_attr.recv_cq = S.cq;
@@ -188,13 +297,11 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   qp_init_attr.cap.max_send_sge = 1;
   qp_init_attr.cap.max_recv_sge = 1;
   qp_init_attr.sq_sig_all = 0;
-
   S.qp = ibv_create_qp(S.pd, &qp_init_attr);
   if (!S.qp) {
     perror("Failed to create QP");
     exit(1);
   }
-
   S.ack_qp = ibv_create_qp(S.pd, &qp_init_attr);
   if (!S.ack_qp) {
     perror("Failed to create Ack QP");
@@ -206,6 +313,7 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
     perror("Failed to create Receive Ack QP");
     exit(1);
   }
+#endif
 
   // Query port
   struct ibv_port_attr port_attr;
@@ -221,8 +329,10 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   local_info->lid = port_attr.lid;
   local_info->rkey = S.rkey;
   local_info->addr = reinterpret_cast<uintptr_t>(gpu_buffer);
-  local_info->psn = rand() & 0xffffff;      // random psn
-  local_info->ack_psn = rand() & 0xffffff;  // random ack psn
+  // local_info->psn = rand() & 0xffffff;      // random psn
+  // local_info->ack_psn = rand() & 0xffffff;  // random ack psn
+  local_info->psn = 0;
+  local_info->ack_psn = 0;
   // printf("[DEBUG] Rank %d: Registering local buffer addr=0x%lx, size=%zu
   // bytes\n",
   //        rank, local_info->addr, size);
@@ -235,17 +345,24 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
 }
 
 void modify_qp_to_init(ProxyCtx& S) {
+#ifdef EFA
+  return;
+#endif
   struct ibv_qp_attr attr;
   memset(&attr, 0, sizeof(attr));
 
   attr.qp_state = IBV_QPS_INIT;
   attr.port_num = 1;  // HCA port you use
   attr.pkey_index = 0;
+  attr.qkey = QKEY;
+#ifndef EFA
   attr.qp_access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ |
                          IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
-
-  int flags =
-      IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS;
+#endif
+  int flags = IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_QKEY;
+#ifndef EFA
+  flags |= IBV_QP_ACCESS_FLAGS;
+#endif
 
   if (ibv_modify_qp(S.qp, &attr, flags)) {
     perror("Failed to modify QP to INIT");
@@ -273,7 +390,32 @@ void modify_qp_to_init(ProxyCtx& S) {
   printf("QP modified to INIT state\n");
 }
 
+struct ibv_ah* create_ah(ProxyCtx& S, uint8_t* remote_gid) {
+  struct ibv_ah_attr ah_attr = {};
+  ah_attr.is_global = 1;  // Enable Global Routing Header (GRH)
+  ah_attr.port_num = 1;
+  ah_attr.grh.sgid_index = 0;  // Local GID index
+  memcpy(&ah_attr.grh.dgid, remote_gid, 16);
+  ah_attr.grh.flow_label = 0;
+  ah_attr.grh.hop_limit = 255;
+  ah_attr.grh.traffic_class = 0;
+
+  struct ibv_ah* ah = ibv_create_ah(S.pd, &ah_attr);
+  if (ah == nullptr) {
+    perror("Failed to create AH");
+    exit(1);
+  }
+  return ah;
+}
+
 void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote) {
+#ifdef EFA
+  S.dst_qpn = remote->qp_num;
+  S.dst_ack_qpn = remote->recv_ack_qp_num;
+  S.dst_ah = create_ah(S, remote->gid);
+  return;
+#endif
+
   int is_roce = 0;
 
   struct ibv_port_attr port_attr;
@@ -369,9 +511,31 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote) {
 }
 
 void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
+#ifdef EFA
+  return;
+#endif
   struct ibv_qp_attr attr;
   memset(&attr, 0, sizeof(attr));
   attr.qp_state = IBV_QPS_RTS;
+
+#ifdef EFA
+  attr.sq_psn = 0;
+  if (ibv_modify_qp(S.qp, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN)) {
+    perror("Failed to modify QP to RTS");
+    exit(1);
+  }
+  if (ibv_modify_qp(S.ack_qp, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN)) {
+    perror("Failed to modify Ack QP to RTS");
+    exit(1);
+  }
+  if (ibv_modify_qp(S.recv_ack_qp, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN)) {
+    perror("Failed to modify Receive Ack QP to RTS");
+    exit(1);
+  }
+  printf("QP modified to RTS state\n");
+  return;
+#endif
+
   attr.timeout = 14;
   attr.retry_cnt = 7;
   attr.rnr_retry = 7;
@@ -416,7 +580,7 @@ void post_receive_buffer_for_imm(ProxyCtx& S) {
     sges[i] = {.addr = (uintptr_t)S.mr->addr + offset * kObjectSize,
                .length = kObjectSize,
                .lkey = S.mr->lkey};
-    wrs[i] = {.wr_id = i,
+    wrs[i] = {.wr_id = make_wr_id(S.tag, static_cast<uint32_t>(i)),
               .next = (i + 1 < kMaxOutstandingRecvs) ? &wrs[i + 1] : nullptr,
               .sg_list = &sges[i],
               .num_sge = 1};
@@ -461,7 +625,44 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       fprintf(stderr, "Destination ctx missing fields for dst=%d\n", dst_rank);
       std::abort();
     }
+    const size_t k = wr_ids.size();
+#ifdef EFA
+    struct ibv_qp_ex* qpx = (struct ibv_qp_ex*)ctx->qp;
+    ibv_wr_start(qpx);
 
+    for (size_t j = 0; j < k; ++j) {
+      size_t i = wr_ids[j];
+      auto const& cmd = cmds_to_post[i];
+      wr_ids[j] = wrs_to_post[i];
+      qpx->wr_id = wrs_to_post[i];
+      qpx->comp_mask = 0;
+      qpx->wr_flags = (j + 1 == k) ? IBV_SEND_SIGNALED : 0;
+
+      uint64_t remote_addr = ctx->remote_addr + S.dispatch_recv_data_offset +
+                             (cmd.req_rptr ? cmd.req_rptr : 0);
+
+      if (j + 1 == k) {
+        ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr,
+                              htonl(static_cast<uint32_t>(qpx->wr_id)));
+      } else {
+        ibv_wr_rdma_write(qpx, ctx->remote_rkey, remote_addr);
+      }
+
+      uintptr_t laddr = cmd.req_lptr
+                            ? cmd.req_lptr
+                            : reinterpret_cast<uintptr_t>(buf) + i * cmd.bytes;
+      ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_qpn, QKEY);
+      ibv_wr_set_sge(qpx, ctx->mr->lkey, laddr,
+                     static_cast<uint32_t>(cmd.bytes));
+    }
+    int ret = ibv_wr_complete(qpx);
+    if (ret) {
+      fprintf(stderr, "ibv_wr_complete failed (dst=%d): %s (ret=%d)\n",
+              dst_rank, strerror(ret), ret);
+      std::abort();
+    }
+    const uint64_t batch_tail_wr = wr_ids.back();
+#else
     const size_t k = wr_ids.size();
     std::vector<ibv_sge> sges(k);
     std::vector<ibv_send_wr> wrs(k);
@@ -500,6 +701,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         fprintf(stderr, "Bad WR at %p (wr_id=%lu)\n", (void*)bad, bad->wr_id);
       std::abort();
     }
+#endif
     S.posted.fetch_add(k, std::memory_order_relaxed);
     if (S.wr_id_to_wr_ids.find(batch_tail_wr) != S.wr_id_to_wr_ids.end()) {
       fprintf(stderr,
@@ -512,10 +714,11 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
   }
 }
 
-void local_process_completions(
-    ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
-    std::mutex& finished_wrs_mutex, int thread_idx, ibv_wc* wc, int ne,
-    std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx) {
+void local_process_completions(ProxyCtx& S,
+                               std::unordered_set<uint64_t>& finished_wrs,
+                               std::mutex& finished_wrs_mutex, int thread_idx,
+                               ibv_wc* wc, int ne,
+                               std::vector<ProxyCtx*>& ctx_by_tag) {
   if (ne == 0) return;
   int send_completed = 0;
   // printf("Local thread %d received %d completions\n", thread_idx, ne);
@@ -532,7 +735,8 @@ void local_process_completions(
     }
 
     switch (wc[i].opcode) {
-      case IBV_WC_RDMA_WRITE: {
+      case IBV_WC_RDMA_WRITE:
+      case IBV_WC_SEND: {
         std::lock_guard<std::mutex> lock(finished_wrs_mutex);
         for (auto const& wr_id : S.wr_id_to_wr_ids[wc[i].wr_id]) {
           finished_wrs.insert(wr_id);
@@ -542,21 +746,18 @@ void local_process_completions(
       } break;
       case IBV_WC_RECV:
         if (wc[i].wc_flags & IBV_WC_WITH_IMM) {
-          uint64_t slot = static_cast<uint64_t>(wc[i].wr_id);
-          uint64_t wr_done = static_cast<uint64_t>(wc[i].imm_data);
+          const uint32_t slot = wr_slot(wc[i].wr_id);
+          uint64_t wr_done = static_cast<uint64_t>(ntohl(wc[i].imm_data));
           // Handle regular operation ACK with sequential tracking
           if (!S.has_received_ack || wr_done >= S.largest_completed_wr) {
             S.largest_completed_wr = wr_done;
             S.has_received_ack = true;
           } else {
-            fprintf(stderr,
-                    "Warning: received ACK for WR %lu, but largest completed "
-                    "WR is %lu\n",
-                    wr_done, S.largest_completed_wr);
-            std::abort();
+            S.largest_completed_wr = std::max(S.largest_completed_wr, wr_done);
+            S.has_received_ack = true;
           }
-          uint32_t qpn = wc[i].qp_num;
-          ProxyCtx& S_ack = *qpn2ctx.at(qpn);
+          const uint32_t tag = wr_tag(wc[i].wr_id);
+          ProxyCtx& S_ack = *ctx_by_tag[tag];
           ibv_sge sge = {
               .addr = reinterpret_cast<uintptr_t>(&S_ack.ack_recv_buf[slot]),
               .length = sizeof(uint64_t),
@@ -564,7 +765,7 @@ void local_process_completions(
           };
           ibv_recv_wr rwr = {};
           ibv_recv_wr* bad = nullptr;
-          rwr.wr_id = static_cast<uint64_t>(slot);
+          rwr.wr_id = make_wr_id(tag, slot);
           rwr.sg_list = &sge;
           rwr.num_sge = 1;
           if (ibv_post_recv(S_ack.recv_ack_qp, &rwr, &bad)) {
@@ -589,35 +790,76 @@ void local_process_completions(
   S.completed.fetch_add(send_completed, std::memory_order_relaxed);
 }
 
-void local_poll_completions(
-    ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
-    std::mutex& finished_wrs_mutex, int thread_idx,
-    std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx) {
+void local_poll_completions(ProxyCtx& S,
+                            std::unordered_set<uint64_t>& finished_wrs,
+                            std::mutex& finished_wrs_mutex, int thread_idx,
+                            std::vector<ProxyCtx*>& ctx_by_tag) {
   struct ibv_wc wc[kMaxOutstandingSends];
-  int ne = ibv_poll_cq(S.cq, kMaxOutstandingSends, wc);
+  int ne = 0;
+#ifdef EFA
+  auto cqx = (struct ibv_cq_ex*)(S.cq);
+  struct ibv_poll_cq_attr poll_cq_attr = {.comp_mask = 0};
+  auto ret = ibv_start_poll(cqx, &poll_cq_attr);
+  if (ret) return;
+  while (1) {
+    wc[ne].status = cqx->status;
+    wc[ne].wr_id = cqx->wr_id;
+    wc[ne].opcode = ibv_wc_read_opcode(cqx);
+    wc[ne].wc_flags = ibv_wc_read_wc_flags(cqx);
+    wc[ne].imm_data = ibv_wc_read_imm_data(cqx);
+    wc[ne].byte_len = ibv_wc_read_byte_len(cqx);
+    ne++;
+    if (ne >= kMaxOutstandingSends) break;
+    ret = ibv_next_poll(cqx);
+    if (ret) break;
+  }
+  ibv_end_poll(cqx);
+#else
+  ne = ibv_poll_cq(S.cq, kMaxOutstandingSends, wc);
+#endif
+  // printf("Local poll thread %d polled %d completions\n", thread_idx, ne);
   local_process_completions(S, finished_wrs, finished_wrs_mutex, thread_idx, wc,
-                            ne, qpn2ctx);
+                            ne, ctx_by_tag);
 }
 
 void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
                   std::mutex& finished_wrs_mutex, int thread_idx,
-                  CopyRingBuffer& g_ring,
-                  std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx) {
-  struct ibv_wc wc[kMaxOutstandingSends];
-  int ne = ibv_poll_cq(S.cq, kMaxOutstandingSends, wc);
+                  CopyRingBuffer& g_ring, std::vector<ProxyCtx*>& ctx_by_tag) {
+  struct ibv_wc wc[kMaxOutstandingSends];  // batch poll
+  int ne = 0;
+#ifdef EFA
+  auto cqx = (struct ibv_cq_ex*)(S.cq);
+  struct ibv_poll_cq_attr poll_cq_attr = {.comp_mask = 0};
+  auto ret = ibv_start_poll(cqx, &poll_cq_attr);
+  if (ret) return;
+  while (1) {
+    wc[ne].status = cqx->status;
+    wc[ne].wr_id = cqx->wr_id;
+    wc[ne].opcode = ibv_wc_read_opcode(cqx);
+    wc[ne].wc_flags = ibv_wc_read_wc_flags(cqx);
+    wc[ne].imm_data = ibv_wc_read_imm_data(cqx);
+    wc[ne].byte_len = ibv_wc_read_byte_len(cqx);
+    ne++;
+    if (ne >= kMaxOutstandingSends) break;
+    ret = ibv_next_poll(cqx);
+    if (ret) break;
+  }
+  ibv_end_poll(cqx);
+#else
+  ne = ibv_poll_cq(S.cq, kMaxOutstandingSends, wc);
+#endif
+  printf("Poll CQ Dual thread %d polled %d completions\n", thread_idx, ne);
   local_process_completions(S, finished_wrs, finished_wrs_mutex, thread_idx, wc,
-                            ne, qpn2ctx);
-  remote_process_completions(S, thread_idx, g_ring, ne, wc, qpn2ctx);
+                            ne, ctx_by_tag);
+  remote_process_completions(S, thread_idx, g_ring, ne, wc, ctx_by_tag);
 }
 
-void remote_process_completions(
-    ProxyCtx& S, int idx, CopyRingBuffer& g_ring, int ne, ibv_wc* wc,
-    std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx) {
+void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
+                                int ne, ibv_wc* wc,
+                                std::vector<ProxyCtx*>& ctx_by_tag) {
   if (ne == 0) return;
-
-  // printf("Remote thread %d received %d completions\n", idx, ne);
-  std::unordered_map<uint32_t, std::vector<ibv_recv_wr>> per_qp;
-  per_qp.reserve(8);
+  std::unordered_map<uint32_t, std::vector<ibv_recv_wr>> per_tag;
+  per_tag.reserve(8);
 
   std::vector<CopyTask> task_vec;
   task_vec.reserve(ne);
@@ -637,11 +879,11 @@ void remote_process_completions(
       continue;
     }
     if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM || cqe.opcode == IBV_WC_RECV) {
-      uint32_t qpn = wc[i].qp_num;
-      auto& batch = per_qp[qpn];
+      const uint32_t tag = wr_tag(cqe.wr_id);
+      auto& batch = per_tag[tag];
       ibv_recv_wr wr{};
       S.pool_index = (S.pool_index + 1) % (kRemoteBufferSize / kObjectSize - 1);
-      wr.wr_id = S.pool_index;
+      wr.wr_id = make_wr_id(wr_tag(cqe.wr_id), S.pool_index);
       wr.sg_list = nullptr;
       wr.num_sge = 0;
       wr.next = nullptr;
@@ -658,21 +900,27 @@ void remote_process_completions(
                       .src_ptr = static_cast<char*>(S.mr->addr) + src_offset,
                       .dst_ptr = nullptr,
                       .bytes = kObjectSize};
-        task_vec.push_back(task);
+        if (task.dst_ptr && task.bytes) {
+          task_vec.push_back(task);
+        } else {
+          ProxyCtx* peer_ctx = ctx_by_tag[tag];
+          remote_send_ack(peer_ctx, peer_ctx->ack_qp, task.wr_id, g_ring.ack_mr,
+                          g_ring.ack_buf, idx);
+        }
       }
     }
   }
-  for (auto& [qpn, batch] : per_qp) {
+  for (auto& [tag, batch] : per_tag) {
     if (batch.empty()) continue;
     for (size_t i = 0; i + 1 < batch.size(); ++i) {
       batch[i].next = &batch[i + 1];
     }
     ibv_recv_wr* first = batch.data();
     ibv_recv_wr* bad = nullptr;
-    ProxyCtx& S_ack = *qpn2ctx.at(qpn);
+    ProxyCtx& S_ack = *ctx_by_tag[tag];
     int ret = ibv_post_recv(S_ack.qp, first, &bad);
     if (ret) {
-      fprintf(stderr, "ibv_post_recv failed for qpn=%u: %s\n", qpn,
+      fprintf(stderr, "ibv_post_recv failed for tag=%u: %s\n", tag,
               strerror(ret));
       std::abort();
     }
@@ -684,12 +932,32 @@ void remote_process_completions(
   }
 }
 
-void remote_poll_completions(
-    ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
-    std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx) {
+void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
+                             std::vector<ProxyCtx*>& ctx_by_tag) {
   struct ibv_wc wc[kMaxOutstandingRecvs];
-  int ne = ibv_poll_cq(S.cq, kMaxOutstandingRecvs, wc);
-  remote_process_completions(S, idx, g_ring, ne, wc, qpn2ctx);
+  int ne = 0;
+#ifdef EFA
+  auto cqx = (struct ibv_cq_ex*)(S.cq);
+  struct ibv_poll_cq_attr poll_cq_attr = {.comp_mask = 0};
+  auto ret = ibv_start_poll(cqx, &poll_cq_attr);
+  if (ret) return;
+  while (1) {
+    wc[ne].status = cqx->status;
+    wc[ne].wr_id = cqx->wr_id;
+    wc[ne].opcode = ibv_wc_read_opcode(cqx);
+    wc[ne].wc_flags = ibv_wc_read_wc_flags(cqx);
+    wc[ne].imm_data = ibv_wc_read_imm_data(cqx);
+    wc[ne].byte_len = ibv_wc_read_byte_len(cqx);
+    ne++;
+    if (ne >= kMaxOutstandingRecvs) break;
+    ret = ibv_next_poll(cqx);
+    if (ret) break;
+  }
+  ibv_end_poll(cqx);
+#else
+  ne = ibv_poll_cq(S.cq, kMaxOutstandingRecvs, wc);
+#endif
+  remote_process_completions(S, idx, g_ring, ne, wc, ctx_by_tag);
 }
 
 void remote_reg_ack_buf(ibv_pd* pd, uint64_t* ack_buf, ibv_mr*& ack_mr) {
@@ -703,7 +971,7 @@ void remote_reg_ack_buf(ibv_pd* pd, uint64_t* ack_buf, ibv_mr*& ack_mr) {
   }
 }
 
-void remote_send_ack(struct ibv_qp* ack_qp, uint64_t& wr_id,
+void remote_send_ack(ProxyCtx* ctx, struct ibv_qp* ack_qp, uint64_t& wr_id,
                      ibv_mr* local_ack_mr, uint64_t* ack_buf, int worker_idx) {
   if (!ack_qp || !local_ack_mr) {
     if (!ack_qp) {
@@ -725,6 +993,26 @@ void remote_send_ack(struct ibv_qp* ack_qp, uint64_t& wr_id,
       .lkey = local_ack_mr->lkey,
   };
 
+#ifdef EFA
+
+  auto qpx = (struct ibv_qp_ex*)ack_qp;
+  ibv_wr_start(qpx);
+
+  qpx->wr_flags = IBV_SEND_SIGNALED;
+  qpx->wr_id = wr_id;
+
+  ibv_wr_send_imm(qpx, htonl(static_cast<uint32_t>(wr_id)));
+  ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_ack_qpn, QKEY);
+  ibv_wr_set_sge(qpx, sge.lkey, sge.addr, sge.length);
+
+  auto ret = ibv_wr_complete(qpx);
+  if (ret) {
+    fprintf(stderr, "ibv_wr_complete(SEND_WITH_IMM) failed: %d (%s)\n", ret,
+            strerror(ret));
+    std::abort();
+  }
+
+#else
   ibv_send_wr wr = {};
   ibv_send_wr* bad = nullptr;
   wr.wr_id = wr_id;
@@ -732,7 +1020,7 @@ void remote_send_ack(struct ibv_qp* ack_qp, uint64_t& wr_id,
   wr.num_sge = 1;
   wr.opcode = IBV_WR_SEND_WITH_IMM;
   wr.send_flags = IBV_SEND_SIGNALED;  // generate a CQE
-  wr.imm_data = static_cast<uint32_t>(wr_id);
+  wr.imm_data = htonl(static_cast<uint32_t>(wr_id));
 
   int ret = ibv_post_send(ack_qp, &wr, &bad);
 
@@ -747,7 +1035,7 @@ void remote_send_ack(struct ibv_qp* ack_qp, uint64_t& wr_id,
     }
     std::abort();
   }
-  // printf("Remote thread %d posted ACK for WR %lu\n", worker_idx, wr_id);
+#endif
 }
 
 void local_post_ack_buf(ProxyCtx& S, int depth) {
@@ -773,7 +1061,7 @@ void local_post_ack_buf(ProxyCtx& S, int depth) {
     };
     ibv_recv_wr rwr = {};
     ibv_recv_wr* bad = nullptr;
-    rwr.wr_id = static_cast<uint64_t>(i);
+    rwr.wr_id = make_wr_id(S.tag, static_cast<uint32_t>(i));
     rwr.sg_list = &sge;
     rwr.num_sge = 1;
     if (ibv_post_recv(S.recv_ack_qp, &rwr, &bad)) {

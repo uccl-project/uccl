@@ -4,6 +4,7 @@
 #include "proxy_ctx.hpp"
 #include "ring_buffer.cuh"
 #include "unistd.h"
+#include <infiniband/efadv.h>
 #include <infiniband/verbs.h>
 #include <atomic>
 #include <mutex>
@@ -38,22 +39,21 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote);
 void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info);
 
 void modify_qp_to_init(ProxyCtx& S);
-void local_poll_completions(
-    ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
-    std::mutex& finished_wrs_mutex, int thread_idx,
-    std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx);
-void remote_process_completions(
-    ProxyCtx& S, int idx, CopyRingBuffer& ring, int ne, ibv_wc* wc,
-    std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx);
+void local_poll_completions(ProxyCtx& S,
+                            std::unordered_set<uint64_t>& finished_wrs,
+                            std::mutex& finished_wrs_mutex, int thread_idx,
+                            std::vector<ProxyCtx*>& ctx_by_tag);
+void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& ring,
+                                int ne, ibv_wc* wc,
+                                std::vector<ProxyCtx*>& ctx_by_tag);
 void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
                           RDMAConnectionInfo* local_info, int rank);
 ibv_cq* create_per_thread_cq(ProxyCtx& S);
-void remote_poll_completions(
-    ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
-    std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx);
+void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
+                             std::vector<ProxyCtx*>& ctx_by_tag);
 void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
                           int block_idx);
-void remote_send_ack(struct ibv_qp* ack_qp, uint64_t& wr_id,
+void remote_send_ack(ProxyCtx* ctx, struct ibv_qp* ack_qp, uint64_t& wr_id,
                      ibv_mr* local_ack_mr, uint64_t* ack_buf, int worker_idx);
 void local_post_ack_buf(ProxyCtx& S, int depth);
 void remote_reg_ack_buf(ibv_pd* pd, uint64_t* ack_buf, ibv_mr*& ack_mr);
@@ -62,12 +62,12 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              std::vector<TransferCmd> const& cmds_to_post,
                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
                              int my_rank);
-void local_process_completions(
-    ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
-    std::mutex& finished_wrs_mutex, int thread_idx, ibv_wc* wc, int ne,
-    std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx);
+void local_process_completions(ProxyCtx& S,
+                               std::unordered_set<uint64_t>& finished_wrs,
+                               std::mutex& finished_wrs_mutex, int thread_idx,
+                               ibv_wc* wc, int ne,
+                               std::vector<ProxyCtx*>& ctx_by_tag);
 void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
                   std::mutex& finished_wrs_mutex, int thread_idx,
-                  CopyRingBuffer& g_ring,
-                  std::unordered_map<uint32_t, ProxyCtx*> const& qpn2ctx);
+                  CopyRingBuffer& g_ring, std::vector<ProxyCtx*>& ctx_by_tag);
 #endif  // RDMA_HPP

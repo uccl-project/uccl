@@ -115,6 +115,7 @@ class Proxy {
   std::vector<std::unique_ptr<ProxyCtx>> ctxs_for_all_ranks_;
   std::unordered_map<uint32_t, ProxyCtx*> qpn2ctx_;
   std::vector<RDMAConnectionInfo> local_infos_, remote_infos_;
+  std::vector<ProxyCtx*> ctx_by_tag_;
 };
 
 #endif  // PROXY_HPP

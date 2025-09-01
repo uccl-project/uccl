@@ -2,6 +2,8 @@ CUDA_PATH ?= /usr/local/cuda
 override CXX := /usr/bin/g++
 NVCC      := $(CUDA_PATH)/bin/nvcc
 
+EFA_HOME?=/opt/amazon/efa
+
 PYTHON            ?= python3
 PYBIND11_INCLUDES := $(shell $(PYTHON) -m pybind11 --includes)
 EXT_SUFFIX        := $(shell $(PYTHON) -c "import sysconfig as s; print(s.get_config_var('EXT_SUFFIX') or '.so')")
@@ -12,14 +14,18 @@ TORCH_LIBDIR       := $(shell $(PYTHON) -c "import torch, pathlib; p=pathlib.Pat
 TORCH_ABI          := $(shell $(PYTHON) -c "import torch; print(int(torch._C._GLIBCXX_USE_CXX11_ABI))")
 TORCH_INCS := -I$(TORCH_INCLUDE) -I$(TORCH_INCLUDE_API)
 
+# Python installation path
+PYTHON_SITE_PACKAGES := $(shell $(PYTHON) -c "import site; print(site.getsitepackages()[0])")
+INSTALL_DIR          := $(PYTHON_SITE_PACKAGES)/uccl
+
 # GPU arch (override with: make SM=90)
 SM ?= 90
 
 CXXFLAGS  := -O3 -std=c++17 -Wall -pthread -fPIC -fvisibility=hidden
-LDFLAGS := -lpthread -lglog -libverbs -lnl-3 -lnl-route-3 -Xlinker -rpath -Xlinker $(CUDA_PATH)/lib64
+LDFLAGS := -lpthread -lglog -libverbs -lnl-3 -lnl-route-3 -Xlinker -rpath -Xlinker $(CUDA_PATH)/lib64 -L$(EFA_HOME)/lib -lefa
 NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread -fPIC -fvisibility=hidden" -ccbin /usr/bin/g++
 
-INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../include -I../thirdparty/DeepEP/csrc
+INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../include -I../thirdparty/DeepEP/csrc -I$(EFA_HOME)/include
 
 SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp src/peer_copy_worker.cpp src/uccl_proxy.cpp src/uccl_bench.cpp src/peer_copy_manager.cpp
 SRC_CU  := src/gpu_kernel.cu src/peer_copy.cu src/py_cuda_shims.cu 
@@ -85,6 +91,13 @@ $(PYTARGET): $(OBJ_CPP) $(OBJ_CU) src/pybind_proxy.o
 	  $(INCLUDES) $(PYBIND11_INCLUDES) $^ -lcuda -lcudart $(LDFLAGS) -o $@
 
 py: $(PYTARGET) $(UCCL_EP_EXT)
+
+# Install the module
+install: $(PYTARGET) $(UCCL_EP_EXT)
+	@mkdir -p $(INSTALL_DIR)
+	@cp $(PYTARGET) $(INSTALL_DIR)/
+	@cp $(UCCL_EP_EXT) $(INSTALL_DIR)/
+	@echo "Installation complete. Modules installed as: $(INSTALL_DIR)/$(PYTARGET), $(INSTALL_DIR)/$(UCCL_EP_EXT)"
 
 # Clean all generated files
 clean:

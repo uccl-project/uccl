@@ -13,8 +13,8 @@ void sync_and_post(PeerWorkerCtx& ctx, CopyRingBuffer& ring,
       fprintf(stderr, "Kernel execution failed: %s\n", gpuGetErrorString(err));
       std::abort();
     }
-    remote_send_ack(ring.ack_qp, ctx.highest_issued_wr_id, ring.ack_mr,
-                    ring.ack_buf, idx);
+    remote_send_ack((ProxyCtx*)ring.ctx, ring.ack_qp, ctx.highest_issued_wr_id,
+                    ring.ack_mr, ring.ack_buf, idx);
     ctx.prev_completed_async_memcpy_count = ctx.async_memcpy_count;
   }
 }

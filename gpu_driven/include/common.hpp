@@ -47,4 +47,8 @@ int get_num_max_nvl_peers();
 
 void maybe_enable_peer_access(int src_dev, int dst_dev);
 
+uint64_t make_wr_id(uint32_t tag, uint32_t slot);
+uint32_t wr_tag(uint64_t wrid);
+uint32_t wr_slot(uint64_t wrid);
+
 #endif  // COMMON_HPP
