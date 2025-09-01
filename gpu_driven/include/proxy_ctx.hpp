@@ -21,6 +21,7 @@ struct ProxyCtx {
 
   // Remote memory
   uintptr_t remote_addr = 0;  // Base address of remote rdma_buffer
+  uint64_t remote_len = 0;
   uint32_t remote_rkey = 0;
   uint32_t rkey = 0;
 

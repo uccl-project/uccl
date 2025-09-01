@@ -179,7 +179,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           uccl::nvshmemi_ibgda_put_nbi_warp(
               dst_offset, src_ptr, num_bytes_per_msg, dst_rank,
               sm_id,  // NOTE(MaoZiming): use sm_id for rb.
-              lane_id, slot_idx, ring_addrs, num_ring_addrs);
+              lane_id, slot_idx, ring_addrs, num_ring_addrs, false);
         }
         // Increase counter after finishing
         __syncwarp();
@@ -302,8 +302,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     } else {
       // Inter-node or no IPC: use IBGDA atomic
       uccl::nvshmemi_ibgda_amo_nonfetch_add(
-          reinterpret_cast<int*>(dst_offset), -num_tokens_sent - 1, dst_rank,
-          sm_id, dst_expert_local_idx, false, ring_addrs, num_ring_addrs);
+          dst_offset, -num_tokens_sent - 1, dst_rank, sm_id,
+          dst_expert_local_idx, false, ring_addrs, num_ring_addrs);
     }
     // Clean workspace for next use
     atomic_counter_per_expert[responsible_expert_idx] = 0;
@@ -579,14 +579,16 @@ __global__ __launch_bounds__(1024, 1) void combine(
     // auto const local_x =
     //     static_cast<int4 const*>(x) + local_expert_idx * num_ranks *
     //                                       num_max_dispatch_tokens_per_rank *
-    //                                       hidden_bf16_int4;  //
-    //                                       NOTE(MaoZiming): not used
+    //                                       hidden_bf16_int4;
     auto const local_src_info = src_info + local_expert_idx * num_ranks *
                                                num_max_dispatch_tokens_per_rank;
-    auto const rdma_send_x_vec = static_cast<uint8_t*>(rdma_send_x) +
-                                 local_expert_idx * num_ranks *
-                                     num_max_dispatch_tokens_per_rank *
-                                     num_bytes_per_slot;
+
+    // NOTE(NEW):
+    int const slice_len = num_max_dispatch_tokens_per_rank;
+    auto const rdma_send_x_vec =
+        static_cast<uint8_t*>(rdma_send_x) +
+        ((size_t)local_expert_idx * (size_t)num_ranks + (size_t)dst_rank) *
+            (size_t)slice_len * (size_t)num_bytes_per_slot;
 
     // Unpack layout
     int offset, num_tokens_to_send;
@@ -637,14 +639,25 @@ __global__ __launch_bounds__(1024, 1) void combine(
     for (int token_idx = offset + sub_warp_id;
          token_idx < offset + num_tokens_to_send;
          token_idx += num_warps_per_group) {
+      // const auto x_int4 = local_x + token_idx * hidden_bf16_int4;
       auto const rdma_send_type_row = reinterpret_cast<int*>(
           rdma_send_x_vec + token_idx * num_bytes_per_slot);
       auto const rdma_send_x_vec_row =
           reinterpret_cast<uint8_t*>(rdma_send_type_row);
 
       // Copy directly to local rank, or copy to buffer and issue RDMA
-      auto const src_idx =
-          __shfl_sync(0xffffffff, __ldg(local_src_info + token_idx), 0);
+      // NOTE: New
+      auto const src_idx = __shfl_sync(
+          0xffffffff, __ldg(local_src_info + dst_rank * slice_len + token_idx),
+          0);
+
+      if (src_idx < 0 || src_idx >= num_ranks * slice_len) {
+        if (lane_id == 0) {
+          printf("BAD src_idx=%d total=%d dst_rank=%d token_idx=%d offset=%d\n",
+                 src_idx, num_ranks * slice_len, dst_rank, token_idx, offset);
+        }
+        continue;
+      }
       auto const x_int4 =
           static_cast<int4 const*>(x) + src_idx * hidden_bf16_int4;
       auto const buf_ptr = reinterpret_cast<int64_t>(rdma_send_x_vec_row);
@@ -658,9 +671,10 @@ __global__ __launch_bounds__(1024, 1) void combine(
 
       // NEW APPROACH: Calculate offset within LowLatencyLayout buffer for CPU
       // proxy translation
-      auto const dst_offset =
-          (global_expert_idx * num_max_dispatch_tokens_per_rank + src_idx) *
-          num_bytes_per_slot;
+      uint64_t dst_offset = (static_cast<uint64_t>(global_expert_idx) *
+                                 num_max_dispatch_tokens_per_rank +
+                             static_cast<uint64_t>(src_idx)) *
+                            static_cast<uint64_t>(num_bytes_per_slot);
 
       // Use IPC for intra-node P2P mapping when available
       auto const dst_p2p_ptr =
@@ -670,6 +684,11 @@ __global__ __launch_bounds__(1024, 1) void combine(
                         reinterpret_cast<char*>(rdma_recv_x) + dst_offset),
                     ipc_base_ptrs, rank, dst_rank, max_nvl_peers, 0)
               : nullptr;
+
+      // NOTE: Otherwise overflow.
+      uint64_t dst_off = (reinterpret_cast<uint64_t>(rdma_recv_x) -
+                          reinterpret_cast<uint64_t>(rdma_buffer_ptr)) +
+                         dst_offset;
 
       if (not zero_copy or dst_p2p_ptr != nullptr) {
         // Read from `cpy_src_int4_ptr` and copy into `cpy_dst_int4_ptr`
@@ -794,10 +813,32 @@ __global__ __launch_bounds__(1024, 1) void combine(
       // NOTES: for zero-copy mode, we assume the data is already in the send
       // buffer
       if (dst_p2p_ptr == nullptr) {
+        // printf(
+        //     "Before nvshmemi_ibgda_put_nbi_warp: "
+        //     "  dst_off=%llu,"
+        //     "  dst_offset=0x%llx,"
+        //     "  base_diff=0x%llx,"
+        //     "  global_expert_idx=%d rank=%d ,"
+        //     "  num_ranks=%d num_max_dispatch_tokens_per_rank=%d
+        //     num_bytes_per_slot=%lu," "  token_idx=%d local_src_info=%p
+        //     addr=%p src_idx=%d\n", (unsigned long long)dst_off, (unsigned
+        //     long long)dst_offset, (unsigned long
+        //     long)(reinterpret_cast<uint64_t>(rdma_recv_x) -
+        //                         reinterpret_cast<uint64_t>(rdma_buffer_ptr)),
+        //     global_expert_idx,
+        //     rank,
+        //     num_ranks,
+        //     num_max_dispatch_tokens_per_rank,
+        //     (unsigned long)num_bytes_per_slot,
+        //     token_idx,
+        //     (void*)local_src_info,
+        //     (void*)(local_src_info + token_idx),
+        //     src_idx);
+
         nvshmemi_ibgda_put_nbi_warp(
-            dst_offset, buf_ptr, hidden * sizeof(nv_bfloat16), dst_rank,
+            dst_off, buf_ptr, hidden * sizeof(nv_bfloat16), dst_rank,
             sm_id,  // NOTE(MaoZiming): use sm_id for rb
-            lane_id, token_idx - offset, ring_addrs, num_ring_addrs);
+            lane_id, token_idx - offset, ring_addrs, num_ring_addrs, true);
       }
     }
 
@@ -839,9 +880,9 @@ __global__ __launch_bounds__(1024, 1) void combine(
         // NOTE(MaoZiming): Without ibgda, we can only use atomic add
         // Pass offset to CPU proxy for atomic operation (similar to dispatch
         // phase)
-        nvshmemi_ibgda_amo_nonfetch_add(reinterpret_cast<int*>(off_send), 1,
-                                        dst_rank, sm_id, local_expert_idx,
-                                        false, ring_addrs, num_ring_addrs);
+        nvshmemi_ibgda_amo_nonfetch_add(off_send, 1, dst_rank, sm_id,
+                                        local_expert_idx, false, ring_addrs,
+                                        num_ring_addrs);
       }
       atomic_add_release_global(atomic_clean_flag, -1);
     }
@@ -883,10 +924,11 @@ LOW_LATENCY_COMBINE_RECV:
                       combine_wait_recv_cost_stats + src_rank),
                   wait_recv_cost);
       }
+      printf("Finished responsible_expert_idx < num_experts\n");
     }
   }
-
   cg::this_grid().sync();
+  // printf("Combine after sync\n");
 
   // Reduce tokens
   EP_DEVICE_ASSERT(num_topk <= 32);

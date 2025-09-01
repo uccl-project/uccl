@@ -31,6 +31,7 @@ struct TransferCmd {
   int message_idx;
   bool is_atomic;
   int value;
+  bool is_combine;
 };
 
 struct CopyTask {

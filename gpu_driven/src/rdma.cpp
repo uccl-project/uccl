@@ -342,6 +342,7 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   local_info->lid = port_attr.lid;
   local_info->rkey = S.rkey;
   local_info->addr = reinterpret_cast<uintptr_t>(gpu_buffer);
+  local_info->len = size;
   // local_info->psn = rand() & 0xffffff;      // random psn
   // local_info->ack_psn = rand() & 0xffffff;  // random ack psn
   local_info->psn = 0;
@@ -651,8 +652,36 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       qpx->comp_mask = 0;
       qpx->wr_flags = (j + 1 == k) ? IBV_SEND_SIGNALED : 0;
 
-      uint64_t remote_addr = ctx->remote_addr + S.dispatch_recv_data_offset +
-                             (cmd.req_rptr ? cmd.req_rptr : 0);
+      uint64_t remote_addr;
+
+      if (cmd.is_combine)
+        remote_addr = ctx->remote_addr + (cmd.req_rptr ? cmd.req_rptr : 0);
+      else
+        remote_addr = ctx->remote_addr + S.dispatch_recv_data_offset +
+                      (cmd.req_rptr ? cmd.req_rptr : 0);
+
+      // printf("cmd.is_combine: %d, cmd.req_rptr: %lu, remote_addr: 0x%llx\n",
+      //       cmd.is_combine, cmd.req_rptr,
+      //       (unsigned long long)remote_addr);
+
+      uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
+
+      if (remote_addr < ctx->remote_addr ||
+          remote_addr + cmd.bytes > remote_end) {
+        fprintf(stderr,
+                "[ERROR] Remote write OOB: addr=0x%llx len=%zu (base=0x%llx, "
+                "size=%zu), cmd.req_rptr: 0x%llx\n",
+                (unsigned long long)remote_addr, cmd.bytes,
+                (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
+                (unsigned long long)cmd.req_rptr);
+        cudaError_t err = cudaDeviceSynchronize();
+        if (err != cudaSuccess) {
+          fprintf(stderr, "cudaDeviceSynchronize failed: %s\n",
+                  cudaGetErrorString(err));
+          std::abort();
+        }
+        std::abort();
+      }
 
       if (j + 1 == k) {
         ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr,
@@ -692,8 +721,16 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       wrs[j].sg_list = &sges[j];
       wrs[j].num_sge = 1;
       wrs[j].wr_id = wr_ids[j];
-      wrs[j].wr.rdma.remote_addr =
-          ctx->remote_addr + S.dispatch_recv_data_offset + cmd.req_rptr;
+
+      // TODO: standardize.
+      if (cmd.is_combine)
+        wrs[j].wr.rdma.remote_addr = ctx->remote_addr + cmd.req_rptr;
+      else
+        wrs[j].wr.rdma.remote_addr =
+            ctx->remote_addr + S.dispatch_recv_data_offset + cmd.req_rptr;
+
+      // printf("cmd.is_combine: %d, wrs[j].wr.rdma.remote_addr: %lu\n",
+      // cmd.is_combine, wrs[j].wr.rdma.remote_addr);
       wrs[j].wr.rdma.rkey = ctx->remote_rkey;
       wrs[j].opcode = IBV_WR_RDMA_WRITE;
       wrs[j].send_flags = 0;

@@ -175,9 +175,7 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
         print(f"[simple-test] Combined tensor shape: {combined_x.shape}", flush=True)
         print("[simple-test] ✓ All tests passed!", flush=True)
 
-        time.sleep(20)
-        os._exit(0)
-
+        time.sleep(10)
         print("[simple-test] ✓ before destroy!", flush=True)
 
         try:
@@ -199,13 +197,12 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
         except Exception:
             pass
 
-        if rank == 0:
-            print("[simple-test] ✓ Proxy stopped", flush=True)
-            try:
-                ep.unregister_proxy(device_index)
-            except Exception:
-                pass
-            print("[simple-test] ✓ Command ring freed", flush=True)
+        print("[simple-test] ✓ Proxy stopped", flush=True)
+        try:
+            ep.unregister_proxy(device_index)
+        except Exception:
+            pass
+        print("[simple-test] ✓ Proxy unregistered", flush=True)
 
         dist.barrier()
 

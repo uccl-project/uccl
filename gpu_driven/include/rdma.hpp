@@ -17,8 +17,9 @@ struct RDMAConnectionInfo {
   uint32_t ack_qp_num;
   uint32_t recv_ack_qp_num;
   uint32_t ack_psn;
-  uint32_t rkey;    // Memory region key
-  uintptr_t addr;   // Buffer address
+  uint32_t rkey;   // Memory region key
+  uintptr_t addr;  // Buffer address
+  uint64_t len;
   uint16_t lid;     // Local ID
   uint8_t gid[16];  // Global ID for RoCE (optional)
 };

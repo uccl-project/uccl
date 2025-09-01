@@ -164,9 +164,10 @@ void Proxy::init_common() {
 
     c.remote_addr = remote_infos_[peer].addr;
     c.remote_rkey = remote_infos_[peer].rkey;
+    c.remote_len = remote_infos_[peer].len;
 
-    printf("Peer %d remote addr=%p rkey=%u\n", peer, (void*)c.remote_addr,
-           c.remote_rkey);
+    printf("Peer %d remote addr=%p rkey=%u len=%lu\n", peer,
+           (void*)c.remote_addr, c.remote_rkey, c.remote_len);
 
     if (FILE* f = fopen("/tmp/uccl_debug.txt", "a")) {
       fprintf(
