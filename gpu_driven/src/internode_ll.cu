@@ -362,11 +362,8 @@ LOW_LATENCY_DISPATCH_RECV:
                                 count_index * sizeof(uint64_t);
       int* count_addr = reinterpret_cast<int*>(aligned_count_addr);
 
-      printf("Before waiting for tokens, count_addr: %p\n", (void*)count_addr);
       while ((num_recv_tokens = ld_acquire_sys_global(count_addr)) == 0)
         ;
-      printf("After waiting for tokens, num_recv_tokens: %d, count_addr: %p\n",
-             num_recv_tokens, (void*)count_addr);
       auto wait_recv_cost = clock64() - start_time;
       num_recv_tokens = -num_recv_tokens - 1;
       printf(
@@ -645,6 +642,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
           0);
 
       if (src_idx < 0 || src_idx >= num_ranks * slice_len) {
+        // TODO: sometimes src_idx will be greater. Not sure why.
         if (lane_id == 0) {
           printf("BAD src_idx=%d total=%d dst_rank=%d token_idx=%d offset=%d\n",
                  src_idx, num_ranks * slice_len, dst_rank, token_idx, offset);
@@ -871,22 +869,9 @@ LOW_LATENCY_COMBINE_RECV:
     EP_DEVICE_ASSERT(num_warps_per_group > 1);
     if (sub_warp_id == 0 and lane_id == 0) {
       auto start_time = clock64();
-      printf(
-          "Before ld_acquire_sys_global(rdma_recv_flag + "
-          "responsible_expert_idx): %p \n",
-          rdma_recv_flag + responsible_expert_idx);
-      uint64_t off_wait = (uintptr_t)(rdma_recv_flag + responsible_expert_idx) -
-                          (uintptr_t)(atomic_buffer_ptr);
-      printf("[RECV] wait flag idx=%d byte_off=%llu base=%p ptr=%p\n",
-             responsible_expert_idx, (unsigned long long)off_wait,
-             rdma_recv_flag, rdma_recv_flag + responsible_expert_idx);
       while (ld_acquire_sys_global(rdma_recv_flag + responsible_expert_idx) ==
              0)
         ;
-      printf(
-          "After ld_acquire_sys_global(rdma_recv_flag + "
-          "responsible_expert_idx): %p \n",
-          rdma_recv_flag + responsible_expert_idx);
       auto wait_recv_cost = clock64() - start_time;
       if (combine_wait_recv_cost_stats != nullptr) {
         auto const& src_rank = responsible_expert_idx / num_local_experts;

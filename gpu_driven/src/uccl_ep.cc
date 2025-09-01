@@ -208,9 +208,7 @@ class Buffer {
     EP_HOST_ASSERT(not destroyed);
 
     // Synchronize
-    printf("Before cudaDeviceSynchronize\n");
     CUDA_CHECK(cudaDeviceSynchronize());
-    printf("After cudaDeviceSynchronize\n");
 
     if (num_nvl_bytes > 0) {
       // Barrier
