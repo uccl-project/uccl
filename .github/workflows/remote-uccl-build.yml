@@ -41,6 +41,15 @@ jobs:
 
           ssh-keyscan -H 4.14.153.89 >> ~/.ssh/known_hosts
 
+      - name: Sync PR code to remote
+        shell: bash
+        run: |
+          set -euo pipefail
+          rsync -az --delete \
+            -e "ssh -o BatchMode=yes" \
+            ./gpu_driven ./rdma ./p2p \
+            ./ l4-sky-test-01:/home/skytestuser/uccl/
+
       - name: Build & verify UCCL on remote
         shell: bash
         run: |
@@ -61,7 +70,7 @@ jobs:
             conda activate uccl
 
             cd /home/skytestuser/uccl
-            ./build_and_install.sh cuda gpudriven 3.11 2>&1 | tee build.log
+            ./build_and_install.sh cuda all 3.11 2>&1 | tee build.log
 
             grep -q \"Successfully installed uccl-0.0.1.post4\" build.log
           "'

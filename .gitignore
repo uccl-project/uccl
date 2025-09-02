@@ -87,3 +87,4 @@ dist/
 wheelhouse-*/
 build/
 gpu_driven/*.log
+build.log
