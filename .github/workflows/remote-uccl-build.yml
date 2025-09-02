@@ -1,0 +1,91 @@
+name: Remote UCCL Build & Verify
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+concurrency:
+  group: remote-uccl-build
+  cancel-in-progress: true
+
+jobs:
+  build-on-gpu-host:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout (for artifacts/consistency)
+        uses: actions/checkout@v4
+
+      - name: Setup SSH for l4-sky-test-01
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          echo "${{ secrets.L4_SSH_KEY }}" > ~/.ssh/l4_key
+          chmod 600 ~/.ssh/l4_key
+
+          # SSH config per your host block
+          cat >> ~/.ssh/config <<'EOF'
+          Host l4-sky-test-01
+            HostName 4.14.153.89
+            User skytestuser
+            IdentityFile ~/.ssh/l4_key
+            IdentitiesOnly yes
+          EOF
+
+          # Trust host key (recommended: pin key type actually used by your host)
+          ssh-keyscan -H 4.14.153.89 >> ~/.ssh/known_hosts
+
+      - name: Build & verify UCCL on remote
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Run a login shell remotely, so conda init from ~/.bashrc is respected.
+          # We also explicitly source common conda locations to be safe.
+          ssh l4-sky-test-01 'bash -lc "
+            set -euo pipefail
+
+            # Load conda if not already in PATH
+            if ! command -v conda >/dev/null 2>&1; then
+              # common install locations
+              [ -f ~/miniconda3/etc/profile.d/conda.sh ] && source ~/miniconda3/etc/profile.d/conda.sh || true
+              [ -f ~/anaconda3/etc/profile.d/conda.sh ]  && source ~/anaconda3/etc/profile.d/conda.sh  || true
+              [ -f ~/.bashrc ] && source ~/.bashrc || true
+            fi
+
+            if ! command -v conda >/dev/null 2>&1; then
+              echo \"conda not found on remote host. Install Miniconda and add to ~/.bashrc\" >&2
+              exit 1
+            fi
+
+            # Create env if missing, then activate
+            conda env list | grep -q \"^uccl\" || conda create -y -n uccl python=3.11
+            source \\"$(conda info --base)/etc/profile.d/conda.sh\\"
+            conda activate uccl
+
+            cd /home/skytestuser/uccl
+
+            # Build & install, capture full log
+            ./build_and_install.sh cuda gpudriven 3.11 2>&1 | tee build.log
+
+            # Verify the expected success string
+            grep -q \"Successfully installed uccl-0.0.1.post4\" build.log
+          "'
+
+      - name: Fetch remote build.log
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          scp l4-sky-test-01:/home/skytestuser/uccl/build.log ./build.log || true
+
+      - name: Upload build.log artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
