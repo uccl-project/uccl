@@ -45,6 +45,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          git submodule update --init --recursive
           rsync -az --delete \
             -e "ssh -o BatchMode=yes" \
             ./gpu_driven ./rdma ./p2p \
