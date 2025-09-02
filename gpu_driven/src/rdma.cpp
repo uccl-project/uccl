@@ -370,15 +370,11 @@ void modify_qp_to_init(ProxyCtx& S) {
   attr.qp_state = IBV_QPS_INIT;
   attr.port_num = 1;  // HCA port you use
   attr.pkey_index = 0;
-  attr.qkey = QKEY;
-#ifndef EFA
   attr.qp_access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ |
                          IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
-#endif
-  int flags = IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_QKEY;
-#ifndef EFA
-  flags |= IBV_QP_ACCESS_FLAGS;
-#endif
+
+  int flags =
+      IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS;
 
   if (ibv_modify_qp(S.qp, &attr, flags)) {
     perror("Failed to modify QP to INIT");
