@@ -3,7 +3,11 @@ name: Remote UCCL Build & Verify
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
 
 concurrency:
   group: remote-uccl-build
