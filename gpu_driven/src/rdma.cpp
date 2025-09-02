@@ -215,6 +215,7 @@ ibv_cq* create_per_thread_cq(ProxyCtx& S) {
   return S.cq;
 }
 
+#ifdef EFA
 struct ibv_qp* create_srd_qp_ex(ProxyCtx& S) {
   struct ibv_qp_init_attr_ex qp_attr_ex = {};
   struct efadv_qp_init_attr efa_attr = {};
@@ -284,6 +285,7 @@ struct ibv_qp* create_srd_qp_ex(ProxyCtx& S) {
 
   return qp;
 }
+#endif
 
 void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
                           RDMAConnectionInfo* local_info, int rank) {
@@ -700,7 +702,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
     }
     const uint64_t batch_tail_wr = wr_ids.back();
 #else
-    const size_t k = wr_ids.size();
     std::vector<ibv_sge> sges(k);
     std::vector<ibv_send_wr> wrs(k);
     for (size_t j = 0; j < k; ++j) {
