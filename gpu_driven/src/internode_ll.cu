@@ -827,8 +827,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
       auto const dst_p2p_ptr_flag =
           ipc_base_ptrs
               ? uccl::get_ipc_p2p_ptr(
-                    reinterpret_cast<void*>(
-                        rdma_recv_flag + global_expert_idx * sizeof(uint64_t)),
+                    reinterpret_cast<void*>(rdma_recv_flag + global_expert_idx),
                     ipc_base_ptrs, rank, dst_rank, max_nvl_peers, 0)
               : nullptr;
       uint64_t off_send = (uintptr_t)(rdma_recv_flag + global_expert_idx) -
@@ -871,17 +870,8 @@ LOW_LATENCY_COMBINE_RECV:
     EP_DEVICE_ASSERT(num_warps_per_group > 1);
     if (sub_warp_id == 0 and lane_id == 0) {
       auto start_time = clock64();
-      printf(
-          "Before ld_acquire_sys_global(rdma_recv_flag + "
-          "responsible_expert_idx): %p \n",
-          rdma_recv_flag + responsible_expert_idx * sizeof(uint64_t));
-      while (ld_acquire_sys_global(rdma_recv_flag + responsible_expert_idx *
-                                                        sizeof(uint64_t)) == 0)
+      while (ld_acquire_sys_global(rdma_recv_flag + responsible_expert_idx) == 0)
         ;
-      printf(
-          "After ld_acquire_sys_global(rdma_recv_flag + "
-          "responsible_expert_idx): %p \n",
-          rdma_recv_flag + responsible_expert_idx * sizeof(uint64_t));
       auto wait_recv_cost = clock64() - start_time;
       if (combine_wait_recv_cost_stats != nullptr) {
         auto const& src_rank = responsible_expert_idx / num_local_experts;

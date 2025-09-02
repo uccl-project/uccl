@@ -175,7 +175,7 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
         print(f"[simple-test] Combined tensor shape: {combined_x.shape}", flush=True)
         print("[simple-test] ✓ All tests passed!", flush=True)
 
-        time.sleep(10)
+        time.sleep(1)
         print("[simple-test] ✓ before destroy!", flush=True)
 
         try:
