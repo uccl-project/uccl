@@ -870,7 +870,8 @@ LOW_LATENCY_COMBINE_RECV:
     EP_DEVICE_ASSERT(num_warps_per_group > 1);
     if (sub_warp_id == 0 and lane_id == 0) {
       auto start_time = clock64();
-      while (ld_acquire_sys_global(rdma_recv_flag + responsible_expert_idx) == 0)
+      while (ld_acquire_sys_global(rdma_recv_flag + responsible_expert_idx) ==
+             0)
         ;
       auto wait_recv_cost = clock64() - start_time;
       if (combine_wait_recv_cost_stats != nullptr) {
