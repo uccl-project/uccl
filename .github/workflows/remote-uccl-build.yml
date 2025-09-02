@@ -48,7 +48,7 @@ jobs:
           rsync -az --delete \
             -e "ssh -o BatchMode=yes" \
             ./gpu_driven ./rdma ./p2p \
-            ./ l4-sky-test-01:/home/skytestuser/uccl/
+            ./ l4-sky-test-01:/home/skytestuser/uccl-test/
 
       - name: Build & verify UCCL on remote
         shell: bash
@@ -80,7 +80,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          scp -o BatchMode=yes l4-sky-test-01:/home/skytestuser/uccl/build.log ./build.log || true
+          scp -o BatchMode=yes l4-sky-test-01:/home/skytestuser/uccl-test/build.log ./build.log || true
 
       - name: Upload build.log artifact
         if: always()
