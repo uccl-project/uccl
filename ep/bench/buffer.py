@@ -362,5 +362,13 @@ class Buffer:
                 `[num_local_experts, num_ranks * num_max_dispatch_tokens_per_rank, hidden]`, you should fill this buffer
                 by yourself.
         """
-        src_info, layout_range, num_max_dispatch_tokens_per_rank, hidden, num_experts = handle
-        return self.runtime.get_next_low_latency_combine_buffer(num_max_dispatch_tokens_per_rank, hidden, num_experts)
+        (
+            src_info,
+            layout_range,
+            num_max_dispatch_tokens_per_rank,
+            hidden,
+            num_experts,
+        ) = handle
+        return self.runtime.get_next_low_latency_combine_buffer(
+            num_max_dispatch_tokens_per_rank, hidden, num_experts
+        )

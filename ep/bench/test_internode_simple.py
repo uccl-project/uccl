@@ -19,7 +19,14 @@ from buffer import Buffer
 import os
 import sys
 
-from utils import init_dist, get_peer_ip, detect_ib_hca, get_cpu_proxies_meta, initialize_uccl, destroy_uccl
+from utils import (
+    init_dist,
+    get_peer_ip,
+    detect_ib_hca,
+    get_cpu_proxies_meta,
+    initialize_uccl,
+    destroy_uccl,
+)
 
 
 def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
