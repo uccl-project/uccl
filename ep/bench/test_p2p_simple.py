@@ -23,7 +23,6 @@ import numpy as np
 
 try:
     from uccl import ep
-    from uccl import uccl_ep as ep
 except ImportError:
     import sys
 

@@ -48,7 +48,6 @@ SRC_LOCAL  := bench/benchmark_local.cu
 SRC_REMOTE := bench/benchmark_remote.cu
 SRC_DUAL   := bench/benchmark_dual.cu
 
-PYBIND_SRC := src/pybind_proxy.cc
 OBJ_CPP := $(SRC_CPP:.cpp=.o)
 OBJ_CU  := $(SRC_CU:.cu=.o)
 
@@ -56,18 +55,7 @@ OBJ_LOCAL  := $(OBJ_CPP) $(OBJ_CU) $(SRC_LOCAL:.cu=.o)
 OBJ_REMOTE := $(OBJ_CPP) $(OBJ_CU) $(SRC_REMOTE:.cu=.o)
 OBJ_DUAL   := $(OBJ_CPP) $(OBJ_CU) $(SRC_DUAL:.cu=.o)
 
-PYBIND_OBJ := $(PYBIND_SRC:.cc=.o)
-
-UCCL_EP_OBJS := src/uccl_ep.o src/internode_ll.o src/ep_runtime.o src/common.o
-UCCL_EP_EXT  := uccl_ep$(EXT_SUFFIX)
-
-$(UCCL_EP_EXT): $(UCCL_EP_OBJS)
-	$(CXX) $(CXXFLAGS) -shared -fPIC \
-	    -D_GLIBCXX_USE_CXX11_ABI=$(TORCH_ABI) \
-	    $(INCLUDES) $(PYBIND11_INCLUDES) $^ \
-	    -L$(TORCH_LIBDIR) -Wl,-rpath,$(TORCH_LIBDIR) \
-	    -ltorch_python -ltorch -ltorch_cpu -ltorch_cuda -lc10 -lc10_cuda \
-	    -o $@
+UCCL_EP_EXT  := ep$(EXT_SUFFIX)
 
 TARGET_LOCAL  := benchmark_local
 TARGET_REMOTE := benchmark_remote
@@ -76,7 +64,7 @@ PYTARGET      := ep$(EXT_SUFFIX)
 
 .PHONY: all py clean
 
-all: $(TARGET_LOCAL) $(TARGET_REMOTE) $(TARGET_DUAL) $(PYTARGET) $(UCCL_EP_EXT)
+all: $(TARGET_LOCAL) $(TARGET_REMOTE) $(TARGET_DUAL) $(UCCL_EP_EXT)
 
 # C++ compilation rule with dependency generation
 %.o: %.cpp
@@ -100,16 +88,20 @@ $(TARGET_DUAL): $(OBJ_DUAL)
 
 SRC_CU  := src/gpu_kernel.cu src/peer_copy.cu src/py_cuda_shims.cu
 
-$(PYTARGET): $(OBJ_CPP) $(OBJ_CU) src/pybind_proxy.o
-	$(NVCC) -arch=sm_$(SM) $(NVCCFLAGS) -shared -Xcompiler "-fPIC" \
-	  $(INCLUDES) $(PYBIND11_INCLUDES) $^ -lcuda -lcudart $(LDFLAGS) -o $@
+$(UCCL_EP_EXT): $(OBJ_CPP) $(OBJ_CU)
+	$(CXX) $(CXXFLAGS) -shared -fPIC \
+	    -D_GLIBCXX_USE_CXX11_ABI=$(TORCH_ABI) \
+	    $(INCLUDES) $(PYBIND11_INCLUDES) $^ \
+	    -L$(TORCH_LIBDIR) -Wl,-rpath,$(TORCH_LIBDIR) \
+	    -L$(CUDA_PATH)/lib64 -Wl,-rpath,$(CUDA_PATH)/lib64 \
+	    -ltorch_python -ltorch -ltorch_cpu -ltorch_cuda -lc10 -lc10_cuda \
+	    -lcuda -lcudart $(LDFLAGS) -o $@
 
 py: $(PYTARGET) $(UCCL_EP_EXT)
 
 # Install the module
-install: $(PYTARGET) $(UCCL_EP_EXT)
+install: $(UCCL_EP_EXT)
 	@mkdir -p $(INSTALL_DIR)
-	@cp $(PYTARGET) $(INSTALL_DIR)/
 	@cp $(UCCL_EP_EXT) $(INSTALL_DIR)/
 	@echo "Installation complete. Modules installed as: $(INSTALL_DIR)/$(PYTARGET), $(INSTALL_DIR)/$(UCCL_EP_EXT)"
 
@@ -117,13 +109,12 @@ install: $(PYTARGET) $(UCCL_EP_EXT)
 clean:
 	rm -f $(OBJ_CPP) $(OBJ_CU) \
 	      $(SRC_LOCAL:.cu=.o) $(SRC_REMOTE:.cu=.o) $(SRC_DUAL:.cu=.o) \
-	      $(PYBIND_OBJ) \
 	      $(TARGET_LOCAL) $(TARGET_REMOTE) $(TARGET_DUAL) \
-	      $(PYTARGET) $(UCCL_EP_EXT) \
+	      $(UCCL_EP_EXT) \
 	      *.d src/*.d bench/*.d src/*.o
 
 # Automatically include dependency files if they exist
 DEPS := $(OBJ_CPP:.o=.d) $(OBJ_CU:.o=.d) \
         $(SRC_LOCAL:.cu=.d) $(SRC_REMOTE:.cu=.d) $(SRC_DUAL:.cu=.d) \
-        $(PYBIND_OBJ:.o=.d) $(UCCL_EP_OBJ:.o=.d)
+        $(UCCL_EP_OBJ:.o=.d)
 -include $(DEPS)

@@ -12,7 +12,6 @@ import sys
 
 try:
     from uccl import ep
-    from uccl import uccl_ep as ep
 except ImportError:
     sys.stderr.write("Failed to import uccl modules\n")
     sys.exit(1)

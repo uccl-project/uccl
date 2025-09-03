@@ -6,7 +6,7 @@ import torch.distributed as dist
 from typing import Optional
 import glob
 
-from uccl.uccl_ep import EventHandle
+from uccl.ep import EventHandle
 
 
 def init_dist(local_rank: int, num_local_ranks: int):
