@@ -24,29 +24,29 @@ import torch
 import torch.distributed as dist
 
 try:
-    from uccl import gpu_driven
+    from uccl import ep
 except ImportError as exc:
-    sys.stderr.write("Failed to import gpu_driven\n")
+    sys.stderr.write("Failed to import ep\n")
     raise
 
 from utils import init_dist, get_peer_ip, detect_ib_hca, get_cpu_proxies_meta
 
 
 def make_proxies(
-    bench: gpu_driven.Bench,
+    bench: ep.Bench,
     buf_addr: int,
     total_size: int,
     rank: int,
     peer_ip: str,
     mode: str,
     peers_meta_list=None,
-) -> List[gpu_driven.Proxy]:
+) -> List[ep.Proxy]:
     env = bench.env_info()
     num_blocks = int(env.blocks)
-    proxies: List[gpu_driven.Proxy] = []
+    proxies: List[ep.Proxy] = []
     for i in range(num_blocks):
         rb_i = bench.ring_addr(i)
-        p = gpu_driven.Proxy(
+        p = ep.Proxy(
             rb_addr=rb_i,
             block_idx=i,
             gpu_buffer_addr=buf_addr,
@@ -69,13 +69,13 @@ def make_proxies(
 
 def run_rank0_sender(args, peer_ip: str, peers_meta_list: list, nbytes: int, buf_addr):
     dev = torch.cuda.current_device()
-    gpu_driven.set_device(dev)
+    ep.set_device(dev)
     print(
         f"[rank 0] Using CUDA device {dev}: {torch.cuda.get_device_name(dev)}",
         flush=True,
     )
 
-    bench = gpu_driven.Bench()
+    bench = ep.Bench()
     env = bench.env_info()
     print(
         f"[rank 0] peer={peer_ip} blocks={int(env.blocks)} "
@@ -112,8 +112,8 @@ def run_rank0_sender(args, peer_ip: str, peers_meta_list: list, nbytes: int, buf
 
 def run_rank1_remote(args, peer_ip: str, peers_meta_list: list, nbytes: int, buf_addr):
     dev = torch.cuda.current_device()
-    gpu_driven.set_device(dev)
-    bench = gpu_driven.Bench()
+    ep.set_device(dev)
+    bench = ep.Bench()
     env = bench.env_info()
     proxies = make_proxies(
         bench,
@@ -125,7 +125,7 @@ def run_rank1_remote(args, peer_ip: str, peers_meta_list: list, nbytes: int, buf
         peers_meta_list=peers_meta_list,
     )
     device_index = int(os.environ.get("LOCAL_RANK", "0"))
-    workers = gpu_driven.PeerCopyManager(src_device=device_index)
+    workers = ep.PeerCopyManager(src_device=device_index)
     workers.start_for_proxies(proxies)
     print("[rank 1] PeerCopyManager started.", flush=True)
     time.sleep(2)

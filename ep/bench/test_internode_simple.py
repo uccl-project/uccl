@@ -21,7 +21,7 @@ import sys
 
 # import deep_ep as ep
 try:
-    from uccl import gpu_driven
+    from uccl import ep
     from uccl import uccl_ep as ep
 except ImportError as exc:
     import sys
@@ -63,7 +63,7 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
         device_index
     ).multi_processor_count
 
-    bench = gpu_driven.Bench()
+    bench = ep.Bench()
     # x_ptr = x.data_ptr()
     proxies = []
 
@@ -78,7 +78,7 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
     peers_meta_list = [rank2meta[r] for r in range(num_ranks)]
 
     for i in range(bench.num_proxies()):
-        proxy = gpu_driven.Proxy(
+        proxy = ep.Proxy(
             rb_addr=bench.ring_addr(i),
             block_idx=i,
             gpu_buffer_addr=scratch_ptr,
@@ -95,9 +95,9 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
         proxies[i].start_dual()
 
     workers = None
-    if hasattr(gpu_driven, "PeerCopyManager"):
+    if hasattr(ep, "PeerCopyManager"):
         try:
-            workers = gpu_driven.PeerCopyManager(src_device=device_index)
+            workers = ep.PeerCopyManager(src_device=device_index)
             workers.start_for_proxies(proxies)
             if rank == 0:
                 print("[simple-test] ✓ PeerCopyManager started", flush=True)

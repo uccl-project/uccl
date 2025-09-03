@@ -45,7 +45,7 @@ jobs:
           git submodule update --init --recursive thirdparty/nccl
           rsync -az --delete \
             -e "ssh -o BatchMode=yes" \
-            ./gpu_driven ./rdma ./p2p \
+            ./ep ./rdma ./p2p \
             ./ l4-sky-test-01:/home/skytestuser/uccl-test/
 
       - name: Build & verify UCCL on remote

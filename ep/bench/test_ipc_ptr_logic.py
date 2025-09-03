@@ -11,7 +11,7 @@ import os
 import sys
 
 try:
-    from uccl import gpu_driven
+    from uccl import ep
     from uccl import uccl_ep as ep
 except ImportError:
     sys.stderr.write("Failed to import uccl modules\n")
@@ -34,7 +34,7 @@ def test_ipc_ptr_logic(rank: int, world_size: int, group: dist.ProcessGroup):
     print(f"[Rank {rank}] Peer IP: {peer_ip}")
 
     # Initialize GPU-driven components
-    bench = gpu_driven.Bench()
+    bench = ep.Bench()
 
     # Create scratch buffer for RDMA
     scratch_size = int(64e6)  # 64MB (smaller for testing)
@@ -48,7 +48,7 @@ def test_ipc_ptr_logic(rank: int, world_size: int, group: dist.ProcessGroup):
     # Setup proxies (minimal setup, just enough for testing)
     proxies = []
     for i in range(min(2, bench.blocks())):  # Only create 2 proxies for testing
-        proxy = gpu_driven.Proxy(
+        proxy = ep.Proxy(
             rb_addr=bench.ring_addr(i),
             block_idx=i,
             gpu_buffer_addr=scratch_ptr,

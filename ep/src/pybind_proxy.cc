@@ -14,13 +14,13 @@
 
 namespace py = pybind11;
 
-PYBIND11_MODULE(gpu_driven, m) {
+PYBIND11_MODULE(ep, m) {
   m.doc() = "Python bindings for RDMA proxy and granular benchmark control";
   m.def("alloc_cmd_ring", &alloc_cmd_ring);
   m.def("free_cmd_ring", &free_cmd_ring);
   m.def("launch_gpu_issue_kernel", [](int blocks, int threads_per_block,
                                       uintptr_t stream_ptr, uintptr_t rb_ptr) {
-    const size_t shmem_bytes = kQueueSize * 2 * sizeof(unsigned long long);
+    size_t const shmem_bytes = kQueueSize * 2 * sizeof(unsigned long long);
     auto* stream = reinterpret_cast<cudaStream_t>(stream_ptr);
     auto* rbs = reinterpret_cast<DeviceToHostCmdBuffer*>(rb_ptr);
     auto st = launch_gpu_issue_batched_commands_shim(blocks, threads_per_block,

@@ -22,7 +22,7 @@ import torch
 import numpy as np
 
 try:
-    from uccl import gpu_driven
+    from uccl import ep
     from uccl import uccl_ep as ep
 except ImportError:
     import sys
@@ -39,7 +39,7 @@ def test_single_gpu():
     print(f"Using CUDA device {device}: {torch.cuda.get_device_name(device)}")
 
     # Initialize bench
-    bench = gpu_driven.Bench()
+    bench = ep.Bench()
     # Skip env_info() call due to type binding issue
     print(f"Bench initialized successfully")
 
@@ -50,7 +50,7 @@ def test_single_gpu():
     print(f"Created test buffer: {buffer_size * 4 / 1e6:.2f}MB at 0x{test_ptr:x}")
 
     # Create proxy
-    proxy = gpu_driven.Proxy(
+    proxy = ep.Proxy(
         rb_addr=bench.ring_addr(0),
         block_idx=0,
         gpu_buffer_addr=test_ptr,
@@ -104,8 +104,8 @@ def test_multi_gpu(num_gpus):
         print(f"GPU {gpu_id}: Created buffer at 0x{pointers[gpu_id]:x}")
 
         # Create bench and proxy for this GPU
-        bench = gpu_driven.Bench()
-        proxy = gpu_driven.Proxy(
+        bench = ep.Bench()
+        proxy = ep.Proxy(
             rb_addr=bench.ring_addr(0),
             block_idx=0,
             gpu_buffer_addr=pointers[gpu_id],
@@ -196,8 +196,8 @@ def test_distributed():
     test_ptr = test_buffer.data_ptr()
 
     # Create bench and proxy
-    bench = gpu_driven.Bench()
-    proxy = gpu_driven.Proxy(
+    bench = ep.Bench()
+    proxy = ep.Proxy(
         rb_addr=bench.ring_addr(0),
         block_idx=0,
         gpu_buffer_addr=test_ptr,

@@ -12,9 +12,9 @@ For UCCL's host/CPU-driven P2P engine, see [p2p](../p2p/) folder.
 
 ## Install
 
-Installing `gpu_driven` as a Python package:
+Installing `ep` as a Python package:
 ```bash
-./build_and_install.sh cuda gpudriven 3.11
+./build_and_install.sh cuda ep 3.11
 ```
 Alternatively, 
 ```bash

@@ -72,7 +72,7 @@ $(UCCL_EP_EXT): $(UCCL_EP_OBJS)
 TARGET_LOCAL  := benchmark_local
 TARGET_REMOTE := benchmark_remote
 TARGET_DUAL   := benchmark_dual
-PYTARGET      := gpu_driven$(EXT_SUFFIX)
+PYTARGET      := ep$(EXT_SUFFIX)
 
 .PHONY: all py clean
 
