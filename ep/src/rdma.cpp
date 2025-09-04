@@ -128,33 +128,46 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
          rank, block_idx, gpu_buf, bytes);
   if (S.context) return;  // already initialized
 
-  struct ibv_device** dev_list = ibv_get_device_list(NULL);
+  int num_devices = 0;
+  struct ibv_device** dev_list = ibv_get_device_list(&num_devices);
   if (!dev_list) {
     perror("Failed to get IB devices list");
     exit(1);
   }
 
-  // Get GPU idx
+  // Assuming fixed GPU idx for now
   int gpu_idx = 0;
+  // Ranked by GPU idx
   auto gpu_cards = uccl::get_gpu_cards();
+  // Ranked by RDMA NIC name (not the ibv_get_device_list order)
   auto ib_nics = uccl::get_rdma_nics();
+  // Get GPU pcie path
   auto gpu_device_path = gpu_cards[gpu_idx];
+  // Find the RDMA NIC that is closest to the GPU.
   auto ib_nic_it = std::min_element(
       ib_nics.begin(), ib_nics.end(), [&](auto const& a, auto const& b) {
         return uccl::cal_pcie_distance(gpu_device_path, a.second) <
                uccl::cal_pcie_distance(gpu_device_path, b.second);
       });
-  int selected_idx = ib_nic_it - ib_nics.begin();
-  printf("[RDMA] Selected NIC %s for GPU %s\n", ib_nic_it->first.c_str(),
-         gpu_device_path.c_str());
+  auto selected_nic_name = ib_nic_it->first;
 
-  S.context = ibv_open_device(dev_list[selected_idx]);
+  int selected_dev_idx = -1;
+  for (int i = 0; i < num_devices; i++) {
+    if (strcmp(ibv_get_device_name(dev_list[i]), selected_nic_name.c_str()) ==
+        0) {
+      selected_dev_idx = i;
+      break;
+    }
+  }
+  CHECK(selected_dev_idx != -1) << "Selected RDMA NIC not found";
+
+  S.context = ibv_open_device(dev_list[selected_dev_idx]);
   if (!S.context) {
     perror("Failed to open device");
     exit(1);
   }
-  printf("[RDMA] Selected NIC: %s (index %d)\n",
-         ibv_get_device_name(dev_list[selected_idx]), selected_idx);
+  printf("[RDMA] Selected NIC %s (index %d) for GPU %d\n",
+         selected_nic_name.c_str(), selected_dev_idx, gpu_idx);
 
   ibv_free_device_list(dev_list);
 
