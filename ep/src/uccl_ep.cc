@@ -62,6 +62,14 @@ static std::vector<uint64_t> collect_ring_addrs_for_device(int device_index) {
   return addrs;
 }
 
+bool is_sm90_compiled() {
+#ifndef DISABLE_SM90_FEATURES
+  return true;
+#else
+  return false;
+#endif
+}
+
 class Buffer {
  public:
   Buffer(int rank, int num_ranks, long num_nvl_bytes, long num_rdma_bytes,
@@ -199,6 +207,77 @@ class Buffer {
         rank, num_ranks, num_nvl_bytes, num_rdma_bytes, low_latency_mode);
   }
 
+  std::tuple<torch::Tensor, std::optional<torch::Tensor>, torch::Tensor,
+             torch::Tensor, std::optional<EventHandle>>
+  get_dispatch_layout(torch::Tensor const& topk_idx, int num_experts,
+                      std::optional<EventHandle>& previous_event, bool async,
+                      bool allocate_on_comm_stream) {
+    EP_HOST_ASSERT(topk_idx.dim() == 2);
+    EP_HOST_ASSERT(topk_idx.is_contiguous());
+    EP_HOST_ASSERT(num_experts > 0);
+
+    // Allocate all tensors on comm stream if set
+    // NOTES: do not allocate tensors upfront!
+    auto compute_stream = at::cuda::getCurrentCUDAStream();
+    if (allocate_on_comm_stream) {
+      EP_HOST_ASSERT(previous_event.has_value() and async);
+      at::cuda::setCurrentCUDAStream(comm_stream);
+    }
+
+    // Wait previous tasks to be finished
+    if (previous_event.has_value()) {
+      stream_wait(comm_stream, previous_event.value());
+    } else {
+      stream_wait(comm_stream, compute_stream);
+    }
+
+    auto num_tokens = static_cast<int>(topk_idx.size(0)),
+         num_topk = static_cast<int>(topk_idx.size(1));
+    auto num_tokens_per_rank =
+        torch::empty({num_ranks}, dtype(torch::kInt32).device(torch::kCUDA));
+    auto num_tokens_per_rdma_rank = std::optional<torch::Tensor>();
+    auto num_tokens_per_expert =
+        torch::empty({num_experts}, dtype(torch::kInt32).device(torch::kCUDA));
+    auto is_token_in_rank = torch::empty(
+        {num_tokens, num_ranks}, dtype(torch::kBool).device(torch::kCUDA));
+    if (is_internode_available())
+      num_tokens_per_rdma_rank = torch::empty(
+          {num_rdma_ranks}, dtype(torch::kInt32).device(torch::kCUDA));
+
+    layout::get_dispatch_layout(
+        topk_idx.data_ptr<int64_t>(), num_tokens_per_rank.data_ptr<int>(),
+        num_tokens_per_rdma_rank.has_value()
+            ? num_tokens_per_rdma_rank.value().data_ptr<int>()
+            : nullptr,
+        num_tokens_per_expert.data_ptr<int>(),
+        is_token_in_rank.data_ptr<bool>(), num_tokens, num_topk, num_ranks,
+        num_experts, comm_stream);
+
+    // Wait streams
+    std::optional<EventHandle> event;
+    if (async) {
+      event = EventHandle(comm_stream);
+      for (auto& t : {topk_idx, num_tokens_per_rank, num_tokens_per_expert,
+                      is_token_in_rank}) {
+        t.record_stream(comm_stream);
+        if (allocate_on_comm_stream) t.record_stream(compute_stream);
+      }
+      for (auto& to : {num_tokens_per_rdma_rank}) {
+        to.has_value() ? to->record_stream(comm_stream) : void();
+        if (allocate_on_comm_stream)
+          to.has_value() ? to->record_stream(compute_stream) : void();
+      }
+    } else {
+      stream_wait(compute_stream, comm_stream);
+    }
+
+    // Switch back compute stream
+    if (allocate_on_comm_stream) at::cuda::setCurrentCUDAStream(compute_stream);
+
+    return {num_tokens_per_rank, num_tokens_per_rdma_rank,
+            num_tokens_per_expert, is_token_in_rank, event};
+  }
+
   ~Buffer() noexcept(false) {
     if (not explicitly_destroy) {
       destroy();
@@ -254,6 +333,33 @@ class Buffer {
 
     destroyed = true;
     available = false;
+  }
+
+  void clean_low_latency_buffer(int num_max_dispatch_tokens_per_rank,
+                                int hidden, int num_experts) {
+#ifndef DISABLE_NVSHMEM
+    EP_HOST_ASSERT(low_latency_mode);
+
+    auto layout =
+        LowLatencyLayout(rdma_buffer_ptr, num_max_dispatch_tokens_per_rank,
+                         hidden, num_ranks, num_experts);
+    auto clean_meta_0 = layout.buffers[0].clean_meta();
+    auto clean_meta_1 = layout.buffers[1].clean_meta();
+
+    auto check_boundary = [=](void* ptr, size_t num_bytes) {
+      auto offset = reinterpret_cast<int64_t>(ptr) -
+                    reinterpret_cast<int64_t>(rdma_buffer_ptr);
+      EP_HOST_ASSERT(0 <= offset and offset + num_bytes <= num_rdma_bytes);
+    };
+    check_boundary(clean_meta_0.first, clean_meta_0.second * sizeof(int));
+    check_boundary(clean_meta_1.first, clean_meta_1.second * sizeof(int));
+
+    uccl::internode_ll::clean_low_latency_buffer(
+        clean_meta_0.first, clean_meta_0.second, clean_meta_1.first,
+        clean_meta_1.second, at::cuda::getCurrentCUDAStream());
+#else
+    EP_HOST_ASSERT(false and "NVSHMEM is disabled during compilation");
+#endif
   }
 
   std::tuple<torch::Tensor, std::optional<torch::Tensor>, torch::Tensor,
@@ -546,6 +652,27 @@ class Buffer {
     return {reinterpret_cast<char const*>(unique_id.data()), unique_id.size()};
   }
 
+  torch::Tensor get_next_low_latency_combine_buffer(
+      int num_max_dispatch_tokens_per_rank, int hidden, int num_experts) const {
+    LowLatencyLayout layout(rdma_buffer_ptr, num_max_dispatch_tokens_per_rank,
+                            hidden, num_ranks, num_experts);
+
+    auto buffer = layout.buffers[low_latency_buffer_idx];
+    auto dtype = torch::kBFloat16;
+    auto num_msg_elems = static_cast<int>(buffer.num_bytes_per_combine_msg /
+                                          elementSize(torch::kBFloat16));
+
+    EP_HOST_ASSERT(
+        buffer.num_bytes_per_combine_msg % elementSize(torch::kBFloat16) == 0);
+    return torch::from_blob(
+        buffer.combine_rdma_send_buffer_data_start,
+        {num_experts / num_ranks, num_ranks * num_max_dispatch_tokens_per_rank,
+         hidden},
+        {num_ranks * num_max_dispatch_tokens_per_rank * num_msg_elems,
+         num_msg_elems, 1},
+        torch::TensorOptions().dtype(dtype).device(torch::kCUDA));
+  }
+
   void sync(std::vector<int> const& device_ids,
             std::vector<std::optional<pybind11::bytearray>> const&
                 all_gathered_handles,
@@ -636,8 +763,10 @@ class Buffer {
         rdma_buffer_ptr =
             internode::alloc(num_rdma_bytes, NUM_BUFFER_ALIGNMENT_BYTES);
       } else {
-        printf("rdma_buffer_ptr is set, using existing buffer: %p\n",
-               rdma_buffer_ptr);
+        printf(
+            "rdma_buffer_ptr is set, using existing buffer: %p, "
+            "num_rdma_bytes: %ld\n",
+            rdma_buffer_ptr, num_rdma_bytes);
       }
       CUDA_CHECK(
           cudaMemsetAsync(rdma_buffer_ptr, 0, num_rdma_bytes, comm_stream));
@@ -662,6 +791,24 @@ class Buffer {
     printf("Buffer atomic_buffer_ptr=%p\n", ptr);
     atomic_buffer_ptr = ptr;
   }
+
+  torch::Tensor get_local_buffer_tensor(pybind11::object const& dtype,
+                                        int64_t offset,
+                                        bool use_rdma_buffer) const {
+    torch::ScalarType casted_dtype =
+        torch::python::detail::py_object_to_dtype(dtype);
+    auto element_bytes = static_cast<int64_t>(elementSize(casted_dtype));
+    auto base_ptr =
+        static_cast<uint8_t*>(use_rdma_buffer ? rdma_buffer_ptr
+                                              : buffer_ptrs[nvl_rank]) +
+        offset;
+    auto num_bytes = use_rdma_buffer ? num_rdma_bytes : num_nvl_bytes;
+    return torch::from_blob(
+        base_ptr, num_bytes / element_bytes,
+        torch::TensorOptions().dtype(casted_dtype).device(at::kCUDA));
+  }
+
+  torch::Stream get_comm_stream() const { return comm_stream; }
 
   bool is_available() const { return available; }
 
@@ -715,6 +862,16 @@ class Buffer {
 
 PYBIND11_MODULE(ep, m) {
   m.doc() = "Minimal DeepEP-compatible shim with UCCL";
+
+  pybind11::class_<Config>(m, "Config")
+      .def(pybind11::init<int, int, int, int, int>(), py::arg("num_sms") = 20,
+           py::arg("num_max_nvl_chunked_send_tokens") = 6,
+           py::arg("num_max_nvl_chunked_recv_tokens") = 256,
+           py::arg("num_max_rdma_chunked_send_tokens") = 6,
+           py::arg("num_max_rdma_chunked_recv_tokens") = 256)
+      .def("get_nvl_buffer_size_hint", &Config::get_nvl_buffer_size_hint)
+      .def("get_rdma_buffer_size_hint", &Config::get_rdma_buffer_size_hint);
+
   m.def(
       "register_proxy",
       [](int device_index, py::object proxy) {
@@ -808,12 +965,21 @@ PYBIND11_MODULE(ep, m) {
       .def("get_num_rdma_ranks", &Buffer::get_num_rdma_ranks)
       .def("get_rdma_rank", &Buffer::get_rdma_rank)
       .def("get_root_rdma_rank", &Buffer::get_root_rdma_rank)
+      // NOTE(MaoZiming): UCCL drops NVSHMEM
+      // .def("get_local_nvshmem_unique_id",
+      // &Buffer::get_local_nvshmem_unique_id)
+      .def("get_local_buffer_tensor", &Buffer::get_local_buffer_tensor)
+      .def("get_comm_stream", &Buffer::get_comm_stream)
       .def("get_local_uccl_shmem_unique_id",
            &Buffer::get_local_uccl_shmem_unique_id)
       .def("sync", &Buffer::sync, py::arg("device_ids"),
            py::arg("all_gathered_handles"),
            py::arg("root_unique_id_opt") = py::none())
       .def("is_available", &Buffer::is_available)
+      .def("get_next_low_latency_combine_buffer",
+           &Buffer::get_next_low_latency_combine_buffer)
+      .def("get_dispatch_layout", &Buffer::get_dispatch_layout)
+      .def("clean_low_latency_buffer", &Buffer::clean_low_latency_buffer)
       .def("low_latency_combine", &Buffer::low_latency_combine, py::arg("x"),
            py::arg("topk_idx"), py::arg("topk_weights"), py::arg("src_info"),
            py::arg("layout_range"),
@@ -836,7 +1002,7 @@ PYBIND11_MODULE(ep, m) {
                                std::string(cudaGetErrorString(st)));
     }
   });
-
+  m.def("get_low_latency_rdma_size_hint", &get_low_latency_rdma_size_hint);
   m.def("sync_stream", []() {
     auto st = cudaDeviceSynchronize();
     if (st != cudaSuccess)
@@ -862,6 +1028,7 @@ PYBIND11_MODULE(ep, m) {
     cudaError_t st = cudaStreamQuery(s);
     return std::string(cudaGetErrorString(st));
   });
+  m.def("is_sm90_compiled", is_sm90_compiled);
   m.def(
       "stream_query",
       [](uintptr_t stream_ptr) {
