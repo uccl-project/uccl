@@ -4,6 +4,8 @@ ARG PY_VER=3.13
 # Non-interactive APT
 ENV DEBIAN_FRONTEND=noninteractive
 
+RUN rm -f /etc/apt/sources.list.d/cuda*.list /etc/apt/sources.list.d/nvidia-ml.list || true
+
 # ---------------------------------------------------------------------------
 # Basic build & runtime dependencies (minus CUDA which is already in base)
 # ---------------------------------------------------------------------------
@@ -34,6 +36,10 @@ RUN apt-get update && \
 # Install Python build back-end (for Python ${PY_VER})
 # ─────────────────────────────────────────────────────────
 RUN python${PY_VER} -m pip install --no-cache-dir build auditwheel pybind11
+
+# ───── Install PyTorch with CUDA support ─────
+RUN python${PY_VER} -m pip install --no-cache-dir torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/cu128
 
 # ───── Set Python ${PY_VER} as default python3 and python3-config ─────
 RUN ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python3 && \

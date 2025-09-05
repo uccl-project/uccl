@@ -3,6 +3,12 @@
 
     server: ./rdma_test
     client: ./rdma_test <server_ip>
+
+    Atomic Tests:
+    - Set TEST_ATOMICS=1 to enable atomic operation tests
+    - Tests both compare-and-swap and fetch-and-add operations
+    - Client performs atomic operations on server's atomic buffer
+    - Server displays final atomic values after completion
  */
 #include <arpa/inet.h>
 #include <gflags/gflags.h>
@@ -23,13 +29,14 @@
 #include <unistd.h>
 
 //////////////////////////////////////////////////////////////////////
-#define DEV_INDEX 0           // mlx5_0-7
+#define DEV_INDEX 2           // mlx5_0-7
 #define USE_GPU 0             // GPU_0-7
 #define NUM_QPS 4             // Number of QPs.
 #define MSG_SIZE (1ul << 20)  // Message size.
 #define OUTSTNADING_MSG 4     // Number of outstanding messages.
 #define ITERATIONS 1000000    // Number of iterations.
 #define ROCE_NET false        // true: RoCE, false: IB
+#define TEST_ATOMICS 1        // 1: Enable atomic tests, 0: Regular RDMA tests
 // #define MANAGED            // Use cudaMallocManaged not cudaMalloc
 //////////////////////////////////////////////////////////////////////
 
@@ -54,12 +61,26 @@ static bool is_server = false;
 static uint32_t next_data_offset = 0;
 static uint32_t next_send_qp_idx = 0;
 
+#if TEST_ATOMICS
+static volatile uint64_t atomic_ops_completed = 0;
+static volatile uint64_t last_atomic_ops_completed = 0;
+static uint64_t* atomic_buffer = nullptr;  // Buffer for atomic operations
+static uint64_t expected_atomic_value =
+    0;                                 // Expected value for compare-and-swap
+static uint64_t atomic_increment = 1;  // Increment value for fetch-and-add
+#define ATOMIC_BUFFER_SIZE 8           // Number of 64-bit atomic values
+#endif
+
 struct metadata {
   uint32_t qpn[NUM_QPS];
   uint32_t rkey;
   union ibv_gid gid;
   uint64_t addr;
   uint16_t lid;
+#if TEST_ATOMICS
+  uint32_t atomic_rkey;
+  uint64_t atomic_addr;
+#endif
 };
 
 struct rdma_context {
@@ -73,6 +94,13 @@ struct rdma_context {
   char* local_buf;
   uint32_t remote_rkey;
   uint64_t remote_addr;
+
+#if TEST_ATOMICS
+  struct ibv_mr* atomic_mr;     // Memory region for atomic operations
+  uint64_t* atomic_local_buf;   // Local atomic buffer
+  uint64_t remote_atomic_addr;  // Remote atomic buffer address
+  uint32_t remote_atomic_rkey;  // Remote atomic rkey
+#endif
 
   struct ibv_qp* qp[NUM_QPS];
   struct metadata remote_meta;
@@ -160,6 +188,15 @@ void init_srq_wr();
 void post_srq(struct rdma_context* rdma, int nb_wr);
 uint32_t poll_cq(struct rdma_context* rdma, uint32_t expect_opcode);
 void send_message(struct rdma_context* rdma);
+
+#if TEST_ATOMICS
+void send_atomic_cmp_swap(struct rdma_context* rdma);
+void send_atomic_fetch_add(struct rdma_context* rdma);
+void run_atomic_server(struct rdma_context* rdma);
+void run_atomic_client(struct rdma_context* rdma);
+void init_atomic_buffer(struct rdma_context* rdma);
+uint32_t poll_atomic_cq(struct rdma_context* rdma);
+#endif
 
 struct ibv_recv_wr wr[MAX_WR];
 
@@ -348,7 +385,26 @@ struct rdma_context* init_rdma(char const* server_ip) {
   local_meta.lid = rdma->port_attr.lid;  // Only for IB
   memcpy(&local_meta.gid, &rdma->gid, sizeof(local_meta.gid));
 
+#if TEST_ATOMICS
+  // Initialize atomic buffer for atomic operations
+  init_atomic_buffer(rdma);
+#endif
+
+#if TEST_ATOMICS
+  local_meta.atomic_rkey = rdma->atomic_mr->rkey;
+  local_meta.atomic_addr = (uint64_t)rdma->atomic_local_buf;
+#endif
+
   exchange_qpns(server_ip, &local_meta, &rdma->remote_meta);
+
+#if TEST_ATOMICS
+  // Store remote atomic buffer information
+  rdma->remote_atomic_addr = rdma->remote_meta.atomic_addr;
+  rdma->remote_atomic_rkey = rdma->remote_meta.atomic_rkey;
+
+  VLOG(1) << "Remote atomic buffer: addr=" << rdma->remote_atomic_addr
+          << ", rkey=" << rdma->remote_atomic_rkey;
+#endif
 
   modify_qp_rtr(rdma);
 
@@ -410,7 +466,11 @@ void create_qp(struct rdma_context* rdma) {
   qp_attr.qp_state = IBV_QPS_INIT;
   qp_attr.pkey_index = 0;
   qp_attr.port_num = PORT_NUM;
+#if TEST_ATOMICS
+  qp_attr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
+#else
   qp_attr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE;
+#endif
 
   for (int i = 0; i < NUM_QPS; i++) {
     rdma->qp[i] = ibv_create_qp(rdma->pd, &attr);
@@ -453,6 +513,233 @@ uint32_t poll_cq(struct rdma_context* rdma, uint32_t expect_opcode) {
 
   return totoal_bytes;
 }
+
+#if TEST_ATOMICS
+uint32_t poll_atomic_cq(struct rdma_context* rdma) {
+  auto completed_ops = 0;
+  auto* cq_ex = rdma->cq_ex;
+
+  struct ibv_poll_cq_attr poll_cq_attr = {};
+  if (ibv_start_poll(cq_ex, &poll_cq_attr)) return 0;
+
+  while (!force_exit) {
+    DCHECK(cq_ex->status == IBV_WC_SUCCESS)
+        << "Failed to poll CQ: " << cq_ex->status;
+
+    uint32_t opcode = ibv_wc_read_opcode(cq_ex);
+    DCHECK(opcode == IBV_WC_COMP_SWAP || opcode == IBV_WC_FETCH_ADD)
+        << "Unexpected atomic opcode: " << opcode;
+
+    completed_ops++;
+
+    if (ibv_next_poll(cq_ex)) break;
+  }
+
+  ibv_end_poll(cq_ex);
+
+  return completed_ops;
+}
+
+void init_atomic_buffer(struct rdma_context* rdma) {
+  // Allocate atomic buffer
+#if USE_GPU
+  cudaSetDevice(USE_GPU);
+#ifndef MANAGED
+  if (cudaMalloc((void**)&rdma->atomic_local_buf,
+                 ATOMIC_BUFFER_SIZE * sizeof(uint64_t)) != cudaSuccess) {
+#else
+  if (cudaMallocManaged((void**)&rdma->atomic_local_buf,
+                        ATOMIC_BUFFER_SIZE * sizeof(uint64_t)) != cudaSuccess) {
+#endif
+    perror("Failed to allocate GPU atomic buffer");
+    exit(1);
+  }
+
+#ifdef MANAGED
+  DCHECK(cudaMemAdvise(
+             rdma->atomic_local_buf, ATOMIC_BUFFER_SIZE * sizeof(uint64_t),
+             cudaMemAdviseSetPreferredLocation, USE_GPU) == cudaSuccess)
+      << "Failed to set atomic buffer preferred location";
+  DCHECK(cudaMemAdvise(rdma->atomic_local_buf,
+                       ATOMIC_BUFFER_SIZE * sizeof(uint64_t),
+                       cudaMemAdviseSetAccessedBy, USE_GPU) == cudaSuccess)
+      << "Failed to set atomic buffer accessed by";
+  DCHECK(cudaMemPrefetchAsync(rdma->atomic_local_buf,
+                              ATOMIC_BUFFER_SIZE * sizeof(uint64_t),
+                              USE_GPU) == cudaSuccess)
+      << "Failed to prefetch GPU atomic buffer";
+  DCHECK(cudaDeviceSynchronize() == cudaSuccess)
+      << "Failed to synchronize atomic buffer";
+#endif
+
+#else
+  if (posix_memalign((void**)&rdma->atomic_local_buf, sysconf(_SC_PAGESIZE),
+                     ATOMIC_BUFFER_SIZE * sizeof(uint64_t))) {
+    perror("Failed to allocate atomic buffer");
+    exit(1);
+  }
+#endif
+
+  // Initialize atomic buffer with known values
+#if USE_GPU
+  // For GPU memory, we need to use cudaMemcpy
+  uint64_t host_init_data[ATOMIC_BUFFER_SIZE];
+  for (int i = 0; i < ATOMIC_BUFFER_SIZE; i++) {
+    host_init_data[i] = i;
+  }
+  DCHECK(cudaMemcpy(rdma->atomic_local_buf, host_init_data,
+                    ATOMIC_BUFFER_SIZE * sizeof(uint64_t),
+                    cudaMemcpyHostToDevice) == cudaSuccess)
+      << "Failed to initialize GPU atomic buffer";
+  DCHECK(cudaDeviceSynchronize() == cudaSuccess)
+      << "Failed to synchronize after atomic buffer initialization";
+#else
+  // For host memory, direct access is fine
+  for (int i = 0; i < ATOMIC_BUFFER_SIZE; i++) {
+    rdma->atomic_local_buf[i] = i;
+  }
+#endif
+
+  // Register atomic memory region
+  rdma->atomic_mr = ibv_reg_mr(
+      rdma->pd, rdma->atomic_local_buf, ATOMIC_BUFFER_SIZE * sizeof(uint64_t),
+      IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+          IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_ATOMIC);
+
+  if (!rdma->atomic_mr) {
+    perror("Failed to register atomic memory region");
+    exit(1);
+  }
+
+  VLOG(1) << "Atomic MR: addr=" << (uint64_t)rdma->atomic_mr->addr
+          << ", len=" << rdma->atomic_mr->length
+          << ", lkey=" << rdma->atomic_mr->lkey
+          << ", rkey=" << rdma->atomic_mr->rkey;
+}
+
+void send_atomic_cmp_swap(struct rdma_context* rdma) {
+  struct ibv_send_wr wr = {};
+  struct ibv_sge sge = {};
+
+  // Use first 8 bytes of local buffer for atomic result
+  sge.lkey = rdma->atomic_mr->lkey;
+  sge.addr = (uint64_t)rdma->atomic_local_buf;
+  sge.length = sizeof(uint64_t);
+
+  wr.sg_list = &sge;
+  wr.num_sge = 1;
+  wr.opcode = IBV_WR_ATOMIC_CMP_AND_SWP;
+  wr.send_flags = IBV_SEND_SIGNALED;
+
+  // Set up atomic operation parameters
+  wr.wr.atomic.remote_addr = rdma->remote_atomic_addr;
+  wr.wr.atomic.rkey = rdma->remote_atomic_rkey;
+  wr.wr.atomic.compare_add = expected_atomic_value;  // Compare value
+  wr.wr.atomic.swap = expected_atomic_value + 1;     // Swap value
+
+  struct ibv_send_wr* bad_wr;
+  if (ibv_post_send(rdma->qp[next_send_qp_idx], &wr, &bad_wr) != 0) {
+    perror("Failed to post atomic compare-and-swap");
+    return;
+  }
+
+  next_send_qp_idx = (next_send_qp_idx + 1) % NUM_QPS;
+  expected_atomic_value++;
+}
+
+void send_atomic_fetch_add(struct rdma_context* rdma) {
+  struct ibv_send_wr wr = {};
+  struct ibv_sge sge = {};
+
+  // Use second 8 bytes of local buffer for atomic result
+  sge.lkey = rdma->atomic_mr->lkey;
+  sge.addr = (uint64_t)(rdma->atomic_local_buf + 1);
+  sge.length = sizeof(uint64_t);
+
+  wr.sg_list = &sge;
+  wr.num_sge = 1;
+  wr.opcode = IBV_WR_ATOMIC_FETCH_AND_ADD;
+  wr.send_flags = IBV_SEND_SIGNALED;
+
+  // Set up atomic operation parameters
+  wr.wr.atomic.remote_addr = rdma->remote_atomic_addr + sizeof(uint64_t);
+  wr.wr.atomic.rkey = rdma->remote_atomic_rkey;
+  wr.wr.atomic.compare_add = atomic_increment;  // Add value
+
+  struct ibv_send_wr* bad_wr;
+  if (ibv_post_send(rdma->qp[next_send_qp_idx], &wr, &bad_wr) != 0) {
+    perror("Failed to post atomic fetch-and-add");
+    return;
+  }
+
+  next_send_qp_idx = (next_send_qp_idx + 1) % NUM_QPS;
+}
+
+void run_atomic_server(struct rdma_context* rdma) {
+  uint32_t iterations = 0;
+  printf("Atomic server waiting for atomic operations...\n");
+
+  while (!force_exit) {
+    // For atomic operations, the server is passive
+    // Just wait and let the client perform atomic operations
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+    if (iterations++ >= ITERATIONS) {
+      break;
+    }
+  }
+
+  printf("Atomic server completed. Final atomic values:\n");
+#if USE_GPU
+  // For GPU memory, copy to host before reading
+  uint64_t host_final_data[ATOMIC_BUFFER_SIZE];
+  DCHECK(cudaMemcpy(host_final_data, rdma->atomic_local_buf,
+                    ATOMIC_BUFFER_SIZE * sizeof(uint64_t),
+                    cudaMemcpyDeviceToHost) == cudaSuccess)
+      << "Failed to read GPU atomic buffer";
+  DCHECK(cudaDeviceSynchronize() == cudaSuccess)
+      << "Failed to synchronize after reading atomic buffer";
+  for (int i = 0; i < ATOMIC_BUFFER_SIZE; i++) {
+    printf("  atomic_buf[%d] = %lu\n", i, host_final_data[i]);
+  }
+#else
+  // For host memory, direct access is fine
+  for (int i = 0; i < ATOMIC_BUFFER_SIZE; i++) {
+    printf("  atomic_buf[%d] = %lu\n", i, rdma->atomic_local_buf[i]);
+  }
+#endif
+}
+
+void run_atomic_client(struct rdma_context* rdma) {
+  uint32_t outstanding_ops = 0;
+  uint32_t iterations = 0;
+  bool use_cmp_swap = true;  // Alternate between operations
+
+  printf("Atomic client starting atomic operations...\n");
+
+  while (!force_exit) {
+    // Send atomic operations
+    while (outstanding_ops < OUTSTNADING_MSG) {
+      if (use_cmp_swap) {
+        send_atomic_cmp_swap(rdma);
+      } else {
+        send_atomic_fetch_add(rdma);
+      }
+
+      atomic_ops_completed++;
+      outstanding_ops++;
+      iterations++;
+      use_cmp_swap = !use_cmp_swap;  // Alternate operations
+    }
+
+    // Poll for completions
+    uint32_t completed = poll_atomic_cq(rdma);
+    outstanding_ops -= completed;
+  }
+
+  printf("Atomic client completed %u atomic operations\n", iterations);
+}
+#endif
 
 // Server: Post a receive and poll CQ
 void run_server(struct rdma_context* rdma) {
@@ -565,6 +852,15 @@ int main(int argc, char* argv[]) {
   std::thread stats_thread([&]() {
     while (!force_exit) {
       std::this_thread::sleep_for(std::chrono::seconds(1));
+#if TEST_ATOMICS
+      // Atomic operations stats
+      auto atomic_ops_per_sec =
+          atomic_ops_completed - last_atomic_ops_completed;
+      printf("[mlx5_%d] Atomic Operations: %lu ops/sec, Total: %lu\n",
+             DEV_INDEX, atomic_ops_per_sec, atomic_ops_completed);
+      last_atomic_ops_completed = atomic_ops_completed;
+#else
+      // Regular RDMA stats
       // unit: Gbps
       auto rx_stats_bytes_per_sec =
           8 * (rx_stats_bytes - last_rx_stats_bytes) / 1e9;
@@ -579,13 +875,21 @@ int main(int argc, char* argv[]) {
 #endif
       last_rx_stats_bytes = rx_stats_bytes;
       last_tx_stats_bytes = tx_stats_bytes;
+#endif
     }
   });
 
+#if TEST_ATOMICS
+  if (!is_server)
+    run_atomic_client(rdma);
+  else
+    run_atomic_server(rdma);
+#else
   if (!is_server)
     run_client(rdma);
   else
     run_server(rdma);
+#endif
 
   return 0;
 }

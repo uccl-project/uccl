@@ -69,8 +69,15 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   // Initialize the RDMA endpoint with lazy creation.
   ep_ = new uccl::RDMAEndpoint(num_cpus_);
 
-  for (int i = 0; i < kMaxNumGPUs; i++) {
+  // Only initialize mapping for detected GPUs
+  int ngpus_detected = 0;
+  GPU_RT_CHECK(gpuGetDeviceCount(&ngpus_detected));
+  for (int i = 0; i < std::min(ngpus_detected, kMaxNumGPUs); i++) {
     gpu_to_dev[i] = ep_->get_best_dev_idx(i);
+  }
+  // Initialize remaining slots to 0 (fallback to first device)
+  for (int i = ngpus_detected; i < kMaxNumGPUs; i++) {
+    gpu_to_dev[i] = 0;
   }
   numa_node_ =
       uccl::RDMAFactory::get_factory_dev(gpu_to_dev[local_gpu_idx_])->numa_node;
