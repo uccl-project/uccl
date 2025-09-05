@@ -23,8 +23,7 @@ void publisher() {
 
     RDMAConnectionInfo remote{};
     remote.qp_num = 4321;
-    remote.rkey   = 8765;
-    remote.addr   = 0x123456;
+    remote.lid   = 8765;
     for (int i = 0; i < 16; i++) remote.gid[i] = 15 - i;
 
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -45,8 +44,7 @@ void test_redis_oob() {
 
     RDMAConnectionInfo local{};
     local.qp_num = 1234;
-    local.rkey   = 5678;
-    local.addr   = 0xabcdef;
+    local.lid    = 5678;
     for (int i = 0; i < 16; i++) local.gid[i] = i;
 
     if (!ex.publish("rdma:peer:0:0", local)) {
@@ -59,8 +57,8 @@ void test_redis_oob() {
     RDMAConnectionInfo remote{};
     if (ex.wait_and_fetch("rdma:peer:1:0", remote)) {
         printf("[INFO] Got remote RDMA info:\n");
-        printf("       qp_num=%u rkey=%u addr=0x%lx\n",
-               remote.qp_num, remote.rkey, remote.addr);
+        printf("       qp_num=%u lid=%u\n",
+               remote.qp_num, remote.lid);
         printf("       gid=");
         for (int i = 0; i < 16; i++) printf("%02x ", remote.gid[i]);
         printf("\n");

@@ -24,6 +24,7 @@ struct Exchangeable {
 struct CommunicatorMeta : public Exchangeable {
     std::string host_id;
     bool is_ready;
+    // TODO: connection abality // support RDMA, PCIe, NVlink, UAlink, etc.
 
     CommunicatorMeta() = default;
 
@@ -43,17 +44,15 @@ struct CommunicatorMeta : public Exchangeable {
 
 struct RDMAConnectionInfo : public Exchangeable {
   uint32_t qp_num;
-  uint32_t rkey;
-  uintptr_t addr;
-  unsigned char gid[16];
+  uint16_t lid;    // Local ID
+  uint8_t gid[16]; // Global ID for RoCE (optional)
 
   RDMAConnectionInfo() = default;
 
   std::map<std::string, std::string> to_map() const override {
     std::map<std::string, std::string> kv;
     kv["qp_num"] = std::to_string(qp_num);
-    kv["rkey"]   = std::to_string(rkey);
-    kv["addr"]   = std::to_string(addr);
+    kv["lid"]   = std::to_string(lid);
 
     std::ostringstream oss;
     oss << std::hex << std::setfill('0');
@@ -67,8 +66,7 @@ struct RDMAConnectionInfo : public Exchangeable {
 
   void from_map(const std::map<std::string, std::string>& kv) override {
     qp_num = std::stoul(kv.at("qp_num"));
-    rkey   = std::stoul(kv.at("rkey"));
-    addr   = std::stoull(kv.at("addr"));
+    lid    = std::stoul(kv.at("lid"));
 
     const std::string& hex = kv.at("gid");
     for (int i = 0; i < 16; ++i) {

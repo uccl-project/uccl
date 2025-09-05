@@ -73,6 +73,8 @@ config.mk
 
 # vscode config
 .vscode/settings.json
+.vscode/c_cpp_properties.json
+.vscode/launch.json
 __pycache__/
 
 compile_commands.json
