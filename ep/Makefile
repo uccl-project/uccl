@@ -42,7 +42,7 @@ LDFLAGS   += $(EFA_LDFLAGS)
 INCLUDES  += $(EFA_CFLAGS)
 
 SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp src/peer_copy_worker.cpp src/uccl_proxy.cpp src/uccl_bench.cpp src/peer_copy_manager.cpp src/ep_runtime.cpp
-SRC_CU  := src/gpu_kernel.cu src/peer_copy.cu src/py_cuda_shims.cu src/internode_ll.cu 
+SRC_CU  := src/gpu_kernel.cu src/peer_copy.cu src/py_cuda_shims.cu src/internode_ll.cu src/internode.cu
 
 SRC_LOCAL  := bench/benchmark_local.cu
 SRC_REMOTE := bench/benchmark_remote.cu
