@@ -1,4 +1,5 @@
 #pragma once
+#include "ep_configs.cuh"
 #include "ep_util.hpp"
 #include <cstddef>
 #include <cstdint>
@@ -52,7 +53,7 @@ struct LowLatencyLayout {
 
   LowLatencyLayout(void* rdma_buffer, int num_max_dispatch_tokens_per_rank,
                    int hidden, int num_ranks, int num_experts,
-                   void* atomic_buffer_ptr) {
+                   void* atomic_buffer_ptr = nullptr) {
     int const num_scales = hidden / 128;
 
     // Dispatch and combine layout:
@@ -133,3 +134,14 @@ struct LowLatencyLayout {
     }
   }
 };
+
+size_t get_low_latency_rdma_size_hint(int num_max_dispatch_tokens_per_rank,
+                                      int hidden, int num_ranks,
+                                      int num_experts) {
+  auto num_bytes = LowLatencyLayout(nullptr, num_max_dispatch_tokens_per_rank,
+                                    hidden, num_ranks, num_experts, nullptr)
+                       .total_bytes;
+  return ((num_bytes + NUM_BUFFER_ALIGNMENT_BYTES) /
+          NUM_BUFFER_ALIGNMENT_BYTES) *
+         NUM_BUFFER_ALIGNMENT_BYTES;
+}

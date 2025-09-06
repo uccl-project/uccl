@@ -66,10 +66,11 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
             allow_mnnvl=False,
             explicitly_destroy=True,
         )
-        buffer.connect_atomic_buffer(proxies[0])
 
         if rank == 0:
             print("[simple-test] ✓ Buffer created successfully", flush=True)
+
+        buffer.connect_atomic_buffer(proxies[0])
 
         for proxy in proxies:
             proxy.calculate_and_set_dispatch_recv_data_offset(

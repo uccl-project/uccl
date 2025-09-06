@@ -546,6 +546,27 @@ class Buffer {
     return {reinterpret_cast<char const*>(unique_id.data()), unique_id.size()};
   }
 
+  torch::Tensor get_next_low_latency_combine_buffer(
+      int num_max_dispatch_tokens_per_rank, int hidden, int num_experts) const {
+    LowLatencyLayout layout(rdma_buffer_ptr, num_max_dispatch_tokens_per_rank,
+                            hidden, num_ranks, num_experts);
+
+    auto buffer = layout.buffers[low_latency_buffer_idx];
+    auto dtype = torch::kBFloat16;
+    auto num_msg_elems = static_cast<int>(buffer.num_bytes_per_combine_msg /
+                                          elementSize(torch::kBFloat16));
+
+    EP_HOST_ASSERT(
+        buffer.num_bytes_per_combine_msg % elementSize(torch::kBFloat16) == 0);
+    return torch::from_blob(
+        buffer.combine_rdma_send_buffer_data_start,
+        {num_experts / num_ranks, num_ranks * num_max_dispatch_tokens_per_rank,
+         hidden},
+        {num_ranks * num_max_dispatch_tokens_per_rank * num_msg_elems,
+         num_msg_elems, 1},
+        torch::TensorOptions().dtype(dtype).device(torch::kCUDA));
+  }
+
   void sync(std::vector<int> const& device_ids,
             std::vector<std::optional<pybind11::bytearray>> const&
                 all_gathered_handles,
@@ -636,8 +657,10 @@ class Buffer {
         rdma_buffer_ptr =
             internode::alloc(num_rdma_bytes, NUM_BUFFER_ALIGNMENT_BYTES);
       } else {
-        printf("rdma_buffer_ptr is set, using existing buffer: %p\n",
-               rdma_buffer_ptr);
+        printf(
+            "rdma_buffer_ptr is set, using existing buffer: %p, "
+            "num_rdma_bytes: %ld\n",
+            rdma_buffer_ptr, num_rdma_bytes);
       }
       CUDA_CHECK(
           cudaMemsetAsync(rdma_buffer_ptr, 0, num_rdma_bytes, comm_stream));
@@ -814,6 +837,8 @@ PYBIND11_MODULE(ep, m) {
            py::arg("all_gathered_handles"),
            py::arg("root_unique_id_opt") = py::none())
       .def("is_available", &Buffer::is_available)
+      .def("get_next_low_latency_combine_buffer",
+           &Buffer::get_next_low_latency_combine_buffer)
       .def("low_latency_combine", &Buffer::low_latency_combine, py::arg("x"),
            py::arg("topk_idx"), py::arg("topk_weights"), py::arg("src_info"),
            py::arg("layout_range"),
@@ -836,7 +861,7 @@ PYBIND11_MODULE(ep, m) {
                                std::string(cudaGetErrorString(st)));
     }
   });
-
+  m.def("get_low_latency_rdma_size_hint", &get_low_latency_rdma_size_hint);
   m.def("sync_stream", []() {
     auto st = cudaDeviceSynchronize();
     if (st != cudaSuccess)

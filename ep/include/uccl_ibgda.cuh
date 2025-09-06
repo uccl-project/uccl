@@ -181,6 +181,8 @@ __device__ __forceinline__ void* get_ipc_p2p_ptr(void* local_ptr,
       reinterpret_cast<uintptr_t>(local_ptr) -
       reinterpret_cast<uintptr_t>(ipc_base_ptrs[src_rank % ranks_per_node]);
 
+  printf("offset: %lu\n", offset);
+
   // Return the corresponding address in the remote buffer
   return reinterpret_cast<void*>(
       reinterpret_cast<uintptr_t>(ipc_base_ptrs[dst_local_rank]) + offset);

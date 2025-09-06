@@ -734,6 +734,24 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         wrs[j].wr.rdma.remote_addr =
             ctx->remote_addr + S.dispatch_recv_data_offset + cmd.req_rptr;
 
+      uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
+      if (wrs[j].wr.rdma.remote_addr < ctx->remote_addr ||
+          wrs[j].wr.rdma.remote_addr + cmd.bytes > remote_end) {
+        fprintf(stderr,
+                "[ERROR] Remote write OOB: addr=0x%llx len=%zu (base=0x%llx, "
+                "size=%zu), cmd.req_rptr: 0x%llx\n",
+                (unsigned long long)wrs[j].wr.rdma.remote_addr, cmd.bytes,
+                (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
+                (unsigned long long)cmd.req_rptr);
+        cudaError_t err = cudaDeviceSynchronize();
+        if (err != cudaSuccess) {
+          fprintf(stderr, "cudaDeviceSynchronize failed: %s\n",
+                  cudaGetErrorString(err));
+          std::abort();
+        }
+        std::abort();
+      }
+
       wrs[j].wr.rdma.rkey = ctx->remote_rkey;
       wrs[j].opcode = IBV_WR_RDMA_WRITE;
       wrs[j].send_flags = 0;
@@ -810,7 +828,7 @@ void local_process_completions(ProxyCtx& S,
             S.largest_completed_wr = std::max(S.largest_completed_wr, wr_done);
             S.has_received_ack = true;
           }
-          // printf("wr_done: %lu\n", wr_done);
+          printf("wr_done: %lu\n", wr_done);
           const uint32_t tag = wr_tag(wc[i].wr_id);
           ProxyCtx& S_ack = *ctx_by_tag[tag];
           ibv_sge sge = {
@@ -1089,7 +1107,8 @@ void remote_send_ack(ProxyCtx* ctx, struct ibv_qp* ack_qp, uint64_t& wr_id,
   };
 
 #ifdef EFA
-
+  printf("remote_send_ack: worker %d sending ACK wr_id %lu\n", worker_idx,
+         wr_id);
   auto qpx = (struct ibv_qp_ex*)ack_qp;
   ibv_wr_start(qpx);
 
@@ -1186,6 +1205,7 @@ void post_atomic_operations_efa(ProxyCtx& S,
   }
 
   for (auto& [dst_rank, wr_ids] : dst_rank_wr_ids) {
+    printf("Posting %zu atomic WRs to dst_rank=%d\n", wr_ids.size(), dst_rank);
     if (wr_ids.empty()) continue;
 
     ProxyCtx* ctx = ctxs[dst_rank].get();
