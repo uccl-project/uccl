@@ -316,104 +316,103 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   //   sm_id);
   // }
 
-  if (responsible_expert_idx < num_experts && sub_warp_id == 0 &&
+  // if (responsible_expert_idx < num_experts && sub_warp_id == 0 &&
+  //     lane_id == 0) {
+  //   int v = ld_acquire_global(atomic_finish_counter_per_expert +
+  //                             responsible_expert_idx);
+  // int s = shared_num_tokens_sent_per_expert[responsible_expert_idx -
+  //                                           sm_id * num_warp_groups];
+  // printf("[DBG] expert=%d sum=%d pre-wait=%d (expect=%d)\n",
+  //        responsible_expert_idx, s, v, FINISHED_SUM_TAG * 2);
+  // }
+
+  // if (blockIdx.x == 0 && threadIdx.x == 0)
+  // printf("[DBG] FINISHED_SUM_TAG=%d\n", FINISHED_SUM_TAG);
+
+  // Issue count sends
+  if (responsible_expert_idx < num_experts and sub_warp_id == 0 and
       lane_id == 0) {
-    int v = ld_acquire_global(atomic_finish_counter_per_expert +
-                              responsible_expert_idx);
-    // int s = shared_num_tokens_sent_per_expert[responsible_expert_idx -
-    //                                           sm_id * num_warp_groups];
-    // printf("[DBG] expert=%d sum=%d pre-wait=%d (expect=%d)\n",
-    //        responsible_expert_idx, s, v, FINISHED_SUM_TAG * 2);
-  }
+    auto const dst_rank = responsible_expert_idx / num_local_experts;
+    auto const dst_expert_local_idx =
+        responsible_expert_idx % num_local_experts;
+    auto const num_tokens_sent =
+        shared_num_tokens_sent_per_expert[responsible_expert_idx -
+                                          sm_id * num_warp_groups];
 
-  if (blockIdx.x == 0 && threadIdx.x == 0)
-    // printf("[DBG] FINISHED_SUM_TAG=%d\n", FINISHED_SUM_TAG);
-
-    // Issue count sends
-    if (responsible_expert_idx < num_experts and sub_warp_id == 0 and
-        lane_id == 0) {
-      auto const dst_rank = responsible_expert_idx / num_local_experts;
-      auto const dst_expert_local_idx =
-          responsible_expert_idx % num_local_experts;
-      auto const num_tokens_sent =
-          shared_num_tokens_sent_per_expert[responsible_expert_idx -
-                                            sm_id * num_warp_groups];
-
-      // Wait local sends issued and send expert counts
-      // printf(
-      //     "Before ld_acquire_global(atomic_finish_counter_per_expert=%p, "
-      //     "responsible_expert_idx=%d)\n",
-      //     atomic_finish_counter_per_expert, responsible_expert_idx);
-      int spins = 0;
-      while (ld_acquire_global(atomic_finish_counter_per_expert +
-                               responsible_expert_idx) !=
-             FINISHED_SUM_TAG * 2) {
-        ;
-        if (lane_id == 0) {
-          // if ((spins & ((1 << 20) - 1)) == 0) {
-          //   printf("[WAIT] expert=%d value=%d expected=%d\n",
-          //          responsible_expert_idx,
-          //          ld_acquire_global(atomic_finish_counter_per_expert +
-          //                            responsible_expert_idx),
-          //          FINISHED_SUM_TAG * 2);
-          // }
-          spins++;
-        }
+    // Wait local sends issued and send expert counts
+    // printf(
+    //     "Before ld_acquire_global(atomic_finish_counter_per_expert=%p, "
+    //     "responsible_expert_idx=%d)\n",
+    //     atomic_finish_counter_per_expert, responsible_expert_idx);
+    int spins = 0;
+    while (ld_acquire_global(atomic_finish_counter_per_expert +
+                             responsible_expert_idx) != FINISHED_SUM_TAG * 2) {
+      ;
+      if (lane_id == 0) {
+        // if ((spins & ((1 << 20) - 1)) == 0) {
+        //   printf("[WAIT] expert=%d value=%d expected=%d\n",
+        //          responsible_expert_idx,
+        //          ld_acquire_global(atomic_finish_counter_per_expert +
+        //                            responsible_expert_idx),
+        //          FINISHED_SUM_TAG * 2);
+        // }
+        spins++;
       }
-      // printf(
-      //     "After ld_acquire_global(atomic_finish_counter_per_expert, "
-      //     "responsible_expert_idx=%d)\n",
-      //     responsible_expert_idx);
-      // TODO(yihan): Mark here for future debugging check.
-      // Calculate offset within LowLatencyLayout buffer for CPU proxy
-      // translation Calculate offset relative to dispatch_rdma_recv_data_buffer
-      // (rdma_recv_x) CPU proxy will translate this to the correct
-      // dispatch_rdma_recv_count_buffer address
-
-      // TODO: Ensure 8-byte alignment for 64-bit atomic operations
-      // Calculate index, multiply by 8 instead of 4, then add to base
-      // NOTE: index by source rank.
-      auto count_index = dst_expert_local_idx * num_ranks + rank;
-      auto aligned_count_addr = reinterpret_cast<uint64_t>(rdma_recv_count) +
-                                count_index * sizeof(uint64_t);
-      auto dst_offset =
-          aligned_count_addr - reinterpret_cast<uint64_t>(atomic_buffer_ptr);
-
-      // Try to use IPC for intra-node atomic operations
-      auto const dst_p2p_ptr =
-          // NOTE(Ziming): it seems there is a mismatch from aligned_count_addr
-          // before.
-          ipc_base_ptrs ? uccl::get_ipc_p2p_ptr(
-                              // reinterpret_cast<void*>(
-                              // rdma_recv_count +
-                              // dst_expert_local_idx * num_ranks + rank),
-                              reinterpret_cast<void*>(aligned_count_addr),
-                              ipc_base_ptrs, rank, dst_rank, max_nvl_peers, 0)
-                        : nullptr;
-
-      printf("get_ipc_p2p_ptr=0x%" PRIxPTR ", dst_offset=%" PRId64
-             ", src_rank=%d, dst_rank=%d, ranks_per_node=%d, count_index: %d, "
-             "expert_idx=%d\n",
-             (uintptr_t)dst_p2p_ptr, dst_offset, rank, dst_rank, max_nvl_peers,
-             count_index, responsible_expert_idx);
-      if (dst_p2p_ptr != nullptr) {
-        // Intra-node: use direct atomic operation
-        st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr),
-                              -num_tokens_sent - 1);
-      } else {
-        // Inter-node or no IPC: use IBGDA atomic
-        uccl::nvshmemi_ibgda_amo_nonfetch_add(
-            dst_offset, -num_tokens_sent - 1, dst_rank, sm_id,
-            dst_expert_local_idx, false, ring_addrs, num_ring_addrs);
-      }
-      // Clean workspace for next use
-      atomic_counter_per_expert[responsible_expert_idx] = 0;
-      atomic_finish_counter_per_expert[responsible_expert_idx] = 0;
-
-      // Clean `packed_recv_count`
-      // Note(MaoZiming): changed from DeepEP.
-      if (dst_rank == rank) packed_recv_count[dst_expert_local_idx] = 0;
     }
+    // printf(
+    //     "After ld_acquire_global(atomic_finish_counter_per_expert, "
+    //     "responsible_expert_idx=%d)\n",
+    //     responsible_expert_idx);
+    // TODO(yihan): Mark here for future debugging check.
+    // Calculate offset within LowLatencyLayout buffer for CPU proxy
+    // translation Calculate offset relative to dispatch_rdma_recv_data_buffer
+    // (rdma_recv_x) CPU proxy will translate this to the correct
+    // dispatch_rdma_recv_count_buffer address
+
+    // TODO: Ensure 8-byte alignment for 64-bit atomic operations
+    // Calculate index, multiply by 8 instead of 4, then add to base
+    // NOTE: index by source rank.
+    auto count_index = dst_expert_local_idx * num_ranks + rank;
+    auto aligned_count_addr = reinterpret_cast<uint64_t>(rdma_recv_count) +
+                              count_index * sizeof(uint64_t);
+    auto dst_offset =
+        aligned_count_addr - reinterpret_cast<uint64_t>(atomic_buffer_ptr);
+
+    // Try to use IPC for intra-node atomic operations
+    auto const dst_p2p_ptr =
+        // NOTE(Ziming): it seems there is a mismatch from aligned_count_addr
+        // before.
+        ipc_base_ptrs ? uccl::get_ipc_p2p_ptr(
+                            // reinterpret_cast<void*>(
+                            // rdma_recv_count +
+                            // dst_expert_local_idx * num_ranks + rank),
+                            reinterpret_cast<void*>(aligned_count_addr),
+                            ipc_base_ptrs, rank, dst_rank, max_nvl_peers, 0)
+                      : nullptr;
+
+    printf("get_ipc_p2p_ptr=0x%" PRIxPTR ", dst_offset=%" PRId64
+           ", src_rank=%d, dst_rank=%d, ranks_per_node=%d, count_index: %d, "
+           "expert_idx=%d\n",
+           (uintptr_t)dst_p2p_ptr, dst_offset, rank, dst_rank, max_nvl_peers,
+           count_index, responsible_expert_idx);
+    if (dst_p2p_ptr != nullptr) {
+      // Intra-node: use direct atomic operation
+      st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr),
+                            -num_tokens_sent - 1);
+    } else {
+      // Inter-node or no IPC: use IBGDA atomic
+      uccl::nvshmemi_ibgda_amo_nonfetch_add(
+          dst_offset, -num_tokens_sent - 1, dst_rank, sm_id,
+          dst_expert_local_idx, false, ring_addrs, num_ring_addrs);
+    }
+    // Clean workspace for next use
+    atomic_counter_per_expert[responsible_expert_idx] = 0;
+    atomic_finish_counter_per_expert[responsible_expert_idx] = 0;
+
+    // Clean `packed_recv_count`
+    // Note(MaoZiming): changed from DeepEP.
+    if (dst_rank == rank) packed_recv_count[dst_expert_local_idx] = 0;
+  }
   __syncwarp();
 
 // Receiving phase
