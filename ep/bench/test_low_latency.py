@@ -368,6 +368,15 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         explicitly_destroy=True,
         allow_mnnvl=args.allow_mnnvl,
     )
+
+    buffer.connect_atomic_buffer(proxies[0])
+
+    for proxy in proxies:
+        proxy.calculate_and_set_dispatch_recv_data_offset(
+            num_tokens, hidden, num_experts
+        )
+        proxy.set_atomic_buffer_ptr(proxies[0].get_atomic_buffer_ptr())
+
     test_main(
         num_tokens,
         hidden,
