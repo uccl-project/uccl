@@ -165,7 +165,10 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           warp_id < num_topk ? static_cast<int>(__ldg(
                                    topk_idx + token_idx * num_topk + warp_id))
                              : -1;
-      thread_id == 0 ? (*rdma_x_src_idx = token_idx) : 0;
+      // thread_id == 0 ? (*rdma_x_src_idx = token_idx) : 0;
+      if (thread_id == 0) {
+        st_release_sys_global(rdma_x_src_idx, token_idx);  // publish header
+      }
 
 // FP8 cast
 #pragma unroll
@@ -245,6 +248,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           }
           if (lane_id == 0)
             printf("nvshmemi_ibgda_put_nbi_warp. dst_ptr: %p, rdma_buffer_ptr: %p, offset: %p, slot_idx: %d\n", (void*)dst_ptr, rdma_buffer_ptr, (void*)(dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr)), slot_idx);
+
+          __threadfence_system();
           uccl::nvshmemi_ibgda_put_nbi_warp(
               dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), src_ptr,
               num_bytes_per_msg, dst_rank,
@@ -318,6 +323,16 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     while (ld_acquire_global(atomic_finish_counter_per_expert +
                              responsible_expert_idx) != FINISHED_SUM_TAG * 2)
       ;
+
+    // TODO (MaoZiming): prevent EFA reordering BS. 
+    if (lane_id == 0) {
+        uint64_t start = clock64();
+        uint64_t wait_cycles = (uint64_t)1e9;
+        while (clock64() - start < wait_cycles) {
+        }
+    }
+    __syncwarp();
+
     // TODO(yihan): Mark here for future debugging check.
     // Calculate offset within LowLatencyLayout buffer for CPU proxy
     // translation Calculate offset relative to dispatch_rdma_recv_data_buffer
