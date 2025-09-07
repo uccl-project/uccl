@@ -562,7 +562,7 @@ class Buffer {
       int num_max_dispatch_tokens_per_rank, int hidden, int num_experts) const {
     printf("get_next_low_latency_combine_buffer called\n");
     LowLatencyLayout layout(rdma_buffer_ptr, num_max_dispatch_tokens_per_rank,
-                            hidden, num_ranks, num_experts);
+                            hidden, num_ranks, num_experts, nullptr);
 
     auto buffer = layout.buffers[low_latency_buffer_idx];
     auto dtype = torch::kBFloat16;

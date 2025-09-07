@@ -53,7 +53,7 @@ struct LowLatencyLayout {
 
   LowLatencyLayout(void* rdma_buffer, int num_max_dispatch_tokens_per_rank,
                    int hidden, int num_ranks, int num_experts,
-                   void* atomic_buffer_ptr = nullptr) {
+                   void* atomic_buffer_ptr) {
     int const num_scales = hidden / 128;
 
     // Dispatch and combine layout:
@@ -131,24 +131,6 @@ struct LowLatencyLayout {
           (uint8_t*)atomic_buffer_ptr + i * signaling_buffer_bytes_aligned);
       buffers[i].combine_rdma_recv_flag_buffer =
           buffers[i].dispatch_rdma_recv_count_buffer;
-    }
-
-    if (rdma_buffer) {
-      printf(
-          "dispatch_rdma_recv_data_buffer: %p, size: %zu, total_bytes: %zu\n",
-          buffers[0].dispatch_rdma_recv_data_buffer,
-          dispatch_recv_data_buffer_bytes, total_bytes);
-
-      void* buf = buffers[0].dispatch_rdma_recv_data_buffer;
-      std::vector<uint8_t> tmp(64);  // check first 64 bytes
-      CUDA_CHECK(
-          cudaMemcpy(tmp.data(), buf, tmp.size(), cudaMemcpyDeviceToHost));
-
-      printf("First 16 ints of dispatch_rdma_recv_data_buffer:\n");
-      for (int i = 0; i < 16; i++) {
-        printf("%08x ", reinterpret_cast<int*>(tmp.data())[i]);
-      }
-      printf("\n");
     }
   }
 };
