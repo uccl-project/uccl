@@ -652,8 +652,10 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
   for (auto& [dst_rank, wr_ids] : dst_rank_wr_ids) {
     if (wr_ids.empty()) continue;
     auto [min_it, max_it] = std::minmax_element(wr_ids.begin(), wr_ids.end());
-    printf("[block_idx: %d] Posting %zu rdma WRs to dst_rank=%d (min=%zu, max=%zu)\n",
-           block_idx, wr_ids.size(), dst_rank, *min_it, *max_it);
+    printf(
+        "[block_idx: %d] Posting %zu rdma WRs to dst_rank=%d (min=%zu, "
+        "max=%zu)\n",
+        block_idx, wr_ids.size(), dst_rank, *min_it, *max_it);
 
     ProxyCtx* ctx = ctxs[dst_rank].get();
     if (!ctx || !ctx->qp || !ctx->mr) {
@@ -677,10 +679,14 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
 
       remote_addr = ctx->remote_addr + (cmd.req_rptr ? cmd.req_rptr : 0);
       printf(
-          "Posting RDMA write to dst_rank=%d, ctx->remote_addr=0x%llx, cmd.req_rptr=0x%llx, "
-          "remote_addr=0x%llx, rkey=0x%x, len=%zu, wr_id=%lu, cmd.req_lptr: 0x%llx\n",
-          dst_rank, (unsigned long long)ctx->remote_addr, (unsigned long long)cmd.req_rptr, (unsigned long long)remote_addr, ctx->remote_rkey,
-          cmd.bytes, wr_ids[j], (unsigned long long)cmd.req_lptr);
+          "Posting RDMA write to dst_rank=%d, ctx->remote_addr=0x%llx, "
+          "cmd.req_rptr=0x%llx, "
+          "remote_addr=0x%llx, rkey=0x%x, len=%zu, wr_id=%lu, cmd.req_lptr: "
+          "0x%llx\n",
+          dst_rank, (unsigned long long)ctx->remote_addr,
+          (unsigned long long)cmd.req_rptr, (unsigned long long)remote_addr,
+          ctx->remote_rkey, cmd.bytes, wr_ids[j],
+          (unsigned long long)cmd.req_lptr);
       uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
 
       if (remote_addr < ctx->remote_addr ||
@@ -1218,8 +1224,10 @@ void post_atomic_operations_efa(ProxyCtx& S,
   for (auto& [dst_rank, wr_ids] : dst_rank_wr_ids) {
     if (wr_ids.empty()) continue;
     auto [min_it, max_it] = std::minmax_element(wr_ids.begin(), wr_ids.end());
-    printf("[block_idx: %d] Posting %zu atomic WRs to dst_rank=%d (min=%zu, max=%zu)\n",
-           block_idx, wr_ids.size(), dst_rank, *min_it, *max_it);
+    printf(
+        "[block_idx: %d] Posting %zu atomic WRs to dst_rank=%d (min=%zu, "
+        "max=%zu)\n",
+        block_idx, wr_ids.size(), dst_rank, *min_it, *max_it);
 
     ProxyCtx* ctx = ctxs[dst_rank].get();
     const size_t k = wr_ids.size();

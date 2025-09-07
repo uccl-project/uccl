@@ -336,11 +336,12 @@ class Buffer {
     C10_CUDA_CHECK(cudaGetDevice(&cur_dev));
     printf("[HOST DEBUG] current device: %d\n", cur_dev);
     printf("[HOST DEBUG] x.device: %d  packed_recv_x.device: %d\n",
-          x.get_device(), packed_recv_x.get_device());
+           x.get_device(), packed_recv_x.get_device());
     cudaPointerAttributes a;
     C10_CUDA_CHECK(cudaPointerGetAttributes(&a, packed_recv_x.data_ptr()));
-    printf("[HOST DEBUG] packed_recv_x ptr device=%d, type=%d\n", a.device, (int)a.type);
-    
+    printf("[HOST DEBUG] packed_recv_x ptr device=%d, type=%d\n", a.device,
+           (int)a.type);
+
     // Allocate column-majored scales
     auto packed_recv_x_scales = std::optional<torch::Tensor>();
     void* packed_recv_x_scales_ptr = nullptr;
@@ -559,6 +560,7 @@ class Buffer {
 
   torch::Tensor get_next_low_latency_combine_buffer(
       int num_max_dispatch_tokens_per_rank, int hidden, int num_experts) const {
+    printf("get_next_low_latency_combine_buffer called\n");
     LowLatencyLayout layout(rdma_buffer_ptr, num_max_dispatch_tokens_per_rank,
                             hidden, num_ranks, num_experts);
 

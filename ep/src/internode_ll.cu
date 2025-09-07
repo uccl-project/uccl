@@ -8,12 +8,11 @@
 #include <iostream>
 #include <vector>
 #include <cooperative_groups.h>
-#include <cuda_fp8.h>
 namespace cg = cooperative_groups;
 namespace uccl {
 namespace internode_ll {
 
-  __device__ __forceinline__ float decode_e4m3(unsigned char w) {
+__device__ __forceinline__ float decode_e4m3(unsigned char w) {
   int s = (w & 0x80) ? -1 : 1;
   int e = (w >> 3) & 0xF;
   int m = w & 0x7;
@@ -26,25 +25,26 @@ namespace internode_ll {
   }
 }
 
-__device__ __forceinline__ int4 ld_acquire_sys_global_int4(const int4* p) {
-  int4 v; auto pi = reinterpret_cast<const int*>(p);
-  v.x = ld_acquire_sys_global(pi+0);
-  v.y = ld_acquire_sys_global(pi+1);
-  v.z = ld_acquire_sys_global(pi+2);
-  v.w = ld_acquire_sys_global(pi+3);
+__device__ __forceinline__ int4 ld_acquire_sys_global_int4(int4 const* p) {
+  int4 v;
+  auto pi = reinterpret_cast<int const*>(p);
+  v.x = ld_acquire_sys_global(pi + 0);
+  v.y = ld_acquire_sys_global(pi + 1);
+  v.z = ld_acquire_sys_global(pi + 2);
+  v.w = ld_acquire_sys_global(pi + 3);
   return v;
 }
 
-__device__ __forceinline__ void dump_bytes(const void* base, int nbytes) {
-    auto p = reinterpret_cast<const unsigned char*>(base);
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-        printf("[DUMP] Dumping %d bytes at %p:\n", nbytes, base);
-        for (int i = 0; i < nbytes; i++) {
-            printf("%02x ", p[i]);
-            if ((i + 1) % 16 == 0) printf("\n");
-        }
-        printf("\n");
+__device__ __forceinline__ void dump_bytes(void const* base, int nbytes) {
+  auto p = reinterpret_cast<unsigned char const*>(base);
+  if (threadIdx.x == 0 && blockIdx.x == 0) {
+    printf("[DUMP] Dumping %d bytes at %p:\n", nbytes, base);
+    for (int i = 0; i < nbytes; i++) {
+      printf("%02x ", p[i]);
+      if ((i + 1) % 16 == 0) printf("\n");
     }
+    printf("\n");
+  }
 }
 
 template <bool kUseFP8, bool kUseUE8M0, int kHidden>
@@ -71,11 +71,12 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   auto const sub_warp_id = warp_id % num_warps_per_group;
   auto const responsible_expert_idx = sm_id * num_warp_groups + warp_group_id;
 
-
   if (lane_id == 0)
-    printf("rdma_recv_x offset to rdma_buffer_ptr = %p, rdma_x offset to rdma_buffer_ptr = %p\n", 
-           (void*)((uintptr_t)rdma_recv_x - (uintptr_t)rdma_buffer_ptr),
-           (void*)((uintptr_t)rdma_x - (uintptr_t)rdma_buffer_ptr));
+    printf(
+        "rdma_recv_x offset to rdma_buffer_ptr = %p, rdma_x offset to "
+        "rdma_buffer_ptr = %p\n",
+        (void*)((uintptr_t)rdma_recv_x - (uintptr_t)rdma_buffer_ptr),
+        (void*)((uintptr_t)rdma_x - (uintptr_t)rdma_buffer_ptr));
 
   // May extract UE8M0 from the scales
   using scale_t = std::conditional_t<kUseUE8M0, uint8_t, float>;
@@ -116,26 +117,29 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
             num_bytes_per_msg +
         src_rank * num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
 
-    for (int i = sub_warp_id; i < num_max_dispatch_tokens_per_rank; i += num_warps_per_group) {
+    for (int i = sub_warp_id; i < num_max_dispatch_tokens_per_rank;
+         i += num_warps_per_group) {
       // Copy source info
       auto const src_src_idx =
           reinterpret_cast<int*>(rdma_recv_x_uint8 + i * num_bytes_per_msg);
       if (lane_id == 0) {
-          // int token_id = ld_nc_global(src_src_idx);
-          int token_id = ld_acquire_sys_global(src_src_idx);
-          asm volatile("membar.sys;" ::: "memory");
-          auto* payload = reinterpret_cast<int4*>(
-              reinterpret_cast<uint8_t*>(src_src_idx) + sizeof(int4));
-          // int4 v = ld_nc_global(payload);
-          int4 v = ld_cg_global(payload);
-          printf("[BEFORE DISPATCH] src_src_idx=%p token=%d first int4 payload: %x %x %x %x\n",
-                (void*)src_src_idx, token_id, v.x, v.y, v.z, v.w);
-          }
-        }
+        // int token_id = ld_nc_global(src_src_idx);
+        int token_id = ld_acquire_sys_global(src_src_idx);
+        asm volatile("membar.sys;" ::: "memory");
+        auto* payload = reinterpret_cast<int4*>(
+            reinterpret_cast<uint8_t*>(src_src_idx) + sizeof(int4));
+        // int4 v = ld_nc_global(payload);
+        int4 v = ld_cg_global(payload);
+        printf(
+            "[BEFORE DISPATCH] src_src_idx=%p token=%d first int4 payload: %x "
+            "%x %x %x\n",
+            (void*)src_src_idx, token_id, v.x, v.y, v.z, v.w);
       }
+    }
+  }
 
   if (lane_id == 0) {
-      dump_bytes(rdma_recv_x, 64);   // dump first 64 bytes
+    dump_bytes(rdma_recv_x, 64);  // dump first 64 bytes
   }
 
   // There are 2 kinds of warps in this part:
@@ -237,17 +241,21 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         if (dst_p2p_ptr == 0) {
           if (lane_id == 0) {
             auto* src_int = reinterpret_cast<int*>(src_ptr);
-              printf("src_ptr=%p first ints: %d %d %d %d\n",
-                    src_int,
-                    src_int[0], src_int[1], src_int[2], src_int[3]);
+            printf("src_ptr=%p first ints: %d %d %d %d\n", src_int, src_int[0],
+                   src_int[1], src_int[2], src_int[3]);
             auto* src_data = reinterpret_cast<int4*>(
                 reinterpret_cast<uint8_t*>(src_ptr) + sizeof(int4));
             int4 v = src_data[0];
-            printf("token %d payload int4 = %x %x %x %x\n",
-                    src_int[0], v.x, v.y, v.z, v.w);
+            printf("token %d payload int4 = %x %x %x %x\n", src_int[0], v.x,
+                   v.y, v.z, v.w);
           }
           if (lane_id == 0)
-            printf("nvshmemi_ibgda_put_nbi_warp. dst_ptr: %p, rdma_buffer_ptr: %p, offset: %p, slot_idx: %d\n", (void*)dst_ptr, rdma_buffer_ptr, (void*)(dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr)), slot_idx);
+            printf(
+                "nvshmemi_ibgda_put_nbi_warp. dst_ptr: %p, rdma_buffer_ptr: "
+                "%p, offset: %p, slot_idx: %d\n",
+                (void*)dst_ptr, rdma_buffer_ptr,
+                (void*)(dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr)),
+                slot_idx);
 
           __threadfence_system();
           uccl::nvshmemi_ibgda_put_nbi_warp(
@@ -324,12 +332,12 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                              responsible_expert_idx) != FINISHED_SUM_TAG * 2)
       ;
 
-    // TODO (MaoZiming): prevent EFA reordering BS. 
+    // TODO (MaoZiming): prevent EFA reordering BS.
     if (lane_id == 0) {
-        uint64_t start = clock64();
-        uint64_t wait_cycles = (uint64_t)1e9;
-        while (clock64() - start < wait_cycles) {
-        }
+      uint64_t start = clock64();
+      uint64_t wait_cycles = (uint64_t)1e9;
+      while (clock64() - start < wait_cycles) {
+      }
     }
     __syncwarp();
 
@@ -356,9 +364,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       uccl::nvshmemi_ibgda_amo_nonfetch_add(
           dst_ptr - reinterpret_cast<uint64_t>(atomic_buffer_ptr),
           -num_tokens_sent - 1, dst_rank,
-          sm_id,   // NOTE(MaoZiming): use sm_id for rb.
-          dst_expert_local_idx, false,
-          ring_addrs, num_ring_addrs);
+          sm_id,  // NOTE(MaoZiming): use sm_id for rb.
+          dst_expert_local_idx, false, ring_addrs, num_ring_addrs);
 
     } else {
       // Intra-node: use direct atomic operation
@@ -459,54 +466,24 @@ LOW_LATENCY_DISPATCH_RECV:
           reinterpret_cast<int*>(rdma_recv_x_uint8 + i * num_bytes_per_msg);
       if (lane_id == 0)
         // recv_src_info[recv_token_begin_idx + i] = ld_nc_global(src_src_idx);
-        recv_src_info[recv_token_begin_idx + i] = ld_acquire_sys_global(src_src_idx);
+        recv_src_info[recv_token_begin_idx + i] =
+            ld_acquire_sys_global(src_src_idx);
       asm volatile("membar.sys;" ::: "memory");
       __syncwarp();
 
       if (lane_id == 0) {
         // NOTE(MaoZiming): IMPORTANT!!
-          // int token_id = ld_nc_global(src_src_idx);
-          int token_id = ld_acquire_sys_global(src_src_idx);
-          asm volatile("membar.sys;" ::: "memory");
-          auto* payload = reinterpret_cast<int4*>(
-              reinterpret_cast<uint8_t*>(src_src_idx) + sizeof(int4));
-          // int4 v = ld_nc_global(payload);
-          int4 v = ld_cg_global(payload);
-          printf("[RECV DEBUG] src_src_idx=%p token=%d first int4 payload: %x %x %x %x\n",
-                (void *)src_src_idx, token_id, v.x, v.y, v.z, v.w);
-
-          if constexpr (!kUseFP8) {
-              // BF16 mode: decode first 4 values
-              auto* bf16 = reinterpret_cast<nv_bfloat16*>(payload);
-              float f0 = __bfloat162float(bf16[0]);
-              float f1 = __bfloat162float(bf16[1]);
-              float f2 = __bfloat162float(bf16[2]);
-              float f3 = __bfloat162float(bf16[3]);
-              if (lane_id == 0)
-                printf("[RECV DEBUG] token=%d first floats (BF16): %f %f %f %f\n",
-                      token_id, f0, f1, f2, f3);
-          } else {
-              auto* fp8x2 = reinterpret_cast<__nv_fp8x2_storage_t*>(payload);
-              unsigned char lo = reinterpret_cast<unsigned char*>(fp8x2)[0];
-              unsigned char hi = reinterpret_cast<unsigned char*>(fp8x2)[1];
-
-              // Manual decode: E4M3 format
-              auto decode_e4m3 = [](unsigned char v) {
-                  int sign = (v & 0x80) ? -1 : 1;
-                  int exp  = (v >> 3) & 0xF;  // 4-bit exponent
-                  int mant = v & 0x7;         // 3-bit mantissa
-                  if (exp == 0) {
-                      return sign * std::ldexp((float)mant, -6); // subnormals
-                  } else {
-                      return sign * std::ldexp((float)(mant | 0x8), exp - 7);
-                  }
-              };
-
-              float f0 = decode_e4m3(lo);
-              float f1 = decode_e4m3(hi);
-              printf("[RECV DEBUG] token=%d first floats (manual FP8): %f %f\n",
-                    token_id, f0, f1);
-          }
+        // int token_id = ld_nc_global(src_src_idx);
+        int token_id = ld_acquire_sys_global(src_src_idx);
+        asm volatile("membar.sys;" ::: "memory");
+        auto* payload = reinterpret_cast<int4*>(
+            reinterpret_cast<uint8_t*>(src_src_idx) + sizeof(int4));
+        // int4 v = ld_nc_global(payload);
+        int4 v = ld_cg_global(payload);
+        printf(
+            "[RECV DEBUG] src_src_idx=%p token=%d first int4 payload: %x %x %x "
+            "%x\n",
+            (void*)src_src_idx, token_id, v.x, v.y, v.z, v.w);
       }
 
       // Copy data
@@ -521,8 +498,11 @@ LOW_LATENCY_DISPATCH_RECV:
       __syncwarp();
       if (lane_id == 0) {
         int4 dv = ld_cg_global(dst_data);
-        printf("[DST DEBUG after UNROLLED_WARP_COPY]  src_src_idx=%p, dst_data=%p, token=%d dst[0] = %x %x %x %x\n", (void *)src_src_idx, (void *)dst_data,
-              ld_cg_global(src_src_idx), dv.x, dv.y, dv.z, dv.w);
+        printf(
+            "[DST DEBUG after UNROLLED_WARP_COPY]  src_src_idx=%p, "
+            "dst_data=%p, token=%d dst[0] = %x %x %x %x\n",
+            (void*)src_src_idx, (void*)dst_data, ld_cg_global(src_src_idx),
+            dv.x, dv.y, dv.z, dv.w);
       }
 
       // Copy scales
@@ -563,18 +543,19 @@ LOW_LATENCY_DISPATCH_RECV:
     }
 
     for (int i = sub_warp_id; i < num_recv_tokens; i += num_warps_per_group) {
-      auto const dst_data =
-          static_cast<int4*>(packed_recv_x) +
-          local_expert_idx * num_ranks * num_max_dispatch_tokens_per_rank * hidden_int4 +
-          (recv_token_begin_idx + i) * hidden_int4;
+      auto const dst_data = static_cast<int4*>(packed_recv_x) +
+                            local_expert_idx * num_ranks *
+                                num_max_dispatch_tokens_per_rank * hidden_int4 +
+                            (recv_token_begin_idx + i) * hidden_int4;
 
       if (lane_id == 0) {
         int slot = recv_token_begin_idx + i;
-        int4 dv = ld_cg_global(dst_data);   // coherent load for debug
-        printf("[DST DEBUG] le=%d src=%d slot=%d i=%d base=%p dst=%p "
-              "dst[0]=%08x %08x %08x %08x\n",
-              local_expert_idx, src_rank, slot, i,
-              packed_recv_x, dst_data, dv.x, dv.y, dv.z, dv.w);
+        int4 dv = ld_cg_global(dst_data);  // coherent load for debug
+        printf(
+            "[DST DEBUG] le=%d src=%d slot=%d i=%d base=%p dst=%p "
+            "dst[0]=%08x %08x %08x %08x\n",
+            local_expert_idx, src_rank, slot, i, packed_recv_x, dst_data, dv.x,
+            dv.y, dv.z, dv.w);
       }
     }
   }
@@ -701,19 +682,16 @@ __global__ __launch_bounds__(1024, 1) void combine(
     auto const global_expert_idx = rank * num_local_experts + local_expert_idx;
     auto const layout =
         __ldg(layout_range + local_expert_idx * num_ranks + dst_rank);
-    // auto const local_x =
-    //     static_cast<int4 const*>(x) + local_expert_idx * num_ranks *
-    //                                       num_max_dispatch_tokens_per_rank *
-    //                                       hidden_bf16_int4;
+    auto const local_x =
+        static_cast<int4 const*>(x) + local_expert_idx * num_ranks *
+                                          num_max_dispatch_tokens_per_rank *
+                                          hidden_bf16_int4;
     auto const local_src_info = src_info + local_expert_idx * num_ranks *
                                                num_max_dispatch_tokens_per_rank;
-
-    // NOTE(NEW): !!! Check logic. This differs from DeepEP.
-    int const slice_len = num_max_dispatch_tokens_per_rank;
-    auto const rdma_send_x_vec =
-        static_cast<uint8_t*>(rdma_send_x) +
-        ((size_t)local_expert_idx * (size_t)num_ranks + (size_t)dst_rank) *
-            (size_t)slice_len * (size_t)num_bytes_per_slot;
+    auto const rdma_send_x_vec = static_cast<uint8_t*>(rdma_send_x) +
+                                 local_expert_idx * num_ranks *
+                                     num_max_dispatch_tokens_per_rank *
+                                     num_bytes_per_slot;
 
     // Unpack layout
     int offset, num_tokens_to_send;
@@ -764,31 +742,19 @@ __global__ __launch_bounds__(1024, 1) void combine(
     for (int token_idx = offset + sub_warp_id;
          token_idx < offset + num_tokens_to_send;
          token_idx += num_warps_per_group) {
-      // NOTE(NEW): !!! Check logic. This differs from DeepEP.
-      // const auto x_int4 = local_x + token_idx * hidden_bf16_int4;
+      auto const x_int4 = local_x + token_idx * hidden_bf16_int4;
       auto const rdma_send_type_row = reinterpret_cast<int*>(
           rdma_send_x_vec + token_idx * num_bytes_per_slot);
       auto const rdma_send_x_vec_row =
           reinterpret_cast<uint8_t*>(rdma_send_type_row);
 
-      // Copy directly to local rank, or copy to buffer and issue RDMA
-      // NOTE: New
-      auto const src_idx = __shfl_sync(
-          0xffffffff, __ldg(local_src_info + dst_rank * slice_len + token_idx),
-          0);
-
-      if (src_idx < 0 || src_idx >= num_ranks * slice_len) {
-        // TODO: sometimes src_idx will be greater. Not sure why.
-        if (lane_id == 0) {
-          printf("BAD src_idx=%d total=%d dst_rank=%d token_idx=%d offset=%d\n",
-                 src_idx, num_ranks * slice_len, dst_rank, token_idx, offset);
-        }
-        continue;
-      }
-      auto const x_int4 =
-          static_cast<int4 const*>(x) + src_idx * hidden_bf16_int4;
+      auto const src_idx =
+          __shfl_sync(0xffffffff, __ldg(local_src_info + token_idx), 0);
       auto const buf_ptr = reinterpret_cast<int64_t>(rdma_send_x_vec_row);
-
+      auto const dst_ptr =
+          reinterpret_cast<uint64_t>(rdma_recv_x) +
+          (global_expert_idx * num_max_dispatch_tokens_per_rank + src_idx) *
+              num_bytes_per_slot;
       // TODO(yihan): Mark here for future debugging check.
       // ORIGINAL CODE: Calculate absolute destination address using local
       // rdma_recv_x base auto const dst_ptr =
@@ -796,25 +762,11 @@ __global__ __launch_bounds__(1024, 1) void combine(
       //     (global_expert_idx * num_max_dispatch_tokens_per_rank + src_idx) *
       //         num_bytes_per_slot;
 
-      // NEW APPROACH: Calculate offset within LowLatencyLayout buffer for CPU
-      // proxy translation
-      uint64_t dst_offset = (static_cast<uint64_t>(global_expert_idx) *
-                                 num_max_dispatch_tokens_per_rank +
-                             static_cast<uint64_t>(src_idx)) *
-                            static_cast<uint64_t>(num_bytes_per_slot);
-
       // Use IPC for intra-node P2P mapping when available
       auto const dst_p2p_ptr =
-          ipc_base_ptrs
-              ? uccl::get_ipc_p2p_ptr(
-                    reinterpret_cast<uint64_t>(rdma_recv_x) + dst_offset,
-                    ipc_base_ptrs, rank, dst_rank, max_nvl_peers, 0)
-              : 0;
-
-      // NOTE: Otherwise overflow.
-      uint64_t dst_off = (reinterpret_cast<uint64_t>(rdma_recv_x) -
-                          reinterpret_cast<uint64_t>(rdma_buffer_ptr)) +
-                         dst_offset;
+          ipc_base_ptrs ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_base_ptrs, rank,
+                                                dst_rank, max_nvl_peers, 0)
+                        : 0;
 
       if (not zero_copy or dst_p2p_ptr != 0) {
         // Read from `cpy_src_int4_ptr` and copy into `cpy_dst_int4_ptr`
@@ -940,7 +892,8 @@ __global__ __launch_bounds__(1024, 1) void combine(
       // buffer
       if (dst_p2p_ptr == 0) {
         nvshmemi_ibgda_put_nbi_warp(
-            dst_off, buf_ptr, hidden * sizeof(nv_bfloat16), dst_rank,
+            dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), buf_ptr,
+            hidden * sizeof(nv_bfloat16), dst_rank,
             sm_id,  // NOTE(MaoZiming): use sm_id for rb
             lane_id, token_idx - offset, ring_addrs, num_ring_addrs, true);
       }
@@ -958,34 +911,24 @@ __global__ __launch_bounds__(1024, 1) void combine(
       // need to calculate the offset from rdma_recv_x (data buffer) to the flag
       // buffer
       // Try to use IPC for intra-node atomic operations
-      auto const dst_p2p_ptr_flag =
-          ipc_base_ptrs ? uccl::get_ipc_p2p_ptr(
-                              reinterpret_cast<uint64_t>(rdma_recv_flag +
-                                                         global_expert_idx),
-                              ipc_base_ptrs, rank, dst_rank, max_nvl_peers, 0)
+      auto dst_ptr =
+          reinterpret_cast<uint64_t>(rdma_recv_flag + global_expert_idx);
+      auto dst_p2p_ptr =
+          ipc_base_ptrs ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_base_ptrs, rank,
+                                                dst_rank, max_nvl_peers, 0)
                         : 0;
-      uint64_t off_send = (uintptr_t)(rdma_recv_flag + global_expert_idx) -
-                          (uintptr_t)(atomic_buffer_ptr);
-      printf("Combine dst_p2p_ptr_flag=0x%" PRIxPTR ", off_send=%" PRId64
-             ", src_rank=%d, dst_rank=%d, ranks_per_node=%d, "
-             "global_expert_idx: %d\n",
-             (uintptr_t)dst_p2p_ptr_flag, off_send, rank, dst_rank,
-             max_nvl_peers, global_expert_idx);
-
-      printf("[SEND] set flag idx=%d byte_off=%llu base=%p ptr=%p\n",
-             global_expert_idx, (unsigned long long)off_send, rdma_recv_flag,
-             rdma_recv_flag + global_expert_idx);
-      if (dst_p2p_ptr_flag != 90) {
+      if (dst_p2p_ptr != 0) {
         // Intra-node: use direct atomic operation
-        st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr_flag), 1);
+        st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr), 1);
       } else {
         // Inter-node or no IPC: use IBGDA atomic
         // NOTE(MaoZiming): Without ibgda, we can only use atomic add
         // Pass offset to CPU proxy for atomic operation (similar to dispatch
         // phase)
-        nvshmemi_ibgda_amo_nonfetch_add(off_send, 1, dst_rank, sm_id,
-                                        local_expert_idx, false, ring_addrs,
-                                        num_ring_addrs);
+        nvshmemi_ibgda_amo_nonfetch_add(
+            dst_ptr - reinterpret_cast<uint64_t>(atomic_buffer_ptr), 1,
+            dst_rank, sm_id, local_expert_idx, false, ring_addrs,
+            num_ring_addrs);
       }
       atomic_add_release_global(atomic_clean_flag, -1);
     }
@@ -1049,7 +992,7 @@ LOW_LATENCY_COMBINE_RECV:
               reinterpret_cast<uint8_t const*>(rdma_buffer_type);
 
           // Reduce
-          auto x_vec = ld_nc_global(
+          auto x_vec = ld_cg_global(
               reinterpret_cast<int4 const*>(rdma_buffer_row) + hidden_idx);
           auto const x_bf16 = reinterpret_cast<nv_bfloat16*>(&x_vec);
 #pragma unroll

@@ -428,9 +428,10 @@ void Proxy::post_gpu_commands_mixed(
   // Separate atomic operations from regular RDMA writes
   std::vector<uint64_t> rdma_wrs, atomic_wrs;
   std::vector<TransferCmd> rdma_cmds, atomic_cmds;
-  auto [min_it, max_it] = std::minmax_element(wrs_to_post.begin(), wrs_to_post.end());
-  printf("[block_idx: %d] Posting %zu WRs (min=%zu, max=%zu)\n",
-          cfg_.block_idx, wrs_to_post.size(), *min_it, *max_it);
+  auto [min_it, max_it] =
+      std::minmax_element(wrs_to_post.begin(), wrs_to_post.end());
+  printf("[block_idx: %d] Posting %zu WRs (min=%zu, max=%zu)\n", cfg_.block_idx,
+         wrs_to_post.size(), *min_it, *max_it);
 
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
     if (cmds_to_post[i].is_atomic) {
@@ -444,7 +445,8 @@ void Proxy::post_gpu_commands_mixed(
   // Handle regular RDMA writes
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
-                            rdma_cmds, ctxs_for_all_ranks_, cfg_.rank, cfg_.block_idx);
+                            rdma_cmds, ctxs_for_all_ranks_, cfg_.rank,
+                            cfg_.block_idx);
   }
   if (!atomic_wrs.empty()) {
 #ifdef EFA

@@ -167,7 +167,7 @@ class Buffer:
             event: the captured event.
         """
         return EventOverlap(EventHandle())
-    
+
     # noinspection PyTypeChecker
     def low_latency_dispatch(
         self,
