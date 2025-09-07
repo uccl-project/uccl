@@ -112,6 +112,11 @@ void Proxy::init_common() {
     c.pd = ctx_.pd;
     c.mr = ctx_.mr;
     c.rkey = ctx_.rkey;
+
+    if (c.rkey == 0) {
+      fprintf(stderr, "rkey equals 0!\n");
+      std::abort();
+    }
     // NOTE(MaoZiming): each context can share the same cq, pd, mr.
     // but the qp must be different.
     c.cq = ctx_.cq;

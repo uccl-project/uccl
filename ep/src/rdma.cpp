@@ -196,6 +196,11 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   if (S.rkey != 0) {
     fprintf(stderr, "Warning: rkey already set (%x), overwriting\n", S.rkey);
   }
+
+  if (S.mr->rkey == 0) {
+    fprintf(stderr, "rkey equals 0!\n");
+    std::abort();
+  }
   S.rkey = S.mr->rkey;
 }
 
@@ -637,6 +642,8 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
   for (size_t i = 0; i < num_wrs; ++i) {
     if (cmds_to_post[i].dst_rank == static_cast<uint32_t>(my_rank)) {
       // NOTE(MaoZiming): this should not happen.
+      printf("Posting rdma to itself\n");
+      std::abort();
       continue;
     } else {
       dst_rank_wr_ids[cmds_to_post[i].dst_rank].push_back(i);
@@ -665,11 +672,12 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
 
       uint64_t remote_addr;
 
-      if (cmd.is_combine)
-        remote_addr = ctx->remote_addr + (cmd.req_rptr ? cmd.req_rptr : 0);
-      else
-        remote_addr = ctx->remote_addr + S.dispatch_recv_data_offset +
-                      (cmd.req_rptr ? cmd.req_rptr : 0);
+      remote_addr = ctx->remote_addr + (cmd.req_rptr ? cmd.req_rptr : 0);
+      printf(
+          "Posting RDMA write to dst_rank=%d, remote_addr=0x%llx, "
+          "rkey=0x%x, len=%zu, wr_id=%lu\n",
+          dst_rank, (unsigned long long)remote_addr, ctx->remote_rkey,
+          cmd.bytes, wr_ids[j]);
       uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
 
       if (remote_addr < ctx->remote_addr ||

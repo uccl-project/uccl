@@ -380,7 +380,7 @@ class Buffer {
           num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
           num_ranks, use_fp8, round_scale, use_ue8m0, workspace, num_device_sms,
           launch_stream, phases, d_ring_addrs, num_ring_addrs,
-          get_num_max_nvl_peers(), d_ipc_base_ptrs,
+          get_num_max_nvl_peers(), d_ipc_base_ptrs, rdma_buffer_ptr,
           atomic_buffer_ptr);  // Added IPC base pointers
     };
     launcher(return_recv_hook
@@ -403,6 +403,8 @@ class Buffer {
     if (return_recv_hook)
       recv_hook = [=]() { launcher(LOW_LATENCY_RECV_PHASE); };
 
+    printf("packed_recv_x: %p\n", packed_recv_x.data_ptr());
+    printf("packed_recv_count: %p\n", packed_recv_count.data_ptr());
     // Return values
     return {packed_recv_x,
             packed_recv_x_scales,

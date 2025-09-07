@@ -74,7 +74,11 @@ def test_main(
     x = torch.ones((num_tokens, hidden), dtype=torch.bfloat16, device="cuda") * (
         rank - rank_offset
     )
+
+    print("x before", x)
     x[:, -128:] = torch.arange(num_tokens, device="cuda").to(torch.bfloat16).view(-1, 1)
+
+    print("x after", x)
     x_list = [x]
     for i in range(4 if use_logfmt else 0):
         # NOTES: make more LogFMT casts and also with some BF16
@@ -94,6 +98,8 @@ def test_main(
         + 1
     )
     topk_idx = torch.topk(scores, num_topk, dim=-1, largest=True, sorted=True)[1]
+
+    print("topk_idx", topk_idx)
     topk_weights = torch.randn(
         (num_tokens, num_topk), dtype=torch.float32, device="cuda"
     ).abs()
@@ -117,6 +123,7 @@ def test_main(
                             cumulative_local_expert_recv_stats = torch.zeros(
                                 (num_local_experts,), dtype=torch.int, device="cuda"
                             )
+                            print("current_x", current_x)
                             packed_recv_x, packed_recv_count, handle, event, hook = (
                                 buffer.low_latency_dispatch(
                                     current_x,
@@ -132,11 +139,33 @@ def test_main(
                                 )
                             )
                             hook() if return_recv_hook else event.current_stream_wait()
+                        torch.cuda.synchronize()
                         packed_recv_x = (
                             (packed_recv_x[0], packed_recv_x[1].contiguous())
                             if dispatch_use_fp8
                             else packed_recv_x
                         )
+                        i = int(
+                            (packed_recv_count > 0).nonzero()[0]
+                        )  # pick any local expert with rows
+                        n = int(packed_recv_count[i])
+                        rl = handle[1][i]  # recv_layout_range for expert i
+                        int_mask = (1 << 32) - 1
+
+                        for j in range(num_ranks):
+                            begin = int((rl[j] >> 32).item())
+                            cnt = int((rl[j] & int_mask).item())
+                            if cnt > 0:
+                                block = packed_recv_x[i, begin : begin + cnt, :]
+                                print(
+                                    f"[i={i}] src_rank={j} cnt={cnt} amax={float(block.abs().amax().item())}"
+                                )
+
+                        print("packed_recv_x", packed_recv_x)
+                        all_zero = packed_recv_x.abs().amax() == 0
+                        print("ALL ZERO (entire buffer)?", bool(all_zero.item()))
+                        print("packed_recv_count", packed_recv_count)
+
                         simulated_gemm_x = (
                             per_token_cast_back(
                                 packed_recv_x[0].view(-1, hidden),
@@ -150,7 +179,9 @@ def test_main(
                             dtype=topk_idx.dtype,
                             device="cuda",
                         )
+                        print("topk_idx", topk_idx)
                         dist.all_gather_into_tensor(all_topk_idx, topk_idx, group=group)
+                        print("all_topk_idx", all_topk_idx)
                         for i in range(num_local_experts if do_check else 0):
                             expert_id = rank * num_local_experts + i
                             recv_x = (
@@ -182,12 +213,15 @@ def test_main(
                                 == (all_topk_idx == expert_id).sum().item()
                             ), f"{num_valid_tokens} != {(all_topk_idx == expert_id).sum().item()}"
 
+                            print("num_valid_tokens: ", num_valid_tokens)
                             if num_valid_tokens == 0:
                                 continue
                             # Check received data
                             if current_x is x:
                                 recv_x = recv_x[:num_valid_tokens]
+                                print("recv_x", recv_x)
                                 recv_x_amin = recv_x[:, :-128].amin(dim=-1)
+                                print("recv_x_amin", recv_x_amin)
                                 recv_src_info = recv_src_info[:num_valid_tokens]
                                 assert torch.equal(
                                     recv_x_amin, recv_x[:, :-128].amax(dim=-1)
@@ -207,6 +241,19 @@ def test_main(
                                         recv_layout_range[j] >> 32
                                     ).item(), (recv_layout_range[j] & int_mask).item()
                                     if not round_scale:
+                                        print(
+                                            "assert equality check",
+                                            (recv_x_amin == j - rank_offset)
+                                            .sum()
+                                            .item(),
+                                            (all_topk_idx[j] == expert_id).sum().item(),
+                                            (recv_x_amin == j - rank_offset)
+                                            .sum()
+                                            .item()
+                                            == (all_topk_idx[j] == expert_id)
+                                            .sum()
+                                            .item(),
+                                        )
                                         assert (
                                             recv_x_amin == j - rank_offset
                                         ).sum().item() == (

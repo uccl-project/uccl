@@ -149,12 +149,12 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
 // GPU IPC handle support - replacement for nvshmemi_get_p2p_ptr
 // This function will be used to get P2P pointers for intra-node communication
 // The actual IPC handles will be managed by the Buffer class in uccl_ep.cc
-__device__ __forceinline__ void* get_ipc_p2p_ptr(void* local_ptr,
-                                                 void** ipc_base_ptrs,
-                                                 int src_rank, int dst_rank,
-                                                 int ranks_per_node,
-                                                 size_t buffer_size) {
-  // If same rank, return local pointer
+__device__ __forceinline__ uint64_t get_ipc_p2p_ptr(uint64_t const& local_ptr,
+                                                    void** ipc_base_ptrs,
+                                                    int src_rank, int dst_rank,
+                                                    int ranks_per_node,
+                                                    size_t buffer_size) {
+  // If same rank, return local pointer directly
   if (src_rank == dst_rank) {
     return local_ptr;
   }
@@ -162,30 +162,24 @@ __device__ __forceinline__ void* get_ipc_p2p_ptr(void* local_ptr,
   // Check if both ranks are on the same node
   int src_node = src_rank / ranks_per_node;
   int dst_node = dst_rank / ranks_per_node;
-
   if (src_node != dst_node) {
-    // Different nodes - cannot use IPC
-    return nullptr;
+    return 0;
   }
 
-  // Get the local rank within the node
+  int src_local_rank = src_rank % ranks_per_node;
   int dst_local_rank = dst_rank % ranks_per_node;
 
-  // Check if we have a valid IPC pointer for this rank
-  if (ipc_base_ptrs == nullptr || ipc_base_ptrs[dst_local_rank] == nullptr) {
-    return nullptr;
+  if (ipc_base_ptrs == nullptr || ipc_base_ptrs[src_local_rank] == nullptr ||
+      ipc_base_ptrs[dst_local_rank] == nullptr) {
+    return 0;
   }
 
-  // Calculate offset from local buffer base
   size_t offset =
-      reinterpret_cast<uintptr_t>(local_ptr) -
-      reinterpret_cast<uintptr_t>(ipc_base_ptrs[src_rank % ranks_per_node]);
+      reinterpret_cast<uintptr_t>(reinterpret_cast<void*>(local_ptr)) -
+      reinterpret_cast<uintptr_t>(ipc_base_ptrs[src_local_rank]);
 
-  printf("offset: %lu\n", offset);
-
-  // Return the corresponding address in the remote buffer
-  return reinterpret_cast<void*>(
-      reinterpret_cast<uintptr_t>(ipc_base_ptrs[dst_local_rank]) + offset);
+  // Return the remote pointer as uint64_t
+  return reinterpret_cast<uint64_t>(ipc_base_ptrs[dst_local_rank]) + offset;
 }
 
 }  // namespace uccl
