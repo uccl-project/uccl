@@ -151,7 +151,6 @@ def test_main(
                             cumulative_local_expert_recv_stats = torch.zeros(
                                 (num_local_experts,), dtype=torch.int, device="cuda"
                             )
-                            print("current_x", current_x)
                             packed_recv_x, packed_recv_count, handle, event, hook = (
                                 buffer.low_latency_dispatch(
                                     current_x,
@@ -168,48 +167,12 @@ def test_main(
                             )
                             hook() if return_recv_hook else event.current_stream_wait()
                             torch.cuda.synchronize()
-
-                            # print("packed_recv_x", packed_recv_x)
-                            # print("packed_recv_x data_ptr:", hex(packed_recv_x.data_ptr()))
-                            # all_zero = packed_recv_x.abs().amax() == 0
-                            # print("ALL ZERO (entire buffer)?", bool(all_zero.item()))
-                            # # Print max and min
-                            # print("packed_recv_x max", packed_recv_x.amax())
-                            # print("packed_recv_x min", packed_recv_x.amin())
-                            # peek_slot_from_handle(
-                            #     packed_recv_x,
-                            #     handle,        # <-- the (recv_src_info, recv_layout_range) tuple from dispatch
-                            #     le=6,          # local_expert index
-                            #     src_rank=0,    # which source rank you want to peek
-                            #     n_words=4
-                            # )
                         torch.cuda.synchronize()
                         packed_recv_x = (
                             (packed_recv_x[0], packed_recv_x[1].contiguous())
                             if dispatch_use_fp8
                             else packed_recv_x
                         )
-                        i = int(
-                            (packed_recv_count > 0).nonzero()[0]
-                        )  # pick any local expert with rows
-                        n = int(packed_recv_count[i])
-                        rl = handle[1][i]  # recv_layout_range for expert i
-                        int_mask = (1 << 32) - 1
-
-                        for j in range(num_ranks):
-                            begin = int((rl[j] >> 32).item())
-                            cnt = int((rl[j] & int_mask).item())
-                            if cnt > 0:
-                                block = packed_recv_x[i, begin : begin + cnt, :]
-                                print(
-                                    f"[i={i}] src_rank={j} cnt={cnt} amax={float(block.abs().amax().item())}"
-                                )
-
-                        print("packed_recv_x", packed_recv_x)
-                        all_zero = packed_recv_x.abs().amax() == 0
-                        print("ALL ZERO (entire buffer)?", bool(all_zero.item()))
-                        print("packed_recv_count", packed_recv_count)
-
                         simulated_gemm_x = (
                             per_token_cast_back(
                                 packed_recv_x[0].view(-1, hidden),
@@ -223,9 +186,7 @@ def test_main(
                             dtype=topk_idx.dtype,
                             device="cuda",
                         )
-                        print("topk_idx", topk_idx)
                         dist.all_gather_into_tensor(all_topk_idx, topk_idx, group=group)
-                        print("all_topk_idx", all_topk_idx)
                         for i in range(num_local_experts if do_check else 0):
                             expert_id = rank * num_local_experts + i
                             recv_x = (

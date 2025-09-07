@@ -71,13 +71,6 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   auto const sub_warp_id = warp_id % num_warps_per_group;
   auto const responsible_expert_idx = sm_id * num_warp_groups + warp_group_id;
 
-  if (lane_id == 0)
-    printf(
-        "rdma_recv_x offset to rdma_buffer_ptr = %p, rdma_x offset to "
-        "rdma_buffer_ptr = %p\n",
-        (void*)((uintptr_t)rdma_recv_x - (uintptr_t)rdma_buffer_ptr),
-        (void*)((uintptr_t)rdma_x - (uintptr_t)rdma_buffer_ptr));
-
   // May extract UE8M0 from the scales
   using scale_t = std::conditional_t<kUseUE8M0, uint8_t, float>;
   using packed_t = std::conditional_t<kUseUE8M0, uint32_t, float>;
