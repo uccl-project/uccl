@@ -25,6 +25,7 @@ UcclProxy::UcclProxy(uintptr_t rb_addr, int block_idx,
     // 128);
     // TODO(MaoZiming)
     cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize, cudaHostAllocMapped);
+    cudaMemset(atomic_buffer_ptr_, 0, kAtomicBufferSize);
     proxy_->set_atomic_buffer_ptr(atomic_buffer_ptr_);
   }
 }

@@ -46,7 +46,30 @@ except ImportError as exc:
     sys.stderr.write("Failed to import uccl.ep\n")
     raise
 
+def peek_slot_from_handle(packed_recv_x, handle, le, src_rank, n_words=4):
+    rl = handle[1][le]             # recv_layout_range for that expert
+    int_mask = (1 << 32) - 1
+    begin = int((rl[src_rank] >> 32).item())
+    cnt   = int((rl[src_rank] & int_mask).item())
+    if cnt == 0:
+        print(f"[peek] le={le} src={src_rank} has no tokens"); return
+    slot = begin                    # first filled slot for this src_rank
 
+    elt_size = packed_recv_x.element_size()
+    hidden   = packed_recv_x.size(-1)
+    slots_per_expert = packed_recv_x.size(1)
+    byte_off = ((le * slots_per_expert + slot) * hidden) * elt_size
+
+    nbytes_total = packed_recv_x.numel() * elt_size
+    u8 = torch.cuda.ByteTensor().set_(
+        packed_recv_x.untyped_storage(), 0, (nbytes_total,), (1,)
+    )
+    torch.cuda.synchronize()
+    chunk = u8[byte_off: byte_off + n_words*4].cpu().numpy().view('<u4')
+    dev_addr = packed_recv_x.data_ptr() + byte_off
+    print(f"[host peek] le={le} src={src_rank} slot={slot} @ {hex(dev_addr)} "
+          f"words=", [hex(int(x)) for x in chunk])
+    
 def test_main(
     num_tokens: int,
     hidden: int,
@@ -114,7 +137,7 @@ def test_main(
     do_check = True
     hash_value, num_times = 0, 0
     for current_x in x_list:
-        for return_recv_hook in (False, True):
+        for return_recv_hook in (True, False):
             for dispatch_use_fp8 in (False, True):
                 for round_scale in (False, True) if dispatch_use_fp8 else (False,):
                     for use_ue8m0 in (False, True) if round_scale else (False,):
@@ -139,6 +162,22 @@ def test_main(
                                 )
                             )
                             hook() if return_recv_hook else event.current_stream_wait()
+                            torch.cuda.synchronize()
+                            
+                            print("packed_recv_x", packed_recv_x)
+                            print("packed_recv_x data_ptr:", hex(packed_recv_x.data_ptr()))
+                            all_zero = packed_recv_x.abs().amax() == 0
+                            print("ALL ZERO (entire buffer)?", bool(all_zero.item()))
+                            # Print max and min
+                            print("packed_recv_x max", packed_recv_x.amax())
+                            print("packed_recv_x min", packed_recv_x.amin())
+                            peek_slot_from_handle(
+                                packed_recv_x,
+                                handle,        # <-- the (recv_src_info, recv_layout_range) tuple from dispatch
+                                le=6,          # local_expert index
+                                src_rank=0,    # which source rank you want to peek
+                                n_words=4
+                            )
                         torch.cuda.synchronize()
                         packed_recv_x = (
                             (packed_recv_x[0], packed_recv_x[1].contiguous())
@@ -232,6 +271,8 @@ def test_main(
                                         < 0.007
                                     )
                                 else:
+                                    print("recv_x[:, -128:]", recv_x[:, -128:])
+                                    print("recv_src_info.view(-1, 1) % num_tokens", recv_src_info.view(-1, 1) % num_tokens)
                                     assert (
                                         recv_x[:, -128:]
                                         - recv_src_info.view(-1, 1) % num_tokens
@@ -253,6 +294,8 @@ def test_main(
                                             == (all_topk_idx[j] == expert_id)
                                             .sum()
                                             .item(),
+                                            "recv_x_amin", recv_x_amin, j - rank_offset,
+                                            "all_topk_idx", all_topk_idx, expert_id
                                         )
                                         assert (
                                             recv_x_amin == j - rank_offset
@@ -398,7 +441,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
 
     # UCCL new code for initialization
     device_index = int(os.environ["LOCAL_RANK"])
-    scratch = torch.empty(
+    scratch = torch.zeros(
         num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
     )
     proxies, workers = initialize_uccl(scratch, num_rdma_bytes, rank, num_ranks, group)

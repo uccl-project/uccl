@@ -11,6 +11,7 @@ except ImportError as exc:
     sys.stderr.write("Failed to import uccl.ep\n")
     raise
 
+from uccl.ep import EventHandle
 from utils import EventOverlap, check_nvlink_connections
 
 
@@ -157,6 +158,16 @@ class Buffer:
         self.runtime.destroy()
         self.runtime = None
 
+    @staticmethod
+    def capture() -> EventOverlap:
+        """
+        Capture a CUDA event on the current stream, i.e. `torch.cuda.current_stream()`.
+
+        Returns:
+            event: the captured event.
+        """
+        return EventOverlap(EventHandle())
+    
     # noinspection PyTypeChecker
     def low_latency_dispatch(
         self,

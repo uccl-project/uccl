@@ -332,6 +332,15 @@ class Buffer {
     auto packed_recv_count = torch::empty(
         {num_local_experts}, torch::dtype(torch::kInt32).device(torch::kCUDA));
 
+    int cur_dev = -1;
+    C10_CUDA_CHECK(cudaGetDevice(&cur_dev));
+    printf("[HOST DEBUG] current device: %d\n", cur_dev);
+    printf("[HOST DEBUG] x.device: %d  packed_recv_x.device: %d\n",
+          x.get_device(), packed_recv_x.get_device());
+    cudaPointerAttributes a;
+    C10_CUDA_CHECK(cudaPointerGetAttributes(&a, packed_recv_x.data_ptr()));
+    printf("[HOST DEBUG] packed_recv_x ptr device=%d, type=%d\n", a.device, (int)a.type);
+    
     // Allocate column-majored scales
     auto packed_recv_x_scales = std::optional<torch::Tensor>();
     void* packed_recv_x_scales_ptr = nullptr;
@@ -621,43 +630,13 @@ class Buffer {
     // Sync NVSHMEM handles and allocate memory
     // NOTE(MaoZiming): drop nvshmem. we directly allocate rdma_buffer_ptr.
     if (num_rdma_bytes > 0) {
-#if false
-      // Initialize NVSHMEM
-      EP_HOST_ASSERT(root_unique_id_opt.has_value());
-      std::vector<uint8_t> root_unique_id(root_unique_id_opt->size());
-      auto root_unique_id_str = root_unique_id_opt->cast<std::string>();
-      std::memcpy(root_unique_id.data(), root_unique_id_str.c_str(),
-                  root_unique_id_opt->size());
-      auto nvshmem_rank = low_latency_mode ? rank : rdma_rank;
-      auto num_nvshmem_ranks = low_latency_mode ? num_ranks : num_rdma_ranks;
-      EP_HOST_ASSERT(nvshmem_rank ==
-                     internode::init(root_unique_id, nvshmem_rank,
-                                     num_nvshmem_ranks, low_latency_mode));
-      internode::barrier();
-
-      // Allocate RDMA buffer
-      if (!rdma_buffer_ptr) {
-        rdma_buffer_ptr =
-            internode::alloc(num_rdma_bytes, NUM_BUFFER_ALIGNMENT_BYTES);
-      }
-
-      // Clean buffer (mainly for low-latency mode)
-      CUDA_CHECK(cudaMemset(rdma_buffer_ptr, 0, num_rdma_bytes));
-
-      // Barrier
-      internode::barrier();
-      CUDA_CHECK(cudaDeviceSynchronize());
-#else
       // TODO(MaoZiming): this needs to be allocated by proxy.
       if (!rdma_buffer_ptr) {
         fprintf(stderr,
                 "WARNING: rdma_buffer_ptr is not set, allocating %ld bytes "
                 "for RDMA buffer.\n",
                 num_rdma_bytes);
-        fflush(stderr);
         std::abort();
-        rdma_buffer_ptr =
-            internode::alloc(num_rdma_bytes, NUM_BUFFER_ALIGNMENT_BYTES);
       } else {
         printf(
             "rdma_buffer_ptr is set, using existing buffer: %p, "
@@ -667,7 +646,6 @@ class Buffer {
       CUDA_CHECK(
           cudaMemsetAsync(rdma_buffer_ptr, 0, num_rdma_bytes, comm_stream));
       CUDA_CHECK(cudaStreamSynchronize(comm_stream));
-#endif
     }
     // Ready to use
     available = true;

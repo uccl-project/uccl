@@ -235,6 +235,32 @@ __device__ __forceinline__ dtype_t ld_nc_global(dtype_t const* ptr) {
   return *reinterpret_cast<dtype_t*>(&ret);
 }
 
+__device__ __forceinline__ int ld_cg_global(const int* p) {
+  int v;
+  asm volatile("ld.global.cg.s32 %0, [%1];" : "=r"(v) : "l"(p));
+  return v;
+}
+
+__device__ __forceinline__ int4 ld_cg_global(const int4* p) {
+  int4 v;
+  asm volatile("ld.global.cg.v4.b32 {%0,%1,%2,%3}, [%4];"
+               : "=r"(v.x), "=r"(v.y), "=r"(v.z), "=r"(v.w)
+               : "l"(p));
+  return v;
+}
+
+__device__ __forceinline__ void st_cg_global(int* p, int v) {
+    asm volatile("st.global.cg.s32 [%0], %1;"
+                 :
+                 : "l"(p), "r"(v));
+}
+
+__device__ __forceinline__ void st_cg_global(int4* p, int4 v) {
+    asm volatile("st.global.cg.v4.b32 [%0], {%1,%2,%3,%4};"
+                 :
+                 : "l"(p), "r"(v.x), "r"(v.y), "r"(v.z), "r"(v.w));
+}
+
 template <typename dtype_t>
 __device__ __forceinline__ void st_na_global(dtype_t const* ptr,
                                              dtype_t const& value) {
@@ -283,32 +309,23 @@ __host__ __device__ constexpr dtype_t align(dtype_t a, dtype_t b) {
   return ceil_div<dtype_t>(a, b) * b;
 }
 
-// NOTE(MaoZiming): Guarded + single-statement safe
-#define UNROLLED_WARP_COPY(UNROLL_FACTOR, LANE_ID, N, DST, SRC, LD_FUNC,  \
-                           ST_FUNC)                                       \
-  do {                                                                    \
-    constexpr int __STRIDE = 32;                                          \
-    constexpr int __TILE = __STRIDE * (UNROLL_FACTOR);                    \
-    auto __src = (SRC);                                                   \
-    auto __dst = (DST);                                                   \
-    int __N = (N);                                                        \
-    int __lane = (LANE_ID);                                               \
-                                                                          \
-    for (int __base = __lane; __base < (__N / __TILE) * __TILE;           \
-         __base += __TILE) {                                              \
-      _Pragma("unroll") for (int __u = 0; __u < (UNROLL_FACTOR); ++__u) { \
-        int __i = __base + __u * __STRIDE;                                \
-        auto __v = LD_FUNC(__src + __i);                                  \
-        ST_FUNC(__dst + __i, __v);                                        \
-      }                                                                   \
-    }                                                                     \
-                                                                          \
-    for (int __i = ((__N / __TILE) * __TILE) + __lane; __i < __N;         \
-         __i += __STRIDE) {                                               \
-      auto __v = LD_FUNC(__src + __i);                                    \
-      ST_FUNC(__dst + __i, __v);                                          \
-    }                                                                     \
-  } while (0)
+#define UNROLLED_WARP_COPY(UNROLL_FACTOR, LANE_ID, N, DST, SRC, LD_FUNC, ST_FUNC) \
+{ \
+    constexpr int kLoopStride = 32 * (UNROLL_FACTOR); \
+    typename std::remove_reference<decltype(LD_FUNC((SRC) + 0))>::type unrolled_values[(UNROLL_FACTOR)]; \
+    auto __src = (SRC); \
+    auto __dst = (DST); \
+    for (int __i = (LANE_ID); __i < ((N) / kLoopStride) * kLoopStride; __i += kLoopStride) { \
+        _Pragma("unroll") \
+        for (int __j = 0; __j < (UNROLL_FACTOR); ++ __j) \
+            unrolled_values[__j] = LD_FUNC(__src + __i + __j * 32); \
+        _Pragma("unroll") \
+        for (int __j = 0; __j < (UNROLL_FACTOR); ++ __j) \
+            ST_FUNC(__dst + __i + __j * 32, unrolled_values[__j]); \
+    } \
+    for (int __i = ((N) / kLoopStride) * kLoopStride + (LANE_ID); __i < (N); __i += 32) \
+        ST_FUNC(__dst + __i, LD_FUNC(__src + __i)); \
+}
 
 __device__ __forceinline__ int atomic_add_release_global(int const* ptr,
                                                          int value) {

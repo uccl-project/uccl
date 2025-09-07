@@ -8,10 +8,44 @@
 #include <iostream>
 #include <vector>
 #include <cooperative_groups.h>
-
+#include <cuda_fp8.h>
 namespace cg = cooperative_groups;
 namespace uccl {
 namespace internode_ll {
+
+  __device__ __forceinline__ float decode_e4m3(unsigned char w) {
+  int s = (w & 0x80) ? -1 : 1;
+  int e = (w >> 3) & 0xF;
+  int m = w & 0x7;
+  if (e == 0) {
+    // subnormal: mantissa * 2^-6
+    return s * ldexpf(static_cast<float>(m), -6);
+  } else {
+    // normal: (mant | 0x8) * 2^(exp-7)
+    return s * ldexpf(static_cast<float>(m | 0x8), e - 7);
+  }
+}
+
+__device__ __forceinline__ int4 ld_acquire_sys_global_int4(const int4* p) {
+  int4 v; auto pi = reinterpret_cast<const int*>(p);
+  v.x = ld_acquire_sys_global(pi+0);
+  v.y = ld_acquire_sys_global(pi+1);
+  v.z = ld_acquire_sys_global(pi+2);
+  v.w = ld_acquire_sys_global(pi+3);
+  return v;
+}
+
+__device__ __forceinline__ void dump_bytes(const void* base, int nbytes) {
+    auto p = reinterpret_cast<const unsigned char*>(base);
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+        printf("[DUMP] Dumping %d bytes at %p:\n", nbytes, base);
+        for (int i = 0; i < nbytes; i++) {
+            printf("%02x ", p[i]);
+            if ((i + 1) % 16 == 0) printf("\n");
+        }
+        printf("\n");
+    }
+}
 
 template <bool kUseFP8, bool kUseUE8M0, int kHidden>
 __global__ __launch_bounds__(1024, 1) void dispatch(
@@ -36,6 +70,12 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   auto const warp_group_id = warp_id / num_warps_per_group;
   auto const sub_warp_id = warp_id % num_warps_per_group;
   auto const responsible_expert_idx = sm_id * num_warp_groups + warp_group_id;
+
+
+  if (lane_id == 0)
+    printf("rdma_recv_x offset to rdma_buffer_ptr = %p, rdma_x offset to rdma_buffer_ptr = %p\n", 
+           (void*)((uintptr_t)rdma_recv_x - (uintptr_t)rdma_buffer_ptr),
+           (void*)((uintptr_t)rdma_x - (uintptr_t)rdma_buffer_ptr));
 
   // May extract UE8M0 from the scales
   using scale_t = std::conditional_t<kUseUE8M0, uint8_t, float>;
@@ -65,6 +105,38 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 
   // Sending phase
   if ((phases & LOW_LATENCY_SEND_PHASE) == 0) goto LOW_LATENCY_DISPATCH_RECV;
+
+  // Receiving and packing
+  if (responsible_expert_idx < num_experts) {
+    auto const src_rank = responsible_expert_idx / num_local_experts;
+    auto const local_expert_idx = responsible_expert_idx % num_local_experts;
+    auto const rdma_recv_x_uint8 =
+        static_cast<uint8_t*>(rdma_recv_x) +
+        local_expert_idx * num_ranks * num_max_dispatch_tokens_per_rank *
+            num_bytes_per_msg +
+        src_rank * num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
+
+    for (int i = sub_warp_id; i < num_max_dispatch_tokens_per_rank; i += num_warps_per_group) {
+      // Copy source info
+      auto const src_src_idx =
+          reinterpret_cast<int*>(rdma_recv_x_uint8 + i * num_bytes_per_msg);
+      if (lane_id == 0) {
+          // int token_id = ld_nc_global(src_src_idx);
+          int token_id = ld_acquire_sys_global(src_src_idx);
+          asm volatile("membar.sys;" ::: "memory");
+          auto* payload = reinterpret_cast<int4*>(
+              reinterpret_cast<uint8_t*>(src_src_idx) + sizeof(int4));
+          // int4 v = ld_nc_global(payload);
+          int4 v = ld_cg_global(payload);
+          printf("[BEFORE DISPATCH] src_src_idx=%p token=%d first int4 payload: %x %x %x %x\n",
+                (void*)src_src_idx, token_id, v.x, v.y, v.z, v.w);
+          }
+        }
+      }
+
+  if (lane_id == 0) {
+      dump_bytes(rdma_recv_x, 64);   // dump first 64 bytes
+  }
 
   // There are 2 kinds of warps in this part:
   // 1. The first-kind warps for FP8 cast and sending top-k tokens
@@ -160,6 +232,19 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                                                   dst_rank, max_nvl_peers, 0)
                           : 0;
         if (dst_p2p_ptr == 0) {
+          if (lane_id == 0) {
+            auto* src_int = reinterpret_cast<int*>(src_ptr);
+              printf("src_ptr=%p first ints: %d %d %d %d\n",
+                    src_int,
+                    src_int[0], src_int[1], src_int[2], src_int[3]);
+            auto* src_data = reinterpret_cast<int4*>(
+                reinterpret_cast<uint8_t*>(src_ptr) + sizeof(int4));
+            int4 v = src_data[0];
+            printf("token %d payload int4 = %x %x %x %x\n",
+                    src_int[0], v.x, v.y, v.z, v.w);
+          }
+          if (lane_id == 0)
+            printf("nvshmemi_ibgda_put_nbi_warp. dst_ptr: %p, rdma_buffer_ptr: %p, offset: %p, slot_idx: %d\n", (void*)dst_ptr, rdma_buffer_ptr, (void*)(dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr)), slot_idx);
           uccl::nvshmemi_ibgda_put_nbi_warp(
               dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), src_ptr,
               num_bytes_per_msg, dst_rank,
@@ -170,7 +255,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           auto const* src_int4_ptr = reinterpret_cast<int4 const*>(src_ptr);
           auto* dst_int4_ptr = reinterpret_cast<int4*>(dst_p2p_ptr);
           UNROLLED_WARP_COPY(8, lane_id, num_int4_per_msg, dst_int4_ptr,
-                             src_int4_ptr, ld_nc_global, st_na_global);
+                             src_int4_ptr, ld_cg_global, st_cg_global);
         }
         // Increase counter after finishing
         __syncwarp();
@@ -255,7 +340,9 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       // Inter-node or no IPC: use IBGDA atomic
       uccl::nvshmemi_ibgda_amo_nonfetch_add(
           dst_ptr - reinterpret_cast<uint64_t>(atomic_buffer_ptr),
-          -num_tokens_sent - 1, dst_rank, sm_id, dst_expert_local_idx, false,
+          -num_tokens_sent - 1, dst_rank,
+          sm_id,   // NOTE(MaoZiming): use sm_id for rb.
+          dst_expert_local_idx, false,
           ring_addrs, num_ring_addrs);
 
     } else {
@@ -268,8 +355,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     atomic_finish_counter_per_expert[responsible_expert_idx] = 0;
 
     // Clean `packed_recv_count`
-    // Note(MaoZiming): changed from DeepEP.
-    if (dst_rank == rank) packed_recv_count[dst_expert_local_idx] = 0;
+    if (dst_rank == 0) packed_recv_count[dst_expert_local_idx] = 0;
   }
   __syncwarp();
 
@@ -357,8 +443,56 @@ LOW_LATENCY_DISPATCH_RECV:
       auto const src_src_idx =
           reinterpret_cast<int*>(rdma_recv_x_uint8 + i * num_bytes_per_msg);
       if (lane_id == 0)
-        recv_src_info[recv_token_begin_idx + i] = ld_nc_global(src_src_idx);
+        // recv_src_info[recv_token_begin_idx + i] = ld_nc_global(src_src_idx);
+        recv_src_info[recv_token_begin_idx + i] = ld_acquire_sys_global(src_src_idx);
+      asm volatile("membar.sys;" ::: "memory");
       __syncwarp();
+
+      if (lane_id == 0) {
+        // NOTE(MaoZiming): IMPORTANT!!
+          // int token_id = ld_nc_global(src_src_idx);
+          int token_id = ld_acquire_sys_global(src_src_idx);
+          asm volatile("membar.sys;" ::: "memory");
+          auto* payload = reinterpret_cast<int4*>(
+              reinterpret_cast<uint8_t*>(src_src_idx) + sizeof(int4));
+          // int4 v = ld_nc_global(payload);
+          int4 v = ld_cg_global(payload);
+          printf("[RECV DEBUG] src_src_idx=%p token=%d first int4 payload: %x %x %x %x\n",
+                (void *)src_src_idx, token_id, v.x, v.y, v.z, v.w);
+
+          if constexpr (!kUseFP8) {
+              // BF16 mode: decode first 4 values
+              auto* bf16 = reinterpret_cast<nv_bfloat16*>(payload);
+              float f0 = __bfloat162float(bf16[0]);
+              float f1 = __bfloat162float(bf16[1]);
+              float f2 = __bfloat162float(bf16[2]);
+              float f3 = __bfloat162float(bf16[3]);
+              if (lane_id == 0)
+                printf("[RECV DEBUG] token=%d first floats (BF16): %f %f %f %f\n",
+                      token_id, f0, f1, f2, f3);
+          } else {
+              auto* fp8x2 = reinterpret_cast<__nv_fp8x2_storage_t*>(payload);
+              unsigned char lo = reinterpret_cast<unsigned char*>(fp8x2)[0];
+              unsigned char hi = reinterpret_cast<unsigned char*>(fp8x2)[1];
+
+              // Manual decode: E4M3 format
+              auto decode_e4m3 = [](unsigned char v) {
+                  int sign = (v & 0x80) ? -1 : 1;
+                  int exp  = (v >> 3) & 0xF;  // 4-bit exponent
+                  int mant = v & 0x7;         // 3-bit mantissa
+                  if (exp == 0) {
+                      return sign * std::ldexp((float)mant, -6); // subnormals
+                  } else {
+                      return sign * std::ldexp((float)(mant | 0x8), exp - 7);
+                  }
+              };
+
+              float f0 = decode_e4m3(lo);
+              float f1 = decode_e4m3(hi);
+              printf("[RECV DEBUG] token=%d first floats (manual FP8): %f %f\n",
+                    token_id, f0, f1);
+          }
+      }
 
       // Copy data
       // NOTES: only 2 load iterations for 7K hidden with 7 unrolls
@@ -367,7 +501,14 @@ LOW_LATENCY_DISPATCH_RECV:
       auto const dst_data =
           recv_x_int4 + (recv_token_begin_idx + i) * hidden_int4;
       UNROLLED_WARP_COPY(7, lane_id, hidden_int4, dst_data, src_data,
-                         ld_nc_global, st_na_global);
+                         ld_cg_global, st_cg_global);
+      __threadfence_system();
+      __syncwarp();
+      if (lane_id == 0) {
+        int4 dv = ld_cg_global(dst_data);
+        printf("[DST DEBUG after UNROLLED_WARP_COPY]  src_src_idx=%p, dst_data=%p, token=%d dst[0] = %x %x %x %x\n", (void *)src_src_idx, (void *)dst_data,
+              ld_cg_global(src_src_idx), dv.x, dv.y, dv.z, dv.w);
+      }
 
       // Copy scales
       if constexpr (kUseFP8) {
@@ -400,8 +541,27 @@ LOW_LATENCY_DISPATCH_RECV:
         }
       }
     }
-    if (blockIdx.x == 0 && threadIdx.x == 0)
-      printf("[dispatch] RECV finished\n");
+
+    if ((phases & LOW_LATENCY_RECV_PHASE) != 0) {
+      __threadfence_system();
+      cg::this_grid().sync();
+    }
+
+    for (int i = sub_warp_id; i < num_recv_tokens; i += num_warps_per_group) {
+      auto const dst_data =
+          static_cast<int4*>(packed_recv_x) +
+          local_expert_idx * num_ranks * num_max_dispatch_tokens_per_rank * hidden_int4 +
+          (recv_token_begin_idx + i) * hidden_int4;
+
+      if (lane_id == 0) {
+        int slot = recv_token_begin_idx + i;
+        int4 dv = ld_cg_global(dst_data);   // coherent load for debug
+        printf("[DST DEBUG] le=%d src=%d slot=%d i=%d base=%p dst=%p "
+              "dst[0]=%08x %08x %08x %08x\n",
+              local_expert_idx, src_rank, slot, i,
+              packed_recv_x, dst_data, dv.x, dv.y, dv.z, dv.w);
+      }
+    }
   }
 }
 

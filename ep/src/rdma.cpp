@@ -628,7 +628,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              std::vector<uint64_t> const& wrs_to_post,
                              std::vector<TransferCmd> const& cmds_to_post,
                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                             int my_rank) {
+                             int my_rank, int block_idx) {
   if (num_wrs == 0) return;
   if (wrs_to_post.size() != num_wrs || cmds_to_post.size() != num_wrs) {
     fprintf(stderr,
@@ -651,6 +651,9 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
   }
   for (auto& [dst_rank, wr_ids] : dst_rank_wr_ids) {
     if (wr_ids.empty()) continue;
+    auto [min_it, max_it] = std::minmax_element(wr_ids.begin(), wr_ids.end());
+    printf("[block_idx: %d] Posting %zu rdma WRs to dst_rank=%d (min=%zu, max=%zu)\n",
+           block_idx, wr_ids.size(), dst_rank, *min_it, *max_it);
 
     ProxyCtx* ctx = ctxs[dst_rank].get();
     if (!ctx || !ctx->qp || !ctx->mr) {
@@ -674,10 +677,10 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
 
       remote_addr = ctx->remote_addr + (cmd.req_rptr ? cmd.req_rptr : 0);
       printf(
-          "Posting RDMA write to dst_rank=%d, remote_addr=0x%llx, "
-          "rkey=0x%x, len=%zu, wr_id=%lu\n",
-          dst_rank, (unsigned long long)remote_addr, ctx->remote_rkey,
-          cmd.bytes, wr_ids[j]);
+          "Posting RDMA write to dst_rank=%d, ctx->remote_addr=0x%llx, cmd.req_rptr=0x%llx, "
+          "remote_addr=0x%llx, rkey=0x%x, len=%zu, wr_id=%lu, cmd.req_lptr: 0x%llx\n",
+          dst_rank, (unsigned long long)ctx->remote_addr, (unsigned long long)cmd.req_rptr, (unsigned long long)remote_addr, ctx->remote_rkey,
+          cmd.bytes, wr_ids[j], (unsigned long long)cmd.req_lptr);
       uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
 
       if (remote_addr < ctx->remote_addr ||
@@ -1197,7 +1200,7 @@ void post_atomic_operations_efa(ProxyCtx& S,
                                 std::vector<uint64_t> const& wrs_to_post,
                                 std::vector<TransferCmd> const& cmds_to_post,
                                 std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                                int my_rank) {
+                                int my_rank, int block_idx) {
   if (cmds_to_post.size() > ProxyCtx::kMaxAtomicOps) {
     fprintf(stderr, "Too many atomic operations: %zu > %zu\n",
             cmds_to_post.size(), ProxyCtx::kMaxAtomicOps);
@@ -1213,8 +1216,10 @@ void post_atomic_operations_efa(ProxyCtx& S,
   }
 
   for (auto& [dst_rank, wr_ids] : dst_rank_wr_ids) {
-    printf("Posting %zu atomic WRs to dst_rank=%d\n", wr_ids.size(), dst_rank);
     if (wr_ids.empty()) continue;
+    auto [min_it, max_it] = std::minmax_element(wr_ids.begin(), wr_ids.end());
+    printf("[block_idx: %d] Posting %zu atomic WRs to dst_rank=%d (min=%zu, max=%zu)\n",
+           block_idx, wr_ids.size(), dst_rank, *min_it, *max_it);
 
     ProxyCtx* ctx = ctxs[dst_rank].get();
     const size_t k = wr_ids.size();
