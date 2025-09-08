@@ -256,25 +256,6 @@ def test_main(
                                         recv_layout_range[j] >> 32
                                     ).item(), (recv_layout_range[j] & int_mask).item()
                                     if not round_scale:
-                                        # print(
-                                        #     "assert equality check",
-                                        #     (recv_x_amin == j - rank_offset)
-                                        #     .sum()
-                                        #     .item(),
-                                        #     (all_topk_idx[j] == expert_id).sum().item(),
-                                        #     (recv_x_amin == j - rank_offset)
-                                        #     .sum()
-                                        #     .item()
-                                        #     == (all_topk_idx[j] == expert_id)
-                                        #     .sum()
-                                        #     .item(),
-                                        #     "recv_x_amin",
-                                        #     recv_x_amin,
-                                        #     j - rank_offset,
-                                        #     "all_topk_idx",
-                                        #     all_topk_idx,
-                                        #     expert_id,
-                                        # )
                                         assert (
                                             recv_x_amin == j - rank_offset
                                         ).sum().item() == (
@@ -296,7 +277,6 @@ def test_main(
                                 hash_value ^= hash_tensor(
                                     packed_recv_x[i, :num_valid_tokens]
                                 )
-
                         print(
                             f"Finished one dispatch test case: return_recv_hook: {return_recv_hook}\n",
                             flush=True,
@@ -397,7 +377,6 @@ def test_main(
             f"avg_t={avg_t * 1e6:.2f} us, min_t={min_t * 1e6:.2f} us, max_t={max_t * 1e6:.2f} us",
             flush=True,
         )
-
         # Separate profiling
         for return_recv_hook in (False, True):
             group.barrier()

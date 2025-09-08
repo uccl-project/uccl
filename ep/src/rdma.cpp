@@ -960,17 +960,17 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       uint32_t imm = ntohl(cqe.imm_data);
 
       // Decode imm: [31] kind, [30:16] value (signed 15-bit), [15:0] offset
-      bool is_combine = unpack_kind(imm);
+      // bool is_combine = unpack_kind(imm);
       int value = unpack_v(static_cast<int32_t>(imm));
       uint32_t offset = unpack_off(imm);
       size_t index = offset / sizeof(int);
-      printf(
-          "[EFA_RECV_IMM] kind=%u value=%d offset=%u index=%zu addr=0x%llx "
-          "imm=0x%08x\n",
-          (unsigned)is_combine, value, offset, index,
-          (unsigned long long)((uintptr_t)atomic_buffer_ptr +
-                               index * sizeof(int)),
-          imm);
+      // printf(
+      //     "[EFA_RECV_IMM] kind=%u value=%d offset=%u index=%zu addr=0x%llx "
+      //     "imm=0x%08x\n",
+      //     (unsigned)is_combine, value, offset, index,
+      //     (unsigned long long)((uintptr_t)atomic_buffer_ptr +
+      //                          index * sizeof(int)),
+      //     imm);
 
       auto* addr32 =
           reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
@@ -1213,7 +1213,7 @@ void post_atomic_operations_efa(ProxyCtx& S,
 
     for (size_t i = 0; i < k; ++i) {
       auto const& cmd = cmds_to_post[wr_ids[i]];
-      bool const is_combine = (cmd.value == 1);
+      // bool const is_combine = (cmd.value == 1);
 
       // Pack control into 32-bit imm:
       // [31] kind (1=combine, 0=dispatch)
@@ -1253,8 +1253,8 @@ void post_atomic_operations_efa(ProxyCtx& S,
 
       wrs[i].next = (i + 1 < k) ? &wrs[i + 1] : nullptr;
 
-      printf("[EFA_EMPTY_IMM] dst=%d kind=%u val=%d offset=%u imm=0x%08x\n",
-             dst_rank, static_cast<unsigned>(is_combine), v, offset, imm);
+      // printf("[EFA_EMPTY_IMM] dst=%d kind=%u val=%d offset=%u imm=0x%08x\n",
+      //        dst_rank, static_cast<unsigned>(is_combine), v, offset, imm);
     }
 
     ibv_send_wr* bad = nullptr;

@@ -338,11 +338,13 @@ LOW_LATENCY_DISPATCH_RECV:
         ;
       auto wait_recv_cost = clock64() - start_time;
       num_recv_tokens = -num_recv_tokens - 1;
-      printf(
-          "[RECV_COUNT_DECODED] Decoded token count: %d (from received value "
-          "%d), count_addr; %p\n",
-          num_recv_tokens, -num_recv_tokens - 1,
-          (void*)(rdma_recv_count + local_expert_idx * num_ranks + src_rank));
+      // printf(
+      //     "[RECV_COUNT_DECODED] Decoded token count: %d (from received value
+      //     "
+      //     "%d), count_addr; %p\n",
+      //     num_recv_tokens, -num_recv_tokens - 1,
+      //     (void*)(rdma_recv_count + local_expert_idx * num_ranks +
+      //     src_rank));
       recv_token_begin_idx =
           atomicAdd(packed_recv_count + local_expert_idx, num_recv_tokens);
       shared_num_recv_tokens[warp_group_id] = num_recv_tokens;
