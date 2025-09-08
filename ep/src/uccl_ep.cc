@@ -332,15 +332,15 @@ class Buffer {
     auto packed_recv_count = torch::empty(
         {num_local_experts}, torch::dtype(torch::kInt32).device(torch::kCUDA));
 
-    int cur_dev = -1;
-    C10_CUDA_CHECK(cudaGetDevice(&cur_dev));
-    printf("[HOST DEBUG] current device: %d\n", cur_dev);
-    printf("[HOST DEBUG] x.device: %d  packed_recv_x.device: %d\n",
-           x.get_device(), packed_recv_x.get_device());
-    cudaPointerAttributes a;
-    C10_CUDA_CHECK(cudaPointerGetAttributes(&a, packed_recv_x.data_ptr()));
-    printf("[HOST DEBUG] packed_recv_x ptr device=%d, type=%d\n", a.device,
-           (int)a.type);
+    // int cur_dev = -1;
+    // C10_CUDA_CHECK(cudaGetDevice(&cur_dev));
+    // printf("[HOST DEBUG] current device: %d\n", cur_dev);
+    // printf("[HOST DEBUG] x.device: %d  packed_recv_x.device: %d\n",
+    //        x.get_device(), packed_recv_x.get_device());
+    // cudaPointerAttributes a;
+    // C10_CUDA_CHECK(cudaPointerGetAttributes(&a, packed_recv_x.data_ptr()));
+    // printf("[HOST DEBUG] packed_recv_x ptr device=%d, type=%d\n", a.device,
+    //        (int)a.type);
 
     // Allocate column-majored scales
     auto packed_recv_x_scales = std::optional<torch::Tensor>();
@@ -413,8 +413,8 @@ class Buffer {
     if (return_recv_hook)
       recv_hook = [=]() { launcher(LOW_LATENCY_RECV_PHASE); };
 
-    printf("packed_recv_x: %p\n", packed_recv_x.data_ptr());
-    printf("packed_recv_count: %p\n", packed_recv_count.data_ptr());
+    // printf("packed_recv_x: %p\n", packed_recv_x.data_ptr());
+    // printf("packed_recv_count: %p\n", packed_recv_count.data_ptr());
     // Return values
     return {packed_recv_x,
             packed_recv_x_scales,
@@ -580,6 +580,18 @@ class Buffer {
         torch::TensorOptions().dtype(dtype).device(torch::kCUDA));
   }
 
+  void reset_rdma_buffer() {
+    CUDA_CHECK(
+        cudaMemsetAsync(rdma_buffer_ptr, 0, num_rdma_bytes, comm_stream));
+    CUDA_CHECK(cudaStreamSynchronize(comm_stream));
+    printf("RDMA buffer reset done\n");
+
+    if (atomic_buffer_ptr != nullptr) {
+      cudaMemset(atomic_buffer_ptr, 0, kAtomicBufferSize);
+      printf("Atomic buffer reset done\n");
+    }
+  }
+
   void sync(std::vector<int> const& device_ids,
             std::vector<std::optional<pybind11::bytearray>> const&
                 all_gathered_handles,
@@ -645,10 +657,9 @@ class Buffer {
             "num_rdma_bytes: %ld\n",
             rdma_buffer_ptr, num_rdma_bytes);
       }
-      CUDA_CHECK(
-          cudaMemsetAsync(rdma_buffer_ptr, 0, num_rdma_bytes, comm_stream));
-      CUDA_CHECK(cudaStreamSynchronize(comm_stream));
+      reset_rdma_buffer();
     }
+
     // Ready to use
     available = true;
   }
@@ -800,6 +811,7 @@ PYBIND11_MODULE(ep, m) {
           },
           py::arg("addr"),
           R"doc(Set RDMA buffer from a raw address. Caller must keep the memory alive.)doc")
+      .def("reset_rdma_buffer", &Buffer::reset_rdma_buffer)
       .def("low_latency_dispatch", &Buffer::low_latency_dispatch, py::arg("x"),
            py::arg("topk_idx"),
            py::arg("cumulative_local_expert_recv_stats") = py::none(),

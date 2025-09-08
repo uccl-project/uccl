@@ -100,37 +100,6 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   // Sending phase
   if ((phases & LOW_LATENCY_SEND_PHASE) == 0) goto LOW_LATENCY_DISPATCH_RECV;
 
-  // Receiving and packing
-  if (responsible_expert_idx < num_experts) {
-    auto const src_rank = responsible_expert_idx / num_local_experts;
-    auto const local_expert_idx = responsible_expert_idx % num_local_experts;
-    auto const rdma_recv_x_uint8 =
-        static_cast<uint8_t*>(rdma_recv_x) +
-        local_expert_idx * num_ranks * num_max_dispatch_tokens_per_rank *
-            num_bytes_per_msg +
-        src_rank * num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
-
-    for (int i = sub_warp_id; i < num_max_dispatch_tokens_per_rank;
-         i += num_warps_per_group) {
-      // Copy source info
-      auto const src_src_idx =
-          reinterpret_cast<int*>(rdma_recv_x_uint8 + i * num_bytes_per_msg);
-      if (lane_id == 0) {
-        // int token_id = ld_nc_global(src_src_idx);
-        int token_id = ld_acquire_sys_global(src_src_idx);
-        asm volatile("membar.sys;" ::: "memory");
-        auto* payload = reinterpret_cast<int4*>(
-            reinterpret_cast<uint8_t*>(src_src_idx) + sizeof(int4));
-        // int4 v = ld_nc_global(payload);
-        int4 v = ld_cg_global(payload);
-        printf(
-            "[BEFORE DISPATCH] src_src_idx=%p token=%d first int4 payload: %x "
-            "%x %x %x\n",
-            (void*)src_src_idx, token_id, v.x, v.y, v.z, v.w);
-      }
-    }
-  }
-
   if (lane_id == 0) {
     dump_bytes(rdma_recv_x, 64);  // dump first 64 bytes
   }
@@ -163,9 +132,9 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                                    topk_idx + token_idx * num_topk + warp_id))
                              : -1;
       // thread_id == 0 ? (*rdma_x_src_idx = token_idx) : 0;
-      if (thread_id == 0) {
-        st_release_sys_global(rdma_x_src_idx, token_idx);  // publish header
-      }
+      // if (thread_id == 0) {
+      //   st_release_sys_global(rdma_x_src_idx, token_idx);  // publish header
+      // }
 
 // FP8 cast
 #pragma unroll
@@ -207,10 +176,17 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         } else {
           // Reinterpret-cast is for C++14 compatibility
           rdma_x_vec[i] = *reinterpret_cast<vec_t*>(&int4_value);
+          // printf("rdma_x_vec[i]: %p, int4_value: %x %x %x %x\n",
+          //        &rdma_x_vec[i], int4_value.x, int4_value.y, int4_value.z,
+          //        int4_value.w);
         }
       }
       asm volatile("bar.sync 1, %0;" ::"r"(num_threads));
+      __threadfence_system();
 
+      if (thread_id == 0) {
+        st_release_sys_global(rdma_x_src_idx, token_idx);  // publish header
+      }
       // Issue IBGDA sends
       if (dst_expert_idx >= 0) {
         int slot_idx =

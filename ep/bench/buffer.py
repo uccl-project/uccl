@@ -144,6 +144,13 @@ class Buffer:
         self.runtime.sync(device_ids, ipc_handles, root_unique_id)
         assert self.runtime.is_available()
 
+    def reset_rdma_buffer(self):
+        """
+        Reset the RDMA buffer, this is useful when you want to reuse the RDMA buffer for another run.
+
+        """
+        self.runtime.reset_rdma_buffer()
+
     def connect_atomic_buffer(self, proxy: "ep.UcclProxy"):
         ep.connect_atomic_buffer(proxy, self.runtime)
 
