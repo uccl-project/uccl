@@ -15,10 +15,6 @@
 #include <tuple>
 #include <unordered_map>
 #include <vector>
-// #define USE_REDIS
-#ifdef USE_REDIS
-#include <sw/redis++/redis++.h>
-#endif
 
 namespace py = pybind11;
 constexpr uint64_t kNvlinkConn = UINT64_MAX;
@@ -64,13 +60,6 @@ class Endpoint {
   const uint32_t kMaxInflightChunks = 8;
 
  public:
-  gpuStream_t pick_stream() {
-    if (streams_.empty()) return nullptr;
-    uint32_t i =
-        rr_stream_.fetch_add(1, std::memory_order_relaxed) % streams_.size();
-    return streams_[i];
-  }
-
   /*
    * Create engine threads running in background for a single interface. It also
    * opens a TCP listening thread waiting for incoming connections.
@@ -97,6 +86,15 @@ class Endpoint {
                uint64_t& conn_id);
 
   bool connect(py::bytes const& metadata, uint64_t& conn_id);
+
+  std::vector<uint8_t> get_endpoint_metadata();
+
+  /*
+   * Parse endpoint metadata to extract IP address, port, and GPU index.
+   * Returns a tuple of (ip_address, port, gpu_index).
+   */
+  static std::tuple<std::string, uint16_t, int> parse_metadata(
+      std::vector<uint8_t> const& metadata);
 
   /*
    * Accept an incoming connection via TCP, then build RDMA QP connections.
@@ -150,9 +148,6 @@ class Endpoint {
   bool recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
             bool inside_python = true);
 
-  bool send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
-                void const* meta, size_t meta_len);
-
   /* Send data to the remote server asynchronously. */
   bool send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
                   size_t size, uint64_t* transfer_id);
@@ -192,14 +187,6 @@ class Endpoint {
              std::vector<void*> dst_v, std::vector<size_t> size_v,
              std::vector<uccl::FifoItem> slot_item_v, size_t num_iovs);
 
-  bool advertise(uint64_t conn_id, uint64_t mr_id, void* addr, size_t len,
-                 char* out_buf);
-
-  /* Advertise a vector of data chunks. */
-  bool advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-                  std::vector<void*> addr_v, std::vector<size_t> len_v,
-                  std::vector<char*> out_buf_v, size_t num_iovs);
-
   /* Write data to the remote server. Blocking. */
   bool write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
              uccl::FifoItem const& slot_item, bool inside_python = true);
@@ -213,53 +200,20 @@ class Endpoint {
               std::vector<void*> src_v, std::vector<size_t> size_v,
               std::vector<uccl::FifoItem> slot_item_v, size_t num_iovs);
 
+  /* Write data to the remote server via CUDA/HIP IPC. Blocking. */
+  bool write_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
+                 size_t size, void const* meta, size_t meta_len);
+
+  bool advertise(uint64_t conn_id, uint64_t mr_id, void* addr, size_t len,
+                 char* out_buf);
+
+  /* Advertise a vector of data chunks. */
+  bool advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                  std::vector<void*> addr_v, std::vector<size_t> len_v,
+                  std::vector<char*> out_buf_v, size_t num_iovs);
+
   /* Poll the status of the asynchronous receive. */
   bool poll_async(uint64_t transfer_id, bool* is_done);
-
-  /**
-   * Join a logical rendezvous group and connect to every other member.
-   *
-   * This helper publishes (ip, gpu_idx) to an external discovery service (e.g.,
-   * Redis, a Ray named actor, etc.) under the given @group_name.  All callers
-   * block until @world_size peers have registered.  Connections are then
-   * established in rank‑ascending order (lower rank initiates), guaranteeing a
-   * fully‑connected clique without duplicate dials.
-   *
-   * @param discovery_uri  URI for discovery backend. Examples:
-   *                       "redis://127.0.0.1:6379" or "ray://actor:Store".
-   * @param group_name     Logical namespace so multiple groups can coexist.
-   * @param world_size     Total number of expected ranks in the group.
-   * @param my_rank        Caller's rank (0‑based). Must be unique.
-   *
-   * @returns true on success, false otherwise.
-   */
-  bool join_group(std::string const& discovery_uri,
-                  std::string const& group_name, int world_size, int my_rank,
-                  int remote_gpu_idx, uint16_t remote_port);
-
-  /**
-   * Convenience constructor: create Endpoint and immediately join a group.
-   * You may prefer this factory in Ray where each actor knows its rank and the
-   * rendezvous, but not its peers' IP addresses.
-   */
-  static std::unique_ptr<Endpoint> create_and_join(
-      std::string const& discovery_uri, std::string const& group_name,
-      int world_size, int my_rank, uint32_t local_gpu_idx, uint32_t num_cpus,
-      int remote_gpu_idx);
-
-  int get_sock_fd(uint64_t conn_id) const;
-
-  /** Returns conn_id for @rank, or UINT64_MAX if unknown. */
-  uint64_t conn_id_of_rank(int rank) const;
-
-  std::vector<uint8_t> get_endpoint_metadata();
-
-  /*
-   * Parse endpoint metadata to extract IP address, port, and GPU index.
-   * Returns a tuple of (ip_address, port, gpu_index).
-   */
-  static std::tuple<std::string, uint16_t, int> parse_metadata(
-      std::vector<uint8_t> const& metadata);
 
   /*
    * Connect to a local process via Unix Domain Socket.
@@ -295,7 +249,28 @@ class Endpoint {
   bool recv_ipc_async(uint64_t conn_id, void* data, size_t size,
                       uint64_t* transfer_id);
 
+  int get_sock_fd(uint64_t conn_id) const {
+    auto it = conn_id_to_conn_.find(conn_id);
+    if (it == conn_id_to_conn_.end()) {
+      return -1;
+    }
+    return it->second->uccl_conn_id_.sock_fd;
+  }
+
+  /** Returns conn_id for @rank, or UINT64_MAX if unknown. */
+  uint64_t conn_id_of_rank(int rank) const {
+    auto it = rank2conn_.find(rank);
+    return it != rank2conn_.end() ? it->second : UINT64_MAX;
+  }
+
  private:
+  gpuStream_t pick_stream() {
+    if (streams_.empty()) return nullptr;
+    uint32_t i =
+        rr_stream_.fetch_add(1, std::memory_order_relaxed) % streams_.size();
+    return streams_[i];
+  }
+
   /** Rank‑indexed view of established connections (read‑only). */
   std::unordered_map<int, uint64_t> const& rank2conn() const {
     return rank2conn_;
@@ -304,7 +279,9 @@ class Endpoint {
   /*
    * Create UDS socket path based on GPU index.
    */
-  std::string get_uds_socket_path(int gpu_idx) const;
+  std::string get_uds_socket_path(int gpu_idx) const {
+    return "/tmp/uccl_gpu_" + std::to_string(gpu_idx) + ".sock";
+  }
 
   /*
    * Initialize UDS socket for listening.
@@ -315,21 +292,6 @@ class Endpoint {
    * Cleanup UDS socket resources.
    */
   void cleanup_uds_socket();
-
-#ifdef USE_REDIS
-  bool publish_redis(std::string const& redis_uri, std::string const& key,
-                     PeerInfo const& info);
-  bool fetch_all_redis(std::string const& redis_uri,
-                       std::string const& key_prefix, int world_size,
-                       std::vector<PeerInfo>& out);
-#endif
-
-  bool publish_peer(std::string const& discovery_uri,
-                    std::string const& group_name, int rank,
-                    PeerInfo const& info);
-  bool collect_peers(std::string const& discovery_uri,
-                     std::string const& group_name, int world_size,
-                     std::vector<PeerInfo>& out);
 
   int local_gpu_idx_;
   int remote_gpu_idx_;

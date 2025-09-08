@@ -82,9 +82,9 @@ PYBIND11_MODULE(p2p, m) {
                     "meta must be provided for nvlink connections");
               }
               std::string buf = py::cast<py::bytes>(meta_blob);
-              return self.send_ipc(conn_id, mr_id,
-                                   reinterpret_cast<void const*>(ptr), size,
-                                   buf.data(), buf.size());
+              return self.write_ipc(conn_id, mr_id,
+                                    reinterpret_cast<void const*>(ptr), size,
+                                    buf.data(), buf.size());
             }
             return self.send(conn_id, mr_id, reinterpret_cast<void const*>(ptr),
                              size);
@@ -364,18 +364,6 @@ PYBIND11_MODULE(p2p, m) {
             return py::make_tuple(success, is_done);
           },
           "Poll the status of an asynchronous transfer", py::arg("transfer_id"))
-      .def("join_group", &Endpoint::join_group,
-           "Join a rendezvous group: publish discovery info, wait for peers, "
-           "and fully-connect",
-           py::arg("discovery_uri"), py::arg("group_name"),
-           py::arg("world_size"), py::arg("my_rank"), py::arg("remote_gpu_idx"),
-           py::arg("remote_port"))
-      .def_static("create_and_join", &Endpoint::create_and_join,
-                  "Create an Endpoint and immediately join a rendezvous group",
-                  py::arg("discovery_uri"), py::arg("group_name"),
-                  py::arg("world_size"), py::arg("my_rank"),
-                  py::arg("local_gpu_idx"), py::arg("num_cpus"),
-                  py::arg("remote_gpu_idx"))
       .def(
           "conn_id_of_rank", &Endpoint::conn_id_of_rank,
           "Get the connection ID for a given peer rank (or UINT64_MAX if none)",

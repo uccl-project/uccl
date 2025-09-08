@@ -14,8 +14,8 @@ To build UCCL for development, you need to install some common dependencies:
 sudo apt update
 sudo apt install linux-tools-$(uname -r) clang llvm cmake m4 build-essential \
                  net-tools libgoogle-glog-dev libgtest-dev libgflags-dev \
-                 libelf-dev libpcap-dev libc6-dev-i386 \
-                 libopenmpi-dev libibverbs-dev libpci-dev -y
+                 libelf-dev libpcap-dev libc6-dev-i386 libpci-dev \
+                 libopenmpi-dev libibverbs-dev clang-format -y
 
 # Install and activate Anaconda (you can choose any recent versions)
 wget https://repo.anaconda.com/archive/Anaconda3-2025.06-1-Linux-x86_64.sh
@@ -25,14 +25,16 @@ source ~/.bashrc # or .zshrc and others
 conda init
 
 # Install python ssh lib into conda-default base env
-pip install paramiko
+pip install paramiko pybind11
 ```
 </details>
 
 For quick installation with docker, you can directly dive into: 
-* [`dev_rdma.md`](dev_rdma.md): Nvidia/AMD GPUs + IB/RoCE RDMA NICs (currently support Nvidia and Broadcom NICs)
-* [`dev_efa.md`](dev_efa.md): AWS EFA NIC (currently support p4d.24xlarge)
-* [`dev_afxdp.md`](dev_afxdp.md): Non-RDMA NICs (currently support AWS ENA NICs and IBM VirtIO NICs)
+* [`dev_rdma.md`](dev_rdma.md): Collectives for Nvidia/AMD GPUs + IB/RoCE RDMA NICs (currently support Nvidia and Broadcom NICs)
+* [`dev_efa.md`](dev_efa.md): Collectives for AWS EFA NIC (currently support p4d.24xlarge)
+* [`dev_afxdp.md`](dev_afxdp.md): Collectives for Non-RDMA NICs (currently support AWS ENA NICs and IBM VirtIO NICs)
+* [`../p2p/README.md`](../p2p/README.md): P2P for RDMA NICs and GPU IPCs (currently support Nvidia/AMD GPUs and Nvidia/Broadcom NICs)
+
 
 ### Python Wheel Build
 
