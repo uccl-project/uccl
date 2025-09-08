@@ -12,41 +12,6 @@ namespace cg = cooperative_groups;
 namespace uccl {
 namespace internode_ll {
 
-__device__ __forceinline__ float decode_e4m3(unsigned char w) {
-  int s = (w & 0x80) ? -1 : 1;
-  int e = (w >> 3) & 0xF;
-  int m = w & 0x7;
-  if (e == 0) {
-    // subnormal: mantissa * 2^-6
-    return s * ldexpf(static_cast<float>(m), -6);
-  } else {
-    // normal: (mant | 0x8) * 2^(exp-7)
-    return s * ldexpf(static_cast<float>(m | 0x8), e - 7);
-  }
-}
-
-__device__ __forceinline__ int4 ld_acquire_sys_global_int4(int4 const* p) {
-  int4 v;
-  auto pi = reinterpret_cast<int const*>(p);
-  v.x = ld_acquire_sys_global(pi + 0);
-  v.y = ld_acquire_sys_global(pi + 1);
-  v.z = ld_acquire_sys_global(pi + 2);
-  v.w = ld_acquire_sys_global(pi + 3);
-  return v;
-}
-
-__device__ __forceinline__ void dump_bytes(void const* base, int nbytes) {
-  auto p = reinterpret_cast<unsigned char const*>(base);
-  if (threadIdx.x == 0 && blockIdx.x == 0) {
-    printf("[DUMP] Dumping %d bytes at %p:\n", nbytes, base);
-    for (int i = 0; i < nbytes; i++) {
-      printf("%02x ", p[i]);
-      if ((i + 1) % 16 == 0) printf("\n");
-    }
-    printf("\n");
-  }
-}
-
 template <bool kUseFP8, bool kUseUE8M0, int kHidden>
 __global__ __launch_bounds__(1024, 1) void dispatch(
     void* packed_recv_x, void* packed_recv_x_scales, int* packed_recv_src_info,
@@ -100,10 +65,6 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   // Sending phase
   if ((phases & LOW_LATENCY_SEND_PHASE) == 0) goto LOW_LATENCY_DISPATCH_RECV;
 
-  if (lane_id == 0) {
-    dump_bytes(rdma_recv_x, 64);  // dump first 64 bytes
-  }
-
   // There are 2 kinds of warps in this part:
   // 1. The first-kind warps for FP8 cast and sending top-k tokens
   // 2. The last warp for reading `topk_idx` and count for per-expert
@@ -131,10 +92,6 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           warp_id < num_topk ? static_cast<int>(__ldg(
                                    topk_idx + token_idx * num_topk + warp_id))
                              : -1;
-      // thread_id == 0 ? (*rdma_x_src_idx = token_idx) : 0;
-      // if (thread_id == 0) {
-      //   st_release_sys_global(rdma_x_src_idx, token_idx);  // publish header
-      // }
 
 // FP8 cast
 #pragma unroll
@@ -176,9 +133,6 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         } else {
           // Reinterpret-cast is for C++14 compatibility
           rdma_x_vec[i] = *reinterpret_cast<vec_t*>(&int4_value);
-          // printf("rdma_x_vec[i]: %p, int4_value: %x %x %x %x\n",
-          //        &rdma_x_vec[i], int4_value.x, int4_value.y, int4_value.z,
-          //        int4_value.w);
         }
       }
       asm volatile("bar.sync 1, %0;" ::"r"(num_threads));
@@ -208,24 +162,6 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                                                   dst_rank, max_nvl_peers, 0)
                           : 0;
         if (dst_p2p_ptr == 0) {
-          if (lane_id == 0) {
-            auto* src_int = reinterpret_cast<int*>(src_ptr);
-            printf("src_ptr=%p first ints: %d %d %d %d\n", src_int, src_int[0],
-                   src_int[1], src_int[2], src_int[3]);
-            auto* src_data = reinterpret_cast<int4*>(
-                reinterpret_cast<uint8_t*>(src_ptr) + sizeof(int4));
-            int4 v = src_data[0];
-            printf("token %d payload int4 = %x %x %x %x\n", src_int[0], v.x,
-                   v.y, v.z, v.w);
-          }
-          if (lane_id == 0)
-            printf(
-                "nvshmemi_ibgda_put_nbi_warp. dst_ptr: %p, rdma_buffer_ptr: "
-                "%p, offset: %p, slot_idx: %d\n",
-                (void*)dst_ptr, rdma_buffer_ptr,
-                (void*)(dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr)),
-                slot_idx);
-
           __threadfence_system();
           uccl::nvshmemi_ibgda_put_nbi_warp(
               dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), src_ptr,
@@ -434,26 +370,10 @@ LOW_LATENCY_DISPATCH_RECV:
       auto const src_src_idx =
           reinterpret_cast<int*>(rdma_recv_x_uint8 + i * num_bytes_per_msg);
       if (lane_id == 0)
-        // recv_src_info[recv_token_begin_idx + i] = ld_nc_global(src_src_idx);
         recv_src_info[recv_token_begin_idx + i] =
             ld_acquire_sys_global(src_src_idx);
       asm volatile("membar.sys;" ::: "memory");
       __syncwarp();
-
-      if (lane_id == 0) {
-        // NOTE(MaoZiming): IMPORTANT!!
-        // int token_id = ld_nc_global(src_src_idx);
-        int token_id = ld_acquire_sys_global(src_src_idx);
-        asm volatile("membar.sys;" ::: "memory");
-        auto* payload = reinterpret_cast<int4*>(
-            reinterpret_cast<uint8_t*>(src_src_idx) + sizeof(int4));
-        // int4 v = ld_nc_global(payload);
-        int4 v = ld_cg_global(payload);
-        printf(
-            "[RECV DEBUG] src_src_idx=%p token=%d first int4 payload: %x %x %x "
-            "%x\n",
-            (void*)src_src_idx, token_id, v.x, v.y, v.z, v.w);
-      }
 
       // Copy data
       // NOTES: only 2 load iterations for 7K hidden with 7 unrolls
@@ -463,16 +383,6 @@ LOW_LATENCY_DISPATCH_RECV:
           recv_x_int4 + (recv_token_begin_idx + i) * hidden_int4;
       UNROLLED_WARP_COPY(7, lane_id, hidden_int4, dst_data, src_data,
                          ld_cg_global, st_cg_global);
-      __threadfence_system();
-      __syncwarp();
-      if (lane_id == 0) {
-        int4 dv = ld_cg_global(dst_data);
-        printf(
-            "[DST DEBUG after UNROLLED_WARP_COPY]  src_src_idx=%p, "
-            "dst_data=%p, token=%d dst[0] = %x %x %x %x\n",
-            (void*)src_src_idx, (void*)dst_data, ld_cg_global(src_src_idx),
-            dv.x, dv.y, dv.z, dv.w);
-      }
 
       // Copy scales
       if constexpr (kUseFP8) {
@@ -505,28 +415,8 @@ LOW_LATENCY_DISPATCH_RECV:
         }
       }
     }
-
-    if ((phases & LOW_LATENCY_RECV_PHASE) != 0) {
-      __threadfence_system();
-      cg::this_grid().sync();
-    }
-
-    for (int i = sub_warp_id; i < num_recv_tokens; i += num_warps_per_group) {
-      auto const dst_data = static_cast<int4*>(packed_recv_x) +
-                            local_expert_idx * num_ranks *
-                                num_max_dispatch_tokens_per_rank * hidden_int4 +
-                            (recv_token_begin_idx + i) * hidden_int4;
-
-      if (lane_id == 0) {
-        int slot = recv_token_begin_idx + i;
-        int4 dv = ld_cg_global(dst_data);  // coherent load for debug
-        printf(
-            "[DST DEBUG] le=%d src=%d slot=%d i=%d base=%p dst=%p "
-            "dst[0]=%08x %08x %08x %08x\n",
-            local_expert_idx, src_rank, slot, i, packed_recv_x, dst_data, dv.x,
-            dv.y, dv.z, dv.w);
-      }
-    }
+    if (blockIdx.x == 0 && threadIdx.x == 0)
+      printf("[dispatch] RECV finished\n");
   }
 }
 

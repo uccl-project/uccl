@@ -332,16 +332,6 @@ class Buffer {
     auto packed_recv_count = torch::empty(
         {num_local_experts}, torch::dtype(torch::kInt32).device(torch::kCUDA));
 
-    // int cur_dev = -1;
-    // C10_CUDA_CHECK(cudaGetDevice(&cur_dev));
-    // printf("[HOST DEBUG] current device: %d\n", cur_dev);
-    // printf("[HOST DEBUG] x.device: %d  packed_recv_x.device: %d\n",
-    //        x.get_device(), packed_recv_x.get_device());
-    // cudaPointerAttributes a;
-    // C10_CUDA_CHECK(cudaPointerGetAttributes(&a, packed_recv_x.data_ptr()));
-    // printf("[HOST DEBUG] packed_recv_x ptr device=%d, type=%d\n", a.device,
-    //        (int)a.type);
-
     // Allocate column-majored scales
     auto packed_recv_x_scales = std::optional<torch::Tensor>();
     void* packed_recv_x_scales_ptr = nullptr;
@@ -413,8 +403,6 @@ class Buffer {
     if (return_recv_hook)
       recv_hook = [=]() { launcher(LOW_LATENCY_RECV_PHASE); };
 
-    // printf("packed_recv_x: %p\n", packed_recv_x.data_ptr());
-    // printf("packed_recv_count: %p\n", packed_recv_count.data_ptr());
     // Return values
     return {packed_recv_x,
             packed_recv_x_scales,

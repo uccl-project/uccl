@@ -112,11 +112,6 @@ void Proxy::init_common() {
     c.pd = ctx_.pd;
     c.mr = ctx_.mr;
     c.rkey = ctx_.rkey;
-
-    if (c.rkey == 0) {
-      fprintf(stderr, "rkey equals 0!\n");
-      std::abort();
-    }
     // NOTE(MaoZiming): each context can share the same cq, pd, mr.
     // but the qp must be different.
     c.cq = ctx_.cq;
@@ -428,10 +423,6 @@ void Proxy::post_gpu_commands_mixed(
   // Separate atomic operations from regular RDMA writes
   std::vector<uint64_t> rdma_wrs, atomic_wrs;
   std::vector<TransferCmd> rdma_cmds, atomic_cmds;
-  auto [min_it, max_it] =
-      std::minmax_element(wrs_to_post.begin(), wrs_to_post.end());
-  printf("[block_idx: %d] Posting %zu WRs (min=%zu, max=%zu)\n", cfg_.block_idx,
-         wrs_to_post.size(), *min_it, *max_it);
 
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
     if (cmds_to_post[i].is_atomic) {
