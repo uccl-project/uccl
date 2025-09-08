@@ -23,12 +23,7 @@ PREFIX ?= /usr/local
 LIBDIR ?= $(PREFIX)/lib
 INCDIR ?= $(PREFIX)/include
 
-# Redis
-REDIS_PKGCONFIG := pkg-config
-REDIS_CFLAGS    := $(shell $(REDIS_PKGCONFIG) --cflags hiredis redis++)
-REDIS_LIBS      := $(shell $(REDIS_PKGCONFIG) --libs hiredis redis++)
-CXXFLAGS       += $(REDIS_CFLAGS)
-LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda $(REDIS_LIBS) \
+LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda \
                   -Wl,-rpath,$(CUDA_LIB) -lglog -lgflags -lgtest \
                   -lz -lelf -libverbs -lpthread
 

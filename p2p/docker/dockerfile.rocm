@@ -16,7 +16,7 @@ RUN apt-get update && \
     rdma-core libibverbs-dev ibverbs-utils net-tools infiniband-diags \
     libgoogle-glog-dev libgflags-dev libgtest-dev libelf-dev \
     libnuma-dev libdrm-dev libdrm-amdgpu1 \
-    pkg-config libhiredis-dev zlib1g-dev curl \
+    pkg-config zlib1g-dev curl \
     autoconf automake libtool linux-headers-$(uname -r) && \
     add-apt-repository ppa:deadsnakes/ppa && \
     apt-get update && \
