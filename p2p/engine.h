@@ -29,6 +29,7 @@ struct MR {
 };
 
 struct IpcCache {
+  uint64_t ipc_cache_id;
   gpuIpcMemHandle_t handle;
   bool is_send;
   void* direct_ptr;
@@ -124,6 +125,17 @@ class Endpoint {
 
   bool regv(std::vector<void const*> const& data_v,
             std::vector<size_t> const& size_v, std::vector<uint64_t>& mr_id_v);
+
+  /*
+   * Register the data for IPC.
+   *
+   * input:
+   *   data: the data to register
+   *   size: the size of the data
+   * output:
+   *   ipc_cache_id: the ID of the IpcCache, in local_ipc_cache_id_to_ipc_cache_
+   */
+  bool reg_ipc(void const* data, size_t size, uint64_t& ipc_cache_id);
 
   /*
    * Send data to the remote server. Blocking.
@@ -280,20 +292,27 @@ class Endpoint {
    */
   bool accept_local(int& remote_gpu_idx, uint64_t& conn_id);
 
+  /* Send side recv IpcCache from the remote. */
+  bool recv_ipc_cache(uint64_t conn_id, uint64_t& remote_ipc_cache_id,
+                      bool inside_python = true);
+  /* Recv side send IpcCache to the remote. */
+  bool send_ipc_cache(uint64_t conn_id, uint64_t local_ipc_cache_id,
+                      bool inside_python = true);
+
   /* Send data to the remote server via CUDA/HIP IPC. Blocking. The
    * gpuIpcMemHandle_t will be passed via UDS from recv_ipc to send_ipc
    * function. */
   bool send_ipc(uint64_t conn_id, void* data, size_t size,
-                bool inside_python = true);
+                uint64_t remote_ipc_cache_id, bool inside_python = true);
 
   bool recv_ipc(uint64_t conn_id, void* data, size_t size,
-                bool inside_python = true);
+                uint64_t local_ipc_cache_id, bool inside_python = true);
 
   bool send_ipc_async(uint64_t conn_id, void const* data, size_t size,
-                      uint64_t* transfer_id);
+                      uint64_t remote_ipc_cache_id, uint64_t* transfer_id);
 
   bool recv_ipc_async(uint64_t conn_id, void* data, size_t size,
-                      uint64_t* transfer_id);
+                      uint64_t local_ipc_cache_id, uint64_t* transfer_id);
 
  private:
   /** Rank‑indexed view of established connections (read‑only). */
@@ -340,6 +359,7 @@ class Endpoint {
 
   std::atomic<uint64_t> next_conn_id_ = 0;
   std::atomic<uint64_t> next_mr_id_ = 0;
+  std::atomic<uint64_t> next_ipc_cache_id_ = 0;
   std::atomic<uint64_t> next_transfer_id_ = 0;
 
   // Accessed by both app thread and proxy thread.
@@ -347,6 +367,9 @@ class Endpoint {
   std::unordered_map<uint64_t, Conn*> conn_id_to_conn_;
   mutable std::shared_mutex mr_mu_;
   std::unordered_map<uint64_t, MR*> mr_id_to_mr_;
+  mutable std::shared_mutex local_ipc_cache_mu_;
+  std::unordered_map<uint64_t, IpcCache*> local_ipc_cache_id_to_ipc_cache_;
+  std::unordered_map<void*, uint64_t> local_data_to_ipc_cache_id_;
 
   // Single-threaded.
   std::unordered_map<int, uint64_t> rank2conn_;
@@ -365,6 +388,7 @@ class Endpoint {
   static constexpr size_t kIpcSizePerEngine = 1ul << 20;
   // Prepare transfer info structure for receiving IPC handle
   struct IpcTransferInfo {
+    uint64_t ipc_cache_id;
     gpuIpcMemHandle_t handle;
     uintptr_t offset;
     size_t size;
@@ -375,10 +399,10 @@ class Endpoint {
     gpuIpcEventHandle_t event_handle;
   };
 
-  // IPC Buffer cache
-  mutable std::shared_mutex ipc_cache_mu_;
-  std::unordered_map<uint64_t, std::unordered_map<void*, struct IpcCache>>
-      conn_id_and_ptr_to_ipc_cache_;
+  // remote IPC Buffer cache
+  mutable std::shared_mutex remote_ipc_cache_mu_;
+  std::unordered_map<uint64_t, std::unordered_map<uint64_t, struct IpcCache>>
+      remote_conn_id_ipc_cache_id_to_ipc_cache_;
 
   static constexpr size_t kTaskRingSize = 1024;
 
@@ -397,6 +421,7 @@ class Endpoint {
     size_t size;
     uint64_t conn_id;
     uint64_t mr_id;
+    uint64_t ipc_cache_id;
     std::atomic<bool> done;
     // For proxy to access the task.done
     Task* self_ptr;

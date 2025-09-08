@@ -52,6 +52,9 @@ def _run_server(args):
         # Register tensor for efficient memory access
         collective.register_tensor(tensor)
 
+        # Send ipc id to remote
+        collective.send_ipc_handle(tensor, peer)
+
         # Warm-up receive
         collective.recv(tensor, src=peer)
 
@@ -88,13 +91,16 @@ def _run_client(args):
         # Register tensor for efficient memory access
         collective.register_tensor(tensor)
 
+        # Rcveive remote ipc id
+        ipc_id = collective.recv_ipc_handle(peer)
+
         # Warm-up send
-        collective.send(tensor, dst=peer)
+        collective.send(tensor, dst=peer, dst_ipc_id=ipc_id)
 
         start = time.perf_counter()
         total = 0
         for _ in range(args.iters):
-            collective.send(tensor, dst=peer)
+            collective.send(tensor, dst=peer, dst_ipc_id=ipc_id)
             total += size
 
         elapsed = time.perf_counter() - start
@@ -115,6 +121,9 @@ def _run_async_server(args):
 
         # Register tensor for efficient memory access
         collective.register_tensor(tensor)
+
+        # Send ipc id to remote
+        collective.send_ipc_handle(tensor, peer)
 
         # Warm-up
         req = collective.irecv(tensor, src=peer)
@@ -146,14 +155,17 @@ def _run_async_client(args):
         # Register tensor for efficient memory access
         collective.register_tensor(tensor)
 
+        # Rcveive remote ipc id
+        ipc_id = collective.recv_ipc_handle(peer)
+
         # Warm-up
-        req = collective.isend(tensor, dst=peer)
+        req = collective.isend(tensor, dst=peer, dst_ipc_id=ipc_id)
         collective.wait(req)
 
         start = time.perf_counter()
         total = 0
         for _ in range(args.iters):
-            req = collective.isend(tensor, dst=peer)
+            req = collective.isend(tensor, dst=peer, dst_ipc_id=ipc_id)
             collective.wait(req)
             total += size
 
@@ -185,8 +197,15 @@ def _run_dual_benchmark(args):
         collective.register_tensor(send_tensor)
         collective.register_tensor(recv_tensor)
 
+        if rank == 0:
+            collective.send_ipc_handle(recv_tensor, peer)
+            ipc_id = collective.recv_ipc_handle(peer)
+        else:
+            ipc_id = collective.recv_ipc_handle(peer)
+            collective.send_ipc_handle(recv_tensor, peer)
+
         # Warm-up: simultaneous send and receive
-        send_req = collective.isend(send_tensor, dst=peer)
+        send_req = collective.isend(send_tensor, dst=peer, dst_ipc_id=ipc_id)
         recv_req = collective.irecv(recv_tensor, src=peer)
         collective.wait_all([send_req, recv_req])
 
@@ -245,9 +264,26 @@ def _run_ring_benchmark(args):
         # Register tensors for efficient memory access
         collective.register_tensor(send_tensor)
         collective.register_tensor(recv_tensor)
+        
+        dist.barrier()
+        if world_size == 2:
+            if rank == 0:
+                ipc_id = collective.recv_ipc_handle(src=1)
+                collective.send_ipc_handle(recv_tensor, dst=1)
+            else:  # rank == 1
+                collective.send_ipc_handle(recv_tensor, dst=0)
+                ipc_id = collective.recv_ipc_handle(src=0)
+        else:
+            if rank == 0:
+                ipc_id = collective.recv_ipc_handle(src=src_rank)
+                collective.send_ipc_handle(recv_tensor, dst=dst_rank)
+            else:
+                collective.send_ipc_handle(recv_tensor, dst=dst_rank)
+                ipc_id = collective.recv_ipc_handle(src=src_rank)
+
 
         # Warm-up
-        send_req = collective.isend(send_tensor, dst=dst_rank)
+        send_req = collective.isend(send_tensor, dst=dst_rank, dst_ipc_id=ipc_id)
         recv_req = collective.irecv(recv_tensor, src=src_rank)
         collective.wait_all([send_req, recv_req])
 

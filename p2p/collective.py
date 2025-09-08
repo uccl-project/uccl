@@ -80,6 +80,7 @@ class CollectiveContext:
             None  # array indexed by rank - True if local, False if remote
         )
         self.memory_regions: Dict[int, int] = {}  # ptr -> mr_id
+        self.local_ipc_cache: Dict[int, int] = {}  # ptr -> ipc_cache_id
         self.initialized = False
 
         # check and setup fd limit and somaxconn for UDS
@@ -330,12 +331,71 @@ class CollectiveContext:
         self.memory_regions[ptr] = mr_id
         return mr_id
 
+    def _register_ipc_cache(self, ptr: int, size: int) -> int:
+        """Register memory and cache the ipc cache ID."""
+        if ptr in self.local_ipc_cache:
+            return self.local_ipc_cache[ptr]
+
+        ok, ipc_cache_id = self.ep.reg_ipc(ptr, size)
+        if not ok:
+            raise RuntimeError("Failed to register ipc memory")
+        self.local_ipc_cache[ptr] = ipc_cache_id
+        return ipc_cache_id
+
+    def recv_ipc_cache(self, src: int) -> int:
+        """
+        Args:
+            src: Remote rank
+        """
+        if not self.initialized:
+            raise RuntimeError("CollectiveContext not initialized. Call init() first.")
+
+        if src == self.rank:
+            return  # No-op for self-send
+
+        if src >= self.world_size or self.send_connections[src] is None:
+            raise ValueError(f"No recv connection to rank {src}")
+
+        conn_id = self.send_connections[src]
+        print(f"start to recv ipc_cache_id from {src}")
+        ok, ipc_cache_id = self.ep.recv_ipc_cache(conn_id)
+        if not ok:
+            raise RuntimeError("Failed to receive a remote ipc_cache_id")
+        print(f"Recv ipc_cache_id {ipc_cache_id}")
+        return ipc_cache_id
+
+    def send_ipc_cache(self, tensor: torch.Tensor, dst: int):
+        """
+        Args:
+            tensor: Tensor Ipc cache to send
+            src: Remote rank
+        """
+        if not self.initialized:
+            raise RuntimeError("CollectiveContext not initialized. Call init() first.")
+
+        if dst == self.rank:
+            return  # No-op for self-send
+
+        if dst >= self.world_size or self.send_connections[dst] is None:
+            raise ValueError(f"No send connection to rank {dst}")
+
+        ptr, _ = self._get_buffer_info(tensor)
+        conn_id = self.send_connections[dst]
+
+        if ptr in self.local_ipc_cache:
+            ipc_cache_id = self.local_ipc_cache[ptr]
+        else:
+            raise RuntimeError("Ptr has not been registered for IPC")
+        ok = self.ep.send_ipc_cache(conn_id, ipc_cache_id)
+        if not ok:
+            raise RuntimeError("Failed to send ipc_cache_id to remote")
+        print(f"Send ipc_cache_id {ipc_cache_id}")
+
     def register_tensor(self, tensor: torch.Tensor):
         """
         Register a tensor for efficient memory access.
 
-        Note: Registration is only required for tensors used with remote (RDMA) connections.
-        Local IPC connections do not require memory registration.
+        Note: Registration is for tensors both used with remote (RDMA) connections and local IPC connections.
 
         Args:
             tensor: Tensor to register
@@ -345,14 +405,16 @@ class CollectiveContext:
 
         ptr, size = self._get_buffer_info(tensor)
         self._register_memory(ptr, size)
+        self._register_ipc_cache(ptr, size)
 
-    def send(self, tensor: torch.Tensor, dst: int):
+    def send(self, tensor: torch.Tensor, dst: int, dst_ipc_id: int = -1):
         """
         Send tensor to destination rank (synchronous).
 
         Args:
             tensor: Tensor to send
             dst: Destination rank
+            dst_ipc_id: [Optional] Destination remote_ipc_cache_id
         """
         if not self.initialized:
             raise RuntimeError("CollectiveContext not initialized. Call init() first.")
@@ -368,7 +430,9 @@ class CollectiveContext:
 
         if self.local_connections[dst]:
             # Use IPC for local connection (no memory registration needed)
-            ok = self.ep.send_ipc(conn_id, ptr, size)
+            if dst_ipc_id == -1:
+                raise RuntimeError(f"dist_ipc_id must be set for IPC connection.")
+            ok = self.ep.send_ipc(conn_id, ptr, size, dst_ipc_id)
             if not ok:
                 raise RuntimeError(f"Failed to initiate IPC send to rank {dst}")
         else:
@@ -405,7 +469,13 @@ class CollectiveContext:
 
         if self.local_connections[src]:
             # Use IPC for local connection (no memory registration needed)
-            ok = self.ep.recv_ipc(conn_id, ptr, size)
+            if ptr in self.local_ipc_cache:
+                local_ipc_id = self.local_ipc_cache[ptr]
+            else:
+                raise RuntimeError(
+                    f"IPC requires a registered pointer. Send the IPC cache ID to the remote endpoint before use."
+                )
+            ok = self.ep.recv_ipc(conn_id, ptr, size, local_ipc_id)
             if not ok:
                 raise RuntimeError(f"Failed to initiate IPC recv from rank {src}")
         else:
@@ -420,14 +490,14 @@ class CollectiveContext:
             if not ok:
                 raise RuntimeError(f"Failed to initiate RDMA recv from rank {src}")
 
-    def isend(self, tensor: torch.Tensor, dst: int) -> int:
+    def isend(self, tensor: torch.Tensor, dst: int, dst_ipc_id: int = -1) -> int:
         """
         Initiate asynchronous send (non-blocking).
 
         Args:
             tensor: Tensor to send
             dst: Destination rank
-
+            dst_ipc_id: [Optional] Destination remote_ipc_cache_id
         Returns:
             transfer_id: ID to poll for completion
         """
@@ -445,7 +515,9 @@ class CollectiveContext:
 
         if self.local_connections[dst]:
             # Use IPC async for local connection (no memory registration needed)
-            ok, transfer_id = self.ep.send_ipc_async(conn_id, ptr, size)
+            if dst_ipc_id == -1:
+                raise RuntimeError(f"dist_ipc_id must be set for IPC connection.")
+            ok, transfer_id = self.ep.send_ipc_async(conn_id, ptr, size, dst_ipc_id)
             if not ok:
                 raise RuntimeError(f"Failed to initiate async IPC send to rank {dst}")
             return transfer_id
@@ -487,7 +559,13 @@ class CollectiveContext:
 
         if self.local_connections[src]:
             # Use IPC async for local connection (no memory registration needed)
-            ok, transfer_id = self.ep.recv_ipc_async(conn_id, ptr, size)
+            if ptr in self.local_ipc_cache:
+                local_ipc_id = self.local_ipc_cache[ptr]
+            else:
+                raise RuntimeError(
+                    f"IPC requires a registered pointer. Send the IPC cache ID to the remote endpoint before use."
+                )
+            ok, transfer_id = self.ep.recv_ipc_async(conn_id, ptr, size, local_ipc_id)
             if not ok:
                 raise RuntimeError(f"Failed to initiate async IPC recv from rank {src}")
             return transfer_id
@@ -579,10 +657,17 @@ def get_collective() -> CollectiveContext:
         raise RuntimeError("Collective not initialized. Call init_collective() first.")
     return _default_context
 
+def send_ipc_handle(tensor: torch.Tensor, dst: int):
+    """Send ipc handle to dst"""
+    get_collective().send_ipc_cache(tensor, dst)
 
-def send(tensor: torch.Tensor, dst: int):
+def recv_ipc_handle(src: int) -> int:
+    """Recv ipc handle from src"""
+    get_collective().recv_ipc_cache(src)
+
+def send(tensor: torch.Tensor, dst: int, dst_ipc_id: int = -1):
     """Send tensor using the default collective context."""
-    get_collective().send(tensor, dst)
+    get_collective().send(tensor, dst, dst_ipc_id)
 
 
 def recv(tensor: torch.Tensor, src: int):
@@ -590,9 +675,9 @@ def recv(tensor: torch.Tensor, src: int):
     get_collective().recv(tensor, src)
 
 
-def isend(tensor: torch.Tensor, dst: int) -> int:
+def isend(tensor: torch.Tensor, dst: int, dst_ipc_id: int = -1) -> int:
     """Async send tensor using the default collective context."""
-    return get_collective().isend(tensor, dst)
+    return get_collective().isend(tensor, dst, dst_ipc_id)
 
 
 def irecv(tensor: torch.Tensor, src: int) -> int:

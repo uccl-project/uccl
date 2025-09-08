@@ -73,6 +73,15 @@ PYBIND11_MODULE(p2p, m) {
           py::arg("ptrs"), py::arg("sizes"),
           "Batch-register multiple memory regions and return [ok, mr_id_list]")
       .def(
+          "reg_ipc",
+          [](Endpoint& self, uint64_t ptr, size_t size) {
+            uint64_t ipc_cache_id;
+            bool success = self.reg_ipc(reinterpret_cast<void const*>(ptr),
+                                        size, ipc_cache_id);
+            return py::make_tuple(success, ipc_cache_id);
+          },
+          "Register a Ipc data buffer", py::arg("ptr"), py::arg("size"))
+      .def(
           "send",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
              size_t size, py::object meta_blob = py::none()) {
@@ -408,46 +417,71 @@ PYBIND11_MODULE(p2p, m) {
           },
           "Accept an incoming local connection via Unix Domain Socket")
       .def(
+          "recv_ipc_cache",
+          [](Endpoint& self, uint64_t conn_id) {
+            uint64_t remote_ipc_cache_id;
+            bool success = self.recv_ipc_cache(conn_id, remote_ipc_cache_id);
+            return py::make_tuple(success, remote_ipc_cache_id);
+          },
+          "Recv a ipc_cache from remote", py::arg("conn_id"))
+      .def(
+          "send_ipc_cache",
+          [](Endpoint& self, uint64_t conn_id, uint64_t local_ipc_cache_id) {
+            bool success = self.send_ipc_cache(conn_id, local_ipc_cache_id);
+            return success;
+          },
+          "Send a ipc_cache to remote", py::arg("conn_id"),
+          py::arg("local_ipc_cache_id"))
+      .def(
           "send_ipc",
-          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
-            bool success =
-                self.send_ipc(conn_id, reinterpret_cast<void*>(ptr), size);
+          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
+             uint64_t remote_ipc_cache_id) {
+            bool success = self.send_ipc(conn_id, reinterpret_cast<void*>(ptr),
+                                         size, remote_ipc_cache_id);
             return success;
           },
           "Send data via IPC (Inter-Process Communication) using CUDA/HIP "
           "memory handles",
-          py::arg("conn_id"), py::arg("ptr"), py::arg("size"))
+          py::arg("conn_id"), py::arg("ptr"), py::arg("size"),
+          py::arg("remote_ipc_cache_id"))
       .def(
           "recv_ipc",
-          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
-            bool success =
-                self.recv_ipc(conn_id, reinterpret_cast<void*>(ptr), size);
+          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
+             uint64_t local_ipc_cache_id) {
+            bool success = self.recv_ipc(conn_id, reinterpret_cast<void*>(ptr),
+                                         size, local_ipc_cache_id);
             return success;
           },
           "Receive data via IPC (Inter-Process Communication) using CUDA/HIP "
           "memory handles",
-          py::arg("conn_id"), py::arg("ptr"), py::arg("size"))
+          py::arg("conn_id"), py::arg("ptr"), py::arg("size"),
+          py::arg("local_ipc_cache_id"))
       .def(
           "send_ipc_async",
-          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
+          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
+             uint64_t remote_ipc_cache_id) {
             uint64_t transfer_id;
             bool success =
                 self.send_ipc_async(conn_id, reinterpret_cast<void const*>(ptr),
-                                    size, &transfer_id);
+                                    remote_ipc_cache_id, size, &transfer_id);
             return py::make_tuple(success, transfer_id);
           },
           "Send data asynchronously via IPC using CUDA/HIP memory handles",
-          py::arg("conn_id"), py::arg("ptr"), py::arg("size"))
+          py::arg("conn_id"), py::arg("ptr"), py::arg("size"),
+          py::arg("remote_ipc_cache_id"))
       .def(
           "recv_ipc_async",
-          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
+          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
+             uint64_t local_ipc_cache_id) {
             uint64_t transfer_id;
-            bool success = self.recv_ipc_async(
-                conn_id, reinterpret_cast<void*>(ptr), size, &transfer_id);
+            bool success =
+                self.recv_ipc_async(conn_id, reinterpret_cast<void*>(ptr), size,
+                                    local_ipc_cache_id, &transfer_id);
             return py::make_tuple(success, transfer_id);
           },
           "Receive data asynchronously via IPC using CUDA/HIP memory handles",
-          py::arg("conn_id"), py::arg("ptr"), py::arg("size"))
+          py::arg("conn_id"), py::arg("ptr"), py::arg("size"),
+          py::arg("local_ipc_cache_id"))
       .def_static(
           "parse_metadata",
           [](py::bytes metadata_bytes) {

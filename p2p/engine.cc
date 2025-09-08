@@ -130,21 +130,20 @@ Endpoint::~Endpoint() {
   }
 
   // free IpcMemHandleCache
-  std::unique_lock<std::shared_mutex> lock(ipc_cache_mu_);
-  for (auto& conn_pair : conn_id_and_ptr_to_ipc_cache_) {
-    auto& ptr_map = conn_pair.second;
-    for (auto& buf_pair : ptr_map) {
-      IpcCache& ipc_buf = buf_pair.second;
-      if (ipc_buf.direct_ptr) {
-        if (ipc_buf.is_send) {
-          GPU_RT_CHECK(gpuIpcCloseMemHandle(ipc_buf.direct_ptr));
-        }
-        ipc_buf.direct_ptr = nullptr;
-      }
+  {
+    std::unique_lock<std::shared_mutex> lock(local_ipc_cache_mu_);
+    for (auto& pair : local_ipc_cache_id_to_ipc_cache_) {
+      IpcCache* cache = pair.second;
+      delete cache;
     }
-    ptr_map.clear();
+    local_ipc_cache_id_to_ipc_cache_.clear();
+    local_data_to_ipc_cache_id_.clear();
   }
-  conn_id_and_ptr_to_ipc_cache_.clear();
+
+  {
+    std::unique_lock<std::shared_mutex> lock(remote_ipc_cache_mu_);
+    remote_conn_id_ipc_cache_id_to_ipc_cache_.clear();
+  }
 
   if (!streams_.empty()) {
     GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
@@ -291,6 +290,38 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
     std::unique_lock<std::shared_mutex> lock(mr_mu_);
     mr_id_to_mr_[mr_id] = new MR{mr_id, mhandle};
   }
+
+  return true;
+}
+
+bool Endpoint::reg_ipc(void const* data, size_t size, uint64_t& ipc_cache_id) {
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
+  void* data_aligned = reinterpret_cast<void*>(
+      reinterpret_cast<uintptr_t>(data) & ~(kIpcAlignment - 1));
+  uintptr_t offset = reinterpret_cast<uintptr_t>(data) -
+                     reinterpret_cast<uintptr_t>(data_aligned);
+
+  std::unique_lock<std::shared_mutex> lock(local_ipc_cache_mu_);
+
+  // Check if it has been registered
+  auto it = local_data_to_ipc_cache_id_.find(data_aligned);
+  if (it != local_data_to_ipc_cache_id_.end()) {
+    ipc_cache_id = it->second;
+    return true;
+  }
+
+  gpuIpcMemHandle_t handle;
+  GPU_RT_CHECK(gpuIpcGetMemHandle(&handle, data_aligned));
+
+  ipc_cache_id = next_ipc_cache_id_.fetch_add(1);
+
+  IpcCache* cache = nullptr;
+  cache = new IpcCache{ipc_cache_id, handle, false, data_aligned, offset, size};
+
+  local_ipc_cache_id_to_ipc_cache_[ipc_cache_id] = cache;
+  local_data_to_ipc_cache_id_[data_aligned] = ipc_cache_id;
 
   return true;
 }
@@ -510,6 +541,7 @@ bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
       .size = size,
       .conn_id = conn_id,
       .mr_id = mr_id,
+      .ipc_cache_id = 0,  // Not used for RDMA
       .done = false,
       .self_ptr = nullptr,
   };
@@ -534,6 +566,7 @@ bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
       .size = size,
       .conn_id = conn_id,
       .mr_id = mr_id,
+      .ipc_cache_id = 0,  // Not used for RDMA
       .done = false,
       .self_ptr = nullptr,
   };
@@ -1584,8 +1617,147 @@ bool Endpoint::accept_local(int& remote_gpu_idx, uint64_t& conn_id) {
   return true;
 }
 
+bool Endpoint::recv_ipc_cache(uint64_t conn_id, uint64_t& remote_ipc_cache_id,
+                              bool inside_python) {
+  auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
+  std::cout << "[recv_ipc_cache] enter, conn_id=" << conn_id << std::endl;
+
+  // Get connection info
+  Conn* conn;
+  {
+    std::shared_lock<std::shared_mutex> lock(conn_mu_);
+    auto it = conn_id_to_conn_.find(conn_id);
+    CHECK(it != conn_id_to_conn_.end())
+        << "Connection not found for conn_id: " << conn_id;
+    conn = it->second;
+  }
+  CHECK_GE(conn->uds_sockfd_, 0)
+      << "recv_ipc_cache only supports local connections with valid UDS socket";
+
+  int sockfd = conn->uds_sockfd_;
+  std::cout << "[recv_ipc_cache] using sockfd=" << sockfd << std::endl;
+
+  int orig_device;
+  GPU_RT_CHECK(gpuGetDevice(&orig_device));
+  auto dev_reset =
+      uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
+
+  IpcTransferInfo transfer_info = {};
+  std::cout << "[recv_ipc_cache] waiting for transfer_info... size: " << sizeof(transfer_info) << std::endl;
+  auto ret = uccl::receive_message_nonblock(
+      sockfd, static_cast<void*>(&transfer_info), sizeof(transfer_info));
+  std::cout << "[recv_ipc_cache] received ret=" << ret << std::endl;
+  CHECK_EQ(ret, sizeof(transfer_info))
+      << "Failed to receive IPC handle from remote";
+  std::cout << "[recv_ipc_cache] transfer_info.op=" << transfer_info.operation
+            << " size=" << transfer_info.size
+            << " ipc_cache_id=" << transfer_info.ipc_cache_id
+            << " offset=" << transfer_info.offset << std::endl;
+  CHECK_EQ(transfer_info.operation, 1) << "Invalid response from remote";
+
+  IpcCache ipc_cache{};
+  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));  // 注意：这里改成 local
+  std::cout << "[recv_ipc_cache] opening mem handle on device="
+            << local_gpu_idx_ << std::endl;
+  GPU_RT_CHECK(gpuIpcOpenMemHandle(&ipc_cache.direct_ptr, transfer_info.handle,
+                                   gpuIpcMemLazyEnablePeerAccess));
+
+  ipc_cache.ipc_cache_id = transfer_info.ipc_cache_id;
+  ipc_cache.handle = transfer_info.handle;
+  ipc_cache.size = transfer_info.size;
+  ipc_cache.offset = transfer_info.offset;
+  ipc_cache.is_send = true;
+
+  {
+    std::unique_lock<std::shared_mutex> lock(remote_ipc_cache_mu_);
+    remote_conn_id_ipc_cache_id_to_ipc_cache_[conn_id][ipc_cache.ipc_cache_id] =
+        ipc_cache;
+  }
+  remote_ipc_cache_id = ipc_cache.ipc_cache_id;
+
+  uint32_t completion = 1;
+  std::cout << "[recv_ipc_cache] sending completion=1" << std::endl;
+  ret = uccl::send_message_nonblock(
+      sockfd, static_cast<void const*>(&completion), sizeof(completion));
+  std::cout << "[recv_ipc_cache] send completion ret=" << ret << " size: " << sizeof(completion) << std::endl;
+  CHECK_EQ(ret, sizeof(completion)) << "Failed to send completion ack";
+
+  std::cout << "[recv_ipc_cache] success, ipc_cache_id="
+            << remote_ipc_cache_id << std::endl;
+  return true;
+}
+
+bool Endpoint::send_ipc_cache(uint64_t conn_id, uint64_t local_ipc_cache_id,
+                              bool inside_python) {
+  auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
+  std::cout << "[send_ipc_cache] enter, conn_id=" << conn_id
+            << " local_ipc_cache_id=" << local_ipc_cache_id << std::endl;
+
+  Conn* conn;
+  {
+    std::shared_lock<std::shared_mutex> lock(conn_mu_);
+    auto it = conn_id_to_conn_.find(conn_id);
+    CHECK(it != conn_id_to_conn_.end())
+        << "Connection not found for conn_id: " << conn_id;
+    conn = it->second;
+  }
+  CHECK_GE(conn->uds_sockfd_, 0)
+      << "send_ipc_cache only supports local connections with valid UDS socket";
+  int client_fd = conn->uds_sockfd_;
+  std::cout << "[send_ipc_cache] using sockfd=" << client_fd << std::endl;
+
+  IpcCache* ipc_cache = nullptr;
+  {
+    std::shared_lock<std::shared_mutex> lock(local_ipc_cache_mu_);
+    auto it = local_ipc_cache_id_to_ipc_cache_.find(local_ipc_cache_id);
+    if (it == local_ipc_cache_id_to_ipc_cache_.end()) {
+      LOG(ERROR) << "IpcCache not found for local_ipc_cache_id: "
+                 << local_ipc_cache_id;
+      return false;
+    }
+    ipc_cache = it->second;
+  }
+
+  int orig_device;
+  GPU_RT_CHECK(gpuGetDevice(&orig_device));
+  auto dev_reset =
+      uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
+
+  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+  IpcTransferInfo transfer_info = {};
+  transfer_info.size = ipc_cache->size;
+  transfer_info.operation = 1;
+  transfer_info.ipc_cache_id = ipc_cache->ipc_cache_id;
+  transfer_info.offset = ipc_cache->offset;
+  transfer_info.handle = ipc_cache->handle;
+
+  std::cout << "[send_ipc_cache] sending transfer_info: size="
+            << transfer_info.size << " ipc_cache_id="
+            << transfer_info.ipc_cache_id << " offset=" << transfer_info.offset
+            << std::endl;
+  auto ret = uccl::send_message_nonblock(
+      client_fd, static_cast<void const*>(&transfer_info),
+      sizeof(transfer_info));
+  std::cout << "[send_ipc_cache] send ret=" << ret << std::endl;
+  CHECK_EQ(ret, sizeof(transfer_info)) << "Failed to send IPC handle";
+
+  uint32_t completion = 0;
+  std::cout << "[send_ipc_cache] waiting for completion..." << std::endl;
+  ret = uccl::receive_message_nonblock(
+      client_fd, static_cast<void*>(&completion), sizeof(completion));
+  std::cout << "[send_ipc_cache] got completion ret=" << ret
+            << " value=" << completion << std::endl;
+  CHECK_EQ(ret, sizeof(completion))
+      << "Failed to receive completion notification";
+  CHECK_EQ(completion, 1) << "Receiver reported failure";
+
+  std::cout << "[send_ipc_cache] success" << std::endl;
+  return true;
+}
+
+
 bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size,
-                        bool inside_python) {
+                        uint64_t remote_ipc_cache_id, bool inside_python) {
   auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
 
   CHECK(data != nullptr) << "send_ipc: data pointer is null!";
@@ -1618,53 +1790,26 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size,
   IpcCache ipc_cache;
   bool found_in_cache = false;
   {
-    std::shared_lock<std::shared_mutex> lock(ipc_cache_mu_);
-    auto it_conn = conn_id_and_ptr_to_ipc_cache_.find(conn_id);
-    if (it_conn != conn_id_and_ptr_to_ipc_cache_.end()) {
-      auto& ptr_to_ipc_cache = it_conn->second;
-      auto it_buf = ptr_to_ipc_cache.find(data);
-      if (it_buf != ptr_to_ipc_cache.end()) {
-        ipc_cache = it_buf->second;
+    std::shared_lock<std::shared_mutex> lock(remote_ipc_cache_mu_);
+    auto it_conn = remote_conn_id_ipc_cache_id_to_ipc_cache_.find(conn_id);
+    if (it_conn != remote_conn_id_ipc_cache_id_to_ipc_cache_.end()) {
+      auto& ipc_cache_id_to_ipc_cache = it_conn->second;
+      auto it_ipc_cache = ipc_cache_id_to_ipc_cache.find(remote_ipc_cache_id);
+      if (it_ipc_cache != ipc_cache_id_to_ipc_cache.end()) {
+        ipc_cache = it_ipc_cache->second;
         found_in_cache = true;
       }
     }
   }
 
-  IpcTransferInfo transfer_info = {};  // Initialize to zero
-  // Wait for receiver's IPC handle (receiver will send this proactively)
-  auto ret = uccl::receive_message_nonblock(
-      sockfd, static_cast<void*>(&transfer_info), sizeof(transfer_info));
-  CHECK_EQ(ret, sizeof(transfer_info))
-      << "Failed to receive IPC handle from receiver";
-  CHECK_EQ(transfer_info.operation, 1) << "Invalid response from receiver";
-  CHECK_EQ(transfer_info.size, size)
-      << "Size mismatch: expected " << size << ", got " << transfer_info.size;
+  CHECK(found_in_cache == true)
+      << "Can't find IpcCache with remote_ipc_cache_id: " << remote_ipc_cache_id
+      << "!";
 
-  void* raw_dst_ptr = nullptr;
   GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
 
-  if (!found_in_cache ||
-      std::memcmp(&transfer_info.handle, &ipc_cache.handle,
-                  sizeof(transfer_info.handle)) != 0) {  // Update handle
-    if (found_in_cache && ipc_cache.direct_ptr) {        // close old one
-      GPU_RT_CHECK(gpuIpcCloseMemHandle(ipc_cache.direct_ptr));
-    }
-    GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_dst_ptr, transfer_info.handle,
-                                     gpuIpcMemLazyEnablePeerAccess));
-    ipc_cache.handle = transfer_info.handle;
-    ipc_cache.direct_ptr = raw_dst_ptr;
-  } else {
-    raw_dst_ptr = ipc_cache.direct_ptr;
-  }
-  ipc_cache.size = transfer_info.size;  // always update
-  ipc_cache.offset = transfer_info.offset;
-  ipc_cache.is_send = true;
-  {
-    std::unique_lock<std::shared_mutex> lock(ipc_cache_mu_);
-    conn_id_and_ptr_to_ipc_cache_[conn_id][data] = ipc_cache;
-  }
   void* dst_ptr = reinterpret_cast<void*>(
-      reinterpret_cast<uintptr_t>(raw_dst_ptr) + ipc_cache.offset);
+      reinterpret_cast<uintptr_t>(ipc_cache.direct_ptr) + ipc_cache.offset);
 
   std::vector<gpuStream_t>& dst_streams = ipc_streams_[conn->remote_gpu_idx_];
   int num_streams =
@@ -1689,7 +1834,7 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size,
 
   // Notify receiver of completion
   uint32_t completion = 1;
-  ret = uccl::send_message_nonblock(
+  auto ret = uccl::send_message_nonblock(
       sockfd, static_cast<void const*>(&completion), sizeof(completion));
   CHECK_EQ(ret, sizeof(completion)) << "Failed to send completion ack";
 
@@ -1706,7 +1851,7 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size,
 }
 
 bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size,
-                        bool inside_python) {
+                        uint64_t local_ipc_cache_id, bool inside_python) {
   auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
 
   CHECK(data != nullptr) << "recv_ipc: data pointer is null!";
@@ -1734,57 +1879,35 @@ bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  IpcCache ipc_cache;
+  IpcCache* ipc_cache;
   bool found_in_cache = false;
   {
-    std::shared_lock<std::shared_mutex> lock(ipc_cache_mu_);
-    auto it_conn = conn_id_and_ptr_to_ipc_cache_.find(conn_id);
-    if (it_conn != conn_id_and_ptr_to_ipc_cache_.end()) {
-      auto& ptr_to_ipc_cache = it_conn->second;
-      auto it_buf = ptr_to_ipc_cache.find(data);
-      if (it_buf != ptr_to_ipc_cache.end()) {
-        ipc_cache = it_buf->second;
-        found_in_cache = true;
-      }
+    std::shared_lock<std::shared_mutex> lock(local_ipc_cache_mu_);
+    auto it_conn = local_ipc_cache_id_to_ipc_cache_.find(local_ipc_cache_id);
+    if (it_conn != local_ipc_cache_id_to_ipc_cache_.end()) {
+      ipc_cache = it_conn->second;
+      found_in_cache = true;
     }
   }
+
+  CHECK(found_in_cache == true)
+      << "Can't find IpcCache with local_ipc_cache_id: " << local_ipc_cache_id
+      << "!";
+
+  // check if data is belongs to the corresponed local_ipc_cache_id
+  void* data_aligned = reinterpret_cast<void*>(
+      reinterpret_cast<uintptr_t>(data) & ~(kIpcAlignment - 1));
+
+  CHECK(data_aligned == ipc_cache->direct_ptr)
+      << "Alignment mismatch: expected " << ipc_cache->direct_ptr << ", got "
+      << data_aligned;
 
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
   // Generate IPC memory handle for our receive buffer
-  IpcTransferInfo transfer_info = {};  // Initialize to zero
-  transfer_info.size = size;
-  transfer_info.operation = 1;                          // response
-  if (found_in_cache) {                                 // Update handle
-    if (ipc_cache.size != size) ipc_cache.size = size;  // update
-    transfer_info.offset = ipc_cache.offset;
-    transfer_info.handle = ipc_cache.handle;
-  } else {
-    auto data_aligned =
-        reinterpret_cast<uintptr_t>(data) & ~(kIpcAlignment - 1);
-    auto data_offset = reinterpret_cast<uintptr_t>(data) - data_aligned;
-    transfer_info.offset = data_offset;
-    GPU_RT_CHECK(gpuIpcGetMemHandle(&transfer_info.handle,
-                                    reinterpret_cast<void*>(data_aligned)));
 
-    ipc_cache.handle = transfer_info.handle;
-    ipc_cache.size = transfer_info.size;
-    ipc_cache.offset = transfer_info.offset;
-    ipc_cache.direct_ptr = reinterpret_cast<void*>(data_aligned);
-    ipc_cache.is_send = false;
-    {
-      std::unique_lock<std::shared_mutex> lock(ipc_cache_mu_);
-      conn_id_and_ptr_to_ipc_cache_[conn_id][data] = ipc_cache;
-    }
-  }
-
-  auto ret = uccl::send_message_nonblock(
-      client_fd, static_cast<void const*>(&transfer_info),
-      sizeof(transfer_info));
-  CHECK_EQ(ret, sizeof(transfer_info)) << "Failed to send IPC handle to sender";
-
-  // Notify sender of completion
+  // Wait notify from sender of completion
   uint32_t completion = 0;
-  ret = uccl::receive_message_nonblock(
+  auto ret = uccl::receive_message_nonblock(
       client_fd, static_cast<void*>(&completion), sizeof(completion));
   CHECK_EQ(ret, sizeof(completion))
       << "Failed to receive completion notification";
@@ -1794,6 +1917,7 @@ bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size,
 }
 
 bool Endpoint::send_ipc_async(uint64_t conn_id, void const* data, size_t size,
+                              uint64_t remote_ipc_cache_id,
                               uint64_t* transfer_id) {
   py::gil_scoped_release release;
 
@@ -1804,6 +1928,7 @@ bool Endpoint::send_ipc_async(uint64_t conn_id, void const* data, size_t size,
       .size = size,
       .conn_id = conn_id,
       .mr_id = 0,  // Not used for IPC
+      .ipc_cache_id = remote_ipc_cache_id,
       .done = false,
       .self_ptr = nullptr,
   };
@@ -1812,7 +1937,8 @@ bool Endpoint::send_ipc_async(uint64_t conn_id, void const* data, size_t size,
   *transfer_id = reinterpret_cast<uint64_t>(task);
 
   // For now, we'll use the existing async infrastructure but call our IPC
-  // function In a real implementation, you might want a separate IPC task ring
+  // function In a real implementation, you might want a separate IPC task
+  // ring
   while (jring_mp_enqueue_bulk(send_task_ring_, task, 1, nullptr) != 1) {
   }
 
@@ -1820,6 +1946,7 @@ bool Endpoint::send_ipc_async(uint64_t conn_id, void const* data, size_t size,
 }
 
 bool Endpoint::recv_ipc_async(uint64_t conn_id, void* data, size_t size,
+                              uint64_t local_ipc_cache_id,
                               uint64_t* transfer_id) {
   py::gil_scoped_release release;
 
@@ -1830,6 +1957,7 @@ bool Endpoint::recv_ipc_async(uint64_t conn_id, void* data, size_t size,
       .size = size,
       .conn_id = conn_id,
       .mr_id = 0,  // Not used for IPC
+      .ipc_cache_id = local_ipc_cache_id,
       .done = false,
       .self_ptr = nullptr,
   };
@@ -1838,7 +1966,8 @@ bool Endpoint::recv_ipc_async(uint64_t conn_id, void* data, size_t size,
   *transfer_id = reinterpret_cast<uint64_t>(task);
 
   // For now, we'll use the existing async infrastructure but call our IPC
-  // function In a real implementation, you might want a separate IPC task ring
+  // function In a real implementation, you might want a separate IPC task
+  // ring
   while (jring_mp_enqueue_bulk(recv_task_ring_, task, 1, nullptr) != 1) {
   }
 
