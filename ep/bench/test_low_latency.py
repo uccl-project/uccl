@@ -4,13 +4,13 @@ On first node:
 torchrun --nnodes=2 --nproc_per_node=1 --node_rank=0 \
   --master_addr=10.1.209.224 --master_port=12355 \
   bench/test_low_latency.py --num-tokens=128 \
-  --hidden=7168 --num-topk=8 --num-experts=288 --disable-nvlink
+  --hidden=7168 --num-topk=1 --num-experts=28
 
 On second node:
 torchrun --nnodes=2 --nproc_per_node=1 --node_rank=1 \
   --master_addr=10.1.209.224 --master_port=12355 \
   bench/test_low_latency.py --num-tokens=128 \
-  --hidden=7168 --num-topk=8 --num-experts=288 --disable-nvlink
+  --hidden=7168 --num-topk=1 --num-experts=28
 """
 
 import argparse
