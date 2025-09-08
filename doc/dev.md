@@ -35,7 +35,6 @@ For quick installation with docker, you can directly dive into:
 * [`dev_afxdp.md`](dev_afxdp.md): Collectives for Non-RDMA NICs (currently support AWS ENA NICs and IBM VirtIO NICs)
 * [`../p2p/README.md`](../p2p/README.md): P2P for RDMA NICs and GPU IPCs (currently support Nvidia/AMD GPUs and Nvidia/Broadcom NICs)
 
-
 ### Python Wheel Build
 
 Run the following to build Python wheels: 
