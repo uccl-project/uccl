@@ -1,5 +1,8 @@
 #include "uccl_engine.h"
 #include "engine.h"
+#include "rdma/rdma_io.h"
+
+using namespace uccl;
 #include <arpa/inet.h>
 #include <algorithm>
 #include <atomic>

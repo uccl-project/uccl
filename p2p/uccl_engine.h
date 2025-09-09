@@ -18,15 +18,15 @@ typedef struct uccl_conn uccl_conn_t;
 // Handle for a memory region
 typedef struct uccl_mr uccl_mr_t;
 
+// UCCL operation types
+enum uccl_op_type { UCCL_READ = 0, UCCL_WRITE = 1, UCCL_FIFO = 2 };
+
 typedef struct metadata {
   uccl_op_type op;  // READ/WRITE/FIFO
   char fifo_buf[64];
   uint64_t data_ptr;  // Memory address for data reception
   size_t data_size;   // Size of data to receive
 } metadata_t;
-
-// UCCL operation types
-enum uccl_op_type { UCCL_READ = 0, UCCL_WRITE = 1, UCCL_FIFO = 2 };
 
 /**
  * Create and initialize an engine instance.
