@@ -353,15 +353,19 @@ void listener_thread_func(uccl_conn_t* conn) {
     }
     std::cout << "Received metadata: " << md.op << " " << md.data_ptr << " "
               << md.data_size << std::endl;
-    auto local_mem_iter = mem_reg_info.find(md.data_ptr);
-    if (local_mem_iter == mem_reg_info.end()) {
-      std::cerr << "Local memory not registered for address: " << md.data_ptr
+    uint64_t mr_id = 0;
+    if (md.op != UCCL_FIFO) {
+      auto local_mem_iter = mem_reg_info.find(md.data_ptr);
+      if (local_mem_iter == mem_reg_info.end()) {
+        std::cerr << "Local memory not registered for address: " << md.data_ptr
+                  << std::endl;
+        continue;
+      }
+      std::cout << "Local memory registered for address: " << md.data_ptr
                 << std::endl;
-      continue;
+      mr_id = local_mem_iter->second;
     }
-    std::cout << "Local memory registered for address: " << md.data_ptr
-              << std::endl;
-    auto mr_id = local_mem_iter->second;
+    
     switch (md.op) {
       case UCCL_READ: {
         char out_buf[sizeof(uccl::FifoItem)];
