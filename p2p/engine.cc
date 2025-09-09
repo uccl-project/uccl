@@ -92,8 +92,12 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   recv_task_ring_ = uccl::create_ring(sizeof(Task), kTaskRingSize);
   read_task_ring_ = uccl::create_ring(sizeof(RWTask), kTaskRingSize);
   write_task_ring_ = uccl::create_ring(sizeof(RWTask), kTaskRingSize);
+  sendv_task_ring_ = uccl::create_ring(sizeof(TaskV), kTaskRingSize);
+  recvv_task_ring_ = uccl::create_ring(sizeof(TaskV), kTaskRingSize);
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
+  sendv_proxy_thread_ = std::thread(&Endpoint::sendv_proxy_thread_func, this);
+  recvv_proxy_thread_ = std::thread(&Endpoint::recvv_proxy_thread_func, this);
 
   // Initialize UDS socket for local connections
   init_uds_socket();
@@ -111,11 +115,15 @@ Endpoint::~Endpoint() {
 
   send_proxy_thread_.join();
   recv_proxy_thread_.join();
+  sendv_proxy_thread_.join();
+  recvv_proxy_thread_.join();
 
   free(send_task_ring_);
   free(recv_task_ring_);
   free(read_task_ring_);
   free(write_task_ring_);
+  free(sendv_task_ring_);
+  free(recvv_task_ring_);
 
   delete ep_;
 
@@ -711,6 +719,61 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   return true;
 }
 
+bool Endpoint::sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                           std::vector<void const*> data_v, 
+                           std::vector<size_t> size_v, size_t num_iovs,
+                           uint64_t* transfer_id) {
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
+  TaskV* task = new TaskV{
+      .type = TaskType::SENDV,
+      .conn_id = conn_id,
+      .mr_id_v = mr_id_v,
+      .const_data_v = data_v,
+      .data_v = {},  // Empty for sendv
+      .size_v = size_v,
+      .num_iovs = num_iovs,
+      .done = false,
+      .self_ptr = nullptr,
+  };
+  task->self_ptr = task;
+
+  *transfer_id = reinterpret_cast<uint64_t>(task);
+
+  while (jring_mp_enqueue_bulk(sendv_task_ring_, task, 1, nullptr) != 1) {
+  }
+
+  return true;
+}
+
+bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                           std::vector<void*> data_v, std::vector<size_t> size_v,
+                           size_t num_iovs, uint64_t* transfer_id) {
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
+  TaskV* task = new TaskV{
+      .type = TaskType::RECVV,
+      .conn_id = conn_id,
+      .mr_id_v = mr_id_v,
+      .const_data_v = {},  // Empty for recvv
+      .data_v = data_v,
+      .size_v = size_v,
+      .num_iovs = num_iovs,
+      .done = false,
+      .self_ptr = nullptr,
+  };
+  task->self_ptr = task;
+
+  *transfer_id = reinterpret_cast<uint64_t>(task);
+
+  while (jring_mp_enqueue_bulk(recvv_task_ring_, task, 1, nullptr) != 1) {
+  }
+
+  return true;
+}
+
 bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void*> dst_v, std::vector<size_t> size_v,
                      std::vector<uccl::FifoItem> slot_item_v, size_t num_iovs) {
@@ -1172,6 +1235,30 @@ void Endpoint::recv_proxy_thread_func() {
   }
 }
 
+void Endpoint::sendv_proxy_thread_func() {
+  uccl::pin_thread_to_numa(numa_node_);
+  TaskV taskv;
+
+  while (!stop_.load(std::memory_order_acquire)) {
+    if (jring_sc_dequeue_bulk(sendv_task_ring_, &taskv, 1, nullptr) == 1) {
+      sendv(taskv.conn_id, taskv.mr_id_v, taskv.const_data_v, taskv.size_v, taskv.num_iovs);
+      taskv.self_ptr->done.store(true, std::memory_order_release);
+    }
+  }
+}
+
+void Endpoint::recvv_proxy_thread_func() {
+  uccl::pin_thread_to_numa(numa_node_);
+  TaskV taskv;
+
+  while (!stop_.load(std::memory_order_acquire)) {
+    if (jring_sc_dequeue_bulk(recvv_task_ring_, &taskv, 1, nullptr) == 1) {
+      recvv(taskv.conn_id, taskv.mr_id_v, taskv.data_v, taskv.size_v, taskv.num_iovs);
+      taskv.self_ptr->done.store(true, std::memory_order_release);
+    }
+  }
+}
+
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   py::gil_scoped_release release;
 
@@ -1181,6 +1268,12 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
     *is_done = rw_task->done.load(std::memory_order_acquire);
     if (*is_done) {
       delete rw_task;
+    }
+  } else if (task->type == TaskType::SENDV || task->type == TaskType::RECVV) {
+    auto taskv = reinterpret_cast<TaskV*>(transfer_id);
+    *is_done = taskv->done.load(std::memory_order_acquire);
+    if (*is_done) {
+      delete taskv;
     }
   } else {
     *is_done = task->done.load(std::memory_order_acquire);

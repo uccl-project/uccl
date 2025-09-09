@@ -154,6 +154,37 @@ PYBIND11_MODULE(p2p, m) {
                 self.recvv(conn_id, mr_id_v, data_v, size_v, num_iovs);
             return success;
           },
+          "Receive multiple data buffers asynchronously", py::arg("conn_id"),
+          py::arg("mr_id_v"), py::arg("data_ptr_v"), py::arg("size_v"),
+          py::arg("num_iovs"))
+      .def(
+          "sendv_async",
+          [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+             std::vector<uint64_t> data_ptr_v, std::vector<size_t> size_v,
+             size_t num_iovs) {
+            std::vector<void const*> data_v;
+            data_v.reserve(data_ptr_v.size());
+            for (uint64_t ptr : data_ptr_v) {
+              data_v.push_back(reinterpret_cast<void const*>(ptr));
+            }
+            return self.sendv(conn_id, mr_id_v, data_v, size_v, num_iovs);
+          },
+          "Send multiple data buffers asynchronously", py::arg("conn_id"), py::arg("mr_id_v"),
+          py::arg("data_ptr_v"), py::arg("size_v"), py::arg("num_iovs"))
+      .def(
+          "recvv_async",
+          [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+             std::vector<uint64_t> data_ptr_v, std::vector<size_t> size_v,
+             size_t num_iovs) {
+            std::vector<void*> data_v;
+            data_v.reserve(data_ptr_v.size());
+            for (uint64_t ptr : data_ptr_v) {
+              data_v.push_back(reinterpret_cast<void*>(ptr));
+            }
+            bool success =
+                self.recvv(conn_id, mr_id_v, data_v, size_v, num_iovs);
+            return success;
+          },
           "Receive multiple data buffers", py::arg("conn_id"),
           py::arg("mr_id_v"), py::arg("data_ptr_v"), py::arg("size_v"),
           py::arg("num_iovs"))

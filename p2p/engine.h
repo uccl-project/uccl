@@ -166,10 +166,20 @@ class Endpoint {
              std::vector<void const*> data_v, std::vector<size_t> size_v,
              size_t num_iovs);
 
+  /* Send a vector of data chunks asynchronously. */
+  bool sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                   std::vector<void const*> data_v, std::vector<size_t> size_v,
+                   size_t num_iovs, uint64_t* transfer_id);
+
   /* Receive a vector of data chunks. Blocking. */
   bool recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
              std::vector<void*> data_v, std::vector<size_t> size_v,
              size_t num_iovs);
+
+  /* Receive a vector of data chunks asynchronously. */
+  bool recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                   std::vector<void*> data_v, std::vector<size_t> size_v,
+                   size_t num_iovs, uint64_t* transfer_id);
 
   /* Read data from the remote server. Blocking.
    *
@@ -389,7 +399,28 @@ class Endpoint {
     WRITE,
     SEND_IPC,
     RECV_IPC,
+    SENDV,
+    RECVV,
+    // TODO: SENDV_IPC, RECVV_IPC
   };
+
+  struct alignas(64) TaskV {
+    TaskType type;              // 任务类型，将是 SENDV 或 RECVV
+
+    uint64_t conn_id;           // 连接 ID，与 Task 相同
+
+    // --- 矢量化操作的核心数据 ---
+    // 使用 vector 来存储多个数据块的信息
+    std::vector<uint64_t> mr_id_v;
+    // 为 sendv (const) 和 recvv (non-const) 分别准备
+    std::vector<void const*> const_data_v;
+    std::vector<void*> data_v;
+    std::vector<size_t> size_v;
+    size_t num_iovs;            // 数据块的数量
+
+    std::atomic<bool> done;     // 完成状态标志，与 Task 相同
+    TaskV* self_ptr;            // 指向自己的指针，与 Task 相同
+};
 
   struct alignas(64) Task {
     TaskType type;
@@ -418,10 +449,16 @@ class Endpoint {
   jring_t* recv_task_ring_;
   jring_t* read_task_ring_;
   jring_t* write_task_ring_;
+  jring_t* sendv_task_ring_;
+  jring_t* recvv_task_ring_;
 
   std::atomic<bool> stop_{false};
   std::thread send_proxy_thread_;
   std::thread recv_proxy_thread_;
+  std::thread sendv_proxy_thread_;
+  std::thread recvv_proxy_thread_;
   void send_proxy_thread_func();
   void recv_proxy_thread_func();
+  void sendv_proxy_thread_func();
+  void recvv_proxy_thread_func();
 };
