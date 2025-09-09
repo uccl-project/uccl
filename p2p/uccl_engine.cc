@@ -111,14 +111,6 @@ typedef struct {
   bool is_valid;
 } fifo_item_t;
 
-typedef struct metadata {
-  uccl_op_type op;  // READ/WRITE/FIFO
-  char fifo_buf[sizeof(uccl::FifoItem)];
-  uint64_t data_ptr;  // Memory address for data reception
-  size_t data_size;   // Size of data to receive
-} metadata_t;
-
-
 std::unordered_map<uintptr_t, uint64_t> mem_reg_info;
 std::unordered_map<uccl_conn_t*, fifo_item_t*> fifo_item_map;
 std::mutex fifo_item_map_mutex;
