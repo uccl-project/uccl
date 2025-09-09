@@ -90,8 +90,11 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
 
   send_task_ring_ = uccl::create_ring(sizeof(Task), kTaskRingSize);
   recv_task_ring_ = uccl::create_ring(sizeof(Task), kTaskRingSize);
-  read_task_ring_ = uccl::create_ring(sizeof(RWTask), kTaskRingSize);
-  write_task_ring_ = uccl::create_ring(sizeof(RWTask), kTaskRingSize);
+  read_net_task_ring_ = uccl::create_ring(sizeof(NetRwTask), kTaskRingSize);
+  write_net_task_ring_ = uccl::create_ring(sizeof(NetRwTask), kTaskRingSize);
+  read_ipc_task_ring_ = uccl::create_ring(sizeof(IpcRwTask), kTaskRingSize);
+  write_ipc_task_ring_ = uccl::create_ring(sizeof(IpcRwTask), kTaskRingSize);
+
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
 
@@ -114,8 +117,10 @@ Endpoint::~Endpoint() {
 
   free(send_task_ring_);
   free(recv_task_ring_);
-  free(read_task_ring_);
-  free(write_task_ring_);
+  free(read_net_task_ring_);
+  free(write_net_task_ring_);
+  free(read_ipc_task_ring_);
+  free(write_ipc_task_ring_);
 
   delete ep_;
 
@@ -198,49 +203,6 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
         new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
   }
   return true;
-}
-
-bool Endpoint::connect(py::bytes const& meta_bytes, uint64_t& conn_id) {
-  std::string buf = meta_bytes;
-  uint8_t const* data = reinterpret_cast<uint8_t const*>(buf.data());
-  size_t const n = buf.size();
-
-  std::string ip;
-  int port = -1;
-  char ipstr[INET6_ADDRSTRLEN] = {0};
-
-  if (n == 10) {  // IPv4 format
-    std::memcpy(ipstr, data, 4);
-    inet_ntop(AF_INET, ipstr, ipstr, sizeof(ipstr));
-    ip = ipstr;
-    port = (data[4] << 8) | data[5];
-    std::memcpy(&remote_gpu_idx_, data + 6, 4);  // host byte-order
-  } else if (n == 22) {                          // IPv6 format
-    std::memcpy(ipstr, data, 16);
-    inet_ntop(AF_INET6, ipstr, ipstr, sizeof(ipstr));
-    ip = ipstr;
-    port = (data[16] << 8) | data[17];
-    std::memcpy(&remote_gpu_idx_, data + 18, 4);
-  } else {
-    throw std::runtime_error("Endpoint::connect(metadata): invalid blob size");
-  }
-
-  if (uccl::is_local_ip(ip)) {
-    if (local_gpu_idx_ == remote_gpu_idx_) {
-      // If the local GPU is the same as the remote GPU, we can use a special
-      // connection ID to indicate this.
-      conn_id = kNvlinkConn;
-      return true;
-    }
-    if (uccl::is_nvlink_peer(local_gpu_idx_, remote_gpu_idx_)) {
-      conn_id = kNvlinkConn;
-      return true;
-    }
-    throw std::runtime_error(
-        "is_local_ip() returned true, "
-        "but remote GPU is not a NVLink peer");
-  }
-  return this->connect(ip, remote_gpu_idx_, port, conn_id);
 }
 
 std::vector<uint8_t> Endpoint::get_metadata() {
@@ -547,7 +509,7 @@ bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
       PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
   Task* task = new Task{
-      .type = TaskType::SEND,
+      .type = TaskType::SEND_NET,
       .data = const_cast<void*>(data),
       .size = size,
       .conn_id = conn_id,
@@ -571,7 +533,7 @@ bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
       PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
   Task* task = new Task{
-      .type = TaskType::RECV,
+      .type = TaskType::RECV_NET,
       .data = data,
       .size = size,
       .conn_id = conn_id,
@@ -820,8 +782,8 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
                           uint64_t* transfer_id) {
   py::gil_scoped_release release;
 
-  RWTask* rw_task = new RWTask{
-      .type = TaskType::READ,
+  NetRwTask* rw_task = new NetRwTask{
+      .type = TaskType::READ_NET,
       .data = dst,
       .size = size,
       .conn_id = conn_id,
@@ -834,7 +796,7 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
 
   *transfer_id = reinterpret_cast<uint64_t>(rw_task);
 
-  while (jring_mp_enqueue_bulk(read_task_ring_, rw_task, 1, nullptr) != 1) {
+  while (jring_mp_enqueue_bulk(read_net_task_ring_, rw_task, 1, nullptr) != 1) {
   }
 
   return true;
@@ -936,8 +898,8 @@ bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
                            uint64_t* transfer_id) {
   py::gil_scoped_release release;
 
-  RWTask* rw_task = new RWTask{
-      .type = TaskType::WRITE,
+  NetRwTask* rw_task = new NetRwTask{
+      .type = TaskType::WRITE_NET,
       .data = src,
       .size = size,
       .conn_id = conn_id,
@@ -950,7 +912,8 @@ bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
 
   *transfer_id = reinterpret_cast<uint64_t>(rw_task);
 
-  while (jring_mp_enqueue_bulk(write_task_ring_, rw_task, 1, nullptr) != 1) {
+  while (jring_mp_enqueue_bulk(write_net_task_ring_, rw_task, 1, nullptr) !=
+         1) {
   }
 
   return true;
@@ -1116,56 +1079,9 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
   return true;
 }
 
-bool Endpoint::write_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
-                         size_t size, void const* meta, size_t meta_len) {
-  py::gil_scoped_release release;
-  DCHECK(size <= 0xffffffff);
-
-  DCHECK(meta_len == sizeof(gpuIpcMemHandle_t));
-  gpuIpcMemHandle_t handle{};
-  std::memcpy(&handle, meta, sizeof(handle));
-
-  void* dst_ptr = nullptr;
-  GPU_RT_CHECK(gpuSetDevice(remote_gpu_idx_));
-  GPU_RT_CHECK(
-      gpuIpcOpenMemHandle(&dst_ptr, handle, gpuIpcMemLazyEnablePeerAccess));
-
-  gpuStream_t s = pick_stream();
-  if (local_gpu_idx_ == remote_gpu_idx_) {
-    GPU_RT_CHECK(
-        gpuMemcpyAsync(dst_ptr, data, size, gpuMemcpyDeviceToDevice, s));
-  } else {
-    int can = 0;
-    GPU_RT_CHECK(gpuDeviceCanAccessPeer(&can, local_gpu_idx_, remote_gpu_idx_));
-    if (can) {
-      GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-      (void)gpuDeviceEnablePeerAccess(remote_gpu_idx_, 0);
-
-      GPU_RT_CHECK(gpuMemcpyPeerAsync(dst_ptr, remote_gpu_idx_, data,
-                                      local_gpu_idx_, size, s));
-    } else {
-      std::cerr << "Cannot access remote GPU " << remote_gpu_idx_
-                << " from local GPU " << local_gpu_idx_ << std::endl;
-      return false;
-    }
-  }
-  GPU_RT_CHECK(gpuStreamSynchronize(s));
-  GPU_RT_CHECK(gpuSetDevice(remote_gpu_idx_));
-  GPU_RT_CHECK(gpuIpcCloseMemHandle(dst_ptr));
-  return true;
-}
-
 bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
                          size_t len, char* out_buf) {
   py::gil_scoped_release release;
-
-  if (conn_id == kNvlinkConn) {
-    GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-    gpuIpcMemHandle_t handle{};
-    GPU_RT_CHECK(gpuIpcGetMemHandle(&handle, addr));
-    std::memcpy(out_buf, &handle, sizeof(handle));
-    return true;
-  }
   auto* conn = conn_id_to_conn_[conn_id];
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
   uccl::ucclRequest req_data;
@@ -1180,15 +1096,6 @@ bool Endpoint::advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                           std::vector<void*> addr_v, std::vector<size_t> len_v,
                           std::vector<char*> out_buf_v, size_t num_iovs) {
   py::gil_scoped_release release;
-  if (conn_id == kNvlinkConn) {
-    GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-    for (size_t i = 0; i < num_iovs; ++i) {
-      gpuIpcMemHandle_t handle{};
-      GPU_RT_CHECK(gpuIpcGetMemHandle(&handle, addr_v[i]));
-      std::memcpy(out_buf_v[i], &handle, sizeof(handle));
-    }
-    return true;
-  }
   auto* conn = conn_id_to_conn_[conn_id];
   for (size_t i = 0; i < num_iovs; ++i) {
     auto mhandle = mr_id_to_mr_[mr_id_v[i]]->mhandle_;
@@ -1196,25 +1103,6 @@ bool Endpoint::advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
             static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
             addr_v[i], len_v[i], out_buf_v[i]) == -1) {
       return false;
-    }
-  }
-  return true;
-}
-
-bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
-  py::gil_scoped_release release;
-
-  auto task = reinterpret_cast<Task*>(transfer_id);
-  if (task->type == TaskType::READ) {
-    auto rw_task = reinterpret_cast<RWTask*>(transfer_id);
-    *is_done = rw_task->done.load(std::memory_order_acquire);
-    if (*is_done) {
-      delete rw_task;
-    }
-  } else {
-    *is_done = task->done.load(std::memory_order_acquire);
-    if (*is_done) {
-      delete task;
     }
   }
   return true;
@@ -1571,6 +1459,294 @@ bool Endpoint::recv_ipc_async(uint64_t conn_id, void* data, size_t size,
   return true;
 }
 
+bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
+                         IpcTransferInfo const& info, bool inside_python) {
+  auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
+
+  CHECK(data != nullptr) << "write_ipc: data pointer is null!";
+
+  // Get connection info
+  Conn* conn;
+  {
+    std::shared_lock<std::shared_mutex> lock(conn_mu_);
+    auto it = conn_id_to_conn_.find(conn_id);
+    CHECK(it != conn_id_to_conn_.end())
+        << "Connection not found for conn_id: " << conn_id;
+    conn = it->second;
+  }
+
+  int orig_device;
+  GPU_RT_CHECK(gpuGetDevice(&orig_device));
+  auto dev_reset =
+      uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
+
+  // Open the remote IPC memory handle
+  void* raw_dst_ptr = nullptr;
+  GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
+  GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_dst_ptr, info.handle,
+                                   gpuIpcMemLazyEnablePeerAccess));
+
+  // Calculate destination pointer with offset
+  void* dst_ptr = reinterpret_cast<void*>(
+      reinterpret_cast<uintptr_t>(raw_dst_ptr) + info.offset);
+
+  // Perform the memory copy using multiple streams for better performance
+  std::vector<gpuStream_t>& dst_streams = ipc_streams_[conn->remote_gpu_idx_];
+  int num_streams =
+      std::min(dst_streams.size(),
+               size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
+  size_t chunk_size = size / num_streams;
+
+  for (int i = 0; i < num_streams; ++i) {
+    // Split data and dst_ptr into n_streams chunks
+    void* chunk_data = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(data) + i * chunk_size);
+    void* chunk_dst_ptr = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(dst_ptr) + i * chunk_size);
+    auto copy_size = i == num_streams - 1 ? size - i * chunk_size : chunk_size;
+
+    // Works for both intra-GPU and inter-GPU copy
+    GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst_ptr, chunk_data, copy_size,
+                                gpuMemcpyDeviceToDevice, dst_streams[i]));
+  }
+
+  // Wait for all streams to complete
+  for (auto& stream : dst_streams) {
+    GPU_RT_CHECK(gpuStreamSynchronize(stream));
+  }
+
+  // Close the IPC memory handle
+  GPU_RT_CHECK(gpuIpcCloseMemHandle(raw_dst_ptr));
+
+  return true;
+}
+
+bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
+                        IpcTransferInfo const& info, bool inside_python) {
+  auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
+
+  CHECK(data != nullptr) << "read_ipc: data pointer is null!";
+
+  // Get connection info
+  Conn* conn;
+  {
+    std::shared_lock<std::shared_mutex> lock(conn_mu_);
+    auto it = conn_id_to_conn_.find(conn_id);
+    CHECK(it != conn_id_to_conn_.end())
+        << "Connection not found for conn_id: " << conn_id;
+    conn = it->second;
+  }
+
+  int orig_device;
+  GPU_RT_CHECK(gpuGetDevice(&orig_device));
+  auto dev_reset =
+      uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
+
+  // Open the remote IPC memory handle
+  void* raw_src_ptr = nullptr;
+  GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
+  GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_src_ptr, info.handle,
+                                   gpuIpcMemLazyEnablePeerAccess));
+
+  // Calculate source pointer with offset
+  void* src_ptr = reinterpret_cast<void*>(
+      reinterpret_cast<uintptr_t>(raw_src_ptr) + info.offset);
+
+  // Perform the memory copy using multiple streams for better performance
+  std::vector<gpuStream_t>& src_streams = ipc_streams_[conn->remote_gpu_idx_];
+  int num_streams =
+      std::min(src_streams.size(),
+               size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
+  size_t chunk_size = size / num_streams;
+
+  for (int i = 0; i < num_streams; ++i) {
+    // Split src_ptr and data into n_streams chunks
+    void* chunk_src_ptr = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(src_ptr) + i * chunk_size);
+    void* chunk_data = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(data) + i * chunk_size);
+    auto copy_size = i == num_streams - 1 ? size - i * chunk_size : chunk_size;
+
+    // Works for both intra-GPU and inter-GPU copy
+    GPU_RT_CHECK(gpuMemcpyAsync(chunk_data, chunk_src_ptr, copy_size,
+                                gpuMemcpyDeviceToDevice, src_streams[i]));
+  }
+
+  // Wait for all streams to complete
+  for (auto& stream : src_streams) {
+    GPU_RT_CHECK(gpuStreamSynchronize(stream));
+  }
+
+  // Close the IPC memory handle
+  GPU_RT_CHECK(gpuIpcCloseMemHandle(raw_src_ptr));
+
+  return true;
+}
+
+bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
+                               IpcTransferInfo const& info,
+                               uint64_t* transfer_id) {
+  py::gil_scoped_release release;
+
+  // Create an IPC task for IPC write operation
+  IpcRwTask* task = new IpcRwTask{
+      .type = TaskType::WRITE_IPC,
+      .data = const_cast<void*>(data),
+      .size = size,
+      .conn_id = conn_id,
+      .mr_id = 0,  // Not used for IPC
+      .done = false,
+      .self_ptr = nullptr,
+      .ipc_info = info,
+  };
+  task->self_ptr = task;
+
+  *transfer_id = reinterpret_cast<uint64_t>(task);
+
+  // Enqueue the task for processing by proxy thread
+  while (jring_mp_enqueue_bulk(write_ipc_task_ring_, task, 1, nullptr) != 1) {
+  }
+
+  return true;
+}
+
+bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
+                              IpcTransferInfo const& info,
+                              uint64_t* transfer_id) {
+  py::gil_scoped_release release;
+
+  // Create an IPC task for IPC read operation
+  IpcRwTask* task = new IpcRwTask{
+      .type = TaskType::READ_IPC,
+      .data = data,
+      .size = size,
+      .conn_id = conn_id,
+      .mr_id = 0,  // Not used for IPC
+      .done = false,
+      .self_ptr = nullptr,
+      .ipc_info = info,
+  };
+  task->self_ptr = task;
+
+  *transfer_id = reinterpret_cast<uint64_t>(task);
+
+  // Enqueue the task for processing by proxy thread
+  while (jring_mp_enqueue_bulk(read_ipc_task_ring_, task, 1, nullptr) != 1) {
+  }
+
+  return true;
+}
+
+bool Endpoint::advertise_ipc(uint64_t conn_id, void* addr, size_t len,
+                             char* out_buf) {
+  py::gil_scoped_release release;
+
+  CHECK(addr != nullptr) << "advertise_ipc: addr pointer is null!";
+  CHECK(out_buf != nullptr) << "advertise_ipc: out_buf pointer is null!";
+
+  int orig_device;
+  GPU_RT_CHECK(gpuGetDevice(&orig_device));
+  auto dev_reset =
+      uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
+
+  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+
+  // Generate IPC memory handle for the address
+  IpcTransferInfo transfer_info = {};  // Initialize to zero
+  transfer_info.size = len;
+  transfer_info.operation = 1;  // response
+
+  // Calculate aligned address and offset
+  auto addr_aligned = reinterpret_cast<uintptr_t>(addr) & ~(kIpcAlignment - 1);
+  auto addr_offset = reinterpret_cast<uintptr_t>(addr) - addr_aligned;
+  transfer_info.offset = addr_offset;
+
+  GPU_RT_CHECK(gpuIpcGetMemHandle(&transfer_info.handle,
+                                  reinterpret_cast<void*>(addr_aligned)));
+
+  // Copy the transfer info to output buffer
+  std::memcpy(out_buf, &transfer_info, sizeof(transfer_info));
+
+  return true;
+}
+
+bool Endpoint::advertisev_ipc(uint64_t conn_id, std::vector<void*> addr_v,
+                              std::vector<size_t> len_v,
+                              std::vector<char*> out_buf_v, size_t num_iovs) {
+  py::gil_scoped_release release;
+
+  CHECK_EQ(addr_v.size(), num_iovs) << "addr_v size mismatch";
+  CHECK_EQ(len_v.size(), num_iovs) << "len_v size mismatch";
+  CHECK_EQ(out_buf_v.size(), num_iovs) << "out_buf_v size mismatch";
+
+  int orig_device;
+  GPU_RT_CHECK(gpuGetDevice(&orig_device));
+  auto dev_reset =
+      uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
+
+  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+
+  for (size_t i = 0; i < num_iovs; ++i) {
+    CHECK(addr_v[i] != nullptr)
+        << "advertisev_ipc: addr_v[" << i << "] is null!";
+    CHECK(out_buf_v[i] != nullptr)
+        << "advertisev_ipc: out_buf_v[" << i << "] is null!";
+
+    // Generate IPC memory handle for each address
+    IpcTransferInfo transfer_info = {};  // Initialize to zero
+    transfer_info.size = len_v[i];
+    transfer_info.operation = 1;  // response
+
+    // Calculate aligned address and offset
+    auto addr_aligned =
+        reinterpret_cast<uintptr_t>(addr_v[i]) & ~(kIpcAlignment - 1);
+    auto addr_offset = reinterpret_cast<uintptr_t>(addr_v[i]) - addr_aligned;
+    transfer_info.offset = addr_offset;
+
+    GPU_RT_CHECK(gpuIpcGetMemHandle(&transfer_info.handle,
+                                    reinterpret_cast<void*>(addr_aligned)));
+
+    // Copy the transfer info to output buffer
+    std::memcpy(out_buf_v[i], &transfer_info, sizeof(transfer_info));
+  }
+
+  return true;
+}
+
+bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
+  py::gil_scoped_release release;
+
+  auto task = reinterpret_cast<Task*>(transfer_id);
+  switch (task->type) {
+    case TaskType::READ_NET:
+    case TaskType::WRITE_NET: {
+      auto rw_task = reinterpret_cast<NetRwTask*>(transfer_id);
+      *is_done = rw_task->done.load(std::memory_order_acquire);
+      if (*is_done) {
+        delete rw_task;
+      }
+      break;
+    }
+    case TaskType::READ_IPC:
+    case TaskType::WRITE_IPC: {
+      auto ipc_task = reinterpret_cast<IpcRwTask*>(transfer_id);
+      *is_done = ipc_task->done.load(std::memory_order_acquire);
+      if (*is_done) {
+        delete ipc_task;
+      }
+      break;
+    }
+    default: {
+      *is_done = task->done.load(std::memory_order_acquire);
+      if (*is_done) {
+        delete task;
+      }
+      break;
+    }
+  }
+  return true;
+}
+
 void Endpoint::init_uds_socket() {
   // Create UDS socket path based on local GPU index
   uds_socket_path_ = get_uds_socket_path(local_gpu_idx_);
@@ -1629,7 +1805,8 @@ void Endpoint::cleanup_uds_socket() {
 void Endpoint::send_proxy_thread_func() {
   uccl::pin_thread_to_numa(numa_node_);
   Task task;
-  RWTask rw_task;
+  NetRwTask rw_task;
+  IpcRwTask ipc_task;
 
   while (!stop_.load(std::memory_order_acquire)) {
     if (jring_sc_dequeue_bulk(send_task_ring_, &task, 1, nullptr) == 1) {
@@ -1641,16 +1818,18 @@ void Endpoint::send_proxy_thread_func() {
       task.self_ptr->done.store(true, std::memory_order_release);
     }
 
-    if (jring_sc_dequeue_bulk(read_task_ring_, &rw_task, 1, nullptr) == 1) {
-      read(rw_task.conn_id, rw_task.mr_id, rw_task.data, rw_task.size,
-           rw_task.slot_item, false);
-      rw_task.self_ptr->done.store(true, std::memory_order_release);
-    }
-
-    if (jring_sc_dequeue_bulk(write_task_ring_, &rw_task, 1, nullptr) == 1) {
+    if (jring_sc_dequeue_bulk(write_net_task_ring_, &rw_task, 1, nullptr) ==
+        1) {
       write(rw_task.conn_id, rw_task.mr_id, rw_task.data, rw_task.size,
             rw_task.slot_item, false);
       rw_task.self_ptr->done.store(true, std::memory_order_release);
+    }
+
+    if (jring_sc_dequeue_bulk(write_ipc_task_ring_, &ipc_task, 1, nullptr) ==
+        1) {
+      write_ipc(ipc_task.conn_id, ipc_task.data, ipc_task.size,
+                ipc_task.ipc_info, false);
+      ipc_task.self_ptr->done.store(true, std::memory_order_release);
     }
   }
 }
@@ -1658,6 +1837,8 @@ void Endpoint::send_proxy_thread_func() {
 void Endpoint::recv_proxy_thread_func() {
   uccl::pin_thread_to_numa(numa_node_);
   Task task;
+  NetRwTask rw_task;
+  IpcRwTask ipc_task;
 
   while (!stop_.load(std::memory_order_acquire)) {
     if (jring_sc_dequeue_bulk(recv_task_ring_, &task, 1, nullptr) == 1) {
@@ -1667,6 +1848,19 @@ void Endpoint::recv_proxy_thread_func() {
         recv(task.conn_id, task.mr_id, task.data, task.size, false);
       }
       task.self_ptr->done.store(true, std::memory_order_release);
+    }
+
+    if (jring_sc_dequeue_bulk(read_net_task_ring_, &rw_task, 1, nullptr) == 1) {
+      read(rw_task.conn_id, rw_task.mr_id, rw_task.data, rw_task.size,
+           rw_task.slot_item, false);
+      rw_task.self_ptr->done.store(true, std::memory_order_release);
+    }
+
+    if (jring_sc_dequeue_bulk(read_ipc_task_ring_, &ipc_task, 1, nullptr) ==
+        1) {
+      read_ipc(ipc_task.conn_id, ipc_task.data, ipc_task.size,
+               ipc_task.ipc_info, false);
+      ipc_task.self_ptr->done.store(true, std::memory_order_release);
     }
   }
 }

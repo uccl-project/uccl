@@ -26,15 +26,6 @@ PYBIND11_MODULE(p2p, m) {
           "Connect to a remote server", py::arg("remote_ip_addr"),
           py::arg("remote_gpu_idx"), py::arg("remote_port") = -1)
       .def(
-          "connect",
-          [](Endpoint& self, py::bytes metadata) {
-            uint64_t conn_id;
-            bool success = self.connect(metadata, conn_id);
-            return py::make_tuple(success, conn_id);
-          },
-          "Connect to a remote server with endpoint-metadata blob",
-          py::arg("metadata"))
-      .def(
           "get_metadata",
           [](Endpoint& self) {
             std::vector<uint8_t> metadata = self.get_metadata();
@@ -315,20 +306,6 @@ PYBIND11_MODULE(p2p, m) {
           py::arg("conn_id"), py::arg("mr_id_v"), py::arg("ptr_v"),
           py::arg("size_v"), py::arg("meta_blob_v"), py::arg("num_iovs"))
       .def(
-          "write_ipc",
-          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
-             size_t size, py::object meta_blob) {
-            assert(conn_id == kNvlinkConn and not meta_blob.is_none());
-            std::string buf = py::cast<py::bytes>(meta_blob);
-            return self.write_ipc(conn_id, mr_id,
-                                  reinterpret_cast<void const*>(ptr), size,
-                                  buf.data(), buf.size());
-          },
-          "Write a data buffer via IPC (Inter-Process Communication) using "
-          "CUDA/HIP memory handles",
-          py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"),
-          py::arg("meta"))
-      .def(
           "advertise",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id,
              uint64_t ptr,  // raw pointer passed from Python
@@ -377,14 +354,6 @@ PYBIND11_MODULE(p2p, m) {
           "RDMA-WRITE",
           py::arg("conn_id"), py::arg("mr_id_v"), py::arg("ptr_v"),
           py::arg("size_v"), py::arg("num_iovs"))
-      .def(
-          "poll_async",
-          [](Endpoint& self, uint64_t transfer_id) {
-            bool is_done;
-            bool success = self.poll_async(transfer_id, &is_done);
-            return py::make_tuple(success, is_done);
-          },
-          "Poll the status of an asynchronous transfer", py::arg("transfer_id"))
       // IPC-specific functions for local connections via Unix Domain Sockets
       .def(
           "connect_local",
@@ -445,6 +414,116 @@ PYBIND11_MODULE(p2p, m) {
           },
           "Receive data asynchronously via IPC using CUDA/HIP memory handles",
           py::arg("conn_id"), py::arg("ptr"), py::arg("size"))
+      .def(
+          "write_ipc",
+          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
+             py::object info_blob) {
+            std::string buf = py::cast<py::bytes>(info_blob);
+            CHECK_EQ(buf.size(), sizeof(Endpoint::IpcTransferInfo))
+                << "IpcTransferInfo size mismatch";
+            Endpoint::IpcTransferInfo info;
+            std::memcpy(&info, buf.data(), sizeof(info));
+            return self.write_ipc(conn_id, reinterpret_cast<void const*>(ptr),
+                                  size, info);
+          },
+          "Write data via one-sided IPC using IpcTransferInfo",
+          py::arg("conn_id"), py::arg("ptr"), py::arg("size"), py::arg("info"))
+      .def(
+          "read_ipc",
+          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
+             py::object info_blob) {
+            std::string buf = py::cast<py::bytes>(info_blob);
+            CHECK_EQ(buf.size(), sizeof(Endpoint::IpcTransferInfo))
+                << "IpcTransferInfo size mismatch";
+            Endpoint::IpcTransferInfo info;
+            std::memcpy(&info, buf.data(), sizeof(info));
+            return self.read_ipc(conn_id, reinterpret_cast<void*>(ptr), size,
+                                 info);
+          },
+          "Read data via one-sided IPC using IpcTransferInfo",
+          py::arg("conn_id"), py::arg("ptr"), py::arg("size"), py::arg("info"))
+      .def(
+          "write_ipc_async",
+          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
+             py::object info_blob) {
+            std::string buf = py::cast<py::bytes>(info_blob);
+            CHECK_EQ(buf.size(), sizeof(Endpoint::IpcTransferInfo))
+                << "IpcTransferInfo size mismatch";
+            Endpoint::IpcTransferInfo info;
+            std::memcpy(&info, buf.data(), sizeof(info));
+            uint64_t transfer_id;
+            bool success = self.write_ipc_async(
+                conn_id, reinterpret_cast<void const*>(ptr), size, info,
+                &transfer_id);
+            return py::make_tuple(success, transfer_id);
+          },
+          "Write data asynchronously via one-sided IPC using IpcTransferInfo",
+          py::arg("conn_id"), py::arg("ptr"), py::arg("size"), py::arg("info"))
+      .def(
+          "read_ipc_async",
+          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
+             py::object info_blob) {
+            std::string buf = py::cast<py::bytes>(info_blob);
+            CHECK_EQ(buf.size(), sizeof(Endpoint::IpcTransferInfo))
+                << "IpcTransferInfo size mismatch";
+            Endpoint::IpcTransferInfo info;
+            std::memcpy(&info, buf.data(), sizeof(info));
+            uint64_t transfer_id;
+            bool success =
+                self.read_ipc_async(conn_id, reinterpret_cast<void*>(ptr), size,
+                                    info, &transfer_id);
+            return py::make_tuple(success, transfer_id);
+          },
+          "Read data asynchronously via one-sided IPC using IpcTransferInfo",
+          py::arg("conn_id"), py::arg("ptr"), py::arg("size"), py::arg("info"))
+      .def(
+          "advertise_ipc",
+          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
+            char serialized[sizeof(Endpoint::IpcTransferInfo)]{};
+            bool success = self.advertise_ipc(
+                conn_id, reinterpret_cast<void*>(ptr), size, serialized);
+            return py::make_tuple(success,
+                                  py::bytes(serialized, sizeof(serialized)));
+          },
+          "Advertise memory for IPC access and return IpcTransferInfo",
+          py::arg("conn_id"), py::arg("ptr"), py::arg("size"))
+      .def(
+          "advertisev_ipc",
+          [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> ptr_v,
+             std::vector<size_t> size_v) {
+            size_t num_iovs = ptr_v.size();
+            CHECK_EQ(size_v.size(), num_iovs) << "Size vector mismatch";
+
+            std::vector<void*> addr_v(num_iovs);
+            std::vector<char*> out_buf_v(num_iovs);
+            std::vector<std::string> buffers(num_iovs);
+
+            for (size_t i = 0; i < num_iovs; ++i) {
+              addr_v[i] = reinterpret_cast<void*>(ptr_v[i]);
+              buffers[i].resize(sizeof(Endpoint::IpcTransferInfo));
+              out_buf_v[i] = buffers[i].data();
+            }
+
+            bool success = self.advertisev_ipc(conn_id, addr_v, size_v,
+                                               out_buf_v, num_iovs);
+
+            std::vector<py::bytes> result_v;
+            for (size_t i = 0; i < num_iovs; ++i) {
+              result_v.push_back(py::bytes(buffers[i]));
+            }
+
+            return py::make_tuple(success, result_v);
+          },
+          "Advertise multiple memory regions for IPC access",
+          py::arg("conn_id"), py::arg("ptr_v"), py::arg("size_v"))
+      .def(
+          "poll_async",
+          [](Endpoint& self, uint64_t transfer_id) {
+            bool is_done;
+            bool success = self.poll_async(transfer_id, &is_done);
+            return py::make_tuple(success, is_done);
+          },
+          "Poll the status of an asynchronous transfer", py::arg("transfer_id"))
       .def(
           "conn_id_of_rank", &Endpoint::conn_id_of_rank,
           "Get the connection ID for a given peer rank (or UINT64_MAX if none)",

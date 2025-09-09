@@ -17,7 +17,6 @@
 #include <vector>
 
 namespace py = pybind11;
-constexpr uint64_t kNvlinkConn = UINT64_MAX;
 
 struct MR {
   uint64_t mr_id_;
@@ -58,8 +57,18 @@ class Endpoint {
   const uint64_t kRTTBytes = 1024 * 1024;
   const uint64_t kChunkSize = 1024 * 1024;
   const uint32_t kMaxInflightChunks = 8;
+  static constexpr size_t kIpcAlignment = 1ul << 20;
+  static constexpr size_t kIpcSizePerEngine = 1ul << 20;
 
  public:
+  // Prepare transfer info structure for receiving IPC handle
+  struct IpcTransferInfo {
+    gpuIpcMemHandle_t handle;
+    uintptr_t offset;
+    size_t size;
+    uint32_t operation;  // 0 = send_ipc request, 1 = recv_ipc response
+  };
+
   /*
    * Create engine threads running in background for a single interface. It also
    * opens a TCP listening thread waiting for incoming connections.
@@ -85,8 +94,6 @@ class Endpoint {
   bool connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
                uint64_t& conn_id);
 
-  bool connect(py::bytes const& metadata, uint64_t& conn_id);
-
   std::vector<uint8_t> get_metadata();
 
   /*
@@ -106,45 +113,17 @@ class Endpoint {
    */
   bool accept(std::string& ip_addr, int& remote_gpu_idx, uint64_t& conn_id);
 
-  /*
-   * Register the data with a specific interface. Typically, one data residing
-   * on one GPU only needs to register to one NIC. Even if the data is
-   * registered to multiple NICs, the GPU wouldn't have enough PCIe bandwidth
-   * for multiple NICs.
-   *
-   * input:
-   *   data: the data to register
-   *   size: the size of the data
-   * output:
-   *   mr_id: the ID of the MR
-   */
+  /*Register the data with a specific interface. */
   bool reg(void const* data, size_t size, uint64_t& mr_id);
 
   bool regv(std::vector<void const*> const& data_v,
             std::vector<size_t> const& size_v, std::vector<uint64_t>& mr_id_v);
 
-  /*
-   * Send data to the remote server. Blocking.
-   *
-   * input:
-   *   conn_id: the ID of the connection
-   *   mr_id: the ID of the data
-   *   data: the data to send
-   *   size: the size of the data
-   */
+  /*Send data to the remote server. Blocking. */
   bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
             bool inside_python = true);
 
-  /*
-   * Receive data from the remote server. Blocking.
-   *
-   * input:
-   *   conn_id: the ID of the connection
-   *   mr_id: the ID of the data
-   * output:
-   *   data: the data to receive
-   *   size: the size of the data
-   */
+  /*Receive data from the remote server. Blocking.*/
   bool recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
             bool inside_python = true);
 
@@ -166,15 +145,7 @@ class Endpoint {
              std::vector<void*> data_v, std::vector<size_t> size_v,
              size_t num_iovs);
 
-  /* Read data from the remote server. Blocking.
-   *
-   * input:
-   *   conn_id: the ID of the connection
-   *   mr_id: the ID of the data
-   *   dst: the destination buffer
-   *   size: the size of the data
-   *   slot_item: the slot item to use for the transfer
-   */
+  /* Read data from the remote server. Blocking. */
   bool read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
             uccl::FifoItem const& slot_item, bool inside_python = true);
 
@@ -212,26 +183,10 @@ class Endpoint {
                   std::vector<void*> addr_v, std::vector<size_t> len_v,
                   std::vector<char*> out_buf_v, size_t num_iovs);
 
-  /* Poll the status of the asynchronous receive. */
-  bool poll_async(uint64_t transfer_id, bool* is_done);
-
-  /*
-   * Connect to a local process via Unix Domain Socket.
-   *
-   * input:
-   *   remote_gpu_idx: the GPU index of the remote process
-   * output:
-   *   conn_id: the ID of the connection
-   */
+  /*Connect to a local process via Unix Domain Socket.*/
   bool connect_local(int remote_gpu_idx, uint64_t& conn_id);
 
-  /*
-   * Accept an incoming local connection via Unix Domain Socket.
-   *
-   * output:
-   *   remote_gpu_idx: the GPU index of the remote process
-   *   conn_id: the ID of the connection
-   */
+  /*Accept an incoming local connection via Unix Domain Socket. */
   bool accept_local(int& remote_gpu_idx, uint64_t& conn_id);
 
   /* Send data to the remote server via CUDA/HIP IPC. Blocking. The
@@ -248,6 +203,23 @@ class Endpoint {
 
   bool recv_ipc_async(uint64_t conn_id, void* data, size_t size,
                       uint64_t* transfer_id);
+
+  /* One-sided write and read via IPC. */
+  bool write_ipc(uint64_t conn_id, void const* data, size_t size,
+                 IpcTransferInfo const& info, bool inside_python = true);
+  bool read_ipc(uint64_t conn_id, void* data, size_t size,
+                IpcTransferInfo const& info, bool inside_python = true);
+  bool write_ipc_async(uint64_t conn_id, void const* data, size_t size,
+                       IpcTransferInfo const& info, uint64_t* transfer_id);
+  bool read_ipc_async(uint64_t conn_id, void* data, size_t size,
+                      IpcTransferInfo const& info, uint64_t* transfer_id);
+  bool advertise_ipc(uint64_t conn_id, void* addr, size_t len, char* out_buf);
+  bool advertisev_ipc(uint64_t conn_id, std::vector<void*> addr_v,
+                      std::vector<size_t> len_v, std::vector<char*> out_buf_v,
+                      size_t num_iovs);
+
+  /* Poll the status of the asynchronous receive. */
+  bool poll_async(uint64_t transfer_id, bool* is_done);
 
   int get_sock_fd(uint64_t conn_id) const {
     auto it = conn_id_to_conn_.find(conn_id);
@@ -294,7 +266,6 @@ class Endpoint {
   void cleanup_uds_socket();
 
   int local_gpu_idx_;
-  int remote_gpu_idx_;
   uint32_t num_cpus_;
   int numa_node_;
 
@@ -323,20 +294,6 @@ class Endpoint {
   std::vector<gpuStream_t> streams_;
   std::vector<std::vector<gpuStream_t>> ipc_streams_;
 
-  static constexpr size_t kIpcAlignment = 1ul << 20;
-  static constexpr size_t kIpcSizePerEngine = 1ul << 20;
-  // Prepare transfer info structure for receiving IPC handle
-  struct IpcTransferInfo {
-    gpuIpcMemHandle_t handle;
-    uintptr_t offset;
-    size_t size;
-    uint32_t operation;  // 0 = send_ipc request, 1 = recv_ipc response
-  };
-
-  struct IpcEventInfo {
-    gpuIpcEventHandle_t event_handle;
-  };
-
   // IPC Buffer cache
   mutable std::shared_mutex ipc_cache_mu_;
   std::unordered_map<uint64_t, std::unordered_map<void*, struct IpcCache>>
@@ -345,12 +302,14 @@ class Endpoint {
   static constexpr size_t kTaskRingSize = 1024;
 
   enum class TaskType {
-    SEND,
-    RECV,
-    READ,
-    WRITE,
+    SEND_NET,
+    RECV_NET,
     SEND_IPC,
     RECV_IPC,
+    WRITE_NET,
+    READ_NET,
+    WRITE_IPC,
+    READ_IPC,
   };
 
   struct alignas(64) Task {
@@ -364,7 +323,7 @@ class Endpoint {
     Task* self_ptr;
   };
 
-  struct alignas(64) RWTask {
+  struct alignas(64) NetRwTask {
     TaskType type;
     void* data;
     size_t size;
@@ -372,14 +331,31 @@ class Endpoint {
     uint64_t mr_id;
     std::atomic<bool> done;
     // For proxy to access the task.done
-    RWTask* self_ptr;
+    NetRwTask* self_ptr;
     uccl::FifoItem slot_item;
   };
 
+  struct alignas(64) IpcRwTask {
+    TaskType type;
+    void* data;
+    size_t size;
+    uint64_t conn_id;
+    uint64_t mr_id;
+    std::atomic<bool> done;
+    // For proxy to access the task.done
+    IpcRwTask* self_ptr;
+    IpcTransferInfo ipc_info;
+  };
+
+  // For both net and ipc send/recv tasks.
   jring_t* send_task_ring_;
   jring_t* recv_task_ring_;
-  jring_t* read_task_ring_;
-  jring_t* write_task_ring_;
+  // For net read/write tasks.
+  jring_t* read_net_task_ring_;
+  jring_t* write_net_task_ring_;
+  // For ipc read/write tasks.
+  jring_t* read_ipc_task_ring_;
+  jring_t* write_ipc_task_ring_;
 
   std::atomic<bool> stop_{false};
   std::thread send_proxy_thread_;
