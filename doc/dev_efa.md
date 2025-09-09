@@ -9,9 +9,10 @@ Using the following commands to install necessary kernel modules for EFA directl
 
 ```bash
 # Latest version of aws-efa-installer should also work. 
-curl -O https://efa-installer.amazonaws.com/aws-efa-installer-1.34.0.tar.gz
-tar -xf aws-efa-installer-1.34.0.tar.gz && cd aws-efa-installer
+curl -O https://efa-installer.amazonaws.com/aws-efa-installer-1.42.0.tar.gz
+tar -xf aws-efa-installer-1.42.0.tar.gz && cd aws-efa-installer
 sudo ./efa_installer.sh -y
+sudo modprobe efa_nv_peermem || true
 ```
 
 Make sure you haveed install docker. Then run the following and log back in. 
@@ -36,7 +37,7 @@ make src.build -j NVCC_GENCODE="-gencode=arch=compute_80,code=sm_80"
 
 # Build nccl-tests; consider "conda deactivate" when hitting dependency errors
 cd $UCCL_HOME/thirdparty/nccl-tests
-make MPI=1 MPI_HOME=/opt/amazon/openmpi CUDA_HOME=/usr/local/cuda NCCL_HOME=$UCCL_HOME/thirdparty/nccl-sg/build -j
+make MPI=1 MPI_HOME=/opt/amazon/openmpi CUDA_HOME=/usr/local/cuda NCCL_HOME=$UCCL_HOME/thirdparty/nccl/build -j
 ```
 
 ## Building EFA plugin
