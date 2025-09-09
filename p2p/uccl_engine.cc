@@ -349,9 +349,6 @@ void listener_thread_func(uccl_conn_t* conn) {
       if (!conn->listener_running) {
         break;
       }
-      // Error receiving metadata or incomplete metadata, sleep briefly before
-      // retrying
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
       continue;
     }
     std::cout << "Received metadata: " << md.op << " " << md.data_ptr << " "
@@ -365,13 +362,18 @@ void listener_thread_func(uccl_conn_t* conn) {
     std::cout << "Local memory registered for address: " << md.data_ptr
               << std::endl;
     auto mr_id = local_mem_iter->second;
-    char out_buf[sizeof(uccl::FifoItem)];
     switch (md.op) {
       case UCCL_READ: {
+        char out_buf[sizeof(uccl::FifoItem)];
         conn->engine->endpoint->advertise(
             conn->conn_id, mr_id, (void*)md.data_ptr, md.data_size, out_buf);
+
+        metadata_t response_md;
+        response_md.op = UCCL_FIFO;
+        memcpy(response_md.fifo_buf, out_buf, sizeof(uccl::FifoItem));
+
         ssize_t result =
-            send(conn->sock_fd, out_buf, sizeof(uccl::FifoItem), 0);
+            send(conn->sock_fd, &response_md, sizeof(metadata_t), 0);
         if (result < 0) {
           std::cerr << "Failed to send FifoItem data: " << strerror(errno)
                     << std::endl;
@@ -417,7 +419,7 @@ int uccl_engine_get_fifo_item(uccl_conn_t* conn, void* fifo_item) {
 
   std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
   auto it = fifo_item_map.find(conn);
-  if (it == fifo_item_map.end()) {  
+  if (it == fifo_item_map.end()) {
     return -1;
   }
   if (it->second->is_valid) {
