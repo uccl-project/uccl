@@ -129,9 +129,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   if (S.context) return;  // already initialized
 
   int num_devices = 0;
-  printf("Getting IB devices list\n");
   struct ibv_device** dev_list = ibv_get_device_list(&num_devices);
-  printf("Found %d IB devices\n", num_devices);
   if (!dev_list) {
     perror("Failed to get IB devices list");
     exit(1);
@@ -141,10 +139,8 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   int gpu_idx = 0;
   // Ranked by GPU idx
   auto gpu_cards = uccl::get_gpu_cards();
-  printf("after get_gpu_cards\n");
   // Ranked by RDMA NIC name (not the ibv_get_device_list order)
   auto ib_nics = uccl::get_rdma_nics();
-  printf("after get_rdma_nics\n");
   // Get GPU pcie path
   auto gpu_device_path = gpu_cards[gpu_idx];
   // Find the RDMA NIC that is closest to the GPU.
@@ -154,7 +150,6 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
                uccl::cal_pcie_distance(gpu_device_path, b.second);
       });
   auto selected_nic_name = ib_nic_it->first;
-  printf("after ib_nic_it->first: %s\n", selected_nic_name.c_str());
   int selected_dev_idx = -1;
   for (int i = 0; i < num_devices; i++) {
     if (strcmp(ibv_get_device_name(dev_list[i]), selected_nic_name.c_str()) ==
@@ -164,7 +159,6 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     }
   }
   CHECK(selected_dev_idx != -1) << "Selected RDMA NIC not found";
-  printf("before ibv_open_device: %d\n", selected_dev_idx);
   S.context = ibv_open_device(dev_list[selected_dev_idx]);
   if (!S.context) {
     perror("Failed to open device");
@@ -174,9 +168,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
          selected_nic_name.c_str(), selected_dev_idx, gpu_idx);
 
   ibv_free_device_list(dev_list);
-    printf("Allocating PD\n");
   S.pd = ibv_alloc_pd(S.context);
-  printf("after ibv_alloc_pd\n");
   if (!S.pd) {
     perror("Failed to allocate PD");
     exit(1);
@@ -188,11 +180,9 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
                               IBV_ACCESS_REMOTE_ATOMIC |
                               IBV_ACCESS_RELAXED_ORDERING);
 #else
-  printf("before ibv_reg_mr_iova2: iova=0x%lx\n", iova);
   S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
                               IBV_ACCESS_RELAXED_ORDERING);
-  printf("after ibv_reg_mr_iova2\n");
 #endif
 
   if (!S.mr) {

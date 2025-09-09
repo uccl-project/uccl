@@ -86,9 +86,7 @@ void Proxy::init_common() {
   ctx_by_tag_.clear();
   ctx_by_tag_.resize(ctxs_for_all_ranks_.size() + 1, nullptr);
   // Per peer QP initialization
-  printf("Rank %d initializing %d per-peer QPs\n", my_rank, num_ranks - 1);
   for (int peer = 0; peer < num_ranks; ++peer) {
-    printf("Peer %d: \n", peer);
     auto& c = *ctxs_for_all_ranks_[peer];
 
     c.tag = next_tag++;

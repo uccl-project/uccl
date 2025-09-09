@@ -84,26 +84,20 @@ class Buffer:
             low_latency_mode,
             explicitly_destroy,
         )
-        print("[rank %d] Buffer runtime created." % self.rank, flush=True)
         self.runtime.set_rdma_buffer_raw(rdma_buffer_ptr)
-        print("[rank %d] RDMA buffer set." % self.rank, flush=True)
 
         # Synchronize device IDs
         device_ids = [
             None,
         ] * self.group_size
-        print("[rank %d] Gathering device IDs..." % self.rank, flush=True)
         local_device_id = self.runtime.get_local_device_id()
-        print("[rank %d] Local device ID: %d, group_size: %d" % (self.rank, local_device_id, self.group_size), flush=True)
         dist.all_gather_object(device_ids, local_device_id, group)
-        print("[rank %d] Device IDs gathered: %s" % (self.rank, device_ids), flush=True)
         # Synchronize IPC handles
         ipc_handles = [
             None,
         ] * self.group_size
         local_ipc_handle = self.runtime.get_local_ipc_handle()
         dist.all_gather_object(ipc_handles, local_ipc_handle, group)
-        print("[rank %d] IPC handles gathered." % self.rank, flush=True)
 
         # Synchronize NVSHMEM unique IDs
         root_unique_id = None
@@ -146,9 +140,7 @@ class Buffer:
             ]
         """
         # Make CPP runtime available
-        print("[rank %d] Making runtime available..." % self.rank, flush=True)
         self.runtime.sync(device_ids, ipc_handles, root_unique_id)
-        print("[rank %d] Runtime is available." % self.rank, flush=True)
         assert self.runtime.is_available()
 
     def reset_rdma_buffer(self):
