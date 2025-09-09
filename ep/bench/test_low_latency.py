@@ -2,13 +2,13 @@
 This is the same test_low_latency.py test in DeepEP's repo.
 On first node:
 torchrun --nnodes=2 --nproc_per_node=1 --node_rank=0 \
-  --master_addr=10.1.209.224 --master_port=12355 \
+  --master_addr=10.1.227.34 --master_port=12355 \
   bench/test_low_latency.py --num-tokens=128 \
   --hidden=7168 --num-topk=1 --num-experts=28
 
 On second node:
 torchrun --nnodes=2 --nproc_per_node=1 --node_rank=1 \
-  --master_addr=10.1.209.224 --master_port=12355 \
+  --master_addr=10.1.227.34 --master_port=12355 \
   bench/test_low_latency.py --num-tokens=128 \
   --hidden=7168 --num-topk=1 --num-experts=28
 """

@@ -78,14 +78,6 @@ void Proxy::init_common() {
   printf("[PROXY_INIT] Atomic buffer at %p, size %zu bytes\n",
          ctx_.atomic_old_values_buf, atomic_buf_size);
 
-  // Add to debug file for core issue tracking
-  FILE* debug_file = fopen("/tmp/uccl_debug.txt", "a");
-  if (debug_file) {
-    fprintf(debug_file,
-            "[PROXY_INIT] Block %d: remote_addr=0x%lx, local_buffer=0x%lx\n",
-            cfg_.block_idx, ctx_.remote_addr, (uintptr_t)cfg_.gpu_buffer);
-    fclose(debug_file);
-  }
   int num_ranks = ctxs_for_all_ranks_.size();
   local_infos_.assign(num_ranks, RDMAConnectionInfo{});
   remote_infos_.assign(num_ranks, RDMAConnectionInfo{});
@@ -93,15 +85,10 @@ void Proxy::init_common() {
   uint32_t next_tag = 1;
   ctx_by_tag_.clear();
   ctx_by_tag_.resize(ctxs_for_all_ranks_.size() + 1, nullptr);
-  cudaError_t err =
-      cudaStreamCreateWithFlags(&ctx_.atomic_stream, cudaStreamNonBlocking);
-  if (err != cudaSuccess) {
-    fprintf(stderr, "cudaStreamCreateWithFlags failed: %s\n",
-            cudaGetErrorString(err));
-    std::abort();
-  }
   // Per peer QP initialization
+  printf("Rank %d initializing %d per-peer QPs\n", my_rank, num_ranks - 1);
   for (int peer = 0; peer < num_ranks; ++peer) {
+    printf("Peer %d: \n", peer);
     auto& c = *ctxs_for_all_ranks_[peer];
 
     c.tag = next_tag++;
@@ -115,8 +102,6 @@ void Proxy::init_common() {
     // NOTE(MaoZiming): each context can share the same cq, pd, mr.
     // but the qp must be different.
     c.cq = ctx_.cq;
-    c.atomic_stream = ctx_.atomic_stream;
-
     create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
                          &local_infos_[peer], my_rank);
     modify_qp_to_init(c);
@@ -466,6 +451,9 @@ void Proxy::post_atomic_operations(std::vector<uint64_t> const& wrs_to_post,
   for (size_t i = 0; i < wrs_to_post.size(); ++i) {
     if (cmds_to_post[i].dst_rank == static_cast<uint32_t>(my_rank)) {
       // NOTE(MaoZiming): this should not happen.
+      fprintf(stderr,
+              "Error: atomic operation to self (rank %d) should not happen\n",
+              my_rank);
       std::abort();
       continue;
     } else {
