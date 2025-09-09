@@ -391,7 +391,7 @@ void listener_thread_func(uccl_conn_t* conn) {
         conn->recv_thread_pool->enqueue(async_recv_worker, conn, mr_id,
                                         (void*)md.data_ptr, md.data_size);
         break;
-      case UCCL_FIFO:
+      case UCCL_FIFO: {
         std::cout << "Received & Stored FIFO item" << std::endl;
         // Store fifo_item in the hashmap for this connection
         uccl::FifoItem fifo_item;
@@ -405,6 +405,7 @@ void listener_thread_func(uccl_conn_t* conn) {
           fifo_item_map[conn] = f_item;
         }
         break;
+      }
       default:
         std::cerr << "Invalid operation type: " << md.op << std::endl;
         continue;
