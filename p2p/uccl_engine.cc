@@ -107,6 +107,8 @@ struct uccl_mr {
 };
 
 std::unordered_map<uintptr_t, uint64_t> mem_reg_info;
+std::unordered_map<uccl_conn_t*, fifo_item_t*> fifo_item_map;
+std::mutex fifo_item_map_mutex;
 
 // Forward declaration
 void listener_thread_func(uccl_conn_t* conn);
@@ -299,6 +301,15 @@ void uccl_engine_conn_destroy(uccl_conn_t* conn) {
       conn->recv_thread_pool->force_destroy();
       delete conn->recv_thread_pool;
     }
+    // Clean up fifo_item for this connection
+    {
+      std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
+      auto it = fifo_item_map.find(conn);
+      if (it != fifo_item_map.end()) {
+        delete it->second;  // Free the fifo_item_t
+        fifo_item_map.erase(it);
+      }
+    }
     delete conn;
   }
 }
@@ -367,6 +378,20 @@ void listener_thread_func(uccl_conn_t* conn) {
         conn->recv_thread_pool->enqueue(async_recv_worker, conn, mr_id,
                                         (void*)md.data_ptr, md.data_size);
         break;
+      case UCCL_FIFO:
+        std::cout << "Received & Stored FIFO item" << std::endl;
+        // Store fifo_item in the hashmap for this connection
+        uccl::FifoItem fifo_item;
+        memcpy(&fifo_item, md.fifo_buf, sizeof(uccl::FifoItem));
+        fifo_item_t* f_item = new fifo_item_t;
+        f_item->fifo_item = fifo_item;
+        f_item->is_valid = true;
+
+        {
+          std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
+          fifo_item_map[conn] = f_item;
+        }
+        break;
       default:
         std::cerr << "Invalid operation type: " << md.op << std::endl;
         continue;
@@ -379,6 +404,23 @@ void listener_thread_func(uccl_conn_t* conn) {
 int uccl_engine_get_sock_fd(uccl_conn_t* conn) {
   if (!conn) return -1;
   return conn->sock_fd;
+}
+
+int uccl_engine_get_fifo_item(uccl_conn_t* conn, uccl::FifoItem* fifo_item) {
+  if (!conn || !fifo_item) return -1;
+
+  std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
+  auto it = fifo_item_map.find(conn);
+  if (it == fifo_item_map.end()) {
+    return -1;
+  }
+  if (it->second->is_valid) {
+    *fifo_item = it->second->fifo_item;
+    it->second->is_valid = false;
+    return 0;
+  } else {
+    return -1;
+  }
 }
 
 int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {

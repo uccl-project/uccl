@@ -1,6 +1,7 @@
 // ... existing code ...
 #pragma once
 
+#include <unordered_map>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -17,11 +18,17 @@ typedef struct uccl_conn uccl_conn_t;
 // Handle for a memory region
 typedef struct uccl_mr uccl_mr_t;
 
+typedef struct {
+  uccl::FifoItem fifo_item;
+  bool is_valid;
+} fifo_item_t;
+
 // UCCL operation types
-enum uccl_op_type { UCCL_READ = 0, UCCL_WRITE = 1 };
+enum uccl_op_type { UCCL_READ = 0, UCCL_WRITE = 1, UCCL_FIFO = 2 };
 
 typedef struct metadata {
-  uccl_op_type op;    // READ/WRITE
+  uccl_op_type op;  // READ/WRITE/FIFO
+  char fifo_buf[sizeof(uccl::FifoItem)];
   uint64_t data_ptr;  // Memory address for data reception
   size_t data_size;   // Size of data to receive
 } metadata_t;
@@ -88,6 +95,8 @@ uccl_mr_t* uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size);
  */
 int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
                      size_t size, void* slot_item, uint64_t* transfer_id);
+
+int uccl_engine_get_fifo_item(uccl_conn_t* conn, uccl::FifoItem* fifo_item);
 
 /**
  * Send data (Non blocking).

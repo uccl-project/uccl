@@ -446,7 +446,8 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
 
 bool Endpoint::send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
                         size_t size, void const* meta, size_t meta_len) {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
   DCHECK(size <= 0xffffffff);
 
   DCHECK(meta_len == sizeof(gpuIpcMemHandle_t));
@@ -609,7 +610,8 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void*> data_v, std::vector<size_t> size_v,
                      size_t num_iovs) {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
   auto conn = conn_id_to_conn_[conn_id];
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
@@ -691,7 +693,8 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void*> dst_v, std::vector<size_t> size_v,
                      std::vector<uccl::FifoItem> slot_item_v, size_t num_iovs) {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
   auto conn = conn_id_to_conn_[conn_id];
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
@@ -781,7 +784,8 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
 bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
                     uccl::FifoItem const& slot_item, bool inside_python) {
-  auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
   if (!ucclParamRCMode()) {
     DCHECK(false) << "RDMA READ is only supported in RC mode, toggle RCMODE to "
@@ -851,7 +855,8 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
 bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
                           size_t size, uccl::FifoItem const& slot_item,
                           uint64_t* transfer_id) {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
   RWTask* rw_task = new RWTask{
       .type = TaskType::READ,
@@ -876,7 +881,8 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
 bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
                            size_t size, uccl::FifoItem const& slot_item,
                            uint64_t* transfer_id) {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
   RWTask* rw_task = new RWTask{
       .type = TaskType::WRITE,
@@ -902,7 +908,8 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                       std::vector<void*> src_v, std::vector<size_t> size_v,
                       std::vector<uccl::FifoItem> slot_item_v,
                       size_t num_iovs) {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
   auto conn = conn_id_to_conn_[conn_id];
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
@@ -1061,7 +1068,8 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
 bool Endpoint::advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                           std::vector<void*> addr_v, std::vector<size_t> len_v,
                           std::vector<char*> out_buf_v, size_t num_iovs) {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
   if (conn_id == kNvlinkConn) {
     GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
     for (size_t i = 0; i < num_iovs; ++i) {
@@ -1085,7 +1093,8 @@ bool Endpoint::advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
 bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
                          size_t len, char* out_buf) {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
   if (conn_id == kNvlinkConn) {
     GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
@@ -1150,7 +1159,8 @@ void Endpoint::recv_proxy_thread_func() {
 }
 
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
   auto task = reinterpret_cast<Task*>(transfer_id);
   if (task->type == TaskType::READ) {
@@ -1479,7 +1489,8 @@ void Endpoint::cleanup_uds_socket() {
 }
 
 bool Endpoint::connect_local(int remote_gpu_idx, uint64_t& conn_id) {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
   std::cout << "Connecting to remote GPU " << remote_gpu_idx << std::endl;
 
   std::string remote_socket_path = get_uds_socket_path(remote_gpu_idx);
@@ -1523,7 +1534,8 @@ bool Endpoint::connect_local(int remote_gpu_idx, uint64_t& conn_id) {
 }
 
 bool Endpoint::accept_local(int& remote_gpu_idx, uint64_t& conn_id) {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
   std::cout << "Waiting to accept UDS connection" << std::endl;
 
   CHECK(uds_listen_fd_ >= 0) << "UDS socket not initialized";
