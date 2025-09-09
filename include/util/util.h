@@ -1147,6 +1147,9 @@ static bool is_bdf(std::string const& s) {
   return std::regex_match(s, re);
 }
 
+
+
+
 static int cal_pcie_distance(fs::path const& devA, fs::path const& devB) {
   auto devA_parent = devA.parent_path();
   auto devB_parent = devB.parent_path();
@@ -1183,6 +1186,15 @@ static int cal_pcie_distance(fs::path const& devA, fs::path const& devB) {
   }
   // Distance = remaining unique hops in each chain
   return static_cast<int>(i + j);
+}
+
+static uint32_t safe_pcie_distance(const std::filesystem::path& gpu,
+                                   const std::filesystem::path& nic) {
+  try {
+    return cal_pcie_distance(gpu, nic);
+  } catch (...) {
+    return UINT32_MAX / 2; // Treat as "very far", but don't crash
+  }
 }
 
 static inline std::string normalize_pci_bus_id(std::string const& pci_bus_id) {

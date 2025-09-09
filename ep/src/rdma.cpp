@@ -24,6 +24,7 @@
 #include <unordered_set>
 #include <vector>
 #include <fcntl.h>
+#include <algorithm>
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
@@ -139,15 +140,23 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   int gpu_idx = 0;
   // Ranked by GPU idx
   auto gpu_cards = uccl::get_gpu_cards();
+  printf("Available GPU cards:\n");
+  for (size_t i = 0; i < gpu_cards.size(); i++) {
+    printf("  GPU %zu: %s\n", i, gpu_cards[i].c_str());
+  }
   // Ranked by RDMA NIC name (not the ibv_get_device_list order)
   auto ib_nics = uccl::get_rdma_nics();
+  printf("Available RDMA NICs:\n");
+  for (auto const& nic : ib_nics) {
+    printf("  NIC: %s at %s\n", nic.first.c_str(), nic.second.c_str());
+  }
   // Get GPU pcie path
   auto gpu_device_path = gpu_cards[gpu_idx];
   // Find the RDMA NIC that is closest to the GPU.
   auto ib_nic_it = std::min_element(
       ib_nics.begin(), ib_nics.end(), [&](auto const& a, auto const& b) {
-        return uccl::cal_pcie_distance(gpu_device_path, a.second) <
-               uccl::cal_pcie_distance(gpu_device_path, b.second);
+        return uccl::safe_pcie_distance(gpu_device_path, a.second) <
+               uccl::safe_pcie_distance(gpu_device_path, b.second);
       });
   auto selected_nic_name = ib_nic_it->first;
   int selected_dev_idx = -1;
@@ -175,10 +184,13 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   }
   uint64_t iova = (uintptr_t)gpu_buf;
 #ifndef EFA
+  printf("Registering MR with iova=0x%lx\n", iova);
   S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
                               IBV_ACCESS_REMOTE_ATOMIC |
                               IBV_ACCESS_RELAXED_ORDERING);
+  printf("Registered MR with lkey=0x%x, rkey=0x%x\n", S.mr->lkey,
+         S.mr->rkey);
 #else
   S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
@@ -625,7 +637,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              std::vector<uint64_t> const& wrs_to_post,
                              std::vector<TransferCmd> const& cmds_to_post,
                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                             int my_rank, int block_idx) {
+                             int my_rank, int block_idx, std::unordered_set<uint64_t>&finished_wrs, std::mutex& finished_wrs_mutex) {
   if (num_wrs == 0) return;
   if (wrs_to_post.size() != num_wrs || cmds_to_post.size() != num_wrs) {
     fprintf(stderr,
@@ -773,19 +785,27 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
     }
 #endif
     S.posted.fetch_add(k, std::memory_order_relaxed);
-    if (S.wr_id_to_wr_ids.find(batch_tail_wr) != S.wr_id_to_wr_ids.end()) {
-      fprintf(stderr,
-              "Error: tail wr_id %lu already exists in wr_id_to_wr_ids "
-              "(dst_rank=%d)\n",
-              batch_tail_wr, dst_rank);
-      std::abort();
+    auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
+    if (!inserted) {
+        fprintf(stderr,
+                "block_idx: %d, Error: tail wr_id %lu already exists (map=%p, size=%zu, dst_rank=%d)\n",
+                block_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
+                S.wr_id_to_wr_ids.size(), dst_rank);
+        std::abort();
+    } else {
+      std::lock_guard<std::mutex> lock(finished_wrs_mutex);
+      for (auto const& wr_id : it->second) {
+        finished_wrs.insert(wr_id);
+      }
     }
-    S.wr_id_to_wr_ids[batch_tail_wr] = std::move(wr_ids);
+    fprintf(stderr,"block_idx: %d, Posted batch to dst_rank %d, batch_tail_wr: %lu, map=%p\n",
+          block_idx, dst_rank, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
   }
 }
 
 void local_process_completions(ProxyCtx& S,
                                std::unordered_set<uint64_t>& finished_wrs,
+                               std::unordered_set<uint64_t>& acked_wrs,
                                std::mutex& finished_wrs_mutex, int thread_idx,
                                ibv_wc* wc, int ne,
                                std::vector<ProxyCtx*>& ctx_by_tag) {
@@ -807,27 +827,40 @@ void local_process_completions(ProxyCtx& S,
     switch (wc[i].opcode) {
       case IBV_WC_RDMA_WRITE:
       case IBV_WC_SEND: {
-        std::lock_guard<std::mutex> lock(finished_wrs_mutex);
-        for (auto const& wr_id : S.wr_id_to_wr_ids[wc[i].wr_id]) {
-          finished_wrs.insert(wr_id);
-          send_completed++;
-        }
-        S.wr_id_to_wr_ids.erase(wc[i].wr_id);
+        send_completed++;
       } break;
       case IBV_WC_RECV:
         if (wc[i].wc_flags & IBV_WC_WITH_IMM &&
             !((ntohl(wc[i].imm_data) >> 31) & 0x1)) {
           const uint32_t slot = wr_slot(wc[i].wr_id);
           uint64_t wr_done = static_cast<uint64_t>(ntohl(wc[i].imm_data));
-          // Handle regular operation ACK with sequential tracking
-          if (!S.has_received_ack || wr_done >= S.largest_completed_wr) {
-            S.largest_completed_wr = wr_done;
-            S.has_received_ack = true;
-          } else {
-            S.largest_completed_wr = std::max(S.largest_completed_wr, wr_done);
-            S.has_received_ack = true;
+          {
+            std::lock_guard<std::mutex> lock(finished_wrs_mutex);
+            if (S.wr_id_to_wr_ids.find(wr_done) ==
+                S.wr_id_to_wr_ids.end()) {
+              fprintf(stderr,
+                      "Error: received ACK for unknown wr_id %lu (slot=%u)\n",
+                      wr_done, slot);
+              std::abort();
+            }
+            auto &vec = S.wr_id_to_wr_ids[wr_done];
+            if (!vec.empty()) {
+                auto [min_it, max_it] = std::minmax_element(vec.begin(), vec.end());
+                printf("Local thread %d: received ACK for wr_id=%lu, slot=%u. wr_id_to_wr_ids[%lu]: size=%zu, min=%lu, max=%lu\n",
+                      thread_idx, wr_done, slot, wr_done, vec.size(), *min_it, *max_it);
+                for (auto const &wr_id : vec) {
+                    acked_wrs.insert(wr_id);
+                    if (finished_wrs.find(wr_id) ==
+                        finished_wrs.end()) {
+                      fprintf(stderr,
+                              "Error: finished_wrs received ACK for unknown wr_id %lu\n",
+                              wr_id);
+                      std::abort();
+                    }
+                }
+            }
+            S.wr_id_to_wr_ids.erase(wr_done);
           }
-          // printf("wr_done: %lu\n", wr_done);
           const uint32_t tag = wr_tag(wc[i].wr_id);
           ProxyCtx& S_ack = *ctx_by_tag[tag];
           ibv_sge sge = {
@@ -862,6 +895,7 @@ void local_process_completions(ProxyCtx& S,
 
 void local_poll_completions(ProxyCtx& S,
                             std::unordered_set<uint64_t>& finished_wrs,
+                            std::unordered_set<uint64_t>& acked_wrs,
                             std::mutex& finished_wrs_mutex, int thread_idx,
                             std::vector<ProxyCtx*>& ctx_by_tag) {
   struct ibv_wc wc[kMaxOutstandingSends];
@@ -888,11 +922,12 @@ void local_poll_completions(ProxyCtx& S,
   ne = ibv_poll_cq(S.cq, kMaxOutstandingSends, wc);
 #endif
   // printf("Local poll thread %d polled %d completions\n", thread_idx, ne);
-  local_process_completions(S, finished_wrs, finished_wrs_mutex, thread_idx, wc,
+  local_process_completions(S, finished_wrs, acked_wrs, finished_wrs_mutex, thread_idx, wc,
                             ne, ctx_by_tag);
 }
 
 void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
+                  std::unordered_set<uint64_t>& acked_wrs,
                   std::mutex& finished_wrs_mutex, int thread_idx,
                   CopyRingBuffer& g_ring, std::vector<ProxyCtx*>& ctx_by_tag,
                   void* atomic_buffer_ptr) {
@@ -920,7 +955,7 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
   ne = ibv_poll_cq(S.cq, kMaxOutstandingSends, wc);
 #endif
   // printf("Poll CQ Dual thread %d polled %d completions\n", thread_idx, ne);
-  local_process_completions(S, finished_wrs, finished_wrs_mutex, thread_idx, wc,
+  local_process_completions(S, finished_wrs, acked_wrs, finished_wrs_mutex, thread_idx, wc,
                             ne, ctx_by_tag);
   remote_process_completions(S, thread_idx, g_ring, ne, wc, ctx_by_tag,
                              atomic_buffer_ptr);
@@ -1122,6 +1157,7 @@ void remote_send_ack(ProxyCtx* ctx, struct ibv_qp* ack_qp, uint64_t& wr_id,
             strerror(ret));
     std::abort();
   }
+  printf("Remote worker %d: sent ACK for wr_id=%lu\n", worker_idx, wr_id);
 
 #else
   ibv_send_wr wr = {};

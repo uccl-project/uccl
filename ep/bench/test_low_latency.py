@@ -145,11 +145,16 @@ def test_main(
     for current_x in x_list:
         # for return_recv_hook in (True, False):
         for return_recv_hook in (True,):
-            # for dispatch_use_fp8 in (False, True):
-            for dispatch_use_fp8 in (False,):
+            for dispatch_use_fp8 in (False, True):
+            # for dispatch_use_fp8 in (False,):
                 for round_scale in (False,):
                     for round_scale in (False, True) if dispatch_use_fp8 else (False,):
                         for use_ue8m0 in (False, True) if round_scale else (False,):
+                            print("Start experiment with settings:"
+                                  f" return_recv_hook={return_recv_hook}"
+                                  f" dispatch_use_fp8={dispatch_use_fp8}"
+                                  f" round_scale={round_scale}"
+                                  f" use_ue8m0={use_ue8m0}", flush=True)
                             num_times += 1
                             for i in range((num_times % 2) + 1):
                                 cumulative_local_expert_recv_stats = torch.zeros(
@@ -177,6 +182,7 @@ def test_main(
                                 if dispatch_use_fp8
                                 else packed_recv_x
                             )
+                            print("packed_recv_x", packed_recv_x)
                             simulated_gemm_x = (
                                 per_token_cast_back(
                                     packed_recv_x[0].view(-1, hidden),

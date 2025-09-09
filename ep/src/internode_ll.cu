@@ -240,7 +240,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     // TODO (MaoZiming): prevent EFA reordering BS.
     if (lane_id == 0) {
       uint64_t start = clock64();
-      uint64_t wait_cycles = (uint64_t)1e9;
+      uint64_t wait_cycles = (uint64_t)2e9;
       while (clock64() - start < wait_cycles) {
       }
     }
@@ -403,7 +403,7 @@ LOW_LATENCY_DISPATCH_RECV:
           auto const pack_idx = lane_id / num_elems_per_pack;
           auto const elem_idx = lane_id % num_elems_per_pack;
           auto scale = extract_required_scale_format<kUseUE8M0>(
-              ld_nc_global(src_scales + lane_id));
+              ld_cg_global(src_scales + lane_id));
           recv_x_scales[token_idx * token_stride + pack_idx * pack_stride +
                         elem_idx] = scale;
         }
@@ -411,7 +411,7 @@ LOW_LATENCY_DISPATCH_RECV:
           auto const pack_idx = (lane_id + 32) / num_elems_per_pack;
           auto const elem_idx = (lane_id + 32) % num_elems_per_pack;
           auto scale = extract_required_scale_format<kUseUE8M0>(
-              ld_nc_global(src_scales + lane_id + 32));
+              ld_cg_global(src_scales + lane_id + 32));
           recv_x_scales[token_idx * token_stride + pack_idx * pack_stride +
                         elem_idx] = scale;
         }

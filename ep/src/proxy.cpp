@@ -186,7 +186,7 @@ void Proxy::run_sender() {
   size_t seen = 0;
   uint64_t my_tail = 0;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    local_poll_completions(ctx_, finished_wrs_, finished_wrs_mutex_,
+    local_poll_completions(ctx_, finished_wrs_, acked_wrs_, finished_wrs_mutex_,
                            cfg_.block_idx, ctx_by_tag_);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
@@ -220,7 +220,7 @@ void Proxy::run_dual() {
   size_t seen = 0;
   printf("run_dual initialization complete\n");
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    poll_cq_dual(ctx_, finished_wrs_, finished_wrs_mutex_, cfg_.block_idx, ring,
+    poll_cq_dual(ctx_, finished_wrs_, acked_wrs_, finished_wrs_mutex_, cfg_.block_idx, ring,
                  ctx_by_tag_, atomic_buffer_ptr_);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
@@ -228,8 +228,9 @@ void Proxy::run_dual() {
 }
 
 void Proxy::notify_gpu_completion(uint64_t& my_tail) {
-#ifdef ASSUME_WR_IN_ORDER
+
   if (finished_wrs_.empty()) return;
+  if (acked_wrs_.empty()) return;
 
   std::lock_guard<std::mutex> lock(finished_wrs_mutex_);
   int check_i = 0;
@@ -239,15 +240,9 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
   std::unordered_set<uint64_t> finished_copy(finished_wrs_.begin(),
                                              finished_wrs_.end());
   for (auto wr_id : finished_copy) {
-#ifdef SYNCHRONOUS_COMPLETION
-    // These are your existing global conditions.
-    if (!(ctx_.has_received_ack && ctx_.largest_completed_wr >= wr_id)) {
-      continue;
-    }
+    if (acked_wrs_.find(wr_id) == acked_wrs_.end()) break;
     finished_wrs_.erase(wr_id);
-#else
-    finished_wrs_.erase(wr_id);
-#endif
+    acked_wrs_.erase(wr_id);
     // Clear ring entry (contiguity assumed)
     cfg_.rb->buf[(my_tail + check_i) & kQueueMask].cmd = 0;
     check_i++;
@@ -264,17 +259,12 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
     completion_count_++;
     actually_completed++;
   }
-
+  printf("block_idx: %d, moving my_tail from %lu to %lu (actually_completed=%d)\n",
+         cfg_.block_idx, my_tail, my_tail + actually_completed,
+         actually_completed);
+  if (!actually_completed) return;
   my_tail += actually_completed;
-#ifndef SYNCHRONOUS_COMPLETION
-  finished_wrs_.clear();
-#endif
-  // cfg_.rb->tail = my_tail;
   cfg_.rb->cpu_volatile_store_tail(my_tail);
-#else
-  printf("ASSUME_WR_IN_ORDER is not defined. This is not supported.\n");
-  std::abort();
-#endif
 }
 
 void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
@@ -285,10 +275,15 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
     return;
   }
   size_t batch_size = cur_head - seen;
+  if (batch_size == 0)
+    return;
+
   std::vector<uint64_t> wrs_to_post;
   wrs_to_post.reserve(batch_size);
   std::vector<TransferCmd> cmds_to_post;
   cmds_to_post.reserve(batch_size);
+  printf("block_idx: %d, Posting %zu new commands (head=%lu tail=%lu seen=%zu)\n",
+         cfg_.block_idx, batch_size, cur_head, my_tail, seen);
 
   for (size_t i = seen; i < cur_head; ++i) {
     uint64_t cmd = cfg_.rb->volatile_load_cmd(i);
@@ -297,6 +292,7 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 
     TransferCmd& cmd_entry = cfg_.rb->load_cmd_entry(i);
     wrs_to_post.push_back(i);
+    printf("block_idx: %d, pushed to wr_to_post i: %zu\n", cfg_.block_idx, i);
     cmds_to_post.push_back(cmd_entry);
     wr_id_to_start_time_[i] = std::chrono::high_resolution_clock::now();
     seen = i + 1;
@@ -420,7 +416,7 @@ void Proxy::post_gpu_commands_mixed(
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
                             rdma_cmds, ctxs_for_all_ranks_, cfg_.rank,
-                            cfg_.block_idx);
+                            cfg_.block_idx, finished_wrs_, finished_wrs_mutex_);
   }
   if (!atomic_wrs.empty()) {
 #ifdef EFA

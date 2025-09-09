@@ -135,10 +135,10 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
         if (now - last_print > kPrintCycleInterval) {
           uint64_t tail_cmd = rb->buf[cur_tail & rb->mask()].cmd;
           printf(
-              "[nvshmemi_ibgda_amo_nonfetch_add] %p waiting sm_id: %d, "
+              "[nvshmemi_ibgda_amo_nonfetch_add] %p waiting ring_idx: %d, "
               "cur_head: "
               "%llu, cur_tail: %llu, inflight: %llu, tail_cmd: %llu\n",
-              rb, sm_id, cur_head, cur_tail, inflight, tail_cmd);
+              rb, ring_idx, cur_head, cur_tail, inflight, tail_cmd);
           last_print = now;
         }
       }

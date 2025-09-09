@@ -235,6 +235,12 @@ __device__ __forceinline__ dtype_t ld_nc_global(dtype_t const* ptr) {
   return *reinterpret_cast<dtype_t*>(&ret);
 }
 
+__device__ __forceinline__ float ld_cg_global(float const* p) {
+    float v;
+    asm volatile("ld.global.cg.f32 %0, [%1];" : "=f"(v) : "l"(p));
+    return v;
+}
+
 __device__ __forceinline__ int ld_cg_global(int const* p) {
   int v;
   asm volatile("ld.global.cg.s32 %0, [%1];" : "=r"(v) : "l"(p));
