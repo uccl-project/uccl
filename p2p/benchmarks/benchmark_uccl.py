@@ -12,7 +12,7 @@ import torch.distributed as dist
 import numpy as np
 
 try:
-    from uccl import p2p
+    import p2p
 except ImportError as exc:
     sys.stderr.write("Failed to import p2p\n")
     raise
@@ -106,12 +106,30 @@ def _run_server(args, ep, remote_metadata):
             gb_sec = total_recv / elapsed / 1e9  # bytes per second → GB/s
             lat = elapsed / args.iters
         else:
-            ep.recvv(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
+            if args.async_api:
+                print('using async recvv')
+                ok, transfer_id = ep.recvv_async(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
+                assert ok, "[Server] recvv_async error"
+                is_done = False
+                while not is_done:
+                    ok, is_done = ep.poll_async(transfer_id)
+                    assert ok, "[Server] poll_async error"
+            else:
+                ep.recvv(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
+            
             start = time.perf_counter()
             total_recv = 0
             for _ in range(args.iters):
-                ok = ep.recvv(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
-                assert ok, "[Server] recv error"
+                if args.async_api:
+                    ok, transfer_id = ep.recvv_async(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
+                    assert ok, "[Server] recvv_async error"
+                    is_done = False
+                    while not is_done:
+                        ok, is_done = ep.poll_async(transfer_id)
+                        assert ok, "[Server] poll_async error"
+                else:
+                    ok = ep.recvv(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
+                    assert ok, "[Server] recv error"
                 total_recv += sum(size_v)
             elapsed = time.perf_counter() - start
             gbps = (total_recv * 8) / elapsed / 1e9  # bits per second → Gbps
@@ -180,12 +198,29 @@ def _run_client(args, ep, remote_metadata):
             gb_sec = total_sent / elapsed / 1e9
             lat = elapsed / args.iters
         else:
-            ep.sendv(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
+            if args.async_api:
+                ok, transfer_id = ep.sendv_async(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
+                assert ok, "[Client] sendv_async error"
+                is_done = False
+                while not is_done:
+                    ok, is_done = ep.poll_async(transfer_id)
+                    assert ok, "[Client] poll_async error"
+            else:
+                ep.sendv(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
+            
             start = time.perf_counter()
             total_sent = 0
             for _ in range(args.iters):
-                ok = ep.sendv(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
-                assert ok, "[Client] send error"
+                if args.async_api:
+                    ok, transfer_id = ep.sendv_async(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
+                    assert ok, "[Client] sendv_async error"
+                    is_done = False
+                    while not is_done:
+                        ok, is_done = ep.poll_async(transfer_id)
+                        assert ok, "[Client] poll_async error"
+                else:
+                    ok = ep.sendv(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
+                    assert ok, "[Client] send error"
                 total_sent += sum(size_v)
             elapsed = time.perf_counter() - start
             gbps = (total_sent * 8) / elapsed / 1e9
@@ -475,9 +510,6 @@ def main():
     )
     args = p.parse_args()
 
-    if args.async_api:
-        assert args.num_kvblocks == 1, "Async transfers only support one block"
-
     # Check for incompatible options
     if args.dual and args.ipc:
         print("Error: --dual and --ipc options are incompatible")
@@ -489,8 +521,9 @@ def main():
     assert world_size == 2, "This benchmark only supports 2 processes"
 
     mode = "IPC" if args.ipc else ("Dual" if args.dual else "Standard")
+    api_type = "Async" if args.async_api else "Sync"
     print(
-        f"UCCL P2P Benchmark — mode: {mode} | role:",
+        f"UCCL P2P Benchmark — mode: {mode} | API: {api_type} | role:",
         "client" if rank == 0 else "server",
     )
     if not args.ipc:
