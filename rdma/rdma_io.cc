@@ -226,7 +226,6 @@ int RDMAFactory::init_devs() {
   {
     // Sorted by the GPU name.
     gpu_cards = get_gpu_cards();
-    rdma_ctl->num_gpus = gpu_cards.size();
     init_devs_log << "Found " << gpu_cards.size()
                   << " GPUs (get_gpu_cards, ordered by GPU rank):\n";
     int i = 0;
