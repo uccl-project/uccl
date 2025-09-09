@@ -64,7 +64,7 @@ More UCCL features are under development in this repo, currently including:
 The easiest way to use UCCL is to first build based on your platform. The build script will automatically detect the `py_version` of your current environment. If you need to compile UCCL for a specific python version, please specify the `py_version`, such as `3.10`. 
 ```bash
 git clone https://github.com/uccl-project/uccl.git --recursive
-cd uccl && bash build_and_install.sh [cuda|rocm] [all|rdma|p2p|efa] [py_version]
+cd uccl && bash build_and_install.sh [cuda|rocm] [all|rdma|p2p|efa|ep] [py_version]
 ```
 
 Then, when running your PyTorch applications, set the environment variable accordingly: 

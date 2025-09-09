@@ -7,7 +7,7 @@ set -e
 # a purpose-built Docker image derived from Ubuntu 22.04.
 #
 # Usage:
-#   ./build.sh [cuda|rocm] [all|rdma|p2p|efa] [3.13]
+#   ./build.sh [cuda|rocm] [all|rdma|p2p|efa|ep] [py_version]
 #
 # The wheels are written to wheelhouse-[cuda|rocm]
 # -----------------------
@@ -19,7 +19,7 @@ ARCH="$(uname -m)"
 IS_EFA=$(ls /sys/class/infiniband/ | grep rdmap || true)
 
 if [[ $TARGET != "cuda" && $TARGET != "rocm" ]]; then
-  echo "Usage: $0 [cuda|rocm] [all|rdma|p2p|efa|ep] [PY_VER]" >&2
+  echo "Usage: $0 [cuda|rocm] [all|rdma|p2p|efa|ep] [py_version]" >&2
 fi
 
 if [[ $ARCH == "aarch64" && $TARGET == "rocm" ]]; then
