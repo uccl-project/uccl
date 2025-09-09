@@ -237,14 +237,15 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
   int actually_completed = 0;
 
   // Copy to iterate safely while erasing.
-  std::unordered_set<uint64_t> finished_copy(finished_wrs_.begin(),
-                                             finished_wrs_.end());
+  std::vector<uint64_t> finished_copy(finished_wrs_.begin(), finished_wrs_.end());
+  std::sort(finished_copy.begin(), finished_copy.end());
   for (auto wr_id : finished_copy) {
     if (acked_wrs_.find(wr_id) == acked_wrs_.end()) break;
+    printf("block_idx: %d, wr_id %lu completed, my_tail + check_i: %lu\n", cfg_.block_idx, wr_id, my_tail + check_i);
     finished_wrs_.erase(wr_id);
     acked_wrs_.erase(wr_id);
     // Clear ring entry (contiguity assumed)
-    cfg_.rb->buf[(my_tail + check_i) & kQueueMask].cmd = 0;
+    cfg_.rb->volatile_store_cmd(my_tail + check_i, 0);
     check_i++;
 
     auto it = wr_id_to_start_time_.find(wr_id);
@@ -259,10 +260,10 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
     completion_count_++;
     actually_completed++;
   }
+  if (!actually_completed) return;
   printf("block_idx: %d, moving my_tail from %lu to %lu (actually_completed=%d)\n",
          cfg_.block_idx, my_tail, my_tail + actually_completed,
          actually_completed);
-  if (!actually_completed) return;
   my_tail += actually_completed;
   cfg_.rb->cpu_volatile_store_tail(my_tail);
 }
@@ -405,9 +406,11 @@ void Proxy::post_gpu_commands_mixed(
 
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
     if (cmds_to_post[i].is_atomic) {
+      printf("block_idx: %d, wr_id %lu is atomic operation\n", cfg_.block_idx, wrs_to_post[i]);
       atomic_wrs.push_back(wrs_to_post[i]);
       atomic_cmds.push_back(cmds_to_post[i]);
     } else {
+      printf("block_idx: %d, wr_id %lu is regular RDMA write\n", cfg_.block_idx, wrs_to_post[i]);
       rdma_wrs.push_back(wrs_to_post[i]);
       rdma_cmds.push_back(cmds_to_post[i]);
     }
@@ -421,7 +424,7 @@ void Proxy::post_gpu_commands_mixed(
   if (!atomic_wrs.empty()) {
 #ifdef EFA
     post_atomic_operations_efa(ctx_, atomic_wrs, atomic_cmds,
-                               ctxs_for_all_ranks_, cfg_.rank, cfg_.block_idx);
+                               ctxs_for_all_ranks_, cfg_.rank, cfg_.block_idx, finished_wrs_, finished_wrs_mutex_);
 #else
     post_atomic_operations(atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
                            cfg_.rank);

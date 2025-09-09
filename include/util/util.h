@@ -1147,54 +1147,67 @@ static bool is_bdf(std::string const& s) {
   return std::regex_match(s, re);
 }
 
+static int cal_pcie_distance(const fs::path& devA, const fs::path& devB) {
+    auto devA_parent = devA.parent_path();
+    auto devB_parent = devB.parent_path();
 
+    auto build_chain = [](const fs::path& dev) {
+        std::vector<std::string> chain;
+        fs::path p = fs::canonical(dev);
+        for (;; p = p.parent_path()) {
+            std::string leaf = p.filename();
+            if (is_bdf(leaf)) {
+                chain.push_back(leaf); // collect BDF components
+            }
+            if (p == p.root_path()) break; // reached filesystem root
+        }
+        return chain; // self → root
+    };
 
+    // thread-safe cache
+    static std::mutex cache_mutex;
+    static std::unordered_map<fs::path, std::vector<std::string>> dev_to_chain_cache;
 
-static int cal_pcie_distance(fs::path const& devA, fs::path const& devB) {
-  auto devA_parent = devA.parent_path();
-  auto devB_parent = devB.parent_path();
+    std::vector<std::string> chainA, chainB;
+    {
+        std::lock_guard<std::mutex> g(cache_mutex);
 
-  auto build_chain = [](fs::path const& dev) {
-    std::vector<std::string> chain;
-    for (fs::path p = fs::canonical(dev);; p = p.parent_path()) {
-      std::string leaf = p.filename();
-      if (is_bdf(leaf)) chain.push_back(leaf);  // collect BDF components
-      if (p == p.root_path()) break;            // reached filesystem root
+        auto itA = dev_to_chain_cache.find(devA_parent);
+        if (itA == dev_to_chain_cache.end()) {
+            itA = dev_to_chain_cache.emplace(devA_parent, build_chain(devA_parent)).first;
+        }
+        chainA = itA->second;
+
+        auto itB = dev_to_chain_cache.find(devB_parent);
+        if (itB == dev_to_chain_cache.end()) {
+            itB = dev_to_chain_cache.emplace(devB_parent, build_chain(devB_parent)).first;
+        }
+        chainB = itB->second;
     }
-    return chain; /* self → root */
-  };
 
-  static std::unordered_map<fs::path, std::vector<std::string>>
-      dev_to_chain_cache;
+    // Walk back from root until paths diverge
+    size_t i = chainA.size();
+    size_t j = chainB.size();
+    while (i > 0 && j > 0 && chainA[i - 1] == chainB[j - 1]) {
+        --i;
+        --j;
+    }
 
-  if (dev_to_chain_cache.find(devA_parent) == dev_to_chain_cache.end()) {
-    dev_to_chain_cache[devA_parent] = build_chain(devA_parent);
-  }
-  if (dev_to_chain_cache.find(devB_parent) == dev_to_chain_cache.end()) {
-    dev_to_chain_cache[devB_parent] = build_chain(devB_parent);
-  }
-
-  auto chainA = dev_to_chain_cache[devA_parent];
-  auto chainB = dev_to_chain_cache[devB_parent];
-
-  // Walk back from root until paths diverge
-  size_t i = chainA.size();
-  size_t j = chainB.size();
-  while (i > 0 && j > 0 && chainA[i - 1] == chainB[j - 1]) {
-    --i;
-    --j;
-  }
-  // Distance = remaining unique hops in each chain
-  return static_cast<int>(i + j);
+    // Distance = remaining unique hops in each chain
+    return static_cast<int>(i + j);
 }
 
-static uint32_t safe_pcie_distance(const std::filesystem::path& gpu,
-                                   const std::filesystem::path& nic) {
-  try {
-    return cal_pcie_distance(gpu, nic);
-  } catch (...) {
-    return UINT32_MAX / 2; // Treat as "very far", but don't crash
-  }
+static uint32_t safe_pcie_distance(const fs::path& gpu,
+                                   const fs::path& nic) {
+    try {
+        return static_cast<uint32_t>(cal_pcie_distance(gpu, nic));
+    } catch (const std::exception& e) {
+        fprintf(stderr, "[WARN] safe_pcie_distance failed: %s\n", e.what());
+        return UINT32_MAX / 2; // Treat as "very far"
+    } catch (...) {
+        fprintf(stderr, "[WARN] safe_pcie_distance unknown failure\n");
+        return UINT32_MAX / 2;
+    }
 }
 
 static inline std::string normalize_pci_bus_id(std::string const& pci_bus_id) {

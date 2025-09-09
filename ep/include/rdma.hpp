@@ -82,5 +82,5 @@ void post_atomic_operations_efa(ProxyCtx& S,
                                 std::vector<uint64_t> const& wrs_to_post,
                                 std::vector<TransferCmd> const& cmds_to_post,
                                 std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                                int my_rank, int block_idx);
+                                int my_rank, int block_idx, std::unordered_set<uint64_t>&finished_wrs, std::mutex& finished_wrs_mutex);
 #endif  // RDMA_HPP

@@ -135,30 +135,61 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     perror("Failed to get IB devices list");
     exit(1);
   }
+  for (int i = 0; i < num_devices; ++i) {
+    fprintf(stderr, "[IBV] dev[%d]=%s\n", i, ibv_get_device_name(dev_list[i]));
+  }
 
   // Assuming fixed GPU idx for now
   int gpu_idx = 0;
   // Ranked by GPU idx
   auto gpu_cards = uccl::get_gpu_cards();
+
+  fprintf(stderr, "[DBG] gpu_cards.size()=%zu\n", gpu_cards.size());
+  if (gpu_cards.empty()) {
+    fprintf(stderr, "[FATAL] get_gpu_cards() returned empty.\n");
+    std::abort();
+  }
   printf("Available GPU cards:\n");
   for (size_t i = 0; i < gpu_cards.size(); i++) {
     printf("  GPU %zu: %s\n", i, gpu_cards[i].c_str());
   }
   // Ranked by RDMA NIC name (not the ibv_get_device_list order)
   auto ib_nics = uccl::get_rdma_nics();
+  fprintf(stderr, "[DBG] ib_nics.size()=%zu\n", ib_nics.size());
+  if (ib_nics.empty()) {
+    fprintf(stderr, "[FATAL] get_rdma_nics() returned empty.\n");
+    std::abort();
+  }
   printf("Available RDMA NICs:\n");
   for (auto const& nic : ib_nics) {
     printf("  NIC: %s at %s\n", nic.first.c_str(), nic.second.c_str());
   }
   // Get GPU pcie path
+  printf("GPU %d: %s\n", gpu_idx, gpu_cards[gpu_idx].c_str());
   auto gpu_device_path = gpu_cards[gpu_idx];
   // Find the RDMA NIC that is closest to the GPU.
-  auto ib_nic_it = std::min_element(
-      ib_nics.begin(), ib_nics.end(), [&](auto const& a, auto const& b) {
-        return uccl::safe_pcie_distance(gpu_device_path, a.second) <
-               uccl::safe_pcie_distance(gpu_device_path, b.second);
-      });
-  auto selected_nic_name = ib_nic_it->first;
+
+  std::vector<std::pair<std::string, uint32_t>> dist;
+  dist.reserve(ib_nics.size());
+
+  for (auto& nic : ib_nics) {
+      uint32_t d = uccl::safe_pcie_distance(gpu_device_path, nic.second);
+      dist.emplace_back(nic.first, d);
+  }
+
+  auto it = std::min_element(dist.begin(), dist.end(),
+                            [](auto const& a, auto const& b) {
+                                return a.second < b.second;
+                            });
+
+  if (it == dist.end()) {
+      fprintf(stderr, "[WARN] no NIC found, defaulting to first\n");
+      // fallback
+  }
+  auto selected_nic_name = it->first;
+
+
+  fprintf(stderr, "[DBG] selected_nic_name=%s\n", selected_nic_name.c_str());
   int selected_dev_idx = -1;
   for (int i = 0; i < num_devices; i++) {
     if (strcmp(ibv_get_device_name(dev_list[i]), selected_nic_name.c_str()) ==
@@ -167,7 +198,16 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
       break;
     }
   }
-  CHECK(selected_dev_idx != -1) << "Selected RDMA NIC not found";
+  if (selected_dev_idx < 0) {
+    fprintf(stderr, "[FATAL] Selected RDMA NIC '%s' not found in verbs device list\n",
+            selected_nic_name.c_str());
+    for (int i = 0; i < num_devices; ++i) {
+      fprintf(stderr, "  verbs dev[%d]=%s\n", i, ibv_get_device_name(dev_list[i]));
+    }
+    ibv_free_device_list(dev_list);
+    std::abort();
+  }
+
   S.context = ibv_open_device(dev_list[selected_dev_idx]);
   if (!S.context) {
     perror("Failed to open device");
@@ -178,23 +218,23 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
 
   ibv_free_device_list(dev_list);
   S.pd = ibv_alloc_pd(S.context);
+  printf("after ibv_alloc_pd\n");
   if (!S.pd) {
     perror("Failed to allocate PD");
     exit(1);
   }
   uint64_t iova = (uintptr_t)gpu_buf;
 #ifndef EFA
-  printf("Registering MR with iova=0x%lx\n", iova);
   S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
                               IBV_ACCESS_REMOTE_ATOMIC |
                               IBV_ACCESS_RELAXED_ORDERING);
+#else
+  printf("Registering MR with iova=0x%lx\n", iova);
+  S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
+                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
   printf("Registered MR with lkey=0x%x, rkey=0x%x\n", S.mr->lkey,
          S.mr->rkey);
-#else
-  S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
-                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                              IBV_ACCESS_RELAXED_ORDERING);
 #endif
 
   if (!S.mr) {
@@ -488,7 +528,7 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote) {
     attr.ah_attr.port_num = 1;
     attr.ah_attr.sl = 0;
     attr.ah_attr.src_path_bits = 0;
-    attr.ah_attr.grh.hop_limit = 1;
+    attr.ah_attr.grh.hop_limit = 64;
     // Fill GID from remote_info
     memcpy(&attr.ah_attr.grh.dgid, remote->gid, 16);
     attr.ah_attr.grh.sgid_index = 1;  // Assume GID index 0
@@ -738,12 +778,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       wrs[j].num_sge = 1;
       wrs[j].wr_id = wr_ids[j];
 
-      // TODO: standardize.
-      if (cmd.is_combine)
-        wrs[j].wr.rdma.remote_addr = ctx->remote_addr + cmd.req_rptr;
-      else
-        wrs[j].wr.rdma.remote_addr =
-            ctx->remote_addr + S.dispatch_recv_data_offset + cmd.req_rptr;
+      wrs[j].wr.rdma.remote_addr = ctx->remote_addr + cmd.req_rptr;
 
       uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
       if (wrs[j].wr.rdma.remote_addr < ctx->remote_addr ||
@@ -785,21 +820,25 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
     }
 #endif
     S.posted.fetch_add(k, std::memory_order_relaxed);
-    auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
-    if (!inserted) {
-        fprintf(stderr,
-                "block_idx: %d, Error: tail wr_id %lu already exists (map=%p, size=%zu, dst_rank=%d)\n",
-                block_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
-                S.wr_id_to_wr_ids.size(), dst_rank);
-        std::abort();
-    } else {
+    {
       std::lock_guard<std::mutex> lock(finished_wrs_mutex);
-      for (auto const& wr_id : it->second) {
-        finished_wrs.insert(wr_id);
+      auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
+      if (!inserted) {
+          fprintf(stderr,
+                  "block_idx: %d, Error: tail wr_id %lu already exists (map=%p, size=%zu, dst_rank=%d)\n",
+                  block_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
+                  S.wr_id_to_wr_ids.size(), dst_rank);
+          std::abort();
+      } else {
+        for (auto const& wr_id : it->second) {
+          finished_wrs.insert(wr_id);
+          printf("block_idx: %d, Inserting finished wr_id=%lu for tail wr_id=%lu\n",
+                 block_idx, wr_id, batch_tail_wr);
+        }
       }
+      fprintf(stderr,"block_idx: %d, Posted batch to dst_rank %d, batch_tail_wr: %lu, map=%p\n",
+            block_idx, dst_rank, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
     }
-    fprintf(stderr,"block_idx: %d, Posted batch to dst_rank %d, batch_tail_wr: %lu, map=%p\n",
-          block_idx, dst_rank, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
   }
 }
 
@@ -828,6 +867,24 @@ void local_process_completions(ProxyCtx& S,
       case IBV_WC_RDMA_WRITE:
       case IBV_WC_SEND: {
         send_completed++;
+        // Detect atomic WRs by checking the high tag bits
+        // TODO(MaoZiming): ignore ack from atomic remote for now. 
+        if ((wc[i].wr_id & 0xFFFF000000000000ULL) == kAtomicWrTag) {
+            uint64_t wr_id = wc[i].wr_id & 0x0000FFFFFFFFFFFFULL;
+            printf("Thread %d: got atomic CQE logical_wr_id=%lu\n",
+                  thread_idx, wr_id);
+            {
+                std::lock_guard<std::mutex> lock(finished_wrs_mutex);
+                acked_wrs.insert(wr_id);
+                if (finished_wrs.find(wr_id) == finished_wrs.end()) {
+                  fprintf(stderr,
+                          "Error: atomic finished_wrs received ACK for unknown wr_id %lu\n",
+                          wr_id);
+                  std::abort();
+                }
+            }
+            continue;
+        }
       } break;
       case IBV_WC_RECV:
         if (wc[i].wc_flags & IBV_WC_WITH_IMM &&
@@ -850,6 +907,7 @@ void local_process_completions(ProxyCtx& S,
                       thread_idx, wr_done, slot, wr_done, vec.size(), *min_it, *max_it);
                 for (auto const &wr_id : vec) {
                     acked_wrs.insert(wr_id);
+                    printf("Local thread %d: inserting ACK wr_id=%lu\n", thread_idx, wr_id);
                     if (finished_wrs.find(wr_id) ==
                         finished_wrs.end()) {
                       fprintf(stderr,
@@ -1222,7 +1280,7 @@ void post_atomic_operations_efa(ProxyCtx& S,
                                 std::vector<uint64_t> const& wrs_to_post,
                                 std::vector<TransferCmd> const& cmds_to_post,
                                 std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                                int my_rank, int block_idx) {
+                                int my_rank, int block_idx, std::unordered_set<uint64_t>&finished_wrs, std::mutex& finished_wrs_mutex) {
   if (cmds_to_post.size() > ProxyCtx::kMaxAtomicOps) {
     fprintf(stderr, "Too many atomic operations: %zu > %zu\n",
             cmds_to_post.size(), ProxyCtx::kMaxAtomicOps);
@@ -1249,6 +1307,8 @@ void post_atomic_operations_efa(ProxyCtx& S,
 
     for (size_t i = 0; i < k; ++i) {
       auto const& cmd = cmds_to_post[wr_ids[i]];
+      auto wr_id = wrs_to_post[wr_ids[i]];
+      wr_ids[i] = wr_id;
       bool const is_combine = (cmd.value == 1);
 
       // Pack control into 32-bit imm:
@@ -1275,7 +1335,7 @@ void post_atomic_operations_efa(ProxyCtx& S,
           pack_imm(/*is_combine=*/true, v, static_cast<uint16_t>(offset));
 
       std::memset(&wrs[i], 0, sizeof(wrs[i]));
-      wrs[i].wr_id = kAtomicWrTag;
+      wrs[i].wr_id = kAtomicWrTag | (wr_id & 0x0000FFFFFFFFFFFFULL);
       wrs[i].opcode = IBV_WR_SEND_WITH_IMM;
       wrs[i].send_flags = IBV_SEND_SIGNALED;
       wrs[i].imm_data = htonl(imm);
@@ -1301,6 +1361,28 @@ void post_atomic_operations_efa(ProxyCtx& S,
       if (bad)
         fprintf(stderr, "Bad WR at %p (wr_id=%lu)\n", (void*)bad, bad->wr_id);
       std::abort();
+    }
+
+    S.posted.fetch_add(k, std::memory_order_relaxed);
+    const uint64_t batch_tail_wr = wr_ids.back();
+    {
+      std::lock_guard<std::mutex> lock(finished_wrs_mutex);
+      auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
+      if (!inserted) {
+          fprintf(stderr,
+                  "block_idx: %d, Error: tail wr_id %lu already exists (map=%p, size=%zu, dst_rank=%d)\n",
+                  block_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
+                  S.wr_id_to_wr_ids.size(), dst_rank);
+          std::abort();
+      } else {
+        for (auto const& wr_id : wr_ids) {
+          finished_wrs.insert(wr_id);
+          printf("block_idx: %d, Inserting atomics finished wr_id=%lu for tail wr_id=%lu\n",
+                 block_idx, wr_id, batch_tail_wr);
+        }
+      }
+      fprintf(stderr,"block_idx: %d, Posted atomic batch to dst_rank %d, batch_tail_wr: %lu, map=%p\n",
+            block_idx, dst_rank, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
     }
   }
 }
