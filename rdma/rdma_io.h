@@ -539,7 +539,6 @@ class RDMAFactory {
   std::vector<struct FactoryDevice> devices_;
   std::map<int, int> gpu_to_dev_idx_;
   int num_devices = 0;
-  int num_gpus = 0;
 
  public:
   ~RDMAFactory() { devices_.clear(); }
@@ -564,10 +563,6 @@ class RDMAFactory {
   static inline bool is_roce(int dev) {
     DCHECK(dev >= 0 && dev < rdma_ctl->devices_.size());
     return rdma_ctl->devices_[dev].is_roce;
-  }
-
-  static inline int get_num_devices() {
-    return rdma_ctl->num_gpus;
   }
 
   static inline int get_best_dev_idx(int gpu_idx) {
