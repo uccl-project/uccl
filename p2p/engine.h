@@ -164,7 +164,7 @@ class Endpoint {
   /* Send a vector of data chunks. Blocking. */
   bool sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
              std::vector<void const*> data_v, std::vector<size_t> size_v,
-             size_t num_iovs);
+             size_t num_iovs,bool inside_python = true);
 
   /* Send a vector of data chunks asynchronously. */
   bool sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
@@ -174,7 +174,7 @@ class Endpoint {
   /* Receive a vector of data chunks. Blocking. */
   bool recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
              std::vector<void*> data_v, std::vector<size_t> size_v,
-             size_t num_iovs);
+             size_t num_iovs,bool inside_python = true);
 
   /* Receive a vector of data chunks asynchronously. */
   bool recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
@@ -420,6 +420,11 @@ class Endpoint {
 
     std::atomic<bool> done;     // 完成状态标志，与 Task 相同
     TaskV* self_ptr;            // 指向自己的指针，与 Task 相同
+};
+
+struct TaskVPtrWrapper {
+    TaskV* ptr;
+    uint64_t padding; // 8 bytes of ptr + 8 bytes of padding = 16 bytes
 };
 
   struct alignas(64) Task {
