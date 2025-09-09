@@ -25,7 +25,7 @@ setup(
     url="https://github.com/uccl-project/uccl",
     packages=find_packages(),
     package_data={
-        "uccl": ["lib/*.so", "p2p*.so", "gpu_driven*.so", "uccl_ep*.so", "collective.py"],
+        "uccl": ["lib/*.so", "p2p*.so", "ep*.so", "collective.py", "utils.py"],
     },
     license="Apache-2.0",
     install_requires=[],

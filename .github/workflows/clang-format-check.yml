@@ -29,7 +29,7 @@ jobs:
       run: |
         set -e
 
-        DIRECTORIES=("afxdp" "efa" "gpu_driven" "rdma" "misc" "p2p" "include")
+        DIRECTORIES=("afxdp" "efa" "ep" "rdma" "misc" "p2p" "include")
         EXTENSIONS=("cpp" "cxx" "cc" "h" "hpp" "cu" "cuh")
         EXCLUDE=("afxdp/lib")
 
@@ -80,7 +80,7 @@ jobs:
 
     - name: Check Python formatting
       run: |
-        PYTHON_DIRS=("p2p" "gpu_driven")
+        PYTHON_DIRS=("p2p" "ep")
         EXCLUDES="thirdparty|doc|build"
 
         for DIR in "${PYTHON_DIRS[@]}"; do
