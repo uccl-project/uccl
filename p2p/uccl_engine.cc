@@ -385,8 +385,7 @@ int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
   if (!engine || !metadata) return -1;
 
   try {
-    std::vector<uint8_t> metadata_vec =
-        engine->endpoint->get_endpoint_metadata();
+    std::vector<uint8_t> metadata_vec = engine->endpoint->get_metadata();
 
     // Build string representation
     std::string result;

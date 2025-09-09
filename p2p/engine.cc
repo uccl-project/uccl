@@ -243,7 +243,7 @@ bool Endpoint::connect(py::bytes const& meta_bytes, uint64_t& conn_id) {
   return this->connect(ip, remote_gpu_idx_, port, conn_id);
 }
 
-std::vector<uint8_t> Endpoint::get_endpoint_metadata() {
+std::vector<uint8_t> Endpoint::get_metadata() {
   std::string ip_str = get_oob_ip();
   uint16_t port = ep_->get_p2p_listen_port(gpu_to_dev[local_gpu_idx_]);
 

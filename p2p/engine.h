@@ -87,7 +87,7 @@ class Endpoint {
 
   bool connect(py::bytes const& metadata, uint64_t& conn_id);
 
-  std::vector<uint8_t> get_endpoint_metadata();
+  std::vector<uint8_t> get_metadata();
 
   /*
    * Parse endpoint metadata to extract IP address, port, and GPU index.
