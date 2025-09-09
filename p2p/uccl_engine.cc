@@ -106,6 +106,19 @@ struct uccl_mr {
   uccl_engine* engine;
 };
 
+typedef struct {
+  uccl::FifoItem fifo_item;
+  bool is_valid;
+} fifo_item_t;
+
+typedef struct metadata {
+  uccl_op_type op;  // READ/WRITE/FIFO
+  char fifo_buf[sizeof(uccl::FifoItem)];
+  uint64_t data_ptr;  // Memory address for data reception
+  size_t data_size;   // Size of data to receive
+} metadata_t;
+
+
 std::unordered_map<uintptr_t, uint64_t> mem_reg_info;
 std::unordered_map<uccl_conn_t*, fifo_item_t*> fifo_item_map;
 std::mutex fifo_item_map_mutex;
@@ -406,16 +419,16 @@ int uccl_engine_get_sock_fd(uccl_conn_t* conn) {
   return conn->sock_fd;
 }
 
-int uccl_engine_get_fifo_item(uccl_conn_t* conn, uccl::FifoItem* fifo_item) {
+int uccl_engine_get_fifo_item(uccl_conn_t* conn, void* fifo_item) {
   if (!conn || !fifo_item) return -1;
 
   std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
   auto it = fifo_item_map.find(conn);
-  if (it == fifo_item_map.end()) {
+  if (it == fifo_item_map.end()) {  
     return -1;
   }
   if (it->second->is_valid) {
-    *fifo_item = it->second->fifo_item;
+    memcpy(fifo_item, &it->second->fifo_item, sizeof(uccl::FifoItem));
     it->second->is_valid = false;
     return 0;
   } else {
