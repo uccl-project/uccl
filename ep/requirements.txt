@@ -1,0 +1,9 @@
+# Python 3.11, Linux x86_64, NVIDIA CUDA 12.8 wheels
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+# needed by Torch and your code
+numpy>=1.26,<3
+pybind11>=2.11
+
+# PyTorch with CUDA 12.8
+torch==2.8.0+cu128
