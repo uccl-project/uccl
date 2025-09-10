@@ -62,8 +62,9 @@ def init_dist(local_rank: int, num_local_ranks: int):
         params["device_id"] = torch.device(f"cuda:{local_rank}")
     dist.init_process_group(**params)
     torch.set_default_dtype(torch.bfloat16)
-    torch.set_default_device("cuda")
+    # CRITICAL FIX: Set device first, then set default device to specific device
     torch.cuda.set_device(local_rank)
+    torch.set_default_device(f"cuda:{local_rank}")  # Use specific device, not just "cuda"
 
     return (
         dist.get_rank(),
@@ -109,6 +110,13 @@ def get_peer_ip(rank: int, num_ranks: int, group: dist.ProcessGroup):
 
 
 def get_cpu_proxies_meta(rank, scratch_ptr, scratch_bytes, num_ranks, group):
+    # CRITICAL FIX: Get the expected device based on rank
+    expected_device = int(os.environ.get("LOCAL_RANK", 0))
+    
+    # Ensure we're on the correct device before any distributed operations
+    torch.cuda.set_device(expected_device)
+    torch.set_default_device(f"cuda:{expected_device}")
+    
     meta = {
         "rank": rank,
         "ptr": int(scratch_ptr),
@@ -116,8 +124,41 @@ def get_cpu_proxies_meta(rank, scratch_ptr, scratch_bytes, num_ranks, group):
         "ip": _discover_local_ip(),
     }
     all_meta = [None] * num_ranks
-    dist.all_gather_object(all_meta, meta)
+    
+    # CRITICAL: Check device before all_gather_object in get_cpu_proxies_meta
+    current_device_before_meta = torch.cuda.current_device()
+    print(f"[get_cpu_proxies_meta] Rank {rank}: Device before all_gather_object: current={current_device_before_meta}, expected={expected_device}", flush=True)
+    
+    # Ensure device is correct immediately before the problematic call
+    if current_device_before_meta != expected_device:
+        print(f"[get_cpu_proxies_meta] Rank {rank}: CRITICAL - correcting device before all_gather_object", flush=True)
+        torch.cuda.set_device(expected_device)
+        torch.set_default_device(f"cuda:{expected_device}")
+    
+    dist.all_gather_object(all_meta, meta, group=group)
+    
+    # Check device after all_gather_object and fix if needed
+    current_device_after_meta = torch.cuda.current_device()
+    if current_device_after_meta != expected_device:
+        print(f"[get_cpu_proxies_meta] Rank {rank}: CRITICAL - all_gather_object changed device! before={expected_device}, after={current_device_after_meta}, fixing...", flush=True)
+        torch.cuda.set_device(expected_device)
+        torch.set_default_device(f"cuda:{expected_device}")
+    
+    # Check device before barrier and ensure correctness
+    current_device_before_barrier = torch.cuda.current_device()
+    if current_device_before_barrier != expected_device:
+        torch.cuda.set_device(expected_device)
+        torch.set_default_device(f"cuda:{expected_device}")
+        
     dist.barrier(group)
+    
+    # Check device after barrier and ensure correctness
+    current_device_after_barrier = torch.cuda.current_device()
+    if current_device_after_barrier != expected_device:
+        print(f"[get_cpu_proxies_meta] Rank {rank}: CRITICAL - barrier changed device! expected={expected_device}, after={current_device_after_barrier}, fixing...", flush=True)
+        torch.cuda.set_device(expected_device)
+        torch.set_default_device(f"cuda:{expected_device}")
+    
     rank2meta = {m["rank"]: m for m in all_meta}
     return rank2meta
 
@@ -298,7 +339,8 @@ class suppress_stdout_stderr:
 def bench(fn, num_warmups: int = 50, num_tests: int = 50, post_fn=None):
     # Flush L2 cache with 256 MB data
     torch.cuda.synchronize()
-    cache = torch.empty(int(256e6 // 4), dtype=torch.int, device="cuda")
+    current_device = torch.cuda.current_device()
+    cache = torch.empty(int(256e6 // 4), dtype=torch.int, device=f"cuda:{current_device}")
 
     # Warmup
     for _ in range(num_warmups):
@@ -344,10 +386,11 @@ def bench_kineto(
             for i in range(2):
                 # NOTES: use a large kernel and a barrier to eliminate the unbalanced CPU launch overhead
                 if barrier_comm_profiling:
-                    lhs = torch.randn((8192, 8192), dtype=torch.float, device="cuda")
-                    rhs = torch.randn((8192, 8192), dtype=torch.float, device="cuda")
+                    current_device = torch.cuda.current_device()
+                    lhs = torch.randn((8192, 8192), dtype=torch.float, device=f"cuda:{current_device}")
+                    rhs = torch.randn((8192, 8192), dtype=torch.float, device=f"cuda:{current_device}")
                     lhs @ rhs
-                    dist.all_reduce(torch.ones(1, dtype=torch.float, device="cuda"))
+                    dist.all_reduce(torch.ones(1, dtype=torch.float, device=f"cuda:{current_device}"))
                 for _ in range(num_tests):
                     fn()
                 prof.step()
