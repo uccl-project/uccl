@@ -143,7 +143,6 @@ def test_main(
     hash_value, num_times = 0, 0
 
     for current_x in x_list:
-        # TODO(MaoZiming): Support return_recv_hook=False
         for return_recv_hook in (False, True):
             for dispatch_use_fp8 in (False, True):
                 for round_scale in (False,):

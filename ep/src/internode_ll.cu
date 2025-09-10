@@ -324,7 +324,7 @@ LOW_LATENCY_DISPATCH_RECV:
     EP_DEVICE_ASSERT(num_warps_per_group > 1 and num_warp_groups < 15);
     if (sub_warp_id == 1 and lane_id == 0) {
       auto start_time = clock64();
-    // TODO (MaoZiming): prevent EFA reordering BS.
+      // TODO (MaoZiming): Fix dumb timer wait.
       uint64_t start = clock64();
       uint64_t wait_cycles = (uint64_t)1e9;
       while (clock64() - start < wait_cycles) {
