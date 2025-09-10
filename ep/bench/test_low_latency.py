@@ -347,8 +347,10 @@ def test_main(
                                 f"Finished one combine case: return_recv_hook: {return_recv_hook}, zero_copy: {zero_copy}\n",
                                 flush=True,
                             )
+                            dist.barrier(group=group)
+                            time.sleep(0.2)
                             buffer.reset_rdma_buffer()
-                            time.sleep(1)
+                            time.sleep(0.2)
 
     # noinspection PyShadowingNames
     def large_gemm_with_hook(hook):
@@ -379,8 +381,10 @@ def test_main(
             return_recv_hook=return_recv_hook,
         )
         large_gemm_with_hook(hook) if return_recv_hook else None
+        dist.barrier(group=group)
+        time.sleep(0.2)
         buffer.reset_rdma_buffer()
-        time.sleep(1)
+        time.sleep(0.2)
 
     print("[simple-test] ✓ All correctness tests passed!", flush=True)
     # Calculate bandwidth

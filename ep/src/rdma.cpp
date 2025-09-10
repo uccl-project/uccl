@@ -786,7 +786,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       std::abort();
     }
 #endif
-    S.posted.fetch_add(k, std::memory_order_relaxed);
+    S.posted.fetch_add(k, std::memory_order_release);
     {
       std::lock_guard<std::mutex> lock(finished_wrs_mutex);
       auto [it, inserted] =
