@@ -134,7 +134,7 @@ class CollectiveContext:
 
         # Create endpoint
         self.ep = p2p.Endpoint(self.local_gpu_idx, self.num_cpus)
-        local_metadata = self.ep.get_endpoint_metadata()
+        local_metadata = self.ep.get_metadata()
 
         # Initialize connection arrays
         self.send_connections = [None] * self.world_size  # indexed by rank
