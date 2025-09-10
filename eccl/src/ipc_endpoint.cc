@@ -16,7 +16,3 @@ bool IPCEndpoint::send_async(int to_rank, std::shared_ptr<Request> creq) {
 bool IPCEndpoint::recv_async(int from_rank, std::shared_ptr<Request> creq) {
   return true;
 }
-
-bool IPCEndpoint::poll_reqs(std::vector<std::shared_ptr<Request>>& creqs) {
-  return true;
-}

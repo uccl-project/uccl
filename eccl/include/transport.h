@@ -14,11 +14,11 @@
 #include <unistd.h>
 
 class Communicator;
-
+class CQPoller;
 class EndpointBase {
+ public:
   virtual bool send_async(int to_rank, std::shared_ptr<Request> creq) = 0;
   virtual bool recv_async(int from_rank, std::shared_ptr<Request> creq) = 0;
-  virtual bool poll_reqs(std::vector<std::shared_ptr<Request>>& creqs) = 0;
 };
 
 class RDMAEndpoint : public EndpointBase {
@@ -31,7 +31,6 @@ class RDMAEndpoint : public EndpointBase {
 
   bool send_async(int to_rank, std::shared_ptr<Request> creq) override;
   bool recv_async(int from_rank, std::shared_ptr<Request> creq) override;
-  bool poll_reqs(std::vector<std::shared_ptr<Request>>& creqs) override;
 
  private:
   std::vector<ibv_qp*> qp_list_;
@@ -63,7 +62,6 @@ class IPCEndpoint : public EndpointBase {
 
   bool send_async(int to_rank, std::shared_ptr<Request> creq) override;
   bool recv_async(int from_rank, std::shared_ptr<Request> creq) override;
-  bool poll_reqs(std::vector<std::shared_ptr<Request>>& creqs) override;
 
  private:
   std::shared_ptr<IPCcontext> ipc_context;
@@ -93,10 +91,12 @@ class Communicator {
       int rank);
 
   // ---------- Communication ----------
-  bool isend(int rank, std::shared_ptr<Request> req);
-  bool irecv(int rank, std::shared_ptr<Request> req);
-  bool irecv_red(int rank, std::shared_ptr<Request> req);
-  bool poll_finish(std::vector<std::shared_ptr<Request>>& reqs);
+  bool isend(int rank, void* ptr, size_t offset, size_t len,
+             uint32_t local_mr_id, uint32_t remote_mr_id, bool on_gpu);
+  bool irecv(int rank, void* ptr, size_t offset, size_t len, bool on_gpu);
+  bool irecv_red(int rank, void* ptr, size_t offset, size_t len, bool on_gpu,
+                 ReductionType red_op);
+  bool wait_finish();  // wait before works finished
 
   // ---------- Meta info -------------
   void set_communicator_meta_with_rank(int rank, CommunicatorMeta const& meta);
@@ -104,10 +104,12 @@ class Communicator {
   bool check_ready();
 
   // ---------- RDMA / IPC helpers ----
-  bool register_local_mr(void* local_buf, size_t len);
-  bool register_remote_mr(int remote_rank, void* local_buf, ibv_mr* remote_mr);
-  ibv_mr* get_local_mr(void* local_buf);
-  ibv_mr* get_remote_mr(int remote_rank, void* local_buf);
+  MR reg_mr(void* local_buf, size_t len);
+  bool notify_mr(int remote_rank, MR& mr);
+  MR wait_mr_notify(int remote_rank);
+  MR get_local_mr(void* local_buf);
+  MR get_local_mr(uint32_t mr_id);
+  MR get_remote_mr(int remote_rank, uint32_t mr_id);
 
   bool register_local_ipc_cache(void* local_buf);
   bool register_remote_ipc_cache(int remote_rank, void* local_buf,
@@ -140,11 +142,15 @@ class Communicator {
   // ---------- RDMA resources --------
   ibv_pd* pd_{nullptr};
   std::vector<ibv_cq*> cq_list_;
-  std::unordered_map<void*, ibv_mr*> ptr_to_local_mr_;  // local ptr -> local mr
-  std::unordered_map<int, std::unordered_map<void*, ibv_mr*>>
-      rank_ptr_to_remote_mr_;  // to_rank remote_ptr -> remote_mr
+  std::vector<CQPoller*> cq_poller_list_;
+  std::unordered_map<void*, ibv_mr*> ptr_to_local_ibv_mr_;
+  std::unordered_map<uint32_t, MR>
+      mr_id_to_local_mr_;  // local mr id -> local mr
   mutable std::mutex local_mr_mu_;
+  std::unordered_map<int, std::unordered_map<uint32_t, MR>>
+      rank_mr_id_to_remote_mr_;  // to_rank remote_ptr -> remote mr
   mutable std::mutex remote_mr_mu_;
+  std::atomic<uint32_t> next_mr_id{0};
 
   // ---------- IPC resources ---------
   std::unordered_map<void*, IpcCache> ptr_to_local_ipc_cache_;
@@ -158,6 +164,13 @@ class Communicator {
   std::shared_ptr<RedisExchanger> redis_client_;
   mutable std::mutex redis_client_mu_;
 
+  // Requests pool
+  std::unordered_map<unsigned, std::shared_ptr<Request>> requests_map_;
+  std::mutex req_mu_;
+  std::atomic<int> head_id{0};
+  std::atomic<int> tail_id{0};
+
   friend class RDMAEndpoint;
   friend class IPCEndpoint;
+  friend class CQPoller;
 };

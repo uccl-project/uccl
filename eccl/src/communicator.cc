@@ -1,3 +1,4 @@
+#include "cq_poller.h"
 #include "transport.h"
 #include "util/util.h"
 #include "utils.h"
@@ -80,6 +81,13 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
       support_rdma_roce = false;
     }
 
+    // start cq poller
+    for (int i = 0; i < config_->cq_poller_threads; i++) {
+      CQPoller* cq_poller = new CQPoller(this, cq_list_[i]);
+      cq_poller->start();
+      cq_poller_list_.push_back(cq_poller);
+    }
+
   } else {  // does not support RDMA
     // TODO: if we can't find any rdma nic, we still can do ipc comm on local
     // host.
@@ -138,6 +146,17 @@ Communicator::~Communicator() {
     rank_to_endpoint_.clear();
   }
 
+  // stop cq poller first
+  if (!cq_poller_list_.empty()) {
+    for (auto& cq_poller : cq_poller_list_) {
+      if (cq_poller) {
+        cq_poller->stop();
+        std::cout << "[INFO] Communicator CQPoller destroyed" << std::endl;
+      }
+    }
+    cq_poller_list_.clear();
+  }
+
   // Release RDMA resources
   if (!cq_list_.empty()) {
     for (auto& cq : cq_list_) {
@@ -179,7 +198,7 @@ Communicator::~Communicator() {
   // Release local memory regions
   {
     std::lock_guard<std::mutex> lk(local_mr_mu_);
-    for (auto& [ptr, mr] : ptr_to_local_mr_) {
+    for (auto& [ptr, mr] : ptr_to_local_ibv_mr_) {
       if (mr) {
         if (ibv_dereg_mr(mr)) {
           std::cerr << "[WARN] Communicator " << local_rank_
@@ -190,22 +209,13 @@ Communicator::~Communicator() {
         }
       }
     }
-    ptr_to_local_mr_.clear();
+    ptr_to_local_ibv_mr_.clear();
+    mr_id_to_local_mr_.clear();
   }
-
   // Release remote memory regions
   {
     std::lock_guard<std::mutex> lk(remote_mr_mu_);
-    // for (auto& [rank, mr_map] : rank_ptr_to_remote_mr_) {
-    //     for (auto& [ptr, mr] : mr_map) {
-    //         // remote MR usually not owned by this process; optionally skip
-    //         deregister
-    //         // just for safety, you can log
-    //         std::cout << "[INFO] Cleaned remote MR cache for rank " << rank
-    //         << std::endl;
-    //     }
-    // }
-    rank_ptr_to_remote_mr_.clear();
+    rank_mr_id_to_remote_mr_.clear();
   }
 
   // Release IPC caches
@@ -294,52 +304,95 @@ Communicator::get_endpoint_by_rank(int rank) {
   return {nullptr, false};
 }
 
-bool Communicator::isend(int rank, std::shared_ptr<Request> req) {
+bool Communicator::isend(int rank, void* ptr, size_t offset, size_t len,
+                         uint32_t local_mr_id, uint32_t remote_mr_id,
+                         bool on_gpu) {
   auto [ep, ok] = get_endpoint_by_rank(rank);
-  if (ok) {
-    // ep->send_async(req);
-    return true;
-  } else {
+  if (!ok || !ep) return false;
+
+  auto req =
+      std::make_shared<Request>(ptr, offset, len, local_mr_id, remote_mr_id,
+                                /*on_gpu*/ false, RequestType::SEND);
+
+  {
+    std::lock_guard<std::mutex> lk(req_mu_);
+    requests_map_[req->id] = req;
+  }
+
+  if (!ep->send_async(rank, req)) {
     return false;
   }
+
+  return true;
 }
 
-bool Communicator::irecv(int rank, std::shared_ptr<Request> req) {
+bool Communicator::irecv(int rank, void* ptr, size_t offset, size_t len,
+                         bool on_gpu) {
   auto [ep, ok] = get_endpoint_by_rank(rank);
-  if (ok) {
-    // ep->recv_async(req);
-    return true;
-  } else {
+  if (!ok || !ep) return false;
+
+  auto req = std::make_shared<Request>(ptr, offset, len, -1, -1,
+                                       /*on_gpu*/ false, RequestType::RECV);
+
+  {
+    std::lock_guard<std::mutex> lk(req_mu_);
+    requests_map_[req->id] = req;
+  }
+
+  if (!ep->recv_async(rank, req)) {
     return false;
   }
+
+  return true;
 }
 
-bool Communicator::irecv_red(int rank, std::shared_ptr<Request> req) {
+bool Communicator::irecv_red(int rank, void* ptr, size_t offset, size_t len,
+                             bool on_gpu, ReductionType red_op) {
   auto [ep, ok] = get_endpoint_by_rank(rank);
-  if (ok) {
-    // ep->recv_async(req);
-    return true;
-  } else {
+  if (!ok || !ep) return false;
+
+  auto req =
+      std::make_shared<Request>(ptr, offset, len, -1, -1, /*on_gpu*/ false,
+                                RequestType::SEND, true, red_op);  // todo
+
+  {
+    std::lock_guard<std::mutex> lk(req_mu_);
+    requests_map_[req->id] = req;
+  }
+
+  if (!ep->recv_async(rank, req)) {
     return false;
   }
+
+  return true;
 }
 
-bool Communicator::poll_finish(std::vector<std::shared_ptr<Request>>& reqs) {
-  size_t n = reqs.size();
-  std::vector<bool> unfinished(n, true);
-  size_t remaining = n;
+bool Communicator::wait_finish() {
+  unsigned start = head_id.load(std::memory_order_relaxed);
+  unsigned end = tail_id.load(std::memory_order_relaxed);
 
-  while (remaining > 0) {
-    for (size_t i = 0; i < n; ++i) {
-      if (!unfinished[i]) continue;
-
-      if (reqs[i]->finished.load(std::memory_order_acquire)) {
-        unfinished[i] = false;
-        --remaining;
+  for (unsigned id = start; id <= end; ++id) {
+    std::shared_ptr<Request> req;
+    {
+      std::lock_guard<std::mutex> lk(req_mu_);
+      auto it = requests_map_.find(id);
+      if (it != requests_map_.end()) {
+        req = it->second;
       }
     }
-    std::this_thread::yield();
+
+    if (req) {
+      while (!req->finished.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+      }
+      {
+        std::lock_guard<std::mutex> lk(req_mu_);
+        requests_map_.erase(id);
+      }
+    }
   }
+
+  head_id.store(end + 1, std::memory_order_relaxed);
   return true;
 }
 
@@ -411,36 +464,113 @@ bool Communicator::check_ready() {
   return true;
 }
 
-bool Communicator::register_local_mr(void* local_buf, size_t len) {
-  std::lock_guard<std::mutex> lock(local_mr_mu_);
-  // TODO: ibv_reg_mr
-  // ptr_to_local_mr_[local_buf] = std::make_shared<ibv_mr>(/* init mr */);
-  return true;
-}
+MR Communicator::reg_mr(void* local_buf, size_t len) {
+  if (!pd_) throw std::runtime_error("PD not initialized");
 
-ibv_mr* Communicator::get_local_mr(void* local_buf) {
-  std::lock_guard<std::mutex> lock(local_mr_mu_);
-  auto it = ptr_to_local_mr_.find(local_buf);
-  return (it != ptr_to_local_mr_.end()) ? it->second : nullptr;
-}
-
-// Register a remote MR for a given rank
-bool Communicator::register_remote_mr(int remote_rank, void* local_buf,
-                                      ibv_mr* remote_mr) {
-  std::lock_guard<std::mutex> lock(remote_mr_mu_);
-  rank_ptr_to_remote_mr_[remote_rank][local_buf] = remote_mr;
-  return true;
-}
-
-// Get remote MR
-ibv_mr* Communicator::get_remote_mr(int remote_rank, void* local_buf) {
-  std::lock_guard<std::mutex> lock(remote_mr_mu_);
-  auto it_rank = rank_ptr_to_remote_mr_.find(remote_rank);
-  if (it_rank != rank_ptr_to_remote_mr_.end()) {
-    auto it_buf = it_rank->second.find(local_buf);
-    if (it_buf != it_rank->second.end()) return it_buf->second;
+  ibv_mr* mr = ibv_reg_mr(pd_, local_buf, len,
+                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ |
+                              IBV_ACCESS_REMOTE_WRITE);
+  if (!mr) {
+    perror("ibv_reg_mr failed");
+    throw std::runtime_error("ibv_reg_mr failed");
   }
-  return nullptr;
+
+  uint32_t id = next_mr_id.fetch_add(1, std::memory_order_relaxed);
+
+  MR info;
+  info.id = id;
+  info.address = reinterpret_cast<uint64_t>(local_buf);
+  info.length = static_cast<uint32_t>(len);
+  info.key = mr->rkey;
+
+  {
+    std::lock_guard<std::mutex> lk(local_mr_mu_);
+    ptr_to_local_ibv_mr_[local_buf] = mr;
+    mr_id_to_local_mr_[id] = info;
+  }
+
+  return info;
+}
+
+bool Communicator::notify_mr(int remote_rank, MR& mr) {
+  if (!redis_client_ || !redis_client_->valid()) return false;
+
+  MRInfos wrapper;
+  wrapper.mrs.push_back(mr);
+
+  std::string key =
+      "mr:" + std::to_string(local_rank_) + "->" + std::to_string(remote_rank);
+
+  return redis_client_->publish(key, wrapper);
+}
+
+MR Communicator::wait_mr_notify(int remote_rank) {
+  MRInfos wrapper;
+
+  std::string key =
+      "mr:" + std::to_string(remote_rank) + "->" + std::to_string(local_rank_);
+
+  if (!redis_client_ || !redis_client_->valid()) {
+    throw std::runtime_error("Redis client not valid");
+  }
+
+  bool ok = redis_client_->wait_and_fetch(key, wrapper);
+  if (!ok || wrapper.mrs.empty()) {
+    throw std::runtime_error("Failed to fetch MR from remote rank=" +
+                             std::to_string(remote_rank));
+  }
+
+  MR remote_mr = wrapper.mrs[0];  // only support one mr now
+
+  {
+    std::lock_guard<std::mutex> lk(remote_mr_mu_);
+    rank_mr_id_to_remote_mr_[remote_rank][remote_mr.id] = remote_mr;
+  }
+
+  return remote_mr;
+}
+
+MR Communicator::get_local_mr(void* local_buf) {
+  uint64_t buf_addr = reinterpret_cast<uint64_t>(local_buf);
+
+  std::lock_guard<std::mutex> lk(local_mr_mu_);
+
+  auto it = ptr_to_local_ibv_mr_.find(local_buf);
+  if (it == ptr_to_local_ibv_mr_.end()) {
+    throw std::runtime_error("Local MR not found for buffer");
+  }
+
+  for (auto& kv : mr_id_to_local_mr_) {
+    const MR& mr = kv.second;
+    if (buf_addr >= mr.address && buf_addr < mr.address + mr.length) {
+      return mr;
+    }
+  }
+
+  throw std::runtime_error("Local MR info not found");
+}
+
+MR Communicator::get_local_mr(uint32_t mr_id) {
+  std::lock_guard<std::mutex> lk(local_mr_mu_);
+  auto it = mr_id_to_local_mr_.find(mr_id);
+  if (it == mr_id_to_local_mr_.end()) {
+    throw std::runtime_error("Local MR not found for buffer");
+  }
+  return it->second;
+}
+
+MR Communicator::get_remote_mr(int remote_rank, uint32_t mr_id) {
+  std::lock_guard<std::mutex> lk(remote_mr_mu_);
+  auto it_rank = rank_mr_id_to_remote_mr_.find(remote_rank);
+  if (it_rank == rank_mr_id_to_remote_mr_.end()) {
+    throw std::runtime_error("No MR cached for remote rank");
+  }
+  auto it_mr = it_rank->second.find(mr_id);
+  if (it_mr == it_rank->second.end()) {
+    throw std::runtime_error("Remote MR not found for id=" +
+                             std::to_string(mr_id));
+  }
+  return it_mr->second;
 }
 
 // Register a local IPC cache for a buffer

@@ -98,6 +98,60 @@ struct RDMAInfo : public Exchangeable {
   }
 };
 
+struct MR {
+  uint32_t id;
+  uint64_t address;
+  uint32_t length;
+  uint32_t key;
+};
+
+struct MRInfos : public Exchangeable {
+  std::vector<MR> mrs;
+
+  MRInfos() = default;
+
+  std::map<std::string, std::string> to_map() const override {
+    std::map<std::string, std::string> kv;
+    kv["count"] = std::to_string(mrs.size());
+
+    for (size_t i = 0; i < mrs.size(); ++i) {
+      auto const& mr = mrs[i];
+      kv["mr_" + std::to_string(i) + "_id"] = std::to_string(mr.id);
+
+      {
+        std::ostringstream oss;
+        oss << std::hex << std::setw(16) << std::setfill('0') << mr.address;
+        kv["mr_" + std::to_string(i) + "_addr"] = oss.str();
+      }
+
+      kv["mr_" + std::to_string(i) + "_len"] = std::to_string(mr.length);
+      kv["mr_" + std::to_string(i) + "_key"] = std::to_string(mr.key);
+    }
+
+    return kv;
+  }
+
+  void from_map(std::map<std::string, std::string> const& kv) override {
+    size_t count = std::stoul(kv.at("count"));
+    mrs.resize(count);
+
+    for (size_t i = 0; i < count; ++i) {
+      auto& mr = mrs[i];
+      mr.id = std::stoul(kv.at("mr_" + std::to_string(i) + "_id"));
+
+      {
+        std::string hexaddr = kv.at("mr_" + std::to_string(i) + "_addr");
+        std::stringstream ss;
+        ss << std::hex << hexaddr;
+        ss >> mr.address;
+      }
+
+      mr.length = std::stoul(kv.at("mr_" + std::to_string(i) + "_len"));
+      mr.key = std::stoul(kv.at("mr_" + std::to_string(i) + "_key"));
+    }
+  }
+};
+
 class RedisExchanger {
  public:
   RedisExchanger(std::string const& host = "127.0.0.1", int port = 6379,

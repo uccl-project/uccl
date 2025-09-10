@@ -214,7 +214,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
       build_efa "$TARGET" "$ARCH" "$IS_EFA"
       build_p2p "$TARGET" "$ARCH" "$IS_EFA"
       # build_gpu_driven "$TARGET" "$ARCH" "$IS_EFA"
-      build_eccl "$TARGET" "$ARCH" "$IS_EFA"
+      # build_eccl "$TARGET" "$ARCH" "$IS_EFA"
     fi
 
     ls -lh uccl/

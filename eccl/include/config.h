@@ -3,7 +3,7 @@
 #include <cstdlib>
 #include <string>
 
-#define DEFAULT_CHUNK_SIZE 1024 * 1024
+#define DEFAULT_RDMA_CHUNK_SIZE 1024 * 1024
 #define DEFAULT_QP_PER_EP 4
 #define DEFAULT_CQ_PER_EP 4
 #define DEFAULT_CQ_POLLER_THREADS 4
@@ -19,7 +19,7 @@
 #define DEFAULT_REDIS_SERVER_PORT 6379
 
 struct Config {
-  int chunk_size;
+  int rdma_chunk_size;
   int qp_count_per_ep;
   int cq_count_per_ep;
   int cq_poller_threads;
@@ -33,7 +33,8 @@ struct Config {
   int redis_port;
 
   Config()
-      : chunk_size(getEnvOrDefault("ECCL_CHUNK_SIZE", DEFAULT_CHUNK_SIZE)),
+      : rdma_chunk_size(
+            getEnvOrDefault("ECCL_RDMA_CHUNK_SIZE", DEFAULT_RDMA_CHUNK_SIZE)),
         qp_count_per_ep(getEnvOrDefault("ECCL_QP_COUNT", DEFAULT_QP_PER_EP)),
         cq_count_per_ep(getEnvOrDefault("ECCL_CQ_COUNT", DEFAULT_CQ_PER_EP)),
         cq_poller_threads(getEnvOrDefault("ECCL_CQ_POLLER_THREADS",
