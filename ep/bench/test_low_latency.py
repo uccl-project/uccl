@@ -517,6 +517,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     dist.barrier()
     dist.destroy_process_group()
 
+
 if __name__ == "__main__":
     # TODO: you may modify NUMA binding for less CPU overhead
     # TODO: buggy with `num_tokens=512`
