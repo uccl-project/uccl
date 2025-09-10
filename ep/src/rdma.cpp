@@ -1279,7 +1279,7 @@ void post_atomic_operations_efa(ProxyCtx& S,
           pack_imm(/*is_combine=*/true, v, static_cast<uint16_t>(offset));
 
       std::memset(&wrs[i], 0, sizeof(wrs[i]));
-      wrs[i].wr_id = kAtomicWrTag | (wr_id & 0x0000FFFFFFFFFFFFULL);
+      wrs[i].wr_id = kAtomicWrTag | (wr_id & kAtomicMask);
       wrs[i].opcode = IBV_WR_SEND_WITH_IMM;
       wrs[i].send_flags = IBV_SEND_SIGNALED;
       wrs[i].imm_data = htonl(imm);
