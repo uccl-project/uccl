@@ -238,15 +238,6 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                              responsible_expert_idx) != FINISHED_SUM_TAG * 2)
       ;
 
-    // TODO (MaoZiming): prevent EFA reordering BS.
-    {
-      uint64_t start = clock64();
-      uint64_t wait_cycles = (uint64_t)1e9;
-      while (clock64() - start < wait_cycles) {
-      }
-    }
-    // __syncwarp();
-
     // TODO(yihan): Mark here for future debugging check.
     // Calculate offset within LowLatencyLayout buffer for CPU proxy
     // translation Calculate offset relative to dispatch_rdma_recv_data_buffer
@@ -333,6 +324,11 @@ LOW_LATENCY_DISPATCH_RECV:
     EP_DEVICE_ASSERT(num_warps_per_group > 1 and num_warp_groups < 15);
     if (sub_warp_id == 1 and lane_id == 0) {
       auto start_time = clock64();
+    // TODO (MaoZiming): prevent EFA reordering BS.
+      uint64_t start = clock64();
+      uint64_t wait_cycles = (uint64_t)1e9;
+      while (clock64() - start < wait_cycles) {
+      }
       while ((num_recv_tokens = ld_acquire_sys_global(
                   rdma_recv_count + local_expert_idx * num_ranks + src_rank)) ==
              0)
