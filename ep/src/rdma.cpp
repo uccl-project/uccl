@@ -829,8 +829,7 @@ void local_process_completions(ProxyCtx& S,
     }
 
     switch (wc[i].opcode) {
-      case IBV_WC_RDMA_WRITE:
-      case IBV_WC_SEND: {
+      case IBV_WC_RDMA_WRITE: {
         send_completed++;
         const uint64_t wrid = wc[i].wr_id;
         if ((wrid & ~kAtomicMask) == kAtomicWrTag) {
@@ -992,7 +991,7 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       continue;
     }
 #ifdef EFA
-    if (cqe.opcode == IBV_WC_RECV && (cqe.wc_flags & IBV_WC_WITH_IMM) &&
+    if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
         ((ntohl(cqe.imm_data) >> 31) & 0x1)) {
       uint32_t imm = ntohl(cqe.imm_data);
 
@@ -1247,64 +1246,79 @@ void post_atomic_operations_efa(ProxyCtx& S,
     dst_rank_wr_ids[dst].push_back(i);
   }
 
-  for (auto& [dst_rank, wr_ids] : dst_rank_wr_ids) {
-    if (wr_ids.empty()) continue;
+  for (auto& [dst_rank, wr_idx_vec] : dst_rank_wr_ids) {
+    if (wr_idx_vec.empty()) continue;
 
     ProxyCtx* ctx = ctxs[dst_rank].get();
-    const size_t k = wr_ids.size();
-    std::vector<ibv_send_wr> wrs(k);
 
-    for (size_t i = 0; i < k; ++i) {
-      auto const& cmd = cmds_to_post[wr_ids[i]];
-      auto wr_id = wrs_to_post[wr_ids[i]];
-      wr_ids[i] = wr_id;
-      // Pack control into 32-bit imm:
-      // [31] kind (1=combine, 0=dispatch)
-      // [30:16] signed 15-bit value (two's complement)
-      // [15:0]  slot/seq (here: lower 16 bits of wr index)
+    if (!ctx || !ctx->qp) {
+      fprintf(stderr, "Destination ctx missing qp for dst=%d\n", dst_rank);
+      std::abort();
+    }
+    // Need remote MR info for the zero-length write target.
+    if (ctx->remote_len == 0) {
+      fprintf(stderr, "Remote region is zero-sized for dst=%d\n", dst_rank);
+      std::abort();
+    }
+    if (!ctx->mr) {
+      fprintf(stderr, "Missing local MR for dummy SGE (dst=%d)\n", dst_rank);
+      std::abort();
+    }
+
+    const size_t k = wr_idx_vec.size();
+    struct ibv_qp_ex* qpx = (struct ibv_qp_ex*)ctx->qp;
+
+    ibv_wr_start(qpx);
+    for (size_t j = 0; j < k; ++j) {
+      const size_t i = wr_idx_vec[j];
+      auto const& cmd = cmds_to_post[i];
+
+      // Map to real wr_id and store it back for tail tracking
+      const uint64_t wr_id = wrs_to_post[i];
+      wr_idx_vec[j] = wr_id;
+
+      // Pack immediate: [31]=kind, [30:16]=v(15-bit signed), [15:0]=offset
       int v = static_cast<int>(cmd.value);
       if (v < -16384 || v > 16383) {
-        fprintf(stderr,
-                "[EFA] value=%d won't fit in 15 bits; "
-                "use an inline payload scheme instead.\n",
-                v);
+        fprintf(
+            stderr,
+            "[EFA] value=%d won't fit in 15 bits; use a different scheme.\n",
+            v);
         std::abort();
       }
-      uint32_t offset = static_cast<int64_t>(cmd.req_rptr);
-      uint32_t imm =
-          pack_imm(/*is_combine=*/true, v, static_cast<uint16_t>(offset));
-      std::memset(&wrs[i], 0, sizeof(wrs[i]));
-      wrs[i].wr_id = kAtomicWrTag | (wr_id & kAtomicMask);
-      wrs[i].opcode = IBV_WR_SEND_WITH_IMM;
-      wrs[i].send_flags = IBV_SEND_SIGNALED;
-      wrs[i].imm_data = htonl(imm);
-      wrs[i].wr.ud.ah = ctx->dst_ah;
-      wrs[i].wr.ud.remote_qpn = ctx->dst_qpn;
-      wrs[i].wr.ud.remote_qkey = QKEY;
-      wrs[i].sg_list = nullptr;
-      wrs[i].num_sge = 0;
-      wrs[i].next = (i + 1 < k) ? &wrs[i + 1] : nullptr;
+      const uint16_t off16 = static_cast<uint16_t>(cmd.req_rptr);
+      const uint32_t imm = pack_imm(/*is_combine=*/true, v, off16);
+
+      // Choose a valid target address inside the remote MR.
+      // For zero-byte writes, allow remote_addr == remote_end.
+      uint64_t remote_addr = ctx->remote_addr;
+      // Set WR header
+      qpx->wr_id = kAtomicWrTag | (wr_id & kAtomicMask);
+      qpx->comp_mask = 0;
+      qpx->wr_flags = (j + 1 == k) ? IBV_SEND_SIGNALED : 0;
+
+      ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
+      ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_qpn, QKEY);
+      ibv_wr_set_sge(qpx, ctx->mr->lkey, (uintptr_t)ctx->mr->addr, 0);
       printf(
-          "[EFA_EMPTY_IMM] wr_id=%lu dst=%d kind=%u val=%d offset=%u "
-          "imm=0x%08x\n",
-          wrs[i].wr_id, dst_rank, static_cast<unsigned>(cmd.is_combine), v,
-          offset, imm);
+          "[EFA_ATOMIC] wr_id=%llu dst=%d val=%d off16=%u imm=0x%08x "
+          "raddr=0x%llx\n",
+          (unsigned long long)qpx->wr_id, dst_rank, v, off16, imm,
+          (unsigned long long)remote_addr);
     }
-    ibv_send_wr* bad = nullptr;
-    int ret = ibv_post_send(ctx->qp, &wrs[0], &bad);
+    int ret = ibv_wr_complete(qpx);
     if (ret) {
-      fprintf(stderr, "[EFA] post_send failed: %s (ret=%d)\n", strerror(ret),
-              ret);
-      if (bad)
-        fprintf(stderr, "Bad WR at %p (wr_id=%lu)\n", (void*)bad, bad->wr_id);
+      fprintf(stderr, "[EFA] ibv_wr_complete failed (dst=%d): %s (ret=%d)\n",
+              dst_rank, strerror(ret), ret);
       std::abort();
     }
     S.posted.fetch_add(k, std::memory_order_relaxed);
-    const uint64_t batch_tail_wr = wr_ids.back();
+    const uint64_t batch_tail_wr = wr_idx_vec.back();
+
     {
       std::lock_guard<std::mutex> lock(finished_wrs_mutex);
       auto [it, inserted] =
-          S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
+          S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_idx_vec));
       if (!inserted) {
         fprintf(stderr,
                 "block_idx: %d, Error: tail wr_id %lu already exists (map=%p, "
@@ -1313,10 +1327,10 @@ void post_atomic_operations_efa(ProxyCtx& S,
                 S.wr_id_to_wr_ids.size(), dst_rank);
         std::abort();
       } else {
-        // TODO(MaoZiming): ack for atomic operations?
-        for (auto const& wr_id : it->second) {
-          finished_wrs.insert(wr_id);
-          acked_wrs.insert(wr_id);
+        // Mirror your existing “auto-ack” for atomics
+        for (auto const& wid : it->second) {
+          finished_wrs.insert(wid);
+          acked_wrs.insert(wid);
         }
       }
     }
