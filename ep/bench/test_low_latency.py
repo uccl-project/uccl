@@ -385,6 +385,7 @@ def test_main(
         for return_recv_hook in (True,):
             print("before group.barrier()", flush=True)
             group.barrier()
+            print("after group.barrier()", flush=True)
             dispatch_t, combine_t = bench_kineto(
                 partial(test_func, return_recv_hook=return_recv_hook),
                 kernel_names=("dispatch", "combine"),
@@ -494,8 +495,11 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     buffer.destroy()
     dist.barrier()
     destroy_uccl(proxies, workers)
+    print("Before dist.barrier()", flush=True)
     dist.barrier()
+    print("Before dist.destroy_process_group()", flush=True)
     dist.destroy_process_group()
+    print("After dist.destroy_process_group()", flush=True)
 
 
 if __name__ == "__main__":
