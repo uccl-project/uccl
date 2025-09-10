@@ -1270,33 +1270,26 @@ void post_atomic_operations_efa(ProxyCtx& S,
                 v);
         std::abort();
       }
-
       uint32_t offset = static_cast<int64_t>(cmd.req_rptr);
       uint32_t imm =
           pack_imm(/*is_combine=*/true, v, static_cast<uint16_t>(offset));
-
       std::memset(&wrs[i], 0, sizeof(wrs[i]));
       wrs[i].wr_id = kAtomicWrTag | (wr_id & kAtomicMask);
       wrs[i].opcode = IBV_WR_SEND_WITH_IMM;
       wrs[i].send_flags = IBV_SEND_SIGNALED;
       wrs[i].imm_data = htonl(imm);
-
       wrs[i].wr.ud.ah = ctx->dst_ah;
       wrs[i].wr.ud.remote_qpn = ctx->dst_qpn;
       wrs[i].wr.ud.remote_qkey = QKEY;
-
       wrs[i].sg_list = nullptr;
       wrs[i].num_sge = 0;
-
       wrs[i].next = (i + 1 < k) ? &wrs[i + 1] : nullptr;
-
       printf(
           "[EFA_EMPTY_IMM] wr_id=%lu dst=%d kind=%u val=%d offset=%u "
           "imm=0x%08x\n",
           wrs[i].wr_id, dst_rank, static_cast<unsigned>(cmd.is_combine), v,
           offset, imm);
     }
-
     ibv_send_wr* bad = nullptr;
     int ret = ibv_post_send(ctx->qp, &wrs[0], &bad);
     if (ret) {
@@ -1306,7 +1299,6 @@ void post_atomic_operations_efa(ProxyCtx& S,
         fprintf(stderr, "Bad WR at %p (wr_id=%lu)\n", (void*)bad, bad->wr_id);
       std::abort();
     }
-
     S.posted.fetch_add(k, std::memory_order_relaxed);
     const uint64_t batch_tail_wr = wr_ids.back();
     {
