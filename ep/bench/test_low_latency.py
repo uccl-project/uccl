@@ -400,9 +400,9 @@ def test_main(
 
     # Dispatch + combine testing
     # TODO(MaoZiming)
-    avg_t, min_t, max_t = bench(partial(test_func, return_recv_hook=False))
+    avg_t, min_t, max_t = bench(partial(test_func, return_recv_hook=False), num_warmups=1, num_tests=5)
     print(
-        f"[rank {rank}] Dispatch + combine bandwidth: {(num_dispatch_comm_bytes + num_combine_comm_bytes) / 1e9 / avg_t:.2f} GB/s, "
+        f"[rank {rank}] Dispatch + combine bandwidth: {(num_dispatch_comm_bytes + num_combine_comm_bytes) / 1e6 / avg_t:.2f} MB/s, "
         f"avg_t={avg_t * 1e6:.2f} us, min_t={min_t * 1e6:.2f} us, max_t={max_t * 1e6:.2f} us",
         flush=True,
     )
