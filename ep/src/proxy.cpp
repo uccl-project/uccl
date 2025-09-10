@@ -424,7 +424,7 @@ void Proxy::post_gpu_commands_mixed(
   if (!atomic_wrs.empty()) {
 #ifdef EFA
     post_atomic_operations_efa(ctx_, atomic_wrs, atomic_cmds,
-                               ctxs_for_all_ranks_, cfg_.rank, cfg_.block_idx, finished_wrs_, finished_wrs_mutex_);
+                               ctxs_for_all_ranks_, cfg_.rank, cfg_.block_idx, finished_wrs_, finished_wrs_mutex_, acked_wrs_);
 #else
     post_atomic_operations(atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
                            cfg_.rank);

@@ -141,12 +141,11 @@ def test_main(
     # Check dispatch correctness
     do_check = True
     hash_value, num_times = 0, 0
-    # TODO(MaoZiming)
+    
     for current_x in x_list:
-        # for return_recv_hook in (True, False):
+        # TODO(MaoZiming): Support return_recv_hook=False
         for return_recv_hook in (True,):
             for dispatch_use_fp8 in (False, True):
-            # for dispatch_use_fp8 in (False,):
                 for round_scale in (False,):
                     for round_scale in (False, True) if dispatch_use_fp8 else (False,):
                         for use_ue8m0 in (False, True) if round_scale else (False,):
@@ -175,8 +174,6 @@ def test_main(
                                     )
                                 )
                                 hook() if return_recv_hook else event.current_stream_wait()
-                                torch.cuda.synchronize()
-                            torch.cuda.synchronize()
                             packed_recv_x = (
                                 (packed_recv_x[0], packed_recv_x[1].contiguous())
                                 if dispatch_use_fp8
@@ -382,8 +379,11 @@ def test_main(
             f"avg_t={avg_t * 1e6:.2f} us, min_t={min_t * 1e6:.2f} us, max_t={max_t * 1e6:.2f} us",
             flush=True,
         )
+    if True:
         # Separate profiling
-        for return_recv_hook in (False, True):
+        # for return_recv_hook in (False, True):
+        for return_recv_hook in (True,):
+            print("before group.barrier()", flush=True)
             group.barrier()
             dispatch_t, combine_t = bench_kineto(
                 partial(test_func, return_recv_hook=return_recv_hook),

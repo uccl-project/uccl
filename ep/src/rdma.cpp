@@ -869,22 +869,22 @@ void local_process_completions(ProxyCtx& S,
         send_completed++;
         // Detect atomic WRs by checking the high tag bits
         // TODO(MaoZiming): ignore ack from atomic remote for now. 
-        if ((wc[i].wr_id & 0xFFFF000000000000ULL) == kAtomicWrTag) {
-            uint64_t wr_id = wc[i].wr_id & 0x0000FFFFFFFFFFFFULL;
-            printf("Thread %d: got atomic CQE logical_wr_id=%lu\n",
-                  thread_idx, wr_id);
-            {
-                std::lock_guard<std::mutex> lock(finished_wrs_mutex);
-                acked_wrs.insert(wr_id);
-                if (finished_wrs.find(wr_id) == finished_wrs.end()) {
-                  fprintf(stderr,
-                          "Error: atomic finished_wrs received ACK for unknown wr_id %lu\n",
-                          wr_id);
-                  std::abort();
-                }
-            }
-            continue;
-        }
+        // if ((wc[i].wr_id & 0xFFFF000000000000ULL) == kAtomicWrTag) {
+        //     uint64_t wr_id = wc[i].wr_id & 0x0000FFFFFFFFFFFFULL;
+        //     printf("Thread %d: got atomic CQE logical_wr_id=%lu\n",
+        //           thread_idx, wr_id);
+        //     {
+        //         std::lock_guard<std::mutex> lock(finished_wrs_mutex);
+        //         acked_wrs.insert(wr_id);
+        //         if (finished_wrs.find(wr_id) == finished_wrs.end()) {
+        //           fprintf(stderr,
+        //                   "Error: atomic finished_wrs received ACK for unknown wr_id %lu\n",
+        //                   wr_id);
+        //           std::abort();
+        //         }
+        //     }
+        //     continue;
+        // }
       } break;
       case IBV_WC_RECV:
         if (wc[i].wc_flags & IBV_WC_WITH_IMM &&
@@ -1280,7 +1280,7 @@ void post_atomic_operations_efa(ProxyCtx& S,
                                 std::vector<uint64_t> const& wrs_to_post,
                                 std::vector<TransferCmd> const& cmds_to_post,
                                 std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                                int my_rank, int block_idx, std::unordered_set<uint64_t>&finished_wrs, std::mutex& finished_wrs_mutex) {
+                                int my_rank, int block_idx, std::unordered_set<uint64_t>&finished_wrs, std::mutex& finished_wrs_mutex, std::unordered_set<uint64_t>& acked_wrs) {
   if (cmds_to_post.size() > ProxyCtx::kMaxAtomicOps) {
     fprintf(stderr, "Too many atomic operations: %zu > %zu\n",
             cmds_to_post.size(), ProxyCtx::kMaxAtomicOps);
@@ -1375,8 +1375,9 @@ void post_atomic_operations_efa(ProxyCtx& S,
                   S.wr_id_to_wr_ids.size(), dst_rank);
           std::abort();
       } else {
-        for (auto const& wr_id : wr_ids) {
+        for (auto const& wr_id : it->second) {
           finished_wrs.insert(wr_id);
+          acked_wrs.insert(wr_id); // For atomic, we consider it acked immediately after posting
           printf("block_idx: %d, Inserting atomics finished wr_id=%lu for tail wr_id=%lu\n",
                  block_idx, wr_id, batch_tail_wr);
         }
