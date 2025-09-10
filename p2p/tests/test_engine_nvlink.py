@@ -75,7 +75,7 @@ def test_local_dist():
         print("Running test_local (server)…")
 
         engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
-        metadata = engine.get_endpoint_metadata()
+        metadata = engine.get_metadata()
         ip, port, remote_gpu_idx = p2p.Endpoint.parse_metadata(metadata)
         print(f"[server] Parsed IP: {ip}")
         print(f"[server] Parsed Port: {port}")
@@ -89,11 +89,11 @@ def test_local_dist():
         tensor = torch.zeros(1024, dtype=torch.float32, device="cuda:0")
         assert tensor.is_contiguous()
         mr_id = 0
-        ok, fifo_blob = engine.advertise(
-            conn_id, mr_id, tensor.data_ptr(), tensor.numel() * 4
+        ok, fifo_blob = engine.advertise_ipc(
+            conn_id, tensor.data_ptr(), tensor.numel() * 4
         )
-        assert ok and isinstance(fifo_blob, (bytes, bytearray)) and len(fifo_blob) == 64
-        print("[server] Buffer exposed for RDMA READ")
+        assert ok and isinstance(fifo_blob, (bytes, bytearray))
+        print("[server] Buffer exposed for IPC READ")
 
         _send_bytes(bytes(fifo_blob), dst=1)
 
@@ -113,7 +113,7 @@ def test_local_dist():
         )
 
         engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
-        success, conn_id = engine.connect(metadata)
+        success, conn_id = engine.connect_local(remote_gpu_idx)
         assert success
         print(f"[client] Connected successfully: conn_id={conn_id}")
         _send_int(conn_id, dst=0)
@@ -123,11 +123,10 @@ def test_local_dist():
 
         fifo_blob = _recv_bytes(src=0)
         print("[client] Received FIFO blob from server")
-        assert isinstance(fifo_blob, (bytes, bytearray)) and len(fifo_blob) == 64
+        assert isinstance(fifo_blob, (bytes, bytearray))
 
-        mr_id = 0
-        success = engine.send(
-            conn_id, mr_id, tensor.data_ptr(), tensor.numel() * 4, fifo_blob
+        success = engine.write_ipc(
+            conn_id, tensor.data_ptr(), tensor.numel() * 4, fifo_blob
         )
         assert success
         print("[client] Sent data")
