@@ -241,8 +241,6 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
   std::sort(finished_copy.begin(), finished_copy.end());
   for (auto wr_id : finished_copy) {
     if (acked_wrs_.find(wr_id) == acked_wrs_.end()) break;
-    printf("block_idx: %d, wr_id %lu completed, my_tail + check_i: %lu\n",
-           cfg_.block_idx, wr_id, my_tail + check_i);
     finished_wrs_.erase(wr_id);
     acked_wrs_.erase(wr_id);
     // Clear ring entry (contiguity assumed)
@@ -262,10 +260,6 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
     actually_completed++;
   }
   if (!actually_completed) return;
-  printf(
-      "block_idx: %d, moving my_tail from %lu to %lu (actually_completed=%d)\n",
-      cfg_.block_idx, my_tail, my_tail + actually_completed,
-      actually_completed);
   my_tail += actually_completed;
   cfg_.rb->cpu_volatile_store_tail(my_tail);
 }
@@ -284,9 +278,6 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
   wrs_to_post.reserve(batch_size);
   std::vector<TransferCmd> cmds_to_post;
   cmds_to_post.reserve(batch_size);
-  printf(
-      "block_idx: %d, Posting %zu new commands (head=%lu tail=%lu seen=%zu)\n",
-      cfg_.block_idx, batch_size, cur_head, my_tail, seen);
 
   for (size_t i = seen; i < cur_head; ++i) {
     uint64_t cmd = cfg_.rb->volatile_load_cmd(i);
@@ -295,7 +286,6 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 
     TransferCmd& cmd_entry = cfg_.rb->load_cmd_entry(i);
     wrs_to_post.push_back(i);
-    printf("block_idx: %d, pushed to wr_to_post i: %zu\n", cfg_.block_idx, i);
     cmds_to_post.push_back(cmd_entry);
     wr_id_to_start_time_[i] = std::chrono::high_resolution_clock::now();
     seen = i + 1;
@@ -408,13 +398,9 @@ void Proxy::post_gpu_commands_mixed(
 
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
     if (cmds_to_post[i].is_atomic) {
-      printf("block_idx: %d, wr_id %lu is atomic operation\n", cfg_.block_idx,
-             wrs_to_post[i]);
       atomic_wrs.push_back(wrs_to_post[i]);
       atomic_cmds.push_back(cmds_to_post[i]);
     } else {
-      printf("block_idx: %d, wr_id %lu is regular RDMA write\n", cfg_.block_idx,
-             wrs_to_post[i]);
       rdma_wrs.push_back(wrs_to_post[i]);
       rdma_cmds.push_back(cmds_to_post[i]);
     }

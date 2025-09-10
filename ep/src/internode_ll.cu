@@ -137,11 +137,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         }
       }
       asm volatile("bar.sync 1, %0;" ::"r"(num_threads));
-      // __threadfence_system();
 
-      // if (thread_id == 0) {
-      //   st_release_sys_global(rdma_x_src_idx, token_idx);  // publish header
-      // }
       // Issue IBGDA sends
       if (dst_expert_idx >= 0) {
         int slot_idx =
