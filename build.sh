@@ -112,6 +112,7 @@ build_p2p() {
   mkdir -p uccl/lib
   cp p2p/p2p.*.so uccl/
   cp p2p/collective.py uccl/
+  cp p2p/transfer.py uccl/
   cp p2p/utils.py uccl/
 }
 

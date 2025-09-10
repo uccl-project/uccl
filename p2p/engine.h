@@ -118,6 +118,7 @@ class Endpoint {
 
   bool regv(std::vector<void const*> const& data_v,
             std::vector<size_t> const& size_v, std::vector<uint64_t>& mr_id_v);
+  bool dereg(uint64_t mr_id);
 
   /*Send data to the remote server. Blocking. */
   bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,

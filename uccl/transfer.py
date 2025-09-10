@@ -37,7 +37,9 @@ class TransferManager:
             self.mr_id = mr_id
             self.conn = conn
 
-    def __init__(self, gpu_idx_list: list[int], num_cpus: int, zmq_port: int):
+    def __init__(
+        self, gpu_idx_list: list[int], num_cpus: int, zmq_port: int
+    ):
         assert len(gpu_idx_list) > 0
         self.gpu_idx_list = gpu_idx_list
         self.num_cpus = num_cpus
@@ -69,7 +71,6 @@ class TransferManager:
         socket.send_pyobj(self.gpu_idx_list)
         remote_gpu_idx_list = socket.recv_pyobj()
         # Assume the same GPU indexes in both sides
-        # TODO: for intra-node and inter-node, these are different.
         assert remote_gpu_idx_list == self.gpu_idx_list
 
         socket.send_pyobj(self.ep_ports)
@@ -82,14 +83,18 @@ class TransferManager:
         for local_gpu_idx in self.gpu_idx_list:
             remote_gpu_idx = local_gpu_idx
             if self.local_ip == remote_ip:
-                success, conn_id = self.eps[local_gpu_idx].connect_local(remote_gpu_idx)
+                success, conn_id = self.eps[local_gpu_idx].connect_local(
+                    remote_gpu_idx
+                )
             else:
                 success, conn_id = self.eps[local_gpu_idx].connect(
                     remote_ip,
                     remote_gpu_idx,
                     self.remote_ep_ports[remote_gpu_idx],
                 )
-            assert success, f"Failed to connect to {remote_ip} on GPU {remote_gpu_idx}"
+            assert (
+                success
+            ), f"Failed to connect to {remote_ip} on GPU {remote_gpu_idx}"
             self.conn_ids[local_gpu_idx][remote_gpu_idx] = self.Connection(
                 local_gpu_idx,
                 remote_gpu_idx,
@@ -155,7 +160,9 @@ class TransferManager:
         transfer_state = self.transfer_table[transfer_id]
         conn = transfer_state.conn
         if conn.is_local:
-            success, transfer_metadata = self.eps[conn.local_gpu_idx].advertise_ipc(
+            success, transfer_metadata = self.eps[
+                conn.local_gpu_idx
+            ].advertise_ipc(
                 conn.conn_id, transfer_state.data_ptr, transfer_state.size
             )
         else:
@@ -165,8 +172,9 @@ class TransferManager:
                 transfer_state.data_ptr,
                 transfer_state.size,
             )
-        assert success, f"Failed to advertise tensor on GPU {conn.local_gpu_idx}"
-        # TODO: need to use another ZMQ socket for this.
+        assert (
+            success
+        ), f"Failed to advertise tensor on GPU {conn.local_gpu_idx}"
         conn.socket.send_pyobj(transfer_metadata)
         return True
 
@@ -179,7 +187,9 @@ class TransferManager:
         ), f"Failed to fetch transfer metadata on GPU {conn.local_gpu_idx}"
         return transfer_metadata
 
-    def transfer_tensor(self, transfer_id: int, transfer_metadata: bytes) -> bool:
+    def transfer_tensor(
+        self, transfer_id: int, transfer_metadata: bytes
+    ) -> bool:
         transfer_state = self.transfer_table[transfer_id]
         conn = transfer_state.conn
         if conn.is_local:
