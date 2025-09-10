@@ -92,7 +92,6 @@ class Buffer:
         ] * self.group_size
         local_device_id = self.runtime.get_local_device_id()
         dist.all_gather_object(device_ids, local_device_id, group)
-
         # Synchronize IPC handles
         ipc_handles = [
             None,

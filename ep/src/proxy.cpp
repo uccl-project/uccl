@@ -78,14 +78,6 @@ void Proxy::init_common() {
   printf("[PROXY_INIT] Atomic buffer at %p, size %zu bytes\n",
          ctx_.atomic_old_values_buf, atomic_buf_size);
 
-  // Add to debug file for core issue tracking
-  FILE* debug_file = fopen("/tmp/uccl_debug.txt", "a");
-  if (debug_file) {
-    fprintf(debug_file,
-            "[PROXY_INIT] Block %d: remote_addr=0x%lx, local_buffer=0x%lx\n",
-            cfg_.block_idx, ctx_.remote_addr, (uintptr_t)cfg_.gpu_buffer);
-    fclose(debug_file);
-  }
   int num_ranks = ctxs_for_all_ranks_.size();
   local_infos_.assign(num_ranks, RDMAConnectionInfo{});
   remote_infos_.assign(num_ranks, RDMAConnectionInfo{});
@@ -93,13 +85,6 @@ void Proxy::init_common() {
   uint32_t next_tag = 1;
   ctx_by_tag_.clear();
   ctx_by_tag_.resize(ctxs_for_all_ranks_.size() + 1, nullptr);
-  cudaError_t err =
-      cudaStreamCreateWithFlags(&ctx_.atomic_stream, cudaStreamNonBlocking);
-  if (err != cudaSuccess) {
-    fprintf(stderr, "cudaStreamCreateWithFlags failed: %s\n",
-            cudaGetErrorString(err));
-    std::abort();
-  }
   // Per peer QP initialization
   for (int peer = 0; peer < num_ranks; ++peer) {
     auto& c = *ctxs_for_all_ranks_[peer];
@@ -115,8 +100,6 @@ void Proxy::init_common() {
     // NOTE(MaoZiming): each context can share the same cq, pd, mr.
     // but the qp must be different.
     c.cq = ctx_.cq;
-    c.atomic_stream = ctx_.atomic_stream;
-
     create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
                          &local_infos_[peer], my_rank);
     modify_qp_to_init(c);
@@ -203,7 +186,7 @@ void Proxy::run_sender() {
   size_t seen = 0;
   uint64_t my_tail = 0;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    local_poll_completions(ctx_, finished_wrs_, finished_wrs_mutex_,
+    local_poll_completions(ctx_, finished_wrs_, acked_wrs_, finished_wrs_mutex_,
                            cfg_.block_idx, ctx_by_tag_);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
@@ -237,36 +220,31 @@ void Proxy::run_dual() {
   size_t seen = 0;
   printf("run_dual initialization complete\n");
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    poll_cq_dual(ctx_, finished_wrs_, finished_wrs_mutex_, cfg_.block_idx, ring,
-                 ctx_by_tag_, atomic_buffer_ptr_);
+    poll_cq_dual(ctx_, finished_wrs_, acked_wrs_, finished_wrs_mutex_,
+                 cfg_.block_idx, ring, ctx_by_tag_, atomic_buffer_ptr_);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
   }
 }
 
 void Proxy::notify_gpu_completion(uint64_t& my_tail) {
-#ifdef ASSUME_WR_IN_ORDER
   if (finished_wrs_.empty()) return;
+  if (acked_wrs_.empty()) return;
 
   std::lock_guard<std::mutex> lock(finished_wrs_mutex_);
   int check_i = 0;
   int actually_completed = 0;
 
   // Copy to iterate safely while erasing.
-  std::unordered_set<uint64_t> finished_copy(finished_wrs_.begin(),
-                                             finished_wrs_.end());
+  std::vector<uint64_t> finished_copy(finished_wrs_.begin(),
+                                      finished_wrs_.end());
+  std::sort(finished_copy.begin(), finished_copy.end());
   for (auto wr_id : finished_copy) {
-#ifdef SYNCHRONOUS_COMPLETION
-    // These are your existing global conditions.
-    if (!(ctx_.has_received_ack && ctx_.largest_completed_wr >= wr_id)) {
-      continue;
-    }
+    if (acked_wrs_.find(wr_id) == acked_wrs_.end()) break;
     finished_wrs_.erase(wr_id);
-#else
-    finished_wrs_.erase(wr_id);
-#endif
+    acked_wrs_.erase(wr_id);
     // Clear ring entry (contiguity assumed)
-    cfg_.rb->buf[(my_tail + check_i) & kQueueMask].cmd = 0;
+    cfg_.rb->volatile_store_cmd(my_tail + check_i, 0);
     check_i++;
 
     auto it = wr_id_to_start_time_.find(wr_id);
@@ -281,17 +259,9 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
     completion_count_++;
     actually_completed++;
   }
-
+  if (!actually_completed) return;
   my_tail += actually_completed;
-#ifndef SYNCHRONOUS_COMPLETION
-  finished_wrs_.clear();
-#endif
-  // cfg_.rb->tail = my_tail;
   cfg_.rb->cpu_volatile_store_tail(my_tail);
-#else
-  printf("ASSUME_WR_IN_ORDER is not defined. This is not supported.\n");
-  std::abort();
-#endif
 }
 
 void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
@@ -302,6 +272,8 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
     return;
   }
   size_t batch_size = cur_head - seen;
+  if (batch_size == 0) return;
+
   std::vector<uint64_t> wrs_to_post;
   wrs_to_post.reserve(batch_size);
   std::vector<TransferCmd> cmds_to_post;
@@ -437,12 +409,13 @@ void Proxy::post_gpu_commands_mixed(
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
                             rdma_cmds, ctxs_for_all_ranks_, cfg_.rank,
-                            cfg_.block_idx);
+                            cfg_.block_idx, finished_wrs_, finished_wrs_mutex_);
   }
   if (!atomic_wrs.empty()) {
 #ifdef EFA
     post_atomic_operations_efa(ctx_, atomic_wrs, atomic_cmds,
-                               ctxs_for_all_ranks_, cfg_.rank, cfg_.block_idx);
+                               ctxs_for_all_ranks_, cfg_.rank, cfg_.block_idx,
+                               finished_wrs_, finished_wrs_mutex_, acked_wrs_);
 #else
     post_atomic_operations(atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
                            cfg_.rank);
@@ -466,6 +439,9 @@ void Proxy::post_atomic_operations(std::vector<uint64_t> const& wrs_to_post,
   for (size_t i = 0; i < wrs_to_post.size(); ++i) {
     if (cmds_to_post[i].dst_rank == static_cast<uint32_t>(my_rank)) {
       // NOTE(MaoZiming): this should not happen.
+      fprintf(stderr,
+              "Error: atomic operation to self (rank %d) should not happen\n",
+              my_rank);
       std::abort();
       continue;
     } else {
