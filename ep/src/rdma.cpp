@@ -24,7 +24,6 @@
 #include <unordered_set>
 #include <vector>
 #include <fcntl.h>
-#include <algorithm>
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
@@ -173,21 +172,19 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   dist.reserve(ib_nics.size());
 
   for (auto& nic : ib_nics) {
-      uint32_t d = uccl::safe_pcie_distance(gpu_device_path, nic.second);
-      dist.emplace_back(nic.first, d);
+    uint32_t d = uccl::safe_pcie_distance(gpu_device_path, nic.second);
+    dist.emplace_back(nic.first, d);
   }
 
-  auto it = std::min_element(dist.begin(), dist.end(),
-                            [](auto const& a, auto const& b) {
-                                return a.second < b.second;
-                            });
+  auto it = std::min_element(
+      dist.begin(), dist.end(),
+      [](auto const& a, auto const& b) { return a.second < b.second; });
 
   if (it == dist.end()) {
-      fprintf(stderr, "[WARN] no NIC found, defaulting to first\n");
-      // fallback
+    fprintf(stderr, "[WARN] no NIC found, defaulting to first\n");
+    // fallback
   }
   auto selected_nic_name = it->first;
-
 
   fprintf(stderr, "[DBG] selected_nic_name=%s\n", selected_nic_name.c_str());
   int selected_dev_idx = -1;
@@ -199,10 +196,12 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     }
   }
   if (selected_dev_idx < 0) {
-    fprintf(stderr, "[FATAL] Selected RDMA NIC '%s' not found in verbs device list\n",
+    fprintf(stderr,
+            "[FATAL] Selected RDMA NIC '%s' not found in verbs device list\n",
             selected_nic_name.c_str());
     for (int i = 0; i < num_devices; ++i) {
-      fprintf(stderr, "  verbs dev[%d]=%s\n", i, ibv_get_device_name(dev_list[i]));
+      fprintf(stderr, "  verbs dev[%d]=%s\n", i,
+              ibv_get_device_name(dev_list[i]));
     }
     ibv_free_device_list(dev_list);
     std::abort();
@@ -233,8 +232,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   printf("Registering MR with iova=0x%lx\n", iova);
   S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
-  printf("Registered MR with lkey=0x%x, rkey=0x%x\n", S.mr->lkey,
-         S.mr->rkey);
+  printf("Registered MR with lkey=0x%x, rkey=0x%x\n", S.mr->lkey, S.mr->rkey);
 #endif
 
   if (!S.mr) {
@@ -677,7 +675,9 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              std::vector<uint64_t> const& wrs_to_post,
                              std::vector<TransferCmd> const& cmds_to_post,
                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                             int my_rank, int block_idx, std::unordered_set<uint64_t>&finished_wrs, std::mutex& finished_wrs_mutex) {
+                             int my_rank, int block_idx,
+                             std::unordered_set<uint64_t>& finished_wrs,
+                             std::mutex& finished_wrs_mutex) {
   if (num_wrs == 0) return;
   if (wrs_to_post.size() != num_wrs || cmds_to_post.size() != num_wrs) {
     fprintf(stderr,
@@ -822,22 +822,28 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
     S.posted.fetch_add(k, std::memory_order_relaxed);
     {
       std::lock_guard<std::mutex> lock(finished_wrs_mutex);
-      auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
+      auto [it, inserted] =
+          S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
       if (!inserted) {
-          fprintf(stderr,
-                  "block_idx: %d, Error: tail wr_id %lu already exists (map=%p, size=%zu, dst_rank=%d)\n",
-                  block_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
-                  S.wr_id_to_wr_ids.size(), dst_rank);
-          std::abort();
+        fprintf(stderr,
+                "block_idx: %d, Error: tail wr_id %lu already exists (map=%p, "
+                "size=%zu, dst_rank=%d)\n",
+                block_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
+                S.wr_id_to_wr_ids.size(), dst_rank);
+        std::abort();
       } else {
         for (auto const& wr_id : it->second) {
           finished_wrs.insert(wr_id);
-          printf("block_idx: %d, Inserting finished wr_id=%lu for tail wr_id=%lu\n",
-                 block_idx, wr_id, batch_tail_wr);
+          printf(
+              "block_idx: %d, Inserting finished wr_id=%lu for tail "
+              "wr_id=%lu\n",
+              block_idx, wr_id, batch_tail_wr);
         }
       }
-      fprintf(stderr,"block_idx: %d, Posted batch to dst_rank %d, batch_tail_wr: %lu, map=%p\n",
-            block_idx, dst_rank, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
+      fprintf(stderr,
+              "block_idx: %d, Posted batch to dst_rank %d, batch_tail_wr: %lu, "
+              "map=%p\n",
+              block_idx, dst_rank, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
     }
   }
 }
@@ -868,7 +874,7 @@ void local_process_completions(ProxyCtx& S,
       case IBV_WC_SEND: {
         send_completed++;
         // Detect atomic WRs by checking the high tag bits
-        // TODO(MaoZiming): ignore ack from atomic remote for now. 
+        // TODO(MaoZiming): ignore ack from atomic remote for now.
         // if ((wc[i].wr_id & 0xFFFF000000000000ULL) == kAtomicWrTag) {
         //     uint64_t wr_id = wc[i].wr_id & 0x0000FFFFFFFFFFFFULL;
         //     printf("Thread %d: got atomic CQE logical_wr_id=%lu\n",
@@ -878,8 +884,8 @@ void local_process_completions(ProxyCtx& S,
         //         acked_wrs.insert(wr_id);
         //         if (finished_wrs.find(wr_id) == finished_wrs.end()) {
         //           fprintf(stderr,
-        //                   "Error: atomic finished_wrs received ACK for unknown wr_id %lu\n",
-        //                   wr_id);
+        //                   "Error: atomic finished_wrs received ACK for
+        //                   unknown wr_id %lu\n", wr_id);
         //           std::abort();
         //         }
         //     }
@@ -893,29 +899,33 @@ void local_process_completions(ProxyCtx& S,
           uint64_t wr_done = static_cast<uint64_t>(ntohl(wc[i].imm_data));
           {
             std::lock_guard<std::mutex> lock(finished_wrs_mutex);
-            if (S.wr_id_to_wr_ids.find(wr_done) ==
-                S.wr_id_to_wr_ids.end()) {
+            if (S.wr_id_to_wr_ids.find(wr_done) == S.wr_id_to_wr_ids.end()) {
               fprintf(stderr,
                       "Error: received ACK for unknown wr_id %lu (slot=%u)\n",
                       wr_done, slot);
               std::abort();
             }
-            auto &vec = S.wr_id_to_wr_ids[wr_done];
+            auto& vec = S.wr_id_to_wr_ids[wr_done];
             if (!vec.empty()) {
-                auto [min_it, max_it] = std::minmax_element(vec.begin(), vec.end());
-                printf("Local thread %d: received ACK for wr_id=%lu, slot=%u. wr_id_to_wr_ids[%lu]: size=%zu, min=%lu, max=%lu\n",
-                      thread_idx, wr_done, slot, wr_done, vec.size(), *min_it, *max_it);
-                for (auto const &wr_id : vec) {
-                    acked_wrs.insert(wr_id);
-                    printf("Local thread %d: inserting ACK wr_id=%lu\n", thread_idx, wr_id);
-                    if (finished_wrs.find(wr_id) ==
-                        finished_wrs.end()) {
-                      fprintf(stderr,
-                              "Error: finished_wrs received ACK for unknown wr_id %lu\n",
-                              wr_id);
-                      std::abort();
-                    }
+              auto [min_it, max_it] =
+                  std::minmax_element(vec.begin(), vec.end());
+              printf(
+                  "Local thread %d: received ACK for wr_id=%lu, slot=%u. "
+                  "wr_id_to_wr_ids[%lu]: size=%zu, min=%lu, max=%lu\n",
+                  thread_idx, wr_done, slot, wr_done, vec.size(), *min_it,
+                  *max_it);
+              for (auto const& wr_id : vec) {
+                acked_wrs.insert(wr_id);
+                printf("Local thread %d: inserting ACK wr_id=%lu\n", thread_idx,
+                       wr_id);
+                if (finished_wrs.find(wr_id) == finished_wrs.end()) {
+                  fprintf(stderr,
+                          "Error: finished_wrs received ACK for unknown wr_id "
+                          "%lu\n",
+                          wr_id);
+                  std::abort();
                 }
+              }
             }
             S.wr_id_to_wr_ids.erase(wr_done);
           }
@@ -980,8 +990,8 @@ void local_poll_completions(ProxyCtx& S,
   ne = ibv_poll_cq(S.cq, kMaxOutstandingSends, wc);
 #endif
   // printf("Local poll thread %d polled %d completions\n", thread_idx, ne);
-  local_process_completions(S, finished_wrs, acked_wrs, finished_wrs_mutex, thread_idx, wc,
-                            ne, ctx_by_tag);
+  local_process_completions(S, finished_wrs, acked_wrs, finished_wrs_mutex,
+                            thread_idx, wc, ne, ctx_by_tag);
 }
 
 void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
@@ -1013,8 +1023,8 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
   ne = ibv_poll_cq(S.cq, kMaxOutstandingSends, wc);
 #endif
   // printf("Poll CQ Dual thread %d polled %d completions\n", thread_idx, ne);
-  local_process_completions(S, finished_wrs, acked_wrs, finished_wrs_mutex, thread_idx, wc,
-                            ne, ctx_by_tag);
+  local_process_completions(S, finished_wrs, acked_wrs, finished_wrs_mutex,
+                            thread_idx, wc, ne, ctx_by_tag);
   remote_process_completions(S, thread_idx, g_ring, ne, wc, ctx_by_tag,
                              atomic_buffer_ptr);
 }
@@ -1280,7 +1290,10 @@ void post_atomic_operations_efa(ProxyCtx& S,
                                 std::vector<uint64_t> const& wrs_to_post,
                                 std::vector<TransferCmd> const& cmds_to_post,
                                 std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                                int my_rank, int block_idx, std::unordered_set<uint64_t>&finished_wrs, std::mutex& finished_wrs_mutex, std::unordered_set<uint64_t>& acked_wrs) {
+                                int my_rank, int block_idx,
+                                std::unordered_set<uint64_t>& finished_wrs,
+                                std::mutex& finished_wrs_mutex,
+                                std::unordered_set<uint64_t>& acked_wrs) {
   if (cmds_to_post.size() > ProxyCtx::kMaxAtomicOps) {
     fprintf(stderr, "Too many atomic operations: %zu > %zu\n",
             cmds_to_post.size(), ProxyCtx::kMaxAtomicOps);
@@ -1367,23 +1380,30 @@ void post_atomic_operations_efa(ProxyCtx& S,
     const uint64_t batch_tail_wr = wr_ids.back();
     {
       std::lock_guard<std::mutex> lock(finished_wrs_mutex);
-      auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
+      auto [it, inserted] =
+          S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
       if (!inserted) {
-          fprintf(stderr,
-                  "block_idx: %d, Error: tail wr_id %lu already exists (map=%p, size=%zu, dst_rank=%d)\n",
-                  block_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
-                  S.wr_id_to_wr_ids.size(), dst_rank);
-          std::abort();
+        fprintf(stderr,
+                "block_idx: %d, Error: tail wr_id %lu already exists (map=%p, "
+                "size=%zu, dst_rank=%d)\n",
+                block_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
+                S.wr_id_to_wr_ids.size(), dst_rank);
+        std::abort();
       } else {
         for (auto const& wr_id : it->second) {
           finished_wrs.insert(wr_id);
-          acked_wrs.insert(wr_id); // For atomic, we consider it acked immediately after posting
-          printf("block_idx: %d, Inserting atomics finished wr_id=%lu for tail wr_id=%lu\n",
-                 block_idx, wr_id, batch_tail_wr);
+          acked_wrs.insert(wr_id);  // For atomic, we consider it acked
+                                    // immediately after posting
+          printf(
+              "block_idx: %d, Inserting atomics finished wr_id=%lu for tail "
+              "wr_id=%lu\n",
+              block_idx, wr_id, batch_tail_wr);
         }
       }
-      fprintf(stderr,"block_idx: %d, Posted atomic batch to dst_rank %d, batch_tail_wr: %lu, map=%p\n",
-            block_idx, dst_rank, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
+      fprintf(stderr,
+              "block_idx: %d, Posted atomic batch to dst_rank %d, "
+              "batch_tail_wr: %lu, map=%p\n",
+              block_idx, dst_rank, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
     }
   }
 }

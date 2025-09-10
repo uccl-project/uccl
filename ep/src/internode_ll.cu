@@ -92,6 +92,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           warp_id < num_topk ? static_cast<int>(__ldg(
                                    topk_idx + token_idx * num_topk + warp_id))
                              : -1;
+      thread_id == 0 ? (*rdma_x_src_idx = token_idx) : 0;
 
 // FP8 cast
 #pragma unroll
@@ -136,11 +137,11 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         }
       }
       asm volatile("bar.sync 1, %0;" ::"r"(num_threads));
-      __threadfence_system();
+      // __threadfence_system();
 
-      if (thread_id == 0) {
-        st_release_sys_global(rdma_x_src_idx, token_idx);  // publish header
-      }
+      // if (thread_id == 0) {
+      //   st_release_sys_global(rdma_x_src_idx, token_idx);  // publish header
+      // }
       // Issue IBGDA sends
       if (dst_expert_idx >= 0) {
         int slot_idx =
@@ -238,13 +239,13 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       ;
 
     // TODO (MaoZiming): prevent EFA reordering BS.
-    if (lane_id == 0) {
+    {
       uint64_t start = clock64();
-      uint64_t wait_cycles = (uint64_t)2e9;
+      uint64_t wait_cycles = (uint64_t)1e9;
       while (clock64() - start < wait_cycles) {
       }
     }
-    __syncwarp();
+    // __syncwarp();
 
     // TODO(yihan): Mark here for future debugging check.
     // Calculate offset within LowLatencyLayout buffer for CPU proxy

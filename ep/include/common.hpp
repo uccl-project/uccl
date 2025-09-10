@@ -14,8 +14,6 @@
 
 #define USE_GRACE_HOPPER
 #define MEASURE_PER_OP_LATENCY
-#define ASSUME_WR_IN_ORDER
-#define SYNCHRONOUS_COMPLETION
 #define RDMA_BATCH_TOKENS
 #define kAtomicBufferSize 8196
 #define kQueueSize 1024

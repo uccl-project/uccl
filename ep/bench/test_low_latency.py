@@ -141,39 +141,50 @@ def test_main(
     # Check dispatch correctness
     do_check = True
     hash_value, num_times = 0, 0
-    
+
     for current_x in x_list:
         # TODO(MaoZiming): Support return_recv_hook=False
-        for return_recv_hook in (True,):
+        for return_recv_hook in (False, True):
             for dispatch_use_fp8 in (False, True):
                 for round_scale in (False,):
                     for round_scale in (False, True) if dispatch_use_fp8 else (False,):
                         for use_ue8m0 in (False, True) if round_scale else (False,):
-                            print("Start experiment with settings:"
-                                  f" return_recv_hook={return_recv_hook}"
-                                  f" dispatch_use_fp8={dispatch_use_fp8}"
-                                  f" round_scale={round_scale}"
-                                  f" use_ue8m0={use_ue8m0}", flush=True)
+                            print(
+                                "Start experiment with settings:"
+                                f" return_recv_hook={return_recv_hook}"
+                                f" dispatch_use_fp8={dispatch_use_fp8}"
+                                f" round_scale={round_scale}"
+                                f" use_ue8m0={use_ue8m0}",
+                                flush=True,
+                            )
                             num_times += 1
                             for i in range((num_times % 2) + 1):
                                 cumulative_local_expert_recv_stats = torch.zeros(
                                     (num_local_experts,), dtype=torch.int, device="cuda"
                                 )
-                                packed_recv_x, packed_recv_count, handle, event, hook = (
-                                    buffer.low_latency_dispatch(
-                                        current_x,
-                                        topk_idx,
-                                        num_tokens,
-                                        num_experts,
-                                        use_fp8=dispatch_use_fp8,
-                                        round_scale=round_scale,
-                                        use_ue8m0=use_ue8m0,
-                                        cumulative_local_expert_recv_stats=cumulative_local_expert_recv_stats,
-                                        async_finish=not return_recv_hook,
-                                        return_recv_hook=return_recv_hook,
-                                    )
+                                (
+                                    packed_recv_x,
+                                    packed_recv_count,
+                                    handle,
+                                    event,
+                                    hook,
+                                ) = buffer.low_latency_dispatch(
+                                    current_x,
+                                    topk_idx,
+                                    num_tokens,
+                                    num_experts,
+                                    use_fp8=dispatch_use_fp8,
+                                    round_scale=round_scale,
+                                    use_ue8m0=use_ue8m0,
+                                    cumulative_local_expert_recv_stats=cumulative_local_expert_recv_stats,
+                                    async_finish=not return_recv_hook,
+                                    return_recv_hook=return_recv_hook,
                                 )
-                                hook() if return_recv_hook else event.current_stream_wait()
+                                (
+                                    hook()
+                                    if return_recv_hook
+                                    else event.current_stream_wait()
+                                )
                             packed_recv_x = (
                                 (packed_recv_x[0], packed_recv_x[1].contiguous())
                                 if dispatch_use_fp8
@@ -193,7 +204,9 @@ def test_main(
                                 dtype=topk_idx.dtype,
                                 device="cuda",
                             )
-                            dist.all_gather_into_tensor(all_topk_idx, topk_idx, group=group)
+                            dist.all_gather_into_tensor(
+                                all_topk_idx, topk_idx, group=group
+                            )
                             for i in range(num_local_experts if do_check else 0):
                                 expert_id = rank * num_local_experts + i
                                 recv_x = (
@@ -240,7 +253,9 @@ def test_main(
                                     )
                                     if round_scale:
                                         assert (
-                                            calc_diff(recv_x[:, -1], recv_src_info.view(-1))
+                                            calc_diff(
+                                                recv_x[:, -1], recv_src_info.view(-1)
+                                            )
                                             < 0.007
                                         )
                                     else:
@@ -256,7 +271,9 @@ def test_main(
                                     for j in range(num_ranks):
                                         begin_idx, count = (
                                             recv_layout_range[j] >> 32
-                                        ).item(), (recv_layout_range[j] & int_mask).item()
+                                        ).item(), (
+                                            recv_layout_range[j] & int_mask
+                                        ).item()
                                         if not round_scale:
                                             assert (
                                                 recv_x_amin == j - rank_offset
@@ -264,7 +281,9 @@ def test_main(
                                                 all_topk_idx[j] == expert_id
                                             ).sum().item()
                                             assert (
-                                                recv_x[begin_idx : begin_idx + count, :-128]
+                                                recv_x[
+                                                    begin_idx : begin_idx + count, :-128
+                                                ]
                                                 - j
                                                 + rank_offset
                                             ).sum().item() == 0
@@ -306,7 +325,11 @@ def test_main(
                                     return_recv_hook=return_recv_hook,
                                     out=out,
                                 )
-                                hook() if return_recv_hook else event.current_stream_wait()
+                                (
+                                    hook()
+                                    if return_recv_hook
+                                    else event.current_stream_wait()
+                                )
                                 if do_check:
                                     diff = calc_diff(
                                         current_x
@@ -379,10 +402,9 @@ def test_main(
             f"avg_t={avg_t * 1e6:.2f} us, min_t={min_t * 1e6:.2f} us, max_t={max_t * 1e6:.2f} us",
             flush=True,
         )
-    if True:
+    if False:
         # Separate profiling
-        # for return_recv_hook in (False, True):
-        for return_recv_hook in (True,):
+        for return_recv_hook in (False, True):
             print("before group.barrier()", flush=True)
             group.barrier()
             print("after group.barrier()", flush=True)
