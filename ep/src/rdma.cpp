@@ -219,7 +219,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
 }
 
 ibv_cq* create_per_thread_cq(ProxyCtx& S) {
-  int cq_depth = kMaxOutstandingSends * 2;
+  int cq_depth = kMaxOutstandingSends * 2;  // The limit in EFA is 4096.
 #ifdef EFA
   struct ibv_cq_init_attr_ex cq_ex_attr = {};
   cq_ex_attr.cqe = cq_depth;
@@ -832,6 +832,11 @@ void local_process_completions(ProxyCtx& S,
       case IBV_WC_RDMA_WRITE:
       case IBV_WC_SEND: {
         send_completed++;
+        const uint64_t wrid = wc[i].wr_id;
+        if ((wrid & ~kAtomicMask) == kAtomicWrTag) {
+          printf("[EFA_SEND_DONE] wrid=%lu tag=0x%llx qp=0x%x\n", wrid,
+                 (wrid & kAtomicMask), wc[i].qp_num);
+        }
       } break;
       case IBV_WC_RECV:
         if (wc[i].wc_flags & IBV_WC_WITH_IMM &&
@@ -1253,11 +1258,9 @@ void post_atomic_operations_efa(ProxyCtx& S,
       auto const& cmd = cmds_to_post[wr_ids[i]];
       auto wr_id = wrs_to_post[wr_ids[i]];
       wr_ids[i] = wr_id;
-      bool const is_combine = (cmd.value == 1);
-
       // Pack control into 32-bit imm:
       // [31] kind (1=combine, 0=dispatch)
-      // [30:16] signed 15-bit value (two's complement)  <-- ensure it fits
+      // [30:16] signed 15-bit value (two's complement)
       // [15:0]  slot/seq (here: lower 16 bits of wr index)
       int v = static_cast<int>(cmd.value);
       if (v < -16384 || v > 16383) {
@@ -1269,12 +1272,6 @@ void post_atomic_operations_efa(ProxyCtx& S,
       }
 
       uint32_t offset = static_cast<int64_t>(cmd.req_rptr);
-      // if (is_combine) {
-      //   offset = static_cast<uint32_t>(cmd.req_rptr);
-      // } else {
-      //   offset = S.dispatch_recv_data_offset +
-      //   static_cast<int64_t>(cmd.req_rptr);
-      // }
       uint32_t imm =
           pack_imm(/*is_combine=*/true, v, static_cast<uint16_t>(offset));
 
@@ -1293,8 +1290,11 @@ void post_atomic_operations_efa(ProxyCtx& S,
 
       wrs[i].next = (i + 1 < k) ? &wrs[i + 1] : nullptr;
 
-      printf("[EFA_EMPTY_IMM] dst=%d kind=%u val=%d offset=%u imm=0x%08x\n",
-             dst_rank, static_cast<unsigned>(is_combine), v, offset, imm);
+      printf(
+          "[EFA_EMPTY_IMM] wr_id=%lu dst=%d kind=%u val=%d offset=%u "
+          "imm=0x%08x\n",
+          wrs[i].wr_id, dst_rank, static_cast<unsigned>(cmd.is_combine), v,
+          offset, imm);
     }
 
     ibv_send_wr* bad = nullptr;
