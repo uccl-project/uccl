@@ -1293,6 +1293,7 @@ void post_atomic_operations_efa(ProxyCtx& S,
               dst_rank, strerror(ret), ret);
       std::abort();
     }
+
     S.posted.fetch_add(k, std::memory_order_relaxed);
     const uint64_t batch_tail_wr = wr_ids.back();
     {
@@ -1307,10 +1308,10 @@ void post_atomic_operations_efa(ProxyCtx& S,
                 S.wr_id_to_wr_ids.size(), dst_rank);
         std::abort();
       } else {
-        // Mirror your existing “auto-ack” for atomics
-        for (auto const& wid : it->second) {
-          finished_wrs.insert(wid);
-          acked_wrs.insert(wid);
+        // TODO(MaoZiming): ack for atomic operations?
+        for (auto const& wr_id : it->second) {
+          finished_wrs.insert(wr_id);
+          acked_wrs.insert(wr_id);
         }
       }
     }
