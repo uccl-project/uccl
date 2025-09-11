@@ -6,9 +6,6 @@ import torch
 import numpy as np
 import os
 
-# Only RC mode is supported for now.
-os.environ["UCCL_RCMODE"] = "1"
-
 try:
     from uccl import p2p
 except ImportError:

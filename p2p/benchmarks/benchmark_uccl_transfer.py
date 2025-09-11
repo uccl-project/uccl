@@ -1,235 +1,202 @@
-"""
-Benchmark UCCL Transfer API
-
-This benchmark demonstrates the transfer API for UCCL P2P engine.
-It tests point-to-point transfers between rank 0 (sender) and rank 1 (receiver).
-"""
-
 from __future__ import annotations
-
-import argparse
-import sys
-import time
+import argparse, sys, time, socket, struct
 from typing import List
-
-import torch
 import torch.distributed as dist
-
-from uccl import transfer
-
-
-def _make_buffer(size_bytes: int):
-    """Allocate a contiguous GPU tensor of *size_bytes* and return it."""
-    n_elems = size_bytes // 4  # float32
-    tensor = torch.ones(n_elems, dtype=torch.float32).cuda()
-    assert tensor.is_contiguous()
-    assert tensor.device.type == "cuda"
-    return tensor
+import torch
+import numpy as np
+import os
+from uccl import p2p
+from uccl.transfer import TransferManager
 
 
-def _pretty_size(num_bytes: int) -> str:
-    units = ["B", "KB", "MB", "GB"]
-    val = float(num_bytes)
+# parse_metadata is now provided by the C++ layer via p2p.Endpoint.parse_metadata()
+
+
+def _make_buffer(n_bytes: int, device: str, gpu: int):
+    n = n_bytes // 4
+    if device == "gpu":
+        buf = torch.ones(n, dtype=torch.float32, device=f"cuda:{gpu}")
+        ptr = buf.data_ptr()
+    else:
+        buf = torch.ones(n, dtype=torch.float32, pin_memory=True)
+        ptr = buf.data_ptr()
+    return buf, ptr
+
+
+def _pretty(num: int):
+    units, val = ["B", "KB", "MB", "GB"], float(num)
     for u in units:
         if val < 1024 or u == units[-1]:
             return f"{val:.0f} {u}" if u == "B" else f"{val:.1f} {u}"
         val /= 1024
-    return f"{num_bytes} B"
 
 
-def parse_sizes(v: str) -> List[int]:
-    """Parse comma-separated sizes like '1MB,4MB,16MB'."""
-    try:
-        sizes = []
-        for s in v.split(","):
-            s = s.strip().upper()
-            if s.endswith("B"):
-                s = s[:-1]
-
-            multipliers = {"K": 1024, "M": 1024**2, "G": 1024**3}
-
-            if s[-1] in multipliers:
-                sizes.append(int(s[:-1]) * multipliers[s[-1]])
-            else:
-                sizes.append(int(s))
-        return sizes
-    except (ValueError, IndexError):
-        raise argparse.ArgumentTypeError("bad --sizes")
-
-
-################################################################################
-# Benchmark functions
-################################################################################
-
-
-def _run_receiver(args):
+def _run_server(args, manager, remote_oob_ip, local_rank):
     """Run as receiver (rank 1) - receives data from sender."""
-    sender_rank = 0
-    local_gpu_idx = dist.get_rank()
+    print("[Server] Waiting for connection...")
+    conn_id = manager.accept()
 
-    # Create transfer manager as receiver
-    gpu_idx_list = [local_gpu_idx]
-    zmq_port = 5556  # Receiver port
-    manager = transfer.TransferManager(gpu_idx_list, num_cpus=4, zmq_port=zmq_port)
+    print("[Server] Connection established")
 
-    # Accept connection from sender
-    success = manager.accept()
-    if not success:
-        raise RuntimeError("Failed to accept connection from sender")
-
-    for size in args.sizes:
-        # Create receive buffer
-        recv_tensor = _make_buffer(size)
+    for sz in args.sizes:
+        recv_buf, recv_ptr = _make_buffer(sz, args.device, local_rank)
 
         # Register transfer
-        transfer_id = manager.register_transfer(local_gpu_idx, sender_rank, recv_tensor)
+        transfer_id = manager.register_transfer(conn_id, recv_buf)
 
         # Warm-up receive
         manager.post_transfer_metadata(transfer_id)
 
         # Benchmark receives
-        start = time.perf_counter()
-        total = 0
-
         for _ in range(args.iters):
             manager.post_transfer_metadata(transfer_id)
-            total += size
-
-        elapsed = time.perf_counter() - start
 
         # Check if tensor received data correctly
-        if not recv_tensor.allclose(torch.tensor(size, dtype=torch.float32).cuda()):
-            print(f"[Receiver] WARNING: Tensor not filled correctly for size {size}")
-
-        gbps = (total * 8) / elapsed / 1e9
-        gb_sec = total / elapsed / 1e9
-        print(
-            f"[Receiver] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
-        )
+        expected_value = float(sz)
+        if not recv_buf.allclose(
+            torch.tensor(expected_value, dtype=torch.float32).cuda()
+        ):
+            print(
+                f"[Server] WARNING: Tensor not filled correctly for size {sz}: {recv_buf}"
+            )
 
         # Cleanup transfer
-        manager.cleanup_transfer(transfer_id)
+        manager.deregister_transfer(transfer_id)
 
-    print("[Receiver] Benchmark complete")
+    print("[Server] Benchmark complete")
 
 
-def _run_sender(args):
+def _run_client(args, manager, remote_oob_ip, local_rank):
     """Run as sender (rank 0) - sends data to receiver."""
-    receiver_rank = 1
-    local_gpu_idx = dist.get_rank()
 
-    # Create transfer manager as sender
-    gpu_idx_list = [local_gpu_idx]
-    manager = transfer.TransferManager(gpu_idx_list, num_cpus=4, zmq_port=5555)
+    # Parse remote OOB IP to get connection info
+    remote_ip = remote_oob_ip
+    receiver_port = args.listen_port  # Use same port as server
 
-    # Connect to receiver
-    receiver_ip = "127.0.0.1"  # For local testing
-    receiver_zmq_port = 5556
-    success = manager.connect(receiver_ip, receiver_zmq_port)
-    if not success:
-        raise RuntimeError("Failed to connect to receiver")
+    print(f"[Client] Connecting to receiver at {remote_ip}:{receiver_port}...")
+    conn_id = manager.connect(remote_ip, receiver_port)
 
-    for size in args.sizes:
+    print("[Client] Connection established")
+
+    for sz in args.sizes:
         # Create send buffer with known pattern
-        send_tensor = _make_buffer(size)
-        send_tensor.fill_(size)  # Fill with size value for verification
+        send_buf, send_ptr = _make_buffer(sz, args.device, local_rank)
+        send_buf.fill_(float(sz))  # Fill with size value for verification
 
         # Register transfer
-        transfer_id = manager.register_transfer(
-            local_gpu_idx, receiver_rank, send_tensor
-        )
+        transfer_id = manager.register_transfer(conn_id, send_buf)
 
         # Warm-up send
         transfer_metadata = manager.fetch_transfer_metadata(transfer_id)
-        manager.transfer_tensor(transfer_id, transfer_metadata)
+        poll_id = manager.do_transfer_async(transfer_id, transfer_metadata)
 
-        # Benchmark sends
+        # Wait for warmup to complete
+        while not manager.check_transfer_done(transfer_id, poll_id):
+            time.sleep(0.001)
+
+        # Benchmark starts
         start = time.perf_counter()
         total = 0
 
         for _ in range(args.iters):
-            transfer_metadata = manager.fetch_transfer_metadata(transfer_id)
-            manager.transfer_tensor(transfer_id, transfer_metadata)
-            total += size
+            poll_id = manager.do_transfer_async(transfer_id, transfer_metadata)
+
+            # Wait for transfer to complete
+            while not manager.check_transfer_done(transfer_id, poll_id):
+                pass
+
+            total += sz
 
         elapsed = time.perf_counter() - start
 
-        gbps = (total * 8) / elapsed / 1e9
-        gb_sec = total / elapsed / 1e9
         print(
-            f"[Sender] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
+            f"[Client] {_pretty(sz):>8} : "
+            f"{(total*8)/elapsed/1e9:6.2f} Gbps | "
+            f"{total/elapsed/1e9:6.2f} GB/s | "
+            f"{elapsed/args.iters:6.6f} s"
         )
 
         # Cleanup transfer
-        manager.cleanup_transfer(transfer_id)
+        manager.deregister_transfer(transfer_id)
 
-    print("[Sender] Benchmark complete")
+    print("[Client] Benchmark complete")
+
+
+def parse_sizes(v: str) -> List[int]:
+    try:
+        return [int(x) for x in v.split(",") if x]
+    except ValueError:
+        raise argparse.ArgumentTypeError("bad --sizes")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="UCCL Transfer API Benchmark")
-    parser.add_argument(
+    p = argparse.ArgumentParser("UCCL transfer benchmark (one-sided)")
+    p.add_argument("--num-cpus", type=int, default=4)
+    p.add_argument("--device", choices=["cpu", "gpu"], default="gpu")
+    p.add_argument(
         "--sizes",
         type=parse_sizes,
-        default="1MB,4MB,16MB,64MB,256MB",
-        help="Comma-separated list of message sizes (e.g., 1MB,4MB,16MB)",
+        default=[
+            256,
+            1024,
+            4096,
+            16384,
+            65536,
+            262144,
+            1048576,
+            10485760,
+            16777216,
+            104857600,
+        ],
     )
-    parser.add_argument(
-        "--iters", type=int, default=100, help="Number of iterations per size"
-    )
-    parser.add_argument(
-        "--backend",
-        type=str,
-        default="gloo",
-        help="PyTorch distributed backend (gloo recommended for metadata exchange)",
-    )
+    p.add_argument("--iters", type=int, default=10)
+    p.add_argument("--listen-port", type=int, default=29999)
+    args = p.parse_args()
 
-    args = parser.parse_args()
+    print("Sizes:", ", ".join(_pretty(s) for s in args.sizes))
 
-    # Initialize distributed
-    if not dist.is_initialized():
-        dist.init_process_group(backend=args.backend)
+    dist.init_process_group(backend="gloo")
 
-    try:
-        rank = dist.get_rank()
-        world_size = dist.get_world_size()
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    assert world_size == 2, "This benchmark only supports 2 processes"
+    assert args.device == "gpu"
+    local_rank = int(os.environ["LOCAL_RANK"])
 
-        if world_size != 2:
-            raise RuntimeError(
-                "Transfer benchmark requires exactly 2 processes (sender and receiver)"
-            )
+    # Use different ports for sender and receiver
+    if rank == 0:
+        # Sender (client) - no need to listen
+        manager = TransferManager(local_rank, args.num_cpus, args.listen_port + 1000)
+    else:
+        # Receiver (server) - listens on the specified port
+        manager = TransferManager(local_rank, args.num_cpus, args.listen_port)
 
-        local_gpu_idx = rank  # Assume each rank uses its own GPU
+    local_metadata = manager.ep.get_metadata()
 
-        # Print benchmark info
-        if rank == 0:
-            print("=== UCCL Transfer Benchmark ===")
-            print("Message sizes:", ", ".join(_pretty_size(s) for s in args.sizes))
-            print(f"Device: GPU | Local GPU idx: {local_gpu_idx} | Iters: {args.iters}")
-            print("Transfer pattern: Rank 0 (sender) -> Rank 1 (receiver)")
-            print()
+    if rank == 0:
+        dist.send(torch.ByteTensor(list(local_metadata)), dst=1)
+        remote_metadata_tensor = torch.zeros(len(local_metadata), dtype=torch.uint8)
+        dist.recv(remote_metadata_tensor, src=1)
+        remote_metadata = bytes(remote_metadata_tensor.tolist())
+    else:
+        remote_metadata_tensor = torch.zeros(len(local_metadata), dtype=torch.uint8)
+        dist.recv(remote_metadata_tensor, src=0)
+        dist.send(torch.ByteTensor(list(local_metadata)), dst=0)
+        remote_metadata = bytes(remote_metadata_tensor.tolist())
 
-        # Synchronize before starting
-        dist.barrier()
+    remote_oob_ip = p2p.Endpoint.parse_metadata(remote_metadata)[0]
 
-        # Run benchmark based on rank
-        if rank == 0:
-            _run_sender(args)
-        else:
-            _run_receiver(args)
+    if rank == 0:
+        _run_client(args, manager, remote_oob_ip, local_rank)
+    elif rank == 1:
+        _run_server(args, manager, remote_oob_ip, local_rank)
 
-        # Synchronize before finishing
-        dist.barrier()
-        print("Transfer benchmark completed successfully!")
-
-    finally:
-        if dist.is_initialized():
-            dist.destroy_process_group()
+    dist.destroy_process_group()
 
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n[Interrupted] Benchmark aborted by user.")
+        print("\n[Ctrl-C] Aborted.")
         sys.exit(1)

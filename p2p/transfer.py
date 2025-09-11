@@ -1,6 +1,6 @@
-import zmq
+import socket
 import torch
-import pybind11 as py
+from .utils import create_socket_and_connect, send_obj, recv_obj
 
 try:
     from . import p2p
@@ -10,200 +10,208 @@ except ImportError:
 
 class TransferManager:
 
-    class Connection:
+    class ConnState:
         def __init__(
             self,
             local_gpu_idx: int,
             remote_gpu_idx: int,
-            socket: zmq.Socket,
+            socket: socket.socket,
             conn_id: int,
             is_local: bool,
         ):
             self.local_gpu_idx = local_gpu_idx
             self.remote_gpu_idx = remote_gpu_idx
+            self.socket = socket
             self.conn_id = conn_id
             self.is_local = is_local
 
     class TransferState:
         def __init__(
             self,
-            data_ptr: int,
+            data: int,
             size: int,
             mr_id: int,
-            conn: "TransferManager.Connection",
+            conn_state: "TransferManager.ConnState",
         ):
-            self.data_ptr = data_ptr
+            self.data = data
             self.size = size
             self.mr_id = mr_id
-            self.conn = conn
+            self.conn_state = conn_state
 
-    def __init__(self, gpu_idx_list: list[int], num_cpus: int, zmq_port: int):
-        assert len(gpu_idx_list) > 0
-        self.gpu_idx_list = gpu_idx_list
+    def __init__(self, local_gpu_idx: int, num_cpus: int, listen_port: int):
+        self.local_gpu_idx = local_gpu_idx
         self.num_cpus = num_cpus
-        self.zmq_port = zmq_port
+        self.listen_port = listen_port
 
-        max_gpu_idx = max(gpu_idx_list)
-        self.eps = [None for _ in range(max_gpu_idx + 1)]
-        self.ep_ports = [None for _ in range(max_gpu_idx + 1)]
-        for gpu_idx in gpu_idx_list:
-            self.eps[gpu_idx] = p2p.Endpoint(gpu_idx, num_cpus)
-            self.ep_ports[gpu_idx] = self.eps[gpu_idx].get_metadata()[1]
-
-        # Setup ZMQ socket for listening if port specified
-        self.zmq_context = zmq.Context()
-        self.socket = self.zmq_context.socket(zmq.REP)
-        self.socket.bind(f"tcp://*:{self.zmq_port}")
-
-        self.conn_ids = {gpu_idx: {} for gpu_idx in self.gpu_idx_list}
+        self.ep = p2p.Endpoint(local_gpu_idx, num_cpus)
+        # The C++ Endpoint listens on this port.
+        self.local_ep_port = self.ep.get_metadata()[1]
         # Used to determine if the connection is local or remote
-        self.local_ip = p2p.get_oob_ip()
-        self.transfer_id = 0
+        self.local_ep_ip = p2p.get_oob_ip()
+
+        # Mapping remote GPU index to ConnState
+        self.conn_table = {}
+        # Mapping transfer id to TransferState
         self.transfer_table = {}
+        self.next_transfer_id = 0
 
-    # Connecting to a remote server GPU-to-GPU.
-    def connect(self, remote_ip: str, remote_zmq_port: int) -> bool:
-        socket = self.zmq_context.socket(zmq.REQ)
-        socket.connect(f"tcp://{remote_ip}:{remote_zmq_port}")
+        # This Python TransferManager listens on this port.
+        self.listen_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.listen_socket.bind(("", listen_port))
+        self.listen_socket.listen(128)
 
-        socket.send_pyobj(self.gpu_idx_list)
-        remote_gpu_idx_list = socket.recv_pyobj()
-        # Assume the same GPU indexes in both sides
-        # TODO: for intra-node and inter-node, these are different.
-        assert remote_gpu_idx_list == self.gpu_idx_list
+    # Connecting to a remote GPU.
+    def connect(self, remote_ip: str, remote_listen_port: int) -> int:
+        socket = create_socket_and_connect(remote_ip, remote_listen_port)
 
-        socket.send_pyobj(self.ep_ports)
-        remote_ep_ports = socket.recv_pyobj()
-        assert len(remote_ep_ports) == len(self.ep_ports)
+        send_obj(socket, [self.local_gpu_idx, self.local_ep_port, self.local_ep_ip])
+        remote_gpu_idx, remote_ep_port, remote_ep_ip = recv_obj(socket)
 
-        socket.send_pyobj(self.local_ip)
-        remote_ip = socket.recv_pyobj()
+        is_local = self.local_ep_ip == remote_ep_ip
 
-        for local_gpu_idx in self.gpu_idx_list:
-            remote_gpu_idx = local_gpu_idx
-            if self.local_ip == remote_ip:
-                success, conn_id = self.eps[local_gpu_idx].connect_local(remote_gpu_idx)
-            else:
-                success, conn_id = self.eps[local_gpu_idx].connect(
-                    remote_ip,
-                    remote_gpu_idx,
-                    self.remote_ep_ports[remote_gpu_idx],
-                )
-            assert success, f"Failed to connect to {remote_ip} on GPU {remote_gpu_idx}"
-            self.conn_ids[local_gpu_idx][remote_gpu_idx] = self.Connection(
-                local_gpu_idx,
+        if is_local:
+            success, conn_id = self.ep.connect_local(remote_gpu_idx)
+            assert success, f"Failed to connect to local GPU {remote_gpu_idx}"
+        else:
+            success, conn_id = self.ep.connect(
+                remote_ep_ip,
                 remote_gpu_idx,
-                socket,
-                conn_id,
-                self.local_ip == remote_ip,
+                remote_ep_port,
             )
-
-        return True
-
-    def accept(self) -> bool:
-        remote_gpu_idx_list = self.socket.recv_pyobj()
-        assert remote_gpu_idx_list == self.gpu_idx_list
-        self.socket.send_pyobj(self.gpu_idx_list)
-
-        remote_ep_ports = self.socket.recv_pyobj()
-        assert len(remote_ep_ports) == len(self.ep_ports)
-        self.socket.send_pyobj(self.ep_ports)
-
-        remote_ip = self.socket.recv_pyobj()
-        self.socket.send_pyobj(self.local_ip)
-
-        for local_gpu_idx in self.gpu_idx_list:
-            if self.local_ip == remote_ip:
-                success, remote_gpu_idx, conn_id = self.eps[
-                    local_gpu_idx
-                ].accept_local()
-            else:
-                success, remote_ip_addr, remote_gpu_idx, conn_id = self.eps[
-                    local_gpu_idx
-                ].accept()
             assert (
                 success
-            ), f"Failed to accept connection from {remote_ip} on GPU {remote_gpu_idx}"
-            self.conn_ids[local_gpu_idx][remote_gpu_idx] = self.Connection(
-                local_gpu_idx,
-                remote_gpu_idx,
-                self.socket,
-                conn_id,
-                self.local_ip == remote_ip,
-            )
+            ), f"Failed to connect to remote GPU {remote_gpu_idx} on {remote_ep_ip}"
 
-        return True
+        self.conn_table[conn_id] = self.ConnState(
+            self.local_gpu_idx,
+            remote_gpu_idx,
+            socket,
+            conn_id,
+            is_local,
+        )
+
+        return conn_id
+
+    def accept(self) -> int:
+        socket, addr = self.listen_socket.accept()
+
+        send_obj(socket, [self.local_gpu_idx, self.local_ep_port, self.local_ep_ip])
+        remote_gpu_idx, remote_ep_port, remote_ep_ip = recv_obj(socket)
+
+        is_local = self.local_ep_ip == remote_ep_ip
+
+        if is_local:
+            success, _remote_gpu_idx, conn_id = self.ep.accept_local()
+            assert (
+                success
+            ), f"Failed to accept connection from local GPU {remote_gpu_idx}"
+        else:
+            success, _remote_ep_addr, _remote_gpu_idx, conn_id = self.ep.accept()
+            assert (
+                success
+            ), f"Failed to accept connection from remote GPU {remote_gpu_idx} on {remote_ep_ip}"
+
+        self.conn_table[conn_id] = self.ConnState(
+            self.local_gpu_idx,
+            remote_gpu_idx,
+            socket,
+            conn_id,
+            is_local,
+        )
+
+        return conn_id
 
     def register_transfer(
-        self, local_gpu_idx: int, remote_gpu_idx: int, tensor: torch.Tensor
+        self,
+        conn_id: int,
+        tensor: torch.Tensor,
     ) -> int:
         assert tensor.is_contiguous()
-        success, mr_id = self.eps[local_gpu_idx].reg(
-            tensor.data_ptr(), tensor.numel() * tensor.element_size()
-        )
-        assert success, f"Failed to register tensor on GPU {local_gpu_idx}"
-        self.transfer_table[self.transfer_id] = self.TransferState(
-            tensor.data_ptr(),
-            tensor.numel() * tensor.element_size(),
+        data = tensor.data_ptr()
+        size = tensor.numel() * tensor.element_size()
+
+        success, mr_id = self.ep.reg(data, size)
+        assert success, f"Failed to register tensor on GPU {self.local_gpu_idx}"
+
+        conn_state = self.conn_table[conn_id]
+        self.transfer_table[self.next_transfer_id] = self.TransferState(
+            data,
+            size,
             mr_id,
-            self.conn_ids[local_gpu_idx][remote_gpu_idx],
+            conn_state,
         )
-        self.transfer_id += 1
-        return self.transfer_id - 1
+        self.next_transfer_id += 1
+        return self.next_transfer_id - 1
+
+    def deregister_transfer(self, transfer_id: int) -> bool:
+        transfer_state = self.transfer_table[transfer_id]
+        success = self.ep.dereg(transfer_state.mr_id)
+        assert success, f"Failed to cleanup tensor on GPU {self.local_gpu_idx}"
+
+        del self.transfer_table[transfer_id]
+        return True
 
     def post_transfer_metadata(self, transfer_id: int) -> bool:
         transfer_state = self.transfer_table[transfer_id]
-        conn = transfer_state.conn
-        if conn.is_local:
-            success, transfer_metadata = self.eps[conn.local_gpu_idx].advertise_ipc(
-                conn.conn_id, transfer_state.data_ptr, transfer_state.size
+        conn_state = transfer_state.conn_state
+
+        if conn_state.is_local:
+            success, transfer_metadata = self.ep.advertise_ipc(
+                conn_state.conn_id, transfer_state.data, transfer_state.size
             )
+            assert (
+                success
+            ), f"Failed to advertise tensor on GPU {self.local_gpu_idx} for IPC"
         else:
-            success, transfer_metadata = self.eps[conn.local_gpu_idx].advertise(
-                conn.conn_id,
+            success, transfer_metadata = self.ep.advertise(
+                conn_state.conn_id,
                 transfer_state.mr_id,
-                transfer_state.data_ptr,
+                transfer_state.data,
                 transfer_state.size,
             )
-        assert success, f"Failed to advertise tensor on GPU {conn.local_gpu_idx}"
-        # TODO: need to use another ZMQ socket for this.
-        conn.socket.send_pyobj(transfer_metadata)
+            assert (
+                success
+            ), f"Failed to advertise tensor on GPU {self.local_gpu_idx} for RDMA"
+
+        send_obj(conn_state.socket, transfer_metadata)
         return True
 
     def fetch_transfer_metadata(self, transfer_id: int) -> bytes:
         transfer_state = self.transfer_table[transfer_id]
-        conn = transfer_state.conn
-        transfer_metadata = conn.socket.recv_pyobj()
+        conn_state = transfer_state.conn_state
+
+        transfer_metadata = recv_obj(conn_state.socket)
         assert (
             transfer_metadata is not None
-        ), f"Failed to fetch transfer metadata on GPU {conn.local_gpu_idx}"
+        ), f"Failed to fetch transfer metadata on GPU {self.local_gpu_idx}"
+
         return transfer_metadata
 
-    def transfer_tensor(self, transfer_id: int, transfer_metadata: bytes) -> bool:
+    def do_transfer_async(self, transfer_id: int, transfer_metadata: bytes) -> int:
         transfer_state = self.transfer_table[transfer_id]
-        conn = transfer_state.conn
-        if conn.is_local:
-            success = self.eps[conn.local_gpu_idx].write_ipc(
-                conn.conn_id,
-                transfer_state.data_ptr,
+        conn_state = transfer_state.conn_state
+        if conn_state.is_local:
+            success, poll_id = self.ep.write_ipc_async(
+                conn_state.conn_id,
+                transfer_state.data,
                 transfer_state.size,
                 transfer_metadata,
             )
         else:
-            success = self.eps[conn.local_gpu_idx].write(
-                conn.conn_id,
+            success, poll_id = self.ep.write_async(
+                conn_state.conn_id,
                 transfer_state.mr_id,
-                transfer_state.data_ptr,
+                transfer_state.data,
                 transfer_state.size,
                 transfer_metadata,
             )
-        assert success, f"Failed to transfer tensor on GPU {conn.local_gpu_idx}"
-        return True
+        assert success, f"Failed to transfer tensor on GPU {self.local_gpu_idx}"
+        return poll_id
 
-    def cleanup_transfer(self, transfer_id: int) -> bool:
-        transfer_state = self.transfer_table[transfer_id]
-        conn = transfer_state.conn
-        success = self.eps[conn.local_gpu_idx].dereg(transfer_state.mr_id)
-        assert success, f"Failed to cleanup tensor on GPU {conn.local_gpu_idx}"
-        del self.transfer_table[transfer_id]
-        return True
+    def check_transfer_done(self, transfer_id: int, poll_id: int) -> bool:
+        success, is_done = self.ep.poll_async(poll_id)
+        assert (
+            success
+        ), f"Failed to check if transfer is done on GPU {self.local_gpu_idx}"
+
+        return is_done

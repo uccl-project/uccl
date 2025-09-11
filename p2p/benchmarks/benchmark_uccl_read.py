@@ -6,9 +6,6 @@ import torch
 import numpy as np
 import os
 
-# UCCL P2P read requires RC mode, as RDMA UC does not support one-sided read.
-os.environ["UCCL_RCMODE"] = "1"
-
 try:
     from uccl import p2p
 except ImportError:
