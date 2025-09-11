@@ -1289,8 +1289,8 @@ void post_atomic_operations_efa(ProxyCtx& S,
     }
     int ret = ibv_wr_complete(qpx);
     if (ret) {
-      fprintf(stderr, "[EFA] ibv_wr_complete failed (dst=%d): %s (ret=%d)\n",
-              dst_rank, strerror(ret), ret);
+      fprintf(stderr, "[EFA] post_send failed: %s (ret=%d)\n", strerror(ret),
+              ret);
       std::abort();
     }
 
