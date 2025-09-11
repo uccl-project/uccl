@@ -45,7 +45,9 @@ class TransferManager:
 
         self.ep = p2p.Endpoint(local_gpu_idx, num_cpus)
         # The C++ Endpoint listens on this port.
-        self.local_ep_port = self.ep.get_metadata()[1]
+        self.local_ep_port = p2p.Endpoint.parse_metadata(
+            self.ep.get_metadata()
+        )[1]
         # Used to determine if the connection is local or remote
         self.local_ep_ip = p2p.get_oob_ip()
 

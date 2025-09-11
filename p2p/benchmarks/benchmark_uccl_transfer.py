@@ -8,9 +8,10 @@ import os
 from uccl import p2p
 from uccl.transfer import TransferManager
 
+# UCCL P2P read requires RC mode, as RDMA UC does not support one-sided read.
+os.environ["UCCL_RCMODE"] = "1"
 
 # parse_metadata is now provided by the C++ layer via p2p.Endpoint.parse_metadata()
-
 
 def _make_buffer(n_bytes: int, device: str, gpu: int):
     n = n_bytes // 4
