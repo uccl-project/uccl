@@ -34,6 +34,16 @@ WHEEL_DIR="wheelhouse-${TARGET}"
 rm -r "${WHEEL_DIR}" >/dev/null 2>&1 || true
 mkdir -p "${WHEEL_DIR}"
 
+build_rccl_nccl_h() {
+  # Unlike CUDA, ROCM does not include nccl.h. So we need to build rccl to get nccl.h.
+  if [[ ! -f "thirdparty/rccl/build/release/include/nccl.h" ]]; then
+    cd thirdparty/rccl
+    # Just to get nccl.h, not the whole library
+    CXX=/opt/rocm/bin/hipcc cmake -B build/release -S . -DCMAKE_EXPORT_COMPILE_COMMANDS=OFF >/dev/null 2>&1 || true
+    cd ../..
+  fi
+}
+
 build_rdma() {
   local TARGET="$1"
   local ARCH="$2"
@@ -49,13 +59,6 @@ build_rdma() {
     if [[ "$ARCH" == "aarch64" ]]; then
       echo "Skipping ROCm build on Arm64 (no ROCm toolchain)."
       return
-    fi
-    # Unlike CUDA, ROCM does not include nccl.h. So we need to build rccl to get nccl.h.
-    if [[ ! -f "thirdparty/rccl/build/release/include/nccl.h" ]]; then
-      cd thirdparty/rccl
-      # Just to get nccl.h, not the whole library
-      CXX=/opt/rocm/bin/hipcc cmake -B build/release -S . -DCMAKE_EXPORT_COMPILE_COMMANDS=OFF >/dev/null 2>&1 || true
-      cd ../..
     fi
     cd rdma && make clean -f MakefileHip && make -j$(nproc) -f MakefileHip && cd ..
     TARGET_SO=rdma/librccl-net-uccl.so
@@ -173,12 +176,16 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -e IS_EFA="${IS_EFA}" \
   -e WHEEL_DIR="${WHEEL_DIR}" \
   -e BUILD_TYPE="${BUILD_TYPE}" \
-  -e FUNCTION_DEF="$(declare -f build_rdma build_efa build_p2p build_ep)" \
+  -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_rdma build_efa build_p2p build_ep)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
     set -euo pipefail
-
     eval "$FUNCTION_DEF"
+
+    if [[ "$TARGET" == "rocm" ]]; then
+      build_rccl_nccl_h
+    fi
+
     if [[ "$BUILD_TYPE" == "rdma" ]]; then
       build_rdma "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "efa" ]]; then
