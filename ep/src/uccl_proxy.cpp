@@ -66,6 +66,9 @@ void UcclProxy::stop() {
   if (thread_.joinable()) thread_.join();
   std::printf("UcclProxy stopped\n");
   running_.store(false, std::memory_order_release);
+  std::printf("proxy_ destroying...\n");
+  proxy_->destroy(true);
+  std::printf("proxy_ destroyed\n");
 }
 
 void UcclProxy::start(Mode m) {

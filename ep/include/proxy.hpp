@@ -41,20 +41,8 @@ class Proxy {
   };
 
   explicit Proxy(Config const& cfg) : cfg_(cfg) {
-    const size_t total_size = kRemoteBufferSize;
-    int nDevices;
-    cudaError_t err = cudaGetDeviceCount(&nDevices);
-    if (err != cudaSuccess) {
-      printf("CUDA error: %s\n", cudaGetErrorString(err));
-      std::abort();
-    }
-    for (int d = 0; d < nDevices; ++d) {
-      GPU_RT_CHECK(gpuSetDevice(d));
-      void* buf = nullptr;
-      GPU_RT_CHECK(gpuMalloc(&buf, total_size));
-      ctx_.per_gpu_device_buf[d] = buf;
-    }
-    GPU_RT_CHECK(gpuSetDevice(0));
+    // TODO(MaoZiming): Fix.
+    GPU_RT_CHECK(gpuSetDevice(cfg.rank % MAX_NUM_GPUS));
   }
 
   void set_progress_run(bool run) {
@@ -73,6 +61,7 @@ class Proxy {
   void run_local();
   void run_dual();
   void pin_thread();
+  void destroy(bool free_gpu_buffer);
 
   double avg_rdma_write_us() const;
   double avg_wr_latency_us() const;

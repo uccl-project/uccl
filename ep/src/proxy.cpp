@@ -1,4 +1,5 @@
 #include "proxy.hpp"
+#include "ep_util.hpp"
 #include <arpa/inet.h>  // for htonl, ntohl
 #include <chrono>
 #include <thread>
@@ -563,4 +564,83 @@ void Proxy::post_atomic_operations(std::vector<uint64_t> const& wrs_to_post,
       std::abort();
     }
   }
+}
+
+void Proxy::destroy(bool free_gpu_buffer /*= true*/) {
+  ctx_.progress_run.store(false, std::memory_order_release);
+  cudaError_t cerr = cudaDeviceSynchronize();
+  if (cerr != cudaSuccess) {
+    fprintf(stderr, "[destroy] cudaDeviceSynchronize failed: %s\n",
+            cudaGetErrorString(cerr));
+  }
+
+  for (auto& ctx_ptr : ctxs_for_all_ranks_) {
+    if (!ctx_ptr) continue;
+    ProxyCtx& c = *ctx_ptr;
+    qp_to_error(c.qp);
+    qp_to_error(c.ack_qp);
+  }
+
+  drain_cq(ctx_.cq);
+  if (ring.ack_mr) {
+    dereg_mr_safely(ring.ack_mr);
+  }
+
+  if (ctx_.mr) {
+    dereg_mr_safely(ctx_.mr);
+    for (auto& uptr : ctxs_for_all_ranks_) {
+      if (uptr) uptr->mr = nullptr;
+    }
+  }
+
+  if (free_gpu_buffer && cfg_.gpu_buffer) {
+    cudaError_t e = cudaFree(cfg_.gpu_buffer);
+    if (e != cudaSuccess) {
+      fprintf(stderr, "[destroy] cudaFree(gpu_buffer) failed: %s\n",
+              cudaGetErrorString(e));
+    } else {
+      cfg_.gpu_buffer = nullptr;
+    }
+  }
+
+  for (auto& ctx_ptr : ctxs_for_all_ranks_) {
+    if (!ctx_ptr) continue;
+    ProxyCtx& c = *ctx_ptr;
+    if (c.qp) {
+      int ret = ibv_destroy_qp(c.qp);
+      if (ret) fprintf(stderr, "[destroy] ibv_destroy_qp(data) ret=%d\n", ret);
+      c.qp = nullptr;
+    }
+    if (c.ack_qp) {
+      int ret = ibv_destroy_qp(c.ack_qp);
+      if (ret) fprintf(stderr, "[destroy] ibv_destroy_qp(ack) ret=%d\n", ret);
+      c.ack_qp = nullptr;
+    }
+  }
+
+  ring.ack_qp = nullptr;
+  if (ctx_.cq) {
+    int ret = ibv_destroy_cq(ctx_.cq);
+    if (ret) fprintf(stderr, "[destroy] ibv_destroy_cq ret=%d\n", ret);
+    ctx_.cq = nullptr;
+  }
+
+  if (ctx_.pd) {
+    int ret = ibv_dealloc_pd(ctx_.pd);
+    if (ret) fprintf(stderr, "[destroy] ibv_dealloc_pd ret=%d\n", ret);
+    ctx_.pd = nullptr;
+  }
+
+  if (ctx_.context) {
+    int ret = ibv_close_device(ctx_.context);
+    if (ret) fprintf(stderr, "[destroy] ibv_close_device ret=%d\n", ret);
+    ctx_.context = nullptr;
+  }
+  finished_wrs_.clear();
+  acked_wrs_.clear();
+  wr_id_to_start_time_.clear();
+  ctxs_for_all_ranks_.clear();
+  ctx_by_tag_.clear();
+  local_infos_.clear();
+  remote_infos_.clear();
 }
