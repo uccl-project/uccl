@@ -377,6 +377,19 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
   return true;
 }
 
+bool Endpoint::dereg(uint64_t mr_id) {
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+  {
+    std::unique_lock<std::shared_mutex> lock(mr_mu_);
+    MR* mr = mr_id_to_mr_[mr_id];
+    ep_->uccl_deregmr(mr->mhandle_);
+    delete mr;
+    mr_id_to_mr_.erase(mr_id);
+  }
+  return true;
+}
+
 bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
                     size_t size, bool inside_python) {
   DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
