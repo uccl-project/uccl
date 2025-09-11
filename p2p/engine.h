@@ -348,15 +348,79 @@ class Endpoint {
     IpcTransferInfo ipc_info;
   };
 
+  static constexpr size_t MAX_RESERVE_SIZE =
+      uccl::max_sizeof<uccl::FifoItem, IpcTransferInfo>();
+
+  struct alignas(64) UnifiedTask {
+    TaskType type;
+    void* data;
+    size_t size;
+    uint64_t conn_id;
+    uint64_t mr_id;
+    std::atomic<bool> done;
+    UnifiedTask* self_ptr;
+
+    union SpecificData {
+      struct {
+        uint8_t reserved[MAX_RESERVE_SIZE];
+      } base;
+
+      struct {
+        uccl::FifoItem slot_item;
+        uint8_t reserved[MAX_RESERVE_SIZE - sizeof(uccl::FifoItem)];
+      } net;
+
+      struct {
+        IpcTransferInfo ipc_info;
+        uint8_t reserved[MAX_RESERVE_SIZE - sizeof(IpcTransferInfo)];
+      } ipc;
+      SpecificData() : base{} {}
+    } specific;
+
+    inline uccl::FifoItem& slot_item() { return specific.net.slot_item; }
+
+    inline uccl::FifoItem const& slot_item() const {
+      return specific.net.slot_item;
+    }
+
+    inline IpcTransferInfo& ipc_info() { return specific.ipc.ipc_info; }
+
+    inline IpcTransferInfo const& ipc_info() const {
+      return specific.ipc.ipc_info;
+    }
+  };
+
+  inline UnifiedTask* create_task(uint64_t conn_id, uint64_t mr_id,
+                                  TaskType type, void* data, size_t size) {
+    UnifiedTask* task = new UnifiedTask();
+    task->type = type;
+    task->data = data;
+    task->size = size;
+    task->conn_id = conn_id;
+    task->mr_id = mr_id;
+    task->done = false;
+    task->self_ptr = task;
+    return task;
+  }
+
+  inline UnifiedTask* create_net_task(uint64_t conn_id, uint64_t mr_id,
+                                      TaskType type, void* data, size_t size,
+                                      uccl::FifoItem const& slot_item) {
+    UnifiedTask* task = create_task(conn_id, mr_id, type, data, size);
+    task->slot_item() = slot_item;
+    return task;
+  }
+
+  inline UnifiedTask* create_ipc_task(uint64_t conn_id, uint64_t mr_id,
+                                      TaskType type, void* data, size_t size,
+                                      IpcTransferInfo const& ipc_info) {
+    UnifiedTask* task = create_task(conn_id, mr_id, type, data, size);
+    task->ipc_info() = ipc_info;
+    return task;
+  }
   // For both net and ipc send/recv tasks.
-  jring_t* send_task_ring_;
-  jring_t* recv_task_ring_;
-  // For net read/write tasks.
-  jring_t* read_net_task_ring_;
-  jring_t* write_net_task_ring_;
-  // For ipc read/write tasks.
-  jring_t* read_ipc_task_ring_;
-  jring_t* write_ipc_task_ring_;
+  jring_t* send_unified_task_ring_;
+  jring_t* recv_unified_task_ring_;
 
   std::atomic<bool> stop_{false};
   std::thread send_proxy_thread_;
