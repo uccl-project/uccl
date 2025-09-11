@@ -13,6 +13,7 @@ os.environ["UCCL_RCMODE"] = "1"
 
 # parse_metadata is now provided by the C++ layer via p2p.Endpoint.parse_metadata()
 
+
 def _make_buffer(n_bytes: int, device: str, gpu: int):
     n = n_bytes // 4
     if device == "gpu":

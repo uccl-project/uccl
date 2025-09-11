@@ -45,9 +45,7 @@ class TransferManager:
 
         self.ep = p2p.Endpoint(local_gpu_idx, num_cpus)
         # The C++ Endpoint listens on this port.
-        self.local_ep_port = p2p.Endpoint.parse_metadata(
-            self.ep.get_metadata()
-        )[1]
+        self.local_ep_port = p2p.Endpoint.parse_metadata(self.ep.get_metadata())[1]
         # Used to determine if the connection is local or remote
         self.local_ep_ip = p2p.get_oob_ip()
 
@@ -66,9 +64,7 @@ class TransferManager:
     def connect(self, remote_ip: str, remote_listen_port: int) -> int:
         socket = create_socket_and_connect(remote_ip, remote_listen_port)
 
-        send_obj(
-            socket, [self.local_gpu_idx, self.local_ep_port, self.local_ep_ip]
-        )
+        send_obj(socket, [self.local_gpu_idx, self.local_ep_port, self.local_ep_ip])
         remote_gpu_idx, remote_ep_port, remote_ep_ip = recv_obj(socket)
 
         is_local = self.local_ep_ip == remote_ep_ip
@@ -99,9 +95,7 @@ class TransferManager:
     def accept(self) -> int:
         socket, addr = self.listen_socket.accept()
 
-        send_obj(
-            socket, [self.local_gpu_idx, self.local_ep_port, self.local_ep_ip]
-        )
+        send_obj(socket, [self.local_gpu_idx, self.local_ep_port, self.local_ep_ip])
         remote_gpu_idx, remote_ep_port, remote_ep_ip = recv_obj(socket)
 
         is_local = self.local_ep_ip == remote_ep_ip
@@ -112,9 +106,7 @@ class TransferManager:
                 success
             ), f"Failed to accept connection from local GPU {remote_gpu_idx}"
         else:
-            success, _remote_ep_addr, _remote_gpu_idx, conn_id = (
-                self.ep.accept()
-            )
+            success, _remote_ep_addr, _remote_gpu_idx, conn_id = self.ep.accept()
             assert (
                 success
             ), f"Failed to accept connection from remote GPU {remote_gpu_idx} on {remote_ep_ip}"
@@ -195,9 +187,7 @@ class TransferManager:
 
         return transfer_metadata
 
-    def do_transfer_async(
-        self, transfer_id: int, transfer_metadata: bytes
-    ) -> int:
+    def do_transfer_async(self, transfer_id: int, transfer_metadata: bytes) -> int:
         transfer_state = self.transfer_table[transfer_id]
         conn_state = transfer_state.conn_state
         if conn_state.is_local:
