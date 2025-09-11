@@ -1244,18 +1244,18 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size,
   // IpcCache.direct_ptr directly.
   IpcCache ipc_cache;
   bool found_in_cache = false;
-  {
-    std::shared_lock<std::shared_mutex> lock(ipc_cache_mu_);
-    auto it_conn = conn_id_and_ptr_to_ipc_cache_.find(conn_id);
-    if (it_conn != conn_id_and_ptr_to_ipc_cache_.end()) {
-      auto& ptr_to_ipc_cache = it_conn->second;
-      auto it_buf = ptr_to_ipc_cache.find(data);
-      if (it_buf != ptr_to_ipc_cache.end()) {
-        ipc_cache = it_buf->second;
-        found_in_cache = true;
-      }
-    }
-  }
+  // {
+  //   std::shared_lock<std::shared_mutex> lock(ipc_cache_mu_);
+  //   auto it_conn = conn_id_and_ptr_to_ipc_cache_.find(conn_id);
+  //   if (it_conn != conn_id_and_ptr_to_ipc_cache_.end()) {
+  //     auto& ptr_to_ipc_cache = it_conn->second;
+  //     auto it_buf = ptr_to_ipc_cache.find(data);
+  //     if (it_buf != ptr_to_ipc_cache.end()) {
+  //       ipc_cache = it_buf->second;
+  //       found_in_cache = true;
+  //     }
+  //   }
+  // }
 
   IpcTransferInfo transfer_info = {};  // Initialize to zero
   // Wait for receiver's IPC handle (receiver will send this proactively)
@@ -1363,18 +1363,18 @@ bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size,
 
   IpcCache ipc_cache;
   bool found_in_cache = false;
-  {
-    std::shared_lock<std::shared_mutex> lock(ipc_cache_mu_);
-    auto it_conn = conn_id_and_ptr_to_ipc_cache_.find(conn_id);
-    if (it_conn != conn_id_and_ptr_to_ipc_cache_.end()) {
-      auto& ptr_to_ipc_cache = it_conn->second;
-      auto it_buf = ptr_to_ipc_cache.find(data);
-      if (it_buf != ptr_to_ipc_cache.end()) {
-        ipc_cache = it_buf->second;
-        found_in_cache = true;
-      }
-    }
-  }
+  // {
+  //   std::shared_lock<std::shared_mutex> lock(ipc_cache_mu_);
+  //   auto it_conn = conn_id_and_ptr_to_ipc_cache_.find(conn_id);
+  //   if (it_conn != conn_id_and_ptr_to_ipc_cache_.end()) {
+  //     auto& ptr_to_ipc_cache = it_conn->second;
+  //     auto it_buf = ptr_to_ipc_cache.find(data);
+  //     if (it_buf != ptr_to_ipc_cache.end()) {
+  //       ipc_cache = it_buf->second;
+  //       found_in_cache = true;
+  //     }
+  //   }
+  // }
 
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
   // Generate IPC memory handle for our receive buffer
