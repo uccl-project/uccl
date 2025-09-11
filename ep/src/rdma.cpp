@@ -1001,7 +1001,7 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       uint32_t offset = unpack_off(imm);
       size_t index = offset / sizeof(int);
       printf(
-          "[EFA_RECV_IMM] kind=%u value=%d offset=%u index=%zu addr=0x%llx "
+          "[EFA_RECV_ATOMIC] kind=%u value=%d offset=%u index=%zu addr=0x%llx "
           "imm=0x%08x\n",
           (unsigned)is_combine, value, offset, index,
           (unsigned long long)((uintptr_t)atomic_buffer_ptr +
@@ -1301,7 +1301,7 @@ void post_atomic_operations_efa(ProxyCtx& S,
       ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_qpn, QKEY);
       ibv_wr_set_sge(qpx, ctx->mr->lkey, (uintptr_t)ctx->mr->addr, 0);
       printf(
-          "[EFA_ATOMIC] wr_id=%llu dst=%d val=%d off16=%u imm=0x%08x "
+          "[EFA_SEND_ATOMIC] wr_id=%llu dst=%d val=%d off16=%u imm=0x%08x "
           "raddr=0x%llx\n",
           (unsigned long long)qpx->wr_id, dst_rank, v, off16, imm,
           (unsigned long long)remote_addr);
