@@ -1277,8 +1277,11 @@ void post_atomic_operations_efa(ProxyCtx& S,
                             htonl(imm));
       ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_qpn, QKEY);
       ibv_wr_set_sge(qpx, ctx->mr->lkey, (uintptr_t)ctx->mr->addr, 0);
-      printf("[EFA_SEND_ATOMIC] wr_id=%lu dst=%d kind=%u val=%d offset=%u imm=0x%08x\n",
-             qpx->wr_id, dst_rank, static_cast<unsigned>(is_combine), v, offset, imm);
+      printf(
+          "[EFA_SEND_ATOMIC] wr_id=%lu dst=%d kind=%u val=%d offset=%u "
+          "imm=0x%08x\n",
+          qpx->wr_id, dst_rank, static_cast<unsigned>(is_combine), v, offset,
+          imm);
     }
     int ret = ibv_wr_complete(qpx);
     if (ret) {
