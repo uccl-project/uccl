@@ -254,11 +254,6 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                       : 0;
     if (dst_p2p_ptr == 0) {
       // Inter-node or no IPC: use IBGDA atomic
-      if (lane_id == 0) {
-        printf("nvshmemi_ibgda_amo_nonfetch_add offset=%lu dst_rank=%d\n",
-               dst_ptr - reinterpret_cast<uint64_t>(atomic_buffer_ptr),
-               dst_rank);
-      }
       uccl::nvshmemi_ibgda_amo_nonfetch_add(
           dst_ptr - reinterpret_cast<uint64_t>(atomic_buffer_ptr),
           -num_tokens_sent - 1, dst_rank,

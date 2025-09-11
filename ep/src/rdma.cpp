@@ -219,7 +219,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
 }
 
 ibv_cq* create_per_thread_cq(ProxyCtx& S) {
-  int cq_depth = kMaxOutstandingSends * 2;  // The limit in EFA is 4096.
+  int cq_depth = kMaxOutstandingSends * 2;
 #ifdef EFA
   struct ibv_cq_init_attr_ex cq_ex_attr = {};
   cq_ex_attr.cqe = cq_depth;
@@ -1250,21 +1250,6 @@ void post_atomic_operations_efa(ProxyCtx& S,
     if (wr_ids.empty()) continue;
 
     ProxyCtx* ctx = ctxs[dst_rank].get();
-
-    if (!ctx || !ctx->qp) {
-      fprintf(stderr, "Destination ctx missing qp for dst=%d\n", dst_rank);
-      std::abort();
-    }
-    // Need remote MR info for the zero-length write target.
-    if (ctx->remote_len == 0) {
-      fprintf(stderr, "Remote region is zero-sized for dst=%d\n", dst_rank);
-      std::abort();
-    }
-    if (!ctx->mr) {
-      fprintf(stderr, "Missing local MR for dummy SGE (dst=%d)\n", dst_rank);
-      std::abort();
-    }
-
     const size_t k = wr_ids.size();
     struct ibv_qp_ex* qpx = (struct ibv_qp_ex*)ctx->qp;
 
