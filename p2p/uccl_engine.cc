@@ -365,7 +365,7 @@ void listener_thread_func(uccl_conn_t* conn) {
                 << std::endl;
       mr_id = local_mem_iter->second;
     }
-    
+
     switch (md.op) {
       case UCCL_READ: {
         char out_buf[sizeof(uccl::FifoItem)];

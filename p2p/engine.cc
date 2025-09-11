@@ -1724,7 +1724,8 @@ bool Endpoint::advertisev_ipc(uint64_t conn_id, std::vector<void*> addr_v,
 }
 
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
   auto task = reinterpret_cast<Task*>(transfer_id);
   switch (task->type) {
