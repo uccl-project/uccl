@@ -30,7 +30,10 @@ class UcclProxy {
   }
 
   void* get_atomic_buffer_ptr() {
-    if (!atomic_buffer_ptr_) std::abort();
+    if (!atomic_buffer_ptr_) {
+      fprintf(stderr, "Error: atomic_buffer_ptr_ is not set yet\n");
+      std::abort();
+    }
     return atomic_buffer_ptr_;
   }
 

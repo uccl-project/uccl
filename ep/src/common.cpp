@@ -32,6 +32,7 @@ int get_num_max_nvl_peers() {
   int deviceCount = 0;
   cudaError_t err = cudaGetDeviceCount(&deviceCount);
   if (err != cudaSuccess) {
+    fprintf(stderr, "cudaGetDeviceCount failed: %s\n", cudaGetErrorString(err));
     std::abort();
   }
   return deviceCount;

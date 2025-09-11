@@ -92,6 +92,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           warp_id < num_topk ? static_cast<int>(__ldg(
                                    topk_idx + token_idx * num_topk + warp_id))
                              : -1;
+      thread_id == 0 ? (*rdma_x_src_idx = token_idx) : 0;
 
 // FP8 cast
 #pragma unroll
@@ -136,11 +137,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         }
       }
       asm volatile("bar.sync 1, %0;" ::"r"(num_threads));
-      __threadfence_system();
 
-      if (thread_id == 0) {
-        st_release_sys_global(rdma_x_src_idx, token_idx);  // publish header
-      }
       // Issue IBGDA sends
       if (dst_expert_idx >= 0) {
         int slot_idx =
@@ -237,15 +234,6 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                              responsible_expert_idx) != FINISHED_SUM_TAG * 2)
       ;
 
-    // TODO (MaoZiming): prevent EFA reordering BS.
-    if (lane_id == 0) {
-      uint64_t start = clock64();
-      uint64_t wait_cycles = (uint64_t)1e9;
-      while (clock64() - start < wait_cycles) {
-      }
-    }
-    __syncwarp();
-
     // TODO(yihan): Mark here for future debugging check.
     // Calculate offset within LowLatencyLayout buffer for CPU proxy
     // translation Calculate offset relative to dispatch_rdma_recv_data_buffer
@@ -332,6 +320,11 @@ LOW_LATENCY_DISPATCH_RECV:
     EP_DEVICE_ASSERT(num_warps_per_group > 1 and num_warp_groups < 15);
     if (sub_warp_id == 1 and lane_id == 0) {
       auto start_time = clock64();
+      // TODO (MaoZiming): Fix dumb timer wait.
+      uint64_t start = clock64();
+      uint64_t wait_cycles = (uint64_t)1e9;
+      while (clock64() - start < wait_cycles) {
+      }
       while ((num_recv_tokens = ld_acquire_sys_global(
                   rdma_recv_count + local_expert_idx * num_ranks + src_rank)) ==
              0)
@@ -403,7 +396,7 @@ LOW_LATENCY_DISPATCH_RECV:
           auto const pack_idx = lane_id / num_elems_per_pack;
           auto const elem_idx = lane_id % num_elems_per_pack;
           auto scale = extract_required_scale_format<kUseUE8M0>(
-              ld_nc_global(src_scales + lane_id));
+              ld_cg_global(src_scales + lane_id));
           recv_x_scales[token_idx * token_stride + pack_idx * pack_stride +
                         elem_idx] = scale;
         }
@@ -411,7 +404,7 @@ LOW_LATENCY_DISPATCH_RECV:
           auto const pack_idx = (lane_id + 32) / num_elems_per_pack;
           auto const elem_idx = (lane_id + 32) % num_elems_per_pack;
           auto scale = extract_required_scale_format<kUseUE8M0>(
-              ld_nc_global(src_scales + lane_id + 32));
+              ld_cg_global(src_scales + lane_id + 32));
           recv_x_scales[token_idx * token_stride + pack_idx * pack_stride +
                         elem_idx] = scale;
         }

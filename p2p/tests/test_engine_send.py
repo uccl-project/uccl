@@ -45,7 +45,7 @@ def test_local():
 
     def server_process():
         engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
-        meta_q.put(bytes(engine.get_endpoint_metadata()))
+        meta_q.put(bytes(engine.get_metadata()))
 
         success, remote_ip_addr, remote_gpu_idx, conn_id = engine.accept()
         assert success
