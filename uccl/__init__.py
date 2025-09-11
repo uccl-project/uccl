@@ -5,6 +5,7 @@ if not is_efa:
     try:
         from . import p2p
         from . import collective
+        from . import transfer
     except ImportError:
         pass
 

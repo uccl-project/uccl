@@ -103,6 +103,7 @@ Notes:
 * You can specify `NCCL_IB_HCA=mlx5_2:1` to control which NIC and port to use. 
 * If you see errors like `message size truncated`, it is likely caused by NCCL version mismatch. We suggest specifying `LD_PRELOAD=<path to libnccl.so.2>`. 
 * To benchmark dual direction transfer, you can add `--dual`. 
+* Consider tune `NCCL_IB_GID_INDEX=3` if NCCL triggers errors.
 * This also works for AMD GPUs.
 
 ### Running NIXL with UCX backend

@@ -82,6 +82,10 @@ PYBIND11_MODULE(p2p, m) {
           py::arg("ptrs"), py::arg("sizes"),
           "Batch-register multiple memory regions and return [ok, mr_id_list]")
       .def(
+          "dereg",
+          [](Endpoint& self, uint64_t mr_id) { return self.dereg(mr_id); },
+          "Deregister a memory region", py::arg("mr_id"))
+      .def(
           "send",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
              size_t size) {
@@ -417,8 +421,8 @@ PYBIND11_MODULE(p2p, m) {
       .def(
           "write_ipc",
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
-             py::object info_blob) {
-            std::string buf = py::cast<py::bytes>(info_blob);
+             py::bytes info_blob) {
+            std::string buf = info_blob;
             CHECK_EQ(buf.size(), sizeof(Endpoint::IpcTransferInfo))
                 << "IpcTransferInfo size mismatch";
             Endpoint::IpcTransferInfo info;
@@ -431,8 +435,8 @@ PYBIND11_MODULE(p2p, m) {
       .def(
           "read_ipc",
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
-             py::object info_blob) {
-            std::string buf = py::cast<py::bytes>(info_blob);
+             py::bytes info_blob) {
+            std::string buf = info_blob;
             CHECK_EQ(buf.size(), sizeof(Endpoint::IpcTransferInfo))
                 << "IpcTransferInfo size mismatch";
             Endpoint::IpcTransferInfo info;
@@ -445,8 +449,8 @@ PYBIND11_MODULE(p2p, m) {
       .def(
           "write_ipc_async",
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
-             py::object info_blob) {
-            std::string buf = py::cast<py::bytes>(info_blob);
+             py::bytes info_blob) {
+            std::string buf = info_blob;
             CHECK_EQ(buf.size(), sizeof(Endpoint::IpcTransferInfo))
                 << "IpcTransferInfo size mismatch";
             Endpoint::IpcTransferInfo info;
@@ -462,8 +466,8 @@ PYBIND11_MODULE(p2p, m) {
       .def(
           "read_ipc_async",
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
-             py::object info_blob) {
-            std::string buf = py::cast<py::bytes>(info_blob);
+             py::bytes info_blob) {
+            std::string buf = info_blob;
             CHECK_EQ(buf.size(), sizeof(Endpoint::IpcTransferInfo))
                 << "IpcTransferInfo size mismatch";
             Endpoint::IpcTransferInfo info;
