@@ -232,16 +232,6 @@ class Buffer {
       CUDA_CHECK(cudaFree(buffer_ptrs[nvl_rank]));
     }
 
-#ifdef false
-    // Deregister and free rdma_buffer_ptr in cpu proxy.
-    if (is_available() and num_rdma_bytes > 0) {
-      CUDA_CHECK(cudaDeviceSynchronize());
-      internode::barrier();
-      internode::free(rdma_buffer_ptr);
-      internode::finalize();
-    }
-#endif
-
     // Free workspace and MoE counter
     CUDA_CHECK(cudaFree(workspace));
     if (d_ipc_base_ptrs != nullptr) {
