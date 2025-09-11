@@ -1246,8 +1246,8 @@ void post_atomic_operations_efa(ProxyCtx& S,
     dst_rank_wr_ids[dst].push_back(i);
   }
 
-  for (auto& [dst_rank, wr_idx_vec] : dst_rank_wr_ids) {
-    if (wr_idx_vec.empty()) continue;
+  for (auto& [dst_rank, wr_ids] : dst_rank_wr_ids) {
+    if (wr_ids.empty()) continue;
 
     ProxyCtx* ctx = ctxs[dst_rank].get();
 
@@ -1265,46 +1265,42 @@ void post_atomic_operations_efa(ProxyCtx& S,
       std::abort();
     }
 
-    const size_t k = wr_idx_vec.size();
+    const size_t k = wr_ids.size();
     struct ibv_qp_ex* qpx = (struct ibv_qp_ex*)ctx->qp;
 
     ibv_wr_start(qpx);
-    for (size_t j = 0; j < k; ++j) {
-      const size_t i = wr_idx_vec[j];
-      auto const& cmd = cmds_to_post[i];
+    for (size_t i = 0; i < k; ++i) {
+      auto const& cmd = cmds_to_post[wr_ids[i]];
+      auto wr_id = wrs_to_post[wr_ids[i]];
+      wr_ids[i] = wr_id;
+      bool const is_combine = cmd.is_combine;
 
-      // Map to real wr_id and store it back for tail tracking
-      const uint64_t wr_id = wrs_to_post[i];
-      wr_idx_vec[j] = wr_id;
-
-      // Pack immediate: [31]=kind, [30:16]=v(15-bit signed), [15:0]=offset
+      // Pack control into 32-bit imm:
+      // [31] kind (1=combine, 0=dispatch)
+      // [30:16] signed 15-bit value (two's complement)  <-- ensure it fits
+      // [15:0]  slot/seq (here: lower 16 bits of wr index)
       int v = static_cast<int>(cmd.value);
       if (v < -16384 || v > 16383) {
-        fprintf(
-            stderr,
-            "[EFA] value=%d won't fit in 15 bits; use a different scheme.\n",
-            v);
+        fprintf(stderr,
+                "[EFA] value=%d won't fit in 15 bits; "
+                "use an inline payload scheme instead.\n",
+                v);
         std::abort();
       }
-      const uint16_t off16 = static_cast<uint16_t>(cmd.req_rptr);
-      const uint32_t imm = pack_imm(/*is_combine=*/true, v, off16);
+      uint32_t offset = static_cast<int64_t>(cmd.req_rptr);
+      uint32_t imm =
+          pack_imm(/*is_combine=*/true, v, static_cast<uint16_t>(offset));
 
-      // Choose a valid target address inside the remote MR.
-      // For zero-byte writes, allow remote_addr == remote_end.
-      uint64_t remote_addr = ctx->remote_addr;
-      // Set WR header
       qpx->wr_id = kAtomicWrTag | (wr_id & kAtomicMask);
       qpx->comp_mask = 0;
-      qpx->wr_flags = (j + 1 == k) ? IBV_SEND_SIGNALED : 0;
+      qpx->wr_flags = (i + 1 == k) ? IBV_SEND_SIGNALED : 0;
 
-      ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
+      ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, ctx->remote_addr,
+                            htonl(imm));
       ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_qpn, QKEY);
       ibv_wr_set_sge(qpx, ctx->mr->lkey, (uintptr_t)ctx->mr->addr, 0);
-      printf(
-          "[EFA_SEND_ATOMIC] wr_id=%llu dst=%d val=%d off16=%u imm=0x%08x "
-          "raddr=0x%llx\n",
-          (unsigned long long)qpx->wr_id, dst_rank, v, off16, imm,
-          (unsigned long long)remote_addr);
+      printf("[EFA_EMPTY_IMM] dst=%d kind=%u val=%d offset=%u imm=0x%08x\n",
+             dst_rank, static_cast<unsigned>(is_combine), v, offset, imm);
     }
     int ret = ibv_wr_complete(qpx);
     if (ret) {
@@ -1313,12 +1309,11 @@ void post_atomic_operations_efa(ProxyCtx& S,
       std::abort();
     }
     S.posted.fetch_add(k, std::memory_order_relaxed);
-    const uint64_t batch_tail_wr = wr_idx_vec.back();
-
+    const uint64_t batch_tail_wr = wr_ids.back();
     {
       std::lock_guard<std::mutex> lock(finished_wrs_mutex);
       auto [it, inserted] =
-          S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_idx_vec));
+          S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
       if (!inserted) {
         fprintf(stderr,
                 "block_idx: %d, Error: tail wr_id %lu already exists (map=%p, "
