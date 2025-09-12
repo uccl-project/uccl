@@ -50,7 +50,6 @@ inline void init_env(BenchEnv& env, int blocks = kNumThBlocks, int device = 0,
 }
 
 inline void destroy_env(BenchEnv& env) {
-  printf("Destroying env\n");
   if (env.rbs) {
 #ifdef USE_GRACE_HOPPER
     GPU_RT_CHECK(cudaFree(env.rbs));

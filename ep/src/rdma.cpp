@@ -1248,43 +1248,37 @@ void post_atomic_operations(ProxyCtx& S,
     ibv_wr_start(qpx);
     for (size_t i = 0; i < k; ++i) {
       auto const& cmd = cmds_to_post[wr_ids[i]];
-      const uint64_t wrid = wrs_to_post[wr_ids[i]];
-      wr_ids[i] = wrid;
+      auto wr_id = wrs_to_post[wr_ids[i]];
+      wr_ids[i] = wr_id;
 
       int v = static_cast<int>(cmd.value);
       if (v < -16384 || v > 16383) {
-        fprintf(stderr, "[EFA] value=%d won't fit in 15 bits\n", v);
+        fprintf(stderr,
+                "[EFA] value=%d won't fit in 15 bits; "
+                "use an inline payload scheme instead.\n",
+                v);
         std::abort();
       }
-      const uint32_t off16 = static_cast<uint32_t>(cmd.req_rptr) & 0xFFFFu;
-      const uint32_t imm = pack_imm(true, v, off16);
+      uint32_t offset = static_cast<int64_t>(cmd.req_rptr);
+      uint32_t imm =
+          pack_imm(/*is_combine=*/true, v, static_cast<uint16_t>(offset));
 
-      qpx->wr_id = kAtomicWrTag | (wrid & kAtomicMask);
+      qpx->wr_id = kAtomicWrTag | (wr_id & kAtomicMask);
       qpx->comp_mask = 0;
       qpx->wr_flags = (i + 1 == k) ? IBV_SEND_SIGNALED : 0;
 
-      const uint64_t remote_scratch = ctx->remote_addr;
-
-      ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_scratch, htonl(imm));
+      ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, ctx->remote_addr,
+                            htonl(imm));
       ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_qpn, QKEY);
-      const uintptr_t laddr = reinterpret_cast<uintptr_t>(ctx->mr->addr);
-      ibv_wr_set_sge(qpx, ctx->mr->lkey, laddr, 0);
+      ibv_wr_set_sge(qpx, ctx->mr->lkey, (uintptr_t)ctx->mr->addr, 0);
     }
-    {
-      int ret = ibv_wr_complete(qpx);
-      if (ret) {
-        fprintf(stderr, "[EFA] post_send failed: %s (ret=%d)\n", strerror(ret),
-                ret);
-        std::abort();
-      }
-    }
-#else
-    if (ctx->remote_len < 4) {
-      fprintf(stderr, "remote_len < 4, no room for scratch word\n");
+    int ret = ibv_wr_complete(qpx);
+    if (ret) {
+      fprintf(stderr, "[EFA] post_send failed: %s (ret=%d)\n", strerror(ret),
+              ret);
       std::abort();
     }
-    const uint64_t remote_scratch = ctx->remote_addr + ctx->remote_len - 4;
-
+#else
     std::vector<ibv_sge> sge(k);
     std::vector<ibv_send_wr> wr(k);
 
@@ -1311,7 +1305,7 @@ void post_atomic_operations(ProxyCtx& S,
       wr[i].imm_data = htonl(imm);
       wr[i].sg_list = &sge[i];
       wr[i].num_sge = 1;
-      wr[i].wr.rdma.remote_addr = remote_scratch;
+      wr[i].wr.rdma.remote_addr = ctx->remote_addr;
       wr[i].wr.rdma.rkey = ctx->remote_rkey;
       wr[i].next = (i + 1 < k) ? &wr[i + 1] : nullptr;
     }
