@@ -63,10 +63,12 @@ void UcclProxy::start_dual() {
 void UcclProxy::stop() {
   if (!running_.load(std::memory_order_acquire)) return;
   proxy_->set_progress_run(false);
-  std::printf("UcclProxy stopping...\n");
   if (thread_.joinable()) thread_.join();
-  std::printf("UcclProxy stopped\n");
   running_.store(false, std::memory_order_release);
+  // Because proxies share the gpu_buffer, only destroy gpu_buffer for the first
+  // proxy.
+  proxy_->destroy(block_idx_ == 0);
+  std::printf("UcclProxy destroyed\n");
 }
 
 void UcclProxy::start(Mode m) {

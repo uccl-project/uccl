@@ -902,7 +902,7 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
 
   constexpr int kNumTMABytesPerWarp = 12 * (512 + 16);
   int const smem_size = kNumTMABytesPerWarp * num_warps;
-  printf("Combine launched\n");
+  // printf("Combine launched\n");
 
 #define COMBINE_LAUNCH_CASE(hidden)                                            \
   {                                                                            \
