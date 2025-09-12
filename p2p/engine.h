@@ -23,14 +23,6 @@ struct MR {
   uccl::Mhandle* mhandle_;
 };
 
-struct IpcCache {
-  gpuIpcMemHandle_t handle;
-  bool is_send;
-  void* direct_ptr;
-  uintptr_t offset;
-  size_t size;
-};
-
 struct Conn {
   uint64_t conn_id_;
   uccl::ConnID uccl_conn_id_;
@@ -118,6 +110,7 @@ class Endpoint {
 
   bool regv(std::vector<void const*> const& data_v,
             std::vector<size_t> const& size_v, std::vector<uint64_t>& mr_id_v);
+  bool dereg(uint64_t mr_id);
 
   /*Send data to the remote server. Blocking. */
   bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
@@ -293,11 +286,6 @@ class Endpoint {
   std::atomic<uint32_t> rr_stream_{0};
   std::vector<gpuStream_t> streams_;
   std::vector<std::vector<gpuStream_t>> ipc_streams_;
-
-  // IPC Buffer cache
-  mutable std::shared_mutex ipc_cache_mu_;
-  std::unordered_map<uint64_t, std::unordered_map<void*, struct IpcCache>>
-      conn_id_and_ptr_to_ipc_cache_;
 
   static constexpr size_t kTaskRingSize = 1024;
 

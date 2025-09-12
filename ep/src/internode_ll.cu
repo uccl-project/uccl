@@ -136,7 +136,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           rdma_x_vec[i] = *reinterpret_cast<vec_t*>(&int4_value);
         }
       }
-      asm volatile("bar.sync 1, %0;" ::"r"(num_threads));
+      sync_barrier_1(num_threads);
 
       // Issue IBGDA sends
       if (dst_expert_idx >= 0) {
@@ -258,7 +258,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           dst_ptr - reinterpret_cast<uint64_t>(atomic_buffer_ptr),
           -num_tokens_sent - 1, dst_rank,
           sm_id,  // NOTE(MaoZiming): use sm_id for rb.
-          dst_expert_local_idx, false, ring_addrs, num_ring_addrs);
+          dst_expert_local_idx, false, ring_addrs, num_ring_addrs, true);
 
     } else {
       // Intra-node: use direct atomic operation
@@ -325,6 +325,10 @@ LOW_LATENCY_DISPATCH_RECV:
       uint64_t wait_cycles = (uint64_t)1e9;
       while (clock64() - start < wait_cycles) {
       }
+      // printf(
+      //     "[RECV_COUNT_DECODING] Counter waiting on %p\n",
+      //     (void*)(rdma_recv_count + local_expert_idx * num_ranks +
+      //     src_rank));
       while ((num_recv_tokens = ld_acquire_sys_global(
                   rdma_recv_count + local_expert_idx * num_ranks + src_rank)) ==
              0)
@@ -332,8 +336,7 @@ LOW_LATENCY_DISPATCH_RECV:
       auto wait_recv_cost = clock64() - start_time;
       num_recv_tokens = -num_recv_tokens - 1;
       // printf(
-      //     "[RECV_COUNT_DECODED] Decoded token count: %d (from received value
-      //     "
+      //     "[RECV_COUNT_DECODED] Decoded token count: %d (from received value"
       //     "%d), count_addr; %p\n",
       //     num_recv_tokens, -num_recv_tokens - 1,
       //     (void*)(rdma_recv_count + local_expert_idx * num_ranks +
@@ -353,8 +356,7 @@ LOW_LATENCY_DISPATCH_RECV:
                       dispatch_wait_recv_cost_stats + src_rank),
                   wait_recv_cost);
     }
-    asm volatile("bar.sync %0, %1;" ::"r"(warp_group_id + 2),
-                 "r"(num_warps_per_group * 32));
+    sync_barrier(warp_group_id + 2, num_warps_per_group * 32);
     num_recv_tokens = shared_num_recv_tokens[warp_group_id];
     recv_token_begin_idx = shared_recv_token_begin_idx[warp_group_id];
 
@@ -367,7 +369,7 @@ LOW_LATENCY_DISPATCH_RECV:
       if (lane_id == 0)
         recv_src_info[recv_token_begin_idx + i] =
             ld_acquire_sys_global(src_src_idx);
-      asm volatile("membar.sys;" ::: "memory");
+      sys_membar();
       __syncwarp();
 
       // Copy data
@@ -410,8 +412,8 @@ LOW_LATENCY_DISPATCH_RECV:
         }
       }
     }
-    if (blockIdx.x == 0 && threadIdx.x == 0)
-      printf("[dispatch] RECV finished\n");
+    // if (blockIdx.x == 0 && threadIdx.x == 0)
+    //   printf("[dispatch] RECV finished\n");
   }
 }
 
@@ -755,8 +757,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
 
     // Put the finishing flag
     EP_DEVICE_ASSERT(num_warps_per_group > 1 and num_warp_groups < 16);
-    asm volatile("bar.sync %0, %1;" ::"r"(warp_group_id + 1),
-                 "r"(num_warps_per_group * 32));
+    sync_barrier(warp_group_id + 1, num_warps_per_group * 32);
     if (sub_warp_id == 1 and lane_id == 0) {
       while (ld_acquire_global(atomic_clean_flag) == 0)
         ;
@@ -782,7 +783,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
         nvshmemi_ibgda_amo_nonfetch_add(
             dst_ptr - reinterpret_cast<uint64_t>(atomic_buffer_ptr), 1,
             dst_rank, sm_id, local_expert_idx, false, ring_addrs,
-            num_ring_addrs);
+            num_ring_addrs, false);
       }
       atomic_add_release_global(atomic_clean_flag, -1);
     }
@@ -865,8 +866,8 @@ LOW_LATENCY_COMBINE_RECV:
        token_idx * hidden_bf16_int4)[hidden_idx] = combined_int4;
     }
 
-    if (blockIdx.x == 0 && threadIdx.x == 0)
-      printf("[combine] RECV finished\n");
+    // if (blockIdx.x == 0 && threadIdx.x == 0)
+    //   printf("[combine] RECV finished\n");
   }
 }
 
@@ -899,7 +900,7 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
 
   constexpr int kNumTMABytesPerWarp = 12 * (512 + 16);
   int const smem_size = kNumTMABytesPerWarp * num_warps;
-  printf("Combine launched\n");
+  // printf("Combine launched\n");
 
 #define COMBINE_LAUNCH_CASE(hidden)                                            \
   {                                                                            \

@@ -141,23 +141,6 @@ Endpoint::~Endpoint() {
     }
   }
 
-  // free IpcMemHandleCache
-  std::unique_lock<std::shared_mutex> lock(ipc_cache_mu_);
-  for (auto& conn_pair : conn_id_and_ptr_to_ipc_cache_) {
-    auto& ptr_map = conn_pair.second;
-    for (auto& buf_pair : ptr_map) {
-      IpcCache& ipc_buf = buf_pair.second;
-      if (ipc_buf.direct_ptr) {
-        if (ipc_buf.is_send) {
-          GPU_RT_CHECK(gpuIpcCloseMemHandle(ipc_buf.direct_ptr));
-        }
-        ipc_buf.direct_ptr = nullptr;
-      }
-    }
-    ptr_map.clear();
-  }
-  conn_id_and_ptr_to_ipc_cache_.clear();
-
   if (!streams_.empty()) {
     GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
     for (auto s : streams_)
@@ -373,6 +356,19 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
       mr_id_to_mr_[id] = new MR{id, mhandle};
     }
     mr_id_v[i] = id;
+  }
+  return true;
+}
+
+bool Endpoint::dereg(uint64_t mr_id) {
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+  {
+    std::unique_lock<std::shared_mutex> lock(mr_mu_);
+    MR* mr = mr_id_to_mr_[mr_id];
+    ep_->uccl_deregmr(mr->mhandle_);
+    delete mr;
+    mr_id_to_mr_.erase(mr_id);
   }
   return true;
 }
@@ -1237,23 +1233,6 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  // can we assume that we are always in the same progress? so that we can use
-  // IpcCache.direct_ptr directly.
-  IpcCache ipc_cache;
-  bool found_in_cache = false;
-  {
-    std::shared_lock<std::shared_mutex> lock(ipc_cache_mu_);
-    auto it_conn = conn_id_and_ptr_to_ipc_cache_.find(conn_id);
-    if (it_conn != conn_id_and_ptr_to_ipc_cache_.end()) {
-      auto& ptr_to_ipc_cache = it_conn->second;
-      auto it_buf = ptr_to_ipc_cache.find(data);
-      if (it_buf != ptr_to_ipc_cache.end()) {
-        ipc_cache = it_buf->second;
-        found_in_cache = true;
-      }
-    }
-  }
-
   IpcTransferInfo transfer_info = {};  // Initialize to zero
   // Wait for receiver's IPC handle (receiver will send this proactively)
   auto ret = uccl::receive_message_nonblock(
@@ -1266,35 +1245,18 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size,
 
   void* raw_dst_ptr = nullptr;
   GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
+  GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_dst_ptr, transfer_info.handle,
+                                   gpuIpcMemLazyEnablePeerAccess));
 
-  if (!found_in_cache ||
-      std::memcmp(&transfer_info.handle, &ipc_cache.handle,
-                  sizeof(transfer_info.handle)) != 0) {  // Update handle
-    if (found_in_cache && ipc_cache.direct_ptr) {        // close old one
-      GPU_RT_CHECK(gpuIpcCloseMemHandle(ipc_cache.direct_ptr));
-    }
-    GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_dst_ptr, transfer_info.handle,
-                                     gpuIpcMemLazyEnablePeerAccess));
-    ipc_cache.handle = transfer_info.handle;
-    ipc_cache.direct_ptr = raw_dst_ptr;
-  } else {
-    raw_dst_ptr = ipc_cache.direct_ptr;
-  }
-  ipc_cache.size = transfer_info.size;  // always update
-  ipc_cache.offset = transfer_info.offset;
-  ipc_cache.is_send = true;
-  {
-    std::unique_lock<std::shared_mutex> lock(ipc_cache_mu_);
-    conn_id_and_ptr_to_ipc_cache_[conn_id][data] = ipc_cache;
-  }
   void* dst_ptr = reinterpret_cast<void*>(
-      reinterpret_cast<uintptr_t>(raw_dst_ptr) + ipc_cache.offset);
+      reinterpret_cast<uintptr_t>(raw_dst_ptr) + transfer_info.offset);
 
   std::vector<gpuStream_t>& dst_streams = ipc_streams_[conn->remote_gpu_idx_];
   int num_streams =
       std::min(dst_streams.size(),
                size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
   size_t chunk_size = size / num_streams;
+
   for (int i = 0; i < num_streams; ++i) {
     // Split data and dst_ptr into n_streams chunks
     void* chunk_data = reinterpret_cast<void*>(
@@ -1358,48 +1320,17 @@ bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  IpcCache ipc_cache;
-  bool found_in_cache = false;
-  {
-    std::shared_lock<std::shared_mutex> lock(ipc_cache_mu_);
-    auto it_conn = conn_id_and_ptr_to_ipc_cache_.find(conn_id);
-    if (it_conn != conn_id_and_ptr_to_ipc_cache_.end()) {
-      auto& ptr_to_ipc_cache = it_conn->second;
-      auto it_buf = ptr_to_ipc_cache.find(data);
-      if (it_buf != ptr_to_ipc_cache.end()) {
-        ipc_cache = it_buf->second;
-        found_in_cache = true;
-      }
-    }
-  }
-
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
   // Generate IPC memory handle for our receive buffer
   IpcTransferInfo transfer_info = {};  // Initialize to zero
   transfer_info.size = size;
-  transfer_info.operation = 1;                          // response
-  if (found_in_cache) {                                 // Update handle
-    if (ipc_cache.size != size) ipc_cache.size = size;  // update
-    transfer_info.offset = ipc_cache.offset;
-    transfer_info.handle = ipc_cache.handle;
-  } else {
-    auto data_aligned =
-        reinterpret_cast<uintptr_t>(data) & ~(kIpcAlignment - 1);
-    auto data_offset = reinterpret_cast<uintptr_t>(data) - data_aligned;
-    transfer_info.offset = data_offset;
-    GPU_RT_CHECK(gpuIpcGetMemHandle(&transfer_info.handle,
-                                    reinterpret_cast<void*>(data_aligned)));
+  transfer_info.operation = 1;  // response
 
-    ipc_cache.handle = transfer_info.handle;
-    ipc_cache.size = transfer_info.size;
-    ipc_cache.offset = transfer_info.offset;
-    ipc_cache.direct_ptr = reinterpret_cast<void*>(data_aligned);
-    ipc_cache.is_send = false;
-    {
-      std::unique_lock<std::shared_mutex> lock(ipc_cache_mu_);
-      conn_id_and_ptr_to_ipc_cache_[conn_id][data] = ipc_cache;
-    }
-  }
+  auto data_aligned = reinterpret_cast<uintptr_t>(data) & ~(kIpcAlignment - 1);
+  auto data_offset = reinterpret_cast<uintptr_t>(data) - data_aligned;
+  transfer_info.offset = data_offset;
+  GPU_RT_CHECK(gpuIpcGetMemHandle(&transfer_info.handle,
+                                  reinterpret_cast<void*>(data_aligned)));
 
   auto ret = uccl::send_message_nonblock(
       client_fd, static_cast<void const*>(&transfer_info),
