@@ -37,6 +37,10 @@
 #define QKEY 0x11111111u
 
 inline uint32_t pack_imm(bool is_combine, int v15, uint16_t off16) {
+  // Pack control into 32-bit imm:
+  // [31] kind (1=combine, 0=dispatch)
+  // [30:16] signed 15-bit value (two's complement)
+  // [15:0]  slot/seq (here: lower 16 bits of wr index)
   // v15 must be in [-16384, 16383]
   uint32_t vfield = static_cast<uint32_t>(v15) & 0x7FFF;
   return (static_cast<uint32_t>(is_combine) << 31) | (vfield << 16) | off16;
@@ -45,6 +49,7 @@ inline uint32_t pack_imm(bool is_combine, int v15, uint16_t off16) {
 inline int unpack_v(int32_t imm) {
   // Layout: [31]=kind, [30:16]=v(15b), [15:0]=off
   // Drop kind (<<1), then arithmetic >>17 to sign-extend bit30
+  // Decode imm: [31] kind, [30:16] value (signed 15-bit), [15:0] offset
   return (imm << 1) >> 17;
 }
 
@@ -994,9 +999,6 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
     if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
         ((ntohl(cqe.imm_data) >> 31) & 0x1)) {
       uint32_t imm = ntohl(cqe.imm_data);
-
-      // Decode imm: [31] kind, [30:16] value (signed 15-bit), [15:0] offset
-      // bool is_combine = unpack_kind(imm);
       int value = unpack_v(static_cast<int32_t>(imm));
       uint32_t offset = unpack_off(imm);
       size_t index = offset / sizeof(int);
@@ -1213,14 +1215,14 @@ void local_post_ack_buf(ProxyCtx& S, int depth) {
   }
 }
 
-void post_atomic_operations_efa(ProxyCtx& S,
-                                std::vector<uint64_t> const& wrs_to_post,
-                                std::vector<TransferCmd> const& cmds_to_post,
-                                std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                                int my_rank, int block_idx,
-                                std::unordered_set<uint64_t>& finished_wrs,
-                                std::mutex& finished_wrs_mutex,
-                                std::unordered_set<uint64_t>& acked_wrs) {
+void post_atomic_operations(ProxyCtx& S,
+                            std::vector<uint64_t> const& wrs_to_post,
+                            std::vector<TransferCmd> const& cmds_to_post,
+                            std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
+                            int my_rank, int block_idx,
+                            std::unordered_set<uint64_t>& finished_wrs,
+                            std::mutex& finished_wrs_mutex,
+                            std::unordered_set<uint64_t>& acked_wrs) {
   if (cmds_to_post.size() > ProxyCtx::kMaxAtomicOps) {
     fprintf(stderr, "Too many atomic operations: %zu > %zu\n",
             cmds_to_post.size(), ProxyCtx::kMaxAtomicOps);
@@ -1250,12 +1252,6 @@ void post_atomic_operations_efa(ProxyCtx& S,
       auto const& cmd = cmds_to_post[wr_ids[i]];
       auto wr_id = wrs_to_post[wr_ids[i]];
       wr_ids[i] = wr_id;
-      // bool const is_combine = cmd.is_combine;
-
-      // Pack control into 32-bit imm:
-      // [31] kind (1=combine, 0=dispatch)
-      // [30:16] signed 15-bit value (two's complement)  <-- ensure it fits
-      // [15:0]  slot/seq (here: lower 16 bits of wr index)
       int v = static_cast<int>(cmd.value);
       if (v < -16384 || v > 16383) {
         fprintf(stderr,
@@ -1265,17 +1261,22 @@ void post_atomic_operations_efa(ProxyCtx& S,
         std::abort();
       }
       uint32_t offset = static_cast<int64_t>(cmd.req_rptr);
-      uint32_t imm =
-          pack_imm(/*is_combine=*/true, v, static_cast<uint16_t>(offset));
+      uint32_t imm = pack_imm(true, v, static_cast<uint16_t>(offset));
 
       qpx->wr_id = kAtomicWrTag | (wr_id & kAtomicMask);
       qpx->comp_mask = 0;
       qpx->wr_flags = (i + 1 == k) ? IBV_SEND_SIGNALED : 0;
 
+#ifdef EFA
       ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, ctx->remote_addr,
                             htonl(imm));
       ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_qpn, QKEY);
       ibv_wr_set_sge(qpx, ctx->mr->lkey, (uintptr_t)ctx->mr->addr, 0);
+#else
+      ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, ctx->remote_addr,
+                            htonl(imm));
+      ibv_wr_set_sge(qpx, ctx->mr->lkey, (uintptr_t)ctx->mr->addr, 4);
+#endif
       // printf(
       //     "[EFA_SEND_ATOMIC] wr_id=%lu dst=%d kind=%u val=%d offset=%u "
       //     "imm=0x%08x\n",
