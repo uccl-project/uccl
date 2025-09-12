@@ -102,11 +102,7 @@ def test_main(
     x = torch.ones((num_tokens, hidden), dtype=torch.bfloat16, device="cuda") * (
         rank - rank_offset
     )
-
-    print("x before", x)
     x[:, -128:] = torch.arange(num_tokens, device="cuda").to(torch.bfloat16).view(-1, 1)
-
-    print("x after", x)
     x_list = [x]
     for i in range(4 if use_logfmt else 0):
         # NOTES: make more LogFMT casts and also with some BF16
@@ -126,8 +122,6 @@ def test_main(
         + 1
     )
     topk_idx = torch.topk(scores, num_topk, dim=-1, largest=True, sorted=True)[1]
-
-    print("topk_idx", topk_idx)
     topk_weights = torch.randn(
         (num_tokens, num_topk), dtype=torch.float32, device="cuda"
     ).abs()
@@ -141,7 +135,6 @@ def test_main(
     # Check dispatch correctness
     do_check = True
     hash_value, num_times = 0, 0
-
     for current_x in x_list:
         for return_recv_hook in (False, True):
             for dispatch_use_fp8 in (False, True):
@@ -189,7 +182,6 @@ def test_main(
                                 if dispatch_use_fp8
                                 else packed_recv_x
                             )
-                            print("packed_recv_x", packed_recv_x)
                             simulated_gemm_x = (
                                 per_token_cast_back(
                                     packed_recv_x[0].view(-1, hidden),
@@ -236,16 +228,12 @@ def test_main(
                                     num_valid_tokens
                                     == (all_topk_idx == expert_id).sum().item()
                                 ), f"{num_valid_tokens} != {(all_topk_idx == expert_id).sum().item()}"
-
-                                print("num_valid_tokens: ", num_valid_tokens)
                                 if num_valid_tokens == 0:
                                     continue
                                 # Check received data
                                 if current_x is x:
                                     recv_x = recv_x[:num_valid_tokens]
-                                    print("recv_x", recv_x)
                                     recv_x_amin = recv_x[:, :-128].amin(dim=-1)
-                                    print("recv_x_amin", recv_x_amin)
                                     recv_src_info = recv_src_info[:num_valid_tokens]
                                     assert torch.equal(
                                         recv_x_amin, recv_x[:, :-128].amax(dim=-1)
@@ -258,11 +246,6 @@ def test_main(
                                             < 0.007
                                         )
                                     else:
-                                        print("recv_x[:, -128:]", recv_x[:, -128:])
-                                        print(
-                                            "recv_src_info.view(-1, 1) % num_tokens",
-                                            recv_src_info.view(-1, 1) % num_tokens,
-                                        )
                                         assert (
                                             recv_x[:, -128:]
                                             - recv_src_info.view(-1, 1) % num_tokens
@@ -297,11 +280,6 @@ def test_main(
                                     hash_value ^= hash_tensor(
                                         packed_recv_x[i, :num_valid_tokens]
                                     )
-                            print(
-                                f"Finished one dispatch test case: return_recv_hook: {return_recv_hook}\n",
-                                flush=True,
-                            )
-                            time.sleep(1)
                             # Check combine correctness
                             for zero_copy in (False,) if use_logfmt else (False, True):
                                 if zero_copy:
@@ -337,16 +315,11 @@ def test_main(
                                         .view(-1, 1),
                                         combined_x,
                                     )
-                                    print("combined_x", combined_x)
                                     assert torch.isnan(combined_x).sum().item() == 0
                                     assert diff < (
                                         9e-4 if dispatch_use_fp8 else 1e-5
                                     ), f"Error: {diff=}, {dispatch_use_fp8=}, {zero_copy=}"
                                     hash_value ^= hash_tensor(combined_x)
-                            print(
-                                f"Finished one combine case: return_recv_hook: {return_recv_hook}, zero_copy: {zero_copy}\n",
-                                flush=True,
-                            )
 
     # noinspection PyShadowingNames
     def large_gemm_with_hook(hook):
