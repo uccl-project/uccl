@@ -831,11 +831,11 @@ void local_process_completions(ProxyCtx& S,
     switch (wc[i].opcode) {
       case IBV_WC_RDMA_WRITE: {
         send_completed++;
-        const uint64_t wrid = wc[i].wr_id;
-        if ((wrid & ~kAtomicMask) == kAtomicWrTag) {
-          printf("[EFA_SEND_DONE] wrid=%lu tag=0x%llx qp=0x%x\n", wrid,
-                 (wrid & kAtomicMask), wc[i].qp_num);
-        }
+        // const uint64_t wrid = wc[i].wr_id;
+        // if ((wrid & ~kAtomicMask) == kAtomicWrTag) {
+        //   printf("[EFA_SEND_DONE] wrid=%lu tag=0x%llx qp=0x%x\n", wrid,
+        //          (wrid & kAtomicMask), wc[i].qp_num);
+        // }
       } break;
       case IBV_WC_RECV:
         if (wc[i].wc_flags & IBV_WC_WITH_IMM &&
@@ -996,17 +996,16 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       uint32_t imm = ntohl(cqe.imm_data);
 
       // Decode imm: [31] kind, [30:16] value (signed 15-bit), [15:0] offset
-      bool is_combine = unpack_kind(imm);
+      // bool is_combine = unpack_kind(imm);
       int value = unpack_v(static_cast<int32_t>(imm));
       uint32_t offset = unpack_off(imm);
       size_t index = offset / sizeof(int);
-      printf(
-          "[EFA_RECV_ATOMIC] kind=%u value=%d offset=%u index=%zu addr=0x%llx "
-          "imm=0x%08x\n",
-          (unsigned)is_combine, value, offset, index,
-          (unsigned long long)((uintptr_t)atomic_buffer_ptr +
-                               index * sizeof(int)),
-          imm);
+      // printf(
+      //     "[EFA_RECV_ATOMIC] kind=%u value=%d offset=%u index=%zu addr=0x%llx
+      //     " "imm=0x%08x\n", (unsigned)is_combine, value, offset, index,
+      //     (unsigned long long)((uintptr_t)atomic_buffer_ptr +
+      //                          index * sizeof(int)),
+      //     imm);
 
       auto* addr32 =
           reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
@@ -1251,7 +1250,7 @@ void post_atomic_operations_efa(ProxyCtx& S,
       auto const& cmd = cmds_to_post[wr_ids[i]];
       auto wr_id = wrs_to_post[wr_ids[i]];
       wr_ids[i] = wr_id;
-      bool const is_combine = cmd.is_combine;
+      // bool const is_combine = cmd.is_combine;
 
       // Pack control into 32-bit imm:
       // [31] kind (1=combine, 0=dispatch)
@@ -1277,11 +1276,11 @@ void post_atomic_operations_efa(ProxyCtx& S,
                             htonl(imm));
       ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_qpn, QKEY);
       ibv_wr_set_sge(qpx, ctx->mr->lkey, (uintptr_t)ctx->mr->addr, 0);
-      printf(
-          "[EFA_SEND_ATOMIC] wr_id=%lu dst=%d kind=%u val=%d offset=%u "
-          "imm=0x%08x\n",
-          qpx->wr_id, dst_rank, static_cast<unsigned>(is_combine), v, offset,
-          imm);
+      // printf(
+      //     "[EFA_SEND_ATOMIC] wr_id=%lu dst=%d kind=%u val=%d offset=%u "
+      //     "imm=0x%08x\n",
+      //     qpx->wr_id, dst_rank, static_cast<unsigned>(is_combine), v, offset,
+      //     imm);
     }
     int ret = ibv_wr_complete(qpx);
     if (ret) {

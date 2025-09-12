@@ -325,20 +325,22 @@ LOW_LATENCY_DISPATCH_RECV:
       uint64_t wait_cycles = (uint64_t)1e9;
       while (clock64() - start < wait_cycles) {
       }
-      printf(
-          "[RECV_COUNT_DECODING] Counter waiting on %p\n",
-          (void*)(rdma_recv_count + local_expert_idx * num_ranks + src_rank));
+      // printf(
+      //     "[RECV_COUNT_DECODING] Counter waiting on %p\n",
+      //     (void*)(rdma_recv_count + local_expert_idx * num_ranks +
+      //     src_rank));
       while ((num_recv_tokens = ld_acquire_sys_global(
                   rdma_recv_count + local_expert_idx * num_ranks + src_rank)) ==
              0)
         ;
       auto wait_recv_cost = clock64() - start_time;
       num_recv_tokens = -num_recv_tokens - 1;
-      printf(
-          "[RECV_COUNT_DECODED] Decoded token count: %d (from received value"
-          "%d), count_addr; %p\n",
-          num_recv_tokens, -num_recv_tokens - 1,
-          (void*)(rdma_recv_count + local_expert_idx * num_ranks + src_rank));
+      // printf(
+      //     "[RECV_COUNT_DECODED] Decoded token count: %d (from received value"
+      //     "%d), count_addr; %p\n",
+      //     num_recv_tokens, -num_recv_tokens - 1,
+      //     (void*)(rdma_recv_count + local_expert_idx * num_ranks +
+      //     src_rank));
       recv_token_begin_idx =
           atomicAdd(packed_recv_count + local_expert_idx, num_recv_tokens);
       shared_num_recv_tokens[warp_group_id] = num_recv_tokens;
@@ -411,8 +413,8 @@ LOW_LATENCY_DISPATCH_RECV:
         }
       }
     }
-    if (blockIdx.x == 0 && threadIdx.x == 0)
-      printf("[dispatch] RECV finished\n");
+    // if (blockIdx.x == 0 && threadIdx.x == 0)
+    //   printf("[dispatch] RECV finished\n");
   }
 }
 
@@ -866,8 +868,8 @@ LOW_LATENCY_COMBINE_RECV:
        token_idx * hidden_bf16_int4)[hidden_idx] = combined_int4;
     }
 
-    if (blockIdx.x == 0 && threadIdx.x == 0)
-      printf("[combine] RECV finished\n");
+    // if (blockIdx.x == 0 && threadIdx.x == 0)
+    //   printf("[combine] RECV finished\n");
   }
 }
 
