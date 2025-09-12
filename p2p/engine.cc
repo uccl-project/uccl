@@ -96,8 +96,9 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   recvv_task_ring_ = uccl::create_ring(sizeof(TaskVPtrWrapper), kTaskRingSize);
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
-  sendv_proxy_thread_ = std::thread(&Endpoint::sendv_proxy_thread_func, this);
-  recvv_proxy_thread_ = std::thread(&Endpoint::recvv_proxy_thread_func, this);
+  // sendv_proxy_thread_ = std::thread(&Endpoint::sendv_proxy_thread_func,
+  // this); recvv_proxy_thread_ =
+  // std::thread(&Endpoint::recvv_proxy_thread_func, this);
 
   // Initialize UDS socket for local connections
   init_uds_socket();
@@ -115,24 +116,15 @@ Endpoint::~Endpoint() {
 
   send_proxy_thread_.join();
   recv_proxy_thread_.join();
-  std::cout << "send_proxy_thread_.join ok" <<std::endl;
-  sendv_proxy_thread_.join();
-  recvv_proxy_thread_.join();
-  std::cout << "recvv_proxy_thread_.join(); ok" <<std::endl;
+  // sendv_proxy_thread_.join();
+  // recvv_proxy_thread_.join();
 
   free(send_task_ring_);
   free(recv_task_ring_);
-  std::cout << "recv_task_ring_ ok" <<std::endl;
-
   free(read_task_ring_);
   free(write_task_ring_);
-  std::cout << "write_task_ring_ ok" <<std::endl;
-  
-
   free(sendv_task_ring_);
   free(recvv_task_ring_);
-  std::cout << " free(recvv_task_ring_);" <<std::endl;
-
 
   delete ep_;
 
@@ -573,23 +565,24 @@ bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
 
 bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void const*> data_v,
-                     std::vector<size_t> size_v, size_t num_iovs,bool inside_python) {
+                     std::vector<size_t> size_v, size_t num_iovs,
+                     bool inside_python) {
   // [[maybe_unused]] auto _ =
   //     PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
-    [[maybe_unused]] auto _ = inside_python && PyGILState_Check()
+  [[maybe_unused]] auto _ = inside_python && PyGILState_Check()
                                 ? (py::gil_scoped_release{}, nullptr)
                                 : nullptr;
 
   Conn* conn;
   {
-      std::shared_lock<std::shared_mutex> lock(conn_mu_);
-      auto it = conn_id_to_conn_.find(conn_id);
-      if (it == conn_id_to_conn_.end()) {
-          // 最好增加一个错误处理
-          std::cerr << "[sendv] Error: Invalid conn_id " << conn_id << std::endl;
-          return false;
-      }
-      conn = it->second;
+    std::shared_lock<std::shared_mutex> lock(conn_mu_);
+    auto it = conn_id_to_conn_.find(conn_id);
+    if (it == conn_id_to_conn_.end()) {
+      // 最好增加一个错误处理
+      std::cerr << "[sendv] Error: Invalid conn_id " << conn_id << std::endl;
+      return false;
+    }
+    conn = it->second;
   }
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
@@ -623,8 +616,9 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
         std::shared_lock<std::shared_mutex> lock(mr_mu_);
         auto it = mr_id_to_mr_.find(mr_id_v[i]);
         if (it == mr_id_to_mr_.end()) {
-            std::cerr << "[sendv] Error: Invalid mr_id " << mr_id_v[i] << std::endl;
-            return false;
+          std::cerr << "[sendv] Error: Invalid mr_id " << mr_id_v[i]
+                    << std::endl;
+          return false;
         }
         mhandle_send_vec.push_back(it->second->mhandle_);
       }
@@ -669,20 +663,20 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
 bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void*> data_v, std::vector<size_t> size_v,
-                     size_t num_iovs,bool inside_python) {
+                     size_t num_iovs, bool inside_python) {
   [[maybe_unused]] auto _ = inside_python && PyGILState_Check()
-          ? (py::gil_scoped_release{}, nullptr)
-          : nullptr;
+                                ? (py::gil_scoped_release{}, nullptr)
+                                : nullptr;
   // py::gil_scoped_release release;
   Conn* conn;
   {
-      std::shared_lock<std::shared_mutex> lock(conn_mu_);
-      auto it = conn_id_to_conn_.find(conn_id);
-      if (it == conn_id_to_conn_.end()) {
-          std::cerr << "[recvv] Error: Invalid conn_id " << conn_id << std::endl;
-          return false;
-      }
-      conn = it->second;
+    std::shared_lock<std::shared_mutex> lock(conn_mu_);
+    auto it = conn_id_to_conn_.find(conn_id);
+    if (it == conn_id_to_conn_.end()) {
+      std::cerr << "[recvv] Error: Invalid conn_id " << conn_id << std::endl;
+      return false;
+    }
+    conn = it->second;
   }
 
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
@@ -723,8 +717,9 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
         std::shared_lock<std::shared_mutex> lock(mr_mu_);
         auto it = mr_id_to_mr_.find(mr_id_v[i]);
         if (it == mr_id_to_mr_.end()) {
-            std::cerr << "[recvv] Error: Invalid mr_id " << mr_id_v[i] << std::endl;
-            return false;
+          std::cerr << "[recvv] Error: Invalid mr_id " << mr_id_v[i]
+                    << std::endl;
+          return false;
         }
         mhandle_recv_vec.push_back(it->second->mhandle_);
       }
@@ -771,12 +766,12 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 }
 
 bool Endpoint::sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-                           std::vector<void const*> data_v, 
+                           std::vector<void const*> data_v,
                            std::vector<size_t> size_v, size_t num_iovs,
                            uint64_t* transfer_id) {
   [[maybe_unused]] auto _ =
       PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
-
+  // std::cout << "[debug] enter sendv_async" << std::endl;
   TaskV* task = new TaskV{
       .type = TaskType::SENDV,
       .conn_id = conn_id,
@@ -791,19 +786,21 @@ bool Endpoint::sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   task->self_ptr = task;
 
   *transfer_id = reinterpret_cast<uint64_t>(task);
-  TaskVPtrWrapper wrapper = { .ptr = task };
+  TaskVPtrWrapper wrapper = {.ptr = task};
+  // std::cout << "[debug] before while sendv_async" << std::endl;
   while (jring_mp_enqueue_bulk(sendv_task_ring_, &wrapper, 1, nullptr) != 1) {
   }
-
+  // std::cout << "[debug] after while sendv_async" << std::endl;
   return true;
 }
 
 bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-                           std::vector<void*> data_v, std::vector<size_t> size_v,
-                           size_t num_iovs, uint64_t* transfer_id) {
+                           std::vector<void*> data_v,
+                           std::vector<size_t> size_v, size_t num_iovs,
+                           uint64_t* transfer_id) {
   [[maybe_unused]] auto _ =
       PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
-
+  // std::cout << "[debug]enter recvv_async" << std::endl;
   TaskV* task = new TaskV{
       .type = TaskType::RECVV,
       .conn_id = conn_id,
@@ -818,9 +815,11 @@ bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   task->self_ptr = task;
 
   *transfer_id = reinterpret_cast<uint64_t>(task);
-  TaskVPtrWrapper wrapper = { .ptr = task };
+  TaskVPtrWrapper wrapper = {.ptr = task};
+  // std::cout << "[debug]before while recvv_async" << std::endl;
   while (jring_mp_enqueue_bulk(recvv_task_ring_, &wrapper, 1, nullptr) != 1) {
   }
+  // std::cout << "[debug]after while recvv_async" << std::endl;
 
   return true;
 }
@@ -1245,8 +1244,11 @@ void Endpoint::send_proxy_thread_func() {
   uccl::pin_thread_to_numa(numa_node_);
   Task task;
   RWTask rw_task;
+  TaskVPtrWrapper wrapper;
+  TaskV* taskv;
 
   while (!stop_.load(std::memory_order_acquire)) {
+    // std::cout << "[debug] enter send_proxy_thread_func while loop" << std::endl;
     if (jring_sc_dequeue_bulk(send_task_ring_, &task, 1, nullptr) == 1) {
       if (task.type == TaskType::SEND_IPC) {
         send_ipc(task.conn_id, task.data, task.size, false);
@@ -1267,14 +1269,25 @@ void Endpoint::send_proxy_thread_func() {
             rw_task.slot_item, false);
       rw_task.self_ptr->done.store(true, std::memory_order_release);
     }
+
+    if (jring_sc_dequeue_bulk(sendv_task_ring_, &wrapper, 1, nullptr) == 1) {
+      // std::cout << "[debug] enter sendv proxy thread func" << std::endl;
+      taskv = wrapper.ptr;  // Extract the actual pointer
+      sendv(taskv->conn_id, taskv->mr_id_v, taskv->const_data_v, taskv->size_v,
+            taskv->num_iovs, false);
+      (taskv->self_ptr)->done.store(true, std::memory_order_release);
+      // std::cout << "[debug] finish sendv proxy thread func" << std::endl;
+    }
   }
 }
 
 void Endpoint::recv_proxy_thread_func() {
   uccl::pin_thread_to_numa(numa_node_);
   Task task;
-
+  TaskVPtrWrapper wrapper;
+  TaskV* taskv;
   while (!stop_.load(std::memory_order_acquire)) {
+    // std::cout << "[debug] enter recv_proxy_thread_func while loop" << std::endl;
     if (jring_sc_dequeue_bulk(recv_task_ring_, &task, 1, nullptr) == 1) {
       if (task.type == TaskType::RECV_IPC) {
         recv_ipc(task.conn_id, task.data, task.size, false);
@@ -1283,36 +1296,35 @@ void Endpoint::recv_proxy_thread_func() {
       }
       task.self_ptr->done.store(true, std::memory_order_release);
     }
-  }
-}
-
-void Endpoint::sendv_proxy_thread_func() {
-  uccl::pin_thread_to_numa(numa_node_);
-  TaskVPtrWrapper wrapper;
-  // TaskV *taskv = nullptr;
-
-  while (!stop_.load(std::memory_order_acquire)) {
-    if (jring_sc_dequeue_bulk(sendv_task_ring_,  &wrapper, 1, nullptr) == 1) {
-      TaskV* taskv = wrapper.ptr; // Extract the actual pointer
-
-      sendv(taskv->conn_id, taskv->mr_id_v, taskv->const_data_v, taskv->size_v, taskv->num_iovs,false);
-      (taskv->self_ptr)->done.store(true, std::memory_order_release);
-    }
-  }
-}
-
-void Endpoint::recvv_proxy_thread_func() {
-  uccl::pin_thread_to_numa(numa_node_);
-  TaskVPtrWrapper wrapper; // Dequeue into the 16-byte wrapper struct
-
-  while (!stop_.load(std::memory_order_acquire)) {
     if (jring_sc_dequeue_bulk(recvv_task_ring_, &wrapper, 1, nullptr) == 1) {
-      TaskV* taskv = wrapper.ptr; // Extract the actual pointer
-      recvv(taskv->conn_id, taskv->mr_id_v, taskv->data_v, taskv->size_v, taskv->num_iovs,false);
+      // std::cout << "[debug] enter recv_proxy_thread_func" << std::endl;
+      taskv = wrapper.ptr;  // Extract the actual pointer
+      recvv(taskv->conn_id, taskv->mr_id_v, taskv->data_v, taskv->size_v,
+            taskv->num_iovs, false);
       (taskv->self_ptr)->done.store(true, std::memory_order_release);
+      // std::cout << "[debug] finish recv_proxy_thread_func" << std::endl;
     }
   }
 }
+
+// void Endpoint::sendv_proxy_thread_func() {
+//   uccl::pin_thread_to_numa(numa_node_);
+//   TaskVPtrWrapper wrapper;
+//   // TaskV *taskv = nullptr;
+
+//   while (!stop_.load(std::memory_order_acquire)) {
+
+//   }
+// }
+
+// void Endpoint::recvv_proxy_thread_func() {
+//   uccl::pin_thread_to_numa(numa_node_);
+//   TaskVPtrWrapper wrapper;  // Dequeue into the 16-byte wrapper struct
+
+//   while (!stop_.load(std::memory_order_acquire)) {
+
+//   }
+// }
 
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   py::gil_scoped_release release;

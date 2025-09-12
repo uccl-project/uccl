@@ -164,7 +164,7 @@ class Endpoint {
   /* Send a vector of data chunks. Blocking. */
   bool sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
              std::vector<void const*> data_v, std::vector<size_t> size_v,
-             size_t num_iovs,bool inside_python = true);
+             size_t num_iovs, bool inside_python = true);
 
   /* Send a vector of data chunks asynchronously. */
   bool sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
@@ -174,7 +174,7 @@ class Endpoint {
   /* Receive a vector of data chunks. Blocking. */
   bool recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
              std::vector<void*> data_v, std::vector<size_t> size_v,
-             size_t num_iovs,bool inside_python = true);
+             size_t num_iovs, bool inside_python = true);
 
   /* Receive a vector of data chunks asynchronously. */
   bool recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
@@ -405,27 +405,28 @@ class Endpoint {
   };
 
   struct alignas(64) TaskV {
-    TaskType type;              // 任务类型，将是 SENDV 或 RECVV
+    TaskType type;  // 任务类型，将是 SENDV 或 RECVV
 
-    uint64_t conn_id;           // 连接 ID，与 Task 相同
+    uint64_t conn_id;  // 连接 ID，与 Task 相同
 
     // --- 矢量化操作的核心数据 ---
     // 使用 vector 来存储多个数据块的信息
     std::vector<uint64_t> mr_id_v;
-    // 为 sendv (const) 和 recvv (non-const) 分别准备
+    // 为 sendv (const) 和 recvv (non-const) 分别准备: 是否必要？
+    // 感觉没必要 TODO: 统一 vector；但是 sendv 使用的是
     std::vector<void const*> const_data_v;
     std::vector<void*> data_v;
     std::vector<size_t> size_v;
-    size_t num_iovs;            // 数据块的数量
+    size_t num_iovs;  // 数据块的数量
 
-    std::atomic<bool> done;     // 完成状态标志，与 Task 相同
-    TaskV* self_ptr;            // 指向自己的指针，与 Task 相同
-};
-
-struct TaskVPtrWrapper {
+    std::atomic<bool> done;  // 完成状态标志，与 Task 相同
+    TaskV* self_ptr;         // 指向自己的指针，与 Task 相同
+  };
+  // 用于 jring 16 字节 对齐
+  struct TaskVPtrWrapper {
     TaskV* ptr;
-    uint64_t padding; // 8 bytes of ptr + 8 bytes of padding = 16 bytes
-};
+    uint64_t padding;  // 8 bytes of ptr + 8 bytes of padding = 16 bytes
+  };
 
   struct alignas(64) Task {
     TaskType type;
