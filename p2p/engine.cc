@@ -773,26 +773,23 @@ bool Endpoint::sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                            uint64_t* transfer_id) {
   [[maybe_unused]] auto _ =
       PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
-  // std::cout << "[debug] enter sendv_async" << std::endl;
   TaskBatch* task = new TaskBatch{
       .type = TaskType::SENDV,
-      .conn_id = conn_id,
-      .mr_id_v = mr_id_v,
       .const_data_v = data_v,
       .data_v = {},  // Empty for sendv
       .size_v = size_v,
-      .num_iovs = num_iovs,
+      .conn_id = conn_id,
+      .mr_id_v = mr_id_v,
       .done = false,
       .self_ptr = nullptr,
+      .num_iovs = num_iovs,
   };
   task->self_ptr = task;
 
   *transfer_id = reinterpret_cast<uint64_t>(task);
   TaskBatchPtrWrapper wrapper = {.ptr = task};
-  // std::cout << "[debug] before while sendv_async" << std::endl;
   while (jring_mp_enqueue_bulk(sendv_task_ring_, &wrapper, 1, nullptr) != 1) {
   }
-  // std::cout << "[debug] after while sendv_async" << std::endl;
   return true;
 }
 
@@ -802,26 +799,23 @@ bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                            uint64_t* transfer_id) {
   [[maybe_unused]] auto _ =
       PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
-  // std::cout << "[debug]enter recvv_async" << std::endl;
   TaskBatch* task = new TaskBatch{
       .type = TaskType::RECVV,
-      .conn_id = conn_id,
-      .mr_id_v = mr_id_v,
       .const_data_v = {},  // Empty for recvv
       .data_v = data_v,
       .size_v = size_v,
-      .num_iovs = num_iovs,
+      .conn_id = conn_id,
+      .mr_id_v = mr_id_v,
       .done = false,
       .self_ptr = nullptr,
+      .num_iovs = num_iovs,
   };
   task->self_ptr = task;
 
   *transfer_id = reinterpret_cast<uint64_t>(task);
   TaskBatchPtrWrapper wrapper = {.ptr = task};
-  // std::cout << "[debug]before while recvv_async" << std::endl;
   while (jring_mp_enqueue_bulk(recvv_task_ring_, &wrapper, 1, nullptr) != 1) {
   }
-  // std::cout << "[debug]after while recvv_async" << std::endl;
 
   return true;
 }
@@ -1250,8 +1244,6 @@ void Endpoint::send_proxy_thread_func() {
   TaskBatch* taskv;
 
   while (!stop_.load(std::memory_order_acquire)) {
-    // std::cout << "[debug] enter send_proxy_thread_func while loop" <<
-    // std::endl;
     if (jring_sc_dequeue_bulk(send_task_ring_, &task, 1, nullptr) == 1) {
       if (task.type == TaskType::SEND_IPC) {
         send_ipc(task.conn_id, task.data, task.size, false);
@@ -1274,12 +1266,10 @@ void Endpoint::send_proxy_thread_func() {
     }
 
     if (jring_sc_dequeue_bulk(sendv_task_ring_, &wrapper, 1, nullptr) == 1) {
-      // std::cout << "[debug] enter sendv proxy thread func" << std::endl;
       taskv = wrapper.ptr;  // Extract the actual pointer
       sendv(taskv->conn_id, taskv->mr_id_v, taskv->const_data_v, taskv->size_v,
             taskv->num_iovs, false);
       (taskv->self_ptr)->done.store(true, std::memory_order_release);
-      // std::cout << "[debug] finish sendv proxy thread func" << std::endl;
     }
   }
 }
@@ -1290,8 +1280,6 @@ void Endpoint::recv_proxy_thread_func() {
   TaskBatchPtrWrapper wrapper;
   TaskBatch* taskv;
   while (!stop_.load(std::memory_order_acquire)) {
-    // std::cout << "[debug] enter recv_proxy_thread_func while loop" <<
-    // std::endl;
     if (jring_sc_dequeue_bulk(recv_task_ring_, &task, 1, nullptr) == 1) {
       if (task.type == TaskType::RECV_IPC) {
         recv_ipc(task.conn_id, task.data, task.size, false);
@@ -1301,12 +1289,10 @@ void Endpoint::recv_proxy_thread_func() {
       task.self_ptr->done.store(true, std::memory_order_release);
     }
     if (jring_sc_dequeue_bulk(recvv_task_ring_, &wrapper, 1, nullptr) == 1) {
-      // std::cout << "[debug] enter recv_proxy_thread_func" << std::endl;
       taskv = wrapper.ptr;  // Extract the actual pointer
       recvv(taskv->conn_id, taskv->mr_id_v, taskv->data_v, taskv->size_v,
             taskv->num_iovs, false);
       (taskv->self_ptr)->done.store(true, std::memory_order_release);
-      // std::cout << "[debug] finish recv_proxy_thread_func" << std::endl;
     }
   }
 }

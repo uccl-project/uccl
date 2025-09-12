@@ -410,15 +410,15 @@ class Endpoint {
     std::vector<void const*> const_data_v;
     std::vector<void*> data_v;
     std::vector<size_t> size_v;
-    std::vector<uint64_t> mr_id_v;
     uint64_t conn_id;
-    size_t num_iovs;  // param of sendv/recv
+    std::vector<uint64_t> mr_id_v;
     std::atomic<bool> done;
     // For proxy to access the task.done
     TaskBatch* self_ptr;
+    size_t num_iovs;  // param of sendv/recv
   };
 
-  // For jring 16-byte alignment; 8 bytes of ptr + 8 bytes of padding = 16 bytes
+  // For jring memcpy 16-byte alignment; 8 bytes of ptr + 8 bytes of padding
   struct TaskBatchPtrWrapper {
     TaskBatch* ptr;
     uint64_t padding;
