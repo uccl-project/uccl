@@ -136,7 +136,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           rdma_x_vec[i] = *reinterpret_cast<vec_t*>(&int4_value);
         }
       }
-      asm volatile("bar.sync 1, %0;" ::"r"(num_threads));
+      sync_barrier_1(num_threads);
 
       // Issue IBGDA sends
       if (dst_expert_idx >= 0) {
@@ -353,8 +353,7 @@ LOW_LATENCY_DISPATCH_RECV:
                       dispatch_wait_recv_cost_stats + src_rank),
                   wait_recv_cost);
     }
-    asm volatile("bar.sync %0, %1;" ::"r"(warp_group_id + 2),
-                 "r"(num_warps_per_group * 32));
+    sync_barrier(warp_group_id, num_warps_per_group);
     num_recv_tokens = shared_num_recv_tokens[warp_group_id];
     recv_token_begin_idx = shared_recv_token_begin_idx[warp_group_id];
 
@@ -367,7 +366,7 @@ LOW_LATENCY_DISPATCH_RECV:
       if (lane_id == 0)
         recv_src_info[recv_token_begin_idx + i] =
             ld_acquire_sys_global(src_src_idx);
-      asm volatile("membar.sys;" ::: "memory");
+      sys_membar();
       __syncwarp();
 
       // Copy data
@@ -755,8 +754,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
 
     // Put the finishing flag
     EP_DEVICE_ASSERT(num_warps_per_group > 1 and num_warp_groups < 16);
-    asm volatile("bar.sync %0, %1;" ::"r"(warp_group_id + 1),
-                 "r"(num_warps_per_group * 32));
+    sync_barrier(warp_group_id + 2, num_warps_per_group * 32);
     if (sub_warp_id == 1 and lane_id == 0) {
       while (ld_acquire_global(atomic_clean_flag) == 0)
         ;
