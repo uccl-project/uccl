@@ -353,7 +353,7 @@ LOW_LATENCY_DISPATCH_RECV:
                       dispatch_wait_recv_cost_stats + src_rank),
                   wait_recv_cost);
     }
-    sync_barrier(warp_group_id, num_warps_per_group);
+    sync_barrier(warp_group_id + 2, num_warps_per_group * 32);
     num_recv_tokens = shared_num_recv_tokens[warp_group_id];
     recv_token_begin_idx = shared_recv_token_begin_idx[warp_group_id];
 
@@ -754,7 +754,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
 
     // Put the finishing flag
     EP_DEVICE_ASSERT(num_warps_per_group > 1 and num_warp_groups < 16);
-    sync_barrier(warp_group_id + 2, num_warps_per_group * 32);
+    sync_barrier(warp_group_id + 1, num_warps_per_group * 32);
     if (sub_warp_id == 1 and lane_id == 0) {
       while (ld_acquire_global(atomic_clean_flag) == 0)
         ;
