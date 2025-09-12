@@ -38,6 +38,7 @@ class TransferManager:
             self.mr_id = mr_id
             self.conn_state = conn_state
 
+    # Both initiator and target inits the TransferManager.
     def __init__(self, local_gpu_idx: int, num_cpus: int, listen_port: int):
         self.local_gpu_idx = local_gpu_idx
         self.num_cpus = num_cpus
@@ -60,7 +61,7 @@ class TransferManager:
         self.listen_socket.bind(("", listen_port))
         self.listen_socket.listen(128)
 
-    # Connecting to a remote GPU.
+    # Initiator connects to the target.
     def connect(self, remote_ip: str, remote_listen_port: int) -> int:
         socket = create_socket_and_connect(remote_ip, remote_listen_port)
 
@@ -92,6 +93,7 @@ class TransferManager:
 
         return conn_id
 
+    # Target accepts a connection from the initiator.
     def accept(self) -> int:
         socket, addr = self.listen_socket.accept()
 
@@ -121,6 +123,7 @@ class TransferManager:
 
         return conn_id
 
+    # Both initiator and target register the tensor.
     def register_transfer(
         self,
         conn_id: int,
@@ -143,6 +146,7 @@ class TransferManager:
         self.next_transfer_id += 1
         return self.next_transfer_id - 1
 
+    # Both initiator and target deregister the tensor.
     def deregister_transfer(self, transfer_id: int) -> bool:
         transfer_state = self.transfer_table[transfer_id]
         success = self.ep.dereg(transfer_state.mr_id)
@@ -151,6 +155,7 @@ class TransferManager:
         del self.transfer_table[transfer_id]
         return True
 
+    # Target posts the transfer metadata to the initiator.
     def post_transfer_metadata(self, transfer_id: int) -> bool:
         transfer_state = self.transfer_table[transfer_id]
         conn_state = transfer_state.conn_state
@@ -176,6 +181,7 @@ class TransferManager:
         send_obj(conn_state.socket, transfer_metadata)
         return True
 
+    # Initiator fetches the transfer metadata from the target.
     def fetch_transfer_metadata(self, transfer_id: int) -> bytes:
         transfer_state = self.transfer_table[transfer_id]
         conn_state = transfer_state.conn_state
@@ -187,6 +193,7 @@ class TransferManager:
 
         return transfer_metadata
 
+    # Initiator does one-sided transfer.
     def do_transfer_async(self, transfer_id: int, transfer_metadata: bytes) -> int:
         transfer_state = self.transfer_table[transfer_id]
         conn_state = transfer_state.conn_state
@@ -208,6 +215,7 @@ class TransferManager:
         assert success, f"Failed to transfer tensor on GPU {self.local_gpu_idx}"
         return poll_id
 
+    # Initiator checks if the transfer is done.
     def check_transfer_done(self, transfer_id: int, poll_id: int) -> bool:
         success, is_done = self.ep.poll_async(poll_id)
         assert (
@@ -215,3 +223,24 @@ class TransferManager:
         ), f"Failed to check if transfer is done on GPU {self.local_gpu_idx}"
 
         return is_done
+
+    # Initiator posts transfer done signal to the target, so that the target can safely delete the tensor.
+    def post_transfer_done(self, transfer_id: int) -> bool:
+        transfer_state = self.transfer_table[transfer_id]
+        conn_state = transfer_state.conn_state
+
+        done = True
+        send_obj(conn_state.socket, done)
+        return True
+
+    # Target waits for the transfer done signal from the initiator.
+    def wait_transfer_done(self, transfer_id: int) -> bool:
+        transfer_state = self.transfer_table[transfer_id]
+        conn_state = transfer_state.conn_state
+
+        done = recv_obj(conn_state.socket)
+        assert (
+            done is not None
+        ), f"Failed to receive transfer done signal on GPU {self.local_gpu_idx}"
+        assert done, f"Transfer {transfer_id} failed"
+        return True

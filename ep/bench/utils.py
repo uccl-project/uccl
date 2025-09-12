@@ -452,10 +452,10 @@ def initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group):
             workers = ep.PeerCopyManager(src_device=device_index)
             workers.start_for_proxies(proxies)
             if rank == 0:
-                print("[simple-test] ✓ PeerCopyManager started", flush=True)
+                print("✓ PeerCopyManager started", flush=True)
         except Exception as e:
             if rank == 0:
-                print(f"[simple-test] PeerCopyManager unavailable: {e}", flush=True)
+                print(f"PeerCopyManager unavailable: {e}", flush=True)
 
     time.sleep(1)
 
@@ -477,9 +477,9 @@ def destroy_uccl(proxies, workers):
     except Exception:
         pass
 
-    print("[simple-test] ✓ Proxy stopped", flush=True)
+    print("✓ Proxy stopped", flush=True)
     try:
         ep.unregister_proxy(device_index)
     except Exception:
         pass
-    print("[simple-test] ✓ Proxy unregistered", flush=True)
+    print("✓ Proxy unregistered", flush=True)

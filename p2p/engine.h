@@ -23,14 +23,6 @@ struct MR {
   uccl::Mhandle* mhandle_;
 };
 
-struct IpcCache {
-  gpuIpcMemHandle_t handle;
-  bool is_send;
-  void* direct_ptr;
-  uintptr_t offset;
-  size_t size;
-};
-
 struct Conn {
   uint64_t conn_id_;
   uccl::ConnID uccl_conn_id_;
@@ -295,11 +287,6 @@ class Endpoint {
   std::vector<gpuStream_t> streams_;
   std::vector<std::vector<gpuStream_t>> ipc_streams_;
 
-  // IPC Buffer cache
-  mutable std::shared_mutex ipc_cache_mu_;
-  std::unordered_map<uint64_t, std::unordered_map<void*, struct IpcCache>>
-      conn_id_and_ptr_to_ipc_cache_;
-
   static constexpr size_t kTaskRingSize = 1024;
 
   enum class TaskType {
@@ -348,15 +335,79 @@ class Endpoint {
     IpcTransferInfo ipc_info;
   };
 
+  static constexpr size_t MAX_RESERVE_SIZE =
+      uccl::max_sizeof<uccl::FifoItem, IpcTransferInfo>();
+
+  struct alignas(64) UnifiedTask {
+    TaskType type;
+    void* data;
+    size_t size;
+    uint64_t conn_id;
+    uint64_t mr_id;
+    std::atomic<bool> done;
+    UnifiedTask* self_ptr;
+
+    union SpecificData {
+      struct {
+        uint8_t reserved[MAX_RESERVE_SIZE];
+      } base;
+
+      struct {
+        uccl::FifoItem slot_item;
+        uint8_t reserved[MAX_RESERVE_SIZE - sizeof(uccl::FifoItem)];
+      } net;
+
+      struct {
+        IpcTransferInfo ipc_info;
+        uint8_t reserved[MAX_RESERVE_SIZE - sizeof(IpcTransferInfo)];
+      } ipc;
+      SpecificData() : base{} {}
+    } specific;
+
+    inline uccl::FifoItem& slot_item() { return specific.net.slot_item; }
+
+    inline uccl::FifoItem const& slot_item() const {
+      return specific.net.slot_item;
+    }
+
+    inline IpcTransferInfo& ipc_info() { return specific.ipc.ipc_info; }
+
+    inline IpcTransferInfo const& ipc_info() const {
+      return specific.ipc.ipc_info;
+    }
+  };
+
+  inline UnifiedTask* create_task(uint64_t conn_id, uint64_t mr_id,
+                                  TaskType type, void* data, size_t size) {
+    UnifiedTask* task = new UnifiedTask();
+    task->type = type;
+    task->data = data;
+    task->size = size;
+    task->conn_id = conn_id;
+    task->mr_id = mr_id;
+    task->done = false;
+    task->self_ptr = task;
+    return task;
+  }
+
+  inline UnifiedTask* create_net_task(uint64_t conn_id, uint64_t mr_id,
+                                      TaskType type, void* data, size_t size,
+                                      uccl::FifoItem const& slot_item) {
+    UnifiedTask* task = create_task(conn_id, mr_id, type, data, size);
+    task->slot_item() = slot_item;
+    return task;
+  }
+
+  inline UnifiedTask* create_ipc_task(uint64_t conn_id, uint64_t mr_id,
+                                      TaskType type, void* data, size_t size,
+                                      IpcTransferInfo const& ipc_info) {
+    UnifiedTask* task = create_task(conn_id, mr_id, type, data, size);
+    task->ipc_info() = ipc_info;
+    return task;
+  }
   // For both net and ipc send/recv tasks.
-  jring_t* send_task_ring_;
-  jring_t* recv_task_ring_;
-  // For net read/write tasks.
-  jring_t* read_net_task_ring_;
-  jring_t* write_net_task_ring_;
-  // For ipc read/write tasks.
-  jring_t* read_ipc_task_ring_;
-  jring_t* write_ipc_task_ring_;
+  jring_t* send_unified_task_ring_;
+  jring_t* recv_unified_task_ring_;
 
   std::atomic<bool> stop_{false};
   std::thread send_proxy_thread_;
