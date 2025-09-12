@@ -159,7 +159,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
             slot_idx * num_bytes_per_msg;
         auto const dst_p2p_ptr =
             ipc_base_ptrs ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_base_ptrs, rank,
-                                                  dst_rank, max_nvl_peers, 0)
+                                                  dst_rank, max_nvl_peers, 1000000000)
                           : 0;
         if (dst_p2p_ptr == 0) {
           __threadfence_system();
@@ -262,7 +262,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         // NOTE(Ziming): it seems there is a mismatch from aligned_count_addr
         // before.
         ipc_base_ptrs ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_base_ptrs, rank,
-                                              dst_rank, max_nvl_peers, 0)
+                                              dst_rank, max_nvl_peers, 1000000000)
                       : 0;
     if (dst_p2p_ptr == 0) {
       // Inter-node or no IPC: use IBGDA atomic
@@ -626,7 +626,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
       // Use IPC for intra-node P2P mapping when available
       auto const dst_p2p_ptr =
           ipc_base_ptrs ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_base_ptrs, rank,
-                                                dst_rank, max_nvl_peers, 0)
+                                                dst_rank, max_nvl_peers, 1000000000)
                         : 0;
 
       if (not zero_copy or dst_p2p_ptr != 0) {
@@ -776,7 +776,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
           reinterpret_cast<uint64_t>(rdma_recv_flag + global_expert_idx);
       auto dst_p2p_ptr =
           ipc_base_ptrs ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_base_ptrs, rank,
-                                                dst_rank, max_nvl_peers, 0)
+                                                dst_rank, max_nvl_peers, 1000000000)
                         : 0;
       if (dst_p2p_ptr != 0) {
         // Intra-node: use direct atomic operation

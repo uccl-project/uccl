@@ -200,7 +200,7 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
                 group=group,
                 rdma_buffer_ptr=scratch.data_ptr(),
                 num_nvl_bytes=scratch_nbytes,  # All memory for NVLink
-                num_rdma_bytes=0,  # No RDMA needed for single node
+                num_rdma_bytes=scratch_nbytes,  # No RDMA needed for single node
                 low_latency_mode=True,
                 num_qps_per_rank=num_device_sms,
                 allow_nvlink_for_low_latency_mode=True,
@@ -213,7 +213,7 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
             buffer = Buffer(
                 group=group,
                 rdma_buffer_ptr=scratch.data_ptr(),
-                num_nvl_bytes=0,
+                num_nvl_bytes=scratch_nbytes,
                 num_rdma_bytes=scratch_nbytes,
                 low_latency_mode=True,
                 num_qps_per_rank=num_device_sms,

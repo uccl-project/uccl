@@ -26,7 +26,7 @@
 #define kNumThBlocks 6
 #define kNumThPerBlock 1
 #define kObjectSize 10752  // 10.5 KB
-#define kMaxOutstandingSends 2048
+#define kMaxOutstandingSends 64
 #define kMaxOutstandingRecvs 2048
 #define kSignalledEvery 1
 #define kSenderAckQueueDepth 1024

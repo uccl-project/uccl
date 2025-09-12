@@ -184,6 +184,8 @@ class Buffer {
                            static_cast<size_t>(buffer_ptr_bytes) +
                            static_cast<size_t>(barrier_signal_ptr_bytes);
 
+      // Ensure we're on the correct device before memory allocation and IPC handle creation
+      CUDA_CHECK(cudaSetDevice(device_index));
       CUDA_CHECK(cudaMalloc(&buffer_ptrs[nvl_rank], total_bytes));
       CUDA_CHECK(
           cudaIpcGetMemHandle(&ipc_handles[nvl_rank], buffer_ptrs[nvl_rank]));
@@ -627,18 +629,26 @@ class Buffer {
       EP_HOST_ASSERT(device_ids.size() == all_gathered_handles.size());
       for (int i = 0, offset = rdma_rank * num_nvl_ranks; i < num_nvl_ranks;
            ++i) {
-        EP_HOST_ASSERT(all_gathered_handles[offset + i].has_value());
-        auto handle_str = std::string(all_gathered_handles[offset + i].value());
+        int global_rank = offset + i;
+        int local_rank_idx = global_rank % max_nvl_peers;  // Map to correct buffer_ptrs index
+        
+        EP_HOST_ASSERT(all_gathered_handles[global_rank].has_value());
+        auto handle_str = std::string(all_gathered_handles[global_rank].value());
         EP_HOST_ASSERT(handle_str.size() == CUDA_IPC_HANDLE_SIZE);
-        if (offset + i != rank) {
-          std::memcpy(ipc_handles[i].reserved, handle_str.c_str(),
+        if (global_rank != rank) {
+          std::memcpy(ipc_handles[local_rank_idx].reserved, handle_str.c_str(),
                       CUDA_IPC_HANDLE_SIZE);
-          CUDA_CHECK(cudaIpcOpenMemHandle(&buffer_ptrs[i], ipc_handles[i],
+          // Ensure we're on the correct device before opening IPC handle
+          CUDA_CHECK(cudaSetDevice(device_index));
+          CUDA_CHECK(cudaIpcOpenMemHandle(&buffer_ptrs[local_rank_idx], ipc_handles[local_rank_idx],
                                           cudaIpcMemLazyEnablePeerAccess));
-          barrier_signal_ptrs[i] = reinterpret_cast<int*>(
-              static_cast<uint8_t*>(buffer_ptrs[i]) + num_nvl_bytes);
+          barrier_signal_ptrs[local_rank_idx] = reinterpret_cast<int*>(
+              static_cast<uint8_t*>(buffer_ptrs[local_rank_idx]) + num_nvl_bytes);
         } else {
-          EP_HOST_ASSERT(std::memcmp(ipc_handles[i].reserved,
+          // This is our own rank - buffer_ptrs[local_rank_idx] should already be set from constructor
+          // But let's verify it's not null and the IPC handle matches
+          EP_HOST_ASSERT(buffer_ptrs[local_rank_idx] != nullptr);
+          EP_HOST_ASSERT(std::memcmp(ipc_handles[local_rank_idx].reserved,
                                      handle_str.c_str(),
                                      CUDA_IPC_HANDLE_SIZE) == 0);
         }

@@ -135,8 +135,45 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     exit(1);
   }
 
-  // Assuming fixed GPU idx for now
-  int gpu_idx = 0;
+  // Determine correct GPU index based on rank for multi-GPU scenarios
+  int gpu_idx;
+  cudaGetDevice(&gpu_idx);
+  
+  // Check if we're in a multi-GPU single-node scenario
+  // In this case, each rank should use its corresponding GPU
+  int local_rank = -1;
+  const char* local_rank_env = getenv("LOCAL_RANK");
+  if (local_rank_env != nullptr) {
+    local_rank = atoi(local_rank_env);
+  }
+  
+  // If LOCAL_RANK is set and valid, use it as the GPU index
+  // This ensures rank 0 uses GPU 0, rank 1 uses GPU 1, etc.
+  if (local_rank >= 0) {
+    int num_devices;
+    cudaError_t err = cudaGetDeviceCount(&num_devices);
+    if (err != cudaSuccess) {
+      printf("Rank %d, Block %d: CUDA error getting device count: %s\n",
+             rank, block_idx, cudaGetErrorString(err));
+    } else if (local_rank < num_devices) {
+      gpu_idx = local_rank;
+      // Set the device to ensure we're using the correct GPU
+      err = cudaSetDevice(gpu_idx);
+      if (err != cudaSuccess) {
+        printf("Rank %d, Block %d: CUDA error setting device to %d: %s\n",
+               rank, block_idx, gpu_idx, cudaGetErrorString(err));
+      } else {
+        printf("Rank %d, Block %d: Using GPU %d (from LOCAL_RANK) for RDMA init\n", 
+               rank, block_idx, gpu_idx);
+      }
+    } else {
+      printf("Rank %d, Block %d: LOCAL_RANK %d >= num_devices %d, using current GPU %d\n",
+             rank, block_idx, local_rank, num_devices, gpu_idx);
+    }
+  } else {
+    printf("Rank %d, Block %d: Using current GPU %d for RDMA init (LOCAL_RANK not set)\n", 
+           rank, block_idx, gpu_idx);
+  }
   // Ranked by GPU idx
   auto gpu_cards = uccl::get_gpu_cards();
   // Ranked by RDMA NIC name (not the ibv_get_device_list order)
