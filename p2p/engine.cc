@@ -88,12 +88,10 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_], true);
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
 
-  send_task_ring_ = uccl::create_ring(sizeof(Task), kTaskRingSize);
-  recv_task_ring_ = uccl::create_ring(sizeof(Task), kTaskRingSize);
-  read_net_task_ring_ = uccl::create_ring(sizeof(NetRwTask), kTaskRingSize);
-  write_net_task_ring_ = uccl::create_ring(sizeof(NetRwTask), kTaskRingSize);
-  read_ipc_task_ring_ = uccl::create_ring(sizeof(IpcRwTask), kTaskRingSize);
-  write_ipc_task_ring_ = uccl::create_ring(sizeof(IpcRwTask), kTaskRingSize);
+  send_unified_task_ring_ =
+      uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
+  recv_unified_task_ring_ =
+      uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
 
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
@@ -115,12 +113,8 @@ Endpoint::~Endpoint() {
   send_proxy_thread_.join();
   recv_proxy_thread_.join();
 
-  free(send_task_ring_);
-  free(recv_task_ring_);
-  free(read_net_task_ring_);
-  free(write_net_task_ring_);
-  free(read_ipc_task_ring_);
-  free(write_ipc_task_ring_);
+  free(send_unified_task_ring_);
+  free(recv_unified_task_ring_);
 
   delete ep_;
 
@@ -504,20 +498,16 @@ bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
   [[maybe_unused]] auto _ =
       PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
-  Task* task = new Task{
-      .type = TaskType::SEND_NET,
-      .data = const_cast<void*>(data),
-      .size = size,
-      .conn_id = conn_id,
-      .mr_id = mr_id,
-      .done = false,
-      .self_ptr = nullptr,
-  };
-  task->self_ptr = task;
+  UnifiedTask* task = create_task(conn_id, mr_id, TaskType::SEND_NET,
+                                  const_cast<void*>(data), size);
+  if (unlikely(task == nullptr)) {
+    return false;
+  }
 
   *transfer_id = reinterpret_cast<uint64_t>(task);
 
-  while (jring_mp_enqueue_bulk(send_task_ring_, task, 1, nullptr) != 1) {
+  while (jring_mp_enqueue_bulk(send_unified_task_ring_, task, 1, nullptr) !=
+         1) {
   }
 
   return true;
@@ -528,20 +518,16 @@ bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
   [[maybe_unused]] auto _ =
       PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
-  Task* task = new Task{
-      .type = TaskType::RECV_NET,
-      .data = data,
-      .size = size,
-      .conn_id = conn_id,
-      .mr_id = mr_id,
-      .done = false,
-      .self_ptr = nullptr,
-  };
-  task->self_ptr = task;
+  UnifiedTask* task =
+      create_task(conn_id, mr_id, TaskType::RECV_NET, data, size);
+  if (unlikely(task == nullptr)) {
+    return false;
+  }
 
   *transfer_id = reinterpret_cast<uint64_t>(task);
 
-  while (jring_mp_enqueue_bulk(recv_task_ring_, task, 1, nullptr) != 1) {
+  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, task, 1, nullptr) !=
+         1) {
   }
 
   return true;
@@ -781,21 +767,16 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
   [[maybe_unused]] auto _ =
       PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
-  NetRwTask* rw_task = new NetRwTask{
-      .type = TaskType::READ_NET,
-      .data = dst,
-      .size = size,
-      .conn_id = conn_id,
-      .mr_id = mr_id,
-      .done = false,
-      .self_ptr = nullptr,
-      .slot_item = slot_item,
-  };
-  rw_task->self_ptr = rw_task;
+  UnifiedTask* rw_task =
+      create_net_task(conn_id, mr_id, TaskType::READ_NET, dst, size, slot_item);
+  if (unlikely(rw_task == nullptr)) {
+    return false;
+  }
 
   *transfer_id = reinterpret_cast<uint64_t>(rw_task);
 
-  while (jring_mp_enqueue_bulk(read_net_task_ring_, rw_task, 1, nullptr) != 1) {
+  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, rw_task, 1, nullptr) !=
+         1) {
   }
 
   return true;
@@ -899,21 +880,14 @@ bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
   [[maybe_unused]] auto _ =
       PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
-  NetRwTask* rw_task = new NetRwTask{
-      .type = TaskType::WRITE_NET,
-      .data = src,
-      .size = size,
-      .conn_id = conn_id,
-      .mr_id = mr_id,
-      .done = false,
-      .self_ptr = nullptr,
-      .slot_item = slot_item,
-  };
-  rw_task->self_ptr = rw_task;
-
+  UnifiedTask* rw_task = create_net_task(conn_id, mr_id, TaskType::WRITE_NET,
+                                         src, size, slot_item);
+  if (unlikely(rw_task == nullptr)) {
+    return false;
+  }
   *transfer_id = reinterpret_cast<uint64_t>(rw_task);
 
-  while (jring_mp_enqueue_bulk(write_net_task_ring_, rw_task, 1, nullptr) !=
+  while (jring_mp_enqueue_bulk(send_unified_task_ring_, rw_task, 1, nullptr) !=
          1) {
   }
 
@@ -1353,22 +1327,18 @@ bool Endpoint::send_ipc_async(uint64_t conn_id, void const* data, size_t size,
   py::gil_scoped_release release;
 
   // Create a task for IPC send operation
-  Task* task = new Task{
-      .type = TaskType::SEND_IPC,
-      .data = const_cast<void*>(data),
-      .size = size,
-      .conn_id = conn_id,
-      .mr_id = 0,  // Not used for IPC
-      .done = false,
-      .self_ptr = nullptr,
-  };
-  task->self_ptr = task;
+  UnifiedTask* task = create_task(conn_id, 0, TaskType::SEND_IPC,
+                                  const_cast<void*>(data), size);
+  if (unlikely(task == nullptr)) {
+    return false;
+  }
 
   *transfer_id = reinterpret_cast<uint64_t>(task);
 
   // For now, we'll use the existing async infrastructure but call our IPC
   // function In a real implementation, you might want a separate IPC task ring
-  while (jring_mp_enqueue_bulk(send_task_ring_, task, 1, nullptr) != 1) {
+  while (jring_mp_enqueue_bulk(send_unified_task_ring_, task, 1, nullptr) !=
+         1) {
   }
 
   return true;
@@ -1379,22 +1349,17 @@ bool Endpoint::recv_ipc_async(uint64_t conn_id, void* data, size_t size,
   py::gil_scoped_release release;
 
   // Create a task for IPC receive operation
-  Task* task = new Task{
-      .type = TaskType::RECV_IPC,
-      .data = data,
-      .size = size,
-      .conn_id = conn_id,
-      .mr_id = 0,  // Not used for IPC
-      .done = false,
-      .self_ptr = nullptr,
-  };
-  task->self_ptr = task;
+  UnifiedTask* task = create_task(conn_id, 0, TaskType::RECV_IPC, data, size);
+  if (unlikely(task == nullptr)) {
+    return false;
+  }
 
   *transfer_id = reinterpret_cast<uint64_t>(task);
 
   // For now, we'll use the existing async infrastructure but call our IPC
   // function In a real implementation, you might want a separate IPC task ring
-  while (jring_mp_enqueue_bulk(recv_task_ring_, task, 1, nullptr) != 1) {
+  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, task, 1, nullptr) !=
+         1) {
   }
 
   return true;
@@ -1530,22 +1495,17 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
   py::gil_scoped_release release;
 
   // Create an IPC task for IPC write operation
-  IpcRwTask* task = new IpcRwTask{
-      .type = TaskType::WRITE_IPC,
-      .data = const_cast<void*>(data),
-      .size = size,
-      .conn_id = conn_id,
-      .mr_id = 0,  // Not used for IPC
-      .done = false,
-      .self_ptr = nullptr,
-      .ipc_info = info,
-  };
-  task->self_ptr = task;
+  UnifiedTask* task = create_ipc_task(conn_id, 0, TaskType::WRITE_IPC,
+                                      const_cast<void*>(data), size, info);
+  if (unlikely(task == nullptr)) {
+    return false;
+  }
 
   *transfer_id = reinterpret_cast<uint64_t>(task);
 
   // Enqueue the task for processing by proxy thread
-  while (jring_mp_enqueue_bulk(write_ipc_task_ring_, task, 1, nullptr) != 1) {
+  while (jring_mp_enqueue_bulk(send_unified_task_ring_, task, 1, nullptr) !=
+         1) {
   }
 
   return true;
@@ -1557,22 +1517,17 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
   py::gil_scoped_release release;
 
   // Create an IPC task for IPC read operation
-  IpcRwTask* task = new IpcRwTask{
-      .type = TaskType::READ_IPC,
-      .data = data,
-      .size = size,
-      .conn_id = conn_id,
-      .mr_id = 0,  // Not used for IPC
-      .done = false,
-      .self_ptr = nullptr,
-      .ipc_info = info,
-  };
-  task->self_ptr = task;
+  UnifiedTask* task =
+      create_ipc_task(conn_id, 0, TaskType::READ_IPC, data, size, info);
+  if (unlikely(task == nullptr)) {
+    return false;
+  }
 
   *transfer_id = reinterpret_cast<uint64_t>(task);
 
   // Enqueue the task for processing by proxy thread
-  while (jring_mp_enqueue_bulk(read_ipc_task_ring_, task, 1, nullptr) != 1) {
+  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, task, 1, nullptr) !=
+         1) {
   }
 
   return true;
@@ -1658,33 +1613,10 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   [[maybe_unused]] auto _ =
       PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
-  auto task = reinterpret_cast<Task*>(transfer_id);
-  switch (task->type) {
-    case TaskType::READ_NET:
-    case TaskType::WRITE_NET: {
-      auto rw_task = reinterpret_cast<NetRwTask*>(transfer_id);
-      *is_done = rw_task->done.load(std::memory_order_acquire);
-      if (*is_done) {
-        delete rw_task;
-      }
-      break;
-    }
-    case TaskType::READ_IPC:
-    case TaskType::WRITE_IPC: {
-      auto ipc_task = reinterpret_cast<IpcRwTask*>(transfer_id);
-      *is_done = ipc_task->done.load(std::memory_order_acquire);
-      if (*is_done) {
-        delete ipc_task;
-      }
-      break;
-    }
-    default: {
-      *is_done = task->done.load(std::memory_order_acquire);
-      if (*is_done) {
-        delete task;
-      }
-      break;
-    }
+  auto task = reinterpret_cast<UnifiedTask*>(transfer_id);
+  *is_done = task->done.load(std::memory_order_acquire);
+  if (*is_done) {
+    delete task;
   }
   return true;
 }
@@ -1746,63 +1678,66 @@ void Endpoint::cleanup_uds_socket() {
 
 void Endpoint::send_proxy_thread_func() {
   uccl::pin_thread_to_numa(numa_node_);
-  Task task;
-  NetRwTask rw_task;
-  IpcRwTask ipc_task;
+  UnifiedTask task;
 
   while (!stop_.load(std::memory_order_acquire)) {
-    if (jring_sc_dequeue_bulk(send_task_ring_, &task, 1, nullptr) == 1) {
-      if (task.type == TaskType::SEND_IPC) {
-        send_ipc(task.conn_id, task.data, task.size, false);
-      } else {
-        send(task.conn_id, task.mr_id, task.data, task.size, false);
+    if (jring_sc_dequeue_bulk(send_unified_task_ring_, &task, 1, nullptr) ==
+        1) {
+      switch (task.type) {
+        case TaskType::SEND_IPC:
+          send_ipc(task.conn_id, task.data, task.size, false);
+          break;
+        case TaskType::WRITE_NET:
+          write(task.conn_id, task.mr_id, task.data, task.size,
+                task.slot_item(), false);
+          break;
+        case TaskType::WRITE_IPC:
+          write_ipc(task.conn_id, task.data, task.size, task.ipc_info(), false);
+          break;
+        case TaskType::SEND_NET:
+          send(task.conn_id, task.mr_id, task.data, task.size, false);
+          break;
+        default:
+          LOG(ERROR) << "Unexpected task type in send processing: "
+                     << static_cast<int>(task.type);
+          break;
       }
       task.self_ptr->done.store(true, std::memory_order_release);
-    }
-
-    if (jring_sc_dequeue_bulk(write_net_task_ring_, &rw_task, 1, nullptr) ==
-        1) {
-      write(rw_task.conn_id, rw_task.mr_id, rw_task.data, rw_task.size,
-            rw_task.slot_item, false);
-      rw_task.self_ptr->done.store(true, std::memory_order_release);
-    }
-
-    if (jring_sc_dequeue_bulk(write_ipc_task_ring_, &ipc_task, 1, nullptr) ==
-        1) {
-      write_ipc(ipc_task.conn_id, ipc_task.data, ipc_task.size,
-                ipc_task.ipc_info, false);
-      ipc_task.self_ptr->done.store(true, std::memory_order_release);
     }
   }
 }
 
 void Endpoint::recv_proxy_thread_func() {
   uccl::pin_thread_to_numa(numa_node_);
-  Task task;
-  NetRwTask rw_task;
-  IpcRwTask ipc_task;
+  UnifiedTask task;
 
   while (!stop_.load(std::memory_order_acquire)) {
-    if (jring_sc_dequeue_bulk(recv_task_ring_, &task, 1, nullptr) == 1) {
-      if (task.type == TaskType::RECV_IPC) {
-        recv_ipc(task.conn_id, task.data, task.size, false);
-      } else {
-        recv(task.conn_id, task.mr_id, task.data, task.size, false);
+    if (jring_sc_dequeue_bulk(recv_unified_task_ring_, &task, 1, nullptr) ==
+        1) {
+      switch (task.type) {
+        case TaskType::RECV_IPC:
+          recv_ipc(task.conn_id, task.data, task.size, false);
+          break;
+        case TaskType::READ_NET:
+          read(task.conn_id, task.mr_id, task.data, task.size, task.slot_item(),
+               false);
+          break;
+        case TaskType::READ_IPC:
+          read_ipc(task.conn_id, task.data, task.size, task.ipc_info(), false);
+          break;
+        case TaskType::RECV_NET:
+          recv(task.conn_id, task.mr_id, task.data, task.size, false);
+          break;
+        case TaskType::SEND_NET:
+        case TaskType::SEND_IPC:
+        case TaskType::WRITE_NET:
+        case TaskType::WRITE_IPC:
+        default:
+          LOG(ERROR) << "Unexpected task type in receive processing: "
+                     << static_cast<int>(task.type);
+          break;
       }
       task.self_ptr->done.store(true, std::memory_order_release);
-    }
-
-    if (jring_sc_dequeue_bulk(read_net_task_ring_, &rw_task, 1, nullptr) == 1) {
-      read(rw_task.conn_id, rw_task.mr_id, rw_task.data, rw_task.size,
-           rw_task.slot_item, false);
-      rw_task.self_ptr->done.store(true, std::memory_order_release);
-    }
-
-    if (jring_sc_dequeue_bulk(read_ipc_task_ring_, &ipc_task, 1, nullptr) ==
-        1) {
-      read_ipc(ipc_task.conn_id, ipc_task.data, ipc_task.size,
-               ipc_task.ipc_info, false);
-      ipc_task.self_ptr->done.store(true, std::memory_order_release);
     }
   }
 }
