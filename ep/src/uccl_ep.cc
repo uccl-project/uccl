@@ -104,7 +104,7 @@ class Buffer {
         for (int i = 0; i < num_ring_addrs; ++i) {
           void* host_ptr = reinterpret_cast<void*>(host_addrs[i]);
           void* dev_ptr = nullptr;
-#ifndef USE_GH200
+#ifndef USE_GRACE_HOPPER
           CUDA_CHECK(cudaHostGetDevicePointer(&dev_ptr, host_ptr, 0));
 #else
           dev_ptr = host_ptr;

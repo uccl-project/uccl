@@ -995,7 +995,6 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
     if (cqe.opcode == IBV_WC_SEND) {
       continue;
     }
-#ifdef EFA
     if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
         ((ntohl(cqe.imm_data) >> 31) & 0x1)) {
       uint32_t imm = ntohl(cqe.imm_data);
@@ -1003,7 +1002,7 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       uint32_t offset = unpack_off(imm);
       size_t index = offset / sizeof(int);
       // printf(
-      //     "[EFA_RECV_ATOMIC] kind=%u value=%d offset=%u index=%zu addr=0x%llx
+      //     "[RECV_ATOMIC] kind=%u value=%d offset=%u index=%zu addr=0x%llx
       //     " "imm=0x%08x\n", (unsigned)is_combine, value, offset, index,
       //     (unsigned long long)((uintptr_t)atomic_buffer_ptr +
       //                          index * sizeof(int)),
@@ -1031,7 +1030,6 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       }
       continue;
     }
-#endif
     if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
       const uint32_t tag = wr_tag(cqe.wr_id);
       ProxyCtx& S_ack = *ctx_by_tag[tag];
@@ -1245,51 +1243,92 @@ void post_atomic_operations(ProxyCtx& S,
 
     ProxyCtx* ctx = ctxs[dst_rank].get();
     const size_t k = wr_ids.size();
+#ifdef EFA
     struct ibv_qp_ex* qpx = (struct ibv_qp_ex*)ctx->qp;
-
     ibv_wr_start(qpx);
     for (size_t i = 0; i < k; ++i) {
       auto const& cmd = cmds_to_post[wr_ids[i]];
-      auto wr_id = wrs_to_post[wr_ids[i]];
-      wr_ids[i] = wr_id;
+      const uint64_t wrid = wrs_to_post[wr_ids[i]];
+      wr_ids[i] = wrid;
+
       int v = static_cast<int>(cmd.value);
       if (v < -16384 || v > 16383) {
-        fprintf(stderr,
-                "[EFA] value=%d won't fit in 15 bits; "
-                "use an inline payload scheme instead.\n",
-                v);
+        fprintf(stderr, "[EFA] value=%d won't fit in 15 bits\n", v);
         std::abort();
       }
-      uint32_t offset = static_cast<int64_t>(cmd.req_rptr);
-      uint32_t imm = pack_imm(true, v, static_cast<uint16_t>(offset));
+      const uint32_t off16 = static_cast<uint32_t>(cmd.req_rptr) & 0xFFFFu;
+      const uint32_t imm = pack_imm(true, v, off16);
 
-      qpx->wr_id = kAtomicWrTag | (wr_id & kAtomicMask);
+      qpx->wr_id = kAtomicWrTag | (wrid & kAtomicMask);
       qpx->comp_mask = 0;
       qpx->wr_flags = (i + 1 == k) ? IBV_SEND_SIGNALED : 0;
 
-#ifdef EFA
-      ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, ctx->remote_addr,
-                            htonl(imm));
+      const uint64_t remote_scratch = ctx->remote_addr;
+
+      ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_scratch, htonl(imm));
       ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_qpn, QKEY);
-      ibv_wr_set_sge(qpx, ctx->mr->lkey, (uintptr_t)ctx->mr->addr, 0);
-#else
-      ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, ctx->remote_addr,
-                            htonl(imm));
-      ibv_wr_set_sge(qpx, ctx->mr->lkey, (uintptr_t)ctx->mr->addr, 4);
-#endif
-      // printf(
-      //     "[EFA_SEND_ATOMIC] wr_id=%lu dst=%d kind=%u val=%d offset=%u "
-      //     "imm=0x%08x\n",
-      //     qpx->wr_id, dst_rank, static_cast<unsigned>(is_combine), v, offset,
-      //     imm);
+      const uintptr_t laddr = reinterpret_cast<uintptr_t>(ctx->mr->addr);
+      ibv_wr_set_sge(qpx, ctx->mr->lkey, laddr, 0);
     }
-    int ret = ibv_wr_complete(qpx);
-    if (ret) {
-      fprintf(stderr, "[EFA] post_send failed: %s (ret=%d)\n", strerror(ret),
-              ret);
+    {
+      int ret = ibv_wr_complete(qpx);
+      if (ret) {
+        fprintf(stderr, "[EFA] post_send failed: %s (ret=%d)\n", strerror(ret),
+                ret);
+        std::abort();
+      }
+    }
+#else
+    if (ctx->remote_len < 4) {
+      fprintf(stderr, "remote_len < 4, no room for scratch word\n");
       std::abort();
     }
+    const uint64_t remote_scratch = ctx->remote_addr + ctx->remote_len - 4;
 
+    std::vector<ibv_sge> sge(k);
+    std::vector<ibv_send_wr> wr(k);
+
+    for (size_t i = 0; i < k; ++i) {
+      auto const& cmd = cmds_to_post[wr_ids[i]];
+      const uint64_t wrid = wrs_to_post[wr_ids[i]];
+      wr_ids[i] = wrid;
+
+      int v = static_cast<int>(cmd.value);
+      if (v < -16384 || v > 16383) {
+        fprintf(stderr, "value=%d won't fit in 15 bits\n", v);
+        std::abort();
+      }
+      const uint32_t off16 = static_cast<uint32_t>(cmd.req_rptr) & 0xFFFFu;
+      const uint32_t imm = pack_imm(true, v, off16);
+      sge[i].addr = reinterpret_cast<uintptr_t>(ctx->mr->addr);
+      sge[i].length = 0;
+      sge[i].lkey = ctx->mr->lkey;
+
+      std::memset(&wr[i], 0, sizeof(wr[i]));
+      wr[i].wr_id = kAtomicWrTag | (wrid & kAtomicMask);
+      wr[i].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+      wr[i].send_flags = (i + 1 == k) ? IBV_SEND_SIGNALED : 0;
+      wr[i].imm_data = htonl(imm);
+      wr[i].sg_list = &sge[i];
+      wr[i].num_sge = 1;
+      wr[i].wr.rdma.remote_addr = remote_scratch;
+      wr[i].wr.rdma.rkey = ctx->remote_rkey;
+      wr[i].next = (i + 1 < k) ? &wr[i + 1] : nullptr;
+    }
+    {
+      ibv_send_wr* bad = nullptr;
+      int ret = ibv_post_send(ctx->qp, &wr[0], &bad);
+      if (ret) {
+        fprintf(stderr, "ibv_post_send(atomic) failed: %d (%s)\n", ret,
+                strerror(ret));
+        if (bad)
+          fprintf(stderr, "  bad wr_id=0x%llx\n",
+                  (unsigned long long)bad->wr_id);
+        std::abort();
+      }
+    }
+#endif
+    // bookkeeping identical to your original logic
     S.posted.fetch_add(k, std::memory_order_relaxed);
     const uint64_t batch_tail_wr = wr_ids.back();
     {
@@ -1304,7 +1343,7 @@ void post_atomic_operations(ProxyCtx& S,
                 S.wr_id_to_wr_ids.size(), dst_rank);
         std::abort();
       } else {
-        // TODO(MaoZiming): ack for atomic operations?
+        // You already treat atomics as self-ACKed
         for (auto const& wr_id : it->second) {
           finished_wrs.insert(wr_id);
           acked_wrs.insert(wr_id);
