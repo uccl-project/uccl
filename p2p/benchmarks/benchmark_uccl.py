@@ -107,8 +107,9 @@ def _run_server(args, ep, remote_metadata):
             lat = elapsed / args.iters
         else:
             if args.async_api:
-                print('using async recvv')
-                ok, transfer_id = ep.recvv_async(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
+                ok, transfer_id = ep.recvv_async(
+                    conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks
+                )
                 assert ok, "[Server] recvv_async error"
                 is_done = False
                 while not is_done:
@@ -116,19 +117,23 @@ def _run_server(args, ep, remote_metadata):
                     assert ok, "[Server] poll_async error"
             else:
                 ep.recvv(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
-            
+
             start = time.perf_counter()
             total_recv = 0
             for _ in range(args.iters):
                 if args.async_api:
-                    ok, transfer_id = ep.recvv_async(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
+                    ok, transfer_id = ep.recvv_async(
+                        conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks
+                    )
                     assert ok, "[Server] recvv_async error"
                     is_done = False
                     while not is_done:
                         ok, is_done = ep.poll_async(transfer_id)
                         assert ok, "[Server] poll_async error"
                 else:
-                    ok = ep.recvv(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
+                    ok = ep.recvv(
+                        conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks
+                    )
                     assert ok, "[Server] recv error"
                 total_recv += sum(size_v)
             elapsed = time.perf_counter() - start
@@ -199,7 +204,9 @@ def _run_client(args, ep, remote_metadata):
             lat = elapsed / args.iters
         else:
             if args.async_api:
-                ok, transfer_id = ep.sendv_async(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
+                ok, transfer_id = ep.sendv_async(
+                    conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks
+                )
                 assert ok, "[Client] sendv_async error"
                 is_done = False
                 while not is_done:
@@ -207,19 +214,23 @@ def _run_client(args, ep, remote_metadata):
                     assert ok, "[Client] poll_async error"
             else:
                 ep.sendv(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
-            
+
             start = time.perf_counter()
             total_sent = 0
             for _ in range(args.iters):
                 if args.async_api:
-                    ok, transfer_id = ep.sendv_async(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
+                    ok, transfer_id = ep.sendv_async(
+                        conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks
+                    )
                     assert ok, "[Client] sendv_async error"
                     is_done = False
                     while not is_done:
                         ok, is_done = ep.poll_async(transfer_id)
                         assert ok, "[Client] poll_async error"
                 else:
-                    ok = ep.sendv(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
+                    ok = ep.sendv(
+                        conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks
+                    )
                     assert ok, "[Client] send error"
                 total_sent += sum(size_v)
             elapsed = time.perf_counter() - start
