@@ -257,7 +257,7 @@ class Buffer {
       bool round_scale, bool use_ue8m0, bool async, bool return_recv_hook) {
     EP_HOST_ASSERT(low_latency_mode);
 
-    printf("low_latency_dispatch called\n");
+    // printf("low_latency_dispatch called\n");
 
     // Tensor checks
     // By default using `ptp128c` FP8 cast

@@ -219,7 +219,7 @@ void Proxy::run_dual() {
   }
   uint64_t my_tail = 0;
   size_t seen = 0;
-  printf("run_dual initialization complete\n");
+  // printf("run_dual initialization complete\n");
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     poll_cq_dual(ctx_, finished_wrs_, acked_wrs_, finished_wrs_mutex_,
                  cfg_.block_idx, ring, ctx_by_tag_, atomic_buffer_ptr_);
