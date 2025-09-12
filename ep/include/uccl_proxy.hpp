@@ -38,7 +38,7 @@ class UcclProxy {
   }
 
   void set_atomic_buffer_ptr(void* ptr) {
-    printf("Set atomic_buffer_ptr_ to %p\n", ptr);
+    // printf("Set atomic_buffer_ptr_ to %p\n", ptr);
     atomic_buffer_ptr_ = ptr;
     proxy_->set_atomic_buffer_ptr(atomic_buffer_ptr_);
   }

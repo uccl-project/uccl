@@ -54,8 +54,7 @@ enum class FlowDirection { HostToDevice, DeviceToHost, HostToHost };
 #endif
 
 __device__ __forceinline__ uint64_t ld_volatile(uint64_t* ptr) {
-#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
-#ifdef __CUDA_ARCH__
+#if defined(__CUDA_ARCH__)
   uint64_t ans;
   asm volatile("ld.volatile.global.u64 %0, [%1];"
                : "=l"(ans)
@@ -63,12 +62,7 @@ __device__ __forceinline__ uint64_t ld_volatile(uint64_t* ptr) {
                : "memory");
   return ans;
 #elif defined(__HIP_DEVICE_COMPILE__)
-  uint64_t ans;
-  ans = __builtin_nontemporal_load(ptr);
-  return ans;
-#else
-#error "Not supported"
-#endif
+  return __builtin_nontemporal_load(ptr);
 #else
   return *((volatile uint64_t const*)ptr);
 #endif

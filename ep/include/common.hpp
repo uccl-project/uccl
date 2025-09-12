@@ -25,7 +25,7 @@
 #define kObjectSize 10752  // 10.5 KB
 #define kMaxOutstandingSends 2048
 #define kMaxOutstandingRecvs 2048
-#define kSenderAckQueueDepth 1024
+#define kSenderAckQueueDepth 2048
 #define kWarmupOps 10000
 #define kRemoteBufferSize kBatchSize* kNumThBlocks* kObjectSize * 100
 #define MAIN_THREAD_CPU_IDX 31
