@@ -1007,10 +1007,9 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       //     (unsigned long long)((uintptr_t)atomic_buffer_ptr +
       //                          index * sizeof(int)),
       //     imm);
-
       auto* addr32 =
           reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
-      addr32->fetch_add(value, std::memory_order_relaxed);
+      addr32->fetch_add(value, std::memory_order_release);
       const uint32_t tag = wr_tag(cqe.wr_id);
       ProxyCtx& S_atomic = *ctx_by_tag[tag];
       ibv_sge sge = {
@@ -1337,7 +1336,7 @@ void post_atomic_operations(ProxyCtx& S,
                 S.wr_id_to_wr_ids.size(), dst_rank);
         std::abort();
       } else {
-        // You already treat atomics as self-ACKed
+        // TODO(MaoZiming): ack for atomic operations?
         for (auto const& wr_id : it->second) {
           finished_wrs.insert(wr_id);
           acked_wrs.insert(wr_id);
