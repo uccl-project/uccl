@@ -32,6 +32,7 @@ setup(
             "collective.py",
             "transfer.py",
             "utils.py",
+            "tensor.py"
         ],
     },
     license="Apache-2.0",

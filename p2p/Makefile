@@ -30,10 +30,10 @@ LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda \
 # Target and source files
 TARGET   := p2p$(PYEXT)
 PLUGIN_SO := libuccl_engine.so
-CAPI_SOURCE := uccl_engine.cc
-CAPI_HEADER := uccl_engine.h
+CAPI_SOURCE := uccl_engine.cc allocator.cc
+CAPI_HEADER := uccl_engine.h allocator.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
-SOURCES := engine.cc pybind_engine.cc
+SOURCES := engine.cc pybind_engine.cc allocator.cc
 CORE_OBJECT := engine.o
 OBJECTS := $(SOURCES:.cc=.o)
 

@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "allocator.h"
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -9,6 +10,28 @@ PYBIND11_MODULE(p2p, m) {
   m.doc() = "P2P Engine - High-performance RDMA-based peer-to-peer transport";
 
   m.def("get_oob_ip", &get_oob_ip, "Get the OOB IP address");
+  // for P2PTensor
+  m.def(
+      "reg_ipc_with_name",
+      [](uintptr_t ptr, size_t size, const std::string ipc_name) {
+          return reg_ipc_with_name(reinterpret_cast<void*>(ptr), size, ipc_name);
+      },
+      "Register an IPC memory handle with a given name",
+      py::arg("ptr"), py::arg("size"), py::arg("ipc_name"));
+  m.def(
+      "dereg_ipc_with_name",
+      [](const std::string name) {
+          return dereg_ipc_with_name(name);
+      },
+      "Deregister an IPC memory handle by name",
+      py::arg("ipc_name"));
+  m.def(
+      "check_ipc_by_name_once",
+      [](const std::string name) {
+          return check_ipc_by_name_once(name);
+      },
+      "Check an IPC memory handle by name",
+      py::arg("ipc_name"));
 
   // Endpoint class binding
   py::class_<Endpoint>(m, "Endpoint")

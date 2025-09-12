@@ -6,6 +6,7 @@ if not is_efa:
         from . import p2p
         from . import collective
         from . import transfer
+        from .tensor import P2PTensor
     except ImportError:
         pass
 

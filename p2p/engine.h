@@ -1,6 +1,7 @@
 #pragma once
 
 #include "transport.h"
+#include "allocator.h"
 #include "util/gpu_rt.h"
 #include "util/jring.h"
 #include "util/net.h"
@@ -21,6 +22,12 @@ namespace py = pybind11;
 struct MR {
   uint64_t mr_id_;
   uccl::Mhandle* mhandle_;
+};
+
+struct IPCCache {
+  std::string name_;
+  IPCMemHandle handle_;
+  void* direct_ptr_;
 };
 
 struct Conn {
@@ -286,6 +293,11 @@ class Endpoint {
   std::atomic<uint32_t> rr_stream_{0};
   std::vector<gpuStream_t> streams_;
   std::vector<std::vector<gpuStream_t>> ipc_streams_;
+
+
+  // IPC Buffer cache
+  mutable std::shared_mutex ipc_cache_mu_;
+  std::unordered_map<std::string, struct IpcCache> ipc_name_to_ipc_cache_;
 
   static constexpr size_t kTaskRingSize = 1024;
 
