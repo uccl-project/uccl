@@ -160,32 +160,34 @@ PYBIND11_MODULE(p2p, m) {
       .def(
           "sendv_async",
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-            std::vector<uint64_t> data_ptr_v, std::vector<size_t> size_v,
-            size_t num_iovs) {
+             std::vector<uint64_t> data_ptr_v, std::vector<size_t> size_v,
+             size_t num_iovs) {
             std::vector<void const*> data_v;
             data_v.reserve(data_ptr_v.size());
             for (uint64_t ptr : data_ptr_v) {
               data_v.push_back(reinterpret_cast<void const*>(ptr));
             }
             uint64_t transfer_id;
-            bool success = self.sendv_async(conn_id, mr_id_v, data_v, size_v, num_iovs, &transfer_id);
+            bool success = self.sendv_async(conn_id, mr_id_v, data_v, size_v,
+                                            num_iovs, &transfer_id);
             return py::make_tuple(success, transfer_id);
           },
-          "Send multiple data buffers asynchronously", py::arg("conn_id"), py::arg("mr_id_v"),
-          py::arg("data_ptr_v"), py::arg("size_v"), py::arg("num_iovs"))
+          "Send multiple data buffers asynchronously", py::arg("conn_id"),
+          py::arg("mr_id_v"), py::arg("data_ptr_v"), py::arg("size_v"),
+          py::arg("num_iovs"))
       .def(
           "recvv_async",
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-            std::vector<uint64_t> data_ptr_v, std::vector<size_t> size_v,
-            size_t num_iovs) {
+             std::vector<uint64_t> data_ptr_v, std::vector<size_t> size_v,
+             size_t num_iovs) {
             std::vector<void*> data_v;
             data_v.reserve(data_ptr_v.size());
             for (uint64_t ptr : data_ptr_v) {
               data_v.push_back(reinterpret_cast<void*>(ptr));
             }
-            uint64_t transfer_id; 
-            bool success =
-                self.recvv_async(conn_id, mr_id_v, data_v, size_v, num_iovs, &transfer_id);
+            uint64_t transfer_id;
+            bool success = self.recvv_async(conn_id, mr_id_v, data_v, size_v,
+                                            num_iovs, &transfer_id);
 
             return py::make_tuple(success, transfer_id);
           },
