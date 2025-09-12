@@ -258,7 +258,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           dst_ptr - reinterpret_cast<uint64_t>(atomic_buffer_ptr),
           -num_tokens_sent - 1, dst_rank,
           sm_id,  // NOTE(MaoZiming): use sm_id for rb.
-          dst_expert_local_idx, false, ring_addrs, num_ring_addrs);
+          dst_expert_local_idx, false, ring_addrs, num_ring_addrs, true);
 
     } else {
       // Intra-node: use direct atomic operation
@@ -325,6 +325,10 @@ LOW_LATENCY_DISPATCH_RECV:
       uint64_t wait_cycles = (uint64_t)1e9;
       while (clock64() - start < wait_cycles) {
       }
+      // printf(
+      //     "[RECV_COUNT_DECODING] Counter waiting on %p\n",
+      //     (void*)(rdma_recv_count + local_expert_idx * num_ranks +
+      //     src_rank));
       while ((num_recv_tokens = ld_acquire_sys_global(
                   rdma_recv_count + local_expert_idx * num_ranks + src_rank)) ==
              0)
@@ -332,8 +336,7 @@ LOW_LATENCY_DISPATCH_RECV:
       auto wait_recv_cost = clock64() - start_time;
       num_recv_tokens = -num_recv_tokens - 1;
       // printf(
-      //     "[RECV_COUNT_DECODED] Decoded token count: %d (from received value
-      //     "
+      //     "[RECV_COUNT_DECODED] Decoded token count: %d (from received value"
       //     "%d), count_addr; %p\n",
       //     num_recv_tokens, -num_recv_tokens - 1,
       //     (void*)(rdma_recv_count + local_expert_idx * num_ranks +
@@ -409,8 +412,8 @@ LOW_LATENCY_DISPATCH_RECV:
         }
       }
     }
-    if (blockIdx.x == 0 && threadIdx.x == 0)
-      printf("[dispatch] RECV finished\n");
+    // if (blockIdx.x == 0 && threadIdx.x == 0)
+    //   printf("[dispatch] RECV finished\n");
   }
 }
 
@@ -780,7 +783,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
         nvshmemi_ibgda_amo_nonfetch_add(
             dst_ptr - reinterpret_cast<uint64_t>(atomic_buffer_ptr), 1,
             dst_rank, sm_id, local_expert_idx, false, ring_addrs,
-            num_ring_addrs);
+            num_ring_addrs, false);
       }
       atomic_add_release_global(atomic_clean_flag, -1);
     }
@@ -863,8 +866,8 @@ LOW_LATENCY_COMBINE_RECV:
        token_idx * hidden_bf16_int4)[hidden_idx] = combined_int4;
     }
 
-    if (blockIdx.x == 0 && threadIdx.x == 0)
-      printf("[combine] RECV finished\n");
+    // if (blockIdx.x == 0 && threadIdx.x == 0)
+    //   printf("[combine] RECV finished\n");
   }
 }
 
@@ -897,7 +900,7 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
 
   constexpr int kNumTMABytesPerWarp = 12 * (512 + 16);
   int const smem_size = kNumTMABytesPerWarp * num_warps;
-  printf("Combine launched\n");
+  // printf("Combine launched\n");
 
 #define COMBINE_LAUNCH_CASE(hidden)                                            \
   {                                                                            \

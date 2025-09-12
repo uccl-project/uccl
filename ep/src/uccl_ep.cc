@@ -232,16 +232,6 @@ class Buffer {
       CUDA_CHECK(cudaFree(buffer_ptrs[nvl_rank]));
     }
 
-    // Free NVSHMEM
-#ifndef DISABLE_NVSHMEM
-    if (is_available() and num_rdma_bytes > 0) {
-      CUDA_CHECK(cudaDeviceSynchronize());
-      internode::barrier();
-      internode::free(rdma_buffer_ptr);
-      internode::finalize();
-    }
-#endif
-
     // Free workspace and MoE counter
     CUDA_CHECK(cudaFree(workspace));
     if (d_ipc_base_ptrs != nullptr) {
@@ -267,7 +257,7 @@ class Buffer {
       bool round_scale, bool use_ue8m0, bool async, bool return_recv_hook) {
     EP_HOST_ASSERT(low_latency_mode);
 
-    printf("low_latency_dispatch called\n");
+    // printf("low_latency_dispatch called\n");
 
     // Tensor checks
     // By default using `ptp128c` FP8 cast

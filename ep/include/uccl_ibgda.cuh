@@ -99,7 +99,7 @@ struct nvshmemi_ibgda_device_state_t {
 __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     uint64_t rptr, int const& value, int dst_rank, int qp_id, int sm_id,
     bool is_local_copy = false, uint64_t const* ring_addrs = nullptr,
-    int num_ring_addrs = 0) {
+    int num_ring_addrs = 0, bool is_combine = true) {
   if (is_local_copy) {
     atomicAdd(reinterpret_cast<int*>(rptr), value);
   } else {
@@ -127,6 +127,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
         cmd.value = value;
         cmd.dst_rank = dst_rank;
         cmd.is_atomic = true;
+        cmd.is_combine = is_combine;
         cmd.req_rptr = rptr;
         rb->atomic_set_and_commit(cmd, &slot);
         break;
