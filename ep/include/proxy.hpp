@@ -41,8 +41,8 @@ class Proxy {
   };
 
   explicit Proxy(Config const& cfg) : cfg_(cfg) {
-    // TODO(MaoZiming): Fix.
-    GPU_RT_CHECK(gpuSetDevice(cfg.rank % MAX_NUM_GPUS));
+    // TODO(Fix)
+    GPU_RT_CHECK(gpuSetDevice(0));
   }
 
   void set_progress_run(bool run) {

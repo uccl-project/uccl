@@ -66,29 +66,6 @@ __device__ __forceinline__ void st_release_sys_global(int const* ptr, int val) {
                : "memory");
 }
 
-inline void dereg_mr_safely(ibv_mr*& mr) {
-  if (!mr) return;
-  for (int attempt = 0; attempt < 3; ++attempt) {
-    int ret = ibv_dereg_mr(mr);
-    if (ret == 0) {
-      mr = nullptr;
-      return;
-    }
-    fprintf(stderr, "[destroy] ibv_dereg_mr failed (ret=%d), attempt=%d\n", ret,
-            attempt + 1);
-    std::this_thread::sleep_for(std::chrono::milliseconds(2));
-  }
-  int ret = ibv_dereg_mr(mr);
-  if (ret == 0) {
-    mr = nullptr;
-  } else {
-    fprintf(
-        stderr,
-        "[destroy] ibv_dereg_mr final failure (ret=%d); continuing teardown\n",
-        ret);
-  }
-}
-
 inline void drain_cq(ibv_cq* cq, int empty_rounds_target = 5) {
   if (!cq) return;
   int empty_rounds = 0;
