@@ -159,11 +159,6 @@ __device__ __forceinline__ uint64_t get_ipc_p2p_ptr(uint64_t const& local_ptr,
     return local_ptr;
   }
 
-  // Basic parameter validation
-  if (ranks_per_node <= 0) {
-    return 0;  // Invalid parameter
-  }
-
   // Check if both ranks are on the same node
   int src_node = src_rank / ranks_per_node;
   int dst_node = dst_rank / ranks_per_node;
@@ -173,31 +168,15 @@ __device__ __forceinline__ uint64_t get_ipc_p2p_ptr(uint64_t const& local_ptr,
 
   int src_local_rank = src_rank % ranks_per_node;
   int dst_local_rank = dst_rank % ranks_per_node;
-  
-  // Additional bounds checking
-  if (src_local_rank < 0 || dst_local_rank < 0 || 
-      src_local_rank >= ranks_per_node || dst_local_rank >= ranks_per_node) {
-    return 0;  // Out of bounds
-  }
 
-  if (ipc_base_ptrs == nullptr) {
-    return 0;  // No IPC base pointers available
-  }
-  
-  if (ipc_base_ptrs[src_local_rank] == nullptr || 
+  if (ipc_base_ptrs == nullptr || ipc_base_ptrs[src_local_rank] == nullptr ||
       ipc_base_ptrs[dst_local_rank] == nullptr) {
-    return 0;  // Required IPC pointers not available
+    return 0;
   }
 
   size_t offset =
       reinterpret_cast<uintptr_t>(reinterpret_cast<void*>(local_ptr)) -
       reinterpret_cast<uintptr_t>(ipc_base_ptrs[src_local_rank]);
-
-  // Bounds check: ensure offset is within expected buffer size
-  // Note: if buffer_size is 0, skip bounds checking (legacy behavior)
-  if (buffer_size > 0 && offset >= buffer_size) {
-    return 0;  // Offset out of bounds
-  }
 
   // Return the remote pointer as uint64_t
   return reinterpret_cast<uint64_t>(ipc_base_ptrs[dst_local_rank]) + offset;
