@@ -277,8 +277,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 // Receiving phase
 LOW_LATENCY_DISPATCH_RECV:
   if ((phases & LOW_LATENCY_RECV_PHASE) == 0) {
-    if (blockIdx.x == 0 && threadIdx.x == 0)
-      printf("[dispatch] SEND finished\n");
+    // if (blockIdx.x == 0 && threadIdx.x == 0)
+    //   printf("[dispatch] SEND finished\n");
     return;
   }
 
@@ -794,8 +794,8 @@ __global__ __launch_bounds__(1024, 1) void combine(
 // Receiving phase
 LOW_LATENCY_COMBINE_RECV:
   if ((phases & LOW_LATENCY_RECV_PHASE) == 0) {
-    if (blockIdx.x == 0 && threadIdx.x == 0)
-      printf("[combine] SEND finished\n");
+    // if (blockIdx.x == 0 && threadIdx.x == 0)
+    //   printf("[combine] SEND finished\n");
     return;
   }
   // Wait all ranks to arrive

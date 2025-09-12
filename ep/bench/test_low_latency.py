@@ -351,7 +351,7 @@ def test_main(
         )
         large_gemm_with_hook(hook) if return_recv_hook else None
 
-    print("[simple-test] ✓ All correctness tests passed!", flush=True)
+    print("✓ All correctness tests passed!", flush=True)
     # Calculate bandwidth
     num_fp8_bytes, num_bf16_bytes = (hidden + hidden / 128 * 4 + 16), hidden * 2
     num_logfmt10_bytes = hidden * 10 / 8 + hidden / 128 * 4
