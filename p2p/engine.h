@@ -23,14 +23,6 @@ struct MR {
   uccl::Mhandle* mhandle_;
 };
 
-struct IpcCache {
-  gpuIpcMemHandle_t handle;
-  bool is_send;
-  void* direct_ptr;
-  uintptr_t offset;
-  size_t size;
-};
-
 struct Conn {
   uint64_t conn_id_;
   uccl::ConnID uccl_conn_id_;
@@ -294,11 +286,6 @@ class Endpoint {
   std::atomic<uint32_t> rr_stream_{0};
   std::vector<gpuStream_t> streams_;
   std::vector<std::vector<gpuStream_t>> ipc_streams_;
-
-  // IPC Buffer cache
-  mutable std::shared_mutex ipc_cache_mu_;
-  std::unordered_map<uint64_t, std::unordered_map<void*, struct IpcCache>>
-      conn_id_and_ptr_to_ipc_cache_;
 
   static constexpr size_t kTaskRingSize = 1024;
 
