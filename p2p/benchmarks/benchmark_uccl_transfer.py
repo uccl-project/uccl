@@ -46,12 +46,11 @@ def _run_server(args, manager, remote_oob_ip, local_rank):
         # Register transfer
         transfer_id = manager.register_transfer(conn_id, recv_buf)
 
-        # Warm-up receive
+        # Let the initiator know that the tensor is ready.
         manager.post_transfer_metadata(transfer_id)
 
-        # Benchmark receives
-        for _ in range(args.iters):
-            manager.post_transfer_metadata(transfer_id)
+        # Wait for the initiator to finish all the transfers.
+        manager.wait_transfer_done(transfer_id)
 
         # Check if tensor received data correctly
         expected_value = float(sz)
@@ -88,8 +87,10 @@ def _run_client(args, manager, remote_oob_ip, local_rank):
         # Register transfer
         transfer_id = manager.register_transfer(conn_id, send_buf)
 
-        # Warm-up send
+        # Fetch transfer metadata from the target.
         transfer_metadata = manager.fetch_transfer_metadata(transfer_id)
+
+        # Warm-up send
         poll_id = manager.do_transfer_async(transfer_id, transfer_metadata)
 
         # Wait for warmup to complete
@@ -117,6 +118,9 @@ def _run_client(args, manager, remote_oob_ip, local_rank):
             f"{total/elapsed/1e9:6.2f} GB/s | "
             f"{elapsed/args.iters:6.6f} s"
         )
+
+        # Post transfer done signal to the target.
+        manager.post_transfer_done(transfer_id)
 
         # Cleanup transfer
         manager.deregister_transfer(transfer_id)

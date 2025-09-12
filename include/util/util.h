@@ -59,6 +59,10 @@ namespace uccl {
     }                                \
   } while (0)
 
+template <typename... Types>
+constexpr size_t max_sizeof() {
+  return std::max({sizeof(Types)...});
+}
 /// Convert a default bytes/second rate to Gbit/s
 inline double rate_to_gbps(double r) { return (r / (1000 * 1000 * 1000)) * 8; }
 

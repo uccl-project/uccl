@@ -106,7 +106,14 @@ struct uccl_mr {
   uccl_engine* engine;
 };
 
+typedef struct {
+  uccl::FifoItem fifo_item;
+  bool is_valid;
+} fifo_item_t;
+
 std::unordered_map<uintptr_t, uint64_t> mem_reg_info;
+std::unordered_map<uccl_conn_t*, fifo_item_t*> fifo_item_map;
+std::mutex fifo_item_map_mutex;
 
 // Forward declaration
 void listener_thread_func(uccl_conn_t* conn);
@@ -299,6 +306,15 @@ void uccl_engine_conn_destroy(uccl_conn_t* conn) {
       conn->recv_thread_pool->force_destroy();
       delete conn->recv_thread_pool;
     }
+    // Clean up fifo_item for this connection
+    {
+      std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
+      auto it = fifo_item_map.find(conn);
+      if (it != fifo_item_map.end()) {
+        delete it->second;  // Free the fifo_item_t
+        fifo_item_map.erase(it);
+      }
+    }
     delete conn;
   }
 }
@@ -333,29 +349,35 @@ void listener_thread_func(uccl_conn_t* conn) {
       if (!conn->listener_running) {
         break;
       }
-      // Error receiving metadata or incomplete metadata, sleep briefly before
-      // retrying
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
       continue;
     }
     std::cout << "Received metadata: " << md.op << " " << md.data_ptr << " "
               << md.data_size << std::endl;
-    auto local_mem_iter = mem_reg_info.find(md.data_ptr);
-    if (local_mem_iter == mem_reg_info.end()) {
-      std::cerr << "Local memory not registered for address: " << md.data_ptr
+    uint64_t mr_id = 0;
+    if (md.op != UCCL_FIFO) {
+      auto local_mem_iter = mem_reg_info.find(md.data_ptr);
+      if (local_mem_iter == mem_reg_info.end()) {
+        std::cerr << "Local memory not registered for address: " << md.data_ptr
+                  << std::endl;
+        continue;
+      }
+      std::cout << "Local memory registered for address: " << md.data_ptr
                 << std::endl;
-      continue;
+      mr_id = local_mem_iter->second;
     }
-    std::cout << "Local memory registered for address: " << md.data_ptr
-              << std::endl;
-    auto mr_id = local_mem_iter->second;
-    char out_buf[sizeof(uccl::FifoItem)];
+
     switch (md.op) {
       case UCCL_READ: {
+        char out_buf[sizeof(uccl::FifoItem)];
         conn->engine->endpoint->advertise(
             conn->conn_id, mr_id, (void*)md.data_ptr, md.data_size, out_buf);
+
+        metadata_t response_md;
+        response_md.op = UCCL_FIFO;
+        memcpy(response_md.fifo_buf, out_buf, sizeof(uccl::FifoItem));
+
         ssize_t result =
-            send(conn->sock_fd, out_buf, sizeof(uccl::FifoItem), 0);
+            send(conn->sock_fd, &response_md, sizeof(metadata_t), 0);
         if (result < 0) {
           std::cerr << "Failed to send FifoItem data: " << strerror(errno)
                     << std::endl;
@@ -367,6 +389,21 @@ void listener_thread_func(uccl_conn_t* conn) {
         conn->recv_thread_pool->enqueue(async_recv_worker, conn, mr_id,
                                         (void*)md.data_ptr, md.data_size);
         break;
+      case UCCL_FIFO: {
+        std::cout << "Received & Stored FIFO item" << std::endl;
+        // Store fifo_item in the hashmap for this connection
+        uccl::FifoItem fifo_item;
+        memcpy(&fifo_item, md.fifo_buf, sizeof(uccl::FifoItem));
+        fifo_item_t* f_item = new fifo_item_t;
+        f_item->fifo_item = fifo_item;
+        f_item->is_valid = true;
+
+        {
+          std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
+          fifo_item_map[conn] = f_item;
+        }
+        break;
+      }
       default:
         std::cerr << "Invalid operation type: " << md.op << std::endl;
         continue;
@@ -379,6 +416,23 @@ void listener_thread_func(uccl_conn_t* conn) {
 int uccl_engine_get_sock_fd(uccl_conn_t* conn) {
   if (!conn) return -1;
   return conn->sock_fd;
+}
+
+int uccl_engine_get_fifo_item(uccl_conn_t* conn, void* fifo_item) {
+  if (!conn || !fifo_item) return -1;
+
+  std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
+  auto it = fifo_item_map.find(conn);
+  if (it == fifo_item_map.end()) {
+    return -1;
+  }
+  if (it->second->is_valid) {
+    memcpy(fifo_item, &it->second->fifo_item, sizeof(uccl::FifoItem));
+    it->second->is_valid = false;
+    return 0;
+  } else {
+    return -1;
+  }
 }
 
 int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
