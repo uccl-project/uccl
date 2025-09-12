@@ -22,14 +22,14 @@ namespace uccl {
 // be say 64 (= number of experts), but the number of ring buffers is small (say
 // 6).
 __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
-    uint64_t req_rptr, uint64_t req_lptr, size_t bytes, int dst_rank, int sm_id,
+    uint64_t req_rptr, uint64_t req_lptr, size_t bytes, int dst_rank, int warp_id,
     int lane_id, int message_idx, uint64_t const* ring_addrs,
     int num_ring_addrs, bool is_combine) {
   // NOTE(MaoZiming): different from the nvshmemi_ibgda_put_nbi_warp in
   // ibgda_device.cuh, we don't do warp-cooperation.
   if (lane_id != 0) return;
   int safe_n = num_ring_addrs > 0 ? num_ring_addrs : 1;
-  int ring_idx = (sm_id >= 0 ? sm_id : 0) % safe_n;
+  int ring_idx = (warp_id >= 0 ? warp_id : 0) % safe_n;
 
   unsigned long long rptr_val = static_cast<unsigned long long>(req_rptr);
   unsigned long long lptr_val = static_cast<unsigned long long>(req_lptr);
@@ -54,14 +54,14 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       TransferCmd cmd{};
       // TODO(MaoZiming): Check fields here.
       // NOTE(MaoZiming): cmd is needed for proxy to process the command.
-      cmd.cmd = (static_cast<uint64_t>(sm_id + 1) << 32) |
-                (message_idx & 0xFFFFFFFF);  // NOTE(MaoZiming): Use sm_id + 1
+      cmd.cmd = (static_cast<uint64_t>(warp_id + 1) << 32) |
+                (message_idx & 0xFFFFFFFF);  // NOTE(MaoZiming): Use warp_id + 1
                                              // to avoid 0 as a valid command.
       cmd.req_rptr = rptr_val;
       cmd.req_lptr = lptr_val;
       cmd.bytes = bytes_val;
       cmd.dst_rank = dst_rank;
-      cmd.sm_id = sm_id;
+      cmd.warp_id = warp_id;
       cmd.lane_id = lane_id;
       cmd.message_idx = message_idx;
       cmd.is_combine = is_combine;
@@ -97,14 +97,14 @@ struct nvshmemi_ibgda_device_state_t {
 // TODO(MaoZiming): Fix. This should be a non-fetch add operation. This could be
 // implemented with CPU proxy.
 __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
-    uint64_t rptr, int const& value, int dst_rank, int qp_id, int sm_id,
+    uint64_t rptr, int const& value, int dst_rank, int qp_id, int warp_id,
     bool is_local_copy = false, uint64_t const* ring_addrs = nullptr,
     int num_ring_addrs = 0, bool is_combine = true) {
   if (is_local_copy) {
     atomicAdd(reinterpret_cast<int*>(rptr), value);
   } else {
     int safe_n = num_ring_addrs > 0 ? num_ring_addrs : 1;
-    int ring_idx = (sm_id >= 0 ? sm_id : 0) % safe_n;
+    int ring_idx = (warp_id >= 0 ? warp_id : 0) % safe_n;
 
     auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
         static_cast<uintptr_t>(ring_addrs[ring_idx]));
@@ -123,7 +123,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
         // TODO(MaoZiming): Check fields here.
         // NOTE(MaoZiming): cmd is needed for proxy to process the command.
         cmd.cmd = 1;  // to avoid 0 as a valid command.
-        cmd.sm_id = sm_id;
+        cmd.warp_id = warp_id;
         cmd.value = value;
         cmd.dst_rank = dst_rank;
         cmd.is_atomic = true;
