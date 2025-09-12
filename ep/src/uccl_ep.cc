@@ -538,7 +538,7 @@ class Buffer {
 
   torch::Tensor get_next_low_latency_combine_buffer(
       int num_max_dispatch_tokens_per_rank, int hidden, int num_experts) const {
-    printf("get_next_low_latency_combine_buffer called\n");
+    // printf("get_next_low_latency_combine_buffer called\n");
     LowLatencyLayout layout(rdma_buffer_ptr, num_max_dispatch_tokens_per_rank,
                             hidden, num_ranks, num_experts, nullptr);
 
@@ -562,7 +562,7 @@ class Buffer {
     CUDA_CHECK(
         cudaMemsetAsync(rdma_buffer_ptr, 0, num_rdma_bytes, comm_stream));
     CUDA_CHECK(cudaStreamSynchronize(comm_stream));
-    printf("RDMA buffer reset done\n");
+    // printf("RDMA buffer reset done\n");
 
     if (atomic_buffer_ptr != nullptr) {
       cudaMemset(atomic_buffer_ptr, 0, kAtomicBufferSize);

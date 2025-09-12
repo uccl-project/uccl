@@ -163,7 +163,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           uccl::nvshmemi_ibgda_put_nbi_warp(
               dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), src_ptr,
               num_bytes_per_msg, dst_rank,
-              sm_id,  // NOTE(MaoZiming): use sm_id for rb.
+              warp_id,  // NOTE(MaoZiming): use warp_id for rb.
               lane_id, slot_idx, ring_addrs, num_ring_addrs, false);
         } else {
           // Intra-node: use direct memory copy via IPC
@@ -257,7 +257,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       uccl::nvshmemi_ibgda_amo_nonfetch_add(
           dst_ptr - reinterpret_cast<uint64_t>(atomic_buffer_ptr),
           -num_tokens_sent - 1, dst_rank,
-          sm_id,  // NOTE(MaoZiming): use sm_id for rb.
+          warp_id,  // NOTE(MaoZiming): use warp_id for rb.
           dst_expert_local_idx, false, ring_addrs, num_ring_addrs, true);
 
     } else {
@@ -277,8 +277,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 // Receiving phase
 LOW_LATENCY_DISPATCH_RECV:
   if ((phases & LOW_LATENCY_RECV_PHASE) == 0) {
-    if (blockIdx.x == 0 && threadIdx.x == 0)
-      printf("[dispatch] SEND finished\n");
+    // if (blockIdx.x == 0 && threadIdx.x == 0)
+    //   printf("[dispatch] SEND finished\n");
     return;
   }
 
@@ -320,11 +320,11 @@ LOW_LATENCY_DISPATCH_RECV:
     EP_DEVICE_ASSERT(num_warps_per_group > 1 and num_warp_groups < 15);
     if (sub_warp_id == 1 and lane_id == 0) {
       auto start_time = clock64();
-      // TODO (MaoZiming): Fix dumb timer wait.
-      uint64_t start = clock64();
-      uint64_t wait_cycles = (uint64_t)1e9;
-      while (clock64() - start < wait_cycles) {
-      }
+      // // TODO (MaoZiming): Fix dumb timer wait.
+      // uint64_t start = clock64();
+      // uint64_t wait_cycles = (uint64_t)1e9;
+      // while (clock64() - start < wait_cycles) {
+      // }
       // printf(
       //     "[RECV_COUNT_DECODING] Counter waiting on %p\n",
       //     (void*)(rdma_recv_count + local_expert_idx * num_ranks +
@@ -750,7 +750,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
         nvshmemi_ibgda_put_nbi_warp(
             dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), buf_ptr,
             hidden * sizeof(nv_bfloat16), dst_rank,
-            sm_id,  // NOTE(MaoZiming): use sm_id for rb
+            warp_id,  // NOTE(MaoZiming): use warp_id for rb
             lane_id, token_idx - offset, ring_addrs, num_ring_addrs, true);
       }
     }
@@ -782,8 +782,9 @@ __global__ __launch_bounds__(1024, 1) void combine(
         // phase)
         nvshmemi_ibgda_amo_nonfetch_add(
             dst_ptr - reinterpret_cast<uint64_t>(atomic_buffer_ptr), 1,
-            dst_rank, sm_id, local_expert_idx, false, ring_addrs,
-            num_ring_addrs, false);
+            dst_rank,
+            warp_id,  // NOTE(MaoZiming): use warp_id for rb
+            local_expert_idx, false, ring_addrs, num_ring_addrs, false);
       }
       atomic_add_release_global(atomic_clean_flag, -1);
     }
@@ -793,8 +794,8 @@ __global__ __launch_bounds__(1024, 1) void combine(
 // Receiving phase
 LOW_LATENCY_COMBINE_RECV:
   if ((phases & LOW_LATENCY_RECV_PHASE) == 0) {
-    if (blockIdx.x == 0 && threadIdx.x == 0)
-      printf("[combine] SEND finished\n");
+    // if (blockIdx.x == 0 && threadIdx.x == 0)
+    //   printf("[combine] SEND finished\n");
     return;
   }
   // Wait all ranks to arrive
