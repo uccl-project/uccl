@@ -26,10 +26,15 @@ inline void init_env(BenchEnv& env, int blocks = kNumThBlocks, int device = 0,
 
   GPU_RT_CHECK(gpuStreamCreate(&env.stream));
 
+#ifdef USE_GH200
+  GPU_RT_CHECK(cudaMallocManaged(
+      &env.rbs, sizeof(DeviceToHostCmdBuffer) * static_cast<size_t>(blocks),
+      cudaMemAttachGlobal));
+#else
   GPU_RT_CHECK(gpuHostAlloc(
       &env.rbs, sizeof(DeviceToHostCmdBuffer) * static_cast<size_t>(blocks),
       gpuHostAllocMapped));
-
+#endif
   for (int i = 0; i < blocks; ++i) {
     env.rbs[i].head = 0;
     env.rbs[i].tail = 0;
@@ -46,6 +51,7 @@ inline void init_env(BenchEnv& env, int blocks = kNumThBlocks, int device = 0,
 }
 
 inline void destroy_env(BenchEnv& env) {
+  printf("Destroying env\n");
   if (env.rbs) {
     GPU_RT_CHECK(gpuFreeHost(env.rbs));
     env.rbs = nullptr;

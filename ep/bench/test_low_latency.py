@@ -410,7 +410,9 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     scratch = torch.zeros(
         num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
     )
-    proxies, workers = initialize_uccl(scratch, num_rdma_bytes, rank, num_ranks, group)
+    proxies, workers, bench = initialize_uccl(
+        scratch, num_rdma_bytes, rank, num_ranks, group
+    )
 
     if local_rank == 0:
         print(f"Allocating buffer size: {num_rdma_bytes / 1e6} MB ...", flush=True)
@@ -483,7 +485,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     group.barrier()
     buffer.destroy()
     dist.barrier()
-    destroy_uccl(proxies, workers)
+    destroy_uccl(proxies, workers, bench)
     dist.barrier()
     dist.destroy_process_group()
 
