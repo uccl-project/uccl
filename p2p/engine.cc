@@ -92,8 +92,10 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   recv_task_ring_ = uccl::create_ring(sizeof(Task), kTaskRingSize);
   read_task_ring_ = uccl::create_ring(sizeof(RWTask), kTaskRingSize);
   write_task_ring_ = uccl::create_ring(sizeof(RWTask), kTaskRingSize);
-  sendv_task_ring_ = uccl::create_ring(sizeof(TaskVPtrWrapper), kTaskRingSize);
-  recvv_task_ring_ = uccl::create_ring(sizeof(TaskVPtrWrapper), kTaskRingSize);
+  sendv_task_ring_ =
+      uccl::create_ring(sizeof(TaskBatchPtrWrapper), kTaskRingSize);
+  recvv_task_ring_ =
+      uccl::create_ring(sizeof(TaskBatchPtrWrapper), kTaskRingSize);
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
   // sendv_proxy_thread_ = std::thread(&Endpoint::sendv_proxy_thread_func,
@@ -772,7 +774,7 @@ bool Endpoint::sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   [[maybe_unused]] auto _ =
       PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
   // std::cout << "[debug] enter sendv_async" << std::endl;
-  TaskV* task = new TaskV{
+  TaskBatch* task = new TaskBatch{
       .type = TaskType::SENDV,
       .conn_id = conn_id,
       .mr_id_v = mr_id_v,
@@ -786,7 +788,7 @@ bool Endpoint::sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   task->self_ptr = task;
 
   *transfer_id = reinterpret_cast<uint64_t>(task);
-  TaskVPtrWrapper wrapper = {.ptr = task};
+  TaskBatchPtrWrapper wrapper = {.ptr = task};
   // std::cout << "[debug] before while sendv_async" << std::endl;
   while (jring_mp_enqueue_bulk(sendv_task_ring_, &wrapper, 1, nullptr) != 1) {
   }
@@ -801,7 +803,7 @@ bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   [[maybe_unused]] auto _ =
       PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
   // std::cout << "[debug]enter recvv_async" << std::endl;
-  TaskV* task = new TaskV{
+  TaskBatch* task = new TaskBatch{
       .type = TaskType::RECVV,
       .conn_id = conn_id,
       .mr_id_v = mr_id_v,
@@ -815,7 +817,7 @@ bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   task->self_ptr = task;
 
   *transfer_id = reinterpret_cast<uint64_t>(task);
-  TaskVPtrWrapper wrapper = {.ptr = task};
+  TaskBatchPtrWrapper wrapper = {.ptr = task};
   // std::cout << "[debug]before while recvv_async" << std::endl;
   while (jring_mp_enqueue_bulk(recvv_task_ring_, &wrapper, 1, nullptr) != 1) {
   }
@@ -1244,11 +1246,12 @@ void Endpoint::send_proxy_thread_func() {
   uccl::pin_thread_to_numa(numa_node_);
   Task task;
   RWTask rw_task;
-  TaskVPtrWrapper wrapper;
-  TaskV* taskv;
+  TaskBatchPtrWrapper wrapper;
+  TaskBatch* taskv;
 
   while (!stop_.load(std::memory_order_acquire)) {
-    // std::cout << "[debug] enter send_proxy_thread_func while loop" << std::endl;
+    // std::cout << "[debug] enter send_proxy_thread_func while loop" <<
+    // std::endl;
     if (jring_sc_dequeue_bulk(send_task_ring_, &task, 1, nullptr) == 1) {
       if (task.type == TaskType::SEND_IPC) {
         send_ipc(task.conn_id, task.data, task.size, false);
@@ -1284,10 +1287,11 @@ void Endpoint::send_proxy_thread_func() {
 void Endpoint::recv_proxy_thread_func() {
   uccl::pin_thread_to_numa(numa_node_);
   Task task;
-  TaskVPtrWrapper wrapper;
-  TaskV* taskv;
+  TaskBatchPtrWrapper wrapper;
+  TaskBatch* taskv;
   while (!stop_.load(std::memory_order_acquire)) {
-    // std::cout << "[debug] enter recv_proxy_thread_func while loop" << std::endl;
+    // std::cout << "[debug] enter recv_proxy_thread_func while loop" <<
+    // std::endl;
     if (jring_sc_dequeue_bulk(recv_task_ring_, &task, 1, nullptr) == 1) {
       if (task.type == TaskType::RECV_IPC) {
         recv_ipc(task.conn_id, task.data, task.size, false);
@@ -1307,25 +1311,6 @@ void Endpoint::recv_proxy_thread_func() {
   }
 }
 
-// void Endpoint::sendv_proxy_thread_func() {
-//   uccl::pin_thread_to_numa(numa_node_);
-//   TaskVPtrWrapper wrapper;
-//   // TaskV *taskv = nullptr;
-
-//   while (!stop_.load(std::memory_order_acquire)) {
-
-//   }
-// }
-
-// void Endpoint::recvv_proxy_thread_func() {
-//   uccl::pin_thread_to_numa(numa_node_);
-//   TaskVPtrWrapper wrapper;  // Dequeue into the 16-byte wrapper struct
-
-//   while (!stop_.load(std::memory_order_acquire)) {
-
-//   }
-// }
-
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   py::gil_scoped_release release;
 
@@ -1337,7 +1322,7 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
       delete rw_task;
     }
   } else if (task->type == TaskType::SENDV || task->type == TaskType::RECVV) {
-    auto taskv = reinterpret_cast<TaskV*>(transfer_id);
+    auto taskv = reinterpret_cast<TaskBatch*>(transfer_id);
     *is_done = taskv->done.load(std::memory_order_acquire);
     if (*is_done) {
       delete taskv;
