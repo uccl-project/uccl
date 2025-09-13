@@ -1,4 +1,5 @@
 #pragma once
+#include "exception.cuh"
 
 #ifndef SETUP_LAUNCH_CONFIG
 #ifndef DISABLE_SM90_FEATURES
@@ -71,4 +72,19 @@
     default:                                          \
       EP_HOST_ASSERT(false and "Unsupported hidden"); \
   }                                                   \
+  while (false)
+
+#define SWITCH_RDMA_RANKS(case_macro)                    \
+  switch (num_ranks / NUM_MAX_NVL_PEERS) {               \
+    case 2:                                              \
+      case_macro(2);                                     \
+    case 4:                                              \
+      case_macro(4);                                     \
+    case 8:                                              \
+      case_macro(8);                                     \
+    case 16:                                             \
+      case_macro(16);                                    \
+    default:                                             \
+      EP_HOST_ASSERT(false && "Unsupported RDMA ranks"); \
+  }                                                      \
   while (false)
