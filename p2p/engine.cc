@@ -98,9 +98,6 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
       uccl::create_ring(sizeof(TaskBatchPtrWrapper), kTaskRingSize);
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
-  // sendv_proxy_thread_ = std::thread(&Endpoint::sendv_proxy_thread_func,
-  // this); recvv_proxy_thread_ =
-  // std::thread(&Endpoint::recvv_proxy_thread_func, this);
 
   // Initialize UDS socket for local connections
   init_uds_socket();
@@ -118,8 +115,6 @@ Endpoint::~Endpoint() {
 
   send_proxy_thread_.join();
   recv_proxy_thread_.join();
-  // sendv_proxy_thread_.join();
-  // recvv_proxy_thread_.join();
 
   free(send_task_ring_);
   free(recv_task_ring_);
@@ -580,7 +575,6 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
     auto it = conn_id_to_conn_.find(conn_id);
     if (it == conn_id_to_conn_.end()) {
-      // 最好增加一个错误处理
       std::cerr << "[sendv] Error: Invalid conn_id " << conn_id << std::endl;
       return false;
     }
