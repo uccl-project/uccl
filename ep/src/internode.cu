@@ -409,9 +409,9 @@ void notify_dispatch(
       NUM_MAX_NVL_PEERS, num_max_nvl_chunked_recv_tokens, num_channels, true);
   EP_HOST_ASSERT((rdma_clean_meta.first + rdma_clean_meta.second) *
                      sizeof(int) <=
-                 num_rdma_bytes);
+                 static_cast<size_t>(num_rdma_bytes));
   EP_HOST_ASSERT((nvl_clean_meta.first + nvl_clean_meta.second) * sizeof(int) <=
-                 num_nvl_bytes);
+                 static_cast<size_t>(num_nvl_bytes));
   EP_HOST_ASSERT(num_rdma_bytes < std::numeric_limits<int>::max());
   EP_HOST_ASSERT(num_nvl_bytes < std::numeric_limits<int>::max());
 
@@ -1555,9 +1555,9 @@ void cached_notify(int hidden_int4, int num_scales, int num_topk_idx,
       is_cached_dispatch);
   EP_HOST_ASSERT((rdma_clean_meta.first + rdma_clean_meta.second) *
                      sizeof(int) <=
-                 num_rdma_bytes);
+                 static_cast<size_t>(num_rdma_bytes));
   EP_HOST_ASSERT((nvl_clean_meta.first + nvl_clean_meta.second) * sizeof(int) <=
-                 num_nvl_bytes);
+                 static_cast<size_t>(num_nvl_bytes));
   EP_HOST_ASSERT(num_rdma_bytes < std::numeric_limits<int>::max());
   EP_HOST_ASSERT(num_nvl_bytes < std::numeric_limits<int>::max());
   EP_HOST_ASSERT(num_channels * 2 > 3);
