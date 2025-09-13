@@ -484,20 +484,26 @@ def destroy_uccl(proxies, workers):
         pass
     print("✓ Proxy unregistered", flush=True)
 
+
 def per_token_cast_to_fp8(x: torch.Tensor):
     assert x.dim() == 2 and x.size(1) % 128 == 0
     m, n = x.shape
     x_view = x.view(m, -1, 128)
     x_amax = x_view.abs().float().amax(dim=2).view(m, -1).clamp(1e-4)
-    return (x_view * (448.0 / x_amax.unsqueeze(2))).to(torch.float8_e4m3fn).view(m, n), (x_amax / 448.0).view(m, -1)
+    return (x_view * (448.0 / x_amax.unsqueeze(2))).to(torch.float8_e4m3fn).view(
+        m, n
+    ), (x_amax / 448.0).view(m, -1)
 
 
-def create_grouped_scores(scores: torch.Tensor, group_idx: torch.Tensor, num_groups: int):
+def create_grouped_scores(
+    scores: torch.Tensor, group_idx: torch.Tensor, num_groups: int
+):
     num_tokens, num_experts = scores.shape
     scores = scores.view(num_tokens, num_groups, -1)
     mask = torch.zeros((num_tokens, num_groups), dtype=torch.bool, device=scores.device)
     mask = mask.scatter_(1, group_idx, True).unsqueeze(-1).expand_as(scores)
     return (scores * mask).view(num_tokens, num_experts)
+
 
 def inplace_unique(x: torch.Tensor, num_slots: int):
     assert x.dim() == 2
