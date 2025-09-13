@@ -80,6 +80,13 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   }
 }
 
+template <bool kAlwaysDoPostSend = false>
+__device__ static __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
+    uint64_t req_rptr, uint64_t req_lptr, size_t bytes, int dst_pe, int qp_id,
+    int lane_id, int message_idx) {
+  ;
+}
+
 // NOTE(MaoZiming): Remove this. We don't need nvshmem and ibgda.
 #ifdef false
 __device__ __forceinline__ nvshmemi_ibgda_device_state_t* ibgda_get_state() {
@@ -93,6 +100,12 @@ struct nvshmemi_ibgda_device_state_t {
   uint32_t num_rc_per_pe{0};
 };
 #endif
+
+__device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
+    void* rptr, int const& value, int pe, int qp_id,
+    bool is_local_copy = false) {
+  ;
+}
 
 // TODO(MaoZiming): Fix. This should be a non-fetch add operation. This could be
 // implemented with CPU proxy.

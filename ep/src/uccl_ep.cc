@@ -6,13 +6,16 @@
 #include "ep_proxy_registry.hpp"
 #include "ep_runtime.cuh"
 #include "ep_util.hpp"
+#include "internode.cuh"
 #include "internode_ll.cuh"
+#include "layout.hpp"
 #include "peer_copy_manager.hpp"
 #include "py_cuda_shims.hpp"
 #include "ring_buffer.cuh"
 #include "uccl_bench.hpp"
 #include "uccl_proxy.hpp"
 #include <ATen/cuda/CUDAContext.h>
+#include <ATen/cuda/CUDADataType.h>
 #include <pybind11/chrono.h>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
@@ -244,7 +247,7 @@ class Buffer {
       num_tokens_per_rdma_rank = torch::empty(
           {num_rdma_ranks}, dtype(torch::kInt32).device(torch::kCUDA));
 
-    layout::get_dispatch_layout(
+    uccl::layout::get_dispatch_layout(
         topk_idx.data_ptr<int64_t>(), num_tokens_per_rank.data_ptr<int>(),
         num_tokens_per_rdma_rank.has_value()
             ? num_tokens_per_rdma_rank.value().data_ptr<int>()
@@ -498,7 +501,7 @@ class Buffer {
       recv_gbl_rank_prefix_sum = cached_recv_gbl_rank_prefix_sum.value();
 
       // Just a barrier and clean flags
-      internode::cached_notify(
+      uccl::internode::cached_notify(
           hidden_int4, num_scales, num_topk, num_topk, num_ranks, num_channels,
           0, nullptr, nullptr, nullptr, nullptr, rdma_buffer_ptr,
           config.num_max_rdma_chunked_recv_tokens, buffer_ptrs_gpu,
@@ -522,7 +525,7 @@ class Buffer {
       *moe_recv_counter = -1, *moe_recv_rdma_counter = -1;
       for (int i = 0; i < num_local_experts; ++i)
         moe_recv_expert_counter[i] = -1;
-      internode::notify_dispatch(
+      uccl::internode::notify_dispatch(
           num_tokens_per_rank->data_ptr<int>(), moe_recv_counter_mapped,
           num_ranks, num_tokens_per_rdma_rank->data_ptr<int>(),
           moe_recv_rdma_counter_mapped, num_tokens_per_expert->data_ptr<int>(),
@@ -583,9 +586,9 @@ class Buffer {
     auto send_rdma_head = std::optional<torch::Tensor>();
     auto send_nvl_head = std::optional<torch::Tensor>();
     if (not cached_mode) {
-      recv_src_meta =
-          torch::empty({num_recv_tokens, internode::get_source_meta_bytes()},
-                       dtype(torch::kByte).device(torch::kCUDA));
+      recv_src_meta = torch::empty(
+          {num_recv_tokens, uccl::internode::get_source_meta_bytes()},
+          dtype(torch::kByte).device(torch::kCUDA));
       recv_rdma_channel_prefix_matrix =
           torch::empty({num_rdma_ranks, num_channels},
                        dtype(torch::kInt32).device(torch::kCUDA));
@@ -619,7 +622,7 @@ class Buffer {
 
     // Launch data dispatch
     // NOTES: the buffer size checks are moved into the `.cu` file
-    internode::dispatch(
+    uccl::internode::dispatch(
         recv_x.data_ptr(), recv_x_scales_ptr, recv_topk_idx_ptr,
         recv_topk_weights_ptr,
         cached_mode ? nullptr : recv_src_meta->data_ptr(), x.data_ptr(),
@@ -742,7 +745,8 @@ class Buffer {
     auto num_combined_tokens =
         static_cast<int>(is_combined_token_in_rank.size(0));
     EP_HOST_ASSERT((hidden * x.element_size()) % sizeof(int4) == 0);
-    EP_HOST_ASSERT(src_meta.size(1) == internode::get_source_meta_bytes());
+    EP_HOST_ASSERT(src_meta.size(1) ==
+                   uccl::internode::get_source_meta_bytes());
     EP_HOST_ASSERT(is_combined_token_in_rank.size(1) == num_ranks);
     EP_HOST_ASSERT(rdma_channel_prefix_matrix.size(0) == num_rdma_ranks and
                    rdma_channel_prefix_matrix.size(1) == num_channels);
@@ -794,7 +798,7 @@ class Buffer {
                    config.num_max_nvl_chunked_recv_tokens / num_rdma_ranks);
 
     // Launch barrier and reset queue head and tail
-    internode::cached_notify(
+    uccl::internode::cached_notify(
         hidden_int4, 0, 0, num_topk, num_ranks, num_channels,
         num_combined_tokens, combined_rdma_head.data_ptr<int>(),
         rdma_channel_prefix_matrix.data_ptr<int>(),
@@ -821,21 +825,21 @@ class Buffer {
 
     // Launch data combine
     auto combined_x = torch::empty({num_combined_tokens, hidden}, x.options());
-    internode::combine(at::cuda::ScalarTypeToCudaDataType(x.scalar_type()),
-                       combined_x.data_ptr(), combined_topk_weights_ptr,
-                       is_combined_token_in_rank.data_ptr<bool>(), x.data_ptr(),
-                       topk_weights_ptr, bias_ptrs[0], bias_ptrs[1],
-                       combined_rdma_head.data_ptr<int>(),
-                       combined_nvl_head.data_ptr<int>(), src_meta.data_ptr(),
-                       rdma_channel_prefix_matrix.data_ptr<int>(),
-                       rdma_rank_prefix_sum.data_ptr<int>(),
-                       gbl_channel_prefix_matrix.data_ptr<int>(), num_tokens,
-                       num_combined_tokens, hidden, num_topk, rdma_buffer_ptr,
-                       config.num_max_rdma_chunked_send_tokens,
-                       config.num_max_rdma_chunked_recv_tokens, buffer_ptrs_gpu,
-                       config.num_max_nvl_chunked_send_tokens,
-                       config.num_max_nvl_chunked_recv_tokens, rank, num_ranks,
-                       comm_stream, num_channels, low_latency_mode);
+    uccl::internode::combine(
+        at::cuda::ScalarTypeToCudaDataType(x.scalar_type()),
+        combined_x.data_ptr(), combined_topk_weights_ptr,
+        is_combined_token_in_rank.data_ptr<bool>(), x.data_ptr(),
+        topk_weights_ptr, bias_ptrs[0], bias_ptrs[1],
+        combined_rdma_head.data_ptr<int>(), combined_nvl_head.data_ptr<int>(),
+        src_meta.data_ptr(), rdma_channel_prefix_matrix.data_ptr<int>(),
+        rdma_rank_prefix_sum.data_ptr<int>(),
+        gbl_channel_prefix_matrix.data_ptr<int>(), num_tokens,
+        num_combined_tokens, hidden, num_topk, rdma_buffer_ptr,
+        config.num_max_rdma_chunked_send_tokens,
+        config.num_max_rdma_chunked_recv_tokens, buffer_ptrs_gpu,
+        config.num_max_nvl_chunked_send_tokens,
+        config.num_max_nvl_chunked_recv_tokens, rank, num_ranks, comm_stream,
+        num_channels, low_latency_mode);
 
     // Wait streams
     std::optional<EventHandle> event;
@@ -882,12 +886,13 @@ class Buffer {
     auto check_boundary = [=](void* ptr, size_t num_bytes) {
       auto offset = reinterpret_cast<int64_t>(ptr) -
                     reinterpret_cast<int64_t>(rdma_buffer_ptr);
-      EP_HOST_ASSERT(0 <= offset and offset + num_bytes <= num_rdma_bytes);
+      EP_HOST_ASSERT(0 <= offset &&
+                     offset + num_bytes <= static_cast<size_t>(num_rdma_bytes));
     };
     check_boundary(clean_meta_0.first, clean_meta_0.second * sizeof(int));
     check_boundary(clean_meta_1.first, clean_meta_1.second * sizeof(int));
 
-    internode_ll::clean_low_latency_buffer(
+    uccl::internode_ll::clean_low_latency_buffer(
         clean_meta_0.first, clean_meta_0.second, clean_meta_1.first,
         clean_meta_1.second, at::cuda::getCurrentCUDAStream());
 #else
@@ -1325,6 +1330,9 @@ class Buffer {
   torch::Stream get_comm_stream() const { return comm_stream; }
 
   bool is_available() const { return available; }
+  bool is_internode_available() const {
+    return is_available() and num_ranks > NUM_MAX_NVL_PEERS;
+  }
 
  private:
   int rank{0};
@@ -1357,7 +1365,7 @@ class Buffer {
 
   // MoE counters (host mapped)
   int volatile* moe_recv_counter = nullptr;
-  int64_t* moe_recv_counter_mapped{nullptr};  // device pointer
+  int* moe_recv_counter_mapped{nullptr};  // device pointer
   int* moe_recv_expert_counter{nullptr};
   int* moe_recv_expert_counter_mapped{nullptr};
   int* moe_recv_rdma_counter{nullptr};
@@ -1377,16 +1385,14 @@ class Buffer {
 PYBIND11_MODULE(ep, m) {
   m.doc() = "Minimal DeepEP-compatible shim with UCCL";
 
-  pybind11::class_<deep_ep::Config>(m, "Config")
+  pybind11::class_<Config>(m, "Config")
       .def(pybind11::init<int, int, int, int, int>(), py::arg("num_sms") = 20,
            py::arg("num_max_nvl_chunked_send_tokens") = 6,
            py::arg("num_max_nvl_chunked_recv_tokens") = 256,
            py::arg("num_max_rdma_chunked_send_tokens") = 6,
            py::arg("num_max_rdma_chunked_recv_tokens") = 256)
-      .def("get_nvl_buffer_size_hint",
-           &deep_ep::Config::get_nvl_buffer_size_hint)
-      .def("get_rdma_buffer_size_hint",
-           &deep_ep::Config::get_rdma_buffer_size_hint);
+      .def("get_nvl_buffer_size_hint", &Config::get_nvl_buffer_size_hint)
+      .def("get_rdma_buffer_size_hint", &Config::get_rdma_buffer_size_hint);
 
   m.def(
       "register_proxy",

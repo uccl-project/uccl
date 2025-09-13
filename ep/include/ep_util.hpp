@@ -1,4 +1,5 @@
 #pragma once
+#include "exception.cuh"
 #include <ATen/cuda/CUDAContext.h>
 #include <ATen/cuda/CUDAEvent.h>
 #include <infiniband/verbs.h>
@@ -40,17 +41,6 @@
     }                                                                        \
   } while (0)
 #endif
-
-__device__ __forceinline__ int ld_acquire_global(int const* ptr) {
-  int ret;
-  asm volatile("ld.acquire.gpu.global.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
-  return ret;
-}
-
-__device__ __forceinline__ void st_release_sys_global(int const* ptr, int val) {
-  asm volatile("st.release.sys.global.s32 [%0], %1;" ::"l"(ptr), "r"(val)
-               : "memory");
-}
 
 inline void drain_cq(ibv_cq* cq, int empty_rounds_target = 5) {
   if (!cq) return;
