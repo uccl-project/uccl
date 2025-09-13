@@ -541,7 +541,7 @@ class Buffer {
           comm_stream,
           config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4),
                                            num_ranks),
-          num_nvl_bytes, low_latency_mode);
+          num_nvl_bytes, low_latency_mode, d_ring_addrs, num_ring_addrs);
 
       // Synchronize total received tokens and tokens per expert
       auto start_time = std::chrono::high_resolution_clock::now();
@@ -642,7 +642,8 @@ class Buffer {
         config.num_max_rdma_chunked_recv_tokens, buffer_ptrs_gpu,
         config.num_max_nvl_chunked_send_tokens,
         config.num_max_nvl_chunked_recv_tokens, rank, num_ranks, cached_mode,
-        comm_stream, num_channels, low_latency_mode);
+        comm_stream, num_channels, low_latency_mode, d_ring_addrs,
+        num_ring_addrs, atomic_buffer_ptr);
 
     // Wait streams
     std::optional<EventHandle> event;
@@ -839,7 +840,8 @@ class Buffer {
         config.num_max_rdma_chunked_recv_tokens, buffer_ptrs_gpu,
         config.num_max_nvl_chunked_send_tokens,
         config.num_max_nvl_chunked_recv_tokens, rank, num_ranks, comm_stream,
-        num_channels, low_latency_mode);
+        num_channels, low_latency_mode, d_ring_addrs, num_ring_addrs,
+        atomic_buffer_ptr);
 
     // Wait streams
     std::optional<EventHandle> event;
