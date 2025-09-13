@@ -88,11 +88,13 @@ __forceinline__ __device__ int translate_dst_rdma_rank(int const dst_rdma_rank,
                          : dst_rdma_rank;
 }
 
-// template <bool kLowLatencyMode>
-// __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(const
-// nvshmem_team_t& rdma_team) {
-//     kLowLatencyMode ? void(nvshmem_sync(rdma_team)) : nvshmem_sync_all();
-// }
+#ifdef ZIMING_DEBUG
+template <bool kLowLatencyMode>
+__forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
+    nvshmem_team_t const& rdma_team) {
+  kLowLatencyMode ? void(nvshmem_sync(rdma_team)) : nvshmem_sync_all();
+}
+#endif
 
 template <bool kLowLatencyMode, int kNumRDMARanks>
 __global__ void notify_dispatch(
@@ -126,21 +128,25 @@ __global__ void notify_dispatch(
 
     // waiting for all previous inflight wrs to complete,
     // in case of rewriting cleared rdma_buffer
-    // auto qps_per_rdma_rank = ibgda_get_state()->num_rc_per_pe *
-    //                          ibgda_get_state()->num_devices_initialized;
-    // for (int i = thread_id; i < qps_per_rdma_rank * (kNumRDMARanks - 1);
-    //      i += num_threads) {
-    //   auto dst_rdma_rank =
-    //       (i / qps_per_rdma_rank + rdma_rank + 1) % kNumRDMARanks;
-    //   auto qp_id = i % qps_per_rdma_rank;
-    //   nvshmemi_ibgda_quiet(
-    //       translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank),
-    //       qp_id);
-    // }
+#ifdef ZIMING_DEBUG
+    auto qps_per_rdma_rank = ibgda_get_state()->num_rc_per_pe *
+                             ibgda_get_state()->num_devices_initialized;
+    for (int i = thread_id; i < qps_per_rdma_rank * (kNumRDMARanks - 1);
+         i += num_threads) {
+      auto dst_rdma_rank =
+          (i / qps_per_rdma_rank + rdma_rank + 1) % kNumRDMARanks;
+      auto qp_id = i % qps_per_rdma_rank;
+      nvshmemi_ibgda_quiet(
+          translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank),
+          qp_id);
+    }
+#endif
     __syncthreads();
 
-    // if (thread_id == 32)
-    //   nvshmem_sync_with_same_gpu_idx<kLowLatencyMode>(rdma_team);
+#ifdef ZIMING_DEBUG
+    if (thread_id == 32)
+      nvshmem_sync_with_same_gpu_idx<kLowLatencyMode>(rdma_team);
+#endif
     barrier_block<NUM_MAX_NVL_PEERS, true>(barrier_signal_ptrs, nvl_rank);
 
     // Send numbers of tokens per rank/expert to RDMA ranks
@@ -198,13 +204,17 @@ __global__ void notify_dispatch(
 
     // Wait previous operations to be finished
     if (thread_id < kNumRDMARanks and thread_id != rdma_rank)
-      // nvshmemi_ibgda_quiet(
-      //     translate_dst_rdma_rank<kLowLatencyMode>(thread_id, nvl_rank), 0);
-      __syncthreads();
+#ifdef ZIMING_DEBUG
+      nvshmemi_ibgda_quiet(
+          translate_dst_rdma_rank<kLowLatencyMode>(thread_id, nvl_rank), 0);
+#endif
+    __syncthreads();
 
     // Barrier
-    // if (thread_id == 0)
-    //   nvshmem_sync_with_same_gpu_idx<kLowLatencyMode>(rdma_team);
+#ifdef ZIMING_DEBUG
+    if (thread_id == 0)
+      nvshmem_sync_with_same_gpu_idx<kLowLatencyMode>(rdma_team);
+#endif
     __syncthreads();
 
     // NVL buffers
@@ -302,8 +312,10 @@ __global__ void notify_dispatch(
     }
 
     // Finally barrier
-    // if (thread_id == 32)
-    //   nvshmem_sync_with_same_gpu_idx<kLowLatencyMode>(rdma_team);
+#ifdef ZIMING_DEBUG
+    if (thread_id == 32)
+      nvshmem_sync_with_same_gpu_idx<kLowLatencyMode>(rdma_team);
+#endif
     barrier_block<NUM_MAX_NVL_PEERS>(barrier_signal_ptrs, nvl_rank);
   } else {
     // Calculate meta data
@@ -470,8 +482,10 @@ __global__ void __launch_bounds__(
   auto const rdma_rank = rank / NUM_MAX_NVL_PEERS,
              nvl_rank = rank % NUM_MAX_NVL_PEERS;
 
-  // EP_DEVICE_ASSERT(ibgda_get_state()->num_rc_per_pe == num_channels or
-  //                  ibgda_get_state()->num_rc_per_pe >= num_sms);
+#ifdef ZIMING_DEBUG
+  EP_DEVICE_ASSERT(ibgda_get_state()->num_rc_per_pe == num_channels or
+                   ibgda_get_state()->num_rc_per_pe >= num_sms);
+#endif
 
   auto const role_meta = [=]() -> std::pair<WarpRole, int> {
     if (is_forwarder) {
@@ -1384,22 +1398,26 @@ __global__ void cached_notify(
 
   // Using two SMs, which clean the RDMA/NVL buffer respectively
   if (sm_id == 0) {
-    //   auto qps_per_rdma_rank = ibgda_get_state()->num_rc_per_pe *
-    //                            ibgda_get_state()->num_devices_initialized;
-    //   for (int i = thread_id; i < qps_per_rdma_rank * (num_rdma_ranks - 1);
-    //        i += num_threads) {
-    //     auto dst_rdma_rank =
-    //         (i / qps_per_rdma_rank + rdma_rank + 1) % num_rdma_ranks;
-    //     auto qp_id = i % qps_per_rdma_rank;
-    //     nvshmemi_ibgda_quiet(
-    //         translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank,
-    //         nvl_rank), qp_id);
-    //   }
+#ifdef ZIMING_DEBUG
+    auto qps_per_rdma_rank = ibgda_get_state()->num_rc_per_pe *
+                             ibgda_get_state()->num_devices_initialized;
+    for (int i = thread_id; i < qps_per_rdma_rank * (num_rdma_ranks - 1);
+         i += num_threads) {
+      auto dst_rdma_rank =
+          (i / qps_per_rdma_rank + rdma_rank + 1) % num_rdma_ranks;
+      auto qp_id = i % qps_per_rdma_rank;
+      nvshmemi_ibgda_quiet(
+          translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank),
+          qp_id);
+    }
+#endif
     __syncthreads();
 
     // Barrier for RDMA
-    // if (thread_id == 32)
-    //   nvshmem_sync_with_same_gpu_idx<kLowLatencyMode>(rdma_team);
+#ifdef ZIMING_DEBUG
+    if (thread_id == 32)
+      nvshmem_sync_with_same_gpu_idx<kLowLatencyMode>(rdma_team);
+#endif
 
     // Barrier for NVL
     barrier_block<NUM_MAX_NVL_PEERS, true>(barrier_signal_ptrs, nvl_rank);
@@ -1418,8 +1436,10 @@ __global__ void cached_notify(
     __syncthreads();
 
     // Barrier again
-    // if (thread_id == 32)
-    //   nvshmem_sync_with_same_gpu_idx<kLowLatencyMode>(rdma_team);
+#ifdef ZIMING_DEBUG
+    if (thread_id == 32)
+      nvshmem_sync_with_same_gpu_idx<kLowLatencyMode>(rdma_team);
+#endif
 
     barrier_block<NUM_MAX_NVL_PEERS>(barrier_signal_ptrs, nvl_rank);
   } else if (sm_id == 1) {
