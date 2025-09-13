@@ -12,7 +12,7 @@ import torch.distributed as dist
 import numpy as np
 
 try:
-    import p2p
+    from uccl import p2p
 except ImportError as exc:
     sys.stderr.write("Failed to import p2p\n")
     raise
