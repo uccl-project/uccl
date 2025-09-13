@@ -81,10 +81,6 @@ class Proxy {
   void post_gpu_command(uint64_t& my_tail, size_t& seen);
   void post_gpu_commands_mixed(std::vector<uint64_t> const& wrs_to_post,
                                std::vector<TransferCmd> const& cmds_to_post);
-  void post_atomic_operations(std::vector<uint64_t> const& wrs_to_post,
-                              std::vector<TransferCmd> const& cmds_to_post,
-                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                              int my_rank);
   Config cfg_;
   RDMAConnectionInfo local_info_{}, remote_info_{};
 
