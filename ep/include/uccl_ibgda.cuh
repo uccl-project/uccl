@@ -22,8 +22,8 @@ namespace uccl {
 // be say 64 (= number of experts), but the number of ring buffers is small (say
 // 6).
 __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
-    uint64_t req_rptr, uint64_t req_lptr, size_t bytes, int dst_rank, int warp_id,
-    int lane_id, int message_idx, uint64_t const* ring_addrs,
+    uint64_t req_rptr, uint64_t req_lptr, size_t bytes, int dst_rank,
+    int warp_id, int lane_id, int message_idx, uint64_t const* ring_addrs,
     int num_ring_addrs, bool is_combine) {
   // NOTE(MaoZiming): different from the nvshmemi_ibgda_put_nbi_warp in
   // ibgda_device.cuh, we don't do warp-cooperation.
