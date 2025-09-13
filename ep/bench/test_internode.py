@@ -1,3 +1,25 @@
+"""
+This is the same test_internode.py test in DeepEP's repo.
+
+On first node:
+torchrun --nnodes=2 --nproc_per_node=1 --node_rank=0 \
+  --master_addr=10.1.227.34 --master_port=12355 \
+  bench/test_internode.py --num-tokens=4096 \
+  --hidden=7168 --num-topk=8 --num-experts=256
+
+On second node:
+torchrun --nnodes=2 --nproc_per_node=1 --node_rank=1 \
+  --master_addr=10.1.227.34 --master_port=12355 \
+  bench/test_internode.py --num-tokens=4096 \
+  --hidden=7168 --num-topk=8 --num-experts=256
+
+This benchmark verifies:
+  * Dispatch and combine correctness for BF16/FP8
+  * Top-k routing and per-expert token distribution
+  * Compatibility with cached dispatch and low-latency kernels
+  * Performance tuning for NVL and RDMA chunk sizes
+"""
+
 import argparse
 import os
 import time
@@ -15,12 +37,14 @@ from utils import (
     inplace_unique,
     per_token_cast_to_fp8,
     per_token_cast_back,
+    initialize_uccl,
+    destroy_uccl,
 )
 
 # Test compatibility with low latency functions
 import test_low_latency
 from buffer import Buffer
-from uccl import Config
+from uccl.ep import Config
 
 
 # noinspection PyShadowingNames
@@ -427,15 +451,33 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     num_qps_per_rank = max(
         num_sms, ll_num_experts // num_ranks if args.test_ll_compatibility else 0
     )
+    num_rdma_bytes = int(2e9)
+    num_nvlink_bytes = int(1e9)
+
+    # UCCL new code for initialization
+    device_index = int(os.environ["LOCAL_RANK"])
+    scratch = torch.zeros(
+        num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
+    )
+    proxies, workers = initialize_uccl(scratch, num_rdma_bytes, rank, num_ranks, group)
 
     buffer = Buffer(
         group,
-        int(2e9),
-        int(1e9),
+        scratch.data_ptr(),
+        num_rdma_bytes,
+        num_nvlink_bytes,
         low_latency_mode=args.test_ll_compatibility,
         num_qps_per_rank=num_qps_per_rank,
         explicitly_destroy=True,
     )
+    buffer.connect_atomic_buffer(proxies[0])
+
+    for proxy in proxies:
+        proxy.calculate_and_set_dispatch_recv_data_offset(
+            args.num_tokens, args.hiden, args.num_experts
+        )
+        proxy.set_atomic_buffer_ptr(proxies[0].get_atomic_buffer_ptr())
+
     assert num_local_ranks == 8 and num_ranks > 8
     torch.manual_seed(rank)
 
@@ -470,7 +512,10 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         )
 
     # Destroy the buffer runtime and communication group
+    group.barrier()
     buffer.destroy()
+    dist.barrier()
+    destroy_uccl(proxies, workers)
     dist.barrier()
     dist.destroy_process_group()
 
