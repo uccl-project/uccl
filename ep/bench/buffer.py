@@ -1,18 +1,17 @@
 import os
 import torch
 import torch.distributed as dist
-from typing import Callable, Tuple, Optional, Union
+from typing import Callable, Tuple, Optional, Union, List
 
 try:
     from uccl import ep
-    from ep import EventHandle, Config
 except ImportError as exc:
     import sys
 
     sys.stderr.write("Failed to import uccl.ep\n")
     raise
 
-from uccl.ep import EventHandle
+from uccl.ep import EventHandle, Config
 from utils import EventOverlap, check_nvlink_connections
 
 

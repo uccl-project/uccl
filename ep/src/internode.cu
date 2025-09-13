@@ -13,7 +13,9 @@ namespace uccl {
 
 namespace internode {
 
-// extern nvshmem_team_t cpu_rdma_team;
+#ifdef ZIMING_DEBUG
+extern nvshmem_team_t cpu_rdma_team;
+#endif
 
 struct SourceMeta {
   int src_rdma_rank, is_token_in_nvl_rank_bits;
