@@ -1,7 +1,6 @@
 #pragma once
 #include "ep_util.hpp"
 
-// TODO(MaoZiming): The whole thing is very nvidia-specific.
 __forceinline__ __device__ int get_lane_id() {
   int lane_id;
   asm("mov.s32 %0, %laneid;" : "=r"(lane_id));
@@ -235,6 +234,44 @@ __device__ __forceinline__ dtype_t ld_nc_global(dtype_t const* ptr) {
   return *reinterpret_cast<dtype_t*>(&ret);
 }
 
+__device__ __forceinline__ float ld_cg_global(float const* p) {
+  float v;
+  asm volatile("ld.global.cg.f32 %0, [%1];" : "=f"(v) : "l"(p));
+  return v;
+}
+
+__device__ __forceinline__ int ld_cg_global(int const* p) {
+  int v;
+  asm volatile("ld.global.cg.s32 %0, [%1];" : "=r"(v) : "l"(p));
+  return v;
+}
+
+__device__ __forceinline__ uint2 ld_cg_global(uint2 const* p) {
+  uint2 v;
+  asm volatile("ld.global.cg.v2.u32 {%0,%1}, [%2];"
+               : "=r"(v.x), "=r"(v.y)
+               : "l"(p));
+  return v;
+}
+
+__device__ __forceinline__ int4 ld_cg_global(int4 const* p) {
+  int4 v;
+  asm volatile("ld.global.cg.v4.b32 {%0,%1,%2,%3}, [%4];"
+               : "=r"(v.x), "=r"(v.y), "=r"(v.z), "=r"(v.w)
+               : "l"(p));
+  return v;
+}
+
+__device__ __forceinline__ void st_cg_global(int* p, int v) {
+  asm volatile("st.global.cg.s32 [%0], %1;" : : "l"(p), "r"(v));
+}
+
+__device__ __forceinline__ void st_cg_global(int4* p, int4 v) {
+  asm volatile("st.global.cg.v4.b32 [%0], {%1,%2,%3,%4};"
+               :
+               : "l"(p), "r"(v.x), "r"(v.y), "r"(v.z), "r"(v.w));
+}
+
 template <typename dtype_t>
 __device__ __forceinline__ void st_na_global(dtype_t const* ptr,
                                              dtype_t const& value) {
@@ -312,8 +349,6 @@ __device__ __forceinline__ int atomic_add_release_global(int const* ptr,
   return ret;
 }
 
-#ifndef DISABLE_SM90_FEATURES
-
 __device__ __forceinline__ uint32_t elect_one_sync(int lane_id) {
   uint32_t pred = 0;
   asm volatile(
@@ -329,4 +364,14 @@ __device__ __forceinline__ uint32_t elect_one_sync(int lane_id) {
   return pred;
 }
 
-#endif
+__device__ inline void sync_barrier(int barrier_id, int num_threads) {
+  asm volatile("bar.sync %0, %1;" : : "r"(barrier_id), "r"(num_threads));
+}
+
+__device__ inline void sync_barrier_1(int num_threads) {
+  asm volatile("bar.sync 1, %0;" ::"r"(num_threads));
+}
+
+__device__ inline void sys_membar() {
+  asm volatile("membar.sys;" ::: "memory");
+}

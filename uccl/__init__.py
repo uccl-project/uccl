@@ -1,10 +1,19 @@
 import os
 
+try:
+    from . import _rocm_init
+except ModuleNotFoundError:
+    pass
+else:
+    _rocm_init.initialize()
+    del _rocm_init
+
 is_efa = "rdmap" in " ".join(os.listdir("/sys/class/infiniband/"))
 if not is_efa:
     try:
         from . import p2p
         from . import collective
+        from . import transfer
     except ImportError:
         pass
 

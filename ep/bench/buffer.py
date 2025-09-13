@@ -12,6 +12,7 @@ except ImportError as exc:
     sys.stderr.write("Failed to import uccl.ep\n")
     raise
 
+from uccl.ep import EventHandle
 from utils import EventOverlap, check_nvlink_connections
 
 
@@ -94,7 +95,6 @@ class Buffer:
         ] * self.group_size
         local_device_id = self.runtime.get_local_device_id()
         dist.all_gather_object(device_ids, local_device_id, group)
-
         # Synchronize IPC handles
         ipc_handles = [
             None,
@@ -146,7 +146,13 @@ class Buffer:
         self.runtime.sync(device_ids, ipc_handles, root_unique_id)
         assert self.runtime.is_available()
 
-    # NOTE: UCCL new.
+    def reset_rdma_buffer(self):
+        """
+        Reset the RDMA buffer, this is useful when you want to reuse the RDMA buffer for another run.
+
+        """
+        self.runtime.reset_rdma_buffer()
+
     def connect_atomic_buffer(self, proxy: "ep.UcclProxy"):
         ep.connect_atomic_buffer(proxy, self.runtime)
 
