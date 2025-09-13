@@ -1482,9 +1482,6 @@ PYBIND11_MODULE(ep, m) {
       .def("get_num_rdma_ranks", &Buffer::get_num_rdma_ranks)
       .def("get_rdma_rank", &Buffer::get_rdma_rank)
       .def("get_root_rdma_rank", &Buffer::get_root_rdma_rank)
-      // NOTE(MaoZiming): UCCL drops NVSHMEM
-      // .def("get_local_nvshmem_unique_id",
-      // &deep_ep::Buffer::get_local_nvshmem_unique_id)
       .def("get_local_buffer_tensor", &Buffer::get_local_buffer_tensor)
       .def("get_comm_stream", &Buffer::get_comm_stream)
       .def("get_local_uccl_shmem_unique_id",
