@@ -559,6 +559,7 @@ if __name__ == "__main__":
         args.num_topk_groups = min(num_nodes, 4)
 
     num_processes = args.num_processes
-    torch.multiprocessing.spawn(
-        test_loop, args=(num_processes, args), nprocs=num_processes
-    )
+    # NOTE: modified from deep_ep
+    local_rank = int(os.environ["LOCAL_RANK"])
+    num_local_ranks = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
+    test_loop(local_rank, num_local_ranks, args)
