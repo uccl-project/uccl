@@ -26,7 +26,7 @@ struct TransferCmd {
   // TODO(MaoZiming): Put the DeepEP fields here. Refactor.
   uint64_t req_rptr;
   uint64_t req_lptr;
-  int sm_id;
+  int warp_id;
   int lane_id;
   int message_idx;
   bool is_atomic;

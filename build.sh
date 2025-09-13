@@ -9,20 +9,21 @@ set -e
 # Usage:
 #   ./build.sh [cuda|rocm] [all|rdma|p2p|efa|ep] [py_version]
 #
-# The wheels are written to wheelhouse-[cuda|rocm]
+# The wheels are written to wheelhouse-[cuda|rocm|therock]
 # -----------------------
 
 TARGET=${1:-cuda}
 BUILD_TYPE=${2:-all}
 PY_VER=${3:-$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")}
 ARCH="$(uname -m)"
+GFX_VER=${4:-gfx94X-dcgpu}
 IS_EFA=$(ls /sys/class/infiniband/ | grep rdmap || true)
 
-if [[ $TARGET != "cuda" && $TARGET != "rocm" ]]; then
-  echo "Usage: $0 [cuda|rocm] [all|rdma|p2p|efa|ep] [py_version]" >&2
+if [[ $TARGET != "cuda" && $TARGET != "rocm" && $TARGET != "therock" ]]; then
+  echo "Usage: $0 [cuda|rocm|therock] [all|rdma|p2p|efa|ep] [py_version] [gfx_version]" >&2
 fi
 
-if [[ $ARCH == "aarch64" && $TARGET == "rocm" ]]; then
+if [[ $ARCH == "aarch64" && ( $TARGET == "rocm" || $TARGET == "therock" ) ]]; then
   echo "Skipping ROCm build on Arm64 (no ROCm toolchain)."
   exit 1
 fi
@@ -62,6 +63,20 @@ build_rdma() {
     fi
     cd rdma && make clean -f MakefileHip && make -j$(nproc) -f MakefileHip && cd ..
     TARGET_SO=rdma/librccl-net-uccl.so
+  elif [[ "$TARGET" == "therock" ]]; then
+    if [[ "$ARCH" == "aarch64" ]]; then
+      echo "Skipping ROCm build on Arm64 (no ROCm toolchain)."
+      return
+    fi
+    # Unlike CUDA, ROCM does not include nccl.h. So we need to build rccl to get nccl.h.
+    if [[ ! -f "thirdparty/rccl/build/release/include/nccl.h" ]]; then
+      cd thirdparty/rccl
+      # Just to get nccl.h, not the whole library
+      CXX=hipcc cmake -B build/release -S . -DCMAKE_EXPORT_COMPILE_COMMANDS=OFF -DCMAKE_PREFIX_PATH=$(rocm-sdk path --cmake) -DROCM_PATH=$(rocm-sdk path --root) -DHIP_PLATFORM=amd >/dev/null 2>&1 || true
+      cd ../..
+    fi
+    cd rdma && make clean -f MakefileHip.therock && make -j$(nproc) -f MakefileHip.therock HIP_HOME=$(rocm-sdk path --root) CONDA_LIB_HOME=$VIRTUAL_ENV/lib && cd ..
+    TARGET_SO=rdma/librccl-net-uccl.so
   fi
 
   echo "[container] Copying RDMA .so to uccl/lib/"
@@ -77,7 +92,7 @@ build_efa() {
   set -euo pipefail
   echo "[container] build_efa Target: $TARGET"
 
-  if [[ "$ARCH" == "aarch64" || "$TARGET" == "rocm" ]]; then
+  if [[ "$ARCH" == "aarch64" || "$TARGET" == "rocm" || "$TARGET" == "therock" ]]; then
     echo "Skipping EFA build on Arm64 (no EFA installer) or ROCm (no CUDA)."
     return
   fi
@@ -107,6 +122,8 @@ build_p2p() {
     make clean && make -j$(nproc)
   elif [[ "$TARGET" == "rocm" ]]; then
     make clean -f MakefileHip && make -j$(nproc) -f MakefileHip
+  elif [[ "$TARGET" == "therock" ]]; then
+    make clean -f MakefileHip.therock && make -j$(nproc) -f MakefileHip.therock HIP_HOME=$(rocm-sdk path --root) CONDA_LIB_HOME=$VIRTUAL_ENV/lib
   fi
   cd ..
 
@@ -127,7 +144,7 @@ build_ep() {
   set -euo pipefail
   echo "[container] build_ep Target: $TARGET"
 
-  if [[ "$TARGET" == "rocm" ]]; then
+  if [[ "$TARGET" == "rocm" || "$TARGET" == "therock" ]]; then
     echo "Skipping GPU-driven build on ROCm (no GPU-driven support yet)."
     return
   fi
@@ -154,11 +171,17 @@ if [[ $TARGET == "cuda" ]]; then
 elif [[ $TARGET == "rocm" ]]; then
   DOCKERFILE="docker/Dockerfile.rocm"
   IMAGE_NAME="uccl-builder-rocm"
+elif [[ $TARGET == "therock" ]]; then
+  DOCKERFILE="docker/Dockerfile.therock"
+  IMAGE_NAME="uccl-builder-therock"
 fi
 
 # Build the builder image (contains toolchain + CUDA/ROCm)
 echo "[1/3] Building Docker image ${IMAGE_NAME} using ${DOCKERFILE}..."
 echo "Python version: ${PY_VER}"
+if [[ "$TARGET" == "therock" ]]; then
+  echo "GFX version: ${GFX_VER}"
+fi
 if [[ "$ARCH" == "aarch64" ]]; then
   docker build --platform=linux/arm64 --build-arg PY_VER="${PY_VER}" -t "$IMAGE_NAME" -f "$DOCKERFILE" .
 else
@@ -173,6 +196,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -v "$(pwd)":/io \
   -e TARGET="${TARGET}" \
   -e ARCH="${ARCH}" \
+  -e GFX_VER="${GFX_VER}" \
   -e IS_EFA="${IS_EFA}" \
   -e WHEEL_DIR="${WHEEL_DIR}" \
   -e BUILD_TYPE="${BUILD_TYPE}" \
@@ -180,6 +204,15 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
     set -euo pipefail
+
+    if [[ "$TARGET" == "therock" ]]; then
+      # Python environment with ROCm from TheRock
+      python3 -m venv /tmp/venv && . /tmp/venv/bin/activate
+      pip3 install --no-cache-dir --upgrade pip
+      pip3 install --no-cache-dir build auditwheel pybind11
+      pip3 install --no-cache-dir rocm[libraries,devel] --index-url https://rocm.nightlies.amd.com/v2/${GFX_VER}
+    fi
+
     eval "$FUNCTION_DEF"
 
     if [[ "$TARGET" == "rocm" ]]; then
@@ -203,11 +236,40 @@ docker run --rm --user "$(id -u):$(id -g)" \
 
     ls -lh uccl/
     ls -lh uccl/lib/
+
+    # Emit TheRock init code
+    if [[ "$TARGET" == "therock" ]]; then
+      echo "
+def initialize():
+  import rocm_sdk
+  rocm_sdk.initialize_process(preload_shortnames=[
+    \"amd_comgr\",
+    \"amdhip64\",
+    \"roctx64\",
+    \"hiprtc\",
+    \"hipblas\",
+    \"hipfft\",
+    \"hiprand\",
+    \"hipsparse\",
+    \"hipsolver\",
+    \"rccl\",
+    \"hipblaslt\",
+    \"miopen\",
+  ],
+  check_version=\"$(rocm-sdk version)\")
+" > uccl/_rocm_init.py
+
+      # Emit UCCL package dependence on TheRock
+      sed -i "s/\"rocm\": \[\],/\"rocm\": \[\"rocm\[libraries\]==$(rocm-sdk version)\"\]/;" setup.py
+
+      export PIP_EXTRA_INDEX_URL=https://rocm.nightlies.amd.com/v2/${GFX_VER}
+    fi
+
     python3 -m build
-    auditwheel repair dist/uccl-*.whl --exclude "libtorch*.so" --exclude "libc10*.so" --exclude "libibverbs.so.1" --exclude "libcudart.so.12" --exclude "libamdhip64.so.6" -w /io/${WHEEL_DIR}
+    auditwheel repair dist/uccl-*.whl --exclude "libtorch*.so" --exclude "libc10*.so" --exclude "libibverbs.so.1" --exclude "libcudart.so.12" --exclude "libamdhip64.so.*" -w /io/${WHEEL_DIR}
 
     # Add backend tag to wheel filename using local version identifier
-    if [[ "$TARGET" == "rocm" ]]; then
+    if [[ "$TARGET" == "rocm" || "$TARGET" == "therock" ]]; then
       cd /io/${WHEEL_DIR}
       for wheel in uccl-*.whl; do
         if [[ -f "$wheel" ]]; then

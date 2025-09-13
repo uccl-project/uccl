@@ -62,9 +62,11 @@ More UCCL features are under development in this repo, currently including:
 ## Quick Start
 
 The easiest way to use UCCL is to first build based on your platform. The build script will automatically detect the `py_version` of your current environment. If you need to compile UCCL for a specific python version, please specify the `py_version`, such as `3.10`. 
+When building for ROCm with python packaging through TheRock, please, specify your AMD GPU's gfx architecture. The default is `gfx94X-dcgpu` and it may not be what you want.
+When installing UCCL wheels for TheRock, please, add the optional extra `[rocm]` to the wheel, e.g., `python install wheelhouse-therock/uccl-0.0.1.post4+therock-py3-none-manylinux_2_35_x86_64.whl[rocm]` and provide pip with the extra index for your gfx arch ROCm packages, e.g. `--extra-index-url http://rocm.nightlies.amd.com/v2/gfx94X-dcgpu`.
 ```bash
 git clone https://github.com/uccl-project/uccl.git --recursive
-cd uccl && bash build_and_install.sh [cuda|rocm] [all|rdma|p2p|efa|ep] [py_version]
+cd uccl && bash build_and_install.sh [cuda|rocm|therock] [all|rdma|p2p|efa|ep] [py_version] [gfx_version]
 ```
 
 Then, when running your PyTorch applications, set the environment variable accordingly: 
