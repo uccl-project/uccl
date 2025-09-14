@@ -16,11 +16,14 @@
 
 ## About 
 
-UCCL is an efficient collective communication library for GPUs, focusing on: 
+UCCL is an efficient communication library for GPUs, covering collectives, P2P (e.g., KV cache transfer, RL weight transfer), and EP (e.g., IBGDA), with two key focuses: 
 * **Flexibility** for high performance in fast-evolving ML workloads
 * **Portability** for connecting heterogeneous GPUs in ML workloads
 
-UCCL serves as a drop-in replacement for NCCL/RCCL (e.g., requiring no changes to your PyTorch code), and significantly outperforms them in both latency and throughput across various settings. 
+For collectives, UCCL-collective serves as a drop-in replacement for NCCL/RCCL (e.g., requiring no changes to application code), and significantly outperforms them in both latency and throughput across various settings. 
+
+<details>
+<summary>Click here for details</summary>
 
 * On six HGX servers (across two racks) with 8x400G CX-7 RoCE NICs and 8xH100 GPUs, UCCL outperforms NCCL by up to **2.5x** for AllReduce:
   <p align="left"> <img src="./doc/images/allreduce_6_hgx.png" alt="" width="600"> </p>
@@ -28,9 +31,8 @@ UCCL serves as a drop-in replacement for NCCL/RCCL (e.g., requiring no changes t
 * On four AWS `p4d.24xlarge` instances with 4x100G EFA NICs and 8xA100 GPUs, UCCL outperforms NCCL by up to **3.3x** for AlltoAll: 
   <p align="left"> <img src="./doc/images/alltoall_4_p4d.png" alt="" width="600"> </p>
 
-* On two AWS `g4dn.8xlarge` instances with 1x50G ENA NICs and 1xT4 GPUs under the same cluster placement group, UCCL outperforms NCCL by up to **3.7x** for AllReduce: 
+* On two AWS `g4dn.8xlarge` instances with 1x50G ENA NICs and 1xT4 GPUs within the same cluster placement group, UCCL outperforms NCCL by up to **3.7x** for AllReduce: 
   <p align="left"> <img src="./doc/images/allreduce_2_g4dn.png" alt="" width="600"> </p>
-
 
 More specifically, UCCL aims to: 
 * rearchitect the CCL layer (while keeping NCCL APIs) to unleash the full potential of network hardware
@@ -44,19 +46,26 @@ Instead, UCCL employs packet spraying in software to leverage abundant network p
 More benefits include: 1) packet spraying with 256 paths, 2) advanced congestion control such as latency-based and receiver-driven ones, 3) efficient loss recovery by selective repeat, and 4) widely usable in public clouds with legacy NICs and Ethernet. 
 
 Feel free to check out our full [technical report](https://arxiv.org/pdf/2504.17307) and [slides](https://drive.google.com/file/d/1YsgMNPeCV797sYPiCWAT0AMfc0WgIhP0/view?usp=sharing).
+</details>
+
+For P2P, UCCL-P2P provides both NIXL-style initiator-target tranfer APIs and NCCL-style collective APIs, with the same or better performance than both. UCCL-P2P is purposely designed for the next-gen 800Gbps NICs with efficient multi-threaded transfer engines. 
+
+For EP, UCCL-EP allows running DeepEP atop of heterogeneous hardware platforms, including AMD and Nvidia GPUs, and any RDMA NICs such as AWS EFA NICs and Broadcom NICs, while achieving IBGDA-level performance. UCCL-EP also makes DeepEP SM-free, devoting all GPU SMs to compute. 
+
+UCCL has been adopted as part of the AMD [TheRock](https://github.com/ROCm/TheRock) ecosystem.
 
 ## Road Map
 
 More UCCL features are under development in this repo, currently including: 
-- [ ] Dynamic membership with GPU servers joining and exiting
-- [ ] More efficient KV cache transfer engine (e.g., better Mooncake)
-- [ ] Generic and SM-free GPU-initiated P2P (e.g., better DeepEP for MoE)
-  - [ ] Supporting all NIC vendors including Nvidia, AWS EFA, and Broadcom
-  - [ ] Avoiding burning precious GPU SMs
-- [ ] Re-architecting NCCL to unleash network hardware performance
-  - [ ] Scalable and efficient CPU proxy
+- [x] More efficient KV cache transfer engine (e.g., better Mooncake)
+- 🚧 Generic and SM-free GPU-initiated P2P (e.g., better DeepEP for MoE)
+  - 🚧 Supporting all NIC vendors including Nvidia, AWS EFA, and Broadcom
+  - 🚧 Avoiding burning precious GPU SMs
+- 🚧 Re-architecting NCCL to unleash network hardware performance
+  - 🚧 Scalable and efficient CPU proxy
   - [ ] Fast async collectives with compute-communication ordering guarantee
   - [ ] Device kernels in vendor-agnostic Triton language
+- [ ] Dynamic membership with GPU servers joining and exiting
 
 
 ## Quick Start
