@@ -17,9 +17,9 @@
 namespace uccl {
 
 // template <bool kAlwaysDoPostSend = false>
-// Note(MaoZiming): the warp_id here is used to tell which ring buffer to use.
-// The total concurrent warps can be say 64 (= number of experts), while the
-// number of ring buffers is small (say 6).
+// Note(MaoZiming, Yang): the warp_id here is used to tell which ring buffer to
+// use. The total concurrent warps can be say 64 (= number of experts), while
+// the number of ring buffers is small (say 6).
 __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     uint64_t req_rptr, uint64_t req_lptr, size_t bytes, int dst_rank,
     int warp_id, int lane_id, int message_idx, uint64_t const* ring_addrs,
@@ -79,24 +79,10 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   }
 }
 
-// NOTE(MaoZiming): Remove this. We don't need nvshmem and ibgda.
-#ifdef false
-__device__ __forceinline__ nvshmemi_ibgda_device_state_t* ibgda_get_state() {
-  return &nvshmemi_ibgda_device_state_d;
-}
-
-__device__ nvshmemi_ibgda_device_state_t nvshmemi_ibgda_device_state_d;
-
-struct nvshmemi_ibgda_device_state_t {
-  int _unused{0};
-  uint32_t num_rc_per_pe{0};
-};
-#endif
-
 // TODO(MaoZiming): Fix. This should be a non-fetch add operation. This could be
 // implemented with CPU proxy.
 __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
-    uint64_t rptr, int const& value, int dst_rank, int warp_id,
+    uint64_t rptr, int const& value, int dst_rank, int qp_id, int warp_id,
     bool is_local_copy = false, uint64_t const* ring_addrs = nullptr,
     int num_ring_addrs = 0, bool is_combine = true) {
   if (is_local_copy) {
