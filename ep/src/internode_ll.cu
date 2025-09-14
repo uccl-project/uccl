@@ -257,8 +257,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       uccl::nvshmemi_ibgda_amo_nonfetch_add(
           dst_ptr - reinterpret_cast<uint64_t>(atomic_buffer_ptr),
           -num_tokens_sent - 1, dst_rank,
-          warp_id,  // NOTE(MaoZiming): use warp_id for rb.
-          dst_expert_local_idx, false, ring_addrs, num_ring_addrs, true);
+          /*warp_id=*/dst_expert_local_idx,  // NOTE(yang): for selecting rb.
+          false, ring_addrs, num_ring_addrs, true);
 
     } else {
       // Intra-node: use direct atomic operation
@@ -783,8 +783,8 @@ __global__ __launch_bounds__(1024, 1) void combine(
         nvshmemi_ibgda_amo_nonfetch_add(
             dst_ptr - reinterpret_cast<uint64_t>(atomic_buffer_ptr), 1,
             dst_rank,
-            warp_id,  // NOTE(MaoZiming): use warp_id for rb
-            local_expert_idx, false, ring_addrs, num_ring_addrs, false);
+            /*warp_id=*/local_expert_idx,  // NOTE(yang): for selecting rb.
+            false, ring_addrs, num_ring_addrs, false);
       }
       atomic_add_release_global(atomic_clean_flag, -1);
     }
