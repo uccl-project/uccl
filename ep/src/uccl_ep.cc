@@ -355,7 +355,6 @@ class Buffer {
       int expert_alignment, uccl::Config const& config,
       std::optional<EventHandle>& previous_event, bool async,
       bool allocate_on_comm_stream) {
-#ifndef DISABLE_NVSHMEM
     // In dispatch, CPU will busy-wait until GPU receive tensor size metadata
     // from other ranks, which can be quite long. If users of DeepEP need to
     // execute other Python code on other threads, such as KV transfer, their
@@ -694,10 +693,6 @@ class Buffer {
             send_rdma_head,
             send_nvl_head,
             event};
-#else
-    EP_HOST_ASSERT(false and "NVSHMEM is disabled during compilation");
-    return {};
-#endif
   }
 
   std::tuple<torch::Tensor, std::optional<torch::Tensor>,
@@ -716,7 +711,6 @@ class Buffer {
                     uccl::Config const& config,
                     std::optional<EventHandle>& previous_event, bool async,
                     bool allocate_on_comm_stream) {
-#ifndef DISABLE_NVSHMEM
     int const num_channels = config.num_sms / 2;
     EP_HOST_ASSERT(config.num_sms % 2 == 0);
 
@@ -872,10 +866,6 @@ class Buffer {
 
     // Return values
     return {combined_x, combined_topk_weights, event};
-#else
-    EP_HOST_ASSERT(false and "NVSHMEM is disabled during compilation");
-    return {};
-#endif
   }
 
   std::tuple<torch::Tensor, std::optional<torch::Tensor>,
@@ -1324,7 +1314,6 @@ class Buffer {
 
   void clean_low_latency_buffer(int num_max_dispatch_tokens_per_rank,
                                 int hidden, int num_experts) {
-#ifndef DISABLE_NVSHMEM
     EP_HOST_ASSERT(low_latency_mode);
 
     auto layout = uccl::LowLatencyLayout(rdma_buffer_ptr,
@@ -1345,9 +1334,6 @@ class Buffer {
     uccl::internode_ll::clean_low_latency_buffer(
         clean_meta_0.first, clean_meta_0.second, clean_meta_1.first,
         clean_meta_1.second, at::cuda::getCurrentCUDAStream());
-#else
-    EP_HOST_ASSERT(false and "NVSHMEM is disabled during compilation");
-#endif
   }
 
   std::tuple<torch::Tensor, std::optional<torch::Tensor>, torch::Tensor,
