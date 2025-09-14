@@ -1,8 +1,8 @@
 #include "buffer.cuh"
-#include "configs.cuh"
+#include "ep_configs.cuh"
+#include "ep_launch.cuh"
+#include "ep_utils.cuh"
 #include "exception.cuh"
-#include "launch.cuh"
-#include "utils.cuh"
 
 namespace uccl {
 

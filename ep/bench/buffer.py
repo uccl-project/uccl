@@ -5,7 +5,6 @@ from typing import Callable, Tuple, Optional, Union, List
 
 try:
     from uccl import ep
-    from ep import EventHandle, Config
 except ImportError as exc:
     import sys
 
@@ -85,8 +84,6 @@ class Buffer:
             low_latency_mode,
             explicitly_destroy,
         )
-
-        # NOTE: UCCL new
         self.runtime.set_rdma_buffer_raw(rdma_buffer_ptr)
 
         # Synchronize device IDs
