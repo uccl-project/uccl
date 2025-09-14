@@ -1,4 +1,5 @@
 #include "proxy.hpp"
+#include "ep_util.hpp"
 #include <arpa/inet.h>  // for htonl, ntohl
 #include <chrono>
 #include <thread>
@@ -78,14 +79,6 @@ void Proxy::init_common() {
   printf("[PROXY_INIT] Atomic buffer at %p, size %zu bytes\n",
          ctx_.atomic_old_values_buf, atomic_buf_size);
 
-  // Add to debug file for core issue tracking
-  FILE* debug_file = fopen("/tmp/uccl_debug.txt", "a");
-  if (debug_file) {
-    fprintf(debug_file,
-            "[PROXY_INIT] Block %d: remote_addr=0x%lx, local_buffer=0x%lx\n",
-            cfg_.block_idx, ctx_.remote_addr, (uintptr_t)cfg_.gpu_buffer);
-    fclose(debug_file);
-  }
   int num_ranks = ctxs_for_all_ranks_.size();
   local_infos_.assign(num_ranks, RDMAConnectionInfo{});
   remote_infos_.assign(num_ranks, RDMAConnectionInfo{});
@@ -93,13 +86,6 @@ void Proxy::init_common() {
   uint32_t next_tag = 1;
   ctx_by_tag_.clear();
   ctx_by_tag_.resize(ctxs_for_all_ranks_.size() + 1, nullptr);
-  cudaError_t err =
-      cudaStreamCreateWithFlags(&ctx_.atomic_stream, cudaStreamNonBlocking);
-  if (err != cudaSuccess) {
-    fprintf(stderr, "cudaStreamCreateWithFlags failed: %s\n",
-            cudaGetErrorString(err));
-    std::abort();
-  }
   // Per peer QP initialization
   for (int peer = 0; peer < num_ranks; ++peer) {
     auto& c = *ctxs_for_all_ranks_[peer];
@@ -115,8 +101,6 @@ void Proxy::init_common() {
     // NOTE(MaoZiming): each context can share the same cq, pd, mr.
     // but the qp must be different.
     c.cq = ctx_.cq;
-    c.atomic_stream = ctx_.atomic_stream;
-
     create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
                          &local_infos_[peer], my_rank);
     modify_qp_to_init(c);
@@ -203,7 +187,7 @@ void Proxy::run_sender() {
   size_t seen = 0;
   uint64_t my_tail = 0;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    local_poll_completions(ctx_, finished_wrs_, finished_wrs_mutex_,
+    local_poll_completions(ctx_, finished_wrs_, acked_wrs_, finished_wrs_mutex_,
                            cfg_.block_idx, ctx_by_tag_);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
@@ -235,38 +219,33 @@ void Proxy::run_dual() {
   }
   uint64_t my_tail = 0;
   size_t seen = 0;
-  printf("run_dual initialization complete\n");
+  // printf("run_dual initialization complete\n");
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    poll_cq_dual(ctx_, finished_wrs_, finished_wrs_mutex_, cfg_.block_idx, ring,
-                 ctx_by_tag_, atomic_buffer_ptr_);
+    poll_cq_dual(ctx_, finished_wrs_, acked_wrs_, finished_wrs_mutex_,
+                 cfg_.block_idx, ring, ctx_by_tag_, atomic_buffer_ptr_);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
   }
 }
 
 void Proxy::notify_gpu_completion(uint64_t& my_tail) {
-#ifdef ASSUME_WR_IN_ORDER
   if (finished_wrs_.empty()) return;
+  if (acked_wrs_.empty()) return;
 
   std::lock_guard<std::mutex> lock(finished_wrs_mutex_);
   int check_i = 0;
   int actually_completed = 0;
 
   // Copy to iterate safely while erasing.
-  std::unordered_set<uint64_t> finished_copy(finished_wrs_.begin(),
-                                             finished_wrs_.end());
+  std::vector<uint64_t> finished_copy(finished_wrs_.begin(),
+                                      finished_wrs_.end());
+  std::sort(finished_copy.begin(), finished_copy.end());
   for (auto wr_id : finished_copy) {
-#ifdef SYNCHRONOUS_COMPLETION
-    // These are your existing global conditions.
-    if (!(ctx_.has_received_ack && ctx_.largest_completed_wr >= wr_id)) {
-      continue;
-    }
+    if (acked_wrs_.find(wr_id) == acked_wrs_.end()) break;
     finished_wrs_.erase(wr_id);
-#else
-    finished_wrs_.erase(wr_id);
-#endif
+    acked_wrs_.erase(wr_id);
     // Clear ring entry (contiguity assumed)
-    cfg_.rb->buf[(my_tail + check_i) & kQueueMask].cmd = 0;
+    cfg_.rb->volatile_store_cmd(my_tail + check_i, 0);
     check_i++;
 
     auto it = wr_id_to_start_time_.find(wr_id);
@@ -281,17 +260,9 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
     completion_count_++;
     actually_completed++;
   }
-
+  if (!actually_completed) return;
   my_tail += actually_completed;
-#ifndef SYNCHRONOUS_COMPLETION
-  finished_wrs_.clear();
-#endif
-  // cfg_.rb->tail = my_tail;
   cfg_.rb->cpu_volatile_store_tail(my_tail);
-#else
-  printf("ASSUME_WR_IN_ORDER is not defined. This is not supported.\n");
-  std::abort();
-#endif
 }
 
 void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
@@ -302,6 +273,8 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
     return;
   }
   size_t batch_size = cur_head - seen;
+  if (batch_size == 0) return;
+
   std::vector<uint64_t> wrs_to_post;
   wrs_to_post.reserve(batch_size);
   std::vector<TransferCmd> cmds_to_post;
@@ -436,154 +409,86 @@ void Proxy::post_gpu_commands_mixed(
   // Handle regular RDMA writes
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
-                            rdma_cmds, ctxs_for_all_ranks_, cfg_.rank);
+                            rdma_cmds, ctxs_for_all_ranks_, cfg_.rank,
+                            cfg_.block_idx, finished_wrs_, finished_wrs_mutex_);
   }
   if (!atomic_wrs.empty()) {
-#ifdef EFA
-    post_atomic_operations_efa(ctx_, atomic_wrs, atomic_cmds,
-                               ctxs_for_all_ranks_, cfg_.rank);
-#else
-    post_atomic_operations(atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
-                           cfg_.rank);
-#endif
+    post_atomic_operations(ctx_, atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
+                           cfg_.rank, cfg_.block_idx, finished_wrs_,
+                           finished_wrs_mutex_, acked_wrs_);
   }
 }
 
-void Proxy::post_atomic_operations(std::vector<uint64_t> const& wrs_to_post,
-                                   std::vector<TransferCmd> const& cmds_to_post,
-                                   std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                                   int my_rank) {
-  // Use RDMA hardware atomic operations directly on remote GPU memory
+void Proxy::destroy(bool free_gpu_buffer) {
+  ctx_.progress_run.store(false, std::memory_order_release);
+  cudaDeviceSynchronize();
 
-  if (cmds_to_post.size() > ProxyCtx::kMaxAtomicOps) {
-    fprintf(stderr, "Too many atomic operations: %zu > %zu\n",
-            cmds_to_post.size(), ProxyCtx::kMaxAtomicOps);
-    std::abort();
+  for (auto& ctx_ptr : ctxs_for_all_ranks_) {
+    if (!ctx_ptr) continue;
+    qp_to_error(ctx_ptr->qp);
+    qp_to_error(ctx_ptr->ack_qp);
   }
 
-  std::unordered_map<int, std::vector<size_t>> dst_rank_wr_ids;
-  for (size_t i = 0; i < wrs_to_post.size(); ++i) {
-    if (cmds_to_post[i].dst_rank == static_cast<uint32_t>(my_rank)) {
-      // NOTE(MaoZiming): this should not happen.
-      std::abort();
-      continue;
-    } else {
-      dst_rank_wr_ids[cmds_to_post[i].dst_rank].push_back(i);
+  drain_cq(ctx_.cq);
+
+  for (auto& ctx_ptr : ctxs_for_all_ranks_) {
+    if (!ctx_ptr) continue;
+    if (ctx_ptr->qp) {
+      ibv_destroy_qp(ctx_ptr->qp);
+      ctx_ptr->qp = nullptr;
+    }
+    if (ctx_ptr->ack_qp) {
+      ibv_destroy_qp(ctx_ptr->ack_qp);
+      ctx_ptr->ack_qp = nullptr;
     }
   }
+  ring.ack_qp = nullptr;
 
-  for (auto& [dst_rank, wr_ids] : dst_rank_wr_ids) {
-    if (wr_ids.empty()) continue;
+  drain_cq(ctx_.cq);
 
-    ProxyCtx* ctx = ctxs[dst_rank].get();
-    if (!ctx || !ctx->qp || !ctx->mr) {
-      fprintf(stderr, "Destination ctx missing fields for dst=%d\n", dst_rank);
-      std::abort();
-    }
-
-    const size_t k = wr_ids.size();
-    std::vector<ibv_send_wr> wrs(k);
-    std::vector<ibv_sge> sges(k);
-
-    for (size_t i = 0; i < k; ++i) {
-      auto const& cmd = cmds_to_post[wr_ids[i]];
-
-      // SGE for receiving the old value, using GPU memory!
-      // Place atomic buffers safely within MR bounds, starting from the end
-      uint64_t mr_start = reinterpret_cast<uintptr_t>(ctx->mr->addr);
-      uint64_t mr_end = mr_start + ctx->mr->length;
-
-      // TODO:yihan: modify the size later. Reserve 16KB at the end for atomic
-      // operations (sufficient for all threads, )
-      uint64_t atomic_region_start = mr_end - 16384;  // 16KB for atomic ops
-      uint64_t thread_offset =
-          cfg_.block_idx * 1024;  // 1KB per thread (reduced)
-      uint64_t sge_addr = atomic_region_start + thread_offset +
-                          i * sizeof(uint64_t);  // 64-bit aligned
-
-      sges[i] = {
-          .addr = sge_addr,
-          .length =
-              sizeof(uint64_t),  // 8-byte atomic operations (like rdma_test.cc)
-          .lkey = ctx->mr->lkey  // Now this matches - our own MR's lkey
-      };
-
-      // Verify atomic buffer is within bounds
-      if (sge_addr < mr_start || sge_addr + sizeof(uint64_t) > mr_end) {
-        printf("[ERROR] SGE addr 0x%lx exceeds MR bounds - ABORTING\n",
-               sge_addr);
-        std::abort();
-      }
-
-      std::memset(&wrs[i], 0, sizeof(wrs[i]));
-      wrs[i].wr_id = kAtomicWrTag;
-      wrs[i].sg_list = &sges[i];
-      wrs[i].num_sge = 1;
-
-      // Use RDMA atomic fetch_and_add
-      wrs[i].opcode = IBV_WR_ATOMIC_FETCH_AND_ADD;
-
-      int64_t signed_offset = static_cast<int64_t>(cmd.req_rptr);
-      bool is_combine_op = (cmd.value == 1);
-
-      uint64_t target_addr;
-      if (is_combine_op) {
-        // Combine operations: use direct offset from remote base
-        target_addr = ctx->remote_addr + signed_offset;
-      } else {
-        // Dispatch operations: use offset from dispatch_recv_data_offset
-        target_addr =
-            ctx->remote_addr + ctx_.dispatch_recv_data_offset + signed_offset;
-      }
-
-      // Validate target address
-      uint64_t remote_mr_end = ctx->remote_addr + ctx->mr->length;
-      if (target_addr < ctx->remote_addr ||
-          target_addr + sizeof(uint64_t) > remote_mr_end) {
-        printf(
-            "[ERROR] Atomic target 0x%lx outside MR bounds [0x%lx - 0x%lx] - "
-            "ABORTING\n",
-            target_addr, ctx->remote_addr, remote_mr_end);
-        std::abort();
-      }
-
-      if (target_addr % sizeof(uint64_t) != 0) {
-        printf("[ERROR] Atomic target 0x%lx not 8-byte aligned - ABORTING\n",
-               target_addr);
-        std::abort();
-      }
-
-      wrs[i].wr.atomic.remote_addr = target_addr;
-      wrs[i].wr.atomic.rkey = ctx->remote_rkey;
-      // For 64-bit atomic operations with signed values
-      // RDMA fetch_and_add supports signed addition - negative values are part
-      // of the protocol! Negative values indicate token counts:
-      // -num_tokens_sent - 1 The receiver expects negative values to detect
-      // completion and recover token count
-
-      // Convert signed int to unsigned 64-bit while preserving the bit pattern
-      // This allows negative values to be correctly added by RDMA hardware
-      uint64_t increment_value =
-          static_cast<uint64_t>(static_cast<int64_t>(cmd.value));
-
-      wrs[i].wr.atomic.compare_add = increment_value;
-      wrs[i].send_flags = IBV_SEND_SIGNALED;
-      wrs[i].next = (i + 1 < cmds_to_post.size()) ? &wrs[i + 1] : nullptr;
-
-      // Key info: what we're sending where
-      printf("[ATOMIC_SEND] → 0x%lx: %d\n", wrs[i].wr.atomic.remote_addr,
-             cmd.value);
-    }
-
-    ibv_send_wr* bad = nullptr;
-    int ret = ibv_post_send(ctx->qp, &wrs[0], &bad);
-    if (ret) {
-      fprintf(stderr, "RDMA atomic operations failed: %s (ret=%d)\n",
-              strerror(ret), ret);
-      if (bad)
-        fprintf(stderr, "Bad atomic WR at %p (wr_id=%lu)\n", (void*)bad,
-                bad->wr_id);
-      std::abort();
-    }
+  if (ctx_.cq) {
+    ibv_destroy_cq(ctx_.cq);
+    ctx_.cq = nullptr;
   }
+
+  auto dereg = [&](ibv_mr*& mr) {
+    if (!mr) return;
+    for (int i = 0; i < 5; ++i) {
+      int ret = ibv_dereg_mr(mr);
+      if (ret == 0) {
+        mr = nullptr;
+        return;
+      }
+      fprintf(stderr, "[destroy] ibv_dereg_mr ret=%d (%s), attempt=%d\n", ret,
+              strerror(ret), i + 1);
+      std::this_thread::sleep_for(std::chrono::milliseconds(2 << i));
+    }
+  };
+  dereg(ring.ack_mr);
+  dereg(ctx_.mr);
+
+  if (free_gpu_buffer && cfg_.gpu_buffer) {
+    cudaError_t e = cudaFree(cfg_.gpu_buffer);
+    if (e != cudaSuccess)
+      fprintf(stderr, "[destroy] cudaFree failed: %s\n", cudaGetErrorString(e));
+    else
+      cfg_.gpu_buffer = nullptr;
+  }
+
+  if (ctx_.pd) {
+    ibv_dealloc_pd(ctx_.pd);
+    ctx_.pd = nullptr;
+  }
+  if (ctx_.context) {
+    ibv_close_device(ctx_.context);
+    ctx_.context = nullptr;
+  }
+
+  finished_wrs_.clear();
+  acked_wrs_.clear();
+  wr_id_to_start_time_.clear();
+  ctxs_for_all_ranks_.clear();
+  ctx_by_tag_.clear();
+  local_infos_.clear();
+  remote_infos_.clear();
 }

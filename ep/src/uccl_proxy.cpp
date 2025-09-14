@@ -24,7 +24,13 @@ UcclProxy::UcclProxy(uintptr_t rb_addr, int block_idx,
     // size_t atomic_buffer_bytes = 2 * align<size_t>(num_experts * sizeof(int),
     // 128);
     // TODO(MaoZiming)
-    cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize, cudaHostAllocMapped);
+#ifdef USE_GRACE_HOPPER
+    cudaMallocManaged(&atomic_buffer_ptr_, kAtomicBufferSize);
+#else
+    cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize,
+                  cudaHostAllocMapped | cudaHostAllocWriteCombined);
+#endif
+    cudaMemset(atomic_buffer_ptr_, 0, kAtomicBufferSize);
     proxy_->set_atomic_buffer_ptr(atomic_buffer_ptr_);
   }
 }
@@ -61,10 +67,13 @@ void UcclProxy::start_dual() {
 void UcclProxy::stop() {
   if (!running_.load(std::memory_order_acquire)) return;
   proxy_->set_progress_run(false);
-  std::printf("UcclProxy stopping...\n");
   if (thread_.joinable()) thread_.join();
-  std::printf("UcclProxy stopped\n");
   running_.store(false, std::memory_order_release);
+  // Because proxies share the gpu_buffer, only destroy gpu_buffer for the first
+  // proxy.
+  // std::printf("UcclProxy destroying\n");
+  proxy_->destroy(block_idx_ == 0);
+  // std::printf("UcclProxy destroyed\n");
 }
 
 void UcclProxy::start(Mode m) {

@@ -43,7 +43,7 @@ $(TARGET): $(OBJECTS) ../rdma/librdma_hip.a
 
 
 ../rdma/librdma_hip.a: ../rdma/*.cc ../rdma/*.h
-	make -C ../rdma -f MakefileHip -j$(nproc)
+	make -C ../rdma -f MakefileHip.therock -j$(nproc) HIP_HOME=${HIP_HOME} CONDA_LIB_HOME=${CONDA_LIB_HOME}
 
 # Compile source files
 %.o: %.cc
@@ -58,7 +58,7 @@ install: $(TARGET)
 # Clean build artifacts
 clean:
 	rm -f $(OBJECTS) $(TARGET)
-	make -C ../rdma -f MakefileHip clean -j$(nproc)
+	make -C ../rdma -f MakefileHip.therock clean -j$(nproc) HIP_HOME=${HIP_HOME} CONDA_LIB_HOME=${CONDA_LIB_HOME}
 
 # Test the module
 test: $(TARGET)
@@ -78,4 +78,4 @@ help:
 	@echo "  install-deps - Install pybind11 dependency"
 	@echo "  help         - Show this help message"
 
-.PHONY: all clean test install-deps help install 
+.PHONY: all clean test install-deps help install

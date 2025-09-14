@@ -22,7 +22,7 @@ p2p/
 The easiest way is to: 
 ```bash
 git clone https://github.com/uccl-project/uccl.git --recursive
-cd uccl && bash build_and_install.sh [cuda|rocm] p2p
+cd uccl && bash build_and_install.sh [cuda|rocm] p2p [py_version]
 ```
 
 Alternatively, you can setup your local dev environment by: 
@@ -41,46 +41,9 @@ sudo apt install build-essential net-tools libelf-dev libibverbs-dev \
                  libgoogle-glog-dev libgtest-dev libgflags-dev -y
 ```
 
-### Optional Dependencies
-
-- CUDA (for GPU tensor operations)
-- Install Redis
-
-```bash
-sudo apt-get update
-sudo apt-get install -y \
-    build-essential \
-    cmake \
-    libhiredis-dev \
-    libuv1-dev \
-    pkg-config
-```
-and
-```bash
-git clone https://github.com/redis/hiredis.git
-cd hiredis
-mkdir build && cd build
-cmake -DCMAKE_BUILD_TYPE=Release ..
-make -j
-sudo make install
-cd ../..
-
-git clone https://github.com/sewenew/redis-plus-plus.git
-cd redis-plus-plus
-mkdir build && cd build
-cmake                                  \
-  -DCMAKE_BUILD_TYPE=Release           \
-  -DCMAKE_INSTALL_PREFIX=/usr/local    \
-  -DREDIS_PLUS_PLUS_CXX_STANDARD=17    \
-  -DREDIS_PLUS_PLUS_BUILD_ASYNC=libuv  \
-  ..
-make -j
-sudo make install
-```
-
 ### Installation
 
-1. **Install Python dependencies:**
+1. **Install Pybind11 dependency:**
    ```bash
    make install-deps
    ```
@@ -140,6 +103,7 @@ Notes:
 * You can specify `NCCL_IB_HCA=mlx5_2:1` to control which NIC and port to use. 
 * If you see errors like `message size truncated`, it is likely caused by NCCL version mismatch. We suggest specifying `LD_PRELOAD=<path to libnccl.so.2>`. 
 * To benchmark dual direction transfer, you can add `--dual`. 
+* Consider tune `NCCL_IB_GID_INDEX=3` if NCCL triggers errors.
 * This also works for AMD GPUs.
 
 ### Running NIXL with UCX backend

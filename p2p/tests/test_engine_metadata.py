@@ -33,7 +33,7 @@ def test_local():
 
     def server_process(q):
         engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
-        metadata = engine.get_endpoint_metadata()
+        metadata = engine.get_metadata()
         ip, port, remote_gpu_idx = p2p.Endpoint.parse_metadata(metadata)
         print(f"Parsed IP: {ip}")
         print(f"Parsed Port: {port}")

@@ -17,19 +17,18 @@
 namespace uccl {
 
 // template <bool kAlwaysDoPostSend = false>
-// Note(MaoZiming): the qp_id here is actually the sm_id, which is used to tell
-// which ring buffer to use. However, we still have an issue: the total SMs can
-// be say 64 (= number of experts), but the number of ring buffers is small (say
-// 6).
+// Note(MaoZiming, Yang): the warp_id here is used to tell which ring buffer to
+// use. The total concurrent warps can be say 64 (= number of experts), while
+// the number of ring buffers is small (say 6).
 __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
-    uint64_t req_rptr, uint64_t req_lptr, size_t bytes, int dst_rank, int sm_id,
-    int lane_id, int message_idx, uint64_t const* ring_addrs,
+    uint64_t req_rptr, uint64_t req_lptr, size_t bytes, int dst_rank,
+    int warp_id, int lane_id, int message_idx, uint64_t const* ring_addrs,
     int num_ring_addrs, bool is_combine) {
   // NOTE(MaoZiming): different from the nvshmemi_ibgda_put_nbi_warp in
   // ibgda_device.cuh, we don't do warp-cooperation.
   if (lane_id != 0) return;
   int safe_n = num_ring_addrs > 0 ? num_ring_addrs : 1;
-  int ring_idx = (sm_id >= 0 ? sm_id : 0) % safe_n;
+  int ring_idx = (warp_id >= 0 ? warp_id : 0) % safe_n;
 
   unsigned long long rptr_val = static_cast<unsigned long long>(req_rptr);
   unsigned long long lptr_val = static_cast<unsigned long long>(req_lptr);
@@ -54,14 +53,14 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       TransferCmd cmd{};
       // TODO(MaoZiming): Check fields here.
       // NOTE(MaoZiming): cmd is needed for proxy to process the command.
-      cmd.cmd = (static_cast<uint64_t>(sm_id + 1) << 32) |
-                (message_idx & 0xFFFFFFFF);  // NOTE(MaoZiming): Use sm_id + 1
+      cmd.cmd = (static_cast<uint64_t>(warp_id + 1) << 32) |
+                (message_idx & 0xFFFFFFFF);  // NOTE(MaoZiming): Use warp_id + 1
                                              // to avoid 0 as a valid command.
       cmd.req_rptr = rptr_val;
       cmd.req_lptr = lptr_val;
       cmd.bytes = bytes_val;
       cmd.dst_rank = dst_rank;
-      cmd.sm_id = sm_id;
+      cmd.warp_id = warp_id;
       cmd.lane_id = lane_id;
       cmd.message_idx = message_idx;
       cmd.is_combine = is_combine;
@@ -80,31 +79,17 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   }
 }
 
-// NOTE(MaoZiming): Remove this. We don't need nvshmem and ibgda.
-#ifdef false
-__device__ __forceinline__ nvshmemi_ibgda_device_state_t* ibgda_get_state() {
-  return &nvshmemi_ibgda_device_state_d;
-}
-
-__device__ nvshmemi_ibgda_device_state_t nvshmemi_ibgda_device_state_d;
-
-struct nvshmemi_ibgda_device_state_t {
-  int _unused{0};
-  uint32_t num_rc_per_pe{0};
-};
-#endif
-
 // TODO(MaoZiming): Fix. This should be a non-fetch add operation. This could be
 // implemented with CPU proxy.
 __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
-    uint64_t rptr, int const& value, int dst_rank, int qp_id, int sm_id,
+    uint64_t rptr, int const& value, int dst_rank, int qp_id, int warp_id,
     bool is_local_copy = false, uint64_t const* ring_addrs = nullptr,
-    int num_ring_addrs = 0) {
+    int num_ring_addrs = 0, bool is_combine = true) {
   if (is_local_copy) {
     atomicAdd(reinterpret_cast<int*>(rptr), value);
   } else {
     int safe_n = num_ring_addrs > 0 ? num_ring_addrs : 1;
-    int ring_idx = (sm_id >= 0 ? sm_id : 0) % safe_n;
+    int ring_idx = (warp_id >= 0 ? warp_id : 0) % safe_n;
 
     auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
         static_cast<uintptr_t>(ring_addrs[ring_idx]));
@@ -123,10 +108,11 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
         // TODO(MaoZiming): Check fields here.
         // NOTE(MaoZiming): cmd is needed for proxy to process the command.
         cmd.cmd = 1;  // to avoid 0 as a valid command.
-        cmd.sm_id = sm_id;
+        cmd.warp_id = warp_id;
         cmd.value = value;
         cmd.dst_rank = dst_rank;
         cmd.is_atomic = true;
+        cmd.is_combine = is_combine;
         cmd.req_rptr = rptr;
         rb->atomic_set_and_commit(cmd, &slot);
         break;
@@ -135,10 +121,10 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
         if (now - last_print > kPrintCycleInterval) {
           uint64_t tail_cmd = rb->buf[cur_tail & rb->mask()].cmd;
           printf(
-              "[nvshmemi_ibgda_amo_nonfetch_add] %p waiting sm_id: %d, "
+              "[nvshmemi_ibgda_amo_nonfetch_add] %p waiting ring_idx: %d, "
               "cur_head: "
               "%llu, cur_tail: %llu, inflight: %llu, tail_cmd: %llu\n",
-              rb, sm_id, cur_head, cur_tail, inflight, tail_cmd);
+              rb, ring_idx, cur_head, cur_tail, inflight, tail_cmd);
           last_print = now;
         }
       }
@@ -149,12 +135,12 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
 // GPU IPC handle support - replacement for nvshmemi_get_p2p_ptr
 // This function will be used to get P2P pointers for intra-node communication
 // The actual IPC handles will be managed by the Buffer class in uccl_ep.cc
-__device__ __forceinline__ void* get_ipc_p2p_ptr(void* local_ptr,
-                                                 void** ipc_base_ptrs,
-                                                 int src_rank, int dst_rank,
-                                                 int ranks_per_node,
-                                                 size_t buffer_size) {
-  // If same rank, return local pointer
+__device__ __forceinline__ uint64_t get_ipc_p2p_ptr(uint64_t const& local_ptr,
+                                                    void** ipc_base_ptrs,
+                                                    int src_rank, int dst_rank,
+                                                    int ranks_per_node,
+                                                    size_t buffer_size) {
+  // If same rank, return local pointer directly
   if (src_rank == dst_rank) {
     return local_ptr;
   }
@@ -162,28 +148,24 @@ __device__ __forceinline__ void* get_ipc_p2p_ptr(void* local_ptr,
   // Check if both ranks are on the same node
   int src_node = src_rank / ranks_per_node;
   int dst_node = dst_rank / ranks_per_node;
-
   if (src_node != dst_node) {
-    // Different nodes - cannot use IPC
-    return nullptr;
+    return 0;
   }
 
-  // Get the local rank within the node
+  int src_local_rank = src_rank % ranks_per_node;
   int dst_local_rank = dst_rank % ranks_per_node;
 
-  // Check if we have a valid IPC pointer for this rank
-  if (ipc_base_ptrs == nullptr || ipc_base_ptrs[dst_local_rank] == nullptr) {
-    return nullptr;
+  if (ipc_base_ptrs == nullptr || ipc_base_ptrs[src_local_rank] == nullptr ||
+      ipc_base_ptrs[dst_local_rank] == nullptr) {
+    return 0;
   }
 
-  // Calculate offset from local buffer base
   size_t offset =
-      reinterpret_cast<uintptr_t>(local_ptr) -
-      reinterpret_cast<uintptr_t>(ipc_base_ptrs[src_rank % ranks_per_node]);
+      reinterpret_cast<uintptr_t>(reinterpret_cast<void*>(local_ptr)) -
+      reinterpret_cast<uintptr_t>(ipc_base_ptrs[src_local_rank]);
 
-  // Return the corresponding address in the remote buffer
-  return reinterpret_cast<void*>(
-      reinterpret_cast<uintptr_t>(ipc_base_ptrs[dst_local_rank]) + offset);
+  // Return the remote pointer as uint64_t
+  return reinterpret_cast<uint64_t>(ipc_base_ptrs[dst_local_rank]) + offset;
 }
 
 }  // namespace uccl

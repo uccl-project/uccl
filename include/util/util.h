@@ -59,6 +59,10 @@ namespace uccl {
     }                                \
   } while (0)
 
+template <typename... Types>
+constexpr size_t max_sizeof() {
+  return std::max({sizeof(Types)...});
+}
 /// Convert a default bytes/second rate to Gbit/s
 inline double rate_to_gbps(double r) { return (r / (1000 * 1000 * 1000)) * 8; }
 
@@ -1153,26 +1157,40 @@ static int cal_pcie_distance(fs::path const& devA, fs::path const& devB) {
 
   auto build_chain = [](fs::path const& dev) {
     std::vector<std::string> chain;
-    for (fs::path p = fs::canonical(dev);; p = p.parent_path()) {
+    fs::path p = fs::canonical(dev);
+    for (;; p = p.parent_path()) {
       std::string leaf = p.filename();
-      if (is_bdf(leaf)) chain.push_back(leaf);  // collect BDF components
-      if (p == p.root_path()) break;            // reached filesystem root
+      if (is_bdf(leaf)) {
+        chain.push_back(leaf);  // collect BDF components
+      }
+      if (p == p.root_path()) break;  // reached filesystem root
     }
-    return chain; /* self → root */
+    return chain;  // self → root
   };
 
+  // thread-safe cache
+  static std::mutex cache_mutex;
   static std::unordered_map<fs::path, std::vector<std::string>>
       dev_to_chain_cache;
 
-  if (dev_to_chain_cache.find(devA_parent) == dev_to_chain_cache.end()) {
-    dev_to_chain_cache[devA_parent] = build_chain(devA_parent);
-  }
-  if (dev_to_chain_cache.find(devB_parent) == dev_to_chain_cache.end()) {
-    dev_to_chain_cache[devB_parent] = build_chain(devB_parent);
-  }
+  std::vector<std::string> chainA, chainB;
+  {
+    std::lock_guard<std::mutex> g(cache_mutex);
 
-  auto chainA = dev_to_chain_cache[devA_parent];
-  auto chainB = dev_to_chain_cache[devB_parent];
+    auto itA = dev_to_chain_cache.find(devA_parent);
+    if (itA == dev_to_chain_cache.end()) {
+      itA = dev_to_chain_cache.emplace(devA_parent, build_chain(devA_parent))
+                .first;
+    }
+    chainA = itA->second;
+
+    auto itB = dev_to_chain_cache.find(devB_parent);
+    if (itB == dev_to_chain_cache.end()) {
+      itB = dev_to_chain_cache.emplace(devB_parent, build_chain(devB_parent))
+                .first;
+    }
+    chainB = itB->second;
+  }
 
   // Walk back from root until paths diverge
   size_t i = chainA.size();
@@ -1181,8 +1199,21 @@ static int cal_pcie_distance(fs::path const& devA, fs::path const& devB) {
     --i;
     --j;
   }
+
   // Distance = remaining unique hops in each chain
   return static_cast<int>(i + j);
+}
+
+static uint32_t safe_pcie_distance(fs::path const& gpu, fs::path const& nic) {
+  try {
+    return static_cast<uint32_t>(cal_pcie_distance(gpu, nic));
+  } catch (std::exception const& e) {
+    fprintf(stderr, "[WARN] safe_pcie_distance failed: %s\n", e.what());
+    return UINT32_MAX / 2;  // Treat as "very far"
+  } catch (...) {
+    fprintf(stderr, "[WARN] safe_pcie_distance unknown failure\n");
+    return UINT32_MAX / 2;
+  }
 }
 
 static inline std::string normalize_pci_bus_id(std::string const& pci_bus_id) {

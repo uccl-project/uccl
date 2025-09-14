@@ -3,7 +3,7 @@
 #include "ep_configs.cuh"
 #include "exception.cuh"
 
-namespace deep_ep {
+namespace uccl {
 
 template <typename dtype_t>
 struct Buffer {
@@ -148,4 +148,4 @@ struct SymBuffer {
   }
 };
 
-}  // namespace deep_ep
+}  // namespace uccl

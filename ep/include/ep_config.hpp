@@ -75,7 +75,7 @@ struct Config {
 #ifndef DISABLE_NVSHMEM
     num_bytes += num_channels * num_nvl_ranks *
                  num_max_nvl_chunked_recv_tokens *
-                 internode::get_source_meta_bytes();
+                 uccl::internode::get_source_meta_bytes();
 #endif
     num_bytes += num_channels * num_nvl_ranks *
                  num_max_nvl_chunked_recv_tokens * kNumMaxTopK *
@@ -110,7 +110,7 @@ struct Config {
                  num_max_rdma_chunked_recv_tokens * hidden_bytes * 2;
     num_bytes += num_channels * num_rdma_ranks *
                  num_max_rdma_chunked_recv_tokens *
-                 internode::get_source_meta_bytes() * 2;
+                 uccl::internode::get_source_meta_bytes() * 2;
     num_bytes += num_channels * num_rdma_ranks *
                  num_max_rdma_chunked_recv_tokens * kNumMaxTopK *
                  sizeof(int64_t) * 2;
