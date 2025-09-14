@@ -163,7 +163,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           uccl::nvshmemi_ibgda_put_nbi_warp(
               dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), src_ptr,
               num_bytes_per_msg, dst_rank,
-              warp_id,  // NOTE(MaoZiming): use warp_id for rb.
+              dst_expert_local_idx,  // NOTE(MaoZiming): use warp_id for rb.
               lane_id, slot_idx, ring_addrs, num_ring_addrs, false);
         } else {
           // Intra-node: use direct memory copy via IPC
@@ -750,7 +750,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
         nvshmemi_ibgda_put_nbi_warp(
             dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), buf_ptr,
             hidden * sizeof(nv_bfloat16), dst_rank,
-            warp_id,  // NOTE(MaoZiming): use warp_id for rb
+            local_expert_idx,  // NOTE(MaoZiming): use warp_id for rb
             lane_id, token_idx - offset, ring_addrs, num_ring_addrs, true);
       }
     }
