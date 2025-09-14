@@ -23,7 +23,7 @@ UCCL is an efficient communication library for GPUs, covering collectives, P2P (
 For collectives, UCCL-collective serves as a drop-in replacement for NCCL/RCCL (e.g., requiring no changes to application code), and significantly outperforms them in both latency and throughput across various settings. 
 
 <details>
-<summary>UCCL-collective performance comparison with NCCL/RCCL</summary>
+<summary>UCCL-collective performance comparison</summary>
 
 * On six HGX servers (across two racks) with 8x400G CX-7 RoCE NICs and 8xH100 GPUs, UCCL-collective outperforms NCCL by up to **2.5x** for AllReduce:
   <p align="left"> <img src="./doc/images/allreduce_6_hgx.png" alt="" width="600"> </p>
