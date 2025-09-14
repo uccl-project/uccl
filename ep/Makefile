@@ -14,6 +14,24 @@ else
   EFA_LDFLAGS := -L$(EFA_HOME)/lib -lefa
 endif
 
+ARCH := $(shell uname -m)
+GPU_NAME := $(shell nvidia-smi --query-gpu=name --format=csv,noheader | head -n1)
+CPU_IS_ARM64 := 0
+GPU_IS_HOPPER := 0
+ifeq ($(ARCH),aarch64)
+  CPU_IS_ARM64 := 1
+endif
+ifneq (,$(findstring GH200,$(GPU_NAME)))
+  GPU_IS_HOPPER := 1
+endif
+ifeq ($(and $(CPU_IS_ARM64),$(GPU_IS_HOPPER)),1)
+  $(warning GH200 detected, building with GH200)
+  GH_CFLAGS := -DUSE_GRACE_HOPPER
+else
+  $(warning GH200 not detected, building without GH200)
+  GH_CFLAGS :=
+endif
+
 PYTHON            ?= python3
 PYBIND11_INCLUDES := $(shell $(PYTHON) -m pybind11 --includes)
 EXT_SUFFIX        := $(shell $(PYTHON) -c "import sysconfig as s; print(s.get_config_var('EXT_SUFFIX') or '.so')")
@@ -36,10 +54,10 @@ LDFLAGS := -lpthread -lglog -libverbs -lnl-3 -lnl-route-3 -Xlinker -rpath -Xlink
 NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread -fPIC -fvisibility=hidden" -ccbin /usr/bin/g++ --expt-relaxed-constexpr
 INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../include -I../thirdparty/DeepEP/csrc
 
-CXXFLAGS  += $(EFA_CFLAGS)
-NVCCFLAGS += $(EFA_CFLAGS)
+CXXFLAGS  += $(EFA_CFLAGS) $(GH_CFLAGS)
+NVCCFLAGS += $(EFA_CFLAGS) $(GH_CFLAGS)
 LDFLAGS   += $(EFA_LDFLAGS)
-INCLUDES  += $(EFA_CFLAGS)
+INCLUDES  += $(EFA_CFLAGS) $(GH_CFLAGS)
 
 SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp src/peer_copy_worker.cpp src/uccl_proxy.cpp src/uccl_bench.cpp src/peer_copy_manager.cpp src/ep_runtime.cpp
 SRC_CU  := src/gpu_kernel.cu src/peer_copy.cu src/py_cuda_shims.cu src/internode_ll.cu src/internode.cu src/layout.cu
