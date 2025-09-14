@@ -31,10 +31,8 @@ from utils import (
     calc_diff,
     hash_tensor,
     per_token_cast_back,
-    get_cpu_proxies_meta,
     initialize_uccl,
     destroy_uccl,
-    get_peer_ip,
 )
 
 # UCCL import
@@ -411,8 +409,6 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     )
     proxies, workers = initialize_uccl(scratch, num_rdma_bytes, rank, num_ranks, group)
 
-    if local_rank == 0:
-        print(f"Allocating buffer size: {num_rdma_bytes / 1e6} MB ...", flush=True)
     buffer = Buffer(
         group,
         rdma_buffer_ptr=scratch.data_ptr(),

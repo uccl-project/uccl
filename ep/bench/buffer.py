@@ -1,7 +1,7 @@
 import os
 import torch
 import torch.distributed as dist
-from typing import Callable, Tuple, Optional
+from typing import Callable, Tuple, Optional, Union, List
 
 try:
     from uccl import ep
@@ -11,7 +11,7 @@ except ImportError as exc:
     sys.stderr.write("Failed to import uccl.ep\n")
     raise
 
-from uccl.ep import EventHandle
+from uccl.ep import EventHandle, Config
 from utils import EventOverlap, check_nvlink_connections
 
 
@@ -163,6 +163,22 @@ class Buffer:
 
         self.runtime.destroy()
         self.runtime = None
+
+    @staticmethod
+    def is_sm90_compiled():
+        return ep.is_sm90_compiled()
+
+    @staticmethod
+    def set_num_sms(new_num_sms: int) -> None:
+        """
+        Set the number of SMs to use in high-throughput kernels.
+
+        Arguments:
+            new_num_sms: the new number to be set.
+        """
+
+        assert new_num_sms % 2 == 0, "The SM count must be even"
+        Buffer.num_sms = new_num_sms
 
     @staticmethod
     def capture() -> EventOverlap:
@@ -411,4 +427,372 @@ class Buffer:
         """
         return ep.get_low_latency_rdma_size_hint(
             num_max_dispatch_tokens_per_rank, hidden, num_ranks, num_experts
+        )
+
+    def get_comm_stream(self) -> torch.Stream:
+        """
+        Get the communication stream.
+
+        Returns:
+            stream: the communication stream.
+        """
+        ts: torch.Stream = self.runtime.get_comm_stream()
+        return torch.cuda.Stream(
+            stream_id=ts.stream_id,
+            device_index=ts.device_index,
+            device_type=ts.device_type,
+        )
+
+    def get_local_buffer_tensor(
+        self,
+        dtype: torch.dtype,
+        size: Optional[torch.Size] = None,
+        offset: int = 0,
+        use_rdma_buffer: bool = False,
+    ) -> torch.Tensor:
+        """
+        Get the raw buffer (slice supported) as a PyTorch tensor.
+
+        Argument:
+            dtype: the data type (PyTorch `dtype`) for the tensor.
+            size: the slice size (by elements) to get from the buffer.
+            offset: the offset of the beginning element.
+            use_rdma_buffer: whether to return the RDMA buffer.
+        """
+        tensor = self.runtime.get_local_buffer_tensor(dtype, offset, use_rdma_buffer)
+        if size is None:
+            return tensor
+
+        assert tensor.numel() >= size.numel()
+        return tensor[: size.numel()].view(size)
+
+    @staticmethod
+    def _unpack_bias(bias: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]):
+        bias_0, bias_1 = None, None
+        if isinstance(bias, torch.Tensor):
+            bias_0 = bias
+        elif isinstance(bias, tuple):
+            assert len(bias) == 2
+            bias_0, bias_1 = bias
+        return bias_0, bias_1
+
+    @staticmethod
+    def get_dispatch_config(num_ranks: int) -> Config:
+        """
+        Get a recommended dispatch config.
+
+        Argument:
+            num_ranks: the number of ranks.
+
+        Returns:
+            config: the recommended config.
+        """
+
+        # TODO: automatically tune
+        config_map = {
+            2: Config(Buffer.num_sms, 24, 256, 6, 128),
+            4: Config(Buffer.num_sms, 6, 256, 6, 128),
+            8: Config(Buffer.num_sms, 6, 256, 6, 128),
+            16: Config(Buffer.num_sms, 36, 288, 20, 128),
+            24: Config(Buffer.num_sms, 8, 288, 32, 128),
+            32: Config(Buffer.num_sms, 32, 288, 32, 128),
+            64: Config(Buffer.num_sms, 20, 288, 28, 128),
+            128: Config(Buffer.num_sms, 20, 560, 32, 128),
+            144: Config(Buffer.num_sms, 32, 720, 12, 128),
+            160: Config(Buffer.num_sms, 28, 720, 12, 128),
+        }
+        assert num_ranks in config_map, f"Unsupported number of EP ranks: {num_ranks}"
+        return config_map[num_ranks]
+
+    @staticmethod
+    def get_combine_config(num_ranks: int) -> Config:
+        """
+        Get a recommended combine config.
+
+        Argument:
+            num_ranks: the number of ranks.
+
+        Returns:
+            config: the recommended config.
+        """
+
+        # TODO: automatically tune
+        config_map = {
+            2: Config(Buffer.num_sms, 10, 256, 6, 128),
+            4: Config(Buffer.num_sms, 9, 256, 6, 128),
+            8: Config(Buffer.num_sms, 4, 256, 6, 128),
+            16: Config(Buffer.num_sms, 4, 288, 12, 128),
+            24: Config(Buffer.num_sms, 1, 288, 8, 128),
+            32: Config(Buffer.num_sms, 1, 288, 8, 128),
+            64: Config(Buffer.num_sms, 1, 288, 20, 128),
+            128: Config(Buffer.num_sms, 1, 560, 12, 128),
+            144: Config(Buffer.num_sms, 2, 720, 8, 128),
+            160: Config(Buffer.num_sms, 2, 720, 8, 128),
+        }
+        assert num_ranks in config_map, f"Unsupported number of EP ranks: {num_ranks}"
+        return config_map[num_ranks]
+
+    # noinspection PyTypeChecker
+    def get_dispatch_layout(
+        self,
+        topk_idx: torch.Tensor,
+        num_experts: int,
+        previous_event: Optional[EventOverlap] = None,
+        async_finish: bool = False,
+        allocate_on_comm_stream: bool = False,
+    ) -> Tuple[
+        torch.Tensor, Optional[torch.Tensor], torch.Tensor, torch.Tensor, EventOverlap
+    ]:
+        """
+        Calculate the layout required for later communication.
+
+        Arguments:
+            topk_idx: `[num_tokens, num_topk]`, dtype must be `torch.int64`, the expert indices selected by each token,
+                `-1` means no selections.
+            num_experts: the number of experts.
+            previous_event: the event to wait before actually executing the kernel.
+            async_finish: the current stream will not wait for the communication kernels to be finished if set.
+            allocate_on_comm_stream: control whether all the allocated tensors' ownership to be on the communication stream.
+
+        Returns:
+            num_tokens_per_rank: `[num_ranks]` with `torch.int`, the number of tokens to be sent to each rank.
+            num_tokens_per_rdma_rank: `[num_rdma_ranks]` with `torch.int`, the number of tokens to be sent to each RDMA
+                rank (with the same GPU index), return `None` for intranode settings.
+            num_tokens_per_expert: `[num_experts]` with `torch.int`, the number of tokens to be sent to each expert.
+            is_token_in_rank: `[num_tokens, num_ranks]` with `torch.bool`, whether a token be sent to a rank.
+            event: the event after executing the kernel (valid only if `async_finish` is set).
+        """
+        (
+            num_tokens_per_rank,
+            num_tokens_per_rdma_rank,
+            num_tokens_per_expert,
+            is_token_in_rank,
+            event,
+        ) = self.runtime.get_dispatch_layout(
+            topk_idx,
+            num_experts,
+            getattr(previous_event, "event", None),
+            async_finish,
+            allocate_on_comm_stream,
+        )
+        return (
+            num_tokens_per_rank,
+            num_tokens_per_rdma_rank,
+            num_tokens_per_expert,
+            is_token_in_rank,
+            EventOverlap(event),
+        )
+
+    # noinspection PyTypeChecker
+    def internode_dispatch(
+        self,
+        x: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]],
+        handle: Optional[Tuple] = None,
+        num_tokens_per_rank: Optional[torch.Tensor] = None,
+        num_tokens_per_rdma_rank: Optional[torch.Tensor] = None,
+        is_token_in_rank: Optional[torch.Tensor] = None,
+        num_tokens_per_expert: Optional[torch.Tensor] = None,
+        topk_idx: Optional[torch.Tensor] = None,
+        topk_weights: Optional[torch.Tensor] = None,
+        expert_alignment: int = 1,
+        config: Optional[Config] = None,
+        previous_event: Optional[EventOverlap] = None,
+        async_finish: bool = False,
+        allocate_on_comm_stream: bool = False,
+    ) -> Tuple[
+        Union[Tuple[torch.Tensor, torch.Tensor], torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        List[int],
+        Tuple,
+        EventOverlap,
+    ]:
+        """
+        Internode dispatch implementation, for more details, please refer to the `dispatch` docs.
+        Normally, you should not directly call this function.
+        """
+        assert config is not None
+
+        # Launch the kernel with cached or non-cached mode
+        x, x_scales = x if isinstance(x, tuple) else (x, None)
+        if handle is not None:
+            assert topk_idx is None and topk_weights is None
+            (
+                is_token_in_rank,
+                rdma_channel_prefix_matrix,
+                gbl_channel_prefix_matrix,
+                recv_rdma_channel_prefix_matrix,
+                recv_rdma_rank_prefix_sum,
+                recv_gbl_channel_prefix_matrix,
+                recv_gbl_rank_prefix_sum,
+                recv_src_meta,
+                send_rdma_head,
+                send_nvl_head,
+            ) = handle
+            num_recv_tokens = recv_src_meta.size(0)
+            num_rdma_recv_tokens = send_nvl_head.size(0)
+            recv_x, recv_x_scales, _, _, _, _, _, _, _, _, _, _, _, _, event = (
+                self.runtime.internode_dispatch(
+                    x,
+                    x_scales,
+                    topk_idx,
+                    topk_weights,
+                    None,
+                    None,
+                    is_token_in_rank,
+                    None,
+                    num_recv_tokens,
+                    num_rdma_recv_tokens,
+                    rdma_channel_prefix_matrix,
+                    recv_rdma_rank_prefix_sum,
+                    gbl_channel_prefix_matrix,
+                    recv_gbl_rank_prefix_sum,
+                    expert_alignment,
+                    config,
+                    getattr(previous_event, "event", None),
+                    async_finish,
+                    allocate_on_comm_stream,
+                )
+            )
+            return (
+                (recv_x, recv_x_scales) if x_scales is not None else recv_x,
+                None,
+                None,
+                None,
+                None,
+                EventOverlap(event),
+            )
+        else:
+            assert (
+                num_tokens_per_rank is not None
+                and is_token_in_rank is not None
+                and num_tokens_per_expert is not None
+            )
+            (
+                recv_x,
+                recv_x_scales,
+                recv_topk_idx,
+                recv_topk_weights,
+                num_recv_tokens_per_expert_list,
+                rdma_channel_prefix_matrix,
+                gbl_channel_prefix_matrix,
+                recv_rdma_channel_prefix_matrix,
+                recv_rdma_rank_prefix_sum,
+                recv_gbl_channel_prefix_matrix,
+                recv_gbl_rank_prefix_sum,
+                recv_src_meta,
+                send_rdma_head,
+                send_nvl_head,
+                event,
+            ) = self.runtime.internode_dispatch(
+                x,
+                x_scales,
+                topk_idx,
+                topk_weights,
+                num_tokens_per_rank,
+                num_tokens_per_rdma_rank,
+                is_token_in_rank,
+                num_tokens_per_expert,
+                0,
+                0,
+                None,
+                None,
+                None,
+                None,
+                expert_alignment,
+                config,
+                getattr(previous_event, "event", None),
+                async_finish,
+                allocate_on_comm_stream,
+            )
+            handle = (
+                is_token_in_rank,
+                rdma_channel_prefix_matrix,
+                gbl_channel_prefix_matrix,
+                recv_rdma_channel_prefix_matrix,
+                recv_rdma_rank_prefix_sum,
+                recv_gbl_channel_prefix_matrix,
+                recv_gbl_rank_prefix_sum,
+                recv_src_meta,
+                send_rdma_head,
+                send_nvl_head,
+            )
+            return (
+                (recv_x, recv_x_scales) if x_scales is not None else recv_x,
+                recv_topk_idx,
+                recv_topk_weights,
+                num_recv_tokens_per_expert_list,
+                handle,
+                EventOverlap(event),
+            )
+
+    # noinspection PyTypeChecker
+    def internode_combine(
+        self,
+        x: torch.Tensor,
+        handle: Union[tuple, list],
+        topk_weights: Optional[torch.Tensor] = None,
+        bias: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]] = None,
+        config: Optional[Config] = None,
+        previous_event: Optional[EventOverlap] = None,
+        async_finish: bool = False,
+        allocate_on_comm_stream: bool = False,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], EventOverlap]:
+        """
+        Internode combine implementation, for more details, please refer to the `combine` docs.
+        Normally, you should not directly call this function.
+        """
+        assert config is not None
+
+        # Unpack handle and bias
+        (
+            is_combined_token_in_rank,
+            _,
+            _,
+            rdma_channel_prefix_matrix,
+            rdma_rank_prefix_sum,
+            gbl_channel_prefix_matrix,
+            gbl_rank_prefix_sum,
+            src_meta,
+            send_rdma_head,
+            send_nvl_head,
+        ) = handle
+        bias_0, bias_1 = Buffer._unpack_bias(bias)
+
+        # Launch the kernel
+        combined_x, combined_topk_weights, event = self.runtime.internode_combine(
+            x,
+            topk_weights,
+            bias_0,
+            bias_1,
+            src_meta,
+            is_combined_token_in_rank,
+            rdma_channel_prefix_matrix,
+            rdma_rank_prefix_sum,
+            gbl_channel_prefix_matrix,
+            send_rdma_head,
+            send_nvl_head,
+            config,
+            getattr(previous_event, "event", None),
+            async_finish,
+            allocate_on_comm_stream,
+        )
+        return combined_x, combined_topk_weights, EventOverlap(event)
+
+    def clean_low_latency_buffer(
+        self, num_max_dispatch_tokens_per_rank: int, hidden: int, num_experts: int
+    ) -> None:
+        """
+        As low-latency kernels require part of the buffer to be zero-initialized, so it is vital to clean the buffer
+            if the buffer is dirty at some time.
+        For example, after running the normal dispatch/combine, you must run this function before executing any
+            low-latency kernel.
+
+        Arguments:
+            num_max_dispatch_tokens_per_rank: the maximum number of tokens to dispatch, all the ranks must hold the same value.
+            hidden: the hidden dimension of each token.
+            num_experts: the number of all experts.
+        """
+        self.runtime.clean_low_latency_buffer(
+            num_max_dispatch_tokens_per_rank, hidden, num_experts
         )

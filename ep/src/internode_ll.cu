@@ -12,6 +12,33 @@ namespace cg = cooperative_groups;
 namespace uccl {
 namespace internode_ll {
 
+template <int kNumThreads>
+__launch_bounds__(kNumThreads, 1) __global__
+    void clean_low_latency_buffer(int* clean_0, int num_clean_int_0,
+                                  int* clean_1, int num_clean_int_1) {
+  // Barrier before cleaning (in case of unfinished chunked EP)
+  // nvshmemx_barrier_all_block();
+
+  // Clean
+  auto thread_id = static_cast<int>(threadIdx.x);
+#pragma unroll
+  for (int i = thread_id; i < num_clean_int_0; i += kNumThreads) clean_0[i] = 0;
+#pragma unroll
+  for (int i = thread_id; i < num_clean_int_1; i += kNumThreads) clean_1[i] = 0;
+
+  // Barrier after cleaning (make sure the low-latency mode works fine)
+  // nvshmemx_barrier_all_block();
+}
+
+void clean_low_latency_buffer(int* clean_0, int num_clean_int_0, int* clean_1,
+                              int num_clean_int_1, cudaStream_t stream) {
+  constexpr int kNumThreads = 256;
+
+  SETUP_LAUNCH_CONFIG(1, kNumThreads, stream);
+  LAUNCH_KERNEL(&cfg, clean_low_latency_buffer<kNumThreads>, clean_0,
+                num_clean_int_0, clean_1, num_clean_int_1);
+}
+
 template <bool kUseFP8, bool kUseUE8M0, int kHidden>
 __global__ __launch_bounds__(1024, 1) void dispatch(
     void* packed_recv_x, void* packed_recv_x_scales, int* packed_recv_src_info,

@@ -17,10 +17,6 @@
 namespace uccl {
 
 // template <bool kAlwaysDoPostSend = false>
-// Note(MaoZiming): the qp_id here is actually the sm_id, which is used to tell
-// which ring buffer to use. However, we still have an issue: the total SMs can
-// be say 64 (= number of experts), but the number of ring buffers is small (say
-// 6).
 __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     uint64_t req_rptr, uint64_t req_lptr, size_t bytes, int dst_rank,
     int warp_id, int lane_id, int message_idx, uint64_t const* ring_addrs,
@@ -79,20 +75,6 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     }
   }
 }
-
-// NOTE(MaoZiming): Remove this. We don't need nvshmem and ibgda.
-#ifdef false
-__device__ __forceinline__ nvshmemi_ibgda_device_state_t* ibgda_get_state() {
-  return &nvshmemi_ibgda_device_state_d;
-}
-
-__device__ nvshmemi_ibgda_device_state_t nvshmemi_ibgda_device_state_d;
-
-struct nvshmemi_ibgda_device_state_t {
-  int _unused{0};
-  uint32_t num_rc_per_pe{0};
-};
-#endif
 
 // TODO(MaoZiming): Fix. This should be a non-fetch add operation. This could be
 // implemented with CPU proxy.
