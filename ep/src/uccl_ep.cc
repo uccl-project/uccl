@@ -1244,6 +1244,10 @@ class Buffer {
         if (offset + i != rank) {
           std::memcpy(ipc_handles[i].reserved, handle_str.c_str(),
                       CUDA_IPC_HANDLE_SIZE);
+          printf(
+              "[debug] rank=%d rdma_rank=%d opening handle %d (offset+i=%d) on "
+              "device %d\n",
+              rank, rdma_rank, i, offset + i, device_ids[offset + i]);
           CUDA_CHECK(cudaIpcOpenMemHandle(&buffer_ptrs[i], ipc_handles[i],
                                           cudaIpcMemLazyEnablePeerAccess));
           barrier_signal_ptrs[i] = reinterpret_cast<int*>(

@@ -2,16 +2,18 @@
 This is the same test_internode.py test in DeepEP's repo.
 
 On first node:
-torchrun --nnodes=2 --nproc_per_node=1 --node_rank=0 \
+export OMP_NUM_THREADS=4
+torchrun --nnodes=2 --nproc_per_node=8 --node_rank=0 \
   --master_addr=10.1.227.34 --master_port=12355 \
   bench/test_internode.py --num-tokens=4096 \
-  --hidden=7168 --num-topk=8 --num-experts=256
+  --hidden=7168 --num-topk=8 --num-experts=256 --test-ll-compatibility
 
 On second node:
-torchrun --nnodes=2 --nproc_per_node=1 --node_rank=1 \
+export OMP_NUM_THREADS=4
+torchrun --nnodes=2 --nproc_per_node=8 --node_rank=1 \
   --master_addr=10.1.227.34 --master_port=12355 \
   bench/test_internode.py --num-tokens=4096 \
-  --hidden=7168 --num-topk=8 --num-experts=256
+  --hidden=7168 --num-topk=8 --num-experts=256 --test-ll-compatibility
 
 This benchmark verifies:
   * Dispatch and combine correctness for BF16/FP8
@@ -464,8 +466,8 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     buffer = Buffer(
         group,
         scratch.data_ptr(),
-        num_rdma_bytes,
         num_nvlink_bytes,
+        num_rdma_bytes,
         low_latency_mode=args.test_ll_compatibility,
         num_qps_per_rank=num_qps_per_rank,
         explicitly_destroy=True,
@@ -474,7 +476,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
 
     for proxy in proxies:
         proxy.calculate_and_set_dispatch_recv_data_offset(
-            args.num_tokens, args.hiden, args.num_experts
+            args.num_tokens, args.hidden, args.num_experts
         )
         proxy.set_atomic_buffer_ptr(proxies[0].get_atomic_buffer_ptr())
 
