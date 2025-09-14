@@ -57,15 +57,15 @@ UCCL has been adopted as part of the AMD [TheRock](https://github.com/ROCm/TheRo
 ## Road Map
 
 More UCCL features are under development in this repo, currently including: 
-- [x] More efficient KV cache transfer engine (e.g., better Mooncake)
+- ✅ More efficient KV cache transfer engine (e.g., better Mooncake)
 - 🚧 Generic and SM-free GPU-initiated P2P (e.g., better DeepEP for MoE)
   - 🚧 Supporting all NIC vendors including Nvidia, AWS EFA, and Broadcom
   - 🚧 Avoiding burning precious GPU SMs
 - 🚧 Re-architecting NCCL to unleash network hardware performance
   - 🚧 Scalable and efficient CPU proxy
-  - [ ] Fast async collectives with compute-communication ordering guarantee
-  - [ ] Device kernels in vendor-agnostic Triton language
-- [ ] Dynamic membership with GPU servers joining and exiting
+  - ☐ Fast async collectives with compute-communication ordering guarantee
+  - ☐ Device kernels in vendor-agnostic Triton language
+- ☐ Dynamic membership with GPU servers joining and exiting
 
 
 ## Quick Start
