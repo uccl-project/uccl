@@ -20,6 +20,8 @@ This benchmark verifies:
   * Top-k routing and per-expert token distribution
   * Compatibility with cached dispatch and low-latency kernels
   * Performance tuning for NVL and RDMA chunk sizes
+  
+It is currently still under development. 
 """
 
 import argparse
@@ -41,6 +43,7 @@ from utils import (
     per_token_cast_back,
     initialize_uccl,
     destroy_uccl,
+    init_dist_under_torchrun,
 )
 
 # Test compatibility with low latency functions
@@ -445,7 +448,7 @@ def test_main(
 # noinspection PyUnboundLocalVariable,PyShadowingNames
 def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     num_nodes = int(os.getenv("WORLD_SIZE", 1))
-    rank, num_ranks, group = init_dist(local_rank, num_local_ranks)
+    rank, num_ranks, group = init_dist_under_torchrun(local_rank, num_local_ranks)
     if args.test_ll_compatibility:
         ll_num_tokens, ll_hidden, ll_num_experts, ll_num_topk = 16, 5120, 256, 9
 
