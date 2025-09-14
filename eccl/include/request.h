@@ -29,11 +29,11 @@ struct Request {
   void on_comm_done(bool done = true);
   void on_compute_done();
 
-  Request(void* buf, size_t offset, size_t len, uint32_t local_mr_id,
-          uint32_t remote_mr_id, bool gpu,
+  Request(unsigned id, void* buf, size_t offset, size_t len,
+          uint32_t local_mr_id, uint32_t remote_mr_id, bool gpu,
           RequestType reqtype = RequestType::SEND, bool reduction = false,
           ReductionType op = ReductionType::NONE)
-      : id(global_id_counter.fetch_add(1, std::memory_order_relaxed)),
+      : id(id),
         buf(buf),
         offset(offset),
         len(len),

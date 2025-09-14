@@ -1,7 +1,5 @@
 #include "request.h"
 
-std::atomic<unsigned> Request::global_id_counter{0};
-
 void Request::on_comm_done(bool done) {
   if (!done) {
     failed.store(true, std::memory_order_release);

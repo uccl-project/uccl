@@ -2,6 +2,7 @@
 #include "transport.h"
 #include "util/gpu_rt.h"
 #include <iostream>
+#include <vector>
 
 void cqpoller_client_thread(std::shared_ptr<Communicator> comm, int peer_rank) {
   if (comm->connect_to(peer_rank)) {
@@ -10,15 +11,30 @@ void cqpoller_client_thread(std::shared_ptr<Communicator> comm, int peer_rank) {
   } else {
     std::cerr << "[CLIENT] Failed to connect to rank " << peer_rank
               << std::endl;
+    return;
   }
+
+  auto [ep, epok] = comm->get_endpoint_by_rank(peer_rank);
+
   float* d_data;
-  size_t size = 1024 * sizeof(float);
+  size_t count = 1024;
+  size_t size = count * sizeof(float);
   GPU_RT_CHECK(gpuMalloc((void**)&d_data, size));
+
+  // make host buffer
+  std::vector<float> h_data(count);
+  for (size_t i = 0; i < count; ++i) h_data[i] = static_cast<float>(i);
+
+  // copy to GPU
+  GPU_RT_CHECK(gpuMemcpy(d_data, h_data.data(), size, gpuMemcpyHostToDevice));
+
   auto mr = comm->reg_mr(d_data, size);
   auto remote_mr = comm->wait_mr_notify(peer_rank);
+
   std::cout << "[CLIENT] Got remote MR id=" << remote_mr.id << " addr=0x"
             << std::hex << remote_mr.address << " len=" << std::dec
             << remote_mr.length << "\n";
+
   bool ok = comm->isend(peer_rank, d_data, 0, size, mr.id, remote_mr.id, true);
   if (!ok) {
     std::cerr << "[CLIENT] isend failed\n";
@@ -39,34 +55,57 @@ void cqpoller_server_thread(std::shared_ptr<Communicator> comm, int peer_rank) {
   } else {
     std::cerr << "[SERVER] Failed to accept connection from rank " << peer_rank
               << std::endl;
+    return;
   }
+
   float* d_data;
-  size_t size = 1024 * sizeof(float);
+  size_t count = 1024;
+  size_t size = count * sizeof(float);
   GPU_RT_CHECK(gpuMalloc((void**)&d_data, size));
+
   auto mr = comm->reg_mr(d_data, size);
   comm->notify_mr(peer_rank, mr);
 
-  // 发起异步 recv
   bool ok = comm->irecv(peer_rank, d_data, 0, size, true);
   if (!ok) {
     std::cerr << "[SERVER] irecv failed\n";
+    GPU_RT_CHECK(gpuFree(d_data));
+    return;
   } else {
     std::cout << "[SERVER] irecv posted\n";
   }
 
-  // 等待完成
   comm->wait_finish();
-  std::cout << "[SERVER] recv completed, first 8 bytes="
-            << *reinterpret_cast<uint64_t*>(d_data) << "\n";
+
+  // copy and check data
+  std::vector<float> h_recv(count);
+  GPU_RT_CHECK(gpuMemcpy(h_recv.data(), d_data, size, gpuMemcpyDeviceToHost));
+
+  bool valid = true;
+  for (size_t i = 0; i < count; ++i) {
+    if (h_recv[i] != static_cast<float>(i)) {
+      std::cerr << "[CHECK] mismatch at idx=" << i << ", expected=" << i
+                << " got=" << h_recv[i] << "\n";
+      valid = false;
+      break;
+    }
+  }
+
+  if (valid) {
+    std::cout << "[SERVER] recv completed correctly, first 32 bytes="
+              << h_recv[0] << h_recv[1] << h_recv[2] << h_recv[3] << "\n";
+  } else {
+    std::cerr << "[SERVER] data mismatch detected!\n";
+  }
 
   GPU_RT_CHECK(gpuFree(d_data));
 }
 
 void test_cq_poller() {
-  auto comm0 = std::make_shared<Communicator>(
-      0, 0, 2);  // gpu_id=0, local_rank=0, world_size=2
-  auto comm1 = std::make_shared<Communicator>(
-      0, 1, 2);  // gpu_id=0, local_rank=1, world_size=2
+  auto comm0 =
+      std::make_shared<Communicator>(0, 0, 2);  // gpu_id=0, local_rank=0
+  auto comm1 =
+      std::make_shared<Communicator>(0, 1, 2);  // gpu_id=0, local_rank=1
 
   std::thread t_client(cqpoller_client_thread, comm0, 1);
   std::thread t_server(cqpoller_server_thread, comm1, 0);

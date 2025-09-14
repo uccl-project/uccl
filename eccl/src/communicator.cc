@@ -88,6 +88,9 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
       cq_poller_list_.push_back(cq_poller);
     }
 
+    pending_req_id_to_deal_ =
+        uccl::create_ring(sizeof(unsigned), 8);  // change num later
+
   } else {  // does not support RDMA
     // TODO: if we can't find any rdma nic, we still can do ipc comm on local
     // host.
@@ -135,17 +138,6 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
 }
 
 Communicator::~Communicator() {
-  // Release endpoints first
-  {
-    std::lock_guard<std::mutex> lk(ep_mu_);
-    for (auto& [rank, ep] : rank_to_endpoint_) {
-      if (ep) {
-        ep.reset();
-      }
-    }
-    rank_to_endpoint_.clear();
-  }
-
   // stop cq poller first
   if (!cq_poller_list_.empty()) {
     for (auto& cq_poller : cq_poller_list_) {
@@ -157,45 +149,18 @@ Communicator::~Communicator() {
     cq_poller_list_.clear();
   }
 
-  // Release RDMA resources
-  if (!cq_list_.empty()) {
-    for (auto& cq : cq_list_) {
-      if (cq) {
-        if (ibv_destroy_cq(cq)) {
-          std::cerr << "[WARN] Communicator " << local_rank_
-                    << " Failed to destroy CQ" << std::endl;
-        } else {
-          std::cout << "[INFO] Communicator " << local_rank_ << " CQ destroyed"
-                    << std::endl;
-        }
+  // Release endpoints
+  {
+    std::lock_guard<std::mutex> lk(ep_mu_);
+    for (auto& [rank, ep] : rank_to_endpoint_) {
+      if (ep) {
+        ep.reset();
       }
     }
-    cq_list_.clear();
+    rank_to_endpoint_.clear();
   }
 
-  if (pd_) {
-    if (ibv_dealloc_pd(pd_)) {
-      std::cerr << "[WARN] Communicator " << local_rank_
-                << " Failed to deallocate PD" << std::endl;
-    } else {
-      std::cout << "[INFO] Communicator " << local_rank_ << " PD deallocated"
-                << std::endl;
-    }
-    pd_ = nullptr;
-  }
-
-  if (nic_ibv_ctx_) {
-    if (ibv_close_device(nic_ibv_ctx_)) {
-      std::cerr << "[WARN] Communicator " << local_rank_
-                << " Failed to close IBV device context" << std::endl;
-    } else {
-      std::cout << "[INFO] Communicator " << local_rank_
-                << " IBV device context closed" << std::endl;
-    }
-    nic_ibv_ctx_ = nullptr;
-  }
-
-  // Release local memory regions
+  // Deregister local memory regions
   {
     std::lock_guard<std::mutex> lk(local_mr_mu_);
     for (auto& [ptr, mr] : ptr_to_local_ibv_mr_) {
@@ -212,13 +177,54 @@ Communicator::~Communicator() {
     ptr_to_local_ibv_mr_.clear();
     mr_id_to_local_mr_.clear();
   }
-  // Release remote memory regions
+
+  // Destory all CQs
+  if (!cq_list_.empty()) {
+    for (auto& cq : cq_list_) {
+      if (cq) {
+        if (ibv_destroy_cq(cq)) {
+          std::cerr << "[WARN] Communicator " << local_rank_
+                    << " Failed to destroy CQ" << std::endl;
+        } else {
+          std::cout << "[INFO] Communicator " << local_rank_ << " CQ destroyed"
+                    << std::endl;
+        }
+      }
+    }
+    cq_list_.clear();
+  }
+
+  // Deallocate PD
+  if (pd_) {
+    if (ibv_dealloc_pd(pd_)) {
+      std::cerr << "[WARN] Communicator " << local_rank_
+                << " Failed to deallocate PD" << std::endl;
+    } else {
+      std::cout << "[INFO] Communicator " << local_rank_ << " PD deallocated"
+                << std::endl;
+    }
+    pd_ = nullptr;
+  }
+
+  // Close device
+  if (nic_ibv_ctx_) {
+    if (ibv_close_device(nic_ibv_ctx_)) {
+      std::cerr << "[WARN] Communicator " << local_rank_
+                << " Failed to close IBV device context" << std::endl;
+    } else {
+      std::cout << "[INFO] Communicator " << local_rank_
+                << " IBV device context closed" << std::endl;
+    }
+    nic_ibv_ctx_ = nullptr;
+  }
+
+  // Clear remote MRs
   {
     std::lock_guard<std::mutex> lk(remote_mr_mu_);
     rank_mr_id_to_remote_mr_.clear();
   }
 
-  // Release IPC caches
+  // Clear IPC caches
   {
     std::lock_guard<std::mutex> lk(local_ipc_cache_mu_);
     ptr_to_local_ipc_cache_.clear();
@@ -226,6 +232,12 @@ Communicator::~Communicator() {
   {
     std::lock_guard<std::mutex> lk(remote_ipc_cache_mu_);
     rank_ptr_to_ipc_cache_.clear();
+  }
+
+  // Free pending_req_id_to_deal_ buffer
+  if (pending_req_id_to_deal_) {
+    free(pending_req_id_to_deal_);
+    pending_req_id_to_deal_ = nullptr;
   }
 
   std::cout << "[INFO] Communicator " << local_rank_ << " resources released"
@@ -238,6 +250,9 @@ bool Communicator::connect_to(int rank) {
               << " not ready, cannot connect to rank " << rank << std::endl;
     return false;
   }
+
+  auto [existing_ep, ok] = get_endpoint_by_rank(rank);
+  if (ok && existing_ep) return true;  // already
 
   if (rank == local_rank_) {
     std::cout << "[INFO] Communicator " << local_rank_
@@ -270,17 +285,20 @@ bool Communicator::connect_to(int rank) {
   bool same_host = meta->host_id == local_meta->host_id;
   same_host = false;
 
+  std::shared_ptr<EndpointBase> ep;
+  bool ret = false;
+
   if (same_host) {
     std::cout << "[INFO] Communicator " << local_rank_
               << " same host detected, using IPC endpoint" << std::endl;
-    auto ep = std::make_shared<IPCEndpoint>(config_, this);
+    ep = std::make_shared<IPCEndpoint>(config_, this);
     // ep->connect_to(rank); // optional if IPCEndpoint needs explicit connect
-    return true;
+    ret = true;
   } else {
     std::cout << "[INFO] Communicator " << local_rank_
               << " different host detected, using RDMA endpoint" << std::endl;
-    auto ep = std::make_shared<RDMAEndpoint>(config_, this);
-    bool ret = ep->connect_to(rank);
+    ep = std::make_shared<RDMAEndpoint>(config_, this);
+    ret = ep->connect_to(rank);
     if (ret) {
       std::cout << "[INFO] Communicator " << local_rank_
                 << " RDMA connect_to succeeded to rank " << rank << std::endl;
@@ -288,8 +306,13 @@ bool Communicator::connect_to(int rank) {
       std::cerr << "[ERROR] Communicator " << local_rank_
                 << " RDMA connect_to failed to rank " << rank << std::endl;
     }
-    return ret;
   }
+
+  {
+    std::lock_guard<std::mutex> lk(ep_mu_);
+    rank_to_endpoint_[rank] = ep;
+  }
+  return ret;
 }
 
 bool Communicator::accept_from(int rank) { return connect_to(rank); }
@@ -310,9 +333,10 @@ bool Communicator::isend(int rank, void* ptr, size_t offset, size_t len,
   auto [ep, ok] = get_endpoint_by_rank(rank);
   if (!ok || !ep) return false;
 
-  auto req =
-      std::make_shared<Request>(ptr, offset, len, local_mr_id, remote_mr_id,
-                                /*on_gpu*/ false, RequestType::SEND);
+  auto req = std::make_shared<Request>(
+      next_request_id_.fetch_add(1, std::memory_order_relaxed), ptr, offset,
+      len, local_mr_id, remote_mr_id,
+      /*on_gpu*/ false, RequestType::SEND);
 
   {
     std::lock_guard<std::mutex> lk(req_mu_);
@@ -323,6 +347,7 @@ bool Communicator::isend(int rank, void* ptr, size_t offset, size_t len,
     return false;
   }
 
+  std::cout << "isend new req with id " << req->id << std::endl;
   return true;
 }
 
@@ -331,8 +356,10 @@ bool Communicator::irecv(int rank, void* ptr, size_t offset, size_t len,
   auto [ep, ok] = get_endpoint_by_rank(rank);
   if (!ok || !ep) return false;
 
-  auto req = std::make_shared<Request>(ptr, offset, len, -1, -1,
-                                       /*on_gpu*/ false, RequestType::RECV);
+  auto req = std::make_shared<Request>(
+      next_request_id_.fetch_add(1, std::memory_order_relaxed), ptr, offset,
+      len, -1, -1,
+      /*on_gpu*/ false, RequestType::RECV);
 
   {
     std::lock_guard<std::mutex> lk(req_mu_);
@@ -340,8 +367,40 @@ bool Communicator::irecv(int rank, void* ptr, size_t offset, size_t len,
   }
 
   if (!ep->recv_async(rank, req)) {
+    {
+      std::lock_guard<std::mutex> lk(req_mu_);
+      requests_map_.erase(req->id);
+    }
     return false;
   }
+
+  // TODO: Add a pending queue. RECV work requests (WRs) may have already
+  // generated CQEs before irecv is called. For such CQEs that are not yet
+  // processed, add them to a pending queue. If the queue is not empty, process
+  // these CQEs here and release the corresponding requests.
+  unsigned req_id_batch[16];
+  unsigned int num_dequeued;
+
+  // try to get max 16 req_ids
+  num_dequeued = jring_dequeue_bulk(pending_req_id_to_deal_,
+                                    (void**)req_id_batch, 16, nullptr);
+
+  if (num_dequeued > 0) {
+    for (unsigned int i = 0; i < num_dequeued; ++i) {
+      unsigned req_id = req_id_batch[i];
+      {
+        std::shared_ptr<Request> req;
+        {
+          std::lock_guard<std::mutex> lk(req_mu_);
+          auto it = requests_map_.find(req_id);
+          if (it != requests_map_.end()) req = it->second;
+        }
+        req->on_comm_done(true);
+      }
+    }
+  }
+
+  std::cout << "irecv new req with id " << req->id << std::endl;
 
   return true;
 }
@@ -351,9 +410,9 @@ bool Communicator::irecv_red(int rank, void* ptr, size_t offset, size_t len,
   auto [ep, ok] = get_endpoint_by_rank(rank);
   if (!ok || !ep) return false;
 
-  auto req =
-      std::make_shared<Request>(ptr, offset, len, -1, -1, /*on_gpu*/ false,
-                                RequestType::SEND, true, red_op);  // todo
+  auto req = std::make_shared<Request>(
+      next_request_id_.fetch_add(1, std::memory_order_relaxed), ptr, offset,
+      len, -1, -1, /*on_gpu*/ false, RequestType::SEND, true, red_op);  // todo
 
   {
     std::lock_guard<std::mutex> lk(req_mu_);
@@ -382,6 +441,8 @@ bool Communicator::wait_finish() {
     }
 
     if (req) {
+      std::cout << "[WARN] Communicator " << local_rank_
+                << " [wait finish] req " << id << std::endl;
       while (!req->finished.load(std::memory_order_acquire)) {
         std::this_thread::yield();
       }
@@ -389,6 +450,8 @@ bool Communicator::wait_finish() {
         std::lock_guard<std::mutex> lk(req_mu_);
         requests_map_.erase(id);
       }
+      std::cout << "[WARN] Communicator " << local_rank_
+                << " [wait finish] req " << id << "finished" << std::endl;
     }
   }
 
@@ -497,6 +560,8 @@ bool Communicator::notify_mr(int remote_rank, MR& mr) {
 
   MRInfos wrapper;
   wrapper.mrs.push_back(mr);
+  std::cout << "[notify MR to rank " << remote_rank << "] addr=" << mr.address
+            << " length=" << mr.length << " key=" << mr.key << std::endl;
 
   std::string key =
       "mr:" + std::to_string(local_rank_) + "->" + std::to_string(remote_rank);
@@ -526,6 +591,10 @@ MR Communicator::wait_mr_notify(int remote_rank) {
     std::lock_guard<std::mutex> lk(remote_mr_mu_);
     rank_mr_id_to_remote_mr_[remote_rank][remote_mr.id] = remote_mr;
   }
+
+  std::cout << "[recv MR from rank " << remote_rank
+            << "] addr=" << remote_mr.address << " length=" << remote_mr.length
+            << " key=" << remote_mr.key << std::endl;
 
   return remote_mr;
 }

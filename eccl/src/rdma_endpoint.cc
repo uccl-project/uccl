@@ -188,6 +188,11 @@ bool RDMAEndpoint::connect_to(int peer_rank) {
               << "] modified to RTS state" << std::endl;
   }
 
+  // pre post some recv wrs
+  for (int i = 0; i < config_->qp_count_per_ep; i++) {
+    post_recv_imm_(qp_list_[i], 8);  // just 8 now
+  }
+
   return true;
 }
 
@@ -198,103 +203,180 @@ bool RDMAEndpoint::send_async(int to_rank, std::shared_ptr<Request> creq) {
     std::lock_guard<std::mutex> lk(qp_list_mu_);
     if (qp_list_.empty()) return false;
   }
-  const size_t chunk_size = config_->rdma_chunk_size;
-  if (chunk_size == 0) return false;
 
   size_t total = creq->len;
   if (total == 0) return false;
 
-  // calcu all chunk
-  size_t chunk_count = (total + chunk_size - 1) / chunk_size;
-  size_t qp_count;
+  // use qp0 send for test
+  ibv_qp* qp0 = nullptr;
   {
     std::lock_guard<std::mutex> lk(qp_list_mu_);
-    qp_count = qp_list_.size();
-    if (qp_count == 0) return false;
+    qp0 = qp_list_.empty() ? nullptr : qp_list_[0];
   }
+  if (!qp0) return false;
 
-  // assign chunk to qp
-  struct Chunk {
-    size_t chunk_idx;
-    size_t off;
-    size_t len;
-  };
-  std::vector<std::vector<Chunk>> assign(qp_count);
-  size_t chunk_per_qp = (chunk_count + qp_count - 1) / qp_count;  // ceil
-  for (size_t ci = 0; ci < chunk_count; ++ci) {
-    size_t qp_idx = ci / chunk_per_qp;
-    if (qp_idx >= qp_count) qp_idx = qp_count - 1;
-    size_t off = creq->offset + ci * chunk_size;
-    size_t len = std::min(chunk_size, creq->len - ci * chunk_size);
-    assign[qp_idx].push_back({ci, off, len});
-  }
-
-  int used_qps = 0;
-  for (size_t i = 0; i < qp_count; ++i)
-    if (!assign[i].empty()) ++used_qps;
-  creq->pending_signaled.store(used_qps, std::memory_order_relaxed);
-  creq->pending_signaled.store(used_qps, std::memory_order_relaxed);
+  creq->pending_signaled.store(1, std::memory_order_relaxed);
   creq->running.store(true, std::memory_order_release);
 
-  // check mr
   MR remote_mr = comm_->get_remote_mr(to_rank, creq->remote_mr_id);
   MR local_mr = comm_->get_local_mr(creq->local_mr_id);
 
-  for (size_t qp_idx = 0; qp_idx < qp_count; ++qp_idx) {
-    if (assign[qp_idx].empty()) continue;
+  // prepare SGE
+  ibv_sge sge;
+  sge.addr = reinterpret_cast<uint64_t>(creq->buf) + creq->offset;
+  sge.length = static_cast<uint32_t>(creq->len);
+  sge.lkey = local_mr.key;
 
-    ibv_qp* qp = nullptr;
-    {
-      std::lock_guard<std::mutex> lk(qp_list_mu_);
-      qp = qp_list_[qp_idx];
-    }
-    if (!qp) {
-      creq->pending_signaled.store(0, std::memory_order_relaxed);
-      return false;
-    }
+  // prepare WR
+  ibv_send_wr wr;
+  memset(&wr, 0, sizeof(wr));
+  wr.wr_id = static_cast<uint64_t>(static_cast<uint32_t>(creq->id));
+  ;  // wr_id : which creq
+  // std::cout << "wr id is " << creq->id << std::endl;
+  wr.sg_list = &sge;
+  wr.num_sge = 1;
+  wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+  wr.send_flags = IBV_SEND_SIGNALED;
+  wr.wr.rdma.remote_addr =
+      reinterpret_cast<uint64_t>(remote_mr.address) + creq->offset;
+  wr.wr.rdma.rkey = remote_mr.key;
+  wr.imm_data = htonl(static_cast<uint32_t>(creq->id));
 
-    auto& chunks = assign[qp_idx];
-    std::vector<ibv_send_wr> wrs(chunks.size());
-    std::vector<ibv_sge> sges(chunks.size());
+  ibv_send_wr* bad_wr = nullptr;
+  int ret = ibv_post_send(qp0, &wr, &bad_wr);
+  if (ret) {
+    perror("ibv_post_send failed");
+    creq->pending_signaled.store(0, std::memory_order_relaxed);
+    creq->running.store(false, std::memory_order_release);
+    return false;
+  }
 
-    for (size_t j = 0; j < chunks.size(); ++j) {
-      Chunk const& c = chunks[j];
+  return true;
+}
 
-      // sge
-      sges[j].addr = reinterpret_cast<uint64_t>(creq->buf) + c.off;
-      sges[j].length = static_cast<uint32_t>(c.len);
-      sges[j].lkey = local_mr.key;
+// bool RDMAEndpoint::send_async(int to_rank, std::shared_ptr<Request> creq) {
+//   {
+//     std::lock_guard<std::mutex> lk(qp_list_mu_);
+//     if (qp_list_.empty()) return false;
+//   }
+//   const size_t chunk_size = config_->rdma_chunk_size;
+//   if (chunk_size == 0) return false;
 
-      // wr
-      memset(&wrs[j], 0, sizeof(ibv_send_wr));
-      wrs[j].wr_id = static_cast<uint64_t>(creq->id);
-      wrs[j].sg_list = &sges[j];
-      wrs[j].num_sge = 1;
-      wrs[j].wr.rdma.remote_addr =
-          reinterpret_cast<uint64_t>(remote_mr.address) + c.off;
-      wrs[j].wr.rdma.rkey = remote_mr.key;
+//   size_t total = creq->len;
+//   if (total == 0) return false;
 
-      if (j + 1 == chunks.size()) {
-        wrs[j].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-        wrs[j].send_flags = IBV_SEND_SIGNALED;
-        wrs[j].imm_data = htonl(static_cast<uint32_t>(creq->id));
-      } else {
-        wrs[j].opcode = IBV_WR_RDMA_WRITE;
-        wrs[j].send_flags = 0;
-      }
+//   // calcu all chunk
+//   size_t chunk_count = (total + chunk_size - 1) / chunk_size;
+//   size_t qp_count;
+//   {
+//     std::lock_guard<std::mutex> lk(qp_list_mu_);
+//     qp_count = qp_list_.size();
+//     if (qp_count == 0) return false;
+//   }
 
-      wrs[j].next = (j + 1 < chunks.size()) ? &wrs[j + 1] : nullptr;
-    }
+//   // assign chunk to qp
+//   struct Chunk {
+//     size_t chunk_idx;
+//     size_t off;
+//     size_t len;
+//   };
+//   std::vector<std::vector<Chunk>> assign(qp_count);
+//   size_t chunk_per_qp = (chunk_count + qp_count - 1) / qp_count;  // ceil
+//   for (size_t ci = 0; ci < chunk_count; ++ci) {
+//     size_t qp_idx = ci / chunk_per_qp;
+//     if (qp_idx >= qp_count) qp_idx = qp_count - 1;
+//     size_t off = creq->offset + ci * chunk_size;
+//     size_t len = std::min(chunk_size, creq->len - ci * chunk_size);
+//     assign[qp_idx].push_back({ci, off, len});
+//   }
 
-    ibv_send_wr* bad_wr = nullptr;
-    int ret = ibv_post_send(qp, &wrs[0], &bad_wr);
+//   int used_qps = 0;
+//   for (size_t i = 0; i < qp_count; ++i)
+//     if (!assign[i].empty()) ++used_qps;
+//   creq->pending_signaled.store(used_qps, std::memory_order_relaxed);
+//   creq->pending_signaled.store(used_qps, std::memory_order_relaxed);
+//   creq->running.store(true, std::memory_order_release);
+
+//   // check mr
+//   MR remote_mr = comm_->get_remote_mr(to_rank, creq->remote_mr_id);
+//   MR local_mr = comm_->get_local_mr(creq->local_mr_id);
+
+//   for (size_t qp_idx = 0; qp_idx < qp_count; ++qp_idx) {
+//     if (assign[qp_idx].empty()) continue;
+
+//     ibv_qp* qp = nullptr;
+//     {
+//       std::lock_guard<std::mutex> lk(qp_list_mu_);
+//       qp = qp_list_[qp_idx];
+//     }
+//     if (!qp) {
+//       creq->pending_signaled.store(0, std::memory_order_relaxed);
+//       return false;
+//     }
+
+//     auto& chunks = assign[qp_idx];
+//     std::vector<ibv_send_wr> wrs(chunks.size());
+//     std::vector<ibv_sge> sges(chunks.size());
+
+//     for (size_t j = 0; j < chunks.size(); ++j) {
+//       Chunk const& c = chunks[j];
+
+//       // sge
+//       sges[j].addr = reinterpret_cast<uint64_t>(creq->buf) + c.off;
+//       sges[j].length = static_cast<uint32_t>(c.len);
+//       sges[j].lkey = local_mr.key;
+
+//       // wr
+//       memset(&wrs[j], 0, sizeof(ibv_send_wr));
+//       wrs[j].wr_id = static_cast<uint64_t>(creq->id);
+//       wrs[j].sg_list = &sges[j];
+//       wrs[j].num_sge = 1;
+//       wrs[j].wr.rdma.remote_addr =
+//           reinterpret_cast<uint64_t>(remote_mr.address) + c.off;
+//       wrs[j].wr.rdma.rkey = remote_mr.key;
+
+//       if (j + 1 == chunks.size()) {
+//         wrs[j].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+//         wrs[j].send_flags = IBV_SEND_SIGNALED;
+//         wrs[j].imm_data = htonl(static_cast<uint32_t>(creq->id));
+//       } else {
+//         wrs[j].opcode = IBV_WR_RDMA_WRITE;
+//         wrs[j].send_flags = 0;
+//       }
+
+//       wrs[j].next = (j + 1 < chunks.size()) ? &wrs[j + 1] : nullptr;
+//     }
+
+//     ibv_send_wr* bad_wr = nullptr;
+//     int ret = ibv_post_send(qp, &wrs[0], &bad_wr);
+//     if (ret) {
+//       perror("ibv_post_send failed");
+//       creq->pending_signaled.store(0, std::memory_order_relaxed);
+//       return false;
+//     }
+//   }
+
+//   return true;
+// }
+
+bool RDMAEndpoint::post_recv_imm_(ibv_qp* qp, uint64_t count) {
+  for (uint64_t i = 0; i < count; ++i) {
+    ibv_recv_wr rr;
+    memset(&rr, 0, sizeof(rr));
+
+    rr.wr_id = reinterpret_cast<uint64_t>(
+        qp);         // wr_id : which qp; recv get creq->id from imm data
+    rr.num_sge = 0;  // zero-byte
+    rr.sg_list = nullptr;
+
+    ibv_recv_wr* bad_rr = nullptr;
+    int ret = ibv_post_recv(qp, &rr, &bad_rr);
     if (ret) {
-      perror("ibv_post_send failed");
-      creq->pending_signaled.store(0, std::memory_order_relaxed);
+      std::cerr << "[RDMAEndpoint] ibv_post_recv failed at " << i << ": "
+                << strerror(errno) << std::endl;
       return false;
     }
   }
-
   return true;
 }
 
@@ -303,84 +385,111 @@ bool RDMAEndpoint::recv_async(int from_rank, std::shared_ptr<Request> creq) {
     std::lock_guard<std::mutex> lk(qp_list_mu_);
     if (qp_list_.empty()) return false;
   }
-  const size_t chunk_size = config_->rdma_chunk_size;
-  if (chunk_size == 0) return false;
 
   size_t total = creq->len;
   if (total == 0) return false;
 
-  // calc all chunk
-  size_t chunk_count = (total + chunk_size - 1) / chunk_size;
-  size_t qp_count;
+  // use qp0 recv for test
+  ibv_qp* qp0 = nullptr;
   {
     std::lock_guard<std::mutex> lk(qp_list_mu_);
-    qp_count = qp_list_.size();
-    if (qp_count == 0) return false;
+    if (qp_list_.empty()) return false;
+    qp0 = qp_list_[0];
   }
+  if (!qp0) return false;
 
-  // assign chunk to qp (block distribution, same as sender)
-  struct Chunk {
-    size_t chunk_idx;
-    size_t off;
-    size_t len;
-  };
-  std::vector<std::vector<Chunk>> assign(qp_count);
-  size_t chunk_per_qp = (chunk_count + qp_count - 1) / qp_count;  // ceil
-  for (size_t ci = 0; ci < chunk_count; ++ci) {
-    size_t qp_idx = ci / chunk_per_qp;
-    if (qp_idx >= qp_count) qp_idx = qp_count - 1;
-    size_t off = creq->offset + ci * chunk_size;
-    size_t len = std::min(chunk_size, creq->len - ci * chunk_size);
-    assign[qp_idx].push_back({ci, off, len});
-  }
-
-  // how many QPs will actually produce an IMM (used_qps)
-  int used_qps = 0;
-  for (size_t i = 0; i < qp_count; ++i)
-    if (!assign[i].empty()) ++used_qps;
-  if (used_qps == 0) {
-    // nothing to receive
-    creq->finished.store(true, std::memory_order_release);
-    return true;
-  }
-
-  // record that we expect `used_qps` IMM notifications for this request
-  // reuse pending_signaled as pending IMM count on receiver
-  creq->pending_signaled.store(used_qps, std::memory_order_relaxed);
+  creq->pending_signaled.store(1, std::memory_order_relaxed);
   creq->running.store(true, std::memory_order_release);
 
-  // For each qp that has assigned chunks, post a single zero-byte recv WR
-  for (size_t qp_idx = 0; qp_idx < qp_count; ++qp_idx) {
-    if (assign[qp_idx].empty()) continue;
+  auto ok = post_recv_imm_(qp0, 1);
+  if (!ok) {
+    creq->pending_signaled.store(0, std::memory_order_relaxed);
+    creq->running.store(false, std::memory_order_release);
+    return false;
+  }
 
-    ibv_qp* qp = nullptr;
-    {
-      std::lock_guard<std::mutex> lk(qp_list_mu_);
-      qp = qp_list_[qp_idx];
-    }
-    if (!qp) {
-      // failure: clear expectation and return false
-      creq->pending_signaled.store(0, std::memory_order_relaxed);
-      return false;
-    }
-
-    // Prepare a zero-byte receive WR to capture the incoming IMM.
-    // For RDMA_WRITE_WITH_IMM the recv WR can be 0-byte; the completion
-    // will be IBV_WC_RECV_RDMA_WITH_IMM containing wc.imm_data.
-    ibv_recv_wr rr;
-    memset(&rr, 0, sizeof(rr));
-    rr.wr_id = static_cast<uint64_t>(creq->id);  // optional: helps mapping
-    rr.next = nullptr;
-    rr.num_sge = 0;  // zero-byte receive (no payload buffer)
-    rr.sg_list = nullptr;
-
-    ibv_recv_wr* bad_rr = nullptr;
-    int ret = ibv_post_recv(qp, &rr, &bad_rr);
-    if (ret) {
-      perror("ibv_post_recv failed");
-      creq->pending_signaled.store(0, std::memory_order_relaxed);
-      return false;
-    }
-  }  // per-qp
   return true;
 }
+
+// bool RDMAEndpoint::recv_async(int from_rank, std::shared_ptr<Request> creq) {
+//   const size_t chunk_size = config_->rdma_chunk_size;
+//   if (chunk_size == 0) return false;
+
+//   size_t total = creq->len;
+//   if (total == 0) return false;
+
+//   // calc all chunk
+//   size_t chunk_count = (total + chunk_size - 1) / chunk_size;
+//   size_t qp_count;
+//   {
+//     std::lock_guard<std::mutex> lk(qp_list_mu_);
+//     qp_count = qp_list_.size();
+//     if (qp_count == 0) return false;
+//   }
+
+//   // assign chunk to qp (block distribution, same as sender)
+//   struct Chunk {
+//     size_t chunk_idx;
+//     size_t off;
+//     size_t len;
+//   };
+//   std::vector<std::vector<Chunk>> assign(qp_count);
+//   size_t chunk_per_qp = (chunk_count + qp_count - 1) / qp_count;  // ceil
+//   for (size_t ci = 0; ci < chunk_count; ++ci) {
+//     size_t qp_idx = ci / chunk_per_qp;
+//     if (qp_idx >= qp_count) qp_idx = qp_count - 1;
+//     size_t off = creq->offset + ci * chunk_size;
+//     size_t len = std::min(chunk_size, creq->len - ci * chunk_size);
+//     assign[qp_idx].push_back({ci, off, len});
+//   }
+
+//   // how many QPs will actually produce an IMM (used_qps)
+//   int used_qps = 0;
+//   for (size_t i = 0; i < qp_count; ++i)
+//     if (!assign[i].empty()) ++used_qps;
+//   if (used_qps == 0) {
+//     // nothing to receive
+//     creq->finished.store(true, std::memory_order_release);
+//     return true;
+//   }
+
+//   // record that we expect `used_qps` IMM notifications for this request
+//   // reuse pending_signaled as pending IMM count on receiver
+//   creq->pending_signaled.store(used_qps, std::memory_order_relaxed);
+//   creq->running.store(true, std::memory_order_release);
+
+//   // For each qp that has assigned chunks, post a single zero-byte recv WR
+//   for (size_t qp_idx = 0; qp_idx < qp_count; ++qp_idx) {
+//     if (assign[qp_idx].empty()) continue;
+
+//     ibv_qp* qp = nullptr;
+//     {
+//       std::lock_guard<std::mutex> lk(qp_list_mu_);
+//       qp = qp_list_[qp_idx];
+//     }
+//     if (!qp) {
+//       // failure: clear expectation and return false
+//       creq->pending_signaled.store(0, std::memory_order_relaxed);
+//       return false;
+//     }
+
+//     // Prepare a zero-byte receive WR to capture the incoming IMM.
+//     // For RDMA_WRITE_WITH_IMM the recv WR can be 0-byte; the completion
+//     // will be IBV_WC_RECV_RDMA_WITH_IMM containing wc.imm_data.
+//     ibv_recv_wr rr;
+//     memset(&rr, 0, sizeof(rr));
+//     rr.wr_id = static_cast<uint64_t>(creq->id);  // optional: helps mapping
+//     rr.next = nullptr;
+//     rr.num_sge = 0;  // zero-byte receive (no payload buffer)
+//     rr.sg_list = nullptr;
+
+//     ibv_recv_wr* bad_rr = nullptr;
+//     int ret = ibv_post_recv(qp, &rr, &bad_rr);
+//     if (ret) {
+//       perror("ibv_post_recv failed");
+//       creq->pending_signaled.store(0, std::memory_order_relaxed);
+//       return false;
+//     }
+//   }  // per-qp
+//   return true;
+// }

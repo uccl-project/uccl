@@ -4,6 +4,7 @@
 #include "oob.h"
 #include "request.h"
 #include "util/gpu_rt.h"
+#include "util/jring.h"
 #include <infiniband/verbs.h>
 #include <memory>
 #include <mutex>
@@ -17,6 +18,8 @@ class Communicator;
 class CQPoller;
 class EndpointBase {
  public:
+  virtual bool connect_to(int rank) = 0;
+  virtual bool accept_from(int rank) = 0;
   virtual bool send_async(int to_rank, std::shared_ptr<Request> creq) = 0;
   virtual bool recv_async(int from_rank, std::shared_ptr<Request> creq) = 0;
 };
@@ -26,8 +29,8 @@ class RDMAEndpoint : public EndpointBase {
   RDMAEndpoint(std::shared_ptr<Config> config, Communicator* comm);
   ~RDMAEndpoint();
 
-  bool connect_to(int rank);
-  bool accept_from(int rank);
+  bool connect_to(int rank) override;
+  bool accept_from(int rank) override;
 
   bool send_async(int to_rank, std::shared_ptr<Request> creq) override;
   bool recv_async(int from_rank, std::shared_ptr<Request> creq) override;
@@ -39,6 +42,8 @@ class RDMAEndpoint : public EndpointBase {
   mutable std::mutex qp_info_list_mu_;
   std::vector<QpInfo> remote_qp_info_list_;
   mutable std::mutex remote_qp_info_list_mu_;
+
+  bool post_recv_imm_(ibv_qp* qp, uint64_t count);
 
   std::shared_ptr<Config> config_;
   Communicator* comm_;
@@ -57,8 +62,8 @@ class IPCEndpoint : public EndpointBase {
   IPCEndpoint(std::shared_ptr<Config> config, Communicator* comm);
   ~IPCEndpoint();
 
-  bool connect_to(int rank);
-  bool accept_from(int rank);
+  bool connect_to(int rank) override;
+  bool accept_from(int rank) override;
 
   bool send_async(int to_rank, std::shared_ptr<Request> creq) override;
   bool recv_async(int from_rank, std::shared_ptr<Request> creq) override;
@@ -165,10 +170,15 @@ class Communicator {
   mutable std::mutex redis_client_mu_;
 
   // Requests pool
+  std::atomic<unsigned> next_request_id_{0};
   std::unordered_map<unsigned, std::shared_ptr<Request>> requests_map_;
   std::mutex req_mu_;
   std::atomic<int> head_id{0};
   std::atomic<int> tail_id{0};
+  jring_t* pending_req_id_to_deal_ =
+      nullptr;  // for which request has not been added to requests_map_,
+                // cqpoller add unaddressed req_id to this queue, and
+                // irecv/recv_red consume it
 
   friend class RDMAEndpoint;
   friend class IPCEndpoint;

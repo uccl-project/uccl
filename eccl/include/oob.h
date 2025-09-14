@@ -137,15 +137,14 @@ struct MRInfos : public Exchangeable {
 
     for (size_t i = 0; i < count; ++i) {
       auto& mr = mrs[i];
+      // id
       mr.id = std::stoul(kv.at("mr_" + std::to_string(i) + "_id"));
-
+      // address (64-bit)
       {
         std::string hexaddr = kv.at("mr_" + std::to_string(i) + "_addr");
-        std::stringstream ss;
-        ss << std::hex << hexaddr;
-        ss >> mr.address;
+        mr.address = std::stoull(hexaddr, nullptr, 16);
       }
-
+      // length and key
       mr.length = std::stoul(kv.at("mr_" + std::to_string(i) + "_len"));
       mr.key = std::stoul(kv.at("mr_" + std::to_string(i) + "_key"));
     }

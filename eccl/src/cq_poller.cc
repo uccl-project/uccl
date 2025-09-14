@@ -59,18 +59,7 @@ void CQPoller::run_loop() {
     for (int i = 0; i < ne; ++i) {
       ibv_wc& wc = wcs[i];
 
-      unsigned req_id = static_cast<unsigned>(wc.wr_id);
-      std::shared_ptr<Request> req;
-      {
-        std::lock_guard<std::mutex> lk(comm_->req_mu_);
-        auto it = comm_->requests_map_.find(req_id);
-        if (it != comm_->requests_map_.end()) req = it->second;
-      }
-
       if (wc.status != IBV_WC_SUCCESS) {
-        if (req) {
-          req->on_comm_done(false);
-        }
         std::cerr << "[CQPoller] wc error and cannot map req: status="
                   << wc.status << " opcode=" << wc.opcode
                   << " wr_id=" << wc.wr_id << " imm=" << wc.imm_data
@@ -78,34 +67,53 @@ void CQPoller::run_loop() {
         continue;
       }
 
-      if (!req) {
-        std::cerr << "[CQPoller] success wc but unknown req_id=" << req_id
-                  << " opcode=" << wc.opcode << "\n";
-        continue;
-      }
-
       switch (wc.opcode) {
-        case IBV_WC_SEND:
-          // 本端 send 的 signaled 完成
-          req->on_comm_done(true);
-          break;
+        case IBV_WR_RDMA_WRITE_WITH_IMM: {
+          //  std::cout << "wc id is " << wc.wr_id << std::endl;
+          unsigned req_id = static_cast<uint32_t>(wc.wr_id);
+          std::shared_ptr<Request> req;
 
-        case IBV_WC_RECV_RDMA_WITH_IMM:
-          // remote 发来的 IMM -> data 到达，通知 request
-          req->on_comm_done(true);
-          // 如果你维护 per-q/pool，需要在这里补贴 recv pool：
-          // comm_->replenish_recv_for_qp(cq_idx, 1);
-          break;
+          {
+            std::lock_guard<std::mutex> lk(comm_->req_mu_);
+            auto it = comm_->requests_map_.find(req_id);
+            if (it != comm_->requests_map_.end()) req = it->second;
+          }
 
-        case IBV_WC_RECV:
-          // 带 payload 的 recv 完成（视你协议可当作事件）
+          if (!req) {
+            std::cerr << "[CQPoller] send success wc but unknown req_id="
+                      << req_id << " opcode=" << wc.opcode << "\n";
+            break;
+          }
           req->on_comm_done(true);
-          // comm_->replenish_recv_for_qp(cq_idx, 1);
           break;
+        }
+
+        case IBV_WC_RECV_RDMA_WITH_IMM: {
+          unsigned req_id = ntohl(static_cast<uint32_t>(wc.imm_data));
+          std::shared_ptr<Request> req;
+
+          {
+            std::lock_guard<std::mutex> lk(comm_->req_mu_);
+            auto it = comm_->requests_map_.find(req_id);
+            if (it != comm_->requests_map_.end()) req = it->second;
+          }
+
+          if (!req) {
+            std::cerr << "[CQPoller] recv success wc but unknown req_id="
+                      << req_id << " opcode=" << wc.opcode
+                      << " add it to pending queue first" << std::endl;
+            while (jring_mp_enqueue_bulk(comm_->pending_req_id_to_deal_,
+                                         &req_id, 1, nullptr) != 1) {
+            }
+            continue;
+          }
+          req->on_comm_done(true);
+          break;
+        }
 
         default:
-          // 其它完成（RDMA_WRITE 本地完成、RDMA_READ 完成等）
-          req->on_comm_done(true);
+          std::cerr << "[CQPoller] unknown wc wr_id=" << wc.wr_id
+                    << " opcode=" << wc.opcode << "\n";
           break;
       }
     }  // for each wc

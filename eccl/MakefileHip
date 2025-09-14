@@ -13,7 +13,7 @@ CONDA_LIB_HOME ?= /usr/lib
 CXXFLAGS   := -O0 -std=c++17 -Wall -pthread -D__HIP_PLATFORM_AMD__ -I${CONDA_LIB_HOME}/../include
 HIPCCFLAGS := -g -O0 -std=c++17 -D__HIP_PLATFORM_AMD__ --offload-arch=gfx942
 
-LDFLAGS    := -L${CONDA_LIB_HOME} -lgflags -lgtest -lz -lelf -libverbs -lnl-3 -lnl-route-3 -lpthread
+LDFLAGS    := -L${CONDA_LIB_HOME} -lgflags -lgtest -lz -lelf -libverbs -lnl-3 -lnl-route-3 -lpthread -lglog
 
 # --------------------------
 # Include directories
