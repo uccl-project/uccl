@@ -187,10 +187,6 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                           : 0;
         if (dst_p2p_ptr == 0) {
           __threadfence_system();
-          if (reinterpret_cast<uint64_t>(rdma_buffer_ptr) > dst_ptr) {
-            printf("Error: rdma_buffer_ptr %p, dst_ptr %p\n",
-                   rdma_buffer_ptr, (void*)dst_ptr);
-          }
           uccl::nvshmemi_ibgda_put_nbi_warp(
               dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), src_ptr,
               num_bytes_per_msg, dst_rank,
@@ -286,10 +282,6 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                       : 0;
     if (dst_p2p_ptr == 0) {
       // Inter-node or no IPC: use IBGDA atomic
-      if (reinterpret_cast<uint64_t>(atomic_buffer_ptr) > dst_ptr) {
-        printf("Error: atomic_buffer_ptr %p, dst_ptr %p\n",
-                atomic_buffer_ptr, (void*)dst_ptr);
-      }
       uccl::nvshmemi_ibgda_amo_nonfetch_add(
           dst_ptr - reinterpret_cast<uint64_t>(atomic_buffer_ptr),
           -num_tokens_sent - 1, dst_rank,
@@ -404,8 +396,7 @@ LOW_LATENCY_DISPATCH_RECV:
       auto const src_src_idx =
           reinterpret_cast<int*>(rdma_recv_x_uint8 + i * num_bytes_per_msg);
       if (lane_id == 0)
-        recv_src_info[recv_token_begin_idx + i] =
-            ld_cg_global(src_src_idx);
+        recv_src_info[recv_token_begin_idx + i] = ld_cg_global(src_src_idx);
       __syncwarp();
 
       // Copy data
@@ -783,10 +774,6 @@ __global__ __launch_bounds__(1024, 1) void combine(
       // NOTES: for zero-copy mode, we assume the data is already in the send
       // buffer
       if (dst_p2p_ptr == 0) {
-        if (reinterpret_cast<uint64_t>(rdma_buffer_ptr) > dst_ptr) {
-          printf("Error: rdma_buffer_ptr %p, dst_ptr %p\n",
-                  rdma_buffer_ptr, (void*)dst_ptr);
-        }
         __threadfence_system();
         nvshmemi_ibgda_put_nbi_warp(
             dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), buf_ptr,
