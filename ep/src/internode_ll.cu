@@ -259,7 +259,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                                           sm_id * num_warp_groups];
     // Wait local sends issued and send expert counts
     while (ld_acquire_global(atomic_finish_counter_per_expert +
-                             responsible_expert_idx) != FINISHED_SUM_TAG * 2);
+                             responsible_expert_idx) != FINISHED_SUM_TAG * 2)
+      ;
 
     // TODO(yihan): Mark here for future debugging check.
     // Calculate offset within LowLatencyLayout buffer for CPU proxy
@@ -359,7 +360,8 @@ LOW_LATENCY_DISPATCH_RECV:
       //     src_rank));
       while ((num_recv_tokens = ld_acquire_sys_global(
                   rdma_recv_count + local_expert_idx * num_ranks + src_rank)) ==
-             0);
+             0)
+        ;
       auto wait_recv_cost = clock64() - start_time;
       num_recv_tokens = -num_recv_tokens - 1;
       // printf(
@@ -786,7 +788,8 @@ __global__ __launch_bounds__(1024, 1) void combine(
     EP_DEVICE_ASSERT(num_warps_per_group > 1 and num_warp_groups < 16);
     sync_barrier(warp_group_id + 1, num_warps_per_group * 32);
     if (sub_warp_id == 1 and lane_id == 0) {
-      while (ld_acquire_global(atomic_clean_flag) == 0);
+      while (ld_acquire_global(atomic_clean_flag) == 0)
+        ;
       // Calculate offset from data buffer to flag buffer (similar to dispatch
       // phase) rdma_recv_flag corresponds to combine_rdma_recv_flag_buffer We
       // need to calculate the offset from rdma_recv_x (data buffer) to the flag
@@ -831,7 +834,8 @@ LOW_LATENCY_COMBINE_RECV:
     if (sub_warp_id == 0 and lane_id == 0) {
       auto start_time = clock64();
       while (ld_acquire_sys_global(rdma_recv_flag + responsible_expert_idx) ==
-             0);
+             0)
+        ;
       auto wait_recv_cost = clock64() - start_time;
       if (combine_wait_recv_cost_stats != nullptr) {
         auto const& src_rank = responsible_expert_idx / num_local_experts;
