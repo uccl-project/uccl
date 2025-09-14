@@ -17,6 +17,9 @@
 namespace uccl {
 
 // template <bool kAlwaysDoPostSend = false>
+// Note(MaoZiming, Yang): the warp_id here is used to tell which ring buffer to
+// use. The total concurrent warps can be say 64 (= number of experts), while
+// the number of ring buffers is small (say 6).
 __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     uint64_t req_rptr, uint64_t req_lptr, size_t bytes, int dst_rank,
     int warp_id, int lane_id, int message_idx, uint64_t const* ring_addrs,

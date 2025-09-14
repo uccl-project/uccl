@@ -115,11 +115,14 @@ class Buffer {
         for (int i = 0; i < num_ring_addrs; ++i) {
           void* host_ptr = reinterpret_cast<void*>(host_addrs[i]);
           void* dev_ptr = nullptr;
+#ifndef USE_GRACE_HOPPER
           CUDA_CHECK(cudaHostGetDevicePointer(&dev_ptr, host_ptr, 0));
+#else
+          dev_ptr = host_ptr;
+#endif
           d_ring_addrs[i] = reinterpret_cast<uint64_t>(dev_ptr);
         }
         CUDA_CHECK(cudaDeviceSynchronize());
-
         // Allocate device memory for IPC base pointers
         CUDA_CHECK(cudaMalloc(&d_ipc_base_ptrs, max_nvl_peers * sizeof(void*)));
         CUDA_CHECK(

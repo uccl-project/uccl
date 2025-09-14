@@ -475,10 +475,10 @@ def initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group):
 
     time.sleep(1)
 
-    return proxies, workers
+    return proxies, workers, bench
 
 
-def destroy_uccl(proxies, workers):
+def destroy_uccl(proxies, workers, bench):
 
     device_index = int(os.environ["LOCAL_RANK"])
     if workers is not None:
