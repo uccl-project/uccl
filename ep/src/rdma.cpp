@@ -770,24 +770,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         std::abort();
       }
 
-      uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
-      if (wrs[j].wr.rdma.remote_addr < ctx->remote_addr ||
-          wrs[j].wr.rdma.remote_addr + cmd.bytes > remote_end) {
-        fprintf(stderr,
-                "[ERROR] Remote write OOB: addr=0x%llx len=%zu (base=0x%llx, "
-                "size=%zu), cmd.req_rptr: 0x%llx\n",
-                (unsigned long long)wrs[j].wr.rdma.remote_addr, cmd.bytes,
-                (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
-                (unsigned long long)cmd.req_rptr);
-        cudaError_t err = cudaDeviceSynchronize();
-        if (err != cudaSuccess) {
-          fprintf(stderr, "cudaDeviceSynchronize failed: %s\n",
-                  cudaGetErrorString(err));
-          std::abort();
-        }
-        std::abort();
-      }
-
       wrs[j].wr.rdma.rkey = ctx->remote_rkey;
       wrs[j].opcode = IBV_WR_RDMA_WRITE;
       wrs[j].send_flags = 0;
@@ -1256,7 +1238,6 @@ void post_atomic_operations(ProxyCtx& S,
   }
 
   for (auto& [dst_rank, wr_ids] : dst_rank_wr_ids) {
-    printf("Posting %zu atomic WRs to dst_rank=%d\n", wr_ids.size(), dst_rank);
     if (wr_ids.empty()) continue;
 
     ProxyCtx* ctx = ctxs[dst_rank].get();

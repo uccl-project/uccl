@@ -3,7 +3,6 @@
 #include "ep_runtime.cuh"
 #include "ep_util.hpp"
 #include "ep_utils.cuh"
-#include "exception.cuh"
 #include "internode_ll.cuh"
 #include "uccl_ibgda.cuh"
 #include <iostream>
@@ -69,9 +68,6 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   using packed_t = std::conditional_t<kUseUE8M0, uint32_t, float>;
   EP_STATIC_ASSERT(sizeof(packed_t) % sizeof(scale_t) == 0,
                    "Invalid vector length");
-
-  EP_DEVICE_ASSERT(num_warps <= 32);
-  EP_DEVICE_ASSERT(gridDim.x * num_warp_groups >= num_experts);
 
   // FP8 staffs
   constexpr int kNumPerChannels = 128;
@@ -175,13 +171,6 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
             lane_id == 0
                 ? atomicAdd(atomic_counter_per_expert + dst_expert_idx, 1)
                 : 0;
-
-        if (lane_id == 0 && slot_idx >= num_max_dispatch_tokens_per_rank) {
-          printf("[OOB] slot_idx=%d cap=%d expert=%d token=%d\n", slot_idx,
-                 num_max_dispatch_tokens_per_rank, dst_expert_idx, token_idx);
-          asm("trap;");  // or EP_DEVICE_ASSERT(false);
-        }
-
         slot_idx = __shfl_sync(0xffffffff, slot_idx, 0);
         auto const dst_rank = dst_expert_idx / num_local_experts;
         auto const dst_expert_local_idx = dst_expert_idx % num_local_experts;
@@ -269,14 +258,10 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         shared_num_tokens_sent_per_expert[responsible_expert_idx -
                                           sm_id * num_warp_groups];
     // Wait local sends issued and send expert counts
-    printf(
-        "Before ld_acquire_global(atomic_finish_counter_per_expert=%p, "
-        "responsible_expert_idx=%d)\n",
-        atomic_finish_counter_per_expert, responsible_expert_idx);
-    int spins = 0;
     while (ld_acquire_global(atomic_finish_counter_per_expert +
-                             responsible_expert_idx) != FINISHED_SUM_TAG * 2) {
+                             responsible_expert_idx) != FINISHED_SUM_TAG * 2)
       ;
+
     // TODO(yihan): Mark here for future debugging check.
     // Calculate offset within LowLatencyLayout buffer for CPU proxy
     // translation Calculate offset relative to dispatch_rdma_recv_data_buffer
@@ -314,8 +299,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     atomic_finish_counter_per_expert[responsible_expert_idx] = 0;
 
     // Clean `packed_recv_count`
-    // Note(MaoZiming): changed from DeepEP.
-    if (dst_rank == rank) packed_recv_count[dst_expert_local_idx] = 0;
+    if (dst_rank == 0) packed_recv_count[dst_expert_local_idx] = 0;
   }
   __syncwarp();
 
@@ -388,12 +372,6 @@ LOW_LATENCY_DISPATCH_RECV:
       //     src_rank));
       recv_token_begin_idx =
           atomicAdd(packed_recv_count + local_expert_idx, num_recv_tokens);
-
-      EP_DEVICE_ASSERT(num_recv_tokens >= 0);
-      EP_DEVICE_ASSERT(num_recv_tokens <= num_max_dispatch_tokens_per_rank);
-      EP_DEVICE_ASSERT(recv_token_begin_idx >= 0);
-      EP_DEVICE_ASSERT(recv_token_begin_idx + num_recv_tokens <=
-                       num_ranks * num_max_dispatch_tokens_per_rank);
       shared_num_recv_tokens[warp_group_id] = num_recv_tokens;
       shared_recv_token_begin_idx[warp_group_id] = recv_token_begin_idx;
       recv_range[src_rank] =
