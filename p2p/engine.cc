@@ -564,8 +564,6 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void const*> data_v,
                      std::vector<size_t> size_v, size_t num_iovs,
                      bool inside_python) {
-  // [[maybe_unused]] auto _ =
-  //     PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
   [[maybe_unused]] auto _ = inside_python && PyGILState_Check()
                                 ? (py::gil_scoped_release{}, nullptr)
                                 : nullptr;
