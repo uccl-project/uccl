@@ -91,26 +91,32 @@ class Buffer:
             None,
         ] * self.group_size
         local_device_id = self.runtime.get_local_device_id()
-        
+
         # CRITICAL FIX: Ensure we're on the correct device for all distributed operations
         expected_device = int(os.environ.get("LOCAL_RANK", 0))
         torch.cuda.set_device(expected_device)
         torch.set_default_device(f"cuda:{expected_device}")
-        
+
         current_device_before_gather = torch.cuda.current_device()
-        print(f"[Buffer] Rank {self.rank}: Device before device_ids all_gather: current={current_device_before_gather}, local_device_id={local_device_id}, expected={expected_device}", flush=True)
-        
+        print(
+            f"[Buffer] Rank {self.rank}: Device before device_ids all_gather: current={current_device_before_gather}, local_device_id={local_device_id}, expected={expected_device}",
+            flush=True,
+        )
+
         # Double-check device right before the call
         if current_device_before_gather != expected_device:
             torch.cuda.set_device(expected_device)
             torch.set_default_device(f"cuda:{expected_device}")
-        
+
         dist.all_gather_object(device_ids, local_device_id, group)
-        
+
         # Verify and fix device after all_gather_object
         current_device_after_gather = torch.cuda.current_device()
         if current_device_after_gather != expected_device:
-            print(f"[Buffer] Rank {self.rank}: CRITICAL - device_ids all_gather changed device! expected={expected_device}, after={current_device_after_gather}, fixing...", flush=True)
+            print(
+                f"[Buffer] Rank {self.rank}: CRITICAL - device_ids all_gather changed device! expected={expected_device}, after={current_device_after_gather}, fixing...",
+                flush=True,
+            )
             torch.cuda.set_device(expected_device)
             torch.set_default_device(f"cuda:{expected_device}")
 
@@ -119,25 +125,31 @@ class Buffer:
             None,
         ] * self.group_size
         local_ipc_handle = self.runtime.get_local_ipc_handle()
-        
+
         # CRITICAL: Ensure we're on correct device before IPC all_gather_object
         torch.cuda.set_device(expected_device)
         torch.set_default_device(f"cuda:{expected_device}")
-        
+
         current_device_before_ipc = torch.cuda.current_device()
-        print(f"[Buffer] Rank {self.rank}: Device before IPC all_gather: current={current_device_before_ipc}, expected={expected_device}", flush=True)
-        
+        print(
+            f"[Buffer] Rank {self.rank}: Device before IPC all_gather: current={current_device_before_ipc}, expected={expected_device}",
+            flush=True,
+        )
+
         # Double-check device right before the call
         if current_device_before_ipc != expected_device:
             torch.cuda.set_device(expected_device)
             torch.set_default_device(f"cuda:{expected_device}")
-        
+
         dist.all_gather_object(ipc_handles, local_ipc_handle, group)
-        
+
         # Verify and fix device after IPC all_gather_object
         current_device_after_ipc = torch.cuda.current_device()
         if current_device_after_ipc != expected_device:
-            print(f"[Buffer] Rank {self.rank}: CRITICAL - IPC all_gather changed device! expected={expected_device}, after={current_device_after_ipc}, fixing...", flush=True)
+            print(
+                f"[Buffer] Rank {self.rank}: CRITICAL - IPC all_gather changed device! expected={expected_device}, after={current_device_after_ipc}, fixing...",
+                flush=True,
+            )
             torch.cuda.set_device(expected_device)
             torch.set_default_device(f"cuda:{expected_device}")
 
@@ -185,19 +197,25 @@ class Buffer:
         # CRITICAL: Ensure device is correct before runtime.sync
         torch.cuda.set_device(expected_device)
         torch.set_default_device(f"cuda:{expected_device}")
-        
+
         current_device_before_sync = torch.cuda.current_device()
-        print(f"[Buffer] Rank {self.rank}: Device before runtime.sync: current={current_device_before_sync}, expected={expected_device}", flush=True)
-        
+        print(
+            f"[Buffer] Rank {self.rank}: Device before runtime.sync: current={current_device_before_sync}, expected={expected_device}",
+            flush=True,
+        )
+
         self.runtime.sync(device_ids, ipc_handles, root_unique_id)
-        
+
         # Verify and fix device after runtime.sync
         current_device_after_sync = torch.cuda.current_device()
         if current_device_after_sync != expected_device:
-            print(f"[Buffer] Rank {self.rank}: CRITICAL - runtime.sync changed device! expected={expected_device}, after={current_device_after_sync}, fixing...", flush=True)
+            print(
+                f"[Buffer] Rank {self.rank}: CRITICAL - runtime.sync changed device! expected={expected_device}, after={current_device_after_sync}, fixing...",
+                flush=True,
+            )
             torch.cuda.set_device(expected_device)
             torch.set_default_device(f"cuda:{expected_device}")
-        
+
         assert self.runtime.is_available()
 
     def reset_rdma_buffer(self):

@@ -9,12 +9,12 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
 #include <vector>
 #include <assert.h>
-#include <cstdlib>
 #include <stdio.h>
 #include <unistd.h>
 #if defined(__x86_64__) || defined(__i386__)
@@ -45,18 +45,18 @@ class Proxy {
     const size_t total_size = kRemoteBufferSize;
     int nDevices;
     cudaGetDeviceCount(&nDevices);
-    
+
     // 保存当前设备
     int original_device;
     cudaGetDevice(&original_device);
-    
+
     // Get LOCAL_RANK to determine which GPU this rank should use
     int local_rank = -1;
-    const char* local_rank_env = getenv("LOCAL_RANK");
+    char const* local_rank_env = getenv("LOCAL_RANK");
     if (local_rank_env != nullptr) {
       local_rank = atoi(local_rank_env);
     }
-    
+
     // In multi-GPU single-node scenarios, each rank should only allocate
     // memory on its assigned GPU to avoid conflicts
     if (local_rank >= 0 && local_rank < nDevices) {
@@ -64,14 +64,15 @@ class Proxy {
       GPU_RT_CHECK(gpuSetDevice(local_rank));
       void* buf = nullptr;
       GPU_RT_CHECK(gpuMalloc(&buf, total_size));
-      
+
       // Initialize all entries to avoid null pointer access
       // All entries will point to the same buffer allocated on this rank's GPU
       for (int d = 0; d < nDevices; ++d) {
         ctx_.per_gpu_device_buf[d] = buf;
       }
     } else {
-      // Original behavior: allocate on all GPUs (for single GPU or unspecified scenarios)
+      // Original behavior: allocate on all GPUs (for single GPU or unspecified
+      // scenarios)
       for (int d = 0; d < nDevices; ++d) {
         GPU_RT_CHECK(gpuSetDevice(d));
         void* buf = nullptr;
@@ -79,7 +80,7 @@ class Proxy {
         ctx_.per_gpu_device_buf[d] = buf;
       }
     }
-    
+
     // 恢复原始设备
     GPU_RT_CHECK(gpuSetDevice(original_device));
   }

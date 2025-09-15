@@ -38,13 +38,13 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
     hidden = args.hidden
     num_experts = args.num_experts if args.num_experts else 4 * num_ranks
     num_topk = args.num_topk
-    
+
     # Calculate expected device index based on rank and world size
     # For single node: device_index should match LOCAL_RANK
     # For multi-node: device_index should be rank % num_gpus_per_node
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
-    
+
     # Determine device index - for single node, use LOCAL_RANK
     # For multi-node, use rank % local_world_size
     if num_ranks == local_world_size:
@@ -55,57 +55,83 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
         # Multi-node scenario
         device_index = rank % local_world_size
         expected_device_for_rank = device_index
-    
+
     # Validate device availability
     if device_index >= torch.cuda.device_count():
-        raise RuntimeError(f"Rank {rank}: Calculated device_index {device_index} >= available devices {torch.cuda.device_count()}")
-    
-    print(f"[single-node] Rank {rank}/{num_ranks}: LOCAL_RANK={local_rank}, "
-          f"LOCAL_WORLD_SIZE={local_world_size}, calculated device_index={device_index}", flush=True)
-    
+        raise RuntimeError(
+            f"Rank {rank}: Calculated device_index {device_index} >= available devices {torch.cuda.device_count()}"
+        )
+
+    print(
+        f"[single-node] Rank {rank}/{num_ranks}: LOCAL_RANK={local_rank}, "
+        f"LOCAL_WORLD_SIZE={local_world_size}, calculated device_index={device_index}",
+        flush=True,
+    )
+
     # 确保本 rank 使用正确的 CUDA 设备，并将默认设备绑定到该 GPU
     torch.cuda.set_device(device_index)
     torch.set_default_device(f"cuda:{device_index}")
-    
+
     # Verify device setting worked correctly
     actual_device = torch.cuda.current_device()
     if actual_device != device_index:
-        raise RuntimeError(f"Rank {rank}: Failed to set device to {device_index}, got {actual_device}")
-    
-    print(f"[single-node] Rank {rank}/{num_ranks}, Device cuda:{device_index} (verified)", flush=True)
-    print(f"[single-node] Configuration: tokens={num_tokens}, hidden={hidden}, "
-          f"experts={num_experts}, topk={num_topk}", flush=True)
-    print(f"[single-node] Mode: {'Mixed simulation' if args.mixed else 'Pure intranode'}", flush=True)
+        raise RuntimeError(
+            f"Rank {rank}: Failed to set device to {device_index}, got {actual_device}"
+        )
+
+    print(
+        f"[single-node] Rank {rank}/{num_ranks}, Device cuda:{device_index} (verified)",
+        flush=True,
+    )
+    print(
+        f"[single-node] Configuration: tokens={num_tokens}, hidden={hidden}, "
+        f"experts={num_experts}, topk={num_topk}",
+        flush=True,
+    )
+    print(
+        f"[single-node] Mode: {'Mixed simulation' if args.mixed else 'Pure intranode'}",
+        flush=True,
+    )
 
     torch.manual_seed(rank)
-    
+
     # CRITICAL: Ensure we're on the correct device before creating ANY tensors
     current_before_tensors = torch.cuda.current_device()
     if current_before_tensors != device_index:
-        print(f"[single-node] Rank {rank}: WARNING - device mismatch before tensor creation. "
-              f"Expected {device_index}, current {current_before_tensors}. Fixing...", flush=True)
+        print(
+            f"[single-node] Rank {rank}: WARNING - device mismatch before tensor creation. "
+            f"Expected {device_index}, current {current_before_tensors}. Fixing...",
+            flush=True,
+        )
         torch.cuda.set_device(device_index)
         torch.set_default_device(f"cuda:{device_index}")
-    
+
     # Generate input data - explicitly specify device to be safe
     x = torch.randn(
         (num_tokens, hidden), dtype=torch.bfloat16, device=f"cuda:{device_index}"
     )
-    
+
     # Verify tensor is on correct device
     if x.device.index != device_index:
-        raise RuntimeError(f"Rank {rank}: Input tensor x created on wrong device! "
-                         f"Expected cuda:{device_index}, got {x.device}")
-    
-    print(f"[single-node] Rank {rank}: Created input tensor on {x.device} (verified)", flush=True)
-    
+        raise RuntimeError(
+            f"Rank {rank}: Input tensor x created on wrong device! "
+            f"Expected cuda:{device_index}, got {x.device}"
+        )
+
+    print(
+        f"[single-node] Rank {rank}: Created input tensor on {x.device} (verified)",
+        flush=True,
+    )
+
     if args.mixed:
         # Simulate mixed workload pattern - some experts are treated as "remote"
         # This helps test different communication patterns even on single node
-        topk_idx = torch.zeros((num_tokens, num_topk), dtype=torch.long, device=f"cuda:{device_index}")
-        
+        topk_idx = torch.zeros(
+            (num_tokens, num_topk), dtype=torch.long, device=f"cuda:{device_index}"
+        )
+
         experts_per_rank = num_experts // num_ranks
-        
+
         for i in range(num_tokens):
             # Simulate 50% local, 50% "remote" expert selection
             # Even though all are on same node, this tests different access patterns
@@ -113,38 +139,72 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
                 # Prefer "local" experts (same rank)
                 local_start = rank * experts_per_rank
                 local_end = (rank + 1) * experts_per_rank
-                local_choices = torch.randint(local_start, local_end, (num_topk // 2,), device=f"cuda:{device_index}")
-                
+                local_choices = torch.randint(
+                    local_start,
+                    local_end,
+                    (num_topk // 2,),
+                    device=f"cuda:{device_index}",
+                )
+
                 # Add some "remote" experts
                 remote_choices = []
                 for _ in range(num_topk - len(local_choices)):
-                    remote_rank = (rank + 1 + torch.randint(0, num_ranks - 1, (1,), device=f"cuda:{device_index}").item()) % num_ranks
+                    remote_rank = (
+                        rank
+                        + 1
+                        + torch.randint(
+                            0, num_ranks - 1, (1,), device=f"cuda:{device_index}"
+                        ).item()
+                    ) % num_ranks
                     remote_start = remote_rank * experts_per_rank
                     remote_end = (remote_rank + 1) * experts_per_rank
-                    remote_choices.append(torch.randint(remote_start, remote_end, (1,), device=f"cuda:{device_index}").item())
-                
-                topk_idx[i] = torch.cat([
-                    local_choices,
-                    torch.tensor(remote_choices, dtype=torch.long, device=f"cuda:{device_index}")
-                ]).to(f"cuda:{device_index}")
+                    remote_choices.append(
+                        torch.randint(
+                            remote_start,
+                            remote_end,
+                            (1,),
+                            device=f"cuda:{device_index}",
+                        ).item()
+                    )
+
+                topk_idx[i] = torch.cat(
+                    [
+                        local_choices,
+                        torch.tensor(
+                            remote_choices,
+                            dtype=torch.long,
+                            device=f"cuda:{device_index}",
+                        ),
+                    ]
+                ).to(f"cuda:{device_index}")
             else:
                 # Fully random selection
-                topk_idx[i] = torch.randint(0, num_experts, (num_topk,), device=f"cuda:{device_index}")
-        
-        print(f"[single-node] Mixed pattern: alternating local/remote expert selection", flush=True)
+                topk_idx[i] = torch.randint(
+                    0, num_experts, (num_topk,), device=f"cuda:{device_index}"
+                )
+
+        print(
+            f"[single-node] Mixed pattern: alternating local/remote expert selection",
+            flush=True,
+        )
     else:
         # Pure random selection for standard intranode test
         topk_idx = torch.randint(
             0, num_experts, (num_tokens, num_topk), device=f"cuda:{device_index}"
         )
         print(f"[single-node] Pure intranode: random expert selection", flush=True)
-    
+
     # Verify topk_idx tensor is on correct device
     if topk_idx.device.index != device_index:
-        raise RuntimeError(f"Rank {rank}: topk_idx tensor created on wrong device! "
-                         f"Expected cuda:{device_index}, got {topk_idx.device}")
-    print(f"[single-node] Rank {rank}: Created topk_idx tensor on {topk_idx.device} (verified)", flush=True)
-    
+        raise RuntimeError(
+            f"Rank {rank}: topk_idx tensor created on wrong device! "
+            f"Expected cuda:{device_index}, got {topk_idx.device}"
+        )
+    print(
+        f"[single-node] Rank {rank}: Created topk_idx tensor on {topk_idx.device} (verified)",
+        flush=True,
+    )
+
     num_device_sms = torch.cuda.get_device_properties(
         device_index
     ).multi_processor_count
@@ -153,47 +213,70 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
     scratch = torch.empty(
         scratch_nbytes, dtype=torch.uint8, device=f"cuda:{device_index}"
     )
-    
+
     # Verify device before initialize_uccl
     pre_init_device = torch.cuda.current_device()
-    print(f"[single-node] Rank {rank}: Device before initialize_uccl: current={pre_init_device}, expected={device_index}", flush=True)
+    print(
+        f"[single-node] Rank {rank}: Device before initialize_uccl: current={pre_init_device}, expected={device_index}",
+        flush=True,
+    )
     if pre_init_device != device_index:
-        print(f"[single-node] Rank {rank}: CRITICAL - Device mismatch before initialize_uccl!", flush=True)
+        print(
+            f"[single-node] Rank {rank}: CRITICAL - Device mismatch before initialize_uccl!",
+            flush=True,
+        )
         torch.cuda.set_device(device_index)
         torch.set_default_device(f"cuda:{device_index}")
-    
+
     proxies, workers = initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group)
-    
+
     # Verify device after initialize_uccl
     post_init_device = torch.cuda.current_device()
-    print(f"[single-node] Rank {rank}: Device after initialize_uccl: current={post_init_device}, expected={device_index}", flush=True)
+    print(
+        f"[single-node] Rank {rank}: Device after initialize_uccl: current={post_init_device}, expected={device_index}",
+        flush=True,
+    )
     if post_init_device != device_index:
-        print(f"[single-node] Rank {rank}: CRITICAL - initialize_uccl changed device! Fixing...", flush=True)
+        print(
+            f"[single-node] Rank {rank}: CRITICAL - initialize_uccl changed device! Fixing...",
+            flush=True,
+        )
         torch.cuda.set_device(device_index)
         torch.set_default_device(f"cuda:{device_index}")
 
     try:
         # Additional device consistency check before creating buffer
         current_dev = torch.cuda.current_device()
-        print(f"[single-node] Rank {rank}: Pre-buffer device check: current={current_dev}, expected={device_index}", flush=True)
-        
+        print(
+            f"[single-node] Rank {rank}: Pre-buffer device check: current={current_dev}, expected={device_index}",
+            flush=True,
+        )
+
         if current_dev != device_index:
-            print(f"[single-node] Rank {rank}: Device inconsistency detected, re-setting device...", flush=True)
+            print(
+                f"[single-node] Rank {rank}: Device inconsistency detected, re-setting device...",
+                flush=True,
+            )
             torch.cuda.set_device(device_index)
             torch.set_default_device(f"cuda:{device_index}")
             # Verify the fix worked
             new_current = torch.cuda.current_device()
             if new_current != device_index:
-                raise RuntimeError(f"Rank {rank}: Critical device setting failure. Expected {device_index}, got {new_current}")
-        
+                raise RuntimeError(
+                    f"Rank {rank}: Critical device setting failure. Expected {device_index}, got {new_current}"
+                )
+
         # For single node, prioritize NVLink over RDMA
         # Double-check device before buffer creation
         pre_buffer_device = torch.cuda.current_device()
         if pre_buffer_device != device_index:
-            print(f"[single-node] Rank {rank}: CRITICAL - Device wrong before Buffer creation! current={pre_buffer_device}, expected={device_index}", flush=True)
+            print(
+                f"[single-node] Rank {rank}: CRITICAL - Device wrong before Buffer creation! current={pre_buffer_device}, expected={device_index}",
+                flush=True,
+            )
             torch.cuda.set_device(device_index)
             torch.set_default_device(f"cuda:{device_index}")
-        
+
         if num_ranks > 1:
             # Multi-GPU single node - use NVLink
             buffer = Buffer(
@@ -207,7 +290,9 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
                 allow_mnnvl=False,  # No multi-node NVLink needed
                 explicitly_destroy=True,
             )
-            print("[single-node] ✓ Buffer created with NVLink for multi-GPU", flush=True)
+            print(
+                "[single-node] ✓ Buffer created with NVLink for multi-GPU", flush=True
+            )
         else:
             # Single GPU - local memory only
             buffer = Buffer(
@@ -222,11 +307,14 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
                 explicitly_destroy=True,
             )
             print("[single-node] ✓ Buffer created for single GPU", flush=True)
-            
+
         # Verify device after buffer creation
         post_buffer_device = torch.cuda.current_device()
         if post_buffer_device != device_index:
-            print(f"[single-node] Rank {rank}: CRITICAL - Buffer creation changed device! current={post_buffer_device}, expected={device_index}", flush=True)
+            print(
+                f"[single-node] Rank {rank}: CRITICAL - Buffer creation changed device! current={post_buffer_device}, expected={device_index}",
+                flush=True,
+            )
             torch.cuda.set_device(device_index)
             torch.set_default_device(f"cuda:{device_index}")
 
@@ -235,8 +323,10 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
         # Verify device consistency before setting up proxies
         verification_device = torch.cuda.current_device()
         if verification_device != device_index:
-            raise RuntimeError(f"Rank {rank}: Device inconsistency before proxy setup. "
-                             f"Expected {device_index}, current {verification_device}")
+            raise RuntimeError(
+                f"Rank {rank}: Device inconsistency before proxy setup. "
+                f"Expected {device_index}, current {verification_device}"
+            )
 
         for proxy in proxies:
             proxy.calculate_and_set_dispatch_recv_data_offset(
@@ -245,48 +335,64 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
             proxy.set_atomic_buffer_ptr(proxies[0].get_atomic_buffer_ptr())
 
         if rank == 0:
-            print(f"[single-node] ✓ Atomic buffer connected and offsets set. "
-                  f"All ranks using consistent device mapping (rank->device).", flush=True)
-        
+            print(
+                f"[single-node] ✓ Atomic buffer connected and offsets set. "
+                f"All ranks using consistent device mapping (rank->device).",
+                flush=True,
+            )
+
         # Final device-rank consistency check
-        print(f"[single-node] Rank {rank}: Final device consistency check - "
-              f"rank={rank}, device_index={device_index}, current_device={torch.cuda.current_device()}, "
-              f"expected_mapping=rank%{local_world_size if num_ranks != local_world_size else 'local_rank'}", flush=True)
+        print(
+            f"[single-node] Rank {rank}: Final device consistency check - "
+            f"rank={rank}, device_index={device_index}, current_device={torch.cuda.current_device()}, "
+            f"expected_mapping=rank%{local_world_size if num_ranks != local_world_size else 'local_rank'}",
+            flush=True,
+        )
 
         cumulative_local_expert_recv_stats = torch.zeros(
             (num_experts // num_ranks,), dtype=torch.int, device=f"cuda:{device_index}"
         )
-        
+
         # Verify this tensor is also on correct device
         if cumulative_local_expert_recv_stats.device.index != device_index:
-            raise RuntimeError(f"Rank {rank}: cumulative_local_expert_recv_stats tensor on wrong device! "
-                             f"Expected cuda:{device_index}, got {cumulative_local_expert_recv_stats.device}")
-        
+            raise RuntimeError(
+                f"Rank {rank}: cumulative_local_expert_recv_stats tensor on wrong device! "
+                f"Expected cuda:{device_index}, got {cumulative_local_expert_recv_stats.device}"
+            )
+
         # Warmup run if requested
         if args.warmup > 0:
-            print(f"[single-node] Running {args.warmup} warmup iterations...", flush=True)
+            print(
+                f"[single-node] Running {args.warmup} warmup iterations...", flush=True
+            )
             for _ in range(args.warmup):
-                recv_x, recv_count, handle, event, dispatch_hook = buffer.low_latency_dispatch(
-                    x=x,
-                    topk_idx=topk_idx,
-                    num_max_dispatch_tokens_per_rank=num_tokens,
-                    num_experts=num_experts,
-                    use_fp8=False,
-                    round_scale=False,
-                    use_ue8m0=False,
-                    cumulative_local_expert_recv_stats=cumulative_local_expert_recv_stats.clone(),
-                    async_finish=False,
-                    return_recv_hook=True,
+                recv_x, recv_count, handle, event, dispatch_hook = (
+                    buffer.low_latency_dispatch(
+                        x=x,
+                        topk_idx=topk_idx,
+                        num_max_dispatch_tokens_per_rank=num_tokens,
+                        num_experts=num_experts,
+                        use_fp8=False,
+                        round_scale=False,
+                        use_ue8m0=False,
+                        cumulative_local_expert_recv_stats=cumulative_local_expert_recv_stats.clone(),
+                        async_finish=False,
+                        return_recv_hook=True,
+                    )
                 )
                 dispatch_hook()
-                
+
                 topk_weights = torch.ones(
-                    (num_tokens, num_topk), dtype=torch.float32, device=f"cuda:{device_index}"
+                    (num_tokens, num_topk),
+                    dtype=torch.float32,
+                    device=f"cuda:{device_index}",
                 )
                 # Verify tensor device
                 if topk_weights.device.index != device_index:
-                    raise RuntimeError(f"Rank {rank}: topk_weights tensor on wrong device in warmup! "
-                                     f"Expected cuda:{device_index}, got {topk_weights.device}")
+                    raise RuntimeError(
+                        f"Rank {rank}: topk_weights tensor on wrong device in warmup! "
+                        f"Expected cuda:{device_index}, got {topk_weights.device}"
+                    )
                 combined_x, combine_event, combine_hook = buffer.low_latency_combine(
                     x=recv_x,
                     topk_idx=topk_idx,
@@ -299,45 +405,54 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
                 )
                 combine_hook()
             print("[single-node] ✓ Warmup completed", flush=True)
-        
+
         # Benchmark run
-        print(f"[single-node] Running {args.iterations} benchmark iterations...", flush=True)
+        print(
+            f"[single-node] Running {args.iterations} benchmark iterations...",
+            flush=True,
+        )
         dispatch_times = []
         combine_times = []
-        
+
         for iter_idx in range(args.iterations):
             # Reset stats for each iteration
             cumulative_local_expert_recv_stats.zero_()
-            
+
             # Dispatch
             torch.cuda.synchronize()
             start_time = time.time()
-            recv_x, recv_count, handle, event, dispatch_hook = buffer.low_latency_dispatch(
-                x=x,
-                topk_idx=topk_idx,
-                num_max_dispatch_tokens_per_rank=num_tokens,
-                num_experts=num_experts,
-                use_fp8=False,
-                round_scale=False,
-                use_ue8m0=False,
-                cumulative_local_expert_recv_stats=cumulative_local_expert_recv_stats,
-                async_finish=False,
-                return_recv_hook=True,
+            recv_x, recv_count, handle, event, dispatch_hook = (
+                buffer.low_latency_dispatch(
+                    x=x,
+                    topk_idx=topk_idx,
+                    num_max_dispatch_tokens_per_rank=num_tokens,
+                    num_experts=num_experts,
+                    use_fp8=False,
+                    round_scale=False,
+                    use_ue8m0=False,
+                    cumulative_local_expert_recv_stats=cumulative_local_expert_recv_stats,
+                    async_finish=False,
+                    return_recv_hook=True,
+                )
             )
             dispatch_hook()
             torch.cuda.synchronize()
             dispatch_time = time.time() - start_time
             dispatch_times.append(dispatch_time)
-            
+
             # Combine
             topk_weights = torch.ones(
-                (num_tokens, num_topk), dtype=torch.float32, device=f"cuda:{device_index}"
+                (num_tokens, num_topk),
+                dtype=torch.float32,
+                device=f"cuda:{device_index}",
             )
             # Verify tensor device
             if topk_weights.device.index != device_index:
-                raise RuntimeError(f"Rank {rank}: topk_weights tensor on wrong device in benchmark! "
-                                 f"Expected cuda:{device_index}, got {topk_weights.device}")
-            
+                raise RuntimeError(
+                    f"Rank {rank}: topk_weights tensor on wrong device in benchmark! "
+                    f"Expected cuda:{device_index}, got {topk_weights.device}"
+                )
+
             torch.cuda.synchronize()
             start_time = time.time()
             combined_x, combine_event, combine_hook = buffer.low_latency_combine(
@@ -354,11 +469,14 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
             torch.cuda.synchronize()
             combine_time = time.time() - start_time
             combine_times.append(combine_time)
-            
+
             if args.verbose:
-                print(f"[single-node] Iter {iter_idx}: dispatch={dispatch_time:.4f}s, "
-                      f"combine={combine_time:.4f}s", flush=True)
-        
+                print(
+                    f"[single-node] Iter {iter_idx}: dispatch={dispatch_time:.4f}s, "
+                    f"combine={combine_time:.4f}s",
+                    flush=True,
+                )
+
         # Calculate statistics
         avg_dispatch = sum(dispatch_times) / len(dispatch_times)
         avg_combine = sum(combine_times) / len(combine_times)
@@ -366,14 +484,17 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
         min_combine = min(combine_times)
         max_dispatch = max(dispatch_times)
         max_combine = max(combine_times)
-        
+
         # Verify output shape
         if combined_x.shape[0] == num_tokens and combined_x.shape[1] == hidden:
             print("[single-node] ✓ Output shape verification passed!", flush=True)
         else:
-            print(f"[single-node] ✗ Output shape mismatch! Expected ({num_tokens}, {hidden}), "
-                  f"got {combined_x.shape}", flush=True)
-        
+            print(
+                f"[single-node] ✗ Output shape mismatch! Expected ({num_tokens}, {hidden}), "
+                f"got {combined_x.shape}",
+                flush=True,
+            )
+
         # Print summary
         if rank == 0:
             print("\n[single-node] === Performance Summary ===", flush=True)
@@ -381,9 +502,15 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
             print(f"    - GPUs: {num_ranks}", flush=True)
             print(f"    - Tokens: {num_tokens}", flush=True)
             print(f"    - Hidden: {hidden}", flush=True)
-            print(f"    - Experts: {num_experts} ({num_experts // num_ranks} per rank)", flush=True)
+            print(
+                f"    - Experts: {num_experts} ({num_experts // num_ranks} per rank)",
+                flush=True,
+            )
             print(f"    - Top-K: {num_topk}", flush=True)
-            print(f"    - Mode: {'Mixed simulation' if args.mixed else 'Pure intranode'}", flush=True)
+            print(
+                f"    - Mode: {'Mixed simulation' if args.mixed else 'Pure intranode'}",
+                flush=True,
+            )
             print(f"  Dispatch times (s):", flush=True)
             print(f"    - Average: {avg_dispatch:.6f}", flush=True)
             print(f"    - Min: {min_dispatch:.6f}", flush=True)
@@ -392,8 +519,10 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
             print(f"    - Average: {avg_combine:.6f}", flush=True)
             print(f"    - Min: {min_combine:.6f}", flush=True)
             print(f"    - Max: {max_combine:.6f}", flush=True)
-            print(f"  Total average time: {avg_dispatch + avg_combine:.6f}s", flush=True)
-            
+            print(
+                f"  Total average time: {avg_dispatch + avg_combine:.6f}s", flush=True
+            )
+
             # Calculate throughput
             total_data = num_tokens * hidden * 2  # bfloat16 = 2 bytes
             throughput_gbps = (total_data / 1e9) / (avg_dispatch + avg_combine)
@@ -402,6 +531,7 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
 
     except Exception as e:
         import traceback
+
         print(f"[single-node] ✗ Error on rank {rank}: {repr(e)}", flush=True)
         traceback.print_exc()
         raise
@@ -415,12 +545,18 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
     torch.cuda.set_device(device_index)
     torch.set_default_device(f"cuda:{device_index}")
     current_dev = torch.cuda.current_device()
-    print(f"[Rank {rank}] Device before barrier: current={current_dev}, expected={device_index}", flush=True)
+    print(
+        f"[Rank {rank}] Device before barrier: current={current_dev}, expected={device_index}",
+        flush=True,
+    )
     if current_dev != device_index:
-        print(f"[Rank {rank}] CRITICAL: Device mismatch before barrier! Fixing...", flush=True)
+        print(
+            f"[Rank {rank}] CRITICAL: Device mismatch before barrier! Fixing...",
+            flush=True,
+        )
         torch.cuda.set_device(device_index)
         torch.set_default_device(f"cuda:{device_index}")
-    
+
     try:
         dist.barrier()
     except Exception as e:
@@ -433,12 +569,18 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
     torch.cuda.set_device(device_index)
     torch.set_default_device(f"cuda:{device_index}")
     final_current_dev = torch.cuda.current_device()
-    print(f"[Rank {rank}] Device before final barrier: current={final_current_dev}, expected={device_index}", flush=True)
+    print(
+        f"[Rank {rank}] Device before final barrier: current={final_current_dev}, expected={device_index}",
+        flush=True,
+    )
     if final_current_dev != device_index:
-        print(f"[Rank {rank}] CRITICAL: Device mismatch before final barrier! Fixing...", flush=True)
+        print(
+            f"[Rank {rank}] CRITICAL: Device mismatch before final barrier! Fixing...",
+            flush=True,
+        )
         torch.cuda.set_device(device_index)
         torch.set_default_device(f"cuda:{device_index}")
-    
+
     try:
         dist.barrier()
     except Exception as e:
@@ -447,56 +589,74 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
 
 
 def test_worker(local_rank: int, num_local_ranks: int, args):
-    print(f"[Local Rank {local_rank}] Entering test_worker, about to init distributed...", flush=True)
-    
+    print(
+        f"[Local Rank {local_rank}] Entering test_worker, about to init distributed...",
+        flush=True,
+    )
+
     # For single node: torchrun sets these incorrectly for our use case
     # torchrun sets WORLD_SIZE = num_local_ranks and RANK = local_rank
     # But init_dist expects WORLD_SIZE = num_nodes and RANK = node_rank
-    
+
     # Override for single node scenario
     os.environ["WORLD_SIZE"] = "1"  # Number of nodes (single node = 1)
     os.environ["RANK"] = "0"  # Node index (first and only node = 0)
-    
-    print(f"[Local Rank {local_rank}] Environment for init_dist: "
-          f"WORLD_SIZE={os.environ.get('WORLD_SIZE')} (nodes), "
-          f"RANK={os.environ.get('RANK')} (node index), "
-          f"LOCAL_RANK={local_rank}, LOCAL_WORLD_SIZE={num_local_ranks}, "
-          f"MASTER_ADDR={os.environ.get('MASTER_ADDR')}, "
-          f"MASTER_PORT={os.environ.get('MASTER_PORT')}", flush=True)
-    
+
+    print(
+        f"[Local Rank {local_rank}] Environment for init_dist: "
+        f"WORLD_SIZE={os.environ.get('WORLD_SIZE')} (nodes), "
+        f"RANK={os.environ.get('RANK')} (node index), "
+        f"LOCAL_RANK={local_rank}, LOCAL_WORLD_SIZE={num_local_ranks}, "
+        f"MASTER_ADDR={os.environ.get('MASTER_ADDR')}, "
+        f"MASTER_PORT={os.environ.get('MASTER_PORT')}",
+        flush=True,
+    )
+
     rank, num_ranks, group = init_dist(local_rank, num_local_ranks)
-    print(f"[Local Rank {local_rank}] init_dist completed. Global rank={rank}/{num_ranks}", flush=True)
-    
+    print(
+        f"[Local Rank {local_rank}] init_dist completed. Global rank={rank}/{num_ranks}",
+        flush=True,
+    )
+
     # CRITICAL: Re-set device after distributed initialization
     # torchrun and distributed initialization can change the current device
     torch.cuda.set_device(local_rank)
     torch.set_default_device(f"cuda:{local_rank}")
-    print(f"[Local Rank {local_rank}] Re-set device to cuda:{local_rank} after init_dist", flush=True)
+    print(
+        f"[Local Rank {local_rank}] Re-set device to cuda:{local_rank} after init_dist",
+        flush=True,
+    )
 
     try:
         print(f"[Rank {rank}] Starting test_single_node...", flush=True)
         test_single_node(rank, num_ranks, group, args)
     finally:
-        print(f"[Rank {rank}] Test completed, running barrier before destroy...", flush=True)
+        print(
+            f"[Rank {rank}] Test completed, running barrier before destroy...",
+            flush=True,
+        )
         # Ensure we're on the correct device before barrier
         device_index = int(os.environ.get("LOCAL_RANK", 0))
         torch.cuda.set_device(device_index)
         torch.set_default_device(f"cuda:{device_index}")
-        
+
         # Verify device setting before barrier
         cleanup_current_dev = torch.cuda.current_device()
         if cleanup_current_dev != device_index:
-            print(f"[Rank {rank}] WARNING: Device mismatch in cleanup! "
-                  f"current={cleanup_current_dev}, expected={device_index}", flush=True)
+            print(
+                f"[Rank {rank}] WARNING: Device mismatch in cleanup! "
+                f"current={cleanup_current_dev}, expected={device_index}",
+                flush=True,
+            )
             torch.cuda.set_device(device_index)
             torch.set_default_device(f"cuda:{device_index}")
-        
+
         try:
             dist.barrier()
         except Exception as e:
             print(f"[Rank {rank}] Cleanup barrier failed: {e}", flush=True)
             # Continue with cleanup even if barrier fails
-        
+
         print(f"[Rank {rank}] Destroying process group...", flush=True)
         dist.destroy_process_group()
         print(f"[Rank {rank}] Process group destroyed", flush=True)
@@ -506,21 +666,41 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Single-node DeepEP test")
     parser.add_argument("--num-tokens", type=int, default=512, help="Number of tokens")
     parser.add_argument("--hidden", type=int, default=2048, help="Hidden dimension")
-    parser.add_argument("--num-experts", type=int, default=None, help="Number of experts (default: 4*num_ranks)")
+    parser.add_argument(
+        "--num-experts",
+        type=int,
+        default=None,
+        help="Number of experts (default: 4*num_ranks)",
+    )
     parser.add_argument("--num-topk", type=int, default=4, help="Top-K value")
-    parser.add_argument("--buffer-size", type=float, default=1.0, help="Buffer size in GB")
-    parser.add_argument("--mixed", action="store_true", help="Simulate mixed workload pattern")
-    parser.add_argument("--iterations", type=int, default=10, help="Number of benchmark iterations")
-    parser.add_argument("--warmup", type=int, default=2, help="Number of warmup iterations")
-    parser.add_argument("--verbose", action="store_true", help="Print per-iteration timings")
+    parser.add_argument(
+        "--buffer-size", type=float, default=1.0, help="Buffer size in GB"
+    )
+    parser.add_argument(
+        "--mixed", action="store_true", help="Simulate mixed workload pattern"
+    )
+    parser.add_argument(
+        "--iterations", type=int, default=10, help="Number of benchmark iterations"
+    )
+    parser.add_argument(
+        "--warmup", type=int, default=2, help="Number of warmup iterations"
+    )
+    parser.add_argument(
+        "--verbose", action="store_true", help="Print per-iteration timings"
+    )
     args = parser.parse_args()
-    
+
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     num_local_ranks = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
-    
-    print(f"[Rank {local_rank}] Single-node test starting with args: {args}", flush=True)
-    print(f"[Rank {local_rank}] LOCAL_RANK={local_rank}, LOCAL_WORLD_SIZE={num_local_ranks}", flush=True)
-    
+
+    print(
+        f"[Rank {local_rank}] Single-node test starting with args: {args}", flush=True
+    )
+    print(
+        f"[Rank {local_rank}] LOCAL_RANK={local_rank}, LOCAL_WORLD_SIZE={num_local_ranks}",
+        flush=True,
+    )
+
     # Set up IB if available
     print(f"[Rank {local_rank}] Detecting IB HCA...", flush=True)
     ib_dev = detect_ib_hca()
@@ -528,7 +708,10 @@ if __name__ == "__main__":
         os.environ["NCCL_IB_HCA"] = ib_dev
         print(f"[Rank {local_rank}] Set NCCL_IB_HCA={ib_dev}", flush=True)
     else:
-        print(f"[Rank {local_rank}] No IB device found or not Mellanox (detected: {ib_dev})", flush=True)
-    
+        print(
+            f"[Rank {local_rank}] No IB device found or not Mellanox (detected: {ib_dev})",
+            flush=True,
+        )
+
     print(f"[Rank {local_rank}] Starting test_worker...", flush=True)
     test_worker(local_rank, num_local_ranks, args)

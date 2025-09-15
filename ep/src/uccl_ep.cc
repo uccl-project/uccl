@@ -93,49 +93,55 @@ class Buffer {
           rank, num_ranks, num_nvl_bytes, num_rdma_bytes);
       {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
-        
+
         // First get the current device to check consistency
         int current_device;
         CUDA_CHECK(cudaGetDevice(&current_device));
-        
+
         // For single node scenarios, device_index should match local rank
         // For multi-node scenarios, we need to calculate the correct device
-        int expected_device = rank % max_nvl_peers;  // Assume device mapping based on rank
-        
+        int expected_device =
+            rank % max_nvl_peers;  // Assume device mapping based on rank
+
         // If current device doesn't match expected, try to set it
         if (current_device != expected_device) {
-          printf("Buffer: Device mismatch detected. Current: %d, Expected: %d for rank %d. "
-                 "Attempting to set correct device...\n", 
-                 current_device, expected_device, rank);
-          
+          printf(
+              "Buffer: Device mismatch detected. Current: %d, Expected: %d for "
+              "rank %d. "
+              "Attempting to set correct device...\n",
+              current_device, expected_device, rank);
+
           // Try to set the expected device
           cudaError_t set_result = cudaSetDevice(expected_device);
           if (set_result == cudaSuccess) {
             device_index = expected_device;
-            printf("Buffer: Successfully set device to %d for rank %d\n", 
+            printf("Buffer: Successfully set device to %d for rank %d\n",
                    device_index, rank);
           } else {
             // If we can't set the expected device, use current device but warn
-            printf("Buffer: WARNING - Could not set device %d for rank %d (error: %s). "
-                   "Using current device %d\n", 
-                   expected_device, rank, cudaGetErrorString(set_result), current_device);
+            printf(
+                "Buffer: WARNING - Could not set device %d for rank %d (error: "
+                "%s). "
+                "Using current device %d\n",
+                expected_device, rank, cudaGetErrorString(set_result),
+                current_device);
             device_index = current_device;
           }
         } else {
           device_index = current_device;
         }
-        
+
         // Now check if proxy is registered for this device
         auto it = uccl::g_proxies_by_dev.find(device_index);
         if (it == uccl::g_proxies_by_dev.end() || it->second.empty()) {
           throw std::runtime_error(
               "ep.Buffer: no UcclProxy registered for device " +
-              std::to_string(device_index) + " (rank " + std::to_string(rank) + 
-              "). Current device was " + std::to_string(current_device) + 
+              std::to_string(device_index) + " (rank " + std::to_string(rank) +
+              "). Current device was " + std::to_string(current_device) +
               ". Call uccl.ep.register_proxy(device_index, proxies) first.");
         }
-        
-        printf("Buffer: Using device %d for rank %d (found %zu proxies)\n", 
+
+        printf("Buffer: Using device %d for rank %d (found %zu proxies)\n",
                device_index, rank, it->second.size());
       }
 
@@ -199,7 +205,8 @@ class Buffer {
                            static_cast<size_t>(buffer_ptr_bytes) +
                            static_cast<size_t>(barrier_signal_ptr_bytes);
 
-      // Ensure we're on the correct device before memory allocation and IPC handle creation
+      // Ensure we're on the correct device before memory allocation and IPC
+      // handle creation
       CUDA_CHECK(cudaSetDevice(device_index));
       CUDA_CHECK(cudaMalloc(&buffer_ptrs[nvl_rank], total_bytes));
       CUDA_CHECK(
@@ -1713,23 +1720,28 @@ class Buffer {
       for (int i = 0, offset = rdma_rank * num_nvl_ranks; i < num_nvl_ranks;
            ++i) {
         int global_rank = offset + i;
-        int local_rank_idx = global_rank % max_nvl_peers;  // Map to correct buffer_ptrs index
-        
+        int local_rank_idx =
+            global_rank % max_nvl_peers;  // Map to correct buffer_ptrs index
+
         EP_HOST_ASSERT(all_gathered_handles[global_rank].has_value());
-        auto handle_str = std::string(all_gathered_handles[global_rank].value());
+        auto handle_str =
+            std::string(all_gathered_handles[global_rank].value());
         EP_HOST_ASSERT(handle_str.size() == CUDA_IPC_HANDLE_SIZE);
         if (global_rank != rank) {
           std::memcpy(ipc_handles[local_rank_idx].reserved, handle_str.c_str(),
                       CUDA_IPC_HANDLE_SIZE);
           // Ensure we're on the correct device before opening IPC handle
           CUDA_CHECK(cudaSetDevice(device_index));
-          CUDA_CHECK(cudaIpcOpenMemHandle(&buffer_ptrs[local_rank_idx], ipc_handles[local_rank_idx],
+          CUDA_CHECK(cudaIpcOpenMemHandle(&buffer_ptrs[local_rank_idx],
+                                          ipc_handles[local_rank_idx],
                                           cudaIpcMemLazyEnablePeerAccess));
           barrier_signal_ptrs[local_rank_idx] = reinterpret_cast<int*>(
-              static_cast<uint8_t*>(buffer_ptrs[local_rank_idx]) + num_nvl_bytes);
+              static_cast<uint8_t*>(buffer_ptrs[local_rank_idx]) +
+              num_nvl_bytes);
         } else {
-          // This is our own rank - buffer_ptrs[local_rank_idx] should already be set from constructor
-          // But let's verify it's not null and the IPC handle matches
+          // This is our own rank - buffer_ptrs[local_rank_idx] should already
+          // be set from constructor But let's verify it's not null and the IPC
+          // handle matches
           EP_HOST_ASSERT(buffer_ptrs[local_rank_idx] != nullptr);
           EP_HOST_ASSERT(std::memcmp(ipc_handles[local_rank_idx].reserved,
                                      handle_str.c_str(),
