@@ -92,10 +92,8 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   recv_task_ring_ = uccl::create_ring(sizeof(Task), kTaskRingSize);
   read_task_ring_ = uccl::create_ring(sizeof(RWTask), kTaskRingSize);
   write_task_ring_ = uccl::create_ring(sizeof(RWTask), kTaskRingSize);
-  sendv_task_ring_ =
-      uccl::create_ring(sizeof(TaskBatchPtrWrapper), kTaskRingSize);
-  recvv_task_ring_ =
-      uccl::create_ring(sizeof(TaskBatchPtrWrapper), kTaskRingSize);
+  sendv_task_ring_ = uccl::create_ring(sizeof(TaskBatch), kTaskRingSize);
+  recvv_task_ring_ = uccl::create_ring(sizeof(TaskBatch), kTaskRingSize);
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
 
@@ -764,23 +762,13 @@ bool Endpoint::sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                            uint64_t* transfer_id) {
   [[maybe_unused]] auto _ =
       PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
-  TaskBatch* task = new TaskBatch{
-      .type = TaskType::SENDV,
-      .const_data_v = data_v,
-      .data_v = {},  // Empty for sendv
-      .size_v = size_v,
-      .conn_id = conn_id,
-      .mr_id_v = mr_id_v,
-      .done = false,
-      .self_ptr = nullptr,
-      .num_iovs = num_iovs,
-  };
-  task->self_ptr = task;
-
+  
+  TaskBatch* task = create_task_batch_sendv(conn_id, data_v, size_v, mr_id_v);
   *transfer_id = reinterpret_cast<uint64_t>(task);
-  TaskBatchPtrWrapper wrapper = {.ptr = task};
-  while (jring_mp_enqueue_bulk(sendv_task_ring_, &wrapper, 1, nullptr) != 1) {
+  
+  while (jring_mp_enqueue_bulk(sendv_task_ring_, task, 1, nullptr) != 1) {
   }
+  
   return true;
 }
 
@@ -790,24 +778,13 @@ bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                            uint64_t* transfer_id) {
   [[maybe_unused]] auto _ =
       PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
-  TaskBatch* task = new TaskBatch{
-      .type = TaskType::RECVV,
-      .const_data_v = {},  // Empty for recvv
-      .data_v = data_v,
-      .size_v = size_v,
-      .conn_id = conn_id,
-      .mr_id_v = mr_id_v,
-      .done = false,
-      .self_ptr = nullptr,
-      .num_iovs = num_iovs,
-  };
-  task->self_ptr = task;
-
+  
+  TaskBatch* task = create_task_batch_recvv(conn_id, data_v, size_v, mr_id_v);
   *transfer_id = reinterpret_cast<uint64_t>(task);
-  TaskBatchPtrWrapper wrapper = {.ptr = task};
-  while (jring_mp_enqueue_bulk(recvv_task_ring_, &wrapper, 1, nullptr) != 1) {
+  
+  while (jring_mp_enqueue_bulk(recvv_task_ring_, task, 1, nullptr) != 1) {
   }
-
+  
   return true;
 }
 
@@ -1231,8 +1208,7 @@ void Endpoint::send_proxy_thread_func() {
   uccl::pin_thread_to_numa(numa_node_);
   Task task;
   RWTask rw_task;
-  TaskBatchPtrWrapper wrapper;
-  TaskBatch* taskv;
+  TaskBatch taskv;
 
   while (!stop_.load(std::memory_order_acquire)) {
     if (jring_sc_dequeue_bulk(send_task_ring_, &task, 1, nullptr) == 1) {
@@ -1256,11 +1232,17 @@ void Endpoint::send_proxy_thread_func() {
       rw_task.self_ptr->done.store(true, std::memory_order_release);
     }
 
-    if (jring_sc_dequeue_bulk(sendv_task_ring_, &wrapper, 1, nullptr) == 1) {
-      taskv = wrapper.ptr;  // Extract the actual pointer
-      sendv(taskv->conn_id, taskv->mr_id_v, taskv->const_data_v, taskv->size_v,
-            taskv->num_iovs, false);
-      (taskv->self_ptr)->done.store(true, std::memory_order_release);
+     if (jring_sc_dequeue_bulk(sendv_task_ring_, &taskv, 1, nullptr) == 1) {
+      // 使用 TaskBatch 的新接口
+      std::vector<void const*> const_data_v(taskv.const_data_v(), 
+                                            taskv.const_data_v() + taskv.num_iovs);
+      std::vector<size_t> size_v(taskv.size_v(), 
+                                taskv.size_v() + taskv.num_iovs);
+      std::vector<uint64_t> mr_id_v(taskv.mr_id_v(), 
+                                   taskv.mr_id_v() + taskv.num_iovs);
+      
+      sendv(taskv.conn_id, mr_id_v, const_data_v, size_v, taskv.num_iovs, false);
+      taskv.self_ptr->done.store(true, std::memory_order_release);
     }
   }
 }
@@ -1268,8 +1250,7 @@ void Endpoint::send_proxy_thread_func() {
 void Endpoint::recv_proxy_thread_func() {
   uccl::pin_thread_to_numa(numa_node_);
   Task task;
-  TaskBatchPtrWrapper wrapper;
-  TaskBatch* taskv;
+  TaskBatch taskv;
   while (!stop_.load(std::memory_order_acquire)) {
     if (jring_sc_dequeue_bulk(recv_task_ring_, &task, 1, nullptr) == 1) {
       if (task.type == TaskType::RECV_IPC) {
@@ -1279,11 +1260,17 @@ void Endpoint::recv_proxy_thread_func() {
       }
       task.self_ptr->done.store(true, std::memory_order_release);
     }
-    if (jring_sc_dequeue_bulk(recvv_task_ring_, &wrapper, 1, nullptr) == 1) {
-      taskv = wrapper.ptr;  // Extract the actual pointer
-      recvv(taskv->conn_id, taskv->mr_id_v, taskv->data_v, taskv->size_v,
-            taskv->num_iovs, false);
-      (taskv->self_ptr)->done.store(true, std::memory_order_release);
+    if (jring_sc_dequeue_bulk(recvv_task_ring_, &taskv, 1, nullptr) == 1) {
+      // 使用 TaskBatch 的新接口
+      std::vector<void*> data_v(taskv.data_v(), 
+                               taskv.data_v() + taskv.num_iovs);
+      std::vector<size_t> size_v(taskv.size_v(), 
+                                taskv.size_v() + taskv.num_iovs);
+      std::vector<uint64_t> mr_id_v(taskv.mr_id_v(), 
+                                   taskv.mr_id_v() + taskv.num_iovs);
+
+      recvv(taskv.conn_id, mr_id_v, data_v, size_v, taskv.num_iovs, false);
+      taskv.self_ptr->done.store(true, std::memory_order_release);
     }
   }
 }
@@ -1302,7 +1289,7 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
     auto taskv = reinterpret_cast<TaskBatch*>(transfer_id);
     *is_done = taskv->done.load(std::memory_order_acquire);
     if (*is_done) {
-      delete taskv;
+      destroy_task_batch(taskv);  // 使用工厂函数销毁
     }
   } else {
     *is_done = task->done.load(std::memory_order_acquire);

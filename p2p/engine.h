@@ -59,9 +59,9 @@ static inline std::string get_oob_ip() {
 }
 
 class Endpoint {
-  const uint64_t kRTTBytes = 1024 * 1024;
-  const uint64_t kChunkSize = 1024 * 1024;
-  const uint32_t kMaxInflightChunks = 8;
+  uint64_t const kRTTBytes = 1024 * 1024;
+  uint64_t const kChunkSize = 1024 * 1024;
+  uint32_t const kMaxInflightChunks = 8;
 
  public:
   gpuStream_t pick_stream() {
@@ -404,25 +404,150 @@ class Endpoint {
     // TODO: SENDV_IPC, RECVV_IPC
   };
 
+  // struct alignas(64) TaskBatch {
+  //   TaskType type;  // SENDV or RECVV
+  //   // const_data_v for sendv (const) ; data_v for recvv (non-const)
+  //   std::vector<void const*> const_data_v;
+  //   std::vector<void*> data_v;
+  //   std::vector<size_t> size_v;
+  //   uint64_t conn_id;
+  //   std::vector<uint64_t> mr_id_v;
+  //   std::atomic<bool> done;
+  //   // For proxy to access the task.done
+  //   TaskBatch* self_ptr;
+  //   size_t num_iovs;  // param of sendv/recv
+  // };
   struct alignas(64) TaskBatch {
-    TaskType type;  // SENDV or RECVV
-    // const_data_v for sendv (const) ; data_v for recvv (non-const)
-    std::vector<void const*> const_data_v;
-    std::vector<void*> data_v;
-    std::vector<size_t> size_v;
+    TaskType type;
     uint64_t conn_id;
-    std::vector<uint64_t> mr_id_v;
+    size_t num_iovs;
+    void* iov_data_block;
     std::atomic<bool> done;
-    // For proxy to access the task.done
     TaskBatch* self_ptr;
-    size_t num_iovs;  // param of sendv/recv
+
+    // --- Helper Functions ---
+    void const** const_data_v() const {
+      if (type != TaskType::SENDV) return nullptr;
+      return static_cast<void const**>(iov_data_block);
+    }
+
+    void** data_v() const {
+      if (type != TaskType::RECVV) return nullptr;
+      return static_cast<void**>(iov_data_block);
+    }
+
+    size_t* size_v() const {
+      uintptr_t base = reinterpret_cast<uintptr_t>(iov_data_block);
+      return reinterpret_cast<size_t*>(base + sizeof(void*) * num_iovs);
+    }
+
+    uint64_t* mr_id_v() const {
+      uintptr_t base = reinterpret_cast<uintptr_t>(iov_data_block);
+      return reinterpret_cast<uint64_t*>(base + sizeof(void*) * num_iovs +
+                                         sizeof(size_t) * num_iovs);
+    }
   };
 
-  // For jring memcpy 16-byte alignment; 8 bytes of ptr + 8 bytes of padding
-  struct TaskBatchPtrWrapper {
-    TaskBatch* ptr;
-    uint64_t padding;
-  };
+  inline TaskBatch* create_task_batch_base(
+      uint64_t conn_id, size_t num_iovs, std::vector<size_t> const& size_v,
+      std::vector<uint64_t> const& mr_id_v) {
+    // --- 1. 计算总大小 (公共逻辑) ---
+    size_t const ptr_array_size = sizeof(void*) * num_iovs;
+    size_t const size_array_size = sizeof(size_t) * num_iovs;
+    size_t const mr_id_array_size = sizeof(uint64_t) * num_iovs;
+    size_t const total_data_size =
+        ptr_array_size + size_array_size + mr_id_array_size;
+
+    // --- 2. 分配内存 (公共逻辑) ---
+    TaskBatch* task = new (std::align_val_t(64)) TaskBatch();
+    char* block = new char[total_data_size];
+
+    // --- 3. 填充公共字段 (公共逻辑) ---
+    task->conn_id = conn_id;
+    task->num_iovs = num_iovs;
+    task->iov_data_block = block;
+    task->done.store(false, std::memory_order_relaxed);
+    task->self_ptr = task;
+
+    // --- 4. 拷贝公共数据 (公共逻辑) ---
+    // size_v 和 mr_id_v 的位置是固定的，可以提前拷贝
+    void* dest_size_array = block + ptr_array_size;
+    void* dest_mr_id_array = block + ptr_array_size + size_array_size;
+    std::memcpy(dest_size_array, size_v.data(), size_array_size);
+    std::memcpy(dest_mr_id_array, mr_id_v.data(), mr_id_array_size);
+
+    return task;
+  }
+
+  /**
+   * @brief 创建一个用于批量发送 (SENDV) 的 TaskBatch
+   */
+  inline TaskBatch* create_task_batch_sendv(
+      uint64_t conn_id, std::vector<void const*> const& const_data_v,
+      std::vector<size_t> const& size_v, std::vector<uint64_t> const& mr_id_v) {
+    size_t const num_iovs = const_data_v.size();
+    if (num_iovs == 0 || size_v.size() != num_iovs ||
+        mr_id_v.size() != num_iovs) {
+      throw std::runtime_error(
+          "Mismatched or empty vector sizes for SENDV task creation.");
+    }
+
+    // 1. 调用基础函数创建通用部分
+    TaskBatch* task =
+        create_task_batch_base(conn_id, num_iovs, size_v, mr_id_v);
+
+    // 2. 完成该类型的特定任务
+    task->type = TaskType::SENDV;
+
+    // 拷贝 const void* 指针数组 (这是 SENDV 特有的)
+    std::memcpy(task->iov_data_block, const_data_v.data(),
+                sizeof(void const*) * num_iovs);
+
+    return task;
+  }
+
+  /**
+   * @brief 创建一个用于批量接收 (RECVV) 的 TaskBatch
+   */
+  inline TaskBatch* create_task_batch_recvv(
+      uint64_t conn_id, std::vector<void*> const& data_v,
+      std::vector<size_t> const& size_v, std::vector<uint64_t> const& mr_id_v) {
+    size_t const num_iovs = data_v.size();
+    if (num_iovs == 0 || size_v.size() != num_iovs ||
+        mr_id_v.size() != num_iovs) {
+      throw std::runtime_error(
+          "Mismatched or empty vector sizes for RECVV task creation.");
+    }
+
+    // 1. 调用基础函数创建通用部分
+    TaskBatch* task =
+        create_task_batch_base(conn_id, num_iovs, size_v, mr_id_v);
+
+    // 2. 完成该类型的特定任务
+    task->type = TaskType::RECVV;
+
+    // 拷贝 void* 指针数组 (这是 RECVV 特有的)
+    std::memcpy(task->iov_data_block, data_v.data(), sizeof(void*) * num_iovs);
+
+    return task;
+  }
+
+  /**
+   * @brief 销毁由 create_task_batch_* 创建的任务，释放所有相关内存
+   */
+  inline void destroy_task_batch(TaskBatch* task) {
+    if (task == nullptr) {
+      return;
+    }
+    delete[] static_cast<char*>(task->iov_data_block);
+    delete task;
+  }
+
+  // // For jring memcpy 16-byte alignment; 8 bytes of ptr + 8 bytes of padding
+  // struct TaskBatchPtrWrapper {
+  //   TaskBatch* ptr;
+  //   uint64_t padding;
+  // };
 
   struct alignas(64) Task {
     TaskType type;
