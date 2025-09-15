@@ -30,7 +30,7 @@ UCCL_PARAM(PORT_ENTROPY, "PORT_ENTROPY", 32);
 // Maximum chunk size for each WQE.
 UCCL_PARAM(CHUNK_SIZE_KB, "CHUNK_SIZE_KB", 64);
 // Number of CUDA/HIP streams per engine.
-UCCL_PARAM(NumGpuRtStreams, "NUM_GPU_RT_STREAMS", 8);
+UCCL_PARAM(NumGpuRtStreams, "NUM_GPU_RT_STREAMS", 4);
 
 static constexpr uint32_t MAX_PEER = 2048;
 // Maximum number of flows (one-way) on each engine.
@@ -165,6 +165,7 @@ static constexpr uint32_t kMaxRecv = 1;
 // Maximum number of outstanding receive requests in one engine.
 static constexpr uint32_t kMaxReq =
     16;  // This should be aligned with RID in IMMData
+static constexpr uint32_t kMaxSendRecvWR = kMaxRecv * kMaxReq * 4;
 // Maximum number of WQEs in SRQ (Shared Receive Queue).
 static constexpr uint32_t kMaxSRQ = 16 * kMaxReq;
 // Maximum number of chunks can be transmitted from timing wheel in one loop.

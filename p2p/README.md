@@ -2,7 +2,7 @@
 
 UCCL P2P Engine is a high-performance, RDMA-based P2P transfer system designed for distributed machine learning and high-throughput data processing applications. It provides a Python API for seamless integration with PyTorch tensors, NumPy arrays, and other data structures while leveraging the performance of InfiniBand/RoCE RDMA for ultra-low latency communication.
 
-UCCL has an experimental GPU-driven P2P engine, see [gpu_driven](../gpu_driven/) folder.
+UCCL has an experimental GPU-driven P2P engine, see [ep](../ep/) folder.
 
 ## Project Structure
 
@@ -22,7 +22,7 @@ p2p/
 The easiest way is to: 
 ```bash
 git clone https://github.com/uccl-project/uccl.git --recursive
-cd uccl && bash build_and_install.sh [cuda|rocm] p2p
+cd uccl && bash build_and_install.sh [cuda|rocm] p2p [py_version]
 ```
 
 Alternatively, you can setup your local dev environment by: 
@@ -41,46 +41,9 @@ sudo apt install build-essential net-tools libelf-dev libibverbs-dev \
                  libgoogle-glog-dev libgtest-dev libgflags-dev -y
 ```
 
-### Optional Dependencies
-
-- CUDA (for GPU tensor operations)
-- Install Redis
-
-```bash
-sudo apt-get update
-sudo apt-get install -y \
-    build-essential \
-    cmake \
-    libhiredis-dev \
-    libuv1-dev \
-    pkg-config
-```
-and
-```bash
-git clone https://github.com/redis/hiredis.git
-cd hiredis
-mkdir build && cd build
-cmake -DCMAKE_BUILD_TYPE=Release ..
-make -j
-sudo make install
-cd ../..
-
-git clone https://github.com/sewenew/redis-plus-plus.git
-cd redis-plus-plus
-mkdir build && cd build
-cmake                                  \
-  -DCMAKE_BUILD_TYPE=Release           \
-  -DCMAKE_INSTALL_PREFIX=/usr/local    \
-  -DREDIS_PLUS_PLUS_CXX_STANDARD=17    \
-  -DREDIS_PLUS_PLUS_BUILD_ASYNC=libuv  \
-  ..
-make -j
-sudo make install
-```
-
 ### Installation
 
-1. **Install Python dependencies:**
+1. **Install Pybind11 dependency:**
    ```bash
    make install-deps
    ```
@@ -116,11 +79,13 @@ torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> ben
 
 Notes: 
 * You may consider exporting `GLOO_SOCKET_IFNAME=xxx` if triggering Gloo connectFullMesh failure.
-* To benchmark on AMD GPUs, you need to specify `UCCL_RCMODE=1`. 
 * **You must first import `torch` before importing `uccl.p2p` for AMD GPUs**, otherwise, `RuntimeError: No HIP GPUs are available` will occur. We guess this is because torch does some extra init for AMD GPUs, in order for Pybind-C++ code to use AMD GPUs. 
 * To benchmark dual direction transfer, you can add `--dual` with the same commands as above. 
 * To benchmark one-sided READ transfer, you can run `benchmark_uccl_read.py`.
-* To benchmark UCCL copy-only collectives, you can run `benchmark_uccl_collective.py`
+* To benchmark one-sided WRITE transfer, you can run `benchmark_uccl_write.py`.
+* To benchmark UCCL copy-only collectives, you can run `benchmark_uccl_collective.py`.
+    * To benchmark UCCL collectives over CUDA/HIP IPC, `torchrun --nnodes=1 --nproc_per_node=2 benchmark_uccl_collective.py`
+* To benchmark UCCL intra-node transfer via CUDA/HIP IPC, you can run the above on the same node with `--ipc --local-gpu-idx=0/1`.
 
 ### Running NCCL
 
@@ -138,6 +103,7 @@ Notes:
 * You can specify `NCCL_IB_HCA=mlx5_2:1` to control which NIC and port to use. 
 * If you see errors like `message size truncated`, it is likely caused by NCCL version mismatch. We suggest specifying `LD_PRELOAD=<path to libnccl.so.2>`. 
 * To benchmark dual direction transfer, you can add `--dual`. 
+* Consider tune `NCCL_IB_GID_INDEX=3` if NCCL triggers errors.
 * This also works for AMD GPUs.
 
 ### Running NIXL with UCX backend
@@ -586,14 +552,142 @@ Poll the status of an asynchronous transfer operation.
 - `success` (bool): Whether polling succeeded
 - `is_done` (bool): Whether the transfer has completed
 
+#### One-Sided RDMA Operations
+
+```python
+read(conn_id, mr_id, dst, size, slot_item) -> success
+```
+Read data from remote endpoint using one-sided RDMA READ operation (blocking).
+
+**Parameters:**
+- `conn_id` (int): Connection ID from connect/accept
+- `mr_id` (int): Memory region ID of remote data to read
+- `dst` (int): Pointer to local destination buffer
+- `size` (int): Number of bytes to read
+- `slot_item` (FifoItem): Slot item for RDMA operation coordination (contains the remote address to read from)
+
+**Returns:**
+- `success` (bool): Whether read completed successfully
+
+```python
+read_async(conn_id, mr_id, dst, size, slot_item) -> (success, transfer_id)
+```
+Read data from remote endpoint using one-sided RDMA READ operation asynchronously (non-blocking).
+
+**Parameters:**
+- `conn_id` (int): Connection ID from connect/accept
+- `mr_id` (int): Memory region ID of remote data to read
+- `dst` (int): Pointer to local destination buffer
+- `size` (int): Number of bytes to read
+- `slot_item` (FifoItem): Slot item for RDMA operation coordination (contains the remote address to read from)
+
+**Returns:**
+- `success` (bool): Whether read was initiated successfully
+- `transfer_id` (int): Transfer ID for polling completion
+
+```python
+readv(conn_id, mr_id_list, dst_list, size_list, slot_item_list, num_iovs) -> success
+```
+Read multiple memory regions from remote endpoint using one-sided RDMA READ operations in a single operation (blocking).
+
+**Parameters:**
+- `conn_id` (int): Connection ID from connect/accept
+- `mr_id_list` (list[int]): List of memory region IDs of remote data to read
+- `dst_list` (list[int]): List of pointers to local destination buffers
+- `size_list` (list[int]): List of sizes in bytes for each memory region
+- `slot_item_list` (list[FifoItem]): List of slot items for RDMA operation coordination (contains the remote address to read from)
+- `num_iovs` (int): Number of I/O vectors (length of the lists)
+
+**Returns:**
+- `success` (bool): Whether read completed successfully
+
+```python
+advertise(conn_id, mr_id, addr, len, out_buf) -> success
+```
+Advertise memory region information to remote endpoint for one-sided RDMA operations.
+
+**Parameters:**
+- `conn_id` (int): Connection ID from connect/accept
+- `mr_id` (int): Memory region ID to advertise
+- `addr` (int): Pointer to the memory region
+- `len` (int): Size of the memory region in bytes
+- `out_buf` (str): Output buffer to store advertisement metadata
+
+**Returns:**
+- `success` (bool): Whether advertisement completed successfully
+
+```python
+advertisev(conn_id, mr_id_list, addr_list, len_list, out_buf_list, num_iovs) -> success
+```
+Advertise multiple memory regions to remote endpoint for one-sided RDMA operations in a single operation.
+
+**Parameters:**
+- `conn_id` (int): Connection ID from connect/accept
+- `mr_id_list` (list[int]): List of memory region IDs to advertise
+- `addr_list` (list[int]): List of pointers to memory regions
+- `len_list` (list[int]): List of sizes in bytes for each memory region
+- `out_buf_list` (list[str]): List of output buffers to store advertisement metadata
+- `num_iovs` (int): Number of I/O vectors (length of the lists)
+
+**Returns:**
+- `success` (bool): Whether advertisement completed successfully
+
+```python
+write(conn_id, mr_id, src, size, slot_item) -> success
+```
+Write data to remote endpoint using one-sided RDMA WRITE operation (blocking).
+
+**Parameters:**
+- `conn_id` (int): Connection ID from connect/accept
+- `mr_id` (int): Memory region ID of remote destination
+- `src` (int): Pointer to local buffer
+- `size` (int): Number of bytes to write
+- `slot_item` (FifoItem): Slot item for RDMA operation coordination (contains the remote address to write to)
+
+**Returns:**
+- `success` (bool): Whether write completed successfully
+
+```python
+write_async(conn_id, mr_id, src, size, slot_item) -> (success, transfer_id)
+```
+Write data to remote endpoint using one-sided RDMA WRITE operation asynchronously (non-blocking).
+
+**Parameters:**
+- `conn_id` (int): Connection ID from connect/accept
+- `mr_id` (int): Memory region ID of remote destination
+- `src` (int): Pointer to local buffer
+- `size` (int): Number of bytes to write
+- `slot_item` (FifoItem): Slot item for RDMA operation coordination (contains the remote address to write to)
+
+**Returns:**
+- `success` (bool): Whether write was initiated successfully
+- `transfer_id` (int): Transfer ID for polling completion
+
+```python
+writev(conn_id, mr_id_list, src_list, size_list, slot_item_list, num_iovs) -> success
+```
+Write multiple memory regions to remote endpoint using one-sided RDMA WRITE operations in a single operation (blocking).
+
+**Parameters:**
+- `conn_id` (int): Connection ID from connect/accept
+- `mr_id_list` (list[int]): List of memory region IDs of remote destinations
+- `src_list` (list[int]): List of pointers to local buffers
+- `size_list` (list[int]): List of sizes in bytes for each memory region
+- `slot_item_list` (list[FifoItem]): List of slot items for RDMA operation coordination (contains the remote address to write to)
+- `num_iovs` (int): Number of I/O vectors (length of the lists)
+
+**Returns:**
+- `success` (bool): Whether write completed successfully
+
 </details>
 
 
 ## Testing
 
 ```bash
-python tests/test_engine_write.py
+python tests/test_engine_send.py
 python tests/test_engine_read.py
+python tests/test_engine_write.py
 python tests/test_engine_metadata.py
 torchrun --nnodes=1 --nproc_per_node=2 tests/test_engine_nvlink.py
 ```

@@ -32,10 +32,14 @@ int RDMAFactory::init_devs() {
   std::vector<std::tuple<std::string, fs::path, int>> ib_nics_with_dev_idx;
   std::stringstream init_devs_log;
 
+#ifndef DISABLE_CALL_ONCE_STATIC
   static std::once_flag init_flag;
-  std::call_once(init_flag,
-                 []() { rdma_ctl = std::make_shared<RDMAFactory>(); });
-
+  std::call_once(init_flag, []() {
+#endif
+    rdma_ctl = std::make_shared<RDMAFactory>();
+#ifndef DISABLE_CALL_ONCE_STATIC
+  });
+#endif
   //  Find interface for connection setup.
   int num_ifs = find_interfaces(uccl_ifname, &uccl_ifaddr, MAX_IF_NAME_SIZE, 1);
   if (num_ifs != 1) UCCL_INIT_CHECK(false, "No IP interface found");
@@ -809,7 +813,7 @@ int SharedIOContext::_rc_poll_send_cq_normal(void) {
   for (int i = 0; i < nr_wcs; i++) {
     auto* wc = wcs + i;
     DCHECK(wc->status == IBV_WC_SUCCESS)
-        << "RC send CQ state error: " << wc->status;
+        << "RC send CQ state error: " << wc->status << ", " << wc->byte_len;
     auto* rdma_ctx = qpn_to_rdma_ctx(wc->qp_num);
     rdma_ctx->rc_rx_ack(wc);
   }

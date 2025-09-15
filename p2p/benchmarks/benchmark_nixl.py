@@ -73,11 +73,12 @@ def cleanup_transfer(
         agent.deregister_memory(register_descs)
 
 
-def create_nixl_agent_mc(role: str, dataset, zmq_socket):
+def create_nixl_agent_mc(role: str, dataset, zmq_socket, backend):
     """
-    Create Nixl agents based on the role with Mooncake backend
+    Create Nixl agents based on the role with Mooncake/UCCL backend
     """
-    config = nixl_agent_config(backends=["Mooncake"])
+    backend_name = "Mooncake" if backend == "mooncake" else "Uccl"
+    config = nixl_agent_config(backends=[backend_name])
     agent = nixl_agent(role, config)
     descs = agent.get_reg_descs(dataset)
     register_descs = agent.register_memory(descs)
@@ -89,8 +90,8 @@ def create_nixl_agent_mc(role: str, dataset, zmq_socket):
         agent.add_remote_agent(remote_meta).decode("utf-8")
     elif "server" in role:
         remote_meta = zmq_socket.recv()
-        agent.add_remote_agent(remote_meta).decode("utf-8")
         zmq_socket.send(local_meta)
+        agent.add_remote_agent(remote_meta).decode("utf-8")
 
     return agent, register_descs
 
@@ -247,9 +248,8 @@ def start_transfer(size, num_kvblocks, args):
     op = "WRITE" if args.op_type == "write" else "READ"
     zmq_socket = None
 
-    if args.backend == "mooncake":
+    if args.backend == "mooncake" or args.backend == "uccl":
         zmq_socket = init_zmq(args.remote_ip, listen_port, args.role)
-
     try:
         dataset = create_dataset(
             args.role, size, num_kvblocks, args.device, args.local_gpu_idx
@@ -262,41 +262,48 @@ def start_transfer(size, num_kvblocks, args):
         # Suppress stdout for better output
         old_stdout = sys.stdout
         sys.stdout = io.StringIO()
-        if args.backend == "mooncake":
-            agent, register_descs = create_nixl_agent_mc(args.role, dataset, zmq_socket)
-            transfer_handle = init_transfer_metadata_mc(
-                args.role, op, agent, register_descs, zmq_socket
+        if args.backend == "mooncake" or args.backend == "uccl":
+            agent, register_descs = create_nixl_agent_mc(
+                args.role, dataset, zmq_socket, args.backend
             )
         else:
             agent, register_descs = create_nixl_agent_ucx(args.role, dataset)
-            transfer_handle = init_transfer_metadata_ucx(
-                args.role,
-                op,
-                agent,
-                register_descs,
-                args.remote_ip,
-                listen_port,
-            )
         sys.stdout = old_stdout
 
         total_size = 0
-        start = time.perf_counter()
+        total_transfer_time = 0.0
 
-        if args.backend == "mooncake":
-            for _ in range(args.iters):
+        for _ in range(args.iters):
+            if args.backend == "mooncake" or args.backend == "uccl":
+                transfer_handle = init_transfer_metadata_mc(
+                    args.role, op, agent, register_descs, zmq_socket
+                )
+            else:
+                transfer_handle = init_transfer_metadata_ucx(
+                    args.role,
+                    op,
+                    agent,
+                    register_descs,
+                    args.remote_ip,
+                    listen_port,
+                )
+            start = time.perf_counter()
+            if args.backend == "mooncake" or args.backend == "uccl":
                 do_transfer_mc(args.role, agent, transfer_handle, zmq_socket)
                 total_size += size
-        else:
-            for _ in range(args.iters):
+            else:
                 do_transfer_ucx(args.role, agent, transfer_handle)
                 total_size += size
 
-        end = time.perf_counter()
+            end = time.perf_counter()
+            transfer_time = end - start
+            total_transfer_time += transfer_time
 
-        transfer_time = end - start
-        gbps = (total_size * 8) / transfer_time / 1e9  # bits per second → Gbps
-        gb_sec = total_size / transfer_time / 1e9  # bytes per second → GB/s
-        lat = transfer_time / args.iters
+        avg_transfer_time = total_transfer_time / args.iters
+        gbps = (total_size * 8) / total_transfer_time / 1e9  # bits per second → Gbps
+        gb_sec = total_size / total_transfer_time / 1e9  # bytes per second → GB/s
+        lat = avg_transfer_time  # Average latency per transfer
+
         print(
             f"[{args.role}] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s | {lat:6.6f} s"
         )
@@ -316,7 +323,7 @@ def start_transfer(size, num_kvblocks, args):
             register_descs,
         )
         cleanup_agent(agent)
-        if args.backend == "mooncake":
+        if args.backend == "mooncake" or args.backend == "uccl":
             zmq_socket.close()
 
 
@@ -582,7 +589,7 @@ def main():
     )
     p.add_argument(
         "--backend",
-        choices=["ucx", "mooncake"],
+        choices=["ucx", "mooncake", "uccl"],
         default="ucx",
         help="Backend that nixl will use for the data transfer",
     )

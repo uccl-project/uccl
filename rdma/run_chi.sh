@@ -33,7 +33,8 @@ NVLINK_OFF=$((1 - NVLINK_ON))
 # alltoall_perf, all_reduce_perf
 TEST_BIN=alltoall_perf
 QP_SCALING=4
-UCCL_ENTROPY=1
+UCCL_ENTROPY=2
+UCCL_CHUNK_SIZE_KB=64
 
 mpirun --bind-to none -np 3 -N 1 --hostfile $NODEFILE --map-by ppr:1:node \
     -x LD_LIBRARY_PATH=${UCCL_HOME}/thirdparty/rccl/build/release:${CONDA_LIB_HOME}:/opt/rocm/lib:${LD_LIBRARY_PATH} \
@@ -51,15 +52,15 @@ mpirun --bind-to none -np 3 -N 1 --hostfile $NODEFILE --map-by ppr:1:node \
     -x NCCL_IB_QPS_PER_CONNECTION=${QP_SCALING} \
     -x NCCL_IB_SPLIT_DATA_ON_QPS=0 \
     -x NCCL_IB_GID_INDEX=3 \
-    -x HIP_VISIBLE_DEVICES=0,1,2,3,4,5,7 \
-    -x NCCL_IB_HCA=bnxt_re0,bnxt_re1,bnxt_re2,bnxt_re3,bnxt_re4,bnxt_re5,bnxt_re7 \
+    -x HIP_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+    -x NCCL_IB_HCA=bnxt_re0,bnxt_re1,bnxt_re2,bnxt_re3,bnxt_re4,bnxt_re5,bnxt_re6,bnxt_re7 \
     -x GLOG_v=0 \
     -x UCCL_NUM_ENGINES=4 \
     -x UCCL_PORT_ENTROPY=${UCCL_ENTROPY} \
-    -x UCCL_CHUNK_SIZE_KB=32 \
+    -x UCCL_CHUNK_SIZE_KB=${UCCL_CHUNK_SIZE_KB} \
     -x UCCL_RCMODE=1 \
     ${UCCL_HOME}/thirdparty/rccl-tests/build/${TEST_BIN} \
-    -b 1K -e 1G -f 2 -w 5 -n 20 -c 1 -g 1 -t 7 |& 
+    -b 1K -e 1G -f 2 -w 5 -n 20 -c 1 -g 1 -t 8 |& 
     tee ${TEST_BIN}_$([ "$TEST" = "rccl" ] && echo "rccl_qp${QP_SCALING}" || echo "uccl_qp${UCCL_ENTROPY}").log
 
 # -x NCCL_DMABUF_ENABLE=1 \

@@ -31,6 +31,7 @@ namespace uccl {
 
 struct ConnID {
   void* context;
+  int sock_fd;     // Used for further coordination if necessary.
   FlowID flow_id;  // Used for RDMAEndpoint to look up UcclFlow.
   PeerID peer_id;  // Used for UcclEngine to look up RDMAContext.
   int dev;
@@ -51,7 +52,7 @@ class Channel {
 
  public:
   struct Msg {
-    enum Op : uint8_t { kTx, kRx, kRead };
+    enum Op : uint8_t { kTx, kRx, kRead, kWrite };
     Op opcode;
     PeerID peer_id;
     struct ucclRequest* ureq;
@@ -430,13 +431,17 @@ class RDMAContext {
     if constexpr (kReceiverCCA != RECEIVER_CCA_NONE) {
       return receiverCC_tx_message(ureq);
     } else {
-      if (ureq->type == ReqRead) return senderCC_tx_read(ureq);
+      if (ureq->type == ReqRead)
+        return senderCC_tx_read(ureq);
+      else if (ureq->type == ReqWrite)
+        return senderCC_tx_write(ureq);
       return senderCC_tx_message(ureq);
     }
   }
   bool receiverCC_tx_message(struct ucclRequest* ureq);
   bool senderCC_tx_message(struct ucclRequest* ureq);
   bool senderCC_tx_read(struct ucclRequest* ureq);
+  bool senderCC_tx_write(struct ucclRequest* ureq);
 
   virtual uint32_t EventOnSelectPath(SubUcclFlow* subflow,
                                      uint32_t chunk_size) = 0;
@@ -1056,8 +1061,9 @@ class RDMAEndpoint {
                         remote_port);
   }
   ConnID test_uccl_accept(int dev, int gpu, std::string& remote_ip,
-                          int* remote_dev) {
-    return uccl_accept(dev, p2p_listen_fds_[dev], gpu, remote_ip, remote_dev);
+                          int* remote_dev, int* remote_gpuidx) {
+    return uccl_accept(dev, p2p_listen_fds_[dev], gpu, remote_ip, remote_dev,
+                       remote_gpuidx);
   }
   /// For testing easily.
 
@@ -1070,7 +1076,8 @@ class RDMAEndpoint {
   // Accept a connection using the given listen_fd. <remote_ip, remote_dev> is
   // returned. This function is thread-safe.
   ConnID uccl_accept(int dev, int listen_fd, int local_gpuidx,
-                     std::string& remote_ip, int* remote_dev);
+                     std::string& remote_ip, int* remote_dev,
+                     int* remote_gpuidx);
 
   bool is_local_leader(int ldev, int lgpu, std::string lip, uint16_t lport,
                        int rdev, int rgpu, std::string rip, uint16_t rport) {
@@ -1117,6 +1124,10 @@ class RDMAEndpoint {
 
   int uccl_read_async(UcclFlow* flow, Mhandle* local_mh, void* dst, size_t size,
                       FifoItem const& slot_item, ucclRequest* ureq);
+
+  int uccl_write_async(UcclFlow* flow, Mhandle* local_mh, void* src,
+                       size_t size, FifoItem const& slot_item,
+                       ucclRequest* ureq);
 
   // Post n buffers to engine for receiving data asynchronously.
   int uccl_recv_async(UcclFlow* flow, struct Mhandle** mhandles, void** data,
@@ -1244,8 +1255,14 @@ class UcclFlow {
     memset(&recv_comm_, 0, sizeof(recv_comm_));
     int num_devices = ep->get_num_devices();
     // Avoid all flows using the same initial engine offset.
+
+#ifdef DISABLE_CALL_ONCE_STATIC
+    std::vector<std::atomic<uint32_t>>* off =
+        new std::vector<std::atomic<uint32_t>>(num_devices);
+#else
     static std::vector<std::atomic<uint32_t>>* off =
         new std::vector<std::atomic<uint32_t>>(num_devices);
+#endif
     next_engine_offset_ = (*off)[dev].fetch_add(1) % ucclParamNUM_ENGINES();
   }
 
@@ -1279,7 +1296,7 @@ class UcclFlow {
                         false, false, &comm_base->flow_cq, false, kFifoCQSize,
                         factory_dev->pd, factory_dev->ib_port_num,
                         &comm_base->fifo_mr, nullptr, kFifoMRSize,
-                        kMaxReq * kMaxRecv, kMaxReq * kMaxRecv, 1, 1);
+                        kMaxSendRecvWR, kMaxSendRecvWR, 1, 1);
     comm_base->fifo =
         reinterpret_cast<struct RemFifo*>(comm_base->fifo_mr->addr);
 
@@ -1323,8 +1340,8 @@ class UcclFlow {
                           IBV_QPT_RC, false, false, &comm_base->flow_cq, true,
                           0, factory_dev->pd, factory_dev->ib_port_num,
                           &recv_comm_.gpu_flush_mr, &recv_comm_.gpu_flush,
-                          sizeof(int), kMaxReq * kMaxRecv, kMaxReq * kMaxRecv,
-                          kMaxSge, kMaxSge);
+                          sizeof(int), kMaxSendRecvWR, kMaxSendRecvWR, kMaxSge,
+                          kMaxSge);
 
       recv_comm_.gpu_flush_sge.addr = (uint64_t)&recv_comm_.gpu_flush;
       recv_comm_.gpu_flush_sge.length = 1;
@@ -1360,8 +1377,8 @@ class UcclFlow {
       qp_init_attr.send_cq = comm_base->flow_cq;
       qp_init_attr.recv_cq = comm_base->flow_cq;
       qp_init_attr.qp_type = IBV_QPT_RC;
-      qp_init_attr.cap.max_send_wr = kMaxReq * kMaxRecv;
-      qp_init_attr.cap.max_recv_wr = kMaxReq * kMaxRecv;
+      qp_init_attr.cap.max_send_wr = kMaxSendRecvWR;
+      qp_init_attr.cap.max_recv_wr = kMaxSendRecvWR;
       qp_init_attr.cap.max_send_sge = kMaxSge;
       qp_init_attr.cap.max_recv_sge = kMaxSge;
       qp_init_attr.cap.max_inline_data = 0;
@@ -1459,6 +1476,8 @@ class UcclFlow {
   void post_multi_send(struct ucclRequest** ureqs, uint32_t engine_offset);
 
   void post_multi_read(struct ucclRequest** ureqs, uint32_t engine_offset);
+
+  void post_multi_write(struct ucclRequest** ureqs, uint32_t engine_offset);
 
   void rc_send(struct ucclRequest* ureq);
   void rc_read(struct ucclRequest* ureq);

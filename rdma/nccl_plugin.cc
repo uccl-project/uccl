@@ -405,9 +405,10 @@ ncclResult_t pluginAccept(void* listenComm, void** recvComm,
     std::thread t = std::thread([lcomm] {
       std::string remote_ip_str;
       int remote_dev;
+      int remote_gpuidx;
       lcomm->accept_buffer.base.conn_id =
           ep->uccl_accept(lcomm->dev, lcomm->listen_fd, lcomm->gpuidx,
-                          remote_ip_str, &remote_dev);
+                          remote_ip_str, &remote_dev, &remote_gpuidx);
       lcomm->accept_buffer.base.dev = lcomm->dev;
       lcomm->accept_buffer.remote_ip_str = remote_ip_str;
       lcomm->accept_buffer.remote_dev = remote_dev;

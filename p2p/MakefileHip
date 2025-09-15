@@ -8,7 +8,7 @@ CONDA_LIB_HOME?=/usr/lib
 CXX := g++
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I../include -I../rdma -I$(HIP_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
-	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -I${CONDA_LIB_HOME}/../include -L${CONDA_LIB_HOME} -lglog -lgflags -lgtest -lz -lelf -libverbs -lpthread
+	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -Wl,-rpath=${CONDA_LIB_HOME} -I${CONDA_LIB_HOME}/../include -L${CONDA_LIB_HOME} -lglog -lgflags -lgtest -lz -lelf -libverbs -lpthread
 
 # Python and pybind11 configuration
 PYTHON          ?= python3
@@ -21,12 +21,8 @@ PYTHON_LDFLAGS := $(shell $(PYTHON_CONFIG) --ldflags)
 PYTHON_SITE_PACKAGES := $(shell $(PYTHON) -c "import site; print(site.getsitepackages()[0])")
 INSTALL_DIR          := $(PYTHON_SITE_PACKAGES)/uccl
 
-# Redis
-REDIS_PKGCONFIG := pkg-config
-REDIS_CFLAGS    := $(shell $(REDIS_PKGCONFIG) --cflags hiredis redis++)
-REDIS_LIBS      := $(shell $(REDIS_PKGCONFIG) --libs hiredis redis++)
-CXXFLAGS       += $(REDIS_CFLAGS) -D__HIP_PLATFORM_AMD__
-LDFLAGS         = -L$(HIP_LIB) -lamdhip64 $(REDIS_LIBS) \
+CXXFLAGS       += -D__HIP_PLATFORM_AMD__
+LDFLAGS         = -L$(HIP_LIB) -lamdhip64 \
                   -Wl,-rpath,$(HIP_LIB) -I${CONDA_LIB_HOME}/../include -L${CONDA_LIB_HOME} -lglog -lgflags -lgtest \
                   -lz -lelf -libverbs -lpthread
 

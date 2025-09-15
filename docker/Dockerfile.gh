@@ -14,7 +14,7 @@ RUN apt-get update && \
         rdma-core libibverbs-dev \
         libgoogle-glog-dev libgflags-dev libgtest-dev libgomp1 libelf-dev \
         libnuma-dev libdrm-dev libdrm-amdgpu1 libgfortran5 \
-        pkg-config libhiredis-dev zlib1g-dev curl && \
+        pkg-config zlib1g-dev curl && \
 \
 # ───── Add Python ${PY_VER} PPA & install Python ${PY_VER} + setuptools ─────
     add-apt-repository ppa:deadsnakes/ppa && \
@@ -41,16 +41,6 @@ RUN ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python3 && \
 
 RUN python${PY_VER} -m pip install --no-cache-dir torch==2.6.0+cu126 --index-url https://download.pytorch.org/whl/cu126
 
-# ─────────────────────────────────────────────────────────
-# Build and install redis-plus-plus
-# ─────────────────────────────────────────────────────────
-RUN git clone --depth 1 https://github.com/sewenew/redis-plus-plus.git /tmp/redis-plus-plus && \
-    cd /tmp/redis-plus-plus && \
-    mkdir build && cd build && \
-    cmake .. && \
-    make -j$(nproc) && \
-    make install && \
-    rm -rf /tmp/redis-plus-plus
 
 WORKDIR /io
 CMD ["bash"]
