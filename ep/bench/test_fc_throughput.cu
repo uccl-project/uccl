@@ -47,8 +47,8 @@ __global__ void fc_throughput_kernel(
     FCRingBufferManager* mgr_ptr, DeviceToHostCmdBuffer** ring_buffers,
     PublicationList* pub_list, uint32_t* warp_to_proxy_map,
     uint32_t* proxy_to_combiner_map, uint8_t** payload_buffers,
-    uint32_t* payload_write_ptrs, ThroughputConfig config, WarpMetrics* metrics,
-    bool volatile* stop_flag) {
+    uint32_t* payload_write_ptrs, ProxyWarpList* proxy_warp_lists,
+    ThroughputConfig config, WarpMetrics* metrics, bool volatile* stop_flag) {
   const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
   const uint32_t warp_id = tid / 32;
   const uint32_t lane_id = tid % 32;
@@ -60,7 +60,7 @@ __global__ void fc_throughput_kernel(
     const uint32_t payload_buffer_size = 128 * 1024 * 1024;
     mgr_ptr->init(ring_buffers, config.num_proxies, config.num_warps, pub_list,
                   warp_to_proxy_map, proxy_to_combiner_map, payload_buffers,
-                  payload_buffer_size, payload_write_ptrs);
+                  payload_buffer_size, payload_write_ptrs, proxy_warp_lists);
   }
   __syncthreads();
 
@@ -160,7 +160,7 @@ void run_throughput_test(uint32_t num_warps, uint32_t num_proxies,
                              .warmup_iterations = 50,
                              .verbose = false};
 
-  // Allocate GPU memory (same as original)
+  // Allocate GPU memory
   PublicationRecord* d_records;
   cudaMalloc(&d_records, sizeof(PublicationRecord) * MAX_WARPS);
   cudaMemset(d_records, 0, sizeof(PublicationRecord) * MAX_WARPS);
@@ -193,28 +193,41 @@ void run_throughput_test(uint32_t num_warps, uint32_t num_proxies,
   std::vector<uint32_t> h_warp_to_proxy(config.num_warps);
   std::vector<uint32_t> h_proxy_to_combiner(config.num_proxies);
 
-  // Fixed mapping to avoid dead warps - ensure at least one producer per active
-  // proxy
-  uint32_t active_proxies = std::min(config.num_proxies, config.num_warps);
-
-  // Map warps to active proxies only
-  for (uint32_t w = 0; w < config.num_warps; w++) {
-    h_warp_to_proxy[w] = w % active_proxies;
+  // Create proxy warp lists for optimized combiner scanning
+  std::vector<ProxyWarpList> h_proxy_warp_lists(config.num_proxies);
+  for (auto& list : h_proxy_warp_lists) {
+    list.init();
   }
 
-  // Set combiners - first warp mapped to each proxy becomes combiner
-  for (uint32_t p = 0; p < config.num_proxies; p++) {
-    if (p < config.num_warps) {
-      h_proxy_to_combiner[p] = p;  // Warp p is combiner for proxy p
-    } else {
-      h_proxy_to_combiner[p] = INVALID_COMBINER;  // No combiner for this proxy
-    }
-  }
+  // Initialize warp mapping and build proxy warp lists
+  init_warp_mapping(config.num_warps, config.num_proxies,
+                    h_warp_to_proxy.data(), h_proxy_to_combiner.data(),
+                    h_proxy_warp_lists.data());
 
   cudaMemcpy(d_warp_to_proxy, h_warp_to_proxy.data(),
              sizeof(uint32_t) * config.num_warps, cudaMemcpyHostToDevice);
   cudaMemcpy(d_proxy_to_combiner, h_proxy_to_combiner.data(),
              sizeof(uint32_t) * config.num_proxies, cudaMemcpyHostToDevice);
+
+  // Allocate and copy proxy warp lists to GPU
+  ProxyWarpList* d_proxy_warp_lists;
+  cudaMallocManaged(&d_proxy_warp_lists,
+                    sizeof(ProxyWarpList) * config.num_proxies);
+
+  // Copy the proxy warp lists structure and allocate GPU memory for warp_ids
+  // arrays
+  for (uint32_t p = 0; p < config.num_proxies; p++) {
+    d_proxy_warp_lists[p].count = h_proxy_warp_lists[p].count;
+    if (h_proxy_warp_lists[p].count > 0) {
+      cudaMallocManaged(&d_proxy_warp_lists[p].warp_ids,
+                        sizeof(uint32_t) * h_proxy_warp_lists[p].count);
+      cudaMemcpy(d_proxy_warp_lists[p].warp_ids, h_proxy_warp_lists[p].warp_ids,
+                 sizeof(uint32_t) * h_proxy_warp_lists[p].count,
+                 cudaMemcpyHostToDevice);
+    } else {
+      d_proxy_warp_lists[p].warp_ids = nullptr;
+    }
+  }
 
   // Payload buffers
   const uint32_t payload_buffer_size = 128 * 1024 * 1024;
@@ -261,7 +274,8 @@ void run_throughput_test(uint32_t num_warps, uint32_t num_proxies,
 
   fc_throughput_kernel<<<grid, block>>>(
       d_mgr, d_ring_buffers, d_pub_list, d_warp_to_proxy, d_proxy_to_combiner,
-      d_payload_buffers, d_payload_write_ptrs, config, d_metrics, d_stop);
+      d_payload_buffers, d_payload_write_ptrs, d_proxy_warp_lists, config,
+      d_metrics, d_stop);
 
   // Wait for test duration
   std::this_thread::sleep_for(
@@ -296,6 +310,17 @@ void run_throughput_test(uint32_t num_warps, uint32_t num_proxies,
   cudaFree(d_mgr);
   cudaFree(d_metrics);
   cudaFree(d_stop);
+
+  // Cleanup proxy warp lists
+  for (uint32_t p = 0; p < config.num_proxies; p++) {
+    if (d_proxy_warp_lists[p].warp_ids != nullptr) {
+      cudaFree(d_proxy_warp_lists[p].warp_ids);
+    }
+    if (h_proxy_warp_lists[p].warp_ids != nullptr) {
+      delete[] h_proxy_warp_lists[p].warp_ids;
+    }
+  }
+  cudaFree(d_proxy_warp_lists);
 
   for (auto* rb : h_ring_buffers) {
     rb->~DeviceToHostCmdBuffer();

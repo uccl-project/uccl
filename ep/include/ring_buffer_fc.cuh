@@ -9,9 +9,20 @@ namespace uccl {
 namespace flat_combining {
 
 // Maximum number of warps and proxies for this benchmark
-constexpr uint32_t MAX_WARPS = 64;
+constexpr uint32_t MAX_WARPS = 1024;
 constexpr uint32_t MAX_PROXIES = 8;
 constexpr uint32_t MAX_BATCH_SIZE = 32;
+
+// Proxy warp list for efficient combiner scanning
+struct ProxyWarpList {
+  uint32_t* warp_ids;  // Dynamic array of warp IDs assigned to this proxy
+  uint32_t count;      // Number of warps assigned to this proxy
+
+  __host__ __device__ void init() {
+    warp_ids = nullptr;
+    count = 0;
+  }
+};
 
 // Publication Record - each warp has one record
 struct alignas(128) PublicationRecord {
@@ -92,6 +103,7 @@ class FCRingBufferManager {
   // Ring buffers (one per proxy)
   DeviceToHostCmdBuffer** ring_buffers_;
   uint32_t num_proxies_;
+  uint32_t num_warps_;
 
   // Publication lists
   PublicationList* pub_lists_;
@@ -100,6 +112,9 @@ class FCRingBufferManager {
   uint32_t* warp_to_proxy_map_;
   uint32_t*
       proxy_to_combiner_map_;  // Which warp is the combiner for each proxy
+
+  // Optimized combiner scanning - each proxy has a list of its warps
+  ProxyWarpList* proxy_warp_lists_;
 
   // Payload buffer pools (one per proxy for staging payload data)
   uint8_t** payload_buffers_;     // Pinned memory for payload staging
@@ -121,15 +136,20 @@ class FCRingBufferManager {
       DeviceToHostCmdBuffer** rbs, uint32_t num_proxies, uint32_t num_warps,
       PublicationList* pub_list, uint32_t* warp_to_proxy,
       uint32_t* proxy_to_combiner, uint8_t** payload_bufs = nullptr,
-      uint32_t payload_buf_size = 0, uint32_t* payload_write_ptrs = nullptr) {
+      uint32_t payload_buf_size = 0, uint32_t* payload_write_ptrs = nullptr,
+      ProxyWarpList* proxy_warp_lists = nullptr) {
     ring_buffers_ = rbs;
     num_proxies_ = num_proxies;
+    num_warps_ = num_warps;
     pub_lists_ = pub_list;
     warp_to_proxy_map_ = warp_to_proxy;
     proxy_to_combiner_map_ = proxy_to_combiner;
     payload_buffers_ = payload_bufs;
     payload_buffer_size_ = payload_buf_size;
     payload_write_ptrs_ = payload_write_ptrs;
+
+    // Set proxy warp lists
+    proxy_warp_lists_ = proxy_warp_lists;
 
     // Initialize stats
     stats_.total_requests = 0;
@@ -180,16 +200,36 @@ class FCRingBufferManager {
       uint32_t batch_count = 0;
 
       // Step 1: Scan and collect requests from assigned warps
-      for (uint32_t w = 0; w < pub_lists_->num_warps; w++) {
-        if (warp_to_proxy_map_[w] == proxy_id) {
+      if (proxy_warp_lists_ != nullptr &&
+          proxy_warp_lists_[proxy_id].warp_ids != nullptr) {
+        // Optimized path: only scan warps assigned to this proxy
+        ProxyWarpList const& my_warps = proxy_warp_lists_[proxy_id];
+        for (uint32_t i = 0; i < my_warps.count && batch_count < MAX_BATCH_SIZE;
+             i++) {
+          uint32_t w = my_warps.warp_ids[i];
           auto* record = pub_lists_->get_record(w);
-          if (record->request_flag == 1 && batch_count < MAX_BATCH_SIZE) {
+          if (record->request_flag == 1) {
             // Mark as being processed
             record->request_flag = 2;
 
             batch[batch_count] = record->cmd;
             batch_warp_ids[batch_count] = w;
             batch_count++;
+          }
+        }
+      } else {
+        // Fallback path: scan all warps (original behavior)
+        for (uint32_t w = 0; w < pub_lists_->num_warps; w++) {
+          if (warp_to_proxy_map_[w] == proxy_id) {
+            auto* record = pub_lists_->get_record(w);
+            if (record->request_flag == 1 && batch_count < MAX_BATCH_SIZE) {
+              // Mark as being processed
+              record->request_flag = 2;
+
+              batch[batch_count] = record->cmd;
+              batch_warp_ids[batch_count] = w;
+              batch_count++;
+            }
           }
         }
       }
@@ -334,10 +374,11 @@ __host__ __device__ inline uint32_t get_combiner_for_proxy(
   }
 }
 
-// Initialize warp to proxy mapping
-__host__ inline void init_warp_mapping(uint32_t num_warps, uint32_t num_proxies,
-                                       uint32_t* warp_to_proxy_map,
-                                       uint32_t* proxy_to_combiner_map) {
+// Initialize warp to proxy mapping and build proxy warp lists
+__host__ inline void init_warp_mapping(
+    uint32_t num_warps, uint32_t num_proxies, uint32_t* warp_to_proxy_map,
+    uint32_t* proxy_to_combiner_map,
+    ProxyWarpList* proxy_warp_lists = nullptr) {
   // Step 1: Set warp to proxy mapping using modulo
   for (uint32_t w = 0; w < num_warps; w++) {
     warp_to_proxy_map[w] = get_proxy_for_warp(w, num_proxies);
@@ -359,26 +400,50 @@ __host__ inline void init_warp_mapping(uint32_t num_warps, uint32_t num_proxies,
     }
   }
 
-  // Verification: print mapping for debugging
-  printf("Warp to Proxy mapping (num_warps=%u, num_proxies=%u):\n", num_warps,
-         num_proxies);
-  for (uint32_t p = 0; p < num_proxies; p++) {
-    printf("  Proxy %u: combiner=", p);
-    if (proxy_to_combiner_map[p] != INVALID_COMBINER) {
-      printf("warp %u, assigned warps={", proxy_to_combiner_map[p]);
-      bool first = true;
+  // Step 4: Build proxy warp lists (if provided)
+  if (proxy_warp_lists != nullptr) {
+    // Count warps per proxy
+    for (uint32_t p = 0; p < num_proxies; p++) {
+      uint32_t count = 0;
       for (uint32_t w = 0; w < num_warps; w++) {
-        if (warp_to_proxy_map[w] == p) {
-          if (!first) printf(",");
-          printf("%u", w);
-          first = false;
-        }
+        if (warp_to_proxy_map[w] == p) count++;
       }
-      printf("}\n");
-    } else {
-      printf("NONE (no warps assigned)\n");
+
+      // Allocate and fill warp list for this proxy
+      proxy_warp_lists[p].count = count;
+      if (count > 0) {
+        proxy_warp_lists[p].warp_ids = new uint32_t[count];
+        uint32_t idx = 0;
+        for (uint32_t w = 0; w < num_warps; w++) {
+          if (warp_to_proxy_map[w] == p) {
+            proxy_warp_lists[p].warp_ids[idx++] = w;
+          }
+        }
+      } else {
+        proxy_warp_lists[p].warp_ids = nullptr;
+      }
     }
   }
+
+  // Verification: print mapping for debugging - DISABLED for performance
+  // printf("Warp to Proxy mapping (num_warps=%u, num_proxies=%u):\n",
+  // num_warps, num_proxies); for (uint32_t p = 0; p < num_proxies; p++) {
+  //     printf("  Proxy %u: combiner=", p);
+  //     if (proxy_to_combiner_map[p] != INVALID_COMBINER) {
+  //         printf("warp %u, assigned warps={", proxy_to_combiner_map[p]);
+  //         bool first = true;
+  //         for (uint32_t w = 0; w < num_warps; w++) {
+  //             if (warp_to_proxy_map[w] == p) {
+  //                 if (!first) printf(",");
+  //                 printf("%u", w);
+  //                 first = false;
+  //             }
+  //         }
+  //         printf("}\n");
+  //     } else {
+  //         printf("NONE (no warps assigned)\n");
+  //     }
+  // }
 }
 
 }  // namespace flat_combining
