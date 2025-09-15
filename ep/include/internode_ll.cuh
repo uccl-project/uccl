@@ -8,7 +8,8 @@
 
 namespace uccl {
 namespace internode_ll {
-
+void clean_low_latency_buffer(int* clean_0, int num_clean_int_0, int* clean_1,
+                              int num_clean_int_1, cudaStream_t stream);
 // Dummy host launcher declaration
 void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
               int* packed_recv_src_info, int64_t* packed_recv_layout_range,

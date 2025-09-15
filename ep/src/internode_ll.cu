@@ -12,6 +12,33 @@ namespace cg = cooperative_groups;
 namespace uccl {
 namespace internode_ll {
 
+template <int kNumThreads>
+__launch_bounds__(kNumThreads, 1) __global__
+    void clean_low_latency_buffer(int* clean_0, int num_clean_int_0,
+                                  int* clean_1, int num_clean_int_1) {
+  // Barrier before cleaning (in case of unfinished chunked EP)
+  // nvshmemx_barrier_all_block();
+
+  // Clean
+  auto thread_id = static_cast<int>(threadIdx.x);
+#pragma unroll
+  for (int i = thread_id; i < num_clean_int_0; i += kNumThreads) clean_0[i] = 0;
+#pragma unroll
+  for (int i = thread_id; i < num_clean_int_1; i += kNumThreads) clean_1[i] = 0;
+
+  // Barrier after cleaning (make sure the low-latency mode works fine)
+  // nvshmemx_barrier_all_block();
+}
+
+void clean_low_latency_buffer(int* clean_0, int num_clean_int_0, int* clean_1,
+                              int num_clean_int_1, cudaStream_t stream) {
+  constexpr int kNumThreads = 256;
+
+  SETUP_LAUNCH_CONFIG(1, kNumThreads, stream);
+  LAUNCH_KERNEL(&cfg, clean_low_latency_buffer<kNumThreads>, clean_0,
+                num_clean_int_0, clean_1, num_clean_int_1);
+}
+
 template <bool kUseFP8, bool kUseUE8M0, int kHidden>
 __global__ __launch_bounds__(1024, 1) void dispatch(
     void* packed_recv_x, void* packed_recv_x_scales, int* packed_recv_src_info,
@@ -163,7 +190,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           uccl::nvshmemi_ibgda_put_nbi_warp(
               dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), src_ptr,
               num_bytes_per_msg, dst_rank,
-              warp_id,  // NOTE(MaoZiming): use warp_id for rb.
+              /*warp_id=*/dst_expert_local_idx,  // NOTE(Yang): for selecting
+                                                 // rb.
               lane_id, slot_idx, ring_addrs, num_ring_addrs, false);
         } else {
           // Intra-node: use direct memory copy via IPC
@@ -257,8 +285,9 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       uccl::nvshmemi_ibgda_amo_nonfetch_add(
           dst_ptr - reinterpret_cast<uint64_t>(atomic_buffer_ptr),
           -num_tokens_sent - 1, dst_rank,
-          warp_id,  // NOTE(MaoZiming): use warp_id for rb.
-          dst_expert_local_idx, false, ring_addrs, num_ring_addrs, true);
+          /*qp_id=*/-1,                      // NOTE(Yang): not used.
+          /*warp_id=*/dst_expert_local_idx,  // NOTE(Yang): for selecting rb.
+          false, ring_addrs, num_ring_addrs, true);
 
     } else {
       // Intra-node: use direct atomic operation
@@ -367,9 +396,7 @@ LOW_LATENCY_DISPATCH_RECV:
       auto const src_src_idx =
           reinterpret_cast<int*>(rdma_recv_x_uint8 + i * num_bytes_per_msg);
       if (lane_id == 0)
-        recv_src_info[recv_token_begin_idx + i] =
-            ld_acquire_sys_global(src_src_idx);
-      sys_membar();
+        recv_src_info[recv_token_begin_idx + i] = ld_cg_global(src_src_idx);
       __syncwarp();
 
       // Copy data
@@ -747,10 +774,11 @@ __global__ __launch_bounds__(1024, 1) void combine(
       // NOTES: for zero-copy mode, we assume the data is already in the send
       // buffer
       if (dst_p2p_ptr == 0) {
+        __threadfence_system();
         nvshmemi_ibgda_put_nbi_warp(
             dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), buf_ptr,
             hidden * sizeof(nv_bfloat16), dst_rank,
-            warp_id,  // NOTE(MaoZiming): use warp_id for rb
+            /*warp_id=*/local_expert_idx,  // NOTE(Yang): for selecting rb.
             lane_id, token_idx - offset, ring_addrs, num_ring_addrs, true);
       }
     }
@@ -780,11 +808,12 @@ __global__ __launch_bounds__(1024, 1) void combine(
         // NOTE(MaoZiming): Without ibgda, we can only use atomic add
         // Pass offset to CPU proxy for atomic operation (similar to dispatch
         // phase)
-        nvshmemi_ibgda_amo_nonfetch_add(
+        uccl::nvshmemi_ibgda_amo_nonfetch_add(
             dst_ptr - reinterpret_cast<uint64_t>(atomic_buffer_ptr), 1,
             dst_rank,
-            warp_id,  // NOTE(MaoZiming): use warp_id for rb
-            local_expert_idx, false, ring_addrs, num_ring_addrs, false);
+            /*qp_id=*/-1,                  // NOTE(Yang): not used.
+            /*warp_id=*/local_expert_idx,  // NOTE(Yang): for selecting rb.
+            false, ring_addrs, num_ring_addrs, false);
       }
       atomic_add_release_global(atomic_clean_flag, -1);
     }

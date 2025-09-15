@@ -12,7 +12,6 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#define USE_GRACE_HOPPER
 #define MEASURE_PER_OP_LATENCY
 #define kAtomicBufferSize 8196
 #define kQueueSize 1024
