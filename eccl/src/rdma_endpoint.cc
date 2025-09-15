@@ -38,7 +38,7 @@ RDMAEndpoint::~RDMAEndpoint() {
 bool RDMAEndpoint::connect_to(int peer_rank) {
   int local_rank = comm_->local_rank_;
 
-  // create QPs
+  // Create QPs
   struct ibv_qp_init_attr qp_init_attr = {};
   qp_init_attr.send_cq = comm_->cq_list_[peer_rank % comm_->cq_list_.size()];
   qp_init_attr.recv_cq = comm_->cq_list_[peer_rank % comm_->cq_list_.size()];
@@ -67,7 +67,7 @@ bool RDMAEndpoint::connect_to(int peer_rank) {
     qp_info_list_.push_back(new_info);
   }
 
-  // modify QPs to INIT
+  // Modify QPs to INIT
   struct ibv_qp_attr attr;
   memset(&attr, 0, sizeof(attr));
   attr.qp_state = IBV_QPS_INIT;
@@ -87,7 +87,7 @@ bool RDMAEndpoint::connect_to(int peer_rank) {
     }
   }
 
-  // exchange QP info
+  // Exchange QP info
   RDMAInfo local_info{};
   {
     std::lock_guard<std::mutex> lk(qp_info_list_mu_);
@@ -127,7 +127,7 @@ bool RDMAEndpoint::connect_to(int peer_rank) {
             << ", local_qps=" << local_info.qps.size()
             << ", remote_qps=" << remote_info.qps.size() << std::endl;
 
-  // modify QPs to RTR
+  // Modify QPs to RTR
   for (int i = 0; i < config_->qp_count_per_ep; i++) {
     memset(&attr, 0, sizeof(attr));
     attr.qp_state = IBV_QPS_RTR;
@@ -166,7 +166,7 @@ bool RDMAEndpoint::connect_to(int peer_rank) {
               << "] modified to RTR state" << std::endl;
   }
 
-  // modify QPs to RTS
+  // Modify QPs to RTS
   for (int i = 0; i < config_->qp_count_per_ep; i++) {
     memset(&attr, 0, sizeof(attr));
     attr.qp_state = IBV_QPS_RTS;
@@ -188,9 +188,9 @@ bool RDMAEndpoint::connect_to(int peer_rank) {
               << "] modified to RTS state" << std::endl;
   }
 
-  // pre post some recv wrs
+  // Pre post some recv wrs
   for (int i = 0; i < config_->qp_count_per_ep; i++) {
-    post_recv_imm_(qp_list_[i], 8);  // just 8 now
+    post_recv_imm_(qp_list_[i], 16);  // keep same as cq poll batch
   }
 
   return true;
@@ -207,7 +207,7 @@ bool RDMAEndpoint::send_async(int to_rank, std::shared_ptr<Request> creq) {
   size_t total = creq->len;
   if (total == 0) return false;
 
-  // use qp0 send for test
+  // Use qp0 send for single qp transfer test
   ibv_qp* qp0 = nullptr;
   {
     std::lock_guard<std::mutex> lk(qp_list_mu_);
@@ -221,17 +221,15 @@ bool RDMAEndpoint::send_async(int to_rank, std::shared_ptr<Request> creq) {
   MR remote_mr = comm_->get_remote_mr(to_rank, creq->remote_mr_id);
   MR local_mr = comm_->get_local_mr(creq->local_mr_id);
 
-  // prepare SGE
   ibv_sge sge;
   sge.addr = reinterpret_cast<uint64_t>(creq->buf) + creq->offset;
   sge.length = static_cast<uint32_t>(creq->len);
   sge.lkey = local_mr.key;
 
-  // prepare WR
   ibv_send_wr wr;
   memset(&wr, 0, sizeof(wr));
-  wr.wr_id = static_cast<uint64_t>(static_cast<uint32_t>(creq->id));
-  ;  // wr_id : which creq
+  wr.wr_id = static_cast<uint64_t>(
+      static_cast<uint32_t>(creq->id));  // wr_id : which creq
   // std::cout << "wr id is " << creq->id << std::endl;
   wr.sg_list = &sge;
   wr.num_sge = 1;
@@ -254,6 +252,7 @@ bool RDMAEndpoint::send_async(int to_rank, std::shared_ptr<Request> creq) {
   return true;
 }
 
+// TODO: multi qps transfer
 // bool RDMAEndpoint::send_async(int to_rank, std::shared_ptr<Request> creq) {
 //   {
 //     std::lock_guard<std::mutex> lk(qp_list_mu_);
@@ -365,8 +364,8 @@ bool RDMAEndpoint::post_recv_imm_(ibv_qp* qp, uint64_t count) {
     memset(&rr, 0, sizeof(rr));
 
     rr.wr_id = reinterpret_cast<uint64_t>(
-        qp);         // wr_id : which qp; recv get creq->id from imm data
-    rr.num_sge = 0;  // zero-byte
+        qp);  // wr_id : which qp; recv get creq->id from imm data
+    rr.num_sge = 0;
     rr.sg_list = nullptr;
 
     ibv_recv_wr* bad_rr = nullptr;
@@ -389,7 +388,7 @@ bool RDMAEndpoint::recv_async(int from_rank, std::shared_ptr<Request> creq) {
   size_t total = creq->len;
   if (total == 0) return false;
 
-  // use qp0 recv for test
+  // Use qp0 recv for single qp tansfer test
   ibv_qp* qp0 = nullptr;
   {
     std::lock_guard<std::mutex> lk(qp_list_mu_);
@@ -411,6 +410,7 @@ bool RDMAEndpoint::recv_async(int from_rank, std::shared_ptr<Request> creq) {
   return true;
 }
 
+// TODO: multi qps transfer
 // bool RDMAEndpoint::recv_async(int from_rank, std::shared_ptr<Request> creq) {
 //   const size_t chunk_size = config_->rdma_chunk_size;
 //   if (chunk_size == 0) return false;

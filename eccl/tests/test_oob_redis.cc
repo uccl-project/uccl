@@ -72,7 +72,7 @@ void test_redis_oob() {
         std::cout << std::hex << std::setw(2) << std::setfill('0')
                   << static_cast<int>(qp.gid[j]) << " ";
       }
-      std::cout << std::dec << std::endl;  // 恢复十进制输出
+      std::cout << std::dec << std::endl;
     }
   } else {
     std::cerr << "[WARN] Timeout waiting for remote RDMA info" << std::endl;

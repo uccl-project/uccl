@@ -7,7 +7,7 @@ void Request::on_comm_done(bool done) {
   }
   int prev = pending_signaled.fetch_sub(1, std::memory_order_acq_rel);
   if (do_reduction) {
-    // post compute req to gpu kernel
+    // TODO: post compute req to gpu kernel
     return;
   } else {
     if (prev == 1) {

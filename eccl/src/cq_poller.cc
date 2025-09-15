@@ -74,7 +74,6 @@ void CQPoller::run_loop() {
       continue;
     }
     if (ne == 0) {
-      // no completions
       std::this_thread::sleep_for(idle_sleep);
       idle_sleep = std::min(kIdleSleepMax, idle_sleep * 2);
       continue;

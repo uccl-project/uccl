@@ -23,8 +23,8 @@ struct Request {
   std::atomic<bool> failed{false};
   static std::atomic<unsigned> global_id_counter;
 
-  std::atomic<int> pending_signaled{0};  // how many qps we used
-  std::atomic<int> pending_computed{0};  // how many compute events
+  std::atomic<int> pending_signaled{0};  // How many qps we used
+  std::atomic<int> pending_computed{0};  // How many compute events
 
   void on_comm_done(bool done = true);
   void on_compute_done();

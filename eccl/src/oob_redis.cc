@@ -51,7 +51,7 @@ bool RedisExchanger::fetch(std::string const& key, Exchangeable& obj) {
 
   if (reply->type != REDIS_REPLY_ARRAY || reply->elements == 0) {
     freeReplyObject(reply);
-    return false;  // key 不存在
+    return false;  // key does not exist
   }
 
   std::map<std::string, std::string> kv;

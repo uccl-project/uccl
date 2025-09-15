@@ -175,7 +175,7 @@ class Communicator {
   std::unordered_map<unsigned, std::shared_ptr<Request>> requests_map_;
   std::mutex req_mu_;
   jring_t* pending_req_id_to_deal_ =
-      nullptr;  // for which request has not been added to requests_map_,
+      nullptr;  // For which request has not been added to requests_map_,
                 // cqpoller add unaddressed req_id to this queue, and
                 // irecv/recv_red consume it
 

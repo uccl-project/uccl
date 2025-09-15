@@ -21,11 +21,11 @@ void cqpoller_client_thread(std::shared_ptr<Communicator> comm, int peer_rank) {
   size_t size = count * sizeof(float);
   GPU_RT_CHECK(gpuMalloc((void**)&d_data, size));
 
-  // make host buffer
+  // Make host buffer
   std::vector<float> h_data(count);
   for (size_t i = 0; i < count; ++i) h_data[i] = static_cast<float>(i);
 
-  // copy to GPU
+  // Copy to GPU
   GPU_RT_CHECK(gpuMemcpy(d_data, h_data.data(), size, gpuMemcpyHostToDevice));
 
   auto mr = comm->reg_mr(d_data, size);
@@ -65,7 +65,7 @@ void cqpoller_server_thread(std::shared_ptr<Communicator> comm, int peer_rank) {
 
   auto mr = comm->reg_mr(d_data, size);
   comm->notify_mr(peer_rank, mr);
-  sleep(1); // test recv ceq before post irecv
+  sleep(1);  // test recv ceq before post irecv
   bool ok = comm->irecv(peer_rank, d_data, 0, size, true);
   if (!ok) {
     std::cerr << "[SERVER] irecv failed\n";
@@ -77,7 +77,7 @@ void cqpoller_server_thread(std::shared_ptr<Communicator> comm, int peer_rank) {
 
   comm->wait_finish();
 
-  // copy and check data
+  // Copy and check data
   std::vector<float> h_recv(count);
   GPU_RT_CHECK(gpuMemcpy(h_recv.data(), d_data, size, gpuMemcpyDeviceToHost));
 

@@ -9,9 +9,9 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
       local_rank_(rank),
       world_size_(world_size),
       config_(config) {
-  // find best NIC for cur gpu
+  // Find best NIC for current gpu
   auto [nic_id, nic_name] = find_best_rdma_for_gpu(gpu_id_);
-  if (nic_id != -1) {  // support RDMA
+  if (nic_id != -1) {  // Support RDMA
     struct ibv_device** dev_list = ibv_get_device_list(nullptr);
     if (!dev_list) {
       std::cerr << "Failed to get IB devices" << std::endl;
@@ -43,13 +43,13 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
 
     support_rdma = true;
     // Init RAMD resource
-    // create pd
+    // Create pd
     pd_ = ibv_alloc_pd(nic_ibv_ctx_);
     if (!pd_) {
       perror("Failed to allocate PD");
       std::abort();
     }
-    // create cq
+    // Create cq
     for (int i = 0; i < config_->cq_poller_threads; i++) {
       ibv_cq* cq =
           ibv_create_cq(nic_ibv_ctx_, config_->cq_depth, nullptr, nullptr, 0);
@@ -81,7 +81,7 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
       support_rdma_roce = false;
     }
 
-    // start cq poller
+    // Start cq poller
     for (int i = 0; i < config_->cq_poller_threads; i++) {
       CQPoller* cq_poller = new CQPoller(this, cq_list_[i]);
       cq_poller->start();
@@ -91,7 +91,7 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
     pending_req_id_to_deal_ =
         uccl::create_ring(sizeof(unsigned), 16);  // change num later
 
-  } else {  // does not support RDMA
+  } else {  // Does not support RDMA
     // TODO: if we can't find any rdma nic, we still can do ipc comm on local
     // host.
     support_rdma = false;
@@ -108,7 +108,7 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
             << " world_size: " << world_size_ << " host_id: " << local.host_id
             << std::endl;
 
-  // initialize Redis client
+  // Initialize Redis client
   redis_client_ =
       std::make_shared<RedisExchanger>(config->redis_ip, config->redis_port);
   if (!redis_client_->valid()) {
@@ -116,13 +116,13 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
     return;
   }
 
-  // exchange communicator meta
+  // Exchange communicator meta
   std::string meta_key = "meta:" + std::to_string(local_rank_);
   if (!redis_client_->publish(meta_key, local)) {
     fprintf(stderr, "[ERROR] Failed to publish local CommunicatorMeta \n");
   }
 
-  // get all others meta
+  // Get all others meta
   CommunicatorMeta remote{};
   for (int i = 0; i < world_size_; i++) {
     if (i == local_rank_) continue;
@@ -138,7 +138,7 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
 }
 
 Communicator::~Communicator() {
-  // stop cq poller first
+  // Stop cq poller first
   if (!cq_poller_list_.empty()) {
     for (auto& cq_poller : cq_poller_list_) {
       if (cq_poller) {
@@ -281,7 +281,7 @@ bool Communicator::connect_to(int rank) {
             << ", local_host_id=" << local_meta->host_id
             << ", peer_host_id=" << meta->host_id << std::endl;
 
-  // 强制使用 RDMA，即使在同主机
+  // We use RDMA for test now. TODO: support IPC
   bool same_host = meta->host_id == local_meta->host_id;
   same_host = false;
 
@@ -377,7 +377,7 @@ bool Communicator::irecv(int rank, void* ptr, size_t offset, size_t len,
     return false;
   }
 
-  // TODO: Add a pending queue. RECV work requests (WRs) may have already
+  // Add a pending queue. RECV work requests (WRs) may have already
   // generated CQEs before irecv is called. For such CQEs that are not yet
   // processed, add them to a pending queue. If the queue is not empty, process
   // these CQEs here and release the corresponding requests.
@@ -410,8 +410,7 @@ bool Communicator::irecv_red(int rank, void* ptr, size_t offset, size_t len,
     return false;
   }
 
-  cq_poller_list_[0]
-      ->process_pending();  // static function for process pending queue
+  cq_poller_list_[0]->process_pending();
 
   return true;
 }
@@ -468,7 +467,7 @@ std::shared_ptr<CommunicatorMeta> Communicator::get_communicator_meta_by_rank(
 bool Communicator::check_ready() {
   std::lock_guard<std::mutex> lock(meta_mu_);
 
-  // check meta map size
+  // Check meta map size
   if (static_cast<int>(rank_to_comm_meta_.size()) < world_size_) {
     std::cout << "[WARN] Communicator " << local_rank_
               << " check_ready: rank_to_comm_meta_ size "
@@ -477,7 +476,7 @@ bool Communicator::check_ready() {
     return false;
   }
 
-  // check each rank meta
+  // Check each rank meta
   for (int i = 0; i < world_size_; i++) {
     auto it = rank_to_comm_meta_.find(i);
     if (it == rank_to_comm_meta_.end()) {
@@ -494,7 +493,7 @@ bool Communicator::check_ready() {
     }
   }
 
-  // check RDMA NIC context if supported
+  // Check RDMA NIC context if supported
   if (support_rdma) {
     if (!nic_ibv_ctx_) {
       std::cout << "[WARN] Communicator " << local_rank_
