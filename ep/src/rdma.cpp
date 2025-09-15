@@ -204,7 +204,8 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
                               IBV_ACCESS_RELAXED_ORDERING);
 #else
   S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
-                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                              IBV_ACCESS_RELAXED_ORDERING);
 #endif
 
   if (!S.mr) {

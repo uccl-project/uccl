@@ -3,7 +3,6 @@ override CXX := /usr/bin/g++
 NVCC      := $(CUDA_PATH)/bin/nvcc
 
 EFA_HOME?=/opt/amazon/efa
-
 ifeq ($(wildcard $(EFA_HOME)),)
   $(warning EFA not detected, building without EFA)
   EFA_CFLAGS :=
@@ -24,12 +23,12 @@ endif
 ifneq (,$(findstring GH200,$(GPU_NAME)))
   GPU_IS_HOPPER := 1
 endif
-ifeq ($(and $(CPU_IS_ARM64),$(GPU_IS_HOPPER)),1)
-  $(warning GH200 detected, building with GH200)
-  GH_CFLAGS := -DUSE_GRACE_HOPPER
-else
+ifeq ($(and $(CPU_IS_ARM64),$(GPU_IS_HOPPER)),0)
   $(warning GH200 not detected, building without GH200)
   GH_CFLAGS :=
+else
+  $(info GH200 detected, building with GH200)
+  GH_CFLAGS := -DUSE_GRACE_HOPPER
 endif
 
 PYTHON            ?= python3
