@@ -88,3 +88,38 @@
       EP_HOST_ASSERT(false && "Unsupported RDMA ranks"); \
   }                                                      \
   while (false)
+
+#define SWITCH_RANKS(case_macro)                     \
+  switch (num_ranks) {                               \
+    case 2:                                          \
+      case_macro(2);                                 \
+    case 4:                                          \
+      case_macro(4);                                 \
+    case 8:                                          \
+      case_macro(8);                                 \
+    default:                                         \
+      EP_HOST_ASSERT(false and "Unsupported ranks"); \
+  }                                                  \
+  while (false)
+
+#define SWITCH_TYPES(case_macro)                    \
+  switch (type) {                                   \
+    case CUDA_R_16BF:                               \
+      case_macro(nv_bfloat16);                      \
+    default:                                        \
+      EP_HOST_ASSERT(false and "Unsupported type"); \
+  }                                                 \
+  while (false)
+
+#define SWITCH_RANKS_WITH_DTYPE(dtype, case_macro)   \
+  switch (num_ranks) {                               \
+    case 2:                                          \
+      case_macro(dtype, 2);                          \
+    case 4:                                          \
+      case_macro(dtype, 4);                          \
+    case 8:                                          \
+      case_macro(dtype, 8);                          \
+    default:                                         \
+      EP_HOST_ASSERT(false and "Unsupported ranks"); \
+  }                                                  \
+  while (false)
