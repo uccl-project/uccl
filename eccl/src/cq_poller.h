@@ -18,6 +18,8 @@ class CQPoller {
   void stop();
   bool running() const { return running_.load(std::memory_order_acquire); }
 
+  void process_pending();
+
  private:
   void run_loop();
 

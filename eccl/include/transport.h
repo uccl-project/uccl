@@ -22,6 +22,8 @@ class EndpointBase {
   virtual bool accept_from(int rank) = 0;
   virtual bool send_async(int to_rank, std::shared_ptr<Request> creq) = 0;
   virtual bool recv_async(int from_rank, std::shared_ptr<Request> creq) = 0;
+  std::atomic<uint16_t> next_send_seq_{0};
+  std::atomic<uint16_t> next_recv_seq_{0};
 };
 
 class RDMAEndpoint : public EndpointBase {
@@ -97,7 +99,7 @@ class Communicator {
 
   // ---------- Communication ----------
   bool isend(int rank, void* ptr, size_t offset, size_t len,
-             uint32_t local_mr_id, uint32_t remote_mr_id, bool on_gpu);
+             uint16_t local_mr_id, uint16_t remote_mr_id, bool on_gpu);
   bool irecv(int rank, void* ptr, size_t offset, size_t len, bool on_gpu);
   bool irecv_red(int rank, void* ptr, size_t offset, size_t len, bool on_gpu,
                  ReductionType red_op);
@@ -113,8 +115,8 @@ class Communicator {
   bool notify_mr(int remote_rank, MR& mr);
   MR wait_mr_notify(int remote_rank);
   MR get_local_mr(void* local_buf);
-  MR get_local_mr(uint32_t mr_id);
-  MR get_remote_mr(int remote_rank, uint32_t mr_id);
+  MR get_local_mr(uint16_t mr_id);
+  MR get_remote_mr(int remote_rank, uint16_t mr_id);
 
   bool register_local_ipc_cache(void* local_buf);
   bool register_remote_ipc_cache(int remote_rank, void* local_buf,
@@ -149,13 +151,13 @@ class Communicator {
   std::vector<ibv_cq*> cq_list_;
   std::vector<CQPoller*> cq_poller_list_;
   std::unordered_map<void*, ibv_mr*> ptr_to_local_ibv_mr_;
-  std::unordered_map<uint32_t, MR>
+  std::unordered_map<uint16_t, MR>
       mr_id_to_local_mr_;  // local mr id -> local mr
   mutable std::mutex local_mr_mu_;
-  std::unordered_map<int, std::unordered_map<uint32_t, MR>>
+  std::unordered_map<int, std::unordered_map<uint16_t, MR>>
       rank_mr_id_to_remote_mr_;  // to_rank remote_ptr -> remote mr
   mutable std::mutex remote_mr_mu_;
-  std::atomic<uint32_t> next_mr_id{0};
+  std::atomic<uint16_t> next_mr_id{0};
 
   // ---------- IPC resources ---------
   std::unordered_map<void*, IpcCache> ptr_to_local_ipc_cache_;
@@ -170,11 +172,8 @@ class Communicator {
   mutable std::mutex redis_client_mu_;
 
   // Requests pool
-  std::atomic<unsigned> next_request_id_{0};
   std::unordered_map<unsigned, std::shared_ptr<Request>> requests_map_;
   std::mutex req_mu_;
-  std::atomic<int> head_id{0};
-  std::atomic<int> tail_id{0};
   jring_t* pending_req_id_to_deal_ =
       nullptr;  // for which request has not been added to requests_map_,
                 // cqpoller add unaddressed req_id to this queue, and

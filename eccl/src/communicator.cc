@@ -89,7 +89,7 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
     }
 
     pending_req_id_to_deal_ =
-        uccl::create_ring(sizeof(unsigned), 8);  // change num later
+        uccl::create_ring(sizeof(unsigned), 16);  // change num later
 
   } else {  // does not support RDMA
     // TODO: if we can't find any rdma nic, we still can do ipc comm on local
@@ -328,26 +328,29 @@ Communicator::get_endpoint_by_rank(int rank) {
 }
 
 bool Communicator::isend(int rank, void* ptr, size_t offset, size_t len,
-                         uint32_t local_mr_id, uint32_t remote_mr_id,
+                         uint16_t local_mr_id, uint16_t remote_mr_id,
                          bool on_gpu) {
   auto [ep, ok] = get_endpoint_by_rank(rank);
   if (!ok || !ep) return false;
 
-  auto req = std::make_shared<Request>(
-      next_request_id_.fetch_add(1, std::memory_order_relaxed), ptr, offset,
-      len, local_mr_id, remote_mr_id,
-      /*on_gpu*/ false, RequestType::SEND);
+  unsigned rid = make_request_id(
+      remote_mr_id, ep->next_send_seq_.fetch_add(1, std::memory_order_relaxed));
+
+  auto req = std::make_shared<Request>(rid, ptr, offset, len, local_mr_id,
+                                       remote_mr_id,
+                                       /*on_gpu*/ false, RequestType::SEND);
 
   {
     std::lock_guard<std::mutex> lk(req_mu_);
-    requests_map_[req->id] = req;
+    requests_map_[rid] = req;
   }
 
   if (!ep->send_async(rank, req)) {
+    std::lock_guard<std::mutex> lk(req_mu_);
+    requests_map_.erase(rid);
     return false;
   }
 
-  std::cout << "isend new req with id " << req->id << std::endl;
   return true;
 }
 
@@ -356,21 +359,21 @@ bool Communicator::irecv(int rank, void* ptr, size_t offset, size_t len,
   auto [ep, ok] = get_endpoint_by_rank(rank);
   if (!ok || !ep) return false;
 
-  auto req = std::make_shared<Request>(
-      next_request_id_.fetch_add(1, std::memory_order_relaxed), ptr, offset,
-      len, -1, -1,
-      /*on_gpu*/ false, RequestType::RECV);
+  auto local_mr = get_local_mr(ptr);
+  unsigned rid = make_request_id(
+      local_mr.id, ep->next_send_seq_.fetch_add(1, std::memory_order_relaxed));
+
+  auto req = std::make_shared<Request>(rid, ptr, offset, len, -1, -1, false,
+                                       RequestType::RECV);
 
   {
     std::lock_guard<std::mutex> lk(req_mu_);
-    requests_map_[req->id] = req;
+    requests_map_[rid] = req;
   }
 
   if (!ep->recv_async(rank, req)) {
-    {
-      std::lock_guard<std::mutex> lk(req_mu_);
-      requests_map_.erase(req->id);
-    }
+    std::lock_guard<std::mutex> lk(req_mu_);
+    requests_map_.erase(rid);
     return false;
   }
 
@@ -378,29 +381,7 @@ bool Communicator::irecv(int rank, void* ptr, size_t offset, size_t len,
   // generated CQEs before irecv is called. For such CQEs that are not yet
   // processed, add them to a pending queue. If the queue is not empty, process
   // these CQEs here and release the corresponding requests.
-  unsigned req_id_batch[16];
-  unsigned int num_dequeued;
-
-  // try to get max 16 req_ids
-  num_dequeued = jring_dequeue_bulk(pending_req_id_to_deal_,
-                                    (void**)req_id_batch, 16, nullptr);
-
-  if (num_dequeued > 0) {
-    for (unsigned int i = 0; i < num_dequeued; ++i) {
-      unsigned req_id = req_id_batch[i];
-      {
-        std::shared_ptr<Request> req;
-        {
-          std::lock_guard<std::mutex> lk(req_mu_);
-          auto it = requests_map_.find(req_id);
-          if (it != requests_map_.end()) req = it->second;
-        }
-        req->on_comm_done(true);
-      }
-    }
-  }
-
-  std::cout << "irecv new req with id " << req->id << std::endl;
+  cq_poller_list_[0]->process_pending();
 
   return true;
 }
@@ -410,52 +391,64 @@ bool Communicator::irecv_red(int rank, void* ptr, size_t offset, size_t len,
   auto [ep, ok] = get_endpoint_by_rank(rank);
   if (!ok || !ep) return false;
 
-  auto req = std::make_shared<Request>(
-      next_request_id_.fetch_add(1, std::memory_order_relaxed), ptr, offset,
-      len, -1, -1, /*on_gpu*/ false, RequestType::SEND, true, red_op);  // todo
+  auto local_mr = get_local_mr(ptr);
+  unsigned rid = make_request_id(
+      local_mr.id, ep->next_send_seq_.fetch_add(1, std::memory_order_relaxed));
+
+  auto req =
+      std::make_shared<Request>(rid, ptr, offset, len, -1, -1, /*on_gpu*/ false,
+                                RequestType::RECV, true, red_op);
 
   {
     std::lock_guard<std::mutex> lk(req_mu_);
-    requests_map_[req->id] = req;
+    requests_map_[rid] = req;
   }
 
   if (!ep->recv_async(rank, req)) {
+    std::lock_guard<std::mutex> lk(req_mu_);
+    requests_map_.erase(rid);
     return false;
   }
+
+  cq_poller_list_[0]
+      ->process_pending();  // static function for process pending queue
 
   return true;
 }
 
 bool Communicator::wait_finish() {
-  unsigned start = head_id.load(std::memory_order_relaxed);
-  unsigned end = tail_id.load(std::memory_order_relaxed);
+  while (true) {
+    std::vector<unsigned> finished_ids;
 
-  for (unsigned id = start; id <= end; ++id) {
-    std::shared_ptr<Request> req;
     {
       std::lock_guard<std::mutex> lk(req_mu_);
-      auto it = requests_map_.find(id);
-      if (it != requests_map_.end()) {
-        req = it->second;
+      // std::cout << "[DEBUG] Communicator " << local_rank_ << " current
+      // requests_map_ ids: "; for (auto& [id, req] : requests_map_) {
+      //     std::cout << id << " ";
+      // }
+      // std::cout << std::endl;
+
+      if (requests_map_.empty()) {
+        break;
+      }
+
+      for (auto& [id, req] : requests_map_) {
+        if (req && req->finished.load(std::memory_order_acquire)) {
+          finished_ids.push_back(id);
+        }
+      }
+
+      for (auto id : finished_ids) {
+        requests_map_.erase(id);
+        std::cout << "[INFO] Communicator " << local_rank_
+                  << " wait_finish req " << id << " finished" << std::endl;
       }
     }
 
-    if (req) {
-      std::cout << "[WARN] Communicator " << local_rank_
-                << " [wait finish] req " << id << std::endl;
-      while (!req->finished.load(std::memory_order_acquire)) {
-        std::this_thread::yield();
-      }
-      {
-        std::lock_guard<std::mutex> lk(req_mu_);
-        requests_map_.erase(id);
-      }
-      std::cout << "[WARN] Communicator " << local_rank_
-                << " [wait finish] req " << id << "finished" << std::endl;
+    if (finished_ids.empty()) {
+      std::this_thread::yield();
     }
   }
-
-  head_id.store(end + 1, std::memory_order_relaxed);
   return true;
 }
 
@@ -538,7 +531,7 @@ MR Communicator::reg_mr(void* local_buf, size_t len) {
     throw std::runtime_error("ibv_reg_mr failed");
   }
 
-  uint32_t id = next_mr_id.fetch_add(1, std::memory_order_relaxed);
+  uint16_t id = next_mr_id.fetch_add(1, std::memory_order_relaxed);
 
   MR info;
   info.id = id;
@@ -619,7 +612,7 @@ MR Communicator::get_local_mr(void* local_buf) {
   throw std::runtime_error("Local MR info not found");
 }
 
-MR Communicator::get_local_mr(uint32_t mr_id) {
+MR Communicator::get_local_mr(uint16_t mr_id) {
   std::lock_guard<std::mutex> lk(local_mr_mu_);
   auto it = mr_id_to_local_mr_.find(mr_id);
   if (it == mr_id_to_local_mr_.end()) {
@@ -628,7 +621,7 @@ MR Communicator::get_local_mr(uint32_t mr_id) {
   return it->second;
 }
 
-MR Communicator::get_remote_mr(int remote_rank, uint32_t mr_id) {
+MR Communicator::get_remote_mr(int remote_rank, uint16_t mr_id) {
   std::lock_guard<std::mutex> lk(remote_mr_mu_);
   auto it_rank = rank_mr_id_to_remote_mr_.find(remote_rank);
   if (it_rank == rank_mr_id_to_remote_mr_.end()) {

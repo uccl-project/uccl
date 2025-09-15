@@ -11,8 +11,8 @@ struct Request {
   void* buf;
   size_t offset;  // default 0
   size_t len;
-  uint32_t local_mr_id;
-  uint32_t remote_mr_id;
+  uint16_t local_mr_id;
+  uint16_t remote_mr_id;
   bool on_gpu;
   bool do_reduction;
   ReductionType reduction_op;
@@ -30,7 +30,7 @@ struct Request {
   void on_compute_done();
 
   Request(unsigned id, void* buf, size_t offset, size_t len,
-          uint32_t local_mr_id, uint32_t remote_mr_id, bool gpu,
+          uint16_t local_mr_id, uint16_t remote_mr_id, bool gpu,
           RequestType reqtype = RequestType::SEND, bool reduction = false,
           ReductionType op = ReductionType::NONE)
       : id(id),
@@ -44,3 +44,9 @@ struct Request {
         reduction_op(op),
         reqtype(reqtype) {}
 };
+
+static inline unsigned make_request_id(uint16_t mr_id, uint16_t seq) {
+  return (static_cast<unsigned>(mr_id) << 16) | seq;
+}
+// remote_mr_id = static_cast<uint16_t>(request_id >> 16);
+// seq = static_cast<uint16_t>(request_id & 0xFFFF);

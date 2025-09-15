@@ -65,7 +65,7 @@ void cqpoller_server_thread(std::shared_ptr<Communicator> comm, int peer_rank) {
 
   auto mr = comm->reg_mr(d_data, size);
   comm->notify_mr(peer_rank, mr);
-
+  sleep(1); // test recv ceq before post irecv
   bool ok = comm->irecv(peer_rank, d_data, 0, size, true);
   if (!ok) {
     std::cerr << "[SERVER] irecv failed\n";
