@@ -1,4 +1,6 @@
+#include "ep_launch.cuh"
 #include "ep_runtime.cuh"
+#include "ep_utils.cuh"
 #include <iostream>
 
 namespace internode {
@@ -50,11 +52,20 @@ std::vector<uint8_t> get_unique_id() { return std::vector<uint8_t>(64, 0); }
 
 namespace intranode {
 
-// No device definition here; just the host wrapper stub.
+template <int kNumRanks>
+__global__ void barrier(int** barrier_signal_ptrs, int rank) {
+  barrier_block<kNumRanks>(barrier_signal_ptrs, rank);
+}
+
 void barrier(int** barrier_signal_ptrs, int rank, int num_ranks,
              cudaStream_t stream) {
-  std::cout << "[intranode::barrier] dummy intranode barrier invoked"
-            << std::endl;
+#define BARRIER_LAUNCH_CASE(ranks)                                \
+  LAUNCH_KERNEL(&cfg, barrier<ranks>, barrier_signal_ptrs, rank); \
+  break
+
+  SETUP_LAUNCH_CONFIG(1, 32, stream);
+  SWITCH_RANKS(BARRIER_LAUNCH_CASE);
+#undef BARRIER_LAUNCH_CASE
 }
 
 }  // namespace intranode
