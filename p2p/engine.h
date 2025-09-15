@@ -451,26 +451,21 @@ class Endpoint {
   inline TaskBatch* create_task_batch_base(
       uint64_t conn_id, size_t num_iovs, std::vector<size_t> const& size_v,
       std::vector<uint64_t> const& mr_id_v) {
-    // --- 1. 计算总大小 (公共逻辑) ---
     size_t const ptr_array_size = sizeof(void*) * num_iovs;
     size_t const size_array_size = sizeof(size_t) * num_iovs;
     size_t const mr_id_array_size = sizeof(uint64_t) * num_iovs;
     size_t const total_data_size =
         ptr_array_size + size_array_size + mr_id_array_size;
 
-    // --- 2. 分配内存 (公共逻辑) ---
     TaskBatch* task = new (std::align_val_t(64)) TaskBatch();
     char* block = new char[total_data_size];
 
-    // --- 3. 填充公共字段 (公共逻辑) ---
     task->conn_id = conn_id;
     task->num_iovs = num_iovs;
     task->iov_data_block = block;
     task->done.store(false, std::memory_order_relaxed);
     task->self_ptr = task;
 
-    // --- 4. 拷贝公共数据 (公共逻辑) ---
-    // size_v 和 mr_id_v 的位置是固定的，可以提前拷贝
     void* dest_size_array = block + ptr_array_size;
     void* dest_mr_id_array = block + ptr_array_size + size_array_size;
     std::memcpy(dest_size_array, size_v.data(), size_array_size);
@@ -479,9 +474,6 @@ class Endpoint {
     return task;
   }
 
-  /**
-   * @brief 创建一个用于批量发送 (SENDV) 的 TaskBatch
-   */
   inline TaskBatch* create_task_batch_sendv(
       uint64_t conn_id, std::vector<void const*> const& const_data_v,
       std::vector<size_t> const& size_v, std::vector<uint64_t> const& mr_id_v) {
@@ -492,23 +484,17 @@ class Endpoint {
           "Mismatched or empty vector sizes for SENDV task creation.");
     }
 
-    // 1. 调用基础函数创建通用部分
     TaskBatch* task =
         create_task_batch_base(conn_id, num_iovs, size_v, mr_id_v);
 
-    // 2. 完成该类型的特定任务
     task->type = TaskType::SENDV;
 
-    // 拷贝 const void* 指针数组 (这是 SENDV 特有的)
     std::memcpy(task->iov_data_block, const_data_v.data(),
                 sizeof(void const*) * num_iovs);
 
     return task;
   }
 
-  /**
-   * @brief 创建一个用于批量接收 (RECVV) 的 TaskBatch
-   */
   inline TaskBatch* create_task_batch_recvv(
       uint64_t conn_id, std::vector<void*> const& data_v,
       std::vector<size_t> const& size_v, std::vector<uint64_t> const& mr_id_v) {
@@ -519,22 +505,16 @@ class Endpoint {
           "Mismatched or empty vector sizes for RECVV task creation.");
     }
 
-    // 1. 调用基础函数创建通用部分
     TaskBatch* task =
         create_task_batch_base(conn_id, num_iovs, size_v, mr_id_v);
 
-    // 2. 完成该类型的特定任务
     task->type = TaskType::RECVV;
 
-    // 拷贝 void* 指针数组 (这是 RECVV 特有的)
     std::memcpy(task->iov_data_block, data_v.data(), sizeof(void*) * num_iovs);
 
     return task;
   }
 
-  /**
-   * @brief 销毁由 create_task_batch_* 创建的任务，释放所有相关内存
-   */
   inline void destroy_task_batch(TaskBatch* task) {
     if (task == nullptr) {
       return;
@@ -542,12 +522,6 @@ class Endpoint {
     delete[] static_cast<char*>(task->iov_data_block);
     delete task;
   }
-
-  // // For jring memcpy 16-byte alignment; 8 bytes of ptr + 8 bytes of padding
-  // struct TaskBatchPtrWrapper {
-  //   TaskBatch* ptr;
-  //   uint64_t padding;
-  // };
 
   struct alignas(64) Task {
     TaskType type;

@@ -762,13 +762,13 @@ bool Endpoint::sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                            uint64_t* transfer_id) {
   [[maybe_unused]] auto _ =
       PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
-  
+
   TaskBatch* task = create_task_batch_sendv(conn_id, data_v, size_v, mr_id_v);
   *transfer_id = reinterpret_cast<uint64_t>(task);
-  
+
   while (jring_mp_enqueue_bulk(sendv_task_ring_, task, 1, nullptr) != 1) {
   }
-  
+
   return true;
 }
 
@@ -778,13 +778,13 @@ bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                            uint64_t* transfer_id) {
   [[maybe_unused]] auto _ =
       PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
-  
+
   TaskBatch* task = create_task_batch_recvv(conn_id, data_v, size_v, mr_id_v);
   *transfer_id = reinterpret_cast<uint64_t>(task);
-  
+
   while (jring_mp_enqueue_bulk(recvv_task_ring_, task, 1, nullptr) != 1) {
   }
-  
+
   return true;
 }
 
@@ -1232,16 +1232,16 @@ void Endpoint::send_proxy_thread_func() {
       rw_task.self_ptr->done.store(true, std::memory_order_release);
     }
 
-     if (jring_sc_dequeue_bulk(sendv_task_ring_, &taskv, 1, nullptr) == 1) {
-      // 使用 TaskBatch 的新接口
-      std::vector<void const*> const_data_v(taskv.const_data_v(), 
-                                            taskv.const_data_v() + taskv.num_iovs);
-      std::vector<size_t> size_v(taskv.size_v(), 
-                                taskv.size_v() + taskv.num_iovs);
-      std::vector<uint64_t> mr_id_v(taskv.mr_id_v(), 
-                                   taskv.mr_id_v() + taskv.num_iovs);
-      
-      sendv(taskv.conn_id, mr_id_v, const_data_v, size_v, taskv.num_iovs, false);
+    if (jring_sc_dequeue_bulk(sendv_task_ring_, &taskv, 1, nullptr) == 1) {
+      std::vector<void const*> const_data_v(
+          taskv.const_data_v(), taskv.const_data_v() + taskv.num_iovs);
+      std::vector<size_t> size_v(taskv.size_v(),
+                                 taskv.size_v() + taskv.num_iovs);
+      std::vector<uint64_t> mr_id_v(taskv.mr_id_v(),
+                                    taskv.mr_id_v() + taskv.num_iovs);
+
+      sendv(taskv.conn_id, mr_id_v, const_data_v, size_v, taskv.num_iovs,
+            false);
       taskv.self_ptr->done.store(true, std::memory_order_release);
     }
   }
@@ -1261,13 +1261,12 @@ void Endpoint::recv_proxy_thread_func() {
       task.self_ptr->done.store(true, std::memory_order_release);
     }
     if (jring_sc_dequeue_bulk(recvv_task_ring_, &taskv, 1, nullptr) == 1) {
-      // 使用 TaskBatch 的新接口
-      std::vector<void*> data_v(taskv.data_v(), 
-                               taskv.data_v() + taskv.num_iovs);
-      std::vector<size_t> size_v(taskv.size_v(), 
-                                taskv.size_v() + taskv.num_iovs);
-      std::vector<uint64_t> mr_id_v(taskv.mr_id_v(), 
-                                   taskv.mr_id_v() + taskv.num_iovs);
+      std::vector<void*> data_v(taskv.data_v(),
+                                taskv.data_v() + taskv.num_iovs);
+      std::vector<size_t> size_v(taskv.size_v(),
+                                 taskv.size_v() + taskv.num_iovs);
+      std::vector<uint64_t> mr_id_v(taskv.mr_id_v(),
+                                    taskv.mr_id_v() + taskv.num_iovs);
 
       recvv(taskv.conn_id, mr_id_v, data_v, size_v, taskv.num_iovs, false);
       taskv.self_ptr->done.store(true, std::memory_order_release);
@@ -1289,7 +1288,7 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
     auto taskv = reinterpret_cast<TaskBatch*>(transfer_id);
     *is_done = taskv->done.load(std::memory_order_acquire);
     if (*is_done) {
-      destroy_task_batch(taskv);  // 使用工厂函数销毁
+      destroy_task_batch(taskv);
     }
   } else {
     *is_done = task->done.load(std::memory_order_acquire);
