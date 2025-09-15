@@ -88,4 +88,5 @@ uccl.egg-info/
 dist/
 wheelhouse-*/
 build/
-gpu_driven/*.log
+ep/*.log
+*.log

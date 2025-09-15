@@ -4,7 +4,9 @@
 set -e
 
 # Directories to format (excluding thirdparty/, scripts/, doc/, etc.)
-DIRECTORIES=("afxdp" "efa" "gpu_driven" "rdma" "misc" "p2p" "include" "eccl")
+
+DIRECTORIES=("afxdp" "efa" "ep" "rdma" "misc" "p2p" "include" "eccl")
+
 EXTENSIONS=("cpp" "cxx" "cc" "h" "hpp" "cu" "cuh")
 EXCLUDE=("afxdp/lib")
 
@@ -56,7 +58,7 @@ done
 
 echo "Formatting Python files with black..."
 
-PYTHON_DIRS=("p2p" "gpu_driven")  # Adjust as needed
+PYTHON_DIRS=("p2p" "ep")  # Adjust as needed
 BLACK_EXCLUDES=("thirdparty" "doc" "build")
 
 # Convert to exclude args

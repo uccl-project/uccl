@@ -183,7 +183,7 @@ def main():
     assert world_size == 2, "This benchmark only supports 2 processes"
 
     ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
-    local_metadata = ep.get_endpoint_metadata()
+    local_metadata = ep.get_metadata()
 
     if rank == 0:
         dist.send(torch.ByteTensor(list(local_metadata)), dst=1)

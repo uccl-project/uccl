@@ -4,6 +4,8 @@ ARG PY_VER=3.13
 # Non-interactive APT
 ENV DEBIAN_FRONTEND=noninteractive
 
+RUN rm -f /etc/apt/sources.list.d/cuda*.list /etc/apt/sources.list.d/nvidia-ml.list || true
+
 # ---------------------------------------------------------------------------
 # Basic build & runtime dependencies (minus CUDA which is already in base)
 # ---------------------------------------------------------------------------
@@ -14,7 +16,7 @@ RUN apt-get update && \
         rdma-core libibverbs-dev \
         libgoogle-glog-dev libgflags-dev libgtest-dev libelf-dev \
         libnuma-dev libdrm-dev libdrm-amdgpu1 \
-        pkg-config libhiredis-dev zlib1g-dev curl && \
+        pkg-config zlib1g-dev curl && \
 \
 # ───── Add Python ${PY_VER} PPA & install Python ${PY_VER} + setuptools ─────
     add-apt-repository ppa:deadsnakes/ppa && \
@@ -35,14 +37,13 @@ RUN apt-get update && \
 # ─────────────────────────────────────────────────────────
 RUN python${PY_VER} -m pip install --no-cache-dir build auditwheel pybind11
 
+# ───── Install PyTorch with CUDA support ─────
+RUN python${PY_VER} -m pip install --no-cache-dir torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/cu128
+
 # ───── Set Python ${PY_VER} as default python3 and python3-config ─────
 RUN ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python3 && \
     ln -sf /usr/bin/python${PY_VER}-config /usr/local/bin/python3-config
-
-RUN git clone --depth 1 https://github.com/sewenew/redis-plus-plus.git /tmp/redis-plus-plus && \
-    cd /tmp/redis-plus-plus && mkdir build && cd build && \
-    cmake .. && make -j && make install && \
-    rm -rf /tmp/redis-plus-plus
     
 WORKDIR /io
 

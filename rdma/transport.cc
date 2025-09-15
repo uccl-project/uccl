@@ -747,7 +747,9 @@ int try_bind_listen_socket(int* sock_fd, int base_port,
     addr.sin_port = htons(port);
 
     if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) == 0) {
-      if (listen(fd, 128) != 0) {
+      // The backlog will be silently truncated to the value in
+      // /proc/sys/net/core/somaxconn
+      if (listen(fd, 16384) != 0) {
         perror("listen");
         close(fd);
         return -1;
