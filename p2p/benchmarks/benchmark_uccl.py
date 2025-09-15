@@ -546,7 +546,7 @@ def main():
     torch.cuda.set_device(f"cuda:{args.local_gpu_idx}")
 
     ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
-    local_metadata = ep.get_endpoint_metadata()
+    local_metadata = ep.get_metadata()
 
     # This also serves as a barrier to guarantee both processes have created the endpoint
     if rank == 0:

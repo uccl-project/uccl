@@ -2,13 +2,13 @@
 This is the same test_low_latency.py test in DeepEP's repo.
 On first node:
 torchrun --nnodes=2 --nproc_per_node=1 --node_rank=0 \
-  --master_addr=10.1.209.224 --master_port=12355 \
+  --master_addr=10.1.1.171 --master_port=12355 \
   bench/test_low_latency.py --num-tokens=128 \
   --hidden=7168 --num-topk=1 --num-experts=28
 
 On second node:
 torchrun --nnodes=2 --nproc_per_node=1 --node_rank=1 \
-  --master_addr=10.1.209.224 --master_port=12355 \
+  --master_addr=10.1.1.171 --master_port=12355 \
   bench/test_low_latency.py --num-tokens=128 \
   --hidden=7168 --num-topk=1 --num-experts=28
 """
@@ -102,11 +102,7 @@ def test_main(
     x = torch.ones((num_tokens, hidden), dtype=torch.bfloat16, device="cuda") * (
         rank - rank_offset
     )
-
-    print("x before", x)
     x[:, -128:] = torch.arange(num_tokens, device="cuda").to(torch.bfloat16).view(-1, 1)
-
-    print("x after", x)
     x_list = [x]
     for i in range(4 if use_logfmt else 0):
         # NOTES: make more LogFMT casts and also with some BF16
@@ -126,8 +122,6 @@ def test_main(
         + 1
     )
     topk_idx = torch.topk(scores, num_topk, dim=-1, largest=True, sorted=True)[1]
-
-    print("topk_idx", topk_idx)
     topk_weights = torch.randn(
         (num_tokens, num_topk), dtype=torch.float32, device="cuda"
     ).abs()
@@ -141,23 +135,32 @@ def test_main(
     # Check dispatch correctness
     do_check = True
     hash_value, num_times = 0, 0
-    # TODO(MaoZiming)
     for current_x in x_list:
-        # for return_recv_hook in (True, False):
-        for return_recv_hook in (True,):
-            # for dispatch_use_fp8 in (False, True):
-            for dispatch_use_fp8 in (False,):
+        for return_recv_hook in (False, True):
+            for dispatch_use_fp8 in (False, True):
                 for round_scale in (False,):
-                    # for round_scale in (False, True) if dispatch_use_fp8 else (False,):
-                    # for use_ue8m0 in (False, True) if round_scale else (False,):
-                    for use_ue8m0 in (False,):
-                        num_times += 1
-                        for i in range((num_times % 2) + 1):
-                            cumulative_local_expert_recv_stats = torch.zeros(
-                                (num_local_experts,), dtype=torch.int, device="cuda"
+                    for round_scale in (False, True) if dispatch_use_fp8 else (False,):
+                        for use_ue8m0 in (False, True) if round_scale else (False,):
+                            print(
+                                "Start experiment with settings:"
+                                f" return_recv_hook={return_recv_hook}"
+                                f" dispatch_use_fp8={dispatch_use_fp8}"
+                                f" round_scale={round_scale}"
+                                f" use_ue8m0={use_ue8m0}",
+                                flush=True,
                             )
-                            packed_recv_x, packed_recv_count, handle, event, hook = (
-                                buffer.low_latency_dispatch(
+                            num_times += 1
+                            for i in range((num_times % 2) + 1):
+                                cumulative_local_expert_recv_stats = torch.zeros(
+                                    (num_local_experts,), dtype=torch.int, device="cuda"
+                                )
+                                (
+                                    packed_recv_x,
+                                    packed_recv_count,
+                                    handle,
+                                    event,
+                                    hook,
+                                ) = buffer.low_latency_dispatch(
                                     current_x,
                                     topk_idx,
                                     num_tokens,
@@ -169,162 +172,154 @@ def test_main(
                                     async_finish=not return_recv_hook,
                                     return_recv_hook=return_recv_hook,
                                 )
-                            )
-                            hook() if return_recv_hook else event.current_stream_wait()
-                            torch.cuda.synchronize()
-                        torch.cuda.synchronize()
-                        packed_recv_x = (
-                            (packed_recv_x[0], packed_recv_x[1].contiguous())
-                            if dispatch_use_fp8
-                            else packed_recv_x
-                        )
-                        simulated_gemm_x = (
-                            per_token_cast_back(
-                                packed_recv_x[0].view(-1, hidden),
-                                packed_recv_x[1].view(-1, hidden // 128),
-                            ).view(packed_recv_x[0].shape)
-                            if dispatch_use_fp8
-                            else packed_recv_x.clone()
-                        )
-                        all_topk_idx = torch.empty(
-                            (num_ranks, num_tokens, num_topk),
-                            dtype=topk_idx.dtype,
-                            device="cuda",
-                        )
-                        dist.all_gather_into_tensor(all_topk_idx, topk_idx, group=group)
-                        for i in range(num_local_experts if do_check else 0):
-                            expert_id = rank * num_local_experts + i
-                            recv_x = (
-                                per_token_cast_back(
-                                    packed_recv_x[0][i], packed_recv_x[1][i]
+                                (
+                                    hook()
+                                    if return_recv_hook
+                                    else event.current_stream_wait()
                                 )
+                            packed_recv_x = (
+                                (packed_recv_x[0], packed_recv_x[1].contiguous())
                                 if dispatch_use_fp8
-                                else packed_recv_x[i]
+                                else packed_recv_x
                             )
-                            recv_count, recv_src_info, recv_layout_range = (
-                                packed_recv_count[i],
-                                handle[0][i],
-                                handle[1][i],
+                            simulated_gemm_x = (
+                                per_token_cast_back(
+                                    packed_recv_x[0].view(-1, hidden),
+                                    packed_recv_x[1].view(-1, hidden // 128),
+                                ).view(packed_recv_x[0].shape)
+                                if dispatch_use_fp8
+                                else packed_recv_x.clone()
                             )
-
-                            # Check expert indices
-                            int_mask = (2**32) - 1
-                            num_valid_tokens = recv_count.item()
-                            assert (
-                                cumulative_local_expert_recv_stats[i].item()
-                                == num_valid_tokens
-                            ), f"{cumulative_local_expert_recv_stats[i].item()} != {num_valid_tokens}"
-                            assert (
-                                num_valid_tokens
-                                == (recv_layout_range & int_mask).sum().item()
-                            ), f"{num_valid_tokens} != {recv_layout_range & int_mask}.sum().item()"
-                            assert (
-                                num_valid_tokens
-                                == (all_topk_idx == expert_id).sum().item()
-                            ), f"{num_valid_tokens} != {(all_topk_idx == expert_id).sum().item()}"
-
-                            print("num_valid_tokens: ", num_valid_tokens)
-                            if num_valid_tokens == 0:
-                                continue
-                            # Check received data
-                            if current_x is x:
-                                recv_x = recv_x[:num_valid_tokens]
-                                print("recv_x", recv_x)
-                                recv_x_amin = recv_x[:, :-128].amin(dim=-1)
-                                print("recv_x_amin", recv_x_amin)
-                                recv_src_info = recv_src_info[:num_valid_tokens]
-                                assert torch.equal(
-                                    recv_x_amin, recv_x[:, :-128].amax(dim=-1)
-                                )
-                                if round_scale:
-                                    assert (
-                                        calc_diff(recv_x[:, -1], recv_src_info.view(-1))
-                                        < 0.007
-                                    )
-                                else:
-                                    print("recv_x[:, -128:]", recv_x[:, -128:])
-                                    print(
-                                        "recv_src_info.view(-1, 1) % num_tokens",
-                                        recv_src_info.view(-1, 1) % num_tokens,
-                                    )
-                                    assert (
-                                        recv_x[:, -128:]
-                                        - recv_src_info.view(-1, 1) % num_tokens
-                                    ).sum().item() == 0
-                                for j in range(num_ranks):
-                                    begin_idx, count = (
-                                        recv_layout_range[j] >> 32
-                                    ).item(), (recv_layout_range[j] & int_mask).item()
-                                    if not round_scale:
-                                        assert (
-                                            recv_x_amin == j - rank_offset
-                                        ).sum().item() == (
-                                            all_topk_idx[j] == expert_id
-                                        ).sum().item()
-                                        assert (
-                                            recv_x[begin_idx : begin_idx + count, :-128]
-                                            - j
-                                            + rank_offset
-                                        ).sum().item() == 0
-                            if dispatch_use_fp8:
-                                hash_value ^= hash_tensor(
-                                    packed_recv_x[0][i, :num_valid_tokens]
-                                )
-                                hash_value ^= hash_tensor(
-                                    packed_recv_x[1][i, :num_valid_tokens]
-                                )
-                            else:
-                                hash_value ^= hash_tensor(
-                                    packed_recv_x[i, :num_valid_tokens]
-                                )
-                        print(
-                            f"Finished one dispatch test case: return_recv_hook: {return_recv_hook}\n",
-                            flush=True,
-                        )
-                        time.sleep(1)
-                        # Check combine correctness
-                        for zero_copy in (False,) if use_logfmt else (False, True):
-                            if zero_copy:
-                                buffer.get_next_low_latency_combine_buffer(handle)[
-                                    :, :, :
-                                ] = simulated_gemm_x
-                            out = torch.empty(
-                                (num_tokens, hidden),
-                                dtype=torch.bfloat16,
+                            all_topk_idx = torch.empty(
+                                (num_ranks, num_tokens, num_topk),
+                                dtype=topk_idx.dtype,
                                 device="cuda",
                             )
-                            combined_x, event, hook = buffer.low_latency_combine(
-                                simulated_gemm_x,
-                                topk_idx,
-                                topk_weights,
-                                handle,
-                                use_logfmt=use_logfmt,
-                                async_finish=not return_recv_hook,
-                                zero_copy=zero_copy,
-                                return_recv_hook=return_recv_hook,
-                                out=out,
+                            dist.all_gather_into_tensor(
+                                all_topk_idx, topk_idx, group=group
                             )
-                            hook() if return_recv_hook else event.current_stream_wait()
-                            if do_check:
-                                diff = calc_diff(
-                                    current_x
-                                    * topk_weights.masked_fill(topk_idx == -1, 0)
-                                    .sum(dim=1)
-                                    .view(-1, 1),
-                                    combined_x,
+                            for i in range(num_local_experts if do_check else 0):
+                                expert_id = rank * num_local_experts + i
+                                recv_x = (
+                                    per_token_cast_back(
+                                        packed_recv_x[0][i], packed_recv_x[1][i]
+                                    )
+                                    if dispatch_use_fp8
+                                    else packed_recv_x[i]
                                 )
-                                print("combined_x", combined_x)
-                                assert torch.isnan(combined_x).sum().item() == 0
-                                assert diff < (
-                                    9e-4 if dispatch_use_fp8 else 1e-5
-                                ), f"Error: {diff=}, {dispatch_use_fp8=}, {zero_copy=}"
-                                hash_value ^= hash_tensor(combined_x)
-                        print(
-                            f"Finished one combine case: return_recv_hook: {return_recv_hook}, zero_copy: {zero_copy}\n",
-                            flush=True,
-                        )
-                        buffer.reset_rdma_buffer()
-                        time.sleep(1)
+                                recv_count, recv_src_info, recv_layout_range = (
+                                    packed_recv_count[i],
+                                    handle[0][i],
+                                    handle[1][i],
+                                )
+
+                                # Check expert indices
+                                int_mask = (2**32) - 1
+                                num_valid_tokens = recv_count.item()
+                                assert (
+                                    cumulative_local_expert_recv_stats[i].item()
+                                    == num_valid_tokens
+                                ), f"{cumulative_local_expert_recv_stats[i].item()} != {num_valid_tokens}"
+                                assert (
+                                    num_valid_tokens
+                                    == (recv_layout_range & int_mask).sum().item()
+                                ), f"{num_valid_tokens} != {recv_layout_range & int_mask}.sum().item()"
+                                assert (
+                                    num_valid_tokens
+                                    == (all_topk_idx == expert_id).sum().item()
+                                ), f"{num_valid_tokens} != {(all_topk_idx == expert_id).sum().item()}"
+                                if num_valid_tokens == 0:
+                                    continue
+                                # Check received data
+                                if current_x is x:
+                                    recv_x = recv_x[:num_valid_tokens]
+                                    recv_x_amin = recv_x[:, :-128].amin(dim=-1)
+                                    recv_src_info = recv_src_info[:num_valid_tokens]
+                                    assert torch.equal(
+                                        recv_x_amin, recv_x[:, :-128].amax(dim=-1)
+                                    )
+                                    if round_scale:
+                                        assert (
+                                            calc_diff(
+                                                recv_x[:, -1], recv_src_info.view(-1)
+                                            )
+                                            < 0.007
+                                        )
+                                    else:
+                                        assert (
+                                            recv_x[:, -128:]
+                                            - recv_src_info.view(-1, 1) % num_tokens
+                                        ).sum().item() == 0
+                                    for j in range(num_ranks):
+                                        begin_idx, count = (
+                                            recv_layout_range[j] >> 32
+                                        ).item(), (
+                                            recv_layout_range[j] & int_mask
+                                        ).item()
+                                        if not round_scale:
+                                            assert (
+                                                recv_x_amin == j - rank_offset
+                                            ).sum().item() == (
+                                                all_topk_idx[j] == expert_id
+                                            ).sum().item()
+                                            assert (
+                                                recv_x[
+                                                    begin_idx : begin_idx + count, :-128
+                                                ]
+                                                - j
+                                                + rank_offset
+                                            ).sum().item() == 0
+                                if dispatch_use_fp8:
+                                    hash_value ^= hash_tensor(
+                                        packed_recv_x[0][i, :num_valid_tokens]
+                                    )
+                                    hash_value ^= hash_tensor(
+                                        packed_recv_x[1][i, :num_valid_tokens]
+                                    )
+                                else:
+                                    hash_value ^= hash_tensor(
+                                        packed_recv_x[i, :num_valid_tokens]
+                                    )
+                            # Check combine correctness
+                            for zero_copy in (False,) if use_logfmt else (False, True):
+                                if zero_copy:
+                                    buffer.get_next_low_latency_combine_buffer(handle)[
+                                        :, :, :
+                                    ] = simulated_gemm_x
+                                out = torch.empty(
+                                    (num_tokens, hidden),
+                                    dtype=torch.bfloat16,
+                                    device="cuda",
+                                )
+                                combined_x, event, hook = buffer.low_latency_combine(
+                                    simulated_gemm_x,
+                                    topk_idx,
+                                    topk_weights,
+                                    handle,
+                                    use_logfmt=use_logfmt,
+                                    async_finish=not return_recv_hook,
+                                    zero_copy=zero_copy,
+                                    return_recv_hook=return_recv_hook,
+                                    out=out,
+                                )
+                                (
+                                    hook()
+                                    if return_recv_hook
+                                    else event.current_stream_wait()
+                                )
+                                if do_check:
+                                    diff = calc_diff(
+                                        current_x
+                                        * topk_weights.masked_fill(topk_idx == -1, 0)
+                                        .sum(dim=1)
+                                        .view(-1, 1),
+                                        combined_x,
+                                    )
+                                    assert torch.isnan(combined_x).sum().item() == 0
+                                    assert diff < (
+                                        9e-4 if dispatch_use_fp8 else 1e-5
+                                    ), f"Error: {diff=}, {dispatch_use_fp8=}, {zero_copy=}"
+                                    hash_value ^= hash_tensor(combined_x)
 
     # noinspection PyShadowingNames
     def large_gemm_with_hook(hook):
@@ -356,7 +351,7 @@ def test_main(
         )
         large_gemm_with_hook(hook) if return_recv_hook else None
 
-    print("[simple-test] ✓ All correctness tests passed!", flush=True)
+    print("✓ All correctness tests passed!", flush=True)
     # Calculate bandwidth
     num_fp8_bytes, num_bf16_bytes = (hidden + hidden / 128 * 4 + 16), hidden * 2
     num_logfmt10_bytes = hidden * 10 / 8 + hidden / 128 * 4
@@ -369,36 +364,34 @@ def test_main(
         ) * num_selections
 
     # Dispatch + combine testing
-    # TODO(MaoZiming)
-    if False:
-        avg_t, min_t, max_t = bench(partial(test_func, return_recv_hook=False))
-        print(
-            f"[rank {rank}] Dispatch + combine bandwidth: {(num_dispatch_comm_bytes + num_combine_comm_bytes) / 1e9 / avg_t:.2f} GB/s, "
-            f"avg_t={avg_t * 1e6:.2f} us, min_t={min_t * 1e6:.2f} us, max_t={max_t * 1e6:.2f} us",
-            flush=True,
+    avg_t, min_t, max_t = bench(partial(test_func, return_recv_hook=False))
+    print(
+        f"[rank {rank}] Dispatch + combine bandwidth: {(num_dispatch_comm_bytes + num_combine_comm_bytes) / 1e6 / avg_t:.2f} MB/s, "
+        f"avg_t={avg_t * 1e6:.2f} us, min_t={min_t * 1e6:.2f} us, max_t={max_t * 1e6:.2f} us",
+        flush=True,
+    )
+    # Separate profiling
+    for return_recv_hook in (False, True):
+        group.barrier()
+        dispatch_t, combine_t = bench_kineto(
+            partial(test_func, return_recv_hook=return_recv_hook),
+            kernel_names=("dispatch", "combine"),
+            barrier_comm_profiling=True,
+            suppress_kineto_output=True,
+            num_kernels_per_period=2 if return_recv_hook else 1,
         )
-        # Separate profiling
-        for return_recv_hook in (False, True):
-            group.barrier()
-            dispatch_t, combine_t = bench_kineto(
-                partial(test_func, return_recv_hook=return_recv_hook),
-                kernel_names=("dispatch", "combine"),
-                barrier_comm_profiling=True,
-                suppress_kineto_output=True,
-                num_kernels_per_period=2 if return_recv_hook else 1,
+        if not return_recv_hook:
+            print(
+                f"[rank {rank}] Dispatch bandwidth: {num_dispatch_comm_bytes / 1e6 / dispatch_t:.2f} MB/s, avg_t={dispatch_t * 1e6:.2f} us | "
+                f"Combine bandwidth: {num_combine_comm_bytes / 1e6 / combine_t:.2f} MB/s, avg_t={combine_t * 1e6:.2f} us",
+                flush=True,
             )
-            if not return_recv_hook:
-                print(
-                    f"[rank {rank}] Dispatch bandwidth: {num_dispatch_comm_bytes / 1e9 / dispatch_t:.2f} GB/s, avg_t={dispatch_t * 1e6:.2f} us | "
-                    f"Combine bandwidth: {num_combine_comm_bytes / 1e9 / combine_t:.2f} GB/s, avg_t={combine_t * 1e6:.2f} us",
-                    flush=True,
-                )
-            else:
-                print(
-                    f"[rank {rank}] Dispatch send/recv time: {dispatch_t[0] * 1e6:.2f} + {dispatch_t[1] * 1e6:.2f} us | "
-                    f"Combine send/recv time: {combine_t[0] * 1e6:.2f} + {combine_t[1] * 1e6:.2f} us",
-                    flush=True,
-                )
+        else:
+            print(
+                f"[rank {rank}] Dispatch send/recv time: {dispatch_t[0] * 1e6:.2f} + {dispatch_t[1] * 1e6:.2f} us | "
+                f"Combine send/recv time: {combine_t[0] * 1e6:.2f} + {combine_t[1] * 1e6:.2f} us",
+                flush=True,
+            )
     return hash_value
 
 
@@ -486,6 +479,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
             ), f"Error: seed={seed}"
 
     # Destroy the buffer runtime and communication group
+    group.barrier()
     buffer.destroy()
     dist.barrier()
     destroy_uccl(proxies, workers)

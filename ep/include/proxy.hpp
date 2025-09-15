@@ -41,19 +41,7 @@ class Proxy {
   };
 
   explicit Proxy(Config const& cfg) : cfg_(cfg) {
-    const size_t total_size = kRemoteBufferSize;
-    int nDevices;
-    cudaError_t err = cudaGetDeviceCount(&nDevices);
-    if (err != cudaSuccess) {
-      printf("CUDA error: %s\n", cudaGetErrorString(err));
-      std::abort();
-    }
-    for (int d = 0; d < nDevices; ++d) {
-      GPU_RT_CHECK(gpuSetDevice(d));
-      void* buf = nullptr;
-      GPU_RT_CHECK(gpuMalloc(&buf, total_size));
-      ctx_.per_gpu_device_buf[d] = buf;
-    }
+    // TODO(Fix)
     GPU_RT_CHECK(gpuSetDevice(0));
   }
 
@@ -73,6 +61,7 @@ class Proxy {
   void run_local();
   void run_dual();
   void pin_thread();
+  void destroy(bool free_gpu_buffer);
 
   double avg_rdma_write_us() const;
   double avg_wr_latency_us() const;
@@ -101,6 +90,7 @@ class Proxy {
 
   // Completion tracking
   std::unordered_set<uint64_t> finished_wrs_;
+  std::unordered_set<uint64_t> acked_wrs_;
   std::mutex finished_wrs_mutex_;
 
   std::unordered_map<uint64_t, std::chrono::high_resolution_clock::time_point>

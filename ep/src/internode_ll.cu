@@ -92,6 +92,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           warp_id < num_topk ? static_cast<int>(__ldg(
                                    topk_idx + token_idx * num_topk + warp_id))
                              : -1;
+      thread_id == 0 ? (*rdma_x_src_idx = token_idx) : 0;
 
 // FP8 cast
 #pragma unroll
@@ -135,12 +136,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           rdma_x_vec[i] = *reinterpret_cast<vec_t*>(&int4_value);
         }
       }
-      asm volatile("bar.sync 1, %0;" ::"r"(num_threads));
-      __threadfence_system();
+      sync_barrier_1(num_threads);
 
-      if (thread_id == 0) {
-        st_release_sys_global(rdma_x_src_idx, token_idx);  // publish header
-      }
       // Issue IBGDA sends
       if (dst_expert_idx >= 0) {
         int slot_idx =
@@ -166,7 +163,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           uccl::nvshmemi_ibgda_put_nbi_warp(
               dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), src_ptr,
               num_bytes_per_msg, dst_rank,
-              sm_id,  // NOTE(MaoZiming): use sm_id for rb.
+              warp_id,  // NOTE(MaoZiming): use warp_id for rb.
               lane_id, slot_idx, ring_addrs, num_ring_addrs, false);
         } else {
           // Intra-node: use direct memory copy via IPC
@@ -237,15 +234,6 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                              responsible_expert_idx) != FINISHED_SUM_TAG * 2)
       ;
 
-    // TODO (MaoZiming): prevent EFA reordering BS.
-    if (lane_id == 0) {
-      uint64_t start = clock64();
-      uint64_t wait_cycles = (uint64_t)1e9;
-      while (clock64() - start < wait_cycles) {
-      }
-    }
-    __syncwarp();
-
     // TODO(yihan): Mark here for future debugging check.
     // Calculate offset within LowLatencyLayout buffer for CPU proxy
     // translation Calculate offset relative to dispatch_rdma_recv_data_buffer
@@ -269,8 +257,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       uccl::nvshmemi_ibgda_amo_nonfetch_add(
           dst_ptr - reinterpret_cast<uint64_t>(atomic_buffer_ptr),
           -num_tokens_sent - 1, dst_rank,
-          sm_id,  // NOTE(MaoZiming): use sm_id for rb.
-          dst_expert_local_idx, false, ring_addrs, num_ring_addrs);
+          warp_id,  // NOTE(MaoZiming): use warp_id for rb.
+          dst_expert_local_idx, false, ring_addrs, num_ring_addrs, true);
 
     } else {
       // Intra-node: use direct atomic operation
@@ -289,8 +277,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 // Receiving phase
 LOW_LATENCY_DISPATCH_RECV:
   if ((phases & LOW_LATENCY_RECV_PHASE) == 0) {
-    if (blockIdx.x == 0 && threadIdx.x == 0)
-      printf("[dispatch] SEND finished\n");
+    // if (blockIdx.x == 0 && threadIdx.x == 0)
+    //   printf("[dispatch] SEND finished\n");
     return;
   }
 
@@ -332,6 +320,15 @@ LOW_LATENCY_DISPATCH_RECV:
     EP_DEVICE_ASSERT(num_warps_per_group > 1 and num_warp_groups < 15);
     if (sub_warp_id == 1 and lane_id == 0) {
       auto start_time = clock64();
+      // // TODO (MaoZiming): Fix dumb timer wait.
+      // uint64_t start = clock64();
+      // uint64_t wait_cycles = (uint64_t)1e9;
+      // while (clock64() - start < wait_cycles) {
+      // }
+      // printf(
+      //     "[RECV_COUNT_DECODING] Counter waiting on %p\n",
+      //     (void*)(rdma_recv_count + local_expert_idx * num_ranks +
+      //     src_rank));
       while ((num_recv_tokens = ld_acquire_sys_global(
                   rdma_recv_count + local_expert_idx * num_ranks + src_rank)) ==
              0)
@@ -339,8 +336,7 @@ LOW_LATENCY_DISPATCH_RECV:
       auto wait_recv_cost = clock64() - start_time;
       num_recv_tokens = -num_recv_tokens - 1;
       // printf(
-      //     "[RECV_COUNT_DECODED] Decoded token count: %d (from received value
-      //     "
+      //     "[RECV_COUNT_DECODED] Decoded token count: %d (from received value"
       //     "%d), count_addr; %p\n",
       //     num_recv_tokens, -num_recv_tokens - 1,
       //     (void*)(rdma_recv_count + local_expert_idx * num_ranks +
@@ -360,8 +356,7 @@ LOW_LATENCY_DISPATCH_RECV:
                       dispatch_wait_recv_cost_stats + src_rank),
                   wait_recv_cost);
     }
-    asm volatile("bar.sync %0, %1;" ::"r"(warp_group_id + 2),
-                 "r"(num_warps_per_group * 32));
+    sync_barrier(warp_group_id + 2, num_warps_per_group * 32);
     num_recv_tokens = shared_num_recv_tokens[warp_group_id];
     recv_token_begin_idx = shared_recv_token_begin_idx[warp_group_id];
 
@@ -374,7 +369,7 @@ LOW_LATENCY_DISPATCH_RECV:
       if (lane_id == 0)
         recv_src_info[recv_token_begin_idx + i] =
             ld_acquire_sys_global(src_src_idx);
-      asm volatile("membar.sys;" ::: "memory");
+      sys_membar();
       __syncwarp();
 
       // Copy data
@@ -403,7 +398,7 @@ LOW_LATENCY_DISPATCH_RECV:
           auto const pack_idx = lane_id / num_elems_per_pack;
           auto const elem_idx = lane_id % num_elems_per_pack;
           auto scale = extract_required_scale_format<kUseUE8M0>(
-              ld_nc_global(src_scales + lane_id));
+              ld_cg_global(src_scales + lane_id));
           recv_x_scales[token_idx * token_stride + pack_idx * pack_stride +
                         elem_idx] = scale;
         }
@@ -411,14 +406,14 @@ LOW_LATENCY_DISPATCH_RECV:
           auto const pack_idx = (lane_id + 32) / num_elems_per_pack;
           auto const elem_idx = (lane_id + 32) % num_elems_per_pack;
           auto scale = extract_required_scale_format<kUseUE8M0>(
-              ld_nc_global(src_scales + lane_id + 32));
+              ld_cg_global(src_scales + lane_id + 32));
           recv_x_scales[token_idx * token_stride + pack_idx * pack_stride +
                         elem_idx] = scale;
         }
       }
     }
-    if (blockIdx.x == 0 && threadIdx.x == 0)
-      printf("[dispatch] RECV finished\n");
+    // if (blockIdx.x == 0 && threadIdx.x == 0)
+    //   printf("[dispatch] RECV finished\n");
   }
 }
 
@@ -755,15 +750,14 @@ __global__ __launch_bounds__(1024, 1) void combine(
         nvshmemi_ibgda_put_nbi_warp(
             dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), buf_ptr,
             hidden * sizeof(nv_bfloat16), dst_rank,
-            sm_id,  // NOTE(MaoZiming): use sm_id for rb
+            warp_id,  // NOTE(MaoZiming): use warp_id for rb
             lane_id, token_idx - offset, ring_addrs, num_ring_addrs, true);
       }
     }
 
     // Put the finishing flag
     EP_DEVICE_ASSERT(num_warps_per_group > 1 and num_warp_groups < 16);
-    asm volatile("bar.sync %0, %1;" ::"r"(warp_group_id + 1),
-                 "r"(num_warps_per_group * 32));
+    sync_barrier(warp_group_id + 1, num_warps_per_group * 32);
     if (sub_warp_id == 1 and lane_id == 0) {
       while (ld_acquire_global(atomic_clean_flag) == 0)
         ;
@@ -788,8 +782,9 @@ __global__ __launch_bounds__(1024, 1) void combine(
         // phase)
         nvshmemi_ibgda_amo_nonfetch_add(
             dst_ptr - reinterpret_cast<uint64_t>(atomic_buffer_ptr), 1,
-            dst_rank, sm_id, local_expert_idx, false, ring_addrs,
-            num_ring_addrs);
+            dst_rank,
+            warp_id,  // NOTE(MaoZiming): use warp_id for rb
+            local_expert_idx, false, ring_addrs, num_ring_addrs, false);
       }
       atomic_add_release_global(atomic_clean_flag, -1);
     }
@@ -799,8 +794,8 @@ __global__ __launch_bounds__(1024, 1) void combine(
 // Receiving phase
 LOW_LATENCY_COMBINE_RECV:
   if ((phases & LOW_LATENCY_RECV_PHASE) == 0) {
-    if (blockIdx.x == 0 && threadIdx.x == 0)
-      printf("[combine] SEND finished\n");
+    // if (blockIdx.x == 0 && threadIdx.x == 0)
+    //   printf("[combine] SEND finished\n");
     return;
   }
   // Wait all ranks to arrive
@@ -872,8 +867,8 @@ LOW_LATENCY_COMBINE_RECV:
        token_idx * hidden_bf16_int4)[hidden_idx] = combined_int4;
     }
 
-    if (blockIdx.x == 0 && threadIdx.x == 0)
-      printf("[combine] RECV finished\n");
+    // if (blockIdx.x == 0 && threadIdx.x == 0)
+    //   printf("[combine] RECV finished\n");
   }
 }
 
@@ -906,7 +901,7 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
 
   constexpr int kNumTMABytesPerWarp = 12 * (512 + 16);
   int const smem_size = kNumTMABytesPerWarp * num_warps;
-  printf("Combine launched\n");
+  // printf("Combine launched\n");
 
 #define COMBINE_LAUNCH_CASE(hidden)                                            \
   {                                                                            \

@@ -1,7 +1,6 @@
 #pragma once
 #include "ep_util.hpp"
 
-// TODO(MaoZiming): The whole thing is very nvidia-specific.
 __forceinline__ __device__ int get_lane_id() {
   int lane_id;
   asm("mov.s32 %0, %laneid;" : "=r"(lane_id));
@@ -235,6 +234,12 @@ __device__ __forceinline__ dtype_t ld_nc_global(dtype_t const* ptr) {
   return *reinterpret_cast<dtype_t*>(&ret);
 }
 
+__device__ __forceinline__ float ld_cg_global(float const* p) {
+  float v;
+  asm volatile("ld.global.cg.f32 %0, [%1];" : "=f"(v) : "l"(p));
+  return v;
+}
+
 __device__ __forceinline__ int ld_cg_global(int const* p) {
   int v;
   asm volatile("ld.global.cg.s32 %0, [%1];" : "=r"(v) : "l"(p));
@@ -344,8 +349,6 @@ __device__ __forceinline__ int atomic_add_release_global(int const* ptr,
   return ret;
 }
 
-#ifndef DISABLE_SM90_FEATURES
-
 __device__ __forceinline__ uint32_t elect_one_sync(int lane_id) {
   uint32_t pred = 0;
   asm volatile(
@@ -361,4 +364,14 @@ __device__ __forceinline__ uint32_t elect_one_sync(int lane_id) {
   return pred;
 }
 
-#endif
+__device__ inline void sync_barrier(int barrier_id, int num_threads) {
+  asm volatile("bar.sync %0, %1;" : : "r"(barrier_id), "r"(num_threads));
+}
+
+__device__ inline void sync_barrier_1(int num_threads) {
+  asm volatile("bar.sync 1, %0;" ::"r"(num_threads));
+}
+
+__device__ inline void sys_membar() {
+  asm volatile("membar.sys;" ::: "memory");
+}
