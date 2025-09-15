@@ -45,8 +45,18 @@ struct Request {
         reqtype(reqtype) {}
 };
 
-static inline unsigned make_request_id(uint16_t mr_id, uint16_t seq) {
-  return (static_cast<unsigned>(mr_id) << 16) | seq;
+static inline unsigned make_request_id(uint16_t receiver_rank, uint8_t mr_id,
+                                       uint16_t seq) {
+  return ((static_cast<unsigned>(receiver_rank) & 0xFFF)
+          << 20) |  // [31:20] 12 bits → receiver_rank (4096)
+         ((static_cast<unsigned>(mr_id) & 0xFF)
+          << 12) |       // [19:12] 8 bits  → mr_id (255)
+         (seq & 0xFFF);  // [11:0]  12 bits → seq (4096)
 }
-// remote_mr_id = static_cast<uint16_t>(request_id >> 16);
-// seq = static_cast<uint16_t>(request_id & 0xFFFF);
+
+static inline void parse_request_id(unsigned req_id, uint16_t& receiver_rank,
+                                    uint8_t& mr_id, uint16_t& seq) {
+  receiver_rank = (req_id >> 20) & 0xFFF;
+  mr_id = (req_id >> 12) & 0xFF;
+  seq = req_id & 0xFFF;
+}

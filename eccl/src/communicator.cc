@@ -334,7 +334,8 @@ bool Communicator::isend(int rank, void* ptr, size_t offset, size_t len,
   if (!ok || !ep) return false;
 
   unsigned rid = make_request_id(
-      remote_mr_id, ep->next_send_seq_.fetch_add(1, std::memory_order_relaxed));
+      rank, remote_mr_id,
+      ep->next_send_seq_.fetch_add(1, std::memory_order_relaxed));
 
   auto req = std::make_shared<Request>(rid, ptr, offset, len, local_mr_id,
                                        remote_mr_id,
@@ -361,7 +362,8 @@ bool Communicator::irecv(int rank, void* ptr, size_t offset, size_t len,
 
   auto local_mr = get_local_mr(ptr);
   unsigned rid = make_request_id(
-      local_mr.id, ep->next_send_seq_.fetch_add(1, std::memory_order_relaxed));
+      local_rank_, local_mr.id,
+      ep->next_send_seq_.fetch_add(1, std::memory_order_relaxed));
 
   auto req = std::make_shared<Request>(rid, ptr, offset, len, -1, -1, false,
                                        RequestType::RECV);
@@ -393,7 +395,8 @@ bool Communicator::irecv_red(int rank, void* ptr, size_t offset, size_t len,
 
   auto local_mr = get_local_mr(ptr);
   unsigned rid = make_request_id(
-      local_mr.id, ep->next_send_seq_.fetch_add(1, std::memory_order_relaxed));
+      local_rank_, local_mr.id,
+      ep->next_send_seq_.fetch_add(1, std::memory_order_relaxed));
 
   auto req =
       std::make_shared<Request>(rid, ptr, offset, len, -1, -1, /*on_gpu*/ false,

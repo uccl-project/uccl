@@ -224,9 +224,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -e IS_EFA="${IS_EFA}" \
   -e WHEEL_DIR="${WHEEL_DIR}" \
   -e BUILD_TYPE="${BUILD_TYPE}" \
-
   -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_rdma build_efa build_p2p build_ep build_eccl)" \
-
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
     set -euo pipefail

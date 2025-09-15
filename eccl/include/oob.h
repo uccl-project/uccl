@@ -25,21 +25,21 @@ struct Exchangeable {
 struct CommunicatorMeta : public Exchangeable {
   std::string host_id;
   bool is_ready;
-  // TODO: connection abality // support RDMA, PCIe, NVlink, UAlink, etc.
+  // TODO: connection abality // Support RDMA, PCIe, NVlink, UAlink, etc.
 
   CommunicatorMeta() = default;
 
   std::map<std::string, std::string> to_map() const override {
     std::map<std::string, std::string> kv;
     kv["host_id"] = host_id;
-    kv["is_ready"] = is_ready ? "1" : "0";  // 用 "1"/"0" 表示 bool
+    kv["is_ready"] = is_ready ? "1" : "0";
     return kv;
   }
 
   void from_map(std::map<std::string, std::string> const& kv) override {
     host_id = kv.at("host_id");
     std::string const& ready_str = kv.at("is_ready");
-    is_ready = (ready_str == "1");  // 解析 "1" 为 true，其他为 false
+    is_ready = (ready_str == "1");
   }
 };
 
@@ -137,7 +137,6 @@ struct MRInfos : public Exchangeable {
 
     for (size_t i = 0; i < count; ++i) {
       auto& mr = mrs[i];
-      // id
       mr.id = std::stoul(kv.at("mr_" + std::to_string(i) + "_id"));
       // address (64-bit)
       {
