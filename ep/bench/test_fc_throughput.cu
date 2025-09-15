@@ -275,9 +275,8 @@ void run_throughput_test(uint32_t num_warps, uint32_t num_proxies,
     t.join();
   }
 
-  auto end_time = std::chrono::high_resolution_clock::now();
-  double duration_sec =
-      std::chrono::duration<double>(end_time - start_time).count();
+  // Use precise test duration instead of wall clock time
+  double duration_sec = config.test_duration_ms / 1000.0;
 
   // Print results
   std::vector<WarpMetrics> h_metrics(config.num_warps);
