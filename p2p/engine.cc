@@ -608,13 +608,16 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
           std::min(cur_size_expected - cur_size_post_send, kChunkSize);
       data_send_vec.push_back(cur_data);
       size_send_vec.push_back(chunk_size);
-      auto it = mr_id_to_mr_.find(mr_id_v[i]);
-      if (it == mr_id_to_mr_.end()) {
-        std::cerr << "[sendv] Error: Invalid mr_id " << mr_id_v[i]
-                  << std::endl;
-        return false;
+      {
+        std::shared_lock<std::shared_mutex> lock(mr_mu_);
+        auto it = mr_id_to_mr_.find(mr_id_v[i]);
+        if (it == mr_id_to_mr_.end()) {
+          std::cerr << "[sendv] Error: Invalid mr_id " << mr_id_v[i]
+                    << std::endl;
+          return false;
+        }
+        mhandle_send_vec.push_back(it->second->mhandle_);
       }
-      mhandle_send_vec.push_back(it->second->mhandle_);
       cur_data += chunk_size;
       cur_size_post_send += chunk_size;
     }
@@ -660,6 +663,7 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   [[maybe_unused]] auto _ = inside_python && PyGILState_Check()
                                 ? (py::gil_scoped_release{}, nullptr)
                                 : nullptr;
+  // py::gil_scoped_release release;
   Conn* conn;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
@@ -705,13 +709,16 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
       data_recv_vec.push_back(cur_data);
       data_recv_ptr_vec.push_back(&data_recv_vec.back());
       size_recv_vec.push_back(chunk_size);
-      auto it = mr_id_to_mr_.find(mr_id_v[i]);
+      {
+        std::shared_lock<std::shared_mutex> lock(mr_mu_);
+        auto it = mr_id_to_mr_.find(mr_id_v[i]);
         if (it == mr_id_to_mr_.end()) {
           std::cerr << "[recvv] Error: Invalid mr_id " << mr_id_v[i]
                     << std::endl;
           return false;
         }
         mhandle_recv_vec.push_back(it->second->mhandle_);
+      }
       mhandle_recv_ptr_vec.push_back(&mhandle_recv_vec.back());
       cur_data += chunk_size;
       cur_size_post_recv += chunk_size;
