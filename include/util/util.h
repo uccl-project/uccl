@@ -1232,7 +1232,7 @@ static fs::path sysfs_pci_path_from_bdf(std::string const& bdf_lower) {
   }
 }
 
-static std::vector<fs::path> get_gpu_cards() {
+static inline std::vector<fs::path> get_gpu_cards() {
   // 1) Collect visible GPUs (ranked) and their normalized BDFs
   int num_gpus = 0;
   GPU_RT_CHECK(gpuGetDeviceCount(&num_gpus));
@@ -1333,7 +1333,7 @@ static std::vector<fs::path> get_gpu_cards() {
   return gpu_cards;
 }
 
-static std::vector<std::pair<std::string, fs::path>> get_rdma_nics() {
+static inline std::vector<std::pair<std::string, fs::path>> get_rdma_nics() {
   std::vector<std::pair<std::string, fs::path>> rdma_nics;
 
   int num_devices = 0;
