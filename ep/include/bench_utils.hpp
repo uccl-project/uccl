@@ -26,10 +26,14 @@ inline void init_env(BenchEnv& env, int blocks = kNumThBlocks, int device = 0,
 
   GPU_RT_CHECK(gpuStreamCreate(&env.stream));
 
+#ifdef USE_GRACE_HOPPER
+  GPU_RT_CHECK(cudaMallocManaged(
+      &env.rbs, sizeof(DeviceToHostCmdBuffer) * static_cast<size_t>(blocks)));
+#else
   GPU_RT_CHECK(gpuHostAlloc(
       &env.rbs, sizeof(DeviceToHostCmdBuffer) * static_cast<size_t>(blocks),
       gpuHostAllocMapped));
-
+#endif
   for (int i = 0; i < blocks; ++i) {
     env.rbs[i].head = 0;
     env.rbs[i].tail = 0;
@@ -47,7 +51,11 @@ inline void init_env(BenchEnv& env, int blocks = kNumThBlocks, int device = 0,
 
 inline void destroy_env(BenchEnv& env) {
   if (env.rbs) {
+#ifdef USE_GRACE_HOPPER
+    GPU_RT_CHECK(cudaFree(env.rbs));
+#else
     GPU_RT_CHECK(gpuFreeHost(env.rbs));
+#endif
     env.rbs = nullptr;
   }
   if (env.stream) {
@@ -90,6 +98,7 @@ inline void* alloc_gpu_buffer(size_t total_size) {
 #endif
   return p;
 }
+
 inline void free_gpu_buffer(void* p) {
   if (!p) return;
 #ifdef USE_GRACE_HOPPER

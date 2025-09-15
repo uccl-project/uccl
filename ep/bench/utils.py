@@ -57,6 +57,7 @@ def init_dist(local_rank: int, num_local_ranks: int):
         "world_size": num_nodes * num_local_ranks,
         "rank": node_rank * num_local_ranks + local_rank,
     }
+    print(params)
     if "device_id" in sig.parameters:
         # noinspection PyTypeChecker
         params["device_id"] = torch.device(f"cuda:{local_rank}")
@@ -70,6 +71,21 @@ def init_dist(local_rank: int, num_local_ranks: int):
         dist.get_rank(),
         dist.get_world_size(),
         dist.new_group(list(range(num_local_ranks * num_nodes))),
+    )
+
+
+def init_dist_under_torchrun(local_rank: int, num_local_ranks: int):
+    # torchrun already sets RANK, WORLD_SIZE, MASTER_ADDR, MASTER_PORT
+    dist.init_process_group(backend="nccl")
+
+    torch.set_default_dtype(torch.bfloat16)
+    torch.set_default_device("cuda")
+    torch.cuda.set_device(local_rank)
+
+    return (
+        dist.get_rank(),
+        dist.get_world_size(),
+        dist.new_group(list(range(dist.get_world_size()))),
     )
 
 
@@ -286,7 +302,7 @@ def detect_ib_hca():
 
 def per_token_cast_back(x_fp8: torch.Tensor, x_scales: torch.Tensor):
     if x_scales.dtype == torch.int:
-        x_scales = x_scales.view(dtype=torch.int8).to(torch.int) << 23
+        x_scales = x_scales.view(dtype=torch.uint8).to(torch.int) << 23
         x_scales = x_scales.view(dtype=torch.float)
     x_fp32 = x_fp8.to(torch.float32).view(x_fp8.size(0), -1, 128)
     x_scales = x_scales.view(x_fp8.size(0), -1, 1)
@@ -393,6 +409,7 @@ def bench_kineto(
                     dist.all_reduce(torch.ones(1, dtype=torch.float, device=f"cuda:{current_device}"))
                 for _ in range(num_tests):
                     fn()
+                torch.cuda.synchronize()
                 prof.step()
 
     # Parse the profiling table
@@ -495,17 +512,17 @@ def initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group):
             workers = ep.PeerCopyManager(src_device=device_index)
             workers.start_for_proxies(proxies)
             if rank == 0:
-                print("[simple-test] ✓ PeerCopyManager started", flush=True)
+                print("✓ PeerCopyManager started", flush=True)
         except Exception as e:
             if rank == 0:
-                print(f"[simple-test] PeerCopyManager unavailable: {e}", flush=True)
+                print(f"PeerCopyManager unavailable: {e}", flush=True)
 
     time.sleep(1)
 
-    return proxies, workers
+    return proxies, workers, bench
 
 
-def destroy_uccl(proxies, workers):
+def destroy_uccl(proxies, workers, bench):
 
     device_index = int(os.environ["LOCAL_RANK"])
     if workers is not None:
@@ -520,9 +537,44 @@ def destroy_uccl(proxies, workers):
     except Exception:
         pass
 
-    print("[simple-test] ✓ Proxy stopped", flush=True)
+    print("✓ Proxy stopped", flush=True)
     try:
         ep.unregister_proxy(device_index)
     except Exception:
         pass
-    print("[simple-test] ✓ Proxy unregistered", flush=True)
+    print("✓ Proxy unregistered", flush=True)
+
+
+def per_token_cast_to_fp8(x: torch.Tensor):
+    assert x.dim() == 2 and x.size(1) % 128 == 0
+    m, n = x.shape
+    x_view = x.view(m, -1, 128)
+    x_amax = x_view.abs().float().amax(dim=2).view(m, -1).clamp(1e-4)
+    return (x_view * (448.0 / x_amax.unsqueeze(2))).to(torch.float8_e4m3fn).view(
+        m, n
+    ), (x_amax / 448.0).view(m, -1)
+
+
+def create_grouped_scores(
+    scores: torch.Tensor, group_idx: torch.Tensor, num_groups: int
+):
+    num_tokens, num_experts = scores.shape
+    scores = scores.view(num_tokens, num_groups, -1)
+    mask = torch.zeros((num_tokens, num_groups), dtype=torch.bool, device=scores.device)
+    mask = mask.scatter_(1, group_idx, True).unsqueeze(-1).expand_as(scores)
+    return (scores * mask).view(num_tokens, num_experts)
+
+
+def inplace_unique(x: torch.Tensor, num_slots: int):
+    assert x.dim() == 2
+    mask = x < 0
+    x_padded = x.masked_fill(mask, num_slots)
+    bin_count = torch.zeros((x.size(0), num_slots + 1), dtype=x.dtype, device=x.device)
+    bin_count.scatter_add_(1, x_padded, torch.ones_like(x_padded))
+    bin_count = bin_count[:, :num_slots]
+    sorted_bin_count, sorted_bin_idx = torch.sort(bin_count, dim=-1, descending=True)
+    sorted_bin_idx.masked_fill_(sorted_bin_count == 0, -1)
+    sorted_bin_idx = torch.sort(sorted_bin_idx, descending=True, dim=-1).values
+    x[:, :].fill_(-1)
+    valid_len = min(num_slots, x.size(1))
+    x[:, :valid_len] = sorted_bin_idx[:, :valid_len]

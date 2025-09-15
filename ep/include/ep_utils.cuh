@@ -1,7 +1,6 @@
 #pragma once
 #include "ep_util.hpp"
 
-// TODO(MaoZiming): The whole thing is very nvidia-specific.
 __forceinline__ __device__ int get_lane_id() {
   int lane_id;
   asm("mov.s32 %0, %laneid;" : "=r"(lane_id));
@@ -235,6 +234,12 @@ __device__ __forceinline__ dtype_t ld_nc_global(dtype_t const* ptr) {
   return *reinterpret_cast<dtype_t*>(&ret);
 }
 
+__device__ __forceinline__ float ld_cg_global(float const* p) {
+  float v;
+  asm volatile("ld.global.cg.f32 %0, [%1];" : "=f"(v) : "l"(p));
+  return v;
+}
+
 __device__ __forceinline__ int ld_cg_global(int const* p) {
   int v;
   asm volatile("ld.global.cg.s32 %0, [%1];" : "=r"(v) : "l"(p));
@@ -344,8 +349,6 @@ __device__ __forceinline__ int atomic_add_release_global(int const* ptr,
   return ret;
 }
 
-#ifndef DISABLE_SM90_FEATURES
-
 __device__ __forceinline__ uint32_t elect_one_sync(int lane_id) {
   uint32_t pred = 0;
   asm volatile(
@@ -361,4 +364,167 @@ __device__ __forceinline__ uint32_t elect_one_sync(int lane_id) {
   return pred;
 }
 
-#endif
+__device__ __forceinline__ int ld_acquire_global(int const* ptr) {
+  int ret;
+  asm volatile("ld.acquire.gpu.global.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
+  return ret;
+}
+
+__device__ __forceinline__ void st_release_sys_global(int const* ptr, int val) {
+  asm volatile("st.release.sys.global.s32 [%0], %1;" ::"l"(ptr), "r"(val)
+               : "memory");
+}
+
+__device__ __forceinline__ void st_release_cta(int const* ptr, int val) {
+  asm volatile("st.release.cta.s32 [%0], %1;" ::"l"(ptr), "r"(val) : "memory");
+}
+
+__device__ inline void sync_barrier(int barrier_id, int num_threads) {
+  asm volatile("bar.sync %0, %1;" : : "r"(barrier_id), "r"(num_threads));
+}
+
+__device__ inline void sync_barrier_1(int num_threads) {
+  asm volatile("bar.sync 1, %0;" ::"r"(num_threads));
+}
+
+__device__ inline void sys_membar() {
+  asm volatile("membar.sys;" ::: "memory");
+}
+
+__device__ __forceinline__ void trap() { asm("trap;"); }
+
+__device__ __forceinline__ int ld_volatile_global(int const* ptr) {
+  int ret;
+  asm volatile("ld.volatile.global.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
+  return ret;
+}
+
+__device__ __forceinline__ float ld_volatile_global(float const* ptr) {
+  float ret;
+  asm volatile("ld.volatile.global.f32 %0, [%1];" : "=f"(ret) : "l"(ptr));
+  return ret;
+}
+
+__device__ __forceinline__ int64_t ld_volatile_global(int64_t const* ptr) {
+  int64_t ret;
+  asm volatile("ld.volatile.global.s64 %0, [%1];" : "=l"(ret) : "l"(ptr));
+  return ret;
+}
+
+__device__ __forceinline__ int64_t ld_volatile_global(uint64_t const* ptr) {
+  int64_t ret;
+  asm volatile("ld.volatile.global.u64 %0, [%1];" : "=l"(ret) : "l"(ptr));
+  return ret;
+}
+
+__device__ __forceinline__ void memory_fence() {
+  asm volatile("fence.acq_rel.sys;" ::: "memory");
+}
+
+__forceinline__ __device__ int atomic_cas_cta_acquire(int* addr, int x, int y) {
+  int ret;
+  asm volatile("atom.acquire.cta.shared::cta.cas.b32 %0, [%1], %2, %3;"
+               : "=r"(ret)
+               : "l"(addr), "r"(x), "r"(y)
+               : "memory");
+  return ret;
+}
+
+__forceinline__ __device__ int atomic_exch_cta_release(int* addr, int x) {
+  int ret;
+  asm volatile("atom.release.cta.shared::cta.exch.b32 %0, [%1], %2;"
+               : "=r"(ret)
+               : "l"(addr), "r"(x)
+               : "memory");
+  return ret;
+}
+
+template <int kNumRanks, bool kSyncOnly = false>
+__forceinline__ __device__ void barrier_block(int** barrier_signal_ptrs,
+                                              int rank) {
+  auto thread_id = static_cast<int>(threadIdx.x);
+
+  // For non-sync-only cases, the memory operations by other threads in the
+  // block must be visible to the `sys` scope
+  if constexpr (not kSyncOnly) {
+    memory_fence();
+    __syncthreads();
+  }
+
+  // Add self-ranks, sub other ranks
+  if (thread_id < kNumRanks) {
+    atomicAdd_system(barrier_signal_ptrs[rank] + thread_id, FINISHED_SUM_TAG);
+    atomicSub_system(barrier_signal_ptrs[thread_id] + rank, FINISHED_SUM_TAG);
+  }
+  EP_DEVICE_ASSERT(kNumRanks <= blockDim.x);
+
+  // Check timeout
+  auto start_time = clock64();
+  while (true) {
+    auto value = thread_id < kNumRanks
+                     ? ld_volatile_global(barrier_signal_ptrs[rank] + thread_id)
+                     : 0;
+    if (__all_sync(0xffffffff, value <= 0)) break;
+
+    if (clock64() - start_time > NUM_TIMEOUT_CYCLES and thread_id < kNumRanks) {
+      printf(
+          "DeepEP timeout check failed: rank = %d, thread = %d, value = %d)\n",
+          rank, thread_id, value);
+      trap();
+    }
+  }
+  __syncthreads();
+}
+
+__forceinline__ __device__ void get_channel_task_range(int num_tokens,
+                                                       int num_sms, int sm_id,
+                                                       int& token_start_idx,
+                                                       int& token_end_idx) {
+  int num_tokens_per_sm = ceil_div(num_tokens, num_sms);
+  token_start_idx = min(num_tokens_per_sm * sm_id, num_tokens);
+  token_end_idx = min(token_start_idx + num_tokens_per_sm, num_tokens);
+}
+
+template <typename dtype_t>
+__device__ __forceinline__ dtype_t broadcast(dtype_t& ptr, int src_lane_idx) {
+  EP_STATIC_ASSERT(sizeof(dtype_t) % sizeof(int) == 0, "");
+  auto send_int_values = reinterpret_cast<int*>(&ptr);
+  int recv_int_values[sizeof(dtype_t) / sizeof(int)];
+#pragma unroll
+  for (int i = 0; i < sizeof(dtype_t) / sizeof(int); ++i)
+    recv_int_values[i] =
+        __shfl_sync(0xffffffff, send_int_values[i], src_lane_idx);
+  return *reinterpret_cast<dtype_t*>(recv_int_values);
+}
+
+__device__ __forceinline__ void memory_fence_gpu() {
+  asm volatile("fence.acq_rel.gpu;" ::: "memory");
+}
+
+__device__ __forceinline__ void memory_fence_cta() {
+  asm volatile("fence.acq_rel.cta;" ::: "memory");
+}
+
+__device__ __forceinline__ void st_relaxed_sys_global(int const* ptr, int val) {
+  asm volatile("st.relaxed.sys.global.s32 [%0], %1;" ::"l"(ptr), "r"(val)
+               : "memory");
+}
+
+__device__ __forceinline__ int ld_acquire_cta(int const* ptr) {
+  int ret;
+  asm volatile("ld.acquire.cta.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
+  return ret;
+}
+
+__forceinline__ __device__ void acquire_lock(int* mutex) {
+  // To make later memory operations valid, we must use `acquire` for memory
+  // semantics
+  while (atomic_cas_cta_acquire(mutex, 0, 1) != 0)
+    ;
+}
+
+__forceinline__ __device__ void release_lock(int* mutex) {
+  // To make previous memory operations visible to other threads, we must use
+  // `release` for memory semantics
+  atomic_exch_cta_release(mutex, 0);
+}

@@ -3,12 +3,12 @@ Simple internode test for DeepEP low-latency kernels.
 This test avoids the IPC handle issues by focusing only on low-latency functionality.
 On first node:
 torchrun --nnodes=2 --nproc_per_node=1 --node_rank=0 \
-  --master_addr=10.1.209.224 --master_port=12356 \
+  --master_addr=10.1.227.34 --master_port=12356 \
   bench/test_internode_simple.py
 
 On second node:
 torchrun --nnodes=2 --nproc_per_node=1 --node_rank=1 \
-  --master_addr=10.1.209.224 --master_port=12356 \
+  --master_addr=10.1.227.34 --master_port=12356 \
   bench/test_internode_simple.py
 """
 

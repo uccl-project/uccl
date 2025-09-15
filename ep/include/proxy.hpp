@@ -100,6 +100,7 @@ class Proxy {
   void run_local();
   void run_dual();
   void pin_thread();
+  void destroy(bool free_gpu_buffer);
 
   double avg_rdma_write_us() const;
   double avg_wr_latency_us() const;
@@ -119,15 +120,12 @@ class Proxy {
   void post_gpu_command(uint64_t& my_tail, size_t& seen);
   void post_gpu_commands_mixed(std::vector<uint64_t> const& wrs_to_post,
                                std::vector<TransferCmd> const& cmds_to_post);
-  void post_atomic_operations(std::vector<uint64_t> const& wrs_to_post,
-                              std::vector<TransferCmd> const& cmds_to_post,
-                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                              int my_rank);
   Config cfg_;
   RDMAConnectionInfo local_info_{}, remote_info_{};
 
   // Completion tracking
   std::unordered_set<uint64_t> finished_wrs_;
+  std::unordered_set<uint64_t> acked_wrs_;
   std::mutex finished_wrs_mutex_;
 
   std::unordered_map<uint64_t, std::chrono::high_resolution_clock::time_point>
