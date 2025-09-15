@@ -59,9 +59,9 @@ static inline std::string get_oob_ip() {
 }
 
 class Endpoint {
-  uint64_t const kRTTBytes = 1024 * 1024;
-  uint64_t const kChunkSize = 1024 * 1024;
-  uint32_t const kMaxInflightChunks = 8;
+  const uint64_t kRTTBytes = 1024 * 1024;
+  const uint64_t kChunkSize = 1024 * 1024;
+  const uint32_t kMaxInflightChunks = 8;
 
  public:
   gpuStream_t pick_stream() {
