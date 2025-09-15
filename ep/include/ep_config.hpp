@@ -9,6 +9,8 @@
 #define LOW_LATENCY_SEND_PHASE 1
 #define LOW_LATENCY_RECV_PHASE 2
 
+namespace uccl {
+
 template <typename dtype_t>
 dtype_t ceil_div(dtype_t a, dtype_t b) {
   return (a + b - 1) / b;
@@ -257,3 +259,5 @@ size_t get_low_latency_rdma_size_hint(int num_max_dispatch_tokens_per_rank,
           NUM_BUFFER_ALIGNMENT_BYTES) *
          NUM_BUFFER_ALIGNMENT_BYTES;
 }
+
+}  // namespace uccl
