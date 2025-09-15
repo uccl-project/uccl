@@ -27,6 +27,9 @@ RUN apt-get update && \
     ln -sf /usr/bin/pip${PY_VER} /usr/local/bin/pip && \
     ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python${PY_VER} && \
 \
+# ───── eccl use hiredis as oob backend ─────
+    apt-get install -y libhiredis-dev && \
+\
 # ───── Clean up apt cache ─────
     rm -rf /var/lib/apt/lists/*
 
@@ -38,7 +41,7 @@ RUN python${PY_VER} -m pip install --no-cache-dir build auditwheel pybind11
 # ───── Set Python ${PY_VER} as default python3 and python3-config ─────
 RUN ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python3 && \
     ln -sf /usr/bin/python${PY_VER}-config /usr/local/bin/python3-config
-    
+
 WORKDIR /io
 
 CMD ["bash"] 
