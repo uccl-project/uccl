@@ -661,7 +661,6 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   [[maybe_unused]] auto _ = inside_python && PyGILState_Check()
                                 ? (py::gil_scoped_release{}, nullptr)
                                 : nullptr;
-  // py::gil_scoped_release release;
   Conn* conn;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
