@@ -184,7 +184,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         auto const dst_p2p_ptr =
             ipc_base_ptrs
                 ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_base_ptrs, rank, dst_rank,
-                                        max_nvl_peers, 1000000000)
+                                        max_nvl_peers, 0)
                 : 0;
         if (dst_p2p_ptr == 0) {
           __threadfence_system();
@@ -280,7 +280,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         // before.
         ipc_base_ptrs
             ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_base_ptrs, rank, dst_rank,
-                                    max_nvl_peers, 1000000000)
+                                    max_nvl_peers, 0)
             : 0;
     if (dst_p2p_ptr == 0) {
       // Inter-node or no IPC: use IBGDA atomic
@@ -651,7 +651,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
       auto const dst_p2p_ptr =
           ipc_base_ptrs
               ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_base_ptrs, rank, dst_rank,
-                                      max_nvl_peers, 1000000000)
+                                      max_nvl_peers, 0)
               : 0;
 
       if (not zero_copy or dst_p2p_ptr != 0) {
@@ -802,7 +802,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
       auto dst_p2p_ptr =
           ipc_base_ptrs
               ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_base_ptrs, rank, dst_rank,
-                                      max_nvl_peers, 1000000000)
+                                      max_nvl_peers, 0)
               : 0;
       if (dst_p2p_ptr != 0) {
         // Intra-node: use direct atomic operation

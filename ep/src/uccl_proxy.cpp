@@ -3,7 +3,7 @@
 #include <stdexcept>
 
 UcclProxy::UcclProxy(uintptr_t rb_addr, int block_idx,
-                     uintptr_t gpu_buffer_addr, size_t total_size, int rank,
+                     uintptr_t gpu_buffer_addr, size_t total_size, int rank, int node_idx, 
                      std::string const& peer_ip)
     : peer_ip_storage_{peer_ip}, thread_{}, mode_{Mode::None}, running_{false} {
   Proxy::Config cfg;
@@ -19,6 +19,7 @@ UcclProxy::UcclProxy(uintptr_t rb_addr, int block_idx,
   cfg.peer_ip = peer_ip_storage_.empty() ? nullptr : peer_ip_storage_.c_str();
   proxy_ = std::make_unique<Proxy>(cfg);
   local_rank_ = rank;
+  node_idx_ = node_idx;
 
   if (block_idx == 0) {
     // size_t atomic_buffer_bytes = 2 * align<size_t>(num_experts * sizeof(int),

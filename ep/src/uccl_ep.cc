@@ -93,56 +93,14 @@ class Buffer {
           rank, num_ranks, num_nvl_bytes, num_rdma_bytes);
       {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
-
-        // First get the current device to check consistency
-        int current_device;
-        CUDA_CHECK(cudaGetDevice(&current_device));
-
-        // For single node scenarios, device_index should match local rank
-        // For multi-node scenarios, we need to calculate the correct device
-        int expected_device =
-            rank % max_nvl_peers;  // Assume device mapping based on rank
-
-        // If current device doesn't match expected, try to set it
-        if (current_device != expected_device) {
-          printf(
-              "Buffer: Device mismatch detected. Current: %d, Expected: %d for "
-              "rank %d. "
-              "Attempting to set correct device...\n",
-              current_device, expected_device, rank);
-
-          // Try to set the expected device
-          cudaError_t set_result = cudaSetDevice(expected_device);
-          if (set_result == cudaSuccess) {
-            device_index = expected_device;
-            printf("Buffer: Successfully set device to %d for rank %d\n",
-                   device_index, rank);
-          } else {
-            // If we can't set the expected device, use current device but warn
-            printf(
-                "Buffer: WARNING - Could not set device %d for rank %d (error: "
-                "%s). "
-                "Using current device %d\n",
-                expected_device, rank, cudaGetErrorString(set_result),
-                current_device);
-            device_index = current_device;
-          }
-        } else {
-          device_index = current_device;
-        }
-
-        // Now check if proxy is registered for this device
         auto it = uccl::g_proxies_by_dev.find(device_index);
         if (it == uccl::g_proxies_by_dev.end() || it->second.empty()) {
           throw std::runtime_error(
               "ep.Buffer: no UcclProxy registered for device " +
-              std::to_string(device_index) + " (rank " + std::to_string(rank) +
-              "). Current device was " + std::to_string(current_device) +
-              ". Call uccl.ep.register_proxy(device_index, proxies) first.");
+              std::to_string(device_index) +
+              ". Call uccl.ep.register_proxy(device_index, proxies) "
+              "first.");
         }
-
-        printf("Buffer: Using device %d for rank %d (found %zu proxies)\n",
-               device_index, rank, it->second.size());
       }
 
       {
@@ -2069,10 +2027,11 @@ PYBIND11_MODULE(ep, m) {
   });
   py::class_<Stats>(m, "Stats");
   py::class_<UcclProxy>(m, "Proxy")
-      .def(py::init<uintptr_t, int, uintptr_t, size_t, int,
+      .def(py::init<uintptr_t, int, uintptr_t, size_t, int, int, 
                     std::string const&>(),
            py::arg("rb_addr"), py::arg("block_idx"), py::arg("gpu_buffer_addr"),
            py::arg("total_size"), py::arg("rank") = 0,
+           py::arg("node_idx") = -1,
            py::arg("peer_ip") = std::string())
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)
