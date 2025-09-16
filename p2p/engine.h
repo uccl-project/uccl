@@ -311,13 +311,43 @@ class Endpoint {
     SENDV,
     RECVV,
   };
-  struct alignas(64) TaskBatch {
+  struct TaskBatch {
+    TaskType type;         // SENDV or RECVV
+    size_t num_iovs;       // Number of IO vectors
+    void* iov_data_block;  // Memory block containing data arrays
+
+    // Get pointer array for const data (SENDV operations)
+    void const** const_data_v() const {
+      if (type != TaskType::SENDV) return nullptr;
+      return static_cast<void const**>(iov_data_block);
+    }
+
+    // Get pointer array for mutable data (RECVV operations)
+    void** data_v() const {
+      if (type != TaskType::RECVV) return nullptr;
+      return static_cast<void**>(iov_data_block);
+    }
+
+    // Get size array
+    size_t* size_v() const {
+      uintptr_t base = reinterpret_cast<uintptr_t>(iov_data_block);
+      return reinterpret_cast<size_t*>(base + sizeof(void*) * num_iovs);
+    }
+
+    // Get memory region ID array
+    uint64_t* mr_id_v() const {
+      uintptr_t base = reinterpret_cast<uintptr_t>(iov_data_block);
+      return reinterpret_cast<uint64_t*>(base + sizeof(void*) * num_iovs +
+                                         sizeof(size_t) * num_iovs);
+    }
+  };
+  struct alignas(64) TaskBatchBig {
     TaskType type;
     uint64_t conn_id;
     size_t num_iovs;
     void* iov_data_block;
     std::atomic<bool> done;
-    TaskBatch* self_ptr;
+    TaskBatchBig* self_ptr;
 
     // --- Helper Functions ---
     void const** const_data_v() const {
@@ -342,7 +372,7 @@ class Endpoint {
     }
   };
 
-  inline TaskBatch* create_task_batch_base(
+  inline TaskBatchBig* create_task_batch_base(
       uint64_t conn_id, size_t num_iovs, std::vector<size_t> const& size_v,
       std::vector<uint64_t> const& mr_id_v) {
     size_t const ptr_array_size = sizeof(void*) * num_iovs;
@@ -351,7 +381,7 @@ class Endpoint {
     size_t const total_data_size =
         ptr_array_size + size_array_size + mr_id_array_size;
 
-    TaskBatch* task = new (std::align_val_t(64)) TaskBatch();
+    TaskBatchBig* task = new (std::align_val_t(64)) TaskBatchBig();
     char* block = new char[total_data_size];
 
     task->conn_id = conn_id;
@@ -368,7 +398,7 @@ class Endpoint {
     return task;
   }
 
-  inline TaskBatch* create_task_batch_sendv(
+  inline TaskBatchBig* create_task_batch_sendv(
       uint64_t conn_id, std::vector<void const*> const& const_data_v,
       std::vector<size_t> const& size_v, std::vector<uint64_t> const& mr_id_v) {
     size_t const num_iovs = const_data_v.size();
@@ -378,7 +408,7 @@ class Endpoint {
           "Mismatched or empty vector sizes for SENDV task creation.");
     }
 
-    TaskBatch* task =
+    TaskBatchBig* task =
         create_task_batch_base(conn_id, num_iovs, size_v, mr_id_v);
 
     task->type = TaskType::SENDV;
@@ -389,7 +419,7 @@ class Endpoint {
     return task;
   }
 
-  inline TaskBatch* create_task_batch_recvv(
+  inline TaskBatchBig* create_task_batch_recvv(
       uint64_t conn_id, std::vector<void*> const& data_v,
       std::vector<size_t> const& size_v, std::vector<uint64_t> const& mr_id_v) {
     size_t const num_iovs = data_v.size();
@@ -399,7 +429,7 @@ class Endpoint {
           "Mismatched or empty vector sizes for RECVV task creation.");
     }
 
-    TaskBatch* task =
+    TaskBatchBig* task =
         create_task_batch_base(conn_id, num_iovs, size_v, mr_id_v);
 
     task->type = TaskType::RECVV;
@@ -409,7 +439,7 @@ class Endpoint {
     return task;
   }
 
-  inline void destroy_task_batch(TaskBatch* task) {
+  inline void destroy_task_batch(TaskBatchBig* task) {
     if (task == nullptr) {
       return;
     }
@@ -452,7 +482,7 @@ class Endpoint {
   };
 
   static constexpr size_t MAX_RESERVE_SIZE =
-      uccl::max_sizeof<uccl::FifoItem, IpcTransferInfo>();
+      uccl::max_sizeof<uccl::FifoItem, IpcTransferInfo, TaskBatch>();
 
   struct alignas(64) UnifiedTask {
     TaskType type;
@@ -477,6 +507,11 @@ class Endpoint {
         IpcTransferInfo ipc_info;
         uint8_t reserved[MAX_RESERVE_SIZE - sizeof(IpcTransferInfo)];
       } ipc;
+
+      struct {
+        TaskBatch task_batch;
+        uint8_t reserved[MAX_RESERVE_SIZE - sizeof(TaskBatch)];
+      } batch;
       SpecificData() : base{} {}
     } specific;
 
@@ -491,6 +526,17 @@ class Endpoint {
     inline IpcTransferInfo const& ipc_info() const {
       return specific.ipc.ipc_info;
     }
+
+    inline TaskBatch& task_batch() { return specific.batch.task_batch; }
+
+    inline TaskBatch const& task_batch() const {
+      return specific.batch.task_batch;
+    }
+
+    // Check if this is a batch task
+    inline bool is_batch_task() const {
+      return type == TaskType::SENDV || type == TaskType::RECVV;
+    }
   };
 
   inline UnifiedTask* create_task(uint64_t conn_id, uint64_t mr_id,
@@ -504,6 +550,81 @@ class Endpoint {
     task->done = false;
     task->self_ptr = task;
     return task;
+  }
+
+  inline UnifiedTask* create_batch_task(uint64_t conn_id, TaskType type,
+                                        TaskBatch const& batch) {
+    UnifiedTask* task = new UnifiedTask();
+    task->type = type;
+    task->conn_id = conn_id;
+    task->mr_id = 0;       // Not used for batch operations
+    task->data = nullptr;  // Not used for batch operations
+    task->size = 0;        // Not used for batch operations
+    task->done = false;
+    task->task_batch() = batch;
+    task->self_ptr = task;
+    return task;
+  }
+
+  // Create batch task for SENDV operations
+  inline UnifiedTask* create_sendv_task(
+      uint64_t conn_id, std::vector<void const*> const& const_data_v,
+      std::vector<size_t> const& size_v, std::vector<uint64_t> const& mr_id_v) {
+    size_t const num_iovs = const_data_v.size();
+    // Calculate memory layout
+    size_t const ptr_array_size = sizeof(void const*) * num_iovs;
+    size_t const size_array_size = sizeof(size_t) * num_iovs;
+    size_t const mr_id_array_size = sizeof(uint64_t) * num_iovs;
+    size_t const total_data_size =
+        ptr_array_size + size_array_size + mr_id_array_size;
+
+    // Allocate and initialize data block
+    char* block = new char[total_data_size];
+    char* size_array_ptr = block + ptr_array_size;
+    char* mr_id_array_ptr = block + ptr_array_size + size_array_size;
+
+    std::memcpy(block, const_data_v.data(), ptr_array_size);
+    std::memcpy(size_array_ptr, size_v.data(), size_array_size);
+    std::memcpy(mr_id_array_ptr, mr_id_v.data(), mr_id_array_size);
+
+    // Create TaskBatch
+    TaskBatch batch;
+    batch.type = TaskType::SENDV;
+    batch.num_iovs = num_iovs;
+    batch.iov_data_block = block;
+
+    return create_batch_task(conn_id, TaskType::SENDV, batch);
+  }
+
+  // Create batch task for RECVV operations
+  inline UnifiedTask* create_recvv_task(uint64_t conn_id,
+                                        std::vector<void*> const& data_v,
+                                        std::vector<size_t> const& size_v,
+                                        std::vector<uint64_t> const& mr_id_v) {
+    size_t const num_iovs = data_v.size();
+    // Calculate memory layout
+    size_t const ptr_array_size = sizeof(void*) * num_iovs;
+    size_t const size_array_size = sizeof(size_t) * num_iovs;
+    size_t const mr_id_array_size = sizeof(uint64_t) * num_iovs;
+    size_t const total_data_size =
+        ptr_array_size + size_array_size + mr_id_array_size;
+
+    // Allocate and initialize data block
+    char* block = new char[total_data_size];
+    char* size_array_ptr = block + ptr_array_size;
+    char* mr_id_array_ptr = block + ptr_array_size + size_array_size;
+
+    std::memcpy(block, data_v.data(), ptr_array_size);
+    std::memcpy(size_array_ptr, size_v.data(), size_array_size);
+    std::memcpy(mr_id_array_ptr, mr_id_v.data(), mr_id_array_size);
+
+    // Create TaskBatch
+    TaskBatch batch;
+    batch.type = TaskType::RECVV;
+    batch.num_iovs = num_iovs;
+    batch.iov_data_block = block;
+
+    return create_batch_task(conn_id, TaskType::RECVV, batch);
   }
 
   inline UnifiedTask* create_net_task(uint64_t conn_id, uint64_t mr_id,
@@ -521,6 +642,21 @@ class Endpoint {
     task->ipc_info() = ipc_info;
     return task;
   }
+
+  // Destroy UnifiedTask and cleanup resources
+  inline void destroy_unified_task(UnifiedTask* task) {
+    if (task == nullptr) {
+      return;
+    }
+
+    // Cleanup batch task specific resources
+    if (task->is_batch_task() && task->task_batch().iov_data_block != nullptr) {
+      delete[] static_cast<char*>(task->task_batch().iov_data_block);
+    }
+
+    delete task;
+  }
+
   // For both net and ipc send/recv tasks.
   jring_t* send_unified_task_ring_;
   jring_t* recv_unified_task_ring_;

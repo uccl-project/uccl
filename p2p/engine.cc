@@ -92,8 +92,8 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
       uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
   recv_unified_task_ring_ =
       uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
-  sendv_task_ring_ = uccl::create_ring(sizeof(TaskBatch), kTaskRingSize);
-  recvv_task_ring_ = uccl::create_ring(sizeof(TaskBatch), kTaskRingSize);
+  sendv_task_ring_ = uccl::create_ring(sizeof(TaskBatchBig), kTaskRingSize);
+  recvv_task_ring_ = uccl::create_ring(sizeof(TaskBatchBig), kTaskRingSize);
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
 
@@ -832,7 +832,7 @@ bool Endpoint::sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   [[maybe_unused]] auto _ =
       PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
-  TaskBatch* task = create_task_batch_sendv(conn_id, data_v, size_v, mr_id_v);
+  TaskBatchBig* task = create_task_batch_sendv(conn_id, data_v, size_v, mr_id_v);
   *transfer_id = reinterpret_cast<uint64_t>(task);
 
   while (jring_mp_enqueue_bulk(sendv_task_ring_, task, 1, nullptr) != 1) {
@@ -848,7 +848,7 @@ bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   [[maybe_unused]] auto _ =
       PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
-  TaskBatch* task = create_task_batch_recvv(conn_id, data_v, size_v, mr_id_v);
+  TaskBatchBig* task = create_task_batch_recvv(conn_id, data_v, size_v, mr_id_v);
   *transfer_id = reinterpret_cast<uint64_t>(task);
 
   while (jring_mp_enqueue_bulk(recvv_task_ring_, task, 1, nullptr) != 1) {
@@ -1691,7 +1691,7 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   auto task = reinterpret_cast<UnifiedTask*>(transfer_id);
   *is_done = task->done.load(std::memory_order_acquire);
   if (*is_done) {
-    delete task;
+    destroy_unified_task(task);
   }
   return true;
 }
@@ -1754,7 +1754,7 @@ void Endpoint::cleanup_uds_socket() {
 void Endpoint::send_proxy_thread_func() {
   uccl::pin_thread_to_numa(numa_node_);
   UnifiedTask task;
-  TaskBatch taskv;
+  TaskBatchBig taskv;
 
   while (!stop_.load(std::memory_order_acquire)) {
     if (jring_sc_dequeue_bulk(send_unified_task_ring_, &task, 1, nullptr) ==
@@ -1798,7 +1798,7 @@ void Endpoint::send_proxy_thread_func() {
 void Endpoint::recv_proxy_thread_func() {
   uccl::pin_thread_to_numa(numa_node_);
   UnifiedTask task;
-  TaskBatch taskv;
+  TaskBatchBig taskv;
 
   while (!stop_.load(std::memory_order_acquire)) {
     if (jring_sc_dequeue_bulk(recv_unified_task_ring_, &task, 1, nullptr) ==
