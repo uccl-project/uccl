@@ -376,7 +376,10 @@ void listener_thread_func(uccl_conn_t* conn) {
         break;
       }
       case UCCL_WRITE:
-        uccl_engine_recv(conn, mr_id, (void*)md.data_ptr, md.data_size);
+        uccl_mr_t temp_mr;
+        temp_mr.mr_id = mr_id;
+        temp_mr.engine = conn->engine;
+        int result = uccl_engine_recv(conn, &temp_mr, (void*)md.data_ptr, md.data_size);
         break;
       case UCCL_FIFO: {
         // Store fifo_item in the hashmap for this connection
