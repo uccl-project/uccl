@@ -18,6 +18,7 @@ double Proxy::avg_wr_latency_us() const {
 uint64_t Proxy::completed_wr() const { return completion_count_; }
 void Proxy::pin_thread() {
   if (cfg_.pin_thread) {
+    // TODO(MaoZiming): improves pinning.
     pin_thread_to_cpu(cfg_.block_idx + 1);
     int cpu = sched_getcpu();
     if (cpu == -1) {
@@ -53,7 +54,7 @@ void Proxy::init_common() {
   int const my_rank = cfg_.rank;
 
   per_thread_rdma_init(ctx_, cfg_.gpu_buffer, cfg_.total_size, my_rank,
-                       cfg_.block_idx);
+                       cfg_.block_idx, cfg_.local_rank);
   pin_thread();
   if (!ctx_.cq) ctx_.cq = create_per_thread_cq(ctx_);
   if (ctxs_for_all_ranks_.empty()) {
@@ -76,8 +77,8 @@ void Proxy::init_common() {
       reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(cfg_.gpu_buffer) +
                                   cfg_.total_size - atomic_buf_size);
 
-  printf("[PROXY_INIT] Atomic buffer at %p, size %zu bytes\n",
-         ctx_.atomic_old_values_buf, atomic_buf_size);
+  // printf("[PROXY_INIT] Atomic buffer at %p, size %zu bytes\n",
+  //        ctx_.atomic_old_values_buf, atomic_buf_size);
 
   int num_ranks = ctxs_for_all_ranks_.size();
   local_infos_.assign(num_ranks, RDMAConnectionInfo{});
@@ -90,10 +91,7 @@ void Proxy::init_common() {
   for (int peer = 0; peer < num_ranks; ++peer) {
     if (peer == my_rank) continue;
     // Skip rdma connection for intra-node.
-    if (peers_[peer].ip == peers_[my_rank].ip) {
-      printf("Skipping QP initialization for intra-node peer %d\n", peer);
-      continue;
-    }
+    if (peers_[peer].ip == peers_[my_rank].ip) continue;
     auto& c = *ctxs_for_all_ranks_[peer];
 
     c.tag = next_tag++;

@@ -25,7 +25,7 @@ def test_single(rank, num_ranks, group, args):
         0, num_experts, (num_tokens, num_topk), device=f"cuda:{device_index}"
     )
 
-    scratch_nbytes = int(args.buffer_size * 1e9)
+    scratch_nbytes = int(args.buffer_size * 2e9)
     scratch = torch.empty(
         scratch_nbytes, dtype=torch.uint8, device=f"cuda:{device_index}"
     )

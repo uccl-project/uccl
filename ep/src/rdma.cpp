@@ -128,7 +128,7 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
 }
 
 void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
-                          int block_idx) {
+                          int block_idx, int local_rank) {
   printf("Rank %d, Block %d: Initializing RDMA for GPU buffer %p, size %zu\n",
          rank, block_idx, gpu_buf, bytes);
   if (S.context) return;  // already initialized
@@ -139,8 +139,8 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     perror("Failed to get IB devices list");
     exit(1);
   }
-  int gpu_idx;
-  cudaGetDevice(&gpu_idx);
+  int gpu_idx = local_rank;
+  cudaSetDevice(gpu_idx);
 
   // Ranked by GPU idx
   auto gpu_cards = uccl::get_gpu_cards();

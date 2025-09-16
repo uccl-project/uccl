@@ -87,10 +87,10 @@ class Buffer {
         comm_stream(at::cuda::getStreamFromPool(/*isHighPriority=*/true)) {
     int max_nvl_peers = get_num_max_nvl_peers();
     {
-      printf(
-          "Buffer initializing for rank %d, num_ranks %d, num_nvl_bytes %ld, "
-          "num_rdma_bytes %ld\n",
-          rank, num_ranks, num_nvl_bytes, num_rdma_bytes);
+      // printf(
+      //     "Buffer initializing for rank %d, num_ranks %d, num_nvl_bytes %ld,
+      //     " "num_rdma_bytes %ld\n", rank, num_ranks, num_nvl_bytes,
+      //     num_rdma_bytes);
       cudaGetDevice(&device_index);
       {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
@@ -122,8 +122,8 @@ class Buffer {
           dev_ptr = host_ptr;
 #endif
           d_ring_addrs[i] = reinterpret_cast<uint64_t>(dev_ptr);
-          printf("Ring buffer %d addr: host %p, dev %p\n", i, host_ptr,
-                 dev_ptr);
+          // printf("Ring buffer %d addr: host %p, dev %p\n", i, host_ptr,
+          //        dev_ptr);
         }
         CUDA_CHECK(cudaDeviceSynchronize());
         // Allocate device memory for IPC base pointers
@@ -1401,6 +1401,8 @@ class Buffer {
     uccl::LowLatencyLayout layout(rdma_buffer_ptr,
                                   num_max_dispatch_tokens_per_rank, hidden,
                                   num_ranks, num_experts, atomic_buffer_ptr);
+    printf("Total bytes: %zu, RDMA bytes: %zu\n", layout.total_bytes,
+           static_cast<std::size_t>(num_rdma_bytes));
     EP_HOST_ASSERT(layout.total_bytes <=
                    static_cast<std::size_t>(num_rdma_bytes));
     auto buffer = layout.buffers[low_latency_buffer_idx];
