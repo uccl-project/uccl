@@ -76,7 +76,6 @@ class Buffer:
         self.num_rdma_bytes = num_rdma_bytes
         self.low_latency_mode = low_latency_mode
         self.explicitly_destroy = explicitly_destroy
-        print("self.rank", self.rank, "local_rank", int(os.environ["LOCAL_RANK"]))
         self.runtime = ep.Buffer(
             self.rank,
             self.group_size,
