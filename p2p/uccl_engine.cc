@@ -17,77 +17,6 @@
 #include <unordered_map>
 #include <vector>
 
-// Threadpool to manage the receiver side
-class ThreadPool {
- private:
-  std::vector<std::thread> workers;
-  std::queue<std::function<void()>> tasks;
-  std::mutex queue_mutex;
-  std::condition_variable condition;
-  std::atomic<bool> stop_flag;
-
- public:
-  ThreadPool(size_t num_threads) : stop_flag(false) {
-    for (size_t i = 0; i < num_threads; ++i) {
-      workers.emplace_back([this] {
-        while (true) {
-          std::function<void()> task;
-          {
-            std::unique_lock<std::mutex> lock(this->queue_mutex);
-            this->condition.wait(lock, [this] {
-              return this->stop_flag || !this->tasks.empty();
-            });
-
-            if (this->stop_flag && this->tasks.empty()) return;
-
-            task = std::move(this->tasks.front());
-            this->tasks.pop();
-          }
-          task();
-        }
-      });
-    }
-  }
-
-  ~ThreadPool() {
-    {
-      std::unique_lock<std::mutex> lock(queue_mutex);
-      stop_flag = true;
-    }
-    condition.notify_all();
-    for (std::thread& worker : workers) {
-      if (worker.joinable()) worker.join();
-    }
-  }
-
-  // Force destroy without waiting for threads to finish
-  void force_destroy() {
-    {
-      std::unique_lock<std::mutex> lock(queue_mutex);
-      stop_flag = true;
-    }
-    condition.notify_all();
-
-    // Detach all threads instead of joining
-    for (std::thread& worker : workers) {
-      if (worker.joinable()) {
-        worker.detach();
-      }
-    }
-  }
-
-  template <class F, class... Args>
-  void enqueue(F&& f, Args&&... args) {
-    auto task = std::bind(std::forward<F>(f), std::forward<Args>(args)...);
-    {
-      std::unique_lock<std::mutex> lock(queue_mutex);
-      if (stop_flag.load()) return;
-      tasks.emplace(std::move(task));
-    }
-    condition.notify_one();
-  }
-};
-
 struct uccl_engine {
   Endpoint* endpoint;
 };
@@ -99,7 +28,6 @@ struct uccl_conn {
   std::thread* listener_thread;
   bool listener_running;
   std::mutex listener_mutex;
-  ThreadPool* recv_thread_pool;
 };
 
 struct uccl_mr {
@@ -162,8 +90,6 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   conn->engine = engine;
   conn->listener_thread = nullptr;
   conn->listener_running = false;
-  conn->recv_thread_pool =
-      new ThreadPool(4);  // Create thread pool with 4 threads
   return conn;
 }
 
@@ -186,8 +112,6 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
   conn->engine = engine;
   conn->listener_thread = nullptr;
   conn->listener_running = false;
-  conn->recv_thread_pool =
-      new ThreadPool(4);  // Create thread pool with 4 threads
   return conn;
 }
 
@@ -295,11 +219,6 @@ int uccl_engine_stop_listener(uccl_conn_t* conn) {
 void uccl_engine_conn_destroy(uccl_conn_t* conn) {
   if (conn) {
     uccl_engine_stop_listener(conn);
-    if (conn->recv_thread_pool) {
-      conn->recv_thread_pool->force_destroy();
-      delete conn->recv_thread_pool;
-    }
-
     {
       std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
       auto it = fifo_item_map.find(conn);
@@ -381,6 +300,10 @@ void listener_thread_func(uccl_conn_t* conn) {
         temp_mr.engine = conn->engine;
         int result =
             uccl_engine_recv(conn, &temp_mr, (void*)md.data_ptr, md.data_size);
+        if (result < 0) {
+          std::cerr << "Failed to perform uccl_engine_recv"
+                    << std::endl;
+        }
         break;
       }
       case UCCL_FIFO: {
