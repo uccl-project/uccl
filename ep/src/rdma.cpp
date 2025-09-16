@@ -567,25 +567,6 @@ void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
   struct ibv_qp_attr attr;
   memset(&attr, 0, sizeof(attr));
   attr.qp_state = IBV_QPS_RTS;
-
-#ifdef EFA
-  attr.sq_psn = 0;
-  if (ibv_modify_qp(S.qp, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN)) {
-    perror("Failed to modify QP to RTS");
-    exit(1);
-  }
-  if (ibv_modify_qp(S.ack_qp, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN)) {
-    perror("Failed to modify Ack QP to RTS");
-    exit(1);
-  }
-  if (ibv_modify_qp(S.recv_ack_qp, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN)) {
-    perror("Failed to modify Receive Ack QP to RTS");
-    exit(1);
-  }
-  printf("QP modified to RTS state\n");
-  return;
-#endif
-
   attr.timeout = 14;
   attr.retry_cnt = 7;
   attr.rnr_retry = 7;
