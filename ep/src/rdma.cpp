@@ -671,7 +671,8 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       wr_ids[j] = wrs_to_post[i];
       qpx->wr_id = wrs_to_post[i];
       qpx->comp_mask = 0;
-      qpx->wr_flags = (j + 1 == k) ? IBV_SEND_SIGNALED : 0;
+      // EFA requires every WR to be signaled.
+      qpx->wr_flags = IBV_SEND_SIGNALED;
 
       uint64_t remote_addr =
           ctx->remote_addr + (cmd.req_rptr ? cmd.req_rptr : 0);
@@ -1246,7 +1247,7 @@ void post_atomic_operations(ProxyCtx& S,
 
       qpx->wr_id = kAtomicWrTag | (wr_id & kAtomicMask);
       qpx->comp_mask = 0;
-      qpx->wr_flags = (i + 1 == k) ? IBV_SEND_SIGNALED : 0;
+      qpx->wr_flags = IBV_SEND_SIGNALED;
 
       ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, ctx->remote_addr,
                             htonl(imm));
