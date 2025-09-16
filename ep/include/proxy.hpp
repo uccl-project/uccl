@@ -42,8 +42,7 @@ class Proxy {
     bool pin_thread = true;
   };
 
-  explicit Proxy(Config const& cfg) : cfg_(cfg) {
-  }
+  explicit Proxy(Config const& cfg) : cfg_(cfg) {}
 
   void set_progress_run(bool run) {
     ctx_.progress_run.store(run, std::memory_order_release);

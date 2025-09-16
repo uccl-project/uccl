@@ -3,8 +3,8 @@
 #include <stdexcept>
 
 UcclProxy::UcclProxy(uintptr_t rb_addr, int block_idx,
-                     uintptr_t gpu_buffer_addr, size_t total_size, int rank, int node_idx, 
-                     std::string const& peer_ip)
+                     uintptr_t gpu_buffer_addr, size_t total_size, int rank,
+                     int node_idx, std::string const& peer_ip)
     : peer_ip_storage_{peer_ip}, thread_{}, mode_{Mode::None}, running_{false} {
   Proxy::Config cfg;
   // cfg.rb = reinterpret_cast<DeviceToHostCmdBuffer*>(rb_addr);

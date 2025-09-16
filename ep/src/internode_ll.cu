@@ -182,10 +182,9 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
             rank * num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
             slot_idx * num_bytes_per_msg;
         auto const dst_p2p_ptr =
-            ipc_base_ptrs
-                ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_base_ptrs, rank, dst_rank,
-                                        max_nvl_peers, 0)
-                : 0;
+            ipc_base_ptrs ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_base_ptrs, rank,
+                                                  dst_rank, max_nvl_peers, 0)
+                          : 0;
         if (dst_p2p_ptr == 0) {
           __threadfence_system();
           uccl::nvshmemi_ibgda_put_nbi_warp(
@@ -278,10 +277,9 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     auto const dst_p2p_ptr =
         // NOTE(Ziming): it seems there is a mismatch from aligned_count_addr
         // before.
-        ipc_base_ptrs
-            ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_base_ptrs, rank, dst_rank,
-                                    max_nvl_peers, 0)
-            : 0;
+        ipc_base_ptrs ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_base_ptrs, rank,
+                                              dst_rank, max_nvl_peers, 0)
+                      : 0;
     if (dst_p2p_ptr == 0) {
       // Inter-node or no IPC: use IBGDA atomic
       uccl::nvshmemi_ibgda_amo_nonfetch_add(
@@ -649,10 +647,9 @@ __global__ __launch_bounds__(1024, 1) void combine(
 
       // Use IPC for intra-node P2P mapping when available
       auto const dst_p2p_ptr =
-          ipc_base_ptrs
-              ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_base_ptrs, rank, dst_rank,
-                                      max_nvl_peers, 0)
-              : 0;
+          ipc_base_ptrs ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_base_ptrs, rank,
+                                                dst_rank, max_nvl_peers, 0)
+                        : 0;
 
       if (not zero_copy or dst_p2p_ptr != 0) {
         // Read from `cpy_src_int4_ptr` and copy into `cpy_dst_int4_ptr`
@@ -800,10 +797,9 @@ __global__ __launch_bounds__(1024, 1) void combine(
       auto dst_ptr =
           reinterpret_cast<uint64_t>(rdma_recv_flag + global_expert_idx);
       auto dst_p2p_ptr =
-          ipc_base_ptrs
-              ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_base_ptrs, rank, dst_rank,
-                                      max_nvl_peers, 0)
-              : 0;
+          ipc_base_ptrs ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_base_ptrs, rank,
+                                                dst_rank, max_nvl_peers, 0)
+                        : 0;
       if (dst_p2p_ptr != 0) {
         // Intra-node: use direct atomic operation
         st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr), 1);

@@ -2027,11 +2027,10 @@ PYBIND11_MODULE(ep, m) {
   });
   py::class_<Stats>(m, "Stats");
   py::class_<UcclProxy>(m, "Proxy")
-      .def(py::init<uintptr_t, int, uintptr_t, size_t, int, int, 
+      .def(py::init<uintptr_t, int, uintptr_t, size_t, int, int,
                     std::string const&>(),
            py::arg("rb_addr"), py::arg("block_idx"), py::arg("gpu_buffer_addr"),
-           py::arg("total_size"), py::arg("rank") = 0,
-           py::arg("node_idx") = -1,
+           py::arg("total_size"), py::arg("rank") = 0, py::arg("node_idx") = -1,
            py::arg("peer_ip") = std::string())
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)

@@ -141,7 +141,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   }
   int gpu_idx;
   cudaGetDevice(&gpu_idx);
-  
+
   // Ranked by GPU idx
   auto gpu_cards = uccl::get_gpu_cards();
 
