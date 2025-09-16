@@ -88,6 +88,12 @@ void Proxy::init_common() {
   ctx_by_tag_.resize(ctxs_for_all_ranks_.size() + 1, nullptr);
   // Per peer QP initialization
   for (int peer = 0; peer < num_ranks; ++peer) {
+    if (peer == my_rank) continue;
+    // Skip rdma connection for intra-node.
+    if (peers_[peer].ip == peers_[my_rank].ip) {
+      printf("Skipping QP initialization for intra-node peer %d\n", peer);
+      continue;
+    }
     auto& c = *ctxs_for_all_ranks_[peer];
 
     c.tag = next_tag++;
@@ -111,6 +117,8 @@ void Proxy::init_common() {
   // Out-of-band exchange per pair.
   for (int peer = 0; peer < num_ranks; ++peer) {
     if (peer == my_rank) continue;
+    // Skip rdma connection for intra-node.
+    if (peers_[peer].ip == peers_[my_rank].ip) continue;
 
     bool const i_listen = (my_rank < peer);
     int const tid = pair_tid_block(my_rank, peer, num_ranks, cfg_.block_idx);
@@ -140,6 +148,8 @@ void Proxy::init_common() {
   // Bring each per-peer QP to RTR/RTS
   for (int peer = 0; peer < num_ranks; ++peer) {
     if (peer == my_rank) continue;
+    // Skip rdma connection for intra-node.
+    if (peers_[peer].ip == peers_[my_rank].ip) continue;
     auto& c = *ctxs_for_all_ranks_[peer];
 
     // qp is different from each rank.
@@ -210,6 +220,7 @@ void Proxy::run_dual() {
   init_common();
   for (int peer = 0; peer < (int)ctxs_for_all_ranks_.size(); ++peer) {
     if (peer == cfg_.rank) continue;
+    if (peers_[peer].ip == peers_[cfg_.rank].ip) continue;
     auto& ctx_ptr = ctxs_for_all_ranks_[peer];
     if (!ctx_ptr) continue;
     local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
