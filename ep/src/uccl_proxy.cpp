@@ -27,8 +27,7 @@ UcclProxy::UcclProxy(uintptr_t rb_addr, int block_idx,
 #ifdef USE_GRACE_HOPPER
     cudaMallocManaged(&atomic_buffer_ptr_, kAtomicBufferSize);
 #else
-    cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize,
-                  cudaHostAllocMapped | cudaHostAllocWriteCombined);
+    cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize, cudaHostAllocMapped);
 #endif
     cudaMemset(atomic_buffer_ptr_, 0, kAtomicBufferSize);
     proxy_->set_atomic_buffer_ptr(atomic_buffer_ptr_);
