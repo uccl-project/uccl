@@ -140,7 +140,6 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     exit(1);
   }
   int gpu_idx = local_rank;
-  printf("gpu_idx: %d\n", gpu_idx);
   cudaSetDevice(gpu_idx);
 
   // Ranked by GPU idx
