@@ -91,6 +91,7 @@ class Buffer {
           "Buffer initializing for rank %d, num_ranks %d, num_nvl_bytes %ld, "
           "num_rdma_bytes %ld\n",
           rank, num_ranks, num_nvl_bytes, num_rdma_bytes);
+      cudaGetDevice(&device_index);
       {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
         auto it = uccl::g_proxies_by_dev.find(device_index);
@@ -1861,6 +1862,7 @@ PYBIND11_MODULE(ep, m) {
           std::abort();
         }
         vec.push_back(std::move(proxy));
+        printf("Registered proxy for device %d\n", device_index);
       },
       py::arg("device_index"), py::arg("proxy"));
   m.def(
@@ -1877,6 +1879,7 @@ PYBIND11_MODULE(ep, m) {
         for (auto& proxy : proxies) {
           vec.push_back(std::move(proxy));
         }
+        printf("Registered proxies for device %d\n", device_index);
       },
       py::arg("device_index"), py::arg("proxies"));
   m.def(
@@ -2027,11 +2030,11 @@ PYBIND11_MODULE(ep, m) {
   });
   py::class_<Stats>(m, "Stats");
   py::class_<UcclProxy>(m, "Proxy")
-      .def(py::init<uintptr_t, int, uintptr_t, size_t, int, int,
+      .def(py::init<uintptr_t, int, uintptr_t, size_t, int, int, int,
                     std::string const&>(),
            py::arg("rb_addr"), py::arg("block_idx"), py::arg("gpu_buffer_addr"),
            py::arg("total_size"), py::arg("rank") = 0, py::arg("node_idx") = -1,
-           py::arg("peer_ip") = std::string())
+           py::arg("local_rank") = 0, py::arg("peer_ip") = std::string())
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)
       .def("start_local", &UcclProxy::start_local)

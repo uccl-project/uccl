@@ -42,69 +42,9 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
     # Calculate expected device index based on rank and world size
     # For single node: device_index should match LOCAL_RANK
     # For multi-node: device_index should be rank % num_gpus_per_node
-    local_rank = int(os.environ.get("LOCAL_RANK", 0))
-    local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
-
-    # Determine device index - for single node, use LOCAL_RANK
-    # For multi-node, use rank % local_world_size
-    if num_ranks == local_world_size:
-        # Single node scenario
-        device_index = local_rank
-        expected_device_for_rank = local_rank
-    else:
-        # Multi-node scenario
-        device_index = rank % local_world_size
-        expected_device_for_rank = device_index
-
-    # Validate device availability
-    if device_index >= torch.cuda.device_count():
-        raise RuntimeError(
-            f"Rank {rank}: Calculated device_index {device_index} >= available devices {torch.cuda.device_count()}"
-        )
-
-    print(
-        f"[single-node] Rank {rank}/{num_ranks}: LOCAL_RANK={local_rank}, "
-        f"LOCAL_WORLD_SIZE={local_world_size}, calculated device_index={device_index}",
-        flush=True,
-    )
-
-    # 确保本 rank 使用正确的 CUDA 设备，并将默认设备绑定到该 GPU
+    device_index = local_rank = int(os.environ.get("LOCAL_RANK", 0))
     torch.cuda.set_device(device_index)
-    torch.set_default_device(f"cuda:{device_index}")
-
-    # Verify device setting worked correctly
-    actual_device = torch.cuda.current_device()
-    if actual_device != device_index:
-        raise RuntimeError(
-            f"Rank {rank}: Failed to set device to {device_index}, got {actual_device}"
-        )
-
-    print(
-        f"[single-node] Rank {rank}/{num_ranks}, Device cuda:{device_index} (verified)",
-        flush=True,
-    )
-    print(
-        f"[single-node] Configuration: tokens={num_tokens}, hidden={hidden}, "
-        f"experts={num_experts}, topk={num_topk}",
-        flush=True,
-    )
-    print(
-        f"[single-node] Mode: {'Mixed simulation' if args.mixed else 'Pure intranode'}",
-        flush=True,
-    )
-
     torch.manual_seed(rank)
-
-    # CRITICAL: Ensure we're on the correct device before creating ANY tensors
-    current_before_tensors = torch.cuda.current_device()
-    if current_before_tensors != device_index:
-        print(
-            f"[single-node] Rank {rank}: WARNING - device mismatch before tensor creation. "
-            f"Expected {device_index}, current {current_before_tensors}. Fixing...",
-            flush=True,
-        )
-        torch.cuda.set_device(device_index)
-        torch.set_default_device(f"cuda:{device_index}")
 
     # Generate input data - explicitly specify device to be safe
     x = torch.randn(
@@ -112,10 +52,10 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
     )
 
     # Verify tensor is on correct device
-    if x.device.index != device_index:
+    if x.device.index != local_rank:
         raise RuntimeError(
             f"Rank {rank}: Input tensor x created on wrong device! "
-            f"Expected cuda:{device_index}, got {x.device}"
+            f"Expected cuda:{local_rank}, got {x.device}"
         )
 
     print(
@@ -228,7 +168,9 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
         torch.cuda.set_device(device_index)
         torch.set_default_device(f"cuda:{device_index}")
 
-    proxies, workers = initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group)
+    proxies, workers, bench = initialize_uccl(
+        scratch, scratch_nbytes, rank, num_ranks, group
+    )
 
     # Verify device after initialize_uccl
     post_init_device = torch.cuda.current_device()
@@ -340,14 +282,6 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
                 f"All ranks using consistent device mapping (rank->device).",
                 flush=True,
             )
-
-        # Final device-rank consistency check
-        print(
-            f"[single-node] Rank {rank}: Final device consistency check - "
-            f"rank={rank}, device_index={device_index}, current_device={torch.cuda.current_device()}, "
-            f"expected_mapping=rank%{local_world_size if num_ranks != local_world_size else 'local_rank'}",
-            flush=True,
-        )
 
         cumulative_local_expert_recv_stats = torch.zeros(
             (num_experts // num_ranks,), dtype=torch.int, device=f"cuda:{device_index}"
@@ -564,7 +498,7 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
         raise
     print(f"[single-node] Rank {rank}: ✓ Buffer destroyed", flush=True)
 
-    destroy_uccl(proxies, workers)
+    destroy_uccl(proxies, workers, bench)
     # Ensure we're on the correct device before final barrier
     torch.cuda.set_device(device_index)
     torch.set_default_device(f"cuda:{device_index}")
@@ -593,15 +527,6 @@ def test_worker(local_rank: int, num_local_ranks: int, args):
         f"[Local Rank {local_rank}] Entering test_worker, about to init distributed...",
         flush=True,
     )
-
-    # For single node: torchrun sets these incorrectly for our use case
-    # torchrun sets WORLD_SIZE = num_local_ranks and RANK = local_rank
-    # But init_dist expects WORLD_SIZE = num_nodes and RANK = node_rank
-
-    # Override for single node scenario
-    os.environ["WORLD_SIZE"] = "1"  # Number of nodes (single node = 1)
-    os.environ["RANK"] = "0"  # Node index (first and only node = 0)
-
     print(
         f"[Local Rank {local_rank}] Environment for init_dist: "
         f"WORLD_SIZE={os.environ.get('WORLD_SIZE')} (nodes), "
@@ -617,49 +542,16 @@ def test_worker(local_rank: int, num_local_ranks: int, args):
         f"[Local Rank {local_rank}] init_dist completed. Global rank={rank}/{num_ranks}",
         flush=True,
     )
-
-    # CRITICAL: Re-set device after distributed initialization
-    # torchrun and distributed initialization can change the current device
-    torch.cuda.set_device(local_rank)
-    torch.set_default_device(f"cuda:{local_rank}")
-    print(
-        f"[Local Rank {local_rank}] Re-set device to cuda:{local_rank} after init_dist",
-        flush=True,
-    )
-
+    test_single_node(rank, num_ranks, group, args)
     try:
-        print(f"[Rank {rank}] Starting test_single_node...", flush=True)
-        test_single_node(rank, num_ranks, group, args)
-    finally:
-        print(
-            f"[Rank {rank}] Test completed, running barrier before destroy...",
-            flush=True,
-        )
-        # Ensure we're on the correct device before barrier
-        device_index = int(os.environ.get("LOCAL_RANK", 0))
-        torch.cuda.set_device(device_index)
-        torch.set_default_device(f"cuda:{device_index}")
+        dist.barrier()
+    except Exception as e:
+        print(f"[Rank {rank}] Cleanup barrier failed: {e}", flush=True)
+        # Continue with cleanup even if barrier fails
 
-        # Verify device setting before barrier
-        cleanup_current_dev = torch.cuda.current_device()
-        if cleanup_current_dev != device_index:
-            print(
-                f"[Rank {rank}] WARNING: Device mismatch in cleanup! "
-                f"current={cleanup_current_dev}, expected={device_index}",
-                flush=True,
-            )
-            torch.cuda.set_device(device_index)
-            torch.set_default_device(f"cuda:{device_index}")
-
-        try:
-            dist.barrier()
-        except Exception as e:
-            print(f"[Rank {rank}] Cleanup barrier failed: {e}", flush=True)
-            # Continue with cleanup even if barrier fails
-
-        print(f"[Rank {rank}] Destroying process group...", flush=True)
-        dist.destroy_process_group()
-        print(f"[Rank {rank}] Process group destroyed", flush=True)
+    print(f"[Rank {rank}] Destroying process group...", flush=True)
+    dist.destroy_process_group()
+    print(f"[Rank {rank}] Process group destroyed", flush=True)
 
 
 if __name__ == "__main__":

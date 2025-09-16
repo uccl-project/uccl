@@ -47,15 +47,15 @@ def init_dist(local_rank: int, num_local_ranks: int):
     # NOTES: you may rewrite this function with your own cluster settings
     ip = os.getenv("MASTER_ADDR", "127.0.0.1")
     port = int(os.getenv("MASTER_PORT", "8361"))
-    num_nodes = int(os.getenv("WORLD_SIZE", 1))
+    world_size = int(os.getenv("WORLD_SIZE", 1))
     node_rank = int(os.getenv("RANK", 0))
 
     sig = inspect.signature(dist.init_process_group)
     params = {
         "backend": "nccl",
         "init_method": f"tcp://{ip}:{port}",
-        "world_size": num_nodes * num_local_ranks,
-        "rank": node_rank * num_local_ranks + local_rank,
+        "world_size": world_size,
+        "rank": node_rank,
     }
     print(params)
     if "device_id" in sig.parameters:
@@ -72,7 +72,7 @@ def init_dist(local_rank: int, num_local_ranks: int):
     return (
         dist.get_rank(),
         dist.get_world_size(),
-        dist.new_group(list(range(num_local_ranks * num_nodes))),
+        dist.new_group(list(range(world_size))),
     )
 
 
@@ -497,7 +497,10 @@ def bench_kineto(
 
 def initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group):
 
-    device_index = int(os.environ["LOCAL_RANK"])
+    local_rank = int(os.environ["LOCAL_RANK"])
+    nproc_per_node = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
+    node_idx = rank // nproc_per_node
+
     peer_ip = get_peer_ip(rank, num_ranks, group)
     if rank == 0:
         print(
@@ -520,11 +523,15 @@ def initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group):
             gpu_buffer_addr=scratch_ptr,
             total_size=scratch_nbytes,
             rank=rank,
+            node_idx=node_idx,
+            local_rank=local_rank,
             peer_ip=peer_ip,
         )
         proxy.set_peers_meta(peers_meta_list)
         proxies.append(proxy)
-    ep.register_proxies(device_index, proxies)
+
+    print("register proxy for device", local_rank)
+    ep.register_proxies(local_rank, proxies)
 
     dist.barrier(group)
     for i in range(bench.num_proxies()):
@@ -533,7 +540,7 @@ def initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group):
     workers = None
     if hasattr(ep, "PeerCopyManager"):
         try:
-            workers = ep.PeerCopyManager(src_device=device_index)
+            workers = ep.PeerCopyManager(src_device=local_rank)
             workers.start_for_proxies(proxies)
             if rank == 0:
                 print("✓ PeerCopyManager started", flush=True)
