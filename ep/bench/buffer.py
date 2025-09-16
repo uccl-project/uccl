@@ -46,6 +46,7 @@ class Buffer:
         allow_nvlink_for_low_latency_mode: bool = True,
         allow_mnnvl: bool = False,
         explicitly_destroy: bool = False,
+        sync: bool = True,
     ) -> None:
         """
         Initialize the communication buffer.
@@ -85,19 +86,22 @@ class Buffer:
             explicitly_destroy,
         )
         self.runtime.set_rdma_buffer_raw(rdma_buffer_ptr)
+        if sync:
+            self.sync()
 
+    def sync(self):
         # Synchronize device IDs
         device_ids = [
             None,
         ] * self.group_size
         local_device_id = self.runtime.get_local_device_id()
-        dist.all_gather_object(device_ids, local_device_id, group)
+        dist.all_gather_object(device_ids, local_device_id, self.group)
         # Synchronize IPC handles
         ipc_handles = [
             None,
         ] * self.group_size
         local_ipc_handle = self.runtime.get_local_ipc_handle()
-        dist.all_gather_object(ipc_handles, local_ipc_handle, group)
+        dist.all_gather_object(ipc_handles, local_ipc_handle, self.group)
 
         rdma_ipc_handles = [None] * self.group_size
         local_rdma_ipc_handle = (
@@ -105,15 +109,7 @@ class Buffer:
             if self.num_rdma_bytes > 0
             else None
         )
-        dist.all_gather_object(rdma_ipc_handles, local_rdma_ipc_handle, group)
-
-        atomics_ipc_handles = [None] * self.group_size
-        local_atomics_ipc_handle = (
-            self.runtime.get_local_atomics_ipc_handle()
-            if self.num_rdma_bytes > 0
-            else None
-        )
-        dist.all_gather_object(atomics_ipc_handles, local_atomics_ipc_handle, group)
+        dist.all_gather_object(rdma_ipc_handles, local_rdma_ipc_handle, self.group)
 
         # Synchronize NVSHMEM unique IDs
         root_unique_id = None
@@ -161,7 +157,6 @@ class Buffer:
             ipc_handles,
             root_unique_id,
             rdma_ipc_handles,
-            atomics_ipc_handles,
         )
         assert self.runtime.is_available()
 

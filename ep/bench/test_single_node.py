@@ -1,6 +1,6 @@
 """
 Single-node test
-torchrun --nproc_per_node=4 bench/test_single_node.py --num-tokens 1024 --hidden 4096 --num-topk 4
+torchrun --nproc_per_node=2 bench/test_single_node.py --num-tokens 1024 --hidden 4096 --num-topk 4
 """
 
 import torch
@@ -37,7 +37,7 @@ def test_single(rank, num_ranks, group, args):
     buffer = Buffer(
         group=group,
         rdma_buffer_ptr=scratch.data_ptr(),
-        num_nvl_bytes=scratch_nbytes,
+        num_nvl_bytes=0,
         num_rdma_bytes=scratch_nbytes,
         low_latency_mode=True,
         num_qps_per_rank=torch.cuda.get_device_properties(
@@ -46,6 +46,7 @@ def test_single(rank, num_ranks, group, args):
         allow_nvlink_for_low_latency_mode=(num_ranks > 1),
         allow_mnnvl=False,
         explicitly_destroy=True,
+        sync=False,
     )
 
     buffer.connect_atomic_buffer(proxies[0])
@@ -54,6 +55,7 @@ def test_single(rank, num_ranks, group, args):
             num_tokens, hidden, num_experts
         )
         proxy.set_atomic_buffer_ptr(proxies[0].get_atomic_buffer_ptr())
+    buffer.sync()
 
     # One dispatch + combine
     recv_x, recv_count, handle, _, dispatch_hook = buffer.low_latency_dispatch(
@@ -65,14 +67,16 @@ def test_single(rank, num_ranks, group, args):
         round_scale=False,
         use_ue8m0=False,
         cumulative_local_expert_recv_stats=torch.zeros(
-            num_experts // num_ranks, device=f"cuda:{device_index}"
+            num_experts // num_ranks, device=f"cuda:{device_index}", dtype=torch.int
         ),
         async_finish=False,
         return_recv_hook=True,
     )
     dispatch_hook()
 
-    topk_weights = torch.ones((num_tokens, num_topk), device=f"cuda:{device_index}")
+    topk_weights = torch.ones(
+        (num_tokens, num_topk), dtype=torch.float32, device=f"cuda:{device_index}"
+    )
     combined_x, _, combine_hook = buffer.low_latency_combine(
         x=recv_x,
         topk_idx=topk_idx,
