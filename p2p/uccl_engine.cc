@@ -301,8 +301,7 @@ void listener_thread_func(uccl_conn_t* conn) {
         int result =
             uccl_engine_recv(conn, &temp_mr, (void*)md.data_ptr, md.data_size);
         if (result < 0) {
-          std::cerr << "Failed to perform uccl_engine_recv"
-                    << std::endl;
+          std::cerr << "Failed to perform uccl_engine_recv" << std::endl;
         }
         break;
       }
