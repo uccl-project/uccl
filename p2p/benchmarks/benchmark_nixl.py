@@ -74,7 +74,7 @@ def cleanup_transfer(
         agent.deregister_memory(register_descs)
 
 
-def create_nixl_agent_mc(role: str, dataset, zmq_socket, device_idx,  backend):
+def create_nixl_agent_mc(role: str, dataset, zmq_socket, device_idx, backend):
     """
     Create Nixl agents based on the role with Mooncake/UCCL backend
     """
