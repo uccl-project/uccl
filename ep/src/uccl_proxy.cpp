@@ -16,6 +16,7 @@ UcclProxy::UcclProxy(uintptr_t rb_addr, int block_idx,
   cfg.gpu_buffer = reinterpret_cast<void*>(gpu_buffer_addr);
   cfg.total_size = total_size;
   cfg.rank = rank;
+  cfg.local_rank = local_rank;
   cfg.peer_ip = peer_ip_storage_.empty() ? nullptr : peer_ip_storage_.c_str();
   proxy_ = std::make_unique<Proxy>(cfg);
   local_rank_ = local_rank;
