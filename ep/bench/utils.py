@@ -366,6 +366,7 @@ def bench_kineto(
                     dist.all_reduce(torch.ones(1, dtype=torch.float, device="cuda"))
                 for _ in range(num_tests):
                     fn()
+                torch.cuda.synchronize()
                 prof.step()
 
     # Parse the profiling table
