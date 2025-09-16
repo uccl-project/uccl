@@ -99,6 +99,22 @@ class Buffer:
         local_ipc_handle = self.runtime.get_local_ipc_handle()
         dist.all_gather_object(ipc_handles, local_ipc_handle, group)
 
+        rdma_ipc_handles = [None] * self.group_size
+        local_rdma_ipc_handle = (
+            self.runtime.get_local_rdma_ipc_handle()
+            if self.num_rdma_bytes > 0
+            else None
+        )
+        dist.all_gather_object(rdma_ipc_handles, local_rdma_ipc_handle, group)
+
+        atomics_ipc_handles = [None] * self.group_size
+        local_atomics_ipc_handle = (
+            self.runtime.get_local_atomics_ipc_handle()
+            if self.num_rdma_bytes > 0
+            else None
+        )
+        dist.all_gather_object(atomics_ipc_handles, local_atomics_ipc_handle, group)
+
         # Synchronize NVSHMEM unique IDs
         root_unique_id = None
         # TODO(MaoZiming): Remove the NVSHMEM dependencies here. We do not need to set the NVSHMEM environment variables. There is also no need to sync a root unique id to join the nvshmem job. Eventually, if this is needed, it should be negotiated by the CPU proxy.
@@ -140,7 +156,13 @@ class Buffer:
             ]
         """
         # Make CPP runtime available
-        self.runtime.sync(device_ids, ipc_handles, root_unique_id)
+        self.runtime.sync(
+            device_ids,
+            ipc_handles,
+            root_unique_id,
+            rdma_ipc_handles,
+            atomics_ipc_handles,
+        )
         assert self.runtime.is_available()
 
     def reset_rdma_buffer(self):

@@ -51,8 +51,9 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     int num_max_dispatch_tokens_per_rank, int num_topk, int num_experts,
     int rank, int num_ranks, int num_warp_groups, int num_warps_per_group,
     bool round_scale, int phases, uint64_t const* ring_addrs,
-    int num_ring_addrs, int max_nvl_peers, void** ipc_base_ptrs = nullptr,
-    void* rdma_buffer_ptr = nullptr, void* atomic_buffer_ptr = nullptr) {
+    int num_ring_addrs, int max_nvl_peers, void** ipc_rdma_base_ptrs = nullptr,
+    void** ipc_atomics_base_ptrs = nullptr, void* rdma_buffer_ptr = nullptr,
+    void* atomic_buffer_ptr = nullptr) {
   auto const sm_id = static_cast<int>(blockIdx.x);
   auto const thread_id = static_cast<int>(threadIdx.x);
   auto const warp_id = thread_id / 32, lane_id = get_lane_id();
@@ -182,9 +183,10 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
             rank * num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
             slot_idx * num_bytes_per_msg;
         auto const dst_p2p_ptr =
-            ipc_base_ptrs ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_base_ptrs, rank,
-                                                  dst_rank, max_nvl_peers, 0)
-                          : 0;
+            ipc_rdma_base_ptrs
+                ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_rdma_base_ptrs, rank,
+                                        dst_rank, max_nvl_peers, 0)
+                : 0;
         if (dst_p2p_ptr == 0) {
           __threadfence_system();
           uccl::nvshmemi_ibgda_put_nbi_warp(
@@ -277,9 +279,10 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     auto const dst_p2p_ptr =
         // NOTE(Ziming): it seems there is a mismatch from aligned_count_addr
         // before.
-        ipc_base_ptrs ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_base_ptrs, rank,
-                                              dst_rank, max_nvl_peers, 0)
-                      : 0;
+        ipc_atomics_base_ptrs
+            ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_atomics_base_ptrs, rank,
+                                    dst_rank, max_nvl_peers, 0)
+            : 0;
     if (dst_p2p_ptr == 0) {
       // Inter-node or no IPC: use IBGDA atomic
       uccl::nvshmemi_ibgda_amo_nonfetch_add(
@@ -306,8 +309,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 // Receiving phase
 LOW_LATENCY_DISPATCH_RECV:
   if ((phases & LOW_LATENCY_RECV_PHASE) == 0) {
-    // if (blockIdx.x == 0 && threadIdx.x == 0)
-    //   printf("[dispatch] SEND finished\n");
+    if (blockIdx.x == 0 && threadIdx.x == 0)
+      printf("[dispatch] SEND finished\n");
     return;
   }
 
@@ -349,27 +352,20 @@ LOW_LATENCY_DISPATCH_RECV:
     EP_DEVICE_ASSERT(num_warps_per_group > 1 and num_warp_groups < 15);
     if (sub_warp_id == 1 and lane_id == 0) {
       auto start_time = clock64();
-      // // TODO (MaoZiming): Fix dumb timer wait.
-      // uint64_t start = clock64();
-      // uint64_t wait_cycles = (uint64_t)1e9;
-      // while (clock64() - start < wait_cycles) {
-      // }
-      // printf(
-      //     "[RECV_COUNT_DECODING] Counter waiting on %p\n",
-      //     (void*)(rdma_recv_count + local_expert_idx * num_ranks +
-      //     src_rank));
+      printf(
+          "[RECV_COUNT_DECODING] Counter waiting on %p\n",
+          (void*)(rdma_recv_count + local_expert_idx * num_ranks + src_rank));
       while ((num_recv_tokens = ld_acquire_sys_global(
                   rdma_recv_count + local_expert_idx * num_ranks + src_rank)) ==
              0)
         ;
       auto wait_recv_cost = clock64() - start_time;
       num_recv_tokens = -num_recv_tokens - 1;
-      // printf(
-      //     "[RECV_COUNT_DECODED] Decoded token count: %d (from received value"
-      //     "%d), count_addr; %p\n",
-      //     num_recv_tokens, -num_recv_tokens - 1,
-      //     (void*)(rdma_recv_count + local_expert_idx * num_ranks +
-      //     src_rank));
+      printf(
+          "[RECV_COUNT_DECODED] Decoded token count: %d (from received value"
+          "%d), count_addr; %p\n",
+          num_recv_tokens, -num_recv_tokens - 1,
+          (void*)(rdma_recv_count + local_expert_idx * num_ranks + src_rank));
       recv_token_begin_idx =
           atomicAdd(packed_recv_count + local_expert_idx, num_recv_tokens);
       shared_num_recv_tokens[warp_group_id] = num_recv_tokens;
@@ -455,8 +451,8 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
               bool use_fp8, bool round_scale, bool use_ue8m0, void* workspace,
               int num_device_sms, cudaStream_t stream, int phases,
               uint64_t const* ring_addrs, int num_ring_addrs, int max_nvl_peers,
-              void** ipc_base_ptrs, void* rdma_buffer_ptr,
-              void* atomic_buffer_ptr) {
+              void** ipc_rdma_base_ptrs, void** ipc_atomics_base_ptrs,
+              void* rdma_buffer_ptr, void* atomic_buffer_ptr) {
   constexpr int kNumMaxTopK = 9;
   int const num_warp_groups = ceil_div(num_experts, num_device_sms);
   int const num_warps_per_group = 32 / num_warp_groups;
@@ -492,8 +488,8 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
         next_clean, num_next_clean_int, num_tokens,                           \
         num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,        \
         num_ranks, num_warp_groups, num_warps_per_group, round_scale, phases, \
-        ring_addrs, num_ring_addrs, max_nvl_peers, ipc_base_ptrs,             \
-        rdma_buffer_ptr, atomic_buffer_ptr);                                  \
+        ring_addrs, num_ring_addrs, max_nvl_peers, ipc_rdma_base_ptrs,        \
+        ipc_atomics_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr);           \
   }                                                                           \
   break
 
@@ -519,8 +515,8 @@ __global__ __launch_bounds__(1024, 1) void combine(
     int num_experts, int rank, int num_ranks, int num_warp_groups,
     int num_warps_per_group, int phases, bool zero_copy,
     uint64_t const* ring_addrs, int num_ring_addrs, int max_nvl_peers,
-    void** ipc_base_ptrs = nullptr, void* rdma_buffer_ptr = nullptr,
-    void* atomic_buffer_ptr = nullptr) {
+    void** ipc_rdma_base_ptrs = nullptr, void** ipc_atomics_base_ptrs = nullptr,
+    void* rdma_buffer_ptr = nullptr, void* atomic_buffer_ptr = nullptr) {
   auto const sm_id = static_cast<int>(blockIdx.x);
   auto const num_sms = static_cast<int>(gridDim.x);
   auto const thread_id = static_cast<int>(threadIdx.x);
@@ -647,9 +643,10 @@ __global__ __launch_bounds__(1024, 1) void combine(
 
       // Use IPC for intra-node P2P mapping when available
       auto const dst_p2p_ptr =
-          ipc_base_ptrs ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_base_ptrs, rank,
-                                                dst_rank, max_nvl_peers, 0)
-                        : 0;
+          ipc_rdma_base_ptrs
+              ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_rdma_base_ptrs, rank,
+                                      dst_rank, max_nvl_peers, 0)
+              : 0;
 
       if (not zero_copy or dst_p2p_ptr != 0) {
         // Read from `cpy_src_int4_ptr` and copy into `cpy_dst_int4_ptr`
@@ -797,9 +794,10 @@ __global__ __launch_bounds__(1024, 1) void combine(
       auto dst_ptr =
           reinterpret_cast<uint64_t>(rdma_recv_flag + global_expert_idx);
       auto dst_p2p_ptr =
-          ipc_base_ptrs ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_base_ptrs, rank,
-                                                dst_rank, max_nvl_peers, 0)
-                        : 0;
+          ipc_atomics_base_ptrs
+              ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_atomics_base_ptrs, rank,
+                                      dst_rank, max_nvl_peers, 0)
+              : 0;
       if (dst_p2p_ptr != 0) {
         // Intra-node: use direct atomic operation
         st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr), 1);
@@ -910,8 +908,9 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
              int num_experts, int rank, int num_ranks, bool use_logfmt,
              void* workspace, int num_device_sms, cudaStream_t stream,
              int phases, bool zero_copy, uint64_t const* ring_addrs,
-             int num_ring_addrs, int max_nvl_peers, void** ipc_base_ptrs,
-             void* rdma_buffer_ptr, void* atomic_buffer_ptr) {
+             int num_ring_addrs, int max_nvl_peers, void** ipc_rdma_base_ptrs,
+             void** ipc_atomics_base_ptrs, void* rdma_buffer_ptr,
+             void* atomic_buffer_ptr) {
   constexpr int kNumMaxTopk = 9;
   int const num_warp_groups = ceil_div(num_experts, num_device_sms);
   int const num_warps_per_group = 32 / num_warp_groups;
@@ -944,8 +943,8 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
                   hidden, num_topk, num_max_dispatch_tokens_per_rank,          \
                   num_experts, rank, num_ranks, num_warp_groups,               \
                   num_warps_per_group, phases, zero_copy, ring_addrs,          \
-                  num_ring_addrs, max_nvl_peers, ipc_base_ptrs,                \
-                  rdma_buffer_ptr, atomic_buffer_ptr);                         \
+                  num_ring_addrs, max_nvl_peers, ipc_rdma_base_ptrs,           \
+                  ipc_atomics_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr);  \
   }                                                                            \
   break
 

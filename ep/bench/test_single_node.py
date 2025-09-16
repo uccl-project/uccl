@@ -315,6 +315,7 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
                     )
                 )
                 dispatch_hook()
+                torch.cuda.synchronize()
 
                 topk_weights = torch.ones(
                     (num_tokens, num_topk),
@@ -338,6 +339,7 @@ def test_single_node(rank: int, num_ranks: int, group: dist.ProcessGroup, args):
                     return_recv_hook=True,
                 )
                 combine_hook()
+                torch.cuda.synchronize()
             print("[single-node] ✓ Warmup completed", flush=True)
 
         # Benchmark run

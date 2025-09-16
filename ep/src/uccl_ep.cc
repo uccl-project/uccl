@@ -122,12 +122,19 @@ class Buffer {
           dev_ptr = host_ptr;
 #endif
           d_ring_addrs[i] = reinterpret_cast<uint64_t>(dev_ptr);
+          printf("Ring buffer %d addr: host %p, dev %p\n", i, host_ptr,
+                 dev_ptr);
         }
         CUDA_CHECK(cudaDeviceSynchronize());
         // Allocate device memory for IPC base pointers
-        CUDA_CHECK(cudaMalloc(&d_ipc_base_ptrs, max_nvl_peers * sizeof(void*)));
         CUDA_CHECK(
-            cudaMemset(d_ipc_base_ptrs, 0, max_nvl_peers * sizeof(void*)));
+            cudaMalloc(&d_ipc_rdma_base_ptrs, max_nvl_peers * sizeof(void*)));
+        CUDA_CHECK(
+            cudaMemset(d_ipc_rdma_base_ptrs, 0, max_nvl_peers * sizeof(void*)));
+        CUDA_CHECK(cudaMalloc(&d_ipc_atomics_base_ptrs,
+                              max_nvl_peers * sizeof(void*)));
+        CUDA_CHECK(cudaMemset(d_ipc_atomics_base_ptrs, 0,
+                              max_nvl_peers * sizeof(void*)));
       }
     }
 
@@ -321,10 +328,24 @@ class Buffer {
       CUDA_CHECK(cudaFree(buffer_ptrs[nvl_rank]));
     }
 
+    if (num_rdma_bytes > 0) {
+      for (int i = 0; i < num_nvl_ranks; ++i) {
+        if (i != nvl_rank && ipc_rdma_base_ptrs[i] != nullptr) {
+          CUDA_CHECK(cudaIpcCloseMemHandle(ipc_rdma_base_ptrs[i]));
+        }
+        if (i != nvl_rank && ipc_atomics_base_ptrs[i] != nullptr) {
+          CUDA_CHECK(cudaIpcCloseMemHandle(ipc_atomics_base_ptrs[i]));
+        }
+      }
+    }
+
     // Free workspace and MoE counter
     CUDA_CHECK(cudaFree(workspace));
-    if (d_ipc_base_ptrs != nullptr) {
-      CUDA_CHECK(cudaFree(d_ipc_base_ptrs));
+    if (d_ipc_rdma_base_ptrs != nullptr) {
+      CUDA_CHECK(cudaFree(d_ipc_rdma_base_ptrs));
+    }
+    if (d_ipc_atomics_base_ptrs != nullptr) {
+      CUDA_CHECK(cudaFree(d_ipc_atomics_base_ptrs));
     }
     CUDA_CHECK(cudaFreeHost(const_cast<int*>(moe_recv_counter)));
 
@@ -1464,7 +1485,8 @@ class Buffer {
           num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
           num_ranks, use_fp8, round_scale, use_ue8m0, workspace, num_device_sms,
           launch_stream, phases, d_ring_addrs, num_ring_addrs,
-          get_num_max_nvl_peers(), d_ipc_base_ptrs, rdma_buffer_ptr,
+          get_num_max_nvl_peers(), d_ipc_rdma_base_ptrs,
+          d_ipc_atomics_base_ptrs, rdma_buffer_ptr,
           atomic_buffer_ptr);  // Added IPC base pointers
     };
     launcher(return_recv_hook
@@ -1587,7 +1609,8 @@ class Buffer {
           hidden, num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
           num_ranks, use_logfmt, workspace, num_device_sms, launch_stream,
           phases, zero_copy, d_ring_addrs, num_ring_addrs,
-          get_num_max_nvl_peers(), d_ipc_base_ptrs, rdma_buffer_ptr,
+          get_num_max_nvl_peers(), d_ipc_rdma_base_ptrs,
+          d_ipc_atomics_base_ptrs, rdma_buffer_ptr,
           atomic_buffer_ptr);  // Added IPC base pointers
     };
     launcher(return_recv_hook
@@ -1618,6 +1641,24 @@ class Buffer {
 
   pybind11::bytearray get_local_ipc_handle() const {
     return {ipc_handles[nvl_rank].reserved, CUDA_IPC_HANDLE_SIZE};
+  }
+
+  pybind11::bytearray get_local_rdma_ipc_handle() {
+    EP_HOST_ASSERT(
+        rdma_buffer_ptr != nullptr &&
+        "set_rdma_buffer_raw must be called before requesting RDMA IPC handle");
+    cudaIpcMemHandle_t h{};
+    CUDA_CHECK(cudaIpcGetMemHandle(&h, rdma_buffer_ptr));
+    return {h.reserved, CUDA_IPC_HANDLE_SIZE};
+  }
+
+  pybind11::bytearray get_local_atomics_ipc_handle() {
+    EP_HOST_ASSERT(atomic_buffer_ptr != nullptr &&
+                   "set_atomic_buffer_raw must be called before requesting "
+                   "atomic IPC handle");
+    cudaIpcMemHandle_t h{};
+    CUDA_CHECK(cudaIpcGetMemHandle(&h, atomic_buffer_ptr));
+    return {h.reserved, CUDA_IPC_HANDLE_SIZE};
   }
 
   int get_num_rdma_ranks() const { return num_rdma_ranks; }
@@ -1666,10 +1707,15 @@ class Buffer {
     }
   }
 
-  void sync(std::vector<int> const& device_ids,
-            std::vector<std::optional<pybind11::bytearray>> const&
-                all_gathered_handles,
-            std::optional<pybind11::bytearray> const& root_unique_id_opt) {
+  void sync(
+      std::vector<int> const& device_ids,
+      std::vector<std::optional<pybind11::bytearray>> const&
+          all_gathered_handles,
+      std::optional<pybind11::bytearray> const& root_unique_id_opt,
+      std::optional<std::vector<std::optional<pybind11::bytearray>>> const&
+          all_gathered_rdma_handles_opt = std::nullopt,
+      std::optional<std::vector<std::optional<pybind11::bytearray>>> const&
+          all_gathered_atomics_handles_opt = std::nullopt) {
     EP_HOST_ASSERT(not is_available());
     int max_nvl_peers = get_num_max_nvl_peers();
     // Sync IPC handles
@@ -1715,16 +1761,6 @@ class Buffer {
       CUDA_CHECK(cudaMemcpy(barrier_signal_ptrs_gpu, barrier_signal_ptrs,
                             sizeof(int*) * max_nvl_peers,
                             cudaMemcpyHostToDevice));
-
-      // Copy IPC base pointers for GPU access (for P2P operations)
-      if (d_ipc_base_ptrs != nullptr) {
-        // For RDMA buffer access, we'll use the rdma_buffer_ptr as the base
-        // Note: This assumes rdma_buffer_ptr is set up properly for each rank
-        CUDA_CHECK(cudaMemcpy(d_ipc_base_ptrs, buffer_ptrs,
-                              sizeof(void*) * max_nvl_peers,
-                              cudaMemcpyHostToDevice));
-      }
-
       CUDA_CHECK(cudaDeviceSynchronize());
     }
 
@@ -1738,13 +1774,59 @@ class Buffer {
                 "for RDMA buffer.\n",
                 num_rdma_bytes);
         std::abort();
-      } else {
-        printf(
-            "rdma_buffer_ptr is set, using existing buffer: %p, "
-            "num_rdma_bytes: %ld\n",
-            rdma_buffer_ptr, num_rdma_bytes);
       }
       reset_rdma_buffer();
+      EP_HOST_ASSERT(all_gathered_rdma_handles_opt.has_value());
+      auto const& all_gathered_rdma_handles = *all_gathered_rdma_handles_opt;
+      EP_HOST_ASSERT(all_gathered_atomics_handles_opt.has_value());
+      auto const& all_gathered_atomics_handles =
+          *all_gathered_atomics_handles_opt;
+      EP_HOST_ASSERT(static_cast<std::size_t>(num_ranks) ==
+                     all_gathered_rdma_handles.size());
+      EP_HOST_ASSERT(static_cast<std::size_t>(num_ranks) ==
+                     all_gathered_atomics_handles.size());
+      for (int i = 0, offset = rdma_rank * num_nvl_ranks; i < num_nvl_ranks;
+           ++i) {
+        int global_rank = offset + i;
+        int local_rank_idx = global_rank % max_nvl_peers;
+        EP_HOST_ASSERT(all_gathered_rdma_handles[global_rank].has_value());
+        auto handle_str =
+            std::string(all_gathered_rdma_handles[global_rank].value());
+        EP_HOST_ASSERT(all_gathered_atomics_handles[global_rank].has_value());
+        auto handle_str_atomics =
+            std::string(all_gathered_atomics_handles[global_rank].value());
+        EP_HOST_ASSERT(handle_str.size() == CUDA_IPC_HANDLE_SIZE);
+        EP_HOST_ASSERT(handle_str_atomics.size() == CUDA_IPC_HANDLE_SIZE);
+
+        if (global_rank != rank) {
+          std::memcpy(rdma_ipc_handles[local_rank_idx].reserved,
+                      handle_str.c_str(), CUDA_IPC_HANDLE_SIZE);
+          std::memcpy(atomics_ipc_handles[local_rank_idx].reserved,
+                      handle_str_atomics.c_str(), CUDA_IPC_HANDLE_SIZE);
+          CUDA_CHECK(cudaSetDevice(device_index));
+          CUDA_CHECK(cudaIpcOpenMemHandle(&ipc_rdma_base_ptrs[local_rank_idx],
+                                          rdma_ipc_handles[local_rank_idx],
+                                          cudaIpcMemLazyEnablePeerAccess));
+          CUDA_CHECK(
+              cudaIpcOpenMemHandle(&ipc_atomics_base_ptrs[local_rank_idx],
+                                   atomics_ipc_handles[local_rank_idx],
+                                   cudaIpcMemLazyEnablePeerAccess));
+        } else {
+          ipc_rdma_base_ptrs[local_rank_idx] = rdma_buffer_ptr;
+          ipc_atomics_base_ptrs[local_rank_idx] = atomic_buffer_ptr;
+        }
+      }
+      if (d_ipc_rdma_base_ptrs != nullptr) {
+        CUDA_CHECK(cudaMemcpy(d_ipc_rdma_base_ptrs, ipc_rdma_base_ptrs,
+                              sizeof(void*) * max_nvl_peers,
+                              cudaMemcpyHostToDevice));
+      }
+      if (d_ipc_atomics_base_ptrs != nullptr) {
+        CUDA_CHECK(cudaMemcpy(d_ipc_atomics_base_ptrs, ipc_atomics_base_ptrs,
+                              sizeof(void*) * max_nvl_peers,
+                              cudaMemcpyHostToDevice));
+      }
+      CUDA_CHECK(cudaDeviceSynchronize());
     }
 
     // Ready to use
@@ -1817,6 +1899,10 @@ class Buffer {
   int* barrier_signal_ptrs[NUM_MAX_NVL_PEERS]{};
   void** buffer_ptrs_gpu{nullptr};
   int** barrier_signal_ptrs_gpu{nullptr};
+  cudaIpcMemHandle_t rdma_ipc_handles[NUM_MAX_NVL_PEERS]{};
+  cudaIpcMemHandle_t atomics_ipc_handles[NUM_MAX_NVL_PEERS]{};
+  void* ipc_rdma_base_ptrs[NUM_MAX_NVL_PEERS]{};
+  void* ipc_atomics_base_ptrs[NUM_MAX_NVL_PEERS]{};
 
   // MoE counters (host mapped)
   int volatile* moe_recv_counter = nullptr;
@@ -1833,8 +1919,9 @@ class Buffer {
   uint64_t* d_ring_addrs{nullptr};
 
   // IPC base pointers for GPU access (for replacing nvshmemi_get_p2p_ptr)
-  void** d_ipc_base_ptrs{
+  void** d_ipc_rdma_base_ptrs{
       nullptr};  // Device pointer to array of IPC base addresses
+  void** d_ipc_atomics_base_ptrs{nullptr};
 };
 
 PYBIND11_MODULE(ep, m) {
@@ -1943,6 +2030,9 @@ PYBIND11_MODULE(ep, m) {
            py::arg("async") = false, py::arg("return_recv_hook") = false)
       .def("get_local_device_id", &Buffer::get_local_device_id)
       .def("get_local_ipc_handle", &Buffer::get_local_ipc_handle)
+      .def("get_local_rdma_ipc_handle", &Buffer::get_local_rdma_ipc_handle)
+      .def("get_local_atomics_ipc_handle",
+           &Buffer::get_local_atomics_ipc_handle)
       .def("get_num_rdma_ranks", &Buffer::get_num_rdma_ranks)
       .def("get_rdma_rank", &Buffer::get_rdma_rank)
       .def("get_root_rdma_rank", &Buffer::get_root_rdma_rank)
@@ -1952,7 +2042,9 @@ PYBIND11_MODULE(ep, m) {
            &Buffer::get_local_uccl_shmem_unique_id)
       .def("sync", &Buffer::sync, py::arg("device_ids"),
            py::arg("all_gathered_handles"),
-           py::arg("root_unique_id_opt") = py::none())
+           py::arg("root_unique_id_opt") = py::none(),
+           py::arg("all_gathered_rdma_handles") = py::none(),
+           py::arg("all_gathered_atomics_handles") = py::none())
       .def("is_available", &Buffer::is_available)
       .def("get_next_low_latency_combine_buffer",
            &Buffer::get_next_low_latency_combine_buffer)
