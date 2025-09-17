@@ -92,8 +92,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
       uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
   recv_unified_task_ring_ =
       uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
-  sendv_task_ring_ = uccl::create_ring(sizeof(TaskBatchBig), kTaskRingSize);
-  recvv_task_ring_ = uccl::create_ring(sizeof(TaskBatchBig), kTaskRingSize);
+
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
 
@@ -116,8 +115,6 @@ Endpoint::~Endpoint() {
 
   free(send_unified_task_ring_);
   free(recv_unified_task_ring_);
-  free(sendv_task_ring_);
-  free(recvv_task_ring_);
 
   delete ep_;
 
@@ -832,10 +829,15 @@ bool Endpoint::sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   [[maybe_unused]] auto _ =
       PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
-  TaskBatchBig* task = create_task_batch_sendv(conn_id, data_v, size_v, mr_id_v);
+  UnifiedTask* task = create_sendv_task(conn_id, data_v, size_v, mr_id_v);
+  if (unlikely(task == nullptr)) {
+    return false;
+  }
+
   *transfer_id = reinterpret_cast<uint64_t>(task);
 
-  while (jring_mp_enqueue_bulk(sendv_task_ring_, task, 1, nullptr) != 1) {
+  while (jring_mp_enqueue_bulk(send_unified_task_ring_, task, 1, nullptr) !=
+         1) {
   }
 
   return true;
@@ -848,10 +850,15 @@ bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   [[maybe_unused]] auto _ =
       PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
-  TaskBatchBig* task = create_task_batch_recvv(conn_id, data_v, size_v, mr_id_v);
+  UnifiedTask* task = create_recvv_task(conn_id, data_v, size_v, mr_id_v);
+  if (unlikely(task == nullptr)) {
+    return false;
+  }
+
   *transfer_id = reinterpret_cast<uint64_t>(task);
 
-  while (jring_mp_enqueue_bulk(recvv_task_ring_, task, 1, nullptr) != 1) {
+  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, task, 1, nullptr) !=
+         1) {
   }
 
   return true;
@@ -1754,7 +1761,6 @@ void Endpoint::cleanup_uds_socket() {
 void Endpoint::send_proxy_thread_func() {
   uccl::pin_thread_to_numa(numa_node_);
   UnifiedTask task;
-  TaskBatchBig taskv;
 
   while (!stop_.load(std::memory_order_acquire)) {
     if (jring_sc_dequeue_bulk(send_unified_task_ring_, &task, 1, nullptr) ==
@@ -1773,6 +1779,19 @@ void Endpoint::send_proxy_thread_func() {
         case TaskType::SEND_NET:
           send(task.conn_id, task.mr_id, task.data, task.size, false);
           break;
+        case TaskType::SENDV: {
+          TaskBatch const& batch = task.task_batch();
+          std::vector<void const*> const_data_v(
+              batch.const_data_v(), batch.const_data_v() + batch.num_iovs);
+          std::vector<size_t> size_v(batch.size_v(),
+                                     batch.size_v() + batch.num_iovs);
+          std::vector<uint64_t> mr_id_v(batch.mr_id_v(),
+                                        batch.mr_id_v() + batch.num_iovs);
+
+          sendv(task.conn_id, mr_id_v, const_data_v, size_v, batch.num_iovs,
+                false);
+          break;
+        }
         default:
           LOG(ERROR) << "Unexpected task type in send processing: "
                      << static_cast<int>(task.type);
@@ -1780,25 +1799,12 @@ void Endpoint::send_proxy_thread_func() {
       }
       task.self_ptr->done.store(true, std::memory_order_release);
     }
-    if (jring_sc_dequeue_bulk(sendv_task_ring_, &taskv, 1, nullptr) == 1) {
-      std::vector<void const*> const_data_v(
-          taskv.const_data_v(), taskv.const_data_v() + taskv.num_iovs);
-      std::vector<size_t> size_v(taskv.size_v(),
-                                 taskv.size_v() + taskv.num_iovs);
-      std::vector<uint64_t> mr_id_v(taskv.mr_id_v(),
-                                    taskv.mr_id_v() + taskv.num_iovs);
-
-      sendv(taskv.conn_id, mr_id_v, const_data_v, size_v, taskv.num_iovs,
-            false);
-      taskv.self_ptr->done.store(true, std::memory_order_release);
-    }
   }
 }
 
 void Endpoint::recv_proxy_thread_func() {
   uccl::pin_thread_to_numa(numa_node_);
   UnifiedTask task;
-  TaskBatchBig taskv;
 
   while (!stop_.load(std::memory_order_acquire)) {
     if (jring_sc_dequeue_bulk(recv_unified_task_ring_, &task, 1, nullptr) ==
@@ -1817,6 +1823,18 @@ void Endpoint::recv_proxy_thread_func() {
         case TaskType::RECV_NET:
           recv(task.conn_id, task.mr_id, task.data, task.size, false);
           break;
+        case TaskType::RECVV: {
+          TaskBatch const& batch = task.task_batch();
+          std::vector<void*> data_v(batch.data_v(),
+                                    batch.data_v() + batch.num_iovs);
+          std::vector<size_t> size_v(batch.size_v(),
+                                     batch.size_v() + batch.num_iovs);
+          std::vector<uint64_t> mr_id_v(batch.mr_id_v(),
+                                        batch.mr_id_v() + batch.num_iovs);
+
+          recvv(task.conn_id, mr_id_v, data_v, size_v, batch.num_iovs, false);
+          break;
+        }
         case TaskType::SEND_NET:
         case TaskType::SEND_IPC:
         case TaskType::WRITE_NET:
@@ -1827,17 +1845,6 @@ void Endpoint::recv_proxy_thread_func() {
           break;
       }
       task.self_ptr->done.store(true, std::memory_order_release);
-    }
-    if (jring_sc_dequeue_bulk(recvv_task_ring_, &taskv, 1, nullptr) == 1) {
-      std::vector<void*> data_v(taskv.data_v(),
-                                taskv.data_v() + taskv.num_iovs);
-      std::vector<size_t> size_v(taskv.size_v(),
-                                 taskv.size_v() + taskv.num_iovs);
-      std::vector<uint64_t> mr_id_v(taskv.mr_id_v(),
-                                    taskv.mr_id_v() + taskv.num_iovs);
-
-      recvv(taskv.conn_id, mr_id_v, data_v, size_v, taskv.num_iovs, false);
-      taskv.self_ptr->done.store(true, std::memory_order_release);
     }
   }
 }
