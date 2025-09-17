@@ -10,9 +10,9 @@ double Proxy::avg_rdma_write_us() const {
 }
 
 double Proxy::avg_wr_latency_us() const {
-  if (completion_count_ == 0) return 0.0;
+  if (completion_count_ <= kWarmupOps) return 0.0;
   return static_cast<double>(wr_time_total_us_) /
-         static_cast<double>(completion_count_);
+         static_cast<double>(completion_count_ - kWarmupOps);
 }
 
 uint64_t Proxy::completed_wr() const { return completion_count_; }
@@ -257,7 +257,9 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
     }
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::high_resolution_clock::now() - it->second);
-    wr_time_total_us_ += duration.count();
+    if (completion_count_ > kWarmupOps) {
+      wr_time_total_us_ += duration.count();
+    }
     completion_count_++;
 #endif
     actually_completed++;
