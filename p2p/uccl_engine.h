@@ -1,8 +1,5 @@
-// ... existing code ...
 #pragma once
 
-#include <unordered_map>
-#include <variant>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -45,7 +42,11 @@ typedef struct tx_msg {
 
 typedef struct md {
   uccl_msg_type op;
-  std::variant<tx_msg_t, fifo_msg_t, notify_msg_t> data;
+  union {
+    tx_msg_t tx_data;
+    fifo_msg_t fifo_data;
+    notify_msg_t notify_data;
+  } data;
 } md_t;
 
 typedef struct metadata {
@@ -170,12 +171,19 @@ void uccl_engine_mr_destroy(uccl_mr_t* mr);
 int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata_str);
 
 /**
- * Send the transfer metadata
+ * Send the transfer metadata.
  * @param conn          Connection handle.
  * @param md            Transfer metadata.
+ * @return              Number of bytes sent, or -1 on failure.
+ */
+int uccl_engine_send_tx_md(uccl_conn_t* conn, md_t* md);
+
+/**
+ * Get socket file descriptor for a connection.
+ * @param conn          Connection handle.
  * @return              Socket file descriptor, or -1 on failure.
  */
- int uccl_engine_send_tx_md(uccl_conn_t* conn, md_t* md) {
+int uccl_engine_get_sock_fd(uccl_conn_t* conn);
 
 /**
  * Free endpoint metadata buffer.
