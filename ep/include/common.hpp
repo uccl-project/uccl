@@ -22,12 +22,12 @@
 #define kIterations 40000
 #define kNumThBlocks 6
 #define kNumThPerBlock 1
-#define kObjectSize 10752  // 10.5 KB
+#define kObjectSize 7168  // 7 KB
 #define kMaxOutstandingSends 2048
 #define kMaxOutstandingRecvs 2048
 #define kSenderAckQueueDepth 2048
 #define kWarmupOps 10000
-#define kRemoteBufferSize kBatchSize* kNumThBlocks* kObjectSize * 100
+#define kRemoteBufferSize (kBatchSize * kNumThBlocks * kObjectSize * 100)
 #define MAIN_THREAD_CPU_IDX 31
 #define MAX_NUM_GPUS 8
 #define RECEIVER_BATCH_SIZE 16
