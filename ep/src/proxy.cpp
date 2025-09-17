@@ -176,6 +176,7 @@ void Proxy::init_remote() {
   init_common();
   assert(cfg_.rank == 1);
   auto& ctx_ptr = ctxs_for_all_ranks_[0];
+  local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
   remote_reg_ack_buf(ctx_ptr->pd, ring.ack_buf, ring.ack_mr);
   ring.ack_qp = ctx_ptr->ack_qp;
   post_receive_buffer_for_imm(*ctx_ptr);
@@ -197,7 +198,6 @@ void Proxy::run_sender() {
 void Proxy::run_remote() {
   printf("Remote CPU thread for block %d started\n", cfg_.block_idx + 1);
   init_remote();
-  printf("Finished\n");
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     remote_poll_completions(ctx_, cfg_.block_idx, ring, ctx_by_tag_,
                             atomic_buffer_ptr_);

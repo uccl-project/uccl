@@ -74,14 +74,22 @@ __global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs) {
     for (int i = 0; i < todo; ++i) {
       unsigned long long t0 = clock64();
       start_cycle_smem[(my_hdr + i) & kQueueMask] = t0;
-      rb->set_buffer(
-          my_hdr + i,
-          TransferCmd{.cmd = (static_cast<uint64_t>(bid) << 32) | (it + i + 1),
-                      .dst_rank = 1,
-                      .dst_gpu = 0,
-                      .src_ptr = reinterpret_cast<void*>(
-                          static_cast<uintptr_t>(it + i + 1)),
-                      .bytes = kObjectSize});
+      int message_idx = it + i + 1;
+      rb->set_buffer(my_hdr + i,
+                     TransferCmd{.cmd = (static_cast<uint64_t>(bid + 1) << 32) |
+                                        (message_idx & 0xFFFFFFFF),
+                                 .dst_rank = 1,
+                                 .dst_gpu = 0,
+                                 .src_ptr = 0,
+                                 .bytes = kObjectSize,
+                                 .req_rptr = 0,
+                                 .req_lptr = 0,
+                                 .warp_id = 0,
+                                 .lane_id = 0,
+                                 .message_idx = message_idx,
+                                 .is_atomic = false,
+                                 .value = 0,
+                                 .is_combine = false});
     }
     rb->commit_with_head(my_hdr + todo);
 
