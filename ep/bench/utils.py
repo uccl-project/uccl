@@ -134,7 +134,9 @@ def get_cpu_proxies_meta(rank, scratch_ptr, scratch_bytes, num_ranks, group):
         "ip": _discover_local_ip(),
     }
     all_meta = [None] * num_ranks
+    print("gathering cpu proxies meta", flush=True)
     dist.all_gather_object(all_meta, meta, group=group)
+    print("After all_gather_object", flush=True)
     dist.barrier(group)
     rank2meta = {m["rank"]: m for m in all_meta}
     return rank2meta

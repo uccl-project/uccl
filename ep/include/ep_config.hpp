@@ -152,10 +152,14 @@ struct LowLatencyBuffer {
   size_t num_bytes_per_combine_msg = 0;
 
   // TODO(MaoZiming)
-  std::pair<int*, int> clean_meta() {
+  std::tuple<int*, int*, int> clean_meta() {
     EP_HOST_ASSERT(dispatch_rdma_recv_count_buffer ==
                    combine_rdma_recv_flag_buffer);
-    return {dispatch_rdma_recv_count_buffer, num_clean_int};
+    EP_HOST_ASSERT(dispatch_rdma_recv_count_buffer_internode ==
+                   combine_rdma_recv_flag_buffer_internode);
+    return std::make_tuple(dispatch_rdma_recv_count_buffer,
+                           dispatch_rdma_recv_count_buffer_internode,
+                           num_clean_int);
   }
 };
 

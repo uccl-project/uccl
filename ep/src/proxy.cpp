@@ -221,6 +221,7 @@ void Proxy::run_dual() {
     if (peers_[peer].ip == peers_[cfg_.rank].ip) continue;
     auto& ctx_ptr = ctxs_for_all_ranks_[peer];
     if (!ctx_ptr) continue;
+    printf("Dual proxy using peer %d\n", peer);
     local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
     remote_reg_ack_buf(ctx_ptr->pd, ring.ack_buf, ring.ack_mr);
     ring.ack_qp = ctx_ptr->ack_qp;

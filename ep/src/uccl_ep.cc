@@ -1336,6 +1336,8 @@ class Buffer {
                                          hidden, num_ranks, num_experts);
     auto clean_meta_0 = layout.buffers[0].clean_meta();
     auto clean_meta_1 = layout.buffers[1].clean_meta();
+    auto [ptr0, ptr_internode0, count0] = clean_meta_0;
+    auto [ptr1, ptr_internode1, count1] = clean_meta_1;
 
     auto check_boundary = [=](void* ptr, size_t num_bytes) {
       auto offset = reinterpret_cast<int64_t>(ptr) -
@@ -1343,12 +1345,11 @@ class Buffer {
       EP_HOST_ASSERT(0 <= offset &&
                      offset + num_bytes <= static_cast<size_t>(num_rdma_bytes));
     };
-    check_boundary(clean_meta_0.first, clean_meta_0.second * sizeof(int));
-    check_boundary(clean_meta_1.first, clean_meta_1.second * sizeof(int));
+    check_boundary(ptr0, count0 * sizeof(int));
+    check_boundary(ptr1, count1 * sizeof(int));
 
     uccl::internode_ll::clean_low_latency_buffer(
-        clean_meta_0.first, clean_meta_0.second, clean_meta_1.first,
-        clean_meta_1.second, at::cuda::getCurrentCUDAStream());
+        ptr0, count0, ptr1, count1, at::cuda::getCurrentCUDAStream());
   }
 
   std::tuple<torch::Tensor, std::optional<torch::Tensor>, torch::Tensor,
@@ -1457,7 +1458,7 @@ class Buffer {
     }
 
     // Kernel launch
-    auto next_clean_meta = next_buffer.clean_meta();
+    auto [ptr0, ptr_internode0, count0] = next_buffer.clean_meta();
     auto launcher = [=](int phases) {
       uccl::internode_ll::dispatch(
           packed_recv_x.data_ptr(), packed_recv_x_scales_ptr,
@@ -1473,12 +1474,12 @@ class Buffer {
           buffer.dispatch_rdma_recv_data_buffer,
           buffer.dispatch_rdma_recv_count_buffer,
           buffer.dispatch_rdma_send_buffer, x.data_ptr(),
-          topk_idx.data_ptr<int64_t>(), next_clean_meta.first,
-          next_clean_meta.second, num_tokens, hidden,
-          num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
-          num_ranks, use_fp8, round_scale, use_ue8m0, workspace, num_device_sms,
-          launch_stream, phases, d_ring_addrs, num_ring_addrs, max_nvl_peers,
-          d_ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr,
+          topk_idx.data_ptr<int64_t>(), ptr0, ptr_internode0, count0,
+          num_tokens, hidden, num_max_dispatch_tokens_per_rank, num_topk,
+          num_experts, rank, num_ranks, use_fp8, round_scale, use_ue8m0,
+          workspace, num_device_sms, launch_stream, phases, d_ring_addrs,
+          num_ring_addrs, max_nvl_peers, d_ipc_rdma_base_ptrs, rdma_buffer_ptr,
+          atomic_buffer_ptr,
           buffer.dispatch_rdma_recv_count_buffer_internode);  // Added IPC base
                                                               // pointers
     };
@@ -1587,7 +1588,7 @@ class Buffer {
     }
 
     // Kernel launch
-    auto next_clean_meta = next_buffer.clean_meta();
+    auto [ptr0, ptr_internode0, count0] = next_buffer.clean_meta();
     auto launcher = [=](int phases) {
       uccl::internode_ll::combine(
           combined_x.data_ptr(), buffer.combine_rdma_recv_data_buffer,
@@ -1598,8 +1599,8 @@ class Buffer {
           combine_wait_recv_cost_stats.has_value()
               ? combine_wait_recv_cost_stats->data_ptr<int64_t>()
               : nullptr,
-          next_clean_meta.first, next_clean_meta.second, num_combined_tokens,
-          hidden, num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
+          ptr0, ptr_internode0, count0, num_combined_tokens, hidden,
+          num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
           num_ranks, use_logfmt, workspace, num_device_sms, launch_stream,
           phases, zero_copy, d_ring_addrs, num_ring_addrs, max_nvl_peers,
           d_ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr,
