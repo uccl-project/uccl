@@ -291,6 +291,13 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
     wr_id_to_start_time_[i] = std::chrono::high_resolution_clock::now();
     seen = i + 1;
   }
+
+  // Yang: this was 20-ish on GH200.
+  if (wrs_to_post.size()) {
+    printf("Thread %d post_gpu_command: wrs_to_post.size()=%zu\n",
+           cfg_.block_idx, wrs_to_post.size());
+  }
+
   if (!wrs_to_post.empty()) {
     auto start = std::chrono::high_resolution_clock::now();
     post_gpu_commands_mixed(wrs_to_post, cmds_to_post);

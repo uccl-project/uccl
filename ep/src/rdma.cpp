@@ -824,6 +824,9 @@ void local_process_completions(ProxyCtx& S,
         //   printf("[EFA_SEND_DONE] wrid=%lu tag=0x%llx qp=0x%x\n", wrid,
         //          (wrid & kAtomicMask), wc[i].qp_num);
         // }
+        // Yang: directly done to avoid the extra ACK RTT for internode-ll.
+        const uint64_t wr_done = wc[i].wr_id;
+        acked_wrs.insert(wr_done);
       } break;
       case IBV_WC_RECV:
         if (wc[i].wc_flags & IBV_WC_WITH_IMM &&
@@ -838,19 +841,21 @@ void local_process_completions(ProxyCtx& S,
                       wr_done, slot);
               std::abort();
             }
-            auto& vec = S.wr_id_to_wr_ids[wr_done];
-            if (!vec.empty()) {
-              for (auto const& wr_id : vec) {
-                acked_wrs.insert(wr_id);
-                if (finished_wrs.find(wr_id) == finished_wrs.end()) {
-                  fprintf(stderr,
-                          "Error: finished_wrs received ACK for unknown wr_id "
-                          "%lu\n",
-                          wr_id);
-                  std::abort();
-                }
-              }
-            }
+            // wr_id in vec could already be erased in notify_gpu_completion().
+            // auto& vec = S.wr_id_to_wr_ids[wr_done];
+            // if (!vec.empty()) {
+            //   for (auto const& wr_id : vec) {
+            //     acked_wrs.insert(wr_id);
+            //     if (finished_wrs.find(wr_id) == finished_wrs.end()) {
+            //       fprintf(stderr,
+            //               "Error: finished_wrs received ACK for unknown wr_id
+            //               "
+            //               "%lu\n",
+            //               wr_id);
+            //       std::abort();
+            //     }
+            //   }
+            // }
             S.wr_id_to_wr_ids.erase(wr_done);
           }
           const uint32_t tag = wr_tag(wc[i].wr_id);
