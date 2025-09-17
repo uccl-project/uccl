@@ -15,15 +15,11 @@ struct BenchEnv {
   gpuDeviceProp prop{};
 };
 
-inline void init_env(BenchEnv& env, int blocks = kNumThBlocks, int device = 0,
-                     bool quiet = false) {
+inline void init_env(BenchEnv& env, int blocks = kNumThBlocks,
+                     int device = -1) {
   env.blocks = blocks;
-  GPU_RT_CHECK(gpuSetDevice(device));
+  if (device == -1) gpuGetDevice(&device);
   GPU_RT_CHECK(gpuGetDeviceProperties(&env.prop, device));
-  if (!quiet) {
-    std::printf("clock rate: %d kHz\n", env.prop.clockRate);
-  }
-
   GPU_RT_CHECK(gpuStreamCreate(&env.stream));
 
 #ifdef USE_GRACE_HOPPER

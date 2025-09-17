@@ -13,8 +13,6 @@ from utils import init_dist, detect_ib_hca, initialize_uccl, destroy_uccl
 
 def test_single(rank, num_ranks, group, args):
     device_index = int(os.environ.get("LOCAL_RANK", 0))
-    torch.cuda.set_device(device_index)
-
     num_tokens, hidden, num_topk = args.num_tokens, args.hidden, args.num_topk
     num_experts = args.num_experts or 4 * num_ranks
 

@@ -342,13 +342,15 @@ LOW_LATENCY_DISPATCH_RECV:
     EP_DEVICE_ASSERT(num_warps_per_group > 1 and num_warp_groups < 15);
     if (sub_warp_id == 1 and lane_id == 0) {
       auto start_time = clock64();
+      printf("Before waiting for internode tokens to arrive\n");
       while ((src_rank / max_nvl_peers == rank / max_nvl_peers) &&
-             (num_recv_tokens_internode = ld_acquire_sys_global(
+             (num_recv_tokens_ipc = ld_acquire_sys_global(
                   rdma_recv_count + local_expert_idx * num_ranks + src_rank)) ==
                  0)
         ;
+      printf("Before waiting for intranode tokens to arrive\n");
       while ((src_rank / max_nvl_peers != rank / max_nvl_peers) &&
-             (num_recv_tokens_ipc = ld_acquire_sys_global(
+             (num_recv_tokens_internode = ld_acquire_sys_global(
                   rdma_recv_count_internode + local_expert_idx * num_ranks +
                   src_rank)) == 0)
         ;
@@ -356,6 +358,8 @@ LOW_LATENCY_DISPATCH_RECV:
       num_recv_tokens_internode = -num_recv_tokens_internode - 1;
       num_recv_tokens_ipc = -num_recv_tokens_ipc - 1;
       num_recv_tokens = num_recv_tokens_internode + num_recv_tokens_ipc;
+      printf("num_recv_tokens: %d, inter: %d, intra: %d\n", num_recv_tokens,
+             num_recv_tokens_internode, num_recv_tokens_ipc);
       recv_token_begin_idx =
           atomicAdd(packed_recv_count + local_expert_idx, num_recv_tokens);
       shared_num_recv_tokens[warp_group_id] = num_recv_tokens;
