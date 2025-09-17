@@ -140,7 +140,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     exit(1);
   }
   int gpu_idx = local_rank;
-  cudaSetDevice(gpu_idx); // Needed. 
+  cudaSetDevice(gpu_idx);  // Needed.
 
   // Ranked by GPU idx
   auto gpu_cards = uccl::get_gpu_cards();

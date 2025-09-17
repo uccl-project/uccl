@@ -1403,8 +1403,6 @@ class Buffer {
     uccl::LowLatencyLayout layout(rdma_buffer_ptr,
                                   num_max_dispatch_tokens_per_rank, hidden,
                                   num_ranks, num_experts, atomic_buffer_ptr);
-    printf("Total bytes: %zu, RDMA bytes: %zu\n", layout.total_bytes,
-           static_cast<std::size_t>(num_rdma_bytes));
     EP_HOST_ASSERT(layout.total_bytes <=
                    static_cast<std::size_t>(num_rdma_bytes));
     auto buffer = layout.buffers[low_latency_buffer_idx];
