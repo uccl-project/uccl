@@ -27,6 +27,7 @@ BUILD_TYPE ?= release
 # Target executables
 FC_TARGET := test_fc_throughput
 LOCK_TARGET := test_lock_throughput
+MULTI_RING_TARGET := test_multi_ring_throughput
 FC_LATENCY_TARGET := test_fc_latency
 FC_LOAD_LATENCY_TARGET := test_fc_load_latency
 
@@ -45,6 +46,7 @@ ifeq ($(BUILD_TYPE), debug)
     NVCC_FLAGS += -DDEBUG
     FC_TARGET := $(FC_TARGET)_debug
     LOCK_TARGET := $(LOCK_TARGET)_debug
+    MULTI_RING_TARGET := $(MULTI_RING_TARGET)_debug
     FC_LATENCY_TARGET := $(FC_LATENCY_TARGET)_debug
     FC_LOAD_LATENCY_TARGET := $(FC_LOAD_LATENCY_TARGET)_debug
     $(info Building DEBUG version)
@@ -70,7 +72,7 @@ HEADERS := $(wildcard ../include/*.h ../include/*.cuh ../include/*.hpp)
 .DEFAULT_GOAL := all
 
 # Build all targets (only working tests for now)
-all: $(FC_TARGET) $(LOCK_TARGET)
+all: $(FC_TARGET) $(LOCK_TARGET) $(MULTI_RING_TARGET)
 	@echo "All targets built successfully"
 
 # Flat Combining throughput test
@@ -86,6 +88,14 @@ lock: $(LOCK_TARGET)
 
 $(LOCK_TARGET): test_lock_throughput.cu $(HEADERS)
 	@echo "Building Lock throughput test..."
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -o $@ $< $(LIBS)
+	@echo "Build complete: $@"
+
+# Multi Ring throughput test
+multi-ring: $(MULTI_RING_TARGET)
+
+$(MULTI_RING_TARGET): test_multi_ring_throughput.cu $(HEADERS)
+	@echo "Building Multi Ring throughput test..."
 	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -o $@ $< $(LIBS)
 	@echo "Build complete: $@"
 
@@ -120,6 +130,12 @@ run-lock: $(LOCK_TARGET)
 	@echo "Running Lock throughput test..."
 	@echo "================================="
 	./$(LOCK_TARGET)
+
+# Run multi ring throughput test
+run-multi-ring: $(MULTI_RING_TARGET)
+	@echo "Running Multi Ring throughput test..."
+	@echo "================================="
+	./$(MULTI_RING_TARGET)
 
 # Run flat combining latency test
 run-fc-latency: $(FC_LATENCY_TARGET)
@@ -223,9 +239,10 @@ check-deps:
 # Clean build artifacts
 clean:
 	@echo "Cleaning build artifacts..."
-	rm -f $(FC_TARGET) $(LOCK_TARGET) $(FC_LATENCY_TARGET) $(FC_LOAD_LATENCY_TARGET)
+	rm -f $(FC_TARGET) $(LOCK_TARGET) $(MULTI_RING_TARGET) $(FC_LATENCY_TARGET) $(FC_LOAD_LATENCY_TARGET)
 	rm -f test_fc_throughput test_fc_throughput_debug
 	rm -f test_lock_throughput test_lock_throughput_debug
+	rm -f test_multi_ring_throughput test_multi_ring_throughput_debug
 	rm -f test_fc_latency test_fc_latency_debug
 	rm -f test_fc_load_latency test_fc_load_latency_debug
 	rm -f test_lock test_lock_debug
