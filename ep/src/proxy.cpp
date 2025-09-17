@@ -89,9 +89,9 @@ void Proxy::init_common() {
   ctx_by_tag_.resize(ctxs_for_all_ranks_.size() + 1, nullptr);
   // Per peer QP initialization
   for (int peer = 0; peer < num_ranks; ++peer) {
-    if (peer == my_rank) continue;
-    // Skip rdma connection for intra-node.
-    if (peers_[peer].ip == peers_[my_rank].ip) continue;
+    // if (peer == my_rank) continue;
+    // // Skip rdma connection for intra-node.
+    // if (peers_[peer].ip == peers_[my_rank].ip) continue;
     auto& c = *ctxs_for_all_ranks_[peer];
 
     c.tag = next_tag++;

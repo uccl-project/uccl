@@ -46,7 +46,6 @@ def test_single(rank, num_ranks, group, args):
         allow_nvlink_for_low_latency_mode=(num_ranks > 1),
         allow_mnnvl=False,
         explicitly_destroy=True,
-        sync=False,
     )
 
     buffer.connect_atomic_buffer(proxies[0])
@@ -55,7 +54,6 @@ def test_single(rank, num_ranks, group, args):
             num_tokens, hidden, num_experts
         )
         proxy.set_atomic_buffer_ptr(proxies[0].get_atomic_buffer_ptr())
-    buffer.sync()
 
     # One dispatch + combine
     recv_x, recv_count, handle, _, dispatch_hook = buffer.low_latency_dispatch(

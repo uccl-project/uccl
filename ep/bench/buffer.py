@@ -46,7 +46,6 @@ class Buffer:
         allow_nvlink_for_low_latency_mode: bool = True,
         allow_mnnvl: bool = False,
         explicitly_destroy: bool = False,
-        sync: bool = True,
     ) -> None:
         """
         Initialize the communication buffer.
@@ -84,24 +83,22 @@ class Buffer:
             num_rdma_bytes,
             low_latency_mode,
             explicitly_destroy,
+            int(os.environ.get("LOCAL_WORLD_SIZE", -1)),
         )
         self.runtime.set_rdma_buffer_raw(rdma_buffer_ptr)
-        if sync:
-            self.sync()
 
-    def sync(self):
         # Synchronize device IDs
         device_ids = [
             None,
         ] * self.group_size
         local_device_id = self.runtime.get_local_device_id()
-        dist.all_gather_object(device_ids, local_device_id, self.group)
+        dist.all_gather_object(device_ids, local_device_id, group)
         # Synchronize IPC handles
         ipc_handles = [
             None,
         ] * self.group_size
         local_ipc_handle = self.runtime.get_local_ipc_handle()
-        dist.all_gather_object(ipc_handles, local_ipc_handle, self.group)
+        dist.all_gather_object(ipc_handles, local_ipc_handle, group)
 
         rdma_ipc_handles = [None] * self.group_size
         local_rdma_ipc_handle = (
@@ -109,48 +106,8 @@ class Buffer:
             if self.num_rdma_bytes > 0
             else None
         )
-        dist.all_gather_object(rdma_ipc_handles, local_rdma_ipc_handle, self.group)
-
-        # Synchronize NVSHMEM unique IDs
+        dist.all_gather_object(rdma_ipc_handles, local_rdma_ipc_handle, group)
         root_unique_id = None
-        # TODO(MaoZiming): Remove the NVSHMEM dependencies here. We do not need to set the NVSHMEM environment variables. There is also no need to sync a root unique id to join the nvshmem job. Eventually, if this is needed, it should be negotiated by the CPU proxy.
-        """
-        if self.runtime.get_num_rdma_ranks() > 1 or low_latency_mode:
-            # Enable IBGDA
-            assert num_qps_per_rank > 0
-            os.environ["NVSHMEM_DISABLE_P2P"] = (
-                "0" if allow_nvlink_for_low_latency_mode else "1"
-            )
-            os.environ["NVSHMEM_IB_ENABLE_IBGDA"] = "1"
-            os.environ["NVSHMEM_IBGDA_NUM_RC_PER_PE"] = f"{num_qps_per_rank}"
-            # Make sure QP depth is always larger than the number of on-flight WRs, so that we can skip WQ slot check
-            os.environ["NVSHMEM_QP_DEPTH"] = os.environ.get("NVSHMEM_QP_DEPTH", "1024")
-
-            # Reduce gpu memory usage
-            # 6 default teams + 1 extra team
-            os.environ["NVSHMEM_MAX_TEAMS"] = "7"
-            # Disable NVLink SHArP
-            os.environ["NVSHMEM_DISABLE_NVLS"] = "1"
-            # NOTES: NVSHMEM initialization requires at least 256 MiB
-            os.environ["NVSHMEM_CUMEM_GRANULARITY"] = f"{2 ** 29}"
-
-            if not allow_mnnvl:
-                # Disable multi-node NVLink detection
-                os.environ["NVSHMEM_DISABLE_MNNVL"] = "1"
-
-            # Synchronize using the root ID
-            uccl_shmem_unique_ids = [
-                None,
-            ] * self.group_size
-            if (low_latency_mode and self.rank == 0) or (
-                not low_latency_mode and self.runtime.get_rdma_rank() == 0
-            ):
-                root_unique_id = self.runtime.get_local_uccl_shmem_unique_id()
-            dist.all_gather_object(uccl_shmem_unique_ids, root_unique_id, group)
-            root_unique_id = uccl_shmem_unique_ids[
-                0 if low_latency_mode else self.runtime.get_root_rdma_rank(True)
-            ]
-        """
         # Make CPP runtime available
         self.runtime.sync(
             device_ids,

@@ -77,7 +77,7 @@ bool is_sm90_compiled() {
 class Buffer {
  public:
   Buffer(int rank, int num_ranks, long num_nvl_bytes, long num_rdma_bytes,
-         bool low_latency_mode, bool explicitly_destroy)
+         bool low_latency_mode, bool explicitly_destroy, int num_local_ranks)
       : rank(rank),
         num_ranks(num_ranks),
         num_nvl_bytes(num_nvl_bytes),
@@ -85,7 +85,8 @@ class Buffer {
         low_latency_mode(low_latency_mode),
         explicitly_destroy(explicitly_destroy),
         comm_stream(at::cuda::getStreamFromPool(/*isHighPriority=*/true)) {
-    int max_nvl_peers = get_num_max_nvl_peers();
+    if (num_local_ranks == -1) num_local_ranks = get_num_max_nvl_peers();
+    max_nvl_peers = num_local_ranks;
     {
       // printf(
       //     "Buffer initializing for rank %d, num_ranks %d, num_nvl_bytes %ld,
@@ -1476,9 +1477,8 @@ class Buffer {
           next_clean_meta.second, num_tokens, hidden,
           num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
           num_ranks, use_fp8, round_scale, use_ue8m0, workspace, num_device_sms,
-          launch_stream, phases, d_ring_addrs, num_ring_addrs,
-          get_num_max_nvl_peers(), d_ipc_rdma_base_ptrs, rdma_buffer_ptr,
-          atomic_buffer_ptr,
+          launch_stream, phases, d_ring_addrs, num_ring_addrs, max_nvl_peers,
+          d_ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr,
           buffer.dispatch_rdma_recv_count_buffer_internode);  // Added IPC base
                                                               // pointers
     };
@@ -1601,9 +1601,8 @@ class Buffer {
           next_clean_meta.first, next_clean_meta.second, num_combined_tokens,
           hidden, num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
           num_ranks, use_logfmt, workspace, num_device_sms, launch_stream,
-          phases, zero_copy, d_ring_addrs, num_ring_addrs,
-          get_num_max_nvl_peers(), d_ipc_rdma_base_ptrs, rdma_buffer_ptr,
-          atomic_buffer_ptr,
+          phases, zero_copy, d_ring_addrs, num_ring_addrs, max_nvl_peers,
+          d_ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr,
           buffer.combine_rdma_recv_flag_buffer_internode);  // Added IPC base
                                                             // pointers
     };
@@ -1709,7 +1708,6 @@ class Buffer {
       std::optional<std::vector<std::optional<pybind11::bytearray>>> const&
           all_gathered_rdma_handles_opt = std::nullopt) {
     EP_HOST_ASSERT(not is_available());
-    int max_nvl_peers = get_num_max_nvl_peers();
     // Sync IPC handles
     if (num_nvl_bytes > 0) {
       EP_HOST_ASSERT(static_cast<std::size_t>(num_ranks) == device_ids.size());
@@ -1861,6 +1859,7 @@ class Buffer {
   int rdma_rank{0}, nvl_rank{0};
   int num_rdma_ranks{1}, num_nvl_ranks{1};
   int num_device_sms{0};
+  int max_nvl_peers{0};
 
   // stream & workspace
   at::cuda::CUDAStream comm_stream;
@@ -1975,10 +1974,11 @@ PYBIND11_MODULE(ep, m) {
 
   py::class_<EventOverlap>(m, "EventOverlap").def(py::init<>());
   py::class_<Buffer>(m, "Buffer")
-      .def(py::init<int, int, long, long, bool, bool>(), py::arg("rank"),
+      .def(py::init<int, int, long, long, bool, bool, int>(), py::arg("rank"),
            py::arg("num_ranks"), py::arg("num_nvl_bytes") = 0,
            py::arg("num_rdma_bytes") = 0, py::arg("low_latency_mode") = false,
-           py::arg("explicitly_destroy") = false)
+           py::arg("explicitly_destroy") = false,
+           py::arg("num_local_ranks") = -1)
       .def("destroy", &Buffer::destroy)
       .def(
           "set_rdma_buffer_raw",
