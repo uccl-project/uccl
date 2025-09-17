@@ -248,6 +248,7 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
     cfg_.rb->volatile_store_cmd(my_tail + check_i, 0);
     check_i++;
 
+#ifdef MEASURE_PER_VERB_LATENCY
     auto it = wr_id_to_start_time_.find(wr_id);
     if (it == wr_id_to_start_time_.end()) {
       fprintf(stderr, "Error: WR ID %lu not found in wr_id_to_start_time\n",
@@ -258,6 +259,7 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
         std::chrono::high_resolution_clock::now() - it->second);
     wr_time_total_us_ += duration.count();
     completion_count_++;
+#endif
     actually_completed++;
   }
   if (!actually_completed) return;
@@ -288,15 +290,17 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
     TransferCmd& cmd_entry = cfg_.rb->load_cmd_entry(i);
     wrs_to_post.push_back(i);
     cmds_to_post.push_back(cmd_entry);
+#ifdef MEASURE_PER_VERB_LATENCY
     wr_id_to_start_time_[i] = std::chrono::high_resolution_clock::now();
+#endif
     seen = i + 1;
   }
 
   // Yang: this was 20-ish on GH200.
-  if (wrs_to_post.size()) {
-    printf("Thread %d post_gpu_command: wrs_to_post.size()=%zu\n",
-           cfg_.block_idx, wrs_to_post.size());
-  }
+  // if (wrs_to_post.size()) {
+  //   printf("Thread %d post_gpu_command: wrs_to_post.size()=%zu\n",
+  //          cfg_.block_idx, wrs_to_post.size());
+  // }
 
   if (!wrs_to_post.empty()) {
     auto start = std::chrono::high_resolution_clock::now();

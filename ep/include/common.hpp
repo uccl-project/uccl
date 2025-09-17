@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #define MEASURE_PER_OP_LATENCY
+#define MEASURE_PER_VERB_LATENCY
 #define kAtomicBufferSize 8196
 #define kQueueSize 1024
 #define kQueueMask (kQueueSize - 1)
