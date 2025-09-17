@@ -2,12 +2,15 @@
 #pragma once
 
 #include <unordered_map>
+#include <variant>
 #include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif  // __cplusplus
+
+#define FIFO_MSG_SIZE 64
 
 // Handle for the UCCL engine instance
 typedef struct uccl_engine uccl_engine_t;
@@ -19,13 +22,37 @@ typedef struct uccl_conn uccl_conn_t;
 typedef struct uccl_mr uccl_mr_t;
 
 // UCCL operation types
-enum uccl_op_type { UCCL_READ = 0, UCCL_WRITE = 1, UCCL_FIFO = 2 };
+enum uccl_msg_type {
+  UCCL_READ = 0,
+  UCCL_WRITE = 1,
+  UCCL_FIFO = 2,
+  UCCL_NOTIFY = 3
+};
 
-typedef struct metadata {
-  uccl_op_type op;  // READ/WRITE/FIFO
-  char fifo_buf[64];
+typedef struct notify_msg {
+  char* name;
+  char* msg;
+} notify_msg_t;
+
+typedef struct fifo_msg {
+  char fifo_buf[FIFO_MSG_SIZE];
+} fifo_msg_t;
+
+typedef struct tx_msg {
   uint64_t data_ptr;  // Memory address for data reception
   size_t data_size;   // Size of data to receive
+} tx_msg_t;
+
+typedef struct md {
+  uccl_msg_type op;
+  std::variant<tx_msg_t, fifo_msg_t, notify_msg_t> data;
+} md_t;
+
+typedef struct metadata {
+  uccl_msg_type op;
+  char fifo_buf[64];
+  uint64_t data_ptr;
+  size_t data_size;
 } metadata_t;
 
 /**
@@ -143,11 +170,12 @@ void uccl_engine_mr_destroy(uccl_mr_t* mr);
 int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata_str);
 
 /**
- * Get socket file descriptor for a connection.
+ * Send the transfer metadata
  * @param conn          Connection handle.
+ * @param md            Transfer metadata.
  * @return              Socket file descriptor, or -1 on failure.
  */
-int uccl_engine_get_sock_fd(uccl_conn_t* conn);
+ int uccl_engine_send_tx_md(uccl_conn_t* conn, md_t* md) {
 
 /**
  * Free endpoint metadata buffer.

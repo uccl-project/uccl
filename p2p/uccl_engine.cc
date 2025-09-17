@@ -47,6 +47,8 @@ std::mutex fifo_item_map_mutex;
 // listener thread which receives control meta for recv/advertise
 void listener_thread_func(uccl_conn_t* conn);
 
+void listener_thread_func_v2(uccl_conn_t* conn);
+
 void async_recv_worker(uccl_conn_t* conn, uint64_t mr_id, void* data,
                        size_t data_size) {
   size_t recv_size = 0;
@@ -178,7 +180,7 @@ int uccl_engine_start_listener(uccl_conn_t* conn) {
 
   conn->listener_running = true;
 
-  conn->listener_thread = new std::thread(listener_thread_func, conn);
+  conn->listener_thread = new std::thread(listener_thread_func_v2, conn);
 
   return 0;
 }
@@ -239,6 +241,103 @@ void uccl_engine_mr_destroy(uccl_mr_t* mr) {
     }
   }
   delete mr;
+}
+
+// Helper function for the listener thread
+void listener_thread_func_v2(uccl_conn_t* conn) {
+  std::cout << "Listener thread: Waiting for metadata." << std::endl;
+
+  while (conn->listener_running) {
+    struct timeval timeout;
+    timeout.tv_sec = 1;
+    timeout.tv_usec = 0;
+    setsockopt(conn->sock_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout,
+               sizeof(timeout));
+
+    md_t md;
+    ssize_t recv_size = recv(conn->sock_fd, &md, sizeof(md_t), 0);
+    if (recv_size != sizeof(md_t)) {
+      if (!conn->listener_running) {
+        break;
+      }
+      continue;
+    }
+
+    uint64_t mr_id = 0;
+    switch (md.op) {
+      case UCCL_READ: {
+        if (std::holds_alternative<tx_msg_t>(md.data)) {
+          tx_msg_t tx_data = std::get<tx_msg_t>(md.data);
+          auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
+          if (local_mem_iter == mem_reg_info.end()) {
+            std::cerr << "Local memory not registered for address: "
+                      << tx_data.data_ptr << std::endl;
+            continue;
+          }
+          mr_id = local_mem_iter->second;
+
+          char out_buf[sizeof(uccl::FifoItem)];
+          conn->engine->endpoint->advertise(conn->conn_id, mr_id,
+                                            (void*)tx_data.data_ptr,
+                                            tx_data.data_size, out_buf);
+
+          md_t response_md;
+          response_md.op = UCCL_FIFO;
+          fifo_msg_t fifo_data;
+          memcpy(fifo_data.fifo_buf, out_buf, sizeof(uccl::FifoItem));
+          response_md.data = fifo_data;
+
+          ssize_t result = send(conn->sock_fd, &response_md, sizeof(md_t), 0);
+          if (result < 0) {
+            std::cerr << "Failed to send FifoItem data: " << strerror(errno)
+                      << std::endl;
+          }
+        }
+        break;
+      }
+      case UCCL_WRITE: {
+        if (std::holds_alternative<tx_msg_t>(md.data)) {
+          tx_msg_t tx_data = std::get<tx_msg_t>(md.data);
+          auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
+          if (local_mem_iter == mem_reg_info.end()) {
+            std::cerr << "Local memory not registered for address: "
+                      << tx_data.data_ptr << std::endl;
+            continue;
+          }
+          mr_id = local_mem_iter->second;
+
+          uccl_mr_t temp_mr;
+          temp_mr.mr_id = mr_id;
+          temp_mr.engine = conn->engine;
+          int result = uccl_engine_recv(conn, &temp_mr, (void*)tx_data.data_ptr,
+                                        tx_data.data_size);
+          if (result < 0) {
+            std::cerr << "Failed to perform uccl_engine_recv" << std::endl;
+          }
+        }
+        break;
+      }
+      case UCCL_FIFO: {
+        if (std::holds_alternative<fifo_msg_t>(md.data)) {
+          fifo_msg_t fifo_data = std::get<fifo_msg_t>(md.data);
+          uccl::FifoItem fifo_item;
+          memcpy(&fifo_item, fifo_data.fifo_buf, sizeof(uccl::FifoItem));
+          fifo_item_t* f_item = new fifo_item_t;
+          f_item->fifo_item = fifo_item;
+          f_item->is_valid = true;
+
+          {
+            std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
+            fifo_item_map[conn] = f_item;
+          }
+        }
+        break;
+      }
+      default:
+        std::cerr << "Invalid operation type: " << md.op << std::endl;
+        continue;
+    }
+  }
 }
 
 // Helper function for the listener thread
@@ -328,9 +427,10 @@ void listener_thread_func(uccl_conn_t* conn) {
   delete[] buffer;
 }
 
-int uccl_engine_get_sock_fd(uccl_conn_t* conn) {
-  if (!conn) return -1;
-  return conn->sock_fd;
+int uccl_engine_send_tx_md(uccl_conn_t* conn, md_t* md) {
+  if (!conn || !md) return -1;
+
+  return send(conn->sock_fd, &md, sizeof(md_t), 0);
 }
 
 int uccl_engine_get_fifo_item(uccl_conn_t* conn, void* fifo_item) {
