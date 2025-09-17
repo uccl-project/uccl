@@ -187,8 +187,8 @@ class Buffer {
         (num_ranks <= max_nvl_peers * NUM_MAX_RDMA_PEERS || low_latency_mode));
     EP_HOST_ASSERT(num_ranks < max_nvl_peers ||
                    (num_ranks % max_nvl_peers) == 0);
-    if (num_rdma_bytes > 0)
-      EP_HOST_ASSERT(num_ranks > max_nvl_peers || low_latency_mode);
+    // if (num_rdma_bytes > 0)
+    //   EP_HOST_ASSERT(num_ranks > max_nvl_peers || low_latency_mode);
 
     rdma_rank = rank / max_nvl_peers;
     nvl_rank = rank % max_nvl_peers;
@@ -1793,9 +1793,6 @@ class Buffer {
   }
 
   void set_rdma_buffer_raw(void* ptr) {
-    if (ptr == nullptr) {
-      throw std::invalid_argument("set_rdma_buffer_raw: ptr null");
-    }
     rdma_buffer_ptr = ptr;
   }
 

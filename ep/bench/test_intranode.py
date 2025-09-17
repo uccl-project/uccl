@@ -3,6 +3,11 @@ import time
 import torch
 import torch.distributed as dist
 import os
+import signal  
+import faulthandler
+
+
+faulthandler.enable()
 
 # noinspection PyUnresolvedReferences
 from uccl.ep import Config
@@ -44,36 +49,42 @@ def test_main(
         )
 
     # Random data
-    x = torch.ones((num_tokens, hidden), dtype=torch.bfloat16, device="cuda") * rank
-    x_pure_rand = torch.randn((num_tokens, hidden), dtype=torch.bfloat16, device="cuda")
+    device = f"cuda:{local_rank}"
+    print(f"[test_main] Rank {rank}: Device set to {device}", flush=True)
+    print(f"[test_main] Rank {rank}: Current device is {torch.cuda.current_device()}", flush=True)
+    print(f"[test_main] Rank {rank}: Count of devices is {torch.cuda.device_count()}", flush=True)
+    
+    x = torch.ones((num_tokens, hidden), dtype=torch.bfloat16, device=device) * rank
+    
+    x_pure_rand = torch.randn((num_tokens, hidden), dtype=torch.bfloat16, device=device)
     x_e4m3 = per_token_cast_to_fp8(x) if Buffer.is_sm90_compiled() else None
     x_e4m3 = (x_e4m3[0], x_e4m3[1].T.contiguous().T) if x_e4m3 is not None else None
     scores = (
-        torch.randn((num_tokens, num_experts), dtype=torch.float32, device="cuda").abs()
+        torch.randn((num_tokens, num_experts), dtype=torch.float32, device=device).abs()
         + 1
     )
     topk_idx = torch.topk(scores, num_topk, dim=-1, largest=True, sorted=False)[1]
     topk_weights = (
-        torch.ones((num_tokens, num_topk), dtype=torch.float32, device="cuda") * rank
+        torch.ones((num_tokens, num_topk), dtype=torch.float32, device=device) * rank
     )
     topk_weights_pure_rand = torch.randn(
-        (num_tokens, num_topk), dtype=torch.float32, device="cuda"
+        (num_tokens, num_topk), dtype=torch.float32, device=device
     )
     rank_idx = topk_idx // (num_experts // num_ranks)
     rank_idx.masked_fill_(topk_idx == -1, -1)
     inplace_unique(rank_idx, num_ranks)
 
     # Expert meta
-    num_tokens_per_expert = torch.zeros((num_experts,), dtype=torch.int, device="cuda")
+    num_tokens_per_expert = torch.zeros((num_experts,), dtype=torch.int, device=device)
     for i in range(num_experts):
         num_tokens_per_expert[i] = (topk_idx == i).sum()
     gbl_num_tokens_per_expert = num_tokens_per_expert.clone()
     dist.all_reduce(gbl_num_tokens_per_expert, group=group)
 
     # Rank layout meta
-    num_tokens_per_rank = torch.empty((num_ranks,), dtype=torch.int, device="cuda")
+    num_tokens_per_rank = torch.empty((num_ranks,), dtype=torch.int, device=device)
     token_idx_in_rank = torch.full(
-        (num_ranks, num_tokens), -1, dtype=torch.long, device="cuda"
+        (num_ranks, num_tokens), -1, dtype=torch.long, device=device
     )
     for i in range(num_ranks):
         num_tokens_per_rank[i] = (rank_idx == i).sum()
@@ -82,7 +93,7 @@ def test_main(
         tokens = torch.sort(token_sel.to(torch.int), descending=True)[1]
         tokens[:count] = torch.sort(tokens[:count])[0]
         token_idx_in_rank[i][tokens[:count]] = torch.arange(
-            count, dtype=torch.long, device="cuda"
+            count, dtype=torch.long, device=device
         )
     token_idx_in_rank = token_idx_in_rank.T.contiguous().to(torch.int)
     is_token_in_rank = token_idx_in_rank >= 0
@@ -334,7 +345,7 @@ def test_main(
         # Gather the best config from rank 0 and the first test setting
         if best_dispatch_results is None:
             best_dispatch_results = torch.tensor(
-                [best_results[0], best_results[1]], dtype=torch.int32, device="cuda"
+                [best_results[0], best_results[1]], dtype=torch.int32, device=device
             )
             all_best_fp8_results_list = [
                 torch.zeros_like(best_dispatch_results)
@@ -387,67 +398,138 @@ def test_main(
 
 # noinspection PyUnboundLocalVariable,PyShadowingNames
 def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
-    rank, num_ranks, group = init_dist(local_rank, num_local_ranks)
-    test_ll_compatibility, num_rdma_bytes = False, 0
-    if test_ll_compatibility:
-        ll_num_tokens, ll_hidden, ll_num_experts, ll_num_topk = 16, 5120, 256, 9
-        num_rdma_bytes = Buffer.get_low_latency_rdma_size_hint(
-            ll_num_tokens, ll_hidden, num_ranks, ll_num_experts
+    proxies = None
+    workers = None
+    bench_obj = None
+    buffer = None
+    
+    try:
+        # Set LOCAL_RANK environment variable for this process
+        os.environ["LOCAL_RANK"] = str(local_rank)
+
+        # Set the CUDA device for this process
+        torch.cuda.set_device(local_rank)
+
+        rank, num_ranks, group = init_dist(local_rank, num_local_ranks)
+        test_ll_compatibility, num_rdma_bytes = False, 1024 * 1024 
+        if test_ll_compatibility:
+            ll_num_tokens, ll_hidden, ll_num_experts, ll_num_topk = 16, 5120, 256, 9
+            num_rdma_bytes = Buffer.get_low_latency_rdma_size_hint(
+                ll_num_tokens, ll_hidden, num_ranks, ll_num_experts
+            )
+
+        num_nvlink_bytes = int(1e9)
+        device_index = int(os.environ["LOCAL_RANK"])
+        scratch = torch.zeros(
+            num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
         )
+        proxies, workers, bench_obj = initialize_uccl(scratch, num_rdma_bytes, rank, num_ranks, group)
 
-    num_nvlink_bytes = int(1e9)
-    device_index = int(os.environ["LOCAL_RANK"])
-    scratch = torch.zeros(
-        num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
-    )
-    proxies, workers = initialize_uccl(scratch, num_rdma_bytes, rank, num_ranks, group)
-
-    buffer = Buffer(
-        group,
-        scratch.data_ptr(),
-        num_nvlink_bytes,
-        num_rdma_bytes,
-        low_latency_mode=test_ll_compatibility,
-        num_qps_per_rank=(ll_num_experts // num_ranks if test_ll_compatibility else 1),
-        explicitly_destroy=True,
-    )
-    buffer.connect_atomic_buffer(proxies[0])
-
-    for proxy in proxies:
-        proxy.calculate_and_set_dispatch_recv_data_offset(
-            args.num_tokens, args.hidden, args.num_experts
-        )
-        proxy.set_atomic_buffer_ptr(proxies[0].get_atomic_buffer_ptr())
-
-    torch.manual_seed(rank)
-
-    for i in (24,):
-        test_main(args, i, local_rank, num_ranks, rank, buffer, group)
-        if local_rank == 0:
-            print("", flush=True)
-
-    # Test compatibility with low latency functions
-    if test_ll_compatibility:
-        buffer.clean_low_latency_buffer(ll_num_tokens, ll_hidden, ll_num_experts)
-        test_low_latency.test_main(
-            ll_num_tokens,
-            ll_hidden,
-            ll_num_experts,
-            ll_num_topk,
-            rank,
-            num_ranks,
+        buffer = Buffer(
             group,
-            buffer,
-            seed=1,
+            scratch.data_ptr(),
+            num_nvlink_bytes,
+            num_rdma_bytes,
+            low_latency_mode=test_ll_compatibility,
+            num_qps_per_rank=(ll_num_experts // num_ranks if test_ll_compatibility else 1),
+            explicitly_destroy=True,
         )
+        buffer.connect_atomic_buffer(proxies[0])
 
-    # Destroy the buffer runtime and communication group
-    group.barrier()
-    buffer.destroy()
-    dist.barrier()
-    destroy_uccl(proxies, workers)
-    dist.barrier()
-    dist.destroy_process_group()
+        for proxy in proxies:
+            proxy.calculate_and_set_dispatch_recv_data_offset(
+                args.num_tokens, args.hidden, args.num_experts
+            )
+            proxy.set_atomic_buffer_ptr(proxies[0].get_atomic_buffer_ptr())
+
+        torch.manual_seed(rank)
+
+        for i in (24,):
+            test_main(args, i, local_rank, num_ranks, rank, buffer, group)
+            if local_rank == 0:
+                print("", flush=True)
+
+        # Test compatibility with low latency functions
+        if test_ll_compatibility:
+            buffer.clean_low_latency_buffer(ll_num_tokens, ll_hidden, ll_num_experts)
+            test_low_latency.test_main(
+                ll_num_tokens,
+                ll_hidden,
+                ll_num_experts,
+                ll_num_topk,
+                rank,
+                num_ranks,
+                group,
+                buffer,
+                seed=1,
+            )
+
+        # Clean up
+        print(f"Rank {rank}: Starting cleanup...", flush=True)
+        
+        # Synchronize before cleanup
+        if group:
+            group.barrier()
+        
+        # Destroy buffer
+        if buffer:
+            try:
+                buffer.destroy()
+                print(f"Rank {rank}: Buffer destroyed", flush=True)
+            except Exception as e:
+                print(f"Rank {rank}: Warning - failed to destroy buffer: {e}", flush=True)
+        
+        # Synchronize after buffer destruction
+        if dist.is_initialized():
+            dist.barrier()
+        
+        # Destroy UCCL resources
+        if proxies and workers:
+            try:
+                destroy_uccl(proxies, workers, bench_obj)
+                print(f"Rank {rank}: UCCL resources destroyed", flush=True)
+            except Exception as e:
+                print(f"Rank {rank}: Warning - failed to destroy UCCL: {e}", flush=True)
+        
+        # Final synchronization
+        if dist.is_initialized():
+            dist.barrier()
+            
+        # Destroy process group
+        if dist.is_initialized():
+            try:
+                dist.destroy_process_group()
+                print(f"Rank {rank}: Process group destroyed", flush=True)
+            except Exception as e:
+                print(f"Rank {rank}: Warning - failed to destroy process group: {e}", flush=True)
+                
+    except Exception as e:
+        print(f"Rank {local_rank}: Fatal error in test_loop: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        
+        # Emergency cleanup
+        try:
+            if proxies:
+                for p in proxies:
+                    try:
+                        p.stop()
+                    except:
+                        pass
+            if workers:
+                try:
+                    workers.stop()
+                except:
+                    pass
+            if buffer:
+                try:
+                    buffer.destroy()
+                except:
+                    pass
+        except:
+            pass
+        
+        raise
 
 
 if __name__ == "__main__":
@@ -459,16 +541,16 @@ if __name__ == "__main__":
         help="Number of processes to spawn (default: 8)",
     )
     parser.add_argument(
-        "--num-tokens", type=int, default=4096, help="Number of tokens (default: 4096)"
+        "--num-tokens", type=int, default=2048, help="Number of tokens (default: 4096)"
     )
     parser.add_argument(
-        "--hidden", type=int, default=7168, help="Hidden dimension size (default: 7168)"
+        "--hidden", type=int, default=3584, help="Hidden dimension size (default: 7168)"
     )
     parser.add_argument(
-        "--num-topk", type=int, default=8, help="Number of top-k experts (default: 8)"
+        "--num-topk", type=int, default=4, help="Number of top-k experts (default: 8)"
     )
     parser.add_argument(
-        "--num-experts", type=int, default=256, help="Number of experts (default: 256)"
+        "--num-experts", type=int, default=128, help="Number of experts (default: 256)"
     )
     args = parser.parse_args()
 

@@ -55,7 +55,11 @@ void Proxy::init_common() {
   per_thread_rdma_init(ctx_, cfg_.gpu_buffer, cfg_.total_size, my_rank,
                        cfg_.block_idx);
   pin_thread();
-  if (!ctx_.cq) ctx_.cq = create_per_thread_cq(ctx_);
+
+  // Skip CQ creation if RDMA is not initialized (intranode mode)
+  if (ctx_.context && !ctx_.cq) {
+    ctx_.cq = create_per_thread_cq(ctx_);
+  }
   if (ctxs_for_all_ranks_.empty()) {
     fprintf(stderr,
             "Error: peers metadata not set before init_common (peers_.size() "
@@ -66,18 +70,29 @@ void Proxy::init_common() {
 
   // Allocate GPU buffer for atomic old values (within the main GPU buffer)
   // Use a small section at the end of the GPU buffer
-  size_t atomic_buf_size = ProxyCtx::kMaxAtomicOps * sizeof(uint32_t);
-  if (cfg_.total_size < atomic_buf_size) {
-    fprintf(stderr, "GPU buffer too small for atomic operations buffer\n");
-    std::abort();
+  // Skip atomic buffer allocation for intranode mode
+  if (ctx_.context && cfg_.total_size > 0) {
+    size_t atomic_buf_size = ProxyCtx::kMaxAtomicOps * sizeof(uint32_t);
+    if (cfg_.total_size < atomic_buf_size) {
+      fprintf(stderr, "GPU buffer too small for atomic operations buffer\n");
+      std::abort();
+    }
+    // Place atomic buffer at the end of the GPU buffer
+    ctx_.atomic_old_values_buf =
+        reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(cfg_.gpu_buffer) +
+                                    cfg_.total_size - atomic_buf_size);
+  } else {
+    // For intranode mode, set atomic buffer to nullptr
+    ctx_.atomic_old_values_buf = nullptr;
   }
-  // Place atomic buffer at the end of the GPU buffer
-  ctx_.atomic_old_values_buf =
-      reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(cfg_.gpu_buffer) +
-                                  cfg_.total_size - atomic_buf_size);
 
-  printf("[PROXY_INIT] Atomic buffer at %p, size %zu bytes\n",
-         ctx_.atomic_old_values_buf, atomic_buf_size);
+  if (ctx_.atomic_old_values_buf) {
+    size_t atomic_buf_size = ProxyCtx::kMaxAtomicOps * sizeof(uint32_t);
+    printf("[PROXY_INIT] Atomic buffer at %p, size %zu bytes\n",
+           ctx_.atomic_old_values_buf, atomic_buf_size);
+  } else {
+    printf("[PROXY_INIT] Atomic buffer disabled for intranode mode\n");
+  }
 
   int num_ranks = ctxs_for_all_ranks_.size();
   local_infos_.assign(num_ranks, RDMAConnectionInfo{});
@@ -94,23 +109,37 @@ void Proxy::init_common() {
     if (c.tag >= ctx_by_tag_.size()) ctx_by_tag_.resize(c.tag + 1, nullptr);
     ctx_by_tag_[c.tag] = &c;
 
-    c.context = ctx_.context;
-    c.pd = ctx_.pd;
-    c.mr = ctx_.mr;
-    c.rkey = ctx_.rkey;
+    // Only set RDMA resources if they were initialized
+    if (ctx_.context) {
+      c.context = ctx_.context;
+      c.pd = ctx_.pd;
+      c.mr = ctx_.mr;
+      c.rkey = ctx_.rkey;
+    } else {
+      // For intranode mode, set these to nullptr
+      c.context = nullptr;
+      c.pd = nullptr;
+      c.mr = nullptr;
+      c.rkey = 0;
+    }
     // NOTE(MaoZiming): each context can share the same cq, pd, mr.
     // but the qp must be different.
     c.cq = ctx_.cq;
-    create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
-                         &local_infos_[peer], my_rank);
-    modify_qp_to_init(c);
+
+    // Only create QP if RDMA is initialized
+    if (ctx_.context) {
+      create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
+                           &local_infos_[peer], my_rank);
+      modify_qp_to_init(c);
+    }
   }
 
   usleep(50 * 1000);
 
-  // Out-of-band exchange per pair.
-  for (int peer = 0; peer < num_ranks; ++peer) {
-    if (peer == my_rank) continue;
+  // Out-of-band exchange per pair (skip if RDMA not initialized)
+  if (ctx_.context) {
+    for (int peer = 0; peer < num_ranks; ++peer) {
+      if (peer == my_rank) continue;
 
     bool const i_listen = (my_rank < peer);
     int const tid = pair_tid_block(my_rank, peer, num_ranks, cfg_.block_idx);
@@ -135,11 +164,13 @@ void Proxy::init_common() {
               peers_[peer].ptr);
       std::abort();
     }
+    }
   }
 
-  // Bring each per-peer QP to RTR/RTS
-  for (int peer = 0; peer < num_ranks; ++peer) {
-    if (peer == my_rank) continue;
+  // Bring each per-peer QP to RTR/RTS (skip if RDMA not initialized)
+  if (ctx_.context) {
+    for (int peer = 0; peer < num_ranks; ++peer) {
+      if (peer == my_rank) continue;
     auto& c = *ctxs_for_all_ranks_[peer];
 
     // qp is different from each rank.
@@ -160,6 +191,7 @@ void Proxy::init_common() {
           my_rank, peer, c.remote_addr, (uintptr_t)cfg_.gpu_buffer);
       fclose(f);
     }
+    }
   }
 
   usleep(50 * 1000);
@@ -169,16 +201,22 @@ void Proxy::init_sender() {
   init_common();
   assert(cfg_.rank == 0);
   auto& ctx_ptr = ctxs_for_all_ranks_[1];
-  local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
+  // Only call local_post_ack_buf if RDMA is initialized
+  if (ctx_ptr->pd && ctx_ptr->recv_ack_qp) {
+    local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
+  }
 }
 
 void Proxy::init_remote() {
   init_common();
   assert(cfg_.rank == 1);
   auto& ctx_ptr = ctxs_for_all_ranks_[0];
-  remote_reg_ack_buf(ctx_ptr->pd, ring.ack_buf, ring.ack_mr);
-  ring.ack_qp = ctx_ptr->ack_qp;
-  post_receive_buffer_for_imm(*ctx_ptr);
+  // Only perform RDMA operations if RDMA is initialized
+  if (ctx_ptr->pd && ctx_ptr->recv_ack_qp) {
+    remote_reg_ack_buf(ctx_ptr->pd, ring.ack_buf, ring.ack_mr);
+    ring.ack_qp = ctx_ptr->ack_qp;
+    post_receive_buffer_for_imm(*ctx_ptr);
+  }
 }
 
 void Proxy::run_sender() {
@@ -212,10 +250,13 @@ void Proxy::run_dual() {
     if (peer == cfg_.rank) continue;
     auto& ctx_ptr = ctxs_for_all_ranks_[peer];
     if (!ctx_ptr) continue;
-    local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
-    remote_reg_ack_buf(ctx_ptr->pd, ring.ack_buf, ring.ack_mr);
-    ring.ack_qp = ctx_ptr->ack_qp;
-    post_receive_buffer_for_imm(*ctx_ptr);
+    // Only perform RDMA operations if RDMA is initialized
+    if (ctx_ptr->pd && ctx_ptr->recv_ack_qp) {
+      local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
+      remote_reg_ack_buf(ctx_ptr->pd, ring.ack_buf, ring.ack_mr);
+      ring.ack_qp = ctx_ptr->ack_qp;
+      post_receive_buffer_for_imm(*ctx_ptr);
+    }
   }
   uint64_t my_tail = 0;
   size_t seen = 0;

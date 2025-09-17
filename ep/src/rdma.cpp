@@ -131,6 +131,14 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
                           int block_idx) {
   printf("Rank %d, Block %d: Initializing RDMA for GPU buffer %p, size %zu\n",
          rank, block_idx, gpu_buf, bytes);
+
+  // Skip RDMA initialization for intranode tests (when buffer size is 0)
+  if (bytes == 0 || gpu_buf == nullptr) {
+    printf("Rank %d, Block %d: Skipping RDMA init - intranode mode (buffer size: %zu, ptr: %p)\n",
+           rank, block_idx, bytes, gpu_buf);
+    return;
+  }
+
   if (S.context) return;  // already initialized
 
   int num_devices = 0;
