@@ -19,8 +19,10 @@ ARCH="$(uname -m)"
 GFX_VER=${4:-gfx94X-dcgpu}
 IS_EFA=$(ls /sys/class/infiniband/ | grep rdmap || true)
 
+
 if [[ $TARGET != "cuda" && $TARGET != "rocm" && $TARGET != "therock" ]]; then
-  echo "Usage: $0 [cuda|rocm|therock] [all|rdma|p2p|efa|ep] [py_version] [gfx_version]" >&2
+  echo "Usage: $0 [cuda|rocm|therock] [all|rdma|p2p|efa|ep|eccl] [py_version] [gfx_version]" >&2
+
 fi
 
 if [[ $ARCH == "aarch64" && ( $TARGET == "rocm" || $TARGET == "therock" ) ]]; then
@@ -156,6 +158,28 @@ build_ep() {
   cp ep/*.so uccl/
 }
 
+build_eccl() {
+  local TARGET="$1"
+  local ARCH="$2"
+  local IS_EFA="$3"
+
+  set -euo pipefail
+  echo "[container] build_eccl Target: $TARGET"
+
+  cd eccl
+  if [[ "$TARGET" == "cuda" ]]; then
+    echo "Skipping eccl build on Cuda."
+    return
+  elif [[ "$TARGET" == "rocm" ]]; then
+    make clean -f MakefileHip && make -j$(nproc) -f MakefileHip
+  fi
+  cd ..
+
+  echo "[container] Copying eccl .so to uccl/"
+  # mkdir -p uccl/lib
+  # cp eccl/eccl.*.so uccl/
+}
+
 # Determine the Docker image to use based on the target and architecture
 if [[ $TARGET == "cuda" ]]; then
   if [[ "$ARCH" == "aarch64" ]]; then
@@ -200,7 +224,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -e IS_EFA="${IS_EFA}" \
   -e WHEEL_DIR="${WHEEL_DIR}" \
   -e BUILD_TYPE="${BUILD_TYPE}" \
-  -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_rdma build_efa build_p2p build_ep)" \
+  -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_rdma build_efa build_p2p build_ep build_eccl)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
     set -euo pipefail
@@ -227,11 +251,14 @@ docker run --rm --user "$(id -u):$(id -g)" \
       build_p2p "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "ep" ]]; then
       build_ep "$TARGET" "$ARCH" "$IS_EFA"
+    elif [[ "$BUILD_TYPE" == "eccl" ]]; then
+      build_eccl "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "all" ]]; then
       build_rdma "$TARGET" "$ARCH" "$IS_EFA"
       build_efa "$TARGET" "$ARCH" "$IS_EFA"
       build_p2p "$TARGET" "$ARCH" "$IS_EFA"
       # build_ep "$TARGET" "$ARCH" "$IS_EFA"
+      # build_eccl "$TARGET" "$ARCH" "$IS_EFA"
     fi
 
     ls -lh uccl/
