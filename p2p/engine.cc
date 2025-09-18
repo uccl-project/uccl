@@ -22,6 +22,7 @@ int const kMaxNumGPUs = 8;
 uint8_t gpu_to_dev[kMaxNumGPUs] = {0};
 std::once_flag glog_init_once;
 constexpr uint32_t kGpuStreamId = 0;
+thread_local bool inside_python = false;
 
 inline void check_python_signals() {
   PyGILState_STATE gstate = PyGILState_Ensure();
@@ -34,9 +35,6 @@ inline void check_python_signals() {
 
 Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
     : local_gpu_idx_(local_gpu_idx), num_cpus_(num_cpus) {
-  [[maybe_unused]] auto _ =
-      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
-
   std::cout << "Creating Engine with GPU index: " << local_gpu_idx
             << ", CPUs: " << num_cpus << std::endl;
   // Py_Initialize();
@@ -149,11 +147,8 @@ Endpoint::~Endpoint() {
 
 bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
                        uint64_t& conn_id) {
-  [[maybe_unused]] auto _ =
-      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
-
   std::cout << "Attempting to connect to " << ip_addr << ":" << remote_gpu_idx
-            << std::endl;
+            << " via port " << remote_port << std::endl;
 
   // Create a new connection ID
   conn_id = next_conn_id_.fetch_add(1);
@@ -168,7 +163,7 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
   // Check for Python signals (eg, ctrl+c) while waiting for connection
   while (uccl_conn_id_future.wait_for(std::chrono::seconds(0)) !=
          std::future_status::ready) {
-    check_python_signals();
+    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
     std::this_thread::sleep_for(std::chrono::seconds(1));
   }
   uccl::ConnID uccl_conn_id = uccl_conn_id_future.get();
@@ -258,9 +253,6 @@ std::tuple<std::string, uint16_t, int> Endpoint::parse_metadata(
 
 bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
                       uint64_t& conn_id) {
-  [[maybe_unused]] auto _ =
-      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
-
   std::cout << "Waiting to accept incoming connection..." << std::endl;
 
   // For demo purposes, simulate accepted connection
@@ -278,7 +270,7 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   // Check for Python signals (eg, ctrl+c) while waiting for connection
   while (uccl_conn_id_future.wait_for(std::chrono::seconds(0)) !=
          std::future_status::ready) {
-    check_python_signals();
+    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
     std::this_thread::sleep_for(std::chrono::seconds(1));
   }
   uccl::ConnID uccl_conn_id = uccl_conn_id_future.get();
@@ -294,9 +286,6 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
 }
 
 bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
-  [[maybe_unused]] auto _ =
-      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
-
   mr_id = next_mr_id_.fetch_add(1);
 
   uccl::Mhandle* mhandle;
@@ -321,9 +310,6 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
   if (data_v.size() != size_v.size())
     throw std::invalid_argument(
         "[Endpoint::regv] data_v/size_v length mismatch");
-
-  [[maybe_unused]] auto _ =
-      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
   size_t const n = data_v.size();
   mr_id_v.resize(n);
@@ -355,8 +341,6 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
 }
 
 bool Endpoint::dereg(uint64_t mr_id) {
-  [[maybe_unused]] auto _ =
-      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
   {
     std::unique_lock<std::shared_mutex> lock(mr_mu_);
     MR* mr = mr_id_to_mr_[mr_id];
@@ -368,11 +352,8 @@ bool Endpoint::dereg(uint64_t mr_id) {
 }
 
 bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
-                    size_t size, bool inside_python) {
+                    size_t size) {
   DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
-  [[maybe_unused]] auto _ = inside_python && PyGILState_Check()
-                                ? (py::gil_scoped_release{}, nullptr)
-                                : nullptr;
 
   Conn* conn;
   {
@@ -430,12 +411,7 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
   return true;
 }
 
-bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
-                    bool inside_python) {
-  [[maybe_unused]] auto _ = inside_python && PyGILState_Check()
-                                ? (py::gil_scoped_release{}, nullptr)
-                                : nullptr;
-
+bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
   Conn* conn;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
@@ -535,12 +511,7 @@ bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
 
 bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void const*> data_v,
-                     std::vector<size_t> size_v, size_t num_iovs,
-                     bool inside_python) {
-  [[maybe_unused]] auto _ = inside_python && PyGILState_Check()
-                                ? (py::gil_scoped_release{}, nullptr)
-                                : nullptr;
-
+                     std::vector<size_t> size_v, size_t num_iovs) {
   Conn* conn;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
@@ -608,7 +579,7 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
       done[ureq_issued % kMaxInflightChunks] = false;
       ureq_issued++;
     }
-    check_python_signals();
+    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
 
     for (int i = ureq_finished; i < ureq_issued; i++) {
       if (done[i % kMaxInflightChunks]) {
@@ -630,10 +601,7 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
 bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void*> data_v, std::vector<size_t> size_v,
-                     size_t num_iovs, bool inside_python) {
-  [[maybe_unused]] auto _ = inside_python && PyGILState_Check()
-                                ? (py::gil_scoped_release{}, nullptr)
-                                : nullptr;
+                     size_t num_iovs) {
   Conn* conn;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
@@ -711,7 +679,7 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
       done[ureq_issued % kMaxInflightChunks] = false;
       ureq_issued++;
     }
-    check_python_signals();
+    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
 
     for (int i = ureq_finished; i < ureq_issued; i++) {
       if (done[i % kMaxInflightChunks]) {
@@ -732,10 +700,7 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 }
 
 bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
-                    uccl::FifoItem const& slot_item, bool inside_python) {
-  [[maybe_unused]] auto _ =
-      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
-
+                    uccl::FifoItem const& slot_item) {
   if (!ucclParamRCMode()) {
     DCHECK(false) << "RDMA READ is only supported in RC mode, toggle RCMODE to "
                      "be True in transport_config.h";
@@ -805,9 +770,6 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
 bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
                           size_t size, uccl::FifoItem const& slot_item,
                           uint64_t* transfer_id) {
-  [[maybe_unused]] auto _ =
-      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
-
   UnifiedTask* rw_task =
       create_net_task(conn_id, mr_id, TaskType::READ_NET, dst, size, slot_item);
   if (unlikely(rw_task == nullptr)) {
@@ -877,8 +839,6 @@ bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void*> dst_v, std::vector<size_t> size_v,
                      std::vector<uccl::FifoItem> slot_item_v, size_t num_iovs) {
-  [[maybe_unused]] auto _ =
-      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
   auto conn = conn_id_to_conn_[conn_id];
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
@@ -946,7 +906,7 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
       done[ureq_issued % kMaxInflightChunks] = false;
       ureq_issued++;
     }
-    check_python_signals();
+    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
 
     for (int i = ureq_finished; i < ureq_issued; i++) {
       if (done[i % kMaxInflightChunks]) {
@@ -969,9 +929,6 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
                            size_t size, uccl::FifoItem const& slot_item,
                            uint64_t* transfer_id) {
-  [[maybe_unused]] auto _ =
-      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
-
   UnifiedTask* rw_task = create_net_task(conn_id, mr_id, TaskType::WRITE_NET,
                                          src, size, slot_item);
   if (unlikely(rw_task == nullptr)) {
@@ -990,8 +947,6 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                       std::vector<void*> src_v, std::vector<size_t> size_v,
                       std::vector<uccl::FifoItem> slot_item_v,
                       size_t num_iovs) {
-  [[maybe_unused]] auto _ =
-      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
   auto conn = conn_id_to_conn_[conn_id];
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
@@ -1059,7 +1014,7 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
       done[ureq_issued % kMaxInflightChunks] = false;
       ureq_issued++;
     }
-    check_python_signals();
+    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
 
     for (int i = ureq_finished; i < ureq_issued; i++) {
       if (done[i % kMaxInflightChunks]) {
@@ -1080,9 +1035,7 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 }
 
 bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
-                     uccl::FifoItem const& slot_item, bool inside_python) {
-  auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
-
+                     uccl::FifoItem const& slot_item) {
   if (!ucclParamRCMode()) {
     DCHECK(false) << "We only support RC mode for now.";
     std::abort();
@@ -1149,8 +1102,6 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
 
 bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
                          size_t len, char* out_buf) {
-  [[maybe_unused]] auto _ =
-      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
   auto* conn = conn_id_to_conn_[conn_id];
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
   uccl::ucclRequest req_data;
@@ -1164,8 +1115,6 @@ bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
 bool Endpoint::advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                           std::vector<void*> addr_v, std::vector<size_t> len_v,
                           std::vector<char*> out_buf_v, size_t num_iovs) {
-  [[maybe_unused]] auto _ =
-      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
   auto* conn = conn_id_to_conn_[conn_id];
   for (size_t i = 0; i < num_iovs; ++i) {
     auto mhandle = mr_id_to_mr_[mr_id_v[i]]->mhandle_;
@@ -1181,8 +1130,6 @@ bool Endpoint::advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 bool Endpoint::connect_local(int remote_gpu_idx, uint64_t& conn_id) {
   int retries = 5;
   int ret = -1;
-  [[maybe_unused]] auto _ =
-      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
   std::cout << "Connecting to remote GPU " << remote_gpu_idx << std::endl;
 
   std::string remote_socket_path = get_uds_socket_path(remote_gpu_idx);
@@ -1235,8 +1182,6 @@ bool Endpoint::connect_local(int remote_gpu_idx, uint64_t& conn_id) {
 }
 
 bool Endpoint::accept_local(int& remote_gpu_idx, uint64_t& conn_id) {
-  [[maybe_unused]] auto _ =
-      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
   std::cout << "Waiting to accept UDS connection" << std::endl;
 
   CHECK(uds_listen_fd_ >= 0) << "UDS socket not initialized";
@@ -1270,10 +1215,7 @@ bool Endpoint::accept_local(int& remote_gpu_idx, uint64_t& conn_id) {
   return true;
 }
 
-bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size,
-                        bool inside_python) {
-  auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
-
+bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size) {
   CHECK(data != nullptr) << "send_ipc: data pointer is null!";
 
   // Get connection info
@@ -1357,10 +1299,7 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size,
   return true;
 }
 
-bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size,
-                        bool inside_python) {
-  auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
-
+bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size) {
   CHECK(data != nullptr) << "recv_ipc: data pointer is null!";
 
   // Get connection info
@@ -1416,8 +1355,6 @@ bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size,
 
 bool Endpoint::send_ipc_async(uint64_t conn_id, void const* data, size_t size,
                               uint64_t* transfer_id) {
-  py::gil_scoped_release release;
-
   // Create a task for IPC send operation
   UnifiedTask* task = create_task(conn_id, 0, TaskType::SEND_IPC,
                                   const_cast<void*>(data), size);
@@ -1438,8 +1375,6 @@ bool Endpoint::send_ipc_async(uint64_t conn_id, void const* data, size_t size,
 
 bool Endpoint::recv_ipc_async(uint64_t conn_id, void* data, size_t size,
                               uint64_t* transfer_id) {
-  py::gil_scoped_release release;
-
   // Create a task for IPC receive operation
   UnifiedTask* task = create_task(conn_id, 0, TaskType::RECV_IPC, data, size);
   if (unlikely(task == nullptr)) {
@@ -1458,9 +1393,7 @@ bool Endpoint::recv_ipc_async(uint64_t conn_id, void* data, size_t size,
 }
 
 bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
-                         IpcTransferInfo const& info, bool inside_python) {
-  auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
-
+                         IpcTransferInfo const& info) {
   CHECK(data != nullptr) << "write_ipc: data pointer is null!";
 
   // Get connection info
@@ -1520,9 +1453,7 @@ bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
 }
 
 bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
-                        IpcTransferInfo const& info, bool inside_python) {
-  auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
-
+                        IpcTransferInfo const& info) {
   CHECK(data != nullptr) << "read_ipc: data pointer is null!";
 
   // Get connection info
@@ -1584,8 +1515,6 @@ bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
 bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
                                IpcTransferInfo const& info,
                                uint64_t* transfer_id) {
-  py::gil_scoped_release release;
-
   // Create an IPC task for IPC write operation
   UnifiedTask* task = create_ipc_task(conn_id, 0, TaskType::WRITE_IPC,
                                       const_cast<void*>(data), size, info);
@@ -1606,8 +1535,6 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
 bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
                               IpcTransferInfo const& info,
                               uint64_t* transfer_id) {
-  py::gil_scoped_release release;
-
   // Create an IPC task for IPC read operation
   UnifiedTask* task =
       create_ipc_task(conn_id, 0, TaskType::READ_IPC, data, size, info);
@@ -1627,8 +1554,6 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
 
 bool Endpoint::advertise_ipc(uint64_t conn_id, void* addr, size_t len,
                              char* out_buf) {
-  py::gil_scoped_release release;
-
   CHECK(addr != nullptr) << "advertise_ipc: addr pointer is null!";
   CHECK(out_buf != nullptr) << "advertise_ipc: out_buf pointer is null!";
 
@@ -1661,8 +1586,6 @@ bool Endpoint::advertise_ipc(uint64_t conn_id, void* addr, size_t len,
 bool Endpoint::advertisev_ipc(uint64_t conn_id, std::vector<void*> addr_v,
                               std::vector<size_t> len_v,
                               std::vector<char*> out_buf_v, size_t num_iovs) {
-  py::gil_scoped_release release;
-
   CHECK_EQ(addr_v.size(), num_iovs) << "addr_v size mismatch";
   CHECK_EQ(len_v.size(), num_iovs) << "len_v size mismatch";
   CHECK_EQ(out_buf_v.size(), num_iovs) << "out_buf_v size mismatch";
@@ -1702,9 +1625,6 @@ bool Endpoint::advertisev_ipc(uint64_t conn_id, std::vector<void*> addr_v,
 }
 
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
-  [[maybe_unused]] auto _ =
-      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
-
   auto task = reinterpret_cast<UnifiedTask*>(transfer_id);
   *is_done = task->done.load(std::memory_order_acquire);
   if (*is_done) {
@@ -1777,17 +1697,17 @@ void Endpoint::send_proxy_thread_func() {
         1) {
       switch (task.type) {
         case TaskType::SEND_IPC:
-          send_ipc(task.conn_id, task.data, task.size, false);
+          send_ipc(task.conn_id, task.data, task.size);
           break;
         case TaskType::WRITE_NET:
           write(task.conn_id, task.mr_id, task.data, task.size,
-                task.slot_item(), false);
+                task.slot_item());
           break;
         case TaskType::WRITE_IPC:
-          write_ipc(task.conn_id, task.data, task.size, task.ipc_info(), false);
+          write_ipc(task.conn_id, task.data, task.size, task.ipc_info());
           break;
         case TaskType::SEND_NET:
-          send(task.conn_id, task.mr_id, task.data, task.size, false);
+          send(task.conn_id, task.mr_id, task.data, task.size);
           break;
         case TaskType::SENDV: {
           TaskBatch const& batch = task.task_batch();
@@ -1798,8 +1718,7 @@ void Endpoint::send_proxy_thread_func() {
           std::vector<uint64_t> mr_id_v(batch.mr_id_v(),
                                         batch.mr_id_v() + batch.num_iovs);
 
-          sendv(task.conn_id, mr_id_v, const_data_v, size_v, batch.num_iovs,
-                false);
+          sendv(task.conn_id, mr_id_v, const_data_v, size_v, batch.num_iovs);
           break;
         }
         default:
@@ -1821,17 +1740,17 @@ void Endpoint::recv_proxy_thread_func() {
         1) {
       switch (task.type) {
         case TaskType::RECV_IPC:
-          recv_ipc(task.conn_id, task.data, task.size, false);
+          recv_ipc(task.conn_id, task.data, task.size);
           break;
         case TaskType::READ_NET:
-          read(task.conn_id, task.mr_id, task.data, task.size, task.slot_item(),
-               false);
+          read(task.conn_id, task.mr_id, task.data, task.size,
+               task.slot_item());
           break;
         case TaskType::READ_IPC:
-          read_ipc(task.conn_id, task.data, task.size, task.ipc_info(), false);
+          read_ipc(task.conn_id, task.data, task.size, task.ipc_info());
           break;
         case TaskType::RECV_NET:
-          recv(task.conn_id, task.mr_id, task.data, task.size, false);
+          recv(task.conn_id, task.mr_id, task.data, task.size);
           break;
         case TaskType::RECVV: {
           TaskBatch const& batch = task.task_batch();
@@ -1842,7 +1761,7 @@ void Endpoint::recv_proxy_thread_func() {
           std::vector<uint64_t> mr_id_v(batch.mr_id_v(),
                                         batch.mr_id_v() + batch.num_iovs);
 
-          recvv(task.conn_id, mr_id_v, data_v, size_v, batch.num_iovs, false);
+          recvv(task.conn_id, mr_id_v, data_v, size_v, batch.num_iovs);
           break;
         }
         case TaskType::SEND_NET:
