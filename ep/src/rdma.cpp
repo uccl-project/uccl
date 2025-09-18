@@ -2,6 +2,7 @@
 #include "common.hpp"
 #include "peer_copy.cuh"
 #include "peer_copy_worker.hpp"
+#include "proxy_ctx.hpp"
 #include "rdma_util.hpp"
 #include "util/gpu_rt.h"
 #include <arpa/inet.h>
@@ -36,24 +37,43 @@
 #define TCP_PORT 18515
 #define QKEY 0x11111111u
 
-inline uint32_t pack_imm(bool is_combine, int v15, uint16_t off16) {
+void add_tokens(ProxyCtx& ctx, int expert_idx, int src_rank, size_t k) {
+  auto key = std::make_pair(expert_idx, src_rank);
+  ctx.token_counter[key] += k;
+}
+
+int get_num_tokens(ProxyCtx& ctx, int expert_idx, int src_rank) {
+  auto key = std::make_pair(expert_idx, src_rank);
+  return ctx.token_counter[key];
+}
+
+void reset_tokens(ProxyCtx& ctx, int expert_idx, int src_rank) {
+  auto key = std::make_pair(expert_idx, src_rank);
+  ctx.token_counter[key] = 0;
+}
+
+inline uint32_t pack_imm(bool is_combine, int v14, uint16_t off16,
+                         int low_latency_buffer_idx) {
   // Pack control into 32-bit imm:
-  // [31] kind (1=combine, 0=dispatch)
-  // [30:16] signed 15-bit value (two's complement)
-  // [15:0]  slot/seq (here: lower 16 bits of wr index)
-  // v15 must be in [-16384, 16383]
-  uint32_t vfield = static_cast<uint32_t>(v15) & 0x7FFF;
-  return (static_cast<uint32_t>(is_combine) << 31) | (vfield << 16) | off16;
+  // [31] kind
+  // [30] buffer index (0 or 1)
+  // [29:16] signed v14
+  // [15:0] offset
+  // v14 must be in [-8192, 8191]
+  uint32_t vfield = static_cast<uint32_t>(v14) & 0x3FFF;  // 14 bits
+  return (static_cast<uint32_t>(is_combine) << 31) |
+         ((low_latency_buffer_idx & 0x1) << 30) | (vfield << 16) | off16;
 }
 
 inline int unpack_v(int32_t imm) {
-  // Layout: [31]=kind, [30:16]=v(15b), [15:0]=off
-  // Drop kind (<<1), then arithmetic >>17 to sign-extend bit30
-  // Decode imm: [31] kind, [30:16] value (signed 15-bit), [15:0] offset
-  return (imm << 1) >> 17;
+  // Extract v14 (bits 29:16), sign extend
+  return (imm << 2) >> 18;  // drop [31:30], then arithmetic >>18
 }
 
 inline bool unpack_kind(uint32_t imm) { return (imm >> 31) & 0x1; }
+
+inline int unpack_buffer_idx(uint32_t imm) { return (imm >> 30) & 0x1; }
+
 inline uint16_t unpack_off(uint32_t imm) { return imm & 0xFFFFu; }
 
 void exchange_connection_info(int rank, char const* peer_ip, int tid,
@@ -715,8 +735,10 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       }
 
       if (j + 1 == k) {
-        ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr,
-                              htonl(static_cast<uint32_t>(qpx->wr_id)));
+        uint32_t imm = ((cmd.expert_idx & 0x3FF) << 22) |  // top 10 bits
+                       ((k & 0x3FF) << 12) |               // next 10 bits
+                       (my_rank & 0xFFF);                  // low 12 bits
+        ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
       } else {
         ibv_wr_rdma_write(qpx, ctx->remote_rkey, remote_addr);
       }
@@ -781,7 +803,9 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
     const uint64_t batch_tail_wr = wr_ids[last];
     wrs[last].send_flags = IBV_SEND_SIGNALED;
     wrs[last].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-    wrs[last].imm_data = htonl(static_cast<uint32_t>(batch_tail_wr));
+    uint32_t imm = ((cmds_to_post[wr_ids[last]].expert_idx & 0x3FF) << 22) |
+                   ((k & 0x3FF) << 12) | (my_rank & 0xFFF);
+    wrs[last].imm_data = htonl(imm);
 
     ibv_send_wr* bad = nullptr;
     int ret = ibv_post_send(ctx->qp, &wrs[0], &bad);
@@ -982,9 +1006,11 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       //                          index * sizeof(int)),
       //     imm);
       // sleep(1);
+      printf("atomic_buffer_ptr: %p, index: %zu\n", atomic_buffer_ptr, index);
       auto* addr32 =
           reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
       addr32->fetch_add(value, std::memory_order_release);
+
       // const uint32_t tag = wr_tag(cqe.wr_id);
       // ProxyCtx& S_atomic = *ctx_by_tag[tag];
       // ibv_sge sge = {
@@ -1005,7 +1031,15 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       continue;
     }
     if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
-      continue;
+      uint32_t imm = ntohl(cqe.imm_data);
+
+      uint32_t expert_idx = (imm >> 22) & 0x3FF;  // top 10 bits
+      uint32_t k = (imm >> 12) & 0x3FF;           // next 10 bits
+      uint32_t src_rank = imm & 0xFFF;            // low 12 bits
+
+      add_tokens(S, expert_idx, src_rank, k);
+      printf("[IMM] expert_idx=%u, src_rank=%u, tokens=%u\n", expert_idx,
+             src_rank, get_num_tokens(S, expert_idx, src_rank));
       // const uint32_t tag = wr_tag(cqe.wr_id);
       // ProxyCtx& S_ack = *ctx_by_tag[tag];
       // ibv_sge sge = {
@@ -1237,8 +1271,18 @@ void post_atomic_operations(ProxyCtx& S,
         std::abort();
       }
       uint32_t offset = static_cast<int64_t>(cmd.req_rptr);
+      int low_latency_buffer_idx = cmd.low_latency_buffer_idx;
+      if (low_latency_buffer_idx < 0 || low_latency_buffer_idx > 1) {
+        fprintf(stderr, "Invalid low_latency_buffer_idx: %d\n",
+                low_latency_buffer_idx);
+        std::abort();
+      }
+
+      printf("offset: %u, req_rptr: %lu, low_latency_buffer_idx: %d\n", offset,
+             static_cast<int64_t>(cmd.req_rptr), low_latency_buffer_idx);
       uint32_t imm =
-          pack_imm(/*is_combine=*/true, v, static_cast<uint16_t>(offset));
+          pack_imm(/*is_combine=*/true, v, static_cast<uint16_t>(offset),
+                   low_latency_buffer_idx);
 
       qpx->wr_id = kAtomicWrTag | (wr_id & kAtomicMask);
       qpx->comp_mask = 0;
@@ -1270,7 +1314,8 @@ void post_atomic_operations(ProxyCtx& S,
         std::abort();
       }
       const uint32_t off16 = static_cast<uint32_t>(cmd.req_rptr) & 0xFFFFu;
-      const uint32_t imm = pack_imm(true, v, off16);
+      int low_latency_buffer_idx = cmd.low_latency_buffer_idx;
+      const uint32_t imm = pack_imm(true, v, off16, low_latency_buffer_idx);
       sge[i].addr = reinterpret_cast<uintptr_t>(ctx->mr->addr);
       sge[i].length = 0;
       sge[i].lkey = ctx->mr->lkey;

@@ -2,6 +2,7 @@
 #include "util/gpu_rt.h"
 #include <infiniband/verbs.h>
 #include <atomic>
+#include <map>
 #include <unordered_map>
 #include <vector>
 
@@ -56,4 +57,6 @@ struct ProxyCtx {
   void* per_gpu_device_buf[MAX_NUM_GPUS] = {nullptr};
 
   uint32_t tag = 0;
+
+  std::map<std::pair<int, int>, size_t> token_counter;
 };

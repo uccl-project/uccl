@@ -1405,6 +1405,7 @@ class Buffer {
                                   num_ranks, num_experts, atomic_buffer_ptr);
     EP_HOST_ASSERT(layout.total_bytes <=
                    static_cast<std::size_t>(num_rdma_bytes));
+    int low_latency_buffer_idx_used = low_latency_buffer_idx;
     auto buffer = layout.buffers[low_latency_buffer_idx];
     auto next_buffer = layout.buffers[low_latency_buffer_idx ^= 1];
 
@@ -1476,8 +1477,8 @@ class Buffer {
           num_tokens, hidden, num_max_dispatch_tokens_per_rank, num_topk,
           num_experts, rank, num_ranks, use_fp8, round_scale, use_ue8m0,
           workspace, num_device_sms, launch_stream, phases, d_ring_addrs,
-          num_ring_addrs, max_nvl_peers, d_ipc_rdma_base_ptrs, rdma_buffer_ptr,
-          atomic_buffer_ptr,
+          num_ring_addrs, max_nvl_peers, low_latency_buffer_idx_used,
+          d_ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr,
           buffer.dispatch_rdma_recv_count_buffer_internode);  // Added IPC base
                                                               // pointers
     };
@@ -1563,6 +1564,7 @@ class Buffer {
                                   num_ranks, num_experts, atomic_buffer_ptr);
     EP_HOST_ASSERT(layout.total_bytes <=
                    static_cast<std::size_t>(num_rdma_bytes));
+    int low_latency_buffer_idx_used = low_latency_buffer_idx;
     auto buffer = layout.buffers[low_latency_buffer_idx];
     auto next_buffer = layout.buffers[low_latency_buffer_idx ^= 1];
 
@@ -1601,7 +1603,8 @@ class Buffer {
           num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
           num_ranks, use_logfmt, workspace, num_device_sms, launch_stream,
           phases, zero_copy, d_ring_addrs, num_ring_addrs, max_nvl_peers,
-          d_ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr,
+          low_latency_buffer_idx_used, d_ipc_rdma_base_ptrs, rdma_buffer_ptr,
+          atomic_buffer_ptr,
           buffer.combine_rdma_recv_flag_buffer_internode);  // Added IPC base
                                                             // pointers
     };
