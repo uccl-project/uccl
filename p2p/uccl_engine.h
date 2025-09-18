@@ -1,11 +1,8 @@
 #pragma once
 
+#include <vector>
 #include <stddef.h>
 #include <stdint.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif  // __cplusplus
 
 #define FIFO_MSG_SIZE 64
 
@@ -179,6 +176,20 @@ int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata_str);
 int uccl_engine_send_tx_md(uccl_conn_t* conn, md_t* md);
 
 /**
+ * Get all notification messages and clear the list.
+ * @return              Vector of notification messages.
+ */
+std::vector<notify_msg_t> uccl_engine_get_notifs();
+
+/**
+ * Send a notification message.
+ * @param conn          Connection handle.
+ * @param notify_msg    Notification message.
+ * @return              Number of bytes sent, or -1 on failure.
+ */
+int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg);
+
+/**
  * Get socket file descriptor for a connection.
  * @param conn          Connection handle.
  * @return              Socket file descriptor, or -1 on failure.
@@ -190,7 +201,3 @@ int uccl_engine_get_sock_fd(uccl_conn_t* conn);
  * @param metadata      The metadata buffer to free.
  */
 void uccl_engine_free_endpoint_metadata(uint8_t* metadata);
-
-#ifdef __cplusplus
-}
-#endif  // __cplusplus
