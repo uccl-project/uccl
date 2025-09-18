@@ -10,9 +10,9 @@ double Proxy::avg_rdma_write_us() const {
 }
 
 double Proxy::avg_wr_latency_us() const {
-  if (completion_count_ == 0) return 0.0;
+  if (completion_count_ <= kWarmupOps) return 0.0;
   return static_cast<double>(wr_time_total_us_) /
-         static_cast<double>(completion_count_);
+         static_cast<double>(completion_count_ - kWarmupOps);
 }
 
 uint64_t Proxy::completed_wr() const { return completion_count_; }
@@ -188,6 +188,7 @@ void Proxy::init_remote() {
   init_common();
   assert(cfg_.rank == 1);
   auto& ctx_ptr = ctxs_for_all_ranks_[0];
+  local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
   remote_reg_ack_buf(ctx_ptr->pd, ring.ack_buf, ring.ack_mr);
   ring.ack_qp = ctx_ptr->ack_qp;
   post_receive_buffer_for_imm(*ctx_ptr);
@@ -209,7 +210,6 @@ void Proxy::run_sender() {
 void Proxy::run_remote() {
   printf("Remote CPU thread for block %d started\n", cfg_.block_idx + 1);
   init_remote();
-  printf("Finished\n");
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     remote_poll_completions(ctx_, cfg_.block_idx, ring, ctx_by_tag_,
                             atomic_buffer_ptr_);
@@ -262,6 +262,7 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
     cfg_.rb->volatile_store_cmd(my_tail + check_i, 0);
     check_i++;
 
+#ifdef MEASURE_PER_VERB_LATENCY
     auto it = wr_id_to_start_time_.find(wr_id);
     if (it == wr_id_to_start_time_.end()) {
       fprintf(stderr, "Error: WR ID %lu not found in wr_id_to_start_time\n",
@@ -270,8 +271,11 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
     }
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::high_resolution_clock::now() - it->second);
-    wr_time_total_us_ += duration.count();
+    if (completion_count_ > kWarmupOps) {
+      wr_time_total_us_ += duration.count();
+    }
     completion_count_++;
+#endif
     actually_completed++;
   }
   if (!actually_completed) return;
@@ -312,9 +316,18 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 
     wrs_to_post.push_back(i);
     cmds_to_post.push_back(cmd_entry);
+#ifdef MEASURE_PER_VERB_LATENCY
     wr_id_to_start_time_[i] = std::chrono::high_resolution_clock::now();
+#endif
     seen = i + 1;
   }
+
+  // Yang: this was 20-ish on GH200.
+  // if (wrs_to_post.size()) {
+  //   printf("Thread %d post_gpu_command: wrs_to_post.size()=%zu\n",
+  //          cfg_.block_idx, wrs_to_post.size());
+  // }
+
   if (!wrs_to_post.empty()) {
     auto start = std::chrono::high_resolution_clock::now();
     post_gpu_commands_mixed(wrs_to_post, cmds_to_post);

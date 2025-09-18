@@ -2108,6 +2108,8 @@ PYBIND11_MODULE(ep, m) {
       .def_property_readonly("rb_addr", &UcclProxy::rb_addr)
       .def_property_readonly("block_idx", &UcclProxy::block_idx)
       .def_property_readonly("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr)
+      .def("avg_rdma_write_us", &UcclProxy::avg_rdma_write_us)
+      .def("avg_wr_latency_us", &UcclProxy::avg_wr_latency_us)
       .def(
           "set_peers_meta",
           [](UcclProxy& self, py::object metas) {

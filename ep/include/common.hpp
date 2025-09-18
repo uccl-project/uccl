@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #define MEASURE_PER_OP_LATENCY
+#define MEASURE_PER_VERB_LATENCY
 #define kAtomicBufferSize 8196
 #define kQueueSize 1024
 #define kQueueMask (kQueueSize - 1)
@@ -26,7 +27,7 @@
 #define kMaxOutstandingRecvs 2048 * 2
 #define kSenderAckQueueDepth 2048 * 2
 #define kWarmupOps 10000
-#define kRemoteBufferSize kBatchSize* kNumThBlocks* kObjectSize * 100
+#define kRemoteBufferSize (kBatchSize * kNumThBlocks * kObjectSize * 100)
 #define MAIN_THREAD_CPU_IDX 31
 #define MAX_NUM_GPUS 8
 #define RECEIVER_BATCH_SIZE 16

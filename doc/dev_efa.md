@@ -115,21 +115,21 @@ Other applications such as DeepSpeed, vLLM, Megatron-LM, and PyTorch FSDP should
 pushd /tmp
 git clone https://github.com/linux-rdma/perftest.git && cd perftest && git checkout c04922f
 git apply $UCCL_HOME/efa/perftest.patch
-./autogen.sh && ./configure && make -j
+./autogen.sh && ./configure CUDA_H_PATH=/usr/local/cuda/include/cuda.h && make -j
 sudo make install
 popd
 ```
 
 Throughput benchmark: 
 ```bash
-ib_send_bw -d rdmap16s27 --report_gbits -x 0 -c UD -t 128 -Q 1 -q 32 -l 2 -s 8192 -F
-ib_send_bw -d rdmap16s27 --report_gbits -x 0 -c UD -t 128 -Q 1 -q 32 -l 2 -s 8192 -F <serverip>
+ib_send_bw -d rdmap16s27 --report_gbits -x 0 -c <UD|SRD> -t 128 -Q 1 -q 32 -l 2 -s 8192 -F --use_cuda 0
+ib_send_bw -d rdmap16s27 --report_gbits -x 0 -c <UD|SRD> -t 128 -Q 1 -q 32 -l 2 -s 8192 -F --use_cuda 0 <serverip>
 ```
 
 Latency benchmark: 
 ```bash
-ib_send_lat -d rdmap16s27 --report_gbits -x 0 -c UD -F
-ib_send_lat -d rdmap16s27 --report_gbits -x 0 -c UD -F <serverip>
+ib_send_lat -d rdmap16s27 --report_gbits -x 0 -c <UD|SRD> -F --use_cuda 0
+ib_send_lat -d rdmap16s27 --report_gbits -x 0 -c <UD|SRD> -F --use_cuda 0 <serverip>
 ```
 
 ### Run transport tests
