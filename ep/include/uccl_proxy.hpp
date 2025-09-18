@@ -67,6 +67,8 @@ class UcclProxy {
   uintptr_t rb_addr() const noexcept { return rb_; }
   int block_idx() const noexcept { return block_idx_; }
   void* gpu_buffer_addr() const noexcept { return gpu_buffer_addr_; }
+  double avg_rdma_write_us() const { return proxy_->avg_rdma_write_us(); }
+  double avg_wr_latency_us() const { return proxy_->avg_wr_latency_us(); }
   void set_peers_meta(std::vector<PeerMeta> const& peers);
 
  private:

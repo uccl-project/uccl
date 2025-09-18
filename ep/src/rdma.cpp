@@ -204,7 +204,8 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
                               IBV_ACCESS_RELAXED_ORDERING);
 #else
   S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
-                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                              IBV_ACCESS_RELAXED_ORDERING);
 #endif
 
   if (!S.mr) {
@@ -279,8 +280,8 @@ struct ibv_qp* create_srd_qp_ex(ProxyCtx& S) {
   qp_attr_ex.qp_type = IBV_QPT_DRIVER;
 
   efa_attr.driver_qp_type = EFADV_QP_DRIVER_TYPE_SRD;
-#define EFA_QP_LOW_LATENCY_SERVICE_LEVEL 8
-  efa_attr.sl = EFA_QP_LOW_LATENCY_SERVICE_LEVEL;
+  // #define EFA_QP_LOW_LATENCY_SERVICE_LEVEL 8
+  //   efa_attr.sl = EFA_QP_LOW_LATENCY_SERVICE_LEVEL;
   efa_attr.flags = 0;
   // If set, Receive WRs will not be consumed for RDMA write with imm.
   // efa_attr.flags |= EFADV_QP_FLAGS_UNSOLICITED_WRITE_RECV;
@@ -566,25 +567,6 @@ void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
   struct ibv_qp_attr attr;
   memset(&attr, 0, sizeof(attr));
   attr.qp_state = IBV_QPS_RTS;
-
-#ifdef EFA
-  attr.sq_psn = 0;
-  if (ibv_modify_qp(S.qp, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN)) {
-    perror("Failed to modify QP to RTS");
-    exit(1);
-  }
-  if (ibv_modify_qp(S.ack_qp, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN)) {
-    perror("Failed to modify Ack QP to RTS");
-    exit(1);
-  }
-  if (ibv_modify_qp(S.recv_ack_qp, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN)) {
-    perror("Failed to modify Receive Ack QP to RTS");
-    exit(1);
-  }
-  printf("QP modified to RTS state\n");
-  return;
-#endif
-
   attr.timeout = 14;
   attr.retry_cnt = 7;
   attr.rnr_retry = 7;
@@ -689,7 +671,8 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       wr_ids[j] = wrs_to_post[i];
       qpx->wr_id = wrs_to_post[i];
       qpx->comp_mask = 0;
-      qpx->wr_flags = (j + 1 == k) ? IBV_SEND_SIGNALED : 0;
+      // EFA requires every WR to be signaled.
+      qpx->wr_flags = IBV_SEND_SIGNALED;
 
       uint64_t remote_addr =
           ctx->remote_addr + (cmd.req_rptr ? cmd.req_rptr : 0);
@@ -772,12 +755,12 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
 
       wrs[j].wr.rdma.rkey = ctx->remote_rkey;
       wrs[j].opcode = IBV_WR_RDMA_WRITE;
-      wrs[j].send_flags = 0;
+      wrs[j].send_flags = IBV_SEND_SIGNALED;
       wrs[j].next = (j + 1 < k) ? &wrs[j + 1] : nullptr;
     }
     const size_t last = k - 1;
     const uint64_t batch_tail_wr = wr_ids[last];
-    wrs[last].send_flags |= IBV_SEND_SIGNALED;
+    wrs[last].send_flags = IBV_SEND_SIGNALED;
     wrs[last].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
     wrs[last].imm_data = htonl(static_cast<uint32_t>(batch_tail_wr));
 
@@ -841,6 +824,9 @@ void local_process_completions(ProxyCtx& S,
         //   printf("[EFA_SEND_DONE] wrid=%lu tag=0x%llx qp=0x%x\n", wrid,
         //          (wrid & kAtomicMask), wc[i].qp_num);
         // }
+        // Yang: directly done to avoid the extra ACK RTT for internode-ll.
+        const uint64_t wr_done = wc[i].wr_id;
+        acked_wrs.insert(wr_done);
       } break;
       case IBV_WC_RECV:
         if (wc[i].wc_flags & IBV_WC_WITH_IMM &&
@@ -855,19 +841,21 @@ void local_process_completions(ProxyCtx& S,
                       wr_done, slot);
               std::abort();
             }
-            auto& vec = S.wr_id_to_wr_ids[wr_done];
-            if (!vec.empty()) {
-              for (auto const& wr_id : vec) {
-                acked_wrs.insert(wr_id);
-                if (finished_wrs.find(wr_id) == finished_wrs.end()) {
-                  fprintf(stderr,
-                          "Error: finished_wrs received ACK for unknown wr_id "
-                          "%lu\n",
-                          wr_id);
-                  std::abort();
-                }
-              }
-            }
+            // wr_id in vec could already be erased in notify_gpu_completion().
+            // auto& vec = S.wr_id_to_wr_ids[wr_done];
+            // if (!vec.empty()) {
+            //   for (auto const& wr_id : vec) {
+            //     acked_wrs.insert(wr_id);
+            //     if (finished_wrs.find(wr_id) == finished_wrs.end()) {
+            //       fprintf(stderr,
+            //               "Error: finished_wrs received ACK for unknown wr_id
+            //               "
+            //               "%lu\n",
+            //               wr_id);
+            //       std::abort();
+            //     }
+            //   }
+            // }
             S.wr_id_to_wr_ids.erase(wr_done);
           }
           const uint32_t tag = wr_tag(wc[i].wr_id);
@@ -1264,7 +1252,7 @@ void post_atomic_operations(ProxyCtx& S,
 
       qpx->wr_id = kAtomicWrTag | (wr_id & kAtomicMask);
       qpx->comp_mask = 0;
-      qpx->wr_flags = (i + 1 == k) ? IBV_SEND_SIGNALED : 0;
+      qpx->wr_flags = IBV_SEND_SIGNALED;
 
       ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, ctx->remote_addr,
                             htonl(imm));
@@ -1300,7 +1288,7 @@ void post_atomic_operations(ProxyCtx& S,
       std::memset(&wr[i], 0, sizeof(wr[i]));
       wr[i].wr_id = kAtomicWrTag | (wrid & kAtomicMask);
       wr[i].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-      wr[i].send_flags = (i + 1 == k) ? IBV_SEND_SIGNALED : 0;
+      wr[i].send_flags = IBV_SEND_SIGNALED;
       wr[i].imm_data = htonl(imm);
       wr[i].sg_list = &sge[i];
       wr[i].num_sge = 1;

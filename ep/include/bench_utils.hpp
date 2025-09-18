@@ -114,6 +114,8 @@ struct Stats {
   double wall_ms = 0.0;
   double wall_ms_gpu = 0.0;  // valid when MEASURE_PER_OP_LATENCY
   double throughput_mops = 0.0;
+  double avg_wr_latency_us = 0.0;
+  double avg_rdma_write_us = 0.0;
 };
 
 inline Stats compute_stats(BenchEnv const& env,
