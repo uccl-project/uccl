@@ -954,12 +954,12 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
 
   std::vector<CopyTask> task_vec;
   task_vec.reserve(ne);
-  int nDevices;
-  cudaError_t err = cudaGetDeviceCount(&nDevices);
-  if (err != cudaSuccess) {
-    printf("CUDA error: %s\n", cudaGetErrorString(err));
-    std::abort();
-  }
+  // int nDevices;
+  // cudaError_t err = cudaGetDeviceCount(&nDevices);
+  // if (err != cudaSuccess) {
+  //   printf("CUDA error: %s\n", cudaGetErrorString(err));
+  //   std::abort();
+  // }
   for (int i = 0; i < ne; ++i) {
     ibv_wc const& cqe = wc[i];
     if (cqe.status != IBV_WC_SUCCESS) {
@@ -981,6 +981,7 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       //     (unsigned long long)((uintptr_t)atomic_buffer_ptr +
       //                          index * sizeof(int)),
       //     imm);
+      // sleep(1);
       auto* addr32 =
           reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
       addr32->fetch_add(value, std::memory_order_release);
@@ -1004,6 +1005,7 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       continue;
     }
     if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
+      continue;
       // const uint32_t tag = wr_tag(cqe.wr_id);
       // ProxyCtx& S_ack = *ctx_by_tag[tag];
       // ibv_sge sge = {
@@ -1021,23 +1023,23 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       //   perror("ibv_post_recv (imm replenish)");
       //   std::abort();
       // }
-      uint32_t imm = ntohl(cqe.imm_data);
-      int destination_gpu = static_cast<int>(imm % nDevices);
-      size_t src_offset = static_cast<size_t>(S.pool_index) * kObjectSize;
-      // TODO(MaoZiming): Implement the logic to set dst_ptr
-      CopyTask task{.wr_id = imm,
-                    .dst_dev = destination_gpu,
-                    .src_ptr = static_cast<char*>(S.mr->addr) + src_offset,
-                    .dst_ptr = nullptr,
-                    .bytes = kObjectSize};
-      if (task.dst_ptr && task.bytes) {
-        task_vec.push_back(task);
-      } else {
-        // ProxyCtx* peer_ctx = ctx_by_tag[tag];
-        // remote_send_ack(peer_ctx, peer_ctx->ack_qp, task.wr_id,
-        // g_ring.ack_mr,
-        //                 g_ring.ack_buf, idx);
-      }
+      // uint32_t imm = ntohl(cqe.imm_data);
+      // int destination_gpu = static_cast<int>(imm % nDevices);
+      // size_t src_offset = static_cast<size_t>(S.pool_index) * kObjectSize;
+      // // TODO(MaoZiming): Implement the logic to set dst_ptr
+      // CopyTask task{.wr_id = imm,
+      //               .dst_dev = destination_gpu,
+      //               .src_ptr = static_cast<char*>(S.mr->addr) + src_offset,
+      //               .dst_ptr = nullptr,
+      //               .bytes = kObjectSize};
+      // if (task.dst_ptr && task.bytes) {
+      //   task_vec.push_back(task);
+      // } else {
+      //   // ProxyCtx* peer_ctx = ctx_by_tag[tag];
+      //   // remote_send_ack(peer_ctx, peer_ctx->ack_qp, task.wr_id,
+      //   // g_ring.ack_mr,
+      //   //                 g_ring.ack_buf, idx);
+      // }
     }
   }
   if (!task_vec.empty()) {

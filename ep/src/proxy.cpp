@@ -459,9 +459,6 @@ void Proxy::post_gpu_commands_mixed(
 }
 
 void Proxy::destroy(bool free_gpu_buffer) {
-  ctx_.progress_run.store(false, std::memory_order_release);
-  cudaDeviceSynchronize();
-
   for (auto& ctx_ptr : ctxs_for_all_ranks_) {
     if (!ctx_ptr) continue;
     qp_to_error(ctx_ptr->qp);
