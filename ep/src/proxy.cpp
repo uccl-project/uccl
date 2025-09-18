@@ -16,14 +16,18 @@ double Proxy::avg_wr_latency_us() const {
 }
 
 uint64_t Proxy::completed_wr() const { return completion_count_; }
+
 void Proxy::pin_thread() {
   if (cfg_.pin_thread) {
-    pin_thread_to_cpu(cfg_.block_idx + 1);
+    // TODO(MaoZiming): improves pinning.
+    pin_thread_to_cpu(cfg_.block_idx + 1 + cfg_.local_rank * kNumThBlocks);
     int cpu = sched_getcpu();
     if (cpu == -1) {
       perror("sched_getcpu");
     } else {
-      printf("Local CPU thread pinned to core %d\n", cpu);
+      printf(
+          "Local CPU thread pinned to core %d, block_idx: %d, local_rank: %d\n",
+          cpu, cfg_.block_idx, cfg_.local_rank);
     }
   }
 }
@@ -53,7 +57,7 @@ void Proxy::init_common() {
   int const my_rank = cfg_.rank;
 
   per_thread_rdma_init(ctx_, cfg_.gpu_buffer, cfg_.total_size, my_rank,
-                       cfg_.block_idx);
+                       cfg_.block_idx, cfg_.local_rank);
   pin_thread();
   if (!ctx_.cq) ctx_.cq = create_per_thread_cq(ctx_);
   if (ctxs_for_all_ranks_.empty()) {
@@ -76,8 +80,8 @@ void Proxy::init_common() {
       reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(cfg_.gpu_buffer) +
                                   cfg_.total_size - atomic_buf_size);
 
-  printf("[PROXY_INIT] Atomic buffer at %p, size %zu bytes\n",
-         ctx_.atomic_old_values_buf, atomic_buf_size);
+  // printf("[PROXY_INIT] Atomic buffer at %p, size %zu bytes\n",
+  //        ctx_.atomic_old_values_buf, atomic_buf_size);
 
   int num_ranks = ctxs_for_all_ranks_.size();
   local_infos_.assign(num_ranks, RDMAConnectionInfo{});
@@ -101,6 +105,10 @@ void Proxy::init_common() {
     // NOTE(MaoZiming): each context can share the same cq, pd, mr.
     // but the qp must be different.
     c.cq = ctx_.cq;
+
+    if (peer == my_rank) continue;
+    // Skip rdma connection for intra-node.
+    if (peers_[peer].ip == peers_[my_rank].ip) continue;
     create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
                          &local_infos_[peer], my_rank);
     modify_qp_to_init(c);
@@ -111,20 +119,22 @@ void Proxy::init_common() {
   // Out-of-band exchange per pair.
   for (int peer = 0; peer < num_ranks; ++peer) {
     if (peer == my_rank) continue;
+    // Skip rdma connection for intra-node.
+    if (peers_[peer].ip == peers_[my_rank].ip) continue;
 
     bool const i_listen = (my_rank < peer);
     int const tid = pair_tid_block(my_rank, peer, num_ranks, cfg_.block_idx);
     char const* ip = peers_[peer].ip.c_str();
 
     int virt_rank = i_listen ? 0 : 1;
-    if (peers_[cfg_.rank].ptr != local_infos_[my_rank].addr) {
-      fprintf(stderr,
-              "Rank %d block %d: Warning: local addr mismatch: got 0x%lx, "
-              "expected 0x%lx\n",
-              my_rank, cfg_.block_idx, local_infos_[my_rank].addr,
-              peers_[cfg_.rank].ptr);
-      std::abort();
-    }
+    // if (peers_[cfg_.rank].ptr != local_infos_[my_rank].addr) {
+    //   fprintf(stderr,
+    //           "Rank %d block %d: Warning: local addr mismatch: got 0x%lx, "
+    //           "expected 0x%lx\n",
+    //           my_rank, cfg_.block_idx, local_infos_[my_rank].addr,
+    //           peers_[cfg_.rank].ptr);
+    //   std::abort();
+    // }
     exchange_connection_info(virt_rank, ip, tid, &local_infos_[peer],
                              &remote_infos_[peer]);
     if (remote_infos_[peer].addr != peers_[peer].ptr) {
@@ -140,6 +150,8 @@ void Proxy::init_common() {
   // Bring each per-peer QP to RTR/RTS
   for (int peer = 0; peer < num_ranks; ++peer) {
     if (peer == my_rank) continue;
+    // Skip rdma connection for intra-node.
+    if (peers_[peer].ip == peers_[my_rank].ip) continue;
     auto& c = *ctxs_for_all_ranks_[peer];
 
     // qp is different from each rank.
@@ -210,8 +222,10 @@ void Proxy::run_dual() {
   init_common();
   for (int peer = 0; peer < (int)ctxs_for_all_ranks_.size(); ++peer) {
     if (peer == cfg_.rank) continue;
+    if (peers_[peer].ip == peers_[cfg_.rank].ip) continue;
     auto& ctx_ptr = ctxs_for_all_ranks_[peer];
     if (!ctx_ptr) continue;
+    printf("Dual proxy using peer %d\n", peer);
     local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
     remote_reg_ack_buf(ctx_ptr->pd, ring.ack_buf, ring.ack_mr);
     ring.ack_qp = ctx_ptr->ack_qp;
@@ -288,8 +302,18 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
     uint64_t cmd = cfg_.rb->volatile_load_cmd(i);
     // NOTE(MaoZiming): Non-blocking. prevent local and remote both while loop.
     if (cmd == 0) break;
-
     TransferCmd& cmd_entry = cfg_.rb->load_cmd_entry(i);
+    if (static_cast<int>(cmd_entry.dst_rank) == cfg_.rank) {
+      printf("Local command!, cmd.dst_rank: %d, cfg_.rank: %d\n",
+             cmd_entry.dst_rank, cfg_.rank);
+      std::abort();
+    }
+    if (peers_[cmd_entry.dst_rank].ip == peers_[cfg_.rank].ip) {
+      printf("Intra-node command!, cmd.dst_rank: %d, cfg_.rank: %d\n",
+             cmd_entry.dst_rank, cfg_.rank);
+      std::abort();
+    }
+
     wrs_to_post.push_back(i);
     cmds_to_post.push_back(cmd_entry);
 #ifdef MEASURE_PER_VERB_LATENCY
@@ -419,6 +443,8 @@ void Proxy::post_gpu_commands_mixed(
       rdma_cmds.push_back(cmds_to_post[i]);
     }
   }
+  // printf("Posting %zu RDMA writes and %zu atomic ops\n", rdma_wrs.size(),
+  //        atomic_wrs.size());
   // Handle regular RDMA writes
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
@@ -433,9 +459,6 @@ void Proxy::post_gpu_commands_mixed(
 }
 
 void Proxy::destroy(bool free_gpu_buffer) {
-  ctx_.progress_run.store(false, std::memory_order_release);
-  cudaDeviceSynchronize();
-
   for (auto& ctx_ptr : ctxs_for_all_ranks_) {
     if (!ctx_ptr) continue;
     qp_to_error(ctx_ptr->qp);

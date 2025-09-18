@@ -15,7 +15,8 @@ class UcclProxy {
 
  public:
   UcclProxy(uintptr_t rb_addr, int block_idx, uintptr_t gpu_buffer_addr,
-            size_t total_size, int rank, std::string const& peer_ip = {});
+            size_t total_size, int rank, int node_idx, int local_rank,
+            std::string const& peer_ip = {});
   ~UcclProxy();
 
   void start_sender();
@@ -86,4 +87,5 @@ class UcclProxy {
   std::vector<PeerMeta> peers_;
   int local_rank_;
   void* atomic_buffer_ptr_;
+  int node_idx_;
 };

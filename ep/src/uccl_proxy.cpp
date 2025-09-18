@@ -4,7 +4,7 @@
 
 UcclProxy::UcclProxy(uintptr_t rb_addr, int block_idx,
                      uintptr_t gpu_buffer_addr, size_t total_size, int rank,
-                     std::string const& peer_ip)
+                     int node_idx, int local_rank, std::string const& peer_ip)
     : peer_ip_storage_{peer_ip}, thread_{}, mode_{Mode::None}, running_{false} {
   Proxy::Config cfg;
   // cfg.rb = reinterpret_cast<DeviceToHostCmdBuffer*>(rb_addr);
@@ -16,9 +16,11 @@ UcclProxy::UcclProxy(uintptr_t rb_addr, int block_idx,
   cfg.gpu_buffer = reinterpret_cast<void*>(gpu_buffer_addr);
   cfg.total_size = total_size;
   cfg.rank = rank;
+  cfg.local_rank = local_rank;
   cfg.peer_ip = peer_ip_storage_.empty() ? nullptr : peer_ip_storage_.c_str();
   proxy_ = std::make_unique<Proxy>(cfg);
-  local_rank_ = rank;
+  local_rank_ = local_rank;
+  node_idx_ = node_idx;
 
   if (block_idx == 0) {
     // size_t atomic_buffer_bytes = 2 * align<size_t>(num_experts * sizeof(int),
@@ -65,15 +67,17 @@ void UcclProxy::start_dual() {
 }
 
 void UcclProxy::stop() {
-  if (!running_.load(std::memory_order_acquire)) return;
+  if (!running_.load(std::memory_order_acquire)) {
+    throw std::runtime_error("Proxy already stopped");
+  }
   proxy_->set_progress_run(false);
   if (thread_.joinable()) thread_.join();
   running_.store(false, std::memory_order_release);
   // Because proxies share the gpu_buffer, only destroy gpu_buffer for the first
   // proxy.
-  // std::printf("UcclProxy destroying\n");
+  std::printf("UcclProxy destroying\n");
   proxy_->destroy(block_idx_ == 0);
-  // std::printf("UcclProxy destroyed\n");
+  std::printf("UcclProxy destroyed\n");
 }
 
 void UcclProxy::start(Mode m) {

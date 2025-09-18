@@ -36,14 +36,13 @@ class Proxy {
     void* gpu_buffer = nullptr;
     size_t total_size = 0;
     int rank = 0;
+    int node_idx = -1;
+    int local_rank = -1;
     char const* peer_ip = nullptr;
     bool pin_thread = true;
   };
 
-  explicit Proxy(Config const& cfg) : cfg_(cfg) {
-    // TODO(Fix)
-    GPU_RT_CHECK(gpuSetDevice(0));
-  }
+  explicit Proxy(Config const& cfg) : cfg_(cfg) {}
 
   void set_progress_run(bool run) {
     ctx_.progress_run.store(run, std::memory_order_release);
