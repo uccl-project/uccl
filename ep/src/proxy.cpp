@@ -16,15 +16,18 @@ double Proxy::avg_wr_latency_us() const {
 }
 
 uint64_t Proxy::completed_wr() const { return completion_count_; }
+
 void Proxy::pin_thread() {
   if (cfg_.pin_thread) {
     // TODO(MaoZiming): improves pinning.
-    pin_thread_to_cpu(cfg_.block_idx + 1);
+    pin_thread_to_cpu(cfg_.block_idx + 1 + cfg_.local_rank * kNumThBlocks);
     int cpu = sched_getcpu();
     if (cpu == -1) {
       perror("sched_getcpu");
     } else {
-      printf("Local CPU thread pinned to core %d\n", cpu);
+      printf(
+          "Local CPU thread pinned to core %d, block_idx: %d, local_rank: %d\n",
+          cpu, cfg_.block_idx, cfg_.local_rank);
     }
   }
 }
@@ -89,9 +92,6 @@ void Proxy::init_common() {
   ctx_by_tag_.resize(ctxs_for_all_ranks_.size() + 1, nullptr);
   // Per peer QP initialization
   for (int peer = 0; peer < num_ranks; ++peer) {
-    // if (peer == my_rank) continue;
-    // // Skip rdma connection for intra-node.
-    // if (peers_[peer].ip == peers_[my_rank].ip) continue;
     auto& c = *ctxs_for_all_ranks_[peer];
 
     c.tag = next_tag++;
@@ -105,6 +105,10 @@ void Proxy::init_common() {
     // NOTE(MaoZiming): each context can share the same cq, pd, mr.
     // but the qp must be different.
     c.cq = ctx_.cq;
+
+    if (peer == my_rank) continue;
+    // Skip rdma connection for intra-node.
+    if (peers_[peer].ip == peers_[my_rank].ip) continue;
     create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
                          &local_infos_[peer], my_rank);
     modify_qp_to_init(c);
@@ -123,14 +127,14 @@ void Proxy::init_common() {
     char const* ip = peers_[peer].ip.c_str();
 
     int virt_rank = i_listen ? 0 : 1;
-    if (peers_[cfg_.rank].ptr != local_infos_[my_rank].addr) {
-      fprintf(stderr,
-              "Rank %d block %d: Warning: local addr mismatch: got 0x%lx, "
-              "expected 0x%lx\n",
-              my_rank, cfg_.block_idx, local_infos_[my_rank].addr,
-              peers_[cfg_.rank].ptr);
-      std::abort();
-    }
+    // if (peers_[cfg_.rank].ptr != local_infos_[my_rank].addr) {
+    //   fprintf(stderr,
+    //           "Rank %d block %d: Warning: local addr mismatch: got 0x%lx, "
+    //           "expected 0x%lx\n",
+    //           my_rank, cfg_.block_idx, local_infos_[my_rank].addr,
+    //           peers_[cfg_.rank].ptr);
+    //   std::abort();
+    // }
     exchange_connection_info(virt_rank, ip, tid, &local_infos_[peer],
                              &remote_infos_[peer]);
     if (remote_infos_[peer].addr != peers_[peer].ptr) {
@@ -426,8 +430,8 @@ void Proxy::post_gpu_commands_mixed(
       rdma_cmds.push_back(cmds_to_post[i]);
     }
   }
-  printf("Posting %zu RDMA writes and %zu atomic ops\n", rdma_wrs.size(),
-         atomic_wrs.size());
+  // printf("Posting %zu RDMA writes and %zu atomic ops\n", rdma_wrs.size(),
+  //        atomic_wrs.size());
   // Handle regular RDMA writes
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,

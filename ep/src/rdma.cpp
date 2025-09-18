@@ -222,7 +222,8 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
                               IBV_ACCESS_RELAXED_ORDERING);
 #else
   S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
-                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                              IBV_ACCESS_RELAXED_ORDERING);
 #endif
 
   if (!S.mr) {
@@ -297,11 +298,11 @@ struct ibv_qp* create_srd_qp_ex(ProxyCtx& S) {
   qp_attr_ex.qp_type = IBV_QPT_DRIVER;
 
   efa_attr.driver_qp_type = EFADV_QP_DRIVER_TYPE_SRD;
-#define EFA_QP_LOW_LATENCY_SERVICE_LEVEL 8
-  efa_attr.sl = EFA_QP_LOW_LATENCY_SERVICE_LEVEL;
+  // #define EFA_QP_LOW_LATENCY_SERVICE_LEVEL 8
+  //   efa_attr.sl = EFA_QP_LOW_LATENCY_SERVICE_LEVEL;
   efa_attr.flags = 0;
   // If set, Receive WRs will not be consumed for RDMA write with imm.
-  // efa_attr.flags |= EFADV_QP_FLAGS_UNSOLICITED_WRITE_RECV;
+  efa_attr.flags |= EFADV_QP_FLAGS_UNSOLICITED_WRITE_RECV;
 
   struct ibv_qp* qp = efadv_create_qp_ex(S.context, &qp_attr_ex, &efa_attr,
                                          sizeof(struct efadv_qp_init_attr));
@@ -585,25 +586,6 @@ void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
   struct ibv_qp_attr attr;
   memset(&attr, 0, sizeof(attr));
   attr.qp_state = IBV_QPS_RTS;
-
-#ifdef EFA
-  attr.sq_psn = 0;
-  if (ibv_modify_qp(S.qp, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN)) {
-    perror("Failed to modify QP to RTS");
-    exit(1);
-  }
-  if (ibv_modify_qp(S.ack_qp, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN)) {
-    perror("Failed to modify Ack QP to RTS");
-    exit(1);
-  }
-  if (ibv_modify_qp(S.recv_ack_qp, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN)) {
-    perror("Failed to modify Receive Ack QP to RTS");
-    exit(1);
-  }
-  printf("QP modified to RTS state\n");
-  return;
-#endif
-
   attr.timeout = 14;
   attr.retry_cnt = 7;
   attr.rnr_retry = 7;
@@ -639,27 +621,27 @@ void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
 }
 
 void post_receive_buffer_for_imm(ProxyCtx& S) {
-  std::vector<ibv_recv_wr> wrs(kMaxOutstandingRecvs);
-  std::vector<ibv_sge> sges(kMaxOutstandingRecvs);
+  // std::vector<ibv_recv_wr> wrs(kMaxOutstandingRecvs);
+  // std::vector<ibv_sge> sges(kMaxOutstandingRecvs);
 
-  for (size_t i = 0; i < kMaxOutstandingRecvs; ++i) {
-    int offset = kNumThBlocks > i ? i : (i % kNumThBlocks);
+  // for (size_t i = 0; i < kMaxOutstandingRecvs; ++i) {
+  //   int offset = kNumThBlocks > i ? i : (i % kNumThBlocks);
 
-    sges[i] = {.addr = (uintptr_t)S.mr->addr + offset * kObjectSize,
-               .length = kObjectSize,
-               .lkey = S.mr->lkey};
-    wrs[i] = {.wr_id = make_wr_id(S.tag, static_cast<uint32_t>(i)),
-              .next = (i + 1 < kMaxOutstandingRecvs) ? &wrs[i + 1] : nullptr,
-              .sg_list = &sges[i],
-              .num_sge = 1};
-  }
+  //   sges[i] = {.addr = (uintptr_t)S.mr->addr + offset * kObjectSize,
+  //              .length = kObjectSize,
+  //              .lkey = S.mr->lkey};
+  //   wrs[i] = {.wr_id = make_wr_id(S.tag, static_cast<uint32_t>(i)),
+  //             .next = (i + 1 < kMaxOutstandingRecvs) ? &wrs[i + 1] : nullptr,
+  //             .sg_list = &sges[i],
+  //             .num_sge = 1};
+  // }
 
-  /* Post the whole chain with ONE verbs call */
-  ibv_recv_wr* bad = nullptr;
-  if (ibv_post_recv(S.qp, &wrs[0], &bad)) {
-    perror("ibv_post_recv");
-    std::abort();
-  }
+  // /* Post the whole chain with ONE verbs call */
+  // ibv_recv_wr* bad = nullptr;
+  // if (ibv_post_recv(S.qp, &wrs[0], &bad)) {
+  //   perror("ibv_post_recv");
+  //   std::abort();
+  // }
 }
 
 void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
@@ -860,51 +842,64 @@ void local_process_completions(ProxyCtx& S,
         //   printf("[EFA_SEND_DONE] wrid=%lu tag=0x%llx qp=0x%x\n", wrid,
         //          (wrid & kAtomicMask), wc[i].qp_num);
         // }
+        {
+          std::lock_guard<std::mutex> lock(finished_wrs_mutex);
+          const uint64_t wr_done = wc[i].wr_id;
+          acked_wrs.insert(wr_done);
+          if (S.wr_id_to_wr_ids.find(wr_done) != S.wr_id_to_wr_ids.end()) {
+            // fprintf(stderr,
+            //         "Error: received ACK for unknown wr_id %lu\n",
+            //         wr_done);
+            // std::abort();
+            S.wr_id_to_wr_ids.erase(wr_done);
+          }
+        }
       } break;
       case IBV_WC_RECV:
         if (wc[i].wc_flags & IBV_WC_WITH_IMM &&
             !((ntohl(wc[i].imm_data) >> 31) & 0x1)) {
           const uint32_t slot = wr_slot(wc[i].wr_id);
           uint64_t wr_done = static_cast<uint64_t>(ntohl(wc[i].imm_data));
-          {
-            std::lock_guard<std::mutex> lock(finished_wrs_mutex);
-            if (S.wr_id_to_wr_ids.find(wr_done) == S.wr_id_to_wr_ids.end()) {
-              fprintf(stderr,
-                      "Error: received ACK for unknown wr_id %lu (slot=%u)\n",
-                      wr_done, slot);
-              std::abort();
-            }
-            auto& vec = S.wr_id_to_wr_ids[wr_done];
-            if (!vec.empty()) {
-              for (auto const& wr_id : vec) {
-                acked_wrs.insert(wr_id);
-                if (finished_wrs.find(wr_id) == finished_wrs.end()) {
-                  fprintf(stderr,
-                          "Error: finished_wrs received ACK for unknown wr_id "
-                          "%lu\n",
-                          wr_id);
-                  std::abort();
-                }
-              }
-            }
-            S.wr_id_to_wr_ids.erase(wr_done);
-          }
-          const uint32_t tag = wr_tag(wc[i].wr_id);
-          ProxyCtx& S_ack = *ctx_by_tag[tag];
-          ibv_sge sge = {
-              .addr = reinterpret_cast<uintptr_t>(&S_ack.ack_recv_buf[slot]),
-              .length = sizeof(uint64_t),
-              .lkey = S_ack.ack_recv_mr->lkey,
-          };
-          ibv_recv_wr rwr = {};
-          ibv_recv_wr* bad = nullptr;
-          rwr.wr_id = make_wr_id(tag, slot);
-          rwr.sg_list = &sge;
-          rwr.num_sge = 1;
-          if (ibv_post_recv(S_ack.recv_ack_qp, &rwr, &bad)) {
-            perror("ibv_post_recv(repost ACK)");
-            std::abort();
-          }
+          // {
+          //   std::lock_guard<std::mutex> lock(finished_wrs_mutex);
+          //   if (S.wr_id_to_wr_ids.find(wr_done) == S.wr_id_to_wr_ids.end()) {
+          //     fprintf(stderr,
+          //             "Error: received ACK for unknown wr_id %lu
+          //             (slot=%u)\n", wr_done, slot);
+          //     std::abort();
+          //   }
+          //   // auto& vec = S.wr_id_to_wr_ids[wr_done];
+          //   // if (!vec.empty()) {
+          //   //   for (auto const& wr_id : vec) {
+          //   //     acked_wrs.insert(wr_id);
+          //   //     if (finished_wrs.find(wr_id) == finished_wrs.end()) {
+          //   //       fprintf(stderr,
+          //   //               "Error: finished_wrs received ACK for unknown
+          //   wr_id "
+          //   //               "%lu\n",
+          //   //               wr_id);
+          //   //       std::abort();
+          //   //     }
+          //   //   }
+          //   // }
+          //   S.wr_id_to_wr_ids.erase(wr_done);
+          // }
+          // const uint32_t tag = wr_tag(wc[i].wr_id);
+          // ProxyCtx& S_ack = *ctx_by_tag[tag];
+          // ibv_sge sge = {
+          //     .addr = reinterpret_cast<uintptr_t>(&S_ack.ack_recv_buf[slot]),
+          //     .length = sizeof(uint64_t),
+          //     .lkey = S_ack.ack_recv_mr->lkey,
+          // };
+          // ibv_recv_wr rwr = {};
+          // ibv_recv_wr* bad = nullptr;
+          // rwr.wr_id = make_wr_id(tag, slot);
+          // rwr.sg_list = &sge;
+          // rwr.num_sge = 1;
+          // if (ibv_post_recv(S_ack.recv_ack_qp, &rwr, &bad)) {
+          //   perror("ibv_post_recv(repost ACK)");
+          //   std::abort();
+          // }
         }
         break;
       case IBV_WC_FETCH_ADD: {
@@ -1029,43 +1024,43 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       auto* addr32 =
           reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
       addr32->fetch_add(value, std::memory_order_release);
-      const uint32_t tag = wr_tag(cqe.wr_id);
-      ProxyCtx& S_atomic = *ctx_by_tag[tag];
-      ibv_sge sge = {
-          .addr = reinterpret_cast<uintptr_t>(S_atomic.mr->addr),
-          .length = 1,
-          .lkey = S_atomic.mr->lkey,
-      };
-      ibv_recv_wr rwr = {};
-      S.pool_index = (S.pool_index + 1) % (kRemoteBufferSize / kObjectSize - 1);
-      rwr.wr_id = make_wr_id(wr_tag(cqe.wr_id), S.pool_index);
-      rwr.sg_list = &sge;
-      rwr.num_sge = 1;
-      ibv_recv_wr* bad = nullptr;
-      if (ibv_post_recv(S_atomic.qp, &rwr, &bad)) {
-        perror("ibv_post_recv (atomics replenish)");
-        std::abort();
-      }
+      // const uint32_t tag = wr_tag(cqe.wr_id);
+      // ProxyCtx& S_atomic = *ctx_by_tag[tag];
+      // ibv_sge sge = {
+      //     .addr = reinterpret_cast<uintptr_t>(S_atomic.mr->addr),
+      //     .length = 1,
+      //     .lkey = S_atomic.mr->lkey,
+      // };
+      // ibv_recv_wr rwr = {};
+      // S.pool_index = (S.pool_index + 1) % (kRemoteBufferSize / kObjectSize -
+      // 1); rwr.wr_id = make_wr_id(wr_tag(cqe.wr_id), S.pool_index);
+      // rwr.sg_list = &sge;
+      // rwr.num_sge = 1;
+      // ibv_recv_wr* bad = nullptr;
+      // if (ibv_post_recv(S_atomic.qp, &rwr, &bad)) {
+      //   perror("ibv_post_recv (atomics replenish)");
+      //   std::abort();
+      // }
       continue;
     }
     if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
-      const uint32_t tag = wr_tag(cqe.wr_id);
-      ProxyCtx& S_ack = *ctx_by_tag[tag];
-      ibv_sge sge = {
-          .addr = reinterpret_cast<uintptr_t>(&S_ack.ack_recv_buf[0]),
-          .length = sizeof(uint64_t),
-          .lkey = S_ack.ack_recv_mr->lkey,
-      };
-      ibv_recv_wr rwr{};
-      S.pool_index = (S.pool_index + 1) % (kRemoteBufferSize / kObjectSize - 1);
-      rwr.wr_id = make_wr_id(wr_tag(cqe.wr_id), S.pool_index);
-      rwr.sg_list = &sge;
-      rwr.num_sge = 1;
-      ibv_recv_wr* bad = nullptr;
-      if (ibv_post_recv(S_ack.qp, &rwr, &bad)) {
-        perror("ibv_post_recv (imm replenish)");
-        std::abort();
-      }
+      // const uint32_t tag = wr_tag(cqe.wr_id);
+      // ProxyCtx& S_ack = *ctx_by_tag[tag];
+      // ibv_sge sge = {
+      //     .addr = reinterpret_cast<uintptr_t>(&S_ack.ack_recv_buf[0]),
+      //     .length = sizeof(uint64_t),
+      //     .lkey = S_ack.ack_recv_mr->lkey,
+      // };
+      // ibv_recv_wr rwr{};
+      // S.pool_index = (S.pool_index + 1) % (kRemoteBufferSize / kObjectSize -
+      // 1); rwr.wr_id = make_wr_id(wr_tag(cqe.wr_id), S.pool_index);
+      // rwr.sg_list = &sge;
+      // rwr.num_sge = 1;
+      // ibv_recv_wr* bad = nullptr;
+      // if (ibv_post_recv(S_ack.qp, &rwr, &bad)) {
+      //   perror("ibv_post_recv (imm replenish)");
+      //   std::abort();
+      // }
       uint32_t imm = ntohl(cqe.imm_data);
       int destination_gpu = static_cast<int>(imm % nDevices);
       size_t src_offset = static_cast<size_t>(S.pool_index) * kObjectSize;
@@ -1078,9 +1073,10 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       if (task.dst_ptr && task.bytes) {
         task_vec.push_back(task);
       } else {
-        ProxyCtx* peer_ctx = ctx_by_tag[tag];
-        remote_send_ack(peer_ctx, peer_ctx->ack_qp, task.wr_id, g_ring.ack_mr,
-                        g_ring.ack_buf, idx);
+        // ProxyCtx* peer_ctx = ctx_by_tag[tag];
+        // remote_send_ack(peer_ctx, peer_ctx->ack_qp, task.wr_id,
+        // g_ring.ack_mr,
+        //                 g_ring.ack_buf, idx);
       }
     }
   }
@@ -1199,6 +1195,7 @@ void remote_send_ack(ProxyCtx* ctx, struct ibv_qp* ack_qp, uint64_t& wr_id,
 }
 
 void local_post_ack_buf(ProxyCtx& S, int depth) {
+  return;
   if (!S.pd || !S.recv_ack_qp) {
     fprintf(stderr,
             "local_post_ack_buf: PD/QP not ready (pd=%p, recv_ack_qp=%p)\n",
