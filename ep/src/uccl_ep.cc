@@ -88,10 +88,10 @@ class Buffer {
     if (num_local_ranks == -1) num_local_ranks = get_num_max_nvl_peers();
     max_nvl_peers = num_local_ranks;
     {
-      // printf(
-      //     "Buffer initializing for rank %d, num_ranks %d, num_nvl_bytes %ld,
-      //     " "num_rdma_bytes %ld\n", rank, num_ranks, num_nvl_bytes,
-      //     num_rdma_bytes);
+      printf(
+          "Buffer initializing for rank %d, num_ranks %d, num_nvl_bytes %ld,"
+          "num_rdma_bytes %ld, max_nvl_peers %d\n",
+          rank, num_ranks, num_nvl_bytes, num_rdma_bytes, max_nvl_peers);
       cudaGetDevice(&device_index);
       {
         std::lock_guard<std::mutex> lk(g_proxies_mu);

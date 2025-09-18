@@ -294,8 +294,18 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
     uint64_t cmd = cfg_.rb->volatile_load_cmd(i);
     // NOTE(MaoZiming): Non-blocking. prevent local and remote both while loop.
     if (cmd == 0) break;
-
     TransferCmd& cmd_entry = cfg_.rb->load_cmd_entry(i);
+    if (static_cast<int>(cmd_entry.dst_rank) == cfg_.rank) {
+      printf("Local command!, cmd.dst_rank: %d, cfg_.rank: %d\n",
+             cmd_entry.dst_rank, cfg_.rank);
+      std::abort();
+    }
+    if (peers_[cmd_entry.dst_rank].ip == peers_[cfg_.rank].ip) {
+      printf("Intra-node command!, cmd.dst_rank: %d, cfg_.rank: %d\n",
+             cmd_entry.dst_rank, cfg_.rank);
+      std::abort();
+    }
+
     wrs_to_post.push_back(i);
     cmds_to_post.push_back(cmd_entry);
     wr_id_to_start_time_[i] = std::chrono::high_resolution_clock::now();
@@ -416,8 +426,8 @@ void Proxy::post_gpu_commands_mixed(
       rdma_cmds.push_back(cmds_to_post[i]);
     }
   }
-  // printf("Posting %zu RDMA writes and %zu atomic ops\n", rdma_wrs.size(),
-  //        atomic_wrs.size());
+  printf("Posting %zu RDMA writes and %zu atomic ops\n", rdma_wrs.size(),
+         atomic_wrs.size());
   // Handle regular RDMA writes
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,

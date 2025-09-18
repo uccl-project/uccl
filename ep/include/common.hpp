@@ -19,7 +19,7 @@
 #define kMaxInflight 64
 #define kBatchSize 32
 #define kIterations 40000
-#define kNumThBlocks 6
+#define kNumThBlocks 2
 #define kNumThPerBlock 1
 #define kObjectSize 10752  // 10.5 KB
 #define kMaxOutstandingSends 2048

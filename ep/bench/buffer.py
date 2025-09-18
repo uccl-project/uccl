@@ -92,12 +92,14 @@ class Buffer:
             None,
         ] * self.group_size
         local_device_id = self.runtime.get_local_device_id()
+        print("Before all_gather_object device_ids", local_device_id, flush=True)
         dist.all_gather_object(device_ids, local_device_id, group)
         # Synchronize IPC handles
         ipc_handles = [
             None,
         ] * self.group_size
         local_ipc_handle = self.runtime.get_local_ipc_handle()
+        print("Before all_gather_object ipc_handles", local_ipc_handle, flush=True)
         dist.all_gather_object(ipc_handles, local_ipc_handle, group)
 
         rdma_ipc_handles = [None] * self.group_size

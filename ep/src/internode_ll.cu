@@ -356,11 +356,42 @@ LOW_LATENCY_DISPATCH_RECV:
                   rdma_recv_count_internode + local_expert_idx * num_ranks +
                   src_rank)) == 0)
         ;
+
+      if (src_rank / max_nvl_peers == rank / max_nvl_peers) {
+        if (ld_acquire_sys_global(rdma_recv_count_internode +
+                                  local_expert_idx * num_ranks + src_rank) !=
+            0) {
+          printf(
+              "Same node but rdma_recv_count_internode is not zero! src_rank: "
+              "%d, rank: %d, max_nvl_peers: %d\n",
+              src_rank, rank, max_nvl_peers);
+          assert(false);
+        }
+      }
+      if (src_rank / max_nvl_peers != rank / max_nvl_peers) {
+        if (ld_acquire_sys_global(rdma_recv_count +
+                                  local_expert_idx * num_ranks + src_rank) !=
+            0) {
+          printf(
+              "Different node but rdma_recv_count is not zero! src_rank: %d, "
+              "rank: %d, max_nvl_peers: %d\n",
+              src_rank, rank, max_nvl_peers);
+          assert(false);
+        }
+      }
       auto wait_recv_cost = clock64() - start_time;
       num_recv_tokens_internode =
           num_recv_tokens_internode != 0 ? -num_recv_tokens_internode - 1 : 0;
       num_recv_tokens_ipc =
           num_recv_tokens_ipc != 0 ? -num_recv_tokens_ipc - 1 : 0;
+      // printf(
+      //     "num_recv_tokens_internode: %d, num_recv_tokens_ipc: %d, src_rank:
+      //     "
+      //     "%d, rank: %d, max_nvl_peers: %d, responsible_expert_idx: %d,
+      //     num_experts: %d, num_local_experts: %d\n",
+      //     num_recv_tokens_internode, num_recv_tokens_ipc, src_rank, rank,
+      //     max_nvl_peers, responsible_expert_idx, num_experts,
+      //     num_local_experts);
       num_recv_tokens = num_recv_tokens_internode + num_recv_tokens_ipc;
       recv_token_begin_idx =
           atomicAdd(packed_recv_count + local_expert_idx, num_recv_tokens);
@@ -840,6 +871,28 @@ LOW_LATENCY_COMBINE_RECV:
              ld_acquire_sys_global(rdma_recv_flag_internode +
                                    responsible_expert_idx) == 0)
         ;
+
+      if (src_rank / max_nvl_peers == rank / max_nvl_peers) {
+        if (ld_acquire_sys_global(rdma_recv_flag_internode +
+                                  responsible_expert_idx) != 0) {
+          printf(
+              "Same node but rdma_recv_flag_internode is not zero! src_rank: "
+              "%d, rank: %d, max_nvl_peers: %d\n",
+              src_rank, rank, max_nvl_peers);
+          assert(false);
+        }
+      }
+      if (src_rank / max_nvl_peers != rank / max_nvl_peers) {
+        if (ld_acquire_sys_global(rdma_recv_flag + responsible_expert_idx) !=
+            0) {
+          printf(
+              "Different node but rdma_recv_flag is not zero! src_rank: %d, "
+              "rank: %d, max_nvl_peers: %d\n",
+              src_rank, rank, max_nvl_peers);
+          assert(false);
+        }
+      }
+
       auto wait_recv_cost = clock64() - start_time;
       if (combine_wait_recv_cost_stats != nullptr) {
         auto const& src_rank = responsible_expert_idx / num_local_experts;

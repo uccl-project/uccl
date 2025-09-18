@@ -154,20 +154,38 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   std::vector<std::pair<std::string, uint32_t>> dist;
   dist.reserve(ib_nics.size());
 
+  std::string selected_nic_name;
   for (auto& nic : ib_nics) {
     uint32_t d = uccl::safe_pcie_distance(gpu_device_path, nic.second);
     dist.emplace_back(nic.first, d);
   }
 
-  auto it = std::min_element(
-      dist.begin(), dist.end(),
-      [](auto const& a, auto const& b) { return a.second < b.second; });
+  if (dist.empty()) {
+    fprintf(stderr, "[WARN] no NIC found, defaulting to empty\n");
+    selected_nic_name.clear();
+  } else {
+    // Find the minimum distance
+    auto min_it = std::min_element(
+        dist.begin(), dist.end(),
+        [](auto const& a, auto const& b) { return a.second < b.second; });
+    auto min_d = min_it->second;
 
-  if (it == dist.end()) {
-    fprintf(stderr, "[WARN] no NIC found, defaulting to first\n");
-    // fallback
+    // Collect all NICs with equal minimum distance
+    std::vector<std::string> candidates;
+    for (auto& p : dist) {
+      if (p.second == min_d) candidates.push_back(p.first);
+    }
+
+    if (candidates.empty()) {
+      fprintf(stderr, "[WARN] no candidate NIC found, defaulting to first\n");
+      selected_nic_name = dist.front().first;
+    } else {
+      // Spread GPUs across equal-distance NICs: use local GPU index modulo
+      // For example, pass in `local_rank` or derive gpu_index from device path
+      selected_nic_name = candidates[gpu_idx % candidates.size()];
+    }
   }
-  auto selected_nic_name = it->first;
+
   int selected_dev_idx = -1;
   for (int i = 0; i < num_devices; i++) {
     if (strcmp(ibv_get_device_name(dev_list[i]), selected_nic_name.c_str()) ==
@@ -373,7 +391,7 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
     perror("Failed to query port");
     exit(1);
   }
-  printf("Local LID: 0x%x\n", port_attr.lid);
+  // printf("Local LID: 0x%x\n", port_attr.lid);
   // Fill local connection info
   local_info->qp_num = S.qp->qp_num;
   local_info->ack_qp_num = S.ack_qp->qp_num;
@@ -390,11 +408,12 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   // bytes\n",
   //        rank, local_info->addr, size);
   fill_local_gid(S, local_info);
-  printf(
-      "Local RDMA info: addr=0x%lx, rkey=0x%x, qp_num=%u, psn=%u, "
-      "ack_qp_num=%u, recv_ack_qp_num=%u, ack_psn: %u\n",
-      local_info->addr, local_info->rkey, local_info->qp_num, local_info->psn,
-      local_info->ack_qp_num, local_info->recv_ack_qp_num, local_info->ack_psn);
+  // printf(
+  //     "Local RDMA info: addr=0x%lx, rkey=0x%x, qp_num=%u, psn=%u, "
+  //     "ack_qp_num=%u, recv_ack_qp_num=%u, ack_psn: %u\n",
+  //     local_info->addr, local_info->rkey, local_info->qp_num,
+  //     local_info->psn, local_info->ack_qp_num, local_info->recv_ack_qp_num,
+  //     local_info->ack_psn);
 }
 
 void modify_qp_to_init(ProxyCtx& S) {

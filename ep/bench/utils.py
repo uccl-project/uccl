@@ -80,7 +80,7 @@ def init_dist_under_torchrun(local_rank: int, num_local_ranks: int):
     dist.init_process_group(backend="nccl")
 
     torch.set_default_dtype(torch.bfloat16)
-    torch.set_default_device("cuda")
+    torch.set_default_device(f"cuda:{local_rank}")
     torch.cuda.set_device(local_rank)
 
     return (
@@ -134,10 +134,20 @@ def get_cpu_proxies_meta(rank, scratch_ptr, scratch_bytes, num_ranks, group):
         "ip": _discover_local_ip(),
     }
     all_meta = [None] * num_ranks
-    print("gathering cpu proxies meta", flush=True)
+    device_index = int(os.environ.get("LOCAL_RANK", 0))
+    torch.cuda.set_device(device_index)
+    print(
+        f"all_gather_object [Rank {dist.get_rank(group)}] "
+        f"group={group}, "
+        f"world_size={dist.get_world_size(group)}, "
+        f"group_rank={dist.get_rank(group)}, "
+        f"default_world_size={dist.get_world_size()}, "
+        f"default_rank={dist.get_rank()}",
+        torch.cuda.current_device(),
+        flush=True,
+    )
     dist.all_gather_object(all_meta, meta, group=group)
     print("After all_gather_object", flush=True)
-    dist.barrier(group)
     rank2meta = {m["rank"]: m for m in all_meta}
     return rank2meta
 
@@ -450,12 +460,15 @@ def initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group):
     nproc_per_node = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
     node_idx = rank // nproc_per_node
 
-    peer_ip = get_peer_ip(rank, num_ranks, group)
-    if rank == 0:
-        print(
-            f"Peer IP: {peer_ip}",
-            flush=True,
-        )
+    if int(os.environ.get("WORLD_SIZE")) % nproc_per_node != 0:
+        raise ValueError("WORLD_SIZE must be divisible by LOCAL_WORLD_SIZE")
+
+    # peer_ip = get_peer_ip(rank, num_ranks, group)
+    # if rank == 0:
+    #     print(
+    #         f"Peer IP: {peer_ip}",
+    #         flush=True,
+    #     )
 
     bench = ep.Bench()
     proxies = []
@@ -464,6 +477,7 @@ def initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group):
         rank, scratch_ptr, scratch_nbytes, num_ranks, group
     )
     peers_meta_list = [rank2meta[r] for r in range(num_ranks)]
+    peer_ip = rank2meta[(rank + 1) % num_ranks]["ip"]
 
     for i in range(bench.num_proxies()):
         proxy = ep.Proxy(
@@ -478,6 +492,7 @@ def initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group):
         )
         proxy.set_peers_meta(peers_meta_list)
         proxies.append(proxy)
+        print(f"Proxy {i} initialized", flush=True)
 
     print("register proxy for device", local_rank)
     ep.register_proxies(local_rank, proxies)
@@ -487,17 +502,17 @@ def initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group):
         proxies[i].start_dual()
 
     workers = None
-    if hasattr(ep, "PeerCopyManager"):
-        try:
-            workers = ep.PeerCopyManager(src_device=local_rank)
-            workers.start_for_proxies(proxies)
-            if rank == 0:
-                print("✓ PeerCopyManager started", flush=True)
-        except Exception as e:
-            if rank == 0:
-                print(f"PeerCopyManager unavailable: {e}", flush=True)
+    # if hasattr(ep, "PeerCopyManager"):
+    #     try:
+    #         workers = ep.PeerCopyManager(src_device=local_rank)
+    #         workers.start_for_proxies(proxies)
+    #         if rank == 0:
+    #             print("✓ PeerCopyManager started", flush=True)
+    #     except Exception as e:
+    #         if rank == 0:
+    #             print(f"PeerCopyManager unavailable: {e}", flush=True)
 
-    time.sleep(1)
+    time.sleep(3)
 
     return proxies, workers, bench
 
