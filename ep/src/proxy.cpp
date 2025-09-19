@@ -2,7 +2,9 @@
 #include "ep_util.hpp"
 #include <arpa/inet.h>  // for htonl, ntohl
 #include <chrono>
+#include <set>
 #include <thread>
+#include <tuple>
 
 double Proxy::avg_rdma_write_us() const {
   if (kIterations == 0) return 0.0;
@@ -210,10 +212,13 @@ void Proxy::run_sender() {
 void Proxy::run_remote() {
   printf("Remote CPU thread for block %d started\n", cfg_.block_idx + 1);
   init_remote();
+  std::set<PendingUpdate> pending_atomic_updates;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     remote_poll_completions(ctx_, cfg_.block_idx, ring, ctx_by_tag_,
                             atomic_buffer_ptr_, cfg_.num_ranks,
-                            cfg_.num_experts);
+                            cfg_.num_experts, pending_atomic_updates);
+    apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
+                          cfg_.num_experts, cfg_.num_ranks);
   }
 }
 
@@ -234,13 +239,16 @@ void Proxy::run_dual() {
   }
   uint64_t my_tail = 0;
   size_t seen = 0;
+  std::set<PendingUpdate> pending_atomic_updates;
   // printf("run_dual initialization complete\n");
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     poll_cq_dual(ctx_, finished_wrs_, acked_wrs_, finished_wrs_mutex_,
                  cfg_.block_idx, ring, ctx_by_tag_, atomic_buffer_ptr_,
-                 cfg_.num_ranks, cfg_.num_experts);
+                 cfg_.num_ranks, cfg_.num_experts, pending_atomic_updates);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
+    apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
+                          cfg_.num_experts, cfg_.num_ranks);
   }
 }
 

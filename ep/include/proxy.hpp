@@ -19,6 +19,9 @@
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
+#include <set>
+#include <tuple>
+
 struct PeerMeta {
   int rank;
   uintptr_t ptr;

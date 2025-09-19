@@ -288,7 +288,10 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           atomic_buffer_ptr, dst_ptr, dst_ptr_internode,
           dst_ptr_internode - reinterpret_cast<uint64_t>(atomic_buffer_ptr),
           low_latency_buffer_idx, dst_expert_local_idx * num_ranks + rank);
-      __nanosleep(5000000);
+      // uint64_t start = clock64();
+      // while (clock64() - start < 1e8) {
+      //     // busy wait
+      // }
       uccl::nvshmemi_ibgda_amo_nonfetch_add(
           dst_ptr_internode - reinterpret_cast<uint64_t>(atomic_buffer_ptr),
           -num_tokens_sent - 1, dst_rank,
@@ -859,7 +862,10 @@ __global__ __launch_bounds__(1024, 1) void combine(
 
         // Small backoff in kernel (~100000 cycles ≈ 100 µs depending on GPU
         // clock)
-        __nanosleep(4000000);
+        // uint64_t start = clock64();
+        // while (clock64() - start < 1e8) {
+        //     // busy wait
+        // }
         uccl::nvshmemi_ibgda_amo_nonfetch_add(
             dst_ptr_internode - reinterpret_cast<uint64_t>(atomic_buffer_ptr),
             num_tokens_to_send /* Will be changed to 1 in the proxy */,

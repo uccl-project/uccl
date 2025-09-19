@@ -36,6 +36,8 @@
 #define RETRY_DELAY_MS 200
 #define TCP_PORT 18515
 #define QKEY 0x11111111u
+#include <set>
+#include <tuple>
 
 template <typename dtype_t>
 dtype_t ceil_div(dtype_t a, dtype_t b) {
@@ -49,18 +51,21 @@ dtype_t align(dtype_t a, dtype_t b) {
 
 void add_tokens(ProxyCtx& ctx, int buffer_idx, int expert_idx, int src_rank,
                 size_t k) {
+  std::lock_guard<std::mutex> lock(ctx.mtx);
   auto key = std::make_tuple(buffer_idx, expert_idx, src_rank);
   ctx.token_counter[key] += k;
 }
 
 int get_num_tokens(ProxyCtx& ctx, int buffer_idx, int expert_idx,
                    int src_rank) {
+  std::lock_guard<std::mutex> lock(ctx.mtx);
   auto key = std::make_tuple(buffer_idx, expert_idx, src_rank);
   auto it = ctx.token_counter.find(key);
   return (it == ctx.token_counter.end()) ? 0 : it->second;
 }
 
 void reset_tokens(ProxyCtx& ctx, int buffer_idx, int expert_idx, int src_rank) {
+  std::lock_guard<std::mutex> lock(ctx.mtx);
   auto key = std::make_tuple(buffer_idx, expert_idx, src_rank);
   ctx.token_counter[key] = 0;
 }
@@ -68,17 +73,20 @@ void reset_tokens(ProxyCtx& ctx, int buffer_idx, int expert_idx, int src_rank) {
 // Combine tokens (per-buffer too)
 void combine_add_tokens(ProxyCtx& ctx, int buffer_idx, int expert_idx,
                         size_t k) {
+  std::lock_guard<std::mutex> lock(ctx.mtx);
   auto key = std::make_pair(buffer_idx, expert_idx);
   ctx.combine_token_counter[key] += k;
 }
 
 int get_combine_num_tokens(ProxyCtx& ctx, int buffer_idx, int expert_idx) {
+  std::lock_guard<std::mutex> lock(ctx.mtx);
   auto key = std::make_pair(buffer_idx, expert_idx);
   auto it = ctx.combine_token_counter.find(key);
   return (it == ctx.combine_token_counter.end()) ? 0 : it->second;
 }
 
 void reset_combine_tokens(ProxyCtx& ctx, int buffer_idx, int expert_idx) {
+  std::lock_guard<std::mutex> lock(ctx.mtx);
   auto key = std::make_pair(buffer_idx, expert_idx);
   ctx.combine_token_counter[key] = 0;
 }
@@ -1014,7 +1022,8 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
                   std::unordered_set<uint64_t>& acked_wrs,
                   std::mutex& finished_wrs_mutex, int thread_idx,
                   CopyRingBuffer& g_ring, std::vector<ProxyCtx*>& ctx_by_tag,
-                  void* atomic_buffer_ptr, int num_ranks, int num_experts) {
+                  void* atomic_buffer_ptr, int num_ranks, int num_experts,
+                  std::set<PendingUpdate>& pending_atomic_updates) {
   struct ibv_wc wc[kMaxOutstandingSends];  // batch poll
   int ne = 0;
 #ifdef EFA
@@ -1042,14 +1051,74 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
   local_process_completions(S, finished_wrs, acked_wrs, finished_wrs_mutex,
                             thread_idx, wc, ne, ctx_by_tag);
   remote_process_completions(S, thread_idx, g_ring, ne, wc, ctx_by_tag,
-                             atomic_buffer_ptr, num_ranks, num_experts);
+                             atomic_buffer_ptr, num_ranks, num_experts,
+                             pending_atomic_updates);
 }
 
-void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
-                                int ne, ibv_wc* wc,
-                                std::vector<ProxyCtx*>& ctx_by_tag,
-                                void* atomic_buffer_ptr, int num_ranks,
-                                int num_experts) {
+void apply_pending_updates(ProxyCtx& ctx,
+                           std::set<PendingUpdate>& pending_atomic_updates,
+                           void* atomic_buffer_ptr, int num_experts,
+                           int num_ranks) {
+  for (auto it = pending_atomic_updates.begin();
+       it != pending_atomic_updates.end();) {
+    PendingUpdate const& upd = *it;
+
+    // Decode imm again
+    uint32_t imm = upd.imm;
+    int value = unpack_v(static_cast<int32_t>(imm));
+    uint32_t offset = unpack_off(imm);
+    size_t index = offset / sizeof(int);
+    int low_latency_buffer_idx = unpack_buffer_idx(imm);
+    bool is_combine = unpack_kind(imm);
+    uint32_t new_offset =
+        offset -
+        low_latency_buffer_idx * align<size_t>(num_experts * sizeof(int), 128);
+    size_t new_index = new_offset / sizeof(int);
+
+    bool is_atomic_ready = false;
+
+    if (!is_combine) {
+      int local_expert_idx = new_index / num_ranks;
+
+      int src_rank = new_index % num_ranks;
+      int num_tokens = get_num_tokens(ctx, low_latency_buffer_idx,
+                                      local_expert_idx, src_rank);
+      if ((-value - 1) == num_tokens) {
+        is_atomic_ready = true;
+      }
+      if (is_atomic_ready)
+        reset_tokens(ctx, low_latency_buffer_idx, local_expert_idx, src_rank);
+    } else {
+      int expert_idx = new_index;
+      int combine_num_tokens =
+          get_combine_num_tokens(ctx, low_latency_buffer_idx, expert_idx);
+      // printf("is_combine: value=%d, combine_num_tokens=%d\n", value,
+      // combine_num_tokens);
+      if (value == combine_num_tokens) {
+        is_atomic_ready = true;
+      }
+
+      if (is_atomic_ready)
+        reset_combine_tokens(ctx, low_latency_buffer_idx, expert_idx);
+    }
+    if (is_atomic_ready) {
+      if (is_combine) value = 1;
+      printf("atomic_ready! Applying pending update: imm=0x%x, value=%d\n", imm,
+             value);
+      // perform atomic update
+      upd.addr->fetch_add(value, std::memory_order_release);
+      // remove from set
+      it = pending_atomic_updates.erase(it);
+    } else {
+      ++it;  // keep it for later
+    }
+  }
+}
+
+void remote_process_completions(
+    ProxyCtx& S, int idx, CopyRingBuffer& g_ring, int ne, ibv_wc* wc,
+    std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr, int num_ranks,
+    int num_experts, std::set<PendingUpdate>& pending_atomic_updates) {
   if (ne == 0) return;
   std::unordered_map<uint32_t, std::vector<ibv_recv_wr>> per_tag;
   per_tag.reserve(8);
@@ -1084,6 +1153,7 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
           offset - low_latency_buffer_idx *
                        align<size_t>(num_experts * sizeof(int), 128);
       size_t new_index = new_offset / sizeof(int);
+      bool is_atomic_ready = false;
       if (!is_combine) {
         int local_expert_idx = new_index / num_ranks;
         int src_rank = new_index % num_ranks;
@@ -1091,16 +1161,17 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                                         local_expert_idx, src_rank);
         printf(
             "[RECV_DISPATCH] low_latency_buffer_idx: %d, num_ranks: %d, "
-            "new_offset: %d (old: %d), local_expert_idx: %d, src_rank: %d\n",
+            "new_offset: %d (old: %d), local_expert_idx: %d, src_rank: %d, "
+            "Value to add: %d, matching counter: %d\n",
             low_latency_buffer_idx, num_ranks, new_offset, offset,
-            local_expert_idx, src_rank);
-        printf("[Dispatch] Value to add: %d, matching counter: %d\n",
-               -value - 1, num_tokens);
+            local_expert_idx, src_rank, -value - 1, num_tokens);
         if ((-value - 1) != num_tokens) {
           fprintf(stderr,
                   "Dispatch value %d does not match counter %d for "
                   "expert_idx %d, src_rank %d\n",
                   -value - 1, num_tokens, local_expert_idx, src_rank);
+        } else {
+          is_atomic_ready = true;
         }
         if ((-value - 1) < num_tokens) {
           fprintf(stderr,
@@ -1109,9 +1180,11 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                   "expert_idx %d, src_rank %d\n",
                   -value - 1, num_tokens, local_expert_idx, src_rank);
         }
-        reset_tokens(S, low_latency_buffer_idx, local_expert_idx, src_rank);
-        assert(get_num_tokens(S, low_latency_buffer_idx, local_expert_idx,
-                              src_rank) == 0);
+        if (is_atomic_ready) {
+          reset_tokens(S, low_latency_buffer_idx, local_expert_idx, src_rank);
+          assert(get_num_tokens(S, low_latency_buffer_idx, local_expert_idx,
+                                src_rank) == 0);
+        }
 
       } else {
         int expert_idx = new_index;
@@ -1134,6 +1207,8 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                   "Combine value %d does not match counter %d for "
                   "expert_idx %d\n",
                   value, combine_num_tokens, expert_idx);
+        } else {
+          is_atomic_ready = true;
         }
         if (value < combine_num_tokens) {
           fprintf(stderr,
@@ -1142,9 +1217,11 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                   "expert_idx %d\n",
                   value, combine_num_tokens, expert_idx);
         }
-        reset_combine_tokens(S, low_latency_buffer_idx, expert_idx);
-        assert(get_combine_num_tokens(S, low_latency_buffer_idx, expert_idx) ==
-               0);
+        if (is_atomic_ready) {
+          reset_combine_tokens(S, low_latency_buffer_idx, expert_idx);
+          assert(get_combine_num_tokens(S, low_latency_buffer_idx,
+                                        expert_idx) == 0);
+        }
       }
       // printf(
       //     "[RECV_ATOMIC] kind=%u value=%d offset=%u index=%zu addr=0x%llx
@@ -1158,8 +1235,13 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       auto* addr32 =
           reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
       if (is_combine) value = 1;
-      addr32->fetch_add(value, std::memory_order_release);
-
+      if (is_atomic_ready)
+        addr32->fetch_add(value, std::memory_order_release);
+      else {
+        printf("Atomic not ready, deferring update: imm=0x%x, value=%d\n", imm,
+               value);
+        pending_atomic_updates.insert({addr32, value, imm});
+      }
       // const uint32_t tag = wr_tag(cqe.wr_id);
       // ProxyCtx& S_atomic = *ctx_by_tag[tag];
       // ibv_sge sge = {
@@ -1192,17 +1274,21 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
         assert(expert_idx /* This is local_expert_idx*/ <
                num_experts / num_ranks);
         add_tokens(S, buffer_idx, expert_idx, src_rank, k);
-        printf("[Write dispatch] expert_idx=%u, src_rank=%u, tokens=%u\n",
-               expert_idx, src_rank,
-               get_num_tokens(S, buffer_idx, expert_idx, src_rank));
+        printf(
+            "[Write dispatch] idx=%d, expert_idx=%u, src_rank=%u, tokens=%u, "
+            "buffer_idx=%d\n",
+            idx, expert_idx, src_rank,
+            get_num_tokens(S, buffer_idx, expert_idx, src_rank), buffer_idx);
       } else {
         /* expert_idx here is the global expert index of the sender */
         assert(expert_idx >= src_rank * (num_experts / num_ranks) &&
                expert_idx < (src_rank + 1) * (num_experts / num_ranks));
         combine_add_tokens(S, buffer_idx, expert_idx, k);
-        printf("[Write combine] expert_idx=%u, tokens=%u, src_rank=%u\n",
-               expert_idx, get_combine_num_tokens(S, buffer_idx, expert_idx),
-               src_rank);
+        printf(
+            "[Write combine] idx=%d, expert_idx=%u, tokens=%u, src_rank=%u, "
+            "buffer_idx=%d\n",
+            idx, expert_idx, get_combine_num_tokens(S, buffer_idx, expert_idx),
+            src_rank, buffer_idx);
       }
       // const uint32_t tag = wr_tag(cqe.wr_id);
       // ProxyCtx& S_ack = *ctx_by_tag[tag];
@@ -1250,7 +1336,8 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
 void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                              std::vector<ProxyCtx*>& ctx_by_tag,
                              void* atomic_buffer_ptr, int num_ranks,
-                             int num_experts) {
+                             int num_experts,
+                             std::set<PendingUpdate>& pending_atomic_updates) {
   struct ibv_wc wc[kMaxOutstandingRecvs];
   int ne = 0;
 #ifdef EFA
@@ -1275,7 +1362,8 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
   ne = ibv_poll_cq(S.cq, kMaxOutstandingRecvs, wc);
 #endif
   remote_process_completions(S, idx, g_ring, ne, wc, ctx_by_tag,
-                             atomic_buffer_ptr, num_ranks, num_experts);
+                             atomic_buffer_ptr, num_ranks, num_experts,
+                             pending_atomic_updates);
 }
 
 void remote_reg_ack_buf(ibv_pd* pd, uint64_t* ack_buf, ibv_mr*& ack_mr) {
