@@ -1,6 +1,6 @@
 # !/bin/bash
 
-source ../scripts/shared.sh
+source ../../scripts/shared.sh
 
 if [[ -z "${CONDA_LIB_HOME}" ]]; then
   echo "CONDA_LIB_HOME is not set or is empty"
