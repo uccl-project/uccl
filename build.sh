@@ -7,7 +7,7 @@ set -e
 # a purpose-built Docker image derived from Ubuntu 22.04.
 #
 # Usage:
-#   ./build.sh [cuda|rocm] [all|rdma|p2p|efa|ep] [py_version]
+#   ./build.sh [cuda|rocm|therock] [all|rdma|p2p|efa|ep] [py_version] [rocm_index_url]
 #
 # The wheels are written to wheelhouse-[cuda|rocm|therock]
 # -----------------------
@@ -16,12 +16,12 @@ TARGET=${1:-cuda}
 BUILD_TYPE=${2:-all}
 PY_VER=${3:-$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")}
 ARCH="$(uname -m)"
-GFX_VER=${4:-gfx94X-dcgpu}
+ROCM_IDX_URL=${4:-https://rocm.nightlies.amd.com/v2/gfx94X-dcgpu}
 IS_EFA=$(ls /sys/class/infiniband/ | grep rdmap || true)
 
 
 if [[ $TARGET != "cuda" && $TARGET != "rocm" && $TARGET != "therock" ]]; then
-  echo "Usage: $0 [cuda|rocm|therock] [all|rdma|p2p|efa|ep|eccl] [py_version] [gfx_version]" >&2
+  echo "Usage: $0 [cuda|rocm|therock] [all|rdma|p2p|efa|ep|eccl] [py_version] [rocm_index_url]" >&2
 
 fi
 
@@ -204,7 +204,7 @@ fi
 echo "[1/3] Building Docker image ${IMAGE_NAME} using ${DOCKERFILE}..."
 echo "Python version: ${PY_VER}"
 if [[ "$TARGET" == "therock" ]]; then
-  echo "GFX version: ${GFX_VER}"
+  echo "ROCm index URL: ${ROCM_IDX_URL}"
 fi
 if [[ "$ARCH" == "aarch64" ]]; then
   docker build --platform=linux/arm64 --build-arg PY_VER="${PY_VER}" -t "$IMAGE_NAME" -f "$DOCKERFILE" .
@@ -220,7 +220,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -v "$(pwd)":/io \
   -e TARGET="${TARGET}" \
   -e ARCH="${ARCH}" \
-  -e GFX_VER="${GFX_VER}" \
+  -e ROCM_IDX_URL="${ROCM_IDX_URL}" \
   -e IS_EFA="${IS_EFA}" \
   -e WHEEL_DIR="${WHEEL_DIR}" \
   -e BUILD_TYPE="${BUILD_TYPE}" \
@@ -234,7 +234,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
       python3 -m venv /tmp/venv && . /tmp/venv/bin/activate
       pip3 install --no-cache-dir --upgrade pip
       pip3 install --no-cache-dir build auditwheel pybind11
-      pip3 install --no-cache-dir rocm[libraries,devel] --index-url https://rocm.nightlies.amd.com/v2/${GFX_VER}
+      pip3 install --no-cache-dir rocm[libraries,devel] --index-url ${ROCM_IDX_URL}
     fi
 
     eval "$FUNCTION_DEF"
@@ -286,13 +286,21 @@ def initialize():
   check_version=\"$(rocm-sdk version)\")
 " > uccl/_rocm_init.py
 
-      # Emit UCCL package dependence on TheRock
+      # Back-up setup.py and emit UCCL package dependence on TheRock
+      BACKUP_FN=$(mktemp -p . -t setup.py.XXXXXX)
+      cp ./setup.py ${BACKUP_FN}
       sed -i "s/\"rocm\": \[\],/\"rocm\": \[\"rocm\[libraries\]==$(rocm-sdk version)\"\]/;" setup.py
 
-      export PIP_EXTRA_INDEX_URL=https://rocm.nightlies.amd.com/v2/${GFX_VER}
+      export PIP_EXTRA_INDEX_URL=${ROCM_IDX_URL}
     fi
 
     python3 -m build
+
+    if [[ "$TARGET" == "therock" ]]; then
+      # Undo UCCL package dependence on TheRock wheels after the build is done
+      mv ${BACKUP_FN} setup.py
+    fi
+
     auditwheel repair dist/uccl-*.whl --exclude "libtorch*.so" --exclude "libc10*.so" --exclude "libibverbs.so.1" --exclude "libcudart.so.12" --exclude "libamdhip64.so.*" -w /io/${WHEEL_DIR}
 
     # Add backend tag to wheel filename using local version identifier
