@@ -1,6 +1,6 @@
 # !/bin/bash
 
-source ../scripts/shared.sh
+source ../../scripts/shared.sh
 
 # Run nccl-tests with multiple processes
 # Usage: ./run_nccl_test_mp.sh [srd|ud] [Total Processes/Ranks/GPUs] [Benchtype, 0: alltoall, 1: allgather, 2: multi-allreduce]
@@ -45,7 +45,7 @@ if [ "$TEST" = "srd" ]; then
     BUFFSIZE=8388608
 fi
 
-NODEFILE="../scripts/node_ips/p5en.txt"
+NODEFILE="../../scripts/node_ips/p5en.txt"
 NODES=$(get_nodes $NODEFILE)
 echo "Running test: ${TEST}, ${PROG_NAME}, ${NUM_PROCS} processes, NIC ${NIC}, uccl_quite ${UCCL_QUITE}, ${NODES}, ${CHANNELS} channels."
 
