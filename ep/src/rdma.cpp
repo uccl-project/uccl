@@ -47,12 +47,14 @@ dtype_t align(dtype_t a, dtype_t b) {
   return ceil_div<dtype_t>(a, b) * b;
 }
 
-void add_tokens(ProxyCtx& ctx, int buffer_idx, int expert_idx, int src_rank, size_t k) {
+void add_tokens(ProxyCtx& ctx, int buffer_idx, int expert_idx, int src_rank,
+                size_t k) {
   auto key = std::make_tuple(buffer_idx, expert_idx, src_rank);
   ctx.token_counter[key] += k;
 }
 
-int get_num_tokens(ProxyCtx& ctx, int buffer_idx, int expert_idx, int src_rank) {
+int get_num_tokens(ProxyCtx& ctx, int buffer_idx, int expert_idx,
+                   int src_rank) {
   auto key = std::make_tuple(buffer_idx, expert_idx, src_rank);
   auto it = ctx.token_counter.find(key);
   return (it == ctx.token_counter.end()) ? 0 : it->second;
@@ -64,7 +66,8 @@ void reset_tokens(ProxyCtx& ctx, int buffer_idx, int expert_idx, int src_rank) {
 }
 
 // Combine tokens (per-buffer too)
-void combine_add_tokens(ProxyCtx& ctx, int buffer_idx, int expert_idx, size_t k) {
+void combine_add_tokens(ProxyCtx& ctx, int buffer_idx, int expert_idx,
+                        size_t k) {
   auto key = std::make_pair(buffer_idx, expert_idx);
   ctx.combine_token_counter[key] += k;
 }
@@ -781,24 +784,23 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         //       ((cmd.expert_idx & 0x3FFu) << 20) |
         //       ((expert_k & 0xFFu) << 12) |
         //       (my_rank & 0xFFFu);
-        //   ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
+        //   ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr,
+        //   htonl(imm));
         // } else {
         //   ibv_wr_rdma_write(qpx, ctx->remote_rkey, remote_addr);
         // }
         if (true) {
-          uint32_t imm =
-              (0u << 31) |
-              ((cmd.is_combine & 0x1u) << 30) |
-              ((cmd.low_latency_buffer_idx & 0x1u) << 29) |   // NEW
-              ((cmd.expert_idx & 0x3FFu) << 19) |
-              (((1u) & 0x7Fu) << 12) |                        // k=1 fits in 7 bits
-              (my_rank & 0xFFFu);
+          uint32_t imm = (0u << 31) | ((cmd.is_combine & 0x1u) << 30) |
+                         ((cmd.low_latency_buffer_idx & 0x1u) << 29) |  // NEW
+                         ((cmd.expert_idx & 0x3FFu) << 19) |
+                         (((1u) & 0x7Fu) << 12) |  // k=1 fits in 7 bits
+                         (my_rank & 0xFFFu);
           ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
         }
 
-        uintptr_t laddr = cmd.req_lptr
-                              ? cmd.req_lptr
-                              : reinterpret_cast<uintptr_t>(buf) + i * cmd.bytes;
+        uintptr_t laddr =
+            cmd.req_lptr ? cmd.req_lptr
+                         : reinterpret_cast<uintptr_t>(buf) + i * cmd.bytes;
         ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_qpn, QKEY);
         ibv_wr_set_sge(qpx, ctx->mr->lkey, laddr,
                        static_cast<uint32_t>(cmd.bytes));
@@ -807,12 +809,13 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       uint64_t const expert_tail_wr = expert_wr_ids.back();
       {
         std::lock_guard<std::mutex> lock(finished_wrs_mutex);
-        auto [it, inserted] =
-            S.wr_id_to_wr_ids.try_emplace(expert_tail_wr, std::move(expert_wr_ids));
+        auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
+            expert_tail_wr, std::move(expert_wr_ids));
         if (!inserted) {
-          fprintf(stderr,
-                  "block_idx: %d, Error: tail wr_id %lu already exists (map=%p)\n",
-                  block_idx, expert_tail_wr, (void*)&S.wr_id_to_wr_ids);
+          fprintf(
+              stderr,
+              "block_idx: %d, Error: tail wr_id %lu already exists (map=%p)\n",
+              block_idx, expert_tail_wr, (void*)&S.wr_id_to_wr_ids);
           std::abort();
         } else {
           for (auto const& wr_id : it->second) {
@@ -874,13 +877,11 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
     uint64_t const batch_tail_wr = wr_ids[last];
     wrs[last].send_flags = IBV_SEND_SIGNALED;
     wrs[last].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-    uint32_t imm =
-        (0u << 31) |
-        ((cmd.is_combine & 0x1u) << 30) |
-        ((cmd.low_latency_buffer_idx & 0x1u) << 29) |   // NEW
-        ((cmd.expert_idx & 0x3FFu) << 19) |
-        (((1u) & 0x7Fu) << 12) |                        // k=1 fits in 7 bits
-        (my_rank & 0xFFFu);
+    uint32_t imm = (0u << 31) | ((cmd.is_combine & 0x1u) << 30) |
+                   ((cmd.low_latency_buffer_idx & 0x1u) << 29) |  // NEW
+                   ((cmd.expert_idx & 0x3FFu) << 19) |
+                   (((1u) & 0x7Fu) << 12) |  // k=1 fits in 7 bits
+                   (my_rank & 0xFFFu);
     wrs[last].imm_data = htonl(imm);
 
     ibv_send_wr* bad = nullptr;
@@ -899,9 +900,10 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       auto [it, inserted] =
           S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
       if (!inserted) {
-        fprintf(stderr,
-                "block_idx: %d, Error: tail wr_id %lu already exists (map=%p)\n",
-                block_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
+        fprintf(
+            stderr,
+            "block_idx: %d, Error: tail wr_id %lu already exists (map=%p)\n",
+            block_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
         std::abort();
       } else {
         for (auto const& wr_id : it->second) {
@@ -1085,60 +1087,64 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       if (!is_combine) {
         int local_expert_idx = new_index / num_ranks;
         int src_rank = new_index % num_ranks;
-        int num_tokens = get_num_tokens(S, low_latency_buffer_idx, local_expert_idx, src_rank);
+        int num_tokens = get_num_tokens(S, low_latency_buffer_idx,
+                                        local_expert_idx, src_rank);
         printf(
             "[RECV_DISPATCH] low_latency_buffer_idx: %d, num_ranks: %d, "
             "new_offset: %d (old: %d), local_expert_idx: %d, src_rank: %d\n",
             low_latency_buffer_idx, num_ranks, new_offset, offset,
             local_expert_idx, src_rank);
-        printf("[Dispatch] Value to add: %d, matching counter: %d\n", - value - 1,
-               num_tokens);
-        if ((- value - 1) != num_tokens) {
+        printf("[Dispatch] Value to add: %d, matching counter: %d\n",
+               -value - 1, num_tokens);
+        if ((-value - 1) != num_tokens) {
           fprintf(stderr,
                   "Dispatch value %d does not match counter %d for "
                   "expert_idx %d, src_rank %d\n",
-                  - value - 1, num_tokens,
-                  local_expert_idx, src_rank);
+                  -value - 1, num_tokens, local_expert_idx, src_rank);
         }
-        if ((- value - 1) < num_tokens) {
+        if ((-value - 1) < num_tokens) {
           fprintf(stderr,
-                  "[Error] Required Dispatch value %d is smaller than received counter %d for "
+                  "[Error] Required Dispatch value %d is smaller than received "
+                  "counter %d for "
                   "expert_idx %d, src_rank %d\n",
-                  - value - 1, num_tokens,
-                  local_expert_idx, src_rank);
+                  -value - 1, num_tokens, local_expert_idx, src_rank);
         }
         reset_tokens(S, low_latency_buffer_idx, local_expert_idx, src_rank);
-        assert(get_num_tokens(S, low_latency_buffer_idx, local_expert_idx, src_rank) == 0);
+        assert(get_num_tokens(S, low_latency_buffer_idx, local_expert_idx,
+                              src_rank) == 0);
 
       } else {
         int expert_idx = new_index;
         if (expert_idx > num_experts) {
-          fprintf(stderr, "Error: expert_idx %d out of range (num_experts=%d)\n",
+          fprintf(stderr,
+                  "Error: expert_idx %d out of range (num_experts=%d)\n",
                   expert_idx, num_experts);
           std::abort();
         }
         printf(
             "[RECV_COMBINE] low_latency_buffer_idx: %d, num_ranks: %d, "
             "new_offset: %d (old: %d), global_expert_idx: %d\n",
-            low_latency_buffer_idx, num_ranks, new_offset, offset,
-            expert_idx);
-        int combine_num_tokens = get_combine_num_tokens(S, low_latency_buffer_idx, expert_idx);
+            low_latency_buffer_idx, num_ranks, new_offset, offset, expert_idx);
+        int combine_num_tokens =
+            get_combine_num_tokens(S, low_latency_buffer_idx, expert_idx);
         printf("[Combine] Value to add: %d, matching counter: %d\n", value,
                combine_num_tokens);
         if (value != combine_num_tokens) {
           fprintf(stderr,
                   "Combine value %d does not match counter %d for "
                   "expert_idx %d\n",
-                  value,combine_num_tokens, expert_idx);
+                  value, combine_num_tokens, expert_idx);
         }
         if (value < combine_num_tokens) {
           fprintf(stderr,
-                  "[Error] Required Combine value %d is smaller than received counter %d for "
+                  "[Error] Required Combine value %d is smaller than received "
+                  "counter %d for "
                   "expert_idx %d\n",
                   value, combine_num_tokens, expert_idx);
         }
         reset_combine_tokens(S, low_latency_buffer_idx, expert_idx);
-        assert(get_combine_num_tokens(S, low_latency_buffer_idx, expert_idx) == 0);
+        assert(get_combine_num_tokens(S, low_latency_buffer_idx, expert_idx) ==
+               0);
       }
       // printf(
       //     "[RECV_ATOMIC] kind=%u value=%d offset=%u index=%zu addr=0x%llx
@@ -1176,24 +1182,27 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
     if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
       uint32_t imm = ntohl(cqe.imm_data);
 
-      bool is_combine            = (imm >> 30) & 0x1;
-      uint32_t buffer_idx        = (imm >> 29) & 0x1;
-      uint32_t expert_idx        = (imm >> 19) & 0x3FF;  // 10 bits
-      uint32_t k                 = (imm >> 12) & 0x7F;   // 7 bits
-      uint32_t src_rank          = imm & 0xFFF;          // 12 bits
+      bool is_combine = (imm >> 30) & 0x1;
+      uint32_t buffer_idx = (imm >> 29) & 0x1;
+      uint32_t expert_idx = (imm >> 19) & 0x3FF;  // 10 bits
+      uint32_t k = (imm >> 12) & 0x7F;            // 7 bits
+      uint32_t src_rank = imm & 0xFFF;            // 12 bits
 
       if (!is_combine) {
-        assert(expert_idx /* This is local_expert_idx*/ < num_experts / num_ranks);
+        assert(expert_idx /* This is local_expert_idx*/ <
+               num_experts / num_ranks);
         add_tokens(S, buffer_idx, expert_idx, src_rank, k);
-        printf("[Write dispatch] expert_idx=%u, src_rank=%u, tokens=%u\n", expert_idx,
-              src_rank, get_num_tokens(S, buffer_idx, expert_idx, src_rank));
+        printf("[Write dispatch] expert_idx=%u, src_rank=%u, tokens=%u\n",
+               expert_idx, src_rank,
+               get_num_tokens(S, buffer_idx, expert_idx, src_rank));
       } else {
         /* expert_idx here is the global expert index of the sender */
         assert(expert_idx >= src_rank * (num_experts / num_ranks) &&
                expert_idx < (src_rank + 1) * (num_experts / num_ranks));
         combine_add_tokens(S, buffer_idx, expert_idx, k);
-        printf("[Write combine] expert_idx=%u, tokens=%u, src_rank=%u\n", expert_idx,
-              get_combine_num_tokens(S, buffer_idx, expert_idx), src_rank);
+        printf("[Write combine] expert_idx=%u, tokens=%u, src_rank=%u\n",
+               expert_idx, get_combine_num_tokens(S, buffer_idx, expert_idx),
+               src_rank);
       }
       // const uint32_t tag = wr_tag(cqe.wr_id);
       // ProxyCtx& S_ack = *ctx_by_tag[tag];
@@ -1446,11 +1455,11 @@ void post_atomic_operations(ProxyCtx& S,
       qpx->wr_id = kAtomicWrTag | (wr_id & kAtomicMask);
       qpx->comp_mask = 0;
       qpx->wr_flags = IBV_SEND_SIGNALED;
-      ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_qpn, QKEY);
-      ibv_wr_set_sge(qpx, ctx->mr->lkey, (uintptr_t)ctx->mr->addr, 0);
       ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, ctx->remote_addr,
                             htonl(imm));
 
+      ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_qpn, QKEY);
+      ibv_wr_set_sge(qpx, ctx->mr->lkey, (uintptr_t)ctx->mr->addr, 0);
     }
     int ret = ibv_wr_complete(qpx);
     if (ret) {

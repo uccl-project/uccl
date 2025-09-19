@@ -195,7 +195,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
               num_bytes_per_msg, dst_rank,
               /*warp_id=*/dst_expert_local_idx,  // NOTE(Yang): for selecting
                                                  // rb.
-              lane_id, slot_idx, ring_addrs, num_ring_addrs, false, low_latency_buffer_idx);
+              lane_id, slot_idx, ring_addrs, num_ring_addrs, false,
+              low_latency_buffer_idx);
         } else {
           // Intra-node: use direct memory copy via IPC
           auto const* src_int4_ptr = reinterpret_cast<int4 const*>(src_ptr);
@@ -280,11 +281,13 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
             : 0;
     if (dst_p2p_ptr == 0) {
       // Inter-node or no IPC: use IBGDA atomic
-      printf("nvshmemi_ibgda_amo_nonfetch_add: atomic_buffer_ptr: %p, dst_ptr: %p, dst_ptr_internode: %p, offset: %ld, low_latency_buffer_idx: %d, dst_expert_local_idx * num_ranks + rank: %ld\n",
-             atomic_buffer_ptr, dst_ptr, dst_ptr_internode,
-             dst_ptr_internode - reinterpret_cast<uint64_t>(atomic_buffer_ptr),
-             low_latency_buffer_idx,
-             dst_expert_local_idx * num_ranks + rank);
+      printf(
+          "nvshmemi_ibgda_amo_nonfetch_add: atomic_buffer_ptr: %p, dst_ptr: "
+          "%p, dst_ptr_internode: %p, offset: %ld, low_latency_buffer_idx: %d, "
+          "dst_expert_local_idx * num_ranks + rank: %ld\n",
+          atomic_buffer_ptr, dst_ptr, dst_ptr_internode,
+          dst_ptr_internode - reinterpret_cast<uint64_t>(atomic_buffer_ptr),
+          low_latency_buffer_idx, dst_expert_local_idx * num_ranks + rank);
       __nanosleep(5000000);
       uccl::nvshmemi_ibgda_amo_nonfetch_add(
           dst_ptr_internode - reinterpret_cast<uint64_t>(atomic_buffer_ptr),
@@ -818,8 +821,10 @@ __global__ __launch_bounds__(1024, 1) void combine(
             dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), buf_ptr,
             hidden * sizeof(nv_bfloat16), dst_rank,
             /*warp_id=*/global_expert_idx,  // NOTE(Yang): for selecting rb.
-            // NOTE(Ziming): this is global_expert_idx because destination is indexed by global_expert_idx
-            lane_id, token_idx - offset, ring_addrs, num_ring_addrs, true, low_latency_buffer_idx);
+            // NOTE(Ziming): this is global_expert_idx because destination is
+            // indexed by global_expert_idx
+            lane_id, token_idx - offset, ring_addrs, num_ring_addrs, true,
+            low_latency_buffer_idx);
       }
     }
 
@@ -852,12 +857,14 @@ __global__ __launch_bounds__(1024, 1) void combine(
         // Pass offset to CPU proxy for atomic operation (similar to dispatch
         // phase)
 
-        // Small backoff in kernel (~100000 cycles ≈ 100 µs depending on GPU clock)
+        // Small backoff in kernel (~100000 cycles ≈ 100 µs depending on GPU
+        // clock)
         __nanosleep(4000000);
         uccl::nvshmemi_ibgda_amo_nonfetch_add(
             dst_ptr_internode - reinterpret_cast<uint64_t>(atomic_buffer_ptr),
-            num_tokens_to_send /* Will be changed to 1 in the proxy */, dst_rank,
-            /*qp_id=*/-1,                  // NOTE(Yang): not used.
+            num_tokens_to_send /* Will be changed to 1 in the proxy */,
+            dst_rank,
+            /*qp_id=*/-1,                   // NOTE(Yang): not used.
             /*warp_id=*/global_expert_idx,  // NOTE(Yang): for selecting rb.
             false, ring_addrs, num_ring_addrs, true, low_latency_buffer_idx);
       }

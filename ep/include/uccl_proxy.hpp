@@ -16,7 +16,8 @@ class UcclProxy {
  public:
   UcclProxy(uintptr_t rb_addr, int block_idx, uintptr_t gpu_buffer_addr,
             size_t total_size, int rank, int node_idx, int local_rank,
-            std::string const& peer_ip = {}, int num_experts = 0, int num_ranks = 0);
+            std::string const& peer_ip = {}, int num_experts = 0,
+            int num_ranks = 0);
   ~UcclProxy();
 
   void start_sender();

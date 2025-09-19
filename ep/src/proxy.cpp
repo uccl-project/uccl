@@ -212,7 +212,8 @@ void Proxy::run_remote() {
   init_remote();
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     remote_poll_completions(ctx_, cfg_.block_idx, ring, ctx_by_tag_,
-                            atomic_buffer_ptr_, cfg_.num_ranks, cfg_.num_experts);
+                            atomic_buffer_ptr_, cfg_.num_ranks,
+                            cfg_.num_experts);
   }
 }
 
@@ -236,7 +237,8 @@ void Proxy::run_dual() {
   // printf("run_dual initialization complete\n");
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     poll_cq_dual(ctx_, finished_wrs_, acked_wrs_, finished_wrs_mutex_,
-                 cfg_.block_idx, ring, ctx_by_tag_, atomic_buffer_ptr_, cfg_.num_ranks, cfg_.num_experts);
+                 cfg_.block_idx, ring, ctx_by_tag_, atomic_buffer_ptr_,
+                 cfg_.num_ranks, cfg_.num_experts);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
   }
