@@ -39,7 +39,7 @@ if [ "$TEST" = "srd" ]; then
 
 elif [ "$TEST" = "ud" ]; then
     LD_PRELOAD="${UCCL_HOME}/thirdparty/nccl-sg/build/lib/libnccl.so" \
-        NCCL_NET_PLUGIN="${UCCL_HOME}/efa/libnccl-net-efa.so" \
+        NCCL_NET_PLUGIN="${UCCL_HOME}/collective/efa/libnccl-net-efa.so" \
         NCCL_PROTO=Simple \
         NCCL_P2P_DISABLE=${NV_LINK_DISABLE} \
         NCCL_SHM_DISABLE=${NV_LINK_DISABLE} \
@@ -52,7 +52,7 @@ elif [ "$TEST" = "ud" ]; then
         NCCL_BUFFSIZE=${BUFFSIZE} \
         NCCL_NET_GDR_LEVEL=SYS \
         CUDA_MODULE_LOADING=EAGER \
-        NCCL_TOPO_FILE=${UCCL_HOME}/efa/p4d-24xl-topo.xml \
+        NCCL_TOPO_FILE=${UCCL_HOME}/collective/efa/p4d-24xl-topo.xml \
         NCCL_PXN_DISABLE=1 \
         UCCL_ENGINE_QUIET=${UCCL_QUITE} \
         GLOG_logtostderr=0 \

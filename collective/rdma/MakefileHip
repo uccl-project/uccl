@@ -1,10 +1,11 @@
 ABS_ROOT_PATH := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
+ABS_REPO_ROOT := $(shell realpath $(ABS_ROOT_PATH)/../..)
 
-RCCL_HOME:=../thirdparty/rccl
+RCCL_HOME:=$(ABS_REPO_ROOT)/thirdparty/rccl
 HIP_HOME?=/opt/rocm
 CONDA_LIB_HOME?=/usr/lib
 
-INC = -I./ -I../include -I$(HIP_HOME)/include -I${CONDA_LIB_HOME}/../include -L${CONDA_LIB_HOME}
+INC = -I./ -I$(ABS_REPO_ROOT)/include -I$(HIP_HOME)/include -I${CONDA_LIB_HOME}/../include -L${CONDA_LIB_HOME}
 LIBS = -lglog -lgflags -lgtest -lz -lelf -libverbs -L ${HIP_HOME}/lib -lamdhip64
 LIBS_SHARED = -lglog -lgflags -lgtest -lz -lelf -libverbs
 override CXXFLAGS += -O3 -g -std=c++17 -Wno-pointer-arith -Wno-interference-size -fPIC -D__HIP_PLATFORM_AMD__

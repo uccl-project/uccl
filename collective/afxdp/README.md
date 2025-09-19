@@ -81,12 +81,12 @@ UCCL-AFXDP currently supports AWS ENA NICs and IBM VirtIO NICs; support for Azur
         * `cd $UCCL_HOME/scripts; python setup_all.py --target aws_g4_afxdp`
         * Keep `setup_all.py` running
     * Run UCCL transport tests: 
-        * [`VM1`] `cd $UCCL_HOME/afxdp/; ./transport_test --logtostderr=1 --clientip=<VM2 IP> --test=bimq`
-        * [`VM2`] `cd $UCCL_HOME/afxdp/; ./transport_test --logtostderr=1 --client --serverip=<VM1 IP> --test=bimq`
+        * [`VM1`] `cd $UCCL_HOME/collective/afxdp/; ./transport_test --logtostderr=1 --clientip=<VM2 IP> --test=bimq`
+        * [`VM2`] `cd $UCCL_HOME/collective/afxdp/; ./transport_test --logtostderr=1 --client --serverip=<VM1 IP> --test=bimq`
         * [`VM2`] You should be able to see something like `Sent 10000 messages, med rtt: 1033 us, tail rtt: 1484 us, link bw 98.3371 Gbps, app bw 95.3775 Gbps`. 
-        * If you hit `[util_afxdp.cc:30] Check failed: receive_fd(afxdp_ctl.client_sock_, &afxdp_ctl.umem_fd_) == 0`, try `make -C afxdp/ clean` then `python setup_all.py --target aws_g4_afxdp` again.
+        * If you hit `[util_afxdp.cc:30] Check failed: receive_fd(afxdp_ctl.client_sock_, &afxdp_ctl.umem_fd_) == 0`, try `make -C collective/afxdp/ clean` then `python setup_all.py --target aws_g4_afxdp` again.
 
 4. Run `nccl-tests` on `VM1`: 
     * `cd $UCCL_HOME/scripts; python setup_all.py --target aws_g4_afxdp`
-    * `cd $UCCL_HOME/afxdp/; ./run_nccl_test.sh afxdp 2 <nic>`
+    * `cd $UCCL_HOME/collective/afxdp/; ./run_nccl_test.sh afxdp 2 <nic>`
     * You should be able to see `nccl-tests` results. 

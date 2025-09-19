@@ -5,8 +5,8 @@ BUILD_TYPE=${2:-all}
 PY_VER=${3:-$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")}
 GFX_VER=${4:-gfx94X-dcgpu}
 
-if [[ $TARGET != "cuda" && $TARGET != "rocm" && $TARGET != "therock" ]]; then
-  echo "Usage: $0 [cuda|rocm|therock] [all|rdma|p2p|efa|ep] [py_version] [gfx_version]" >&2
+if [[ $TARGET != cuda* && $TARGET != rocm* && $TARGET != "therock" ]]; then
+  echo "Usage: $0 [cuda|rocm|therock] [all|rdma|p2p|efa|ep] [py_version] [rocm_index_url]" >&2
   exit 1
 fi
 
