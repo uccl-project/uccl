@@ -1,11 +1,12 @@
 #include "engine.h"
-#include "util/net.h"
 #include "util/util.h"
 #include <arpa/inet.h>
 #include <glog/logging.h>
 #include <netinet/in.h>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <future>
 #include <iostream>
@@ -13,6 +14,7 @@
 #include <sstream>
 #include <thread>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 int const kMaxNumGPUs = 8;
@@ -32,12 +34,28 @@ inline void check_python_signals() {
 
 Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
     : local_gpu_idx_(local_gpu_idx), num_cpus_(num_cpus) {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
   std::cout << "Creating Engine with GPU index: " << local_gpu_idx
             << ", CPUs: " << num_cpus << std::endl;
   // Py_Initialize();
 
   int n_streams = std::max(1, (int)ucclParamNumGpuRtStreams());
+
+  int ngpus = 0;
+  GPU_RT_CHECK(gpuGetDeviceCount(&ngpus));
+  ipc_streams_.resize(ngpus);
+  for (int i = 0; i < ngpus; ++i) {
+    GPU_RT_CHECK(gpuSetDevice(i));
+    ipc_streams_[i].resize(n_streams);
+    for (int j = 0; j < n_streams; ++j) {
+      GPU_RT_CHECK(
+          gpuStreamCreateWithFlags(&ipc_streams_[i][j], gpuStreamNonBlocking));
+    }
+  }
+
+  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
   streams_.resize(n_streams);
   for (int i = 0; i < n_streams; ++i) {
     GPU_RT_CHECK(gpuStreamCreateWithFlags(&streams_[i], gpuStreamNonBlocking));
@@ -51,77 +69,89 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   // Initialize the RDMA endpoint with lazy creation.
   ep_ = new uccl::RDMAEndpoint(num_cpus_);
 
-  auto gpu_cards = uccl::get_gpu_cards();
-  DCHECK(local_gpu_idx_ < gpu_cards.size() && gpu_cards.size() <= kMaxNumGPUs)
-      << "Local GPU index out of range";
-
-  auto ib_nics = uccl::get_rdma_nics();
-  // Find the RDMA NIC that is closest to each of the GPUs,
-  // ensuring fair NIC allocation.
-  std::vector<bool> nic_allocated(ib_nics.size(), false);
-  for (int i = 0; i < gpu_cards.size(); i++) {
-    auto gpu_device_path = gpu_cards[i];
-    int best_nic = -1;
-    int best_distance = std::numeric_limits<int>::max();
-    for (int j = 0; j < ib_nics.size(); ++j) {
-      if (nic_allocated[j]) continue;
-      int dist = uccl::cal_pcie_distance(gpu_device_path, ib_nics[j].second);
-      if (dist < best_distance) {
-        best_distance = dist;
-        best_nic = j;
-      }
-    }
-    if (best_nic != -1) {
-      gpu_to_dev[i] = best_nic;
-      nic_allocated[best_nic] = true;
-    } else {
-      // If all NICs are allocated, fallback to the closest
-      auto ib_nic_it = std::min_element(
-          ib_nics.begin(), ib_nics.end(), [&](auto const& a, auto const& b) {
-            return uccl::cal_pcie_distance(gpu_device_path, a.second) <
-                   uccl::cal_pcie_distance(gpu_device_path, b.second);
-          });
-      gpu_to_dev[i] = ib_nic_it - ib_nics.begin();
-    }
+  // Only initialize mapping for detected GPUs
+  int ngpus_detected = 0;
+  GPU_RT_CHECK(gpuGetDeviceCount(&ngpus_detected));
+  for (int i = 0; i < std::min(ngpus_detected, kMaxNumGPUs); i++) {
+    gpu_to_dev[i] = ep_->get_best_dev_idx(i);
   }
-  std::cout << "Detected best GPU-NIC mapping: " << std::endl;
-  for (int i = 0; i < gpu_cards.size(); i++) {
-    std::cout << "\tGPU " << i << " -> NIC " << gpu_to_dev[i] << " ("
-              << ib_nics[gpu_to_dev[i]].first << ")" << std::endl;
+  // Initialize remaining slots to 0 (fallback to first device)
+  for (int i = ngpus_detected; i < kMaxNumGPUs; i++) {
+    gpu_to_dev[i] = 0;
   }
-  std::cout << std::endl;
+  numa_node_ =
+      uccl::RDMAFactory::get_factory_dev(gpu_to_dev[local_gpu_idx_])->numa_node;
 
   // Initialize the engine based on the GPU index.
-  printf("Lazy creation of engine, GPU index: %d\n", local_gpu_idx_);
+  std::cout << "Lazy creation of engine, GPU index: " << local_gpu_idx_
+            << std::endl;
   ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_], true);
-  printf("Engine initialized for GPU %d\n", local_gpu_idx_);
+  std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
+
+  send_unified_task_ring_ =
+      uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
+  recv_unified_task_ring_ =
+      uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
+
+  send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
+  recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
+
+  // Initialize UDS socket for local connections
+  init_uds_socket();
 
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
 
 Endpoint::~Endpoint() {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
   std::cout << "Destroying Engine..." << std::endl;
+
+  stop_.store(true, std::memory_order_release);
+
+  send_proxy_thread_.join();
+  recv_proxy_thread_.join();
+
+  free(send_unified_task_ring_);
+  free(recv_unified_task_ring_);
+
   delete ep_;
 
-  for (auto& [conn_id, conn] : conn_id_to_conn_) {
-    delete conn;
+  {
+    std::shared_lock<std::shared_mutex> lock(conn_mu_);
+    for (auto& [conn_id, conn] : conn_id_to_conn_) {
+      // Close UDS socket if it exists
+      if (conn->uds_sockfd_ >= 0) {
+        close(conn->uds_sockfd_);
+      }
+      delete conn;
+    }
   }
-  for (auto& [mr_id, mr] : mr_id_to_mr_) {
-    delete mr;
+  {
+    std::shared_lock<std::shared_mutex> lock(mr_mu_);
+    for (auto& [mr_id, mr] : mr_id_to_mr_) {
+      delete mr;
+    }
   }
+
   if (!streams_.empty()) {
     GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
     for (auto s : streams_)
       if (s) GPU_RT_CHECK(gpuStreamDestroy(s));
   }
 
+  // Cleanup UDS socket
+  cleanup_uds_socket();
+
   std::cout << "Engine destroyed" << std::endl;
 }
 
-bool Endpoint::connect(std::string const& ip_addr, int const& remote_gpu_idx,
-                       uint64_t& conn_id, int remote_port) {
-  py::gil_scoped_release release;
+bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
+                       uint64_t& conn_id) {
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
   std::cout << "Attempting to connect to " << ip_addr << ":" << remote_gpu_idx
             << std::endl;
 
@@ -144,80 +174,93 @@ bool Endpoint::connect(std::string const& ip_addr, int const& remote_gpu_idx,
   uccl::ConnID uccl_conn_id = uccl_conn_id_future.get();
 
   // Store the connection ID.
-  conn_id_to_conn_[conn_id] =
-      new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
-
+  {
+    std::unique_lock<std::shared_mutex> lock(conn_mu_);
+    conn_id_to_conn_[conn_id] =
+        new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
+  }
   return true;
 }
 
-bool is_nvlink_peer(int local_gpu, int remote_gpu) {
-  int accessible = 0;
-  GPU_RT_CHECK(gpuDeviceCanAccessPeer(&accessible, local_gpu, remote_gpu));
-  if (!accessible) return false;
+std::vector<uint8_t> Endpoint::get_metadata() {
+  std::string ip_str = get_oob_ip();
+  uint16_t port = ep_->get_p2p_listen_port(gpu_to_dev[local_gpu_idx_]);
 
-#ifdef HAS_NVML
-  nvmlDevice_t local_dev, remote_dev;
-  nvmlDeviceGetHandleByIndex(local_gpu, &local_dev);
-  nvmlDeviceGetHandleByIndex(remote_gpu, &remote_dev);
-  nvmlP2PStatus_t status;
-  if (nvmlDeviceGetP2PStatus(local_dev, remote_dev, NVML_P2P_CAPS_INDEX_NVLINK,
-                             &status) == NVML_SUCCESS &&
-      status == NVML_P2P_STATUS_OK) {
-    return true;
+  bool is_ipv6 = ip_str.find(':') != std::string::npos;
+  size_t ip_len = is_ipv6 ? 16 : 4;
+
+  // Additional 2 bytes for port and 4 bytes for local_gpu_idx_
+  size_t total_len = ip_len + 2 + sizeof(int);
+  std::vector<uint8_t> metadata(total_len);
+
+  // Copy IP
+  if (is_ipv6) {
+    struct in6_addr ip6_bin;
+    if (inet_pton(AF_INET6, ip_str.c_str(), &ip6_bin) != 1)
+      throw std::runtime_error("Invalid IPv6 address: " + ip_str);
+    std::memcpy(metadata.data(), &ip6_bin, 16);
   } else {
-    return false;
+    struct in_addr ip4_bin;
+    if (inet_pton(AF_INET, ip_str.c_str(), &ip4_bin) != 1)
+      throw std::runtime_error("Invalid IPv4 address: " + ip_str);
+    std::memcpy(metadata.data(), &ip4_bin, 4);
   }
-#else
-  return true;
-#endif
+
+  // Copy port in network byte order
+  uint16_t net_port = htons(port);
+  std::memcpy(metadata.data() + ip_len, &net_port, 2);
+
+  // Copy local_gpu_idx_ in host byte order
+  std::memcpy(metadata.data() + ip_len + 2, &local_gpu_idx_, sizeof(int));
+
+  return metadata;
 }
 
-bool Endpoint::connect(py::bytes const& meta_bytes, uint64_t& conn_id) {
-  std::string buf = meta_bytes;
-  uint8_t const* data = reinterpret_cast<uint8_t const*>(buf.data());
-  size_t const n = buf.size();
+std::tuple<std::string, uint16_t, int> Endpoint::parse_metadata(
+    std::vector<uint8_t> const& metadata) {
+  if (metadata.size() == 10) {
+    // IPv4: 4 bytes IP, 2 bytes port, 4 bytes GPU idx
+    char ip_str[INET_ADDRSTRLEN];
+    if (inet_ntop(AF_INET, metadata.data(), ip_str, sizeof(ip_str)) ==
+        nullptr) {
+      throw std::runtime_error("Failed to parse IPv4 address from metadata");
+    }
 
-  std::string ip;
-  int port = -1;
-  char ipstr[INET6_ADDRSTRLEN] = {0};
+    uint16_t net_port;
+    std::memcpy(&net_port, metadata.data() + 4, 2);
+    uint16_t port = ntohs(net_port);
 
-  if (n == 10) {  // IPv4 format
-    std::memcpy(ipstr, data, 4);
-    inet_ntop(AF_INET, ipstr, ipstr, sizeof(ipstr));
-    ip = ipstr;
-    port = (data[4] << 8) | data[5];
-    std::memcpy(&remote_gpu_idx_, data + 6, 4);  // host byte-order
-  } else if (n == 22) {                          // IPv6 format
-    std::memcpy(ipstr, data, 16);
-    inet_ntop(AF_INET6, ipstr, ipstr, sizeof(ipstr));
-    ip = ipstr;
-    port = (data[16] << 8) | data[17];
-    std::memcpy(&remote_gpu_idx_, data + 18, 4);
+    int gpu_idx;
+    std::memcpy(&gpu_idx, metadata.data() + 6, 4);
+
+    return std::make_tuple(std::string(ip_str), port, gpu_idx);
+  } else if (metadata.size() == 22) {
+    // IPv6: 16 bytes IP, 2 bytes port, 4 bytes GPU idx
+    char ip_str[INET6_ADDRSTRLEN];
+    if (inet_ntop(AF_INET6, metadata.data(), ip_str, sizeof(ip_str)) ==
+        nullptr) {
+      throw std::runtime_error("Failed to parse IPv6 address from metadata");
+    }
+
+    uint16_t net_port;
+    std::memcpy(&net_port, metadata.data() + 16, 2);
+    uint16_t port = ntohs(net_port);
+
+    int gpu_idx;
+    std::memcpy(&gpu_idx, metadata.data() + 18, 4);
+
+    return std::make_tuple(std::string(ip_str), port, gpu_idx);
   } else {
-    throw std::runtime_error("Endpoint::connect(metadata): invalid blob size");
+    throw std::runtime_error("Unexpected metadata length: " +
+                             std::to_string(metadata.size()));
   }
-
-  if (uccl::is_local_ip(ip)) {
-    if (local_gpu_idx_ == remote_gpu_idx_) {
-      // If the local GPU is the same as the remote GPU, we can use a special
-      // connection ID to indicate this.
-      conn_id = kNvlinkConn;
-      return true;
-    }
-    if (is_nvlink_peer(local_gpu_idx_, remote_gpu_idx_)) {
-      conn_id = kNvlinkConn;
-      return true;
-    }
-    throw std::runtime_error(
-        "is_local_ip() returned true, "
-        "but remote GPU is not a NVLink peer");
-  }
-  return this->connect(ip, remote_gpu_idx_, conn_id, port);
 }
 
 bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
                       uint64_t& conn_id) {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
   std::cout << "Waiting to accept incoming connection..." << std::endl;
 
   // For demo purposes, simulate accepted connection
@@ -227,8 +270,9 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
       std::async(std::launch::async, [this, &ip_addr, &remote_gpu_idx]() {
         auto dev_idx = gpu_to_dev[local_gpu_idx_];
         auto p2p_listen_fd = ep_->get_p2p_listen_fd(dev_idx);
+        int remote_dev_idx;
         return ep_->uccl_accept(dev_idx, p2p_listen_fd, local_gpu_idx_, ip_addr,
-                                &remote_gpu_idx);
+                                &remote_dev_idx, &remote_gpu_idx);
       });
 
   // Check for Python signals (eg, ctrl+c) while waiting for connection
@@ -240,14 +284,18 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   uccl::ConnID uccl_conn_id = uccl_conn_id_future.get();
 
   // Store the connection ID.
-  conn_id_to_conn_[conn_id] =
-      new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
+  {
+    std::unique_lock<std::shared_mutex> lock(conn_mu_);
+    conn_id_to_conn_[conn_id] =
+        new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
+  }
 
   return true;
 }
 
 bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
   mr_id = next_mr_id_.fetch_add(1);
 
@@ -259,40 +307,11 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
               << "mhandle->mr is null\n";
     std::abort();
   }
-  mr_id_to_mr_[mr_id] = new MR{mr_id, mhandle};
-
-  return true;
-}
-
-bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
-                    uccl::FifoItem const& slot_item) {
-  py::gil_scoped_release release;
-
-  if (!ucclParamRCMode()) {
-    DCHECK(false) << "RDMA READ is only supported in RC mode, toggle RCMODE to "
-                     "be True in transport_config.h";
-    std::abort();
+  {
+    std::unique_lock<std::shared_mutex> lock(mr_mu_);
+    mr_id_to_mr_[mr_id] = new MR{mr_id, mhandle};
   }
 
-  DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
-  auto* conn = conn_id_to_conn_[conn_id];
-  auto* mhandle = mr_id_to_mr_[mr_id]->mhandle_;
-  uccl::ucclRequest ureq;
-  memset(&ureq, 0, sizeof(uccl::ucclRequest));
-  int rc;
-  do {
-    rc = ep_->uccl_read_async(
-        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle, dst,
-        size, slot_item, &ureq);
-    if (rc == -1) {
-      check_python_signals();
-      std::this_thread::yield();
-    }
-  } while (rc == -1);
-
-  while (!ep_->uccl_poll_ureq_once(&ureq)) {
-    check_python_signals();
-  }
   return true;
 }
 
@@ -303,11 +322,16 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
     throw std::invalid_argument(
         "[Endpoint::regv] data_v/size_v length mismatch");
 
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
   size_t const n = data_v.size();
   mr_id_v.resize(n);
 
-  mr_id_to_mr_.reserve(mr_id_to_mr_.size() + n);
+  {
+    std::unique_lock<std::shared_mutex> lock(mr_mu_);
+    mr_id_to_mr_.reserve(mr_id_to_mr_.size() + n);
+  }
 
   for (size_t i = 0; i < n; ++i) {
     uint64_t id = next_mr_id_.fetch_add(1);
@@ -321,65 +345,48 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
       return false;
     }
 
-    mr_id_to_mr_[id] = new MR{id, mhandle};
+    {
+      std::unique_lock<std::shared_mutex> lock(mr_mu_);
+      mr_id_to_mr_[id] = new MR{id, mhandle};
+    }
     mr_id_v[i] = id;
   }
   return true;
 }
 
-bool Endpoint::send_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
-                        size_t size, void const* meta, size_t meta_len) {
-  py::gil_scoped_release release;
-  DCHECK(size <= 0xffffffff);
-
-  DCHECK(meta_len == sizeof(gpuIpcMemHandle_t));
-  gpuIpcMemHandle_t handle{};
-  std::memcpy(&handle, meta, sizeof(handle));
-
-  void* dst_ptr = nullptr;
-  GPU_RT_CHECK(gpuSetDevice(remote_gpu_idx_));
-  GPU_RT_CHECK(
-      gpuIpcOpenMemHandle(&dst_ptr, handle, gpuIpcMemLazyEnablePeerAccess));
-
-  gpuStream_t s = pick_stream();
-  if (local_gpu_idx_ == remote_gpu_idx_) {
-    GPU_RT_CHECK(
-        gpuMemcpyAsync(dst_ptr, data, size, gpuMemcpyDeviceToDevice, s));
-  } else {
-    int can = 0;
-    GPU_RT_CHECK(gpuDeviceCanAccessPeer(&can, local_gpu_idx_, remote_gpu_idx_));
-    if (can) {
-      GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-      (void)gpuDeviceEnablePeerAccess(remote_gpu_idx_, 0);
-
-      GPU_RT_CHECK(gpuMemcpyPeerAsync(dst_ptr, remote_gpu_idx_, data,
-                                      local_gpu_idx_, size, s));
-    } else {
-      std::cerr << "Cannot access remote GPU " << remote_gpu_idx_
-                << " from local GPU " << local_gpu_idx_ << std::endl;
-      return false;
-    }
+bool Endpoint::dereg(uint64_t mr_id) {
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+  {
+    std::unique_lock<std::shared_mutex> lock(mr_mu_);
+    MR* mr = mr_id_to_mr_[mr_id];
+    ep_->uccl_deregmr(mr->mhandle_);
+    delete mr;
+    mr_id_to_mr_.erase(mr_id);
   }
-  GPU_RT_CHECK(gpuStreamSynchronize(s));
-  GPU_RT_CHECK(gpuSetDevice(remote_gpu_idx_));
-  GPU_RT_CHECK(gpuIpcCloseMemHandle(dst_ptr));
   return true;
 }
 
 bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
-                    size_t size, uccl::FifoItem const& slot_item) {
-  DCHECK(size <= 0xffffffff);
-  return send(conn_id, mr_id, data, size);
-}
-
-bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
-                    size_t size) {
+                    size_t size, bool inside_python) {
   DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
+  [[maybe_unused]] auto _ = inside_python && PyGILState_Check()
+                                ? (py::gil_scoped_release{}, nullptr)
+                                : nullptr;
 
-  auto conn = conn_id_to_conn_[conn_id];
-  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  Conn* conn;
+  {
+    std::shared_lock<std::shared_mutex> lock(conn_mu_);
+    conn = conn_id_to_conn_[conn_id];
+  }
 
-  uccl::ucclRequest ureq[kMaxInflightChunks];
+  uccl::Mhandle* mhandle;
+  {
+    std::shared_lock<std::shared_mutex> lock(mr_mu_);
+    mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  }
+
+  uccl::ucclRequest ureq[kMaxInflightChunks] = {};
   bool done[kMaxInflightChunks] = {false};
 
   void* cur_data = const_cast<void*>(data);
@@ -400,7 +407,7 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
       done[ureq_issued % kMaxInflightChunks] = false;
       ureq_issued++;
     }
-    check_python_signals();
+    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
 
     // First, poll all outstanding requests and mark which ones are done.
     for (int i = ureq_finished; i < ureq_issued; i++) {
@@ -423,14 +430,26 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
   return true;
 }
 
-bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
-  py::gil_scoped_release release;
+bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
+                    bool inside_python) {
+  [[maybe_unused]] auto _ = inside_python && PyGILState_Check()
+                                ? (py::gil_scoped_release{}, nullptr)
+                                : nullptr;
 
-  auto conn = conn_id_to_conn_[conn_id];
-  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  Conn* conn;
+  {
+    std::shared_lock<std::shared_mutex> lock(conn_mu_);
+    conn = conn_id_to_conn_[conn_id];
+  }
+
+  uccl::Mhandle* mhandle;
+  {
+    std::shared_lock<std::shared_mutex> lock(mr_mu_);
+    mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  }
   int size_int = static_cast<int>(size);
 
-  uccl::ucclRequest ureq[kMaxInflightChunks];
+  uccl::ucclRequest ureq[kMaxInflightChunks] = {};
   bool done[kMaxInflightChunks] = {false};
 
   void* cur_data = data;
@@ -451,7 +470,7 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
       done[ureq_issued % kMaxInflightChunks] = false;
       ureq_issued++;
     }
-    check_python_signals();
+    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
 
     // First, poll all outstanding requests and mark which ones are done.
     for (int i = ureq_finished; i < ureq_issued; i++) {
@@ -474,14 +493,56 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
   return true;
 }
 
+bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
+                          size_t size, uint64_t* transfer_id) {
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
+  UnifiedTask* task = create_task(conn_id, mr_id, TaskType::SEND_NET,
+                                  const_cast<void*>(data), size);
+  if (unlikely(task == nullptr)) {
+    return false;
+  }
+
+  *transfer_id = reinterpret_cast<uint64_t>(task);
+
+  while (jring_mp_enqueue_bulk(send_unified_task_ring_, task, 1, nullptr) !=
+         1) {
+  }
+
+  return true;
+}
+
+bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
+                          size_t size, uint64_t* transfer_id) {
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
+  UnifiedTask* task =
+      create_task(conn_id, mr_id, TaskType::RECV_NET, data, size);
+  if (unlikely(task == nullptr)) {
+    return false;
+  }
+
+  *transfer_id = reinterpret_cast<uint64_t>(task);
+
+  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, task, 1, nullptr) !=
+         1) {
+  }
+
+  return true;
+}
+
 bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void const*> data_v,
                      std::vector<size_t> size_v, size_t num_iovs) {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
   auto conn = conn_id_to_conn_[conn_id];
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
-  uccl::ucclRequest ureq[kMaxInflightChunks];
+  uccl::ucclRequest ureq[kMaxInflightChunks] = {};
   bool done[kMaxInflightChunks] = {false};
 
   int estimated_ureq_max = 0;
@@ -550,11 +611,12 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void*> data_v, std::vector<size_t> size_v,
                      size_t num_iovs) {
-  py::gil_scoped_release release;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
   auto conn = conn_id_to_conn_[conn_id];
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
-  uccl::ucclRequest ureq[kMaxInflightChunks];
+  uccl::ucclRequest ureq[kMaxInflightChunks] = {};
   bool done[kMaxInflightChunks] = {false};
 
   // Prepare the data, size, and mhandle vectors for the rest of the chunks.
@@ -629,70 +691,375 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   return true;
 }
 
-bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
-                          size_t size, uint64_t* transfer_id) {
-  py::gil_scoped_release release;
-  auto conn = conn_id_to_conn_[conn_id];
-  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
+                    uccl::FifoItem const& slot_item, bool inside_python) {
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
-  auto _transfer_id = next_transfer_id_.fetch_add(1);
-  auto* ureq = new uccl::ucclRequest();
+  if (!ucclParamRCMode()) {
+    DCHECK(false) << "RDMA READ is only supported in RC mode, toggle RCMODE to "
+                     "be True in transport_config.h";
+    std::abort();
+  }
 
-  *transfer_id = _transfer_id;
-  transfer_id_to_ureq_[_transfer_id] = ureq;
+  DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
+  auto* conn = conn_id_to_conn_[conn_id];
+  auto* mhandle = mr_id_to_mr_[mr_id]->mhandle_;
 
-  int rc;
-  do {
-    rc = ep_->uccl_send_async(
-        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
-        (void*)data, size, ureq);
-    if (rc == -1) {
-      check_python_signals();
-      std::this_thread::yield();
+  uccl::ucclRequest ureq[kMaxInflightChunks] = {};
+  uccl::FifoItem curr_slot_item[kMaxInflightChunks] = {};
+  bool done[kMaxInflightChunks] = {false};
+
+  void* cur_data = dst;
+  size_t size_read = 0;
+  int ureq_max = (size + kChunkSize - 1) / kChunkSize;
+  int ureq_issued = 0, ureq_finished = 0;
+
+  auto num_engines = ucclParamNUM_ENGINES();
+
+  while (ureq_finished < ureq_max) {
+    while (ureq_issued - ureq_finished < kMaxInflightChunks &&
+           size_read < size) {
+      size_t chunk_size = std::min(size - size_read, kChunkSize);
+      curr_slot_item[ureq_issued % kMaxInflightChunks] = slot_item;
+      curr_slot_item[ureq_issued % kMaxInflightChunks].addr += size_read;
+      curr_slot_item[ureq_issued % kMaxInflightChunks].size = chunk_size;
+      curr_slot_item[ureq_issued % kMaxInflightChunks].engine_offset =
+          ureq_issued % num_engines;
+      memset(&ureq[ureq_issued % kMaxInflightChunks], 0,
+             sizeof(uccl::ucclRequest));
+      auto rc = ep_->uccl_read_async(
+          static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
+          cur_data, chunk_size,
+          curr_slot_item[ureq_issued % kMaxInflightChunks],
+          &ureq[ureq_issued % kMaxInflightChunks]);
+      if (rc == -1) break;
+      cur_data += chunk_size;
+      size_read += chunk_size;
+      done[ureq_issued % kMaxInflightChunks] = false;
+      ureq_issued++;
     }
-  } while (rc == -1);
+    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+
+    // First, poll all outstanding requests and mark which ones are done.
+    for (int i = ureq_finished; i < ureq_issued; i++) {
+      if (done[i % kMaxInflightChunks]) {
+        continue;
+      }
+      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+        // Just mark it as completed, DO NOT increment ureq_finished here.
+        done[i % kMaxInflightChunks] = true;
+      }
+    }
+
+    // Now, advance the ureq_finished counter as far as possible.
+    while (ureq_finished < ureq_issued &&
+           done[ureq_finished % kMaxInflightChunks]) {
+      ureq_finished++;
+    }
+  }
 
   return true;
 }
 
-bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
-                          size_t size, uint64_t* transfer_id) {
-  py::gil_scoped_release release;
+bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
+                          size_t size, uccl::FifoItem const& slot_item,
+                          uint64_t* transfer_id) {
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
+  UnifiedTask* rw_task =
+      create_net_task(conn_id, mr_id, TaskType::READ_NET, dst, size, slot_item);
+  if (unlikely(rw_task == nullptr)) {
+    return false;
+  }
+
+  *transfer_id = reinterpret_cast<uint64_t>(rw_task);
+
+  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, rw_task, 1, nullptr) !=
+         1) {
+  }
+
+  return true;
+}
+
+bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                     std::vector<void*> dst_v, std::vector<size_t> size_v,
+                     std::vector<uccl::FifoItem> slot_item_v, size_t num_iovs) {
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
   auto conn = conn_id_to_conn_[conn_id];
-  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
-  auto _transfer_id = next_transfer_id_.fetch_add(1);
-  auto* ureq = new uccl::ucclRequest();
+  uccl::ucclRequest ureq[kMaxInflightChunks] = {};
+  uccl::FifoItem curr_slot_item[kMaxInflightChunks] = {};
+  bool done[kMaxInflightChunks] = {false};
 
-  *transfer_id = _transfer_id;
-  transfer_id_to_ureq_[_transfer_id] = ureq;
-  int size_int = static_cast<int>(size);
+  int estimated_ureq_max = 0;
+  for (int i = 0; i < num_iovs; i++) {
+    estimated_ureq_max += (size_v[i] + kChunkSize - 1) / kChunkSize;
+  }
 
-  int rc;
-  do {
-    rc = ep_->uccl_recv_async(
-        static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
-        &data, &size_int, 1, ureq);
-    if (rc == -1) {
-      check_python_signals();
-      std::this_thread::yield();
+  std::vector<void*> data_read_vec;
+  std::vector<size_t> size_read_vec;
+  std::vector<uccl::Mhandle*> mhandle_read_vec;
+  std::vector<uccl::FifoItem> slot_item_vec;
+  // Avoid reallocations.
+  data_read_vec.reserve(estimated_ureq_max);
+  size_read_vec.reserve(estimated_ureq_max);
+  mhandle_read_vec.reserve(estimated_ureq_max);
+  slot_item_vec.reserve(estimated_ureq_max);
+
+  for (int i = 0; i < num_iovs; i++) {
+    void* cur_data = dst_v[i];
+    size_t cur_size_expected = size_v[i];
+    size_t cur_size_post_read = 0;
+    uccl::FifoItem base_slot_item = slot_item_v[i];
+    auto mhandle = mr_id_to_mr_[mr_id_v[i]]->mhandle_;
+
+    while (cur_size_post_read < cur_size_expected) {
+      size_t chunk_size =
+          std::min(cur_size_expected - cur_size_post_read, (size_t)kChunkSize);
+      uccl::FifoItem chunk_slot_item = base_slot_item;
+      chunk_slot_item.addr += cur_size_post_read;
+      chunk_slot_item.size = chunk_size;
+      // engine_offset will be set later
+      data_read_vec.push_back(cur_data);
+      size_read_vec.push_back(chunk_size);
+      mhandle_read_vec.push_back(mhandle);
+      slot_item_vec.push_back(chunk_slot_item);
+      cur_data = (void*)((char*)cur_data + chunk_size);
+      cur_size_post_read += chunk_size;
     }
-  } while (rc == -1);
+  }
 
+  int ureq_max = data_read_vec.size();
+  int ureq_issued = 0, ureq_finished = 0;
+  auto num_engines = ucclParamNUM_ENGINES();
+
+  while (ureq_finished < ureq_max) {
+    while (ureq_issued < ureq_max &&
+           ureq_issued - ureq_finished < kMaxInflightChunks &&
+           size_read_vec[ureq_issued] > 0) {
+      slot_item_vec[ureq_issued].engine_offset = ureq_issued % num_engines;
+      curr_slot_item[ureq_issued % kMaxInflightChunks] =
+          slot_item_vec[ureq_issued];
+      memset(&ureq[ureq_issued % kMaxInflightChunks], 0,
+             sizeof(uccl::ucclRequest));
+      auto rc = ep_->uccl_read_async(
+          uccl_flow, mhandle_read_vec[ureq_issued], data_read_vec[ureq_issued],
+          size_read_vec[ureq_issued],
+          curr_slot_item[ureq_issued % kMaxInflightChunks],
+          &ureq[ureq_issued % kMaxInflightChunks]);
+      if (rc == -1) break;
+      done[ureq_issued % kMaxInflightChunks] = false;
+      ureq_issued++;
+    }
+    check_python_signals();
+
+    for (int i = ureq_finished; i < ureq_issued; i++) {
+      if (done[i % kMaxInflightChunks]) {
+        continue;
+      }
+      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+        done[i % kMaxInflightChunks] = true;
+      }
+    }
+
+    while (ureq_finished < ureq_issued &&
+           done[ureq_finished % kMaxInflightChunks]) {
+      ureq_finished++;
+    }
+  }
+
+  return true;
+}
+
+bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
+                           size_t size, uccl::FifoItem const& slot_item,
+                           uint64_t* transfer_id) {
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
+  UnifiedTask* rw_task = create_net_task(conn_id, mr_id, TaskType::WRITE_NET,
+                                         src, size, slot_item);
+  if (unlikely(rw_task == nullptr)) {
+    return false;
+  }
+  *transfer_id = reinterpret_cast<uint64_t>(rw_task);
+
+  while (jring_mp_enqueue_bulk(send_unified_task_ring_, rw_task, 1, nullptr) !=
+         1) {
+  }
+
+  return true;
+}
+
+bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                      std::vector<void*> src_v, std::vector<size_t> size_v,
+                      std::vector<uccl::FifoItem> slot_item_v,
+                      size_t num_iovs) {
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+  auto conn = conn_id_to_conn_[conn_id];
+  auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
+
+  uccl::ucclRequest ureq[kMaxInflightChunks] = {};
+  uccl::FifoItem curr_slot_item[kMaxInflightChunks] = {};
+  bool done[kMaxInflightChunks] = {false};
+
+  int estimated_ureq_max = 0;
+  for (int i = 0; i < num_iovs; i++) {
+    estimated_ureq_max += (size_v[i] + kChunkSize - 1) / kChunkSize;
+  }
+
+  std::vector<void*> data_write_vec;
+  std::vector<size_t> size_write_vec;
+  std::vector<uccl::Mhandle*> mhandle_write_vec;
+  std::vector<uccl::FifoItem> slot_item_vec;
+  // Avoid reallocations.
+  data_write_vec.reserve(estimated_ureq_max);
+  size_write_vec.reserve(estimated_ureq_max);
+  mhandle_write_vec.reserve(estimated_ureq_max);
+  slot_item_vec.reserve(estimated_ureq_max);
+
+  for (int i = 0; i < num_iovs; i++) {
+    void* cur_data = src_v[i];
+    size_t cur_size_expected = size_v[i];
+    size_t cur_size_post_write = 0;
+    uccl::FifoItem base_slot_item = slot_item_v[i];
+    auto mhandle = mr_id_to_mr_[mr_id_v[i]]->mhandle_;
+
+    while (cur_size_post_write < cur_size_expected) {
+      size_t chunk_size =
+          std::min(cur_size_expected - cur_size_post_write, (size_t)kChunkSize);
+      uccl::FifoItem chunk_slot_item = base_slot_item;
+      chunk_slot_item.addr += cur_size_post_write;
+      chunk_slot_item.size = chunk_size;
+      // engine_offset will be set later
+      data_write_vec.push_back(cur_data);
+      size_write_vec.push_back(chunk_size);
+      mhandle_write_vec.push_back(mhandle);
+      slot_item_vec.push_back(chunk_slot_item);
+      cur_data = (void*)((char*)cur_data + chunk_size);
+      cur_size_post_write += chunk_size;
+    }
+  }
+
+  int ureq_max = data_write_vec.size();
+  int ureq_issued = 0, ureq_finished = 0;
+  auto num_engines = ucclParamNUM_ENGINES();
+
+  while (ureq_finished < ureq_max) {
+    while (ureq_issued < ureq_max &&
+           ureq_issued - ureq_finished < kMaxInflightChunks &&
+           size_write_vec[ureq_issued] > 0) {
+      slot_item_vec[ureq_issued].engine_offset = ureq_issued % num_engines;
+      curr_slot_item[ureq_issued % kMaxInflightChunks] =
+          slot_item_vec[ureq_issued];
+      memset(&ureq[ureq_issued % kMaxInflightChunks], 0,
+             sizeof(uccl::ucclRequest));
+      auto rc = ep_->uccl_write_async(
+          uccl_flow, mhandle_write_vec[ureq_issued],
+          data_write_vec[ureq_issued], size_write_vec[ureq_issued],
+          curr_slot_item[ureq_issued % kMaxInflightChunks],
+          &ureq[ureq_issued % kMaxInflightChunks]);
+      if (rc == -1) break;
+      done[ureq_issued % kMaxInflightChunks] = false;
+      ureq_issued++;
+    }
+    check_python_signals();
+
+    for (int i = ureq_finished; i < ureq_issued; i++) {
+      if (done[i % kMaxInflightChunks]) {
+        continue;
+      }
+      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+        done[i % kMaxInflightChunks] = true;
+      }
+    }
+
+    while (ureq_finished < ureq_issued &&
+           done[ureq_finished % kMaxInflightChunks]) {
+      ureq_finished++;
+    }
+  }
+
+  return true;
+}
+
+bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
+                     uccl::FifoItem const& slot_item, bool inside_python) {
+  auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
+
+  if (!ucclParamRCMode()) {
+    DCHECK(false) << "We only support RC mode for now.";
+    std::abort();
+  }
+
+  DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
+  auto* conn = conn_id_to_conn_[conn_id];
+  auto* mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+
+  uccl::ucclRequest ureq[kMaxInflightChunks] = {};
+  uccl::FifoItem curr_slot_item[kMaxInflightChunks] = {};
+  bool done[kMaxInflightChunks] = {false};
+
+  void* cur_data = src;
+  size_t size_write = 0;
+  int ureq_max = (size + kChunkSize - 1) / kChunkSize;
+  int ureq_issued = 0, ureq_finished = 0;
+
+  auto num_engines = ucclParamNUM_ENGINES();
+
+  while (ureq_finished < ureq_max) {
+    while (ureq_issued - ureq_finished < kMaxInflightChunks &&
+           size_write < size) {
+      size_t chunk_size = std::min(size - size_write, kChunkSize);
+      curr_slot_item[ureq_issued % kMaxInflightChunks] = slot_item;
+      curr_slot_item[ureq_issued % kMaxInflightChunks].addr += size_write;
+      curr_slot_item[ureq_issued % kMaxInflightChunks].size = chunk_size;
+      curr_slot_item[ureq_issued % kMaxInflightChunks].engine_offset =
+          ureq_issued % num_engines;
+      memset(&ureq[ureq_issued % kMaxInflightChunks], 0,
+             sizeof(uccl::ucclRequest));
+      auto rc = ep_->uccl_write_async(
+          static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
+          cur_data, chunk_size,
+          curr_slot_item[ureq_issued % kMaxInflightChunks],
+          &ureq[ureq_issued % kMaxInflightChunks]);
+      if (rc == -1) break;
+      cur_data += chunk_size;
+      size_write += chunk_size;
+      done[ureq_issued % kMaxInflightChunks] = false;
+      ureq_issued++;
+    }
+    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+
+    // First, poll all outstanding requests and mark which ones are done.
+    for (int i = ureq_finished; i < ureq_issued; i++) {
+      if (done[i % kMaxInflightChunks]) {
+        continue;
+      }
+      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+        // Just mark it as completed, DO NOT increment ureq_finished here.
+        done[i % kMaxInflightChunks] = true;
+      }
+    }
+
+    // Now, advance the ureq_finished counter as far as possible.
+    while (ureq_finished < ureq_issued &&
+           done[ureq_finished % kMaxInflightChunks]) {
+      ureq_finished++;
+    }
+  }
   return true;
 }
 
 bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
                          size_t len, char* out_buf) {
-  py::gil_scoped_release release;
-
-  if (conn_id == kNvlinkConn) {
-    GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-    gpuIpcMemHandle_t handle{};
-    GPU_RT_CHECK(gpuIpcGetMemHandle(&handle, addr));
-    std::memcpy(out_buf, &handle, sizeof(handle));
-    return true;
-  }
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
   auto* conn = conn_id_to_conn_[conn_id];
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
   uccl::ucclRequest req_data;
@@ -703,219 +1070,675 @@ bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
   return true;
 }
 
-bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
-  py::gil_scoped_release release;
-  auto* ureq = transfer_id_to_ureq_.at(transfer_id);
-  *is_done = ep_->uccl_poll_ureq_once(ureq);
-  if (*is_done) {
-    delete ureq;
-    transfer_id_to_ureq_.erase(transfer_id);
+bool Endpoint::advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                          std::vector<void*> addr_v, std::vector<size_t> len_v,
+                          std::vector<char*> out_buf_v, size_t num_iovs) {
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+  auto* conn = conn_id_to_conn_[conn_id];
+  for (size_t i = 0; i < num_iovs; ++i) {
+    auto mhandle = mr_id_to_mr_[mr_id_v[i]]->mhandle_;
+    if (ep_->prepare_fifo_metadata(
+            static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
+            addr_v[i], len_v[i], out_buf_v[i]) == -1) {
+      return false;
+    }
   }
   return true;
 }
 
-bool Endpoint::join_group(std::string const& discovery_uri,
-                          std::string const& group_name, int world_size,
-                          int my_rank, int remote_gpu_idx) {
-  std::string local_ip;
+bool Endpoint::connect_local(int remote_gpu_idx, uint64_t& conn_id) {
+  int retries = 5;
+  int ret = -1;
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+  std::cout << "Connecting to remote GPU " << remote_gpu_idx << std::endl;
+
+  std::string remote_socket_path = get_uds_socket_path(remote_gpu_idx);
+
+  // Create socket for connection
+  int sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
+  CHECK_GE(sockfd, 0) << "Failed to create UDS socket for connection: "
+                      << strerror(errno);
+  fcntl(sockfd, F_SETFL, fcntl(sockfd, F_GETFL) | O_NONBLOCK);
+
+  // Set up socket address
+  struct sockaddr_un addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sun_family = AF_UNIX;
+  strncpy(addr.sun_path, remote_socket_path.c_str(), sizeof(addr.sun_path) - 1);
+
+  // Connect to remote socket
+  for (int i = 0; i < retries; ++i) {
+    ret = ::connect(sockfd, (struct sockaddr*)&addr, sizeof(addr));
+    if (ret == 0) break;
+
+    if (errno == ECONNREFUSED || errno == EAGAIN) {
+      std::cerr << "Connect failed: " << strerror(errno) << ", retry "
+                << (i + 1) << "/" << retries << std::endl;
+      std::this_thread::sleep_for(std::chrono::milliseconds(200 * (i + 1)));
+      continue;
+    }
+    break;
+  }
+
+  // Send our GPU index to the remote endpoint
+  ret = uccl::send_message_nonblock(sockfd,
+                                    static_cast<void const*>(&local_gpu_idx_),
+                                    sizeof(local_gpu_idx_));
+  CHECK_EQ(ret, sizeof(local_gpu_idx_)) << "Failed to send local GPU index";
+
+  // Create a new connection ID for this local connection
+  conn_id = next_conn_id_.fetch_add(1);
+
+  // Create a special connection entry for local UDS connection with persistent
+  // socket
   {
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
-    sockaddr_in serv{};
-    serv.sin_family = AF_INET;
-    serv.sin_addr.s_addr = inet_addr("8.8.8.8");
-    serv.sin_port = htons(53);
-    ::connect(sock, (sockaddr*)&serv, sizeof(serv));
-    sockaddr_in name{};
-    socklen_t namelen = sizeof(name);
-    getsockname(sock, (sockaddr*)&name, &namelen);
-    char buf[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &name.sin_addr, buf, sizeof(buf));
-    local_ip = buf;
-    close(sock);
+    std::unique_lock<std::shared_mutex> lock(conn_mu_);
+    uccl::ConnID dummy_conn_id{nullptr, 0, 0, 0};
+    conn_id_to_conn_[conn_id] =
+        new Conn{conn_id, dummy_conn_id, "localhost", remote_gpu_idx, sockfd};
   }
 
-  PeerInfo me{local_ip, static_cast<int>(local_gpu_idx_)};
-  if (!publish_peer(discovery_uri, group_name, my_rank, me)) {
-    std::cerr << "[join_group] failed to publish peer info\n";
+  return true;
+}
+
+bool Endpoint::accept_local(int& remote_gpu_idx, uint64_t& conn_id) {
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+  std::cout << "Waiting to accept UDS connection" << std::endl;
+
+  CHECK(uds_listen_fd_ >= 0) << "UDS socket not initialized";
+
+  // Accept incoming connection
+  struct sockaddr_un client_addr;
+  socklen_t client_len = sizeof(client_addr);
+  int client_fd =
+      ::accept(uds_listen_fd_, (struct sockaddr*)&client_addr, &client_len);
+  CHECK_GE(client_fd, 0) << "Failed to accept UDS connection: "
+                         << strerror(errno);
+
+  fcntl(client_fd, F_SETFL, fcntl(client_fd, F_GETFL) | O_NONBLOCK);
+
+  // Receive remote GPU index
+  auto ret = uccl::receive_message_nonblock(
+      client_fd, static_cast<void*>(&remote_gpu_idx), sizeof(remote_gpu_idx));
+  CHECK_EQ(ret, sizeof(remote_gpu_idx)) << "Failed to receive remote GPU index";
+
+  // Create connection ID
+  conn_id = next_conn_id_.fetch_add(1);
+
+  // Store the connection with persistent socket
+  {
+    std::unique_lock<std::shared_mutex> lock(conn_mu_);
+    uccl::ConnID dummy_conn_id{nullptr, 0, 0, 0};
+    conn_id_to_conn_[conn_id] = new Conn{conn_id, dummy_conn_id, "localhost",
+                                         remote_gpu_idx, client_fd};
+  }
+
+  return true;
+}
+
+bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size,
+                        bool inside_python) {
+  auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
+
+  CHECK(data != nullptr) << "send_ipc: data pointer is null!";
+
+  // Get connection info
+  Conn* conn;
+  {
+    std::shared_lock<std::shared_mutex> lock(conn_mu_);
+    auto it = conn_id_to_conn_.find(conn_id);
+    CHECK(it != conn_id_to_conn_.end())
+        << "Connection not found for conn_id: " << conn_id;
+    conn = it->second;
+  }
+
+  // Check if we have a valid persistent UDS socket (faster than string
+  // comparison)
+  CHECK_GE(conn->uds_sockfd_, 0)
+      << "send_ipc only supports local connections with valid UDS socket";
+
+  // Use the persistent UDS connection
+  int sockfd = conn->uds_sockfd_;
+
+  int orig_device;
+  GPU_RT_CHECK(gpuGetDevice(&orig_device));
+  auto dev_reset =
+      uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
+
+  IpcTransferInfo transfer_info = {};  // Initialize to zero
+  // Wait for receiver's IPC handle (receiver will send this proactively)
+  auto ret = uccl::receive_message_nonblock(
+      sockfd, static_cast<void*>(&transfer_info), sizeof(transfer_info));
+  CHECK_EQ(ret, sizeof(transfer_info))
+      << "Failed to receive IPC handle from receiver";
+  CHECK_EQ(transfer_info.operation, 1) << "Invalid response from receiver";
+  CHECK_EQ(transfer_info.size, size)
+      << "Size mismatch: expected " << size << ", got " << transfer_info.size;
+
+  void* raw_dst_ptr = nullptr;
+  GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
+  GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_dst_ptr, transfer_info.handle,
+                                   gpuIpcMemLazyEnablePeerAccess));
+
+  void* dst_ptr = reinterpret_cast<void*>(
+      reinterpret_cast<uintptr_t>(raw_dst_ptr) + transfer_info.offset);
+
+  std::vector<gpuStream_t>& dst_streams = ipc_streams_[conn->remote_gpu_idx_];
+  int num_streams =
+      std::min(dst_streams.size(),
+               size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
+  size_t chunk_size = size / num_streams;
+
+  for (int i = 0; i < num_streams; ++i) {
+    // Split data and dst_ptr into n_streams chunks
+    void* chunk_data = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(data) + i * chunk_size);
+    void* chunk_dst_ptr = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(dst_ptr) + i * chunk_size);
+    auto copy_size = i == num_streams - 1 ? size - i * chunk_size : chunk_size;
+    // Works for both intra-GPU and inter-GPU copy
+    GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst_ptr, chunk_data, copy_size,
+                                gpuMemcpyDeviceToDevice, dst_streams[i]));
+  }
+
+  for (auto& stream : dst_streams) {
+    GPU_RT_CHECK(gpuStreamSynchronize(stream));
+  }
+
+  // Notify receiver of completion
+  uint32_t completion = 1;
+  ret = uccl::send_message_nonblock(
+      sockfd, static_cast<void const*>(&completion), sizeof(completion));
+  CHECK_EQ(ret, sizeof(completion)) << "Failed to send completion ack";
+
+  // Okay, this is the slowest part, 46GB/s -> 28GB/s for 100MB, so moving it
+  // async. Update: moving async does not help, as gpuIpcOpenMemHandle will be
+  // slower.
+  // std::thread close_mem_handle(
+  //     [raw_dst_ptr]() { GPU_RT_CHECK(gpuIpcCloseMemHandle(raw_dst_ptr)); });
+  // close_mem_handle.detach();
+
+  // We close all IPC memory handles when releasing this endpoint.
+
+  return true;
+}
+
+bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size,
+                        bool inside_python) {
+  auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
+
+  CHECK(data != nullptr) << "recv_ipc: data pointer is null!";
+
+  // Get connection info
+  Conn* conn;
+  {
+    std::shared_lock<std::shared_mutex> lock(conn_mu_);
+    auto it = conn_id_to_conn_.find(conn_id);
+    CHECK(it != conn_id_to_conn_.end())
+        << "Connection not found for conn_id: " << conn_id;
+    conn = it->second;
+  }
+
+  // Check if we have a valid persistent UDS socket (faster than string
+  // comparison)
+  CHECK_GE(conn->uds_sockfd_, 0)
+      << "recv_ipc only supports local connections with valid UDS socket";
+
+  // Use the persistent UDS connection
+  int client_fd = conn->uds_sockfd_;
+
+  int orig_device;
+  GPU_RT_CHECK(gpuGetDevice(&orig_device));
+  auto dev_reset =
+      uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
+
+  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+  // Generate IPC memory handle for our receive buffer
+  IpcTransferInfo transfer_info = {};  // Initialize to zero
+  transfer_info.size = size;
+  transfer_info.operation = 1;  // response
+
+  auto data_aligned = reinterpret_cast<uintptr_t>(data) & ~(kIpcAlignment - 1);
+  auto data_offset = reinterpret_cast<uintptr_t>(data) - data_aligned;
+  transfer_info.offset = data_offset;
+  GPU_RT_CHECK(gpuIpcGetMemHandle(&transfer_info.handle,
+                                  reinterpret_cast<void*>(data_aligned)));
+
+  auto ret = uccl::send_message_nonblock(
+      client_fd, static_cast<void const*>(&transfer_info),
+      sizeof(transfer_info));
+  CHECK_EQ(ret, sizeof(transfer_info)) << "Failed to send IPC handle to sender";
+
+  // Notify sender of completion
+  uint32_t completion = 0;
+  ret = uccl::receive_message_nonblock(
+      client_fd, static_cast<void*>(&completion), sizeof(completion));
+  CHECK_EQ(ret, sizeof(completion))
+      << "Failed to receive completion notification";
+  CHECK_EQ(completion, 1) << "Sender reported failure";
+
+  return true;
+}
+
+bool Endpoint::send_ipc_async(uint64_t conn_id, void const* data, size_t size,
+                              uint64_t* transfer_id) {
+  py::gil_scoped_release release;
+
+  // Create a task for IPC send operation
+  UnifiedTask* task = create_task(conn_id, 0, TaskType::SEND_IPC,
+                                  const_cast<void*>(data), size);
+  if (unlikely(task == nullptr)) {
     return false;
   }
 
-  std::vector<PeerInfo> peers;
-  if (!collect_peers(discovery_uri, group_name, world_size, peers)) {
-    std::cerr << "[join_group] failed to collect peers\n";
+  *transfer_id = reinterpret_cast<uint64_t>(task);
+
+  // For now, we'll use the existing async infrastructure but call our IPC
+  // function In a real implementation, you might want a separate IPC task ring
+  while (jring_mp_enqueue_bulk(send_unified_task_ring_, task, 1, nullptr) !=
+         1) {
+  }
+
+  return true;
+}
+
+bool Endpoint::recv_ipc_async(uint64_t conn_id, void* data, size_t size,
+                              uint64_t* transfer_id) {
+  py::gil_scoped_release release;
+
+  // Create a task for IPC receive operation
+  UnifiedTask* task = create_task(conn_id, 0, TaskType::RECV_IPC, data, size);
+  if (unlikely(task == nullptr)) {
     return false;
   }
 
-  /* Low errank connect, higher rank accept. */
-  for (int r = 0; r < world_size; ++r) {
-    std::cout << "[join_group] peer " << r << ": " << peers[r].ip_addr << ":"
-              << peers[r].gpu_idx << "\n";
-    std::cout << "[join_group] my rank: " << my_rank << ", peer rank: " << r
-              << ", world_size: " << world_size << "\n";
-    if (r == my_rank) continue;
-    uint64_t cid;
-    if (my_rank < r) {
-      if (!accept(peers[r].ip_addr, peers[r].gpu_idx, cid)) {
-        std::cerr << "[join_group] accept to rank " << r << " failed\n";
-        return false;
-      } else {
-        std::cout << "[join_group] accepted to rank " << r << " with conn_id "
-                  << cid << "\n";
-      }
-    } else {
-      if (!connect(peers[r].ip_addr, remote_gpu_idx, cid, -1)) {
-        std::cerr << "[join_group] connect from rank " << r << " failed\n";
-        return false;
-      }
-    }
-    rank2conn_[r] = cid;
+  *transfer_id = reinterpret_cast<uint64_t>(task);
+
+  // For now, we'll use the existing async infrastructure but call our IPC
+  // function In a real implementation, you might want a separate IPC task ring
+  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, task, 1, nullptr) !=
+         1) {
+  }
+
+  return true;
+}
+
+bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
+                         IpcTransferInfo const& info, bool inside_python) {
+  auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
+
+  CHECK(data != nullptr) << "write_ipc: data pointer is null!";
+
+  // Get connection info
+  Conn* conn;
+  {
+    std::shared_lock<std::shared_mutex> lock(conn_mu_);
+    auto it = conn_id_to_conn_.find(conn_id);
+    CHECK(it != conn_id_to_conn_.end())
+        << "Connection not found for conn_id: " << conn_id;
+    conn = it->second;
+  }
+
+  int orig_device;
+  GPU_RT_CHECK(gpuGetDevice(&orig_device));
+  auto dev_reset =
+      uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
+
+  // Open the remote IPC memory handle
+  void* raw_dst_ptr = nullptr;
+  GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
+  GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_dst_ptr, info.handle,
+                                   gpuIpcMemLazyEnablePeerAccess));
+
+  // Calculate destination pointer with offset
+  void* dst_ptr = reinterpret_cast<void*>(
+      reinterpret_cast<uintptr_t>(raw_dst_ptr) + info.offset);
+
+  // Perform the memory copy using multiple streams for better performance
+  std::vector<gpuStream_t>& dst_streams = ipc_streams_[conn->remote_gpu_idx_];
+  int num_streams =
+      std::min(dst_streams.size(),
+               size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
+  size_t chunk_size = size / num_streams;
+
+  for (int i = 0; i < num_streams; ++i) {
+    // Split data and dst_ptr into n_streams chunks
+    void* chunk_data = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(data) + i * chunk_size);
+    void* chunk_dst_ptr = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(dst_ptr) + i * chunk_size);
+    auto copy_size = i == num_streams - 1 ? size - i * chunk_size : chunk_size;
+
+    // Works for both intra-GPU and inter-GPU copy
+    GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst_ptr, chunk_data, copy_size,
+                                gpuMemcpyDeviceToDevice, dst_streams[i]));
+  }
+
+  // Wait for all streams to complete
+  for (auto& stream : dst_streams) {
+    GPU_RT_CHECK(gpuStreamSynchronize(stream));
+  }
+
+  // Close the IPC memory handle
+  GPU_RT_CHECK(gpuIpcCloseMemHandle(raw_dst_ptr));
+
+  return true;
+}
+
+bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
+                        IpcTransferInfo const& info, bool inside_python) {
+  auto _ = inside_python ? (py::gil_scoped_release(), nullptr) : nullptr;
+
+  CHECK(data != nullptr) << "read_ipc: data pointer is null!";
+
+  // Get connection info
+  Conn* conn;
+  {
+    std::shared_lock<std::shared_mutex> lock(conn_mu_);
+    auto it = conn_id_to_conn_.find(conn_id);
+    CHECK(it != conn_id_to_conn_.end())
+        << "Connection not found for conn_id: " << conn_id;
+    conn = it->second;
+  }
+
+  int orig_device;
+  GPU_RT_CHECK(gpuGetDevice(&orig_device));
+  auto dev_reset =
+      uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
+
+  // Open the remote IPC memory handle
+  void* raw_src_ptr = nullptr;
+  GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
+  GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_src_ptr, info.handle,
+                                   gpuIpcMemLazyEnablePeerAccess));
+
+  // Calculate source pointer with offset
+  void* src_ptr = reinterpret_cast<void*>(
+      reinterpret_cast<uintptr_t>(raw_src_ptr) + info.offset);
+
+  // Perform the memory copy using multiple streams for better performance
+  std::vector<gpuStream_t>& src_streams = ipc_streams_[conn->remote_gpu_idx_];
+  int num_streams =
+      std::min(src_streams.size(),
+               size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
+  size_t chunk_size = size / num_streams;
+
+  for (int i = 0; i < num_streams; ++i) {
+    // Split src_ptr and data into n_streams chunks
+    void* chunk_src_ptr = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(src_ptr) + i * chunk_size);
+    void* chunk_data = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(data) + i * chunk_size);
+    auto copy_size = i == num_streams - 1 ? size - i * chunk_size : chunk_size;
+
+    // Works for both intra-GPU and inter-GPU copy
+    GPU_RT_CHECK(gpuMemcpyAsync(chunk_data, chunk_src_ptr, copy_size,
+                                gpuMemcpyDeviceToDevice, src_streams[i]));
+  }
+
+  // Wait for all streams to complete
+  for (auto& stream : src_streams) {
+    GPU_RT_CHECK(gpuStreamSynchronize(stream));
+  }
+
+  // Close the IPC memory handle
+  GPU_RT_CHECK(gpuIpcCloseMemHandle(raw_src_ptr));
+
+  return true;
+}
+
+bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
+                               IpcTransferInfo const& info,
+                               uint64_t* transfer_id) {
+  py::gil_scoped_release release;
+
+  // Create an IPC task for IPC write operation
+  UnifiedTask* task = create_ipc_task(conn_id, 0, TaskType::WRITE_IPC,
+                                      const_cast<void*>(data), size, info);
+  if (unlikely(task == nullptr)) {
+    return false;
+  }
+
+  *transfer_id = reinterpret_cast<uint64_t>(task);
+
+  // Enqueue the task for processing by proxy thread
+  while (jring_mp_enqueue_bulk(send_unified_task_ring_, task, 1, nullptr) !=
+         1) {
+  }
+
+  return true;
+}
+
+bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
+                              IpcTransferInfo const& info,
+                              uint64_t* transfer_id) {
+  py::gil_scoped_release release;
+
+  // Create an IPC task for IPC read operation
+  UnifiedTask* task =
+      create_ipc_task(conn_id, 0, TaskType::READ_IPC, data, size, info);
+  if (unlikely(task == nullptr)) {
+    return false;
+  }
+
+  *transfer_id = reinterpret_cast<uint64_t>(task);
+
+  // Enqueue the task for processing by proxy thread
+  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, task, 1, nullptr) !=
+         1) {
+  }
+
+  return true;
+}
+
+bool Endpoint::advertise_ipc(uint64_t conn_id, void* addr, size_t len,
+                             char* out_buf) {
+  py::gil_scoped_release release;
+
+  CHECK(addr != nullptr) << "advertise_ipc: addr pointer is null!";
+  CHECK(out_buf != nullptr) << "advertise_ipc: out_buf pointer is null!";
+
+  int orig_device;
+  GPU_RT_CHECK(gpuGetDevice(&orig_device));
+  auto dev_reset =
+      uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
+
+  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+
+  // Generate IPC memory handle for the address
+  IpcTransferInfo transfer_info = {};  // Initialize to zero
+  transfer_info.size = len;
+  transfer_info.operation = 1;  // response
+
+  // Calculate aligned address and offset
+  auto addr_aligned = reinterpret_cast<uintptr_t>(addr) & ~(kIpcAlignment - 1);
+  auto addr_offset = reinterpret_cast<uintptr_t>(addr) - addr_aligned;
+  transfer_info.offset = addr_offset;
+
+  GPU_RT_CHECK(gpuIpcGetMemHandle(&transfer_info.handle,
+                                  reinterpret_cast<void*>(addr_aligned)));
+
+  // Copy the transfer info to output buffer
+  std::memcpy(out_buf, &transfer_info, sizeof(transfer_info));
+
+  return true;
+}
+
+bool Endpoint::advertisev_ipc(uint64_t conn_id, std::vector<void*> addr_v,
+                              std::vector<size_t> len_v,
+                              std::vector<char*> out_buf_v, size_t num_iovs) {
+  py::gil_scoped_release release;
+
+  CHECK_EQ(addr_v.size(), num_iovs) << "addr_v size mismatch";
+  CHECK_EQ(len_v.size(), num_iovs) << "len_v size mismatch";
+  CHECK_EQ(out_buf_v.size(), num_iovs) << "out_buf_v size mismatch";
+
+  int orig_device;
+  GPU_RT_CHECK(gpuGetDevice(&orig_device));
+  auto dev_reset =
+      uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
+
+  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+
+  for (size_t i = 0; i < num_iovs; ++i) {
+    CHECK(addr_v[i] != nullptr)
+        << "advertisev_ipc: addr_v[" << i << "] is null!";
+    CHECK(out_buf_v[i] != nullptr)
+        << "advertisev_ipc: out_buf_v[" << i << "] is null!";
+
+    // Generate IPC memory handle for each address
+    IpcTransferInfo transfer_info = {};  // Initialize to zero
+    transfer_info.size = len_v[i];
+    transfer_info.operation = 1;  // response
+
+    // Calculate aligned address and offset
+    auto addr_aligned =
+        reinterpret_cast<uintptr_t>(addr_v[i]) & ~(kIpcAlignment - 1);
+    auto addr_offset = reinterpret_cast<uintptr_t>(addr_v[i]) - addr_aligned;
+    transfer_info.offset = addr_offset;
+
+    GPU_RT_CHECK(gpuIpcGetMemHandle(&transfer_info.handle,
+                                    reinterpret_cast<void*>(addr_aligned)));
+
+    // Copy the transfer info to output buffer
+    std::memcpy(out_buf_v[i], &transfer_info, sizeof(transfer_info));
+  }
+
+  return true;
+}
+
+bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
+  auto task = reinterpret_cast<UnifiedTask*>(transfer_id);
+  *is_done = task->done.load(std::memory_order_acquire);
+  if (*is_done) {
+    delete task;
   }
   return true;
 }
 
-std::unique_ptr<Endpoint> Endpoint::CreateAndJoin(
-    std::string const& discovery_uri, std::string const& group_name,
-    int world_size, int my_rank, uint32_t local_gpu_idx, uint32_t num_cpus,
-    int remote_gpu_idx) {
-  auto ep = std::make_unique<Endpoint>(local_gpu_idx, num_cpus);
-  if (!ep->join_group(discovery_uri, group_name, world_size, my_rank,
-                      remote_gpu_idx)) {
-    throw std::runtime_error("Endpoint::CreateAndJoin() failed");
-  }
-  return ep;
-}
+void Endpoint::init_uds_socket() {
+  // Create UDS socket path based on local GPU index
+  uds_socket_path_ = get_uds_socket_path(local_gpu_idx_);
 
-uint64_t Endpoint::conn_id_of_rank(int rank) const {
-  auto it = rank2conn_.find(rank);
-  return it != rank2conn_.end() ? it->second : UINT64_MAX;
-}
+  // Remove existing socket file if it exists
+  unlink(uds_socket_path_.c_str());
 
-std::vector<uint8_t> Endpoint::get_endpoint_metadata() {
-  char uccl_ifname[MAX_IF_NAME_SIZE + 1];
-  uccl::socketAddress uccl_ifaddr;
-  int num_ifs =
-      uccl::find_interfaces(uccl_ifname, &uccl_ifaddr, MAX_IF_NAME_SIZE, 1);
-  if (num_ifs != 1) UCCL_INIT_CHECK(false, "No IP interface found");
-
-  std::string ip_str = uccl::get_dev_ip(uccl_ifname);
-  uint16_t port = ep_->get_p2p_listen_port(gpu_to_dev[local_gpu_idx_]);
-
-  bool is_ipv6 = ip_str.find(':') != std::string::npos;
-  size_t ip_len = is_ipv6 ? 16 : 4;
-
-  // Additional 2 bytes for port and 4 bytes for local_gpu_idx_
-  size_t total_len = ip_len + 2 + sizeof(int);
-  std::vector<uint8_t> metadata(total_len);
-
-  // Copy IP
-  if (is_ipv6) {
-    struct in6_addr ip6_bin;
-    if (inet_pton(AF_INET6, ip_str.c_str(), &ip6_bin) != 1)
-      throw std::runtime_error("Invalid IPv6 address: " + ip_str);
-    std::memcpy(metadata.data(), &ip6_bin, 16);
-  } else {
-    struct in_addr ip4_bin;
-    if (inet_pton(AF_INET, ip_str.c_str(), &ip4_bin) != 1)
-      throw std::runtime_error("Invalid IPv4 address: " + ip_str);
-    std::memcpy(metadata.data(), &ip4_bin, 4);
+  // Create socket
+  uds_listen_fd_ = socket(AF_UNIX, SOCK_STREAM, 0);
+  if (uds_listen_fd_ < 0) {
+    std::cerr << "Failed to create UDS socket: " << strerror(errno)
+              << std::endl;
+    return;
   }
 
-  // Copy port in network byte order
-  uint16_t net_port = htons(port);
-  std::memcpy(metadata.data() + ip_len, &net_port, 2);
+  // Set up socket address
+  struct sockaddr_un addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sun_family = AF_UNIX;
+  strncpy(addr.sun_path, uds_socket_path_.c_str(), sizeof(addr.sun_path) - 1);
 
-  // Copy local_gpu_idx_ in host byte order
-  std::memcpy(metadata.data() + ip_len + 2, &local_gpu_idx_, sizeof(int));
+  // Bind socket
+  if (bind(uds_listen_fd_, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+    std::cerr << "Failed to bind UDS socket to " << uds_socket_path_ << ": "
+              << strerror(errno) << std::endl;
+    close(uds_listen_fd_);
+    uds_listen_fd_ = -1;
+    return;
+  }
 
-  return metadata;
+  // Start listening
+  if (listen(uds_listen_fd_, 5) < 0) {
+    std::cerr << "Failed to listen on UDS socket: " << strerror(errno)
+              << std::endl;
+    close(uds_listen_fd_);
+    uds_listen_fd_ = -1;
+    unlink(uds_socket_path_.c_str());
+    return;
+  }
+
+  std::cout << "UDS socket initialized at " << uds_socket_path_ << std::endl;
 }
 
-#ifdef USE_REDIS
-bool Endpoint::publish_redis(std::string const& redis_uri,
-                             std::string const& key, PeerInfo const& info) {
-  try {
-    auto redis = sw::redis::Redis(redis_uri);
-    std::ostringstream oss;
-    oss << info.ip_addr << "," << info.gpu_idx;
-    redis.set(key, oss.str());
-    return true;
-  } catch (sw::redis::Error const& e) {
-    std::cerr << "[publish_redis] Redis error: " << e.what() << "\n";
-    return false;
+void Endpoint::cleanup_uds_socket() {
+  if (uds_listen_fd_ >= 0) {
+    close(uds_listen_fd_);
+    uds_listen_fd_ = -1;
+  }
+
+  if (!uds_socket_path_.empty()) {
+    unlink(uds_socket_path_.c_str());
+    uds_socket_path_.clear();
   }
 }
 
-bool Endpoint::fetch_all_redis(std::string const& redis_uri,
-                               std::string const& key_prefix, int world_size,
-                               std::vector<PeerInfo>& out) {
-  try {
-    auto redis = sw::redis::Redis(redis_uri);
-    out.clear();
-    out.reserve(world_size);
+void Endpoint::send_proxy_thread_func() {
+  uccl::pin_thread_to_numa(numa_node_);
+  UnifiedTask task;
 
-    for (int rank = 0; rank < world_size; ++rank) {
-      std::string key = key_prefix + std::to_string(rank);
-      std::optional<std::string> val;
-
-      while (true) {
-        val = redis.get(key);
-        if (val) break;
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  while (!stop_.load(std::memory_order_acquire)) {
+    if (jring_sc_dequeue_bulk(send_unified_task_ring_, &task, 1, nullptr) ==
+        1) {
+      switch (task.type) {
+        case TaskType::SEND_IPC:
+          send_ipc(task.conn_id, task.data, task.size, false);
+          break;
+        case TaskType::WRITE_NET:
+          write(task.conn_id, task.mr_id, task.data, task.size,
+                task.slot_item(), false);
+          break;
+        case TaskType::WRITE_IPC:
+          write_ipc(task.conn_id, task.data, task.size, task.ipc_info(), false);
+          break;
+        case TaskType::SEND_NET:
+          send(task.conn_id, task.mr_id, task.data, task.size, false);
+          break;
+        default:
+          LOG(ERROR) << "Unexpected task type in send processing: "
+                     << static_cast<int>(task.type);
+          break;
       }
-
-      auto const& s = *val;
-      auto comma = s.find(',');
-      if (comma == std::string::npos) {
-        std::cerr << "[fetch_all_redis] bad format for key " << key << "\n";
-        return false;
-      }
-      std::cout << "[fetch_all_redis] Peer " << rank << ": " << s << std::endl;
-
-      PeerInfo p;
-      p.ip_addr = s.substr(0, comma);
-      p.gpu_idx = std::stoi(s.substr(comma + 1));
-      out.push_back(p);
+      task.self_ptr->done.store(true, std::memory_order_release);
     }
-    return true;
-  } catch (sw::redis::Error const& e) {
-    std::cerr << "[fetch_all_redis] Redis error: " << e.what() << "\n";
-    return false;
-  }
-}
-#endif
-
-bool Endpoint::publish_peer(std::string const& discovery_uri,
-                            std::string const& group_name, int rank,
-                            PeerInfo const& info) {
-  if (discovery_uri.rfind("redis://", 0) == 0) {
-#ifdef USE_REDIS
-    std::string key = group_name + ":" + std::to_string(rank);
-    return publish_redis(discovery_uri, key, info);
-#else
-    std::cerr << "[publish_peer] Redis support not compiled in\n";
-    return false;
-#endif
-  } else {
-    std::cerr << "[publish_peer] Unsupported discovery backend: "
-              << discovery_uri << "\n";
-    return false;
   }
 }
 
-bool Endpoint::collect_peers(std::string const& discovery_uri,
-                             std::string const& group_name, int world_size,
-                             std::vector<PeerInfo>& out) {
-  if (discovery_uri.rfind("redis://", 0) == 0) {
-#ifdef USE_REDIS
-    std::string key_prefix = group_name + ":";
-    return fetch_all_redis(discovery_uri, key_prefix, world_size, out);
-#else
-    std::cerr << "[collect_peers] Redis support not compiled in\n";
-    return false;
-#endif
-  } else {
-    std::cerr << "[collect_peers] Unsupported discovery backend: "
-              << discovery_uri << "\n";
-    return false;
+void Endpoint::recv_proxy_thread_func() {
+  uccl::pin_thread_to_numa(numa_node_);
+  UnifiedTask task;
+
+  while (!stop_.load(std::memory_order_acquire)) {
+    if (jring_sc_dequeue_bulk(recv_unified_task_ring_, &task, 1, nullptr) ==
+        1) {
+      switch (task.type) {
+        case TaskType::RECV_IPC:
+          recv_ipc(task.conn_id, task.data, task.size, false);
+          break;
+        case TaskType::READ_NET:
+          read(task.conn_id, task.mr_id, task.data, task.size, task.slot_item(),
+               false);
+          break;
+        case TaskType::READ_IPC:
+          read_ipc(task.conn_id, task.data, task.size, task.ipc_info(), false);
+          break;
+        case TaskType::RECV_NET:
+          recv(task.conn_id, task.mr_id, task.data, task.size, false);
+          break;
+        case TaskType::SEND_NET:
+        case TaskType::SEND_IPC:
+        case TaskType::WRITE_NET:
+        case TaskType::WRITE_IPC:
+        default:
+          LOG(ERROR) << "Unexpected task type in receive processing: "
+                     << static_cast<int>(task.type);
+          break;
+      }
+      task.self_ptr->done.store(true, std::memory_order_release);
+    }
   }
 }

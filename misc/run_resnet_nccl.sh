@@ -19,7 +19,7 @@ cleanup() {
 # 注册信号处理程序
 trap cleanup EXIT SIGINT SIGTERM
 
-UCCL_HOME="/home/ubuntu/uccl_yang"
+UCCL_HOME="/home/ubuntu/uccl"
 NV_LINK_DISABLE=1
 CHANNELS=16
 CHANNELS_NET_PEER=4
@@ -45,7 +45,7 @@ export NCCL_BUFFSIZE=${BUFFSIZE}
 export NCCL_LAUNCH_MODE=PARALLEL
 
 # 读取hostfile配置
-HOSTFILE="./hostfile"
+HOSTFILE="$UCCL_HOME/scripts/node_ips/p4d.txt"
 if [ ! -f "$HOSTFILE" ]; then
     echo "错误: hostfile不存在 ($HOSTFILE)"
     exit 1
@@ -69,7 +69,7 @@ MASTER_ADDR=${HOSTS[0]}
 # 主节点端口
 MASTER_PORT=29500
 # Python脚本路径
-SCRIPT_PATH="customized_resnet_ddp_layer_reduce_async.py"
+SCRIPT_PATH="resnet_ddp_layer_reduce_async.py"
 # torchrun完整路径
 TORCHRUN_PATH="python /opt/conda/bin/torchrun"
 

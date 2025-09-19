@@ -57,7 +57,6 @@ int main(int argc, char* argv[]) {
     if (newsockfd < 0) {
       error("ERROR on accept");
     }
-    fcntl(newsockfd, F_SETFL, O_NONBLOCK);
     setsockopt(newsockfd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
     config.sockfds[i] = newsockfd;
   }

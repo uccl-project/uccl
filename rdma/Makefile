@@ -22,7 +22,7 @@ test_src = $(wildcard *_test.cc)
 test_bin = $(test_src:.cc=)
 
 .PHONY: build
-build: $(test_bin) $(lib_obj) $(PLUGIN_SO) librdma.a
+build: $(test_bin) $(lib_obj) $(PLUGIN_SO) librdma.a librdma_plugin.a
 
 azure: $(test_bin) $(lib_obj)
 
@@ -38,6 +38,9 @@ $(PLUGIN_SO): nccl_plugin.cc $(DEPS) $(lib_obj)
 librdma.a: $(lib_obj)
 	ar rcs $@ $(lib_obj)
 
+librdma_plugin.a: $(lib_obj)
+	ar rcs $@ $(lib_obj)
+
 .PHONY: clean
 clean:
-	rm -f *.o $(test_bin) $(PLUGIN_SO) librdma.a
+	rm -f *.o $(test_bin) $(PLUGIN_SO) librdma.a librdma_plugin.a

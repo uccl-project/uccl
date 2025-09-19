@@ -8,10 +8,12 @@
 #include "util_timer.h"
 #include <glog/logging.h>
 #include <infiniband/verbs.h>
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <sstream>
 #include <vector>
 #include <sys/mman.h>
 
@@ -22,16 +24,22 @@ std::shared_ptr<RDMAFactory> rdma_ctl;
 static char uccl_ifname[MAX_IF_NAME_SIZE + 1];
 static union socketAddress uccl_ifaddr;
 
-static int __num_devices = 0;
-
 int RDMAFactory::init_devs() {
   int num_devs;
   struct ibv_device** devices;
+  std::vector<fs::path> gpu_cards;
+  std::vector<std::pair<std::string, fs::path>> ib_nics;
+  std::vector<std::tuple<std::string, fs::path, int>> ib_nics_with_dev_idx;
+  std::stringstream init_devs_log;
 
+#ifndef DISABLE_CALL_ONCE_STATIC
   static std::once_flag init_flag;
-  std::call_once(init_flag,
-                 []() { rdma_ctl = std::make_shared<RDMAFactory>(); });
-
+  std::call_once(init_flag, []() {
+#endif
+    rdma_ctl = std::make_shared<RDMAFactory>();
+#ifndef DISABLE_CALL_ONCE_STATIC
+  });
+#endif
   //  Find interface for connection setup.
   int num_ifs = find_interfaces(uccl_ifname, &uccl_ifaddr, MAX_IF_NAME_SIZE, 1);
   if (num_ifs != 1) UCCL_INIT_CHECK(false, "No IP interface found");
@@ -61,7 +69,9 @@ int RDMAFactory::init_devs() {
     goto error;
   }
 
-  for (int d = 0; d < num_devs && __num_devices < MAX_IB_DEVS; d++) {
+  init_devs_log << "Found IB devices (ibv_get_device_list + NCCL_IB_HCA "
+                   "filter, ordered by libibverbs):\n";
+  for (int d = 0; d < num_devs && rdma_ctl->num_devices < MAX_IB_DEVS; d++) {
     struct ibv_context* context = ibv_open_device(devices[d]);
     if (context == nullptr) {
       UCCL_LOG_ERROR << "Unable to open device " << devices[d]->name;
@@ -102,21 +112,6 @@ int RDMAFactory::init_devs() {
 
       dev.local_ip_str = oob_ip;
       dev.numa_node = get_dev_numa_node(dev.ib_name);
-
-      // Detecting if the dev support extend cq.
-      struct ibv_cq_init_attr_ex cq_attr = {
-          .cqe = 1,
-          .comp_mask = 0,
-      };
-      struct ibv_cq_ex* cq_ex = ibv_create_cq_ex(context, &cq_attr);
-      if (cq_ex) {
-        UCCL_LOG_RE << "cq_ex supported on dev: " << devices[d]->name;
-        ibv_destroy_cq(ibv_cq_ex_to_cq(cq_ex));
-      } else {
-        UCCL_LOG_RE << "cq_ex NOT supported on dev: " << devices[d]->name;
-      }
-      dev.support_cq_ex = cq_ex != nullptr;
-
       dev.dev_attr = dev_attr;
       dev.port_attr = port_attr;
       dev.ib_port_num = port_num;
@@ -155,6 +150,45 @@ int RDMAFactory::init_devs() {
         continue;
       }
 
+      // Detecting if the dev support extend cq.
+      {
+        struct ibv_cq_init_attr_ex cq_attr = {
+            .cqe = 1,
+            .comp_mask = 0,
+        };
+        struct ibv_cq_ex* cq_ex = ibv_create_cq_ex(context, &cq_attr);
+        if (cq_ex) {
+          UCCL_LOG_RE << "cq_ex supported on dev: " << devices[d]->name;
+          ibv_destroy_cq(ibv_cq_ex_to_cq(cq_ex));
+        } else {
+          UCCL_LOG_RE << "cq_ex NOT supported on dev: " << devices[d]->name;
+        }
+        dev.support_cq_ex = cq_ex != nullptr;
+      }
+
+      // Detect UC support by trying to create a dummy UC QP
+      {
+        struct ibv_qp_init_attr qp_init_attr = {};
+        qp_init_attr.qp_type = IBV_QPT_UC;
+        qp_init_attr.send_cq = ibv_create_cq(context, 1, nullptr, nullptr, 0);
+        qp_init_attr.recv_cq = qp_init_attr.send_cq;
+        qp_init_attr.cap.max_send_wr = 1;
+        qp_init_attr.cap.max_recv_wr = 1;
+        qp_init_attr.cap.max_send_sge = 1;
+        qp_init_attr.cap.max_recv_sge = 1;
+
+        struct ibv_qp* uc_qp = ibv_create_qp(dev.pd, &qp_init_attr);
+        if (uc_qp) {
+          UCCL_LOG_RE << "UC supported on dev: " << devices[d]->name;
+          ibv_destroy_qp(uc_qp);
+          dev.support_uc = true;
+        } else {
+          UCCL_LOG_RE << "UC NOT supported on dev: " << devices[d]->name;
+          dev.support_uc = false;
+        }
+        ibv_destroy_cq(qp_init_attr.send_cq);
+      }
+
       // Detect DMA-BUF support
       {
         struct ibv_pd* pd = ibv_alloc_pd(context);
@@ -175,18 +209,73 @@ int RDMAFactory::init_devs() {
                     << " on dev: " << devices[d]->name;
       }
 
-      LOG(INFO) << "Found IB device #" << __num_devices << " :"
-                << devices[d]->name << " with port " << port_num << " / "
-                << (int)dev_attr.phys_port_cnt;
+      init_devs_log << "\tdev_idx " << rdma_ctl->num_devices << ": "
+                    << devices[d]->name << " (" << port_num << "/"
+                    << (int)dev_attr.phys_port_cnt << ")\n";
 
       rdma_ctl->devices_.push_back(dev);
-      UCCL_LOG_RE << "Initialized " << devices[d]->name;
+      UCCL_LOG_RE << "Initialized " << devices[d]->name
+                  << " dev_idx: " << rdma_ctl->num_devices;
 
-      __num_devices++;
+      rdma_ctl->num_devices++;
     }
   }
   ibv_free_device_list(devices);
-  return __num_devices;
+
+  // Get the GPUs, RDMA NICs, and their best mapping.
+  {
+    // Sorted by the GPU name.
+    gpu_cards = get_gpu_cards();
+    init_devs_log << "Found " << gpu_cards.size()
+                  << " GPUs (get_gpu_cards, ordered by GPU rank):\n";
+    int i = 0;
+    for (auto const& gpu_card : gpu_cards) {
+      init_devs_log << "\tGPU " << i++ << ": " << gpu_card.string() << "\n";
+    }
+
+    // Sorted by the RDMA NIC name.
+    ib_nics = get_rdma_nics();
+    for (auto const& [ib_name, ib_path] : ib_nics) {
+      auto it =
+          std::find_if(rdma_ctl->devices_.begin(), rdma_ctl->devices_.end(),
+                       [ib_name](auto const& dev) {
+                         return strcmp(dev.ib_name, ib_name.c_str()) == 0;
+                       });
+      // This ib_nic was excluded by the user.
+      if (it == rdma_ctl->devices_.end()) continue;
+
+      ib_nics_with_dev_idx.push_back(
+          std::make_tuple(ib_name, ib_path, it - rdma_ctl->devices_.begin()));
+    }
+    // Sort by the dev_idx in rdma_ctl->devices_.
+    std::sort(ib_nics_with_dev_idx.begin(), ib_nics_with_dev_idx.end(),
+              [](auto const& a, auto const& b) {
+                return std::get<2>(a) < std::get<2>(b);
+              });
+    init_devs_log << "Found " << ib_nics_with_dev_idx.size()
+                  << " RDMA NICs (get_rdma_nics + NCCL_IB_HCA filter, ordered "
+                     "by dev_idx in rdma_ctl->devices_[]):\n";
+    for (auto const& [ib_name, ib_path, dev_idx] : ib_nics_with_dev_idx) {
+      init_devs_log << "\tRDMA NIC " << ib_name << ": " << ib_path.string()
+                    << ", dev_idx: " << dev_idx << "\n";
+    }
+
+    // Make sure both have the same number of NICs.
+    CHECK(ib_nics_with_dev_idx.size() == rdma_ctl->num_devices);
+
+    // Mapping GPU idx to dev_idx in rdma_ctl->devices_.
+    rdma_ctl->gpu_to_dev_idx_ = map_gpu_to_dev(gpu_cards, ib_nics_with_dev_idx);
+    init_devs_log << "Detected best GPU-NIC mapping: \n";
+    for (auto const& [gpu_idx, dev_idx] : rdma_ctl->gpu_to_dev_idx_) {
+      init_devs_log << "\tGPU " << gpu_idx << " -> NIC "
+                    << std::get<0>(ib_nics_with_dev_idx[dev_idx])
+                    << ", dev_idx: " << dev_idx << "\n";
+    }
+  }
+  // Forcily output the log for better debugging in case of error.
+  printf("%s", init_devs_log.str().c_str());
+
+  return rdma_ctl->num_devices;
 
 error:
   UCCL_INIT_CHECK(false, "Failed to initialize RDMAFactory");
@@ -724,7 +813,7 @@ int SharedIOContext::_rc_poll_send_cq_normal(void) {
   for (int i = 0; i < nr_wcs; i++) {
     auto* wc = wcs + i;
     DCHECK(wc->status == IBV_WC_SUCCESS)
-        << "RC send CQ state error: " << wc->status;
+        << "RC send CQ state error: " << wc->status << ", " << wc->byte_len;
     auto* rdma_ctx = qpn_to_rdma_ctx(wc->qp_num);
     rdma_ctx->rc_rx_ack(wc);
   }

@@ -19,7 +19,7 @@ cleanup() {
 # 注册信号处理程序
 trap cleanup EXIT SIGINT SIGTERM
 
-UCCL_HOME="/opt/uccl_rdma"
+UCCL_HOME="/home/ubuntu/uccl"
 NV_LINK_DISABLE=1
 CHANNELS=16
 CHANNELS_NET_PEER=4
@@ -36,7 +36,7 @@ sudo rmmod ib_uverbs || true
 sudo modprobe ib_uverbs
 
 # Environment variables for UCCL
-export LD_PRELOAD="${UCCL_HOME}/nccl/build/lib/libnccl.so"
+export NCCL_LD_PRELOAD="${UCCL_HOME}/thirdparty/nccl-sg/build/lib/libnccl.so"
 export NCCL_NET_PLUGIN="${UCCL_HOME}/efa/libnccl-net-efa.so"
 export NCCL_DEBUG=
 export NCCL_PROTO=Simple
@@ -59,7 +59,7 @@ export NCCL_ASYNC_ERROR_HANDLING=1
 export NCCL_LAUNCH_MODE=PARALLEL
 
 # 读取hostfile配置
-HOSTFILE="./hostfile"
+HOSTFILE="$UCCL_HOME/scripts/node_ips/p4d.txt"
 if [ ! -f "$HOSTFILE" ]; then
     echo "错误: hostfile不存在 ($HOSTFILE)"
     exit 1
@@ -126,7 +126,7 @@ for ((i=1; i<${#HOSTS[@]}; i++)); do
     sudo sysctl -w vm.nr_hugepages=2048 && \
     sudo rmmod ib_uverbs || true && \
     sudo modprobe ib_uverbs && \
-    export LD_PRELOAD="${UCCL_HOME}/nccl/build/lib/libnccl.so" && \
+    export LD_PRELOAD=${NCCL_LD_PRELOAD} && \
     export NCCL_NET_PLUGIN="${UCCL_HOME}/efa/libnccl-net-efa.so" && \
     export NCCL_DEBUG= && \
     export NCCL_PROTO=Simple && \
@@ -191,7 +191,7 @@ sudo sysctl -w vm.max_map_count=1048576 && \
 sudo sysctl -w vm.nr_hugepages=2048 && \
 sudo rmmod ib_uverbs || true && \
 sudo modprobe ib_uverbs && \
-export LD_PRELOAD="${UCCL_HOME}/nccl/build/lib/libnccl.so" && \
+export LD_PRELOAD=${NCCL_LD_PRELOAD} && \
 export NCCL_NET_PLUGIN="${UCCL_HOME}/efa/libnccl-net-efa.so" && \
 export NCCL_DEBUG= && \
 export NCCL_PROTO=Simple && \

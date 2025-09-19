@@ -9,7 +9,7 @@ NUM_PROCS=${2:-2}
 NUM_GPUS_PER_PROC=${3:-8}
 PROG_OPTION=${4:-0}
 PROCS_PER_NODE=${5:-1}
-HOSTNAME=${6:-"hosts_single_process"}
+HOSTFILE="${UCCL_HOME}/scripts/node_ips/h100_6.txt"
 
 # Names of HCAs.
 HCA_NAMES="mlx5_1:1,mlx5_2:1,mlx5_3:1,mlx5_4:1,mlx5_5:1,mlx5_6:1,mlx5_7:1,mlx5_8:1"
@@ -77,7 +77,7 @@ echo $NUM_PROCS
 echo $PROCS_PER_NODE
 mpirun --allow-run-as-root -np ${NUM_PROCS} -N ${PROCS_PER_NODE} \
     -x NCCL_IB_DISABLE=0  \
-    -hostfile ${HOSTNAME} \
+    -hostfile ${HOSTFILE} --map-by ppr:${PROCS_PER_NODE}:node \
     -x NCCL_DEBUG=WARN \
     -x NCCL_IB_HCA=mlx5_1,mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7,mlx5_8 \
     -x NCCL_IB_QPS_PER_CONNECTION=${NUM_QPS_PER_CONNECTION} -x NCCL_IB_SPLIT_DATA_ON_QPS=${SPLIT_DATA_ON_QPS} \

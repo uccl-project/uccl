@@ -18,4 +18,5 @@ efa_sge_mr
 efa_shared_cp_ibverbs
 efa_shared_cp_libfabric
 efa_load_latency
+efa_rdma_write
 data/

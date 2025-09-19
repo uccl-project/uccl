@@ -169,6 +169,7 @@ static void server_setup_func(int local_rank, int target_rank, bool incast) {
   std::string ip = nodes[target_rank].ip_;
   struct CommHandle* recv_comm = &nodes[target_rank].recv_comm_;
   int remote_dev;
+  int remote_gpuidx;
   auto local_dev = local_rank % NB_THREADS;
 
   if (incast)
@@ -180,7 +181,8 @@ static void server_setup_func(int local_rank, int target_rank, bool incast) {
   auto fd = incast ? nodes[target_rank].incast_listen_fd_
                    : nodes[target_rank].listen_fd_;
 
-  auto conn_id = ep->uccl_accept(local_dev, fd, local_rank, ip, &remote_dev);
+  auto conn_id = ep->uccl_accept(local_dev, fd, local_rank, ip, &remote_dev,
+                                 &remote_gpuidx);
 
   if (incast)
     MPI_LOG(INFO) << "Done Incast, " << local_rank << " <-- " << target_rank;

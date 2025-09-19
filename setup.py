@@ -25,10 +25,17 @@ setup(
     url="https://github.com/uccl-project/uccl",
     packages=find_packages(),
     package_data={
-        "uccl": ["lib/*.so", "p2p*.so"],
+        "uccl": [
+            "lib/*.so",
+            "p2p*.so",
+            "ep*.so",
+            "collective.py",
+            "transfer.py",
+            "utils.py",
+        ],
     },
     license="Apache-2.0",
-    install_requires=["pybind11>=2.6.0", "paramiko"],
+    install_requires=[],
     classifiers=[
         "Programming Language :: Python :: 3",
     ],

@@ -733,7 +733,7 @@ class Endpoint {
     while (bytes_read < n_bytes) {
       // Make sure we read exactly n_bytes
       r = read(sockfd, buffer + bytes_read, n_bytes - bytes_read);
-      if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
+      if (r < 0 && !(errno == EINTR)) {
         CHECK(false) << "ERROR reading from socket";
       }
       if (r > 0) {
@@ -749,7 +749,7 @@ class Endpoint {
     while (bytes_sent < n_bytes) {
       // Make sure we write exactly n_bytes
       r = write(sockfd, buffer + bytes_sent, n_bytes - bytes_sent);
-      if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
+      if (r < 0 && !(errno == EINTR)) {
         CHECK(false) << "ERROR writing to socket";
       }
       if (r > 0) {

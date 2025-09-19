@@ -73,6 +73,8 @@ config.mk
 
 # vscode config
 .vscode/settings.json
+.vscode/c_cpp_properties.json
+.vscode/launch.json
 __pycache__/
 
 compile_commands.json
@@ -81,9 +83,10 @@ compile_commands.json
 *.sqlite
 
 **/.DS_Store
-scripts/node_ips/default.txt
 
 uccl.egg-info/
 dist/
 wheelhouse-*/
 build/
+ep/*.log
+*.log

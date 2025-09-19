@@ -29,21 +29,7 @@ except ImportError as e:
     sys.exit(1)
 
 
-def parse_metadata(metadata: bytes):
-    if len(metadata) == 10:
-        # IPv4: 4 bytes IP, 2 bytes port, 4 bytes GPU idx
-        ip_b, port_b, gpu_b = metadata[:4], metadata[4:6], metadata[6:10]
-        ip = socket.inet_ntop(socket.AF_INET, ip_b)
-    elif len(metadata) == 22:
-        # IPv6: 16 bytes IP, 2 bytes port, 4 bytes GPU idx
-        ip_b, port_b, gpu_b = metadata[:16], metadata[16:18], metadata[18:22]
-        ip = socket.inet_ntop(socket.AF_INET6, ip_b)
-    else:
-        raise ValueError(f"Unexpected metadata length: {len(metadata)}")
-
-    port = struct.unpack("!H", port_b)[0]
-    remote_gpu_idx = struct.unpack("i", gpu_b)[0]
-    return ip, port, remote_gpu_idx
+# parse_metadata is now provided by the C++ layer via p2p.Endpoint.parse_metadata()
 
 
 def _send_int(value: int, dst: int):
@@ -89,8 +75,8 @@ def test_local_dist():
         print("Running test_local (server)…")
 
         engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
-        metadata = engine.get_endpoint_metadata()
-        ip, port, remote_gpu_idx = parse_metadata(metadata)
+        metadata = engine.get_metadata()
+        ip, port, remote_gpu_idx = p2p.Endpoint.parse_metadata(metadata)
         print(f"[server] Parsed IP: {ip}")
         print(f"[server] Parsed Port: {port}")
         print(f"[server] Parsed Remote GPU Index: {remote_gpu_idx}")
@@ -103,11 +89,11 @@ def test_local_dist():
         tensor = torch.zeros(1024, dtype=torch.float32, device="cuda:0")
         assert tensor.is_contiguous()
         mr_id = 0
-        ok, fifo_blob = engine.advertise(
-            conn_id, mr_id, tensor.data_ptr(), tensor.numel() * 4
+        ok, fifo_blob = engine.advertise_ipc(
+            conn_id, tensor.data_ptr(), tensor.numel() * 4
         )
-        assert ok and isinstance(fifo_blob, (bytes, bytearray)) and len(fifo_blob) == 64
-        print("[server] Buffer exposed for RDMA READ")
+        assert ok and isinstance(fifo_blob, (bytes, bytearray))
+        print("[server] Buffer exposed for IPC READ")
 
         _send_bytes(bytes(fifo_blob), dst=1)
 
@@ -121,13 +107,13 @@ def test_local_dist():
         print("Running test_local (client)…")
 
         metadata = _recv_bytes(src=0)
-        ip, port, remote_gpu_idx = parse_metadata(metadata)
+        ip, port, remote_gpu_idx = p2p.Endpoint.parse_metadata(metadata)
         print(
             f"[client] Parsed server IP: {ip}, port: {port}, remote_gpu_idx: {remote_gpu_idx}"
         )
 
         engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
-        success, conn_id = engine.connect(metadata)
+        success, conn_id = engine.connect_local(remote_gpu_idx)
         assert success
         print(f"[client] Connected successfully: conn_id={conn_id}")
         _send_int(conn_id, dst=0)
@@ -137,11 +123,10 @@ def test_local_dist():
 
         fifo_blob = _recv_bytes(src=0)
         print("[client] Received FIFO blob from server")
-        assert isinstance(fifo_blob, (bytes, bytearray)) and len(fifo_blob) == 64
+        assert isinstance(fifo_blob, (bytes, bytearray))
 
-        mr_id = 0
-        success = engine.send(
-            conn_id, mr_id, tensor.data_ptr(), tensor.numel() * 4, fifo_blob
+        success = engine.write_ipc(
+            conn_id, tensor.data_ptr(), tensor.numel() * 4, fifo_blob
         )
         assert success
         print("[client] Sent data")

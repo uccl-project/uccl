@@ -66,7 +66,7 @@ def test_local():
 
     def client_proc(ep_meta_q, fifo_meta_q):
         ep = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
-        ep_meta_q.put(bytes(ep.get_endpoint_metadata()))
+        ep_meta_q.put(bytes(ep.get_metadata()))
 
         ok, r_ip, r_gpu, conn_id = ep.accept()
         assert ok, "accept failed"

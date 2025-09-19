@@ -6,8 +6,9 @@ XDP_TARGETS  := af_xdp_kern af_xdp_kern_efa
 USER_TARGETS := af_xdp_user af_xdp_user_efa
 CUDA_HOME:=/usr/local/cuda
 NVCC=$(CUDA_HOME)/bin/nvcc
-CXXFLAGS = -I /opt/amazon/efa/include -L /opt/amazon/efa/lib -lfabric -libverbs -lefa -lpthread
-CUFLAGS = -I$(CUDA_HOME)/include -L ${CUDA_HOME}/lib64 -lcudart -lpthread -lcuda -arch=sm_90
+CXXFLAGS = -I /opt/amazon/efa/include -L /opt/amazon/efa/lib -lfabric -libverbs -lefa -lpthread \
+	-I$(CUDA_HOME)/include -L ${CUDA_HOME}/lib64 -lcudart -lcuda -I ../include
+CUFLAGS = -arch=sm_90
 
 all: fi efa cuda
 
@@ -23,7 +24,7 @@ fi_efagen: fi_efagen.c
 fi_efasink: fi_efasink.c
 	gcc -O3 -g fi_efasink.c -o fi_efasink $(CXXFLAGS)
 
-EFA_BIN = efa_shared_cp_libfabric efa_shared_cp_ibverbs efa_sge_mr efa_load_latency
+EFA_BIN = efa_shared_cp_libfabric efa_shared_cp_ibverbs efa_sge_mr efa_load_latency efa_rdma_write
 efa: $(EFA_BIN)
 
 efa_shared_cp_libfabric: efa_shared_cp_libfabric.cc
@@ -33,10 +34,13 @@ efa_shared_cp_ibverbs: efa_shared_cp_ibverbs.cc
 	g++ -O3 -g efa_shared_cp_ibverbs.cc -o efa_shared_cp_ibverbs $(CXXFLAGS) -fstack-protector-all
 
 efa_sge_mr: efa_sge_mr.cc
-	g++ -O3 -g efa_sge_mr.cc -o efa_sge_mr $(CXXFLAGS) $(CUFLAGS)
+	g++ -O3 -g efa_sge_mr.cc -o efa_sge_mr $(CXXFLAGS)
 
 efa_load_latency: efa_load_latency.cc
-	g++ -O3 -g efa_load_latency.cc -o efa_load_latency $(CXXFLAGS) $(CUFLAGS)
+	g++ -O3 -g efa_load_latency.cc -o efa_load_latency $(CXXFLAGS)
+
+efa_rdma_write: efa_rdma_write.cc
+	g++ -O3 -g efa_rdma_write.cc -o efa_rdma_write $(CXXFLAGS)
 
 CUDA_BIN = cuda_event cuda_memcpy cuda_memcpy_async cuda_persist_kernel cuda_memcpy_gpu cuda_concurrent cuda_greenctx
 cuda: $(CUDA_BIN)

@@ -51,6 +51,71 @@ def create_dataset(role, size, num_kvblocks, device, gpu_idx=0):
     return dataset
 
 
+def cleanup_agent(
+    agent: nixl_agent,
+):
+    if agent is None:
+        return
+    peer = "server" if agent.name == "client" else "client"
+    agent.remove_remote_agent(peer)
+
+
+def cleanup_transfer(
+    agent: nixl_agent,
+    transfer_handle,
+    register_descs,
+):
+    if agent is None:
+        return
+    # Cleanup the transfer handle and registered descriptors
+    if transfer_handle is not None:
+        agent.release_xfer_handle(transfer_handle)
+    if register_descs is not None:
+        agent.deregister_memory(register_descs)
+
+
+def create_nixl_agent_mc(role: str, dataset, zmq_socket, device_idx, backend):
+    """
+    Create Nixl agents based on the role with Mooncake/UCCL backend
+    """
+    backend_name = "Mooncake" if backend == "mooncake" else "Uccl"
+    # device_idx is only supported by UCCL backend of nixl
+    config = (
+        nixl_agent_config(device_idx=device_idx, backends=[backend_name])
+        if backend == "uccl"
+        else nixl_agent_config(backends=[backend_name])
+    )
+    agent = nixl_agent(role, config)
+    descs = agent.get_reg_descs(dataset)
+    register_descs = agent.register_memory(descs)
+    local_meta = agent.get_agent_metadata()
+
+    if "client" in role:
+        zmq_socket.send(local_meta)
+        remote_meta = zmq_socket.recv()
+        agent.add_remote_agent(remote_meta).decode("utf-8")
+    elif "server" in role:
+        remote_meta = zmq_socket.recv()
+        zmq_socket.send(local_meta)
+        agent.add_remote_agent(remote_meta).decode("utf-8")
+
+    return agent, register_descs
+
+
+def create_nixl_agent_ucx(role: str, dataset):
+    """
+    Create Nixl agents based on the role.
+    """
+    port = listen_port
+    if role == "client":
+        port = 0
+    config = nixl_agent_config(True, True, port)
+    agent = nixl_agent(role, config)
+    descs = agent.get_reg_descs(dataset)
+    register_descs = agent.register_memory(descs)
+    return agent, register_descs
+
+
 def init_zmq(host, port, role):
     """
     Initialize the ZMQ socket for communication.
@@ -133,6 +198,7 @@ def init_transfer_metadata_ucx(
     elif "client" in role:
         agent.fetch_remote_metadata("server", server_ip, server_port)
         agent.send_local_metadata(server_ip, server_port)
+
         # Wait until there is a message from the peer
         notifs = agent.get_new_notifs()
         while len(notifs) == 0:
@@ -141,54 +207,13 @@ def init_transfer_metadata_ucx(
         remote_xfer_descs = agent.deserialize_descs(notifs["server"][0])
         while not agent.check_remote_metadata("server"):
             continue
+
         uid = "TRANSFER"
         transfer_handle = agent.initialize_xfer(
             operation, local_xfer_descs, remote_xfer_descs, "server", uid
         )
 
     return transfer_handle
-
-
-def create_nixl_agent_mc(role: str, dataset, zmq_socket):
-    """
-    Create Nixl agents based on the role with Mooncake backend
-    """
-    config = nixl_agent_config(backends=["Mooncake"])
-    agent = nixl_agent(role, config)
-    descs = agent.get_reg_descs(dataset)
-    register_descs = agent.register_memory(descs)
-    local_meta = agent.get_agent_metadata()
-
-    if "client" in role:
-        zmq_socket.send(local_meta)
-        remote_meta = zmq_socket.recv()
-        agent.add_remote_agent(remote_meta).decode("utf-8")
-    elif "server" in role:
-        remote_meta = zmq_socket.recv()
-        agent.add_remote_agent(remote_meta).decode("utf-8")
-        zmq_socket.send(local_meta)
-
-    return agent, register_descs
-
-
-def create_nixl_agent_ucx(role: str, dataset):
-    """
-    Create Nixl agents based on the role.
-    """
-    port = listen_port
-    if role == "client":
-        port = 0
-    config = nixl_agent_config(True, True, port)
-    agent = nixl_agent(role, config)
-    descs = agent.get_reg_descs(dataset)
-    register_descs = agent.register_memory(descs)
-    return agent, register_descs
-
-
-def cleanup_agent(
-    agent: nixl_agent,
-):
-    agent.remove_remote_agent(agent.name)
 
 
 def do_transfer_mc(
@@ -225,67 +250,66 @@ def do_transfer_ucx(role: str, agent: nixl_agent, transfer_handle, uid="TRANSFER
             continue
 
 
-def cleanup_transfer(
-    agent: nixl_agent,
-    transfer_handle,
-    register_descs,
-):
-    # Cleanup the transfer handle and registered descriptors
-    if transfer_handle is not None:
-        agent.release_xfer_handle(transfer_handle)
-    agent.deregister_memory(register_descs)
-
-
 def start_transfer(size, num_kvblocks, args):
     op = "WRITE" if args.op_type == "write" else "READ"
     zmq_socket = None
 
-    if args.backend == "mooncake":
+    if args.backend == "mooncake" or args.backend == "uccl":
         zmq_socket = init_zmq(args.remote_ip, listen_port, args.role)
-
     try:
         dataset = create_dataset(
             args.role, size, num_kvblocks, args.device, args.local_gpu_idx
         )
 
+        agent = None
+        transfer_handle = None
+        register_descs = None
+
         # Suppress stdout for better output
         old_stdout = sys.stdout
         sys.stdout = io.StringIO()
-        if args.backend == "mooncake":
-            agent, register_descs = create_nixl_agent_mc(args.role, dataset, zmq_socket)
-            transfer_handle = init_transfer_metadata_mc(
-                args.role, op, agent, register_descs, zmq_socket
+        if args.backend == "mooncake" or args.backend == "uccl":
+            agent, register_descs = create_nixl_agent_mc(
+                args.role, dataset, zmq_socket, args.local_gpu_idx, args.backend
             )
         else:
             agent, register_descs = create_nixl_agent_ucx(args.role, dataset)
-            transfer_handle = init_transfer_metadata_ucx(
-                args.role,
-                op,
-                agent,
-                register_descs,
-                args.remote_ip,
-                listen_port,
-            )
         sys.stdout = old_stdout
 
         total_size = 0
-        start = time.perf_counter()
+        total_transfer_time = 0.0
 
-        if args.backend == "mooncake":
-            for _ in range(args.iters):
+        for _ in range(args.iters):
+            if args.backend == "mooncake" or args.backend == "uccl":
+                transfer_handle = init_transfer_metadata_mc(
+                    args.role, op, agent, register_descs, zmq_socket
+                )
+            else:
+                transfer_handle = init_transfer_metadata_ucx(
+                    args.role,
+                    op,
+                    agent,
+                    register_descs,
+                    args.remote_ip,
+                    listen_port,
+                )
+            start = time.perf_counter()
+            if args.backend == "mooncake" or args.backend == "uccl":
                 do_transfer_mc(args.role, agent, transfer_handle, zmq_socket)
                 total_size += size
-        else:
-            for _ in range(args.iters):
+            else:
                 do_transfer_ucx(args.role, agent, transfer_handle)
                 total_size += size
 
-        end = time.perf_counter()
+            end = time.perf_counter()
+            transfer_time = end - start
+            total_transfer_time += transfer_time
 
-        transfer_time = end - start
-        gbps = (total_size * 8) / transfer_time / 1e9  # bits per second → Gbps
-        gb_sec = total_size / transfer_time / 1e9  # bytes per second → GB/s
-        lat = transfer_time / args.iters
+        avg_transfer_time = total_transfer_time / args.iters
+        gbps = (total_size * 8) / total_transfer_time / 1e9  # bits per second → Gbps
+        gb_sec = total_size / total_transfer_time / 1e9  # bytes per second → GB/s
+        lat = avg_transfer_time  # Average latency per transfer
+
         print(
             f"[{args.role}] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s | {lat:6.6f} s"
         )
@@ -305,8 +329,197 @@ def start_transfer(size, num_kvblocks, args):
             register_descs,
         )
         cleanup_agent(agent)
-        if args.backend == "mooncake":
+        if args.backend == "mooncake" or args.backend == "uccl":
             zmq_socket.close()
+
+
+def create_nixl_agent_ucx_dual(role: str, send_dataset, recv_dataset):
+    """
+    Create Nixl agents based on the role.
+    """
+    port = listen_port
+    config = nixl_agent_config(True, True, port)
+    agent = nixl_agent(role, config)
+    send_descs = agent.get_reg_descs(send_dataset)
+    recv_descs = agent.get_reg_descs(recv_dataset)
+    send_register_descs = agent.register_memory(send_descs)
+    recv_register_descs = agent.register_memory(recv_descs)
+    return agent, send_register_descs, recv_register_descs
+
+
+def init_transfer_metadata_ucx_dual(
+    role: str,
+    agent: nixl_agent,
+    send_register_descs,
+    recv_register_descs,
+    remote_ip,
+    remote_port,
+):
+    """
+    Initialize transfer metadata for dual WRITE operations.
+    Both endpoints will write to each other simultaneously.
+    Both endpoints do symmetric operations: establish connection, exchange descriptors, create transfer handles.
+    """
+    send_local_xfer_descs = send_register_descs.trim()
+    recv_local_xfer_descs = recv_register_descs.trim()
+    remote_peer = "server" if "client" in role else "client"
+
+    # Both endpoints establish metadata connection (client connects, server waits)
+    if "client" in role:
+        agent.send_local_metadata(remote_ip, remote_port)
+        agent.fetch_remote_metadata(remote_peer, remote_ip, remote_port)
+        while not agent.check_remote_metadata(remote_peer):
+            continue
+    else:
+        while not agent.check_remote_metadata(remote_peer):
+            continue
+        agent.send_local_metadata(remote_ip, remote_port)
+        agent.fetch_remote_metadata(remote_peer, remote_ip, remote_port)
+
+    # Both endpoints send their descriptors to peer
+    recv_desc = agent.get_serialized_descs(recv_local_xfer_descs)
+    agent.send_notif(remote_peer, recv_desc)
+
+    # Both endpoints wait for peer descriptors
+    notifs = agent.get_new_notifs()
+    while len(notifs) == 0:
+        notifs = agent.get_new_notifs()
+
+    # Both endpoints parse remote descriptors
+    remote_recv_xfer_descs = agent.deserialize_descs(
+        notifs[remote_peer][0]
+    )  # What we write to
+
+    # Why twice? TBH, I do not know.
+    while not agent.check_remote_metadata(remote_peer):
+        continue
+
+    # Both endpoints initialize transfer handles
+    transfer_handle = agent.initialize_xfer(
+        "WRITE",
+        send_local_xfer_descs,
+        remote_recv_xfer_descs,
+        remote_peer,
+        "TRANSFER",
+    )
+
+    return transfer_handle
+
+
+def do_transfer_ucx_dual(role: str, agent: nixl_agent, transfer_handle):
+    """
+    Execute dual WRITE transfers where both endpoints simultaneously write to each other.
+    Both endpoints do the same operations: initiate transfers and wait for remote completion.
+    """
+    # Both endpoints initiate their outbound transfers
+    state = agent.transfer(transfer_handle)
+    assert state != "ERR", "Error in transfer initiation"
+
+    # Poll our outbound transfer and wait for remote inbound transfer to complete
+    done = False
+    remote_peer = "server" if "client" in role else "client"
+    recv_uid = "TRANSFER"
+
+    while not done or not agent.check_remote_xfer_done(
+        remote_peer, recv_uid.encode("utf-8")
+    ):
+        # Check our outbound transfer
+        if not done:
+            state = agent.check_xfer_state(transfer_handle)
+            assert state != "ERR", "Error in send transfer"
+            done = state == "DONE"
+
+
+def start_transfer_dual(size, num_kvblocks, args):
+    """
+    Dual direction transfer where both client and server simultaneously perform WRITE operations.
+    Each endpoint writes data to the other endpoint concurrently.
+    """
+    assert (
+        args.backend == "ucx"
+    ), "Dual direction transfer only supported with UCX backend"
+
+    try:
+        # Create datasets for both sending and receiving
+        # Dataset for sending (writing to remote)
+        send_dataset = create_dataset(
+            args.role, size, num_kvblocks, args.device, args.local_gpu_idx
+        )
+        # Dataset for receiving (where remote will write to)
+        recv_dataset = create_dataset(
+            (
+                "server" if "client" in args.role else "client"
+            ),  # opposite role for recv buffer
+            size,
+            num_kvblocks,
+            args.device,
+            args.local_gpu_idx,
+        )
+
+        agent = None
+        transfer_handle = None
+        send_register_descs = None
+        recv_register_descs = None
+
+        # Suppress stdout for better output
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+
+        # Create agents and register memory for both send and receive datasets
+        agent, send_register_descs, recv_register_descs = create_nixl_agent_ucx_dual(
+            args.role, send_dataset, recv_dataset
+        )
+
+        # Initialize dual transfer handles for bidirectional WRITE operations
+        transfer_handle = init_transfer_metadata_ucx_dual(
+            args.role,
+            agent,
+            send_register_descs,
+            recv_register_descs,
+            args.remote_ip,
+            listen_port,
+        )
+
+        sys.stdout = old_stdout
+
+        total_size = 0
+        start = time.perf_counter()
+
+        # Perform dual direction WRITE transfers for specified iterations
+        for _ in range(args.iters):
+            # Both endpoints perform WRITE operations simultaneously using dual function
+            do_transfer_ucx_dual(args.role, agent, transfer_handle)
+            total_size += size
+
+        end = time.perf_counter()
+
+        transfer_time = end - start
+        gbps = (total_size * 8) / transfer_time / 1e9  # bits per second → Gbps
+        gb_sec = total_size / transfer_time / 1e9  # bytes per second → GB/s
+        lat = transfer_time / args.iters
+
+        print(
+            f"[{args.role}] DUAL-WRITE {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s | {lat:6.6f} s"
+        )
+
+        # Verify received data (should be opposite of what we sent)
+        expected_value = 0 if "client" in args.role else 1
+        for i, block in enumerate(recv_dataset):
+            block_mean = torch.mean(block).item()
+            assert (
+                abs(block_mean - expected_value) < 1e-6
+            ), f"Block {i} received value {block_mean}, expected {expected_value}"
+
+    except KeyboardInterrupt:
+        return 0.0
+    except Exception as e:
+        print(f"Error in dual write transfer {args.role}: {traceback.format_exc()}")
+        return 0.0
+    finally:
+        # Cleanup transfer handles and registered descriptors
+        cleanup_transfer(agent, transfer_handle, send_register_descs)
+        cleanup_transfer(agent, None, recv_register_descs)
+        cleanup_agent(agent)
 
 
 def _pretty_size(num_bytes: int) -> str:
@@ -348,7 +561,7 @@ def main():
     p.add_argument(
         "--device",
         choices=["cpu", "gpu"],
-        default="cpu",
+        default="gpu",
         help="Buffer location (cpu or gpu)",
     )
     p.add_argument(
@@ -363,6 +576,7 @@ def main():
             262144,
             1048576,
             10485760,
+            16777216,
             104857600,
         ],
         help="Comma separated list of message sizes in bytes",
@@ -381,7 +595,7 @@ def main():
     )
     p.add_argument(
         "--backend",
-        choices=["ucx", "mooncake"],
+        choices=["ucx", "mooncake", "uccl"],
         default="ucx",
         help="Backend that nixl will use for the data transfer",
     )
@@ -391,7 +605,19 @@ def main():
         default="write",
         help="Operation that nixl will use for the data transfer",
     )
+    p.add_argument(
+        "--dual",
+        action="store_true",
+        help="Run the benchmark on two directions",
+    )
     args = p.parse_args()
+
+    assert not (
+        args.dual and args.backend == "mooncake"
+    ), "We do not support dual direction with Mooncake backend"
+    assert not (
+        args.dual and args.remote_ip == "0.0.0.0"
+    ), "Remote IP must be set for dual direction transfer"
 
     print("NIXL P2P Benchmark — role:", args.role)
     print("Message sizes:", ", ".join(_pretty_size(s) for s in args.sizes))
@@ -399,8 +625,12 @@ def main():
     print(
         f"Device: {args.device} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}"
     )
-    for size in args.sizes:
-        start_transfer(size, args.num_kvblocks, args)
+    if args.dual:
+        for size in args.sizes:
+            start_transfer_dual(size, args.num_kvblocks, args)
+    else:
+        for size in args.sizes:
+            start_transfer(size, args.num_kvblocks, args)
 
 
 if __name__ == "__main__":

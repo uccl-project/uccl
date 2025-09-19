@@ -1,0 +1,57 @@
+HIP_HOME ?= /opt/rocm
+override CXX := /usr/bin/g++
+HIPCC      := $(HIP_HOME)/bin/hipcc
+CONDA_LIB_HOME?=/usr/lib
+
+CXXFLAGS  := -O0 -std=c++17 -Wall -pthread -D__HIP_PLATFORM_AMD__ -I${CONDA_LIB_HOME}/../include
+LDFLAGS   := -lpthread -L${CONDA_LIB_HOME} -lglog -lgflags -lgtest -lz -lelf
+
+# CXXFLAGS  += -mclwb
+LDFLAGS   += -libverbs -lnl-3 -lnl-route-3
+HIPCCFLAGS := -g -O0 -std=c++17 -D__HIP_PLATFORM_AMD__ --offload-arch=gfx942
+
+INCLUDES := -Iinclude -I$(HIP_HOME)/include -I/usr/include -I../include
+
+SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp src/peer_copy_worker.cpp
+SRC_CU  := src/gpu_kernel.cu src/peer_copy.cu
+SRC_LOCAL  := bench/benchmark_local.cu
+SRC_REMOTE := bench/benchmark_remote.cu
+SRC_DUAL	:= bench/benchmark_dual.cu
+
+OBJ_CPP := $(SRC_CPP:.cpp=.o)
+OBJ_CU := $(SRC_CU:.cu=.o)
+
+OBJ_LOCAL  := $(OBJ_CPP) $(OBJ_CU) $(SRC_LOCAL:.cu=.o)
+OBJ_REMOTE := $(OBJ_CPP) $(OBJ_CU) $(SRC_REMOTE:.cu=.o)
+
+TARGET_LOCAL  := benchmark_local
+TARGET_REMOTE := benchmark_remote
+TARGET_DUAL   := benchmark_dual
+all: $(TARGET_LOCAL) $(TARGET_REMOTE) $(TARGET_DUAL)	
+
+# C++ compilation rule with dependency generation
+%.o: %.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+
+# HIP compilation rule with dependency generation
+%.o: %.cu
+	$(HIPCC) $(HIPCCFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+
+# Linking rules
+$(TARGET_LOCAL): $(OBJ_LOCAL)
+	$(HIPCC) $(HIPCCFLAGS) $(INCLUDES) $(OBJ_LOCAL) -lamdhip64 $(LDFLAGS) -o $@
+
+$(TARGET_REMOTE): $(OBJ_REMOTE)
+	$(HIPCC) $(HIPCCFLAGS) $(INCLUDES) $(OBJ_REMOTE) -lamdhip64 $(LDFLAGS) -o $@
+
+$(TARGET_DUAL): $(OBJ_CPP) $(OBJ_CU) $(SRC_DUAL:.cu=.o)
+	$(HIPCC) $(HIPCCFLAGS) $(INCLUDES) $(OBJ_CPP) $(OBJ_CU) $(SRC_DUAL:.cu=.o) -lamdhip64 $(LDFLAGS) -o $@
+
+# Clean all generated files
+clean:
+	rm -f $(OBJ_CPP) $(OBJ_CU) $(SRC_LOCAL:.cu=.o) $(SRC_REMOTE:.cu=.o) $(TARGET_LOCAL) $(TARGET_REMOTE) $(TARGET_DUAL) *.d src/*.d
+
+.PHONY: all clean
+
+# Automatically include dependency files if they exist
+-include $(OBJ_LOCAL:.o=.d) $(OBJ_REMOTE:.o=.d)

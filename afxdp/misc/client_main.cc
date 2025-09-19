@@ -237,8 +237,8 @@ int client_init(struct client_t* client, char const* interface_name) {
     // apply_setsockopt(xsk_socket__fd(client->socket[i].xsk));
 
     // initialize frame allocator
-    client->socket[i].frame_pool =
-        std::make_unique<SharedPool<uint64_t, true>>(NUM_FRAMES);
+    client->socket[i].frame_pool = std::make_unique<SharedPool<uint64_t, true>>(
+        NUM_FRAMES, [](uint64_t frame) {});
     for (int j = 0; j < NUM_FRAMES; j++) {
       client->socket[i].frame_pool->push(j * FRAME_SIZE + XDP_PACKET_HEADROOM);
     }

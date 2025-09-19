@@ -9,9 +9,10 @@ Using the following commands to install necessary kernel modules for EFA directl
 
 ```bash
 # Latest version of aws-efa-installer should also work. 
-curl -O https://efa-installer.amazonaws.com/aws-efa-installer-1.34.0.tar.gz
-tar -xf aws-efa-installer-1.34.0.tar.gz && cd aws-efa-installer
+curl -O https://efa-installer.amazonaws.com/aws-efa-installer-1.42.0.tar.gz
+tar -xf aws-efa-installer-1.42.0.tar.gz && cd aws-efa-installer
 sudo ./efa_installer.sh -y
+sudo modprobe efa_nv_peermem || true
 ```
 
 Make sure you haveed install docker. Then run the following and log back in. 
@@ -36,7 +37,7 @@ make src.build -j NVCC_GENCODE="-gencode=arch=compute_80,code=sm_80"
 
 # Build nccl-tests; consider "conda deactivate" when hitting dependency errors
 cd $UCCL_HOME/thirdparty/nccl-tests
-make MPI=1 MPI_HOME=/opt/amazon/openmpi CUDA_HOME=/usr/local/cuda NCCL_HOME=$UCCL_HOME/thirdparty/nccl-sg/build -j
+make MPI=1 MPI_HOME=/opt/amazon/openmpi CUDA_HOME=/usr/local/cuda NCCL_HOME=$UCCL_HOME/thirdparty/nccl/build -j
 ```
 
 ## Building EFA plugin
@@ -59,16 +60,15 @@ make -j
 
 ## Runing nccl-tests for UCCL
 
-Filling `$UCCL_HOME/scripts/node_ips/p4d.txt` with the ssh'able IP addresses of the nodes for rsync'ing all built libs. 
-Filling `$UCCL_HOME/efa/hosts` with the ssh'able IP addresses of the nodes for mpirun use. There, `slots` denotes the number of processes you want to run on each server; we currently only support 8. 
+Filling `$UCCL_HOME/scripts/node_ips/p4d.txt` with the ssh'able IP addresses of the nodes for rsync'ing all built libs and running mpi. 
 
 ```bash
 cd $UCCL_HOME/scripts
-python rsync.py
+python rsync.py -n node_ips/p4d.txt
 
 # Assume four p4d.24xlarge instances each with 8 A100 GPUs. 
 cd $UCCL_HOME/efa
-./run_nccl_test.sh ud 32 0
+./run_nccl_test.sh ud 32
 ``` 
 
 ## Running UCCL for PyTorch Applications
@@ -84,8 +84,6 @@ UCCL currently only supports `Simple` protocol; support for `LL` and `LL128` is 
 You can launch distributed ResNet training by: 
 ```bash
 cd $UCCL_HOME/misc
-
-# Fill in $UCCL_HOME/misc/hostfile the same as `$UCCL_HOME/scripts/node_ips/p4d.txt`
 
 # Benchmark UCCL
 bash run_resnet_uccl.sh
@@ -117,28 +115,28 @@ Other applications such as DeepSpeed, vLLM, Megatron-LM, and PyTorch FSDP should
 pushd /tmp
 git clone https://github.com/linux-rdma/perftest.git && cd perftest && git checkout c04922f
 git apply $UCCL_HOME/efa/perftest.patch
-./autogen.sh && ./configure && make -j
+./autogen.sh && ./configure CUDA_H_PATH=/usr/local/cuda/include/cuda.h && make -j
 sudo make install
 popd
 ```
 
 Throughput benchmark: 
 ```bash
-ib_send_bw -d rdmap16s27 --report_gbits -x 0 -c UD -t 128 -Q 1 -q 32 -l 2 -s 8192 -F
-ib_send_bw -d rdmap16s27 --report_gbits -x 0 -c UD -t 128 -Q 1 -q 32 -l 2 -s 8192 -F <serverip>
+ib_send_bw -d rdmap16s27 --report_gbits -x 0 -c <UD|SRD> -t 128 -Q 1 -q 32 -l 2 -s 8192 -F --use_cuda 0
+ib_send_bw -d rdmap16s27 --report_gbits -x 0 -c <UD|SRD> -t 128 -Q 1 -q 32 -l 2 -s 8192 -F --use_cuda 0 <serverip>
 ```
 
 Latency benchmark: 
 ```bash
-ib_send_lat -d rdmap16s27 --report_gbits -x 0 -c UD -F
-ib_send_lat -d rdmap16s27 --report_gbits -x 0 -c UD -F <serverip>
+ib_send_lat -d rdmap16s27 --report_gbits -x 0 -c <UD|SRD> -F --use_cuda 0
+ib_send_lat -d rdmap16s27 --report_gbits -x 0 -c <UD|SRD> -F --use_cuda 0 <serverip>
 ```
 
 ### Run transport tests
 
 ```bash
-./util_efa_test --logtostderr
-./util_efa_test --logtostderr <serverip>
+./util_efa_test --logtostderr            # server
+./util_efa_test --logtostderr <serverip> # client
 ```
 
 ```bash

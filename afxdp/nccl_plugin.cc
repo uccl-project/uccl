@@ -63,7 +63,10 @@ struct UcclRequest {
 
 static constexpr size_t kMaxInflightMsg = 1024 * 256;
 static char* uccl_req_pool_buf = nullptr;
-SharedPool<UcclRequest*, true> uccl_req_pool(kMaxInflightMsg);
+SharedPool<UcclRequest*, true> uccl_req_pool(kMaxInflightMsg,
+                                             [](UcclRequest* req) {
+                                               req->clear();
+                                             });
 
 static std::atomic<size_t> inflight_send = 0;
 static std::atomic<size_t> inflight_recv = 0;
@@ -82,7 +85,6 @@ ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
   uccl_req_pool_buf = (char*)malloc(sizeof(UcclRequest) * kMaxInflightMsg);
   for (int i = 0; i < kMaxInflightMsg; i++) {
     auto* req = (UcclRequest*)uccl_req_pool_buf + i;
-    req->clear();
     uccl_req_pool.push(req);
   }
 
@@ -298,7 +300,6 @@ ncclResult_t pluginTest(void* request, int* done, int* size) {
     }
     *done = 1;
     *size = req->data_len;
-    req->clear();
     uccl_req_pool.push(req);
   }
   return ncclSuccess;
