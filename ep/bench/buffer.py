@@ -92,131 +92,31 @@ class Buffer:
             None,
         ] * self.group_size
         local_device_id = self.runtime.get_local_device_id()
-
-        # CRITICAL FIX: Ensure we're on the correct device for all distributed operations
-        expected_device = int(os.environ.get("LOCAL_RANK", 0))
-        torch.cuda.set_device(expected_device)
-        torch.set_default_device(f"cuda:{expected_device}")
-
-        current_device_before_gather = torch.cuda.current_device()
-        print(
-            f"[Buffer] Rank {self.rank}: Device before device_ids all_gather: current={current_device_before_gather}, local_device_id={local_device_id}, expected={expected_device}",
-            flush=True,
-        )
-
-        # Double-check device right before the call
-        if current_device_before_gather != expected_device:
-            torch.cuda.set_device(expected_device)
-            torch.set_default_device(f"cuda:{expected_device}")
-
+        # print("Before all_gather_object device_ids", local_device_id, flush=True)
         dist.all_gather_object(device_ids, local_device_id, group)
-
-        # Verify and fix device after all_gather_object
-        current_device_after_gather = torch.cuda.current_device()
-        if current_device_after_gather != expected_device:
-            print(
-                f"[Buffer] Rank {self.rank}: CRITICAL - device_ids all_gather changed device! expected={expected_device}, after={current_device_after_gather}, fixing...",
-                flush=True,
-            )
-            torch.cuda.set_device(expected_device)
-            torch.set_default_device(f"cuda:{expected_device}")
-
         # Synchronize IPC handles
         ipc_handles = [
             None,
         ] * self.group_size
         local_ipc_handle = self.runtime.get_local_ipc_handle()
-
-        # CRITICAL: Ensure we're on correct device before IPC all_gather_object
-        torch.cuda.set_device(expected_device)
-        torch.set_default_device(f"cuda:{expected_device}")
-
-        current_device_before_ipc = torch.cuda.current_device()
-        print(
-            f"[Buffer] Rank {self.rank}: Device before IPC all_gather: current={current_device_before_ipc}, expected={expected_device}",
-            flush=True,
-        )
-
-        # Double-check device right before the call
-        if current_device_before_ipc != expected_device:
-            torch.cuda.set_device(expected_device)
-            torch.set_default_device(f"cuda:{expected_device}")
-
+        # print("Before all_gather_object ipc_handles", local_ipc_handle, flush=True)
         dist.all_gather_object(ipc_handles, local_ipc_handle, group)
 
-        # Verify and fix device after IPC all_gather_object
-        current_device_after_ipc = torch.cuda.current_device()
-        if current_device_after_ipc != expected_device:
-            print(
-                f"[Buffer] Rank {self.rank}: CRITICAL - IPC all_gather changed device! expected={expected_device}, after={current_device_after_ipc}, fixing...",
-                flush=True,
-            )
-            torch.cuda.set_device(expected_device)
-            torch.set_default_device(f"cuda:{expected_device}")
-
-        # Synchronize NVSHMEM unique IDs
-        root_unique_id = None
-        # TODO(MaoZiming): Remove the NVSHMEM dependencies here. We do not need to set the NVSHMEM environment variables. There is also no need to sync a root unique id to join the nvshmem job. Eventually, if this is needed, it should be negotiated by the CPU proxy.
-        """
-        if self.runtime.get_num_rdma_ranks() > 1 or low_latency_mode:
-            # Enable IBGDA
-            assert num_qps_per_rank > 0
-            os.environ["NVSHMEM_DISABLE_P2P"] = (
-                "0" if allow_nvlink_for_low_latency_mode else "1"
-            )
-            os.environ["NVSHMEM_IB_ENABLE_IBGDA"] = "1"
-            os.environ["NVSHMEM_IBGDA_NUM_RC_PER_PE"] = f"{num_qps_per_rank}"
-            # Make sure QP depth is always larger than the number of on-flight WRs, so that we can skip WQ slot check
-            os.environ["NVSHMEM_QP_DEPTH"] = os.environ.get("NVSHMEM_QP_DEPTH", "1024")
-
-            # Reduce gpu memory usage
-            # 6 default teams + 1 extra team
-            os.environ["NVSHMEM_MAX_TEAMS"] = "7"
-            # Disable NVLink SHArP
-            os.environ["NVSHMEM_DISABLE_NVLS"] = "1"
-            # NOTES: NVSHMEM initialization requires at least 256 MiB
-            os.environ["NVSHMEM_CUMEM_GRANULARITY"] = f"{2 ** 29}"
-
-            if not allow_mnnvl:
-                # Disable multi-node NVLink detection
-                os.environ["NVSHMEM_DISABLE_MNNVL"] = "1"
-
-            # Synchronize using the root ID
-            uccl_shmem_unique_ids = [
-                None,
-            ] * self.group_size
-            if (low_latency_mode and self.rank == 0) or (
-                not low_latency_mode and self.runtime.get_rdma_rank() == 0
-            ):
-                root_unique_id = self.runtime.get_local_uccl_shmem_unique_id()
-            dist.all_gather_object(uccl_shmem_unique_ids, root_unique_id, group)
-            root_unique_id = uccl_shmem_unique_ids[
-                0 if low_latency_mode else self.runtime.get_root_rdma_rank(True)
-            ]
-        """
-        # Make CPP runtime available
-        # CRITICAL: Ensure device is correct before runtime.sync
-        torch.cuda.set_device(expected_device)
-        torch.set_default_device(f"cuda:{expected_device}")
-
-        current_device_before_sync = torch.cuda.current_device()
-        print(
-            f"[Buffer] Rank {self.rank}: Device before runtime.sync: current={current_device_before_sync}, expected={expected_device}",
-            flush=True,
+        rdma_ipc_handles = [None] * self.group_size
+        local_rdma_ipc_handle = (
+            self.runtime.get_local_rdma_ipc_handle()
+            if self.num_rdma_bytes > 0
+            else None
         )
-
-        self.runtime.sync(device_ids, ipc_handles, root_unique_id)
-
-        # Verify and fix device after runtime.sync
-        current_device_after_sync = torch.cuda.current_device()
-        if current_device_after_sync != expected_device:
-            print(
-                f"[Buffer] Rank {self.rank}: CRITICAL - runtime.sync changed device! expected={expected_device}, after={current_device_after_sync}, fixing...",
-                flush=True,
-            )
-            torch.cuda.set_device(expected_device)
-            torch.set_default_device(f"cuda:{expected_device}")
-
+        dist.all_gather_object(rdma_ipc_handles, local_rdma_ipc_handle, group)
+        root_unique_id = None
+        # Make CPP runtime available
+        self.runtime.sync(
+            device_ids,
+            ipc_handles,
+            root_unique_id,
+            rdma_ipc_handles,
+        )
         assert self.runtime.is_available()
 
     def reset_rdma_buffer(self):
