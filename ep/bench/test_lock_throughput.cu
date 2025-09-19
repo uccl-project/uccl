@@ -84,7 +84,7 @@ __global__ void lock_throughput_kernel(DeviceToHostCmdBuffer** ring_buffers,
   dummy_cmd.bytes = config.payload_size;
   dummy_cmd.req_rptr = warp_id;
   dummy_cmd.req_lptr = 0;
-  // dummy_cmd.sm_id = blockIdx.x;
+  dummy_cmd.sm_id = blockIdx.x;
   dummy_cmd.lane_id = lane_id;
   dummy_cmd.message_idx = 0;
   dummy_cmd.is_atomic = false;
@@ -129,29 +129,54 @@ __global__ void lock_throughput_kernel(DeviceToHostCmdBuffer** ring_buffers,
   }
 }
 
-// CPU proxy thread function
+// CPU proxy thread function - uses head/tail batch processing like proxy.cpp
 void cpu_proxy_thread(DeviceToHostCmdBuffer* ring_buffer, int proxy_id,
                       bool volatile* stop_flag,
                       std::atomic<uint64_t>* processed_count, bool verbose) {
   uint64_t processed = 0;
-  TransferCmd cmd;
+  uint64_t my_tail = 0;
+  size_t seen = 0;
 
   if (verbose) {
-    printf("CPU proxy %d started\n", proxy_id);
+    printf("CPU proxy %d started (head/tail batch mode)\n", proxy_id);
   }
 
   while (!*stop_flag) {
-    if (ring_buffer->pop(cmd)) {
-      processed++;
-
-      // Verify dummy content if needed
-      if (verbose && processed % 10000 == 0) {
-        printf("Proxy %d: processed %lu ops (last from warp %d)\n", proxy_id,
-               processed, cmd.value);
-      }
-    } else {
-      // Small sleep to avoid busy waiting
+    // Force load head from DRAM (like proxy.cpp)
+    uint64_t cur_head = ring_buffer->volatile_head();
+    if (cur_head == my_tail) {
       std::this_thread::sleep_for(std::chrono::microseconds(1));
+      continue;
+    }
+
+    // Batch processing
+    size_t batch_size = cur_head - seen;
+    std::vector<TransferCmd> cmds_to_process;
+    cmds_to_process.reserve(batch_size);
+
+    // Collect batch of commands (like proxy.cpp)
+    for (size_t i = seen; i < cur_head; ++i) {
+      uint64_t cmd = ring_buffer->volatile_load_cmd(i);
+      // Non-blocking: break if cmd not ready
+      if (cmd == 0) break;
+
+      TransferCmd& cmd_entry = ring_buffer->load_cmd_entry(i);
+      cmds_to_process.push_back(cmd_entry);
+      seen = i + 1;
+    }
+
+    // Process the batch
+    if (!cmds_to_process.empty()) {
+      processed += cmds_to_process.size();
+
+      // Update tail to mark commands as processed
+      my_tail += cmds_to_process.size();
+      ring_buffer->cpu_volatile_store_tail(my_tail);
+
+      if (verbose && processed % 10000 == 0) {
+        printf("Proxy %d: processed %lu ops (batch size: %zu)\n",
+               proxy_id, processed, cmds_to_process.size());
+      }
     }
   }
 
@@ -332,9 +357,10 @@ int main(int argc, char** argv) {
   std::vector<uint32_t> warp_counts = {32, 64, 128, 256, 512, 1024};
 
   printf(
-      "\n========== Ring Buffer Lock Throughput Test (4 Proxies) ==========\n");
+      "\n========== Ring Buffer Lock Throughput Test (Head/Tail Batch Mode) ==========\n");
   printf("Architecture: %u warps per proxy, spinlock synchronization\n",
          WARPS_PER_PROXY);
+  printf("CPU Polling: Head/tail batch processing (like proxy.cpp)\n");
   printf("Fixed: 4 CPU proxies\n\n");
 
   for (auto num_warps : warp_counts) {
