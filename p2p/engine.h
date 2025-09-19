@@ -341,106 +341,6 @@ class Endpoint {
                                          sizeof(size_t) * num_iovs);
     }
   };
-  // struct alignas(64) TaskBatchBig {
-  //   TaskType type;
-  //   uint64_t conn_id;
-  //   size_t num_iovs;
-  //   void* iov_data_block;
-  //   std::atomic<bool> done;
-  //   TaskBatchBig* self_ptr;
-
-  //   // --- Helper Functions ---
-  //   void const** const_data_v() const {
-  //     if (type != TaskType::SENDV) return nullptr;
-  //     return static_cast<void const**>(iov_data_block);
-  //   }
-
-  //   void** data_v() const {
-  //     if (type != TaskType::RECVV) return nullptr;
-  //     return static_cast<void**>(iov_data_block);
-  //   }
-
-  //   size_t* size_v() const {
-  //     uintptr_t base = reinterpret_cast<uintptr_t>(iov_data_block);
-  //     return reinterpret_cast<size_t*>(base + sizeof(void*) * num_iovs);
-  //   }
-
-  //   uint64_t* mr_id_v() const {
-  //     uintptr_t base = reinterpret_cast<uintptr_t>(iov_data_block);
-  //     return reinterpret_cast<uint64_t*>(base + sizeof(void*) * num_iovs +
-  //                                        sizeof(size_t) * num_iovs);
-  //   }
-  // };
-
-  // inline TaskBatchBig* create_task_batch_base(
-  //     uint64_t conn_id, size_t num_iovs, std::vector<size_t> const& size_v,
-  //     std::vector<uint64_t> const& mr_id_v) {
-  //   size_t const ptr_array_size = sizeof(void*) * num_iovs;
-  //   size_t const size_array_size = sizeof(size_t) * num_iovs;
-  //   size_t const mr_id_array_size = sizeof(uint64_t) * num_iovs;
-  //   size_t const total_data_size =
-  //       ptr_array_size + size_array_size + mr_id_array_size;
-
-  //   TaskBatchBig* task = new (std::align_val_t(64)) TaskBatchBig();
-  //   char* block = new char[total_data_size];
-
-  //   task->conn_id = conn_id;
-  //   task->num_iovs = num_iovs;
-  //   task->iov_data_block = block;
-  //   task->done.store(false, std::memory_order_relaxed);
-  //   task->self_ptr = task;
-
-  //   void* dest_size_array = block + ptr_array_size;
-  //   void* dest_mr_id_array = block + ptr_array_size + size_array_size;
-  //   std::memcpy(dest_size_array, size_v.data(), size_array_size);
-  //   std::memcpy(dest_mr_id_array, mr_id_v.data(), mr_id_array_size);
-
-  //   return task;
-  // }
-
-  // inline TaskBatchBig* create_task_batch_sendv(
-  //     uint64_t conn_id, std::vector<void const*> const& const_data_v,
-  //     std::vector<size_t> const& size_v, std::vector<uint64_t> const&
-  //     mr_id_v) {
-  //   size_t const num_iovs = const_data_v.size();
-  //   if (num_iovs == 0 || size_v.size() != num_iovs ||
-  //       mr_id_v.size() != num_iovs) {
-  //     throw std::runtime_error(
-  //         "Mismatched or empty vector sizes for SENDV task creation.");
-  //   }
-
-  //   TaskBatchBig* task =
-  //       create_task_batch_base(conn_id, num_iovs, size_v, mr_id_v);
-
-  //   task->type = TaskType::SENDV;
-
-  //   std::memcpy(task->iov_data_block, const_data_v.data(),
-  //               sizeof(void const*) * num_iovs);
-
-  //   return task;
-  // }
-
-  // inline TaskBatchBig* create_task_batch_recvv(
-  //     uint64_t conn_id, std::vector<void*> const& data_v,
-  //     std::vector<size_t> const& size_v, std::vector<uint64_t> const&
-  //     mr_id_v) {
-  // size_t const num_iovs = data_v.size();
-  // if (num_iovs == 0 || size_v.size() != num_iovs ||
-  //     mr_id_v.size() != num_iovs) {
-  //   throw std::runtime_error(
-  //       "Mismatched or empty vector sizes for RECVV task creation.");
-  // }
-
-  //   TaskBatchBig* task =
-  //       create_task_batch_base(conn_id, num_iovs, size_v, mr_id_v);
-
-  //   task->type = TaskType::RECVV;
-
-  //   std::memcpy(task->iov_data_block, data_v.data(), sizeof(void*) *
-  //   num_iovs);
-
-  //   return task;
-  // }
 
   struct alignas(64) Task {
     TaskType type;
@@ -553,16 +453,16 @@ class Endpoint {
     UnifiedTask* task = new UnifiedTask();
     task->type = type;
     task->conn_id = conn_id;
-    task->mr_id = 0;       // Not used for batch operations
-    task->data = nullptr;  // Not used for batch operations
-    task->size = 0;        // Not used for batch operations
     task->done = false;
     task->task_batch() = batch;
     task->self_ptr = task;
+    // Not used for batch operations
+    task->mr_id = 0;
+    task->data = nullptr;
+    task->size = 0;
     return task;
   }
 
-  // Create batch task for SENDV operations
   inline UnifiedTask* create_sendv_task(
       uint64_t conn_id, std::vector<void const*> const& const_data_v,
       std::vector<size_t> const& size_v, std::vector<uint64_t> const& mr_id_v) {
