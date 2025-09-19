@@ -30,10 +30,10 @@ pip install paramiko pybind11
 </details>
 
 For quick installation with docker, you can directly dive into: 
-* [`dev_rdma.md`](dev_rdma.md): Collectives for Nvidia/AMD GPUs + IB/RoCE RDMA NICs (currently support Nvidia and Broadcom NICs)
-* [`dev_efa.md`](dev_efa.md): Collectives for AWS EFA NIC (currently support p4d.24xlarge)
-* [`dev_afxdp.md`](dev_afxdp.md): Collectives for Non-RDMA NICs (currently support AWS ENA NICs and IBM VirtIO NICs)
-* [`../p2p/README.md`](../p2p/README.md): P2P for RDMA NICs and GPU IPCs (currently support Nvidia/AMD GPUs and Nvidia/Broadcom NICs)
+* [`UCCL-Collective RDMA`](../collective/rdma/README.md): Collectives for Nvidia/AMD GPUs + IB/RoCE RDMA NICs (currently support Nvidia and Broadcom NICs)
+* [`UCCL-Collective EFA`](../collective/efa/README.md): Collectives for AWS EFA NIC (currently support p4d.24xlarge)
+* [`UCCL-Collective AFXDP`](../collective/afxdp/README.md): Collectives for Non-RDMA NICs (currently support AWS ENA NICs and IBM VirtIO NICs)
+* [`UCCL-P2P`](../p2p/README.md): P2P for RDMA NICs and GPU IPCs (currently support Nvidia/AMD GPUs and Nvidia/Broadcom NICs)
 
 ### Python Wheel Build
 

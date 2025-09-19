@@ -1,5 +1,5 @@
 ABS_ROOT_PATH := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
-ABS_REPO_ROOT := $(shell realpath $(ABS_ROOT_PATH)/..)
+ABS_REPO_ROOT := $(shell realpath $(ABS_ROOT_PATH)/../..)
 
 KERNEL = $(shell uname -r)
 INC = -I./lib/install/include \

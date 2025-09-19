@@ -97,7 +97,7 @@ Now, you can just run your PyTorch applications and enjoy UCCL performance benef
 
 ## Dev Guide
 
-Please refer to [doc/dev.md](doc/dev.md) for full development guide of UCCL.
+Please refer to [doc/README.md](doc/README.md) for full development guide of UCCL.
 
 ## Citation
 The code in this repository is mostly described in the paper below. Please consider citing this work if you find the repository helpful. 
