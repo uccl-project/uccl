@@ -2,9 +2,7 @@
 #include "ep_util.hpp"
 #include <arpa/inet.h>  // for htonl, ntohl
 #include <chrono>
-#include <set>
 #include <thread>
-#include <tuple>
 
 double Proxy::avg_rdma_write_us() const {
   if (kIterations == 0) return 0.0;

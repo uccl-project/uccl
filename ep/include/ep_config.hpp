@@ -230,8 +230,6 @@ struct LowLatencyLayout {
     // NOTES: we still leave some space for distinguishing dispatch/combine
     // buffer, so you may see some parameters are duplicated
     for (int i = 0; i < 2; ++i) {
-      printf("i * signaling_buffer_bytes_aligned: %ld\n",
-             i * signaling_buffer_bytes_aligned);
       buffers[i] = {
           static_cast<int>(signaling_buffer_bytes / sizeof(int)),
           advance(rdma_buffer,

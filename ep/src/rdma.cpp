@@ -36,8 +36,6 @@
 #define RETRY_DELAY_MS 200
 #define TCP_PORT 18515
 #define QKEY 0x11111111u
-#include <set>
-#include <tuple>
 
 template <typename dtype_t>
 dtype_t ceil_div(dtype_t a, dtype_t b) {
@@ -881,8 +879,8 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       wrs[j].send_flags = IBV_SEND_SIGNALED;
       wrs[j].next = (j + 1 < k) ? &wrs[j + 1] : nullptr;
     }
-    size_t const last = k - 1;
-    uint64_t const batch_tail_wr = wr_ids[last];
+    const size_t last = k - 1;
+    const uint64_t batch_tail_wr = wr_ids[last];
     wrs[last].send_flags = IBV_SEND_SIGNALED;
     wrs[last].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
     uint32_t imm = (0u << 31) | ((cmd.is_combine & 0x1u) << 30) |
@@ -954,7 +952,7 @@ void local_process_completions(ProxyCtx& S,
         // }
         {
           std::lock_guard<std::mutex> lock(finished_wrs_mutex);
-          uint64_t const wr_done = wc[i].wr_id;
+          const uint64_t wr_done = wc[i].wr_id;
           acked_wrs.insert(wr_done);
           if (S.wr_id_to_wr_ids.find(wr_done) != S.wr_id_to_wr_ids.end()) {
             // fprintf(stderr,
@@ -1067,7 +1065,6 @@ void apply_pending_updates(ProxyCtx& ctx,
     uint32_t imm = upd.imm;
     int value = unpack_v(static_cast<int32_t>(imm));
     uint32_t offset = unpack_off(imm);
-    size_t index = offset / sizeof(int);
     int low_latency_buffer_idx = unpack_buffer_idx(imm);
     bool is_combine = unpack_kind(imm);
     uint32_t new_offset =
@@ -1230,8 +1227,6 @@ void remote_process_completions(
       //                          index * sizeof(int)),
       //     imm);
       // sleep(1);
-      printf("atomic_buffer_ptr: %p, index: %zu, low_latency_buffer_idx: %d\n",
-             atomic_buffer_ptr, index, low_latency_buffer_idx);
       auto* addr32 =
           reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
       if (is_combine) value = 1;
@@ -1271,8 +1266,6 @@ void remote_process_completions(
       uint32_t src_rank = imm & 0xFFF;            // 12 bits
 
       if (!is_combine) {
-        assert(expert_idx /* This is local_expert_idx*/ <
-               num_experts / num_ranks);
         add_tokens(S, buffer_idx, expert_idx, src_rank, k);
         printf(
             "[Write dispatch] idx=%d, expert_idx=%u, src_rank=%u, tokens=%u, "
@@ -1506,7 +1499,7 @@ void post_atomic_operations(ProxyCtx& S,
     if (wr_ids.empty()) continue;
 
     ProxyCtx* ctx = ctxs[dst_rank].get();
-    size_t const k = wr_ids.size();
+    const size_t k = wr_ids.size();
 #ifdef EFA
     struct ibv_qp_ex* qpx = (struct ibv_qp_ex*)ctx->qp;
     ibv_wr_start(qpx);
@@ -1561,7 +1554,7 @@ void post_atomic_operations(ProxyCtx& S,
 
     for (size_t i = 0; i < k; ++i) {
       auto const& cmd = cmds_to_post[wr_ids[i]];
-      uint64_t const wrid = wrs_to_post[wr_ids[i]];
+      const uint64_t wrid = wrs_to_post[wr_ids[i]];
       wr_ids[i] = wrid;
 
       int v = static_cast<int>(cmd.value);
@@ -1603,7 +1596,7 @@ void post_atomic_operations(ProxyCtx& S,
 #endif
     // bookkeeping identical to your original logic
     S.posted.fetch_add(k, std::memory_order_relaxed);
-    uint64_t const batch_tail_wr = wr_ids.back();
+    const uint64_t batch_tail_wr = wr_ids.back();
     {
       std::lock_guard<std::mutex> lock(finished_wrs_mutex);
       auto [it, inserted] =
