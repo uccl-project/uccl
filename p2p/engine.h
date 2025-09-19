@@ -20,6 +20,9 @@ namespace py = pybind11;
 
 extern thread_local bool inside_python;
 
+int const kMaxNumGPUs = 8;
+extern uint8_t gpu_to_dev[kMaxNumGPUs];
+
 struct MR {
   uint64_t mr_id_;
   uccl::Mhandle* mhandle_;

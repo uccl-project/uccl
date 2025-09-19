@@ -17,7 +17,6 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-int const kMaxNumGPUs = 8;
 // Assume the local and remote GPUs have the same GPU-NIC mapping.
 uint8_t gpu_to_dev[kMaxNumGPUs] = {0};
 std::once_flag glog_init_once;

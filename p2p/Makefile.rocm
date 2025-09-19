@@ -29,7 +29,7 @@ LDFLAGS         = -L$(HIP_LIB) -lamdhip64 \
 
 # Target and source files
 TARGET   := p2p$(PYEXT)
-SOURCES := engine.cc pybind_engine.cc
+SOURCES := engine.cc pybind_engine.cc tensor.cc
 OBJECTS := $(SOURCES:.cc=.o)
 
 # Default target

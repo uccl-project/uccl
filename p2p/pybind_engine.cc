@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "tensor.h"
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -14,6 +15,20 @@ PYBIND11_MODULE(p2p, m) {
   m.doc() = "P2P Engine - High-performance RDMA-based peer-to-peer transport";
 
   m.def("get_oob_ip", &get_oob_ip, "Get the OOB IP address");
+
+  m.def(
+      "reg_mem",
+      [](int gpu_id, uint64_t addr, size_t size) {
+        uint64_t mem_id;
+        reg_mem(gpu_id, reinterpret_cast<void*>(addr), size, mem_id);
+        return mem_id;
+      },
+      "Reg the memory with RDMA capabilities", py::arg("gpu_id"),
+      py::arg("addr"), py::arg("size"));
+
+  m.def(
+      "dereg_mem", [](uint64_t mem_id) { dereg_mem(mem_id); },
+      "Dereg the memory associated RDMA resources", py::arg("mem_id"));
 
   // Endpoint class binding
   py::class_<Endpoint>(m, "Endpoint")
