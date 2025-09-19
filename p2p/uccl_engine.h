@@ -4,8 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define FIFO_MSG_SIZE 64
-
+#define MSG_SIZE 64
 // Handle for the UCCL engine instance
 typedef struct uccl_engine uccl_engine_t;
 
@@ -24,12 +23,12 @@ enum uccl_msg_type {
 };
 
 typedef struct notify_msg {
-  char* name;
-  char* msg;
+  char name[MSG_SIZE];
+  char msg[MSG_SIZE];
 } notify_msg_t;
 
 typedef struct fifo_msg {
-  char fifo_buf[FIFO_MSG_SIZE];
+  char fifo_buf[MSG_SIZE];
 } fifo_msg_t;
 
 typedef struct tx_msg {
