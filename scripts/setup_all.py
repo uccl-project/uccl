@@ -106,7 +106,7 @@ if __name__ == "__main__":
 
     ### Setup NIC
     num_queues = parse_num_queues(
-        make_macro, f"{UCCL_HOME}/afxdp/transport_config.h"
+        make_macro, f"{UCCL_HOME}/collective/afxdp/transport_config.h"
     )
     if num_queues is None:
         print("NUM_QUEUES not found!")

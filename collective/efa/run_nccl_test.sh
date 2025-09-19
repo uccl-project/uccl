@@ -95,7 +95,7 @@ elif [ "$TEST" = "ud" ]; then
     done
 
     # LIBNCCL_PATH="${UCCL_HOME}/thirdparty/nccl-sg/build/lib/libnccl.so"
-    # PLUGIN_PATH="${UCCL_HOME}/efa/libnccl-net-efa.so"
+    # PLUGIN_PATH="${UCCL_HOME}/collective/efa/libnccl-net-efa.so"
     LIBNCCL_PATH=`python -c "import uccl; print(uccl.efa_nccl_path())"`
     PLUGIN_PATH=`python -c "import uccl; print(uccl.efa_plugin_path())"`
     echo "LIBNCCL_PATH: ${LIBNCCL_PATH}"
@@ -126,7 +126,7 @@ elif [ "$TEST" = "ud" ]; then
         -x NCCL_GDRCOPY_SYNC_ENABLE=0 \
         -x NCCL_GDRCOPY_FIFO_ENABLE=0 \
         -x CUDA_MODULE_LOADING=EAGER \
-        -x NCCL_TOPO_FILE=${UCCL_HOME}/efa/p4d-24xl-topo.xml \
+        -x NCCL_TOPO_FILE=${UCCL_HOME}/collective/efa/p4d-24xl-topo.xml \
         -x NCCL_PXN_DISABLE=1 \
         -x UCCL_ENGINE_QUIET=1 \
         ${UCCL_HOME}/thirdparty/nccl-tests/build/${PROG_NAME} \

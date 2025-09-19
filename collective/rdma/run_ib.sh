@@ -42,7 +42,7 @@ CTRL_NIC="ds-eap-1,ds-eap-2,ds-eap-3"
 # Path of NCCL
 NCCL_PATH="${UCCL_HOME}/thirdparty/nccl/build/lib"
 # Path of UCCL
-# PLUGIN_LIB="${UCCL_HOME}/rdma/libnccl-net-uccl.so"
+# PLUGIN_LIB="${UCCL_HOME}/collective/rdma/libnccl-net-uccl.so"
 PLUGIN_LIB=`python -c "import uccl; print(uccl.nccl_plugin_path())"`
 echo "PLUGIN_LIB: ${PLUGIN_LIB}"
 

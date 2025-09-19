@@ -80,7 +80,7 @@ if [ "$TEST" = "nccl" ]; then
     plugin_path=""
 elif [ "$TEST" = "uccl" ]; then
     echo "Running UCCL test"
-    # plugin_path="${UCCL_HOME}/rdma/libnccl-net-uccl.so"
+    # plugin_path="${UCCL_HOME}/collective/rdma/libnccl-net-uccl.so"
     plugin_path=`python -c "import uccl; print(uccl.nccl_plugin_path())"`
     echo "plugin_path: ${plugin_path}"
 else
