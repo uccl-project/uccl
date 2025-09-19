@@ -312,33 +312,56 @@ class Endpoint {
     RECVV,
   };
   struct TaskBatch {
-    TaskType type;         // SENDV or RECVV
-    size_t num_iovs;       // Number of IO vectors
-    void* iov_data_block;  // Memory block containing data arrays
+    TaskType type;
+    size_t num_iovs;  // Number of IO vectors
+    std::shared_ptr<std::vector<void const*>> const_data_ptr;  // for SENDV
+    std::shared_ptr<std::vector<void*>> data_ptr;              // for RECVV
+    std::shared_ptr<std::vector<size_t>> size_ptr;
+    std::shared_ptr<std::vector<uint64_t>> mr_id_ptr;
 
-    // Get pointer array for const data (SENDV operations)
+    // Constructor for move semantics
+    TaskBatch() : type(TaskType::SENDV), num_iovs(0) {}
+    
+    // Move constructor
+    TaskBatch(TaskBatch&& other) noexcept 
+        : type(other.type), num_iovs(other.num_iovs),
+          const_data_ptr(std::move(other.const_data_ptr)),
+          data_ptr(std::move(other.data_ptr)),
+          size_ptr(std::move(other.size_ptr)),
+          mr_id_ptr(std::move(other.mr_id_ptr)) {}
+    
+    // Move assignment
+    TaskBatch& operator=(TaskBatch&& other) noexcept {
+      if (this != &other) {
+        type = other.type;
+        num_iovs = other.num_iovs;
+        const_data_ptr = std::move(other.const_data_ptr);
+        data_ptr = std::move(other.data_ptr);
+        size_ptr = std::move(other.size_ptr);
+        mr_id_ptr = std::move(other.mr_id_ptr);
+      }
+      return *this;
+    }
+    
+    // Delete copy constructor and assignment
+    TaskBatch(const TaskBatch&) = delete;
+    TaskBatch& operator=(const TaskBatch&) = delete;
+
     void const** const_data_v() const {
-      if (type != TaskType::SENDV) return nullptr;
-      return static_cast<void const**>(iov_data_block);
+      if (type != TaskType::SENDV || !const_data_ptr) return nullptr;
+      return const_data_ptr->data();
     }
-
-    // Get pointer array for mutable data (RECVV operations)
     void** data_v() const {
-      if (type != TaskType::RECVV) return nullptr;
-      return static_cast<void**>(iov_data_block);
+      if (type != TaskType::RECVV || !data_ptr) return nullptr;
+      return data_ptr->data();
     }
-
-    // Get size array
     size_t* size_v() const {
-      uintptr_t base = reinterpret_cast<uintptr_t>(iov_data_block);
-      return reinterpret_cast<size_t*>(base + sizeof(void*) * num_iovs);
+      if (!size_ptr) return nullptr;
+      return size_ptr->data();
     }
-
-    // Get memory region ID array
     uint64_t* mr_id_v() const {
-      uintptr_t base = reinterpret_cast<uintptr_t>(iov_data_block);
-      return reinterpret_cast<uint64_t*>(base + sizeof(void*) * num_iovs +
-                                         sizeof(size_t) * num_iovs);
+      if (!mr_id_ptr) return nullptr;
+      return mr_id_ptr->data();
     }
   };
 
@@ -408,8 +431,21 @@ class Endpoint {
         TaskBatch task_batch;
         uint8_t reserved[MAX_RESERVE_SIZE - sizeof(TaskBatch)];
       } batch;
+      
       SpecificData() : base{} {}
+      ~SpecificData() {}  // Union destructor does nothing by default
     } specific;
+
+    // Constructor
+    UnifiedTask() : type(TaskType::SEND_NET), data(nullptr), size(0), 
+                    conn_id(0), mr_id(0), done(false), self_ptr(this), specific() {}
+
+    // Destructor to properly cleanup TaskBatch if needed
+    ~UnifiedTask() {
+      if (is_batch_task()) {
+        specific.batch.task_batch.~TaskBatch();
+      }
+    }
 
     inline uccl::FifoItem& slot_item() { return specific.net.slot_item; }
 
@@ -449,78 +485,67 @@ class Endpoint {
   }
 
   inline UnifiedTask* create_batch_task(uint64_t conn_id, TaskType type,
-                                        TaskBatch const& batch) {
+                                        TaskBatch&& batch) {
     UnifiedTask* task = new UnifiedTask();
     task->type = type;
     task->conn_id = conn_id;
     task->done = false;
-    task->task_batch() = batch;
     task->self_ptr = task;
     // Not used for batch operations
     task->mr_id = 0;
     task->data = nullptr;
     task->size = 0;
+    
+    // Use placement new to construct TaskBatch in the union
+    new (&task->specific.batch.task_batch) TaskBatch(std::move(batch));
+    
     return task;
   }
 
   inline UnifiedTask* create_sendv_task(
-      uint64_t conn_id, std::vector<void const*> const& const_data_v,
-      std::vector<size_t> const& size_v, std::vector<uint64_t> const& mr_id_v) {
-    size_t const num_iovs = const_data_v.size();
-    // Calculate memory layout
-    size_t const ptr_array_size = sizeof(void const*) * num_iovs;
-    size_t const size_array_size = sizeof(size_t) * num_iovs;
-    size_t const mr_id_array_size = sizeof(uint64_t) * num_iovs;
-    size_t const total_data_size =
-        ptr_array_size + size_array_size + mr_id_array_size;
+      uint64_t conn_id, std::shared_ptr<std::vector<void const*>> const_data_ptr,
+      std::shared_ptr<std::vector<size_t>> size_ptr,
+      std::shared_ptr<std::vector<uint64_t>> mr_id_ptr) {
+    if (!const_data_ptr || !size_ptr || !mr_id_ptr ||
+        const_data_ptr->size() != size_ptr->size() ||
+        size_ptr->size() != mr_id_ptr->size()) {
+      return nullptr;  // Error check
+    }
+    size_t num_iovs = const_data_ptr->size();
 
-    // Allocate and initialize data block
-    char* block = new char[total_data_size];
-    char* size_array_ptr = block + ptr_array_size;
-    char* mr_id_array_ptr = block + ptr_array_size + size_array_size;
-
-    std::memcpy(block, const_data_v.data(), ptr_array_size);
-    std::memcpy(size_array_ptr, size_v.data(), size_array_size);
-    std::memcpy(mr_id_array_ptr, mr_id_v.data(), mr_id_array_size);
-
-    // Create TaskBatch
     TaskBatch batch;
     batch.type = TaskType::SENDV;
     batch.num_iovs = num_iovs;
-    batch.iov_data_block = block;
+    batch.const_data_ptr = std::move(const_data_ptr);  // Transfer ownership
+    batch.size_ptr = std::move(size_ptr);
+    batch.mr_id_ptr = std::move(mr_id_ptr);
 
-    return create_batch_task(conn_id, TaskType::SENDV, batch);
+    return create_batch_task(conn_id, TaskType::SENDV, std::move(batch));
   }
 
   // Create batch task for RECVV operations
   inline UnifiedTask* create_recvv_task(uint64_t conn_id,
-                                        std::vector<void*> const& data_v,
-                                        std::vector<size_t> const& size_v,
-                                        std::vector<uint64_t> const& mr_id_v) {
-    size_t const num_iovs = data_v.size();
-    // Calculate memory layout
-    size_t const ptr_array_size = sizeof(void*) * num_iovs;
-    size_t const size_array_size = sizeof(size_t) * num_iovs;
-    size_t const mr_id_array_size = sizeof(uint64_t) * num_iovs;
-    size_t const total_data_size =
-        ptr_array_size + size_array_size + mr_id_array_size;
+                                        std::vector<void*>&& data_v,
+                                        std::vector<size_t>&& size_v,
+                                        std::vector<uint64_t>&& mr_id_v) {
+    if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size()) {
+      return nullptr;  // Error check
+    }
+    size_t num_iovs = data_v.size();
 
-    // Allocate and initialize data block
-    char* block = new char[total_data_size];
-    char* size_array_ptr = block + ptr_array_size;
-    char* mr_id_array_ptr = block + ptr_array_size + size_array_size;
+    // Create shared_ptrs and move data
+    auto data_ptr = std::make_shared<std::vector<void*>>(std::move(data_v));
+    auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
+    auto mr_id_ptr = std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
 
-    std::memcpy(block, data_v.data(), ptr_array_size);
-    std::memcpy(size_array_ptr, size_v.data(), size_array_size);
-    std::memcpy(mr_id_array_ptr, mr_id_v.data(), mr_id_array_size);
-
-    // Create TaskBatch
     TaskBatch batch;
     batch.type = TaskType::RECVV;
     batch.num_iovs = num_iovs;
-    batch.iov_data_block = block;
+    batch.data_ptr = std::move(data_ptr);
+    batch.size_ptr = std::move(size_ptr);
+    batch.mr_id_ptr = std::move(mr_id_ptr);
 
-    return create_batch_task(conn_id, TaskType::RECVV, batch);
+    return create_batch_task(conn_id, TaskType::RECVV, std::move(batch));
   }
 
   inline UnifiedTask* create_net_task(uint64_t conn_id, uint64_t mr_id,
@@ -541,15 +566,9 @@ class Endpoint {
 
   // Destroy UnifiedTask and cleanup resources
   inline void destroy_unified_task(UnifiedTask* task) {
-    if (task == nullptr) {
-      return;
-    }
-
-    // Cleanup batch task specific resources
-    if (task->is_batch_task() && task->task_batch().iov_data_block != nullptr) {
-      delete[] static_cast<char*>(task->task_batch().iov_data_block);
-    }
-
+    if (!task) return;
+    
+    // The destructor will handle TaskBatch cleanup properly
     delete task;
   }
 
