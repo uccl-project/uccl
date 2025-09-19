@@ -1,4 +1,5 @@
-FROM rocm/dev-ubuntu-22.04
+ARG BASE_IMAGE=rocm/dev-ubuntu-22.04
+FROM ${BASE_IMAGE}
 ARG PY_VER=3.13
 
 # Non-interactive APT
