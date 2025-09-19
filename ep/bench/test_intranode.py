@@ -3,7 +3,7 @@ import time
 import torch
 import torch.distributed as dist
 import os
-import signal  
+import signal
 import faulthandler
 
 
@@ -51,11 +51,17 @@ def test_main(
     # Random data
     device = f"cuda:{local_rank}"
     print(f"[test_main] Rank {rank}: Device set to {device}", flush=True)
-    print(f"[test_main] Rank {rank}: Current device is {torch.cuda.current_device()}", flush=True)
-    print(f"[test_main] Rank {rank}: Count of devices is {torch.cuda.device_count()}", flush=True)
-    
+    print(
+        f"[test_main] Rank {rank}: Current device is {torch.cuda.current_device()}",
+        flush=True,
+    )
+    print(
+        f"[test_main] Rank {rank}: Count of devices is {torch.cuda.device_count()}",
+        flush=True,
+    )
+
     x = torch.ones((num_tokens, hidden), dtype=torch.bfloat16, device=device) * rank
-    
+
     x_pure_rand = torch.randn((num_tokens, hidden), dtype=torch.bfloat16, device=device)
     x_e4m3 = per_token_cast_to_fp8(x) if Buffer.is_sm90_compiled() else None
     x_e4m3 = (x_e4m3[0], x_e4m3[1].T.contiguous().T) if x_e4m3 is not None else None
@@ -402,7 +408,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     workers = None
     bench_obj = None
     buffer = None
-    
+
     try:
         # Set LOCAL_RANK environment variable for this process
         os.environ["LOCAL_RANK"] = str(local_rank)
@@ -411,7 +417,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         torch.cuda.set_device(local_rank)
 
         rank, num_ranks, group = init_dist(local_rank, num_local_ranks)
-        test_ll_compatibility, num_rdma_bytes = False, 1024 * 1024 
+        test_ll_compatibility, num_rdma_bytes = False, 1024 * 1024
         if test_ll_compatibility:
             ll_num_tokens, ll_hidden, ll_num_experts, ll_num_topk = 16, 5120, 256, 9
             num_rdma_bytes = Buffer.get_low_latency_rdma_size_hint(
@@ -423,7 +429,9 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         scratch = torch.zeros(
             num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
         )
-        proxies, workers, bench_obj = initialize_uccl(scratch, num_rdma_bytes, rank, num_ranks, group)
+        proxies, workers, bench_obj = initialize_uccl(
+            scratch, num_rdma_bytes, rank, num_ranks, group
+        )
 
         buffer = Buffer(
             group,
@@ -431,7 +439,9 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
             num_nvlink_bytes,
             num_rdma_bytes,
             low_latency_mode=test_ll_compatibility,
-            num_qps_per_rank=(ll_num_experts // num_ranks if test_ll_compatibility else 1),
+            num_qps_per_rank=(
+                ll_num_experts // num_ranks if test_ll_compatibility else 1
+            ),
             explicitly_destroy=True,
         )
         buffer.connect_atomic_buffer(proxies[0])
@@ -466,23 +476,25 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
 
         # Clean up
         print(f"Rank {rank}: Starting cleanup...", flush=True)
-        
+
         # Synchronize before cleanup
         if group:
             group.barrier()
-        
+
         # Destroy buffer
         if buffer:
             try:
                 buffer.destroy()
                 print(f"Rank {rank}: Buffer destroyed", flush=True)
             except Exception as e:
-                print(f"Rank {rank}: Warning - failed to destroy buffer: {e}", flush=True)
-        
+                print(
+                    f"Rank {rank}: Warning - failed to destroy buffer: {e}", flush=True
+                )
+
         # Synchronize after buffer destruction
         if dist.is_initialized():
             dist.barrier()
-        
+
         # Destroy UCCL resources
         if proxies and workers:
             try:
@@ -490,24 +502,28 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                 print(f"Rank {rank}: UCCL resources destroyed", flush=True)
             except Exception as e:
                 print(f"Rank {rank}: Warning - failed to destroy UCCL: {e}", flush=True)
-        
+
         # Final synchronization
         if dist.is_initialized():
             dist.barrier()
-            
+
         # Destroy process group
         if dist.is_initialized():
             try:
                 dist.destroy_process_group()
                 print(f"Rank {rank}: Process group destroyed", flush=True)
             except Exception as e:
-                print(f"Rank {rank}: Warning - failed to destroy process group: {e}", flush=True)
-                
+                print(
+                    f"Rank {rank}: Warning - failed to destroy process group: {e}",
+                    flush=True,
+                )
+
     except Exception as e:
         print(f"Rank {local_rank}: Fatal error in test_loop: {e}", flush=True)
         import traceback
+
         traceback.print_exc()
-        
+
         # Emergency cleanup
         try:
             if proxies:
@@ -528,7 +544,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                     pass
         except:
             pass
-        
+
         raise
 
 

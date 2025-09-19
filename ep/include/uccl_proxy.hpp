@@ -32,7 +32,8 @@ class UcclProxy {
 
   void* get_atomic_buffer_ptr() {
     if (!atomic_buffer_ptr_) {
-      // For intranode mode, return a dummy pointer (atomic operations not needed)
+      // For intranode mode, return a dummy pointer (atomic operations not
+      // needed)
       static int dummy_atomic_buffer = 0;
       return &dummy_atomic_buffer;
     }

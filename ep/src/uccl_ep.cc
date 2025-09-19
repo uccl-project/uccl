@@ -1804,9 +1804,7 @@ class Buffer {
     available = true;
   }
 
-  void set_rdma_buffer_raw(void* ptr) {
-    rdma_buffer_ptr = ptr;
-  }
+  void set_rdma_buffer_raw(void* ptr) { rdma_buffer_ptr = ptr; }
 
   void set_atomic_buffer_ptr(void* ptr) {
     if (ptr == nullptr) {

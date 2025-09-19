@@ -145,29 +145,29 @@ void Proxy::init_common() {
     for (int peer = 0; peer < num_ranks; ++peer) {
       if (peer == my_rank) continue;
 
-    bool const i_listen = (my_rank < peer);
-    int const tid = pair_tid_block(my_rank, peer, num_ranks, cfg_.block_idx);
-    char const* ip = peers_[peer].ip.c_str();
+      bool const i_listen = (my_rank < peer);
+      int const tid = pair_tid_block(my_rank, peer, num_ranks, cfg_.block_idx);
+      char const* ip = peers_[peer].ip.c_str();
 
-    int virt_rank = i_listen ? 0 : 1;
-    // if (peers_[cfg_.rank].ptr != local_infos_[my_rank].addr) {
-    //   fprintf(stderr,
-    //           "Rank %d block %d: Warning: local addr mismatch: got 0x%lx, "
-    //           "expected 0x%lx\n",
-    //           my_rank, cfg_.block_idx, local_infos_[my_rank].addr,
-    //           peers_[cfg_.rank].ptr);
-    //   std::abort();
-    // }
-    exchange_connection_info(virt_rank, ip, tid, &local_infos_[peer],
-                             &remote_infos_[peer]);
-    if (remote_infos_[peer].addr != peers_[peer].ptr) {
-      fprintf(stderr,
-              "Rank %d block %d: Warning: remote addr mismatch for peer %d: "
-              "got 0x%lx, expected 0x%lx\n",
-              my_rank, cfg_.block_idx, peer, remote_infos_[peer].addr,
-              peers_[peer].ptr);
-      std::abort();
-    }
+      int virt_rank = i_listen ? 0 : 1;
+      // if (peers_[cfg_.rank].ptr != local_infos_[my_rank].addr) {
+      //   fprintf(stderr,
+      //           "Rank %d block %d: Warning: local addr mismatch: got 0x%lx, "
+      //           "expected 0x%lx\n",
+      //           my_rank, cfg_.block_idx, local_infos_[my_rank].addr,
+      //           peers_[cfg_.rank].ptr);
+      //   std::abort();
+      // }
+      exchange_connection_info(virt_rank, ip, tid, &local_infos_[peer],
+                               &remote_infos_[peer]);
+      if (remote_infos_[peer].addr != peers_[peer].ptr) {
+        fprintf(stderr,
+                "Rank %d block %d: Warning: remote addr mismatch for peer %d: "
+                "got 0x%lx, expected 0x%lx\n",
+                my_rank, cfg_.block_idx, peer, remote_infos_[peer].addr,
+                peers_[peer].ptr);
+        std::abort();
+      }
     }
   }
 
@@ -175,26 +175,26 @@ void Proxy::init_common() {
   if (ctx_.context) {
     for (int peer = 0; peer < num_ranks; ++peer) {
       if (peer == my_rank) continue;
-    auto& c = *ctxs_for_all_ranks_[peer];
+      auto& c = *ctxs_for_all_ranks_[peer];
 
-    // qp is different from each rank.
-    modify_qp_to_rtr(c, &remote_infos_[peer]);
-    modify_qp_to_rts(c, &local_infos_[peer]);
+      // qp is different from each rank.
+      modify_qp_to_rtr(c, &remote_infos_[peer]);
+      modify_qp_to_rts(c, &local_infos_[peer]);
 
-    c.remote_addr = remote_infos_[peer].addr;
-    c.remote_rkey = remote_infos_[peer].rkey;
-    c.remote_len = remote_infos_[peer].len;
+      c.remote_addr = remote_infos_[peer].addr;
+      c.remote_rkey = remote_infos_[peer].rkey;
+      c.remote_len = remote_infos_[peer].len;
 
-    printf("Peer %d remote addr=%p rkey=%u len=%lu\n", peer,
-           (void*)c.remote_addr, c.remote_rkey, c.remote_len);
+      printf("Peer %d remote addr=%p rkey=%u len=%lu\n", peer,
+             (void*)c.remote_addr, c.remote_rkey, c.remote_len);
 
-    if (FILE* f = fopen("/tmp/uccl_debug.txt", "a")) {
-      fprintf(
-          f,
-          "[PROXY_INIT] me=%d peer=%d: remote_addr=0x%lx local_buffer=0x%lx\n",
-          my_rank, peer, c.remote_addr, (uintptr_t)cfg_.gpu_buffer);
-      fclose(f);
-    }
+      if (FILE* f = fopen("/tmp/uccl_debug.txt", "a")) {
+        fprintf(f,
+                "[PROXY_INIT] me=%d peer=%d: remote_addr=0x%lx "
+                "local_buffer=0x%lx\n",
+                my_rank, peer, c.remote_addr, (uintptr_t)cfg_.gpu_buffer);
+        fclose(f);
+      }
     }
   }
 

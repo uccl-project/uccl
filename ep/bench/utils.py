@@ -458,11 +458,10 @@ def bench_kineto(
 
 def initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group):
     device_index = int(os.environ["LOCAL_RANK"])
-    
 
     peer_ip = get_peer_ip(rank, num_ranks, group)
-    is_intranode = (peer_ip == "127.0.0.1" or peer_ip == "")
-    
+    is_intranode = peer_ip == "127.0.0.1" or peer_ip == ""
+
     if rank == 0:
         print(f"Peer IP: {peer_ip}, intranode mode: {is_intranode}", flush=True)
 
@@ -487,10 +486,10 @@ def initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group):
         )
         proxy.set_peers_meta(peers_meta_list)
         proxies.append(proxy)
-    
+
     ep.register_proxies(device_index, proxies)
     dist.barrier(group)
-    
+
     for i in range(bench.num_proxies()):
         proxies[i].start_dual()
 
