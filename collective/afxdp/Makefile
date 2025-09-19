@@ -63,7 +63,7 @@ util_lrpc_test: util_lrpc_test.cc $(DEPS) $(lib_obj)
 %.o: %.cc $(DEPS)
 	g++ -c $< -o $@ $(INC) $(CXXFLAGS)
 
-NCCL_HOME:=../thirdparty/nccl
+NCCL_HOME:=$(ABS_REPO_ROOT)/thirdparty/nccl
 CUDA_HOME:=/usr/local/cuda
 NCCL_INC:= -I$(NCCL_HOME)/build/include -I$(NCCL_HOME)/src/include -I$(CUDA_HOME)/include
 

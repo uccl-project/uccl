@@ -1,7 +1,7 @@
 ABS_ROOT_PATH := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 ABS_REPO_ROOT := $(shell realpath $(ABS_ROOT_PATH)/../..)
 
-RCCL_HOME:=../thirdparty/rccl
+RCCL_HOME:=$(ABS_REPO_ROOT)/thirdparty/rccl
 HIP_HOME?=/opt/rocm
 CONDA_LIB_HOME?=/usr/lib
 
