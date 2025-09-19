@@ -174,8 +174,8 @@ void cpu_proxy_thread(DeviceToHostCmdBuffer* ring_buffer, int proxy_id,
       ring_buffer->cpu_volatile_store_tail(my_tail);
 
       if (verbose && processed % 10000 == 0) {
-        printf("Proxy %d: processed %lu ops (batch size: %zu)\n",
-               proxy_id, processed, cmds_to_process.size());
+        printf("Proxy %d: processed %lu ops (batch size: %zu)\n", proxy_id,
+               processed, cmds_to_process.size());
       }
     }
   }
@@ -357,7 +357,8 @@ int main(int argc, char** argv) {
   std::vector<uint32_t> warp_counts = {32, 64, 128, 256, 512, 1024};
 
   printf(
-      "\n========== Ring Buffer Lock Throughput Test (Head/Tail Batch Mode) ==========\n");
+      "\n========== Ring Buffer Lock Throughput Test (Head/Tail Batch Mode) "
+      "==========\n");
   printf("Architecture: %u warps per proxy, spinlock synchronization\n",
          WARPS_PER_PROXY);
   printf("CPU Polling: Head/tail batch processing (like proxy.cpp)\n");
