@@ -2092,10 +2092,10 @@ PYBIND11_MODULE(ep, m) {
   py::class_<Stats>(m, "Stats");
   py::class_<UcclProxy>(m, "Proxy")
       .def(py::init<uintptr_t, int, uintptr_t, size_t, int, int, int,
-                    std::string const&>(),
+                    std::string const&, int, int>(),
            py::arg("rb_addr"), py::arg("block_idx"), py::arg("gpu_buffer_addr"),
            py::arg("total_size"), py::arg("rank") = 0, py::arg("node_idx") = -1,
-           py::arg("local_rank") = 0, py::arg("peer_ip") = std::string())
+           py::arg("local_rank") = 0, py::arg("peer_ip") = std::string(), py::arg("num_experts") = -1, py::arg("num_ranks") = -1)
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)
       .def("start_local", &UcclProxy::start_local)
@@ -2148,8 +2148,8 @@ PYBIND11_MODULE(ep, m) {
             self.set_peers_meta(v);
           },
           py::arg("metas"),
-          "Attach peer metadata (list of dicts or PeerMeta objects).")
-      .def_property_readonly("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr);
+          "Attach peer metadata (list of dicts or PeerMeta objects).");
+      // .def_property_readonly("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr);
   py::class_<EnvInfo>(m, "EnvInfo")
       .def_readonly("blocks", &EnvInfo::blocks)
       .def_readonly("queue_size", &EnvInfo::queue_size)

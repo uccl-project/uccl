@@ -40,6 +40,8 @@ class Proxy {
     int local_rank = -1;
     char const* peer_ip = nullptr;
     bool pin_thread = true;
+    int num_experts = 0;
+    int num_ranks = 0;
   };
 
   explicit Proxy(Config const& cfg) : cfg_(cfg) {}

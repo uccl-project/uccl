@@ -58,5 +58,6 @@ struct ProxyCtx {
 
   uint32_t tag = 0;
 
-  std::map<std::pair<int, int>, size_t> token_counter;
+    std::map<std::tuple<int,int,int>, size_t> token_counter;  // (buffer, expert, src)
+    std::map<std::pair<int,int>, size_t>      combine_token_counter; // (buffer, expert)
 };

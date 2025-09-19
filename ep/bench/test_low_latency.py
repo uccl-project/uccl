@@ -411,7 +411,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     )
     print(num_rdma_bytes, "bytes low-latency RDMA buffer allocated", flush=True)
     proxies, workers, bench = initialize_uccl(
-        scratch, num_rdma_bytes, rank, num_ranks, group
+        scratch, num_rdma_bytes, rank, num_ranks, group, args.num_experts
     )
 
     buffer = Buffer(

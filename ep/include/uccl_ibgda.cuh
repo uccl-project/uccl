@@ -23,7 +23,7 @@ namespace uccl {
 __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     uint64_t req_rptr, uint64_t req_lptr, size_t bytes, int dst_rank,
     int expert_idx, int lane_id, int message_idx, uint64_t const* ring_addrs,
-    int num_ring_addrs, bool is_combine) {
+    int num_ring_addrs, bool is_combine, int low_latency_buffer_idx = -1) {
   // NOTE(MaoZiming): different from the nvshmemi_ibgda_put_nbi_warp in
   // ibgda_device.cuh, we don't do warp-cooperation.
   if (lane_id != 0) return;
@@ -65,6 +65,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       cmd.lane_id = lane_id;
       cmd.message_idx = message_idx;
       cmd.is_combine = is_combine;
+      cmd.low_latency_buffer_idx = low_latency_buffer_idx;
       rb->atomic_set_and_commit(cmd, &slot);
       break;
     }

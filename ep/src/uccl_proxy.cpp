@@ -4,7 +4,7 @@
 
 UcclProxy::UcclProxy(uintptr_t rb_addr, int block_idx,
                      uintptr_t gpu_buffer_addr, size_t total_size, int rank,
-                     int node_idx, int local_rank, std::string const& peer_ip)
+                     int node_idx, int local_rank, std::string const& peer_ip, int num_experts, int num_ranks)
     : peer_ip_storage_{peer_ip}, thread_{}, mode_{Mode::None}, running_{false} {
   Proxy::Config cfg;
   // cfg.rb = reinterpret_cast<DeviceToHostCmdBuffer*>(rb_addr);
@@ -18,6 +18,8 @@ UcclProxy::UcclProxy(uintptr_t rb_addr, int block_idx,
   cfg.rank = rank;
   cfg.local_rank = local_rank;
   cfg.peer_ip = peer_ip_storage_.empty() ? nullptr : peer_ip_storage_.c_str();
+  cfg.num_experts = num_experts;
+  cfg.num_ranks = num_ranks;
   proxy_ = std::make_unique<Proxy>(cfg);
   local_rank_ = local_rank;
   node_idx_ = node_idx;
