@@ -461,6 +461,12 @@ def initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group):
 
     peer_ip = get_peer_ip(rank, num_ranks, group)
     is_intranode = peer_ip == "127.0.0.1" or peer_ip == ""
+    local_rank = int(os.environ["LOCAL_RANK"])
+    nproc_per_node = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
+    node_idx = rank // nproc_per_node
+
+    if int(os.environ.get("WORLD_SIZE")) % nproc_per_node != 0:
+        raise ValueError("WORLD_SIZE must be divisible by LOCAL_WORLD_SIZE")
 
     if rank == 0:
         print(f"Peer IP: {peer_ip}, intranode mode: {is_intranode}", flush=True)
@@ -482,6 +488,8 @@ def initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group):
             gpu_buffer_addr=scratch_ptr,
             total_size=scratch_nbytes,
             rank=rank,
+            node_idx=node_idx,
+            local_rank=local_rank,
             peer_ip="" if is_intranode else peer_ip,  # 关键：intranode 时使用空字符串
         )
         proxy.set_peers_meta(peers_meta_list)
