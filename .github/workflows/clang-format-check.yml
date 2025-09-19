@@ -81,7 +81,7 @@ jobs:
     - name: Check Python formatting
       run: |
         PYTHON_DIRS=("p2p" "ep")
-        EXCLUDES="thirdparty|doc|build"
+        EXCLUDES="thirdparty|docs|build"
 
         for DIR in "${PYTHON_DIRS[@]}"; do
           if [ -d "$DIR" ]; then

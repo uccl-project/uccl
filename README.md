@@ -1,6 +1,6 @@
 <div align="center">
 
-<p align="center"> <img src="./doc/images/uccl_logo.png" alt="" width="300"> </p>
+<p align="center"> <img src="./docs/images/uccl_logo.png" alt="" width="300"> </p>
 
 [![🌐 UCCL](https://img.shields.io/badge/-Visit%20Website-5865F2?style=for-the-badge)](https://uccl-project.github.io/) [![Github](https://img.shields.io/badge/UCCL-000000?style=for-the-badge&logo=github&logoColor=000&logoColor=white)](https://github.com/uccl-project/uccl) [![Twitter](https://img.shields.io/badge/UCCL-white?style=for-the-badge&logo=X&logoColor=000&color=000&labelColor=white)](https://x.com/uccl_proj)
 <p align="center">
@@ -26,13 +26,13 @@ For collectives, UCCL-collective serves as a drop-in replacement for NCCL/RCCL (
 <summary>UCCL-collective performance comparison</summary>
 
 * On six HGX servers (across two racks) with 8x400G CX-7 RoCE NICs and 8xH100 GPUs, UCCL-collective outperforms NCCL by up to **2.5x** for AllReduce:
-  <p align="left"> <img src="./doc/images/allreduce_6_hgx.png" alt="" width="600"> </p>
+  <p align="left"> <img src="./docs/images/allreduce_6_hgx.png" alt="" width="600"> </p>
 
 * On four AWS `p4d.24xlarge` instances with 4x100G EFA NICs and 8xA100 GPUs, UCCL-collective outperforms NCCL by up to **3.3x** for AlltoAll: 
-  <p align="left"> <img src="./doc/images/alltoall_4_p4d.png" alt="" width="600"> </p>
+  <p align="left"> <img src="./docs/images/alltoall_4_p4d.png" alt="" width="600"> </p>
 
 * On two AWS `g4dn.8xlarge` instances with 1x50G ENA NICs and 1xT4 GPUs within the same cluster placement group, UCCL-collective outperforms NCCL by up to **3.7x** for AllReduce: 
-  <p align="left"> <img src="./doc/images/allreduce_2_g4dn.png" alt="" width="600"> </p>
+  <p align="left"> <img src="./docs/images/allreduce_2_g4dn.png" alt="" width="600"> </p>
 
 More specifically, UCCL-collective aims to: 
 * rearchitect the CCL layer (while keeping NCCL APIs) to unleash the full potential of network hardware
@@ -97,7 +97,7 @@ Now, you can just run your PyTorch applications and enjoy UCCL performance benef
 
 ## Dev Guide
 
-Please refer to [doc/README.md](doc/README.md) for full development guide of UCCL.
+Please refer to [docs/README.md](docs/README.md) for full development guide of UCCL.
 
 ## Citation
 The code in this repository is mostly described in the paper below. Please consider citing this work if you find the repository helpful. 

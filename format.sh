@@ -3,7 +3,7 @@
 
 set -e
 
-# Directories to format (excluding thirdparty/, scripts/, doc/, etc.)
+# Directories to format (excluding thirdparty/, scripts/, docs/, etc.)
 
 DIRECTORIES=("collective" "ep" "misc" "p2p" "include" "eccl")
 
@@ -59,7 +59,7 @@ done
 echo "Formatting Python files with black..."
 
 PYTHON_DIRS=("p2p" "ep")  # Adjust as needed
-BLACK_EXCLUDES=("thirdparty" "doc" "build")
+BLACK_EXCLUDES=("thirdparty" "docs" "build")
 
 # Convert to exclude args
 BLACK_EXCLUDE_ARGS=$(IFS="|"; echo "${BLACK_EXCLUDES[*]}")
