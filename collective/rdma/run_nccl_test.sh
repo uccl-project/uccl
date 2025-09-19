@@ -1,6 +1,6 @@
 # !/bin/bash
 
-source ../scripts/shared.sh
+source ../../scripts/shared.sh
 
 # Usage ./run_nccl_test.sh [UCCL] [# of Nodes] [# of GPUs per process] [allreduce/alltoall: 0/1]
 
@@ -57,7 +57,7 @@ if [ "$TEST" = "rccl" ]; then
     PLUGIN_PATH=""
 elif [ "$TEST" = "uccl" ]; then
     echo "Running UCCL test"
-    # PLUGIN_PATH="${UCCL_HOME}/rdma/libnccl-net-uccl.so"
+    # PLUGIN_PATH="${UCCL_HOME}/collective/rdma/libnccl-net-uccl.so"
     PLUGIN_PATH=`python -c "import uccl; print(uccl.nccl_plugin_path())"`
     echo "PLUGIN_PATH: ${PLUGIN_PATH}"
 else

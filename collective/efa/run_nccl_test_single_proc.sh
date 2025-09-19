@@ -1,6 +1,6 @@
 # !/bin/bash
 
-source ../scripts/shared.sh
+source ../../scripts/shared.sh
 
 # Run nccl-tests with multiple processes
 # Usage: ./run_nccl_test_mp.sh [srd|ud] [Total Processes/Ranks/GPUs] [Benchtype, 0: alltoall, 1: allgather, 2: multi-allreduce]
@@ -45,7 +45,7 @@ if [ "$TEST" = "srd" ]; then
     BUFFSIZE=8388608
 fi
 
-NODEFILE="../scripts/node_ips/p4d.txt"
+NODEFILE="../../scripts/node_ips/p4d.txt"
 NODES=$(get_nodes $NODEFILE)
 echo "Running test: ${TEST}, ${PROG_NAME}, ${NUM_PROCS} processes, NIC ${NIC}, uccl_quite ${UCCL_QUITE}, ${NODES}, ${CHANNELS} channels."
 
@@ -95,7 +95,7 @@ elif [ "$TEST" = "ud" ]; then
     done
 
     # LIBNCCL_PATH="${UCCL_HOME}/thirdparty/nccl-sg/build/lib/libnccl.so"
-    # PLUGIN_PATH="${UCCL_HOME}/efa/libnccl-net-efa.so"
+    # PLUGIN_PATH="${UCCL_HOME}/collective/efa/libnccl-net-efa.so"
     LIBNCCL_PATH=`python -c "import uccl; print(uccl.efa_nccl_path())"`
     PLUGIN_PATH=`python -c "import uccl; print(uccl.efa_plugin_path())"`
     echo "LIBNCCL_PATH: ${LIBNCCL_PATH}"
@@ -126,7 +126,7 @@ elif [ "$TEST" = "ud" ]; then
         -x NCCL_GDRCOPY_SYNC_ENABLE=0 \
         -x NCCL_GDRCOPY_FIFO_ENABLE=0 \
         -x CUDA_MODULE_LOADING=EAGER \
-        -x NCCL_TOPO_FILE=${UCCL_HOME}/efa/p4d-24xl-topo.xml \
+        -x NCCL_TOPO_FILE=${UCCL_HOME}/collective/efa/p4d-24xl-topo.xml \
         -x NCCL_PXN_DISABLE=1 \
         -x UCCL_ENGINE_QUIET=1 \
         ${UCCL_HOME}/thirdparty/nccl-tests/build/${PROG_NAME} \

@@ -37,7 +37,7 @@ sudo modprobe ib_uverbs
 
 # Environment variables for UCCL
 export NCCL_LD_PRELOAD="${UCCL_HOME}/thirdparty/nccl-sg/build/lib/libnccl.so"
-export NCCL_NET_PLUGIN="${UCCL_HOME}/efa/libnccl-net-efa.so"
+export NCCL_NET_PLUGIN="${UCCL_HOME}/collective/efa/libnccl-net-efa.so"
 export NCCL_DEBUG=
 export NCCL_PROTO=Simple
 export NCCL_P2P_DISABLE=${NV_LINK_DISABLE}
@@ -50,7 +50,7 @@ export NCCL_NCHANNELS_PER_NET_PEER=${CHANNELS_NET_PEER}
 export NCCL_P2P_NET_CHUNKSIZE=${CHUNK_SIZE}
 export NCCL_BUFFSIZE=${BUFFSIZE}
 export NCCL_NET_GDR_LEVEL=SYS
-export NCCL_TOPO_FILE=${UCCL_HOME}/efa/p4d-24xl-topo.xml
+export NCCL_TOPO_FILE=${UCCL_HOME}/collective/efa/p4d-24xl-topo.xml
 export UCCL_ENGINE_QUIET=1
 export GLOG_logtostderr=0
 
@@ -127,7 +127,7 @@ for ((i=1; i<${#HOSTS[@]}; i++)); do
     sudo rmmod ib_uverbs || true && \
     sudo modprobe ib_uverbs && \
     export LD_PRELOAD=${NCCL_LD_PRELOAD} && \
-    export NCCL_NET_PLUGIN="${UCCL_HOME}/efa/libnccl-net-efa.so" && \
+    export NCCL_NET_PLUGIN="${UCCL_HOME}/collective/efa/libnccl-net-efa.so" && \
     export NCCL_DEBUG= && \
     export NCCL_PROTO=Simple && \
     export NCCL_P2P_DISABLE=${NV_LINK_DISABLE} && \
@@ -139,7 +139,7 @@ for ((i=1; i<${#HOSTS[@]}; i++)); do
     export NCCL_P2P_NET_CHUNKSIZE=${CHUNK_SIZE} && \
     export NCCL_BUFFSIZE=${BUFFSIZE} && \
     export NCCL_NET_GDR_LEVEL=SYS && \
-    export NCCL_TOPO_FILE=${UCCL_HOME}/efa/p4d-24xl-topo.xml && \
+    export NCCL_TOPO_FILE=${UCCL_HOME}/collective/efa/p4d-24xl-topo.xml && \
     export UCCL_ENGINE_QUIET=1 && \
     export GLOG_logtostderr=0 && \
     export NCCL_ASYNC_ERROR_HANDLING=1 && \
@@ -192,7 +192,7 @@ sudo sysctl -w vm.nr_hugepages=2048 && \
 sudo rmmod ib_uverbs || true && \
 sudo modprobe ib_uverbs && \
 export LD_PRELOAD=${NCCL_LD_PRELOAD} && \
-export NCCL_NET_PLUGIN="${UCCL_HOME}/efa/libnccl-net-efa.so" && \
+export NCCL_NET_PLUGIN="${UCCL_HOME}/collective/efa/libnccl-net-efa.so" && \
 export NCCL_DEBUG= && \
 export NCCL_PROTO=Simple && \
 export NCCL_P2P_DISABLE=${NV_LINK_DISABLE} && \
@@ -204,7 +204,7 @@ export NCCL_NCHANNELS_PER_NET_PEER=${CHANNELS_NET_PEER} && \
 export NCCL_P2P_NET_CHUNKSIZE=${CHUNK_SIZE} && \
 export NCCL_BUFFSIZE=${BUFFSIZE} && \
 export NCCL_NET_GDR_LEVEL=SYS && \
-export NCCL_TOPO_FILE=${UCCL_HOME}/efa/p4d-24xl-topo.xml && \
+export NCCL_TOPO_FILE=${UCCL_HOME}/collective/efa/p4d-24xl-topo.xml && \
 export UCCL_ENGINE_QUIET=1 && \
 export GLOG_logtostderr=0 && \
 export NCCL_ASYNC_ERROR_HANDLING=1 && \
