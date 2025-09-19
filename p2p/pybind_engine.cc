@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "tensor.h"
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -9,6 +10,18 @@ PYBIND11_MODULE(p2p, m) {
   m.doc() = "P2P Engine - High-performance RDMA-based peer-to-peer transport";
 
   m.def("get_oob_ip", &get_oob_ip, "Get the OOB IP address");
+
+  m.def("create_tensor", [](int gpu_index, size_t num_elems, size_t dtype_size, bool requires_grad = false) {
+      uint64_t mr_id, ipc_id;
+      auto tensor = create_tensor(gpu_index, num_elems, dtype_size, mr_id, ipc_id, requires_grad);
+      return std::make_tuple(tensor, mr_id, ipc_id);
+  }, "Create a tensor with RDMA capabilities",
+      py::arg("gpu_index"), py::arg("num_elems"), py::arg("dtype_size"), py::arg("requires_grad") = false);
+
+  m.def("free_tensor", [](torch::Tensor& tensor, uint64_t mr_id, uint64_t ipc_id) {
+      free_tensor(tensor, mr_id, ipc_id);
+  }, "Free the tensor and associated RDMA resources",
+      py::arg("tensor"), py::arg("mr_id"), py::arg("ipc_id"));
 
   // Endpoint class binding
   py::class_<Endpoint>(m, "Endpoint")
