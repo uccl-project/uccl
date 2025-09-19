@@ -312,7 +312,6 @@ class Endpoint {
     RECVV,
   };
   struct TaskBatch {
-    TaskType type;
     size_t num_iovs;  // Number of IO vectors
     std::shared_ptr<std::vector<void const*>> const_data_ptr;  // for SENDV
     std::shared_ptr<std::vector<void*>> data_ptr;              // for RECVV
@@ -320,11 +319,11 @@ class Endpoint {
     std::shared_ptr<std::vector<uint64_t>> mr_id_ptr;
 
     // Constructor for move semantics
-    TaskBatch() : type(TaskType::SENDV), num_iovs(0) {}
+    TaskBatch() : num_iovs(0) {}
     
     // Move constructor
     TaskBatch(TaskBatch&& other) noexcept 
-        : type(other.type), num_iovs(other.num_iovs),
+        : num_iovs(other.num_iovs),
           const_data_ptr(std::move(other.const_data_ptr)),
           data_ptr(std::move(other.data_ptr)),
           size_ptr(std::move(other.size_ptr)),
@@ -333,7 +332,6 @@ class Endpoint {
     // Move assignment
     TaskBatch& operator=(TaskBatch&& other) noexcept {
       if (this != &other) {
-        type = other.type;
         num_iovs = other.num_iovs;
         const_data_ptr = std::move(other.const_data_ptr);
         data_ptr = std::move(other.data_ptr);
@@ -348,11 +346,11 @@ class Endpoint {
     TaskBatch& operator=(const TaskBatch&) = delete;
 
     void const** const_data_v() const {
-      if (type != TaskType::SENDV || !const_data_ptr) return nullptr;
+      if (!const_data_ptr) return nullptr;
       return const_data_ptr->data();
     }
     void** data_v() const {
-      if (type != TaskType::RECVV || !data_ptr) return nullptr;
+      if (!data_ptr) return nullptr;
       return data_ptr->data();
     }
     size_t* size_v() const {
@@ -514,7 +512,6 @@ class Endpoint {
     size_t num_iovs = const_data_ptr->size();
 
     TaskBatch batch;
-    batch.type = TaskType::SENDV;
     batch.num_iovs = num_iovs;
     batch.const_data_ptr = std::move(const_data_ptr);  // Transfer ownership
     batch.size_ptr = std::move(size_ptr);
@@ -539,7 +536,6 @@ class Endpoint {
     auto mr_id_ptr = std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
 
     TaskBatch batch;
-    batch.type = TaskType::RECVV;
     batch.num_iovs = num_iovs;
     batch.data_ptr = std::move(data_ptr);
     batch.size_ptr = std::move(size_ptr);
