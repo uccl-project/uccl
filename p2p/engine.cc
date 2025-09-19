@@ -828,15 +828,15 @@ bool Endpoint::sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                            uint64_t* transfer_id) {
   [[maybe_unused]] auto _ =
       PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
-  
-  // Create shared_ptrs and move data to reduce memory copies
+
   auto const_data_ptr =
       std::make_shared<std::vector<void const*>>(std::move(data_v));
   auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
   auto mr_id_ptr = std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
-  
-  UnifiedTask* task = create_sendv_task(conn_id, std::move(const_data_ptr),
-                                        std::move(size_ptr), std::move(mr_id_ptr));
+
+  UnifiedTask* task =
+      create_sendv_task(conn_id, std::move(const_data_ptr), std::move(size_ptr),
+                        std::move(mr_id_ptr));
   if (unlikely(task == nullptr)) {
     return false;
   }
@@ -858,7 +858,7 @@ bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
       PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
   // Use move semantics to reduce memory copies
-  UnifiedTask* task = create_recvv_task(conn_id, std::move(data_v), 
+  UnifiedTask* task = create_recvv_task(conn_id, std::move(data_v),
                                         std::move(size_v), std::move(mr_id_v));
   if (unlikely(task == nullptr)) {
     return false;
@@ -1707,7 +1707,7 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   auto task = reinterpret_cast<UnifiedTask*>(transfer_id);
   *is_done = task->done.load(std::memory_order_acquire);
   if (*is_done) {
-    destroy_unified_task(task);
+    delete task;
   }
   return true;
 }

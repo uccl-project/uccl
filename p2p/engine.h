@@ -318,18 +318,15 @@ class Endpoint {
     std::shared_ptr<std::vector<size_t>> size_ptr;
     std::shared_ptr<std::vector<uint64_t>> mr_id_ptr;
 
-    // Constructor for move semantics
     TaskBatch() : num_iovs(0) {}
-    
-    // Move constructor
-    TaskBatch(TaskBatch&& other) noexcept 
+
+    TaskBatch(TaskBatch&& other) noexcept
         : num_iovs(other.num_iovs),
           const_data_ptr(std::move(other.const_data_ptr)),
           data_ptr(std::move(other.data_ptr)),
           size_ptr(std::move(other.size_ptr)),
           mr_id_ptr(std::move(other.mr_id_ptr)) {}
-    
-    // Move assignment
+
     TaskBatch& operator=(TaskBatch&& other) noexcept {
       if (this != &other) {
         num_iovs = other.num_iovs;
@@ -340,10 +337,9 @@ class Endpoint {
       }
       return *this;
     }
-    
-    // Delete copy constructor and assignment
-    TaskBatch(const TaskBatch&) = delete;
-    TaskBatch& operator=(const TaskBatch&) = delete;
+
+    TaskBatch(TaskBatch const&) = delete;
+    TaskBatch& operator=(TaskBatch const&) = delete;
 
     void const** const_data_v() const {
       if (!const_data_ptr) return nullptr;
@@ -429,16 +425,20 @@ class Endpoint {
         TaskBatch task_batch;
         uint8_t reserved[MAX_RESERVE_SIZE - sizeof(TaskBatch)];
       } batch;
-      
+
       SpecificData() : base{} {}
-      ~SpecificData() {}  // Union destructor does nothing by default
     } specific;
 
-    // Constructor
-    UnifiedTask() : type(TaskType::SEND_NET), data(nullptr), size(0), 
-                    conn_id(0), mr_id(0), done(false), self_ptr(this), specific() {}
+    UnifiedTask()
+        : type(TaskType::SEND_NET),
+          data(nullptr),
+          size(0),
+          conn_id(0),
+          mr_id(0),
+          done(false),
+          self_ptr(this),
+          specific() {}
 
-    // Destructor to properly cleanup TaskBatch if needed
     ~UnifiedTask() {
       if (is_batch_task()) {
         specific.batch.task_batch.~TaskBatch();
@@ -493,21 +493,20 @@ class Endpoint {
     task->mr_id = 0;
     task->data = nullptr;
     task->size = 0;
-    
-    // Use placement new to construct TaskBatch in the union
+    // placement new
     new (&task->specific.batch.task_batch) TaskBatch(std::move(batch));
-    
     return task;
   }
 
   inline UnifiedTask* create_sendv_task(
-      uint64_t conn_id, std::shared_ptr<std::vector<void const*>> const_data_ptr,
+      uint64_t conn_id,
+      std::shared_ptr<std::vector<void const*>> const_data_ptr,
       std::shared_ptr<std::vector<size_t>> size_ptr,
       std::shared_ptr<std::vector<uint64_t>> mr_id_ptr) {
     if (!const_data_ptr || !size_ptr || !mr_id_ptr ||
         const_data_ptr->size() != size_ptr->size() ||
         size_ptr->size() != mr_id_ptr->size()) {
-      return nullptr;  // Error check
+      return nullptr;
     }
     size_t num_iovs = const_data_ptr->size();
 
@@ -520,20 +519,19 @@ class Endpoint {
     return create_batch_task(conn_id, TaskType::SENDV, std::move(batch));
   }
 
-  // Create batch task for RECVV operations
   inline UnifiedTask* create_recvv_task(uint64_t conn_id,
                                         std::vector<void*>&& data_v,
                                         std::vector<size_t>&& size_v,
                                         std::vector<uint64_t>&& mr_id_v) {
     if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size()) {
-      return nullptr;  // Error check
+      return nullptr;
     }
     size_t num_iovs = data_v.size();
 
-    // Create shared_ptrs and move data
     auto data_ptr = std::make_shared<std::vector<void*>>(std::move(data_v));
     auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
-    auto mr_id_ptr = std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
+    auto mr_id_ptr =
+        std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
 
     TaskBatch batch;
     batch.num_iovs = num_iovs;
@@ -558,14 +556,6 @@ class Endpoint {
     UnifiedTask* task = create_task(conn_id, mr_id, type, data, size);
     task->ipc_info() = ipc_info;
     return task;
-  }
-
-  // Destroy UnifiedTask and cleanup resources
-  inline void destroy_unified_task(UnifiedTask* task) {
-    if (!task) return;
-    
-    // The destructor will handle TaskBatch cleanup properly
-    delete task;
   }
 
   // For both net and ipc send/recv tasks.
