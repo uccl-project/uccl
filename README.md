@@ -74,10 +74,11 @@ The easiest way to use UCCL is to first build based on your platform. The build 
 
 ```bash
 git clone https://github.com/uccl-project/uccl.git --recursive
-cd uccl && bash build_and_install.sh [cuda|rocm|therock] [all|rdma|p2p|efa|ep] [py_version] [gfx_version]
+cd uccl && bash build_and_install.sh [cuda|rocm|therock] [all|rdma|p2p|efa|ep] [py_version] [rocm_index_url]
 ```
-> When building for ROCm with python packaging through TheRock, please, specify your AMD GPU's gfx architecture. The default is `gfx94X-dcgpu` and it may not be what you want. When installing UCCL wheels for TheRock, please, add the optional extra `[rocm]` to the wheel, e.g., `python install wheelhouse-therock/uccl-0.0.1.post4+therock-py3-none-manylinux_2_35_x86_64.whl[rocm]` and provide pip with the extra index for your gfx arch ROCm packages, e.g. `--extra-index-url http://rocm.nightlies.amd.com/v2/gfx94X-dcgpu`.
-
+> Note: 
+> - when building for ROCm with python packaging through TheRock, please specify your ROCm index url; the default is `https://rocm.nightlies.amd.com/v2/gfx94X-dcgpu` and it may not be what you want. When installing UCCL wheels for TheRock, please provide pip with the index url and add the optional extra `[rocm]` to the wheel, e.g., `pip install --extra-index-url https://rocm.nightlies.amd.com/v2/gfx94X-dcgpu wheelhouse-therock/uccl-0.0.1.post4+therock-py3-none-manylinux_2_35_x86_64.whl[rocm]`.
+> - you can build with different CUDA or ROCm versions by specifying tags such as cuda13 or rocm6. The default versions are CUDA 12.x for the "cuda" tag and ROCm 7.x for the "rocm" tag.
 
 Then, when running your PyTorch applications, set the environment variable accordingly: 
 ```bash

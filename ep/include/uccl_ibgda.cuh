@@ -164,6 +164,10 @@ __device__ __forceinline__ uint64_t get_ipc_p2p_ptr(uint64_t const& local_ptr,
       reinterpret_cast<uintptr_t>(reinterpret_cast<void*>(local_ptr)) -
       reinterpret_cast<uintptr_t>(ipc_base_ptrs[src_local_rank]);
 
+  // printf("src_local_rank: %d, dst_local_rank: %d, offset: %zu, local_ptr: %p,
+  // base_ptr: %p\n", src_local_rank, dst_local_rank, offset, (void*)local_ptr,
+  // ipc_base_ptrs[src_local_rank]);
+
   // Return the remote pointer as uint64_t
   return reinterpret_cast<uint64_t>(ipc_base_ptrs[dst_local_rank]) + offset;
 }

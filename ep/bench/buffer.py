@@ -83,6 +83,7 @@ class Buffer:
             num_rdma_bytes,
             low_latency_mode,
             explicitly_destroy,
+            int(os.environ.get("LOCAL_WORLD_SIZE", -1)),
         )
         self.runtime.set_rdma_buffer_raw(rdma_buffer_ptr)
 

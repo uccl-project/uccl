@@ -42,10 +42,9 @@ Usage: ./run_rccl_test.sh [RCCL/UCCLL: rccl/uccl, default:uccl]
 ### Build `nccl` and `nccl-tests`: 
 
 ```bash
-# Eg, /home/yangz/uccl
-export UCCL_HOME=<the path of uccl>
+export UCCL_HOME=<the path of uccl> # Eg, /home/yangz/uccl
 
-# Build nccl (taking ~3min); assume H100 GPUs
+# Build nccl ~3min; assume H100 GPUs
 cd $UCCL_HOME/thirdparty/nccl
 make src.build -j NVCC_GENCODE="-gencode=arch=compute_90,code=sm_90"
 cp src/include/nccl_common.h build/include/
@@ -93,14 +92,12 @@ This guide assumes under the [AMD HPC Fund cluster](https://amdresearch.github.i
 ### Build `rccl` and `rccl-tests`: 
 
 ```bash
-# Export the path of uccl
 export UCCL_HOME="/home1/yangzhou/uccl"
-# Export the path of anaconda lib
 export CONDA_LIB_HOME="/work1/yzhou/yangzhou/anaconda3/lib"
 
 # Avoiding gfx950 as the HPC Fund cluster clang does not support it yet. Note this takes ~20min. 
 cd $UCCL_HOME/thirdparty/rccl
-./install.sh --amdgpu_targets="gfx906;gfx908;gfx90a;gfx942;gfx1030;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201" -j 16
+./install.sh --amdgpu_targets="gfx906;gfx908;gfx90a;gfx942;gfx1030;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201" --disable-mscclpp -j 16
 
 cd $UCCL_HOME/thirdparty/rccl-tests
 make MPI=1 MPI_HOME=/opt/ohpc/pub/mpi/openmpi4-gnu12/4.1.5 HIP_HOME=/opt/rocm-6.3.1 NCCL_HOME=/opt/rocm-6.3.1/include/rccl CUSTOM_RCCL_LIB=/opt/rocm-6.3.1/lib/librccl.so -j

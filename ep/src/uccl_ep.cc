@@ -77,7 +77,7 @@ bool is_sm90_compiled() {
 class Buffer {
  public:
   Buffer(int rank, int num_ranks, long num_nvl_bytes, long num_rdma_bytes,
-         bool low_latency_mode, bool explicitly_destroy)
+         bool low_latency_mode, bool explicitly_destroy, int num_local_ranks)
       : rank(rank),
         num_ranks(num_ranks),
         num_nvl_bytes(num_nvl_bytes),
@@ -85,53 +85,16 @@ class Buffer {
         low_latency_mode(low_latency_mode),
         explicitly_destroy(explicitly_destroy),
         comm_stream(at::cuda::getStreamFromPool(/*isHighPriority=*/true)) {
-    int max_nvl_peers = get_num_max_nvl_peers();
+    if (num_local_ranks == -1) num_local_ranks = get_num_max_nvl_peers();
+    max_nvl_peers = num_local_ranks;
     {
       printf(
-          "Buffer initializing for rank %d, num_ranks %d, num_nvl_bytes %ld, "
-          "num_rdma_bytes %ld\n",
-          rank, num_ranks, num_nvl_bytes, num_rdma_bytes);
+          "Buffer initializing for rank %d, num_ranks %d, num_nvl_bytes %ld,"
+          "num_rdma_bytes %ld, max_nvl_peers %d\n",
+          rank, num_ranks, num_nvl_bytes, num_rdma_bytes, max_nvl_peers);
+      cudaGetDevice(&device_index);
       {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
-
-        // First get the current device to check consistency
-        int current_device;
-        CUDA_CHECK(cudaGetDevice(&current_device));
-
-        // For single node scenarios, device_index should match local rank
-        // For multi-node scenarios, we need to calculate the correct device
-        int expected_device =
-            rank % max_nvl_peers;  // Assume device mapping based on rank
-
-        // If current device doesn't match expected, try to set it
-        if (current_device != expected_device) {
-          printf(
-              "Buffer: Device mismatch detected. Current: %d, Expected: %d for "
-              "rank %d. "
-              "Attempting to set correct device...\n",
-              current_device, expected_device, rank);
-
-          // Try to set the expected device
-          cudaError_t set_result = cudaSetDevice(expected_device);
-          if (set_result == cudaSuccess) {
-            device_index = expected_device;
-            printf("Buffer: Successfully set device to %d for rank %d\n",
-                   device_index, rank);
-          } else {
-            // If we can't set the expected device, use current device but warn
-            printf(
-                "Buffer: WARNING - Could not set device %d for rank %d (error: "
-                "%s). "
-                "Using current device %d\n",
-                expected_device, rank, cudaGetErrorString(set_result),
-                current_device);
-            device_index = current_device;
-          }
-        } else {
-          device_index = current_device;
-        }
-
-        // Now check if proxy is registered for this device
         auto it = uccl::g_proxies_by_dev.find(device_index);
         if (it == uccl::g_proxies_by_dev.end() || it->second.empty()) {
           throw std::runtime_error(
@@ -163,12 +126,15 @@ class Buffer {
           dev_ptr = host_ptr;
 #endif
           d_ring_addrs[i] = reinterpret_cast<uint64_t>(dev_ptr);
+          // printf("Ring buffer %d addr: host %p, dev %p\n", i, host_ptr,
+          //        dev_ptr);
         }
         CUDA_CHECK(cudaDeviceSynchronize());
         // Allocate device memory for IPC base pointers
-        CUDA_CHECK(cudaMalloc(&d_ipc_base_ptrs, max_nvl_peers * sizeof(void*)));
         CUDA_CHECK(
-            cudaMemset(d_ipc_base_ptrs, 0, max_nvl_peers * sizeof(void*)));
+            cudaMalloc(&d_ipc_rdma_base_ptrs, max_nvl_peers * sizeof(void*)));
+        CUDA_CHECK(
+            cudaMemset(d_ipc_rdma_base_ptrs, 0, max_nvl_peers * sizeof(void*)));
       }
     }
 
@@ -362,10 +328,18 @@ class Buffer {
       CUDA_CHECK(cudaFree(buffer_ptrs[nvl_rank]));
     }
 
+    if (num_rdma_bytes > 0) {
+      for (int i = 0; i < num_nvl_ranks; ++i) {
+        if (i != nvl_rank && ipc_rdma_base_ptrs[i] != nullptr) {
+          CUDA_CHECK(cudaIpcCloseMemHandle(ipc_rdma_base_ptrs[i]));
+        }
+      }
+    }
+
     // Free workspace and MoE counter
     CUDA_CHECK(cudaFree(workspace));
-    if (d_ipc_base_ptrs != nullptr) {
-      CUDA_CHECK(cudaFree(d_ipc_base_ptrs));
+    if (d_ipc_rdma_base_ptrs != nullptr) {
+      CUDA_CHECK(cudaFree(d_ipc_rdma_base_ptrs));
     }
     CUDA_CHECK(cudaFreeHost(const_cast<int*>(moe_recv_counter)));
 
@@ -1365,6 +1339,8 @@ class Buffer {
                                          hidden, num_ranks, num_experts);
     auto clean_meta_0 = layout.buffers[0].clean_meta();
     auto clean_meta_1 = layout.buffers[1].clean_meta();
+    auto [ptr0, ptr_internode0, count0] = clean_meta_0;
+    auto [ptr1, ptr_internode1, count1] = clean_meta_1;
 
     auto check_boundary = [=](void* ptr, size_t num_bytes) {
       auto offset = reinterpret_cast<int64_t>(ptr) -
@@ -1372,12 +1348,11 @@ class Buffer {
       EP_HOST_ASSERT(0 <= offset &&
                      offset + num_bytes <= static_cast<size_t>(num_rdma_bytes));
     };
-    check_boundary(clean_meta_0.first, clean_meta_0.second * sizeof(int));
-    check_boundary(clean_meta_1.first, clean_meta_1.second * sizeof(int));
+    check_boundary(ptr0, count0 * sizeof(int));
+    check_boundary(ptr1, count1 * sizeof(int));
 
     uccl::internode_ll::clean_low_latency_buffer(
-        clean_meta_0.first, clean_meta_0.second, clean_meta_1.first,
-        clean_meta_1.second, at::cuda::getCurrentCUDAStream());
+        ptr0, count0, ptr1, count1, at::cuda::getCurrentCUDAStream());
   }
 
   std::tuple<torch::Tensor, std::optional<torch::Tensor>, torch::Tensor,
@@ -1484,7 +1459,7 @@ class Buffer {
     }
 
     // Kernel launch
-    auto next_clean_meta = next_buffer.clean_meta();
+    auto [ptr0, ptr_internode0, count0] = next_buffer.clean_meta();
     auto launcher = [=](int phases) {
       uccl::internode_ll::dispatch(
           packed_recv_x.data_ptr(), packed_recv_x_scales_ptr,
@@ -1500,13 +1475,14 @@ class Buffer {
           buffer.dispatch_rdma_recv_data_buffer,
           buffer.dispatch_rdma_recv_count_buffer,
           buffer.dispatch_rdma_send_buffer, x.data_ptr(),
-          topk_idx.data_ptr<int64_t>(), next_clean_meta.first,
-          next_clean_meta.second, num_tokens, hidden,
-          num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
-          num_ranks, use_fp8, round_scale, use_ue8m0, workspace, num_device_sms,
-          launch_stream, phases, d_ring_addrs, num_ring_addrs,
-          get_num_max_nvl_peers(), d_ipc_base_ptrs, rdma_buffer_ptr,
-          atomic_buffer_ptr);  // Added IPC base pointers
+          topk_idx.data_ptr<int64_t>(), ptr0, ptr_internode0, count0,
+          num_tokens, hidden, num_max_dispatch_tokens_per_rank, num_topk,
+          num_experts, rank, num_ranks, use_fp8, round_scale, use_ue8m0,
+          workspace, num_device_sms, launch_stream, phases, d_ring_addrs,
+          num_ring_addrs, max_nvl_peers, d_ipc_rdma_base_ptrs, rdma_buffer_ptr,
+          atomic_buffer_ptr,
+          buffer.dispatch_rdma_recv_count_buffer_internode);  // Added IPC base
+                                                              // pointers
     };
     launcher(return_recv_hook
                  ? LOW_LATENCY_SEND_PHASE
@@ -1613,7 +1589,7 @@ class Buffer {
     }
 
     // Kernel launch
-    auto next_clean_meta = next_buffer.clean_meta();
+    auto [ptr0, ptr_internode0, count0] = next_buffer.clean_meta();
     auto launcher = [=](int phases) {
       uccl::internode_ll::combine(
           combined_x.data_ptr(), buffer.combine_rdma_recv_data_buffer,
@@ -1624,12 +1600,13 @@ class Buffer {
           combine_wait_recv_cost_stats.has_value()
               ? combine_wait_recv_cost_stats->data_ptr<int64_t>()
               : nullptr,
-          next_clean_meta.first, next_clean_meta.second, num_combined_tokens,
-          hidden, num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
+          ptr0, ptr_internode0, count0, num_combined_tokens, hidden,
+          num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
           num_ranks, use_logfmt, workspace, num_device_sms, launch_stream,
-          phases, zero_copy, d_ring_addrs, num_ring_addrs,
-          get_num_max_nvl_peers(), d_ipc_base_ptrs, rdma_buffer_ptr,
-          atomic_buffer_ptr);  // Added IPC base pointers
+          phases, zero_copy, d_ring_addrs, num_ring_addrs, max_nvl_peers,
+          d_ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr,
+          buffer.combine_rdma_recv_flag_buffer_internode);  // Added IPC base
+                                                            // pointers
     };
     launcher(return_recv_hook
                  ? LOW_LATENCY_SEND_PHASE
@@ -1659,6 +1636,24 @@ class Buffer {
 
   pybind11::bytearray get_local_ipc_handle() const {
     return {ipc_handles[nvl_rank].reserved, CUDA_IPC_HANDLE_SIZE};
+  }
+
+  pybind11::bytearray get_local_rdma_ipc_handle() {
+    EP_HOST_ASSERT(
+        rdma_buffer_ptr != nullptr &&
+        "set_rdma_buffer_raw must be called before requesting RDMA IPC handle");
+    cudaIpcMemHandle_t h{};
+    CUDA_CHECK(cudaIpcGetMemHandle(&h, rdma_buffer_ptr));
+    return {h.reserved, CUDA_IPC_HANDLE_SIZE};
+  }
+
+  pybind11::bytearray get_local_atomics_ipc_handle() {
+    EP_HOST_ASSERT(atomic_buffer_ptr != nullptr &&
+                   "set_atomic_buffer_raw must be called before requesting "
+                   "atomic IPC handle");
+    cudaIpcMemHandle_t h{};
+    CUDA_CHECK(cudaIpcGetMemHandle(&h, atomic_buffer_ptr));
+    return {h.reserved, CUDA_IPC_HANDLE_SIZE};
   }
 
   int get_num_rdma_ranks() const { return num_rdma_ranks; }
@@ -1707,12 +1702,14 @@ class Buffer {
     }
   }
 
-  void sync(std::vector<int> const& device_ids,
-            std::vector<std::optional<pybind11::bytearray>> const&
-                all_gathered_handles,
-            std::optional<pybind11::bytearray> const& root_unique_id_opt) {
+  void sync(
+      std::vector<int> const& device_ids,
+      std::vector<std::optional<pybind11::bytearray>> const&
+          all_gathered_handles,
+      std::optional<pybind11::bytearray> const& root_unique_id_opt,
+      std::optional<std::vector<std::optional<pybind11::bytearray>>> const&
+          all_gathered_rdma_handles_opt = std::nullopt) {
     EP_HOST_ASSERT(not is_available());
-    int max_nvl_peers = get_num_max_nvl_peers();
     // Sync IPC handles
     if (num_nvl_bytes > 0) {
       EP_HOST_ASSERT(static_cast<std::size_t>(num_ranks) == device_ids.size());
@@ -1756,16 +1753,6 @@ class Buffer {
       CUDA_CHECK(cudaMemcpy(barrier_signal_ptrs_gpu, barrier_signal_ptrs,
                             sizeof(int*) * max_nvl_peers,
                             cudaMemcpyHostToDevice));
-
-      // Copy IPC base pointers for GPU access (for P2P operations)
-      if (d_ipc_base_ptrs != nullptr) {
-        // For RDMA buffer access, we'll use the rdma_buffer_ptr as the base
-        // Note: This assumes rdma_buffer_ptr is set up properly for each rank
-        CUDA_CHECK(cudaMemcpy(d_ipc_base_ptrs, buffer_ptrs,
-                              sizeof(void*) * max_nvl_peers,
-                              cudaMemcpyHostToDevice));
-      }
-
       CUDA_CHECK(cudaDeviceSynchronize());
     }
 
@@ -1779,13 +1766,38 @@ class Buffer {
                 "for RDMA buffer.\n",
                 num_rdma_bytes);
         std::abort();
-      } else {
-        printf(
-            "rdma_buffer_ptr is set, using existing buffer: %p, "
-            "num_rdma_bytes: %ld\n",
-            rdma_buffer_ptr, num_rdma_bytes);
       }
       reset_rdma_buffer();
+      EP_HOST_ASSERT(all_gathered_rdma_handles_opt.has_value());
+      auto const& all_gathered_rdma_handles = *all_gathered_rdma_handles_opt;
+      EP_HOST_ASSERT(static_cast<std::size_t>(num_ranks) ==
+                     all_gathered_rdma_handles.size());
+      for (int i = 0, offset = rdma_rank * num_nvl_ranks; i < num_nvl_ranks;
+           ++i) {
+        int global_rank = offset + i;
+        int local_rank_idx = global_rank % max_nvl_peers;
+        EP_HOST_ASSERT(all_gathered_rdma_handles[global_rank].has_value());
+        auto handle_str =
+            std::string(all_gathered_rdma_handles[global_rank].value());
+        EP_HOST_ASSERT(handle_str.size() == CUDA_IPC_HANDLE_SIZE);
+
+        if (global_rank != rank) {
+          std::memcpy(rdma_ipc_handles[local_rank_idx].reserved,
+                      handle_str.c_str(), CUDA_IPC_HANDLE_SIZE);
+          CUDA_CHECK(cudaSetDevice(device_index));
+          CUDA_CHECK(cudaIpcOpenMemHandle(&ipc_rdma_base_ptrs[local_rank_idx],
+                                          rdma_ipc_handles[local_rank_idx],
+                                          cudaIpcMemLazyEnablePeerAccess));
+        } else {
+          ipc_rdma_base_ptrs[local_rank_idx] = rdma_buffer_ptr;
+        }
+      }
+      if (d_ipc_rdma_base_ptrs != nullptr) {
+        CUDA_CHECK(cudaMemcpy(d_ipc_rdma_base_ptrs, ipc_rdma_base_ptrs,
+                              sizeof(void*) * max_nvl_peers,
+                              cudaMemcpyHostToDevice));
+      }
+      CUDA_CHECK(cudaDeviceSynchronize());
     }
 
     // Ready to use
@@ -1846,6 +1858,7 @@ class Buffer {
   int rdma_rank{0}, nvl_rank{0};
   int num_rdma_ranks{1}, num_nvl_ranks{1};
   int num_device_sms{0};
+  int max_nvl_peers{0};
 
   // stream & workspace
   at::cuda::CUDAStream comm_stream;
@@ -1855,6 +1868,8 @@ class Buffer {
   int* barrier_signal_ptrs[NUM_MAX_NVL_PEERS]{};
   void** buffer_ptrs_gpu{nullptr};
   int** barrier_signal_ptrs_gpu{nullptr};
+  cudaIpcMemHandle_t rdma_ipc_handles[NUM_MAX_NVL_PEERS]{};
+  void* ipc_rdma_base_ptrs[NUM_MAX_NVL_PEERS]{};
 
   // MoE counters (host mapped)
   int volatile* moe_recv_counter = nullptr;
@@ -1871,7 +1886,7 @@ class Buffer {
   uint64_t* d_ring_addrs{nullptr};
 
   // IPC base pointers for GPU access (for replacing nvshmemi_get_p2p_ptr)
-  void** d_ipc_base_ptrs{
+  void** d_ipc_rdma_base_ptrs{
       nullptr};  // Device pointer to array of IPC base addresses
 };
 
@@ -1900,6 +1915,7 @@ PYBIND11_MODULE(ep, m) {
           std::abort();
         }
         vec.push_back(std::move(proxy));
+        printf("Registered proxy for device %d\n", device_index);
       },
       py::arg("device_index"), py::arg("proxy"));
   m.def(
@@ -1916,6 +1932,7 @@ PYBIND11_MODULE(ep, m) {
         for (auto& proxy : proxies) {
           vec.push_back(std::move(proxy));
         }
+        printf("Registered proxies for device %d\n", device_index);
       },
       py::arg("device_index"), py::arg("proxies"));
   m.def(
@@ -1956,10 +1973,11 @@ PYBIND11_MODULE(ep, m) {
 
   py::class_<EventOverlap>(m, "EventOverlap").def(py::init<>());
   py::class_<Buffer>(m, "Buffer")
-      .def(py::init<int, int, long, long, bool, bool>(), py::arg("rank"),
+      .def(py::init<int, int, long, long, bool, bool, int>(), py::arg("rank"),
            py::arg("num_ranks"), py::arg("num_nvl_bytes") = 0,
            py::arg("num_rdma_bytes") = 0, py::arg("low_latency_mode") = false,
-           py::arg("explicitly_destroy") = false)
+           py::arg("explicitly_destroy") = false,
+           py::arg("num_local_ranks") = -1)
       .def("destroy", &Buffer::destroy)
       .def(
           "set_rdma_buffer_raw",
@@ -1979,6 +1997,9 @@ PYBIND11_MODULE(ep, m) {
            py::arg("async") = false, py::arg("return_recv_hook") = false)
       .def("get_local_device_id", &Buffer::get_local_device_id)
       .def("get_local_ipc_handle", &Buffer::get_local_ipc_handle)
+      .def("get_local_rdma_ipc_handle", &Buffer::get_local_rdma_ipc_handle)
+      .def("get_local_atomics_ipc_handle",
+           &Buffer::get_local_atomics_ipc_handle)
       .def("get_num_rdma_ranks", &Buffer::get_num_rdma_ranks)
       .def("get_rdma_rank", &Buffer::get_rdma_rank)
       .def("get_root_rdma_rank", &Buffer::get_root_rdma_rank)
@@ -1988,7 +2009,8 @@ PYBIND11_MODULE(ep, m) {
            &Buffer::get_local_uccl_shmem_unique_id)
       .def("sync", &Buffer::sync, py::arg("device_ids"),
            py::arg("all_gathered_handles"),
-           py::arg("root_unique_id_opt") = py::none())
+           py::arg("root_unique_id_opt") = py::none(),
+           py::arg("all_gathered_rdma_handles") = py::none())
       .def("is_available", &Buffer::is_available)
       .def("get_next_low_latency_combine_buffer",
            &Buffer::get_next_low_latency_combine_buffer)
@@ -2066,11 +2088,11 @@ PYBIND11_MODULE(ep, m) {
   });
   py::class_<Stats>(m, "Stats");
   py::class_<UcclProxy>(m, "Proxy")
-      .def(py::init<uintptr_t, int, uintptr_t, size_t, int,
+      .def(py::init<uintptr_t, int, uintptr_t, size_t, int, int, int,
                     std::string const&>(),
            py::arg("rb_addr"), py::arg("block_idx"), py::arg("gpu_buffer_addr"),
-           py::arg("total_size"), py::arg("rank") = 0,
-           py::arg("peer_ip") = std::string())
+           py::arg("total_size"), py::arg("rank") = 0, py::arg("node_idx") = -1,
+           py::arg("local_rank") = 0, py::arg("peer_ip") = std::string())
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)
       .def("start_local", &UcclProxy::start_local)
@@ -2086,6 +2108,8 @@ PYBIND11_MODULE(ep, m) {
       .def_property_readonly("rb_addr", &UcclProxy::rb_addr)
       .def_property_readonly("block_idx", &UcclProxy::block_idx)
       .def_property_readonly("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr)
+      .def("avg_rdma_write_us", &UcclProxy::avg_rdma_write_us)
+      .def("avg_wr_latency_us", &UcclProxy::avg_wr_latency_us)
       .def(
           "set_peers_meta",
           [](UcclProxy& self, py::object metas) {

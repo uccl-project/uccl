@@ -44,18 +44,23 @@ def hash_tensor(t: torch.Tensor):
 
 
 def init_dist(local_rank: int, num_local_ranks: int):
+    # Set device
+    device_index = int(os.environ.get("LOCAL_RANK", 0))
+    torch.cuda.set_device(device_index)
+    torch.set_default_device(f"cuda:{device_index}")
+
     # NOTES: you may rewrite this function with your own cluster settings
     ip = os.getenv("MASTER_ADDR", "127.0.0.1")
     port = int(os.getenv("MASTER_PORT", "8361"))
-    num_nodes = int(os.getenv("WORLD_SIZE", 1))
+    world_size = int(os.getenv("WORLD_SIZE", 1))
     node_rank = int(os.getenv("RANK", 0))
 
     sig = inspect.signature(dist.init_process_group)
     params = {
         "backend": "nccl",
         "init_method": f"tcp://{ip}:{port}",
-        "world_size": num_nodes * num_local_ranks,
-        "rank": node_rank * num_local_ranks + local_rank,
+        "world_size": world_size,
+        "rank": node_rank,
     }
     print(params)
     if "device_id" in sig.parameters:
@@ -72,7 +77,7 @@ def init_dist(local_rank: int, num_local_ranks: int):
     return (
         dist.get_rank(),
         dist.get_world_size(),
-        dist.new_group(list(range(num_local_ranks * num_nodes))),
+        dist.new_group(list(range(world_size))),
     )
 
 
@@ -81,7 +86,7 @@ def init_dist_under_torchrun(local_rank: int, num_local_ranks: int):
     dist.init_process_group(backend="nccl")
 
     torch.set_default_dtype(torch.bfloat16)
-    torch.set_default_device("cuda")
+    torch.set_default_device(f"cuda:{local_rank}")
     torch.cuda.set_device(local_rank)
 
     return (
@@ -373,6 +378,10 @@ def bench(fn, num_warmups: int = 50, num_tests: int = 50, post_fn=None):
     cache = torch.empty(
         int(256e6 // 4), dtype=torch.int, device=f"cuda:{current_device}"
     )
+    current_device = torch.cuda.current_device()
+    cache = torch.empty(
+        int(256e6 // 4), dtype=torch.int, device=f"cuda:{current_device}"
+    )
 
     # Warmup
     for _ in range(num_warmups):
@@ -425,7 +434,19 @@ def bench_kineto(
                     rhs = torch.randn(
                         (8192, 8192), dtype=torch.float, device=f"cuda:{current_device}"
                     )
+                    current_device = torch.cuda.current_device()
+                    lhs = torch.randn(
+                        (8192, 8192), dtype=torch.float, device=f"cuda:{current_device}"
+                    )
+                    rhs = torch.randn(
+                        (8192, 8192), dtype=torch.float, device=f"cuda:{current_device}"
+                    )
                     lhs @ rhs
+                    dist.all_reduce(
+                        torch.ones(
+                            1, dtype=torch.float, device=f"cuda:{current_device}"
+                        )
+                    )
                     dist.all_reduce(
                         torch.ones(
                             1, dtype=torch.float, device=f"cuda:{current_device}"
@@ -512,6 +533,7 @@ def initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group):
         rank, scratch_ptr, scratch_nbytes, num_ranks, group
     )
     peers_meta_list = [rank2meta[r] for r in range(num_ranks)]
+    peer_ip = rank2meta[(rank + 1) % num_ranks]["ip"]
 
     for i in range(bench.num_proxies()):
 
@@ -533,15 +555,15 @@ def initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group):
         proxies[i].start_dual()
 
     workers = None
-    if hasattr(ep, "PeerCopyManager"):
-        try:
-            workers = ep.PeerCopyManager(src_device=device_index)
-            workers.start_for_proxies(proxies)
-            if rank == 0:
-                print("✓ PeerCopyManager started", flush=True)
-        except Exception as e:
-            if rank == 0:
-                print(f"PeerCopyManager unavailable: {e}", flush=True)
+    # if hasattr(ep, "PeerCopyManager"):
+    #     try:
+    #         workers = ep.PeerCopyManager(src_device=local_rank)
+    #         workers.start_for_proxies(proxies)
+    #         if rank == 0:
+    #             print("✓ PeerCopyManager started", flush=True)
+    #     except Exception as e:
+    #         if rank == 0:
+    #             print(f"PeerCopyManager unavailable: {e}", flush=True)
 
     time.sleep(1)
     return proxies, workers, bench
