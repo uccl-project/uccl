@@ -1,10 +1,12 @@
 ABS_ROOT_PATH := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
-ABS_REPO_ROOT := $(shell realpath $(ABS_ROOT_PATH)/..)
+ABS_REPO_ROOT := $(shell realpath $(ABS_ROOT_PATH)/../..)
+CUDA_HOME:=/usr/local/cuda
 
 KERNEL = $(shell uname -r)
 INC = -I./lib/install/include \
       -I$(ABS_REPO_ROOT)/include \
-      -I$(ABS_ROOT_PATH)/lib/libbpf/src
+      -I$(ABS_ROOT_PATH)/lib/libbpf/src \
+      -I$(CUDA_HOME)/include
 LIBS = ./lib/install/lib/libxdp.a ./lib/install/lib/libbpf.a -lglog -lgflags -lgtest -lz -lelf
 LIBS_SHARED = -Wl,-rpath=$(ABS_ROOT_PATH)/./lib/xdp-tools/lib/libxdp/ \
 	   		  -Wl,-rpath=$(ABS_ROOT_PATH)/./lib/libbpf/src/ \
@@ -63,8 +65,7 @@ util_lrpc_test: util_lrpc_test.cc $(DEPS) $(lib_obj)
 %.o: %.cc $(DEPS)
 	g++ -c $< -o $@ $(INC) $(CXXFLAGS)
 
-NCCL_HOME:=../thirdparty/nccl
-CUDA_HOME:=/usr/local/cuda
+NCCL_HOME:=$(ABS_REPO_ROOT)/thirdparty/nccl
 NCCL_INC:= -I$(NCCL_HOME)/build/include -I$(NCCL_HOME)/src/include -I$(CUDA_HOME)/include
 
 $(PLUGIN_SO): nccl_plugin.cc ebpf_transport.o $(DEPS) $(lib_obj)

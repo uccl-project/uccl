@@ -4,8 +4,9 @@
 CUDA_HOME ?= /usr/local/cuda
 CUDA_INC  := $(CUDA_HOME)/include
 CUDA_LIB  := $(CUDA_HOME)/lib64
+RDMA_HOME := ../collective/rdma
 CXX := g++
-CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I../include -I../rdma -I$(CUDA_INC) \
+CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I../include -I$(RDMA_HOME) -I$(CUDA_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
 	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -lglog -lgflags -lgtest -lz -lelf -libverbs -lpthread
 
@@ -41,24 +42,24 @@ OBJECTS := $(SOURCES:.cc=.o)
 all: $(TARGET) $(PLUGIN_SO)
 
 # Build the shared libraries
-$(TARGET): $(OBJECTS) ../rdma/librdma.a
-	$(CXX) $(OBJECTS) ../rdma/librdma.a \
+$(TARGET): $(OBJECTS) $(RDMA_HOME)/librdma.a
+	$(CXX) $(OBJECTS) $(RDMA_HOME)/librdma.a \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB)
 
-$(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECT) ../rdma/librdma_plugin.a
-	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) ../rdma/librdma_plugin.a \
+$(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_HOME)/librdma_plugin.a
+	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_HOME)/librdma_plugin.a \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB)
 
 
-../rdma/librdma.a: $(filter-out ../rdma/nccl_plugin.cc, $(wildcard ../rdma/*.cc)) ../rdma/*.h
-	make -C ../rdma librdma.a -j$(nproc)
+$(RDMA_HOME)/librdma.a: $(filter-out $(RDMA_HOME)/nccl_plugin.cc, $(wildcard $(RDMA_HOME)/*.cc)) $(RDMA_HOME)/*.h
+	make -C $(RDMA_HOME) librdma.a -j$(nproc)
 
-../rdma/librdma_plugin.a: $(filter-out ../rdma/nccl_plugin.cc, $(wildcard ../rdma/*.cc)) ../rdma/*.h
-	make CXXFLAGS="-DDISABLE_CALL_ONCE_STATIC" -C ../rdma librdma_plugin.a
+$(RDMA_HOME)/librdma_plugin.a: $(filter-out $(RDMA_HOME)/nccl_plugin.cc, $(wildcard $(RDMA_HOME)/*.cc)) $(RDMA_HOME)/*.h
+	make CXXFLAGS="-DDISABLE_CALL_ONCE_STATIC" -C $(RDMA_HOME) librdma_plugin.a
 
 # Compile source files
 %.o: %.cc
@@ -74,7 +75,7 @@ install: $(TARGET) $(PLUGIN_SO)
 # Clean build artifacts
 clean:
 	rm -f $(OBJECTS) $(CORE_OBJECT) $(CAPI_OBJECT) $(TARGET) $(PLUGIN_SO)
-	make -C ../rdma clean -j$(nproc)
+	make -C $(RDMA_HOME) clean -j$(nproc)
 
 # Test the module
 test: $(TARGET)

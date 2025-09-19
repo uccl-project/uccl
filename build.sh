@@ -56,15 +56,15 @@ build_rdma() {
   echo "[container] build_rdma Target: $TARGET"
   
   if [[ "$TARGET" == cuda* ]]; then
-    cd rdma && make clean && make -j$(nproc) && cd ..
-    TARGET_SO=rdma/libnccl-net-uccl.so
+    cd collective/rdma && make clean && make -j$(nproc) && cd ../../
+    TARGET_SO=collective/rdma/libnccl-net-uccl.so
   elif [[ "$TARGET" == rocm* ]]; then
     if [[ "$ARCH" == "aarch64" ]]; then
       echo "Skipping ROCm build on Arm64 (no ROCm toolchain)."
       return
     fi
-    cd rdma && make clean -f MakefileHip && make -j$(nproc) -f MakefileHip && cd ..
-    TARGET_SO=rdma/librccl-net-uccl.so
+    cd collective/rdma && make clean -f MakefileHip && make -j$(nproc) -f MakefileHip && cd ../../
+    TARGET_SO=collective/rdma/librccl-net-uccl.so
   elif [[ "$TARGET" == "therock" ]]; then
     if [[ "$ARCH" == "aarch64" ]]; then
       echo "Skipping ROCm build on Arm64 (no ROCm toolchain)."
@@ -77,8 +77,8 @@ build_rdma() {
       CXX=hipcc cmake -B build/release -S . -DCMAKE_EXPORT_COMPILE_COMMANDS=OFF -DCMAKE_PREFIX_PATH=$(rocm-sdk path --cmake) -DROCM_PATH=$(rocm-sdk path --root) -DHIP_PLATFORM=amd >/dev/null 2>&1 || true
       cd ../..
     fi
-    cd rdma && make clean -f MakefileHip.therock && make -j$(nproc) -f MakefileHip.therock HIP_HOME=$(rocm-sdk path --root) CONDA_LIB_HOME=$VIRTUAL_ENV/lib && cd ..
-    TARGET_SO=rdma/librccl-net-uccl.so
+    cd collective/rdma && make clean -f MakefileHip.therock && make -j$(nproc) -f MakefileHip.therock HIP_HOME=$(rocm-sdk path --root) CONDA_LIB_HOME=$VIRTUAL_ENV/lib && cd ../../
+    TARGET_SO=collective/rdma/librccl-net-uccl.so
   fi
 
   echo "[container] Copying RDMA .so to uccl/lib/"
@@ -98,7 +98,7 @@ build_efa() {
     echo "Skipping EFA build on Arm64 (no EFA installer) or ROCm (no CUDA)."
     return
   fi
-  cd efa && make clean && make -j$(nproc) && cd ..
+  cd collective/efa && make clean && make -j$(nproc) && cd ../../
 
   # EFA requires a custom NCCL.
   cd thirdparty/nccl-sg
@@ -107,7 +107,7 @@ build_efa() {
 
   echo "[container] Copying EFA .so to uccl/lib/"
   mkdir -p uccl/lib
-  cp efa/libnccl-net-efa.so uccl/lib/
+  cp collective/efa/libnccl-net-efa.so uccl/lib/
   cp thirdparty/nccl-sg/build/lib/libnccl.so uccl/lib/libnccl-efa.so
 }
 

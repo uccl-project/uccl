@@ -42,9 +42,9 @@ async def sync_repo(node_file):
 
 async def make_afxdp(make_macro, target):
     make_cmd = (
-        f'cd {UCCL_HOME}/afxdp; make -j "CXXFLAGS=-D{make_macro}" transport_test afxdp_daemon_main ebpf_transport.o'
+        f'cd {UCCL_HOME}/collective/afxdp; make -j "CXXFLAGS=-D{make_macro}" transport_test afxdp_daemon_main ebpf_transport.o'
         if "tpu" in target
-        else f'cd {UCCL_HOME}/afxdp; make -j "CXXFLAGS=-D{make_macro}"'
+        else f'cd {UCCL_HOME}/collective/afxdp; make -j "CXXFLAGS=-D{make_macro}"'
     )
     await run_command(make_cmd)
 
@@ -106,7 +106,7 @@ if __name__ == "__main__":
 
     ### Setup NIC
     num_queues = parse_num_queues(
-        make_macro, f"{UCCL_HOME}/afxdp/transport_config.h"
+        make_macro, f"{UCCL_HOME}/collective/afxdp/transport_config.h"
     )
     if num_queues is None:
         print("NUM_QUEUES not found!")
@@ -153,7 +153,7 @@ if __name__ == "__main__":
         print(f"Running AFXDP daemon")
         wait_handler = exec_command_no_wait(
             node_client,
-            f"cd {UCCL_HOME}/afxdp; sudo pkill afxdp_daemon; sudo ./afxdp_daemon_main --logtostderr=1",
+            f"cd {UCCL_HOME}/collective/afxdp; sudo pkill afxdp_daemon; sudo ./afxdp_daemon_main --logtostderr=1",
         )
         wait_handler_vec.append(wait_handler)
 
