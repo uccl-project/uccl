@@ -409,7 +409,6 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     scratch = torch.zeros(
         num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
     )
-    print(num_rdma_bytes, "bytes low-latency RDMA buffer allocated", flush=True)
     proxies, workers, bench = initialize_uccl(
         scratch, num_rdma_bytes, rank, num_ranks, group, args.num_experts
     )
@@ -496,9 +495,6 @@ if __name__ == "__main__":
     if ib_dev and ib_dev.startswith("mlx"):  # Mellanox IB devices show up like mlx5_0
         os.environ["NCCL_IB_HCA"] = ib_dev
         print(f"Set NCCL_IB_HCA={ib_dev}")
-    else:
-        print(f"Skipping NCCL_IB_HCA export (detected {ib_dev})")
-
     parser = argparse.ArgumentParser(description="Test low-latency EP kernels")
     parser.add_argument(
         "--num-processes",

@@ -77,7 +77,9 @@ def init_dist(local_rank: int, num_local_ranks: int):
 
 def init_dist_under_torchrun(local_rank: int, num_local_ranks: int):
     # torchrun already sets RANK, WORLD_SIZE, MASTER_ADDR, MASTER_PORT
-    dist.init_process_group(backend="nccl")
+    dist.init_process_group(
+        backend="nccl", device_id=torch.device(f"cuda:{local_rank}")
+    )
 
     torch.set_default_dtype(torch.bfloat16)
     torch.set_default_device(f"cuda:{local_rank}")
@@ -136,18 +138,7 @@ def get_cpu_proxies_meta(rank, scratch_ptr, scratch_bytes, num_ranks, group):
     all_meta = [None] * num_ranks
     device_index = int(os.environ.get("LOCAL_RANK", 0))
     torch.cuda.set_device(device_index)
-    print(
-        f"all_gather_object [Rank {dist.get_rank(group)}] "
-        f"group={group}, "
-        f"world_size={dist.get_world_size(group)}, "
-        f"group_rank={dist.get_rank(group)}, "
-        f"default_world_size={dist.get_world_size()}, "
-        f"default_rank={dist.get_rank()}",
-        torch.cuda.current_device(),
-        flush=True,
-    )
     dist.all_gather_object(all_meta, meta, group=group)
-    print("After all_gather_object", flush=True)
     rank2meta = {m["rank"]: m for m in all_meta}
     return rank2meta
 
@@ -494,9 +485,6 @@ def initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group, num_experts
         )
         proxy.set_peers_meta(peers_meta_list)
         proxies.append(proxy)
-        print(f"Proxy {i} initialized", flush=True)
-
-    print("register proxy for device", local_rank)
     ep.register_proxies(local_rank, proxies)
 
     dist.barrier(group)
@@ -520,7 +508,6 @@ def initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group, num_experts
 
 
 def destroy_uccl(proxies, workers, bench):
-
     device_index = int(os.environ["LOCAL_RANK"])
     if workers is not None:
         try:
@@ -533,13 +520,11 @@ def destroy_uccl(proxies, workers, bench):
             p.stop()
     except Exception:
         pass
-
-    print("✓ Proxy stopped", flush=True)
     try:
         ep.unregister_proxy(device_index)
     except Exception:
         pass
-    print("✓ Proxy unregistered", flush=True)
+    print("✓ UCCL destroyed", flush=True)
 
 
 def per_token_cast_to_fp8(x: torch.Tensor):

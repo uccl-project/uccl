@@ -88,10 +88,6 @@ class Buffer {
     if (num_local_ranks == -1) num_local_ranks = get_num_max_nvl_peers();
     max_nvl_peers = num_local_ranks;
     {
-      printf(
-          "Buffer initializing for rank %d, num_ranks %d, num_nvl_bytes %ld,"
-          "num_rdma_bytes %ld, max_nvl_peers %d\n",
-          rank, num_ranks, num_nvl_bytes, num_rdma_bytes, max_nvl_peers);
       cudaGetDevice(&device_index);
       {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
@@ -215,10 +211,6 @@ class Buffer {
           moe_recv_rdma_counter, 0));
       *moe_recv_rdma_counter = -1;
     }
-    printf(
-        "Buffer created for rank %d, num_ranks %d, num_nvl_bytes %ld, "
-        "num_rdma_bytes %ld, low_latency_mode %d\n",
-        rank, num_ranks, num_nvl_bytes, num_rdma_bytes, low_latency_mode);
   }
 
   std::tuple<torch::Tensor, std::optional<torch::Tensor>, torch::Tensor,
@@ -1815,7 +1807,6 @@ class Buffer {
     if (ptr == nullptr) {
       throw std::invalid_argument("set_atomic_buffer_ptr: ptr null");
     }
-    printf("Buffer atomic_buffer_ptr=%p\n", ptr);
     atomic_buffer_ptr = ptr;
   }
 

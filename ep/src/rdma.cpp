@@ -122,11 +122,6 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
   int sockfd;
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
-
-  printf(
-      "Rank %d exchanging RDMA connection info with peer %s, "
-      "local.addr=0x%lx\n",
-      rank, peer_ip, local->addr);
   if (rank == 0) {
     // Listen
     int listenfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -143,8 +138,6 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
 
     socklen_t len = sizeof(addr);
     sockfd = accept(listenfd, (struct sockaddr*)&addr, &len);
-    printf("Rank %d accepted connection from peer %s on port %d\n", rank,
-           peer_ip, TCP_PORT + tid);
     close(listenfd);
   } else {
     // Connect
@@ -170,8 +163,6 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
         exit(1);
       }
     }
-    printf("Rank %d connected to peer %s on port %d\n", rank, peer_ip,
-           TCP_PORT + tid);
   }
 
   // Exchange info
@@ -180,17 +171,10 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
   uccl::send_message(sockfd, local, sizeof(*local));
   uccl::receive_message(sockfd, remote, sizeof(*remote));
   close(sockfd);
-
-  printf(
-      "Rank %d exchanged RDMA info: addr=0x%lx, rkey=0x%x, "
-      "qp_num=%u, psn=%u\n",
-      rank, remote->addr, remote->rkey, remote->qp_num, remote->psn);
 }
 
 void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
                           int block_idx, int local_rank) {
-  printf("Rank %d, Block %d: Initializing RDMA for GPU buffer %p, size %zu\n",
-         rank, block_idx, gpu_buf, bytes);
   if (S.context) return;  // already initialized
 
   int num_devices = 0;
@@ -1100,8 +1084,6 @@ void apply_pending_updates(ProxyCtx& ctx,
     }
     if (is_atomic_ready) {
       if (is_combine) value = 1;
-      printf("atomic_ready! Applying pending update: imm=0x%x, value=%d\n", imm,
-             value);
       // perform atomic update
       upd.addr->fetch_add(value, std::memory_order_release);
       // remove from set
@@ -1156,18 +1138,7 @@ void remote_process_completions(
         int src_rank = new_index % num_ranks;
         int num_tokens = get_num_tokens(S, low_latency_buffer_idx,
                                         local_expert_idx, src_rank);
-        printf(
-            "[RECV_DISPATCH] low_latency_buffer_idx: %d, num_ranks: %d, "
-            "new_offset: %d (old: %d), local_expert_idx: %d, src_rank: %d, "
-            "Value to add: %d, matching counter: %d\n",
-            low_latency_buffer_idx, num_ranks, new_offset, offset,
-            local_expert_idx, src_rank, -value - 1, num_tokens);
-        if ((-value - 1) != num_tokens) {
-          fprintf(stderr,
-                  "Dispatch value %d does not match counter %d for "
-                  "expert_idx %d, src_rank %d\n",
-                  -value - 1, num_tokens, local_expert_idx, src_rank);
-        } else {
+        if ((-value - 1) == num_tokens) {
           is_atomic_ready = true;
         }
         if ((-value - 1) < num_tokens) {
@@ -1191,20 +1162,9 @@ void remote_process_completions(
                   expert_idx, num_experts);
           std::abort();
         }
-        printf(
-            "[RECV_COMBINE] low_latency_buffer_idx: %d, num_ranks: %d, "
-            "new_offset: %d (old: %d), global_expert_idx: %d\n",
-            low_latency_buffer_idx, num_ranks, new_offset, offset, expert_idx);
         int combine_num_tokens =
             get_combine_num_tokens(S, low_latency_buffer_idx, expert_idx);
-        printf("[Combine] Value to add: %d, matching counter: %d\n", value,
-               combine_num_tokens);
-        if (value != combine_num_tokens) {
-          fprintf(stderr,
-                  "Combine value %d does not match counter %d for "
-                  "expert_idx %d\n",
-                  value, combine_num_tokens, expert_idx);
-        } else {
+        if (value == combine_num_tokens) {
           is_atomic_ready = true;
         }
         if (value < combine_num_tokens) {
@@ -1233,8 +1193,6 @@ void remote_process_completions(
       if (is_atomic_ready)
         addr32->fetch_add(value, std::memory_order_release);
       else {
-        printf("Atomic not ready, deferring update: imm=0x%x, value=%d\n", imm,
-               value);
         pending_atomic_updates.insert({addr32, value, imm});
       }
       // const uint32_t tag = wr_tag(cqe.wr_id);
@@ -1267,21 +1225,11 @@ void remote_process_completions(
 
       if (!is_combine) {
         add_tokens(S, buffer_idx, expert_idx, src_rank, k);
-        printf(
-            "[Write dispatch] idx=%d, expert_idx=%u, src_rank=%u, tokens=%u, "
-            "buffer_idx=%d\n",
-            idx, expert_idx, src_rank,
-            get_num_tokens(S, buffer_idx, expert_idx, src_rank), buffer_idx);
       } else {
         /* expert_idx here is the global expert index of the sender */
         assert(expert_idx >= src_rank * (num_experts / num_ranks) &&
                expert_idx < (src_rank + 1) * (num_experts / num_ranks));
         combine_add_tokens(S, buffer_idx, expert_idx, k);
-        printf(
-            "[Write combine] idx=%d, expert_idx=%u, tokens=%u, src_rank=%u, "
-            "buffer_idx=%d\n",
-            idx, expert_idx, get_combine_num_tokens(S, buffer_idx, expert_idx),
-            src_rank, buffer_idx);
       }
       // const uint32_t tag = wr_tag(cqe.wr_id);
       // ProxyCtx& S_ack = *ctx_by_tag[tag];
@@ -1523,12 +1471,6 @@ void post_atomic_operations(ProxyCtx& S,
                 low_latency_buffer_idx);
         std::abort();
       }
-
-      printf(
-          "post_atomic_operations. cmd.is_combine: %d, offset: %u, req_rptr: "
-          "%lu, low_latency_buffer_idx: %d\n",
-          cmd.is_combine, offset, static_cast<int64_t>(cmd.req_rptr),
-          low_latency_buffer_idx);
       uint32_t imm =
           pack_imm(/*is_combine=*/true, cmd.is_combine, v,
                    static_cast<uint16_t>(offset), low_latency_buffer_idx);

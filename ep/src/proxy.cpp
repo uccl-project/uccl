@@ -37,9 +37,6 @@ void Proxy::set_peers_meta(std::vector<PeerMeta> const& peers) {
   peers_.reserve(peers.size());
   for (auto const& p : peers) {
     peers_.push_back(p);
-    if (cfg_.block_idx == 0)
-      printf("PeerMeta(rank=%d, ptr=0x%lx, nbytes=%zu, ip=%s)\n", p.rank,
-             static_cast<unsigned long>(p.ptr), p.nbytes, p.ip.c_str());
   }
   ctxs_for_all_ranks_.clear();
   ctxs_for_all_ranks_.resize(peers.size());
@@ -161,10 +158,6 @@ void Proxy::init_common() {
     c.remote_addr = remote_infos_[peer].addr;
     c.remote_rkey = remote_infos_[peer].rkey;
     c.remote_len = remote_infos_[peer].len;
-
-    printf("Peer %d remote addr=%p rkey=%u len=%lu\n", peer,
-           (void*)c.remote_addr, c.remote_rkey, c.remote_len);
-
     if (FILE* f = fopen("/tmp/uccl_debug.txt", "a")) {
       fprintf(
           f,
@@ -221,15 +214,12 @@ void Proxy::run_remote() {
 }
 
 void Proxy::run_dual() {
-  printf("Dual (single-thread) proxy for block %d starting\n",
-         cfg_.block_idx + 1);
   init_common();
   for (int peer = 0; peer < (int)ctxs_for_all_ranks_.size(); ++peer) {
     if (peer == cfg_.rank) continue;
     if (peers_[peer].ip == peers_[cfg_.rank].ip) continue;
     auto& ctx_ptr = ctxs_for_all_ranks_[peer];
     if (!ctx_ptr) continue;
-    printf("Dual proxy using peer %d\n", peer);
     local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
     remote_reg_ack_buf(ctx_ptr->pd, ring.ack_buf, ring.ack_mr);
     ring.ack_qp = ctx_ptr->ack_qp;

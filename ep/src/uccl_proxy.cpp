@@ -52,22 +52,10 @@ void UcclProxy::set_peers_meta(std::vector<PeerMeta> const& peers) {
   proxy_->set_peers_meta(peers);
 }
 
-void UcclProxy::start_sender() {
-  start(Mode::Sender);
-  std::printf("UcclProxy started as Sender\n");
-}
-void UcclProxy::start_remote() {
-  start(Mode::Remote);
-  std::printf("UcclProxy started as Remote\n");
-}
-void UcclProxy::start_local() {
-  start(Mode::Local);
-  std::printf("UcclProxy started as Local\n");
-}
-void UcclProxy::start_dual() {
-  start(Mode::Dual);
-  std::printf("UcclProxy started as Dual\n");
-}
+void UcclProxy::start_sender() { start(Mode::Sender); }
+void UcclProxy::start_remote() { start(Mode::Remote); }
+void UcclProxy::start_local() { start(Mode::Local); }
+void UcclProxy::start_dual() { start(Mode::Dual); }
 
 void UcclProxy::stop() {
   if (!running_.load(std::memory_order_acquire)) {
@@ -78,9 +66,7 @@ void UcclProxy::stop() {
   running_.store(false, std::memory_order_release);
   // Because proxies share the gpu_buffer, only destroy gpu_buffer for the first
   // proxy.
-  std::printf("UcclProxy destroying\n");
   proxy_->destroy(block_idx_ == 0);
-  std::printf("UcclProxy destroyed\n");
 }
 
 void UcclProxy::start(Mode m) {
