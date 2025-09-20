@@ -4,7 +4,7 @@ import socket
 import time
 import struct
 import pickle
-from typing import Any, Tuple
+from typing import Any, Tuple, Dict
 
 import torch
 
@@ -117,50 +117,73 @@ def recv_obj(sock: socket.socket) -> Any:
     return pickle.loads(payload)
 
 
+_GLOBAL_TENSOR_IDS: Dict[int, int] = {}
+
+
+def get_tensor_id_by_tensor(tensor: torch.Tensor):
+    if not tensor.is_contiguous():
+        raise ValueError("Tensor must be contiguous")
+    ptr = tensor.data_ptr()
+    if ptr not in _GLOBAL_TENSOR_IDS:
+        raise RuntimeError(
+            f"Tensor memory not registered for communication. "
+            f"Call create_tensor() to create a tensor."
+        )
+    return _GLOBAL_TENSOR_IDS[ptr]
+
+
 def create_tensor(
     shape: Tuple[int, ...], dtype: torch.dtype, device: str
 ) -> Tuple[torch.Tensor, int]:
     """
     Create an empty tensor and register GPU memory if applicable.
+    Only support GPU.
 
     Args:
         shape (Tuple[int, ...]): e.g., (2, 100, 4)
         dtype (torch.dtype): e.g., torch.float32
-        device (str): 'cuda:0', 'cuda:1', or 'cpu'
+        device (str): 'cuda:0', 'cuda:1'
 
     Returns:
         Tuple[torch.Tensor, int]: tensor, tensor_id
     """
     if device.startswith("cuda"):
-        gpu_id = int(device.split(":")[1])
-    elif device.startswith("cpu"):
-        gpu_id = -1  # CPU -1
+        try:
+            gpu_id = int(device.split(":")[1])
+        except (IndexError, ValueError):
+            raise ValueError(f"Invalid cuda device: {device}")
     else:
-        raise RuntimeError(f"Invalid device: ", device)
+        raise ValueError(f"Unsupported device: {device}")
 
     tensor = torch.empty(size=shape, dtype=dtype, device=device)
-
     addr = tensor.data_ptr()
     size = tensor.numel() * tensor.element_size()
 
+    if addr in _GLOBAL_TENSOR_IDS:
+        raise RuntimeError(f"Tensor at address {addr} is already registered.")
+
     tensor_id = p2p.reg_mem(gpu_id, addr, size)
-
     if tensor_id < 0:
-        raise RuntimeError(
-            f"Failed to register memory: tensor_id={tensor_id}, gpu_id={gpu_id}"
-        )
+        raise RuntimeError(f"Failed to register memory: tensor_id={tensor_id}")
 
+    _GLOBAL_TENSOR_IDS[addr] = tensor_id
     return tensor, tensor_id
 
 
-def free_tensor(tensor_id: int):
+def free_tensor(tensor: torch.Tensor):
     """
-    Free the registered GPU/CPU memory for a tensor.
+    Free the registered GPU memory for a tensor.
 
     Args:
-        tensor_id (int)
+        tensor: torch.Tensor
     """
+    ptr = tensor.data_ptr()
+    if ptr not in _GLOBAL_TENSOR_IDS:
+        return
+
+    tensor_id = _GLOBAL_TENSOR_IDS[ptr]
     if tensor_id < 0:
         raise RuntimeError(f"Invalid tensor_id: {tensor_id}")
 
     p2p.dereg_mem(tensor_id)
+    del _GLOBAL_TENSOR_IDS[ptr]
