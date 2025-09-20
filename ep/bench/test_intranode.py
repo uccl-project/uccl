@@ -423,26 +423,25 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         torch.cuda.set_device(local_rank)
 
         rank, num_ranks, group = init_dist(local_rank, num_local_ranks)
-        test_ll_compatibility, num_rdma_bytes = False, 1024 * 1024
+        test_ll_compatibility, num_rdma_bytes = False, 0
         if test_ll_compatibility:
             ll_num_tokens, ll_hidden, ll_num_experts, ll_num_topk = 16, 5120, 256, 9
             num_rdma_bytes = Buffer.get_low_latency_rdma_size_hint(
                 ll_num_tokens, ll_hidden, num_ranks, ll_num_experts
             )
 
-        num_nvlink_bytes = int(1e9)
         device_index = int(os.environ["LOCAL_RANK"])
         scratch = torch.zeros(
             num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
         )
         proxies, workers, bench_obj = initialize_uccl(
-            scratch, num_rdma_bytes, rank, num_ranks, group, True
+            scratch, num_rdma_bytes, rank, num_ranks, group, args.num_experts, True
         )
 
         buffer = Buffer(
             group,
             scratch.data_ptr(),
-            num_nvlink_bytes,
+            int(2e9),
             num_rdma_bytes,
             low_latency_mode=test_ll_compatibility,
             num_qps_per_rank=(

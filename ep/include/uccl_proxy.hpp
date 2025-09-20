@@ -79,7 +79,7 @@ class UcclProxy {
   enum class Mode { None, Sender, Remote, Local, Dual };
   void start(Mode m);
 
-  std::string peer_ip_storage_;
+  std::string peer_ip_;
   std::unique_ptr<Proxy> proxy_;
   std::thread thread_;
   Mode mode_;

@@ -6,7 +6,7 @@ UcclProxy::UcclProxy(uintptr_t rb_addr, int block_idx,
                      uintptr_t gpu_buffer_addr, size_t total_size, int rank,
                      int node_idx, int local_rank, std::string const& peer_ip,
                      int num_experts, int num_ranks)
-    : peer_ip_storage_{peer_ip}, thread_{}, mode_{Mode::None}, running_{false} {
+    : peer_ip_{peer_ip}, thread_{}, mode_{Mode::None}, running_{false} {
   if (peer_ip.empty()) {
     printf("Intranode mode. UcclProxy returns\n");
     return;
@@ -22,7 +22,7 @@ UcclProxy::UcclProxy(uintptr_t rb_addr, int block_idx,
   cfg.total_size = total_size;
   cfg.rank = rank;
   cfg.local_rank = local_rank;
-  cfg.peer_ip = peer_ip_storage_.empty() ? nullptr : peer_ip_storage_.c_str();
+  cfg.peer_ip = peer_ip_.empty() ? nullptr : peer_ip_.c_str();
   cfg.num_experts = num_experts;
   cfg.num_ranks = num_ranks;
   proxy_ = std::make_unique<Proxy>(cfg);
@@ -82,7 +82,7 @@ void UcclProxy::start(Mode m) {
   running_.store(true, std::memory_order_release);
 
   thread_ = std::thread([this]() {
-    if (peer_ip_storage_.empty()) {
+    if (peer_ip_.empty()) {
       std::printf("UcclProxy: no peer IP set, running in local mode\n");
       proxy_->run_local();
       return;

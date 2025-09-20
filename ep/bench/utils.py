@@ -478,13 +478,15 @@ def initialize_uccl(
             num_experts=num_experts,
             num_ranks=num_ranks,
         )
-        proxy.set_peers_meta(peers_meta_list)
+        if not is_intranode:
+            proxy.set_peers_meta(peers_meta_list)
         proxies.append(proxy)
     ep.register_proxies(local_rank, proxies)
 
     dist.barrier(group)
-    for i in range(bench.num_proxies()):
-        proxies[i].start_dual()
+    if not is_intranode:
+        for i in range(bench.num_proxies()):
+            proxies[i].start_dual()
 
     workers = None
     # if hasattr(ep, "PeerCopyManager"):
