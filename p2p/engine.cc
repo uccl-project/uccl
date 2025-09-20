@@ -535,11 +535,22 @@ bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
 
 bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void const*> data_v,
-                     std::vector<size_t> size_v, size_t num_iovs) {
-  [[maybe_unused]] auto _ =
-      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+                     std::vector<size_t> size_v, size_t num_iovs,
+                     bool inside_python) {
+  [[maybe_unused]] auto _ = inside_python && PyGILState_Check()
+                                ? (py::gil_scoped_release{}, nullptr)
+                                : nullptr;
 
-  auto conn = conn_id_to_conn_[conn_id];
+  Conn* conn;
+  {
+    std::shared_lock<std::shared_mutex> lock(conn_mu_);
+    auto it = conn_id_to_conn_.find(conn_id);
+    if (it == conn_id_to_conn_.end()) {
+      std::cerr << "[sendv] Error: Invalid conn_id " << conn_id << std::endl;
+      return false;
+    }
+    conn = it->second;
+  }
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
   uccl::ucclRequest ureq[kMaxInflightChunks] = {};
@@ -568,7 +579,16 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
           std::min(cur_size_expected - cur_size_post_send, kChunkSize);
       data_send_vec.push_back(cur_data);
       size_send_vec.push_back(chunk_size);
-      mhandle_send_vec.push_back(mr_id_to_mr_[mr_id_v[i]]->mhandle_);
+      {
+        std::shared_lock<std::shared_mutex> lock(mr_mu_);
+        auto it = mr_id_to_mr_.find(mr_id_v[i]);
+        if (it == mr_id_to_mr_.end()) {
+          std::cerr << "[sendv] Error: Invalid mr_id " << mr_id_v[i]
+                    << std::endl;
+          return false;
+        }
+        mhandle_send_vec.push_back(it->second->mhandle_);
+      }
       cur_data += chunk_size;
       cur_size_post_send += chunk_size;
     }
@@ -610,10 +630,21 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
 bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void*> data_v, std::vector<size_t> size_v,
-                     size_t num_iovs) {
-  [[maybe_unused]] auto _ =
-      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
-  auto conn = conn_id_to_conn_[conn_id];
+                     size_t num_iovs, bool inside_python) {
+  [[maybe_unused]] auto _ = inside_python && PyGILState_Check()
+                                ? (py::gil_scoped_release{}, nullptr)
+                                : nullptr;
+  Conn* conn;
+  {
+    std::shared_lock<std::shared_mutex> lock(conn_mu_);
+    auto it = conn_id_to_conn_.find(conn_id);
+    if (it == conn_id_to_conn_.end()) {
+      std::cerr << "[recvv] Error: Invalid conn_id " << conn_id << std::endl;
+      return false;
+    }
+    conn = it->second;
+  }
+
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
   uccl::ucclRequest ureq[kMaxInflightChunks] = {};
@@ -648,7 +679,16 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
       data_recv_vec.push_back(cur_data);
       data_recv_ptr_vec.push_back(&data_recv_vec.back());
       size_recv_vec.push_back(chunk_size);
-      mhandle_recv_vec.push_back(mr_id_to_mr_[mr_id_v[i]]->mhandle_);
+      {
+        std::shared_lock<std::shared_mutex> lock(mr_mu_);
+        auto it = mr_id_to_mr_.find(mr_id_v[i]);
+        if (it == mr_id_to_mr_.end()) {
+          std::cerr << "[recvv] Error: Invalid mr_id " << mr_id_v[i]
+                    << std::endl;
+          return false;
+        }
+        mhandle_recv_vec.push_back(it->second->mhandle_);
+      }
       mhandle_recv_ptr_vec.push_back(&mhandle_recv_vec.back());
       cur_data += chunk_size;
       cur_size_post_recv += chunk_size;
@@ -777,6 +817,57 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
   *transfer_id = reinterpret_cast<uint64_t>(rw_task);
 
   while (jring_mp_enqueue_bulk(recv_unified_task_ring_, rw_task, 1, nullptr) !=
+         1) {
+  }
+
+  return true;
+}
+
+bool Endpoint::sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                           std::vector<void const*> data_v,
+                           std::vector<size_t> size_v, size_t num_iovs,
+                           uint64_t* transfer_id) {
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
+  auto const_data_ptr =
+      std::make_shared<std::vector<void const*>>(std::move(data_v));
+  auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
+  auto mr_id_ptr = std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
+
+  UnifiedTask* task =
+      create_sendv_task(conn_id, std::move(const_data_ptr), std::move(size_ptr),
+                        std::move(mr_id_ptr));
+  if (unlikely(task == nullptr)) {
+    return false;
+  }
+
+  *transfer_id = reinterpret_cast<uint64_t>(task);
+
+  while (jring_mp_enqueue_bulk(send_unified_task_ring_, task, 1, nullptr) !=
+         1) {
+  }
+
+  return true;
+}
+
+bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                           std::vector<void*> data_v,
+                           std::vector<size_t> size_v, size_t num_iovs,
+                           uint64_t* transfer_id) {
+  [[maybe_unused]] auto _ =
+      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+
+  // Use move semantics to reduce memory copies
+  UnifiedTask* task = create_recvv_task(conn_id, std::move(data_v),
+                                        std::move(size_v), std::move(mr_id_v));
+  if (unlikely(task == nullptr)) {
+    return false;
+  }
+
+  *transfer_id = reinterpret_cast<uint64_t>(task);
+
+  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, task, 1, nullptr) !=
          1) {
   }
 
@@ -1698,6 +1789,19 @@ void Endpoint::send_proxy_thread_func() {
         case TaskType::SEND_NET:
           send(task.conn_id, task.mr_id, task.data, task.size, false);
           break;
+        case TaskType::SENDV: {
+          TaskBatch const& batch = task.task_batch();
+          std::vector<void const*> const_data_v(
+              batch.const_data_v(), batch.const_data_v() + batch.num_iovs);
+          std::vector<size_t> size_v(batch.size_v(),
+                                     batch.size_v() + batch.num_iovs);
+          std::vector<uint64_t> mr_id_v(batch.mr_id_v(),
+                                        batch.mr_id_v() + batch.num_iovs);
+
+          sendv(task.conn_id, mr_id_v, const_data_v, size_v, batch.num_iovs,
+                false);
+          break;
+        }
         default:
           LOG(ERROR) << "Unexpected task type in send processing: "
                      << static_cast<int>(task.type);
@@ -1729,6 +1833,18 @@ void Endpoint::recv_proxy_thread_func() {
         case TaskType::RECV_NET:
           recv(task.conn_id, task.mr_id, task.data, task.size, false);
           break;
+        case TaskType::RECVV: {
+          TaskBatch const& batch = task.task_batch();
+          std::vector<void*> data_v(batch.data_v(),
+                                    batch.data_v() + batch.num_iovs);
+          std::vector<size_t> size_v(batch.size_v(),
+                                     batch.size_v() + batch.num_iovs);
+          std::vector<uint64_t> mr_id_v(batch.mr_id_v(),
+                                        batch.mr_id_v() + batch.num_iovs);
+
+          recvv(task.conn_id, mr_id_v, data_v, size_v, batch.num_iovs, false);
+          break;
+        }
         case TaskType::SEND_NET:
         case TaskType::SEND_IPC:
         case TaskType::WRITE_NET:
