@@ -56,11 +56,7 @@ void Proxy::init_common() {
   per_thread_rdma_init(ctx_, cfg_.gpu_buffer, cfg_.total_size, my_rank,
                        cfg_.block_idx, cfg_.local_rank);
   pin_thread();
-
-  // Skip CQ creation if RDMA is not initialized (intranode mode)
-  if (ctx_.context && !ctx_.cq) {
-    ctx_.cq = create_per_thread_cq(ctx_);
-  }
+  if (!ctx_.cq) ctx_.cq = create_per_thread_cq(ctx_);
   if (ctxs_for_all_ranks_.empty()) {
     fprintf(stderr,
             "Error: peers metadata not set before init_common (peers_.size() "
@@ -71,29 +67,18 @@ void Proxy::init_common() {
 
   // Allocate GPU buffer for atomic old values (within the main GPU buffer)
   // Use a small section at the end of the GPU buffer
-  // Skip atomic buffer allocation for intranode mode
-  if (ctx_.context && cfg_.total_size > 0) {
-    size_t atomic_buf_size = ProxyCtx::kMaxAtomicOps * sizeof(uint32_t);
-    if (cfg_.total_size < atomic_buf_size) {
-      fprintf(stderr, "GPU buffer too small for atomic operations buffer\n");
-      std::abort();
-    }
-    // Place atomic buffer at the end of the GPU buffer
-    ctx_.atomic_old_values_buf =
-        reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(cfg_.gpu_buffer) +
-                                    cfg_.total_size - atomic_buf_size);
-  } else {
-    // For intranode mode, set atomic buffer to nullptr
-    ctx_.atomic_old_values_buf = nullptr;
+  size_t atomic_buf_size = ProxyCtx::kMaxAtomicOps * sizeof(uint32_t);
+  if (cfg_.total_size < atomic_buf_size) {
+    fprintf(stderr, "GPU buffer too small for atomic operations buffer\n");
+    std::abort();
   }
+  // Place atomic buffer at the end of the GPU buffer
+  ctx_.atomic_old_values_buf =
+      reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(cfg_.gpu_buffer) +
+                                  cfg_.total_size - atomic_buf_size);
 
-  if (ctx_.atomic_old_values_buf) {
-    size_t atomic_buf_size = ProxyCtx::kMaxAtomicOps * sizeof(uint32_t);
-    printf("[PROXY_INIT] Atomic buffer at %p, size %zu bytes\n",
-           ctx_.atomic_old_values_buf, atomic_buf_size);
-  } else {
-    printf("[PROXY_INIT] Atomic buffer disabled for intranode mode\n");
-  }
+  // printf("[PROXY_INIT] Atomic buffer at %p, size %zu bytes\n",
+  //        ctx_.atomic_old_values_buf, atomic_buf_size);
 
   int num_ranks = ctxs_for_all_ranks_.size();
   local_infos_.assign(num_ranks, RDMAConnectionInfo{});
@@ -110,84 +95,75 @@ void Proxy::init_common() {
     if (c.tag >= ctx_by_tag_.size()) ctx_by_tag_.resize(c.tag + 1, nullptr);
     ctx_by_tag_[c.tag] = &c;
 
-    // Only set RDMA resources if they were initialized
-    if (ctx_.context) {
-      c.context = ctx_.context;
-      c.pd = ctx_.pd;
-      c.mr = ctx_.mr;
-      c.rkey = ctx_.rkey;
-    } else {
-      // For intranode mode, set these to nullptr
-      c.context = nullptr;
-      c.pd = nullptr;
-      c.mr = nullptr;
-      c.rkey = 0;
-    }
+    c.context = ctx_.context;
+    c.pd = ctx_.pd;
+    c.mr = ctx_.mr;
+    c.rkey = ctx_.rkey;
     // NOTE(MaoZiming): each context can share the same cq, pd, mr.
     // but the qp must be different.
     c.cq = ctx_.cq;
 
-    // Only create QP if RDMA is initialized
-    if (ctx_.context) {
-      create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
-                           &local_infos_[peer], my_rank);
-      modify_qp_to_init(c);
-    }
+    if (peer == my_rank) continue;
+    // Skip rdma connection for intra-node.
+    if (peers_[peer].ip == peers_[my_rank].ip) continue;
+    create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
+                         &local_infos_[peer], my_rank);
+    modify_qp_to_init(c);
   }
 
   usleep(50 * 1000);
 
-  // Out-of-band exchange per pair (skip if RDMA not initialized)
-  if (ctx_.context) {
-    for (int peer = 0; peer < num_ranks; ++peer) {
-      if (peer == my_rank) continue;
+  // Out-of-band exchange per pair.
+  for (int peer = 0; peer < num_ranks; ++peer) {
+    if (peer == my_rank) continue;
+    // Skip rdma connection for intra-node.
+    if (peers_[peer].ip == peers_[my_rank].ip) continue;
 
-      bool const i_listen = (my_rank < peer);
-      int const tid = pair_tid_block(my_rank, peer, num_ranks, cfg_.block_idx);
-      char const* ip = peers_[peer].ip.c_str();
+    bool const i_listen = (my_rank < peer);
+    int const tid = pair_tid_block(my_rank, peer, num_ranks, cfg_.block_idx);
+    char const* ip = peers_[peer].ip.c_str();
 
-      int virt_rank = i_listen ? 0 : 1;
-      // if (peers_[cfg_.rank].ptr != local_infos_[my_rank].addr) {
-      //   fprintf(stderr,
-      //           "Rank %d block %d: Warning: local addr mismatch: got 0x%lx, "
-      //           "expected 0x%lx\n",
-      //           my_rank, cfg_.block_idx, local_infos_[my_rank].addr,
-      //           peers_[cfg_.rank].ptr);
-      //   std::abort();
-      // }
-      exchange_connection_info(virt_rank, ip, tid, &local_infos_[peer],
-                               &remote_infos_[peer]);
-      if (remote_infos_[peer].addr != peers_[peer].ptr) {
-        fprintf(stderr,
-                "Rank %d block %d: Warning: remote addr mismatch for peer %d: "
-                "got 0x%lx, expected 0x%lx\n",
-                my_rank, cfg_.block_idx, peer, remote_infos_[peer].addr,
-                peers_[peer].ptr);
-        std::abort();
-      }
+    int virt_rank = i_listen ? 0 : 1;
+    // if (peers_[cfg_.rank].ptr != local_infos_[my_rank].addr) {
+    //   fprintf(stderr,
+    //           "Rank %d block %d: Warning: local addr mismatch: got 0x%lx, "
+    //           "expected 0x%lx\n",
+    //           my_rank, cfg_.block_idx, local_infos_[my_rank].addr,
+    //           peers_[cfg_.rank].ptr);
+    //   std::abort();
+    // }
+    exchange_connection_info(virt_rank, ip, tid, &local_infos_[peer],
+                             &remote_infos_[peer]);
+    if (remote_infos_[peer].addr != peers_[peer].ptr) {
+      fprintf(stderr,
+              "Rank %d block %d: Warning: remote addr mismatch for peer %d: "
+              "got 0x%lx, expected 0x%lx\n",
+              my_rank, cfg_.block_idx, peer, remote_infos_[peer].addr,
+              peers_[peer].ptr);
+      std::abort();
     }
   }
 
-  // Bring each per-peer QP to RTR/RTS (skip if RDMA not initialized)
-  if (ctx_.context) {
-    for (int peer = 0; peer < num_ranks; ++peer) {
-      if (peer == my_rank) continue;
-      auto& c = *ctxs_for_all_ranks_[peer];
+  // Bring each per-peer QP to RTR/RTS
+  for (int peer = 0; peer < num_ranks; ++peer) {
+    if (peer == my_rank) continue;
+    // Skip rdma connection for intra-node.
+    if (peers_[peer].ip == peers_[my_rank].ip) continue;
+    auto& c = *ctxs_for_all_ranks_[peer];
 
-      // qp is different from each rank.
-      modify_qp_to_rtr(c, &remote_infos_[peer]);
-      modify_qp_to_rts(c, &local_infos_[peer]);
+    // qp is different from each rank.
+    modify_qp_to_rtr(c, &remote_infos_[peer]);
+    modify_qp_to_rts(c, &local_infos_[peer]);
 
-      c.remote_addr = remote_infos_[peer].addr;
-      c.remote_rkey = remote_infos_[peer].rkey;
-      c.remote_len = remote_infos_[peer].len;
-      if (FILE* f = fopen("/tmp/uccl_debug.txt", "a")) {
-        fprintf(f,
-                "[PROXY_INIT] me=%d peer=%d: remote_addr=0x%lx "
-                "local_buffer=0x%lx\n",
-                my_rank, peer, c.remote_addr, (uintptr_t)cfg_.gpu_buffer);
-        fclose(f);
-      }
+    c.remote_addr = remote_infos_[peer].addr;
+    c.remote_rkey = remote_infos_[peer].rkey;
+    c.remote_len = remote_infos_[peer].len;
+    if (FILE* f = fopen("/tmp/uccl_debug.txt", "a")) {
+      fprintf(
+          f,
+          "[PROXY_INIT] me=%d peer=%d: remote_addr=0x%lx local_buffer=0x%lx\n",
+          my_rank, peer, c.remote_addr, (uintptr_t)cfg_.gpu_buffer);
+      fclose(f);
     }
   }
 
@@ -198,10 +174,7 @@ void Proxy::init_sender() {
   init_common();
   assert(cfg_.rank == 0);
   auto& ctx_ptr = ctxs_for_all_ranks_[1];
-  // Only call local_post_ack_buf if RDMA is initialized
-  if (ctx_ptr->pd && ctx_ptr->recv_ack_qp) {
-    local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
-  }
+  local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
 }
 
 void Proxy::init_remote() {

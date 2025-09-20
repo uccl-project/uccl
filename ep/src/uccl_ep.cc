@@ -99,9 +99,6 @@ class Buffer {
               ". Call uccl.ep.register_proxy(device_index, proxies) "
               "first.");
         }
-
-        printf("Buffer: Using device %d for rank %d (found %zu proxies)\n",
-               device_index, rank, it->second.size());
       }
 
       {
@@ -1799,7 +1796,12 @@ class Buffer {
     available = true;
   }
 
-  void set_rdma_buffer_raw(void* ptr) { rdma_buffer_ptr = ptr; }
+  void set_rdma_buffer_raw(void* ptr) {
+    if (ptr == nullptr) {
+      throw std::invalid_argument("set_rdma_buffer_raw: ptr null");
+    }
+    rdma_buffer_ptr = ptr;
+  }
 
   void set_atomic_buffer_ptr(void* ptr) {
     if (ptr == nullptr) {

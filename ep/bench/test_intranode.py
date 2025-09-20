@@ -436,7 +436,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
             num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
         )
         proxies, workers, bench_obj = initialize_uccl(
-            scratch, num_rdma_bytes, rank, num_ranks, group
+            scratch, num_rdma_bytes, rank, num_ranks, group, True
         )
 
         buffer = Buffer(
@@ -450,14 +450,6 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
             ),
             explicitly_destroy=True,
         )
-        buffer.connect_atomic_buffer(proxies[0])
-
-        for proxy in proxies:
-            proxy.calculate_and_set_dispatch_recv_data_offset(
-                args.num_tokens, args.hidden, args.num_experts
-            )
-            proxy.set_atomic_buffer_ptr(proxies[0].get_atomic_buffer_ptr())
-
         torch.manual_seed(rank)
 
         for i in (24,):
