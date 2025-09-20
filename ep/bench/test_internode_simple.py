@@ -161,9 +161,6 @@ if __name__ == "__main__":
     if ib_dev and ib_dev.startswith("mlx"):  # Mellanox IB devices show up like mlx5_0
         os.environ["NCCL_IB_HCA"] = ib_dev
         print(f"Set NCCL_IB_HCA={ib_dev}")
-    else:
-        print(f"Skipping NCCL_IB_HCA export (detected {ib_dev})")
-
     print("Simple internode test starting...")
     local_rank = int(os.environ["LOCAL_RANK"])
     num_local_ranks = int(os.environ["LOCAL_WORLD_SIZE"])
