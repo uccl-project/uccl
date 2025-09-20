@@ -55,48 +55,36 @@ def test_main(
         )
 
     # Random data
-    device = f"cuda:{local_rank}"
-    print(f"[test_main] Rank {rank}: Device set to {device}", flush=True)
-    print(
-        f"[test_main] Rank {rank}: Current device is {torch.cuda.current_device()}",
-        flush=True,
-    )
-    print(
-        f"[test_main] Rank {rank}: Count of devices is {torch.cuda.device_count()}",
-        flush=True,
-    )
-
-    x = torch.ones((num_tokens, hidden), dtype=torch.bfloat16, device=device) * rank
-
-    x_pure_rand = torch.randn((num_tokens, hidden), dtype=torch.bfloat16, device=device)
+    x = torch.ones((num_tokens, hidden), dtype=torch.bfloat16, device="cuda") * rank
+    x_pure_rand = torch.randn((num_tokens, hidden), dtype=torch.bfloat16, device="cuda")
     x_e4m3 = per_token_cast_to_fp8(x) if Buffer.is_sm90_compiled() else None
     x_e4m3 = (x_e4m3[0], x_e4m3[1].T.contiguous().T) if x_e4m3 is not None else None
     scores = (
-        torch.randn((num_tokens, num_experts), dtype=torch.float32, device=device).abs()
+        torch.randn((num_tokens, num_experts), dtype=torch.float32, device="cuda").abs()
         + 1
     )
     topk_idx = torch.topk(scores, num_topk, dim=-1, largest=True, sorted=False)[1]
     topk_weights = (
-        torch.ones((num_tokens, num_topk), dtype=torch.float32, device=device) * rank
+        torch.ones((num_tokens, num_topk), dtype=torch.float32, device="cuda") * rank
     )
     topk_weights_pure_rand = torch.randn(
-        (num_tokens, num_topk), dtype=torch.float32, device=device
+        (num_tokens, num_topk), dtype=torch.float32, device="cuda"
     )
     rank_idx = topk_idx // (num_experts // num_ranks)
     rank_idx.masked_fill_(topk_idx == -1, -1)
     inplace_unique(rank_idx, num_ranks)
 
     # Expert meta
-    num_tokens_per_expert = torch.zeros((num_experts,), dtype=torch.int, device=device)
+    num_tokens_per_expert = torch.zeros((num_experts,), dtype=torch.int, device="cuda")
     for i in range(num_experts):
         num_tokens_per_expert[i] = (topk_idx == i).sum()
     gbl_num_tokens_per_expert = num_tokens_per_expert.clone()
     dist.all_reduce(gbl_num_tokens_per_expert, group=group)
 
     # Rank layout meta
-    num_tokens_per_rank = torch.empty((num_ranks,), dtype=torch.int, device=device)
+    num_tokens_per_rank = torch.empty((num_ranks,), dtype=torch.int, device="cuda")  
     token_idx_in_rank = torch.full(
-        (num_ranks, num_tokens), -1, dtype=torch.long, device=device
+        (num_ranks, num_tokens), -1, dtype=torch.long, device="cuda"
     )
     for i in range(num_ranks):
         num_tokens_per_rank[i] = (rank_idx == i).sum()
@@ -105,8 +93,8 @@ def test_main(
         tokens = torch.sort(token_sel.to(torch.int), descending=True)[1]
         tokens[:count] = torch.sort(tokens[:count])[0]
         token_idx_in_rank[i][tokens[:count]] = torch.arange(
-            count, dtype=torch.long, device=device
-        )
+            count, dtype=torch.long, device="cuda"
+    )
     token_idx_in_rank = token_idx_in_rank.T.contiguous().to(torch.int)
     is_token_in_rank = token_idx_in_rank >= 0
     gbl_num_tokens_per_rank = num_tokens_per_rank.clone()
@@ -357,7 +345,7 @@ def test_main(
         # Gather the best config from rank 0 and the first test setting
         if best_dispatch_results is None:
             best_dispatch_results = torch.tensor(
-                [best_results[0], best_results[1]], dtype=torch.int32, device=device
+                [best_results[0], best_results[1]], dtype=torch.int32, device="cuda"
             )
             all_best_fp8_results_list = [
                 torch.zeros_like(best_dispatch_results)
