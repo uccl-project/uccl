@@ -146,8 +146,8 @@ class Buffer {
         (num_ranks <= max_nvl_peers * NUM_MAX_RDMA_PEERS || low_latency_mode));
     EP_HOST_ASSERT(num_ranks < max_nvl_peers ||
                    (num_ranks % max_nvl_peers) == 0);
-    if (num_rdma_bytes > 0)
-      EP_HOST_ASSERT(num_ranks > max_nvl_peers || low_latency_mode);
+    // if (num_rdma_bytes > 0)
+    //   EP_HOST_ASSERT(num_ranks > max_nvl_peers || low_latency_mode);
 
     rdma_rank = rank / max_nvl_peers;
     nvl_rank = rank % max_nvl_peers;
@@ -1128,6 +1128,7 @@ class Buffer {
             num_channels * num_ranks * config.num_max_nvl_chunked_recv_tokens *
                 sizeof(float) * num_scales  // FP8 scale buffer
         <= static_cast<size_t>(num_nvl_bytes));
+
     uccl::intranode::dispatch(
         recv_x.data_ptr(), recv_x_scales_ptr, recv_src_idx.data_ptr<int>(),
         recv_topk_idx_ptr, recv_topk_weights_ptr,

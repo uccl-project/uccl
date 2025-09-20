@@ -445,7 +445,9 @@ def bench_kineto(
     return kernel_durations if is_tuple else kernel_durations[0]
 
 
-def initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group, num_experts=0):
+def initialize_uccl(
+    scratch, scratch_nbytes, rank, num_ranks, group, num_experts=0, is_intranode=False
+):
 
     local_rank = int(os.environ["LOCAL_RANK"])
     nproc_per_node = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
@@ -453,13 +455,6 @@ def initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group, num_experts
 
     if int(os.environ.get("WORLD_SIZE")) % nproc_per_node != 0:
         raise ValueError("WORLD_SIZE must be divisible by LOCAL_WORLD_SIZE")
-
-    # peer_ip = get_peer_ip(rank, num_ranks, group)
-    # if rank == 0:
-    #     print(
-    #         f"Peer IP: {peer_ip}",
-    #         flush=True,
-    #     )
 
     bench = ep.Bench()
     proxies = []
@@ -479,17 +474,19 @@ def initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group, num_experts
             rank=rank,
             node_idx=node_idx,
             local_rank=local_rank,
-            peer_ip=peer_ip,
+            peer_ip="" if is_intranode else peer_ip,
             num_experts=num_experts,
             num_ranks=num_ranks,
         )
-        proxy.set_peers_meta(peers_meta_list)
+        if not is_intranode:
+            proxy.set_peers_meta(peers_meta_list)
         proxies.append(proxy)
     ep.register_proxies(local_rank, proxies)
 
     dist.barrier(group)
-    for i in range(bench.num_proxies()):
-        proxies[i].start_dual()
+    if not is_intranode:
+        for i in range(bench.num_proxies()):
+            proxies[i].start_dual()
 
     workers = None
     # if hasattr(ep, "PeerCopyManager"):
@@ -503,7 +500,6 @@ def initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group, num_experts
     #             print(f"PeerCopyManager unavailable: {e}", flush=True)
 
     time.sleep(3)
-
     return proxies, workers, bench
 
 
