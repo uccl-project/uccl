@@ -1,3 +1,9 @@
+"""
+This is the same test_intranode.py test in DeepEP's repo.
+OMP_NUM_THREADS=8 torchrun --standalone --nproc_per_node=8 bench/test_intranode.py \
+    --num-tokens 2048 --hidden 3584 --num-topk 4 --num-experts 128
+"""
+
 import argparse
 import time
 import torch
@@ -550,27 +556,14 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test intranode EP kernels")
-    parser.add_argument(
-        "--num-processes",
-        type=int,
-        default=8,
-        help="Number of processes to spawn (default: 8)",
-    )
-    parser.add_argument(
-        "--num-tokens", type=int, default=2048, help="Number of tokens (default: 4096)"
-    )
-    parser.add_argument(
-        "--hidden", type=int, default=3584, help="Hidden dimension size (default: 7168)"
-    )
-    parser.add_argument(
-        "--num-topk", type=int, default=4, help="Number of top-k experts (default: 8)"
-    )
-    parser.add_argument(
-        "--num-experts", type=int, default=128, help="Number of experts (default: 256)"
-    )
+    parser.add_argument("--num-tokens", type=int, default=2048)
+    parser.add_argument("--hidden", type=int, default=3584)
+    parser.add_argument("--num-topk", type=int, default=4)
+    parser.add_argument("--num-experts", type=int, default=128)
     args = parser.parse_args()
 
-    num_processes = args.num_processes
-    torch.multiprocessing.spawn(
-        test_loop, args=(num_processes, args), nprocs=num_processes
-    )
+    # torchrun sets these automatically
+    local_rank = int(os.environ["LOCAL_RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+
+    test_loop(local_rank, world_size, args)

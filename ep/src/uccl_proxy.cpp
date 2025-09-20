@@ -4,7 +4,8 @@
 
 UcclProxy::UcclProxy(uintptr_t rb_addr, int block_idx,
                      uintptr_t gpu_buffer_addr, size_t total_size, int rank,
-                     int node_idx, int local_rank, std::string const& peer_ip)
+                     int node_idx, int local_rank, std::string const& peer_ip,
+                     int num_experts, int num_ranks)
     : peer_ip_storage_{peer_ip}, thread_{}, mode_{Mode::None}, running_{false} {
   Proxy::Config cfg;
   // cfg.rb = reinterpret_cast<DeviceToHostCmdBuffer*>(rb_addr);
@@ -18,6 +19,8 @@ UcclProxy::UcclProxy(uintptr_t rb_addr, int block_idx,
   cfg.rank = rank;
   cfg.local_rank = local_rank;
   cfg.peer_ip = peer_ip_storage_.empty() ? nullptr : peer_ip_storage_.c_str();
+  cfg.num_experts = num_experts;
+  cfg.num_ranks = num_ranks;
   proxy_ = std::make_unique<Proxy>(cfg);
   local_rank_ = local_rank;
   node_idx_ = node_idx;
@@ -49,22 +52,10 @@ void UcclProxy::set_peers_meta(std::vector<PeerMeta> const& peers) {
   proxy_->set_peers_meta(peers);
 }
 
-void UcclProxy::start_sender() {
-  start(Mode::Sender);
-  std::printf("UcclProxy started as Sender\n");
-}
-void UcclProxy::start_remote() {
-  start(Mode::Remote);
-  std::printf("UcclProxy started as Remote\n");
-}
-void UcclProxy::start_local() {
-  start(Mode::Local);
-  std::printf("UcclProxy started as Local\n");
-}
-void UcclProxy::start_dual() {
-  start(Mode::Dual);
-  std::printf("UcclProxy started as Dual\n");
-}
+void UcclProxy::start_sender() { start(Mode::Sender); }
+void UcclProxy::start_remote() { start(Mode::Remote); }
+void UcclProxy::start_local() { start(Mode::Local); }
+void UcclProxy::start_dual() { start(Mode::Dual); }
 
 void UcclProxy::stop() {
   if (!running_.load(std::memory_order_acquire)) {
@@ -75,9 +66,7 @@ void UcclProxy::stop() {
   running_.store(false, std::memory_order_release);
   // Because proxies share the gpu_buffer, only destroy gpu_buffer for the first
   // proxy.
-  std::printf("UcclProxy destroying\n");
   proxy_->destroy(block_idx_ == 0);
-  std::printf("UcclProxy destroyed\n");
 }
 
 void UcclProxy::start(Mode m) {

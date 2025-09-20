@@ -37,9 +37,6 @@ void Proxy::set_peers_meta(std::vector<PeerMeta> const& peers) {
   peers_.reserve(peers.size());
   for (auto const& p : peers) {
     peers_.push_back(p);
-    if (cfg_.block_idx == 0)
-      printf("PeerMeta(rank=%d, ptr=0x%lx, nbytes=%zu, ip=%s)\n", p.rank,
-             static_cast<unsigned long>(p.ptr), p.nbytes, p.ip.c_str());
   }
   ctxs_for_all_ranks_.clear();
   ctxs_for_all_ranks_.resize(peers.size());
@@ -173,26 +170,22 @@ void Proxy::init_common() {
 
   // Bring each per-peer QP to RTR/RTS (skip if RDMA not initialized)
   if (ctx_.context) {
-    for (int peer = 0; peer < num_ranks; ++peer) {
-      if (peer == my_rank) continue;
-      auto& c = *ctxs_for_all_ranks_[peer];
+      for (int peer = 0; peer < num_ranks; ++peer) {
+        if (peer == my_rank) continue;
+        auto& c = *ctxs_for_all_ranks_[peer];
 
-      // qp is different from each rank.
-      modify_qp_to_rtr(c, &remote_infos_[peer]);
-      modify_qp_to_rts(c, &local_infos_[peer]);
+        // qp is different from each rank.
+        modify_qp_to_rtr(c, &remote_infos_[peer]);
+        modify_qp_to_rts(c, &local_infos_[peer]);
 
       c.remote_addr = remote_infos_[peer].addr;
       c.remote_rkey = remote_infos_[peer].rkey;
       c.remote_len = remote_infos_[peer].len;
-
-      printf("Peer %d remote addr=%p rkey=%u len=%lu\n", peer,
-             (void*)c.remote_addr, c.remote_rkey, c.remote_len);
-
       if (FILE* f = fopen("/tmp/uccl_debug.txt", "a")) {
-        fprintf(f,
-                "[PROXY_INIT] me=%d peer=%d: remote_addr=0x%lx "
-                "local_buffer=0x%lx\n",
-                my_rank, peer, c.remote_addr, (uintptr_t)cfg_.gpu_buffer);
+        fprintf(
+            f,
+            "[PROXY_INIT] me=%d peer=%d: remote_addr=0x%lx local_buffer=0x%lx\n",
+            my_rank, peer, c.remote_addr, (uintptr_t)cfg_.gpu_buffer);
         fclose(f);
       }
     }
@@ -215,12 +208,12 @@ void Proxy::init_remote() {
   init_common();
   assert(cfg_.rank == 1);
   auto& ctx_ptr = ctxs_for_all_ranks_[0];
-  // Only perform RDMA operations if RDMA is initialized
-  if (ctx_ptr->pd && ctx_ptr->recv_ack_qp) {
-    remote_reg_ack_buf(ctx_ptr->pd, ring.ack_buf, ring.ack_mr);
-    ring.ack_qp = ctx_ptr->ack_qp;
-    post_receive_buffer_for_imm(*ctx_ptr);
-  }
+  local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
+  remote_reg_ack_buf(ctx_ptr->pd, ring.ack_buf, ring.ack_mr);
+  ring.ack_qp = ctx_ptr->ack_qp;
+#ifndef EFA
+  post_receive_buffer_for_imm(*ctx_ptr);
+#endif
 }
 
 void Proxy::run_sender() {
@@ -239,37 +232,42 @@ void Proxy::run_sender() {
 void Proxy::run_remote() {
   printf("Remote CPU thread for block %d started\n", cfg_.block_idx + 1);
   init_remote();
+  std::set<PendingUpdate> pending_atomic_updates;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     remote_poll_completions(ctx_, cfg_.block_idx, ring, ctx_by_tag_,
-                            atomic_buffer_ptr_);
+                            atomic_buffer_ptr_, cfg_.num_ranks,
+                            cfg_.num_experts, pending_atomic_updates);
+    apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
+                          cfg_.num_experts, cfg_.num_ranks);
   }
 }
 
 void Proxy::run_dual() {
-  printf("Dual (single-thread) proxy for block %d starting\n",
-         cfg_.block_idx + 1);
   init_common();
   for (int peer = 0; peer < (int)ctxs_for_all_ranks_.size(); ++peer) {
     if (peer == cfg_.rank) continue;
     if (peers_[peer].ip == peers_[cfg_.rank].ip) continue;
     auto& ctx_ptr = ctxs_for_all_ranks_[peer];
     if (!ctx_ptr) continue;
-    // Only perform RDMA operations if RDMA is initialized
-    if (ctx_ptr->pd && ctx_ptr->recv_ack_qp) {
-      local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
-      remote_reg_ack_buf(ctx_ptr->pd, ring.ack_buf, ring.ack_mr);
-      ring.ack_qp = ctx_ptr->ack_qp;
-      post_receive_buffer_for_imm(*ctx_ptr);
-    }
+    local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
+    remote_reg_ack_buf(ctx_ptr->pd, ring.ack_buf, ring.ack_mr);
+    ring.ack_qp = ctx_ptr->ack_qp;
+#ifndef EFA
+    post_receive_buffer_for_imm(*ctx_ptr);
+#endif
   }
   uint64_t my_tail = 0;
   size_t seen = 0;
+  std::set<PendingUpdate> pending_atomic_updates;
   // printf("run_dual initialization complete\n");
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     poll_cq_dual(ctx_, finished_wrs_, acked_wrs_, finished_wrs_mutex_,
-                 cfg_.block_idx, ring, ctx_by_tag_, atomic_buffer_ptr_);
+                 cfg_.block_idx, ring, ctx_by_tag_, atomic_buffer_ptr_,
+                 cfg_.num_ranks, cfg_.num_experts, pending_atomic_updates);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
+    apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
+                          cfg_.num_experts, cfg_.num_ranks);
   }
 }
 
