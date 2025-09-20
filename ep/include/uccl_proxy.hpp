@@ -33,10 +33,8 @@ class UcclProxy {
 
   void* get_atomic_buffer_ptr() {
     if (!atomic_buffer_ptr_) {
-      // For intranode mode, return a dummy pointer (atomic operations not
-      // needed)
-      static int dummy_atomic_buffer = 0;
-      return &dummy_atomic_buffer;
+      fprintf(stderr, "Error: atomic_buffer_ptr_ is not set yet\n");
+      std::abort();
     }
     return atomic_buffer_ptr_;
   }

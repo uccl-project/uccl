@@ -9,7 +9,6 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <cstdlib>
 #include <mutex>
 #include <thread>
 #include <unordered_map>

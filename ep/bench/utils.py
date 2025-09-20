@@ -499,6 +499,7 @@ def initialize_uccl(
     #         if rank == 0:
     #             print(f"PeerCopyManager unavailable: {e}", flush=True)
 
+    time.sleep(3)
     return proxies, workers, bench
 
 
