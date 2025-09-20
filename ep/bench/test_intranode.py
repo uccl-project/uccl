@@ -410,139 +410,68 @@ def test_main(
 
 # noinspection PyUnboundLocalVariable,PyShadowingNames
 def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
-    proxies = None
-    workers = None
-    bench_obj = None
-    buffer = None
 
-    try:
-        # Set LOCAL_RANK environment variable for this process
-        os.environ["LOCAL_RANK"] = str(local_rank)
+    # Set LOCAL_RANK environment variable for this process
+    os.environ["LOCAL_RANK"] = str(local_rank)
 
-        # Set the CUDA device for this process
-        torch.cuda.set_device(local_rank)
+    # Set the CUDA device for this process
+    torch.cuda.set_device(local_rank)
 
-        rank, num_ranks, group = init_dist(local_rank, num_local_ranks)
-        test_ll_compatibility, num_rdma_bytes = False, 0
-        if test_ll_compatibility:
-            ll_num_tokens, ll_hidden, ll_num_experts, ll_num_topk = 16, 5120, 256, 9
-            num_rdma_bytes = Buffer.get_low_latency_rdma_size_hint(
-                ll_num_tokens, ll_hidden, num_ranks, ll_num_experts
-            )
-
-        device_index = int(os.environ["LOCAL_RANK"])
-        scratch = torch.zeros(
-            num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
-        )
-        proxies, workers, bench_obj = initialize_uccl(
-            scratch, num_rdma_bytes, rank, num_ranks, group, args.num_experts, True
+    rank, num_ranks, group = init_dist(local_rank, num_local_ranks)
+    test_ll_compatibility, num_rdma_bytes = False, 0
+    if test_ll_compatibility:
+        ll_num_tokens, ll_hidden, ll_num_experts, ll_num_topk = 16, 5120, 256, 9
+        num_rdma_bytes = Buffer.get_low_latency_rdma_size_hint(
+            ll_num_tokens, ll_hidden, num_ranks, ll_num_experts
         )
 
-        buffer = Buffer(
+    device_index = int(os.environ["LOCAL_RANK"])
+    scratch = torch.zeros(
+        num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
+    )
+    proxies, workers, bench_obj = initialize_uccl(
+        scratch, num_rdma_bytes, rank, num_ranks, group, args.num_experts, True
+    )
+
+    buffer = Buffer(
+        group,
+        scratch.data_ptr(),
+        int(2e9),
+        num_rdma_bytes,
+        low_latency_mode=test_ll_compatibility,
+        num_qps_per_rank=(ll_num_experts // num_ranks if test_ll_compatibility else 1),
+        explicitly_destroy=True,
+    )
+    torch.manual_seed(rank)
+
+    for i in (24,):
+        test_main(args, i, local_rank, num_ranks, rank, buffer, group)
+        if local_rank == 0:
+            print("", flush=True)
+
+    # Test compatibility with low latency functions
+    if test_ll_compatibility:
+        buffer.clean_low_latency_buffer(ll_num_tokens, ll_hidden, ll_num_experts)
+        test_low_latency.test_main(
+            ll_num_tokens,
+            ll_hidden,
+            ll_num_experts,
+            ll_num_topk,
+            rank,
+            num_ranks,
             group,
-            scratch.data_ptr(),
-            int(2e9),
-            num_rdma_bytes,
-            low_latency_mode=test_ll_compatibility,
-            num_qps_per_rank=(
-                ll_num_experts // num_ranks if test_ll_compatibility else 1
-            ),
-            explicitly_destroy=True,
+            buffer,
+            seed=1,
         )
-        torch.manual_seed(rank)
 
-        for i in (24,):
-            test_main(args, i, local_rank, num_ranks, rank, buffer, group)
-            if local_rank == 0:
-                print("", flush=True)
-
-        # Test compatibility with low latency functions
-        if test_ll_compatibility:
-            buffer.clean_low_latency_buffer(ll_num_tokens, ll_hidden, ll_num_experts)
-            test_low_latency.test_main(
-                ll_num_tokens,
-                ll_hidden,
-                ll_num_experts,
-                ll_num_topk,
-                rank,
-                num_ranks,
-                group,
-                buffer,
-                seed=1,
-            )
-
-        # Clean up
-        print(f"Rank {rank}: Starting cleanup...", flush=True)
-
-        # Synchronize before cleanup
-        if group:
-            group.barrier()
-
-        # Destroy buffer
-        if buffer:
-            try:
-                buffer.destroy()
-                print(f"Rank {rank}: Buffer destroyed", flush=True)
-            except Exception as e:
-                print(
-                    f"Rank {rank}: Warning - failed to destroy buffer: {e}", flush=True
-                )
-
-        # Synchronize after buffer destruction
-        if dist.is_initialized():
-            dist.barrier()
-
-        # Destroy UCCL resources
-        if proxies and workers:
-            try:
-                destroy_uccl(proxies, workers, bench_obj)
-                print(f"Rank {rank}: UCCL resources destroyed", flush=True)
-            except Exception as e:
-                print(f"Rank {rank}: Warning - failed to destroy UCCL: {e}", flush=True)
-
-        # Final synchronization
-        if dist.is_initialized():
-            dist.barrier()
-
-        # Destroy process group
-        if dist.is_initialized():
-            try:
-                dist.destroy_process_group()
-                print(f"Rank {rank}: Process group destroyed", flush=True)
-            except Exception as e:
-                print(
-                    f"Rank {rank}: Warning - failed to destroy process group: {e}",
-                    flush=True,
-                )
-
-    except Exception as e:
-        print(f"Rank {local_rank}: Fatal error in test_loop: {e}", flush=True)
-        import traceback
-
-        traceback.print_exc()
-
-        # Emergency cleanup
-        try:
-            if proxies:
-                for p in proxies:
-                    try:
-                        p.stop()
-                    except:
-                        pass
-            if workers:
-                try:
-                    workers.stop()
-                except:
-                    pass
-            if buffer:
-                try:
-                    buffer.destroy()
-                except:
-                    pass
-        except:
-            pass
-
-        raise
+    # Clean up
+    print(f"Rank {rank}: Starting cleanup...", flush=True)
+    group.barrier()
+    buffer.destroy()
+    dist.barrier()
+    destroy_uccl(proxies, workers, bench)
+    dist.barrier()
+    dist.destroy_process_group()
 
 
 if __name__ == "__main__":

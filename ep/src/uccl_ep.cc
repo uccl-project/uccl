@@ -1129,7 +1129,6 @@ class Buffer {
                 sizeof(float) * num_scales  // FP8 scale buffer
         <= static_cast<size_t>(num_nvl_bytes));
 
-    printf("Intranode dispatch\n");
     uccl::intranode::dispatch(
         recv_x.data_ptr(), recv_x_scales_ptr, recv_src_idx.data_ptr<int>(),
         recv_topk_idx_ptr, recv_topk_weights_ptr,
