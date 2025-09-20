@@ -85,7 +85,8 @@ class Buffer:
             explicitly_destroy,
             int(os.environ.get("LOCAL_WORLD_SIZE", -1)),
         )
-        self.runtime.set_rdma_buffer_raw(rdma_buffer_ptr)
+        if num_rdma_bytes:
+            self.runtime.set_rdma_buffer_raw(rdma_buffer_ptr)
 
         # Synchronize device IDs
         device_ids = [
