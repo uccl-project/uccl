@@ -9,11 +9,6 @@ import time
 import torch
 import torch.distributed as dist
 import os
-import signal
-import faulthandler
-
-
-faulthandler.enable()
 
 # noinspection PyUnresolvedReferences
 from uccl.ep import Config
