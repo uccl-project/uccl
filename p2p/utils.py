@@ -177,6 +177,7 @@ def create_tensor(
 
     weakref.finalize(tensor, _auto_free_tensor, addr, tensor_id)
 
+    _GLOBAL_TENSOR_IDS[addr] = tensor_id
     return tensor, tensor_id
 
 
