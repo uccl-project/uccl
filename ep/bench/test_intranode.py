@@ -82,7 +82,7 @@ def test_main(
     dist.all_reduce(gbl_num_tokens_per_expert, group=group)
 
     # Rank layout meta
-    num_tokens_per_rank = torch.empty((num_ranks,), dtype=torch.int, device="cuda")  
+    num_tokens_per_rank = torch.empty((num_ranks,), dtype=torch.int, device="cuda")
     token_idx_in_rank = torch.full(
         (num_ranks, num_tokens), -1, dtype=torch.long, device="cuda"
     )
@@ -94,7 +94,7 @@ def test_main(
         tokens[:count] = torch.sort(tokens[:count])[0]
         token_idx_in_rank[i][tokens[:count]] = torch.arange(
             count, dtype=torch.long, device="cuda"
-    )
+        )
     token_idx_in_rank = token_idx_in_rank.T.contiguous().to(torch.int)
     is_token_in_rank = token_idx_in_rank >= 0
     gbl_num_tokens_per_rank = num_tokens_per_rank.clone()
