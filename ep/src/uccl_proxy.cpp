@@ -9,6 +9,7 @@ UcclProxy::UcclProxy(uintptr_t rb_addr, int block_idx,
     : peer_ip_storage_{peer_ip}, thread_{}, mode_{Mode::None}, running_{false} {
   if (peer_ip.empty()) {
     printf("Intranode mode. UcclProxy returns\n");
+    return;
   }
   Proxy::Config cfg;
   // cfg.rb = reinterpret_cast<DeviceToHostCmdBuffer*>(rb_addr);

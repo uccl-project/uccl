@@ -445,7 +445,9 @@ def bench_kineto(
     return kernel_durations if is_tuple else kernel_durations[0]
 
 
-def initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group, num_experts=0, is_intranode=False):
+def initialize_uccl(
+    scratch, scratch_nbytes, rank, num_ranks, group, num_experts=0, is_intranode=False
+):
 
     local_rank = int(os.environ["LOCAL_RANK"])
     nproc_per_node = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
