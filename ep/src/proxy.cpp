@@ -170,22 +170,22 @@ void Proxy::init_common() {
 
   // Bring each per-peer QP to RTR/RTS (skip if RDMA not initialized)
   if (ctx_.context) {
-      for (int peer = 0; peer < num_ranks; ++peer) {
-        if (peer == my_rank) continue;
-        auto& c = *ctxs_for_all_ranks_[peer];
+    for (int peer = 0; peer < num_ranks; ++peer) {
+      if (peer == my_rank) continue;
+      auto& c = *ctxs_for_all_ranks_[peer];
 
-        // qp is different from each rank.
-        modify_qp_to_rtr(c, &remote_infos_[peer]);
-        modify_qp_to_rts(c, &local_infos_[peer]);
+      // qp is different from each rank.
+      modify_qp_to_rtr(c, &remote_infos_[peer]);
+      modify_qp_to_rts(c, &local_infos_[peer]);
 
       c.remote_addr = remote_infos_[peer].addr;
       c.remote_rkey = remote_infos_[peer].rkey;
       c.remote_len = remote_infos_[peer].len;
       if (FILE* f = fopen("/tmp/uccl_debug.txt", "a")) {
-        fprintf(
-            f,
-            "[PROXY_INIT] me=%d peer=%d: remote_addr=0x%lx local_buffer=0x%lx\n",
-            my_rank, peer, c.remote_addr, (uintptr_t)cfg_.gpu_buffer);
+        fprintf(f,
+                "[PROXY_INIT] me=%d peer=%d: remote_addr=0x%lx "
+                "local_buffer=0x%lx\n",
+                my_rank, peer, c.remote_addr, (uintptr_t)cfg_.gpu_buffer);
         fclose(f);
       }
     }
