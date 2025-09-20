@@ -4,7 +4,14 @@ import socket
 import time
 import struct
 import pickle
-from typing import Any
+from typing import Any, Tuple
+
+import torch
+
+try:
+    from . import p2p
+except ImportError:
+    import p2p
 
 
 def set_files_limit():
@@ -108,3 +115,52 @@ def recv_obj(sock: socket.socket) -> Any:
         return None
     payload = _recv_exact(sock, length)
     return pickle.loads(payload)
+
+
+def create_tensor(
+    shape: Tuple[int, ...], dtype: torch.dtype, device: str
+) -> Tuple[torch.Tensor, int]:
+    """
+    Create an empty tensor and register GPU memory if applicable.
+
+    Args:
+        shape (Tuple[int, ...]): e.g., (2, 100, 4)
+        dtype (torch.dtype): e.g., torch.float32
+        device (str): 'cuda:0', 'cuda:1', or 'cpu'
+
+    Returns:
+        Tuple[torch.Tensor, int]: tensor, tensor_id
+    """
+    if device.startswith("cuda"):
+        gpu_id = int(device.split(":")[1])
+    elif device.startswith("cpu"):
+        gpu_id = -1  # CPU -1
+    else:
+        raise RuntimeError(f"Invalid device: ", device)
+
+    tensor = torch.empty(size=shape, dtype=dtype, device=device)
+
+    addr = tensor.data_ptr()
+    size = tensor.numel() * tensor.element_size()
+
+    tensor_id = p2p.reg_mem(gpu_id, addr, size)
+
+    if tensor_id < 0:
+        raise RuntimeError(
+            f"Failed to register memory: tensor_id={tensor_id}, gpu_id={gpu_id}"
+        )
+
+    return tensor, tensor_id
+
+
+def free_tensor(tensor_id: int):
+    """
+    Free the registered GPU/CPU memory for a tensor.
+
+    Args:
+        tensor_id (int)
+    """
+    if tensor_id < 0:
+        raise RuntimeError(f"Invalid tensor_id: {tensor_id}")
+
+    p2p.dereg_mem(tensor_id)

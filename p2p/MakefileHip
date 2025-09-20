@@ -22,15 +22,10 @@ PYTHON_LDFLAGS := $(shell $(PYTHON_CONFIG) --ldflags)
 PYTHON_SITE_PACKAGES := $(shell $(PYTHON) -c "import site; print(site.getsitepackages()[0])")
 INSTALL_DIR          := $(PYTHON_SITE_PACKAGES)/uccl
 
-# Pytorch
-TORCH_PATH := $(shell $(PYTHON) -c "import torch; print(torch.__path__[0])")
-TORCH_INC  := -I$(TORCH_PATH)/include -I$(TORCH_PATH)/include/torch/csrc/api/include
-TORCH_LIB  := -L$(TORCH_PATH)/lib -ltorch -ltorch_cpu -ltorch_python -ltorch_hip -lc10_hip
-
-CXXFLAGS       += -D__HIP_PLATFORM_AMD__ $(TORCH_INC)
+CXXFLAGS       += -D__HIP_PLATFORM_AMD__
 LDFLAGS         = -L$(HIP_LIB) -lamdhip64 \
                   -Wl,-rpath,$(HIP_LIB) -I${CONDA_LIB_HOME}/../include -L${CONDA_LIB_HOME} -lglog -lgflags -lgtest \
-                  -lz -lelf -libverbs -lpthread $(TORCH_LIB) -Wl,-rpath,$(TORCH_PATH)/lib
+                  -lz -lelf -libverbs -lpthread
 
 # Target and source files
 TARGET   := p2p$(PYEXT)
