@@ -447,8 +447,6 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
             seed=1,
         )
 
-    # Clean up
-    print(f"Rank {rank}: Starting cleanup...", flush=True)
     group.barrier()
     buffer.destroy()
     dist.barrier()
@@ -459,10 +457,24 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test intranode EP kernels")
-    parser.add_argument("--num-tokens", type=int, default=2048)
-    parser.add_argument("--hidden", type=int, default=3584)
-    parser.add_argument("--num-topk", type=int, default=4)
-    parser.add_argument("--num-experts", type=int, default=128)
+    parser.add_argument(
+        "--num-processes",
+        type=int,
+        default=8,
+        help="Number of processes to spawn (default: 8)",
+    )
+    parser.add_argument(
+        "--num-tokens", type=int, default=4096, help="Number of tokens (default: 4096)"
+    )
+    parser.add_argument(
+        "--hidden", type=int, default=7168, help="Hidden dimension size (default: 7168)"
+    )
+    parser.add_argument(
+        "--num-topk", type=int, default=8, help="Number of top-k experts (default: 8)"
+    )
+    parser.add_argument(
+        "--num-experts", type=int, default=256, help="Number of experts (default: 256)"
+    )
     args = parser.parse_args()
 
     # torchrun sets these automatically
