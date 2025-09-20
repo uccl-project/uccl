@@ -105,7 +105,7 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
 }
 
 void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
-                          int block_idx, int local_rank) {
+                          int thread_idx, int local_rank) {
   if (S.context) return;  // already initialized
 
   int num_devices = 0;
@@ -156,7 +156,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     } else {
       // Spread GPUs across equal-distance NICs: use local GPU index modulo
       // For example, pass in `local_rank` or derive gpu_index from device path
-      selected_nic_name = candidates[block_idx % candidates.size()];
+      selected_nic_name = candidates[thread_idx % candidates.size()];
     }
   }
 
@@ -609,7 +609,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              std::vector<uint64_t> const& wrs_to_post,
                              std::vector<TransferCmd> const& cmds_to_post,
                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                             int my_rank, int block_idx,
+                             int my_rank, int thread_idx,
                              std::unordered_set<uint64_t>& finished_wrs,
                              std::mutex& finished_wrs_mutex) {
   if (num_wrs == 0) return;
@@ -640,7 +640,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       fprintf(stderr, "Destination ctx missing fields for dst=%d\n", dst_rank);
       std::abort();
     }
-    const size_t k = wr_ids.size();
+    size_t const k = wr_ids.size();
 #ifdef EFA
     struct ibv_qp_ex* qpx = (struct ibv_qp_ex*)ctx->qp;
     ibv_wr_start(qpx);
@@ -703,10 +703,10 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
             expert_tail_wr, std::move(expert_wr_ids));
         if (!inserted) {
-          fprintf(
-              stderr,
-              "block_idx: %d, Error: tail wr_id %lu already exists (map=%p)\n",
-              block_idx, expert_tail_wr, (void*)&S.wr_id_to_wr_ids);
+          fprintf(stderr,
+                  "thread_idx: %d, Error: tail wr_id %lu already exists "
+                  "(map=%p)\n",
+                  thread_idx, expert_tail_wr, (void*)&S.wr_id_to_wr_ids);
           std::abort();
         } else {
           for (auto const& wr_id : it->second) {
@@ -764,8 +764,8 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       wrs[j].send_flags = IBV_SEND_SIGNALED;
       wrs[j].next = (j + 1 < k) ? &wrs[j + 1] : nullptr;
     }
-    const size_t last = k - 1;
-    const uint64_t batch_tail_wr = wr_ids[last];
+    size_t const last = k - 1;
+    uint64_t const batch_tail_wr = wr_ids[last];
     wrs[last].send_flags = IBV_SEND_SIGNALED;
     wrs[last].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
     uint32_t imm = WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
@@ -789,10 +789,10 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       auto [it, inserted] =
           S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
       if (!inserted) {
-        fprintf(
-            stderr,
-            "block_idx: %d, Error: tail wr_id %lu already exists (map=%p)\n",
-            block_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
+        fprintf(stderr,
+                "thread_idx: %d, Error: tail wr_id %lu already exists "
+                "(map=%p)\n",
+                thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
         std::abort();
       } else {
         for (auto const& wr_id : it->second) {
@@ -828,7 +828,7 @@ void local_process_completions(ProxyCtx& S,
         send_completed++;
         {
           std::lock_guard<std::mutex> lock(finished_wrs_mutex);
-          const uint64_t wr_done = wc[i].wr_id;
+          uint64_t const wr_done = wc[i].wr_id;
           acked_wrs.insert(wr_done);
           if (S.wr_id_to_wr_ids.find(wr_done) != S.wr_id_to_wr_ids.end()) {
             S.wr_id_to_wr_ids.erase(wr_done);
@@ -1239,7 +1239,7 @@ void post_atomic_operations(ProxyCtx& S,
                             std::vector<uint64_t> const& wrs_to_post,
                             std::vector<TransferCmd> const& cmds_to_post,
                             std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                            int my_rank, int block_idx,
+                            int my_rank, int thread_idx,
                             std::unordered_set<uint64_t>& finished_wrs,
                             std::mutex& finished_wrs_mutex,
                             std::unordered_set<uint64_t>& acked_wrs) {
@@ -1264,7 +1264,7 @@ void post_atomic_operations(ProxyCtx& S,
     if (wr_ids.empty()) continue;
 
     ProxyCtx* ctx = ctxs[dst_rank].get();
-    const size_t k = wr_ids.size();
+    size_t const k = wr_ids.size();
 #ifdef EFA
     struct ibv_qp_ex* qpx = (struct ibv_qp_ex*)ctx->qp;
     ibv_wr_start(qpx);
@@ -1313,7 +1313,7 @@ void post_atomic_operations(ProxyCtx& S,
 
     for (size_t i = 0; i < k; ++i) {
       auto const& cmd = cmds_to_post[wr_ids[i]];
-      const uint64_t wrid = wrs_to_post[wr_ids[i]];
+      uint64_t const wrid = wrs_to_post[wr_ids[i]];
       wr_ids[i] = wrid;
 
       int v = static_cast<int>(cmd.value);
@@ -1355,16 +1355,17 @@ void post_atomic_operations(ProxyCtx& S,
 #endif
     // bookkeeping identical to your original logic
     S.posted.fetch_add(k, std::memory_order_relaxed);
-    const uint64_t batch_tail_wr = wr_ids.back();
+    uint64_t const batch_tail_wr = wr_ids.back();
     {
       std::lock_guard<std::mutex> lock(finished_wrs_mutex);
       auto [it, inserted] =
           S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
       if (!inserted) {
         fprintf(stderr,
-                "block_idx: %d, Error: tail wr_id %lu already exists (map=%p, "
+                "thread_idx: %d, Error: tail wr_id %lu already exists "
+                "(map=%p, "
                 "size=%zu, dst_rank=%d)\n",
-                block_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
+                thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
                 S.wr_id_to_wr_ids.size(), dst_rank);
         std::abort();
       } else {

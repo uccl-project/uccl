@@ -2,7 +2,7 @@
 #include <cstdio>
 #include <stdexcept>
 
-UcclProxy::UcclProxy(uintptr_t rb_addr, int block_idx,
+UcclProxy::UcclProxy(uintptr_t rb_addr, int thread_idx,
                      uintptr_t gpu_buffer_addr, size_t total_size, int rank,
                      int node_idx, int local_rank, std::string const& peer_ip,
                      int num_experts, int num_ranks)
@@ -14,10 +14,10 @@ UcclProxy::UcclProxy(uintptr_t rb_addr, int block_idx,
   Proxy::Config cfg;
   // cfg.rb = reinterpret_cast<DeviceToHostCmdBuffer*>(rb_addr);
   rb_ = rb_addr;
-  block_idx_ = block_idx;
+  thread_idx_ = thread_idx;
   gpu_buffer_addr_ = reinterpret_cast<void*>(gpu_buffer_addr);
   cfg.rb = reinterpret_cast<DeviceToHostCmdBuffer*>(rb_);
-  cfg.block_idx = block_idx;
+  cfg.thread_idx = thread_idx;
   cfg.gpu_buffer = reinterpret_cast<void*>(gpu_buffer_addr);
   cfg.total_size = total_size;
   cfg.rank = rank;
@@ -29,7 +29,7 @@ UcclProxy::UcclProxy(uintptr_t rb_addr, int block_idx,
   local_rank_ = local_rank;
   node_idx_ = node_idx;
 
-  if (block_idx == 0) {
+  if (thread_idx == 0) {
     // size_t atomic_buffer_bytes = 2 * align<size_t>(num_experts * sizeof(int),
     // 128);
     // TODO(MaoZiming)
@@ -70,7 +70,7 @@ void UcclProxy::stop() {
   running_.store(false, std::memory_order_release);
   // Because proxies share the gpu_buffer, only destroy gpu_buffer for the first
   // proxy.
-  proxy_->destroy(block_idx_ == 0);
+  proxy_->destroy(thread_idx_ == 0);
 }
 
 void UcclProxy::start(Mode m) {

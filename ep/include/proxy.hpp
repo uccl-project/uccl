@@ -35,7 +35,7 @@ class Proxy {
 
   struct Config {
     DeviceToHostCmdBuffer* rb = nullptr;
-    int block_idx = 0;
+    int thread_idx = 0;
     void* gpu_buffer = nullptr;
     size_t total_size = 0;
     int rank = 0;

@@ -468,7 +468,7 @@ def initialize_uccl(
     for i in range(bench.num_proxies()):
         proxy = ep.Proxy(
             rb_addr=bench.ring_addr(i),
-            block_idx=i,
+            thread_idx=i,
             gpu_buffer_addr=scratch_ptr,
             total_size=scratch_nbytes,
             rank=rank,
