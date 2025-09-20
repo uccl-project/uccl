@@ -37,11 +37,11 @@ def parse_endpoint_meta(meta: bytes) -> Tuple[str, int, int]:
 
 def test_local():
     print("Running RDMA-WRITE local test")
-    meta_q = multiprocessing.Queue()
-    fifo_q = multiprocessing.Queue()
+    meta_parent, meta_child = multiprocessing.Pipe()
+    fifo_parent, fifo_child = multiprocessing.Pipe()
 
     def server_proc(ep_meta_q, fifo_meta_q):
-        ep_meta = ep_meta_q.get(timeout=5)
+        ep_meta = ep_meta_q.recv()
         ip, port, r_gpu = parse_endpoint_meta(ep_meta)
 
         ep = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
@@ -53,7 +53,7 @@ def test_local():
         ok, mr_id = ep.reg(tensor.data_ptr(), tensor.numel() * 4)
         assert ok
 
-        fifo_meta = fifo_meta_q.get(timeout=10)
+        fifo_meta = fifo_meta_q.recv()
         assert isinstance(fifo_meta, (bytes, bytearray)) and len(fifo_meta) == 64
 
         ok = ep.write(conn_id, mr_id, tensor.data_ptr(), tensor.numel() * 4, fifo_meta)
@@ -66,7 +66,7 @@ def test_local():
 
     def client_proc(ep_meta_q, fifo_meta_q):
         ep = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
-        ep_meta_q.put(bytes(ep.get_metadata()))
+        ep_meta_q.send(bytes(ep.get_metadata()))
 
         ok, r_ip, r_gpu, conn_id = ep.accept()
         assert ok, "accept failed"
@@ -86,11 +86,11 @@ def test_local():
         assert isinstance(fifo_blob, (bytes, bytearray)) and len(fifo_blob) == 64
         print("Buffer exposed for RDMA WRITE")
 
-        fifo_meta_q.put(bytes(fifo_blob))
+        fifo_meta_q.send(bytes(fifo_blob))
         time.sleep(1)
 
-    srv = multiprocessing.Process(target=server_proc, args=(meta_q, fifo_q))
-    cli = multiprocessing.Process(target=client_proc, args=(meta_q, fifo_q))
+    srv = multiprocessing.Process(target=server_proc, args=(meta_parent, fifo_parent))
+    cli = multiprocessing.Process(target=client_proc, args=(meta_child, fifo_child))
     srv.start()
     time.sleep(1)
     cli.start()
