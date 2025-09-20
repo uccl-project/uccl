@@ -184,7 +184,9 @@ void Proxy::init_remote() {
   local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
   remote_reg_ack_buf(ctx_ptr->pd, ring.ack_buf, ring.ack_mr);
   ring.ack_qp = ctx_ptr->ack_qp;
+#ifndef EFA
   post_receive_buffer_for_imm(*ctx_ptr);
+#endif
 }
 
 void Proxy::run_sender() {
@@ -223,7 +225,9 @@ void Proxy::run_dual() {
     local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
     remote_reg_ack_buf(ctx_ptr->pd, ring.ack_buf, ring.ack_mr);
     ring.ack_qp = ctx_ptr->ack_qp;
+#ifndef EFA
     post_receive_buffer_for_imm(*ctx_ptr);
+#endif
   }
   uint64_t my_tail = 0;
   size_t seen = 0;

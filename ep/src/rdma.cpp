@@ -47,75 +47,6 @@ dtype_t align(dtype_t a, dtype_t b) {
   return ceil_div<dtype_t>(a, b) * b;
 }
 
-void add_tokens(ProxyCtx& ctx, int buffer_idx, int expert_idx, int src_rank,
-                size_t k) {
-  std::lock_guard<std::mutex> lock(ctx.mtx);
-  auto key = std::make_tuple(buffer_idx, expert_idx, src_rank);
-  ctx.token_counter[key] += k;
-}
-
-int get_num_tokens(ProxyCtx& ctx, int buffer_idx, int expert_idx,
-                   int src_rank) {
-  std::lock_guard<std::mutex> lock(ctx.mtx);
-  auto key = std::make_tuple(buffer_idx, expert_idx, src_rank);
-  auto it = ctx.token_counter.find(key);
-  return (it == ctx.token_counter.end()) ? 0 : it->second;
-}
-
-void reset_tokens(ProxyCtx& ctx, int buffer_idx, int expert_idx, int src_rank) {
-  std::lock_guard<std::mutex> lock(ctx.mtx);
-  auto key = std::make_tuple(buffer_idx, expert_idx, src_rank);
-  ctx.token_counter[key] = 0;
-}
-
-// Combine tokens (per-buffer too)
-void combine_add_tokens(ProxyCtx& ctx, int buffer_idx, int expert_idx,
-                        size_t k) {
-  std::lock_guard<std::mutex> lock(ctx.mtx);
-  auto key = std::make_pair(buffer_idx, expert_idx);
-  ctx.combine_token_counter[key] += k;
-}
-
-int get_combine_num_tokens(ProxyCtx& ctx, int buffer_idx, int expert_idx) {
-  std::lock_guard<std::mutex> lock(ctx.mtx);
-  auto key = std::make_pair(buffer_idx, expert_idx);
-  auto it = ctx.combine_token_counter.find(key);
-  return (it == ctx.combine_token_counter.end()) ? 0 : it->second;
-}
-
-void reset_combine_tokens(ProxyCtx& ctx, int buffer_idx, int expert_idx) {
-  std::lock_guard<std::mutex> lock(ctx.mtx);
-  auto key = std::make_pair(buffer_idx, expert_idx);
-  ctx.combine_token_counter[key] = 0;
-}
-
-inline uint32_t pack_imm(bool is_atomics, bool is_combine, int v14,
-                         uint16_t off15, int buffer_idx) {
-  // Layout:
-  // [31]     is_atomics
-  // [30]     is_combine
-  // [29]     buffer_idx
-  // [28:15]  signed v14
-  // [14:0]   off (15 bits)
-  // v14 must be in [-8192, 8191], off < 32768
-  uint32_t vfield = static_cast<uint32_t>(v14) & 0x3FFF;  // 14 bits
-  return (static_cast<uint32_t>(is_atomics) << 31) |
-         (static_cast<uint32_t>(is_combine) << 30) |
-         ((buffer_idx & 0x1) << 29) | (vfield << 15) | (off15 & 0x7FFF);
-}
-
-inline int unpack_v(int32_t imm) {
-  // Extract bits [28:15], sign extend 14-bit field
-  return (imm << 3) >> 18;  // drop top 3, then arithmetic >>18
-}
-
-inline bool unpack_is_atomics(uint32_t imm) { return (imm >> 31) & 0x1; }
-inline bool unpack_kind(uint32_t imm) {
-  return (imm >> 30) & 0x1;
-}  // is_combine
-inline int unpack_buffer_idx(uint32_t imm) { return (imm >> 29) & 0x1; }
-inline uint16_t unpack_off(uint32_t imm) { return imm & 0x7FFFu; }  // 15 bits
-
 void exchange_connection_info(int rank, char const* peer_ip, int tid,
                               RDMAConnectionInfo* local,
                               RDMAConnectionInfo* remote) {
@@ -188,7 +119,6 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
 
   // Ranked by GPU idx
   auto gpu_cards = uccl::get_gpu_cards();
-
   // Ranked by RDMA NIC name (not the ibv_get_device_list order)
   auto ib_nics = uccl::get_rdma_nics();
   // Get GPU pcie path
@@ -436,8 +366,6 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
     perror("Failed to query port");
     exit(1);
   }
-  // printf("Local LID: 0x%x\n", port_attr.lid);
-  // Fill local connection info
   local_info->qp_num = S.qp->qp_num;
   local_info->ack_qp_num = S.ack_qp->qp_num;
   local_info->recv_ack_qp_num = S.recv_ack_qp->qp_num;
@@ -445,20 +373,9 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   local_info->rkey = S.rkey;
   local_info->addr = reinterpret_cast<uintptr_t>(gpu_buffer);
   local_info->len = size;
-  // local_info->psn = rand() & 0xffffff;      // random psn
-  // local_info->ack_psn = rand() & 0xffffff;  // random ack psn
   local_info->psn = 0;
   local_info->ack_psn = 0;
-  // printf("[DEBUG] Rank %d: Registering local buffer addr=0x%lx, size=%zu
-  // bytes\n",
-  //        rank, local_info->addr, size);
   fill_local_gid(S, local_info);
-  // printf(
-  //     "Local RDMA info: addr=0x%lx, rkey=0x%x, qp_num=%u, psn=%u, "
-  //     "ack_qp_num=%u, recv_ack_qp_num=%u, ack_psn: %u\n",
-  //     local_info->addr, local_info->rkey, local_info->qp_num,
-  //     local_info->psn, local_info->ack_qp_num, local_info->recv_ack_qp_num,
-  //     local_info->ack_psn);
 }
 
 void modify_qp_to_init(ProxyCtx& S) {
@@ -665,27 +582,27 @@ void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
 }
 
 void post_receive_buffer_for_imm(ProxyCtx& S) {
-  // std::vector<ibv_recv_wr> wrs(kMaxOutstandingRecvs);
-  // std::vector<ibv_sge> sges(kMaxOutstandingRecvs);
+  std::vector<ibv_recv_wr> wrs(kMaxOutstandingRecvs);
+  std::vector<ibv_sge> sges(kMaxOutstandingRecvs);
 
-  // for (size_t i = 0; i < kMaxOutstandingRecvs; ++i) {
-  //   int offset = kNumThBlocks > i ? i : (i % kNumThBlocks);
+  for (size_t i = 0; i < kMaxOutstandingRecvs; ++i) {
+    int offset = kNumThBlocks > i ? i : (i % kNumThBlocks);
 
-  //   sges[i] = {.addr = (uintptr_t)S.mr->addr + offset * kObjectSize,
-  //              .length = kObjectSize,
-  //              .lkey = S.mr->lkey};
-  //   wrs[i] = {.wr_id = make_wr_id(S.tag, static_cast<uint32_t>(i)),
-  //             .next = (i + 1 < kMaxOutstandingRecvs) ? &wrs[i + 1] : nullptr,
-  //             .sg_list = &sges[i],
-  //             .num_sge = 1};
-  // }
+    sges[i] = {.addr = (uintptr_t)S.mr->addr + offset * kObjectSize,
+               .length = kObjectSize,
+               .lkey = S.mr->lkey};
+    wrs[i] = {.wr_id = make_wr_id(S.tag, static_cast<uint32_t>(i)),
+              .next = (i + 1 < kMaxOutstandingRecvs) ? &wrs[i + 1] : nullptr,
+              .sg_list = &sges[i],
+              .num_sge = 1};
+  }
 
-  // /* Post the whole chain with ONE verbs call */
-  // ibv_recv_wr* bad = nullptr;
-  // if (ibv_post_recv(S.qp, &wrs[0], &bad)) {
-  //   perror("ibv_post_recv");
-  //   std::abort();
-  // }
+  /* Post the whole chain with ONE verbs call */
+  ibv_recv_wr* bad = nullptr;
+  if (ibv_post_recv(S.qp, &wrs[0], &bad)) {
+    perror("ibv_post_recv");
+    std::abort();
+  }
 }
 
 void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
@@ -766,27 +683,11 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
           }
           std::abort();
         }
-
-        // if (j + 1 == expert_k) {
-        //   uint32_t imm =
-        //       (0u << 31) |
-        //       ((cmd.is_combine & 0x1u) << 30) |
-        //       ((cmd.expert_idx & 0x3FFu) << 20) |
-        //       ((expert_k & 0xFFu) << 12) |
-        //       (my_rank & 0xFFFu);
-        //   ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr,
-        //   htonl(imm));
-        // } else {
-        //   ibv_wr_rdma_write(qpx, ctx->remote_rkey, remote_addr);
-        // }
-        if (true) {
-          uint32_t imm = (0u << 31) | ((cmd.is_combine & 0x1u) << 30) |
-                         ((cmd.low_latency_buffer_idx & 0x1u) << 29) |  // NEW
-                         ((cmd.expert_idx & 0x3FFu) << 19) |
-                         (((1u) & 0x7Fu) << 12) |  // k=1 fits in 7 bits
-                         (my_rank & 0xFFFu);
-          ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
-        }
+        uint32_t imm =
+            WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
+                           cmd.expert_idx, 1u, my_rank)
+                .GetImmData();
+        ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
 
         uintptr_t laddr =
             cmd.req_lptr ? cmd.req_lptr
@@ -867,11 +768,9 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
     const uint64_t batch_tail_wr = wr_ids[last];
     wrs[last].send_flags = IBV_SEND_SIGNALED;
     wrs[last].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-    uint32_t imm = (0u << 31) | ((cmd.is_combine & 0x1u) << 30) |
-                   ((cmd.low_latency_buffer_idx & 0x1u) << 29) |  // NEW
-                   ((cmd.expert_idx & 0x3FFu) << 19) |
-                   (((1u) & 0x7Fu) << 12) |  // k=1 fits in 7 bits
-                   (my_rank & 0xFFFu);
+    uint32_t imm = WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
+                                  cmd.expert_idx, 1u, my_rank)
+                       .GetImmData();
     wrs[last].imm_data = htonl(imm);
 
     ibv_send_wr* bad = nullptr;
@@ -913,8 +812,6 @@ void local_process_completions(ProxyCtx& S,
                                std::vector<ProxyCtx*>& ctx_by_tag) {
   if (ne == 0) return;
   int send_completed = 0;
-  // printf("Local thread %d received %d completions\n", thread_idx, ne);
-
   for (int i = 0; i < ne; ++i) {
     if (wc[i].status != IBV_WC_SUCCESS) {
       fprintf(stderr,
@@ -929,20 +826,11 @@ void local_process_completions(ProxyCtx& S,
     switch (wc[i].opcode) {
       case IBV_WC_RDMA_WRITE: {
         send_completed++;
-        // const uint64_t wrid = wc[i].wr_id;
-        // if ((wrid & ~kAtomicMask) == kAtomicWrTag) {
-        //   printf("[EFA_SEND_DONE] wrid=%lu tag=0x%llx qp=0x%x\n", wrid,
-        //          (wrid & kAtomicMask), wc[i].qp_num);
-        // }
         {
           std::lock_guard<std::mutex> lock(finished_wrs_mutex);
           const uint64_t wr_done = wc[i].wr_id;
           acked_wrs.insert(wr_done);
           if (S.wr_id_to_wr_ids.find(wr_done) != S.wr_id_to_wr_ids.end()) {
-            // fprintf(stderr,
-            //         "Error: received ACK for unknown wr_id %lu\n",
-            //         wr_done);
-            // std::abort();
             S.wr_id_to_wr_ids.erase(wr_done);
           }
         }
@@ -955,7 +843,6 @@ void local_process_completions(ProxyCtx& S,
         break;
       case IBV_WC_FETCH_ADD: {
         uint64_t wrid = wc[i].wr_id;
-        // If you encode a tag, check it here (see fix #3 below)
         printf("Local thread %d: atomic completed (wr_id=0x%lx)\n", thread_idx,
                wrid);
         send_completed++;
@@ -1044,52 +931,46 @@ void apply_pending_updates(ProxyCtx& ctx,
   for (auto it = pending_atomic_updates.begin();
        it != pending_atomic_updates.end();) {
     PendingUpdate const& upd = *it;
-
-    // Decode imm again
-    uint32_t imm = upd.imm;
-    int value = unpack_v(static_cast<int32_t>(imm));
-    uint32_t offset = unpack_off(imm);
-    int low_latency_buffer_idx = unpack_buffer_idx(imm);
-    bool is_combine = unpack_kind(imm);
+    AtomicsImm aimm(upd.imm);
+    uint32_t offset = aimm.GetOff();
+    int low_latency_buffer_idx = aimm.GetBufferIdx();
+    bool is_combine = aimm.IsCombine();
+    int value = aimm.GetValue();
     uint32_t new_offset =
         offset -
         low_latency_buffer_idx * align<size_t>(num_experts * sizeof(int), 128);
     size_t new_index = new_offset / sizeof(int);
-
     bool is_atomic_ready = false;
 
     if (!is_combine) {
       int local_expert_idx = new_index / num_ranks;
 
       int src_rank = new_index % num_ranks;
-      int num_tokens = get_num_tokens(ctx, low_latency_buffer_idx,
-                                      local_expert_idx, src_rank);
+      int num_tokens = ctx.dispatch_token_counter.Get(
+          {low_latency_buffer_idx, local_expert_idx, src_rank});
       if ((-value - 1) == num_tokens) {
         is_atomic_ready = true;
       }
       if (is_atomic_ready)
-        reset_tokens(ctx, low_latency_buffer_idx, local_expert_idx, src_rank);
+        ctx.dispatch_token_counter.Reset(
+            {low_latency_buffer_idx, local_expert_idx, src_rank});
     } else {
       int expert_idx = new_index;
       int combine_num_tokens =
-          get_combine_num_tokens(ctx, low_latency_buffer_idx, expert_idx);
-      // printf("is_combine: value=%d, combine_num_tokens=%d\n", value,
-      // combine_num_tokens);
+          ctx.combine_token_counter.Get({low_latency_buffer_idx, expert_idx});
       if (value == combine_num_tokens) {
         is_atomic_ready = true;
       }
 
       if (is_atomic_ready)
-        reset_combine_tokens(ctx, low_latency_buffer_idx, expert_idx);
+        ctx.combine_token_counter.Reset({low_latency_buffer_idx, expert_idx});
     }
     if (is_atomic_ready) {
       if (is_combine) value = 1;
-      // perform atomic update
       upd.addr->fetch_add(value, std::memory_order_release);
-      // remove from set
       it = pending_atomic_updates.erase(it);
     } else {
-      ++it;  // keep it for later
+      ++it;
     }
   }
 }
@@ -1104,12 +985,6 @@ void remote_process_completions(
 
   std::vector<CopyTask> task_vec;
   task_vec.reserve(ne);
-  // int nDevices;
-  // cudaError_t err = cudaGetDeviceCount(&nDevices);
-  // if (err != cudaSuccess) {
-  //   printf("CUDA error: %s\n", cudaGetErrorString(err));
-  //   std::abort();
-  // }
   for (int i = 0; i < ne; ++i) {
     ibv_wc const& cqe = wc[i];
     if (cqe.status != IBV_WC_SUCCESS) {
@@ -1121,12 +996,12 @@ void remote_process_completions(
     }
     if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
         ((ntohl(cqe.imm_data) >> 31) & 0x1)) {
-      uint32_t imm = ntohl(cqe.imm_data);
-      int value = unpack_v(static_cast<int32_t>(imm));
-      uint32_t offset = unpack_off(imm);
+      AtomicsImm aimm(ntohl(cqe.imm_data));
+      int value = aimm.GetValue();
+      uint32_t offset = aimm.GetOff();
       size_t index = offset / sizeof(int);
-      int low_latency_buffer_idx = unpack_buffer_idx(imm);
-      bool is_combine = unpack_kind(imm);
+      int low_latency_buffer_idx = aimm.GetBufferIdx();
+      bool is_combine = aimm.IsCombine();
       // ep_config.hpp
       uint32_t new_offset =
           offset - low_latency_buffer_idx *
@@ -1136,8 +1011,8 @@ void remote_process_completions(
       if (!is_combine) {
         int local_expert_idx = new_index / num_ranks;
         int src_rank = new_index % num_ranks;
-        int num_tokens = get_num_tokens(S, low_latency_buffer_idx,
-                                        local_expert_idx, src_rank);
+        int num_tokens = S.dispatch_token_counter.Get(
+            {low_latency_buffer_idx, local_expert_idx, src_rank});
         if ((-value - 1) == num_tokens) {
           is_atomic_ready = true;
         }
@@ -1149,9 +1024,11 @@ void remote_process_completions(
                   -value - 1, num_tokens, local_expert_idx, src_rank);
         }
         if (is_atomic_ready) {
-          reset_tokens(S, low_latency_buffer_idx, local_expert_idx, src_rank);
-          assert(get_num_tokens(S, low_latency_buffer_idx, local_expert_idx,
-                                src_rank) == 0);
+          S.dispatch_token_counter.Reset(
+              {low_latency_buffer_idx, local_expert_idx, src_rank});
+          assert(S.dispatch_token_counter.Get(
+                     {low_latency_buffer_idx, local_expert_idx, src_rank}) ==
+                 0);
         }
 
       } else {
@@ -1163,7 +1040,7 @@ void remote_process_completions(
           std::abort();
         }
         int combine_num_tokens =
-            get_combine_num_tokens(S, low_latency_buffer_idx, expert_idx);
+            S.combine_token_counter.Get({low_latency_buffer_idx, expert_idx});
         if (value == combine_num_tokens) {
           is_atomic_ready = true;
         }
@@ -1175,96 +1052,36 @@ void remote_process_completions(
                   value, combine_num_tokens, expert_idx);
         }
         if (is_atomic_ready) {
-          reset_combine_tokens(S, low_latency_buffer_idx, expert_idx);
-          assert(get_combine_num_tokens(S, low_latency_buffer_idx,
-                                        expert_idx) == 0);
+          S.combine_token_counter.Reset({low_latency_buffer_idx, expert_idx});
         }
       }
-      // printf(
-      //     "[RECV_ATOMIC] kind=%u value=%d offset=%u index=%zu addr=0x%llx
-      //     " "imm=0x%08x\n", (unsigned)is_combine, value, offset, index,
-      //     (unsigned long long)((uintptr_t)atomic_buffer_ptr +
-      //                          index * sizeof(int)),
-      //     imm);
-      // sleep(1);
       auto* addr32 =
           reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
       if (is_combine) value = 1;
       if (is_atomic_ready)
         addr32->fetch_add(value, std::memory_order_release);
       else {
-        pending_atomic_updates.insert({addr32, value, imm});
+        pending_atomic_updates.insert({addr32, value, aimm.GetImmData()});
       }
-      // const uint32_t tag = wr_tag(cqe.wr_id);
-      // ProxyCtx& S_atomic = *ctx_by_tag[tag];
-      // ibv_sge sge = {
-      //     .addr = reinterpret_cast<uintptr_t>(S_atomic.mr->addr),
-      //     .length = 1,
-      //     .lkey = S_atomic.mr->lkey,
-      // };
-      // ibv_recv_wr rwr = {};
-      // S.pool_index = (S.pool_index + 1) % (kRemoteBufferSize / kObjectSize -
-      // 1); rwr.wr_id = make_wr_id(wr_tag(cqe.wr_id), S.pool_index);
-      // rwr.sg_list = &sge;
-      // rwr.num_sge = 1;
-      // ibv_recv_wr* bad = nullptr;
-      // if (ibv_post_recv(S_atomic.qp, &rwr, &bad)) {
-      //   perror("ibv_post_recv (atomics replenish)");
-      //   std::abort();
-      // }
       continue;
     }
     if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
       uint32_t imm = ntohl(cqe.imm_data);
-
-      bool is_combine = (imm >> 30) & 0x1;
-      uint32_t buffer_idx = (imm >> 29) & 0x1;
-      uint32_t expert_idx = (imm >> 19) & 0x3FF;  // 10 bits
-      uint32_t k = (imm >> 12) & 0x7F;            // 7 bits
-      uint32_t src_rank = imm & 0xFFF;            // 12 bits
+      WriteImm wimm(imm);
+      bool is_combine = wimm.IsCombine();
+      uint32_t buffer_idx = wimm.GetBufferIdx();
+      uint32_t expert_idx = wimm.GetExpertIdx();
+      uint32_t k = wimm.GetNumTokens();
+      uint32_t src_rank = wimm.GetRank();
 
       if (!is_combine) {
-        add_tokens(S, buffer_idx, expert_idx, src_rank, k);
+        S.dispatch_token_counter.Add({buffer_idx, expert_idx, src_rank}, k);
       } else {
         /* expert_idx here is the global expert index of the sender */
         assert(expert_idx >= src_rank * (num_experts / num_ranks) &&
                expert_idx < (src_rank + 1) * (num_experts / num_ranks));
-        combine_add_tokens(S, buffer_idx, expert_idx, k);
+        S.combine_token_counter.Add({buffer_idx, expert_idx}, k);
       }
-      // const uint32_t tag = wr_tag(cqe.wr_id);
-      // ProxyCtx& S_ack = *ctx_by_tag[tag];
-      // ibv_sge sge = {
-      //     .addr = reinterpret_cast<uintptr_t>(&S_ack.ack_recv_buf[0]),
-      //     .length = sizeof(uint64_t),
-      //     .lkey = S_ack.ack_recv_mr->lkey,
-      // };
-      // ibv_recv_wr rwr{};
-      // S.pool_index = (S.pool_index + 1) % (kRemoteBufferSize / kObjectSize -
-      // 1); rwr.wr_id = make_wr_id(wr_tag(cqe.wr_id), S.pool_index);
-      // rwr.sg_list = &sge;
-      // rwr.num_sge = 1;
-      // ibv_recv_wr* bad = nullptr;
-      // if (ibv_post_recv(S_ack.qp, &rwr, &bad)) {
-      //   perror("ibv_post_recv (imm replenish)");
-      //   std::abort();
-      // }
-      // uint32_t imm = ntohl(cqe.imm_data);
-      // int destination_gpu = static_cast<int>(imm % nDevices);
-      // size_t src_offset = static_cast<size_t>(S.pool_index) * kObjectSize;
-      // // TODO(MaoZiming): Implement the logic to set dst_ptr
-      // CopyTask task{.wr_id = imm,
-      //               .dst_dev = destination_gpu,
-      //               .src_ptr = static_cast<char*>(S.mr->addr) + src_offset,
-      //               .dst_ptr = nullptr,
-      //               .bytes = kObjectSize};
-      // if (task.dst_ptr && task.bytes) {
-      //   task_vec.push_back(task);
-      // } else {
-      //   // ProxyCtx* peer_ctx = ctx_by_tag[tag];
-      //   // remote_send_ack(peer_ctx, peer_ctx->ack_qp, task.wr_id,
-      //   // g_ring.ack_mr,
-      //   //                 g_ring.ack_buf, idx);
-      // }
     }
   }
   if (!task_vec.empty()) {
@@ -1471,9 +1288,9 @@ void post_atomic_operations(ProxyCtx& S,
                 low_latency_buffer_idx);
         std::abort();
       }
-      uint32_t imm =
-          pack_imm(/*is_combine=*/true, cmd.is_combine, v,
-                   static_cast<uint16_t>(offset), low_latency_buffer_idx);
+      uint32_t imm = AtomicsImm::Pack(true, cmd.is_combine, v, offset,
+                                      low_latency_buffer_idx)
+                         .GetImmData();
 
       qpx->wr_id = kAtomicWrTag | (wr_id & kAtomicMask);
       qpx->comp_mask = 0;

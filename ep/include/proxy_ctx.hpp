@@ -6,6 +6,25 @@
 #include <unordered_map>
 #include <vector>
 
+template <typename Key>
+class TokenCounter {
+ public:
+  using MapType = std::map<Key, size_t>;
+  void Add(Key const& key, size_t k) { counter_[key] += k; }
+  size_t Get(Key const& key) const {
+    auto it = counter_.find(key);
+    return (it == counter_.end()) ? 0 : it->second;
+  }
+  void Reset(Key const& key) { counter_[key] = 0; }
+  void Clear() { counter_.clear(); }
+
+ private:
+  MapType counter_;
+};
+
+using DispatchTokenKey = std::tuple<int, int, int>;
+using CombineTokenKey = std::pair<int, int>;
+
 struct ProxyCtx {
   // RDMA objects
   ibv_context* context = nullptr;
@@ -58,9 +77,6 @@ struct ProxyCtx {
 
   uint32_t tag = 0;
 
-  std::mutex mtx;
-  std::map<std::tuple<int, int, int>, size_t>
-      token_counter;  // (buffer, expert, src)
-  std::map<std::pair<int, int>, size_t>
-      combine_token_counter;  // (buffer, expert)
+  TokenCounter<DispatchTokenKey> dispatch_token_counter;
+  TokenCounter<CombineTokenKey> combine_token_counter;
 };
