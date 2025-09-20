@@ -182,14 +182,15 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     } else {
       // Spread GPUs across equal-distance NICs: use local GPU index modulo
       // For example, pass in `local_rank` or derive gpu_index from device path
-      selected_nic_name = candidates[gpu_idx % candidates.size()];
+      selected_nic_name = candidates[block_idx % candidates.size()];
 #ifdef EFA
       // On p5en, there are 4 NICs with the same distance.
       // We hardcode the first half Proxies to use the first NIC, and the second
       // half to use the second NIC.
       assert(candidates.size() == 4);
-      candidates.resize(candidates.size() / 2);
-      selected_nic_name = candidates[block_idx % 2];
+      // GPU0 uses candidates[0/1], GPU1 uses candidates[2/3], etc.
+      auto half = (local_rank % 2) * 2;
+      selected_nic_name = candidates[block_idx % 2 + half];
 #endif
     }
   }
