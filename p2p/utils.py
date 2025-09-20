@@ -119,7 +119,6 @@ def recv_obj(sock: socket.socket) -> Any:
 
 _GLOBAL_TENSOR_IDS: Dict[int, int] = {}
 
-
 def get_tensor_id_by_tensor(tensor: torch.Tensor):
     if not tensor.is_contiguous():
         raise ValueError("Tensor must be contiguous")
