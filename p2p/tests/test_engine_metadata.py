@@ -29,7 +29,7 @@ def test_local():
     """Test the UCCL P2P Engine local send/recv functionality"""
     print("Running test_local...")
 
-    metadata_queue = multiprocessing.Queue()
+    meta_parent, meta_child = multiprocessing.Pipe()
 
     def server_process(q):
         engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
@@ -38,7 +38,7 @@ def test_local():
         print(f"Parsed IP: {ip}")
         print(f"Parsed Port: {port}")
         print(f"Parsed Remote GPU Index: {remote_gpu_idx}")
-        q.put(bytes(metadata))  # ensure it's serialized as bytes
+        q.send(bytes(metadata))  # ensure it's serialized as bytes
 
         success, remote_ip_addr, remote_gpu_idx, conn_id = engine.accept()
         assert success
@@ -61,13 +61,13 @@ def test_local():
         print("✓ Server received correct data")
 
     def client_process(q):
-        metadata = q.get(timeout=5)
+        metadata = q.recv()
         ip, port, remote_gpu_idx = p2p.Endpoint.parse_metadata(metadata)
         print(
             f"Client parsed server IP: {ip}, port: {port}, remote_gpu_idx: {remote_gpu_idx}"
         )
 
-        engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
+        engine = p2p.Endpoint(local_gpu_idx=1, num_cpus=4)
         success, conn_id = engine.connect(
             remote_ip_addr=ip, remote_gpu_idx=remote_gpu_idx, remote_port=port
         )
@@ -84,11 +84,11 @@ def test_local():
         assert success
         print("✓ Client sent data")
 
-    server = multiprocessing.Process(target=server_process, args=(metadata_queue,))
+    server = multiprocessing.Process(target=server_process, args=(meta_parent,))
     server.start()
     time.sleep(1)
 
-    client = multiprocessing.Process(target=client_process, args=(metadata_queue,))
+    client = multiprocessing.Process(target=client_process, args=(meta_child,))
     client.start()
 
     try:

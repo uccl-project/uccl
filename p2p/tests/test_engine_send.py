@@ -41,11 +41,11 @@ def parse_endpoint_meta(meta: bytes) -> Tuple[str, int, int]:
 def test_local():
     """Test the UCCL P2P Engine"""
     print("Running UCCL P2P Engine local test...")
-    meta_q = multiprocessing.Queue()
+    meta_parent, meta_child = multiprocessing.Pipe()
 
-    def server_process():
+    def server_process(meta_q):
         engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
-        meta_q.put(bytes(engine.get_metadata()))
+        meta_q.send(bytes(engine.get_metadata()))
 
         success, remote_ip_addr, remote_gpu_idx, conn_id = engine.accept()
         assert success
@@ -67,9 +67,9 @@ def test_local():
         assert tensor.allclose(torch.ones(1024, dtype=torch.float32))
         return True
 
-    def client_process():
+    def client_process(meta_q):
         engine = p2p.Endpoint(local_gpu_idx=1, num_cpus=4)
-        ep_meta = meta_q.get(timeout=5)
+        ep_meta = meta_q.recv()
 
         ip, r_port, r_gpu = parse_endpoint_meta(ep_meta)
         success, conn_id = engine.connect(
@@ -89,11 +89,11 @@ def test_local():
 
         return True
 
-    server = multiprocessing.Process(target=server_process)
+    server = multiprocessing.Process(target=server_process, args=(meta_parent,))
     server.start()
     time.sleep(1)
 
-    client = multiprocessing.Process(target=client_process)
+    client = multiprocessing.Process(target=client_process, args=(meta_child,))
     client.start()
 
     try:

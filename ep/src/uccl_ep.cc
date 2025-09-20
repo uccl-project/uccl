@@ -88,10 +88,6 @@ class Buffer {
     if (num_local_ranks == -1) num_local_ranks = get_num_max_nvl_peers();
     max_nvl_peers = num_local_ranks;
     {
-      printf(
-          "Buffer initializing for rank %d, num_ranks %d, num_nvl_bytes %ld,"
-          "num_rdma_bytes %ld, max_nvl_peers %d\n",
-          rank, num_ranks, num_nvl_bytes, num_rdma_bytes, max_nvl_peers);
       cudaGetDevice(&device_index);
       {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
@@ -215,10 +211,6 @@ class Buffer {
           moe_recv_rdma_counter, 0));
       *moe_recv_rdma_counter = -1;
     }
-    printf(
-        "Buffer created for rank %d, num_ranks %d, num_nvl_bytes %ld, "
-        "num_rdma_bytes %ld, low_latency_mode %d\n",
-        rank, num_ranks, num_nvl_bytes, num_rdma_bytes, low_latency_mode);
   }
 
   std::tuple<torch::Tensor, std::optional<torch::Tensor>, torch::Tensor,
@@ -1405,6 +1397,7 @@ class Buffer {
                                   num_ranks, num_experts, atomic_buffer_ptr);
     EP_HOST_ASSERT(layout.total_bytes <=
                    static_cast<std::size_t>(num_rdma_bytes));
+    int low_latency_buffer_idx_used = low_latency_buffer_idx;
     auto buffer = layout.buffers[low_latency_buffer_idx];
     auto next_buffer = layout.buffers[low_latency_buffer_idx ^= 1];
 
@@ -1476,8 +1469,8 @@ class Buffer {
           num_tokens, hidden, num_max_dispatch_tokens_per_rank, num_topk,
           num_experts, rank, num_ranks, use_fp8, round_scale, use_ue8m0,
           workspace, num_device_sms, launch_stream, phases, d_ring_addrs,
-          num_ring_addrs, max_nvl_peers, d_ipc_rdma_base_ptrs, rdma_buffer_ptr,
-          atomic_buffer_ptr,
+          num_ring_addrs, max_nvl_peers, low_latency_buffer_idx_used,
+          d_ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr,
           buffer.dispatch_rdma_recv_count_buffer_internode);  // Added IPC base
                                                               // pointers
     };
@@ -1563,6 +1556,7 @@ class Buffer {
                                   num_ranks, num_experts, atomic_buffer_ptr);
     EP_HOST_ASSERT(layout.total_bytes <=
                    static_cast<std::size_t>(num_rdma_bytes));
+    int low_latency_buffer_idx_used = low_latency_buffer_idx;
     auto buffer = layout.buffers[low_latency_buffer_idx];
     auto next_buffer = layout.buffers[low_latency_buffer_idx ^= 1];
 
@@ -1601,7 +1595,8 @@ class Buffer {
           num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
           num_ranks, use_logfmt, workspace, num_device_sms, launch_stream,
           phases, zero_copy, d_ring_addrs, num_ring_addrs, max_nvl_peers,
-          d_ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr,
+          low_latency_buffer_idx_used, d_ipc_rdma_base_ptrs, rdma_buffer_ptr,
+          atomic_buffer_ptr,
           buffer.combine_rdma_recv_flag_buffer_internode);  // Added IPC base
                                                             // pointers
     };
@@ -1812,7 +1807,6 @@ class Buffer {
     if (ptr == nullptr) {
       throw std::invalid_argument("set_atomic_buffer_ptr: ptr null");
     }
-    printf("Buffer atomic_buffer_ptr=%p\n", ptr);
     atomic_buffer_ptr = ptr;
   }
 
@@ -2089,10 +2083,11 @@ PYBIND11_MODULE(ep, m) {
   py::class_<Stats>(m, "Stats");
   py::class_<UcclProxy>(m, "Proxy")
       .def(py::init<uintptr_t, int, uintptr_t, size_t, int, int, int,
-                    std::string const&>(),
+                    std::string const&, int, int>(),
            py::arg("rb_addr"), py::arg("block_idx"), py::arg("gpu_buffer_addr"),
            py::arg("total_size"), py::arg("rank") = 0, py::arg("node_idx") = -1,
-           py::arg("local_rank") = 0, py::arg("peer_ip") = std::string())
+           py::arg("local_rank") = 0, py::arg("peer_ip") = std::string(),
+           py::arg("num_experts") = -1, py::arg("num_ranks") = -1)
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)
       .def("start_local", &UcclProxy::start_local)
@@ -2145,8 +2140,8 @@ PYBIND11_MODULE(ep, m) {
             self.set_peers_meta(v);
           },
           py::arg("metas"),
-          "Attach peer metadata (list of dicts or PeerMeta objects).")
-      .def_property_readonly("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr);
+          "Attach peer metadata (list of dicts or PeerMeta objects).");
+  // .def_property_readonly("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr);
   py::class_<EnvInfo>(m, "EnvInfo")
       .def_readonly("blocks", &EnvInfo::blocks)
       .def_readonly("queue_size", &EnvInfo::queue_size)

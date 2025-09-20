@@ -27,11 +27,14 @@ struct TransferCmd {
   uint64_t req_rptr;
   uint64_t req_lptr;
   int warp_id;
+  int expert_idx;
   int lane_id;
   int message_idx;
   bool is_atomic;
   int value;
   bool is_combine;
+
+  int low_latency_buffer_idx;
 };
 
 struct CopyTask {

@@ -2,8 +2,28 @@
 #include "util/gpu_rt.h"
 #include <infiniband/verbs.h>
 #include <atomic>
+#include <map>
 #include <unordered_map>
 #include <vector>
+
+template <typename Key>
+class TokenCounter {
+ public:
+  using MapType = std::map<Key, size_t>;
+  void Add(Key const& key, size_t k) { counter_[key] += k; }
+  size_t Get(Key const& key) const {
+    auto it = counter_.find(key);
+    return (it == counter_.end()) ? 0 : it->second;
+  }
+  void Reset(Key const& key) { counter_[key] = 0; }
+  void Clear() { counter_.clear(); }
+
+ private:
+  MapType counter_;
+};
+
+using DispatchTokenKey = std::tuple<int, int, int>;
+using CombineTokenKey = std::pair<int, int>;
 
 struct ProxyCtx {
   // RDMA objects
@@ -56,4 +76,7 @@ struct ProxyCtx {
   void* per_gpu_device_buf[MAX_NUM_GPUS] = {nullptr};
 
   uint32_t tag = 0;
+
+  TokenCounter<DispatchTokenKey> dispatch_token_counter;
+  TokenCounter<CombineTokenKey> combine_token_counter;
 };
