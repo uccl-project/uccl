@@ -19,6 +19,9 @@
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
+#include <set>
+#include <tuple>
+
 struct PeerMeta {
   int rank;
   uintptr_t ptr;
@@ -40,6 +43,8 @@ class Proxy {
     int local_rank = -1;
     char const* peer_ip = nullptr;
     bool pin_thread = true;
+    int num_experts = 0;
+    int num_ranks = 0;
   };
 
   explicit Proxy(Config const& cfg) : cfg_(cfg) {}

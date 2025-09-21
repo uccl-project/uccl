@@ -254,6 +254,18 @@ __device__ __forceinline__ uint2 ld_cg_global(uint2 const* p) {
   return v;
 }
 
+__device__ __forceinline__ long ld_cg_global(long const* p) {
+  long v;
+  asm volatile("ld.global.cg.s64 %0, [%1];" : "=l"(v) : "l"(p));
+  return v;
+}
+
+__device__ __forceinline__ unsigned long ld_cg_global(unsigned long const* p) {
+  unsigned long v;
+  asm volatile("ld.global.cg.u64 %0, [%1];" : "=l"(v) : "l"(p));
+  return v;
+}
+
 __device__ __forceinline__ int4 ld_cg_global(int4 const* p) {
   int4 v;
   asm volatile("ld.global.cg.v4.b32 {%0,%1,%2,%3}, [%4];"
