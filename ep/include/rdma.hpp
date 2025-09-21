@@ -200,7 +200,7 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                              int num_experts,
                              std::set<PendingUpdate>& pending_atomic_updates);
 void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
-                          int block_idx, int local_rank);
+                          int thread_idx, int local_rank);
 void remote_send_ack(ProxyCtx* ctx, struct ibv_qp* ack_qp, uint64_t& wr_id,
                      ibv_mr* local_ack_mr, uint64_t* ack_buf, int worker_idx);
 void local_post_ack_buf(ProxyCtx& S, int depth);
@@ -209,7 +209,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              std::vector<uint64_t> const& wrs_to_post,
                              std::vector<TransferCmd> const& cmds_to_post,
                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                             int my_rank, int block_idx,
+                             int my_rank, int thread_idx,
                              std::unordered_set<uint64_t>& finished_wrs,
                              std::mutex& finished_wrs_mutex);
 void local_process_completions(ProxyCtx& S,
@@ -228,7 +228,7 @@ void post_atomic_operations(ProxyCtx& S,
                             std::vector<uint64_t> const& wrs_to_post,
                             std::vector<TransferCmd> const& cmds_to_post,
                             std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                            int my_rank, int block_idx,
+                            int my_rank, int thread_idx,
                             std::unordered_set<uint64_t>& finished_wrs,
                             std::mutex& finished_wrs_mutex,
                             std::unordered_set<uint64_t>& acked_wrs);

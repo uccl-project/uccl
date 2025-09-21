@@ -51,7 +51,7 @@ def test_single_gpu():
     # Create proxy
     proxy = ep.Proxy(
         rb_addr=bench.ring_addr(0),
-        block_idx=0,
+        thread_idx=0,
         gpu_buffer_addr=test_ptr,
         total_size=buffer_size * 4,
         rank=0,
@@ -106,7 +106,7 @@ def test_multi_gpu(num_gpus):
         bench = ep.Bench()
         proxy = ep.Proxy(
             rb_addr=bench.ring_addr(0),
-            block_idx=0,
+            thread_idx=0,
             gpu_buffer_addr=pointers[gpu_id],
             total_size=buffer_size * 4,
             rank=gpu_id,
@@ -198,7 +198,7 @@ def test_distributed():
     bench = ep.Bench()
     proxy = ep.Proxy(
         rb_addr=bench.ring_addr(0),
-        block_idx=0,
+        thread_idx=0,
         gpu_buffer_addr=test_ptr,
         total_size=buffer_size * 4,
         rank=rank,

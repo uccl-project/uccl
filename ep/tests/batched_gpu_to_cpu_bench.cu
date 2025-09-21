@@ -125,9 +125,9 @@ __global__ void gpu_issue_batched_commands(Fifo* fifos) {
   op_count[bid] = op_count_smem;
 }
 
-void cpu_proxy(Fifo* fifo, int block_idx) {
-  // printf("CPU thread for block %d started\n", block_idx);
-  pin_thread_to_cpu(block_idx);
+void cpu_proxy(Fifo* fifo, int thread_idx) {
+  // printf("CPU thread for block %d started\n", thread_idx);
+  pin_thread_to_cpu(thread_idx);
 
   uint64_t my_tail = 0;
   for (int seen = 0; seen < kIterations; ++seen) {
@@ -143,10 +143,10 @@ void cpu_proxy(Fifo* fifo, int block_idx) {
       cpu_relax();  // Avoid hammering the cacheline.
     } while (cmd == 0);
     uint64_t expected_cmd =
-        (static_cast<uint64_t>(block_idx) << 32) | (seen + 1);
+        (static_cast<uint64_t>(thread_idx) << 32) | (seen + 1);
     if (cmd != expected_cmd) {
       fprintf(stderr, "Error: block %d, expected cmd %llu, got %llu\n",
-              block_idx, static_cast<unsigned long long>(expected_cmd),
+              thread_idx, static_cast<unsigned long long>(expected_cmd),
               static_cast<unsigned long long>(cmd));
       exit(1);
     }
