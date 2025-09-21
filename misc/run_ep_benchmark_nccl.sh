@@ -121,7 +121,7 @@ for ((i=1; i<${#HOSTS[@]}; i++)); do
     sudo sysctl -w vm.nr_hugepages=2048 && \
     sudo rmmod ib_uverbs || true && \
     sudo modprobe ib_uverbs && \
-    export LD_PRELOAD="${UCCL_HOME}/nccl/build/lib/libnccl.so" && \
+    export LD_PRELOAD="${UCCL_HOME}/thirdparty/nccl/build/lib/libnccl.so" && \
     export NCCL_NET_PLUGIN="/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu/libnccl-net.so" && \
     export NCCL_DEBUG= && \
     export NCCL_PROTO=Simple && \
@@ -180,7 +180,7 @@ sudo sysctl -w vm.max_map_count=1048576 && \
 sudo sysctl -w vm.nr_hugepages=2048 && \
 sudo rmmod ib_uverbs || true && \
 sudo modprobe ib_uverbs && \
-export LD_PRELOAD="${UCCL_HOME}/nccl/build/lib/libnccl.so" && \
+export LD_PRELOAD="${UCCL_HOME}/thirdparty/nccl/build/lib/libnccl.so" && \
 export NCCL_NET_PLUGIN="/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu/libnccl-net.so" && \
 export NCCL_DEBUG= && \
 export NCCL_PROTO=Simple && \

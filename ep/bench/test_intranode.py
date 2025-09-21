@@ -1,3 +1,9 @@
+"""
+This is the same test_intranode.py test in DeepEP's repo.
+OMP_NUM_THREADS=8 torchrun --standalone --nproc_per_node=8 bench/test_intranode.py \
+    --num-tokens 2048 --hidden 3584 --num-topk 4 --num-experts 128
+"""
+
 import argparse
 import time
 import torch
@@ -387,6 +393,13 @@ def test_main(
 
 # noinspection PyUnboundLocalVariable,PyShadowingNames
 def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
+
+    # Set LOCAL_RANK environment variable for this process
+    os.environ["LOCAL_RANK"] = str(local_rank)
+
+    # Set the CUDA device for this process
+    torch.cuda.set_device(local_rank)
+
     rank, num_ranks, group = init_dist(local_rank, num_local_ranks)
     test_ll_compatibility, num_rdma_bytes = False, 0
     if test_ll_compatibility:
@@ -395,30 +408,23 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
             ll_num_tokens, ll_hidden, num_ranks, ll_num_experts
         )
 
-    num_nvlink_bytes = int(1e9)
     device_index = int(os.environ["LOCAL_RANK"])
     scratch = torch.zeros(
         num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
     )
-    proxies, workers = initialize_uccl(scratch, num_rdma_bytes, rank, num_ranks, group)
+    proxies, workers, bench_obj = initialize_uccl(
+        scratch, num_rdma_bytes, rank, num_ranks, group, args.num_experts, True
+    )
 
     buffer = Buffer(
         group,
         scratch.data_ptr(),
-        num_nvlink_bytes,
+        int(2e9),
         num_rdma_bytes,
         low_latency_mode=test_ll_compatibility,
         num_qps_per_rank=(ll_num_experts // num_ranks if test_ll_compatibility else 1),
         explicitly_destroy=True,
     )
-    buffer.connect_atomic_buffer(proxies[0])
-
-    for proxy in proxies:
-        proxy.calculate_and_set_dispatch_recv_data_offset(
-            args.num_tokens, args.hidden, args.num_experts
-        )
-        proxy.set_atomic_buffer_ptr(proxies[0].get_atomic_buffer_ptr())
-
     torch.manual_seed(rank)
 
     for i in (24,):
@@ -441,11 +447,10 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
             seed=1,
         )
 
-    # Destroy the buffer runtime and communication group
     group.barrier()
     buffer.destroy()
     dist.barrier()
-    destroy_uccl(proxies, workers)
+    destroy_uccl(proxies, workers, bench)
     dist.barrier()
     dist.destroy_process_group()
 
@@ -472,7 +477,8 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    num_processes = args.num_processes
-    torch.multiprocessing.spawn(
-        test_loop, args=(num_processes, args), nprocs=num_processes
-    )
+    # torchrun sets these automatically
+    local_rank = int(os.environ["LOCAL_RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+
+    test_loop(local_rank, world_size, args)

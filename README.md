@@ -1,6 +1,6 @@
 <div align="center">
 
-<p align="center"> <img src="./doc/images/uccl_logo.png" alt="" width="300"> </p>
+<p align="center"> <img src="./docs/images/uccl_logo.png" alt="" width="300"> </p>
 
 [![🌐 UCCL](https://img.shields.io/badge/-Visit%20Website-5865F2?style=for-the-badge)](https://uccl-project.github.io/) [![Github](https://img.shields.io/badge/UCCL-000000?style=for-the-badge&logo=github&logoColor=000&logoColor=white)](https://github.com/uccl-project/uccl) [![Twitter](https://img.shields.io/badge/UCCL-white?style=for-the-badge&logo=X&logoColor=000&color=000&labelColor=white)](https://x.com/uccl_proj)
 <p align="center">
@@ -26,13 +26,13 @@ For collectives, UCCL-collective serves as a drop-in replacement for NCCL/RCCL (
 <summary>UCCL-collective performance comparison</summary>
 
 * On six HGX servers (across two racks) with 8x400G CX-7 RoCE NICs and 8xH100 GPUs, UCCL-collective outperforms NCCL by up to **2.5x** for AllReduce:
-  <p align="left"> <img src="./doc/images/allreduce_6_hgx.png" alt="" width="600"> </p>
+  <p align="left"> <img src="./docs/images/allreduce_6_hgx.png" alt="" width="600"> </p>
 
 * On four AWS `p4d.24xlarge` instances with 4x100G EFA NICs and 8xA100 GPUs, UCCL-collective outperforms NCCL by up to **3.3x** for AlltoAll: 
-  <p align="left"> <img src="./doc/images/alltoall_4_p4d.png" alt="" width="600"> </p>
+  <p align="left"> <img src="./docs/images/alltoall_4_p4d.png" alt="" width="600"> </p>
 
 * On two AWS `g4dn.8xlarge` instances with 1x50G ENA NICs and 1xT4 GPUs within the same cluster placement group, UCCL-collective outperforms NCCL by up to **3.7x** for AllReduce: 
-  <p align="left"> <img src="./doc/images/allreduce_2_g4dn.png" alt="" width="600"> </p>
+  <p align="left"> <img src="./docs/images/allreduce_2_g4dn.png" alt="" width="600"> </p>
 
 More specifically, UCCL-collective aims to: 
 * rearchitect the CCL layer (while keeping NCCL APIs) to unleash the full potential of network hardware
@@ -74,10 +74,11 @@ The easiest way to use UCCL is to first build based on your platform. The build 
 
 ```bash
 git clone https://github.com/uccl-project/uccl.git --recursive
-cd uccl && bash build_and_install.sh [cuda|rocm|therock] [all|rdma|p2p|efa|ep] [py_version] [gfx_version]
+cd uccl && bash build_and_install.sh [cuda|rocm|therock] [all|rdma|p2p|efa|ep] [py_version] [rocm_index_url]
 ```
-> When building for ROCm with python packaging through TheRock, please, specify your AMD GPU's gfx architecture. The default is `gfx94X-dcgpu` and it may not be what you want. When installing UCCL wheels for TheRock, please, add the optional extra `[rocm]` to the wheel, e.g., `python install wheelhouse-therock/uccl-0.0.1.post4+therock-py3-none-manylinux_2_35_x86_64.whl[rocm]` and provide pip with the extra index for your gfx arch ROCm packages, e.g. `--extra-index-url http://rocm.nightlies.amd.com/v2/gfx94X-dcgpu`.
-
+> Note: 
+> - when building for ROCm with python packaging through TheRock, please specify your ROCm index url; the default is `https://rocm.nightlies.amd.com/v2/gfx94X-dcgpu` and it may not be what you want. When installing UCCL wheels for TheRock, please provide pip with the index url and add the optional extra `[rocm]` to the wheel, e.g., `pip install --extra-index-url https://rocm.nightlies.amd.com/v2/gfx94X-dcgpu wheelhouse-therock/uccl-0.0.1.post4+therock-py3-none-manylinux_2_35_x86_64.whl[rocm]`.
+> - you can build with different CUDA or ROCm versions by specifying tags such as cuda13 or rocm6. The default versions are CUDA 12.x for the "cuda" tag and ROCm 7.x for the "rocm" tag.
 
 Then, when running your PyTorch applications, set the environment variable accordingly: 
 ```bash
@@ -96,7 +97,7 @@ Now, you can just run your PyTorch applications and enjoy UCCL performance benef
 
 ## Dev Guide
 
-Please refer to [doc/dev.md](doc/dev.md) for full development guide of UCCL.
+Please refer to [docs/README.md](docs/README.md) for full development guide of UCCL.
 
 ## Citation
 The code in this repository is mostly described in the paper below. Please consider citing this work if you find the repository helpful. 

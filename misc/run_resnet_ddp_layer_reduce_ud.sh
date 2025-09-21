@@ -26,8 +26,8 @@ sudo rmmod ib_uverbs || true
 sudo modprobe ib_uverbs
 
 # Environment variables for UCCL
-export LD_PRELOAD="${UCCL_HOME}/nccl/build/lib/libnccl.so"
-export NCCL_NET_PLUGIN="${UCCL_HOME}/efa/libnccl-net-efa.so"
+export LD_PRELOAD="${UCCL_HOME}/thirdparty/nccl/build/lib/libnccl.so"
+export NCCL_NET_PLUGIN="${UCCL_HOME}/collective/efa/libnccl-net-efa.so"
 export NCCL_DEBUG=INFO
 export NCCL_PROTO=Simple
 export NCCL_P2P_DISABLE=${NV_LINK_DISABLE}
@@ -41,7 +41,7 @@ export NCCL_P2P_NET_CHUNKSIZE=${CHUNK_SIZE}
 export NCCL_BUFFSIZE=${BUFFSIZE}
 export NCCL_NET_GDR_LEVEL=SYS
 # export CUDA_MODULE_LOADING=EAGER
-export NCCL_TOPO_FILE=${UCCL_HOME}/efa/p4d-24xl-topo.xml
+export NCCL_TOPO_FILE=${UCCL_HOME}/collective/efa/p4d-24xl-topo.xml
 # export NCCL_PXN_DISABLE=1
 export UCCL_ENGINE_QUIET=1
 export GLOG_logtostderr=0

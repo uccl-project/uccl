@@ -4,8 +4,13 @@
 
 UcclProxy::UcclProxy(uintptr_t rb_addr, int block_idx,
                      uintptr_t gpu_buffer_addr, size_t total_size, int rank,
-                     std::string const& peer_ip)
-    : peer_ip_storage_{peer_ip}, thread_{}, mode_{Mode::None}, running_{false} {
+                     int node_idx, int local_rank, std::string const& peer_ip,
+                     int num_experts, int num_ranks)
+    : peer_ip_{peer_ip}, thread_{}, mode_{Mode::None}, running_{false} {
+  if (peer_ip.empty()) {
+    printf("Intranode mode. UcclProxy returns\n");
+    return;
+  }
   Proxy::Config cfg;
   // cfg.rb = reinterpret_cast<DeviceToHostCmdBuffer*>(rb_addr);
   rb_ = rb_addr;
@@ -16,9 +21,13 @@ UcclProxy::UcclProxy(uintptr_t rb_addr, int block_idx,
   cfg.gpu_buffer = reinterpret_cast<void*>(gpu_buffer_addr);
   cfg.total_size = total_size;
   cfg.rank = rank;
-  cfg.peer_ip = peer_ip_storage_.empty() ? nullptr : peer_ip_storage_.c_str();
+  cfg.local_rank = local_rank;
+  cfg.peer_ip = peer_ip_.empty() ? nullptr : peer_ip_.c_str();
+  cfg.num_experts = num_experts;
+  cfg.num_ranks = num_ranks;
   proxy_ = std::make_unique<Proxy>(cfg);
-  local_rank_ = rank;
+  local_rank_ = local_rank;
+  node_idx_ = node_idx;
 
   if (block_idx == 0) {
     // size_t atomic_buffer_bytes = 2 * align<size_t>(num_experts * sizeof(int),
@@ -47,33 +56,21 @@ void UcclProxy::set_peers_meta(std::vector<PeerMeta> const& peers) {
   proxy_->set_peers_meta(peers);
 }
 
-void UcclProxy::start_sender() {
-  start(Mode::Sender);
-  std::printf("UcclProxy started as Sender\n");
-}
-void UcclProxy::start_remote() {
-  start(Mode::Remote);
-  std::printf("UcclProxy started as Remote\n");
-}
-void UcclProxy::start_local() {
-  start(Mode::Local);
-  std::printf("UcclProxy started as Local\n");
-}
-void UcclProxy::start_dual() {
-  start(Mode::Dual);
-  std::printf("UcclProxy started as Dual\n");
-}
+void UcclProxy::start_sender() { start(Mode::Sender); }
+void UcclProxy::start_remote() { start(Mode::Remote); }
+void UcclProxy::start_local() { start(Mode::Local); }
+void UcclProxy::start_dual() { start(Mode::Dual); }
 
 void UcclProxy::stop() {
-  if (!running_.load(std::memory_order_acquire)) return;
+  if (!running_.load(std::memory_order_acquire)) {
+    throw std::runtime_error("Proxy already stopped");
+  }
   proxy_->set_progress_run(false);
   if (thread_.joinable()) thread_.join();
   running_.store(false, std::memory_order_release);
   // Because proxies share the gpu_buffer, only destroy gpu_buffer for the first
   // proxy.
-  // std::printf("UcclProxy destroying\n");
   proxy_->destroy(block_idx_ == 0);
-  // std::printf("UcclProxy destroyed\n");
 }
 
 void UcclProxy::start(Mode m) {
@@ -85,7 +82,7 @@ void UcclProxy::start(Mode m) {
   running_.store(true, std::memory_order_release);
 
   thread_ = std::thread([this]() {
-    if (peer_ip_storage_.empty()) {
+    if (peer_ip_.empty()) {
       std::printf("UcclProxy: no peer IP set, running in local mode\n");
       proxy_->run_local();
       return;

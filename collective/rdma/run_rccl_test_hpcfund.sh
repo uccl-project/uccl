@@ -1,6 +1,6 @@
 # !/bin/bash
 
-source ../scripts/shared.sh
+source ../../scripts/shared.sh
 
 if [[ -z "${CONDA_LIB_HOME}" ]]; then
   echo "CONDA_LIB_HOME is not set or is empty"
@@ -28,7 +28,7 @@ if [ "$TEST" = "rccl" ]; then
     plugin_path=""
 elif [ "$TEST" = "uccl" ]; then
     echo "Running UCCL test"
-    # plugin_path="${UCCL_HOME}/rdma/librccl-net-uccl.so"
+    # plugin_path="${UCCL_HOME}/collective/rdma/librccl-net-uccl.so"
     plugin_path=`python -c "import uccl; print(uccl.rccl_plugin_path())"`
     echo "plugin_path: ${plugin_path}"
 else

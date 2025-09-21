@@ -101,13 +101,15 @@ def run_rank0_sender(args, peer_ip: str, peers_meta_list: list, nbytes: int, buf
 
     try:
         for p in proxies:
+            print(f"Proxy {p.block_idx} avg_wr_latency_us: {p.avg_wr_latency_us()} µs")
             p.stop()
     except Exception:
         pass
+
     bench.print_block_latencies()
     stats = bench.compute_stats()
     bench.print_summary(stats)
-    print("elapsed_ms:", bench.last_elapsed_ms())
+    print("Benchmark elapsed_ms:", bench.last_elapsed_ms())
 
 
 def run_rank1_remote(args, peer_ip: str, peers_meta_list: list, nbytes: int, buf_addr):
