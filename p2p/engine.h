@@ -427,6 +427,8 @@ class Endpoint {
       } batch;
 
       SpecificData() : base{} {}
+      // // Explicit trivial destructor so the union is not implicitly deleted
+      ~SpecificData() {}
     } specific;
 
     UnifiedTask()
@@ -463,7 +465,6 @@ class Endpoint {
       return specific.batch.task_batch;
     }
 
-    // Check if this is a batch task
     inline bool is_batch_task() const {
       return type == TaskType::SENDV || type == TaskType::RECVV;
     }
