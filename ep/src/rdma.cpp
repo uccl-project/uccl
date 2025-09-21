@@ -1081,9 +1081,10 @@ void remote_process_completions(
       uint32_t src_rank = wimm.GetRank();
 
       if (!is_combine) {
+        /* expert_idx here is the local expert index of the receiver. */
         S.dispatch_token_counter.Add({buffer_idx, expert_idx, src_rank}, k);
       } else {
-        /* expert_idx here is the global expert index of the sender */
+        /* expert_idx here is the global expert index of the sender. */
         assert(expert_idx >= src_rank * (num_experts / num_ranks) &&
                expert_idx < (src_rank + 1) * (num_experts / num_ranks));
         S.combine_token_counter.Add({buffer_idx, expert_idx}, k);
