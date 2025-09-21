@@ -30,6 +30,10 @@ struct PendingUpdate {
   std::atomic<int>* addr;
   int value;
   uint32_t imm;
+  int low_latency_buffer_idx;
+  int expert_idx;
+  bool is_combine;
+  int src_rank;
 
   // Needed for std::set ordering
   bool operator<(PendingUpdate const& other) const {

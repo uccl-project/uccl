@@ -693,12 +693,22 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
           }
           std::abort();
         }
-        uint32_t imm =
-            WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
-                           cmd.expert_idx, 1u, my_rank)
-                .GetImmData();
-        ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
-
+        bool last = (j + 1 == expert_k);
+        /*
+        Note(MaoZiming): This is actually fine.
+        When the atomics arrive, the remote side will track if it has received
+        just enough tokens for an expert. If it has not, it will postpone
+        processing the atomic until it does.
+        */
+        if (last) {
+          uint32_t imm =
+              WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
+                             cmd.expert_idx, expert_k, my_rank)
+                  .GetImmData();
+          ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
+        } else {
+          ibv_wr_rdma_write(qpx, ctx->remote_rkey, remote_addr);
+        }
         uintptr_t laddr =
             cmd.req_lptr ? cmd.req_lptr
                          : reinterpret_cast<uintptr_t>(buf) + i * cmd.bytes;
@@ -941,42 +951,27 @@ void apply_pending_updates(ProxyCtx& ctx,
   for (auto it = pending_atomic_updates.begin();
        it != pending_atomic_updates.end();) {
     PendingUpdate const& upd = *it;
-    AtomicsImm aimm(upd.imm);
-    uint32_t offset = aimm.GetOff();
-    int low_latency_buffer_idx = aimm.GetBufferIdx();
-    bool is_combine = aimm.IsCombine();
-    int value = aimm.GetValue();
-    uint32_t new_offset =
-        offset -
-        low_latency_buffer_idx * align<size_t>(num_experts * sizeof(int), 128);
-    size_t new_index = new_offset / sizeof(int);
     bool is_atomic_ready = false;
-
-    if (!is_combine) {
-      int local_expert_idx = new_index / num_ranks;
-
-      int src_rank = new_index % num_ranks;
+    int value = upd.value;
+    if (!upd.is_combine) {
       int num_tokens = ctx.dispatch_token_counter.Get(
-          {low_latency_buffer_idx, local_expert_idx, src_rank});
+          {upd.low_latency_buffer_idx, upd.expert_idx, upd.src_rank});
       if ((-value - 1) == num_tokens) {
         is_atomic_ready = true;
-      }
-      if (is_atomic_ready)
         ctx.dispatch_token_counter.Reset(
-            {low_latency_buffer_idx, local_expert_idx, src_rank});
+            {upd.low_latency_buffer_idx, upd.expert_idx, upd.src_rank});
+      }
     } else {
-      int expert_idx = new_index;
-      int combine_num_tokens =
-          ctx.combine_token_counter.Get({low_latency_buffer_idx, expert_idx});
+      int combine_num_tokens = ctx.combine_token_counter.Get(
+          {upd.low_latency_buffer_idx, upd.expert_idx});
       if (value == combine_num_tokens) {
         is_atomic_ready = true;
+        ctx.combine_token_counter.Reset(
+            {upd.low_latency_buffer_idx, upd.expert_idx});
       }
-
-      if (is_atomic_ready)
-        ctx.combine_token_counter.Reset({low_latency_buffer_idx, expert_idx});
     }
     if (is_atomic_ready) {
-      if (is_combine) value = 1;
+      if (upd.is_combine) value = 1;
       upd.addr->fetch_add(value, std::memory_order_release);
       it = pending_atomic_updates.erase(it);
     } else {
@@ -1017,12 +1012,14 @@ void remote_process_completions(
           offset - low_latency_buffer_idx *
                        align<size_t>(num_experts * sizeof(int), 128);
       size_t new_index = new_offset / sizeof(int);
+      int src_rank = -1;
       bool is_atomic_ready = false;
+      int expert_idx = -1;
       if (!is_combine) {
-        int local_expert_idx = new_index / num_ranks;
-        int src_rank = new_index % num_ranks;
+        expert_idx = new_index / num_ranks;
+        src_rank = new_index % num_ranks;
         int num_tokens = S.dispatch_token_counter.Get(
-            {low_latency_buffer_idx, local_expert_idx, src_rank});
+            {low_latency_buffer_idx, expert_idx, src_rank});
         if ((-value - 1) == num_tokens) {
           is_atomic_ready = true;
         }
@@ -1031,18 +1028,15 @@ void remote_process_completions(
                   "[Error] Required Dispatch value %d is smaller than received "
                   "counter %d for "
                   "expert_idx %d, src_rank %d\n",
-                  -value - 1, num_tokens, local_expert_idx, src_rank);
+                  -value - 1, num_tokens, expert_idx, src_rank);
         }
         if (is_atomic_ready) {
           S.dispatch_token_counter.Reset(
-              {low_latency_buffer_idx, local_expert_idx, src_rank});
-          assert(S.dispatch_token_counter.Get(
-                     {low_latency_buffer_idx, local_expert_idx, src_rank}) ==
-                 0);
+              {low_latency_buffer_idx, expert_idx, src_rank});
         }
 
       } else {
-        int expert_idx = new_index;
+        expert_idx = new_index;
         if (expert_idx > num_experts) {
           fprintf(stderr,
                   "Error: expert_idx %d out of range (num_experts=%d)\n",
@@ -1067,11 +1061,13 @@ void remote_process_completions(
       }
       auto* addr32 =
           reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
-      if (is_combine) value = 1;
-      if (is_atomic_ready)
+      if (is_atomic_ready) {
+        if (is_combine) value = 1;
         addr32->fetch_add(value, std::memory_order_release);
-      else {
-        pending_atomic_updates.insert({addr32, value, aimm.GetImmData()});
+      } else {
+        pending_atomic_updates.insert({addr32, value, aimm.GetImmData(),
+                                       low_latency_buffer_idx, expert_idx,
+                                       is_combine, src_rank});
       }
       continue;
     }
@@ -1085,9 +1081,10 @@ void remote_process_completions(
       uint32_t src_rank = wimm.GetRank();
 
       if (!is_combine) {
+        /* expert_idx here is the local expert index of the receiver. */
         S.dispatch_token_counter.Add({buffer_idx, expert_idx, src_rank}, k);
       } else {
-        /* expert_idx here is the global expert index of the sender */
+        /* expert_idx here is the global expert index of the sender. */
         assert(expert_idx >= src_rank * (num_experts / num_ranks) &&
                expert_idx < (src_rank + 1) * (num_experts / num_ranks));
         S.combine_token_counter.Add({buffer_idx, expert_idx}, k);
