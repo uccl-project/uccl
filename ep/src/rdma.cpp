@@ -165,7 +165,8 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
       assert(candidates.size() == 4);
       // GPU0 uses candidates[0/1], GPU1 uses candidates[2/3], etc.
       auto half = (local_rank % 2) * 2;
-      selected_nic_name = candidates[thread_idx % 2 + half];
+      // selected_nic_name = candidates[thread_idx % 2 + half];
+      selected_nic_name = candidates[thread_idx % candidates.size()];
 #endif
     }
   }
@@ -886,6 +887,7 @@ void local_process_completions(ProxyCtx& S,
     switch (wc[i].opcode) {
       case IBV_WC_RDMA_WRITE: {
         send_completed++;
+#ifdef FALSE
         uint64_t wrid = wc[i].wr_id;
         if ((wrid & kAtomicWrTag) == kAtomicWrTag) {
           break;
@@ -906,6 +908,7 @@ void local_process_completions(ProxyCtx& S,
             assert(false && "wr_id not found in write_struct map");
           }
         }
+#endif
       } break;
       case IBV_WC_RECV:
         if (wc[i].wc_flags & IBV_WC_WITH_IMM &&
@@ -1057,9 +1060,9 @@ void remote_process_completions(
       int value = aimm.GetValue();
       uint32_t offset = aimm.GetOff();
       size_t index = offset / sizeof(int);
-      int low_latency_buffer_idx = aimm.GetBufferIdx();
       bool is_combine = aimm.IsCombine();
 #ifdef FALSE
+      int low_latency_buffer_idx = aimm.GetBufferIdx();
       // ep_config.hpp
       uint32_t new_offset =
           offset - low_latency_buffer_idx *
