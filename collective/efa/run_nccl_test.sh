@@ -1,6 +1,6 @@
 # !/bin/bash
 
-source ../scripts/shared.sh
+source ../../scripts/shared.sh
 
 # Run nccl-tests with multiple processes
 # Usage: ./run_nccl_test_mp.sh [srd|ud] [Total Processes/Ranks/GPUs] [Benchtype, 0: alltoall, 1: allgather, 2: multi-allreduce]
@@ -8,9 +8,9 @@ source ../scripts/shared.sh
 # Visible GPUs to application.
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 # Disable NVLink.
-NV_LINK_DISABLE=0
+NV_LINK_DISABLE=1
 MULTI_GROUP=0
-NIC=10.1.0.0/16
+NIC=ens32
 # Processes/Ranks/GPUs per node.
 PROCS_PER_NODE=8
 
@@ -23,17 +23,17 @@ PROG_NAME=${3:-0}
 if [ "$PROG_NAME" -eq 0 ]; then
     PROG_NAME="alltoall_perf"
 elif [ "$PROG_NAME" -eq 1 ]; then
-    PROG_NAME="all_reduce_perf"
+    PROG_NAME="all_gather_perf"
 elif [ "$PROG_NAME" -eq 2 ]; then
-    PROG_NAME="alltoall_perf"
+    PROG_NAME="all_reduce_perf"
     MULTI_GROUP=0x7
 else
     echo "Invalid program name: ${PROG_NAME}"
     exit 1
 fi
 
-CHANNELS=32
-CHANNELS_NET_PEER=1
+CHANNELS=8
+CHANNELS_NET_PEER=4
 
 # UCCL optimal parameters. Yang: for allreduce with nvlink, we need to use larger buffer to catch up with NCCL with larger buffers, and avoid outliers.
 CHUNK_SIZE=131072
@@ -45,7 +45,7 @@ if [ "$TEST" = "srd" ]; then
     BUFFSIZE=8388608
 fi
 
-NODEFILE="../scripts/node_ips/p5en.txt"
+NODEFILE="../../scripts/node_ips/p4d.txt"
 NODES=$(get_nodes $NODEFILE)
 echo "Running test: ${TEST}, ${PROG_NAME}, ${NUM_PROCS} processes, NIC ${NIC}, uccl_quite ${UCCL_QUITE}, ${NODES}, ${CHANNELS} channels."
 
@@ -95,7 +95,7 @@ elif [ "$TEST" = "ud" ]; then
     done
 
     # LIBNCCL_PATH="${UCCL_HOME}/thirdparty/nccl-sg/build/lib/libnccl.so"
-    # PLUGIN_PATH="${UCCL_HOME}/efa/libnccl-net-efa.so"
+    # PLUGIN_PATH="${UCCL_HOME}/collective/efa/libnccl-net-efa.so"
     LIBNCCL_PATH=`python -c "import uccl; print(uccl.efa_nccl_path())"`
     PLUGIN_PATH=`python -c "import uccl; print(uccl.efa_plugin_path())"`
     echo "LIBNCCL_PATH: ${LIBNCCL_PATH}"
@@ -126,7 +126,7 @@ elif [ "$TEST" = "ud" ]; then
         -x NCCL_GDRCOPY_SYNC_ENABLE=0 \
         -x NCCL_GDRCOPY_FIFO_ENABLE=0 \
         -x CUDA_MODULE_LOADING=EAGER \
-        -x NCCL_TOPO_FILE=${UCCL_HOME}/efa/p4d-24xl-topo.xml \
+        -x NCCL_TOPO_FILE=${UCCL_HOME}/collective/efa/p4d-24xl-topo.xml \
         -x NCCL_PXN_DISABLE=1 \
         -x UCCL_ENGINE_QUIET=1 \
         ${UCCL_HOME}/thirdparty/nccl-tests/build/${PROG_NAME} \

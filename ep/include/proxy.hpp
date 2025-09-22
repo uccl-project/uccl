@@ -19,6 +19,9 @@
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
+#include <set>
+#include <tuple>
+
 struct PeerMeta {
   int rank;
   uintptr_t ptr;
@@ -32,18 +35,19 @@ class Proxy {
 
   struct Config {
     DeviceToHostCmdBuffer* rb = nullptr;
-    int block_idx = 0;
+    int thread_idx = 0;
     void* gpu_buffer = nullptr;
     size_t total_size = 0;
     int rank = 0;
+    int node_idx = -1;
+    int local_rank = -1;
     char const* peer_ip = nullptr;
     bool pin_thread = true;
+    int num_experts = 0;
+    int num_ranks = 0;
   };
 
-  explicit Proxy(Config const& cfg) : cfg_(cfg) {
-    // TODO(Fix)
-    GPU_RT_CHECK(gpuSetDevice(0));
-  }
+  explicit Proxy(Config const& cfg) : cfg_(cfg) {}
 
   void set_progress_run(bool run) {
     ctx_.progress_run.store(run, std::memory_order_release);

@@ -17,18 +17,18 @@
 namespace uccl {
 
 // template <bool kAlwaysDoPostSend = false>
-// Note(MaoZiming, Yang): the warp_id here is used to tell which ring buffer to
-// use. The total concurrent warps can be say 64 (= number of experts), while
+// Note(MaoZiming, Yang): the expert_idx here is used to tell which ring buffer
+// to use. The total concurrent warps can be say 64 (= number of experts), while
 // the number of ring buffers is small (say 6).
 __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     uint64_t req_rptr, uint64_t req_lptr, size_t bytes, int dst_rank,
-    int warp_id, int lane_id, int message_idx, uint64_t const* ring_addrs,
-    int num_ring_addrs, bool is_combine) {
+    int expert_idx, int lane_id, int message_idx, uint64_t const* ring_addrs,
+    int num_ring_addrs, bool is_combine, int low_latency_buffer_idx = -1) {
   // NOTE(MaoZiming): different from the nvshmemi_ibgda_put_nbi_warp in
   // ibgda_device.cuh, we don't do warp-cooperation.
   if (lane_id != 0) return;
   int safe_n = num_ring_addrs > 0 ? num_ring_addrs : 1;
-  int ring_idx = (warp_id >= 0 ? warp_id : 0) % safe_n;
+  int ring_idx = (expert_idx >= 0 ? expert_idx : 0) % safe_n;
 
   unsigned long long rptr_val = static_cast<unsigned long long>(req_rptr);
   unsigned long long lptr_val = static_cast<unsigned long long>(req_lptr);
@@ -53,17 +53,19 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       TransferCmd cmd{};
       // TODO(MaoZiming): Check fields here.
       // NOTE(MaoZiming): cmd is needed for proxy to process the command.
-      cmd.cmd = (static_cast<uint64_t>(warp_id + 1) << 32) |
-                (message_idx & 0xFFFFFFFF);  // NOTE(MaoZiming): Use warp_id + 1
-                                             // to avoid 0 as a valid command.
+      cmd.cmd =
+          (static_cast<uint64_t>(expert_idx + 1) << 32) |
+          (message_idx & 0xFFFFFFFF);  // NOTE(MaoZiming): Use expert_idx + 1
+                                       // to avoid 0 as a valid command.
       cmd.req_rptr = rptr_val;
       cmd.req_lptr = lptr_val;
       cmd.bytes = bytes_val;
       cmd.dst_rank = dst_rank;
-      cmd.warp_id = warp_id;
+      cmd.expert_idx = expert_idx;
       cmd.lane_id = lane_id;
       cmd.message_idx = message_idx;
       cmd.is_combine = is_combine;
+      cmd.low_latency_buffer_idx = low_latency_buffer_idx;
       rb->atomic_set_and_commit(cmd, &slot);
       break;
     }
@@ -84,7 +86,8 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
 __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     uint64_t rptr, int const& value, int dst_rank, int qp_id, int warp_id,
     bool is_local_copy = false, uint64_t const* ring_addrs = nullptr,
-    int num_ring_addrs = 0, bool is_combine = true) {
+    int num_ring_addrs = 0, bool is_combine = true,
+    int low_latency_buffer_idx = -1) {
   if (is_local_copy) {
     atomicAdd(reinterpret_cast<int*>(rptr), value);
   } else {
@@ -114,6 +117,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
         cmd.is_atomic = true;
         cmd.is_combine = is_combine;
         cmd.req_rptr = rptr;
+        cmd.low_latency_buffer_idx = low_latency_buffer_idx;
         rb->atomic_set_and_commit(cmd, &slot);
         break;
       } else {
@@ -163,6 +167,10 @@ __device__ __forceinline__ uint64_t get_ipc_p2p_ptr(uint64_t const& local_ptr,
   size_t offset =
       reinterpret_cast<uintptr_t>(reinterpret_cast<void*>(local_ptr)) -
       reinterpret_cast<uintptr_t>(ipc_base_ptrs[src_local_rank]);
+
+  // printf("src_local_rank: %d, dst_local_rank: %d, offset: %zu, local_ptr: %p,
+  // base_ptr: %p\n", src_local_rank, dst_local_rank, offset, (void*)local_ptr,
+  // ipc_base_ptrs[src_local_rank]);
 
   // Return the remote pointer as uint64_t
   return reinterpret_cast<uint64_t>(ipc_base_ptrs[dst_local_rank]) + offset;
