@@ -89,7 +89,6 @@ struct ProxyCtx {
   TokenCounter<CombineTokenKey> combine_token_counter;
 
   /* low_latency_buffer_idx, expert_idx, dst_rank */
-  std::mutex sent_state_mutex;
   std::unordered_map<uint64_t, WriteStruct> wr_id_to_write_struct;
   TokenCounter<DispatchTokenKey> dispatch_sent_counter;
   TokenCounter<DispatchTokenKey> combine_sent_counter;
