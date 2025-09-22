@@ -695,7 +695,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
           std::abort();
         }
         {
-          std::lock_guard<std::mutex> lock(S.sent_state_mutex);
           S.wr_id_to_write_struct[qpx->wr_id] = {
               expert_idx, dst_rank, cmd.is_combine, cmd.low_latency_buffer_idx};
         }
@@ -753,12 +752,8 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         std::abort();
       }
 
-      {
-        std::lock_guard<std::mutex> lock(S.sent_state_mutex);
-        S.wr_id_to_write_struct[wr_id] = {cmd.expert_idx, dst_rank,
-                                          cmd.is_combine,
-                                          cmd.low_latency_buffer_idx};
-      }
+      S.wr_id_to_write_struct[wr_id] = {
+          cmd.expert_idx, dst_rank, cmd.is_combine, cmd.low_latency_buffer_idx};
 
       if (j + 1 == k) {
         // Last WR carries IMM
@@ -896,7 +891,6 @@ void local_process_completions(ProxyCtx& S,
           break;
         }
         {
-          std::lock_guard<std::mutex> lock(S.sent_state_mutex);
           auto it = S.wr_id_to_write_struct.find(wrid);
           if (it != S.wr_id_to_write_struct.end()) {
             WriteStruct const& ws = it->second;
