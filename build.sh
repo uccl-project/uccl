@@ -63,7 +63,7 @@ build_rdma() {
       echo "Skipping ROCm build on Arm64 (no ROCm toolchain)."
       return
     fi
-    cd collective/rdma && make clean -f MakefileHip && make -j$(nproc) -f MakefileHip && cd ../../
+    cd collective/rdma && make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm && cd ../../
     TARGET_SO=collective/rdma/librccl-net-uccl.so
   elif [[ "$TARGET" == "therock" ]]; then
     if [[ "$ARCH" == "aarch64" ]]; then
@@ -77,7 +77,7 @@ build_rdma() {
       CXX=hipcc cmake -B build/release -S . -DCMAKE_EXPORT_COMPILE_COMMANDS=OFF -DCMAKE_PREFIX_PATH=$(rocm-sdk path --cmake) -DROCM_PATH=$(rocm-sdk path --root) -DHIP_PLATFORM=amd >/dev/null 2>&1 || true
       cd ../..
     fi
-    cd collective/rdma && make clean -f MakefileHip.therock && make -j$(nproc) -f MakefileHip.therock HIP_HOME=$(rocm-sdk path --root) CONDA_LIB_HOME=$VIRTUAL_ENV/lib && cd ../../
+    cd collective/rdma && make clean -f Makefile.therock && make -j$(nproc) -f Makefile.therock HIP_HOME=$(rocm-sdk path --root) CONDA_LIB_HOME=$VIRTUAL_ENV/lib && cd ../../
     TARGET_SO=collective/rdma/librccl-net-uccl.so
   fi
 
@@ -123,9 +123,9 @@ build_p2p() {
   if [[ "$TARGET" == cuda* ]]; then
     make clean && make -j$(nproc)
   elif [[ "$TARGET" == rocm* ]]; then
-    make clean -f MakefileHip && make -j$(nproc) -f MakefileHip
+    make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm
   elif [[ "$TARGET" == "therock" ]]; then
-    make clean -f MakefileHip.therock && make -j$(nproc) -f MakefileHip.therock HIP_HOME=$(rocm-sdk path --root) CONDA_LIB_HOME=$VIRTUAL_ENV/lib
+    make clean -f Makefile.therock && make -j$(nproc) -f Makefile.therock HIP_HOME=$(rocm-sdk path --root) CONDA_LIB_HOME=$VIRTUAL_ENV/lib
   fi
   cd ..
 
@@ -171,7 +171,7 @@ build_eccl() {
     echo "Skipping eccl build on Cuda."
     return
   elif [[ "$TARGET" == rocm* ]]; then
-    make clean -f MakefileHip && make -j$(nproc) -f MakefileHip
+    make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm
   fi
   cd ..
 
