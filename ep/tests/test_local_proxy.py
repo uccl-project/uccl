@@ -38,7 +38,7 @@ def test_proxy():
         rb_i = bench.ring_addr(i)
         p = ep.Proxy(
             rb_addr=rb_i,
-            block_idx=i,
+            thread_idx=i,
             gpu_buffer_addr=gpu_addr,
             total_size=nbytes,
         )

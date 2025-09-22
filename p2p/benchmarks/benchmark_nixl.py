@@ -56,7 +56,8 @@ def cleanup_agent(
 ):
     if agent is None:
         return
-    agent.remove_remote_agent(agent.name)
+    peer = "server" if agent.name == "client" else "client"
+    agent.remove_remote_agent(peer)
 
 
 def cleanup_transfer(
@@ -73,12 +74,17 @@ def cleanup_transfer(
         agent.deregister_memory(register_descs)
 
 
-def create_nixl_agent_mc(role: str, dataset, zmq_socket, backend):
+def create_nixl_agent_mc(role: str, dataset, zmq_socket, device_idx, backend):
     """
     Create Nixl agents based on the role with Mooncake/UCCL backend
     """
     backend_name = "Mooncake" if backend == "mooncake" else "Uccl"
-    config = nixl_agent_config(backends=[backend_name])
+    # device_idx is only supported by UCCL backend of nixl
+    config = (
+        nixl_agent_config(device_idx=device_idx, backends=[backend_name])
+        if backend == "uccl"
+        else nixl_agent_config(backends=[backend_name])
+    )
     agent = nixl_agent(role, config)
     descs = agent.get_reg_descs(dataset)
     register_descs = agent.register_memory(descs)
@@ -264,7 +270,7 @@ def start_transfer(size, num_kvblocks, args):
         sys.stdout = io.StringIO()
         if args.backend == "mooncake" or args.backend == "uccl":
             agent, register_descs = create_nixl_agent_mc(
-                args.role, dataset, zmq_socket, args.backend
+                args.role, dataset, zmq_socket, args.local_gpu_idx, args.backend
             )
         else:
             agent, register_descs = create_nixl_agent_ucx(args.role, dataset)

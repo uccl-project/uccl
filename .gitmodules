@@ -1,8 +1,8 @@
-[submodule "afxdp/lib/libbpf"]
-	path = afxdp/lib/libbpf
+[submodule "collective/afxdp/lib/libbpf"]
+	path = collective/afxdp/lib/libbpf
 	url = https://github.com/libbpf/libbpf
-[submodule "afxdp/lib/xdp-tools"]
-	path = afxdp/lib/xdp-tools
+[submodule "collective/afxdp/lib/xdp-tools"]
+	path = collective/afxdp/lib/xdp-tools
 	url = https://github.com/xdp-project/xdp-tools
 [submodule "thirdparty/rccl"]
 	path = thirdparty/rccl
@@ -16,3 +16,6 @@
 [submodule "thirdparty/nccl-tests"]
 	path = thirdparty/nccl-tests
 	url = https://github.com/NVIDIA/nccl-tests.git
+[submodule "thirdparty/Primus"]
+	path = thirdparty/Primus
+	url = https://github.com/AMD-AIG-AIMA/Primus

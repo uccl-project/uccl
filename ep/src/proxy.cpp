@@ -10,20 +10,25 @@ double Proxy::avg_rdma_write_us() const {
 }
 
 double Proxy::avg_wr_latency_us() const {
-  if (completion_count_ == 0) return 0.0;
+  if (completion_count_ <= kWarmupOps) return 0.0;
   return static_cast<double>(wr_time_total_us_) /
-         static_cast<double>(completion_count_);
+         static_cast<double>(completion_count_ - kWarmupOps);
 }
 
 uint64_t Proxy::completed_wr() const { return completion_count_; }
+
 void Proxy::pin_thread() {
   if (cfg_.pin_thread) {
-    pin_thread_to_cpu(cfg_.block_idx + 1);
+    // TODO(MaoZiming): improves pinning.
+    pin_thread_to_cpu(cfg_.thread_idx + cfg_.local_rank * kNumThBlocks);
     int cpu = sched_getcpu();
     if (cpu == -1) {
       perror("sched_getcpu");
     } else {
-      printf("Local CPU thread pinned to core %d\n", cpu);
+      printf(
+          "Local CPU thread pinned to core %d, thread_idx: %d, "
+          "local_rank: %d\n",
+          cpu, cfg_.thread_idx, cfg_.local_rank);
     }
   }
 }
@@ -33,9 +38,6 @@ void Proxy::set_peers_meta(std::vector<PeerMeta> const& peers) {
   peers_.reserve(peers.size());
   for (auto const& p : peers) {
     peers_.push_back(p);
-    if (cfg_.block_idx == 0)
-      printf("PeerMeta(rank=%d, ptr=0x%lx, nbytes=%zu, ip=%s)\n", p.rank,
-             static_cast<unsigned long>(p.ptr), p.nbytes, p.ip.c_str());
   }
   ctxs_for_all_ranks_.clear();
   ctxs_for_all_ranks_.resize(peers.size());
@@ -44,16 +46,16 @@ void Proxy::set_peers_meta(std::vector<PeerMeta> const& peers) {
   }
 }
 
-static inline int pair_tid_block(int a, int b, int N, int block_idx) {
+static inline int pair_tid_block(int a, int b, int N, int thread_idx) {
   int lo = std::min(a, b), hi = std::max(a, b);
-  return block_idx * (N * N) + lo * N + hi;
+  return thread_idx * (N * N) + lo * N + hi;
 }
 
 void Proxy::init_common() {
   int const my_rank = cfg_.rank;
 
   per_thread_rdma_init(ctx_, cfg_.gpu_buffer, cfg_.total_size, my_rank,
-                       cfg_.block_idx);
+                       cfg_.thread_idx, cfg_.local_rank);
   pin_thread();
   if (!ctx_.cq) ctx_.cq = create_per_thread_cq(ctx_);
   if (ctxs_for_all_ranks_.empty()) {
@@ -76,8 +78,8 @@ void Proxy::init_common() {
       reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(cfg_.gpu_buffer) +
                                   cfg_.total_size - atomic_buf_size);
 
-  printf("[PROXY_INIT] Atomic buffer at %p, size %zu bytes\n",
-         ctx_.atomic_old_values_buf, atomic_buf_size);
+  // printf("[PROXY_INIT] Atomic buffer at %p, size %zu bytes\n",
+  //        ctx_.atomic_old_values_buf, atomic_buf_size);
 
   int num_ranks = ctxs_for_all_ranks_.size();
   local_infos_.assign(num_ranks, RDMAConnectionInfo{});
@@ -101,6 +103,10 @@ void Proxy::init_common() {
     // NOTE(MaoZiming): each context can share the same cq, pd, mr.
     // but the qp must be different.
     c.cq = ctx_.cq;
+
+    if (peer == my_rank) continue;
+    // Skip rdma connection for intra-node.
+    if (peers_[peer].ip == peers_[my_rank].ip) continue;
     create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
                          &local_infos_[peer], my_rank);
     modify_qp_to_init(c);
@@ -111,27 +117,21 @@ void Proxy::init_common() {
   // Out-of-band exchange per pair.
   for (int peer = 0; peer < num_ranks; ++peer) {
     if (peer == my_rank) continue;
+    // Skip rdma connection for intra-node.
+    if (peers_[peer].ip == peers_[my_rank].ip) continue;
 
     bool const i_listen = (my_rank < peer);
-    int const tid = pair_tid_block(my_rank, peer, num_ranks, cfg_.block_idx);
+    int const tid = pair_tid_block(my_rank, peer, num_ranks, cfg_.thread_idx);
     char const* ip = peers_[peer].ip.c_str();
 
     int virt_rank = i_listen ? 0 : 1;
-    if (peers_[cfg_.rank].ptr != local_infos_[my_rank].addr) {
-      fprintf(stderr,
-              "Rank %d block %d: Warning: local addr mismatch: got 0x%lx, "
-              "expected 0x%lx\n",
-              my_rank, cfg_.block_idx, local_infos_[my_rank].addr,
-              peers_[cfg_.rank].ptr);
-      std::abort();
-    }
     exchange_connection_info(virt_rank, ip, tid, &local_infos_[peer],
                              &remote_infos_[peer]);
     if (remote_infos_[peer].addr != peers_[peer].ptr) {
       fprintf(stderr,
-              "Rank %d block %d: Warning: remote addr mismatch for peer %d: "
+              "Rank %d thread %d: Warning: remote addr mismatch for peer %d: "
               "got 0x%lx, expected 0x%lx\n",
-              my_rank, cfg_.block_idx, peer, remote_infos_[peer].addr,
+              my_rank, cfg_.thread_idx, peer, remote_infos_[peer].addr,
               peers_[peer].ptr);
       std::abort();
     }
@@ -140,6 +140,8 @@ void Proxy::init_common() {
   // Bring each per-peer QP to RTR/RTS
   for (int peer = 0; peer < num_ranks; ++peer) {
     if (peer == my_rank) continue;
+    // Skip rdma connection for intra-node.
+    if (peers_[peer].ip == peers_[my_rank].ip) continue;
     auto& c = *ctxs_for_all_ranks_[peer];
 
     // qp is different from each rank.
@@ -149,10 +151,6 @@ void Proxy::init_common() {
     c.remote_addr = remote_infos_[peer].addr;
     c.remote_rkey = remote_infos_[peer].rkey;
     c.remote_len = remote_infos_[peer].len;
-
-    printf("Peer %d remote addr=%p rkey=%u len=%lu\n", peer,
-           (void*)c.remote_addr, c.remote_rkey, c.remote_len);
-
     if (FILE* f = fopen("/tmp/uccl_debug.txt", "a")) {
       fprintf(
           f,
@@ -176,55 +174,66 @@ void Proxy::init_remote() {
   init_common();
   assert(cfg_.rank == 1);
   auto& ctx_ptr = ctxs_for_all_ranks_[0];
+  local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
   remote_reg_ack_buf(ctx_ptr->pd, ring.ack_buf, ring.ack_mr);
   ring.ack_qp = ctx_ptr->ack_qp;
+#ifndef EFA
   post_receive_buffer_for_imm(*ctx_ptr);
+#endif
 }
 
 void Proxy::run_sender() {
-  printf("CPU sender thread for block %d started\n", cfg_.block_idx + 1);
+  printf("CPU sender thread %d started\n", cfg_.thread_idx);
   init_sender();
   size_t seen = 0;
   uint64_t my_tail = 0;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     local_poll_completions(ctx_, finished_wrs_, acked_wrs_, finished_wrs_mutex_,
-                           cfg_.block_idx, ctx_by_tag_);
+                           cfg_.thread_idx, ctx_by_tag_);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
   }
 }
 
 void Proxy::run_remote() {
-  printf("Remote CPU thread for block %d started\n", cfg_.block_idx + 1);
+  printf("Remote CPU thread %d started\n", cfg_.thread_idx);
   init_remote();
-  printf("Finished\n");
+  std::set<PendingUpdate> pending_atomic_updates;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    remote_poll_completions(ctx_, cfg_.block_idx, ring, ctx_by_tag_,
-                            atomic_buffer_ptr_);
+    remote_poll_completions(ctx_, cfg_.thread_idx, ring, ctx_by_tag_,
+                            atomic_buffer_ptr_, cfg_.num_ranks,
+                            cfg_.num_experts, pending_atomic_updates);
+    apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
+                          cfg_.num_experts, cfg_.num_ranks);
   }
 }
 
 void Proxy::run_dual() {
-  printf("Dual (single-thread) proxy for block %d starting\n",
-         cfg_.block_idx + 1);
   init_common();
   for (int peer = 0; peer < (int)ctxs_for_all_ranks_.size(); ++peer) {
     if (peer == cfg_.rank) continue;
+    if (peers_[peer].ip == peers_[cfg_.rank].ip) continue;
     auto& ctx_ptr = ctxs_for_all_ranks_[peer];
     if (!ctx_ptr) continue;
     local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
     remote_reg_ack_buf(ctx_ptr->pd, ring.ack_buf, ring.ack_mr);
     ring.ack_qp = ctx_ptr->ack_qp;
+#ifndef EFA
     post_receive_buffer_for_imm(*ctx_ptr);
+#endif
   }
   uint64_t my_tail = 0;
   size_t seen = 0;
+  std::set<PendingUpdate> pending_atomic_updates;
   // printf("run_dual initialization complete\n");
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     poll_cq_dual(ctx_, finished_wrs_, acked_wrs_, finished_wrs_mutex_,
-                 cfg_.block_idx, ring, ctx_by_tag_, atomic_buffer_ptr_);
+                 cfg_.thread_idx, ring, ctx_by_tag_, atomic_buffer_ptr_,
+                 cfg_.num_ranks, cfg_.num_experts, pending_atomic_updates);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
+    apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
+                          cfg_.num_experts, cfg_.num_ranks);
   }
 }
 
@@ -248,6 +257,7 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
     cfg_.rb->volatile_store_cmd(my_tail + check_i, 0);
     check_i++;
 
+#ifdef MEASURE_PER_VERB_LATENCY
     auto it = wr_id_to_start_time_.find(wr_id);
     if (it == wr_id_to_start_time_.end()) {
       fprintf(stderr, "Error: WR ID %lu not found in wr_id_to_start_time\n",
@@ -256,8 +266,11 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
     }
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::high_resolution_clock::now() - it->second);
-    wr_time_total_us_ += duration.count();
+    if (completion_count_ > kWarmupOps) {
+      wr_time_total_us_ += duration.count();
+    }
     completion_count_++;
+#endif
     actually_completed++;
   }
   if (!actually_completed) return;
@@ -284,13 +297,32 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
     uint64_t cmd = cfg_.rb->volatile_load_cmd(i);
     // NOTE(MaoZiming): Non-blocking. prevent local and remote both while loop.
     if (cmd == 0) break;
-
     TransferCmd& cmd_entry = cfg_.rb->load_cmd_entry(i);
+    if (static_cast<int>(cmd_entry.dst_rank) == cfg_.rank) {
+      printf("Local command!, cmd.dst_rank: %d, cfg_.rank: %d\n",
+             cmd_entry.dst_rank, cfg_.rank);
+      std::abort();
+    }
+    if (peers_[cmd_entry.dst_rank].ip == peers_[cfg_.rank].ip) {
+      printf("Intra-node command!, cmd.dst_rank: %d, cfg_.rank: %d\n",
+             cmd_entry.dst_rank, cfg_.rank);
+      std::abort();
+    }
+
     wrs_to_post.push_back(i);
     cmds_to_post.push_back(cmd_entry);
+#ifdef MEASURE_PER_VERB_LATENCY
     wr_id_to_start_time_[i] = std::chrono::high_resolution_clock::now();
+#endif
     seen = i + 1;
   }
+
+  // Yang: this was 20-ish on GH200.
+  // if (wrs_to_post.size()) {
+  //   printf("Thread %d post_gpu_command: wrs_to_post.size()=%zu\n",
+  //          cfg_.thread_idx, wrs_to_post.size());
+  // }
+
   if (!wrs_to_post.empty()) {
     auto start = std::chrono::high_resolution_clock::now();
     post_gpu_commands_mixed(wrs_to_post, cmds_to_post);
@@ -303,12 +335,12 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 void Proxy::run_local() {
   pin_thread();
   uint64_t my_tail = 0;
-  printf("Local CPU thread for block %d started\n", cfg_.block_idx + 1);
+  printf("Local CPU thread %d started\n", cfg_.thread_idx);
   // for (int seen = 0; seen < kIterations; ++seen) {
   int seen = 0;
   while (true) {
     if (!ctx_.progress_run.load(std::memory_order_acquire)) {
-      printf("Local block %d stopping early at seen=%d\n", cfg_.block_idx + 1,
+      printf("Local thread %d stopping early at seen=%d\n", cfg_.thread_idx,
              seen);
       return;
     }
@@ -318,14 +350,14 @@ void Proxy::run_local() {
 
     while (cfg_.rb->volatile_head() == my_tail) {
 #ifdef DEBUG_PRINT
-      if (cfg_.block_idx == 0) {
-        printf("Local block %d waiting: tail=%lu head=%lu\n", cfg_.block_idx,
+      if (cfg_.thread_idx == 0) {
+        printf("Local thread %d waiting: tail=%lu head=%lu\n", cfg_.thread_idx,
                my_tail, cfg_.rb->head);
       }
 #endif
       cpu_relax();
       if (!ctx_.progress_run.load(std::memory_order_acquire)) {
-        printf("Local block %d stopping early at seen=%d\n", cfg_.block_idx + 1,
+        printf("Local thread %d stopping early at seen=%d\n", cfg_.thread_idx,
                seen);
         return;
       }
@@ -342,41 +374,31 @@ void Proxy::run_local() {
       auto now = std::chrono::steady_clock::now();
       if (now - last_print > std::chrono::seconds(10)) {
         printf(
-            "Still waiting at block %d, seen=%d, spin_count=%zu, my_tail=%lu, "
+            "Still waiting at thread %d, seen=%d, spin_count=%zu, my_tail=%lu, "
             "cmd: %lu\n",
-            cfg_.block_idx + 1, seen, spin_count, my_tail, cmd);
+            cfg_.thread_idx, seen, spin_count, my_tail, cmd);
         last_print = now;
         spin_count++;
       }
 
       if (!ctx_.progress_run.load(std::memory_order_acquire)) {
-        printf("Local block %d stopping early at seen=%d\n", cfg_.block_idx + 1,
+        printf("Local thread %d stopping early at seen=%d\n", cfg_.thread_idx,
                seen);
         return;
       }
     } while (cmd == 0);
 
 #ifdef DEBUG_PRINT
-    printf("Local block %d, seen=%d head=%lu tail=%lu consuming cmd=%llu\n",
-           cfg_.block_idx, seen, cfg_.rb->head, my_tail,
+    printf("Local thread %d, seen=%d head=%lu tail=%lu consuming cmd=%llu\n",
+           cfg_.thread_idx, seen, cfg_.rb->head, my_tail,
            static_cast<unsigned long long>(cmd));
 #endif
 
-    /*
-        const uint64_t expected_cmd =
-            (static_cast<uint64_t>(cfg_.block_idx) << 32) | (seen + 1);
-        if (cmd != expected_cmd) {
-          fprintf(stderr, "Error[Local]: block %d expected %llu got %llu\n",
-                  cfg_.block_idx, static_cast<unsigned long long>(expected_cmd),
-                  static_cast<unsigned long long>(cmd));
-          std::abort();
-        }
-    */
     std::atomic_thread_fence(std::memory_order_acquire);
     if (cmd == 1) {
       TransferCmd& cmd_entry = cfg_.rb->buf[idx];
-      printf("Received command 1: block %d, seen=%d, value: %d\n",
-             cfg_.block_idx + 1, seen, cmd_entry.value);
+      printf("Received command 1: thread %d, seen=%d, value: %d\n",
+             cfg_.thread_idx, seen, cmd_entry.value);
     }
 
     cfg_.rb->volatile_store_cmd(idx, 0);
@@ -386,7 +408,7 @@ void Proxy::run_local() {
     seen++;
   }
 
-  printf("Local block %d finished %d commands, tail=%lu\n", cfg_.block_idx,
+  printf("Local thread %d finished %d commands, tail=%lu\n", cfg_.thread_idx,
          kIterations, my_tail);
 }
 
@@ -406,23 +428,23 @@ void Proxy::post_gpu_commands_mixed(
       rdma_cmds.push_back(cmds_to_post[i]);
     }
   }
+  // printf("Posting %zu RDMA writes and %zu atomic ops\n", rdma_wrs.size(),
+  //        atomic_wrs.size());
   // Handle regular RDMA writes
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
                             rdma_cmds, ctxs_for_all_ranks_, cfg_.rank,
-                            cfg_.block_idx, finished_wrs_, finished_wrs_mutex_);
+                            cfg_.thread_idx, finished_wrs_,
+                            finished_wrs_mutex_);
   }
   if (!atomic_wrs.empty()) {
     post_atomic_operations(ctx_, atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
-                           cfg_.rank, cfg_.block_idx, finished_wrs_,
+                           cfg_.rank, cfg_.thread_idx, finished_wrs_,
                            finished_wrs_mutex_, acked_wrs_);
   }
 }
 
 void Proxy::destroy(bool free_gpu_buffer) {
-  ctx_.progress_run.store(false, std::memory_order_release);
-  cudaDeviceSynchronize();
-
   for (auto& ctx_ptr : ctxs_for_all_ranks_) {
     if (!ctx_ptr) continue;
     qp_to_error(ctx_ptr->qp);

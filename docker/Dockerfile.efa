@@ -1,4 +1,5 @@
-FROM nvidia/cuda:12.3.2-devel-ubuntu22.04
+ARG BASE_IMAGE=nvidia/cuda:12.3.2-devel-ubuntu22.04
+FROM ${BASE_IMAGE}
 ARG PY_VER=3.13
 
 # Non-interactive APT
@@ -43,7 +44,7 @@ RUN ln -s /usr/lib/x86_64-linux-gnu/libevent_core-2.1.so.7 /usr/lib/x86_64-linux
     ln -s /usr/lib/x86_64-linux-gnu/libhwloc.so.15 /usr/lib/x86_64-linux-gnu/libhwloc15.so
 
 # Install EFA installer (without kernel driver)
-ARG EFA_VER=1.34.0
+ARG EFA_VER=1.42.0
 RUN curl -O https://efa-installer.amazonaws.com/aws-efa-installer-${EFA_VER}.tar.gz && \
     tar -xf aws-efa-installer-${EFA_VER}.tar.gz && \
     cd aws-efa-installer && \

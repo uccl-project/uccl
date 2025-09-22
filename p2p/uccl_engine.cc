@@ -1,5 +1,6 @@
 #include "uccl_engine.h"
 #include "engine.h"
+#include "util/util.h"
 #include <arpa/inet.h>
 #include <algorithm>
 #include <atomic>
@@ -16,77 +17,6 @@
 #include <unordered_map>
 #include <vector>
 
-// Threadpool to manage the receiver side
-class ThreadPool {
- private:
-  std::vector<std::thread> workers;
-  std::queue<std::function<void()>> tasks;
-  std::mutex queue_mutex;
-  std::condition_variable condition;
-  std::atomic<bool> stop_flag;
-
- public:
-  ThreadPool(size_t num_threads) : stop_flag(false) {
-    for (size_t i = 0; i < num_threads; ++i) {
-      workers.emplace_back([this] {
-        while (true) {
-          std::function<void()> task;
-          {
-            std::unique_lock<std::mutex> lock(this->queue_mutex);
-            this->condition.wait(lock, [this] {
-              return this->stop_flag || !this->tasks.empty();
-            });
-
-            if (this->stop_flag && this->tasks.empty()) return;
-
-            task = std::move(this->tasks.front());
-            this->tasks.pop();
-          }
-          task();
-        }
-      });
-    }
-  }
-
-  ~ThreadPool() {
-    {
-      std::unique_lock<std::mutex> lock(queue_mutex);
-      stop_flag = true;
-    }
-    condition.notify_all();
-    for (std::thread& worker : workers) {
-      if (worker.joinable()) worker.join();
-    }
-  }
-
-  // Force destroy without waiting for threads to finish
-  void force_destroy() {
-    {
-      std::unique_lock<std::mutex> lock(queue_mutex);
-      stop_flag = true;
-    }
-    condition.notify_all();
-
-    // Detach all threads instead of joining
-    for (std::thread& worker : workers) {
-      if (worker.joinable()) {
-        worker.detach();
-      }
-    }
-  }
-
-  template <class F, class... Args>
-  void enqueue(F&& f, Args&&... args) {
-    auto task = std::bind(std::forward<F>(f), std::forward<Args>(args)...);
-    {
-      std::unique_lock<std::mutex> lock(queue_mutex);
-      if (stop_flag.load()) return;
-      tasks.emplace(std::move(task));
-    }
-    condition.notify_one();
-  }
-};
-
 struct uccl_engine {
   Endpoint* endpoint;
 };
@@ -98,7 +28,6 @@ struct uccl_conn {
   std::thread* listener_thread;
   bool listener_running;
   std::mutex listener_mutex;
-  ThreadPool* recv_thread_pool;
 };
 
 struct uccl_mr {
@@ -115,10 +44,9 @@ std::unordered_map<uintptr_t, uint64_t> mem_reg_info;
 std::unordered_map<uccl_conn_t*, fifo_item_t*> fifo_item_map;
 std::mutex fifo_item_map_mutex;
 
-// Forward declaration
+// listener thread which receives control meta for recv/advertise
 void listener_thread_func(uccl_conn_t* conn);
 
-// Simple async receive function
 void async_recv_worker(uccl_conn_t* conn, uint64_t mr_id, void* data,
                        size_t data_size) {
   size_t recv_size = 0;
@@ -162,8 +90,6 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   conn->engine = engine;
   conn->listener_thread = nullptr;
   conn->listener_running = false;
-  conn->recv_thread_pool =
-      new ThreadPool(4);  // Create thread pool with 4 threads
   return conn;
 }
 
@@ -186,8 +112,6 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
   conn->engine = engine;
   conn->listener_thread = nullptr;
   conn->listener_running = false;
-  conn->recv_thread_pool =
-      new ThreadPool(4);  // Create thread pool with 4 threads
   return conn;
 }
 
@@ -249,12 +173,11 @@ int uccl_engine_start_listener(uccl_conn_t* conn) {
   if (!conn) return -1;
 
   if (conn->listener_running) {
-    return -1;  // Listener already running
+    return -1;
   }
 
   conn->listener_running = true;
 
-  // Start the listener thread
   conn->listener_thread = new std::thread(listener_thread_func, conn);
 
   return 0;
@@ -266,33 +189,27 @@ int uccl_engine_stop_listener(uccl_conn_t* conn) {
   std::lock_guard<std::mutex> lock(conn->listener_mutex);
 
   if (!conn->listener_running) {
-    return 0;  // Listener not running
+    return 0;
   }
 
-  // Signal the thread to stop
   conn->listener_running = false;
 
-  // Close the socket to unblock the recv() call
   if (conn->sock_fd >= 0) {
     close(conn->sock_fd);
     conn->sock_fd = -1;
   }
 
-  // Wait for the thread to finish with a timeout
   if (conn->listener_thread && conn->listener_thread->joinable()) {
-    // Try to join with a timeout
     auto future = std::async(std::launch::async,
                              [conn]() { conn->listener_thread->join(); });
 
     if (future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
-      // Thread is stuck, detach it and let it die naturally
       std::cout << "Warning: Listener thread not responding, detaching..."
                 << std::endl;
       conn->listener_thread->detach();
     }
   }
 
-  // Clean up
   delete conn->listener_thread;
   conn->listener_thread = nullptr;
 
@@ -302,16 +219,11 @@ int uccl_engine_stop_listener(uccl_conn_t* conn) {
 void uccl_engine_conn_destroy(uccl_conn_t* conn) {
   if (conn) {
     uccl_engine_stop_listener(conn);
-    if (conn->recv_thread_pool) {
-      conn->recv_thread_pool->force_destroy();
-      delete conn->recv_thread_pool;
-    }
-    // Clean up fifo_item for this connection
     {
       std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
       auto it = fifo_item_map.find(conn);
       if (it != fifo_item_map.end()) {
-        delete it->second;  // Free the fifo_item_t
+        delete it->second;
         fifo_item_map.erase(it);
       }
     }
@@ -336,7 +248,6 @@ void listener_thread_func(uccl_conn_t* conn) {
   std::cout << "Listener thread: Waiting for metadata." << std::endl;
 
   while (conn->listener_running) {
-    // Set socket to non-blocking mode with timeout
     struct timeval timeout;
     timeout.tv_sec = 1;
     timeout.tv_usec = 0;
@@ -351,8 +262,7 @@ void listener_thread_func(uccl_conn_t* conn) {
       }
       continue;
     }
-    std::cout << "Received metadata: " << md.op << " " << md.data_ptr << " "
-              << md.data_size << std::endl;
+
     uint64_t mr_id = 0;
     if (md.op != UCCL_FIFO) {
       auto local_mem_iter = mem_reg_info.find(md.data_ptr);
@@ -384,13 +294,18 @@ void listener_thread_func(uccl_conn_t* conn) {
         }
         break;
       }
-      case UCCL_WRITE:
-        // Submit async receive task to thread pool
-        conn->recv_thread_pool->enqueue(async_recv_worker, conn, mr_id,
-                                        (void*)md.data_ptr, md.data_size);
+      case UCCL_WRITE: {
+        uccl_mr_t temp_mr;
+        temp_mr.mr_id = mr_id;
+        temp_mr.engine = conn->engine;
+        int result =
+            uccl_engine_recv(conn, &temp_mr, (void*)md.data_ptr, md.data_size);
+        if (result < 0) {
+          std::cerr << "Failed to perform uccl_engine_recv" << std::endl;
+        }
         break;
+      }
       case UCCL_FIFO: {
-        std::cout << "Received & Stored FIFO item" << std::endl;
         // Store fifo_item in the hashmap for this connection
         uccl::FifoItem fifo_item;
         memcpy(&fifo_item, md.fifo_buf, sizeof(uccl::FifoItem));
@@ -441,7 +356,6 @@ int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
   try {
     std::vector<uint8_t> metadata_vec = engine->endpoint->get_metadata();
 
-    // Build string representation
     std::string result;
     if (metadata_vec.size() == 10) {  // IPv4 format
       std::string ip_addr = std::to_string(metadata_vec[0]) + "." +

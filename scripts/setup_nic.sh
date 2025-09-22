@@ -10,7 +10,7 @@ PLATFORM=$6
 echo "configuring ${NIC} with ${NQUEUE} nic queues ${NIRQCORE} irq cores ${MTU} MTU for ${MODE} on ${PLATFORM}"
 
 echo "unloading any xdp programs"
-sudo ${UCCL_HOME}/afxdp/lib/xdp-tools/xdp-loader/xdp-loader unload ${NIC} --all
+sudo ${UCCL_HOME}/collective/afxdp/lib/xdp-tools/xdp-loader/xdp-loader unload ${NIC} --all
 
 if [ $PLATFORM = "tpu" ]; then
     echo "sudo ethtool -L ${NIC} rx ${NQUEUE} tx ${NQUEUE}"

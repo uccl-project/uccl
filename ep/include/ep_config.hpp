@@ -139,18 +139,27 @@ struct LowLatencyBuffer {
   void* dispatch_rdma_send_buffer = nullptr;
   void* dispatch_rdma_recv_data_buffer = nullptr;
   int* dispatch_rdma_recv_count_buffer = nullptr;
+  // This is for emulated CPU-based atomics.
+  int* dispatch_rdma_recv_count_buffer_internode = nullptr;
 
   void* combine_rdma_send_buffer = nullptr;
   void* combine_rdma_recv_data_buffer = nullptr;
   int* combine_rdma_recv_flag_buffer = nullptr;
+  // This is for emulated CPU-based atomics.
+  int* combine_rdma_recv_flag_buffer_internode = nullptr;
 
   void* combine_rdma_send_buffer_data_start = nullptr;
   size_t num_bytes_per_combine_msg = 0;
 
-  std::pair<int*, int> clean_meta() {
+  // TODO(MaoZiming)
+  std::tuple<int*, int*, int> clean_meta() {
     EP_HOST_ASSERT(dispatch_rdma_recv_count_buffer ==
                    combine_rdma_recv_flag_buffer);
-    return {dispatch_rdma_recv_count_buffer, num_clean_int};
+    EP_HOST_ASSERT(dispatch_rdma_recv_count_buffer_internode ==
+                   combine_rdma_recv_flag_buffer_internode);
+    return std::make_tuple(dispatch_rdma_recv_count_buffer,
+                           dispatch_rdma_recv_count_buffer_internode,
+                           num_clean_int);
   }
 };
 
@@ -229,22 +238,25 @@ struct LowLatencyLayout {
                                    send_buffer_bytes * 2 +
                                    recv_buffer_bytes * i),
           advance<int*>(rdma_buffer, signaling_buffer_bytes_aligned * i),
+          reinterpret_cast<int*>(
+              (uint8_t*)atomic_buffer_ptr +
+              i * signaling_buffer_bytes_aligned), /* dispatch_rdma_recv_count_buffer_internode
+                                                    */
+
           advance(rdma_buffer,
                   signaling_buffer_bytes_aligned * 2 + send_buffer_bytes * i),
           advance(rdma_buffer, signaling_buffer_bytes_aligned * 2 +
                                    send_buffer_bytes * 2 +
                                    recv_buffer_bytes * i),
           advance<int*>(rdma_buffer, signaling_buffer_bytes_aligned * i),
+          reinterpret_cast<int*>(
+              (uint8_t*)atomic_buffer_ptr +
+              i * signaling_buffer_bytes_aligned), /* combine_rdma_recv_flag_buffer_internode
+                                                    */
+
           advance(rdma_buffer,
                   signaling_buffer_bytes_aligned * 2 + send_buffer_bytes * i),
           num_bytes_per_combine_msg};
-    }
-
-    for (int i = 0; i < 2; ++i) {
-      buffers[i].dispatch_rdma_recv_count_buffer = reinterpret_cast<int*>(
-          (uint8_t*)atomic_buffer_ptr + i * signaling_buffer_bytes_aligned);
-      buffers[i].combine_rdma_recv_flag_buffer =
-          buffers[i].dispatch_rdma_recv_count_buffer;
     }
   }
 };
