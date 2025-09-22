@@ -231,7 +231,7 @@ void run_throughput_test(uint32_t num_warps, uint32_t num_proxies,
   // Initialize warp mapping and build proxy warp lists
   init_warp_mapping(config.num_warps, config.num_proxies,
                     h_warp_to_proxy.data(), h_proxy_to_combiner.data(),
-                    h_proxy_warp_lists.data(), use_contiguous_mapping);
+                    h_proxy_warp_lists.data());
 
   cudaMemcpy(d_warp_to_proxy, h_warp_to_proxy.data(),
              sizeof(uint32_t) * config.num_warps, cudaMemcpyHostToDevice);

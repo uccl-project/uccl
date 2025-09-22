@@ -84,7 +84,6 @@ __global__ void lock_throughput_kernel(DeviceToHostCmdBuffer** ring_buffers,
   dummy_cmd.bytes = config.payload_size;
   dummy_cmd.req_rptr = warp_id;
   dummy_cmd.req_lptr = 0;
-  dummy_cmd.sm_id = blockIdx.x;
   dummy_cmd.lane_id = lane_id;
   dummy_cmd.message_idx = 0;
   dummy_cmd.is_atomic = false;
