@@ -15,6 +15,16 @@ double Proxy::avg_wr_latency_us() const {
          static_cast<double>(completion_count_ - kWarmupOps);
 }
 
+template <typename dtype_t>
+dtype_t ceil_div(dtype_t a, dtype_t b) {
+  return (a + b - 1) / b;
+}
+
+template <typename dtype_t>
+dtype_t align(dtype_t a, dtype_t b) {
+  return ceil_div<dtype_t>(a, b) * b;
+}
+
 uint64_t Proxy::completed_wr() const { return completion_count_; }
 
 void Proxy::pin_thread() {
@@ -230,10 +240,18 @@ void Proxy::run_dual() {
     poll_cq_dual(ctx_, finished_wrs_, acked_wrs_, finished_wrs_mutex_,
                  cfg_.thread_idx, ring, ctx_by_tag_, atomic_buffer_ptr_,
                  cfg_.num_ranks, cfg_.num_experts, pending_atomic_updates);
-    notify_gpu_completion(my_tail);
+    // notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
     apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
                           cfg_.num_experts, cfg_.num_ranks);
+
+    auto postponed_wr_ids = postponed_wr_ids_;
+    auto postponed_atomics = postponed_atomics_;
+    postponed_wr_ids_.clear();
+    postponed_atomics_.clear();
+    assert(postponed_wr_ids.size() == postponed_atomics.size());
+    assert(postponed_wr_ids_.size() == 0);
+    post_gpu_commands_mixed(postponed_wr_ids, postponed_atomics);
   }
 }
 
@@ -314,6 +332,7 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 #ifdef MEASURE_PER_VERB_LATENCY
     wr_id_to_start_time_[i] = std::chrono::high_resolution_clock::now();
 #endif
+    cfg_.rb->volatile_store_cmd(seen, 0);
     seen = i + 1;
   }
 
@@ -330,6 +349,8 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
     total_rdma_write_durations_ +=
         std::chrono::duration_cast<std::chrono::microseconds>(end - start);
   }
+  cfg_.rb->cpu_volatile_store_tail(seen);
+  my_tail = seen;
 }
 
 void Proxy::run_local() {
@@ -421,8 +442,46 @@ void Proxy::post_gpu_commands_mixed(
 
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
     if (cmds_to_post[i].is_atomic) {
-      atomic_wrs.push_back(wrs_to_post[i]);
-      atomic_cmds.push_back(cmds_to_post[i]);
+      int value = cmds_to_post[i].value;
+      int expected_value;
+      uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
+      uint32_t new_offset =
+          offset - cmds_to_post[i].low_latency_buffer_idx *
+                       align<size_t>(cfg_.num_experts * sizeof(int), 128);
+      size_t new_index = new_offset / sizeof(int);
+      int expert_idx;
+
+      std::lock_guard<std::mutex> lock(ctx_.sent_state_mutex);
+      if (cmds_to_post[i].is_combine) {
+        expert_idx = new_index;
+        expected_value = ctx_.combine_sent_counter.Get(
+            {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
+             cmds_to_post[i].dst_rank});
+      } else {
+        expert_idx = new_index / cfg_.num_ranks;
+        expected_value = ctx_.dispatch_sent_counter.Get(
+            {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
+             cmds_to_post[i].dst_rank});
+        value = -value - 1;
+      }
+      if (value != expected_value) {
+        postponed_atomics_.push_back(cmds_to_post[i]);
+        postponed_wr_ids_.push_back(wrs_to_post[i]);
+        assert(postponed_atomics_.size() == postponed_wr_ids_.size());
+      } else {
+        atomic_wrs.push_back(wrs_to_post[i]);
+        atomic_cmds.push_back(cmds_to_post[i]);
+
+        if (cmds_to_post[i].is_combine) {
+          ctx_.combine_sent_counter.Reset(
+              {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
+               cmds_to_post[i].dst_rank});
+        } else {
+          ctx_.dispatch_sent_counter.Reset(
+              {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
+               cmds_to_post[i].dst_rank});
+        }
+      }
     } else {
       rdma_wrs.push_back(wrs_to_post[i]);
       rdma_cmds.push_back(cmds_to_post[i]);
