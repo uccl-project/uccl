@@ -43,7 +43,7 @@ def test_ipc_ptr_logic(rank: int, world_size: int, group: dist.ProcessGroup):
 
     # Setup proxies (minimal setup, just enough for testing)
     proxies = []
-    for i in range(2):  # Use 2 proxies for testing
+    for i in range(ep.get_num_proxy_threads()):  # Use 2 proxies for testing
         proxy = ep.Proxy(
             thread_idx=i,
             gpu_buffer_addr=scratch_ptr,
