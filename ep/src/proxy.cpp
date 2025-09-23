@@ -189,8 +189,8 @@ void Proxy::run_sender() {
   size_t seen = 0;
   uint64_t my_tail = 0;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    local_poll_completions(ctx_, finished_wrs_, acked_wrs_, finished_wrs_mutex_,
-                           cfg_.thread_idx, ctx_by_tag_);
+    local_poll_completions(ctx_, finished_wrs_, acked_wrs_, cfg_.thread_idx,
+                           ctx_by_tag_);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
   }
@@ -228,9 +228,9 @@ void Proxy::run_dual() {
   std::set<PendingUpdate> pending_atomic_updates;
   // printf("run_dual initialization complete\n");
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    poll_cq_dual(ctx_, finished_wrs_, acked_wrs_, finished_wrs_mutex_,
-                 cfg_.thread_idx, ring, ctx_by_tag_, atomic_buffer_ptr_,
-                 cfg_.num_ranks, cfg_.num_experts, pending_atomic_updates);
+    poll_cq_dual(ctx_, finished_wrs_, acked_wrs_, cfg_.thread_idx, ring,
+                 ctx_by_tag_, atomic_buffer_ptr_, cfg_.num_ranks,
+                 cfg_.num_experts, pending_atomic_updates);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
 #ifdef USE_RECEIVER_BARRIER
@@ -253,8 +253,6 @@ void Proxy::run_dual() {
 void Proxy::notify_gpu_completion(uint64_t& my_tail) {
   if (finished_wrs_.empty()) return;
   if (acked_wrs_.empty()) return;
-
-  std::lock_guard<std::mutex> lock(finished_wrs_mutex_);
 
   // Group completed work requests by ring buffer
   std::map<size_t, std::vector<std::pair<uint64_t, uint64_t>>>
@@ -550,13 +548,12 @@ void Proxy::post_gpu_commands_mixed(
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
                             rdma_cmds, ctxs_for_all_ranks_, cfg_.rank,
-                            cfg_.thread_idx, finished_wrs_,
-                            finished_wrs_mutex_);
+                            cfg_.thread_idx, finished_wrs_);
   }
   if (!atomic_wrs.empty()) {
     post_atomic_operations(ctx_, atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
                            cfg_.rank, cfg_.thread_idx, finished_wrs_,
-                           finished_wrs_mutex_, acked_wrs_);
+                           acked_wrs_);
   }
 }
 
