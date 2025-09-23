@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
   init_env(env);
 
   // RDMA-visible buffer
-  const size_t total_size = kRemoteBufferSize;
+  size_t const total_size = kRemoteBufferSize;
   void* gpu_buffer = nullptr;
 #ifdef USE_GRACE_HOPPER
   GPU_RT_CHECK(gpuHostAlloc(&gpu_buffer, total_size, 0));
@@ -43,7 +43,7 @@ int main(int argc, char** argv) {
   for (int i = 0; i < env.blocks; ++i) {
     Proxy::Config cfg{};
     cfg.rb = &env.rbs[i];  // ring for this block
-    cfg.block_idx = i;
+    cfg.thread_idx = i;
     cfg.gpu_buffer = gpu_buffer;  // RDMA-visible region
     cfg.total_size = total_size;
     cfg.rank = rank;
@@ -84,7 +84,7 @@ int main(int argc, char** argv) {
 
   // Reporting
   print_block_latencies(env);
-  const Stats s = compute_stats(env, t0, t1);
+  Stats const s = compute_stats(env, t0, t1);
   print_summary(env, s);
 
   // Sleep

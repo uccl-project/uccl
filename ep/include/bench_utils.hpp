@@ -60,12 +60,12 @@ inline void destroy_env(BenchEnv& env) {
   }
 }
 
-inline Proxy::Config make_cfg(BenchEnv const& env, int block_idx, int rank,
+inline Proxy::Config make_cfg(BenchEnv const& env, int thread_idx, int rank,
                               char const* peer_ip, void* gpu_buffer = nullptr,
                               size_t total_size = 0, bool pin_thread = true) {
   Proxy::Config cfg{};
-  cfg.rb = &env.rbs[block_idx];
-  cfg.block_idx = block_idx;
+  cfg.rb = &env.rbs[thread_idx];
+  cfg.thread_idx = thread_idx;
   cfg.rank = rank;
   cfg.peer_ip = peer_ip;
   cfg.gpu_buffer = gpu_buffer;

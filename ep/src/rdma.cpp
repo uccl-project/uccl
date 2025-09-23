@@ -105,7 +105,7 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
 }
 
 void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
-                          int block_idx, int local_rank) {
+                          int thread_idx, int local_rank) {
   if (S.context) return;  // already initialized
 
   int num_devices = 0;
@@ -156,7 +156,17 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     } else {
       // Spread GPUs across equal-distance NICs: use local GPU index modulo
       // For example, pass in `local_rank` or derive gpu_index from device path
-      selected_nic_name = candidates[block_idx % candidates.size()];
+      selected_nic_name = candidates[thread_idx % candidates.size()];
+#ifdef EFA
+      // NOTE(MaoZiming): This is a temporary hack.
+      // On p5en, there are 4 NICs with the same distance.
+      // We hardcode the first half Proxies to use the first NIC, and the second
+      // half to use the second NIC.
+      assert(candidates.size() == 4);
+      // GPU0 uses candidates[0/1], GPU1 uses candidates[2/3], etc.
+      auto half = (local_rank % 2) * 2;
+      selected_nic_name = candidates[thread_idx % 2 + half];
+#endif
     }
   }
 
@@ -609,7 +619,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              std::vector<uint64_t> const& wrs_to_post,
                              std::vector<TransferCmd> const& cmds_to_post,
                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                             int my_rank, int block_idx,
+                             int my_rank, int thread_idx,
                              std::unordered_set<uint64_t>& finished_wrs,
                              std::mutex& finished_wrs_mutex) {
   if (num_wrs == 0) return;
@@ -640,7 +650,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       fprintf(stderr, "Destination ctx missing fields for dst=%d\n", dst_rank);
       std::abort();
     }
-    const size_t k = wr_ids.size();
+    size_t const k = wr_ids.size();
 #ifdef EFA
     struct ibv_qp_ex* qpx = (struct ibv_qp_ex*)ctx->qp;
     ibv_wr_start(qpx);
@@ -683,12 +693,22 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
           }
           std::abort();
         }
-        uint32_t imm =
-            WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
-                           cmd.expert_idx, 1u, my_rank)
-                .GetImmData();
-        ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
-
+        bool last = (j + 1 == expert_k);
+        /*
+        Note(MaoZiming): This is actually fine.
+        When the atomics arrive, the remote side will track if it has received
+        just enough tokens for an expert. If it has not, it will postpone
+        processing the atomic until it does.
+        */
+        if (last) {
+          uint32_t imm =
+              WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
+                             cmd.expert_idx, expert_k, my_rank)
+                  .GetImmData();
+          ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
+        } else {
+          ibv_wr_rdma_write(qpx, ctx->remote_rkey, remote_addr);
+        }
         uintptr_t laddr =
             cmd.req_lptr ? cmd.req_lptr
                          : reinterpret_cast<uintptr_t>(buf) + i * cmd.bytes;
@@ -703,10 +723,10 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
             expert_tail_wr, std::move(expert_wr_ids));
         if (!inserted) {
-          fprintf(
-              stderr,
-              "block_idx: %d, Error: tail wr_id %lu already exists (map=%p)\n",
-              block_idx, expert_tail_wr, (void*)&S.wr_id_to_wr_ids);
+          fprintf(stderr,
+                  "thread_idx: %d, Error: tail wr_id %lu already exists "
+                  "(map=%p)\n",
+                  thread_idx, expert_tail_wr, (void*)&S.wr_id_to_wr_ids);
           std::abort();
         } else {
           for (auto const& wr_id : it->second) {
@@ -764,8 +784,8 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       wrs[j].send_flags = IBV_SEND_SIGNALED;
       wrs[j].next = (j + 1 < k) ? &wrs[j + 1] : nullptr;
     }
-    const size_t last = k - 1;
-    const uint64_t batch_tail_wr = wr_ids[last];
+    size_t const last = k - 1;
+    uint64_t const batch_tail_wr = wr_ids[last];
     wrs[last].send_flags = IBV_SEND_SIGNALED;
     wrs[last].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
     uint32_t imm = WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
@@ -789,10 +809,10 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       auto [it, inserted] =
           S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
       if (!inserted) {
-        fprintf(
-            stderr,
-            "block_idx: %d, Error: tail wr_id %lu already exists (map=%p)\n",
-            block_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
+        fprintf(stderr,
+                "thread_idx: %d, Error: tail wr_id %lu already exists "
+                "(map=%p)\n",
+                thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
         std::abort();
       } else {
         for (auto const& wr_id : it->second) {
@@ -828,7 +848,7 @@ void local_process_completions(ProxyCtx& S,
         send_completed++;
         {
           std::lock_guard<std::mutex> lock(finished_wrs_mutex);
-          const uint64_t wr_done = wc[i].wr_id;
+          uint64_t const wr_done = wc[i].wr_id;
           acked_wrs.insert(wr_done);
           if (S.wr_id_to_wr_ids.find(wr_done) != S.wr_id_to_wr_ids.end()) {
             S.wr_id_to_wr_ids.erase(wr_done);
@@ -931,42 +951,27 @@ void apply_pending_updates(ProxyCtx& ctx,
   for (auto it = pending_atomic_updates.begin();
        it != pending_atomic_updates.end();) {
     PendingUpdate const& upd = *it;
-    AtomicsImm aimm(upd.imm);
-    uint32_t offset = aimm.GetOff();
-    int low_latency_buffer_idx = aimm.GetBufferIdx();
-    bool is_combine = aimm.IsCombine();
-    int value = aimm.GetValue();
-    uint32_t new_offset =
-        offset -
-        low_latency_buffer_idx * align<size_t>(num_experts * sizeof(int), 128);
-    size_t new_index = new_offset / sizeof(int);
     bool is_atomic_ready = false;
-
-    if (!is_combine) {
-      int local_expert_idx = new_index / num_ranks;
-
-      int src_rank = new_index % num_ranks;
+    int value = upd.value;
+    if (!upd.is_combine) {
       int num_tokens = ctx.dispatch_token_counter.Get(
-          {low_latency_buffer_idx, local_expert_idx, src_rank});
+          {upd.low_latency_buffer_idx, upd.expert_idx, upd.src_rank});
       if ((-value - 1) == num_tokens) {
         is_atomic_ready = true;
-      }
-      if (is_atomic_ready)
         ctx.dispatch_token_counter.Reset(
-            {low_latency_buffer_idx, local_expert_idx, src_rank});
+            {upd.low_latency_buffer_idx, upd.expert_idx, upd.src_rank});
+      }
     } else {
-      int expert_idx = new_index;
-      int combine_num_tokens =
-          ctx.combine_token_counter.Get({low_latency_buffer_idx, expert_idx});
+      int combine_num_tokens = ctx.combine_token_counter.Get(
+          {upd.low_latency_buffer_idx, upd.expert_idx});
       if (value == combine_num_tokens) {
         is_atomic_ready = true;
+        ctx.combine_token_counter.Reset(
+            {upd.low_latency_buffer_idx, upd.expert_idx});
       }
-
-      if (is_atomic_ready)
-        ctx.combine_token_counter.Reset({low_latency_buffer_idx, expert_idx});
     }
     if (is_atomic_ready) {
-      if (is_combine) value = 1;
+      if (upd.is_combine) value = 1;
       upd.addr->fetch_add(value, std::memory_order_release);
       it = pending_atomic_updates.erase(it);
     } else {
@@ -1007,12 +1012,14 @@ void remote_process_completions(
           offset - low_latency_buffer_idx *
                        align<size_t>(num_experts * sizeof(int), 128);
       size_t new_index = new_offset / sizeof(int);
+      int src_rank = -1;
       bool is_atomic_ready = false;
+      int expert_idx = -1;
       if (!is_combine) {
-        int local_expert_idx = new_index / num_ranks;
-        int src_rank = new_index % num_ranks;
+        expert_idx = new_index / num_ranks;
+        src_rank = new_index % num_ranks;
         int num_tokens = S.dispatch_token_counter.Get(
-            {low_latency_buffer_idx, local_expert_idx, src_rank});
+            {low_latency_buffer_idx, expert_idx, src_rank});
         if ((-value - 1) == num_tokens) {
           is_atomic_ready = true;
         }
@@ -1021,18 +1028,15 @@ void remote_process_completions(
                   "[Error] Required Dispatch value %d is smaller than received "
                   "counter %d for "
                   "expert_idx %d, src_rank %d\n",
-                  -value - 1, num_tokens, local_expert_idx, src_rank);
+                  -value - 1, num_tokens, expert_idx, src_rank);
         }
         if (is_atomic_ready) {
           S.dispatch_token_counter.Reset(
-              {low_latency_buffer_idx, local_expert_idx, src_rank});
-          assert(S.dispatch_token_counter.Get(
-                     {low_latency_buffer_idx, local_expert_idx, src_rank}) ==
-                 0);
+              {low_latency_buffer_idx, expert_idx, src_rank});
         }
 
       } else {
-        int expert_idx = new_index;
+        expert_idx = new_index;
         if (expert_idx > num_experts) {
           fprintf(stderr,
                   "Error: expert_idx %d out of range (num_experts=%d)\n",
@@ -1057,11 +1061,13 @@ void remote_process_completions(
       }
       auto* addr32 =
           reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
-      if (is_combine) value = 1;
-      if (is_atomic_ready)
+      if (is_atomic_ready) {
+        if (is_combine) value = 1;
         addr32->fetch_add(value, std::memory_order_release);
-      else {
-        pending_atomic_updates.insert({addr32, value, aimm.GetImmData()});
+      } else {
+        pending_atomic_updates.insert({addr32, value, aimm.GetImmData(),
+                                       low_latency_buffer_idx, expert_idx,
+                                       is_combine, src_rank});
       }
       continue;
     }
@@ -1075,9 +1081,10 @@ void remote_process_completions(
       uint32_t src_rank = wimm.GetRank();
 
       if (!is_combine) {
+        /* expert_idx here is the local expert index of the receiver. */
         S.dispatch_token_counter.Add({buffer_idx, expert_idx, src_rank}, k);
       } else {
-        /* expert_idx here is the global expert index of the sender */
+        /* expert_idx here is the global expert index of the sender. */
         assert(expert_idx >= src_rank * (num_experts / num_ranks) &&
                expert_idx < (src_rank + 1) * (num_experts / num_ranks));
         S.combine_token_counter.Add({buffer_idx, expert_idx}, k);
@@ -1239,7 +1246,7 @@ void post_atomic_operations(ProxyCtx& S,
                             std::vector<uint64_t> const& wrs_to_post,
                             std::vector<TransferCmd> const& cmds_to_post,
                             std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                            int my_rank, int block_idx,
+                            int my_rank, int thread_idx,
                             std::unordered_set<uint64_t>& finished_wrs,
                             std::mutex& finished_wrs_mutex,
                             std::unordered_set<uint64_t>& acked_wrs) {
@@ -1264,7 +1271,7 @@ void post_atomic_operations(ProxyCtx& S,
     if (wr_ids.empty()) continue;
 
     ProxyCtx* ctx = ctxs[dst_rank].get();
-    const size_t k = wr_ids.size();
+    size_t const k = wr_ids.size();
 #ifdef EFA
     struct ibv_qp_ex* qpx = (struct ibv_qp_ex*)ctx->qp;
     ibv_wr_start(qpx);
@@ -1313,7 +1320,7 @@ void post_atomic_operations(ProxyCtx& S,
 
     for (size_t i = 0; i < k; ++i) {
       auto const& cmd = cmds_to_post[wr_ids[i]];
-      const uint64_t wrid = wrs_to_post[wr_ids[i]];
+      uint64_t const wrid = wrs_to_post[wr_ids[i]];
       wr_ids[i] = wrid;
 
       int v = static_cast<int>(cmd.value);
@@ -1355,16 +1362,17 @@ void post_atomic_operations(ProxyCtx& S,
 #endif
     // bookkeeping identical to your original logic
     S.posted.fetch_add(k, std::memory_order_relaxed);
-    const uint64_t batch_tail_wr = wr_ids.back();
+    uint64_t const batch_tail_wr = wr_ids.back();
     {
       std::lock_guard<std::mutex> lock(finished_wrs_mutex);
       auto [it, inserted] =
           S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
       if (!inserted) {
         fprintf(stderr,
-                "block_idx: %d, Error: tail wr_id %lu already exists (map=%p, "
+                "thread_idx: %d, Error: tail wr_id %lu already exists "
+                "(map=%p, "
                 "size=%zu, dst_rank=%d)\n",
-                block_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
+                thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
                 S.wr_id_to_wr_ids.size(), dst_rank);
         std::abort();
       } else {

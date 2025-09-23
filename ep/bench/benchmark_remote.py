@@ -48,7 +48,7 @@ def make_proxies(
         rb_i = bench.ring_addr(i)
         p = ep.Proxy(
             rb_addr=rb_i,
-            block_idx=i,
+            thread_idx=i,
             gpu_buffer_addr=buf_addr,
             total_size=total_size,
             rank=rank,
@@ -101,7 +101,7 @@ def run_rank0_sender(args, peer_ip: str, peers_meta_list: list, nbytes: int, buf
 
     try:
         for p in proxies:
-            print(f"Proxy {p.block_idx} avg_wr_latency_us: {p.avg_wr_latency_us()} µs")
+            print(f"Proxy {p.thread_idx} avg_wr_latency_us: {p.avg_wr_latency_us()} µs")
             p.stop()
     except Exception:
         pass
