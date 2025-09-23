@@ -11,12 +11,26 @@ UcclProxy::UcclProxy(uintptr_t rb_addr, int thread_idx,
     printf("Intranode mode. UcclProxy returns\n");
     return;
   }
+
+  // Allocate multiple ring buffers for this proxy
+  ring_buffer_addrs_.reserve(kRingsPerProxy);
+  printf("Allocating %zu ring buffers for thread %d\n", kRingsPerProxy, thread_idx);
+
+  for (size_t i = 0; i < kRingsPerProxy; ++i) {
+    uintptr_t ring_addr = alloc_cmd_ring();
+    ring_buffer_addrs_.push_back(ring_addr);
+  }
+
   Proxy::Config cfg;
-  // cfg.rb = reinterpret_cast<DeviceToHostCmdBuffer*>(rb_addr);
-  rb_ = rb_addr;
   thread_idx_ = thread_idx;
   gpu_buffer_addr_ = reinterpret_cast<void*>(gpu_buffer_addr);
-  cfg.rb = reinterpret_cast<DeviceToHostCmdBuffer*>(rb_);
+
+  // Convert addresses to DeviceToHostCmdBuffer pointers
+  cfg.ring_buffers.reserve(kRingsPerProxy);
+  for (auto addr : ring_buffer_addrs_) {
+    cfg.ring_buffers.push_back(reinterpret_cast<DeviceToHostCmdBuffer*>(addr));
+  }
+
   cfg.thread_idx = thread_idx;
   cfg.gpu_buffer = reinterpret_cast<void*>(gpu_buffer_addr);
   cfg.total_size = total_size;
@@ -49,6 +63,21 @@ UcclProxy::~UcclProxy() {
     stop();
   } catch (...) {
   }
+
+  // Free all allocated ring buffers
+  for (auto ring_addr : ring_buffer_addrs_) {
+    free_cmd_ring(ring_addr);
+  }
+  ring_buffer_addrs_.clear();
+}
+
+std::vector<uint64_t> UcclProxy::get_ring_buffer_addrs() const {
+  std::vector<uint64_t> addrs;
+  addrs.reserve(ring_buffer_addrs_.size());
+  for (auto addr : ring_buffer_addrs_) {
+    addrs.push_back(static_cast<uint64_t>(addr));
+  }
+  return addrs;
 }
 
 void UcclProxy::set_peers_meta(std::vector<PeerMeta> const& peers) {
