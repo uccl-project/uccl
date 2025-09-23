@@ -365,7 +365,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
               channel_x_buffers.buffer() + dst_slot_idx * hidden_int4;
           auto shifted_x = x + token_idx * hidden_int4;
           UNROLLED_WARP_COPY(5, lane_id, hidden_int4, shifted_channel_x_buffers,
-                             shifted_x, __ldg, st_cg_global);
+                             shifted_x, __ldg, st_na_global);
 
           // Copy source index
           if (lane_id == 0)
@@ -511,17 +511,18 @@ __global__ void __launch_bounds__(kNumThreads, 1)
         __syncwarp();
 #else
         UNROLLED_WARP_COPY(5, lane_id, hidden_int4, shifted_recv_x_int4,
-                           shifted_buffer_x_int4, ld_cg_global, st_cg_global);
+                           shifted_buffer_x_int4, ld_nc_global, st_na_global);
 #endif
       }
 
 // Copy `src_idx`
+// Support NC
 #pragma unroll 4
       for (int chunk_idx = cached_channel_head_idx + recv_thread_id_in_rank;
            chunk_idx < cached_channel_tail_idx;
            chunk_idx += 32 * num_recv_warps_per_rank)
         recv_src_idx[total_offset + chunk_idx - cached_channel_head_idx] =
-            ld_cg_global(channel_src_idx_buffers.buffer() +
+            ld_nc_global(channel_src_idx_buffers.buffer() +
                          chunk_idx % num_recv_buffer_tokens);
 
 // Copy `topk_idx` and `topk_weights`
@@ -535,10 +536,12 @@ __global__ void __launch_bounds__(kNumThreads, 1)
             static_cast<int64_t>(total_offset + chunk_idx) * num_topk +
             token_topk_idx;
         auto buffer_idx = token_idx_in_buffer * num_topk + token_topk_idx;
+
+        // Actual read
         recv_topk_idx[recv_idx] =
-            ld_cg_global(channel_topk_idx_buffers.buffer() + buffer_idx);
+            ld_nc_global(channel_topk_idx_buffers.buffer() + buffer_idx);
         recv_topk_weights[recv_idx] =
-            ld_cg_global(channel_topk_weights_buffers.buffer() + buffer_idx);
+            ld_nc_global(channel_topk_weights_buffers.buffer() + buffer_idx);
       }
 
 // Copy `x_scales`
@@ -551,7 +554,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
         recv_x_scales[static_cast<int64_t>(total_offset + chunk_idx) *
                           num_scales +
                       scales_idx] =
-            ld_cg_global(channel_x_scales_buffers.buffer() +
+            ld_nc_global(channel_x_scales_buffers.buffer() +
                          token_idx_in_buffer * num_scales + scales_idx);
       }
 
@@ -832,7 +835,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
             channel_x_buffers.buffer() + dst_slot_idx * hidden_int4;
         auto shifted_x = x_int4 + (token_idx + i) * hidden_int4;
         UNROLLED_WARP_COPY(4, lane_id, hidden_int4, shifted_x_buffers,
-                           shifted_x, ld_cg_global, st_cg_global);
+                           shifted_x, ld_nc_global, st_na_global);
 
         // Send source index
         if (lane_id == 0)
@@ -949,7 +952,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
         int expected_head = -1;
         if (lane_id < kNumRanks)
           expected_head =
-              ld_cg_global(send_head + token_idx * kNumRanks + lane_id);
+              ld_nc_global(send_head + token_idx * kNumRanks + lane_id);
 
         auto start_time = clock64();
         while (__any_sync(0xffffffff,
@@ -1006,7 +1009,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
 #pragma unroll
           for (int j = 0; j < num_topk_ranks; ++j)
             recv_value_int4[j] =
-                ld_cg_global(channel_x_buffers[topk_ranks[j]].buffer() +
+                ld_nc_global(channel_x_buffers[topk_ranks[j]].buffer() +
                              slot_indices[j] * hidden_int4 + i);
 
           // Reduce bias
@@ -1068,7 +1071,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
           float value = 0;
 #pragma unroll
           for (int i = 0; i < num_topk_ranks; ++i)
-            value += ld_cg_global(
+            value += ld_nc_global(
                 channel_topk_weights_buffers[topk_ranks[i]].buffer() +
                 slot_indices[i] * num_topk + lane_id);
           recv_topk_weights[token_idx * num_topk + lane_id] = value;
