@@ -721,34 +721,35 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_qpn, QKEY);
         ibv_wr_set_sge(qpx, ctx->mr->lkey, laddr,
                        static_cast<uint32_t>(cmd.bytes));
+      }
 
 #ifdef USE_RECEIVER_BARRIER
-        uint64_t const expert_tail_wr = expert_wr_ids.back();
-        {
-          std::lock_guard<std::mutex> lock(finished_wrs_mutex);
-          auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
-              expert_tail_wr, std::move(expert_wr_ids));
-          if (!inserted) {
-            fprintf(stderr,
-                    "thread_idx: %d, Error: tail wr_id %lu already exists "
-                    "(map=%p)\n",
-                    thread_idx, expert_tail_wr, (void*)&S.wr_id_to_wr_ids);
-            std::abort();
-          } else {
-            for (auto const& wr_id : it->second) {
-              finished_wrs.insert(wr_id);
-            }
+      uint64_t const expert_tail_wr = expert_wr_ids.back();
+      {
+        std::lock_guard<std::mutex> lock(finished_wrs_mutex);
+        auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
+            expert_tail_wr, std::move(expert_wr_ids));
+        if (!inserted) {
+          fprintf(stderr,
+                  "thread_idx: %d, Error: tail wr_id %lu already exists "
+                  "(map=%p)\n",
+                  thread_idx, expert_tail_wr, (void*)&S.wr_id_to_wr_ids);
+          std::abort();
+        } else {
+          for (auto const& wr_id : it->second) {
+            finished_wrs.insert(wr_id);
           }
         }
+      }
 #endif
-      }
+    }
 
-      int ret = ibv_wr_complete(qpx);
-      if (ret) {
-        fprintf(stderr, "ibv_wr_complete failed (dst=%d): %s (ret=%d)\n",
-                dst_rank, strerror(ret), ret);
-        std::abort();
-      }
+    int ret = ibv_wr_complete(qpx);
+    if (ret) {
+      fprintf(stderr, "ibv_wr_complete failed (dst=%d): %s (ret=%d)\n",
+              dst_rank, strerror(ret), ret);
+      std::abort();
+    }
 #else
     std::vector<ibv_sge> sges(k);
     std::vector<ibv_send_wr> wrs(k);
@@ -828,7 +829,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       }
     }
 #endif
-    }
   }
 }
 void local_process_completions(ProxyCtx& S,
@@ -870,6 +870,15 @@ void local_process_completions(ProxyCtx& S,
             }
           } else {
             assert(false && "wr_id not found in write_struct map");
+          }
+        }
+#else
+        {
+          std::lock_guard<std::mutex> lock(finished_wrs_mutex);
+          uint64_t const wr_done = wc[i].wr_id;
+          acked_wrs.insert(wr_done);
+          if (S.wr_id_to_wr_ids.find(wr_done) != S.wr_id_to_wr_ids.end()) {
+            S.wr_id_to_wr_ids.erase(wr_done);
           }
         }
 #endif
