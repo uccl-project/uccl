@@ -699,11 +699,16 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                                                cmd.low_latency_buffer_idx};
 #endif
 #ifdef USE_RECEIVER_BARRIER
-        uint32_t imm =
-            WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
-                           cmd.expert_idx, 1, my_rank)
-                .GetImmData();
-        ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
+        bool last = (j + 1 == expert_k);
+        if (last) {
+          uint32_t imm =
+              WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
+                             cmd.expert_idx, expert_k, my_rank)
+                  .GetImmData();
+          ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
+        } else {
+          ibv_wr_rdma_write(qpx, ctx->remote_rkey, remote_addr);
+        }
 #else
       if (j + 1 == k) {
         uint32_t imm =
@@ -1033,8 +1038,6 @@ void remote_process_completions(
       int low_latency_buffer_idx = aimm.GetBufferIdx();
 #endif
       bool is_combine = aimm.IsCombine();
-      auto* addr32 =
-          reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
 #ifdef USE_RECEIVER_BARRIER
       // ep_config.hpp
       uint32_t new_offset =
@@ -1088,15 +1091,24 @@ void remote_process_completions(
           S.combine_token_counter.Reset({low_latency_buffer_idx, expert_idx});
         }
       }
+      auto* addr32 =
+          reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
       if (!is_atomic_ready) {
+        if (is_combine) value = 1;
+        addr32->fetch_add(value, std::memory_order_release);
+      } else {
         pending_atomic_updates.insert({addr32, value, aimm.GetImmData(),
                                        low_latency_buffer_idx, expert_idx,
                                        is_combine, src_rank});
-        continue;
       }
-#endif
+      continue;
+#else
+      auto* addr32 =
+          reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
       if (is_combine) value = 1;
       addr32->fetch_add(value, std::memory_order_release);
+    }
+#endif
     }
     if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
 #ifdef USE_RECEIVER_BARRIER
