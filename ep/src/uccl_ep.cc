@@ -2072,6 +2072,7 @@ PYBIND11_MODULE(ep, m) {
     return std::string(cudaGetErrorString(st));
   });
   m.def("is_sm90_compiled", is_sm90_compiled);
+  m.def("get_num_proxy_threads", []() { return kNumThBlocks; });
   m.def(
       "stream_query",
       [](uintptr_t stream_ptr) {

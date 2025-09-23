@@ -32,9 +32,6 @@ def test_ipc_ptr_logic(rank: int, world_size: int, group: dist.ProcessGroup):
     peer_ip = get_peer_ip(rank, world_size, group)
     print(f"[Rank {rank}] Peer IP: {peer_ip}")
 
-    # Initialize GPU-driven components
-    bench = ep.Bench()
-
     # Create scratch buffer for RDMA
     scratch_size = int(64e6)  # 64MB (smaller for testing)
     scratch_buffer = torch.empty(scratch_size, dtype=torch.uint8, device="cuda")
@@ -46,9 +43,8 @@ def test_ipc_ptr_logic(rank: int, world_size: int, group: dist.ProcessGroup):
 
     # Setup proxies (minimal setup, just enough for testing)
     proxies = []
-    for i in range(min(2, bench.blocks())):  # Only create 2 proxies for testing
+    for i in range(2):  # Use 2 proxies for testing
         proxy = ep.Proxy(
-            rb_addr=bench.ring_addr(i),
             thread_idx=i,
             gpu_buffer_addr=scratch_ptr,
             total_size=scratch_size,
