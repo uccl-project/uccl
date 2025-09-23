@@ -2090,9 +2090,9 @@ PYBIND11_MODULE(ep, m) {
   });
   py::class_<Stats>(m, "Stats");
   py::class_<UcclProxy>(m, "Proxy")
-      .def(py::init<uintptr_t, int, uintptr_t, size_t, int, int, int,
+      .def(py::init<int, uintptr_t, size_t, int, int, int,
                     std::string const&, int, int>(),
-           py::arg("rb_addr"), py::arg("thread_idx"),
+           py::arg("thread_idx"),
            py::arg("gpu_buffer_addr"), py::arg("total_size"),
            py::arg("rank") = 0, py::arg("node_idx") = -1,
            py::arg("local_rank") = 0, py::arg("peer_ip") = std::string(),
@@ -2109,7 +2109,7 @@ PYBIND11_MODULE(ep, m) {
       .def("calculate_and_set_dispatch_recv_data_offset",
            &UcclProxy::calculate_and_set_dispatch_recv_data_offset,
            py::arg("num_tokens"), py::arg("hidden"), py::arg("num_experts"))
-      .def_property_readonly("rb_addr", &UcclProxy::rb_addr)
+      .def_property_readonly("ring_buffer_addrs", &UcclProxy::get_ring_buffer_addrs)
       .def_property_readonly("thread_idx", &UcclProxy::thread_idx)
       .def_property_readonly("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr)
       .def("avg_rdma_write_us", &UcclProxy::avg_rdma_write_us)

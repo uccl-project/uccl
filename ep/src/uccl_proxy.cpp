@@ -2,7 +2,7 @@
 #include <cstdio>
 #include <stdexcept>
 
-UcclProxy::UcclProxy(uintptr_t rb_addr, int thread_idx,
+UcclProxy::UcclProxy(int thread_idx,
                      uintptr_t gpu_buffer_addr, size_t total_size, int rank,
                      int node_idx, int local_rank, std::string const& peer_ip,
                      int num_experts, int num_ranks)
