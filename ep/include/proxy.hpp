@@ -111,6 +111,8 @@ class Proxy {
   std::vector<RDMAConnectionInfo> local_infos_, remote_infos_;
   std::vector<ProxyCtx*> ctx_by_tag_;
   void* atomic_buffer_ptr_;
+  std::vector<TransferCmd> postponed_atomics_;
+  std::vector<uint64_t> postponed_wr_ids_;
 
   // Multi-ring buffer state tracking (one per ring buffer)
   std::vector<uint64_t> ring_tails_;
