@@ -2,10 +2,9 @@
 #include <cstdio>
 #include <stdexcept>
 
-UcclProxy::UcclProxy(int thread_idx,
-                     uintptr_t gpu_buffer_addr, size_t total_size, int rank,
-                     int node_idx, int local_rank, std::string const& peer_ip,
-                     int num_experts, int num_ranks)
+UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
+                     size_t total_size, int rank, int node_idx, int local_rank,
+                     std::string const& peer_ip, int num_experts, int num_ranks)
     : peer_ip_{peer_ip}, thread_{}, mode_{Mode::None}, running_{false} {
   if (peer_ip.empty()) {
     printf("Intranode mode. UcclProxy returns\n");
