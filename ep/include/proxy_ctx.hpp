@@ -3,7 +3,6 @@
 #include <infiniband/verbs.h>
 #include <atomic>
 #include <map>
-#include <mutex>
 #include <unordered_map>
 #include <vector>
 

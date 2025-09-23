@@ -28,6 +28,7 @@
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
+#include "bench_utils.hpp"
 #include "util/util.h"
 #include <stdio.h>
 #include <sys/socket.h>
@@ -36,16 +37,6 @@
 #define RETRY_DELAY_MS 200
 #define TCP_PORT 18515
 #define QKEY 0x11111111u
-
-template <typename dtype_t>
-dtype_t ceil_div(dtype_t a, dtype_t b) {
-  return (a + b - 1) / b;
-}
-
-template <typename dtype_t>
-dtype_t align(dtype_t a, dtype_t b) {
-  return ceil_div<dtype_t>(a, b) * b;
-}
 
 void exchange_connection_info(int rank, char const* peer_ip, int tid,
                               RDMAConnectionInfo* local,
