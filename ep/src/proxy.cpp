@@ -231,7 +231,7 @@ void Proxy::run_dual() {
     poll_cq_dual(ctx_, finished_wrs_, acked_wrs_, finished_wrs_mutex_,
                  cfg_.thread_idx, ring, ctx_by_tag_, atomic_buffer_ptr_,
                  cfg_.num_ranks, cfg_.num_experts, pending_atomic_updates);
-    // notify_gpu_completion(my_tail);
+    notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
 #ifdef USE_RECEIVER_BARRIER
     apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
@@ -386,12 +386,6 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
     auto end = std::chrono::high_resolution_clock::now();
     total_rdma_write_durations_ +=
         std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  }
-
-  for (size_t rb_idx = 0; rb_idx < cfg_.ring_buffers.size(); rb_idx++) {
-    size_t& ring_seen = ring_seen_[rb_idx];
-    cfg_.ring_buffers[rb_idx]->cpu_volatile_store_tail(ring_seen);
-    ring_tails_[rb_idx] = ring_seen;
   }
 }
 

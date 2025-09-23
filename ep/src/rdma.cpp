@@ -666,33 +666,38 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
 #endif
 
         auto const& cmd = cmds_to_post[i];
-        auto wr_id = wrs_to_post[i];
 #ifdef USE_RECEIVER_BARRIER
-        expert_wr_ids[j] = wr_id;
+        expert_wr_ids[j] = wrs_to_post[i];
 #endif
-
-        qpx->wr_id = wr_id;
+        qpx->wr_id = wrs_to_post[i];
         qpx->comp_mask = 0;
-
-#ifdef USE_RECEIVER_BARRIER
-        qpx->wr_flags = IBV_SEND_SIGNALED;  // always signaled
-#else
-      qpx->wr_flags = (j + 1 == k) ? IBV_SEND_SIGNALED : 0;
-#endif
+        qpx->wr_flags = IBV_SEND_SIGNALED;
 
         uint64_t remote_addr =
             ctx->remote_addr + (cmd.req_rptr ? cmd.req_rptr : 0);
         uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
+
         if (remote_addr < ctx->remote_addr ||
             remote_addr + cmd.bytes > remote_end) {
-          fprintf(stderr, "[ERROR] Remote write OOB ...\n");
+          fprintf(stderr,
+                  "[ERROR] Remote write OOB: addr=0x%llx len=%zu (base=0x%llx, "
+                  "size=%zu), cmd.req_rptr: 0x%llx\n",
+                  (unsigned long long)remote_addr, cmd.bytes,
+                  (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
+                  (unsigned long long)cmd.req_rptr);
+          cudaError_t err = cudaDeviceSynchronize();
+          if (err != cudaSuccess) {
+            fprintf(stderr, "cudaDeviceSynchronize failed: %s\n",
+                    cudaGetErrorString(err));
+            std::abort();
+          }
           std::abort();
         }
-
-        S.wr_id_to_write_struct[wr_id] = {cmd.expert_idx, dst_rank,
-                                          cmd.is_combine,
-                                          cmd.low_latency_buffer_idx};
-
+#ifdef USE_SENDER_BARRIER
+        S.wr_id_to_write_struct[qpx->wr_id] = {cmd.expert_idx, dst_rank,
+                                               cmd.is_combine,
+                                               cmd.low_latency_buffer_idx};
+#endif
 #ifdef USE_RECEIVER_BARRIER
         uint32_t imm =
             WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
@@ -981,9 +986,13 @@ void remote_process_completions(
       int value = aimm.GetValue();
       uint32_t offset = aimm.GetOff();
       size_t index = offset / sizeof(int);
-      bool is_combine = aimm.IsCombine();
 #ifdef USE_RECEIVER_BARRIER
       int low_latency_buffer_idx = aimm.GetBufferIdx();
+#endif
+      bool is_combine = aimm.IsCombine();
+      auto* addr32 =
+          reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
+#ifdef USE_RECEIVER_BARRIER
       // ep_config.hpp
       uint32_t new_offset =
           offset - low_latency_buffer_idx *
@@ -1043,8 +1052,6 @@ void remote_process_completions(
         continue;
       }
 #endif
-      auto* addr32 =
-          reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
       if (is_combine) value = 1;
       addr32->fetch_add(value, std::memory_order_release);
     }
