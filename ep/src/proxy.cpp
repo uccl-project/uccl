@@ -244,7 +244,8 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
   std::lock_guard<std::mutex> lock(finished_wrs_mutex_);
 
   // Group completed work requests by ring buffer
-  std::map<size_t, std::vector<std::pair<uint64_t, uint64_t>>> completed_by_ring;
+  std::map<size_t, std::vector<std::pair<uint64_t, uint64_t>>>
+      completed_by_ring;
 
   // Copy to iterate safely while erasing.
   std::vector<uint64_t> finished_copy(finished_wrs_.begin(),
@@ -330,7 +331,8 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
     // Collect batch of commands from this ring buffer
     for (size_t i = ring_seen; i < cur_head; ++i) {
       uint64_t cmd = ring_buffer->volatile_load_cmd(i);
-      // NOTE(MaoZiming): Non-blocking. prevent local and remote both while loop.
+      // NOTE(MaoZiming): Non-blocking. prevent local and remote both while
+      // loop.
       if (cmd == 0) break;
 
       TransferCmd& cmd_entry = ring_buffer->load_cmd_entry(i);
@@ -350,7 +352,8 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
       wrs_to_post.push_back(unique_wr_id);
       cmds_to_post.push_back(cmd_entry);
 #ifdef MEASURE_PER_VERB_LATENCY
-      wr_id_to_start_time_[unique_wr_id] = std::chrono::high_resolution_clock::now();
+      wr_id_to_start_time_[unique_wr_id] =
+          std::chrono::high_resolution_clock::now();
 #endif
       ring_seen = i + 1;
       found_work = true;
@@ -375,8 +378,8 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 
 void Proxy::run_local() {
   pin_thread();
-  printf("Local CPU thread %d started with %zu ring buffers\n",
-         cfg_.thread_idx, cfg_.ring_buffers.size());
+  printf("Local CPU thread %d started with %zu ring buffers\n", cfg_.thread_idx,
+         cfg_.ring_buffers.size());
 
   if (cfg_.ring_buffers.empty()) {
     printf("Error: No ring buffers available for local mode\n");
@@ -420,7 +423,8 @@ void Proxy::run_local() {
             printf(
                 "Still waiting at thread %d, ring %zu, total_seen=%d, "
                 "spin_count=%zu, ring_tail=%lu, cmd: %lu\n",
-                cfg_.thread_idx, rb_idx, total_seen, spin_count, ring_tail, cmd);
+                cfg_.thread_idx, rb_idx, total_seen, spin_count, ring_tail,
+                cmd);
             last_print = now;
             spin_count++;
           }
@@ -433,16 +437,20 @@ void Proxy::run_local() {
         } while (cmd == 0);
 
 #ifdef DEBUG_PRINT
-        printf("Local thread %d, ring %zu, total_seen=%d head=%lu tail=%lu consuming cmd=%llu\n",
-               cfg_.thread_idx, rb_idx, total_seen, ring_buffer->head, ring_tail,
-               static_cast<unsigned long long>(cmd));
+        printf(
+            "Local thread %d, ring %zu, total_seen=%d head=%lu tail=%lu "
+            "consuming cmd=%llu\n",
+            cfg_.thread_idx, rb_idx, total_seen, ring_buffer->head, ring_tail,
+            static_cast<unsigned long long>(cmd));
 #endif
 
         std::atomic_thread_fence(std::memory_order_acquire);
         if (cmd == 1) {
           TransferCmd& cmd_entry = ring_buffer->buf[idx];
-          printf("Received command 1: thread %d, ring %zu, total_seen=%d, value: %d\n",
-                 cfg_.thread_idx, rb_idx, total_seen, cmd_entry.value);
+          printf(
+              "Received command 1: thread %d, ring %zu, total_seen=%d, value: "
+              "%d\n",
+              cfg_.thread_idx, rb_idx, total_seen, cmd_entry.value);
         }
 
         // Mark command as processed

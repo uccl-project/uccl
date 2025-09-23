@@ -63,7 +63,8 @@ static std::vector<uint64_t> collect_ring_addrs_for_device(int device_index) {
   // Collect all ring buffer addresses from all proxies
   for (auto& proxy : it->second) {
     // Each proxy now manages multiple ring buffers
-    auto proxy_addrs = proxy.attr("get_ring_buffer_addrs")().cast<std::vector<uint64_t>>();
+    auto proxy_addrs =
+        proxy.attr("get_ring_buffer_addrs")().cast<std::vector<uint64_t>>();
     all_addrs.insert(all_addrs.end(), proxy_addrs.begin(), proxy_addrs.end());
   }
 
