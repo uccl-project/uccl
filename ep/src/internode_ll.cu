@@ -202,7 +202,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           auto const* src_int4_ptr = reinterpret_cast<int4 const*>(src_ptr);
           auto* dst_int4_ptr = reinterpret_cast<int4*>(dst_p2p_ptr);
           UNROLLED_WARP_COPY(8, lane_id, num_int4_per_msg, dst_int4_ptr,
-                             src_int4_ptr, ld_cg_global, st_cg_global);
+                             src_int4_ptr, ld_nc_global, st_na_global);
         }
         // Increase counter after finishing
         __syncwarp();
@@ -419,7 +419,7 @@ LOW_LATENCY_DISPATCH_RECV:
       auto const src_src_idx =
           reinterpret_cast<int*>(rdma_recv_x_uint8 + i * num_bytes_per_msg);
       if (lane_id == 0)
-        recv_src_info[recv_token_begin_idx + i] = ld_cg_global(src_src_idx);
+        recv_src_info[recv_token_begin_idx + i] = ld_nc_global(src_src_idx);
       __syncwarp();
 
       // Copy data
@@ -429,7 +429,7 @@ LOW_LATENCY_DISPATCH_RECV:
       auto const dst_data =
           recv_x_int4 + (recv_token_begin_idx + i) * hidden_int4;
       UNROLLED_WARP_COPY(7, lane_id, hidden_int4, dst_data, src_data,
-                         ld_cg_global, st_cg_global);
+                         ld_nc_global, st_na_global);
 
       // Copy scales
       if constexpr (kUseFP8) {
@@ -448,7 +448,7 @@ LOW_LATENCY_DISPATCH_RECV:
           auto const pack_idx = lane_id / num_elems_per_pack;
           auto const elem_idx = lane_id % num_elems_per_pack;
           auto scale = extract_required_scale_format<kUseUE8M0>(
-              ld_cg_global(src_scales + lane_id));
+              ld_nc_global(src_scales + lane_id));
           recv_x_scales[token_idx * token_stride + pack_idx * pack_stride +
                         elem_idx] = scale;
         }
@@ -456,7 +456,7 @@ LOW_LATENCY_DISPATCH_RECV:
           auto const pack_idx = (lane_id + 32) / num_elems_per_pack;
           auto const elem_idx = (lane_id + 32) % num_elems_per_pack;
           auto scale = extract_required_scale_format<kUseUE8M0>(
-              ld_cg_global(src_scales + lane_id + 32));
+              ld_nc_global(src_scales + lane_id + 32));
           recv_x_scales[token_idx * token_stride + pack_idx * pack_stride +
                         elem_idx] = scale;
         }
@@ -944,7 +944,7 @@ LOW_LATENCY_COMBINE_RECV:
               reinterpret_cast<uint8_t const*>(rdma_buffer_type);
 
           // Reduce
-          auto x_vec = ld_cg_global(
+          auto x_vec = ld_nc_global(
               reinterpret_cast<int4 const*>(rdma_buffer_row) + hidden_idx);
           auto const x_bf16 = reinterpret_cast<nv_bfloat16*>(&x_vec);
 #pragma unroll
