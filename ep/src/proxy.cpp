@@ -503,6 +503,7 @@ void Proxy::post_gpu_commands_mixed(
 
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
     if (cmds_to_post[i].is_atomic) {
+#ifdef USE_SENDER_BARRIER
       int value = cmds_to_post[i].value;
       int expected_value;
       uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
@@ -528,20 +529,22 @@ void Proxy::post_gpu_commands_mixed(
         postponed_atomics_.push_back(cmds_to_post[i]);
         postponed_wr_ids_.push_back(wrs_to_post[i]);
         assert(postponed_atomics_.size() == postponed_wr_ids_.size());
-      } else {
-        atomic_wrs.push_back(wrs_to_post[i]);
-        atomic_cmds.push_back(cmds_to_post[i]);
-
-        if (cmds_to_post[i].is_combine) {
-          ctx_.combine_sent_counter.Reset(
-              {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
-               cmds_to_post[i].dst_rank});
-        } else {
-          ctx_.dispatch_sent_counter.Reset(
-              {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
-               cmds_to_post[i].dst_rank});
-        }
+        continue;
       }
+#endif
+      atomic_wrs.push_back(wrs_to_post[i]);
+      atomic_cmds.push_back(cmds_to_post[i]);
+
+#ifdef USE_SENDER_BARRIER
+      if (cmds_to_post[i].is_combine) {
+        ctx_.combine_sent_counter.Reset({cmds_to_post[i].low_latency_buffer_idx,
+                                         expert_idx, cmds_to_post[i].dst_rank});
+      } else {
+        ctx_.dispatch_sent_counter.Reset(
+            {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
+             cmds_to_post[i].dst_rank});
+      }
+#endif
     } else {
       rdma_wrs.push_back(wrs_to_post[i]);
       rdma_cmds.push_back(cmds_to_post[i]);
