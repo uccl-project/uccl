@@ -746,8 +746,8 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
           }
         }
       }
-#endif
     }
+#endif
 
     int ret = ibv_wr_complete(qpx);
     if (ret) {
@@ -1102,6 +1102,7 @@ void remote_process_completions(
                                        is_combine, src_rank});
       }
       continue;
+    }
 #else
       auto* addr32 =
           reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
@@ -1109,7 +1110,6 @@ void remote_process_completions(
       addr32->fetch_add(value, std::memory_order_release);
     }
 #endif
-    }
     if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
 #ifdef USE_RECEIVER_BARRIER
       uint32_t imm = ntohl(cqe.imm_data);
