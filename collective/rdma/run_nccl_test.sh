@@ -52,8 +52,8 @@ else
 fi
 
 
-if [ "$TEST" = "rccl" ]; then
-    echo "Running RCCL test"
+if [ "$TEST" = "nccl" ]; then
+    echo "Running NCCL test"
     PLUGIN_PATH=""
 elif [ "$TEST" = "uccl" ]; then
     echo "Running UCCL test"
