@@ -1,4 +1,5 @@
 #include "proxy.hpp"
+#include "bench_utils.hpp"
 #include "ep_util.hpp"
 #include <arpa/inet.h>  // for htonl, ntohl
 #include <chrono>
@@ -13,16 +14,6 @@ double Proxy::avg_wr_latency_us() const {
   if (completion_count_ <= kWarmupOps) return 0.0;
   return static_cast<double>(wr_time_total_us_) /
          static_cast<double>(completion_count_ - kWarmupOps);
-}
-
-template <typename dtype_t>
-dtype_t ceil_div(dtype_t a, dtype_t b) {
-  return (a + b - 1) / b;
-}
-
-template <typename dtype_t>
-dtype_t align(dtype_t a, dtype_t b) {
-  return ceil_div<dtype_t>(a, b) * b;
 }
 
 uint64_t Proxy::completed_wr() const { return completion_count_; }
@@ -242,10 +233,12 @@ void Proxy::run_dual() {
                  cfg_.num_ranks, cfg_.num_experts, pending_atomic_updates);
     // notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
-#ifdef FALSE
+#ifdef USE_RECEIVER_BARRIER
     apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
                           cfg_.num_experts, cfg_.num_ranks);
 #endif
+
+#ifdef USE_SENDER_BARRIER
     auto postponed_wr_ids = postponed_wr_ids_;
     auto postponed_atomics = postponed_atomics_;
     postponed_wr_ids_.clear();
@@ -253,6 +246,7 @@ void Proxy::run_dual() {
     assert(postponed_wr_ids.size() == postponed_atomics.size());
     assert(postponed_wr_ids_.size() == 0);
     post_gpu_commands_mixed(postponed_wr_ids, postponed_atomics);
+#endif
   }
 }
 
@@ -392,6 +386,12 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
     auto end = std::chrono::high_resolution_clock::now();
     total_rdma_write_durations_ +=
         std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+  }
+
+  for (size_t rb_idx = 0; rb_idx < cfg_.ring_buffers.size(); rb_idx++) {
+    size_t& ring_seen = ring_seen_[rb_idx];
+    cfg_.ring_buffers[rb_idx]->cpu_volatile_store_tail(ring_seen);
+    ring_tails_[rb_idx] = ring_seen;
   }
 }
 
