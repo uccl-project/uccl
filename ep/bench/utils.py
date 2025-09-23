@@ -483,8 +483,8 @@ def initialize_uccl(
 
     dist.barrier(group)
     if not is_intranode:
-        for i in range(ep.get_num_proxy_threads()):
-            proxies[i].start_dual()
+        for proxy in proxies:
+            proxy.start_dual()
 
     workers = None
     # if hasattr(ep, "PeerCopyManager"):
