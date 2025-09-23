@@ -611,8 +611,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              std::vector<TransferCmd> const& cmds_to_post,
                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
                              int my_rank, int thread_idx,
-                             std::unordered_set<uint64_t>& finished_wrs,
-                             std::mutex& finished_wrs_mutex) {
+                             std::unordered_set<uint64_t>& finished_wrs) {
   if (num_wrs == 0) return;
   if (wrs_to_post.size() != num_wrs || cmds_to_post.size() != num_wrs) {
     fprintf(stderr,
@@ -728,7 +727,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
 #ifdef USE_RECEIVER_BARRIER
       uint64_t const expert_tail_wr = expert_wr_ids.back();
       {
-        std::lock_guard<std::mutex> lock(finished_wrs_mutex);
         auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
             expert_tail_wr, std::move(expert_wr_ids));
         if (!inserted) {
@@ -747,7 +745,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
 #else
     uint64_t const tail_wr = wr_ids.back();
     {
-      std::lock_guard<std::mutex> lock(finished_wrs_mutex);
       auto [it, inserted] =
           S.wr_id_to_wr_ids.try_emplace(tail_wr, std::move(wr_ids));
       if (!inserted) {
@@ -833,7 +830,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
 
     S.posted.fetch_add(k, std::memory_order_release);
     {
-      std::lock_guard<std::mutex> lock(finished_wrs_mutex);
       auto [it, inserted] =
           S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
       if (!inserted) {
@@ -855,8 +851,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
 void local_process_completions(ProxyCtx& S,
                                std::unordered_set<uint64_t>& finished_wrs,
                                std::unordered_set<uint64_t>& acked_wrs,
-                               std::mutex& finished_wrs_mutex, int thread_idx,
-                               ibv_wc* wc, int ne,
+                               int thread_idx, ibv_wc* wc, int ne,
                                std::vector<ProxyCtx*>& ctx_by_tag) {
   if (ne == 0) return;
   for (int i = 0; i < ne; ++i) {
@@ -895,7 +890,6 @@ void local_process_completions(ProxyCtx& S,
         }
 #endif
         {
-          std::lock_guard<std::mutex> lock(finished_wrs_mutex);
           uint64_t const wr_done = wc[i].wr_id;
           acked_wrs.insert(wr_done);
           if (S.wr_id_to_wr_ids.find(wr_done) != S.wr_id_to_wr_ids.end()) {
@@ -923,7 +917,7 @@ void local_process_completions(ProxyCtx& S,
 void local_poll_completions(ProxyCtx& S,
                             std::unordered_set<uint64_t>& finished_wrs,
                             std::unordered_set<uint64_t>& acked_wrs,
-                            std::mutex& finished_wrs_mutex, int thread_idx,
+                            int thread_idx,
                             std::vector<ProxyCtx*>& ctx_by_tag) {
   struct ibv_wc wc[kMaxOutstandingSends];
   int ne = 0;
@@ -949,13 +943,12 @@ void local_poll_completions(ProxyCtx& S,
   ne = ibv_poll_cq(S.cq, kMaxOutstandingSends, wc);
 #endif
   // printf("Local poll thread %d polled %d completions\n", thread_idx, ne);
-  local_process_completions(S, finished_wrs, acked_wrs, finished_wrs_mutex,
-                            thread_idx, wc, ne, ctx_by_tag);
+  local_process_completions(S, finished_wrs, acked_wrs, thread_idx, wc, ne,
+                            ctx_by_tag);
 }
 
 void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
-                  std::unordered_set<uint64_t>& acked_wrs,
-                  std::mutex& finished_wrs_mutex, int thread_idx,
+                  std::unordered_set<uint64_t>& acked_wrs, int thread_idx,
                   CopyRingBuffer& g_ring, std::vector<ProxyCtx*>& ctx_by_tag,
                   void* atomic_buffer_ptr, int num_ranks, int num_experts,
                   std::set<PendingUpdate>& pending_atomic_updates) {
@@ -983,8 +976,8 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
   ne = ibv_poll_cq(S.cq, kMaxOutstandingSends, wc);
 #endif
   // printf("Poll CQ Dual thread %d polled %d completions\n", thread_idx, ne);
-  local_process_completions(S, finished_wrs, acked_wrs, finished_wrs_mutex,
-                            thread_idx, wc, ne, ctx_by_tag);
+  local_process_completions(S, finished_wrs, acked_wrs, thread_idx, wc, ne,
+                            ctx_by_tag);
   remote_process_completions(S, thread_idx, g_ring, ne, wc, ctx_by_tag,
                              atomic_buffer_ptr, num_ranks, num_experts,
                              pending_atomic_updates);
@@ -1299,7 +1292,6 @@ void post_atomic_operations(ProxyCtx& S,
                             std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
                             int my_rank, int thread_idx,
                             std::unordered_set<uint64_t>& finished_wrs,
-                            std::mutex& finished_wrs_mutex,
                             std::unordered_set<uint64_t>& acked_wrs) {
   if (cmds_to_post.size() > ProxyCtx::kMaxAtomicOps) {
     fprintf(stderr, "Too many atomic operations: %zu > %zu\n",
@@ -1413,7 +1405,6 @@ void post_atomic_operations(ProxyCtx& S,
 #endif
     uint64_t const batch_tail_wr = wr_ids.back();
     {
-      std::lock_guard<std::mutex> lock(finished_wrs_mutex);
       auto [it, inserted] =
           S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
       if (!inserted) {
