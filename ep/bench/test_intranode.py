@@ -412,7 +412,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     scratch = torch.zeros(
         num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
     )
-    proxies, workers, bench_obj = initialize_uccl(
+    proxies, workers = initialize_uccl(
         scratch, num_rdma_bytes, rank, num_ranks, group, args.num_experts, True
     )
 
