@@ -2108,8 +2108,7 @@ PYBIND11_MODULE(ep, m) {
       .def("calculate_and_set_dispatch_recv_data_offset",
            &UcclProxy::calculate_and_set_dispatch_recv_data_offset,
            py::arg("num_tokens"), py::arg("hidden"), py::arg("num_experts"))
-      .def_property_readonly("ring_buffer_addrs",
-                             &UcclProxy::get_ring_buffer_addrs)
+      .def("get_ring_buffer_addrs", &UcclProxy::get_ring_buffer_addrs)
       .def_property_readonly("thread_idx", &UcclProxy::thread_idx)
       .def_property_readonly("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr)
       .def("avg_rdma_write_us", &UcclProxy::avg_rdma_write_us)
