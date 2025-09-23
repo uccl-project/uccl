@@ -842,24 +842,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         fprintf(stderr, "Bad WR at %p (wr_id=%lu)\n", (void*)bad, bad->wr_id);
       std::abort();
     }
-
-    S.posted.fetch_add(k, std::memory_order_release);
-    {
-      std::lock_guard<std::mutex> lock(finished_wrs_mutex);
-      auto [it, inserted] =
-          S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
-      if (!inserted) {
-        fprintf(stderr,
-                "thread_idx: %d, Error: tail wr_id %lu already exists "
-                "(map=%p)\n",
-                thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
-        std::abort();
-      } else {
-        for (auto const& wr_id : it->second) {
-          finished_wrs.insert(wr_id);
-        }
-      }
-    }
 #endif
   }
 }
@@ -871,7 +853,6 @@ void local_process_completions(ProxyCtx& S,
                                ibv_wc* wc, int ne,
                                std::vector<ProxyCtx*>& ctx_by_tag) {
   if (ne == 0) return;
-  int send_completed = 0;
   for (int i = 0; i < ne; ++i) {
     if (wc[i].status != IBV_WC_SUCCESS) {
       fprintf(stderr,
@@ -885,7 +866,6 @@ void local_process_completions(ProxyCtx& S,
 
     switch (wc[i].opcode) {
       case IBV_WC_RDMA_WRITE: {
-        send_completed++;
         uint64_t wrid = wc[i].wr_id;
         if ((wrid & kAtomicWrTag) == kAtomicWrTag) {
           break;
@@ -917,13 +897,11 @@ void local_process_completions(ProxyCtx& S,
         uint64_t wrid = wc[i].wr_id;
         printf("Local thread %d: atomic completed (wr_id=0x%lx)\n", thread_idx,
                wrid);
-        send_completed++;
       } break;
       default:
         break;
     }
   }
-  S.completed.fetch_add(send_completed, std::memory_order_relaxed);
 }
 
 void local_poll_completions(ProxyCtx& S,
@@ -1039,9 +1017,10 @@ void remote_process_completions(
   if (ne == 0) return;
   std::unordered_map<uint32_t, std::vector<ibv_recv_wr>> per_tag;
   per_tag.reserve(8);
-
+#ifdef FALSE
   std::vector<CopyTask> task_vec;
   task_vec.reserve(ne);
+#endif
   for (int i = 0; i < ne; ++i) {
     ibv_wc const& cqe = wc[i];
     if (cqe.status != IBV_WC_SUCCESS) {
@@ -1057,9 +1036,9 @@ void remote_process_completions(
       int value = aimm.GetValue();
       uint32_t offset = aimm.GetOff();
       size_t index = offset / sizeof(int);
-      int low_latency_buffer_idx = aimm.GetBufferIdx();
       bool is_combine = aimm.IsCombine();
 #ifdef FALSE
+      int low_latency_buffer_idx = aimm.GetBufferIdx();
       // ep_config.hpp
       uint32_t new_offset =
           offset - low_latency_buffer_idx *
@@ -1152,11 +1131,13 @@ void remote_process_completions(
 #endif
     }
   }
+#ifdef FALSE
   if (!task_vec.empty()) {
     while (!g_ring.pushN(task_vec.data(), task_vec.size())) {
       printf("Remote thread %d: Ring buffer full, retrying...\n", idx);
     }
   }
+#endif
 }
 
 void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
@@ -1421,28 +1402,5 @@ void post_atomic_operations(ProxyCtx& S,
       }
     }
 #endif
-    // bookkeeping identical to your original logic
-    S.posted.fetch_add(k, std::memory_order_relaxed);
-    // uint64_t const batch_tail_wr = wr_ids.back();
-    // {
-    //   std::lock_guard<std::mutex> lock(finished_wrs_mutex);
-    //   auto [it, inserted] =
-    //       S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
-    //   if (!inserted) {
-    //     fprintf(stderr,
-    //             "thread_idx: %d, Error: tail wr_id %lu already exists "
-    //             "(map=%p, "
-    //             "size=%zu, dst_rank=%d)\n",
-    //             thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
-    //             S.wr_id_to_wr_ids.size(), dst_rank);
-    //     std::abort();
-    //   } else {
-    //     // TODO(MaoZiming): ack for atomic operations?
-    //     for (auto const& wr_id : it->second) {
-    //       finished_wrs.insert(wr_id);
-    //       acked_wrs.insert(wr_id);
-    //     }
-    //   }
-    // }
   }
 }
