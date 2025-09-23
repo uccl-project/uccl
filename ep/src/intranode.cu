@@ -540,7 +540,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
         // Actual read
         recv_topk_idx[recv_idx] =
             ld_nc_global(channel_topk_idx_buffers.buffer() + buffer_idx);
-        arecv_topk_weights[recv_idx] =
+        recv_topk_weights[recv_idx] =
             ld_nc_global(channel_topk_weights_buffers.buffer() + buffer_idx);
       }
 
