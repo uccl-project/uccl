@@ -25,9 +25,7 @@ def test_bench():
 def test_proxy():
     bench = ep.Bench()
     env = bench.env_info()
-    num_blocks = int(env["blocks"])
-    stream_ptr = env["stream_addr"]
-    rbs_ptr = env["rbs_addr"]
+    num_blocks = int(env.blocks)
 
     nbytes = 1 << 24
     gpu = torch.empty(nbytes, dtype=torch.uint8, device="cuda")
@@ -37,18 +35,22 @@ def test_proxy():
     for i in range(num_blocks):
         rb_i = bench.ring_addr(i)
         p = ep.Proxy(
-            rb_addr=rb_i,
             thread_idx=i,
             gpu_buffer_addr=gpu_addr,
             total_size=nbytes,
+            rank=0,
+            node_idx=0,
+            local_rank=0,
+            peer_ip="127.0.0.1",
         )
+        p.set_bench_ring_addrs([rb_i])
         p.start_local()
         proxies.append(p)
     bench.timing_start()
     ep.launch_gpu_issue_kernel(
-        num_blocks, int(env["threads_per_block"]), stream_ptr, rbs_ptr
+        num_blocks, env.threads_per_block, env.stream_addr, env.rbs_addr
     )
-    ep.sync_stream()
+    bench.sync_stream()
     bench.timing_stop()
 
     for p in proxies:
