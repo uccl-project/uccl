@@ -290,55 +290,6 @@ __device__ __forceinline__ int4 ld_nc_global(int4 const* ptr) {
   return ret;
 }
 
-__device__ __forceinline__ float ld_cg_global(float const* p) {
-  float v;
-  asm volatile("ld.global.cg.f32 %0, [%1];" : "=f"(v) : "l"(p));
-  return v;
-}
-
-__device__ __forceinline__ int ld_cg_global(int const* p) {
-  int v;
-  asm volatile("ld.global.cg.s32 %0, [%1];" : "=r"(v) : "l"(p));
-  return v;
-}
-
-__device__ __forceinline__ uint2 ld_cg_global(uint2 const* p) {
-  uint2 v;
-  asm volatile("ld.global.cg.v2.u32 {%0,%1}, [%2];"
-               : "=r"(v.x), "=r"(v.y)
-               : "l"(p));
-  return v;
-}
-
-__device__ __forceinline__ long ld_cg_global(long const* p) {
-  long v;
-  asm volatile("ld.global.cg.s64 %0, [%1];" : "=l"(v) : "l"(p));
-  return v;
-}
-
-__device__ __forceinline__ unsigned long ld_cg_global(unsigned long const* p) {
-  unsigned long v;
-  asm volatile("ld.global.cg.u64 %0, [%1];" : "=l"(v) : "l"(p));
-  return v;
-}
-
-__device__ __forceinline__ int4 ld_cg_global(int4 const* p) {
-  int4 v;
-  asm volatile("ld.global.cg.v4.b32 {%0,%1,%2,%3}, [%4];"
-               : "=r"(v.x), "=r"(v.y), "=r"(v.z), "=r"(v.w)
-               : "l"(p));
-  return v;
-}
-
-__device__ __forceinline__ void st_cg_global(int* p, int v) {
-  asm volatile("st.global.cg.s32 [%0], %1;" : : "l"(p), "r"(v));
-}
-
-__device__ __forceinline__ void st_cg_global(int4* p, int4 v) {
-  asm volatile("st.global.cg.v4.b32 [%0], {%1,%2,%3,%4};"
-               :
-               : "l"(p), "r"(v.x), "r"(v.y), "r"(v.z), "r"(v.w));
-}
 #ifndef DISABLE_AGGRESSIVE_PTX_INSTRS
 #define ST_NA_FUNC "st.global.L1::no_allocate"
 #else
