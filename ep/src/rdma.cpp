@@ -708,7 +708,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       if (j + 1 == k) {
         uint32_t imm =
             WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
-                           cmd.expert_idx, 1, my_rank)
+                           cmd.expert_idx, k, my_rank)
                 .GetImmData();
         ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
       } else {
@@ -723,16 +723,32 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                        static_cast<uint32_t>(cmd.bytes));
 
 #ifdef USE_RECEIVER_BARRIER
-      }
+        uint64_t const expert_tail_wr = expert_wr_ids.back();
+        {
+          std::lock_guard<std::mutex> lock(finished_wrs_mutex);
+          auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
+              expert_tail_wr, std::move(expert_wr_ids));
+          if (!inserted) {
+            fprintf(stderr,
+                    "thread_idx: %d, Error: tail wr_id %lu already exists "
+                    "(map=%p)\n",
+                    thread_idx, expert_tail_wr, (void*)&S.wr_id_to_wr_ids);
+            std::abort();
+          } else {
+            for (auto const& wr_id : it->second) {
+              finished_wrs.insert(wr_id);
+            }
+          }
+        }
 #endif
-    }
+      }
 
-    int ret = ibv_wr_complete(qpx);
-    if (ret) {
-      fprintf(stderr, "ibv_wr_complete failed (dst=%d): %s (ret=%d)\n",
-              dst_rank, strerror(ret), ret);
-      std::abort();
-    }
+      int ret = ibv_wr_complete(qpx);
+      if (ret) {
+        fprintf(stderr, "ibv_wr_complete failed (dst=%d): %s (ret=%d)\n",
+                dst_rank, strerror(ret), ret);
+        std::abort();
+      }
 #else
     std::vector<ibv_sge> sges(k);
     std::vector<ibv_send_wr> wrs(k);
@@ -793,10 +809,28 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         fprintf(stderr, "Bad WR at %p (wr_id=%lu)\n", (void*)bad, bad->wr_id);
       std::abort();
     }
+
+    S.posted.fetch_add(k, std::memory_order_release);
+    {
+      std::lock_guard<std::mutex> lock(finished_wrs_mutex);
+      auto [it, inserted] =
+          S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
+      if (!inserted) {
+        fprintf(stderr,
+                "thread_idx: %d, Error: tail wr_id %lu already exists "
+                "(map=%p)\n",
+                thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
+        std::abort();
+      } else {
+        for (auto const& wr_id : it->second) {
+          finished_wrs.insert(wr_id);
+        }
+      }
+    }
 #endif
+    }
   }
 }
-
 void local_process_completions(ProxyCtx& S,
                                std::unordered_set<uint64_t>& finished_wrs,
                                std::unordered_set<uint64_t>& acked_wrs,
@@ -1341,5 +1375,26 @@ void post_atomic_operations(ProxyCtx& S,
       }
     }
 #endif
+    uint64_t const batch_tail_wr = wr_ids.back();
+    {
+      std::lock_guard<std::mutex> lock(finished_wrs_mutex);
+      auto [it, inserted] =
+          S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
+      if (!inserted) {
+        fprintf(stderr,
+                "thread_idx: %d, Error: tail wr_id %lu already exists "
+                "(map=%p, "
+                "size=%zu, dst_rank=%d)\n",
+                thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
+                S.wr_id_to_wr_ids.size(), dst_rank);
+        std::abort();
+      } else {
+        // TODO(MaoZiming): ack for atomic operations?
+        for (auto const& wr_id : it->second) {
+          finished_wrs.insert(wr_id);
+          acked_wrs.insert(wr_id);
+        }
+      }
+    }
   }
 }
