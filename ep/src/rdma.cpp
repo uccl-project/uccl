@@ -1093,7 +1093,7 @@ void remote_process_completions(
       }
       auto* addr32 =
           reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
-      if (!is_atomic_ready) {
+      if (is_atomic_ready) {
         if (is_combine) value = 1;
         addr32->fetch_add(value, std::memory_order_release);
       } else {
