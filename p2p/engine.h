@@ -46,9 +46,9 @@ static inline std::string get_oob_ip() {
 }
 
 class Endpoint {
-  const uint64_t kRTTBytes = 1024 * 1024;
-  const uint64_t kChunkSize = 1024 * 1024;
-  const uint32_t kMaxInflightChunks = 8;
+  uint64_t const kRTTBytes = 1024 * 1024;
+  uint64_t const kChunkSize = 1024 * 1024;
+  uint32_t const kMaxInflightChunks = 8;
   static constexpr size_t kIpcAlignment = 1ul << 20;
   static constexpr size_t kIpcSizePerEngine = 1ul << 20;
 
@@ -131,12 +131,22 @@ class Endpoint {
   /* Send a vector of data chunks. Blocking. */
   bool sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
              std::vector<void const*> data_v, std::vector<size_t> size_v,
-             size_t num_iovs);
+             size_t num_iovs, bool inside_python = true);
+
+  /* Send a vector of data chunks asynchronously. */
+  bool sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                   std::vector<void const*> data_v, std::vector<size_t> size_v,
+                   size_t num_iovs, uint64_t* transfer_id);
 
   /* Receive a vector of data chunks. Blocking. */
   bool recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
              std::vector<void*> data_v, std::vector<size_t> size_v,
-             size_t num_iovs);
+             size_t num_iovs, bool inside_python = true);
+
+  /* Receive a vector of data chunks asynchronously. */
+  bool recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                   std::vector<void*> data_v, std::vector<size_t> size_v,
+                   size_t num_iovs, uint64_t* transfer_id);
 
   /* Read data from the remote server. Blocking. */
   bool read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
@@ -298,6 +308,55 @@ class Endpoint {
     READ_NET,
     WRITE_IPC,
     READ_IPC,
+    SENDV,
+    RECVV,
+  };
+  struct TaskBatch {
+    size_t num_iovs;  // Number of IO vectors
+    std::shared_ptr<std::vector<void const*>> const_data_ptr;  // for SENDV
+    std::shared_ptr<std::vector<void*>> data_ptr;              // for RECVV
+    std::shared_ptr<std::vector<size_t>> size_ptr;
+    std::shared_ptr<std::vector<uint64_t>> mr_id_ptr;
+
+    TaskBatch() : num_iovs(0) {}
+
+    TaskBatch(TaskBatch&& other) noexcept
+        : num_iovs(other.num_iovs),
+          const_data_ptr(std::move(other.const_data_ptr)),
+          data_ptr(std::move(other.data_ptr)),
+          size_ptr(std::move(other.size_ptr)),
+          mr_id_ptr(std::move(other.mr_id_ptr)) {}
+
+    TaskBatch& operator=(TaskBatch&& other) noexcept {
+      if (this != &other) {
+        num_iovs = other.num_iovs;
+        const_data_ptr = std::move(other.const_data_ptr);
+        data_ptr = std::move(other.data_ptr);
+        size_ptr = std::move(other.size_ptr);
+        mr_id_ptr = std::move(other.mr_id_ptr);
+      }
+      return *this;
+    }
+
+    TaskBatch(TaskBatch const&) = delete;
+    TaskBatch& operator=(TaskBatch const&) = delete;
+
+    void const** const_data_v() const {
+      if (!const_data_ptr) return nullptr;
+      return const_data_ptr->data();
+    }
+    void** data_v() const {
+      if (!data_ptr) return nullptr;
+      return data_ptr->data();
+    }
+    size_t* size_v() const {
+      if (!size_ptr) return nullptr;
+      return size_ptr->data();
+    }
+    uint64_t* mr_id_v() const {
+      if (!mr_id_ptr) return nullptr;
+      return mr_id_ptr->data();
+    }
   };
 
   struct alignas(64) Task {
@@ -336,7 +395,7 @@ class Endpoint {
   };
 
   static constexpr size_t MAX_RESERVE_SIZE =
-      uccl::max_sizeof<uccl::FifoItem, IpcTransferInfo>();
+      uccl::max_sizeof<uccl::FifoItem, IpcTransferInfo, TaskBatch>();
 
   struct alignas(64) UnifiedTask {
     TaskType type;
@@ -361,8 +420,32 @@ class Endpoint {
         IpcTransferInfo ipc_info;
         uint8_t reserved[MAX_RESERVE_SIZE - sizeof(IpcTransferInfo)];
       } ipc;
+
+      struct {
+        TaskBatch task_batch;
+        uint8_t reserved[MAX_RESERVE_SIZE - sizeof(TaskBatch)];
+      } batch;
+
       SpecificData() : base{} {}
+      // // Explicit trivial destructor so the union is not implicitly deleted
+      ~SpecificData() {}
     } specific;
+
+    UnifiedTask()
+        : type(TaskType::SEND_NET),
+          data(nullptr),
+          size(0),
+          conn_id(0),
+          mr_id(0),
+          done(false),
+          self_ptr(this),
+          specific() {}
+
+    ~UnifiedTask() {
+      if (is_batch_task()) {
+        specific.batch.task_batch.~TaskBatch();
+      }
+    }
 
     inline uccl::FifoItem& slot_item() { return specific.net.slot_item; }
 
@@ -374,6 +457,16 @@ class Endpoint {
 
     inline IpcTransferInfo const& ipc_info() const {
       return specific.ipc.ipc_info;
+    }
+
+    inline TaskBatch& task_batch() { return specific.batch.task_batch; }
+
+    inline TaskBatch const& task_batch() const {
+      return specific.batch.task_batch;
+    }
+
+    inline bool is_batch_task() const {
+      return type == TaskType::SENDV || type == TaskType::RECVV;
     }
   };
 
@@ -388,6 +481,66 @@ class Endpoint {
     task->done = false;
     task->self_ptr = task;
     return task;
+  }
+
+  inline UnifiedTask* create_batch_task(uint64_t conn_id, TaskType type,
+                                        TaskBatch&& batch) {
+    UnifiedTask* task = new UnifiedTask();
+    task->type = type;
+    task->conn_id = conn_id;
+    task->done = false;
+    task->self_ptr = task;
+    // Not used for batch operations
+    task->mr_id = 0;
+    task->data = nullptr;
+    task->size = 0;
+    // placement new
+    new (&task->specific.batch.task_batch) TaskBatch(std::move(batch));
+    return task;
+  }
+
+  inline UnifiedTask* create_sendv_task(
+      uint64_t conn_id,
+      std::shared_ptr<std::vector<void const*>> const_data_ptr,
+      std::shared_ptr<std::vector<size_t>> size_ptr,
+      std::shared_ptr<std::vector<uint64_t>> mr_id_ptr) {
+    if (!const_data_ptr || !size_ptr || !mr_id_ptr ||
+        const_data_ptr->size() != size_ptr->size() ||
+        size_ptr->size() != mr_id_ptr->size()) {
+      return nullptr;
+    }
+    size_t num_iovs = const_data_ptr->size();
+
+    TaskBatch batch;
+    batch.num_iovs = num_iovs;
+    batch.const_data_ptr = std::move(const_data_ptr);  // Transfer ownership
+    batch.size_ptr = std::move(size_ptr);
+    batch.mr_id_ptr = std::move(mr_id_ptr);
+
+    return create_batch_task(conn_id, TaskType::SENDV, std::move(batch));
+  }
+
+  inline UnifiedTask* create_recvv_task(uint64_t conn_id,
+                                        std::vector<void*>&& data_v,
+                                        std::vector<size_t>&& size_v,
+                                        std::vector<uint64_t>&& mr_id_v) {
+    if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size()) {
+      return nullptr;
+    }
+    size_t num_iovs = data_v.size();
+
+    auto data_ptr = std::make_shared<std::vector<void*>>(std::move(data_v));
+    auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
+    auto mr_id_ptr =
+        std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
+
+    TaskBatch batch;
+    batch.num_iovs = num_iovs;
+    batch.data_ptr = std::move(data_ptr);
+    batch.size_ptr = std::move(size_ptr);
+    batch.mr_id_ptr = std::move(mr_id_ptr);
+
+    return create_batch_task(conn_id, TaskType::RECVV, std::move(batch));
   }
 
   inline UnifiedTask* create_net_task(uint64_t conn_id, uint64_t mr_id,
@@ -405,6 +558,7 @@ class Endpoint {
     task->ipc_info() = ipc_info;
     return task;
   }
+
   // For both net and ipc send/recv tasks.
   jring_t* send_unified_task_ring_;
   jring_t* recv_unified_task_ring_;
