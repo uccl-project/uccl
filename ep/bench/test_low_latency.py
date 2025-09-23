@@ -409,7 +409,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     scratch = torch.zeros(
         num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
     )
-    proxies, workers, bench = initialize_uccl(
+    proxies, workers = initialize_uccl(
         scratch, num_rdma_bytes, rank, num_ranks, group, args.num_experts
     )
 
@@ -482,7 +482,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     group.barrier()
     buffer.destroy()
     dist.barrier()
-    destroy_uccl(proxies, workers, bench)
+    destroy_uccl(proxies, workers)
     dist.barrier()
     dist.destroy_process_group()
 

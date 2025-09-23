@@ -123,7 +123,7 @@ pip3 install torch torchvision torchaudio --index-url https://download.pytorch.o
 Then build: 
 ```bash
 cd $UCCL_HOME/rdma
-make -f MakefileHip -j
+make -f Makefile.rocm -j
 ```
 </details>
 

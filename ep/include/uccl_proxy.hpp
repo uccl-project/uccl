@@ -14,8 +14,8 @@ class UcclProxy {
   friend class PeerCopyManager;
 
  public:
-  UcclProxy(uintptr_t rb_addr, int thread_idx, uintptr_t gpu_buffer_addr,
-            size_t total_size, int rank, int node_idx, int local_rank,
+  UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr, size_t total_size,
+            int rank, int node_idx, int local_rank,
             std::string const& peer_ip = {}, int num_experts = 0,
             int num_ranks = 0);
   ~UcclProxy();
@@ -66,7 +66,7 @@ class UcclProxy {
     proxy_->set_dispatch_recv_data_offset(dispatch_recv_data_offset);
   }
 
-  uintptr_t rb_addr() const noexcept { return rb_; }
+  std::vector<uint64_t> get_ring_buffer_addrs() const;
   int thread_idx() const noexcept { return thread_idx_; }
   void* gpu_buffer_addr() const noexcept { return gpu_buffer_addr_; }
   double avg_rdma_write_us() const { return proxy_->avg_rdma_write_us(); }
@@ -82,11 +82,12 @@ class UcclProxy {
   std::thread thread_;
   Mode mode_;
   std::atomic<bool> running_;
-  uintptr_t rb_;
+  std::vector<uintptr_t> ring_buffer_addrs_;
   int thread_idx_;
   void* gpu_buffer_addr_;
   std::vector<PeerMeta> peers_;
   int local_rank_;
   void* atomic_buffer_ptr_;
   int node_idx_;
+  static constexpr size_t kRingsPerProxy = 8;
 };

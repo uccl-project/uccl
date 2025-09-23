@@ -28,9 +28,7 @@ def test_single(rank, num_ranks, group, args):
         scratch_nbytes, dtype=torch.uint8, device=f"cuda:{device_index}"
     )
 
-    proxies, workers, bench = initialize_uccl(
-        scratch, scratch_nbytes, rank, num_ranks, group
-    )
+    proxies, workers = initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group)
 
     buffer = Buffer(
         group=group,
@@ -90,7 +88,7 @@ def test_single(rank, num_ranks, group, args):
         print(f"[single-node] ✓ Dispatch+Combine done. Output shape={combined_x.shape}")
 
     buffer.destroy()
-    destroy_uccl(proxies, workers, bench)
+    destroy_uccl(proxies, workers)
     dist.barrier()
 
 
