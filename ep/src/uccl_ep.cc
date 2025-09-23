@@ -58,12 +58,19 @@ static std::vector<uint64_t> collect_ring_addrs_for_device(int device_index) {
   std::lock_guard<std::mutex> lk(g_proxies_mu);
   auto it = uccl::g_proxies_by_dev.find(device_index);
   EP_HOST_ASSERT(it != uccl::g_proxies_by_dev.end() && !it->second.empty());
-  std::vector<uint64_t> addrs;
-  addrs.reserve(it->second.size());
+
+  std::vector<uint64_t> all_addrs;
+  // Collect all ring buffer addresses from all proxies
   for (auto& proxy : it->second) {
-    addrs.push_back(proxy.attr("rb_addr").cast<uint64_t>());
+    // Each proxy now manages multiple ring buffers
+    auto proxy_addrs =
+        proxy.attr("get_ring_buffer_addrs")().cast<std::vector<uint64_t>>();
+    all_addrs.insert(all_addrs.end(), proxy_addrs.begin(), proxy_addrs.end());
   }
-  return addrs;
+
+  printf("Collected %zu ring buffer addresses for device %d from %zu proxies\n",
+         all_addrs.size(), device_index, it->second.size());
+  return all_addrs;
 }
 
 bool is_sm90_compiled() {
@@ -2065,6 +2072,7 @@ PYBIND11_MODULE(ep, m) {
     return std::string(cudaGetErrorString(st));
   });
   m.def("is_sm90_compiled", is_sm90_compiled);
+  m.def("get_num_proxy_threads", []() { return kNumThBlocks; });
   m.def(
       "stream_query",
       [](uintptr_t stream_ptr) {
@@ -2083,11 +2091,10 @@ PYBIND11_MODULE(ep, m) {
   });
   py::class_<Stats>(m, "Stats");
   py::class_<UcclProxy>(m, "Proxy")
-      .def(py::init<uintptr_t, int, uintptr_t, size_t, int, int, int,
-                    std::string const&, int, int>(),
-           py::arg("rb_addr"), py::arg("thread_idx"),
-           py::arg("gpu_buffer_addr"), py::arg("total_size"),
-           py::arg("rank") = 0, py::arg("node_idx") = -1,
+      .def(py::init<int, uintptr_t, size_t, int, int, int, std::string const&,
+                    int, int>(),
+           py::arg("thread_idx"), py::arg("gpu_buffer_addr"),
+           py::arg("total_size"), py::arg("rank") = 0, py::arg("node_idx") = -1,
            py::arg("local_rank") = 0, py::arg("peer_ip") = std::string(),
            py::arg("num_experts") = -1, py::arg("num_ranks") = -1)
       .def("start_sender", &UcclProxy::start_sender)
@@ -2102,7 +2109,7 @@ PYBIND11_MODULE(ep, m) {
       .def("calculate_and_set_dispatch_recv_data_offset",
            &UcclProxy::calculate_and_set_dispatch_recv_data_offset,
            py::arg("num_tokens"), py::arg("hidden"), py::arg("num_experts"))
-      .def_property_readonly("rb_addr", &UcclProxy::rb_addr)
+      .def("get_ring_buffer_addrs", &UcclProxy::get_ring_buffer_addrs)
       .def_property_readonly("thread_idx", &UcclProxy::thread_idx)
       .def_property_readonly("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr)
       .def("avg_rdma_write_us", &UcclProxy::avg_rdma_write_us)

@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
   proxies.reserve(env.blocks);
   for (int i = 0; i < env.blocks; ++i) {
     Proxy::Config cfg{};
-    cfg.rb = &env.rbs[i];  // ring for this block
+    cfg.ring_buffers.push_back(&env.rbs[i]);  // ring for this block
     cfg.thread_idx = i;
     cfg.gpu_buffer = gpu_buffer;  // RDMA-visible region
     cfg.total_size = total_size;

@@ -64,7 +64,7 @@ inline Proxy::Config make_cfg(BenchEnv const& env, int thread_idx, int rank,
                               char const* peer_ip, void* gpu_buffer = nullptr,
                               size_t total_size = 0, bool pin_thread = true) {
   Proxy::Config cfg{};
-  cfg.rb = &env.rbs[thread_idx];
+  cfg.ring_buffers.push_back(&env.rbs[thread_idx]);
   cfg.thread_idx = thread_idx;
   cfg.rank = rank;
   cfg.peer_ip = peer_ip;
