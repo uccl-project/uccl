@@ -233,55 +233,61 @@ __forceinline__ __device__ void calculate_fp8_scales(float amax, float& scale,
 #define LD_NC_FUNC "ld.volatile.global"
 #endif
 
-// `ld.global.nc.L1::no_allocate` will be translated into `LDG.E.NA.[width].CONSTANT` in SASS
+// `ld.global.nc.L1::no_allocate` will be translated into
+// `LDG.E.NA.[width].CONSTANT` in SASS
 template <typename dtype_t>
-__device__  __forceinline__ dtype_t ld_nc_global(const dtype_t *ptr) {
-    auto ret = ld_nc_global(reinterpret_cast<const typename VecInt<sizeof(dtype_t)>::vec_t*>(ptr));
-    return *reinterpret_cast<dtype_t*>(&ret);
+__device__ __forceinline__ dtype_t ld_nc_global(dtype_t const* ptr) {
+  auto ret = ld_nc_global(
+      reinterpret_cast<const typename VecInt<sizeof(dtype_t)>::vec_t*>(ptr));
+  return *reinterpret_cast<dtype_t*>(&ret);
 }
 
 template <>
-__device__  __forceinline__ uint8_t ld_nc_global(const uint8_t *ptr) {
-    uint16_t ret;
-    // NOTES: we must use `uint16_t` as inline ASM does not support 8-bit constraint letter (`h` below means unsigned 16-bit)
-    asm volatile(LD_NC_FUNC ".u8 %0, [%1];" : "=h"(ret) : "l"(ptr));
-    return static_cast<uint8_t>(ret);
+__device__ __forceinline__ uint8_t ld_nc_global(uint8_t const* ptr) {
+  uint16_t ret;
+  // NOTES: we must use `uint16_t` as inline ASM does not support 8-bit
+  // constraint letter (`h` below means unsigned 16-bit)
+  asm volatile(LD_NC_FUNC ".u8 %0, [%1];" : "=h"(ret) : "l"(ptr));
+  return static_cast<uint8_t>(ret);
 }
 
 template <>
-__device__  __forceinline__ int ld_nc_global(const int *ptr) {
-    int ret;
-    asm volatile(LD_NC_FUNC ".s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
-    return ret;
+__device__ __forceinline__ int ld_nc_global(int const* ptr) {
+  int ret;
+  asm volatile(LD_NC_FUNC ".s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
+  return ret;
 }
 
 template <>
-__device__  __forceinline__ int64_t ld_nc_global(const int64_t *ptr) {
-    int64_t ret;
-    asm volatile(LD_NC_FUNC ".s64 %0, [%1];" : "=l"(ret) : "l"(ptr));
-    return ret;
+__device__ __forceinline__ int64_t ld_nc_global(int64_t const* ptr) {
+  int64_t ret;
+  asm volatile(LD_NC_FUNC ".s64 %0, [%1];" : "=l"(ret) : "l"(ptr));
+  return ret;
 }
 
 template <>
-__device__  __forceinline__ float ld_nc_global(const float *ptr) {
-    float ret;
-    asm volatile(LD_NC_FUNC ".f32 %0, [%1];" : "=f"(ret) : "l"(ptr));
-    return ret;
+__device__ __forceinline__ float ld_nc_global(float const* ptr) {
+  float ret;
+  asm volatile(LD_NC_FUNC ".f32 %0, [%1];" : "=f"(ret) : "l"(ptr));
+  return ret;
 }
 
 template <>
-__device__  __forceinline__ int2 ld_nc_global(const int2 *ptr) {
-    int2 ret;
-    asm volatile(LD_NC_FUNC ".v2.s32 {%0, %1}, [%2];" : "=r"(ret.x), "=r"(ret.y) : "l"(ptr));
-    return ret;
+__device__ __forceinline__ int2 ld_nc_global(int2 const* ptr) {
+  int2 ret;
+  asm volatile(LD_NC_FUNC ".v2.s32 {%0, %1}, [%2];"
+               : "=r"(ret.x), "=r"(ret.y)
+               : "l"(ptr));
+  return ret;
 }
 
 template <>
-__device__  __forceinline__ int4 ld_nc_global(const int4 *ptr) {
-    int4 ret;
-    asm volatile(LD_NC_FUNC ".v4.s32 {%0, %1, %2, %3}, [%4];"
-            : "=r"(ret.x), "=r"(ret.y), "=r"(ret.z), "=r"(ret.w) : "l"(ptr));
-    return ret;
+__device__ __forceinline__ int4 ld_nc_global(int4 const* ptr) {
+  int4 ret;
+  asm volatile(LD_NC_FUNC ".v4.s32 {%0, %1, %2, %3}, [%4];"
+               : "=r"(ret.x), "=r"(ret.y), "=r"(ret.z), "=r"(ret.w)
+               : "l"(ptr));
+  return ret;
 }
 
 __device__ __forceinline__ float ld_cg_global(float const* p) {
@@ -348,24 +354,27 @@ __device__ __forceinline__ void st_na_global(dtype_t const* ptr,
 }
 
 template <>
-__device__  __forceinline__ void st_na_global(const int *ptr, const int& value) {
-    asm volatile(ST_NA_FUNC ".s32 [%0], %1;" ::"l"(ptr), "r"(value));
+__device__ __forceinline__ void st_na_global(int const* ptr, int const& value) {
+  asm volatile(ST_NA_FUNC ".s32 [%0], %1;" ::"l"(ptr), "r"(value));
 }
 
 template <>
-__device__  __forceinline__ void st_na_global(const int64_t *ptr, const int64_t& value) {
-    asm volatile(ST_NA_FUNC ".s64 [%0], %1;" ::"l"(ptr), "l"(value));
+__device__ __forceinline__ void st_na_global(int64_t const* ptr,
+                                             int64_t const& value) {
+  asm volatile(ST_NA_FUNC ".s64 [%0], %1;" ::"l"(ptr), "l"(value));
 }
 
 template <>
-__device__  __forceinline__ void st_na_global(const float *ptr, const float& value) {
-    asm volatile(ST_NA_FUNC ".f32 [%0], %1;" ::"l"(ptr), "f"(value));
+__device__ __forceinline__ void st_na_global(float const* ptr,
+                                             float const& value) {
+  asm volatile(ST_NA_FUNC ".f32 [%0], %1;" ::"l"(ptr), "f"(value));
 }
 
 template <>
-__device__  __forceinline__ void st_na_global(const int4 *ptr, const int4& value) {
-    asm volatile(ST_NA_FUNC ".v4.s32 [%0], {%1, %2, %3, %4};"
-            ::"l"(ptr), "r"(value.x), "r"(value.y), "r"(value.z), "r"(value.w));
+__device__ __forceinline__ void st_na_global(int4 const* ptr,
+                                             int4 const& value) {
+  asm volatile(ST_NA_FUNC ".v4.s32 [%0], {%1, %2, %3, %4};" ::"l"(ptr),
+               "r"(value.x), "r"(value.y), "r"(value.z), "r"(value.w));
 }
 
 __device__ __forceinline__ int ld_acquire_sys_global(int const* ptr) {
