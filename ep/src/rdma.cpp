@@ -701,16 +701,11 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                                                cmd.low_latency_buffer_idx};
 #endif
 #ifdef USE_RECEIVER_BARRIER
-        bool last = (j + 1 == expert_k);
-        if (last) {
-          uint32_t imm =
-              WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
-                             cmd.expert_idx, expert_k, my_rank)
-                  .GetImmData();
-          ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
-        } else {
-          ibv_wr_rdma_write(qpx, ctx->remote_rkey, remote_addr);
-        }
+        uint32_t imm =
+            WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
+                           cmd.expert_idx, 1, my_rank)
+                .GetImmData();
+        ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
 #else
       if (j + 1 == k) {
         uint32_t imm =
