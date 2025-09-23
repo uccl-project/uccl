@@ -16,11 +16,17 @@ except ImportError:
     sys.stderr.write("Failed to import uccl modules\n")
     sys.exit(1)
 
-from utils import init_dist, get_peer_ip
+from utils import init_dist, get_peer_ip, get_cpu_proxies_meta
 from buffer import Buffer
 
 
-def test_ipc_ptr_logic(rank: int, world_size: int, group: dist.ProcessGroup):
+def test_ipc_ptr_logic(
+    rank: int,
+    world_size: int,
+    local_rank: int,
+    local_world_size: int,
+    group: dist.ProcessGroup,
+):
     """Test IPC P2P pointer logic."""
 
     device_index = torch.cuda.current_device()
@@ -36,6 +42,13 @@ def test_ipc_ptr_logic(rank: int, world_size: int, group: dist.ProcessGroup):
     scratch_size = int(64e6)  # 64MB (smaller for testing)
     scratch_buffer = torch.empty(scratch_size, dtype=torch.uint8, device="cuda")
     scratch_ptr = scratch_buffer.data_ptr()
+    scratch_bytes = scratch_buffer.numel() * scratch_buffer.element_size()
+
+    rank2meta = get_cpu_proxies_meta(
+        rank, scratch_ptr, scratch_bytes, world_size, group
+    )
+    peers_meta_list = [rank2meta[r] for r in range(world_size)]
+    dist.barrier(group)
 
     print(
         f"[Rank {rank}] Buffer created at 0x{scratch_ptr:x}, size: {scratch_size / 1e6:.1f}MB"
@@ -49,8 +62,11 @@ def test_ipc_ptr_logic(rank: int, world_size: int, group: dist.ProcessGroup):
             gpu_buffer_addr=scratch_ptr,
             total_size=scratch_size,
             rank=rank,
+            node_idx=rank // local_world_size,
+            local_rank=local_rank,
             peer_ip=peer_ip,
         )
+        proxy.set_peers_meta(peers_meta_list)
         proxy.start_dual()
         proxies.append(proxy)
 
@@ -199,7 +215,7 @@ def main():
     rank, world_size, group = init_dist(local_rank, local_world_size)
 
     try:
-        test_ipc_ptr_logic(rank, world_size, group)
+        test_ipc_ptr_logic(rank, world_size, local_rank, local_world_size, group)
         print(f"\n[Rank {rank}] 🎉 ALL TESTS COMPLETED SUCCESSFULLY!")
     finally:
         dist.barrier()

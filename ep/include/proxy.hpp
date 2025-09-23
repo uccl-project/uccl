@@ -76,6 +76,7 @@ class Proxy {
   uint64_t completed_wr() const;
 
   void set_peers_meta(std::vector<PeerMeta> const& peers);
+  void set_bench_ring_addrs(std::vector<uintptr_t> const& addrs);
 
   CopyRingBuffer ring;
 

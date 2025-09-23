@@ -47,6 +47,19 @@ void Proxy::set_peers_meta(std::vector<PeerMeta> const& peers) {
   }
 }
 
+void Proxy::set_bench_ring_addrs(std::vector<uintptr_t> const& addrs) {
+  ring_tails_.clear();
+  ring_seen_.clear();
+  cfg_.ring_buffers.clear();
+
+  ring_tails_.resize(addrs.size(), 0);
+  ring_seen_.resize(addrs.size(), 0);
+  cfg_.ring_buffers.reserve(addrs.size());
+  for (auto addr : addrs) {
+    cfg_.ring_buffers.push_back(reinterpret_cast<DeviceToHostCmdBuffer*>(addr));
+  }
+}
+
 static inline int pair_tid_block(int a, int b, int N, int thread_idx) {
   int lo = std::min(a, b), hi = std::max(a, b);
   return thread_idx * (N * N) + lo * N + hi;
