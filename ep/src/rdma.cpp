@@ -668,6 +668,8 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         auto const& cmd = cmds_to_post[i];
 #ifdef USE_RECEIVER_BARRIER
         expert_wr_ids[j] = wrs_to_post[i];
+#else
+      wr_ids[j] = wrs_to_post[i];
 #endif
         qpx->wr_id = wrs_to_post[i];
         qpx->comp_mask = 0;
@@ -744,6 +746,24 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
           for (auto const& wr_id : it->second) {
             finished_wrs.insert(wr_id);
           }
+        }
+      }
+    }
+#else
+    uint64_t const tail_wr = wr_ids.back();
+    {
+      std::lock_guard<std::mutex> lock(finished_wrs_mutex);
+      auto [it, inserted] =
+          S.wr_id_to_wr_ids.try_emplace(tail_wr, std::move(wr_ids));
+      if (!inserted) {
+        fprintf(stderr,
+                "thread_idx: %d, Error: tail wr_id %lu already exists "
+                "(map=%p)\n",
+                thread_idx, tail_wr, (void*)&S.wr_id_to_wr_ids);
+        std::abort();
+      } else {
+        for (auto const& wr_id : it->second) {
+          finished_wrs.insert(wr_id);
         }
       }
     }
@@ -836,6 +856,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
 #endif
   }
 }
+
 void local_process_completions(ProxyCtx& S,
                                std::unordered_set<uint64_t>& finished_wrs,
                                std::unordered_set<uint64_t>& acked_wrs,
@@ -877,7 +898,7 @@ void local_process_completions(ProxyCtx& S,
             assert(false && "wr_id not found in write_struct map");
           }
         }
-#else
+#endif
         {
           std::lock_guard<std::mutex> lock(finished_wrs_mutex);
           uint64_t const wr_done = wc[i].wr_id;
@@ -886,7 +907,6 @@ void local_process_completions(ProxyCtx& S,
             S.wr_id_to_wr_ids.erase(wr_done);
           }
         }
-#endif
       } break;
       case IBV_WC_RECV:
         if (wc[i].wc_flags & IBV_WC_WITH_IMM &&
