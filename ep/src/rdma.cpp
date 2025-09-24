@@ -483,7 +483,7 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote) {
     attr.ah_attr.grh.hop_limit = 64;
     // Fill GID from remote_info
     memcpy(&attr.ah_attr.grh.dgid, remote->gid, 16);
-    attr.ah_attr.grh.sgid_index = 1;  // Assume GID index 0
+    attr.ah_attr.grh.sgid_index = 0;  // Assume GID index 0
   } else {
     attr.ah_attr.is_global = 0;
     attr.ah_attr.dlid = remote->lid;
@@ -633,6 +633,8 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
     }
   }
   for (auto& [dst_rank, wr_ids] : dst_rank_wr_ids) {
+    printf("Write posting to rank %d, num_wrs=%zu\n", dst_rank,
+           wr_ids.size());
     if (wr_ids.empty()) continue;
 
     ProxyCtx* ctx = ctxs[dst_rank].get();
@@ -770,7 +772,10 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
 #else
     std::vector<ibv_sge> sges(k);
     std::vector<ibv_send_wr> wrs(k);
+    size_t tail_i = 0;
+    uint64_t batch_tail_wr = 0;
     for (size_t j = 0; j < k; ++j) {
+      printf("posting wr %zu/%zu to rank %d\n", j + 1, k, dst_rank);
       size_t i = wr_ids[j];
       auto const& cmd = cmds_to_post[i];
       wr_ids[j] = wrs_to_post[i];
@@ -782,7 +787,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       std::memset(&wrs[j], 0, sizeof(wrs[j]));
       wrs[j].sg_list = &sges[j];
       wrs[j].num_sge = 1;
-      wrs[j].wr_id = wr_ids[j];
+      wrs[j].wr_id = wrs_to_post[i];
 
       wrs[j].wr.rdma.remote_addr = ctx->remote_addr + cmd.req_rptr;
 
@@ -808,16 +813,24 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       wrs[j].opcode = IBV_WR_RDMA_WRITE;
       wrs[j].send_flags = IBV_SEND_SIGNALED;
       wrs[j].next = (j + 1 < k) ? &wrs[j + 1] : nullptr;
+      wr_ids[j] = wrs_to_post[i];
+      if (j + 1 == k) {
+        tail_i        = i;
+        batch_tail_wr = wr_ids[j];
+      }
     }
-    size_t const last = k - 1;
-    uint64_t const batch_tail_wr = wr_ids[last];
-    wrs[last].send_flags = IBV_SEND_SIGNALED;
-    wrs[last].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-    auto const& cmd = cmds_to_post[wr_ids[last]];
-    uint32_t imm = WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
-                                  cmd.expert_idx, 1u, my_rank)
-                       .GetImmData();
-    wrs[last].imm_data = htonl(imm);
+    auto const& tail_cmd = cmds_to_post[tail_i];
+    wrs[k - 1].opcode  = IBV_WR_RDMA_WRITE_WITH_IMM;
+    wrs[k - 1].imm_data =
+        htonl(WriteImm::Pack(tail_cmd.is_combine,
+                            tail_cmd.low_latency_buffer_idx,
+                            tail_cmd.expert_idx,
+                            1u, my_rank).GetImmData());
+    printf("Posting RDMA_WRITE_WITH_IMM to rank %d (wr_id=%lu, imm=0x%x, remote_addr=0x%llx, length=%u)\n",
+          dst_rank, batch_tail_wr,
+          ntohl(wrs[k - 1].imm_data),
+          (unsigned long long)wrs[k - 1].wr.rdma.remote_addr,
+          sges[k - 1].length);
 
     ibv_send_wr* bad = nullptr;
     int ret = ibv_post_send(ctx->qp, &wrs[0], &bad);
@@ -974,7 +987,8 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
 #else
   ne = ibv_poll_cq(S.cq, kMaxOutstandingSends, wc);
 #endif
-  // printf("Poll CQ Dual thread %d polled %d completions\n", thread_idx, ne);
+  if (ne > 0)
+    printf("Poll CQ Dual thread %d polled %d completions\n", thread_idx, ne);
   local_process_completions(S, finished_wrs, acked_wrs, thread_idx, wc, ne,
                             ctx_by_tag);
   remote_process_completions(S, thread_idx, g_ring, ne, wc, ctx_by_tag,
@@ -1114,7 +1128,29 @@ void remote_process_completions(
       auto* addr32 =
           reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
       if (is_combine) value = 1;
+      printf("Applying atomic update: addr=%p, value=%d\n",
+             (void*)addr32, value);
       addr32->fetch_add(value, std::memory_order_release);
+#ifndef EFA
+      const uint32_t tag = wr_tag(cqe.wr_id);
+      ProxyCtx& S_atomic = *ctx_by_tag[tag];
+      ibv_sge sge = {
+          .addr = reinterpret_cast<uintptr_t>(S_atomic.mr->addr),
+          .length = 1,
+          .lkey = S_atomic.mr->lkey,
+      };
+      ibv_recv_wr rwr = {};
+      S.pool_index = (S.pool_index + 1) % (kRemoteBufferSize / kObjectSize - 1);
+      rwr.wr_id = make_wr_id(wr_tag(cqe.wr_id), S.pool_index);
+      rwr.sg_list = &sge;
+      rwr.num_sge = 1;
+      ibv_recv_wr* bad = nullptr;
+      if (ibv_post_recv(S_atomic.qp, &rwr, &bad)) {
+        perror("ibv_post_recv (atomics replenish)");
+        std::abort();
+      }
+      continue;
+#endif
     }
 #endif
     if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
@@ -1135,6 +1171,25 @@ void remote_process_completions(
         assert(expert_idx >= src_rank * (num_experts / num_ranks) &&
                expert_idx < (src_rank + 1) * (num_experts / num_ranks));
         S.combine_token_counter.Add({buffer_idx, expert_idx}, k);
+      }
+#endif
+#ifndef EFA
+      const uint32_t tag = wr_tag(cqe.wr_id);
+      ProxyCtx& S_ack = *ctx_by_tag[tag];
+      ibv_sge sge = {
+          .addr = reinterpret_cast<uintptr_t>(&S_ack.ack_recv_buf[0]),
+          .length = sizeof(uint64_t),
+          .lkey = S_ack.ack_recv_mr->lkey,
+      };
+      ibv_recv_wr rwr{};
+      S.pool_index = (S.pool_index + 1) % (kRemoteBufferSize / kObjectSize - 1);
+      rwr.wr_id = make_wr_id(wr_tag(cqe.wr_id), S.pool_index);
+      rwr.sg_list = &sge;
+      rwr.num_sge = 1;
+      ibv_recv_wr* bad = nullptr;
+      if (ibv_post_recv(S_ack.qp, &rwr, &bad)) {
+        perror("ibv_post_recv (imm replenish)");
+        std::abort();
       }
 #endif
     }
@@ -1310,6 +1365,8 @@ void post_atomic_operations(ProxyCtx& S,
   }
 
   for (auto& [dst_rank, wr_ids] : dst_rank_wr_ids) {
+    printf("Thread %d posting %zu atomic ops to rank %d\n",
+           thread_idx, wr_ids.size(), dst_rank);
     if (wr_ids.empty()) continue;
 
     ProxyCtx* ctx = ctxs[dst_rank].get();
@@ -1372,9 +1429,8 @@ void post_atomic_operations(ProxyCtx& S,
       }
       uint32_t const off16 = static_cast<uint32_t>(cmd.req_rptr) & 0xFFFFu;
       int low_latency_buffer_idx = cmd.low_latency_buffer_idx;
-      uint32_t const imm = AtomicsImm::Pack(true, cmd.is_combine, v, off16,
-                                            low_latency_buffer_idx)
-                               .GetImmData();
+      uint32_t const imm =
+          AtomicsImm::Pack(true, cmd.is_combine, v, off16, low_latency_buffer_idx).GetImmData();
       sge[i].addr = reinterpret_cast<uintptr_t>(ctx->mr->addr);
       sge[i].length = 0;
       sge[i].lkey = ctx->mr->lkey;
@@ -1404,6 +1460,8 @@ void post_atomic_operations(ProxyCtx& S,
     }
 #endif
     uint64_t const batch_tail_wr = wr_ids.back();
+    printf("Thread %d posted %zu atomic ops to rank %d, tail wr_id=%lu\n",
+           thread_idx, k, dst_rank, batch_tail_wr);
     {
       auto [it, inserted] =
           S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
