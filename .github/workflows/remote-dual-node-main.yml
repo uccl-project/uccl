@@ -98,13 +98,26 @@ jobs:
               source \$HOME/miniconda3/etc/profile.d/conda.sh
               conda activate uccl
 
-              # Make sure deps are present
+              # Ensure deps
               pip install -q pybind11
               pip install -q torch --index-url https://download.pytorch.org/whl/cu124
 
               cd /home/yangzhou_ucberkeley/uccl-test/ep
               make clean || true
               make -j install 2>&1 | tee build.log
+              status=\${PIPESTATUS[0]}
+
+              if [ \$status -ne 0 ]; then
+                echo '❌ make failed'
+                exit \$status
+              fi
+
+              if ! grep -q 'Installation complete. Modules installed as:' build.log; then
+                echo '❌ Build did not complete successfully (marker missing)'
+                exit 1
+              fi
+
+              echo '✅ Build completed and installation marker found'
             "' | tee "logs/${H}_build.log"
           }
 
