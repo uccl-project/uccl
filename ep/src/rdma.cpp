@@ -138,14 +138,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     // Collect all NICs with equal minimum distance
     std::vector<std::string> candidates;
     for (auto& p : dist) {
-      if (p.second == min_d) {
-        if (p.first.find("bond") != std::string::npos) {
-          fprintf(stderr, "[INFO] Skipping RoCE NIC candidate: %s\n",
-                  p.first.c_str());
-          continue;
-        }
-        candidates.push_back(p.first);
-      }
+      if (p.second == min_d) candidates.push_back(p.first);
     }
 
     if (candidates.empty()) {
@@ -490,7 +483,7 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote) {
     attr.ah_attr.grh.hop_limit = 64;
     // Fill GID from remote_info
     memcpy(&attr.ah_attr.grh.dgid, remote->gid, 16);
-    attr.ah_attr.grh.sgid_index = 0;  // Assume GID index 0
+    attr.ah_attr.grh.sgid_index = 1;  // Assume GID index 1
   } else {
     attr.ah_attr.is_global = 0;
     attr.ah_attr.dlid = remote->lid;
@@ -790,7 +783,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       std::memset(&wrs[j], 0, sizeof(wrs[j]));
       wrs[j].sg_list = &sges[j];
       wrs[j].num_sge = 1;
-      wrs[j].wr_id = wr_ids[i];
+      wrs[j].wr_id = wr_ids[j];
 
       wrs[j].wr.rdma.remote_addr = ctx->remote_addr + cmd.req_rptr;
 
