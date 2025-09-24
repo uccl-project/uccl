@@ -788,13 +788,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
     wrs[last].send_flags |= IBV_SEND_SIGNALED;
     wrs[last].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
     wrs[last].imm_data = htonl(static_cast<uint32_t>(batch_tail_wr));
-
-    printf(
-        "Posting RDMA_WRITE_WITH_IMM to rank %d (wr_id=%lu, imm=0x%x, "
-        "remote_addr=0x%llx, length=%u), wr_ids.size: %zu\n",
-        dst_rank, batch_tail_wr, ntohl(wrs[last].imm_data),
-        (unsigned long long)wrs[last].wr.rdma.remote_addr, sges[last].length,
-        wr_ids.size());
     ibv_send_wr* bad = nullptr;
     int ret = ibv_post_send(ctx->qp, &wrs[0], &bad);
     if (ret) {
@@ -974,8 +967,6 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
 #else
   ne = ibv_poll_cq(S.cq, kMaxOutstandingSends, wc);
 #endif
-  if (ne > 0)
-    printf("Poll CQ Dual thread %d polled %d completions\n", thread_idx, ne);
   local_process_completions(S, finished_wrs, acked_wrs, thread_idx, wc, ne,
                             ctx_by_tag);
   remote_process_completions(S, thread_idx, g_ring, ne, wc, ctx_by_tag,
@@ -1350,8 +1341,6 @@ void post_atomic_operations(ProxyCtx& S,
   }
 
   for (auto& [dst_rank, wr_ids] : dst_rank_wr_ids) {
-    printf("Thread %d posting %zu atomic ops to rank %d\n", thread_idx,
-           wr_ids.size(), dst_rank);
     if (wr_ids.empty()) continue;
 
     ProxyCtx* ctx = ctxs[dst_rank].get();
@@ -1446,8 +1435,6 @@ void post_atomic_operations(ProxyCtx& S,
     }
 #endif
     uint64_t const batch_tail_wr = wr_ids.back();
-    printf("Thread %d posted %zu atomic ops to rank %d, tail wr_id=%lu\n",
-           thread_idx, k, dst_rank, batch_tail_wr);
     {
       auto [it, inserted] =
           S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
