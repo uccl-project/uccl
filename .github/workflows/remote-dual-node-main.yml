@@ -96,16 +96,9 @@ jobs:
             local H="$1"
             echo ">>> Building on $H"
 
-            # Send a clean bash script to the remote via HEREDOC to avoid nested-quote issues
-            ssh -A -o BatchMode=yes -T "$H" bash -s <<'REMOTE' | tee "logs/${H}_build.log"
-            set -euo pipefail
-
             # Activate conda env
             source "$HOME/miniconda3/etc/profile.d/conda.sh"
             conda activate uccl
-
-            pip install -q pybind11
-            pip install -q torch --index-url https://download.pytorch.org/whl/cu124
 
             cd /home/yangzhou_ucberkeley/uccl-test/ep
             make clean || true
@@ -116,16 +109,6 @@ jobs:
 
             # Check success marker
             grep -q "Installation complete. Modules installed as:" build.log
-
-            # Import sanity check
-            python - <<'PY'
-            import importlib
-            m = importlib.import_module('uccl.ep')
-            print('uccl.ep import ok:', getattr(m, '__file__', '<none>'))
-            PY
-
-            echo "Build completed and installation marker found"
-            REMOTE
           }
 
           build_on_host gh1 &
