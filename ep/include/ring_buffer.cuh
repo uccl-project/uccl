@@ -23,7 +23,6 @@ struct TransferCmd {
   void* src_ptr;      // device pointer to data
   uint64_t bytes;     // transfer size
 
-  // TODO(MaoZiming): Put the DeepEP fields here. Refactor.
   uint64_t req_rptr;
   uint64_t req_lptr;
   int warp_id;
@@ -33,7 +32,6 @@ struct TransferCmd {
   bool is_atomic;
   int value;
   bool is_combine;
-
   int low_latency_buffer_idx;
 };
 

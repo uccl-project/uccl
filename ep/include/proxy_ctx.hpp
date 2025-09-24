@@ -25,6 +25,13 @@ class TokenCounter {
 using DispatchTokenKey = std::tuple<int, int, int>;
 using CombineTokenKey = std::pair<int, int>;
 
+struct WriteStruct {
+  int expert_idx;
+  int dst_rank;
+  bool is_combine;
+  int low_latency_buffer_idx;
+};
+
 struct ProxyCtx {
   // RDMA objects
   ibv_context* context = nullptr;
@@ -56,7 +63,6 @@ struct ProxyCtx {
       1024;  // Maximum concurrent atomic operations
 
   // Progress/accounting
-  std::atomic<uint64_t> posted{0};
   std::atomic<uint64_t> completed{0};
   std::atomic<bool> progress_run{true};
 
@@ -79,4 +85,9 @@ struct ProxyCtx {
 
   TokenCounter<DispatchTokenKey> dispatch_token_counter;
   TokenCounter<CombineTokenKey> combine_token_counter;
+
+  /* low_latency_buffer_idx, expert_idx, dst_rank */
+  std::unordered_map<uint64_t, WriteStruct> wr_id_to_write_struct;
+  TokenCounter<DispatchTokenKey> dispatch_sent_counter;
+  TokenCounter<DispatchTokenKey> combine_sent_counter;
 };
