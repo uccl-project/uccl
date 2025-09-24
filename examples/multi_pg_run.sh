@@ -39,7 +39,7 @@ if [ "$BACKEND" = "uccl" ]; then
 
     export GLOG_v=0
     export LD_LIBRARY_PATH="${CONDA_LIB_HOME}:${LD_LIBRARY_PATH}"
-    export NCCL_NET_PLUGIN="${UCCL_HOME}/rdma/librccl-net-uccl.so"
+    export NCCL_NET_PLUGIN="${UCCL_HOME}/collective/rdma/librccl-net-uccl.so"
     export UCCL_NUM_ENGINES=4
     export UCCL_PORT_ENTROPY=8
     export UCCL_CHUNK_SIZE_KB=128

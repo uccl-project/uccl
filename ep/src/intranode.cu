@@ -516,6 +516,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
       }
 
 // Copy `src_idx`
+// Support NC
 #pragma unroll 4
       for (int chunk_idx = cached_channel_head_idx + recv_thread_id_in_rank;
            chunk_idx < cached_channel_tail_idx;
@@ -535,6 +536,8 @@ __global__ void __launch_bounds__(kNumThreads, 1)
             static_cast<int64_t>(total_offset + chunk_idx) * num_topk +
             token_topk_idx;
         auto buffer_idx = token_idx_in_buffer * num_topk + token_topk_idx;
+
+        // Actual read
         recv_topk_idx[recv_idx] =
             ld_nc_global(channel_topk_idx_buffers.buffer() + buffer_idx);
         recv_topk_weights[recv_idx] =

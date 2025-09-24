@@ -26,6 +26,7 @@ from typing import Optional
 from buffer import Buffer
 from utils import (
     init_dist,
+    init_dist_under_torchrun,
     bench,
     bench_kineto,
     calc_diff,
@@ -396,7 +397,7 @@ def test_main(
 
 # noinspection PyUnboundLocalVariable,PyShadowingNames
 def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
-    rank, num_ranks, group = init_dist(local_rank, num_local_ranks)
+    rank, num_ranks, group = init_dist_under_torchrun(local_rank, num_local_ranks)
     num_tokens, hidden = args.num_tokens, args.hidden
     num_topk, num_experts = args.num_topk, args.num_experts
     num_rdma_bytes = Buffer.get_low_latency_rdma_size_hint(
@@ -408,8 +409,8 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     scratch = torch.zeros(
         num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
     )
-    proxies, workers, bench = initialize_uccl(
-        scratch, num_rdma_bytes, rank, num_ranks, group
+    proxies, workers = initialize_uccl(
+        scratch, num_rdma_bytes, rank, num_ranks, group, args.num_experts
     )
 
     buffer = Buffer(
@@ -481,7 +482,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     group.barrier()
     buffer.destroy()
     dist.barrier()
-    destroy_uccl(proxies, workers, bench)
+    destroy_uccl(proxies, workers)
     dist.barrier()
     dist.destroy_process_group()
 
@@ -494,9 +495,6 @@ if __name__ == "__main__":
     if ib_dev and ib_dev.startswith("mlx"):  # Mellanox IB devices show up like mlx5_0
         os.environ["NCCL_IB_HCA"] = ib_dev
         print(f"Set NCCL_IB_HCA={ib_dev}")
-    else:
-        print(f"Skipping NCCL_IB_HCA export (detected {ib_dev})")
-
     parser = argparse.ArgumentParser(description="Test low-latency EP kernels")
     parser.add_argument(
         "--num-processes",

@@ -22,6 +22,7 @@ void sync_and_post(PeerWorkerCtx& ctx, CopyRingBuffer& ring,
 void peer_copy_worker(PeerCopyShared& shared, PeerWorkerCtx& ctx,
                       CopyRingBuffer& ring, int idx) {
   pin_thread_to_cpu(idx + 1 + MAIN_THREAD_CPU_IDX);
+  // TODO(MaoZiming): improves pinning.
   printf("Peer copy worker %d started on CPU core %d\n", idx + 1,
          sched_getcpu());
   gpuStream_t stream;

@@ -2,7 +2,7 @@ import os
 
 try:
     from . import _rocm_init
-except ModuleNotFoundError:
+except ImportError:
     pass
 else:
     _rocm_init.initialize()

@@ -44,18 +44,23 @@ def hash_tensor(t: torch.Tensor):
 
 
 def init_dist(local_rank: int, num_local_ranks: int):
+    # Set device
+    device_index = int(os.environ.get("LOCAL_RANK", 0))
+    torch.cuda.set_device(device_index)
+    torch.set_default_device(f"cuda:{device_index}")
+
     # NOTES: you may rewrite this function with your own cluster settings
     ip = os.getenv("MASTER_ADDR", "127.0.0.1")
     port = int(os.getenv("MASTER_PORT", "8361"))
-    num_nodes = int(os.getenv("WORLD_SIZE", 1))
+    world_size = int(os.getenv("WORLD_SIZE", 1))
     node_rank = int(os.getenv("RANK", 0))
 
     sig = inspect.signature(dist.init_process_group)
     params = {
         "backend": "nccl",
         "init_method": f"tcp://{ip}:{port}",
-        "world_size": num_nodes * num_local_ranks,
-        "rank": node_rank * num_local_ranks + local_rank,
+        "world_size": world_size,
+        "rank": node_rank,
     }
     print(params)
     if "device_id" in sig.parameters:
@@ -63,22 +68,21 @@ def init_dist(local_rank: int, num_local_ranks: int):
         params["device_id"] = torch.device(f"cuda:{local_rank}")
     dist.init_process_group(**params)
     torch.set_default_dtype(torch.bfloat16)
-    torch.set_default_device("cuda")
-    torch.cuda.set_device(local_rank)
-
     return (
         dist.get_rank(),
         dist.get_world_size(),
-        dist.new_group(list(range(num_local_ranks * num_nodes))),
+        dist.new_group(list(range(world_size))),
     )
 
 
 def init_dist_under_torchrun(local_rank: int, num_local_ranks: int):
     # torchrun already sets RANK, WORLD_SIZE, MASTER_ADDR, MASTER_PORT
-    dist.init_process_group(backend="nccl")
+    dist.init_process_group(
+        backend="nccl", device_id=torch.device(f"cuda:{local_rank}")
+    )
 
     torch.set_default_dtype(torch.bfloat16)
-    torch.set_default_device("cuda")
+    torch.set_default_device(f"cuda:{local_rank}")
     torch.cuda.set_device(local_rank)
 
     return (
@@ -132,8 +136,9 @@ def get_cpu_proxies_meta(rank, scratch_ptr, scratch_bytes, num_ranks, group):
         "ip": _discover_local_ip(),
     }
     all_meta = [None] * num_ranks
-    dist.all_gather_object(all_meta, meta)
-    dist.barrier(group)
+    device_index = int(os.environ.get("LOCAL_RANK", 0))
+    torch.cuda.set_device(device_index)
+    dist.all_gather_object(all_meta, meta, group=group)
     rank2meta = {m["rank"]: m for m in all_meta}
     return rank2meta
 
@@ -314,7 +319,10 @@ class suppress_stdout_stderr:
 def bench(fn, num_warmups: int = 50, num_tests: int = 50, post_fn=None):
     # Flush L2 cache with 256 MB data
     torch.cuda.synchronize()
-    cache = torch.empty(int(256e6 // 4), dtype=torch.int, device="cuda")
+    current_device = torch.cuda.current_device()
+    cache = torch.empty(
+        int(256e6 // 4), dtype=torch.int, device=f"cuda:{current_device}"
+    )
 
     # Warmup
     for _ in range(num_warmups):
@@ -360,12 +368,22 @@ def bench_kineto(
             for i in range(2):
                 # NOTES: use a large kernel and a barrier to eliminate the unbalanced CPU launch overhead
                 if barrier_comm_profiling:
-                    lhs = torch.randn((8192, 8192), dtype=torch.float, device="cuda")
-                    rhs = torch.randn((8192, 8192), dtype=torch.float, device="cuda")
+                    current_device = torch.cuda.current_device()
+                    lhs = torch.randn(
+                        (8192, 8192), dtype=torch.float, device=f"cuda:{current_device}"
+                    )
+                    rhs = torch.randn(
+                        (8192, 8192), dtype=torch.float, device=f"cuda:{current_device}"
+                    )
                     lhs @ rhs
-                    dist.all_reduce(torch.ones(1, dtype=torch.float, device="cuda"))
+                    dist.all_reduce(
+                        torch.ones(
+                            1, dtype=torch.float, device=f"cuda:{current_device}"
+                        )
+                    )
                 for _ in range(num_tests):
                     fn()
+                torch.cuda.synchronize()
                 prof.step()
 
     # Parse the profiling table
@@ -427,59 +445,63 @@ def bench_kineto(
     return kernel_durations if is_tuple else kernel_durations[0]
 
 
-def initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group):
+def initialize_uccl(
+    scratch, scratch_nbytes, rank, num_ranks, group, num_experts=0, is_intranode=False
+):
 
-    device_index = int(os.environ["LOCAL_RANK"])
-    peer_ip = get_peer_ip(rank, num_ranks, group)
-    if rank == 0:
-        print(
-            f"Peer IP: {peer_ip}",
-            flush=True,
-        )
+    local_rank = int(os.environ["LOCAL_RANK"])
+    nproc_per_node = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
+    node_idx = rank // nproc_per_node
 
-    bench = ep.Bench()
+    if int(os.environ.get("WORLD_SIZE")) % nproc_per_node != 0:
+        raise ValueError("WORLD_SIZE must be divisible by LOCAL_WORLD_SIZE")
+
     proxies = []
     scratch_ptr = scratch.data_ptr()
     rank2meta = get_cpu_proxies_meta(
         rank, scratch_ptr, scratch_nbytes, num_ranks, group
     )
     peers_meta_list = [rank2meta[r] for r in range(num_ranks)]
+    peer_ip = rank2meta[(rank + 1) % num_ranks]["ip"]
 
-    for i in range(bench.num_proxies()):
+    for i in range(ep.get_num_proxy_threads()):
         proxy = ep.Proxy(
-            rb_addr=bench.ring_addr(i),
-            block_idx=i,
+            thread_idx=i,
             gpu_buffer_addr=scratch_ptr,
             total_size=scratch_nbytes,
             rank=rank,
-            peer_ip=peer_ip,
+            node_idx=node_idx,
+            local_rank=local_rank,
+            peer_ip="" if is_intranode else peer_ip,
+            num_experts=num_experts,
+            num_ranks=num_ranks,
         )
-        proxy.set_peers_meta(peers_meta_list)
+        if not is_intranode:
+            proxy.set_peers_meta(peers_meta_list)
         proxies.append(proxy)
-    ep.register_proxies(device_index, proxies)
+    ep.register_proxies(local_rank, proxies)
 
     dist.barrier(group)
-    for i in range(bench.num_proxies()):
-        proxies[i].start_dual()
+    if not is_intranode:
+        for proxy in proxies:
+            proxy.start_dual()
 
     workers = None
-    if hasattr(ep, "PeerCopyManager"):
-        try:
-            workers = ep.PeerCopyManager(src_device=device_index)
-            workers.start_for_proxies(proxies)
-            if rank == 0:
-                print("✓ PeerCopyManager started", flush=True)
-        except Exception as e:
-            if rank == 0:
-                print(f"PeerCopyManager unavailable: {e}", flush=True)
+    # if hasattr(ep, "PeerCopyManager"):
+    #     try:
+    #         workers = ep.PeerCopyManager(src_device=local_rank)
+    #         workers.start_for_proxies(proxies)
+    #         if rank == 0:
+    #             print("✓ PeerCopyManager started", flush=True)
+    #     except Exception as e:
+    #         if rank == 0:
+    #             print(f"PeerCopyManager unavailable: {e}", flush=True)
 
-    time.sleep(1)
+    time.sleep(3)
+    return proxies, workers
 
-    return proxies, workers, bench
 
-
-def destroy_uccl(proxies, workers, bench):
-
+def destroy_uccl(proxies, workers):
     device_index = int(os.environ["LOCAL_RANK"])
     if workers is not None:
         try:
@@ -492,13 +514,11 @@ def destroy_uccl(proxies, workers, bench):
             p.stop()
     except Exception:
         pass
-
-    print("✓ Proxy stopped", flush=True)
     try:
         ep.unregister_proxy(device_index)
     except Exception:
         pass
-    print("✓ Proxy unregistered", flush=True)
+    print("✓ UCCL destroyed", flush=True)
 
 
 def per_token_cast_to_fp8(x: torch.Tensor):

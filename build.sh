@@ -7,7 +7,7 @@ set -e
 # a purpose-built Docker image derived from Ubuntu 22.04.
 #
 # Usage:
-#   ./build.sh [cuda|rocm] [all|rdma|p2p|efa|ep] [py_version]
+#   ./build.sh [cuda|rocm|therock] [all|rdma|p2p|efa|ep] [py_version] [rocm_index_url]
 #
 # The wheels are written to wheelhouse-[cuda|rocm|therock]
 # -----------------------
@@ -16,14 +16,16 @@ TARGET=${1:-cuda}
 BUILD_TYPE=${2:-all}
 PY_VER=${3:-$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")}
 ARCH="$(uname -m)"
-GFX_VER=${4:-gfx94X-dcgpu}
+ROCM_IDX_URL=${4:-https://rocm.nightlies.amd.com/v2/gfx94X-dcgpu}
 IS_EFA=$(ls /sys/class/infiniband/ | grep rdmap || true)
 
-if [[ $TARGET != "cuda" && $TARGET != "rocm" && $TARGET != "therock" ]]; then
-  echo "Usage: $0 [cuda|rocm|therock] [all|rdma|p2p|efa|ep] [py_version] [gfx_version]" >&2
+
+if [[ $TARGET != cuda* && $TARGET != rocm* && $TARGET != "therock" ]]; then
+  echo "Usage: $0 [cuda|rocm|therock] [all|rdma|p2p|efa|ep|eccl] [py_version] [rocm_index_url]" >&2
+
 fi
 
-if [[ $ARCH == "aarch64" && ( $TARGET == "rocm" || $TARGET == "therock" ) ]]; then
+if [[ $ARCH == "aarch64" && ( $TARGET == rocm* || $TARGET == "therock" ) ]]; then
   echo "Skipping ROCm build on Arm64 (no ROCm toolchain)."
   exit 1
 fi
@@ -53,16 +55,16 @@ build_rdma() {
   set -euo pipefail
   echo "[container] build_rdma Target: $TARGET"
   
-  if [[ "$TARGET" == "cuda" ]]; then
-    cd rdma && make clean && make -j$(nproc) && cd ..
-    TARGET_SO=rdma/libnccl-net-uccl.so
-  elif [[ "$TARGET" == "rocm" ]]; then
+  if [[ "$TARGET" == cuda* ]]; then
+    cd collective/rdma && make clean && make -j$(nproc) && cd ../../
+    TARGET_SO=collective/rdma/libnccl-net-uccl.so
+  elif [[ "$TARGET" == rocm* ]]; then
     if [[ "$ARCH" == "aarch64" ]]; then
       echo "Skipping ROCm build on Arm64 (no ROCm toolchain)."
       return
     fi
-    cd rdma && make clean -f MakefileHip && make -j$(nproc) -f MakefileHip && cd ..
-    TARGET_SO=rdma/librccl-net-uccl.so
+    cd collective/rdma && make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm && cd ../../
+    TARGET_SO=collective/rdma/librccl-net-uccl.so
   elif [[ "$TARGET" == "therock" ]]; then
     if [[ "$ARCH" == "aarch64" ]]; then
       echo "Skipping ROCm build on Arm64 (no ROCm toolchain)."
@@ -75,8 +77,8 @@ build_rdma() {
       CXX=hipcc cmake -B build/release -S . -DCMAKE_EXPORT_COMPILE_COMMANDS=OFF -DCMAKE_PREFIX_PATH=$(rocm-sdk path --cmake) -DROCM_PATH=$(rocm-sdk path --root) -DHIP_PLATFORM=amd >/dev/null 2>&1 || true
       cd ../..
     fi
-    cd rdma && make clean -f MakefileHip.therock && make -j$(nproc) -f MakefileHip.therock HIP_HOME=$(rocm-sdk path --root) CONDA_LIB_HOME=$VIRTUAL_ENV/lib && cd ..
-    TARGET_SO=rdma/librccl-net-uccl.so
+    cd collective/rdma && make clean -f Makefile.therock && make -j$(nproc) -f Makefile.therock HIP_HOME=$(rocm-sdk path --root) CONDA_LIB_HOME=$VIRTUAL_ENV/lib && cd ../../
+    TARGET_SO=collective/rdma/librccl-net-uccl.so
   fi
 
   echo "[container] Copying RDMA .so to uccl/lib/"
@@ -92,11 +94,11 @@ build_efa() {
   set -euo pipefail
   echo "[container] build_efa Target: $TARGET"
 
-  if [[ "$ARCH" == "aarch64" || "$TARGET" == "rocm" || "$TARGET" == "therock" ]]; then
+  if [[ "$ARCH" == "aarch64" || "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
     echo "Skipping EFA build on Arm64 (no EFA installer) or ROCm (no CUDA)."
     return
   fi
-  cd efa && make clean && make -j$(nproc) && cd ..
+  cd collective/efa && make clean && make -j$(nproc) && cd ../../
 
   # EFA requires a custom NCCL.
   cd thirdparty/nccl-sg
@@ -105,7 +107,7 @@ build_efa() {
 
   echo "[container] Copying EFA .so to uccl/lib/"
   mkdir -p uccl/lib
-  cp efa/libnccl-net-efa.so uccl/lib/
+  cp collective/efa/libnccl-net-efa.so uccl/lib/
   cp thirdparty/nccl-sg/build/lib/libnccl.so uccl/lib/libnccl-efa.so
 }
 
@@ -118,12 +120,12 @@ build_p2p() {
   echo "[container] build_p2p Target: $TARGET"
 
   cd p2p
-  if [[ "$TARGET" == "cuda" ]]; then
+  if [[ "$TARGET" == cuda* ]]; then
     make clean && make -j$(nproc)
-  elif [[ "$TARGET" == "rocm" ]]; then
-    make clean -f MakefileHip && make -j$(nproc) -f MakefileHip
+  elif [[ "$TARGET" == rocm* ]]; then
+    make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm
   elif [[ "$TARGET" == "therock" ]]; then
-    make clean -f MakefileHip.therock && make -j$(nproc) -f MakefileHip.therock HIP_HOME=$(rocm-sdk path --root) CONDA_LIB_HOME=$VIRTUAL_ENV/lib
+    make clean -f Makefile.therock && make -j$(nproc) -f Makefile.therock HIP_HOME=$(rocm-sdk path --root) CONDA_LIB_HOME=$VIRTUAL_ENV/lib
   fi
   cd ..
 
@@ -144,7 +146,7 @@ build_ep() {
   set -euo pipefail
   echo "[container] build_ep Target: $TARGET"
 
-  if [[ "$TARGET" == "rocm" || "$TARGET" == "therock" ]]; then
+  if [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
     echo "Skipping GPU-driven build on ROCm (no GPU-driven support yet)."
     return
   fi
@@ -156,8 +158,43 @@ build_ep() {
   cp ep/*.so uccl/
 }
 
+build_eccl() {
+  local TARGET="$1"
+  local ARCH="$2"
+  local IS_EFA="$3"
+
+  set -euo pipefail
+  echo "[container] build_eccl Target: $TARGET"
+
+  cd eccl
+  if [[ "$TARGET" == cuda* ]]; then
+    echo "Skipping eccl build on Cuda."
+    return
+  elif [[ "$TARGET" == rocm* ]]; then
+    make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm
+  fi
+  cd ..
+
+  echo "[container] Copying eccl .so to uccl/"
+  # mkdir -p uccl/lib
+  # cp eccl/eccl.*.so uccl/
+}
+
 # Determine the Docker image to use based on the target and architecture
 if [[ $TARGET == "cuda" ]]; then
+  # default is cuda 12 from `nvidia/cuda:12.3.2-devel-ubuntu22.04`/`nvidia/cuda:12.4.1-devel-ubuntu22.04`
+  if [[ "$ARCH" == "aarch64" ]]; then
+    DOCKERFILE="docker/Dockerfile.gh"
+    IMAGE_NAME="uccl-builder-gh"
+  elif [[ -n "$IS_EFA" ]]; then
+    DOCKERFILE="docker/Dockerfile.efa"
+    IMAGE_NAME="uccl-builder-efa"
+  else
+    DOCKERFILE="docker/Dockerfile.cuda"
+    IMAGE_NAME="uccl-builder-cuda"
+  fi
+elif [[ $TARGET == "cuda13" ]]; then
+  BASE_IMAGE="nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04"
   if [[ "$ARCH" == "aarch64" ]]; then
     DOCKERFILE="docker/Dockerfile.gh"
     IMAGE_NAME="uccl-builder-gh"
@@ -169,7 +206,12 @@ if [[ $TARGET == "cuda" ]]; then
     IMAGE_NAME="uccl-builder-cuda"
   fi
 elif [[ $TARGET == "rocm" ]]; then
+  # default is latest rocm version from `rocm/dev-ubuntu-22.04`
   DOCKERFILE="docker/Dockerfile.rocm"
+  IMAGE_NAME="uccl-builder-rocm"
+elif [[ $TARGET == "rocm6" ]]; then
+  DOCKERFILE="docker/Dockerfile.rocm"
+  BASE_IMAGE="rocm/dev-ubuntu-22.04:6.4.3-complete"
   IMAGE_NAME="uccl-builder-rocm"
 elif [[ $TARGET == "therock" ]]; then
   DOCKERFILE="docker/Dockerfile.therock"
@@ -180,12 +222,16 @@ fi
 echo "[1/3] Building Docker image ${IMAGE_NAME} using ${DOCKERFILE}..."
 echo "Python version: ${PY_VER}"
 if [[ "$TARGET" == "therock" ]]; then
-  echo "GFX version: ${GFX_VER}"
+  echo "ROCm index URL: ${ROCM_IDX_URL}"
+fi
+BUILD_ARGS="--build-arg PY_VER=${PY_VER}"
+if [[ -n "${BASE_IMAGE:-}" ]]; then
+  BUILD_ARGS+=" --build-arg BASE_IMAGE=${BASE_IMAGE}"
 fi
 if [[ "$ARCH" == "aarch64" ]]; then
-  docker build --platform=linux/arm64 --build-arg PY_VER="${PY_VER}" -t "$IMAGE_NAME" -f "$DOCKERFILE" .
+  docker build --platform=linux/arm64 $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
 else
-  docker build --build-arg PY_VER="${PY_VER}" -t "$IMAGE_NAME" -f "$DOCKERFILE" .
+  docker build $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
 fi
 
 echo "[2/3] Running build inside container..."
@@ -196,11 +242,11 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -v "$(pwd)":/io \
   -e TARGET="${TARGET}" \
   -e ARCH="${ARCH}" \
-  -e GFX_VER="${GFX_VER}" \
+  -e ROCM_IDX_URL="${ROCM_IDX_URL}" \
   -e IS_EFA="${IS_EFA}" \
   -e WHEEL_DIR="${WHEEL_DIR}" \
   -e BUILD_TYPE="${BUILD_TYPE}" \
-  -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_rdma build_efa build_p2p build_ep)" \
+  -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_rdma build_efa build_p2p build_ep build_eccl)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
     set -euo pipefail
@@ -210,12 +256,12 @@ docker run --rm --user "$(id -u):$(id -g)" \
       python3 -m venv /tmp/venv && . /tmp/venv/bin/activate
       pip3 install --no-cache-dir --upgrade pip
       pip3 install --no-cache-dir build auditwheel pybind11
-      pip3 install --no-cache-dir rocm[libraries,devel] --index-url https://rocm.nightlies.amd.com/v2/${GFX_VER}
+      pip3 install --no-cache-dir rocm[libraries,devel] --index-url ${ROCM_IDX_URL}
     fi
 
     eval "$FUNCTION_DEF"
 
-    if [[ "$TARGET" == "rocm" ]]; then
+    if [[ "$TARGET" == rocm* ]]; then
       build_rccl_nccl_h
     fi
 
@@ -227,11 +273,14 @@ docker run --rm --user "$(id -u):$(id -g)" \
       build_p2p "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "ep" ]]; then
       build_ep "$TARGET" "$ARCH" "$IS_EFA"
+    elif [[ "$BUILD_TYPE" == "eccl" ]]; then
+      build_eccl "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "all" ]]; then
       build_rdma "$TARGET" "$ARCH" "$IS_EFA"
       build_efa "$TARGET" "$ARCH" "$IS_EFA"
       build_p2p "$TARGET" "$ARCH" "$IS_EFA"
       # build_ep "$TARGET" "$ARCH" "$IS_EFA"
+      # build_eccl "$TARGET" "$ARCH" "$IS_EFA"
     fi
 
     ls -lh uccl/
@@ -259,17 +308,25 @@ def initialize():
   check_version=\"$(rocm-sdk version)\")
 " > uccl/_rocm_init.py
 
-      # Emit UCCL package dependence on TheRock
+      # Back-up setup.py and emit UCCL package dependence on TheRock
+      BACKUP_FN=$(mktemp -p . -t setup.py.XXXXXX)
+      cp ./setup.py ${BACKUP_FN}
       sed -i "s/\"rocm\": \[\],/\"rocm\": \[\"rocm\[libraries\]==$(rocm-sdk version)\"\]/;" setup.py
 
-      export PIP_EXTRA_INDEX_URL=https://rocm.nightlies.amd.com/v2/${GFX_VER}
+      export PIP_EXTRA_INDEX_URL=${ROCM_IDX_URL}
     fi
 
     python3 -m build
+
+    if [[ "$TARGET" == "therock" ]]; then
+      # Undo UCCL package dependence on TheRock wheels after the build is done
+      mv ${BACKUP_FN} setup.py
+    fi
+
     auditwheel repair dist/uccl-*.whl --exclude "libtorch*.so" --exclude "libc10*.so" --exclude "libibverbs.so.1" --exclude "libcudart.so.12" --exclude "libamdhip64.so.*" -w /io/${WHEEL_DIR}
 
     # Add backend tag to wheel filename using local version identifier
-    if [[ "$TARGET" == "rocm" || "$TARGET" == "therock" ]]; then
+    if [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
       cd /io/${WHEEL_DIR}
       for wheel in uccl-*.whl; do
         if [[ -f "$wheel" ]]; then

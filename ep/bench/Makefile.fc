@@ -1,0 +1,224 @@
+# ===============================================================================
+# Makefile for UCCL Flat Combining Ring Buffer Benchmark
+#
+# Usage:
+#   make [release|debug]     - Build optimized or debug version
+#   make test               - Run basic functionality test
+#   make benchmark          - Run comprehensive benchmark suite
+#   make bandwidth          - Test bandwidth with different payload sizes
+#   make clean              - Remove build artifacts
+# ===============================================================================
+
+# ===============================================================================
+# Configuration
+# ===============================================================================
+CUDA_PATH ?= /usr/local/cuda
+NVCC := $(CUDA_PATH)/bin/nvcc
+
+# Auto-detect GPU architecture if not specified
+GPU_ARCH ?= auto
+ifeq ($(GPU_ARCH), auto)
+    # Try to detect GPU compute capability
+    GPU_ARCH := $(shell $(NVCC) --list-gpu-code | grep 'sm_' | tail -1 | sed 's/.*sm_//' || echo "90")
+endif
+
+# Build configuration
+BUILD_TYPE ?= release
+TARGET := test_fc_throughput
+
+# ===============================================================================
+# Compiler Flags
+# ===============================================================================
+# Base flags
+NVCC_FLAGS := -std=c++17
+NVCC_FLAGS += -gencode arch=compute_$(GPU_ARCH),code=sm_$(GPU_ARCH)
+NVCC_FLAGS += -Xcompiler -Wall
+NVCC_FLAGS += -Xcompiler -Wextra
+NVCC_FLAGS += --expt-relaxed-constexpr
+
+# Release vs Debug flags
+ifeq ($(BUILD_TYPE), debug)
+    NVCC_FLAGS += -g -G -O0
+    NVCC_FLAGS += -DDEBUG
+    TARGET := $(TARGET)_debug
+    $(info Building DEBUG version)
+else
+    NVCC_FLAGS += -O3 -g
+    NVCC_FLAGS += -DNDEBUG
+    NVCC_FLAGS += --use_fast_math
+    $(info Building RELEASE version for GPU arch $(GPU_ARCH))
+endif
+
+# Include paths
+INCLUDES := -I../include -I../src -I../../include
+
+# Libraries
+LIBS := -lpthread
+
+# Source and header dependencies
+SOURCES := test_fc_throughput.cu
+HEADERS := $(wildcard ../include/*.h ../include/*.cuh ../include/*.hpp)
+
+# ===============================================================================
+# Build Rules
+# ===============================================================================
+.DEFAULT_GOAL := release
+
+# Main targets
+release: BUILD_TYPE := release
+release: $(TARGET)
+
+debug: BUILD_TYPE := debug
+debug: $(TARGET)
+
+$(TARGET): $(SOURCES) $(HEADERS)
+	@echo "Compiling $@ with $(BUILD_TYPE) configuration..."
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -o $@ $< $(LIBS)
+	@echo "Build complete: $@"
+
+# ===============================================================================
+# Test and Benchmark Rules
+# ===============================================================================
+
+# Basic functionality test
+test: $(TARGET)
+	@echo "Running basic functionality test..."
+	./$(TARGET) 4 2 100 0 1
+
+# Quick performance test
+quick: $(TARGET)
+	@echo "Running quick performance test..."
+	./$(TARGET) 8 2 1000 0 0
+
+# Comprehensive benchmark suite
+benchmark: $(TARGET)
+	@echo "Running comprehensive benchmark suite..."
+	@echo "=================================="
+	@echo "Testing different warp configurations:"
+	@echo "4 warps, 2 proxies:"
+	./$(TARGET) 4 2 1000 0 0
+	@echo "8 warps, 2 proxies:"
+	./$(TARGET) 8 2 1000 0 0
+	@echo "16 warps, 4 proxies:"
+	./$(TARGET) 16 4 1000 0 0
+	@echo "32 warps, 8 proxies:"
+	./$(TARGET) 32 8 1000 0 0
+
+# Bandwidth testing with different payload sizes
+bandwidth: $(TARGET)
+	@echo "Running bandwidth tests with different payload sizes..."
+	@echo "======================================================"
+	@for size in 64 256 512 1024 4096 16384 65536; do \
+		echo "Testing payload size: $$size bytes"; \
+		echo "------------------------------------"; \
+		./$(TARGET) 8 2 1000 0 0 $$size; \
+		echo ""; \
+	done
+
+# Load-latency curve testing
+load-latency: $(TARGET)
+	@echo "Running load-latency curve tests..."
+	@echo "===================================="
+	@for sleep in 0 10 50 100 500 1000; do \
+		echo "Testing with sleep: $$sleep ns"; \
+		echo "--------------------------------"; \
+		./$(TARGET) 8 2 1000 $$sleep 0; \
+		echo ""; \
+	done
+
+# Memory usage analysis
+memcheck: $(TARGET)
+	@echo "Running memory leak check..."
+	@if command -v cuda-memcheck >/dev/null 2>&1; then \
+		cuda-memcheck --tool memcheck --leak-check full ./$(TARGET) 4 2 100 0 0; \
+	else \
+		echo "cuda-memcheck not found. Running without memory check."; \
+		./$(TARGET) 4 2 100 0 0; \
+	fi
+
+# Profile with Nsight Compute (if available)
+profile: $(TARGET)
+	@echo "Running performance profile..."
+	@if command -v ncu >/dev/null 2>&1; then \
+		ncu --target-processes all --force-overwrite --export profile_fc ./$(TARGET) 8 2 500 0 0; \
+		echo "Profile saved to profile_fc.ncu-rep"; \
+	else \
+		echo "Nsight Compute (ncu) not found. Skipping profile."; \
+	fi
+
+# ===============================================================================
+# Utility Rules
+# ===============================================================================
+
+# Print build information
+info:
+	@echo "Build Configuration:"
+	@echo "  CUDA_PATH: $(CUDA_PATH)"
+	@echo "  GPU_ARCH: $(GPU_ARCH)"
+	@echo "  BUILD_TYPE: $(BUILD_TYPE)"
+	@echo "  TARGET: $(TARGET)"
+	@echo "  NVCC_FLAGS: $(NVCC_FLAGS)"
+	@echo "  INCLUDES: $(INCLUDES)"
+
+# Check dependencies
+check-deps:
+	@echo "Checking dependencies..."
+	@command -v $(NVCC) >/dev/null 2>&1 || { echo "NVCC not found at $(NVCC)"; exit 1; }
+	@echo "NVCC version:"
+	@$(NVCC) --version | head -4
+	@echo "GPU information:"
+	@nvidia-smi -L 2>/dev/null || echo "nvidia-smi not available"
+
+# Format source code (if clang-format available)
+format:
+	@if command -v clang-format >/dev/null 2>&1; then \
+		echo "Formatting source code..."; \
+		clang-format -i $(SOURCES); \
+		echo "Code formatted."; \
+	else \
+		echo "clang-format not found. Skipping code formatting."; \
+	fi
+
+# Clean build artifacts
+clean:
+	@echo "Cleaning build artifacts..."
+	rm -f $(TARGET) test_fc_throughput test_fc_throughput_debug test_fc_latency test_fc_latency_debug test_fc_load_latency test_fc_load_latency_debug
+	rm -f *.ncu-rep
+	rm -f core.*
+	@echo "Clean complete."
+
+# Install target (copy to bin directory)
+install: $(TARGET)
+	@echo "Installing $(TARGET) to /usr/local/bin (requires sudo)..."
+	sudo cp $(TARGET) /usr/local/bin/
+	@echo "Install complete."
+
+# Help target
+help:
+	@echo "Available targets:"
+	@echo "  release      - Build optimized version (default)"
+	@echo "  debug        - Build debug version"
+	@echo "  test         - Run basic functionality test"
+	@echo "  quick        - Run quick performance test"
+	@echo "  benchmark    - Run comprehensive benchmark suite"
+	@echo "  bandwidth    - Test bandwidth with different payload sizes"
+	@echo "  load-latency - Test load-latency curves"
+	@echo "  memcheck     - Run memory leak check"
+	@echo "  profile      - Run performance profiling"
+	@echo "  info         - Print build configuration"
+	@echo "  check-deps   - Check build dependencies"
+	@echo "  format       - Format source code"
+	@echo "  clean        - Remove build artifacts"
+	@echo "  install      - Install to system (requires sudo)"
+	@echo "  help         - Show this help message"
+	@echo ""
+	@echo "Environment variables:"
+	@echo "  GPU_ARCH     - Target GPU architecture (default: auto-detect)"
+	@echo "  BUILD_TYPE   - Build type: release or debug (default: release)"
+	@echo "  CUDA_PATH    - Path to CUDA installation (default: /usr/local/cuda)"
+
+# ===============================================================================
+# Phony targets
+# ===============================================================================
+.PHONY: all release debug test quick benchmark bandwidth load-latency memcheck profile
+.PHONY: info check-deps format clean install help

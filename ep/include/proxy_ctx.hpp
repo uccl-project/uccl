@@ -2,8 +2,35 @@
 #include "util/gpu_rt.h"
 #include <infiniband/verbs.h>
 #include <atomic>
+#include <map>
 #include <unordered_map>
 #include <vector>
+
+template <typename Key>
+class TokenCounter {
+ public:
+  using MapType = std::map<Key, size_t>;
+  void Add(Key const& key, size_t k) { counter_[key] += k; }
+  size_t Get(Key const& key) const {
+    auto it = counter_.find(key);
+    return (it == counter_.end()) ? 0 : it->second;
+  }
+  void Reset(Key const& key) { counter_[key] = 0; }
+  void Clear() { counter_.clear(); }
+
+ private:
+  MapType counter_;
+};
+
+using DispatchTokenKey = std::tuple<int, int, int>;
+using CombineTokenKey = std::pair<int, int>;
+
+struct WriteStruct {
+  int expert_idx;
+  int dst_rank;
+  bool is_combine;
+  int low_latency_buffer_idx;
+};
 
 struct ProxyCtx {
   // RDMA objects
@@ -36,7 +63,6 @@ struct ProxyCtx {
       1024;  // Maximum concurrent atomic operations
 
   // Progress/accounting
-  std::atomic<uint64_t> posted{0};
   std::atomic<uint64_t> completed{0};
   std::atomic<bool> progress_run{true};
 
@@ -56,4 +82,12 @@ struct ProxyCtx {
   void* per_gpu_device_buf[MAX_NUM_GPUS] = {nullptr};
 
   uint32_t tag = 0;
+
+  TokenCounter<DispatchTokenKey> dispatch_token_counter;
+  TokenCounter<CombineTokenKey> combine_token_counter;
+
+  /* low_latency_buffer_idx, expert_idx, dst_rank */
+  std::unordered_map<uint64_t, WriteStruct> wr_id_to_write_struct;
+  TokenCounter<DispatchTokenKey> dispatch_sent_counter;
+  TokenCounter<DispatchTokenKey> combine_sent_counter;
 };

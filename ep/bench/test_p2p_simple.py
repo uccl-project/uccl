@@ -20,6 +20,7 @@ import os
 import time
 import torch
 import numpy as np
+from utils import init_dist, get_peer_ip, get_cpu_proxies_meta
 
 try:
     from uccl import ep
@@ -48,15 +49,28 @@ def test_single_gpu():
     test_ptr = test_buffer.data_ptr()
     print(f"Created test buffer: {buffer_size * 4 / 1e6:.2f}MB at 0x{test_ptr:x}")
 
+    peers_meta_list = [
+        {
+            "rank": 0,
+            "ptr": int(test_ptr),
+            "nbytes": int(buffer_size * 4),
+            "ip": "127.0.0.1",
+        }
+    ]
+
     # Create proxy
+    rb_addr = bench.ring_addr(0)
     proxy = ep.Proxy(
-        rb_addr=bench.ring_addr(0),
-        block_idx=0,
+        thread_idx=0,
         gpu_buffer_addr=test_ptr,
         total_size=buffer_size * 4,
         rank=0,
-        peer_ip="",  # Local test
+        node_idx=0,
+        local_rank=0,
+        peer_ip="127.0.0.1",  # Local test, but cannot be empty
     )
+    proxy.set_bench_ring_addrs([rb_addr])
+    proxy.set_peers_meta(peers_meta_list)
     proxy.start_dual()
     print("✓ Proxy started successfully")
 
@@ -104,14 +118,26 @@ def test_multi_gpu(num_gpus):
 
         # Create bench and proxy for this GPU
         bench = ep.Bench()
+        rb_addr = bench.ring_addr(0)
+        peers_meta_list = [
+            {
+                "rank": gpu_id,
+                "ptr": int(pointers[gpu_id]),
+                "nbytes": int(buffer_size * 4),
+                "ip": "127.0.0.1",
+            }
+        ]
         proxy = ep.Proxy(
-            rb_addr=bench.ring_addr(0),
-            block_idx=0,
+            thread_idx=0,
             gpu_buffer_addr=pointers[gpu_id],
             total_size=buffer_size * 4,
             rank=gpu_id,
-            peer_ip="",  # Local node
+            node_idx=0,
+            local_rank=gpu_id,
+            peer_ip="127.0.0.1",  # Local node, but cannot be empty
         )
+        proxy.set_bench_ring_addrs([rb_addr])
+        proxy.set_peers_meta(peers_meta_list)
         proxy.start_dual()
         proxies.append(proxy)
 
@@ -132,12 +158,9 @@ def test_multi_gpu(num_gpus):
                 )
 
                 if can_access:
-                    # Enable P2P if available
-                    try:
-                        torch.cuda.set_device(src_gpu)
-                        torch.cuda.set_peer_to_peer_access_enabled(True, dst_gpu)
-                    except RuntimeError:
-                        pass  # P2P might already be enabled
+                    # P2P access is automatically enabled in modern PyTorch versions
+                    # No need to manually enable it
+                    pass
 
     time.sleep(1)
 
@@ -194,16 +217,24 @@ def test_distributed():
     test_buffer = torch.ones(buffer_size, dtype=torch.float32, device="cuda") * rank
     test_ptr = test_buffer.data_ptr()
 
+    rank2meta = get_cpu_proxies_meta(rank, test_ptr, buffer_size * 4, world_size, group)
+    peers_meta_list = [rank2meta[r] for r in range(world_size)]
+    dist.barrier(group)
+
     # Create bench and proxy
     bench = ep.Bench()
+    rb_addr = bench.ring_addr(0)
     proxy = ep.Proxy(
-        rb_addr=bench.ring_addr(0),
-        block_idx=0,
+        thread_idx=0,
         gpu_buffer_addr=test_ptr,
         total_size=buffer_size * 4,
         rank=rank,
+        node_idx=rank // local_world_size,
+        local_rank=local_rank,
         peer_ip=peer_ip,
     )
+    proxy.set_bench_ring_addrs([rb_addr])
+    proxy.set_peers_meta(peers_meta_list)
     proxy.start_dual()
 
     # Register proxy
@@ -255,7 +286,10 @@ def main():
         help="Test mode",
     )
     parser.add_argument(
-        "--num-gpus", type=int, default=2, help="Number of GPUs for multi-GPU test"
+        "--num-gpus",
+        type=int,
+        default=2,
+        help="Number of GPUs for multi-GPU test",
     )
     args = parser.parse_args()
 

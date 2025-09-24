@@ -15,6 +15,78 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
+
+// Threadpool to manage the receiver side
+class ThreadPool {
+ private:
+  std::vector<std::thread> workers;
+  std::queue<std::function<void()>> tasks;
+  std::mutex queue_mutex;
+  std::condition_variable condition;
+  std::atomic<bool> stop_flag;
+
+ public:
+  ThreadPool(size_t num_threads) : stop_flag(false) {
+    for (size_t i = 0; i < num_threads; ++i) {
+      workers.emplace_back([this] {
+        while (true) {
+          std::function<void()> task;
+          {
+            std::unique_lock<std::mutex> lock(this->queue_mutex);
+            this->condition.wait(lock, [this] {
+              return this->stop_flag || !this->tasks.empty();
+            });
+
+            if (this->stop_flag && this->tasks.empty()) return;
+
+            task = std::move(this->tasks.front());
+            this->tasks.pop();
+          }
+          task();
+        }
+      });
+    }
+  }
+
+  ~ThreadPool() {
+    {
+      std::unique_lock<std::mutex> lock(queue_mutex);
+      stop_flag = true;
+    }
+    condition.notify_all();
+    for (std::thread& worker : workers) {
+      if (worker.joinable()) worker.join();
+    }
+  }
+
+  // Force destroy without waiting for threads to finish
+  void force_destroy() {
+    {
+      std::unique_lock<std::mutex> lock(queue_mutex);
+      stop_flag = true;
+    }
+    condition.notify_all();
+
+    // Detach all threads instead of joining
+    for (std::thread& worker : workers) {
+      if (worker.joinable()) {
+        worker.detach();
+      }
+    }
+  }
+
+  template <class F, class... Args>
+  void enqueue(F&& f, Args&&... args) {
+    auto task = std::bind(std::forward<F>(f), std::forward<Args>(args)...);
+    {
+      std::unique_lock<std::mutex> lock(queue_mutex);
+      if (stop_flag.load()) return;
+      tasks.emplace(std::move(task));
+    }
+    condition.notify_one();
+  }
+};
 
 struct uccl_engine {
   Endpoint* endpoint;
@@ -46,110 +118,21 @@ std::vector<notify_msg_t> notify_msg_list;
 std::mutex fifo_item_map_mutex;
 std::mutex notify_msg_list_mutex;
 
-// Helper function for the listener thread
-void listener_thread_func(uccl_conn_t* conn) {
-  std::cout << "Listener thread: Waiting for metadata." << std::endl;
+// Forward declaration
+void listener_thread_func(uccl_conn_t* conn);
 
-  while (conn->listener_running) {
-    struct timeval timeout;
-    timeout.tv_sec = 1;
-    timeout.tv_usec = 0;
-    setsockopt(conn->sock_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout,
-               sizeof(timeout));
+// Simple async receive function
+void async_recv_worker(uccl_conn_t* conn, uint64_t mr_id, void* data,
+                       size_t data_size) {
+  size_t recv_size = 0;
+  uccl_mr_t temp_mr;
+  temp_mr.mr_id = mr_id;
+  temp_mr.engine = conn->engine;
 
-    md_t md;
-    ssize_t recv_size = recv(conn->sock_fd, &md, sizeof(md_t), 0);
-    if (recv_size != sizeof(md_t)) {
-      if (!conn->listener_running) {
-        break;
-      }
-      continue;
-    }
+  int result = uccl_engine_recv(conn, &temp_mr, data, data_size);
 
-    uint64_t mr_id = 0;
-    switch (md.op) {
-      case UCCL_READ: {
-        // Access tx_data directly from union
-        tx_msg_t tx_data = md.data.tx_data;
-        auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
-        if (local_mem_iter == mem_reg_info.end()) {
-          std::cerr << "Local memory not registered for address: "
-                    << tx_data.data_ptr << std::endl;
-          break;
-        }
-        mr_id = local_mem_iter->second;
-
-        char out_buf[sizeof(uccl::FifoItem)];
-        conn->engine->endpoint->advertise(conn->conn_id, mr_id,
-                                          (void*)tx_data.data_ptr,
-                                          tx_data.data_size, out_buf);
-
-        md_t response_md;
-        response_md.op = UCCL_FIFO;
-        fifo_msg_t fifo_data;
-        memcpy(fifo_data.fifo_buf, out_buf, sizeof(uccl::FifoItem));
-        response_md.data.fifo_data = fifo_data;
-
-        ssize_t result = send(conn->sock_fd, &response_md, sizeof(md_t), 0);
-        if (result < 0) {
-          std::cerr << "Failed to send FifoItem data: " << strerror(errno)
-                    << std::endl;
-        }
-        break;
-      }
-      case UCCL_WRITE: {
-        // Access tx_data directly from union
-        tx_msg_t tx_data = md.data.tx_data;
-        auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
-        if (local_mem_iter == mem_reg_info.end()) {
-          std::cerr << "Local memory not registered for address: "
-                    << tx_data.data_ptr << std::endl;
-          break;
-        }
-        mr_id = local_mem_iter->second;
-
-        uccl_mr_t temp_mr;
-        temp_mr.mr_id = mr_id;
-        temp_mr.engine = conn->engine;
-        int result = uccl_engine_recv(conn, &temp_mr, (void*)tx_data.data_ptr,
-                                      tx_data.data_size);
-        if (result < 0) {
-          std::cerr << "Failed to perform uccl_engine_recv" << std::endl;
-        }
-        break;
-      }
-      case UCCL_FIFO: {
-        // Access fifo_data directly from union
-        fifo_msg_t fifo_data = md.data.fifo_data;
-        uccl::FifoItem fifo_item;
-        memcpy(&fifo_item, fifo_data.fifo_buf, sizeof(uccl::FifoItem));
-        fifo_item_t* f_item = new fifo_item_t;
-        f_item->fifo_item = fifo_item;
-        f_item->is_valid = true;
-
-        {
-          std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
-          fifo_item_map[conn] = f_item;
-        }
-        break;
-      }
-      case UCCL_NOTIFY: {
-        // Got a notif, store it in a list
-        std::cout << "Got Notify :" << md.data.notify_data.name << ", "
-                  << md.data.notify_data.msg << std::endl;
-        std::lock_guard<std::mutex> lock(notify_msg_list_mutex);
-        notify_msg_t notify_msg = {};
-        strncpy(notify_msg.name, md.data.notify_data.name,
-                sizeof(notify_msg.name) - 1);
-        strncpy(notify_msg.msg, md.data.notify_data.msg,
-                sizeof(notify_msg.msg) - 1);
-        notify_msg_list.push_back(notify_msg);
-        break;
-      }
-      default:
-        std::cerr << "Invalid operation type: " << md.op << std::endl;
-        continue;
-    }
+  if (result == 0) {
+    // Notify something in conn
   }
 }
 
@@ -333,30 +316,93 @@ void uccl_engine_mr_destroy(uccl_mr_t* mr) {
   delete mr;
 }
 
-int uccl_engine_send_tx_md(uccl_conn_t* conn, md_t* md) {
-  if (!conn || !md) return -1;
+// Helper function for the listener thread
+void listener_thread_func(uccl_conn_t* conn) {
+  const size_t buffer_size = 4096;  // 4KB buffer for receiving messages
+  char* buffer = new char[buffer_size];
+  std::cout << "Listener thread: Waiting for metadata." << std::endl;
 
-  return send(conn->sock_fd, md, sizeof(md_t), 0);
+  while (conn->listener_running) {
+    // Set socket to non-blocking mode with timeout
+    struct timeval timeout;
+    timeout.tv_sec = 1;
+    timeout.tv_usec = 0;
+    setsockopt(conn->sock_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout,
+               sizeof(timeout));
+
+    metadata_t md;
+    ssize_t recv_size = recv(conn->sock_fd, &md, sizeof(metadata_t), 0);
+    if (recv_size != sizeof(metadata_t)) {
+      if (!conn->listener_running) {
+        break;
+      }
+      continue;
+    }
+    std::cout << "Received metadata: " << md.op << " " << md.data_ptr << " "
+              << md.data_size << std::endl;
+    uint64_t mr_id = 0;
+    if (md.op != UCCL_FIFO) {
+      auto local_mem_iter = mem_reg_info.find(md.data_ptr);
+      if (local_mem_iter == mem_reg_info.end()) {
+        std::cerr << "Local memory not registered for address: " << md.data_ptr
+                  << std::endl;
+        continue;
+      }
+      std::cout << "Local memory registered for address: " << md.data_ptr
+                << std::endl;
+      mr_id = local_mem_iter->second;
+    }
+
+    switch (md.op) {
+      case UCCL_READ: {
+        char out_buf[sizeof(uccl::FifoItem)];
+        conn->engine->endpoint->advertise(
+            conn->conn_id, mr_id, (void*)md.data_ptr, md.data_size, out_buf);
+
+        metadata_t response_md;
+        response_md.op = UCCL_FIFO;
+        memcpy(response_md.fifo_buf, out_buf, sizeof(uccl::FifoItem));
+
+        ssize_t result =
+            send(conn->sock_fd, &response_md, sizeof(metadata_t), 0);
+        if (result < 0) {
+          std::cerr << "Failed to send FifoItem data: " << strerror(errno)
+                    << std::endl;
+        }
+        break;
+      }
+      case UCCL_WRITE:
+        // Submit async receive task to thread pool
+        conn->recv_thread_pool->enqueue(async_recv_worker, conn, mr_id,
+                                        (void*)md.data_ptr, md.data_size);
+        break;
+      case UCCL_FIFO: {
+        std::cout << "Received & Stored FIFO item" << std::endl;
+        // Store fifo_item in the hashmap for this connection
+        uccl::FifoItem fifo_item;
+        memcpy(&fifo_item, md.fifo_buf, sizeof(uccl::FifoItem));
+        fifo_item_t* f_item = new fifo_item_t;
+        f_item->fifo_item = fifo_item;
+        f_item->is_valid = true;
+
+        {
+          std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
+          fifo_item_map[conn] = f_item;
+        }
+        break;
+      }
+      default:
+        std::cerr << "Invalid operation type: " << md.op << std::endl;
+        continue;
+    }
+  }
+
+  delete[] buffer;
 }
 
-std::vector<notify_msg_t> uccl_engine_get_notifs() {
-  std::lock_guard<std::mutex> lock(notify_msg_list_mutex);
-
-  std::vector<notify_msg_t> result;
-  result = std::move(notify_msg_list);
-
-  notify_msg_list.clear();
-
-  return result;
-}
-
-int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
-  if (!conn || !notify_msg) return -1;
-  md_t md;
-  md.op = UCCL_NOTIFY;
-  md.data.notify_data = *notify_msg;
-
-  return send(conn->sock_fd, &md, sizeof(md_t), 0);
+int uccl_engine_get_sock_fd(uccl_conn_t* conn) {
+  if (!conn) return -1;
+  return conn->sock_fd;
 }
 
 int uccl_engine_get_fifo_item(uccl_conn_t* conn, void* fifo_item) {

@@ -37,6 +37,8 @@ def make_proxies(
     buf_addr: int,
     total_size: int,
     rank: int,
+    node_idx: int,
+    local_rank: int,
     peer_ip: str,
     mode: str,
     peers_meta_list=None,
@@ -47,15 +49,17 @@ def make_proxies(
     for i in range(num_blocks):
         rb_i = bench.ring_addr(i)
         p = ep.Proxy(
-            rb_addr=rb_i,
-            block_idx=i,
+            thread_idx=i,
             gpu_buffer_addr=buf_addr,
             total_size=total_size,
             rank=rank,
+            node_idx=node_idx,
+            local_rank=local_rank,
             peer_ip=peer_ip or "",
         )
         if peers_meta_list is not None:
             p.set_peers_meta(peers_meta_list)
+        p.set_bench_ring_addrs([rb_i])
         proxies.append(p)
     for p in proxies:
         if mode == "sender":
@@ -67,7 +71,15 @@ def make_proxies(
     return proxies
 
 
-def run_rank0_sender(args, peer_ip: str, peers_meta_list: list, nbytes: int, buf_addr):
+def run_rank0_sender(
+    args,
+    peer_ip: str,
+    peers_meta_list: list,
+    nbytes: int,
+    buf_addr,
+    node_idx: int,
+    local_rank: int,
+):
     dev = torch.cuda.current_device()
     ep.set_device(dev)
     print(
@@ -87,6 +99,8 @@ def run_rank0_sender(args, peer_ip: str, peers_meta_list: list, nbytes: int, buf
         buf_addr,
         nbytes,
         rank=0,
+        node_idx=node_idx,
+        local_rank=local_rank,
         peer_ip=peer_ip,
         mode="sender",
         peers_meta_list=peers_meta_list,
@@ -101,16 +115,26 @@ def run_rank0_sender(args, peer_ip: str, peers_meta_list: list, nbytes: int, buf
 
     try:
         for p in proxies:
+            print(f"Proxy {p.thread_idx} avg_wr_latency_us: {p.avg_wr_latency_us()} µs")
             p.stop()
     except Exception:
         pass
+
     bench.print_block_latencies()
     stats = bench.compute_stats()
     bench.print_summary(stats)
-    print("elapsed_ms:", bench.last_elapsed_ms())
+    print("Benchmark elapsed_ms:", bench.last_elapsed_ms())
 
 
-def run_rank1_remote(args, peer_ip: str, peers_meta_list: list, nbytes: int, buf_addr):
+def run_rank1_remote(
+    args,
+    peer_ip: str,
+    peers_meta_list: list,
+    nbytes: int,
+    buf_addr,
+    node_idx: int,
+    local_rank: int,
+):
     dev = torch.cuda.current_device()
     ep.set_device(dev)
     bench = ep.Bench()
@@ -120,6 +144,8 @@ def run_rank1_remote(args, peer_ip: str, peers_meta_list: list, nbytes: int, buf
         buf_addr,
         nbytes,
         rank=1,
+        node_idx=node_idx,
+        local_rank=local_rank,
         peer_ip=peer_ip,
         mode="remote",
         peers_meta_list=peers_meta_list,
@@ -166,7 +192,7 @@ def main():
     local_rank = int(os.environ["LOCAL_RANK"])
     num_local_ranks = int(os.environ["LOCAL_WORLD_SIZE"])
     rank, num_ranks, group = init_dist(local_rank, num_local_ranks)
-
+    node_idx = rank // num_local_ranks
     peer_ip = get_peer_ip(rank, num_ranks, group)
 
     scratch_nbytes = int(args.size_mb) << 20
@@ -181,9 +207,25 @@ def main():
     dist.barrier(group)
 
     if rank == 0:
-        run_rank0_sender(args, peer_ip, peers_meta_list, scratch_nbytes, scratch_ptr)
+        run_rank0_sender(
+            args,
+            peer_ip,
+            peers_meta_list,
+            scratch_nbytes,
+            scratch_ptr,
+            node_idx,
+            local_rank,
+        )
     else:
-        run_rank1_remote(args, peer_ip, peers_meta_list, scratch_nbytes, scratch_ptr)
+        run_rank1_remote(
+            args,
+            peer_ip,
+            peers_meta_list,
+            scratch_nbytes,
+            scratch_ptr,
+            node_idx,
+            local_rank,
+        )
 
     try:
         dist.barrier(group)
