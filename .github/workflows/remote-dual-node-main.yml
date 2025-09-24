@@ -14,6 +14,7 @@ concurrency:
 
 jobs:
   build-on-nodes:
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -104,20 +105,20 @@ jobs:
 
               cd /home/yangzhou_ucberkeley/uccl-test/ep
               make clean || true
+
+              # propagate make's status through tee
+              set -o pipefail
               make -j install 2>&1 | tee build.log
-              status=\${PIPESTATUS[0]}
 
-              if [ \$status -ne 0 ]; then
-                echo '❌ make failed'
-                exit \$status
-              fi
-
-              if ! grep -q 'Installation complete. Modules installed as:' build.log; then
-                echo '❌ Build did not complete successfully (marker missing)'
+              # success marker in log
+              if ! grep -q \"Installation complete. Modules installed as:\" build.log; then
+                echo \"Build did not complete successfully (marker missing)\"
                 exit 1
               fi
 
-              echo '✅ Build completed and installation marker found'
+              # sanity: module import
+              python -c \"import importlib; m=importlib.import_module('uccl.ep'); print('uccl.ep import ok:', getattr(m,'__file__','<none>'))\"
+              echo \"Build completed and installation marker found\"
             "' | tee "logs/${H}_build.log"
           }
 
