@@ -22,7 +22,6 @@ else
     PROG_NAME=sendrecv_perf
 fi
 
-
 if [ "$TEST" = "nccl" ]; then
     echo "Running NCCL test"
 else
@@ -32,10 +31,10 @@ fi
 
 echo "Running test: ${PROG_NAME}, ${TEST}, ${NUM_PROCS} nodes, ${NUM_GPUS_PER_PROC} GPUs per process, $((NUM_PROCS * NUM_GPUS_PER_PROC)) GPUs in total."
 
-# adapted from https://github.com/skypilot-org/skypilot/blob/master/examples/gcp_gpu_direct_tcpx/nccl_tcpx_gcpvm_h100.yaml
-
 echo $NUM_PROCS
 echo $PROCS_PER_NODE
+
+# adapted from https://github.com/skypilot-org/skypilot/blob/master/examples/gcp_gpu_direct_tcpx/nccl_tcpx_gcpvm_h100.yaml
 mpirun --allow-run-as-root -np ${NUM_PROCS} -N ${PROCS_PER_NODE} \
     -hostfile ${HOSTFILE} --map-by ppr:${PROCS_PER_NODE}:node \
     --mca btl tcp,self \
@@ -73,20 +72,3 @@ mpirun --allow-run-as-root -np ${NUM_PROCS} -N ${PROCS_PER_NODE} \
     -b 1K -e 1G \
     -f 2 -w 50 -n 50 \
     -g 1 -t ${NUM_GPUS_PER_PROC}
-
-
-    # -x NCCL_DEBUG=INFO \
-    # -x NCCL_DEBUG_SUBSYS=ENV \
-    # -x NCCL_GPUDIRECTTCPX_SOCKET_IFNAME=eth1,eth2,eth3,eth4 \
-    # -x NCCL_GPUDIRECTTCPX_CTRL_DEV=eth0 \
-    # -x NCCL_SOCKET_IFNAME=eth0 \
-    # -x NCCL_GPUDIRECTTCPX_FORCE_ACK=0 \
-    # -x NCCL_ALGO=Ring \
-    # -x NCCL_PROTO=Simple \
-    # -x NCCL_GPUDIRECTTCPX_TX_BINDINGS \
-    # -x NCCL_GPUDIRECTTCPX_RX_BINDINGS \
-    # -x NCCL_DYNAMIC_CHUNK_SIZE=524288 \
-    # -x NCCL_NSOCKS_PERTHREAD=4 \
-    # -x NCCL_SOCKET_NTHREADS=1 \
-    # -x NCCL_GPUDIRECTTCPX_PROGRAM_FLOW_STEERING_WAIT_MICROS=500000 \
-    # -x NCCL_GPUDIRECTTCPX_UNIX_CLIENT_PREFIX=/run/tcpx \
