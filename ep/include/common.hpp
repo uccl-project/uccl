@@ -16,7 +16,9 @@
 #define MEASURE_PER_VERB_LATENCY
 // #define USE_SENDER_BARRIER
 #ifndef USE_SENDER_BARRIER
+#ifdef EFA
 #define USE_RECEIVER_BARRIER
+#endif
 #endif
 #define kAtomicBufferSize 8196
 #define kQueueSize 1024
