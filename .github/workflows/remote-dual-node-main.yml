@@ -10,7 +10,7 @@ on:
 
 concurrency:
   group: remote-uccl-dual
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   run-on-nodes:
