@@ -10,7 +10,7 @@ on:
 
 concurrency:
   group: remote-uccl-build
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build-on-gpu-host:
