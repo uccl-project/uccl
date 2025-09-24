@@ -1,4 +1,4 @@
-name: Remote UCCL Low Latency Test
+name: UCCL-EP Low Latency Test
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
       - main
 
 concurrency:
-  group: remote-uccl-build
+  group: ep-test
   cancel-in-progress: false
 
 jobs:
