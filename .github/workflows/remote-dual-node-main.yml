@@ -92,24 +92,23 @@ jobs:
           set -euo pipefail
           mkdir -p logs
 
-          build_on_host() {
+            build_on_host() {
             local H="$1"
             echo ">>> Building on $H"
 
-            # Activate conda env
-            source "/home/yangzhou_ucberkeley/miniconda3/etc/profile.d/conda.sh"
-            conda activate uccl
+            ssh -A -o BatchMode=yes "$H" 'bash -lc "
+                set -euo pipefail
+                source \$HOME/miniconda3/etc/profile.d/conda.sh
+                conda activate uccl
 
-            cd /home/yangzhou_ucberkeley/uccl-test/ep
-            make clean || true
+                cd /home/yangzhou_ucberkeley/uccl-test/ep
+                make clean || true
+                set -o pipefail
+                make -j install 2>&1 | tee build.log
 
-            # Propagate the failing cmd in the pipeline
-            set -o pipefail
-            make -j install 2>&1 | tee build.log
-
-            # Check success marker
-            grep -q "Installation complete. Modules installed as:" build.log
-          }
+                grep -q \"Installation complete. Modules installed as:\" build.log
+            "'
+            }
 
           build_on_host gh1 &
           pid1=$!
