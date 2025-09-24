@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Checkout (for artifacts/consistency)
@@ -61,7 +61,6 @@ jobs:
 
           eval "$(ssh-agent -s)"
           ssh-add ~/.ssh/uccl-dev
-
           ssh-keyscan -H 98.84.112.172 >> ~/.ssh/known_hosts || true
 
       - name: Sync repo to gh1 & gh2
@@ -85,7 +84,7 @@ jobs:
           wait $pid1
           wait $pid2
 
-      - name: Build & install on gh1 & gh2
+      - name: Build & install on gh1 & gh2 (conda env uccl)
         shell: bash
         run: |
           set -euo pipefail
@@ -96,7 +95,15 @@ jobs:
             echo ">>> Building on $H"
             ssh -A -o BatchMode=yes "$H" 'bash -lc "
               set -euo pipefail
+              source \$HOME/miniconda3/etc/profile.d/conda.sh
+              conda activate uccl
+
+              # Make sure deps are present
+              pip install -q pybind11
+              pip install -q torch --index-url https://download.pytorch.org/whl/cu124
+
               cd /home/yangzhou_ucberkeley/uccl-test/ep
+              make clean || true
               make -j install 2>&1 | tee build.log
             "' | tee "logs/${H}_build.log"
           }
