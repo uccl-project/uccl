@@ -1,14 +1,10 @@
-// ... existing code ...
 #pragma once
 
-#include <unordered_map>
+#include <vector>
 #include <stddef.h>
 #include <stdint.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif  // __cplusplus
-
+#define MSG_SIZE 64
 // Handle for the UCCL engine instance
 typedef struct uccl_engine uccl_engine_t;
 
@@ -19,13 +15,41 @@ typedef struct uccl_conn uccl_conn_t;
 typedef struct uccl_mr uccl_mr_t;
 
 // UCCL operation types
-enum uccl_op_type { UCCL_READ = 0, UCCL_WRITE = 1, UCCL_FIFO = 2 };
+enum uccl_msg_type {
+  UCCL_READ = 0,
+  UCCL_WRITE = 1,
+  UCCL_FIFO = 2,
+  UCCL_NOTIFY = 3
+};
 
-typedef struct metadata {
-  uccl_op_type op;  // READ/WRITE/FIFO
-  char fifo_buf[64];
+typedef struct notify_msg {
+  char name[MSG_SIZE];
+  char msg[MSG_SIZE];
+} notify_msg_t;
+
+typedef struct fifo_msg {
+  char fifo_buf[MSG_SIZE];
+} fifo_msg_t;
+
+typedef struct tx_msg {
   uint64_t data_ptr;  // Memory address for data reception
   size_t data_size;   // Size of data to receive
+} tx_msg_t;
+
+typedef struct md {
+  uccl_msg_type op;
+  union {
+    tx_msg_t tx_data;
+    fifo_msg_t fifo_data;
+    notify_msg_t notify_data;
+  } data;
+} md_t;
+
+typedef struct metadata {
+  uccl_msg_type op;
+  char fifo_buf[64];
+  uint64_t data_ptr;
+  size_t data_size;
 } metadata_t;
 
 /**
@@ -143,6 +167,28 @@ void uccl_engine_mr_destroy(uccl_mr_t* mr);
 int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata_str);
 
 /**
+ * Send the transfer metadata.
+ * @param conn          Connection handle.
+ * @param md            Transfer metadata.
+ * @return              Number of bytes sent, or -1 on failure.
+ */
+int uccl_engine_send_tx_md(uccl_conn_t* conn, md_t* md);
+
+/**
+ * Get all notification messages and clear the list.
+ * @return              Vector of notification messages.
+ */
+std::vector<notify_msg_t> uccl_engine_get_notifs();
+
+/**
+ * Send a notification message.
+ * @param conn          Connection handle.
+ * @param notify_msg    Notification message.
+ * @return              Number of bytes sent, or -1 on failure.
+ */
+int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg);
+
+/**
  * Get socket file descriptor for a connection.
  * @param conn          Connection handle.
  * @return              Socket file descriptor, or -1 on failure.
@@ -154,7 +200,3 @@ int uccl_engine_get_sock_fd(uccl_conn_t* conn);
  * @param metadata      The metadata buffer to free.
  */
 void uccl_engine_free_endpoint_metadata(uint8_t* metadata);
-
-#ifdef __cplusplus
-}
-#endif  // __cplusplus
