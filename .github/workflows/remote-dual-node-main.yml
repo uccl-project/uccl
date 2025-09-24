@@ -1,0 +1,102 @@
+name: Remote Dual-Node Commands (main)
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: remote-uccl-dual
+  cancel-in-progress: true
+
+jobs:
+  run-on-nodes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+
+    env:
+      CMD1: |
+        hostname && nvidia-smi -L || true
+      CMD2: |
+        uptime && df -h /
+
+    steps:
+      - name: Checkout (for artifact consistency)
+        uses: actions/checkout@v4
+
+      - name: Setup SSH (p4_gate → gh0/gh1)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.UCCL_DEV_SSH_KEY }}" > ~/.ssh/uccl-dev
+          chmod 600 ~/.ssh/uccl-dev
+
+          cat > ~/.ssh/config <<'EOF'
+          Host gh0
+              User yangzhou_ucberkeley
+              HostName localhost
+              Port 34455
+              ForwardAgent yes
+              ProxyCommand ssh -o 'ForwardAgent yes' p4_gate 'ssh-add && nc %h %p'
+              StrictHostKeyChecking no
+              IdentityFile ~/.ssh/uccl-dev
+
+          Host gh1
+              User yangzhou_ucberkeley
+              HostName localhost
+              Port 34456
+              ForwardAgent yes
+              ProxyCommand ssh -o 'ForwardAgent yes' p4_gate 'ssh-add && nc %h %p'
+              StrictHostKeyChecking no
+              IdentityFile ~/.ssh/uccl-dev
+
+          Host p4_gate
+              HostName 98.84.112.172
+              User ubuntu
+              ForwardAgent yes
+              StrictHostKeyChecking no
+              IdentityFile ~/.ssh/uccl-dev
+          EOF
+          chmod 600 ~/.ssh/config
+
+          # Agent forwarding (used by your ProxyCommand)
+          eval "$(ssh-agent -s)"
+          ssh-add ~/.ssh/uccl-dev
+
+          # Optional: warm up known_hosts for the gateway
+          ssh-keyscan -H 98.84.112.172 >> ~/.ssh/known_hosts || true
+
+      - name: Run CMD1 and CMD2 on gh0 & gh1 (in parallel)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p logs
+
+          run_on_host() {
+            local H="$1"
+            echo ">>> $H: Running CMD1"
+            ssh -A -o BatchMode=yes "$H" "set -euo pipefail; ${CMD1}" | tee "logs/${H}_cmd1.log"
+            echo ">>> $H: Running CMD2"
+            ssh -A -o BatchMode=yes "$H" "set -euo pipefail; ${CMD2}" | tee "logs/${H}_cmd2.log"
+          }
+
+          run_on_host gh0 &
+          pid0=$!
+          run_on_host gh1 &
+          pid1=$!
+
+          wait "$pid0"
+          wait "$pid1"
+
+      - name: Upload remote command logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: remote-node-logs
+          path: logs/
