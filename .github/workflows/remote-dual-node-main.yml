@@ -128,22 +128,48 @@ jobs:
           set -euo pipefail
           mkdir -p logs
 
+          check_gpu_free() {
+            local H="$1"
+            echo ">>> Checking GPU usage on $H"
+            ssh -A -o BatchMode=yes "$H" 'bash -lc "
+              set -euo pipefail
+              source \$HOME/miniconda3/etc/profile.d/conda.sh
+              conda activate uccl
+
+              if nvidia-smi | grep -q \"No running processes found\"; then
+                echo \"GPU is free on $H\"
+              else
+                echo \"GPU already in use on $H\"
+                exit 1
+              fi
+            "'
+          }
+
+          # Check both hosts first
+          check_gpu_free gh1
+          check_gpu_free gh2
+
           run_ll() {
             local H="$1"
             local RANK="$2"
             echo ">>> Launching torchrun on $H (rank=$RANK)"
             ssh -A -o BatchMode=yes "$H" 'bash -lc "
-                set -euo pipefail
-                source \$HOME/miniconda3/etc/profile.d/conda.sh
-                conda activate uccl
+              set -euo pipefail
+              source \$HOME/miniconda3/etc/profile.d/conda.sh
+              conda activate uccl
 
-                cd /home/yangzhou_ucberkeley/uccl-test/ep
-                torchrun \
-                  --nnodes=2 --nproc_per_node=1 \
-                  --node_rank='"$RANK"' \
-                  --master_addr=10.141.1.1 --master_port=12357 \
-                  bench/test_low_latency.py \
-                  --num-tokens=128 --hidden=7168 --num-topk=1 --num-experts=24 2>&1 | tee torchrun.log
+              cd /home/yangzhou_ucberkeley/uccl-test/ep
+              torchrun \
+                --nnodes=2 --nproc_per_node=1 \
+                --node_rank='"$RANK"' \
+                --master_addr=10.141.1.1 --master_port=12357 \
+                bench/test_low_latency.py \
+                --num-tokens=128 --hidden=7168 --num-topk=1 --num-experts=24 2>&1 | tee torchrun.log
+
+              if ! grep -q \"✓ All correctness tests passed!\" torchrun.log; then
+                echo \"Correctness tests did not pass on $H\"
+                exit 1
+              fi
             "' | tee "logs/${H}_torchrun.log"
           }
 
