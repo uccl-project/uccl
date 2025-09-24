@@ -43,7 +43,7 @@ jobs:
               HostName localhost
               Port 34455
               ForwardAgent yes
-              ProxyCommand ssh -o 'ForwardAgent yes' p4_gate 'ssh-add && nc %h %p'
+              ProxyCommand ssh -W %h:%p p4_gate
               StrictHostKeyChecking no
               IdentityFile ~/.ssh/uccl-dev
 
@@ -52,7 +52,7 @@ jobs:
               HostName localhost
               Port 34456
               ForwardAgent yes
-              ProxyCommand ssh -o 'ForwardAgent yes' p4_gate 'ssh-add && nc %h %p'
+              ProxyCommand ssh -W %h:%p p4_gate
               StrictHostKeyChecking no
               IdentityFile ~/.ssh/uccl-dev
 
@@ -65,7 +65,7 @@ jobs:
           EOF
           chmod 600 ~/.ssh/config
 
-          # Agent forwarding (used by your ProxyCommand)
+          # Start agent and add key
           eval "$(ssh-agent -s)"
           ssh-add ~/.ssh/uccl-dev
 
