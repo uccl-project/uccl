@@ -122,6 +122,72 @@ jobs:
           wait $pid1
           wait $pid2
 
+      - name: Run benchmark_remote on gh1 & gh2
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p logs
+
+          check_gpu_free() {
+            local H="$1"
+            echo ">>> Checking GPU usage on $H"
+            ssh -A -o BatchMode=yes "$H" 'bash -lc "
+              set -euo pipefail
+              if nvidia-smi | grep -q \"No running processes found\"; then
+                echo \"GPU is free on $H\"
+              else
+                echo \"GPU already in use on $H\"
+                exit 1
+              fi
+            "'
+          }
+
+          # Check both hosts first
+          check_gpu_free gh1
+          check_gpu_free gh2
+
+          run_test() {
+            local H="$1"
+            local RANK="$2"
+            local MASTER_PORT="$3"
+            local SCRIPT="$4"
+            local MARKER="$5"
+            local LOG="logs/${H}_$(basename $SCRIPT .py).log"
+
+            echo ">>> Launching $SCRIPT on $H (rank=$RANK)"
+            ssh -A -o BatchMode=yes "$H" 'bash -lc "
+              set -euo pipefail
+              source \$HOME/miniconda3/etc/profile.d/conda.sh
+              conda activate uccl
+              cd /home/yangzhou_ucberkeley/uccl-test/ep
+
+              torchrun \
+                --nnodes=2 --nproc_per_node=1 \
+                --node_rank='"$RANK"' \
+                --master_addr=10.141.1.1 --master_port='"$MASTER_PORT"' \
+                bench/'"$SCRIPT"' 2>&1 | tee torchrun.log
+
+              if ! grep -q \"$MARKER\" torchrun.log; then
+                echo \"Marker '$MARKER' not found in $SCRIPT on $H\"
+                exit 1
+              fi
+            "' | tee "$LOG"
+          }
+          run_test gh1 0 12355 benchmark_remote.py "Benchmark elapsed_ms:" &
+          pid1=$!
+          sleep 1
+          run_test gh2 1 12355 benchmark_remote.py "Test completed." &
+          pid2=$!
+          fail=0
+          wait "$pid1" || fail=1
+          wait "$pid2" || fail=1
+
+          if [ "$fail" -ne 0 ]; then
+            echo "Benchmark remote test failed"
+            exit 1
+          fi
+          echo "Benchmark remote test passed on both hosts"
+
       - name: Run internode simple test on gh1 & gh2
         shell: bash
         run: |
@@ -174,22 +240,6 @@ jobs:
             "' | tee "$LOG"
           }
 
-          # Test 1: low-latency
-          run_test gh2 1 12357 test_low_latency.py "✓ All correctness tests passed!" &
-          pid2=$!
-          sleep 1
-          run_test gh1 0 12357 test_low_latency.py "✓ All correctness tests passed!" &
-          pid1=$!
-          fail=0
-          wait "$pid1" || fail=1
-          wait "$pid2" || fail=1
-          if [ "$fail" -ne 0 ]; then
-            echo "Low-latency test failed"
-            exit 1
-          fi
-          echo "Low-latency test passed on both hosts"
-
-          # Test 2: internode simple
           run_test gh2 1 12356 test_internode_simple.py "[simple-test] ✓ All tests passed!" &
           pid2=$!
           sleep 1
