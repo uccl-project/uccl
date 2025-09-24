@@ -135,7 +135,8 @@ void listener_thread_func(uccl_conn_t* conn) {
       }
       case UCCL_NOTIFY: {
         // Got a notif, store it in a list
-        std::cout << "Got Notify :"<< md.data.notify_data.name << ", " << md.data.notify_data.msg << std::endl;
+        std::cout << "Got Notify :" << md.data.notify_data.name << ", "
+                  << md.data.notify_data.msg << std::endl;
         std::lock_guard<std::mutex> lock(notify_msg_list_mutex);
         notify_msg_t notify_msg = {};
         strncpy(notify_msg.name, md.data.notify_data.name,
