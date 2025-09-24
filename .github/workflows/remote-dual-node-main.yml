@@ -107,10 +107,11 @@ jobs:
                 make -j install 2>&1 | tee build.log
 
                 if grep -q \"Installation complete. Modules installed as:\" build.log; then
-                echo \"Build completed successfully on $H\"
+                    echo \"Build completed successfully on '"$H"'\"
+                    exit 0
                 else
-                echo \"Build marker missing on $H\"
-                exit 1
+                    echo \"Build marker missing on '"$H"'\"
+                    exit 1
                 fi
             "'
             }
