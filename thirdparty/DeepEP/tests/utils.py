@@ -1,4 +1,4 @@
-from glob import glob
+import glob
 import inspect
 import json
 import tempfile
