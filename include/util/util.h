@@ -1216,7 +1216,7 @@ static uint32_t safe_pcie_distance(fs::path const& gpu, fs::path const& nic) {
   }
 }
 
-bool is_iface_up(std::string const& ifname) {
+static bool is_iface_up(std::string const& ifname) {
   std::string path = "/sys/class/net/" + ifname + "/operstate";
   std::ifstream f(path);
   if (f) {
