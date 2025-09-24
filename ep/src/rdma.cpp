@@ -138,7 +138,14 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     // Collect all NICs with equal minimum distance
     std::vector<std::string> candidates;
     for (auto& p : dist) {
-      if (p.second == min_d) candidates.push_back(p.first);
+      if (p.second == min_d) {
+        if (p.first.find("bond") != std::string::npos) {
+          fprintf(stderr, "[INFO] Skipping RoCE NIC candidate: %s\n",
+                  p.first.c_str());
+          continue;
+        }
+        candidates.push_back(p.first);
+      }
     }
 
     if (candidates.empty()) {
@@ -1147,8 +1154,6 @@ void remote_process_completions(
       auto* addr32 =
           reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
       if (is_combine) value = 1;
-      printf("Applying atomic update: addr=%p, value=%d\n", (void*)addr32,
-             value);
       addr32->fetch_add(value, std::memory_order_release);
 #ifndef EFA
       const uint32_t tag = wr_tag(cqe.wr_id);
@@ -1164,7 +1169,6 @@ void remote_process_completions(
       rwr.sg_list = &sge;
       rwr.num_sge = 1;
       ibv_recv_wr* bad = nullptr;
-      printf("Posting atomic replenish recv (wr_id=0x%lx)\n", rwr.wr_id);
       if (ibv_post_recv(S_atomic.qp, &rwr, &bad)) {
         perror("ibv_post_recv (atomics replenish)");
         std::abort();
@@ -1459,7 +1463,7 @@ void post_atomic_operations(ProxyCtx& S,
       std::memset(&wr[i], 0, sizeof(wr[i]));
       wr[i].wr_id = kAtomicWrTag | (wrid & kAtomicMask);
       wr[i].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-      wr[i].send_flags = IBV_SEND_SIGNALED;
+      wr[i].send_flags = (i + 1 == k) ? IBV_SEND_SIGNALED : 0;
       wr[i].imm_data = htonl(imm);
       wr[i].sg_list = &sge[i];
       wr[i].num_sge = 1;
