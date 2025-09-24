@@ -14,6 +14,7 @@ concurrency:
 
 jobs:
   build-on-nodes:
+    # Don’t run on forked PRs (secrets aren’t available and remote SSH would fail).
     if: github.event_name == 'push' || (github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork)
     runs-on: ubuntu-latest
     permissions:
@@ -94,32 +95,37 @@ jobs:
           build_on_host() {
             local H="$1"
             echo ">>> Building on $H"
-            ssh -A -o BatchMode=yes "$H" 'bash -lc "
-              set -euo pipefail
-              source \$HOME/miniconda3/etc/profile.d/conda.sh
-              conda activate uccl
 
-              # Ensure deps
-              pip install -q pybind11
-              pip install -q torch --index-url https://download.pytorch.org/whl/cu124
+            # Send a clean bash script to the remote via HEREDOC to avoid nested-quote issues
+            ssh -A -o BatchMode=yes -T "$H" bash -s <<'REMOTE' | tee "logs/${H}_build.log"
+            set -euo pipefail
 
-              cd /home/yangzhou_ucberkeley/uccl-test/ep
-              make clean || true
+            # Activate conda env
+            source "$HOME/miniconda3/etc/profile.d/conda.sh"
+            conda activate uccl
 
-              # propagate make's status through tee
-              set -o pipefail
-              make -j install 2>&1 | tee build.log
+            pip install -q pybind11
+            pip install -q torch --index-url https://download.pytorch.org/whl/cu124
 
-              # success marker in log
-              if ! grep -q \"Installation complete. Modules installed as:\" build.log; then
-                echo \"Build did not complete successfully (marker missing)\"
-                exit 1
-              fi
+            cd /home/yangzhou_ucberkeley/uccl-test/ep
+            make clean || true
 
-              # sanity: module import
-              python -c \"import importlib; m=importlib.import_module('uccl.ep'); print('uccl.ep import ok:', getattr(m,'__file__','<none>'))\"
-              echo \"Build completed and installation marker found\"
-            "' | tee "logs/${H}_build.log"
+            # Propagate the failing cmd in the pipeline
+            set -o pipefail
+            make -j install 2>&1 | tee build.log
+
+            # Check success marker
+            grep -q "Installation complete. Modules installed as:" build.log
+
+            # Import sanity check
+            python - <<'PY'
+            import importlib
+            m = importlib.import_module('uccl.ep')
+            print('uccl.ep import ok:', getattr(m, '__file__', '<none>'))
+            PY
+
+            echo "Build completed and installation marker found"
+            REMOTE
           }
 
           build_on_host gh1 &
