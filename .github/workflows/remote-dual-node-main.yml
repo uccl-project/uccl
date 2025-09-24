@@ -1,4 +1,4 @@
-name: Remote UCCL Build & Verify (Dual-Node)
+name: Remote UCCL Low Latency Test.
 
 on:
   push:
