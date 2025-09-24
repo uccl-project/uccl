@@ -125,15 +125,44 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     dist.emplace_back(nic.first, d);
   }
 
-  auto it = std::min_element(
-      dist.begin(), dist.end(),
-      [](auto const& a, auto const& b) { return a.second < b.second; });
+  if (dist.empty()) {
+    fprintf(stderr, "[WARN] no NIC found, defaulting to empty\n");
+    selected_nic_name.clear();
+  } else {
+    // Find the minimum distance
+    auto min_it = std::min_element(
+        dist.begin(), dist.end(),
+        [](auto const& a, auto const& b) { return a.second < b.second; });
+    auto min_d = min_it->second;
 
-  if (it == dist.end()) {
-    fprintf(stderr, "[WARN] no NIC found, defaulting to first\n");
-    // fallback
+    // Collect all NICs with equal minimum distance
+    std::vector<std::string> candidates;
+    for (auto& p : dist) {
+      if (p.second == min_d) candidates.push_back(p.first);
+    }
+    if (candidates.empty()) {
+      fprintf(stderr, "[WARN] no candidate NIC found, defaulting to first\n");
+      selected_nic_name = dist.front().first;
+    } else {
+      // Spread GPUs across equal-distance NICs: use local GPU index modulo
+      // For example, pass in `local_rank` or derive gpu_index from device path
+      selected_nic_name = candidates[thread_idx % candidates.size()];
+#ifndef EFA
+      selected_nic_name = candidates[0];
+#endif
+#ifdef EFA
+      // NOTE(MaoZiming): This is a temporary hack.
+      // On p5en, there are 4 NICs with the same distance.
+      // We hardcode the first half Proxies to use the first NIC, and the second
+      // half to use the second NIC.
+      assert(candidates.size() == 4);
+      // GPU0 uses candidates[0/1], GPU1 uses candidates[2/3], etc.
+      auto half = (local_rank % 2) * 2;
+      selected_nic_name = candidates[thread_idx % 2 + half];
+#endif
+    }
   }
-  selected_nic_name = it->first;
+
   int selected_dev_idx = -1;
   for (int i = 0; i < num_devices; i++) {
     if (strcmp(ibv_get_device_name(dev_list[i]), selected_nic_name.c_str()) ==
@@ -606,7 +635,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
     }
   }
   for (auto& [dst_rank, wr_ids] : dst_rank_wr_ids) {
-    printf("Write posting to rank %d, num_wrs=%zu\n", dst_rank, wr_ids.size());
     if (wr_ids.empty()) continue;
 
     ProxyCtx* ctx = ctxs[dst_rank].get();
