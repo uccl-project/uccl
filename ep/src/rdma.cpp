@@ -138,8 +138,10 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     // Collect all NICs with equal minimum distance
     std::vector<std::string> candidates;
     for (auto& p : dist) {
+      if (!uccl::is_iface_up(p.first)) continue;
       if (p.second == min_d) candidates.push_back(p.first);
     }
+
     if (candidates.empty()) {
       fprintf(stderr, "[WARN] no candidate NIC found, defaulting to first\n");
       selected_nic_name = dist.front().first;
@@ -147,9 +149,6 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
       // Spread GPUs across equal-distance NICs: use local GPU index modulo
       // For example, pass in `local_rank` or derive gpu_index from device path
       selected_nic_name = candidates[thread_idx % candidates.size()];
-#ifndef EFA
-      selected_nic_name = candidates[0];
-#endif
 #ifdef EFA
       // NOTE(MaoZiming): This is a temporary hack.
       // On p5en, there are 4 NICs with the same distance.
@@ -811,8 +810,8 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       wrs[j].send_flags = 0;
       wrs[j].next = (j + 1 < k) ? &wrs[j + 1] : nullptr;
     }
-    const size_t last = k - 1;
-    const uint64_t batch_tail_wr = wr_ids[last];
+    size_t const last = k - 1;
+    uint64_t const batch_tail_wr = wr_ids[last];
     wrs[last].send_flags |= IBV_SEND_SIGNALED;
     wrs[last].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
     wrs[last].imm_data = htonl(static_cast<uint32_t>(batch_tail_wr));
@@ -916,10 +915,7 @@ void local_process_completions(ProxyCtx& S,
       case IBV_WC_RECV:
         if (wc[i].wc_flags & IBV_WC_WITH_IMM &&
             !((ntohl(wc[i].imm_data) >> 31) & 0x1)) {
-          printf("Local thread %d: received imm=0x%x, byte_len=%u\n",
-                 thread_idx, ntohl(wc[i].imm_data), wc[i].byte_len);
-
-          assert(false && "Ack is deprecated on local proxy");
+          assert(false && "Explicit Ack is deprecated on local proxy");
         }
         break;
       case IBV_WC_FETCH_ADD: {
