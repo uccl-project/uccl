@@ -164,8 +164,9 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         print(f'Allocating buffer size: {num_rdma_bytes / 1e6} MB ...', flush=True)
     buffer = deep_ep.Buffer(group, num_rdma_bytes=num_rdma_bytes, low_latency_mode=True,
                             num_qps_per_rank=num_experts // num_ranks,
-                            allow_nvlink_for_low_latency_mode=not args.disable_nvlink, explicitly_destroy=True,
+                            allow_nvlink_for_low_latency_mode=not args.disable_nvlink, 
                             allow_mnnvl=args.allow_mnnvl)
+    print(f'[rank {rank}] Buffer initialized.', flush=True)
     test_main(num_tokens, hidden, num_experts, num_topk, rank, num_ranks, group, buffer,
               use_logfmt=args.use_logfmt, seed=1)
 
@@ -208,6 +209,8 @@ if __name__ == '__main__':
     parser.add_argument("--pressure-test", action='store_true',
                         help='Whether to do pressure test')
     args = parser.parse_args()
-
     num_processes = args.num_processes
-    torch.multiprocessing.spawn(test_loop, args=(num_processes, args), nprocs=num_processes)
+    # NOTE: modified from deep_ep
+    local_rank = int(os.environ["LOCAL_RANK"])
+    num_local_ranks = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
+    test_loop(local_rank, num_local_ranks, args)
