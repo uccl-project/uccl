@@ -72,6 +72,9 @@ class UcclProxy {
   double avg_rdma_write_us() const { return proxy_->avg_rdma_write_us(); }
   double avg_wr_latency_us() const { return proxy_->avg_wr_latency_us(); }
   void set_peers_meta(std::vector<PeerMeta> const& peers);
+  void set_bench_ring_addrs(std::vector<uintptr_t> const& addrs) {
+    proxy_->set_bench_ring_addrs(addrs);
+  }
 
  private:
   enum class Mode { None, Sender, Remote, Local, Dual };

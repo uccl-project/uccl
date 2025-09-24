@@ -192,3 +192,13 @@ inline void print_summary(BenchEnv const& env, Stats const& s) {
   std::printf("Total Throughput                  : %.2f Gbps\n",
               mops_to_gbps(s.throughput_mops));
 }
+
+template <typename dtype_t>
+dtype_t ceil_div(dtype_t a, dtype_t b) {
+  return (a + b - 1) / b;
+}
+
+template <typename dtype_t>
+dtype_t align(dtype_t a, dtype_t b) {
+  return ceil_div<dtype_t>(a, b) * b;
+}

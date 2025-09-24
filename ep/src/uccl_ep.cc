@@ -2149,7 +2149,15 @@ PYBIND11_MODULE(ep, m) {
             self.set_peers_meta(v);
           },
           py::arg("metas"),
-          "Attach peer metadata (list of dicts or PeerMeta objects).");
+          "Attach peer metadata (list of dicts or PeerMeta objects).")
+      .def(
+          "set_bench_ring_addrs",
+          [](UcclProxy& self, py::iterable addrs) {
+            std::vector<uintptr_t> v;
+            for (py::handle h : addrs) v.push_back(h.cast<uintptr_t>());
+            self.set_bench_ring_addrs(v);
+          },
+          py::arg("addrs"), "Attach ring buffer addresses for benchmarking.");
   // .def_property_readonly("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr);
   py::class_<EnvInfo>(m, "EnvInfo")
       .def_readonly("blocks", &EnvInfo::blocks)

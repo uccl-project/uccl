@@ -1,4 +1,5 @@
 #include "proxy.hpp"
+#include "bench_utils.hpp"
 #include "ep_util.hpp"
 #include <arpa/inet.h>  // for htonl, ntohl
 #include <chrono>
@@ -43,6 +44,19 @@ void Proxy::set_peers_meta(std::vector<PeerMeta> const& peers) {
   ctxs_for_all_ranks_.resize(peers.size());
   for (size_t i = 0; i < peers.size(); ++i) {
     ctxs_for_all_ranks_[i] = std::make_unique<ProxyCtx>();
+  }
+}
+
+void Proxy::set_bench_ring_addrs(std::vector<uintptr_t> const& addrs) {
+  ring_tails_.clear();
+  ring_seen_.clear();
+  cfg_.ring_buffers.clear();
+
+  ring_tails_.resize(addrs.size(), 0);
+  ring_seen_.resize(addrs.size(), 0);
+  cfg_.ring_buffers.reserve(addrs.size());
+  for (auto addr : addrs) {
+    cfg_.ring_buffers.push_back(reinterpret_cast<DeviceToHostCmdBuffer*>(addr));
   }
 }
 
@@ -188,8 +202,8 @@ void Proxy::run_sender() {
   size_t seen = 0;
   uint64_t my_tail = 0;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    local_poll_completions(ctx_, finished_wrs_, acked_wrs_, finished_wrs_mutex_,
-                           cfg_.thread_idx, ctx_by_tag_);
+    local_poll_completions(ctx_, finished_wrs_, acked_wrs_, cfg_.thread_idx,
+                           ctx_by_tag_);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
   }
@@ -227,21 +241,31 @@ void Proxy::run_dual() {
   std::set<PendingUpdate> pending_atomic_updates;
   // printf("run_dual initialization complete\n");
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    poll_cq_dual(ctx_, finished_wrs_, acked_wrs_, finished_wrs_mutex_,
-                 cfg_.thread_idx, ring, ctx_by_tag_, atomic_buffer_ptr_,
-                 cfg_.num_ranks, cfg_.num_experts, pending_atomic_updates);
+    poll_cq_dual(ctx_, finished_wrs_, acked_wrs_, cfg_.thread_idx, ring,
+                 ctx_by_tag_, atomic_buffer_ptr_, cfg_.num_ranks,
+                 cfg_.num_experts, pending_atomic_updates);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
+#ifdef USE_RECEIVER_BARRIER
     apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
                           cfg_.num_experts, cfg_.num_ranks);
+#endif
+
+#ifdef USE_SENDER_BARRIER
+    auto postponed_wr_ids = postponed_wr_ids_;
+    auto postponed_atomics = postponed_atomics_;
+    postponed_wr_ids_.clear();
+    postponed_atomics_.clear();
+    assert(postponed_wr_ids.size() == postponed_atomics.size());
+    assert(postponed_wr_ids_.size() == 0);
+    post_gpu_commands_mixed(postponed_wr_ids, postponed_atomics);
+#endif
   }
 }
 
 void Proxy::notify_gpu_completion(uint64_t& my_tail) {
   if (finished_wrs_.empty()) return;
   if (acked_wrs_.empty()) return;
-
-  std::lock_guard<std::mutex> lock(finished_wrs_mutex_);
 
   // Group completed work requests by ring buffer
   std::map<size_t, std::vector<std::pair<uint64_t, uint64_t>>>
@@ -484,8 +508,48 @@ void Proxy::post_gpu_commands_mixed(
 
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
     if (cmds_to_post[i].is_atomic) {
+#ifdef USE_SENDER_BARRIER
+      int value = cmds_to_post[i].value;
+      int expected_value;
+      uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
+      uint32_t new_offset =
+          offset - cmds_to_post[i].low_latency_buffer_idx *
+                       align<size_t>(cfg_.num_experts * sizeof(int), 128);
+      size_t new_index = new_offset / sizeof(int);
+      int expert_idx;
+
+      if (cmds_to_post[i].is_combine) {
+        expert_idx = new_index;
+        expected_value = ctx_.combine_sent_counter.Get(
+            {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
+             cmds_to_post[i].dst_rank});
+      } else {
+        expert_idx = new_index / cfg_.num_ranks;
+        expected_value = ctx_.dispatch_sent_counter.Get(
+            {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
+             cmds_to_post[i].dst_rank});
+        value = -value - 1;
+      }
+      if (value != expected_value) {
+        postponed_atomics_.push_back(cmds_to_post[i]);
+        postponed_wr_ids_.push_back(wrs_to_post[i]);
+        assert(postponed_atomics_.size() == postponed_wr_ids_.size());
+        continue;
+      }
+#endif
       atomic_wrs.push_back(wrs_to_post[i]);
       atomic_cmds.push_back(cmds_to_post[i]);
+
+#ifdef USE_SENDER_BARRIER
+      if (cmds_to_post[i].is_combine) {
+        ctx_.combine_sent_counter.Reset({cmds_to_post[i].low_latency_buffer_idx,
+                                         expert_idx, cmds_to_post[i].dst_rank});
+      } else {
+        ctx_.dispatch_sent_counter.Reset(
+            {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
+             cmds_to_post[i].dst_rank});
+      }
+#endif
     } else {
       rdma_wrs.push_back(wrs_to_post[i]);
       rdma_cmds.push_back(cmds_to_post[i]);
@@ -497,13 +561,12 @@ void Proxy::post_gpu_commands_mixed(
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
                             rdma_cmds, ctxs_for_all_ranks_, cfg_.rank,
-                            cfg_.thread_idx, finished_wrs_,
-                            finished_wrs_mutex_);
+                            cfg_.thread_idx, finished_wrs_);
   }
   if (!atomic_wrs.empty()) {
     post_atomic_operations(ctx_, atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
                            cfg_.rank, cfg_.thread_idx, finished_wrs_,
-                           finished_wrs_mutex_, acked_wrs_);
+                           acked_wrs_);
   }
 }
 
