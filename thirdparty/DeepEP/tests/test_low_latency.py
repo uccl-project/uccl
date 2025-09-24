@@ -166,7 +166,11 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                             num_qps_per_rank=num_experts // num_ranks,
                             allow_nvlink_for_low_latency_mode=not args.disable_nvlink, 
                             allow_mnnvl=args.allow_mnnvl)
+<<<<<<< Updated upstream
     print(f'[rank {rank}] Buffer initialized.', flush=True)
+=======
+    print("Buffer initialized.", flush=True)
+>>>>>>> Stashed changes
     test_main(num_tokens, hidden, num_experts, num_topk, rank, num_ranks, group, buffer,
               use_logfmt=args.use_logfmt, seed=1)
 
@@ -189,6 +193,11 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
 if __name__ == '__main__':
     # TODO: you may modify NUMA binding for less CPU overhead
     # TODO: buggy with `num_tokens=512`
+    ib_dev = detect_ib_hca()
+    if ib_dev and ib_dev.startswith("mlx"):  # Mellanox IB devices show up like mlx5_0
+        os.environ["NCCL_IB_HCA"] = ib_dev
+        print(f"Set NCCL_IB_HCA={ib_dev}")
+        
     parser = argparse.ArgumentParser(description='Test low-latency EP kernels')
     parser.add_argument('--num-processes', type=int, default=8,
                        help='Number of processes to spawn (default: 8)')

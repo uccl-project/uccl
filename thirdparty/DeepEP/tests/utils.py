@@ -1,3 +1,4 @@
+from glob import glob
 import inspect
 import json
 import tempfile
@@ -10,6 +11,18 @@ import torch
 import torch.distributed as dist
 from typing import Optional, Union
 
+def detect_ib_hca():
+    devices = sorted(glob.glob("/sys/class/infiniband/*"))
+    if not devices:
+        raise RuntimeError("No devices found under /sys/class/infiniband")
+
+    ib_devs = [
+        os.path.basename(d) for d in devices if os.path.basename(d).startswith("mlx5")
+    ]
+    if not ib_devs:
+        return None
+    return ib_devs[0]
+
 
 def init_dist(local_rank: int, num_local_ranks: int):
     # torchrun already sets RANK, WORLD_SIZE, MASTER_ADDR, MASTER_PORT
@@ -17,6 +30,7 @@ def init_dist(local_rank: int, num_local_ranks: int):
     dist.init_process_group(
         backend="nccl", device_id=torch.device(f"cuda:{local_rank}")
     )
+    print("local_rank", local_rank)
     torch.set_default_dtype(torch.bfloat16)
     torch.set_default_device(f"cuda:{local_rank}")
     torch.cuda.set_device(local_rank)
