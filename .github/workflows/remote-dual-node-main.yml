@@ -106,7 +106,12 @@ jobs:
                 set -o pipefail
                 make -j install 2>&1 | tee build.log
 
-                grep -q \"Installation complete. Modules installed as:\" build.log
+                if grep -q \"Installation complete. Modules installed as:\" build.log; then
+                echo \"Build completed successfully on $H\"
+                else
+                echo \"Build marker missing on $H\"
+                exit 1
+                fi
             "'
             }
 
