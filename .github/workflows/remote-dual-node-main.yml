@@ -1,4 +1,4 @@
-name: Remote UCCL Low Latency Test.
+name: Remote UCCL Low Latency Test
 
 on:
   push:
@@ -97,7 +97,7 @@ jobs:
             echo ">>> Building on $H"
 
             # Activate conda env
-            source "$HOME/miniconda3/etc/profile.d/conda.sh"
+            source "/home/yangzhou_ucberkeley/miniconda3/etc/profile.d/conda.sh"
             conda activate uccl
 
             cd /home/yangzhou_ucberkeley/uccl-test/ep
