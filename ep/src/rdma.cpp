@@ -138,7 +138,9 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     // Collect all NICs with equal minimum distance
     std::vector<std::string> candidates;
     for (auto& p : dist) {
+#ifndef EFA
       if (!uccl::is_iface_up(p.first)) continue;
+#endif
       if (p.second == min_d) candidates.push_back(p.first);
     }
 
