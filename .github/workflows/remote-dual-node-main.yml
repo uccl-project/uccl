@@ -1,44 +1,35 @@
-name: Remote Dual-Node Commands (main)
+name: Remote UCCL Build & Verify (Dual-Node)
 
 on:
   push:
     branches:
       - main
-  pull_request:
-    branches:
-      - main
 
 concurrency:
-  group: remote-uccl-dual
+  group: remote-uccl-build
   cancel-in-progress: false
 
 jobs:
-  run-on-nodes:
+  build-on-nodes:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    timeout-minutes: 10
-
-    env:
-      CMD1: |
-        hostname && nvidia-smi -L || true
-      CMD2: |
-        uptime && df -h /
+    timeout-minutes: 20
 
     steps:
-      - name: Checkout (for artifact consistency)
+      - name: Checkout (for artifacts/consistency)
         uses: actions/checkout@v4
 
-      - name: Setup SSH (p4_gate → gh0/gh1)
+      - name: Setup SSH (p4_gate → gh1/gh2)
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.UCCL_DEV_SSH_KEY }}" > ~/.ssh/uccl-dev
+          echo "${{ secrets.UCCL_DEV_SSH_KEY }}" > ~/.ssh/uccl-dev
           chmod 600 ~/.ssh/uccl-dev
 
           cat > ~/.ssh/config <<'EOF'
-          Host gh0
+          Host gh1
               User yangzhou_ucberkeley
               HostName localhost
               Port 34455
@@ -47,7 +38,7 @@ jobs:
               StrictHostKeyChecking no
               IdentityFile ~/.ssh/uccl-dev
 
-          Host gh1
+          Host gh2
               User yangzhou_ucberkeley
               HostName localhost
               Port 34456
@@ -65,38 +56,67 @@ jobs:
           EOF
           chmod 600 ~/.ssh/config
 
-          # Start agent and add key
           eval "$(ssh-agent -s)"
           ssh-add ~/.ssh/uccl-dev
 
-          # Optional: warm up known_hosts for the gateway
           ssh-keyscan -H 98.84.112.172 >> ~/.ssh/known_hosts || true
 
-      - name: Run CMD1 and CMD2 on gh0 & gh1 (in parallel)
+      - name: Sync repo to gh1 & gh2
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule update --init --recursive thirdparty/nccl
+
+          sync_to_host() {
+            local H="$1"
+            echo ">>> Syncing to $H"
+            rsync -az --delete \
+              -e "ssh -o BatchMode=yes -A" \
+              ./ "$H:/home/yangzhou_ucberkeley/uccl-test/"
+          }
+
+          sync_to_host gh1 &
+          pid1=$!
+          sync_to_host gh2 &
+          pid2=$!
+          wait $pid1
+          wait $pid2
+
+      - name: Build & install on gh1 & gh2
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p logs
 
-          run_on_host() {
+          build_on_host() {
             local H="$1"
-            echo ">>> $H: Running CMD1"
-            ssh -A -o BatchMode=yes "$H" "set -euo pipefail; ${CMD1}" | tee "logs/${H}_cmd1.log"
-            echo ">>> $H: Running CMD2"
-            ssh -A -o BatchMode=yes "$H" "set -euo pipefail; ${CMD2}" | tee "logs/${H}_cmd2.log"
+            echo ">>> Building on $H"
+            ssh -A -o BatchMode=yes "$H" 'bash -lc "
+              set -euo pipefail
+              cd /home/yangzhou_ucberkeley/uccl-test/ep
+              make -j install 2>&1 | tee build.log
+            "' | tee "logs/${H}_build.log"
           }
 
-          run_on_host gh0 &
-          pid0=$!
-          run_on_host gh1 &
+          build_on_host gh1 &
           pid1=$!
+          build_on_host gh2 &
+          pid2=$!
+          wait $pid1
+          wait $pid2
 
-          wait "$pid0"
-          wait "$pid1"
+      - name: Fetch remote build logs
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p logs
+          scp -o BatchMode=yes -A gh1:/home/yangzhou_ucberkeley/uccl-test/ep/build.log logs/gh1_build.log || true
+          scp -o BatchMode=yes -A gh2:/home/yangzhou_ucberkeley/uccl-test/ep/build.log logs/gh2_build.log || true
 
-      - name: Upload remote command logs
+      - name: Upload build logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: remote-node-logs
+          name: dual-node-build-logs
           path: logs/
