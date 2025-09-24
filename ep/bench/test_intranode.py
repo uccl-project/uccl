@@ -450,7 +450,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     group.barrier()
     buffer.destroy()
     dist.barrier()
-    destroy_uccl(proxies, workers, bench)
+    destroy_uccl(proxies, workers)
     dist.barrier()
     dist.destroy_process_group()
 

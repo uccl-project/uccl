@@ -112,22 +112,22 @@ class Buffer {
         CUDA_CHECK(cudaSetDevice(device_index));
         auto host_addrs = collect_ring_addrs_for_device(device_index);
         num_ring_addrs = static_cast<int>(host_addrs.size());
-        EP_HOST_ASSERT(num_ring_addrs > 0);
+        if (num_ring_addrs > 0) {
+          CUDA_CHECK(cudaMallocManaged(&d_ring_addrs,
+                                       num_ring_addrs * sizeof(uint64_t)));
 
-        CUDA_CHECK(cudaMallocManaged(&d_ring_addrs,
-                                     num_ring_addrs * sizeof(uint64_t)));
-
-        for (int i = 0; i < num_ring_addrs; ++i) {
-          void* host_ptr = reinterpret_cast<void*>(host_addrs[i]);
-          void* dev_ptr = nullptr;
+          for (int i = 0; i < num_ring_addrs; ++i) {
+            void* host_ptr = reinterpret_cast<void*>(host_addrs[i]);
+            void* dev_ptr = nullptr;
 #ifndef USE_GRACE_HOPPER
-          CUDA_CHECK(cudaHostGetDevicePointer(&dev_ptr, host_ptr, 0));
+            CUDA_CHECK(cudaHostGetDevicePointer(&dev_ptr, host_ptr, 0));
 #else
-          dev_ptr = host_ptr;
+            dev_ptr = host_ptr;
 #endif
-          d_ring_addrs[i] = reinterpret_cast<uint64_t>(dev_ptr);
-          // printf("Ring buffer %d addr: host %p, dev %p\n", i, host_ptr,
-          //        dev_ptr);
+            d_ring_addrs[i] = reinterpret_cast<uint64_t>(dev_ptr);
+            // printf("Ring buffer %d addr: host %p, dev %p\n", i, host_ptr,
+            //        dev_ptr);
+          }
         }
         CUDA_CHECK(cudaDeviceSynchronize());
         // Allocate device memory for IPC base pointers
