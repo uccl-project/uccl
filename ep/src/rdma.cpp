@@ -813,6 +813,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
     uint64_t const batch_tail_wr = wr_ids[last];
     wrs[last].send_flags = IBV_SEND_SIGNALED;
     wrs[last].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+    auto const& cmd = cmds_to_post[wr_ids[last]];
     uint32_t imm = WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
                                   cmd.expert_idx, 1u, my_rank)
                        .GetImmData();
@@ -827,8 +828,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         fprintf(stderr, "Bad WR at %p (wr_id=%lu)\n", (void*)bad, bad->wr_id);
       std::abort();
     }
-
-    S.posted.fetch_add(k, std::memory_order_release);
     {
       auto [it, inserted] =
           S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
@@ -1373,8 +1372,9 @@ void post_atomic_operations(ProxyCtx& S,
       }
       uint32_t const off16 = static_cast<uint32_t>(cmd.req_rptr) & 0xFFFFu;
       int low_latency_buffer_idx = cmd.low_latency_buffer_idx;
-      uint32_t const imm =
-          pack_imm(true, cmd.is_combine, v, off16, low_latency_buffer_idx);
+      uint32_t const imm = AtomicsImm::Pack(true, cmd.is_combine, v, off16,
+                                            low_latency_buffer_idx)
+                               .GetImmData();
       sge[i].addr = reinterpret_cast<uintptr_t>(ctx->mr->addr);
       sge[i].length = 0;
       sge[i].lkey = ctx->mr->lkey;
