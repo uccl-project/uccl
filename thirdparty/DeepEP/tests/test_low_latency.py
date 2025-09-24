@@ -9,7 +9,7 @@ from functools import partial
 from typing import Optional
 
 import deep_ep
-from utils import init_dist, bench, bench_kineto, calc_diff, hash_tensor, per_token_cast_back
+from utils import init_dist, bench, bench_kineto, calc_diff, hash_tensor, per_token_cast_back, detect_ib_hca
 
 
 def test_main(num_tokens: int, hidden: int, num_experts: int, num_topk: int,
