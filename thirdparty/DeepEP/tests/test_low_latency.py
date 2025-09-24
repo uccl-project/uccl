@@ -166,11 +166,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                             num_qps_per_rank=num_experts // num_ranks,
                             allow_nvlink_for_low_latency_mode=not args.disable_nvlink, 
                             allow_mnnvl=args.allow_mnnvl)
-<<<<<<< Updated upstream
-    print(f'[rank {rank}] Buffer initialized.', flush=True)
-=======
     print("Buffer initialized.", flush=True)
->>>>>>> Stashed changes
     test_main(num_tokens, hidden, num_experts, num_topk, rank, num_ranks, group, buffer,
               use_logfmt=args.use_logfmt, seed=1)
 
