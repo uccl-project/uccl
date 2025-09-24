@@ -2,9 +2,11 @@ name: Remote UCCL Low Latency Test
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   pull_request:
-    branches: [main]
+    branches:
+      - main
 
 concurrency:
   group: remote-uccl-build
@@ -71,7 +73,9 @@ jobs:
           sync_to_host() {
             local H="$1"
             echo ">>> Syncing to $H"
-            rsync -az --delete -e "ssh -o BatchMode=yes -A" ./ "$H:/home/yangzhou_ucberkeley/uccl-test/"
+            rsync -az --delete \
+              -e "ssh -o BatchMode=yes -A" \
+              ./ "$H:/home/yangzhou_ucberkeley/uccl-test/"
           }
 
           sync_to_host gh1 &
@@ -90,55 +94,35 @@ jobs:
           build_on_host() {
             local H="$1"
             echo ">>> Building on $H"
+
             ssh -A -o BatchMode=yes "$H" 'bash -lc "
-              set -euo pipefail
-
-              if [ -f \$HOME/miniconda3/etc/profile.d/conda.sh ]; then
+                set -euo pipefail
                 source \$HOME/miniconda3/etc/profile.d/conda.sh
-              elif [ -f \$HOME/miniforge3/etc/profile.d/conda.sh ]; then
-                source \$HOME/miniforge3/etc/profile.d/conda.sh
-              else
-                echo "conda.sh not found under \$HOME/{miniconda3,miniforge3}"
-                exit 1
-              fi
+                conda activate uccl
 
-              conda info --envs | awk '{print \$1}' | grep -qx uccl || conda create -y -n uccl python=3.11
-              conda activate uccl
+                cd /home/yangzhou_ucberkeley/uccl-test/ep
+                make clean || true
+                set -o pipefail
+                make -j install 2>&1 | tee build.log
 
-              python -m pip install -q --upgrade pip
-              pip install -q pybind11
-              pip install -q torch --index-url https://download.pytorch.org/whl/cu124
-
-              cd /home/yangzhou_ucberkeley/uccl-test/ep
-              make clean || true
-              set -o pipefail
-              make -j install 2>&1 | tee build.log
-
-              if grep -q "Installation complete. Modules installed as:" build.log; then
-                echo "Build completed successfully on '"$H"'"
-                exit 0
-              else
-                echo "Build marker missing on '"$H"'"
-                exit 1
-              fi
-            "' | tee "logs/${H}_build.log"
+                if grep -q \"Installation complete. Modules installed as:\" build.log; then
+                    echo \"Build completed successfully on '"$H"'\"
+                    exit 0
+                else
+                    echo \"Build marker missing on '"$H"'\"
+                    exit 1
+                fi
+            "'
           }
 
           build_on_host gh1 &
           pid1=$!
           build_on_host gh2 &
           pid2=$!
+          wait $pid1
+          wait $pid2
 
-          fail=0
-          wait "$pid1" || fail=1
-          wait "$pid2" || fail=1
-          if [ "$fail" -ne 0 ]; then
-            echo "Build failed on at least one host"
-            exit 1
-          fi
-          echo "Build succeeded on both hosts"
-
-      - name: Run low-latency test on gh1 & gh2 (torchrun)
+      - name: Run low-latency test on gh1 & gh2
         shell: bash
         run: |
           set -euo pipefail
@@ -149,26 +133,17 @@ jobs:
             local RANK="$2"
             echo ">>> Launching torchrun on $H (rank=$RANK)"
             ssh -A -o BatchMode=yes "$H" 'bash -lc "
-              set -euo pipefail
-
-              if [ -f \$HOME/miniconda3/etc/profile.d/conda.sh ]; then
+                set -euo pipefail
                 source \$HOME/miniconda3/etc/profile.d/conda.sh
-              elif [ -f \$HOME/miniforge3/etc/profile.d/conda.sh ]; then
-                source \$HOME/miniforge3/etc/profile.d/conda.sh
-              else
-                echo "conda.sh not found under \$HOME/{miniconda3,miniforge3}"
-                exit 1
-              fi
-              conda activate uccl
+                conda activate uccl
 
-              cd /home/yangzhou_ucberkeley/uccl-test/ep
-              set -o pipefail
-              torchrun \
-                --nnodes=2 --nproc_per_node=1 \
-                --node_rank='"$RANK"' \
-                --master_addr=10.141.1.1 --master_port=12357 \
-                bench/test_low_latency.py \
-                --num-tokens=128 --hidden=7168 --num-topk=1 --num-experts=24 2>&1 | tee torchrun.log
+                cd /home/yangzhou_ucberkeley/uccl-test/ep
+                torchrun \
+                  --nnodes=2 --nproc_per_node=1 \
+                  --node_rank='"$RANK"' \
+                  --master_addr=10.141.1.1 --master_port=12357 \
+                  bench/test_low_latency.py \
+                  --num-tokens=128 --hidden=7168 --num-topk=1 --num-experts=24 2>&1 | tee torchrun.log
             "' | tee "logs/${H}_torchrun.log"
           }
 
@@ -195,8 +170,8 @@ jobs:
           mkdir -p logs
           scp -o BatchMode=yes -A gh1:/home/yangzhou_ucberkeley/uccl-test/ep/build.log logs/gh1_build.log || true
           scp -o BatchMode=yes -A gh2:/home/yangzhou_ucberkeley/uccl-test/ep/build.log logs/gh2_build.log || true
-          scp -o BatchMode=yes -A gh1:/home/yangzhou_ucberkeley/uccl-test/ep/torchrun.log logs/gh1_torchrun_remote.log || true
-          scp -o BatchMode=yes -A gh2:/home/yangzhou_ucberkeley/uccl-test/ep/torchrun.log logs/gh2_torchrun_remote.log || true
+          scp -o BatchMode=yes -A gh1:/home/yangzhou_ucberkeley/uccl-test/ep/torchrun.log logs/gh1_torchrun.log || true
+          scp -o BatchMode=yes -A gh2:/home/yangzhou_ucberkeley/uccl-test/ep/torchrun.log logs/gh2_torchrun.log || true
 
       - name: Upload logs
         if: always()
