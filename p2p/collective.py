@@ -281,22 +281,30 @@ class CollectiveContext:
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=self.world_size
         ) as executor:
-            # Submit connect tasks for all other ranks (for sending TO them)
-            connect_futures = []
+            futures = []
             for peer_rank in range(self.world_size):
-                if peer_rank != self.rank:
+                if peer_rank == self.rank:
+                    continue
+                if self.rank < peer_rank:
+                    print(f"[Rank {self.rank}] Connecting to rank {peer_rank}...")
                     future = executor.submit(connect_to_peer, peer_rank)
-                    connect_futures.append(future)
-
-            # Submit accept tasks for all other ranks (for receiving FROM them)
-            accept_futures = []
-            for peer_rank in range(self.world_size):
-                if peer_rank != self.rank:
+                else:
+                    print(f"[Rank {self.rank}] Accepting from rank {peer_rank}...")
                     future = executor.submit(accept_from_peer)
-                    accept_futures.append(future)
 
-            # Wait for all connections to complete
-            concurrent.futures.wait(connect_futures + accept_futures)
+            for peer_rank in range(self.world_size):
+                if peer_rank == self.rank:
+                    continue
+                if self.rank > peer_rank:
+                    print(f"[Rank {self.rank}] Connecting to rank {peer_rank}...")
+                    future = executor.submit(connect_to_peer, peer_rank)
+                else:
+                    print(f"[Rank {self.rank}] Accepting from rank {peer_rank}...")
+                    future = executor.submit(accept_from_peer)
+                    futures.append(future)
+            concurrent.futures.wait(
+                futures, return_when=concurrent.futures.ALL_COMPLETED
+            )
 
         # Check for any errors
         if connect_errors:
@@ -345,6 +353,28 @@ class CollectiveContext:
 
         ptr, size = self._get_buffer_info(tensor)
         self._register_memory(ptr, size)
+
+    def _deregister_memory(self, ptr: int):
+        """Deregister memory and remove the cached memory region ID."""
+        if ptr not in self.memory_regions:
+            return
+
+        mr_id = self.memory_regions[ptr]
+        self.ep.dereg(mr_id)
+        del self.memory_regions[ptr]
+
+    def deregister_tensor(self, tensor: torch.Tensor):
+        """
+        Deregister a tensor that was previously registered.
+
+        Args:
+            tensor: Tensor to deregister
+        """
+        if not self.initialized:
+            raise RuntimeError("CollectiveContext not initialized. Call init() first.")
+
+        ptr, _ = self._get_buffer_info(tensor)
+        self._deregister_memory(ptr)
 
     def send(self, tensor: torch.Tensor, dst: int):
         """
@@ -555,6 +585,44 @@ class CollectiveContext:
         self.ep = None
         self.initialized = False
 
+    def all_to_all_single(self, send_tensor: torch.Tensor, recv_tensor: torch.Tensor):
+        assert (
+            send_tensor.is_contiguous() and recv_tensor.is_contiguous()
+        ), "only support contiguous tensors"
+
+        assert send_tensor.shape == recv_tensor.shape, (
+            f"send_tensor and recv_tensor must have the same shape, "
+            f"but got {send_tensor.shape} and {recv_tensor.shape}"
+        )
+        assert (
+            send_tensor.numel() % self.world_size == 0
+        ), "Tensor must be evenly divisible across world_size."
+
+        send_chunks = send_tensor.view(self.world_size, -1)
+        recv_chunks = recv_tensor.view(self.world_size, -1)
+        send_ids, recv_ids = [], []
+        for r in range(self.world_size):
+            if r == self.rank:
+                recv_chunks[r].copy_(send_chunks[r])
+            else:
+                self.register_tensor(send_chunks[r].contiguous())
+                tid = self.isend(send_chunks[r].contiguous(), r)
+                send_ids.append(tid)
+                self.deregister_tensor(send_chunks[r].contiguous())
+
+        for r in range(self.world_size):
+            if r == self.rank:
+                continue
+            self.register_tensor(recv_chunks[r].contiguous())
+            tid = self.irecv(recv_chunks[r].contiguous(), r)
+            recv_ids.append(tid)
+            self.deregister_tensor(recv_chunks[r].contiguous())
+        self.wait_all(send_ids + recv_ids)
+
+    def wait_all(self, transfer_ids: List[int]):
+        for transfer_id in transfer_ids:
+            self.wait(transfer_id)
+
 
 # Global collective context instance
 _default_context: Optional[CollectiveContext] = None
@@ -607,8 +675,7 @@ def wait(transfer_id: int):
 
 def wait_all(transfer_ids: List[int]):
     """Wait for all async operations using the default collective context."""
-    for transfer_id in transfer_ids:
-        get_collective().wait(transfer_id)
+    get_collective().wait_all(transfer_ids)
 
 
 def test(transfer_id: int) -> bool:
@@ -627,3 +694,13 @@ def finalize_collective():
     if _default_context is not None:
         _default_context.finalize()
         _default_context = None
+
+
+def all_to_all_single(send_tensor: torch.Tensor, recv_tensor: torch.Tensor):
+    """all_to_all_single using the default collective context."""
+    get_collective().all_to_all_single(send_tensor, recv_tensor)
+
+
+def deregister_tensor(tensor: torch.Tensor):
+    """Deregister tensor using the default collective context."""
+    get_collective().deregister_tensor(tensor)

@@ -90,3 +90,7 @@ wheelhouse-*/
 build/
 ep/*.log
 *.log
+
+nodes.txt
+pcie_test
+transport_test
