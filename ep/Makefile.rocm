@@ -1,5 +1,6 @@
 HIP_HOME ?= /opt/rocm
 override CXX := /usr/bin/g++
+HIPIFY_TORCH_CLI := python $(CURDIR)/../thirdparty/hipify_torch/hipify_cli.py
 HIPCC      := $(HIP_HOME)/bin/hipcc
 CONDA_LIB_HOME?=/usr/lib
 
@@ -10,48 +11,66 @@ LDFLAGS   := -lpthread -L${CONDA_LIB_HOME} -lglog -lgflags -lgtest -lz -lelf
 LDFLAGS   += -libverbs -lnl-3 -lnl-route-3
 HIPCCFLAGS := -g -O0 -std=c++17 -D__HIP_PLATFORM_AMD__ --offload-arch=gfx942
 
-INCLUDES := -Iinclude -I$(HIP_HOME)/include -I/usr/include -I../include
+INCLUDES := -Iinclude -I../include -I$(HIP_HOME)/include -I/usr/include 
 
-SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp src/peer_copy_worker.cpp
+# src/peer_copy_worker.cpp
+SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp 
 SRC_CU  := src/gpu_kernel.cu src/peer_copy.cu
-SRC_LOCAL  := bench/benchmark_local.cu
-SRC_REMOTE := bench/benchmark_remote.cu
-SRC_DUAL	:= bench/benchmark_dual.cu
+SRC_LOCAL  := src/benchmark_local.cu
+SRC_REMOTE := src/benchmark_remote.cu
+SRC_DUAL	:= src/benchmark_dual.cu
 
-OBJ_CPP := $(SRC_CPP:.cpp=.o)
-OBJ_CU := $(SRC_CU:.cu=.o)
+SOURCES := $(SRC_CPP) $(SRC_CU) $(SRC_LOCAL) $(SRC_REMOTE) $(SRC_DUAL)
+HIPIFY_SRC_CPP := $(SRC_CPP:.cpp=_hip.cpp)
+HIPIFY_SRC_CU := $(SRC_CU:.cu=.hip)
+HIPIFY_SRC_LOCAL := $(SRC_LOCAL:.cu=.hip)
+HIPIFY_SRC_REMOTE := $(SRC_REMOTE:.cu=.hip)
+HIPIFY_SRC_DUAL := $(SRC_DUAL:.cu=.hip)
+HIPIFY_SOURCES := $(HIPIFY_SRC_CPP) $(HIPIFY_SRC_CU) $(HIPIFY_SRC_LOCAL) $(HIPIFY_SRC_REMOTE) $(HIPIFY_SRC_DUAL)
 
-OBJ_LOCAL  := $(OBJ_CPP) $(OBJ_CU) $(SRC_LOCAL:.cu=.o)
-OBJ_REMOTE := $(OBJ_CPP) $(OBJ_CU) $(SRC_REMOTE:.cu=.o)
+
+HIPIFY_OBJ_CPP := $(HIPIFY_SRC_CPP:.cpp=.o)
+HIPIFY_OBJ_CU := $(HIPIFY_SRC_CU:.hip=.o)
+
+HIPIFY_OBJ_LOCAL  := $(HIPIFY_OBJ_CPP) $(HIPIFY_OBJ_CU) $(HIPIFY_SRC_LOCAL:.hip=.o)
+HIPIFY_OBJ_REMOTE := $(HIPIFY_OBJ_CPP) $(HIPIFY_OBJ_CU) $(HIPIFY_SRC_REMOTE:.hip=.o)
+
 
 TARGET_LOCAL  := benchmark_local
 TARGET_REMOTE := benchmark_remote
 TARGET_DUAL   := benchmark_dual
-all: $(TARGET_LOCAL) $(TARGET_REMOTE) $(TARGET_DUAL)	
+
+all: hipify $(TARGET_LOCAL) $(TARGET_REMOTE) $(TARGET_DUAL)
+
+$(HIPIFY_SOURCES):hipify
+	@echo hello
+
+hipify:
+	$(HIPIFY_TORCH_CLI) --project-directory $(CURDIR) --output-directory $(CURDIR)  --header-include-dirs $(CURDIR)/include;$(CURDIR)/../include
 
 # C++ compilation rule with dependency generation
-%.o: %.cpp
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
-# HIP compilation rule with dependency generation
-%.o: %.cu
+%_hip.o: %_hip.cpp
+	$(CXX) $(CXXFLAGS)  $(INCLUDES) -MMD -MP  -c  $< -o $@
+
+%.o: %.hip
 	$(HIPCC) $(HIPCCFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
 # Linking rules
-$(TARGET_LOCAL): $(OBJ_LOCAL)
-	$(HIPCC) $(HIPCCFLAGS) $(INCLUDES) $(OBJ_LOCAL) -lamdhip64 $(LDFLAGS) -o $@
+$(TARGET_LOCAL): $(HIPIFY_OBJ_LOCAL)
+	$(HIPCC) $(HIPCCFLAGS) $(INCLUDES) $(HIPIFY_OBJ_LOCAL) -lamdhip64 $(LDFLAGS) -o $@
 
-$(TARGET_REMOTE): $(OBJ_REMOTE)
-	$(HIPCC) $(HIPCCFLAGS) $(INCLUDES) $(OBJ_REMOTE) -lamdhip64 $(LDFLAGS) -o $@
+$(TARGET_REMOTE): $(HIPIFY_OBJ_REMOTE)
+	$(HIPCC) $(HIPCCFLAGS) $(INCLUDES) $(HIPIFY_OBJ_REMOTE) -lamdhip64 $(LDFLAGS) -o $@
 
-$(TARGET_DUAL): $(OBJ_CPP) $(OBJ_CU) $(SRC_DUAL:.cu=.o)
-	$(HIPCC) $(HIPCCFLAGS) $(INCLUDES) $(OBJ_CPP) $(OBJ_CU) $(SRC_DUAL:.cu=.o) -lamdhip64 $(LDFLAGS) -o $@
+$(TARGET_DUAL): $(HIPIFY_OBJ_CPP) $(HIPIFY_OBJ_CU) $(HIPIFY_SRC_DUAL:.hip=.o)
+	$(HIPCC) $(HIPCCFLAGS) $(INCLUDES) $(HIPIFY_OBJ_CPP) $(HIPIFY_OBJ_CU) $(HIPIFY_SRC_DUAL:.hip=.o) -lamdhip64 $(LDFLAGS) -o $@
 
 # Clean all generated files
 clean:
-	rm -f $(OBJ_CPP) $(OBJ_CU) $(SRC_LOCAL:.cu=.o) $(SRC_REMOTE:.cu=.o) $(TARGET_LOCAL) $(TARGET_REMOTE) $(TARGET_DUAL) *.d src/*.d
+	rm -f $(OBJ_CPP) $(OBJ_CU) $(SRC_LOCAL:.cu=.o) $(SRC_REMOTE:.cu=.o) $(TARGET_LOCAL) $(TARGET_REMOTE) $(TARGET_DUAL) *.d src/*.d $(HIPIFY_SOURCES)
 
 .PHONY: all clean
 
 # Automatically include dependency files if they exist
--include $(OBJ_LOCAL:.o=.d) $(OBJ_REMOTE:.o=.d)
+-include $(HIPIFY_OBJ_LOCAL:.o=.d) $(HIPIFY_OBJ_REMOTE:.o=.d)
