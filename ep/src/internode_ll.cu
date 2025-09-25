@@ -173,7 +173,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
             lane_id == 0
                 ? atomicAdd(atomic_counter_per_expert + dst_expert_idx, 1)
                 : 0;
-        slot_idx = __shfl_sync(0xffffffff, slot_idx, 0);
+        slot_idx = __shfl_sync(WARP_MASK, slot_idx, 0);
         auto const dst_rank = dst_expert_idx / num_local_experts;
         auto const dst_expert_local_idx = dst_expert_idx % num_local_experts;
         auto const src_ptr = reinterpret_cast<uint64_t>(rdma_x_src_idx);
@@ -662,7 +662,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
           reinterpret_cast<uint8_t*>(rdma_send_type_row);
 
       auto const src_idx =
-          __shfl_sync(0xffffffff, __ldg(local_src_info + token_idx), 0);
+          __shfl_sync(WARP_MASK, __ldg(local_src_info + token_idx), 0);
       auto const buf_ptr = reinterpret_cast<int64_t>(rdma_send_x_vec_row);
       auto const dst_ptr =
           reinterpret_cast<uint64_t>(rdma_recv_x) +
