@@ -408,8 +408,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
 
       // Move tail index
       // NOTES: here all warps should share the same new tail
-      asm volatile("bar.sync %0, %1;" ::"r"(responsible_rank),
-                   "r"(num_threads_per_rank));
+      sync_barrier(responsible_rank, num_threads_per_rank);
       if (send_warp_id_in_rank == 0 and lane_id == 0)
         st_release_sys_global(channel_tail_idx.buffer(),
                               cached_channel_tail_idx);
@@ -447,9 +446,9 @@ __global__ void __launch_bounds__(kNumThreads, 1)
                             responsible_channel] = total_offset;
       num_tokens_to_recv -= total_offset;
     }
-    total_offset = __shfl_sync(0xffffffff, total_offset, 0);
+    total_offset = __shfl_sync(WARP_MASK, total_offset, 0);
     total_offset += rank_offset;
-    num_tokens_to_recv = __shfl_sync(0xffffffff, num_tokens_to_recv, 0);
+    num_tokens_to_recv = __shfl_sync(WARP_MASK, num_tokens_to_recv, 0);
 
     // Shared tail indices for different warps
     __shared__ int volatile shared_channel_tail_idx[kNumRanks];
@@ -561,8 +560,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
       // Move queue
       cached_channel_head_idx += num_recv_tokens;
       total_offset += num_recv_tokens;
-      asm volatile("bar.sync %0, %1;" ::"r"(responsible_rank),
-                   "r"(num_threads_per_rank));
+      sync_barrier(responsible_rank, num_threads_per_rank);
       if (recv_warp_id_in_rank == num_recv_warps_per_rank - 1 and lane_id == 0)
         st_relaxed_sys_global(channel_head_idx.buffer(),
                               cached_channel_head_idx);
@@ -675,7 +673,7 @@ __global__ void cached_notify_combine(void** buffer_ptrs, int* send_head,
               ? __ldg(send_head + token_idx * kNumRanks + rank_id)
               : -1;
       for (int i = 0; i < min(32, token_idx_tail - token_start_idx + 1); ++i) {
-        int const head = __shfl_sync(0xffffffff, current_head, i);
+        int const head = __shfl_sync(WARP_MASK, current_head, i);
         if (head < 0) {
           if (lane_id == i) expected_head = -last_head - 1;
         } else {
@@ -955,7 +953,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
               ld_nc_global(send_head + token_idx * kNumRanks + lane_id);
 
         auto start_time = clock64();
-        while (__any_sync(0xffffffff,
+        while (__any_sync(WARP_MASK,
                           channel_tail_idx[lane_id] <= expected_head and
                               expected_head >= 0)) {
           // Timeout check
@@ -973,7 +971,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
         int num_topk_ranks = 0, topk_ranks[kNumRanks], slot_indices[kNumRanks];
 #pragma unroll
         for (int i = 0; i < kNumRanks; ++i) {
-          auto expected_head_i = __shfl_sync(0xffffffff, expected_head, i);
+          auto expected_head_i = __shfl_sync(WARP_MASK, expected_head, i);
           if (expected_head_i >= 0) {
             slot_indices[num_topk_ranks] =
                 expected_head_i % num_recv_buffer_tokens;
