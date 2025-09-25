@@ -47,7 +47,10 @@ class EPException : public std::exception {
     if (not(cond)) {                                                         \
       printf("Assertion failed: %s:%d, condition: %s\n", __FILE__, __LINE__, \
              #cond);                                                         \
-      asm("trap;");                                                          \
+      _Pragma("if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)")      \
+          abort();                                                           \
+      _Pragma("else") asm("trap;");                                          \
+      _Pragma("endif")                                                       \
     }                                                                        \
   } while (0)
 #endif
