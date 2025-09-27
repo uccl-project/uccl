@@ -206,7 +206,6 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
   }
 }
 
-template <bool kLowLatencyMode>
 __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
     uint64_t const* ring_addrs, int num_ring_addrs) {
   int ring_idx = 0;

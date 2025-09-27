@@ -118,12 +118,11 @@ __global__ void notify_dispatch(
 
     // waiting for all previous inflight wrs to complete,
     // in case of rewriting cleared rdma_buffer
-    uccl::nvshmemi_ibgda_quiet(ring_addrs, num_ring_addrs);
+    if (thread_id == 32) uccl::nvshmemi_ibgda_quiet(ring_addrs, num_ring_addrs);
     __syncthreads();
 
     if (thread_id == 32)
-      uccl::nvshmem_sync_with_same_gpu_idx<kLowLatencyMode>(ring_addrs,
-                                                            num_ring_addrs);
+      uccl::nvshmem_sync_with_same_gpu_idx(ring_addrs, num_ring_addrs);
     barrier_block<NUM_MAX_NVL_PEERS, true>(barrier_signal_ptrs, nvl_rank);
 
     // Send numbers of tokens per rank/expert to RDMA ranks
@@ -180,14 +179,12 @@ __global__ void notify_dispatch(
     __syncthreads();
 
     // Wait previous operations to be finished
-    if (thread_id < kNumRDMARanks and thread_id != rdma_rank)
-      uccl::nvshmemi_ibgda_quiet(ring_addrs, num_ring_addrs);
+    if (thread_id == 32) uccl::nvshmemi_ibgda_quiet(ring_addrs, num_ring_addrs);
     __syncthreads();
 
     // Barrier
-    if (thread_id == 0)
-      uccl::nvshmem_sync_with_same_gpu_idx<kLowLatencyMode>(ring_addrs,
-                                                            num_ring_addrs);
+    if (thread_id == 32)
+      uccl::nvshmem_sync_with_same_gpu_idx(ring_addrs, num_ring_addrs);
     __syncthreads();
 
     // NVL buffers
@@ -286,8 +283,7 @@ __global__ void notify_dispatch(
 
     // Finally barrier
     if (thread_id == 32)
-      uccl::nvshmem_sync_with_same_gpu_idx<kLowLatencyMode>(ring_addrs,
-                                                            num_ring_addrs);
+      uccl::nvshmem_sync_with_same_gpu_idx(ring_addrs, num_ring_addrs);
     barrier_block<NUM_MAX_NVL_PEERS>(barrier_signal_ptrs, nvl_rank);
   } else {
     // Calculate meta data
@@ -1365,13 +1361,12 @@ __global__ void cached_notify(
 
   // Using two SMs, which clean the RDMA/NVL buffer respectively
   if (sm_id == 0) {
-    uccl::nvshmemi_ibgda_quiet(ring_addrs, num_ring_addrs);
+    if (thread_id == 32) uccl::nvshmemi_ibgda_quiet(ring_addrs, num_ring_addrs);
     __syncthreads();
 
     // Barrier for RDMA
     if (thread_id == 32)
-      uccl::nvshmem_sync_with_same_gpu_idx<kLowLatencyMode>(ring_addrs,
-                                                            num_ring_addrs);
+      uccl::nvshmem_sync_with_same_gpu_idx(ring_addrs, num_ring_addrs);
 
     // Barrier for NVL
     barrier_block<NUM_MAX_NVL_PEERS, true>(barrier_signal_ptrs, nvl_rank);
@@ -1391,8 +1386,7 @@ __global__ void cached_notify(
 
     // Barrier again
     if (thread_id == 32)
-      uccl::nvshmem_sync_with_same_gpu_idx<kLowLatencyMode>(ring_addrs,
-                                                            num_ring_addrs);
+      uccl::nvshmem_sync_with_same_gpu_idx(ring_addrs, num_ring_addrs);
 
     barrier_block<NUM_MAX_NVL_PEERS>(barrier_signal_ptrs, nvl_rank);
   } else if (sm_id == 1) {
