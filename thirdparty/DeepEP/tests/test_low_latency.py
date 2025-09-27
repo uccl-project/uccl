@@ -30,6 +30,7 @@ def test_main(num_tokens: int, hidden: int, num_experts: int, num_topk: int,
     x_pure_rand = torch.randn((num_tokens, hidden), dtype=torch.bfloat16, device='cuda') * 0.1
     scores = torch.randn((num_tokens, num_experts), dtype=torch.float32, device='cuda').abs() + 1
     topk_idx = torch.topk(scores, num_topk, dim=-1, largest=True, sorted=True)[1]
+    print("TopK indices sample:", topk_idx, flush=True)
     topk_weights = torch.randn((num_tokens, num_topk), dtype=torch.float32, device='cuda').abs()
 
     # Randomly mask some positions
@@ -143,7 +144,8 @@ def test_main(num_tokens: int, hidden: int, num_experts: int, num_topk: int,
         group.barrier()
         dispatch_t, combine_t = bench_kineto(partial(test_func, return_recv_hook=return_recv_hook),
                                              kernel_names=('dispatch', 'combine'), barrier_comm_profiling=True,
-                                             suppress_kineto_output=True, num_kernels_per_period=2 if return_recv_hook else 1)
+                                             suppress_kineto_output=True, num_kernels_per_period=2 if return_recv_hook else 1,
+                                             trace_path="my_profile_trace.json" if not return_recv_hook else None)
         if not return_recv_hook:
             print(f'[rank {rank}] Dispatch bandwidth: {num_dispatch_comm_bytes / 1e9 / dispatch_t:.2f} GB/s, avg_t={dispatch_t * 1e6:.2f} us | '
                   f'Combine bandwidth: {num_combine_comm_bytes / 1e9 / combine_t:.2f} GB/s, avg_t={combine_t * 1e6:.2f} us', flush=True)
@@ -164,7 +166,8 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         print(f'Allocating buffer size: {num_rdma_bytes / 1e6} MB ...', flush=True)
     buffer = deep_ep.Buffer(group, num_rdma_bytes=num_rdma_bytes, low_latency_mode=True,
                             num_qps_per_rank=num_experts // num_ranks,
-                            allow_nvlink_for_low_latency_mode=not args.disable_nvlink, 
+                            allow_nvlink_for_low_latency_mode=not args.disable_nvlink,
+                            explicitly_destroy=True, 
                             allow_mnnvl=args.allow_mnnvl)
     print("Buffer initialized.", flush=True)
     test_main(num_tokens, hidden, num_experts, num_topk, rank, num_ranks, group, buffer,

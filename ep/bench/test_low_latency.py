@@ -379,6 +379,7 @@ def test_main(
             barrier_comm_profiling=True,
             suppress_kineto_output=True,
             num_kernels_per_period=2 if return_recv_hook else 1,
+            trace_path="my_profile_trace.json" if not return_recv_hook else None
         )
         if not return_recv_hook:
             print(
