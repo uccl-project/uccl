@@ -13,10 +13,6 @@ namespace uccl {
 
 namespace internode {
 
-#ifdef ZIMING_DEBUG
-extern nvshmem_team_t cpu_rdma_team;
-#endif
-
 struct SourceMeta {
   int src_rdma_rank, is_token_in_nvl_rank_bits;
 
@@ -90,14 +86,6 @@ __forceinline__ __device__ int translate_dst_rdma_rank(int const dst_rdma_rank,
                          : dst_rdma_rank;
 }
 
-#ifdef ZIMING_DEBUG
-template <bool kLowLatencyMode>
-__forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
-    nvshmem_team_t const& rdma_team) {
-  kLowLatencyMode ? void(nvshmem_sync(rdma_team)) : nvshmem_sync_all();
-}
-#endif
-
 template <bool kLowLatencyMode, int kNumRDMARanks>
 __global__ void notify_dispatch(
     int const* num_tokens_per_rank, int* moe_recv_counter_mapped, int num_ranks,
@@ -130,25 +118,12 @@ __global__ void notify_dispatch(
 
     // waiting for all previous inflight wrs to complete,
     // in case of rewriting cleared rdma_buffer
-#ifdef ZIMING_DEBUG
-    auto qps_per_rdma_rank = ibgda_get_state()->num_rc_per_pe *
-                             ibgda_get_state()->num_devices_initialized;
-    for (int i = thread_id; i < qps_per_rdma_rank * (kNumRDMARanks - 1);
-         i += num_threads) {
-      auto dst_rdma_rank =
-          (i / qps_per_rdma_rank + rdma_rank + 1) % kNumRDMARanks;
-      auto qp_id = i % qps_per_rdma_rank;
-      nvshmemi_ibgda_quiet(
-          translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank),
-          qp_id);
-    }
-#endif
+    uccl::nvshmemi_ibgda_quiet(ring_addrs, num_ring_addrs);
     __syncthreads();
 
-#ifdef ZIMING_DEBUG
     if (thread_id == 32)
-      nvshmem_sync_with_same_gpu_idx<kLowLatencyMode>(rdma_team);
-#endif
+      uccl::nvshmem_sync_with_same_gpu_idx<kLowLatencyMode>(ring_addrs,
+                                                            num_ring_addrs);
     barrier_block<NUM_MAX_NVL_PEERS, true>(barrier_signal_ptrs, nvl_rank);
 
     // Send numbers of tokens per rank/expert to RDMA ranks
@@ -206,17 +181,13 @@ __global__ void notify_dispatch(
 
     // Wait previous operations to be finished
     if (thread_id < kNumRDMARanks and thread_id != rdma_rank)
-#ifdef ZIMING_DEBUG
-      nvshmemi_ibgda_quiet(
-          translate_dst_rdma_rank<kLowLatencyMode>(thread_id, nvl_rank), 0);
-#endif
+      uccl::nvshmemi_ibgda_quiet(ring_addrs, num_ring_addrs);
     __syncthreads();
 
     // Barrier
-#ifdef ZIMING_DEBUG
     if (thread_id == 0)
-      nvshmem_sync_with_same_gpu_idx<kLowLatencyMode>(rdma_team);
-#endif
+      uccl::nvshmem_sync_with_same_gpu_idx<kLowLatencyMode>(ring_addrs,
+                                                            num_ring_addrs);
     __syncthreads();
 
     // NVL buffers
@@ -314,10 +285,9 @@ __global__ void notify_dispatch(
     }
 
     // Finally barrier
-#ifdef ZIMING_DEBUG
     if (thread_id == 32)
-      nvshmem_sync_with_same_gpu_idx<kLowLatencyMode>(rdma_team);
-#endif
+      uccl::nvshmem_sync_with_same_gpu_idx<kLowLatencyMode>(ring_addrs,
+                                                            num_ring_addrs);
     barrier_block<NUM_MAX_NVL_PEERS>(barrier_signal_ptrs, nvl_rank);
   } else {
     // Calculate meta data
@@ -483,11 +453,6 @@ __global__ void __launch_bounds__(
   bool const is_forwarder = sm_id % 2 == 0;
   auto const rdma_rank = rank / NUM_MAX_NVL_PEERS,
              nvl_rank = rank % NUM_MAX_NVL_PEERS;
-
-#ifdef ZIMING_DEBUG
-  EP_DEVICE_ASSERT(ibgda_get_state()->num_rc_per_pe == num_channels or
-                   ibgda_get_state()->num_rc_per_pe >= num_sms);
-#endif
 
   auto const role_meta = [=]() -> std::pair<WarpRole, int> {
     if (is_forwarder) {
@@ -1385,8 +1350,8 @@ __global__ void cached_notify(
     int* combined_rdma_head, int num_combined_tokens, int num_channels,
     int const* rdma_channel_prefix_matrix, int const* rdma_rank_prefix_sum,
     int* combined_nvl_head, void* rdma_buffer_ptr, void** buffer_ptrs,
-    int** barrier_signal_ptrs, int rank, int num_ranks,
-    bool is_cached_dispatch) {
+    int** barrier_signal_ptrs, int rank, int num_ranks, bool is_cached_dispatch,
+    uint64_t const* ring_addrs, int num_ring_addrs) {
   auto sm_id = static_cast<int>(blockIdx.x);
   auto thread_id = static_cast<int>(threadIdx.x);
   auto num_threads = static_cast<int>(blockDim.x);
@@ -1400,26 +1365,13 @@ __global__ void cached_notify(
 
   // Using two SMs, which clean the RDMA/NVL buffer respectively
   if (sm_id == 0) {
-#ifdef ZIMING_DEBUG
-    auto qps_per_rdma_rank = ibgda_get_state()->num_rc_per_pe *
-                             ibgda_get_state()->num_devices_initialized;
-    for (int i = thread_id; i < qps_per_rdma_rank * (num_rdma_ranks - 1);
-         i += num_threads) {
-      auto dst_rdma_rank =
-          (i / qps_per_rdma_rank + rdma_rank + 1) % num_rdma_ranks;
-      auto qp_id = i % qps_per_rdma_rank;
-      nvshmemi_ibgda_quiet(
-          translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank),
-          qp_id);
-    }
-#endif
+    uccl::nvshmemi_ibgda_quiet(ring_addrs, num_ring_addrs);
     __syncthreads();
 
     // Barrier for RDMA
-#ifdef ZIMING_DEBUG
     if (thread_id == 32)
-      nvshmem_sync_with_same_gpu_idx<kLowLatencyMode>(rdma_team);
-#endif
+      uccl::nvshmem_sync_with_same_gpu_idx<kLowLatencyMode>(ring_addrs,
+                                                            num_ring_addrs);
 
     // Barrier for NVL
     barrier_block<NUM_MAX_NVL_PEERS, true>(barrier_signal_ptrs, nvl_rank);
@@ -1438,10 +1390,9 @@ __global__ void cached_notify(
     __syncthreads();
 
     // Barrier again
-#ifdef ZIMING_DEBUG
     if (thread_id == 32)
-      nvshmem_sync_with_same_gpu_idx<kLowLatencyMode>(rdma_team);
-#endif
+      uccl::nvshmem_sync_with_same_gpu_idx<kLowLatencyMode>(ring_addrs,
+                                                            num_ring_addrs);
 
     barrier_block<NUM_MAX_NVL_PEERS>(barrier_signal_ptrs, nvl_rank);
   } else if (sm_id == 1) {
@@ -1572,7 +1523,8 @@ void cached_notify(int hidden_int4, int num_scales, int num_topk_idx,
                    void** buffer_ptrs, int num_max_nvl_chunked_recv_tokens,
                    int** barrier_signal_ptrs, int rank, cudaStream_t stream,
                    int64_t num_rdma_bytes, int64_t num_nvl_bytes,
-                   bool is_cached_dispatch, bool low_latency_mode) {
+                   bool is_cached_dispatch, bool low_latency_mode,
+                   uint64_t const* ring_addrs, int num_ring_addrs) {
   int const num_threads = std::max(128, 32 * num_channels);
   int const num_warps = num_threads / 32;
   auto const num_rdma_ranks = num_ranks / NUM_MAX_NVL_PEERS;
@@ -1607,7 +1559,8 @@ void cached_notify(int hidden_int4, int num_scales, int num_topk_idx,
                 nvl_clean_meta.second, combined_rdma_head, num_combined_tokens,
                 num_channels, rdma_channel_prefix_matrix, rdma_rank_prefix_sum,
                 combined_nvl_head, rdma_buffer_ptr, buffer_ptrs,
-                barrier_signal_ptrs, rank, num_ranks, is_cached_dispatch);
+                barrier_signal_ptrs, rank, num_ranks, is_cached_dispatch,
+                ring_addrs, num_ring_addrs);
 }
 
 template <int kNumRanks, bool kMaybeWithBias, typename dtype_t,

@@ -526,7 +526,7 @@ class Buffer {
           comm_stream,
           config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4),
                                            num_ranks),
-          num_nvl_bytes, true, low_latency_mode);
+          num_nvl_bytes, true, low_latency_mode, d_ring_addrs, num_ring_addrs);
     } else {
       rdma_channel_prefix_matrix =
           torch::empty({num_rdma_ranks, num_channels},
@@ -820,7 +820,7 @@ class Buffer {
         buffer_ptrs_gpu, config.num_max_nvl_chunked_recv_tokens,
         barrier_signal_ptrs_gpu, rank, comm_stream,
         config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4), num_ranks),
-        num_nvl_bytes, false, low_latency_mode);
+        num_nvl_bytes, false, low_latency_mode, d_ring_addrs, num_ring_addrs);
 
     // Assign bias pointers
     auto bias_opts =

@@ -49,7 +49,8 @@ void cached_notify(int hidden_int4, int num_scales, int num_topk_idx,
                    void** buffer_ptrs, int num_max_nvl_chunked_recv_tokens,
                    int** barrier_signal_ptrs, int rank, cudaStream_t stream,
                    int64_t num_rdma_bytes, int64_t num_nvl_bytes,
-                   bool is_cached_dispatch, bool low_latency_mode);
+                   bool is_cached_dispatch, bool low_latency_mode,
+                   uint64_t const* ring_addrs, int num_ring_addrs);
 
 void dispatch(void* recv_x, float* recv_x_scales, int64_t* recv_topk_idx,
               float* recv_topk_weights, void* recv_src_meta, void const* x,

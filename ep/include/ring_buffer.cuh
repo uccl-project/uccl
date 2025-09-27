@@ -13,10 +13,13 @@
 #define COPY_RING_CAP 4096
 #endif
 
+enum class CmdType : uint64_t { WRITE = 0, ATOMIC, QUIET, BARRIER };
+
 // Command structure for each transfer
 struct TransferCmd {
   // NOTE(MaoZiming): cmd is used to identify the command type and needs to be
   // set in order for proxy to process the command.
+  CmdType cmd_type;
   uint64_t cmd;
   uint32_t dst_rank;  // remote node id (MPI-style)
   uint32_t dst_gpu;   // GPU id on remote node

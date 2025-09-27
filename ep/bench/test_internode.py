@@ -44,12 +44,20 @@ from utils import (
     initialize_uccl,
     destroy_uccl,
     init_dist_under_torchrun,
+    detect_ib_hca,
 )
 
 # Test compatibility with low latency functions
 import test_low_latency
 from buffer import Buffer
-from uccl.ep import Config
+
+try:
+    from uccl.ep import Config
+except ImportError as exc:
+    import sys
+
+    sys.stderr.write("Failed to import uccl.ep\n")
+    raise
 
 
 # noinspection PyShadowingNames
@@ -526,6 +534,10 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
 
 
 if __name__ == "__main__":
+    ib_dev = detect_ib_hca()
+    if ib_dev and ib_dev.startswith("mlx"):  # Mellanox IB devices show up like mlx5_0
+        os.environ["NCCL_IB_HCA"] = ib_dev
+        print(f"Set NCCL_IB_HCA={ib_dev}")
     parser = argparse.ArgumentParser(description="Test internode EP kernels")
     parser.add_argument(
         "--num-processes",
@@ -564,6 +576,8 @@ if __name__ == "__main__":
         args.num_topk_groups = min(num_nodes, 4)
 
     num_processes = args.num_processes
+    if num_processes != 8:
+        raise ValueError("Only --num-processes=8 is supported for this test.")
     # NOTE: modified from deep_ep
     local_rank = int(os.environ["LOCAL_RANK"])
     num_local_ranks = int(os.environ.get("LOCAL_WORLD_SIZE", 1))

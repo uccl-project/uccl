@@ -53,6 +53,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       TransferCmd cmd{};
       // TODO(MaoZiming): Check fields here.
       // NOTE(MaoZiming): cmd is needed for proxy to process the command.
+      cmd.cmd_type = CmdType::WRITE;
       cmd.cmd =
           (static_cast<uint64_t>(expert_idx + 1) << 32) |
           (message_idx & 0xFFFFFFFF);  // NOTE(MaoZiming): Use expert_idx + 1
@@ -108,6 +109,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
       if (inflight < kMaxInflight) {
         uint64_t slot = cur_head;
         TransferCmd cmd{};
+        cmd.cmd_type = CmdType::ATOMIC;
         // TODO(MaoZiming): Check fields here.
         // NOTE(MaoZiming): cmd is needed for proxy to process the command.
         cmd.cmd = 1;  // to avoid 0 as a valid command.
@@ -168,12 +170,73 @@ __device__ __forceinline__ uint64_t get_ipc_p2p_ptr(uint64_t const& local_ptr,
       reinterpret_cast<uintptr_t>(reinterpret_cast<void*>(local_ptr)) -
       reinterpret_cast<uintptr_t>(ipc_base_ptrs[src_local_rank]);
 
-  // printf("src_local_rank: %d, dst_local_rank: %d, offset: %zu, local_ptr: %p,
-  // base_ptr: %p\n", src_local_rank, dst_local_rank, offset, (void*)local_ptr,
-  // ipc_base_ptrs[src_local_rank]);
-
   // Return the remote pointer as uint64_t
   return reinterpret_cast<uint64_t>(ipc_base_ptrs[dst_local_rank]) + offset;
+}
+
+__device__ static __forceinline__ void nvshmemi_ibgda_quiet(
+    uint64_t const* ring_addrs, int num_ring_addrs) {
+  int ring_idx = 0;
+  auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
+      static_cast<uintptr_t>(ring_addrs[ring_idx]));
+  uint64_t cur_head = rb->head;
+  uint64_t cur_tail = rb->volatile_tail();
+  uint64_t inflight = cur_head - cur_tail;
+  auto last_print = clock64();
+  while (true) {
+    cur_head = rb->head;
+    cur_tail = rb->volatile_tail();
+    inflight = cur_head - cur_tail;
+    if (inflight < kMaxInflight) {
+      uint64_t slot = cur_head;
+      TransferCmd cmd{};
+      cmd.cmd_type = CmdType::QUIET;
+      rb->atomic_set_and_commit(cmd, &slot);
+      break;
+    }
+    if ((clock64() - last_print) > kPrintCycleInterval) {
+      if (threadIdx.x == 0 && blockIdx.x == 0) {
+        printf(
+            "[quiet] stuck waiting, inflight=%ld (cur_head=%lu "
+            "cur_tail=%lu)\n",
+            (long)inflight, (unsigned long)cur_head, (unsigned long)cur_tail);
+      }
+      last_print = clock64();
+    }
+  }
+}
+
+template <bool kLowLatencyMode>
+__forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
+    uint64_t const* ring_addrs, int num_ring_addrs) {
+  int ring_idx = 0;
+  auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
+      static_cast<uintptr_t>(ring_addrs[ring_idx]));
+  uint64_t cur_head = rb->head;
+  uint64_t cur_tail = rb->volatile_tail();
+  uint64_t inflight = cur_head - cur_tail;
+  auto last_print = clock64();
+  while (true) {
+    cur_head = rb->head;
+    cur_tail = rb->volatile_tail();
+    inflight = cur_head - cur_tail;
+    if (inflight < kMaxInflight) {
+      uint64_t slot = cur_head;
+      TransferCmd cmd{};
+      cmd.cmd_type = CmdType::BARRIER;
+      rb->atomic_set_and_commit(cmd, &slot);
+      break;
+    }
+    if ((clock64() - last_print) > kPrintCycleInterval) {
+      if (threadIdx.x == 0 && blockIdx.x == 0) {
+        printf(
+            "[quiet] stuck waiting, inflight=%ld (cur_head=%lu "
+            "cur_tail=%lu)\n",
+            (long)inflight, (unsigned long)cur_head, (unsigned long)cur_tail);
+      }
+      last_print = clock64();
+    }
+  }
 }
 
 }  // namespace uccl
