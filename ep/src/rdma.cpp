@@ -33,10 +33,6 @@
 #include <stdio.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#define MAX_RETRIES 20
-#define RETRY_DELAY_MS 200
-#define TCP_PORT 18515
-#define QKEY 0x11111111u
 
 void exchange_connection_info(int rank, char const* peer_ip, int tid,
                               RDMAConnectionInfo* local,

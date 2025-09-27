@@ -90,6 +90,9 @@ class Proxy {
   void post_gpu_command(uint64_t& my_tail, size_t& seen);
   void post_gpu_commands_mixed(std::vector<uint64_t> const& wrs_to_post,
                                std::vector<TransferCmd> const& cmds_to_post);
+  void barrier(std::vector<TransferCmd> cmds);
+  void quiet(std::vector<TransferCmd> cmds);
+  void quiet_cq();
   Config cfg_;
   RDMAConnectionInfo local_info_{}, remote_info_{};
 

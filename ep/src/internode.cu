@@ -490,9 +490,9 @@ __global__ void __launch_bounds__(
       SymBuffer<int>(rdma_buffer_ptr, NUM_MAX_NVL_PEERS * 2 + 2, kNumRDMARanks,
                      channel_id, num_channels);
   auto rdma_channel_head = SymBuffer<uint64_t, false>(
-      rdma_buffer_ptr, 1, kNumRDMARanks, channel_id, num_channels);
+      atomic_buffer_ptr, 1, kNumRDMARanks, channel_id, num_channels);
   auto rdma_channel_tail = SymBuffer<uint64_t, false>(
-      rdma_buffer_ptr, 1, kNumRDMARanks, channel_id, num_channels);
+      atomic_buffer_ptr, 1, kNumRDMARanks, channel_id, num_channels);
 
   // NVL buffer layouts
   // NOTES: `rs_wr_buffer_ptr` means "Read for Senders, Write for Receivers",
@@ -879,7 +879,7 @@ __global__ void __launch_bounds__(
           num_tokens_to_send -= num_tokens_to_issue;
           uccl::nvshmemi_ibgda_amo_nonfetch_add(
               reinterpret_cast<uint64_t>(rdma_channel_tail.buffer(rdma_rank)) -
-                  reinterpret_cast<uint64_t>(rdma_buffer_ptr),
+                  reinterpret_cast<uint64_t>(atomic_buffer_ptr),
               num_tokens_to_issue, dst_rdma_rank,
               warp_id,  // NOTE(MaoZiming): use warp_id for rb.
               target_rank, false, ring_addrs, num_ring_addrs, true);
@@ -1106,7 +1106,7 @@ __global__ void __launch_bounds__(
           lane_id < kNumRDMARanks) {
         uccl::nvshmemi_ibgda_amo_nonfetch_add(
             reinterpret_cast<uint64_t>(rdma_channel_tail.buffer(rdma_rank)) -
-                reinterpret_cast<uint64_t>(rdma_buffer_ptr),
+                reinterpret_cast<uint64_t>(atomic_buffer_ptr),
             min_head - last_head, target_rank /* Fix*/,
             warp_id,  // NOTE(MaoZiming): use warp_id for rb.
             target_rank, false, ring_addrs, num_ring_addrs, true);
@@ -1985,9 +1985,9 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
         rdma_buffer_ptr, num_max_rdma_chunked_recv_tokens * num_bytes_per_token,
         kNumRDMARanks, channel_id, num_channels);
     auto rdma_channel_head = SymBuffer<uint64_t, false>(
-        rdma_buffer_ptr, 1, kNumRDMARanks, channel_id, num_channels);
+        atomic_buffer_ptr, 1, kNumRDMARanks, channel_id, num_channels);
     auto rdma_channel_tail = SymBuffer<uint64_t, false>(
-        rdma_buffer_ptr, 1, kNumRDMARanks, channel_id, num_channels);
+        atomic_buffer_ptr, 1, kNumRDMARanks, channel_id, num_channels);
 
     // NVL layouts
     void* local_nvl_buffer = buffer_ptrs[nvl_rank];
@@ -2220,7 +2220,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
             uccl::nvshmemi_ibgda_amo_nonfetch_add(
                 reinterpret_cast<uint64_t>(
                     rdma_channel_tail.buffer(rdma_rank)) -
-                    reinterpret_cast<uint64_t>(rdma_buffer_ptr),
+                    reinterpret_cast<uint64_t>(atomic_buffer_ptr),
                 num_chunked_tokens, dst_rdma_rank,
                 warp_id,  // NOTE(MaoZiming): use warp_id for rb.
                 dst_rdma_rank /* Fix */, false, ring_addrs, num_ring_addrs,
@@ -2347,7 +2347,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
             uccl::nvshmemi_ibgda_amo_nonfetch_add(
                 reinterpret_cast<uint64_t>(
                     rdma_channel_head.buffer(rdma_rank)) -
-                    reinterpret_cast<uint64_t>(rdma_buffer_ptr),
+                    reinterpret_cast<uint64_t>(atomic_buffer_ptr),
                 min_head - last_rdma_head, dst_rdma_rank,
                 warp_id,  // NOTE(MaoZiming): use warp_id for rb.
                 dst_rdma_rank /* Fix*/, false, ring_addrs, num_ring_addrs,

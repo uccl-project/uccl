@@ -506,8 +506,10 @@ void Proxy::post_gpu_commands_mixed(
   std::vector<uint64_t> rdma_wrs, atomic_wrs;
   std::vector<TransferCmd> rdma_cmds, atomic_cmds;
 
+  std::vector<TransferCmd> quiet_cmds, barrier_cmds;
+
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
-    if (cmds_to_post[i].is_atomic) {
+    if (cmds_to_post[i].cmd_type == CmdType::ATOMIC) {
 #ifdef USE_SENDER_BARRIER
       int value = cmds_to_post[i].value;
       int expected_value;
@@ -550,9 +552,17 @@ void Proxy::post_gpu_commands_mixed(
              cmds_to_post[i].dst_rank});
       }
 #endif
-    } else {
+    } else if (cmds_to_post[i].cmd_type == CmdType::WRITE) {
       rdma_wrs.push_back(wrs_to_post[i]);
       rdma_cmds.push_back(cmds_to_post[i]);
+    } else if (cmds_to_post[i].cmd_type == CmdType::QUIET) {
+      quiet_cmds.push_back(cmds_to_post[i]);
+    } else if (cmds_to_post[i].cmd_type == CmdType::BARRIER) {
+      barrier_cmds.push_back(cmds_to_post[i]);
+    } else {
+      fprintf(stderr, "Error: Unknown command type %d\n",
+              static_cast<int>(cmds_to_post[i].cmd_type));
+      std::abort();
     }
   }
   // printf("Posting %zu RDMA writes and %zu atomic ops\n", rdma_wrs.size(),
@@ -568,6 +578,160 @@ void Proxy::post_gpu_commands_mixed(
                            cfg_.rank, cfg_.thread_idx, finished_wrs_,
                            acked_wrs_);
   }
+  if (!barrier_cmds.empty()) {
+    barrier(barrier_cmds);
+  }
+  if (!quiet_cmds.empty()) {
+    quiet(quiet_cmds);
+  }
+}
+
+void Proxy::quiet_cq() {
+  auto outstanding = [&]() -> size_t {
+    size_t sum = 0;
+    for (auto& ctx_ptr : ctxs_for_all_ranks_) {
+      if (!ctx_ptr) continue;
+      sum += ctx_ptr->wr_id_to_wr_ids.size();
+    }
+    return sum;
+  };
+  if (outstanding() == 0) {
+    drain_cq(ctx_.cq);
+    return;
+  }
+  using clock = std::chrono::steady_clock;
+  auto start = clock::now();
+  auto last_log = start;
+
+  while (true) {
+    local_poll_completions(ctx_, finished_wrs_, acked_wrs_, cfg_.thread_idx,
+                           ctx_by_tag_);
+    if (outstanding() == 0) break;
+    auto now = clock::now();
+    if (now - last_log > std::chrono::milliseconds(1000)) {
+      size_t o = outstanding();
+      fprintf(stderr, "[quiet] waiting, outstanding=%zu\n", o);
+      last_log = now;
+    }
+  }
+  drain_cq(ctx_.cq);
+}
+
+void Proxy::barrier(std::vector<TransferCmd> cmds) {
+  /* NOTE(MaoZiming): this is deliberatebly simple. I will optimize later. */
+  assert(cmds.size() == 1 && "barrier size must be 1");
+  quiet_cq();
+
+  int const my_rank = cfg_.rank;
+  int const num_ranks = static_cast<int>(ctxs_for_all_ranks_.size());
+  int const BARRIER_PORT_BASE = TCP_PORT + 40000;
+  int const port = BARRIER_PORT_BASE + cfg_.thread_idx;
+
+  if (my_rank == 0) {
+    int listenfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (listenfd < 0) {
+      perror("barrier socket()");
+      std::abort();
+    }
+    int one = 1;
+    setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = INADDR_ANY;
+
+    if (bind(listenfd, (sockaddr*)&addr, sizeof(addr)) != 0) {
+      perror("barrier bind()");
+      close(listenfd);
+      std::abort();
+    }
+    if (listen(listenfd, num_ranks) != 0) {
+      perror("barrier listen()");
+      close(listenfd);
+      std::abort();
+    }
+
+    int const expected = num_ranks - 1;
+
+    std::vector<int> client_fds;
+    client_fds.reserve(expected);
+
+    for (int i = 0; i < expected; ++i) {
+      sockaddr_in cli{};
+      socklen_t len = sizeof(cli);
+      int cfd = accept(listenfd, (sockaddr*)&cli, &len);
+      if (cfd < 0) {
+        perror("barrier accept()");
+        std::abort();
+      }
+
+      unsigned char b = 0;
+      ssize_t r = recv(cfd, &b, 1, MSG_WAITALL);
+      if (r != 1) {
+        perror("barrier recv()");
+        std::abort();
+      }
+      client_fds.push_back(cfd);
+    }
+
+    for (int fd : client_fds) {
+      unsigned char oneb = 1;
+      if (send(fd, &oneb, 1, 0) != 1) {
+        perror("barrier send()");
+      }
+      close(fd);
+    }
+    close(listenfd);
+  } else {
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+      perror("barrier socket()");
+      std::abort();
+    }
+    int one = 1;
+    setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    if (inet_pton(AF_INET, peers_[0].ip.c_str(), &addr.sin_addr) != 1) {
+      perror("barrier inet_pton()");
+      close(sockfd);
+      std::abort();
+    }
+
+    int retry = 0;
+    while (connect(sockfd, (sockaddr*)&addr, sizeof(addr)) != 0) {
+      if (++retry > MAX_RETRIES) {
+        fprintf(stderr,
+                "barrier: failed to connect to rank0 after %d retries\n",
+                retry);
+        perror("connect");
+        close(sockfd);
+        std::abort();
+      }
+      usleep(RETRY_DELAY_MS * 1000);  // backoff
+    }
+
+    unsigned char oneb = 1;
+    if (send(sockfd, &oneb, 1, 0) != 1) {
+      perror("barrier send()");
+      std::abort();
+    }
+    unsigned char ack = 0;
+    ssize_t r = recv(sockfd, &ack, 1, MSG_WAITALL);
+    if (r != 1 || ack != 1) {
+      perror("barrier recv()");
+      std::abort();
+    }
+    close(sockfd);
+  }
+}
+
+void Proxy::quiet(std::vector<TransferCmd> cmds) {
+  assert(cmds.size() == 1 && "quiet size must be 1");
+  quiet_cq();
 }
 
 void Proxy::destroy(bool free_gpu_buffer) {

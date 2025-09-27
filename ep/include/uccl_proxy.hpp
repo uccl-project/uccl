@@ -92,5 +92,4 @@ class UcclProxy {
   int local_rank_;
   void* atomic_buffer_ptr_;
   int node_idx_;
-  static constexpr size_t kRingsPerProxy = 8;
 };
