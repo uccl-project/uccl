@@ -40,6 +40,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   uint64_t cur_head = rb->head;
   uint64_t cur_tail = rb->volatile_tail();
   uint64_t inflight = cur_head - cur_tail;
+  printf("nvshmemi_ibgda_put_nbi_warp. dst_rank: %d\n", dst_rank);
 
   // NOTE(MaoZiming): Spins until there is a free slot in the ring buffer.
   auto last_print = clock64();
@@ -179,7 +180,7 @@ __device__ static __forceinline__ void wait_until_cmd_consumed(
   auto last_print = clock64();
   while (true) {
     uint64_t cur_tail = rb->volatile_tail();
-    if (cur_tail > slot) {
+    if (cur_tail >= slot) {
       break;
     }
     if ((clock64() - last_print) > kPrintCycleInterval) {
@@ -202,6 +203,7 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
   /* NOTE(MaoZiming): This should be sent to all proxy threads. Since each proxy
    * thread manages kRingsPerProxy ring buffers, we just need to post a quiet
    * command to one out of the kRingsPerProxy ring buffer. */
+  printf("nvshmemi_ibgda_quiet\n");
   for (int ring_idx = 0; ring_idx < num_ring_addrs;
        ring_idx += kRingsPerProxy) {
     auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
@@ -217,9 +219,13 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
       if (inflight < kMaxInflight) {
         uint64_t slot = cur_head;
         TransferCmd cmd{};
+        cmd.cmd = 1;  // dummy valid cmd.
         cmd.cmd_type = CmdType::QUIET;
         rb->atomic_set_and_commit(cmd, &slot);
-        wait_until_cmd_consumed(rb, slot);
+        printf("Posting quiet to ring_idx %d, slot=%lu, rb->head=%lu\n",
+               ring_idx, slot, rb->head);
+        wait_until_cmd_consumed(rb, rb->head);
+        printf("Quiet to ring_idx %d completed\n", ring_idx);
         break;
       }
       if ((clock64() - last_print) > kPrintCycleInterval) {
@@ -244,6 +250,7 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
   uint64_t cur_tail = rb->volatile_tail();
   uint64_t inflight = cur_head - cur_tail;
   auto last_print = clock64();
+  printf("Entering nvshmem_sync_with_same_gpu_idx\n");
   while (true) {
     cur_head = rb->head;
     cur_tail = rb->volatile_tail();
@@ -251,15 +258,19 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
     if (inflight < kMaxInflight) {
       uint64_t slot = cur_head;
       TransferCmd cmd{};
+      cmd.cmd = 1;  // dummy valid cmd.
       cmd.cmd_type = CmdType::BARRIER;
       rb->atomic_set_and_commit(cmd, &slot);
-      wait_until_cmd_consumed(rb, slot);
+      printf("Posting sync to ring_idx %d, slot=%lu, rb->head=%lu\n", ring_idx,
+             slot, rb->head);
+      wait_until_cmd_consumed(rb, rb->head);
+      printf("Sync to ring_idx %d completed\n", ring_idx);
       break;
     }
     if ((clock64() - last_print) > kPrintCycleInterval) {
       if (threadIdx.x == 0 && blockIdx.x == 0) {
         printf(
-            "[quiet] stuck waiting, inflight=%ld (cur_head=%lu "
+            "[barrier] stuck waiting, inflight=%ld (cur_head=%lu "
             "cur_tail=%lu)\n",
             (long)inflight, (unsigned long)cur_head, (unsigned long)cur_tail);
       }

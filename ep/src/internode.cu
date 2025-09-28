@@ -109,6 +109,13 @@ __global__ void notify_dispatch(
   auto num_rdma_experts = num_experts / kNumRDMARanks,
        num_nvl_experts = num_rdma_experts / NUM_MAX_NVL_PEERS;
 
+  if (lane_id == 0) {
+    printf(
+        "sm_id=%d, thread_id=%d, num_threads=%d, rdma_ranks=%d, nvl_rank=%d, "
+        "num_rdma_experts=%d, num_nvl_experts=%d\n",
+        sm_id, thread_id, num_threads, rdma_rank, nvl_rank, num_rdma_experts,
+        num_nvl_experts);
+  }
   if (sm_id == 0) {
     // Communication with others
     // Global barrier: the first warp does intra-node sync, the second warp does
@@ -164,9 +171,10 @@ __global__ void notify_dispatch(
             rdma_recv_num_tokens_mixed.recv_buffer(rdma_rank));
         uint64_t src_ptr = reinterpret_cast<uint64_t>(
             rdma_recv_num_tokens_mixed.send_buffer(i));
+        int dst_rank = i * NUM_MAX_NVL_PEERS + nvl_rank;
         uccl::nvshmemi_ibgda_put_nbi_warp(
             dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), src_ptr,
-            (NUM_MAX_NVL_PEERS + num_rdma_experts + 1) * sizeof(int), rdma_rank,
+            (NUM_MAX_NVL_PEERS + num_rdma_experts + 1) * sizeof(int), dst_rank,
             warp_id,  // NOTE(MaoZiming): use warp_id for rb.
             lane_id, 0, ring_addrs, num_ring_addrs, false);
       } else {

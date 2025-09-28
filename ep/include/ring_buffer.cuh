@@ -13,7 +13,7 @@
 #define COPY_RING_CAP 4096
 #endif
 
-enum class CmdType : uint64_t { WRITE = 0, ATOMIC, QUIET, BARRIER };
+enum class CmdType : uint64_t { EMPTY = 0, WRITE, ATOMIC, QUIET, BARRIER };
 
 // Command structure for each transfer
 struct TransferCmd {

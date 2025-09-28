@@ -379,6 +379,8 @@ class Buffer {
     EP_HOST_ASSERT(config.num_sms % 2 == 0);
     EP_HOST_ASSERT(0 < get_num_rdma_ranks() and
                    get_num_rdma_ranks() <= NUM_MAX_RDMA_PEERS);
+    printf("internode dispatch started!, num_rdma_ranks: %d\n",
+           get_num_rdma_ranks());
 
     bool cached_mode = cached_rdma_channel_prefix_matrix.has_value();
     if (cached_mode) {
@@ -518,6 +520,7 @@ class Buffer {
       recv_gbl_rank_prefix_sum = cached_recv_gbl_rank_prefix_sum.value();
 
       // Just a barrier and clean flags
+      printf("Using cached notify\n");
       uccl::internode::cached_notify(
           hidden_int4, num_scales, num_topk, num_topk, num_ranks, num_channels,
           0, nullptr, nullptr, nullptr, nullptr, rdma_buffer_ptr,
@@ -527,6 +530,7 @@ class Buffer {
           config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4),
                                            num_ranks),
           num_nvl_bytes, true, low_latency_mode, d_ring_addrs, num_ring_addrs);
+      printf("Cached notify done\n");
     } else {
       rdma_channel_prefix_matrix =
           torch::empty({num_rdma_ranks, num_channels},
@@ -542,6 +546,7 @@ class Buffer {
       *moe_recv_counter = -1, *moe_recv_rdma_counter = -1;
       for (int i = 0; i < num_local_experts; ++i)
         moe_recv_expert_counter[i] = -1;
+      printf("Using normal notify\n");
       uccl::internode::notify_dispatch(
           num_tokens_per_rank->data_ptr<int>(), moe_recv_counter_mapped,
           num_ranks, num_tokens_per_rdma_rank->data_ptr<int>(),
@@ -560,6 +565,7 @@ class Buffer {
                                            num_ranks),
           num_nvl_bytes, low_latency_mode, d_ring_addrs, num_ring_addrs);
 
+      printf("Normal notify done\n");
       // Synchronize total received tokens and tokens per expert
       auto start_time = std::chrono::high_resolution_clock::now();
       while (true) {

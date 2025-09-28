@@ -360,15 +360,27 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
       if (cmd == 0) break;
 
       TransferCmd& cmd_entry = ring_buffer->load_cmd_entry(i);
-      if (static_cast<int>(cmd_entry.dst_rank) == cfg_.rank) {
-        printf("Local command!, cmd.dst_rank: %d, cfg_.rank: %d\n",
-               cmd_entry.dst_rank, cfg_.rank);
-        std::abort();
-      }
-      if (peers_[cmd_entry.dst_rank].ip == peers_[cfg_.rank].ip) {
-        printf("Intra-node command!, cmd.dst_rank: %d, cfg_.rank: %d\n",
-               cmd_entry.dst_rank, cfg_.rank);
-        std::abort();
+      if (cmd_entry.cmd_type == CmdType::EMPTY) break;
+
+      if (cmd_entry.cmd_type == CmdType::WRITE ||
+          cmd_entry.cmd_type == CmdType::ATOMIC) {
+        if (static_cast<int>(cmd_entry.dst_rank) == cfg_.rank) {
+          fprintf(stderr,
+                  "[ERROR] Local command!, cmd.dst_rank: %d, cfg_.rank: %d, "
+                  "cmd_entry.cmd_type: %d, cur_head: %lu, i: %lu, cmd: %lu\n",
+                  cmd_entry.dst_rank, cfg_.rank,
+                  static_cast<int>(cmd_entry.cmd_type), cur_head, i, cmd);
+          std::abort();
+        }
+        if (peers_[cmd_entry.dst_rank].ip == peers_[cfg_.rank].ip) {
+          fprintf(
+              stderr,
+              "[ERROR] Intra-node command!, cmd.dst_rank: %d, cfg_.rank: %d, "
+              "cmd_entry.cmd_type: %d, cur_head: %lu, i: %lu, cmd: %lu\n",
+              cmd_entry.dst_rank, cfg_.rank,
+              static_cast<int>(cmd_entry.cmd_type), cur_head, i, cmd);
+          std::abort();
+        }
       }
 
       // Use a unique ID combining ring buffer index and command index
@@ -506,6 +518,7 @@ void Proxy::post_gpu_commands_mixed(
   std::vector<uint64_t> rdma_wrs, atomic_wrs;
   std::vector<TransferCmd> rdma_cmds, atomic_cmds;
 
+  std::vector<uint64_t> quiet_wrs, barrier_wrs;
   std::vector<TransferCmd> quiet_cmds, barrier_cmds;
 
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
@@ -557,16 +570,19 @@ void Proxy::post_gpu_commands_mixed(
       rdma_cmds.push_back(cmds_to_post[i]);
     } else if (cmds_to_post[i].cmd_type == CmdType::QUIET) {
       quiet_cmds.push_back(cmds_to_post[i]);
+      quiet_wrs.push_back(wrs_to_post[i]);
     } else if (cmds_to_post[i].cmd_type == CmdType::BARRIER) {
       barrier_cmds.push_back(cmds_to_post[i]);
+      barrier_wrs.push_back(wrs_to_post[i]);
     } else {
       fprintf(stderr, "Error: Unknown command type %d\n",
               static_cast<int>(cmds_to_post[i].cmd_type));
       std::abort();
     }
   }
-  // printf("Posting %zu RDMA writes and %zu atomic ops\n", rdma_wrs.size(),
-  //        atomic_wrs.size());
+  printf("Posting %zu RDMA writes, %zu atomic ops, %zu barriers, %zu quiets\n",
+         rdma_wrs.size(), atomic_wrs.size(), barrier_cmds.size(),
+         quiet_cmds.size());
   // Handle regular RDMA writes
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
@@ -579,10 +595,10 @@ void Proxy::post_gpu_commands_mixed(
                            acked_wrs_);
   }
   if (!barrier_cmds.empty()) {
-    barrier(barrier_cmds);
+    barrier(barrier_wrs, barrier_cmds);
   }
   if (!quiet_cmds.empty()) {
-    quiet(quiet_cmds);
+    quiet(quiet_wrs, quiet_cmds);
   }
 }
 
@@ -617,9 +633,10 @@ void Proxy::quiet_cq() {
   drain_cq(ctx_.cq);
 }
 
-void Proxy::barrier(std::vector<TransferCmd> cmds) {
+void Proxy::barrier(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds) {
   /* NOTE(MaoZiming): this is deliberatebly simple. I will optimize later. */
   assert(cmds.size() == 1 && "barrier size must be 1");
+  printf("Barrier started on thread %d\n", cfg_.thread_idx);
   quiet_cq();
 
   int const my_rank = cfg_.rank;
@@ -727,11 +744,18 @@ void Proxy::barrier(std::vector<TransferCmd> cmds) {
     }
     close(sockfd);
   }
+  printf("Barrier completed on thread %d\n", cfg_.thread_idx);
+  finished_wrs_.insert(wrs[0]);
+  acked_wrs_.insert(wrs[0]);
 }
 
-void Proxy::quiet(std::vector<TransferCmd> cmds) {
+void Proxy::quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds) {
   assert(cmds.size() == 1 && "quiet size must be 1");
+  printf("Quiet started on thread %d\n", cfg_.thread_idx);
   quiet_cq();
+  printf("Quiet completed on thread %d\n", cfg_.thread_idx);
+  finished_wrs_.insert(wrs[0]);
+  acked_wrs_.insert(wrs[0]);
 }
 
 void Proxy::destroy(bool free_gpu_buffer) {
