@@ -26,6 +26,7 @@ from utils import (
     destroy_uccl,
 )
 
+
 def test_main(
     num_tokens: int,
     hidden: int,
@@ -46,8 +47,10 @@ def test_main(
 
     # NOTES: the last one is for performance testing
     # Most of the values in the perf case is lower than the threshold, casting most channels
-    current_x = torch.randn((num_tokens, hidden), dtype=torch.bfloat16, device="cuda") * 0.1
-    
+    current_x = (
+        torch.randn((num_tokens, hidden), dtype=torch.bfloat16, device="cuda") * 0.1
+    )
+
     scores = (
         torch.randn((num_tokens, num_experts), dtype=torch.float32, device="cuda").abs()
         + 1
@@ -79,7 +82,7 @@ def test_main(
         large_gemm_with_hook(hook) if return_recv_hook else None
 
     # Calculate bandwidth
-    num_fp8_bytes = (hidden + hidden / 128 * 4 + 16)
+    num_fp8_bytes = hidden + hidden / 128 * 4 + 16
     num_dispatch_comm_bytes = 0
     for i in range(num_tokens):
         num_selections = (topk_idx[i] != -1).sum().item()
