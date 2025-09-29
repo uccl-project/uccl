@@ -40,6 +40,16 @@ out as:
 At the receiver:
 - recvbuf is reorganized into CSR-like groups keyed by (src_rank, local_expert_id),
   so you can slice each group without Python dictionaries/lists.
+  
+export MASTER_ADDR=10.1.227.34
+export MASTER_PORT=29500
+export OMP_NUM_THREADS=1
+export NCCL_DEBUG=WARN
+export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+torchrun --nnodes=2 --nproc_per_node=1  --node_rank=0 --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT   bench_upper_bound_all2all.py   --num-tokens 4096 --hidden 7168 --num-experts 256 --num-topk 8   --use-real-payload --include-processing --verify --remote-only
+
+torchrun --nnodes=2 --nproc_per_node=1   --node_rank=1 --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT   bench_upper_bound_all2all.py   --num-tokens 4096 --hidden 7168 --num-experts 256 --num-topk 8   --use-real-payload --include-processing --verify --remote-only
+
 """
 
 import os, math, argparse, socket, hashlib
