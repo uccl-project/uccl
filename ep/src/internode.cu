@@ -99,6 +99,7 @@ __global__ void notify_dispatch(
     int* recv_gbl_rank_prefix_sum, void* rdma_buffer_ptr, void** buffer_ptrs,
     int** barrier_signal_ptrs, int rank, uint64_t const* ring_addrs,
     int num_ring_addrs) {
+  void* original_rdma_buffer_ptr = rdma_buffer_ptr;
   auto sm_id = static_cast<int>(blockIdx.x);
   auto thread_id = static_cast<int>(threadIdx.x), warp_id = thread_id / 32,
        lane_id = get_lane_id();
@@ -171,10 +172,16 @@ __global__ void notify_dispatch(
             rdma_recv_num_tokens_mixed.recv_buffer(rdma_rank));
         uint64_t src_ptr = reinterpret_cast<uint64_t>(
             rdma_recv_num_tokens_mixed.send_buffer(i));
+        printf(
+            "nvshmemi_ibgda_put_nbi_warp: dst_ptr: %p, "
+            "original_rdma_buffer_ptr: %p, offset: %ld\n",
+            (void*)dst_ptr, original_rdma_buffer_ptr,
+            dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr));
         int dst_rank = i * NUM_MAX_NVL_PEERS + nvl_rank;
         uccl::nvshmemi_ibgda_put_nbi_warp(
-            dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), src_ptr,
-            (NUM_MAX_NVL_PEERS + num_rdma_experts + 1) * sizeof(int), dst_rank,
+            dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
+            src_ptr, (NUM_MAX_NVL_PEERS + num_rdma_experts + 1) * sizeof(int),
+            dst_rank,
             warp_id,  // NOTE(MaoZiming): use warp_id for rb.
             lane_id, 0, ring_addrs, num_ring_addrs, false);
       } else {
@@ -187,12 +194,19 @@ __global__ void notify_dispatch(
     __syncthreads();
 
     // Wait previous operations to be finished
-    if (thread_id == 32) uccl::nvshmemi_ibgda_quiet(ring_addrs, num_ring_addrs);
+    if (thread_id == 32) {
+      printf("Before uccl::nvshmemi_ibgda_quiet\n");
+      uccl::nvshmemi_ibgda_quiet(ring_addrs, num_ring_addrs);
+      printf("After uccl::nvshmemi_ibgda_quiet\n");
+    }
     __syncthreads();
 
     // Barrier
-    if (thread_id == 32)
+    if (thread_id == 32) {
+      printf("Before uccl::nvshmem_sync_with_same_gpu_idx\n");
       uccl::nvshmem_sync_with_same_gpu_idx(ring_addrs, num_ring_addrs);
+      printf("After uccl::nvshmem_sync_with_same_gpu_idx\n");
+    }
     __syncthreads();
 
     // NVL buffers
@@ -446,7 +460,7 @@ __global__ void __launch_bounds__(
     kForwarderCoordinator,
     kNVLReceivers
   };
-
+  void* original_rdma_buffer_ptr = rdma_buffer_ptr;
   auto const num_sms = static_cast<int>(gridDim.x);
   auto const sm_id = static_cast<int>(blockIdx.x);
   auto const num_threads = static_cast<int>(blockDim.x),
@@ -458,6 +472,9 @@ __global__ void __launch_bounds__(
   auto const rdma_rank = rank / NUM_MAX_NVL_PEERS,
              nvl_rank = rank % NUM_MAX_NVL_PEERS;
 
+  if (lane_id == 0) {
+    printf("start dispatch kernels\n");
+  }
   auto const role_meta = [=]() -> std::pair<WarpRole, int> {
     if (is_forwarder) {
       if (warp_id < NUM_MAX_NVL_PEERS) {
@@ -626,9 +643,14 @@ __global__ void __launch_bounds__(
             rdma_channel_meta.recv_buffer(rdma_rank));
         uint64_t src_ptr = reinterpret_cast<uint64_t>(
             rdma_channel_meta.send_buffer(dst_rdma_rank));
+        printf(
+            "nvshmemi_ibgda_put_nbi_warp in kRDMASender: dst_ptr: %p, "
+            "original_rdma_buffer_ptr: %p, offset: %ld\n",
+            (void*)dst_ptr, original_rdma_buffer_ptr,
+            dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr));
         uccl::nvshmemi_ibgda_put_nbi_warp(
-            dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), src_ptr,
-            sizeof(int) * (NUM_MAX_NVL_PEERS * 2 + 2), rdma_rank,
+            dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
+            src_ptr, sizeof(int) * (NUM_MAX_NVL_PEERS * 2 + 2), rdma_rank,
             warp_id,  // NOTE(MaoZiming): use warp_id for rb.
             lane_id, 0, ring_addrs, num_ring_addrs, false);
       }
@@ -870,9 +892,14 @@ __global__ void __launch_bounds__(
           auto const src_ptr = reinterpret_cast<uint64_t>(
               rdma_channel_data.send_buffer(dst_rdma_rank) +
               dst_slot_idx * num_bytes_per_token);
+          printf(
+              "nvshmemi_ibgda_put_nbi_warp in kRDMASenderCoordinator: dst_ptr: "
+              "%p, original_rdma_buffer_ptr: %p, offset: %ld\n",
+              (void*)dst_ptr, original_rdma_buffer_ptr,
+              dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr));
           uccl::nvshmemi_ibgda_put_nbi_warp(
-              dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), src_ptr,
-              num_bytes_per_msg, rdma_rank,
+              dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
+              src_ptr, num_bytes_per_msg, rdma_rank,
               warp_id,  // NOTE(MaoZiming): use warp_id for rb.
               lane_id, 0, ring_addrs, num_ring_addrs, false);
         } else {
@@ -1770,7 +1797,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
     kRDMAReceiver,
     kCoordinator
   };
-
+  void* original_rdma_buffer_ptr = rdma_buffer_ptr;
   auto const sm_id = static_cast<int>(blockIdx.x);
   auto const num_threads = static_cast<int>(blockDim.x),
              num_warps = num_threads / 32;
@@ -2213,9 +2240,14 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
             auto const src_ptr = reinterpret_cast<uint64_t>(
                 rdma_channel_data.send_buffer(dst_rdma_rank) +
                 rdma_slot_idx * num_bytes_per_token);
+            printf(
+                "nvshmemi_ibgda_put_nbi_warp in kNVLAndRDMAForwarder: dst_ptr: "
+                "%p, original_rdma_buffer_ptr: %p, offset: %ld\n",
+                (void*)dst_ptr, original_rdma_buffer_ptr,
+                dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr));
             uccl::nvshmemi_ibgda_put_nbi_warp(
-                dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), src_ptr,
-                num_bytes_per_msg, rdma_rank,
+                dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
+                src_ptr, num_bytes_per_msg, rdma_rank,
                 warp_id,  // NOTE(MaoZiming): use warp_id for rb.
                 lane_id, 0, ring_addrs, num_ring_addrs, false);
           } else {

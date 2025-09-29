@@ -1,4 +1,5 @@
 #pragma once
+#include "barrier_local.hpp"
 #include "util/gpu_rt.h"
 #include <infiniband/verbs.h>
 #include <atomic>
@@ -90,4 +91,25 @@ struct ProxyCtx {
   std::unordered_map<uint64_t, WriteStruct> wr_id_to_write_struct;
   TokenCounter<DispatchTokenKey> dispatch_sent_counter;
   TokenCounter<DispatchTokenKey> combine_sent_counter;
+
+  // Async-barrier state (single inflight assumed)
+  bool barrier_inflight = false;
+  uint16_t barrier_seq = 0;
+  uint64_t barrier_wr = 0;
+
+  // Rank-0 bookkeeping
+  std::vector<uint8_t> barrier_arrived;  // size = num_ranks; 1 if arrival seen
+  int barrier_arrival_count = 0;         // arrivals seen (include self)
+
+  // Followers: release flag from rank-0
+  bool barrier_released = false;
+  uint16_t barrier_release_seq = 0;
+
+  // Intra-node (shared-memory) barrier state
+  LocalBarrier* lb = nullptr;  // mapped shared barrier block (per node+thread)
+  bool lb_owner = false;  // we created the shm (so we should unlink on destroy)
+  int num_local_ranks = 0;    // #local ranks on this node
+  int node_leader_rank = -1;  // lowest global rank on this node
+  int local_rank = -1;        // convenience mirror of cfg_.local_rank
+  int thread_idx = -1;        // thread index used in shm name
 };

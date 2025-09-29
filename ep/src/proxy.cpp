@@ -4,6 +4,61 @@
 #include <arpa/inet.h>  // for htonl, ntohl
 #include <chrono>
 #include <thread>
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+static std::string shm_name_for_barrier(std::string const& ip, int thread_idx) {
+  // POSIX shm names must start with '/' and contain no other slashes.
+  return "/uccl_barrier_" + ip + "_th" + std::to_string(thread_idx);
+}
+
+LocalBarrier* map_local_barrier_shm(std::string const& name, bool* out_owner) {
+  *out_owner = false;
+
+  int fd = shm_open(name.c_str(), O_RDWR | O_CREAT | O_EXCL, 0600);
+  if (fd >= 0) {
+    *out_owner = true;
+    if (ftruncate(fd, sizeof(LocalBarrier)) != 0) {
+      perror("ftruncate(LocalBarrier)");
+      close(fd);
+      shm_unlink(name.c_str());
+      return nullptr;
+    }
+  } else {
+    if (errno != EEXIST) {
+      perror("shm_open");
+      return nullptr;
+    }
+    // Already exists
+    fd = shm_open(name.c_str(), O_RDWR, 0600);
+    if (fd < 0) {
+      perror("shm_open(existing)");
+      return nullptr;
+    }
+    // Size is already set by owner
+  }
+
+  void* p = mmap(nullptr, sizeof(LocalBarrier), PROT_READ | PROT_WRITE,
+                 MAP_SHARED, fd, 0);
+  close(fd);
+  if (p == MAP_FAILED) {
+    perror("mmap(LocalBarrier)");
+    return nullptr;
+  }
+
+  // Construct on first owner (zeroed by ftruncate; we only need to set
+  // full_mask later)
+  return reinterpret_cast<LocalBarrier*>(p);
+}
+
+void unmap_local_barrier_shm(std::string const& name, LocalBarrier* lb,
+                             bool owner) {
+  if (lb) munmap(lb, sizeof(LocalBarrier));
+  if (owner) shm_unlink(name.c_str());
+}
 
 double Proxy::avg_rdma_write_us() const {
   if (kIterations == 0) return 0.0;
@@ -173,8 +228,62 @@ void Proxy::init_common() {
       fclose(f);
     }
   }
-
   usleep(50 * 1000);
+
+  if (cfg_.thread_idx != 0) {
+    return;
+  }
+  // ---- Intra-node barrier setup ----
+  // Discover local ranks (same IP as me)
+  const std::string my_ip = peers_[cfg_.rank].ip;
+  std::vector<int> local_ranks;
+  local_ranks.reserve(ctxs_for_all_ranks_.size());
+  int leader_rank = cfg_.rank;
+
+  for (int r = 0; r < (int)peers_.size(); ++r) {
+    if (peers_[r].ip == my_ip) {
+      local_ranks.push_back(r);
+      if (r < leader_rank) leader_rank = r;
+    }
+  }
+
+  ctx_.num_local_ranks = (int)local_ranks.size();
+  ctx_.node_leader_rank = leader_rank;
+  ctx_.local_rank = cfg_.local_rank;
+  ctx_.thread_idx = cfg_.thread_idx;
+
+  if (ctx_.num_local_ranks > UCCL_MAX_LOCAL_RANKS) {
+    fprintf(stderr, "num_local_ranks=%d exceeds UCCL_MAX_LOCAL_RANKS=%d\n",
+            ctx_.num_local_ranks, (int)UCCL_MAX_LOCAL_RANKS);
+    std::abort();
+  }
+
+  // Map per-node+thread shared barrier block
+  const std::string shm_name = shm_name_for_barrier(my_ip, cfg_.thread_idx);
+  ctx_.lb = map_local_barrier_shm(shm_name, &ctx_.lb_owner);
+  if (!ctx_.lb) {
+    fprintf(stderr, "Failed to map local barrier shm: %s\n", shm_name.c_str());
+    std::abort();
+  }
+
+  // Owner initializes full_mask once
+  if (ctx_.lb_owner) {
+    ctx_.lb->full_mask = (ctx_.num_local_ranks >= 64)
+                             ? ~0ULL
+                             : ((1ULL << ctx_.num_local_ranks) - 1ULL);
+    // seq/arrived_mask already zero due to ftruncate+MAP_SHARED zeroing
+  } else {
+    // Wait until owner sets full_mask (should be quick)
+    while (ctx_.lb->full_mask == 0ULL) cpu_relax();
+  }
+
+  if (cfg_.thread_idx == 0) {
+    printf(
+        "[local_rank:%d] Intra-node barrier ready: local=%d, leader=%d, "
+        "shm=%s\n",
+        cfg_.local_rank, ctx_.num_local_ranks, ctx_.node_leader_rank,
+        shm_name.c_str());
+  }
 }
 
 void Proxy::init_sender() {
@@ -216,7 +325,8 @@ void Proxy::run_remote() {
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     remote_poll_completions(ctx_, cfg_.thread_idx, ring, ctx_by_tag_,
                             atomic_buffer_ptr_, cfg_.num_ranks,
-                            cfg_.num_experts, pending_atomic_updates);
+                            cfg_.num_experts, pending_atomic_updates, cfg_.rank,
+                            cfg_.num_nodes);
     apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
                           cfg_.num_experts, cfg_.num_ranks);
   }
@@ -243,7 +353,8 @@ void Proxy::run_dual() {
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     poll_cq_dual(ctx_, finished_wrs_, acked_wrs_, cfg_.thread_idx, ring,
                  ctx_by_tag_, atomic_buffer_ptr_, cfg_.num_ranks,
-                 cfg_.num_experts, pending_atomic_updates);
+                 cfg_.num_experts, pending_atomic_updates, cfg_.rank,
+                 cfg_.num_nodes);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
 #ifdef USE_RECEIVER_BARRIER
@@ -260,6 +371,7 @@ void Proxy::run_dual() {
     assert(postponed_wr_ids_.size() == 0);
     post_gpu_commands_mixed(postponed_wr_ids, postponed_atomics);
 #endif
+    barrier_check();
   }
 }
 
@@ -278,6 +390,9 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
 
   for (auto wr_id : finished_copy) {
     if (acked_wrs_.find(wr_id) == acked_wrs_.end()) break;
+
+    printf("[local_rank: %d] WR ID %lu completed and acked\n", cfg_.local_rank,
+           wr_id);
 
     // Decode ring buffer index and command index from unique_wr_id
     size_t rb_idx = (wr_id >> 32) & 0xFFFFFFFF;
@@ -595,7 +710,8 @@ void Proxy::post_gpu_commands_mixed(
                            acked_wrs_);
   }
   if (!barrier_cmds.empty()) {
-    barrier(barrier_wrs, barrier_cmds);
+    // barrier(barrier_wrs, barrier_cmds);
+    send_barrier(barrier_wrs[0]);
   }
   if (!quiet_cmds.empty()) {
     quiet(quiet_wrs, quiet_cmds);
@@ -634,9 +750,11 @@ void Proxy::quiet_cq() {
 }
 
 void Proxy::barrier(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds) {
-  /* NOTE(MaoZiming): this is deliberatebly simple. I will optimize later. */
+  /* NOTE(MaoZiming): this is deliberately simple, but now keeps CQ progress
+   * while waiting. */
   assert(cmds.size() == 1 && "barrier size must be 1");
-  printf("Barrier started on thread %d\n", cfg_.thread_idx);
+  printf("[local_rank: %d] Barrier started on thread %d\n", cfg_.local_rank,
+         cfg_.thread_idx);
   quiet_cq();
 
   int const my_rank = cfg_.rank;
@@ -751,9 +869,11 @@ void Proxy::barrier(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds) {
 
 void Proxy::quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds) {
   assert(cmds.size() == 1 && "quiet size must be 1");
-  printf("Quiet started on thread %d\n", cfg_.thread_idx);
+  printf("[local_rank: %d] Quiet started on thread %d, wrs[0]=%lu\n",
+         cfg_.local_rank, cfg_.thread_idx, wrs[0]);
   quiet_cq();
-  printf("Quiet completed on thread %d\n", cfg_.thread_idx);
+  printf("[local_rank: %d] Quiet completed on thread %d, wrs[0]=%lu\n",
+         cfg_.local_rank, cfg_.thread_idx, wrs[0]);
   finished_wrs_.insert(wrs[0]);
   acked_wrs_.insert(wrs[0]);
 }
@@ -820,6 +940,16 @@ void Proxy::destroy(bool free_gpu_buffer) {
     ctx_.context = nullptr;
   }
 
+  // Unmap local barrier shm
+  if (cfg_.thread_idx == 0) {
+    const std::string my_ip =
+        (cfg_.rank < (int)peers_.size()) ? peers_[cfg_.rank].ip : "";
+    const std::string shm_name = shm_name_for_barrier(my_ip, cfg_.thread_idx);
+    unmap_local_barrier_shm(shm_name, ctx_.lb, ctx_.lb_owner);
+    ctx_.lb = nullptr;
+    ctx_.lb_owner = false;
+  }
+
   finished_wrs_.clear();
   acked_wrs_.clear();
   wr_id_to_start_time_.clear();
@@ -827,4 +957,188 @@ void Proxy::destroy(bool free_gpu_buffer) {
   ctx_by_tag_.clear();
   local_infos_.clear();
   remote_infos_.clear();
+}
+
+void Proxy::post_barrier_msg(int dst_rank, bool ack, uint16_t seq) {
+  assert(cfg_.thread_idx == 0 && "barrier must be posted on thread 0");
+  ProxyCtx* ctx = ctxs_for_all_ranks_[dst_rank].get();
+  if (!ctx || !ctx->qp || !ctx->mr) {
+    fprintf(stderr, "barrier_msg: bad ctx for dst=%d\n", dst_rank);
+    std::abort();
+  }
+  uint32_t imm = BarrierImm::Pack(ack, seq, (uint16_t)cfg_.rank);
+#ifdef EFA
+  auto* qpx = (struct ibv_qp_ex*)ctx->qp;
+  ibv_wr_start(qpx);
+  qpx->wr_id = 0;
+  qpx->comp_mask = 0;
+  qpx->wr_flags = IBV_SEND_SIGNALED;
+  // zero-length RDMA write with imm
+  ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, ctx->remote_addr, htonl(imm));
+  ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_qpn, QKEY);
+  ibv_wr_set_sge(qpx, ctx->mr->lkey, (uintptr_t)ctx->mr->addr, 0);
+  int ret = ibv_wr_complete(qpx);
+  if (ret) {
+    fprintf(stderr, "post_barrier_msg (EFA) failed: %s (%d)\n", strerror(ret),
+            ret);
+    std::abort();
+  }
+#else
+  ibv_sge sge{};
+  sge.addr = (uintptr_t)ctx->mr->addr;
+  sge.length = 0;
+  sge.lkey = ctx->mr->lkey;
+
+  ibv_send_wr wr{};
+  wr.wr_id = 0;
+  wr.sg_list = &sge;
+  wr.num_sge = 1;
+  wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+  wr.send_flags = IBV_SEND_SIGNALED;
+  wr.imm_data = htonl(imm);
+  wr.wr.rdma.remote_addr = ctx->remote_addr;
+  wr.wr.rdma.rkey = ctx->remote_rkey;
+
+  ibv_send_wr* bad = nullptr;
+  int ret = ibv_post_send(ctx->qp, &wr, &bad);
+  if (ret) {
+    fprintf(stderr, "post_barrier_msg failed: %s (%d)\n", strerror(ret), ret);
+    if (bad)
+      fprintf(stderr, "  bad wr_id=%llu\n", (unsigned long long)bad->wr_id);
+    std::abort();
+  }
+#endif
+}
+
+void Proxy::send_barrier(uint64_t wr) {
+  if (ctx_.barrier_inflight) {
+    fprintf(stderr, "send_barrier: already inflight\n");
+    return;
+  }
+  assert(cfg_.thread_idx == 0 && "barrier must be placed on thread 0");
+
+  ctx_.barrier_inflight = true;
+  ctx_.barrier_wr = wr;
+  ctx_.barrier_seq = (uint16_t)(ctx_.barrier_seq + 1);
+  finished_wrs_.insert(wr);
+
+  if (cfg_.rank == ctx_.node_leader_rank) {
+    if (ctx_.barrier_arrived.size() != static_cast<size_t>(cfg_.num_nodes)) {
+      ctx_.barrier_arrived.assign(cfg_.num_nodes, 0);
+      ctx_.barrier_arrival_count = 0;
+    }
+  }
+
+  // Mark local arrival
+  auto* lb = ctx_.lb;
+  lb->seq.store(ctx_.barrier_seq, std::memory_order_release);
+  uint64_t bit = (1ULL << (uint64_t)ctx_.local_rank);
+  lb->arrived_mask.fetch_or(bit, std::memory_order_acq_rel);
+
+  printf("[local_rank:%d] barrier seq=%u announced (local)\n", cfg_.local_rank,
+         ctx_.barrier_seq);
+}
+
+void Proxy::barrier_check() {
+  if (cfg_.thread_idx != 0) return;  // first thread handle barrier.
+  if (!ctx_.barrier_inflight) return;
+
+  auto* lb = ctx_.lb;
+  const uint16_t seq = ctx_.barrier_seq;
+
+  // Node leader aggregates local arrivals
+  if (cfg_.rank == ctx_.node_leader_rank) {
+    const uint64_t arrived = lb->arrived_mask.load(std::memory_order_acquire);
+    if (arrived == lb->full_mask) {
+      // Local node has arrived at 'seq' — now engage your existing inter-node
+      // step. If this node IS the global leader (rank 0), treat as its own
+      // arrival; otherwise send arrival to rank 0 ONCE per seq.
+      static thread_local uint16_t last_sent_seq = 0;
+      if (last_sent_seq != seq) {
+        last_sent_seq = seq;
+        if (cfg_.rank == 0) {
+          // Global leader: mark self-arrival; remote arrivals will come via
+          // your existing CQ handler.
+          if (ctx_.barrier_arrived.empty()) {
+            ctx_.barrier_arrived.assign(ctxs_for_all_ranks_.size(), 0);
+            ctx_.barrier_arrival_count = 0;
+          }
+          if (!ctx_.barrier_arrived[0]) {
+            ctx_.barrier_arrived[0] = 1;
+            ++ctx_.barrier_arrival_count;
+            printf(
+                "[local_rank:%d] barrier seq=%u local node arrived (global "
+                "leader), %d/%d\n",
+                cfg_.local_rank, seq, ctx_.barrier_arrival_count,
+                cfg_.num_nodes);
+          }
+        } else {
+          // Send a single arrival to rank 0 (reuse your existing function)
+          post_barrier_msg(/*dst=*/0, /*ack=*/false, seq);
+          printf("[local_rank:%d] barrier seq=%u sent to global leader\n",
+                 cfg_.local_rank, seq);
+        }
+      }
+
+      if (cfg_.rank == 0) {
+        if (ctx_.barrier_arrival_count == cfg_.num_nodes) {
+          printf(
+              "[local_rank:%d] barrier seq=%u all arrivals received (global "
+              "leader)\n",
+              cfg_.local_rank, seq);
+          std::unordered_map<std::string, int> leader_for_ip;
+          for (int r = 0; r < (int)peers_.size(); ++r) {
+            auto it = leader_for_ip.find(peers_[r].ip);
+            if (it == leader_for_ip.end() || r < it->second)
+              leader_for_ip[peers_[r].ip] = r;
+          }
+          for (auto const& kv : leader_for_ip) {
+            std::string const& ip = kv.first;
+            int leader_r = kv.second;
+            if (ip == peers_[0].ip) continue;
+            post_barrier_msg(leader_r, true, seq);
+          }
+
+          for (int lr = 0; lr < ctx_.num_local_ranks; ++lr) {
+            lb->release_seq[lr].store(seq, std::memory_order_release);
+          }
+          lb->arrived_mask.store(0ULL, std::memory_order_release);
+          ctx_.barrier_arrived.clear();
+          ctx_.barrier_arrival_count = 0;
+
+          acked_wrs_.insert(ctx_.barrier_wr);
+          ctx_.barrier_inflight = false;
+          printf("[local_rank:%d] barrier seq=%u released (global leader)\n",
+                 cfg_.local_rank, seq);
+          return;
+        }
+      }
+
+      // When global release comes back (CQ handler should set these):
+      if (ctx_.barrier_released && ctx_.barrier_release_seq == seq) {
+        // Fan-out to local ranks via shared memory
+        for (int lr = 0; lr < ctx_.num_local_ranks; ++lr) {
+          lb->release_seq[lr].store(seq, std::memory_order_release);
+        }
+        // Reset local mask for next barrier and consume the global release
+        lb->arrived_mask.store(0ULL, std::memory_order_release);
+        ctx_.barrier_released = false;
+
+        // Complete WR
+        acked_wrs_.insert(ctx_.barrier_wr);
+        ctx_.barrier_inflight = false;
+        printf("[local_rank:%d] barrier seq=%u released (node leader)\n",
+               cfg_.local_rank, seq);
+      }
+    }
+    return;
+  }
+
+  // Followers: wait until leader sets our release_seq
+  if (lb->release_seq[ctx_.local_rank].load(std::memory_order_acquire) == seq) {
+    acked_wrs_.insert(ctx_.barrier_wr);
+    ctx_.barrier_inflight = false;
+    printf("[local_rank:%d] barrier seq=%u released (local follower)\n",
+           cfg_.local_rank, seq);
+  }
 }

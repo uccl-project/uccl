@@ -4,7 +4,8 @@
 
 UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
                      size_t total_size, int rank, int node_idx, int local_rank,
-                     std::string const& peer_ip, int num_experts, int num_ranks)
+                     std::string const& peer_ip, int num_experts, int num_ranks,
+                     int num_nodes)
     : peer_ip_{peer_ip}, thread_{}, mode_{Mode::None}, running_{false} {
   if (peer_ip.empty()) {
     printf("Intranode mode. UcclProxy returns\n");
@@ -39,6 +40,7 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   cfg.peer_ip = peer_ip_.empty() ? nullptr : peer_ip_.c_str();
   cfg.num_experts = num_experts;
   cfg.num_ranks = num_ranks;
+  cfg.num_nodes = num_nodes;
   proxy_ = std::make_unique<Proxy>(cfg);
   local_rank_ = local_rank;
   node_idx_ = node_idx;

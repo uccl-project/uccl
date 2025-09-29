@@ -204,39 +204,38 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
    * thread manages kRingsPerProxy ring buffers, we just need to post a quiet
    * command to one out of the kRingsPerProxy ring buffer. */
   printf("nvshmemi_ibgda_quiet\n");
-  for (int ring_idx = 0; ring_idx < num_ring_addrs;
-       ring_idx += kRingsPerProxy) {
-    auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
-        static_cast<uintptr_t>(ring_addrs[ring_idx]));
-    uint64_t cur_head = rb->head;
-    uint64_t cur_tail = rb->volatile_tail();
-    uint64_t inflight = cur_head - cur_tail;
-    auto last_print = clock64();
-    while (true) {
-      cur_head = rb->head;
-      cur_tail = rb->volatile_tail();
-      inflight = cur_head - cur_tail;
-      if (inflight < kMaxInflight) {
-        uint64_t slot = cur_head;
-        TransferCmd cmd{};
-        cmd.cmd = 1;  // dummy valid cmd.
-        cmd.cmd_type = CmdType::QUIET;
-        rb->atomic_set_and_commit(cmd, &slot);
-        printf("Posting quiet to ring_idx %d, slot=%lu, rb->head=%lu\n",
-               ring_idx, slot, rb->head);
-        wait_until_cmd_consumed(rb, rb->head);
-        printf("Quiet to ring_idx %d completed\n", ring_idx);
-        break;
+  int ring_idx = 0;
+  auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
+      static_cast<uintptr_t>(ring_addrs[ring_idx]));
+  uint64_t cur_head = rb->head;
+  uint64_t cur_tail = rb->volatile_tail();
+  uint64_t inflight = cur_head - cur_tail;
+  auto last_print = clock64();
+  while (true) {
+    cur_head = rb->head;
+    cur_tail = rb->volatile_tail();
+    inflight = cur_head - cur_tail;
+    if (inflight < kMaxInflight) {
+      uint64_t slot = cur_head;
+      TransferCmd cmd{};
+      cmd.cmd = 1;  // dummy valid cmd.
+      cmd.cmd_type = CmdType::QUIET;
+      rb->atomic_set_and_commit(cmd, &slot);
+      printf("Posting quiet to ring_idx %d, slot=%lu, rb->head=%lu\n", ring_idx,
+             slot, rb->head);
+      wait_until_cmd_consumed(rb, rb->head);
+      printf("Quiet to ring_idx %d completed, slot=%lu, rb->head=%lu\n",
+             ring_idx, slot, rb->head);
+      break;
+    }
+    if ((clock64() - last_print) > kPrintCycleInterval) {
+      if (threadIdx.x == 0 && blockIdx.x == 0) {
+        printf(
+            "[quiet] stuck waiting, inflight=%ld (cur_head=%lu "
+            "cur_tail=%lu)\n",
+            (long)inflight, (unsigned long)cur_head, (unsigned long)cur_tail);
       }
-      if ((clock64() - last_print) > kPrintCycleInterval) {
-        if (threadIdx.x == 0 && blockIdx.x == 0) {
-          printf(
-              "[quiet] stuck waiting, inflight=%ld (cur_head=%lu "
-              "cur_tail=%lu)\n",
-              (long)inflight, (unsigned long)cur_head, (unsigned long)cur_tail);
-        }
-        last_print = clock64();
-      }
+      last_print = clock64();
     }
   }
 }
@@ -264,7 +263,8 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
       printf("Posting sync to ring_idx %d, slot=%lu, rb->head=%lu\n", ring_idx,
              slot, rb->head);
       wait_until_cmd_consumed(rb, rb->head);
-      printf("Sync to ring_idx %d completed\n", ring_idx);
+      printf("Sync to ring_idx %d completed, slot=%lu, rb->head=%lu\n",
+             ring_idx, slot, rb->head);
       break;
     }
     if ((clock64() - last_print) > kPrintCycleInterval) {
