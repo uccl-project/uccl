@@ -105,7 +105,7 @@ The code in this repository is mostly described in the paper below. Please consi
 ```bibtex
 @article{uccl_transport,
   title={An Extensible Software Transport Layer for GPU Networking},
-  author={Zhou, Yang and Chen, Zhongjie and Mao, Ziming and Lao, ChonLam and Yang, Shuo and Kannan, Pravein Govindan and Gao, Jiaqi and Zhao, Yilong and Wu, Yongji and You, Kaichao and others},
+  author={Zhou, Yang and Chen, Zhongjie and Mao, Ziming and Lao, ChonLam and Yang, Shuo and Kannan, Pravein Govindan and Gao, Jiaqi and Zhao, Yilong and Wu, Yongji and You, Kaichao and Ren, Fengyuan and Xu, Zhiying and Raiciu, Costin and Stoica, Ion},
   journal={arXiv preprint arXiv:2504.17307},
   year={2025}
 }
