@@ -473,7 +473,9 @@ def test_loop(
     scratch = torch.zeros(
         num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
     )
-    proxies, workers = initialize_uccl(scratch, num_rdma_bytes, rank, num_ranks, group)
+    proxies, workers = initialize_uccl(
+        scratch, num_rdma_bytes, rank, num_ranks, group, num_experts=args.num_experts
+    )
 
     buffer = Buffer(
         group,

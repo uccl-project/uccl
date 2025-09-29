@@ -23,7 +23,7 @@ namespace uccl {
 __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     uint64_t req_rptr, uint64_t req_lptr, size_t bytes, int dst_rank,
     int expert_idx, int lane_id, int message_idx, uint64_t const* ring_addrs,
-    int num_ring_addrs, bool is_combine, int low_latency_buffer_idx = -1) {
+    int num_ring_addrs, bool is_combine, int low_latency_buffer_idx = 0) {
   // NOTE(MaoZiming): different from the nvshmemi_ibgda_put_nbi_warp in
   // ibgda_device.cuh, we don't do warp-cooperation.
   if (lane_id != 0) return;
@@ -86,10 +86,10 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
 // TODO(MaoZiming): Fix. This should be a non-fetch add operation. This could be
 // implemented with CPU proxy.
 __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
-    uint64_t rptr, int const& value, int dst_rank, int qp_id, int warp_id,
+    uint64_t rptr, int const& value, int dst_rank, int warp_id,
     bool is_local_copy = false, uint64_t const* ring_addrs = nullptr,
     int num_ring_addrs = 0, bool is_combine = true,
-    int low_latency_buffer_idx = -1) {
+    int low_latency_buffer_idx = 0) {
   if (is_local_copy) {
     atomicAdd(reinterpret_cast<int*>(rptr), value);
   } else {
