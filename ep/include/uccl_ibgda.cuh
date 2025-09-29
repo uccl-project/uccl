@@ -42,6 +42,12 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   uint64_t inflight = cur_head - cur_tail;
   printf("nvshmemi_ibgda_put_nbi_warp. dst_rank: %d\n", dst_rank);
 
+  if (low_latency_buffer_idx == -1) {
+    /* Normal mode */
+    expert_idx = 0;
+    low_latency_buffer_idx = 0;
+  }
+
   // NOTE(MaoZiming): Spins until there is a free slot in the ring buffer.
   auto last_print = clock64();
   while (true) {
@@ -102,6 +108,12 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     uint64_t cur_tail = rb->volatile_tail();
     uint64_t inflight = cur_head - cur_tail;
     auto last_print = clock64();
+
+    if (low_latency_buffer_idx == -1) {
+      /* Normal mode */
+      low_latency_buffer_idx = 0;
+    }
+
     while (true) {
       // NOTE(MaoZiming): update the view.
       cur_head = rb->head;

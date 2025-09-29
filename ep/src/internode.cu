@@ -183,7 +183,7 @@ __global__ void notify_dispatch(
             src_ptr, (NUM_MAX_NVL_PEERS + num_rdma_experts + 1) * sizeof(int),
             translate_dst_rdma_rank<kLowLatencyMode>(i, nvl_rank),
             warp_id,  // NOTE(MaoZiming): use warp_id for rb.
-            lane_id, 0, ring_addrs, num_ring_addrs, false);
+            lane_id, 0, ring_addrs, num_ring_addrs, false, -1);
       } else {
         UNROLLED_WARP_COPY(1, lane_id, NUM_MAX_NVL_PEERS + num_rdma_experts + 1,
                            rdma_recv_num_tokens_mixed.recv_buffer(rdma_rank),
@@ -653,7 +653,7 @@ __global__ void __launch_bounds__(
             src_ptr, sizeof(int) * (NUM_MAX_NVL_PEERS * 2 + 2),
             translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank),
             warp_id,  // NOTE(MaoZiming): use warp_id for rb.
-            lane_id, 0, ring_addrs, num_ring_addrs, false);
+            lane_id, 0, ring_addrs, num_ring_addrs, false, -1);
       }
     }
     sync_rdma_sender_smem();
@@ -905,7 +905,7 @@ __global__ void __launch_bounds__(
               src_ptr, num_bytes_per_msg,
               translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank),
               warp_id,  // NOTE(MaoZiming): use warp_id for rb.
-              lane_id, 0, ring_addrs, num_ring_addrs, false);
+              lane_id, 0, ring_addrs, num_ring_addrs, false, -1);
         } else {
           // Lighter fence for local RDMA rank
           memory_fence();
@@ -2279,7 +2279,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                 translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank,
                                                          nvl_rank),
                 warp_id,  // NOTE(MaoZiming): use warp_id for rb.
-                lane_id, 0, ring_addrs, num_ring_addrs, false);
+                lane_id, 0, ring_addrs, num_ring_addrs, false, -1);
           } else {
             memory_fence();
           }
