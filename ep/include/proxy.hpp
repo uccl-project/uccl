@@ -34,7 +34,7 @@ class Proxy {
   enum class Mode { Sender, Remote, Local, Dual };
 
   struct Config {
-    DeviceToHostCmdBuffer* rb = nullptr;
+    std::vector<DeviceToHostCmdBuffer*> ring_buffers;
     int thread_idx = 0;
     void* gpu_buffer = nullptr;
     size_t total_size = 0;
@@ -47,7 +47,11 @@ class Proxy {
     int num_ranks = 0;
   };
 
-  explicit Proxy(Config const& cfg) : cfg_(cfg) {}
+  explicit Proxy(Config const& cfg) : cfg_(cfg) {
+    // Initialize state tracking for each ring buffer
+    ring_tails_.resize(cfg_.ring_buffers.size(), 0);
+    ring_seen_.resize(cfg_.ring_buffers.size(), 0);
+  }
 
   void set_progress_run(bool run) {
     ctx_.progress_run.store(run, std::memory_order_release);
@@ -72,6 +76,7 @@ class Proxy {
   uint64_t completed_wr() const;
 
   void set_peers_meta(std::vector<PeerMeta> const& peers);
+  void set_bench_ring_addrs(std::vector<uintptr_t> const& addrs);
 
   CopyRingBuffer ring;
 
@@ -107,6 +112,12 @@ class Proxy {
   std::vector<RDMAConnectionInfo> local_infos_, remote_infos_;
   std::vector<ProxyCtx*> ctx_by_tag_;
   void* atomic_buffer_ptr_;
+  std::vector<TransferCmd> postponed_atomics_;
+  std::vector<uint64_t> postponed_wr_ids_;
+
+  // Multi-ring buffer state tracking (one per ring buffer)
+  std::vector<uint64_t> ring_tails_;
+  std::vector<size_t> ring_seen_;
 };
 
 #endif  // PROXY_HPP

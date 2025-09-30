@@ -456,7 +456,6 @@ def initialize_uccl(
     if int(os.environ.get("WORLD_SIZE")) % nproc_per_node != 0:
         raise ValueError("WORLD_SIZE must be divisible by LOCAL_WORLD_SIZE")
 
-    bench = ep.Bench()
     proxies = []
     scratch_ptr = scratch.data_ptr()
     rank2meta = get_cpu_proxies_meta(
@@ -465,9 +464,8 @@ def initialize_uccl(
     peers_meta_list = [rank2meta[r] for r in range(num_ranks)]
     peer_ip = rank2meta[(rank + 1) % num_ranks]["ip"]
 
-    for i in range(bench.num_proxies()):
+    for i in range(ep.get_num_proxy_threads()):
         proxy = ep.Proxy(
-            rb_addr=bench.ring_addr(i),
             thread_idx=i,
             gpu_buffer_addr=scratch_ptr,
             total_size=scratch_nbytes,
@@ -485,8 +483,8 @@ def initialize_uccl(
 
     dist.barrier(group)
     if not is_intranode:
-        for i in range(bench.num_proxies()):
-            proxies[i].start_dual()
+        for proxy in proxies:
+            proxy.start_dual()
 
     workers = None
     # if hasattr(ep, "PeerCopyManager"):
@@ -500,10 +498,10 @@ def initialize_uccl(
     #             print(f"PeerCopyManager unavailable: {e}", flush=True)
 
     time.sleep(3)
-    return proxies, workers, bench
+    return proxies, workers
 
 
-def destroy_uccl(proxies, workers, bench):
+def destroy_uccl(proxies, workers):
     device_index = int(os.environ["LOCAL_RANK"])
     if workers is not None:
         try:

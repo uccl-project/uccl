@@ -28,6 +28,7 @@
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
+#include "bench_utils.hpp"
 #include "util/util.h"
 #include <stdio.h>
 #include <sys/socket.h>
@@ -36,16 +37,6 @@
 #define RETRY_DELAY_MS 200
 #define TCP_PORT 18515
 #define QKEY 0x11111111u
-
-template <typename dtype_t>
-dtype_t ceil_div(dtype_t a, dtype_t b) {
-  return (a + b - 1) / b;
-}
-
-template <typename dtype_t>
-dtype_t align(dtype_t a, dtype_t b) {
-  return ceil_div<dtype_t>(a, b) * b;
-}
 
 void exchange_connection_info(int rank, char const* peer_ip, int tid,
                               RDMAConnectionInfo* local,
@@ -147,6 +138,9 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     // Collect all NICs with equal minimum distance
     std::vector<std::string> candidates;
     for (auto& p : dist) {
+#ifndef EFA
+      if (!uccl::is_iface_up(p.first)) continue;
+#endif
       if (p.second == min_d) candidates.push_back(p.first);
     }
 
@@ -492,7 +486,7 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote) {
     attr.ah_attr.grh.hop_limit = 64;
     // Fill GID from remote_info
     memcpy(&attr.ah_attr.grh.dgid, remote->gid, 16);
-    attr.ah_attr.grh.sgid_index = 1;  // Assume GID index 0
+    attr.ah_attr.grh.sgid_index = 1;  // Assume GID index 1
   } else {
     attr.ah_attr.is_global = 0;
     attr.ah_attr.dlid = remote->lid;
@@ -620,8 +614,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              std::vector<TransferCmd> const& cmds_to_post,
                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
                              int my_rank, int thread_idx,
-                             std::unordered_set<uint64_t>& finished_wrs,
-                             std::mutex& finished_wrs_mutex) {
+                             std::unordered_set<uint64_t>& finished_wrs) {
   if (num_wrs == 0) return;
   if (wrs_to_post.size() != num_wrs || cmds_to_post.size() != num_wrs) {
     fprintf(stderr,
@@ -655,20 +648,31 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
     struct ibv_qp_ex* qpx = (struct ibv_qp_ex*)ctx->qp;
     ibv_wr_start(qpx);
 
+#ifdef USE_RECEIVER_BARRIER
     std::unordered_map<int, std::vector<size_t>> dst_expert_wr_ids;
     for (size_t j = 0; j < k; ++j) {
       size_t i = wr_ids[j];
       int expert_idx = cmds_to_post[i].expert_idx;
       dst_expert_wr_ids[expert_idx].push_back(i);
     }
+#endif
 
+#ifdef USE_RECEIVER_BARRIER
     for (auto& [expert_idx, expert_wr_ids] : dst_expert_wr_ids) {
       size_t expert_k = expert_wr_ids.size();
-
       for (size_t j = 0; j < expert_k; ++j) {
         size_t i = expert_wr_ids[j];
+#else
+    for (size_t j = 0; j < k; ++j) {
+      size_t i = wr_ids[j];
+#endif
+
         auto const& cmd = cmds_to_post[i];
+#ifdef USE_RECEIVER_BARRIER
         expert_wr_ids[j] = wrs_to_post[i];
+#else
+      wr_ids[j] = wrs_to_post[i];
+#endif
         qpx->wr_id = wrs_to_post[i];
         qpx->comp_mask = 0;
         qpx->wr_flags = IBV_SEND_SIGNALED;
@@ -693,22 +697,28 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
           }
           std::abort();
         }
-        bool last = (j + 1 == expert_k);
-        /*
-        Note(MaoZiming): This is actually fine.
-        When the atomics arrive, the remote side will track if it has received
-        just enough tokens for an expert. If it has not, it will postpone
-        processing the atomic until it does.
-        */
-        if (last) {
-          uint32_t imm =
-              WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
-                             cmd.expert_idx, expert_k, my_rank)
-                  .GetImmData();
-          ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
-        } else {
-          ibv_wr_rdma_write(qpx, ctx->remote_rkey, remote_addr);
-        }
+#ifdef USE_SENDER_BARRIER
+        S.wr_id_to_write_struct[qpx->wr_id] = {cmd.expert_idx, dst_rank,
+                                               cmd.is_combine,
+                                               cmd.low_latency_buffer_idx};
+#endif
+#ifdef USE_RECEIVER_BARRIER
+        uint32_t imm =
+            WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
+                           cmd.expert_idx, 1, my_rank)
+                .GetImmData();
+        ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
+#else
+      if (j + 1 == k) {
+        uint32_t imm =
+            WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
+                           cmd.expert_idx, k, my_rank)
+                .GetImmData();
+        ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
+      } else {
+        ibv_wr_rdma_write(qpx, ctx->remote_rkey, remote_addr);
+      }
+#endif
         uintptr_t laddr =
             cmd.req_lptr ? cmd.req_lptr
                          : reinterpret_cast<uintptr_t>(buf) + i * cmd.bytes;
@@ -717,9 +727,9 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                        static_cast<uint32_t>(cmd.bytes));
       }
 
+#ifdef USE_RECEIVER_BARRIER
       uint64_t const expert_tail_wr = expert_wr_ids.back();
       {
-        std::lock_guard<std::mutex> lock(finished_wrs_mutex);
         auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
             expert_tail_wr, std::move(expert_wr_ids));
         if (!inserted) {
@@ -735,6 +745,24 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         }
       }
     }
+#else
+    uint64_t const tail_wr = wr_ids.back();
+    {
+      auto [it, inserted] =
+          S.wr_id_to_wr_ids.try_emplace(tail_wr, std::move(wr_ids));
+      if (!inserted) {
+        fprintf(stderr,
+                "thread_idx: %d, Error: tail wr_id %lu already exists "
+                "(map=%p)\n",
+                thread_idx, tail_wr, (void*)&S.wr_id_to_wr_ids);
+        std::abort();
+      } else {
+        for (auto const& wr_id : it->second) {
+          finished_wrs.insert(wr_id);
+        }
+      }
+    }
+#endif
 
     int ret = ibv_wr_complete(qpx);
     if (ret) {
@@ -781,18 +809,14 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
 
       wrs[j].wr.rdma.rkey = ctx->remote_rkey;
       wrs[j].opcode = IBV_WR_RDMA_WRITE;
-      wrs[j].send_flags = IBV_SEND_SIGNALED;
+      wrs[j].send_flags = 0;
       wrs[j].next = (j + 1 < k) ? &wrs[j + 1] : nullptr;
     }
     size_t const last = k - 1;
     uint64_t const batch_tail_wr = wr_ids[last];
-    wrs[last].send_flags = IBV_SEND_SIGNALED;
+    wrs[last].send_flags |= IBV_SEND_SIGNALED;
     wrs[last].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-    uint32_t imm = WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
-                                  cmd.expert_idx, 1u, my_rank)
-                       .GetImmData();
-    wrs[last].imm_data = htonl(imm);
-
+    wrs[last].imm_data = htonl(static_cast<uint32_t>(batch_tail_wr));
     ibv_send_wr* bad = nullptr;
     int ret = ibv_post_send(ctx->qp, &wrs[0], &bad);
     if (ret) {
@@ -802,10 +826,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         fprintf(stderr, "Bad WR at %p (wr_id=%lu)\n", (void*)bad, bad->wr_id);
       std::abort();
     }
-
-    S.posted.fetch_add(k, std::memory_order_release);
     {
-      std::lock_guard<std::mutex> lock(finished_wrs_mutex);
       auto [it, inserted] =
           S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
       if (!inserted) {
@@ -827,11 +848,9 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
 void local_process_completions(ProxyCtx& S,
                                std::unordered_set<uint64_t>& finished_wrs,
                                std::unordered_set<uint64_t>& acked_wrs,
-                               std::mutex& finished_wrs_mutex, int thread_idx,
-                               ibv_wc* wc, int ne,
+                               int thread_idx, ibv_wc* wc, int ne,
                                std::vector<ProxyCtx*>& ctx_by_tag) {
   if (ne == 0) return;
-  int send_completed = 0;
   for (int i = 0; i < ne; ++i) {
     if (wc[i].status != IBV_WC_SUCCESS) {
       fprintf(stderr,
@@ -845,39 +864,78 @@ void local_process_completions(ProxyCtx& S,
 
     switch (wc[i].opcode) {
       case IBV_WC_RDMA_WRITE: {
-        send_completed++;
+        uint64_t wrid = wc[i].wr_id;
+        if ((wrid & kAtomicWrTag) == kAtomicWrTag) {
+          break;
+        }
+#ifdef USE_SENDER_BARRIER
         {
-          std::lock_guard<std::mutex> lock(finished_wrs_mutex);
+          auto it = S.wr_id_to_write_struct.find(wrid);
+          if (it != S.wr_id_to_write_struct.end()) {
+            WriteStruct const& ws = it->second;
+            S.wr_id_to_write_struct.erase(it);
+            if (ws.is_combine) {
+              S.combine_sent_counter.Add(
+                  {ws.low_latency_buffer_idx, ws.expert_idx, ws.dst_rank}, 1);
+            } else {
+              S.dispatch_sent_counter.Add(
+                  {ws.low_latency_buffer_idx, ws.expert_idx, ws.dst_rank}, 1);
+            }
+          } else {
+            assert(false && "wr_id not found in write_struct map");
+          }
+        }
+#endif
+        {
+#ifdef EFA
           uint64_t const wr_done = wc[i].wr_id;
           acked_wrs.insert(wr_done);
           if (S.wr_id_to_wr_ids.find(wr_done) != S.wr_id_to_wr_ids.end()) {
             S.wr_id_to_wr_ids.erase(wr_done);
           }
+#else
+          uint64_t const wr_done = wc[i].wr_id;
+          auto it = S.wr_id_to_wr_ids.find(wr_done);
+          if (it != S.wr_id_to_wr_ids.end()) {
+            for (uint64_t sub_wr : it->second) {
+              acked_wrs.insert(sub_wr);
+              if (finished_wrs.find(sub_wr) == finished_wrs.end()) {
+                fprintf(stderr,
+                        "Error: finished_wrs received ACK for unknown wr_id "
+                        "%lu\n",
+                        sub_wr);
+                std::abort();
+              }
+            }
+            S.wr_id_to_wr_ids.erase(it);
+          } else {
+            std::abort();
+          }
+#endif
         }
       } break;
       case IBV_WC_RECV:
         if (wc[i].wc_flags & IBV_WC_WITH_IMM &&
             !((ntohl(wc[i].imm_data) >> 31) & 0x1)) {
-          // Don't care about ack for now.
+          assert(false && "Explicit Ack is deprecated on local proxy");
         }
         break;
       case IBV_WC_FETCH_ADD: {
         uint64_t wrid = wc[i].wr_id;
         printf("Local thread %d: atomic completed (wr_id=0x%lx)\n", thread_idx,
                wrid);
-        send_completed++;
+        assert(false && "Atomic not expected on local proxy");
       } break;
       default:
         break;
     }
   }
-  S.completed.fetch_add(send_completed, std::memory_order_relaxed);
 }
 
 void local_poll_completions(ProxyCtx& S,
                             std::unordered_set<uint64_t>& finished_wrs,
                             std::unordered_set<uint64_t>& acked_wrs,
-                            std::mutex& finished_wrs_mutex, int thread_idx,
+                            int thread_idx,
                             std::vector<ProxyCtx*>& ctx_by_tag) {
   struct ibv_wc wc[kMaxOutstandingSends];
   int ne = 0;
@@ -903,13 +961,12 @@ void local_poll_completions(ProxyCtx& S,
   ne = ibv_poll_cq(S.cq, kMaxOutstandingSends, wc);
 #endif
   // printf("Local poll thread %d polled %d completions\n", thread_idx, ne);
-  local_process_completions(S, finished_wrs, acked_wrs, finished_wrs_mutex,
-                            thread_idx, wc, ne, ctx_by_tag);
+  local_process_completions(S, finished_wrs, acked_wrs, thread_idx, wc, ne,
+                            ctx_by_tag);
 }
 
 void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
-                  std::unordered_set<uint64_t>& acked_wrs,
-                  std::mutex& finished_wrs_mutex, int thread_idx,
+                  std::unordered_set<uint64_t>& acked_wrs, int thread_idx,
                   CopyRingBuffer& g_ring, std::vector<ProxyCtx*>& ctx_by_tag,
                   void* atomic_buffer_ptr, int num_ranks, int num_experts,
                   std::set<PendingUpdate>& pending_atomic_updates) {
@@ -936,9 +993,8 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
 #else
   ne = ibv_poll_cq(S.cq, kMaxOutstandingSends, wc);
 #endif
-  // printf("Poll CQ Dual thread %d polled %d completions\n", thread_idx, ne);
-  local_process_completions(S, finished_wrs, acked_wrs, finished_wrs_mutex,
-                            thread_idx, wc, ne, ctx_by_tag);
+  local_process_completions(S, finished_wrs, acked_wrs, thread_idx, wc, ne,
+                            ctx_by_tag);
   remote_process_completions(S, thread_idx, g_ring, ne, wc, ctx_by_tag,
                              atomic_buffer_ptr, num_ranks, num_experts,
                              pending_atomic_updates);
@@ -988,8 +1044,6 @@ void remote_process_completions(
   std::unordered_map<uint32_t, std::vector<ibv_recv_wr>> per_tag;
   per_tag.reserve(8);
 
-  std::vector<CopyTask> task_vec;
-  task_vec.reserve(ne);
   for (int i = 0; i < ne; ++i) {
     ibv_wc const& cqe = wc[i];
     if (cqe.status != IBV_WC_SUCCESS) {
@@ -1005,8 +1059,11 @@ void remote_process_completions(
       int value = aimm.GetValue();
       uint32_t offset = aimm.GetOff();
       size_t index = offset / sizeof(int);
+#ifdef USE_RECEIVER_BARRIER
       int low_latency_buffer_idx = aimm.GetBufferIdx();
+#endif
       bool is_combine = aimm.IsCombine();
+#ifdef USE_RECEIVER_BARRIER
       // ep_config.hpp
       uint32_t new_offset =
           offset - low_latency_buffer_idx *
@@ -1071,7 +1128,35 @@ void remote_process_completions(
       }
       continue;
     }
+#else
+      auto* addr32 =
+          reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
+      if (is_combine) value = 1;
+      addr32->fetch_add(value, std::memory_order_release);
+#ifndef EFA
+      const uint32_t tag = wr_tag(cqe.wr_id);
+      ProxyCtx& S_atomic = *ctx_by_tag[tag];
+      ibv_sge sge = {
+          .addr = reinterpret_cast<uintptr_t>(S_atomic.mr->addr),
+          .length = 1,
+          .lkey = S_atomic.mr->lkey,
+      };
+      ibv_recv_wr rwr = {};
+      S.pool_index = (S.pool_index + 1) % (kRemoteBufferSize / kObjectSize - 1);
+      rwr.wr_id = make_wr_id(wr_tag(cqe.wr_id), S.pool_index);
+      rwr.sg_list = &sge;
+      rwr.num_sge = 1;
+      ibv_recv_wr* bad = nullptr;
+      if (ibv_post_recv(S_atomic.qp, &rwr, &bad)) {
+        perror("ibv_post_recv (atomics replenish)");
+        std::abort();
+      }
+      continue;
+#endif
+    }
+#endif
     if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
+#ifdef USE_RECEIVER_BARRIER
       uint32_t imm = ntohl(cqe.imm_data);
       WriteImm wimm(imm);
       bool is_combine = wimm.IsCombine();
@@ -1089,11 +1174,26 @@ void remote_process_completions(
                expert_idx < (src_rank + 1) * (num_experts / num_ranks));
         S.combine_token_counter.Add({buffer_idx, expert_idx}, k);
       }
-    }
-  }
-  if (!task_vec.empty()) {
-    while (!g_ring.pushN(task_vec.data(), task_vec.size())) {
-      printf("Remote thread %d: Ring buffer full, retrying...\n", idx);
+#endif
+#ifndef EFA
+      const uint32_t tag = wr_tag(cqe.wr_id);
+      ProxyCtx& S = *ctx_by_tag[tag];
+      ibv_sge sge = {
+          .addr = reinterpret_cast<uintptr_t>(&S.ack_recv_buf[0]),
+          .length = sizeof(uint64_t),
+          .lkey = S.ack_recv_mr->lkey,
+      };
+      ibv_recv_wr rwr{};
+      S.pool_index = (S.pool_index + 1) % (kRemoteBufferSize / kObjectSize - 1);
+      rwr.wr_id = make_wr_id(wr_tag(cqe.wr_id), S.pool_index);
+      rwr.sg_list = &sge;
+      rwr.num_sge = 1;
+      ibv_recv_wr* bad = nullptr;
+      if (ibv_post_recv(S.qp, &rwr, &bad)) {
+        perror("ibv_post_recv (imm replenish)");
+        std::abort();
+      }
+#endif
     }
   }
 }
@@ -1144,6 +1244,7 @@ void remote_reg_ack_buf(ibv_pd* pd, uint64_t* ack_buf, ibv_mr*& ack_mr) {
 
 void remote_send_ack(ProxyCtx* ctx, struct ibv_qp* ack_qp, uint64_t& wr_id,
                      ibv_mr* local_ack_mr, uint64_t* ack_buf, int worker_idx) {
+  assert(false && "ACK is disabled");
   if (!ack_qp || !local_ack_mr) {
     if (!ack_qp) {
       fprintf(stderr, "QP not initialised\n");
@@ -1209,7 +1310,6 @@ void remote_send_ack(ProxyCtx* ctx, struct ibv_qp* ack_qp, uint64_t& wr_id,
 }
 
 void local_post_ack_buf(ProxyCtx& S, int depth) {
-  return;
   if (!S.pd || !S.recv_ack_qp) {
     fprintf(stderr,
             "local_post_ack_buf: PD/QP not ready (pd=%p, recv_ack_qp=%p)\n",
@@ -1248,7 +1348,6 @@ void post_atomic_operations(ProxyCtx& S,
                             std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
                             int my_rank, int thread_idx,
                             std::unordered_set<uint64_t>& finished_wrs,
-                            std::mutex& finished_wrs_mutex,
                             std::unordered_set<uint64_t>& acked_wrs) {
   if (cmds_to_post.size() > ProxyCtx::kMaxAtomicOps) {
     fprintf(stderr, "Too many atomic operations: %zu > %zu\n",
@@ -1330,8 +1429,9 @@ void post_atomic_operations(ProxyCtx& S,
       }
       uint32_t const off16 = static_cast<uint32_t>(cmd.req_rptr) & 0xFFFFu;
       int low_latency_buffer_idx = cmd.low_latency_buffer_idx;
-      uint32_t const imm =
-          pack_imm(true, cmd.is_combine, v, off16, low_latency_buffer_idx);
+      uint32_t const imm = AtomicsImm::Pack(true, cmd.is_combine, v, off16,
+                                            low_latency_buffer_idx)
+                               .GetImmData();
       sge[i].addr = reinterpret_cast<uintptr_t>(ctx->mr->addr);
       sge[i].length = 0;
       sge[i].lkey = ctx->mr->lkey;
@@ -1339,7 +1439,7 @@ void post_atomic_operations(ProxyCtx& S,
       std::memset(&wr[i], 0, sizeof(wr[i]));
       wr[i].wr_id = kAtomicWrTag | (wrid & kAtomicMask);
       wr[i].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-      wr[i].send_flags = IBV_SEND_SIGNALED;
+      wr[i].send_flags = (i + 1 == k) ? IBV_SEND_SIGNALED : 0;
       wr[i].imm_data = htonl(imm);
       wr[i].sg_list = &sge[i];
       wr[i].num_sge = 1;
@@ -1360,11 +1460,8 @@ void post_atomic_operations(ProxyCtx& S,
       }
     }
 #endif
-    // bookkeeping identical to your original logic
-    S.posted.fetch_add(k, std::memory_order_relaxed);
     uint64_t const batch_tail_wr = wr_ids.back();
     {
-      std::lock_guard<std::mutex> lock(finished_wrs_mutex);
       auto [it, inserted] =
           S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
       if (!inserted) {

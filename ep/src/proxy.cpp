@@ -1,4 +1,5 @@
 #include "proxy.hpp"
+#include "bench_utils.hpp"
 #include "ep_util.hpp"
 #include <arpa/inet.h>  // for htonl, ntohl
 #include <chrono>
@@ -43,6 +44,19 @@ void Proxy::set_peers_meta(std::vector<PeerMeta> const& peers) {
   ctxs_for_all_ranks_.resize(peers.size());
   for (size_t i = 0; i < peers.size(); ++i) {
     ctxs_for_all_ranks_[i] = std::make_unique<ProxyCtx>();
+  }
+}
+
+void Proxy::set_bench_ring_addrs(std::vector<uintptr_t> const& addrs) {
+  ring_tails_.clear();
+  ring_seen_.clear();
+  cfg_.ring_buffers.clear();
+
+  ring_tails_.resize(addrs.size(), 0);
+  ring_seen_.resize(addrs.size(), 0);
+  cfg_.ring_buffers.reserve(addrs.size());
+  for (auto addr : addrs) {
+    cfg_.ring_buffers.push_back(reinterpret_cast<DeviceToHostCmdBuffer*>(addr));
   }
 }
 
@@ -188,8 +202,8 @@ void Proxy::run_sender() {
   size_t seen = 0;
   uint64_t my_tail = 0;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    local_poll_completions(ctx_, finished_wrs_, acked_wrs_, finished_wrs_mutex_,
-                           cfg_.thread_idx, ctx_by_tag_);
+    local_poll_completions(ctx_, finished_wrs_, acked_wrs_, cfg_.thread_idx,
+                           ctx_by_tag_);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
   }
@@ -227,13 +241,25 @@ void Proxy::run_dual() {
   std::set<PendingUpdate> pending_atomic_updates;
   // printf("run_dual initialization complete\n");
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    poll_cq_dual(ctx_, finished_wrs_, acked_wrs_, finished_wrs_mutex_,
-                 cfg_.thread_idx, ring, ctx_by_tag_, atomic_buffer_ptr_,
-                 cfg_.num_ranks, cfg_.num_experts, pending_atomic_updates);
+    poll_cq_dual(ctx_, finished_wrs_, acked_wrs_, cfg_.thread_idx, ring,
+                 ctx_by_tag_, atomic_buffer_ptr_, cfg_.num_ranks,
+                 cfg_.num_experts, pending_atomic_updates);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
+#ifdef USE_RECEIVER_BARRIER
     apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
                           cfg_.num_experts, cfg_.num_ranks);
+#endif
+
+#ifdef USE_SENDER_BARRIER
+    auto postponed_wr_ids = postponed_wr_ids_;
+    auto postponed_atomics = postponed_atomics_;
+    postponed_wr_ids_.clear();
+    postponed_atomics_.clear();
+    assert(postponed_wr_ids.size() == postponed_atomics.size());
+    assert(postponed_wr_ids_.size() == 0);
+    post_gpu_commands_mixed(postponed_wr_ids, postponed_atomics);
+#endif
   }
 }
 
@@ -241,21 +267,26 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
   if (finished_wrs_.empty()) return;
   if (acked_wrs_.empty()) return;
 
-  std::lock_guard<std::mutex> lock(finished_wrs_mutex_);
-  int check_i = 0;
-  int actually_completed = 0;
+  // Group completed work requests by ring buffer
+  std::map<size_t, std::vector<std::pair<uint64_t, uint64_t>>>
+      completed_by_ring;
 
   // Copy to iterate safely while erasing.
   std::vector<uint64_t> finished_copy(finished_wrs_.begin(),
                                       finished_wrs_.end());
   std::sort(finished_copy.begin(), finished_copy.end());
+
   for (auto wr_id : finished_copy) {
     if (acked_wrs_.find(wr_id) == acked_wrs_.end()) break;
+
+    // Decode ring buffer index and command index from unique_wr_id
+    size_t rb_idx = (wr_id >> 32) & 0xFFFFFFFF;
+    uint64_t cmd_idx = wr_id & 0xFFFFFFFF;
+
+    completed_by_ring[rb_idx].push_back({wr_id, cmd_idx});
+
     finished_wrs_.erase(wr_id);
     acked_wrs_.erase(wr_id);
-    // Clear ring entry (contiguity assumed)
-    cfg_.rb->volatile_store_cmd(my_tail + check_i, 0);
-    check_i++;
 
 #ifdef MEASURE_PER_VERB_LATENCY
     auto it = wr_id_to_start_time_.find(wr_id);
@@ -271,58 +302,95 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
     }
     completion_count_++;
 #endif
-    actually_completed++;
   }
-  if (!actually_completed) return;
-  my_tail += actually_completed;
-  cfg_.rb->cpu_volatile_store_tail(my_tail);
+
+  // Process completions for each ring buffer
+  for (auto& [rb_idx, completions] : completed_by_ring) {
+    if (rb_idx >= cfg_.ring_buffers.size()) {
+      fprintf(stderr, "Error: Invalid ring buffer index %zu\n", rb_idx);
+      continue;
+    }
+
+    auto* ring_buffer = cfg_.ring_buffers[rb_idx];
+    uint64_t& ring_tail = ring_tails_[rb_idx];
+
+    // Clear ring entries and update tail
+    for (auto& [wr_id, cmd_idx] : completions) {
+      ring_buffer->volatile_store_cmd(cmd_idx, 0);
+    }
+
+    // Update tail for this ring buffer
+    ring_tail += completions.size();
+    ring_buffer->cpu_volatile_store_tail(ring_tail);
+  }
 }
 
 void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
-  // Force load head from DRAM
-  uint64_t cur_head = cfg_.rb->volatile_head();
-  if (cur_head == my_tail) {
+  // Multi-ring buffer processing: collect commands from all ring buffers
+  std::vector<uint64_t> wrs_to_post;
+  std::vector<TransferCmd> cmds_to_post;
+  bool found_work = false;
+
+  // Process each ring buffer (similar to test_multi_ring_throughput.cu)
+  for (size_t rb_idx = 0; rb_idx < cfg_.ring_buffers.size(); rb_idx++) {
+    auto* ring_buffer = cfg_.ring_buffers[rb_idx];
+    uint64_t& ring_tail = ring_tails_[rb_idx];
+    size_t& ring_seen = ring_seen_[rb_idx];
+
+    // Force load head from DRAM (like original code)
+    uint64_t cur_head = ring_buffer->volatile_head();
+    if (cur_head == ring_tail) {
+      continue;  // No new work in this ring
+    }
+
+    // Batch processing for this ring buffer
+    size_t batch_size = cur_head - ring_seen;
+    if (batch_size == 0) continue;
+
+    // Reserve space for new commands
+    size_t current_size = wrs_to_post.size();
+    wrs_to_post.reserve(current_size + batch_size);
+    cmds_to_post.reserve(current_size + batch_size);
+
+    // Collect batch of commands from this ring buffer
+    for (size_t i = ring_seen; i < cur_head; ++i) {
+      uint64_t cmd = ring_buffer->volatile_load_cmd(i);
+      // NOTE(MaoZiming): Non-blocking. prevent local and remote both while
+      // loop.
+      if (cmd == 0) break;
+
+      TransferCmd& cmd_entry = ring_buffer->load_cmd_entry(i);
+      if (static_cast<int>(cmd_entry.dst_rank) == cfg_.rank) {
+        printf("Local command!, cmd.dst_rank: %d, cfg_.rank: %d\n",
+               cmd_entry.dst_rank, cfg_.rank);
+        std::abort();
+      }
+      if (peers_[cmd_entry.dst_rank].ip == peers_[cfg_.rank].ip) {
+        printf("Intra-node command!, cmd.dst_rank: %d, cfg_.rank: %d\n",
+               cmd_entry.dst_rank, cfg_.rank);
+        std::abort();
+      }
+
+      // Use a unique ID combining ring buffer index and command index
+      uint64_t unique_wr_id = (rb_idx << 32) | i;
+      wrs_to_post.push_back(unique_wr_id);
+      cmds_to_post.push_back(cmd_entry);
+#ifdef MEASURE_PER_VERB_LATENCY
+      wr_id_to_start_time_[unique_wr_id] =
+          std::chrono::high_resolution_clock::now();
+#endif
+      ring_seen = i + 1;
+      found_work = true;
+    }
+  }
+
+  // If no work found across all ring buffers, relax CPU
+  if (!found_work) {
     cpu_relax();
     return;
   }
-  size_t batch_size = cur_head - seen;
-  if (batch_size == 0) return;
 
-  std::vector<uint64_t> wrs_to_post;
-  wrs_to_post.reserve(batch_size);
-  std::vector<TransferCmd> cmds_to_post;
-  cmds_to_post.reserve(batch_size);
-
-  for (size_t i = seen; i < cur_head; ++i) {
-    uint64_t cmd = cfg_.rb->volatile_load_cmd(i);
-    // NOTE(MaoZiming): Non-blocking. prevent local and remote both while loop.
-    if (cmd == 0) break;
-    TransferCmd& cmd_entry = cfg_.rb->load_cmd_entry(i);
-    if (static_cast<int>(cmd_entry.dst_rank) == cfg_.rank) {
-      printf("Local command!, cmd.dst_rank: %d, cfg_.rank: %d\n",
-             cmd_entry.dst_rank, cfg_.rank);
-      std::abort();
-    }
-    if (peers_[cmd_entry.dst_rank].ip == peers_[cfg_.rank].ip) {
-      printf("Intra-node command!, cmd.dst_rank: %d, cfg_.rank: %d\n",
-             cmd_entry.dst_rank, cfg_.rank);
-      std::abort();
-    }
-
-    wrs_to_post.push_back(i);
-    cmds_to_post.push_back(cmd_entry);
-#ifdef MEASURE_PER_VERB_LATENCY
-    wr_id_to_start_time_[i] = std::chrono::high_resolution_clock::now();
-#endif
-    seen = i + 1;
-  }
-
-  // Yang: this was 20-ish on GH200.
-  // if (wrs_to_post.size()) {
-  //   printf("Thread %d post_gpu_command: wrs_to_post.size()=%zu\n",
-  //          cfg_.thread_idx, wrs_to_post.size());
-  // }
-
+  // Process all collected commands in batch
   if (!wrs_to_post.empty()) {
     auto start = std::chrono::high_resolution_clock::now();
     post_gpu_commands_mixed(wrs_to_post, cmds_to_post);
@@ -334,82 +402,101 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 
 void Proxy::run_local() {
   pin_thread();
-  uint64_t my_tail = 0;
-  printf("Local CPU thread %d started\n", cfg_.thread_idx);
-  // for (int seen = 0; seen < kIterations; ++seen) {
-  int seen = 0;
-  while (true) {
-    if (!ctx_.progress_run.load(std::memory_order_acquire)) {
-      printf("Local thread %d stopping early at seen=%d\n", cfg_.thread_idx,
-             seen);
-      return;
-    }
-    // Prefer volatile read to defeat CPU cache stale head.
-    // If your ring already has volatile_head(), use it; otherwise keep
-    // rb->head.
+  printf("Local CPU thread %d started with %zu ring buffers\n", cfg_.thread_idx,
+         cfg_.ring_buffers.size());
 
-    while (cfg_.rb->volatile_head() == my_tail) {
-#ifdef DEBUG_PRINT
-      if (cfg_.thread_idx == 0) {
-        printf("Local thread %d waiting: tail=%lu head=%lu\n", cfg_.thread_idx,
-               my_tail, cfg_.rb->head);
-      }
-#endif
-      cpu_relax();
-      if (!ctx_.progress_run.load(std::memory_order_acquire)) {
-        printf("Local thread %d stopping early at seen=%d\n", cfg_.thread_idx,
-               seen);
-        return;
-      }
-    }
-
-    uint64_t const idx = my_tail & kQueueMask;
-    uint64_t cmd;
-    auto last_print = std::chrono::steady_clock::now();
-    size_t spin_count = 0;
-    do {
-      cmd = cfg_.rb->volatile_load_cmd(idx);
-      cpu_relax();
-
-      auto now = std::chrono::steady_clock::now();
-      if (now - last_print > std::chrono::seconds(10)) {
-        printf(
-            "Still waiting at thread %d, seen=%d, spin_count=%zu, my_tail=%lu, "
-            "cmd: %lu\n",
-            cfg_.thread_idx, seen, spin_count, my_tail, cmd);
-        last_print = now;
-        spin_count++;
-      }
-
-      if (!ctx_.progress_run.load(std::memory_order_acquire)) {
-        printf("Local thread %d stopping early at seen=%d\n", cfg_.thread_idx,
-               seen);
-        return;
-      }
-    } while (cmd == 0);
-
-#ifdef DEBUG_PRINT
-    printf("Local thread %d, seen=%d head=%lu tail=%lu consuming cmd=%llu\n",
-           cfg_.thread_idx, seen, cfg_.rb->head, my_tail,
-           static_cast<unsigned long long>(cmd));
-#endif
-
-    std::atomic_thread_fence(std::memory_order_acquire);
-    if (cmd == 1) {
-      TransferCmd& cmd_entry = cfg_.rb->buf[idx];
-      printf("Received command 1: thread %d, seen=%d, value: %d\n",
-             cfg_.thread_idx, seen, cmd_entry.value);
-    }
-
-    cfg_.rb->volatile_store_cmd(idx, 0);
-    ++my_tail;
-    // cfg_.rb->tail = my_tail;
-    cfg_.rb->cpu_volatile_store_tail(my_tail);
-    seen++;
+  if (cfg_.ring_buffers.empty()) {
+    printf("Error: No ring buffers available for local mode\n");
+    return;
   }
 
-  printf("Local thread %d finished %d commands, tail=%lu\n", cfg_.thread_idx,
-         kIterations, my_tail);
+  int total_seen = 0;
+  while (true) {
+    if (!ctx_.progress_run.load(std::memory_order_acquire)) {
+      printf("Local thread %d stopping early at total_seen=%d\n",
+             cfg_.thread_idx, total_seen);
+      return;
+    }
+
+    bool found_work = false;
+
+    // Multi-ring buffer polling (consistent with other modes)
+    for (size_t rb_idx = 0; rb_idx < cfg_.ring_buffers.size(); rb_idx++) {
+      auto* ring_buffer = cfg_.ring_buffers[rb_idx];
+      uint64_t& ring_tail = ring_tails_[rb_idx];
+
+      // Check for new work in this ring buffer
+      uint64_t cur_head = ring_buffer->volatile_head();
+      if (cur_head == ring_tail) {
+        continue;  // No new work in this ring
+      }
+
+      // Process commands from this ring buffer
+      while (ring_tail < cur_head) {
+        uint64_t const idx = ring_tail & kQueueMask;
+        uint64_t cmd;
+
+        auto last_print = std::chrono::steady_clock::now();
+        size_t spin_count = 0;
+        do {
+          cmd = ring_buffer->volatile_load_cmd(idx);
+          cpu_relax();
+
+          auto now = std::chrono::steady_clock::now();
+          if (now - last_print > std::chrono::seconds(10)) {
+            printf(
+                "Still waiting at thread %d, ring %zu, total_seen=%d, "
+                "spin_count=%zu, ring_tail=%lu, cmd: %lu\n",
+                cfg_.thread_idx, rb_idx, total_seen, spin_count, ring_tail,
+                cmd);
+            last_print = now;
+            spin_count++;
+          }
+
+          if (!ctx_.progress_run.load(std::memory_order_acquire)) {
+            printf("Local thread %d stopping early at total_seen=%d\n",
+                   cfg_.thread_idx, total_seen);
+            return;
+          }
+        } while (cmd == 0);
+
+#ifdef DEBUG_PRINT
+        printf(
+            "Local thread %d, ring %zu, total_seen=%d head=%lu tail=%lu "
+            "consuming cmd=%llu\n",
+            cfg_.thread_idx, rb_idx, total_seen, ring_buffer->head, ring_tail,
+            static_cast<unsigned long long>(cmd));
+#endif
+
+        std::atomic_thread_fence(std::memory_order_acquire);
+        if (cmd == 1) {
+          TransferCmd& cmd_entry = ring_buffer->buf[idx];
+          printf(
+              "Received command 1: thread %d, ring %zu, total_seen=%d, value: "
+              "%d\n",
+              cfg_.thread_idx, rb_idx, total_seen, cmd_entry.value);
+        }
+
+        // Mark command as processed
+        ring_buffer->volatile_store_cmd(idx, 0);
+        ring_tail++;
+        ring_buffer->cpu_volatile_store_tail(ring_tail);
+        total_seen++;
+        found_work = true;
+
+        // Break to check other ring buffers and progress_run flag
+        break;
+      }
+    }
+
+    // If no work found across all ring buffers, relax CPU
+    if (!found_work) {
+      cpu_relax();
+    }
+  }
+
+  printf("Local thread %d finished %d commands across %zu ring buffers\n",
+         cfg_.thread_idx, total_seen, cfg_.ring_buffers.size());
 }
 
 void Proxy::post_gpu_commands_mixed(
@@ -421,8 +508,48 @@ void Proxy::post_gpu_commands_mixed(
 
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
     if (cmds_to_post[i].is_atomic) {
+#ifdef USE_SENDER_BARRIER
+      int value = cmds_to_post[i].value;
+      int expected_value;
+      uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
+      uint32_t new_offset =
+          offset - cmds_to_post[i].low_latency_buffer_idx *
+                       align<size_t>(cfg_.num_experts * sizeof(int), 128);
+      size_t new_index = new_offset / sizeof(int);
+      int expert_idx;
+
+      if (cmds_to_post[i].is_combine) {
+        expert_idx = new_index;
+        expected_value = ctx_.combine_sent_counter.Get(
+            {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
+             cmds_to_post[i].dst_rank});
+      } else {
+        expert_idx = new_index / cfg_.num_ranks;
+        expected_value = ctx_.dispatch_sent_counter.Get(
+            {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
+             cmds_to_post[i].dst_rank});
+        value = -value - 1;
+      }
+      if (value != expected_value) {
+        postponed_atomics_.push_back(cmds_to_post[i]);
+        postponed_wr_ids_.push_back(wrs_to_post[i]);
+        assert(postponed_atomics_.size() == postponed_wr_ids_.size());
+        continue;
+      }
+#endif
       atomic_wrs.push_back(wrs_to_post[i]);
       atomic_cmds.push_back(cmds_to_post[i]);
+
+#ifdef USE_SENDER_BARRIER
+      if (cmds_to_post[i].is_combine) {
+        ctx_.combine_sent_counter.Reset({cmds_to_post[i].low_latency_buffer_idx,
+                                         expert_idx, cmds_to_post[i].dst_rank});
+      } else {
+        ctx_.dispatch_sent_counter.Reset(
+            {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
+             cmds_to_post[i].dst_rank});
+      }
+#endif
     } else {
       rdma_wrs.push_back(wrs_to_post[i]);
       rdma_cmds.push_back(cmds_to_post[i]);
@@ -434,13 +561,12 @@ void Proxy::post_gpu_commands_mixed(
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
                             rdma_cmds, ctxs_for_all_ranks_, cfg_.rank,
-                            cfg_.thread_idx, finished_wrs_,
-                            finished_wrs_mutex_);
+                            cfg_.thread_idx, finished_wrs_);
   }
   if (!atomic_wrs.empty()) {
     post_atomic_operations(ctx_, atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
                            cfg_.rank, cfg_.thread_idx, finished_wrs_,
-                           finished_wrs_mutex_, acked_wrs_);
+                           acked_wrs_);
   }
 }
 
