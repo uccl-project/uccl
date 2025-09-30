@@ -4,7 +4,8 @@
  *
  * Builds GPU unpack descriptors from TCPX receive metadata.
  * After a GPU receive completes, the plugin provides scatter-gather metadata
- * (loadMeta array) describing how to unpack fragmented data from bounce buffers.
+ * (loadMeta array) describing how to unpack fragmented data from bounce
+ * buffers.
  *
  * Design: Header-only, uses tcpx::plugin::loadMeta directly (no duplication).
  */
@@ -12,8 +13,8 @@
 #ifndef TCPX_RX_DESCRIPTOR_H_
 #define TCPX_RX_DESCRIPTOR_H_
 
-#include <stdint.h>
 #include "tcpx_structs.h"
+#include <stdint.h>
 
 namespace tcpx {
 namespace rx {
@@ -27,16 +28,21 @@ using UnpackDescriptor = tcpx::plugin::loadMeta;
 // Descriptor block for GPU kernel
 struct UnpackDescriptorBlock {
   UnpackDescriptor descriptors[MAX_UNPACK_DESCRIPTORS];
-  uint32_t count;           // Number of valid descriptors
-  uint32_t total_bytes;     // Total bytes to unpack
-  void* bounce_buffer;      // Source bounce buffer base
-  void* dst_buffer;         // Destination buffer base
-  void* ready_flag;         // Device pointer to a 64-bit counter/flag (optional)
-  uint64_t ready_threshold; // Optional: expected minimal value to consider ready
+  uint32_t count;        // Number of valid descriptors
+  uint32_t total_bytes;  // Total bytes to unpack
+  void* bounce_buffer;   // Source bounce buffer base
+  void* dst_buffer;      // Destination buffer base
+  void* ready_flag;      // Device pointer to a 64-bit counter/flag (optional)
+  uint64_t
+      ready_threshold;  // Optional: expected minimal value to consider ready
 
   UnpackDescriptorBlock()
-    : count(0), total_bytes(0), bounce_buffer(nullptr), dst_buffer(nullptr)
-    , ready_flag(nullptr), ready_threshold(0) {}
+      : count(0),
+        total_bytes(0),
+        bounce_buffer(nullptr),
+        dst_buffer(nullptr),
+        ready_flag(nullptr),
+        ready_threshold(0) {}
 };
 
 /**
@@ -52,12 +58,10 @@ struct UnpackDescriptorBlock {
  * - Host unpack: DtoH + gather + HtoD
  * - Kernel unpack: Copy to device and launch GPU kernel
  */
-inline void buildDescriptorBlock(
-    const tcpx::plugin::loadMeta* meta_entries,
-    uint32_t count,
-    void* bounce_buffer,
-    void* dst_buffer,
-    UnpackDescriptorBlock& desc_block) {
+inline void buildDescriptorBlock(tcpx::plugin::loadMeta const* meta_entries,
+                                 uint32_t count, void* bounce_buffer,
+                                 void* dst_buffer,
+                                 UnpackDescriptorBlock& desc_block) {
   desc_block.count = count;
   desc_block.total_bytes = 0;
   desc_block.bounce_buffer = bounce_buffer;
@@ -69,8 +73,7 @@ inline void buildDescriptorBlock(
   }
 }
 
-} // namespace rx
-} // namespace tcpx
+}  // namespace rx
+}  // namespace tcpx
 
-#endif // TCPX_RX_DESCRIPTOR_H_
-
+#endif  // TCPX_RX_DESCRIPTOR_H_

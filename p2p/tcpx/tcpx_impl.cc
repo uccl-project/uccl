@@ -287,21 +287,18 @@ int tcpx_test(void* request, int* done, int* size) {
 // Completion helpers implementation
 
 int tcpx_irecv_consumed(void* comm, int n, void* request) {
-
   if (!g_net || !g_net->irecvConsumed) {
-
-    tcpx_dbg("tcpx_irecv_consumed: plugin not initialized or irecvConsumed not available");
+    tcpx_dbg(
+        "tcpx_irecv_consumed: plugin not initialized or irecvConsumed not "
+        "available");
 
     return -1;
-
   }
 
   if (!request) {
-
     tcpx_dbg("tcpx_irecv_consumed: request is null, returning error");
 
     return -1;
-
   }
 
   tcpx_dbg("tcpx_irecv_consumed: comm=%p n=%d request=%p", comm, n, request);
@@ -311,10 +308,7 @@ int tcpx_irecv_consumed(void* comm, int n, void* request) {
   tcpx_dbg("tcpx_irecv_consumed: rc=%d", rc);
 
   return rc;
-
 }
-
-
 
 // Connection cleanup implementation
 int tcpx_close_send(void* send_comm) {
