@@ -124,15 +124,17 @@ int tcpx_get_device_count() {
   return rc == 0 ? ndev : -1;
 }
 
-// Connection management implementation
+// Connection management implementation - use v5 API for consistency
 int tcpx_listen(int dev, void* handle, void** listen_comm) {
+  tcpx_dbg("tcpx_listen: dev=%d (using v5 API for consistency)", dev);
+
   if (!g_net || !g_net->listen) {
     tcpx_dbg("tcpx_listen: plugin not initialized or listen not available");
     return -1;
   }
-  tcpx_dbg("tcpx_listen: dev=%d", dev);
+
   int rc = g_net->listen(dev, handle, listen_comm);
-  tcpx_dbg("tcpx_listen: rc=%d listen_comm=%p", rc, *listen_comm);
+  tcpx_dbg("tcpx_listen (v5): rc=%d listen_comm=%p", rc, *listen_comm);
   return rc;
 }
 
@@ -141,28 +143,15 @@ int tcpx_listen(int dev, void* handle, void** listen_comm) {
 // parameters
 int tcpx_connect_v5(int dev, void* handle, void** send_comm,
                     void** send_dev_handle) {
-  tcpx_dbg("tcpx_connect_v5: dev=%d handle=%p", dev, handle);
+  tcpx_dbg("tcpx_connect_v5: dev=%d handle=%p (using v5 API)", dev, handle);
 
-  // We need to call the real TCPX plugin function here
-  // However, our g_net structure may not expose the v5-specific functions
-  // Let's first try to get the function pointer via dlsym
-
-  if (!g_plugin_handle) {
-    tcpx_dbg("tcpx_connect_v5: plugin not loaded");
+  if (!g_net || !g_net->connect) {
+    tcpx_dbg(
+        "tcpx_connect_v5: plugin not initialized or connect not available");
     return -1;
   }
 
-  // Attempt to get the tcpxConnect_v5 function using the C++ mangled name
-  typedef int (*tcpxConnect_v5_fn)(int, void*, void**, void**);
-  tcpxConnect_v5_fn connect_fn = (tcpxConnect_v5_fn)dlsym(
-      g_plugin_handle, "_Z14tcpxConnect_v5iPvPS_PP24ncclNetDeviceHandle_v7_t");
-
-  if (!connect_fn) {
-    tcpx_dbg("tcpxConnect_v5 function not found: %s", dlerror());
-    return -1;
-  }
-
-  int rc = connect_fn(dev, handle, send_comm, send_dev_handle);
+  int rc = g_net->connect(dev, handle, send_comm, send_dev_handle);
   tcpx_dbg("tcpx_connect_v5: rc=%d send_comm=%p send_dev_handle=%p", rc,
            *send_comm, *send_dev_handle);
   return rc;
@@ -170,24 +159,14 @@ int tcpx_connect_v5(int dev, void* handle, void** send_comm,
 
 int tcpx_accept_v5(void* listen_comm, void** recv_comm,
                    void** recv_dev_handle) {
-  tcpx_dbg("tcpx_accept_v5: listen_comm=%p", listen_comm);
+  tcpx_dbg("tcpx_accept_v5: listen_comm=%p (using v5 API)", listen_comm);
 
-  if (!g_plugin_handle) {
-    tcpx_dbg("tcpx_accept_v5: plugin not loaded");
+  if (!g_net || !g_net->accept) {
+    tcpx_dbg("tcpx_accept_v5: plugin not initialized or accept not available");
     return -1;
   }
 
-  // Attempt to get the tcpxAccept_v5 function using the C++ mangled name
-  typedef int (*tcpxAccept_v5_fn)(void*, void**, void**);
-  tcpxAccept_v5_fn accept_fn = (tcpxAccept_v5_fn)dlsym(
-      g_plugin_handle, "_Z13tcpxAccept_v5PvPS_PP24ncclNetDeviceHandle_v7_t");
-
-  if (!accept_fn) {
-    tcpx_dbg("tcpxAccept_v5 function not found: %s", dlerror());
-    return -1;
-  }
-
-  int rc = accept_fn(listen_comm, recv_comm, recv_dev_handle);
+  int rc = g_net->accept(listen_comm, recv_comm, recv_dev_handle);
   tcpx_dbg("tcpx_accept_v5: rc=%d recv_comm=%p recv_dev_handle=%p", rc,
            *recv_comm, *recv_dev_handle);
   return rc;
@@ -224,10 +203,17 @@ int tcpx_isend(void* send_comm, void* data, int size, int tag, void* mhandle,
     tcpx_dbg("tcpx_isend: plugin not initialized or isend not available");
     return -1;
   }
+
+  // Check for null communication handle to avoid segfault
+  if (!send_comm) {
+    tcpx_dbg("tcpx_isend: send_comm is null, returning error");
+    return -1;
+  }
+
   tcpx_dbg("tcpx_isend: send_comm=%p data=%p size=%d tag=%d mhandle=%p",
            send_comm, data, size, tag, mhandle);
   int rc = g_net->isend(send_comm, data, size, tag, mhandle, request);
-  tcpx_dbg("tcpx_isend: rc=%d request=%p", rc, *request);
+  tcpx_dbg("tcpx_isend: rc=%d request=%p", rc, request ? *request : nullptr);
   return rc;
 }
 
@@ -237,9 +223,16 @@ int tcpx_irecv(void* recv_comm, int n, void** data, int* sizes, int* tags,
     tcpx_dbg("tcpx_irecv: plugin not initialized or irecv not available");
     return -1;
   }
+
+  // Check for null communication handle to avoid segfault
+  if (!recv_comm) {
+    tcpx_dbg("tcpx_irecv: recv_comm is null, returning error");
+    return -1;
+  }
+
   tcpx_dbg("tcpx_irecv: recv_comm=%p n=%d", recv_comm, n);
   int rc = g_net->irecv(recv_comm, n, data, sizes, tags, mhandles, request);
-  tcpx_dbg("tcpx_irecv: rc=%d request=%p", rc, *request);
+  tcpx_dbg("tcpx_irecv: rc=%d request=%p", rc, request ? *request : nullptr);
   return rc;
 }
 
@@ -248,13 +241,36 @@ int tcpx_test(void* request, int* done, int* size) {
     tcpx_dbg("tcpx_test: plugin not initialized or test not available");
     return -1;
   }
+
+  // Check for null request handle to avoid segfault
+  if (!request) {
+    tcpx_dbg("tcpx_test: request is null, returning error");
+    return -1;
+  }
+
   int rc = g_net->test(request, done, size);
-  if (*done) {
+  if (done && *done) {
     tcpx_dbg("tcpx_test: rc=%d done=%d size=%d", rc, *done, size ? *size : -1);
   }
   return rc;
 }
 
+// Completion helpers implementation
+int tcpx_irecv_consumed(void* comm, int n, void* request) {
+  if (!g_net || !g_net->irecvConsumed) {
+    tcpx_dbg("tcpx_irecv_consumed: plugin not initialized or irecvConsumed not available");
+    return -1;
+  }
+  if (!request) {
+    tcpx_dbg("tcpx_irecv_consumed: request is null, returning error");
+    return -1;
+  }
+  tcpx_dbg("tcpx_irecv_consumed: comm=%p n=%d request=%p", comm, n, request);
+  int rc = g_net->irecvConsumed(comm, n, request);
+  tcpx_dbg("tcpx_irecv_consumed: rc=%d", rc);
+  return rc;
+}
+
 // Connection cleanup implementation
 int tcpx_close_send(void* send_comm) {
   if (!g_net || !g_net->closeSend) {

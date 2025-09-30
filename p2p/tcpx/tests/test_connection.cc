@@ -7,6 +7,10 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <vector>
+#ifndef NO_CUDA
+#include <cuda.h>
+#endif
 
 // NCCL network handle - used to exchange connection details
 // According to the NCCL spec, the handle is typically 128 bytes (extra space
@@ -179,21 +183,27 @@ int main(int argc, char* argv[]) {
     // Small delay to ensure TCPX is fully ready
     usleep(100000);  // 100ms
 
-    ssize_t sent = send(bootstrap_fd, handle.data, NCCL_NET_HANDLE_MAXSIZE, 0);
-    if (sent != NCCL_NET_HANDLE_MAXSIZE) {
-      std::cout << "�?FAILED: Cannot send handle to client (sent " << sent
-                << " bytes)" << std::endl;
-      close(bootstrap_fd);
-      return 1;
+    // Loop to guarantee full 128B handle is sent
+    size_t total_sent = 0;
+    while (total_sent < NCCL_NET_HANDLE_MAXSIZE) {
+      ssize_t s = send(bootstrap_fd, handle.data + total_sent,
+                       NCCL_NET_HANDLE_MAXSIZE - total_sent, 0);
+      if (s <= 0) {
+        std::cout << "�?FAILED: Cannot send handle to client (sent " << total_sent
+                  << " bytes)" << std::endl;
+        close(bootstrap_fd);
+        return 1;
+      }
+      total_sent += static_cast<size_t>(s);
     }
-    std::cout << "�?SUCCESS: Handle sent to client (" << sent << " bytes)"
+    std::cout << "�?SUCCESS: Handle sent to client (" << total_sent << " bytes)"
               << std::endl;
 
     close(bootstrap_fd);
 
     // Wait for client to process handle and initiate connection
     std::cout << "Waiting for client to connect..." << std::endl;
-    sleep(2);  // Give client time to process handle and connect
+    sleep(3);  // Give client more time to process handle and connect
 
     // Accept connection with retry loop
     void* recv_comm = nullptr;
@@ -236,102 +246,10 @@ int main(int argc, char* argv[]) {
       return 1;
     }
 
-    // Test data transfer - receive data from client
-    std::cout << "\n[Step 4] Testing data transfer (receive)..." << std::endl;
-
-// ===== Allocate receive buffer (prefer mmap + mlock; fallback to posix_memalign/new) =====
-size_t const buffer_size = 1024;
-void*   recv_mmap   = MAP_FAILED;
-void*   recv_aligned = nullptr;
-char*   recv_buffer = nullptr;
-bool    used_mmap   = false;
-bool    used_posix  = false;
-
-// 1) mmap 优先
-recv_mmap = mmap(nullptr, buffer_size,
-                 PROT_READ | PROT_WRITE,
-                 MAP_PRIVATE | MAP_ANONYMOUS
-#ifdef MAP_POPULATE
-                 | MAP_POPULATE
-#endif
-                 , -1, 0);
-if (recv_mmap != MAP_FAILED) {
-  used_mmap   = true;
-  recv_buffer = static_cast<char*>(recv_mmap);
-  memset(recv_buffer, 0, buffer_size);
-  if (mlock(recv_buffer, buffer_size) != 0) {
-    perror("mlock"); 
-  }
-} else if (posix_memalign(&recv_aligned, 4096, buffer_size) == 0) {
-  used_posix  = true;
-  recv_buffer = static_cast<char*>(recv_aligned);
-  memset(recv_buffer, 0, buffer_size);
-  if (mlock(recv_buffer, buffer_size) != 0) {
-    perror("mlock(posix)"); 
-  }
-} else {
-
-  recv_buffer = new char[buffer_size];
-  memset(recv_buffer, 0, buffer_size);
-}
-
-printf("Recv buffer addr=%p, size=%zu\n", recv_buffer, buffer_size);
-
-// ===== Register MR =====
-void* recv_mhandle = nullptr;
-int rc_reg = tcpx_reg_mr(recv_comm, recv_buffer, buffer_size, NCCL_PTR_HOST, &recv_mhandle);
-if (rc_reg != 0) {
-  printf("WARNING: tcpx_reg_mr failed rc=%d, continue unregistered\n", rc_reg);
-  recv_mhandle = nullptr;
-} else {
-  printf("Memory registered for receive, mhandle=%p\n", recv_mhandle);
-}
-
-// ===== Post receive =====
-void* recv_data[1]    = { recv_buffer };
-int   recv_sizes[1]   = { buffer_size };
-int   recv_tags[1]    = { 42 };
-void* recv_mhandles[1]= { recv_mhandle };
-void* recv_request    = nullptr;
-
-printf("  recv_data[0]=%p, mhandle=%p\n", recv_buffer, recv_mhandle);
-
-int rc_recv = tcpx_irecv(recv_comm, 1, recv_data, recv_sizes, recv_tags, recv_mhandles, &recv_request);
-if (rc_recv != 0) {
-  printf("FAILED: tcpx_irecv rc=%d\n", rc_recv);
-} else {
-  printf("Receive request posted, request=%p\n", recv_request);
-  // ===== Poll =====
-  int done = 0, received_size = 0;
-  for (int i = 0; i < 1000 && !done; i++) {
-    int rc_test = tcpx_test(recv_request, &done, &received_size);
-    if (rc_test != 0) { printf("tcpx_test rc=%d\n", rc_test); break; }
-    if (!done) usleep(1000);
-  }
-  if (done) {
-    printf("SUCCESS: Received %d bytes\n", received_size);
-    printf("Data: '%s'\n", recv_buffer);
-  } else {
-    printf("TIMEOUT: no data\n");
-  }
-}
-
-if (recv_mhandle) {
-  tcpx_dereg_mr(recv_comm, recv_mhandle);
-}
-if (used_mmap) {
-  munlock(recv_buffer, buffer_size);
-  munmap(recv_buffer, buffer_size);
-} else if (used_posix) {
-  munlock(recv_buffer, buffer_size);
-  free(recv_aligned);
-} else {
-  delete[] recv_buffer;
-}
-
-
-    std::cout << "TODO: Implement proper cleanup for TCPX connections"
-              << std::endl;
+    std::cout << "\nConnection established successfully. Data path validation is covered by"
+              << " tests/test_tcpx_transfer." << std::endl;
+    if (recv_comm) tcpx_close_recv(recv_comm);
+    if (listen_comm) tcpx_close_listen(listen_comm);
 
   } else if (strcmp(argv[1], "client") == 0) {
     if (argc < 3) {
@@ -354,15 +272,19 @@ if (used_mmap) {
     // Receive handle from server via bootstrap connection
     std::cout << "Receiving TCPX handle from server..." << std::endl;
     ncclNetHandle_v7 handle;
-    ssize_t received =
-        recv(bootstrap_fd, handle.data, NCCL_NET_HANDLE_MAXSIZE, 0);
-    if (received != NCCL_NET_HANDLE_MAXSIZE) {
-      std::cout << "�?FAILED: Cannot receive handle from server (received "
-                << received << " bytes)" << std::endl;
-      close(bootstrap_fd);
-      return 1;
+    size_t total_received = 0;
+    while (total_received < NCCL_NET_HANDLE_MAXSIZE) {
+      ssize_t r = recv(bootstrap_fd, handle.data + total_received,
+                       NCCL_NET_HANDLE_MAXSIZE - total_received, 0);
+      if (r <= 0) {
+        std::cout << "�?FAILED: Cannot receive handle from server (received "
+                  << total_received << " bytes)" << std::endl;
+        close(bootstrap_fd);
+        return 1;
+      }
+      total_received += static_cast<size_t>(r);
     }
-    std::cout << "�?SUCCESS: Handle received from server (" << received
+    std::cout << "�?SUCCESS: Handle received from server (" << total_received
               << " bytes)" << std::endl;
 
     // Debug: Print received handle data
@@ -389,7 +311,7 @@ if (used_mmap) {
 
     // Small delay to ensure server is ready for accept
     std::cout << "Preparing to connect..." << std::endl;
-    sleep(1);
+    sleep(2);
 
     void* send_comm = nullptr;
     void* send_dev_handle = nullptr;
@@ -407,79 +329,11 @@ if (used_mmap) {
 
     // Wait a bit to ensure connection is fully established
     std::cout << "Waiting for connection to stabilize..." << std::endl;
-    sleep(2);
+    sleep(3);  // Give more time for server to be ready for receive
 
-    // Test data transfer - send data to server
-    std::cout << "\n[Step 4] Testing data transfer (send)..." << std::endl;
-
-    // Prepare test data
-    char const* test_message = "Hello from TCPX client!";
-    int const message_len =
-        strlen(test_message) + 1;  // Include null terminator
-    char* send_buffer = new char[message_len];
-    strcpy(send_buffer, test_message);
-
-    std::cout << "Sending message: '" << test_message << "' (" << message_len
-              << " bytes)" << std::endl;
-
-    // Register memory for TCPX
-    void* send_mhandle = nullptr;
-    int rc_reg = tcpx_reg_mr(send_comm, send_buffer, message_len, NCCL_PTR_HOST,
-                             &send_mhandle);
-    if (rc_reg != 0) {
-      std::cout << "�?WARNING: tcpx_reg_mr failed with rc=" << rc_reg
-                << std::endl;
-      std::cout << "Continuing without memory registration..." << std::endl;
-      send_mhandle = nullptr;
-    } else {
-      std::cout << "�?Memory registered for send, mhandle=" << send_mhandle
-                << std::endl;
-    }
-
-    // Send data
-    void* send_request = nullptr;
-    int send_tag = 42;  // Match server's receive tag
-
-    std::cout << "Posting send request..." << std::endl;
-    int rc_send = tcpx_isend(send_comm, send_buffer, message_len, send_tag,
-                             send_mhandle, &send_request);
-    if (rc_send != 0) {
-      std::cout << "�?FAILED: tcpx_isend returned " << rc_send << std::endl;
-    } else {
-      std::cout << "�?Send request posted, request=" << send_request
-                << std::endl;
-
-      // Wait for completion
-      std::cout << "Waiting for send completion..." << std::endl;
-      int done = 0, sent_size = 0;
-      int max_polls = 1000;
-      for (int i = 0; i < max_polls && !done; i++) {
-        int rc_test = tcpx_test(send_request, &done, &sent_size);
-        if (rc_test != 0) {
-          std::cout << "�?tcpx_test failed with rc=" << rc_test << std::endl;
-          break;
-        }
-        if (!done) {
-          usleep(1000);  // 1ms delay
-        }
-      }
-
-      if (done) {
-        std::cout << "�?SUCCESS: Sent " << sent_size << " bytes" << std::endl;
-      } else {
-        std::cout << "�?TIMEOUT: Send not completed after " << max_polls
-                  << " polls" << std::endl;
-      }
-    }
-
-    // Cleanup
-    if (send_mhandle) {
-      tcpx_dereg_mr(send_comm, send_mhandle);
-    }
-    delete[] send_buffer;
-
-    std::cout << "TODO: Implement proper cleanup for TCPX connections"
-              << std::endl;
+    std::cout << "Connection established successfully. Data transfer test is"
+              << " available in tests/test_tcpx_transfer." << std::endl;
+    if (send_comm) tcpx_close_send(send_comm);
 
   } else {
     std::cout << "�?ERROR: Invalid mode. Use 'server' or 'client'" << std::endl;

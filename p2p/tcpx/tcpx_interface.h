@@ -6,6 +6,10 @@
 #include <cstddef>
 #include <cstdint>
 
+// NCCL memory type constants
+#define NCCL_PTR_HOST 0x1
+#define NCCL_PTR_CUDA 0x2
+
 extern "C" {
 // Basic functions
 int tcpx_get_device_count();
@@ -27,6 +31,9 @@ int tcpx_isend(void* send_comm, void* data, int size, int tag, void* mhandle,
 int tcpx_irecv(void* recv_comm, int n, void** data, int* sizes, int* tags,
                void** mhandles, void** request);
 int tcpx_test(void* request, int* done, int* size);
+
+// Completion helpers
+int tcpx_irecv_consumed(void* comm, int n, void* request);
 
 // Connection cleanup
 int tcpx_close_send(void* send_comm);
