@@ -1,24 +1,35 @@
 /**
- * @file test_tcpx_transfer_clean.cc
+ * @file test_tcpx_transfer.cc
  * @brief TCPX GPU-to-GPU end-to-end transfer validation
  *
- * This test uses nccl-plugin-gpudirecttcpx APIs to transfer data between CUDA device memory
- * on two nodes. It builds upon test_connection.cc (handshake only) by adding CUDA buffer
- * registration and data validation.
+ * This test validates the complete TCPX transfer pipeline including:
+ * - TCPX connection establishment (listen/accept/connect)
+ * - CUDA device buffer registration
+ * - Async send/receive operations
+ * - RX metadata parsing (CMSG scatter-gather lists)
+ * - Device unpack implementations (D2D and host-mediated)
  *
- * Server steps:
- *   1. Listen for TCPX connections on device 0, publish NCCL handle via bootstrap TCP socket.
- *   2. Accept TCPX connection, register a 4KB CUDA buffer, submit an async receive request.
- *   3. Poll for completion, execute the device unpack path, copy data back to host memory, and validate.
+ * Server workflow:
+ *   1. Listen on device 0, publish NCCL handle via bootstrap TCP
+ *   2. Accept connection, register 4KB CUDA buffer, submit irecv
+ *   3. Poll for completion, parse RX metadata, execute unpack
+ *   4. Validate received data against expected payload
  *
- * Client steps:
- *   1. Get the NCCL handle via bootstrap TCP socket.
- *   2. Connect to the server via TCPX, register a 4KB CUDA buffer, write the test payload, and send.
- *   3. Wait for completion and clean up resources.
+ * Client workflow:
+ *   1. Connect to server via bootstrap TCP and TCPX
+ *   2. Register 4KB CUDA buffer, write test payload, submit isend
+ *   3. Wait for completion and cleanup
+ *
+ * Environment variables:
+ *   UCCL_TCPX_UNPACK_IMPL: Select unpack implementation (d2d|host|kernel)
+ *     - d2d (default): Device-to-device memcpy per fragment
+ *     - host: Host-mediated gather (DtoH + memcpy + HtoD)
+ *     - kernel: CUDA kernel-based unpack (experimental, not in this PR)
  */
 
-#include "../tcpx_interface.h"
+#include "../include/tcpx_interface.h"
 #include "../include/tcpx_structs.h"
+#include "../include/rx_descriptor.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -30,7 +41,6 @@
 #include <cuda_runtime.h>
 
 #include "../device/unpack_launch.h"
-#include "../rx/rx_descriptor.h"
 
 #include <algorithm>
 #include <chrono>
@@ -417,45 +427,27 @@ int main(int argc, char** argv) {
           std::cout << "[DEBUG] Device handle: meta=" << dev_handle.meta
                     << " bounce_buf=" << dev_handle.bounce_buf
                     << " head=" << dev_handle.head << std::endl;
+          // Build descriptor block using simplified utility function
           tcpx::rx::UnpackDescriptorBlock desc_block;
-          desc_block.count = static_cast<uint32_t>(frag_count);
-          desc_block.total_bytes = 0;
-          desc_block.bounce_buffer = dev_handle.bounce_buf;
-          desc_block.dst_buffer = reinterpret_cast<void*>(d_aligned);
+          tcpx::rx::buildDescriptorBlock(
+              meta_entries,
+              static_cast<uint32_t>(frag_count),
+              dev_handle.bounce_buf,
+              reinterpret_cast<void*>(d_aligned),
+              desc_block
+          );
 
-	          // Provide device-side ready flag to mimic NCCL visibility barrier
-	          desc_block.ready_flag = rx_req->unpack_slot.cnt;  // device pointer
-	          desc_block.ready_threshold = frag_count;  // optional, not enforced yet
+          // Set optional ready flag for device-side visibility barrier
+          desc_block.ready_flag = rx_req->unpack_slot.cnt;
+          desc_block.ready_threshold = frag_count;
 
+          // Print descriptor details
           for (uint32_t i = 0; i < desc_block.count; ++i) {
-            desc_block.descriptors[i].src_off = meta_entries[i].src_off;
-            desc_block.descriptors[i].len = meta_entries[i].len;
-            desc_block.descriptors[i].dst_off = meta_entries[i].dst_off;
-            desc_block.total_bytes += meta_entries[i].len;
-            std::cout << "[DEBUG] descriptor[" << i << "] src_off=" << meta_entries[i].src_off
-                      << " len=" << meta_entries[i].len
-                      << " dst_off=" << meta_entries[i].dst_off << std::endl;
+            std::cout << "[DEBUG] descriptor[" << i << "] src_off=" << desc_block.descriptors[i].src_off
+                      << " len=" << desc_block.descriptors[i].len
+                      << " dst_off=" << desc_block.descriptors[i].dst_off << std::endl;
           }
           bool device_copy_ok = true;
-
-          // Optional preflight: sanity-check that bounce buffer is readable from this context
-          if (desc_block.count > 0) {
-            const auto& meta0 = desc_block.descriptors[0];
-            CUdeviceptr src0 = static_cast<CUdeviceptr>(
-                reinterpret_cast<uintptr_t>(desc_block.bounce_buffer) + meta0.src_off);
-            unsigned char probe[32] = {0};
-            size_t probe_n = std::min<size_t>(sizeof(probe), meta0.len);
-            if (!cuda_check(cuMemcpyDtoH(probe, src0, probe_n), "cuMemcpyDtoH(bounce_probe)")) {
-              std::cout << "[DEBUG] ERROR: bounce buffer not readable from current context" << std::endl;
-            } else {
-              std::cout << "[DEBUG] Bounce probe (" << probe_n << "B) from src_off=" << meta0.src_off << ": ";
-              for (size_t i = 0; i < probe_n; ++i) {
-                std::cout << std::hex << std::setw(2) << std::setfill('0')
-                          << static_cast<int>(probe[i]) << ' ';
-              }
-              std::cout << std::dec << std::endl;
-            }
-          }
 
           // Select unpack implementation: kernel | d2d | host
           const char* impl_env = std::getenv("UCCL_TCPX_UNPACK_IMPL");
@@ -466,46 +458,28 @@ int main(int argc, char** argv) {
             std::cout << "[DEBUG] Launching device unpack (kernel), total_bytes="
                       << desc_block.total_bytes << std::endl;
 
-            // Create dedicated stream to avoid default stream blocking
             cudaStream_t dedicated_stream;
             if (cudaStreamCreate(&dedicated_stream) != cudaSuccess) {
-              std::cout << "[Debug Kernel] ERROR: Failed to create dedicated stream" << std::endl;
+              std::cout << "[DEBUG] ERROR: Failed to create dedicated stream" << std::endl;
               device_copy_ok = false;
             } else {
-              std::cout << "[Debug Kernel] Created dedicated stream: " << dedicated_stream << std::endl;
-
               tcpx::device::UnpackLaunchConfig cfg;
-              cfg.stream = dedicated_stream;      // use dedicated stream
-              cfg.enable_profiling = false;       // avoid event sync during debugging
-              cfg.use_small_kernel = true;        // small payloads
-
-              std::cout << "[Debug Kernel] Config: stream=" << cfg.stream
-                        << " use_small=" << cfg.use_small_kernel
-                        << " profiling=" << cfg.enable_profiling << std::endl;
+              cfg.stream = dedicated_stream;
+              cfg.enable_profiling = false;
+              cfg.use_small_kernel = true;
 
               tcpx::device::UnpackLauncher launcher(cfg);
 
-              // Log descriptor block details
-              std::cout << "[Debug Kernel] DescBlock: count=" << desc_block.count
-                        << " total_bytes=" << desc_block.total_bytes
-                        << " bounce_buf=" << desc_block.bounce_buffer
-                        << " dst_buf=" << desc_block.dst_buffer
-                        << " ready_flag=" << desc_block.ready_flag << std::endl;
-
-              std::cout << "[Debug Kernel] Calling launcher.launchSync..." << std::endl;
               int lrc = launcher.launchSync(desc_block);
-              std::cout << "[Debug Kernel] launcher.launchSync returned rc=" << lrc << std::endl;
 
               if (lrc != 0) {
-                std::cout << "[Debug Kernel] ERROR: Unpack kernel failed rc=" << lrc << std::endl;
+                std::cout << "[DEBUG] ERROR: Unpack kernel failed rc=" << lrc << std::endl;
                 device_copy_ok = false;
               } else {
-                std::cout << "[Debug Kernel] Unpack kernel completed successfully" << std::endl;
+                std::cout << "[DEBUG] Unpack kernel completed successfully" << std::endl;
               }
 
-              // Clean up stream
               cudaStreamDestroy(dedicated_stream);
-              std::cout << "[Debug Kernel] Destroyed dedicated stream" << std::endl;
             }
           } else if (impl == "host") {
             std::cout << "[DEBUG] Launching host gather (DtoH+memcpy+HtoD), total_bytes="
