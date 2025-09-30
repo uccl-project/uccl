@@ -40,15 +40,15 @@ out as:
 At the receiver:
 - recvbuf is reorganized into CSR-like groups keyed by (src_rank, local_expert_id),
   so you can slice each group without Python dictionaries/lists.
-  
+
 export MASTER_ADDR=10.1.227.34
 export MASTER_PORT=29500
 export OMP_NUM_THREADS=1
 export NCCL_DEBUG=WARN
 export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
-torchrun --nnodes=2 --nproc_per_node=1  --node_rank=0 --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT   bench_upper_bound_all2all.py   --num-tokens 4096 --hidden 7168 --num-experts 256 --num-topk 8   --use-real-payload --include-processing --verify --remote-only
+torchrun --nnodes=2 --nproc_per_node=8  --node_rank=0 --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT   bench_upper_bound_all2all.py   --num-tokens 4096 --hidden 7168 --num-experts 256 --num-topk 8   --use-real-payload --include-processing --verify --remote-only
 
-torchrun --nnodes=2 --nproc_per_node=1   --node_rank=1 --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT   bench_upper_bound_all2all.py   --num-tokens 4096 --hidden 7168 --num-experts 256 --num-topk 8   --use-real-payload --include-processing --verify --remote-only
+torchrun --nnodes=2 --nproc_per_node=8   --node_rank=1 --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT   bench_upper_bound_all2all.py   --num-tokens 4096 --hidden 7168 --num-experts 256 --num-topk 8   --use-real-payload --include-processing --verify --remote-only
 
 """
 
@@ -553,19 +553,12 @@ def main():
         nic_only_GBps_dec = (
             (inter_node_bytes / comm_time) / 1e9 if inter_node_bytes > 0 else 0.0
         )
-        ideal_nic_s_dec = (
-            (inter_node_bytes / (theo_GBps_dec * 1e9))
-            if inter_node_bytes > 0
-            else float("inf")
-        )
-
     else:
         total_GBps_dec = remote_GBps_dec = local_GBps_dec = 0.0
         e2e_total_GBps_dec = 0.0
         theo_GBps_dec = (args.nic_gbps / 8.0) * args.efficiency * args.nic_count
         ideal_remote_s_dec = float("inf")
         nic_only_GBps_dec = 0.0
-        ideal_nic_s_dec = float("inf")
 
     # Optional verification / debug
     if recv_total and (args.verify or args.debug_print):
@@ -677,10 +670,7 @@ def main():
                 f"theoretical NIC ceiling (decimal)           ~ {theo_GBps_dec:.2f} GB/s"
             )
             print(
-                f"ideal network-only time vs ceiling          ~ {ideal_remote_s_dec*1e6:.1f} us"
-            )
-            print(
-                f"ideal NIC-only time vs ceiling              ~ {ideal_nic_s_dec*1e6:.1f} us"
+                f"theoretical network-only time          ~ {ideal_remote_s_dec*1e6:.1f} us"
             )
 
         # Breakdown (when processing included)
@@ -694,6 +684,9 @@ def main():
             )
             print(
                 f"Reorganize:  avg={r_avg*1e6:.1f} us  min={r_min*1e6:.1f} us  max={r_max*1e6:.1f} us"
+            )
+            print(
+                f"Overall:     avg={avg_s*1e6:.1f} us  min={min_s*1e6:.1f} us  max={max_s*1e6:.1f} us"
             )
 
     # Clean shutdown
