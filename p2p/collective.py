@@ -346,6 +346,28 @@ class CollectiveContext:
         ptr, size = self._get_buffer_info(tensor)
         self._register_memory(ptr, size)
 
+    def _deregister_memory(self, ptr: int):
+        """Deregister memory and remove the cached memory region ID."""
+        if ptr not in self.memory_regions:
+            return
+
+        mr_id = self.memory_regions[ptr]
+        self.ep.dereg(mr_id)
+        del self.memory_regions[ptr]
+
+    def deregister_tensor(self, tensor: torch.Tensor):
+        """
+        Deregister a tensor that was previously registered.
+
+        Args:
+            tensor: Tensor to deregister
+        """
+        if not self.initialized:
+            raise RuntimeError("CollectiveContext not initialized. Call init() first.")
+
+        ptr, _ = self._get_buffer_info(tensor)
+        self._deregister_memory(ptr)
+
     def send(self, tensor: torch.Tensor, dst: int):
         """
         Send tensor to destination rank (synchronous).
@@ -555,6 +577,10 @@ class CollectiveContext:
         self.ep = None
         self.initialized = False
 
+    def wait_all(self, transfer_ids: List[int]):
+        for transfer_id in transfer_ids:
+            self.wait(transfer_id)
+
 
 # Global collective context instance
 _default_context: Optional[CollectiveContext] = None
@@ -607,8 +633,7 @@ def wait(transfer_id: int):
 
 def wait_all(transfer_ids: List[int]):
     """Wait for all async operations using the default collective context."""
-    for transfer_id in transfer_ids:
-        get_collective().wait(transfer_id)
+    get_collective().wait_all(transfer_ids)
 
 
 def test(transfer_id: int) -> bool:
@@ -627,3 +652,8 @@ def finalize_collective():
     if _default_context is not None:
         _default_context.finalize()
         _default_context = None
+
+
+def deregister_tensor(tensor: torch.Tensor):
+    """Deregister tensor using the default collective context."""
+    get_collective().deregister_tensor(tensor)
