@@ -216,7 +216,6 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
   /* NOTE(MaoZiming): This should be sent to all proxy threads. Since each proxy
    * thread manages kRingsPerProxy ring buffers, we just need to post a quiet
    * command to one out of the kRingsPerProxy ring buffer. */
-  printf("nvshmemi_ibgda_quiet\n");
   int ring_idx = 0;
   auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
       static_cast<uintptr_t>(ring_addrs[ring_idx]));

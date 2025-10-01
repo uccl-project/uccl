@@ -662,9 +662,6 @@ __global__ void __launch_bounds__(
 
       // Wait the remote buffer to be released
       auto start_time = clock64();
-      // if (lane_id == 0)
-      //   printf("Before wait for token %ld, head: %d, tail: %d\n",
-      //         token_idx, cached_rdma_channel_head, rdma_tail_idx);
       while (is_token_in_rank_uint64 != 0 and
              rdma_tail_idx - cached_rdma_channel_head >=
                  num_max_rdma_chunked_recv_tokens) {
@@ -681,10 +678,6 @@ __global__ void __launch_bounds__(
           trap();
         }
       }
-      // if (lane_id == 0) {
-      //   printf("After wait for token %ld, head: %d, tail: %d\n",
-      //          token_idx, cached_rdma_channel_head, rdma_tail_idx);
-      // }
       __syncwarp();
 
       // Store RDMA head for combine
