@@ -233,11 +233,7 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
       cmd.cmd = 1;  // dummy valid cmd.
       cmd.cmd_type = CmdType::QUIET;
       rb->atomic_set_and_commit(cmd, &slot);
-      printf("Posting quiet to ring_idx %d, slot=%lu, rb->head=%lu\n", ring_idx,
-             slot, rb->head);
       wait_until_cmd_consumed(rb, rb->head);
-      printf("Quiet to ring_idx %d completed, slot=%lu, rb->head=%lu\n",
-             ring_idx, slot, rb->head);
       break;
     }
     if ((clock64() - last_print) > kPrintCycleInterval) {
@@ -261,7 +257,6 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
   uint64_t cur_tail = rb->volatile_tail();
   uint64_t inflight = cur_head - cur_tail;
   auto last_print = clock64();
-  printf("Entering nvshmem_sync_with_same_gpu_idx\n");
   while (true) {
     cur_head = rb->head;
     cur_tail = rb->volatile_tail();
@@ -272,11 +267,7 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
       cmd.cmd = 1;  // dummy valid cmd.
       cmd.cmd_type = CmdType::BARRIER;
       rb->atomic_set_and_commit(cmd, &slot);
-      printf("Posting sync to ring_idx %d, slot=%lu, rb->head=%lu\n", ring_idx,
-             slot, rb->head);
       wait_until_cmd_consumed(rb, rb->head);
-      printf("Sync to ring_idx %d completed, slot=%lu, rb->head=%lu\n",
-             ring_idx, slot, rb->head);
       break;
     }
     if ((clock64() - last_print) > kPrintCycleInterval) {

@@ -894,11 +894,6 @@ void local_process_completions(ProxyCtx& S,
           acked_wrs.insert(wr_done);
           auto it = S.wr_id_to_wr_ids.find(wr_done);
           if (it != S.wr_id_to_wr_ids.end()) {
-            printf(
-                "Local thread %d: RDMA write completed (wr_id=%lu), vector "
-                "size=%zu\n",
-                thread_idx, wr_done, it->second.size());
-
             S.wr_id_to_wr_ids.erase(it);
           }
 #else
@@ -1167,8 +1162,6 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
         auto* addr32 =
             reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
         if (is_combine) value = 1;
-        printf("[Rank %d]: Atomic update: add32=%p, value=%d, index=%zu\n",
-               my_rank, (void*)addr32, value, index);
         addr32->fetch_add(value, std::memory_order_release);
 #endif
       } else if (ImmType::IsBarrier(raw)) {
