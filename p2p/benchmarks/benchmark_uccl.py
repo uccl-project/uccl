@@ -539,6 +539,11 @@ def main():
     )
     if not args.ipc:
         print("Number of key-value blocks per message:", args.num_kvblocks)
+    else:
+        # Use the rank as the local GPU index for IPC
+        print(f"Using rank {rank} as local GPU index for IPC")
+        args.local_gpu_idx = rank
+
     print("Message sizes:", ", ".join(_pretty_size(s) for s in args.sizes))
     print(
         f"Device: {args.device} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}"
@@ -567,7 +572,6 @@ def main():
             _run_server_dual(args, ep, remote_metadata)
     elif args.ipc:
         _, _, remote_gpu_idx = p2p.Endpoint.parse_metadata(remote_metadata)
-
         if rank == 0:
             _run_client_ipc(args, ep, remote_gpu_idx)
         else:
