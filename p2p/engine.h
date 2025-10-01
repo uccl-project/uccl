@@ -18,6 +18,8 @@
 
 namespace py = pybind11;
 
+extern thread_local bool inside_python;
+
 struct MR {
   uint64_t mr_id_;
   uccl::Mhandle* mhandle_;
@@ -113,12 +115,10 @@ class Endpoint {
   bool dereg(uint64_t mr_id);
 
   /*Send data to the remote server. Blocking. */
-  bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size,
-            bool inside_python = true);
+  bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size);
 
   /*Receive data from the remote server. Blocking.*/
-  bool recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
-            bool inside_python = true);
+  bool recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size);
 
   /* Send data to the remote server asynchronously. */
   bool send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
@@ -131,7 +131,7 @@ class Endpoint {
   /* Send a vector of data chunks. Blocking. */
   bool sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
              std::vector<void const*> data_v, std::vector<size_t> size_v,
-             size_t num_iovs, bool inside_python = true);
+             size_t num_iovs);
 
   /* Send a vector of data chunks asynchronously. */
   bool sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
@@ -141,7 +141,7 @@ class Endpoint {
   /* Receive a vector of data chunks. Blocking. */
   bool recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
              std::vector<void*> data_v, std::vector<size_t> size_v,
-             size_t num_iovs, bool inside_python = true);
+             size_t num_iovs);
 
   /* Receive a vector of data chunks asynchronously. */
   bool recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
@@ -150,7 +150,7 @@ class Endpoint {
 
   /* Read data from the remote server. Blocking. */
   bool read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
-            uccl::FifoItem const& slot_item, bool inside_python = true);
+            uccl::FifoItem const& slot_item);
 
   /* Read data from the remote server asynchronously. */
   bool read_async(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
@@ -163,7 +163,7 @@ class Endpoint {
 
   /* Write data to the remote server. Blocking. */
   bool write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
-             uccl::FifoItem const& slot_item, bool inside_python = true);
+             uccl::FifoItem const& slot_item);
 
   /* Write data to the remote server asynchronously. */
   bool write_async(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
@@ -195,11 +195,9 @@ class Endpoint {
   /* Send data to the remote server via CUDA/HIP IPC. Blocking. The
    * gpuIpcMemHandle_t will be passed via UDS from recv_ipc to send_ipc
    * function. */
-  bool send_ipc(uint64_t conn_id, void* data, size_t size,
-                bool inside_python = true);
+  bool send_ipc(uint64_t conn_id, void* data, size_t size);
 
-  bool recv_ipc(uint64_t conn_id, void* data, size_t size,
-                bool inside_python = true);
+  bool recv_ipc(uint64_t conn_id, void* data, size_t size);
 
   bool send_ipc_async(uint64_t conn_id, void const* data, size_t size,
                       uint64_t* transfer_id);
@@ -209,9 +207,9 @@ class Endpoint {
 
   /* One-sided write and read via IPC. */
   bool write_ipc(uint64_t conn_id, void const* data, size_t size,
-                 IpcTransferInfo const& info, bool inside_python = true);
+                 IpcTransferInfo const& info);
   bool read_ipc(uint64_t conn_id, void* data, size_t size,
-                IpcTransferInfo const& info, bool inside_python = true);
+                IpcTransferInfo const& info);
   bool write_ipc_async(uint64_t conn_id, void const* data, size_t size,
                        IpcTransferInfo const& info, uint64_t* transfer_id);
   bool read_ipc_async(uint64_t conn_id, void* data, size_t size,

@@ -1,22 +1,14 @@
 import argparse
 import os
-import random
 from dataclasses import dataclass
-
+import csv
 import numpy as np
 import nvtx
 import torch
 import torch.distributed as dist
 
+from util import setup_seed, get_fcp_comm_plans, Metrics
 from pynccl import PyNcclCommunicator
-
-
-def setup_seed(seed: int):
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    np.random.seed(seed)
-    random.seed(seed)
 
 
 def warmup_all2all(
@@ -37,39 +29,6 @@ def warmup_all2all(
 
     comm.barrier()
     torch.cuda.synchronize(device)
-
-
-@dataclass
-class Metrics:
-    avg_time: float
-    total_flops: float
-    mem_buckets: np.ndarray
-    flops_buckets: np.ndarray
-    seq_lens: np.ndarray
-
-
-def get_fcp_comm_plan(num_gpus: int):
-    perm = np.random.permutation(num_gpus)
-    P = np.zeros((num_gpus, num_gpus))
-    P[np.arange(num_gpus), perm] = 1
-
-    assert np.all(np.sum(P, axis=1) == 1)
-    assert np.all(np.sum(P, axis=0) == 1)
-
-    return P
-
-
-def get_fcp_comm_plans(num_gpus: int, num_iters: int):
-    plans = []
-    for _ in range(num_iters):
-        plan = get_fcp_comm_plan(num_gpus)
-        plans.append(
-            (
-                np.argmax(plan, axis=1),
-                np.argmax(plan, axis=0),
-            )
-        )
-    return plans
 
 
 def run_ring_p2p(
@@ -192,13 +151,18 @@ def run_fcp_p2p(
 if __name__ == "__main__":
     """
     Usage:
-    NCCL_MAX_CTAS=8 NCCL_CGA_CLUSTER_SIZE=0 \
-    CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 ENABLE_INTRA_NODE_COMM=1 PYTHONOPTIMIZE=1 \
-    nsys profile --trace=cuda,nvtx,osrt --cuda-event-trace=false --delay=5 --duration=10 --force-overwrite true -o pynccl-all2all-profile \
-    torchrun --standalone --nproc_per_node=8 test-pynccl-all2all.py --block-size 4096 --num-qo-heads 32 --gqa-group-size 4 --head-dim 128 --num-iters 10000
+    torchrun --standalone --nproc_per_node=8 test-pynccl-all2all.py \
+        --block-sizes 4096 8192 16384 \
+        --num-qo-heads 32 --gqa-group-size 4 --head-dim 128 --num-iters 100
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument("--block-size", type=int, default=4 * 1024)
+    parser.add_argument(
+        "--block-sizes",
+        type=int,
+        nargs="+",
+        default=[4 * 1024],
+        help="List of block sizes to test",
+    )
     parser.add_argument("--num-qo-heads", type=int, default=32)
     parser.add_argument("--gqa-group-size", type=int, default=4)
     parser.add_argument("--head-dim", type=int, default=128)
@@ -218,59 +182,102 @@ if __name__ == "__main__":
     global_rank = dist.get_rank(group=dist.group.WORLD)
     world_size = dist.get_world_size(group=dist.group.WORLD)
 
-    # warmup
-    warmup_all2all(
-        iters=10,
-        chunk=args.block_size
-        * 2
-        * args.num_qo_heads
-        // args.gqa_group_size
-        * args.head_dim,
-        dtype=torch.float16,
-        device=device,
-        comm=communicator,
-    )
-    run_fcp_p2p(
-        block_size=args.block_size,
-        num_qo_heads=args.num_qo_heads,
-        gqa_group_size=args.gqa_group_size,
-        head_dim=args.head_dim,
-        num_iters=100,
-        comm=communicator,
-        device=device,
-    )
+    results = []
 
-    data = run_ring_p2p(
-        block_size=args.block_size,
-        num_qo_heads=args.num_qo_heads,
-        gqa_group_size=args.gqa_group_size,
-        head_dim=args.head_dim,
-        num_iters=args.num_iters,
-        comm=communicator,
-        device=device,
-    )
-
-    if global_rank == 0:
-        # print data
-        msg_sz = (
-            args.block_size
+    for block_size in args.block_sizes:
+        # warmup
+        warmup_all2all(
+            iters=10,
+            chunk=block_size
             * 2
             * args.num_qo_heads
             // args.gqa_group_size
-            * args.head_dim
-            * 2
-            / 1024
-            / 1024
+            * args.head_dim,
+            dtype=torch.float16,
+            device=device,
+            comm=communicator,
         )
-        avg_bw = msg_sz / data.avg_time
 
-        print(
-            (
-                f"num_gpus={world_size},block_size={args.block_size//1024}K,num_qo_heads={args.num_qo_heads},"
-                f"gqa_group_size={args.gqa_group_size},head_dim={args.head_dim},num_iters={args.num_iters},"
-                f"msg_sz={msg_sz:.2f}MB,avg_bw={avg_bw:.2f}GB/s",
+        run_fcp_p2p(
+            block_size=block_size,
+            num_qo_heads=args.num_qo_heads,
+            gqa_group_size=args.gqa_group_size,
+            head_dim=args.head_dim,
+            num_iters=100,
+            comm=communicator,
+            device=device,
+        )
+
+        data = run_ring_p2p(
+            block_size=block_size,
+            num_qo_heads=args.num_qo_heads,
+            gqa_group_size=args.gqa_group_size,
+            head_dim=args.head_dim,
+            num_iters=args.num_iters,
+            comm=communicator,
+            device=device,
+        )
+
+        if global_rank == 0:
+            msg_sz = (
+                block_size
+                * 2
+                * args.num_qo_heads
+                // args.gqa_group_size
+                * args.head_dim
+                * 2
+                / 1024
+                / 1024
             )
-        )
+            avg_bw = msg_sz / data.avg_time
+            results.append(
+                {
+                    "block_size": f"{block_size//1024}K",
+                    "msg_sz_MB": f"{msg_sz:.2f}",
+                    "avg_bw_GBs": f"{avg_bw:.2f}",
+                }
+            )
 
-    communicator.barrier()
-    dist.destroy_process_group()
+    # only rank 0 prints the summary table
+    if global_rank == 0 and results:
+        print("\n================ Summary ================")
+        header = f"{'Block Size':>12} | {'Msg Size (MB)':>12} | {'Avg BW (GB/s)':>12}"
+        print(header)
+        print("-" * len(header))
+        for r in results:
+            print(
+                f"{r['block_size']:>12} | {r['msg_sz_MB']:>12} | {r['avg_bw_GBs']:>12}"
+            )
+        print("=========================================\n")
+
+        csv_file = "nccl_benchmark_results.csv"
+        write_header = not os.path.exists(csv_file)
+
+        with open(csv_file, mode="a", newline="") as f:
+            writer = csv.writer(f)
+            if write_header:
+                writer.writerow(
+                    [
+                        "num_qo_heads",
+                        "gqa_group_size",
+                        "head_dim",
+                        "num_iters",
+                        "block_size",
+                        "msg_size_MB",
+                        "avg_bw_GBs",
+                    ]
+                )
+
+            for r in results:
+                writer.writerow(
+                    [
+                        args.num_qo_heads,
+                        args.gqa_group_size,
+                        args.head_dim,
+                        args.num_iters,
+                        r["block_size"],
+                        r["msg_sz_MB"],
+                        r["avg_bw_GBs"],
+                    ]
+                )
+        print(f"✅ Results saved to {csv_file}")
