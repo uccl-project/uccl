@@ -297,11 +297,12 @@ void Proxy::init_common() {
 
   // Map per-node+thread shared barrier block
   const std::string shm_name = shm_name_for_barrier(my_ip, cfg_.thread_idx);
-  printf("[local_rank:%d] Mapping local barrier shm %s\n", cfg_.local_rank,
-         shm_name.c_str());
+  // printf("[local_rank:%d] Mapping local barrier shm %s\n", cfg_.local_rank,
+  //        shm_name.c_str());
   ctx_.lb = map_local_barrier_shm(shm_name, &ctx_.lb_owner);
-  printf("[local_rank:%d] Mapped local barrier shm %s at %p, is_lb_owner=%d\n",
-         cfg_.local_rank, shm_name.c_str(), (void*)ctx_.lb, ctx_.lb_owner);
+  // printf("[local_rank:%d] Mapped local barrier shm %s at %p,
+  // is_lb_owner=%d\n",
+  //        cfg_.local_rank, shm_name.c_str(), (void*)ctx_.lb, ctx_.lb_owner);
   if (!ctx_.lb) {
     fprintf(stderr, "Failed to map local barrier shm: %s\n", shm_name.c_str());
     std::abort();
@@ -438,8 +439,9 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
   for (auto wr_id : finished_copy) {
     if (acked_wrs_.find(wr_id) == acked_wrs_.end()) break;
 
-    printf("[local_rank: %d] WR ID %lu completed and acked\n", cfg_.local_rank,
-           wr_id);
+    // printf("[local_rank: %d] WR ID %lu completed and acked\n",
+    // cfg_.local_rank,
+    //        wr_id);
 
     // Decode ring buffer index and command index from unique_wr_id
     size_t rb_idx = (wr_id >> 32) & 0xFFFFFFFF;

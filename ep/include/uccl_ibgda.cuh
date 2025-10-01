@@ -40,7 +40,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   uint64_t cur_head = rb->head;
   uint64_t cur_tail = rb->volatile_tail();
   uint64_t inflight = cur_head - cur_tail;
-  printf("nvshmemi_ibgda_put_nbi_warp. dst_rank: %d\n", dst_rank);
+  // printf("nvshmemi_ibgda_put_nbi_warp. dst_rank: %d\n", dst_rank);
 
   if (low_latency_buffer_idx == -1) {
     /* Normal mode */

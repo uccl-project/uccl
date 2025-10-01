@@ -15,9 +15,14 @@
 #define MEASURE_PER_OP_LATENCY
 #define MEASURE_PER_VERB_LATENCY
 // #define USE_SENDER_BARRIER
+
+/* Sender barrier and receiver barrier for low latency mode for now. */
+#define USE_NORMAL_MODE
+#ifndef USE_NORMAL_MODE
 #ifndef USE_SENDER_BARRIER
 #ifdef EFA
 #define USE_RECEIVER_BARRIER
+#endif
 #endif
 #endif
 #define kAtomicBufferSize 8196

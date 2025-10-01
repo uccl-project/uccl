@@ -111,7 +111,7 @@ __global__ void notify_dispatch(
   auto num_rdma_experts = num_experts / kNumRDMARanks,
        num_nvl_experts = num_rdma_experts / NUM_MAX_NVL_PEERS;
 
-  if (lane_id == 0) {
+  if (thread_id == 0) {
     printf(
         "sm_id=%d, thread_id=%d, num_threads=%d, rdma_ranks=%d, nvl_rank=%d, "
         "num_rdma_experts=%d, num_nvl_experts=%d\n",
@@ -173,11 +173,11 @@ __global__ void notify_dispatch(
             rdma_recv_num_tokens_mixed.recv_buffer(rdma_rank));
         uint64_t src_ptr = reinterpret_cast<uint64_t>(
             rdma_recv_num_tokens_mixed.send_buffer(i));
-        printf(
-            "nvshmemi_ibgda_put_nbi_warp: dst_ptr: %p, "
-            "original_rdma_buffer_ptr: %p, offset: %ld\n",
-            (void*)dst_ptr, original_rdma_buffer_ptr,
-            dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr));
+        // printf(
+        //     "nvshmemi_ibgda_put_nbi_warp: dst_ptr: %p, "
+        //     "original_rdma_buffer_ptr: %p, offset: %ld\n",
+        //     (void*)dst_ptr, original_rdma_buffer_ptr,
+        //     dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr));
         uccl::nvshmemi_ibgda_put_nbi_warp(
             dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
             src_ptr, (NUM_MAX_NVL_PEERS + num_rdma_experts + 1) * sizeof(int),
@@ -195,17 +195,17 @@ __global__ void notify_dispatch(
 
     // Wait previous operations to be finished
     if (thread_id == 32) {
-      printf("Before uccl::nvshmemi_ibgda_quiet\n");
+      // printf("Before uccl::nvshmemi_ibgda_quiet\n");
       uccl::nvshmemi_ibgda_quiet(ring_addrs, num_ring_addrs);
-      printf("After uccl::nvshmemi_ibgda_quiet\n");
+      // printf("After uccl::nvshmemi_ibgda_quiet\n");
     }
     __syncthreads();
 
     // Barrier
     if (thread_id == 32) {
-      printf("Before uccl::nvshmem_sync_with_same_gpu_idx\n");
+      // printf("Before uccl::nvshmem_sync_with_same_gpu_idx\n");
       uccl::nvshmem_sync_with_same_gpu_idx(ring_addrs, num_ring_addrs);
-      printf("After uccl::nvshmem_sync_with_same_gpu_idx\n");
+      // printf("After uccl::nvshmem_sync_with_same_gpu_idx\n");
     }
     __syncthreads();
 
@@ -472,7 +472,7 @@ __global__ void __launch_bounds__(
   auto const rdma_rank = rank / NUM_MAX_NVL_PEERS,
              nvl_rank = rank % NUM_MAX_NVL_PEERS;
 
-  if (lane_id == 0) {
+  if (thread_id == 0) {
     printf("start dispatch kernels\n");
   }
   auto const role_meta = [=]() -> std::pair<WarpRole, int> {
@@ -643,11 +643,11 @@ __global__ void __launch_bounds__(
             rdma_channel_meta.recv_buffer(rdma_rank));
         uint64_t src_ptr = reinterpret_cast<uint64_t>(
             rdma_channel_meta.send_buffer(dst_rdma_rank));
-        printf(
-            "nvshmemi_ibgda_put_nbi_warp in kRDMASender: dst_ptr: %p, "
-            "original_rdma_buffer_ptr: %p, offset: %ld\n",
-            (void*)dst_ptr, original_rdma_buffer_ptr,
-            dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr));
+        // printf(
+        //     "nvshmemi_ibgda_put_nbi_warp in kRDMASender: dst_ptr: %p, "
+        //     "original_rdma_buffer_ptr: %p, offset: %ld\n",
+        //     (void*)dst_ptr, original_rdma_buffer_ptr,
+        //     dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr));
         uccl::nvshmemi_ibgda_put_nbi_warp(
             dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
             src_ptr, sizeof(int) * (NUM_MAX_NVL_PEERS * 2 + 2),
@@ -684,6 +684,9 @@ __global__ void __launch_bounds__(
 
       // Wait the remote buffer to be released
       auto start_time = clock64();
+      // if (lane_id == 0)
+      //   printf("Before wait for token %ld, head: %d, tail: %d\n",
+      //         token_idx, cached_rdma_channel_head, rdma_tail_idx);
       while (is_token_in_rank_uint64 != 0 and
              rdma_tail_idx - cached_rdma_channel_head >=
                  num_max_rdma_chunked_recv_tokens) {
@@ -700,6 +703,10 @@ __global__ void __launch_bounds__(
           trap();
         }
       }
+      // if (lane_id == 0) {
+      //   printf("After wait for token %ld, head: %d, tail: %d\n",
+      //          token_idx, cached_rdma_channel_head, rdma_tail_idx);
+      // }
       __syncwarp();
 
       // Store RDMA head for combine
@@ -840,6 +847,14 @@ __global__ void __launch_bounds__(
     // Iterate all RDMA ranks
     int last_issued_tail = 0;
     auto start_time = clock64();
+    if (lane_id == 0) {
+      printf(
+          "Before send coordinator loop, channel: %d, IB: %d, nvl %d, tail: "
+          "%d, "
+          "remaining: %d\n",
+          channel_id, rdma_rank, nvl_rank, last_issued_tail,
+          num_tokens_to_send);
+    }
     while (__any_sync(0xffffffff, num_tokens_to_send > 0)) {
       // Timeout check
       if (clock64() - start_time > NUM_TIMEOUT_CYCLES and
@@ -923,21 +938,28 @@ __global__ void __launch_bounds__(
                 reinterpret_cast<int*>(rdma_channel_tail.buffer(rdma_rank)),
                 num_tokens_to_issue);
           } else {
-            printf(
-                "nvshmemi_ibgda_amo_nonfetch_add in kRDMASenderCoordinator: "
-                "dst_rank: %d, rank: %d\n",
-                dst_rank, rank);
+            // printf(
+            //     "nvshmemi_ibgda_amo_nonfetch_add in kRDMASenderCoordinator: "
+            //     "dst_rank: %d, rank: %d\n",
+            //     dst_rank, rank);
             uccl::nvshmemi_ibgda_amo_nonfetch_add(
                 reinterpret_cast<uint64_t>(
                     rdma_channel_tail.buffer(rdma_rank)) -
                     reinterpret_cast<uint64_t>(atomic_buffer_ptr),
                 num_tokens_to_issue, dst_rank,
                 warp_id,  // NOTE(MaoZiming): use warp_id for rb.
-                false, ring_addrs, num_ring_addrs, true);
+                false, ring_addrs, num_ring_addrs, false, -1);
           }
         }
         __syncwarp();
       }
+    }
+    if (lane_id == 0) {
+      printf(
+          "After send coordinator loop, channel: %d, IB: %d, nvl %d, tail: %d, "
+          "remaining: %d\n",
+          channel_id, rdma_rank, nvl_rank, last_issued_tail,
+          num_tokens_to_send);
     }
   } else if (warp_role == WarpRole::kRDMAAndNVLForwarder) {
     // RDMA consumers and NVL producers
@@ -948,6 +970,12 @@ __global__ void __launch_bounds__(
     EP_DEVICE_ASSERT(kNumRDMARanks <= 32);
     auto start_time = clock64();
     if (lane_id < kNumRDMARanks) {
+      if (lane_id == 0) {
+        printf(
+            "Before kRDMAAndNVLForwarder loop, channel: %d, RDMA: %d, nvl: "
+            "%d\n",
+            channel_id, rdma_rank, nvl_rank);
+      }
       while (true) {
         auto meta_0 = ld_volatile_global(
             rdma_channel_meta.recv_buffer(lane_id) + dst_nvl_rank);
@@ -994,6 +1022,12 @@ __global__ void __launch_bounds__(
           trap();
         }
       }
+      if (lane_id == 0)
+        printf(
+            "After kRDMAAndNVLForwarder loop, channel: %d, RDMA: %d, nvl: %d, "
+            "src RDMA lane: %d, dst NVL: %d, num tokens: %d\n",
+            channel_id, rdma_rank, nvl_rank, lane_id, dst_nvl_rank,
+            num_tokens_to_recv_from_rdma);
     }
     __syncwarp();
 
@@ -1009,6 +1043,13 @@ __global__ void __launch_bounds__(
     int cached_rdma_channel_head = 0, cached_rdma_channel_tail = 0;
     int cached_nvl_channel_head = 0, cached_nvl_channel_tail = 0,
         rdma_nvl_token_idx = 0;
+    if (lane_id == 0)
+      printf(
+          "Before kRDMAAndNVLForwarder forward loop, channel: %d, RDMA: %d, "
+          "nvl: "
+          "%d, dst NVL: %d, remaining: %d\n",
+          channel_id, rdma_rank, nvl_rank, dst_nvl_rank,
+          num_tokens_to_recv_from_rdma);
     while (__any_sync(0xffffffff, num_tokens_to_recv_from_rdma > 0)) {
       // Check destination queue emptiness, or wait a buffer to be released
       start_time = clock64();
@@ -1122,6 +1163,13 @@ __global__ void __launch_bounds__(
         st_release_sys_global(nvl_channel_tail.buffer(),
                               cached_nvl_channel_tail);
     }
+    if (lane_id == 0) {
+      printf(
+          "After kRDMAAndNVLForwarder forward loop, channel: %d, RDMA: %d, "
+          "nvl: "
+          "%d, dst NVL: %d\n",
+          channel_id, rdma_rank, nvl_rank, dst_nvl_rank);
+    }
 
     // Retired
     __syncwarp();
@@ -1142,6 +1190,9 @@ __global__ void __launch_bounds__(
     sync_forwarder_smem();
 
     int last_head = 0, target_rdma = lane_id < kNumRDMARanks ? lane_id : 0;
+    if (lane_id == 0) {
+      printf("Before kForwarderCoordinator loop\n");
+    }
     while (true) {
       // Find minimum head
       int min_head = std::numeric_limits<int>::max();
@@ -1163,21 +1214,24 @@ __global__ void __launch_bounds__(
               reinterpret_cast<int*>(rdma_channel_head.buffer(rdma_rank)),
               static_cast<unsigned long long>(min_head - last_head));
         } else {
-          printf(
-              "nvshmemi_ibgda_amo_nonfetch_add in kForwarderCoordinator: "
-              "dst_rank: %d, rank: %d\n",
-              dst_rank, rank);
+          // printf(
+          //     "nvshmemi_ibgda_amo_nonfetch_add in kForwarderCoordinator: "
+          //     "dst_rank: %d, rank: %d\n",
+          //     dst_rank, rank);
           uccl::nvshmemi_ibgda_amo_nonfetch_add(
               reinterpret_cast<uint64_t>(rdma_channel_head.buffer(rdma_rank)) -
                   reinterpret_cast<uint64_t>(atomic_buffer_ptr),
               min_head - last_head, dst_rank, warp_id, false, ring_addrs,
-              num_ring_addrs, true);
+              num_ring_addrs, false, -1);
         }
         last_head = min_head;
       }
 
       // Nanosleep and let other warps work
       __nanosleep(NUM_WAIT_NANOSECONDS);
+    }
+    if (lane_id == 0) {
+      printf("After kForwarderCoordinator loop\n");
     }
   } else {
     // NVL consumers
@@ -1196,6 +1250,7 @@ __global__ void __launch_bounds__(
     // Receive channel offsets
     int start_offset = 0, end_offset = 0, num_tokens_to_recv;
     auto start_time = clock64();
+    if (lane_id == 0) printf("Before nvlconsumer loop\n");
     while (lane_id < kNumRDMARanks) {
       start_offset =
           ld_volatile_global(nvl_channel_prefix_start.buffer() + lane_id);
@@ -1217,6 +1272,9 @@ __global__ void __launch_bounds__(
         trap();
       }
     }
+    if (lane_id == 0) {
+      printf("After nvlconsumer loop\n");
+    }
     num_tokens_to_recv = warp_reduce_sum(end_offset - start_offset);
 
     // Save for combine usage
@@ -1228,6 +1286,9 @@ __global__ void __launch_bounds__(
     __syncwarp();
 
     int cached_channel_head_idx = 0, cached_channel_tail_idx = 0;
+    if (lane_id == 0) {
+      printf("Before num_tokens_to_recv\n");
+    }
     while (num_tokens_to_recv > 0) {
       // Check channel status by lane 0
       start_time = clock64();
@@ -1326,6 +1387,9 @@ __global__ void __launch_bounds__(
       if (lane_id == 0)
         st_relaxed_sys_global(nvl_channel_head.buffer(),
                               cached_channel_head_idx);
+    }
+    if (lane_id == 0) {
+      printf("finished\n");
     }
   }
 }
@@ -1834,6 +1898,10 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
              channel_id = sm_id / 2;
   bool const is_forwarder_sm = sm_id % 2 == 1;
 
+  if (thread_id == 0) {
+    printf("start combine kernels\n");
+  }
+
   EP_DEVICE_ASSERT(num_topk <= 32);
   EP_DEVICE_ASSERT(hidden % (sizeof(int4) / sizeof(dtype_t)) == 0);
   auto const hidden_int4 = hidden / (sizeof(int4) / sizeof(dtype_t));
@@ -2268,11 +2336,13 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
             auto const src_ptr = reinterpret_cast<uint64_t>(
                 rdma_channel_data.send_buffer(dst_rdma_rank) +
                 rdma_slot_idx * num_bytes_per_token);
-            printf(
-                "nvshmemi_ibgda_put_nbi_warp in kNVLAndRDMAForwarder: dst_ptr: "
-                "%p, original_rdma_buffer_ptr: %p, offset: %ld\n",
-                (void*)dst_ptr, original_rdma_buffer_ptr,
-                dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr));
+            // printf(
+            //     "nvshmemi_ibgda_put_nbi_warp in kNVLAndRDMAForwarder:
+            //     dst_ptr: "
+            //     "%p, original_rdma_buffer_ptr: %p, offset: %ld\n",
+            //     (void*)dst_ptr, original_rdma_buffer_ptr,
+            //     dst_ptr -
+            //     reinterpret_cast<uint64_t>(original_rdma_buffer_ptr));
             uccl::nvshmemi_ibgda_put_nbi_warp(
                 dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
                 src_ptr, num_bytes_per_msg,
@@ -2294,17 +2364,16 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                   reinterpret_cast<int*>(rdma_channel_tail.buffer(rdma_rank)),
                   num_chunked_tokens);
             } else {
-              printf(
-                  "nvshmemi_ibgda_amo_nonfetch_add in kRDMASenderCoordinator: "
-                  "dst_rank: %d, rank: %d\n",
-                  dst_rank, rank);
+              // printf(
+              //     "nvshmemi_ibgda_amo_nonfetch_add in kRDMASenderCoordinator:
+              //     " "dst_rank: %d, rank: %d\n", dst_rank, rank);
               uccl::nvshmemi_ibgda_amo_nonfetch_add(
                   reinterpret_cast<uint64_t>(
                       rdma_channel_tail.buffer(rdma_rank)) -
                       reinterpret_cast<uint64_t>(atomic_buffer_ptr),
                   num_chunked_tokens, dst_rank,
                   warp_id,  // NOTE(MaoZiming): use warp_id for rb.
-                  false, ring_addrs, num_ring_addrs, true);
+                  false, ring_addrs, num_ring_addrs, false, -1);
             }
           }
         }
@@ -2432,10 +2501,9 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                   reinterpret_cast<int*>(rdma_channel_head.buffer(rdma_rank)),
                   min_head - last_rdma_head);
             } else {
-              printf(
-                  "nvshmemi_ibgda_amo_nonfetch_add in kRDMASenderCoordinator: "
-                  "dst_rank: %d, rank: %d\n",
-                  dst_rank, rank);
+              // printf(
+              //     "nvshmemi_ibgda_amo_nonfetch_add in kRDMASenderCoordinator:
+              //     " "dst_rank: %d, rank: %d\n", dst_rank, rank);
               uccl::nvshmemi_ibgda_amo_nonfetch_add(
                   reinterpret_cast<uint64_t>(
                       rdma_channel_head.buffer(rdma_rank)) -
@@ -2444,7 +2512,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                   translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank,
                                                            nvl_rank),
                   warp_id,  // NOTE(MaoZiming): use warp_id for rb.
-                  false, ring_addrs, num_ring_addrs, true);
+                  false, ring_addrs, num_ring_addrs, false, -1);
             }
             last_rdma_head = min_head;
           }
