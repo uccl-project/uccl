@@ -926,9 +926,9 @@ __global__ void __launch_bounds__(
           int start_sum = -meta_0 - 1, end_sum = -meta_1 - 1;
           EP_DEVICE_ASSERT(start_sum >= 0 and end_sum >= 0 and
                            end_sum >= start_sum);
-          st_release_sys_global(nvl_channel_prefix_start.buffer() + lane_id,
+          st_relaxed_sys_global(nvl_channel_prefix_start.buffer() + lane_id,
                                 -start_sum - 1);
-          st_release_sys_global(nvl_channel_prefix_end.buffer() + lane_id,
+          st_relaxed_sys_global(nvl_channel_prefix_end.buffer() + lane_id,
                                 -end_sum - 1);
 
           // Save RDMA channel received token count
@@ -982,7 +982,7 @@ __global__ void __launch_bounds__(
             num_max_nvl_chunked_send_tokens)
           break;
         cached_nvl_channel_head = __shfl_sync(
-            0xffffffffu, ld_acquire_sys_global(nvl_channel_head.buffer()), 0);
+            0xffffffffu, ld_volatile_global(nvl_channel_head.buffer()), 0);
 
         // Timeout check
         if (lane_id == 0 and clock64() - start_time > NUM_TIMEOUT_CYCLES) {
@@ -1081,10 +1081,9 @@ __global__ void __launch_bounds__(
 
       // Move tail index
       __syncwarp();
-      if (lane_id == 0) {
+      if (lane_id == 0)
         st_release_sys_global(nvl_channel_tail.buffer(),
                               cached_nvl_channel_tail);
-      }
     }
 
     // Retired
@@ -1152,9 +1151,9 @@ __global__ void __launch_bounds__(
     auto start_time = clock64();
     while (lane_id < kNumRDMARanks) {
       start_offset =
-          ld_acquire_sys_global(nvl_channel_prefix_start.buffer() + lane_id);
+          ld_volatile_global(nvl_channel_prefix_start.buffer() + lane_id);
       end_offset =
-          ld_acquire_sys_global(nvl_channel_prefix_end.buffer() + lane_id);
+          ld_volatile_global(nvl_channel_prefix_end.buffer() + lane_id);
       if (start_offset < 0 and end_offset < 0) {
         start_offset = -start_offset - 1, end_offset = -end_offset - 1;
         total_offset += start_offset;
@@ -1280,7 +1279,7 @@ __global__ void __launch_bounds__(
 
       // Move queue
       if (lane_id == 0)
-        st_release_sys_global(nvl_channel_head.buffer(),
+        st_relaxed_sys_global(nvl_channel_head.buffer(),
                               cached_channel_head_idx);
     }
   }
