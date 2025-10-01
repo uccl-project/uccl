@@ -92,13 +92,14 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
 // TODO(MaoZiming): Fix. This should be a non-fetch add operation. This could be
 // implemented with CPU proxy.
 __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
-    uint64_t rptr, int const& value, int dst_rank, int warp_id,
-    bool is_local_copy = false, uint64_t const* ring_addrs = nullptr,
-    int num_ring_addrs = 0, bool is_combine = true,
-    int low_latency_buffer_idx = 0) {
+    uint64_t rptr, uint64_t atomic_base_addr, int const& value, int dst_rank,
+    int warp_id, bool is_local_copy = false,
+    uint64_t const* ring_addrs = nullptr, int num_ring_addrs = 0,
+    bool is_combine = true, int low_latency_buffer_idx = 0) {
   if (is_local_copy) {
     atomicAdd(reinterpret_cast<int*>(rptr), value);
   } else {
+    rptr -= atomic_base_addr;
     int safe_n = num_ring_addrs > 0 ? num_ring_addrs : 1;
     int ring_idx = (warp_id >= 0 ? warp_id : 0) % safe_n;
 
