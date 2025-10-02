@@ -148,7 +148,7 @@ def test_main(num_tokens: int, hidden: int, num_experts: int, num_topk: int,
         dist.barrier(group=group);
         dispatch_t, combine_t = bench_kineto(partial(test_func, return_recv_hook=return_recv_hook),
                                              kernel_names=('dispatch', 'combine'), barrier_comm_profiling=True,
-                                             suppress_kineto_output=True, num_kernels_per_period=2 if return_recv_hook else 1)
+                                             suppress_kineto_output=True, num_kernels_per_period=2 if return_recv_hook else 1, trace_path="./low_latency_trace.json")
         dist.barrier(group=group);
         if not return_recv_hook:
             print(f'[rank {rank}] Dispatch bandwidth: {num_dispatch_comm_bytes / 1e9 / dispatch_t:.2f} GB/s, avg_t={dispatch_t * 1e6:.2f} us | '
