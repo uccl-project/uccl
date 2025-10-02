@@ -64,6 +64,7 @@ def _run_server_read(args, ep, remote_metadata):
         # Send all fifo_blobs to peer
         for fifo_blob in fifo_blob_v:
             dist.send(torch.ByteTensor(list(fifo_blob)), dst=peer)
+        dist.barrier()
     print("[Server] Benchmark complete")
 
 
@@ -129,6 +130,7 @@ def _run_client_recv(args, ep, remote_metadata):
             f"{total/elapsed/1e9:6.2f} GB/s | "
             f"{elapsed/args.iters:6.6f} s"
         )
+        dist.barrier()
     print("[Client] Benchmark complete")
 
 

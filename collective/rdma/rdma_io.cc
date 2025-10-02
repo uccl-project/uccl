@@ -579,7 +579,7 @@ int SharedIOContext::_poll_ctrl_cq_ex(void) {
           auto peer_id = ucclsackh->peer_id.value();
           auto* rdma_ctx = find_rdma_ctx(peer_id, fid);
 
-          rdma_ctx->uc_rx_ack(cq_ex, ucclsackh);
+          rdma_ctx->uc_rx_ack<struct ibv_cq_ex>(cq_ex, ucclsackh);
         }
         inc_post_ctrl_rq();
       } else {
@@ -644,7 +644,7 @@ int SharedIOContext::_poll_ctrl_cq_normal(void) {
           auto peer_id = ucclsackh->peer_id.value();
           auto* rdma_ctx = find_rdma_ctx(peer_id, fid);
 
-          rdma_ctx->uc_rx_ack(ucclsackh);
+          rdma_ctx->uc_rx_ack<struct ibv_wc>(wc, ucclsackh);
         }
         inc_post_ctrl_rq();
       } else {
@@ -686,7 +686,7 @@ int SharedIOContext::_rc_poll_recv_cq_ex(void) {
 
     auto* rdma_ctx = qpn_to_rdma_ctx(ibv_wc_read_qp_num(cq_ex));
 
-    rdma_ctx->rc_rx_chunk(cq_ex);
+    rdma_ctx->rc_rx_chunk<struct ibv_cq_ex>(cq_ex);
 
     inc_post_srq();
 
@@ -713,7 +713,7 @@ int SharedIOContext::_rc_poll_send_cq_ex(void) {
 
     auto* rdma_ctx = qpn_to_rdma_ctx(ibv_wc_read_qp_num(cq_ex));
 
-    rdma_ctx->rc_rx_ack(cq_ex);
+    rdma_ctx->rc_rx_ack<struct ibv_cq_ex>(cq_ex);
 
     if (++cq_budget == kMaxBatchCQ || ibv_next_poll(cq_ex)) break;
   }
@@ -776,10 +776,10 @@ int SharedIOContext::_uc_poll_recv_cq_ex(void) {
 
     if (likely(opcode == IBV_WC_RECV_RDMA_WITH_IMM)) {
       // Common case.
-      rdma_ctx->uc_rx_chunk(cq_ex);
+      rdma_ctx->uc_rx_chunk<struct ibv_cq_ex>(cq_ex);
     } else {
       // Rare case.
-      rdma_ctx->uc_rx_rtx_chunk(cq_ex, chunk_addr);
+      rdma_ctx->uc_rx_rtx_chunk<struct ibv_cq_ex>(cq_ex, chunk_addr);
     }
 
     rdma_ctxs.push_back(rdma_ctx);
@@ -815,7 +815,7 @@ int SharedIOContext::_rc_poll_send_cq_normal(void) {
     DCHECK(wc->status == IBV_WC_SUCCESS)
         << "RC send CQ state error: " << wc->status << ", " << wc->byte_len;
     auto* rdma_ctx = qpn_to_rdma_ctx(wc->qp_num);
-    rdma_ctx->rc_rx_ack(wc);
+    rdma_ctx->rc_rx_ack<struct ibv_wc>(wc);
   }
 
   return nr_wcs;
@@ -834,7 +834,7 @@ int SharedIOContext::_rc_poll_recv_cq_normal(void) {
         << "RC recv CQ state error: " << wc->status;
     auto* cqe_desc = (CQEDesc*)wc->wr_id;
     auto* rdma_ctx = qpn_to_rdma_ctx(wc->qp_num);
-    rdma_ctx->rc_rx_chunk(wc->byte_len, wc->imm_data);
+    rdma_ctx->rc_rx_chunk<struct ibv_wc>(wc);
 
     inc_post_srq();
   }
@@ -887,10 +887,10 @@ int SharedIOContext::_uc_poll_recv_cq_normal(void) {
 
     if (likely(opcode == IBV_WC_RECV_RDMA_WITH_IMM)) {
       // Common case.
-      rdma_ctx->uc_rx_chunk(wc);
+      rdma_ctx->uc_rx_chunk<struct ibv_wc>(wc);
     } else {
       // Rare case.
-      rdma_ctx->uc_rx_rtx_chunk(wc, chunk_addr);
+      rdma_ctx->uc_rx_rtx_chunk<struct ibv_wc>(wc, chunk_addr);
     }
 
     rdma_ctxs.push_back(rdma_ctx);

@@ -27,7 +27,6 @@ else
 fi
 
 NVLINK_ON=1
-
 NVLINK_OFF=$((1 - NVLINK_ON))
 
 # alltoall_perf, all_reduce_perf

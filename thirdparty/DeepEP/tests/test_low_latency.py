@@ -121,9 +121,13 @@ def test_main(num_tokens: int, hidden: int, num_experts: int, num_topk: int,
                                         cumulative_local_expert_recv_stats=cumulative_local_expert_recv_stats,
                                         use_fp8=True, async_finish=False, return_recv_hook=return_recv_hook)
         large_gemm_with_hook(hook) if return_recv_hook else None
+        # --- Phase alignment after dispatch --- #
+        dist.barrier(group=group)
         combined_x, event, hook = buffer.low_latency_combine(simulated_gemm_x, topk_idx, topk_weights, handle,
                                                              use_logfmt=use_logfmt, return_recv_hook=return_recv_hook)
         large_gemm_with_hook(hook) if return_recv_hook else None
+        # --- Phase alignment after dispatch --- #
+        dist.barrier(group=group)
 
     # Calculate bandwidth
     num_fp8_bytes, num_bf16_bytes = (hidden + hidden / 128 * 4 + 16), hidden * 2
@@ -135,15 +139,17 @@ def test_main(num_tokens: int, hidden: int, num_experts: int, num_topk: int,
 
     # Dispatch + combine testing
     avg_t, min_t, max_t = bench(partial(test_func, return_recv_hook=False))
+    dist.barrier(group=group);
     print(f'[rank {rank}] Dispatch + combine bandwidth: {(num_dispatch_comm_bytes + num_combine_comm_bytes) / 1e9 / avg_t:.2f} GB/s, '
           f'avg_t={avg_t * 1e6:.2f} us, min_t={min_t * 1e6:.2f} us, max_t={max_t * 1e6:.2f} us', flush=True)
 
     # Separate profiling
     for return_recv_hook in (False, True):
-        group.barrier()
+        dist.barrier(group=group);
         dispatch_t, combine_t = bench_kineto(partial(test_func, return_recv_hook=return_recv_hook),
                                              kernel_names=('dispatch', 'combine'), barrier_comm_profiling=True,
                                              suppress_kineto_output=True, num_kernels_per_period=2 if return_recv_hook else 1)
+        dist.barrier(group=group);
         if not return_recv_hook:
             print(f'[rank {rank}] Dispatch bandwidth: {num_dispatch_comm_bytes / 1e9 / dispatch_t:.2f} GB/s, avg_t={dispatch_t * 1e6:.2f} us | '
                   f'Combine bandwidth: {num_combine_comm_bytes / 1e9 / combine_t:.2f} GB/s, avg_t={combine_t * 1e6:.2f} us', flush=True)
