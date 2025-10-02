@@ -190,8 +190,22 @@ def bench_kineto(fn, kernel_names: Union[str, tuple], num_tests: int = 30, suppr
         assert sum([name in line for line in prof_lines]) == 1, f'Errors of the kernel {name} in the profiling table'
 
     # Save chrome traces
+    rank_suffix = ""
+    try:
+        rank_suffix = f".rank{dist.get_rank()}"
+    except Exception:
+        pass
+
+    final_trace_path = None
     if trace_path is not None:
-        prof.export_chrome_trace(trace_path)
+        base, ext = os.path.splitext(trace_path)
+        final_trace_path = f"{base}{rank_suffix}{ext or '.json'}"
+        prof.export_chrome_trace(final_trace_path)
+    elif num_kernels_per_period > 1:
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
+        tmp.close()
+        final_trace_path = tmp.name
+        prof.export_chrome_trace(final_trace_path)
 
     # Return average kernel durations
     units = {'ms': 1e3, 'us': 1e6}
@@ -209,8 +223,8 @@ def bench_kineto(fn, kernel_names: Union[str, tuple], num_tests: int = 30, suppr
     # Expand the kernels by periods
     if num_kernels_per_period > 1:
         with tempfile.NamedTemporaryFile(suffix='.json') as tmp:
-            prof.export_chrome_trace(tmp.name)
-            profile_data = json.loads(Path(tmp.name).read_text())
+            assert final_trace_path is not None, "internal error: expected trace file to parse"
+            profile_data = json.loads(Path(final_trace_path).read_text())
 
         for i, kernel_name in enumerate(kernel_names):
             events = [event for event in profile_data['traceEvents'] if f'::{kernel_name}' in event['name']]
