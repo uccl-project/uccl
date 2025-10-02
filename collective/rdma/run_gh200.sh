@@ -4,9 +4,9 @@ source ../../scripts/shared.sh
 
 # Usage ./run_nccl_test.sh [UCCL] [# of Nodes] [# of GPUs per process] [allreduce/alltoall: 0/1]
 
-TEST=${1:-1}
+TEST=${1:-nccl}
 NUM_PROCS=${2:-2}
-NUM_GPUS_PER_PROC=${3:-8}
+NUM_GPUS_PER_PROC=${3:-1}
 PROG_OPTION=${4:-0}
 PROCS_PER_NODE=${5:-1}
 HOSTFILE="${UCCL_HOME}/scripts/node_ips/gh200.txt"
@@ -36,7 +36,7 @@ for node in "${ADDR[@]}"; do
 done
 
 # Names of HCAs."
-HCA_NAMES="mlx5_2:1,mlx5_3:1"
+HCA_NAMES="mlx5_2:1"
 # Name of Control NIC.
 CTRL_NIC="bond0"
 # Path of NCCL
