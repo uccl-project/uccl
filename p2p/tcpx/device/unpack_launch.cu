@@ -137,83 +137,31 @@ int UnpackLauncher::launch(tcpx::rx::UnpackDescriptorBlock const& desc_block,
 
   if (use_staging) {
     if (dbg) {
-      std::cout << "[Debug Kernel] [staging] Copying bounce->staging D2D..."
+      std::cout << "[Debug Kernel] [staging] DISABLED - staging buffer causes "
+                   "offset issues"
                 << std::endl;
+      std::cout << "[Debug Kernel] [staging] Reason: descriptors have src_off "
+                   "relative to original bounce_buffer"
+                << std::endl;
+      std::cout << "[Debug Kernel] [staging] Copying entire bounce buffer "
+                   "would require recalculating all offsets"
+                << std::endl;
+      std::cout
+          << "[Debug Kernel] [staging] Proceeding without staging buffer..."
+          << std::endl;
       std::cout.flush();
     }
-
-    // Ensure staging buffer is large enough
-    size_t required_staging =
-        desc_block.total_bytes + 65536;  // Add margin for alignment
-    if (d_staging_buffer_size_ < required_staging) {
-      if (d_staging_buffer_) {
-        cudaFree(d_staging_buffer_);
-      }
-      cudaError_t err = cudaMalloc(&d_staging_buffer_, required_staging);
-      if (err != cudaSuccess) {
-        if (dbg) {
-          std::cout << "[Debug Kernel] [staging] cudaMalloc failed: "
-                    << cudaGetErrorString(err) << std::endl;
-          std::cout.flush();
-        }
-        stats_.kernel_errors++;
-        return -5;
-      }
-      d_staging_buffer_size_ = required_staging;
-      if (dbg) {
-        std::cout << "[Debug Kernel] [staging] Allocated staging buffer: "
-                  << d_staging_buffer_ << " size=" << required_staging
-                  << std::endl;
-        std::cout.flush();
-      }
-    }
-
-    // Copy bounce buffer to staging using D2D
-    cudaError_t err =
-        cudaMemcpy(d_staging_buffer_, desc_block.bounce_buffer,
-                   desc_block.total_bytes, cudaMemcpyDeviceToDevice);
-    if (err != cudaSuccess) {
-      if (dbg) {
-        std::cout << "[Debug Kernel] [staging] D2D copy failed: "
-                  << cudaGetErrorString(err) << std::endl;
-        std::cout.flush();
-      }
-      stats_.kernel_errors++;
-      return -6;
-    }
-
-    if (dbg) {
-      std::cout << "[Debug Kernel] [staging] D2D copy completed, modifying "
-                   "descriptors..."
-                << std::endl;
-      std::cout.flush();
-    }
-
-    // Modify descriptor block to point to staging buffer
-    // We need to update the device-side descriptor block
-    tcpx::rx::UnpackDescriptorBlock modified_block = desc_block;
-    modified_block.bounce_buffer = d_staging_buffer_;
-
-    // Re-copy modified descriptor block to device
-    size_t required_size = sizeof(tcpx::rx::UnpackDescriptorBlock);
-    err = cudaMemcpy(d_desc_block_, &modified_block, required_size,
-                     cudaMemcpyHostToDevice);
-    if (err != cudaSuccess) {
-      if (dbg) {
-        std::cout << "[Debug Kernel] [staging] Modified desc H2D failed: "
-                  << cudaGetErrorString(err) << std::endl;
-        std::cout.flush();
-      }
-      stats_.kernel_errors++;
-      return -7;
-    }
-
-    if (dbg) {
-      std::cout << "[Debug Kernel] [staging] Ready to launch kernel with "
-                   "staging buffer"
-                << std::endl;
-      std::cout.flush();
-    }
+    // DISABLED: Staging buffer approach is flawed because:
+    // 1. We copy total_bytes from bounce_buffer to staging
+    // 2. But descriptors have src_off relative to original bounce_buffer base
+    // 3. If we change bounce_buffer pointer, we'd need to:
+    //    a) Find the minimum src_off across all descriptors
+    //    b) Copy from (bounce_buffer + min_offset) for (max_offset -
+    //    min_offset) bytes c) Adjust all src_off values by subtracting
+    //    min_offset
+    // 4. This is complex and error-prone
+    // 5. Better to let kernel read directly from bounce_buffer (which is
+    // already on GPU)
   }
 
   // Start profiling if enabled

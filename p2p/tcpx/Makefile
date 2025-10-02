@@ -38,10 +38,13 @@ test_tcpx_transfer: $(DEVICE_OBJS)
 	@echo "Building test_tcpx_transfer..."
 	$(NVCC) $(NVCCFLAGS) -o tests/test_tcpx_transfer tests/test_tcpx_transfer.cc tcpx_impl.cc $(DEVICE_OBJS) $(LIBS) $(CUDA_LIBS)
 
-# All unit tests and redundant tests removed - only integration test remains
+# Performance benchmark test
+test_tcpx_perf: $(DEVICE_OBJS)
+	@echo "Building test_tcpx_perf..."
+	$(NVCC) $(NVCCFLAGS) -o tests/test_tcpx_perf tests/test_tcpx_perf.cc tcpx_impl.cc $(DEVICE_OBJS) $(LIBS) $(CUDA_LIBS)
 
 # Build targets
-all: core test_tcpx_transfer
+all: core test_tcpx_transfer test_tcpx_perf
 
 # All tests (only integration test remains)
 all_tests: all
@@ -72,9 +75,9 @@ check:
 clean:
 	@echo "Cleaning build artifacts..."
 	@echo "Removing executable files..."
-	rm -f tests/test_tcpx_transfer
+	rm -f tests/test_tcpx_transfer tests/test_tcpx_perf
 	@echo "Removing object files..."
 	rm -f $(DEVICE_OBJS) *.o
 	@echo "Clean completed. Source files preserved."
 
-.PHONY: all core quick check clean all_tests test_tcpx_transfer
+.PHONY: all core quick check clean all_tests test_tcpx_transfer test_tcpx_perf
