@@ -3352,7 +3352,9 @@ void RDMAContext::uc_rx_rtx_chunk(struct ibv_cq_ex* cq_ex,
   return;
 }
 
-void RDMAContext::rc_rx_chunk(uint32_t byte_len, uint32_t wc_imm_data) {
+void RDMAContext::rc_rx_chunk(struct ibv_wc* wc) {
+  auto byte_len = wc->byte_len;
+  auto wc_imm_data = wc->imm_data;
   auto imm_data = IMMData(ntohl(wc_imm_data));
 
   auto last_chunk = imm_data.GetHINT();

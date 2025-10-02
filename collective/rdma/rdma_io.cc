@@ -834,7 +834,7 @@ int SharedIOContext::_rc_poll_recv_cq_normal(void) {
         << "RC recv CQ state error: " << wc->status;
     auto* cqe_desc = (CQEDesc*)wc->wr_id;
     auto* rdma_ctx = qpn_to_rdma_ctx(wc->qp_num);
-    rdma_ctx->rc_rx_chunk(wc->byte_len, wc->imm_data);
+    rdma_ctx->rc_rx_chunk(wc);
 
     inc_post_srq();
   }
