@@ -17,6 +17,10 @@
 // #define USE_SENDER_BARRIER
 
 /* Sender barrier and receiver barrier for low latency mode for now. */
+#ifndef EFA
+#define EFA
+#endif
+
 #define USE_NORMAL_MODE
 #ifndef USE_NORMAL_MODE
 #ifndef USE_SENDER_BARRIER
@@ -24,7 +28,10 @@
 #define USE_RECEIVER_BARRIER
 #endif
 #endif
+#else
+// #define USE_SENDER_BARRIER
 #endif
+
 #define kAtomicBufferSize 8196
 #define kQueueSize 1024
 #define kQueueMask (kQueueSize - 1)
@@ -46,6 +53,8 @@
 #define NVLINK_SM_PER_PROCESS 1
 #define kAtomicWrTag 0xa70a000000000000ULL
 #define kAtomicMask 0x0000FFFFFFFFFFFFULL
+#define kBarrierWrTag 0xbaba000000000000ULL
+#define kBarrierMask 0x0000FFFFFFFFFFFFULL
 #define kPrintCycleInterval 1000000000ULL
 // Base TCP port for Proxy barrier rendezvous (rank0 server)
 #define TCP_PORT 18515

@@ -694,9 +694,10 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
           std::abort();
         }
 #ifdef USE_SENDER_BARRIER
-        S.wr_id_to_write_struct[qpx->wr_id] = {cmd.expert_idx, dst_rank,
-                                               cmd.is_combine,
-                                               cmd.low_latency_buffer_idx};
+        // printf("wr_id: %d inserted into map\n", (int)qpx->wr_id);
+        S.wr_id_to_write_struct[qpx->wr_id] = {
+            cmd.expert_idx, dst_rank, cmd.is_combine,
+            cmd.low_latency_buffer_idx, cmd.barrier_id};
 #endif
 #ifdef USE_RECEIVER_BARRIER
         uint32_t imm =
@@ -705,7 +706,16 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                 .GetImmData();
         ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
 #else
-      if (j + 1 == k) {
+      if (cmd.barrier_id != -1) {
+        printf("atomic_offset: %lu, atomic_val: %lu, bytes: %ld\n",
+               cmd.atomic_offset, cmd.atomic_val, cmd.bytes);
+        uint32_t imm =
+            AtomicsImm::Pack(true, cmd.is_combine, cmd.atomic_val,
+                             cmd.atomic_offset, cmd.low_latency_buffer_idx)
+                .GetImmData();
+
+        ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
+      } else if (j + 1 == k) {
         uint32_t imm =
             WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
                            cmd.expert_idx, k, my_rank)
@@ -870,12 +880,21 @@ void local_process_completions(ProxyCtx& S,
         if ((wrid & kAtomicWrTag) == kAtomicWrTag) {
           break;
         }
+        if ((wrid & kBarrierWrTag) == kBarrierWrTag) {
+          break;
+        }
 #ifdef USE_SENDER_BARRIER
         {
           auto it = S.wr_id_to_write_struct.find(wrid);
           if (it != S.wr_id_to_write_struct.end()) {
             WriteStruct const& ws = it->second;
             S.wr_id_to_write_struct.erase(it);
+            if (ws.is_normal != -1) {
+              S.normal_sent_counter.Add({ws.is_normal, ws.dst_rank}, 1);
+              printf("Normal send completed (is_normal=%d, dst_rank=%d)\n",
+                     ws.is_normal, ws.dst_rank);
+            }
+#ifndef USE_NORMAL_MODE
             if (ws.is_combine) {
               S.combine_sent_counter.Add(
                   {ws.low_latency_buffer_idx, ws.expert_idx, ws.dst_rank}, 1);
@@ -883,7 +902,12 @@ void local_process_completions(ProxyCtx& S,
               S.dispatch_sent_counter.Add(
                   {ws.low_latency_buffer_idx, ws.expert_idx, ws.dst_rank}, 1);
             }
+#endif
           } else {
+            printf(
+                "Local thread %d: RDMA write completed (wr_id=%lu), "
+                "but not found in write_struct map\n",
+                thread_idx, wrid);
             assert(false && "wr_id not found in write_struct map");
           }
         }

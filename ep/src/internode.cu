@@ -874,12 +874,18 @@ __global__ void __launch_bounds__(
           auto const src_ptr = reinterpret_cast<uint64_t>(
               rdma_channel_data.send_buffer(dst_rdma_rank) +
               dst_slot_idx * num_bytes_per_token);
+
+          /* NOTE(MaoZiming): this is a special write */
+          // It piggybacks later atomics to this right.
           uccl::nvshmemi_ibgda_put_nbi_warp(
               dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
               src_ptr, num_bytes_per_msg,
               translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank),
               warp_id,  // NOTE(MaoZiming): use warp_id for rb.
-              lane_id, 0, ring_addrs, num_ring_addrs, false, -1);
+              lane_id, 0, ring_addrs, num_ring_addrs, false, -1, 0,
+              reinterpret_cast<uint64_t>(rdma_channel_tail.buffer(rdma_rank)) -
+                  reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
+              num_tokens_to_issue);
         } else {
           // Lighter fence for local RDMA rank
           memory_fence();
@@ -897,7 +903,7 @@ __global__ void __launch_bounds__(
               reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
               num_tokens_to_issue, dst_rank,
               warp_id,  // NOTE(MaoZiming): use warp_id for rb.
-              dst_rank == rank, ring_addrs, num_ring_addrs, false, -1);
+              dst_rank == rank, ring_addrs, num_ring_addrs, false, -1, 0);
         }
         __syncwarp();
       }

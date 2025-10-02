@@ -25,12 +25,14 @@ class TokenCounter {
 
 using DispatchTokenKey = std::tuple<int, int, int>;
 using CombineTokenKey = std::pair<int, int>;
+using NormalTokenKey = std::pair<int, int>;
 
 struct WriteStruct {
   int expert_idx;
   int dst_rank;
   bool is_combine;
   int low_latency_buffer_idx;
+  int is_normal;
 };
 
 struct ProxyCtx {
@@ -86,11 +88,13 @@ struct ProxyCtx {
 
   TokenCounter<DispatchTokenKey> dispatch_token_counter;
   TokenCounter<CombineTokenKey> combine_token_counter;
+  TokenCounter<NormalTokenKey> normal_token_counter;
 
   /* low_latency_buffer_idx, expert_idx, dst_rank */
   std::unordered_map<uint64_t, WriteStruct> wr_id_to_write_struct;
   TokenCounter<DispatchTokenKey> dispatch_sent_counter;
   TokenCounter<DispatchTokenKey> combine_sent_counter;
+  TokenCounter<NormalTokenKey> normal_sent_counter;
 
   // Async-barrier state (single inflight assumed)
   bool barrier_inflight = false;
