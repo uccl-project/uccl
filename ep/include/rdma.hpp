@@ -43,6 +43,23 @@ struct PendingUpdate {
   }
 };
 
+struct ImmType {
+  // Top-bit definitions
+  static constexpr uint32_t kAtomicsBit = 1u << 31;  // 1 = atomics
+  static constexpr uint32_t kCtrlBit = 1u << 30;     // 1 = control/barrier
+  // Write is the "default": [31]=0 and [30]=0
+
+  static inline bool IsAtomics(uint32_t imm) {
+    return (imm & kAtomicsBit) != 0u;
+  }
+  static inline bool IsBarrier(uint32_t imm) {
+    return ((imm & kAtomicsBit) == 0u) && ((imm & kCtrlBit) != 0u);
+  }
+  static inline bool IsWrite(uint32_t imm) {
+    return ((imm & kAtomicsBit) == 0u) && ((imm & kCtrlBit) == 0u);
+  }
+};
+
 class AtomicsImm {
  public:
   // Bit layout:
@@ -170,6 +187,25 @@ class WriteImm {
   uint32_t imm_data_;
 };
 
+struct BarrierImm {
+  // Layout: [31]=0(non-atomic), [30]=1(barrier ctl), [29]=ACK?, [28:16]=SEQ
+  // (13b), [15:0]=SRC_RANK
+  static constexpr uint32_t kAtomicBit = 1u << 31;
+  static constexpr uint32_t kCtrlBit = 1u << 30;
+  static constexpr uint32_t kAckBit = 1u << 29;
+
+  static inline bool IsAck(uint32_t imm) { return (imm & kAckBit) != 0u; }
+
+  static inline uint32_t Pack(bool ack, uint16_t seq, uint16_t src_rank) {
+    // seq kept in 13 bits; OK for practical purposes
+    return kCtrlBit | (ack ? kAckBit : 0u) | ((uint32_t)(seq & 0x1FFFu) << 16) |
+           (uint32_t)src_rank;
+  }
+
+  static inline uint16_t Seq(uint32_t imm) { return (imm >> 16) & 0x1FFFu; }
+  static inline uint16_t Rank(uint32_t imm) { return imm & 0xFFFFu; }
+};
+
 // Setup RDMA resources (register GPU memory, create QP, etc.)
 void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info,
                 int rank);
@@ -190,10 +226,13 @@ void local_poll_completions(ProxyCtx& S,
                             std::unordered_set<uint64_t>& finished_wrs,
                             std::unordered_set<uint64_t>& acked_wrs,
                             int thread_idx, std::vector<ProxyCtx*>& ctx_by_tag);
-void remote_process_completions(
-    ProxyCtx& S, int idx, CopyRingBuffer& ring, int ne, ibv_wc* wc,
-    std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr, int num_ranks,
-    int num_experts, std::set<PendingUpdate>& pending_atomic_updates);
+void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& ring,
+                                int ne, ibv_wc* wc,
+                                std::vector<ProxyCtx*>& ctx_by_tag,
+                                void* atomic_buffer_ptr, int num_ranks,
+                                int num_experts,
+                                std::set<PendingUpdate>& pending_atomic_updates,
+                                int my_rank, int num_nodes);
 void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
                           RDMAConnectionInfo* local_info, int rank);
 ibv_cq* create_per_thread_cq(ProxyCtx& S);
@@ -201,7 +240,8 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                              std::vector<ProxyCtx*>& ctx_by_tag,
                              void* atomic_buffer_ptr, int num_ranks,
                              int num_experts,
-                             std::set<PendingUpdate>& pending_atomic_updates);
+                             std::set<PendingUpdate>& pending_atomic_updates,
+                             int my_rank, int num_nodes);
 void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
                           int thread_idx, int local_rank);
 void remote_send_ack(ProxyCtx* ctx, struct ibv_qp* ack_qp, uint64_t& wr_id,
@@ -223,7 +263,8 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
                   std::unordered_set<uint64_t>& acked_wrs, int thread_idx,
                   CopyRingBuffer& g_ring, std::vector<ProxyCtx*>& ctx_by_tag,
                   void* atomic_buffer_ptr, int num_ranks, int num_experts,
-                  std::set<PendingUpdate>& pending_atomic_updates);
+                  std::set<PendingUpdate>& pending_atomic_updates, int my_rank,
+                  int num_nodes);
 void post_atomic_operations(ProxyCtx& S,
                             std::vector<uint64_t> const& wrs_to_post,
                             std::vector<TransferCmd> const& cmds_to_post,

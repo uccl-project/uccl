@@ -44,12 +44,41 @@ from utils import (
     initialize_uccl,
     destroy_uccl,
     init_dist_under_torchrun,
+    detect_ib_hca,
 )
 
 # Test compatibility with low latency functions
 import test_low_latency
 from buffer import Buffer
-from uccl.ep import Config
+
+try:
+    from uccl.ep import Config
+except ImportError as exc:
+    import sys
+
+    sys.stderr.write("Failed to import uccl.ep\n")
+    raise
+
+
+# Paste inside test_main, after you compute rdma_rank_idx / inplace_unique
+def channel_token_range(num_tokens, num_channels, channel_id):
+    # matches typical get_channel_task_range partitioning
+    start = (num_tokens * channel_id) // num_channels
+    end = (num_tokens * (channel_id + 1)) // num_channels
+    return start, end
+
+
+def expected_per_dst_for_channel(
+    rdma_rank_idx, num_nodes, num_tokens, num_channels, channel_id
+):
+    start, end = channel_token_range(num_tokens, num_channels, channel_id)
+    # Does token t go to dst d?
+    # rdma_rank_idx[t] holds up to num_topk entries in 0..num_nodes-1 or -1
+    token_goes_to = [
+        (rdma_rank_idx == d).any(dim=1) for d in range(num_nodes)
+    ]  # list of [num_tokens] bool
+    per_dst_counts = [int(mask[start:end].sum().item()) for mask in token_goes_to]
+    return per_dst_counts  # length = num_nodes
 
 
 # noinspection PyShadowingNames
@@ -159,6 +188,15 @@ def test_main(
     if local_rank == 0:
         print(f"[layout] Kernel performance: {t * 1000:.3f} ms", flush=True)
         print("", flush=True)
+
+    if rank == 0:
+        num_channels = num_sms // 2
+        for ch in range(num_channels):
+            counts = expected_per_dst_for_channel(
+                rdma_rank_idx, num_nodes, num_tokens, num_channels, ch
+            )
+            print(f"[host] channel {ch}: per-dst RDMA counts = {counts}", flush=True)
+
     group.barrier()
     time.sleep(1)
 
@@ -446,8 +484,9 @@ def test_main(
 
 
 # noinspection PyUnboundLocalVariable,PyShadowingNames
-def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
-    num_nodes = int(os.getenv("WORLD_SIZE", 1))
+def test_loop(
+    local_rank: int, num_local_ranks: int, num_nodes: int, args: argparse.Namespace
+):
     rank, num_ranks, group = init_dist_under_torchrun(local_rank, num_local_ranks)
     if args.test_ll_compatibility:
         ll_num_tokens, ll_hidden, ll_num_experts, ll_num_topk = 16, 5120, 256, 9
@@ -464,7 +503,9 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     scratch = torch.zeros(
         num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
     )
-    proxies, workers = initialize_uccl(scratch, num_rdma_bytes, rank, num_ranks, group)
+    proxies, workers = initialize_uccl(
+        scratch, num_rdma_bytes, rank, num_ranks, group, num_experts=args.num_experts
+    )
 
     buffer = Buffer(
         group,
@@ -526,6 +567,10 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
 
 
 if __name__ == "__main__":
+    ib_dev = detect_ib_hca()
+    if ib_dev and ib_dev.startswith("mlx"):  # Mellanox IB devices show up like mlx5_0
+        os.environ["NCCL_IB_HCA"] = ib_dev
+        print(f"Set NCCL_IB_HCA={ib_dev}")
     parser = argparse.ArgumentParser(description="Test internode EP kernels")
     parser.add_argument(
         "--num-processes",
@@ -557,14 +602,18 @@ if __name__ == "__main__":
         help="whether to test compatibility with low-latency kernels",
     )
     args = parser.parse_args()
+    world_size = int(os.environ["WORLD_SIZE"])
+    local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])
+    num_nodes = world_size // local_world_size
 
     # Set default `num_topk_groups` if not provided
     if args.num_topk_groups is None:
-        num_nodes = int(os.getenv("WORLD_SIZE", 1))
         args.num_topk_groups = min(num_nodes, 4)
 
     num_processes = args.num_processes
+    if num_processes != 8:
+        raise ValueError("Only --num-processes=8 is supported for this test.")
     # NOTE: modified from deep_ep
     local_rank = int(os.environ["LOCAL_RANK"])
     num_local_ranks = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
-    test_loop(local_rank, num_local_ranks, args)
+    test_loop(local_rank, num_local_ranks, num_nodes, args)

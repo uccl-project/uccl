@@ -6,7 +6,7 @@ import torch.distributed as dist
 
 # noinspection PyUnresolvedReferences
 import deep_ep
-from utils import init_dist, bench, bench_kineto, calc_diff, create_grouped_scores, inplace_unique, per_token_cast_to_fp8, per_token_cast_back
+from utils import init_dist, bench, bench_kineto, calc_diff, create_grouped_scores, inplace_unique, per_token_cast_to_fp8, per_token_cast_back, detect_ib_hca
 
 # Test compatibility with low latency functions
 import test_low_latency
@@ -256,6 +256,11 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
 
 
 if __name__ == '__main__':
+    ib_dev = detect_ib_hca()
+    if ib_dev and ib_dev.startswith("mlx"):  # Mellanox IB devices show up like mlx5_0
+        os.environ["NCCL_IB_HCA"] = ib_dev
+        print(f"Set NCCL_IB_HCA={ib_dev}")
+        
     parser = argparse.ArgumentParser(description='Test internode EP kernels')
     parser.add_argument('--num-processes', type=int, default=8,
                        help='Number of processes to spawn (default: 8)')

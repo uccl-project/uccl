@@ -15,9 +15,14 @@
 #define MEASURE_PER_OP_LATENCY
 #define MEASURE_PER_VERB_LATENCY
 // #define USE_SENDER_BARRIER
+
+/* Sender barrier and receiver barrier for low latency mode for now. */
+#define USE_NORMAL_MODE
+#ifndef USE_NORMAL_MODE
 #ifndef USE_SENDER_BARRIER
 #ifdef EFA
 #define USE_RECEIVER_BARRIER
+#endif
 #endif
 #endif
 #define kAtomicBufferSize 8196
@@ -33,6 +38,7 @@
 #define kMaxOutstandingRecvs 2048 * 2
 #define kSenderAckQueueDepth 2048 * 2
 #define kWarmupOps 10000
+#define kRingsPerProxy 8
 #define kRemoteBufferSize (kBatchSize * kNumThBlocks * kObjectSize * 100)
 #define MAIN_THREAD_CPU_IDX 31
 #define MAX_NUM_GPUS 8
@@ -41,6 +47,11 @@
 #define kAtomicWrTag 0xa70a000000000000ULL
 #define kAtomicMask 0x0000FFFFFFFFFFFFULL
 #define kPrintCycleInterval 1000000000ULL
+// Base TCP port for Proxy barrier rendezvous (rank0 server)
+#define TCP_PORT 18515
+#define MAX_RETRIES 100
+#define RETRY_DELAY_MS 50
+#define QKEY 0x11111111u
 // P2P enable flags (once per GPU pair)
 extern std::once_flag peer_ok_flag[MAX_NUM_GPUS][MAX_NUM_GPUS];
 bool pin_thread_to_cpu(int cpu);

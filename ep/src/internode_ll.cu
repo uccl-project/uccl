@@ -282,9 +282,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     if (dst_p2p_ptr == 0) {
       // Inter-node or no IPC: use IBGDA atomic
       uccl::nvshmemi_ibgda_amo_nonfetch_add(
-          dst_ptr_internode - reinterpret_cast<uint64_t>(atomic_buffer_ptr),
+          dst_ptr_internode, reinterpret_cast<uint64_t>(atomic_buffer_ptr),
           -num_tokens_sent - 1, dst_rank,
-          /*qp_id=*/-1,                      // NOTE(Yang): not used.
           /*warp_id=*/dst_expert_local_idx,  // NOTE(Yang): for selecting rb.
           false, ring_addrs, num_ring_addrs, false, low_latency_buffer_idx);
 
@@ -847,10 +846,9 @@ __global__ __launch_bounds__(1024, 1) void combine(
         // Pass offset to CPU proxy for atomic operation (similar to dispatch
         // phase)
         uccl::nvshmemi_ibgda_amo_nonfetch_add(
-            dst_ptr_internode - reinterpret_cast<uint64_t>(atomic_buffer_ptr),
+            dst_ptr_internode, reinterpret_cast<uint64_t>(atomic_buffer_ptr),
             num_tokens_to_send /* Will be changed to 1 in the proxy */,
             dst_rank,
-            /*qp_id=*/-1,                   // NOTE(Yang): not used.
             /*warp_id=*/global_expert_idx,  // NOTE(Yang): for selecting rb.
             false, ring_addrs, num_ring_addrs, true, low_latency_buffer_idx);
       }
