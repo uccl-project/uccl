@@ -1,0 +1,34 @@
+# Makefile for EFA All-to-All RDMA Tests
+
+CXX = g++
+CXXFLAGS = -std=c++17 -O3 -Wall -Wextra -march=native
+LDFLAGS = -libverbs -lefa
+
+# Targets
+TARGETS = test_alltoall_pairwise test_rdma_alltoall
+
+.PHONY: all clean
+
+all: $(TARGETS)
+
+test_alltoall_pairwise: test_alltoall_pairwise.cpp
+	@echo "Compiling test_alltoall_pairwise..."
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS)
+	@echo "Build complete: $@"
+
+test_rdma_alltoall: test_rdma_alltoall.cpp
+	@echo "Compiling test_rdma_alltoall..."
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS)
+	@echo "Build complete: $@"
+
+clean:
+	@echo "Cleaning build artifacts..."
+	rm -f $(TARGETS)
+	@echo "Clean complete"
+
+# Helper targets
+pairwise: test_alltoall_pairwise
+	@echo "Pairwise test ready"
+
+true_alltoall: test_rdma_alltoall
+	@echo "True all-to-all test ready"
