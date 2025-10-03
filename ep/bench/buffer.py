@@ -33,7 +33,7 @@ class Buffer:
     """
 
     # TODO(MaoZiming): Reduce SMs. UCCL Proxy should reduce the usage of SMs.
-    num_sms: int = 20
+    num_sms: int = 4
 
     def __init__(
         self,

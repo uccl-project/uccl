@@ -120,8 +120,9 @@ __global__ void notify_dispatch(
 
     // waiting for all previous inflight wrs to complete,
     // in case of rewriting cleared rdma_buffer
-    if (thread_id == 32)
+    if (thread_id == 32) {
       uccl::nvshmemi_ibgda_quiet(ring_addrs, num_ring_addrs, nvl_rank);
+    }
     __syncthreads();
 
     if (thread_id == 32) {
@@ -562,7 +563,7 @@ __global__ void __launch_bounds__(
   // TMA stuffs
   extern __shared__ __align__(1024) uint8_t smem_tma_buffer[];
   auto tma_buffer = smem_tma_buffer + target_rank * kNumTMABytesPerWarp;
-  auto tma_mbarrier = reinterpret_cast<uint64_t*>(tma_buffer + hidden_bytes);
+  auto tma_mbarrier = reinterpret_cast<uint64_t*>(tma_buffer + num_bytes_per_token);
   uint32_t tma_phase = 0;
   if ((warp_role == WarpRole::kRDMAAndNVLForwarder or
        warp_role == WarpRole::kNVLReceivers) and
@@ -630,13 +631,11 @@ __global__ void __launch_bounds__(
 
       // Issue RDMA for non-local ranks
       if (dst_rdma_rank != rdma_rank) {
-        uint64_t dst_ptr = reinterpret_cast<uint64_t>(
-            rdma_channel_meta.recv_buffer(rdma_rank));
-        uint64_t src_ptr = reinterpret_cast<uint64_t>(
-            rdma_channel_meta.send_buffer(dst_rdma_rank));
+        // NOTE(MaoZiming): this tells the remote rank how many tokens each local nvl_rank and expert are expected to receive. 
         uccl::nvshmemi_ibgda_put_nbi_warp(
-            dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
-            src_ptr, sizeof(int) * (NUM_MAX_NVL_PEERS * 2 + 2),
+            reinterpret_cast<uint64_t>(
+            rdma_channel_meta.recv_buffer(rdma_rank)) - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
+            reinterpret_cast<uint64_t>(rdma_channel_meta.send_buffer(dst_rdma_rank)), sizeof(int) * (NUM_MAX_NVL_PEERS * 2 + 2),
             translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank),
             channel_id,  // NOTE(MaoZiming): use channel_id for rb.
             lane_id, 0, ring_addrs, num_ring_addrs, false, -1);
@@ -909,18 +908,13 @@ __global__ void __launch_bounds__(
           num_tokens_to_send -= num_tokens_to_issue;
           int dst_rank =
               translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank);
+          // NOTE(MaoZiming): this only does local atomic add. For remote counter update, it is piggyback on the previous write. 
           uccl::nvshmemi_ibgda_amo_nonfetch_add(
               reinterpret_cast<uint64_t>(rdma_channel_tail.buffer(rdma_rank)),
               reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
               num_tokens_to_issue, dst_rank,
               channel_id,  // NOTE(MaoZiming): use channel_id for rb.
-              dst_rank == rank, ring_addrs, num_ring_addrs, false, -1, 0);
-
-          // printf("[b=%d w=%d l=%d] rdma_rank:%d nvl_rank:%d ch:%d
-          // left:%d/%d\n",
-          //        blockIdx.x, warp_id, lane_id, rdma_rank, nvl_rank,
-          //        channel_id, num_tokens_to_send,
-          //        original_num_tokens_to_send);
+              dst_rdma_rank == rdma_rank, ring_addrs, num_ring_addrs, false, -1, 0);
         }
         __syncwarp();
       }
@@ -1149,11 +1143,15 @@ __global__ void __launch_bounds__(
           lane_id < kNumRDMARanks) {
         int dst_rank =
             translate_dst_rdma_rank<kLowLatencyMode>(lane_id, nvl_rank);
+        
+        if (lane_id == 0) {
+          printf("atomic - offset: %lu, value: %d\n", reinterpret_cast<uint64_t>(rdma_channel_head.buffer(rdma_rank)) - reinterpret_cast<uint64_t>(original_atomic_buffer_ptr), min_head - last_head);
+        }
         uccl::nvshmemi_ibgda_amo_nonfetch_add(
             reinterpret_cast<uint64_t>(rdma_channel_head.buffer(rdma_rank)),
             reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
             min_head - last_head, dst_rank, channel_id + num_channels,
-            dst_rank == rank, ring_addrs, num_ring_addrs, false, -1);
+            lane_id == rdma_rank, ring_addrs, num_ring_addrs, false, -1);
         last_head = min_head;
       }
 
@@ -1256,19 +1254,18 @@ __global__ void __launch_bounds__(
         }
         __syncwarp();
         mbarrier_wait(tma_mbarrier, tma_phase);
-        if (lane_id == 0)
+        if (lane_id == 0) {
           tma_store_1d(tma_buffer, recv_x + recv_token_idx * hidden_int4,
                        hidden_bytes, false);
+          if (scale_aligned)
+              tma_store_1d(tma_buffer + hidden_bytes, recv_x_scales + recv_token_idx * num_scales, scale_bytes, false);
+        }
         __syncwarp();
         shifted += hidden_bytes;
 
         // Copy scales
         // TODO: make it as templated
-        if (scale_aligned) {
-          tma_store_1d(tma_buffer + hidden_bytes,
-                       recv_x_scales + recv_token_idx * num_scales, scale_bytes,
-                       false);
-        } else {
+        if (not scale_aligned) {
           UNROLLED_WARP_COPY(1, lane_id, num_scales,
                              recv_x_scales + recv_token_idx * num_scales,
                              reinterpret_cast<float*>(shifted), ld_nc_global,
@@ -1895,13 +1892,13 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
     extern __shared__ __align__(1024) uint8_t smem_tma_buffer[];
     auto tma_buffer =
         smem_tma_buffer + dst_nvl_rank * kNumTMABytesPerSenderWarp;
-    auto tma_mbarrier = reinterpret_cast<uint64_t*>(tma_buffer + hidden_bytes);
+    auto tma_mbarrier = reinterpret_cast<uint64_t*>(tma_buffer + num_bytes_per_token);
     uint32_t tma_phase = 0;
     if (lane_id == 0) {
       mbarrier_init(tma_mbarrier, 1);
       fence_view_async_shared();
       fence_barrier_init();
-      EP_DEVICE_ASSERT(hidden_bytes + sizeof(uint64_t) <=
+      EP_DEVICE_ASSERT(num_bytes_per_token + sizeof(uint64_t) <=
                        kNumTMABytesPerSenderWarp);
     }
     __syncwarp();
@@ -2192,9 +2189,11 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
           // Read expected head
           EP_STATIC_ASSERT(kNumRDMARanks <= 32, "Invalid number of RDMA peers");
           int expected_head = -1;
-          if (lane_id < NUM_MAX_NVL_PEERS)
+          if (lane_id < NUM_MAX_NVL_PEERS) {
             expected_head = ld_nc_global(
                 combined_nvl_head + token_idx * NUM_MAX_NVL_PEERS + lane_id);
+            expected_head < 0 ? (forwarder_nvl_head[warp_id][lane_id] = -expected_head - 1) : (forwarder_nvl_head[warp_id][lane_id] = expected_head);
+          }
 
           // Wait lanes to be ready
           start_time = clock64();
@@ -2288,7 +2287,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                 reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
                 num_chunked_tokens, dst_rank,
                 channel_id,  // NOTE(MaoZiming): use warp_id for rb.
-                dst_rank == rank, ring_addrs, num_ring_addrs, false, -1, 0);
+                dst_rdma_rank == rdma_rank, ring_addrs, num_ring_addrs, false, -1, 0);
           }
         }
       }
@@ -2418,7 +2417,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                                                          nvl_rank),
                 channel_id +
                     num_channels,  // NOTE(MaoZiming): use channel_id for rb.
-                dst_rank == rank, ring_addrs, num_ring_addrs, false, -1);
+                dst_rdma_rank == rdma_rank, ring_addrs, num_ring_addrs, false, -1);
             last_rdma_head = min_head;
           }
         } else {

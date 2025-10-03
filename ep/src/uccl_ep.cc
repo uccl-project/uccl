@@ -93,7 +93,8 @@ class Buffer {
         explicitly_destroy(explicitly_destroy),
         comm_stream(at::cuda::getStreamFromPool(/*isHighPriority=*/true)) {
     if (num_local_ranks == -1) num_local_ranks = get_num_max_nvl_peers();
-    max_nvl_peers = num_local_ranks;
+    // max_nvl_peers = num_local_ranks;
+    max_nvl_peers = NUM_MAX_NVL_PEERS;
     {
       cudaGetDevice(&device_index);
       {
