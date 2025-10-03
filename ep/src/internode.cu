@@ -173,7 +173,7 @@ __global__ void notify_dispatch(
             dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
             src_ptr, (NUM_MAX_NVL_PEERS + num_rdma_experts + 1) * sizeof(int),
             translate_dst_rdma_rank<kLowLatencyMode>(i, nvl_rank),
-            0,  // NOTE(MaoZiming): use channel_id for rb.
+            0,  // NOTE(MaoZiming): use 0 for rb.
             lane_id, 0, ring_addrs, num_ring_addrs, false, -1);
       } else {
         UNROLLED_WARP_COPY(1, lane_id, NUM_MAX_NVL_PEERS + num_rdma_experts + 1,
@@ -674,7 +674,7 @@ __global__ void __launch_bounds__(
              rdma_tail_idx - cached_rdma_channel_head >=
                  num_max_rdma_chunked_recv_tokens) {
         cached_rdma_channel_head = static_cast<int>(
-            ld_acquire_sys_global(rdma_channel_head.buffer(lane_id)));
+            ld_volatile_global(rdma_channel_head.buffer(lane_id)));
 
         // Timeout check
         if (clock64() - start_time >= NUM_TIMEOUT_CYCLES) {
@@ -885,7 +885,7 @@ __global__ void __launch_bounds__(
               dst_slot_idx * num_bytes_per_token);
 
           /* NOTE(MaoZiming): this is a special write */
-          // It piggybacks later atomics to this right.
+          // It piggybacks later atomics to this write.
           uccl::nvshmemi_ibgda_put_nbi_warp(
               dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
               src_ptr, num_bytes_per_msg,
@@ -909,8 +909,6 @@ __global__ void __launch_bounds__(
           num_tokens_to_send -= num_tokens_to_issue;
           int dst_rank =
               translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank);
-          /* NOTE(MaoZiming): the remote atomics are handled previously by
-           * nvshmemi_ibgda_put_nbi_warp*/
           uccl::nvshmemi_ibgda_amo_nonfetch_add(
               reinterpret_cast<uint64_t>(rdma_channel_tail.buffer(rdma_rank)),
               reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
@@ -918,9 +916,11 @@ __global__ void __launch_bounds__(
               channel_id,  // NOTE(MaoZiming): use channel_id for rb.
               dst_rank == rank, ring_addrs, num_ring_addrs, false, -1, 0);
 
-          printf("[b=%d w=%d l=%d] rdma_rank:%d nvl_rank:%d ch:%d left:%d/%d\n",
-                 blockIdx.x, warp_id, lane_id, rdma_rank, nvl_rank, channel_id,
-                 num_tokens_to_send, original_num_tokens_to_send);
+          // printf("[b=%d w=%d l=%d] rdma_rank:%d nvl_rank:%d ch:%d
+          // left:%d/%d\n",
+          //        blockIdx.x, warp_id, lane_id, rdma_rank, nvl_rank,
+          //        channel_id, num_tokens_to_send,
+          //        original_num_tokens_to_send);
         }
         __syncwarp();
       }
@@ -1152,8 +1152,8 @@ __global__ void __launch_bounds__(
         uccl::nvshmemi_ibgda_amo_nonfetch_add(
             reinterpret_cast<uint64_t>(rdma_channel_head.buffer(rdma_rank)),
             reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
-            min_head - last_head, dst_rank, channel_id, dst_rank == rank,
-            ring_addrs, num_ring_addrs, false, -1);
+            min_head - last_head, dst_rank, channel_id + num_channels,
+            dst_rank == rank, ring_addrs, num_ring_addrs, false, -1);
         last_head = min_head;
       }
 
@@ -1222,7 +1222,8 @@ __global__ void __launch_bounds__(
         if (lane_id == 0 and clock64() - start_time > NUM_TIMEOUT_CYCLES) {
           printf(
               "DeepEP dispatch NVL receiver timeout, channel: %d, RDMA: %d, "
-              "nvl: %d, src NVL: %d, head: %d, tail: %d, num_tokens_to_recv: "
+              "nvl: %d, src NVL: %d, head: %d, tail: %d, remaining "
+              "num_tokens_to_recv: "
               "%d, original_num_tokens_to_recv: %d\n",
               channel_id, rdma_rank, nvl_rank, src_nvl_rank,
               cached_channel_head_idx, cached_channel_tail_idx,
@@ -1309,6 +1310,14 @@ __global__ void __launch_bounds__(
       if (lane_id == 0)
         st_relaxed_sys_global(nvl_channel_head.buffer(),
                               cached_channel_head_idx);
+    }
+    if (lane_id == 0) {
+      printf(
+          "[channel: %d, RDMA: %d, "
+          "nvl: %d, src_nvl_rank: %d] RECV done. original_num_tokens_to_recv: "
+          "%d\n",
+          channel_id, rdma_rank, nvl_rank, src_nvl_rank,
+          original_num_tokens_to_recv);
     }
   }
 }
@@ -2260,7 +2269,11 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                 translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank,
                                                          nvl_rank),
                 channel_id,  // NOTE(MaoZiming): use channel_id for rb.
-                lane_id, 0, ring_addrs, num_ring_addrs, false, -1);
+                lane_id, 0, ring_addrs, num_ring_addrs, false, -1, 0,
+                reinterpret_cast<uint64_t>(
+                    rdma_channel_tail.buffer(rdma_rank)) -
+                    reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
+                num_chunked_tokens);
           } else {
             memory_fence();
           }
@@ -2275,7 +2288,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                 reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
                 num_chunked_tokens, dst_rank,
                 channel_id,  // NOTE(MaoZiming): use warp_id for rb.
-                dst_rank == rank, ring_addrs, num_ring_addrs, false, -1);
+                dst_rank == rank, ring_addrs, num_ring_addrs, false, -1, 0);
           }
         }
       }
@@ -2403,7 +2416,8 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                 min_head - last_rdma_head,
                 translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank,
                                                          nvl_rank),
-                channel_id,  // NOTE(MaoZiming): use channel_id for rb.
+                channel_id +
+                    num_channels,  // NOTE(MaoZiming): use channel_id for rb.
                 dst_rank == rank, ring_addrs, num_ring_addrs, false, -1);
             last_rdma_head = min_head;
           }

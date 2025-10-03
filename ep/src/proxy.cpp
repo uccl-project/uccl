@@ -833,12 +833,21 @@ void Proxy::quiet_cq() {
   ibv_wc wc[kMaxOutstandingSends];
   using clock = std::chrono::steady_clock;
   auto last_log = clock::now();
+  std::set<PendingUpdate> pending_atomic_updates;
   for (;;) {
     int ne = poll_cq_once(ctx_.cq, wc, kMaxOutstandingSends);
     if (ne > 0) {
       empty_iters = 0;
       local_process_completions(ctx_, finished_wrs_, acked_wrs_,
                                 cfg_.thread_idx, wc, ne, ctx_by_tag_);
+      remote_process_completions(
+          ctx_, cfg_.thread_idx, ring, ne, wc, ctx_by_tag_, atomic_buffer_ptr_,
+          cfg_.num_ranks, cfg_.num_experts, pending_atomic_updates, cfg_.rank,
+          cfg_.num_nodes);
+#ifdef USE_RECEIVER_BARRIER
+      apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
+                            cfg_.num_experts, cfg_.num_ranks);
+#endif
     } else {
       ++empty_iters;
     }

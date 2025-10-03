@@ -710,10 +710,16 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         assert(cmd.barrier_id == 0);
       }
       if (cmd.barrier_id != -1) {
+        int v = static_cast<int>(cmd.atomic_val);
+        if (v < -16384 || v > 16383) {
+          fprintf(stderr, "[EFA] atomic value=%d won't fit in 15 bits\n", v);
+          std::abort();
+        }
         uint32_t imm =
             AtomicsImm::Pack(true, false, cmd.atomic_val, cmd.atomic_offset,
                              cmd.low_latency_buffer_idx)
                 .GetImmData();
+        assert(cmd.barrier_id == 0);
         assert(cmd.atomic_offset > 0 && cmd.atomic_val > 0);
 
         ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
@@ -1179,8 +1185,14 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
 #else
         auto* addr32 =
             reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
+#ifndef USE_NORMAL_MODE
         if (is_combine) value = 1;
-        addr32->fetch_add(value, std::memory_order_release);
+#endif
+        printf(
+            "Atomic imm received: value=%d offset=%u (index=%zu) -> new=%d\n",
+            value, offset, index,
+            addr32->fetch_add(value, std::memory_order_release) + value);
+        // addr32->fetch_add(value, std::memory_order_release);
 #endif
       } else if (ImmType::IsBarrier(raw)) {
         bool is_ack = BarrierImm::IsAck(raw);
