@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <vector>
+#include <immintrin.h>
 #ifndef COPY_RING_CAP
 #define COPY_RING_CAP 4096
 #endif
@@ -65,10 +66,7 @@ enum class FlowDirection { HostToDevice, DeviceToHost, HostToHost };
 __device__ __forceinline__ uint64_t ld_volatile(uint64_t* ptr) {
 #if defined(__CUDA_ARCH__)
   uint64_t ans;
-  asm volatile("ld.volatile.global.u64 %0, [%1];"
-               : "=l"(ans)
-               : "l"(ptr)
-               : "memory");
+  asm volatile("ld.global.nc.u64 %0, [%1];" : "=l"(ans) : "l"(ptr) : "memory");
   return ans;
 #elif defined(__HIP_DEVICE_COMPILE__)
   return __builtin_nontemporal_load(ptr);
@@ -79,8 +77,8 @@ __device__ __forceinline__ uint64_t ld_volatile(uint64_t* ptr) {
 
 template <typename T, FlowDirection Dir, uint32_t Capacity>
 struct alignas(128) RingBuffer {
-  uint64_t head = 0;
-  uint64_t tail = 0;
+  alignas(128) uint64_t head;
+  alignas(128) uint64_t tail;
   T buf[Capacity];
   uint64_t cycle_accum = 0;
   uint64_t op_count = 0;
@@ -101,8 +99,14 @@ struct alignas(128) RingBuffer {
   uint64_t ack_buf[RECEIVER_BATCH_SIZE] = {0};
 
   inline void cpu_volatile_store_tail(uint64_t new_tail) {
-    // NOTE(MaoZiming): proxy needs this.
     __atomic_store_n(&tail, new_tail, __ATOMIC_RELEASE);
+#if defined(__x86_64__) || defined(_M_X64)
+    _mm_sfence();  // drain WC buffers to PCIe/NVLink
+#elif defined(__aarch64__)
+    asm volatile("dmb oshst" ::: "memory");  // host-store barrier for devices
+#else
+    std::atomic_thread_fence(std::memory_order_seq_cst);  // fallback
+#endif
   }
 
   inline uint64_t volatile_load_cmd(int idx) const {
@@ -279,10 +283,17 @@ typedef RingBuffer<CopyTask, FlowDirection::HostToHost, COPY_RING_CAP>
     CopyRingBuffer;
 
 static inline uintptr_t alloc_cmd_ring() {
+  cudaError_t e = cudaSetDeviceFlags(cudaDeviceMapHost);
+  if (e != cudaSuccess && e != cudaErrorSetOnActiveProcess) {
+    throw std::runtime_error("cudaSetDeviceFlags(cudaDeviceMapHost) failed");
+  }
   void* raw = nullptr;
-  auto err = cudaMallocHost(&raw, sizeof(DeviceToHostCmdBuffer));
+  cudaError_t err =
+      cudaHostAlloc(&raw, sizeof(DeviceToHostCmdBuffer),
+                    cudaHostAllocMapped | cudaHostAllocWriteCombined);
   if (err != cudaSuccess || raw == nullptr) {
-    throw std::runtime_error("cudaMallocHost(DeviceToHostCmdBuffer) failed");
+    throw std::runtime_error(
+        "cudaHostAlloc(DeviceToHostCmdBuffer, MAPPED|WC) failed");
   }
   auto* rb = static_cast<DeviceToHostCmdBuffer*>(raw);
   new (rb) DeviceToHostCmdBuffer{};

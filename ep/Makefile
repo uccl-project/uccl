@@ -51,7 +51,7 @@ SM ?= 90
 CXXFLAGS  := -O3 -std=c++17 -Wall -pthread -fPIC -fvisibility=hidden
 LDFLAGS := -lpthread -lglog -libverbs -lnl-3 -lnl-route-3 -Xlinker -rpath -Xlinker $(CUDA_PATH)/lib64
 NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread -fPIC -fvisibility=hidden" -ccbin /usr/bin/g++ --expt-relaxed-constexpr
-INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../include -I../thirdparty/DeepEP/csrc
+INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../include 
 
 CXXFLAGS  += $(EFA_CFLAGS) $(GH_CFLAGS)
 NVCCFLAGS += $(EFA_CFLAGS) $(GH_CFLAGS)

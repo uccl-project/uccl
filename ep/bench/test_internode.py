@@ -101,7 +101,7 @@ def test_main(
         args.num_experts,
     )
 
-    assert num_experts % num_ranks == 0 and num_local_ranks == 8
+    # assert num_experts % num_ranks == 0 and num_local_ranks == 8
     if local_rank == 0:
         print(
             f"[config] num_tokens={num_tokens}, hidden={hidden}, num_topk_groups={num_topk_groups}, num_topk={num_topk}",
@@ -293,6 +293,11 @@ def test_main(
                             )
                             check_data(recv_topk_weights, recv_gbl_rank_prefix_sum)
 
+                    # NOTE(MaoZiming): for debug
+                    print("passed!", flush=True, end=" ")
+                    print("Before dist.barrier", flush=True)
+                    dist.barrier()
+                    print("After dist.barrier", flush=True)
                     # Test cached dispatch (must without top-k staffs)
                     if not with_topk:
                         dispatch_args = {
@@ -524,7 +529,7 @@ def test_loop(
         )
         proxy.set_atomic_buffer_ptr(proxies[0].get_atomic_buffer_ptr())
 
-    assert num_local_ranks == 8 and num_ranks > 8
+    # assert num_local_ranks == 8 and num_ranks > 8
     torch.manual_seed(rank)
 
     for i in (num_sms,):

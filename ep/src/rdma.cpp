@@ -706,13 +706,15 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                 .GetImmData();
         ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
 #else
+      if (cmd.atomic_val > 0 || cmd.atomic_offset > 0) {
+        assert(cmd.barrier_id == 0);
+      }
       if (cmd.barrier_id != -1) {
-        printf("atomic_offset: %lu, atomic_val: %lu, bytes: %ld\n",
-               cmd.atomic_offset, cmd.atomic_val, cmd.bytes);
         uint32_t imm =
-            AtomicsImm::Pack(true, cmd.is_combine, cmd.atomic_val,
-                             cmd.atomic_offset, cmd.low_latency_buffer_idx)
+            AtomicsImm::Pack(true, false, cmd.atomic_val, cmd.atomic_offset,
+                             cmd.low_latency_buffer_idx)
                 .GetImmData();
+        assert(cmd.atomic_offset > 0 && cmd.atomic_val > 0);
 
         ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
       } else if (j + 1 == k) {
@@ -904,10 +906,6 @@ void local_process_completions(ProxyCtx& S,
             }
 #endif
           } else {
-            printf(
-                "Local thread %d: RDMA write completed (wr_id=%lu), "
-                "but not found in write_struct map\n",
-                thread_idx, wrid);
             assert(false && "wr_id not found in write_struct map");
           }
         }
@@ -923,10 +921,6 @@ void local_process_completions(ProxyCtx& S,
 #else
           uint64_t const wr_done = wc[i].wr_id;
           auto it = S.wr_id_to_wr_ids.find(wr_done);
-          printf(
-              "Local thread %d: RDMA write completed (wr_id=%lu), "
-              "it->second.size=%zu\n",
-              thread_idx, wr_done, it->second.size());
           if (it != S.wr_id_to_wr_ids.end()) {
             for (uint64_t sub_wr : it->second) {
               acked_wrs.insert(sub_wr);
@@ -1228,6 +1222,7 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
           }
         }
       } else if (ImmType::IsWrite(raw)) {
+        printf("Received write imm: 0x%x\n", raw);
 #ifdef USE_RECEIVER_BARRIER
         uint32_t imm = ntohl(cqe.imm_data);
         WriteImm wimm(imm);

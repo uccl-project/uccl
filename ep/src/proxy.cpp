@@ -438,11 +438,6 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
 
   for (auto wr_id : finished_copy) {
     if (acked_wrs_.find(wr_id) == acked_wrs_.end()) break;
-
-    // printf("[local_rank: %d] WR ID %lu completed and acked\n",
-    // cfg_.local_rank,
-    //        wr_id);
-
     // Decode ring buffer index and command index from unique_wr_id
     size_t rb_idx = (wr_id >> 32) & 0xFFFFFFFF;
     uint64_t cmd_idx = wr_id & 0xFFFFFFFF;
@@ -861,10 +856,10 @@ void Proxy::quiet_cq() {
 
 void Proxy::quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds) {
   assert(cmds.size() == 1 && "quiet size must be 1");
-  printf("[local_rank: %d] Quiet started on thread %d, wrs[0]=%lu\n",
+  printf("[local_rank: %d] Quiet started on thread %d, wr=%lu\n",
          cfg_.local_rank, cfg_.thread_idx, wrs[0]);
   quiet_cq();
-  printf("[local_rank: %d] Quiet completed on thread %d, wrs[0]=%lu\n",
+  printf("[local_rank: %d] Quiet completed on thread %d, wr=%lu\n",
          cfg_.local_rank, cfg_.thread_idx, wrs[0]);
   finished_wrs_.insert(wrs[0]);
   acked_wrs_.insert(wrs[0]);
@@ -1032,8 +1027,11 @@ void Proxy::send_barrier(uint64_t wr) {
   lb->arrived_mask.fetch_or(bit, std::memory_order_acq_rel);
   uint64_t cur_mask = lb->arrived_mask.load(std::memory_order_acquire);
 
-  printf("[local_rank:%d] barrier seq=%u announced (local), arrived=%llu\n",
-         cfg_.local_rank, ctx_.barrier_seq, (unsigned long long)cur_mask);
+  printf(
+      "[local_rank:%d, wr:%ld] barrier seq=%u announced (local), "
+      "arrived=%llu\n",
+      cfg_.local_rank, ctx_.barrier_wr, ctx_.barrier_seq,
+      (unsigned long long)cur_mask);
 }
 
 void Proxy::barrier_check() {
@@ -1121,8 +1119,10 @@ void Proxy::barrier_check() {
 
           acked_wrs_.insert(ctx_.barrier_wr);
           ctx_.barrier_inflight = false;
-          printf("[local_rank:%d] barrier seq=%u released (global leader)\n",
-                 cfg_.local_rank, seq);
+          printf(
+              "[local_rank:%d] barrier seq=%u released (global leader), "
+              "barrier_wr: %ld\n",
+              cfg_.local_rank, seq, ctx_.barrier_wr);
           return;
         }
       }
@@ -1139,8 +1139,10 @@ void Proxy::barrier_check() {
         // Complete WR
         acked_wrs_.insert(ctx_.barrier_wr);
         ctx_.barrier_inflight = false;
-        printf("[local_rank:%d] barrier seq=%u released (node leader)\n",
-               cfg_.local_rank, seq);
+        printf(
+            "[local_rank:%d] barrier seq=%u released (node leader), "
+            "barrier_wr: %ld\n",
+            cfg_.local_rank, seq, ctx_.barrier_wr);
       }
     }
     return;
@@ -1150,7 +1152,9 @@ void Proxy::barrier_check() {
   if (lb->release_seq[ctx_.local_rank].load(std::memory_order_acquire) == seq) {
     acked_wrs_.insert(ctx_.barrier_wr);
     ctx_.barrier_inflight = false;
-    printf("[local_rank:%d] barrier seq=%u released (local follower)\n",
-           cfg_.local_rank, seq);
+    printf(
+        "[local_rank:%d] barrier seq=%u released (local follower), barrier_wr: "
+        "%ld\n",
+        cfg_.local_rank, seq, ctx_.barrier_wr);
   }
 }

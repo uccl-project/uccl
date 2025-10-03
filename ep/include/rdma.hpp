@@ -45,9 +45,8 @@ struct PendingUpdate {
 
 struct ImmType {
   // Top-bit definitions
-  static constexpr uint32_t kAtomicsBit = 1u << 31;  // 1 = atomics
-  static constexpr uint32_t kCtrlBit = 1u << 30;     // 1 = control/barrier
-  // Write is the "default": [31]=0 and [30]=0
+  static constexpr uint32_t kAtomicsBit = 1u << 31;
+  static constexpr uint32_t kCtrlBit = 1u << 30;
 
   static inline bool IsAtomics(uint32_t imm) {
     return (imm & kAtomicsBit) != 0u;
@@ -119,36 +118,35 @@ class AtomicsImm {
 
 class WriteImm {
  public:
-  // Bit layout:
-  // [31]     reserved (0 for now)
-  // [30]     is_combine (1 bit)
-  // [29]     low_latency_buffer_idx (1 bit)
-  // [28:19]  expert_idx (10 bits)
-  // [18:12]  num_tokens (7 bits)
-  // [11:0]   my_rank (12 bits)
-  constexpr static int kRANK = 0;
-  constexpr static int kNUM_TOKENS = 12;
-  constexpr static int kEXPERT_IDX = 19;
-  constexpr static int kBUFFER_IDX = 29;
-  constexpr static int kIS_COMBINE = 30;
+  // Bit positions
+  static constexpr int kRANK = 0;         // 10 bits
+  static constexpr int kNUM_TOKENS = 10;  // 6 bits
+  static constexpr int kEXPERT_IDX = 16;  // 12 bits
+  static constexpr int kBUFFER_IDX = 28;  // 1 bit
+  static constexpr int kIS_COMBINE = 29;  // 1 bit
 
-  constexpr static uint32_t kRANK_MASK = 0xFFF;    // 12 bits
-  constexpr static uint32_t kTOKENS_MASK = 0x7F;   // 7 bits
-  constexpr static uint32_t kEXPERT_MASK = 0x3FF;  // 10 bits
+  // Masks
+  static constexpr uint32_t kRANK_MASK = 0x3FF;    // 10 bits
+  static constexpr uint32_t kTOKENS_MASK = 0x03F;  // 6 bits
+  static constexpr uint32_t kEXPERT_MASK = 0xFFF;  // 12 bits
 
-  WriteImm(uint32_t imm_data = 0) : imm_data_(imm_data) {}
+  explicit WriteImm(uint32_t imm_data = 0) : imm_data_(imm_data) {}
 
-  static WriteImm Pack(bool is_combine, uint32_t buffer_idx,
-                       uint32_t expert_idx, uint32_t num_tokens,
-                       uint32_t my_rank) {
+  static WriteImm Pack(bool is_combine,
+                       uint32_t buffer_idx,  // 0/1
+                       uint32_t expert_idx,  // 0..4095
+                       uint32_t num_tokens,  // 0..63
+                       uint32_t my_rank) {   // 0..1023
     uint32_t imm = ((is_combine & 0x1u) << kIS_COMBINE) |
                    ((buffer_idx & 0x1u) << kBUFFER_IDX) |
                    ((expert_idx & kEXPERT_MASK) << kEXPERT_IDX) |
                    ((num_tokens & kTOKENS_MASK) << kNUM_TOKENS) |
                    (my_rank & kRANK_MASK);
+    // Top bits [31:30] remain 0 → write type
     return WriteImm(imm);
   }
 
+  // Getters
   inline bool IsCombine() const { return (imm_data_ >> kIS_COMBINE) & 0x1u; }
   inline uint32_t GetBufferIdx() const {
     return (imm_data_ >> kBUFFER_IDX) & 0x1u;
@@ -161,9 +159,10 @@ class WriteImm {
   }
   inline uint32_t GetRank() const { return imm_data_ & kRANK_MASK; }
 
+  // Setters
   inline void SetCombine(bool c) {
-    imm_data_ =
-        (imm_data_ & ~(1u << kIS_COMBINE)) | ((c & 0x1u) << kIS_COMBINE);
+    imm_data_ = (imm_data_ & ~(1u << kIS_COMBINE)) |
+                ((uint32_t(c) & 0x1u) << kIS_COMBINE);
   }
   inline void SetBufferIdx(uint32_t idx) {
     imm_data_ =
@@ -188,18 +187,16 @@ class WriteImm {
 };
 
 struct BarrierImm {
-  // Layout: [31]=0(non-atomic), [30]=1(barrier ctl), [29]=ACK?, [28:16]=SEQ
-  // (13b), [15:0]=SRC_RANK
-  static constexpr uint32_t kAtomicBit = 1u << 31;
+  // [31]=0 (non-atomic), [30]=1 (control), [29]=ACK, [28:16]=SEQ (13b),
+  // [15:0]=SRC_RANK
   static constexpr uint32_t kCtrlBit = 1u << 30;
   static constexpr uint32_t kAckBit = 1u << 29;
 
   static inline bool IsAck(uint32_t imm) { return (imm & kAckBit) != 0u; }
 
   static inline uint32_t Pack(bool ack, uint16_t seq, uint16_t src_rank) {
-    // seq kept in 13 bits; OK for practical purposes
-    return kCtrlBit | (ack ? kAckBit : 0u) | ((uint32_t)(seq & 0x1FFFu) << 16) |
-           (uint32_t)src_rank;
+    return kCtrlBit | (ack ? kAckBit : 0u) | ((uint32_t(seq & 0x1FFFu) << 16)) |
+           uint32_t(src_rank);
   }
 
   static inline uint16_t Seq(uint32_t imm) { return (imm >> 16) & 0x1FFFu; }

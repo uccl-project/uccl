@@ -14,9 +14,6 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
 
   // Allocate multiple ring buffers for this proxy
   ring_buffer_addrs_.reserve(kRingsPerProxy);
-  printf("Allocating %u ring buffers for thread %d\n", kRingsPerProxy,
-         thread_idx);
-
   for (size_t i = 0; i < kRingsPerProxy; ++i) {
     uintptr_t ring_addr = alloc_cmd_ring();
     ring_buffer_addrs_.push_back(ring_addr);
