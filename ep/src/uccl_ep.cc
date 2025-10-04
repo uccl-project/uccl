@@ -530,7 +530,8 @@ class Buffer {
           comm_stream,
           config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4),
                                            num_ranks),
-          num_nvl_bytes, true, low_latency_mode, d_ring_addrs, num_ring_addrs);
+          num_nvl_bytes, true, low_latency_mode, d_ring_addrs, num_ring_addrs,
+          atomic_buffer_ptr);
       printf("Cached notify done\n");
     } else {
       rdma_channel_prefix_matrix =
@@ -564,7 +565,8 @@ class Buffer {
           comm_stream,
           config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4),
                                            num_ranks),
-          num_nvl_bytes, low_latency_mode, d_ring_addrs, num_ring_addrs);
+          num_nvl_bytes, low_latency_mode, d_ring_addrs, num_ring_addrs,
+          atomic_buffer_ptr);
 
       printf("Normal notify done\n");
       // Synchronize total received tokens and tokens per expert
@@ -842,7 +844,8 @@ class Buffer {
         buffer_ptrs_gpu, config.num_max_nvl_chunked_recv_tokens,
         barrier_signal_ptrs_gpu, rank, comm_stream,
         config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4), num_ranks),
-        num_nvl_bytes, false, low_latency_mode, d_ring_addrs, num_ring_addrs);
+        num_nvl_bytes, false, low_latency_mode, d_ring_addrs, num_ring_addrs,
+        atomic_buffer_ptr);
 
     // Assign bias pointers
     auto bias_opts =

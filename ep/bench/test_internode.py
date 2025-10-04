@@ -359,10 +359,10 @@ def test_main(
                     combine_bf16_nvl_send_bytes = dispatch_bf16_nvl_recv_bytes
                     combine_bf16_rdma_recv_bytes = dispatch_bf16_rdma_send_bytes
 
-                    print("Combine passed!", flush=True, end=" ")
-                    print("Combine Before dist.barrier", flush=True)
-                    dist.barrier()
-                    print("Combine After dist.barrier", flush=True)
+                    # print("Combine passed!", flush=True, end=" ")
+                    # print("Combine Before dist.barrier", flush=True)
+                    # dist.barrier()
+                    # print("Combine After dist.barrier", flush=True)
 
     if local_rank == 0:
         print("", flush=True)
@@ -384,6 +384,11 @@ def test_main(
         )
         for nvl_chunk_size in range(4, 45, 4):
             for rdma_chunk_size in range(4, 33, 4):
+                if local_rank == 0:
+                    print(
+                        f"[tuning] Testing dispatch with SMs {num_sms}, NVL chunk {nvl_chunk_size}, RDMA chunk {rdma_chunk_size} ...",
+                        flush=True,
+                    )
                 config = Config(
                     num_sms,
                     nvl_chunk_size,
@@ -451,6 +456,11 @@ def test_main(
     best_time, best_results = 1e10, None
     for nvl_chunk_size in range(1, 8, 1):
         for rdma_chunk_size in range(12 if num_nodes == 2 else 8, 33, 4):
+            if local_rank == 0:
+                print(
+                    f"[tuning] Testing combine with SMs {num_sms}, NVL chunk {nvl_chunk_size}, RDMA chunk {rdma_chunk_size} ...",
+                    flush=True,
+                )
             config = Config(
                 num_sms,
                 nvl_chunk_size,
