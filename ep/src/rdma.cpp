@@ -1452,9 +1452,9 @@ void post_atomic_operations(ProxyCtx& S,
       int v = static_cast<int>(cmd.value);
       if (v < -16384 || v > 16383) {
         fprintf(stderr,
-                "[EFA] value=%d won't fit in 15 bits; "
+                "[EFA] value=%d (cmd.value: %lu) won't fit in 15 bits; "
                 "use an inline payload scheme instead.\n",
-                v);
+                v, (unsigned long)cmd.value);
         std::abort();
       }
       uint32_t offset = static_cast<int64_t>(cmd.req_rptr);

@@ -55,7 +55,7 @@
 #define kAtomicMask 0x0000FFFFFFFFFFFFULL
 #define kBarrierWrTag 0xbaba000000000000ULL
 #define kBarrierMask 0x0000FFFFFFFFFFFFULL
-#define kPrintCycleInterval 1000000000ULL
+#define kPrintCycleInterval 5000000000ULL
 // Base TCP port for Proxy barrier rendezvous (rank0 server)
 #define TCP_PORT 18515
 #define MAX_RETRIES 100

@@ -189,14 +189,6 @@ def test_main(
         print(f"[layout] Kernel performance: {t * 1000:.3f} ms", flush=True)
         print("", flush=True)
 
-    if rank == 0:
-        num_channels = num_sms // 2
-        for ch in range(num_channels):
-            counts = expected_per_dst_for_channel(
-                rdma_rank_idx, num_nodes, num_tokens, num_channels, ch
-            )
-            print(f"[host] channel {ch}: per-dst RDMA counts = {counts}", flush=True)
-
     group.barrier()
     time.sleep(1)
 
@@ -496,7 +488,7 @@ def test_loop(
     if args.test_ll_compatibility:
         ll_num_tokens, ll_hidden, ll_num_experts, ll_num_topk = 16, 5120, 256, 9
 
-    num_sms = 2
+    num_sms = 24
     num_qps_per_rank = max(
         num_sms, ll_num_experts // num_ranks if args.test_ll_compatibility else 0
     )

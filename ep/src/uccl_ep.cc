@@ -596,6 +596,17 @@ class Buffer {
           throw std::runtime_error("DeepEP error: timeout (dispatch CPU)");
         }
       }
+
+      if (rank % 8 == 0) {
+        printf("[verify] Rank %d ready after notify_dispatch\n", rank);
+        printf("          num_recv_tokens=%d, num_rdma_recv_tokens=%d\n",
+               num_recv_tokens, num_rdma_recv_tokens);
+        printf("          per-expert counts: ");
+        for (int i = 0; i < num_local_experts; ++i)
+          printf("%d ", moe_recv_expert_counter[i]);
+        printf("\n");
+      }
+
       num_recv_tokens_per_expert_list = std::vector<int>(
           moe_recv_expert_counter, moe_recv_expert_counter + num_local_experts);
     }
@@ -849,6 +860,8 @@ class Buffer {
 
     // Launch data combine
     auto combined_x = torch::empty({num_combined_tokens, hidden}, x.options());
+    printf("Launching internode combine kernel\n");
+
     uccl::internode::combine(
         at::cuda::ScalarTypeToCudaDataType(x.scalar_type()),
         combined_x.data_ptr(), combined_topk_weights_ptr,
@@ -865,6 +878,7 @@ class Buffer {
         config.num_max_nvl_chunked_recv_tokens, rank, num_ranks, comm_stream,
         num_channels, low_latency_mode, d_ring_addrs, num_ring_addrs,
         atomic_buffer_ptr);
+    printf("Launching internode combine kernel\n");
 
     // Wait streams
     std::optional<EventHandle> event;

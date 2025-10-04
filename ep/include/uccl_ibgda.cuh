@@ -103,6 +103,14 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     uint64_t const* ring_addrs = nullptr, int num_ring_addrs = 0,
     bool is_combine = true, int low_latency_buffer_idx = 0,
     int barrier_id = -1) {
+  if (value > 16383 || value < -16384) {
+    printf(
+        "[nvshmemi_ibgda_amo_nonfetch_add] Warning: value=%d won't fit in 15 "
+        "bits\n",
+        value);
+    trap();
+  }
+
   if (is_local_copy) {
     atomicAdd(reinterpret_cast<unsigned long long*>(rptr),
               static_cast<unsigned long long>(value));
@@ -277,11 +285,11 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
       cmd.cmd = 1;  // dummy valid cmd.
       cmd.cmd_type = CmdType::BARRIER;
       rb->atomic_set_and_commit(cmd, &slot);
-      printf("[nvl_rank: %d] barrier posted slot %lu\n", nvl_rank,
-             (unsigned long)slot);
+      // printf("[nvl_rank: %d] barrier posted slot %lu\n", nvl_rank,
+      //        (unsigned long)slot);
       wait_until_cmd_consumed(rb, slot, nvl_rank, CmdType::BARRIER);
-      printf("[nvl_rank: %d] barrier completed slot %lu\n", nvl_rank,
-             (unsigned long)slot);
+      // printf("[nvl_rank: %d] barrier completed slot %lu\n", nvl_rank,
+      //        (unsigned long)slot);
       break;
     }
     if ((clock64() - last_print) > kPrintCycleInterval) {
