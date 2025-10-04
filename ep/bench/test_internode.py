@@ -286,8 +286,8 @@ def test_main(
                             check_data(recv_topk_weights, recv_gbl_rank_prefix_sum)
 
                     # NOTE(MaoZiming): for debug
-                    print("passed!", flush=True, end=" ")
-                    print("Before dist.barrier", flush=True)
+                    print("dispatch passed!", flush=True, end=" ")
+                    print("dispatch Before dist.barrier", flush=True)
                     dist.barrier()
                     print("After dist.barrier", flush=True)
                     # Test cached dispatch (must without top-k staffs)
@@ -359,8 +359,11 @@ def test_main(
                     combine_bf16_nvl_send_bytes = dispatch_bf16_nvl_recv_bytes
                     combine_bf16_rdma_recv_bytes = dispatch_bf16_rdma_send_bytes
 
-                    if local_rank == 0:
-                        print(" passed", flush=True)
+                    print("Combine passed!", flush=True, end=" ")
+                    print("Combine Before dist.barrier", flush=True)
+                    dist.barrier()
+                    print("Combine After dist.barrier", flush=True)
+
     if local_rank == 0:
         print("", flush=True)
 

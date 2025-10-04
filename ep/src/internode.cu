@@ -984,8 +984,6 @@ __global__ void __launch_bounds__(
               translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank);
           // NOTE(MaoZiming): this only does local atomic add. For remote
           // counter update, it is piggyback on the previous write.
-          printf("num_tokens_to_issue=%d dst_rdma_rank=%d dst_rank=%d\n",
-                 num_tokens_to_issue, dst_rdma_rank, dst_rank);
           if (num_tokens_to_issue > 16383 || num_tokens_to_issue < -16384) {
             printf(
                 "[kRDMASenderCoordinator] Warning: num_tokens_to_issue=%d "
@@ -1569,7 +1567,7 @@ __global__ void cached_notify(
 
   auto nvl_rank = rank % NUM_MAX_NVL_PEERS;
   auto num_rdma_ranks = num_ranks / NUM_MAX_NVL_PEERS;
-  // auto rdma_rank = rank / NUM_MAX_NVL_PEERS;
+  auto rdma_rank = rank / NUM_MAX_NVL_PEERS;
 
   // Using two SMs, which clean the RDMA/NVL buffer respectively
   if (sm_id == 0) {
@@ -1617,7 +1615,7 @@ __global__ void cached_notify(
                              token_start_idx, token_end_idx);
 
       // NOTES: `1 << 25` is a heuristic large number
-      int last_head = 1 << 25;
+      int last_head = 16383;  // NOTE(MaoZiming): changed
       for (int token_idx = token_end_idx - 1; token_idx >= token_start_idx;
            --token_idx) {
         auto current_head =
@@ -1629,6 +1627,8 @@ __global__ void cached_notify(
           last_head = current_head;
         }
       }
+      printf("[cached_notify] lane_id: %d, warp_id: %d, last_head: %d\n",
+             lane_id, warp_id, last_head);
     }
   } else {
     if (is_cached_dispatch) return;
@@ -1673,7 +1673,7 @@ __global__ void cached_notify(
         token_start_idx += shift, token_end_idx += shift;
 
         // NOTES: `1 << 25` is a heuristic large number
-        int last_head = 1 << 25;
+        int last_head = 16383;  // NOTE(MaoZiming): changed
         for (int batch_end_idx = token_end_idx; batch_end_idx > token_start_idx;
              batch_end_idx -= num_tokens_per_batch) {
           auto batch_start_idx =
@@ -2353,9 +2353,6 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
           if (lane_id < NUM_MAX_NVL_PEERS) {
             expected_head = ld_nc_global(
                 combined_nvl_head + token_idx * NUM_MAX_NVL_PEERS + lane_id);
-            expected_head < 0
-                ? (forwarder_nvl_head[warp_id][lane_id] = -expected_head - 1)
-                : (forwarder_nvl_head[warp_id][lane_id] = expected_head);
           }
 
           // Wait lanes to be ready
@@ -2445,7 +2442,13 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
           if (lane_id == 0) {
             int dst_rank = translate_dst_rdma_rank<kLowLatencyMode>(
                 dst_rdma_rank, nvl_rank);
-            printf("num_chunked_tokens: %d\n", num_chunked_tokens);
+            if (num_chunked_tokens > 16383 || num_chunked_tokens < -16383) {
+              printf(
+                  "[kNVLAndRDMAFOrwarder] Error: invalid num_chunked_tokens "
+                  "%d\n",
+                  num_chunked_tokens);
+              trap();
+            }
             uccl::nvshmemi_ibgda_amo_nonfetch_add(
                 reinterpret_cast<uint64_t>(rdma_channel_tail.buffer(rdma_rank)),
                 reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
@@ -2487,6 +2490,9 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
           (expected_head < 0)
               ? (rdma_receiver_rdma_head[warp_id][lane_id] = -expected_head - 1)
               : (rdma_receiver_rdma_head[warp_id][lane_id] = expected_head);
+
+          printf("token_idx: %ld, lane_id: %d, expected_head: %d\n", token_idx,
+                 lane_id, expected_head);
         }
 
         // Wait lanes to be ready
@@ -2574,6 +2580,15 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
               lane_id < kNumRDMARanks) {
             int dst_rank = translate_dst_rdma_rank<kLowLatencyMode>(
                 dst_rdma_rank, nvl_rank);
+
+            if (min_head - last_rdma_head > 16383 ||
+                min_head - last_rdma_head < -16383) {
+              printf(
+                  "[kRDMAReceiver] Error: invalid min_head - last_rdma_head "
+                  "%d, min_head: %d, last_rdma_head: %d\n",
+                  min_head - last_rdma_head, min_head, last_rdma_head);
+              trap();
+            }
             uccl::nvshmemi_ibgda_amo_nonfetch_add(
                 reinterpret_cast<uint64_t>(rdma_channel_head.buffer(rdma_rank)),
                 reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),

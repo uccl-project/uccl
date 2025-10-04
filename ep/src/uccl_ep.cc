@@ -857,10 +857,14 @@ class Buffer {
                        bias.size(1) == hidden);
         bias_ptrs[i] = bias.data_ptr();
       }
+    // NOTE(MaoZiming): new
+    printf("combine before sync\n");
+    CUDA_CHECK(cudaStreamSynchronize(comm_stream));
+    printf("combine after sync\n");
 
     // Launch data combine
     auto combined_x = torch::empty({num_combined_tokens, hidden}, x.options());
-    printf("Launching internode combine kernel\n");
+    printf("Launching internode combine kernel.\n");
 
     uccl::internode::combine(
         at::cuda::ScalarTypeToCudaDataType(x.scalar_type()),
