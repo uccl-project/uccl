@@ -677,30 +677,17 @@ void Proxy::post_gpu_commands_mixed(
 #ifdef USE_SENDER_BARRIER
       int value;
       int expected_value;
-      if (cmds_to_post[i].barrier_id != -1) {
-        value = 1;
-        expected_value = ctx_.normal_sent_counter.Get(
-            {cmds_to_post[i].barrier_id, cmds_to_post[i].dst_rank});
-        printf("barrier_id: %d, expected_value: %d, value: %d\n",
-               cmds_to_post[i].barrier_id, expected_value, value);
-      } else {
-        expected_value = 1;
-        value = 1;
-      }
-#ifndef USE_NORMAL_MODE
+      expected_value = 1;
+      value = 1;
       int expert_idx;
       size_t new_index;
 
-      if (cmds_to_post[i].barrier_id == -1) {
-        value = cmds_to_post[i].value;
-        uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
-        uint32_t new_offset =
-            offset - cmds_to_post[i].low_latency_buffer_idx *
-                         align<size_t>(cfg_.num_experts * sizeof(int), 128);
-        new_index = new_offset / sizeof(int);
-      } else {
-        value = 1;
-      }
+      value = cmds_to_post[i].value;
+      uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
+      uint32_t new_offset =
+          offset - cmds_to_post[i].low_latency_buffer_idx *
+                       align<size_t>(cfg_.num_experts * sizeof(int), 128);
+      new_index = new_offset / sizeof(int);
 
       if (cmds_to_post[i].is_combine) {
         expert_idx = new_index;
@@ -714,7 +701,6 @@ void Proxy::post_gpu_commands_mixed(
              cmds_to_post[i].dst_rank});
         value = -value - 1;
       }
-#endif
       if (value != expected_value) {
         postponed_atomics_.push_back(cmds_to_post[i]);
         postponed_wr_ids_.push_back(wrs_to_post[i]);
@@ -726,11 +712,6 @@ void Proxy::post_gpu_commands_mixed(
       atomic_cmds.push_back(cmds_to_post[i]);
 
 #ifdef USE_SENDER_BARRIER
-      if (cmds_to_post[i].barrier_id != -1) {
-        ctx_.normal_sent_counter.Reset(
-            {cmds_to_post[i].barrier_id, cmds_to_post[i].dst_rank});
-      }
-#ifndef USE_NORMAL_MODE
       if (cmds_to_post[i].is_combine) {
         ctx_.combine_sent_counter.Reset({cmds_to_post[i].low_latency_buffer_idx,
                                          expert_idx, cmds_to_post[i].dst_rank});
@@ -739,7 +720,6 @@ void Proxy::post_gpu_commands_mixed(
             {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
              cmds_to_post[i].dst_rank});
       }
-#endif
 #endif
     } else if (cmds_to_post[i].cmd_type == CmdType::WRITE) {
       rdma_wrs.push_back(wrs_to_post[i]);

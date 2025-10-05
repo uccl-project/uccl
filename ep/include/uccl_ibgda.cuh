@@ -24,7 +24,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     uint64_t req_rptr, uint64_t req_lptr, size_t bytes, int dst_rank,
     int expert_idx, int lane_id, int message_idx, uint64_t const* ring_addrs,
     int num_ring_addrs, bool is_combine, int low_latency_buffer_idx = 0,
-    int barrier_id = -1, uint64_t atomic_offset = 0, uint64_t atomic_val = 0) {
+    uint64_t atomic_offset = 0, uint64_t atomic_val = 0) {
   // NOTE(MaoZiming): different from the nvshmemi_ibgda_put_nbi_warp in
   // ibgda_device.cuh, we don't do warp-cooperation.
   if (lane_id != 0) return;
@@ -73,7 +73,6 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       cmd.message_idx = message_idx;
       cmd.is_combine = is_combine;
       cmd.low_latency_buffer_idx = low_latency_buffer_idx;
-      cmd.barrier_id = barrier_id;
       cmd.atomic_offset = atomic_offset;
       cmd.atomic_val = atomic_val;
       rb->atomic_set_and_commit(cmd, &slot);
@@ -98,7 +97,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     int warp_id, bool is_local_copy = false,
     uint64_t const* ring_addrs = nullptr, int num_ring_addrs = 0,
     bool is_combine = true, int low_latency_buffer_idx = 0,
-    int barrier_id = -1) {
+    bool skip_remote = false) {
   if (value > 16383 || value < -16384) {
     printf(
         "[nvshmemi_ibgda_amo_nonfetch_add] Warning: value=%d won't fit in 15 "
@@ -111,7 +110,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     atomicAdd(reinterpret_cast<unsigned long long*>(rptr),
               static_cast<unsigned long long>(value));
   } else {
-    if (barrier_id != -1) {
+    if (skip_remote) {
       return;
     }
     rptr -= atomic_base_addr;
@@ -149,7 +148,6 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
         cmd.is_combine = is_combine;
         cmd.req_rptr = rptr;
         cmd.low_latency_buffer_idx = low_latency_buffer_idx;
-        cmd.barrier_id = barrier_id;
         rb->atomic_set_and_commit(cmd, &slot);
         break;
       } else {

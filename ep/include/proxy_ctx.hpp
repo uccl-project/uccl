@@ -32,7 +32,6 @@ struct WriteStruct {
   int dst_rank;
   bool is_combine;
   int low_latency_buffer_idx;
-  int is_normal;
 };
 
 struct ProxyCtx {

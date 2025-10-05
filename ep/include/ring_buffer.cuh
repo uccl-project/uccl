@@ -38,8 +38,6 @@ struct TransferCmd {
   bool is_combine;
   int low_latency_buffer_idx;
 
-  int barrier_id;
-
   uint64_t atomic_offset;
   uint64_t atomic_val;
 };

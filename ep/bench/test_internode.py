@@ -60,27 +60,6 @@ except ImportError as exc:
     raise
 
 
-# Paste inside test_main, after you compute rdma_rank_idx / inplace_unique
-def channel_token_range(num_tokens, num_channels, channel_id):
-    # matches typical get_channel_task_range partitioning
-    start = (num_tokens * channel_id) // num_channels
-    end = (num_tokens * (channel_id + 1)) // num_channels
-    return start, end
-
-
-def expected_per_dst_for_channel(
-    rdma_rank_idx, num_nodes, num_tokens, num_channels, channel_id
-):
-    start, end = channel_token_range(num_tokens, num_channels, channel_id)
-    # Does token t go to dst d?
-    # rdma_rank_idx[t] holds up to num_topk entries in 0..num_nodes-1 or -1
-    token_goes_to = [
-        (rdma_rank_idx == d).any(dim=1) for d in range(num_nodes)
-    ]  # list of [num_tokens] bool
-    per_dst_counts = [int(mask[start:end].sum().item()) for mask in token_goes_to]
-    return per_dst_counts  # length = num_nodes
-
-
 # noinspection PyShadowingNames
 def test_main(
     args: argparse.Namespace,
@@ -101,7 +80,7 @@ def test_main(
         args.num_experts,
     )
 
-    # assert num_experts % num_ranks == 0 and num_local_ranks == 8
+    assert num_experts % num_ranks == 0 and num_local_ranks == 8
     if local_rank == 0:
         print(
             f"[config] num_tokens={num_tokens}, hidden={hidden}, num_topk_groups={num_topk_groups}, num_topk={num_topk}",
@@ -188,7 +167,6 @@ def test_main(
     if local_rank == 0:
         print(f"[layout] Kernel performance: {t * 1000:.3f} ms", flush=True)
         print("", flush=True)
-
     group.barrier()
     time.sleep(1)
 
@@ -512,7 +490,7 @@ def test_loop(
         )
         proxy.set_atomic_buffer_ptr(proxies[0].get_atomic_buffer_ptr())
 
-    # assert num_local_ranks == 8 and num_ranks > 8
+    assert num_local_ranks == 8 and num_ranks > 8
     torch.manual_seed(rank)
 
     for i in (num_sms,):

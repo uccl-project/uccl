@@ -695,9 +695,9 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         }
 #ifdef USE_SENDER_BARRIER
         // printf("wr_id: %d inserted into map\n", (int)qpx->wr_id);
-        S.wr_id_to_write_struct[qpx->wr_id] = {
-            cmd.expert_idx, dst_rank, cmd.is_combine,
-            cmd.low_latency_buffer_idx, cmd.barrier_id};
+        S.wr_id_to_write_struct[qpx->wr_id] = {cmd.expert_idx, dst_rank,
+                                               cmd.is_combine,
+                                               cmd.low_latency_buffer_idx};
 #endif
 #ifdef USE_RECEIVER_BARRIER
         uint32_t imm =
@@ -706,10 +706,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                 .GetImmData();
         ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
 #else
-      if (cmd.atomic_val > 0 || cmd.atomic_offset > 0) {
-        assert(cmd.barrier_id == 0);
-      }
-      if (cmd.barrier_id != -1) {
+      if (cmd.atomic_offset > 0 && cmd.atomic_val > 0) {
         int v = static_cast<int>(cmd.atomic_val);
         if (v < -16384 || v > 16383) {
           fprintf(stderr, "[EFA] atomic value=%d won't fit in 15 bits\n", v);
@@ -719,9 +716,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
             AtomicsImm::Pack(true, false, cmd.atomic_val, cmd.atomic_offset,
                              cmd.low_latency_buffer_idx)
                 .GetImmData();
-        assert(cmd.barrier_id == 0);
-        assert(cmd.atomic_offset > 0 && cmd.atomic_val > 0);
-
         ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
       } else if (j + 1 == k) {
         uint32_t imm =

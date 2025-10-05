@@ -917,7 +917,7 @@ __global__ void __launch_bounds__(
               src_ptr, num_bytes_per_msg,
               translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank),
               channel_id,  // NOTE(MaoZiming): use channel_id for rb.
-              lane_id, 0, ring_addrs, num_ring_addrs, false, -1, 0,
+              lane_id, 0, ring_addrs, num_ring_addrs, false, -1,
               reinterpret_cast<uint64_t>(rdma_channel_tail.buffer(rdma_rank)) -
                   reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
               num_tokens_to_issue);
@@ -948,7 +948,7 @@ __global__ void __launch_bounds__(
               num_tokens_to_issue, dst_rank,
               channel_id,  // NOTE(MaoZiming): use channel_id for rb.
               dst_rdma_rank == rdma_rank, ring_addrs, num_ring_addrs, false, -1,
-              0);
+              true);
         }
         __syncwarp();
       }
@@ -2327,7 +2327,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                 translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank,
                                                          nvl_rank),
                 channel_id,  // NOTE(MaoZiming): use channel_id for rb.
-                lane_id, 0, ring_addrs, num_ring_addrs, false, -1, 0,
+                lane_id, 0, ring_addrs, num_ring_addrs, false, -1,
                 reinterpret_cast<uint64_t>(
                     rdma_channel_tail.buffer(rdma_rank)) -
                     reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
@@ -2355,7 +2355,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                 num_chunked_tokens, dst_rank,
                 channel_id,  // NOTE(MaoZiming): use warp_id for rb.
                 dst_rdma_rank == rdma_rank, ring_addrs, num_ring_addrs, false,
-                -1, 0);
+                -1, true);
           }
         }
       }

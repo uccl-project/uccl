@@ -84,6 +84,7 @@ def init_dist_under_torchrun(local_rank: int, num_local_ranks: int):
     torch.set_default_dtype(torch.bfloat16)
     torch.set_default_device(f"cuda:{local_rank}")
     torch.cuda.set_device(local_rank)
+
     return (
         dist.get_rank(),
         dist.get_world_size(),
@@ -462,6 +463,7 @@ def initialize_uccl(
     )
     peers_meta_list = [rank2meta[r] for r in range(num_ranks)]
     peer_ip = rank2meta[(rank + 1) % num_ranks]["ip"]
+
     for i in range(ep.get_num_proxy_threads()):
         proxy = ep.Proxy(
             thread_idx=i,
