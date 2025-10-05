@@ -1466,7 +1466,7 @@ __global__ void cached_notify(
                              token_start_idx, token_end_idx);
 
       // NOTES: `1 << 25` is a heuristic large number
-      int last_head = 1 << 25;  // NOTE(MaoZiming): changeds
+      int last_head = 1 << 25;
       for (int token_idx = token_end_idx - 1; token_idx >= token_start_idx;
            --token_idx) {
         auto current_head =
@@ -1522,7 +1522,7 @@ __global__ void cached_notify(
         token_start_idx += shift, token_end_idx += shift;
 
         // NOTES: `1 << 25` is a heuristic large number
-        int last_head = 1 << 25;  // NOTE(MaoZiming): changed
+        int last_head = 1 << 25;
         for (int batch_end_idx = token_end_idx; batch_end_idx > token_start_idx;
              batch_end_idx -= num_tokens_per_batch) {
           auto batch_start_idx =
@@ -2249,19 +2249,6 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
               nullptr, nullptr, num_max_nvl_chunked_recv_tokens_per_rdma,
               get_addr_fn, recv_tw_fn, smem_ptr, tma_phase);
 
-          __syncwarp();
-          if (lane_id == 0) {
-            auto* meta_ptr = reinterpret_cast<SourceMeta*>(
-                static_cast<int8_t*>(shifted) + hidden_bytes);
-            SourceMeta sm;
-            sm.src_rdma_rank = rdma_rank;
-            sm.is_token_in_nvl_rank_bits = token_idx + 1;
-            st_na_global(meta_ptr, sm);
-            __threadfence_system();
-            st_release_sys_global(&meta_ptr->is_token_in_nvl_rank_bits,
-                                  sm.is_token_in_nvl_rank_bits);
-          }
-
           // Update head
           if (lane_id < NUM_MAX_NVL_PEERS)
             expected_head < 0
@@ -2362,30 +2349,6 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
             trap();
           }
         }
-        // READY-GUARD: ensure the RDMA slot's payload/meta are visible
-        if (expected_head >= 0 && lane_id < kNumRDMARanks) {
-          int slot = expected_head % num_max_rdma_chunked_recv_tokens;
-          auto* meta = reinterpret_cast<SourceMeta*>(
-              rdma_channel_data.recv_buffer(lane_id) +
-              slot * num_bytes_per_token + hidden_bytes);
-
-          int expect = expected_head + 1;
-          auto t0 = clock64();
-          for (;;) {
-            int seen = ld_acquire_sys_global(&meta->is_token_in_nvl_rank_bits);
-            if (seen == expect) break;
-            if (clock64() - t0 > NUM_TIMEOUT_CYCLES) {
-              printf(
-                  "DeepEP combine RDMA recv ready-guard timeout, channel:%d "
-                  "rdma:%d nvl:%d src_rdma:%d token:%ld expected:%d slot:%d\n",
-                  channel_id, rdma_rank, nvl_rank, lane_id, token_idx, expect,
-                  slot);
-              trap();
-            }
-            __nanosleep(NUM_WAIT_NANOSECONDS);
-          }
-        }
-
         __syncwarp();
 
         // Combine current token
