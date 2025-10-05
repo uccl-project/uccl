@@ -79,13 +79,14 @@ torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> ben
 
 Notes: 
 * You may consider exporting `GLOO_SOCKET_IFNAME=xxx` if triggering Gloo connectFullMesh failure.
-* **You must first import `torch` before importing `uccl.p2p` for AMD GPUs**, otherwise, `RuntimeError: No HIP GPUs are available` will occur. We guess this is because torch does some extra init for AMD GPUs, in order for Pybind-C++ code to use AMD GPUs. 
+* You may consider exporting `NCCL_IB_GID_INDEX=3` if your cluster requires it for NCCL to run.
+* **You must first import `torch` before importing `uccl.p2p` for AMD GPUs**, otherwise, `RuntimeError: No HIP GPUs are available` will occur. We guess this is because torch does some extra init for AMD GPUs, in order for Pybind-C++ code to work. 
 * To benchmark dual direction transfer, you can add `--dual` with the same commands as above. 
+* To benchmark intra-node transfer via CUDA/HIP IPC, `torchrun --nnodes=1 --nproc_per_node=2 benchmark_uccl.py --ipc`.
 * To benchmark one-sided READ transfer, you can run `benchmark_uccl_read.py`.
 * To benchmark one-sided WRITE transfer, you can run `benchmark_uccl_write.py`.
 * To benchmark UCCL copy-only collectives, you can run `benchmark_uccl_collective.py`.
-    * To benchmark UCCL collectives over CUDA/HIP IPC, `torchrun --nnodes=1 --nproc_per_node=2 benchmark_uccl_collective.py`
-* To benchmark UCCL intra-node transfer via CUDA/HIP IPC, you can run the above on the same node with `--ipc --local-gpu-idx=0/1`.
+* To benchmark UCCL copy-only collectives over CUDA/HIP IPC, `torchrun --nnodes=1 --nproc_per_node=2 benchmark_uccl_collective.py`
 
 ### Running NCCL
 

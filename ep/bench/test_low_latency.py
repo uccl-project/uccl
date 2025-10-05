@@ -357,7 +357,7 @@ def test_main(
     # Dispatch + combine testing
     avg_t, min_t, max_t = bench(partial(test_func, return_recv_hook=False))
     print(
-        f"[rank {rank}] Dispatch + combine bandwidth: {(num_dispatch_comm_bytes + num_combine_comm_bytes) / 1e6 / avg_t:.2f} MB/s, "
+        f"[rank {rank}] Dispatch + combine bandwidth: {(num_dispatch_comm_bytes + num_combine_comm_bytes) / 1e9 / avg_t:.2f} GB/s, "
         f"avg_t={avg_t * 1e6:.2f} us, min_t={min_t * 1e6:.2f} us, max_t={max_t * 1e6:.2f} us",
         flush=True,
     )
@@ -374,8 +374,8 @@ def test_main(
         )
         if not return_recv_hook:
             print(
-                f"[rank {rank}] Dispatch bandwidth: {num_dispatch_comm_bytes / 1e6 / dispatch_t:.2f} MB/s, avg_t={dispatch_t * 1e6:.2f} us | "
-                f"Combine bandwidth: {num_combine_comm_bytes / 1e6 / combine_t:.2f} MB/s, avg_t={combine_t * 1e6:.2f} us",
+                f"[rank {rank}] Dispatch bandwidth: {num_dispatch_comm_bytes / 1e9 / dispatch_t:.2f} GB/s, avg_t={dispatch_t * 1e6:.2f} us | "
+                f"Combine bandwidth: {num_combine_comm_bytes / 1e9 / combine_t:.2f} GB/s, avg_t={combine_t * 1e6:.2f} us",
                 flush=True,
             )
         else:
