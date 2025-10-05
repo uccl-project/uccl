@@ -745,6 +745,10 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                   "(map=%p)\n",
                   thread_idx, expert_tail_wr, (void*)&S.wr_id_to_wr_ids);
           std::abort();
+        } else {
+          for (auto const& wr_id : it->second) {
+            finished_wrs.insert(wr_id);
+          }
         }
       }
     }
@@ -832,8 +836,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
     {
       auto [it, inserted] =
           S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
-      printf("Posted %zu RDMA WRs to rank %d (tail wr_id=%lu)\n", k, dst_rank,
-             batch_tail_wr);
       if (!inserted) {
         fprintf(stderr,
                 "thread_idx: %d, Error: tail wr_id %lu already exists "

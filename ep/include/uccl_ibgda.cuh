@@ -1,4 +1,5 @@
 #pragma once
+#include "common.hpp"
 #include "ring_buffer.cuh"
 #include <cstddef>
 #include <cstdint>
@@ -41,12 +42,13 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   uint64_t cur_head = rb->head;
   uint64_t cur_tail = rb->volatile_tail();
   uint64_t inflight = cur_head - cur_tail;
+#ifdef USE_NORMAL_MODE
   if (low_latency_buffer_idx == -1) {
     /* Normal mode */
     expert_idx = 0;
     low_latency_buffer_idx = 0;
   }
-
+#endif
   // NOTE(MaoZiming): Spins until there is a free slot in the ring buffer.
   auto last_print = clock64();
   while (true) {
@@ -73,8 +75,10 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       cmd.message_idx = message_idx;
       cmd.is_combine = is_combine;
       cmd.low_latency_buffer_idx = low_latency_buffer_idx;
+#ifdef USE_NORMAL_MODE
       cmd.atomic_offset = atomic_offset;
       cmd.atomic_val = atomic_val;
+#endif
       rb->atomic_set_and_commit(cmd, &slot);
       break;
     }
@@ -102,9 +106,11 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     atomicAdd(reinterpret_cast<unsigned long long*>(rptr),
               static_cast<unsigned long long>(value));
   } else {
+#ifdef USE_NORMAL_MODE
     if (skip_remote) {
       return;
     }
+#endif
     rptr -= atomic_base_addr;
     int safe_n = num_ring_addrs > 0 ? num_ring_addrs : 1;
     int ring_idx = (warp_id >= 0 ? warp_id : 0) % safe_n;
@@ -115,12 +121,12 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     uint64_t cur_tail = rb->volatile_tail();
     uint64_t inflight = cur_head - cur_tail;
     auto last_print = clock64();
-
+#ifdef USE_NORMAL_MODE
     if (low_latency_buffer_idx == -1) {
       /* Normal mode */
       low_latency_buffer_idx = 0;
     }
-
+#endif
     while (true) {
       // NOTE(MaoZiming): update the view.
       cur_head = rb->head;

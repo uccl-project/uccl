@@ -21,7 +21,7 @@
 #define EFA
 #endif
 
-#define USE_NORMAL_MODE
+// #define USE_NORMAL_MODE
 #ifndef USE_NORMAL_MODE
 #ifndef USE_SENDER_BARRIER
 #ifdef EFA

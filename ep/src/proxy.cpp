@@ -238,7 +238,7 @@ void Proxy::init_common() {
     }
   }
   usleep(50 * 1000);
-
+#ifdef USE_NORMAL_MODE
   if (cfg_.thread_idx != 0) {
     return;
   }
@@ -281,6 +281,7 @@ void Proxy::init_common() {
   } else {
     while (ctx_.lb->full_mask == 0ULL) cpu_relax();
   }
+#endif
 }
 
 void Proxy::init_sender() {
@@ -368,7 +369,10 @@ void Proxy::run_dual() {
     assert(postponed_wr_ids_.size() == 0);
     post_gpu_commands_mixed(postponed_wr_ids, postponed_atomics);
 #endif
+
+#ifdef USE_NORMAL_MODE
     barrier_check();
+#endif
   }
 }
 
