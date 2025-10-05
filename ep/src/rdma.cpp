@@ -1047,26 +1047,6 @@ void apply_pending_updates(ProxyCtx& ctx,
   }
 }
 
-inline void repost_recv(ProxyCtx& S, uint64_t wr_id, void* addr, size_t len,
-                        uint32_t lkey) {
-  ibv_sge sge = {
-      .addr = reinterpret_cast<uintptr_t>(addr),
-      .length = static_cast<uint32_t>(len),
-      .lkey = lkey,
-  };
-  ibv_recv_wr rwr{};
-  S.pool_index = (S.pool_index + 1) % (kRemoteBufferSize / kObjectSize - 1);
-  rwr.wr_id = make_wr_id(wr_tag(wr_id), S.pool_index);
-  rwr.sg_list = &sge;
-  rwr.num_sge = 1;
-
-  ibv_recv_wr* bad = nullptr;
-  if (ibv_post_recv(S.qp, &rwr, &bad)) {
-    perror("ibv_post_recv (replenish)");
-    std::abort();
-  }
-}
-
 void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                                 int ne, ibv_wc* wc,
                                 std::vector<ProxyCtx*>& ctx_by_tag,
@@ -1164,6 +1144,26 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
 #ifdef USE_SENDER_BARRIER
       bool is_combine = aimm.IsCombine();
       if (is_combine) value = 1;
+#ifndef EFA
+      const uint32_t tag = wr_tag(cqe.wr_id);
+      ProxyCtx& S_atomic = *ctx_by_tag[tag];
+      ibv_sge sge = {
+          .addr = reinterpret_cast<uintptr_t>(S_atomic.mr->addr),
+          .length = 1,
+          .lkey = S_atomic.mr->lkey,
+      };
+      ibv_recv_wr rwr = {};
+      S.pool_index = (S.pool_index + 1) % (kRemoteBufferSize / kObjectSize - 1);
+      rwr.wr_id = make_wr_id(wr_tag(cqe.wr_id), S.pool_index);
+      rwr.sg_list = &sge;
+      rwr.num_sge = 1;
+      ibv_recv_wr* bad = nullptr;
+      if (ibv_post_recv(S_atomic.qp, &rwr, &bad)) {
+        perror("ibv_post_recv (atomics replenish)");
+        std::abort();
+      }
+      continue;
+#endif
 #endif
       if (value == kMaxSendAtomicValue) value = kLargeAtomicValue;
       addr32->fetch_add(value, std::memory_order_release);
@@ -1230,7 +1230,21 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
 #ifndef EFA
     const uint32_t tag = wr_tag(cqe.wr_id);
     ProxyCtx& S = *ctx_by_tag[tag];
-    repost_recv(S, cqe.wr_id, S.mr->addr, 1, S.mr->lkey);
+    ibv_sge sge = {
+        .addr = reinterpret_cast<uintptr_t>(&S.ack_recv_buf[0]),
+        .length = sizeof(uint64_t),
+        .lkey = S.ack_recv_mr->lkey,
+    };
+    ibv_recv_wr rwr{};
+    S.pool_index = (S.pool_index + 1) % (kRemoteBufferSize / kObjectSize - 1);
+    rwr.wr_id = make_wr_id(wr_tag(cqe.wr_id), S.pool_index);
+    rwr.sg_list = &sge;
+    rwr.num_sge = 1;
+    ibv_recv_wr* bad = nullptr;
+    if (ibv_post_recv(S.qp, &rwr, &bad)) {
+      perror("ibv_post_recv (imm replenish)");
+      std::abort();
+    }
 #endif
   }
 }
