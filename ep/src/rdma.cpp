@@ -694,7 +694,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
           std::abort();
         }
 #ifdef USE_SENDER_BARRIER
-        // printf("wr_id: %d inserted into map\n", (int)qpx->wr_id);
         S.wr_id_to_write_struct[qpx->wr_id] = {cmd.expert_idx, dst_rank,
                                                cmd.is_combine,
                                                cmd.low_latency_buffer_idx};
@@ -896,7 +895,6 @@ void local_process_completions(ProxyCtx& S,
               printf("Normal send completed (is_normal=%d, dst_rank=%d)\n",
                      ws.is_normal, ws.dst_rank);
             }
-#ifndef USE_NORMAL_MODE
             if (ws.is_combine) {
               S.combine_sent_counter.Add(
                   {ws.low_latency_buffer_idx, ws.expert_idx, ws.dst_rank}, 1);
@@ -904,7 +902,6 @@ void local_process_completions(ProxyCtx& S,
               S.dispatch_sent_counter.Add(
                   {ws.low_latency_buffer_idx, ws.expert_idx, ws.dst_rank}, 1);
             }
-#endif
           } else {
             assert(false && "wr_id not found in write_struct map");
           }

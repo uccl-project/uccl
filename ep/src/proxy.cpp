@@ -11,32 +11,20 @@
 #include <unistd.h>
 
 static std::string shm_name_for_barrier(std::string const& ip, int thread_idx) {
-  // POSIX shm names must start with '/' and contain no other slashes.
   return "/uccl_barrier_" + ip + "_th" + std::to_string(thread_idx);
 }
 
 LocalBarrier* map_local_barrier_shm(std::string const& name, bool* out_owner) {
   *out_owner = false;
-
   const size_t kSize = sizeof(LocalBarrier);
   const mode_t kMode = 0600;
-
-  // Try to create exclusively: only the first process should succeed here.
-  int fd = shm_open(name.c_str(),
-                    O_RDWR | O_CREAT | O_EXCL
-#ifdef O_CLOEXEC
-                        | O_CLOEXEC
-#endif
-                    ,
-                    kMode);
-
+  int fd = shm_open(name.c_str(), O_RDWR | O_CREAT | O_EXCL, kMode);
   if (fd >= 0) {
-    // We created it — we're the owner.
     *out_owner = true;
     if (ftruncate(fd, kSize) != 0) {
       perror("ftruncate(LocalBarrier)");
       close(fd);
-      shm_unlink(name.c_str());  // safe to unlink because we are the creator
+      shm_unlink(name.c_str());
       return nullptr;
     }
   } else {
@@ -44,24 +32,13 @@ LocalBarrier* map_local_barrier_shm(std::string const& name, bool* out_owner) {
       perror("shm_open");
       return nullptr;
     }
-
-    // Someone else created it. Just open the existing object.
-    fd = shm_open(name.c_str(),
-                  O_RDWR
-#ifdef O_CLOEXEC
-                      | O_CLOEXEC
-#endif
-                  ,
-                  kMode);
+    fd = shm_open(name.c_str(), O_RDWR, kMode);
     if (fd < 0) {
       perror("shm_open(existing)");
       return nullptr;
     }
-
-    // Wait until the creator has sized it with ftruncate().
-    // (Size is 0 right after creation until ftruncate runs.)
     struct stat st {};
-    int tries = 1000;  // ~1s total
+    int tries = 1000;
     while (tries-- > 0) {
       if (fstat(fd, &st) == 0 && static_cast<size_t>(st.st_size) >= kSize)
         break;
@@ -75,17 +52,14 @@ LocalBarrier* map_local_barrier_shm(std::string const& name, bool* out_owner) {
       return nullptr;
     }
   }
-
   void* p = mmap(nullptr, kSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   int saved_errno = errno;
   close(fd);
-
   if (p == MAP_FAILED) {
     errno = saved_errno;
     perror("mmap(LocalBarrier)");
     return nullptr;
   }
-
   return reinterpret_cast<LocalBarrier*>(p);
 }
 
@@ -268,20 +242,17 @@ void Proxy::init_common() {
   if (cfg_.thread_idx != 0) {
     return;
   }
-  // ---- Intra-node barrier setup ----
   // Discover local ranks (same IP as me)
   const std::string my_ip = peers_[cfg_.rank].ip;
   std::vector<int> local_ranks;
   local_ranks.reserve(ctxs_for_all_ranks_.size());
   int leader_rank = cfg_.rank;
-
   for (int r = 0; r < (int)peers_.size(); ++r) {
     if (peers_[r].ip == my_ip) {
       local_ranks.push_back(r);
       if (r < leader_rank) leader_rank = r;
     }
   }
-
   ctx_.num_local_ranks = (int)local_ranks.size();
   ctx_.node_leader_rank = leader_rank;
   ctx_.local_rank = cfg_.local_rank;
@@ -292,23 +263,13 @@ void Proxy::init_common() {
             ctx_.num_local_ranks, (int)UCCL_MAX_LOCAL_RANKS);
     std::abort();
   }
-
   if (cfg_.thread_idx != 0) return;
-
-  // Map per-node+thread shared barrier block
   const std::string shm_name = shm_name_for_barrier(my_ip, cfg_.thread_idx);
-  // printf("[local_rank:%d] Mapping local barrier shm %s\n", cfg_.local_rank,
-  //        shm_name.c_str());
   ctx_.lb = map_local_barrier_shm(shm_name, &ctx_.lb_owner);
-  // printf("[local_rank:%d] Mapped local barrier shm %s at %p,
-  // is_lb_owner=%d\n",
-  //        cfg_.local_rank, shm_name.c_str(), (void*)ctx_.lb, ctx_.lb_owner);
   if (!ctx_.lb) {
     fprintf(stderr, "Failed to map local barrier shm: %s\n", shm_name.c_str());
     std::abort();
   }
-
-  // Owner initializes full_mask once
   if (ctx_.lb_owner) {
     ctx_.lb->full_mask = (ctx_.num_local_ranks >= 64)
                              ? ~0ULL
@@ -317,9 +278,7 @@ void Proxy::init_common() {
       ctx_.lb->arrive_seq[i].store(0, std::memory_order_relaxed);
       ctx_.lb->release_seq[i].store(0, std::memory_order_relaxed);
     }
-    // seq/arrived_mask already zero due to ftruncate+MAP_SHARED zeroing
   } else {
-    // Wait until owner sets full_mask (should be quick)
     while (ctx_.lb->full_mask == 0ULL) cpu_relax();
   }
 }
