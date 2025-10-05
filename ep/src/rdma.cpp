@@ -1188,11 +1188,11 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
 #ifndef USE_NORMAL_MODE
         if (is_combine) value = 1;
 #endif
-          // printf(
-          //     "Atomic imm received: value=%d offset=%u (index=%zu) ->
-          //     new=%d\n", value, offset, index, addr32->fetch_add(value,
-          //     std::memory_order_release) + value);
-          // addr32->fetch_add(value, std::memory_order_release);
+        // printf(
+        //     "Atomic imm received: value=%d offset=%u (index=%zu) ->
+        //     new=%d\n", value, offset, index, addr32->fetch_add(value,
+        //     std::memory_order_release) + value);
+        addr32->fetch_add(value, std::memory_order_release);
 #endif
       } else if (ImmType::IsBarrier(raw)) {
         bool is_ack = BarrierImm::IsAck(raw);
