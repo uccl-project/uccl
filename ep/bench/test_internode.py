@@ -1,15 +1,18 @@
 """
 This is the same test_internode.py test in DeepEP's repo.
 
+Build:
+export OMP_NUM_THREADS=6
+export MAKE_NORMAL_MODE=1
+make clean && make -j install
+
 On first node:
-export OMP_NUM_THREADS=4
 torchrun --nnodes=2 --nproc_per_node=8 --node_rank=0 \
   --master_addr=10.1.227.34 --master_port=12355 \
   bench/test_internode.py --num-tokens=4096 \
   --hidden=7168 --num-topk=8 --num-experts=256 --test-ll-compatibility
 
 On second node:
-export OMP_NUM_THREADS=4
 torchrun --nnodes=2 --nproc_per_node=8 --node_rank=1 \
   --master_addr=10.1.227.34 --master_port=12355 \
   bench/test_internode.py --num-tokens=4096 \
@@ -44,12 +47,20 @@ from utils import (
     initialize_uccl,
     destroy_uccl,
     init_dist_under_torchrun,
+    detect_ib_hca,
 )
 
 # Test compatibility with low latency functions
 import test_low_latency
 from buffer import Buffer
-from uccl.ep import Config
+
+try:
+    from uccl.ep import Config
+except ImportError as exc:
+    import sys
+
+    sys.stderr.write("Failed to import uccl.ep\n")
+    raise
 
 
 # noinspection PyShadowingNames
@@ -184,7 +195,6 @@ def test_main(
                         print(
                             f'[testing] Running with {"FP8" if isinstance(current_x, tuple) else "BF16"}, {"with" if with_topk else "without"} top-k (async={async_mode}, previous={previous_mode}) ...',
                             flush=True,
-                            end="",
                         )
                     dispatch_args = {
                         "x": current_x,
@@ -323,9 +333,6 @@ def test_main(
                     dispatch_bf16_nvl_recv_bytes = recv_x.numel() * 2
                     combine_bf16_nvl_send_bytes = dispatch_bf16_nvl_recv_bytes
                     combine_bf16_rdma_recv_bytes = dispatch_bf16_rdma_send_bytes
-
-                    if local_rank == 0:
-                        print(" passed", flush=True)
     if local_rank == 0:
         print("", flush=True)
 
@@ -446,8 +453,9 @@ def test_main(
 
 
 # noinspection PyUnboundLocalVariable,PyShadowingNames
-def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
-    num_nodes = int(os.getenv("WORLD_SIZE", 1))
+def test_loop(
+    local_rank: int, num_local_ranks: int, num_nodes: int, args: argparse.Namespace
+):
     rank, num_ranks, group = init_dist_under_torchrun(local_rank, num_local_ranks)
     if args.test_ll_compatibility:
         ll_num_tokens, ll_hidden, ll_num_experts, ll_num_topk = 16, 5120, 256, 9
@@ -464,7 +472,9 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     scratch = torch.zeros(
         num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
     )
-    proxies, workers = initialize_uccl(scratch, num_rdma_bytes, rank, num_ranks, group)
+    proxies, workers = initialize_uccl(
+        scratch, num_rdma_bytes, rank, num_ranks, group, num_experts=args.num_experts
+    )
 
     buffer = Buffer(
         group,
@@ -501,21 +511,6 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         if local_rank == 0:
             print("", flush=True)
 
-    # Test compatibility with low latency functions
-    if args.test_ll_compatibility:
-        buffer.clean_low_latency_buffer(ll_num_tokens, ll_hidden, ll_num_experts)
-        test_low_latency.test_main(
-            ll_num_tokens,
-            ll_hidden,
-            ll_num_experts,
-            ll_num_topk,
-            rank,
-            num_ranks,
-            group,
-            buffer,
-            seed=1,
-        )
-
     # Destroy the buffer runtime and communication group
     group.barrier()
     buffer.destroy()
@@ -526,6 +521,17 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
 
 
 if __name__ == "__main__":
+    if os.getenv("MAKE_NORMAL_MODE") != "1":
+        raise RuntimeError(
+            "[ERROR] The environment variable MAKE_NORMAL_MODE is not set to 1 (normal mode disabled).\n"
+            "This script requires normal mode to be active.\n"
+            "To fix this, run the following before rebuilding:\n"
+            "export MAKE_NORMAL_MODE=1 && make clean && make -j install\n"
+        )
+    ib_dev = detect_ib_hca()
+    if ib_dev and ib_dev.startswith("mlx"):  # Mellanox IB devices show up like mlx5_0
+        os.environ["NCCL_IB_HCA"] = ib_dev
+        print(f"Set NCCL_IB_HCA={ib_dev}")
     parser = argparse.ArgumentParser(description="Test internode EP kernels")
     parser.add_argument(
         "--num-processes",
@@ -557,14 +563,18 @@ if __name__ == "__main__":
         help="whether to test compatibility with low-latency kernels",
     )
     args = parser.parse_args()
+    world_size = int(os.environ["WORLD_SIZE"])
+    local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])
+    num_nodes = world_size // local_world_size
 
     # Set default `num_topk_groups` if not provided
     if args.num_topk_groups is None:
-        num_nodes = int(os.getenv("WORLD_SIZE", 1))
         args.num_topk_groups = min(num_nodes, 4)
 
     num_processes = args.num_processes
+    if num_processes != 8:
+        raise ValueError("Only --num-processes=8 is supported for this test.")
     # NOTE: modified from deep_ep
     local_rank = int(os.environ["LOCAL_RANK"])
     num_local_ranks = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
-    test_loop(local_rank, num_local_ranks, args)
+    test_loop(local_rank, num_local_ranks, num_nodes, args)

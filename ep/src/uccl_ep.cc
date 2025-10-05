@@ -67,9 +67,6 @@ static std::vector<uint64_t> collect_ring_addrs_for_device(int device_index) {
         proxy.attr("get_ring_buffer_addrs")().cast<std::vector<uint64_t>>();
     all_addrs.insert(all_addrs.end(), proxy_addrs.begin(), proxy_addrs.end());
   }
-
-  printf("Collected %zu ring buffer addresses for device %d from %zu proxies\n",
-         all_addrs.size(), device_index, it->second.size());
   return all_addrs;
 }
 
@@ -526,7 +523,8 @@ class Buffer {
           comm_stream,
           config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4),
                                            num_ranks),
-          num_nvl_bytes, true, low_latency_mode);
+          num_nvl_bytes, true, low_latency_mode, d_ring_addrs, num_ring_addrs,
+          atomic_buffer_ptr);
     } else {
       rdma_channel_prefix_matrix =
           torch::empty({num_rdma_ranks, num_channels},
@@ -558,7 +556,8 @@ class Buffer {
           comm_stream,
           config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4),
                                            num_ranks),
-          num_nvl_bytes, low_latency_mode, d_ring_addrs, num_ring_addrs);
+          num_nvl_bytes, low_latency_mode, d_ring_addrs, num_ring_addrs,
+          atomic_buffer_ptr);
 
       // Synchronize total received tokens and tokens per expert
       auto start_time = std::chrono::high_resolution_clock::now();
@@ -661,7 +660,6 @@ class Buffer {
         config.num_max_nvl_chunked_recv_tokens, rank, num_ranks, cached_mode,
         comm_stream, num_channels, low_latency_mode, d_ring_addrs,
         num_ring_addrs, atomic_buffer_ptr);
-
     // Wait streams
     std::optional<EventHandle> event;
     if (async) {
@@ -820,7 +818,8 @@ class Buffer {
         buffer_ptrs_gpu, config.num_max_nvl_chunked_recv_tokens,
         barrier_signal_ptrs_gpu, rank, comm_stream,
         config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4), num_ranks),
-        num_nvl_bytes, false, low_latency_mode);
+        num_nvl_bytes, false, low_latency_mode, d_ring_addrs, num_ring_addrs,
+        atomic_buffer_ptr);
 
     // Assign bias pointers
     auto bias_opts =
@@ -2092,11 +2091,12 @@ PYBIND11_MODULE(ep, m) {
   py::class_<Stats>(m, "Stats");
   py::class_<UcclProxy>(m, "Proxy")
       .def(py::init<int, uintptr_t, size_t, int, int, int, std::string const&,
-                    int, int>(),
+                    int, int, int>(),
            py::arg("thread_idx"), py::arg("gpu_buffer_addr"),
            py::arg("total_size"), py::arg("rank") = 0, py::arg("node_idx") = -1,
            py::arg("local_rank") = 0, py::arg("peer_ip") = std::string(),
-           py::arg("num_experts") = -1, py::arg("num_ranks") = -1)
+           py::arg("num_experts") = -1, py::arg("num_ranks") = -1,
+           py::arg("num_nodes") = 0)
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)
       .def("start_local", &UcclProxy::start_local)
