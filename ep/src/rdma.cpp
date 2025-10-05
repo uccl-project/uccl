@@ -33,10 +33,6 @@
 #include <stdio.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#define MAX_RETRIES 20
-#define RETRY_DELAY_MS 200
-#define TCP_PORT 18515
-#define QKEY 0x11111111u
 
 void exchange_connection_info(int rank, char const* peer_ip, int tid,
                               RDMAConnectionInfo* local,
@@ -709,7 +705,18 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                 .GetImmData();
         ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
 #else
-      if (j + 1 == k) {
+      if (cmd.atomic_offset > 0 && cmd.atomic_val > 0) {
+        int v = static_cast<int>(cmd.atomic_val);
+        if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {
+          fprintf(stderr, "[EFA] atomic value=%d won't fit in 15 bits\n", v);
+          std::abort();
+        }
+        uint32_t imm =
+            AtomicsImm::Pack(true, false, cmd.atomic_val, cmd.atomic_offset,
+                             cmd.low_latency_buffer_idx)
+                .GetImmData();
+        ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
+      } else if (j + 1 == k) {
         uint32_t imm =
             WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
                            cmd.expert_idx, k, my_rank)
@@ -868,6 +875,9 @@ void local_process_completions(ProxyCtx& S,
         if ((wrid & kAtomicWrTag) == kAtomicWrTag) {
           break;
         }
+        if ((wrid & kBarrierWrTag) == kBarrierWrTag) {
+          break;
+        }
 #ifdef USE_SENDER_BARRIER
         {
           auto it = S.wr_id_to_write_struct.find(wrid);
@@ -969,7 +979,8 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
                   std::unordered_set<uint64_t>& acked_wrs, int thread_idx,
                   CopyRingBuffer& g_ring, std::vector<ProxyCtx*>& ctx_by_tag,
                   void* atomic_buffer_ptr, int num_ranks, int num_experts,
-                  std::set<PendingUpdate>& pending_atomic_updates) {
+                  std::set<PendingUpdate>& pending_atomic_updates, int my_rank,
+                  int num_nodes) {
   struct ibv_wc wc[kMaxOutstandingSends];  // batch poll
   int ne = 0;
 #ifdef EFA
@@ -997,7 +1008,7 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
                             ctx_by_tag);
   remote_process_completions(S, thread_idx, g_ring, ne, wc, ctx_by_tag,
                              atomic_buffer_ptr, num_ranks, num_experts,
-                             pending_atomic_updates);
+                             pending_atomic_updates, my_rank, num_nodes);
 }
 
 void apply_pending_updates(ProxyCtx& ctx,
@@ -1036,10 +1047,13 @@ void apply_pending_updates(ProxyCtx& ctx,
   }
 }
 
-void remote_process_completions(
-    ProxyCtx& S, int idx, CopyRingBuffer& g_ring, int ne, ibv_wc* wc,
-    std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr, int num_ranks,
-    int num_experts, std::set<PendingUpdate>& pending_atomic_updates) {
+void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
+                                int ne, ibv_wc* wc,
+                                std::vector<ProxyCtx*>& ctx_by_tag,
+                                void* atomic_buffer_ptr, int num_ranks,
+                                int num_experts,
+                                std::set<PendingUpdate>& pending_atomic_updates,
+                                int my_rank, int num_nodes) {
   if (ne == 0) return;
   std::unordered_map<uint32_t, std::vector<ibv_recv_wr>> per_tag;
   per_tag.reserve(8);
@@ -1054,17 +1068,15 @@ void remote_process_completions(
       continue;
     }
     if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
-        ((ntohl(cqe.imm_data) >> 31) & 0x1)) {
+        ImmType::IsAtomics(ntohl(cqe.imm_data))) {
       AtomicsImm aimm(ntohl(cqe.imm_data));
       int value = aimm.GetValue();
       uint32_t offset = aimm.GetOff();
       size_t index = offset / sizeof(int);
 #ifdef USE_RECEIVER_BARRIER
-      int low_latency_buffer_idx = aimm.GetBufferIdx();
-#endif
-      bool is_combine = aimm.IsCombine();
-#ifdef USE_RECEIVER_BARRIER
       // ep_config.hpp
+      bool is_combine = aimm.IsCombine();
+      int low_latency_buffer_idx = aimm.GetBufferIdx();
       uint32_t new_offset =
           offset - low_latency_buffer_idx *
                        align<size_t>(num_experts * sizeof(int), 128);
@@ -1126,13 +1138,12 @@ void remote_process_completions(
                                        low_latency_buffer_idx, expert_idx,
                                        is_combine, src_rank});
       }
-      continue;
-    }
 #else
       auto* addr32 =
           reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
+#ifdef USE_SENDER_BARRIER
+      bool is_combine = aimm.IsCombine();
       if (is_combine) value = 1;
-      addr32->fetch_add(value, std::memory_order_release);
 #ifndef EFA
       const uint32_t tag = wr_tag(cqe.wr_id);
       ProxyCtx& S_atomic = *ctx_by_tag[tag];
@@ -1153,9 +1164,46 @@ void remote_process_completions(
       }
       continue;
 #endif
-    }
 #endif
-    if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
+      if (value == kMaxSendAtomicValue) value = kLargeAtomicValue;
+      addr32->fetch_add(value, std::memory_order_release);
+#endif
+    } else if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
+               ImmType::IsBarrier(ntohl(cqe.imm_data))) {
+      BarrierImm bimm(ntohl(cqe.imm_data));
+      bool is_ack = bimm.GetIsAck();
+      uint32_t seq = bimm.GetSeq();
+      uint16_t src = bimm.GetRank();
+      if (my_rank == 0) {
+        if (!is_ack) {
+          if (S.barrier_arrived.empty()) {
+            assert(S.barrier_arrival_count == 0 &&
+                   "Barrier arrival count should be 0");
+            S.barrier_arrived.resize((size_t)num_nodes, 0);
+          }
+          int num_ranks_per_node = num_ranks / num_nodes;
+          size_t node_rank = src / num_ranks_per_node;
+          if (node_rank < S.barrier_arrived.size() &&
+              !S.barrier_arrived[node_rank]) {
+            S.barrier_arrived[node_rank] = 1;
+            ++S.barrier_arrival_count;
+          } else {
+            assert(false &&
+                   "Duplicate barrier arrival or local_rank out of range");
+          }
+        } else {
+          assert(false && "Rank 0 should not receive barrier ack");
+        }
+      } else {
+        if (is_ack) {
+          S.barrier_released = true;
+          S.barrier_release_seq = seq;
+        } else {
+          assert(false && "Non-leader rank should not receive barrier request");
+        }
+      }
+    } else if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
+               ImmType::IsWrite(ntohl(cqe.imm_data))) {
 #ifdef USE_RECEIVER_BARRIER
       uint32_t imm = ntohl(cqe.imm_data);
       WriteImm wimm(imm);
@@ -1175,7 +1223,12 @@ void remote_process_completions(
         S.combine_token_counter.Add({buffer_idx, expert_idx}, k);
       }
 #endif
+    } else if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
+      fprintf(stderr, "Unexpected CQE opcode: %d\n", cqe.opcode);
+      std::abort();
+    }
 #ifndef EFA
+    if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
       const uint32_t tag = wr_tag(cqe.wr_id);
       ProxyCtx& S = *ctx_by_tag[tag];
       ibv_sge sge = {
@@ -1193,8 +1246,8 @@ void remote_process_completions(
         perror("ibv_post_recv (imm replenish)");
         std::abort();
       }
-#endif
     }
+#endif
   }
 }
 
@@ -1202,7 +1255,8 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                              std::vector<ProxyCtx*>& ctx_by_tag,
                              void* atomic_buffer_ptr, int num_ranks,
                              int num_experts,
-                             std::set<PendingUpdate>& pending_atomic_updates) {
+                             std::set<PendingUpdate>& pending_atomic_updates,
+                             int my_rank, int num_nodes) {
   struct ibv_wc wc[kMaxOutstandingRecvs];
   int ne = 0;
 #ifdef EFA
@@ -1228,7 +1282,7 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
 #endif
   remote_process_completions(S, idx, g_ring, ne, wc, ctx_by_tag,
                              atomic_buffer_ptr, num_ranks, num_experts,
-                             pending_atomic_updates);
+                             pending_atomic_updates, my_rank, num_nodes);
 }
 
 void remote_reg_ack_buf(ibv_pd* pd, uint64_t* ack_buf, ibv_mr*& ack_mr) {
@@ -1380,11 +1434,12 @@ void post_atomic_operations(ProxyCtx& S,
       wr_ids[i] = wr_id;
 
       int v = static_cast<int>(cmd.value);
-      if (v < -16384 || v > 16383) {
+      if (v == kLargeAtomicValue) v = kMaxSendAtomicValue;
+      if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {
         fprintf(stderr,
-                "[EFA] value=%d won't fit in 15 bits; "
+                "[EFA] value=%d (cmd.value: %lu) won't fit in 15 bits; "
                 "use an inline payload scheme instead.\n",
-                v);
+                v, (unsigned long)cmd.value);
         std::abort();
       }
       uint32_t offset = static_cast<int64_t>(cmd.req_rptr);
@@ -1423,7 +1478,8 @@ void post_atomic_operations(ProxyCtx& S,
       wr_ids[i] = wrid;
 
       int v = static_cast<int>(cmd.value);
-      if (v < -16384 || v > 16383) {
+      if (v == kLargeAtomicValue) v = kMaxSendAtomicValue;
+      if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {
         fprintf(stderr, "value=%d won't fit in 15 bits\n", v);
         std::abort();
       }

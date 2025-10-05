@@ -9,14 +9,20 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <vector>
+#if defined(__x86_64__) || defined(_M_X64)
+#include <immintrin.h>
+#endif
 #ifndef COPY_RING_CAP
 #define COPY_RING_CAP 4096
 #endif
+
+enum class CmdType : uint64_t { EMPTY = 0, WRITE, ATOMIC, QUIET, BARRIER };
 
 // Command structure for each transfer
 struct TransferCmd {
   // NOTE(MaoZiming): cmd is used to identify the command type and needs to be
   // set in order for proxy to process the command.
+  CmdType cmd_type;
   uint64_t cmd;
   uint32_t dst_rank;  // remote node id (MPI-style)
   uint32_t dst_gpu;   // GPU id on remote node
@@ -33,6 +39,9 @@ struct TransferCmd {
   int value;
   bool is_combine;
   int low_latency_buffer_idx;
+
+  uint64_t atomic_offset;
+  uint64_t atomic_val;
 };
 
 struct CopyTask {
@@ -93,7 +102,6 @@ struct alignas(128) RingBuffer {
   uint64_t ack_buf[RECEIVER_BATCH_SIZE] = {0};
 
   inline void cpu_volatile_store_tail(uint64_t new_tail) {
-    // NOTE(MaoZiming): proxy needs this.
     __atomic_store_n(&tail, new_tail, __ATOMIC_RELEASE);
   }
 
