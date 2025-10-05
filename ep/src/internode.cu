@@ -636,26 +636,6 @@ __global__ void __launch_bounds__(
                                         channel_id] -
             1;
       }
-      if (lane_id == 0) {
-        bool all_zero = true;
-
-        // Check a few representative entries for the current dst_rdma_rank
-        for (int i = 0; i < num_channels; i++) {
-          if (gbl_channel_prefix_matrix[dst_rdma_rank * num_channels + i] !=
-                  0 ||
-              rdma_channel_prefix_matrix[dst_rdma_rank * num_channels + i] !=
-                  0) {
-            all_zero = false;
-            break;
-          }
-        }
-
-        if (all_zero) {
-          printf("WARNING: prefix matrices all zero (rdma_rank=%d, ch=%d)\n",
-                 dst_rdma_rank, channel_id);
-          trap();
-        }
-      }
       __syncwarp();
 
       // Issue RDMA for non-local ranks
@@ -945,7 +925,8 @@ __global__ void __launch_bounds__(
           uccl::nvshmemi_ibgda_amo_nonfetch_add(
               reinterpret_cast<uint64_t>(rdma_channel_tail.buffer(rdma_rank)),
               reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
-              num_tokens_to_issue, dst_rank,
+              num_tokens_to_issue,
+              translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank),
               channel_id,  // NOTE(MaoZiming): use channel_id for rb.
               dst_rdma_rank == rdma_rank, ring_addrs, num_ring_addrs, false, -1,
               true);
@@ -1504,13 +1485,14 @@ __global__ void cached_notify(
                              token_start_idx, token_end_idx);
 
       // NOTES: `1 << 25` is a heuristic large number
-      int last_head = 16383;  // NOTE(MaoZiming): changed
+      int last_head = 16383;  // NOTE(MaoZiming): changeds
       for (int token_idx = token_end_idx - 1; token_idx >= token_start_idx;
            --token_idx) {
-        int* ptr = combined_rdma_head + token_idx * num_rdma_ranks + lane_id;
-        auto current_head = __ldg(ptr);
+        auto current_head =
+            __ldg(combined_rdma_head + token_idx * num_rdma_ranks + lane_id);
         if (current_head < 0) {
-          st_release_sys_global(ptr, -last_head - 1);
+          combined_rdma_head[token_idx * num_rdma_ranks + lane_id] =
+              -last_head - 1;
         } else {
           last_head = current_head;
         }
@@ -2236,10 +2218,9 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
           // Read expected head
           EP_STATIC_ASSERT(kNumRDMARanks <= 32, "Invalid number of RDMA peers");
           int expected_head = -1;
-          if (lane_id < NUM_MAX_NVL_PEERS) {
+          if (lane_id < NUM_MAX_NVL_PEERS)
             expected_head = ld_nc_global(
                 combined_nvl_head + token_idx * NUM_MAX_NVL_PEERS + lane_id);
-          }
 
           // Wait lanes to be ready
           start_time = clock64();
@@ -2333,26 +2314,18 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                     reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
                 num_chunked_tokens);
           } else {
-            // memory_fence();
-            __threadfence_system();
+            memory_fence();
           }
 
           // Write new RDMA tail
           __syncwarp();
           if (lane_id == 0) {
-            int dst_rank = translate_dst_rdma_rank<kLowLatencyMode>(
-                dst_rdma_rank, nvl_rank);
-            if (num_chunked_tokens > 16383 || num_chunked_tokens < -16383) {
-              printf(
-                  "[kNVLAndRDMAFOrwarder] Error: invalid num_chunked_tokens "
-                  "%d\n",
-                  num_chunked_tokens);
-              trap();
-            }
             uccl::nvshmemi_ibgda_amo_nonfetch_add(
                 reinterpret_cast<uint64_t>(rdma_channel_tail.buffer(rdma_rank)),
                 reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
-                num_chunked_tokens, dst_rank,
+                num_chunked_tokens,
+                translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank,
+                                                         nvl_rank),
                 channel_id,  // NOTE(MaoZiming): use warp_id for rb.
                 dst_rdma_rank == rdma_rank, ring_addrs, num_ring_addrs, false,
                 -1, true);
@@ -2499,17 +2472,6 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
           if (min_head != std::numeric_limits<int>::max() and
               min_head >= last_rdma_head + num_max_rdma_chunked_send_tokens and
               lane_id < kNumRDMARanks) {
-            int dst_rank = translate_dst_rdma_rank<kLowLatencyMode>(
-                dst_rdma_rank, nvl_rank);
-
-            if (min_head - last_rdma_head > 16383 ||
-                min_head - last_rdma_head < -16383) {
-              printf(
-                  "[kRDMAReceiver] Error: invalid min_head - last_rdma_head "
-                  "%d, min_head: %d, last_rdma_head: %d\n",
-                  min_head - last_rdma_head, min_head, last_rdma_head);
-              trap();
-            }
             uccl::nvshmemi_ibgda_amo_nonfetch_add(
                 reinterpret_cast<uint64_t>(rdma_channel_head.buffer(rdma_rank)),
                 reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
