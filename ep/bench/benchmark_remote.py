@@ -6,12 +6,12 @@ Usage
 -----
 # Node 0
 torchrun --nnodes=2 --nproc_per_node=1 --node_rank=0 \
-  --master_addr=10.1.227.34 --master_port=12356 \
+  --master_addr=10.141.1.1 --master_port=12356 \
   bench/benchmark_remote.py
 
 # Node 1
 torchrun --nnodes=2 --nproc_per_node=1 --node_rank=1 \
-  --master_addr=10.1.227.34 --master_port=12356 \
+  --master_addr=10.141.1.1 --master_port=12356 \
   bench/benchmark_remote.py
 """
 
