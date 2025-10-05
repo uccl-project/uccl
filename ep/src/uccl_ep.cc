@@ -593,8 +593,6 @@ class Buffer {
       num_recv_tokens_per_expert_list = std::vector<int>(
           moe_recv_expert_counter, moe_recv_expert_counter + num_local_experts);
     }
-    // NOTE(MaoZiming): new
-    // CUDA_CHECK(cudaStreamSynchronize(comm_stream));
 
     // Allocate new tensors
     auto recv_x = torch::empty({num_recv_tokens, hidden}, x.options());
@@ -839,8 +837,6 @@ class Buffer {
                        bias.size(1) == hidden);
         bias_ptrs[i] = bias.data_ptr();
       }
-    // // NOTE(MaoZiming): new
-    // CUDA_CHECK(cudaStreamSynchronize(comm_stream));
 
     // Launch data combine
     auto combined_x = torch::empty({num_combined_tokens, hidden}, x.options());

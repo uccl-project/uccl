@@ -41,10 +41,6 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   uint64_t cur_head = rb->head;
   uint64_t cur_tail = rb->volatile_tail();
   uint64_t inflight = cur_head - cur_tail;
-  // printf("nvshmemi_ibgda_put_nbi_warp. dst_rank: %d\n", dst_rank);
-
-  assert((atomic_offset == 0 && atomic_val == 0) || barrier_id != -1);
-
   if (low_latency_buffer_idx == -1) {
     /* Normal mode */
     expert_idx = 0;

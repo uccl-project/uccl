@@ -761,11 +761,6 @@ void Proxy::post_gpu_commands_mixed(
       0) {
     return;
   }
-
-  // printf("Posting %zu RDMA writes, %zu atomic ops, %zu barriers, %zu
-  // quiets\n",
-  //        rdma_wrs.size(), atomic_wrs.size(), barrier_cmds.size(),
-  //        quiet_cmds.size());
   // Handle regular RDMA writes
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,

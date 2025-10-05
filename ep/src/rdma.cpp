@@ -1190,10 +1190,6 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
 #ifndef USE_NORMAL_MODE
         if (is_combine) value = 1;
 #endif
-        // printf(
-        //     "Atomic imm received: value=%d offset=%u (index=%zu) ->
-        //     new=%d\n", value, offset, index, addr32->fetch_add(value,
-        //     std::memory_order_release) + value);
         addr32->fetch_add(value, std::memory_order_release);
 #endif
       } else if (ImmType::IsBarrier(raw)) {
@@ -1220,19 +1216,10 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
           } else {
             assert(false && "Rank 0 should not receive barrier ack");
           }
-          // printf(
-          //     "Rank 0: Received barrier from rank %d (seq=%u), total arrived:
-          //     "
-          //     "%d/%d\n",
-          //     src, seq, S.barrier_arrival_count, num_nodes);
         } else {
           if (is_ack) {
             S.barrier_released = true;
             S.barrier_release_seq = seq;
-            printf(
-                "Rank %d: Received barrier release from rank 0 (seq=%u, "
-                "barrier_wr:%lu)\n",
-                my_rank, seq, S.barrier_wr);
           } else {
             assert(false &&
                    "Non-leader rank should not receive barrier request");
