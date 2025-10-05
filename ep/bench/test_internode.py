@@ -518,6 +518,13 @@ def test_loop(
 
 
 if __name__ == "__main__":
+    if os.getenv("MAKE_NORMAL_MODE") != "1":
+        raise RuntimeError(
+            "[ERROR] The environment variable MAKE_NORMAL_MODE is not set to 1 (normal mode disabled).\n"
+            "This script requires normal mode to be active.\n"
+            "To fix this, run the following before rebuilding:\n"
+            "export MAKE_NORMAL_MODE=1 && make clean && make -j install\n"
+        )
     ib_dev = detect_ib_hca()
     if ib_dev and ib_dev.startswith("mlx"):  # Mellanox IB devices show up like mlx5_0
         os.environ["NCCL_IB_HCA"] = ib_dev

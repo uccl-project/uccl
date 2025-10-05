@@ -16,11 +16,6 @@
 #define MEASURE_PER_VERB_LATENCY
 // #define USE_SENDER_BARRIER
 
-/* Sender barrier and receiver barrier for low latency mode for now. */
-#ifndef EFA
-#define EFA
-#endif
-
 // #define USE_NORMAL_MODE
 #ifndef USE_NORMAL_MODE
 #ifndef USE_SENDER_BARRIER
