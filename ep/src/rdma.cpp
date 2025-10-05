@@ -708,7 +708,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
 #else
       if (cmd.atomic_offset > 0 && cmd.atomic_val > 0) {
         int v = static_cast<int>(cmd.atomic_val);
-        if (v < -16384 || v > 16383) {
+        if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {
           fprintf(stderr, "[EFA] atomic value=%d won't fit in 15 bits\n", v);
           std::abort();
         }
@@ -1184,6 +1184,7 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
 #ifndef USE_NORMAL_MODE
         if (is_combine) value = 1;
 #endif
+        if (value == kMaxSendAtomicValue) value = kLargeAtomicValue;
         addr32->fetch_add(value, std::memory_order_release);
 #endif
       } else if (ImmType::IsBarrier(raw)) {
@@ -1435,7 +1436,8 @@ void post_atomic_operations(ProxyCtx& S,
       wr_ids[i] = wr_id;
 
       int v = static_cast<int>(cmd.value);
-      if (v < -16384 || v > 16383) {
+      if (v == kLargeAtomicValue) v = kMaxSendAtomicValue;
+      if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {
         fprintf(stderr,
                 "[EFA] value=%d (cmd.value: %lu) won't fit in 15 bits; "
                 "use an inline payload scheme instead.\n",
@@ -1478,7 +1480,8 @@ void post_atomic_operations(ProxyCtx& S,
       wr_ids[i] = wrid;
 
       int v = static_cast<int>(cmd.value);
-      if (v < -16384 || v > 16383) {
+      if (v == kLargeAtomicValue) v = kMaxSendAtomicValue;
+      if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {
         fprintf(stderr, "value=%d won't fit in 15 bits\n", v);
         std::abort();
       }

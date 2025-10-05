@@ -98,14 +98,6 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     uint64_t const* ring_addrs = nullptr, int num_ring_addrs = 0,
     bool is_combine = true, int low_latency_buffer_idx = 0,
     bool skip_remote = false) {
-  if (value > 16383 || value < -16384) {
-    printf(
-        "[nvshmemi_ibgda_amo_nonfetch_add] Warning: value=%d won't fit in 15 "
-        "bits\n",
-        value);
-    trap();
-  }
-
   if (is_local_copy) {
     atomicAdd(reinterpret_cast<unsigned long long*>(rptr),
               static_cast<unsigned long long>(value));

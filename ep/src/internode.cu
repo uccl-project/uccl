@@ -911,17 +911,6 @@ __global__ void __launch_bounds__(
         if (lane_id == dst_rdma_rank) {
           last_issued_tail += num_tokens_to_issue;
           num_tokens_to_send -= num_tokens_to_issue;
-          int dst_rank =
-              translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank);
-          // NOTE(MaoZiming): this only does local atomic add. For remote
-          // counter update, it is piggyback on the previous write.
-          if (num_tokens_to_issue > 16383 || num_tokens_to_issue < -16384) {
-            printf(
-                "[kRDMASenderCoordinator] Warning: num_tokens_to_issue=%d "
-                "won't fit in 15 bits\n",
-                num_tokens_to_issue);
-            trap();
-          }
           uccl::nvshmemi_ibgda_amo_nonfetch_add(
               reinterpret_cast<uint64_t>(rdma_channel_tail.buffer(rdma_rank)),
               reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
@@ -1165,21 +1154,13 @@ __global__ void __launch_bounds__(
       if (min_head != std::numeric_limits<int>::max() and
           min_head >= last_head + num_max_rdma_chunked_send_tokens and
           lane_id < kNumRDMARanks) {
-        int dst_rank =
-            translate_dst_rdma_rank<kLowLatencyMode>(lane_id, nvl_rank);
-        if (min_head - last_head > 16383) {
-          printf(
-              "[kRDMAAndNVLForwarder] min_head=%d, last_head=%d, "
-              "min_head-last_head=%d, dst_rank=%d, lane_id=%d, rdma_rank=%d\n",
-              min_head, last_head, min_head - last_head, dst_rank, lane_id,
-              rdma_rank);
-          trap();
-        }
         uccl::nvshmemi_ibgda_amo_nonfetch_add(
             reinterpret_cast<uint64_t>(rdma_channel_head.buffer(rdma_rank)),
             reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
-            min_head - last_head, dst_rank, channel_id + num_channels,
-            lane_id == rdma_rank, ring_addrs, num_ring_addrs, false, -1);
+            min_head - last_head,
+            translate_dst_rdma_rank<kLowLatencyMode>(lane_id, nvl_rank),
+            channel_id + num_channels, lane_id == rdma_rank, ring_addrs,
+            num_ring_addrs, false, -1);
         last_head = min_head;
       }
 
@@ -1485,7 +1466,7 @@ __global__ void cached_notify(
                              token_start_idx, token_end_idx);
 
       // NOTES: `1 << 25` is a heuristic large number
-      int last_head = 16383;  // NOTE(MaoZiming): changeds
+      int last_head = 1 << 25;  // NOTE(MaoZiming): changeds
       for (int token_idx = token_end_idx - 1; token_idx >= token_start_idx;
            --token_idx) {
         auto current_head =
@@ -1541,7 +1522,7 @@ __global__ void cached_notify(
         token_start_idx += shift, token_end_idx += shift;
 
         // NOTES: `1 << 25` is a heuristic large number
-        int last_head = 16383;  // NOTE(MaoZiming): changed
+        int last_head = 1 << 25;  // NOTE(MaoZiming): changed
         for (int batch_end_idx = token_end_idx; batch_end_idx > token_start_idx;
              batch_end_idx -= num_tokens_per_batch) {
           auto batch_start_idx =
