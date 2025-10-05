@@ -1198,7 +1198,7 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
 #endif
       } else if (ImmType::IsBarrier(raw)) {
         bool is_ack = BarrierImm::IsAck(raw);
-        uint16_t seq = BarrierImm::Seq(raw);
+        uint32_t seq = BarrierImm::Seq(raw);
         uint16_t src = BarrierImm::Rank(raw);
         if (my_rank == 0) {
           if (!is_ack) {
@@ -1229,9 +1229,10 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
           if (is_ack) {
             S.barrier_released = true;
             S.barrier_release_seq = seq;
-            // printf("Rank %d: Received barrier release from rank 0
-            // (seq=%u)\n",
-            //        my_rank, seq);
+            printf(
+                "Rank %d: Received barrier release from rank 0 (seq=%u, "
+                "barrier_wr:%lu)\n",
+                my_rank, seq, S.barrier_wr);
           } else {
             assert(false &&
                    "Non-leader rank should not receive barrier request");

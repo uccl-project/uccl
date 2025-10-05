@@ -80,8 +80,8 @@ __device__ __forceinline__ uint64_t ld_volatile(uint64_t* ptr) {
 
 template <typename T, FlowDirection Dir, uint32_t Capacity>
 struct alignas(128) RingBuffer {
-  alignas(128) uint64_t head;
-  alignas(128) uint64_t tail;
+  uint64_t head = 0;
+  uint64_t tail = 0;
   T buf[Capacity];
   uint64_t cycle_accum = 0;
   uint64_t op_count = 0;

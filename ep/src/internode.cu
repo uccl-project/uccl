@@ -637,24 +637,34 @@ __global__ void __launch_bounds__(
                                         channel_id] -
             1;
       }
+      if (lane_id == 0) {
+        bool all_zero = true;
+
+        // Check a few representative entries for the current dst_rdma_rank
+        for (int i = 0; i < num_channels; i++) {
+          if (gbl_channel_prefix_matrix[dst_rdma_rank * num_channels + i] !=
+                  0 ||
+              rdma_channel_prefix_matrix[dst_rdma_rank * num_channels + i] !=
+                  0) {
+            all_zero = false;
+            break;
+          }
+        }
+
+        if (all_zero) {
+          printf("WARNING: prefix matrices all zero (rdma_rank=%d, ch=%d)\n",
+                 dst_rdma_rank, channel_id);
+          trap();
+        }
+      }
       __syncwarp();
 
       // Issue RDMA for non-local ranks
       if (dst_rdma_rank != rdma_rank) {
         // NOTE(MaoZiming): this tells the remote rank how many tokens each
         // local nvl_rank and expert are expected to receive.
-
-        // if (lane_id == 0 && nvl_rank == 0) {
-        //   printf("[DEBUG] rdma_rank=%d, channel_id=%d\n", rdma_rank,
-        //   channel_id); for (int i = 0; i < kNumRDMARanks; ++i) {
-        //     printf("  [send_buffer %d] ", i);
-        //     int* sb = rdma_channel_meta.send_buffer(i);
-        //     for (int j = 0; j < NUM_MAX_NVL_PEERS * 2 + 2; ++j) {
-        //       printf("%d ", sb[j]);
-        //     }
-        //     printf("\n");
-        //   }
-        // }
+        __syncwarp();
+        __threadfence_system();
         uccl::nvshmemi_ibgda_put_nbi_warp(
             reinterpret_cast<uint64_t>(
                 rdma_channel_meta.recv_buffer(rdma_rank)) -
@@ -962,14 +972,14 @@ __global__ void __launch_bounds__(
     auto start_time = clock64();
     if (lane_id < kNumRDMARanks) {
       while (true) {
-        auto meta_0 = ld_volatile_global(
+        auto meta_0 = ld_acquire_sys_global(
             rdma_channel_meta.recv_buffer(lane_id) + dst_nvl_rank);
         auto meta_1 =
-            ld_volatile_global(rdma_channel_meta.recv_buffer(lane_id) +
-                               NUM_MAX_NVL_PEERS + dst_nvl_rank);
-        auto meta_2 = ld_volatile_global(
+            ld_acquire_sys_global(rdma_channel_meta.recv_buffer(lane_id) +
+                                  NUM_MAX_NVL_PEERS + dst_nvl_rank);
+        auto meta_2 = ld_acquire_sys_global(
             rdma_channel_meta.recv_buffer(lane_id) + NUM_MAX_NVL_PEERS * 2);
-        auto meta_3 = ld_volatile_global(
+        auto meta_3 = ld_acquire_sys_global(
             rdma_channel_meta.recv_buffer(lane_id) + NUM_MAX_NVL_PEERS * 2 + 1);
         if (meta_0 < 0 and meta_1 < 0 and meta_2 < 0 and meta_3 < 0) {
           // Notify NVL ranks
@@ -1079,34 +1089,6 @@ __global__ void __launch_bounds__(
           __shfl_sync(0xffffffff, cached_rdma_channel_head, src_rdma_rank);
       auto src_rdma_tail =
           __shfl_sync(0xffffffff, cached_rdma_channel_tail, src_rdma_rank);
-
-      // NOTE(MaoZiming):
-      // Problem:
-      //   On EFA, the large payload write (token data + SourceMeta) and the
-      //   queue-level notification (remote tail bump / AMO) are not strongly
-      //   ordered at the receiver. The forwarder was trusting `tail` as “data
-      //   is present up to here”, then reading SourceMeta with a non-coherent
-      //   load and seeing `is_token_in_nvl_rank_bits == 0` for some slots
-      //   because those cache lines hadn’t become globally visible yet. That
-      //   led to zeros, spurious spins, and timeouts.
-      //
-      // Fix (minimal & safe):
-      //   1) Treat `tail` as an *upper bound*, not a readiness guarantee.
-      //      Scan from `head` toward `tail` and stop at the first slot whose
-      //      per-slot ready flag is not yet visible:
-      //         int seen_bits =
-      //         ld_acquire_sys_global(&meta_ptr->is_token_in_nvl_rank_bits); if
-      //         (seen_bits == 0) break;  // stop at first not-yet-visible slot
-      //      The scan yields a contiguous "[head, tail_ready)" window we can
-      //      safely consume.
-      //   2) Use a system-scope *acquire* load for the ready flag so that once
-      //   it’s observed,
-      //      the token payload/meta for that slot is also ordered-visible to
-      //      this GPU.
-      //   3) On the sender, issue `__threadfence_system()` *before* advertising
-      //   progress
-      //      (NVSHMEM put/atomic) so the NIC cannot let the notification outrun
-      //      the data.
 
       int src_rdma_tail_ready = src_rdma_head;
       for (int t = src_rdma_head; t < src_rdma_tail; ++t) {

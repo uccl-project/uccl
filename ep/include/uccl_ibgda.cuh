@@ -285,11 +285,7 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
       cmd.cmd = 1;  // dummy valid cmd.
       cmd.cmd_type = CmdType::BARRIER;
       rb->atomic_set_and_commit(cmd, &slot);
-      // printf("[nvl_rank: %d] barrier posted slot %lu\n", nvl_rank,
-      //        (unsigned long)slot);
       wait_until_cmd_consumed(rb, slot, nvl_rank, CmdType::BARRIER);
-      // printf("[nvl_rank: %d] barrier completed slot %lu\n", nvl_rank,
-      //        (unsigned long)slot);
       break;
     }
     if ((clock64() - last_print) > kPrintCycleInterval) {

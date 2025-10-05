@@ -98,7 +98,7 @@ struct ProxyCtx {
 
   // Async-barrier state (single inflight assumed)
   bool barrier_inflight = false;
-  uint16_t barrier_seq = 0;
+  uint64_t barrier_seq = 0;
   uint64_t barrier_wr = 0;
 
   // Rank-0 bookkeeping
@@ -107,7 +107,7 @@ struct ProxyCtx {
 
   // Followers: release flag from rank-0
   bool barrier_released = false;
-  uint16_t barrier_release_seq = 0;
+  uint64_t barrier_release_seq = 0;
 
   // Intra-node (shared-memory) barrier state
   LocalBarrier* lb = nullptr;  // mapped shared barrier block (per node+thread)

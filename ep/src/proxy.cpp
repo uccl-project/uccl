@@ -942,14 +942,14 @@ void Proxy::destroy(bool free_gpu_buffer) {
   remote_infos_.clear();
 }
 
-void Proxy::post_barrier_msg(int dst_rank, bool ack, uint16_t seq) {
+void Proxy::post_barrier_msg(int dst_rank, bool ack, uint64_t seq) {
   assert(cfg_.thread_idx == 0 && "barrier must be posted on thread 0");
   ProxyCtx* ctx = ctxs_for_all_ranks_[dst_rank].get();
   if (!ctx || !ctx->qp || !ctx->mr) {
     fprintf(stderr, "barrier_msg: bad ctx for dst=%d\n", dst_rank);
     std::abort();
   }
-  uint32_t imm = BarrierImm::Pack(ack, seq, (uint16_t)cfg_.rank);
+  uint32_t imm = BarrierImm::Pack(ack, (uint32_t)seq, (uint8_t)cfg_.rank);
 #ifdef EFA
   auto* qpx = (struct ibv_qp_ex*)ctx->qp;
   int barrier_seq = 0;
@@ -1000,10 +1000,11 @@ void Proxy::send_barrier(uint64_t wr) {
     return;
   }
   assert(cfg_.thread_idx == 0 && "barrier must be placed on thread 0");
-
+  assert(!ctx_.barrier_inflight && "only one barrier at a time");
+  assert(ctx_.barrier_wr == 0 && "barrier_wr should be 0");
   ctx_.barrier_inflight = true;
   ctx_.barrier_wr = wr;
-  ctx_.barrier_seq = (uint16_t)(ctx_.barrier_seq + 1);
+  ctx_.barrier_seq = ctx_.barrier_seq + 1;
   finished_wrs_.insert(wr);
 
   if (cfg_.rank == ctx_.node_leader_rank) {
@@ -1028,7 +1029,7 @@ void Proxy::barrier_check() {
   if (!ctx_.barrier_inflight) return;
 
   auto* lb = ctx_.lb;
-  const uint16_t seq = ctx_.barrier_seq;
+  const uint64_t seq = ctx_.barrier_seq;
 
   // Node leader aggregates local arrivals
   if (cfg_.rank == ctx_.node_leader_rank) {
@@ -1047,7 +1048,7 @@ void Proxy::barrier_check() {
     }
 
     if (all_local_arrived) {
-      static thread_local uint16_t last_sent_seq = 0;
+      static thread_local uint64_t last_sent_seq = 0;
       if (last_sent_seq != seq) {
         last_sent_seq = seq;
         if (cfg_.rank == 0) {
@@ -1089,6 +1090,7 @@ void Proxy::barrier_check() {
 
           acked_wrs_.insert(ctx_.barrier_wr);
           ctx_.barrier_inflight = false;
+          ctx_.barrier_wr = 0;
           return;
         }
       }
@@ -1105,6 +1107,7 @@ void Proxy::barrier_check() {
         // Complete WR
         acked_wrs_.insert(ctx_.barrier_wr);
         ctx_.barrier_inflight = false;
+        ctx_.barrier_wr = 0;
       }
     }
     return;
@@ -1114,5 +1117,6 @@ void Proxy::barrier_check() {
   if (lb->release_seq[ctx_.local_rank].load(std::memory_order_acquire) == seq) {
     acked_wrs_.insert(ctx_.barrier_wr);
     ctx_.barrier_inflight = false;
+    ctx_.barrier_wr = 0;
   }
 }

@@ -187,20 +187,21 @@ class WriteImm {
 };
 
 struct BarrierImm {
-  // [31]=0 (non-atomic), [30]=1 (control), [29]=ACK, [28:16]=SEQ (13b),
-  // [15:0]=SRC_RANK
+  // [31]=0 (non-atomic), [30]=1 (control), [29]=ACK,
+  // [28:8]=SEQ (21 bits), [7:0]=SRC_RANK
   static constexpr uint32_t kCtrlBit = 1u << 30;
   static constexpr uint32_t kAckBit = 1u << 29;
 
   static inline bool IsAck(uint32_t imm) { return (imm & kAckBit) != 0u; }
 
-  static inline uint32_t Pack(bool ack, uint16_t seq, uint16_t src_rank) {
-    return kCtrlBit | (ack ? kAckBit : 0u) | ((uint32_t(seq & 0x1FFFu) << 16)) |
-           uint32_t(src_rank);
+  static inline uint32_t Pack(bool ack, uint32_t seq, uint8_t src_rank) {
+    return kCtrlBit | (ack ? kAckBit : 0u) |
+           ((seq & 0x1FFFFFu) << 8)  // 21 bits for seq
+           | uint32_t(src_rank);
   }
 
-  static inline uint16_t Seq(uint32_t imm) { return (imm >> 16) & 0x1FFFu; }
-  static inline uint16_t Rank(uint32_t imm) { return imm & 0xFFFFu; }
+  static inline uint32_t Seq(uint32_t imm) { return (imm >> 8) & 0x1FFFFFu; }
+  static inline uint8_t Rank(uint32_t imm) { return imm & 0xFFu; }
 };
 
 // Setup RDMA resources (register GPU memory, create QP, etc.)

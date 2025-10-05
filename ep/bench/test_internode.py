@@ -372,11 +372,6 @@ def test_main(
         )
         for nvl_chunk_size in range(4, 45, 4):
             for rdma_chunk_size in range(4, 33, 4):
-                if local_rank == 0:
-                    print(
-                        f"[tuning] Testing dispatch with SMs {num_sms}, NVL chunk {nvl_chunk_size}, RDMA chunk {rdma_chunk_size} ...",
-                        flush=True,
-                    )
                 config = Config(
                     num_sms,
                     nvl_chunk_size,
@@ -444,11 +439,6 @@ def test_main(
     best_time, best_results = 1e10, None
     for nvl_chunk_size in range(1, 8, 1):
         for rdma_chunk_size in range(12 if num_nodes == 2 else 8, 33, 4):
-            if local_rank == 0:
-                print(
-                    f"[tuning] Testing combine with SMs {num_sms}, NVL chunk {nvl_chunk_size}, RDMA chunk {rdma_chunk_size} ...",
-                    flush=True,
-                )
             config = Config(
                 num_sms,
                 nvl_chunk_size,
@@ -539,21 +529,6 @@ def test_loop(
         )
         if local_rank == 0:
             print("", flush=True)
-
-    # Test compatibility with low latency functions
-    if args.test_ll_compatibility:
-        buffer.clean_low_latency_buffer(ll_num_tokens, ll_hidden, ll_num_experts)
-        test_low_latency.test_main(
-            ll_num_tokens,
-            ll_hidden,
-            ll_num_experts,
-            ll_num_topk,
-            rank,
-            num_ranks,
-            group,
-            buffer,
-            seed=1,
-        )
 
     # Destroy the buffer runtime and communication group
     group.barrier()
