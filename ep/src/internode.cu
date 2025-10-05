@@ -388,10 +388,6 @@ __global__ void notify_dispatch(
       for (int i = 1; i < num_channels; ++i) prefix_row[i] += prefix_row[i - 1];
     }
   }
-  if (thread_id == 0) {
-    printf("[notify_dispatch] rdma_rank: %d, nvl_rank: %d done\n", rdma_rank,
-           nvl_rank);
-  }
 }
 
 void notify_dispatch(
@@ -1580,7 +1576,6 @@ __global__ void cached_notify(
 
   auto nvl_rank = rank % NUM_MAX_NVL_PEERS;
   auto num_rdma_ranks = num_ranks / NUM_MAX_NVL_PEERS;
-  auto rdma_rank = rank / NUM_MAX_NVL_PEERS;
 
   // Using two SMs, which clean the RDMA/NVL buffer respectively
   if (sm_id == 0) {
@@ -1650,8 +1645,6 @@ __global__ void cached_notify(
           last_head = current_head;
         }
       }
-      printf("[cached_notify] lane_id: %d, warp_id: %d, last_head: %d\n",
-             lane_id, warp_id, last_head);
     }
   } else {
     if (is_cached_dispatch) return;

@@ -214,7 +214,6 @@ def test_main(
                         print(
                             f'[testing] Running with {"FP8" if isinstance(current_x, tuple) else "BF16"}, {"with" if with_topk else "without"} top-k (async={async_mode}, previous={previous_mode}) ...',
                             flush=True,
-                            end="",
                         )
                     dispatch_args = {
                         "x": current_x,
@@ -353,12 +352,6 @@ def test_main(
                     dispatch_bf16_nvl_recv_bytes = recv_x.numel() * 2
                     combine_bf16_nvl_send_bytes = dispatch_bf16_nvl_recv_bytes
                     combine_bf16_rdma_recv_bytes = dispatch_bf16_rdma_send_bytes
-
-                    # print("Combine passed!", flush=True, end=" ")
-                    # print("Combine Before dist.barrier", flush=True)
-                    # dist.barrier()
-                    # print("Combine After dist.barrier", flush=True)
-
     if local_rank == 0:
         print("", flush=True)
 

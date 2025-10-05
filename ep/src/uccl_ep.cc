@@ -67,9 +67,6 @@ static std::vector<uint64_t> collect_ring_addrs_for_device(int device_index) {
         proxy.attr("get_ring_buffer_addrs")().cast<std::vector<uint64_t>>();
     all_addrs.insert(all_addrs.end(), proxy_addrs.begin(), proxy_addrs.end());
   }
-
-  printf("Collected %zu ring buffer addresses for device %d from %zu proxies\n",
-         all_addrs.size(), device_index, it->second.size());
   return all_addrs;
 }
 
@@ -380,8 +377,6 @@ class Buffer {
     EP_HOST_ASSERT(config.num_sms % 2 == 0);
     EP_HOST_ASSERT(0 < get_num_rdma_ranks() and
                    get_num_rdma_ranks() <= NUM_MAX_RDMA_PEERS);
-    printf("internode dispatch started!, num_rdma_ranks: %d\n",
-           get_num_rdma_ranks());
 
     bool cached_mode = cached_rdma_channel_prefix_matrix.has_value();
     if (cached_mode) {
@@ -521,7 +516,6 @@ class Buffer {
       recv_gbl_rank_prefix_sum = cached_recv_gbl_rank_prefix_sum.value();
 
       // Just a barrier and clean flags
-      printf("Using cached notify\n");
       uccl::internode::cached_notify(
           hidden_int4, num_scales, num_topk, num_topk, num_ranks, num_channels,
           0, nullptr, nullptr, nullptr, nullptr, rdma_buffer_ptr,
@@ -532,7 +526,6 @@ class Buffer {
                                            num_ranks),
           num_nvl_bytes, true, low_latency_mode, d_ring_addrs, num_ring_addrs,
           atomic_buffer_ptr);
-      printf("Cached notify done\n");
     } else {
       rdma_channel_prefix_matrix =
           torch::empty({num_rdma_ranks, num_channels},
@@ -548,7 +541,6 @@ class Buffer {
       *moe_recv_counter = -1, *moe_recv_rdma_counter = -1;
       for (int i = 0; i < num_local_experts; ++i)
         moe_recv_expert_counter[i] = -1;
-      printf("Using normal notify\n");
       uccl::internode::notify_dispatch(
           num_tokens_per_rank->data_ptr<int>(), moe_recv_counter_mapped,
           num_ranks, num_tokens_per_rdma_rank->data_ptr<int>(),
@@ -568,7 +560,6 @@ class Buffer {
           num_nvl_bytes, low_latency_mode, d_ring_addrs, num_ring_addrs,
           atomic_buffer_ptr);
 
-      printf("Normal notify done\n");
       // Synchronize total received tokens and tokens per expert
       auto start_time = std::chrono::high_resolution_clock::now();
       while (true) {
@@ -599,21 +590,11 @@ class Buffer {
         }
       }
 
-      if (rank % 8 == 0) {
-        printf("[verify] Rank %d ready after notify_dispatch\n", rank);
-        printf("          num_recv_tokens=%d, num_rdma_recv_tokens=%d\n",
-               num_recv_tokens, num_rdma_recv_tokens);
-        printf("          per-expert counts: ");
-        for (int i = 0; i < num_local_experts; ++i)
-          printf("%d ", moe_recv_expert_counter[i]);
-        printf("\n");
-      }
-
       num_recv_tokens_per_expert_list = std::vector<int>(
           moe_recv_expert_counter, moe_recv_expert_counter + num_local_experts);
     }
     // NOTE(MaoZiming): new
-    CUDA_CHECK(cudaStreamSynchronize(comm_stream));
+    // CUDA_CHECK(cudaStreamSynchronize(comm_stream));
 
     // Allocate new tensors
     auto recv_x = torch::empty({num_recv_tokens, hidden}, x.options());
@@ -662,7 +643,6 @@ class Buffer {
 
     // Launch data dispatch
     // NOTES: the buffer size checks are moved into the `.cu` file
-    printf("Launching internode dispatch kernel\n");
     uccl::internode::dispatch(
         recv_x.data_ptr(), recv_x_scales_ptr, recv_topk_idx_ptr,
         recv_topk_weights_ptr,
@@ -685,7 +665,6 @@ class Buffer {
         config.num_max_nvl_chunked_recv_tokens, rank, num_ranks, cached_mode,
         comm_stream, num_channels, low_latency_mode, d_ring_addrs,
         num_ring_addrs, atomic_buffer_ptr);
-    printf("Internode dispatch kernel launched\n");
     // Wait streams
     std::optional<EventHandle> event;
     if (async) {
@@ -860,14 +839,11 @@ class Buffer {
                        bias.size(1) == hidden);
         bias_ptrs[i] = bias.data_ptr();
       }
-    // NOTE(MaoZiming): new
-    printf("combine before sync\n");
-    CUDA_CHECK(cudaStreamSynchronize(comm_stream));
-    printf("combine after sync\n");
+    // // NOTE(MaoZiming): new
+    // CUDA_CHECK(cudaStreamSynchronize(comm_stream));
 
     // Launch data combine
     auto combined_x = torch::empty({num_combined_tokens, hidden}, x.options());
-    printf("Launching internode combine kernel.\n");
 
     uccl::internode::combine(
         at::cuda::ScalarTypeToCudaDataType(x.scalar_type()),
@@ -885,7 +861,6 @@ class Buffer {
         config.num_max_nvl_chunked_recv_tokens, rank, num_ranks, comm_stream,
         num_channels, low_latency_mode, d_ring_addrs, num_ring_addrs,
         atomic_buffer_ptr);
-    printf("Launching internode combine kernel\n");
 
     // Wait streams
     std::optional<EventHandle> event;

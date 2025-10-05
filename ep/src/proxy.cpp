@@ -310,8 +310,6 @@ void Proxy::init_common() {
 
   // Owner initializes full_mask once
   if (ctx_.lb_owner) {
-    printf("[local_rank:%d] Local barrier shm %s created\n", cfg_.local_rank,
-           shm_name.c_str());
     ctx_.lb->full_mask = (ctx_.num_local_ranks >= 64)
                              ? ~0ULL
                              : ((1ULL << ctx_.num_local_ranks) - 1ULL);
@@ -319,19 +317,11 @@ void Proxy::init_common() {
       ctx_.lb->arrive_seq[i].store(0, std::memory_order_relaxed);
       ctx_.lb->release_seq[i].store(0, std::memory_order_relaxed);
     }
-    printf("[local_rank:%d] Local barrier shm %s created, full_mask=0x%lx\n",
-           cfg_.local_rank, shm_name.c_str(), ctx_.lb->full_mask.load());
     // seq/arrived_mask already zero due to ftruncate+MAP_SHARED zeroing
   } else {
     // Wait until owner sets full_mask (should be quick)
     while (ctx_.lb->full_mask == 0ULL) cpu_relax();
   }
-
-  printf(
-      "[local_rank:%d] Intra-node barrier ready: local=%d, leader=%d, "
-      "shm=%s\n",
-      cfg_.local_rank, ctx_.num_local_ranks, ctx_.node_leader_rank,
-      shm_name.c_str());
 }
 
 void Proxy::init_sender() {
@@ -866,11 +856,7 @@ void Proxy::quiet_cq() {
 
 void Proxy::quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds) {
   assert(cmds.size() == 1 && "quiet size must be 1");
-  printf("[local_rank: %d] Quiet started on thread %d, wr=%lu\n",
-         cfg_.local_rank, cfg_.thread_idx, wrs[0]);
   quiet_cq();
-  printf("[local_rank: %d] Quiet completed on thread %d, wr=%lu\n",
-         cfg_.local_rank, cfg_.thread_idx, wrs[0]);
   finished_wrs_.insert(wrs[0]);
   acked_wrs_.insert(wrs[0]);
 }
@@ -1036,12 +1022,6 @@ void Proxy::send_barrier(uint64_t wr) {
   uint64_t bit = (1ULL << (uint64_t)ctx_.local_rank);
   lb->arrived_mask.fetch_or(bit, std::memory_order_acq_rel);
   uint64_t cur_mask = lb->arrived_mask.load(std::memory_order_acquire);
-
-  printf(
-      "[local_rank:%d, wr:%ld] barrier seq=%u announced (local), "
-      "arrived=%llu\n",
-      cfg_.local_rank, ctx_.barrier_wr, ctx_.barrier_seq,
-      (unsigned long long)cur_mask);
 }
 
 void Proxy::barrier_check() {
@@ -1057,8 +1037,6 @@ void Proxy::barrier_check() {
     auto now = std::chrono::steady_clock::now();
     if (now - last_dbg > std::chrono::milliseconds(1000)) {
       uint64_t mask_dbg = lb->arrived_mask.load(std::memory_order_acquire);
-      printf("[barrier dbg] leader=%d seq=%u arrived_mask=%llu\n", cfg_.rank,
-             seq, (unsigned long long)mask_dbg);
       last_dbg = now;
     }
     bool all_local_arrived = true;
@@ -1073,7 +1051,6 @@ void Proxy::barrier_check() {
     if (all_local_arrived) {
       static thread_local uint16_t last_sent_seq = 0;
       if (last_sent_seq != seq) {
-        printf("New barrier seq=%u detected (local leader)\n", seq);
         last_sent_seq = seq;
         if (cfg_.rank == 0) {
           // Global leader: mark self-arrival; remote arrivals will come via
@@ -1085,29 +1062,14 @@ void Proxy::barrier_check() {
           if (!ctx_.barrier_arrived[0]) {
             ctx_.barrier_arrived[0] = 1;
             ++ctx_.barrier_arrival_count;
-            printf(
-                "[local_rank:%d] barrier seq=%u local node arrived (global "
-                "leader), %d/%d\n",
-                cfg_.local_rank, seq, ctx_.barrier_arrival_count,
-                cfg_.num_nodes);
           }
         } else {
-          printf(
-              "[local_rank:%d] barrier seq=%u local node arrived, "
-              "sending to global leader\n",
-              cfg_.local_rank, seq);
           post_barrier_msg(/*dst=*/0, /*ack=*/false, seq);
-          printf("[local_rank:%d] barrier seq=%u sent to global leader\n",
-                 cfg_.local_rank, seq);
         }
       }
 
       if (cfg_.rank == 0) {
         if (ctx_.barrier_arrival_count == cfg_.num_nodes) {
-          printf(
-              "[local_rank:%d] barrier seq=%u all arrivals received (global "
-              "leader)\n",
-              cfg_.local_rank, seq);
           std::unordered_map<std::string, int> leader_for_ip;
           for (int r = 0; r < (int)peers_.size(); ++r) {
             auto it = leader_for_ip.find(peers_[r].ip);
@@ -1129,10 +1091,6 @@ void Proxy::barrier_check() {
 
           acked_wrs_.insert(ctx_.barrier_wr);
           ctx_.barrier_inflight = false;
-          printf(
-              "[local_rank:%d] barrier seq=%u released (global leader), "
-              "barrier_wr: %ld\n",
-              cfg_.local_rank, seq, ctx_.barrier_wr);
           return;
         }
       }
@@ -1149,10 +1107,6 @@ void Proxy::barrier_check() {
         // Complete WR
         acked_wrs_.insert(ctx_.barrier_wr);
         ctx_.barrier_inflight = false;
-        printf(
-            "[local_rank:%d] barrier seq=%u released (node leader), "
-            "barrier_wr: %ld\n",
-            cfg_.local_rank, seq, ctx_.barrier_wr);
       }
     }
     return;
@@ -1162,9 +1116,5 @@ void Proxy::barrier_check() {
   if (lb->release_seq[ctx_.local_rank].load(std::memory_order_acquire) == seq) {
     acked_wrs_.insert(ctx_.barrier_wr);
     ctx_.barrier_inflight = false;
-    printf(
-        "[local_rank:%d] barrier seq=%u released (local follower), barrier_wr: "
-        "%ld\n",
-        cfg_.local_rank, seq, ctx_.barrier_wr);
   }
 }

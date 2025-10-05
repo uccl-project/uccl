@@ -1115,7 +1115,9 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
         int value = aimm.GetValue();
         uint32_t offset = aimm.GetOff();
         size_t index = offset / sizeof(int);
+#ifndef USE_NORMAL_MODE
         bool is_combine = aimm.IsCombine();
+#endif
 #ifdef USE_RECEIVER_BARRIER
         // ep_config.hpp
         int low_latency_buffer_idx = aimm.GetBufferIdx();
@@ -1218,23 +1220,24 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
           } else {
             assert(false && "Rank 0 should not receive barrier ack");
           }
-          printf(
-              "Rank 0: Received barrier from rank %d (seq=%u), total arrived: "
-              "%d/%d\n",
-              src, seq, S.barrier_arrival_count, num_nodes);
+          // printf(
+          //     "Rank 0: Received barrier from rank %d (seq=%u), total arrived:
+          //     "
+          //     "%d/%d\n",
+          //     src, seq, S.barrier_arrival_count, num_nodes);
         } else {
           if (is_ack) {
             S.barrier_released = true;
             S.barrier_release_seq = seq;
-            printf("Rank %d: Received barrier release from rank 0 (seq=%u)\n",
-                   my_rank, seq);
+            // printf("Rank %d: Received barrier release from rank 0
+            // (seq=%u)\n",
+            //        my_rank, seq);
           } else {
             assert(false &&
                    "Non-leader rank should not receive barrier request");
           }
         }
       } else if (ImmType::IsWrite(raw)) {
-        printf("Received write imm: 0x%x\n", raw);
 #ifdef USE_RECEIVER_BARRIER
         uint32_t imm = ntohl(cqe.imm_data);
         WriteImm wimm(imm);
