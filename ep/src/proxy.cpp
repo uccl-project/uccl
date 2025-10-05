@@ -634,19 +634,13 @@ void Proxy::post_gpu_commands_mixed(
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
     if (cmds_to_post[i].cmd_type == CmdType::ATOMIC) {
 #ifdef USE_SENDER_BARRIER
-      int value;
-      int expected_value;
-      expected_value = 1;
-      value = 1;
-      int expert_idx;
-      size_t new_index;
-
-      value = cmds_to_post[i].value;
+      int value = cmds_to_post[i].value;
       uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
       uint32_t new_offset =
           offset - cmds_to_post[i].low_latency_buffer_idx *
                        align<size_t>(cfg_.num_experts * sizeof(int), 128);
-      new_index = new_offset / sizeof(int);
+      size_t new_index = new_offset / sizeof(int);
+      int expert_idx;
 
       if (cmds_to_post[i].is_combine) {
         expert_idx = new_index;

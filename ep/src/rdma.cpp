@@ -745,14 +745,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                   "(map=%p)\n",
                   thread_idx, expert_tail_wr, (void*)&S.wr_id_to_wr_ids);
           std::abort();
-        } else {
-          for (auto const& wr_id : it->second) {
-            printf(
-                "[local_rank: %d] Expert %d: Posted RDMA WR to rank %d "
-                "(wr_id=%lu)\n",
-                my_rank, expert_idx, dst_rank, wr_id);
-            finished_wrs.insert(wr_id);
-          }
         }
       }
     }
@@ -890,11 +882,6 @@ void local_process_completions(ProxyCtx& S,
           if (it != S.wr_id_to_write_struct.end()) {
             WriteStruct const& ws = it->second;
             S.wr_id_to_write_struct.erase(it);
-            if (ws.is_normal != -1) {
-              S.normal_sent_counter.Add({ws.is_normal, ws.dst_rank}, 1);
-              printf("Normal send completed (is_normal=%d, dst_rank=%d)\n",
-                     ws.is_normal, ws.dst_rank);
-            }
             if (ws.is_combine) {
               S.combine_sent_counter.Add(
                   {ws.low_latency_buffer_idx, ws.expert_idx, ws.dst_rank}, 1);
@@ -911,9 +898,8 @@ void local_process_completions(ProxyCtx& S,
 #ifdef EFA
           uint64_t const wr_done = wc[i].wr_id;
           acked_wrs.insert(wr_done);
-          auto it = S.wr_id_to_wr_ids.find(wr_done);
-          if (it != S.wr_id_to_wr_ids.end()) {
-            S.wr_id_to_wr_ids.erase(it);
+          if (S.wr_id_to_wr_ids.find(wr_done) != S.wr_id_to_wr_ids.end()) {
+            S.wr_id_to_wr_ids.erase(wr_done);
           }
 #else
           uint64_t const wr_done = wc[i].wr_id;
@@ -1099,154 +1085,151 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
     if (cqe.opcode == IBV_WC_SEND) {
       continue;
     }
-    if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
-      uint32_t raw = ntohl(cqe.imm_data);
-      if (ImmType::IsAtomics(raw)) {
-        AtomicsImm aimm(raw);
-        int value = aimm.GetValue();
-        uint32_t offset = aimm.GetOff();
-        size_t index = offset / sizeof(int);
-#ifndef USE_NORMAL_MODE
-        bool is_combine = aimm.IsCombine();
-#endif
+    if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
+        ImmType::IsAtomics(ntohl(cqe.imm_data))) {
+      AtomicsImm aimm(ntohl(cqe.imm_data));
+      int value = aimm.GetValue();
+      uint32_t offset = aimm.GetOff();
+      size_t index = offset / sizeof(int);
 #ifdef USE_RECEIVER_BARRIER
-        // ep_config.hpp
-        int low_latency_buffer_idx = aimm.GetBufferIdx();
-        uint32_t new_offset =
-            offset - low_latency_buffer_idx *
-                         align<size_t>(num_experts * sizeof(int), 128);
-        size_t new_index = new_offset / sizeof(int);
-        int src_rank = -1;
-        bool is_atomic_ready = false;
-        int expert_idx = -1;
-        if (!is_combine) {
-          expert_idx = new_index / num_ranks;
-          src_rank = new_index % num_ranks;
-          int num_tokens = S.dispatch_token_counter.Get(
-              {low_latency_buffer_idx, expert_idx, src_rank});
-          if ((-value - 1) == num_tokens) {
-            is_atomic_ready = true;
-          }
-          if ((-value - 1) < num_tokens) {
-            fprintf(
-                stderr,
-                "[Error] Required Dispatch value %d is smaller than received "
-                "counter %d for "
-                "expert_idx %d, src_rank %d\n",
-                -value - 1, num_tokens, expert_idx, src_rank);
-          }
-          if (is_atomic_ready) {
-            S.dispatch_token_counter.Reset(
-                {low_latency_buffer_idx, expert_idx, src_rank});
-          }
-
-        } else {
-          expert_idx = new_index;
-          if (expert_idx > num_experts) {
-            fprintf(stderr,
-                    "Error: expert_idx %d out of range (num_experts=%d)\n",
-                    expert_idx, num_experts);
-            std::abort();
-          }
-          int combine_num_tokens =
-              S.combine_token_counter.Get({low_latency_buffer_idx, expert_idx});
-          if (value == combine_num_tokens) {
-            is_atomic_ready = true;
-          }
-          if (value < combine_num_tokens) {
-            fprintf(
-                stderr,
-                "[Error] Required Combine value %d is smaller than received "
-                "counter %d for "
-                "expert_idx %d\n",
-                value, combine_num_tokens, expert_idx);
-          }
-          if (is_atomic_ready) {
-            S.combine_token_counter.Reset({low_latency_buffer_idx, expert_idx});
-          }
+      // ep_config.hpp
+      bool is_combine = aimm.IsCombine();
+      int low_latency_buffer_idx = aimm.GetBufferIdx();
+      uint32_t new_offset =
+          offset - low_latency_buffer_idx *
+                       align<size_t>(num_experts * sizeof(int), 128);
+      size_t new_index = new_offset / sizeof(int);
+      int src_rank = -1;
+      bool is_atomic_ready = false;
+      int expert_idx = -1;
+      if (!is_combine) {
+        expert_idx = new_index / num_ranks;
+        src_rank = new_index % num_ranks;
+        int num_tokens = S.dispatch_token_counter.Get(
+            {low_latency_buffer_idx, expert_idx, src_rank});
+        if ((-value - 1) == num_tokens) {
+          is_atomic_ready = true;
         }
-        auto* addr32 =
-            reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
+        if ((-value - 1) < num_tokens) {
+          fprintf(stderr,
+                  "[Error] Required Dispatch value %d is smaller than received "
+                  "counter %d for "
+                  "expert_idx %d, src_rank %d\n",
+                  -value - 1, num_tokens, expert_idx, src_rank);
+        }
         if (is_atomic_ready) {
-          if (is_combine) value = 1;
-          addr32->fetch_add(value, std::memory_order_release);
-        } else {
-          pending_atomic_updates.insert({addr32, value, aimm.GetImmData(),
-                                         low_latency_buffer_idx, expert_idx,
-                                         is_combine, src_rank});
+          S.dispatch_token_counter.Reset(
+              {low_latency_buffer_idx, expert_idx, src_rank});
         }
-#else
-        auto* addr32 =
-            reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
-#ifndef USE_NORMAL_MODE
+
+      } else {
+        expert_idx = new_index;
+        if (expert_idx > num_experts) {
+          fprintf(stderr,
+                  "Error: expert_idx %d out of range (num_experts=%d)\n",
+                  expert_idx, num_experts);
+          std::abort();
+        }
+        int combine_num_tokens =
+            S.combine_token_counter.Get({low_latency_buffer_idx, expert_idx});
+        if (value == combine_num_tokens) {
+          is_atomic_ready = true;
+        }
+        if (value < combine_num_tokens) {
+          fprintf(stderr,
+                  "[Error] Required Combine value %d is smaller than received "
+                  "counter %d for "
+                  "expert_idx %d\n",
+                  value, combine_num_tokens, expert_idx);
+        }
+        if (is_atomic_ready) {
+          S.combine_token_counter.Reset({low_latency_buffer_idx, expert_idx});
+        }
+      }
+      auto* addr32 =
+          reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
+      if (is_atomic_ready) {
         if (is_combine) value = 1;
-#endif
-        if (value == kMaxSendAtomicValue) value = kLargeAtomicValue;
         addr32->fetch_add(value, std::memory_order_release);
+      } else {
+        pending_atomic_updates.insert({addr32, value, aimm.GetImmData(),
+                                       low_latency_buffer_idx, expert_idx,
+                                       is_combine, src_rank});
+      }
+#else
+      auto* addr32 =
+          reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
+#ifdef USE_SENDER_BARRIER
+      bool is_combine = aimm.IsCombine();
+      if (is_combine) value = 1;
 #endif
-      } else if (ImmType::IsBarrier(raw)) {
-        bool is_ack = BarrierImm::IsAck(raw);
-        uint32_t seq = BarrierImm::Seq(raw);
-        uint16_t src = BarrierImm::Rank(raw);
-        if (my_rank == 0) {
-          if (!is_ack) {
-            if (S.barrier_arrived.empty()) {
-              assert(S.barrier_arrival_count == 0 &&
-                     "Barrier arrival count should be 0");
-              S.barrier_arrived.resize((size_t)num_nodes, 0);
-            }
-            int num_ranks_per_node = num_ranks / num_nodes;
-            size_t node_rank = src / num_ranks_per_node;
-            if (node_rank < S.barrier_arrived.size() &&
-                !S.barrier_arrived[node_rank]) {
-              S.barrier_arrived[node_rank] = 1;
-              ++S.barrier_arrival_count;
-            } else {
-              assert(false &&
-                     "Duplicate barrier arrival or local_rank out of range");
-            }
-          } else {
-            assert(false && "Rank 0 should not receive barrier ack");
+      if (value == kMaxSendAtomicValue) value = kLargeAtomicValue;
+      addr32->fetch_add(value, std::memory_order_release);
+#endif
+    } else if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
+               ImmType::IsBarrier(ntohl(cqe.imm_data))) {
+      BarrierImm bimm(ntohl(cqe.imm_data));
+      bool is_ack = bimm.GetIsAck();
+      uint32_t seq = bimm.GetSeq();
+      uint16_t src = bimm.GetRank();
+      if (my_rank == 0) {
+        if (!is_ack) {
+          if (S.barrier_arrived.empty()) {
+            assert(S.barrier_arrival_count == 0 &&
+                   "Barrier arrival count should be 0");
+            S.barrier_arrived.resize((size_t)num_nodes, 0);
           }
-        } else {
-          if (is_ack) {
-            S.barrier_released = true;
-            S.barrier_release_seq = seq;
+          int num_ranks_per_node = num_ranks / num_nodes;
+          size_t node_rank = src / num_ranks_per_node;
+          if (node_rank < S.barrier_arrived.size() &&
+              !S.barrier_arrived[node_rank]) {
+            S.barrier_arrived[node_rank] = 1;
+            ++S.barrier_arrival_count;
           } else {
             assert(false &&
-                   "Non-leader rank should not receive barrier request");
+                   "Duplicate barrier arrival or local_rank out of range");
           }
-        }
-      } else if (ImmType::IsWrite(raw)) {
-#ifdef USE_RECEIVER_BARRIER
-        uint32_t imm = ntohl(cqe.imm_data);
-        WriteImm wimm(imm);
-        bool is_combine = wimm.IsCombine();
-        uint32_t buffer_idx = wimm.GetBufferIdx();
-        uint32_t expert_idx = wimm.GetExpertIdx();
-        uint32_t k = wimm.GetNumTokens();
-        uint32_t src_rank = wimm.GetRank();
-
-        if (!is_combine) {
-          /* expert_idx here is the local expert index of the receiver. */
-          S.dispatch_token_counter.Add({buffer_idx, expert_idx, src_rank}, k);
         } else {
-          /* expert_idx here is the global expert index of the sender. */
-          assert(expert_idx >= src_rank * (num_experts / num_ranks) &&
-                 expert_idx < (src_rank + 1) * (num_experts / num_ranks));
-          S.combine_token_counter.Add({buffer_idx, expert_idx}, k);
+          assert(false && "Rank 0 should not receive barrier ack");
         }
-#endif
       } else {
-        fprintf(stderr, "Unexpected CQE opcode: %d\n", cqe.opcode);
-        std::abort();
+        if (is_ack) {
+          S.barrier_released = true;
+          S.barrier_release_seq = seq;
+        } else {
+          assert(false && "Non-leader rank should not receive barrier request");
+        }
       }
-#ifndef EFA
-      const uint32_t tag = wr_tag(cqe.wr_id);
-      ProxyCtx& S = *ctx_by_tag[tag];
-      repost_recv(S, cqe.wr_id, S.mr->addr, 1, S.mr->lkey);
+    } else if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
+               ImmType::IsWrite(ntohl(cqe.imm_data))) {
+#ifdef USE_RECEIVER_BARRIER
+      uint32_t imm = ntohl(cqe.imm_data);
+      WriteImm wimm(imm);
+      bool is_combine = wimm.IsCombine();
+      uint32_t buffer_idx = wimm.GetBufferIdx();
+      uint32_t expert_idx = wimm.GetExpertIdx();
+      uint32_t k = wimm.GetNumTokens();
+      uint32_t src_rank = wimm.GetRank();
+
+      if (!is_combine) {
+        /* expert_idx here is the local expert index of the receiver. */
+        S.dispatch_token_counter.Add({buffer_idx, expert_idx, src_rank}, k);
+      } else {
+        /* expert_idx here is the global expert index of the sender. */
+        assert(expert_idx >= src_rank * (num_experts / num_ranks) &&
+               expert_idx < (src_rank + 1) * (num_experts / num_ranks));
+        S.combine_token_counter.Add({buffer_idx, expert_idx}, k);
+      }
 #endif
+    } else if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
+      fprintf(stderr, "Unexpected CQE opcode: %d\n", cqe.opcode);
+      std::abort();
     }
+#ifndef EFA
+    const uint32_t tag = wr_tag(cqe.wr_id);
+    ProxyCtx& S = *ctx_by_tag[tag];
+    repost_recv(S, cqe.wr_id, S.mr->addr, 1, S.mr->lkey);
+#endif
   }
 }
 

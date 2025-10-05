@@ -90,8 +90,7 @@ class Buffer {
         explicitly_destroy(explicitly_destroy),
         comm_stream(at::cuda::getStreamFromPool(/*isHighPriority=*/true)) {
     if (num_local_ranks == -1) num_local_ranks = get_num_max_nvl_peers();
-    // max_nvl_peers = num_local_ranks;
-    max_nvl_peers = NUM_MAX_NVL_PEERS;
+    max_nvl_peers = num_local_ranks;
     {
       cudaGetDevice(&device_index);
       {
@@ -585,11 +584,9 @@ class Buffer {
           for (int i = 0; i < num_local_experts; ++i)
             printf("moe_recv_expert_counter[%d]: %d\n", i,
                    moe_recv_expert_counter[i]);
-          cudaDeviceSynchronize();
           throw std::runtime_error("DeepEP error: timeout (dispatch CPU)");
         }
       }
-
       num_recv_tokens_per_expert_list = std::vector<int>(
           moe_recv_expert_counter, moe_recv_expert_counter + num_local_experts);
     }
@@ -840,7 +837,6 @@ class Buffer {
 
     // Launch data combine
     auto combined_x = torch::empty({num_combined_tokens, hidden}, x.options());
-
     uccl::internode::combine(
         at::cuda::ScalarTypeToCudaDataType(x.scalar_type()),
         combined_x.data_ptr(), combined_topk_weights_ptr,
