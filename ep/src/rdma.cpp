@@ -1228,22 +1228,24 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       std::abort();
     }
 #ifndef EFA
-    const uint32_t tag = wr_tag(cqe.wr_id);
-    ProxyCtx& S = *ctx_by_tag[tag];
-    ibv_sge sge = {
-        .addr = reinterpret_cast<uintptr_t>(&S.ack_recv_buf[0]),
-        .length = sizeof(uint64_t),
-        .lkey = S.ack_recv_mr->lkey,
-    };
-    ibv_recv_wr rwr{};
-    S.pool_index = (S.pool_index + 1) % (kRemoteBufferSize / kObjectSize - 1);
-    rwr.wr_id = make_wr_id(wr_tag(cqe.wr_id), S.pool_index);
-    rwr.sg_list = &sge;
-    rwr.num_sge = 1;
-    ibv_recv_wr* bad = nullptr;
-    if (ibv_post_recv(S.qp, &rwr, &bad)) {
-      perror("ibv_post_recv (imm replenish)");
-      std::abort();
+    if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
+      const uint32_t tag = wr_tag(cqe.wr_id);
+      ProxyCtx& S = *ctx_by_tag[tag];
+      ibv_sge sge = {
+          .addr = reinterpret_cast<uintptr_t>(&S.ack_recv_buf[0]),
+          .length = sizeof(uint64_t),
+          .lkey = S.ack_recv_mr->lkey,
+      };
+      ibv_recv_wr rwr{};
+      S.pool_index = (S.pool_index + 1) % (kRemoteBufferSize / kObjectSize - 1);
+      rwr.wr_id = make_wr_id(wr_tag(cqe.wr_id), S.pool_index);
+      rwr.sg_list = &sge;
+      rwr.num_sge = 1;
+      ibv_recv_wr* bad = nullptr;
+      if (ibv_post_recv(S.qp, &rwr, &bad)) {
+        perror("ibv_post_recv (imm replenish)");
+        std::abort();
+      }
     }
 #endif
   }
