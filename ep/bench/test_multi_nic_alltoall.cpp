@@ -297,7 +297,6 @@ ibv_qp* create_srd_qp_ex(BaseNicCtx& base) {
 }
 
 // Create AH
- 
 
 std::atomic<int> thread_barrier_count{0};
 std::atomic<bool> thread_barrier_sense{false};
