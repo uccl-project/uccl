@@ -1,5 +1,4 @@
 #pragma once
-#include "barrier_local.hpp"
 #include "util/gpu_rt.h"
 #include <infiniband/verbs.h>
 #include <atomic>

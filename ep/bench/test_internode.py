@@ -285,11 +285,6 @@ def test_main(
                             )
                             check_data(recv_topk_weights, recv_gbl_rank_prefix_sum)
 
-                    # NOTE(MaoZiming): for debug
-                    print("dispatch passed!", flush=True, end=" ")
-                    print("dispatch Before dist.barrier", flush=True)
-                    dist.barrier()
-                    print("After dist.barrier", flush=True)
                     # Test cached dispatch (must without top-k staffs)
                     if not with_topk:
                         dispatch_args = {

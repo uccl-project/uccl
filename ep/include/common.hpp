@@ -38,14 +38,14 @@
 #define kMaxInflight 256
 #define kBatchSize 32
 #define kIterations 40000
-#define kNumThBlocks 1
+#define kNumThBlocks 4
 #define kNumThPerBlock 1
 #define kObjectSize 10752  // 10.5 KB
 #define kMaxOutstandingSends 2048
 #define kMaxOutstandingRecvs 2048 * 2
 #define kSenderAckQueueDepth 2048 * 2
 #define kWarmupOps 10000
-#define kRingsPerProxy 1
+#define kRingsPerProxy 8
 #define kRemoteBufferSize (kBatchSize * kNumThBlocks * kObjectSize * 100)
 #define MAIN_THREAD_CPU_IDX 31
 #define MAX_NUM_GPUS 8
