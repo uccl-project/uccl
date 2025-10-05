@@ -1,15 +1,18 @@
 """
 This is the same test_internode.py test in DeepEP's repo.
 
+Build:
+export OMP_NUM_THREADS=6
+export MAKE_NORMAL_MODE=1
+make clean && make -j install
+
 On first node:
-export OMP_NUM_THREADS=4
 torchrun --nnodes=2 --nproc_per_node=8 --node_rank=0 \
   --master_addr=10.1.227.34 --master_port=12355 \
   bench/test_internode.py --num-tokens=4096 \
   --hidden=7168 --num-topk=8 --num-experts=256 --test-ll-compatibility
 
 On second node:
-export OMP_NUM_THREADS=4
 torchrun --nnodes=2 --nproc_per_node=8 --node_rank=1 \
   --master_addr=10.1.227.34 --master_port=12355 \
   bench/test_internode.py --num-tokens=4096 \
