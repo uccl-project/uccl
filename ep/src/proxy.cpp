@@ -1021,7 +1021,6 @@ void Proxy::send_barrier(uint64_t wr) {
 
   uint64_t bit = (1ULL << (uint64_t)ctx_.local_rank);
   lb->arrived_mask.fetch_or(bit, std::memory_order_acq_rel);
-  uint64_t cur_mask = lb->arrived_mask.load(std::memory_order_acquire);
 }
 
 void Proxy::barrier_check() {
@@ -1036,7 +1035,6 @@ void Proxy::barrier_check() {
     static auto last_dbg = std::chrono::steady_clock::now();
     auto now = std::chrono::steady_clock::now();
     if (now - last_dbg > std::chrono::milliseconds(1000)) {
-      uint64_t mask_dbg = lb->arrived_mask.load(std::memory_order_acquire);
       last_dbg = now;
     }
     bool all_local_arrived = true;
