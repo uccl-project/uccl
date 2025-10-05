@@ -45,6 +45,7 @@ class Proxy {
     bool pin_thread = true;
     int num_experts = 0;
     int num_ranks = 0;
+    int num_nodes = 0;
   };
 
   explicit Proxy(Config const& cfg) : cfg_(cfg) {
@@ -90,6 +91,11 @@ class Proxy {
   void post_gpu_command(uint64_t& my_tail, size_t& seen);
   void post_gpu_commands_mixed(std::vector<uint64_t> const& wrs_to_post,
                                std::vector<TransferCmd> const& cmds_to_post);
+  void post_barrier_msg(int dst_rank, bool ack, uint64_t seq);
+  void send_barrier(uint64_t wr);
+  void barrier_check();
+  void quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds);
+  void quiet_cq();
   Config cfg_;
   RDMAConnectionInfo local_info_{}, remote_info_{};
 
