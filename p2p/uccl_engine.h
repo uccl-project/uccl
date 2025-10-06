@@ -19,7 +19,9 @@ enum uccl_msg_type {
   UCCL_READ = 0,
   UCCL_WRITE = 1,
   UCCL_FIFO = 2,
-  UCCL_NOTIFY = 3
+  UCCL_NOTIFY = 3,
+  UCCL_VECTOR_READ = 4,
+  UCCL_VECTOR_WRITE = 5
 };
 
 typedef struct notify_msg {
@@ -36,12 +38,18 @@ typedef struct tx_msg {
   size_t data_size;   // Size of data to receive
 } tx_msg_t;
 
+typedef struct vector_msg {
+  size_t count;  // Number of items in the vector
+
+} vector_msg_t;
+
 typedef struct md {
   uccl_msg_type op;
   union {
     tx_msg_t tx_data;
     fifo_msg_t fifo_data;
     notify_msg_t notify_data;
+    vector_msg_t vector_data;
   } data;
 } md_t;
 
@@ -173,6 +181,16 @@ int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata_str);
  * @return              Number of bytes sent, or -1 on failure.
  */
 int uccl_engine_send_tx_md(uccl_conn_t* conn, md_t* md);
+
+/**
+ * Send multiple transfer metadata as a vector.
+ * @param conn          Connection handle.
+ * @param md_array      Array of transfer metadata.
+ * @param count         Number of metadata items in the array.
+ * @return              Number of bytes sent, or -1 on failure.
+ */
+int uccl_engine_send_tx_md_vector(uccl_conn_t* conn, md_t* md_array,
+                                  size_t count);
 
 /**
  * Get all notification messages and clear the list.

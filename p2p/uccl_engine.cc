@@ -146,6 +146,98 @@ void listener_thread_func(uccl_conn_t* conn) {
         notify_msg_list.push_back(notify_msg);
         break;
       }
+      case UCCL_VECTOR_READ: {
+        size_t count = md.data.vector_data.count;
+        std::cout << "Got Vector READ with " << count << " items" << std::endl;
+
+        tx_msg_t* tx_data_array = new tx_msg_t[count];
+        ssize_t data_size = count * sizeof(tx_msg_t);
+        ssize_t recv_data_size =
+            recv(conn->sock_fd, tx_data_array, data_size, 0);
+
+        if (recv_data_size != data_size) {
+          std::cerr << "Failed to receive complete tx_data array. Expected: "
+                    << data_size << ", Received: " << recv_data_size
+                    << std::endl;
+          delete[] tx_data_array;
+          break;
+        }
+        for (size_t i = 0; i < count; i++) {
+          tx_msg_t tx_data = tx_data_array[i];
+          auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
+          if (local_mem_iter == mem_reg_info.end()) {
+            std::cerr << "Local memory not registered for address: "
+                      << tx_data.data_ptr << " (item " << i << ")" << std::endl;
+            continue;
+          }
+          mr_id = local_mem_iter->second;
+
+          char out_buf[sizeof(uccl::FifoItem)];
+          conn->engine->endpoint->advertise(conn->conn_id, mr_id,
+                                            (void*)tx_data.data_ptr,
+                                            tx_data.data_size, out_buf);
+
+          md_t response_md;
+          response_md.op = UCCL_FIFO;
+          fifo_msg_t fifo_data;
+          memcpy(fifo_data.fifo_buf, out_buf, sizeof(uccl::FifoItem));
+          response_md.data.fifo_data = fifo_data;
+
+          // TODO: Check if this has to sent in bulk or individually
+          ssize_t result = send(conn->sock_fd, &response_md, sizeof(md_t), 0);
+          if (result < 0) {
+            std::cerr << "Failed to send FifoItem data for item " << i << ": "
+                      << strerror(errno) << std::endl;
+          }
+        }
+
+        delete[] tx_data_array;
+        break;
+      }
+      case UCCL_VECTOR_WRITE: {
+        // Handle vector write operations
+        size_t count = md.data.vector_data.count;
+        std::cout << "Got Vector WRITE with " << count << " items" << std::endl;
+
+        // Receive the tx_data array
+        tx_msg_t* tx_data_array = new tx_msg_t[count];
+        ssize_t data_size = count * sizeof(tx_msg_t);
+        ssize_t recv_data_size =
+            recv(conn->sock_fd, tx_data_array, data_size, 0);
+
+        if (recv_data_size != data_size) {
+          std::cerr << "Failed to receive complete tx_data array. Expected: "
+                    << data_size << ", Received: " << recv_data_size
+                    << std::endl;
+          delete[] tx_data_array;
+          break;
+        }
+
+        // Process each tx_data item sequentially
+        for (size_t i = 0; i < count; i++) {
+          tx_msg_t tx_data = tx_data_array[i];
+          auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
+          if (local_mem_iter == mem_reg_info.end()) {
+            std::cerr << "Local memory not registered for address: "
+                      << tx_data.data_ptr << " (item " << i << ")" << std::endl;
+            continue;
+          }
+          mr_id = local_mem_iter->second;
+
+          uccl_mr_t temp_mr;
+          temp_mr.mr_id = mr_id;
+          temp_mr.engine = conn->engine;
+          int result = uccl_engine_recv(conn, &temp_mr, (void*)tx_data.data_ptr,
+                                        tx_data.data_size);
+          if (result < 0) {
+            std::cerr << "Failed to perform uccl_engine_recv for item " << i
+                      << std::endl;
+          }
+        }
+
+        delete[] tx_data_array;
+        break;
+      }
       default:
         std::cerr << "Invalid operation type: " << md.op << std::endl;
         continue;
@@ -337,6 +429,44 @@ int uccl_engine_send_tx_md(uccl_conn_t* conn, md_t* md) {
   if (!conn || !md) return -1;
 
   return send(conn->sock_fd, md, sizeof(md_t), 0);
+}
+
+int uccl_engine_send_tx_md_vector(uccl_conn_t* conn, md_t* md_array,
+                                  size_t count) {
+  if (!conn || !md_array || count == 0) return -1;
+
+  // Determine the operation type based on the first item
+  uccl_msg_type op_type =
+      (md_array[0].op == UCCL_READ) ? UCCL_VECTOR_READ : UCCL_VECTOR_WRITE;
+
+  md_t vector_md;
+  vector_md.op = op_type;
+  vector_md.data.vector_data.count = count;
+
+  ssize_t bytes_sent = send(conn->sock_fd, &vector_md, sizeof(md_t), 0);
+  if (bytes_sent != sizeof(md_t)) {
+    std::cerr << "Failed to send vector metadata header. Expected: "
+              << sizeof(md_t) << ", Sent: " << bytes_sent << std::endl;
+    return -1;
+  }
+
+  tx_msg_t* tx_data_array = new tx_msg_t[count];
+  for (size_t i = 0; i < count; i++) {
+    tx_data_array[i] = md_array[i].data.tx_data;
+  }
+
+  ssize_t data_size = count * sizeof(tx_msg_t);
+  bytes_sent = send(conn->sock_fd, tx_data_array, data_size, 0);
+
+  delete[] tx_data_array;
+
+  if (bytes_sent != data_size) {
+    std::cerr << "Failed to send vector tx_data array. Expected: " << data_size
+              << ", Sent: " << bytes_sent << std::endl;
+    return -1;
+  }
+
+  return sizeof(md_t) + data_size;
 }
 
 std::vector<notify_msg_t> uccl_engine_get_notifs() {
