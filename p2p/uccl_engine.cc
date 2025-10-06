@@ -70,7 +70,6 @@ void listener_thread_func(uccl_conn_t* conn) {
     uint64_t mr_id = 0;
     switch (md.op) {
       case UCCL_READ: {
-        // Access tx_data directly from union
         tx_msg_t tx_data = md.data.tx_data;
         auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
         if (local_mem_iter == mem_reg_info.end()) {
@@ -99,7 +98,6 @@ void listener_thread_func(uccl_conn_t* conn) {
         break;
       }
       case UCCL_WRITE: {
-        // Access tx_data directly from union
         tx_msg_t tx_data = md.data.tx_data;
         auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
         if (local_mem_iter == mem_reg_info.end()) {
@@ -117,34 +115,6 @@ void listener_thread_func(uccl_conn_t* conn) {
         if (result < 0) {
           std::cerr << "Failed to perform uccl_engine_recv" << std::endl;
         }
-        break;
-      }
-      case UCCL_FIFO: {
-        // Access fifo_data directly from union
-        fifo_msg_t fifo_data = md.data.fifo_data;
-        uccl::FifoItem fifo_item;
-        memcpy(&fifo_item, fifo_data.fifo_buf, sizeof(uccl::FifoItem));
-        fifo_item_t* f_item = new fifo_item_t;
-        f_item->fifo_item = fifo_item;
-        f_item->is_valid = true;
-
-        {
-          std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
-          fifo_item_map[conn+fifo_data.id] = f_item;
-        }
-        break;
-      }
-      case UCCL_NOTIFY: {
-        // Got a notif, store it in a list
-        std::cout << "Got Notify :" << md.data.notify_data.name << ", "
-                  << md.data.notify_data.msg << std::endl;
-        std::lock_guard<std::mutex> lock(notify_msg_list_mutex);
-        notify_msg_t notify_msg = {};
-        strncpy(notify_msg.name, md.data.notify_data.name,
-                sizeof(notify_msg.name) - 1);
-        strncpy(notify_msg.msg, md.data.notify_data.msg,
-                sizeof(notify_msg.msg) - 1);
-        notify_msg_list.push_back(notify_msg);
         break;
       }
       case UCCL_VECTOR_READ: {
@@ -181,6 +151,7 @@ void listener_thread_func(uccl_conn_t* conn) {
           md_t response_md;
           response_md.op = UCCL_FIFO;
           fifo_msg_t fifo_data;
+          fifo_data.id=i;
           memcpy(fifo_data.fifo_buf, out_buf, sizeof(uccl::FifoItem));
           response_md.data.fifo_data = fifo_data;
 
@@ -196,11 +167,7 @@ void listener_thread_func(uccl_conn_t* conn) {
         break;
       }
       case UCCL_VECTOR_WRITE: {
-        // Handle vector write operations
         size_t count = md.data.vector_data.count;
-        std::cout << "Got Vector WRITE with " << count << " items" << std::endl;
-
-        // Receive the tx_data array
         tx_msg_t* tx_data_array = new tx_msg_t[count];
         ssize_t data_size = count * sizeof(tx_msg_t);
         ssize_t recv_data_size =
@@ -214,7 +181,6 @@ void listener_thread_func(uccl_conn_t* conn) {
           break;
         }
 
-        // Process each tx_data item sequentially
         for (size_t i = 0; i < count; i++) {
           tx_msg_t tx_data = tx_data_array[i];
           auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
@@ -237,6 +203,32 @@ void listener_thread_func(uccl_conn_t* conn) {
         }
 
         delete[] tx_data_array;
+        break;
+      }
+      case UCCL_FIFO: {
+        fifo_msg_t fifo_data = md.data.fifo_data;
+        uccl::FifoItem fifo_item;
+        memcpy(&fifo_item, fifo_data.fifo_buf, sizeof(uccl::FifoItem));
+        fifo_item_t* f_item = new fifo_item_t;
+        f_item->fifo_item = fifo_item;
+        f_item->is_valid = true;
+
+        {
+          std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
+          fifo_item_map[conn+fifo_data.id] = f_item;
+        }
+        break;
+      }
+      case UCCL_NOTIFY: {
+        std::cout << "Got Notify :" << md.data.notify_data.name << ", "
+                  << md.data.notify_data.msg << std::endl;
+        std::lock_guard<std::mutex> lock(notify_msg_list_mutex);
+        notify_msg_t notify_msg = {};
+        strncpy(notify_msg.name, md.data.notify_data.name,
+                sizeof(notify_msg.name) - 1);
+        strncpy(notify_msg.msg, md.data.notify_data.msg,
+                sizeof(notify_msg.msg) - 1);
+        notify_msg_list.push_back(notify_msg);
         break;
       }
       default:

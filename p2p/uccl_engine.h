@@ -18,10 +18,10 @@ typedef struct uccl_mr uccl_mr_t;
 enum uccl_msg_type {
   UCCL_READ = 0,
   UCCL_WRITE = 1,
-  UCCL_FIFO = 2,
-  UCCL_NOTIFY = 3,
-  UCCL_VECTOR_READ = 4,
-  UCCL_VECTOR_WRITE = 5
+  UCCL_VECTOR_READ = 2,
+  UCCL_VECTOR_WRITE = 3,
+  UCCL_FIFO = 4,
+  UCCL_NOTIFY = 5
 };
 
 typedef struct notify_msg {
