@@ -30,6 +30,7 @@ typedef struct notify_msg {
 } notify_msg_t;
 
 typedef struct fifo_msg {
+  int id;
   char fifo_buf[MSG_SIZE];
 } fifo_msg_t;
 
@@ -122,8 +123,14 @@ uccl_mr_t* uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size);
  */
 int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
                      size_t size, void* slot_item, uint64_t* transfer_id);
-
-int uccl_engine_get_fifo_item(uccl_conn_t* conn, void* fifo_item);
+/**
+ * Get a FIFO item.
+ * @param conn          Connection handle.
+ * @param id            FIFO item ID.
+ * @param fifo_item     Pointer to the FIFO item.
+ * @return              0 on success, non-zero on failure.
+ */
+int uccl_engine_get_fifo_item(uccl_conn_t* conn, int id, void* fifo_item);
 
 /**
  * Send data (Non blocking).

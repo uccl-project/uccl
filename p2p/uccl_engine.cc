@@ -10,6 +10,7 @@
 #include <cstring>
 #include <functional>
 #include <future>
+#include <iostream>
 #include <mutex>
 #include <queue>
 #include <string>
@@ -129,7 +130,7 @@ void listener_thread_func(uccl_conn_t* conn) {
 
         {
           std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
-          fifo_item_map[conn] = f_item;
+          fifo_item_map[conn+fifo_data.id] = f_item;
         }
         break;
       }
@@ -489,11 +490,11 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   return send(conn->sock_fd, &md, sizeof(md_t), 0);
 }
 
-int uccl_engine_get_fifo_item(uccl_conn_t* conn, void* fifo_item) {
+int uccl_engine_get_fifo_item(uccl_conn_t* conn, int id, void* fifo_item) {
   if (!conn || !fifo_item) return -1;
 
   std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
-  auto it = fifo_item_map.find(conn);
+  auto it = fifo_item_map.find(conn+id);
   if (it == fifo_item_map.end()) {
     return -1;
   }
