@@ -77,6 +77,20 @@ struct ncclNet_v7 {
   int (*irecvConsumed)(void*, int, void*);
 };
 
+struct ncclNetProperties_v7_t {
+  char* name;
+  char* pciPath;
+  uint64_t guid;
+  int ptrSupport;
+  int speed;
+  int port;
+  float latency;
+  int maxComms;
+  int maxRecvs;
+  int netDeviceType;
+  int netDeviceVersion;
+};
+
 //=============================================================================
 // Global State
 //=============================================================================
@@ -151,6 +165,47 @@ int tcpx_get_device_count() {
   int rc = g_net->devices(&ndev);
   tcpx_dbg("net->devices rc=%d ndev=%d", rc, ndev);
   return rc == 0 ? ndev : -1;
+}
+
+int tcpx_get_properties(int dev, struct tcpx_net_properties* props) {
+  if (!g_inited) {
+    char const* path = std::getenv("UCCL_TCPX_PLUGIN_PATH");
+    if (!path) path = "/usr/local/tcpx/lib64/libnccl-net-tcpx.so";
+    if (tcpx_load_plugin(path) != 0) {
+      tcpx_dbg("Failed to load plugin for get_properties");
+      return -1;
+    }
+  }
+
+  if (!g_net || !g_net->getProperties) {
+    tcpx_dbg(
+        "tcpx_get_properties: plugin not initialized or getProperties not "
+        "available");
+    return -1;
+  }
+
+  ncclNetProperties_v7_t net_props{};
+  int rc = g_net->getProperties(dev, &net_props);
+  if (rc != 0) {
+    tcpx_dbg("tcpx_get_properties: getProperties failed rc=%d", rc);
+    return rc;
+  }
+
+  if (props) {
+    props->name = net_props.name;
+    props->pci_path = net_props.pciPath;
+    props->guid = net_props.guid;
+    props->ptr_support = net_props.ptrSupport;
+    props->speed = net_props.speed;
+    props->port = net_props.port;
+    props->latency = net_props.latency;
+    props->max_comms = net_props.maxComms;
+    props->max_recvs = net_props.maxRecvs;
+    props->net_device_type = net_props.netDeviceType;
+    props->net_device_version = net_props.netDeviceVersion;
+  }
+
+  return 0;
 }
 
 // Connection management implementation - use v5 API for consistency
