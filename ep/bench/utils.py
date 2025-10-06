@@ -475,6 +475,7 @@ def initialize_uccl(
             peer_ip="" if is_intranode else peer_ip,
             num_experts=num_experts,
             num_ranks=num_ranks,
+            num_nodes=int(os.environ.get("WORLD_SIZE")) // nproc_per_node,
         )
         if not is_intranode:
             proxy.set_peers_meta(peers_meta_list)

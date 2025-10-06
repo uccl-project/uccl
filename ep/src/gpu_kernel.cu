@@ -76,7 +76,8 @@ __global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs) {
       start_cycle_smem[(my_hdr + i) & kQueueMask] = t0;
       int message_idx = it + i + 1;
       rb->set_buffer(my_hdr + i,
-                     TransferCmd{.cmd = (static_cast<uint64_t>(bid + 1) << 32) |
+                     TransferCmd{.cmd_type = CmdType::WRITE,
+                                 .cmd = (static_cast<uint64_t>(bid + 1) << 32) |
                                         (message_idx & 0xFFFFFFFF),
                                  .dst_rank = 1,
                                  .dst_gpu = 0,
