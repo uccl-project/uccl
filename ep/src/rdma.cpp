@@ -1434,7 +1434,7 @@ void post_atomic_operations(ProxyCtx& S,
       wr_ids[i] = wr_id;
 
       int v = static_cast<int>(cmd.value);
-      if (v == kLargeAtomicValue) v = kMaxSendAtomicValue;
+      if (v > kLargeAtomicValue) v = kMaxSendAtomicValue;
       if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {
         fprintf(stderr,
                 "[EFA] value=%d (cmd.value: %lu) won't fit in 15 bits; "
@@ -1478,7 +1478,7 @@ void post_atomic_operations(ProxyCtx& S,
       wr_ids[i] = wrid;
 
       int v = static_cast<int>(cmd.value);
-      if (v == kLargeAtomicValue) v = kMaxSendAtomicValue;
+      if (v > kLargeAtomicValue) v = kMaxSendAtomicValue;
       if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {
         fprintf(stderr, "value=%d won't fit in 15 bits\n", v);
         std::abort();

@@ -23,8 +23,6 @@ This benchmark verifies:
   * Top-k routing and per-expert token distribution
   * Compatibility with cached dispatch and low-latency kernels
   * Performance tuning for NVL and RDMA chunk sizes
-  
-It is currently still under development. 
 """
 
 import argparse
@@ -174,7 +172,7 @@ def test_main(
     time.sleep(1)
 
     # Config
-    rdma_buffer_size, nvl_buffer_size = 128, (720 if num_ranks in (144, 160) else 512)
+    rdma_buffer_size, nvl_buffer_size = 128, (480 if num_ranks in (24, 48, 96, 144, 160) else 512)
     config = Config(num_sms, 8, nvl_buffer_size, 16, rdma_buffer_size)
 
     # Test dispatch

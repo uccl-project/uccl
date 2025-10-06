@@ -80,6 +80,7 @@
     switch (num_ranks / NUM_MAX_NVL_PEERS) {               \
       case 2:                                              \
         case_macro(2);                                     \
+      case 3: case_macro(3);                               \
       case 4:                                              \
         case_macro(4);                                     \
       case 8:                                              \
