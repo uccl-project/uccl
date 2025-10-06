@@ -59,16 +59,33 @@ void listener_thread_func(uccl_conn_t* conn) {
                sizeof(timeout));
 
     md_t md;
-    ssize_t recv_size = recv(conn->sock_fd, &md, sizeof(md_t), 0);
-    if (recv_size != sizeof(md_t)) {
-      if (!conn->listener_running) {
+    ssize_t total_received = 0;
+    ssize_t recv_size = 0;
+    char* buffer = reinterpret_cast<char*>(&md);
+
+    while (total_received < sizeof(md_t)) {
+      recv_size = recv(conn->sock_fd, buffer + total_received,
+                       sizeof(md_t) - total_received, 0);
+
+      if (recv_size <= 0) {
+        if (!conn->listener_running) {
+          return;
+        }
         break;
+      }
+
+      total_received += recv_size;
+    }
+
+    if (total_received != sizeof(md_t)) {
+      if (!conn->listener_running) {
+        return;
       }
       continue;
     }
 
     uint64_t mr_id = 0;
-    switch (md.op) {
+      switch (md.op) {
       case UCCL_READ: {
         tx_msg_t tx_data = md.data.tx_data;
         auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
