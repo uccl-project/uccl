@@ -180,8 +180,9 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     perror("Failed to open device");
     exit(1);
   }
-  printf("[RDMA] Selected NIC %s (index %d) for GPU %d\n",
-         selected_nic_name.c_str(), selected_dev_idx, gpu_idx);
+  S.numa_node = uccl::get_dev_numa_node(selected_nic_name.c_str());
+  printf("[RDMA] Selected NIC %s (index %d) for GPU %d, NUMA node %d\n",
+         selected_nic_name.c_str(), selected_dev_idx, gpu_idx, S.numa_node);
   ibv_free_device_list(dev_list);
   S.pd = ibv_alloc_pd(S.context);
   if (!S.pd) {

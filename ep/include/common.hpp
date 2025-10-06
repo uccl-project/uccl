@@ -61,6 +61,7 @@
 // P2P enable flags (once per GPU pair)
 extern std::once_flag peer_ok_flag[MAX_NUM_GPUS][MAX_NUM_GPUS];
 bool pin_thread_to_cpu(int cpu);
+bool pin_thread_to_numa(int numa_node);
 void cpu_relax();
 int get_num_max_nvl_peers();
 
