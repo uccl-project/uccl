@@ -2,6 +2,8 @@
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
+#include <fstream>
+#include <sstream>
 
 std::once_flag peer_ok_flag[MAX_NUM_GPUS][MAX_NUM_GPUS];
 
@@ -15,6 +17,45 @@ bool pin_thread_to_cpu(int cpu) {
 
   pthread_t current_thread = pthread_self();
   return !pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
+}
+
+bool pin_thread_to_numa(int numa_node) {
+  char cpumap_path[1024];
+  snprintf(cpumap_path, sizeof(cpumap_path),
+           "/sys/devices/system/node/node%d/cpulist", numa_node);
+  std::string cpumap_path_str(cpumap_path);
+  std::ifstream cpumap_file(cpumap_path_str);
+  if (!cpumap_file.is_open()) {
+    fprintf(stderr, "Failed to open %s\n", cpumap_path);
+    return false;
+  }
+
+  cpu_set_t cpuset;
+  CPU_ZERO(&cpuset);
+
+  std::string line;
+  std::getline(cpumap_file, line);
+
+  // Parse CPU ranges like "0-3,7-11"
+  std::stringstream ss(line);
+  std::string range;
+  while (std::getline(ss, range, ',')) {
+    size_t dash = range.find('-');
+    if (dash != std::string::npos) {
+      // Handle range like "0-3"
+      int start = std::stoi(range.substr(0, dash));
+      int end = std::stoi(range.substr(dash + 1));
+      for (int cpu = start; cpu <= end; cpu++) {
+        CPU_SET(cpu, &cpuset);
+      }
+    } else {
+      // Handle single CPU like "7"
+      int cpu = std::stoi(range);
+      CPU_SET(cpu, &cpuset);
+    }
+  }
+
+  return !sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
 }
 
 void cpu_relax() {
