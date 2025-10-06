@@ -119,17 +119,30 @@ void listener_thread_func(uccl_conn_t* conn) {
       }
       case UCCL_VECTOR_READ: {
         size_t count = md.data.vector_data.count;
-        std::cout << "Got Vector READ with " << count << " items" << std::endl;
 
         tx_msg_t* tx_data_array = new tx_msg_t[count];
         ssize_t data_size = count * sizeof(tx_msg_t);
-        ssize_t recv_data_size =
-            recv(conn->sock_fd, tx_data_array, data_size, 0);
 
-        if (recv_data_size != data_size) {
-          std::cerr << "Failed to receive complete tx_data array. Expected: "
-                    << data_size << ", Received: " << recv_data_size
-                    << std::endl;
+        ssize_t total_received = 0;
+        ssize_t recv_data_size = 0;
+        char* buffer = reinterpret_cast<char*>(tx_data_array);
+
+        while (total_received < data_size) {
+          recv_data_size = recv(conn->sock_fd, buffer + total_received,
+                                data_size - total_received, 0);
+
+          if (recv_data_size <= 0) {
+            std::cerr << "Failed to receive tx_data array. Expected: "
+                      << data_size << ", Received: " << total_received
+                      << ", Last recv: " << recv_data_size << std::endl;
+            delete[] tx_data_array;
+            break;
+          }
+
+          total_received += recv_data_size;
+        }
+
+        if (total_received != data_size) {
           delete[] tx_data_array;
           break;
         }
@@ -151,7 +164,7 @@ void listener_thread_func(uccl_conn_t* conn) {
           md_t response_md;
           response_md.op = UCCL_FIFO;
           fifo_msg_t fifo_data;
-          fifo_data.id=i;
+          fifo_data.id = i;
           memcpy(fifo_data.fifo_buf, out_buf, sizeof(uccl::FifoItem));
           response_md.data.fifo_data = fifo_data;
 
@@ -170,13 +183,27 @@ void listener_thread_func(uccl_conn_t* conn) {
         size_t count = md.data.vector_data.count;
         tx_msg_t* tx_data_array = new tx_msg_t[count];
         ssize_t data_size = count * sizeof(tx_msg_t);
-        ssize_t recv_data_size =
-            recv(conn->sock_fd, tx_data_array, data_size, 0);
 
-        if (recv_data_size != data_size) {
-          std::cerr << "Failed to receive complete tx_data array. Expected: "
-                    << data_size << ", Received: " << recv_data_size
-                    << std::endl;
+        ssize_t total_received = 0;
+        ssize_t recv_data_size = 0;
+        char* buffer = reinterpret_cast<char*>(tx_data_array);
+
+        while (total_received < data_size) {
+          recv_data_size = recv(conn->sock_fd, buffer + total_received,
+                                data_size - total_received, 0);
+
+          if (recv_data_size <= 0) {
+            std::cerr << "Failed to receive tx_data array. Expected: "
+                      << data_size << ", Received: " << total_received
+                      << ", Last recv: " << recv_data_size << std::endl;
+            delete[] tx_data_array;
+            break;
+          }
+
+          total_received += recv_data_size;
+        }
+
+        if (total_received != data_size) {
           delete[] tx_data_array;
           break;
         }
@@ -215,13 +242,11 @@ void listener_thread_func(uccl_conn_t* conn) {
 
         {
           std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
-          fifo_item_map[conn+fifo_data.id] = f_item;
+          fifo_item_map[conn + fifo_data.id] = f_item;
         }
         break;
       }
       case UCCL_NOTIFY: {
-        std::cout << "Got Notify :" << md.data.notify_data.name << ", "
-                  << md.data.notify_data.msg << std::endl;
         std::lock_guard<std::mutex> lock(notify_msg_list_mutex);
         notify_msg_t notify_msg = {};
         strncpy(notify_msg.name, md.data.notify_data.name,
@@ -486,7 +511,7 @@ int uccl_engine_get_fifo_item(uccl_conn_t* conn, int id, void* fifo_item) {
   if (!conn || !fifo_item) return -1;
 
   std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
-  auto it = fifo_item_map.find(conn+id);
+  auto it = fifo_item_map.find(conn + id);
   if (it == fifo_item_map.end()) {
     return -1;
   }
