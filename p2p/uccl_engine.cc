@@ -85,7 +85,7 @@ void listener_thread_func(uccl_conn_t* conn) {
     }
 
     uint64_t mr_id = 0;
-      switch (md.op) {
+    switch (md.op) {
       case UCCL_READ: {
         tx_msg_t tx_data = md.data.tx_data;
         auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
