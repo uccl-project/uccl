@@ -1,34 +1,53 @@
-# Makefile for EFA All-to-All RDMA Tests
+# Makefile for Multi-NIC EFA All-to-All RDMA Test with GPU Memory
 
 CXX = g++
-CXXFLAGS = -std=c++17 -O3 -Wall -Wextra -march=native
-LDFLAGS = -libverbs -lefa
+CXXFLAGS = -std=c++17 -O3 -Wall -Wextra -march=native -pthread
 
-# Targets
-TARGETS = test_alltoall_pairwise test_rdma_alltoall
+# CUDA configuration
+CUDA_HOME ?= /usr/local/cuda
+CUDA_INCLUDE = -I$(CUDA_HOME)/include
+CUDA_LDFLAGS = -L$(CUDA_HOME)/lib64 -lcudart
 
-.PHONY: all clean
+# RDMA/EFA libraries
+RDMA_LDFLAGS = -libverbs -lefa
 
-all: $(TARGETS)
+# Combined flags
+INCLUDES = $(CUDA_INCLUDE)
+LDFLAGS = $(CUDA_LDFLAGS) $(RDMA_LDFLAGS)
 
-test_alltoall_pairwise: test_alltoall_pairwise.cpp
-	@echo "Compiling test_alltoall_pairwise..."
-	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS)
-	@echo "Build complete: $@"
+# Target
+TARGET = test_multi_nic_alltoall
 
-test_rdma_alltoall: test_rdma_alltoall.cpp
-	@echo "Compiling test_rdma_alltoall..."
-	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS)
+# Source file
+SRC = test_multi_nic_alltoall.cpp
+
+.PHONY: all clean run
+
+all: $(TARGET)
+
+$(TARGET): $(SRC)
+	@echo "Compiling $@..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $< $(LDFLAGS)
 	@echo "Build complete: $@"
 
 clean:
 	@echo "Cleaning build artifacts..."
-	rm -f $(TARGETS)
+	rm -f $(TARGET)
 	@echo "Clean complete"
 
-# Helper targets
-pairwise: test_alltoall_pairwise
-	@echo "Pairwise test ready"
+# Example run targets (requires 2 nodes)
+# Usage: make run-node0 NODE_IPS="10.1.1.1,10.1.1.2"
+# Usage: make run-node1 NODE_IPS="10.1.1.1,10.1.1.2"
+run-node0: $(TARGET)
+	@if [ -z "$(NODE_IPS)" ]; then \
+		echo "Error: NODE_IPS not set. Usage: make run-node0 NODE_IPS=\"ip1,ip2\""; \
+		exit 1; \
+	fi
+	./$(TARGET) 0 $(NODE_IPS)
 
-true_alltoall: test_rdma_alltoall
-	@echo "True all-to-all test ready"
+run-node1: $(TARGET)
+	@if [ -z "$(NODE_IPS)" ]; then \
+		echo "Error: NODE_IPS not set. Usage: make run-node1 NODE_IPS=\"ip1,ip2\""; \
+		exit 1; \
+	fi
+	./$(TARGET) 1 $(NODE_IPS)

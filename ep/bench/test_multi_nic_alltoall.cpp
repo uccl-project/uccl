@@ -1,11 +1,11 @@
 // Multi-NIC EFA All-to-All RDMA Test with GPU Memory
-// Each GPU thread manages 2 NICs, each with dedicated QPs to all remote GPUs
+// Supports arbitrary number of nodes
 //
 // Architecture:
-// - 2 nodes × 8 GPUs = 16 total GPUs
+// - N nodes × 8 GPUs = N*8 total GPUs
 // - Each GPU: 1 CPU thread managing 2 NICs
 // - Each (NIC, remote_GPU) pair: dedicated QP + AH
-// - True all-to-all: every local GPU sends to all 8 remote GPUs
+// - True all-to-all: every local GPU sends to all GPUs on all other nodes
 
 #include <arpa/inet.h>
 #include <infiniband/efadv.h>
@@ -30,7 +30,7 @@
 // Configuration
 constexpr int NUM_GPUS_PER_NODE = 8;
 constexpr int NUM_NICS_PER_GPU = 2;
-constexpr size_t MSG_SIZE = 256 * 1024;  // 64KB per message
+constexpr size_t MSG_SIZE = 512 * 1024;  // 256KB per message
 constexpr int MSGS_PER_REMOTE_GPU = 1000;
 constexpr int SLOTS_PER_SRC = 1024;
 constexpr int WINDOW_PER_NIC = 256;  // In-flight ops per NIC
@@ -80,7 +80,7 @@ struct PeerEndpoint {
   size_t remote_len = 0;
 };
 
-// Parse "ip1,ip2" into vector
+// Parse "ip1,ip2,ip3,..." into vector
 std::vector<std::string> parse_ip_list(std::string const& ip_str) {
   std::vector<std::string> ips;
   std::stringstream ss(ip_str);
@@ -146,8 +146,9 @@ void exchange_connection_info(int my_rank, int my_gpu, int nic_id,
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
 
-  if (my_rank < remote_rank) {
-    // Lower rank listens
+  if (my_rank < remote_rank ||
+      (my_rank == remote_rank && my_gpu < remote_gpu)) {
+    // Lower rank/gpu listens
     int listenfd = socket(AF_INET, SOCK_STREAM, 0);
     int opt = 1;
     setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -166,7 +167,7 @@ void exchange_connection_info(int my_rank, int my_gpu, int nic_id,
     recv(sockfd, remote, sizeof(*remote), MSG_WAITALL);
     close(sockfd);
   } else {
-    // Higher rank connects
+    // Higher rank/gpu connects
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
@@ -183,7 +184,7 @@ void exchange_connection_info(int my_rank, int my_gpu, int nic_id,
   }
 }
 
-// Fill local GID (from rdma.cpp)
+// Fill local GID
 void fill_local_gid(ibv_context* ctx, uint8_t* gid_out) {
   union ibv_gid gid;
   if (ibv_query_gid(ctx, 1, 0, &gid) != 0) {
@@ -297,6 +298,24 @@ ibv_qp* create_srd_qp_ex(BaseNicCtx& base) {
 }
 
 // Create AH
+ibv_ah* create_ah(ibv_pd* pd, uint8_t const* gid_bytes) {
+  union ibv_gid gid;
+  memcpy(&gid, gid_bytes, 16);
+
+  ibv_ah_attr ah_attr = {};
+  ah_attr.is_global = 1;
+  ah_attr.grh.dgid = gid;
+  ah_attr.grh.sgid_index = 0;
+  ah_attr.grh.hop_limit = 255;
+  ah_attr.port_num = 1;
+
+  ibv_ah* ah = ibv_create_ah(pd, &ah_attr);
+  if (!ah) {
+    perror("ibv_create_ah");
+    return nullptr;
+  }
+  return ah;
+}
 
 std::atomic<int> thread_barrier_count{0};
 std::atomic<bool> thread_barrier_sense{false};
@@ -316,14 +335,20 @@ void thread_barrier(int num_threads) {
   }
 }
 
-void run_gpu_thread(int gpu_id, int my_rank, int peer_rank,
+void run_gpu_thread(int gpu_id, int my_rank, int num_nodes,
                     std::vector<std::string> const& node_ips) {
-  // Bind to GPU
   CUDA_CHECK(cudaSetDevice(gpu_id));
+
+  // Calculate total number of remote GPUs across all other nodes
+  int num_remote_nodes = num_nodes - 1;
+  int total_remote_gpus = num_remote_nodes * NUM_GPUS_PER_NODE;
+
   size_t send_size = MSG_SIZE;
-  size_t recv_size =
-      MSG_SIZE * SLOTS_PER_SRC * NUM_GPUS_PER_NODE;  // Space for all sources
+  // Receive buffer needs space for all possible senders (all GPUs from all
+  // nodes)
+  size_t recv_size = MSG_SIZE * SLOTS_PER_SRC * num_nodes * NUM_GPUS_PER_NODE;
   size_t total_size = send_size + recv_size;
+
   void* gpu_buf = nullptr;
   CUDA_CHECK(cudaMalloc(&gpu_buf, total_size));
   void* gpu_send_buf = gpu_buf;
@@ -373,7 +398,7 @@ void run_gpu_thread(int gpu_id, int my_rank, int peer_rank,
     }
     base_nics[nic].lkey = base_nics[nic].mr->lkey;
 
-    // Create CQ
+    // Create CQ with larger size for multiple nodes
     ibv_cq_init_attr_ex cq_ex_attr = {};
     cq_ex_attr.cqe = WINDOW_PER_NIC * 4;
     cq_ex_attr.cq_context = nullptr;
@@ -391,99 +416,143 @@ void run_gpu_thread(int gpu_id, int my_rank, int peer_rank,
     }
   }
 
-  PeerEndpoint peers[NUM_NICS_PER_GPU][NUM_GPUS_PER_NODE];
+  // Allocate peer endpoints: [NIC][remote_rank][remote_gpu]
+  // Use vector for dynamic sizing
+  std::vector<std::vector<std::vector<PeerEndpoint>>> peers(
+      NUM_NICS_PER_GPU,
+      std::vector<std::vector<PeerEndpoint>>(
+          num_nodes, std::vector<PeerEndpoint>(NUM_GPUS_PER_NODE)));
 
+  // Establish connections to all remote nodes and GPUs
   for (int nic = 0; nic < NUM_NICS_PER_GPU; nic++) {
-    for (int remote_gpu = 0; remote_gpu < NUM_GPUS_PER_NODE; remote_gpu++) {
-      // Create QP
-      peers[nic][remote_gpu].qp = create_srd_qp_ex(base_nics[nic]);
-      if (!peers[nic][remote_gpu].qp) {
-        fprintf(stderr,
-                "[GPU %d] Failed to create QP for nic=%d, remote_gpu=%d\n",
-                gpu_id, nic, remote_gpu);
-        exit(EXIT_FAILURE);
+    for (int remote_rank = 0; remote_rank < num_nodes; remote_rank++) {
+      if (remote_rank == my_rank) continue;  // Skip self
+
+      for (int remote_gpu = 0; remote_gpu < NUM_GPUS_PER_NODE; remote_gpu++) {
+        // Create QP
+        peers[nic][remote_rank][remote_gpu].qp =
+            create_srd_qp_ex(base_nics[nic]);
+        if (!peers[nic][remote_rank][remote_gpu].qp) {
+          fprintf(stderr,
+                  "[GPU %d] Failed to create QP for nic=%d, remote_rank=%d, "
+                  "remote_gpu=%d\n",
+                  gpu_id, nic, remote_rank, remote_gpu);
+          exit(EXIT_FAILURE);
+        }
+
+        // Prepare local connection info
+        RDMAConnectionInfo local_info = {};
+        local_info.qp_num = peers[nic][remote_rank][remote_gpu].qp->qp_num;
+        local_info.rkey = base_nics[nic].mr->rkey;
+        local_info.addr = (uint64_t)gpu_buf;
+        local_info.len = total_size;
+        fill_local_gid(base_nics[nic].context, local_info.gid);
+
+        // Exchange connection info with remote GPU
+        RDMAConnectionInfo remote_info = {};
+        exchange_connection_info(my_rank, gpu_id, nic, remote_rank, remote_gpu,
+                                 node_ips[remote_rank], &local_info,
+                                 &remote_info);
+
+        // Create AH
+        peers[nic][remote_rank][remote_gpu].ah =
+            create_ah(base_nics[nic].pd, remote_info.gid);
+
+        // Store remote info
+        peers[nic][remote_rank][remote_gpu].remote_qpn = remote_info.qp_num;
+        peers[nic][remote_rank][remote_gpu].remote_rkey = remote_info.rkey;
+        peers[nic][remote_rank][remote_gpu].remote_addr = remote_info.addr;
+        peers[nic][remote_rank][remote_gpu].remote_len = remote_info.len;
       }
-
-      // Prepare local connection info
-      RDMAConnectionInfo local_info = {};
-      local_info.qp_num = peers[nic][remote_gpu].qp->qp_num;
-      local_info.rkey = base_nics[nic].mr->rkey;
-      local_info.addr = (uint64_t)gpu_buf;
-      local_info.len = total_size;
-      fill_local_gid(base_nics[nic].context, local_info.gid);
-
-      // Exchange connection info with remote GPU
-      RDMAConnectionInfo remote_info = {};
-      exchange_connection_info(my_rank, gpu_id, nic, peer_rank, remote_gpu,
-                               node_ips[peer_rank], &local_info, &remote_info);
-
-      // Create AH
-      peers[nic][remote_gpu].ah = create_ah(base_nics[nic].pd, remote_info.gid);
-
-      // Store remote info
-      peers[nic][remote_gpu].remote_qpn = remote_info.qp_num;
-      peers[nic][remote_gpu].remote_rkey = remote_info.rkey;
-      peers[nic][remote_gpu].remote_addr = remote_info.addr;
-      peers[nic][remote_gpu].remote_len = remote_info.len;
     }
   }
 
   thread_barrier(NUM_GPUS_PER_NODE);
   if (gpu_id == 0) {
-    tcp_barrier(my_rank, 2, node_ips, 5000);
+    tcp_barrier(my_rank, num_nodes, node_ips, 5000);
   }
   thread_barrier(NUM_GPUS_PER_NODE);
 
   auto t_start = std::chrono::high_resolution_clock::now();
 
-  uint64_t total_msgs = NUM_GPUS_PER_NODE * MSGS_PER_REMOTE_GPU;
-  uint64_t posted_per_remote[NUM_GPUS_PER_NODE] = {0};
+  // Total messages = messages to each remote GPU × total remote GPUs
+  uint64_t total_msgs = total_remote_gpus * MSGS_PER_REMOTE_GPU;
+
+  // Track posted messages per (remote_rank, remote_gpu) pair
+  std::vector<std::vector<uint64_t>> posted_per_remote(
+      num_nodes, std::vector<uint64_t>(NUM_GPUS_PER_NODE, 0));
+
   uint64_t completed_per_nic[NUM_NICS_PER_GPU] = {0};
   int inflight_per_nic[NUM_NICS_PER_GPU] = {0};
 
   uint64_t total_posted = 0;
   uint64_t total_completed = 0;
 
-  int next_remote = 0;  // Round-robin
+  int next_remote_rank = (my_rank + 1) % num_nodes;  // Start with next rank
+  int next_remote_gpu = 0;
 
   while (total_completed < total_msgs) {
-    // Post phase: round-robin across remote GPUs, stripe across 2 NICs
+    // Post phase: round-robin across all remote (rank, gpu) pairs
     while (total_posted < total_msgs) {
-      // Find next remote GPU that needs more messages
+      // Find next remote (rank, gpu) that needs more messages
       int attempts = 0;
-      while (attempts < NUM_GPUS_PER_NODE) {
-        if (posted_per_remote[next_remote] < (uint64_t)MSGS_PER_REMOTE_GPU) {
+      while (attempts < total_remote_gpus) {
+        if (next_remote_rank == my_rank) {
+          // Skip to next rank
+          next_remote_rank = (next_remote_rank + 1) % num_nodes;
+          continue;
+        }
+
+        if (posted_per_remote[next_remote_rank][next_remote_gpu] <
+            (uint64_t)MSGS_PER_REMOTE_GPU) {
           break;
         }
-        next_remote = (next_remote + 1) % NUM_GPUS_PER_NODE;
+
+        // Move to next GPU/rank
+        next_remote_gpu++;
+        if (next_remote_gpu >= NUM_GPUS_PER_NODE) {
+          next_remote_gpu = 0;
+          next_remote_rank = (next_remote_rank + 1) % num_nodes;
+        }
         attempts++;
       }
-      if (attempts >= NUM_GPUS_PER_NODE) break;  // All done posting
+      if (attempts >= total_remote_gpus) break;  // All done posting
 
-      // Striping: alternate NICs based on message sequence (block striping)
-      int nic = (int)(posted_per_remote[next_remote] / 64) % NUM_NICS_PER_GPU;
+      // Striping: alternate NICs based on message sequence
+      int nic =
+          (int)(posted_per_remote[next_remote_rank][next_remote_gpu] / 64) %
+          NUM_NICS_PER_GPU;
 
       // Check window
       if (inflight_per_nic[nic] >= WINDOW_PER_NIC) break;
 
       // Post RDMA WRITE
-      uint64_t seq = posted_per_remote[next_remote];
+      uint64_t seq = posted_per_remote[next_remote_rank][next_remote_gpu];
       uint64_t slot = seq % SLOTS_PER_SRC;
-      uint64_t remote_offset =
-          send_size + gpu_id * SLOTS_PER_SRC * MSG_SIZE + slot * MSG_SIZE;
-      uint64_t remote_addr =
-          peers[nic][next_remote].remote_addr + remote_offset;
 
-      ibv_qp_ex* qpx = (ibv_qp_ex*)peers[nic][next_remote].qp;
+      // Calculate remote offset based on sender's global GPU ID
+      int sender_global_gpu_id = my_rank * NUM_GPUS_PER_NODE + gpu_id;
+      uint64_t remote_offset = send_size +
+                               sender_global_gpu_id * SLOTS_PER_SRC * MSG_SIZE +
+                               slot * MSG_SIZE;
+      uint64_t remote_addr =
+          peers[nic][next_remote_rank][next_remote_gpu].remote_addr +
+          remote_offset;
+
+      ibv_qp_ex* qpx =
+          (ibv_qp_ex*)peers[nic][next_remote_rank][next_remote_gpu].qp;
       ibv_wr_start(qpx);
 
-      qpx->wr_id = ((uint64_t)nic << 48) | ((uint64_t)next_remote << 32) |
-                   (seq & 0xFFFFFFFF);
-      qpx->wr_flags = IBV_SEND_SIGNALED;  // sq_sig_all=1, but explicit
+      qpx->wr_id = ((uint64_t)nic << 56) | ((uint64_t)next_remote_rank << 48) |
+                   ((uint64_t)next_remote_gpu << 32) | (seq & 0xFFFFFFFF);
+      qpx->wr_flags = IBV_SEND_SIGNALED;
       qpx->comp_mask = 0;
-      ibv_wr_rdma_write(qpx, peers[nic][next_remote].remote_rkey, remote_addr);
-      ibv_wr_set_ud_addr(qpx, peers[nic][next_remote].ah,
-                         peers[nic][next_remote].remote_qpn, QKEY);
+      ibv_wr_rdma_write(
+          qpx, peers[nic][next_remote_rank][next_remote_gpu].remote_rkey,
+          remote_addr);
+      ibv_wr_set_ud_addr(
+          qpx, peers[nic][next_remote_rank][next_remote_gpu].ah,
+          peers[nic][next_remote_rank][next_remote_gpu].remote_qpn, QKEY);
       ibv_wr_set_sge(qpx, base_nics[nic].lkey, (uintptr_t)gpu_send_buf,
                      MSG_SIZE);
 
@@ -494,12 +563,17 @@ void run_gpu_thread(int gpu_id, int my_rank, int peer_rank,
         exit(EXIT_FAILURE);
       }
 
-      posted_per_remote[next_remote]++;
+      posted_per_remote[next_remote_rank][next_remote_gpu]++;
       inflight_per_nic[nic]++;
       total_posted++;
       base_nics[nic].posted.fetch_add(1, std::memory_order_relaxed);
 
-      next_remote = (next_remote + 1) % NUM_GPUS_PER_NODE;
+      // Move to next GPU/rank
+      next_remote_gpu++;
+      if (next_remote_gpu >= NUM_GPUS_PER_NODE) {
+        next_remote_gpu = 0;
+        next_remote_rank = (next_remote_rank + 1) % num_nodes;
+      }
     }
 
     // Poll phase: poll both NICs
@@ -511,28 +585,16 @@ void run_gpu_thread(int gpu_id, int my_rank, int peer_rank,
 
       while (true) {
         if (cqx->status != IBV_WC_SUCCESS) {
-          uint64_t nic_id = (cqx->wr_id >> 48) & 0xFFFF;
+          uint64_t nic_id = (cqx->wr_id >> 56) & 0xFF;
+          uint64_t remote_rank = (cqx->wr_id >> 48) & 0xFF;
           uint64_t remote_gpu = (cqx->wr_id >> 32) & 0xFFFF;
           uint64_t seq_id = cqx->wr_id & 0xFFFFFFFF;
 
           fprintf(stderr, "[GPU %d] CQE error: %s\n", gpu_id,
                   ibv_wc_status_str(cqx->status));
-          fprintf(stderr, "  nic=%lu, remote_gpu=%lu, seq=%lu\n", nic_id,
-                  remote_gpu, seq_id);
           fprintf(stderr,
-                  "  Remote addr: base=0x%lx + send_size=%zu + "
-                  "offset(%d*%d*%zu + %lu*%zu)\n",
-                  peers[nic_id][remote_gpu].remote_addr, send_size, gpu_id,
-                  SLOTS_PER_SRC, MSG_SIZE, seq_id % SLOTS_PER_SRC, MSG_SIZE);
-
-          uint64_t calc_offset = send_size + gpu_id * SLOTS_PER_SRC * MSG_SIZE +
-                                 (seq_id % SLOTS_PER_SRC) * MSG_SIZE;
-          uint64_t calc_addr =
-              peers[nic_id][remote_gpu].remote_addr + calc_offset;
-          fprintf(stderr, "  Calculated addr=0x%lx, MR range=[0x%lx, 0x%lx]\n",
-                  calc_addr, peers[nic_id][remote_gpu].remote_addr,
-                  peers[nic_id][remote_gpu].remote_addr +
-                      peers[nic_id][remote_gpu].remote_len);
+                  "  nic=%lu, remote_rank=%lu, remote_gpu=%lu, seq=%lu\n",
+                  nic_id, remote_rank, remote_gpu, seq_id);
           exit(EXIT_FAILURE);
         }
 
@@ -556,7 +618,7 @@ void run_gpu_thread(int gpu_id, int my_rank, int peer_rank,
 
   thread_barrier(NUM_GPUS_PER_NODE);
   if (gpu_id == 0) {
-    tcp_barrier(my_rank, 2, node_ips, 6000);
+    tcp_barrier(my_rank, num_nodes, node_ips, 6000);
   }
   thread_barrier(NUM_GPUS_PER_NODE);
 
@@ -565,8 +627,10 @@ void run_gpu_thread(int gpu_id, int my_rank, int peer_rank,
 
   {
     std::lock_guard<std::mutex> lock(print_mutex);
-    printf("\n=== [GPU %d] Results ===\n", gpu_id);
+    printf("\n=== [Rank %d GPU %d] Results ===\n", my_rank, gpu_id);
     printf("  Elapsed: %.3f s\n", elapsed);
+    printf("  Remote nodes: %d\n", num_remote_nodes);
+    printf("  Total remote GPUs: %d\n", total_remote_gpus);
     printf("  Total msgs: %lu\n", total_msgs);
     printf("  Total bytes: %.2f MB\n", total_bytes / (1024.0 * 1024.0));
     printf("  Bandwidth: %.3f GB/s\n", bw_gbps);
@@ -576,10 +640,14 @@ void run_gpu_thread(int gpu_id, int my_rank, int peer_rank,
            base_nics[1].completed.load());
   }
 
+  // Cleanup
   for (int nic = 0; nic < NUM_NICS_PER_GPU; nic++) {
-    for (int r = 0; r < NUM_GPUS_PER_NODE; r++) {
-      if (peers[nic][r].ah) ibv_destroy_ah(peers[nic][r].ah);
-      if (peers[nic][r].qp) ibv_destroy_qp(peers[nic][r].qp);
+    for (int r = 0; r < num_nodes; r++) {
+      if (r == my_rank) continue;
+      for (int g = 0; g < NUM_GPUS_PER_NODE; g++) {
+        if (peers[nic][r][g].ah) ibv_destroy_ah(peers[nic][r][g].ah);
+        if (peers[nic][r][g].qp) ibv_destroy_qp(peers[nic][r][g].qp);
+      }
     }
     if (base_nics[nic].cq) ibv_destroy_cq(base_nics[nic].cq);
     if (base_nics[nic].mr) ibv_dereg_mr(base_nics[nic].mr);
@@ -593,23 +661,36 @@ void run_gpu_thread(int gpu_id, int my_rank, int peer_rank,
 int main(int argc, char** argv) {
   if (argc != 3) {
     printf("Usage: %s <my_rank> <node_ips>\n", argv[0]);
-    printf("  Example: %s 0 10.1.1.1,10.1.1.2\n", argv[0]);
+    printf("  Example (2 nodes): %s 0 10.1.1.1,10.1.1.2\n", argv[0]);
+    printf("  Example (4 nodes): %s 0 10.1.1.1,10.1.1.2,10.1.1.3,10.1.1.4\n",
+           argv[0]);
     return 1;
   }
 
   int my_rank = atoi(argv[1]);
   std::vector<std::string> node_ips = parse_ip_list(argv[2]);
 
-  if (node_ips.size() != 2) {
-    fprintf(stderr, "ERROR: This test requires exactly 2 nodes\n");
+  if (node_ips.size() < 2) {
+    fprintf(stderr, "ERROR: Need at least 2 nodes\n");
     return 1;
   }
 
-  int peer_rank = 1 - my_rank;
+  int num_nodes = (int)node_ips.size();
+
+  if (my_rank < 0 || my_rank >= num_nodes) {
+    fprintf(stderr, "ERROR: Invalid rank %d (must be 0-%d)\n", my_rank,
+            num_nodes - 1);
+    return 1;
+  }
 
   printf("=== Multi-NIC EFA All-to-All Test ===\n");
-  printf("My rank: %d, Peer rank: %d\n", my_rank, peer_rank);
-  printf("Node IPs: %s, %s\n", node_ips[0].c_str(), node_ips[1].c_str());
+  printf("Total nodes: %d\n", num_nodes);
+  printf("My rank: %d\n", my_rank);
+  printf("Node IPs: ");
+  for (size_t i = 0; i < node_ips.size(); i++) {
+    printf("%s%s", node_ips[i].c_str(),
+           (i < node_ips.size() - 1) ? ", " : "\n");
+  }
   printf(
       "Config: %d GPUs/node, %d NICs/GPU, %d msgs/remote_gpu, msg_size=%zu "
       "bytes\n",
@@ -618,7 +699,7 @@ int main(int argc, char** argv) {
   // Launch 8 threads (one per GPU)
   std::vector<std::thread> threads;
   for (int gpu = 0; gpu < NUM_GPUS_PER_NODE; gpu++) {
-    threads.emplace_back(run_gpu_thread, gpu, my_rank, peer_rank, node_ips);
+    threads.emplace_back(run_gpu_thread, gpu, my_rank, num_nodes, node_ips);
   }
 
   for (auto& t : threads) {
