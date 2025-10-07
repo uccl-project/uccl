@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    timeout-minutes: 30
+    timeout-minutes: 5
 
     steps:
       - name: Checkout (for artifacts/consistency)
@@ -146,7 +146,6 @@ jobs:
             "'
           }
 
-          # Check both hosts first
           check_gpu_free gh1
           check_gpu_free gh2
 
@@ -177,19 +176,15 @@ jobs:
               fi
             "' | tee "$LOG"
           }
+
+          trap 'echo "[ERROR] Killing all running jobs"; kill 0' ERR
           run_test gh1 0 12355 benchmark_remote.py "Benchmark elapsed_ms:" &
           pid1=$!
           sleep 1
           run_test gh2 1 12355 benchmark_remote.py "Test completed." &
           pid2=$!
-          fail=0
-          wait "$pid1" || fail=1
-          wait "$pid2" || fail=1
-
-          if [ "$fail" -ne 0 ]; then
-            echo "Benchmark remote test failed"
-            exit 1
-          fi
+          wait -n || { echo "[ERROR] benchmark_remote failed"; kill 0; exit 1; }
+          wait
           echo "Benchmark remote test passed on both hosts"
 
       - name: Run internode simple test on gh1 & gh2
@@ -212,7 +207,6 @@ jobs:
             "'
           }
 
-          # Check both hosts first
           check_gpu_free gh1
           check_gpu_free gh2
 
@@ -244,18 +238,14 @@ jobs:
             "' | tee "$LOG"
           }
 
+          trap 'echo "[ERROR] Killing all running jobs"; kill 0' ERR
           run_test gh2 1 12356 test_internode_simple.py "[simple-test] ✓ All tests passed!" &
           pid2=$!
           sleep 1
           run_test gh1 0 12356 test_internode_simple.py "[simple-test] ✓ All tests passed!" &
           pid1=$!
-          fail=0
-          wait "$pid1" || fail=1
-          wait "$pid2" || fail=1
-          if [ "$fail" -ne 0 ]; then
-            echo "Internode simple test failed"
-            exit 1
-          fi
+          wait -n || { echo "[ERROR] internode simple test failed"; kill 0; exit 1; }
+          wait
           echo "Internode simple test passed on both hosts"
 
       - name: Run low-latency test on gh1 & gh2
@@ -281,7 +271,6 @@ jobs:
             "'
           }
 
-          # Check both hosts first
           check_gpu_free gh1
           check_gpu_free gh2
 
@@ -309,19 +298,14 @@ jobs:
             "' | tee "logs/${H}_torchrun.log"
           }
 
+          trap 'echo "[ERROR] Killing all running jobs"; kill 0' ERR
           run_ll gh2 1 &
           pid2=$!
           sleep 1
           run_ll gh1 0 &
           pid1=$!
-
-          fail=0
-          wait "$pid1" || fail=1
-          wait "$pid2" || fail=1
-          if [ "$fail" -ne 0 ]; then
-            echo "Low-latency test failed on at least one host"
-            exit 1
-          fi
+          wait -n || { echo "[ERROR] low-latency test failed"; kill 0; exit 1; }
+          wait
           echo "Low-latency test passed on both hosts"
 
       - name: Fetch remote logs (build + torchrun)

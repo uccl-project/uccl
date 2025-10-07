@@ -17,7 +17,7 @@ class UcclProxy {
   UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr, size_t total_size,
             int rank, int node_idx, int local_rank,
             std::string const& peer_ip = {}, int num_experts = 0,
-            int num_ranks = 0);
+            int num_ranks = 0, int num_nodes = 0);
   ~UcclProxy();
 
   void start_sender();
@@ -92,5 +92,4 @@ class UcclProxy {
   int local_rank_;
   void* atomic_buffer_ptr_;
   int node_idx_;
-  static constexpr size_t kRingsPerProxy = 8;
 };
