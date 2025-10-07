@@ -10,6 +10,7 @@
 #include <cstring>
 #include <functional>
 #include <future>
+#include <iostream>
 #include <mutex>
 #include <queue>
 #include <string>
@@ -58,10 +59,27 @@ void listener_thread_func(uccl_conn_t* conn) {
                sizeof(timeout));
 
     md_t md;
-    ssize_t recv_size = recv(conn->sock_fd, &md, sizeof(md_t), 0);
-    if (recv_size != sizeof(md_t)) {
-      if (!conn->listener_running) {
+    ssize_t total_received = 0;
+    ssize_t recv_size = 0;
+    char* buffer = reinterpret_cast<char*>(&md);
+
+    while (total_received < sizeof(md_t)) {
+      recv_size = recv(conn->sock_fd, buffer + total_received,
+                       sizeof(md_t) - total_received, 0);
+
+      if (recv_size <= 0) {
+        if (!conn->listener_running) {
+          return;
+        }
         break;
+      }
+
+      total_received += recv_size;
+    }
+
+    if (total_received != sizeof(md_t)) {
+      if (!conn->listener_running) {
+        return;
       }
       continue;
     }
@@ -69,7 +87,6 @@ void listener_thread_func(uccl_conn_t* conn) {
     uint64_t mr_id = 0;
     switch (md.op) {
       case UCCL_READ: {
-        // Access tx_data directly from union
         tx_msg_t tx_data = md.data.tx_data;
         auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
         if (local_mem_iter == mem_reg_info.end()) {
@@ -98,7 +115,6 @@ void listener_thread_func(uccl_conn_t* conn) {
         break;
       }
       case UCCL_WRITE: {
-        // Access tx_data directly from union
         tx_msg_t tx_data = md.data.tx_data;
         auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
         if (local_mem_iter == mem_reg_info.end()) {
@@ -118,8 +134,122 @@ void listener_thread_func(uccl_conn_t* conn) {
         }
         break;
       }
+      case UCCL_VECTOR_READ: {
+        size_t count = md.data.vector_data.count;
+
+        tx_msg_t* tx_data_array = new tx_msg_t[count];
+        ssize_t data_size = count * sizeof(tx_msg_t);
+
+        ssize_t total_received = 0;
+        ssize_t recv_data_size = 0;
+        char* buffer = reinterpret_cast<char*>(tx_data_array);
+
+        while (total_received < data_size) {
+          recv_data_size = recv(conn->sock_fd, buffer + total_received,
+                                data_size - total_received, 0);
+
+          if (recv_data_size <= 0) {
+            std::cerr << "Failed to receive tx_data array. Expected: "
+                      << data_size << ", Received: " << total_received
+                      << ", Last recv: " << recv_data_size << std::endl;
+            delete[] tx_data_array;
+            break;
+          }
+
+          total_received += recv_data_size;
+        }
+
+        if (total_received != data_size) {
+          delete[] tx_data_array;
+          break;
+        }
+        for (size_t i = 0; i < count; i++) {
+          tx_msg_t tx_data = tx_data_array[i];
+          auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
+          if (local_mem_iter == mem_reg_info.end()) {
+            std::cerr << "Local memory not registered for address: "
+                      << tx_data.data_ptr << " (item " << i << ")" << std::endl;
+            continue;
+          }
+          mr_id = local_mem_iter->second;
+
+          char out_buf[sizeof(uccl::FifoItem)];
+          conn->engine->endpoint->advertise(conn->conn_id, mr_id,
+                                            (void*)tx_data.data_ptr,
+                                            tx_data.data_size, out_buf);
+
+          md_t response_md;
+          response_md.op = UCCL_FIFO;
+          fifo_msg_t fifo_data;
+          fifo_data.id = i;
+          memcpy(fifo_data.fifo_buf, out_buf, sizeof(uccl::FifoItem));
+          response_md.data.fifo_data = fifo_data;
+
+          // TODO: Check if this has to sent in bulk or individually
+          ssize_t result = send(conn->sock_fd, &response_md, sizeof(md_t), 0);
+          if (result < 0) {
+            std::cerr << "Failed to send FifoItem data for item " << i << ": "
+                      << strerror(errno) << std::endl;
+          }
+        }
+
+        delete[] tx_data_array;
+        break;
+      }
+      case UCCL_VECTOR_WRITE: {
+        size_t count = md.data.vector_data.count;
+        tx_msg_t* tx_data_array = new tx_msg_t[count];
+        ssize_t data_size = count * sizeof(tx_msg_t);
+
+        ssize_t total_received = 0;
+        ssize_t recv_data_size = 0;
+        char* buffer = reinterpret_cast<char*>(tx_data_array);
+
+        while (total_received < data_size) {
+          recv_data_size = recv(conn->sock_fd, buffer + total_received,
+                                data_size - total_received, 0);
+
+          if (recv_data_size <= 0) {
+            std::cerr << "Failed to receive tx_data array. Expected: "
+                      << data_size << ", Received: " << total_received
+                      << ", Last recv: " << recv_data_size << std::endl;
+            delete[] tx_data_array;
+            break;
+          }
+
+          total_received += recv_data_size;
+        }
+
+        if (total_received != data_size) {
+          delete[] tx_data_array;
+          break;
+        }
+
+        for (size_t i = 0; i < count; i++) {
+          tx_msg_t tx_data = tx_data_array[i];
+          auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
+          if (local_mem_iter == mem_reg_info.end()) {
+            std::cerr << "Local memory not registered for address: "
+                      << tx_data.data_ptr << " (item " << i << ")" << std::endl;
+            continue;
+          }
+          mr_id = local_mem_iter->second;
+
+          uccl_mr_t temp_mr;
+          temp_mr.mr_id = mr_id;
+          temp_mr.engine = conn->engine;
+          int result = uccl_engine_recv(conn, &temp_mr, (void*)tx_data.data_ptr,
+                                        tx_data.data_size);
+          if (result < 0) {
+            std::cerr << "Failed to perform uccl_engine_recv for item " << i
+                      << std::endl;
+          }
+        }
+
+        delete[] tx_data_array;
+        break;
+      }
       case UCCL_FIFO: {
-        // Access fifo_data directly from union
         fifo_msg_t fifo_data = md.data.fifo_data;
         uccl::FifoItem fifo_item;
         memcpy(&fifo_item, fifo_data.fifo_buf, sizeof(uccl::FifoItem));
@@ -129,14 +259,11 @@ void listener_thread_func(uccl_conn_t* conn) {
 
         {
           std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
-          fifo_item_map[conn] = f_item;
+          fifo_item_map[conn + fifo_data.id] = f_item;
         }
         break;
       }
       case UCCL_NOTIFY: {
-        // Got a notif, store it in a list
-        std::cout << "Got Notify :" << md.data.notify_data.name << ", "
-                  << md.data.notify_data.msg << std::endl;
         std::lock_guard<std::mutex> lock(notify_msg_list_mutex);
         notify_msg_t notify_msg = {};
         strncpy(notify_msg.name, md.data.notify_data.name,
@@ -339,6 +466,44 @@ int uccl_engine_send_tx_md(uccl_conn_t* conn, md_t* md) {
   return send(conn->sock_fd, md, sizeof(md_t), 0);
 }
 
+int uccl_engine_send_tx_md_vector(uccl_conn_t* conn, md_t* md_array,
+                                  size_t count) {
+  if (!conn || !md_array || count == 0) return -1;
+
+  // Determine the operation type based on the first item
+  uccl_msg_type op_type =
+      (md_array[0].op == UCCL_READ) ? UCCL_VECTOR_READ : UCCL_VECTOR_WRITE;
+
+  md_t vector_md;
+  vector_md.op = op_type;
+  vector_md.data.vector_data.count = count;
+
+  ssize_t bytes_sent = send(conn->sock_fd, &vector_md, sizeof(md_t), 0);
+  if (bytes_sent != sizeof(md_t)) {
+    std::cerr << "Failed to send vector metadata header. Expected: "
+              << sizeof(md_t) << ", Sent: " << bytes_sent << std::endl;
+    return -1;
+  }
+
+  tx_msg_t* tx_data_array = new tx_msg_t[count];
+  for (size_t i = 0; i < count; i++) {
+    tx_data_array[i] = md_array[i].data.tx_data;
+  }
+
+  ssize_t data_size = count * sizeof(tx_msg_t);
+  bytes_sent = send(conn->sock_fd, tx_data_array, data_size, 0);
+
+  delete[] tx_data_array;
+
+  if (bytes_sent != data_size) {
+    std::cerr << "Failed to send vector tx_data array. Expected: " << data_size
+              << ", Sent: " << bytes_sent << std::endl;
+    return -1;
+  }
+
+  return sizeof(md_t) + data_size;
+}
+
 std::vector<notify_msg_t> uccl_engine_get_notifs() {
   std::lock_guard<std::mutex> lock(notify_msg_list_mutex);
 
@@ -359,11 +524,11 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   return send(conn->sock_fd, &md, sizeof(md_t), 0);
 }
 
-int uccl_engine_get_fifo_item(uccl_conn_t* conn, void* fifo_item) {
+int uccl_engine_get_fifo_item(uccl_conn_t* conn, int id, void* fifo_item) {
   if (!conn || !fifo_item) return -1;
 
   std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
-  auto it = fifo_item_map.find(conn);
+  auto it = fifo_item_map.find(conn + id);
   if (it == fifo_item_map.end()) {
     return -1;
   }
