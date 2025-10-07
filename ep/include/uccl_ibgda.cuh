@@ -202,7 +202,7 @@ __device__ __forceinline__ uint64_t get_ipc_p2p_ptr(uint64_t const& local_ptr,
 
 __device__ static __forceinline__ void wait_until_cmd_consumed(
     DeviceToHostCmdBuffer* rb, uint64_t slot, int nvl_rank = -1,
-    CmdType cmd_type = CmdType::EMPTY) {
+    CmdType cmd_type = CmdType::EMPTY, int label = -1) {
   auto last_print = clock64();
   while (true) {
     uint64_t cur_tail = rb->volatile_tail();
@@ -211,10 +211,11 @@ __device__ static __forceinline__ void wait_until_cmd_consumed(
     }
     if ((clock64() - last_print) > kPrintCycleInterval) {
       printf(
-          "[wait_until_cmd_consumed, nvl_rank: %d, cmd: %d] still waiting, "
+          "[wait_until_cmd_consumed, nvl_rank: %d, cmd: %d, label: %d] still "
+          "waiting, "
           "head=%lu tail=%lu "
           "slot=%lu\n",
-          nvl_rank, static_cast<int>(cmd_type), (unsigned long)rb->head,
+          nvl_rank, static_cast<int>(cmd_type), label, (unsigned long)rb->head,
           (unsigned long)cur_tail, (unsigned long)slot);
       last_print = clock64();
     }
@@ -222,72 +223,100 @@ __device__ static __forceinline__ void wait_until_cmd_consumed(
 }
 
 __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
-    uint64_t const* ring_addrs, int num_ring_addrs, int nvl_rank = -1) {
+    uint64_t const* ring_addrs, int num_ring_addrs, int nvl_rank = -1,
+    int label = -1) {
   assert(num_ring_addrs % kRingsPerProxy == 0 &&
          "num_ring_addrs must be multiple of kRingsPerProxy");
-  /* NOTE(MaoZiming): This should be sent to all proxy threads. Since each proxy
+  /* NOTE(MaoZiming): This is sent to all proxy threads. Since each proxy
    * thread manages kRingsPerProxy ring buffers, we just need to post a quiet
-   * command to one out of the kRingsPerProxy ring buffer. */
-  int ring_idx = 0;
-  auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
-      static_cast<uintptr_t>(ring_addrs[ring_idx]));
-  uint64_t cur_head = rb->head;
-  uint64_t cur_tail = rb->volatile_tail();
-  uint64_t inflight = cur_head - cur_tail;
-  auto last_print = clock64();
-  while (true) {
-    cur_head = rb->head;
-    cur_tail = rb->volatile_tail();
-    inflight = cur_head - cur_tail;
-    if (inflight < kMaxInflight) {
-      uint64_t slot = cur_head;
-      TransferCmd cmd{};
-      cmd.cmd = 1;  // dummy valid cmd.
-      cmd.cmd_type = CmdType::QUIET;
-      rb->atomic_set_and_commit(cmd, &slot);
-      wait_until_cmd_consumed(rb, slot, nvl_rank, CmdType::QUIET);
-      break;
-    }
-    if ((clock64() - last_print) > kPrintCycleInterval) {
-      printf(
-          "[quiet] stuck waiting, inflight=%ld (cur_head=%lu "
-          "cur_tail=%lu)\n",
-          (long)inflight, (unsigned long)cur_head, (unsigned long)cur_tail);
-      last_print = clock64();
+   * command to one out of the kRingsPerProxy ring buffer per cpu thread. */
+  assert(num_ring_addrs % kRingsPerProxy == 0);
+  assert(num_ring_addrs / kRingsPerProxy == kNumThBlocks);
+  // First, atomically commit QUIET to one ring per proxy
+  uint64_t slots[kNumThBlocks];
+
+  // if (label != -1)
+  //   printf("[nvshmemi_ibgda_quiet, nvl_rank: %d, label: %d] start\n",
+  //   nvl_rank, label);
+
+  int num_posted = 0;
+  for (int ring_idx = 0; ring_idx < num_ring_addrs;
+       ring_idx += kRingsPerProxy) {
+    auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
+        static_cast<uintptr_t>(ring_addrs[ring_idx]));
+
+    while (true) {
+      uint64_t cur_head = rb->head;
+      uint64_t cur_tail = rb->volatile_tail();
+      uint64_t inflight = cur_head - cur_tail;
+      if (inflight < kMaxInflight) {
+        uint64_t slot = cur_head;
+        TransferCmd cmd{};
+        cmd.cmd = 1;
+        cmd.cmd_type = CmdType::QUIET;
+        rb->atomic_set_and_commit(cmd, &slot);
+        slots[num_posted] = slot;
+        ++num_posted;
+        break;
+      }
     }
   }
+
+  // Then wait for all QUIET commands to complete
+  for (int i = 0; i < num_posted; ++i) {
+    auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
+        static_cast<uintptr_t>(ring_addrs[i * kRingsPerProxy]));
+    wait_until_cmd_consumed(rb, slots[i], nvl_rank, CmdType::QUIET);
+  }
+  // if (label != -1)
+  //   printf("[nvshmemi_ibgda_quiet, nvl_rank: %d, label: %d] end\n", nvl_rank,
+  //   label);
 }
 
 __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
-    uint64_t const* ring_addrs, int num_ring_addrs, int nvl_rank = -1) {
-  int ring_idx = 0;
-  auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
-      static_cast<uintptr_t>(ring_addrs[ring_idx]));
-  uint64_t cur_head = rb->head;
-  uint64_t cur_tail = rb->volatile_tail();
-  uint64_t inflight = cur_head - cur_tail;
-  auto last_print = clock64();
-  while (true) {
-    cur_head = rb->head;
-    cur_tail = rb->volatile_tail();
-    inflight = cur_head - cur_tail;
-    if (inflight < kMaxInflight) {
-      uint64_t slot = cur_head;
-      TransferCmd cmd{};
-      cmd.cmd = 1;  // dummy valid cmd.
-      cmd.cmd_type = CmdType::BARRIER;
-      rb->atomic_set_and_commit(cmd, &slot);
-      wait_until_cmd_consumed(rb, slot, nvl_rank, CmdType::BARRIER);
-      break;
-    }
-    if ((clock64() - last_print) > kPrintCycleInterval) {
-      printf(
-          "[barrier] stuck waiting, inflight=%ld (cur_head=%lu "
-          "cur_tail=%lu)\n",
-          (long)inflight, (unsigned long)cur_head, (unsigned long)cur_tail);
-      last_print = clock64();
+    uint64_t const* ring_addrs, int num_ring_addrs, int nvl_rank = -1,
+    int label = -1) {
+  assert(num_ring_addrs % kRingsPerProxy == 0 &&
+         "num_ring_addrs must be multiple of kRingsPerProxy");
+  assert(num_ring_addrs / kRingsPerProxy == kNumThBlocks);
+
+  // if (label != -1)
+  //   printf("[nvshmem_sync_with_same_gpu_idx, nvl_rank: %d, label: %d]
+  //   start\n", nvl_rank, label);
+  uint64_t slots[kNumThBlocks];
+  int num_posted = 0;
+
+  // First, post one BARRIER command per proxy
+  for (int ring_idx = 0; ring_idx < num_ring_addrs;
+       ring_idx += kRingsPerProxy) {
+    auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
+        static_cast<uintptr_t>(ring_addrs[ring_idx]));
+
+    while (true) {
+      uint64_t cur_head = rb->head;
+      uint64_t cur_tail = rb->volatile_tail();
+      uint64_t inflight = cur_head - cur_tail;
+      if (inflight < kMaxInflight) {
+        uint64_t slot = cur_head;
+        TransferCmd cmd{};
+        cmd.cmd = 1;  // dummy valid cmd
+        cmd.cmd_type = CmdType::BARRIER;
+        rb->atomic_set_and_commit(cmd, &slot);
+        slots[num_posted++] = slot;
+        break;
+      }
     }
   }
+
+  // Then wait for each proxy’s barrier to complete
+  for (int i = 0; i < num_posted; ++i) {
+    auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
+        static_cast<uintptr_t>(ring_addrs[i * kRingsPerProxy]));
+    wait_until_cmd_consumed(rb, slots[i], nvl_rank, CmdType::BARRIER, label);
+  }
+  // if (label != -1)
+  //   printf("[nvshmem_sync_with_same_gpu_idx, nvl_rank: %d, label: %d] end\n",
+  //   nvl_rank, label);
 }
 
 }  // namespace uccl

@@ -15,7 +15,7 @@ pplx_combine = [1.840, 1.324, 1.098]
 # Normal mode (top = RDMA, bottom = NVLink)
 # normal_mode_dispatch_rdma = np.array([13.01, 14.19, 15.67])
 # normal_mode_dispatch_nvl = np.array([42.19, 35.18, 33.45])
-normal_mode_dispatch_rdma = np.array([8.03,  7.95, 9.49])
+normal_mode_dispatch_rdma = np.array([8.03, 7.95, 9.49])
 normal_mode_dispatch_nvl = np.array([25.09, 18.71, 18.73])
 
 normal_mode_combine_rdma = np.array([4.38, 4.44, 10.34])
@@ -23,7 +23,7 @@ normal_mode_combine_nvl = np.array([14.20, 11.01, 22.07])
 
 # Aggregate: RDMA + NVLink throughput
 normal_mode_dispatch = np.minimum(normal_mode_dispatch_rdma, normal_mode_dispatch_nvl)
-normal_mode_combine = normal_mode_combine_rdma + normal_mode_combine_nvl
+normal_mode_combine = np.minimum(normal_mode_combine_rdma, normal_mode_combine_nvl)
 
 # ---------------------------
 # Data (Latency in µs)

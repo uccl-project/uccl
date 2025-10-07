@@ -23,23 +23,29 @@ bf16_combine_lat = np.array([1171.00, 1811.00, 1229.00, 766.59, 814.01])
 # ---------------------------
 # Plot settings
 # ---------------------------
-plt.rcParams.update({
-    "font.size": 18,
-    "axes.labelsize": 20,
-    "xtick.labelsize": 16,
-    "ytick.labelsize": 16,
-    "legend.fontsize": 14,
-    "lines.linewidth": 3,
-    "lines.markersize": 10,
-})
+plt.rcParams.update(
+    {
+        "font.size": 18,
+        "axes.labelsize": 20,
+        "xtick.labelsize": 16,
+        "ytick.labelsize": 16,
+        "legend.fontsize": 14,
+        "lines.linewidth": 3,
+        "lines.markersize": 10,
+    }
+)
 
 # ---------------------------
 # Plot FP8 Dispatch Throughput
 # ---------------------------
 plt.figure(figsize=(8, 6))
 plt.plot(num_sms, fp8_dispatch_total, marker="^", label="FP8 Dispatch (Total)")
-plt.plot(num_sms, fp8_dispatch_rdma, marker="x", linestyle="--", label="FP8 Dispatch (RDMA)")
-plt.plot(num_sms, fp8_dispatch_nvl, marker="d", linestyle="--", label="FP8 Dispatch (NVLink)")
+plt.plot(
+    num_sms, fp8_dispatch_rdma, marker="x", linestyle="--", label="FP8 Dispatch (RDMA)"
+)
+plt.plot(
+    num_sms, fp8_dispatch_nvl, marker="d", linestyle="--", label="FP8 Dispatch (NVLink)"
+)
 plt.xlabel("Number of SMs")
 plt.ylabel("Dispatch Throughput (GB/s)")
 plt.title("FP8 Dispatch Throughput vs SMs")
@@ -54,8 +60,12 @@ plt.show()
 # ---------------------------
 plt.figure(figsize=(8, 6))
 plt.plot(num_sms, fp8_combine_total, marker="^", label="FP8 Combine (Total)")
-plt.plot(num_sms, fp8_combine_rdma, marker="x", linestyle="--", label="FP8 Combine (RDMA)")
-plt.plot(num_sms, fp8_combine_nvl, marker="d", linestyle="--", label="FP8 Combine (NVLink)")
+plt.plot(
+    num_sms, fp8_combine_rdma, marker="x", linestyle="--", label="FP8 Combine (RDMA)"
+)
+plt.plot(
+    num_sms, fp8_combine_nvl, marker="d", linestyle="--", label="FP8 Combine (NVLink)"
+)
 plt.xlabel("Number of SMs")
 plt.ylabel("Combine Throughput (GB/s)")
 plt.title("FP8 Combine Throughput vs SMs")

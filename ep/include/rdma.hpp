@@ -7,6 +7,7 @@
 #include <infiniband/efadv.h>
 #include <infiniband/verbs.h>
 #include <atomic>
+#include <cassert>
 #include <mutex>
 #include <set>
 #include <tuple>
@@ -80,6 +81,19 @@ class AtomicsImm {
 
   static AtomicsImm Pack(bool is_atomics, bool is_combine, int v14,
                          uint16_t off15, int buffer_idx) {
+    constexpr uint32_t kIS_ATOMICS_MASK = 0x1u;
+    constexpr uint32_t kIS_COMBINE_MASK = 0x1u;
+    constexpr uint32_t kBUFFER_IDX_MASK = 0x1u;
+    constexpr uint32_t kV14_MASK = 0x3FFFu;  // 14 bits
+    constexpr uint32_t kOFF_MASK = 0x7FFFu;  // 15 bits
+
+    // runtime asserts
+    assert((is_atomics & ~kIS_ATOMICS_MASK) == 0 && "is_atomics overflow");
+    assert((is_combine & ~kIS_COMBINE_MASK) == 0 && "is_combine overflow");
+    assert((buffer_idx & ~kBUFFER_IDX_MASK) == 0 && "buffer_idx overflow");
+    assert((v14 & ~kV14_MASK) == 0 && "v14 overflow 14 bits");
+    assert((off15 & ~kOFF_MASK) == 0 && "off15 overflow 15 bits");
+
     uint32_t vfield = static_cast<uint32_t>(v14) & kV14_MASK;
     uint32_t imm = (static_cast<uint32_t>(is_atomics) << kIS_ATOMICS) |
                    (static_cast<uint32_t>(is_combine) << kIS_COMBINE) |
@@ -134,9 +148,25 @@ class WriteImm {
 
   static WriteImm Pack(bool is_combine,
                        uint32_t buffer_idx,  // 0/1
-                       uint32_t expert_idx,  // 0..4095
-                       uint32_t num_tokens,  // 0..63
-                       uint32_t my_rank) {   // 0..1023
+                       uint32_t expert_idx,  // 0..4095 (12 bits)
+                       uint32_t num_tokens,  // 0..63   (6 bits)
+                       uint32_t my_rank) {   // 0..1023 (10 bits)
+    constexpr uint32_t kIS_COMBINE_MASK = 0x1u;
+    constexpr uint32_t kBUFFER_IDX_MASK = 0x1u;
+    constexpr uint32_t kEXPERT_MASK = 0xFFFu;  // 12 bits
+    constexpr uint32_t kTOKENS_MASK = 0x3Fu;   // 6 bits
+    constexpr uint32_t kRANK_MASK = 0x3FFu;    // 10 bits
+
+    // Runtime validation
+    assert((is_combine & ~kIS_COMBINE_MASK) == 0 &&
+           "is_combine overflow (1 bit)");
+    assert((buffer_idx & ~kBUFFER_IDX_MASK) == 0 &&
+           "buffer_idx overflow (1 bit)");
+    assert((expert_idx & ~kEXPERT_MASK) == 0 &&
+           "expert_idx overflow (12 bits)");
+    assert((num_tokens & ~kTOKENS_MASK) == 0 && "num_tokens overflow (6 bits)");
+    assert((my_rank & ~kRANK_MASK) == 0 && "my_rank overflow (10 bits)");
+
     uint32_t imm = ((is_combine & 0x1u) << kIS_COMBINE) |
                    ((buffer_idx & 0x1u) << kBUFFER_IDX) |
                    ((expert_idx & kEXPERT_MASK) << kEXPERT_IDX) |
