@@ -353,7 +353,7 @@ def test_main(
         )
         for nvl_chunk_size in range(4, 45, 4):
             # NOTE(MaoZiming): I have modified this!
-            for rdma_chunk_size in range(12 if num_nodes == 2 else 4, 28, 4):
+            for rdma_chunk_size in range(4, 28, 4):
                 config = Config(
                     num_sms,
                     nvl_chunk_size,
@@ -363,7 +363,12 @@ def test_main(
                 )
                 tune_args = {"x": current_x, "handle": handle, "config": config}
                 t, notify_t = bench_kineto(
-                    lambda: buffer.dispatch(**tune_args), ("dispatch", "notify")
+                    lambda: (
+                        buffer.dispatch(**tune_args),
+                        # dist.barrier()
+                    ),
+                    ("dispatch", "notify"),
+                    # num_tests=3
                 )
                 if t < best_time:
                     best_time, best_results = t, (

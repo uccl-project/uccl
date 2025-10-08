@@ -16,8 +16,8 @@ static std::string shm_name_for_barrier(std::string const& ip, int thread_idx) {
 
 LocalBarrier* map_local_barrier_shm(std::string const& name, bool* out_owner) {
   *out_owner = false;
-  const size_t kSize = sizeof(LocalBarrier);
-  const mode_t kMode = 0600;
+  size_t const kSize = sizeof(LocalBarrier);
+  mode_t const kMode = 0600;
   int fd = shm_open(name.c_str(), O_RDWR | O_CREAT | O_EXCL, kMode);
   if (fd >= 0) {
     *out_owner = true;
@@ -82,7 +82,7 @@ double Proxy::avg_wr_latency_us() const {
 
 uint64_t Proxy::completed_wr() const { return completion_count_; }
 
-void Proxy::pin_thread() {
+void Proxy::pin_thread_to_cpu_wrapper() {
   if (cfg_.pin_thread) {
     // TODO(MaoZiming): improves pinning.
     pin_thread_to_cpu(cfg_.thread_idx + cfg_.local_rank * kNumThBlocks);
@@ -95,6 +95,17 @@ void Proxy::pin_thread() {
           "local_rank: %d\n",
           cpu, cfg_.thread_idx, cfg_.local_rank);
     }
+  }
+}
+
+void Proxy::pin_thread_to_numa_wrapper() {
+  if (cfg_.pin_thread) {
+    assert(ctx_.numa_node != -1);
+    pin_thread_to_numa(ctx_.numa_node);
+    printf(
+        "Local CPU thread pinned to NUMA node %d, thread_idx: %d, "
+        "local_rank: %d\n",
+        ctx_.numa_node, cfg_.thread_idx, cfg_.local_rank);
   }
 }
 
@@ -134,7 +145,7 @@ void Proxy::init_common() {
 
   per_thread_rdma_init(ctx_, cfg_.gpu_buffer, cfg_.total_size, my_rank,
                        cfg_.thread_idx, cfg_.local_rank);
-  pin_thread();
+  pin_thread_to_numa_wrapper();
   if (!ctx_.cq) ctx_.cq = create_per_thread_cq(ctx_);
   if (ctxs_for_all_ranks_.empty()) {
     fprintf(stderr,
@@ -243,7 +254,7 @@ void Proxy::init_common() {
   //   return;
   // }
   // Discover local ranks (same IP as me)
-  const std::string my_ip = peers_[cfg_.rank].ip;
+  std::string const my_ip = peers_[cfg_.rank].ip;
   std::vector<int> local_ranks;
   local_ranks.reserve(ctxs_for_all_ranks_.size());
   int leader_rank = cfg_.rank;
@@ -527,7 +538,7 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 }
 
 void Proxy::run_local() {
-  pin_thread();
+  pin_thread_to_cpu_wrapper();
   printf("Local CPU thread %d started with %zu ring buffers\n", cfg_.thread_idx,
          cfg_.ring_buffers.size());
 
@@ -869,12 +880,12 @@ void Proxy::destroy(bool free_gpu_buffer) {
 
   // Unmap local barrier shm
   // if (cfg_.thread_idx == 0) {
-  const std::string my_ip =
-      (cfg_.rank < (int)peers_.size()) ? peers_[cfg_.rank].ip : "";
-  const std::string shm_name = shm_name_for_barrier(my_ip, cfg_.thread_idx);
-  unmap_local_barrier_shm(shm_name, ctx_.lb, ctx_.lb_owner);
-  ctx_.lb = nullptr;
-  ctx_.lb_owner = false;
+    std::string const my_ip =
+        (cfg_.rank < (int)peers_.size()) ? peers_[cfg_.rank].ip : "";
+    std::string const shm_name = shm_name_for_barrier(my_ip, cfg_.thread_idx);
+    unmap_local_barrier_shm(shm_name, ctx_.lb, ctx_.lb_owner);
+    ctx_.lb = nullptr;
+    ctx_.lb_owner = false;
   // }
 
   finished_wrs_.clear();
@@ -969,7 +980,7 @@ void Proxy::barrier_check() {
   if (!ctx_.barrier_inflight) return;
 
   auto* lb = ctx_.lb;
-  const uint64_t seq = ctx_.barrier_seq;
+  uint64_t const seq = ctx_.barrier_seq;
 
   // Node leader aggregates local arrivals
   if (cfg_.rank == ctx_.node_leader_rank) {

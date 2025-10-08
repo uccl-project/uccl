@@ -356,6 +356,31 @@ extract_required_scale_format(float value) {
   }
 }
 
+// 32-bit, for CPU std::atomic<int>
+__device__ __forceinline__ uint32_t ld_sys_cv_u32(const volatile uint32_t* p) {
+  uint32_t v;
+  asm volatile("ld.global.cv.u32 %0, [%1];" : "=r"(v) : "l"(p));
+#if __CUDA_ARCH__ >= 800
+  asm volatile("fence.acquire.sys;" ::: "memory");
+#else
+  asm volatile("membar.sys;" ::: "memory");
+#endif
+  return v;
+}
+
+// 64-bit, if CPU uses std::atomic<uint64_t>
+__device__ __forceinline__ uint64_t ld_sys_cv_u64(const volatile uint64_t* p) {
+  uint64_t v;
+  asm volatile("ld.global.cv.u64 %0, [%1];" : "=l"(v) : "l"(p));
+#if __CUDA_ARCH__ >= 800
+  asm volatile("fence.acquire.sys;" ::: "memory");
+#else
+  asm volatile("membar.sys;" ::: "memory");
+#endif
+  return v;
+}
+
+
 __device__ __forceinline__ uint64_t ld_acquire_sys_global(uint64_t const* ptr) {
   uint64_t ret;
   asm volatile("ld.acquire.sys.global.u64 %0, [%1];" : "=l"(ret) : "l"(ptr));

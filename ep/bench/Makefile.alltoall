@@ -1,0 +1,53 @@
+# Makefile for Multi-NIC EFA All-to-All RDMA Test with GPU Memory
+
+CXX = g++
+CXXFLAGS = -std=c++17 -O3 -Wall -Wextra -march=native -pthread
+
+# CUDA configuration
+CUDA_HOME ?= /usr/local/cuda
+CUDA_INCLUDE = -I$(CUDA_HOME)/include
+CUDA_LDFLAGS = -L$(CUDA_HOME)/lib64 -lcudart
+
+# RDMA/EFA libraries
+RDMA_LDFLAGS = -libverbs -lefa
+
+# Combined flags
+INCLUDES = $(CUDA_INCLUDE)
+LDFLAGS = $(CUDA_LDFLAGS) $(RDMA_LDFLAGS)
+
+# Target
+TARGET = test_multi_nic_alltoall
+
+# Source file
+SRC = test_multi_nic_alltoall.cpp
+
+.PHONY: all clean run
+
+all: $(TARGET)
+
+$(TARGET): $(SRC)
+	@echo "Compiling $@..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $< $(LDFLAGS)
+	@echo "Build complete: $@"
+
+clean:
+	@echo "Cleaning build artifacts..."
+	rm -f $(TARGET)
+	@echo "Clean complete"
+
+# Example run targets (requires 2 nodes)
+# Usage: make run-node0 NODE_IPS="10.1.1.1,10.1.1.2"
+# Usage: make run-node1 NODE_IPS="10.1.1.1,10.1.1.2"
+run-node0: $(TARGET)
+	@if [ -z "$(NODE_IPS)" ]; then \
+		echo "Error: NODE_IPS not set. Usage: make run-node0 NODE_IPS=\"ip1,ip2\""; \
+		exit 1; \
+	fi
+	./$(TARGET) 0 $(NODE_IPS)
+
+run-node1: $(TARGET)
+	@if [ -z "$(NODE_IPS)" ]; then \
+		echo "Error: NODE_IPS not set. Usage: make run-node1 NODE_IPS=\"ip1,ip2\""; \
+		exit 1; \
+	fi
+	./$(TARGET) 1 $(NODE_IPS)

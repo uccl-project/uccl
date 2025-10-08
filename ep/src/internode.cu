@@ -686,7 +686,7 @@ __global__ void __launch_bounds__(
              rdma_tail_idx - cached_rdma_channel_head >=
                  num_max_rdma_chunked_recv_tokens) {
         cached_rdma_channel_head = static_cast<int>(
-            ld_acquire_sys_global(rdma_channel_head.buffer(lane_id)));
+            ld_sys_cv_u64(rdma_channel_head.buffer(lane_id)));
 
         // Timeout check
         if (clock64() - start_time >= NUM_TIMEOUT_CYCLES) {
@@ -757,12 +757,21 @@ __global__ void __launch_bounds__(
 
       // Copy source metadata into symmetric send buffer
       if (lane_id < num_topk_ranks) {
-        st_na_global(reinterpret_cast<SourceMeta*>(dst_send_buffers[lane_id]),
-                     src_meta);
+        auto* dst_meta = reinterpret_cast<SourceMeta*>(dst_send_buffers[lane_id]);
+        // if (dst_meta->is_token_in_nvl_rank_bits != 0) {
+        //   printf("dst_meta->is_token_in_nvl_rank_bits != 0\n");
+        //   trap();
+        // }
+
+        st_na_global(dst_meta, src_meta);
         st_release_sys_global(
             &reinterpret_cast<SourceMeta*>(dst_send_buffers[lane_id])
                  ->is_token_in_nvl_rank_bits,
             src_meta.is_token_in_nvl_rank_bits);
+        if (src_meta.is_token_in_nvl_rank_bits == 0) {
+          printf("src_meta.is_token_in_nvl_rank_bits == 0\n");
+          trap();
+        }
       }
 #pragma unroll
       for (int i = 0; i < num_topk_ranks; ++i)
@@ -897,7 +906,7 @@ __global__ void __launch_bounds__(
           auto const src_ptr = reinterpret_cast<uint64_t>(
               rdma_channel_data.send_buffer(dst_rdma_rank) +
               dst_slot_idx * num_bytes_per_token);
-
+          __threadfence_system();
           uccl::nvshmemi_ibgda_put_nbi_warp(
               dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
               src_ptr, num_bytes_per_msg,
@@ -1004,7 +1013,7 @@ __global__ void __launch_bounds__(
       // Check destination queue emptiness, or wait a buffer to be released
 
       // Timeout check
-      if (lane_id == 0 and clock64() - start_time_outer > NUM_TIMEOUT_CYCLES) {
+      if (lane_id == 0 and clock64() - start_time_outer > NUM_TIMEOUT_CYCLES / 2) {
         printf(
             "DeepEP dispatch forwarder timeout, num_tokens_to_recv_from_rdma: "
             "%d\n",
@@ -1043,7 +1052,7 @@ __global__ void __launch_bounds__(
           if (lane_id == src_rdma_rank and
               cached_rdma_channel_head == cached_rdma_channel_tail)
             cached_rdma_channel_tail = static_cast<int>(
-                ld_acquire_sys_global(rdma_channel_tail.buffer(src_rdma_rank)));
+                ld_sys_cv_u64(rdma_channel_tail.buffer(src_rdma_rank)));
           if (__shfl_sync(0xffffffff,
                           cached_rdma_channel_tail > cached_rdma_channel_head,
                           src_rdma_rank))
@@ -1077,7 +1086,10 @@ __global__ void __launch_bounds__(
 
         int seen_bits =
             ld_acquire_sys_global(&meta_ptr->is_token_in_nvl_rank_bits);
-        if (seen_bits == 0) break;  // not yet written
+        if (seen_bits == 0) {
+          // printf("seen_bits == 0 early break, t: %d, src_rdma_head: %d, src_rdma_tail: %d\n", t, src_rdma_head, src_rdma_tail);
+          break;  // not yet written
+        }
         src_rdma_tail_ready = t + 1;
       }
       src_rdma_tail = src_rdma_tail_ready;
@@ -2201,7 +2213,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
           // num_chunked_tokens` Here, `token_start_idx` is the actual tail
           int num_used_slots =
               token_start_idx -
-              ld_acquire_sys_global(rdma_channel_head.buffer(dst_rdma_rank));
+              ld_sys_cv_u64(rdma_channel_head.buffer(dst_rdma_rank));
           if (num_max_rdma_chunked_recv_tokens - num_used_slots >=
               num_chunked_tokens)
             break;
@@ -2213,7 +2225,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                 "RDMA: %d, nvl: %d, dst RDMA: %d, head: %ld, tail: %d, "
                 "chunked: %d\n",
                 channel_id, rdma_rank, nvl_rank, dst_rdma_rank,
-                ld_acquire_sys_global(rdma_channel_head.buffer(dst_rdma_rank)),
+                ld_sys_cv_u64(rdma_channel_head.buffer(dst_rdma_rank)),
                 token_start_idx, num_chunked_tokens);
             trap();
           }
@@ -2368,7 +2380,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
         auto start_time = clock64();
         while (cached_channel_tail_idx <= expected_head) {
           cached_channel_tail_idx = static_cast<int>(
-              ld_acquire_sys_global(rdma_channel_tail.buffer(lane_id)));
+              ld_sys_cv_u64(rdma_channel_tail.buffer(lane_id)));
 
           // Timeout check
           if (clock64() - start_time > NUM_TIMEOUT_CYCLES) {

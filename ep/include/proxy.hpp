@@ -69,7 +69,8 @@ class Proxy {
   void run_remote();
   void run_local();
   void run_dual();
-  void pin_thread();
+  void pin_thread_to_cpu_wrapper();
+  void pin_thread_to_numa_wrapper();
   void destroy(bool free_gpu_buffer);
 
   double avg_rdma_write_us() const;
