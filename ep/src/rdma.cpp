@@ -1165,20 +1165,20 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       }
       continue;
 #endif
-#endif 
-    if (value == kMaxSendAtomicValue) value = kLargeAtomicValue;
-    // auto start = std::chrono::high_resolution_clock::now();
-    // while (std::chrono::duration_cast<std::chrono::microseconds>(
-    //           std::chrono::high_resolution_clock::now() - start)
-    //           .count() < 200) {
-    //     _mm_pause();
-    // }
-      
-    addr64->fetch_add(static_cast<uint64_t>(value),
-                      std::memory_order_release);
-    /* Flush */
-    _mm_clflush(addr64);
-    _mm_mfence();
+#endif
+      if (value == kMaxSendAtomicValue) value = kLargeAtomicValue;
+      // auto start = std::chrono::high_resolution_clock::now();
+      // while (std::chrono::duration_cast<std::chrono::microseconds>(
+      //           std::chrono::high_resolution_clock::now() - start)
+      //           .count() < 200) {
+      //     _mm_pause();
+      // }
+
+      addr64->fetch_add(static_cast<uint64_t>(value),
+                        std::memory_order_release);
+      /* Flush */
+      _mm_clflush(addr64);
+      _mm_mfence();
 #endif
     } else if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
                ImmType::IsBarrier(ntohl(cqe.imm_data))) {
@@ -1447,7 +1447,8 @@ void post_atomic_operations(ProxyCtx& S,
 
       int v = static_cast<int>(cmd.value);
       if (v > kLargeAtomicValue) {
-        printf("v = %d set to kMaxSendAtomicValue = %d\n", v, kMaxSendAtomicValue);
+        printf("v = %d set to kMaxSendAtomicValue = %d\n", v,
+               kMaxSendAtomicValue);
         v = kMaxSendAtomicValue;
       }
       if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {

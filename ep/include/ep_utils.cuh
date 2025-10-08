@@ -380,7 +380,6 @@ __device__ __forceinline__ uint64_t ld_sys_cv_u64(const volatile uint64_t* p) {
   return v;
 }
 
-
 __device__ __forceinline__ uint64_t ld_acquire_sys_global(uint64_t const* ptr) {
   uint64_t ret;
   asm volatile("ld.acquire.sys.global.u64 %0, [%1];" : "=l"(ret) : "l"(ptr));

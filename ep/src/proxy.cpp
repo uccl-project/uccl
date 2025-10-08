@@ -880,12 +880,12 @@ void Proxy::destroy(bool free_gpu_buffer) {
 
   // Unmap local barrier shm
   // if (cfg_.thread_idx == 0) {
-    std::string const my_ip =
-        (cfg_.rank < (int)peers_.size()) ? peers_[cfg_.rank].ip : "";
-    std::string const shm_name = shm_name_for_barrier(my_ip, cfg_.thread_idx);
-    unmap_local_barrier_shm(shm_name, ctx_.lb, ctx_.lb_owner);
-    ctx_.lb = nullptr;
-    ctx_.lb_owner = false;
+  std::string const my_ip =
+      (cfg_.rank < (int)peers_.size()) ? peers_[cfg_.rank].ip : "";
+  std::string const shm_name = shm_name_for_barrier(my_ip, cfg_.thread_idx);
+  unmap_local_barrier_shm(shm_name, ctx_.lb, ctx_.lb_owner);
+  ctx_.lb = nullptr;
+  ctx_.lb_owner = false;
   // }
 
   finished_wrs_.clear();

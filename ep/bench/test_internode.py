@@ -352,7 +352,6 @@ def test_main(
             else dispatch_bf16_nvl_recv_bytes
         )
         for nvl_chunk_size in range(4, 45, 4):
-            # NOTE(MaoZiming): I have modified this!
             for rdma_chunk_size in range(4, 28, 4):
                 config = Config(
                     num_sms,

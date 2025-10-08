@@ -144,15 +144,22 @@ __global__ void notify_dispatch(
     for (int i = thread_id; i < rdma_num_int_clean; i += num_threads)
       rdma_buffer_ptr_int[rdma_clean_offset + i] = 0;
 
+    auto atomic_ptr_u64 = reinterpret_cast<uint64_t*>(atomic_buffer_ptr);
+    auto rdma_channel_head = SymBuffer<uint64_t, false>(
+        atomic_buffer_ptr, 1, kNumRDMARanks, 0, num_channels);
+    auto rdma_channel_tail = SymBuffer<uint64_t, false>(
+        atomic_buffer_ptr, 1, kNumRDMARanks, 0, num_channels);
     // Clean atomic_buffer_ptr
-    {
-      auto atomic_ptr_u64 = reinterpret_cast<uint64_t*>(atomic_buffer_ptr);
-      int num_atomic_slots = num_channels * num_ranks / NUM_MAX_NVL_PEERS *
-                             2;  // 1 head + 1 tail per lane
+    EP_DEVICE_ASSERT(rdma_channel_tail.total_bytes +
+                         rdma_channel_head.total_bytes <=
+                     kAtomicBufferSize);
+    int num_atomic_slots =
+        (rdma_channel_tail.total_bytes + rdma_channel_head.total_bytes) /
+        sizeof(uint64_t);
 #pragma unroll
-      for (int i = thread_id; i < num_atomic_slots; i += num_threads)
-        atomic_ptr_u64[i] = 0ull;
-    }
+    for (int i = thread_id; i < num_atomic_slots; i += num_threads)
+      atomic_ptr_u64[i] = 0ull;
+
     __syncthreads();
 
 // Copy to send buffer
@@ -685,8 +692,8 @@ __global__ void __launch_bounds__(
       while (is_token_in_rank_uint64 != 0 and
              rdma_tail_idx - cached_rdma_channel_head >=
                  num_max_rdma_chunked_recv_tokens) {
-        cached_rdma_channel_head = static_cast<int>(
-            ld_sys_cv_u64(rdma_channel_head.buffer(lane_id)));
+        cached_rdma_channel_head =
+            static_cast<int>(ld_sys_cv_u64(rdma_channel_head.buffer(lane_id)));
 
         // Timeout check
         if (clock64() - start_time >= NUM_TIMEOUT_CYCLES) {
@@ -757,7 +764,8 @@ __global__ void __launch_bounds__(
 
       // Copy source metadata into symmetric send buffer
       if (lane_id < num_topk_ranks) {
-        auto* dst_meta = reinterpret_cast<SourceMeta*>(dst_send_buffers[lane_id]);
+        auto* dst_meta =
+            reinterpret_cast<SourceMeta*>(dst_send_buffers[lane_id]);
         // if (dst_meta->is_token_in_nvl_rank_bits != 0) {
         //   printf("dst_meta->is_token_in_nvl_rank_bits != 0\n");
         //   trap();
@@ -1013,7 +1021,8 @@ __global__ void __launch_bounds__(
       // Check destination queue emptiness, or wait a buffer to be released
 
       // Timeout check
-      if (lane_id == 0 and clock64() - start_time_outer > NUM_TIMEOUT_CYCLES / 2) {
+      if (lane_id == 0 and
+          clock64() - start_time_outer > NUM_TIMEOUT_CYCLES / 2) {
         printf(
             "DeepEP dispatch forwarder timeout, num_tokens_to_recv_from_rdma: "
             "%d\n",
@@ -1087,7 +1096,8 @@ __global__ void __launch_bounds__(
         int seen_bits =
             ld_acquire_sys_global(&meta_ptr->is_token_in_nvl_rank_bits);
         if (seen_bits == 0) {
-          // printf("seen_bits == 0 early break, t: %d, src_rdma_head: %d, src_rdma_tail: %d\n", t, src_rdma_head, src_rdma_tail);
+          // printf("seen_bits == 0 early break, t: %d, src_rdma_head: %d,
+          // src_rdma_tail: %d\n", t, src_rdma_head, src_rdma_tail);
           break;  // not yet written
         }
         src_rdma_tail_ready = t + 1;
@@ -1473,15 +1483,21 @@ __global__ void cached_notify(
     for (int i = thread_id; i < nvl_num_int_clean; i += num_threads)
       nvl_buffer_ptr_int[nvl_clean_offset + i] = 0;
 
-    // Clean atomic buffer (head/tail region)
-    {
-      auto atomic_ptr_u64 = reinterpret_cast<uint64_t*>(atomic_buffer_ptr);
-      // Each channel × RDMA rank typically has 1 head + 1 tail
-      int num_atomic_slots = num_channels * (num_ranks / NUM_MAX_NVL_PEERS) * 2;
+    auto atomic_ptr_u64 = reinterpret_cast<uint64_t*>(atomic_buffer_ptr);
+    auto rdma_channel_head = SymBuffer<uint64_t, false>(
+        atomic_buffer_ptr, 1, num_rdma_ranks, 0, num_channels);
+    auto rdma_channel_tail = SymBuffer<uint64_t, false>(
+        atomic_buffer_ptr, 1, num_rdma_ranks, 0, num_channels);
+    // Clean atomic_buffer_ptr
+    EP_DEVICE_ASSERT(rdma_channel_tail.total_bytes +
+                         rdma_channel_head.total_bytes <=
+                     kAtomicBufferSize);
+    int num_atomic_slots =
+        (rdma_channel_tail.total_bytes + rdma_channel_head.total_bytes) /
+        sizeof(uint64_t);
 #pragma unroll
-      for (int i = thread_id; i < num_atomic_slots; i += num_threads)
-        atomic_ptr_u64[i] = 0ull;
-    }
+    for (int i = thread_id; i < num_atomic_slots; i += num_threads)
+      atomic_ptr_u64[i] = 0ull;
 
     __syncthreads();
 
