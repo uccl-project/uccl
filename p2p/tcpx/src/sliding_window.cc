@@ -54,7 +54,7 @@ int SlidingWindow::try_release_oldest(void* comm, bool is_recv) {
   int rc = tcpx_test(oldest_req, &done, &size);
 
   static int debug_count = 0;
-  if (debug_count < 50) {  
+  if (debug_count < 50) {
     std::cout << "[DEBUG][SlidingWindow] tcpx_test: chunk_idx=" << oldest_idx
               << " rc=" << rc << " done=" << done << " size=" << size
               << " is_recv=" << is_recv << std::endl;
