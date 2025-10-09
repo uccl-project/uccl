@@ -4,22 +4,36 @@ set -euo pipefail
 usage() {
   cat <<USAGE
 Usage:
-  $(basename "$0") server
-  $(basename "$0") client <server_ip>
+  $(basename "$0") server [gpu_id]
+  $(basename "$0") client <server_ip> [gpu_id]
 
 Description:
-  Launches TCPX P2P perf runs for all 8 GPUs per node (16 GPUs total across 2 nodes).
+  Launches TCPX P2P perf runs for GPUs.
+  - If gpu_id is specified: runs single GPU with 4 TCPX connections
+  - If gpu_id is omitted: runs all 8 GPUs per node (full-mesh)
+
   Each GPU is paired with the NIC on its PCIe root: {0,1}->eth1, {2,3}->eth2,
   {4,5}->eth3, {6,7}->eth4. A unique bootstrap port is derived from
   UCCL_TCPX_BOOTSTRAP_PORT_BASE + gpu_id to avoid collisions.
 
 Environment overrides:
   GPU_LIST                       Space-separated GPU ids (default: 0 1 2 3 4 5 6 7)
+  UCCL_TCPX_NUM_CHANNELS         Connections per GPU (default: 4)
   UCCL_TCPX_BOOTSTRAP_PORT_BASE  Base port (default: 20000)
   UCCL_TCPX_PERF_SIZE            Bytes per iteration (default: 67108864)
   UCCL_TCPX_PERF_ITERS           Iterations (default: 20)
   UCCL_TCPX_CHUNK_BYTES          Chunk size (default: 524288)
+  UCCL_TCPX_UNPACK_IMPL          Unpack implementation: kernel|d2d|host (default: kernel)
   LOG_DIR                        Output log directory (default: p2p/tcpx/logs)
+
+Examples:
+  # Single GPU pair (GPU 0 on both nodes, 4 connections each)
+  ./run_p2p_fullmesh.sh server 0
+  ./run_p2p_fullmesh.sh client <SERVER_IP> 0
+
+  # Full-mesh (all 8 GPUs on both nodes)
+  ./run_p2p_fullmesh.sh server
+  ./run_p2p_fullmesh.sh client <SERVER_IP>
 USAGE
 }
 
@@ -29,13 +43,22 @@ if [[ -z "${ROLE}" ]]; then
 fi
 shift || true
 
+SERVER_IP=""
+SINGLE_GPU=""
+
 case "${ROLE}" in
   server)
+    # Optional: single GPU mode
+    SINGLE_GPU=${1:-}
+    [[ -n "${SINGLE_GPU}" ]] && shift || true
     ;;
   client)
     SERVER_IP=${1:-}
     [[ -z "${SERVER_IP}" ]] && { echo "[ERROR] Missing <server_ip>" >&2; usage; exit 1; }
     shift || true
+    # Optional: single GPU mode
+    SINGLE_GPU=${1:-}
+    [[ -n "${SINGLE_GPU}" ]] && shift || true
     ;;
   *)
     usage; exit 1;
@@ -43,15 +66,24 @@ case "${ROLE}" in
 esac
 
 # Defaults (can be overridden by environment)
-GPU_LIST=${GPU_LIST:-"0 1 2 3 4 5 6 7"}
+if [[ -n "${SINGLE_GPU}" ]]; then
+  GPU_LIST="${SINGLE_GPU}"
+  echo "[INFO] Single GPU mode: GPU ${SINGLE_GPU}"
+else
+  GPU_LIST=${GPU_LIST:-"0 1 2 3 4 5 6 7"}
+  echo "[INFO] Full-mesh mode: GPUs ${GPU_LIST}"
+fi
+
 BOOTSTRAP_BASE=${UCCL_TCPX_BOOTSTRAP_PORT_BASE:-20000}
 PERF_SIZE=${UCCL_TCPX_PERF_SIZE:-67108864}
 PERF_ITERS=${UCCL_TCPX_PERF_ITERS:-20}
 CHUNK_BYTES=${UCCL_TCPX_CHUNK_BYTES:-524288}
+CHANNELS=${UCCL_TCPX_NUM_CHANNELS:-2}  # 2 channels per GPU (recommended)
+UNPACK_IMPL=${UCCL_TCPX_UNPACK_IMPL:-kernel}  # kernel|d2d|host
 LOG_DIR=${LOG_DIR:-"$(dirname "$0")/logs"}
 mkdir -p "${LOG_DIR}"
 
-map_gpu_to_iface() {
+map_gpu_to_ifaces() {
   local gpu=$1
   case ${gpu} in
     0|1) echo "eth1" ;;
@@ -66,7 +98,9 @@ map_gpu_to_iface() {
 export PATH="/usr/local/cuda/bin:/usr/local/nvidia/bin:${PATH}"
 export LD_LIBRARY_PATH="/usr/local/cuda/lib64:/usr/local/nvidia/lib64:/var/lib/tcpx/lib64:${LD_LIBRARY_PATH:-}"
 export NCCL_GPUDIRECTTCPX_CTRL_DEV="eth0"
-export NCCL_NSOCKS_PERTHREAD=4
+# Configuration: 2 channels × 2 sockets = 4 sockets per GPU
+# 2 GPUs share 1 NIC → 8 sockets per NIC (MAX_SOCKETS=8)
+export NCCL_NSOCKS_PERTHREAD=2
 export NCCL_SOCKET_NTHREADS=1
 export NCCL_DYNAMIC_CHUNK_SIZE=524288
 export NCCL_P2P_NET_CHUNKSIZE=524288
@@ -101,10 +135,11 @@ run_instance() {
     export NCCL_GPUDIRECTTCPX_SOCKET_IFNAME="${iface}"
     export NCCL_GPUDIRECTTCPX_UNIX_CLIENT_PREFIX="/run/tcpx"
     export UCCL_TCPX_BOOTSTRAP_PORT_BASE="${BOOTSTRAP_BASE}"
-    export UCCL_TCPX_NUM_CHANNELS=1
+    export UCCL_TCPX_NUM_CHANNELS="${CHANNELS}"
     export UCCL_TCPX_PERF_SIZE="${PERF_SIZE}"
     export UCCL_TCPX_PERF_ITERS="${PERF_ITERS}"
     export UCCL_TCPX_CHUNK_BYTES="${CHUNK_BYTES}"
+    export UCCL_TCPX_UNPACK_IMPL="${UNPACK_IMPL}"
 
     if [[ "${role}" == "server" ]]; then
       exec ./tests/test_tcpx_perf_multi server "${gpu}"
@@ -115,13 +150,13 @@ run_instance() {
 }
 
 for gpu in ${GPU_LIST}; do
-  iface=$(map_gpu_to_iface "${gpu}")
-  if [[ -z "${iface}" ]]; then
+  ifaces=$(map_gpu_to_ifaces "${gpu}")
+  if [[ -z "${ifaces}" ]]; then
     echo "[WARN] No NIC mapping for GPU ${gpu}; skipping" >&2
     continue
   fi
-  echo "[INFO] Launching ${ROLE} GPU ${gpu} on ${iface} (port base ${BOOTSTRAP_BASE})"
-  run_instance "${ROLE}" "${gpu}" "${iface}"
+  echo "[INFO] Launching ${ROLE} GPU ${gpu} on ${ifaces} (${CHANNELS} channels, port base ${BOOTSTRAP_BASE})"
+  run_instance "${ROLE}" "${gpu}" "${ifaces}"
   sleep 0.2
 done
 

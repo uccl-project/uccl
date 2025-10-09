@@ -39,25 +39,15 @@ core: $(DEVICE_OBJS) $(CORE_OBJS)
 	@echo "Device objects: $(DEVICE_OBJS)"
 	@echo "Core objects: $(CORE_OBJS)"
 
-# Main transfer test with unpack architecture
-test_tcpx_transfer: $(DEVICE_OBJS) $(CORE_OBJS)
-	@echo "Building test_tcpx_transfer..."
-	$(NVCC) $(NVCCFLAGS) -o tests/test_tcpx_transfer tests/test_tcpx_transfer.cc tcpx_impl.cc $(DEVICE_OBJS) $(CORE_OBJS) $(LIBS) $(CUDA_LIBS)
+# Multi-channel performance test (main program)
+test_tcpx_perf_multi: $(DEVICE_OBJS) $(CORE_OBJS)
+	@echo "Building test_tcpx_perf_multi..."
+	$(NVCC) $(NVCCFLAGS) -o tests/test_tcpx_perf_multi tests/test_tcpx_perf_multi.cc tcpx_impl.cc $(DEVICE_OBJS) $(CORE_OBJS) $(LIBS) $(CUDA_LIBS)
 
 # Multi-channel transfer test
 test_tcpx_transfer_multi: $(DEVICE_OBJS) $(CORE_OBJS)
 	@echo "Building test_tcpx_transfer_multi..."
 	$(NVCC) $(NVCCFLAGS) -o tests/test_tcpx_transfer_multi tests/test_tcpx_transfer_multi.cc tcpx_impl.cc $(DEVICE_OBJS) $(CORE_OBJS) $(LIBS) $(CUDA_LIBS)
-
-# Multi-channel performance test
-test_tcpx_perf_multi: $(DEVICE_OBJS) $(CORE_OBJS)
-	@echo "Building test_tcpx_perf_multi..."
-	$(NVCC) $(NVCCFLAGS) -o tests/test_tcpx_perf_multi tests/test_tcpx_perf_multi.cc tcpx_impl.cc $(DEVICE_OBJS) $(CORE_OBJS) $(LIBS) $(CUDA_LIBS)
-
-# Performance benchmark test
-test_tcpx_perf: $(DEVICE_OBJS) $(CORE_OBJS)
-	@echo "Building test_tcpx_perf..."
-	$(NVCC) $(NVCCFLAGS) -o tests/test_tcpx_perf tests/test_tcpx_perf.cc tcpx_impl.cc $(DEVICE_OBJS) $(CORE_OBJS) $(LIBS) $(CUDA_LIBS)
 
 # Module unit tests
 test_modules: $(CORE_OBJS)
@@ -65,10 +55,7 @@ test_modules: $(CORE_OBJS)
 	$(CXX) $(CXXFLAGS) -o tests/test_modules tests/test_modules.cc tcpx_impl.cc $(CORE_OBJS) $(LIBS) $(CUDA_LIBS)
 
 # Build targets
-all: core test_tcpx_transfer test_tcpx_transfer_multi test_tcpx_perf test_tcpx_perf_multi test_modules
-
-# All tests (only integration test remains)
-all_tests: all
+all: core test_tcpx_perf_multi test_tcpx_transfer_multi test_modules
 
 # Quick test - just core components
 quick: core
@@ -92,13 +79,11 @@ check:
 	@echo "Built objects:"
 	@ls -la $(DEVICE_OBJS) 2>/dev/null || echo "No objects built yet"
 
-# Clean built files (ONLY executables and objects, NOT source files)
+# Clean built files
 clean:
 	@echo "Cleaning build artifacts..."
-	@echo "Removing executable files..."
-	rm -f tests/test_tcpx_transfer tests/test_tcpx_transfer_multi tests/test_tcpx_perf tests/test_tcpx_perf_multi tests/test_modules
-	@echo "Removing object files..."
+	rm -f tests/test_tcpx_perf_multi tests/test_tcpx_transfer_multi tests/test_modules
 	rm -f $(DEVICE_OBJS) $(CORE_OBJS) *.o
-	@echo "Clean completed. Source files preserved."
+	@echo "Clean completed."
 
-.PHONY: all core quick check clean all_tests test_tcpx_transfer test_tcpx_transfer_multi test_tcpx_perf test_tcpx_perf_multi test_modules
+.PHONY: all core quick check clean test_tcpx_perf_multi test_tcpx_transfer_multi test_modules

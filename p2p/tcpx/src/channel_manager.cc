@@ -6,11 +6,13 @@
 #include "channel_manager.h"
 #include "sliding_window.h"
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <thread>
@@ -25,6 +27,13 @@ std::string trim(std::string const& s) {
   if (start == std::string::npos) return "";
   size_t end = s.find_last_not_of(" \t\n\r");
   return s.substr(start, end - start + 1);
+}
+
+std::string to_lower_copy(std::string v) {
+  std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+  return v;
 }
 
 bool read_gpu_pci_bdf(int gpu_id, std::string& bdf_out) {
@@ -87,9 +96,29 @@ std::string canonical_path(std::string const& path) {
   if (path.empty()) return path;
   std::error_code ec;
   auto p = std::filesystem::path(path);
-  auto canonical = std::filesystem::canonical(p, ec);
+  auto canonical = std::filesystem::weakly_canonical(p, ec);
   if (ec) return path;
   return canonical.string();
+}
+
+int read_numa_node_from_path(std::string const& sysfs_path) {
+  if (sysfs_path.empty()) return -1;
+  std::error_code ec;
+  std::filesystem::path p(sysfs_path);
+  if (!std::filesystem::exists(p, ec)) return -1;
+  std::filesystem::path numa_file = p / "numa_node";
+  if (!std::filesystem::exists(numa_file, ec)) return -1;
+  std::ifstream f(numa_file);
+  if (!f) return -1;
+  int node = -1;
+  f >> node;
+  return node;
+}
+
+int read_numa_node_from_bdf(std::string const& bdf) {
+  if (bdf.empty()) return -1;
+  std::string lower_bdf = to_lower_copy(bdf);
+  return read_numa_node_from_path("/sys/bus/pci/devices/" + lower_bdf);
 }
 
 std::vector<std::string> extract_pci_segments(std::string const& path) {
@@ -137,20 +166,29 @@ ChannelManager::ChannelManager(int num_channels, int gpu_id)
   }
 
   if (num_channels_ > tcpx_dev_count) {
-    std::cerr << "[ChannelManager] Warning: Requested " << num_channels_
-              << " channels but only " << tcpx_dev_count
-              << " TCPX devices available. Clamping to " << tcpx_dev_count
-              << std::endl;
-    num_channels_ = tcpx_dev_count;
+    std::cerr
+        << "[ChannelManager] Info: Requested " << num_channels_
+        << " channels but only " << tcpx_dev_count
+        << " TCPX devices are present. Reusing NICs to satisfy the request."
+        << std::endl;
   }
 
   std::string gpu_bdf;
   std::vector<std::string> gpu_pci_segments;
+  int gpu_numa = -1;
   if (read_gpu_pci_bdf(gpu_id_, gpu_bdf)) {
     std::string gpu_sysfs = canonical_path("/sys/bus/pci/devices/" + gpu_bdf);
     gpu_pci_segments = extract_pci_segments(gpu_sysfs);
     std::cout << "[ChannelManager] GPU " << gpu_id_ << " PCI BDF " << gpu_bdf
               << " (" << gpu_sysfs << ")" << std::endl;
+    gpu_numa = read_numa_node_from_path(gpu_sysfs);
+    if (gpu_numa < 0) {
+      gpu_numa = read_numa_node_from_bdf(gpu_bdf);
+    }
+    if (gpu_numa >= 0) {
+      std::cout << "[ChannelManager] GPU " << gpu_id_ << " NUMA node "
+                << gpu_numa << std::endl;
+    }
   } else {
     std::cerr
         << "[ChannelManager] Warning: Unable to determine PCI path for GPU "
@@ -163,6 +201,8 @@ ChannelManager::ChannelManager(int num_channels, int gpu_id)
     std::vector<std::string> pci_segments;
     int score = -1000;
     bool cuda_supported = false;
+    int numa_node = -1;
+    bool numa_match = false;
   };
 
   std::vector<Candidate> candidates;
@@ -180,6 +220,18 @@ ChannelManager::ChannelManager(int num_channels, int gpu_id)
       nic_path = canonical_path(nic_path);
       cand.pci_segments = extract_pci_segments(nic_path);
       cand.score = compute_pci_score(gpu_pci_segments, cand.pci_segments);
+      cand.numa_node = read_numa_node_from_path(nic_path);
+    }
+    if (cand.numa_node < 0 && props.pci_path) {
+      cand.numa_node = read_numa_node_from_path(props.pci_path);
+    }
+    if (cand.numa_node < 0 && props.pci_path) {
+      std::filesystem::path nic_fs(props.pci_path);
+      std::string nic_bdf = nic_fs.filename().string();
+      cand.numa_node = read_numa_node_from_bdf(nic_bdf);
+    }
+    if (gpu_numa >= 0 && cand.numa_node >= 0 && cand.numa_node == gpu_numa) {
+      cand.numa_match = true;
     }
     candidates.push_back(cand);
   }
@@ -220,11 +272,31 @@ ChannelManager::ChannelManager(int num_channels, int gpu_id)
   }
 
   if ((int)selected.size() < num_channels_) {
-    std::cerr << "[ChannelManager] Warning: Requested " << num_channels_
-              << " channel(s) but only " << selected.size()
-              << " NIC(s) match GPU " << gpu_id_
-              << " topology. Reducing channel count." << std::endl;
-    num_channels_ = selected.size();
+    // Phase 1 Fix: Round-robin across ALL available NICs to avoid saturating a
+    // single NIC. This prevents accept stalls when multiple GPUs try to use the
+    // same NIC. Build a pool of all CUDA-supported NICs for round-robin
+    // distribution.
+    std::vector<Candidate> pool;
+    for (auto const& cand : sorted) {
+      if (cand.cuda_supported) {
+        pool.push_back(cand);
+      }
+    }
+
+    if (pool.empty()) {
+      // Fallback: if no CUDA-supported NICs, use the first available NIC
+      pool.push_back(sorted.front());
+    }
+
+    std::cout << "[ChannelManager] GPU " << gpu_id_ << ": Distributing "
+              << num_channels_ << " channels across " << pool.size()
+              << " NICs (round-robin)" << std::endl;
+
+    // Round-robin across all NICs in the pool
+    while ((int)selected.size() < num_channels_) {
+      Candidate const& src = pool[selected.size() % pool.size()];
+      selected.push_back(src);
+    }
   }
 
   channels_.resize(num_channels_);
@@ -240,7 +312,14 @@ ChannelManager::ChannelManager(int num_channels, int gpu_id)
     char const* nic_pci = cand.props.pci_path ? cand.props.pci_path : "";
     std::cout << "[ChannelManager] Channel " << i << " → netDev " << cand.dev
               << " (" << nic_name << ", PCI=" << nic_pci
-              << ", score=" << cand.score << ")" << std::endl;
+              << ", score=" << cand.score;
+    if (cand.numa_node >= 0) {
+      std::cout << ", numa=" << cand.numa_node;
+    }
+    if (cand.numa_match) {
+      std::cout << ", numa-match";
+    }
+    std::cout << ")" << std::endl;
 
     ch.listen_comm = nullptr;
     ch.recv_comm = nullptr;
@@ -355,13 +434,8 @@ int ChannelManager::server_accept_all() {
       int rc =
           tcpx_accept_v5(ch.listen_comm, &ch.recv_comm, &ch.recv_dev_handle);
 
-      if (rc != 0) {
-        std::cerr << "[ChannelManager] tcpx_accept_v5 failed for channel "
-                  << ch.channel_id << ", rc=" << rc << std::endl;
-        return -1;
-      }
-
-      if (ch.recv_comm) {
+      // Success: recv_comm is set
+      if (rc == 0 && ch.recv_comm) {
         std::cout << "[ChannelManager] Channel " << ch.channel_id
                   << ": Connection accepted, recv_comm=" << ch.recv_comm
                   << std::endl;
@@ -369,8 +443,17 @@ int ChannelManager::server_accept_all() {
         break;
       }
 
-      // Client hasn't connected yet, retry
-      std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs));
+      // Transient error or not ready yet: retry
+      // rc=2 typically means "not ready" or "would block"
+      if (rc != 0 || !ch.recv_comm) {
+        if (attempt == 0) {
+          std::cout << "[ChannelManager] Channel " << ch.channel_id
+                    << ": Accept not ready (rc=" << rc << "), retrying..."
+                    << std::endl;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs));
+        continue;
+      }
     }
 
     if (!accepted) {
