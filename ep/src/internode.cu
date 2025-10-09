@@ -2510,8 +2510,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
               min_head =
                   min(min_head, rdma_receiver_rdma_head[i][dst_rdma_rank]);
           if (min_head != std::numeric_limits<int>::max() and
-              min_head >= last_rdma_head +
-                              max(1, num_max_rdma_chunked_send_tokens / 2) and
+              min_head >= last_rdma_head + num_max_rdma_chunked_send_tokens and
               lane_id < kNumRDMARanks) {
             uccl::nvshmemi_ibgda_amo_nonfetch_add(
                 reinterpret_cast<uint64_t>(rdma_channel_head.buffer(rdma_rank)),
