@@ -280,7 +280,8 @@ void listener_thread_func(uccl_conn_t* conn) {
   }
 }
 
-uccl_engine_t* uccl_engine_create(int local_gpu_idx, int num_cpus, bool in_python) {
+uccl_engine_t* uccl_engine_create(int local_gpu_idx, int num_cpus,
+                                  bool in_python) {
   inside_python = in_python;
   uccl_engine_t* eng = new uccl_engine;
   eng->endpoint = new Endpoint(local_gpu_idx, num_cpus);

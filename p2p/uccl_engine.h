@@ -68,7 +68,8 @@ typedef struct metadata {
  * @param in_python     Whether the engine is being created in Python.
  * @return              Pointer to the engine instance, or NULL on failure.
  */
-uccl_engine_t* uccl_engine_create(int local_gpu_idx, int num_cpus, bool in_python);
+uccl_engine_t* uccl_engine_create(int local_gpu_idx, int num_cpus,
+                                  bool in_python);
 
 /**
  * Destroy the engine instance and free resources.

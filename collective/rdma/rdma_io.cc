@@ -72,7 +72,8 @@ int RDMAFactory::init_devs() {
   init_devs_log << "Found IB devices (ibv_get_device_list + NCCL_IB_HCA "
                    "filter, ordered by libibverbs):\n";
   if (rdma_ctl->num_devices == 0) {
-    // When a single process creates multiple engines, the discovery can be skipped
+    // When a single process creates multiple engines, the discovery can be
+    // skipped
     for (int d = 0; d < num_devs && rdma_ctl->num_devices < MAX_IB_DEVS; d++) {
       struct ibv_context* context = ibv_open_device(devices[d]);
       if (context == nullptr) {
@@ -120,7 +121,7 @@ int RDMAFactory::init_devs() {
 
         double link_bw = (ncclIbSpeed(port_attr.active_speed) *
                           ncclIbWidth(port_attr.active_width)) *
-                        1e6 / 8;
+                         1e6 / 8;
         dev.link_bw = link_bw;
 
         DCHECK(ncclIbGetGidIndex(context, port_num, &port_attr, &dev.gid_idx));
