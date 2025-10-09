@@ -1679,14 +1679,12 @@ void cached_notify(int hidden_int4, int num_scales, int num_topk_idx,
 template <int kNumRanks, bool kMaybeWithBias, typename dtype_t,
           int kMaxNumRanks, bool kUseTMA, int kNumStages,
           int kNumTMALoadBytes = 0, typename GetAddrFn, typename ReceiveTWFn>
-__device__ int combine_token(bool is_token_in_rank, int head_idx, int lane_id,
-                             int hidden_int4, int num_topk, int4* combined_row,
-                             float* combined_topk_weights,
-                             int4 const* bias_0_int4, int4 const* bias_1_int4,
-                             int num_max_recv_tokens,
-                             GetAddrFn const& get_addr_fn,
-                             ReceiveTWFn const& recv_tw_fn, uint8_t* smem_ptr,
-                             uint32_t (&tma_phase)[kNumStages]) {
+__forceinline__ __device__ int combine_token(
+    bool is_token_in_rank, int head_idx, int lane_id, int hidden_int4,
+    int num_topk, int4* combined_row, float* combined_topk_weights,
+    int4 const* bias_0_int4, int4 const* bias_1_int4, int num_max_recv_tokens,
+    GetAddrFn const& get_addr_fn, ReceiveTWFn const& recv_tw_fn,
+    uint8_t* smem_ptr, uint32_t (&tma_phase)[kNumStages]) {
   constexpr auto kDtypePerInt4 = sizeof(int4) / sizeof(dtype_t);
 
   // Broadcast current heads
@@ -2224,6 +2222,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                 num_tokens_to_combine);
         auto num_chunked_tokens = token_end_idx - token_start_idx;
         auto start_time = clock64();
+        unsigned long long rdma_wait_start = clock64();
         while (sub_warp_id == 0 and lane_id == 0) {
           // Inequality: `num_max_rdma_chunked_recv_tokens - (tail - head) >=
           // num_chunked_tokens` Here, `token_start_idx` is the actual tail
@@ -2247,6 +2246,11 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
           }
         }
         sync_large_warp();
+        unsigned long long rdma_wait_end = clock64();
+        // if (rdma_rank == 0 && lane_id == 0 && nvl_rank == 0 && channel_id ==
+        // 0)
+        //   printf("forwarder RDMA_wait: %.3f µs\n",
+        //          (rdma_wait_end - rdma_wait_start) / (1.41 * 1e3));
 
         // Combine and write to the RDMA buffer
         for (int token_idx = token_start_idx + sub_warp_id;
@@ -2264,6 +2268,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
 
           // Wait lanes to be ready
           start_time = clock64();
+          unsigned long long nvl_wait_start = clock64();
           while (cached_nvl_channel_tail_idx <= expected_head) {
             cached_nvl_channel_tail_idx =
                 ld_acquire_sys_global(nvl_channel_tail.buffer(lane_id));
@@ -2281,6 +2286,11 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
               trap();
             }
           }
+          unsigned long long nvl_wait_end = clock64();
+          // if (rdma_rank == 0 && lane_id == 0 && nvl_rank == 0 && channel_id
+          // == 0)
+          //   printf("forwarder NVL_wait: %.3f µs\n",
+          //     (nvl_wait_end - nvl_wait_start)/(1.41*1e3));
 
           // Combine current token
           auto rdma_slot_idx = token_idx % num_max_rdma_chunked_recv_tokens;
@@ -2299,6 +2309,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                                          hidden_bytes + sizeof(SourceMeta)) +
                 topk_idx);
           };
+          unsigned long long start_cycles = clock64();
           combine_token<NUM_MAX_NVL_PEERS, false, dtype_t, NUM_MAX_NVL_PEERS,
                         true, kNumStages, kNumTMALoadBytes>(
               expected_head >= 0, expected_head, lane_id, hidden_int4, num_topk,
@@ -2307,6 +2318,14 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                                        hidden_bytes + sizeof(SourceMeta)),
               nullptr, nullptr, num_max_nvl_chunked_recv_tokens_per_rdma,
               get_addr_fn, recv_tw_fn, smem_ptr, tma_phase);
+          unsigned long long end_cycles = clock64();
+          // if (rdma_rank == 0 && is_forwarder_sm && lane_id == 0 && nvl_rank
+          // == 0 &&
+          //     channel_id == 0 && token_idx == token_start_idx) {
+          //   double sm_ghz = 1.41;
+          //   printf("combine_token forwarder: %.3f µs\n", (end_cycles -
+          //   start_cycles) / (sm_ghz * 1e3));
+          // }
 
           // Update head
           if (lane_id < NUM_MAX_NVL_PEERS)
@@ -2394,6 +2413,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
 
         // Wait lanes to be ready
         auto start_time = clock64();
+        unsigned long long rdma_wait_start = clock64();
         while (cached_channel_tail_idx <= expected_head) {
           cached_channel_tail_idx = static_cast<int>(
               ld_sys_cv_u64(rdma_channel_tail.buffer(lane_id)));
@@ -2409,6 +2429,12 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
           }
         }
         __syncwarp();
+        unsigned long long rdma_wait_end = clock64();
+        // if (rdma_rank == 1 && !is_forwarder_sm && lane_id == 0 && nvl_rank ==
+        // 0 &&
+        //     channel_id == 0)
+        //   printf("receiver RDMA_wait: %.3f µs\n",
+        //          (rdma_wait_end - rdma_wait_start) / (1.41 * 1e3));
 
         // Combine current token
         auto get_addr_fn = [&](int src_rdma_rank, int slot_idx,
@@ -2427,6 +2453,8 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                               topk_idx);
         };
         uint32_t dummy_tma_phases[2];
+
+        unsigned long long start_cycles = clock64();
         combine_token<kNumRDMARanks, true, dtype_t, kNumTopkRDMARanks, false,
                       2>(
             expected_head >= 0, expected_head, lane_id, hidden_int4, num_topk,
@@ -2436,6 +2464,15 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
             bias_1 == nullptr ? nullptr : bias_1 + token_idx * hidden_int4,
             num_max_rdma_chunked_recv_tokens, get_addr_fn, recv_tw_fn, nullptr,
             dummy_tma_phases);
+
+        unsigned long long end_cycles = clock64();
+        // if (rdma_rank == 1 && !is_forwarder_sm && lane_id == 0 && nvl_rank ==
+        // 0 &&
+        //     channel_id == 0) {
+        //   double sm_ghz = 1.41;
+        //   printf("combine_token receiver: %.3f µs\n", (end_cycles -
+        //   start_cycles) / (sm_ghz * 1e3));
+        // }
       }
 
       // Retired
@@ -2473,7 +2510,8 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
               min_head =
                   min(min_head, rdma_receiver_rdma_head[i][dst_rdma_rank]);
           if (min_head != std::numeric_limits<int>::max() and
-              min_head >= last_rdma_head + num_max_rdma_chunked_send_tokens and
+              min_head >= last_rdma_head +
+                              max(1, num_max_rdma_chunked_send_tokens / 2) and
               lane_id < kNumRDMARanks) {
             uccl::nvshmemi_ibgda_amo_nonfetch_add(
                 reinterpret_cast<uint64_t>(rdma_channel_head.buffer(rdma_rank)),

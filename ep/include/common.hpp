@@ -58,7 +58,7 @@
 #define QKEY 0x11111111u
 // #define kLargeAtomicValue 33554352
 #define kLargeAtomicValue 33550000
-#define kMaxSendAtomicValue 16383
+#define kMaxSendAtomicValue 32767
 // P2P enable flags (once per GPU pair)
 extern std::once_flag peer_ok_flag[MAX_NUM_GPUS][MAX_NUM_GPUS];
 bool pin_thread_to_cpu(int cpu);

@@ -30,6 +30,7 @@
 #endif
 #include "bench_utils.hpp"
 #include "util/util.h"
+#include <cstdlib>
 #include <stdio.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -628,7 +629,18 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       printf("Posting rdma to itself\n");
       std::abort();
       continue;
-    } else {
+    }
+#ifdef USE_NORMAL_MODE
+    else if (std::abs((int)cmds_to_post[i].dst_rank - (int)my_rank) %
+                 MAX_NUM_GPUS !=
+             0) {
+      // NOTE(MaoZiming): this should not happen.
+      printf("Posting rdma to a different rank\n");
+      std::abort();
+      continue;
+    }
+#endif
+    else {
       dst_rank_wr_ids[cmds_to_post[i].dst_rank].push_back(i);
     }
   }

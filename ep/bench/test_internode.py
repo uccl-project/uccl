@@ -423,7 +423,7 @@ def test_main(
 
     # Tune combine performance
     best_time, best_results = 1e10, None
-    for nvl_chunk_size in range(1, 8, 1):
+    for nvl_chunk_size in range(4, 45, 4):
         for rdma_chunk_size in range(12 if num_nodes == 2 else 8, 33, 4):
             config = Config(
                 num_sms,
@@ -434,7 +434,9 @@ def test_main(
             )
             tune_args = {"x": recv_x, "handle": handle, "config": config}
             t, notify_t = bench_kineto(
-                lambda: buffer.combine(**tune_args), ("combine", "notify")
+                lambda: buffer.combine(**tune_args),
+                ("combine", "notify"),
+                trace_path=f"/tmp/kineto_trace_rank{local_rank}.json",
             )
             if local_rank == 0:
                 print(
@@ -565,6 +567,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--test-ll-compatibility",
         action="store_true",
+        default=True,
         help="whether to test compatibility with low-latency kernels",
     )
     args = parser.parse_args()

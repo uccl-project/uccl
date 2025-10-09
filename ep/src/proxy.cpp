@@ -3,6 +3,7 @@
 #include "ep_util.hpp"
 #include <arpa/inet.h>  // for htonl, ntohl
 #include <chrono>
+#include <cstdlib>
 #include <thread>
 #include <errno.h>
 #include <fcntl.h>
@@ -196,6 +197,9 @@ void Proxy::init_common() {
     if (peer == my_rank) continue;
     // Skip rdma connection for intra-node.
     if (peers_[peer].ip == peers_[my_rank].ip) continue;
+#ifdef USE_NORMAL_MODE
+    if (std::abs(peer - my_rank) % MAX_NUM_GPUS != 0) continue;
+#endif
     create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
                          &local_infos_[peer], my_rank);
     modify_qp_to_init(c);
@@ -208,7 +212,9 @@ void Proxy::init_common() {
     if (peer == my_rank) continue;
     // Skip rdma connection for intra-node.
     if (peers_[peer].ip == peers_[my_rank].ip) continue;
-
+#ifdef USE_NORMAL_MODE
+    if (std::abs(peer - my_rank) % MAX_NUM_GPUS != 0) continue;
+#endif
     bool const i_listen = (my_rank < peer);
     int const tid = pair_tid_block(my_rank, peer, num_ranks, cfg_.thread_idx);
     char const* ip = peers_[peer].ip.c_str();
@@ -231,6 +237,9 @@ void Proxy::init_common() {
     if (peer == my_rank) continue;
     // Skip rdma connection for intra-node.
     if (peers_[peer].ip == peers_[my_rank].ip) continue;
+#ifdef USE_NORMAL_MODE
+    if (std::abs(peer - my_rank) % MAX_NUM_GPUS != 0) continue;
+#endif
     auto& c = *ctxs_for_all_ranks_[peer];
 
     // qp is different from each rank.
@@ -346,6 +355,9 @@ void Proxy::run_dual() {
   for (int peer = 0; peer < (int)ctxs_for_all_ranks_.size(); ++peer) {
     if (peer == cfg_.rank) continue;
     if (peers_[peer].ip == peers_[cfg_.rank].ip) continue;
+#ifdef USE_NORMAL_MODE
+    if (std::abs(peer - cfg_.rank) % MAX_NUM_GPUS != 0) continue;
+#endif
     auto& ctx_ptr = ctxs_for_all_ranks_[peer];
     if (!ctx_ptr) continue;
     local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);

@@ -62,51 +62,54 @@ struct ImmType {
 
 class AtomicsImm {
  public:
-  // Bit layout:
-  // [31]     is_atomics (1 bit)
-  // [30]     is_combine (1 bit)
-  // [29]     buffer_idx (1 bit)
-  // [28:15]  v14 (14 bits, signed, range [-8192, 8191])
-  // [14:0]   off15 (15 bits, unsigned, < 32768)
+  // Bit layout (updated):
+  // [31]     is_atomics  (1 bit)
+  // [30]     is_combine  (1 bit)
+  // [29]     buffer_idx  (1 bit)
+  // [28:13]  v16         (16 bits, signed, range [-32768, 32767])
+  // [12:0]   off13       (13 bits, unsigned, < 8192)
   constexpr static int kOFF = 0;
-  constexpr static int kV14 = 15;
+  constexpr static int kV16 = 13;
   constexpr static int kBUFFER_IDX = 29;
   constexpr static int kIS_COMBINE = 30;
   constexpr static int kIS_ATOMICS = 31;
 
-  constexpr static uint32_t kOFF_MASK = 0x7FFF;  // 15 bits
-  constexpr static uint32_t kV14_MASK = 0x3FFF;  // 14 bits
+  constexpr static uint32_t kOFF_MASK = 0x1FFF;  // 13 bits
+  constexpr static uint32_t kV16_MASK = 0xFFFF;  // 16 bits
 
   AtomicsImm(uint32_t imm_data = 0) : imm_data_(imm_data) {}
 
-  static AtomicsImm Pack(bool is_atomics, bool is_combine, int v14,
-                         uint16_t off15, int buffer_idx) {
+  static AtomicsImm Pack(bool is_atomics, bool is_combine, int v16,
+                         uint16_t off13, int buffer_idx) {
     constexpr uint32_t kIS_ATOMICS_MASK = 0x1u;
     constexpr uint32_t kIS_COMBINE_MASK = 0x1u;
     constexpr uint32_t kBUFFER_IDX_MASK = 0x1u;
-    constexpr uint32_t kV14_MASK = 0x3FFFu;  // 14 bits
-    constexpr uint32_t kOFF_MASK = 0x7FFFu;  // 15 bits
+    constexpr uint32_t kV16_MASK = 0xFFFFu;  // 16 bits
+    constexpr uint32_t kOFF_MASK = 0x1FFFu;  // 13 bits
 
     // runtime asserts
     assert((is_atomics & ~kIS_ATOMICS_MASK) == 0 && "is_atomics overflow");
     assert((is_combine & ~kIS_COMBINE_MASK) == 0 && "is_combine overflow");
     assert((buffer_idx & ~kBUFFER_IDX_MASK) == 0 && "buffer_idx overflow");
-    assert((v14 & ~kV14_MASK) == 0 && "v14 overflow 14 bits");
-    assert((off15 & ~kOFF_MASK) == 0 && "off15 overflow 15 bits");
+    assert((v16 & ~kV16_MASK) == 0 && "v16 overflow 16 bits");
+    assert((off13 & ~kOFF_MASK) == 0 && "off13 overflow 13 bits");
 
-    uint32_t vfield = static_cast<uint32_t>(v14) & kV14_MASK;
+    uint32_t vfield = static_cast<uint32_t>(v16) & kV16_MASK;
     uint32_t imm = (static_cast<uint32_t>(is_atomics) << kIS_ATOMICS) |
                    (static_cast<uint32_t>(is_combine) << kIS_COMBINE) |
-                   ((buffer_idx & 0x1u) << kBUFFER_IDX) | (vfield << kV14) |
-                   (off15 & kOFF_MASK);
+                   ((buffer_idx & 0x1u) << kBUFFER_IDX) | (vfield << kV16) |
+                   (off13 & kOFF_MASK);
     return AtomicsImm(imm);
   }
+
   inline bool IsAtomics() const { return (imm_data_ >> kIS_ATOMICS) & 0x1u; }
   inline bool IsCombine() const { return (imm_data_ >> kIS_COMBINE) & 0x1u; }
   inline int GetBufferIdx() const { return (imm_data_ >> kBUFFER_IDX) & 0x1u; }
   inline uint16_t GetOff() const { return imm_data_ & kOFF_MASK; }
+
   inline int GetValue() const {
-    return (static_cast<int32_t>(imm_data_) << 3) >> 18;
+    // 16-bit signed extract from bits [28:13]
+    return (static_cast<int32_t>(imm_data_) << 3) >> 16;
   }
 
   inline void SetAtomics(bool is_atomics) {
@@ -119,9 +122,9 @@ class AtomicsImm {
     imm_data_ |= (idx & 0x1u) << kBUFFER_IDX;
   }
   inline void SetOff(uint16_t off) { imm_data_ |= (off & kOFF_MASK); }
-  inline void SetV14(int v14) {
-    uint32_t vfield = static_cast<uint32_t>(v14) & kV14_MASK;
-    imm_data_ |= (vfield << kV14);
+  inline void SetV16(int v16) {
+    uint32_t vfield = static_cast<uint32_t>(v16) & kV16_MASK;
+    imm_data_ |= (vfield << kV16);
   }
 
   inline uint32_t GetImmData() const { return imm_data_; }
