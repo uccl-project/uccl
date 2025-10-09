@@ -66,13 +66,12 @@ class Buffer:
         self.explicitly_destroy = explicitly_destroy
         self.runtime = deep_ep_cpp.Buffer(self.rank, self.group_size, num_nvl_bytes, num_rdma_bytes, low_latency_mode, explicitly_destroy)
 
+        print('initialize in process')
         if hasattr(self.runtime, "set_num_sms"):
-            print(f"setting sms num in init 1: {Buffer.num_sms}")
             self.runtime.set_num_sms(Buffer.num_sms)
         elif hasattr(deep_ep_cpp, "set_num_sms"):
-            print(f"setting sms num in init 2: {Buffer.num_sms}")
             deep_ep_cpp.set_num_sms(Buffer.num_sms)
-
+        print("sms configure done")
         # Synchronize device IDs
         device_ids = [None, ] * self.group_size
         local_device_id = self.runtime.get_local_device_id()
@@ -147,7 +146,6 @@ class Buffer:
 
         try:
             if hasattr(deep_ep_cpp, "set_num_sms"):
-                print(f"setting sms num in set_num_sms: {Buffer.num_sms}")
                 deep_ep_cpp.set_num_sms(new_num_sms)
         except Exception:
             pass
