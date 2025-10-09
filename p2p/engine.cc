@@ -102,7 +102,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
 
 Endpoint::~Endpoint() {
   [[maybe_unused]] auto _ =
-      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+      inside_python && PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
   std::cout << "Destroying Engine..." << std::endl;
 
@@ -472,7 +472,7 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
 bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
                           size_t size, uint64_t* transfer_id) {
   [[maybe_unused]] auto _ =
-      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+      inside_python && PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
   UnifiedTask* task = create_task(conn_id, mr_id, TaskType::SEND_NET,
                                   const_cast<void*>(data), size);
@@ -492,7 +492,7 @@ bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
 bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
                           size_t size, uint64_t* transfer_id) {
   [[maybe_unused]] auto _ =
-      PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
+      inside_python && PyGILState_Check() ? (py::gil_scoped_release{}, nullptr) : nullptr;
 
   UnifiedTask* task =
       create_task(conn_id, mr_id, TaskType::RECV_NET, data, size);

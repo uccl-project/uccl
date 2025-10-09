@@ -71,153 +71,156 @@ int RDMAFactory::init_devs() {
 
   init_devs_log << "Found IB devices (ibv_get_device_list + NCCL_IB_HCA "
                    "filter, ordered by libibverbs):\n";
-  for (int d = 0; d < num_devs && rdma_ctl->num_devices < MAX_IB_DEVS; d++) {
-    struct ibv_context* context = ibv_open_device(devices[d]);
-    if (context == nullptr) {
-      UCCL_LOG_ERROR << "Unable to open device " << devices[d]->name;
-      continue;
-    }
+  if (rdma_ctl->num_devices == 0) {
+    // When a single process creates multiple engines, the discovery can be skipped
+    for (int d = 0; d < num_devs && rdma_ctl->num_devices < MAX_IB_DEVS; d++) {
+      struct ibv_context* context = ibv_open_device(devices[d]);
+      if (context == nullptr) {
+        UCCL_LOG_ERROR << "Unable to open device " << devices[d]->name;
+        continue;
+      }
 
-    struct ibv_device_attr dev_attr;
-    memset(&dev_attr, 0, sizeof(dev_attr));
-    if (ibv_query_device(context, &dev_attr)) {
-      ibv_close_device(context);
-      continue;
-    }
-
-    for (int port_num = 1; port_num <= dev_attr.phys_port_cnt; port_num++) {
-      struct ibv_port_attr port_attr;
-      if (ibv_query_port(context, port_num, &port_attr)) {
-        UCCL_LOG_ERROR << "Unable to query port_num " << port_num;
+      struct ibv_device_attr dev_attr;
+      memset(&dev_attr, 0, sizeof(dev_attr));
+      if (ibv_query_device(context, &dev_attr)) {
         ibv_close_device(context);
         continue;
       }
 
-      // Check against user specified HCAs/ports
-      if (!(match_if_list(devices[d]->name, port_num, user_ib_ifs, num_ib_ifs,
-                          searchExact) ^
-            searchNot)) {
-        ibv_close_device(context);
-        continue;
-      }
-
-      if (port_attr.state != IBV_PORT_ACTIVE) {
-        ibv_close_device(context);
-        continue;
-      }
-
-      // Initialize Dev
-      struct FactoryDevice dev;
-      strncpy(dev.ib_name, devices[d]->name, sizeof(devices[d]->name));
-
-      dev.local_ip_str = oob_ip;
-      dev.numa_node = get_dev_numa_node(dev.ib_name);
-      dev.dev_attr = dev_attr;
-      dev.port_attr = port_attr;
-      dev.ib_port_num = port_num;
-
-      double link_bw = (ncclIbSpeed(port_attr.active_speed) *
-                        ncclIbWidth(port_attr.active_width)) *
-                       1e6 / 8;
-      dev.link_bw = link_bw;
-
-      DCHECK(ncclIbGetGidIndex(context, port_num, &port_attr, &dev.gid_idx));
-      UCCL_LOG_RE << devices[d]->name << " uses gid_idx " << dev.gid_idx;
-
-      if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
-        dev.is_roce = true;
-      } else if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
-        dev.is_roce = false;
-      } else {
-        UCCL_LOG_ERROR << "Unknown link layer: " << port_attr.link_layer;
-        ibv_close_device(context);
-        continue;
-      }
-
-      dev.context = context;
-
-      if (ibv_query_gid(context, port_num, dev.gid_idx, &dev.gid)) {
-        UCCL_LOG_ERROR << "Unable to query GID";
-        ibv_close_device(context);
-        continue;
-      }
-
-      // Allocate a PD for this device
-      dev.pd = ibv_alloc_pd(context);
-      if (dev.pd == nullptr) {
-        UCCL_LOG_ERROR << "Unable to allocate PD";
-        ibv_close_device(context);
-        continue;
-      }
-
-      // Detecting if the dev support extend cq.
-      {
-        struct ibv_cq_init_attr_ex cq_attr = {
-            .cqe = 1,
-            .comp_mask = 0,
-        };
-        struct ibv_cq_ex* cq_ex = ibv_create_cq_ex(context, &cq_attr);
-        if (cq_ex) {
-          UCCL_LOG_RE << "cq_ex supported on dev: " << devices[d]->name;
-          ibv_destroy_cq(ibv_cq_ex_to_cq(cq_ex));
-        } else {
-          UCCL_LOG_RE << "cq_ex NOT supported on dev: " << devices[d]->name;
+      for (int port_num = 1; port_num <= dev_attr.phys_port_cnt; port_num++) {
+        struct ibv_port_attr port_attr;
+        if (ibv_query_port(context, port_num, &port_attr)) {
+          UCCL_LOG_ERROR << "Unable to query port_num " << port_num;
+          ibv_close_device(context);
+          continue;
         }
-        dev.support_cq_ex = cq_ex != nullptr;
-      }
 
-      // Detect UC support by trying to create a dummy UC QP
-      {
-        struct ibv_qp_init_attr qp_init_attr = {};
-        qp_init_attr.qp_type = IBV_QPT_UC;
-        qp_init_attr.send_cq = ibv_create_cq(context, 1, nullptr, nullptr, 0);
-        qp_init_attr.recv_cq = qp_init_attr.send_cq;
-        qp_init_attr.cap.max_send_wr = 1;
-        qp_init_attr.cap.max_recv_wr = 1;
-        qp_init_attr.cap.max_send_sge = 1;
-        qp_init_attr.cap.max_recv_sge = 1;
-
-        struct ibv_qp* uc_qp = ibv_create_qp(dev.pd, &qp_init_attr);
-        if (uc_qp) {
-          UCCL_LOG_RE << "UC supported on dev: " << devices[d]->name;
-          ibv_destroy_qp(uc_qp);
-          dev.support_uc = true;
-        } else {
-          UCCL_LOG_RE << "UC NOT supported on dev: " << devices[d]->name;
-          dev.support_uc = false;
+        // Check against user specified HCAs/ports
+        if (!(match_if_list(devices[d]->name, port_num, user_ib_ifs, num_ib_ifs,
+                            searchExact) ^
+              searchNot)) {
+          ibv_close_device(context);
+          continue;
         }
-        ibv_destroy_cq(qp_init_attr.send_cq);
-      }
 
-      // Detect DMA-BUF support
-      {
-        struct ibv_pd* pd = ibv_alloc_pd(context);
-        if (pd == nullptr) {
+        if (port_attr.state != IBV_PORT_ACTIVE) {
+          ibv_close_device(context);
+          continue;
+        }
+
+        // Initialize Dev
+        struct FactoryDevice dev;
+        strncpy(dev.ib_name, devices[d]->name, sizeof(devices[d]->name));
+
+        dev.local_ip_str = oob_ip;
+        dev.numa_node = get_dev_numa_node(dev.ib_name);
+        dev.dev_attr = dev_attr;
+        dev.port_attr = port_attr;
+        dev.ib_port_num = port_num;
+
+        double link_bw = (ncclIbSpeed(port_attr.active_speed) *
+                          ncclIbWidth(port_attr.active_width)) *
+                        1e6 / 8;
+        dev.link_bw = link_bw;
+
+        DCHECK(ncclIbGetGidIndex(context, port_num, &port_attr, &dev.gid_idx));
+        UCCL_LOG_RE << devices[d]->name << " uses gid_idx " << dev.gid_idx;
+
+        if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
+          dev.is_roce = true;
+        } else if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
+          dev.is_roce = false;
+        } else {
+          UCCL_LOG_ERROR << "Unknown link layer: " << port_attr.link_layer;
+          ibv_close_device(context);
+          continue;
+        }
+
+        dev.context = context;
+
+        if (ibv_query_gid(context, port_num, dev.gid_idx, &dev.gid)) {
+          UCCL_LOG_ERROR << "Unable to query GID";
+          ibv_close_device(context);
+          continue;
+        }
+
+        // Allocate a PD for this device
+        dev.pd = ibv_alloc_pd(context);
+        if (dev.pd == nullptr) {
           UCCL_LOG_ERROR << "Unable to allocate PD";
           ibv_close_device(context);
           continue;
         }
 
-        // Test kernel DMA-BUF support with a dummy call (fd=-1)
-        (void)ibv_reg_dmabuf_mr(pd, 0ULL /*offset*/, 0ULL /*len*/,
-                                0ULL /*iova*/, -1 /*fd*/, 0 /*flags*/);
-        dev.dma_buf_support =
-            !((errno == EOPNOTSUPP) || (errno == EPROTONOSUPPORT));
-        ibv_dealloc_pd(pd);
+        // Detecting if the dev support extend cq.
+        {
+          struct ibv_cq_init_attr_ex cq_attr = {
+              .cqe = 1,
+              .comp_mask = 0,
+          };
+          struct ibv_cq_ex* cq_ex = ibv_create_cq_ex(context, &cq_attr);
+          if (cq_ex) {
+            UCCL_LOG_RE << "cq_ex supported on dev: " << devices[d]->name;
+            ibv_destroy_cq(ibv_cq_ex_to_cq(cq_ex));
+          } else {
+            UCCL_LOG_RE << "cq_ex NOT supported on dev: " << devices[d]->name;
+          }
+          dev.support_cq_ex = cq_ex != nullptr;
+        }
 
-        UCCL_LOG_RE << "DMA-BUF support: " << dev.dma_buf_support
-                    << " on dev: " << devices[d]->name;
+        // Detect UC support by trying to create a dummy UC QP
+        {
+          struct ibv_qp_init_attr qp_init_attr = {};
+          qp_init_attr.qp_type = IBV_QPT_UC;
+          qp_init_attr.send_cq = ibv_create_cq(context, 1, nullptr, nullptr, 0);
+          qp_init_attr.recv_cq = qp_init_attr.send_cq;
+          qp_init_attr.cap.max_send_wr = 1;
+          qp_init_attr.cap.max_recv_wr = 1;
+          qp_init_attr.cap.max_send_sge = 1;
+          qp_init_attr.cap.max_recv_sge = 1;
+
+          struct ibv_qp* uc_qp = ibv_create_qp(dev.pd, &qp_init_attr);
+          if (uc_qp) {
+            UCCL_LOG_RE << "UC supported on dev: " << devices[d]->name;
+            ibv_destroy_qp(uc_qp);
+            dev.support_uc = true;
+          } else {
+            UCCL_LOG_RE << "UC NOT supported on dev: " << devices[d]->name;
+            dev.support_uc = false;
+          }
+          ibv_destroy_cq(qp_init_attr.send_cq);
+        }
+
+        // Detect DMA-BUF support
+        {
+          struct ibv_pd* pd = ibv_alloc_pd(context);
+          if (pd == nullptr) {
+            UCCL_LOG_ERROR << "Unable to allocate PD";
+            ibv_close_device(context);
+            continue;
+          }
+
+          // Test kernel DMA-BUF support with a dummy call (fd=-1)
+          (void)ibv_reg_dmabuf_mr(pd, 0ULL /*offset*/, 0ULL /*len*/,
+                                  0ULL /*iova*/, -1 /*fd*/, 0 /*flags*/);
+          dev.dma_buf_support =
+              !((errno == EOPNOTSUPP) || (errno == EPROTONOSUPPORT));
+          ibv_dealloc_pd(pd);
+
+          UCCL_LOG_RE << "DMA-BUF support: " << dev.dma_buf_support
+                      << " on dev: " << devices[d]->name;
+        }
+
+        init_devs_log << "\tdev_idx " << rdma_ctl->num_devices << ": "
+                      << devices[d]->name << " (" << port_num << "/"
+                      << (int)dev_attr.phys_port_cnt << ")\n";
+
+        rdma_ctl->devices_.push_back(dev);
+        UCCL_LOG_RE << "Initialized " << devices[d]->name
+                    << " dev_idx: " << rdma_ctl->num_devices;
+
+        rdma_ctl->num_devices++;
       }
-
-      init_devs_log << "\tdev_idx " << rdma_ctl->num_devices << ": "
-                    << devices[d]->name << " (" << port_num << "/"
-                    << (int)dev_attr.phys_port_cnt << ")\n";
-
-      rdma_ctl->devices_.push_back(dev);
-      UCCL_LOG_RE << "Initialized " << devices[d]->name
-                  << " dev_idx: " << rdma_ctl->num_devices;
-
-      rdma_ctl->num_devices++;
     }
   }
   ibv_free_device_list(devices);
