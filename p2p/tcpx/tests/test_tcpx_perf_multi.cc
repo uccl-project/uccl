@@ -1,123 +1,108 @@
 /**
  * @file test_tcpx_perf_multi.cc
- * @brief Multi-Channel TCPX GPU-to-GPU 性能基准测试程序
+ * @brief Multi-channel TCPX GPU-to-GPU performance benchmark
  *
- * 【程序目标】
- * 测量两个 H100 节点之间通过多个 TCPX channels 进行 GPU-to-GPU 数据传输的性能。
- * 基于 test_tcpx_perf.cc 的逻辑，增加了多 channel 支持以利用多个 NIC (eth1-4)。
+ * Goal:
+ * Measure GPU-to-GPU throughput between two H100 nodes over multiple TCPX
+ * channels. Extends test_tcpx_perf.cc with multi-channel support to utilize
+ * multiple NICs (e.g., eth1-4).
  *
- * 【核心设计】
- * - Server: 接收数据，使用 GPU kernel 解包（从分散的 bounce buffer
- * 拷贝到连续的目标 GPU 内存）
- * - Client: 发送数据
- * - 使用 ChannelManager 管理多个 TCPX channels
- * - Round-robin 分配 chunks 到不同的 channels
- * - 每个 channel 独立的滑动窗口机制（避免耗尽 TCPX 请求池）
+ * Design:
+ * - Server: receives data; unpacks with a GPU kernel (gathers from a scattered
+ *   bounce buffer into a contiguous GPU destination).
+ * - Client: sends data.
+ * - ChannelManager manages multiple TCPX channels.
+ * - Chunks are dispatched round-robin to channels.
+ * - Each channel has its own sliding window to avoid exhausting request slots.
  *
- * 【使用方法】
- *   # Server 端（10.65.74.150）
- *   UCCL_TCPX_NUM_CHANNELS=4 UCCL_TCPX_PERF_SIZE=67108864
- * ./tests/test_tcpx_perf_multi server 0
+ * Usage:
+ *   # Server (example: 10.65.74.150)
+ *   UCCL_TCPX_NUM_CHANNELS=4 UCCL_TCPX_PERF_SIZE=67108864 \
+ *   ./tests/test_tcpx_perf_multi server 0
  *
- *   # Client 端（10.64.113.77）
- *   UCCL_TCPX_NUM_CHANNELS=4 UCCL_TCPX_PERF_SIZE=67108864
- * ./tests/test_tcpx_perf_multi client 10.65.74.150 0
+ *   # Client (example: 10.64.113.77)
+ *   UCCL_TCPX_NUM_CHANNELS=4 UCCL_TCPX_PERF_SIZE=67108864 \
+ *   ./tests/test_tcpx_perf_multi client 10.65.74.150 0
  *
- * 【环境变量】
- *   UCCL_TCPX_NUM_CHANNELS: Channel 数量（默认 1，推荐 4）
- *   UCCL_TCPX_PERF_SIZE: 每次迭代传输的总字节数（默认 4MB）
- *   UCCL_TCPX_PERF_ITERS: 迭代次数（默认 10）
- *   UCCL_TCPX_CHUNK_BYTES: 每个 chunk 的大小（默认 2MB）
- *   UCCL_TCPX_UNPACK_IMPL: 解包实现方式（kernel|d2d|host，默认 kernel）
+ * Env vars:
+ *   UCCL_TCPX_NUM_CHANNELS: number of channels (default 1, recommend 4)
+ *   UCCL_TCPX_PERF_SIZE: total bytes per iteration (default 4MB)
+ *   UCCL_TCPX_PERF_ITERS: iteration count (default 10)
+ *   UCCL_TCPX_CHUNK_BYTES: chunk size (default 2MB)
+ *   UCCL_TCPX_UNPACK_IMPL: unpack impl (kernel|d2d|host, default kernel)
  *
- * 【关键血泪经验】（从 test_tcpx_perf.cc 继承）
- * 1. 滑动窗口检查必须在 tcpx_irecv 之前，不是之后！
- * 2. tcpx_irecv_consumed 必须在 kernel 完成后调用（使用 CUDA events 跟踪）
- * 3. Device handle 必须 16 字节对齐
- * 4. Accept 可能返回 nullptr，需要重试
- * 5. 每个 chunk 使用唯一的 tag（避免 TCPX 混淆）
- * 6. 移除超时限制，持续轮询直到完成
- * 7. 在循环外创建 stream 和 launcher（避免每个 chunk 4ms 开销）
- * 8. Client 滑动窗口设为 12（< 16，留余量）
- * 9. Chunk size 保持 512KB（默认值）
+ * Key lessons (from test_tcpx_perf.cc):
+ * 1) Check window capacity BEFORE tcpx_irecv.
+ * 2) Call tcpx_irecv_consumed after the kernel completes (track via events).
+ * 3) Device handle must be 16-byte aligned.
+ * 4) Accept may return nullptr; retry.
+ * 5) Use a unique tag per chunk.
+ * 6) Remove timeouts; poll until completion.
+ * 7) Create stream/launcher outside loops (~4ms saved per chunk).
+ * 8) Client send window = 12 (<16 for headroom).
+ * 9) Default chunk size = 512KB.
  */
 
 /*
-======================== 全文件阅读指南（2025-10-08 更新）
-========================
-本文件是“多进程基线”的权威参考实现。接下来我们将基于它推进：
-- 放弃单进程 orchestrator；每个 GPU 的独立进程上，打开 4 条 TCPX 连接（可通过
-UCCL_TCPX_NUM_CHANNELS=4 配置）
-- 一条 channel ≈ 一条 TCPX 连接；在本测试中 channel 的概念仅作为“连接个数”的载体
-- 供应商建议：单 200Gbps NIC + ~8 条连接是 per-NIC 的上限基线（~21.26
-GB/s）；不追求 send/recv 对称
-- NUMA 建议：每 GPU 绑定到其 NUMA-local 的
-NIC；当前可用静态数组硬编码映射（本测试不强制，运行脚本可设置 IFNAME）
-- 线程：保持 NCCL 的线程机制；无需应用层 ACK，简单 send/recv 即可
+======================== File Reading Guide (2025-10-08)
+======================== This file is the reference implementation for the
+multi-process baseline. Each GPU runs its own process and opens multiple TCPX
+connections (e.g., UCCL_TCPX_NUM_CHANNELS=4). A channel ≈ a TCPX connection.
 
-核心语义与约束（务必理解）：
-1) 进度与队列顺序
-   - 每次 tcpx_test() 内部会驱动
-tcpxCommProgress()；需要“持续”调用以保持后台状态机前进
-   - 必须严格 FIFO：只对每通道队首请求调用 tcpx_test（对应 TCPX
-rq.next_transmitting）
-   - rc!=0 在本基线被视为“真错误”（通常意味着不是你的请求或状态非法）；done=0
-则表示未完成（非错误） 2) 窗口与上限
-   - TCPX 每个 comm 有 MAX_REQUESTS=16 个槽位；我们在 server recv 侧允许 16，在
-client send 侧使用 12（留安全余量）
-   - 窗口满时：server 调用 wait_for_channel_capacity / client 轮询最老的 send
-完成
-   - 非阻塞时机：每次 post 后立即调用
-process_completed_chunk(blocking=false)，并“顺手”轮询其它通道（opportunistic
-drain） 3) Recv 生命周期
-   - irecv → tcpx_test(done=1) →（若 kernel 路径则等待 CUDA event）→
-tcpx_irecv_consumed()
-   - send 生命周期更简单：done=1 自动释放，无 consumed
-4) Tag 唯一性
-   - 每个 chunk 必须有全局唯一 tag（本文件以迭代号+全局 chunk
-序号编码），确保不会交叉匹配 5) 性能计时口径（不对称是正常的）
-   - server 吞吐：包含 recv 侧 drain（和可能的 unpack 工作），窗口深度 16；有
-consumed；工作量偏重
-   - client 吞吐：只计发送流水线，窗口 12，自释放；口径更“轻”
-   - 进度节奏、NUMA/NIC 绑定也会造成两端读数差异
+Vendor guidance: a single 200Gbps NIC with ~8 connections is a practical
+per-NIC upper baseline (~21.26 GB/s). Do not chase symmetric send/recv numbers.
 
-代码导读（主要结构）：
-- server 路径：
-  1. ChannelManager.listen → bootstrap 发送 handles → accept → CUDA init →
-注册接收缓冲
-  2. 为每通道构建“滑动窗口”与（kernel 模式）持久化 CUDA stream/launcher
-  3. 主循环：
-     - 按 chunk 划分，round-robin 分配到不同通道
-     - post tcpx_irecv 后立即 process_completed_chunk(false) + 顺手轮询其它通道
-     - 窗口达到上限时阻塞式释放（等待 kernel event 或完成）
-     - 迭代末尾排空 inflight/pending（kernel 模式下）
-- client 路径：
-  1. bootstrap 接收 handles → 连接所有通道 → CUDA init → 注册发送缓冲
-  2. 为每通道创建发送侧滑动窗口（12）
-  3. 主循环：
-     - 按 chunk 划分并 round-robin 选择通道
-     - 窗口满时等待队首 send 完成（tcpx_test 轮询+sleep）
-     - post tcpx_isend 并记录 pending，迭代末尾排空
+NUMA guidance: bind each GPU to its NUMA-local NIC (configure IFNAME via
+script/env). Keep NCCL threading; no app-layer ACKs, plain send/recv.
 
-如何将“每 GPU 4 连接”落地：
-- 运行时设置环境变量：UCCL_TCPX_NUM_CHANNELS=4（server 与 client 需一致）
-- 如需脚本化：在 run 脚本中导出该变量；若需单 NIC 压测，可设置 IFNAME 只暴露一个
-NIC
+Core semantics and constraints:
+1) Progress & FIFO: tcpx_test() drives tcpxCommProgress() internally; call it
+   repeatedly. Always test only the per-channel FIFO head (matches
+   rq.next_transmitting). Nonzero rc is a real error; done=0 means not finished.
+2) Windows & limits: each comm has MAX_REQUESTS=16. Server recv uses 16; client
+   send uses 12 for safety. When full: server waits via
+wait_for_channel_capacity; client polls oldest send. 3) Recv lifecycle: irecv →
+tcpx_test(done=1) → (kernel waits for event) → tcpx_irecv_consumed(). Send is
+simpler: done=1 auto-releases. 4) Unique tags: each chunk must have a globally
+unique tag (iter + global chunk index) to avoid cross-match. 5) Measurement
+asymmetry is expected: server includes recv drain (and unpack), window=16, has
+consumed; client measures only send pipeline (window=12, auto-release). Progress
+cadence and NUMA/NIC placement affect readings.
 
-常见陷阱：
-- 遗漏“每次 post 后的非阻塞进度驱动” → 第一批请求卡死
-- 测队首之外的 request → 触发 TCPX 的 next_transmitting 保护（多为错误）
-- Recv 未在 done=1 后调用 consumed → 槽位泄露导致后续阻塞
-- 追求 send/recv 对称带宽 → 不必要（口径不同且流水线不同）
+Structure overview:
+- Server path:
+  1) ChannelManager.listen → bootstrap send handles → accept → CUDA init →
+     register recv buffer
+  2) Per-channel sliding window and (kernel mode) persistent stream/launcher
+  3) Main loop: split chunks, round-robin channels, post tcpx_irecv then
+     process_completed_chunk(false) and opportunistically poll others; when
+     window full, block (event or completion); end-of-iter drain
+- Client path:
+  1) Bootstrap receive handles → connect all channels → CUDA init → register
+     send buffer
+  2) Per-channel send window (12)
+  3) Main loop: chunk split, round-robin channel selection; when full, wait for
+     oldest send (tcpx_test + sleep); post tcpx_isend and track pending; drain
+     at iteration end.
+
+Operational notes:
+- Set UCCL_TCPX_NUM_CHANNELS=4 on both server and client. To stress a single
+  NIC, set IFNAME to expose one NIC.
+
+Common pitfalls:
+- Missing post-irecv non-blocking progress → first batch stalls
+- Testing beyond FIFO head → triggers next_transmitting guard
+- Not calling consumed after done=1 on recv → slot leak and stalls
+- Chasing symmetric send/recv bandwidth → unnecessary
 ===============================================================================
 */
 
-#include "../device/unpack_launch.h"     // GPU kernel 启动器
+#include "../device/unpack_launch.h"     // GPU kernel launcher
 #include "../include/bootstrap.h"        // Bootstrap protocol
 #include "../include/channel_manager.h"  // Multi-channel manager
-#include "../include/rx_descriptor.h"    // 接收描述符构建工具
-#include "../include/tcpx_interface.h"   // TCPX API 封装
-#include "../include/tcpx_structs.h"     // TCPX 内部结构定义
+#include "../include/rx_descriptor.h"    // Receive descriptor builder
+#include "../include/tcpx_interface.h"   // TCPX API wrapper
+#include "../include/tcpx_structs.h"     // TCPX internal structs
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <chrono>
@@ -132,25 +117,26 @@ NIC
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
-// 供应商要点（2025-10-08）：
-// - 一条 channel ≈ 一条 TCPX 连接；本项目不需在 NIXL 里过度强调 channel 概念
-// - 每 GPU 绑定其 NUMA-local NIC；当前可静态映射（脚本/环境变量控制 IFNAME）
-// - vLLM 模式是一进程一 GPU；每进程仅操作一块 NIC（本测试仍可多连接以压测 NIC）
+// Vendor notes (2025-10-08):
+// - One channel ≈ one TCPX connection; do not overemphasize channels in NIXL
+// - Bind each GPU to its NUMA-local NIC (IFNAME via scripts/env is fine)
+// - vLLM: one process per GPU; a process uses one NIC (multiple connections
+//   still OK for NIC stress testing)
 
 #include <algorithm>
 #include <vector>
 
 namespace {
 // ============================================================================
-// 常量定义
+// Constants
 // ============================================================================
 
-constexpr int kTransferTag = 99;                // 基础传输标签
-constexpr size_t kMaxSize = 256 * 1024 * 1024;  // 最大传输大小（256MB）
-constexpr size_t kRegisteredBytes = kMaxSize + 4096;  // 注册内存大小
+constexpr int kTransferTag = 99;                // base transfer tag
+constexpr size_t kMaxSize = 256 * 1024 * 1024;  // max transfer size (256MB)
+constexpr size_t kRegisteredBytes = kMaxSize + 4096;  // registered size
 
 // ============================================================================
-// 辅助函数
+// Helpers
 // ============================================================================
 
 int getEnvInt(char const* name, int def) {
@@ -163,7 +149,7 @@ size_t getEnvSize(char const* name, size_t def) {
   return v ? static_cast<size_t>(std::atoll(v)) : def;
 }
 
-// CUDA 错误检查辅助函数
+// CUDA error checking helpers
 bool cuda_check(CUresult res, char const* msg) {
   if (res != CUDA_SUCCESS) {
     char const* err_str = nullptr;
@@ -187,39 +173,37 @@ bool cuda_check(cudaError_t err, char const* msg) {
 }  // namespace
 
 // ============================================================================
-// 主函数
+// Main
 // ============================================================================
 
 int main(int argc, char** argv) {
   // ============================================================================
-  // 环境变量设置（TCPX 配置）
+  // Env overrides (TCPX config)
   // ============================================================================
 
-  // 运行建议（2025-10-08 更新）：
-  // - 放弃单进程 orchestrator；本测试作为主路径推进
-  // - 推荐配置：UCCL_TCPX_NUM_CHANNELS=2, NCCL_NSOCKS_PERTHREAD=2
-  //   * 2 个 channels per GPU
-  //   * 每个 channel 2 个 sockets
-  //   * 总共：4 sockets per GPU
-  //   * 2 个 GPUs 共享 1 个 NIC = 8 sockets per NIC (MAX_SOCKETS=8)
-  // - 不必追求 send/recv 对称带宽；关注单向上限与总体规模化行为
+  // Recommendations (2025-10-08):
+  // - Drop single-process orchestrator; use this test as the main path
+  // - Example: UCCL_TCPX_NUM_CHANNELS=2, NCCL_NSOCKS_PERTHREAD=2
+  //   * 2 channels per GPU; 2 sockets per channel → 4 sockets per GPU
+  //   * 2 GPUs share 1 NIC → 8 sockets per NIC (MAX_SOCKETS=8)
+  // - Focus on one-way max and scaling; symmetry is unnecessary
 
-  // 【关键】启用 zero-copy（从 4KB 开始使用 devmem-tcp）
+  // Enable zero-copy (devmem-tcp from 4KB)
   setenv("NCCL_MIN_ZCOPY_SIZE", "4096", 0);
   setenv("NCCL_GPUDIRECTTCPX_MIN_ZCOPY_SIZE", "4096", 0);
 
-  // 【关键】启用接收同步（确保数据完整性）
+  // Enable recv sync (data integrity)
   setenv("NCCL_GPUDIRECTTCPX_RECV_SYNC", "1", 0);
 
-  // 启用 TCPX wrapper 调试日志
+  // Enable TCPX wrapper debug logs
   setenv("UCCL_TCPX_DEBUG", "1", 0);
 
-  // 默认关闭 kernel launch 调试日志（太详细）
+  // Disable kernel-launch debug by default
   if (!std::getenv("UCCL_TCPX_LAUNCH_DEBUG"))
     setenv("UCCL_TCPX_LAUNCH_DEBUG", "0", 0);
 
   // ============================================================================
-  // 命令行参数解析
+  // CLI parsing
   // ============================================================================
 
   if (argc < 3) {
@@ -240,10 +224,10 @@ int main(int argc, char** argv) {
   }
 
   // ============================================================================
-  // 测试参数配置
+  // Benchmark parameters
   // ============================================================================
 
-  // Channel 数量（默认 2）
+  // Number of channels (default 2)
   int num_channels = getEnvInt("UCCL_TCPX_NUM_CHANNELS", 2);
   int nsocks_per_thread = getEnvInt("NCCL_NSOCKS_PERTHREAD", 2);
   int nthreads = getEnvInt("NCCL_SOCKET_NTHREADS", 1);
@@ -266,32 +250,28 @@ int main(int argc, char** argv) {
       << std::endl;
   std::cout << "[PERF] ========================================" << std::endl;
 
-  // === 路径总览（SERVER）===
-  // 步骤 1: listen 并生成 handles（后续 bootstrap 发给 client）
-  // 步骤 2: bootstrap：server_send_handles（一次性发完所有通道句柄）
-  // 步骤 3: accept 所有通道（生成 recv_comm）
-  // 步骤 4: 选择 unpack 实现（kernel/d2d/host）
-  // 步骤 5: CUDA 初始化 + 分配 4KB 对齐缓冲（devmem-tcp 要求）
-  // 步骤 6: 将接收缓冲注册到所有通道
-  // 步骤 7:（kernel 模式）创建持久化 stream/launcher，预建 events
-  // 步骤 8: 为每通道创建滑动窗口（MAX_INFLIGHT_PER_CHANNEL=16）
-  // 步骤 9: 循环按 chunk post irecv，post 后立刻 process_completed_chunk(false)
-  //         并顺手轮询其它通道；窗口满时阻塞等待 capacity（kernel: 等 event；非
-  //         kernel: 轮询 done）
-  // 步骤 10: 迭代尾部排空 inflight（以及 kernel 模式下 pending）并统计性能
+  // === SERVER path overview ===
+  // 1) listen and generate handles (then send to client via bootstrap)
+  // 2) accept all channels (create recv_comm)
+  // 3) choose unpack impl (kernel/d2d/host)
+  // 4) CUDA init + 4KB aligned buffer; register buffer across channels
+  // 5) (kernel) persistent stream/launcher; pre-create events
+  // 6) per-channel sliding window (MAX_INFLIGHT_PER_CHANNEL=16)
+  // 7) post irecv per chunk; then non-blocking progress; block when full
+  // 8) drain inflight/pending at iteration end and record performance
 
-  // 每次迭代传输的总字节数（默认 4MB）
+  // Total bytes per iteration (default 4MB)
   size_t test_size = getEnvSize("UCCL_TCPX_PERF_SIZE", 4 * 1024 * 1024);
 
-  // 迭代次数
+  // Iteration count
   int iterations = getEnvInt("UCCL_TCPX_PERF_ITERS", 10);
 
-  // Chunk 大小：默认 512KB
+  // Chunk size (default 512KB)
   size_t chunk_bytes =
       getEnvSize("UCCL_TCPX_CHUNK_BYTES",
                  getEnvSize("NCCL_P2P_NET_CHUNKSIZE", 512 * 1024));
 
-  // 限制最大传输大小
+  // Cap maximum transfer size
   if (test_size > kMaxSize) test_size = kMaxSize;
 
   std::cout << "[PERF] Mode: " << (is_server ? "SERVER" : "CLIENT")
@@ -305,7 +285,7 @@ int main(int argc, char** argv) {
             << std::endl;
 
   // ============================================================================
-  // TCPX 插件初始化
+  // TCPX plugin initialization
   // ============================================================================
 
   int ndev = tcpx_get_device_count();
@@ -343,14 +323,14 @@ int main(int argc, char** argv) {
   std::cout << "[PERF] Bootstrap port: " << bootstrap_port << std::endl;
 
   // ============================================================================
-  // SERVER 端逻辑
+  // SERVER logic
   // ============================================================================
 
   if (is_server) {
     std::cout << "[PERF] Starting SERVER mode" << std::endl;
 
     // ==========================================================================
-    // 步骤 1: 创建 ChannelManager 并 listen
+    // Step 1: create ChannelManager and listen
     // ==========================================================================
 
     ChannelManager mgr(num_channels, gpu_id);
@@ -361,14 +341,14 @@ int main(int argc, char** argv) {
       return 1;
     }
 
-    // CRITICAL: Update num_channels to actual count after clamping
+    // Update num_channels to actual count after clamping
     num_channels = mgr.get_num_channels();
     std::cout << "[PERF] Listening on " << num_channels
               << " channels (after clamping to available TCPX devices)"
               << std::endl;
 
     // ==========================================================================
-    // 步骤 2: Bootstrap 握手（发送 handles 给 client）
+    // Step 2: bootstrap handshake (send handles to client)
     // ==========================================================================
 
     int bootstrap_fd = -1;
@@ -389,7 +369,7 @@ int main(int argc, char** argv) {
               << std::endl;
 
     // ==========================================================================
-    // 步骤 3: Accept 所有 channels
+    // Step 3: accept all channels
     // ==========================================================================
 
     if (mgr.server_accept_all() != 0) {
@@ -402,7 +382,7 @@ int main(int argc, char** argv) {
               << std::endl;
 
     // ==========================================================================
-    // 步骤 4: 选择 Unpack 实现方式
+    // Step 4: choose unpack implementation
     // ==========================================================================
 
     char const* impl_env = std::getenv("UCCL_TCPX_UNPACK_IMPL");
@@ -411,7 +391,7 @@ int main(int argc, char** argv) {
     std::cout << "[PERF] Unpack impl: " << impl << std::endl;
 
     // ==========================================================================
-    // 步骤 5: CUDA 初始化
+    // Step 5: CUDA initialization
     // ==========================================================================
 
     CUdevice cuDev;
@@ -428,7 +408,7 @@ int main(int argc, char** argv) {
     }
 
     // ==========================================================================
-    // 步骤 6: 分配接收缓冲区
+    // Step 6: allocate recv buffer
     // ==========================================================================
 
     CUdeviceptr d_base = 0, d_aligned = 0;
@@ -439,7 +419,7 @@ int main(int argc, char** argv) {
       return 1;
     }
 
-    // 【关键】对齐到 4KB 边界（devmem-tcp 要求）
+    // Align to 4KB boundary (devmem-tcp requirement)
     uintptr_t addr = static_cast<uintptr_t>(d_base);
     addr = (addr + 4095) & ~static_cast<uintptr_t>(4095);
     d_aligned = static_cast<CUdeviceptr>(addr);
@@ -448,7 +428,7 @@ int main(int argc, char** argv) {
     std::cout << "[PERF] Allocated recv buffer: " << recv_buf << std::endl;
 
     // ==========================================================================
-    // 步骤 7: 注册内存到所有 channels（共享内存方式）
+    // Step 7: register memory to all channels (shared)
     // ==========================================================================
 
     if (mgr.register_memory(recv_buf, kRegisteredBytes, NCCL_PTR_CUDA, true) !=
@@ -461,18 +441,17 @@ int main(int argc, char** argv) {
 
     std::cout << "[PERF] Registered recv buffer with " << num_channels
               << " channels" << std::endl;
-    // 进度引擎（关键）：总是测试 FIFO 队首
-    // - rc!=0 视为真错（非队首/无效状态）；done=0 表示未完成（非错）
-    // - done=1 后读取 unpack 元数据并执行 kernel/d2d/host 路径，最后
-    // irecv_consumed()
-    // - 该函数在 post
-    // 后以非阻塞模式调用；窗口满时则以阻塞模式调用，保证持续推进
+    // Progress engine (recv): always test FIFO head
+    // - rc!=0 means real error; done=0 means not finished
+    // - When done=1: read unpack metadata, run kernel/d2d/host path, then call
+    //   irecv_consumed()
+    // - Call non-blocking after post; block when window is full
 
     // ==========================================================================
-    // 步骤 8: 创建持久化的 Stream 和 Launcher（仅 kernel 模式）
+    // Step 8: create persistent stream and launcher (kernel only)
     // ==========================================================================
 
-    // 【关键优化】在循环外创建，避免每个 chunk ~4ms 的创建开销
+    // Create outside loops to avoid ~4ms per chunk overhead
     cudaStream_t unpack_stream = nullptr;
     tcpx::device::UnpackLauncher* launcher_ptr = nullptr;
 
@@ -497,14 +476,14 @@ int main(int argc, char** argv) {
     }
 
     // ==========================================================================
-    // 步骤 9: 为每个 channel 创建滑动窗口
+    // Step 9: create per-channel sliding windows
     // ==========================================================================
 
-    // 【核心问题】TCPX 插件每个 comm 只有 MAX_REQUESTS=16 个请求槽
-    // 【解决方案】每个 channel 独立的滑动窗口
+    // Each comm has MAX_REQUESTS=16; use per-channel independent sliding
+    // windows
     constexpr int MAX_INFLIGHT_PER_CHANNEL = 16;
 
-    // 每个 channel 的滑动窗口状态
+    // Per-channel sliding window state
     struct PostedChunk {
       void* request = nullptr;
       void* dst_ptr = nullptr;
@@ -515,18 +494,17 @@ int main(int argc, char** argv) {
     };
 
     struct ChannelWindow {
-      std::vector<cudaEvent_t> events;  // CUDA events（用于跟踪 kernel 完成）
-      std::vector<void*>
-          pending_reqs;  // Kernel 已提交但尚未 consumed 的 TCPX 请求
-      std::vector<int> pending_indices;  // 待完成的 chunk 索引
-      int chunk_counter = 0;             // 该 channel 处理的 chunk 计数
-      std::deque<PostedChunk> inflight_recvs;  // 已经 post 但尚未解包的 chunk
+      std::vector<cudaEvent_t> events;  // CUDA events (track kernel completion)
+      std::vector<void*> pending_reqs;  // Kernel submitted but not yet consumed
+      std::vector<int> pending_indices;        // Pending chunk indices
+      int chunk_counter = 0;                   // Chunks handled by this channel
+      std::deque<PostedChunk> inflight_recvs;  // Posted but not yet unpacked
     };
 
     std::vector<ChannelWindow> channel_windows(num_channels);
 
     if (impl == "kernel") {
-      // 为每个 channel 预创建 CUDA events
+      // Pre-create CUDA events for each channel
       for (int ch = 0; ch < num_channels; ++ch) {
         channel_windows[ch].events.resize(MAX_INFLIGHT_PER_CHANNEL);
         for (int i = 0; i < MAX_INFLIGHT_PER_CHANNEL; ++i) {
@@ -787,7 +765,7 @@ int main(int argc, char** argv) {
     };
 
     // ==========================================================================
-    // 步骤 10: 性能测试主循环
+    // Step 10: main benchmark loop
     // ==========================================================================
 
     double total_time_ms = 0.0;
@@ -801,17 +779,16 @@ int main(int argc, char** argv) {
       auto start = std::chrono::high_resolution_clock::now();
       bool iteration_failed = false;
 
-      // 每次迭代开始时重置所有 channel 的滑动窗口状态
+      // Reset per-channel sliding windows at the start of each iteration
       if (impl == "kernel") {
         std::cout << "[DEBUG] Iteration " << iter
                   << " start: clearing sliding windows for " << num_channels
                   << " channels" << std::endl;
         for (int ch = 0; ch < num_channels; ++ch) {
           channel_windows[ch].pending_reqs.clear();
-          // 将当前 irecv 记录到该通道的 FIFO
-          // 后，立刻触发一次非阻塞进度（避免首批请求积压）
-          // 同时“顺手”对其它通道做非阻塞进度，缩短 metadata/backlog，降低 HOL
-          // 风险
+          // After recording the irecv to the per-channel FIFO, trigger
+          // non-blocking progress immediately to avoid initial backlog. Also
+          // opportunistically progress other channels to reduce HOL risk.
 
           channel_windows[ch].pending_indices.clear();
           channel_windows[ch].chunk_counter = 0;
@@ -819,7 +796,7 @@ int main(int argc, char** argv) {
       }
 
       // ========================================================================
-      // Chunk 循环：将大消息分成多个 chunk，round-robin 分配到不同 channels
+      // Chunk loop: split message into chunks and round-robin across channels
       // ========================================================================
 
       size_t offset = 0;
@@ -830,12 +807,12 @@ int main(int argc, char** argv) {
         void* dst_ptr = reinterpret_cast<void*>(
             reinterpret_cast<uintptr_t>(recv_buf) + offset);
 
-        // 【关键】Round-robin 选择 channel
+        // Round-robin channel selection
         int channel_id = global_chunk_idx % num_channels;
         ChannelResources& ch = mgr.get_channel(channel_id);
         ChannelWindow& win = channel_windows[channel_id];
 
-        // 【关键】每个 chunk 使用唯一的 tag
+        // Unique tag per chunk
         int const tag = kTransferTag + iter * 10000 + global_chunk_idx;
 
         std::cout << "[DEBUG][SERVER] chunk=" << global_chunk_idx
@@ -867,7 +844,7 @@ int main(int argc, char** argv) {
         }
 
         // ======================================================================
-        // 发起异步接收（tcpx_irecv）
+        // Post async recv (tcpx_irecv)
         // ======================================================================
 
         void* recv_data[1] = {dst_ptr};
@@ -945,7 +922,7 @@ int main(int argc, char** argv) {
       }
 
       // ========================================================================
-      // 迭代结束：排空所有 channels 的滑动窗口（仅 kernel 模式）
+      // End of iteration: drain per-channel windows (kernel mode only)
       // ========================================================================
 
       if (impl == "kernel") {
@@ -986,14 +963,13 @@ int main(int argc, char** argv) {
               win.pending_indices.erase(win.pending_indices.begin());
             }
 
-            // === 路径总览（CLIENT）===
-            // 步骤 1: bootstrap 连接并接收 handles（获取通道数）→ 以
-            // handles.size() 构造 ChannelManager 步骤 2: 连接所有通道（生成
-            // send_comm） 步骤 3: CUDA 初始化 + 分配 4KB 对齐发送缓冲 +
-            // 注册到所有通道 步骤 4:
-            // 为每通道创建发送侧窗口（MAX_INFLIGHT_SEND_PER_CHANNEL=12） 步骤
-            // 5: 主循环按 chunk 发送；窗口满时阻塞等待最老 send 完成（tcpx_test
-            // + sleep） 步骤 6: 迭代尾部排空 pending 发送请求并统计平均性能
+            // === CLIENT path overview ===
+            // 1) Bootstrap and receive handles → ChannelManager(handles.size())
+            // 2) Connect all channels (send_comm)
+            // 3) CUDA init + 4KB-aligned send buffer + register to channels
+            // 4) Per-channel send window (MAX_INFLIGHT_SEND_PER_CHANNEL=12)
+            // 5) Send chunks; if full, wait on oldest send (tcpx_test+sleep)
+            // 6) Drain pending sends and compute averages at iteration end
 
             if (abort_benchmark) break;
           }
@@ -1001,7 +977,7 @@ int main(int argc, char** argv) {
       }
 
       // ========================================================================
-      // 计算本次迭代的性能
+      // Compute this iteration's performance
       // ========================================================================
 
       auto end = std::chrono::high_resolution_clock::now();
@@ -1035,7 +1011,7 @@ int main(int argc, char** argv) {
     // - Per vendor guidance (2025-10-08): measuring per-NIC max should use one
     //   200Gbps NIC with ~8 TCPX connections; do not expect symmetric GB/s.
 
-    // 计算并输出平均性能
+    // Compute and print average
     // ==========================================================================
 
     if (completed_iters > 0) {
@@ -1052,10 +1028,10 @@ int main(int argc, char** argv) {
     }
 
     // ==========================================================================
-    // 清理资源
+    // Cleanup
     // ==========================================================================
 
-    // 清理 launcher 和 stream
+    // Destroy launcher and stream
     if (launcher_ptr) {
       delete launcher_ptr;
       launcher_ptr = nullptr;
@@ -1065,7 +1041,7 @@ int main(int argc, char** argv) {
       unpack_stream = nullptr;
     }
 
-    // 清理 CUDA events
+    // Destroy CUDA events
     if (impl == "kernel") {
       for (int ch = 0; ch < num_channels; ++ch) {
         for (auto& evt : channel_windows[ch].events) {
@@ -1074,7 +1050,7 @@ int main(int argc, char** argv) {
       }
     }
 
-    // 清理 TCPX 资源
+    // Release TCPX/CUDA resources
     mgr.deregister_memory(true);
     cuMemFree(d_base);
     cuDevicePrimaryCtxRelease(cuDev);
@@ -1082,14 +1058,14 @@ int main(int argc, char** argv) {
     close(bootstrap_fd);
 
     // ============================================================================
-    // CLIENT 端逻辑
+    // CLIENT logic
     // ============================================================================
 
   } else {
     std::cout << "[PERF] Starting CLIENT mode" << std::endl;
 
     // ==========================================================================
-    // 步骤 1: Bootstrap 连接（接收 handles）
+    // Step 1: bootstrap connect (receive handles)
     // ==========================================================================
 
     int bootstrap_fd = -1;
@@ -1112,7 +1088,7 @@ int main(int argc, char** argv) {
               << std::endl;
 
     // ==========================================================================
-    // 步骤 2: 创建 ChannelManager 并连接所有 channels
+    // Step 2: create ChannelManager and connect all channels
     // ==========================================================================
 
     // CRITICAL: Use handles.size() instead of env value to match server's
@@ -1131,7 +1107,7 @@ int main(int argc, char** argv) {
               << " channels connected (matched to server's count)" << std::endl;
 
     // ==========================================================================
-    // 步骤 3: CUDA 初始化和内存分配
+    // Step 3: CUDA initialization and memory allocation
     // ==========================================================================
 
     CUdevice cuDev;
@@ -1139,8 +1115,8 @@ int main(int argc, char** argv) {
     CUdeviceptr d_base, d_aligned;
 
     if (!cuda_check(cuInit(0), "cuInit") ||
-        // send 窗口满：等待队首发送完成（tcpx_test + sleep），避免占满 TCPX
-        // 请求槽 注意：send 完成后自动释放，仅需从窗口 vector 中移除指针
+        // When send window is full: wait for oldest send (tcpx_test + sleep)
+        // Send auto-releases; just remove from the window vector
 
         !cuda_check(cuDeviceGet(&cuDev, gpu_id), "cuDeviceGet") ||
         !cuda_check(cuDevicePrimaryCtxRetain(&cuCtx, cuDev),
@@ -1153,7 +1129,7 @@ int main(int argc, char** argv) {
       return 1;
     }
 
-    // 对齐到 4KB 边界
+    // Align to 4KB boundary
     uintptr_t addr = static_cast<uintptr_t>(d_base);
     addr = (addr + 4095) & ~static_cast<uintptr_t>(4095);
     d_aligned = static_cast<CUdeviceptr>(addr);
@@ -1162,7 +1138,7 @@ int main(int argc, char** argv) {
     std::cout << "[PERF] Allocated send buffer: " << send_buf << std::endl;
 
     // ==========================================================================
-    // 步骤 4: 注册发送缓冲区到所有 channels（共享内存方式）
+    // Step 4: register send buffer to all channels (shared)
     // ==========================================================================
 
     if (mgr.register_memory(send_buf, kRegisteredBytes, NCCL_PTR_CUDA, false) !=
@@ -1177,10 +1153,10 @@ int main(int argc, char** argv) {
               << " channels" << std::endl;
 
     // ==========================================================================
-    // 步骤 5: 配置发送端滑动窗口（每个 channel 独立）
+    // Step 5: configure per-channel send windows
     // ==========================================================================
 
-    // 【关键】Client 使用 12 而不是 16，留余量避免边界情况
+    // Client uses 12 instead of 16 to keep headroom
     constexpr int MAX_INFLIGHT_SEND_PER_CHANNEL = 12;
 
     struct SendChannelWindow {
@@ -1197,7 +1173,7 @@ int main(int argc, char** argv) {
               << MAX_INFLIGHT_SEND_PER_CHANNEL << " per channel" << std::endl;
 
     // ==========================================================================
-    // 步骤 6: 性能测试主循环
+    // Step 6: main benchmark loop
     // ==========================================================================
 
     double total_time_ms = 0.0;
@@ -1205,14 +1181,14 @@ int main(int argc, char** argv) {
     for (int iter = 0; iter < iterations; ++iter) {
       std::cout << "[PERF] Iteration " << iter << ": total bytes="
                 << test_size
-                // 迭代结束：对每个通道排空 pending 发送请求；此处只需轮询 done
-                // 并从窗口移除（无 consumed）
+                // End-of-iteration: drain pending sends per channel (poll done
+                // and remove from window; no consumed step needed)
 
                 << ", chunk_bytes=" << chunk_bytes << std::endl;
 
       auto start = std::chrono::high_resolution_clock::now();
 
-      // 每次迭代开始时重置所有 channel 的滑动窗口
+      // Reset all per-channel send windows at iteration start
       std::cout << "[DEBUG] Iteration " << iter
                 << " start: clearing send windows for " << num_channels
                 << " channels" << std::endl;
@@ -1222,7 +1198,7 @@ int main(int argc, char** argv) {
       }
 
       // ========================================================================
-      // Chunk 循环：将大消息分成多个 chunk，round-robin 分配到不同 channels
+      // Chunk loop: split into chunks; round-robin to channels
       // ========================================================================
 
       size_t offset = 0;
@@ -1233,12 +1209,12 @@ int main(int argc, char** argv) {
         void* src_ptr = reinterpret_cast<void*>(
             reinterpret_cast<uintptr_t>(send_buf) + offset);
 
-        // 【关键】Round-robin 选择 channel
+        // Round-robin channel selection
         int channel_id = global_chunk_idx % num_channels;
         ChannelResources& ch = mgr.get_channel(channel_id);
         SendChannelWindow& win = send_windows[channel_id];
 
-        // 【关键】每个 chunk 使用唯一的 tag（必须与 server 端一致）
+        // Unique tag per chunk (must match server)
         int const tag = kTransferTag + iter * 10000 + global_chunk_idx;
 
         std::cout << "[DEBUG][CLIENT] chunk=" << global_chunk_idx
@@ -1248,7 +1224,7 @@ int main(int argc, char** argv) {
                   << MAX_INFLIGHT_SEND_PER_CHANNEL << std::endl;
 
         // ======================================================================
-        // 滑动窗口：如果该 channel 的窗口满，等待最老的 send 完成
+        // Sliding window: if full, wait for oldest send
         // ======================================================================
 
         if (win.pending_reqs.size() >= MAX_INFLIGHT_SEND_PER_CHANNEL) {
@@ -1260,7 +1236,7 @@ int main(int argc, char** argv) {
           void* oldest_req = win.pending_reqs.front();
           int done = 0, sent_size = 0;
 
-          // 【修复】移除超时限制，持续轮询直到发送完成
+          // Remove timeout; poll until send completes
           int poll_count = 0;
           while (!done) {
             tcpx_test(oldest_req, &done, &sent_size);
@@ -1279,7 +1255,7 @@ int main(int argc, char** argv) {
                     << poll_count << " polls, sent_size=" << sent_size
                     << std::endl;
 
-          // Send 请求自动释放，只需从窗口中移除
+          // Send auto-releases; just remove from the window
           win.pending_reqs.erase(win.pending_reqs.begin());
 
           std::cout << "[DEBUG][CLIENT] Channel " << channel_id
@@ -1288,7 +1264,7 @@ int main(int argc, char** argv) {
         }
 
         // ======================================================================
-        // 发起异步发送（tcpx_isend）
+        // Post async send (tcpx_isend)
         // ======================================================================
 
         std::cout << "[DEBUG][CLIENT] Calling tcpx_isend for chunk "
@@ -1306,7 +1282,7 @@ int main(int argc, char** argv) {
         std::cout << "[DEBUG][CLIENT] tcpx_isend returned, request="
                   << send_request << std::endl;
 
-        // 将当前 send 请求加入该 channel 的滑动窗口
+        // Track the send request in channel window
         win.pending_reqs.push_back(send_request);
         win.chunk_counter++;
 
@@ -1320,7 +1296,7 @@ int main(int argc, char** argv) {
       }
 
       // ========================================================================
-      // 迭代结束：排空所有 channels 的滑动窗口
+      // End of iteration: drain all channel windows
       // ========================================================================
 
       std::cout << "[DEBUG] Iteration " << iter
@@ -1351,7 +1327,7 @@ int main(int argc, char** argv) {
       }
 
       // ========================================================================
-      // 计算本次迭代的性能
+      // Per-iteration performance
       // ========================================================================
 
       auto end = std::chrono::high_resolution_clock::now();
@@ -1363,7 +1339,7 @@ int main(int argc, char** argv) {
     }  // end of iteration loop
 
     // ==========================================================================
-    // 计算并输出平均性能
+    // Compute and print average
     // ==========================================================================
 
     double avg_ms = total_time_ms / iterations;
@@ -1376,7 +1352,7 @@ int main(int argc, char** argv) {
               << " GB/s" << std::endl;
 
     // ==========================================================================
-    // 清理资源
+    // Cleanup resources
     // ==========================================================================
 
     mgr.deregister_memory(false);
