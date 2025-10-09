@@ -73,6 +73,7 @@ install: $(TARGET) $(PLUGIN_SO)
 	@cp $(TARGET) $(INSTALL_DIR)/
 	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(TARGET)"
 	install -m 755 $(PLUGIN_SO) $(LIBDIR)/
+	install -m 755 $(RDMA_HOME)/librdma_plugin.a $(LIBDIR)/
 	install -m 644 $(CAPI_HEADER) $(INCDIR)/
 # Clean build artifacts
 clean:
