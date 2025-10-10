@@ -598,6 +598,14 @@ int main(int argc, char** argv) {
                   << " recv completed (received_size=" << received_size << ")"
                   << std::endl;
 
+        // Ablation mode: skip any unpack work and immediately consume the recv.
+        if (impl == "none") {
+          tcpx_irecv_consumed(ch.recv_comm, 1, entry.request);
+          win.inflight_recvs.pop_front();
+          // Proceed to next FIFO head (if any)
+          continue;
+        }
+        
         auto* rx_req =
             reinterpret_cast<tcpx::plugin::tcpxRequest*>(entry.request);
         auto* dev_handle_struct =
