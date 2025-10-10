@@ -119,6 +119,7 @@ def recv_obj(sock: socket.socket) -> Any:
 
 _GLOBAL_TENSOR_IDS: Dict[int, int] = {}
 
+
 def get_tensor_id_by_tensor(tensor: torch.Tensor):
     if not tensor.is_contiguous():
         raise ValueError("Tensor must be contiguous")
@@ -183,9 +184,9 @@ def create_tensor(
 
 def free_tensor(tensor: torch.Tensor):
     """
-    Note that the GPU memory allocated for a tensor is automatically freed 
-    when the tensor object is garbage collected. Manual intervention to free 
-    GPU memory is generally not required unless immediate resource release 
+    Note that the GPU memory allocated for a tensor is automatically freed
+    when the tensor object is garbage collected. Manual intervention to free
+    GPU memory is generally not required unless immediate resource release
     is necessary.
     Args:
         tensor: torch.Tensor
