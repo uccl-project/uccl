@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#if __CUDA_ARCH__
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
+#endif
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
 

@@ -1,15 +1,5 @@
 #pragma once
 
-#if __HIP_DEVICE_COMPILE__
-#if defined(__GFX9__)
-#define WARP_SIZE 64
-#define WARP_MASK 0xffffffffffffffff
-#else
-#define WARP_SIZE 32
-#define WARP_MASK 0xffffffff
-#endif
-#endif
-
 #define NUM_MAX_NVL_PEERS 8
 #define NUM_MAX_RDMA_PEERS 20
 #define NUM_WORKSPACE_BYTES (32 * 1024 * 1024)
@@ -55,12 +45,26 @@
 #endif
 
 #include <cstdint>
-#include <cuda_bf16.h>
 #include <cuda_runtime.h>
 
+
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-#include <hip/hip_fp8.h>
+
+// #include <hip/hip_bfloat16.h>
+// #include <hip/hip_fp8.h>
+#define nv_bfloat16 hip_bfloat16
+#define __nv_fp8x2_storage_t __hip_fp8x2_storage_t
+#define __nv_fp8_storage_t __hip_fp8_storage_t
+#define __nv_cvt_float2_to_fp8x2 __hip_cvt_float2_to_fp8x2
+#define __NV_SATFINITE __HIP_SATFINITE
+#define __NV_E4M3 __HIP_E4M3_FNUZ
+#define WARP_SIZE 64
+#define WARP_MASK 0xffffffffffffffff
+
 #else
+#include <cuda_bf16.h>
+#define WARP_SIZE 32
+#define WARP_MASK 0xffffffff
 #ifndef DISABLE_SM90_FEATURES
 #include <cuda_fp8.h>
 #else

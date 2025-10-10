@@ -224,7 +224,11 @@ struct alignas(128) RingBuffer {
       uint64_t h = ld_volatile(&head);
       uint64_t t = ld_volatile(&tail);
       if (h - t == Capacity) {
+#if defined(__HIP_DEVICE_COMPILE__)
+        __builtin_amdgcn_s_sleep(8);
+#else
         __nanosleep(64);
+#endif
         continue;
       }
       unsigned long long prev =
