@@ -1205,7 +1205,7 @@ __global__ void __launch_bounds__(
             min_head - last_head,
             translate_dst_rdma_rank<kLowLatencyMode>(lane_id, nvl_rank),
             channel_id + num_channels, lane_id == rdma_rank, ring_addrs,
-            num_ring_addrs, false, -1);
+            num_ring_addrs, false, -1, false, true);
         last_head = min_head;
       }
 
@@ -2521,7 +2521,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                 channel_id +
                     num_channels,  // NOTE(MaoZiming): use channel_id for rb.
                 dst_rdma_rank == rdma_rank, ring_addrs, num_ring_addrs, false,
-                -1);
+                -1, false, true);
             last_rdma_head = min_head;
           }
         } else {

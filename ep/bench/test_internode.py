@@ -49,7 +49,6 @@ from utils import (
 )
 
 # Test compatibility with low latency functions
-import test_low_latency
 from buffer import Buffer
 
 try:
@@ -172,9 +171,7 @@ def test_main(
     time.sleep(1)
 
     # Config
-    rdma_buffer_size, nvl_buffer_size = 128, (
-        480 if num_ranks in (24, 48, 96, 144, 160) else 512
-    )
+    rdma_buffer_size, nvl_buffer_size = 128, (720 if num_ranks in (144, 160) else 512)
     config = Config(num_sms, 8, nvl_buffer_size, 16, rdma_buffer_size)
 
     # Test dispatch
@@ -352,7 +349,7 @@ def test_main(
             else dispatch_bf16_nvl_recv_bytes
         )
         for nvl_chunk_size in range(4, 45, 4):
-            for rdma_chunk_size in range(4, 28, 4):
+            for rdma_chunk_size in range(4, 33, 4):
                 config = Config(
                     num_sms,
                     nvl_chunk_size,
@@ -362,12 +359,9 @@ def test_main(
                 )
                 tune_args = {"x": current_x, "handle": handle, "config": config}
                 t, notify_t = bench_kineto(
-                    lambda: (
-                        buffer.dispatch(**tune_args),
-                        # dist.barrier()
-                    ),
+                    lambda: (buffer.dispatch(**tune_args), dist.barrier()),
                     ("dispatch", "notify"),
-                    # num_tests=3
+                    num_tests=3,
                 )
                 if t < best_time:
                     best_time, best_results = t, (
@@ -423,7 +417,7 @@ def test_main(
 
     # Tune combine performance
     best_time, best_results = 1e10, None
-    for nvl_chunk_size in range(4, 45, 4):
+    for nvl_chunk_size in range(1, 8, 1):
         for rdma_chunk_size in range(12 if num_nodes == 2 else 8, 33, 4):
             config = Config(
                 num_sms,
@@ -464,15 +458,17 @@ def test_loop(
     local_rank: int, num_local_ranks: int, num_nodes: int, args: argparse.Namespace
 ):
     rank, num_ranks, group = init_dist_under_torchrun(local_rank, num_local_ranks)
+    print("test_ll_compatibility =", args.test_ll_compatibility)
     if args.test_ll_compatibility:
         ll_num_tokens, ll_hidden, ll_num_experts, ll_num_topk = 16, 5120, 256, 9
 
     num_sms = 24
     num_qps_per_rank = max(
-        num_sms, ll_num_experts // num_ranks if args.test_ll_compatibility else 0
+        num_sms,
+        ll_num_experts // num_ranks if False and args.test_ll_compatibility else 0,
     )
-    num_rdma_bytes = int(2e9)
-    num_nvlink_bytes = int(1e9)
+    num_nvlink_bytes = int(2e9)
+    num_rdma_bytes = int(1e9)
 
     # UCCL new code for initialization
     device_index = int(os.environ["LOCAL_RANK"])
@@ -567,7 +563,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--test-ll-compatibility",
         action="store_true",
-        default=True,
         help="whether to test compatibility with low-latency kernels",
     )
     args = parser.parse_args()

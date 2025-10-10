@@ -25,12 +25,22 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     uint64_t req_rptr, uint64_t req_lptr, size_t bytes, int dst_rank,
     int expert_idx, int lane_id, int message_idx, uint64_t const* ring_addrs,
     int num_ring_addrs, bool is_combine, int low_latency_buffer_idx = 0,
-    uint64_t atomic_offset = 0, uint64_t atomic_val = 0) {
+    uint64_t atomic_offset = 0, uint64_t atomic_val = 0,
+    bool last_thread = false) {
   // NOTE(MaoZiming): different from the nvshmemi_ibgda_put_nbi_warp in
   // ibgda_device.cuh, we don't do warp-cooperation.
   if (lane_id != 0) return;
   int safe_n = num_ring_addrs > 0 ? num_ring_addrs : 1;
+  if (!last_thread) safe_n -= kRingsPerProxy;
+  assert(safe_n > 0);
   int ring_idx = (expert_idx >= 0 ? expert_idx : 0) % safe_n;
+  if (last_thread)
+    ring_idx = (expert_idx >= 0 ? expert_idx : 0) % kRingsPerProxy +
+               (num_ring_addrs - kRingsPerProxy);
+  if (!last_thread)
+    assert(ring_idx < (num_ring_addrs - kRingsPerProxy));
+  else
+    assert(ring_idx >= (num_ring_addrs - kRingsPerProxy));
 
   unsigned long long rptr_val = static_cast<unsigned long long>(req_rptr);
   unsigned long long lptr_val = static_cast<unsigned long long>(req_lptr);
@@ -101,7 +111,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     int warp_id, bool is_local_copy = false,
     uint64_t const* ring_addrs = nullptr, int num_ring_addrs = 0,
     bool is_combine = true, int low_latency_buffer_idx = 0,
-    bool skip_remote = false) {
+    bool skip_remote = false, bool last_thread = false) {
   if (is_local_copy) {
     atomicAdd(reinterpret_cast<unsigned long long*>(rptr),
               static_cast<unsigned long long>(value));
@@ -113,7 +123,18 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
 #endif
     rptr -= atomic_base_addr;
     int safe_n = num_ring_addrs > 0 ? num_ring_addrs : 1;
+
+    if (!last_thread) safe_n -= kRingsPerProxy;
+    assert(safe_n > 0);
+
     int ring_idx = (warp_id >= 0 ? warp_id : 0) % safe_n;
+    if (last_thread)
+      ring_idx = (warp_id >= 0 ? warp_id : 0) % kRingsPerProxy +
+                 (num_ring_addrs - kRingsPerProxy);
+    if (!last_thread)
+      assert(ring_idx < (num_ring_addrs - kRingsPerProxy));
+    else
+      assert(ring_idx >= (num_ring_addrs - kRingsPerProxy));
 
     auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
         static_cast<uintptr_t>(ring_addrs[ring_idx]));
