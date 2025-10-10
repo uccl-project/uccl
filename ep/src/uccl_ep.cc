@@ -635,6 +635,20 @@ class Buffer {
                                          x_scales->options());
       recv_x_scales_ptr = static_cast<float*>(recv_x_scales->data_ptr());
     }
+    // #ifndef EP_DBG_LOG_RECV
+    // #define EP_DBG_LOG_RECV 1
+    // #endif
+
+#if EP_DBG_LOG_RECV
+    constexpr int dbg_max_log = 1 << 16;  // capacity per RDMA lane
+    int64_t* dbg_recv_idx = nullptr;      // [kNumRDMARanks * dbg_max_log]
+    int* dbg_recv_cnt = nullptr;          // [kNumRDMARanks]
+
+    // Allocate on device
+    CUDA_CHECK(cudaMalloc(&dbg_recv_idx, sizeof(int64_t) * 32 * dbg_max_log));
+    CUDA_CHECK(cudaMalloc(&dbg_recv_cnt, sizeof(int) * 32));
+    CUDA_CHECK(cudaMemset(dbg_recv_cnt, 0, sizeof(int) * 32));
+#endif
 
     // Launch data dispatch
     // NOTES: the buffer size checks are moved into the `.cu` file
@@ -659,7 +673,12 @@ class Buffer {
         config.num_max_nvl_chunked_send_tokens,
         config.num_max_nvl_chunked_recv_tokens, rank, num_ranks, cached_mode,
         comm_stream, num_channels, low_latency_mode, d_ring_addrs,
-        num_ring_addrs, atomic_buffer_ptr);
+        num_ring_addrs, atomic_buffer_ptr
+#if EP_DBG_LOG_RECV
+        ,
+        dbg_recv_idx, dbg_recv_cnt, dbg_max_log
+#endif
+    );
     // Wait streams
     std::optional<EventHandle> event;
     if (async) {

@@ -201,7 +201,8 @@ void Proxy::init_common() {
     if (std::abs(peer - my_rank) % MAX_NUM_GPUS != 0) continue;
 #endif
     create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
-                         &local_infos_[peer], my_rank);
+                         &local_infos_[peer], my_rank,
+                         cfg_.ring_buffers.size());
     modify_qp_to_init(c);
   }
 
@@ -329,8 +330,26 @@ void Proxy::run_sender() {
   size_t seen = 0;
   uint64_t my_tail = 0;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    local_poll_completions(ctx_, finished_wrs_, acked_wrs_, cfg_.thread_idx,
-                           ctx_by_tag_);
+    if (ctx_.cq) {
+      ibv_wc wc[kMaxOutstandingSends];
+      int ne = poll_cq_once(ctx_.cq, wc, kMaxOutstandingSends);
+      if (ne > 0) {
+        local_process_completions(ctx_, finished_wrs_, acked_wrs_,
+                                  cfg_.thread_idx, wc, ne, ctx_by_tag_);
+      }
+    }
+
+    for (auto& c : ctxs_for_all_ranks_) {
+      if (!c) continue;
+      ibv_wc wc2[kMaxOutstandingSends];
+      for (auto* cq : c->extra_cqs) {
+        int ne2 = poll_cq_once(cq, wc2, kMaxOutstandingSends);
+        if (ne2 > 0) {
+          local_process_completions(*c, finished_wrs_, acked_wrs_,
+                                    cfg_.thread_idx, wc2, ne2, ctx_by_tag_);
+        }
+      }
+    }
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
   }
@@ -341,10 +360,30 @@ void Proxy::run_remote() {
   init_remote();
   std::set<PendingUpdate> pending_atomic_updates;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    remote_poll_completions(ctx_, cfg_.thread_idx, ring, ctx_by_tag_,
-                            atomic_buffer_ptr_, cfg_.num_ranks,
-                            cfg_.num_experts, pending_atomic_updates, cfg_.rank,
-                            cfg_.num_nodes);
+    // Shared barrier CQ → ctx_
+    if (ctx_.cq) {
+      ibv_wc wc[kMaxOutstandingRecvs];
+      int ne = poll_cq_once(ctx_.cq, wc, kMaxOutstandingRecvs);
+      if (ne > 0) {
+        remote_process_completions(
+            ctx_, cfg_.thread_idx, ring, ne, wc, ctx_by_tag_,
+            atomic_buffer_ptr_, cfg_.num_ranks, cfg_.num_experts,
+            pending_atomic_updates, cfg_.rank, cfg_.num_nodes);
+      }
+    }
+    for (auto& c : ctxs_for_all_ranks_) {
+      if (!c) continue;
+      ibv_wc wc2[kMaxOutstandingRecvs];
+      for (auto* cq : c->extra_cqs) {
+        int ne2 = poll_cq_once(cq, wc2, kMaxOutstandingRecvs);
+        if (ne2 > 0) {
+          remote_process_completions(
+              *c, cfg_.thread_idx, ring, ne2, wc2, ctx_by_tag_,
+              atomic_buffer_ptr_, cfg_.num_ranks, cfg_.num_experts,
+              pending_atomic_updates, cfg_.rank, cfg_.num_nodes);
+        }
+      }
+    }
     apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
                           cfg_.num_experts, cfg_.num_ranks);
   }
@@ -370,12 +409,35 @@ void Proxy::run_dual() {
   uint64_t my_tail = 0;
   size_t seen = 0;
   std::set<PendingUpdate> pending_atomic_updates;
-  // printf("run_dual initialization complete\n");
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    poll_cq_dual(ctx_, finished_wrs_, acked_wrs_, cfg_.thread_idx, ring,
-                 ctx_by_tag_, atomic_buffer_ptr_, cfg_.num_ranks,
-                 cfg_.num_experts, pending_atomic_updates, cfg_.rank,
-                 cfg_.num_nodes);
+    if (ctx_.cq) {
+      ibv_wc wc[kMaxOutstandingSends];
+      int ne = poll_cq_once(ctx_.cq, wc, kMaxOutstandingSends);
+      if (ne > 0) {
+        local_process_completions(ctx_, finished_wrs_, acked_wrs_,
+                                  cfg_.thread_idx, wc, ne, ctx_by_tag_);
+        remote_process_completions(
+            ctx_, cfg_.thread_idx, ring, ne, wc, ctx_by_tag_,
+            atomic_buffer_ptr_, cfg_.num_ranks, cfg_.num_experts,
+            pending_atomic_updates, cfg_.rank, cfg_.num_nodes);
+      }
+    }
+    // Per-QP CQs → owning ctx
+    for (auto& c : ctxs_for_all_ranks_) {
+      if (!c) continue;
+      ibv_wc wc2[kMaxOutstandingSends];
+      for (auto* cq : c->extra_cqs) {
+        int ne2 = poll_cq_once(cq, wc2, kMaxOutstandingSends);
+        if (ne2 > 0) {
+          local_process_completions(*c, finished_wrs_, acked_wrs_,
+                                    cfg_.thread_idx, wc2, ne2, ctx_by_tag_);
+          remote_process_completions(
+              *c, cfg_.thread_idx, ring, ne2, wc2, ctx_by_tag_,
+              atomic_buffer_ptr_, cfg_.num_ranks, cfg_.num_experts,
+              pending_atomic_updates, cfg_.rank, cfg_.num_nodes);
+        }
+      }
+    }
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
 #ifdef USE_RECEIVER_BARRIER
@@ -753,30 +815,6 @@ void Proxy::post_gpu_commands_mixed(
   }
 }
 
-static inline int poll_cq_once(ibv_cq* cq, ibv_wc* wc, int max_cqes) {
-#ifdef EFA
-  auto cqx = reinterpret_cast<ibv_cq_ex*>(cq);
-  ibv_poll_cq_attr attr{.comp_mask = 0};
-  if (ibv_start_poll(cqx, &attr)) return 0;
-
-  int n = 0;
-  while (n < max_cqes) {
-    wc[n].status = cqx->status;
-    wc[n].wr_id = cqx->wr_id;
-    wc[n].opcode = ibv_wc_read_opcode(cqx);
-    wc[n].wc_flags = ibv_wc_read_wc_flags(cqx);
-    wc[n].imm_data = ibv_wc_read_imm_data(cqx);
-    wc[n].byte_len = ibv_wc_read_byte_len(cqx);
-    ++n;
-    if (ibv_next_poll(cqx)) break;
-  }
-  ibv_end_poll(cqx);
-  return n;
-#else
-  return ibv_poll_cq(cq, max_cqes, wc);
-#endif
-}
-
 void Proxy::quiet_cq() {
   auto outstanding_batches = [&]() -> size_t {
     size_t sum = 0;
@@ -793,22 +831,42 @@ void Proxy::quiet_cq() {
   auto last_log = clock::now();
   std::set<PendingUpdate> pending_atomic_updates;
   for (;;) {
-    int ne = poll_cq_once(ctx_.cq, wc, kMaxOutstandingSends);
-    if (ne > 0) {
-      empty_iters = 0;
-      local_process_completions(ctx_, finished_wrs_, acked_wrs_,
-                                cfg_.thread_idx, wc, ne, ctx_by_tag_);
-      remote_process_completions(
-          ctx_, cfg_.thread_idx, ring, ne, wc, ctx_by_tag_, atomic_buffer_ptr_,
-          cfg_.num_ranks, cfg_.num_experts, pending_atomic_updates, cfg_.rank,
-          cfg_.num_nodes);
-#ifdef USE_RECEIVER_BARRIER
-      apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
-                            cfg_.num_experts, cfg_.num_ranks);
-#endif
-    } else {
-      ++empty_iters;
+    int ne_total = 0;
+    if (ctx_.cq) {
+      int ne = poll_cq_once(ctx_.cq, wc, kMaxOutstandingSends);
+      if (ne > 0) {
+        ne_total += ne;
+        local_process_completions(ctx_, finished_wrs_, acked_wrs_,
+                                  cfg_.thread_idx, wc, ne, ctx_by_tag_);
+        remote_process_completions(
+            ctx_, cfg_.thread_idx, ring, ne, wc, ctx_by_tag_,
+            atomic_buffer_ptr_, cfg_.num_ranks, cfg_.num_experts,
+            pending_atomic_updates, cfg_.rank, cfg_.num_nodes);
+      }
     }
+    for (auto& c : ctxs_for_all_ranks_) {
+      if (!c) continue;
+      for (auto* cq : c->extra_cqs) {
+        int ne = poll_cq_once(cq, wc, kMaxOutstandingSends);
+        if (ne > 0) {
+          ne_total += ne;
+          local_process_completions(*c, finished_wrs_, acked_wrs_,
+                                    cfg_.thread_idx, wc, ne, ctx_by_tag_);
+          remote_process_completions(
+              *c, cfg_.thread_idx, ring, ne, wc, ctx_by_tag_,
+              atomic_buffer_ptr_, cfg_.num_ranks, cfg_.num_experts,
+              pending_atomic_updates, cfg_.rank, cfg_.num_nodes);
+        }
+      }
+    }
+    if (ne_total > 0)
+      empty_iters = 0;
+    else
+      ++empty_iters;
+#ifdef USE_RECEIVER_BARRIER
+    apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
+                          cfg_.num_experts, cfg_.num_ranks);
+#endif
     if (outstanding_batches() == 0 && empty_iters >= kConsecutiveEmptyToExit) {
       break;
     }
@@ -831,18 +889,34 @@ void Proxy::quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds) {
 void Proxy::destroy(bool free_gpu_buffer) {
   for (auto& ctx_ptr : ctxs_for_all_ranks_) {
     if (!ctx_ptr) continue;
-    qp_to_error(ctx_ptr->qp);
+    // qp_to_error(ctx_ptr->qp);
     qp_to_error(ctx_ptr->ack_qp);
+    for (auto* q : ctx_ptr->data_qps_by_ring) {
+      if (q) qp_to_error(q);
+    }
   }
-
-  drain_cq(ctx_.cq);
 
   for (auto& ctx_ptr : ctxs_for_all_ranks_) {
     if (!ctx_ptr) continue;
-    if (ctx_ptr->qp) {
-      ibv_destroy_qp(ctx_ptr->qp);
-      ctx_ptr->qp = nullptr;
+    for (auto* cq : ctx_ptr->extra_cqs) {
+      if (cq) drain_cq(cq);
     }
+  }
+  if (ctx_.cq) drain_cq(ctx_.cq);
+
+  for (auto& ctx_ptr : ctxs_for_all_ranks_) {
+    if (!ctx_ptr) continue;
+    // if (ctx_ptr->qp) {
+    //   ibv_destroy_qp(ctx_ptr->qp);
+    //   ctx_ptr->qp = nullptr;
+    // }
+    for (auto*& q : ctx_ptr->data_qps_by_ring) {
+      if (q) {
+        ibv_destroy_qp(q);
+        q = nullptr;
+      }
+    }
+    ctx_ptr->data_qps_by_ring.clear();
     if (ctx_ptr->ack_qp) {
       ibv_destroy_qp(ctx_ptr->ack_qp);
       ctx_ptr->ack_qp = nullptr;
@@ -850,8 +924,24 @@ void Proxy::destroy(bool free_gpu_buffer) {
   }
   ring.ack_qp = nullptr;
 
-  drain_cq(ctx_.cq);
+  for (auto& ctx_ptr : ctxs_for_all_ranks_) {
+    if (!ctx_ptr) continue;
+    for (auto* cq : ctx_ptr->extra_cqs) {
+      if (cq) drain_cq(cq);
+    }
+  }
+  if (ctx_.cq) drain_cq(ctx_.cq);
 
+  for (auto& ctx_ptr : ctxs_for_all_ranks_) {
+    if (!ctx_ptr) continue;
+    for (auto*& cq : ctx_ptr->extra_cqs) {
+      if (cq) {
+        ibv_destroy_cq(cq);
+        cq = nullptr;
+      }
+    }
+    ctx_ptr->extra_cqs.clear();
+  }
   if (ctx_.cq) {
     ibv_destroy_cq(ctx_.cq);
     ctx_.cq = nullptr;

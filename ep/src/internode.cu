@@ -9,6 +9,10 @@
 // #include "ibgda_device.cuh"
 #include "internode.cuh"
 
+// #ifndef EP_DBG_LOG_RECV
+// #define EP_DBG_LOG_RECV 1
+// #endif
+
 namespace uccl {
 
 namespace internode {
@@ -462,7 +466,32 @@ __global__ void __launch_bounds__(
              int num_max_nvl_chunked_send_tokens,
              int num_max_nvl_chunked_recv_tokens, int rank, int num_ranks,
              uint64_t const* ring_addrs, int num_ring_addrs,
-             void* atomic_buffer_ptr) {
+             void* atomic_buffer_ptr
+#if EP_DBG_LOG_RECV
+             ,
+             int64_t* __restrict__ dbg_recv_idx,  // [32][EP_DBG_MAX_LOG]
+             int* __restrict__ dbg_recv_cnt,      // [32]
+             int dbg_max_log                      // EP_DBG_MAX_LOG
+#endif
+    ) {
+// ---------- Debug logging controls ----------
+#ifndef EP_DBG_LOG_RECV
+#define EP_DBG_LOG_RECV 0
+#endif
+#ifndef EP_DBG_PRINT_LIMIT
+#define EP_DBG_PRINT_LIMIT 256
+#endif
+#ifndef EP_DBG_FILTER_CHANNEL
+#define EP_DBG_FILTER_CHANNEL -1
+#endif
+#ifndef EP_DBG_FILTER_DST_NVL
+#define EP_DBG_FILTER_DST_NVL -1
+#endif
+#ifndef EP_DBG_FILTER_SRC_RDMA
+#define EP_DBG_FILTER_SRC_RDMA -1
+#endif
+  // -------------------------------------------
+
   enum class WarpRole {
     kRDMASender,
     kRDMASenderCoordinator,
@@ -1205,7 +1234,7 @@ __global__ void __launch_bounds__(
             min_head - last_head,
             translate_dst_rdma_rank<kLowLatencyMode>(lane_id, nvl_rank),
             channel_id + num_channels, lane_id == rdma_rank, ring_addrs,
-            num_ring_addrs, false, -1, false, true);
+            num_ring_addrs, false, -1, false);
         last_head = min_head;
       }
 
@@ -1261,6 +1290,7 @@ __global__ void __launch_bounds__(
     __syncwarp();
 
     int cached_channel_head_idx = 0, cached_channel_tail_idx = 0;
+    long long last_recv_token_idx = -1;
     while (num_tokens_to_recv > 0) {
       // Check channel status by lane 0
       start_time = clock64();
@@ -1275,11 +1305,44 @@ __global__ void __launch_bounds__(
           printf(
               "DeepEP dispatch NVL receiver timeout, channel: %d, RDMA: %d, "
               "nvl: %d, src NVL: %d, head: %d, tail: %d, "
-              "num_tokens_to_recv_original: %d\n",
+              "num_tokens_to_recv_original: %d, last_recv_token_idx: %lld, "
+              "next_expected_token_idx: %lld\n",
               channel_id, rdma_rank, nvl_rank, src_nvl_rank,
               cached_channel_head_idx, cached_channel_tail_idx,
-              num_tokens_to_recv_original);
+              num_tokens_to_recv_original, last_recv_token_idx,
+              (long long)(last_recv_token_idx + 1));
+#if EP_DBG_LOG_RECV
+          if (lane_id == 0 &&
+              (EP_DBG_FILTER_CHANNEL < 0 ||
+               EP_DBG_FILTER_CHANNEL == channel_id) &&
+              (EP_DBG_FILTER_DST_NVL < 0 ||
+               EP_DBG_FILTER_DST_NVL == src_nvl_rank)) {
+            // Print compact per-lane summary and (optionally) the indices we
+            // logged.
+            if (dbg_recv_cnt && dbg_recv_idx && dbg_max_log > 0) {
+              for (int s = 0; s < kNumRDMARanks; ++s) {
+                if (EP_DBG_FILTER_SRC_RDMA >= 0 && s != EP_DBG_FILTER_SRC_RDMA)
+                  continue;
+                int c = dbg_recv_cnt ? dbg_recv_cnt[s] : 0;
+                int limit = c;
+                if (limit > dbg_max_log) limit = dbg_max_log;
+                if (limit > EP_DBG_PRINT_LIMIT) limit = EP_DBG_PRINT_LIMIT;
+                printf("DBG ch=%d dst_nvl=%d src_rdma=%d received=%d\n",
+                       channel_id, src_nvl_rank, s, c);
+                for (int i = 0; i < limit; ++i) {
+                  long long v =
+                      static_cast<long long>(dbg_recv_idx[s * dbg_max_log + i]);
+                  printf("%lld%c", v, (i + 1 == limit) ? '\n' : ' ');
+                }
+              }
+            } else {
+              printf("DBG ch=%d dst_nvl=%d: recv log buffers not provided\n",
+                     channel_id, src_nvl_rank);
+            }
+          }
+#endif
           trap();
+          // return;
         }
       }
 
@@ -1296,7 +1359,26 @@ __global__ void __launch_bounds__(
         int64_t recv_token_idx =
             __shfl_sync(0xffffffff, total_offset, meta.src_rdma_rank);
         (lane_id == meta.src_rdma_rank) ? (total_offset += 1) : 0;
+        if (lane_id == 0) last_recv_token_idx = (long long)recv_token_idx;
 
+#if EP_DBG_LOG_RECV
+        // Log every received index per source RDMA lane (bounded).
+        if ((EP_DBG_FILTER_CHANNEL < 0 ||
+             EP_DBG_FILTER_CHANNEL == channel_id) &&
+            (EP_DBG_FILTER_DST_NVL < 0 ||
+             EP_DBG_FILTER_DST_NVL == src_nvl_rank) &&
+            (EP_DBG_FILTER_SRC_RDMA < 0 ||
+             EP_DBG_FILTER_SRC_RDMA == meta.src_rdma_rank) &&
+            dbg_recv_cnt && dbg_recv_idx) {
+          if (lane_id == meta.src_rdma_rank) {
+            int pos = atomicAdd(dbg_recv_cnt + meta.src_rdma_rank, 1);
+            if (pos < dbg_max_log) {
+              dbg_recv_idx[meta.src_rdma_rank * dbg_max_log + pos] =
+                  recv_token_idx;
+            }
+          }
+        }
+#endif
         bool scale_aligned = (scale_bytes % 16 == 0);
         auto tma_load_bytes = hidden_bytes + (scale_aligned ? scale_bytes : 0);
 
@@ -1384,7 +1466,14 @@ void dispatch(void* recv_x, float* recv_x_scales, int64_t* recv_topk_idx,
               int num_max_nvl_chunked_recv_tokens, int rank, int num_ranks,
               bool is_cached_dispatch, cudaStream_t stream, int num_channels,
               bool low_latency_mode, uint64_t const* ring_addrs,
-              int num_ring_addrs, void* atomic_buffer_ptr) {
+              int num_ring_addrs, void* atomic_buffer_ptr
+#if EP_DBG_LOG_RECV
+              ,
+              int64_t* __restrict__ dbg_recv_idx,  // [32][EP_DBG_MAX_LOG]
+              int* __restrict__ dbg_recv_cnt,      // [32]
+              int dbg_max_log                      // EP_DBG_MAX_LOG
+#endif
+) {
   constexpr int kNumDispatchRDMASenderWarps = 7;
   constexpr int kNumTMABytesPerWarp = 16384;
   constexpr int smem_size = kNumTMABytesPerWarp * NUM_MAX_NVL_PEERS;
@@ -1392,6 +1481,12 @@ void dispatch(void* recv_x, float* recv_x_scales, int64_t* recv_topk_idx,
   // Make sure never OOB
   EP_HOST_ASSERT(static_cast<int64_t>(num_scales) * scale_hidden_stride <
                  std::numeric_limits<int>::max());
+
+#if EP_DBG_LOG_RECV
+#define IF_EP_DBG_LOG_RECV_ARGS(...) , __VA_ARGS__
+#else
+#define IF_EP_DBG_LOG_RECV_ARGS(...)
+#endif
 
 #define DISPATCH_LAUNCH_CASE(num_rdma_ranks)                                   \
   {                                                                            \
@@ -1410,6 +1505,8 @@ void dispatch(void* recv_x, float* recv_x_scales, int64_t* recv_topk_idx,
                                              kNumTMABytesPerWarp,              \
                                              kNumDispatchRDMASenderWarps>);    \
     SET_SHARED_MEMORY_FOR_TMA(dispatch_func);                                  \
+                                                                               \
+    /* Launch the kernel safely under both modes */                            \
     LAUNCH_KERNEL(                                                             \
         &cfg, dispatch_func, reinterpret_cast<int4*>(recv_x), recv_x_scales,   \
         recv_topk_idx, recv_topk_weights,                                      \
@@ -2521,7 +2618,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                 channel_id +
                     num_channels,  // NOTE(MaoZiming): use channel_id for rb.
                 dst_rdma_rank == rdma_rank, ring_addrs, num_ring_addrs, false,
-                -1, false, true);
+                -1, false);
             last_rdma_head = min_head;
           }
         } else {

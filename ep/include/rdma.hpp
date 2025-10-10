@@ -25,6 +25,11 @@ struct RDMAConnectionInfo {
   uint64_t len;
   uint16_t lid;     // Local ID
   uint8_t gid[16];  // Global ID for RoCE (optional)
+
+#ifdef EFA
+  uint32_t num_rings;
+  uint32_t data_qp_num[kRingsPerProxy];
+#endif
 };
 
 struct PendingUpdate {
@@ -268,7 +273,8 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& ring,
                                 std::set<PendingUpdate>& pending_atomic_updates,
                                 int my_rank, int num_nodes);
 void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
-                          RDMAConnectionInfo* local_info, int rank);
+                          RDMAConnectionInfo* local_info, int rank,
+                          size_t num_rings);
 ibv_cq* create_per_thread_cq(ProxyCtx& S);
 void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                              std::vector<ProxyCtx*>& ctx_by_tag,
@@ -311,4 +317,6 @@ void apply_pending_updates(ProxyCtx& ctx,
                            std::set<PendingUpdate>& pending_atomic_updates,
                            void* atomic_buffer_ptr, int num_experts,
                            int num_ranks);
+
+int poll_cq_once(ibv_cq* cq, ibv_wc* wc, int max_cqes);
 #endif  // RDMA_HPP

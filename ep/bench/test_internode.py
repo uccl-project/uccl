@@ -336,6 +336,34 @@ def test_main(
     # Tune dispatch performance
     best_dispatch_results = None
     fp8_factor = (1 + 4 / 128) / 2
+
+    # # -------------------------------
+    # # Token routing summary: per rank and per expert
+    # # -------------------------------
+    # num_tokens_per_rank = is_token_in_rank.sum(dim=0)
+    # if local_rank == 0:
+    #     print("\n=== Token routing summary ===")
+    #     for rank, count in enumerate(num_tokens_per_rank.tolist()):
+    #         print(f"Rank {rank}: {count} tokens")
+
+    #     if 'num_tokens_per_expert' in locals():
+    #         print("\n=== Token routing summary (per expert) ===")
+    #         for expert, count in enumerate(num_tokens_per_expert.tolist()):
+    #             print(f"Expert {expert}: {count} tokens")
+
+    #     # --- Optional: detailed mapping of tokens → (rank, expert)
+    #     print("\n=== Token → (Rank, Expert) mapping (first few) ===")
+    #     for token in range(topk_idx.size(0)):  # limit output for readability
+    #         assigned = []
+    #         for k in range(topk_idx.size(1)):
+    #             exp = topk_idx[token, k].item()
+    #             rk = rank_idx[token, k].item()
+    #             # Only include valid pairs (no masked or invalid entries)
+    #             if exp != -1 and rk != -1:
+    #                 assigned.append((rk, exp))
+    #         if assigned:  # print only if at least one valid target
+    #             print(f"Token {token}: {assigned}")
+
     for current_x in (x_e4m3, x):
         best_time, best_results = 1e10, None
         rdma_send_bytes = (
@@ -359,9 +387,12 @@ def test_main(
                 )
                 tune_args = {"x": current_x, "handle": handle, "config": config}
                 t, notify_t = bench_kineto(
-                    lambda: (buffer.dispatch(**tune_args), dist.barrier()),
+                    lambda: (
+                        buffer.dispatch(**tune_args),
+                        # dist.barrier()
+                    ),
                     ("dispatch", "notify"),
-                    num_tests=3,
+                    # num_tests=3,
                 )
                 if t < best_time:
                     best_time, best_results = t, (
@@ -465,12 +496,11 @@ def test_loop(
     num_sms = 24
     num_qps_per_rank = max(
         num_sms,
-        ll_num_experts // num_ranks if False and args.test_ll_compatibility else 0,
+        ll_num_experts // num_ranks if args.test_ll_compatibility else 0,
     )
     num_nvlink_bytes = int(2e9)
     num_rdma_bytes = int(1e9)
 
-    # UCCL new code for initialization
     device_index = int(os.environ["LOCAL_RANK"])
     scratch = torch.zeros(
         num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"

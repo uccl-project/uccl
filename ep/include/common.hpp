@@ -12,11 +12,18 @@
 #include <stdio.h>
 #include <unistd.h>
 
+#ifndef EFA
+#define EFA
+#endif
+
 #define MEASURE_PER_OP_LATENCY
 #define MEASURE_PER_VERB_LATENCY
 // #define USE_SENDER_BARRIER
 
-// #define USE_NORMAL_MODE
+#ifndef USE_NORMAL_MODE
+#define USE_NORMAL_MODE
+#endif
+
 #ifndef USE_NORMAL_MODE
 #ifndef USE_SENDER_BARRIER
 #ifdef EFA
@@ -33,14 +40,14 @@
 #define kMaxInflight 128
 #define kBatchSize 32
 #define kIterations 40000
-#define kNumThBlocks 5
+#define kNumThBlocks 6
 #define kNumThPerBlock 1
 #define kObjectSize 10752  // 10.5 KB
 #define kMaxOutstandingSends 2048
 #define kMaxOutstandingRecvs 2048 * 2
 #define kSenderAckQueueDepth 2048 * 2
 #define kWarmupOps 10000
-#define kRingsPerProxy 8
+#define kRingsPerProxy 4
 #define kRemoteBufferSize (kBatchSize * kNumThBlocks * kObjectSize * 100)
 #define MAIN_THREAD_CPU_IDX 31
 #define MAX_NUM_GPUS 8
