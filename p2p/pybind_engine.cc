@@ -84,55 +84,55 @@ PYBIND11_MODULE(p2p, m) {
                                   conn_id);
           },
           "Accept an incoming connection")
-      .def(
-          "reg",
-          [](Endpoint& self, uint64_t ptr, size_t size) {
-            uint64_t mr_id;
-            bool success;
-            {
-              py::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success =
-                  self.reg(reinterpret_cast<void const*>(ptr), size, mr_id);
-            }
-            return py::make_tuple(success, mr_id);
-          },
-          "Register a data buffer", py::arg("ptr"), py::arg("size"))
-      .def(
-          "regv",
-          [](Endpoint& self, std::vector<uintptr_t> const& ptrs,
-             std::vector<size_t> const& sizes) {
-            if (ptrs.size() != sizes.size())
-              throw std::runtime_error("ptrs and sizes must match");
+      // .def(
+      //     "reg",
+      //     [](Endpoint& self, uint64_t ptr, size_t size) {
+      //       uint64_t mr_id;
+      //       bool success;
+      //       {
+      //         py::gil_scoped_release release;
+      //         InsidePythonGuard guard;
+      //         success =
+      //             self.reg(reinterpret_cast<void const*>(ptr), size, mr_id);
+      //       }
+      //       return py::make_tuple(success, mr_id);
+      //     },
+      //     "Register a data buffer", py::arg("ptr"), py::arg("size"))
+      // .def(
+      //     "regv",
+      //     [](Endpoint& self, std::vector<uintptr_t> const& ptrs,
+      //        std::vector<size_t> const& sizes) {
+      //       if (ptrs.size() != sizes.size())
+      //         throw std::runtime_error("ptrs and sizes must match");
 
-            std::vector<void const*> data_v;
-            data_v.reserve(ptrs.size());
-            for (auto p : ptrs)
-              data_v.push_back(reinterpret_cast<void const*>(p));
+      //       std::vector<void const*> data_v;
+      //       data_v.reserve(ptrs.size());
+      //       for (auto p : ptrs)
+      //         data_v.push_back(reinterpret_cast<void const*>(p));
 
-            std::vector<uint64_t> mr_ids;
-            bool ok;
-            {
-              py::gil_scoped_release release;
-              InsidePythonGuard guard;
-              ok = self.regv(data_v, sizes, mr_ids);
-            }
-            return py::make_tuple(ok, py::cast(mr_ids));
-          },
-          py::arg("ptrs"), py::arg("sizes"),
-          "Batch-register multiple memory regions and return [ok, mr_id_list]")
-      .def(
-          "dereg",
-          [](Endpoint& self, uint64_t mr_id) {
-            bool ok;
-            {
-              py::gil_scoped_release release;
-              InsidePythonGuard guard;
-              ok = self.dereg(mr_id);
-            }
-            return ok;
-          },
-          "Deregister a memory region", py::arg("mr_id"))
+      //       std::vector<uint64_t> mr_ids;
+      //       bool ok;
+      //       {
+      //         py::gil_scoped_release release;
+      //         InsidePythonGuard guard;
+      //         ok = self.regv(data_v, sizes, mr_ids);
+      //       }
+      //       return py::make_tuple(ok, py::cast(mr_ids));
+      //     },
+      //     py::arg("ptrs"), py::arg("sizes"),
+      //     "Batch-register multiple memory regions and return [ok, mr_id_list]")
+      // .def(
+      //     "dereg",
+      //     [](Endpoint& self, uint64_t mr_id) {
+      //       bool ok;
+      //       {
+      //         py::gil_scoped_release release;
+      //         InsidePythonGuard guard;
+      //         ok = self.dereg(mr_id);
+      //       }
+      //       return ok;
+      //     },
+      //     "Deregister a memory region", py::arg("mr_id"))
       .def(
           "send",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,

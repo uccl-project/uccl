@@ -141,11 +141,11 @@ void dereg_mem(uint64_t mem_id) {
   }
 }
 
-ibv_mr* get_ibv_mr_by_mem_id(uint64_t mem_id) {
+uccl::Mhandle* get_mr_handle_by_mem_id(uint64_t mem_id) {
   std::shared_lock<std::shared_mutex> lock(mr_mapping_mu_);
   auto it = mr_mapping_.find(mem_id);
   if (it != mr_mapping_.end()) {
-    return it->second->mhandle_->mr;
+    return it->second->mhandle_;
   }
   return nullptr;
 }

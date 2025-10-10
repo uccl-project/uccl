@@ -10,6 +10,11 @@
 
 static constexpr size_t kIpcAlignment = 1ul << 20;
 
+struct MR {
+  uint64_t mr_id_;
+  uccl::Mhandle* mhandle_;
+};
+
 struct IPCMemHandle {
   uint64_t id;
   gpuIpcMemHandle_t handle;
@@ -44,5 +49,5 @@ void reg_mem(int gpu_id, void* addr, size_t size, uint64_t& mem_id);
 void dereg_mem(uint64_t mem_id);
 
 // for engine Endpoint
-ibv_mr* get_ibv_mr_by_mem_id(uint64_t mem_id);
+uccl::Mhandle* get_mr_handle_by_mem_id(uint64_t mem_id);
 gpuIpcMemHandle_t get_ipc_mem_handle_by_mem_id(uint64_t mem_id);

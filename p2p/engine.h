@@ -1,6 +1,7 @@
 #pragma once
 
 #include "transport.h"
+#include "tensor.h"
 #include "util/gpu_rt.h"
 #include "util/jring.h"
 #include "util/net.h"
@@ -22,11 +23,6 @@ extern thread_local bool inside_python;
 
 int const kMaxNumGPUs = 8;
 extern uint8_t gpu_to_dev[kMaxNumGPUs];
-
-struct MR {
-  uint64_t mr_id_;
-  uccl::Mhandle* mhandle_;
-};
 
 struct Conn {
   uint64_t conn_id_;
@@ -110,12 +106,12 @@ class Endpoint {
    */
   bool accept(std::string& ip_addr, int& remote_gpu_idx, uint64_t& conn_id);
 
-  /*Register the data with a specific interface. */
-  bool reg(void const* data, size_t size, uint64_t& mr_id);
+  // /*Register the data with a specific interface. */
+  // bool reg(void const* data, size_t size, uint64_t& mr_id);
 
-  bool regv(std::vector<void const*> const& data_v,
-            std::vector<size_t> const& size_v, std::vector<uint64_t>& mr_id_v);
-  bool dereg(uint64_t mr_id);
+  // bool regv(std::vector<void const*> const& data_v,
+  //           std::vector<size_t> const& size_v, std::vector<uint64_t>& mr_id_v);
+  // bool dereg(uint64_t mr_id);
 
   /*Send data to the remote server. Blocking. */
   bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size);
@@ -276,14 +272,14 @@ class Endpoint {
   uccl::RDMAEndpoint* ep_;
 
   std::atomic<uint64_t> next_conn_id_ = 0;
-  std::atomic<uint64_t> next_mr_id_ = 0;
+  // std::atomic<uint64_t> next_mr_id_ = 0;
   std::atomic<uint64_t> next_transfer_id_ = 0;
 
   // Accessed by both app thread and proxy thread.
   mutable std::shared_mutex conn_mu_;
   std::unordered_map<uint64_t, Conn*> conn_id_to_conn_;
-  mutable std::shared_mutex mr_mu_;
-  std::unordered_map<uint64_t, MR*> mr_id_to_mr_;
+  // mutable std::shared_mutex mr_mu_;
+  // std::unordered_map<uint64_t, MR*> mr_id_to_mr_;
 
   // Single-threaded.
   std::unordered_map<int, uint64_t> rank2conn_;

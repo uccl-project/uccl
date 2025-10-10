@@ -125,11 +125,28 @@ Endpoint::~Endpoint() {
       delete conn;
     }
   }
+
+  std::vector<uccl::Mhandle*> mr_to_dereg;
   {
-    std::shared_lock<std::shared_mutex> lock(mr_mu_);
-    for (auto& [mr_id, mr] : mr_id_to_mr_) {
-      delete mr;
+    std::shared_lock<std::shared_mutex> lock(mr_mapping_mu_);
+    for (const auto& [id, mr_ptr] : mr_mapping_) {
+      if (mr_ptr && mr_ptr->mhandle_) {
+        mr_to_dereg.push_back(mr_ptr->mhandle_);
+      }
     }
+  }
+
+  for (auto* mhandle : mr_to_dereg) {
+    dereg_mr(mhandle);
+  }
+
+  {
+    std::unique_lock<std::shared_mutex> lock(mr_mapping_mu_);
+    mr_mapping_.clear();
+  }
+  {
+    std::unique_lock<std::shared_mutex> lock(ipc_handle_mapping_mu_);
+    ipc_handle_mapping_.clear();
   }
 
   if (!streams_.empty()) {
@@ -284,72 +301,6 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   return true;
 }
 
-bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
-  mr_id = next_mr_id_.fetch_add(1);
-
-  uccl::Mhandle* mhandle;
-  ep_->uccl_regmr(gpu_to_dev[local_gpu_idx_], const_cast<void*>(data), size, 0,
-                  &mhandle);
-  if (mhandle->mr == nullptr) {
-    std::cerr << "[Endpoint::reg] Failed to register memory region, "
-              << "mhandle->mr is null\n";
-    std::abort();
-  }
-  {
-    std::unique_lock<std::shared_mutex> lock(mr_mu_);
-    mr_id_to_mr_[mr_id] = new MR{mr_id, mhandle};
-  }
-
-  return true;
-}
-
-bool Endpoint::regv(std::vector<void const*> const& data_v,
-                    std::vector<size_t> const& size_v,
-                    std::vector<uint64_t>& mr_id_v) {
-  if (data_v.size() != size_v.size())
-    throw std::invalid_argument(
-        "[Endpoint::regv] data_v/size_v length mismatch");
-
-  size_t const n = data_v.size();
-  mr_id_v.resize(n);
-
-  {
-    std::unique_lock<std::shared_mutex> lock(mr_mu_);
-    mr_id_to_mr_.reserve(mr_id_to_mr_.size() + n);
-  }
-
-  for (size_t i = 0; i < n; ++i) {
-    uint64_t id = next_mr_id_.fetch_add(1);
-    uccl::Mhandle* mhandle = nullptr;
-
-    ep_->uccl_regmr(gpu_to_dev[local_gpu_idx_], const_cast<void*>(data_v[i]),
-                    size_v[i], 0, &mhandle);
-
-    if (mhandle == nullptr || mhandle->mr == nullptr) {
-      std::cerr << "[Endpoint::regv] registration failed at i=" << i << '\n';
-      return false;
-    }
-
-    {
-      std::unique_lock<std::shared_mutex> lock(mr_mu_);
-      mr_id_to_mr_[id] = new MR{id, mhandle};
-    }
-    mr_id_v[i] = id;
-  }
-  return true;
-}
-
-bool Endpoint::dereg(uint64_t mr_id) {
-  {
-    std::unique_lock<std::shared_mutex> lock(mr_mu_);
-    MR* mr = mr_id_to_mr_[mr_id];
-    ep_->uccl_deregmr(mr->mhandle_);
-    delete mr;
-    mr_id_to_mr_.erase(mr_id);
-  }
-  return true;
-}
-
 bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
                     size_t size) {
   DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
@@ -361,10 +312,7 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
   }
 
   uccl::Mhandle* mhandle;
-  {
-    std::shared_lock<std::shared_mutex> lock(mr_mu_);
-    mhandle = mr_id_to_mr_[mr_id]->mhandle_;
-  }
+  mhandle = get_mr_handle_by_mem_id(mr_id);
 
   uccl::ucclRequest ureq[kMaxInflightChunks] = {};
   bool done[kMaxInflightChunks] = {false};
@@ -418,10 +366,8 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
   }
 
   uccl::Mhandle* mhandle;
-  {
-    std::shared_lock<std::shared_mutex> lock(mr_mu_);
-    mhandle = mr_id_to_mr_[mr_id]->mhandle_;
-  }
+  mhandle = get_mr_handle_by_mem_id(mr_id);
+
   int size_int = static_cast<int>(size);
 
   uccl::ucclRequest ureq[kMaxInflightChunks] = {};
@@ -539,6 +485,7 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   size_send_vec.reserve(estimated_ureq_max);
   mhandle_send_vec.reserve(estimated_ureq_max);
 
+  uccl::Mhandle* mhandle;
   for (int i = 0; i < num_iovs; i++) {
     void* cur_data = (void*)data_v[i];
     size_t cur_size_expected = size_v[i];
@@ -549,15 +496,13 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
           std::min(cur_size_expected - cur_size_post_send, kChunkSize);
       data_send_vec.push_back(cur_data);
       size_send_vec.push_back(chunk_size);
-      {
-        std::shared_lock<std::shared_mutex> lock(mr_mu_);
-        auto it = mr_id_to_mr_.find(mr_id_v[i]);
-        if (it == mr_id_to_mr_.end()) {
-          std::cerr << "[sendv] Error: Invalid mr_id " << mr_id_v[i]
+      mhandle = get_mr_handle_by_mem_id(mr_id_v[i]);
+      if (mhandle == nullptr) {
+        std::cerr << "[sendv] Error: Invalid mr_id " << mr_id_v[i]
                     << std::endl;
           return false;
-        }
-        mhandle_send_vec.push_back(it->second->mhandle_);
+      } else {
+        mhandle_send_vec.push_back(mhandle);
       }
       cur_data += chunk_size;
       cur_size_post_send += chunk_size;
@@ -635,6 +580,7 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   mhandle_recv_vec.reserve(estimated_ureq_max);
   mhandle_recv_ptr_vec.reserve(estimated_ureq_max);
 
+  uccl::Mhandle* mhandle;
   for (int i = 0; i < num_iovs; i++) {
     void* cur_data = data_v[i];
     size_t cur_size_expected = size_v[i];
@@ -646,15 +592,13 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
       data_recv_vec.push_back(cur_data);
       data_recv_ptr_vec.push_back(&data_recv_vec.back());
       size_recv_vec.push_back(chunk_size);
-      {
-        std::shared_lock<std::shared_mutex> lock(mr_mu_);
-        auto it = mr_id_to_mr_.find(mr_id_v[i]);
-        if (it == mr_id_to_mr_.end()) {
-          std::cerr << "[recvv] Error: Invalid mr_id " << mr_id_v[i]
+      mhandle = get_mr_handle_by_mem_id(mr_id_v[i]);
+      if (mhandle == nullptr) {
+        std::cerr << "[sendv] Error: Invalid mr_id " << mr_id_v[i]
                     << std::endl;
           return false;
-        }
-        mhandle_recv_vec.push_back(it->second->mhandle_);
+      } else {
+        mhandle_recv_vec.push_back(mhandle);
       }
       mhandle_recv_ptr_vec.push_back(&mhandle_recv_vec.back());
       cur_data += chunk_size;
@@ -708,7 +652,7 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
 
   DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
   auto* conn = conn_id_to_conn_[conn_id];
-  auto* mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  auto* mhandle = get_mr_handle_by_mem_id(mr_id);
 
   uccl::ucclRequest ureq[kMaxInflightChunks] = {};
   uccl::FifoItem curr_slot_item[kMaxInflightChunks] = {};
@@ -865,7 +809,7 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     size_t cur_size_expected = size_v[i];
     size_t cur_size_post_read = 0;
     uccl::FifoItem base_slot_item = slot_item_v[i];
-    auto mhandle = mr_id_to_mr_[mr_id_v[i]]->mhandle_;
+    auto mhandle = get_mr_handle_by_mem_id(mr_id_v[i]);
 
     while (cur_size_post_read < cur_size_expected) {
       size_t chunk_size =
@@ -973,7 +917,7 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     size_t cur_size_expected = size_v[i];
     size_t cur_size_post_write = 0;
     uccl::FifoItem base_slot_item = slot_item_v[i];
-    auto mhandle = mr_id_to_mr_[mr_id_v[i]]->mhandle_;
+    auto mhandle = get_mr_handle_by_mem_id(mr_id_v[i]);
 
     while (cur_size_post_write < cur_size_expected) {
       size_t chunk_size =
@@ -1042,7 +986,7 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
 
   DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
   auto* conn = conn_id_to_conn_[conn_id];
-  auto* mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  auto* mhandle = get_mr_handle_by_mem_id(mr_id);
 
   uccl::ucclRequest ureq[kMaxInflightChunks] = {};
   uccl::FifoItem curr_slot_item[kMaxInflightChunks] = {};
@@ -1102,7 +1046,8 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
 bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
                          size_t len, char* out_buf) {
   auto* conn = conn_id_to_conn_[conn_id];
-  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  auto mhandle = get_mr_handle_by_mem_id(mr_id);
+  
   uccl::ucclRequest req_data;
   if (ep_->prepare_fifo_metadata(
           static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
@@ -1116,7 +1061,7 @@ bool Endpoint::advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                           std::vector<char*> out_buf_v, size_t num_iovs) {
   auto* conn = conn_id_to_conn_[conn_id];
   for (size_t i = 0; i < num_iovs; ++i) {
-    auto mhandle = mr_id_to_mr_[mr_id_v[i]]->mhandle_;
+    auto mhandle = get_mr_handle_by_mem_id(mr_id_v[i]);
     if (ep_->prepare_fifo_metadata(
             static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
             addr_v[i], len_v[i], out_buf_v[i]) == -1) {
