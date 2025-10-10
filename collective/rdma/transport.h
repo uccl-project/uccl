@@ -1034,7 +1034,7 @@ class RDMAEndpoint {
   }
 
   inline int get_p2p_listen_fd(int dev) {
-    CHECK(p2p_listen_fds_[dev] != 0)
+    CHECK(p2p_listen_fds_[dev] >= 0)
         << "Error: p2p_listen_fds_[" << dev << "] is not set.";
     return p2p_listen_fds_[dev];
   }
