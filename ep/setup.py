@@ -13,6 +13,7 @@ PROJECT_ROOT = Path(os.path.dirname(__file__)).resolve()
 # -------- Supported GPU ARCHS --------
 SUPPORTED_GPU_ARCHS = ["gfx942", "gfx950"]
 
+
 def get_offload_archs():
     def _get_device_arch():
         import torch
@@ -34,27 +35,21 @@ def get_offload_archs():
             if arch not in arch_list:
                 arch_list.append(arch)
 
-    # TODO:Support compile multi-arch.
-    assert len(arch_list) == 1, "Primus Turbo only supports single arch for now."
-
     macro_arch_list = []
     offload_arch_list = []
     for arch in arch_list:
         if arch in SUPPORTED_GPU_ARCHS:
             offload_arch_list.append(f"--offload-arch={arch}")
-            macro_arch_list.append(f"-DPRIMUS_TURBO_{arch.upper()}")
         else:
             print(f"[WARNING] Ignoring unsupported GPU_ARCHS entry: {arch}")
-    assert len(offload_arch_list) == 1, "Primus Turbo: expected exactly one --offload-arch."
     return offload_arch_list, macro_arch_list
+
 
 def get_common_flags():
     arch = platform.machine().lower()
     extra_link_args = [
         "-Wl,-rpath,/opt/rocm/lib",
         f"-L/usr/lib/{arch}-linux-gnu",
-        "-fgpu-rdc",
-        "--hip-link",
     ]
 
     cxx_flags = [
@@ -85,7 +80,6 @@ def get_common_flags():
         "-mllvm",
         "-amdgpu-function-calls=false",
         "-std=c++20",
-        "-fgpu-rdc",
         "-DDISABLE_SM90_FEATURES",
     ]
 
@@ -98,10 +92,6 @@ def get_common_flags():
     # Max Jobs
     max_jobs = int(os.getenv("MAX_JOBS", "64"))
     nvcc_flags.append(f"-parallel-jobs={max_jobs}")
-
-    if "--offload-arch=gfx950" in nvcc_flags:
-        cxx_flags.append("-DCK_TILE_USE_OCP_FP8")
-        nvcc_flags.append("-DCK_TILE_USE_OCP_FP8")
 
     return {
         "extra_link_args": extra_link_args,
@@ -130,18 +120,30 @@ def build_torch_extension():
 
     # CPP
     ep_src_dir = Path(PROJECT_ROOT / "src")
-    sources = [ep_src_dir / "ep_runtime.cu",
-               ep_src_dir / "common.cpp",
-               ep_src_dir / "layout.cu",
-               ep_src_dir / "intranode.cu",
-               ep_src_dir / "uccl_ep.cc",]
+    # sources = [ep_src_dir / "ep_runtime.cu",
+    #            ep_src_dir / "common.cpp",
+    #            ep_src_dir / "layout.cu",
+    #            ep_src_dir / "intranode.cu",
+    #            ep_src_dir / "uccl_ep.cc",
+    #            ep_src_dir / "proxy.cpp",
+    #            ep_src_dir / "uccl_bench.cpp",
+    #            ep_src_dir / "peer_copy_manager.cpp",
+    #            ep_src_dir / "peer_copy_worker.cpp",
+    #            ep_src_dir / "uccl_proxy.cpp",
+    #            ep_src_dir / "py_cuda_shims.cu",
+    #            ep_src_dir / "internode_ll.cu"]
 
+    sources = all_files_in_dir(ep_src_dir, ["cpp", "cu", "cc"])
     return CUDAExtension(
-        name="uccl.ep",
+        name="ep_cpp",
         sources=sources,
+        libraries=["ibverbs", "glog"],
+        library_dirs=["/usr/lib/x86_64-linux-gnu/"],
         include_dirs=[
             Path(PROJECT_ROOT / "include"),
-            Path(PROJECT_ROOT / ".." / "include"),
+            Path(PROJECT_ROOT / ".." / "include",
+                 "/usr/include",
+                 PROJECT_ROOT / ".." / "include"),
         ],
         **extra_flags,
     )
@@ -151,9 +153,9 @@ if __name__ == "__main__":
 
     torch_ext = build_torch_extension()
     setup(
-        name="uccl",
+        name="ep_cpp",
         version="0.0.0",
         package_data={"ep": ["lib/*.so"]},
-        ext_modules=[ build_torch_extension()],
+        ext_modules=[build_torch_extension()],
         cmdclass={"build_ext": BuildExtension.with_options(use_ninja=True)},
     )
