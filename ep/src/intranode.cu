@@ -280,7 +280,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
                      half_hidden_bytes + sizeof(uint64_t) <=
                          kNumTMABytesPerWarp);
   }
-  __syncwarp();
+  syncwarp();
 #endif
 
   if (is_sender) {
@@ -305,7 +305,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
                                     responsible_channel];
       st_relaxed_sys_global(channel_end_offset.buffer(), -value - 1);
     }
-    __syncwarp();
+    syncwarp();
 
     // Get tasks
     int token_start_idx, token_end_idx;
@@ -336,7 +336,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
           trap();
         }
       }
-      __syncwarp();
+      syncwarp();
 
       int chunk_token_idx = 0;
       while (chunk_token_idx < num_max_send_tokens and
@@ -479,8 +479,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
       }
 
       // Synchronize queue tail
-      asm volatile("bar.sync %0, %1;" ::"r"(responsible_rank),
-                   "r"(num_threads_per_rank));
+      sync_barrier(responsible_rank, num_threads_per_rank);           
       cached_channel_tail_idx = shared_channel_tail_idx[responsible_rank];
 
       // Copy data
@@ -507,7 +506,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
             tma_store_1d(tma_buffer, shifted_recv_x_int4 + i * half_hidden_int4,
                          half_hidden_bytes, false);
           }
-        __syncwarp();
+        syncwarp();
 #else
         UNROLLED_WARP_COPY(5, lane_id, hidden_int4, shifted_recv_x_int4,
                            shifted_buffer_x_int4, ld_nc_global, st_na_global);
@@ -818,7 +817,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
           trap();
         }
       }
-      __syncwarp();
+      syncwarp();
 
 // Send by chunk
 #pragma unroll
@@ -849,8 +848,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
       current_channel_tail_idx += num_round_tokens;
 
       // Move tail index
-      asm volatile("bar.sync %0, %1;" ::"r"(send_rank_id),
-                   "r"(num_threads_per_rank));
+      sync_barrier(send_rank_id, num_threads_per_rank);
       if (lane_id == 0 and send_warp_id_in_rank == 0)
         st_release_sys_global(channel_tail_idx.buffer(),
                               current_channel_tail_idx);
@@ -870,7 +868,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
     if (thread_id < num_recv_warps) warp_retired[thread_id] = false;
     if (lane_id < kNumRanks) warp_channel_head_idx[recv_warp_id][lane_id] = 0;
     if (thread_id < kNumRanks) channel_tail_idx[thread_id] = 0;
-    asm volatile("bar.sync 0, %0;" ::"r"(kNumThreads));
+    __syncthreads();
 
     if (thread_id < 32) {
       int* channel_head_idx_ptr = static_cast<int*>(buffer_ptrs[rank]) +
@@ -965,7 +963,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
             trap();
           }
         }
-        __syncwarp();
+        syncwarp();
 
         // Broadcast current heads
         int num_topk_ranks = 0, topk_ranks[kNumRanks], slot_indices[kNumRanks];
@@ -982,7 +980,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
         // Wait shared memory release
 #ifndef DISABLE_SM90_FEATURES
         if (lane_id == 0) tma_store_wait();
-        __syncwarp();
+        syncwarp();
 #endif
 
         // Reduce data with pipeline
@@ -1041,7 +1039,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
 #ifndef DISABLE_SM90_FEATURES
           // Wait TMA arrival
           if (lane_id == 0) tma_store_wait<kNumStages - 1>();
-          __syncwarp();
+          syncwarp();
 
           // Write into TMA buffer
           auto tma_stage_idx = (i / 32) % kNumStages;
@@ -1050,7 +1048,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
 
           // Issue TMA
           tma_store_fence();
-          __syncwarp();
+          syncwarp();
           if (lane_id == 0) {
             auto tma_bytes =
                 min(32, hidden_int4 - i) * static_cast<int>(sizeof(int4));
@@ -1058,7 +1056,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
                 reinterpret_cast<int4*>(tma_buffer) + tma_stage_idx * 32,
                 recv_int4 + token_idx * hidden_int4 + i, tma_bytes, false);
           }
-          __syncwarp();
+          syncwarp();
 #else
           recv_int4[token_idx * hidden_int4 + i] = out_int4;
 #endif
@@ -1082,7 +1080,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
       }
 
       // Retired
-      __syncwarp();
+      syncwarp();
       if (lane_id == 0) warp_retired[recv_warp_id] = true;
 
         // Make TMA store visible to the next kernel

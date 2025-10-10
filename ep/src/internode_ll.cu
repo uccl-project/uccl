@@ -151,7 +151,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           // Cast into send buffer
           vec_t int2_value;
           auto fp8x2_values =
-              reinterpret_cast<__nv_fp8x2_storage_t*>(&int2_value);
+              reinterpret_cast<__hip_fp8x2_storage_t*>(&int2_value);
 #pragma unroll
           for (int j = 0; j < kNumElemsPerRead; j += 2) {
             float2 fp32x2 = {fp32_values[j] * scale,
@@ -205,7 +205,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                              src_int4_ptr, ld_nc_global, st_na_global);
         }
         // Increase counter after finishing
-        __syncwarp();
+        syncwarp();
         lane_id == 0 ? atomic_add_release_global(
                            atomic_finish_counter_per_expert + dst_expert_idx, 1)
                      : 0;
@@ -222,7 +222,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         next_clean_second[i] = 0;
       }
       // Notify before executing `int_p`
-      __syncwarp();
+      syncwarp();
 #pragma unroll
       for (int i = lane_id; i < num_experts; i += 32)
         atomic_add_release_global(atomic_finish_counter_per_expert + i,
@@ -299,7 +299,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     // Clean `packed_recv_count`
     if (dst_rank == 0) packed_recv_count[dst_expert_local_idx] = 0;
   }
-  __syncwarp();
+  syncwarp();
 
 // Receiving phase
 LOW_LATENCY_DISPATCH_RECV:
@@ -419,7 +419,7 @@ LOW_LATENCY_DISPATCH_RECV:
           reinterpret_cast<int*>(rdma_recv_x_uint8 + i * num_bytes_per_msg);
       if (lane_id == 0)
         recv_src_info[recv_token_begin_idx + i] = ld_nc_global(src_src_idx);
-      __syncwarp();
+      syncwarp();
 
       // Copy data
       // NOTES: only 2 load iterations for 7K hidden with 7 unrolls
@@ -584,7 +584,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
     }
 
     // Notify before executing `int_p`
-    __syncwarp();
+    syncwarp();
     if (lane_id == 0) atomic_add_release_global(atomic_clean_flag, num_experts);
   }
 
@@ -636,7 +636,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
       fence_view_async_shared();
       fence_barrier_init();
     }
-    __syncwarp();
+    syncwarp();
 
     constexpr int kNumIters = hidden_bf16_int4_pad / (32 * kNumUnrolls);
     auto tma_load_and_arrive = [&](int const& stage_idx, int4 const* gmem_ptr,
@@ -693,13 +693,13 @@ __global__ __launch_bounds__(1024, 1) void combine(
         // Prefetch
         if (elect_one_sync(lane_id))
           tma_load_and_arrive(0, cpy_src_int4_ptr, get_num_tma_bytes(0));
-        __syncwarp();
+        syncwarp();
 
 #pragma unroll
         for (int i = lane_id * kNumUnrolls, iter_idx = 0;
              i < hidden_bf16_int4_pad; i += 32 * kNumUnrolls, ++iter_idx) {
           // Read
-          int4 int4_values[kNumUnrolls] = {0};
+          int4 int4_values[kNumUnrolls] = {make_int4(0, 0, 0, 0)};
           auto uint32_values = reinterpret_cast<uint32_t*>(int4_values);
 
           // Load the next iteration
@@ -712,7 +712,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
             tma_load_and_arrive(next_stage_idx, cpy_src_int4_ptr + offset_int4,
                                 get_num_tma_bytes(offset_int4));
           }
-          __syncwarp();
+          syncwarp();
 
           // Wait the current TMA arrival
           mbarrier_wait(tma_mbarrier[stage_idx], tma_phase[stage_idx]);
@@ -769,7 +769,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
             // quarter-warps)
             if (amax <= kThreshold and log_amin < log_amax) {
               // Transform
-              auto transform = [=](float const& log_abs_value) -> nv_bfloat16 {
+              auto transform = [=](float const& log_abs_value) -> __hip_bfloat16 {
                 auto const encoded =
                     floorf((log_abs_value - log_amin) * step_inv + rounding);
                 auto const decoded =
@@ -788,18 +788,18 @@ __global__ __launch_bounds__(1024, 1) void combine(
             }
             tma_store_fence();
           }
-          __syncwarp();
+          syncwarp();
 
           // Store
           if (elect_one_sync(lane_id))
             tma_store_1d(tma_buffer[stage_idx], cpy_dst_int4_ptr + i,
                          get_num_tma_bytes(i));
-          __syncwarp();
+          syncwarp();
         }
       }
       // Flush all stores
       tma_store_wait();
-      __syncwarp();
+      syncwarp();
 
       // Issue RDMA only if we couldn't use IPC
       // NOTES: for zero-copy mode, we assume the data is already in the send
@@ -854,7 +854,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
       }
       atomic_add_release_global(atomic_clean_flag, -1);
     }
-    __syncwarp();
+    syncwarp();
   }
 
 // Receiving phase

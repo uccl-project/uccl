@@ -1,5 +1,5 @@
-#include "bench_kernel.cuh"
 #include "bench_utils.hpp"
+#include "gpu_kernel.cuh"
 #include "peer_copy_worker.hpp"
 #include "proxy.hpp"
 #include "rdma.hpp"
@@ -56,8 +56,8 @@ int main(int argc, char** argv) {
     ::sleep(2);
     auto t0 = std::chrono::high_resolution_clock::now();
     const size_t shmem_bytes = kQueueSize * 2 * sizeof(unsigned long long);
-    gpu_issue_batched_commands<<<env.blocks, kNumThPerBlock, shmem_bytes,
-                                 env.stream>>>(env.rbs);
+   hipLaunchKernelGGL(( gpu_issue_batched_commands), dim3(env.blocks), dim3(kNumThPerBlock), shmem_bytes,
+                                 env.stream, env.rbs);
     GPU_RT_CHECK_ERRORS("gpu_issue_batched_commands kernel failed");
     GPU_RT_CHECK(gpuStreamSynchronize(env.stream));
     auto t1 = std::chrono::high_resolution_clock::now();

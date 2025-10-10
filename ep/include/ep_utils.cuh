@@ -777,3 +777,12 @@ __forceinline__ __device__ void release_lock(int* mutex) {
   // `release` for memory semantics
   atomic_exch_cta_release(mutex, 0);
 }
+
+
+__forceinline__ __device__ void syncwarp() {
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  __builtin_amdgcn_wave_barrier();
+#else
+  __syncwarp();
+#endif
+}

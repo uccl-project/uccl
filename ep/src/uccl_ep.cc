@@ -117,7 +117,8 @@ class Buffer {
             void* host_ptr = reinterpret_cast<void*>(host_addrs[i]);
             void* dev_ptr = nullptr;
 #ifndef USE_GRACE_HOPPER
-            CUDA_CHECK(cudaHostGetDevicePointer(&dev_ptr, host_ptr, 0));
+          CUDA_CHECK(cudaHostGetDevicePointer(
+              reinterpret_cast<void**>(&dev_ptr), host_ptr, 0));
 #else
             dev_ptr = host_ptr;
 #endif
@@ -194,8 +195,9 @@ class Buffer {
     CUDA_CHECK(cudaMemsetAsync(workspace, 0, NUM_WORKSPACE_BYTES, comm_stream));
     CUDA_CHECK(cudaMallocHost(&moe_recv_counter, sizeof(int64_t),
                               cudaHostAllocMapped));
-    CUDA_CHECK(cudaHostGetDevicePointer(&moe_recv_counter_mapped,
-                                        const_cast<int*>(moe_recv_counter), 0));
+    CUDA_CHECK(cudaHostGetDevicePointer(
+        reinterpret_cast<void**>(&moe_recv_counter_mapped),
+        const_cast<int*>(moe_recv_counter), 0));
     *moe_recv_counter = -1;
 
     CUDA_CHECK(cudaMallocHost(&moe_recv_expert_counter,
@@ -366,6 +368,7 @@ class Buffer {
       int expert_alignment, uccl::Config const& config,
       std::optional<EventHandle>& previous_event, bool async,
       bool allocate_on_comm_stream) {
+#if 0
     // In dispatch, CPU will busy-wait until GPU receive tensor size metadata
     // from other ranks, which can be quite long. If users of DeepEP need to
     // execute other Python code on other threads, such as KV transfer, their
@@ -705,6 +708,9 @@ class Buffer {
             send_rdma_head,
             send_nvl_head,
             event};
+  #else
+      return {};
+  #endif
   }
 
   std::tuple<torch::Tensor, std::optional<torch::Tensor>,
@@ -723,6 +729,8 @@ class Buffer {
                     uccl::Config const& config,
                     std::optional<EventHandle>& previous_event, bool async,
                     bool allocate_on_comm_stream) {
+
+#if 0
     int const num_channels = config.num_sms / 2;
     EP_HOST_ASSERT(config.num_sms % 2 == 0);
 
@@ -879,6 +887,9 @@ class Buffer {
 
     // Return values
     return {combined_x, combined_topk_weights, event};
+  #else
+    return {};
+  #endif
   }
 
   std::tuple<torch::Tensor, std::optional<torch::Tensor>,

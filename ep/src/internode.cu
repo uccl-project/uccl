@@ -1,3 +1,5 @@
+#if 0
+
 #include "buffer.cuh"
 #include "ep_configs.cuh"
 #include "ep_launch.cuh"
@@ -2538,3 +2540,4 @@ void combine(cudaDataType_t type, void* combined_x,
 }  // namespace internode
 
 }  // namespace uccl
+#endif

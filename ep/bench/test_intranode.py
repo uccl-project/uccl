@@ -11,7 +11,7 @@ import torch.distributed as dist
 import os
 
 # noinspection PyUnresolvedReferences
-from uccl.ep import Config
+from ep_cpp import Config
 from utils import (
     init_dist,
     bench,
@@ -26,7 +26,6 @@ from utils import (
 # Test compatibility with low latency functions
 import test_low_latency
 from buffer import Buffer
-
 
 # noinspection PyShadowingNames
 def test_main(
