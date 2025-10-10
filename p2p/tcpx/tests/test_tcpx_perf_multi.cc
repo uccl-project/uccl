@@ -605,7 +605,7 @@ int main(int argc, char** argv) {
           // Proceed to next FIFO head (if any)
           continue;
         }
-        
+
         auto* rx_req =
             reinterpret_cast<tcpx::plugin::tcpxRequest*>(entry.request);
         auto* dev_handle_struct =
