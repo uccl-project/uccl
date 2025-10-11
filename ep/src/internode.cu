@@ -806,24 +806,9 @@ __global__ void __launch_bounds__(
             reinterpret_cast<float*>(dst_send_buffers[i]) + num_scales;
 
       // Copy source metadata into symmetric send buffer
-      if (lane_id < num_topk_ranks) {
-        auto* dst_meta =
-            reinterpret_cast<SourceMeta*>(dst_send_buffers[lane_id]);
-        // if (dst_meta->is_token_in_nvl_rank_bits != 0) {
-        //   printf("dst_meta->is_token_in_nvl_rank_bits != 0\n");
-        //   trap();
-        // }
-
-        st_na_global(dst_meta, src_meta);
-        st_release_sys_global(
-            &reinterpret_cast<SourceMeta*>(dst_send_buffers[lane_id])
-                 ->is_token_in_nvl_rank_bits,
-            src_meta.is_token_in_nvl_rank_bits);
-        if (src_meta.is_token_in_nvl_rank_bits == 0) {
-          printf("src_meta.is_token_in_nvl_rank_bits == 0\n");
-          trap();
-        }
-      }
+      if (lane_id < num_topk_ranks)
+        st_na_global(reinterpret_cast<SourceMeta*>(dst_send_buffers[lane_id]),
+                     src_meta);
 #pragma unroll
       for (int i = 0; i < num_topk_ranks; ++i)
         dst_send_buffers[i] =
@@ -1143,15 +1128,9 @@ __global__ void __launch_bounds__(
             rdma_channel_data.recv_buffer(src_rdma_rank) +
             slot * num_bytes_per_token + hidden_bytes + scale_bytes);
 
-        // int seen_bits =
-        //     ld_acquire_sys_global(&meta_ptr->is_token_in_nvl_rank_bits);
-        int seen_bits = ld_sys_cv_u32(reinterpret_cast<uint32_t volatile*>(
-            &meta_ptr->is_token_in_nvl_rank_bits));
-        if (seen_bits == 0) {
-          // printf("seen_bits == 0 early break, t: %d, src_rdma_head: %d,
-          // src_rdma_tail: %d\n", t, src_rdma_head, src_rdma_tail);
-          break;  // not yet written
-        }
+        int seen_bits =
+            ld_acquire_sys_global(&meta_ptr->is_token_in_nvl_rank_bits);
+        if (seen_bits == 0) break;  // not yet written
         src_rdma_tail_ready = t + 1;
       }
       src_rdma_tail = src_rdma_tail_ready;
