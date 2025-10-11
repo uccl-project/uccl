@@ -22,7 +22,7 @@ import torch
 import torch.distributed as dist
 from torch.multiprocessing import spawn
 
-import nvshmem.core as nvshmem 
+import nvshmem.core as nvshmem
 
 P = ParamSpec("P")
 
