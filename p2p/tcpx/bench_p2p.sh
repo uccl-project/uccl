@@ -67,8 +67,8 @@ ITERS=20
 CHUNK=$((512*1024))
 NSOCKS=4
 NTHREADS=1
-UNIX_PREFIX=""  # empty by default (explicit opt-in)
-USE_UNIX=0
+UNIX_PREFIX="/run/tcpx"  # align with NCCL test env
+USE_UNIX=1
 IMPL="kernel"
 HOST_RECV=0
 SKIP_WARMUP=1
@@ -98,6 +98,12 @@ LOG_BASE="logs/bench_${ROLE}_${TS}"
 LOG_FILE="${LOG_BASE}.log"
 
 # Env for TCPX (adapted from run_nccl_test_tcpx.sh)
+# Match NCCL test environment: PATH and LD_LIBRARY_PATH and plugin path
+export PATH="/usr/local/cuda/bin:/usr/local/nvidia/bin:$PATH"
+export LD_LIBRARY_PATH="/usr/local/cuda/lib64:/usr/local/nvidia/lib64:/var/lib/tcpx/lib64:${LD_LIBRARY_PATH:-}"
+# Force the bench to load the same TCPX plugin as NCCL
+# export UCCL_TCPX_PLUGIN_PATH="/usr/local/tcpx/lib64/libnccl-net-tcpx.so"  # disabled: fall back to default in wrapper
+
 export NCCL_GPUDIRECTTCPX_SOCKET_IFNAME="${IFACES}"
 export NCCL_GPUDIRECTTCPX_CTRL_DEV="${CTRL_DEV}"
 export NCCL_NSOCKS_PERTHREAD="${NSOCKS}"
@@ -127,9 +133,15 @@ export NCCL_CROSS_NIC=0
 export NCCL_NET_GDR_LEVEL=PIX
 export NCCL_P2P_PXN_LEVEL=0
 
+# Align NCCL algorithm/proto/channel settings with NCCL test script
+export NCCL_ALGO=Ring
+export NCCL_PROTO=Simple
+export NCCL_MAX_NCHANNELS=8
+export NCCL_MIN_NCHANNELS=8
+
 # NCCL debug output (to verify TCPX configuration)
 export NCCL_DEBUG=INFO
-export NCCL_DEBUG_SUBSYS=NET
+export NCCL_DEBUG_SUBSYS=ENV
 
 if [[ ${USE_UNIX} -eq 1 ]]; then
   export NCCL_GPUDIRECTTCPX_UNIX_CLIENT_PREFIX="${UNIX_PREFIX}"
