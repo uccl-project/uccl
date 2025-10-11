@@ -12,6 +12,7 @@
 // #ifndef EP_DBG_LOG_RECV
 // #define EP_DBG_LOG_RECV 1
 // #endif
+// #define EP_DBG_LOG_FWD 1
 
 namespace uccl {
 
@@ -449,29 +450,35 @@ template <bool kLowLatencyMode, int kNumRDMARanks, bool kCachedMode,
           int kNumTopkRDMARanks = get_num_topk_rdma_ranks(kNumRDMARanks)>
 __global__ void __launch_bounds__(
     ((kNumDispatchRDMASenderWarps + 1 + NUM_MAX_NVL_PEERS) * 32), 1)
-    dispatch(int4* recv_x, float* recv_x_scales, int64_t* recv_topk_idx,
-             float* recv_topk_weights, SourceMeta* recv_src_meta, int4 const* x,
-             float const* x_scales, int64_t const* topk_idx,
-             float const* topk_weights, int* send_rdma_head, int* send_nvl_head,
-             int* recv_rdma_channel_prefix_matrix,
-             int* recv_gbl_channel_prefix_matrix,
-             int const* rdma_channel_prefix_matrix,
-             int const* recv_rdma_rank_prefix_sum,
-             int const* gbl_channel_prefix_matrix,
-             int const* recv_gbl_rank_prefix_sum, bool const* is_token_in_rank,
-             int num_tokens, int hidden_int4, int num_scales, int num_topk,
-             int num_experts, int scale_token_stride, int scale_hidden_stride,
-             void* rdma_buffer_ptr, int num_max_rdma_chunked_send_tokens,
-             int num_max_rdma_chunked_recv_tokens, void** buffer_ptrs,
-             int num_max_nvl_chunked_send_tokens,
-             int num_max_nvl_chunked_recv_tokens, int rank, int num_ranks,
-             uint64_t const* ring_addrs, int num_ring_addrs,
-             void* atomic_buffer_ptr
+    dispatch(
+        int4* recv_x, float* recv_x_scales, int64_t* recv_topk_idx,
+        float* recv_topk_weights, SourceMeta* recv_src_meta, int4 const* x,
+        float const* x_scales, int64_t const* topk_idx,
+        float const* topk_weights, int* send_rdma_head, int* send_nvl_head,
+        int* recv_rdma_channel_prefix_matrix,
+        int* recv_gbl_channel_prefix_matrix,
+        int const* rdma_channel_prefix_matrix,
+        int const* recv_rdma_rank_prefix_sum,
+        int const* gbl_channel_prefix_matrix,
+        int const* recv_gbl_rank_prefix_sum, bool const* is_token_in_rank,
+        int num_tokens, int hidden_int4, int num_scales, int num_topk,
+        int num_experts, int scale_token_stride, int scale_hidden_stride,
+        void* rdma_buffer_ptr, int num_max_rdma_chunked_send_tokens,
+        int num_max_rdma_chunked_recv_tokens, void** buffer_ptrs,
+        int num_max_nvl_chunked_send_tokens,
+        int num_max_nvl_chunked_recv_tokens, int rank, int num_ranks,
+        uint64_t const* ring_addrs, int num_ring_addrs, void* atomic_buffer_ptr
+#if EP_DBG_LOG_FWD
+        ,
+        int*
+            dbg_tokens_left_g,  // [num_channels][NUM_MAX_NVL_PEERS][kNumRDMARanks]
+        unsigned* dbg_last_clk_g  // same shape
+#endif
 #if EP_DBG_LOG_RECV
-             ,
-             int64_t* __restrict__ dbg_recv_idx,  // [32][EP_DBG_MAX_LOG]
-             int* __restrict__ dbg_recv_cnt,      // [32]
-             int dbg_max_log                      // EP_DBG_MAX_LOG
+        ,
+        int64_t* __restrict__ dbg_recv_idx,  // [32][EP_DBG_MAX_LOG]
+        int* __restrict__ dbg_recv_cnt,      // [32]
+        int dbg_max_log                      // EP_DBG_MAX_LOG
 #endif
     ) {
 // ---------- Debug logging controls ----------
@@ -490,6 +497,7 @@ __global__ void __launch_bounds__(
 #ifndef EP_DBG_FILTER_SRC_RDMA
 #define EP_DBG_FILTER_SRC_RDMA -1
 #endif
+
   // -------------------------------------------
 
   enum class WarpRole {
@@ -628,6 +636,12 @@ __global__ void __launch_bounds__(
   auto sync_forwarder_smem = []() {
     asm volatile("barrier.sync 1, %0;" ::"r"((NUM_MAX_NVL_PEERS + 1) * 32));
   };
+
+#if EP_DBG_LOG_FWD
+  auto dbg_idx = [&](int ch, int dst, int src) {
+    return ((ch * NUM_MAX_NVL_PEERS + dst) * kNumRDMARanks + src);
+  };
+#endif
 
   if (warp_role == WarpRole::kRDMASender) {
     // Get tasks
@@ -1009,6 +1023,14 @@ __global__ void __launch_bounds__(
           auto src_rdma_channel_prefix_1 = -meta_3 - 1;
           num_tokens_to_recv_from_rdma =
               src_rdma_channel_prefix_1 - src_rdma_channel_prefix;
+#if EP_DBG_LOG_FWD
+          // Global publish (visible to NVL receivers in other CTAs)
+          int g = dbg_idx(channel_id, dst_nvl_rank, lane_id);
+          st_release_sys_global(dbg_tokens_left_g + g,
+                                num_tokens_to_recv_from_rdma);
+          st_release_sys_global(reinterpret_cast<int*>(dbg_last_clk_g) + g,
+                                (int)clock64());
+#endif
           if (not kCachedMode)
             recv_rdma_channel_prefix_matrix[lane_id * num_channels +
                                             channel_id] =
@@ -1145,7 +1167,17 @@ __global__ void __launch_bounds__(
             &reinterpret_cast<SourceMeta*>(shifted + hidden_bytes + scale_bytes)
                  ->is_token_in_nvl_rank_bits);
         if (seen_bits == 0) trap();
-        lane_id == src_rdma_rank ? (num_tokens_to_recv_from_rdma -= 1) : 0;
+        // lane_id == src_rdma_rank ? (num_tokens_to_recv_from_rdma -= 1) : 0;
+        if (lane_id == src_rdma_rank) {
+          num_tokens_to_recv_from_rdma -= 1;
+#if EP_DBG_LOG_FWD
+          int g = dbg_idx(channel_id, dst_nvl_rank, src_rdma_rank);
+          st_release_sys_global(dbg_tokens_left_g + g,
+                                num_tokens_to_recv_from_rdma);
+          st_release_sys_global(reinterpret_cast<int*>(dbg_last_clk_g) + g,
+                                (int)clock64());
+#endif
+        }
         // bool is_in_dst_nvl_rank =
         // src_meta.is_token_in_nvl_rank(dst_nvl_rank);
         bool is_in_dst_nvl_rank = (seen_bits >> dst_nvl_rank) & 1;
@@ -1213,6 +1245,16 @@ __global__ void __launch_bounds__(
     if (lane_id < NUM_MAX_NVL_PEERS) forward_channel_retired[lane_id] = false;
     sync_forwarder_smem();
 
+#if EP_DBG_LOG_FWD
+    // Zero/mark global mirrors for this channel only
+    for (int i = lane_id; i < NUM_MAX_NVL_PEERS * kNumRDMARanks; i += 32) {
+      int dst = i % NUM_MAX_NVL_PEERS;
+      int src = i / NUM_MAX_NVL_PEERS;
+      int idx = dbg_idx(channel_id, dst, src);
+      st_release_sys_global(dbg_tokens_left_g + idx, -1);
+      st_release_sys_global(reinterpret_cast<int*>(dbg_last_clk_g) + idx, 0);
+    }
+#endif
     int last_head = 0, target_rdma = lane_id < kNumRDMARanks ? lane_id : 0;
     while (true) {
       // Find minimum head
@@ -1311,6 +1353,19 @@ __global__ void __launch_bounds__(
               cached_channel_head_idx, cached_channel_tail_idx,
               num_tokens_to_recv_original, last_recv_token_idx,
               (long long)(last_recv_token_idx + 1));
+#if EP_DBG_LOG_FWD
+          // Snapshot forwarder-published views for this dst NVL across all src
+          // RDMA lanes
+          for (int src = 0; src < kNumRDMARanks; ++src) {
+            int g = dbg_idx(channel_id, src_nvl_rank, src);
+            int left = ld_acquire_sys_global(dbg_tokens_left_g + g);
+            unsigned clk = (unsigned)ld_acquire_sys_global(
+                reinterpret_cast<int*>(dbg_last_clk_g) + g);
+            printf("DBG fwd(dst=%d,src=%d): left=%d last_clk=%u\n",
+                   src_nvl_rank, src, left, clk);
+          }
+#endif
+
 #if EP_DBG_LOG_RECV
           if (lane_id == 0 &&
               (EP_DBG_FILTER_CHANNEL < 0 ||
@@ -1486,6 +1541,17 @@ void dispatch(void* recv_x, float* recv_x_scales, int64_t* recv_topk_idx,
 #define IF_EP_DBG_LOG_RECV_ARGS(...) , __VA_ARGS__
 #else
 #define IF_EP_DBG_LOG_RECV_ARGS(...)
+#endif
+
+#if EP_DBG_LOG_FWD
+  size_t dbg_elems = (size_t)num_channels * NUM_MAX_NVL_PEERS *
+                     (num_ranks / NUM_MAX_NVL_PEERS);
+  int* d_dbg_tokens_left = nullptr;
+  unsigned* d_dbg_last_clk = nullptr;
+  cudaMalloc(&d_dbg_tokens_left, dbg_elems * sizeof(int));
+  cudaMalloc(&d_dbg_last_clk, dbg_elems * sizeof(unsigned));
+  cudaMemset(d_dbg_tokens_left, 0xFF, dbg_elems * sizeof(int));  // -1 pattern
+  cudaMemset(d_dbg_last_clk, 0x00, dbg_elems * sizeof(unsigned));
 #endif
 
 #define DISPATCH_LAUNCH_CASE(num_rdma_ranks)                                   \
