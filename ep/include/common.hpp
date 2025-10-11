@@ -14,9 +14,7 @@
 
 #define MEASURE_PER_OP_LATENCY
 #define MEASURE_PER_VERB_LATENCY
-// #define USE_SENDER_BARRIER
 
-// #define USE_NORMAL_MODE
 #ifndef USE_NORMAL_MODE
 #ifndef USE_SENDER_BARRIER
 #ifdef EFA
@@ -30,7 +28,7 @@
 #define kAtomicBufferSize 81960
 #define kQueueSize 1024
 #define kQueueMask (kQueueSize - 1)
-#define kMaxInflight 128
+#define kMaxInflight 32
 #define kBatchSize 32
 #define kIterations 40000
 #define kNumThBlocks 4
@@ -56,8 +54,9 @@
 #define MAX_RETRIES 100
 #define RETRY_DELAY_MS 50
 #define QKEY 0x11111111u
-#define kLargeAtomicValue 33554352
-#define kMaxSendAtomicValue 16383
+// #define kLargeAtomicValue 33554352
+#define kLargeAtomicValue 33550000
+#define kMaxSendAtomicValue 32767
 // P2P enable flags (once per GPU pair)
 extern std::once_flag peer_ok_flag[MAX_NUM_GPUS][MAX_NUM_GPUS];
 bool pin_thread_to_cpu(int cpu);
