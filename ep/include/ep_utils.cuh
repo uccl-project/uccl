@@ -361,8 +361,8 @@ __device__ __forceinline__ uint32_t ld_sys_cv_u32(const volatile uint32_t* p) {
   uint32_t v;
   // Coherent, volatile load from global memory
   asm volatile("ld.global.cv.u32 %0, [%1];" : "=r"(v) : "l"(p));
-
-#if __CUDA_ARCH__ >= 900
+  // TODO(MaoZiming): double check.
+#ifdef USE_GRACE_HOPPER
   // Hopper/GH200: lightweight acquire fence at system scope
   asm volatile("fence.acq_rel.sys;" ::: "memory");
 #elif __CUDA_ARCH__ >= 800
@@ -386,7 +386,7 @@ ld_acquire_sys_u64(const volatile uint64_t* p) {
 __device__ __forceinline__ uint64_t ld_sys_cv_u64(const volatile uint64_t* p) {
   uint64_t v;
   asm volatile("ld.global.cv.u64 %0, [%1];" : "=l"(v) : "l"(p));
-#if __CUDA_ARCH__ >= 900
+#ifdef USE_GRACE_HOPPER
   // Hopper/GH200: lightweight acquire fence at system scope
   asm volatile("fence.acq_rel.sys;" ::: "memory");
 #elif __CUDA_ARCH__ >= 800
