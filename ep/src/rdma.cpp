@@ -1570,7 +1570,6 @@ void post_atomic_operations(ProxyCtx& S,
     size_t const k = wr_ids.size();
 
 #ifdef EFA
-    // --- EFA/SRD: per-ring QPs for atomics too ---
     // Group by ring index (upper 32 bits in wrs_to_post)
     std::unordered_map<size_t, std::vector<size_t>> ring_to_indices;
     ring_to_indices.reserve(k);
@@ -1669,7 +1668,6 @@ void post_atomic_operations(ProxyCtx& S,
     }  // end per-ring loop
 
 #else
-    // --- RC path unchanged ---
     std::vector<ibv_sge> sge(k);
     std::vector<ibv_send_wr> wr(k);
 

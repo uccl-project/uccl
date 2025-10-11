@@ -1041,8 +1041,7 @@ __global__ void __launch_bounds__(
         src_rdma_rank = (src_rdma_rank + 1) % kNumRDMARanks;
         if (__shfl_sync(0xffffffff, num_tokens_to_recv_from_rdma,
                         src_rdma_rank) > 0) {
-          if (lane_id == src_rdma_rank and
-              cached_rdma_channel_head == cached_rdma_channel_tail)
+          if (lane_id == src_rdma_rank)
             cached_rdma_channel_tail = static_cast<int>(
                 ld_sys_cv_u64(rdma_channel_tail.buffer(src_rdma_rank)));
           if (__shfl_sync(0xffffffff,
@@ -1089,16 +1088,13 @@ __global__ void __launch_bounds__(
         auto rdma_slot_idx = i % num_max_rdma_chunked_recv_tokens;
         auto shifted = rdma_channel_data.recv_buffer(src_rdma_rank) +
                        rdma_slot_idx * num_bytes_per_token;
-        auto src_meta = ld_nc_global(reinterpret_cast<SourceMeta*>(
-            shifted + hidden_bytes + scale_bytes));
-        int seen_bits = ld_acquire_sys_global(
+        int seen_bits = ld_sys_cv_u32(reinterpret_cast<uint32_t volatile*>(
             &reinterpret_cast<SourceMeta*>(shifted + hidden_bytes + scale_bytes)
-                 ->is_token_in_nvl_rank_bits);
+                 ->is_token_in_nvl_rank_bits));
         if (seen_bits == 0) trap();
         lane_id == src_rdma_rank ? (num_tokens_to_recv_from_rdma -= 1) : 0;
 
-        bool is_in_dst_nvl_rank = src_meta.is_token_in_nvl_rank(dst_nvl_rank);
-        // bool is_in_dst_nvl_rank = (seen_bits >> dst_nvl_rank) & 1;
+        bool is_in_dst_nvl_rank = (seen_bits >> dst_nvl_rank) & 1;
         if (lane_id == src_rdma_rank) {
           auto cached_head = is_in_dst_nvl_rank ? rdma_nvl_token_idx : -1;
           rdma_nvl_token_idx += is_in_dst_nvl_rank;
