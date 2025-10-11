@@ -58,6 +58,7 @@ logger = logging.getLogger(__name__)
 # MoE Data Packing/Unpacking Functions
 # ============================================================================
 
+
 def pack_moe_data_to_buffers(
     x: torch.Tensor,  # (num_tokens, hidden_dim)
     topk_idx: torch.Tensor,  # (num_tokens, experts_per_token)
@@ -124,19 +125,21 @@ def pack_moe_data_to_buffers(
 
             # Pack token data
             token_bytes = x[token_id].view(torch.uint8)
-            buf[offset:offset + bytes_per_token].copy_(token_bytes)
+            buf[offset : offset + bytes_per_token].copy_(token_bytes)
             offset += bytes_per_token
 
             # Pack local expert ID
-            idx_tensor = torch.tensor([local_expert_id], dtype=topk_idx.dtype, device=device)
+            idx_tensor = torch.tensor(
+                [local_expert_id], dtype=topk_idx.dtype, device=device
+            )
             idx_bytes = idx_tensor.view(torch.uint8)
-            buf[offset:offset + bytes_per_idx].copy_(idx_bytes)
+            buf[offset : offset + bytes_per_idx].copy_(idx_bytes)
             offset += bytes_per_idx
 
             # Pack weight
-            weight_tensor = topk_weights[token_id, topk_pos:topk_pos+1]
+            weight_tensor = topk_weights[token_id, topk_pos : topk_pos + 1]
             weight_bytes = weight_tensor.view(torch.uint8)
-            buf[offset:offset + bytes_per_weight].copy_(weight_bytes)
+            buf[offset : offset + bytes_per_weight].copy_(weight_bytes)
             offset += bytes_per_weight
 
     return per_rank_bytes
@@ -182,7 +185,9 @@ def unpack_moe_data_from_buffers(
 
     recv_x = torch.empty((total_recv_items, hidden_dim), dtype=x_dtype, device=device)
     recv_topk_idx = torch.empty((total_recv_items,), dtype=idx_dtype, device=device)
-    recv_topk_weights = torch.empty((total_recv_items,), dtype=weight_dtype, device=device)
+    recv_topk_weights = torch.empty(
+        (total_recv_items,), dtype=weight_dtype, device=device
+    )
 
     recv_item_id = 0
     for sender_rank in range(world_size):
@@ -195,17 +200,17 @@ def unpack_moe_data_from_buffers(
 
         while offset < recv_bytes:
             # Unpack token data
-            token_bytes = buf[offset:offset + bytes_per_token]
+            token_bytes = buf[offset : offset + bytes_per_token]
             recv_x[recv_item_id] = token_bytes.view(x_dtype).view(hidden_dim)
             offset += bytes_per_token
 
             # Unpack expert ID
-            idx_bytes = buf[offset:offset + bytes_per_idx]
+            idx_bytes = buf[offset : offset + bytes_per_idx]
             recv_topk_idx[recv_item_id] = idx_bytes.view(idx_dtype)[0]
             offset += bytes_per_idx
 
             # Unpack weight
-            weight_bytes = buf[offset:offset + bytes_per_weight]
+            weight_bytes = buf[offset : offset + bytes_per_weight]
             recv_topk_weights[recv_item_id] = weight_bytes.view(weight_dtype)[0]
             offset += bytes_per_weight
 
@@ -224,6 +229,7 @@ def unpack_moe_data_from_buffers(
 # Main Benchmark Function
 # ============================================================================
 
+
 @torch.inference_mode()
 def bench_all_to_all(
     pgi: ProcessGroupInfo,
@@ -237,7 +243,9 @@ def bench_all_to_all(
     # Check if experts can be evenly distributed
     if moe.num_experts % pgi.world_size != 0:
         if pgi.rank == 0:
-            print(f"⚠️  Skipping: {moe.num_experts} experts cannot be evenly divided by {pgi.world_size} ranks")
+            print(
+                f"⚠️  Skipping: {moe.num_experts} experts cannot be evenly divided by {pgi.world_size} ranks"
+            )
         return None, None
 
     rng = torch.Generator()
@@ -249,12 +257,18 @@ def bench_all_to_all(
     # ========== MoE Input Data (unified input format) ==========
     num_tokens = rank_data.num_tokens
     x = torch.randn((num_tokens, moe.hidden_dim), dtype=moe.in_dtype, device=device)
-    topk_idx = rank_data.indices.to(device)  # (num_tokens, experts_per_token) - ensure on GPU
-    topk_weights = torch.randn((num_tokens, moe.experts_per_token), dtype=torch.float32, device=device)
+    topk_idx = rank_data.indices.to(
+        device
+    )  # (num_tokens, experts_per_token) - ensure on GPU
+    topk_weights = torch.randn(
+        (num_tokens, moe.experts_per_token), dtype=torch.float32, device=device
+    )
 
     if pgi.rank == 0:
         print(f"\n[MoE Input Data]")
-        print(f"  Tokens: {num_tokens}, Hidden: {moe.hidden_dim}, Experts/token: {moe.experts_per_token}")
+        print(
+            f"  Tokens: {num_tokens}, Hidden: {moe.hidden_dim}, Experts/token: {moe.experts_per_token}"
+        )
         print(f"  Example: Token 0 → Experts {topk_idx[0].tolist()}")
 
     # ========== Prepare buffers for all three communication methods ==========
@@ -281,23 +295,40 @@ def bench_all_to_all(
     torch_send_bufs = []
     for i in range(pgi.world_size):
         size = int(per_rank_send_bytes[i].item())
-        torch_send_bufs.append(torch.empty(max(size, 1), dtype=torch.uint8, device=device))
+        torch_send_bufs.append(
+            torch.empty(max(size, 1), dtype=torch.uint8, device=device)
+        )
 
     # Measure CPU pack time
     torch_stream = torch.cuda.current_stream()
-    cpu_pack_events = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(10)]
+    cpu_pack_events = [
+        (torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True))
+        for _ in range(10)
+    ]
     for start_ev, end_ev in cpu_pack_events:
         start_ev.record(torch_stream)
         pack_moe_data_to_buffers(
-            x, topk_idx, topk_weights, moe.num_experts, pgi.world_size, device, torch_send_bufs
+            x,
+            topk_idx,
+            topk_weights,
+            moe.num_experts,
+            pgi.world_size,
+            device,
+            torch_send_bufs,
         )
         end_ev.record(torch_stream)
     torch_stream.synchronize()
-    cpu_pack_time_us = sum(s.elapsed_time(e) * 1e3 for s, e in cpu_pack_events) / len(cpu_pack_events)
+    cpu_pack_time_us = sum(s.elapsed_time(e) * 1e3 for s, e in cpu_pack_events) / len(
+        cpu_pack_events
+    )
 
     # Merge into single sendbuf for all_to_all_single
-    torch_sparse_sendbuf = torch.cat([torch_send_bufs[i][:int(per_rank_send_bytes[i].item())]
-                                       for i in range(pgi.world_size)])
+    torch_sparse_sendbuf = torch.cat(
+        [
+            torch_send_bufs[i][: int(per_rank_send_bytes[i].item())]
+            for i in range(pgi.world_size)
+        ]
+    )
     sparse_in_splits = per_rank_send_bytes.tolist()
 
     per_rank_recv_bytes = torch.zeros_like(per_rank_send_bytes)
@@ -305,14 +336,19 @@ def bench_all_to_all(
     sparse_out_splits = per_rank_recv_bytes.tolist()
 
     total_sparse_bytes = int(per_rank_send_bytes.sum().item())
-    torch_sparse_recvbuf = torch.empty(max(int(per_rank_recv_bytes.sum().item()), 1),
-                                        dtype=torch.uint8, device=device)
+    torch_sparse_recvbuf = torch.empty(
+        max(int(per_rank_recv_bytes.sum().item()), 1), dtype=torch.uint8, device=device
+    )
 
     # 2. NVSHMEM: Symmetric memory buffers
-    per_rank_send_bytes_all = [torch.zeros(pgi.world_size, dtype=torch.int32, device=device)
-                                for _ in range(pgi.world_size)]
-    per_rank_recv_bytes_all = [torch.zeros(pgi.world_size, dtype=torch.int32, device=device)
-                                for _ in range(pgi.world_size)]
+    per_rank_send_bytes_all = [
+        torch.zeros(pgi.world_size, dtype=torch.int32, device=device)
+        for _ in range(pgi.world_size)
+    ]
+    per_rank_recv_bytes_all = [
+        torch.zeros(pgi.world_size, dtype=torch.int32, device=device)
+        for _ in range(pgi.world_size)
+    ]
     torch.distributed.all_gather(per_rank_send_bytes_all, per_rank_send_bytes)
     torch.distributed.all_gather(per_rank_recv_bytes_all, per_rank_recv_bytes)
 
@@ -336,18 +372,34 @@ def bench_all_to_all(
 
     # Pack data into NVSHMEM buffers
     pack_moe_data_to_buffers(
-        x, topk_idx, topk_weights, moe.num_experts, pgi.world_size, device, nvshmem_send_bufs
+        x,
+        topk_idx,
+        topk_weights,
+        moe.num_experts,
+        pgi.world_size,
+        device,
+        nvshmem_send_bufs,
     )
 
     # 3. Dense baseline
-    effective_tokens_per_expert = max(1, (total_sparse_bytes // pgi.world_size // num_local_experts) // bytes_per_item)
-    a2a_shape = (pgi.world_size, num_local_experts, effective_tokens_per_expert * bytes_per_item)
-    dense_a2a_tensor = torch.randint(0, 256, a2a_shape, dtype=torch.uint8, device=device)
+    effective_tokens_per_expert = max(
+        1, (total_sparse_bytes // pgi.world_size // num_local_experts) // bytes_per_item
+    )
+    a2a_shape = (
+        pgi.world_size,
+        num_local_experts,
+        effective_tokens_per_expert * bytes_per_item,
+    )
+    dense_a2a_tensor = torch.randint(
+        0, 256, a2a_shape, dtype=torch.uint8, device=device
+    )
     dense_a2a_out_tensor = torch.empty_like(dense_a2a_tensor)
     dense_a2a_bytes = dense_a2a_tensor.numel()
 
     if pgi.rank == 0:
-        print(f"  Sparse bytes: {total_sparse_bytes:,} ({total_sparse_bytes/1e6:.2f} MB)")
+        print(
+            f"  Sparse bytes: {total_sparse_bytes:,} ({total_sparse_bytes/1e6:.2f} MB)"
+        )
         print(f"  Dense bytes:  {dense_a2a_bytes:,} ({dense_a2a_bytes/1e6:.2f} MB)")
         print(f"  Reduction: {dense_a2a_bytes/total_sparse_bytes:.2f}x\n")
 
@@ -360,23 +412,43 @@ def bench_all_to_all(
         cuda_torch_send_bufs = []
         for i in range(pgi.world_size):
             size = int(per_rank_send_bytes[i].item())
-            cuda_torch_send_bufs.append(torch.empty(max(size, 1), dtype=torch.uint8, device=device))
+            cuda_torch_send_bufs.append(
+                torch.empty(max(size, 1), dtype=torch.uint8, device=device)
+            )
 
         # Measure CUDA pack time
-        cuda_pack_events = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(10)]
+        cuda_pack_events = [
+            (torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True))
+            for _ in range(10)
+        ]
         for start_ev, end_ev in cuda_pack_events:
             start_ev.record(torch_stream)
             pack_moe_data_to_buffers_cuda(
-                x, topk_idx, topk_weights, moe.num_experts, pgi.world_size, device, cuda_torch_send_bufs
+                x,
+                topk_idx,
+                topk_weights,
+                moe.num_experts,
+                pgi.world_size,
+                device,
+                cuda_torch_send_bufs,
             )
             end_ev.record(torch_stream)
         torch_stream.synchronize()
-        cuda_pack_time_us = sum(s.elapsed_time(e) * 1e3 for s, e in cuda_pack_events) / len(cuda_pack_events)
+        cuda_pack_time_us = sum(
+            s.elapsed_time(e) * 1e3 for s, e in cuda_pack_events
+        ) / len(cuda_pack_events)
 
-        cuda_torch_sendbuf = torch.cat([cuda_torch_send_bufs[i][:int(per_rank_send_bytes[i].item())]
-                                          for i in range(pgi.world_size)])
-        cuda_torch_recvbuf = torch.empty(max(int(per_rank_recv_bytes.sum().item()), 1),
-                                           dtype=torch.uint8, device=device)
+        cuda_torch_sendbuf = torch.cat(
+            [
+                cuda_torch_send_bufs[i][: int(per_rank_send_bytes[i].item())]
+                for i in range(pgi.world_size)
+            ]
+        )
+        cuda_torch_recvbuf = torch.empty(
+            max(int(per_rank_recv_bytes.sum().item()), 1),
+            dtype=torch.uint8,
+            device=device,
+        )
 
         # Method 4: NVSHMEM buffers
         cuda_nvshmem_send_bufs = []
@@ -399,7 +471,13 @@ def bench_all_to_all(
 
         # Pre-pack data into NVSHMEM buffers (only once)
         pack_moe_data_to_buffers_cuda(
-            x, topk_idx, topk_weights, moe.num_experts, pgi.world_size, device, cuda_nvshmem_send_bufs
+            x,
+            topk_idx,
+            topk_weights,
+            moe.num_experts,
+            pgi.world_size,
+            device,
+            cuda_nvshmem_send_bufs,
         )
 
     # ========== Benchmark ==========
@@ -448,7 +526,7 @@ def bench_all_to_all(
             offset = 0
             for i in range(pgi.world_size):
                 size = sparse_out_splits[i]
-                torch_recv_bufs.append(torch_sparse_recvbuf[offset:offset+size])
+                torch_recv_bufs.append(torch_sparse_recvbuf[offset : offset + size])
                 offset += size
 
             _, _, _, _ = unpack_moe_data_from_buffers(
@@ -474,7 +552,7 @@ def bench_all_to_all(
                         dst=nvshmem_recv_bufs[pgi.rank],
                         src=nvshmem_send_bufs[target_rank],
                         remote_pe=target_rank,
-                        stream=cuda_stream
+                        stream=cuda_stream,
                     )
 
             cuda_stream.sync()
@@ -514,7 +592,9 @@ def bench_all_to_all(
                 offset = 0
                 for i in range(pgi.world_size):
                     size = sparse_out_splits[i]
-                    cuda_torch_recv_bufs.append(cuda_torch_recvbuf[offset:offset+size])
+                    cuda_torch_recv_bufs.append(
+                        cuda_torch_recvbuf[offset : offset + size]
+                    )
                     offset += size
 
                 _, _, _, _ = unpack_moe_data_from_buffers_cuda(
@@ -541,7 +621,7 @@ def bench_all_to_all(
                             dst=cuda_nvshmem_recv_bufs[pgi.rank],
                             src=cuda_nvshmem_send_bufs[target_rank],
                             remote_pe=target_rank,
-                            stream=cuda_stream
+                            stream=cuda_stream,
                         )
 
                 cuda_stream.sync()
@@ -564,19 +644,29 @@ def bench_all_to_all(
         torch_stream.synchronize()
 
         # Method 1: CPU + torch.dist (e0->e1: comm, e1->e2: total)
-        sum_cpu_torch_comm_us = sum(event_list[0].elapsed_time(event_list[1]) * 1e3 for event_list in events)
-        sum_cpu_torch_us = sum(event_list[0].elapsed_time(event_list[2]) * 1e3 for event_list in events)
+        sum_cpu_torch_comm_us = sum(
+            event_list[0].elapsed_time(event_list[1]) * 1e3 for event_list in events
+        )
+        sum_cpu_torch_us = sum(
+            event_list[0].elapsed_time(event_list[2]) * 1e3 for event_list in events
+        )
         cpu_torch_comm_us = sum_cpu_torch_comm_us / num_samples
         cpu_torch_us = sum_cpu_torch_us / num_samples
 
         # Method 2: CPU + NVSHMEM (e2->e3: comm, e2->e4: total)
-        sum_cpu_nvshmem_comm_us = sum(event_list[2].elapsed_time(event_list[3]) * 1e3 for event_list in events)
-        sum_cpu_nvshmem_us = sum(event_list[2].elapsed_time(event_list[4]) * 1e3 for event_list in events)
+        sum_cpu_nvshmem_comm_us = sum(
+            event_list[2].elapsed_time(event_list[3]) * 1e3 for event_list in events
+        )
+        sum_cpu_nvshmem_us = sum(
+            event_list[2].elapsed_time(event_list[4]) * 1e3 for event_list in events
+        )
         cpu_nvshmem_comm_us = sum_cpu_nvshmem_comm_us / num_samples
         cpu_nvshmem_us = sum_cpu_nvshmem_us / num_samples
 
         # Dense baseline (e4->e5)
-        sum_dense_us = sum(event_list[4].elapsed_time(event_list[5]) * 1e3 for event_list in events)
+        sum_dense_us = sum(
+            event_list[4].elapsed_time(event_list[5]) * 1e3 for event_list in events
+        )
         dense_us = sum_dense_us / num_samples
 
         # Calculate bandwidth
@@ -586,14 +676,22 @@ def bench_all_to_all(
 
         if CUDA_AVAILABLE:
             # Method 3: CUDA + torch.dist (e5->e6: comm, e5->e7: total)
-            sum_cuda_torch_comm_us = sum(event_list[5].elapsed_time(event_list[6]) * 1e3 for event_list in events)
-            sum_cuda_torch_us = sum(event_list[5].elapsed_time(event_list[7]) * 1e3 for event_list in events)
+            sum_cuda_torch_comm_us = sum(
+                event_list[5].elapsed_time(event_list[6]) * 1e3 for event_list in events
+            )
+            sum_cuda_torch_us = sum(
+                event_list[5].elapsed_time(event_list[7]) * 1e3 for event_list in events
+            )
             cuda_torch_comm_us = sum_cuda_torch_comm_us / num_samples
             cuda_torch_us = sum_cuda_torch_us / num_samples
 
             # Method 4: CUDA + NVSHMEM (e7->e8: comm, e7->e9: total)
-            sum_cuda_nvshmem_comm_us = sum(event_list[7].elapsed_time(event_list[8]) * 1e3 for event_list in events)
-            sum_cuda_nvshmem_us = sum(event_list[7].elapsed_time(event_list[9]) * 1e3 for event_list in events)
+            sum_cuda_nvshmem_comm_us = sum(
+                event_list[7].elapsed_time(event_list[8]) * 1e3 for event_list in events
+            )
+            sum_cuda_nvshmem_us = sum(
+                event_list[7].elapsed_time(event_list[9]) * 1e3 for event_list in events
+            )
             cuda_nvshmem_comm_us = sum_cuda_nvshmem_comm_us / num_samples
             cuda_nvshmem_us = sum_cuda_nvshmem_us / num_samples
 
@@ -602,17 +700,37 @@ def bench_all_to_all(
             cuda_nvshmem_gbps = total_sparse_bytes / cuda_nvshmem_us / 1e3
 
             return (
-                cpu_torch_us, cpu_torch_gbps, cpu_torch_comm_us, cpu_pack_time_us,         # Method 1: CPU + torch.dist
-                cpu_nvshmem_us, cpu_nvshmem_gbps, cpu_nvshmem_comm_us, cpu_pack_time_us,   # Method 2: CPU + NVSHMEM
-                cuda_torch_us, cuda_torch_gbps, cuda_torch_comm_us, cuda_pack_time_us,      # Method 3: CUDA + torch.dist
-                cuda_nvshmem_us, cuda_nvshmem_gbps, cuda_nvshmem_comm_us, cuda_pack_time_us,# Method 4: CUDA + NVSHMEM
-                dense_us, dense_gbps,                                                        # Dense baseline
+                cpu_torch_us,
+                cpu_torch_gbps,
+                cpu_torch_comm_us,
+                cpu_pack_time_us,  # Method 1: CPU + torch.dist
+                cpu_nvshmem_us,
+                cpu_nvshmem_gbps,
+                cpu_nvshmem_comm_us,
+                cpu_pack_time_us,  # Method 2: CPU + NVSHMEM
+                cuda_torch_us,
+                cuda_torch_gbps,
+                cuda_torch_comm_us,
+                cuda_pack_time_us,  # Method 3: CUDA + torch.dist
+                cuda_nvshmem_us,
+                cuda_nvshmem_gbps,
+                cuda_nvshmem_comm_us,
+                cuda_pack_time_us,  # Method 4: CUDA + NVSHMEM
+                dense_us,
+                dense_gbps,  # Dense baseline
             )
         else:
             return (
-                cpu_torch_us, cpu_torch_gbps, cpu_torch_comm_us, cpu_pack_time_us,
-                cpu_nvshmem_us, cpu_nvshmem_gbps, cpu_nvshmem_comm_us, cpu_pack_time_us,
-                dense_us, dense_gbps,
+                cpu_torch_us,
+                cpu_torch_gbps,
+                cpu_torch_comm_us,
+                cpu_pack_time_us,
+                cpu_nvshmem_us,
+                cpu_nvshmem_gbps,
+                cpu_nvshmem_comm_us,
+                cpu_pack_time_us,
+                dense_us,
+                dense_gbps,
             )
 
     # Warmup
@@ -630,7 +748,7 @@ def bench_all_to_all(
         offset = 0
         for i in range(pgi.world_size):
             size = sparse_out_splits[i]
-            torch_recv_bufs.append(torch_sparse_recvbuf[offset:offset+size])
+            torch_recv_bufs.append(torch_sparse_recvbuf[offset : offset + size])
             offset += size
 
         recv_x, _, _, recv_counts = unpack_moe_data_from_buffers(
@@ -657,6 +775,7 @@ def bench_all_to_all(
     del nvshmem_send_bufs
     del nvshmem_recv_bufs
     import gc
+
     gc.collect()
     torch.cuda.synchronize()
 
@@ -713,19 +832,41 @@ def _worker_bench_all_to_all(
         print("=" * 80)
 
     header = [
-        "E", "E/tok", "tok", "dim",
-        "CPU+Torch_total", "CPU+Torch_lat", "CPU+Torch_bw", "CPU+Torch_comm", "CPU_pack",
-        "CPU+NVSHMEM_total", "CPU+NVSHMEM_lat", "CPU+NVSHMEM_bw", "CPU+NVSHMEM_comm",
-        "Dense_lat", "Dense_bw",
-        "Sparse_bytes", "Dense_bytes",
+        "E",
+        "E/tok",
+        "tok",
+        "dim",
+        "CPU+Torch_total",
+        "CPU+Torch_lat",
+        "CPU+Torch_bw",
+        "CPU+Torch_comm",
+        "CPU_pack",
+        "CPU+NVSHMEM_total",
+        "CPU+NVSHMEM_lat",
+        "CPU+NVSHMEM_bw",
+        "CPU+NVSHMEM_comm",
+        "Dense_lat",
+        "Dense_bw",
+        "Sparse_bytes",
+        "Dense_bytes",
     ]
 
     if CUDA_AVAILABLE:
-        header.extend([
-            "CUDA+Torch_total", "CUDA+Torch_lat", "CUDA+Torch_bw", "CUDA+Torch_comm", "CUDA_pack",
-            "CUDA+NVSHMEM_total", "CUDA+NVSHMEM_lat", "CUDA+NVSHMEM_bw", "CUDA+NVSHMEM_comm",
-            "Speedup_Torch", "Speedup_NVSHMEM",
-        ])
+        header.extend(
+            [
+                "CUDA+Torch_total",
+                "CUDA+Torch_lat",
+                "CUDA+Torch_bw",
+                "CUDA+Torch_comm",
+                "CUDA_pack",
+                "CUDA+NVSHMEM_total",
+                "CUDA+NVSHMEM_lat",
+                "CUDA+NVSHMEM_bw",
+                "CUDA+NVSHMEM_comm",
+                "Speedup_Torch",
+                "Speedup_NVSHMEM",
+            ]
+        )
 
     outpath = (
         Path(__file__).resolve().parents[1]
@@ -808,8 +949,14 @@ def _worker_bench_all_to_all(
                 cuda_nvshmem_total = cuda_nvshmem_lat + cuda_pack
 
                 # Speedup calculation (CPU vs CUDA) - use total time including pack
-                speedup_torch = cpu_torch_total / cuda_torch_total if cuda_torch_total > 0 else 0
-                speedup_nvshmem = cpu_nvshmem_total / cuda_nvshmem_total if cuda_nvshmem_total > 0 else 0
+                speedup_torch = (
+                    cpu_torch_total / cuda_torch_total if cuda_torch_total > 0 else 0
+                )
+                speedup_nvshmem = (
+                    cpu_nvshmem_total / cuda_nvshmem_total
+                    if cuda_nvshmem_total > 0
+                    else 0
+                )
 
                 row["CUDA+Torch_total"] = f"{cuda_torch_total:.1f}μs"
                 row["CUDA+Torch_lat"] = f"{cuda_torch_lat:.1f}μs"
@@ -838,15 +985,27 @@ def _worker_bench_all_to_all(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dp-size", type=int, default=1)
-    parser.add_argument("--in-dtype", choices=["bfloat16", "float16"], default="bfloat16")
-    parser.add_argument("--out-dtype", choices=["bfloat16", "float16"], default="bfloat16")
+    parser.add_argument(
+        "--in-dtype", choices=["bfloat16", "float16"], default="bfloat16"
+    )
+    parser.add_argument(
+        "--out-dtype", choices=["bfloat16", "float16"], default="bfloat16"
+    )
     args = parser.parse_args()
 
     if "MASTER_ADDR" in os.environ:
-        parallel_launch_from_env(_worker_bench_all_to_all, args.dp_size, args.in_dtype, args.out_dtype)
+        parallel_launch_from_env(
+            _worker_bench_all_to_all, args.dp_size, args.in_dtype, args.out_dtype
+        )
     else:
         world_size = torch.cuda.device_count()
-        parallel_launch(world_size, _worker_bench_all_to_all, args.dp_size, args.in_dtype, args.out_dtype)
+        parallel_launch(
+            world_size,
+            _worker_bench_all_to_all,
+            args.dp_size,
+            args.in_dtype,
+            args.out_dtype,
+        )
 
 
 if __name__ == "__main__":

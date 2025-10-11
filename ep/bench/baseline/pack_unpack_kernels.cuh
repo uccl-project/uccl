@@ -1,7 +1,7 @@
 #pragma once
 
-#include <cuda_runtime.h>
 #include <torch/extension.h>
+#include <cuda_runtime.h>
 
 namespace moe_pack_unpack {
 
@@ -19,14 +19,12 @@ namespace moe_pack_unpack {
 // Returns:
 //   per_rank_bytes: (world_size,) - total bytes written to each rank
 void pack_moe_data_cuda(
-    const torch::Tensor& x,                    // (num_tokens, hidden_dim)
-    const torch::Tensor& topk_idx,             // (num_tokens, experts_per_token)
-    const torch::Tensor& topk_weights,         // (num_tokens, experts_per_token)
-    const std::vector<torch::Tensor>& buffers, // world_size buffers
-    int num_experts,
-    int num_local_experts,
-    int world_size,
-    torch::Tensor& per_rank_bytes              // (world_size,) output
+    torch::Tensor const& x,             // (num_tokens, hidden_dim)
+    torch::Tensor const& topk_idx,      // (num_tokens, experts_per_token)
+    torch::Tensor const& topk_weights,  // (num_tokens, experts_per_token)
+    std::vector<torch::Tensor> const& buffers,  // world_size buffers
+    int num_experts, int num_local_experts, int world_size,
+    torch::Tensor& per_rank_bytes  // (world_size,) output
 );
 
 // Unpack MoE data from per-rank buffers on GPU
@@ -44,14 +42,10 @@ void pack_moe_data_cuda(
 //   tuple of (recv_x, recv_topk_idx, recv_topk_weights, recv_expert_counts)
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 unpack_moe_data_cuda(
-    const std::vector<torch::Tensor>& buffers,   // world_size buffers
-    const torch::Tensor& per_rank_recv_bytes,    // (world_size,)
-    int num_local_experts,
-    int hidden_dim,
-    int world_size,
-    torch::ScalarType x_dtype,
-    torch::ScalarType idx_dtype,
-    torch::ScalarType weight_dtype
-);
+    std::vector<torch::Tensor> const& buffers,  // world_size buffers
+    torch::Tensor const& per_rank_recv_bytes,   // (world_size,)
+    int num_local_experts, int hidden_dim, int world_size,
+    torch::ScalarType x_dtype, torch::ScalarType idx_dtype,
+    torch::ScalarType weight_dtype);
 
-} // namespace moe_pack_unpack
+}  // namespace moe_pack_unpack

@@ -2,12 +2,12 @@
 Standalone utilities for All-to-All benchmarking.
 Contains all necessary data structures and distributed utilities.
 
-Note: The distributed launching utilities (_worker_parallel_launch, 
-parallel_launch, parallel_launch_from_env) are adapted from the original 
+Note: The distributed launching utilities (_worker_parallel_launch,
+parallel_launch, parallel_launch_from_env) are adapted from the original
 implementation at:
 https://github.com/perplexity-ai-labs/pplx-kernels
 
-These functions provide robust multi-node and single-node distributed 
+These functions provide robust multi-node and single-node distributed
 process management with proper device initialization and synchronization.
 
 """
@@ -33,9 +33,11 @@ logger = logging.getLogger(__name__)
 # MoE Configuration and Test Data
 # ============================================================================
 
+
 @dataclasses.dataclass
 class MoEConfig:
     """Configuration for Mixture of Experts model."""
+
     num_experts: int
     experts_per_token: int
     hidden_dim: int
@@ -47,7 +49,7 @@ class MoEConfig:
 
 class RankTestData:
     """Test data generator for each rank."""
-    
+
     def __init__(
         self,
         cfg: MoEConfig,
@@ -60,7 +62,7 @@ class RankTestData:
             if not use_max_tokens
             else cfg.max_num_tokens
         )
-        
+
         # Generate expert indices for each token
         self.indices = torch.empty(
             self.num_tokens,
@@ -69,24 +71,18 @@ class RankTestData:
         )
         for i in range(self.num_tokens):
             perm = torch.randperm(cfg.num_experts, generator=rng)
-            self.indices[i] = perm[:cfg.experts_per_token]
-        
+            self.indices[i] = perm[: cfg.experts_per_token]
+
         # Generate routing weights
         self.weights = torch.rand(
-            self.num_tokens, 
-            cfg.experts_per_token, 
-            dtype=torch.float32, 
-            generator=rng
+            self.num_tokens, cfg.experts_per_token, dtype=torch.float32, generator=rng
         )
-        
+
         # Generate input data with optional FP8 scaling
         self.x_scale: torch.Tensor | None = None
         if cfg.in_dtype.itemsize == 1:  # FP8
             x_fp32 = torch.rand(
-                self.num_tokens, 
-                cfg.hidden_dim, 
-                dtype=torch.float32, 
-                generator=rng
+                self.num_tokens, cfg.hidden_dim, dtype=torch.float32, generator=rng
             )
             self.x = ((x_fp32 - 0.5) * 400).to(cfg.in_dtype)
             self.x_scale = torch.rand(
@@ -97,10 +93,7 @@ class RankTestData:
             )
         else:
             self.x = torch.randn(
-                self.num_tokens, 
-                cfg.hidden_dim, 
-                dtype=cfg.in_dtype, 
-                generator=rng
+                self.num_tokens, cfg.hidden_dim, dtype=cfg.in_dtype, generator=rng
             )
 
 
@@ -108,9 +101,11 @@ class RankTestData:
 # Process Group Info
 # ============================================================================
 
+
 @dataclasses.dataclass
 class ProcessGroupInfo:
     """Information about the distributed process group."""
+
     world_size: int
     world_local_size: int
     rank: int
@@ -122,6 +117,7 @@ class ProcessGroupInfo:
 # ============================================================================
 # Distributed Initialization Worker
 # ============================================================================
+
 
 def _worker_parallel_launch(
     local_rank: int,
@@ -137,7 +133,7 @@ def _worker_parallel_launch(
     rank = node_rank * world_local_size + local_rank
     torch.cuda.set_device(local_rank)
     device = torch.device("cuda", local_rank)
-    
+
     # Initialize process group with device_id to avoid warnings
     torch.distributed.init_process_group(
         backend="cpu:gloo,cuda:nccl",
@@ -146,7 +142,7 @@ def _worker_parallel_launch(
         world_size=world_size,
         device_id=device,
     )
-    
+
     world_group = torch.distributed.group.WORLD
     assert world_group is not None
     torch._C._distributed_c10d._register_process_group("default", world_group)
@@ -182,6 +178,7 @@ def _worker_parallel_launch(
 # Parallel Launch Functions
 # ============================================================================
 
+
 def parallel_launch(
     world_size: int,
     worker: Callable[Concatenate[ProcessGroupInfo, P], None],
@@ -190,7 +187,7 @@ def parallel_launch(
 ) -> None:
     """
     Launch distributed processes using torch.multiprocessing on a single node.
-    
+
     Args:
         world_size: Number of processes to spawn (should equal number of GPUs)
         worker: Function to execute on each process
@@ -198,7 +195,7 @@ def parallel_launch(
         **kwargs: Keyword arguments to pass to worker
     """
     assert not kwargs, "Keyword arguments not supported in parallel_launch"
-    
+
     spawn(
         _worker_parallel_launch,
         args=(
@@ -207,7 +204,8 @@ def parallel_launch(
             0,  # node_rank = 0 for single node
             "tcp://localhost:29500",
             worker,
-        ) + args,
+        )
+        + args,
         nprocs=world_size,
         join=True,
     )
@@ -220,28 +218,28 @@ def parallel_launch_from_env(
 ) -> None:
     """
     Launch worker function in parallel across all processes in the current environment.
-    
+
     The environment must have the following variables set:
     - WORLD_SIZE: The total number of processes
     - WORLD_LOCAL_SIZE: The number of processes on the current node
     - NODE_RANK: The rank of the current node
     - MASTER_ADDR: The address of the master process
     - MASTER_PORT: The port of the master process
-    
+
     Args:
         worker: Function to execute on each process
         *args: Positional arguments to pass to worker
         **kwargs: Keyword arguments to pass to worker
     """
     assert not kwargs, "Keyword arguments not supported in parallel_launch_from_env"
-    
+
     world_size = int(os.environ["WORLD_SIZE"])
     world_local_size = int(os.environ["WORLD_LOCAL_SIZE"])
     node_rank = int(os.environ["NODE_RANK"])
-    
+
     assert "MASTER_ADDR" in os.environ, "MASTER_ADDR not set in environment"
     assert "MASTER_PORT" in os.environ, "MASTER_PORT not set in environment"
-    
+
     spawn(
         _worker_parallel_launch,
         args=(
@@ -250,7 +248,8 @@ def parallel_launch_from_env(
             node_rank,
             "env://",
             worker,
-        ) + args,
+        )
+        + args,
         nprocs=world_local_size,
         join=True,
     )
@@ -260,16 +259,18 @@ def parallel_launch_from_env(
 # Utility Functions
 # ============================================================================
 
+
 def setup_logging(prefix: str = "") -> None:
     """
     Setup basic logging configuration.
-    
+
     Args:
         prefix: Prefix to add to log messages
     """
     logging.basicConfig(
         level="DEBUG",
-        format=prefix + "[%(asctime)s] [%(levelname)s] (%(filename)s:%(lineno)s) %(message)s",
+        format=prefix
+        + "[%(asctime)s] [%(levelname)s] (%(filename)s:%(lineno)s) %(message)s",
         datefmt="%H:%M:%S",
     )
 

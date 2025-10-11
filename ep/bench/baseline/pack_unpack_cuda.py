@@ -17,12 +17,15 @@ try:
         sys.path.insert(0, str(tests_dir))
 
     import moe_pack_unpack
+
     CUDA_AVAILABLE = True
 except ImportError as e:
     CUDA_AVAILABLE = False
     print(f"Warning: moe_pack_unpack CUDA extension not available: {e}")
     print(f"  Expected location: {Path(__file__).parent}")
-    print(f"  Run 'cd tests && python setup_pack_unpack.py build_ext --inplace' to build it.")
+    print(
+        f"  Run 'cd tests && python setup_pack_unpack.py build_ext --inplace' to build it."
+    )
 
 
 def pack_moe_data_to_buffers_cuda(
@@ -32,7 +35,9 @@ def pack_moe_data_to_buffers_cuda(
     num_experts: int,
     world_size: int,
     device: torch.device,
-    buffers: List[torch.Tensor],  # world_size buffers (can be regular tensor or nvshmem tensor)
+    buffers: List[
+        torch.Tensor
+    ],  # world_size buffers (can be regular tensor or nvshmem tensor)
 ) -> torch.Tensor:
     """
     Pack MoE data into buffers - CUDA accelerated version
@@ -110,7 +115,7 @@ def unpack_moe_data_from_buffers_cuda(
     weight_scalar_type = dtype_map.get(weight_dtype, torch.float32)
 
     # Call CUDA kernel
-    recv_x, recv_topk_idx, recv_topk_weights, recv_num_tokens_per_expert = \
+    recv_x, recv_topk_idx, recv_topk_weights, recv_num_tokens_per_expert = (
         moe_pack_unpack.unpack_moe_data(
             buffers,
             per_rank_recv_bytes,
@@ -119,8 +124,9 @@ def unpack_moe_data_from_buffers_cuda(
             world_size,
             x_scalar_type,
             idx_scalar_type,
-            weight_scalar_type
+            weight_scalar_type,
         )
+    )
 
     return recv_x, recv_topk_idx, recv_topk_weights, recv_num_tokens_per_expert
 
@@ -176,20 +182,22 @@ def pack_moe_data_to_buffers_cpu(
 
             # Pack token data
             token_bytes = x[token_id].view(torch.uint8)
-            buf[offset:offset + bytes_per_token].copy_(token_bytes)
+            buf[offset : offset + bytes_per_token].copy_(token_bytes)
             offset += bytes_per_token
 
             # Pack local expert ID - use numpy to ensure correct byte representation
-            idx_tensor = torch.tensor([local_expert_id], dtype=topk_idx.dtype, device='cpu')
+            idx_tensor = torch.tensor(
+                [local_expert_id], dtype=topk_idx.dtype, device="cpu"
+            )
             idx_bytes_np = idx_tensor.numpy().tobytes()
             idx_bytes_gpu = torch.frombuffer(idx_bytes_np, dtype=torch.uint8).to(device)
-            buf[offset:offset + bytes_per_idx].copy_(idx_bytes_gpu)
+            buf[offset : offset + bytes_per_idx].copy_(idx_bytes_gpu)
             offset += bytes_per_idx
 
             # Pack weight
-            weight_tensor = topk_weights[token_id, topk_pos:topk_pos+1]
+            weight_tensor = topk_weights[token_id, topk_pos : topk_pos + 1]
             weight_bytes = weight_tensor.view(torch.uint8)
-            buf[offset:offset + bytes_per_weight].copy_(weight_bytes)
+            buf[offset : offset + bytes_per_weight].copy_(weight_bytes)
             offset += bytes_per_weight
 
     return per_rank_bytes
@@ -216,7 +224,9 @@ def unpack_moe_data_from_buffers_cpu(
 
     recv_x = torch.empty((total_recv_items, hidden_dim), dtype=x_dtype, device=device)
     recv_topk_idx = torch.empty((total_recv_items,), dtype=idx_dtype, device=device)
-    recv_topk_weights = torch.empty((total_recv_items,), dtype=weight_dtype, device=device)
+    recv_topk_weights = torch.empty(
+        (total_recv_items,), dtype=weight_dtype, device=device
+    )
 
     recv_item_id = 0
     for sender_rank in range(world_size):
@@ -229,24 +239,30 @@ def unpack_moe_data_from_buffers_cpu(
 
         while offset < recv_bytes:
             # Unpack token data - copy to avoid alignment issues
-            token_bytes = buf[offset:offset + bytes_per_token].clone()
+            token_bytes = buf[offset : offset + bytes_per_token].clone()
             recv_x[recv_item_id] = token_bytes.view(x_dtype).view(hidden_dim)
             offset += bytes_per_token
 
             # Unpack expert ID - use numpy for unaligned data
-            idx_bytes = buf[offset:offset + bytes_per_idx].cpu().numpy()
+            idx_bytes = buf[offset : offset + bytes_per_idx].cpu().numpy()
             if idx_dtype == torch.int64:
-                idx_val = int.from_bytes(idx_bytes.tobytes(), byteorder='little')
+                idx_val = int.from_bytes(idx_bytes.tobytes(), byteorder="little")
             elif idx_dtype == torch.int32:
-                idx_val = int.from_bytes(idx_bytes.tobytes(), byteorder='little', signed=True)
+                idx_val = int.from_bytes(
+                    idx_bytes.tobytes(), byteorder="little", signed=True
+                )
             else:
-                idx_val = torch.frombuffer(idx_bytes.tobytes(), dtype=idx_dtype)[0].item()
+                idx_val = torch.frombuffer(idx_bytes.tobytes(), dtype=idx_dtype)[
+                    0
+                ].item()
             recv_topk_idx[recv_item_id] = idx_val
             offset += bytes_per_idx
 
             # Unpack weight - use numpy for unaligned data
-            weight_bytes = buf[offset:offset + bytes_per_weight].cpu().numpy()
-            weight_val = torch.frombuffer(weight_bytes.tobytes(), dtype=weight_dtype)[0].item()
+            weight_bytes = buf[offset : offset + bytes_per_weight].cpu().numpy()
+            weight_val = torch.frombuffer(weight_bytes.tobytes(), dtype=weight_dtype)[
+                0
+            ].item()
             recv_topk_weights[recv_item_id] = weight_val
             offset += bytes_per_weight
 
