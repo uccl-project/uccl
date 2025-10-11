@@ -376,11 +376,6 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
 
   local_info->ack_qp_num = S.ack_qp->qp_num;
   local_info->recv_ack_qp_num = S.recv_ack_qp->qp_num;
-
-  // if (!S.qp || !S.ack_qp || !S.recv_ack_qp) {
-  //   perror("Failed to create QPs for EFA");
-  //   exit(1);
-  // }
 #else
   struct ibv_qp_init_attr qp_init_attr = {};
   qp_init_attr.send_cq = S.cq;
@@ -920,10 +915,9 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                 dst_rank, strerror(ret), ret);
         std::abort();
       }
-    }  // end per-ring loop
+    }
 
 #else
-    // --- RC path unchanged ---
     std::vector<ibv_sge> sges(k);
     std::vector<ibv_send_wr> wrs(k);
     for (size_t j = 0; j < k; ++j) {
