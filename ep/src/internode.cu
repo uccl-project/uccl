@@ -999,20 +999,8 @@ __global__ void __launch_bounds__(
     int cached_rdma_channel_head = 0, cached_rdma_channel_tail = 0;
     int cached_nvl_channel_head = 0, cached_nvl_channel_tail = 0,
         rdma_nvl_token_idx = 0;
-    auto start_time_outer = clock64();
     while (__any_sync(0xffffffff, num_tokens_to_recv_from_rdma > 0)) {
       // Check destination queue emptiness, or wait a buffer to be released
-
-      // Timeout check
-      if (lane_id == 0 and
-          clock64() - start_time_outer > NUM_TIMEOUT_CYCLES / 2) {
-        printf(
-            "DeepEP dispatch forwarder timeout, num_tokens_to_recv_from_rdma: "
-            "%d\n",
-            num_tokens_to_recv_from_rdma);
-        trap();
-      }
-
       start_time = clock64();
       while (true) {
         int const num_used_slots =
@@ -2242,7 +2230,6 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
 
           // Wait lanes to be ready
           start_time = clock64();
-          unsigned long long nvl_wait_start = clock64();
           while (cached_nvl_channel_tail_idx <= expected_head) {
             cached_nvl_channel_tail_idx =
                 ld_acquire_sys_global(nvl_channel_tail.buffer(lane_id));
@@ -2260,7 +2247,6 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
               trap();
             }
           }
-          unsigned long long nvl_wait_end = clock64();
 
           // Combine current token
           auto rdma_slot_idx = token_idx % num_max_rdma_chunked_recv_tokens;
@@ -2279,7 +2265,6 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                                          hidden_bytes + sizeof(SourceMeta)) +
                 topk_idx);
           };
-          unsigned long long start_cycles = clock64();
           combine_token<NUM_MAX_NVL_PEERS, false, dtype_t, NUM_MAX_NVL_PEERS,
                         true, kNumStages, kNumTMALoadBytes>(
               expected_head >= 0, expected_head, lane_id, hidden_int4, num_topk,
@@ -2288,7 +2273,6 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                                        hidden_bytes + sizeof(SourceMeta)),
               nullptr, nullptr, num_max_nvl_chunked_recv_tokens_per_rdma,
               get_addr_fn, recv_tw_fn, smem_ptr, tma_phase);
-          unsigned long long end_cycles = clock64();
 
           // Update head
           if (lane_id < NUM_MAX_NVL_PEERS)
@@ -2376,7 +2360,6 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
 
         // Wait lanes to be ready
         auto start_time = clock64();
-        unsigned long long rdma_wait_start = clock64();
         while (cached_channel_tail_idx <= expected_head) {
           cached_channel_tail_idx = static_cast<int>(
               ld_sys_cv_u64(rdma_channel_tail.buffer(lane_id)));
@@ -2392,7 +2375,6 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
           }
         }
         __syncwarp();
-        unsigned long long rdma_wait_end = clock64();
 
         // Combine current token
         auto get_addr_fn = [&](int src_rdma_rank, int slot_idx,
@@ -2411,8 +2393,6 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                               topk_idx);
         };
         uint32_t dummy_tma_phases[2];
-
-        unsigned long long start_cycles = clock64();
         combine_token<kNumRDMARanks, true, dtype_t, kNumTopkRDMARanks, false,
                       2>(
             expected_head >= 0, expected_head, lane_id, hidden_int4, num_topk,
@@ -2422,8 +2402,6 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
             bias_1 == nullptr ? nullptr : bias_1 + token_idx * hidden_int4,
             num_max_rdma_chunked_recv_tokens, get_addr_fn, recv_tw_fn, nullptr,
             dummy_tma_phases);
-
-        unsigned long long end_cycles = clock64();
       }
 
       // Retired

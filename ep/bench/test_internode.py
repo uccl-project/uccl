@@ -337,34 +337,6 @@ def test_main(
     # Tune dispatch performance
     best_dispatch_results = None
     fp8_factor = (1 + 4 / 128) / 2
-
-    # # -------------------------------
-    # # Token routing summary: per rank and per expert
-    # # -------------------------------
-    # num_tokens_per_rank = is_token_in_rank.sum(dim=0)
-    # if local_rank == 0:
-    #     print("\n=== Token routing summary ===")
-    #     for rank, count in enumerate(num_tokens_per_rank.tolist()):
-    #         print(f"Rank {rank}: {count} tokens")
-
-    #     if 'num_tokens_per_expert' in locals():
-    #         print("\n=== Token routing summary (per expert) ===")
-    #         for expert, count in enumerate(num_tokens_per_expert.tolist()):
-    #             print(f"Expert {expert}: {count} tokens")
-
-    #     # --- Optional: detailed mapping of tokens → (rank, expert)
-    #     print("\n=== Token → (Rank, Expert) mapping (first few) ===")
-    #     for token in range(topk_idx.size(0)):  # limit output for readability
-    #         assigned = []
-    #         for k in range(topk_idx.size(1)):
-    #             exp = topk_idx[token, k].item()
-    #             rk = rank_idx[token, k].item()
-    #             # Only include valid pairs (no masked or invalid entries)
-    #             if exp != -1 and rk != -1:
-    #                 assigned.append((rk, exp))
-    #         if assigned:  # print only if at least one valid target
-    #             print(f"Token {token}: {assigned}")
-
     for current_x in (x_e4m3, x):
         best_time, best_results = 1e10, None
         rdma_send_bytes = (
@@ -388,12 +360,7 @@ def test_main(
                 )
                 tune_args = {"x": current_x, "handle": handle, "config": config}
                 t, notify_t = bench_kineto(
-                    lambda: (
-                        buffer.dispatch(**tune_args),
-                        # dist.barrier()
-                    ),
-                    ("dispatch", "notify"),
-                    # num_tests=3,
+                    lambda: buffer.dispatch(**tune_args), ("dispatch", "notify")
                 )
                 if t < best_time:
                     best_time, best_results = t, (
@@ -460,9 +427,7 @@ def test_main(
             )
             tune_args = {"x": recv_x, "handle": handle, "config": config}
             t, notify_t = bench_kineto(
-                lambda: buffer.combine(**tune_args),
-                ("combine", "notify"),
-                trace_path=f"/tmp/kineto_trace_rank{local_rank}.json",
+                lambda: buffer.combine(**tune_args), ("combine", "notify")
             )
             if local_rank == 0:
                 print(
@@ -490,7 +455,6 @@ def test_loop(
     local_rank: int, num_local_ranks: int, num_nodes: int, args: argparse.Namespace
 ):
     rank, num_ranks, group = init_dist_under_torchrun(local_rank, num_local_ranks)
-    print("test_ll_compatibility =", args.test_ll_compatibility)
     if args.test_ll_compatibility:
         ll_num_tokens, ll_hidden, ll_num_experts, ll_num_topk = 16, 5120, 256, 9
 

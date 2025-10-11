@@ -35,12 +35,6 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   assert(ring_buffer_idx < kRingsPerProxy);
   int ring_idx = thread_idx * kRingsPerProxy + ring_buffer_idx;
   assert(ring_idx < num_ring_addrs);
-
-  // int safe_n = num_ring_addrs > 0 ? num_ring_addrs : 1;
-  // assert(safe_n > 0);
-  // assert(expert_idx  < safe_n);
-  // int ring_idx = (expert_idx >= 0 ? expert_idx : 0) % safe_n;
-
   unsigned long long rptr_val = static_cast<unsigned long long>(req_rptr);
   unsigned long long lptr_val = static_cast<unsigned long long>(req_lptr);
   unsigned long long bytes_val = static_cast<unsigned long long>(bytes);
@@ -127,11 +121,6 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     assert(ring_buffer_idx < kRingsPerProxy);
     int ring_idx = thread_idx * kRingsPerProxy + ring_buffer_idx;
     assert(ring_idx < num_ring_addrs);
-
-    // int safe_n = num_ring_addrs > 0 ? num_ring_addrs : 1;
-    // assert(safe_n > 0);
-    // assert(warp_id < safe_n);
-    // int ring_idx = (warp_id >= 0 ? warp_id : 0) % safe_n;
     auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
         static_cast<uintptr_t>(ring_addrs[ring_idx]));
     uint64_t cur_head = rb->head;

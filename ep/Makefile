@@ -56,21 +56,15 @@ INSTALL_DIR          := $(PYTHON_SITE_PACKAGES)/uccl
 # GPU arch (override with: make SM=90)
 SM ?= 90
 
-CXXFLAGS  := -O3 -std=c++20 -Wall -pthread -fPIC -fvisibility=hidden
+CXXFLAGS  := -O3 -std=c++17 -Wall -pthread -fPIC -fvisibility=hidden
 LDFLAGS := -lpthread -lglog -libverbs -lnl-3 -lnl-route-3 -Xlinker -rpath -Xlinker $(CUDA_PATH)/lib64
-NVCCFLAGS := -O3 -std=c++20 -Xcompiler "-Wall -pthread -fPIC -fvisibility=hidden" -ccbin /usr/bin/g++ --expt-relaxed-constexpr
+NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread -fPIC -fvisibility=hidden" -ccbin /usr/bin/g++ --expt-relaxed-constexpr
 INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../include 
 
 CXXFLAGS  += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS)
 NVCCFLAGS += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS)
 LDFLAGS   += $(EFA_LDFLAGS)
 INCLUDES  += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS)
-
-NSYS_NVTX_ROOT ?= /opt/nvidia/nsight-systems/2024.6.2/target-linux-x64/nvtx
-INCLUDES += -I$(NSYS_NVTX_ROOT)/include
-LDFLAGS  += -lnvToolsExt
-
-NVCCFLAGS += -lineinfo -DEP_ENABLE_DEVICE_NVTX=1
 
 SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp src/peer_copy_worker.cpp src/uccl_proxy.cpp src/uccl_bench.cpp src/peer_copy_manager.cpp 
 SRC_CU  := src/gpu_kernel.cu src/peer_copy.cu src/py_cuda_shims.cu src/internode_ll.cu src/internode.cu src/layout.cu src/intranode.cu src/ep_runtime.cu

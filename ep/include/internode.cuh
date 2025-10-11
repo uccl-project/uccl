@@ -54,10 +54,6 @@ void cached_notify(int hidden_int4, int num_scales, int num_topk_idx,
                    uint64_t const* ring_addrs, int num_ring_addrs,
                    void* atomic_buffer_ptr);
 
-// #ifndef EP_DBG_LOG_RECV
-// #define EP_DBG_LOG_RECV 1
-// #endif
-
 void dispatch(void* recv_x, float* recv_x_scales, int64_t* recv_topk_idx,
               float* recv_topk_weights, void* recv_src_meta, void const* x,
               float const* x_scales, int64_t const* topk_idx,
@@ -76,14 +72,7 @@ void dispatch(void* recv_x, float* recv_x_scales, int64_t* recv_topk_idx,
               int num_max_nvl_chunked_recv_tokens, int rank, int num_ranks,
               bool is_cached_dispatch, cudaStream_t stream, int num_channels,
               bool low_latency_mode, uint64_t const* ring_addrs,
-              int num_ring_addrs, void* atomic_buffer_ptr
-#if EP_DBG_LOG_RECV
-              ,
-              int64_t* __restrict__ dbg_recv_idx,  // [32][EP_DBG_MAX_LOG]
-              int* __restrict__ dbg_recv_cnt,      // [32]
-              int dbg_max_log                      // EP_DBG_MAX_LOG
-#endif
-);
+              int num_ring_addrs, void* atomic_buffer_ptr);
 
 void combine(cudaDataType_t type, void* combined_x,
              float* combined_topk_weights,
