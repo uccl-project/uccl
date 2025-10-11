@@ -318,5 +318,4 @@ void apply_pending_updates(ProxyCtx& ctx,
                            void* atomic_buffer_ptr, int num_experts,
                            int num_ranks);
 
-int poll_cq_once(ibv_cq* cq, ibv_wc* wc, int max_cqes);
 #endif  // RDMA_HPP

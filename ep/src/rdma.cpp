@@ -251,7 +251,7 @@ ibv_cq* create_per_thread_cq(ProxyCtx& S) {
 }
 
 #ifdef EFA
-struct ibv_qp* create_srd_qp_ex(ProxyCtx& S, ibv_cq* cq_for_this_qp) {
+struct ibv_qp* create_srd_qp_ex(ProxyCtx& S) {
   struct ibv_qp_init_attr_ex qp_attr_ex = {};
   struct efadv_qp_init_attr efa_attr = {};
 
@@ -271,8 +271,8 @@ struct ibv_qp* create_srd_qp_ex(ProxyCtx& S, ibv_cq* cq_for_this_qp) {
   qp_attr_ex.qp_context = S.context;
   qp_attr_ex.sq_sig_all = 1;
 
-  qp_attr_ex.send_cq = cq_for_this_qp;
-  qp_attr_ex.recv_cq = cq_for_this_qp;
+  qp_attr_ex.send_cq = S.cq;
+  qp_attr_ex.recv_cq = S.cq;
 
   qp_attr_ex.qp_type = IBV_QPT_DRIVER;
 
@@ -322,28 +322,6 @@ struct ibv_qp* create_srd_qp_ex(ProxyCtx& S, ibv_cq* cq_for_this_qp) {
 }
 #endif
 
-static inline ibv_cq* create_cq_for_qp(ProxyCtx& S, int cq_depth) {
-#ifdef EFA
-  struct ibv_cq_init_attr_ex cq_ex_attr = {};
-  cq_ex_attr.cqe = cq_depth;
-  cq_ex_attr.cq_context = nullptr;
-  cq_ex_attr.channel = nullptr;
-  cq_ex_attr.comp_vector = 0;
-  cq_ex_attr.wc_flags = IBV_WC_STANDARD_FLAGS;
-  cq_ex_attr.comp_mask = 0;
-  cq_ex_attr.flags = 0;
-  ibv_cq* cq = (struct ibv_cq*)ibv_create_cq_ex(S.context, &cq_ex_attr);
-#else
-  ibv_cq* cq = ibv_create_cq(S.context, cq_depth, nullptr, nullptr, 0);
-#endif
-  if (!cq) {
-    perror("create_cq_for_qp");
-    std::abort();
-  }
-  S.extra_cqs.push_back(cq);
-  return cq;
-}
-
 void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
                           RDMAConnectionInfo* local_info, int rank,
                           size_t num_rings) {
@@ -351,14 +329,13 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   if (S.ack_qp) return;
   if (S.recv_ack_qp) return;
 #ifdef EFA
-  S.qp = create_srd_qp_ex(S, S.cq);
-  S.ack_qp = create_srd_qp_ex(S, S.cq);
-  S.recv_ack_qp = create_srd_qp_ex(S, S.cq);
+  S.qp = create_srd_qp_ex(S);
+  S.ack_qp = create_srd_qp_ex(S);
+  S.recv_ack_qp = create_srd_qp_ex(S);
   const size_t rings_to_create = std::min(num_rings, (size_t)kRingsPerProxy);
   S.data_qps_by_ring.resize(rings_to_create);
   for (size_t r = 0; r < rings_to_create; ++r) {
-    ibv_cq* ring_cq = create_cq_for_qp(S, kMaxOutstandingSends * 2);
-    S.data_qps_by_ring[r] = create_srd_qp_ex(S, ring_cq);
+    S.data_qps_by_ring[r] = create_srd_qp_ex(S);
   }
 
   // Advertise per-ring QPNs (zero-fill the rest for determinism)
