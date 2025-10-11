@@ -519,6 +519,11 @@ def destroy_uccl(proxies, workers):
         ep.unregister_proxy(device_index)
     except Exception:
         pass
+    try:
+        for shm_file in glob.glob("/dev/shm/uccl_barrier_*"):
+            os.remove(shm_file)
+    except Exception:
+        pass
     print("✓ UCCL destroyed", flush=True)
 
 
