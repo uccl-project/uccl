@@ -1,29 +1,8 @@
-# TCPX GPU-to-GPU Transfer
+# TCPX P2P Performance Benchmark
 
-TCPX-based GPU-to-GPU data transfer implementation using [nccl-plugin-gpudirecttcpx](https://github.com/google/nccl-plugin-gpudirecttcpx).
+Multi-channel TCPX GPU-to-GPU performance test using Google's nccl-plugin-gpudirecttcpx.
 
-## Features
-
-- TCPX connection management (listen, accept, connect)
-- CUDA device buffer registration
-- Async send/receive operations
-- RX metadata parsing and descriptor construction
-- Multiple unpack implementations:
-  - **D2D**: Device-to-device memcpy (default, recommended)
-  - **Host**: Host-mediated gather (fallback for debugging)
-  - **Kernel**: CUDA kernel-based unpack (experimental, not in this PR)
-
----
-
-## Setup Guide
-
-### Prerequisites
-
-- CUDA Toolkit 11.0+
-- H100 or compatible GPU with devmem-tcp support
-- Linux kernel with devmem-tcp support
-- C++17 compatible compiler
-- NCCL GPUDirect TCPX plugin installed
+## Quick Start
 
 ### Step 1: Install TCPX Plugin
 
@@ -45,241 +24,119 @@ sudo ln -sf libnccl-net.so libnccl-net-tcpx.so
 
 ```bash
 # Set UCCL home directory
-export UCCL_HOME=/mnt/user_storage/uccl
+export UCCL_HOME=/your/uccl
 
 # Navigate to TCPX directory
 cd $UCCL_HOME/p2p/tcpx
 ```
 
 ### Step 3: Build
-
 ```bash
-# Clean previous builds
 make clean
-
-# Build the test executable
-make test_tcpx_transfer
+make all
 ```
 
-### Step 4: Configure Unpack Mode
-
-Choose the unpack implementation:
-
+### Step 4: Run
 ```bash
-# Option 1: D2D mode (recommended for production)
-export UCCL_TCPX_UNPACK_IMPL=d2d
+# Server (node 1)
+./run_p2p_fullmesh.sh server
 
-# Option 2: Host mode (for debugging)
-export UCCL_TCPX_UNPACK_IMPL=host
+# Client (node 2)
+./run_p2p_fullmesh.sh client <server_ip>
 ```
 
-### Step 5: Run Tests
-
-**Using the test script (recommended)**:
-
-```bash
-# Make script executable
-chmod +x run_tcpx_test.sh
-
-# Server (Node 1)
-./run_tcpx_test.sh transfer server
-
-# Client (Node 2)
-./run_tcpx_test.sh transfer <server_ip>
+### Expected Output in each server's log
 ```
-
-**Manual execution**:
-
-```bash
-# Server (Node 1)
-./tests/test_tcpx_transfer server
-
-# Client (Node 2)
-./tests/test_tcpx_transfer client <server_ip>
-```
-
----
-
-## Quick Start (TL;DR)
-
-```bash
-# One-time setup
-sudo mkdir -p /usr/local/tcpx/lib64
-sudo cp -r /var/lib/tcpx/lib64/* /usr/local/tcpx/lib64/
-cd /usr/local/tcpx/lib64
-sudo ln -sf libnccl-net.so libnccl-net-tcpx.so
-
-# Build and run
-export UCCL_HOME=/mnt/user_storage/uccl
-cd $UCCL_HOME/p2p/tcpx
-make clean && make test_tcpx_transfer
-chmod +x run_tcpx_test.sh
-
-# Choose mode
-export UCCL_TCPX_UNPACK_IMPL=d2d  # or 'host'
-
-# Run test
-./run_tcpx_test.sh transfer server  # Node 1
-./run_tcpx_test.sh transfer <ip>    # Node 2
+[PERF] Avg (10 iter): 22.42 ms, BW: 2.85 GB/s
 ```
 
 ---
 
 ## Environment Variables
 
-| Variable | Values | Description |
-|----------|--------|-------------|
-| `UCCL_TCPX_UNPACK_IMPL` | `d2d` (default) | Device-to-device memcpy |
-| | `host` | Host-mediated transfer |
-| | `kernel` | GPU kernel (experimental) |
-| `UCCL_TCPX_DEBUG` | `0` or `1` | Enable verbose logging |
-
----
-
-## Expected Output
-
-**Successful test**:
-```
-[DEBUG] === TCPX GPU-to-GPU transfer test ===
-[DEBUG] Received data (23 bytes): Hello from TCPX client!
-[DEBUG] ✓ Data validation PASSED
-[DEBUG] Server test completed successfully
-```
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `UCCL_TCPX_NUM_CHANNELS` | 2 | Number of TCPX channels |
+| `UCCL_TCPX_PERF_SIZE` | 4MB | Transfer size per iteration |
+| `UCCL_TCPX_PERF_ITERS` | 10 | Number of iterations |
+| `UCCL_TCPX_CHUNK_BYTES` | 512KB | Chunk size |
+| `UCCL_TCPX_UNPACK_IMPL` | kernel | Unpack mode: kernel/d2d/host |
+| `NCCL_NSOCKS_PERTHREAD` | 2 | Sockets per thread (TCPX plugin) |
+| `NCCL_SOCKET_NTHREADS` | 1 | Threads per comm (TCPX plugin) |
 
 ---
 
 ## Architecture
 
-```
-Client                          Server
-  │                               │
-  ├─ cudaMalloc(send_buf)        ├─ cudaMalloc(recv_buf)
-  ├─ tcpx_reg_mr(send_buf)       ├─ tcpx_reg_mr(recv_buf)
-  ├─ Write payload to GPU        │
-  ├─ tcpx_isend() ──────────────>├─ tcpx_irecv()
-  │                               ├─ Poll tcpx_test()
-  │                               ├─ Parse RX metadata
-  │                               ├─ buildDescriptorBlock()
-  │                               ├─ Execute unpack (D2D/host)
-  │                               ├─ Validate received data
-  └─ Cleanup                      └─ Cleanup
-```
+### Components
 
----
-## Components
+- **ChannelManager**: Manages multiple TCPX connections per GPU
+- **Bootstrap**: Exchanges connection handles between server/client
+- **SlidingWindow**: Prevents exhausting TCPX request pool (MAX_REQUESTS=16)
+- **UnpackKernel**: GPU kernel to copy scattered 4KB fragments to contiguous memory
+- **UnpackLauncher**: Manages CUDA streams and events
 
-### TCPX Interface Layer
-- `tcpx_interface.h`: C API definitions
-- `tcpx_impl.cc`: TCPX plugin wrapper implementation
+### Data Flow
 
-### RX Descriptor Module
-- `rx_descriptor.h`: Header-only descriptor construction utilities
-  - Uses `tcpx::plugin::loadMeta` as descriptor type (avoids duplication)
-  - Provides `buildDescriptorBlock()` inline function
+**Server (Receiver)**:
+1. Listen on all channels → Bootstrap send handles → Accept connections
+2. CUDA init → Register GPU receive buffer
+3. Main loop:
+   - Post `tcpx_irecv` (round-robin across channels)
+   - Wait for completion via `tcpx_test`
+   - Launch GPU unpack kernel
+   - Call `tcpx_irecv_consumed` after kernel completes
 
-### Device Unpack (`device/`)
-- `unpack_kernels.cu`: CUDA kernels for GPU-side unpack (experimental)
-- `unpack_launch.{h,cu}`: Kernel launcher and configuration (experimental)
-- **Note**: Device unpack is not included in this PR
-
-### Tests (`tests/`)
-- `test_tcpx_transfer.cc`: End-to-end GPU-to-GPU transfer validation
+**Client (Sender)**:
+1. Bootstrap receive handles → Connect to all channels
+2. CUDA init → Register GPU send buffer
+3. Main loop:
+   - Post `tcpx_isend` (round-robin across channels)
+   - Wait for completion via `tcpx_test`
 
 ---
 
-## Troubleshooting
+## File Structure
 
-### Plugin Not Found
+```
+p2p/tcpx/
+├── Makefile
+├── tcpx_impl.cc                      # TCPX plugin wrapper
+├── include/                          # Headers (8 files)
+│   ├── tcpx_interface.h
+│   ├── tcpx_structs.h
+│   ├── channel_manager.h
+│   ├── bootstrap.h
+│   ├── sliding_window.h
+│   └── rx_descriptor.h
+├── src/                              # Implementation (3 files)
+│   ├── channel_manager.cc
+│   ├── bootstrap.cc
+│   └── sliding_window.cc
+├── device/                           # GPU code (3 files)
+│   ├── unpack_kernels.cu
+│   ├── unpack_launch.cu
+│   └── unpack_launch.h
+└── tests/
+    └── test_tcpx_perf_multi.cc       # Main program
+```
 
-**Error**: `Failed to load TCPX plugin`
+---
 
-**Solution**:
+## Advanced Usage
+
+### Multi-Channel Configuration
+
 ```bash
-# Verify plugin exists
-ls -la /usr/local/tcpx/lib64/libnccl-net-tcpx.so
+# 1 channel × 8 sockets (maximize single channel bandwidth)
+UCCL_TCPX_NUM_CHANNELS=1 NCCL_NSOCKS_PERTHREAD=8 ./tests/test_tcpx_perf_multi server 0
 
-# If not, run setup again
-sudo mkdir -p /usr/local/tcpx/lib64
-sudo cp -r /var/lib/tcpx/lib64/* /usr/local/tcpx/lib64/
-cd /usr/local/tcpx/lib64
-sudo ln -sf libnccl-net.so libnccl-net-tcpx.so
+# 2 channels × 4 sockets (balanced)
+UCCL_TCPX_NUM_CHANNELS=2 NCCL_NSOCKS_PERTHREAD=4 ./tests/test_tcpx_perf_multi server 0
+
+# 4 channels × 2 sockets (current default)
+UCCL_TCPX_NUM_CHANNELS=4 NCCL_NSOCKS_PERTHREAD=2 ./tests/test_tcpx_perf_multi server 0
 ```
 
-### Build Errors
-
-**Error**: `cuda_runtime.h: No such file or directory`
-
-**Solution**:
-```bash
-# Set CUDA_HOME
-export CUDA_HOME=/usr/local/cuda
-export PATH=$CUDA_HOME/bin:$PATH
-export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
-```
-
-### Connection Timeout
-
-**Error**: `Bootstrap connection timeout`
-
-**Solution**:
-- Verify server IP is correct
-- Check firewall allows TCP port 12345
-- Ensure both nodes can ping each other
-- Verify TCPX plugin is loaded on both nodes
-
-### Data Validation Failed
-
-**Error**: `Data validation FAILED`
-
-**Solution**:
-- Try host mode: `export UCCL_TCPX_UNPACK_IMPL=host`
-- Enable debug logging: `export UCCL_TCPX_DEBUG=1`
-- Check GPU memory is not corrupted
-- Verify CUDA driver version compatibility
-
-
----
-
-## Implementation Details
-
-### TCPX Plugin Integration
-
-Uses NCCL plugin v7 APIs:
-- `ncclNetPlugin_v7`: Main plugin interface
-- `ncclNet_v7_t`: Network operations (init, listen, accept, connect)
-- Device handle management for GPU memory registration
-
-### RX Metadata Format
-
-TCPX delivers fragments with metadata:
-```c
-struct loadMeta {
-  uint32_t src_off;  // Offset in bounce buffer
-  uint32_t len;      // Fragment length
-  uint64_t dst_off;  // Offset in destination buffer
-};
-```
-
-### Memory Management
-
-- **Bounce buffers**: TCPX plugin managed (devmem-tcp mapped GPU memory)
-- **Destination buffers**: Application allocated via `cudaMalloc`
-- **Descriptor blocks**: Host-side structures for unpack operations
-
----
-
-
-## Known Limitations
-
-1. **Kernel mode**: Direct GPU kernel access to devmem-tcp bounce buffers requires staging buffer workaround (not in this PR)
-
-2. **Multi-fragment optimization**: Current D2D implementation issues one copy per fragment
-
----
-
-
-## References
-
-- [nccl-plugin-gpudirecttcpx](https://github.com/google/nccl-plugin-gpudirecttcpx)
-- [Linux devmem-tcp](https://lwn.net/Articles/945687/)
+**Note**: `total_sockets = UCCL_TCPX_NUM_CHANNELS × NCCL_NSOCKS_PERTHREAD × NCCL_SOCKET_NTHREADS`
 
