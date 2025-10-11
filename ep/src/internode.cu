@@ -735,8 +735,8 @@ __global__ void __launch_bounds__(
       while (is_token_in_rank_uint64 != 0 and
              rdma_tail_idx - cached_rdma_channel_head >=
                  num_max_rdma_chunked_recv_tokens) {
-        cached_rdma_channel_head =
-            static_cast<int>(ld_sys_cv_u64(rdma_channel_head.buffer(lane_id)));
+        cached_rdma_channel_head = static_cast<int>(
+            ld_acquire_sys_u64(rdma_channel_head.buffer(lane_id)));
 
         // Timeout check
         if (clock64() - start_time >= NUM_TIMEOUT_CYCLES) {
@@ -1107,8 +1107,9 @@ __global__ void __launch_bounds__(
         src_rdma_rank = (src_rdma_rank + 1) % kNumRDMARanks;
         if (__shfl_sync(0xffffffff, num_tokens_to_recv_from_rdma,
                         src_rdma_rank) > 0) {
-          if (lane_id == src_rdma_rank and
-              cached_rdma_channel_head == cached_rdma_channel_tail)
+          // if (lane_id == src_rdma_rank and
+          // cached_rdma_channel_head == cached_rdma_channel_tail)
+          if (lane_id == src_rdma_rank)
             cached_rdma_channel_tail = static_cast<int>(
                 ld_sys_cv_u64(rdma_channel_tail.buffer(src_rdma_rank)));
           if (__shfl_sync(0xffffffff,
@@ -1142,8 +1143,10 @@ __global__ void __launch_bounds__(
             rdma_channel_data.recv_buffer(src_rdma_rank) +
             slot * num_bytes_per_token + hidden_bytes + scale_bytes);
 
-        int seen_bits =
-            ld_acquire_sys_global(&meta_ptr->is_token_in_nvl_rank_bits);
+        // int seen_bits =
+        //     ld_acquire_sys_global(&meta_ptr->is_token_in_nvl_rank_bits);
+        int seen_bits = ld_sys_cv_u32(reinterpret_cast<uint32_t volatile*>(
+            &meta_ptr->is_token_in_nvl_rank_bits));
         if (seen_bits == 0) {
           // printf("seen_bits == 0 early break, t: %d, src_rdma_head: %d,
           // src_rdma_tail: %d\n", t, src_rdma_head, src_rdma_tail);
@@ -1159,23 +1162,18 @@ __global__ void __launch_bounds__(
         auto rdma_slot_idx = i % num_max_rdma_chunked_recv_tokens;
         auto shifted = rdma_channel_data.recv_buffer(src_rdma_rank) +
                        rdma_slot_idx * num_bytes_per_token;
-        auto src_meta = ld_nc_global(reinterpret_cast<SourceMeta*>(
-            shifted + hidden_bytes + scale_bytes));
-        int seen_bits = ld_acquire_sys_global(
+        // auto src_meta = ld_nc_global(reinterpret_cast<SourceMeta*>(
+        //     shifted + hidden_bytes + scale_bytes));
+        // int seen_bits = ld_acquire_sys_global(
+        //     &reinterpret_cast<SourceMeta*>(shifted + hidden_bytes +
+        //     scale_bytes)
+        //          ->is_token_in_nvl_rank_bits);
+        int seen_bits = ld_sys_cv_u32(reinterpret_cast<uint32_t volatile*>(
             &reinterpret_cast<SourceMeta*>(shifted + hidden_bytes + scale_bytes)
-                 ->is_token_in_nvl_rank_bits);
+                 ->is_token_in_nvl_rank_bits));
         if (seen_bits == 0) trap();
-        // lane_id == src_rdma_rank ? (num_tokens_to_recv_from_rdma -= 1) : 0;
-        if (lane_id == src_rdma_rank) {
-          num_tokens_to_recv_from_rdma -= 1;
-#if EP_DBG_LOG_FWD
-          int g = dbg_idx(channel_id, dst_nvl_rank, src_rdma_rank);
-          st_release_sys_global(dbg_tokens_left_g + g,
-                                num_tokens_to_recv_from_rdma);
-          st_release_sys_global(reinterpret_cast<int*>(dbg_last_clk_g) + g,
-                                (int)clock64());
-#endif
-        }
+        lane_id == src_rdma_rank ? (num_tokens_to_recv_from_rdma -= 1) : 0;
+
         // bool is_in_dst_nvl_rank =
         // src_meta.is_token_in_nvl_rank(dst_nvl_rank);
         bool is_in_dst_nvl_rank = (seen_bits >> dst_nvl_rank) & 1;
@@ -2389,7 +2387,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
           // num_chunked_tokens` Here, `token_start_idx` is the actual tail
           int num_used_slots =
               token_start_idx -
-              ld_sys_cv_u64(rdma_channel_head.buffer(dst_rdma_rank));
+              ld_acquire_sys_u64(rdma_channel_head.buffer(dst_rdma_rank));
           if (num_max_rdma_chunked_recv_tokens - num_used_slots >=
               num_chunked_tokens)
             break;
@@ -2401,7 +2399,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                 "RDMA: %d, nvl: %d, dst RDMA: %d, head: %ld, tail: %d, "
                 "chunked: %d\n",
                 channel_id, rdma_rank, nvl_rank, dst_rdma_rank,
-                ld_sys_cv_u64(rdma_channel_head.buffer(dst_rdma_rank)),
+                ld_acquire_sys_u64(rdma_channel_head.buffer(dst_rdma_rank)),
                 token_start_idx, num_chunked_tokens);
             trap();
           }

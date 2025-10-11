@@ -56,9 +56,9 @@ INSTALL_DIR          := $(PYTHON_SITE_PACKAGES)/uccl
 # GPU arch (override with: make SM=90)
 SM ?= 90
 
-CXXFLAGS  := -O3 -std=c++17 -Wall -pthread -fPIC -fvisibility=hidden
+CXXFLAGS  := -O3 -std=c++20 -Wall -pthread -fPIC -fvisibility=hidden
 LDFLAGS := -lpthread -lglog -libverbs -lnl-3 -lnl-route-3 -Xlinker -rpath -Xlinker $(CUDA_PATH)/lib64
-NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread -fPIC -fvisibility=hidden" -ccbin /usr/bin/g++ --expt-relaxed-constexpr
+NVCCFLAGS := -O3 -std=c++20 -Xcompiler "-Wall -pthread -fPIC -fvisibility=hidden" -ccbin /usr/bin/g++ --expt-relaxed-constexpr
 INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../include 
 
 CXXFLAGS  += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS)
