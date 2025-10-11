@@ -29,8 +29,11 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   // NOTE(MaoZiming): different from the nvshmemi_ibgda_put_nbi_warp in
   // ibgda_device.cuh, we don't do warp-cooperation.
   if (lane_id != 0) return;
-  int safe_n = num_ring_addrs > 0 ? num_ring_addrs : 1;
-  int ring_idx = (expert_idx >= 0 ? expert_idx : 0) % safe_n;
+  int thread_idx = (expert_idx % num_ring_addrs) % kNumThBlocks;
+  int ring_buffer_idx = (expert_idx % num_ring_addrs) / kNumThBlocks;
+  assert(ring_buffer_idx < kRingsPerProxy);
+  int ring_idx = thread_idx * kRingsPerProxy + ring_buffer_idx;
+  assert(ring_idx < num_ring_addrs);
   unsigned long long rptr_val = static_cast<unsigned long long>(req_rptr);
   unsigned long long lptr_val = static_cast<unsigned long long>(req_lptr);
   unsigned long long bytes_val = static_cast<unsigned long long>(bytes);
@@ -111,9 +114,11 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     }
 #endif
     rptr -= atomic_base_addr;
-
-    int safe_n = num_ring_addrs > 0 ? num_ring_addrs : 1;
-    int ring_idx = (warp_id >= 0 ? warp_id : 0) % safe_n;
+    int thread_idx = (warp_id % num_ring_addrs) % kNumThBlocks;
+    int ring_buffer_idx = (warp_id % num_ring_addrs) / kNumThBlocks;
+    assert(ring_buffer_idx < kRingsPerProxy);
+    int ring_idx = thread_idx * kRingsPerProxy + ring_buffer_idx;
+    assert(ring_idx < num_ring_addrs);
     auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
         static_cast<uintptr_t>(ring_addrs[ring_idx]));
     uint64_t cur_head = rb->head;

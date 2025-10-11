@@ -357,45 +357,17 @@ extract_required_scale_format(float value) {
 }
 
 // 32-bit system-consistent load with acquire semantics (GH200-safe)
-__device__ __forceinline__ uint32_t ld_sys_cv_u32(const volatile uint32_t* p) {
+__device__ __forceinline__ uint32_t
+ld_acquire_sys_global(const volatile uint32_t* p) {
   uint32_t v;
-  // Coherent, volatile load from global memory
-  asm volatile("ld.global.cv.u32 %0, [%1];" : "=r"(v) : "l"(p));
-  // TODO(MaoZiming): double check.
-#ifdef USE_GRACE_HOPPER
-  // Hopper/GH200: lightweight acquire fence at system scope
-  asm volatile("fence.acq_rel.sys;" ::: "memory");
-#elif __CUDA_ARCH__ >= 800
-  // Ampere fallback (sm_80–sm_89)
-  asm volatile("fence.acquire.sys;" ::: "memory");
-#else
-  // Older architectures (Volta and below)
-  asm volatile("membar.sys;" ::: "memory");
-#endif
-
+  asm volatile("ld.acquire.sys.global.u32 %0, [%1];" : "=r"(v) : "l"(p));
   return v;
 }
 
 __device__ __forceinline__ uint64_t
-ld_acquire_sys_u64(const volatile uint64_t* p) {
-  uint64_t x;
-  asm volatile("ld.acquire.sys.global.u64 %0, [%1];" : "=l"(x) : "l"(p));
-  return x;
-}
-
-__device__ __forceinline__ uint64_t ld_sys_cv_u64(const volatile uint64_t* p) {
+ld_acquire_sys_global(const volatile uint64_t* p) {
   uint64_t v;
-  asm volatile("ld.global.cv.u64 %0, [%1];" : "=l"(v) : "l"(p));
-#ifdef USE_GRACE_HOPPER
-  // Hopper/GH200: lightweight acquire fence at system scope
-  asm volatile("fence.acq_rel.sys;" ::: "memory");
-#elif __CUDA_ARCH__ >= 800
-  // Ampere fallback (sm_80–sm_89)
-  asm volatile("fence.acquire.sys;" ::: "memory");
-#else
-  // Older architectures (Volta and below)
-  asm volatile("membar.sys;" ::: "memory");
-#endif
+  asm volatile("ld.acquire.sys.global.u64 %0, [%1];" : "=l"(v) : "l"(p));
   return v;
 }
 
