@@ -15,6 +15,7 @@ os.environ["UCCL_RCMODE"] = "1"
 
 try:
     from uccl import p2p
+    from uccl.utils import get_tensor_id_by_tensor, create_tensor
 except ImportError as e:
     sys.stderr.write(f"Failed to import p2p: {e}\n")
     raise
@@ -49,9 +50,10 @@ def test_local():
         assert ok, "connect failed"
         print(f"[Server] connected (conn_id={conn_id})")
 
-        tensor = torch.ones(1024, dtype=torch.float32, device="cuda:0")
-        ok, mr_id = ep.reg(tensor.data_ptr(), tensor.numel() * 4)
-        assert ok
+        tensor, t_id = create_tensor((1024,), dtype=torch.float32, device="cuda:0")
+        mr_id = get_tensor_id_by_tensor(tensor=tensor)
+        assert tensor.is_contiguous()
+        assert mr_id == t_id
 
         fifo_meta = fifo_meta_q.recv()
         assert isinstance(fifo_meta, (bytes, bytearray)) and len(fifo_meta) == 64
@@ -72,12 +74,12 @@ def test_local():
         assert ok, "accept failed"
         print(f"[Client] accepted (conn_id={conn_id})")
 
-        tensor = torch.ones(1024, dtype=torch.float32, device="cuda:0")
-
+        tensor, t_id = create_tensor((1024,), dtype=torch.float32, device="cuda:0")
         print("data pointer hex", hex(tensor.data_ptr()))
         torch.cuda.synchronize()
-        ok, mr_id = ep.reg(tensor.data_ptr(), tensor.numel() * 4)
-        assert ok
+        mr_id = get_tensor_id_by_tensor(tensor=tensor)
+        assert mr_id == t_id
+
         time.sleep(0.1)
         print("advertise data pointer hex", hex(tensor.data_ptr()))
         ok, fifo_blob = ep.advertise(
