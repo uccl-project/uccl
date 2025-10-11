@@ -43,11 +43,13 @@ int get_source_meta_bytes() { return sizeof(SourceMeta); }
 
 __host__ __device__ __forceinline__ int get_num_bytes_per_token(
     int hidden_int4, int num_scales, int num_topk_idx, int num_topk_weights) {
+  // Align the packed token to 128B to improve L2/TMA transaction efficiency.
+  constexpr size_t kPerTokenAlign = 128;
   return static_cast<int>(
       align(hidden_int4 * sizeof(int4) + sizeof(SourceMeta) +
                 num_scales * sizeof(float) + num_topk_idx * sizeof(int) +
                 num_topk_weights * sizeof(float),
-            sizeof(int4)));
+            kPerTokenAlign));
 }
 
 __host__ __device__ __forceinline__ std::pair<int, int> get_rdma_clean_meta(
@@ -2232,7 +2234,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
           start_time = clock64();
           while (cached_nvl_channel_tail_idx <= expected_head) {
             cached_nvl_channel_tail_idx =
-                ld_acquire_sys_global(nvl_channel_tail.buffer(lane_id));
+                ld_acquire_global(nvl_channel_tail.buffer(lane_id));
 
             // Timeout check
             if (clock64() - start_time > NUM_TIMEOUT_CYCLES and
@@ -2438,8 +2440,10 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
             if (not rdma_receiver_retired[i])
               min_head =
                   min(min_head, rdma_receiver_rdma_head[i][dst_rdma_rank]);
+          int const kHeadUpdateQuantum =
+              max(1, num_max_rdma_chunked_send_tokens >> 1);
           if (min_head != std::numeric_limits<int>::max() and
-              min_head >= last_rdma_head + num_max_rdma_chunked_send_tokens and
+              min_head >= last_rdma_head + kHeadUpdateQuantum and
               lane_id < kNumRDMARanks) {
             uccl::nvshmemi_ibgda_amo_nonfetch_add(
                 reinterpret_cast<uint64_t>(rdma_channel_head.buffer(rdma_rank)),
