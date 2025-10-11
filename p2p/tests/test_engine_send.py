@@ -15,6 +15,7 @@ from typing import Tuple
 
 try:
     from uccl import p2p
+    from uccl.utils import get_tensor_id_by_tensor, create_tensor
 
     print("✓ Successfully imported p2p")
 except ImportError as e:
@@ -53,11 +54,10 @@ def test_local():
             f"Server accepted connection from {remote_ip_addr}, GPU {remote_gpu_idx}, conn_id={conn_id}"
         )
 
-        tensor = torch.zeros(1024, dtype=torch.float32)
+        tensor, t_id = create_tensor((1024,), dtype=torch.float32)
+        mr_id = get_tensor_id_by_tensor(tensor=tensor)
         assert tensor.is_contiguous()
-
-        success, mr_id = engine.reg(tensor.data_ptr(), tensor.numel() * 4)
-        assert success
+        assert mr_id == t_id
 
         success = engine.recv(
             conn_id, mr_id, tensor.data_ptr(), size=tensor.numel() * 8
@@ -78,11 +78,10 @@ def test_local():
         assert success
         print(f"Client connected successfully: conn_id={conn_id}")
 
-        tensor = torch.ones(1024, dtype=torch.float32)
+        tensor, t_id = create_tensor((1024,), dtype=torch.float32)
+        mr_id = get_tensor_id_by_tensor(tensor=tensor)
         assert tensor.is_contiguous()
-
-        success, mr_id = engine.reg(tensor.data_ptr(), tensor.numel() * 4)
-        assert success
+        assert mr_id == t_id
 
         success = engine.send(conn_id, mr_id, tensor.data_ptr(), tensor.numel() * 4)
         assert success

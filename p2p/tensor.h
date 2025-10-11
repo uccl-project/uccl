@@ -45,7 +45,8 @@ int get_ipc_handle(void* addr, struct IPCMemHandle* ipchandle);
 int open_ipc_handle(void* addr, struct IPCMemHandle* ipchandle);
 
 // API: for pybind
-void reg_mem(int gpu_id, void* addr, size_t size, uint64_t& mem_id);
+void reg_mem(void* addr, size_t size, uint64_t& mem_id, bool is_device = true,
+             int gpu_id = 0);
 void dereg_mem(uint64_t mem_id);
 
 // for engine Endpoint

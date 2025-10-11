@@ -7,6 +7,7 @@ import numpy as np
 import os
 from uccl import p2p
 from uccl.transfer import TransferManager
+from uccl.utils import create_tensor
 
 # UCCL P2P read requires RC mode, as RDMA UC does not support one-sided read.
 os.environ["UCCL_RCMODE"] = "1"
@@ -17,12 +18,12 @@ os.environ["UCCL_RCMODE"] = "1"
 def _make_buffer(n_bytes: int, device: str, gpu: int):
     n = n_bytes // 4
     if device == "gpu":
-        buf = torch.ones(n, dtype=torch.float32, device=f"cuda:{gpu}")
-        ptr = buf.data_ptr()
+        tensor, _ = create_tensor((n,), dtype=torch.float32, device=f"cuda:{gpu}")
+        ptr = tensor.data_ptr()
     else:
-        buf = torch.ones(n, dtype=torch.float32, pin_memory=True)
-        ptr = buf.data_ptr()
-    return buf, ptr
+        tensor, _ = create_tensor((n,), dtype=torch.float32, device="cpu")
+        ptr = tensor.data_ptr()
+    return tensor, ptr
 
 
 def _pretty(num: int):

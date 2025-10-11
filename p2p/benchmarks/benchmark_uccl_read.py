@@ -11,23 +11,22 @@ os.environ["UCCL_RCMODE"] = "1"
 
 try:
     from uccl import p2p
+    from uccl.utils import get_tensor_id_by_tensor, create_tensor
 except ImportError:
     sys.stderr.write("Failed to import p2p\n")
     raise
 
 
 # parse_metadata is now provided by the C++ layer via p2p.Endpoint.parse_metadata()
-
-
 def _make_buffer(n_bytes: int, device: str, gpu: int):
     n = n_bytes // 4
     if device == "gpu":
-        buf = torch.ones(n, dtype=torch.float32, device=f"cuda:{gpu}")
-        ptr = buf.data_ptr()
+        tensor, t_id = create_tensor((n,), dtype=torch.float32, device=f"cuda:{gpu}")
+        ptr = tensor.data_ptr()
     else:
-        buf = torch.ones(n, dtype=torch.float32, pin_memory=True)
-        ptr = buf.data_ptr()
-    return buf, ptr
+        tensor, t_id = create_tensor((n,), dtype=torch.float32, device="cpu")
+        ptr = tensor.data_ptr()
+    return tensor, ptr, t_id
 
 
 def _pretty(num: int):
@@ -51,9 +50,9 @@ def _run_server_read(args, ep, remote_metadata):
         mr_id_v = []
         size_v = []
         for _ in range(args.num_iovs):
-            buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
-            ok, mr_id = ep.reg(ptr, size_per_block)
-            assert ok
+            buf, ptr, mr_id = _make_buffer(
+                size_per_block, args.device, args.local_gpu_idx
+            )
             buf_v.append(buf)
             ptr_v.append(ptr)
             mr_id_v.append(mr_id)
@@ -83,9 +82,9 @@ def _run_client_recv(args, ep, remote_metadata):
         size_v = []
         fifo_blob_v = []
         for _ in range(args.num_iovs):
-            buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
-            ok, mr_id = ep.reg(ptr, size_per_block)
-            assert ok
+            buf, ptr, mr_id = _make_buffer(
+                size_per_block, args.device, args.local_gpu_idx
+            )
             buf_v.append(buf)
             ptr_v.append(ptr)
             mr_id_v.append(mr_id)

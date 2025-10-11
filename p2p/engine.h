@@ -1,7 +1,7 @@
 #pragma once
 
-#include "transport.h"
 #include "tensor.h"
+#include "transport.h"
 #include "util/gpu_rt.h"
 #include "util/jring.h"
 #include "util/net.h"
@@ -105,13 +105,6 @@ class Endpoint {
    *   conn_id: the ID of the connection
    */
   bool accept(std::string& ip_addr, int& remote_gpu_idx, uint64_t& conn_id);
-
-  // /*Register the data with a specific interface. */
-  // bool reg(void const* data, size_t size, uint64_t& mr_id);
-
-  // bool regv(std::vector<void const*> const& data_v,
-  //           std::vector<size_t> const& size_v, std::vector<uint64_t>& mr_id_v);
-  // bool dereg(uint64_t mr_id);
 
   /*Send data to the remote server. Blocking. */
   bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size);

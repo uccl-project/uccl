@@ -79,7 +79,6 @@ class CollectiveContext:
         self.local_connections = (
             None  # array indexed by rank - True if local, False if remote
         )
-        self.memory_regions: Dict[int, int] = {}  # ptr -> mr_id
         self.initialized = False
 
         # check and setup fd limit and somaxconn for UDS
@@ -319,55 +318,6 @@ class CollectiveContext:
         size = tensor.numel() * tensor.element_size()
         return ptr, size
 
-    def _register_memory(self, ptr: int, size: int) -> int:
-        """Register memory and cache the memory region ID."""
-        if ptr in self.memory_regions:
-            return self.memory_regions[ptr]
-
-        ok, mr_id = self.ep.reg(ptr, size)
-        if not ok:
-            raise RuntimeError("Failed to register memory")
-        self.memory_regions[ptr] = mr_id
-        return mr_id
-
-    def register_tensor(self, tensor: torch.Tensor):
-        """
-        Register a tensor for efficient memory access.
-
-        Note: Registration is only required for tensors used with remote (RDMA) connections.
-        Local IPC connections do not require memory registration.
-
-        Args:
-            tensor: Tensor to register
-        """
-        if not self.initialized:
-            raise RuntimeError("CollectiveContext not initialized. Call init() first.")
-
-        ptr, size = self._get_buffer_info(tensor)
-        self._register_memory(ptr, size)
-
-    def _deregister_memory(self, ptr: int):
-        """Deregister memory and remove the cached memory region ID."""
-        if ptr not in self.memory_regions:
-            return
-
-        mr_id = self.memory_regions[ptr]
-        self.ep.dereg(mr_id)
-        del self.memory_regions[ptr]
-
-    def deregister_tensor(self, tensor: torch.Tensor):
-        """
-        Deregister a tensor that was previously registered.
-
-        Args:
-            tensor: Tensor to deregister
-        """
-        if not self.initialized:
-            raise RuntimeError("CollectiveContext not initialized. Call init() first.")
-
-        ptr, _ = self._get_buffer_info(tensor)
-        self._deregister_memory(ptr)
-
     def send(self, tensor: torch.Tensor, dst: int):
         """
         Send tensor to destination rank (synchronous).
@@ -395,12 +345,7 @@ class CollectiveContext:
                 raise RuntimeError(f"Failed to initiate IPC send to rank {dst}")
         else:
             # Use RDMA for remote connection (requires memory registration)
-            if ptr not in self.memory_regions:
-                raise RuntimeError(
-                    f"Tensor memory not registered for remote communication with rank {dst}. "
-                    f"Call register_tensor() first for tensors used with remote ranks."
-                )
-            mr_id = self.memory_regions[ptr]
+            mr_id = utils.get_tensor_id_by_tensor(tensor=tensor)
             ok = self.ep.send(conn_id, mr_id, ptr, size)
             if not ok:
                 raise RuntimeError(f"Failed to initiate RDMA send to rank {dst}")
@@ -432,12 +377,7 @@ class CollectiveContext:
                 raise RuntimeError(f"Failed to initiate IPC recv from rank {src}")
         else:
             # Use RDMA for remote connection (requires memory registration)
-            if ptr not in self.memory_regions:
-                raise RuntimeError(
-                    f"Tensor memory not registered for remote communication with rank {src}. "
-                    f"Call register_tensor() first for tensors used with remote ranks."
-                )
-            mr_id = self.memory_regions[ptr]
+            mr_id = utils.get_tensor_id_by_tensor(tensor=tensor)
             ok = self.ep.recv(conn_id, mr_id, ptr, size)
             if not ok:
                 raise RuntimeError(f"Failed to initiate RDMA recv from rank {src}")
@@ -473,12 +413,7 @@ class CollectiveContext:
             return transfer_id
         else:
             # Use RDMA async for remote connection (requires memory registration)
-            if ptr not in self.memory_regions:
-                raise RuntimeError(
-                    f"Tensor memory not registered for remote communication with rank {dst}. "
-                    f"Call register_tensor() first for tensors used with remote ranks."
-                )
-            mr_id = self.memory_regions[ptr]
+            mr_id = utils.get_tensor_id_by_tensor(tensor=tensor)
             ok, transfer_id = self.ep.send_async(conn_id, mr_id, ptr, size)
             if not ok:
                 raise RuntimeError(f"Failed to initiate async RDMA send to rank {dst}")
@@ -515,12 +450,7 @@ class CollectiveContext:
             return transfer_id
         else:
             # Use RDMA async for remote connection (requires memory registration)
-            if ptr not in self.memory_regions:
-                raise RuntimeError(
-                    f"Tensor memory not registered for remote communication with rank {src}. "
-                    f"Call register_tensor() first for tensors used with remote ranks."
-                )
-            mr_id = self.memory_regions[ptr]
+            mr_id = utils.get_tensor_id_by_tensor(tensor=tensor)
             ok, transfer_id = self.ep.recv_async(conn_id, mr_id, ptr, size)
             if not ok:
                 raise RuntimeError(
@@ -573,7 +503,6 @@ class CollectiveContext:
         self.send_connections = None
         self.recv_connections = None
         self.local_connections = None
-        self.memory_regions.clear()
         self.ep = None
         self.initialized = False
 
@@ -641,19 +570,9 @@ def test(transfer_id: int) -> bool:
     return get_collective().test(transfer_id)
 
 
-def register_tensor(tensor: torch.Tensor):
-    """Register tensor using the default collective context."""
-    get_collective().register_tensor(tensor)
-
-
 def finalize_collective():
     """Finalize the default collective context."""
     global _default_context
     if _default_context is not None:
         _default_context.finalize()
         _default_context = None
-
-
-def deregister_tensor(tensor: torch.Tensor):
-    """Deregister tensor using the default collective context."""
-    get_collective().deregister_tensor(tensor)

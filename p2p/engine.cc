@@ -129,7 +129,7 @@ Endpoint::~Endpoint() {
   std::vector<uccl::Mhandle*> mr_to_dereg;
   {
     std::shared_lock<std::shared_mutex> lock(mr_mapping_mu_);
-    for (const auto& [id, mr_ptr] : mr_mapping_) {
+    for (auto const& [id, mr_ptr] : mr_mapping_) {
       if (mr_ptr && mr_ptr->mhandle_) {
         mr_to_dereg.push_back(mr_ptr->mhandle_);
       }
@@ -498,9 +498,8 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
       size_send_vec.push_back(chunk_size);
       mhandle = get_mr_handle_by_mem_id(mr_id_v[i]);
       if (mhandle == nullptr) {
-        std::cerr << "[sendv] Error: Invalid mr_id " << mr_id_v[i]
-                    << std::endl;
-          return false;
+        std::cerr << "[sendv] Error: Invalid mr_id " << mr_id_v[i] << std::endl;
+        return false;
       } else {
         mhandle_send_vec.push_back(mhandle);
       }
@@ -594,9 +593,8 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
       size_recv_vec.push_back(chunk_size);
       mhandle = get_mr_handle_by_mem_id(mr_id_v[i]);
       if (mhandle == nullptr) {
-        std::cerr << "[sendv] Error: Invalid mr_id " << mr_id_v[i]
-                    << std::endl;
-          return false;
+        std::cerr << "[sendv] Error: Invalid mr_id " << mr_id_v[i] << std::endl;
+        return false;
       } else {
         mhandle_recv_vec.push_back(mhandle);
       }
@@ -1047,7 +1045,7 @@ bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
                          size_t len, char* out_buf) {
   auto* conn = conn_id_to_conn_[conn_id];
   auto mhandle = get_mr_handle_by_mem_id(mr_id);
-  
+
   uccl::ucclRequest req_data;
   if (ep_->prepare_fifo_metadata(
           static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,

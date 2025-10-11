@@ -16,6 +16,8 @@ engine = p2p.Endpoint(local_gpu_idx=use_gpu_id, num_cpus=4)
 
 tensor, tensor_id = utils.create_tensor((2, 4, 2), torch.float32, f"cuda:{use_gpu_id}")
 print(f"Allocate tensor: id={tensor_id}")
+tensor2, tensor_id2 = utils.create_tensor((2,), torch.float32, "cpu")
+print(f"Allocate tensor2: id={tensor_id2}")
 t_id = utils.get_tensor_id_by_tensor(tensor)
 print(f"Query tensor: id={tensor_id}")
 # test auto free

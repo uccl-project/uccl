@@ -135,7 +135,7 @@ def get_tensor_id_by_tensor(tensor: torch.Tensor):
 def _auto_free_tensor(ptr: int, tensor_id: int):
     if ptr not in _GLOBAL_TENSOR_IDS:
         return
-    print(f"[Auto Free] ptr={ptr}, tensor_id={tensor_id}")
+    # print(f"[Auto Free] ptr={ptr}, tensor_id={tensor_id}")
     try:
         p2p.dereg_mem(tensor_id)
     finally:
@@ -146,39 +146,44 @@ def create_tensor(
     shape: Tuple[int, ...], dtype: torch.dtype, device: str = "cuda:0"
 ) -> Tuple[torch.Tensor, int]:
     """
-    Create an empty tensor and register GPU memory if applicable.
-    Only support GPU.
-    Args:
-        shape (Tuple[int, ...]): e.g., (2, 100, 4)
-        dtype (torch.dtype): e.g., torch.float32
-        device (str): 'cuda:0', 'cuda:1'
-    Returns:
-        Tuple[torch.Tensor, int]: tensor, tensor_id
+    Create an empty tensor and register its memory (GPU or pinned CPU).
+    Automatically handles CUDA device parsing and memory registration.
     """
-    if not device.startswith("cuda"):
-        raise ValueError(f"Only GPU device is supported, got: {device}")
+    if device == "cpu":
+        gpu_id = 0
+        use_cuda = False
+    elif device.startswith("cuda"):
+        parts = device.split(":")
+        if len(parts) == 2 and parts[1].isdigit():
+            gpu_id = int(parts[1])
+        elif len(parts) == 1:
+            gpu_id = torch.cuda.current_device()
+        else:
+            raise ValueError(f"Invalid CUDA device string: '{device}'")
+        use_cuda = True
+    else:
+        raise ValueError(f"Unsupported device type: '{device}'")
 
-    try:
-        gpu_id = int(device.split(":")[1])
-    except (IndexError, ValueError):
-        raise ValueError(f"Invalid cuda device: {device}")
+    tensor = torch.empty(
+        size=shape,
+        dtype=dtype,
+        device=device if use_cuda else "cpu",
+        pin_memory=not use_cuda,
+    )
 
-    tensor = torch.empty(size=shape, dtype=dtype, device=device)
     addr = tensor.data_ptr()
     size = tensor.numel() * tensor.element_size()
 
     if addr in _GLOBAL_TENSOR_IDS:
         raise RuntimeError(f"Tensor at address {addr} is already registered.")
 
-    tensor_id = p2p.reg_mem(gpu_id, addr, size)
+    tensor_id = p2p.reg_mem(addr, size, use_cuda, gpu_id)
     if tensor_id < 0:
-        raise RuntimeError(f"Failed to register memory: tensor_id={tensor_id}")
+        raise RuntimeError(f"Failed to register memory (tensor_id={tensor_id})")
 
     _GLOBAL_TENSOR_IDS[addr] = tensor_id
-
     weakref.finalize(tensor, _auto_free_tensor, addr, tensor_id)
 
-    _GLOBAL_TENSOR_IDS[addr] = tensor_id
     return tensor, tensor_id
 
 
@@ -188,8 +193,6 @@ def free_tensor(tensor: torch.Tensor):
     when the tensor object is garbage collected. Manual intervention to free
     GPU memory is generally not required unless immediate resource release
     is necessary.
-    Args:
-        tensor: torch.Tensor
     """
     ptr = tensor.data_ptr()
     if ptr not in _GLOBAL_TENSOR_IDS:

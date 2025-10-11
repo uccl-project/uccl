@@ -13,6 +13,7 @@ import numpy as np
 
 try:
     from uccl import p2p
+    from uccl.utils import get_tensor_id_by_tensor, create_tensor
 except ImportError as exc:
     sys.stderr.write("Failed to import p2p\n")
     raise
@@ -26,16 +27,16 @@ def _make_buffer(size_bytes: int, device: str, gpu_idx: int):
     if device == "gpu":
         dtype = torch.float32 if size_bytes >= 4 else torch.uint8
         n_elems = size_bytes // dtype.itemsize
-        buf = torch.ones(n_elems, dtype=dtype).cuda()
-        assert buf.device.type == "cuda"
-        assert buf.is_contiguous()
-        ptr = buf.data_ptr()
+        tensor, t_id = create_tensor((n_elems,), dtype=dtype, device=f"cuda:{gpu_idx}")
+        assert tensor.device.type == "cuda"
+        assert tensor.is_contiguous()
+        ptr = tensor.data_ptr()
     else:  # cpu
         dtype = np.float32 if size_bytes >= 4 else np.uint8
         n_elems = size_bytes // dtype.itemsize
-        buf = np.ones(n_elems, dtype=dtype)
-        ptr = buf.ctypes.data
-    return buf, ptr
+        tensor, t_id = create_tensor((n_elems,), dtype=dtype, device=f"cpu")
+        ptr = tensor.ctypes.data
+    return tensor, ptr, t_id
 
 
 def _pretty_size(num_bytes: int) -> str:
@@ -60,9 +61,9 @@ def _run_server(args, ep, remote_metadata):
         data_ptr_v = []
         size_v = []
         for _ in range(args.num_kvblocks):
-            buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
-            ok, mr_id = ep.reg(ptr, size_per_block)
-            assert ok, "[Server] register failed"
+            buf, ptr, mr_id = _make_buffer(
+                size_per_block, args.device, args.local_gpu_idx
+            )
             buf_v.append(buf)
             mr_id_v.append(mr_id)
             data_ptr_v.append(ptr)
@@ -160,9 +161,9 @@ def _run_client(args, ep, remote_metadata):
         data_ptr_v = []
         size_v = []
         for _ in range(args.num_kvblocks):
-            buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
-            ok, mr_id = ep.reg(ptr, size_per_block)
-            assert ok, "[Client] register failed"
+            buf, ptr, mr_id = _make_buffer(
+                size_per_block, args.device, args.local_gpu_idx
+            )
             buf_v.append(buf)
             mr_id_v.append(mr_id)
             data_ptr_v.append(ptr)
@@ -257,14 +258,10 @@ def _run_server_dual(args, ep, remote_metadata):
     print(f"[Server] Connected to {ip}:{port} (GPU {r_gpu}) conn_id={conn_id2}")
 
     for size in args.sizes:
-        buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx)
-        ok, mr_id = ep.reg(ptr, size)
-        assert ok, "[Server] register failed"
+        buf, ptr, mr_id = _make_buffer(size, args.device, args.local_gpu_idx)
         # ep.recv(conn_id, mr_id, ptr, size)
 
-        buf2, ptr2 = _make_buffer(size, args.device, args.local_gpu_idx)
-        ok, mr_id2 = ep.reg(ptr2, size)
-        assert ok, "[Server] register failed"
+        buf2, ptr2, mr_id2 = _make_buffer(size, args.device, args.local_gpu_idx)
         # ep.send(conn_id, mr_id2, ptr2, size)
 
         start = time.perf_counter()
@@ -314,14 +311,10 @@ def _run_client_dual(args, ep, remote_metadata):
     print(f"[Client] Accept from {r_ip} (GPU {r_gpu2}) conn_id={conn_id2}")
 
     for size in args.sizes:
-        buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx)
-        ok, mr_id = ep.reg(ptr, size)
-        assert ok, "[Client] register failed"
+        buf, ptr, mr_id = _make_buffer(size, args.device, args.local_gpu_idx)
         # ep.send(conn_id, mr_id, ptr, size)
 
-        buf2, ptr2 = _make_buffer(size, args.device, args.local_gpu_idx)
-        ok, mr_id2 = ep.reg(ptr2, size)
-        assert ok, "[Client] register failed"
+        buf2, ptr2, mr_id2 = _make_buffer(size, args.device, args.local_gpu_idx)
         # ep.recv(conn_id, mr_id2, ptr2, size)
 
         start = time.perf_counter()
@@ -366,7 +359,7 @@ def _run_server_ipc(args, ep):
 
     for size in args.sizes:
         # Allocate receive buffer - no memory registration needed for IPC
-        buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx)
+        buf, ptr, ipc_id = _make_buffer(size, args.device, args.local_gpu_idx)
 
         # Warm-up transfer
         if args.async_api:
@@ -413,7 +406,7 @@ def _run_client_ipc(args, ep, remote_gpu_idx):
 
     for size in args.sizes:
         # Allocate send buffer - no memory registration needed for IPC
-        buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx)
+        buf, ptr, ipc_id = _make_buffer(size, args.device, args.local_gpu_idx)
 
         # Warm-up transfer
         if args.async_api:

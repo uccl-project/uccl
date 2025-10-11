@@ -5,16 +5,13 @@
 
 std::shared_mutex mr_mapping_mu_;
 std::unordered_map<uint64_t, std::unique_ptr<MR>> mr_mapping_;
-
 std::shared_mutex ipc_handle_mapping_mu_;
 std::unordered_map<uint64_t, std::unique_ptr<IPCMemHandle>> ipc_handle_mapping_;
-
 std::atomic<uint64_t> next_mem_id_{0};
 
 int reg_dma_mr(uccl::FactoryDevice* dev, void* addr, size_t len, int offset,
                int fd, struct uccl::Mhandle** mhandle) {
   bool ib_relaxed_ordering_enabled_ = uccl::ncclIbRelaxedOrderingCapable();
-
   unsigned int flags =
       IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ;
   if (ib_relaxed_ordering_enabled_) flags |= IBV_ACCESS_RELAXED_ORDERING;
@@ -22,24 +19,30 @@ int reg_dma_mr(uccl::FactoryDevice* dev, void* addr, size_t len, int offset,
   *mhandle = new uccl::Mhandle();
   (*mhandle)->mr =
       ibv_reg_dmabuf_mr(dev->pd, offset, len, (uint64_t)addr, fd, flags);
+  if (!(*mhandle)->mr) {
+    delete *mhandle;
+    *mhandle = nullptr;
+    return -1;
+  }
   return 0;
 }
 
 int reg_mr(uccl::FactoryDevice* dev, void* addr, size_t len,
            struct uccl::Mhandle** mhandle) {
   bool ib_relaxed_ordering_enabled_ = uccl::ncclIbRelaxedOrderingCapable();
-
   unsigned int flags =
       IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ;
   if (ib_relaxed_ordering_enabled_) flags |= IBV_ACCESS_RELAXED_ORDERING;
 
   *mhandle = new uccl::Mhandle();
   if (ib_relaxed_ordering_enabled_) {
+    // try iova2 variant if available
     (*mhandle)->mr =
         ibv_reg_mr_iova2(dev->pd, addr, len, (uint64_t)addr, flags);
   } else {
     (*mhandle)->mr = ibv_reg_mr(dev->pd, addr, len, flags);
   }
+
   if (!(*mhandle)->mr) {
     std::cerr << "ibv_reg_mr failed (" << strerror(errno) << "), len=" << len
               << " addr=" << addr << "\n";
@@ -51,23 +54,30 @@ int reg_mr(uccl::FactoryDevice* dev, void* addr, size_t len,
 }
 
 void dereg_mr(struct uccl::Mhandle* mhandle) {
-  ibv_dereg_mr(mhandle->mr);
+  if (!mhandle) return;
+  if (mhandle->mr) {
+    ibv_dereg_mr(mhandle->mr);
+    mhandle->mr = nullptr;
+  }
   delete mhandle;
 }
 
 int get_ipc_handle(void* addr, struct IPCMemHandle* ipchandle) {
+  if (!ipchandle) return -1;
   GPU_RT_CHECK(
       gpuIpcGetMemHandle(&ipchandle->handle, reinterpret_cast<void*>(addr)));
   return 0;
 }
 
 int open_ipc_handle(void* addr, struct IPCMemHandle* ipchandle) {
+  if (!ipchandle) return -1;
   GPU_RT_CHECK(gpuIpcOpenMemHandle(&addr, ipchandle->handle,
                                    gpuIpcMemLazyEnablePeerAccess));
   return 0;
 }
 
-void reg_mem(int gpu_id, void* addr, size_t size, uint64_t& mem_id) {
+void reg_mem(void* addr, size_t size, uint64_t& mem_id, bool is_device,
+             int gpu_id) {
   if (gpu_id < 0 || gpu_id >= kMaxNumGPUs) {
     throw std::invalid_argument("[reg_mem] Invalid gpu_id: " +
                                 std::to_string(gpu_id));
@@ -78,7 +88,9 @@ void reg_mem(int gpu_id, void* addr, size_t size, uint64_t& mem_id) {
         "You must initialize UCCL collective context or Endpoint first");
   }
 
-  GPU_RT_CHECK(gpuSetDevice(gpu_id));
+  if (is_device) {
+    GPU_RT_CHECK(gpuSetDevice(gpu_id));
+  }
 
   uccl::FactoryDevice* factory_dev =
       uccl::RDMAFactory::get_factory_dev(gpu_to_dev[gpu_id]);
@@ -97,25 +109,34 @@ void reg_mem(int gpu_id, void* addr, size_t size, uint64_t& mem_id) {
   }
 
   // IPC
-  auto addr_aligned = reinterpret_cast<uintptr_t>(addr) & ~(kIpcAlignment - 1);
-  auto addr_offset = reinterpret_cast<uintptr_t>(addr) - addr_aligned;
-  //   std::cout << "[reg_mem] Aligned pointer=" << addr_aligned << std::endl;
+  if (is_device) {
+    auto addr_aligned =
+        reinterpret_cast<uintptr_t>(addr) & ~(kIpcAlignment - 1);
+    auto addr_offset = reinterpret_cast<uintptr_t>(addr) - addr_aligned;
+    //   std::cout << "[reg_mem] Aligned pointer=" << addr_aligned << std::endl;
 
-  std::unique_ptr<IPCMemHandle> ipc = std::make_unique<IPCMemHandle>();
-  ret = get_ipc_handle(reinterpret_cast<void*>(addr_aligned), ipc.get());
-  if (ret != 0) {
-    {
+    std::unique_ptr<IPCMemHandle> ipc = std::make_unique<IPCMemHandle>();
+    ret = get_ipc_handle(reinterpret_cast<void*>(addr_aligned), ipc.get());
+    if (ret != 0) {
+      // Rollback MR
       std::unique_lock<std::shared_mutex> lock(mr_mapping_mu_);
-      mr_mapping_.erase(mem_id);
+      auto it = mr_mapping_.find(mem_id);
+      if (it != mr_mapping_.end()) {
+        if (it->second->mhandle_) {
+          dereg_mr(it->second->mhandle_);
+        }
+        mr_mapping_.erase(it);
+      }
+      throw std::runtime_error(
+          "[reg_mem] IPC handle creation failed for device memory");
     }
-    throw std::runtime_error("[reg_mem] IPC handle creation failed");
-  }
-  ipc->size = size;
-  ipc->offset = addr_offset;
-  ipc->id = mem_id;
-  {
-    std::unique_lock<std::shared_mutex> lock(ipc_handle_mapping_mu_);
-    ipc_handle_mapping_[ipc->id] = std::move(ipc);
+    ipc->size = size;
+    ipc->offset = addr_offset;
+    ipc->id = mem_id;
+    {
+      std::unique_lock<std::shared_mutex> lock(ipc_handle_mapping_mu_);
+      ipc_handle_mapping_[ipc->id] = std::move(ipc);
+    }
   }
 }
 
@@ -124,10 +145,12 @@ void dereg_mem(uint64_t mem_id) {
     std::unique_lock<std::shared_mutex> lock(mr_mapping_mu_);
     auto it = mr_mapping_.find(mem_id);
     if (it != mr_mapping_.end()) {
-      dereg_mr(it->second->mhandle_);
+      MR* mr = it->second.get();
+      if (mr->mhandle_) {
+        dereg_mr(mr->mhandle_);
+        mr->mhandle_ = nullptr;
+      }
       mr_mapping_.erase(it);
-    } else {
-      std::cerr << "[free_tensor] MR id " << mem_id << " not found!\n";
     }
   }
   {
@@ -135,8 +158,6 @@ void dereg_mem(uint64_t mem_id) {
     auto it = ipc_handle_mapping_.find(mem_id);
     if (it != ipc_handle_mapping_.end()) {
       ipc_handle_mapping_.erase(it);
-    } else {
-      std::cerr << "[free_tensor] IPC id " << mem_id << " not found!\n";
     }
   }
 }
@@ -156,6 +177,6 @@ gpuIpcMemHandle_t get_ipc_mem_handle_by_mem_id(uint64_t mem_id) {
   if (it != ipc_handle_mapping_.end()) {
     return it->second->handle;
   }
-  gpuIpcMemHandle_t handle = {};
-  return handle;
+  gpuIpcMemHandle_t invalid = {};
+  return invalid;
 }
