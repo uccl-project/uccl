@@ -2165,7 +2165,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
         // Retry
         if (lane_id < kNumRDMARanks and token_start_idx < token_end_idx)
           cached_channel_head_idx =
-              ld_acquire_sys_global(nvl_channel_head.buffer() + lane_id);
+              ld_volatile_global(nvl_channel_head.buffer() + lane_id);
 
         // Timeout check
         if (clock64() - start_time > NUM_TIMEOUT_CYCLES and
@@ -2175,7 +2175,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
               "%d, dst NVL: %d, RDMA lane: %d, head: %d, tail: %d, start: %d, "
               "end: %d\n",
               channel_id, rdma_rank, nvl_rank, dst_nvl_rank, lane_id,
-              ld_acquire_sys_global(nvl_channel_head.buffer() + lane_id),
+              ld_volatile_global(nvl_channel_head.buffer() + lane_id),
               cached_channel_tail_idx, token_start_idx, token_end_idx);
           trap();
         }
@@ -2698,7 +2698,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                                                   j][dst_nvl_rank]);
             if (min_head != std::numeric_limits<int>::max() and
                 min_head > last_nvl_head[i] and lane_id < NUM_MAX_NVL_PEERS)
-              st_release_sys_global(
+              st_relaxed_sys_global(
                   nvl_channel_head.buffer_by(dst_nvl_rank) + i,
                   last_nvl_head[i] = min_head);
           }
