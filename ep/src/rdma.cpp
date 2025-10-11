@@ -1564,6 +1564,7 @@ void local_post_ack_buf(ProxyCtx& S, int depth) {
   }
 }
 
+#ifdef USE_NORMAL_MODE
 void post_atomic_operations(ProxyCtx& S,
                             std::vector<uint64_t> const& wrs_to_post,
                             std::vector<TransferCmd> const& cmds_to_post,
@@ -1593,8 +1594,6 @@ void post_atomic_operations(ProxyCtx& S,
 
     ProxyCtx* ctx = ctxs[dst_rank].get();
     size_t const k = wr_ids.size();
-
-#ifdef EFA
     // Group by ring index (upper 32 bits in wrs_to_post)
     std::unordered_map<size_t, std::vector<size_t>> ring_to_indices;
     ring_to_indices.reserve(k);
@@ -1691,7 +1690,81 @@ void post_atomic_operations(ProxyCtx& S,
         }
       }
     }  // end per-ring loop
+  }
+}
+#else
+void post_atomic_operations(ProxyCtx& S,
+                            std::vector<uint64_t> const& wrs_to_post,
+                            std::vector<TransferCmd> const& cmds_to_post,
+                            std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
+                            int my_rank, int thread_idx,
+                            std::unordered_set<uint64_t>& finished_wrs,
+                            std::unordered_set<uint64_t>& acked_wrs) {
+  if (cmds_to_post.size() > ProxyCtx::kMaxAtomicOps) {
+    fprintf(stderr, "Too many atomic operations: %zu > %zu\n",
+            cmds_to_post.size(), ProxyCtx::kMaxAtomicOps);
+    std::abort();
+  }
 
+  std::unordered_map<int, std::vector<size_t>> dst_rank_wr_ids;
+  dst_rank_wr_ids.reserve(cmds_to_post.size());
+  for (size_t i = 0; i < wrs_to_post.size(); ++i) {
+    int dst = static_cast<int>(cmds_to_post[i].dst_rank);
+    if (dst == my_rank) {
+      fprintf(stderr, "Posting atomic to itself\n");
+      std::abort();
+    }
+    dst_rank_wr_ids[dst].push_back(i);
+  }
+
+  for (auto& [dst_rank, wr_ids] : dst_rank_wr_ids) {
+    if (wr_ids.empty()) continue;
+
+    ProxyCtx* ctx = ctxs[dst_rank].get();
+    size_t const k = wr_ids.size();
+#ifdef EFA
+    struct ibv_qp_ex* qpx = (struct ibv_qp_ex*)ctx->qp;
+    ibv_wr_start(qpx);
+    for (size_t i = 0; i < k; ++i) {
+      auto const& cmd = cmds_to_post[wr_ids[i]];
+      auto wr_id = wrs_to_post[wr_ids[i]];
+      wr_ids[i] = wr_id;
+
+      int v = static_cast<int>(cmd.value);
+      if (v == kLargeAtomicValue) v = kMaxSendAtomicValue;
+      if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {
+        fprintf(stderr,
+                "[EFA] value=%d (cmd.value: %lu) won't fit in 15 bits; "
+                "use an inline payload scheme instead.\n",
+                v, (unsigned long)cmd.value);
+        std::abort();
+      }
+      uint32_t offset = static_cast<int64_t>(cmd.req_rptr);
+      int low_latency_buffer_idx = cmd.low_latency_buffer_idx;
+      if (low_latency_buffer_idx < 0 || low_latency_buffer_idx > 1) {
+        fprintf(stderr, "Invalid low_latency_buffer_idx: %d\n",
+                low_latency_buffer_idx);
+        std::abort();
+      }
+      uint32_t imm = AtomicsImm::Pack(true, cmd.is_combine, v, offset,
+                                      low_latency_buffer_idx)
+                         .GetImmData();
+
+      qpx->wr_id = kAtomicWrTag | (wr_id & kAtomicMask);
+      qpx->comp_mask = 0;
+      qpx->wr_flags = IBV_SEND_SIGNALED;
+      ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, ctx->remote_addr,
+                            htonl(imm));
+
+      ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_qpn, QKEY);
+      ibv_wr_set_sge(qpx, ctx->mr->lkey, (uintptr_t)ctx->mr->addr, 0);
+    }
+    int ret = ibv_wr_complete(qpx);
+    if (ret) {
+      fprintf(stderr, "[EFA] post_send failed: %s (ret=%d)\n", strerror(ret),
+              ret);
+      std::abort();
+    }
 #else
     std::vector<ibv_sge> sge(k);
     std::vector<ibv_send_wr> wr(k);
@@ -1702,7 +1775,7 @@ void post_atomic_operations(ProxyCtx& S,
       wr_ids[i] = wrid;
 
       int v = static_cast<int>(cmd.value);
-      if (v > kLargeAtomicValue) v = kMaxSendAtomicValue;
+      if (v == kLargeAtomicValue) v = kMaxSendAtomicValue;
       if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {
         fprintf(stderr, "value=%d won't fit in 15 bits\n", v);
         std::abort();
@@ -1739,7 +1812,7 @@ void post_atomic_operations(ProxyCtx& S,
         std::abort();
       }
     }
-
+#endif
     uint64_t const batch_tail_wr = wr_ids.back();
     {
       auto [it, inserted] =
@@ -1747,18 +1820,19 @@ void post_atomic_operations(ProxyCtx& S,
       if (!inserted) {
         fprintf(stderr,
                 "thread_idx: %d, Error: tail wr_id %lu already exists "
-                "(map=%p, size=%zu, dst_rank=%d)\n",
+                "(map=%p, "
+                "size=%zu, dst_rank=%d)\n",
                 thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
                 S.wr_id_to_wr_ids.size(), dst_rank);
         std::abort();
       } else {
-        // RC atomics: keep existing behavior (immediate finish + ack)
-        for (auto const& wid : it->second) {
-          finished_wrs.insert(wid);
-          acked_wrs.insert(wid);
+        // TODO(MaoZiming): ack for atomic operations?
+        for (auto const& wr_id : it->second) {
+          finished_wrs.insert(wr_id);
+          acked_wrs.insert(wr_id);
         }
       }
     }
-#endif  // EFA
   }
 }
+#endif
