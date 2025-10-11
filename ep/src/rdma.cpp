@@ -332,6 +332,7 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   S.qp = create_srd_qp_ex(S);
   S.ack_qp = create_srd_qp_ex(S);
   S.recv_ack_qp = create_srd_qp_ex(S);
+#ifdef USE_NORMAL_MODE
   const size_t rings_to_create = std::min(num_rings, (size_t)kRingsPerProxy);
   S.data_qps_by_ring.resize(rings_to_create);
   for (size_t r = 0; r < rings_to_create; ++r) {
@@ -346,11 +347,9 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   for (uint32_t r = local_info->num_rings; r < kRingsPerProxy; ++r) {
     local_info->data_qp_num[r] = 0;
   }
-
+#endif
   // Fallback/default QPN (ring 0 if any; otherwise use ack_qp to keep valid)
-  local_info->qp_num =
-      (rings_to_create > 0) ? S.data_qps_by_ring[0]->qp_num : S.ack_qp->qp_num;
-
+  local_info->qp_num = S.qp->qp_num;
   local_info->ack_qp_num = S.ack_qp->qp_num;
   local_info->recv_ack_qp_num = S.recv_ack_qp->qp_num;
 #else
@@ -471,9 +470,11 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote) {
   const uint32_t remote_rings =
       std::min(remote->num_rings, (uint32_t)kRingsPerProxy);
   S.dst_data_qpn_by_ring.reserve(remote_rings);
+#ifdef USE_NORMAL_MODE
   for (uint32_t r = 0; r < remote_rings; ++r) {
     S.dst_data_qpn_by_ring.push_back(remote->data_qp_num[r]);
   }
+#endif
   return;
 
 #endif
@@ -1168,7 +1169,6 @@ void local_poll_completions(ProxyCtx& S,
                                 ctx_by_tag);
     }
   };
-  // Poll the barrier CQ plus all per-QP CQs belonging to S.
   if (S.cq) poll_one(S.cq);
   for (auto* cq : S.extra_cqs) poll_one(cq);
 }
@@ -1255,7 +1255,7 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       AtomicsImm aimm(ntohl(cqe.imm_data));
       int value = aimm.GetValue();
       uint32_t offset = aimm.GetOff();
-      size_t index = offset / sizeof(uint64_t);
+      size_t index = offset / sizeof(int);
 #ifdef USE_RECEIVER_BARRIER
       // ep_config.hpp
       bool is_combine = aimm.IsCombine();
@@ -1322,8 +1322,8 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                                        is_combine, src_rank});
       }
 #else
-      auto* addr64 =
-          reinterpret_cast<std::atomic<uint64_t>*>(atomic_buffer_ptr) + index;
+      auto* addr32 =
+          reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
 #ifdef USE_SENDER_BARRIER
       bool is_combine = aimm.IsCombine();
       if (is_combine) value = 1;
@@ -1349,7 +1349,7 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
 #endif
 #endif
       if (value == kMaxSendAtomicValue) value = kLargeAtomicValue;
-      addr64->fetch_add((uint64_t)value, std::memory_order_release);
+      addr32->fetch_add(value, std::memory_order_release);
 #endif
     } else if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
                ImmType::IsBarrier(ntohl(cqe.imm_data))) {

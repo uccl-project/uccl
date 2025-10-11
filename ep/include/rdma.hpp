@@ -89,15 +89,39 @@ class AtomicsImm {
     constexpr uint32_t kIS_ATOMICS_MASK = 0x1u;
     constexpr uint32_t kIS_COMBINE_MASK = 0x1u;
     constexpr uint32_t kBUFFER_IDX_MASK = 0x1u;
-    constexpr uint32_t kV16_MASK = 0xFFFFu;  // 16 bits
-    constexpr uint32_t kOFF_MASK = 0x1FFFu;  // 13 bits
 
-    // runtime asserts
-    assert((is_atomics & ~kIS_ATOMICS_MASK) == 0 && "is_atomics overflow");
-    assert((is_combine & ~kIS_COMBINE_MASK) == 0 && "is_combine overflow");
-    assert((buffer_idx & ~kBUFFER_IDX_MASK) == 0 && "buffer_idx overflow");
-    assert((v16 & ~kV16_MASK) == 0 && "v16 overflow 16 bits");
-    assert((off13 & ~kOFF_MASK) == 0 && "off13 overflow 13 bits");
+    if (is_atomics & ~kIS_ATOMICS_MASK) {
+      fprintf(stderr,
+              "[AtomicsImm::Pack] is_atomics overflow: value=%d (mask=0x%X)\n",
+              is_atomics, kIS_ATOMICS_MASK);
+      assert(false && "is_atomics overflow");
+    }
+    if (is_combine & ~kIS_COMBINE_MASK) {
+      fprintf(stderr,
+              "[AtomicsImm::Pack] is_combine overflow: value=%d (mask=0x%X)\n",
+              is_combine, kIS_COMBINE_MASK);
+      assert(false && "is_combine overflow");
+    }
+    if (buffer_idx & ~kBUFFER_IDX_MASK) {
+      fprintf(stderr,
+              "[AtomicsImm::Pack] buffer_idx overflow: value=%d (mask=0x%X)\n",
+              buffer_idx, kBUFFER_IDX_MASK);
+      assert(false && "buffer_idx overflow");
+    }
+    if (v16 < -32768 || v16 > 32767) {
+      fprintf(stderr,
+              "[AtomicsImm::Pack] v16 overflow: value=%d (expected in [-32768, "
+              "32767])\n",
+              v16);
+      assert(false && "v16 overflow 16 bits");
+    }
+    if (off13 > 0x1FFF) {
+      fprintf(
+          stderr,
+          "[AtomicsImm::Pack] off13 overflow: value=%u (expected <= 8191)\n",
+          off13);
+      assert(false && "off13 overflow 13 bits");
+    }
 
     uint32_t vfield = static_cast<uint32_t>(v16) & kV16_MASK;
     uint32_t imm = (static_cast<uint32_t>(is_atomics) << kIS_ATOMICS) |
