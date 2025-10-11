@@ -38,19 +38,6 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-inline void bump_counter(void* atomic_buffer_ptr, size_t index,
-                         uint64_t value) {
-  auto* base = static_cast<uint64_t*>(atomic_buffer_ptr);
-  uint64_t* slot = base + index;
-
-  // alignment sanity check (safe to drop in release builds)
-  assert((reinterpret_cast<uintptr_t>(slot) & 7) == 0);
-
-  // atomic view over the existing uint64_t
-  std::atomic_ref<uint64_t> ctr(*slot);
-  ctr.fetch_add(value, std::memory_order_release);  // multiple CPU threads safe
-}
-
 void exchange_connection_info(int rank, char const* peer_ip, int tid,
                               RDMAConnectionInfo* local,
                               RDMAConnectionInfo* remote) {
@@ -1289,9 +1276,8 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                                        is_combine, src_rank});
       }
 #else
-      // auto* addr64 =
-      //     reinterpret_cast<std::atomic<uint64_t>*>(atomic_buffer_ptr) +
-      //     index;
+      auto* addr64 =
+          reinterpret_cast<std::atomic<uint64_t>*>(atomic_buffer_ptr) + index;
 #ifdef USE_SENDER_BARRIER
       bool is_combine = aimm.IsCombine();
       if (is_combine) value = 1;
@@ -1317,14 +1303,7 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
 #endif
 #endif
       if (value == kMaxSendAtomicValue) value = kLargeAtomicValue;
-      // auto start = std::chrono::high_resolution_clock::now();
-      // while (std::chrono::duration_cast<std::chrono::microseconds>(
-      //           std::chrono::high_resolution_clock::now() - start)
-      //           .count() < 200) {
-      //     _mm_pause();
-      // }
-      bump_counter(atomic_buffer_ptr, index, static_cast<uint64_t>(value));
-      // addr64->fetch_add((uint64_t)value, std::memory_order_release);
+      addr64->fetch_add((uint64_t)value, std::memory_order_release);
 #endif
     } else if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
                ImmType::IsBarrier(ntohl(cqe.imm_data))) {

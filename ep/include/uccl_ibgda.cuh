@@ -240,11 +240,6 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
   assert(num_ring_addrs / kRingsPerProxy == kNumThBlocks);
   // First, atomically commit QUIET to one ring per proxy
   uint64_t slots[kNumThBlocks];
-
-  // if (label != -1)
-  //   printf("[nvshmemi_ibgda_quiet, nvl_rank: %d, label: %d] start\n",
-  //   nvl_rank, label);
-
   int num_posted = 0;
   for (int ring_idx = 0; ring_idx < num_ring_addrs;
        ring_idx += kRingsPerProxy) {
@@ -274,9 +269,6 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
         static_cast<uintptr_t>(ring_addrs[i * kRingsPerProxy]));
     wait_until_cmd_consumed(rb, slots[i], nvl_rank, CmdType::QUIET);
   }
-  // if (label != -1)
-  //   printf("[nvshmemi_ibgda_quiet, nvl_rank: %d, label: %d] end\n", nvl_rank,
-  //   label);
 }
 
 __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
@@ -285,10 +277,6 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
   assert(num_ring_addrs % kRingsPerProxy == 0 &&
          "num_ring_addrs must be multiple of kRingsPerProxy");
   assert(num_ring_addrs / kRingsPerProxy == kNumThBlocks);
-
-  // if (label != -1)
-  //   printf("[nvshmem_sync_with_same_gpu_idx, nvl_rank: %d, label: %d]
-  //   start\n", nvl_rank, label);
   uint64_t slots[kNumThBlocks];
   int num_posted = 0;
 
@@ -320,9 +308,6 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
         static_cast<uintptr_t>(ring_addrs[i * kRingsPerProxy]));
     wait_until_cmd_consumed(rb, slots[i], nvl_rank, CmdType::BARRIER, label);
   }
-  // if (label != -1)
-  //   printf("[nvshmem_sync_with_same_gpu_idx, nvl_rank: %d, label: %d] end\n",
-  //   nvl_rank, label);
 }
 
 }  // namespace uccl

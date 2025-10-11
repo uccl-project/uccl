@@ -783,15 +783,6 @@ void Proxy::post_gpu_commands_mixed(
       0) {
     return;
   }
-  // if (rdma_wrs.size() + atomic_wrs.size() + barrier_cmds.size() +
-  //       quiet_cmds.size() > 10) {
-  //   printf(
-  //       "[post_gpu_commands_mixed] thread %d: Posting %zu RDMA writes, %zu "
-  //       "atomics, %zu barriers, %zu quiets\n",
-  //       cfg_.thread_idx, rdma_wrs.size(), atomic_wrs.size(),
-  //       barrier_cmds.size(), quiet_cmds.size());
-  // }
-
   // Handle regular RDMA writes
   if (!barrier_cmds.empty()) {
     // barrier(barrier_wrs, barrier_cmds);
@@ -889,7 +880,7 @@ void Proxy::quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds) {
 void Proxy::destroy(bool free_gpu_buffer) {
   for (auto& ctx_ptr : ctxs_for_all_ranks_) {
     if (!ctx_ptr) continue;
-    // qp_to_error(ctx_ptr->qp);
+    qp_to_error(ctx_ptr->qp);
     qp_to_error(ctx_ptr->ack_qp);
     for (auto* q : ctx_ptr->data_qps_by_ring) {
       if (q) qp_to_error(q);
@@ -906,10 +897,10 @@ void Proxy::destroy(bool free_gpu_buffer) {
 
   for (auto& ctx_ptr : ctxs_for_all_ranks_) {
     if (!ctx_ptr) continue;
-    // if (ctx_ptr->qp) {
-    //   ibv_destroy_qp(ctx_ptr->qp);
-    //   ctx_ptr->qp = nullptr;
-    // }
+    if (ctx_ptr->qp) {
+      ibv_destroy_qp(ctx_ptr->qp);
+      ctx_ptr->qp = nullptr;
+    }
     for (auto*& q : ctx_ptr->data_qps_by_ring) {
       if (q) {
         ibv_destroy_qp(q);
@@ -1000,7 +991,6 @@ void Proxy::destroy(bool free_gpu_buffer) {
 }
 
 void Proxy::post_barrier_msg(int dst_rank, bool ack, uint64_t seq) {
-  // assert(cfg_.thread_idx == 0 && "barrier must be posted on thread 0");
   ProxyCtx* ctx = ctxs_for_all_ranks_[dst_rank].get();
   if (!ctx || !ctx->qp || !ctx->mr) {
     fprintf(stderr, "barrier_msg: bad ctx for dst=%d\n", dst_rank);
@@ -1052,7 +1042,6 @@ void Proxy::post_barrier_msg(int dst_rank, bool ack, uint64_t seq) {
 }
 
 void Proxy::send_barrier(uint64_t wr) {
-  // assert(cfg_.thread_idx == 0 && "barrier must be placed on thread 0");
   assert(!ctx_.barrier_inflight && "only one barrier at a time");
   assert(ctx_.barrier_wr == 0 && "barrier_wr should be 0");
   ctx_.barrier_inflight = true;
@@ -1078,7 +1067,6 @@ void Proxy::send_barrier(uint64_t wr) {
 }
 
 void Proxy::barrier_check() {
-  // if (cfg_.thread_idx != 0) return;  // first thread handle barrier.
   if (!ctx_.barrier_inflight) return;
 
   auto* lb = ctx_.lb;
