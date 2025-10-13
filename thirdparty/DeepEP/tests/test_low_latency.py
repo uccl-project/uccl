@@ -173,6 +173,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                             allow_nvlink_for_low_latency_mode=not args.disable_nvlink,
                             explicitly_destroy=True, 
                             allow_mnnvl=args.allow_mnnvl)
+    buffer.set_num_sms(20)
     print("Buffer initialized.", flush=True)
     test_main(num_tokens, hidden, num_experts, num_topk, rank, num_ranks, group, buffer,
               use_logfmt=args.use_logfmt, seed=1)

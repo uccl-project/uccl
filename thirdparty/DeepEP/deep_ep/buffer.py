@@ -66,15 +66,15 @@ class Buffer:
         self.explicitly_destroy = explicitly_destroy
         self.runtime = deep_ep_cpp.Buffer(self.rank, self.group_size, num_nvl_bytes, num_rdma_bytes, low_latency_mode, explicitly_destroy)
 
-        print(f"[rank {self.rank}] trying to set num_sms={Buffer.num_sms}", flush=True)
-        if hasattr(self.runtime, "set_num_sms"):
-            self.runtime.set_num_sms(Buffer.num_sms)
-            print(f"[rank {self.rank}] runtime.set_num_sms succeeded", flush=True)
-        elif hasattr(deep_ep_cpp, "set_num_sms"):
-            deep_ep_cpp.set_num_sms(Buffer.num_sms)
-            print(f"[rank {self.rank}] deep_ep_cpp.set_num_sms succeeded", flush=True)
-        else:
-            raise RuntimeError("deep_ep_cpp: no set_num_sms() exported — cannot drive num_sms")
+        # print(f"[rank {self.rank}] trying to set num_sms={Buffer.num_sms}", flush=True)
+        # if hasattr(self.runtime, "set_num_sms"):
+        #     self.runtime.set_num_sms(Buffer.num_sms)
+        #     print(f"[rank {self.rank}] runtime.set_num_sms succeeded", flush=True)
+        # elif hasattr(deep_ep_cpp, "set_num_sms"):
+        #     deep_ep_cpp.set_num_sms(Buffer.num_sms)
+        #     print(f"[rank {self.rank}] deep_ep_cpp.set_num_sms succeeded", flush=True)
+        # else:
+        #     raise RuntimeError("deep_ep_cpp: no set_num_sms() exported — cannot drive num_sms")
 
         # Synchronize device IDs
         device_ids = [None, ] * self.group_size
@@ -144,11 +144,11 @@ class Buffer:
         print(f"setting new num_sms:{new_num_sms}")
         assert new_num_sms % 2 == 0, 'The SM count must be even'
         Buffer.num_sms = new_num_sms
-        try:
-            cur = self.runtime.get_num_sms() if hasattr(self.runtime,"get_num_sms") else deep_ep_cpp.get_num_sms()
-            print(f"[rank {self.rank}] C++ reports num_sms={cur}", flush=True)
-        except Exception as e:
-            print(f"[rank {self.rank}] WARNING: no get_num_sms() — {e}", flush=True)
+        # try:
+        #     cur = self.runtime.get_num_sms() if hasattr(self.runtime,"get_num_sms") else deep_ep_cpp.get_num_sms()
+        #     print(f"[rank {self.rank}] C++ reports num_sms={cur}", flush=True)
+        # except Exception as e:
+        #     print(f"[rank {self.rank}] WARNING: no get_num_sms() — {e}", flush=True)
 
 
     @staticmethod
