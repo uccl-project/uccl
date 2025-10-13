@@ -1,6 +1,6 @@
 # RDMA All-to-All Throughput Results
 
-Unit: **Gb/s**
+Unit: **GB/s**
 
 | Message Size (KB) | 2 Nodes | 3 Nodes | 4 Nodes |
 |-------------------|---------|---------|---------|
