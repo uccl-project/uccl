@@ -347,14 +347,15 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
               void* workspace, int num_device_sms,
               cudaStream_t stream, int phases) {
     constexpr int kNumMaxTopK = 9;
-    const int num_warp_groups = ceil_div(num_experts, num_device_sms);
+    int desired_sms = 20;
+    const int num_warp_groups = ceil_div(num_experts, desired_sms);
     const int num_warps_per_group = 32 / num_warp_groups;
     EP_HOST_ASSERT(num_warp_groups > 0 and num_warps_per_group > 0);
     EP_HOST_ASSERT(kNumMaxTopK + 1 <= num_warp_groups * num_warps_per_group);
 
     const auto num_warps = num_warp_groups * num_warps_per_group;
     // const auto num_sms = ceil_div(num_experts, num_warp_groups);
-    int num_sms = 20;
+    // int num_sms = 20;
     EP_HOST_ASSERT(num_topk <= kNumMaxTopK);
 
     // Workspace checks
@@ -387,7 +388,7 @@ LAUNCH_KERNEL(&cfg, dispatch_func, \
               num_warp_groups, num_warps_per_group, \
               round_scale, phases); } break
 
-    SETUP_LAUNCH_CONFIG(num_sms, num_warps * 32, stream);
+    SETUP_LAUNCH_CONFIG(desired_sms, num_warps * 32, stream);
     SWITCH_HIDDEN(DISPATCH_LAUNCH_CASE);
 #undef DISPATCH_LAUNCH_CASE
 }
@@ -692,13 +693,14 @@ void combine(void* combined_x,
              void* workspace, int num_device_sms,
              cudaStream_t stream, int phases, bool zero_copy) {
     constexpr int kNumMaxTopk = 9;
-    const int num_warp_groups = ceil_div(num_experts, num_device_sms);
+    int desired_sms = 20;
+    const int num_warp_groups = ceil_div(num_experts, desired_sms);
     const int num_warps_per_group = 32 / num_warp_groups;
     EP_HOST_ASSERT(num_warp_groups > 0 and num_warps_per_group > 0);
 
     const auto num_warps = num_warp_groups * num_warps_per_group;
     // const auto num_sms = ceil_div(num_experts, num_warp_groups);
-    int num_sms = 20;
+    // int num_sms = 20;
 
     // Check workspace
     auto atomic_clean_flag = static_cast<int*>(workspace);
@@ -729,7 +731,7 @@ LAUNCH_KERNEL(&cfg, combine_func, \
               num_warp_groups, num_warps_per_group, \
               phases, zero_copy); } break
 
-    SETUP_LAUNCH_CONFIG(num_sms, num_warps * 32, stream);
+    SETUP_LAUNCH_CONFIG(desired_sms, num_warps * 32, stream);
     SWITCH_HIDDEN(COMBINE_LAUNCH_CASE);
 #undef COMBINE_LAUNCH_CASE
 }
