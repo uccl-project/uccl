@@ -106,6 +106,8 @@ def unpack_moe_data_from_buffers_cuda(
         torch.float32: torch.float32,
         torch.float16: torch.float16,
         torch.bfloat16: torch.bfloat16,
+        torch.float8_e4m3fn: torch.float8_e4m3fn,
+        torch.float8_e5m2: torch.float8_e5m2,
         torch.int32: torch.int32,
         torch.int64: torch.int64,
     }
