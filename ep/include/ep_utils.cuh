@@ -356,6 +356,21 @@ extract_required_scale_format(float value) {
   }
 }
 
+// 32-bit system-consistent load with acquire semantics (GH200-safe)
+__device__ __forceinline__ uint32_t
+ld_acquire_sys_global(const volatile uint32_t* p) {
+  uint32_t v;
+  asm volatile("ld.acquire.sys.global.u32 %0, [%1];" : "=r"(v) : "l"(p));
+  return v;
+}
+
+__device__ __forceinline__ uint64_t
+ld_acquire_sys_global(const volatile uint64_t* p) {
+  uint64_t v;
+  asm volatile("ld.acquire.sys.global.u64 %0, [%1];" : "=l"(v) : "l"(p));
+  return v;
+}
+
 __device__ __forceinline__ uint64_t ld_acquire_sys_global(uint64_t const* ptr) {
   uint64_t ret;
   asm volatile("ld.acquire.sys.global.u64 %0, [%1];" : "=l"(ret) : "l"(ptr));

@@ -7,6 +7,7 @@
 #include <infiniband/efadv.h>
 #include <infiniband/verbs.h>
 #include <atomic>
+#include <cassert>
 #include <mutex>
 #include <set>
 #include <tuple>
@@ -24,6 +25,11 @@ struct RDMAConnectionInfo {
   uint64_t len;
   uint16_t lid;     // Local ID
   uint8_t gid[16];  // Global ID for RoCE (optional)
+
+#ifdef EFA
+  uint32_t num_rings;
+  uint32_t data_qp_num[kRingsPerProxy];
+#endif
 };
 
 struct PendingUpdate {
@@ -61,38 +67,78 @@ struct ImmType {
 
 class AtomicsImm {
  public:
-  // Bit layout:
-  // [31]     is_atomics (1 bit)
-  // [30]     is_combine (1 bit)
-  // [29]     buffer_idx (1 bit)
-  // [28:15]  v14 (14 bits, signed, range [-8192, 8191])
-  // [14:0]   off15 (15 bits, unsigned, < 32768)
+  // Bit layout (updated):
+  // [31]     is_atomics  (1 bit)
+  // [30]     is_combine  (1 bit)
+  // [29]     buffer_idx  (1 bit)
+  // [28:13]  v16         (16 bits, signed, range [-32768, 32767])
+  // [12:0]   off13       (13 bits, unsigned, < 8192)
   constexpr static int kOFF = 0;
-  constexpr static int kV14 = 15;
+  constexpr static int kV16 = 13;
   constexpr static int kBUFFER_IDX = 29;
   constexpr static int kIS_COMBINE = 30;
   constexpr static int kIS_ATOMICS = 31;
 
-  constexpr static uint32_t kOFF_MASK = 0x7FFF;  // 15 bits
-  constexpr static uint32_t kV14_MASK = 0x3FFF;  // 14 bits
+  constexpr static uint32_t kOFF_MASK = 0x1FFF;  // 13 bits
+  constexpr static uint32_t kV16_MASK = 0xFFFF;  // 16 bits
 
   AtomicsImm(uint32_t imm_data = 0) : imm_data_(imm_data) {}
 
-  static AtomicsImm Pack(bool is_atomics, bool is_combine, int v14,
-                         uint16_t off15, int buffer_idx) {
-    uint32_t vfield = static_cast<uint32_t>(v14) & kV14_MASK;
+  static AtomicsImm Pack(bool is_atomics, bool is_combine, int v16,
+                         uint16_t off13, int buffer_idx) {
+    constexpr uint32_t kIS_ATOMICS_MASK = 0x1u;
+    constexpr uint32_t kIS_COMBINE_MASK = 0x1u;
+    constexpr uint32_t kBUFFER_IDX_MASK = 0x1u;
+
+    if (is_atomics & ~kIS_ATOMICS_MASK) {
+      fprintf(stderr,
+              "[AtomicsImm::Pack] is_atomics overflow: value=%d (mask=0x%X)\n",
+              is_atomics, kIS_ATOMICS_MASK);
+      assert(false && "is_atomics overflow");
+    }
+    if (is_combine & ~kIS_COMBINE_MASK) {
+      fprintf(stderr,
+              "[AtomicsImm::Pack] is_combine overflow: value=%d (mask=0x%X)\n",
+              is_combine, kIS_COMBINE_MASK);
+      assert(false && "is_combine overflow");
+    }
+    if (buffer_idx & ~kBUFFER_IDX_MASK) {
+      fprintf(stderr,
+              "[AtomicsImm::Pack] buffer_idx overflow: value=%d (mask=0x%X)\n",
+              buffer_idx, kBUFFER_IDX_MASK);
+      assert(false && "buffer_idx overflow");
+    }
+    if (v16 < -32768 || v16 > 32767) {
+      fprintf(stderr,
+              "[AtomicsImm::Pack] v16 overflow: value=%d (expected in [-32768, "
+              "32767])\n",
+              v16);
+      assert(false && "v16 overflow 16 bits");
+    }
+    if (off13 > 0x1FFF) {
+      fprintf(
+          stderr,
+          "[AtomicsImm::Pack] off13 overflow: value=%u (expected <= 8191)\n",
+          off13);
+      assert(false && "off13 overflow 13 bits");
+    }
+
+    uint32_t vfield = static_cast<uint32_t>(v16) & kV16_MASK;
     uint32_t imm = (static_cast<uint32_t>(is_atomics) << kIS_ATOMICS) |
                    (static_cast<uint32_t>(is_combine) << kIS_COMBINE) |
-                   ((buffer_idx & 0x1u) << kBUFFER_IDX) | (vfield << kV14) |
-                   (off15 & kOFF_MASK);
+                   ((buffer_idx & 0x1u) << kBUFFER_IDX) | (vfield << kV16) |
+                   (off13 & kOFF_MASK);
     return AtomicsImm(imm);
   }
+
   inline bool IsAtomics() const { return (imm_data_ >> kIS_ATOMICS) & 0x1u; }
   inline bool IsCombine() const { return (imm_data_ >> kIS_COMBINE) & 0x1u; }
   inline int GetBufferIdx() const { return (imm_data_ >> kBUFFER_IDX) & 0x1u; }
   inline uint16_t GetOff() const { return imm_data_ & kOFF_MASK; }
+
   inline int GetValue() const {
-    return (static_cast<int32_t>(imm_data_) << 3) >> 18;
+    // 16-bit signed extract from bits [28:13]
+    return (static_cast<int32_t>(imm_data_) << 3) >> 16;
   }
 
   inline void SetAtomics(bool is_atomics) {
@@ -105,9 +151,9 @@ class AtomicsImm {
     imm_data_ |= (idx & 0x1u) << kBUFFER_IDX;
   }
   inline void SetOff(uint16_t off) { imm_data_ |= (off & kOFF_MASK); }
-  inline void SetV14(int v14) {
-    uint32_t vfield = static_cast<uint32_t>(v14) & kV14_MASK;
-    imm_data_ |= (vfield << kV14);
+  inline void SetV16(int v16) {
+    uint32_t vfield = static_cast<uint32_t>(v16) & kV16_MASK;
+    imm_data_ |= (vfield << kV16);
   }
 
   inline uint32_t GetImmData() const { return imm_data_; }
@@ -134,9 +180,25 @@ class WriteImm {
 
   static WriteImm Pack(bool is_combine,
                        uint32_t buffer_idx,  // 0/1
-                       uint32_t expert_idx,  // 0..4095
-                       uint32_t num_tokens,  // 0..63
-                       uint32_t my_rank) {   // 0..1023
+                       uint32_t expert_idx,  // 0..4095 (12 bits)
+                       uint32_t num_tokens,  // 0..63   (6 bits)
+                       uint32_t my_rank) {   // 0..1023 (10 bits)
+    constexpr uint32_t kIS_COMBINE_MASK = 0x1u;
+    constexpr uint32_t kBUFFER_IDX_MASK = 0x1u;
+    constexpr uint32_t kEXPERT_MASK = 0xFFFu;  // 12 bits
+    constexpr uint32_t kTOKENS_MASK = 0x3Fu;   // 6 bits
+    constexpr uint32_t kRANK_MASK = 0x3FFu;    // 10 bits
+
+    // Runtime validation
+    assert((is_combine & ~kIS_COMBINE_MASK) == 0 &&
+           "is_combine overflow (1 bit)");
+    assert((buffer_idx & ~kBUFFER_IDX_MASK) == 0 &&
+           "buffer_idx overflow (1 bit)");
+    assert((expert_idx & ~kEXPERT_MASK) == 0 &&
+           "expert_idx overflow (12 bits)");
+    assert((num_tokens & ~kTOKENS_MASK) == 0 && "num_tokens overflow (6 bits)");
+    assert((my_rank & ~kRANK_MASK) == 0 && "my_rank overflow (10 bits)");
+
     uint32_t imm = ((is_combine & 0x1u) << kIS_COMBINE) |
                    ((buffer_idx & 0x1u) << kBUFFER_IDX) |
                    ((expert_idx & kEXPERT_MASK) << kEXPERT_IDX) |
@@ -235,7 +297,8 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& ring,
                                 std::set<PendingUpdate>& pending_atomic_updates,
                                 int my_rank, int num_nodes);
 void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
-                          RDMAConnectionInfo* local_info, int rank);
+                          RDMAConnectionInfo* local_info, int rank,
+                          size_t num_rings);
 ibv_cq* create_per_thread_cq(ProxyCtx& S);
 void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                              std::vector<ProxyCtx*>& ctx_by_tag,
@@ -278,4 +341,5 @@ void apply_pending_updates(ProxyCtx& ctx,
                            std::set<PendingUpdate>& pending_atomic_updates,
                            void* atomic_buffer_ptr, int num_experts,
                            int num_ranks);
+
 #endif  // RDMA_HPP

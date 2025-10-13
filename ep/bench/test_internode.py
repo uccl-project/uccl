@@ -23,8 +23,6 @@ This benchmark verifies:
   * Top-k routing and per-expert token distribution
   * Compatibility with cached dispatch and low-latency kernels
   * Performance tuning for NVL and RDMA chunk sizes
-  
-It is currently still under development. 
 """
 
 import argparse
@@ -51,7 +49,6 @@ from utils import (
 )
 
 # Test compatibility with low latency functions
-import test_low_latency
 from buffer import Buffer
 
 try:
@@ -174,7 +171,8 @@ def test_main(
     time.sleep(1)
 
     # Config
-    rdma_buffer_size, nvl_buffer_size = 128, (720 if num_ranks in (144, 160) else 512)
+    # This seems really high.
+    rdma_buffer_size, nvl_buffer_size = 512, (720 if num_ranks in (144, 160) else 512)
     config = Config(num_sms, 8, nvl_buffer_size, 16, rdma_buffer_size)
 
     # Test dispatch
@@ -462,12 +460,12 @@ def test_loop(
 
     num_sms = 24
     num_qps_per_rank = max(
-        num_sms, ll_num_experts // num_ranks if args.test_ll_compatibility else 0
+        num_sms,
+        ll_num_experts // num_ranks if args.test_ll_compatibility else 0,
     )
-    num_rdma_bytes = int(2e9)
-    num_nvlink_bytes = int(1e9)
+    num_nvlink_bytes = int(2e9)
+    num_rdma_bytes = int(1e9)
 
-    # UCCL new code for initialization
     device_index = int(os.environ["LOCAL_RANK"])
     scratch = torch.zeros(
         num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
