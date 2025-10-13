@@ -66,26 +66,23 @@ class Buffer:
         self.explicitly_destroy = explicitly_destroy
         self.runtime = deep_ep_cpp.Buffer(self.rank, self.group_size, num_nvl_bytes, num_rdma_bytes, low_latency_mode, explicitly_destroy)
 
-        print('initialize in process')
         if hasattr(self.runtime, "set_num_sms"):
+            print(f"setting new num in runtime: {Buffer.num_sms}")
             self.runtime.set_num_sms(Buffer.num_sms)
         elif hasattr(deep_ep_cpp, "set_num_sms"):
+            print(f"setting new num sms in deep_ep: {Buffer.num_sms}")
             deep_ep_cpp.set_num_sms(Buffer.num_sms)
-        print("sms configure done")
         # Synchronize device IDs
         device_ids = [None, ] * self.group_size
         local_device_id = self.runtime.get_local_device_id()
         dist.all_gather_object(device_ids, local_device_id, group)
-        print("sync device are done")
         # Synchronize IPC handles
         ipc_handles = [None, ] * self.group_size
         local_ipc_handle = self.runtime.get_local_ipc_handle()
         dist.all_gather_object(ipc_handles, local_ipc_handle, group)
-        print("sync IPC device done")
         # Synchronize NVSHMEM unique IDs
         root_unique_id = None
         if self.runtime.get_num_rdma_ranks() > 1 or low_latency_mode:
-            print("ll mode")
             # Enable IBGDA 
             assert num_qps_per_rank > 0
             os.environ['NVSHMEM_DISABLE_P2P'] = '0' if allow_nvlink_for_low_latency_mode else '1'
@@ -101,7 +98,6 @@ class Buffer:
             os.environ['NVSHMEM_DISABLE_NVLS'] = '1'
             # NOTES: NVSHMEM initialization requires at least 256 MiB
             os.environ['NVSHMEM_CUMEM_GRANULARITY'] = f'{2 ** 29}'
-            print("var set for ll")
             if not allow_mnnvl:
                 # Disable multi-node NVLink detection
                 os.environ['NVSHMEM_DISABLE_MNNVL'] = '1'
@@ -112,13 +108,10 @@ class Buffer:
                 root_unique_id = self.runtime.get_local_nvshmem_unique_id()
             dist.all_gather_object(nvshmem_unique_ids, root_unique_id, group)
             root_unique_id = nvshmem_unique_ids[0 if low_latency_mode else self.runtime.get_root_rdma_rank(True)]
-            print("ll setup done")
 
-        print("init last start")
         # Make CPP runtime available
         self.runtime.sync(device_ids, ipc_handles, root_unique_id)
         assert self.runtime.is_available()
-        print("buffer done")
 
     def destroy(self):
         """
@@ -144,13 +137,14 @@ class Buffer:
         Arguments:
             new_num_sms: the new number to be set.
         """
-
+        print(f"setting new num_sms:{new_num_sms}")
         assert new_num_sms % 2 == 0, 'The SM count must be even'
         Buffer.num_sms = new_num_sms
-
+        print("buffer new num is set")
         try:
             if hasattr(deep_ep_cpp, "set_num_sms"):
                 deep_ep_cpp.set_num_sms(new_num_sms)
+                print(f"deep_ep_new_num_set: {new_num_sms}")
         except Exception:
             pass
 
