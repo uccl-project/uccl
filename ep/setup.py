@@ -135,7 +135,7 @@ def build_torch_extension():
 
     sources = all_files_in_dir(ep_src_dir, ["cpp", "cu", "cc"])
     return CUDAExtension(
-        name="ep_cpp",
+        name="ep",
         sources=sources,
         libraries=["ibverbs", "glog"],
         library_dirs=["/usr/lib/x86_64-linux-gnu/"],
@@ -153,7 +153,7 @@ if __name__ == "__main__":
 
     torch_ext = build_torch_extension()
     setup(
-        name="ep_cpp",
+        name="ep",
         version="0.0.0",
         package_data={"ep": ["lib/*.so"]},
         ext_modules=[build_torch_extension()],

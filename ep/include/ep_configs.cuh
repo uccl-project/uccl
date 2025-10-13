@@ -49,7 +49,6 @@
 
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-
 // #include <hip/hip_bfloat16.h>
 // #include <hip/hip_fp8.h>
 #define nv_bfloat16 hip_bfloat16
