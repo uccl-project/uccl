@@ -347,7 +347,7 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
               void* workspace, int num_device_sms,
               cudaStream_t stream, int phases) {
     constexpr int kNumMaxTopK = 9;
-    int desired_sms = 20;
+    int desired_sms = 40;
     const int num_warp_groups = ceil_div(num_experts, desired_sms);
     const int num_warps_per_group = 32 / num_warp_groups;
     EP_HOST_ASSERT(num_warp_groups > 0 and num_warps_per_group > 0);
@@ -693,7 +693,7 @@ void combine(void* combined_x,
              void* workspace, int num_device_sms,
              cudaStream_t stream, int phases, bool zero_copy) {
     constexpr int kNumMaxTopk = 9;
-    int desired_sms = 20;
+    int desired_sms = 40;
     const int num_warp_groups = ceil_div(num_experts, desired_sms);
     const int num_warps_per_group = 32 / num_warp_groups;
     EP_HOST_ASSERT(num_warp_groups > 0 and num_warps_per_group > 0);
