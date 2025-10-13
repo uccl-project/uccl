@@ -291,7 +291,7 @@ inline void RDMAEndpoint::initialize_resources(int total_num_engines) {
   p2p_listen_ports_.resize(num_devices_);
   std::fill(p2p_listen_ports_.begin(), p2p_listen_ports_.end(), 0);
   p2p_listen_fds_.resize(num_devices_);
-  std::fill(p2p_listen_fds_.begin(), p2p_listen_fds_.end(), 0);
+  std::fill(p2p_listen_fds_.begin(), p2p_listen_fds_.end(), -1);
 
   peer_map_.resize(num_devices_);
   peer_map_mu_.resize(num_devices_);
