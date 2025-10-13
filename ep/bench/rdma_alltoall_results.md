@@ -1,6 +1,6 @@
 # RDMA All-to-All Throughput Results
 
-Unit: **Gb/s**
+Unit: **GB/s**
 
 | Message Size (KB) | 2 Nodes | 3 Nodes | 4 Nodes |
 |-------------------|---------|---------|---------|
@@ -16,6 +16,21 @@ Unit: **Gb/s**
 | 4096              | 41.0    | 28.9    | 24.9    |
 
 ---
+
+RDMA rail-optimized (no cross-rail traffic) all-to-all results
+
+| Message Size (KB) | 2 Nodes | 3 Nodes | 4 Nodes |
+| ----------------- | ------- | ------- | ------- |
+| 8                 | 2.4     | 4.0     | 5.3     |
+| 16                | 4.1     | 7.6     | 10.1    |
+| 32                | 7.2     | 13.2    | 17.0    |
+| 64                | 12.1    | 20.0    | 24.5    |
+| 128               | 17.7    | 27.2    | 31.0    |
+| 256               | 22.6    | 33.1    | 35.9    |
+| 512               | 28.0    | 38.5    | 38.7    |
+| 1024              | 36.4    | 39.7    | 40.5    |
+| 2048              | 39.8    | 41.3    | 41.5    |
+| 4096              | 41.5    | 41.9    | 42.1    |
 
 ## Observations
 - **2 Nodes**: Throughput increases steadily with message size and reaches ~41 Gb/s at around 2 MB, which is close to the peak of the platform.  
