@@ -63,7 +63,7 @@ void barrier(int** barrier_signal_ptrs, int rank, int num_ranks,
   LAUNCH_KERNEL(&cfg, barrier<ranks>, barrier_signal_ptrs, rank); \
   break
 
-  SETUP_LAUNCH_CONFIG(1, 32, stream);
+  SETUP_LAUNCH_CONFIG(1, WARP_SIZE, stream);
   SWITCH_RANKS(BARRIER_LAUNCH_CASE);
 #undef BARRIER_LAUNCH_CASE
 }

@@ -11,7 +11,7 @@ import torch.distributed as dist
 import os
 
 # noinspection PyUnresolvedReferences
-from ep_cpp import Config
+from ep import Config
 from utils import (
     init_dist,
     bench,
@@ -426,7 +426,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     )
     torch.manual_seed(rank)
 
-    for i in (24,):
+    for i in (24, 64):
         test_main(args, i, local_rank, num_ranks, rank, buffer, group)
         if local_rank == 0:
             print("", flush=True)
