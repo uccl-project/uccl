@@ -6,6 +6,7 @@
  ************************************************************************/
 #include "../include/rx_descriptor.h"
 #include "unpack_launch.h"
+#include <algorithm>
 #include <cstdint>
 #include <cuda_runtime.h>
 
@@ -140,6 +141,7 @@ __device__ __forceinline__ void st_global<16>(uintptr_t addr,
 // Constants
 #define DATA_LOAD_SIZE 16
 #define WARP_SIZE 32
+constexpr int kWarpBatchDescriptors = 4;
 
 // Device-side visibility barrier similar to NCCL load64gpu on cnt
 // NOTE: This function does NOT include __syncthreads() - caller must sync if
@@ -163,12 +165,12 @@ __device__ __forceinline__ void devmem_visibility_barrier(
 // IMPORTANT: Loop condition must match NCCL exactly: data_s + DATA_LOAD_SIZE -
 // 1 < len
 template <int BYTES>
-__device__ void bulkCopy(int tid, uint32_t len, char* src, char* dst) {
+__device__ void bulkCopy(int lane, uint32_t len, char* src, char* dst) {
   int const elements_per_thread = DATA_LOAD_SIZE / BYTES;
   BytePack<BYTES> reg[elements_per_thread];
 
   // Match NCCL's loop condition exactly
-  for (uint32_t offset = tid * DATA_LOAD_SIZE;
+  for (uint32_t offset = lane * DATA_LOAD_SIZE;
        offset + DATA_LOAD_SIZE - 1 <
        len;  // Fixed: was "offset + DATA_LOAD_SIZE <= len"
        offset += WARP_SIZE * DATA_LOAD_SIZE) {
@@ -190,7 +192,7 @@ __device__ void bulkCopy(int tid, uint32_t len, char* src, char* dst) {
 
 // Single descriptor unpack kernel
 // Matches NCCL logic from unpack.h:251-275
-__device__ void unpackSingleDescriptor(int tid,
+__device__ void unpackSingleDescriptor(int lane,
                                        tcpx::rx::UnpackDescriptor const& desc,
                                        char* bounce_buffer, char* dst_buffer) {
   char* src = bounce_buffer + desc.src_off;
@@ -206,15 +208,15 @@ __device__ void unpackSingleDescriptor(int tid,
 
     // Select bulk copy size based on alignment (matches NCCL line 257-267)
     if (align_off == 0) {
-      bulkCopy<16>(tid, len, src, dst);
+      bulkCopy<16>(lane, len, src, dst);
     } else if (align_off & 0x8) {
-      bulkCopy<8>(tid, len, src, dst);
+      bulkCopy<8>(lane, len, src, dst);
     } else if (align_off & 0x4) {
-      bulkCopy<4>(tid, len, src, dst);
+      bulkCopy<4>(lane, len, src, dst);
     } else if (align_off & 0x2) {
-      bulkCopy<2>(tid, len, src, dst);
+      bulkCopy<2>(lane, len, src, dst);
     } else {
-      bulkCopy<1>(tid, len, src, dst);
+      bulkCopy<1>(lane, len, src, dst);
     }
   }
 
@@ -223,9 +225,9 @@ __device__ void unpackSingleDescriptor(int tid,
   // 1. Tail bytes after bulk copy (e.g., 23 bytes = 16 bulk + 7 tail)
   // 2. Entire payload if len < 16 (e.g., 7 bytes = 0 bulk + 7 tail)
   uint32_t remaining_start = (len / DATA_LOAD_SIZE) * DATA_LOAD_SIZE;
-  if (tid < len % DATA_LOAD_SIZE) {
-    char volatile* src_ptr = src + remaining_start + tid;
-    char volatile* dst_ptr = dst + remaining_start + tid;
+  if (lane < len % DATA_LOAD_SIZE) {
+    char volatile* src_ptr = src + remaining_start + lane;
+    char volatile* dst_ptr = dst + remaining_start + lane;
     *dst_ptr = *src_ptr;
   }
 }
@@ -234,22 +236,44 @@ __device__ void unpackSingleDescriptor(int tid,
 extern "C" __global__ void tcpxUnpackKernel(
     tcpx::rx::UnpackDescriptorBlock const* desc_block) {
   int tid = threadIdx.x;
-  int bid = blockIdx.x;
 
-  // Issue a device-side visibility barrier before reading bounce buffer
-  // Only thread 0 does the visibility load, but all threads must sync
   if (tid == 0) {
     devmem_visibility_barrier(desc_block->ready_flag);
   }
-  __syncthreads();  // All threads sync here
+  __syncthreads();
 
   char* bounce_buffer = static_cast<char*>(desc_block->bounce_buffer);
   char* dst_buffer = static_cast<char*>(desc_block->dst_buffer);
 
-  // Each block processes one descriptor
-  if (bid < desc_block->count) {
-    tcpx::rx::UnpackDescriptor const& desc = desc_block->descriptors[bid];
-    unpackSingleDescriptor(tid, desc, bounce_buffer, dst_buffer);
+  int const lane = tid & (WARP_SIZE - 1);
+  int const warp_id = tid / WARP_SIZE;
+  int const warps_per_block = blockDim.x / WARP_SIZE;
+  int const total_warps = gridDim.x * warps_per_block;
+
+  extern __shared__ unsigned char smem[];
+  auto* warp_cache =
+      reinterpret_cast<tcpx::rx::UnpackDescriptor*>(smem);
+
+  for (int base =
+           (blockIdx.x * warps_per_block + warp_id) * kWarpBatchDescriptors;
+       base < desc_block->count;
+       base += total_warps * kWarpBatchDescriptors) {
+    int batch = desc_block->count - base;
+    if (batch > kWarpBatchDescriptors) batch = kWarpBatchDescriptors;
+    if (batch <= 0) continue;
+
+    if (lane < batch) {
+      warp_cache[warp_id * kWarpBatchDescriptors + lane] =
+          desc_block->descriptors[base + lane];
+    }
+    __syncwarp();
+
+    for (int i = 0; i < batch; ++i) {
+      tcpx::rx::UnpackDescriptor const& desc =
+          warp_cache[warp_id * kWarpBatchDescriptors + i];
+      unpackSingleDescriptor(lane, desc, bounce_buffer, dst_buffer);
+    }
+    __syncwarp();
   }
 }
 
@@ -314,10 +338,15 @@ extern "C" __host__ tcpx::device::KernelLaunchParams calculateLaunchParams(
 
     params.grid_size = dim3(blocks_needed);
     params.block_size = dim3(threads_per_block);
+    params.shared_mem_size = 0;
   } else {
     // Block per descriptor
-    params.grid_size = dim3(desc_block.count);
-    params.block_size = dim3(256);  // Full block per descriptor
+    params.grid_size = dim3(std::max<uint32_t>(1, desc_block.count));
+    params.block_size = dim3(256);  // 8 warps per block
+    int warps_per_block = params.block_size.x / WARP_SIZE;
+    params.shared_mem_size =
+        warps_per_block * kWarpBatchDescriptors *
+        sizeof(tcpx::rx::UnpackDescriptor);
   }
 
   return params;
