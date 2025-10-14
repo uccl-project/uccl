@@ -470,16 +470,26 @@ extract_required_scale_format(float value) {
 
 // 32-bit system-consistent load with acquire semantics (GH200-safe)
 __device__ __forceinline__ uint32_t
-ld_acquire_sys_global(const volatile uint32_t* p) {
+ld_acquire_sys_global(uint32_t const volatile* p) {
   uint32_t v;
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  v = __hip_atomic_load(const_cast<uint32_t*>(p), __ATOMIC_ACQUIRE,
+                        __HIP_MEMORY_SCOPE_SYSTEM);
+#else
   asm volatile("ld.acquire.sys.global.u32 %0, [%1];" : "=r"(v) : "l"(p));
+#endif
   return v;
 }
 
 __device__ __forceinline__ uint64_t
-ld_acquire_sys_global(const volatile uint64_t* p) {
+ld_acquire_sys_global(uint64_t const volatile* p) {
   uint64_t v;
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  v = __hip_atomic_load(const_cast<uint64_t*>(p), __ATOMIC_ACQUIRE,
+                        __HIP_MEMORY_SCOPE_SYSTEM);
+#else
   asm volatile("ld.acquire.sys.global.u64 %0, [%1];" : "=l"(v) : "l"(p));
+#endif
   return v;
 }
 

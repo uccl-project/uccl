@@ -15,10 +15,21 @@
   cfg.attrs = attr;                                                           \
   cfg.numAttrs = 2
 #else
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+typedef struct {
+  dim3 num_sms;
+  dim3 num_threads;
+  unsigned int shared_mem_bytes;
+  hipStream_t stream;
+} hipLaunchConfig_t;
+#define SETUP_LAUNCH_CONFIG(num_sms, num_threads, stream) \
+  hipLaunchConfig_t cfg = {(num_sms), (num_threads), 0, stream};
+#else
 #define SETUP_LAUNCH_CONFIG(sms, threads, stream) \
   int __num_sms = (sms);                          \
   int __num_threads = (threads);                  \
   auto __stream = (stream)
+#endif
 #endif
 #endif
 
@@ -26,6 +37,29 @@
 #ifndef DISABLE_SM90_FEATURES
 #define LAUNCH_KERNEL(config, kernel, ...) \
   CUDA_CHECK(cudaLaunchKernelEx(config, kernel, ##__VA_ARGS__))
+#else
+
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+template <typename T>
+void fill_kernel_args(void** f, size_t idx, T&& arg) {
+  f[idx] = (void*)std::addressof(arg);
+}
+
+template <typename Head, typename... Tail>
+void fill_kernel_args(void** f, size_t idx, Head&& head, Tail&&... tail) {
+  f[idx] = (void*)std::addressof(head);
+  fill_kernel_args(f, idx + 1, std::forward<Tail>(tail)...);
+}
+
+template <typename T, typename Kern, typename... Args>
+inline void LAUNCH_KERNEL(T&& config, Kern&& kernel, Args&&... args) {
+  constexpr size_t k_num_kernel_args = sizeof...(args);
+  void* kernel_args[k_num_kernel_args];
+  fill_kernel_args(kernel_args, 0, std::forward<Args>(args)...);
+  CUDA_CHECK(hipLaunchCooperativeKernel(
+      std::forward<Kern>(kernel), config->num_sms, config->num_threads,
+      kernel_args, config->shared_mem_bytes, config->stream));
+}
 #else
 #define LAUNCH_KERNEL(config, kernel, ...)                          \
   do {                                                              \
@@ -38,6 +72,7 @@
       throw cuda_exception;                                         \
     }                                                               \
   } while (0)
+#endif
 #endif
 #endif
 
