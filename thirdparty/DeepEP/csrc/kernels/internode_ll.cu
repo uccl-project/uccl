@@ -352,7 +352,8 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
     const int num_warps_per_group = 32 / num_warp_groups;
     EP_HOST_ASSERT(num_warp_groups > 0 and num_warps_per_group > 0);
     EP_HOST_ASSERT(kNumMaxTopK + 1 <= num_warp_groups * num_warps_per_group);
-
+    printf("dispatch desired_sms=%d num_warp_groups=%d num_warps_per_group=%d\n",
+        desired_sms, num_warp_groups, num_warps_per_group);
     const auto num_warps = num_warp_groups * num_warps_per_group;
     // const auto num_sms = ceil_div(num_experts, num_warp_groups);
     // int num_sms = 20;
@@ -702,6 +703,8 @@ void combine(void* combined_x,
     // const auto num_sms = ceil_div(num_experts, num_warp_groups);
     // int num_sms = 20;
 
+    printf("combine desired_sms=%d num_warp_groups=%d num_warps_per_group=%d\n",
+        desired_sms, num_warp_groups, num_warps_per_group);
     // Check workspace
     auto atomic_clean_flag = static_cast<int*>(workspace);
     EP_HOST_ASSERT(sizeof(int) <= NUM_WORKSPACE_BYTES);
