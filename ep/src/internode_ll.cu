@@ -88,7 +88,11 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   EP_DEVICE_ASSERT(num_bytes_per_msg % sizeof(int4) == 0);
 
   // Expert counts
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  constexpr int kNumMaxWarpGroups = 16;
+#else
   constexpr int kNumMaxWarpGroups = 32;
+#endif
   __shared__ int shared_num_tokens_sent_per_expert[kNumMaxWarpGroups];
 
   // Sending phase
@@ -349,7 +353,7 @@ LOW_LATENCY_DISPATCH_RECV:
     // NOTES: using sub-warp 1 to overlap with sub-warp 0
     int num_recv_tokens_internode = 0, num_recv_tokens_ipc = 0,
         num_recv_tokens = 0, recv_token_begin_idx = 0;
-    EP_DEVICE_ASSERT(num_warps_per_group > 1 and num_warp_groups < 15);
+    EP_DEVICE_ASSERT(num_warps_per_group > 1);
     if (sub_warp_id == 1 and lane_id == 0) {
       auto start_time = clock64();
       while ((src_rank / max_nvl_peers == rank / max_nvl_peers) &&
@@ -487,7 +491,11 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
               int* rdma_recv_count_internode) {
   constexpr int kNumMaxTopK = 9;
   int const num_warp_groups = ceil_div(num_experts, num_device_sms);
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  int const num_warps_per_group = 16 / num_warp_groups;
+#else
   int const num_warps_per_group = 32 / num_warp_groups;
+#endif
   EP_HOST_ASSERT(num_warp_groups > 0 and num_warps_per_group > 0);
   EP_HOST_ASSERT(kNumMaxTopK + 1 <= num_warp_groups * num_warps_per_group);
 
@@ -525,6 +533,9 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
         rdma_recv_count_internode);                                           \
   }                                                                           \
   break
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  EP_HOST_ASSERT(num_warps * WARP_SIZE <= 1024);
+#endif
 
   SETUP_LAUNCH_CONFIG(num_sms, num_warps * WARP_SIZE, stream);
   SWITCH_HIDDEN(DISPATCH_LAUNCH_CASE);
