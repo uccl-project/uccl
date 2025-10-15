@@ -41,6 +41,7 @@ An UCCL overview can be found in these [slides](https://docs.google.com/presenta
   * rearchitect the network transport layer to be fast and extensible
   * support heterogeneous GPU and networking vendors such as Nvidia, AMD, and Broadcom
   * become an open and collaborative platform for GPU communication research
+  <br>
 
   UCCL-collective has built a fast and extensible transport layer in software, which has created many benefits. 
   For example, existing network transports under NCCL (i.e., kernel TCP and RDMA) leverage one or few network paths to stream huge data volumes, thus prone to congestion happening in datacenter networks. 
