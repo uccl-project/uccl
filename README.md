@@ -19,6 +19,7 @@
 UCCL is an efficient communication library for GPUs, covering collectives, P2P (e.g., KV cache transfer, RL weight transfer), and EP (e.g., IBGDA), with two key focuses: 
 * **Flexibility** for high performance in fast-evolving ML workloads
 * **Portability** for connecting heterogeneous GPUs in ML workloads
+An overview of the UCCL project can be found in these [slides](https://docs.google.com/presentation/d/1LQxZzxghRmua4FkfQjWu69wXy9hrs9V_tXrXt_DT-F4/edit?usp=sharing). 
 
 For collectives, UCCL-collective serves as a drop-in replacement for NCCL/RCCL (e.g., requiring no changes to application code), and significantly outperforms them in both latency and throughput across various settings. 
 
@@ -45,7 +46,7 @@ For example, existing network transports under NCCL (i.e., kernel TCP and RDMA) 
 Instead, UCCL-collective employs packet spraying in software to leverage abundant network paths to avoid "single-path-of-congestion". 
 More benefits include: 1) packet spraying with 256 paths, 2) advanced congestion control such as latency-based and receiver-driven ones, 3) efficient loss recovery by selective repeat, and 4) widely usable in public clouds with legacy NICs and Ethernet. 
 
-Feel free to check out our full [technical report](https://arxiv.org/pdf/2504.17307) and [slides](https://drive.google.com/file/d/1YsgMNPeCV797sYPiCWAT0AMfc0WgIhP0/view?usp=sharing).
+Feel free to check out our full [technical report](https://arxiv.org/pdf/2504.17307).
 </details>
 
 For P2P, UCCL-P2P provides both NIXL-style initiator-target tranfer APIs and NCCL-style collective APIs, with the same or better performance than both. UCCL-P2P is purposely designed for the next-gen 800Gbps NICs with efficient multi-threaded transfer engines. 
