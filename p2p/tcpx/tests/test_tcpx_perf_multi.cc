@@ -29,7 +29,6 @@
  *   UCCL_TCPX_PERF_SIZE: total bytes per iteration (default 4MB)
  *   UCCL_TCPX_PERF_ITERS: iteration count (default 10)
  *   UCCL_TCPX_CHUNK_BYTES: chunk size (default 2MB)
- *   UCCL_TCPX_UNPACK_IMPL: unpack impl (kernel|d2d|host, default kernel)
  *
  * Key lessons (from test_tcpx_perf.cc):
  * 1) Check window capacity BEFORE tcpx_irecv.
@@ -73,8 +72,8 @@ Structure overview:
 - Server path:
   1) ChannelManager.listen → bootstrap send handles → accept → CUDA init →
      register recv buffer
-  2) Per-channel sliding window and (kernel mode) persistent stream/launcher
-  3) Main loop: split chunks, round-robin channels, post tcpx_irecv then
+  2) Per-channel sliding window and persistent stream/launcher for GPU kernel
+unpack 3) Main loop: split chunks, round-robin channels, post tcpx_irecv then
      process_completed_chunk(false) and opportunistically poll others; when
      window full, block (event or completion); end-of-iter drain
 - Client path:
@@ -253,10 +252,9 @@ int main(int argc, char** argv) {
   // === SERVER path overview ===
   // 1) listen and generate handles (then send to client via bootstrap)
   // 2) accept all channels (create recv_comm)
-  // 3) choose unpack impl (kernel/d2d/host)
-  // 4) CUDA init + 4KB aligned buffer; register buffer across channels
-  // 5) (kernel) persistent stream/launcher; pre-create events
-  // 6) per-channel sliding window (MAX_INFLIGHT_PER_CHANNEL=16)
+  // 3) CUDA init + 4KB aligned buffer; register buffer across channels
+  // 4) persistent stream/launcher for GPU kernel unpack; pre-create events
+  // 5) per-channel sliding window (MAX_INFLIGHT_PER_CHANNEL=16)
   // 7) post irecv per chunk; then non-blocking progress; block when full
   // 8) drain inflight/pending at iteration end and record performance
 
@@ -382,13 +380,9 @@ int main(int argc, char** argv) {
               << std::endl;
 
     // ==========================================================================
-    // Step 4: choose unpack implementation
+    // Step 4: GPU kernel unpack (only mode supported, matching NCCL+TCPX)
     // ==========================================================================
-
-    char const* impl_env = std::getenv("UCCL_TCPX_UNPACK_IMPL");
-    std::string impl = impl_env ? std::string(impl_env) : std::string("kernel");
-    std::transform(impl.begin(), impl.end(), impl.begin(), ::tolower);
-    std::cout << "[PERF] Unpack impl: " << impl << std::endl;
+    std::cout << "[PERF] Unpack mode: GPU kernel (NCCL-aligned)" << std::endl;
 
     // ==========================================================================
     // Step 5: CUDA initialization
@@ -443,37 +437,33 @@ int main(int argc, char** argv) {
               << " channels" << std::endl;
     // Progress engine (recv): always test FIFO head
     // - rc!=0 means real error; done=0 means not finished
-    // - When done=1: read unpack metadata, run kernel/d2d/host path, then call
-    //   irecv_consumed()
+    // - When done=1: read unpack metadata, launch GPU kernel, then track
+    // completion
     // - Call non-blocking after post; block when window is full
 
     // ==========================================================================
-    // Step 8: create persistent stream and launcher (kernel only)
+    // Step 8: create persistent stream and GPU kernel launcher
     // ==========================================================================
 
     // Create outside loops to avoid ~4ms per chunk overhead
     cudaStream_t unpack_stream = nullptr;
-    tcpx::device::UnpackLauncher* launcher_ptr = nullptr;
-
-    if (impl == "kernel") {
-      if (!cuda_check(cudaStreamCreate(&unpack_stream), "cudaStreamCreate")) {
-        cuMemFree(d_base);
-        mgr.deregister_memory(true);
-        mgr.close_all(true);
-        close(bootstrap_fd);
-        return 1;
-      }
-
-      tcpx::device::UnpackLaunchConfig cfg;
-      cfg.stream = unpack_stream;
-      cfg.enable_profiling = false;
-      cfg.use_small_kernel = true;
-      launcher_ptr = new tcpx::device::UnpackLauncher(cfg);
-
-      std::cout
-          << "[PERF] Created persistent stream and launcher for kernel mode"
-          << std::endl;
+    if (!cuda_check(cudaStreamCreate(&unpack_stream), "cudaStreamCreate")) {
+      cuMemFree(d_base);
+      mgr.deregister_memory(true);
+      mgr.close_all(true);
+      close(bootstrap_fd);
+      return 1;
     }
+
+    tcpx::device::UnpackLaunchConfig cfg;
+    cfg.stream = unpack_stream;
+    cfg.enable_profiling = false;
+    cfg.use_small_kernel = true;
+    tcpx::device::UnpackLauncher* launcher_ptr =
+        new tcpx::device::UnpackLauncher(cfg);
+
+    std::cout << "[PERF] Created persistent stream and GPU kernel launcher"
+              << std::endl;
 
     // ==========================================================================
     // Step 9: create per-channel sliding windows
@@ -503,24 +493,23 @@ int main(int argc, char** argv) {
 
     std::vector<ChannelWindow> channel_windows(num_channels);
 
-    if (impl == "kernel") {
-      // Pre-create CUDA events for each channel
-      for (int ch = 0; ch < num_channels; ++ch) {
-        channel_windows[ch].events.resize(MAX_INFLIGHT_PER_CHANNEL);
-        for (int i = 0; i < MAX_INFLIGHT_PER_CHANNEL; ++i) {
-          if (!cuda_check(cudaEventCreate(&channel_windows[ch].events[i]),
-                          "cudaEventCreate")) {
-            std::cerr << "[ERROR] Failed to create event for channel " << ch
-                      << std::endl;
-            return 1;
-          }
+    // Pre-create CUDA events for each channel
+    for (int ch = 0; ch < num_channels; ++ch) {
+      channel_windows[ch].events.resize(MAX_INFLIGHT_PER_CHANNEL);
+      for (int i = 0; i < MAX_INFLIGHT_PER_CHANNEL; ++i) {
+        if (!cuda_check(cudaEventCreate(&channel_windows[ch].events[i]),
+                        "cudaEventCreate")) {
+          std::cerr << "[ERROR] Failed to create event for channel " << ch
+                    << std::endl;
+          return 1;
         }
-        channel_windows[ch].pending_reqs.reserve(MAX_INFLIGHT_PER_CHANNEL);
-        channel_windows[ch].pending_indices.reserve(MAX_INFLIGHT_PER_CHANNEL);
       }
-      std::cout << "[PERF] Created " << MAX_INFLIGHT_PER_CHANNEL
-                << " events per channel for async kernel mode" << std::endl;
+      channel_windows[ch].pending_reqs.reserve(MAX_INFLIGHT_PER_CHANNEL);
+      channel_windows[ch].pending_indices.reserve(MAX_INFLIGHT_PER_CHANNEL);
     }
+    std::cout << "[PERF] Created " << MAX_INFLIGHT_PER_CHANNEL
+              << " CUDA events per channel for async GPU kernel unpack"
+              << std::endl;
 
     // PROGRESS CORE (server/recv) — this is the canonical reference we mimic in
     // single-process orchestrator:
@@ -598,14 +587,6 @@ int main(int argc, char** argv) {
                   << " recv completed (received_size=" << received_size << ")"
                   << std::endl;
 
-        // Ablation mode: skip any unpack work and immediately consume the recv.
-        if (impl == "none") {
-          tcpx_irecv_consumed(ch.recv_comm, 1, entry.request);
-          win.inflight_recvs.pop_front();
-          // Proceed to next FIFO head (if any)
-          continue;
-        }
-
         auto* rx_req =
             reinterpret_cast<tcpx::plugin::tcpxRequest*>(entry.request);
         auto* dev_handle_struct =
@@ -649,78 +630,27 @@ int main(int argc, char** argv) {
         desc_block.ready_flag = rx_req->unpack_slot.cnt;
         desc_block.ready_threshold = frag_count;
 
-        int lrc = 0;
+        // Launch GPU kernel to unpack scattered fragments
+        std::cout << "[DEBUG][SERVER] Launching unpack kernel for chunk "
+                  << entry.global_idx << " (channel " << channel_id
+                  << ", descriptors=" << desc_block.count << ")" << std::endl;
 
-        if (impl == "kernel") {
-          std::cout << "[DEBUG][SERVER] Launching unpack kernel for chunk "
-                    << entry.global_idx << " (channel " << channel_id
-                    << ", descriptors=" << desc_block.count << ")" << std::endl;
-
-          lrc = launcher_ptr->launch(desc_block);
-          if (lrc != 0) {
-            std::cerr << "[ERROR] Unpack kernel launch failed: " << lrc
-                      << std::endl;
-            return false;
-          }
-
-          int event_idx = win.chunk_counter % MAX_INFLIGHT_PER_CHANNEL;
-          if (!cuda_check(cudaEventRecord(win.events[event_idx], unpack_stream),
-                          "cudaEventRecord")) {
-            return false;
-          }
-
-          win.pending_reqs.push_back(entry.request);
-          win.pending_indices.push_back(win.chunk_counter);
-          win.chunk_counter++;
-
-        } else if (impl == "d2d") {
-          for (uint32_t i = 0; i < desc_block.count; ++i) {
-            const auto& meta = desc_block.descriptors[i];
-            CUdeviceptr src_ptr = static_cast<CUdeviceptr>(
-                reinterpret_cast<uintptr_t>(desc_block.bounce_buffer) +
-                meta.src_off);
-            CUdeviceptr dst_ptr_frag = static_cast<CUdeviceptr>(
-                reinterpret_cast<uintptr_t>(desc_block.dst_buffer) +
-                meta.dst_off);
-
-            if (!cuda_check(cuMemcpyDtoD(dst_ptr_frag, src_ptr, meta.len),
-                            "cuMemcpyDtoD")) {
-              lrc = -1;
-              break;
-            }
-          }
-          if (lrc != 0) return false;
-
-          tcpx_irecv_consumed(ch.recv_comm, 1, entry.request);
-
-        } else {  // host gather
-          std::vector<unsigned char> tmp(desc_block.total_bytes);
-          size_t host_off = 0;
-          for (uint32_t i = 0; i < desc_block.count; ++i) {
-            const auto& meta = desc_block.descriptors[i];
-            CUdeviceptr src_ptr = static_cast<CUdeviceptr>(
-                reinterpret_cast<uintptr_t>(desc_block.bounce_buffer) +
-                meta.src_off);
-            if (!cuda_check(
-                    cuMemcpyDtoH(tmp.data() + host_off, src_ptr, meta.len),
-                    "cuMemcpyDtoH")) {
-              lrc = -1;
-              break;
-            }
-            host_off += meta.len;
-          }
-          if (lrc != 0) return false;
-
-          if (!cuda_check(cuMemcpyHtoD(static_cast<CUdeviceptr>(
-                                           reinterpret_cast<uintptr_t>(
-                                               desc_block.dst_buffer)),
-                                       tmp.data(), tmp.size()),
-                          "cuMemcpyHtoD")) {
-            return false;
-          }
-
-          tcpx_irecv_consumed(ch.recv_comm, 1, entry.request);
+        int lrc = launcher_ptr->launch(desc_block);
+        if (lrc != 0) {
+          std::cerr << "[ERROR] Unpack kernel launch failed: " << lrc
+                    << std::endl;
+          return false;
         }
+
+        int event_idx = win.chunk_counter % MAX_INFLIGHT_PER_CHANNEL;
+        if (!cuda_check(cudaEventRecord(win.events[event_idx], unpack_stream),
+                        "cudaEventRecord")) {
+          return false;
+        }
+
+        win.pending_reqs.push_back(entry.request);
+        win.pending_indices.push_back(win.chunk_counter);
+        win.chunk_counter++;
 
         win.inflight_recvs.pop_front();
       }
@@ -788,19 +718,17 @@ int main(int argc, char** argv) {
       bool iteration_failed = false;
 
       // Reset per-channel sliding windows at the start of each iteration
-      if (impl == "kernel") {
-        std::cout << "[DEBUG] Iteration " << iter
-                  << " start: clearing sliding windows for " << num_channels
-                  << " channels" << std::endl;
-        for (int ch = 0; ch < num_channels; ++ch) {
-          channel_windows[ch].pending_reqs.clear();
-          // After recording the irecv to the per-channel FIFO, trigger
-          // non-blocking progress immediately to avoid initial backlog. Also
-          // opportunistically progress other channels to reduce HOL risk.
+      std::cout << "[DEBUG] Iteration " << iter
+                << " start: clearing sliding windows for " << num_channels
+                << " channels" << std::endl;
+      for (int ch = 0; ch < num_channels; ++ch) {
+        channel_windows[ch].pending_reqs.clear();
+        // After recording the irecv to the per-channel FIFO, trigger
+        // non-blocking progress immediately to avoid initial backlog. Also
+        // opportunistically progress other channels to reduce HOL risk.
 
-          channel_windows[ch].pending_indices.clear();
-          channel_windows[ch].chunk_counter = 0;
-        }
+        channel_windows[ch].pending_indices.clear();
+        channel_windows[ch].chunk_counter = 0;
       }
 
       // ========================================================================
@@ -830,25 +758,11 @@ int main(int argc, char** argv) {
                   << (win.pending_reqs.size() + win.inflight_recvs.size())
                   << "/" << MAX_INFLIGHT_PER_CHANNEL << std::endl;
 
-        if (impl == "kernel") {
-          if (!wait_for_channel_capacity(channel_id, ch, win)) {
-            std::cerr << "[ERROR] Failed while waiting for channel capacity"
-                      << std::endl;
-            iteration_failed = true;
-            break;
-          }
-        } else {
-          while (win.inflight_recvs.size() >= MAX_INFLIGHT_PER_CHANNEL) {
-            if (!process_completed_chunk(channel_id, ch, win,
-                                         /*blocking=*/true)) {
-              std::cerr
-                  << "[ERROR] Failed while waiting for inflight recv to drain"
-                  << std::endl;
-              iteration_failed = true;
-              break;
-            }
-          }
-          if (iteration_failed) break;
+        if (!wait_for_channel_capacity(channel_id, ch, win)) {
+          std::cerr << "[ERROR] Failed while waiting for channel capacity"
+                    << std::endl;
+          iteration_failed = true;
+          break;
         }
 
         // ======================================================================
@@ -930,57 +844,55 @@ int main(int argc, char** argv) {
       }
 
       // ========================================================================
-      // End of iteration: drain per-channel windows (kernel mode only)
+      // End of iteration: drain per-channel windows
       // ========================================================================
 
-      if (impl == "kernel") {
+      for (int ch = 0; ch < num_channels; ++ch) {
+        ChannelResources& channel = mgr.get_channel(ch);
+        ChannelWindow& win = channel_windows[ch];
+        while (!win.inflight_recvs.empty()) {
+          if (!process_completed_chunk(ch, channel, win, /*blocking=*/true)) {
+            std::cerr << "[ERROR] Failed to drain inflight recvs for channel "
+                      << ch << std::endl;
+            abort_benchmark = true;
+            break;
+          }
+        }
+        if (abort_benchmark) break;
+      }
+
+      if (!abort_benchmark) {
         for (int ch = 0; ch < num_channels; ++ch) {
           ChannelResources& channel = mgr.get_channel(ch);
           ChannelWindow& win = channel_windows[ch];
-          while (!win.inflight_recvs.empty()) {
-            if (!process_completed_chunk(ch, channel, win, /*blocking=*/true)) {
-              std::cerr << "[ERROR] Failed to drain inflight recvs for channel "
-                        << ch << std::endl;
+
+          while (!win.pending_reqs.empty()) {
+            int oldest_idx = win.pending_indices.front();
+            cudaEvent_t oldest_event =
+                win.events[oldest_idx % MAX_INFLIGHT_PER_CHANNEL];
+
+            if (!cuda_check(cudaEventSynchronize(oldest_event),
+                            "cudaEventSynchronize drain")) {
               abort_benchmark = true;
               break;
             }
+
+            void* oldest_req = win.pending_reqs.front();
+            tcpx_irecv_consumed(channel.recv_comm, 1, oldest_req);
+
+            win.pending_reqs.erase(win.pending_reqs.begin());
+            win.pending_indices.erase(win.pending_indices.begin());
           }
+
+          // === CLIENT path overview ===
+          // 1) Bootstrap and receive handles → ChannelManager(handles.size())
+          // 2) Connect all channels (send_comm)
+          // 3) CUDA init + 4KB-aligned send buffer + register to channels
+          // 4) Per-channel send window (MAX_INFLIGHT_SEND_PER_CHANNEL=12)
+          // 5) Send chunks; if full, wait on oldest send (tcpx_test+sleep)
+          // 6) Drain pending sends and compute averages at iteration end
+
           if (abort_benchmark) break;
-        }
-
-        if (!abort_benchmark) {
-          for (int ch = 0; ch < num_channels; ++ch) {
-            ChannelResources& channel = mgr.get_channel(ch);
-            ChannelWindow& win = channel_windows[ch];
-
-            while (!win.pending_reqs.empty()) {
-              int oldest_idx = win.pending_indices.front();
-              cudaEvent_t oldest_event =
-                  win.events[oldest_idx % MAX_INFLIGHT_PER_CHANNEL];
-
-              if (!cuda_check(cudaEventSynchronize(oldest_event),
-                              "cudaEventSynchronize drain")) {
-                abort_benchmark = true;
-                break;
-              }
-
-              void* oldest_req = win.pending_reqs.front();
-              tcpx_irecv_consumed(channel.recv_comm, 1, oldest_req);
-
-              win.pending_reqs.erase(win.pending_reqs.begin());
-              win.pending_indices.erase(win.pending_indices.begin());
-            }
-
-            // === CLIENT path overview ===
-            // 1) Bootstrap and receive handles → ChannelManager(handles.size())
-            // 2) Connect all channels (send_comm)
-            // 3) CUDA init + 4KB-aligned send buffer + register to channels
-            // 4) Per-channel send window (MAX_INFLIGHT_SEND_PER_CHANNEL=12)
-            // 5) Send chunks; if full, wait on oldest send (tcpx_test+sleep)
-            // 6) Drain pending sends and compute averages at iteration end
-
-            if (abort_benchmark) break;
-          }
         }
       }
 
@@ -1050,11 +962,9 @@ int main(int argc, char** argv) {
     }
 
     // Destroy CUDA events
-    if (impl == "kernel") {
-      for (int ch = 0; ch < num_channels; ++ch) {
-        for (auto& evt : channel_windows[ch].events) {
-          cudaEventDestroy(evt);
-        }
+    for (int ch = 0; ch < num_channels; ++ch) {
+      for (auto& evt : channel_windows[ch].events) {
+        cudaEventDestroy(evt);
       }
     }
 

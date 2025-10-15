@@ -14,11 +14,11 @@ CUDA_LIBS  := -L$(CUDA_HOME)/lib64 -lcuda -lcudart
 # Source files
 # Note: rx_descriptor.h is now header-only, no .cc files needed
 DEVICE_SRCS := device/unpack_kernels.cu device/unpack_launch.cu
-CORE_SRCS   := src/sliding_window.cc src/bootstrap.cc src/channel_manager.cc
+CORE_SRCS   := src/bootstrap.cc src/channel_manager.cc src/sliding_window.cc
 
 # Object files
 DEVICE_OBJS := device/unpack_kernels.o device/unpack_launch.o
-CORE_OBJS   := src/sliding_window.o src/bootstrap.o src/channel_manager.o
+CORE_OBJS   := src/bootstrap.o src/channel_manager.o src/sliding_window.o
 
 # Build object files
 %.o: %.cc
@@ -39,23 +39,13 @@ core: $(DEVICE_OBJS) $(CORE_OBJS)
 	@echo "Device objects: $(DEVICE_OBJS)"
 	@echo "Core objects: $(CORE_OBJS)"
 
-# Multi-channel performance test (main program)
+# Performance test (main program)
 test_tcpx_perf_multi: $(DEVICE_OBJS) $(CORE_OBJS)
 	@echo "Building test_tcpx_perf_multi..."
 	$(NVCC) $(NVCCFLAGS) -o tests/test_tcpx_perf_multi tests/test_tcpx_perf_multi.cc tcpx_impl.cc $(DEVICE_OBJS) $(CORE_OBJS) $(LIBS) $(CUDA_LIBS)
 
-# Multi-channel transfer test
-test_tcpx_transfer_multi: $(DEVICE_OBJS) $(CORE_OBJS)
-	@echo "Building test_tcpx_transfer_multi..."
-	$(NVCC) $(NVCCFLAGS) -o tests/test_tcpx_transfer_multi tests/test_tcpx_transfer_multi.cc tcpx_impl.cc $(DEVICE_OBJS) $(CORE_OBJS) $(LIBS) $(CUDA_LIBS)
-
-# Module unit tests
-test_modules: $(CORE_OBJS)
-	@echo "Building test_modules..."
-	$(CXX) $(CXXFLAGS) -o tests/test_modules tests/test_modules.cc tcpx_impl.cc $(CORE_OBJS) $(LIBS) $(CUDA_LIBS)
-
 # Build targets
-all: core test_tcpx_perf_multi test_tcpx_transfer_multi test_modules
+all: core test_tcpx_perf_multi
 
 # Quick test - just core components
 quick: core
@@ -82,8 +72,8 @@ check:
 # Clean built files
 clean:
 	@echo "Cleaning build artifacts..."
-	rm -f tests/test_tcpx_perf_multi tests/test_tcpx_transfer_multi tests/test_modules
+	rm -f tests/test_tcpx_perf_multi
 	rm -f $(DEVICE_OBJS) $(CORE_OBJS) *.o
 	@echo "Clean completed."
 
-.PHONY: all core quick check clean test_tcpx_perf_multi test_tcpx_transfer_multi test_modules
+.PHONY: all core quick check clean test_tcpx_perf_multi
