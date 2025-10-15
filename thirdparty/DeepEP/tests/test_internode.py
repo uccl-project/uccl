@@ -6,7 +6,7 @@ import torch.distributed as dist
 
 # noinspection PyUnresolvedReferences
 import deep_ep
-from utils import init_dist, bench, bench_kineto, calc_diff, create_grouped_scores, inplace_unique, per_token_cast_to_fp8, per_token_cast_back
+from utils import init_dist, bench, bench_kineto, calc_diff, create_grouped_scores, inplace_unique, per_token_cast_to_fp8, per_token_cast_back, detect_ib_hca, init_dist_under_torchrun
 
 # Test compatibility with low latency functions
 import test_low_latency
@@ -226,8 +226,12 @@ def test_main(args: argparse.Namespace, num_sms: int,
 
 # noinspection PyUnboundLocalVariable,PyShadowingNames
 def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
-    num_nodes = int(os.getenv('WORLD_SIZE', 1))
-    rank, num_ranks, group = init_dist(local_rank, num_local_ranks)
+    world_size = int(os.getenv('WORLD_SIZE', 1))
+    local_world_size = int(os.getenv('LOCAL_WORLD_SIZE', 1))
+    num_nodes = max(1, world_size // local_world_size)
+    print("Before init_dist")
+    rank, num_ranks, group = init_dist_under_torchrun(local_rank, num_local_ranks)
+    print("After init_dist")
     if args.test_ll_compatibility:
         ll_num_tokens, ll_hidden, ll_num_experts, ll_num_topk = 16, 5120, 256, 9
 
@@ -256,6 +260,12 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
 
 
 if __name__ == '__main__':
+    
+    ib_dev = detect_ib_hca()
+    if ib_dev and ib_dev.startswith("mlx"):  # Mellanox IB devices show up like mlx5_0
+        os.environ["NCCL_IB_HCA"] = ib_dev
+        print(f"Set NCCL_IB_HCA={ib_dev}")
+        
     parser = argparse.ArgumentParser(description='Test internode EP kernels')
     parser.add_argument('--num-processes', type=int, default=8,
                        help='Number of processes to spawn (default: 8)')
@@ -272,11 +282,17 @@ if __name__ == '__main__':
     parser.add_argument('--test-ll-compatibility', action='store_true',
                         help='whether to test compatibility with low-latency kernels')
     args = parser.parse_args()
-
-    # Set default `num_topk_groups` if not provided
+    world_size = int(os.environ["WORLD_SIZE"])
+    local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])
+    num_nodes = world_size // local_world_size
+    # Set default `num_topk` if not provided
     if args.num_topk_groups is None:
-        num_nodes = int(os.getenv('WORLD_SIZE', 1))
         args.num_topk_groups = min(num_nodes, 4)
-
+        print(args.num_topk_groups)
+        
+    assert(args.num_topk_groups is not None)
     num_processes = args.num_processes
-    torch.multiprocessing.spawn(test_loop, args=(num_processes, args), nprocs=num_processes)
+    # NOTE: modified from deep_ep
+    local_rank = int(os.environ["LOCAL_RANK"])
+    num_local_ranks = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
+    test_loop(local_rank, num_local_ranks, args)

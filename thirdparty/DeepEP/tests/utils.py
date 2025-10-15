@@ -24,6 +24,23 @@ def detect_ib_hca():
     return ib_devs[0]
 
 
+def init_dist_under_torchrun(local_rank: int, num_local_ranks: int):
+    # torchrun already sets RANK, WORLD_SIZE, MASTER_ADDR, MASTER_PORT
+    dist.init_process_group(
+        backend="nccl", device_id=torch.device(f"cuda:{local_rank}")
+    )
+
+    torch.set_default_dtype(torch.bfloat16)
+    torch.set_default_device(f"cuda:{local_rank}")
+    torch.cuda.set_device(local_rank)
+
+    return (
+        dist.get_rank(),
+        dist.get_world_size(),
+        dist.new_group(list(range(dist.get_world_size()))),
+    )
+
+
 def init_dist(local_rank: int, num_local_ranks: int):
     # torchrun already sets RANK, WORLD_SIZE, MASTER_ADDR, MASTER_PORT
     print("local_rank", local_rank)
