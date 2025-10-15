@@ -1,6 +1,11 @@
 import socket
 import torch
-from .utils import create_socket_and_connect, send_obj, recv_obj
+from .utils import (
+    create_socket_and_connect,
+    send_obj,
+    recv_obj,
+    get_tensor_id_by_tensor,
+)
 
 try:
     from . import p2p
@@ -132,9 +137,7 @@ class TransferManager:
         assert tensor.is_contiguous()
         data = tensor.data_ptr()
         size = tensor.numel() * tensor.element_size()
-
-        success, mr_id = self.ep.reg(data, size)
-        assert success, f"Failed to register tensor on GPU {self.local_gpu_idx}"
+        mr_id = get_tensor_id_by_tensor(tensor=tensor)
 
         conn_state = self.conn_table[conn_id]
         self.transfer_table[self.next_transfer_id] = self.TransferState(
