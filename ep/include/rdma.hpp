@@ -341,5 +341,6 @@ void apply_pending_updates(ProxyCtx& ctx,
                            std::set<PendingUpdate>& pending_atomic_updates,
                            void* atomic_buffer_ptr, int num_experts,
                            int num_ranks);
+int poll_cq_once(ibv_cq* cq, ibv_wc* wc, int max_cqes);
 
 #endif  // RDMA_HPP

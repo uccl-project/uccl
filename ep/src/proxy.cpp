@@ -746,30 +746,6 @@ void Proxy::post_gpu_commands_mixed(
   }
 }
 
-static inline int poll_cq_once(ibv_cq* cq, ibv_wc* wc, int max_cqes) {
-#ifdef EFA
-  auto cqx = reinterpret_cast<ibv_cq_ex*>(cq);
-  ibv_poll_cq_attr attr{.comp_mask = 0};
-  if (ibv_start_poll(cqx, &attr)) return 0;
-
-  int n = 0;
-  while (n < max_cqes) {
-    wc[n].status = cqx->status;
-    wc[n].wr_id = cqx->wr_id;
-    wc[n].opcode = ibv_wc_read_opcode(cqx);
-    wc[n].wc_flags = ibv_wc_read_wc_flags(cqx);
-    wc[n].imm_data = ibv_wc_read_imm_data(cqx);
-    wc[n].byte_len = ibv_wc_read_byte_len(cqx);
-    ++n;
-    if (ibv_next_poll(cqx)) break;
-  }
-  ibv_end_poll(cqx);
-  return n;
-#else
-  return ibv_poll_cq(cq, max_cqes, wc);
-#endif
-}
-
 void Proxy::quiet_cq() {
   auto outstanding_batches = [&]() -> size_t {
     size_t sum = 0;
