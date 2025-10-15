@@ -19,39 +19,38 @@
 UCCL is an efficient communication library for GPUs, covering collectives, P2P (e.g., KV cache transfer, RL weight transfer), and EP (e.g., IBGDA), with two key focuses: 
 * **Flexibility** for high performance in fast-evolving ML workloads
 * **Portability** for connecting heterogeneous GPUs in ML workloads
+
 An overview of the UCCL project can be found in these [slides](https://docs.google.com/presentation/d/1LQxZzxghRmua4FkfQjWu69wXy9hrs9V_tXrXt_DT-F4/edit?usp=sharing). 
 
-For collectives, UCCL-collective serves as a drop-in replacement for NCCL/RCCL (e.g., requiring no changes to application code), and significantly outperforms them in both latency and throughput across various settings. 
+* For collectives, UCCL-collective serves as a drop-in replacement for NCCL/RCCL (e.g., requiring no changes to application code), and significantly outperforms them in both latency and throughput across various settings. 
 
-<details>
-<summary>UCCL-collective performance comparison</summary>
+  <details>
+  <summary>UCCL-collective performance comparison</summary>
 
-* On six HGX servers (across two racks) with 8x400G CX-7 RoCE NICs and 8xH100 GPUs, UCCL-collective outperforms NCCL by up to **2.5x** for AllReduce:
-  <p align="left"> <img src="./docs/images/allreduce_6_hgx.png" alt="" width="600"> </p>
+  * On six HGX servers (across two racks) with 8x400G CX-7 RoCE NICs and 8xH100 GPUs, UCCL-collective outperforms NCCL by up to **2.5x** for AllReduce:
+    <p align="left"> <img src="./docs/images/allreduce_6_hgx.png" alt="" width="600"> </p>
 
-* On four AWS `p4d.24xlarge` instances with 4x100G EFA NICs and 8xA100 GPUs, UCCL-collective outperforms NCCL by up to **3.3x** for AlltoAll: 
-  <p align="left"> <img src="./docs/images/alltoall_4_p4d.png" alt="" width="600"> </p>
+  * On four AWS `p4d.24xlarge` instances with 4x100G EFA NICs and 8xA100 GPUs, UCCL-collective outperforms NCCL by up to **3.3x** for AlltoAll: 
+    <p align="left"> <img src="./docs/images/alltoall_4_p4d.png" alt="" width="600"> </p>
 
-* On two AWS `g4dn.8xlarge` instances with 1x50G ENA NICs and 1xT4 GPUs within the same cluster placement group, UCCL-collective outperforms NCCL by up to **3.7x** for AllReduce: 
-  <p align="left"> <img src="./docs/images/allreduce_2_g4dn.png" alt="" width="600"> </p>
+  * On two AWS `g4dn.8xlarge` instances with 1x50G ENA NICs and 1xT4 GPUs within the same cluster placement group, UCCL-collective outperforms NCCL by up to **3.7x** for AllReduce: 
+    <p align="left"> <img src="./docs/images/allreduce_2_g4dn.png" alt="" width="600"> </p>
 
-More specifically, UCCL-collective aims to: 
-* rearchitect the CCL layer (while keeping NCCL APIs) to unleash the full potential of network hardware
-* rearchitect the network transport layer to be fast and extensible
-* support heterogeneous GPU and networking vendors such as Nvidia, AMD, and Broadcom
-* become an open and collaborative platform for GPU communication research
+  More specifically, UCCL-collective aims to: 
+  * rearchitect the CCL layer (while keeping NCCL APIs) to unleash the full potential of network hardware
+  * rearchitect the network transport layer to be fast and extensible
+  * support heterogeneous GPU and networking vendors such as Nvidia, AMD, and Broadcom
+  * become an open and collaborative platform for GPU communication research
 
-UCCL-collective has built a fast and extensible transport layer in software, which has created many benefits. 
-For example, existing network transports under NCCL (i.e., kernel TCP and RDMA) leverage one or few network paths to stream huge data volumes, thus prone to congestion happening in datacenter networks. 
-Instead, UCCL-collective employs packet spraying in software to leverage abundant network paths to avoid "single-path-of-congestion". 
-More benefits include: 1) packet spraying with 256 paths, 2) advanced congestion control such as latency-based and receiver-driven ones, 3) efficient loss recovery by selective repeat, and 4) widely usable in public clouds with legacy NICs and Ethernet. 
+  UCCL-collective has built a fast and extensible transport layer in software, which has created many benefits. 
+  For example, existing network transports under NCCL (i.e., kernel TCP and RDMA) leverage one or few network paths to stream huge data volumes, thus prone to congestion happening in datacenter networks. 
+  Instead, UCCL-collective employs packet spraying in software to leverage abundant network paths to avoid "single-path-of-congestion". 
+  More benefits include: 1) packet spraying with 256 paths, 2) advanced congestion control such as latency-based and receiver-driven ones, 3) efficient loss recovery by selective repeat, and 4) widely usable in public clouds with legacy NICs and Ethernet. Feel free to check out our full [technical report](https://arxiv.org/pdf/2504.17307).
+  </details>
 
-Feel free to check out our full [technical report](https://arxiv.org/pdf/2504.17307).
-</details>
+* For P2P, UCCL-P2P provides both NIXL-style initiator-target tranfer APIs and NCCL-style collective APIs, with the same or better performance than both. UCCL-P2P is purposely designed for the next-gen 800Gbps NICs with efficient multi-threaded transfer engines. 
 
-For P2P, UCCL-P2P provides both NIXL-style initiator-target tranfer APIs and NCCL-style collective APIs, with the same or better performance than both. UCCL-P2P is purposely designed for the next-gen 800Gbps NICs with efficient multi-threaded transfer engines. 
-
-For EP, UCCL-EP allows running DeepEP atop of heterogeneous hardware platforms, including AMD and Nvidia GPUs, and any RDMA NICs such as AWS EFA NICs and Broadcom NICs, while achieving IBGDA-level performance. UCCL-EP also makes DeepEP SM-free, devoting all GPU SMs to compute. 
+* For EP, UCCL-EP allows running DeepEP atop of heterogeneous hardware platforms, including AMD and Nvidia GPUs, and any RDMA NICs such as AWS EFA NICs and Broadcom NICs, while achieving IBGDA-level performance. UCCL-EP also makes DeepEP SM-free, devoting all GPU SMs to compute. 
 
 UCCL has been adopted as part of the AMD [TheRock](https://github.com/ROCm/TheRock) ecosystem.
 
