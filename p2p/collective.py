@@ -220,8 +220,6 @@ class CollectiveContext:
                 # We'll need to track which type we're expecting based on remaining connections
 
                 # Count how many local vs remote connections we still need to accept
-                if self.recv_connections[peer_rank]:
-                    return
                 if self.local_connections[peer_rank]:
                     # Try to accept a local connection first
                     ok, r_gpu, conn_id = self.ep.accept_local()
