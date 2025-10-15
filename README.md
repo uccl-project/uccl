@@ -20,7 +20,7 @@ UCCL is an efficient communication library for GPUs, covering collectives, P2P (
 * **Flexibility** for high performance in fast-evolving ML workloads
 * **Portability** for connecting heterogeneous GPUs in ML workloads
 
-An UCCL overview can be found in these [slides](https://docs.google.com/presentation/d/1LQxZzxghRmua4FkfQjWu69wXy9hrs9V_tXrXt_DT-F4/edit?usp=sharing) with the following components: 
+An UCCL overview can be found in this [slide deck](https://docs.google.com/presentation/d/1LQxZzxghRmua4FkfQjWu69wXy9hrs9V_tXrXt_DT-F4/edit?usp=sharing) with the following components: 
 
 * **UCCL-collective** serves as a drop-in replacement for NCCL/RCCL (e.g., requiring no changes to application code), and significantly outperforms them in both latency and throughput across various settings. 
 
