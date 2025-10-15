@@ -141,7 +141,7 @@ __device__ __forceinline__ void st_global<16>(uintptr_t addr,
 // Constants
 #define DATA_LOAD_SIZE 16
 #define WARP_SIZE 32
-constexpr int kWarpBatchDescriptors = 4;
+constexpr int kWarpShmPageCnt = 4;
 
 // Device-side visibility barrier similar to NCCL load64gpu on cnt
 // NOTE: This function does NOT include __syncthreads() - caller must sync if
@@ -251,26 +251,23 @@ extern "C" __global__ void tcpxUnpackKernel(
   int const total_warps = gridDim.x * warps_per_block;
 
   extern __shared__ unsigned char smem[];
-  auto* warp_cache =
-      reinterpret_cast<tcpx::rx::UnpackDescriptor*>(smem);
+  auto* warp_cache = reinterpret_cast<tcpx::rx::UnpackDescriptor*>(smem) +
+                     warp_id * kWarpShmPageCnt;
 
-  for (int base =
-           (blockIdx.x * warps_per_block + warp_id) * kWarpBatchDescriptors;
-       base < desc_block->count;
-       base += total_warps * kWarpBatchDescriptors) {
+  int const warp_global = blockIdx.x * warps_per_block + warp_id;
+  for (int base = warp_global * kWarpShmPageCnt; base < desc_block->count;
+       base += total_warps * kWarpShmPageCnt) {
     int batch = desc_block->count - base;
-    if (batch > kWarpBatchDescriptors) batch = kWarpBatchDescriptors;
+    if (batch > kWarpShmPageCnt) batch = kWarpShmPageCnt;
     if (batch <= 0) continue;
 
     if (lane < batch) {
-      warp_cache[warp_id * kWarpBatchDescriptors + lane] =
-          desc_block->descriptors[base + lane];
+      warp_cache[lane] = desc_block->descriptors[base + lane];
     }
     __syncwarp();
 
     for (int i = 0; i < batch; ++i) {
-      tcpx::rx::UnpackDescriptor const& desc =
-          warp_cache[warp_id * kWarpBatchDescriptors + i];
+      tcpx::rx::UnpackDescriptor const& desc = warp_cache[i];
       unpackSingleDescriptor(lane, desc, bounce_buffer, dst_buffer);
     }
     __syncwarp();
@@ -345,8 +342,7 @@ extern "C" __host__ tcpx::device::KernelLaunchParams calculateLaunchParams(
     params.block_size = dim3(256);  // 8 warps per block
     int warps_per_block = params.block_size.x / WARP_SIZE;
     params.shared_mem_size =
-        warps_per_block * kWarpBatchDescriptors *
-        sizeof(tcpx::rx::UnpackDescriptor);
+        warps_per_block * kWarpShmPageCnt * sizeof(tcpx::rx::UnpackDescriptor);
   }
 
   return params;

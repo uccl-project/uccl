@@ -298,8 +298,7 @@ int UnpackLauncher::copyDescriptorBlockToDevice(
   constexpr size_t kHeaderSize =
       offsetof(tcpx::rx::UnpackDescriptorBlock, descriptors);
   const size_t descriptor_bytes =
-      static_cast<size_t>(desc_block.count) *
-      sizeof(desc_block.descriptors[0]);
+      static_cast<size_t>(desc_block.count) * sizeof(desc_block.descriptors[0]);
   size_t required_size = kHeaderSize + descriptor_bytes;
   if (required_size < kHeaderSize) {
     required_size = kHeaderSize;
