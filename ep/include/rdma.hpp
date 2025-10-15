@@ -26,10 +26,10 @@ struct RDMAConnectionInfo {
   uint16_t lid;     // Local ID
   uint8_t gid[16];  // Global ID for RoCE (optional)
 
-#ifdef EFA
+  // #ifdef EFA
   uint32_t num_rings;
   uint32_t data_qp_num[kRingsPerProxy];
-#endif
+  // #endif
 };
 
 struct PendingUpdate {

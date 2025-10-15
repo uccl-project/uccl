@@ -332,26 +332,6 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   S.qp = create_srd_qp_ex(S);
   S.ack_qp = create_srd_qp_ex(S);
   S.recv_ack_qp = create_srd_qp_ex(S);
-#ifdef USE_NORMAL_MODE
-  const size_t rings_to_create = std::min(num_rings, (size_t)kRingsPerProxy);
-  S.data_qps_by_ring.resize(rings_to_create);
-  for (size_t r = 0; r < rings_to_create; ++r) {
-    S.data_qps_by_ring[r] = create_srd_qp_ex(S);
-  }
-
-  // Advertise per-ring QPNs (zero-fill the rest for determinism)
-  local_info->num_rings = static_cast<uint32_t>(rings_to_create);
-  for (uint32_t r = 0; r < local_info->num_rings; ++r) {
-    local_info->data_qp_num[r] = S.data_qps_by_ring[r]->qp_num;
-  }
-  for (uint32_t r = local_info->num_rings; r < kRingsPerProxy; ++r) {
-    local_info->data_qp_num[r] = 0;
-  }
-#endif
-  // Fallback/default QPN (ring 0 if any; otherwise use ack_qp to keep valid)
-  local_info->qp_num = S.qp->qp_num;
-  local_info->ack_qp_num = S.ack_qp->qp_num;
-  local_info->recv_ack_qp_num = S.recv_ack_qp->qp_num;
 #else
   struct ibv_qp_init_attr qp_init_attr = {};
   qp_init_attr.send_cq = S.cq;
@@ -379,6 +359,31 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   if (!S.recv_ack_qp) {
     perror("Failed to create Receive Ack QP");
     exit(1);
+  }
+#endif
+
+#ifdef USE_NORMAL_MODE
+  const size_t rings_to_create = std::min(num_rings, (size_t)kRingsPerProxy);
+  S.data_qps_by_ring.resize(rings_to_create);
+  for (size_t r = 0; r < rings_to_create; ++r) {
+#ifdef EFA
+    S.data_qps_by_ring[r] = create_srd_qp_ex(S);
+#else
+    S.data_qps_by_ring[r] = ibv_create_qp(S.pd, &qp_init_attr);
+#endif
+    if (!S.data_qps_by_ring[r]) {
+      perror("Failed to create data QP");
+      exit(1);
+    }
+  }
+
+  // Advertise per-ring QPNs (zero-fill the rest for determinism)
+  local_info->num_rings = static_cast<uint32_t>(rings_to_create);
+  for (uint32_t r = 0; r < local_info->num_rings; ++r) {
+    local_info->data_qp_num[r] = S.data_qps_by_ring[r]->qp_num;
+  }
+  for (uint32_t r = local_info->num_rings; r < kRingsPerProxy; ++r) {
+    local_info->data_qp_num[r] = 0;
   }
 #endif
 
@@ -419,6 +424,13 @@ void modify_qp_to_init(ProxyCtx& S) {
   if (ibv_modify_qp(S.qp, &attr, flags)) {
     perror("Failed to modify QP to INIT");
     exit(1);
+  }
+
+  for (size_t r = 0; r < kRingsPerProxy; ++r) {
+    if (ibv_modify_qp(S.data_qps_by_ring[r], &attr, flags)) {
+      perror("Failed to modify QP to INIT");
+      exit(1);
+    }
   }
 
   if (S.ack_qp) {
@@ -465,18 +477,20 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote) {
   S.dst_qpn = remote->qp_num;
   S.dst_ack_qpn = remote->recv_ack_qp_num;
   S.dst_ah = create_ah(S, remote->gid);
+#endif
 
+#ifdef USE_NORMAL_MODE
   S.dst_data_qpn_by_ring.clear();
   const uint32_t remote_rings =
       std::min(remote->num_rings, (uint32_t)kRingsPerProxy);
   S.dst_data_qpn_by_ring.reserve(remote_rings);
-#ifdef USE_NORMAL_MODE
   for (uint32_t r = 0; r < remote_rings; ++r) {
     S.dst_data_qpn_by_ring.push_back(remote->data_qp_num[r]);
   }
 #endif
-  return;
 
+#ifdef EFA
+  return;
 #endif
 
   int is_roce = 0;
@@ -547,6 +561,14 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote) {
     fprintf(stderr, "errno: %d\n", errno);
     exit(1);
   }
+
+  for (size_t r = 0; r < kRingsPerProxy; ++r) {
+    if (ibv_modify_qp(S.data_qps_by_ring[r], &attr, flags)) {
+      perror("Failed to modify QP to RTR");
+      exit(1);
+    }
+  }
+
   printf("QP modified to RTR state\n");
 
   if (S.ack_qp) {
@@ -595,6 +617,14 @@ void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
     perror("Failed to modify QP to RTS");
     exit(1);
   }
+
+  for (size_t r = 0; r < kRingsPerProxy; ++r) {
+    if (ibv_modify_qp(S.data_qps_by_ring[r], &attr, flags)) {
+      perror("Failed to modify QP to RTR");
+      exit(1);
+    }
+  }
+
   printf("QP modified to RTS state\n");
 
   attr.sq_psn = local_info->ack_psn;
@@ -1370,6 +1400,10 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
               !S.barrier_arrived[node_rank]) {
             S.barrier_arrived[node_rank] = 1;
             ++S.barrier_arrival_count;
+            printf(
+                "Rank 0: Barrier arrived from rank %d (node_rank=%zu, "
+                "seq=%u, count=%d)\n",
+                src, node_rank, seq, S.barrier_arrival_count);
           } else {
             assert(false &&
                    "Duplicate barrier arrival or local_rank out of range");
@@ -1381,6 +1415,7 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
         if (is_ack) {
           S.barrier_released = true;
           S.barrier_release_seq = seq;
+          printf("Rank %d: Barrier released (seq=%u)\n", my_rank, seq);
         } else {
           assert(false && "Non-leader rank should not receive barrier request");
         }
@@ -1413,6 +1448,11 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
 #ifndef EFA
     if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
       const uint32_t tag = wr_tag(cqe.wr_id);
+      if (tag >= ctx_by_tag.size() || ctx_by_tag[tag] == nullptr) {
+        fprintf(stderr, "Invalid tag or uninitialized context for tag=%u\n",
+                tag);
+        std::abort();
+      }
       ProxyCtx& S = *ctx_by_tag[tag];
       ibv_sge sge = {
           .addr = reinterpret_cast<uintptr_t>(&S.ack_recv_buf[0]),
