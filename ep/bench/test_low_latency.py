@@ -495,10 +495,10 @@ if __name__ == "__main__":
             "To fix this, run the following before rebuilding:\n"
             "unset MAKE_NORMAL_MODE && make clean && make -j install\n"
         )
-    ib_dev = detect_ib_hca()
-    if ib_dev and ib_dev.startswith("mlx"):  # Mellanox IB devices show up like mlx5_0
-        os.environ["NCCL_IB_HCA"] = ib_dev
-        print(f"Set NCCL_IB_HCA={ib_dev}")
+    # ib_dev = detect_ib_hca()
+    # if ib_dev and ib_dev.startswith("mlx"):  # Mellanox IB devices show up like mlx5_0
+    #     os.environ["NCCL_IB_HCA"] = ib_dev
+    #     print(f"Set NCCL_IB_HCA={ib_dev}")
     parser = argparse.ArgumentParser(description="Test low-latency EP kernels")
     parser.add_argument(
         "--num-processes",

@@ -721,9 +721,6 @@ void Proxy::post_gpu_commands_mixed(
       0) {
     return;
   }
-  printf("Posting %zu RDMA writes, %zu atomics, %zu barriers, %zu quiets\n",
-         rdma_wrs.size(), atomic_wrs.size(), barrier_cmds.size(),
-         quiet_cmds.size());
   // Handle regular RDMA writes
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
@@ -795,7 +792,6 @@ void Proxy::quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds) {
   quiet_cq();
   finished_wrs_.insert(wrs[0]);
   acked_wrs_.insert(wrs[0]);
-  printf("Quiet completed for wr_id %lu\n", wrs[0]);
 }
 
 void Proxy::destroy(bool free_gpu_buffer) {
@@ -929,7 +925,8 @@ void Proxy::post_barrier_msg(int dst_rank, bool ack, uint64_t seq) {
   sge.lkey = ctx->mr->lkey;
 
   ibv_send_wr wr{};
-  wr.wr_id = 0;
+  int barrier_seq = 0;
+  wr.wr_id = kBarrierWrTag | (barrier_seq & kBarrierMask);
   wr.sg_list = &sge;
   wr.num_sge = 1;
   wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
@@ -946,9 +943,6 @@ void Proxy::post_barrier_msg(int dst_rank, bool ack, uint64_t seq) {
       fprintf(stderr, "  bad wr_id=%llu\n", (unsigned long long)bad->wr_id);
     std::abort();
   }
-
-  printf("Sent barrier msg to rank %d: ack=%d, seq=%u, wr_id=0\n", dst_rank,
-         ack ? 1 : 0, (uint32_t)seq);
 #endif
 }
 
@@ -975,7 +969,6 @@ void Proxy::send_barrier(uint64_t wr) {
 
   uint64_t bit = (1ULL << (uint64_t)ctx_.local_rank);
   lb->arrived_mask.fetch_or(bit, std::memory_order_acq_rel);
-  printf("Barrier posted: seq=%lu, wr_id=%lu\n", ctx_.barrier_seq, wr);
 }
 
 void Proxy::barrier_check() {
@@ -1040,7 +1033,6 @@ void Proxy::barrier_check() {
           acked_wrs_.insert(ctx_.barrier_wr);
           ctx_.barrier_inflight = false;
           ctx_.barrier_wr = 0;
-          printf("Barrier complete: seq=%lu\n", seq);
           return;
         }
       }
@@ -1058,7 +1050,6 @@ void Proxy::barrier_check() {
         acked_wrs_.insert(ctx_.barrier_wr);
         ctx_.barrier_inflight = false;
         ctx_.barrier_wr = 0;
-        printf("Barrier complete: seq=%lu\n", seq);
       }
     }
     return;
@@ -1072,6 +1063,5 @@ void Proxy::barrier_check() {
     acked_wrs_.insert(ctx_.barrier_wr);
     ctx_.barrier_inflight = false;
     ctx_.barrier_wr = 0;
-    printf("Barrier complete: seq=%lu\n", seq);
   }
 }

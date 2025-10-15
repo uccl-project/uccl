@@ -1,6 +1,7 @@
 #!/bin/bash
 set -e
 
+sudo apt install -y nvtop
 sudo apt install -y libgoogle-glog-dev
 sudo apt install -y clang-format-14
 

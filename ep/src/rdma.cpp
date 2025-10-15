@@ -645,27 +645,29 @@ void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
   printf("ACK-QP modified to RTS state\n");
 }
 
-void post_receive_buffer_for_imm(ProxyCtx& S) {
+void post_receive_buffer_for_imm_on_qp(ProxyCtx& S, ibv_qp* qp) {
   std::vector<ibv_recv_wr> wrs(kMaxOutstandingRecvs);
   std::vector<ibv_sge> sges(kMaxOutstandingRecvs);
-
   for (size_t i = 0; i < kMaxOutstandingRecvs; ++i) {
-    int offset = kNumThBlocks > i ? i : (i % kNumThBlocks);
-
-    sges[i] = {.addr = (uintptr_t)S.mr->addr + offset * kObjectSize,
-               .length = kObjectSize,
-               .lkey = S.mr->lkey};
-    wrs[i] = {.wr_id = make_wr_id(S.tag, static_cast<uint32_t>(i)),
+    size_t offset = (i < kNumThBlocks) ? i : (i % kNumThBlocks);
+    sges[i] = {(uintptr_t)S.mr->addr + offset * kObjectSize, kObjectSize,
+               S.mr->lkey};
+    wrs[i] = {.wr_id = make_wr_id(S.tag, (uint32_t)i),
               .next = (i + 1 < kMaxOutstandingRecvs) ? &wrs[i + 1] : nullptr,
               .sg_list = &sges[i],
               .num_sge = 1};
   }
-
-  /* Post the whole chain with ONE verbs call */
   ibv_recv_wr* bad = nullptr;
-  if (ibv_post_recv(S.qp, &wrs[0], &bad)) {
+  if (ibv_post_recv(qp, &wrs[0], &bad)) {
     perror("ibv_post_recv");
-    std::abort();
+    abort();
+  }
+}
+
+void post_receive_buffer_for_imm(ProxyCtx& S) {
+  post_receive_buffer_for_imm_on_qp(S, S.qp);  // main QP
+  for (auto* q : S.data_qps_by_ring) {
+    post_receive_buffer_for_imm_on_qp(S, q);  // per-ring QPs
   }
 }
 
@@ -805,7 +807,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         std::abort();
       }
 #else
-      // --- non-EFA (RC QP) version of the block above ---
       {
         const size_t local_ring_count = ctx->data_qps_by_ring.size();
         struct ibv_qp* qp =
@@ -864,10 +865,9 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
           wrs[j].wr.rdma.remote_addr = remote_addr;
           wrs[j].wr.rdma.rkey = ctx->remote_rkey;
           wrs[j].opcode = IBV_WR_RDMA_WRITE;  // default
-          wrs[j].send_flags = 0;              // tail gets SIGNALED
+          wrs[j].send_flags = (j + 1 == kgroup) ? IBV_SEND_SIGNALED : 0;
           wrs[j].next = (j + 1 < kgroup) ? &wrs[j + 1] : nullptr;
 
-          // Inline "atomic" via imm, else use imm only on the tail
           if (cmd.atomic_offset > 0 && cmd.atomic_val > 0) {
             int v = static_cast<int>(cmd.atomic_val);
             if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {
@@ -889,7 +889,8 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                     .GetImmData();
             wrs[j].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
             wrs[j].imm_data = htonl(imm);
-            wrs[j].send_flags = IBV_SEND_SIGNALED;
+          } else {
+            wrs[j].opcode = IBV_WR_RDMA_WRITE;
           }
         }
 
@@ -917,7 +918,9 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
               thread_idx, tail_wr, (void*)&S.wr_id_to_wr_ids);
           std::abort();
         } else {
-          for (auto const& wr_id : it->second) finished_wrs.insert(wr_id);
+          for (auto const& wr_id : it->second) {
+            finished_wrs.insert(wr_id);
+          }
         }
       }
     }
@@ -958,7 +961,8 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
 
     ProxyCtx* ctx = ctxs[dst_rank].get();
     if (!ctx || !ctx->qp || !ctx->mr) {
-      fprintf(stderr, "Destination ctx missing fields for dst=%d\n", dst_rank);
+      fprintf(stderr, "Destination ctx missing fields for dst=%d, ctx=%p\n",
+              dst_rank, (void*)ctx);
       std::abort();
     }
     size_t const k = wr_ids.size();
@@ -1193,6 +1197,7 @@ void local_process_completions(ProxyCtx& S,
     }
 
     switch (wc[i].opcode) {
+      case IBV_WC_SEND:
       case IBV_WC_RDMA_WRITE: {
         uint64_t wrid = wc[i].wr_id;
         if ((wrid & kAtomicWrTag) == kAtomicWrTag) {
@@ -1242,6 +1247,7 @@ void local_process_completions(ProxyCtx& S,
             }
             S.wr_id_to_wr_ids.erase(it);
           } else {
+            printf("Error: ACK for unknown wr_id %lu\n", wr_done);
             std::abort();
           }
 #endif
@@ -1303,7 +1309,7 @@ void local_poll_completions(ProxyCtx& S,
     }
   };
   if (S.cq) poll_one(S.cq);
-  for (auto* cq : S.extra_cqs) poll_one(cq);
+  // for (auto* cq : S.extra_cqs) poll_one(cq);
 }
 
 void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
@@ -1324,7 +1330,7 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
     }
   };
   if (S.cq) poll_one(S.cq);
-  for (auto* cq : S.extra_cqs) poll_one(cq);
+  // for (auto* cq : S.extra_cqs) poll_one(cq);
 }
 
 void apply_pending_updates(ProxyCtx& ctx,
@@ -1361,6 +1367,15 @@ void apply_pending_updates(ProxyCtx& ctx,
       ++it;
     }
   }
+}
+
+static ibv_qp* qp_from_qpnum(ProxyCtx& S, uint32_t qpnum) {
+  if (S.qp && S.qp->qp_num == qpnum) return S.qp;
+  if (S.recv_ack_qp && S.recv_ack_qp->qp_num == qpnum) return S.recv_ack_qp;
+  if (S.ack_qp && S.ack_qp->qp_num == qpnum) return S.ack_qp;
+  for (auto* q : S.data_qps_by_ring)
+    if (q && q->qp_num == qpnum) return q;
+  return nullptr;
 }
 
 void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
@@ -1503,10 +1518,6 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
               !S.barrier_arrived[node_rank]) {
             S.barrier_arrived[node_rank] = 1;
             ++S.barrier_arrival_count;
-            printf(
-                "Rank 0: Barrier arrived from rank %d (node_rank=%zu, "
-                "seq=%u, count=%d)\n",
-                src, node_rank, seq, S.barrier_arrival_count);
           } else {
             assert(false &&
                    "Duplicate barrier arrival or local_rank out of range");
@@ -1518,7 +1529,6 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
         if (is_ack) {
           S.barrier_released = true;
           S.barrier_release_seq = seq;
-          printf("Rank %d: Barrier released (seq=%u)\n", my_rank, seq);
         } else {
           assert(false && "Non-leader rank should not receive barrier request");
         }
@@ -1557,6 +1567,12 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
         std::abort();
       }
       ProxyCtx& S = *ctx_by_tag[tag];
+      ibv_qp* qp = qp_from_qpnum(S, cqe.qp_num);
+      if (!qp) {
+        fprintf(stderr, "No matching QP for qp_num=0x%x (tag=%u)\n", cqe.qp_num,
+                tag);
+        std::abort();
+      }
       ibv_sge sge = {
           .addr = reinterpret_cast<uintptr_t>(&S.ack_recv_buf[0]),
           .length = sizeof(uint64_t),
@@ -1568,8 +1584,13 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       rwr.sg_list = &sge;
       rwr.num_sge = 1;
       ibv_recv_wr* bad = nullptr;
-      if (ibv_post_recv(S.qp, &rwr, &bad)) {
-        perror("ibv_post_recv (imm replenish)");
+      int ret = ibv_post_recv(qp, &rwr, &bad);
+      if (ret) {
+        fprintf(stderr,
+                "ibv_post_recv (imm replenish) failed on qp=0x%x: %s (%d)\n",
+                qp->qp_num, strerror(ret), ret);
+        if (bad)
+          fprintf(stderr, "  bad wr_id=%llu\n", (unsigned long long)bad->wr_id);
         std::abort();
       }
     }
@@ -1593,7 +1614,7 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
     }
   };
   if (S.cq) poll_one(S.cq);
-  for (auto* cq : S.extra_cqs) poll_one(cq);
+  // for (auto* cq : S.extra_cqs) poll_one(cq);
 }
 
 void remote_reg_ack_buf(ibv_pd* pd, uint64_t* ack_buf, ibv_mr*& ack_mr) {
