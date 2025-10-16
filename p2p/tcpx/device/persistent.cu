@@ -5,6 +5,8 @@
 namespace tcpx {
 namespace device {
 
+#define N_THREAD_PER_IOV 8
+
 /*
 IovMultiFifo
 */
@@ -163,7 +165,7 @@ __device__ __forceinline__ void kernelScatteredMemcpy(struct Iov *iov) {
     extern __shared__ uint8_t allocated_smem[];
     auto smem = reinterpret_cast<T*>(allocated_smem);
     
-    constexpr int nthreads_per_iov = 8;
+    constexpr int nthreads_per_iov = N_THREAD_PER_IOV;
 
     // Each SM is an independent worker.
     int nthreads = blockDim.x;
@@ -331,16 +333,50 @@ bool UnpackerPersistentKernel::launch() {
     return PersistentKernel::launch(persistKernel<float4, 2>); // float4: 16bytes
 }
 
-uint64_t UnpackerPersistentKernel::submitDescriptors(int channel_id, tcpx::rx::UnpackDescriptorBlock const& desc_block) {
-    Iov iov{};
-    iov.iov_n = desc_block.count;
-    for (int j = 0; j < iov.iov_n; ++j) {
-        auto &d = desc_block.descriptors[j];
-        iov.srcs[j] = (void*)((char*)desc_block.bounce_buffer + d.src_off);
-        iov.dsts[j] = (void*)((char*)desc_block.dst_buffer + d.dst_off);
-        iov.lens[j] = d.len;
+// uint64_t UnpackerPersistentKernel::submitDescriptors(int channel_id, tcpx::rx::UnpackDescriptorBlock const& desc_block) {
+//     Iov iov{};
+//     iov.iov_n = desc_block.count;
+//     for (int j = 0; j < iov.iov_n; ++j) {
+//         auto &d = desc_block.descriptors[j];
+//         iov.srcs[j] = (void*)((char*)desc_block.bounce_buffer + d.src_off);
+//         iov.dsts[j] = (void*)((char*)desc_block.dst_buffer + d.dst_off);
+//         iov.lens[j] = d.len;
+//     }
+//     return submit(channel_id, iov); // PersistentKernel::submit()
+// }
+std::vector<uint64_t> UnpackerPersistentKernel::submitDescriptors(
+    int channel_id,
+    const tcpx::rx::UnpackDescriptorBlock &desc_block)
+{
+    constexpr int nthreads_per_iov = N_THREAD_PER_IOV;
+    const int block_dim = cfg_.numThPerBlock;
+    const int max_iov_per_block = block_dim / nthreads_per_iov;
+
+    std::vector<uint64_t> slot_ids;
+    slot_ids.reserve((desc_block.count + max_iov_per_block - 1) / max_iov_per_block);
+
+    const int total_desc = desc_block.count;
+
+    for (int offset = 0; offset < total_desc; offset += max_iov_per_block) {
+        const int batch_count = std::min(max_iov_per_block, total_desc - offset);
+
+        Iov iov{};
+        iov.iov_n = batch_count;
+
+        for (int j = 0; j < batch_count; ++j) {
+            const auto &d = desc_block.descriptors[offset + j];
+            iov.srcs[j] = static_cast<void*>(
+                static_cast<char*>(desc_block.bounce_buffer) + d.src_off);
+            iov.dsts[j] = static_cast<void*>(
+                static_cast<char*>(desc_block.dst_buffer) + d.dst_off);
+            iov.lens[j] = d.len;
+        }
+
+        uint64_t slot_id = submit(channel_id, iov);
+        slot_ids.push_back(slot_id);
     }
-    return submit(channel_id, iov); // PersistentKernel::submit()
+
+    return slot_ids;
 }
 
 }

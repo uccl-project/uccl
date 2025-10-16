@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <tuple>
+#include <vector>
 
 #include "rx_descriptor.h"
 
@@ -132,7 +133,7 @@ public:
     using PersistentKernel::PersistentKernel;
 
     bool launch();
-    uint64_t submitDescriptors(int channel_id, tcpx::rx::UnpackDescriptorBlock const& desc_block);
+    std::vector<uint64_t> submitDescriptors(int channel_id, tcpx::rx::UnpackDescriptorBlock const& desc_block);
 };
 
 }
