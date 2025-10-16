@@ -42,6 +42,9 @@ struct TcpxTransfer::Impl {
   // Per-channel sliding window state (for recv only)
   std::vector<ChannelWindow> channel_windows_;
 
+  // Per-channel send inflight counters
+  std::vector<int> send_inflight_count_;
+
   // Send request tracking (fire-and-forget with polling)
   struct SendRequest {
     void* request;
@@ -55,6 +58,8 @@ struct TcpxTransfer::Impl {
   int completed_chunks_ = 0;   // Completed chunks (send + recv)
   bool completed_ = false;     // Transfer complete flag
   int next_channel_ = 0;       // Round-robin channel selection
+
+  static constexpr int kMaxSendInflightPerChannel = 12;
 
   // ============================================================================
   // Constructor / Destructor
@@ -126,6 +131,15 @@ struct TcpxTransfer::Impl {
    * @return true on success, false on error
    */
   bool waitForCapacity(int channel_id);
+
+  /**
+   * @brief Wait for send capacity on a channel
+   *
+   * Blocks until send inflight count falls below limit.
+   */
+  bool waitForSendCapacity(int channel_id);
+
+  bool progressSendWindow(int channel_id);
 };
 
 // ============================================================================
@@ -158,6 +172,8 @@ TcpxTransfer::Impl::Impl(TcpxSession* session, const std::string& remote_name)
       }
     }
   }
+
+  send_inflight_count_.assign(num_channels, 0);
 
   LOG_INFO("TcpxTransfer::Impl initialized with %d channels", num_channels);
 }
@@ -199,15 +215,10 @@ bool TcpxTransfer::Impl::processInflightRecv(int channel_id, bool blocking) {
                    entry.global_idx, channel_id);
           // Continue processing this chunk
         } else {
-          // Connection closed but data not yet complete
-          LOG_WARN("Connection closed by peer while chunk %d on channel %d still in progress",
-                   entry.global_idx, channel_id);
-          if (blocking) {
-            std::this_thread::sleep_for(std::chrono::microseconds(kSleepMicros));
-            continue;
-          } else {
-            break;
-          }
+          // Connection closed but data not yet complete – fatal
+          LOG_ERROR("Connection closed by peer while chunk %d on channel %d still in progress",
+                    entry.global_idx, channel_id);
+          return false;
         }
       } else {
         // Other errors are real errors
@@ -353,6 +364,11 @@ bool TcpxTransfer::Impl::drainCompletedSends() {
                 send_req.global_idx, send_req.channel_id);
 
       completed_chunks_++;
+      if (send_req.channel_id >= 0 &&
+          send_req.channel_id < static_cast<int>(send_inflight_count_.size()) &&
+          send_inflight_count_[send_req.channel_id] > 0) {
+        send_inflight_count_[send_req.channel_id]--;
+      }
 
       // Remove from pending list (swap with last and pop)
       pending_sends_[i] = pending_sends_.back();
@@ -412,6 +428,35 @@ bool TcpxTransfer::Impl::waitForCapacity(int channel_id) {
 
     // Both queues empty, we have capacity
     break;
+  }
+
+  return true;
+}
+
+bool TcpxTransfer::Impl::waitForSendCapacity(int channel_id) {
+  const int kSleepMicros = 10;
+
+  while (send_inflight_count_[channel_id] >= kMaxSendInflightPerChannel) {
+    if (!progressSendWindow(channel_id)) {
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::microseconds(kSleepMicros));
+  }
+  return true;
+}
+
+bool TcpxTransfer::Impl::progressSendWindow(int channel_id) {
+  // First, poll all pending sends
+  if (!drainCompletedSends()) {
+    return false;
+  }
+
+  // Then, opportunistically drain other channels (mimic original behavior)
+  for (int ch = 0; ch < session_->getNumChannels(); ++ch) {
+    if (ch == channel_id) continue;
+    if (!drainCompletedSends()) {
+      return false;
+    }
   }
 
   return true;
@@ -477,7 +522,6 @@ int TcpxTransfer::postRecv(uint64_t mem_id, size_t offset, size_t size,
   }
 
   // 6. Record request
-  // 6. Record request
   int global_idx = impl_->total_chunks_++;
 
   PostedChunk chunk;
@@ -492,6 +536,26 @@ int TcpxTransfer::postRecv(uint64_t mem_id, size_t offset, size_t size,
 
   LOG_DEBUG("Posted recv: mem_id=%lu, offset=%zu, size=%zu, tag=%d, channel=%d, chunk=%d",
             mem_id, offset, size, tag, ch_id, global_idx);
+
+  // Opportunistically progress current channel (non-blocking)
+  if (!impl_->processInflightRecv(ch_id, /*blocking=*/false)) {
+    return -1;
+  }
+  if (!impl_->drainCompletedKernels(ch_id)) {
+    return -1;
+  }
+
+  // Opportunistically progress other channels (non-blocking)
+  int total_channels = impl_->session_->getNumChannels();
+  for (int other = 0; other < total_channels; ++other) {
+    if (other == ch_id) continue;
+    if (!impl_->processInflightRecv(other, /*blocking=*/false)) {
+      return -1;
+    }
+    if (!impl_->drainCompletedKernels(other)) {
+      return -1;
+    }
+  }
 
   return 0;
 }
@@ -514,6 +578,11 @@ int TcpxTransfer::postSend(uint64_t mem_id, size_t offset, size_t size,
 
   auto* mgr = static_cast<ChannelManager*>(impl_->session_->getChannelManager());
   auto& ch = mgr->get_channel(ch_id);
+
+  // 3. Wait for send capacity
+  if (!impl_->waitForSendCapacity(ch_id)) {
+    return -1;
+  }
 
   // 3. Get mhandle for this channel
   void* mhandle = mgr->get_mhandle(mem_id, false, ch_id);
@@ -540,6 +609,13 @@ int TcpxTransfer::postSend(uint64_t mem_id, size_t offset, size_t size,
   send_req.channel_id = ch_id;
   send_req.global_idx = global_idx;
   impl_->pending_sends_.push_back(send_req);
+  if (ch_id >= 0 &&
+      ch_id < static_cast<int>(impl_->send_inflight_count_.size())) {
+    impl_->send_inflight_count_[ch_id]++;
+  }
+
+  // Opportunistically progress all channels (keep inflight queues short)
+  impl_->progressSendWindow(ch_id);
 
   LOG_DEBUG("Posted send: mem_id=%lu, offset=%zu, size=%zu, tag=%d, channel=%d, chunk=%d",
             mem_id, offset, size, tag, ch_id, global_idx);
@@ -589,4 +665,3 @@ int TcpxTransfer::release() {
 }
 
 }  // namespace tcpx
-
