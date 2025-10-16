@@ -24,6 +24,8 @@
 
 namespace tcpx {
 
+constexpr int kTransferTag = 99;
+
 // ============================================================================
 // Utility Functions
 // ============================================================================
@@ -337,7 +339,7 @@ int PerfRunner::initialize() {
 
   // Register memory
   bool is_recv = impl_->config.is_server;
-  int ptr_type = 1;  // NCCL_PTR_CUDA
+  int ptr_type = NCCL_PTR_CUDA;
   impl_->mem_id = impl_->session->registerMemory(impl_->buffer,
                                                   Impl::kRegisteredBytes,
                                                   ptr_type, is_recv);
@@ -394,11 +396,9 @@ int PerfRunner::run(PerfStats* stats) {
     // Post chunks
     size_t remaining = impl_->config.test_size;
     size_t offset = 0;
-    int tag_base = iter * 10000;  // Unique tag per iteration
-
     for (size_t chunk_idx = 0; chunk_idx < chunks_per_iter; ++chunk_idx) {
       size_t chunk_size = std::min(remaining, impl_->config.chunk_bytes);
-      int tag = tag_base + static_cast<int>(chunk_idx);
+      int tag = kTransferTag + iter * 10000 + static_cast<int>(chunk_idx);
 
       int rc;
       if (impl_->config.is_server) {

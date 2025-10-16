@@ -11,6 +11,7 @@
 #include <chrono>
 #include <stdexcept>
 #include <thread>
+#include <deque>
 #include <vector>
 
 #include <cuda.h>
@@ -45,13 +46,12 @@ struct TcpxTransfer::Impl {
   // Per-channel send inflight counters
   std::vector<int> send_inflight_count_;
 
-  // Send request tracking (fire-and-forget with polling)
+  // Send queue per channel (head-of-line polling)
   struct SendRequest {
     void* request;
-    int channel_id;
     int global_idx;
   };
-  std::vector<SendRequest> pending_sends_;
+  std::vector<std::deque<SendRequest>> send_queues_;
 
   // Transfer state
   int total_chunks_ = 0;       // Total chunks posted (send + recv)
@@ -60,6 +60,7 @@ struct TcpxTransfer::Impl {
   int next_channel_ = 0;       // Round-robin channel selection
 
   static constexpr int kMaxSendInflightPerChannel = 12;
+  bool error_ = false;
 
   // ============================================================================
   // Constructor / Destructor
@@ -110,7 +111,7 @@ struct TcpxTransfer::Impl {
    *
    * This polls tcpx_test() for completed send requests:
    * - Check each pending send request
-   * - Remove completed sends from pending_sends_
+   * - Remove completed sends from per-channel send queues
    * - Update completed_chunks_ counter
    *
    * @return true on success, false on error
@@ -140,6 +141,8 @@ struct TcpxTransfer::Impl {
   bool waitForSendCapacity(int channel_id);
 
   bool progressSendWindow(int channel_id);
+
+  bool progressSendQueue(int channel_id, bool blocking);
 };
 
 // ============================================================================
@@ -174,6 +177,7 @@ TcpxTransfer::Impl::Impl(TcpxSession* session, const std::string& remote_name)
   }
 
   send_inflight_count_.assign(num_channels, 0);
+  send_queues_.resize(num_channels);
 
   LOG_INFO("TcpxTransfer::Impl initialized with %d channels", num_channels);
 }
@@ -215,15 +219,24 @@ bool TcpxTransfer::Impl::processInflightRecv(int channel_id, bool blocking) {
                    entry.global_idx, channel_id);
           // Continue processing this chunk
         } else {
-          // Connection closed but data not yet complete – fatal
-          LOG_ERROR("Connection closed by peer while chunk %d on channel %d still in progress",
-                    entry.global_idx, channel_id);
-          return false;
+          // Connection closed but data not yet complete – transient
+          LOG_WARN(
+              "Connection closed by peer while chunk %d on channel %d still in "
+              "progress (done=0, will retry)",
+              entry.global_idx, channel_id);
+          if (blocking) {
+            std::this_thread::sleep_for(
+                std::chrono::microseconds(kSleepMicros));
+            continue;
+          } else {
+            break;
+          }
         }
       } else {
         // Other errors are real errors
         LOG_ERROR("tcpx_test failed (rc=%d, done=%d) for channel %d chunk %d",
                   test_rc, done, channel_id, entry.global_idx);
+        error_ = true;
         return false;
       }
     }
@@ -248,6 +261,7 @@ bool TcpxTransfer::Impl::processInflightRecv(int channel_id, bool blocking) {
         !rx_req->unpack_slot.cnt) {
       LOG_ERROR("Missing TCPX metadata for unpack (channel %d, chunk %d)",
                 channel_id, entry.global_idx);
+      error_ = true;
       return false;
     }
 
@@ -257,6 +271,7 @@ bool TcpxTransfer::Impl::processInflightRecv(int channel_id, bool blocking) {
     if (frag_count == 0 || frag_count > MAX_UNPACK_DESCRIPTORS) {
       LOG_ERROR("Invalid fragment count: %lu (cnt_cache=%lu)", frag_count,
                 rx_req->unpack_slot.cnt_cache);
+      error_ = true;
       return false;
     }
 
@@ -267,6 +282,7 @@ bool TcpxTransfer::Impl::processInflightRecv(int channel_id, bool blocking) {
         sizeof(dev_handle));
     if (cu_rc != CUDA_SUCCESS) {
       LOG_ERROR("cuMemcpyDtoH device handle failed: %d", cu_rc);
+      error_ = true;
       return false;
     }
 
@@ -289,6 +305,7 @@ bool TcpxTransfer::Impl::processInflightRecv(int channel_id, bool blocking) {
     int lrc = launcher->launch(desc_block);
     if (lrc != 0) {
       LOG_ERROR("Unpack kernel launch failed: %d", lrc);
+      error_ = true;
       return false;
     }
 
@@ -298,6 +315,7 @@ bool TcpxTransfer::Impl::processInflightRecv(int channel_id, bool blocking) {
     cudaError_t cuda_rc = cudaEventRecord(win.events[event_idx], unpack_stream);
     if (cuda_rc != cudaSuccess) {
       LOG_ERROR("cudaEventRecord failed: %s", cudaGetErrorString(cuda_rc));
+      error_ = true;
       return false;
     }
 
@@ -325,57 +343,19 @@ bool TcpxTransfer::Impl::drainCompletedKernels(int channel_id) {
 
   if (success) {
     completed_chunks_ += completed;
+  } else {
+    error_ = true;
   }
 
   return success;
 }
 
 bool TcpxTransfer::Impl::drainCompletedSends() {
-  // Poll all pending send requests for completion
-  // This is critical for pure-send transfers (client side)
-
-  if (pending_sends_.empty()) {
-    return true;
-  }
-
-  // Iterate backwards so we can erase while iterating
-  for (int i = pending_sends_.size() - 1; i >= 0; --i) {
-    auto& send_req = pending_sends_[i];
-
-    // Poll tcpx_test() for this send request
-    int done = 0;
-    int size = 0;
-    int rc = tcpx_test(send_req.request, &done, &size);
-
-    if (rc < 0) {
-      LOG_ERROR("tcpx_test failed for send request (chunk %d): rc=%d",
-                send_req.global_idx, rc);
+  for (int ch = 0; ch < session_->getNumChannels(); ++ch) {
+    if (!progressSendQueue(ch, /*blocking=*/false)) {
       return false;
     }
-
-    if (rc == 2) {
-      LOG_ERROR("Connection closed during send (chunk %d)", send_req.global_idx);
-      return false;
-    }
-
-    if (done) {
-      // Send completed
-      LOG_DEBUG("Send chunk %d completed (channel %d)",
-                send_req.global_idx, send_req.channel_id);
-
-      completed_chunks_++;
-      if (send_req.channel_id >= 0 &&
-          send_req.channel_id < static_cast<int>(send_inflight_count_.size()) &&
-          send_inflight_count_[send_req.channel_id] > 0) {
-        send_inflight_count_[send_req.channel_id]--;
-      }
-
-      // Remove from pending list (swap with last and pop)
-      pending_sends_[i] = pending_sends_.back();
-      pending_sends_.pop_back();
-    }
   }
-
   return true;
 }
 
@@ -435,9 +415,10 @@ bool TcpxTransfer::Impl::waitForCapacity(int channel_id) {
 
 bool TcpxTransfer::Impl::waitForSendCapacity(int channel_id) {
   const int kSleepMicros = 10;
+  auto& queue = send_queues_[channel_id];
 
-  while (send_inflight_count_[channel_id] >= kMaxSendInflightPerChannel) {
-    if (!progressSendWindow(channel_id)) {
+  while (queue.size() >= kMaxSendInflightPerChannel) {
+    if (!progressSendQueue(channel_id, /*blocking=*/true)) {
       return false;
     }
     std::this_thread::sleep_for(std::chrono::microseconds(kSleepMicros));
@@ -446,17 +427,82 @@ bool TcpxTransfer::Impl::waitForSendCapacity(int channel_id) {
 }
 
 bool TcpxTransfer::Impl::progressSendWindow(int channel_id) {
-  // First, poll all pending sends
-  if (!drainCompletedSends()) {
-    return false;
+  bool ok = progressSendQueue(channel_id, /*blocking=*/false);
+  int total = session_->getNumChannels();
+  for (int ch = 0; ch < total; ++ch) {
+    if (ch == channel_id) continue;
+    ok = progressSendQueue(ch, /*blocking=*/false) && ok;
+  }
+  return ok;
+}
+
+bool TcpxTransfer::Impl::progressSendQueue(int channel_id, bool blocking) {
+  if (channel_id < 0 || channel_id >= static_cast<int>(send_queues_.size())) {
+    return true;
   }
 
-  // Then, opportunistically drain other channels (mimic original behavior)
-  for (int ch = 0; ch < session_->getNumChannels(); ++ch) {
-    if (ch == channel_id) continue;
-    if (!drainCompletedSends()) {
+  auto& queue = send_queues_[channel_id];
+  const int kSleepMicros = 10;
+
+  while (!queue.empty()) {
+    auto& entry = queue.front();
+
+    int done = 0;
+    int size = 0;
+    int rc = tcpx_test(entry.request, &done, &size);
+
+    if (rc < 0) {
+      LOG_ERROR("tcpx_test failed for send request (chunk %d): rc=%d",
+                entry.global_idx, rc);
+      error_ = true;
       return false;
     }
+
+    if (rc == 2) {
+      if (done == 1) {
+        LOG_INFO(
+            "Connection closed by peer after send chunk %d completed on channel %d",
+            entry.global_idx, channel_id);
+      } else {
+        LOG_WARN(
+            "Connection closed by peer while send chunk %d on channel %d still "
+            "in progress (done=0, will retry)",
+            entry.global_idx, channel_id);
+        if (blocking) {
+          std::this_thread::sleep_for(
+              std::chrono::microseconds(kSleepMicros));
+          continue;
+        } else {
+          break;
+        }
+      }
+    } else if (rc > 0) {
+      LOG_ERROR(
+          "tcpx_test returned unexpected rc=%d for send chunk %d on channel %d",
+          rc, entry.global_idx, channel_id);
+      error_ = true;
+      return false;
+    }
+
+    if (!done) {
+      if (blocking) {
+        std::this_thread::sleep_for(std::chrono::microseconds(kSleepMicros));
+        continue;
+      }
+      break;
+    }
+
+    LOG_DEBUG("Send chunk %d completed (channel %d)", entry.global_idx,
+              channel_id);
+
+    completed_chunks_++;
+    if (channel_id >= 0 &&
+        channel_id < static_cast<int>(send_inflight_count_.size()) &&
+        send_inflight_count_[channel_id] > 0) {
+      send_inflight_count_[channel_id]--;
+    }
+
+    queue.pop_front();
   }
 
   return true;
@@ -545,9 +591,9 @@ int TcpxTransfer::postRecv(uint64_t mem_id, size_t offset, size_t size,
     return -1;
   }
 
-  // Opportunistically progress other channels (non-blocking)
-  int total_channels = impl_->session_->getNumChannels();
-  for (int other = 0; other < total_channels; ++other) {
+  // Opportunistically progress other channels to keep metadata queues short
+  int num_channels = impl_->session_->getNumChannels();
+  for (int other = 0; other < num_channels; ++other) {
     if (other == ch_id) continue;
     if (!impl_->processInflightRecv(other, /*blocking=*/false)) {
       return -1;
@@ -603,47 +649,61 @@ int TcpxTransfer::postSend(uint64_t mem_id, size_t offset, size_t size,
   // 5. Record request for completion tracking
   int global_idx = impl_->total_chunks_++;
 
-  // Add to pending sends list for polling
   Impl::SendRequest send_req;
   send_req.request = request;
-  send_req.channel_id = ch_id;
   send_req.global_idx = global_idx;
-  impl_->pending_sends_.push_back(send_req);
+  impl_->send_queues_[ch_id].push_back(send_req);
   if (ch_id >= 0 &&
       ch_id < static_cast<int>(impl_->send_inflight_count_.size())) {
     impl_->send_inflight_count_[ch_id]++;
   }
 
-  // Opportunistically progress all channels (keep inflight queues short)
-  impl_->progressSendWindow(ch_id);
-
   LOG_DEBUG("Posted send: mem_id=%lu, offset=%zu, size=%zu, tag=%d, channel=%d, chunk=%d",
             mem_id, offset, size, tag, ch_id, global_idx);
+
+  // Opportunistically progress send window
+  if (!impl_->progressSendWindow(ch_id)) {
+    return -1;
+  }
 
   return 0;
 }
 
 bool TcpxTransfer::isComplete() {
-  // Poll all channels to drain completed recv kernels
-  for (int ch = 0; ch < impl_->session_->getNumChannels(); ++ch) {
-    impl_->drainCompletedKernels(ch);
+  bool ok = true;
+
+  int num_channels = impl_->session_->getNumChannels();
+  for (int ch = 0; ch < num_channels; ++ch) {
+    if (!impl_->processInflightRecv(ch, /*blocking=*/false)) {
+      ok = false;
+    }
+    if (!impl_->drainCompletedKernels(ch)) {
+      ok = false;
+    }
   }
 
-  // Poll all pending send requests
-  impl_->drainCompletedSends();
+  if (!impl_->drainCompletedSends()) {
+    ok = false;
+  }
 
-  // Check if all chunks are complete
+  if (impl_->error_) {
+    return false;
+  }
+
   impl_->completed_ = (impl_->completed_chunks_ >= impl_->total_chunks_);
-  return impl_->completed_;
+  return ok && impl_->completed_;
 }
 
 int TcpxTransfer::wait() {
   // Block until complete
   const int kSleepMicros = 100;
   while (!isComplete()) {
+    if (impl_->error_) {
+      return -1;
+    }
     std::this_thread::sleep_for(std::chrono::microseconds(kSleepMicros));
   }
-  return 0;
+  return impl_->error_ ? -1 : 0;
 }
 
 int TcpxTransfer::getCompletedChunks() const {
