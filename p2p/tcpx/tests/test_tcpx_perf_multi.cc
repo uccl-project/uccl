@@ -103,6 +103,7 @@ Common pitfalls:
 #include "../include/rx_descriptor.h"    // Receive descriptor builder
 #include "../include/tcpx_interface.h"   // TCPX API wrapper
 #include "../include/tcpx_structs.h"     // TCPX internal structs
+#include "../device/persistent.h"
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <chrono>
@@ -475,6 +476,18 @@ int main(int argc, char** argv) {
           << std::endl;
     }
 
+    tcpx::device::UnpackerPersistentKernel *pkernel_ptr = nullptr;
+    if (impl == "pkernel") {
+      int kPipelineDepth = 2;
+      tcpx::device::PersistentKernelConfig cfg;
+      cfg.numThBlocks = num_channels;
+      cfg.numThPerBlock = 256; // too much MAX_UNPACK_DESCRIPTORS
+      cfg.fifoCap = tcpx::device::MAX_INFLIGHT_PER_CHANNEL;
+      cfg.smem_size = cfg.numThPerBlock * sizeof(float4) * kPipelineDepth; // 16 bytes for best bluk transfer
+
+      pkernel_ptr = new tcpx::device::UnpackerPersistentKernel(cfg);
+    }
+
     // ==========================================================================
     // Step 9: create per-channel sliding windows
     // ==========================================================================
@@ -501,6 +514,8 @@ int main(int argc, char** argv) {
       std::deque<PostedChunk> inflight_recvs;  // Posted but not yet unpacked
     };
 
+    std::deque<std::tuple<uint64_t, std::vector<uint64_t>>> pending_fifo_slot; // pkernel pending;
+
     std::vector<ChannelWindow> channel_windows(num_channels);
 
     if (impl == "kernel") {
@@ -520,6 +535,13 @@ int main(int argc, char** argv) {
       }
       std::cout << "[PERF] Created " << MAX_INFLIGHT_PER_CHANNEL
                 << " events per channel for async kernel mode" << std::endl;
+    } else if (impl == "pkernel") {
+      // TODO launch persistent kernel
+      if (!pkernel_ptr->launch()) {
+          std::cerr << "Failed to launch persistent kernel!" << std::endl;
+          return -1;
+      }
+      std::cout << "Unpacker Persistent Kernel Launched!" << std::endl;
     }
 
     // PROGRESS CORE (server/recv) — this is the canonical reference we mimic in
@@ -631,6 +653,7 @@ int main(int argc, char** argv) {
           return false;
         }
 
+        // TODO: error here
         tcpx::plugin::unpackNetDeviceHandle dev_handle{};
         if (!cuda_check(cuMemcpyDtoH(&dev_handle,
                                      reinterpret_cast<CUdeviceptr>(
@@ -672,6 +695,22 @@ int main(int argc, char** argv) {
           win.pending_reqs.push_back(entry.request);
           win.pending_indices.push_back(win.chunk_counter);
           win.chunk_counter++;
+
+        } else if (impl == "pkernel") {
+          // TODO cpu端提交任务到persistent kernel
+          // desc_block -> Iov; fifo_id = channel_id
+          // kernel.submitDescriptors()
+          std::cout<< "start copy desc to iov1" << std::endl;
+
+          std::vector<uint64_t> slot_ids = pkernel_ptr->submitDescriptors(channel_id, desc_block);
+
+          std::cout<< "start copy desc to iov2" << std::endl;
+
+          win.pending_reqs.push_back(entry.request);
+          win.pending_indices.push_back(win.chunk_counter);
+          win.chunk_counter++;
+
+          pending_fifo_slot.emplace_back(channel_id, std::move(slot_ids));
 
         } else if (impl == "d2d") {
           for (uint32_t i = 0; i < desc_block.count; ++i) {
@@ -728,6 +767,7 @@ int main(int argc, char** argv) {
       return true;
     };
 
+    // kernel专用，主要是等之前launch的kernel完事
     auto wait_for_channel_capacity = [&](int channel_id, ChannelResources& ch,
                                          ChannelWindow& win) -> bool {
       while (win.pending_reqs.size() + win.inflight_recvs.size() >=
@@ -735,18 +775,41 @@ int main(int argc, char** argv) {
         if (!win.pending_reqs.empty()) {
           int oldest_idx = win.pending_indices.front();
           void* oldest_req = win.pending_reqs.front();
-          cudaEvent_t oldest_event =
-              win.events[oldest_idx % MAX_INFLIGHT_PER_CHANNEL];
+          
+          if (impl == "kernel") {
+            cudaEvent_t oldest_event =
+                win.events[oldest_idx % MAX_INFLIGHT_PER_CHANNEL];
 
-          std::cout << "[DEBUG][SERVER] Channel " << channel_id
-                    << " sliding window FULL (" << win.pending_reqs.size()
-                    << "+" << win.inflight_recvs.size() << "/"
-                    << MAX_INFLIGHT_PER_CHANNEL << "), waiting for chunk "
-                    << oldest_idx << " kernel to complete..." << std::endl;
+            std::cout << "[DEBUG][SERVER] Channel " << channel_id
+                      << " sliding window FULL (" << win.pending_reqs.size()
+                      << "+" << win.inflight_recvs.size() << "/"
+                      << MAX_INFLIGHT_PER_CHANNEL << "), waiting for chunk "
+                      << oldest_idx << " kernel to complete..." << std::endl;
+            
+                      
+            if (!cuda_check(cudaEventSynchronize(oldest_event),
+                            "cudaEventSynchronize")) {
+              return false;
+            }
+          } else if (impl == "pkernel" && !pending_fifo_slot.empty()) {
+            auto &[fifo_id, front_slot_ids] = pending_fifo_slot.front();  // oldest batch
 
-          if (!cuda_check(cudaEventSynchronize(oldest_event),
-                          "cudaEventSynchronize")) {
-            return false;
+            bool all_done = false;
+            while (!all_done) {
+                all_done = true;
+                for (uint64_t slot_id : front_slot_ids) {
+                    if (!pkernel_ptr->is_done(fifo_id, slot_id)) {
+                        all_done = false;
+                        break;
+                    }
+                }
+
+                if (!all_done) {
+                    std::this_thread::yield();
+                }
+            }
+
+            pending_fifo_slot.pop_front();
           }
 
           tcpx_irecv_consumed(ch.recv_comm, 1, oldest_req);
@@ -831,7 +894,7 @@ int main(int argc, char** argv) {
                   << "/" << MAX_INFLIGHT_PER_CHANNEL << std::endl;
 
         if (impl == "kernel") {
-          if (!wait_for_channel_capacity(channel_id, ch, win)) {
+          if (!wait_for_channel_capacity(channel_id, ch, win)) { // TODO，非阻塞recordEvent
             std::cerr << "[ERROR] Failed while waiting for channel capacity"
                       << std::endl;
             iteration_failed = true;
@@ -889,7 +952,7 @@ int main(int argc, char** argv) {
         win.inflight_recvs.push_back(std::move(posted));
 
         bool ok =
-            process_completed_chunk(channel_id, ch, win, /*blocking=*/false);
+            process_completed_chunk(channel_id, ch, win, /*blocking=*/false); // TODO
         if (!ok) {
           std::cerr << "[ERROR] Failed to process completed chunks"
                     << std::endl;
@@ -906,7 +969,7 @@ int main(int argc, char** argv) {
           ChannelWindow& other_win = channel_windows[other];
           if (other_win.inflight_recvs.empty()) continue;
           ChannelResources& other_ch = mgr.get_channel(other);
-          if (!process_completed_chunk(other, other_ch, other_win,
+          if (!process_completed_chunk(other, other_ch, other_win, // TODO
                                        /*blocking=*/false)) {
             std::cerr
                 << "[ERROR] Failed to process completed chunks for channel "
@@ -938,7 +1001,7 @@ int main(int argc, char** argv) {
           ChannelResources& channel = mgr.get_channel(ch);
           ChannelWindow& win = channel_windows[ch];
           while (!win.inflight_recvs.empty()) {
-            if (!process_completed_chunk(ch, channel, win, /*blocking=*/true)) {
+            if (!process_completed_chunk(ch, channel, win, /*blocking=*/true)) { // TODO, why blocking
               std::cerr << "[ERROR] Failed to drain inflight recvs for channel "
                         << ch << std::endl;
               abort_benchmark = true;
@@ -1043,6 +1106,11 @@ int main(int argc, char** argv) {
     if (launcher_ptr) {
       delete launcher_ptr;
       launcher_ptr = nullptr;
+    }
+    if (pkernel_ptr) {
+      pkernel_ptr->stop();
+      pkernel_ptr = nullptr;
+      pending_fifo_slot.clear();
     }
     if (unpack_stream) {
       cudaStreamDestroy(unpack_stream);

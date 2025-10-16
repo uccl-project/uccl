@@ -13,11 +13,11 @@ CUDA_LIBS  := -L$(CUDA_HOME)/lib64 -lcuda -lcudart
 
 # Source files
 # Note: rx_descriptor.h is now header-only, no .cc files needed
-DEVICE_SRCS := device/unpack_kernels.cu device/unpack_launch.cu
+DEVICE_SRCS := device/unpack_kernels.cu device/unpack_launch.cu device/persistent.cu
 CORE_SRCS   := src/sliding_window.cc src/bootstrap.cc src/channel_manager.cc
 
 # Object files
-DEVICE_OBJS := device/unpack_kernels.o device/unpack_launch.o
+DEVICE_OBJS := device/unpack_kernels.o device/unpack_launch.o device/persistent.o
 CORE_OBJS   := src/sliding_window.o src/bootstrap.o src/channel_manager.o
 
 # Build object files
@@ -31,6 +31,9 @@ device/unpack_kernels.o: device/unpack_kernels.cu
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 
 device/unpack_launch.o: device/unpack_launch.cu
+	$(NVCC) $(NVCCFLAGS) -c $< -o $@
+
+device/persistent.o: device/persistent.cu
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 
 # Core components (device + multi-channel modules)
@@ -54,8 +57,13 @@ test_modules: $(CORE_OBJS)
 	@echo "Building test_modules..."
 	$(CXX) $(CXXFLAGS) -o tests/test_modules tests/test_modules.cc tcpx_impl.cc $(CORE_OBJS) $(LIBS) $(CUDA_LIBS)
 
+# Persistent kernel test
+test_persistent_kernel: $(CORE_OBJS) $(DEVICE_OBJS)
+	@echo "Building test_persistent_kernel..."
+	$(NVCC) $(NVCCFLAGS) -o tests/test_persistent_kernel tests/test_persistent_kernel.cu tcpx_impl.cc $(CORE_OBJS) $(DEVICE_OBJS) $(LIBS) $(CUDA_LIBS)
+
 # Build targets
-all: core test_tcpx_perf_multi test_tcpx_transfer_multi test_modules
+all: core test_tcpx_perf_multi test_tcpx_transfer_multi test_modules test_persistent_kernel
 
 # Quick test - just core components
 quick: core

@@ -79,7 +79,7 @@ PERF_SIZE=${UCCL_TCPX_PERF_SIZE:-67108864}
 PERF_ITERS=${UCCL_TCPX_PERF_ITERS:-20}
 CHUNK_BYTES=${UCCL_TCPX_CHUNK_BYTES:-524288}
 CHANNELS=${UCCL_TCPX_NUM_CHANNELS:-2}  # 2 channels per GPU (recommended)
-UNPACK_IMPL=${UCCL_TCPX_UNPACK_IMPL:-kernel}  # kernel|d2d|host|none
+UNPACK_IMPL=${UCCL_TCPX_UNPACK_IMPL:-pkernel}  # kernel|d2d|host|none
 LOG_DIR=${LOG_DIR:-"$(dirname "$0")/logs"}
 mkdir -p "${LOG_DIR}"
 
