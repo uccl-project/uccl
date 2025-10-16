@@ -9,7 +9,7 @@ RDMA_HOME := ../collective/rdma
 CXX := g++
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I../include -I$(RDMA_HOME) -I$(HIP_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
-	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -Wl,-rpath=${CONDA_LIB_HOME} -I${CONDA_LIB_HOME}/../include -L${CONDA_LIB_HOME} -lglog -lgflags -lgtest -lz -lelf -libverbs -lpthread
+	-I${CONDA_LIB_HOME}/../include -L${CONDA_LIB_HOME} -lglog -lgflags -lgtest -lz -lelf -libverbs -lpthread
 
 # Python and pybind11 configuration
 PYTHON          ?= python3
@@ -24,7 +24,7 @@ INSTALL_DIR          := $(PYTHON_SITE_PACKAGES)/uccl
 
 CXXFLAGS       += -D__HIP_PLATFORM_AMD__
 LDFLAGS         = -L$(HIP_LIB) -lamdhip64 \
-                  -Wl,-rpath,$(HIP_LIB) -I${CONDA_LIB_HOME}/../include -L${CONDA_LIB_HOME} -lglog -lgflags -lgtest \
+                  -I${CONDA_LIB_HOME}/../include -L${CONDA_LIB_HOME} -lglog -lgflags -lgtest \
                   -lz -lelf -libverbs -lpthread
 
 # Target and source files
@@ -39,8 +39,7 @@ all: $(TARGET)
 $(TARGET): $(OBJECTS) $(RDMA_HOME)/librdma_hip.a
 	$(CXX) $(OBJECTS) $(RDMA_HOME)/librdma_hip.a \
 	      -L$(HIP_LIB) -lamdhip64 \
-	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
-	      -Wl,-rpath,$(HIP_LIB)
+	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS)
 
 
 $(RDMA_HOME)/librdma_hip.a: $(RDMA_HOME)/*.cc $(RDMA_HOME)/*.h

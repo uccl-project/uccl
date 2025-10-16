@@ -1,43 +1,15 @@
-FROM ubuntu:22.04
-ARG PY_VER=3.13
+# Itself based on: quay.io/pypa/manylinux_2_28_x86_64@sha256:d632b5e68ab39e59e128dcf0e59e438b26f122d7f2d45f3eea69ffd2877ab017
+ARG BASE_IMAGE=ghcr.io/rocm/therock_build_manylinux_x86_64@sha256:3ac188c17f88f08ce522297b616d8308361b8e9a9b31bcc3c3bbb9429b1efa6c
 
-# Non-interactive APT
-ENV DEBIAN_FRONTEND=noninteractive
+FROM ${BASE_IMAGE}
 
 # ---------------------------------------------------------------------------
 # Basic build & runtime dependencies (minus ROCm which is already in base)
+#
+# Note that the PyPA manylinux upstream has all python versions pre-installed
 # ---------------------------------------------------------------------------
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        build-essential cmake git ninja-build g++ make patchelf \
-        rdma-core libibverbs-dev \
-        libgoogle-glog-dev libgflags-dev libgtest-dev libelf-dev \
-        libnuma-dev libdrm-dev libdrm-amdgpu1 \
-        pkg-config zlib1g-dev curl \
-        software-properties-common gnupg gpg-agent && \
-\
-# ───── Add Python ${PY_VER} PPA & install Python ${PY_VER} + setuptools ─────
-    add-apt-repository ppa:deadsnakes/ppa && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends \
-        python${PY_VER} python${PY_VER}-dev python${PY_VER}-venv python3-setuptools && \
-\
-# ───── Bootstrap pip for Python ${PY_VER} ─────
-    curl -sS https://bootstrap.pypa.io/get-pip.py | python${PY_VER} && \
-    ln -sf /usr/bin/pip${PY_VER} /usr/local/bin/pip && \
-    ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python${PY_VER} && \
-\
-# ───── Clean up apt cache ─────
-    rm -rf /var/lib/apt/lists/*
-
-# ─────────────────────────────────────────────────────────
-# Install Python build back-end (for Python ${PY_VER})
-# ─────────────────────────────────────────────────────────
-RUN python${PY_VER} -m pip install --no-cache-dir build auditwheel pybind11
-
-# ───── Set Python ${PY_VER} as default python3 and python3-config ─────
-RUN ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python3 && \
-    ln -sf /usr/bin/python${PY_VER}-config /usr/local/bin/python3-config
+RUN dnf install -y rdma-core rdma-core-devel glog glog-devel gflags gflags-devel gtest gtest-devel\
+    elfutils-libelf elfutils-libelf-devel hiredis hiredis-devel libnl3 libnl3-devel
 
 WORKDIR /io
 
