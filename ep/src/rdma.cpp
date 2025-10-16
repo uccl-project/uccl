@@ -926,7 +926,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
     }
   }
 }
-}
 #endif
 
 #ifndef USE_NORMAL_MODE
