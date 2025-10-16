@@ -14,8 +14,6 @@
 #include <vector>
 #include <cuda.h>
 
-class SlidingWindow;
-
 struct ChannelResources {
   int channel_id;
   int net_dev;
@@ -35,8 +33,6 @@ struct ChannelResources {
   std::unordered_map<uint64_t, void*> recv_mhandles;
   // Maps mem_id -> mhandle for send buffers
   std::unordered_map<uint64_t, void*> send_mhandles;
-
-  SlidingWindow* sliding_window;
 
   uint64_t bytes_transferred;
   int chunks_processed;

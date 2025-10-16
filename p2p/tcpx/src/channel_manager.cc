@@ -4,7 +4,6 @@
  */
 
 #include "channel_manager.h"
-#include "sliding_window.h"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -336,7 +335,6 @@ ChannelManager::ChannelManager(int num_channels, int gpu_id)
     ch.recv_mhandles.clear();
     ch.send_mhandles.clear();
 
-    ch.sliding_window = new SlidingWindow(16);
     ch.bytes_transferred = 0;
     ch.chunks_processed = 0;
   }
@@ -348,12 +346,7 @@ ChannelManager::ChannelManager(int num_channels, int gpu_id)
 }
 
 ChannelManager::~ChannelManager() {
-  for (auto& ch : channels_) {
-    if (ch.sliding_window) {
-      delete ch.sliding_window;
-      ch.sliding_window = nullptr;
-    }
-  }
+  // Nothing to clean up per-channel beyond sockets/memory (handled elsewhere)
 }
 
 ChannelResources& ChannelManager::get_channel(int idx) {
