@@ -211,7 +211,7 @@ class CollectiveContext:
             except Exception as e:
                 connect_errors.append(f"Connect to rank {peer_rank}: {e}")
 
-        def accept_from_peer():
+        def accept_from_peer(peer_rank):
             """Accept connection from a specific peer for receiving data FROM that peer."""
             try:
                 # We need to accept both local and remote connections
@@ -220,22 +220,7 @@ class CollectiveContext:
                 # We'll need to track which type we're expecting based on remaining connections
 
                 # Count how many local vs remote connections we still need to accept
-                remaining_local = sum(
-                    1
-                    for rank in range(self.world_size)
-                    if rank != self.rank
-                    and self.local_connections[rank]
-                    and self.recv_connections[rank] is None
-                )
-                remaining_remote = sum(
-                    1
-                    for rank in range(self.world_size)
-                    if rank != self.rank
-                    and not self.local_connections[rank]
-                    and self.recv_connections[rank] is None
-                )
-
-                if remaining_local > 0:
+                if self.local_connections[peer_rank]:
                     # Try to accept a local connection first
                     ok, r_gpu, conn_id = self.ep.accept_local()
                     if ok:
@@ -252,8 +237,7 @@ class CollectiveContext:
                                     )
                                     return
                         raise RuntimeError(f"Could not map local GPU {r_gpu} to a rank")
-
-                if remaining_remote > 0:
+                else:
                     # Accept a remote connection
                     ok, r_ip, r_gpu, conn_id = self.ep.accept()
                     if ok:
@@ -292,7 +276,7 @@ class CollectiveContext:
             accept_futures = []
             for peer_rank in range(self.world_size):
                 if peer_rank != self.rank:
-                    future = executor.submit(accept_from_peer)
+                    future = executor.submit(accept_from_peer, peer_rank)
                     accept_futures.append(future)
 
             # Wait for all connections to complete

@@ -65,9 +65,11 @@ typedef struct metadata {
  * Create and initialize an engine instance.
  * @param local_gpu_idx The GPU index to use for the engine.
  * @param num_cpus      The number of CPUs to use for the engine.
+ * @param in_python     Whether the engine is being created in Python.
  * @return              Pointer to the engine instance, or NULL on failure.
  */
-uccl_engine_t* uccl_engine_create(int local_gpu_idx, int num_cpus);
+uccl_engine_t* uccl_engine_create(int local_gpu_idx, int num_cpus,
+                                  bool in_python);
 
 /**
  * Destroy the engine instance and free resources.

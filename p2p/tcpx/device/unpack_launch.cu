@@ -6,6 +6,7 @@
 #include "unpack_launch.h"
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -294,7 +295,14 @@ int UnpackLauncher::allocateDeviceMemory(size_t size) {
 
 int UnpackLauncher::copyDescriptorBlockToDevice(
     tcpx::rx::UnpackDescriptorBlock const& desc_block) {
-  size_t required_size = sizeof(tcpx::rx::UnpackDescriptorBlock);
+  constexpr size_t kHeaderSize =
+      offsetof(tcpx::rx::UnpackDescriptorBlock, descriptors);
+  const size_t descriptor_bytes =
+      static_cast<size_t>(desc_block.count) * sizeof(desc_block.descriptors[0]);
+  size_t required_size = kHeaderSize + descriptor_bytes;
+  if (required_size < kHeaderSize) {
+    required_size = kHeaderSize;
+  }
 
   int ret = allocateDeviceMemory(required_size);
   if (ret < 0) {
