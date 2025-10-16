@@ -570,7 +570,7 @@ int ChannelManager::deregister_memory(uint64_t mem_id, bool is_recv) {
 }
 
 void* ChannelManager::get_mhandle(uint64_t mem_id, bool is_recv,
-                                   int channel_id) {
+                                  int channel_id) {
   if (channel_id < 0 || channel_id >= num_channels_) {
     return nullptr;
   }

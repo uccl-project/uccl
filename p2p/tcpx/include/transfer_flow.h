@@ -9,11 +9,11 @@
 
 #pragma once
 
-#include <cuda_runtime.h>
-#include <deque>
-#include <vector>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
+#include <vector>
+#include <cuda_runtime.h>
 
 namespace tcpx {
 
@@ -46,12 +46,12 @@ constexpr int DEFAULT_NUM_CHANNELS = 2;
  * Used in sliding window flow control to manage request lifecycle.
  */
 struct PostedChunk {
-  void* request = nullptr;      ///< TCPX request handle
-  void* dst_ptr = nullptr;      ///< Destination pointer (for recv)
-  size_t bytes = 0;             ///< Transfer size in bytes
-  size_t offset = 0;            ///< Offset within the buffer
-  int tag = 0;                  ///< Transfer tag (must be unique)
-  int global_idx = 0;           ///< Global chunk index (for debugging)
+  void* request = nullptr;  ///< TCPX request handle
+  void* dst_ptr = nullptr;  ///< Destination pointer (for recv)
+  size_t bytes = 0;         ///< Transfer size in bytes
+  size_t offset = 0;        ///< Offset within the buffer
+  int tag = 0;              ///< Transfer tag (must be unique)
+  int global_idx = 0;       ///< Global chunk index (for debugging)
 };
 
 /**
@@ -66,13 +66,14 @@ struct PostedChunk {
  * 2. tcpx_test(done=1) → kernel launched → moved to pending_reqs
  * 3. cudaEventSynchronize → tcpx_irecv_consumed → removed from pending_reqs
  *
- * Invariant: pending_reqs.size() + inflight_recvs.size() <= MAX_INFLIGHT_PER_CHANNEL
+ * Invariant: pending_reqs.size() + inflight_recvs.size() <=
+ * MAX_INFLIGHT_PER_CHANNEL
  */
 struct ChannelWindow {
-  std::vector<cudaEvent_t> events;         ///< CUDA events (track kernel completion)
-  std::vector<void*> pending_reqs;         ///< Kernel submitted but not yet consumed
-  std::vector<int> pending_indices;        ///< Pending chunk indices (for debugging)
-  int chunk_counter = 0;                   ///< Chunks handled by this channel
+  std::vector<cudaEvent_t> events;   ///< CUDA events (track kernel completion)
+  std::vector<void*> pending_reqs;   ///< Kernel submitted but not yet consumed
+  std::vector<int> pending_indices;  ///< Pending chunk indices (for debugging)
+  int chunk_counter = 0;             ///< Chunks handled by this channel
   std::deque<PostedChunk> inflight_recvs;  ///< Posted but not yet unpacked
 };
 
@@ -85,7 +86,7 @@ void destroyChannelEvents(std::vector<ChannelWindow>& windows);
 bool drainCompletedKernels(ChannelWindow& win, void* recv_comm,
                            int& completed_chunks);
 bool waitForPendingKernel(ChannelWindow& win, void* recv_comm);
-bool hasCapacity(const ChannelWindow& win);
-int getAvailableSlots(const ChannelWindow& win);
+bool hasCapacity(ChannelWindow const& win);
+int getAvailableSlots(ChannelWindow const& win);
 
 }  // namespace tcpx

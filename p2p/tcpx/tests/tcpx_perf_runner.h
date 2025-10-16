@@ -1,6 +1,7 @@
 /**
  * @file tcpx_perf_runner.h
- * @brief Lightweight wrapper for TCPX performance benchmarking using TcpxSession/TcpxTransfer API
+ * @brief Lightweight wrapper for TCPX performance benchmarking using
+ * TcpxSession/TcpxTransfer API
  *
  * This runner encapsulates the server/client logic using the new Phase 1 API:
  * - TcpxSession: manages channels, memory registration, connection lifecycle
@@ -31,18 +32,18 @@ namespace tcpx {
  */
 struct PerfConfig {
   // Mode
-  bool is_server;           // true = server (recv), false = client (send)
-  std::string server_ip;    // Server IP (client only)
-  int gpu_id;               // GPU device ID
+  bool is_server;         // true = server (recv), false = client (send)
+  std::string server_ip;  // Server IP (client only)
+  int gpu_id;             // GPU device ID
 
   // Connection
-  int num_channels;         // Number of TCPX channels
-  int bootstrap_port;       // Bootstrap port for handshake
+  int num_channels;    // Number of TCPX channels
+  int bootstrap_port;  // Bootstrap port for handshake
 
   // Transfer
-  size_t test_size;         // Total bytes per iteration
-  size_t chunk_bytes;       // Chunk size
-  int iterations;           // Number of iterations
+  size_t test_size;    // Total bytes per iteration
+  size_t chunk_bytes;  // Chunk size
+  int iterations;      // Number of iterations
 
   // Defaults
   PerfConfig()
@@ -60,11 +61,11 @@ struct PerfConfig {
  * @brief Performance statistics
  */
 struct PerfStats {
-  double total_time_ms;     // Total time (ms)
-  double bandwidth_gbps;    // Bandwidth (GB/s)
-  size_t total_bytes;       // Total bytes transferred
-  int iterations;           // Number of iterations
-  int num_channels;         // Number of channels used
+  double total_time_ms;   // Total time (ms)
+  double bandwidth_gbps;  // Bandwidth (GB/s)
+  size_t total_bytes;     // Total bytes transferred
+  int iterations;         // Number of iterations
+  int num_channels;       // Number of channels used
 
   PerfStats()
       : total_time_ms(0.0),
@@ -81,8 +82,8 @@ struct PerfStats {
 /**
  * @brief TCPX performance benchmark runner
  *
- * This class encapsulates the server/client logic using TcpxSession and TcpxTransfer.
- * It handles:
+ * This class encapsulates the server/client logic using TcpxSession and
+ * TcpxTransfer. It handles:
  * - Bootstrap handshake
  * - CUDA initialization
  * - Memory allocation and registration
@@ -95,7 +96,7 @@ class PerfRunner {
    * @brief Constructor
    * @param config Benchmark configuration
    */
-  explicit PerfRunner(const PerfConfig& config);
+  explicit PerfRunner(PerfConfig const& config);
 
   /**
    * @brief Destructor - cleans up resources
@@ -142,8 +143,8 @@ class PerfRunner {
   Impl* impl_;
 
   // Disable copy and assignment
-  PerfRunner(const PerfRunner&) = delete;
-  PerfRunner& operator=(const PerfRunner&) = delete;
+  PerfRunner(PerfRunner const&) = delete;
+  PerfRunner& operator=(PerfRunner const&) = delete;
 };
 
 // ============================================================================
@@ -155,7 +156,7 @@ class PerfRunner {
  * @param stats Statistics to print
  * @param config Configuration used
  */
-void printPerfStats(const PerfStats& stats, const PerfConfig& config);
+void printPerfStats(PerfStats const& stats, PerfConfig const& config);
 
 /**
  * @brief Get environment variable as int
@@ -163,7 +164,7 @@ void printPerfStats(const PerfStats& stats, const PerfConfig& config);
  * @param def Default value
  * @return Value from environment or default
  */
-int getEnvInt(const char* name, int def);
+int getEnvInt(char const* name, int def);
 
 /**
  * @brief Get environment variable as size_t
@@ -171,9 +172,8 @@ int getEnvInt(const char* name, int def);
  * @param def Default value
  * @return Value from environment or default
  */
-size_t getEnvSize(const char* name, size_t def);
+size_t getEnvSize(char const* name, size_t def);
 
 }  // namespace tcpx
 
 #endif  // TCPX_PERF_RUNNER_H_
-

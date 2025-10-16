@@ -30,8 +30,8 @@
  */
 
 #include "transfer_flow.h"
-#include "tcpx_logging.h"
 #include "tcpx_interface.h"  // For tcpx_irecv_consumed
+#include "tcpx_logging.h"
 #include <cuda_runtime.h>
 
 namespace tcpx {
@@ -112,17 +112,19 @@ void destroyChannelEvents(std::vector<ChannelWindow>& windows) {
  * This function is non-blocking: it only processes kernels that have
  * already completed (cudaEventQuery returns cudaSuccess).
  */
-bool drainCompletedKernels(ChannelWindow& win, void* recv_comm, int& completed_chunks) {
+bool drainCompletedKernels(ChannelWindow& win, void* recv_comm,
+                           int& completed_chunks) {
   completed_chunks = 0;
-  
+
   while (!win.pending_reqs.empty()) {
     int oldest_idx = win.pending_indices.front();
     void* oldest_req = win.pending_reqs.front();
-    cudaEvent_t oldest_event = win.events[oldest_idx % MAX_INFLIGHT_PER_CHANNEL];
-    
+    cudaEvent_t oldest_event =
+        win.events[oldest_idx % MAX_INFLIGHT_PER_CHANNEL];
+
     // Non-blocking check: has the kernel completed?
     cudaError_t err = cudaEventQuery(oldest_event);
-    
+
     if (err == cudaSuccess) {
       // Kernel completed - consume the TCPX request
       int rc = tcpx_irecv_consumed(recv_comm, 1, oldest_req);
@@ -130,14 +132,14 @@ bool drainCompletedKernels(ChannelWindow& win, void* recv_comm, int& completed_c
         LOG_ERROR("tcpx_irecv_consumed failed: rc=%d", rc);
         return false;
       }
-      
+
       // Remove from pending queue
       win.pending_reqs.erase(win.pending_reqs.begin());
       win.pending_indices.erase(win.pending_indices.begin());
       completed_chunks++;
-      
-      LOG_DEBUG("Drained completed chunk %d (pending: %zu)",
-                oldest_idx, win.pending_reqs.size());
+
+      LOG_DEBUG("Drained completed chunk %d (pending: %zu)", oldest_idx,
+                win.pending_reqs.size());
     } else if (err == cudaErrorNotReady) {
       // Kernel still running - stop draining
       break;
@@ -147,7 +149,7 @@ bool drainCompletedKernels(ChannelWindow& win, void* recv_comm, int& completed_c
       return false;
     }
   }
-  
+
   return true;
 }
 
@@ -157,7 +159,8 @@ bool drainCompletedKernels(ChannelWindow& win, void* recv_comm, int& completed_c
  * @param recv_comm TCPX receive communicator
  * @return true on success, false on error
  *
- * Blocks until the oldest pending kernel completes, then releases its TCPX slot.
+ * Blocks until the oldest pending kernel completes, then releases its TCPX
+ * slot.
  *
  * This implements the "pending queue drain" part of wait_for_channel_capacity
  * from test_tcpx_perf_multi.cc lines 665-689.
@@ -180,8 +183,10 @@ bool waitForPendingKernel(ChannelWindow& win, void* recv_comm) {
   void* oldest_req = win.pending_reqs.front();
   cudaEvent_t oldest_event = win.events[oldest_idx % MAX_INFLIGHT_PER_CHANNEL];
 
-  LOG_DEBUG("Waiting for pending kernel: synchronizing on chunk %d (pending: %zu, inflight: %zu)",
-            oldest_idx, win.pending_reqs.size(), win.inflight_recvs.size());
+  LOG_DEBUG(
+      "Waiting for pending kernel: synchronizing on chunk %d (pending: %zu, "
+      "inflight: %zu)",
+      oldest_idx, win.pending_reqs.size(), win.inflight_recvs.size());
 
   // Block until kernel completes
   cudaError_t err = cudaEventSynchronize(oldest_event);
@@ -201,8 +206,8 @@ bool waitForPendingKernel(ChannelWindow& win, void* recv_comm) {
   win.pending_reqs.erase(win.pending_reqs.begin());
   win.pending_indices.erase(win.pending_indices.begin());
 
-  LOG_DEBUG("Pending kernel consumed: chunk %d (pending: %zu)",
-            oldest_idx, win.pending_reqs.size());
+  LOG_DEBUG("Pending kernel consumed: chunk %d (pending: %zu)", oldest_idx,
+            win.pending_reqs.size());
 
   return true;
 }
@@ -212,7 +217,7 @@ bool waitForPendingKernel(ChannelWindow& win, void* recv_comm) {
  * @param win Channel window state
  * @return true if capacity is available, false if window is full
  */
-bool hasCapacity(const ChannelWindow& win) {
+bool hasCapacity(ChannelWindow const& win) {
   size_t total_inflight = win.pending_reqs.size() + win.inflight_recvs.size();
   return total_inflight < MAX_INFLIGHT_PER_CHANNEL;
 }
@@ -222,7 +227,7 @@ bool hasCapacity(const ChannelWindow& win) {
  * @param win Channel window state
  * @return Number of available slots
  */
-int getAvailableSlots(const ChannelWindow& win) {
+int getAvailableSlots(ChannelWindow const& win) {
   size_t total_inflight = win.pending_reqs.size() + win.inflight_recvs.size();
   return MAX_INFLIGHT_PER_CHANNEL - static_cast<int>(total_inflight);
 }

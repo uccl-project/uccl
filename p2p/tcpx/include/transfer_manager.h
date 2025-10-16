@@ -57,7 +57,7 @@ class TcpxTransfer {
    *
    * Based on test_tcpx_perf_multi.cc lines 496-509.
    */
-  TcpxTransfer(TcpxSession* session, const std::string& remote_name);
+  TcpxTransfer(TcpxSession* session, std::string const& remote_name);
 
   /**
    * @brief Destroy the transfer object
@@ -69,8 +69,8 @@ class TcpxTransfer {
   ~TcpxTransfer();
 
   // Disable copy and move
-  TcpxTransfer(const TcpxTransfer&) = delete;
-  TcpxTransfer& operator=(const TcpxTransfer&) = delete;
+  TcpxTransfer(TcpxTransfer const&) = delete;
+  TcpxTransfer& operator=(TcpxTransfer const&) = delete;
   TcpxTransfer(TcpxTransfer&&) = delete;
   TcpxTransfer& operator=(TcpxTransfer&&) = delete;
 

@@ -25,14 +25,16 @@ class TcpxTransfer;
  *
  * This class encapsulates the complete TCPX handshake flow:
  * - Server: listen() → accept() → register memory → create transfers
- * - Client: loadRemoteConnInfo() → connect() → register memory → create transfers
+ * - Client: loadRemoteConnInfo() → connect() → register memory → create
+ * transfers
  *
  * Lifecycle:
  * 1. Construction: Initialize CUDA context, create ChannelManager
  * 2. Handshake: Server listen/accept OR Client loadRemoteConnInfo/connect
  * 3. Memory registration: registerMemory() for send/recv buffers
  * 4. Transfer creation: createTransfer() for each remote peer
- * 5. Destruction: RAII cleanup (deregister memory, release CUDA context, close channels)
+ * 5. Destruction: RAII cleanup (deregister memory, release CUDA context, close
+ * channels)
  *
  * Thread-safety: NOT thread-safe. Caller must synchronize access.
  */
@@ -67,8 +69,8 @@ class TcpxSession {
   ~TcpxSession();
 
   // Disable copy and move
-  TcpxSession(const TcpxSession&) = delete;
-  TcpxSession& operator=(const TcpxSession&) = delete;
+  TcpxSession(TcpxSession const&) = delete;
+  TcpxSession& operator=(TcpxSession const&) = delete;
   TcpxSession(TcpxSession&&) = delete;
   TcpxSession& operator=(TcpxSession&&) = delete;
 
@@ -97,7 +99,7 @@ class TcpxSession {
    *
    * Based on test_tcpx_perf_multi.cc lines 373-380.
    */
-  int accept(const std::string& remote_name);
+  int accept(std::string const& remote_name);
 
   /**
    * @brief Client: Load remote connection info from server
@@ -108,8 +110,8 @@ class TcpxSession {
    * Client-side step 1: Parse and store server's handles.
    * Must be called before connect().
    */
-  int loadRemoteConnInfo(const std::string& remote_name,
-                         const std::string& conn_info);
+  int loadRemoteConnInfo(std::string const& remote_name,
+                         std::string const& conn_info);
 
   /**
    * @brief Client: Connect to remote peer
@@ -121,7 +123,7 @@ class TcpxSession {
    *
    * Based on test_tcpx_perf_multi.cc client path.
    */
-  int connect(const std::string& remote_name);
+  int connect(std::string const& remote_name);
 
   /**
    * @brief Disconnect from a remote peer
@@ -131,7 +133,7 @@ class TcpxSession {
    * Closes all channels to the specified peer.
    * Automatically called by destructor for all connected peers.
    */
-  int disconnect(const std::string& remote_name);
+  int disconnect(std::string const& remote_name);
 
   // ============================================================================
   // Memory Management
@@ -141,12 +143,12 @@ class TcpxSession {
    * @brief Memory handle returned by registerMemory()
    */
   struct MemoryHandle {
-    void* buffer;       ///< Pointer to the registered buffer
-    size_t size;        ///< Size of the buffer in bytes
-    int ptr_type;       ///< NCCL_PTR_CUDA or NCCL_PTR_HOST
-    bool is_recv;       ///< true for recv buffers, false for send buffers
-    void* mhandle;      ///< TCPX memory handle (opaque)
-    uint64_t id;        ///< Unique identifier for this registration
+    void* buffer;   ///< Pointer to the registered buffer
+    size_t size;    ///< Size of the buffer in bytes
+    int ptr_type;   ///< NCCL_PTR_CUDA or NCCL_PTR_HOST
+    bool is_recv;   ///< true for recv buffers, false for send buffers
+    void* mhandle;  ///< TCPX memory handle (opaque)
+    uint64_t id;    ///< Unique identifier for this registration
   };
 
   /**
@@ -162,7 +164,8 @@ class TcpxSession {
    *
    * Based on test_tcpx_perf_multi.cc lines 428-437.
    */
-  uint64_t registerMemory(void* buffer, size_t size, int ptr_type, bool is_recv);
+  uint64_t registerMemory(void* buffer, size_t size, int ptr_type,
+                          bool is_recv);
 
   /**
    * @brief Deregister memory
@@ -188,12 +191,13 @@ class TcpxSession {
   /**
    * @brief Create a new transfer object for a remote peer
    * @param remote_name Identifier for the remote peer
-   * @return Pointer to TcpxTransfer object (owned by caller), or nullptr on error
+   * @return Pointer to TcpxTransfer object (owned by caller), or nullptr on
+   * error
    *
    * The returned transfer object can be used to post send/recv operations.
    * Caller is responsible for deleting the transfer object.
    */
-  TcpxTransfer* createTransfer(const std::string& remote_name);
+  TcpxTransfer* createTransfer(std::string const& remote_name);
 
   // ============================================================================
   // Accessors (for TcpxTransfer)

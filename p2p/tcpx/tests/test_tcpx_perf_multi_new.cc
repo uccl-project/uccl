@@ -28,7 +28,6 @@
  */
 
 #include "tcpx_perf_runner.h"
-
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -56,9 +55,12 @@ int main(int argc, char** argv) {
   // ============================================================================
 
   if (argc < 2) {
-    std::cerr << "Usage: " << argv[0] << " <server|client> [server_ip] [gpu_id]" << std::endl;
-    std::cerr << "  server mode: " << argv[0] << " server [gpu_id]" << std::endl;
-    std::cerr << "  client mode: " << argv[0] << " client <server_ip> [gpu_id]" << std::endl;
+    std::cerr << "Usage: " << argv[0] << " <server|client> [server_ip] [gpu_id]"
+              << std::endl;
+    std::cerr << "  server mode: " << argv[0] << " server [gpu_id]"
+              << std::endl;
+    std::cerr << "  client mode: " << argv[0] << " client <server_ip> [gpu_id]"
+              << std::endl;
     return 1;
   }
 
@@ -97,23 +99,28 @@ int main(int argc, char** argv) {
   config.iterations = tcpx::getEnvInt("UCCL_TCPX_PERF_ITERS", 10);
 
   // Chunk size (default 512KB)
-  config.chunk_bytes = tcpx::getEnvSize("UCCL_TCPX_CHUNK_BYTES",
-                                        tcpx::getEnvSize("NCCL_P2P_NET_CHUNKSIZE", 512 * 1024));
+  config.chunk_bytes =
+      tcpx::getEnvSize("UCCL_TCPX_CHUNK_BYTES",
+                       tcpx::getEnvSize("NCCL_P2P_NET_CHUNKSIZE", 512 * 1024));
 
   // Bootstrap port
-  int bootstrap_port_base = tcpx::getEnvInt("UCCL_TCPX_BOOTSTRAP_PORT_BASE", 12345);
+  int bootstrap_port_base =
+      tcpx::getEnvInt("UCCL_TCPX_BOOTSTRAP_PORT_BASE", 12345);
   config.bootstrap_port = bootstrap_port_base + gpu_id;
 
   // Print configuration
   std::cout << "========================================" << std::endl;
   std::cout << "TCPX Performance Benchmark (Phase 1 API)" << std::endl;
   std::cout << "========================================" << std::endl;
-  std::cout << "Mode:           " << (is_server ? "SERVER" : "CLIENT") << std::endl;
+  std::cout << "Mode:           " << (is_server ? "SERVER" : "CLIENT")
+            << std::endl;
   std::cout << "GPU ID:         " << gpu_id << std::endl;
   std::cout << "Channels:       " << config.num_channels << std::endl;
-  std::cout << "Size:           " << (config.test_size / 1024 / 1024) << " MB" << std::endl;
+  std::cout << "Size:           " << (config.test_size / 1024 / 1024) << " MB"
+            << std::endl;
   std::cout << "Iterations:     " << config.iterations << std::endl;
-  std::cout << "Chunk size:     " << (config.chunk_bytes / 1024 / 1024) << " MB" << std::endl;
+  std::cout << "Chunk size:     " << (config.chunk_bytes / 1024 / 1024) << " MB"
+            << std::endl;
   std::cout << "Bootstrap port: " << config.bootstrap_port << std::endl;
   if (!is_server) {
     std::cout << "Server IP:      " << server_ip << std::endl;

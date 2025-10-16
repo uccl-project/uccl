@@ -23,8 +23,8 @@ namespace tcpx {
  * @param default_val Default value if variable is not set
  * @return Parsed integer value or default
  */
-inline int getEnvInt(const char* name, int default_val) {
-  const char* val = std::getenv(name);
+inline int getEnvInt(char const* name, int default_val) {
+  char const* val = std::getenv(name);
   return val ? std::atoi(val) : default_val;
 }
 
@@ -34,8 +34,8 @@ inline int getEnvInt(const char* name, int default_val) {
  * @param default_val Default value if variable is not set
  * @return Parsed size_t value or default
  */
-inline size_t getEnvSize(const char* name, size_t default_val) {
-  const char* val = std::getenv(name);
+inline size_t getEnvSize(char const* name, size_t default_val) {
+  char const* val = std::getenv(name);
   return val ? static_cast<size_t>(std::atoll(val)) : default_val;
 }
 
@@ -47,11 +47,11 @@ inline size_t getEnvSize(const char* name, size_t default_val) {
  * Debug logging (controlled by TCPX_DEBUG environment variable)
  * Usage: LOG_DEBUG("Message: %d", value);
  */
-#define LOG_DEBUG(fmt, ...) \
-  do { \
-    if (::tcpx::getEnvInt("TCPX_DEBUG", 0)) { \
+#define LOG_DEBUG(fmt, ...)                                     \
+  do {                                                          \
+    if (::tcpx::getEnvInt("TCPX_DEBUG", 0)) {                   \
       std::fprintf(stderr, "[DEBUG] " fmt "\n", ##__VA_ARGS__); \
-    } \
+    }                                                           \
   } while (0)
 
 /**
@@ -65,11 +65,11 @@ inline size_t getEnvSize(const char* name, size_t default_val) {
  * Performance logging (controlled by TCPX_PERF environment variable)
  * Usage: LOG_PERF("Bandwidth: %.2f GB/s", bw);
  */
-#define LOG_PERF(fmt, ...) \
-  do { \
-    if (::tcpx::getEnvInt("TCPX_PERF", 0)) { \
+#define LOG_PERF(fmt, ...)                                     \
+  do {                                                         \
+    if (::tcpx::getEnvInt("TCPX_PERF", 0)) {                   \
       std::fprintf(stderr, "[PERF] " fmt "\n", ##__VA_ARGS__); \
-    } \
+    }                                                          \
   } while (0)
 
 /**
@@ -87,4 +87,3 @@ inline size_t getEnvSize(const char* name, size_t default_val) {
   std::fprintf(stderr, "[WARN] " fmt "\n", ##__VA_ARGS__)
 
 }  // namespace tcpx
-

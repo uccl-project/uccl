@@ -7,20 +7,17 @@
  */
 
 #include "session_manager.h"
-
 #include "channel_manager.h"
+#include "device/unpack_launch.h"
 #include "tcpx_logging.h"
 #include "transfer_manager.h"
-#include "device/unpack_launch.h"
-
-#include <cuda.h>
-#include <cuda_runtime.h>
-
 #include <cstdio>
 #include <map>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
+#include <cuda.h>
+#include <cuda_runtime.h>
 
 namespace tcpx {
 
@@ -173,9 +170,7 @@ TcpxSession::TcpxSession(int gpu_id, int num_channels)
   LOG_INFO("TcpxSession initialized successfully");
 }
 
-TcpxSession::~TcpxSession() {
-  LOG_INFO("TcpxSession destroyed");
-}
+TcpxSession::~TcpxSession() { LOG_INFO("TcpxSession destroyed"); }
 
 // ============================================================================
 // Handshake Flow
@@ -200,8 +195,8 @@ std::string TcpxSession::listen() {
     if (i > 0) oss << ",";
     oss << "\"";
     // Encode handle as hex string
-    const unsigned char* data =
-        reinterpret_cast<const unsigned char*>(&handles[i]);
+    unsigned char const* data =
+        reinterpret_cast<unsigned char const*>(&handles[i]);
     for (size_t j = 0; j < sizeof(ncclNetHandle_v7); ++j) {
       char hex[3];
       snprintf(hex, sizeof(hex), "%02x", data[j]);
@@ -214,7 +209,7 @@ std::string TcpxSession::listen() {
   return oss.str();
 }
 
-int TcpxSession::accept(const std::string& remote_name) {
+int TcpxSession::accept(std::string const& remote_name) {
   // Based on test_tcpx_perf_multi.cc lines 373-380
 
   int rc = impl_->mgr_->server_accept_all();
@@ -234,8 +229,8 @@ int TcpxSession::accept(const std::string& remote_name) {
   return 0;
 }
 
-int TcpxSession::loadRemoteConnInfo(const std::string& remote_name,
-                                    const std::string& conn_info) {
+int TcpxSession::loadRemoteConnInfo(std::string const& remote_name,
+                                    std::string const& conn_info) {
   // Parse JSON to extract handles
   // Simple parser (assumes valid JSON from listen())
 
@@ -263,7 +258,7 @@ int TcpxSession::loadRemoteConnInfo(const std::string& remote_name,
   handles.resize(num_channels);
 
   // Parse each handle (hex string)
-  const char* p = conn_info.c_str() + handles_pos + 11;  // Skip "handles":["
+  char const* p = conn_info.c_str() + handles_pos + 11;  // Skip "handles":["
   for (int i = 0; i < num_channels; ++i) {
     // Skip to next quote
     while (*p && *p != '"') p++;
@@ -299,7 +294,7 @@ int TcpxSession::loadRemoteConnInfo(const std::string& remote_name,
   return 0;
 }
 
-int TcpxSession::connect(const std::string& remote_name) {
+int TcpxSession::connect(std::string const& remote_name) {
   // Find handles for this remote
   auto it = impl_->remote_handles_.find(remote_name);
   if (it == impl_->remote_handles_.end()) {
@@ -317,7 +312,7 @@ int TcpxSession::connect(const std::string& remote_name) {
   return 0;
 }
 
-int TcpxSession::disconnect(const std::string& remote_name) {
+int TcpxSession::disconnect(std::string const& remote_name) {
   // Close all channels (both recv and send)
   if (impl_->mgr_) {
     impl_->mgr_->close_all(true);   // Close recv/listen comms
@@ -349,7 +344,8 @@ uint64_t TcpxSession::registerMemory(void* buffer, size_t size, int ptr_type,
   uint64_t mem_id = impl_->next_mem_id_++;
 
   // Register with ChannelManager (pass mem_id)
-  int rc = impl_->mgr_->register_memory(mem_id, buffer, size, ptr_type, is_recv);
+  int rc =
+      impl_->mgr_->register_memory(mem_id, buffer, size, ptr_type, is_recv);
   if (rc != 0) {
     LOG_ERROR("register_memory failed: %d", rc);
     return 0;
@@ -366,8 +362,8 @@ uint64_t TcpxSession::registerMemory(void* buffer, size_t size, int ptr_type,
 
   impl_->registered_memory_[mem_id] = handle;
 
-  LOG_INFO("Registered memory: id=%lu, buffer=%p, size=%zu, is_recv=%d",
-           mem_id, buffer, size, is_recv);
+  LOG_INFO("Registered memory: id=%lu, buffer=%p, size=%zu, is_recv=%d", mem_id,
+           buffer, size, is_recv);
 
   return mem_id;
 }
@@ -404,7 +400,7 @@ TcpxSession::MemoryHandle* TcpxSession::getMemoryHandle(uint64_t mem_id) {
 // Transfer Management
 // ============================================================================
 
-TcpxTransfer* TcpxSession::createTransfer(const std::string& remote_name) {
+TcpxTransfer* TcpxSession::createTransfer(std::string const& remote_name) {
   // Check if connected to this remote
   auto it = impl_->remote_handles_.find(remote_name);
   if (it == impl_->remote_handles_.end()) {

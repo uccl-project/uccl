@@ -7,22 +7,19 @@
  */
 
 #include "transfer_manager.h"
-
+#include "channel_manager.h"
+#include "device/unpack_launch.h"
+#include "session_manager.h"
+#include "tcpx_logging.h"
+#include "transfer_flow.h"
+#include "unpack_descriptor.h"
 #include <chrono>
+#include <deque>
 #include <stdexcept>
 #include <thread>
-#include <deque>
 #include <vector>
-
 #include <cuda.h>
 #include <cuda_runtime.h>
-
-#include "channel_manager.h"
-#include "unpack_descriptor.h"
-#include "tcpx_logging.h"
-#include "session_manager.h"
-#include "transfer_flow.h"
-#include "device/unpack_launch.h"
 
 // TCPX plugin API (already declared in tcpx_interface.h)
 // No need to redeclare here
@@ -52,10 +49,10 @@ struct TcpxTransfer::Impl {
   std::vector<std::deque<SendRequest>> send_queues_;
 
   // Transfer state
-  int total_chunks_ = 0;       // Total chunks posted (send + recv)
-  int completed_chunks_ = 0;   // Completed chunks (send + recv)
-  bool completed_ = false;     // Transfer complete flag
-  int next_channel_ = 0;       // Round-robin channel selection
+  int total_chunks_ = 0;      // Total chunks posted (send + recv)
+  int completed_chunks_ = 0;  // Completed chunks (send + recv)
+  bool completed_ = false;    // Transfer complete flag
+  int next_channel_ = 0;      // Round-robin channel selection
 
   static constexpr int kMaxSendInflightPerChannel = 12;
   bool error_ = false;
@@ -64,7 +61,7 @@ struct TcpxTransfer::Impl {
   // Constructor / Destructor
   // ============================================================================
 
-  Impl(TcpxSession* session, const std::string& remote_name);
+  Impl(TcpxSession* session, std::string const& remote_name);
   ~Impl();
 
   // ============================================================================
@@ -147,7 +144,7 @@ struct TcpxTransfer::Impl {
 // TcpxTransfer::Impl Implementation
 // ============================================================================
 
-TcpxTransfer::Impl::Impl(TcpxSession* session, const std::string& remote_name)
+TcpxTransfer::Impl::Impl(TcpxSession* session, std::string const& remote_name)
     : session_(session), remote_name_(remote_name) {
   // Get number of channels from session
   int num_channels = session->getNumChannels();
@@ -160,8 +157,8 @@ TcpxTransfer::Impl::Impl(TcpxSession* session, const std::string& remote_name)
     for (int i = 0; i < MAX_INFLIGHT_PER_CHANNEL; ++i) {
       cudaError_t cuda_rc = cudaEventCreate(&channel_windows_[ch].events[i]);
       if (cuda_rc != cudaSuccess) {
-        LOG_ERROR("cudaEventCreate failed for channel %d, event %d: %s",
-                  ch, i, cudaGetErrorString(cuda_rc));
+        LOG_ERROR("cudaEventCreate failed for channel %d, event %d: %s", ch, i,
+                  cudaGetErrorString(cuda_rc));
         // Clean up already-created events
         for (int cleanup_ch = 0; cleanup_ch <= ch; ++cleanup_ch) {
           int max_evt = (cleanup_ch == ch) ? i : MAX_INFLIGHT_PER_CHANNEL;
@@ -199,7 +196,7 @@ bool TcpxTransfer::Impl::processInflightRecv(int channel_id, bool blocking) {
   auto& win = channel_windows_[channel_id];
   auto* mgr = static_cast<ChannelManager*>(session_->getChannelManager());
   auto& ch = mgr->get_channel(channel_id);
-  const int kSleepMicros = 10;
+  int const kSleepMicros = 10;
 
   while (!win.inflight_recvs.empty()) {
     auto& entry = win.inflight_recvs.front();
@@ -213,8 +210,10 @@ bool TcpxTransfer::Impl::processInflightRecv(int channel_id, bool blocking) {
       if (test_rc == 2) {
         if (done == 1) {
           // Data was received successfully before connection closed
-          LOG_INFO("Connection closed by peer after chunk %d completed on channel %d",
-                   entry.global_idx, channel_id);
+          LOG_INFO(
+              "Connection closed by peer after chunk %d completed on channel "
+              "%d",
+              entry.global_idx, channel_id);
           // Continue processing this chunk
         } else {
           // Connection closed but data not yet complete – transient
@@ -248,12 +247,14 @@ bool TcpxTransfer::Impl::processInflightRecv(int channel_id, bool blocking) {
       break;
     }
 
-    LOG_DEBUG("Chunk %d recv completed (received_size=%d)", entry.global_idx, received_size);
+    LOG_DEBUG("Chunk %d recv completed (received_size=%d)", entry.global_idx,
+              received_size);
 
     // Extract TCPX metadata for unpack (lines 592-615)
     auto* rx_req = reinterpret_cast<tcpx::plugin::tcpxRequest*>(entry.request);
     auto* dev_handle_struct =
-        reinterpret_cast<tcpx::plugin::NcclNetDeviceHandle*>(ch.recv_dev_handle);
+        reinterpret_cast<tcpx::plugin::NcclNetDeviceHandle*>(
+            ch.recv_dev_handle);
 
     if (!rx_req || !dev_handle_struct || !rx_req->unpack_slot.mem ||
         !rx_req->unpack_slot.cnt) {
@@ -288,15 +289,16 @@ bool TcpxTransfer::Impl::processInflightRecv(int channel_id, bool blocking) {
     auto* meta_entries =
         static_cast<tcpx::plugin::loadMeta*>(rx_req->unpack_slot.mem);
     tcpx::rx::UnpackDescriptorBlock desc_block;
-    tcpx::rx::buildDescriptorBlock(meta_entries, static_cast<uint32_t>(frag_count),
-                                    dev_handle.bounce_buf, entry.dst_ptr,
-                                    desc_block);
+    tcpx::rx::buildDescriptorBlock(
+        meta_entries, static_cast<uint32_t>(frag_count), dev_handle.bounce_buf,
+        entry.dst_ptr, desc_block);
     desc_block.ready_flag = rx_req->unpack_slot.cnt;
     desc_block.ready_threshold = frag_count;
 
     // Launch GPU kernel to unpack scattered fragments (lines 635-645)
-    LOG_DEBUG("Launching unpack kernel for chunk %d (channel %d, descriptors=%u)",
-              entry.global_idx, channel_id, desc_block.count);
+    LOG_DEBUG(
+        "Launching unpack kernel for chunk %d (channel %d, descriptors=%u)",
+        entry.global_idx, channel_id, desc_block.count);
 
     auto* launcher = static_cast<tcpx::device::UnpackLauncher*>(
         session_->getUnpackLauncher());
@@ -309,7 +311,8 @@ bool TcpxTransfer::Impl::processInflightRecv(int channel_id, bool blocking) {
 
     // Record CUDA event (lines 647-651)
     int event_idx = win.chunk_counter % MAX_INFLIGHT_PER_CHANNEL;
-    cudaStream_t unpack_stream = static_cast<cudaStream_t>(session_->getUnpackStream());
+    cudaStream_t unpack_stream =
+        static_cast<cudaStream_t>(session_->getUnpackStream());
     cudaError_t cuda_rc = cudaEventRecord(win.events[event_idx], unpack_stream);
     if (cuda_rc != cudaSuccess) {
       LOG_ERROR("cudaEventRecord failed: %s", cudaGetErrorString(cuda_rc));
@@ -374,14 +377,17 @@ bool TcpxTransfer::Impl::waitForCapacity(int channel_id) {
       cudaEvent_t oldest_event =
           win.events[oldest_idx % MAX_INFLIGHT_PER_CHANNEL];
 
-      LOG_DEBUG("Channel %d sliding window FULL (%zu+%zu/%d), waiting for chunk %d kernel to complete...",
-                channel_id, win.pending_reqs.size(), win.inflight_recvs.size(),
-                MAX_INFLIGHT_PER_CHANNEL, oldest_idx);
+      LOG_DEBUG(
+          "Channel %d sliding window FULL (%zu+%zu/%d), waiting for chunk %d "
+          "kernel to complete...",
+          channel_id, win.pending_reqs.size(), win.inflight_recvs.size(),
+          MAX_INFLIGHT_PER_CHANNEL, oldest_idx);
 
       // Block until kernel completes
       cudaError_t cuda_rc = cudaEventSynchronize(oldest_event);
       if (cuda_rc != cudaSuccess) {
-        LOG_ERROR("cudaEventSynchronize failed: %s", cudaGetErrorString(cuda_rc));
+        LOG_ERROR("cudaEventSynchronize failed: %s",
+                  cudaGetErrorString(cuda_rc));
         return false;
       }
 
@@ -391,8 +397,8 @@ bool TcpxTransfer::Impl::waitForCapacity(int channel_id) {
       win.pending_indices.erase(win.pending_indices.begin());
       completed_chunks_++;
 
-      LOG_DEBUG("Channel %d window now has %zu+%zu outstanding",
-                channel_id, win.pending_reqs.size(), win.inflight_recvs.size());
+      LOG_DEBUG("Channel %d window now has %zu+%zu outstanding", channel_id,
+                win.pending_reqs.size(), win.inflight_recvs.size());
       continue;
     }
 
@@ -412,7 +418,7 @@ bool TcpxTransfer::Impl::waitForCapacity(int channel_id) {
 }
 
 bool TcpxTransfer::Impl::waitForSendCapacity(int channel_id) {
-  const int kSleepMicros = 10;
+  int const kSleepMicros = 10;
   auto& queue = send_queues_[channel_id];
 
   while (queue.size() >= kMaxSendInflightPerChannel) {
@@ -440,7 +446,7 @@ bool TcpxTransfer::Impl::progressSendQueue(int channel_id, bool blocking) {
   }
 
   auto& queue = send_queues_[channel_id];
-  const int kSleepMicros = 10;
+  int const kSleepMicros = 10;
 
   while (!queue.empty()) {
     auto& entry = queue.front();
@@ -459,7 +465,8 @@ bool TcpxTransfer::Impl::progressSendQueue(int channel_id, bool blocking) {
     if (rc == 2) {
       if (done == 1) {
         LOG_INFO(
-            "Connection closed by peer after send chunk %d completed on channel %d",
+            "Connection closed by peer after send chunk %d completed on "
+            "channel %d",
             entry.global_idx, channel_id);
       } else {
         LOG_WARN(
@@ -467,8 +474,7 @@ bool TcpxTransfer::Impl::progressSendQueue(int channel_id, bool blocking) {
             "in progress (done=0, will retry)",
             entry.global_idx, channel_id);
         if (blocking) {
-          std::this_thread::sleep_for(
-              std::chrono::microseconds(kSleepMicros));
+          std::this_thread::sleep_for(std::chrono::microseconds(kSleepMicros));
           continue;
         } else {
           break;
@@ -510,14 +516,12 @@ bool TcpxTransfer::Impl::progressSendQueue(int channel_id, bool blocking) {
 // TcpxTransfer - Public API
 // ============================================================================
 
-TcpxTransfer::TcpxTransfer(TcpxSession* session, const std::string& remote_name)
+TcpxTransfer::TcpxTransfer(TcpxSession* session, std::string const& remote_name)
     : impl_(new Impl(session, remote_name)) {
   LOG_INFO("TcpxTransfer created for remote: %s", remote_name.c_str());
 }
 
-TcpxTransfer::~TcpxTransfer() {
-  LOG_INFO("TcpxTransfer destroyed");
-}
+TcpxTransfer::~TcpxTransfer() { LOG_INFO("TcpxTransfer destroyed"); }
 
 int TcpxTransfer::postRecv(uint64_t mem_id, size_t offset, size_t size,
                            int tag) {
@@ -535,7 +539,8 @@ int TcpxTransfer::postRecv(uint64_t mem_id, size_t offset, size_t size,
   impl_->next_channel_ =
       (impl_->next_channel_ + 1) % impl_->session_->getNumChannels();
 
-  auto* mgr = static_cast<ChannelManager*>(impl_->session_->getChannelManager());
+  auto* mgr =
+      static_cast<ChannelManager*>(impl_->session_->getChannelManager());
   auto& ch = mgr->get_channel(ch_id);
   auto& win = impl_->channel_windows_[ch_id];
 
@@ -547,7 +552,8 @@ int TcpxTransfer::postRecv(uint64_t mem_id, size_t offset, size_t size,
   // 4. Get mhandle for this channel
   void* mhandle = mgr->get_mhandle(mem_id, true, ch_id);
   if (!mhandle) {
-    LOG_ERROR("Failed to get mhandle for mem_id=%lu, channel=%d", mem_id, ch_id);
+    LOG_ERROR("Failed to get mhandle for mem_id=%lu, channel=%d", mem_id,
+              ch_id);
     return -1;
   }
 
@@ -578,8 +584,10 @@ int TcpxTransfer::postRecv(uint64_t mem_id, size_t offset, size_t size,
 
   win.inflight_recvs.push_back(chunk);
 
-  LOG_DEBUG("Posted recv: mem_id=%lu, offset=%zu, size=%zu, tag=%d, channel=%d, chunk=%d",
-            mem_id, offset, size, tag, ch_id, global_idx);
+  LOG_DEBUG(
+      "Posted recv: mem_id=%lu, offset=%zu, size=%zu, tag=%d, channel=%d, "
+      "chunk=%d",
+      mem_id, offset, size, tag, ch_id, global_idx);
 
   // Opportunistically progress current channel (non-blocking)
   if (!impl_->processInflightRecv(ch_id, /*blocking=*/false)) {
@@ -620,7 +628,8 @@ int TcpxTransfer::postSend(uint64_t mem_id, size_t offset, size_t size,
   impl_->next_channel_ =
       (impl_->next_channel_ + 1) % impl_->session_->getNumChannels();
 
-  auto* mgr = static_cast<ChannelManager*>(impl_->session_->getChannelManager());
+  auto* mgr =
+      static_cast<ChannelManager*>(impl_->session_->getChannelManager());
   auto& ch = mgr->get_channel(ch_id);
 
   // 3. Wait for send capacity
@@ -631,7 +640,8 @@ int TcpxTransfer::postSend(uint64_t mem_id, size_t offset, size_t size,
   // 3. Get mhandle for this channel
   void* mhandle = mgr->get_mhandle(mem_id, false, ch_id);
   if (!mhandle) {
-    LOG_ERROR("Failed to get mhandle for mem_id=%lu, channel=%d", mem_id, ch_id);
+    LOG_ERROR("Failed to get mhandle for mem_id=%lu, channel=%d", mem_id,
+              ch_id);
     return -1;
   }
 
@@ -639,7 +649,8 @@ int TcpxTransfer::postSend(uint64_t mem_id, size_t offset, size_t size,
   void* request = nullptr;
   void* src_ptr = (char*)mem->buffer + offset;
 
-  if (tcpx_isend(ch.send_comm, src_ptr, (int)size, tag, mhandle, &request) != 0) {
+  if (tcpx_isend(ch.send_comm, src_ptr, (int)size, tag, mhandle, &request) !=
+      0) {
     LOG_ERROR("tcpx_isend failed");
     return -1;
   }
@@ -656,8 +667,10 @@ int TcpxTransfer::postSend(uint64_t mem_id, size_t offset, size_t size,
     impl_->send_inflight_count_[ch_id]++;
   }
 
-  LOG_DEBUG("Posted send: mem_id=%lu, offset=%zu, size=%zu, tag=%d, channel=%d, chunk=%d",
-            mem_id, offset, size, tag, ch_id, global_idx);
+  LOG_DEBUG(
+      "Posted send: mem_id=%lu, offset=%zu, size=%zu, tag=%d, channel=%d, "
+      "chunk=%d",
+      mem_id, offset, size, tag, ch_id, global_idx);
 
   // Opportunistically progress send window
   if (!impl_->progressSendWindow(ch_id)) {
@@ -694,7 +707,7 @@ bool TcpxTransfer::isComplete() {
 
 int TcpxTransfer::wait() {
   // Block until complete
-  const int kSleepMicros = 100;
+  int const kSleepMicros = 100;
   while (!isComplete()) {
     if (impl_->error_) {
       return -1;
@@ -718,7 +731,8 @@ int TcpxTransfer::release() {
   // This is a no-op for NIXL plugin compatibility.
   // NIXL expects a releaseReqH() method to clean up request handles.
 
-  LOG_DEBUG("TcpxTransfer::release() called (no-op, resources already released)");
+  LOG_DEBUG(
+      "TcpxTransfer::release() called (no-op, resources already released)");
   return 0;
 }
 
