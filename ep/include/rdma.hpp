@@ -26,10 +26,10 @@ struct RDMAConnectionInfo {
   uint16_t lid;     // Local ID
   uint8_t gid[16];  // Global ID for RoCE (optional)
 
-#ifdef EFA
+  // #ifdef EFA
   uint32_t num_rings;
   uint32_t data_qp_num[kRingsPerProxy];
-#endif
+  // #endif
 };
 
 struct PendingUpdate {
@@ -341,5 +341,6 @@ void apply_pending_updates(ProxyCtx& ctx,
                            std::set<PendingUpdate>& pending_atomic_updates,
                            void* atomic_buffer_ptr, int num_experts,
                            int num_ranks);
+int poll_cq_once(ibv_cq* cq, ibv_wc* wc, int max_cqes);
 
 #endif  // RDMA_HPP
