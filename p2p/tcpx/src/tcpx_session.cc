@@ -11,6 +11,7 @@
 #include "channel_manager.h"
 #include "tcpx_helpers.h"
 #include "tcpx_logging.h"
+#include "tcpx_transfer.h"
 #include "device/unpack_launch.h"
 
 #include <cuda.h>
@@ -224,6 +225,11 @@ int TcpxSession::accept(const std::string& remote_name) {
   }
 
   impl_->remote_accepted_[remote_name] = true;
+
+  // Add remote to handles map so createTransfer() can find it
+  // Server doesn't need actual handles (already has accept comms)
+  impl_->remote_handles_[remote_name] = std::vector<ncclNetHandle_v7>();
+
   LOG_INFO("Accepted connection from %s", remote_name.c_str());
 
   return 0;
@@ -407,10 +413,10 @@ TcpxTransfer* TcpxSession::createTransfer(const std::string& remote_name) {
     return nullptr;
   }
 
-  // TcpxTransfer will be implemented in Task 1.3
-  // For now, return nullptr
-  LOG_ERROR("TcpxTransfer not yet implemented (Task 1.3)");
-  return nullptr;
+  // Create transfer object
+  TcpxTransfer* transfer = new TcpxTransfer(this, remote_name);
+  LOG_INFO("Created transfer for remote: %s", remote_name.c_str());
+  return transfer;
 }
 
 // ============================================================================
@@ -420,6 +426,12 @@ TcpxTransfer* TcpxSession::createTransfer(const std::string& remote_name) {
 int TcpxSession::getNumChannels() const { return impl_->num_channels_; }
 
 int TcpxSession::getGpuId() const { return impl_->gpu_id_; }
+
+void* TcpxSession::getChannelManager() { return impl_->mgr_; }
+
+void* TcpxSession::getUnpackLauncher() { return impl_->launcher_; }
+
+void* TcpxSession::getUnpackStream() { return impl_->unpack_stream_; }
 
 }  // namespace tcpx
 

@@ -211,6 +211,11 @@ class TcpxSession {
    */
   int getGpuId() const;
 
+  // Internal accessors (for TcpxTransfer implementation)
+  void* getChannelManager();  // Returns ChannelManager*
+  void* getUnpackLauncher();  // Returns tcpx::device::UnpackLauncher*
+  void* getUnpackStream();    // Returns cudaStream_t
+
  private:
   struct Impl;  // PIMPL pattern to hide implementation details
   std::unique_ptr<Impl> impl_;
