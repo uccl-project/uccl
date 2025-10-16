@@ -229,9 +229,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     world_size = int(os.getenv('WORLD_SIZE', 1))
     local_world_size = int(os.getenv('LOCAL_WORLD_SIZE', 1))
     num_nodes = max(1, world_size // local_world_size)
-    print("Before init_dist")
     rank, num_ranks, group = init_dist_under_torchrun(local_rank, num_local_ranks)
-    print("After init_dist")
     if args.test_ll_compatibility:
         ll_num_tokens, ll_hidden, ll_num_experts, ll_num_topk = 16, 5120, 256, 9
 
