@@ -1,0 +1,74 @@
+# Makefile for Rail-Optimized Multi-NIC EFA All-to-All RDMA Test with GPU Memory
+
+CXX = g++
+CXXFLAGS = -std=c++17 -O3 -Wall -Wextra -march=native -pthread
+
+# CUDA configuration
+CUDA_HOME ?= /usr/local/cuda
+CUDA_INCLUDE = -I$(CUDA_HOME)/include
+CUDA_LDFLAGS = -L$(CUDA_HOME)/lib64 -lcudart
+
+# RDMA/EFA libraries
+RDMA_LDFLAGS = -libverbs -lefa
+
+# Combined flags
+INCLUDES = $(CUDA_INCLUDE)
+LDFLAGS = $(CUDA_LDFLAGS) $(RDMA_LDFLAGS)
+
+# Target
+TARGET = test_alltoall_rail
+
+# Source file
+SRC = test_alltoall_rail.cpp
+
+.PHONY: all clean run
+
+all: $(TARGET)
+
+$(TARGET): $(SRC)
+	@echo "Compiling $@..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $< $(LDFLAGS)
+	@echo "Build complete: $@"
+
+clean:
+	@echo "Cleaning build artifacts..."
+	rm -f $(TARGET)
+	@echo "Clean complete"
+
+# Example run targets (requires 2+ nodes)
+# Usage: make run-node0 NODE_IPS="10.1.1.1,10.1.1.2,10.1.1.3"
+# Usage: make run-node1 NODE_IPS="10.1.1.1,10.1.1.2,10.1.1.3"
+# Usage: make run-node2 NODE_IPS="10.1.1.1,10.1.1.2,10.1.1.3"
+run-node0: $(TARGET)
+	@if [ -z "$(NODE_IPS)" ]; then \
+		echo "Error: NODE_IPS not set. Usage: make run-node0 NODE_IPS=\"ip1,ip2,ip3\""; \
+		exit 1; \
+	fi
+	./$(TARGET) 0 $(NODE_IPS)
+
+run-node1: $(TARGET)
+	@if [ -z "$(NODE_IPS)" ]; then \
+		echo "Error: NODE_IPS not set. Usage: make run-node1 NODE_IPS=\"ip1,ip2,ip3\""; \
+		exit 1; \
+	fi
+	./$(TARGET) 1 $(NODE_IPS)
+
+run-node2: $(TARGET)
+	@if [ -z "$(NODE_IPS)" ]; then \
+		echo "Error: NODE_IPS not set. Usage: make run-node2 NODE_IPS=\"ip1,ip2,ip3\""; \
+		exit 1; \
+	fi
+	./$(TARGET) 2 $(NODE_IPS)
+
+# Show info about rail-optimized mode
+info:
+	@echo "=== Rail-Optimized All-to-All ==="
+	@echo "Each GPU only communicates with same GPU ID on other nodes"
+	@echo "Example: GPU0 on node0 <-> GPU0 on node1 <-> GPU0 on node2"
+	@echo "         GPU1 on node0 <-> GPU1 on node1 <-> GPU1 on node2"
+	@echo "         etc. No cross-rail traffic!"
+	@echo ""
+	@echo "Usage:"
+	@echo "  make               # Build the binary"
+	@echo "  make clean         # Clean build artifacts"
+	@echo "  make run-nodeN NODE_IPS=\"ip1,ip2,...\"  # Run on node N"

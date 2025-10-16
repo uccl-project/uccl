@@ -1,12 +1,12 @@
 name: UCCL-EP Low Latency Test
 
-on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+# on:
+#   push:
+#     branches:
+#       - main
+#   pull_request:
+#     branches:
+#       - main
 
 concurrency:
   group: ep-test
