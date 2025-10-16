@@ -416,8 +416,10 @@ def test_main(
 
     # Tune combine performance
     best_time, best_results = 1e10, None
-    for nvl_chunk_size in range(1, 8, 1):
-        for rdma_chunk_size in range(12 if num_nodes == 2 else 8, 33, 4):
+    # for nvl_chunk_size in range(1, 8, 1):
+    for nvl_chunk_size in range(4, 45, 4):
+        # for rdma_chunk_size in range(12 if num_nodes == 2 else 8, 33, 4):
+        for rdma_chunk_size in range(8, 33, 4):
             config = Config(
                 num_sms,
                 nvl_chunk_size,
@@ -526,10 +528,6 @@ if __name__ == "__main__":
             "To fix this, run the following before rebuilding:\n"
             "export MAKE_NORMAL_MODE=1 && make clean && make -j install\n"
         )
-    # ib_dev = detect_ib_hca()
-    # if ib_dev and ib_dev.startswith("mlx"):  # Mellanox IB devices show up like mlx5_0
-    #     os.environ["NCCL_IB_HCA"] = ib_dev
-    #     print(f"Set NCCL_IB_HCA={ib_dev}")
     parser = argparse.ArgumentParser(description="Test internode EP kernels")
     parser.add_argument(
         "--num-processes",
