@@ -425,16 +425,18 @@ int main(int argc, char** argv) {
     // Step 7: register memory to all channels (shared)
     // ==========================================================================
 
-    if (mgr.register_memory(recv_buf, kRegisteredBytes, NCCL_PTR_CUDA, true) !=
-        0) {
+    // Register memory with mem_id = 1 for recv buffer
+    uint64_t recv_mem_id = 1;
+    if (mgr.register_memory(recv_mem_id, recv_buf, kRegisteredBytes,
+                            NCCL_PTR_CUDA, true) != 0) {
       std::cerr << "[ERROR] register_memory failed" << std::endl;
       cuMemFree(d_base);
       close(bootstrap_fd);
       return 1;
     }
 
-    std::cout << "[PERF] Registered recv buffer with " << num_channels
-              << " channels" << std::endl;
+    std::cout << "[PERF] Registered recv buffer (mem_id=" << recv_mem_id
+              << ") with " << num_channels << " channels" << std::endl;
     // Progress engine (recv): always test FIFO head
     // - rc!=0 means real error; done=0 means not finished
     // - When done=1: read unpack metadata, launch GPU kernel, then track
@@ -449,7 +451,7 @@ int main(int argc, char** argv) {
     cudaStream_t unpack_stream = nullptr;
     if (!cuda_check(cudaStreamCreate(&unpack_stream), "cudaStreamCreate")) {
       cuMemFree(d_base);
-      mgr.deregister_memory(true);
+      mgr.deregister_memory(recv_mem_id, true);
       mgr.close_all(true);
       close(bootstrap_fd);
       return 1;
@@ -772,7 +774,8 @@ int main(int argc, char** argv) {
         void* recv_data[1] = {dst_ptr};
         int recv_sizes[1] = {static_cast<int>(this_chunk)};
         int recv_tags[1] = {tag};
-        void* recv_mhandles[1] = {ch.mhandle};
+        void* recv_mhandle = mgr.get_mhandle(recv_mem_id, true, channel_id);
+        void* recv_mhandles[1] = {recv_mhandle};
         void* recv_request = nullptr;
 
         std::cout << "[DEBUG][SERVER] Calling tcpx_irecv for chunk "
@@ -969,7 +972,7 @@ int main(int argc, char** argv) {
     }
 
     // Release TCPX/CUDA resources
-    mgr.deregister_memory(true);
+    mgr.deregister_memory(recv_mem_id, true);
     cuMemFree(d_base);
     cuDevicePrimaryCtxRelease(cuDev);
     mgr.close_all(true);
@@ -1059,8 +1062,9 @@ int main(int argc, char** argv) {
     // Step 4: register send buffer to all channels (shared)
     // ==========================================================================
 
-    if (mgr.register_memory(send_buf, kRegisteredBytes, NCCL_PTR_CUDA, false) !=
-        0) {
+    uint64_t send_mem_id = 2;
+    if (mgr.register_memory(send_mem_id, send_buf, kRegisteredBytes,
+                            NCCL_PTR_CUDA, false) != 0) {
       std::cerr << "[ERROR] register_memory failed" << std::endl;
       cuMemFree(d_base);
       close(bootstrap_fd);
@@ -1190,8 +1194,9 @@ int main(int argc, char** argv) {
                   << std::endl;
 
         void* send_request = nullptr;
+        void* send_mhandle = mgr.get_mhandle(send_mem_id, false, channel_id);
         if (tcpx_isend(ch.send_comm, src_ptr, static_cast<int>(this_chunk), tag,
-                       ch.mhandle, &send_request) != 0) {
+                       send_mhandle, &send_request) != 0) {
           std::cerr << "[ERROR] tcpx_isend failed (chunk " << global_chunk_idx
                     << " channel " << channel_id << ")" << std::endl;
           break;
@@ -1273,7 +1278,7 @@ int main(int argc, char** argv) {
     // Cleanup resources
     // ==========================================================================
 
-    mgr.deregister_memory(false);
+    mgr.deregister_memory(send_mem_id, false);
     cuMemFree(d_base);
     cuDevicePrimaryCtxRelease(cuDev);
     mgr.close_all(false);

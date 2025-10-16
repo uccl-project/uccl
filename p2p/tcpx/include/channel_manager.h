@@ -8,7 +8,9 @@
 #include "tcpx_handles.h"
 #include "tcpx_interface.h"
 #include <array>
+#include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <cuda.h>
 
@@ -28,7 +30,12 @@ struct ChannelResources {
   void* recv_dev_handle;
   void* send_dev_handle;
 
-  void* mhandle;
+  // Multi-memory registration support
+  // Maps mem_id -> mhandle for recv buffers
+  std::unordered_map<uint64_t, void*> recv_mhandles;
+  // Maps mem_id -> mhandle for send buffers
+  std::unordered_map<uint64_t, void*> send_mhandles;
+
   SlidingWindow* sliding_window;
 
   uint64_t bytes_transferred;
@@ -51,9 +58,11 @@ class ChannelManager {
   // Client-side
   int client_connect_all(std::vector<ncclNetHandle_v7> const& handles);
 
-  // Memory management
-  int register_memory(void* buffer, size_t size, int ptr_type, bool is_recv);
-  int deregister_memory(bool is_recv);
+  // Memory management (multi-registration support)
+  int register_memory(uint64_t mem_id, void* buffer, size_t size, int ptr_type,
+                      bool is_recv);
+  int deregister_memory(uint64_t mem_id, bool is_recv);
+  void* get_mhandle(uint64_t mem_id, bool is_recv, int channel_id);
   void close_all(bool is_recv);
 
  private:

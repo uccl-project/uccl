@@ -14,11 +14,11 @@ CUDA_LIBS  := -L$(CUDA_HOME)/lib64 -lcuda -lcudart
 # Source files
 # Note: rx_descriptor.h is now header-only, no .cc files needed
 DEVICE_SRCS := device/unpack_kernels.cu device/unpack_launch.cu
-CORE_SRCS   := src/bootstrap.cc src/channel_manager.cc src/sliding_window.cc src/tcpx_helpers.cc
+CORE_SRCS   := src/bootstrap.cc src/channel_manager.cc src/sliding_window.cc src/tcpx_helpers.cc src/tcpx_session.cc
 
 # Object files
 DEVICE_OBJS := device/unpack_kernels.o device/unpack_launch.o
-CORE_OBJS   := src/bootstrap.o src/channel_manager.o src/sliding_window.o src/tcpx_helpers.o
+CORE_OBJS   := src/bootstrap.o src/channel_manager.o src/sliding_window.o src/tcpx_helpers.o src/tcpx_session.o
 
 # Build object files
 %.o: %.cc

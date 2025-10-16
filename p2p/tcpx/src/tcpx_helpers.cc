@@ -33,7 +33,6 @@
 #include "tcpx_logging.h"
 #include "tcpx_interface.h"  // For tcpx_irecv_consumed
 #include <cuda_runtime.h>
-#include <iostream>
 
 namespace tcpx {
 
