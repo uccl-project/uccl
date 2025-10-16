@@ -2266,7 +2266,6 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                                          hidden_bytes + sizeof(SourceMeta)) +
                 topk_idx);
           };
-          // __prof_trigger(0);
           combine_token<NUM_MAX_NVL_PEERS, false, dtype_t, NUM_MAX_NVL_PEERS,
                         true, kNumStages, kNumTMALoadBytes>(
               expected_head >= 0, expected_head, lane_id, hidden_int4, num_topk,
@@ -2275,7 +2274,6 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                                        hidden_bytes + sizeof(SourceMeta)),
               nullptr, nullptr, num_max_nvl_chunked_recv_tokens_per_rdma,
               get_addr_fn, recv_tw_fn, smem_ptr, tma_phase);
-          // __prof_trigger(1);
           // Update head
           if (lane_id < NUM_MAX_NVL_PEERS)
             expected_head < 0
@@ -2439,7 +2437,9 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
             if (not rdma_receiver_retired[i])
               min_head =
                   min(min_head, rdma_receiver_rdma_head[i][dst_rdma_rank]);
-            if (min_head != std::numeric_limits<int>::max() and min_head >= last_rdma_head + num_max_rdma_chunked_send_tokens and lane_id < kNumRDMARanks) {
+          if (min_head != std::numeric_limits<int>::max() and
+              min_head >= last_rdma_head + num_max_rdma_chunked_send_tokens and
+              lane_id < kNumRDMARanks) {
             uccl::nvshmemi_ibgda_amo_nonfetch_add(
                 reinterpret_cast<uint64_t>(rdma_channel_head.buffer(rdma_rank)),
                 reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
@@ -2494,6 +2494,7 @@ void combine(cudaDataType_t type, void* combined_x,
              cudaStream_t stream, int num_channels, bool low_latency_mode,
              uint64_t const* ring_addrs, int num_ring_addrs,
              void* atomic_buffer_ptr) {
+  // NOTE(MaoZiming): I changed here from 24 to 16.
   constexpr int kNumCombineForwarderWarps = 16;
   constexpr int kNumTMABytesPerSenderWarp = 16384;
   constexpr int kNumTMABytesPerForwarderWarp = 9248;
