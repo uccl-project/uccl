@@ -2196,7 +2196,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
           // num_chunked_tokens` Here, `token_start_idx` is the actual tail
           int num_used_slots =
               token_start_idx -
-              ld_acquire_sys_u64(rdma_channel_head.buffer(dst_rdma_rank));
+              ld_volatile_global(rdma_channel_head.buffer(dst_rdma_rank));
           if (num_max_rdma_chunked_recv_tokens - num_used_slots >=
               num_chunked_tokens)
             break;
@@ -2208,14 +2208,13 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                 "RDMA: %d, nvl: %d, dst RDMA: %d, head: %ld, tail: %d, "
                 "chunked: %d\n",
                 channel_id, rdma_rank, nvl_rank, dst_rdma_rank,
-                ld_acquire_sys_u64(rdma_channel_head.buffer(dst_rdma_rank)),
+                ld_volatile_global(rdma_channel_head.buffer(dst_rdma_rank)),
                 token_start_idx, num_chunked_tokens);
             trap();
           }
         }
         sync_large_warp();
         unsigned long long rdma_wait_end = clock64();
-
         // Combine and write to the RDMA buffer
         for (int token_idx = token_start_idx + sub_warp_id;
              token_idx < token_end_idx; token_idx += kNumWarpsPerForwarder) {
@@ -2234,7 +2233,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
           start_time = clock64();
           while (cached_nvl_channel_tail_idx <= expected_head) {
             cached_nvl_channel_tail_idx =
-                ld_acquire_global(nvl_channel_tail.buffer(lane_id));
+                ld_acquire_sys_global(nvl_channel_tail.buffer(lane_id));
 
             // Timeout check
             if (clock64() - start_time > NUM_TIMEOUT_CYCLES and
@@ -2267,6 +2266,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                                          hidden_bytes + sizeof(SourceMeta)) +
                 topk_idx);
           };
+          // __prof_trigger(0);
           combine_token<NUM_MAX_NVL_PEERS, false, dtype_t, NUM_MAX_NVL_PEERS,
                         true, kNumStages, kNumTMALoadBytes>(
               expected_head >= 0, expected_head, lane_id, hidden_int4, num_topk,
@@ -2275,7 +2275,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                                        hidden_bytes + sizeof(SourceMeta)),
               nullptr, nullptr, num_max_nvl_chunked_recv_tokens_per_rdma,
               get_addr_fn, recv_tw_fn, smem_ptr, tma_phase);
-
+          // __prof_trigger(1);
           // Update head
           if (lane_id < NUM_MAX_NVL_PEERS)
             expected_head < 0
@@ -2327,7 +2327,6 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
           }
         }
       }
-
       // Retired
       __syncwarp();
       if (lane_id == 0) forwarder_retired[warp_id] = true;
@@ -2364,7 +2363,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
         auto start_time = clock64();
         while (cached_channel_tail_idx <= expected_head) {
           cached_channel_tail_idx = static_cast<int>(
-              ld_sys_cv_u64(rdma_channel_tail.buffer(lane_id)));
+              ld_acquire_sys_global(rdma_channel_tail.buffer(lane_id)));
 
           // Timeout check
           if (clock64() - start_time > NUM_TIMEOUT_CYCLES) {
@@ -2440,11 +2439,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
             if (not rdma_receiver_retired[i])
               min_head =
                   min(min_head, rdma_receiver_rdma_head[i][dst_rdma_rank]);
-          int const kHeadUpdateQuantum =
-              max(1, num_max_rdma_chunked_send_tokens >> 1);
-          if (min_head != std::numeric_limits<int>::max() and
-              min_head >= last_rdma_head + kHeadUpdateQuantum and
-              lane_id < kNumRDMARanks) {
+            if (min_head != std::numeric_limits<int>::max() and min_head >= last_rdma_head + num_max_rdma_chunked_send_tokens and lane_id < kNumRDMARanks) {
             uccl::nvshmemi_ibgda_amo_nonfetch_add(
                 reinterpret_cast<uint64_t>(rdma_channel_head.buffer(rdma_rank)),
                 reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
