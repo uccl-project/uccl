@@ -28,7 +28,7 @@
 #define kAtomicBufferSize 81960
 #define kQueueSize 1024
 #define kQueueMask (kQueueSize - 1)
-#define kMaxInflight 32
+#define kMaxInflight 128
 #define kBatchSize 32
 #define kIterations 40000
 #define kNumThBlocks 4

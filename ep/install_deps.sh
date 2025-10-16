@@ -1,6 +1,10 @@
 #!/bin/bash
 set -e
 
+sudo apt install -y nvtop
+sudo apt install -y libgoogle-glog-dev
+sudo apt install -y clang-format-14
+
 CONDA_ENV_NAME="${1}"
 if [ -z "$CONDA_ENV_NAME" ]; then
     echo "Please provide the conda environment name as the first argument, e.g., bash install_deps.sh myenv"
@@ -17,6 +21,9 @@ fi
 echo "Activating conda environment: $CONDA_ENV_NAME"
 eval "$(conda shell.bash hook)"
 conda activate $CONDA_ENV_NAME
+
+conda install -c conda-forge libstdcxx-ng
+pip install black
 
 # Check if pip is installed in the environment
 if ! command -v pip3 &> /dev/null; then
