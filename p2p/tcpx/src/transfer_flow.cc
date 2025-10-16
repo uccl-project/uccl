@@ -1,5 +1,5 @@
 /**
- * @file tcpx_helpers.cc
+ * @file transfer_flow.cc
  * @brief Helper functions for TCPX plugin API
  *
  * This file contains helper functions extracted from test_tcpx_perf_multi.cc
@@ -29,7 +29,7 @@
  * - Application-specific logic in higher layers (TcpxTransfer)
  */
 
-#include "tcpx_helpers.h"
+#include "transfer_flow.h"
 #include "tcpx_logging.h"
 #include "tcpx_interface.h"  // For tcpx_irecv_consumed
 #include <cuda_runtime.h>
@@ -228,4 +228,3 @@ int getAvailableSlots(const ChannelWindow& win) {
 }
 
 }  // namespace tcpx
-

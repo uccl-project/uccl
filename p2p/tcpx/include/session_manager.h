@@ -1,5 +1,5 @@
 /**
- * @file tcpx_session.h
+ * @file session_manager.h
  * @brief TCPX Session Management API
  *
  * This file defines the TcpxSession class, which manages connections to remote
@@ -225,4 +225,3 @@ class TcpxSession {
 };
 
 }  // namespace tcpx
-

@@ -1,12 +1,12 @@
 /**
- * @file tcpx_transfer.cc
+ * @file transfer_manager.cc
  * @brief Implementation of TcpxTransfer class
  *
  * This file implements the TCPX transfer logic, faithfully following the
  * validated implementation from test_tcpx_perf_multi.cc (lines 523-705).
  */
 
-#include "tcpx_transfer.h"
+#include "transfer_manager.h"
 
 #include <chrono>
 #include <stdexcept>
@@ -18,12 +18,10 @@
 #include <cuda_runtime.h>
 
 #include "channel_manager.h"
-#include "rx_descriptor.h"
-#include "tcpx_helpers.h"
+#include "unpack_descriptor.h"
 #include "tcpx_logging.h"
-#include "tcpx_session.h"
-#include "tcpx_structs.h"
-#include "tcpx_types.h"
+#include "session_manager.h"
+#include "transfer_flow.h"
 #include "device/unpack_launch.h"
 
 // TCPX plugin API (already declared in tcpx_interface.h)

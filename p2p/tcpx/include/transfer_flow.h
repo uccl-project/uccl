@@ -1,5 +1,5 @@
 /**
- * @file tcpx_types.h
+ * @file transfer_flow.h
  * @brief Core types and constants for TCPX plugin API
  *
  * This file contains the fundamental data structures and constants used
@@ -76,5 +76,16 @@ struct ChannelWindow {
   std::deque<PostedChunk> inflight_recvs;  ///< Posted but not yet unpacked
 };
 
-}  // namespace tcpx
+// ============================================================================
+// Helper Function Declarations (Stage 2 pipeline utilities)
+// ============================================================================
 
+bool initChannelEvents(std::vector<ChannelWindow>& windows, int num_channels);
+void destroyChannelEvents(std::vector<ChannelWindow>& windows);
+bool drainCompletedKernels(ChannelWindow& win, void* recv_comm,
+                           int& completed_chunks);
+bool waitForPendingKernel(ChannelWindow& win, void* recv_comm);
+bool hasCapacity(const ChannelWindow& win);
+int getAvailableSlots(const ChannelWindow& win);
+
+}  // namespace tcpx

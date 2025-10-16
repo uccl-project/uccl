@@ -18,8 +18,8 @@
 #include <unistd.h>
 
 #include "../include/bootstrap.h"
-#include "../include/tcpx_session.h"
-#include "../include/tcpx_transfer.h"
+#include "../include/session_manager.h"
+#include "../include/transfer_manager.h"
 #include "../include/tcpx_interface.h"
 
 namespace tcpx {
@@ -472,4 +472,3 @@ void PerfRunner::cleanup() {
 }
 
 }  // namespace tcpx
-

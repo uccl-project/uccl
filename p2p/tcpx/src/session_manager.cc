@@ -1,17 +1,16 @@
 /**
- * @file tcpx_session.cc
+ * @file session_manager.cc
  * @brief TCPX Session Management Implementation
  *
  * This file implements the TcpxSession class based on the handshake flow
  * from test_tcpx_perf_multi.cc (lines 327-437 for server, client path similar).
  */
 
-#include "tcpx_session.h"
+#include "session_manager.h"
 
 #include "channel_manager.h"
-#include "tcpx_helpers.h"
 #include "tcpx_logging.h"
-#include "tcpx_transfer.h"
+#include "transfer_manager.h"
 #include "device/unpack_launch.h"
 
 #include <cuda.h>
@@ -434,5 +433,3 @@ void* TcpxSession::getUnpackLauncher() { return impl_->launcher_; }
 void* TcpxSession::getUnpackStream() { return impl_->unpack_stream_; }
 
 }  // namespace tcpx
-
-

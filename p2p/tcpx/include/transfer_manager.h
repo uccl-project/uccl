@@ -1,5 +1,5 @@
 /**
- * @file tcpx_transfer.h
+ * @file transfer_manager.h
  * @brief TCPX Transfer Management API
  *
  * This file defines the TcpxTransfer class, which manages data transfers
@@ -172,4 +172,3 @@ class TcpxTransfer {
 };
 
 }  // namespace tcpx
-
