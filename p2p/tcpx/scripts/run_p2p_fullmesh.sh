@@ -23,7 +23,6 @@ Environment overrides:
   UCCL_TCPX_PERF_SIZE            Bytes per iteration (default: 67108864)
   UCCL_TCPX_PERF_ITERS           Iterations (default: 20)
   UCCL_TCPX_CHUNK_BYTES          Chunk size (default: 524288)
-  UCCL_TCPX_UNPACK_IMPL          Unpack implementation: kernel|d2d|host|none(default: kernel)
   LOG_DIR                        Output log directory (default: p2p/tcpx/logs)
 
 Examples:
@@ -79,8 +78,7 @@ PERF_SIZE=${UCCL_TCPX_PERF_SIZE:-67108864}
 PERF_ITERS=${UCCL_TCPX_PERF_ITERS:-20}
 CHUNK_BYTES=${UCCL_TCPX_CHUNK_BYTES:-524288}
 CHANNELS=${UCCL_TCPX_NUM_CHANNELS:-2}  # 2 channels per GPU (recommended)
-UNPACK_IMPL=${UCCL_TCPX_UNPACK_IMPL:-kernel}  # kernel|d2d|host|none
-LOG_DIR=${LOG_DIR:-"$(dirname "$0")/logs"}
+LOG_DIR=${LOG_DIR:-"$(dirname "$0")/../logs"}
 mkdir -p "${LOG_DIR}"
 
 map_gpu_to_ifaces() {
@@ -139,12 +137,16 @@ run_instance() {
     export UCCL_TCPX_PERF_SIZE="${PERF_SIZE}"
     export UCCL_TCPX_PERF_ITERS="${PERF_ITERS}"
     export UCCL_TCPX_CHUNK_BYTES="${CHUNK_BYTES}"
-    export UCCL_TCPX_UNPACK_IMPL="${UNPACK_IMPL}"
+
+    # Get script directory and navigate to project root
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local project_root="${script_dir}/.."
 
     if [[ "${role}" == "server" ]]; then
-      exec ./tests/test_tcpx_perf_multi server "${gpu}"
+      exec "${project_root}/tests/test_tcpx_perf_multi" server "${gpu}"
     else
-      exec ./tests/test_tcpx_perf_multi client "${SERVER_IP}" "${gpu}"
+      exec "${project_root}/tests/test_tcpx_perf_multi" client "${SERVER_IP}" "${gpu}"
     fi
   ) &>"${log_file}" &
 }

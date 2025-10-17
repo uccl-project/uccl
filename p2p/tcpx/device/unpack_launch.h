@@ -6,7 +6,7 @@
 #ifndef TCPX_DEVICE_UNPACK_LAUNCH_H_
 #define TCPX_DEVICE_UNPACK_LAUNCH_H_
 
-#include "../include/rx_descriptor.h"
+#include "../include/unpack_descriptor.h"
 #include <cuda_runtime.h>
 
 namespace tcpx {

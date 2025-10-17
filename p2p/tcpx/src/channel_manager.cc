@@ -4,7 +4,6 @@
  */
 
 #include "channel_manager.h"
-#include "sliding_window.h"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -332,8 +331,10 @@ ChannelManager::ChannelManager(int num_channels, int gpu_id)
     std::memset(ch.send_dev_handle_storage.data(), 0,
                 ch.send_dev_handle_storage.size());
 
-    ch.mhandle = nullptr;
-    ch.sliding_window = new SlidingWindow(16);
+    // Multi-memory registration maps (empty initially)
+    ch.recv_mhandles.clear();
+    ch.send_mhandles.clear();
+
     ch.bytes_transferred = 0;
     ch.chunks_processed = 0;
   }
@@ -345,12 +346,7 @@ ChannelManager::ChannelManager(int num_channels, int gpu_id)
 }
 
 ChannelManager::~ChannelManager() {
-  for (auto& ch : channels_) {
-    if (ch.sliding_window) {
-      delete ch.sliding_window;
-      ch.sliding_window = nullptr;
-    }
-  }
+  // Nothing to clean up per-channel beyond sockets/memory (handled elsewhere)
 }
 
 ChannelResources& ChannelManager::get_channel(int idx) {
@@ -503,13 +499,14 @@ int ChannelManager::client_connect_all(
   return 0;
 }
 
-int ChannelManager::register_memory(void* buffer, size_t size, int ptr_type,
-                                    bool is_recv) {
+int ChannelManager::register_memory(uint64_t mem_id, void* buffer, size_t size,
+                                    int ptr_type, bool is_recv) {
   char const* type_str = (ptr_type == NCCL_PTR_CUDA) ? "CUDA" : "HOST";
   char const* role_str = is_recv ? "recv" : "send";
 
   std::cout << "[ChannelManager] Registering " << type_str << " memory for "
-            << role_str << ": ptr=" << buffer << ", size=" << size << std::endl;
+            << role_str << ": mem_id=" << mem_id << ", ptr=" << buffer
+            << ", size=" << size << std::endl;
 
   for (int i = 0; i < num_channels_; i++) {
     ChannelResources& ch = channels_[i];
@@ -521,34 +518,68 @@ int ChannelManager::register_memory(void* buffer, size_t size, int ptr_type,
       return -1;
     }
 
-    if (tcpx_reg_mr(comm, buffer, size, ptr_type, &ch.mhandle) != 0) {
+    void* mhandle = nullptr;
+    if (tcpx_reg_mr(comm, buffer, size, ptr_type, &mhandle) != 0) {
       std::cerr << "[ChannelManager] tcpx_reg_mr failed for channel "
                 << ch.channel_id << std::endl;
       return -1;
     }
 
+    // Store mhandle in the appropriate map
+    if (is_recv) {
+      ch.recv_mhandles[mem_id] = mhandle;
+    } else {
+      ch.send_mhandles[mem_id] = mhandle;
+    }
+
     std::cout << "[ChannelManager] Channel " << ch.channel_id
-              << ": Memory registered, mhandle=" << ch.mhandle << std::endl;
+              << ": Memory registered, mem_id=" << mem_id
+              << ", mhandle=" << mhandle << std::endl;
   }
 
   std::cout << "[ChannelManager] All " << num_channels_
-            << " channels registered memory successfully" << std::endl;
+            << " channels registered mem_id=" << mem_id << " successfully"
+            << std::endl;
   return 0;
 }
 
-int ChannelManager::deregister_memory(bool is_recv) {
+int ChannelManager::deregister_memory(uint64_t mem_id, bool is_recv) {
+  char const* role_str = is_recv ? "recv" : "send";
+
   for (int i = 0; i < num_channels_; i++) {
     ChannelResources& ch = channels_[i];
     void* comm = is_recv ? ch.recv_comm : ch.send_comm;
 
-    if (comm && ch.mhandle) {
-      tcpx_dereg_mr(comm, ch.mhandle);
-      ch.mhandle = nullptr;
+    auto& mhandle_map = is_recv ? ch.recv_mhandles : ch.send_mhandles;
+    auto it = mhandle_map.find(mem_id);
+
+    if (it != mhandle_map.end()) {
+      if (comm && it->second) {
+        tcpx_dereg_mr(comm, it->second);
+        std::cout << "[ChannelManager] Channel " << ch.channel_id
+                  << ": Deregistered mem_id=" << mem_id
+                  << ", mhandle=" << it->second << std::endl;
+      }
+      mhandle_map.erase(it);
     }
   }
 
-  std::cout << "[ChannelManager] All channels deregistered memory" << std::endl;
+  std::cout << "[ChannelManager] Deregistered mem_id=" << mem_id << " for "
+            << role_str << std::endl;
   return 0;
+}
+
+void* ChannelManager::get_mhandle(uint64_t mem_id, bool is_recv,
+                                  int channel_id) {
+  if (channel_id < 0 || channel_id >= num_channels_) {
+    return nullptr;
+  }
+
+  ChannelResources& ch = channels_[channel_id];
+  auto& mhandle_map = is_recv ? ch.recv_mhandles : ch.send_mhandles;
+  auto it = mhandle_map.find(mem_id);
+
+  return (it != mhandle_map.end()) ? it->second : nullptr;
 }
 
 void ChannelManager::close_all(bool is_recv) {

@@ -15,7 +15,11 @@ if UCCL_HOME:
 else:
     LOG_DIR_DEFAULT = Path(__file__).resolve().parents[1] / "logs"
 AVG_RE = re.compile(
-    r"\[PERF\]\s*Avg(?:\s*\([^)]*\))?:\s*([0-9.]+)\s*ms,\s*BW:\s*([0-9.]+)\s*GB/s",
+    r"\[PERF\]\s*Avg(?:\s*\([^)]*\))?:\s*([0-9.]+)\s*ms,\s*(?:BW|Bandwidth):\s*([0-9.]+)\s*GB/s",
+    re.IGNORECASE,
+)
+SUMMARY_RE = re.compile(
+    r"Total time:\s*([0-9.]+)\s*ms\s*[\r\n]+Bandwidth:\s*([0-9.]+)\s*GB/s",
     re.IGNORECASE,
 )
 GPU_RE = re.compile(r"\[PERF\]\s*GPU:\s*(\d+)")
@@ -31,14 +35,23 @@ def find_latest_log(log_dir: Path, role: str, gpu: int) -> Optional[Path]:
 
 def parse_log(path: Path) -> Tuple[Optional[str], Optional[str]]:
     avg_ms = bw = None
+    text = ""
     try:
-        with path.open("r", encoding="utf-8", errors="ignore") as f:
-            for line in f:
-                m_avg = AVG_RE.search(line)
-                if m_avg:
-                    avg_ms, bw = m_avg.group(1), m_avg.group(2)
+        text = path.read_text(encoding="utf-8", errors="ignore")
     except OSError as exc:
         print(f"[WARN] Failed to read {path}: {exc}", file=sys.stderr)
+        return avg_ms, bw
+
+    matches = list(AVG_RE.finditer(text))
+    if matches:
+        last = matches[-1]
+        return last.group(1), last.group(2)
+
+    summary_matches = list(SUMMARY_RE.finditer(text))
+    if summary_matches:
+        last = summary_matches[-1]
+        return last.group(1), last.group(2)
+
     return avg_ms, bw
 
 
