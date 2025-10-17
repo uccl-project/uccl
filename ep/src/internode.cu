@@ -2497,7 +2497,8 @@ void combine(cudaDataType_t type, void* combined_x,
              cudaStream_t stream, int num_channels, bool low_latency_mode,
              uint64_t const* ring_addrs, int num_ring_addrs,
              void* atomic_buffer_ptr) {
-  constexpr int kNumCombineForwarderWarps = 24;
+  // NOTE(MaoZiming): I changed here from 24 to 16.
+  constexpr int kNumCombineForwarderWarps = 16;
   constexpr int kNumTMABytesPerSenderWarp = 16384;
   constexpr int kNumTMABytesPerForwarderWarp = 9248;
   constexpr int smem_size =
