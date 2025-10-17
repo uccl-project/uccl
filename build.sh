@@ -149,12 +149,22 @@ build_ep() {
   set -euo pipefail
   echo "[container] build_ep Target: $TARGET"
 
-  # if [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
-  #   echo "Skipping GPU-driven build on ROCm (no GPU-driven support yet)."
-  #   return
-  # fi
+  if [["$TARGET" == "therock" ]]; then
+    echo "Skipping GPU-driven build on therock (no GPU-driven support yet)."
+    return
+  fi
 
-  cd ep && make clean && make -j$(nproc) Makefile.rocm all && cd ..
+  # build ep on rocm
+  if [["$TARGET" == rocm* ]]; then
+    cd ep && python3 setup.py build && cd ..
+    echo "[container] Copying GPU-driven .so to uccl/"
+    mkdir -p uccl/lib
+    cp ep/build/**/*.so uccl/
+    return
+  fi
+
+
+  cd ep && make clean && make -j$(nproc) all && cd ..
 
   echo "[container] Copying GPU-driven .so to uccl/"
   mkdir -p uccl/lib
@@ -214,7 +224,7 @@ elif [[ $TARGET == "rocm" ]]; then
   IMAGE_NAME="uccl-builder-rocm"
 elif [[ $TARGET == "rocm6" ]]; then
   DOCKERFILE="docker/Dockerfile.rocm"
-  BASE_IMAGE="docker.io/rocm/dev-ubuntu-22.04:6.4.3-complete"
+  BASE_IMAGE="rocm/dev-ubuntu-22.04:6.4.3-complete"
   IMAGE_NAME="uccl-builder-rocm"
 elif [[ $TARGET == "therock" ]]; then
   DOCKERFILE="docker/Dockerfile.therock"
@@ -233,13 +243,13 @@ if [[ -n "${BASE_IMAGE:-}" ]]; then
   BUILD_ARGS+=" --build-arg BASE_IMAGE=${BASE_IMAGE}"
 fi
 if [[ "$ARCH" == "aarch64" ]]; then
-  podman  build --platform=linux/arm64 $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
+  docker build --platform=linux/arm64 $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
 else
-  podman  build $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
+  docker build $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
 fi
 
 echo "[2/3] Running build inside container..."
-podman  run --rm --user "$(id -u):$(id -g)" \
+docker run --rm --user "$(id -u):$(id -g)" \
   -v /etc/passwd:/etc/passwd:ro \
   -v /etc/group:/etc/group:ro \
   -v $HOME:$HOME \

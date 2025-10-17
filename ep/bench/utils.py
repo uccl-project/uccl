@@ -6,7 +6,7 @@ import torch.distributed as dist
 from typing import Optional
 import glob
 import sys
-from ep import EventHandle
+from uccl.ep import EventHandle
 import tempfile
 import json
 from pathlib import Path
@@ -14,23 +14,22 @@ import time
 import numpy as np
 
 # import deep_ep as ep
-import ep
-# try:
-#     from uccl import ep
-# except ImportError as exc:
-#     import sys
+try:
+    from uccl import ep
+except ImportError as exc:
+    import sys
 
-#     sys.stderr.write("Failed to import uccl.ep\n")
-#     raise
+    sys.stderr.write("Failed to import uccl.ep\n")
+    raise
 
 # import deep_ep as ep
-# try:
-#     from uccl import ep
-# except ImportError as exc:
-#     import sys
+try:
+    from uccl import ep
+except ImportError as exc:
+    import sys
 
-#     sys.stderr.write("Failed to import uccl.ep\n")
-#     raise
+    sys.stderr.write("Failed to import uccl.ep\n")
+    raise
 
 
 def calc_diff(x: torch.Tensor, y: torch.Tensor):

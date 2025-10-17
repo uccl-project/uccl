@@ -31,9 +31,6 @@ RUN apt-get update && \
 # ───── eccl use hiredis as oob backend ─────
     apt-get install -y libhiredis-dev && \
 \
-# ───── install torch dependencies ─────
- apt-get install -y hipsolver hipblas hipsparse rocthrust hipblaslt && \
- \
 # ───── Clean up apt cache ─────
     rm -rf /var/lib/apt/lists/*
 

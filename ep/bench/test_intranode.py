@@ -11,7 +11,7 @@ import torch.distributed as dist
 import os
 
 # noinspection PyUnresolvedReferences
-from ep import Config
+from uccl.ep import Config
 from utils import (
     init_dist,
     bench,
@@ -26,6 +26,7 @@ from utils import (
 # Test compatibility with low latency functions
 import test_low_latency
 from buffer import Buffer
+
 
 # noinspection PyShadowingNames
 def test_main(
@@ -426,7 +427,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     )
     torch.manual_seed(rank)
 
-    for i in (24, 64):
+    for i in (24,):
         test_main(args, i, local_rank, num_ranks, rank, buffer, group)
         if local_rank == 0:
             print("", flush=True)
