@@ -1,15 +1,16 @@
 #!/bin/bash
 set -e
 
-sudo apt install -y nvtop
-sudo apt install -y libgoogle-glog-dev
-sudo apt install -y clang-format-14
-
 CONDA_ENV_NAME="${1}"
 if [ -z "$CONDA_ENV_NAME" ]; then
     echo "Please provide the conda environment name as the first argument, e.g., bash install_deps.sh myenv"
     exit 1
 fi
+
+sudo apt update
+sudo apt install -y libgoogle-glog-dev
+sudo apt install -y clang-format-14
+
 
 # Ensure conda is available
 if ! command -v conda &> /dev/null; then
@@ -41,6 +42,12 @@ check_cuda() {
     command -v nvcc &> /dev/null
 }
 
+# Check HIP availability and get version
+check_rocm() {
+    command -v hipcc &> /dev/null
+}
+
+
 get_cuda_version() {
     # Extracts version like "12.8" from nvcc output
     nvcc --version | grep -oE 'release [0-9]+\.[0-9]+' | awk '{print $2}' | head -n1
@@ -49,6 +56,9 @@ get_cuda_version() {
 # Install PyTorch with automatic CUDA version handling
 echo "Checking CUDA environment..."
 if check_cuda; then
+    # Install CUDA dependencies
+    sudo apt install -y nvtop
+
     CUDA_VERSION=$(get_cuda_version)
     echo "Detected CUDA version: $CUDA_VERSION"
     
@@ -66,8 +76,14 @@ if check_cuda; then
     fi
     
     pip3 install torch torchvision torchaudio --index-url "https://download.pytorch.org/whl/$PYTORCH_SUFFIX"
+elif check_rocm; then
+    # Install ROCM dependencies
+    sudo apt-get install -y hipsolver hipblas hipsparse rocthrust hipblaslt 
+
+    # Install Pytorch using nightly
+    pip3 install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
 else
-    echo "No CUDA detected"
+    echo "No CUDA or ROCM detected"
     exit 1
 fi
 

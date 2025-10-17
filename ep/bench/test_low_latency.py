@@ -38,14 +38,14 @@ from utils import (
 )
 
 # UCCL import
-# try:
-#     from uccl import ep
-# except ImportError as exc:
-#     import sys
+try:
+    from uccl import ep
+except ImportError as exc:
+    import sys
 
-#     sys.stderr.write("Failed to import uccl.ep\n")
-#     raise
-import ep
+    sys.stderr.write("Failed to import uccl.ep\n")
+    raise
+
 
 def peek_slot_from_handle(packed_recv_x, handle, le, src_rank, n_words=4):
     rl = handle[1][le]  # recv_layout_range for that expert
