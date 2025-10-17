@@ -12,6 +12,12 @@ namespace cg = cooperative_groups;
 namespace uccl {
 namespace internode_ll {
 
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+constexpr int kNumMaxWarpGroups = 16;
+#else
+constexpr int kNumMaxWarpGroups = 32;
+#endif
+
 template <int kNumThreads>
 __launch_bounds__(kNumThreads, 1) __global__
     void clean_low_latency_buffer(int* clean_0, int num_clean_int_0,
@@ -88,11 +94,6 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   EP_DEVICE_ASSERT(num_bytes_per_msg % sizeof(int4) == 0);
 
   // Expert counts
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  constexpr int kNumMaxWarpGroups = 16;
-#else
-  constexpr int kNumMaxWarpGroups = 32;
-#endif
   __shared__ int shared_num_tokens_sent_per_expert[kNumMaxWarpGroups];
 
   // Sending phase
@@ -162,7 +163,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           // Cast into send buffer
           vec_t int2_value;
           auto fp8x2_values =
-              reinterpret_cast<__hip_fp8x2_storage_t*>(&int2_value);
+              reinterpret_cast<__nv_fp8x2_storage_t*>(&int2_value);
 #pragma unroll
           for (int j = 0; j < kNumElemsPerRead; j += 2) {
             float2 fp32x2 = {fp32_values[j] * scale,
@@ -491,11 +492,7 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
               int* rdma_recv_count_internode) {
   constexpr int kNumMaxTopK = 9;
   int const num_warp_groups = ceil_div(num_experts, num_device_sms);
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  int const num_warps_per_group = 16 / num_warp_groups;
-#else
-  int const num_warps_per_group = 32 / num_warp_groups;
-#endif
+  int const num_warps_per_group = kNumMaxWarpGroups / num_warp_groups;
   EP_HOST_ASSERT(num_warp_groups > 0 and num_warps_per_group > 0);
   EP_HOST_ASSERT(kNumMaxTopK + 1 <= num_warp_groups * num_warps_per_group);
 

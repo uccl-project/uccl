@@ -117,8 +117,8 @@ class Buffer {
             void* host_ptr = reinterpret_cast<void*>(host_addrs[i]);
             void* dev_ptr = nullptr;
 #ifndef USE_GRACE_HOPPER
-          CUDA_CHECK(cudaHostGetDevicePointer(
-              reinterpret_cast<void**>(&dev_ptr), host_ptr, 0));
+            CUDA_CHECK(cudaHostGetDevicePointer(
+                reinterpret_cast<void**>(&dev_ptr), host_ptr, 0));
 #else
             dev_ptr = host_ptr;
 #endif
@@ -172,7 +172,13 @@ class Buffer {
       // Ensure we're on the correct device before memory allocation and IPC
       // handle creation
       CUDA_CHECK(cudaSetDevice(device_index));
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+      // aggressive atomic will work with malloc with uncached memory
+      CUDA_CHECK(hipExtMallocWithFlags(&buffer_ptrs[nvl_rank], total_bytes,
+                                       hipDeviceMallocUncached));
+#else
       CUDA_CHECK(cudaMalloc(&buffer_ptrs[nvl_rank], total_bytes));
+#endif
       CUDA_CHECK(
           cudaIpcGetMemHandle(&ipc_handles[nvl_rank], buffer_ptrs[nvl_rank]));
 
@@ -708,9 +714,9 @@ class Buffer {
             send_rdma_head,
             send_nvl_head,
             event};
-  #else
-      return {};
-  #endif
+#else
+    return {};
+#endif
   }
 
   std::tuple<torch::Tensor, std::optional<torch::Tensor>,
@@ -729,7 +735,6 @@ class Buffer {
                     uccl::Config const& config,
                     std::optional<EventHandle>& previous_event, bool async,
                     bool allocate_on_comm_stream) {
-
 #if 0
     int const num_channels = config.num_sms / 2;
     EP_HOST_ASSERT(config.num_sms % 2 == 0);
@@ -887,9 +892,9 @@ class Buffer {
 
     // Return values
     return {combined_x, combined_topk_weights, event};
-  #else
+#else
     return {};
-  #endif
+#endif
   }
 
   std::tuple<torch::Tensor, std::optional<torch::Tensor>,
