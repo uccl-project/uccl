@@ -478,14 +478,26 @@ int main(int argc, char** argv) {
 
     tcpx::device::UnpackerPersistentKernel *pkernel_ptr = nullptr;
     if (impl == "pkernel") {
+      if (!cuda_check(cudaStreamCreate(&unpack_stream), "cudaStreamCreate")) {
+        cuMemFree(d_base);
+        mgr.deregister_memory(true);
+        mgr.close_all(true);
+        close(bootstrap_fd);
+        return 1;
+      }
+
       int kPipelineDepth = 2;
       tcpx::device::PersistentKernelConfig cfg;
       cfg.numThBlocks = num_channels;
       cfg.numThPerBlock = 256; // too much MAX_UNPACK_DESCRIPTORS
       cfg.fifoCap = tcpx::device::MAX_INFLIGHT_PER_CHANNEL;
       cfg.smem_size = cfg.numThPerBlock * sizeof(float4) * kPipelineDepth; // 16 bytes for best bluk transfer
+      cfg.stream = unpack_stream;
 
       pkernel_ptr = new tcpx::device::UnpackerPersistentKernel(cfg);
+      std::cout
+          << "[PERF] Created persistent stream and launcher for persistent kernel mode"
+          << std::endl;
     }
 
     // ==========================================================================
@@ -536,7 +548,11 @@ int main(int argc, char** argv) {
       std::cout << "[PERF] Created " << MAX_INFLIGHT_PER_CHANNEL
                 << " events per channel for async kernel mode" << std::endl;
     } else if (impl == "pkernel") {
-      // TODO launch persistent kernel
+      for (int ch = 0; ch < num_channels; ++ch) {
+        channel_windows[ch].pending_reqs.reserve(MAX_INFLIGHT_PER_CHANNEL);
+        channel_windows[ch].pending_indices.reserve(MAX_INFLIGHT_PER_CHANNEL);
+      }
+      // Launch persistent kernel
       if (!pkernel_ptr->launch()) {
           std::cerr << "Failed to launch persistent kernel!" << std::endl;
           return -1;
@@ -851,7 +867,7 @@ int main(int argc, char** argv) {
       bool iteration_failed = false;
 
       // Reset per-channel sliding windows at the start of each iteration
-      if (impl == "kernel") {
+      if (impl == "kernel" || impl == "pkernel") {
         std::cout << "[DEBUG] Iteration " << iter
                   << " start: clearing sliding windows for " << num_channels
                   << " channels" << std::endl;
@@ -893,7 +909,7 @@ int main(int argc, char** argv) {
                   << (win.pending_reqs.size() + win.inflight_recvs.size())
                   << "/" << MAX_INFLIGHT_PER_CHANNEL << std::endl;
 
-        if (impl == "kernel") {
+        if (impl == "kernel" || impl == "pkernel") {
           if (!wait_for_channel_capacity(channel_id, ch, win)) { // TODO，非阻塞recordEvent
             std::cerr << "[ERROR] Failed while waiting for channel capacity"
                       << std::endl;
@@ -996,7 +1012,7 @@ int main(int argc, char** argv) {
       // End of iteration: drain per-channel windows (kernel mode only)
       // ========================================================================
 
-      if (impl == "kernel") {
+      if (impl == "kernel" || impl == "pkernel") {
         for (int ch = 0; ch < num_channels; ++ch) {
           ChannelResources& channel = mgr.get_channel(ch);
           ChannelWindow& win = channel_windows[ch];
