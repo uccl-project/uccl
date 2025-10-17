@@ -721,6 +721,26 @@ void Proxy::post_gpu_commands_mixed(
       0) {
     return;
   }
+
+  if (false && cfg_.local_rank == 0 && cfg_.thread_idx == 0) {
+    static auto last_time = std::chrono::steady_clock::now();
+    auto now = std::chrono::steady_clock::now();
+    double elapsed_ms =
+        std::chrono::duration<double, std::milli>(now - last_time).count();
+    last_time = now;
+    printf(
+        "[%lld.%03llds | +%.3fms] [post_gpu_commands_mixed] rank: %d, thread %d: "
+        "Posting %zu RDMA writes, %zu atomics, %zu barriers, %zu quiets\n",
+        (long long)(std::chrono::duration_cast<std::chrono::seconds>(
+                        now.time_since_epoch())
+                        .count()),
+        (long long)((std::chrono::duration_cast<std::chrono::milliseconds>(
+                        now.time_since_epoch())
+                        .count()) %
+                    1000),
+        elapsed_ms, cfg_.rank, cfg_.thread_idx, rdma_wrs.size(),
+        atomic_wrs.size(), barrier_cmds.size(), quiet_cmds.size());
+  }
   // Handle regular RDMA writes
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,

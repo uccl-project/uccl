@@ -331,6 +331,11 @@ def test_main(
                     dispatch_bf16_nvl_recv_bytes = recv_x.numel() * 2
                     combine_bf16_nvl_send_bytes = dispatch_bf16_nvl_recv_bytes
                     combine_bf16_rdma_recv_bytes = dispatch_bf16_rdma_send_bytes
+                    break
+                break
+            break
+        break
+
     if local_rank == 0:
         print("", flush=True)
 
@@ -338,6 +343,7 @@ def test_main(
     best_dispatch_results = None
     fp8_factor = (1 + 4 / 128) / 2
     for current_x in (x_e4m3, x):
+    # if False:
         best_time, best_results = 1e10, None
         rdma_send_bytes = (
             (dispatch_bf16_rdma_send_bytes * fp8_factor)
@@ -349,8 +355,8 @@ def test_main(
             if isinstance(current_x, tuple)
             else dispatch_bf16_nvl_recv_bytes
         )
-        for nvl_chunk_size in range(4, 45, 4):
-            for rdma_chunk_size in range(4, 33, 4):
+        for nvl_chunk_size in range(4, 45, 2):
+            for rdma_chunk_size in range(4, 33, 2):
                 config = Config(
                     num_sms,
                     nvl_chunk_size,
@@ -360,7 +366,7 @@ def test_main(
                 )
                 tune_args = {"x": current_x, "handle": handle, "config": config}
                 t, notify_t = bench_kineto(
-                    lambda: buffer.dispatch(**tune_args), ("dispatch", "notify")
+                    lambda: buffer.dispatch(**tune_args), ("dispatch", "notify"), num_tests=1
                 )
                 if t < best_time:
                     best_time, best_results = t, (
@@ -371,7 +377,7 @@ def test_main(
                     )
                 if local_rank == 0:
                     print(
-                        f"[tuning] SMs {num_sms}, NVL chunk {nvl_chunk_size}, RDMA chunk {rdma_chunk_size}, transmit: {t * 1e6:.2f} us, notify: {notify_t * 1e6:.2f} us, BW: {rdma_send_bytes / 1e9 / t:.2f} GB/s (RDMA), {nvl_recv_bytes / 1e9 / t:.2f} GB/s (NVL) ",
+                        f"[tuning dispatch] SMs {num_sms}, NVL chunk {nvl_chunk_size}, RDMA chunk {rdma_chunk_size}, transmit: {t * 1e6:.2f} us, notify: {notify_t * 1e6:.2f} us, BW: {rdma_send_bytes / 1e9 / t:.2f} GB/s (RDMA), {nvl_recv_bytes / 1e9 / t:.2f} GB/s (NVL) ",
                         flush=True,
                     )
         if local_rank == 0:
@@ -396,14 +402,14 @@ def test_main(
                 all_best_fp8_results_list, best_dispatch_results, group=group
             )
             best_dispatch_results = all_best_fp8_results_list[0].tolist()
-    dispatch_config = Config(
-        best_dispatch_results[0],
-        best_dispatch_results[1],
-        nvl_buffer_size,
-        best_dispatch_results[2],
-        rdma_buffer_size,
-    )
-
+    # dispatch_config = Config(
+    #     best_dispatch_results[0],
+    #     best_dispatch_results[1],
+    #     nvl_buffer_size,
+    #     best_dispatch_results[2],
+    #     rdma_buffer_size,
+    # )
+    dispatch_config = None
     dispatch_args = {
         "x": x,
         "num_tokens_per_rank": num_tokens_per_rank,
@@ -417,9 +423,9 @@ def test_main(
     # Tune combine performance
     best_time, best_results = 1e10, None
     # for nvl_chunk_size in range(1, 8, 1):
-    for nvl_chunk_size in range(4, 45, 4):
+    for nvl_chunk_size in range(4, 45, 2):
         # for rdma_chunk_size in range(12 if num_nodes == 2 else 8, 33, 4):
-        for rdma_chunk_size in range(8, 33, 4):
+        for rdma_chunk_size in range(8, 33, 2):
             config = Config(
                 num_sms,
                 nvl_chunk_size,
@@ -429,11 +435,11 @@ def test_main(
             )
             tune_args = {"x": recv_x, "handle": handle, "config": config}
             t, notify_t = bench_kineto(
-                lambda: buffer.combine(**tune_args), ("combine", "notify")
+                lambda: buffer.combine(**tune_args), ("combine", "notify"), num_tests=1
             )
             if local_rank == 0:
                 print(
-                    f"[tuning] SMs {num_sms}, NVL chunk {nvl_chunk_size}, RDMA chunk {rdma_chunk_size}, transmit: {t * 1e6:.2f} us, notify: {notify_t * 1e6:.2f} us, BW: {combine_bf16_rdma_recv_bytes / 1e9 / t:.2f} GB/s (RDMA), {combine_bf16_nvl_send_bytes / 1e9 / t:.2f} GB/s (NVL) ",
+                    f"[tuning combine] SMs {num_sms}, NVL chunk {nvl_chunk_size}, RDMA chunk {rdma_chunk_size}, transmit: {t * 1e6:.2f} us, notify: {notify_t * 1e6:.2f} us, BW: {combine_bf16_rdma_recv_bytes / 1e9 / t:.2f} GB/s (RDMA), {combine_bf16_nvl_send_bytes / 1e9 / t:.2f} GB/s (NVL) ",
                     flush=True,
                 )
                 if t < best_time:

@@ -22,7 +22,7 @@ echo "Activating conda environment: $CONDA_ENV_NAME"
 eval "$(conda shell.bash hook)"
 conda activate $CONDA_ENV_NAME
 
-conda install -c conda-forge libstdcxx-ng
+conda install -c conda-forge libstdcxx-ng -y
 pip install black
 
 # Check if pip is installed in the environment
