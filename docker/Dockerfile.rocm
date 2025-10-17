@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=docker.io/rocm/megatron-lm:v25.5_py310
+ARG BASE_IMAGE=rocm/dev-ubuntu-22.04
 FROM ${BASE_IMAGE}
 ARG PY_VER=3.10
 
@@ -31,6 +31,9 @@ RUN apt-get update && \
 # ───── eccl use hiredis as oob backend ─────
     apt-get install -y libhiredis-dev && \
 \
+# ───── install torch dependencies ─────
+ apt-get install -y hipsolver hipblas hipsparse rocthrust hipblaslt && \
+ \
 # ───── Clean up apt cache ─────
     rm -rf /var/lib/apt/lists/*
 
