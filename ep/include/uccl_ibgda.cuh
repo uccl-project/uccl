@@ -41,9 +41,9 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
       static_cast<uintptr_t>(ring_addrs[ring_idx]));
 
-  uint64_t cur_head = rb->head;
-  uint64_t cur_tail = rb->volatile_tail();
-  uint64_t inflight = cur_head - cur_tail;
+  // uint64_t cur_head = rb->head;
+  // uint64_t cur_tail = rb->volatile_tail();
+  // uint64_t inflight = cur_head - cur_tail;
 #ifdef USE_NORMAL_MODE
   if (low_latency_buffer_idx == -1) {
     /* Normal mode */
@@ -53,39 +53,46 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
 #endif
   // NOTE(MaoZiming): Spins until there is a free slot in the ring buffer.
   auto last_print = clock64();
+  TransferCmd cmd{};
+  // TODO(MaoZiming): Check fields here.
+  // NOTE(MaoZiming): cmd is needed for proxy to process the command.
+  cmd.cmd_type = CmdType::WRITE;
+  cmd.cmd = (static_cast<uint64_t>(expert_idx + 1) << 32) |
+            (message_idx & 0xFFFFFFFF);  // NOTE(MaoZiming): Use expert_idx + 1
+                                         // to avoid 0 as a valid command.
+  cmd.req_rptr = rptr_val;
+  cmd.req_lptr = lptr_val;
+  cmd.bytes = bytes_val;
+  cmd.dst_rank = dst_rank;
+  cmd.expert_idx = expert_idx;
+  cmd.lane_id = lane_id;
+  cmd.message_idx = message_idx;
+  cmd.is_combine = is_combine;
+  cmd.low_latency_buffer_idx = low_latency_buffer_idx;
+
+#ifdef USE_NORMAL_MODE
+  cmd.atomic_offset = atomic_offset;
+  cmd.atomic_val = atomic_val;
+#endif
+
+  uint64_t slot;
   while (true) {
     // NOTE(MaoZiming): update the view.
-    cur_head = rb->head;
-    cur_tail = rb->volatile_tail();
-    inflight = cur_head - cur_tail;
-    if (inflight < kMaxInflight) {
-      uint64_t slot = cur_head;
-      TransferCmd cmd{};
-      // TODO(MaoZiming): Check fields here.
-      // NOTE(MaoZiming): cmd is needed for proxy to process the command.
-      cmd.cmd_type = CmdType::WRITE;
-      cmd.cmd =
-          (static_cast<uint64_t>(expert_idx + 1) << 32) |
-          (message_idx & 0xFFFFFFFF);  // NOTE(MaoZiming): Use expert_idx + 1
-                                       // to avoid 0 as a valid command.
-      cmd.req_rptr = rptr_val;
-      cmd.req_lptr = lptr_val;
-      cmd.bytes = bytes_val;
-      cmd.dst_rank = dst_rank;
-      cmd.expert_idx = expert_idx;
-      cmd.lane_id = lane_id;
-      cmd.message_idx = message_idx;
-      cmd.is_combine = is_combine;
-      cmd.low_latency_buffer_idx = low_latency_buffer_idx;
-#ifdef USE_NORMAL_MODE
-      cmd.atomic_offset = atomic_offset;
-      cmd.atomic_val = atomic_val;
-#endif
-      rb->atomic_set_and_commit(cmd, &slot);
+    // cur_head = rb->head;
+    // cur_tail = rb->volatile_tail();
+    // inflight = cur_head - cur_tail;
+    // if (inflight < kMaxInflight) {
+
+    if (!rb->spsc_push_gpu(cmd, &slot)) {
+      continue;
+    } else {
       break;
     }
     if ((clock64() - last_print) > kPrintCycleInterval) {
       if (threadIdx.x == 0 && blockIdx.x == 0) {
+        uint64_t cur_head = rb->head;
+        uint64_t cur_tail = rb->volatile_tail();
+        uint64_t inflight = cur_head - cur_tail;
         printf(
             "[dispatch] stuck waiting, inflight=%ld (cur_head=%lu "
             "cur_tail=%lu)\n",
@@ -121,9 +128,9 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     assert(ring_idx < num_ring_addrs);
     auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
         static_cast<uintptr_t>(ring_addrs[ring_idx]));
-    uint64_t cur_head = rb->head;
-    uint64_t cur_tail = rb->volatile_tail();
-    uint64_t inflight = cur_head - cur_tail;
+    // uint64_t cur_head = rb->head;
+    // uint64_t cur_tail = rb->volatile_tail();
+    // uint64_t inflight = cur_head - cur_tail;
     auto last_print = clock64();
 #ifdef USE_NORMAL_MODE
     if (low_latency_buffer_idx == -1) {
@@ -131,39 +138,45 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
       low_latency_buffer_idx = 0;
     }
 #endif
+    auto now = clock64();
+    uint64_t slot;
+    TransferCmd cmd{};
+    cmd.cmd_type = CmdType::ATOMIC;
+    // TODO(MaoZiming): Check fields here.
+    // NOTE(MaoZiming): cmd is needed for proxy to process the command.
+    cmd.cmd = 1;  // to avoid 0 as a valid command.
+    cmd.warp_id = warp_id;
+    cmd.value = value;
+    cmd.dst_rank = dst_rank;
+    cmd.is_atomic = true;
+    cmd.is_combine = is_combine;
+    cmd.req_rptr = rptr;
+    cmd.low_latency_buffer_idx = low_latency_buffer_idx;
+
     while (true) {
       // NOTE(MaoZiming): update the view.
-      cur_head = rb->head;
-      cur_tail = rb->volatile_tail();
-      inflight = cur_head - cur_tail;
-      if (inflight < kMaxInflight) {
-        uint64_t slot = cur_head;
-        TransferCmd cmd{};
-        cmd.cmd_type = CmdType::ATOMIC;
-        // TODO(MaoZiming): Check fields here.
-        // NOTE(MaoZiming): cmd is needed for proxy to process the command.
-        cmd.cmd = 1;  // to avoid 0 as a valid command.
-        cmd.warp_id = warp_id;
-        cmd.value = value;
-        cmd.dst_rank = dst_rank;
-        cmd.is_atomic = true;
-        cmd.is_combine = is_combine;
-        cmd.req_rptr = rptr;
-        cmd.low_latency_buffer_idx = low_latency_buffer_idx;
-        rb->atomic_set_and_commit(cmd, &slot);
-        break;
+
+      // if (inflight < kMaxInflight) {
+
+      if (!rb->spsc_push_gpu(cmd, &slot)) {
+        continue;
       } else {
-        auto now = clock64();
-        if (now - last_print > kPrintCycleInterval) {
-          uint64_t tail_cmd = rb->buf[cur_tail & rb->mask()].cmd;
-          printf(
-              "[nvshmemi_ibgda_amo_nonfetch_add] %p waiting ring_idx: %d, "
-              "cur_head: "
-              "%llu, cur_tail: %llu, inflight: %llu, tail_cmd: %llu\n",
-              rb, ring_idx, cur_head, cur_tail, inflight, tail_cmd);
-          last_print = now;
-        }
+        break;
       }
+      // } else {
+      if (now - last_print > kPrintCycleInterval) {
+        uint64_t cur_tail = rb->volatile_tail();
+        uint64_t tail_cmd = rb->buf[cur_tail & rb->mask()].cmd;
+        uint64_t cur_head = rb->head;
+        uint64_t inflight = cur_head - cur_tail;
+        printf(
+            "[nvshmemi_ibgda_amo_nonfetch_add] %p waiting ring_idx: %d, "
+            "cur_head: "
+            "%llu, cur_tail: %llu, inflight: %llu, tail_cmd: %llu\n",
+            rb, ring_idx, cur_head, cur_tail, inflight, tail_cmd);
+        last_print = now;
+      }
+      // }
     }
   }
 }
@@ -245,15 +258,13 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
         static_cast<uintptr_t>(ring_addrs[ring_idx]));
 
     while (true) {
-      uint64_t cur_head = rb->head;
-      uint64_t cur_tail = rb->volatile_tail();
-      uint64_t inflight = cur_head - cur_tail;
-      if (inflight < kMaxInflight) {
-        uint64_t slot = cur_head;
-        TransferCmd cmd{};
-        cmd.cmd = 1;
-        cmd.cmd_type = CmdType::QUIET;
-        rb->atomic_set_and_commit(cmd, &slot);
+      uint64_t slot;
+      TransferCmd cmd{};
+      cmd.cmd = 1;
+      cmd.cmd_type = CmdType::QUIET;
+      if (!rb->spsc_push_gpu(cmd, &slot)) {
+        continue;
+      } else {
         slots[num_posted] = slot;
         ++num_posted;
         break;
@@ -286,20 +297,17 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
         static_cast<uintptr_t>(ring_addrs[ring_idx]));
 
     while (true) {
-      uint64_t cur_head = rb->head;
-      uint64_t cur_tail = rb->volatile_tail();
-      uint64_t inflight = cur_head - cur_tail;
-      if (inflight < kMaxInflight) {
-        uint64_t slot = cur_head;
-        TransferCmd cmd{};
-        cmd.cmd = 1;  // dummy valid cmd
-        cmd.cmd_type = CmdType::BARRIER;
-        rb->atomic_set_and_commit(cmd, &slot);
+      uint64_t slot;
+      TransferCmd cmd{};
+      cmd.cmd = 1;  // dummy valid cmd
+      cmd.cmd_type = CmdType::BARRIER;
+      if (!rb->spsc_push_gpu(cmd, &slot)) {
+        continue;
+      } else {
         slots[num_posted++] = slot;
         break;
       }
     }
-    break;
   }
 
   // Then wait for each proxy’s barrier to complete

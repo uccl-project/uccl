@@ -695,7 +695,7 @@ __global__ void __launch_bounds__(
              rdma_tail_idx - cached_rdma_channel_head >=
                  num_max_rdma_chunked_recv_tokens) {
         cached_rdma_channel_head = static_cast<int>(
-            ld_acquire_sys_u64(rdma_channel_head.buffer(lane_id)));
+            ld_acquire_sys_global(rdma_channel_head.buffer(lane_id)));
 
         // Timeout check
         if (clock64() - start_time >= NUM_TIMEOUT_CYCLES) {
@@ -1033,7 +1033,7 @@ __global__ void __launch_bounds__(
                         src_rdma_rank) > 0) {
           if (lane_id == src_rdma_rank)
             cached_rdma_channel_tail = static_cast<int>(
-                ld_sys_cv_u64(rdma_channel_tail.buffer(src_rdma_rank)));
+                ld_acquire_sys_global(rdma_channel_tail.buffer(src_rdma_rank)));
           if (__shfl_sync(0xffffffff,
                           cached_rdma_channel_tail > cached_rdma_channel_head,
                           src_rdma_rank))
@@ -1078,9 +1078,11 @@ __global__ void __launch_bounds__(
         auto rdma_slot_idx = i % num_max_rdma_chunked_recv_tokens;
         auto shifted = rdma_channel_data.recv_buffer(src_rdma_rank) +
                        rdma_slot_idx * num_bytes_per_token;
-        int seen_bits = ld_sys_cv_u32(reinterpret_cast<uint32_t volatile*>(
-            &reinterpret_cast<SourceMeta*>(shifted + hidden_bytes + scale_bytes)
-                 ->is_token_in_nvl_rank_bits));
+        int seen_bits =
+            ld_acquire_sys_global(reinterpret_cast<uint32_t volatile*>(
+                &reinterpret_cast<SourceMeta*>(shifted + hidden_bytes +
+                                               scale_bytes)
+                     ->is_token_in_nvl_rank_bits));
         if (seen_bits == 0) trap();
         lane_id == src_rdma_rank ? (num_tokens_to_recv_from_rdma -= 1) : 0;
 
@@ -2196,7 +2198,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
           // num_chunked_tokens` Here, `token_start_idx` is the actual tail
           int num_used_slots =
               token_start_idx -
-              ld_volatile_global(rdma_channel_head.buffer(dst_rdma_rank));
+              ld_acquire_sys_global(rdma_channel_head.buffer(dst_rdma_rank));
           if (num_max_rdma_chunked_recv_tokens - num_used_slots >=
               num_chunked_tokens)
             break;
@@ -2208,7 +2210,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                 "RDMA: %d, nvl: %d, dst RDMA: %d, head: %ld, tail: %d, "
                 "chunked: %d\n",
                 channel_id, rdma_rank, nvl_rank, dst_rdma_rank,
-                ld_volatile_global(rdma_channel_head.buffer(dst_rdma_rank)),
+                ld_acquire_sys_global(rdma_channel_head.buffer(dst_rdma_rank)),
                 token_start_idx, num_chunked_tokens);
             trap();
           }

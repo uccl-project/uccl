@@ -216,39 +216,60 @@ struct alignas(128) RingBuffer {
     return val;
   }
 
-  __host__ __device__ inline bool atomic_set_and_commit(
-      const T& item, uint64_t* out_slot = nullptr) {
-    uint64_t slot;
-    while (true) {
+#if defined(__CUDACC__) || defined(__HIP_PLATFORM_AMD__)
+  __device__ __forceinline__ bool spsc_push_gpu(const T& item,
+                                                uint64_t* out_slot = nullptr) {
+    const uint64_t h = head;
+    uint64_t t;
 #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
-      uint64_t h = ld_volatile(&head);
-      uint64_t t = ld_volatile(&tail);
-      if (h - t == Capacity) {
-        __nanosleep(64);
-        continue;
-      }
-      unsigned long long prev =
-          atomicCAS((unsigned long long*)&head, (unsigned long long)h,
-                    (unsigned long long)(h + 1));
-      if (prev == h) {
-        slot = h;
-        break;
-      }
+    t = ld_volatile(&tail);
 #else
-      uint64_t h = __atomic_load_n(&head, __ATOMIC_RELAXED);
-      uint64_t t = __atomic_load_n(&tail, __ATOMIC_RELAXED);
-      if (h - t == Capacity) {
-        cpu_relax();
-        continue;
-      }
-      uint64_t expected = h;
-      if (__atomic_compare_exchange_n(&head, &expected, h + 1, true,
-                                      __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
-        slot = h;
-        break;
-      }
+    t = 0;
 #endif
+    if (h - t == Capacity) return false;
+    const uint64_t slot = h;
+    const uint32_t idx = static_cast<uint32_t>(head) & mask();
+    T tmp = item;
+    auto const saved_cmd = tmp.cmd;
+    tmp.cmd = 0;
+    buf[idx] = tmp;
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+    if constexpr (Dir == FlowDirection::DeviceToHost)
+      __threadfence_system();
+    else
+      __threadfence();
+#endif
+    buf[idx].cmd = saved_cmd;
+    head = h + 1;
+    if (out_slot) *out_slot = slot;
+    return true;
+  }
+#else
+  inline bool spsc_push_gpu(const T&, uint64_t* = nullptr) { return false; }
+#endif
+
+  __host__ __device__ inline bool atomic_set_and_commit(
+      const T& item, uint64_t cur_head, uint64_t* out_slot = nullptr) {
+    uint64_t slot;
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+    uint64_t h = ld_volatile(&head);
+    unsigned long long prev =
+        atomicCAS((unsigned long long*)&head, (unsigned long long)h,
+                  (unsigned long long)(h + 1));
+    if (prev == h) {
+      slot = h;
+    } else {
+      return false;
     }
+#else
+    uint64_t expected = cur_head;
+    if (!__atomic_compare_exchange_n(&head, &expected, cur_head + 1,
+                                     /*weak=*/false, __ATOMIC_RELAXED,
+                                     __ATOMIC_RELAXED)) {
+      return false;
+    }
+    slot = cur_head;
+#endif
     uint32_t idx = (uint32_t)slot & mask();
 
     T tmp = item;

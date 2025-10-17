@@ -450,9 +450,9 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
     uint64_t& ring_tail = ring_tails_[rb_idx];
 
     // Clear ring entries and update tail
-    for (auto& [wr_id, cmd_idx] : completions) {
-      ring_buffer->volatile_store_cmd(cmd_idx, 0);
-    }
+    // for (auto& [wr_id, cmd_idx] : completions) {
+    //   ring_buffer->volatile_store_cmd(cmd_idx, 0);
+    // }
 
     // Update tail for this ring buffer
     ring_tail += completions.size();
