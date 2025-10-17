@@ -5,6 +5,25 @@
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
 #define __syncwarp() __builtin_amdgcn_wave_barrier()
+#define clock wall_clock
+
+// for better performance
+// #define DISABLE_AGGRESSIVE_HIP_ATOMIC
+
+#ifndef DISABLE_AGGRESSIVE_ATOMIC
+#define HIP_ATOMIC_LOAD(ptr, order, scope) __builtin_nontemporal_load((ptr))
+#define HIP_ATOMIC_STORE(val, ptr, order, scope) \
+  __builtin_nontemporal_store((val), (ptr))
+#define HIP_ATOMIC_ADD(val, ptr, order, scope) \
+  (__builtin_nontemporal_load((ptr)) + (val))
+#else
+#define HIP_ATOMIC_LOAD(ptr, order, scope) \
+  __hip_atomic_load((ptr), (order), (scope))
+#define HIP_ATOMIC_STORE(val, ptr, order, scope) \
+  __hip_atomic_store((ptr), (val), (order), (scope))
+#define HIP_ATOMIC_ADD(val, ptr, order, scope) \
+  __hip_atomic_fetch_add((ptr), (val), (order), (scope))
+#endif
 #endif
 
 __forceinline__ __device__ int get_lane_id() {
@@ -392,8 +411,7 @@ __device__ __forceinline__ void st_na_global(dtype_t const* ptr,
 template <>
 __device__ __forceinline__ void st_na_global(int const* ptr, int const& value) {
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  int* non_const_ptr = const_cast<int*>(ptr);
-  *non_const_ptr = value;
+  __builtin_nontemporal_store(value, ptr);
 #else
   asm volatile(ST_NA_FUNC ".s32 [%0], %1;" ::"l"(ptr), "r"(value));
 #endif
@@ -403,8 +421,7 @@ template <>
 __device__ __forceinline__ void st_na_global(int64_t const* ptr,
                                              int64_t const& value) {
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  int64_t* non_const_ptr = const_cast<int64_t*>(ptr);
-  *non_const_ptr = value;
+  __builtin_nontemporal_store(value, ptr);
 #else
   asm volatile(ST_NA_FUNC ".s64 [%0], %1;" ::"l"(ptr), "l"(value));
 #endif
@@ -414,8 +431,7 @@ template <>
 __device__ __forceinline__ void st_na_global(float const* ptr,
                                              float const& value) {
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  float* non_const_ptr = const_cast<float*>(ptr);
-  *non_const_ptr = value;
+  __builtin_nontemporal_store(value, ptr);
 #else
   asm volatile(ST_NA_FUNC ".f32 [%0], %1;" ::"l"(ptr), "f"(value));
 #endif
@@ -425,11 +441,10 @@ template <>
 __device__ __forceinline__ void st_na_global(int4 const* ptr,
                                              int4 const& value) {
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  int4* non_const_ptr = const_cast<int4*>(ptr);
-  non_const_ptr->x = value.x;
-  non_const_ptr->y = value.y;
-  non_const_ptr->z = value.z;
-  non_const_ptr->w = value.w;
+  __builtin_nontemporal_store(value.x, &ptr->x);
+  __builtin_nontemporal_store(value.y, &ptr->y);
+  __builtin_nontemporal_store(value.z, &ptr->z);
+  __builtin_nontemporal_store(value.w, &ptr->w);
 #else
   asm volatile(ST_NA_FUNC ".v4.s32 [%0], {%1, %2, %3, %4};" ::"l"(ptr),
                "r"(value.x), "r"(value.y), "r"(value.z), "r"(value.w));
@@ -439,13 +454,69 @@ __device__ __forceinline__ void st_na_global(int4 const* ptr,
 __device__ __forceinline__ int ld_acquire_sys_global(int const* ptr) {
   int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = __hip_atomic_load(ptr, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM);
+  ret = HIP_ATOMIC_LOAD(ptr, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM);
 #else
   asm volatile("ld.acquire.sys.global.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
 #endif
   return ret;
 }
 
+<<<<<<< HEAD
+=======
+__device__ __forceinline__ uint32_t ld_sys_cv_u32(uint32_t const volatile* p) {
+  uint32_t v;
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  EP_DEVICE_ASSERT(false);
+#else
+  // Coherent, volatile load from global memory
+  asm volatile("ld.global.cv.u32 %0, [%1];" : "=r"(v) : "l"(p));
+  // TODO(MaoZiming): double check.
+#ifdef USE_GRACE_HOPPER
+  // Hopper/GH200: lightweight acquire fence at system scope
+  asm volatile("fence.acq_rel.sys;" ::: "memory");
+#elif __CUDA_ARCH__ >= 800
+  // Ampere fallback (sm_80–sm_89)
+  asm volatile("fence.acquire.sys;" ::: "memory");
+#else
+  // Older architectures (Volta and below)
+  asm volatile("membar.sys;" ::: "memory");
+#endif
+#endif
+  return v;
+}
+
+__device__ __forceinline__ uint64_t
+ld_acquire_sys_u64(uint64_t const volatile* p) {
+  uint64_t x;
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  x = HIP_ATOMIC_LOAD(p, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM);
+#else
+  asm volatile("ld.acquire.sys.global.u64 %0, [%1];" : "=l"(x) : "l"(p));
+#endif
+  return x;
+}
+
+__device__ __forceinline__ uint64_t ld_sys_cv_u64(uint64_t const volatile* p) {
+  uint64_t v;
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  EP_DEVICE_ASSERT(false);
+#else
+  asm volatile("ld.global.cv.u64 %0, [%1];" : "=l"(v) : "l"(p));
+#ifdef USE_GRACE_HOPPER
+  // Hopper/GH200: lightweight acquire fence at system scope
+  asm volatile("fence.acq_rel.sys;" ::: "memory");
+#elif __CUDA_ARCH__ >= 800
+  // Ampere fallback (sm_80–sm_89)
+  asm volatile("fence.acquire.sys;" ::: "memory");
+#else
+  // Older architectures (Volta and below)
+  asm volatile("membar.sys;" ::: "memory");
+#endif
+#endif
+  return v;
+}
+
+>>>>>>> 9182e94 (EP: improve intranode performance)
 template <typename dtype_a_t, typename dtype_b_t>
 __device__ __forceinline__ dtype_b_t pack2(dtype_a_t const& x,
                                            dtype_a_t const& y) {
@@ -473,8 +544,7 @@ __device__ __forceinline__ uint32_t
 ld_acquire_sys_global(uint32_t const volatile* p) {
   uint32_t v;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  v = __hip_atomic_load(const_cast<uint32_t*>(p), __ATOMIC_ACQUIRE,
-                        __HIP_MEMORY_SCOPE_SYSTEM);
+  v = HIP_ATOMIC_LOAD(p, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM);
 #else
   asm volatile("ld.acquire.sys.global.u32 %0, [%1];" : "=r"(v) : "l"(p));
 #endif
@@ -485,8 +555,7 @@ __device__ __forceinline__ uint64_t
 ld_acquire_sys_global(uint64_t const volatile* p) {
   uint64_t v;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  v = __hip_atomic_load(const_cast<uint64_t*>(p), __ATOMIC_ACQUIRE,
-                        __HIP_MEMORY_SCOPE_SYSTEM);
+  v = HIP_ATOMIC_LOAD(p, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM);
 #else
   asm volatile("ld.acquire.sys.global.u64 %0, [%1];" : "=l"(v) : "l"(p));
 #endif
@@ -496,7 +565,7 @@ ld_acquire_sys_global(uint64_t const volatile* p) {
 __device__ __forceinline__ uint64_t ld_acquire_sys_global(uint64_t const* ptr) {
   uint64_t ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = __hip_atomic_load(ptr, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM);
+  ret = HIP_ATOMIC_LOAD(ptr, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM);
 #else
   asm volatile("ld.acquire.sys.global.u64 %0, [%1];" : "=l"(ret) : "l"(ptr));
 #endif
@@ -532,8 +601,8 @@ __device__ __forceinline__ int atomic_add_release_global(int const* ptr,
                                                          int value) {
   int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = __hip_atomic_fetch_add(const_cast<int*>(ptr), value, __ATOMIC_RELEASE,
-                               __HIP_MEMORY_SCOPE_AGENT);
+  ret = HIP_ATOMIC_ADD(value, const_cast<int*>(ptr), __ATOMIC_RELEASE,
+                       __HIP_MEMORY_SCOPE_AGENT);
 #else
   asm volatile("atom.add.release.gpu.global.s32 %0, [%1], %2;"
                : "=r"(ret)
@@ -565,7 +634,7 @@ __device__ __forceinline__ uint32_t elect_one_sync(int lane_id) {
 __device__ __forceinline__ int ld_acquire_global(int const* ptr) {
   int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = __hip_atomic_load(ptr, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_AGENT);
+  ret = HIP_ATOMIC_LOAD(ptr, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_AGENT);
 #else
   asm volatile("ld.acquire.gpu.global.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
 #endif
@@ -574,8 +643,8 @@ __device__ __forceinline__ int ld_acquire_global(int const* ptr) {
 
 __device__ __forceinline__ void st_release_sys_global(int const* ptr, int val) {
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  __hip_atomic_store(const_cast<int*>(ptr), val, __ATOMIC_RELEASE,
-                     __HIP_MEMORY_SCOPE_SYSTEM);
+  HIP_ATOMIC_STORE(val, const_cast<int*>(ptr), __ATOMIC_RELEASE,
+                   __HIP_MEMORY_SCOPE_SYSTEM);
 #else
   asm volatile("st.release.sys.global.s32 [%0], %1;" ::"l"(ptr), "r"(val)
                : "memory");
@@ -584,8 +653,8 @@ __device__ __forceinline__ void st_release_sys_global(int const* ptr, int val) {
 
 __device__ __forceinline__ void st_release_cta(int const* ptr, int val) {
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  __hip_atomic_store(const_cast<int*>(ptr), val, __ATOMIC_RELEASE,
-                     __HIP_MEMORY_SCOPE_WORKGROUP);
+  HIP_ATOMIC_STORE(val, const_cast<int*>(ptr), __ATOMIC_RELEASE,
+                   __HIP_MEMORY_SCOPE_WORKGROUP);
 #else
   asm volatile("st.release.cta.s32 [%0], %1;" ::"l"(ptr), "r"(val) : "memory");
 #endif
@@ -632,7 +701,11 @@ __device__ __forceinline__ void trap() {
 __device__ __forceinline__ int ld_volatile_global(int const* ptr) {
   int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = __hip_atomic_load(ptr, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_SYSTEM);
+  asm volatile(
+      "global_load_dword %0 %1 off sc0 sc1\n "
+      "s_waitcnt vmcnt(0)"
+      : "=v"(ret)
+      : "v"(ptr));
 #else
   asm volatile("ld.volatile.global.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
 #endif
@@ -642,7 +715,11 @@ __device__ __forceinline__ int ld_volatile_global(int const* ptr) {
 __device__ __forceinline__ float ld_volatile_global(float const* ptr) {
   float ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = __hip_atomic_load(ptr, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_SYSTEM);
+  asm volatile(
+      "global_load_dword %0 %1 off sc0 sc1\n "
+      "s_waitcnt vmcnt(0)"
+      : "=v"(ret)
+      : "v"(ptr));
 #else
   asm volatile("ld.volatile.global.f32 %0, [%1];" : "=f"(ret) : "l"(ptr));
 #endif
@@ -652,7 +729,11 @@ __device__ __forceinline__ float ld_volatile_global(float const* ptr) {
 __device__ __forceinline__ int64_t ld_volatile_global(int64_t const* ptr) {
   int64_t ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = __hip_atomic_load(ptr, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_SYSTEM);
+  asm volatile(
+      "global_load_dwordx2 %0 %1 off sc0 sc1\n "
+      "s_waitcnt vmcnt(0)"
+      : "=v"(ret)
+      : "v"(ptr));
 #else
   asm volatile("ld.volatile.global.s64 %0, [%1];" : "=l"(ret) : "l"(ptr));
 #endif
@@ -662,7 +743,11 @@ __device__ __forceinline__ int64_t ld_volatile_global(int64_t const* ptr) {
 __device__ __forceinline__ int64_t ld_volatile_global(uint64_t const* ptr) {
   int64_t ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = __hip_atomic_load(ptr, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_SYSTEM);
+  asm volatile(
+      "global_load_dwordx2 %0 %1 off sc0 sc1\n "
+      "s_waitcnt vmcnt(0)"
+      : "=v"(ret)
+      : "v"(ptr));
 #else
   asm volatile("ld.volatile.global.u64 %0, [%1];" : "=l"(ret) : "l"(ptr));
 #endif
@@ -779,7 +864,8 @@ __device__ __forceinline__ void memory_fence_cta() {
 
 __device__ __forceinline__ void st_relaxed_sys_global(int const* ptr, int val) {
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  __builtin_nontemporal_store(val, ptr);
+  HIP_ATOMIC_STORE(val, const_cast<int*>(ptr), __ATOMIC_RELAXED,
+                   __HIP_MEMORY_SCOPE_SYSTEM);
 #else
   asm volatile("st.relaxed.sys.global.s32 [%0], %1;" ::"l"(ptr), "r"(val)
                : "memory");
@@ -789,7 +875,7 @@ __device__ __forceinline__ void st_relaxed_sys_global(int const* ptr, int val) {
 __device__ __forceinline__ int ld_acquire_cta(int const* ptr) {
   int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = __builtin_nontemporal_load(ptr);
+  HIP_ATOMIC_LOAD(ptr, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_WORKGROUP);
 #else
   asm volatile("ld.acquire.cta.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
 #endif
