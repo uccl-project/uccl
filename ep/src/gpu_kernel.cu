@@ -12,9 +12,9 @@ __global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs) {
   }
   printf("Device Block %d: Scheduled\n", bid);
   auto rb = &rbs[bid];
+  uint32_t complete = 0;
 
 #ifdef MEASURE_PER_OP_LATENCY
-  uint32_t complete = 0;
   __shared__ unsigned long long cycle_accum_smem;
   __shared__ unsigned int op_count_smem;
   cycle_accum_smem = 0ull;

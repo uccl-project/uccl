@@ -12,8 +12,16 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#define MEASURE_PER_OP_LATENCY
-#define MEASURE_PER_VERB_LATENCY
+// #define MEASURE_PER_OP_LATENCY
+// #define MEASURE_PER_VERB_LATENCY
+
+#ifndef USE_NORMAL_MODE
+#define USE_NORMAL_MODE
+#endif
+
+#ifndef EFA
+#define EFA
+#endif
 
 #ifndef USE_NORMAL_MODE
 #ifndef USE_SENDER_BARRIER
@@ -28,7 +36,7 @@
 #define kAtomicBufferSize 81960
 #define kQueueSize 1024
 #define kQueueMask (kQueueSize - 1)
-#define kMaxInflight 32
+#define kMaxInflight 64
 #define kBatchSize 32
 #define kIterations 40000
 #define kNumThBlocks 4
