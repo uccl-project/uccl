@@ -11,6 +11,7 @@
 #include <vector>
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
+#include <cassert>
 #endif
 #ifndef COPY_RING_CAP
 #define COPY_RING_CAP 4096
@@ -88,6 +89,119 @@ struct alignas(128) RingBuffer {
   uint64_t cycle_start = 0;
   uint64_t cycle_end = 0;
   uint32_t capacity = Capacity;
+
+  static constexpr size_t kNumWords = (Capacity + 63) / 64;
+  uint64_t ack_mask[kNumWords] = {};
+
+  inline void mark_acked(size_t idx) noexcept {
+      const size_t word = idx >> 6;        // idx / 64
+      const size_t bit = idx & 63;         // idx % 64
+      ack_mask[word] |= (1ull << bit);
+  }
+
+  inline void clear_acked(size_t idx) noexcept {
+      const size_t word = idx >> 6;
+      const size_t bit = idx & 63;
+      ack_mask[word] &= ~(1ull << bit);
+  }
+
+  inline bool is_acked(size_t idx) const noexcept {
+      const size_t word = idx >> 6;
+      const size_t bit = idx & 63;
+      return (ack_mask[word] >> bit) & 1ull;
+  }
+
+  // Return next index >= start_idx whose bit is UNSET (0)
+  inline size_t next_unacked(size_t start_idx) const noexcept {
+      if (start_idx >= Capacity) return Capacity;
+
+      size_t word = start_idx >> 6;
+      size_t bit  = start_idx & 63;
+
+      // How many valid bits remain in [start_idx, Capacity)
+      size_t remaining = Capacity - start_idx;
+      size_t span = remaining < (64 - bit) ? remaining : (64 - bit);
+
+      // Mask the slice in this word to only the valid range
+      uint64_t slice = (ack_mask[word] >> bit);
+      uint64_t range_mask = (span == 64) ? ~0ull : ((1ull << span) - 1);
+      slice &= range_mask;
+
+      // If there is any 0 in the slice, return its position
+      uint64_t inv = (~slice) & range_mask;
+      if (inv) return start_idx + __builtin_ctzll(inv);
+
+      // Scan subsequent full words, but clamp the last word
+      for (++word; word < kNumWords; ++word) {
+          size_t base = word << 6;
+          size_t valid = Capacity > base ? (size_t)std::min<size_t>(64, Capacity - base) : 0;
+          if (!valid) break;
+
+          uint64_t m = (valid == 64) ? ~0ull : ((1ull << valid) - 1);
+          uint64_t blk = ack_mask[word] & m;
+          if (blk != m) {
+              uint64_t inv2 = (~blk) & m;
+              return base + __builtin_ctzll(inv2);
+          }
+      }
+      return Capacity;  // all set up to Capacity
+  }
+
+  inline void clear_acked_range(size_t start, size_t end) noexcept {
+    if (start >= end) return;
+    if (start >= Capacity) return;
+    assert(end <= Capacity);
+
+    size_t start_word = start >> 6;
+    size_t end_word   = (end - 1) >> 6;
+    if (start_word == end_word) {
+        uint64_t mask = ((~0ull >> (64 - (end - start))) << (start & 63));
+        ack_mask[start_word] &= ~mask;
+        return;
+    }
+    if (start & 63) {
+        ack_mask[start_word] &= ~((~0ull) << (start & 63));
+        ++start_word;
+    }
+    for (size_t w = start_word; w < end_word; ++w)
+        ack_mask[w] = 0;
+    if ((end & 63) != 0) {
+        uint64_t mask = (~0ull) >> (64 - (end & 63));
+        ack_mask[end_word] &= ~mask;
+    } else {
+        ack_mask[end_word] = 0;
+    }
+  }
+
+  inline uint64_t advance_tail_from_mask() noexcept {
+    size_t local = (size_t)(tail % Capacity);
+
+    // First pass: [local, Capacity)
+    size_t next0 = next_unacked(local);
+    if (next0 == Capacity) {
+        // Everything from local..end is acked; maybe we can wrap
+        if (local != 0) {
+            // Consume [local, Capacity)
+            clear_acked_range(local, Capacity);
+            tail += (Capacity - local);
+
+            // Second pass: [0, new_local)
+            size_t wrap0 = next_unacked(0);
+            if (wrap0 > 0 && wrap0 <= local) {
+                clear_acked_range(0, wrap0);
+                tail += wrap0;
+            }
+        }
+    } else if (next0 > local) {
+        // Consume [local, next0)
+        clear_acked_range(local, next0);
+        tail += (next0 - local);
+    }
+
+    // Publish with release semantics
+    cpu_volatile_store_tail(tail);
+    return tail;
+  }
 
   RingBuffer() {
     for (uint32_t i = 0; i < Capacity; i++) {

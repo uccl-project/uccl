@@ -907,22 +907,22 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         }
 #endif
       // Map the tail of this ring-group batch
-      uint64_t const tail_wr = ring_wrids.back();
-      {
-        auto [it, inserted] =
-            S.wr_id_to_wr_ids.try_emplace(tail_wr, std::move(ring_wrids));
-        if (!inserted) {
-          fprintf(
-              stderr,
-              "thread_idx: %d, Error: tail wr_id %lu already exists (map=%p)\n",
-              thread_idx, tail_wr, (void*)&S.wr_id_to_wr_ids);
-          std::abort();
-        } else {
-          for (auto const& wr_id : it->second) {
-            finished_wrs.insert(wr_id);
-          }
-        }
-      }
+      // uint64_t const tail_wr = ring_wrids.back();
+      // {
+      //   auto [it, inserted] =
+      //       S.wr_id_to_wr_ids.try_emplace(tail_wr, std::move(ring_wrids));
+      //   if (!inserted) {
+      //     fprintf(
+      //         stderr,
+      //         "thread_idx: %d, Error: tail wr_id %lu already exists (map=%p)\n",
+      //         thread_idx, tail_wr, (void*)&S.wr_id_to_wr_ids);
+      //     std::abort();
+      //   } else {
+      //     for (auto const& wr_id : it->second) {
+      //       finished_wrs.insert(wr_id);
+      //     }
+      //   }
+      // }
     }
   }
 }
@@ -1227,9 +1227,9 @@ void local_process_completions(ProxyCtx& S,
 #ifdef EFA
           uint64_t const wr_done = wc[i].wr_id;
           acked_wrs.insert(wr_done);
-          if (S.wr_id_to_wr_ids.find(wr_done) != S.wr_id_to_wr_ids.end()) {
-            S.wr_id_to_wr_ids.erase(wr_done);
-          }
+          // if (S.wr_id_to_wr_ids.find(wr_done) != S.wr_id_to_wr_ids.end()) {
+          //   S.wr_id_to_wr_ids.erase(wr_done);
+          // }
 #else
           uint64_t const wr_done = wc[i].wr_id;
           auto it = S.wr_id_to_wr_ids.find(wr_done);
@@ -1907,23 +1907,26 @@ void post_atomic_operations(ProxyCtx& S,
         }
 #endif
       // Map tail WR for this ring group; mark finished and acked immediately
-      uint64_t const batch_tail_wr = group_wrids.back();
-      {
-        auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
-            batch_tail_wr, std::move(group_wrids));
-        if (!inserted) {
-          fprintf(stderr,
-                  "thread_idx: %d, Error: tail wr_id %lu already exists "
-                  "(map=%p, size=%zu, dst_rank=%d)\n",
-                  thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
-                  S.wr_id_to_wr_ids.size(), dst_rank);
-          std::abort();
-        } else {
-          for (auto const& wid : it->second) {
-            finished_wrs.insert(wid);
-            acked_wrs.insert(wid);
-          }
-        }
+      // uint64_t const batch_tail_wr = group_wrids.back();
+      // {
+      //   auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
+      //       batch_tail_wr, std::move(group_wrids));
+      //   if (!inserted) {
+      //     fprintf(stderr,
+      //             "thread_idx: %d, Error: tail wr_id %lu already exists "
+      //             "(map=%p, size=%zu, dst_rank=%d)\n",
+      //             thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
+      //             S.wr_id_to_wr_ids.size(), dst_rank);
+      //     std::abort();
+      //   } else {
+      //     for (auto const& wid : it->second) {
+      //       finished_wrs.insert(wid);
+      //       acked_wrs.insert(wid);
+      //     }
+      //   }
+      // }
+      for (auto const& wid : group_wrids) {
+        acked_wrs.insert(wid);
       }
     }  // end per-ring loop
   }

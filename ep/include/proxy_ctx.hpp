@@ -120,6 +120,6 @@ struct ProxyCtx {
   int local_rank = -1;        // convenience mirror of cfg_.local_rank
   int thread_idx = -1;        // thread index used in shm name
 
-  static constexpr int kNotifyGpuCounter = 100;
+  static constexpr int kNotifyGpuCounter = 5000;
   int notify_gpu_counter = kNotifyGpuCounter;
 };
