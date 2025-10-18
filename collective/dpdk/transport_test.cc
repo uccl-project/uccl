@@ -1,5 +1,7 @@
 #include "transport.h"
+#include "dpdk.h"
 #include "transport_config.h"
+#include "util/util.h"
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <chrono>
@@ -11,9 +13,9 @@ using namespace uccl;
 
 size_t kTestMsgSize = 1024000;
 size_t kReportIters = 5000;
-const size_t kTestIters = 1024000000000UL;
+size_t const kTestIters = 1024000000000UL;
 // Using larger inlights like 64 will cause severe cache miss, impacting perf.
-const size_t kMaxInflight = 8;
+size_t const kMaxInflight = 8;
 
 DEFINE_uint64(size, 1024000, "Size of test message.");
 DEFINE_bool(client, false, "Whether this is a client sending traffic.");
@@ -33,7 +35,6 @@ bool volatile quit = false;
 void interrupt_handler(int signal) {
   (void)signal;
   quit = true;
-  AFXDPFactory::shutdown();
 }
 
 int main(int argc, char* argv[]) {
@@ -46,6 +47,15 @@ int main(int argc, char* argv[]) {
   signal(SIGHUP, interrupt_handler);
   // signal(SIGALRM, interrupt_handler);
   // alarm(10);
+
+  Dpdk dpdk;
+  dpdk.InitDpdk(1, argv);
+
+  std::string mac_str = get_dev_mac(DEV_DEFAULT);
+  uint16_t port_id = dpdk.GetPmdPortIdByMac(mac_str.c_str());
+  if (port_id == (uint16_t)-1) {
+    LOG(FATAL) << "Client port not found";
+  }
 
   kTestMsgSize = FLAGS_size;
 
@@ -82,7 +92,7 @@ int main(int argc, char* argv[]) {
   pin_thread_to_cpu(0);
 
   if (FLAGS_client) {
-    auto ep = Endpoint(DEV_DEFAULT, NUM_QUEUES, NUM_FRAMES, ENGINE_CPU_START);
+    auto ep = Endpoint(port_id, DEV_DEFAULT, NUM_QUEUES, ENGINE_CPU_START);
     DCHECK(FLAGS_serverip != "");
     auto conn_id = ep.uccl_connect(FLAGS_serverip);
     ConnID conn_id2;
@@ -269,7 +279,7 @@ int main(int argc, char* argv[]) {
         // 24B: 4B FCS + 8B frame delimiter + 12B interframe gap
         auto bw_gbps =
             sent_bytes *
-            ((AFXDP_MTU * 1.0 + 24) / (AFXDP_MTU - kNetHdrLen - kUcclHdrLen)) *
+            ((DPDK_MTU * 1.0 + 24) / (DPDK_MTU - kNetHdrLen - kUcclHdrLen)) *
             8.0 / 1000 / 1000 / 1000 /
             (std::chrono::duration_cast<std::chrono::microseconds>(end_bw_mea -
                                                                    start_bw_mea)
@@ -290,7 +300,7 @@ int main(int argc, char* argv[]) {
       }
     }
   } else {
-    auto ep = Endpoint(DEV_DEFAULT, NUM_QUEUES, NUM_FRAMES, ENGINE_CPU_START);
+    auto ep = Endpoint(port_id, DEV_DEFAULT, NUM_QUEUES, ENGINE_CPU_START);
     std::string remote_ip;
     auto conn_id = ep.uccl_accept(remote_ip);
     ConnID conn_id2;

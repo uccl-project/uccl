@@ -99,24 +99,24 @@ public:
     mbuf_.ol_flags |= (RTE_MBUF_F_TX_UDP_CKSUM);
   }
 
-  /**
-   * @brief Attach external buffer to this packet mbuf.
-   * @param buf_va External buffer virtual address (VA).
-   * @param buf_iova External buffer IO address (IOVA).
-   * @param buf_len Total length of the external buffer.
-   * @param buf_data_ofs Offset of the data in the external buffer.
-   * @param buf_data_len Length of the data in the external buffer.
-   * @param shinfo DPDK-related shared info of the external buffer.
-   */
-  void attach_extbuf(void *buf_va, uint64_t buf_iova, uint16_t buf_len,
-                     uint32_t buf_data_ofs, uint32_t buf_data_len,
-                     rte_mbuf_ext_shared_info *shinfo) {
-    rte_pktmbuf_attach_extbuf(&mbuf_, buf_va, buf_iova, buf_len, shinfo);
-    mbuf_.data_off = buf_data_ofs;
-    mbuf_.data_len = buf_data_len;
-    mbuf_.pkt_len = buf_data_len;
-    rte_mbuf_refcnt_set(&mbuf_, 1);
-  }
+  // /**
+  //  * @brief Attach external buffer to this packet mbuf.
+  //  * @param buf_va External buffer virtual address (VA).
+  //  * @param buf_iova External buffer IO address (IOVA).
+  //  * @param buf_len Total length of the external buffer.
+  //  * @param buf_data_ofs Offset of the data in the external buffer.
+  //  * @param buf_data_len Length of the data in the external buffer.
+  //  * @param shinfo DPDK-related shared info of the external buffer.
+  //  */
+  // void attach_extbuf(void *buf_va, uint64_t buf_iova, uint16_t buf_len,
+  //                    uint32_t buf_data_ofs, uint32_t buf_data_len,
+  //                    rte_mbuf_ext_shared_info *shinfo) {
+  //   rte_pktmbuf_attach_extbuf(&mbuf_, buf_va, buf_iova, buf_len, shinfo);
+  //   mbuf_.data_off = buf_data_ofs;
+  //   mbuf_.data_len = buf_data_len;
+  //   mbuf_.pkt_len = buf_data_len;
+  //   rte_mbuf_refcnt_set(&mbuf_, 1);
+  // }
 
   /**
    * @brief Append len bytes to this packet and return a pointer to the start

@@ -12,11 +12,11 @@
 
 namespace uccl {
 class Dpdk {
-public:
+ public:
   Dpdk() : initialized_(false) {}
   ~Dpdk() { DeInitDpdk(); }
 
-  void InitDpdk(int argc, char **argv) {
+  void InitDpdk(int argc, char** argv) {
     if (initialized_) {
       LOG(WARNING) << "DPDK is already initialized.";
       return;
@@ -37,31 +37,35 @@ public:
     } else {
       LOG(INFO) << "DPDK runs in PA mode.";
     }
+
+    initialized_ = true;
+    LOG(INFO) << "DPDK initialized successfully";
   }
 
   void DeInitDpdk() {
-    int ret = rte_eal_cleanup();
-    if (ret != 0) {
-      LOG(FATAL) << "rte_eal_cleanup() failed: ret = " << ret
-                 << " rte_errno = " << rte_errno << " ("
-                 << rte_strerror(rte_errno) << ")";
-    }
+    if (initialized_) {
+      int ret = rte_eal_cleanup();
+      if (ret != 0) {
+        LOG(FATAL) << "rte_eal_cleanup() failed: ret = " << ret
+                   << " rte_errno = " << rte_errno << " ("
+                   << rte_strerror(rte_errno) << ")";
+      }
 
-    initialized_ = false;
+      initialized_ = false;
+    }
   }
 
   bool isInitialized() const { return initialized_; }
 
   size_t GetNumPmdPortsAvailable() { return rte_eth_dev_count_avail(); }
 
-  uint16_t GetPmdPortIdByMac(const char *l2_addr) const {
+  uint16_t GetPmdPortIdByMac(char const* l2_addr) const {
     uint16_t nb_ports = rte_eth_dev_count_avail();
     struct rte_ether_addr mac;
     char buf[32];
 
     for (uint16_t pid = 0; pid < nb_ports; pid++) {
-      if (rte_eth_macaddr_get(pid, &mac) < 0)
-        continue;
+      if (rte_eth_macaddr_get(pid, &mac) < 0) continue;
 
       mac_to_str(&mac, buf, sizeof(buf));
 
@@ -69,11 +73,11 @@ public:
         return pid;
       }
     }
-    return -1; // 没找到
+    return -1;  // 没找到
   }
 
-private:
-  void mac_to_str(struct rte_ether_addr *mac, char *buf, size_t size) const {
+ private:
+  void mac_to_str(struct rte_ether_addr* mac, char* buf, size_t size) const {
     snprintf(buf, size, "%02x:%02x:%02x:%02x:%02x:%02x", mac->addr_bytes[0],
              mac->addr_bytes[1], mac->addr_bytes[2], mac->addr_bytes[3],
              mac->addr_bytes[4], mac->addr_bytes[5]);
@@ -81,6 +85,6 @@ private:
 
   bool initialized_;
 };
-} // namespace uccl
+}  // namespace uccl
 
-#endif // SRC_INCLUDE_DPDK_H_
+#endif  // SRC_INCLUDE_DPDK_H_
