@@ -25,7 +25,8 @@ using CUmemAllocationProp = hipMemAllocationProp;
 using CUmemAccessDesc = hipMemAccessDesc;
 using CUmemAllocationHandleType = hipMemAllocationHandleType;
 
-constexpr auto cudaErrorPeerAccessAlreadyEnabled = hipErrorPeerAccessAlreadyEnabled;
+constexpr auto cudaErrorPeerAccessAlreadyEnabled =
+    hipErrorPeerAccessAlreadyEnabled;
 constexpr auto cudaErrorContextIsDestroyed = hipErrorContextIsDestroyed;
 constexpr auto cudaErrorInvalidDevice = hipErrorInvalidDevice;
 constexpr auto cudaSuccess = hipSuccess;
@@ -42,8 +43,10 @@ constexpr auto cudaIpcMemLazyEnablePeerAccess = hipIpcMemLazyEnablePeerAccess;
 
 constexpr auto CU_MEM_ALLOCATION_TYPE_PINNED = hipMemAllocationTypePinned;
 constexpr auto CU_MEM_LOCATION_TYPE_DEVICE = hipMemLocationTypeDevice;
-constexpr auto CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR = hipMemHandleTypePosixFileDescriptor;
-constexpr auto CU_MEM_ACCESS_FLAGS_PROT_READWRITE = hipMemAccessFlagsProtReadWrite;
+constexpr auto CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR =
+    hipMemHandleTypePosixFileDescriptor;
+constexpr auto CU_MEM_ACCESS_FLAGS_PROT_READWRITE =
+    hipMemAccessFlagsProtReadWrite;
 
 #ifndef CUDA_SUCCESS
 #define CUDA_SUCCESS hipSuccess
@@ -89,7 +92,8 @@ constexpr auto CU_MEM_ACCESS_FLAGS_PROT_READWRITE = hipMemAccessFlagsProtReadWri
 #define cudaGraphLaunch(...) hipGraphLaunch(__VA_ARGS__)
 #define cudaGraphDestroy(...) hipGraphDestroy(__VA_ARGS__)
 #define cudaGraphExecDestroy(...) hipGraphExecDestroy(__VA_ARGS__)
-#define cudaThreadExchangeStreamCaptureMode(...) hipThreadExchangeStreamCaptureMode(__VA_ARGS__)
+#define cudaThreadExchangeStreamCaptureMode(...) \
+  hipThreadExchangeStreamCaptureMode(__VA_ARGS__)
 #define cudaIpcGetMemHandle(...) hipIpcGetMemHandle(__VA_ARGS__)
 #define cudaIpcOpenMemHandle(...) hipIpcOpenMemHandle(__VA_ARGS__)
 #define cudaIpcCloseMemHandle(...) hipIpcCloseMemHandle(__VA_ARGS__)
@@ -103,9 +107,12 @@ constexpr auto CU_MEM_ACCESS_FLAGS_PROT_READWRITE = hipMemAccessFlagsProtReadWri
 #define cuMemSetAccess(...) hipMemSetAccess(__VA_ARGS__)
 #define cuMemMap(...) hipMemMap(__VA_ARGS__)
 #define cuMemUnmap(...) hipMemUnmap(__VA_ARGS__)
-#define cuMemRetainAllocationHandle(...) hipMemRetainAllocationHandle(__VA_ARGS__)
-#define cuMemExportToShareableHandle(...) hipMemExportToShareableHandle(__VA_ARGS__)
-#define cuMemImportFromShareableHandle(...) hipMemImportFromShareableHandle(__VA_ARGS__)
+#define cuMemRetainAllocationHandle(...) \
+  hipMemRetainAllocationHandle(__VA_ARGS__)
+#define cuMemExportToShareableHandle(...) \
+  hipMemExportToShareableHandle(__VA_ARGS__)
+#define cuMemImportFromShareableHandle(...) \
+  hipMemImportFromShareableHandle(__VA_ARGS__)
 
 #else
 
@@ -121,7 +128,8 @@ constexpr auto CU_MEM_ACCESS_FLAGS_PROT_READWRITE = hipMemAccessFlagsProtReadWri
 #define CU_MEM_HANDLE_TYPE_FABRIC ((CUmemAllocationHandleType)0x8ULL)
 #endif
 // We need CUDA 12.3 above and kernel 5.6.0 above for NVLS API
-#define CUDA_NVLS_API_AVAILABLE ((CUDART_VERSION >= 12030) && (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)))
+#define CUDA_NVLS_API_AVAILABLE \
+  ((CUDART_VERSION >= 12030) && (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)))
 #else  // defined(__HIP_PLATFORM_AMD__)
 #define CUDA_NVLS_API_AVAILABLE 0
 // NVLS is not supported on AMD platform, just to avoid compilation error

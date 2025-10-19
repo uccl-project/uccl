@@ -2,9 +2,9 @@
 // Licensed under the MIT license.
 
 #include "fifo.hpp"
+#include "atomic.hpp"
 #include "gpu_utils.hpp"
 #include "numa.hpp"
-#include "atomic.hpp"
 
 namespace mscclpp {
 
@@ -13,7 +13,7 @@ struct Fifo::Impl {
   detail::UniqueGpuPtr<uint64_t> head;
   detail::UniqueGpuHostPtr<uint64_t> tail;
   detail::UniqueGpuPtr<uint64_t> tailCache;
-  const int size;
+  int const size;
 
   Impl(int size)
       : triggers(detail::gpuCallocHostUnique<ProxyTrigger>(size)),

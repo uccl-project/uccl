@@ -32,7 +32,7 @@ class BaseError : public std::runtime_error {
   ///
   /// @param message The error message.
   /// @param errorCode The error code.
-  BaseError(const std::string& message, int errorCode);
+  BaseError(std::string const& message, int errorCode);
 
   /// Constructor of BaseError.
   ///
@@ -50,7 +50,7 @@ class BaseError : public std::runtime_error {
   /// Get the error message.
   ///
   /// @return The error message.
-  const char* what() const noexcept override;
+  char const* what() const noexcept override;
 
  protected:
   std::string message_;
@@ -60,7 +60,7 @@ class BaseError : public std::runtime_error {
 /// A generic error.
 class Error : public BaseError {
  public:
-  Error(const std::string& message, ErrorCode errorCode);
+  Error(std::string const& message, ErrorCode errorCode);
   virtual ~Error() = default;
   ErrorCode getErrorCode() const;
 };
@@ -68,28 +68,28 @@ class Error : public BaseError {
 /// An error from a system call that sets `errno`.
 class SysError : public BaseError {
  public:
-  SysError(const std::string& message, int errorCode);
+  SysError(std::string const& message, int errorCode);
   virtual ~SysError() = default;
 };
 
 /// An error from a CUDA runtime library call.
 class CudaError : public BaseError {
  public:
-  CudaError(const std::string& message, int errorCode);
+  CudaError(std::string const& message, int errorCode);
   virtual ~CudaError() = default;
 };
 
 /// An error from a CUDA driver library call.
 class CuError : public BaseError {
  public:
-  CuError(const std::string& message, int errorCode);
+  CuError(std::string const& message, int errorCode);
   virtual ~CuError() = default;
 };
 
 /// An error from an ibverbs library call.
 class IbError : public BaseError {
  public:
-  IbError(const std::string& message, int errorCode);
+  IbError(std::string const& message, int errorCode);
   virtual ~IbError() = default;
 };
 

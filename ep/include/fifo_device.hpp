@@ -4,9 +4,8 @@
 #ifndef MSCCLPP_FIFO_DEVICE_HPP_
 #define MSCCLPP_FIFO_DEVICE_HPP_
 
-#include <cstdint>
-
 #include "device.hpp"
+#include <cstdint>
 
 #if defined(MSCCLPP_DEVICE_COMPILE)
 #include "atomic_device.hpp"
@@ -40,15 +39,17 @@ union alignas(16) ProxyTrigger {
     // First 64 bits: value[0]
     uint64_t size : TriggerBitsSize;
     uint64_t srcOffset : TriggerBitsOffset;
-    uint64_t : (64 - TriggerBitsSize - TriggerBitsOffset);  // ensure 64-bit alignment
+    uint64_t : (64 - TriggerBitsSize -
+                TriggerBitsOffset);  // ensure 64-bit alignment
     // Second 64 bits: value[1]
     uint64_t dstOffset : TriggerBitsOffset;
     uint64_t srcMemoryId : TriggerBitsMemoryId;
     uint64_t dstMemoryId : TriggerBitsMemoryId;
     uint64_t type : TriggerBitsType;
     uint64_t semaphoreId : TriggerBitsSemaphoreId;
-    uint64_t : (64 - TriggerBitsOffset - TriggerBitsMemoryId - TriggerBitsMemoryId - TriggerBitsType -
-                TriggerBitsSemaphoreId - TriggerBitsFifoReserved);  // ensure 64-bit alignment
+    uint64_t : (64 - TriggerBitsOffset - TriggerBitsMemoryId -
+                TriggerBitsMemoryId - TriggerBitsType - TriggerBitsSemaphoreId -
+                TriggerBitsFifoReserved);  // ensure 64-bit alignment
     uint64_t reserved : TriggerBitsFifoReserved;
   } fields;
 
@@ -64,16 +65,25 @@ union alignas(16) ProxyTrigger {
   /// @param srcOffset The offset into the source memory region.
   /// @param bytes The bytes of the transfer.
   /// @param semaphoreId The ID of the semaphore.
-  MSCCLPP_DEVICE_INLINE ProxyTrigger(TriggerType type, uint32_t dstId, uint64_t dstOffset, uint32_t srcId,
-                                     uint64_t srcOffset, uint64_t bytes, uint32_t semaphoreId) {
-    MSCCLPP_ASSERT_DEVICE(type < (1ULL << TriggerBitsType), "type is too large");
-    MSCCLPP_ASSERT_DEVICE(dstId < (1ULL << TriggerBitsMemoryId), "dstId is too large");
-    MSCCLPP_ASSERT_DEVICE(dstOffset < (1ULL << TriggerBitsOffset), "dstOffset is too large");
-    MSCCLPP_ASSERT_DEVICE(srcId < (1ULL << TriggerBitsMemoryId), "srcId is too large");
-    MSCCLPP_ASSERT_DEVICE(srcOffset < (1ULL << TriggerBitsOffset), "srcOffset is too large");
+  MSCCLPP_DEVICE_INLINE ProxyTrigger(TriggerType type, uint32_t dstId,
+                                     uint64_t dstOffset, uint32_t srcId,
+                                     uint64_t srcOffset, uint64_t bytes,
+                                     uint32_t semaphoreId) {
+    MSCCLPP_ASSERT_DEVICE(type < (1ULL << TriggerBitsType),
+                          "type is too large");
+    MSCCLPP_ASSERT_DEVICE(dstId < (1ULL << TriggerBitsMemoryId),
+                          "dstId is too large");
+    MSCCLPP_ASSERT_DEVICE(dstOffset < (1ULL << TriggerBitsOffset),
+                          "dstOffset is too large");
+    MSCCLPP_ASSERT_DEVICE(srcId < (1ULL << TriggerBitsMemoryId),
+                          "srcId is too large");
+    MSCCLPP_ASSERT_DEVICE(srcOffset < (1ULL << TriggerBitsOffset),
+                          "srcOffset is too large");
     MSCCLPP_ASSERT_DEVICE(bytes != 0, "bytes must not be zero");
-    MSCCLPP_ASSERT_DEVICE(bytes < (1ULL << TriggerBitsSize), "bytes is too large");
-    MSCCLPP_ASSERT_DEVICE(semaphoreId < (1ULL << TriggerBitsSemaphoreId), "semaphoreId is too large");
+    MSCCLPP_ASSERT_DEVICE(bytes < (1ULL << TriggerBitsSize),
+                          "bytes is too large");
+    MSCCLPP_ASSERT_DEVICE(semaphoreId < (1ULL << TriggerBitsSemaphoreId),
+                          "semaphoreId is too large");
     constexpr uint64_t maskSize = (1ULL << TriggerBitsSize) - 1;
     constexpr uint64_t maskSrcOffset = (1ULL << TriggerBitsOffset) - 1;
     constexpr uint64_t maskDstOffset = (1ULL << TriggerBitsOffset) - 1;
@@ -81,8 +91,10 @@ union alignas(16) ProxyTrigger {
     constexpr uint64_t maskDstMemoryId = (1ULL << TriggerBitsMemoryId) - 1;
     constexpr uint64_t maskType = (1ULL << TriggerBitsType) - 1;
     constexpr uint64_t maskSemaphoreId = (1ULL << TriggerBitsSemaphoreId) - 1;
-    fst = (((srcOffset & maskSrcOffset) << TriggerBitsSize) + (bytes & maskSize));
-    snd = (((((((((semaphoreId & maskSemaphoreId) << TriggerBitsType) + ((uint64_t)type & maskType))
+    fst =
+        (((srcOffset & maskSrcOffset) << TriggerBitsSize) + (bytes & maskSize));
+    snd = (((((((((semaphoreId & maskSemaphoreId) << TriggerBitsType) +
+                 ((uint64_t)type & maskType))
                 << TriggerBitsMemoryId) +
                (dstId & maskDstMemoryId))
               << TriggerBitsMemoryId) +
@@ -93,18 +105,22 @@ union alignas(16) ProxyTrigger {
 #endif  // defined(MSCCLPP_DEVICE_COMPILE)
 };
 
-/// Concurrent FIFO where multiple device threads (the number of threads should not exceed the FIFO size) to push
-/// Head pointer is on device, tail pointer is on host (readable by device).
-/// The FIFO’s capacity is limited only by MAX_UINT64—effectively infinite for practical use. Exceeding this limit will
+/// Concurrent FIFO where multiple device threads (the number of threads should
+/// not exceed the FIFO size) to push Head pointer is on device, tail pointer is
+/// on host (readable by device). The FIFO’s capacity is limited only by
+/// MAX_UINT64—effectively infinite for practical use. Exceeding this limit will
 /// overflow the counter and lead to undefined behavior.
 struct FifoDeviceHandle {
 #if defined(MSCCLPP_DEVICE_COMPILE)
   /// Push a trigger to the FIFO.
   /// @param trigger Trigger to push.
-  /// @param maxSpinCount Max spin count before assert. Never assert if negative.
+  /// @param maxSpinCount Max spin count before assert. Never assert if
+  /// negative.
   /// @return Previous head of the FIFO where the trigger was pushed.
-  MSCCLPP_DEVICE_INLINE uint64_t push(ProxyTrigger trigger, int64_t maxSpinCount = 1000000) {
-    uint64_t prevHead = atomicFetchAdd<uint64_t, scopeDevice>(head, 1, memoryOrderRelaxed);
+  MSCCLPP_DEVICE_INLINE uint64_t push(ProxyTrigger trigger,
+                                      int64_t maxSpinCount = 1000000) {
+    uint64_t prevHead =
+        atomicFetchAdd<uint64_t, scopeDevice>(head, 1, memoryOrderRelaxed);
 
     // Flip the last bit for safe polling; host will revert.
     constexpr uint64_t flipMask = uint64_t{1} << uint64_t{63};
@@ -121,9 +137,13 @@ struct FifoDeviceHandle {
 #if __CUDA_ARCH__ == 800
     // This is faster than release for A100.
     __threadfence_system();
-    asm volatile("st.global.relaxed.sys.v2.u64 [%0], {%1,%2};" ::"l"(triggerPtr), "l"(trigger.fst), "l"(trigger.snd));
+    asm volatile(
+        "st.global.relaxed.sys.v2.u64 [%0], {%1,%2};" ::"l"(triggerPtr),
+        "l"(trigger.fst), "l"(trigger.snd));
 #else
-    asm volatile("st.global.release.sys.v2.u64 [%0], {%1,%2};" ::"l"(triggerPtr), "l"(trigger.fst), "l"(trigger.snd));
+    asm volatile(
+        "st.global.release.sys.v2.u64 [%0], {%1,%2};" ::"l"(triggerPtr),
+        "l"(trigger.fst), "l"(trigger.snd));
 #endif
 #else   // !defined(MSCCLPP_DEVICE_CUDA)
     // Store snd no later than fst.
@@ -149,13 +169,18 @@ struct FifoDeviceHandle {
 
   /// Wait until a specific trigger is popped from the FIFO.
   /// @param fifoHead FIFO head where the trigger was pushed.
-  /// @param maxSpinCount Max spin count before assert. Never assert if negative.
-  MSCCLPP_DEVICE_INLINE void sync(uint64_t fifoHead, [[maybe_unused]] int64_t maxSpinCount = 1000000) {
+  /// @param maxSpinCount Max spin count before assert. Never assert if
+  /// negative.
+  MSCCLPP_DEVICE_INLINE void sync(
+      uint64_t fifoHead, [[maybe_unused]] int64_t maxSpinCount = 1000000) {
     uint64_t val;
-    POLL_MAYBE_JAILBREAK((fifoHead >= (val = atomicLoad(tail, memoryOrderAcquire))), maxSpinCount);
-    // If multiple threads sync in parallel, this may write a stale value to tailCache.
-    // This is fine, as the tailCache is for avoiding unnecessary syncs from the push(),
-    // which can work as long as the tailCache is not stale by the length of the FIFO.
+    POLL_MAYBE_JAILBREAK(
+        (fifoHead >= (val = atomicLoad(tail, memoryOrderAcquire))),
+        maxSpinCount);
+    // If multiple threads sync in parallel, this may write a stale value to
+    // tailCache. This is fine, as the tailCache is for avoiding unnecessary
+    // syncs from the push(), which can work as long as the tailCache is not
+    // stale by the length of the FIFO.
     *tailCache = val;
   }
 #endif  // defined(MSCCLPP_DEVICE_COMPILE)

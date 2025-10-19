@@ -15,165 +15,247 @@ struct ThreadMetrics {
   uint64_t min_latency_cycles;
 };
 
-// FIFO throughput test kernel
+// FIFO throughput test kernel with batching support
 __global__ void fifoThroughputKernel(
-    mscclpp::FifoDeviceHandle fifo,
-    ThreadMetrics* metrics,
-    uint32_t num_threads,
-    uint32_t test_duration_ms,
-    uint32_t warmup_iterations,
-    bool measure_latency,
-    bool volatile* stop_flag) {
-  
+    mscclpp::FifoDeviceHandle* fifos, ThreadMetrics* metrics,
+    uint32_t num_threads, uint32_t test_duration_ms, uint32_t warmup_iterations,
+    bool volatile* stop_flag, float gpu_clock_ghz, uint32_t batch_size,
+    int num_fifos, uint64_t* latency_samples, int max_samples) {
   const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
-  
+
   if (tid >= num_threads) return;
-  
+
+  // Each block uses its own FIFO
+  mscclpp::FifoDeviceHandle& fifo = fifos[blockIdx.x % num_fifos];
+
   // Initialize metrics
   metrics[tid].push_count = 0;
   metrics[tid].total_cycles = 0;
   metrics[tid].max_latency_cycles = 0;
   metrics[tid].min_latency_cycles = UINT64_MAX;
-  
+
   // Warmup phase
   for (uint32_t i = 0; i < warmup_iterations && !(*stop_flag); i++) {
     mscclpp::ProxyTrigger trigger;
     trigger.fst = tid + 1;  // Use tid+1 to ensure non-zero
     trigger.snd = i;
-    
+
     fifo.push(trigger);
   }
-  
+
   __syncthreads();
-  
-  // Test phase
+
+  // Test phase with batching - maintains high in-flight count
   uint64_t test_start = clock64();
-  uint64_t test_duration_cycles = (uint64_t)test_duration_ms * 1500000ULL; // ~1.5GHz
-  
+  // Convert test duration from ms to cycles using actual GPU clock rate
+  uint64_t test_duration_cycles =
+      (uint64_t)(test_duration_ms * gpu_clock_ghz * 1000000.0f);
+
+  // Use a circular buffer to track head positions of in-flight requests
+  // This allows us to maintain a consistently high number of in-flight requests
+  // Max batch size is 256 to fit in local memory
+  constexpr uint32_t MAX_BATCH_SIZE = 256;
+  uint64_t head_buffer[MAX_BATCH_SIZE];
+  uint32_t effective_batch_size =
+      batch_size < MAX_BATCH_SIZE ? batch_size : MAX_BATCH_SIZE;
+  uint32_t head_write_idx = 0;
+  uint32_t head_read_idx = 0;
+  uint32_t inflight_count = 0;
+  uint32_t sample_idx = 0;
+
   while (!(*stop_flag)) {
     uint64_t current_time = clock64();
     if (current_time - test_start > test_duration_cycles) {
       break;
     }
-    
+
     // Create trigger
     mscclpp::ProxyTrigger trigger;
     trigger.fst = tid + 1;  // Use tid+1 to ensure non-zero
     trigger.snd = metrics[tid].push_count;
-    
+
     // Measure latency if requested
     uint64_t push_start = 0;
-    if (measure_latency) {
-      push_start = clock64();
+    push_start = clock64();
+
+    // Push to FIFO and get the head position
+    uint64_t head = fifo.push(trigger);
+
+    // Store head in circular buffer
+    head_buffer[head_write_idx] = head;
+    head_write_idx = (head_write_idx + 1) % effective_batch_size;
+    inflight_count++;
+
+    uint64_t push_end = clock64();
+    uint64_t latency = push_end - push_start;
+
+    metrics[tid].total_cycles += latency;
+    metrics[tid].max_latency_cycles =
+        max(metrics[tid].max_latency_cycles, latency);
+    metrics[tid].min_latency_cycles =
+        min(metrics[tid].min_latency_cycles, latency);
+
+    // Store latency sample for percentile calculation
+    if (latency_samples && sample_idx < max_samples) {
+      latency_samples[tid * max_samples + sample_idx] = latency;
+      sample_idx++;
     }
-    
-    // Push to FIFO
-    fifo.push(trigger);
-    
-    if (measure_latency) {
-      uint64_t push_end = clock64();
-      uint64_t latency = push_end - push_start;
-      
-      metrics[tid].total_cycles += latency;
-      metrics[tid].max_latency_cycles = 
-          max(metrics[tid].max_latency_cycles, latency);
-      metrics[tid].min_latency_cycles = 
-          min(metrics[tid].min_latency_cycles, latency);
-    }
-    
+
     // Increment counter
     metrics[tid].push_count++;
+
+    // Once we reach batch_size, start polling the oldest request
+    // This maintains batch_size in-flight requests at all times
+    if (inflight_count > effective_batch_size) {
+      uint64_t oldest_head = head_buffer[head_read_idx];
+      head_read_idx = (head_read_idx + 1) % effective_batch_size;
+
+      // Wait for the oldest request to be consumed by the host
+      fifo.sync(oldest_head);
+      inflight_count--;
+    }
   }
 }
 
-// FIFO latency stress test kernel - multiple warps competing
-__global__ void fifoLatencyStressKernel(
-    mscclpp::FifoDeviceHandle fifo,
-    ThreadMetrics* metrics,
-    uint32_t num_threads,
-    uint32_t num_iterations,
-    bool volatile* stop_flag) {
-  
+// FIFO RTT latency test kernel - measures round-trip time by polling after each
+// push
+__global__ void fifoLatencyKernel(mscclpp::FifoDeviceHandle* fifos,
+                                  ThreadMetrics* metrics, uint32_t num_threads,
+                                  uint32_t test_duration_ms,
+                                  uint32_t warmup_iterations,
+                                  bool volatile* stop_flag, float gpu_clock_ghz,
+                                  int num_fifos, uint64_t* latency_samples,
+                                  int max_samples) {
   const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
-  
+
   if (tid >= num_threads) return;
-  
+
+  // Each block uses its own FIFO
+  mscclpp::FifoDeviceHandle& fifo = fifos[blockIdx.x % num_fifos];
+
   // Initialize metrics
   metrics[tid].push_count = 0;
   metrics[tid].total_cycles = 0;
   metrics[tid].max_latency_cycles = 0;
   metrics[tid].min_latency_cycles = UINT64_MAX;
-  
-  __syncthreads();
-  
-  for (uint32_t i = 0; i < num_iterations && !(*stop_flag); i++) {
+
+  // Warmup phase - don't measure latency during warmup
+  for (uint32_t i = 0; i < warmup_iterations && !(*stop_flag); i++) {
     mscclpp::ProxyTrigger trigger;
     trigger.fst = tid + 1;
     trigger.snd = i;
-    
-    uint64_t push_start = clock64();
-    
-    // Push to FIFO (this may spin if FIFO is full)
-    fifo.push(trigger);
-    
-    uint64_t push_end = clock64();
-    uint64_t latency = push_end - push_start;
-    
+
+    uint64_t head = fifo.push(trigger);
+    fifo.sync(head);  // Wait for host to consume
+  }
+
+  __syncthreads();
+
+  // Test phase - measure RTT latency
+  uint64_t test_start = clock64();
+  uint64_t test_duration_cycles =
+      (uint64_t)(test_duration_ms * gpu_clock_ghz * 1000000.0f);
+  uint64_t iteration = 0;
+  uint32_t sample_idx = 0;
+
+  while (!(*stop_flag)) {
+    uint64_t current_time = clock64();
+    if (current_time - test_start > test_duration_cycles) {
+      break;
+    }
+
+    mscclpp::ProxyTrigger trigger;
+    trigger.fst = tid + 1;
+    trigger.snd = warmup_iterations + iteration;
+
+    uint64_t rtt_start = clock64();
+
+    // Push to FIFO and get the head position
+    uint64_t head = fifo.push(trigger);
+
+    // Poll the just-pushed request to measure RTT (round-trip time)
+    // This waits until the host proxy has consumed the trigger
+    fifo.sync(head);
+
+    uint64_t rtt_end = clock64();
+    uint64_t latency = rtt_end - rtt_start;
+
     metrics[tid].total_cycles += latency;
-    metrics[tid].max_latency_cycles = 
+    metrics[tid].max_latency_cycles =
         max(metrics[tid].max_latency_cycles, latency);
-    metrics[tid].min_latency_cycles = 
+    metrics[tid].min_latency_cycles =
         min(metrics[tid].min_latency_cycles, latency);
     metrics[tid].push_count++;
+
+    // Store latency sample for percentile calculation
+    if (latency_samples && sample_idx < max_samples) {
+      latency_samples[tid * max_samples + sample_idx] = latency;
+      sample_idx++;
+    }
+
+    iteration++;
   }
 }
 
-// Burst test - threads push as fast as possible
-__global__ void fifoBurstKernel(
-    mscclpp::FifoDeviceHandle fifo,
-    ThreadMetrics* metrics,
-    uint32_t num_threads,
-    uint32_t burst_size,
-    bool volatile* stop_flag) {
-  
+// Burst test - threads push as fast as possible without polling
+__global__ void fifoBurstKernel(mscclpp::FifoDeviceHandle* fifos,
+                                ThreadMetrics* metrics, uint32_t num_threads,
+                                uint32_t test_duration_ms,
+                                uint32_t warmup_iterations,
+                                bool volatile* stop_flag, float gpu_clock_ghz,
+                                int num_fifos, uint64_t* latency_samples,
+                                int max_samples) {
   const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
-  
+
   if (tid >= num_threads) return;
-  
+
+  // Each block uses its own FIFO
+  mscclpp::FifoDeviceHandle& fifo = fifos[blockIdx.x % num_fifos];
+
   metrics[tid].push_count = 0;
   metrics[tid].total_cycles = 0;
   metrics[tid].max_latency_cycles = 0;
   metrics[tid].min_latency_cycles = UINT64_MAX;
-  
-  __syncthreads();
-  
-  uint64_t burst_start = clock64();
-  
-  for (uint32_t i = 0; i < burst_size && !(*stop_flag); i++) {
+
+  // Warmup phase - don't measure during warmup
+  for (uint32_t i = 0; i < warmup_iterations && !(*stop_flag); i++) {
     mscclpp::ProxyTrigger trigger;
     trigger.fst = tid + 1;
     trigger.snd = i;
-    
+    fifo.push(trigger);
+  }
+
+  __syncthreads();
+
+  // Test phase - measure burst performance
+  uint64_t test_start = clock64();
+  uint64_t test_duration_cycles =
+      (uint64_t)(test_duration_ms * gpu_clock_ghz * 1000000.0f);
+  uint64_t iteration = 0;
+
+  while (!(*stop_flag)) {
+    uint64_t current_time = clock64();
+    if (current_time - test_start > test_duration_cycles) {
+      break;
+    }
+
+    mscclpp::ProxyTrigger trigger;
+    trigger.fst = tid + 1;
+    trigger.snd = warmup_iterations + iteration;
+
     uint64_t push_start = clock64();
     fifo.push(trigger);
     uint64_t push_end = clock64();
-    
+
     uint64_t latency = push_end - push_start;
     metrics[tid].total_cycles += latency;
-    metrics[tid].max_latency_cycles = 
+    metrics[tid].max_latency_cycles =
         max(metrics[tid].max_latency_cycles, latency);
-    metrics[tid].min_latency_cycles = 
+    metrics[tid].min_latency_cycles =
         min(metrics[tid].min_latency_cycles, latency);
     metrics[tid].push_count++;
-  }
-  
-  uint64_t burst_end = clock64();
-  
-  // Store total burst duration in first thread
-  if (tid == 0) {
-    metrics[tid].total_cycles = burst_end - burst_start;
+    iteration++;
   }
 }
 
 #endif  // FIFO_KERNEL_CUH_
-

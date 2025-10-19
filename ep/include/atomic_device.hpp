@@ -24,17 +24,20 @@ constexpr cuda::thread_scope scopeSystem = cuda::thread_scope_system;
 constexpr cuda::thread_scope scopeDevice = cuda::thread_scope_device;
 
 template <typename T, cuda::thread_scope Scope = cuda::thread_scope_system>
-MSCCLPP_HOST_DEVICE_INLINE T atomicLoad(T* ptr, cuda::memory_order memoryOrder) {
+MSCCLPP_HOST_DEVICE_INLINE T atomicLoad(T* ptr,
+                                        cuda::memory_order memoryOrder) {
   return cuda::atomic_ref<T, Scope>{*ptr}.load(memoryOrder);
 }
 
 template <typename T, cuda::thread_scope Scope = cuda::thread_scope_system>
-MSCCLPP_HOST_DEVICE_INLINE void atomicStore(T* ptr, const T& val, cuda::memory_order memoryOrder) {
+MSCCLPP_HOST_DEVICE_INLINE void atomicStore(T* ptr, const T& val,
+                                            cuda::memory_order memoryOrder) {
   cuda::atomic_ref<T, Scope>{*ptr}.store(val, memoryOrder);
 }
 
 template <typename T, cuda::thread_scope Scope = cuda::thread_scope_system>
-MSCCLPP_HOST_DEVICE_INLINE T atomicFetchAdd(T* ptr, const T& val, cuda::memory_order memoryOrder) {
+MSCCLPP_HOST_DEVICE_INLINE T atomicFetchAdd(T* ptr, const T& val,
+                                            cuda::memory_order memoryOrder) {
   return cuda::atomic_ref<T, Scope>{*ptr}.fetch_add(val, memoryOrder);
 }
 
@@ -56,12 +59,14 @@ MSCCLPP_HOST_DEVICE_INLINE T atomicLoad(const T* ptr, int memoryOrder) {
 }
 
 template <typename T, int scope = scopeSystem>
-MSCCLPP_HOST_DEVICE_INLINE void atomicStore(T* ptr, const T& val, int memoryOrder) {
+MSCCLPP_HOST_DEVICE_INLINE void atomicStore(T* ptr, const T& val,
+                                            int memoryOrder) {
   __atomic_store_n(ptr, val, memoryOrder);
 }
 
 template <typename T, int scope = scopeSystem>
-MSCCLPP_HOST_DEVICE_INLINE T atomicFetchAdd(T* ptr, const T& val, int memoryOrder) {
+MSCCLPP_HOST_DEVICE_INLINE T atomicFetchAdd(T* ptr, const T& val,
+                                            int memoryOrder) {
   return __atomic_fetch_add(ptr, val, memoryOrder);
 }
 

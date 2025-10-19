@@ -1,21 +1,24 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#include <cstring>
-#include "gpu.hpp"
 #include "gpu_utils.hpp"
+#include "gpu.hpp"
+#include <cstring>
 
 static inline bool isCudaTeardownError(cudaError_t err) {
 #if defined(__HIP_PLATFORM_AMD__)
   return err == cudaErrorContextIsDestroyed || err == cudaErrorInvalidDevice;
 #else   // !defined(__HIP_PLATFORM_AMD__)
-  return err == cudaErrorCudartUnloading || err == cudaErrorContextIsDestroyed || err == cudaErrorInitializationError ||
-         err == cudaErrorInvalidDevice || err == cudaErrorLaunchFailure;
+  return err == cudaErrorCudartUnloading ||
+         err == cudaErrorContextIsDestroyed ||
+         err == cudaErrorInitializationError || err == cudaErrorInvalidDevice ||
+         err == cudaErrorLaunchFailure;
 #endif  // !defined(__HIP_PLATFORM_AMD__)
 }
 
 static inline bool isCuTeardownError(CUresult r) {
-  return r == CUDA_ERROR_DEINITIALIZED || r == CUDA_ERROR_CONTEXT_IS_DESTROYED || r == CUDA_ERROR_LAUNCH_FAILED;
+  return r == CUDA_ERROR_DEINITIALIZED ||
+         r == CUDA_ERROR_CONTEXT_IS_DESTROYED || r == CUDA_ERROR_LAUNCH_FAILED;
 }
 
 #define MSCCLPP_CUDATHROW_IGNORE_TEARDOWN(cmd) \
@@ -36,19 +39,20 @@ static inline bool isCuTeardownError(CUresult r) {
     }                                        \
   } while (false)
 
-#define MSCCLPP_CUTHROW_IGNORE(cmd)                                        \
-  do {                                                                     \
-    CUresult __e = cmd;                                                    \
-    if (__e != CUDA_SUCCESS) {                                             \
-      const char* errStr;                                                  \
-      cuGetErrorString(__e, &errStr);                                      \
+#define MSCCLPP_CUTHROW_IGNORE(cmd)                                          \
+  do {                                                                       \
+    CUresult __e = cmd;                                                      \
+    if (__e != CUDA_SUCCESS) {                                               \
+      char const* errStr;                                                    \
+      cuGetErrorString(__e, &errStr);                                        \
       printf("%s:%d Cuda failure %d '%s'", __FILE__, __LINE__, __e, errStr); \
-    }                                                                      \
+    }                                                                        \
   } while (false)
 
 namespace mscclpp {
 
-AvoidCudaGraphCaptureGuard::AvoidCudaGraphCaptureGuard() : mode_(cudaStreamCaptureModeRelaxed), active_(true) {
+AvoidCudaGraphCaptureGuard::AvoidCudaGraphCaptureGuard()
+    : mode_(cudaStreamCaptureModeRelaxed), active_(true) {
   cudaError_t res = cudaThreadExchangeStreamCaptureMode(&mode_);
   if (isCudaTeardownError(res)) {
     // Runtime is going away; just mark inactive so destructor skips restoring.
@@ -64,7 +68,9 @@ AvoidCudaGraphCaptureGuard::~AvoidCudaGraphCaptureGuard() {
   (void)cudaThreadExchangeStreamCaptureMode(&mode_);
 }
 
-CudaStreamWithFlags::CudaStreamWithFlags() : stream_(nullptr) { MSCCLPP_CUDATHROW(cudaGetDevice(&deviceId_)); }
+CudaStreamWithFlags::CudaStreamWithFlags() : stream_(nullptr) {
+  MSCCLPP_CUDATHROW(cudaGetDevice(&deviceId_));
+}
 
 CudaStreamWithFlags::CudaStreamWithFlags(unsigned int flags) {
   MSCCLPP_CUDATHROW(cudaGetDevice(&deviceId_));
@@ -76,17 +82,21 @@ CudaStreamWithFlags::~CudaStreamWithFlags() {
 }
 
 void CudaStreamWithFlags::set(unsigned int flags) {
-  if (!empty()) throw Error("CudaStreamWithFlags already set", ErrorCode::InvalidUsage);
+  if (!empty())
+    throw Error("CudaStreamWithFlags already set", ErrorCode::InvalidUsage);
   int originalDeviceId;
-  MSCCLPP_CUDATHROW(cudaGetDevice(&originalDeviceId));  // Save the current device
+  MSCCLPP_CUDATHROW(
+      cudaGetDevice(&originalDeviceId));  // Save the current device
   MSCCLPP_CUDATHROW(cudaSetDevice(deviceId_));
   MSCCLPP_CUDATHROW(cudaStreamCreateWithFlags(&stream_, flags));
-  MSCCLPP_CUDATHROW(cudaSetDevice(originalDeviceId));  // Restore the original device
+  MSCCLPP_CUDATHROW(
+      cudaSetDevice(originalDeviceId));  // Restore the original device
 }
 
 bool CudaStreamWithFlags::empty() const { return stream_ == nullptr; }
 
-GpuStream::GpuStream(std::shared_ptr<GpuStreamPool> pool, std::shared_ptr<CudaStreamWithFlags> stream)
+GpuStream::GpuStream(std::shared_ptr<GpuStreamPool> pool,
+                     std::shared_ptr<CudaStreamWithFlags> stream)
     : pool_(pool), stream_(stream) {}
 
 GpuStream::~GpuStream() { pool_->streams_[deviceId()].push_back(stream_); }
@@ -102,7 +112,8 @@ GpuStream GpuStreamPool::getStream() {
     streamVec.pop_back();
     return GpuStream(gpuStreamPool(), stream);
   }
-  return GpuStream(gpuStreamPool(), std::make_shared<CudaStreamWithFlags>(cudaStreamNonBlocking));
+  return GpuStream(gpuStreamPool(), std::make_shared<CudaStreamWithFlags>(
+                                        cudaStreamNonBlocking));
 }
 
 void GpuStreamPool::clear() { streams_.clear(); }
@@ -119,7 +130,8 @@ std::shared_ptr<GpuStreamPool> gpuStreamPool() {
 
 namespace detail {
 
-CUmemAllocationHandleType nvlsCompatibleMemHandleType = CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
+CUmemAllocationHandleType nvlsCompatibleMemHandleType =
+    CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
 
 /// set memory access permission to read-write
 /// @param base Base memory pointer.
@@ -157,7 +169,8 @@ void* gpuCallocUncached(size_t bytes) {
   AvoidCudaGraphCaptureGuard cgcGuard;
   void* ptr;
   auto stream = gpuStreamPool()->getStream();
-  MSCCLPP_CUDATHROW(hipExtMallocWithFlags((void**)&ptr, bytes, hipDeviceMallocUncached));
+  MSCCLPP_CUDATHROW(
+      hipExtMallocWithFlags((void**)&ptr, bytes, hipDeviceMallocUncached));
   MSCCLPP_CUDATHROW(cudaMemsetAsync(ptr, 0, bytes, stream));
   MSCCLPP_CUDATHROW(cudaStreamSynchronize(stream));
   return ptr;
@@ -165,7 +178,8 @@ void* gpuCallocUncached(size_t bytes) {
 #endif  // defined(__HIP_PLATFORM_AMD__)
 
 #if (CUDA_NVLS_API_AVAILABLE)
-size_t getMulticastGranularity(size_t size, CUmulticastGranularity_flags granFlag) {
+size_t getMulticastGranularity(size_t size,
+                               CUmulticastGranularity_flags granFlag) {
   size_t gran = 0;
   int numDevices = 0;
   MSCCLPP_CUDATHROW(cudaGetDeviceCount(&numDevices));
@@ -174,7 +188,9 @@ size_t getMulticastGranularity(size_t size, CUmulticastGranularity_flags granFla
   prop.size = size;
   // This is a dummy value, it might affect the granularity in the future
   prop.numDevices = numDevices;
-  prop.handleTypes = (CUmemAllocationHandleType)(CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR | CU_MEM_HANDLE_TYPE_FABRIC);
+  prop.handleTypes =
+      (CUmemAllocationHandleType)(CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR |
+                                  CU_MEM_HANDLE_TYPE_FABRIC);
   prop.flags = 0;
   MSCCLPP_CUTHROW(cuMulticastGetGranularity(&gran, &prop, granFlag));
   return gran;
@@ -189,8 +205,9 @@ void* gpuCallocPhysical(size_t bytes, size_t gran, size_t align) {
 
   int requestedHandleTypes = CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
   int isFabricSupported;
-  MSCCLPP_CUTHROW(
-      cuDeviceGetAttribute(&isFabricSupported, CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_FABRIC_SUPPORTED, currentDevice));
+  MSCCLPP_CUTHROW(cuDeviceGetAttribute(
+      &isFabricSupported, CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_FABRIC_SUPPORTED,
+      currentDevice));
   if (isFabricSupported) {
     requestedHandleTypes |= CU_MEM_HANDLE_TYPE_FABRIC;
   }
@@ -209,7 +226,8 @@ void* gpuCallocPhysical(size_t bytes, size_t gran, size_t align) {
   size_t nbytes = (bytes + gran - 1) / gran * gran;
   CUresult result = cuMemCreate(&memHandle, nbytes, &prop, 0);
   if (requestedHandleTypes & CU_MEM_HANDLE_TYPE_FABRIC &&
-      (result == CUDA_ERROR_NOT_PERMITTED || result == CUDA_ERROR_NOT_SUPPORTED)) {
+      (result == CUDA_ERROR_NOT_PERMITTED ||
+       result == CUDA_ERROR_NOT_SUPPORTED)) {
     requestedHandleTypes = CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
     prop.requestedHandleTypes = (CUmemAllocationHandleType)requestedHandleTypes;
     MSCCLPP_CUTHROW(cuMemCreate(&memHandle, nbytes, &prop, 0));
@@ -223,7 +241,8 @@ void* gpuCallocPhysical(size_t bytes, size_t gran, size_t align) {
   }
 
   void* devicePtr = nullptr;
-  MSCCLPP_CUTHROW(cuMemAddressReserve((CUdeviceptr*)&devicePtr, nbytes, align, 0U, 0));
+  MSCCLPP_CUTHROW(
+      cuMemAddressReserve((CUdeviceptr*)&devicePtr, nbytes, align, 0U, 0));
   MSCCLPP_CUTHROW(cuMemMap((CUdeviceptr)devicePtr, nbytes, 0, memHandle, 0));
   setReadWriteMemoryAccess(devicePtr, nbytes);
   auto stream = gpuStreamPool()->getStream();
@@ -251,19 +270,21 @@ void gpuFreePhysical(void* ptr) {
   size_t size = 0;
   MSCCLPP_CUTHROW_IGNORE_TEARDOWN(cuMemRetainAllocationHandle(&handle, ptr));
   MSCCLPP_CUTHROW_IGNORE_TEARDOWN(cuMemRelease(handle));
-  MSCCLPP_CUTHROW_IGNORE_TEARDOWN(cuMemGetAddressRange(NULL, &size, (CUdeviceptr)ptr));
+  MSCCLPP_CUTHROW_IGNORE_TEARDOWN(
+      cuMemGetAddressRange(NULL, &size, (CUdeviceptr)ptr));
   MSCCLPP_CUTHROW_IGNORE(cuMemUnmap((CUdeviceptr)ptr, size));
   MSCCLPP_CUTHROW_IGNORE_TEARDOWN(cuMemRelease(handle));
   MSCCLPP_CUTHROW_IGNORE(cuMemAddressFree((CUdeviceptr)ptr, size));
 }
 #endif  // CUDA_NVLS_API_AVAILABLE
 
-void gpuMemcpyAsync(void* dst, const void* src, size_t bytes, cudaStream_t stream, cudaMemcpyKind kind) {
+void gpuMemcpyAsync(void* dst, void const* src, size_t bytes,
+                    cudaStream_t stream, cudaMemcpyKind kind) {
   AvoidCudaGraphCaptureGuard cgcGuard;
   MSCCLPP_CUDATHROW(cudaMemcpyAsync(dst, src, bytes, kind, stream));
 }
 
-void gpuMemcpy(void* dst, const void* src, size_t bytes, cudaMemcpyKind kind) {
+void gpuMemcpy(void* dst, void const* src, size_t bytes, cudaMemcpyKind kind) {
   AvoidCudaGraphCaptureGuard cgcGuard;
   CudaStreamWithFlags stream(cudaStreamNonBlocking);
   MSCCLPP_CUDATHROW(cudaMemcpyAsync(dst, src, bytes, kind, stream));
@@ -283,7 +304,8 @@ bool isNvlsSupported() {
     CUdevice dev;
     MSCCLPP_CUDATHROW(cudaGetDevice(&deviceId));
     MSCCLPP_CUTHROW(cuDeviceGet(&dev, deviceId));
-    MSCCLPP_CUTHROW(cuDeviceGetAttribute(&isMulticastSupported, CU_DEVICE_ATTRIBUTE_MULTICAST_SUPPORTED, dev));
+    MSCCLPP_CUTHROW(cuDeviceGetAttribute(
+        &isMulticastSupported, CU_DEVICE_ATTRIBUTE_MULTICAST_SUPPORTED, dev));
     return isMulticastSupported == 1;
   }
   return result;
@@ -302,7 +324,8 @@ bool isCuMemMapAllocated([[maybe_unused]] void* ptr) {
   }
   MSCCLPP_CUTHROW(cuMemRelease(handle));
   if (!isNvlsSupported()) {
-    throw Error("cuMemMap is used in env without NVLS support", ErrorCode::InvalidUsage);
+    throw Error("cuMemMap is used in env without NVLS support",
+                ErrorCode::InvalidUsage);
   }
   return true;
 #endif

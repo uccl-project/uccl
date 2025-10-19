@@ -4,9 +4,8 @@
 #ifndef MSCCLPP_FIFO_HPP_
 #define MSCCLPP_FIFO_HPP_
 
-#include <memory>
-
 #include "fifo_device.hpp"
+#include <memory>
 
 namespace mscclpp {
 
@@ -37,7 +36,9 @@ class Fifo {
   /// @return FifoDeviceHandle for device access.
   FifoDeviceHandle deviceHandle() const;
 
-  [[deprecated("flushTail() is now no-op and no longer needed. This will be removed in a future release.")]] void
+  [[deprecated(
+      "flushTail() is now no-op and no longer needed. This will be removed in "
+      "a future release.")]] void
   flushTail([[maybe_unused]] bool sync = false) {}
 
  private:

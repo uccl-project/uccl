@@ -1,10 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-#include <numa.h>
-
-#include <fstream>
 #include "gpu_utils.hpp"
+#include <fstream>
+#include <numa.h>
 
 // Convert a logical cudaDev index to the NVML device minor number
 static const std::string getBusId(int cudaDev) {
@@ -12,7 +11,8 @@ static const std::string getBusId(int cudaDev) {
   // format. Still need to allocate proper space in case PCI domain goes
   // higher.
   char busIdChar[] = "00000000:00:00.0";
-  MSCCLPP_CUDATHROW(cudaDeviceGetPCIBusId(busIdChar, sizeof(busIdChar), cudaDev));
+  MSCCLPP_CUDATHROW(
+      cudaDeviceGetPCIBusId(busIdChar, sizeof(busIdChar), cudaDev));
   // we need the hex in lower case format
   for (size_t i = 0; i < sizeof(busIdChar); i++) {
     busIdChar[i] = std::tolower(busIdChar[i]);
@@ -29,7 +29,8 @@ int getDeviceNumaNode(int cudaDev) {
   int numaNode;
   if (file.is_open()) {
     if (!(file >> numaNode)) {
-      throw Error("Failed to read NUMA node from file: " + file_str, ErrorCode::SystemError);
+      throw Error("Failed to read NUMA node from file: " + file_str,
+                  ErrorCode::SystemError);
     }
   } else {
     throw Error("Failed to open file: " + file_str, ErrorCode::SystemError);
@@ -40,9 +41,10 @@ int getDeviceNumaNode(int cudaDev) {
 void numaBind(int node) {
   int totalNumNumaNodes = numa_num_configured_nodes();
   if (node < 0 || node >= totalNumNumaNodes) {
-    throw Error(
-        "Invalid NUMA node " + std::to_string(node) + ", must be between 0 and " + std::to_string(totalNumNumaNodes),
-        ErrorCode::InvalidUsage);
+    throw Error("Invalid NUMA node " + std::to_string(node) +
+                    ", must be between 0 and " +
+                    std::to_string(totalNumNumaNodes),
+                ErrorCode::InvalidUsage);
   }
   nodemask_t mask;
   nodemask_zero(&mask);
