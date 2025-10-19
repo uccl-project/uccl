@@ -135,7 +135,8 @@ void FifoProxy::run_sender() {
     }
 
     if (fifo_head_seen - fifo_tail_acked > 128) {
-      printf("Fifo head seen: %lu, Fifo tail acked: %lu, diff: %lu\n", fifo_head_seen, fifo_tail_acked, fifo_head_seen - fifo_tail_acked);
+      // printf("Fifo head seen: %lu, Fifo tail acked: %lu, diff: %lu\n",
+      // fifo_head_seen, fifo_tail_acked, fifo_head_seen - fifo_tail_acked);
       continue;
     }
 

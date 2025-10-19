@@ -15,7 +15,6 @@ __global__ void gpu_issue_batched_commands_fifo(
   int const tid = threadIdx.x;
   int const num_threads = blockDim.x;
 
-  // Print only from thread 0
   if (tid == 0) {
     printf("Device Block %d: Scheduled with %d threads (FIFO mode)\n", bid,
            num_threads);
@@ -25,7 +24,7 @@ __global__ void gpu_issue_batched_commands_fifo(
   mscclpp::FifoDeviceHandle& fifo = fifos[bid];
 
   // Track completed operations and latency metrics (per-thread)
-  uint32_t complete = 0;
+  uint32_t completed = 0;
 
   __shared__ unsigned long long cycle_accum_smem;
   __shared__ unsigned int op_count_smem;
@@ -42,7 +41,6 @@ __global__ void gpu_issue_batched_commands_fifo(
   uint32_t head_write_idx = 0;
   uint32_t head_read_idx = 0;
   uint32_t inflight_count = 0;
-
   uint64_t block_cycle_start = 0;
 
   // Each thread processes kIterations/num_threads operations
@@ -57,13 +55,11 @@ __global__ void gpu_issue_batched_commands_fifo(
 
     int message_idx = it + 1;
 
-    // Create a ProxyTrigger command
+    // Push to FIFO
     mscclpp::ProxyTrigger trigger;
     trigger.fst = (static_cast<uint64_t>(bid + 1) << 32) |
                   (static_cast<uint64_t>(CmdType::WRITE) & 0xFFFFFFFF);
     trigger.snd = message_idx;
-
-    // Push to FIFO
     uint64_t head = fifo.push(trigger);
 
     // Store head in circular buffer for tracking
@@ -80,24 +76,22 @@ __global__ void gpu_issue_batched_commands_fifo(
       fifo.sync(oldest_head, -1);
 
       // Measure latency for completed operation
-      int abs_it = tid + complete * num_threads;
+      int abs_it = tid + completed * num_threads;
       if (abs_it >= kWarmupOps && abs_it < kIterations) {
         unsigned long long t1 = clock64();
         unsigned long long cycles = t1 - start_cycle_smem[abs_it & kQueueMask];
         atomicAdd((unsigned long long*)&cycle_accum_smem, cycles);
         atomicAdd(&op_count_smem, 1u);
-
         if (block_cycle_start == 0) {
           block_cycle_start = t1;
         }
       }
-      complete++;
+      completed++;
       inflight_count--;
     }
   }
 
   // Wait for all remaining in-flight operations to complete
-  // my_iterations is already calculated above
   while (inflight_count > 0) {
     uint64_t oldest_head = head_buffer[head_read_idx];
     head_read_idx = (head_read_idx + 1) % kMaxInflight;
@@ -105,14 +99,14 @@ __global__ void gpu_issue_batched_commands_fifo(
     fifo.sync(oldest_head, -1);
     inflight_count--;
 
-    int abs_it = tid + complete * num_threads;
+    int abs_it = tid + completed * num_threads;
     if (abs_it < kIterations && abs_it >= kWarmupOps) {
       unsigned long long t1 = clock64();
       unsigned long long cycles = t1 - start_cycle_smem[abs_it & kQueueMask];
       atomicAdd((unsigned long long*)&cycle_accum_smem, cycles);
       atomicAdd(&op_count_smem, 1u);
     }
-    complete++;
+    completed++;
   }
 
   __syncthreads();
