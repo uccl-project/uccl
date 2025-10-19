@@ -13,12 +13,12 @@ CUDA_LIBS  := -L$(CUDA_HOME)/lib64 -lcuda -lcudart
 
 # Source files
 # Note: unpack_descriptor.h is header-only, no .cc files needed
-DEVICE_SRCS := device/unpack_kernels.cu device/unpack_launch.cu
+DEVICE_SRCS := device/unpack_kernels.cu device/unpack_launch.cu device/persistent.cu
 CORE_SRCS   := src/bootstrap.cc src/channel_manager.cc src/transfer_flow.cc src/session_manager.cc src/transfer_manager.cc
 TEST_SRCS   := tests/tcpx_perf_runner.cc
 
 # Object files
-DEVICE_OBJS := device/unpack_kernels.o device/unpack_launch.o
+DEVICE_OBJS := device/unpack_kernels.o device/unpack_launch.o device/persistent.o
 CORE_OBJS   := src/bootstrap.o src/channel_manager.o src/transfer_flow.o src/session_manager.o src/transfer_manager.o
 TEST_OBJS   := tests/tcpx_perf_runner.o
 
@@ -38,6 +38,9 @@ device/unpack_kernels.o: device/unpack_kernels.cu
 device/unpack_launch.o: device/unpack_launch.cu
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 
+device/persistent.o: device/persistent.cu
+	$(NVCC) $(NVCCFLAGS) -c $< -o $@
+
 # Core components (device + multi-channel modules)
 core: $(DEVICE_OBJS) $(CORE_OBJS)
 	@echo "Core TCPX components built successfully!"
@@ -54,8 +57,12 @@ test_tcpx_perf_multi: $(DEVICE_OBJS) $(CORE_OBJS) $(TEST_OBJS)
 	@echo "Building test_tcpx_perf_multi (Phase 1 API)..."
 	$(NVCC) $(NVCCFLAGS) -o tests/test_tcpx_perf_multi tests/test_tcpx_perf_multi_new.cc tcpx_impl.cc $(TEST_OBJS) $(DEVICE_OBJS) $(CORE_OBJS) $(LIBS) $(CUDA_LIBS)
 
+test_persistent_kernel: $(CORE_OBJS) $(DEVICE_OBJS)
+	@echo "Building test_persistent_kernel..."
+	$(NVCC) $(NVCCFLAGS) -o tests/test_persistent_kernel tests/test_persistent_kernel.cu tcpx_impl.cc $(CORE_OBJS) $(DEVICE_OBJS) $(LIBS) $(CUDA_LIBS)
+
 # Build targets
-all: core test_tcpx_perf_multi
+all: core test_tcpx_perf_multi test_persistent_kernel
 
 # Quick test - just core components
 quick: core

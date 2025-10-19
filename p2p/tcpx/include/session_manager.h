@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include "unpack_descriptor.h"
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -219,6 +220,13 @@ class TcpxSession {
   void* getChannelManager();  // Returns ChannelManager*
   void* getUnpackLauncher();  // Returns tcpx::device::UnpackLauncher*
   void* getUnpackStream();    // Returns cudaStream_t
+
+  // Persistent kernel API
+  bool use_persisitent();
+  bool launch();
+  uint64_t submitDescriptors(int channel_id, tcpx::rx::UnpackDescriptorBlock const& desc_block);
+  bool is_done_block(uint64_t desc_id);
+  void stop();
 
  private:
   struct Impl;  // PIMPL pattern to hide implementation details

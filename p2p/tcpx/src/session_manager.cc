@@ -11,6 +11,7 @@
 #include "device/unpack_launch.h"
 #include "tcpx_logging.h"
 #include "transfer_manager.h"
+#include "device/persistent.h"
 #include <cstdio>
 #include <map>
 #include <sstream>
@@ -18,6 +19,7 @@
 #include <vector>
 #include <cuda.h>
 #include <cuda_runtime.h>
+#include <deque>
 
 namespace tcpx {
 
@@ -39,6 +41,10 @@ struct TcpxSession::Impl {
   ChannelManager* mgr_;
   tcpx::device::UnpackLauncher* launcher_;
 
+  // Persisitent kernel
+  bool use_persisitent_;
+  tcpx::device::UnpackerPersistentKernel* persistent_;
+
   // Connection state
   std::map<std::string, std::vector<ncclNetHandle_v7>> remote_handles_;
   std::map<std::string, bool> remote_accepted_;
@@ -56,6 +62,8 @@ struct TcpxSession::Impl {
         unpack_stream_(nullptr),
         mgr_(nullptr),
         launcher_(nullptr),
+        use_persisitent_(false),
+        persistent_(nullptr),
         next_mem_id_(1) {  // Start from 1 (0 reserved for error)
   }
 
@@ -78,6 +86,11 @@ struct TcpxSession::Impl {
     if (launcher_) {
       delete launcher_;
       launcher_ = nullptr;
+    }
+
+    if (use_persisitent_ == true && persistent_) {
+      persistent_->stop();
+      persistent_ = nullptr;
     }
 
     // Destroy CUDA stream
@@ -160,12 +173,28 @@ TcpxSession::TcpxSession(int gpu_id, int num_channels)
     throw std::runtime_error("cudaStreamCreate failed");
   }
 
-  // Step 4: Create UnpackLauncher
-  tcpx::device::UnpackLaunchConfig launcher_config;
-  launcher_config.stream = impl_->unpack_stream_;
-  launcher_config.use_small_kernel = true;
-  launcher_config.enable_profiling = false;
-  impl_->launcher_ = new tcpx::device::UnpackLauncher(launcher_config);
+  if (impl_->use_persisitent_) {
+    // Step 4: Create Persistent Unpacker Kernel
+    int kPipelineDepth = 2;
+    tcpx::device::PersistentKernelConfig cfg;
+    cfg.numThBlocks = num_channels;
+    cfg.numThPerBlock = 256; // too much MAX_UNPACK_DESCRIPTORS
+    cfg.fifoCap = tcpx::device::MAX_INFLIGHT_PER_CHANNEL;
+    cfg.smem_size = cfg.numThPerBlock * sizeof(float4) * kPipelineDepth; // 16 bytes for best bluk transfer
+    cfg.stream = impl_->unpack_stream_;
+
+    impl_->persistent_ = new tcpx::device::UnpackerPersistentKernel(cfg);
+    std::cout
+        << "Created persistent stream and launcher for persistent kernel mode"
+        << std::endl;
+  } else {
+    // Step 4: Create UnpackLauncher
+    tcpx::device::UnpackLaunchConfig launcher_config;
+    launcher_config.stream = impl_->unpack_stream_;
+    launcher_config.use_small_kernel = true;
+    launcher_config.enable_profiling = false;
+    impl_->launcher_ = new tcpx::device::UnpackLauncher(launcher_config);
+  }
 
   LOG_INFO("TcpxSession initialized successfully");
 }
@@ -427,5 +456,29 @@ void* TcpxSession::getChannelManager() { return impl_->mgr_; }
 void* TcpxSession::getUnpackLauncher() { return impl_->launcher_; }
 
 void* TcpxSession::getUnpackStream() { return impl_->unpack_stream_; }
+
+// ============================================================================
+// Persistent kernel API
+// ============================================================================
+
+bool TcpxSession::use_persisitent() {
+  return impl_->use_persisitent_;
+}
+
+bool TcpxSession::launch() {
+  return impl_->persistent_->launch();
+}
+
+uint64_t TcpxSession::submitDescriptors(int channel_id, tcpx::rx::UnpackDescriptorBlock const& desc_block) {
+  return impl_->persistent_->submitDescriptors(channel_id, desc_block);
+}
+
+bool TcpxSession::is_done_block(uint64_t desc_id) {
+  return impl_->persistent_->is_done_block(desc_id);  
+}
+
+void TcpxSession::stop() {
+  return impl_->persistent_->stop();
+}
 
 }  // namespace tcpx

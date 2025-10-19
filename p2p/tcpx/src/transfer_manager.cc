@@ -155,18 +155,20 @@ TcpxTransfer::Impl::Impl(TcpxSession* session, std::string const& remote_name)
   for (int ch = 0; ch < num_channels; ++ch) {
     channel_windows_[ch].events.resize(MAX_INFLIGHT_PER_CHANNEL);
     for (int i = 0; i < MAX_INFLIGHT_PER_CHANNEL; ++i) {
-      cudaError_t cuda_rc = cudaEventCreate(&channel_windows_[ch].events[i]);
-      if (cuda_rc != cudaSuccess) {
-        LOG_ERROR("cudaEventCreate failed for channel %d, event %d: %s", ch, i,
-                  cudaGetErrorString(cuda_rc));
-        // Clean up already-created events
-        for (int cleanup_ch = 0; cleanup_ch <= ch; ++cleanup_ch) {
-          int max_evt = (cleanup_ch == ch) ? i : MAX_INFLIGHT_PER_CHANNEL;
-          for (int cleanup_i = 0; cleanup_i < max_evt; ++cleanup_i) {
-            cudaEventDestroy(channel_windows_[cleanup_ch].events[cleanup_i]);
+      if (!session_->use_persisitent()) {
+        cudaError_t cuda_rc = cudaEventCreate(&channel_windows_[ch].events[i]);
+        if (cuda_rc != cudaSuccess) {
+          LOG_ERROR("cudaEventCreate failed for channel %d, event %d: %s", ch, i,
+                    cudaGetErrorString(cuda_rc));
+          // Clean up already-created events
+          for (int cleanup_ch = 0; cleanup_ch <= ch; ++cleanup_ch) {
+            int max_evt = (cleanup_ch == ch) ? i : MAX_INFLIGHT_PER_CHANNEL;
+            for (int cleanup_i = 0; cleanup_i < max_evt; ++cleanup_i) {
+              cudaEventDestroy(channel_windows_[cleanup_ch].events[cleanup_i]);
+            }
           }
+          throw std::runtime_error("Failed to create CUDA events");
         }
-        throw std::runtime_error("Failed to create CUDA events");
       }
     }
   }
@@ -174,16 +176,27 @@ TcpxTransfer::Impl::Impl(TcpxSession* session, std::string const& remote_name)
   send_inflight_count_.assign(num_channels, 0);
   send_queues_.resize(num_channels);
 
+  if (session_->use_persisitent()) {
+    bool req = session_->launch();
+    if (!req) {
+      throw std::runtime_error("Failed to launch persistent kernel");
+    }
+  }
+
   LOG_INFO("TcpxTransfer::Impl initialized with %d channels", num_channels);
 }
 
 TcpxTransfer::Impl::~Impl() {
   // Destroy all CUDA events
   // Based on test_tcpx_perf_multi.cc cleanup logic
-  for (auto& win : channel_windows_) {
-    for (auto& evt : win.events) {
-      if (evt) {
-        cudaEventDestroy(evt);
+  if (session_->use_persisitent()) {
+    session_->stop();
+  } else {
+    for (auto& win : channel_windows_) {
+      for (auto& evt : win.events) {
+        if (evt) {
+          cudaEventDestroy(evt);
+        }
       }
     }
   }
@@ -295,29 +308,37 @@ bool TcpxTransfer::Impl::processInflightRecv(int channel_id, bool blocking) {
     desc_block.ready_flag = rx_req->unpack_slot.cnt;
     desc_block.ready_threshold = frag_count;
 
-    // Launch GPU kernel to unpack scattered fragments (lines 635-645)
-    LOG_DEBUG(
-        "Launching unpack kernel for chunk %d (channel %d, descriptors=%u)",
-        entry.global_idx, channel_id, desc_block.count);
+    if (session_->use_persisitent()) {
+      LOG_DEBUG(
+          "Submit chunk %d (channel %d, descriptors=%u) to Persistent Kernel",
+          entry.global_idx, channel_id, desc_block.count);
+      uint64_t desc_id = session_->submitDescriptors(channel_id, desc_block);
+      win.pending_desc_id.push_back(desc_id);
+    } else {
+      // Launch GPU kernel to unpack scattered fragments (lines 635-645)
+      LOG_DEBUG(
+          "Launching unpack kernel for chunk %d (channel %d, descriptors=%u)",
+          entry.global_idx, channel_id, desc_block.count);
 
-    auto* launcher = static_cast<tcpx::device::UnpackLauncher*>(
-        session_->getUnpackLauncher());
-    int lrc = launcher->launch(desc_block);
-    if (lrc != 0) {
-      LOG_ERROR("Unpack kernel launch failed: %d", lrc);
-      error_ = true;
-      return false;
-    }
+      auto* launcher = static_cast<tcpx::device::UnpackLauncher*>(
+          session_->getUnpackLauncher());
+      int lrc = launcher->launch(desc_block);
+      if (lrc != 0) {
+        LOG_ERROR("Unpack kernel launch failed: %d", lrc);
+        error_ = true;
+        return false;
+      }
 
-    // Record CUDA event (lines 647-651)
-    int event_idx = win.chunk_counter % MAX_INFLIGHT_PER_CHANNEL;
-    cudaStream_t unpack_stream =
-        static_cast<cudaStream_t>(session_->getUnpackStream());
-    cudaError_t cuda_rc = cudaEventRecord(win.events[event_idx], unpack_stream);
-    if (cuda_rc != cudaSuccess) {
-      LOG_ERROR("cudaEventRecord failed: %s", cudaGetErrorString(cuda_rc));
-      error_ = true;
-      return false;
+      // Record CUDA event (lines 647-651)
+      int event_idx = win.chunk_counter % MAX_INFLIGHT_PER_CHANNEL;
+      cudaStream_t unpack_stream =
+          static_cast<cudaStream_t>(session_->getUnpackStream());
+      cudaError_t cuda_rc = cudaEventRecord(win.events[event_idx], unpack_stream);
+      if (cuda_rc != cudaSuccess) {
+        LOG_ERROR("cudaEventRecord failed: %s", cudaGetErrorString(cuda_rc));
+        error_ = true;
+        return false;
+      }
     }
 
     // Move to pending queue (lines 653-657)
@@ -340,7 +361,35 @@ bool TcpxTransfer::Impl::drainCompletedKernels(int channel_id) {
 
   // Use the helper function from tcpx_helpers.cc
   int completed = 0;
-  bool success = tcpx::drainCompletedKernels(win, ch.recv_comm, completed);
+  bool success = false;
+  
+  if (session_->use_persisitent()) {
+    while (!win.pending_reqs.empty()) {
+      int oldest_idx = win.pending_indices.front();
+      void* oldest_req = win.pending_reqs.front();
+      uint64_t desc_id = win.pending_desc_id.front();
+      bool req = session_->is_done_block(desc_id);
+      if (req) {
+        int rc = tcpx_irecv_consumed(ch.recv_comm, 1, oldest_req);
+        if (rc != 0) {
+          LOG_ERROR("tcpx_irecv_consumed failed: rc=%d", rc);
+          return success;
+        }
+        
+        // Remove from pending queue
+        win.pending_reqs.erase(win.pending_reqs.begin());
+        win.pending_indices.erase(win.pending_indices.begin());
+        win.pending_desc_id.erase(win.pending_desc_id.begin());
+        completed++;
+        
+        success = true;
+        LOG_DEBUG("Drained completed chunk %d (pending: %zu)", oldest_idx,
+                  win.pending_reqs.size());
+      }
+    }
+  } else {
+    success = tcpx::drainCompletedKernels(win, ch.recv_comm, completed);
+  }
 
   if (success) {
     completed_chunks_ += completed;
@@ -374,21 +423,32 @@ bool TcpxTransfer::Impl::waitForCapacity(int channel_id) {
     if (!win.pending_reqs.empty()) {
       int oldest_idx = win.pending_indices.front();
       void* oldest_req = win.pending_reqs.front();
-      cudaEvent_t oldest_event =
-          win.events[oldest_idx % MAX_INFLIGHT_PER_CHANNEL];
 
-      LOG_DEBUG(
-          "Channel %d sliding window FULL (%zu+%zu/%d), waiting for chunk %d "
-          "kernel to complete...",
-          channel_id, win.pending_reqs.size(), win.inflight_recvs.size(),
-          MAX_INFLIGHT_PER_CHANNEL, oldest_idx);
+      if (!session_->use_persisitent()) {
+        uint64_t desc_id = win.pending_desc_id.front();
+        bool req = session_->is_done_block(desc_id);
+        if (!req) {
+          LOG_ERROR("pending desc %lu done failed", desc_id);
+          return false;
+        }
+        win.pending_desc_id.erase(win.pending_desc_id.begin());
+      } else {
+        cudaEvent_t oldest_event =
+            win.events[oldest_idx % MAX_INFLIGHT_PER_CHANNEL];
 
-      // Block until kernel completes
-      cudaError_t cuda_rc = cudaEventSynchronize(oldest_event);
-      if (cuda_rc != cudaSuccess) {
-        LOG_ERROR("cudaEventSynchronize failed: %s",
-                  cudaGetErrorString(cuda_rc));
-        return false;
+        LOG_DEBUG(
+            "Channel %d sliding window FULL (%zu+%zu/%d), waiting for chunk %d "
+            "kernel to complete...",
+            channel_id, win.pending_reqs.size(), win.inflight_recvs.size(),
+            MAX_INFLIGHT_PER_CHANNEL, oldest_idx);
+
+        // Block until kernel completes
+        cudaError_t cuda_rc = cudaEventSynchronize(oldest_event);
+        if (cuda_rc != cudaSuccess) {
+          LOG_ERROR("cudaEventSynchronize failed: %s",
+                    cudaGetErrorString(cuda_rc));
+          return false;
+        }
       }
 
       // Release TCPX resources
