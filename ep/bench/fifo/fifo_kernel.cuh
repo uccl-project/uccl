@@ -232,6 +232,7 @@ __global__ void fifoBurstKernel(mscclpp::FifoDeviceHandle* fifos,
   uint64_t test_duration_cycles =
       (uint64_t)(test_duration_ms * gpu_clock_ghz * 1000000.0f);
   uint64_t iteration = 0;
+  uint32_t sample_idx = 0;
 
   while (!(*stop_flag)) {
     uint64_t current_time = clock64();
@@ -254,6 +255,13 @@ __global__ void fifoBurstKernel(mscclpp::FifoDeviceHandle* fifos,
     metrics[tid].min_latency_cycles =
         min(metrics[tid].min_latency_cycles, latency);
     metrics[tid].push_count++;
+
+    // Store latency sample for percentile calculation
+    if (latency_samples && sample_idx < max_samples) {
+      latency_samples[tid * max_samples + sample_idx] = latency;
+      sample_idx++;
+    }
+
     iteration++;
   }
 }
