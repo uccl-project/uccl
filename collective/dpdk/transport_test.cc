@@ -9,6 +9,8 @@
 #include <thread>
 #include <signal.h>
 
+#define DEBUG
+
 using namespace uccl;
 
 size_t kTestMsgSize = 1024000;
