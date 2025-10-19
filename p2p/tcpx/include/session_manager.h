@@ -224,7 +224,8 @@ class TcpxSession {
   // Persistent kernel API
   bool use_persisitent();
   bool launch();
-  uint64_t submitDescriptors(int channel_id, tcpx::rx::UnpackDescriptorBlock const& desc_block);
+  uint64_t submitDescriptors(int channel_id,
+                             tcpx::rx::UnpackDescriptorBlock const& desc_block);
   bool is_done_block(uint64_t desc_id);
   void stop();
 

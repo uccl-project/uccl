@@ -158,8 +158,8 @@ TcpxTransfer::Impl::Impl(TcpxSession* session, std::string const& remote_name)
       if (!session_->use_persisitent()) {
         cudaError_t cuda_rc = cudaEventCreate(&channel_windows_[ch].events[i]);
         if (cuda_rc != cudaSuccess) {
-          LOG_ERROR("cudaEventCreate failed for channel %d, event %d: %s", ch, i,
-                    cudaGetErrorString(cuda_rc));
+          LOG_ERROR("cudaEventCreate failed for channel %d, event %d: %s", ch,
+                    i, cudaGetErrorString(cuda_rc));
           // Clean up already-created events
           for (int cleanup_ch = 0; cleanup_ch <= ch; ++cleanup_ch) {
             int max_evt = (cleanup_ch == ch) ? i : MAX_INFLIGHT_PER_CHANNEL;
@@ -333,7 +333,8 @@ bool TcpxTransfer::Impl::processInflightRecv(int channel_id, bool blocking) {
       int event_idx = win.chunk_counter % MAX_INFLIGHT_PER_CHANNEL;
       cudaStream_t unpack_stream =
           static_cast<cudaStream_t>(session_->getUnpackStream());
-      cudaError_t cuda_rc = cudaEventRecord(win.events[event_idx], unpack_stream);
+      cudaError_t cuda_rc =
+          cudaEventRecord(win.events[event_idx], unpack_stream);
       if (cuda_rc != cudaSuccess) {
         LOG_ERROR("cudaEventRecord failed: %s", cudaGetErrorString(cuda_rc));
         error_ = true;
@@ -362,7 +363,7 @@ bool TcpxTransfer::Impl::drainCompletedKernels(int channel_id) {
   // Use the helper function from tcpx_helpers.cc
   int completed = 0;
   bool success = false;
-  
+
   if (session_->use_persisitent()) {
     while (!win.pending_reqs.empty()) {
       int oldest_idx = win.pending_indices.front();
@@ -375,13 +376,13 @@ bool TcpxTransfer::Impl::drainCompletedKernels(int channel_id) {
           LOG_ERROR("tcpx_irecv_consumed failed: rc=%d", rc);
           return success;
         }
-        
+
         // Remove from pending queue
         win.pending_reqs.erase(win.pending_reqs.begin());
         win.pending_indices.erase(win.pending_indices.begin());
         win.pending_desc_id.erase(win.pending_desc_id.begin());
         completed++;
-        
+
         success = true;
         LOG_DEBUG("Drained completed chunk %d (pending: %zu)", oldest_idx,
                   win.pending_reqs.size());

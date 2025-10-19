@@ -75,19 +75,20 @@ struct ChannelWindow {
   std::vector<int> pending_indices;  ///< Pending chunk indices (for debugging)
   int chunk_counter = 0;             ///< Chunks handled by this channel
   std::deque<PostedChunk> inflight_recvs;  ///< Posted but not yet unpacked
-  std::vector<uint64_t> pending_desc_id; /// persistent_kernel to deal
+  std::vector<uint64_t> pending_desc_id;   /// persistent_kernel to deal
 };
 
 // ============================================================================
 // Helper Function Declarations (Stage 2 pipeline utilities)
 // ============================================================================
 
-bool initChannelEvents(std::vector<ChannelWindow>& windows, int num_channels); // TODO delete?
-void destroyChannelEvents(std::vector<ChannelWindow>& windows); // TODO delete?
+bool initChannelEvents(std::vector<ChannelWindow>& windows,
+                       int num_channels);                        // TODO delete?
+void destroyChannelEvents(std::vector<ChannelWindow>& windows);  // TODO delete?
 bool drainCompletedKernels(ChannelWindow& win, void* recv_comm,
                            int& completed_chunks);
-bool waitForPendingKernel(ChannelWindow& win, void* recv_comm); // TODO delete?
-bool hasCapacity(ChannelWindow const& win); // TODO delete?
-int getAvailableSlots(ChannelWindow const& win); // TODO delete?
+bool waitForPendingKernel(ChannelWindow& win, void* recv_comm);  // TODO delete?
+bool hasCapacity(ChannelWindow const& win);                      // TODO delete?
+int getAvailableSlots(ChannelWindow const& win);                 // TODO delete?
 
 }  // namespace tcpx

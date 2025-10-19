@@ -8,18 +8,18 @@
 
 #include "session_manager.h"
 #include "channel_manager.h"
+#include "device/persistent.h"
 #include "device/unpack_launch.h"
 #include "tcpx_logging.h"
 #include "transfer_manager.h"
-#include "device/persistent.h"
 #include <cstdio>
+#include <deque>
 #include <map>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
 #include <cuda.h>
 #include <cuda_runtime.h>
-#include <deque>
 
 namespace tcpx {
 
@@ -178,9 +178,10 @@ TcpxSession::TcpxSession(int gpu_id, int num_channels)
     int kPipelineDepth = 2;
     tcpx::device::PersistentKernelConfig cfg;
     cfg.numThBlocks = num_channels;
-    cfg.numThPerBlock = 256; // too much MAX_UNPACK_DESCRIPTORS
+    cfg.numThPerBlock = 256;  // too much MAX_UNPACK_DESCRIPTORS
     cfg.fifoCap = tcpx::device::MAX_INFLIGHT_PER_CHANNEL;
-    cfg.smem_size = cfg.numThPerBlock * sizeof(float4) * kPipelineDepth; // 16 bytes for best bluk transfer
+    cfg.smem_size = cfg.numThPerBlock * sizeof(float4) *
+                    kPipelineDepth;  // 16 bytes for best bluk transfer
     cfg.stream = impl_->unpack_stream_;
 
     impl_->persistent_ = new tcpx::device::UnpackerPersistentKernel(cfg);
@@ -461,24 +462,19 @@ void* TcpxSession::getUnpackStream() { return impl_->unpack_stream_; }
 // Persistent kernel API
 // ============================================================================
 
-bool TcpxSession::use_persisitent() {
-  return impl_->use_persisitent_;
-}
+bool TcpxSession::use_persisitent() { return impl_->use_persisitent_; }
 
-bool TcpxSession::launch() {
-  return impl_->persistent_->launch();
-}
+bool TcpxSession::launch() { return impl_->persistent_->launch(); }
 
-uint64_t TcpxSession::submitDescriptors(int channel_id, tcpx::rx::UnpackDescriptorBlock const& desc_block) {
+uint64_t TcpxSession::submitDescriptors(
+    int channel_id, tcpx::rx::UnpackDescriptorBlock const& desc_block) {
   return impl_->persistent_->submitDescriptors(channel_id, desc_block);
 }
 
 bool TcpxSession::is_done_block(uint64_t desc_id) {
-  return impl_->persistent_->is_done_block(desc_id);  
+  return impl_->persistent_->is_done_block(desc_id);
 }
 
-void TcpxSession::stop() {
-  return impl_->persistent_->stop();
-}
+void TcpxSession::stop() { return impl_->persistent_->stop(); }
 
 }  // namespace tcpx
