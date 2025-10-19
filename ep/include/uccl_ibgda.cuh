@@ -41,9 +41,9 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
       static_cast<uintptr_t>(ring_addrs[ring_idx]));
 
-  uint64_t cur_head = rb->head;
-  uint64_t cur_tail = rb->volatile_tail();
-  uint64_t inflight = cur_head - cur_tail;
+  uint64_t cur_head;
+  uint64_t cur_tail;
+  uint64_t inflight;
 #ifdef USE_NORMAL_MODE
   if (low_latency_buffer_idx == -1) {
     /* Normal mode */
@@ -122,9 +122,9 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     assert(ring_idx < num_ring_addrs);
     auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
         static_cast<uintptr_t>(ring_addrs[ring_idx]));
-    uint64_t cur_head = rb->head;
-    uint64_t cur_tail = rb->volatile_tail();
-    uint64_t inflight = cur_head - cur_tail;
+    uint64_t cur_head;
+    uint64_t cur_tail;
+    uint64_t inflight;
     auto last_print = clock64();
 #ifdef USE_NORMAL_MODE
     if (low_latency_buffer_idx == -1) {

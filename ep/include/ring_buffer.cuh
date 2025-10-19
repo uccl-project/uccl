@@ -92,6 +92,7 @@ struct alignas(128) RingBuffer {
 
   static constexpr size_t kNumWords = (Capacity + 63) / 64;
   uint64_t ack_mask[kNumWords] = {};
+  static constexpr int kFenceBatch = 8;
 
   inline void mark_acked(size_t idx) noexcept {
       const size_t word = idx >> 6;        // idx / 64
@@ -371,10 +372,11 @@ struct alignas(128) RingBuffer {
     buf[idx] = tmp;
 
 #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
-    if constexpr (Dir == FlowDirection::DeviceToHost)
-      __threadfence_system();
-    else
-      __threadfence();
+    if ((slot & (kFenceBatch - 1)) == (kFenceBatch - 1)) {
+        __threadfence_system();  // Flush every Nth item
+    } else {
+        __threadfence();         // GPU local fence only
+    }
 #else
     std::atomic_thread_fence(std::memory_order_release);
 #endif

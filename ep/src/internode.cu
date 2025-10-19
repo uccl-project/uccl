@@ -13,7 +13,7 @@ namespace uccl {
 
 namespace internode {
 
-struct SourceMeta {
+struct alignas(16) SourceMeta {
   int src_rdma_rank, is_token_in_nvl_rank_bits;
 
   EP_STATIC_ASSERT(NUM_MAX_NVL_PEERS == 8,
@@ -2037,16 +2037,34 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
           mbarrier_wait(tma_mbarrier, tma_phase);
 
           // Load source meta
-          if (lane_id == num_topk)
+          // meta by lane 0
+          if (lane_id == 0) {
             *reinterpret_cast<SourceMeta*>(tma_buffer + hidden_bytes) =
                 ld_nc_global(src_meta + token_idx);
+          }
 
-          // Load `topk_weights`
-          if (lane_id < num_topk)
-            *reinterpret_cast<float*>(tma_buffer + hidden_bytes +
-                                      sizeof(SourceMeta) +
-                                      lane_id * sizeof(float)) =
-                ld_nc_global(topk_weights + token_idx * num_topk + lane_id);
+          // vectorized topk
+          int n4 = num_topk >> 2;
+          auto* dst4 = reinterpret_cast<float4*>(
+              tma_buffer + hidden_bytes + sizeof(SourceMeta));
+          auto* src4 = reinterpret_cast<const float4*>(
+              topk_weights + token_idx * num_topk);
+
+          // lanes 0..n4-1 do 16B copies
+          if (lane_id < n4) {
+            // If you don't have ld_nc_global(float4*), plain deref is fine:
+            dst4[lane_id] = *(src4 + lane_id);
+          }
+
+          // lane 0 handles the tail (0..3 scalars)
+          if ((num_topk & 3) && lane_id == 0) {
+            float const* src_tail = reinterpret_cast<const float*>(src4 + n4);
+            float* dst_tail = reinterpret_cast<float*>(dst4 + n4);
+            #pragma unroll
+            for (int r = 0; r < (num_topk & 3); ++r) {
+              dst_tail[r] = src_tail[r];
+            }
+          }
 
           // Issue TMA store
           tma_store_fence();
