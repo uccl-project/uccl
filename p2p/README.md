@@ -285,31 +285,25 @@ if success:
 
 ```python
 # Sender side
-send_tensor = torch.ones(1024, dtype=torch.float32)
-assert send_tensor.is_contiguous()  # Ensure tensor is contiguous
+from uccl.utils import create_tensor, get_tensor_id_by_tensor
+send_tensor, mr_id = create_tensor((1024,) dtype=torch.float32, device="cpu")
 
-# Register tensor for RDMA
-success, mr_id = endpoint.reg(send_tensor.data_ptr(), send_tensor.numel() * 4)
-assert success
+# You can get mr_id later with get_tensor_id_by_tensor
+mr_id = get_tensor_id_by_tensor(send_tensor)
 
 # Send the tensor
 success = endpoint.send(conn_id, mr_id, send_tensor.data_ptr(), send_tensor.numel() * 4)
 assert success
 
 # Receiver side
-recv_tensor = torch.zeros(1024, dtype=torch.float32)
-assert recv_tensor.is_contiguous()
-
-# Register receive buffer
-success, mr_id = endpoint.reg(recv_tensor.data_ptr(), recv_tensor.numel() * 4)
-assert success
+recv_tensor, mr_id = create_tensor((1024,) dtype=torch.float32, device="cpu")
 
 # Receive the tensor
 success = endpoint.recv(conn_id, mr_id, recv_tensor.data_ptr(), recv_tensor.numel() * 4)
 assert success
 ```
 
-### NumPy Array Transfer
+### NumPy Array Transfer [TODO]
 
 ```python
 import numpy as np
@@ -338,21 +332,13 @@ success = endpoint.recv(conn_id, recv_mr_id, recv_ptr, recv_data.nbytes)
 
 ```python
 # Sender side - send multiple tensors at once
-tensors = [
-    torch.ones(512, dtype=torch.float32),
-    torch.ones(1024, dtype=torch.float32),
-    torch.ones(256, dtype=torch.float32)
-]
-
-# Ensure all tensors are contiguous
-for tensor in tensors:
-    assert tensor.is_contiguous()
-
-# Register all tensors
+shapes = [(512,), (1024,), (256,)]
+tensors = []
 mr_ids = []
-for tensor in tensors:
-    success, mr_id = endpoint.reg(tensor.data_ptr(), tensor.numel() * 4)
-    assert success
+for shape in shapes:
+    tensor, mr_id = create_tensor(shape, dtype=torch.float32, device="cuda:0")
+    assert tensor.is_contiguous()
+    tensors.append(tensor)
     mr_ids.append(mr_id)
 
 # Prepare data for vectorized send
@@ -365,18 +351,13 @@ success = endpoint.sendv(conn_id, mr_ids, ptr_list, size_list, num_iovs)
 assert success
 
 # Receiver side - receive multiple tensors at once
-recv_tensors = [
-    torch.zeros(512, dtype=torch.float32),
-    torch.zeros(1024, dtype=torch.float32),
-    torch.zeros(256, dtype=torch.float32)
-]
-
-# Register receive buffers
+recv_tensors = []
 recv_mr_ids = []
-for tensor in recv_tensors:
-    success, mr_id = endpoint.reg(tensor.data_ptr(), tensor.numel() * 4)
-    assert success
-    recv_mr_ids.append(mr_id)
+for shape in shapes:
+    recv_tensor, recv_mr_id = create_tensor(shape, dtype=torch.float32, device="cuda:0")
+    assert recv_tensor.is_contiguous()
+    recv_tensors.append(recv_tensor)
+    recv_mr_ids.append(recv_mr_id)
 
 # Prepare data for vectorized receive
 recv_ptr_list = [tensor.data_ptr() for tensor in recv_tensors]
@@ -393,6 +374,20 @@ assert success
 ## API Reference
 
 <details><summary>Click me</summary>
+
+### Tensor
+
+#### create_tensor
+```python
+create_tensor(shape, dtype, device) -> (tensor, tensor_id)
+```
+Create an empty tensor and register its memory (GPU or pinned CPU).
+Automatically handles CUDA device parsing and memory registration.
+
+**Parameters:**
+- `shape` (Tuple[int, ...]): (1024, )
+- `dtype` (int): torch.dtype
+- `device` (int): cpu or cuda:0
 
 ### Endpoint Class
 
@@ -434,21 +429,6 @@ Accept an incoming connection (blocking).
 - `remote_gpu_idx` (int): GPU index of connecting client
 - `conn_id` (int): Connection ID for subsequent operations
 
-#### Memory Registration
-
-```python
-reg(ptr, size) -> (success, mr_id)
-```
-Register a memory region for RDMA operations.
-
-**Parameters:**
-- `ptr` (int): Memory pointer (use `tensor.data_ptr()` for PyTorch)
-- `size` (int): Size in bytes
-
-**Returns:**
-- `success` (bool): Whether registration succeeded
-- `mr_id` (int): Memory region ID for transfer operations
-
 #### Data Transfer
 
 ```python
@@ -458,7 +438,7 @@ Send data to remote endpoint (blocking).
 
 **Parameters:**
 - `conn_id` (int): Connection ID from connect/accept
-- `mr_id` (int): Memory region ID from register
+- `mr_id` (int): Memory region ID (Tensor ID) from registed Tensor
 - `ptr` (int): Pointer to data to send
 - `size` (int): Number of bytes to send
 
@@ -472,7 +452,7 @@ Receive data from remote endpoint (blocking).
 
 **Parameters:**
 - `conn_id` (int): Connection ID from connect/accept
-- `mr_id` (int): Memory region ID from register
+- `mr_id` (int): Memory region ID (Tensor ID) from registed Tensor
 - `ptr` (int): Pointer to buffer for received data
 - `size` (int): Number of bytes to receive
 
@@ -486,7 +466,7 @@ Send multiple memory regions to remote endpoint in a single operation (blocking)
 
 **Parameters:**
 - `conn_id` (int): Connection ID from connect/accept
-- `mr_id_list` (list[int]): List of memory region IDs from register
+- `mr_id_list` (list[int]): List of memory region IDs (Tensor ID) from registed Tensor
 - `ptr_list` (list[int]): List of pointers to data to send
 - `size_list` (list[int]): List of sizes in bytes for each memory region
 - `num_iovs` (int): Number of I/O vectors (length of the lists)
@@ -501,7 +481,7 @@ Receive multiple memory regions from remote endpoint in a single operation (bloc
 
 **Parameters:**
 - `conn_id` (int): Connection ID from connect/accept
-- `mr_id_list` (list[int]): List of memory region IDs from register
+- `mr_id_list` (list[int]): List of memory region IDs (Tensor ID) from registed Tensor
 - `ptr_list` (list[int]): List of pointers to buffers for received data
 - `size_list` (list[int]): List of sizes in bytes for each memory region
 - `num_iovs` (int): Number of I/O vectors (length of the lists)
@@ -518,7 +498,7 @@ Send data to remote endpoint asynchronously (non-blocking).
 
 **Parameters:**
 - `conn_id` (int): Connection ID from connect/accept
-- `mr_id` (int): Memory region ID from register
+- `mr_id` (int): Memory region ID (Tensor ID) from registed Tensor
 - `ptr` (int): Pointer to data to send
 - `size` (int): Number of bytes to send
 
@@ -533,7 +513,7 @@ Receive data from remote endpoint asynchronously (non-blocking).
 
 **Parameters:**
 - `conn_id` (int): Connection ID from connect/accept
-- `mr_id` (int): Memory region ID from register
+- `mr_id` (int): Memory region ID (Tensor ID) from registed Tensor
 - `ptr` (int): Pointer to buffer for received data
 - `size` (int): Exact number of bytes to receive
 
@@ -562,7 +542,7 @@ Read data from remote endpoint using one-sided RDMA READ operation (blocking).
 
 **Parameters:**
 - `conn_id` (int): Connection ID from connect/accept
-- `mr_id` (int): Memory region ID of remote data to read
+- `mr_id` (int): Memory region ID (Tensor ID) of remote data to read
 - `dst` (int): Pointer to local destination buffer
 - `size` (int): Number of bytes to read
 - `slot_item` (FifoItem): Slot item for RDMA operation coordination (contains the remote address to read from)
@@ -577,7 +557,7 @@ Read data from remote endpoint using one-sided RDMA READ operation asynchronousl
 
 **Parameters:**
 - `conn_id` (int): Connection ID from connect/accept
-- `mr_id` (int): Memory region ID of remote data to read
+- `mr_id` (int): Memory region ID (Tensor ID) of remote data to read
 - `dst` (int): Pointer to local destination buffer
 - `size` (int): Number of bytes to read
 - `slot_item` (FifoItem): Slot item for RDMA operation coordination (contains the remote address to read from)
@@ -593,7 +573,7 @@ Read multiple memory regions from remote endpoint using one-sided RDMA READ oper
 
 **Parameters:**
 - `conn_id` (int): Connection ID from connect/accept
-- `mr_id_list` (list[int]): List of memory region IDs of remote data to read
+- `mr_id_list` (list[int]): List of memory region IDs (Tensor ID) of remote data to read
 - `dst_list` (list[int]): List of pointers to local destination buffers
 - `size_list` (list[int]): List of sizes in bytes for each memory region
 - `slot_item_list` (list[FifoItem]): List of slot items for RDMA operation coordination (contains the remote address to read from)
@@ -609,7 +589,7 @@ Advertise memory region information to remote endpoint for one-sided RDMA operat
 
 **Parameters:**
 - `conn_id` (int): Connection ID from connect/accept
-- `mr_id` (int): Memory region ID to advertise
+- `mr_id` (int): Memory region ID (Tensor ID) to advertise
 - `addr` (int): Pointer to the memory region
 - `len` (int): Size of the memory region in bytes
 - `out_buf` (str): Output buffer to store advertisement metadata
@@ -624,7 +604,7 @@ Advertise multiple memory regions to remote endpoint for one-sided RDMA operatio
 
 **Parameters:**
 - `conn_id` (int): Connection ID from connect/accept
-- `mr_id_list` (list[int]): List of memory region IDs to advertise
+- `mr_id_list` (list[int]): List of memory region IDs (Tensor ID) to advertise
 - `addr_list` (list[int]): List of pointers to memory regions
 - `len_list` (list[int]): List of sizes in bytes for each memory region
 - `out_buf_list` (list[str]): List of output buffers to store advertisement metadata
@@ -640,7 +620,7 @@ Write data to remote endpoint using one-sided RDMA WRITE operation (blocking).
 
 **Parameters:**
 - `conn_id` (int): Connection ID from connect/accept
-- `mr_id` (int): Memory region ID of remote destination
+- `mr_id` (int): Memory region ID (Tensor ID) of remote destination
 - `src` (int): Pointer to local buffer
 - `size` (int): Number of bytes to write
 - `slot_item` (FifoItem): Slot item for RDMA operation coordination (contains the remote address to write to)
@@ -655,7 +635,7 @@ Write data to remote endpoint using one-sided RDMA WRITE operation asynchronousl
 
 **Parameters:**
 - `conn_id` (int): Connection ID from connect/accept
-- `mr_id` (int): Memory region ID of remote destination
+- `mr_id` (int): Memory region ID (Tensor ID) of remote destination
 - `src` (int): Pointer to local buffer
 - `size` (int): Number of bytes to write
 - `slot_item` (FifoItem): Slot item for RDMA operation coordination (contains the remote address to write to)
@@ -671,7 +651,7 @@ Write multiple memory regions to remote endpoint using one-sided RDMA WRITE oper
 
 **Parameters:**
 - `conn_id` (int): Connection ID from connect/accept
-- `mr_id_list` (list[int]): List of memory region IDs of remote destinations
+- `mr_id_list` (list[int]): List of memory region IDs (Tensor ID) of remote destinations
 - `src_list` (list[int]): List of pointers to local buffers
 - `size_list` (list[int]): List of sizes in bytes for each memory region
 - `slot_item_list` (list[FifoItem]): List of slot items for RDMA operation coordination (contains the remote address to write to)

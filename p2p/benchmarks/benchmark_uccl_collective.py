@@ -18,12 +18,15 @@ import torch.distributed as dist
 import os
 
 from uccl import collective
+from uccl.utils import create_tensor
 
 
 def _make_buffer(size_bytes: int):
     """Allocate a contiguous GPU tensor of *size_bytes* and return it."""
     n_elems = size_bytes // 4  # float32
-    tensor = torch.ones(n_elems, dtype=torch.float32).cuda()
+    tensor, _ = create_tensor(
+        (n_elems,), dtype=torch.float32, device=f"cuda:{torch.cuda.current_device()}"
+    )
     assert tensor.is_contiguous()
     assert tensor.device.type == "cuda"
     return tensor
@@ -48,9 +51,6 @@ def _run_server(args):
     peer = 0  # client rank
     for size in args.sizes:
         tensor = _make_buffer(size)
-
-        # Register tensor for efficient memory access
-        collective.register_tensor(tensor)
 
         # Warm-up receive
         collective.recv(tensor, src=peer)
@@ -85,9 +85,6 @@ def _run_client(args):
         tensor = _make_buffer(size)
         tensor.fill_(size)
 
-        # Register tensor for efficient memory access
-        collective.register_tensor(tensor)
-
         # Warm-up send
         collective.send(tensor, dst=peer)
 
@@ -112,9 +109,6 @@ def _run_async_server(args):
     peer = 0  # client rank
     for size in args.sizes:
         tensor = _make_buffer(size)
-
-        # Register tensor for efficient memory access
-        collective.register_tensor(tensor)
 
         # Warm-up
         req = collective.irecv(tensor, src=peer)
@@ -142,9 +136,6 @@ def _run_async_client(args):
     peer = 1  # server rank
     for size in args.sizes:
         tensor = _make_buffer(size)
-
-        # Register tensor for efficient memory access
-        collective.register_tensor(tensor)
 
         # Warm-up
         req = collective.isend(tensor, dst=peer)
@@ -180,10 +171,6 @@ def _run_dual_benchmark(args):
     for size in args.sizes:
         send_tensor = _make_buffer(size)
         recv_tensor = _make_buffer(size)
-
-        # Register tensors for efficient memory access
-        collective.register_tensor(send_tensor)
-        collective.register_tensor(recv_tensor)
 
         # Warm-up: simultaneous send and receive
         send_req = collective.isend(send_tensor, dst=peer)
@@ -241,10 +228,6 @@ def _run_ring_benchmark(args):
 
         # Fill send tensor with rank-specific data for verification
         send_tensor.fill_(size)
-
-        # Register tensors for efficient memory access
-        collective.register_tensor(send_tensor)
-        collective.register_tensor(recv_tensor)
 
         # Warm-up
         send_req = collective.isend(send_tensor, dst=dst_rank)

@@ -43,6 +43,20 @@ RUN python${PY_VER} -m pip install --no-cache-dir build auditwheel pybind11
 RUN ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python3 && \
     ln -sf /usr/bin/python${PY_VER}-config /usr/local/bin/python3-config
 
+# ───── Install PyTorch with ROCm support ─────
+# pytorch does not support ROCm 7.x now
+ARG BASE_IMAGE
+RUN set -ex; \
+    if [ "$BASE_IMAGE" = "rocm/dev-ubuntu-22.04:6.4.3-complete" ]; then \
+        echo "Installing pip and PyTorch with ROCm 6.4 support..."; \
+        apt-get update && apt-get install -y python3-pip; \
+        python3 -m pip install --upgrade pip; \
+        python3 -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.4; \
+        python3 -c "import torch; print('CUDA available:', torch.cuda.is_available())"; \
+    else \
+        echo "BASE_IMAGE='$BASE_IMAGE', skipping PyTorch installation."; \
+    fi
+
 WORKDIR /io
 
 CMD ["bash"] 

@@ -36,7 +36,7 @@ PLUGIN_SO := libuccl_engine.so
 CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
-SOURCES := engine.cc pybind_engine.cc
+SOURCES := engine.cc pybind_engine.cc tensor.cc
 CORE_OBJECT := engine.o
 OBJECTS := $(SOURCES:.cc=.o)
 
