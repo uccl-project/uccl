@@ -35,3 +35,13 @@ void launchFifoBurstKernel(dim3 grid, dim3 block,
       fifos, metrics, num_threads, test_duration_ms, warmup_iterations,
       stop_flag, gpu_clock_ghz, num_fifos, latency_samples, max_samples);
 }
+
+void launchFifoRandomKernel(
+    dim3 grid, dim3 block, mscclpp::FifoDeviceHandle* fifos,
+    ThreadMetrics* metrics, uint32_t num_threads, uint32_t test_duration_ms,
+    uint32_t warmup_iterations, bool volatile* stop_flag, float gpu_clock_ghz,
+    int num_fifos, uint64_t* latency_samples, int max_samples) {
+  fifoRandomKernel<<<grid, block>>>(
+      fifos, metrics, num_threads, test_duration_ms, warmup_iterations,
+      stop_flag, gpu_clock_ghz, num_fifos, latency_samples, max_samples);
+}

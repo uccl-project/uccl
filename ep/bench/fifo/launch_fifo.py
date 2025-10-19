@@ -5,12 +5,15 @@ import os
 parser = argparse.ArgumentParser()
 parser.add_argument("-l", action="store_true", help="Run latency mode")
 parser.add_argument("-b", action="store_true", help="Run burst mode")
+parser.add_argument("-r", action="store_true", help="Run random mode")
 args = parser.parse_args()
 
 if args.l:
     cmd = ["./benchmark_fifo", "-l"]
 elif args.b:
     cmd = ["./benchmark_fifo", "-b"]
+elif args.r:
+    cmd = ["./benchmark_fifo", "-r"]
 else:
     cmd = ["./benchmark_fifo"]
 

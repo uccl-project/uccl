@@ -263,4 +263,85 @@ __global__ void fifoBurstKernel(mscclpp::FifoDeviceHandle* fifos,
   }
 }
 
+// Random FIFO selection kernel - each thread randomly picks a FIFO for each
+// push
+__global__ void fifoRandomKernel(mscclpp::FifoDeviceHandle* fifos,
+                                 ThreadMetrics* metrics, uint32_t num_threads,
+                                 uint32_t test_duration_ms,
+                                 uint32_t warmup_iterations,
+                                 bool volatile* stop_flag, float gpu_clock_ghz,
+                                 int num_fifos, uint64_t* latency_samples,
+                                 int max_samples) {
+  const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (tid >= num_threads) return;
+
+  // Initialize metrics
+  metrics[tid].push_count = 0;
+  metrics[tid].total_cycles = 0;
+  metrics[tid].max_latency_cycles = 0;
+  metrics[tid].min_latency_cycles = UINT64_MAX;
+
+  // Simple LCG random number generator (per-thread state)
+  // Use tid and clock for seed to ensure different sequences per thread
+  uint64_t rng_state = tid * 0x5DEECE66Dull + clock64();
+
+  // Warmup phase - don't measure during warmup
+  for (uint32_t i = 0; i < warmup_iterations && !(*stop_flag); i++) {
+    // Update RNG state (Linear Congruential Generator)
+    rng_state = rng_state * 0x5DEECE66Dull + 0xBull;
+    uint32_t fifo_idx = (uint32_t)(rng_state >> 16) % num_fifos;
+
+    mscclpp::ProxyTrigger trigger;
+    trigger.fst = tid + 1;
+    trigger.snd = i;
+
+    fifos[fifo_idx].push(trigger);
+  }
+
+  __syncthreads();
+
+  // Test phase - measure burst performance with random FIFO selection
+  uint64_t test_start = clock64();
+  uint64_t test_duration_cycles =
+      (uint64_t)(test_duration_ms * gpu_clock_ghz * 1000000.0f);
+  uint64_t iteration = 0;
+  uint32_t sample_idx = 0;
+
+  while (!(*stop_flag)) {
+    uint64_t current_time = clock64();
+    if (current_time - test_start > test_duration_cycles) {
+      break;
+    }
+
+    // Randomly select a FIFO for this push
+    rng_state = rng_state * 0x5DEECE66Dull + 0xBull;
+    uint32_t fifo_idx = (uint32_t)(rng_state >> 16) % num_fifos;
+
+    mscclpp::ProxyTrigger trigger;
+    trigger.fst = tid + 1;
+    trigger.snd = warmup_iterations + iteration;
+
+    uint64_t push_start = clock64();
+    fifos[fifo_idx].push(trigger);
+    uint64_t push_end = clock64();
+
+    uint64_t latency = push_end - push_start;
+    metrics[tid].total_cycles += latency;
+    metrics[tid].max_latency_cycles =
+        max(metrics[tid].max_latency_cycles, latency);
+    metrics[tid].min_latency_cycles =
+        min(metrics[tid].min_latency_cycles, latency);
+    metrics[tid].push_count++;
+
+    // Store latency sample for percentile calculation
+    if (latency_samples && sample_idx < max_samples) {
+      latency_samples[tid * max_samples + sample_idx] = latency;
+      sample_idx++;
+    }
+
+    iteration++;
+  }
+}
+
 #endif  // FIFO_KERNEL_CUH_

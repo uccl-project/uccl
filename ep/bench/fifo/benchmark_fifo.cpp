@@ -3,7 +3,10 @@
  * Measures FIFO dispatch throughput and GPU-side latency
  * To run the benchmark:
  *    make
- *    torchrun --nproc_per_node=8 --standalone launch_fifo.py [-l] [-b]
+ *    torchrun --nproc_per_node=8 --standalone launch_fifo.py [-l] [-b] [-r]
+ *    -l: Latency mode (RTT measurement)
+ *    -b: Burst mode (no polling)
+ *    -r: Random mode (each thread randomly selects a FIFO)
  */
 
 #include "../../include/fifo.hpp"
@@ -32,7 +35,7 @@ struct BenchmarkConfig {
   uint32_t batch_size;   // Batch size for in-flight requests (default: 32)
   float gpu_clock_ghz;   // GPU clock rate in GHz
   bool measure_latency;  // Whether to measure GPU-side latency
-  int mode;              // 0: throughput, 1: latency, 2: burst
+  int mode;              // 0: throughput, 1: latency, 2: burst, 3: random
 };
 
 // Metrics collected from GPU
@@ -222,6 +225,13 @@ void runBenchmark(BenchmarkConfig const& config) {
                           config.warmup_iterations, d_stop_flag,
                           config.gpu_clock_ghz, NUM_FIFOS, d_latency_samples,
                           MAX_LATENCY_SAMPLES);
+  } else if (config.mode == 3) {
+    // Use random kernel - each thread randomly selects a FIFO
+    launchFifoRandomKernel(grid, block, d_fifo_handles, d_metrics,
+                           config.num_threads, config.test_duration_ms,
+                           config.warmup_iterations, d_stop_flag,
+                           config.gpu_clock_ghz, NUM_FIFOS, d_latency_samples,
+                           MAX_LATENCY_SAMPLES);
   }
 
   // Wait for test duration (or kernel completion for latency mode)
@@ -325,6 +335,8 @@ int main(int argc, char** argv) {
       config.mode = 1;
     } else if (std::string(argv[i]) == "-b") {
       config.mode = 2;
+    } else if (std::string(argv[i]) == "-r") {
+      config.mode = 3;
     }
   }
 
@@ -347,6 +359,10 @@ int main(int argc, char** argv) {
     // Burst tests
     printf("--- FIFO Burst Tests ---\n");
     printf("(Testing different thread counts and FIFO sizes)\n\n");
+  } else if (config.mode == 3) {
+    // Random FIFO selection tests
+    printf("--- FIFO Random Selection Tests ---\n");
+    printf("(Each thread randomly selects a FIFO for each push)\n\n");
   }
 
   for (auto fifo_size : fifo_sizes) {
