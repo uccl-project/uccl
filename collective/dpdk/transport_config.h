@@ -49,7 +49,7 @@ static const uint32_t kMaxPath = 128;
 static const uint32_t kMaxUnackedPktsPP = 3u;
 #elif defined(CLAB_XL170)
 static const uint32_t DPDK_MTU = 1500;
-static char const* DEV_DEFAULT = "ens1f1np1";
+[[maybe_unused]] static char const* DEV_DEFAULT = "ens1f1np1";
 static double const kLinkBandwidth = 25.0 * 1e9 / 8;
 static const uint32_t NUM_QUEUES = 2;
 static const uint32_t kMaxPath = 64;

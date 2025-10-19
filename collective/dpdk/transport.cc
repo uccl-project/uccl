@@ -1,5 +1,4 @@
 #include "transport.h"
-#include "transport_config.h"
 #include "util/util.h"
 #include <cstdint>
 #include <set>
@@ -116,8 +115,9 @@ RXTracking::ConsumeRet RXTracking::consume(swift::Pcb* pcb, PacketBuf* msgbuf) {
   auto frame_len = msgbuf->get_packet_len();
   auto const* ucclh =
       reinterpret_cast<UcclPktHdr const*>(pkt_addr + kNetHdrLen);
-  auto const* payload =
-      reinterpret_cast<UcclPktHdr const*>(pkt_addr + kNetHdrLen + kUcclHdrLen);
+  // auto const* payload =
+  //     reinterpret_cast<UcclPktHdr const*>(pkt_addr + kNetHdrLen +
+  //     kUcclHdrLen);
   auto const seqno = ucclh->seqno.value();
   auto const expected_seqno = pcb->rcv_nxt;
 
@@ -234,7 +234,7 @@ std::string UcclFlow::to_string() const {
 
 void UcclFlow::rx_messages() {
   VLOG(3) << "Received " << pending_rx_msgbufs_.size() << " packets";
-  RXTracking::ConsumeRet consume_ret;
+
   uint32_t num_data_frames_recvd = 0;
   uint32_t path_id = 0;
   uint16_t dst_port = 0;
@@ -257,6 +257,7 @@ void UcclFlow::rx_messages() {
         process_rttprobe_rsp(ucclh->timestamp1, ucclh->timestamp2,
                              ucclsackh->timestamp3, ucclsackh->timestamp4,
                              ucclh->path_id);
+        [[fallthrough]];
       case UcclPktHdr::UcclFlags::kAck:
         // ACK packet, update the flow.
         process_ack(ucclh);
@@ -271,10 +272,11 @@ void UcclFlow::rx_messages() {
         dst_port_rtt_probe = htons(udph->dest);
         timestamp1 = ucclh->timestamp1;
         timestamp2 = ucclh->timestamp2;
+        [[fallthrough]];
       case UcclPktHdr::UcclFlags::kData:
         // Data packet, process the payload. The frame will be freed
         // once the engine copies the payload into app buffer
-        consume_ret = rx_tracking_.consume(&pcb_, msgbuf);
+        rx_tracking_.consume(&pcb_, msgbuf);
         num_data_frames_recvd++;
         // Sender's dst_port selection are symmetric.
         dst_port = htons(udph->dest);
@@ -1001,7 +1003,7 @@ void UcclEngine::run() {
       active_flows_map_[rx_work.flow_id]->rx_supply_app_buf(rx_work);
     }
 
-    uint32_t rcvd = socket_->recv_packets(pkts,RECV_BATCH_SIZE);
+    uint32_t rcvd = socket_->recv_packets(pkts, RECV_BATCH_SIZE);
     if (rcvd) process_rx_msg(pkts, rcvd);
 
     if (Channel::dequeue_sc(channel_->tx_deser_q_, &tx_deser_work)) {
@@ -1136,7 +1138,7 @@ void UcclEngine::deser_th_func(std::vector<UcclEngine*> engines) {
 }
 
 void UcclEngine::process_rx_msg(Packet** pkts, uint32_t rcvd) {
-  for (int i = 0; i < rcvd; i++) {
+  for (uint32_t i = 0; i < rcvd; i++) {
     auto* pkt = pkts[i];
 
     auto* msgbuf = PacketBuf::Create(pkt);
@@ -1227,13 +1229,13 @@ void UcclEngine::handle_install_flow_on_engine(Channel::CtrlMsg& ctrl_work) {
   std::set<uint16_t> dst_ports_set;
   Packet** pkts = new Packet*[RECV_BATCH_SIZE];
 
-  for (int i = BASE_PORT; i < 65536;
+  for (uint32_t i = BASE_PORT; i < 65536;
        i = (i + 1) % (65536 - BASE_PORT) + BASE_PORT) {
     uint16_t dst_port = i;
     socket_->send_packet(flow->craft_rssprobe_packet(dst_port));
 
     uint32_t rcvd = socket_->recv_packets(pkts, RECV_BATCH_SIZE);
-    for (int i = 0; i < rcvd; i++) {
+    for (uint32_t j = 0; j < rcvd; i++) {
       auto* pkt = pkts[i];
       auto* msgbuf = PacketBuf::Create(pkt);
       auto* pkt_addr = msgbuf->get_pkt_addr();
@@ -1374,7 +1376,7 @@ Endpoint::Endpoint(uint16_t port_id, char const* interface_name, int num_queues,
   ctx_pool_ = new SharedPool<PollCtx*, true>(
       kMaxInflightMsg, [](PollCtx* ctx) { ctx->clear(); });
   ctx_pool_buf_ = new uint8_t[kMaxInflightMsg * sizeof(PollCtx)];
-  for (int i = 0; i < kMaxInflightMsg; i++) {
+  for (uint32_t i = 0; i < kMaxInflightMsg; i++) {
     ctx_pool_->push(new (ctx_pool_buf_ + i * sizeof(PollCtx)) PollCtx());
   }
 
@@ -1443,7 +1445,7 @@ ConnID Endpoint::uccl_connect(std::string remote_ip) {
   serv_addr.sin_port = htons(kBootstrapPort);
 
   // Force the socket to bind to the local IP address.
-  sockaddr_in localaddr = {0};
+  sockaddr_in localaddr = {};
   localaddr.sin_family = AF_INET;
   localaddr.sin_addr.s_addr = str_to_ip(local_ip_str_.c_str());
   bind(bootstrap_fd, (sockaddr*)&localaddr, sizeof(localaddr));
@@ -1644,13 +1646,12 @@ void Endpoint::install_flow_on_engine(FlowID flow_id,
 
   // Install flow and dst ports on engine.
   auto* poll_ctx = new PollCtx();
-  Channel::CtrlMsg ctrl_msg = {
-      .opcode = Channel::CtrlMsg::Op::kInstallFlow,
-      .flow_id = flow_id,
-      .remote_ip = htonl(str_to_ip(remote_ip)),
-      .remote_engine_idx = remote_engine_idx,
-      .poll_ctx = poll_ctx,
-  };
+  Channel::CtrlMsg ctrl_msg = {};
+  ctrl_msg.opcode = Channel::CtrlMsg::Op::kInstallFlow;
+  ctrl_msg.flow_id = flow_id;
+  ctrl_msg.remote_ip = htonl(str_to_ip(remote_ip));
+  ctrl_msg.remote_engine_idx = remote_engine_idx;
+  ctrl_msg.poll_ctx = poll_ctx;
   str_to_mac(remote_mac, ctrl_msg.remote_mac);
   Channel::enqueue_mp(channel_vec_[local_engine_idx]->ctrl_task_q_, &ctrl_msg);
 
@@ -1694,7 +1695,7 @@ void Endpoint::stats_thread_fn() {
     }
     if (engine_vec_.empty()) continue;
 
-    int cnt = 0;
+    uint32_t cnt = 0;
     std::string s;
     s += "\n\t[Uccl Engine] ";
     for (auto& engine : engine_vec_) {

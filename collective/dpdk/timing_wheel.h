@@ -124,7 +124,7 @@ public:
     }
 
     bkt_pool_buf_ = new uint8_t[sizeof(wheel_bkt_t) * kBktPoolSize];
-    for (int i = 0; i < kBktPoolSize; i++) {
+    for (size_t i = 0; i < kBktPoolSize; i++) {
       CHECK(bkt_pool_.push_front((wheel_bkt_t *)bkt_pool_buf_ + i));
     }
   }

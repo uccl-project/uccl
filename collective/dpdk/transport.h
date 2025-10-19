@@ -1,7 +1,6 @@
 #pragma once
 
 #include "transport_cc.h"
-#include "transport_config.h"
 #include "util/endian.h"
 #include "util/latency.h"
 #include "util/rss.h"
@@ -209,10 +208,10 @@ class TXTracking {
               uint32_t num_frames, PollCtx* poll_ctx);
   std::optional<PacketBuf*> get_and_update_oldest_unsent();
 
-  inline uint32_t const num_unacked_msgbufs() const {
+  inline uint32_t num_unacked_msgbufs() const {
     return num_unacked_msgbufs_;
   }
-  inline uint32_t const num_unsent_msgbufs() const {
+  inline uint32_t num_unsent_msgbufs() const {
     return num_unsent_msgbufs_;
   }
   inline PacketBuf* get_oldest_unacked_msgbuf() const {
@@ -378,9 +377,9 @@ class UcclFlow {
         socket_(CHECK_NOTNULL(socket)),
         channel_(channel),
         flow_id_(flow_id),
-        pcb_(),
-        cubic_g_(),
-        timely_g_(),
+        // pcb_(),
+        // cubic_g_(),
+        // timely_g_(),
         tx_tracking_(socket, channel),
         rx_tracking_(socket, channel) {
     // Copy MAC addresses.
@@ -725,8 +724,8 @@ class Endpoint {
   inline void fence_and_clean_ctx(PollCtx* ctx);
 
   inline int receive_message(int sockfd, void* buffer, size_t n_bytes) {
-    int bytes_read = 0;
-    int r;
+    size_t bytes_read = 0;
+    ssize_t r;
     while (bytes_read < n_bytes) {
       // Make sure we read exactly n_bytes
       r = read(sockfd, static_cast<char*>(buffer) + bytes_read,
@@ -742,8 +741,8 @@ class Endpoint {
   }
 
   inline int send_message(int sockfd, void const* buffer, size_t n_bytes) {
-    int bytes_sent = 0;
-    int r;
+    size_t bytes_sent = 0;
+    ssize_t r;
     while (bytes_sent < n_bytes) {
       // Make sure we write exactly n_bytes
       r = write(sockfd, static_cast<char const*>(buffer) + bytes_sent,

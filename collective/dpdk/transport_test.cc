@@ -51,6 +51,8 @@ int main(int argc, char* argv[]) {
   Dpdk dpdk;
   dpdk.InitDpdk(1, argv);
 
+  LOG(INFO) << "Getting port ID for device " << DEV_DEFAULT;
+  
   std::string mac_str = get_dev_mac(DEV_DEFAULT);
   uint16_t port_id = dpdk.GetPmdPortIdByMac(mac_str.c_str());
   if (port_id == (uint16_t)-1) {
@@ -101,11 +103,11 @@ int main(int argc, char* argv[]) {
       conn_id2 = ep.uccl_connect(FLAGS_serverip);
     } else if (test_type == kMq) {
       conn_id_vec[0] = conn_id;
-      for (int i = 1; i < NUM_QUEUES; i++)
+      for (uint32_t i = 1; i < NUM_QUEUES; i++)
         conn_id_vec[i] = ep.uccl_connect(FLAGS_serverip);
     } else if (test_type == kBiMq) {
       conn_id_vec[0] = conn_id;
-      for (int i = 1; i < NUM_QUEUES; i++) {
+      for (uint32_t i = 1; i < NUM_QUEUES; i++) {
         std::string remote_ip;
         if (i % 2 == 0)
           conn_id_vec[i] = ep.uccl_connect(FLAGS_serverip);
@@ -130,7 +132,7 @@ int main(int argc, char* argv[]) {
       if (FLAGS_rand) send_len = distribution(generator);
 
       if (FLAGS_verify) {
-        for (int j = 0; j < send_len / sizeof(uint64_t); j++) {
+        for (size_t j = 0; j < send_len / sizeof(uint64_t); j++) {
           data_u64[j] = (uint64_t)i * (uint64_t)j;
         }
       }
@@ -147,7 +149,7 @@ int main(int argc, char* argv[]) {
         case kAsync: {
           std::vector<PollCtx*> poll_ctxs;
           size_t step_size = send_len / kMaxInflight + 1;
-          for (int j = 0; j < kMaxInflight; j++) {
+          for (size_t j = 0; j < kMaxInflight; j++) {
             auto iter_len = std::min(step_size, send_len - j * step_size);
             auto* iter_data = data + j * step_size;
 
@@ -210,8 +212,8 @@ int main(int argc, char* argv[]) {
           break;
         }
         case kMq: {
-          for (int k = 0; k < kMaxInflight; k++) {
-            for (int j = 0; j < NUM_QUEUES; j++) {
+          for (size_t k = 0; k < kMaxInflight; k++) {
+            for (size_t j = 0; j < NUM_QUEUES; j++) {
               auto poll_ctx =
                   ep.uccl_send_async(conn_id_vec[j], data, send_len);
               poll_ctx->timestamp = rdtsc();
@@ -229,11 +231,11 @@ int main(int argc, char* argv[]) {
           break;
         }
         case kBiMq: {
-          for (int k = 0; k < kMaxInflight; k++) {
-            for (int j = 0; j < NUM_QUEUES; j++) {
+          for (size_t k = 0; k < kMaxInflight; k++) {
+            for (size_t j = 0; j < NUM_QUEUES; j++) {
               auto* poll_ctx =
                   (j % 2 == 0)
-                      ? ep.uccl_send_async(conn_id_vec[j], data, send_len)
+                      ? ep.uccl_send_async( conn_id_vec[j], data, send_len)
                       : ep.uccl_recv_async(conn_id_vec[j], data, &recv_len);
               poll_ctx->timestamp = rdtsc();
               poll_ctxs.push_back(poll_ctx);
@@ -309,11 +311,11 @@ int main(int argc, char* argv[]) {
       conn_id2 = ep.uccl_accept(remote_ip);
     } else if (test_type == kMq) {
       conn_id_vec[0] = conn_id;
-      for (int i = 1; i < NUM_QUEUES; i++)
+      for (uint32_t i = 1; i < NUM_QUEUES; i++)
         conn_id_vec[i] = ep.uccl_accept(remote_ip);
     } else if (test_type == kBiMq) {
       conn_id_vec[0] = conn_id;
-      for (int i = 1; i < NUM_QUEUES; i++) {
+      for (uint32_t i = 1; i < NUM_QUEUES; i++) {
         std::string remote_ip;
         if (i % 2 == 0)
           conn_id_vec[i] = ep.uccl_accept(remote_ip);
@@ -343,8 +345,8 @@ int main(int argc, char* argv[]) {
           size_t step_size = send_len / kMaxInflight + 1;
           size_t recv_lens[kMaxInflight] = {0};
           std::vector<PollCtx*> poll_ctxs;
-          for (int j = 0; j < kMaxInflight; j++) {
-            auto iter_len = std::min(step_size, send_len - j * step_size);
+          for (size_t j = 0; j < kMaxInflight; j++) {
+            // auto iter_len = std::min(step_size, send_len - j * step_size);
             auto* iter_data = data + j * step_size;
 
             PollCtx* poll_ctx;
@@ -390,8 +392,8 @@ int main(int argc, char* argv[]) {
           break;
         }
         case kMq: {
-          for (int k = 0; k < kMaxInflight; k++) {
-            for (int j = 0; j < NUM_QUEUES; j++) {
+          for (size_t k = 0; k < kMaxInflight; k++) {
+            for (size_t j = 0; j < NUM_QUEUES; j++) {
               auto poll_ctx =
                   ep.uccl_recv_async(conn_id_vec[j], data, &recv_len);
               poll_ctxs.push_back(poll_ctx);
@@ -405,8 +407,8 @@ int main(int argc, char* argv[]) {
           break;
         }
         case kBiMq: {
-          for (int k = 0; k < kMaxInflight; k++) {
-            for (int j = 0; j < NUM_QUEUES; j++) {
+          for (size_t k = 0; k < kMaxInflight; k++) {
+            for (size_t j = 0; j < NUM_QUEUES; j++) {
               auto* poll_ctx =
                   (j % 2 == 0)
                       ? ep.uccl_recv_async(conn_id_vec[j], data, &recv_len)
@@ -442,7 +444,7 @@ int main(int argc, char* argv[]) {
                      << expected_len << ", received " << recv_len;
           data_mismatch = true;
         }
-        for (int j = 0; j < recv_len / sizeof(uint64_t); j++) {
+        for (size_t j = 0; j < recv_len / sizeof(uint64_t); j++) {
           if (data_u64[j] != (uint64_t)i * (uint64_t)j) {
             data_mismatch = true;
             LOG_EVERY_N(ERROR, 1000)

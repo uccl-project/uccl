@@ -266,7 +266,7 @@ struct Pacer {
   double target_rate_;
 
   // Rate in GBytes per second.
-  Pacer(double target_rate)
+  Pacer()
       : wheel_({freq_ghz}),
         prev_desired_tx_tsc_(rdtsc()),
         target_rate_(kLinkBandwidth) {

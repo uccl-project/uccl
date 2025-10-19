@@ -34,12 +34,12 @@ static inline uint64_t rdtsc() {
 /// An alias for rdtsc() to distinguish calls on the critical path
 static auto const& dpath_rdtsc = rdtsc;
 
-static void nano_sleep(size_t ns, double freq_ghz) {
-  size_t start = rdtsc();
-  size_t end = start;
-  size_t upp = static_cast<size_t>(freq_ghz * ns);
-  while (end - start < upp) end = rdtsc();
-}
+// static void nano_sleep(size_t ns, double freq_ghz) {
+//   size_t start = rdtsc();
+//   size_t end = start;
+//   size_t upp = static_cast<size_t>(freq_ghz * ns);
+//   while (end - start < upp) end = rdtsc();
+// }
 
 /// Simple time that uses std::chrono
 class ChronoTimer {
@@ -95,18 +95,18 @@ static double to_sec(size_t cycles, double freq_ghz) {
 }
 
 /// Convert cycles measured by rdtsc with frequence \p freq_ghz to msec
-static double to_msec(size_t cycles, double freq_ghz) {
-  return (cycles / (freq_ghz * 1000000));
-}
+// static double to_msec(size_t cycles, double freq_ghz) {
+//   return (cycles / (freq_ghz * 1000000));
+// }
 
 /// Convert cycles measured by rdtsc with frequence \p freq_ghz to usec
 static double to_usec(size_t cycles, double freq_ghz) {
   return (cycles / (freq_ghz * 1000));
 }
 
-static size_t ms_to_cycles(double ms, double freq_ghz) {
-  return static_cast<size_t>(ms * 1000 * 1000 * freq_ghz);
-}
+// static size_t ms_to_cycles(double ms, double freq_ghz) {
+//   return static_cast<size_t>(ms * 1000 * 1000 * freq_ghz);
+// }
 
 static size_t us_to_cycles(double us, double freq_ghz) {
   return static_cast<size_t>(us * 1000 * freq_ghz);

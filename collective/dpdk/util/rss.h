@@ -4,6 +4,7 @@
 #include <linux/ethtool.h>
 #include <linux/sockios.h>
 #include <net/if.h>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -168,7 +169,7 @@ inline bool get_dst_ports_with_target_queueid(
                                            rss_key, redir_table);
     if (queue_id == target_queue_id) {
       dst_ports.push_back(dst_port);
-      if (dst_ports.size() == num_dst_ports) {
+      if (dst_ports.size() == uint16_t(num_dst_ports)) {
         return true;
       }
     }
