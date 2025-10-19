@@ -84,6 +84,11 @@ struct alignas(128) RingBuffer {
   uint64_t head = 0;
   uint64_t tail = 0;
   T buf[Capacity];
+  // 16B publish header (CPU polls here). Must be 16B aligned.
+  struct alignas(16) Header128 {
+    uint64_t fst, snd;
+  };
+  Header128 hdr[Capacity] = {};
   uint64_t cycle_accum = 0;
   uint64_t op_count = 0;
   uint64_t cycle_start = 0;
@@ -221,13 +226,13 @@ struct alignas(128) RingBuffer {
   }
 
   inline uint64_t volatile_load_cmd(int idx) const {
-    return __atomic_load_n(&buf[idx & mask()].cmd, __ATOMIC_ACQUIRE);
+    return __atomic_load_n(&hdr[idx & mask()].fst, __ATOMIC_ACQUIRE);
   }
 
   inline T& load_cmd_entry(int idx) { return buf[idx & mask()]; }
 
   inline void volatile_store_cmd(int idx, uint64_t val) {
-    __atomic_store_n(&buf[idx & mask()].cmd, val, __ATOMIC_RELEASE);
+    __atomic_store_n(&hdr[idx & mask()].fst, val, __ATOMIC_RELEASE);
   }
 
   __host__ __device__ static constexpr uint32_t mask() { return Capacity - 1; }
@@ -334,11 +339,20 @@ struct alignas(128) RingBuffer {
   __host__ __device__ inline bool atomic_set_and_commit(
       const T& item, uint64_t* out_slot = nullptr) {
     uint64_t slot;
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+    // Cache a local snapshot of tail to avoid hammering PCIe each spin.
+    uint64_t tail_snap = ld_volatile(&tail);
+    int spins = 0;
+#endif
     while (true) {
 #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
       uint64_t h = ld_volatile(&head);
-      uint64_t t = ld_volatile(&tail);
+      uint64_t t = tail_snap;
       if (h - t == Capacity) {
+        // Refresh snapshot occasionally to reduce PCIe reads under contention.
+        if ((++spins & 0x3F) == 0) {
+          tail_snap = ld_volatile(&tail);
+        }
         __nanosleep(64);
         continue;
       }
@@ -367,21 +381,28 @@ struct alignas(128) RingBuffer {
     uint32_t idx = (uint32_t)slot & mask();
 
     T tmp = item;
-    auto saved_cmd = tmp.cmd;
-    tmp.cmd = 0;
+    auto saved_cmd = item.cmd;
     buf[idx] = tmp;
 
-#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
-    if ((slot & (kFenceBatch - 1)) == (kFenceBatch - 1)) {
-      __threadfence_system();  // Flush every Nth item
-    } else {
-      __threadfence();  // GPU local fence only
-    }
+    // Single 16B system-scope publish: {fst=ready flag, snd=metadata}
+#if defined(__CUDA_ARCH__)
+#if __CUDA_ARCH__ >= 900
+    asm volatile("st.global.release.sys.v2.u64 [%0], {%1,%2};" ::"l"(&hdr[idx]),
+                 "l"(saved_cmd), "l"((uint64_t)idx)
+                 : "memory");
+#else
+    // A100 fast path can use relaxed.sys like MSCCL++ (ordering still covered
+    // by __threadfence_system()).
+    __threadfence_system();
+    asm volatile("st.global.relaxed.sys.v2.u64 [%0], {%1,%2};" ::"l"(&hdr[idx]),
+                 "l"(saved_cmd), "l"((uint64_t)idx)
+                 : "memory");
+#endif
 #else
     std::atomic_thread_fence(std::memory_order_release);
+    __atomic_store_n(&hdr[idx].snd, (uint64_t)idx, std::memory_order_relaxed);
+    __atomic_store_n(&hdr[idx].fst, saved_cmd, std::memory_order_release);
 #endif
-
-    buf[idx].cmd = saved_cmd;
     if (out_slot) *out_slot = slot;
     return true;
   }
