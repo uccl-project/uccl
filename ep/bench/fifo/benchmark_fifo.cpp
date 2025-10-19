@@ -3,8 +3,7 @@
  * Measures FIFO dispatch throughput and GPU-side latency
  * To run the benchmark:
  *    make
- *    ./benchmark_fifo
- *    ./benchmark_fifo -l
+ *    torchrun --nproc_per_node=8 --standalone launch_fifo.py [-l] [-b]
  */
 
 #include "../../include/fifo.hpp"
@@ -14,6 +13,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <numeric>
@@ -279,10 +279,24 @@ void runBenchmark(BenchmarkConfig const& config) {
 }
 
 int main(int argc, char** argv) {
-  // Initialize CUDA
-  cudaSetDevice(0);
+  // Get LOCAL_RANK from environment (set by torchrun)
+  int local_rank = 0;
+  char const* local_rank_env = std::getenv("LOCAL_RANK");
+  if (local_rank_env != nullptr) {
+    local_rank = std::atoi(local_rank_env);
+  }
+
+  // Get WORLD_SIZE from environment (total number of processes)
+  int world_size = 1;
+  char const* world_size_env = std::getenv("WORLD_SIZE");
+  if (world_size_env != nullptr) {
+    world_size = std::atoi(world_size_env);
+  }
+
+  // Initialize CUDA with the appropriate device
+  cudaSetDevice(local_rank);
   cudaDeviceProp prop;
-  cudaGetDeviceProperties(&prop, 0);
+  cudaGetDeviceProperties(&prop, local_rank);
 
   // Get GPU clock rate (clockRate is in kHz)
   float gpu_clock_ghz = prop.clockRate / 1000000.0f;
@@ -290,7 +304,8 @@ int main(int argc, char** argv) {
   printf("========================================\n");
   printf("FIFO Performance Benchmark\n");
   printf("========================================\n");
-  printf("GPU: %s\n", prop.name);
+  printf("Rank: %d/%d\n", local_rank, world_size);
+  printf("GPU %d: %s\n", local_rank, prop.name);
   printf("SM count: %d\n", prop.multiProcessorCount);
   printf("GPU Clock: %.2f GHz\n", gpu_clock_ghz);
   printf("Configuration: 32 FIFOs, 4 Proxy Threads (8 FIFOs/proxy)\n\n");

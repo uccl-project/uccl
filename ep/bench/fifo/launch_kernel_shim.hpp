@@ -1,6 +1,3 @@
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
-
 #ifndef LAUNCH_KERNEL_SHIM_HPP_
 #define LAUNCH_KERNEL_SHIM_HPP_
 

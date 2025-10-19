@@ -1,6 +1,3 @@
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
-
 #ifndef FIFO_KERNEL_CUH_
 #define FIFO_KERNEL_CUH_
 

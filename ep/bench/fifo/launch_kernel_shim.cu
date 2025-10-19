@@ -1,6 +1,3 @@
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
-
 #include "fifo_kernel.cuh"
 #include "launch_kernel_shim.hpp"
 
