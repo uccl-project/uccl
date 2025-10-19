@@ -14,7 +14,13 @@ namespace uccl {
 namespace internode {
 
 struct alignas(16) SourceMeta {
-  int src_rdma_rank, is_token_in_nvl_rank_bits;
+  int src_rdma_rank;
+  // nvl_bits layout (lower 16 used):
+  //   [7:0]   membership (1 => token belongs to that NVL rank)
+  //   [15:8]  delivered  (1 => pending for that NVL rank; cleared by consumer)
+  //   [23:16]  COMB_READY (combine)   - per RDMAReceiver warp READY bit
+  //   [31:24]  reserved
+  int is_token_in_nvl_rank_bits;
 
   EP_STATIC_ASSERT(NUM_MAX_NVL_PEERS == 8,
                    "Invalid number of maximum NVL peers");
@@ -26,9 +32,11 @@ struct alignas(16) SourceMeta {
                                         bool const* is_token_in_nvl_ranks) {
     src_rdma_rank = rdma_rank;
     is_token_in_nvl_rank_bits = is_token_in_nvl_ranks[0];
+    // delivered_mask            = 0xFF; // Always 8 bits set.
 #pragma unroll
     for (int i = 1; i < NUM_MAX_NVL_PEERS; ++i)
       is_token_in_nvl_rank_bits |= is_token_in_nvl_ranks[i] << i;
+    is_token_in_nvl_rank_bits |= 0xFF << 8;  // Always 8 bits set.
   }
 
   __device__ __forceinline__ bool is_token_in_nvl_rank(int nvl_rank) const {
@@ -38,6 +46,12 @@ struct alignas(16) SourceMeta {
 
 EP_STATIC_ASSERT(sizeof(SourceMeta) % sizeof(int) == 0,
                  "Invalid size of `SourceMeta`");
+
+// READY bit base for combine; bit = 1u << (kCombReadyBitBase + warp_id)
+static __device__ __constant__ uint32_t kCombReadyBitBase = 16u;
+__device__ __forceinline__ uint32_t comb_ready_bit_for_warp(int warp_local_id) {
+  return 1u << (kCombReadyBitBase + warp_local_id);
+}
 
 int get_source_meta_bytes() { return sizeof(SourceMeta); }
 
@@ -762,16 +776,7 @@ __global__ void __launch_bounds__(
         dst_send_buffers[i] =
             reinterpret_cast<float*>(dst_send_buffers[i]) + num_scales;
 
-      // Copy source metadata into symmetric send buffer
-      if (lane_id < num_topk_ranks)
-        st_na_global(reinterpret_cast<SourceMeta*>(dst_send_buffers[lane_id]),
-                     src_meta);
-#pragma unroll
-      for (int i = 0; i < num_topk_ranks; ++i)
-        dst_send_buffers[i] =
-            reinterpret_cast<SourceMeta*>(dst_send_buffers[i]) + 1;
-
-// Copy `topk_idx` and `topk_weights` into symmetric send buffer
+// Copy `topk_idx` and `topk_weights` into symmetric send buffer (before meta)
 #pragma unroll
       for (int i = lane_id; i < num_topk * num_topk_ranks; i += 32) {
         auto rank_idx = i / num_topk, copy_idx = i % num_topk;
@@ -779,12 +784,36 @@ __global__ void __launch_bounds__(
             ld_nc_global(topk_idx + token_idx * num_topk + copy_idx));
         auto weight_value =
             ld_nc_global(topk_weights + token_idx * num_topk + copy_idx);
-        st_na_global(
-            reinterpret_cast<int*>(dst_send_buffers[rank_idx]) + copy_idx,
-            idx_value);
-        st_na_global(reinterpret_cast<float*>(dst_send_buffers[rank_idx]) +
-                         num_topk + copy_idx,
-                     weight_value);
+        auto* topk_base_i = reinterpret_cast<int*>(
+            reinterpret_cast<SourceMeta*>(dst_send_buffers[rank_idx]) + 1);
+        auto* topk_base_f = reinterpret_cast<float*>(
+            reinterpret_cast<SourceMeta*>(dst_send_buffers[rank_idx]) + 1);
+        st_na_global(topk_base_i + copy_idx, idx_value);
+        st_na_global(topk_base_f + num_topk + copy_idx, weight_value);
+      }
+      __syncwarp();
+
+      // Publish SourceMeta *last*. Write struct relaxed, then ready flag with release.sys
+      if (lane_id < num_topk_ranks) {
+        // meta is placed after [num_topk ints][num_topk floats]
+        auto* meta_ptr = reinterpret_cast<SourceMeta*>(dst_send_buffers[lane_id]);
+        // write all fields except the ready flag (set to 0)
+        // write all fields except the ready flag
+        SourceMeta tmp = src_meta;
+        tmp.is_token_in_nvl_rank_bits = 0;
+        st_na_global(meta_ptr, tmp);
+#if __CUDA_ARCH__ >= 900
+        // 1) make membership visible
+        asm volatile("membar.sys;" ::: "memory");
+        asm volatile("st.global.release.sys.u32 [%0], %1;"
+                     :: "l"(&meta_ptr->is_token_in_nvl_rank_bits),
+                        "r"(src_meta.is_token_in_nvl_rank_bits)
+                     : "memory");
+#else
+        // 1) store membership, 2) fence, 3) store READY
+        *reinterpret_cast<volatile uint32_t*>(&meta_ptr->is_token_in_nvl_rank_bits) =
+            src_meta.is_token_in_nvl_rank_bits;
+#endif
       }
       __syncwarp();
 
@@ -1062,10 +1091,14 @@ __global__ void __launch_bounds__(
         auto meta_ptr = reinterpret_cast<SourceMeta*>(
             rdma_channel_data.recv_buffer(src_rdma_rank) +
             slot * num_bytes_per_token + hidden_bytes + scale_bytes);
-
-        int seen_bits =
-            ld_acquire_sys_global(&meta_ptr->is_token_in_nvl_rank_bits);
-        if (seen_bits == 0) break;  // not yet written
+        
+        /* NOTE: this assumes that we have 8 nvl ranks. */
+        uint32_t bits =
+            ld_acquire_sys_global(reinterpret_cast<volatile uint32_t*>(&meta_ptr->is_token_in_nvl_rank_bits));
+        // gate on BOTH: my delivered bit (top-8) and my membership (low-8)
+        bool my_delivered  = (bits >> (8 + dst_nvl_rank)) & 1u;
+        bool my_membership = (bits >>      dst_nvl_rank ) & 1u;
+        if (!my_delivered) break;
         src_rdma_tail_ready = t + 1;
       }
       src_rdma_tail = src_rdma_tail_ready;
@@ -1076,22 +1109,59 @@ __global__ void __launch_bounds__(
         auto rdma_slot_idx = i % num_max_rdma_chunked_recv_tokens;
         auto shifted = rdma_channel_data.recv_buffer(src_rdma_rank) +
                        rdma_slot_idx * num_bytes_per_token;
+        auto meta_ptr = reinterpret_cast<SourceMeta*>(shifted + hidden_bytes +
+                                               scale_bytes);
+        /* The problem is still if we don't clear the is_token_in_nvl_rank_bits */
+        /* If the rdma_channel_tail.buffer(src_rdma_rank) is bumped by a reordered atomics */
+        /* The warp can read a stale is_token_in_nvl_rank_bits */
+        /* Naively clearing the is_token_in_nvl_rank_bits doesn't work either */
+        /* Because other warps might still be using it */
+#ifndef FALSE
         int seen_bits =
             ld_acquire_sys_global(reinterpret_cast<uint32_t volatile*>(
-                &reinterpret_cast<SourceMeta*>(shifted + hidden_bytes +
-                                               scale_bytes)
-                     ->is_token_in_nvl_rank_bits));
-        if (seen_bits == 0) trap();
+                &meta_ptr->is_token_in_nvl_rank_bits));
+        if ((seen_bits & 0xFFFFu) == 0) trap();
+
+        bool my_delivered  = (seen_bits >> (8 + dst_nvl_rank)) & 1u;
+        bool my_membership = (seen_bits >>      dst_nvl_rank ) & 1u;
+        if (!my_delivered) trap();
+
         lane_id == src_rdma_rank ? (num_tokens_to_recv_from_rdma -= 1) : 0;
 
-        bool is_in_dst_nvl_rank = (seen_bits >> dst_nvl_rank) & 1;
+        bool is_in_dst_nvl_rank = my_membership;
+#else
+        lane_id == src_rdma_rank ? (num_tokens_to_recv_from_rdma -= 1) : 0;
+        auto* meta_ptr = reinterpret_cast<SourceMeta*>(
+            shifted + hidden_bytes + scale_bytes);
+        auto* flag_ptr = &meta_ptr->is_token_in_nvl_rank_bits;
+
+        uint32_t seen_bits_lane0 = 0;
+        int      in_rank_lane0   = 0;
+        if (lane_id == 0) {
+          seen_bits_lane0 =
+              ld_acquire_sys_global(reinterpret_cast<volatile uint32_t*>(flag_ptr));
+          // if (seen_bits_lane0 == 0) trap();
+          in_rank_lane0 = (seen_bits_lane0 >> dst_nvl_rank) & 1;
+        }
+        uint32_t seen_bits = __shfl_sync(0xffffffff, seen_bits_lane0, 0);
+        bool is_in_dst_nvl_rank = __shfl_sync(0xffffffff, in_rank_lane0, 0);
+        __syncwarp();
+#endif
         if (lane_id == src_rdma_rank) {
           auto cached_head = is_in_dst_nvl_rank ? rdma_nvl_token_idx : -1;
           rdma_nvl_token_idx += is_in_dst_nvl_rank;
           if (not kCachedMode)
             send_nvl_head[i * NUM_MAX_NVL_PEERS] = cached_head;
         }
-        if (not is_in_dst_nvl_rank) continue;
+        if (not is_in_dst_nvl_rank) {
+          /* After I have seen the is_token_in_nvl_rank_bits, I can clear the delievered mask.  */
+          if (lane_id == 0) {
+            atomicAnd(reinterpret_cast<unsigned int*>(&meta_ptr->is_token_in_nvl_rank_bits),
+                      ~(1u << (8 + dst_nvl_rank)));
+          }
+          __syncwarp();
+          continue;
+        }
 
         // Get an empty slot
         int dst_slot_idx =
@@ -1117,6 +1187,22 @@ __global__ void __launch_bounds__(
 
         // Wait TMA to be finished
         tma_store_wait();
+        __syncwarp();
+
+        // Clear our NVL bit only AFTER we’ve consumed the payload.
+#ifdef FALSE
+        if (lane_id == 0) {
+          if ((seen_bits >> dst_nvl_rank) & 1) {
+            atomicAnd(reinterpret_cast<unsigned int*>(flag_ptr), ~(1u << dst_nvl_rank));
+          }
+        }
+        __syncwarp();
+#endif
+        /* After I have seen the is_token_in_nvl_rank_bits, I can clear the delievered mask.  */
+        if (lane_id == 0) {
+          atomicAnd(reinterpret_cast<unsigned int*>(&meta_ptr->is_token_in_nvl_rank_bits),
+                    ~(1u << (8 + dst_nvl_rank)));
+        }
         __syncwarp();
       }
 
@@ -2200,6 +2286,11 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
       combined_nvl_head += num_tokens_prefix * NUM_MAX_NVL_PEERS;
 
       // Iterate over all tokens and combine by chunks
+#ifdef FALSE
+      int ch_token_start_idx, ch_token_end_idx;
+      get_channel_task_range(num_combined_tokens, num_channels, channel_id,
+                             ch_token_start_idx, ch_token_end_idx);
+#endif
       for (int token_start_idx = 0; token_start_idx < num_tokens_to_combine;
            token_start_idx += num_max_rdma_chunked_send_tokens) {
         // Check destination queue emptiness, or wait a buffer to be released
@@ -2304,6 +2395,32 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
 
         // Issue RDMA send
         if (sub_warp_id == kNumWarpsPerForwarder - 1) {
+#ifdef FALSE
+          // Mark per-token receiver readiness before the transfer/tail bump.
+          for (int j = lane_id; j < num_chunked_tokens; j += 32) {
+            int rdma_slot_idx = (token_start_idx + j) % num_max_rdma_chunked_recv_tokens;
+            auto* meta = reinterpret_cast<SourceMeta*>(
+                send_buffer + rdma_slot_idx * num_bytes_per_token + hidden_bytes);
+            // Map global token → owning RDMAReceiver warp (matches receiver loop stride)
+            int global_token_idx = num_tokens_prefix + token_start_idx + j;
+            int receiver_id = (global_token_idx - ch_token_start_idx) % kNumRDMAReceivers;
+            if (receiver_id < 0) receiver_id += kNumRDMAReceivers;
+            uint32_t mask = comb_ready_bit_for_warp(receiver_id);
+#if __CUDA_ARCH__ >= 900
+            asm volatile("membar.sys;" ::: "memory");
+            uint32_t val = meta->is_token_in_nvl_rank_bits | mask;
+            asm volatile("st.global.release.sys.u32 [%0], %1;"
+                         :: "l"(&meta->is_token_in_nvl_rank_bits), "r"(val)
+                         : "memory");
+#else
+            __threadfence_system();
+            *reinterpret_cast<volatile uint32_t*>(
+                &meta->is_token_in_nvl_rank_bits) =
+                meta->is_token_in_nvl_rank_bits | mask;
+#endif
+          }
+          __syncwarp();
+#endif
           if (dst_rdma_rank != rdma_rank) {
             auto rdma_slot_idx =
                 token_start_idx % num_max_rdma_chunked_recv_tokens;
@@ -2396,6 +2513,31 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
         }
         __syncwarp();
 
+#ifdef FALSE
+       // Per-token readiness bit (which receiver warp owns this token)
+       int ready_slot = 0;
+       SourceMeta* ready_meta = nullptr;
+       if (expected_head >= 0) {
+         ready_slot = expected_head % num_max_rdma_chunked_recv_tokens;
+         ready_meta = reinterpret_cast<SourceMeta*>(
+             rdma_channel_data.recv_buffer(lane_id) +
+             ready_slot * num_bytes_per_token + hidden_bytes);
+         uint32_t my_ready = comb_ready_bit_for_warp(warp_id);
+         start_time = clock64();
+         while (true) {
+           uint32_t bits = ld_acquire_sys_global(
+               reinterpret_cast<volatile uint32_t*>(
+                   &ready_meta->is_token_in_nvl_rank_bits));
+           if (bits & my_ready) break;
+           if (clock64() - start_time > NUM_TIMEOUT_CYCLES) {
+              printf("DeepEP combine RDMA receiver timeout (READY), channel: %d, RDMA: %d, nvl: %d, src RDMA: %d, head: %d, tail: %d\n",
+                     channel_id, rdma_rank, nvl_rank, lane_id, expected_head,
+                     cached_channel_tail_idx);
+              trap();
+            }
+          }
+        }
+#endif
         // Combine current token
         auto get_addr_fn = [&](int src_rdma_rank, int slot_idx,
                                int hidden_int4_idx) -> int4* {
@@ -2422,6 +2564,16 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
             bias_1 == nullptr ? nullptr : bias_1 + token_idx * hidden_int4,
             num_max_rdma_chunked_recv_tokens, get_addr_fn, recv_tw_fn, nullptr,
             dummy_tma_phases);
+#ifdef FALSE
+        // Clear my readiness bit once consumed
+        if (expected_head >= 0 && lane_id == 0) {
+          uint32_t my_ready = comb_ready_bit_for_warp(warp_id);
+          atomicAnd(reinterpret_cast<unsigned int*>(
+                        &ready_meta->is_token_in_nvl_rank_bits),
+                    ~my_ready);
+        }
+         __syncwarp();
+#endif
       }
 
       // Retired

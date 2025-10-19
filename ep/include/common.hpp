@@ -37,7 +37,7 @@
 #define kQueueSize 1024
 #define kQueueMask (kQueueSize - 1)
 #ifdef EFA
-#define kMaxInflight 1
+#define kMaxInflight 3
 #else
 #define kMaxInflight 32
 #endif

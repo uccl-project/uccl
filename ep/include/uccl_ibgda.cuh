@@ -248,7 +248,7 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
       uint64_t cur_head = rb->head;
       uint64_t cur_tail = rb->volatile_tail();
       uint64_t inflight = cur_head - cur_tail;
-      if (inflight < kMaxInflight) {
+      if (inflight < 1) {
         uint64_t slot = cur_head;
         TransferCmd cmd{};
         cmd.cmd = 1;
@@ -289,7 +289,7 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
       uint64_t cur_head = rb->head;
       uint64_t cur_tail = rb->volatile_tail();
       uint64_t inflight = cur_head - cur_tail;
-      if (inflight < kMaxInflight) {
+      if (inflight < 1) {
         uint64_t slot = cur_head;
         TransferCmd cmd{};
         cmd.cmd = 1;  // dummy valid cmd

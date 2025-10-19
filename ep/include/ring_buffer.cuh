@@ -336,76 +336,56 @@ struct alignas(128) RingBuffer {
     return val;
   }
 
-  __host__ __device__ inline bool atomic_set_and_commit(
-      const T& item, uint64_t* out_slot = nullptr) {
-    uint64_t slot;
+__host__ __device__ inline bool atomic_set_and_commit(const T& item, uint64_t* out_slot = nullptr) {
+  // Reserve a unique slot (no retry loop)
 #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
-    // Cache a local snapshot of tail to avoid hammering PCIe each spin.
-    // uint64_t tail_snap = ld_volatile(&tail);
-    // int spins = 0;
+  uint64_t prevHead = atomicAdd(reinterpret_cast<unsigned long long*>(&head), 1ULL);
+#else
+  uint64_t prevHead = __atomic_fetch_add(&head, 1ULL, __ATOMIC_RELAXED);
 #endif
-    while (true) {
+
+  // Throttle if reservation would overflow ring
 #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
-      uint64_t h = ld_volatile(&head);
-      // uint64_t t = tail_snap;
-      // if (h - t == Capacity) {
-      //   // Refresh snapshot occasionally to reduce PCIe reads under
-      //   contention. if ((++spins & 0x3F) == 0) {
-      //     tail_snap = ld_volatile(&tail);
-      //   }
-      //   __nanosleep(64);
-      //   continue;
-      // }
-      unsigned long long prev =
-          atomicCAS((unsigned long long*)&head, (unsigned long long)h,
-                    (unsigned long long)(h + 1));
-      if (prev == h) {
-        slot = h;
-        break;
-      }
-#else
-      uint64_t h = __atomic_load_n(&head, __ATOMIC_RELAXED);
-      uint64_t t = __atomic_load_n(&tail, __ATOMIC_RELAXED);
-      if (h - t == Capacity) {
-        cpu_relax();
-        continue;
-      }
-      uint64_t expected = h;
-      if (__atomic_compare_exchange_n(&head, &expected, h + 1, true,
-                                      __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
-        slot = h;
-        break;
-      }
-#endif
-    }
-    uint32_t idx = (uint32_t)slot & mask();
-
-    T tmp = item;
-    auto saved_cmd = item.cmd;
-    buf[idx] = tmp;
-
-    // Single 16B system-scope publish: {fst=ready flag, snd=metadata}
-#if defined(__CUDA_ARCH__)
-#if __CUDA_ARCH__ >= 900
-    asm volatile("st.global.release.sys.v2.u64 [%0], {%1,%2};" ::"l"(&hdr[idx]),
-                 "l"(saved_cmd), "l"((uint64_t)idx)
-                 : "memory");
-#else
-    // A100 fast path can use relaxed.sys like MSCCL++ (ordering still covered
-    // by __threadfence_system()).
-    __threadfence_system();
-    asm volatile("st.global.relaxed.sys.v2.u64 [%0], {%1,%2};" ::"l"(&hdr[idx]),
-                 "l"(saved_cmd), "l"((uint64_t)idx)
-                 : "memory");
-#endif
-#else
-    std::atomic_thread_fence(std::memory_order_release);
-    __atomic_store_n(&hdr[idx].snd, (uint64_t)idx, std::memory_order_relaxed);
-    __atomic_store_n(&hdr[idx].fst, saved_cmd, std::memory_order_release);
-#endif
-    if (out_slot) *out_slot = slot;
-    return true;
+  // Snapshot to cut PCIe traffic; refresh occasionally
+  uint64_t tail_snap = ld_volatile(&tail);
+  int spins = 0;
+  while (prevHead >= capacity + tail_snap) {
+    if ((++spins & 0x3F) == 0) tail_snap = ld_volatile(&tail);
+    __nanosleep(64);
   }
+#else
+  while (prevHead >= capacity + __atomic_load_n(&tail, __ATOMIC_ACQUIRE)) {
+    cpu_relax();
+  }
+#endif
+
+  // Now it’s safe to write the payload
+  const uint32_t idx = static_cast<uint32_t>(prevHead) & mask();
+
+  T tmp = item;
+  auto ready_flag = tmp.cmd;     // your “visible when non-zero” flag
+  // tmp.cmd = 0;                   // keep flag clear in the payload copy if you want
+  buf[idx] = tmp;
+
+  // Single 16B publish of the header (system-scope)
+#if defined(__CUDA_ARCH__)
+  #if __CUDA_ARCH__ >= 900
+    asm volatile("st.global.release.sys.v2.u64 [%0], {%1,%2};"
+                 :: "l"(&hdr[idx]), "l"(ready_flag), "l"((uint64_t)idx) : "memory");
+  #else
+    __threadfence_system();
+    asm volatile("st.global.relaxed.sys.v2.u64 [%0], {%1,%2};"
+                 :: "l"( &hdr[idx] ), "l"(ready_flag), "l"((uint64_t)idx) : "memory");
+  #endif
+#else
+  std::atomic_thread_fence(std::memory_order_release);
+  __atomic_store_n(&hdr[idx].snd, (uint64_t)idx, __ATOMIC_RELAXED);
+  __atomic_store_n(&hdr[idx].fst, ready_flag, __ATOMIC_RELEASE);
+#endif
+
+  if (out_slot) *out_slot = prevHead;
+  return true;
+}
 };
 
 typedef RingBuffer<TransferCmd, FlowDirection::DeviceToHost, kQueueSize>
