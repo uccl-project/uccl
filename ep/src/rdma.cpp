@@ -1200,6 +1200,8 @@ void local_process_completions(ProxyCtx& S,
       case IBV_WC_RDMA_WRITE: {
         uint64_t wrid = wc[i].wr_id;
         if ((wrid & kAtomicWrTag) == kAtomicWrTag) {
+          wrid &= kAtomicMask;
+          acked_wrs.insert(wrid);
           break;
         }
         if ((wrid & kBarrierWrTag) == kBarrierWrTag) {
@@ -1925,9 +1927,9 @@ void post_atomic_operations(ProxyCtx& S,
       //     }
       //   }
       // }
-      for (auto const& wid : group_wrids) {
-        acked_wrs.insert(wid);
-      }
+      // for (auto const& wid : group_wrids) {
+      //   acked_wrs.insert(wid);
+      // }
     }  // end per-ring loop
   }
 }
