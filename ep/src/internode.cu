@@ -704,7 +704,6 @@ __global__ void __launch_bounds__(
               cached_rdma_channel_head, rdma_tail_idx);
           trap();
         }
-        __nanosleep(256);
       }
       __syncwarp();
 
@@ -1033,7 +1032,7 @@ __global__ void __launch_bounds__(
           if (lane_id == src_rdma_rank)
             cached_rdma_channel_tail = static_cast<int>(
                 ld_acquire_sys_global(rdma_channel_tail.buffer(src_rdma_rank)));
-            if (__shfl_sync(0xffffffff,
+          if (__shfl_sync(0xffffffff,
                           cached_rdma_channel_tail > cached_rdma_channel_head,
                           src_rdma_rank))
             break;
@@ -1051,7 +1050,6 @@ __global__ void __launch_bounds__(
               num_tokens_to_recv_from_rdma);
           trap();
         }
-        __nanosleep(256);
       }
       auto src_rdma_head =
           __shfl_sync(0xffffffff, cached_rdma_channel_head, src_rdma_rank);
@@ -1079,7 +1077,7 @@ __global__ void __launch_bounds__(
         auto shifted = rdma_channel_data.recv_buffer(src_rdma_rank) +
                        rdma_slot_idx * num_bytes_per_token;
         int seen_bits =
-            ld_sys_cv_u32(reinterpret_cast<uint32_t volatile*>(
+            ld_acquire_sys_global(reinterpret_cast<uint32_t volatile*>(
                 &reinterpret_cast<SourceMeta*>(shifted + hidden_bytes +
                                                scale_bytes)
                      ->is_token_in_nvl_rank_bits));
@@ -1251,7 +1249,6 @@ __global__ void __launch_bounds__(
               (long long)(last_recv_token_idx + 1));
           trap();
         }
-        __nanosleep(256);
       }
 
       // Copy data
@@ -2045,10 +2042,10 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
 
           // vectorized topk
           int n4 = num_topk >> 2;
-          auto* dst4 = reinterpret_cast<float4*>(
-              tma_buffer + hidden_bytes + sizeof(SourceMeta));
-          auto* src4 = reinterpret_cast<const float4*>(
-              topk_weights + token_idx * num_topk);
+          auto* dst4 = reinterpret_cast<float4*>(tma_buffer + hidden_bytes +
+                                                 sizeof(SourceMeta));
+          auto* src4 = reinterpret_cast<float4 const*>(topk_weights +
+                                                       token_idx * num_topk);
 
           // lanes 0..n4-1 do 16B copies
           if (lane_id < n4) {
@@ -2058,9 +2055,9 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
 
           // lane 0 handles the tail (0..3 scalars)
           if ((num_topk & 3) && lane_id == 0) {
-            float const* src_tail = reinterpret_cast<const float*>(src4 + n4);
+            float const* src_tail = reinterpret_cast<float const*>(src4 + n4);
             float* dst_tail = reinterpret_cast<float*>(dst4 + n4);
-            #pragma unroll
+#pragma unroll
             for (int r = 0; r < (num_topk & 3); ++r) {
               dst_tail[r] = src_tail[r];
             }
@@ -2233,7 +2230,6 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                 token_start_idx, num_chunked_tokens);
             trap();
           }
-          __nanosleep(256);
         }
         sync_large_warp();
         unsigned long long rdma_wait_end = clock64();
@@ -2270,7 +2266,6 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                   sub_warp_id, kNumWarpsPerForwarder, expected_head);
               trap();
             }
-            __nanosleep(256);
           }
 
           // Combine current token
@@ -2398,7 +2393,6 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                 cached_channel_tail_idx, token_idx, expected_head);
             trap();
           }
-          __nanosleep(256);
         }
         __syncwarp();
 
@@ -2465,7 +2459,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
               min_head =
                   min(min_head, rdma_receiver_rdma_head[i][dst_rdma_rank]);
           if (min_head != std::numeric_limits<int>::max() and
-              min_head >= last_rdma_head + (num_max_rdma_chunked_send_tokens / 2) and 
+              min_head >= last_rdma_head + num_max_rdma_chunked_send_tokens and
               lane_id < kNumRDMARanks) {
             uccl::nvshmemi_ibgda_amo_nonfetch_add(
                 reinterpret_cast<uint64_t>(rdma_channel_head.buffer(rdma_rank)),

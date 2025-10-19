@@ -21,7 +21,8 @@ bool pin_thread_to_cpu(int cpu) {
 }
 
 static std::vector<int> cpus_in_numa_node(int numa_node) {
-  std::ifstream f("/sys/devices/system/node/node" + std::to_string(numa_node) + "/cpulist");
+  std::ifstream f("/sys/devices/system/node/node" + std::to_string(numa_node) +
+                  "/cpulist");
   std::string line;
   std::getline(f, line);
   std::vector<int> cpus;
@@ -41,8 +42,10 @@ static std::vector<int> cpus_in_numa_node(int numa_node) {
 }
 
 // Pin a single thread to a unique CPU inside its NUMA node.
-// threads_per_rank: number of CPU threads you spawn per local rank (e.g., 2 or 4)
-bool pin_thread_unique(int numa_node, int local_rank, int thread_idx, int threads_per_rank) {
+// threads_per_rank: number of CPU threads you spawn per local rank (e.g., 2 or
+// 4)
+bool pin_thread_unique(int numa_node, int local_rank, int thread_idx,
+                       int threads_per_rank) {
   auto cpus = cpus_in_numa_node(numa_node);
   if (cpus.empty()) {
     fprintf(stderr, "No CPUs for NUMA node %d\n", numa_node);
@@ -52,8 +55,9 @@ bool pin_thread_unique(int numa_node, int local_rank, int thread_idx, int thread
   // Make a unique ordinal per (rank, thread)
   int ordinal = local_rank * threads_per_rank + thread_idx;
 
-  // (Optional) prefer physical cores over SMT by using the first half of the list.
-  // If your cpulist is [phys0,ht0,phys1,ht1,...], you can compact to even indices instead.
+  // (Optional) prefer physical cores over SMT by using the first half of the
+  // list. If your cpulist is [phys0,ht0,phys1,ht1,...], you can compact to even
+  // indices instead.
 
   int chosen_cpu = cpus[ordinal % cpus.size()];
 
@@ -68,8 +72,10 @@ bool pin_thread_unique(int numa_node, int local_rank, int thread_idx, int thread
   // Give scheduler a chance to migrate if needed
   sched_yield();
   int now = sched_getcpu();
-  printf("Pinned to NUMA node %d, thread_idx: %d, local_rank: %d, running on CPU %d.\n",
-         numa_node, thread_idx, local_rank, now);
+  printf(
+      "Pinned to NUMA node %d, thread_idx: %d, local_rank: %d, running on CPU "
+      "%d.\n",
+      numa_node, thread_idx, local_rank, now);
   return true;
 }
 

@@ -36,7 +36,11 @@
 #define kAtomicBufferSize 81960
 #define kQueueSize 1024
 #define kQueueMask (kQueueSize - 1)
-#define kMaxInflight 64
+#ifdef EFA
+#define kMaxInflight 1
+#else
+#define kMaxInflight 32
+#endif
 #define kBatchSize 32
 #define kIterations 40000
 #define kNumThBlocks 4
@@ -69,7 +73,8 @@
 extern std::once_flag peer_ok_flag[MAX_NUM_GPUS][MAX_NUM_GPUS];
 bool pin_thread_to_cpu(int cpu);
 bool pin_thread_to_numa(int numa_node);
-bool pin_thread_unique(int numa_node, int local_rank, int thread_idx, int threads_per_rank);
+bool pin_thread_unique(int numa_node, int local_rank, int thread_idx,
+                       int threads_per_rank);
 void cpu_relax();
 int get_num_max_nvl_peers();
 

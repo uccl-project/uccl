@@ -914,8 +914,8 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       //   if (!inserted) {
       //     fprintf(
       //         stderr,
-      //         "thread_idx: %d, Error: tail wr_id %lu already exists (map=%p)\n",
-      //         thread_idx, tail_wr, (void*)&S.wr_id_to_wr_ids);
+      //         "thread_idx: %d, Error: tail wr_id %lu already exists
+      //         (map=%p)\n", thread_idx, tail_wr, (void*)&S.wr_id_to_wr_ids);
       //     std::abort();
       //   } else {
       //     for (auto const& wr_id : it->second) {

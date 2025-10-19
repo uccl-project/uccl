@@ -84,7 +84,6 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       rb->atomic_set_and_commit(cmd, &slot);
       break;
     }
-    __nanosleep(1000);
     if (clock64() - last_print > kPrintCycleInterval) {
       if (threadIdx.x == 0 && blockIdx.x == 0) {
         printf(
@@ -154,7 +153,6 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
         rb->atomic_set_and_commit(cmd, &slot);
         break;
       } else {
-        __nanosleep(1000);
         auto now = clock64();
         if (now - last_print > kPrintCycleInterval) {
           uint64_t tail_cmd = rb->buf[cur_tail & rb->mask()].cmd;

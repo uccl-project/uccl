@@ -102,7 +102,8 @@ void Proxy::pin_thread_to_cpu_wrapper() {
 void Proxy::pin_thread_to_numa_wrapper() {
   if (cfg_.pin_thread) {
     assert(ctx_.numa_node != -1);
-    pin_thread_unique(ctx_.numa_node, cfg_.local_rank, cfg_.thread_idx, kNumThBlocks);
+    pin_thread_unique(ctx_.numa_node, cfg_.local_rank, cfg_.thread_idx,
+                      kNumThBlocks);
 
     // Get the actual CPU this thread is running on
     int cpu = sched_getcpu();
@@ -113,7 +114,8 @@ void Proxy::pin_thread_to_numa_wrapper() {
     pthread_getaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
 
     printf(
-        "Local CPU thread pinned to NUMA node %d, thread_idx: %d, local_rank: %d, "
+        "Local CPU thread pinned to NUMA node %d, thread_idx: %d, local_rank: "
+        "%d, "
         "running on CPU %d.\n",
         ctx_.numa_node, cfg_.thread_idx, cfg_.local_rank, cpu);
   }
@@ -386,10 +388,10 @@ void Proxy::run_dual() {
                  ctx_by_tag_, atomic_buffer_ptr_, cfg_.num_ranks,
                  cfg_.num_experts, pending_atomic_updates, cfg_.rank,
                  cfg_.num_nodes);
-    if (ctx_.notify_gpu_counter <= 0) {
-      notify_gpu_completion(my_tail);
-      ctx_.notify_gpu_counter = ProxyCtx::kNotifyGpuCounter;
-    }
+    // if (ctx_.notify_gpu_counter <= 0) {
+    notify_gpu_completion(my_tail);
+    // ctx_.notify_gpu_counter = ProxyCtx::kNotifyGpuCounter;
+    // }
     post_gpu_command(my_tail, seen);
 #ifdef USE_RECEIVER_BARRIER
     apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
@@ -418,9 +420,9 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
 
   // Mark all acked command slots in each ring's bitmask
   for (auto wr_id : acked_wrs_) {
-    const size_t rb_idx  = (wr_id >> 32) & 0xFFFFFFFF;
+    const size_t rb_idx = (wr_id >> 32) & 0xFFFFFFFF;
     const size_t cmd_idx = wr_id & 0xFFFFFFFF;
-    
+
     if (rb_idx >= cfg_.ring_buffers.size()) {
       fprintf(stderr, "Invalid rb_idx %zu in acked_wrs_\n", rb_idx);
       continue;
@@ -449,8 +451,7 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
     // Keep advancing tail while current cmd is acked
     while (true) {
       uint64_t wr_id = (rb_idx << 32) | (ring_tail & 0xFFFFFFFFull);
-      if (acked_wrs_.find(wr_id) == acked_wrs_.end())
-        break;
+      if (acked_wrs_.find(wr_id) == acked_wrs_.end()) break;
 
       // Clear the command slot
       ring_buffer->volatile_store_cmd(ring_tail, 0);
