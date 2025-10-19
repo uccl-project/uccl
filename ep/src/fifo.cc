@@ -23,7 +23,7 @@ struct Fifo::Impl {
         size(size) {}
 };
 
-MSCCLPP_API_CPP Fifo::Fifo(int size) {
+Fifo::Fifo(int size) {
   int device;
   MSCCLPP_CUDATHROW(cudaGetDevice(&device));
   int numaNode = getDeviceNumaNode(device);
@@ -33,9 +33,9 @@ MSCCLPP_API_CPP Fifo::Fifo(int size) {
   pimpl_ = std::make_unique<Impl>(size);
 }
 
-MSCCLPP_API_CPP Fifo::~Fifo() = default;
+Fifo::~Fifo() = default;
 
-MSCCLPP_API_CPP ProxyTrigger Fifo::poll() {
+ProxyTrigger Fifo::poll() {
   ProxyTrigger trigger;
   ProxyTrigger* ptr = &pimpl_->triggers.get()[*(pimpl_->tail) % pimpl_->size];
   // we are loading fst first. if fst is non-zero then snd is also valid
@@ -44,15 +44,15 @@ MSCCLPP_API_CPP ProxyTrigger Fifo::poll() {
   return trigger;
 }
 
-MSCCLPP_API_CPP void Fifo::pop() {
+void Fifo::pop() {
   uint64_t curTail = *(pimpl_->tail);
   pimpl_->triggers.get()[curTail % pimpl_->size].fst = 0;
   atomicStore(pimpl_->tail.get(), curTail + 1, memoryOrderRelease);
 }
 
-MSCCLPP_API_CPP int Fifo::size() const { return pimpl_->size; }
+int Fifo::size() const { return pimpl_->size; }
 
-MSCCLPP_API_CPP FifoDeviceHandle Fifo::deviceHandle() const {
+FifoDeviceHandle Fifo::deviceHandle() const {
   FifoDeviceHandle deviceHandle;
   deviceHandle.triggers = pimpl_->triggers.get();
   deviceHandle.head = pimpl_->head.get();

@@ -22,7 +22,7 @@ static const std::string getBusId(int cudaDev) {
 
 namespace mscclpp {
 
-MSCCLPP_API_CPP int getDeviceNumaNode(int cudaDev) {
+int getDeviceNumaNode(int cudaDev) {
   std::string busId = getBusId(cudaDev);
   std::string file_str = "/sys/bus/pci/devices/" + busId + "/numa_node";
   std::ifstream file(file_str);
@@ -37,7 +37,7 @@ MSCCLPP_API_CPP int getDeviceNumaNode(int cudaDev) {
   return numaNode;
 }
 
-MSCCLPP_API_CPP void numaBind(int node) {
+void numaBind(int node) {
   int totalNumNumaNodes = numa_num_configured_nodes();
   if (node < 0 || node >= totalNumNumaNodes) {
     throw Error(
