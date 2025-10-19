@@ -341,21 +341,21 @@ struct alignas(128) RingBuffer {
     uint64_t slot;
 #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
     // Cache a local snapshot of tail to avoid hammering PCIe each spin.
-    uint64_t tail_snap = ld_volatile(&tail);
-    int spins = 0;
+    // uint64_t tail_snap = ld_volatile(&tail);
+    // int spins = 0;
 #endif
     while (true) {
 #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
       uint64_t h = ld_volatile(&head);
-      uint64_t t = tail_snap;
-      if (h - t == Capacity) {
-        // Refresh snapshot occasionally to reduce PCIe reads under contention.
-        if ((++spins & 0x3F) == 0) {
-          tail_snap = ld_volatile(&tail);
-        }
-        __nanosleep(64);
-        continue;
-      }
+      // uint64_t t = tail_snap;
+      // if (h - t == Capacity) {
+      //   // Refresh snapshot occasionally to reduce PCIe reads under
+      //   contention. if ((++spins & 0x3F) == 0) {
+      //     tail_snap = ld_volatile(&tail);
+      //   }
+      //   __nanosleep(64);
+      //   continue;
+      // }
       unsigned long long prev =
           atomicCAS((unsigned long long*)&head, (unsigned long long)h,
                     (unsigned long long)(h + 1));
