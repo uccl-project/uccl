@@ -174,7 +174,7 @@ def run_rank1_remote(
     workers = ep.PeerCopyManager(src_device=device_index)
 
     print("[rank 1] FifoProxies started.", flush=True)
-    time.sleep(3)
+    time.sleep(5)
 
     try:
         workers.stop()

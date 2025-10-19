@@ -107,7 +107,7 @@ def run_rank0_sender(
     )
     bench.launch_gpu_issue_batched_commands()
     try:
-        bench.sync_stream_interruptible(poll_ms=5, timeout_ms=2000)
+        bench.sync_stream_interruptible(poll_ms=5, timeout_ms=5000)
     except KeyboardInterrupt:
         print("[rank 0] Interrupted during wait.")
     except RuntimeError as e:
@@ -154,7 +154,7 @@ def run_rank1_remote(
     workers = ep.PeerCopyManager(src_device=device_index)
     workers.start_for_proxies(proxies)
     print("[rank 1] PeerCopyManager started.", flush=True)
-    time.sleep(2)
+    time.sleep(5)
     try:
         workers.stop()
     except Exception:

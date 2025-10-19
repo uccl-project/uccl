@@ -27,19 +27,12 @@ __global__ void gpu_issue_batched_commands_fifo(
   // Track completed operations and latency metrics (per-thread)
   uint32_t complete = 0;
 
-#ifdef MEASURE_PER_OP_LATENCY
   __shared__ unsigned long long cycle_accum_smem;
   __shared__ unsigned int op_count_smem;
+  extern __shared__ unsigned long long start_cycle_smem[];
   if (tid == 0) {
     cycle_accum_smem = 0ull;
     op_count_smem = 0u;
-  }
-#endif
-
-  extern __shared__ unsigned long long start_cycle_smem[];
-  __shared__ bool print_warmup_exit;
-  if (tid == 0) {
-    print_warmup_exit = true;
   }
   __syncthreads();
 
@@ -86,7 +79,6 @@ __global__ void gpu_issue_batched_commands_fifo(
       // Wait for the oldest request to be consumed by host proxy
       fifo.sync(oldest_head, -1);
 
-#ifdef MEASURE_PER_OP_LATENCY
       // Measure latency for completed operation
       int abs_it = tid + complete * num_threads;
       if (abs_it >= kWarmupOps && abs_it < kIterations) {
@@ -99,18 +91,11 @@ __global__ void gpu_issue_batched_commands_fifo(
           block_cycle_start = t1;
         }
       }
-#endif
       complete++;
       inflight_count--;
     }
-
-    if (it == kWarmupOps && tid == 0 && print_warmup_exit) {
-      printf("Device Block %d: Exiting warmup phase\n", bid);
-      print_warmup_exit = false;
-    }
   }
 
-#ifdef MEASURE_PER_OP_LATENCY
   // Wait for all remaining in-flight operations to complete
   // my_iterations is already calculated above
   while (inflight_count > 0) {
@@ -143,13 +128,6 @@ __global__ void gpu_issue_batched_commands_fifo(
         "ops)\n",
         bid, num_threads, kIterations, op_count_smem);
   }
-#else
-  __syncthreads();
-  if (tid == 0) {
-    printf("Device Block %d done (%d threads pushed %d operations total)\n",
-           bid, num_threads, kIterations);
-  }
-#endif
 }
 
 // Launcher function implementation
