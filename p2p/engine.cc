@@ -1,5 +1,8 @@
 #include "engine.h"
 #include "util/util.h"
+#ifdef USE_TCPX
+#include "tcpx_plugin.h"
+#endif
 #include <arpa/inet.h>
 #include <glog/logging.h>
 #include <netinet/in.h>
