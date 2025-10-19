@@ -29,12 +29,13 @@
 #define kQueueSize 1024
 #define kQueueMask (kQueueSize - 1)
 #define kMaxInflight 32
-#define kBatchSize 1
+#define kBatchSize 32
 #define kIterations 40000
 #define kNumThBlocks 4
 #define kNumThPerBlock 1
-// #define kObjectSize 10752  // 10.5 KB
-#define kObjectSize 7168  // 7 KB
+#define kObjectSize 10752  // 10.5 KB
+// #define kObjectSize 7168  // 7 KB
+// #define kObjectSize 14336  // 14 KB
 #define kMaxOutstandingSends 2048
 #define kMaxOutstandingRecvs 2048 * 2
 #define kSenderAckQueueDepth 2048 * 2
