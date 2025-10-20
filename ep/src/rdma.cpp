@@ -676,8 +676,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              std::vector<uint64_t> const& wrs_to_post,
                              std::vector<TransferCmd> const& cmds_to_post,
                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                             int my_rank, int thread_idx,
-                             std::unordered_set<uint64_t>& finished_wrs) {
+                             int my_rank, int thread_idx) {
   if (num_wrs == 0) return;
   if (wrs_to_post.size() != num_wrs || cmds_to_post.size() != num_wrs) {
     fprintf(stderr, "Size mismatch (num_wrs=%zu, wr_ids=%zu, cmds=%zu)\n",
@@ -776,10 +775,22 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
             fprintf(stderr, "[EFA] atomic value=%d won't fit in 15 bits\n", v);
             std::abort();
           }
+          size_t index = static_cast<size_t>(cmd.atomic_offset / sizeof(int));
+          // Initialize missing entries lazily
+          auto key = ctx->seq_key(dst_rank, index);
+          if (ctx->next_seq_per_index.find(key) ==
+              ctx->next_seq_per_index.end())
+            ctx->next_seq_per_index[key] = 0;
+
+          uint8_t seq = ctx->next_seq_per_index[key];
+          ctx->next_seq_per_index[key] =
+              (seq + 1) % kReorderingBufferSize;  // 4-bit wrap (0–15)
           uint32_t imm =
-              AtomicsImm::Pack(true, false, cmd.atomic_val, cmd.atomic_offset,
-                               cmd.low_latency_buffer_idx)
+              AtomicsImm::PackAtomicWithSeq(v, cmd.atomic_offset, seq, true)
                   .GetImmData();
+          AtomicsImm aimm(imm);
+          assert(aimm.GetSeq() == seq);
+
           ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
         } else if (j + 1 == idxs.size()) {
           uint32_t imm =
@@ -906,23 +917,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
           std::abort();
         }
 #endif
-      // Map the tail of this ring-group batch
-      uint64_t const tail_wr = ring_wrids.back();
-      {
-        auto [it, inserted] =
-            S.wr_id_to_wr_ids.try_emplace(tail_wr, std::move(ring_wrids));
-        if (!inserted) {
-          fprintf(
-              stderr,
-              "thread_idx: %d, Error: tail wr_id %lu already exists (map=%p)\n",
-              thread_idx, tail_wr, (void*)&S.wr_id_to_wr_ids);
-          std::abort();
-        } else {
-          for (auto const& wr_id : it->second) {
-            finished_wrs.insert(wr_id);
-          }
-        }
-      }
     }
   }
 }
@@ -933,8 +927,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              std::vector<uint64_t> const& wrs_to_post,
                              std::vector<TransferCmd> const& cmds_to_post,
                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                             int my_rank, int thread_idx,
-                             std::unordered_set<uint64_t>& finished_wrs) {
+                             int my_rank, int thread_idx) {
   if (num_wrs == 0) return;
   if (wrs_to_post.size() != num_wrs || cmds_to_post.size() != num_wrs) {
     fprintf(stderr,
@@ -1070,10 +1063,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                   "(map=%p)\n",
                   thread_idx, expert_tail_wr, (void*)&S.wr_id_to_wr_ids);
           std::abort();
-        } else {
-          for (auto const& wr_id : it->second) {
-            finished_wrs.insert(wr_id);
-          }
         }
       }
     }
@@ -1088,10 +1077,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                 "(map=%p)\n",
                 thread_idx, tail_wr, (void*)&S.wr_id_to_wr_ids);
         std::abort();
-      } else {
-        for (auto const& wr_id : it->second) {
-          finished_wrs.insert(wr_id);
-        }
       }
     }
 #endif
@@ -1167,10 +1152,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                   "(map=%p)\n",
                   thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
           std::abort();
-        } else {
-          for (auto const& wr_id : it->second) {
-            finished_wrs.insert(wr_id);
-          }
         }
       }
 #endif
@@ -1179,7 +1160,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
 #endif
 
 void local_process_completions(ProxyCtx& S,
-                               std::unordered_set<uint64_t>& finished_wrs,
                                std::unordered_set<uint64_t>& acked_wrs,
                                int thread_idx, ibv_wc* wc, int ne,
                                std::vector<ProxyCtx*>& ctx_by_tag) {
@@ -1200,6 +1180,21 @@ void local_process_completions(ProxyCtx& S,
       case IBV_WC_RDMA_WRITE: {
         uint64_t wrid = wc[i].wr_id;
         if ((wrid & kAtomicWrTag) == kAtomicWrTag) {
+          wrid &= kAtomicMask;
+#ifdef EFA
+          acked_wrs.insert(wrid);
+#else
+          auto it = S.wr_id_to_wr_ids.find(wrid);
+          if (it != S.wr_id_to_wr_ids.end()) {
+            for (uint64_t sub_wr : it->second) {
+              acked_wrs.insert(sub_wr);
+            }
+            S.wr_id_to_wr_ids.erase(it);
+          } else {
+            printf("Error: ACK for unknown wr_id %lu\n", wrid);
+            std::abort();
+          }
+#endif
           break;
         }
         if ((wrid & kBarrierWrTag) == kBarrierWrTag) {
@@ -1224,25 +1219,14 @@ void local_process_completions(ProxyCtx& S,
         }
 #endif
         {
+          uint64_t const wr_done = wc[i].wr_id;
 #ifdef EFA
-          uint64_t const wr_done = wc[i].wr_id;
           acked_wrs.insert(wr_done);
-          if (S.wr_id_to_wr_ids.find(wr_done) != S.wr_id_to_wr_ids.end()) {
-            S.wr_id_to_wr_ids.erase(wr_done);
-          }
 #else
-          uint64_t const wr_done = wc[i].wr_id;
           auto it = S.wr_id_to_wr_ids.find(wr_done);
           if (it != S.wr_id_to_wr_ids.end()) {
             for (uint64_t sub_wr : it->second) {
               acked_wrs.insert(sub_wr);
-              if (finished_wrs.find(sub_wr) == finished_wrs.end()) {
-                fprintf(stderr,
-                        "Error: finished_wrs received ACK for unknown wr_id "
-                        "%lu\n",
-                        sub_wr);
-                std::abort();
-              }
             }
             S.wr_id_to_wr_ids.erase(it);
           } else {
@@ -1295,7 +1279,6 @@ int poll_cq_once(ibv_cq* cq, ibv_wc* wc, int max_cqes) {
 }
 
 void local_poll_completions(ProxyCtx& S,
-                            std::unordered_set<uint64_t>& finished_wrs,
                             std::unordered_set<uint64_t>& acked_wrs,
                             int thread_idx,
                             std::vector<ProxyCtx*>& ctx_by_tag) {
@@ -1303,26 +1286,24 @@ void local_poll_completions(ProxyCtx& S,
   auto poll_one = [&](ibv_cq* cq) {
     int ne = poll_cq_once(cq, wc, kMaxOutstandingSends);
     if (ne > 0) {
-      local_process_completions(S, finished_wrs, acked_wrs, thread_idx, wc, ne,
-                                ctx_by_tag);
+      local_process_completions(S, acked_wrs, thread_idx, wc, ne, ctx_by_tag);
     }
   };
   if (S.cq) poll_one(S.cq);
   // for (auto* cq : S.extra_cqs) poll_one(cq);
 }
 
-void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
-                  std::unordered_set<uint64_t>& acked_wrs, int thread_idx,
-                  CopyRingBuffer& g_ring, std::vector<ProxyCtx*>& ctx_by_tag,
-                  void* atomic_buffer_ptr, int num_ranks, int num_experts,
+void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& acked_wrs,
+                  int thread_idx, CopyRingBuffer& g_ring,
+                  std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr,
+                  int num_ranks, int num_experts,
                   std::set<PendingUpdate>& pending_atomic_updates, int my_rank,
                   int num_nodes) {
   ibv_wc wc[kMaxOutstandingSends];
   auto poll_one = [&](ibv_cq* cq) {
     int ne = poll_cq_once(cq, wc, kMaxOutstandingSends);
     if (ne > 0) {
-      local_process_completions(S, finished_wrs, acked_wrs, thread_idx, wc, ne,
-                                ctx_by_tag);
+      local_process_completions(S, acked_wrs, thread_idx, wc, ne, ctx_by_tag);
       remote_process_completions(S, thread_idx, g_ring, ne, wc, ctx_by_tag,
                                  atomic_buffer_ptr, num_ranks, num_experts,
                                  pending_atomic_updates, my_rank, num_nodes);
@@ -1496,7 +1477,70 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
 #endif
 #endif
       if (value == kMaxSendAtomicValue) value = kLargeAtomicValue;
-      addr32->fetch_add(value, std::memory_order_release);
+
+      if (!aimm.IsReorderable()) {
+        addr32->fetch_add(value, std::memory_order_release);
+      } else {
+        struct SeqBuf {
+          uint8_t expected = 0;       // next seq expected
+          uint16_t present_mask = 0;  // bitmask of buffered seqs
+          int vals[kReorderingBufferSize] = {0};
+        };
+
+        // Thread-local map to maintain per-index state
+        static thread_local std::unordered_map<size_t, SeqBuf> seqbufs;
+        auto& sb = seqbufs[index];
+
+        auto commit = [&](int delta) {
+          addr32->fetch_add(delta, std::memory_order_release);
+        };
+        uint8_t seq = aimm.GetSeq();
+        if (seq >= kReorderingBufferSize) {
+          fprintf(stderr, "Error: seq %u out of range\n", seq);
+          std::abort();
+        }
+        if (seq == sb.expected) {
+          // if (my_rank % MAX_NUM_GPUS == 0)
+          //   printf("seq: %u in order, applying immediately\n", seq);
+          // Apply immediately
+          commit(value);
+          sb.expected = (sb.expected + 1) % kReorderingBufferSize;
+
+          // Drain buffered consecutive entries
+          for (int step = 0; step < kReorderingBufferSize; ++step) {
+            uint8_t e = sb.expected;
+            uint16_t bit = static_cast<uint16_t>(1u << e);
+            if (!(sb.present_mask & bit)) break;
+            commit(sb.vals[e]);
+            sb.present_mask &= static_cast<uint16_t>(~bit);
+            sb.expected = (sb.expected + 1) % kReorderingBufferSize;
+          }
+        } else {
+          // Out-of-order arrival — buffer it
+          if (seq >= kReorderingBufferSize) {
+            fprintf(stderr, "Error: seq %u out of range\n", seq);
+            std::abort();
+          }
+          // if (my_rank % MAX_NUM_GPUS == 0)
+          //   printf("seq: %u out of order (expected %u), buffering\n", seq,
+          //         sb.expected);
+
+          if (sb.present_mask & (1u << seq)) {
+            fprintf(stderr, "Error: duplicate seq %u arrival\n", seq);
+            std::abort();
+          }
+          uint16_t bit = static_cast<uint16_t>(1u << seq);
+          if (sb.present_mask & bit) {
+            // Duplicate (possible with UD/SRD). Ignore safely.
+            // If you prefer strictness, keep the abort here.
+            fprintf(stderr, "Error: duplicate seq %u arrival\n", seq);
+            std::abort();
+          } else {
+            sb.present_mask |= bit;
+            sb.vals[seq] = value;
+          }
+        }
+      }
 #endif
     } else if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
                ImmType::IsBarrier(ntohl(cqe.imm_data))) {
@@ -1733,7 +1777,6 @@ void post_atomic_operations(ProxyCtx& S,
                             std::vector<TransferCmd> const& cmds_to_post,
                             std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
                             int my_rank, int thread_idx,
-                            std::unordered_set<uint64_t>& finished_wrs,
                             std::unordered_set<uint64_t>& acked_wrs) {
   if (cmds_to_post.size() > ProxyCtx::kMaxAtomicOps) {
     fprintf(stderr, "Too many atomic operations: %zu > %zu\n",
@@ -1813,9 +1856,7 @@ void post_atomic_operations(ProxyCtx& S,
           std::abort();
         }
 
-        uint32_t imm = AtomicsImm::Pack(true, cmd.is_combine, v, offset,
-                                        low_latency_buffer_idx)
-                           .GetImmData();
+        uint32_t imm = AtomicsImm::PackAtomic(v, offset).GetImmData();
 
         qpx->wr_id = kAtomicWrTag | (wr_id & kAtomicMask);
         qpx->comp_mask = 0;
@@ -1906,26 +1947,7 @@ void post_atomic_operations(ProxyCtx& S,
           std::abort();
         }
 #endif
-      // Map tail WR for this ring group; mark finished and acked immediately
-      uint64_t const batch_tail_wr = group_wrids.back();
-      {
-        auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
-            batch_tail_wr, std::move(group_wrids));
-        if (!inserted) {
-          fprintf(stderr,
-                  "thread_idx: %d, Error: tail wr_id %lu already exists "
-                  "(map=%p, size=%zu, dst_rank=%d)\n",
-                  thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
-                  S.wr_id_to_wr_ids.size(), dst_rank);
-          std::abort();
-        } else {
-          for (auto const& wid : it->second) {
-            finished_wrs.insert(wid);
-            acked_wrs.insert(wid);
-          }
-        }
-      }
-    }  // end per-ring loop
+    }
   }
 }
 #else
@@ -1934,7 +1956,6 @@ void post_atomic_operations(ProxyCtx& S,
                             std::vector<TransferCmd> const& cmds_to_post,
                             std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
                             int my_rank, int thread_idx,
-                            std::unordered_set<uint64_t>& finished_wrs,
                             std::unordered_set<uint64_t>& acked_wrs) {
   if (cmds_to_post.size() > ProxyCtx::kMaxAtomicOps) {
     fprintf(stderr, "Too many atomic operations: %zu > %zu\n",
@@ -2061,12 +2082,6 @@ void post_atomic_operations(ProxyCtx& S,
                 thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
                 S.wr_id_to_wr_ids.size(), dst_rank);
         std::abort();
-      } else {
-        // TODO(MaoZiming): ack for atomic operations?
-        for (auto const& wr_id : it->second) {
-          finished_wrs.insert(wr_id);
-          acked_wrs.insert(wr_id);
-        }
       }
     }
   }

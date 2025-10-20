@@ -238,16 +238,11 @@ void FifoProxy::run_sender() {
   while (!stop_flag_.load(std::memory_order_acquire) &&
          proxy_->ctx_.progress_run.load(std::memory_order_acquire)) {
     // Poll completions (like original proxy)
-    local_poll_completions(proxy_->ctx_, proxy_->finished_wrs_,
-                           proxy_->acked_wrs_, thread_idx, proxy_->ctx_by_tag_);
-
-    // printf("Finished wrs: %zu, Acked wrs: %zu, fifo_tail_acked: %lu,
-    // fifo_head_seen: %lu\n", proxy_->finished_wrs_.size(),
-    // proxy_->acked_wrs_.size(), fifo_tail_acked, fifo_head_seen);
+    local_poll_completions(proxy_->ctx_, proxy_->acked_wrs_, thread_idx,
+                           proxy_->ctx_by_tag_);
 
     // Process completed work requests (similar to notify_gpu_completion)
     while (fifo_tail_acked < fifo_head_seen &&
-           proxy_->finished_wrs_.count(fifo_tail_acked) > 0 &&
            proxy_->acked_wrs_.count(fifo_tail_acked) > 0) {
 #ifdef MEASURE_PER_VERB_LATENCY
       // Track latency
@@ -264,7 +259,6 @@ void FifoProxy::run_sender() {
 #endif
 
       // Remove from tracking sets
-      proxy_->finished_wrs_.erase(fifo_tail_acked);
       proxy_->acked_wrs_.erase(fifo_tail_acked);
 
       // Pop from FIFO
@@ -322,11 +316,10 @@ void FifoProxy::run_sender() {
 
   // Wait for all remaining completions
   while (fifo_tail_acked < fifo_head_seen) {
-    local_poll_completions(proxy_->ctx_, proxy_->finished_wrs_,
-                           proxy_->acked_wrs_, thread_idx, proxy_->ctx_by_tag_);
+    local_poll_completions(proxy_->ctx_, proxy_->acked_wrs_, thread_idx,
+                           proxy_->ctx_by_tag_);
 
     while (fifo_tail_acked < fifo_head_seen &&
-           proxy_->finished_wrs_.count(fifo_tail_acked) > 0 &&
            proxy_->acked_wrs_.count(fifo_tail_acked) > 0) {
 #ifdef MEASURE_PER_VERB_LATENCY
       auto it = proxy_->wr_id_to_start_time_.find(fifo_tail_acked);
@@ -341,7 +334,6 @@ void FifoProxy::run_sender() {
       }
 #endif
 
-      proxy_->finished_wrs_.erase(fifo_tail_acked);
       proxy_->acked_wrs_.erase(fifo_tail_acked);
       fifo_->pop();
       fifo_tail_acked++;

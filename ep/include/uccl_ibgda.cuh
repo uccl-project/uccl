@@ -41,9 +41,9 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
       static_cast<uintptr_t>(ring_addrs[ring_idx]));
 
-  uint64_t cur_head = rb->head;
-  uint64_t cur_tail = rb->volatile_tail();
-  uint64_t inflight = cur_head - cur_tail;
+  uint64_t cur_head;
+  uint64_t cur_tail;
+  uint64_t inflight;
 #ifdef USE_NORMAL_MODE
   if (low_latency_buffer_idx == -1) {
     /* Normal mode */
@@ -84,7 +84,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       rb->atomic_set_and_commit(cmd, &slot);
       break;
     }
-    if ((clock64() - last_print) > kPrintCycleInterval) {
+    if (clock64() - last_print > kPrintCycleInterval) {
       if (threadIdx.x == 0 && blockIdx.x == 0) {
         printf(
             "[dispatch] stuck waiting, inflight=%ld (cur_head=%lu "
@@ -121,9 +121,9 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     assert(ring_idx < num_ring_addrs);
     auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
         static_cast<uintptr_t>(ring_addrs[ring_idx]));
-    uint64_t cur_head = rb->head;
-    uint64_t cur_tail = rb->volatile_tail();
-    uint64_t inflight = cur_head - cur_tail;
+    uint64_t cur_head;
+    uint64_t cur_tail;
+    uint64_t inflight;
     auto last_print = clock64();
 #ifdef USE_NORMAL_MODE
     if (low_latency_buffer_idx == -1) {
@@ -248,7 +248,7 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
       uint64_t cur_head = rb->head;
       uint64_t cur_tail = rb->volatile_tail();
       uint64_t inflight = cur_head - cur_tail;
-      if (inflight < kMaxInflight) {
+      if (inflight < 1) {
         uint64_t slot = cur_head;
         TransferCmd cmd{};
         cmd.cmd = 1;
@@ -289,7 +289,7 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
       uint64_t cur_head = rb->head;
       uint64_t cur_tail = rb->volatile_tail();
       uint64_t inflight = cur_head - cur_tail;
-      if (inflight < kMaxInflight) {
+      if (inflight < 1) {
         uint64_t slot = cur_head;
         TransferCmd cmd{};
         cmd.cmd = 1;  // dummy valid cmd

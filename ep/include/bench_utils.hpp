@@ -42,7 +42,7 @@ inline void init_env(BenchEnv& env, int blocks = kNumThBlocks,
     env.rbs[i].cycle_end = 0ULL;
 #endif
     for (uint32_t j = 0; j < kQueueSize; ++j) {
-      env.rbs[i].buf[j].cmd = 0ULL;
+      env.rbs[i].volatile_store_cmd(j, 0ULL);
     }
   }
 }

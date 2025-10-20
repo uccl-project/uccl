@@ -448,7 +448,11 @@ def bench_kineto(
 def initialize_uccl(
     scratch, scratch_nbytes, rank, num_ranks, group, num_experts=0, is_intranode=False
 ):
-
+    try:
+        for shm_file in glob.glob("/dev/shm/uccl_barrier_*"):
+            os.remove(shm_file)
+    except Exception:
+        pass
     local_rank = int(os.environ["LOCAL_RANK"])
     nproc_per_node = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
     node_idx = rank // nproc_per_node
