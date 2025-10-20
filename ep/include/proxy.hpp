@@ -83,6 +83,7 @@ class Proxy {
   CopyRingBuffer ring;
 
  private:
+  friend class FifoProxy;  // Allow FifoProxy to access private methods
   ProxyCtx ctx_;
   void init_common();
   void init_sender();
