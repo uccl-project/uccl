@@ -99,10 +99,10 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   // Sending phase
   if ((phases & LOW_LATENCY_SEND_PHASE) == 0) goto LOW_LATENCY_DISPATCH_RECV;
 
-    // There are 2 kinds of warps in this part:
-    // 1. The first-kind warps for FP8 cast and sending top-k tokens
-    // 2. The last warp for reading `topk_idx` and count for per-expert
-    // information
+  // There are 2 kinds of warps in this part:
+  // 1. The first-kind warps for FP8 cast and sending top-k tokens
+  // 2. The last warp for reading `topk_idx` and count for per-expert
+  // information
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   if (warp_id < num_warps) {
 #else
@@ -287,8 +287,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                                           sm_id * num_warp_groups];
     // Wait local sends issued and send expert counts
     while (ld_acquire_global(atomic_finish_counter_per_expert +
-                             responsible_expert_idx) != FINISHED_SUM_TAG * 2)
-      ;
+                             responsible_expert_idx) != FINISHED_SUM_TAG * 2);
 
     auto dst_ptr = reinterpret_cast<uint64_t>(
         rdma_recv_count + dst_expert_local_idx * num_ranks + rank);
@@ -364,19 +363,21 @@ LOW_LATENCY_DISPATCH_RECV:
     // NOTES: using sub-warp 1 to overlap with sub-warp 0
     int num_recv_tokens_internode = 0, num_recv_tokens_ipc = 0,
         num_recv_tokens = 0, recv_token_begin_idx = 0;
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
     EP_DEVICE_ASSERT(num_warps_per_group > 1);
+#else
+    EP_DEVICE_ASSERT(num_warps_per_group > 1 and num_warp_groups < 15);
+#endif
     if (sub_warp_id == 1 and lane_id == 0) {
       auto start_time = clock64();
       while ((src_rank / max_nvl_peers == rank / max_nvl_peers) &&
              (num_recv_tokens_ipc = ld_acquire_sys_global(
                   rdma_recv_count + local_expert_idx * num_ranks + src_rank)) ==
-                 0)
-        ;
+                 0);
       while ((src_rank / max_nvl_peers != rank / max_nvl_peers) &&
              (num_recv_tokens_internode = ld_acquire_sys_global(
                   rdma_recv_count_internode + local_expert_idx * num_ranks +
-                  src_rank)) == 0)
-        ;
+                  src_rank)) == 0);
 
       if (src_rank / max_nvl_peers == rank / max_nvl_peers) {
         if (ld_acquire_sys_global(rdma_recv_count_internode +
@@ -794,8 +795,12 @@ __global__ __launch_bounds__(1024, 1) void combine(
             // quarter-warps)
             if (amax <= kThreshold and log_amin < log_amax) {
               // Transform
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
               auto transform =
                   [=](float const& log_abs_value) -> __hip_bfloat16 {
+#else
+              auto transform = [=](float const& log_abs_value) -> nv_bfloat16 {
+#endif
                 auto const encoded =
                     floorf((log_abs_value - log_amin) * step_inv + rounding);
                 auto const decoded =
@@ -847,8 +852,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
     EP_DEVICE_ASSERT(num_warps_per_group > 1 and num_warp_groups < 16);
     sync_barrier(warp_group_id + 1, num_warps_per_group * WARP_SIZE);
     if (sub_warp_id == 1 and lane_id == 0) {
-      while (ld_acquire_global(atomic_clean_flag) == 0)
-        ;
+      while (ld_acquire_global(atomic_clean_flag) == 0);
       // Calculate offset from data buffer to flag buffer (similar to dispatch
       // phase) rdma_recv_flag_internode corresponds to
       // combine_rdma_recv_flag_buffer We need to calculate the offset from
@@ -898,12 +902,10 @@ LOW_LATENCY_COMBINE_RECV:
       auto start_time = clock64();
       while ((src_rank / max_nvl_peers == rank / max_nvl_peers) &&
              ld_acquire_sys_global(rdma_recv_flag + responsible_expert_idx) ==
-                 0)
-        ;
+                 0);
       while ((src_rank / max_nvl_peers != rank / max_nvl_peers) &&
              ld_acquire_sys_global(rdma_recv_flag_internode +
-                                   responsible_expert_idx) == 0)
-        ;
+                                   responsible_expert_idx) == 0);
 
       if (src_rank / max_nvl_peers == rank / max_nvl_peers) {
         if (ld_acquire_sys_global(rdma_recv_flag_internode +

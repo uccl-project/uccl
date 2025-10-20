@@ -20,8 +20,8 @@ int main(int argc, char** argv) {
   }
   auto t0 = std::chrono::high_resolution_clock::now();
   const size_t shmem_bytes = kQueueSize * sizeof(unsigned long long);
-  hipLaunchKernelGGL((gpu_issue_batched_commands), dim3(env.blocks),
-                     dim3(kNumThPerBlock), shmem_bytes, env.stream, env.rbs);
+  gpu_issue_batched_commands<<<env.blocks, kNumThPerBlock, shmem_bytes,
+                               env.stream>>>(env.rbs);
   GPU_RT_CHECK_ERRORS("gpu_issue_batched_commands failed");
   GPU_RT_CHECK(gpuStreamSynchronize(env.stream));
   auto t1 = std::chrono::high_resolution_clock::now();

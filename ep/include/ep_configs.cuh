@@ -48,8 +48,6 @@
 #include <cuda_runtime.h>
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-// #include <hip/hip_bfloat16.h>
-// #include <hip/hip_fp8.h>
 #define nv_bfloat16 hip_bfloat16
 #define __nv_fp8x2_storage_t __hip_fp8x2_storage_t
 #define __nv_fp8_storage_t __hip_fp8_storage_t

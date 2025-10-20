@@ -100,7 +100,7 @@ if __name__ == "__main__":
 
     setuptools.setup(
         name="ep",
-        version="1.2.1" + revision,
+        version="0.0.1" + revision,
         ext_modules=[
             CUDAExtension(
                 name="ep",

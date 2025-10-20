@@ -434,11 +434,9 @@ __global__ void __launch_bounds__(kNumThreads, 1)
     // Receive channel offset
     int total_offset, num_tokens_to_recv;
     while (lane_id == 0 and (total_offset = ld_volatile_global(
-                                 channel_start_offset.buffer())) == 0)
-      ;
+                                 channel_start_offset.buffer())) == 0);
     while (lane_id == 0 and (num_tokens_to_recv = ld_volatile_global(
-                                 channel_end_offset.buffer())) == 0)
-      ;
+                                 channel_end_offset.buffer())) == 0);
     if (lane_id == 0) {
       total_offset = -total_offset - 1,
       num_tokens_to_recv = -num_tokens_to_recv - 1;
@@ -509,7 +507,11 @@ __global__ void __launch_bounds__(kNumThreads, 1)
           }
         __syncwarp();
 #else
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
         UNROLLED_WARP_COPY(2, lane_id, hidden_int4, shifted_recv_x_int4,
+#else
+        UNROLLED_WARP_COPY(5, lane_id, hidden_int4, shifted_recv_x_int4,
+#endif
                            shifted_buffer_x_int4, ld_nc_global, st_na_global);
 #endif
       }
@@ -1092,7 +1094,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
       __syncwarp();
       if (lane_id == 0) warp_retired[recv_warp_id] = true;
 
-        // Make TMA store visible to the next kernel
+      // Make TMA store visible to the next kernel
 #ifndef DISABLE_SM90_FEATURES
       if (lane_id == 0) tma_store_wait();
 #endif
