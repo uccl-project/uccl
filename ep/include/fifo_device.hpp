@@ -4,13 +4,8 @@
 #ifndef MSCCLPP_FIFO_DEVICE_HPP_
 #define MSCCLPP_FIFO_DEVICE_HPP_
 
-#include "device.hpp"
+#include "fifo_util.hpp"
 #include <cstdint>
-
-#if defined(MSCCLPP_DEVICE_COMPILE)
-#include "atomic_device.hpp"
-#include "poll_device.hpp"
-#endif  // defined(MSCCLPP_DEVICE_COMPILE)
 
 namespace mscclpp {
 

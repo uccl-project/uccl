@@ -2,9 +2,7 @@
 // Licensed under the MIT license.
 
 #include "fifo.hpp"
-#include "atomic.hpp"
-#include "gpu_utils.hpp"
-#include "numa.hpp"
+#include "fifo_util.hpp"
 
 namespace mscclpp {
 

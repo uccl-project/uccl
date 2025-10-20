@@ -10,7 +10,7 @@
  */
 
 #include "../../include/fifo.hpp"
-#include "../../include/gpu_utils.hpp"
+#include "../../include/fifo_util.hpp"
 #include "launch_kernel_shim.hpp"
 #include <algorithm>
 #include <atomic>
