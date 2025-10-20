@@ -3,12 +3,12 @@
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
 #ifndef SETUP_LAUNCH_CONFIG
-#define SETUP_LAUNCH_CONFIG(num_sms, num_threads, stream)                     \
+#define SETUP_LAUNCH_CONFIG(num_sms, num_threads, stream)                    \
   hipLaunchConfig_t cfg = {(num_sms), (num_threads), 0, stream, nullptr, 0}; \
   hipLaunchAttribute attr[1];                                                \
   attr[0].id = hipLaunchAttributeCooperative;                                \
-  attr[0].val.cooperative = 1;                                                \
-  cfg.attrs = attr;                                                           \
+  attr[0].val.cooperative = 1;                                               \
+  cfg.attrs = attr;                                                          \
   cfg.numAttrs = 1
 #endif
 #ifndef LAUNCH_KERNEL

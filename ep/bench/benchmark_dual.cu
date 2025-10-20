@@ -76,8 +76,9 @@ int main(int argc, char** argv) {
 
   // Issue commands from GPU on BOTH ranks in duplex
   auto t0 = std::chrono::high_resolution_clock::now();
- hipLaunchKernelGGL(( gpu_issue_batched_commands), dim3(env.blocks), dim3(kNumThPerBlock), shmem_bytes_remote(),
-                               env.stream, env.rbs);
+  hipLaunchKernelGGL((gpu_issue_batched_commands), dim3(env.blocks),
+                     dim3(kNumThPerBlock), shmem_bytes_remote(), env.stream,
+                     env.rbs);
   GPU_RT_CHECK_ERRORS("gpu_issue_batched_commands kernel failed");
   GPU_RT_CHECK(gpuStreamSynchronize(env.stream));
   auto t1 = std::chrono::high_resolution_clock::now();

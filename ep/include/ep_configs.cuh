@@ -47,7 +47,6 @@
 #include <cstdint>
 #include <cuda_runtime.h>
 
-
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
 // #include <hip/hip_bfloat16.h>
 // #include <hip/hip_fp8.h>
@@ -60,7 +59,7 @@
 #define WARP_SIZE 64
 #define WARP_MASK 0xffffffffffffffff
 #define MAX_NTHREADS 1024
-#define MAX_GROUPS (MAX_NTHREADS/WARP_SIZE)
+#define MAX_GROUPS (MAX_NTHREADS / WARP_SIZE)
 
 #else
 #include <cuda_bf16.h>
