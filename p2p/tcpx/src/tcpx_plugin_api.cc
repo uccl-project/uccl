@@ -1,230 +1,471 @@
 #include "tcpx_plugin_api.h"
-
-// Internal headers (from your existing tcpx include directory)
+#include "bootstrap.h"
 #include "session_manager.h"
 #include "transfer_manager.h"
-#include "bootstrap.h"
 #include "tcpx_interface.h"
 
+#include <algorithm>
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <unistd.h>
 #include <cuda.h>
 #include <cuda_runtime.h>
-#include <unistd.h>
-#include <algorithm>
-#include <cstring>
-#include <stdexcept>
 
 namespace tcpx_plugin {
 
-struct Transfer::Impl {
-  std::unique_ptr<tcpx::TcpxTransfer> xfer;
+// -------------------------------
+// Small helpers
+// -------------------------------
+static inline Status rc_to_status(int rc) {
+  return rc == 0 ? Status::kOk : Status::kInternal;
+}
+static inline Status invalid() { return Status::kInvalidArg; }
+
+// Best-effort CUDA device guard (keeps previous device, restores on exit)
+struct ScopedCudaDevice {
+  int  prev{-1};
+  bool active{false};
+  explicit ScopedCudaDevice(int gpu_id) {
+    int cur = -1;
+    if (cudaGetDevice(&cur) == cudaSuccess) {
+      prev = cur;
+      if (cudaSetDevice(gpu_id) == cudaSuccess) active = true;
+    }
+  }
+  ~ScopedCudaDevice() {
+    if (active && prev >= 0) cudaSetDevice(prev);
+  }
 };
 
-// ---------- small utils ----------
-static inline Status to_status(bool ok) {
-  return ok ? Status::kOk : Status::kInternal;
-}
-static inline Status fail(Status s = Status::kInternal) { return s; }
+// Opaque internal ID used by TcpxSession for memory registration
+using MemId = uint64_t;
 
-// Best-effort CUDA device guard
-ScopedCudaDevice::ScopedCudaDevice(int gpu_id) {
-  int cur = -1;
-  if (cudaGetDevice(&cur) == cudaSuccess) {
-    prev_ = cur;
-    // Always set device to ensure context is current
-    if (cudaSetDevice(gpu_id) == cudaSuccess) {
-      active_ = true;
-    }
-  }
-}
-ScopedCudaDevice::~ScopedCudaDevice() {
-  if (active_ && prev_ >= 0) {
-    cudaSetDevice(prev_);
-  }
-}
-
-// ---------- init / caps ----------
-Status init(InitOptions const& opts) {
-  // Try to ensure the TCPX plugin is available. If count < 0, optionally try load.
-  int n = tcpx_get_device_count();
-  if (n < 0) {
-    if (opts.plugin_path && opts.plugin_path[0]) {
-      if (tcpx_load_plugin(opts.plugin_path) != 0) return Status::kUnavailable;
-    } else {
-      // rely on default search; if still unavailable, report error
-      if (tcpx_get_device_count() < 0) return Status::kUnavailable;
-    }
-  }
-  // Initialize CUDA driver (best-effort)
-  if (cuInit(0) != CUDA_SUCCESS) {
-    return Status::kUnavailable;
-  }
-  return Status::kOk;
-}
-
-Status get_device_count(int* out_count) {
-  if (!out_count) return Status::kInvalidArg;
-  int n = tcpx_get_device_count();
-  if (n < 0) return Status::kUnavailable;
-  *out_count = n;
-  return Status::kOk;
-}
-
-// ---------- Session PIMPL ----------
-struct Session::Impl {
-  int gpu_id = 0;
-  int num_channels = 0;
-  std::string bootstrap_info;
-  int nic_device_id = -1;
-
+// ===========================================================
+// Transport::Impl
+// ===========================================================
+struct Transport::Impl {
+  // Config (copied from user)
+  Config cfg{};
+  // Session (manages channels, registration, transfer creation)
   std::unique_ptr<tcpx::TcpxSession> sess;
 
-  Impl(int gid, int nch, std::string const& bs, int nic)
-      : gpu_id(gid), num_channels(nch), bootstrap_info(bs), nic_device_id(nic),
-        sess(new tcpx::TcpxSession(gid, nch)) {}
+  // Chunk bytes for posting; must be >0
+  size_t chunk_bytes{512 * 1024};
+
+  // Handle allocators
+  std::atomic<uint64_t> next_conn{1};
+  std::atomic<uint64_t> next_mr{1};
+  std::atomic<uint64_t> next_tx{1};
+
+  // Per-connection state
+  struct ConnState {
+    std::string remote_name;  // key used by session->createTransfer()
+  };
+
+  // Async transfer tracking
+  struct TxState {
+    std::unique_ptr<tcpx::TcpxTransfer> xfer;
+  };
+
+  // Mappings protected by mutex
+  std::mutex mu;
+  std::unordered_map<ConnHandle, ConnState> conns;
+  std::unordered_map<MrHandle, MemId>       mr_map;
+  std::unordered_map<TxHandle, TxState>     tx_map;
+
+  // ---------- Bootstrap wire helpers (length-prefixed JSON) ----------
+  static Status send_conn_json(tcpx::TcpxSession* s, int fd) {
+    if (!s || fd < 0) return Status::kInvalidArg;
+    std::string json = s->listen();
+    if (json.empty()) return Status::kInternal;
+
+    uint32_t len = static_cast<uint32_t>(json.size());
+    ssize_t n = ::write(fd, &len, sizeof(len));
+    if (n != static_cast<ssize_t>(sizeof(len))) return Status::kInternal;
+
+    ssize_t m = ::write(fd, json.data(), len);
+    if (m != static_cast<ssize_t>(len)) return Status::kInternal;
+
+    return Status::kOk;
+  }
+
+  static Status recv_conn_json(tcpx::TcpxSession* s, int fd,
+                               const std::string& remote) {
+    if (!s || fd < 0) return Status::kInvalidArg;
+
+    uint32_t len = 0;
+    ssize_t n = ::read(fd, &len, sizeof(len));
+    if (n != static_cast<ssize_t>(sizeof(len))) return Status::kInternal;
+    if (len == 0) return Status::kInternal;
+
+    std::string json(len, '\0');
+    ssize_t m = ::read(fd, json.data(), len);
+    if (m != static_cast<ssize_t>(len)) return Status::kInternal;
+
+    int rc = s->loadRemoteConnInfo(remote, json);
+    return rc_to_status(rc);
+  }
+
+  // Fresh transfer for a given remote
+  static std::unique_ptr<tcpx::TcpxTransfer>
+  make_transfer(tcpx::TcpxSession* s, const std::string& remote) {
+    if (!s) return nullptr;
+    auto* raw = s->createTransfer(remote);
+    return std::unique_ptr<tcpx::TcpxTransfer>(raw);
+  }
 };
 
-Session::Session(int gpu_id, int num_channels,
-                 std::string const& bootstrap_info,
-                 int nic_device_id)
-    : pimpl_(new Impl(gpu_id, num_channels, bootstrap_info, nic_device_id)) {}
+// ===========================================================
+// Transport - public API
+// ===========================================================
 
-Session::~Session() { delete pimpl_; }
+Transport::Transport(const Config& cfg) : pimpl_(new Impl) {
+  pimpl_->cfg = cfg;
+  pimpl_->chunk_bytes = cfg.chunk_bytes ? cfg.chunk_bytes : (512 * 1024);
 
-int Session::gpu_id() const { return pimpl_->gpu_id; }
-int Session::num_channels() const { return pimpl_->num_channels; }
-
-uint64_t Session::register_memory(void* buffer, size_t size, bool is_recv) {
-  return pimpl_->sess->registerMemory(buffer, size, NCCL_PTR_CUDA, is_recv);
-}
-
-Status Session::deregister_memory(uint64_t mem_id) {
-  int rc = pimpl_->sess->deregisterMemory(mem_id);
-  return rc == 0 ? Status::kOk : Status::kInternal;
-}
-
-Transfer* Session::create_transfer(ConnID const& conn) {
-  (void)conn;
-  auto* t = pimpl_->sess->createTransfer(conn.remote);
-  if (!t) return nullptr;
-
-  return new Transfer(new Transfer::Impl{std::unique_ptr<tcpx::TcpxTransfer>(t)});
-}
-
-// Bootstrap helpers (string JSON roundtrip)
-std::string Session::listen_json() {
-  return pimpl_->sess->listen();
-}
-
-Status Session::accept(std::string const& remote_name) {
-  int rc = pimpl_->sess->accept(remote_name);
-  return rc == 0 ? Status::kOk : Status::kInternal;
-}
-
-Status Session::load_remote_json(std::string const& remote_name,
-                                 std::string const& conn_info_json) {
-  int rc = pimpl_->sess->loadRemoteConnInfo(remote_name, conn_info_json);
-  return rc == 0 ? Status::kOk : Status::kInvalidArg;
-}
-
-Status Session::connect(std::string const& remote_name) {
-  int rc = pimpl_->sess->connect(remote_name);
-  return rc == 0 ? Status::kOk : Status::kInternal;
-}
-
-// ---------- Transfer PIMPL ----------
-Transfer::Transfer(Impl* impl) : pimpl_(impl) {}
-Transfer::~Transfer() { delete pimpl_; }
-
-Status Transfer::post_send(uint64_t mem_id, size_t offset, size_t size, int tag) {
-  int rc = pimpl_->xfer->postSend(mem_id, offset, size, tag);
-  return rc == 0 ? Status::kOk : Status::kInternal;
-}
-
-Status Transfer::post_recv(uint64_t mem_id, size_t offset, size_t size, int tag) {
-  int rc = pimpl_->xfer->postRecv(mem_id, offset, size, tag);
-  return rc == 0 ? Status::kOk : Status::kInternal;
-}
-
-bool Transfer::is_complete() {
-  return pimpl_->xfer->isComplete();
-}
-
-Status Transfer::wait() {
-  int rc = pimpl_->xfer->wait();
-  return rc == 0 ? Status::kOk : Status::kInternal;
-}
-
-int Transfer::total_chunks() const {
-  return pimpl_->xfer->getTotalChunks();
-}
-
-int Transfer::completed_chunks() const {
-  return pimpl_->xfer->getCompletedChunks();
-}
-
-Status Transfer::release() {
-  int rc = pimpl_->xfer->release();
-  return rc == 0 ? Status::kOk : Status::kInternal;
-}
-
-Status Transfer::send_all(uint64_t mem_id, size_t total_size, size_t offset,
-                          size_t chunk_bytes, int tag_base) {
-  if (chunk_bytes == 0) return Status::kInvalidArg;
-  size_t sent = 0; int idx = 0;
-  while (sent < total_size) {
-    size_t n = std::min(chunk_bytes, total_size - sent);
-    auto st = post_send(mem_id, offset + sent, n, tag_base + idx);
-    if (st != Status::kOk) return st;
-    sent += n; ++idx;
+  // Ensure plugin presence (optional explicit load)
+  int ndev = tcpx_get_device_count();
+  if (ndev < 0 && cfg.plugin_path && cfg.plugin_path[0]) {
+    (void)tcpx_load_plugin(cfg.plugin_path);
+    ndev = tcpx_get_device_count();
   }
-  return Status::kOk;
+  // CUDA driver best-effort init (TcpxSession also retains primary ctx)
+  (void)cuInit(0);
+
+  // Create session immediately (direct-construct design)
+  pimpl_->sess.reset(new tcpx::TcpxSession(cfg.gpu_id, cfg.channels));
 }
 
-Status Transfer::recv_all(uint64_t mem_id, size_t total_size, size_t offset,
-                          size_t chunk_bytes, int tag_base) {
-  if (chunk_bytes == 0) return Status::kInvalidArg;
-  size_t recvd = 0; int idx = 0;
-  while (recvd < total_size) {
-    size_t n = std::min(chunk_bytes, total_size - recvd);
-    auto st = post_recv(mem_id, offset + recvd, n, tag_base + idx);
-    if (st != Status::kOk) return st;
-    recvd += n; ++idx;
+Transport::~Transport() {
+  // Release async transfers and maps first (order matters)
+  {
+    std::lock_guard<std::mutex> g(pimpl_->mu);
+    pimpl_->tx_map.clear();
+    pimpl_->mr_map.clear();
+    pimpl_->conns.clear();
   }
-  return Status::kOk;
+  // Destroy session last
+  pimpl_->sess.reset();
+  delete pimpl_;
 }
 
-// ---------- High-level OOB helpers (blocking) ----------
-Status server_send_conn_json(Session* sess, int sockfd) {
-  if (!sess || sockfd < 0) return Status::kInvalidArg;
-  std::string json = sess->listen_json();
-  if (json.empty()) return Status::kInternal;
+// -----------------------------------------------------------
+// Connection management (blocking)
+// -----------------------------------------------------------
 
-  uint32_t len = static_cast<uint32_t>(json.size());
-  ssize_t n = ::write(sockfd, &len, sizeof(len));
-  if (n != static_cast<ssize_t>(sizeof(len))) return Status::kInternal;
+Status Transport::connect(const std::string& ip,
+                          int                port,
+                          const std::string& remote_name,
+                          ConnHandle&        out_conn) {
+  if (ip.empty() || port <= 0 || remote_name.empty()) return invalid();
 
-  ssize_t m = ::write(sockfd, json.data(), len);
-  if (m != static_cast<ssize_t>(len)) return Status::kInternal;
+  int fd = -1;
+  if (bootstrap_client_connect(ip.c_str(), port, &fd) != 0) {
+    return Status::kUnavailable;
+  }
 
-  return Status::kOk;
-}
-
-Status client_recv_conn_json(Session* sess, int sockfd,
-                             std::string const& remote) {
-  if (!sess || sockfd < 0) return Status::kInvalidArg;
-
-  uint32_t len = 0;
-  ssize_t n = ::read(sockfd, &len, sizeof(len));
-  if (n != static_cast<ssize_t>(sizeof(len))) return Status::kInternal;
-
-  std::string json(len, '\0');
-  ssize_t m = ::read(sockfd, json.data(), len);
-  if (m != static_cast<ssize_t>(len)) return Status::kInternal;
-
-  auto st = sess->load_remote_json(remote, json);
+  Status st = Impl::recv_conn_json(pimpl_->sess.get(), fd, remote_name);
+  ::close(fd);
   if (st != Status::kOk) return st;
 
+  int rc = pimpl_->sess->connect(remote_name);
+  if (rc != 0) return Status::kInternal;
+
+  ConnHandle ch = pimpl_->next_conn.fetch_add(1);
+  {
+    std::lock_guard<std::mutex> g(pimpl_->mu);
+    pimpl_->conns.emplace(ch, Impl::ConnState{remote_name});
+  }
+  out_conn = ch;
   return Status::kOk;
 }
 
-} // namespace tcpx_plugin
+Status Transport::accept(int                port,
+                         const std::string& remote_name,
+                         ConnHandle&        out_conn) {
+  if (port <= 0 || remote_name.empty()) return invalid();
+
+  int fd = -1;
+  if (bootstrap_server_create(port, &fd) != 0) {
+    return Status::kUnavailable;
+  }
+
+  Status st = Impl::send_conn_json(pimpl_->sess.get(), fd);
+  ::close(fd);
+  if (st != Status::kOk) return st;
+
+  int rc = pimpl_->sess->accept(remote_name);
+  if (rc != 0) return Status::kInternal;
+
+  ConnHandle ch = pimpl_->next_conn.fetch_add(1);
+  {
+    std::lock_guard<std::mutex> g(pimpl_->mu);
+    pimpl_->conns.emplace(ch, Impl::ConnState{remote_name});
+  }
+  out_conn = ch;
+  return Status::kOk;
+}
+
+// -----------------------------------------------------------
+// Memory registration (clean 2-API version)
+// -----------------------------------------------------------
+
+Status Transport::register_memory(void*    ptr,
+                                  size_t   size,
+                                  bool     is_recv,
+                                  MrHandle& out_mr) {
+  if (!ptr || size == 0) return Status::kInvalidArg;
+
+  ScopedCudaDevice guard(pimpl_->cfg.gpu_id);
+
+  // IMPORTANT: use NCCL_PTR_CUDA, don't hardcode constants
+  uint64_t mem_id = pimpl_->sess->registerMemory(ptr, size, NCCL_PTR_CUDA, is_recv);
+  if (mem_id == 0) return Status::kInternal;
+
+  MrHandle h = pimpl_->next_mr.fetch_add(1);
+  {
+    std::lock_guard<std::mutex> g(pimpl_->mu);
+    pimpl_->mr_map.emplace(h, mem_id);
+  }
+  out_mr = h;
+  return Status::kOk;
+}
+
+Status Transport::deregister_memory(MrHandle mr) {
+  if (mr == 0) return invalid();
+
+  MemId mem_id = 0;
+  {
+    std::lock_guard<std::mutex> g(pimpl_->mu);
+    auto it = pimpl_->mr_map.find(mr);
+    if (it == pimpl_->mr_map.end()) return Status::kInvalidArg;
+    mem_id = it->second;
+    pimpl_->mr_map.erase(it);
+  }
+
+  int rc = pimpl_->sess->deregisterMemory(mem_id);
+  return rc_to_status(rc);
+}
+
+// -----------------------------------------------------------
+// Blocking send / recv
+// -----------------------------------------------------------
+
+Status Transport::send(ConnHandle conn,
+                       MrHandle   mr,
+                       size_t     total_bytes,
+                       int        tag_base) {
+  if (conn == 0 || mr == 0 || total_bytes == 0) return invalid();
+
+  // Ensure we are on the configured CUDA device during posting
+  ScopedCudaDevice guard(pimpl_->cfg.gpu_id);
+
+  std::string remote;
+  MemId mem_id = 0;
+  {
+    std::lock_guard<std::mutex> g(pimpl_->mu);
+    auto cit = pimpl_->conns.find(conn);
+    if (cit == pimpl_->conns.end()) return Status::kInvalidArg;
+    remote = cit->second.remote_name;
+
+    auto mit = pimpl_->mr_map.find(mr);
+    if (mit == pimpl_->mr_map.end()) return Status::kInvalidArg;
+    mem_id = mit->second;
+  }
+
+  auto xfer = Impl::make_transfer(pimpl_->sess.get(), remote);
+  if (!xfer) return Status::kInternal;
+
+  const size_t chunk = pimpl_->chunk_bytes;
+  if (chunk == 0) return Status::kInvalidArg;
+
+  // Post all chunks using offset within the single registered MR.
+  size_t posted = 0; int idx = 0;
+  while (posted < total_bytes) {
+    size_t n = std::min(chunk, total_bytes - posted);
+    int rc = xfer->postSend(mem_id, /*offset=*/posted, /*size=*/n,
+                            /*tag=*/tag_base + idx);
+    if (rc != 0) return Status::kInternal;
+    posted += n; ++idx;
+  }
+
+  if (xfer->wait() != 0) return Status::kInternal;
+  if (xfer->release() != 0) return Status::kInternal;
+  return Status::kOk;
+}
+
+Status Transport::recv(ConnHandle conn,
+                       MrHandle   mr,
+                       size_t     total_bytes,
+                       int        tag_base) {
+  if (conn == 0 || mr == 0 || total_bytes == 0) return invalid();
+
+  // Ensure we are on the configured CUDA device during posting
+  ScopedCudaDevice guard(pimpl_->cfg.gpu_id);
+
+  std::string remote;
+  MemId mem_id = 0;
+  {
+    std::lock_guard<std::mutex> g(pimpl_->mu);
+    auto cit = pimpl_->conns.find(conn);
+    if (cit == pimpl_->conns.end()) return Status::kInvalidArg;
+    remote = cit->second.remote_name;
+
+    auto mit = pimpl_->mr_map.find(mr);
+    if (mit == pimpl_->mr_map.end()) return Status::kInvalidArg;
+    mem_id = mit->second;
+  }
+
+  auto xfer = Impl::make_transfer(pimpl_->sess.get(), remote);
+  if (!xfer) return Status::kInternal;
+
+  const size_t chunk = pimpl_->chunk_bytes;
+  if (chunk == 0) return Status::kInvalidArg;
+
+  // Post all chunks using offset within the single registered MR.
+  size_t recvd = 0; int idx = 0;
+  while (recvd < total_bytes) {
+    size_t n = std::min(chunk, total_bytes - recvd);
+    int rc = xfer->postRecv(mem_id, /*offset=*/recvd, /*size=*/n,
+                            /*tag=*/tag_base + idx);
+    if (rc != 0) return Status::kInternal;
+    recvd += n; ++idx;
+  }
+
+  if (xfer->wait() != 0) return Status::kInternal;
+  if (xfer->release() != 0) return Status::kInternal;
+  return Status::kOk;
+}
+
+// -----------------------------------------------------------
+// Async send / recv
+// -----------------------------------------------------------
+
+Status Transport::send_async(ConnHandle conn,
+                             MrHandle   mr,
+                             size_t     total_bytes,
+                             int        tag_base,
+                             TxHandle&  out_tx) {
+  if (conn == 0 || mr == 0 || total_bytes == 0) return invalid();
+
+  // Ensure we are on the configured CUDA device during posting
+  ScopedCudaDevice guard(pimpl_->cfg.gpu_id);
+
+  std::string remote;
+  MemId mem_id = 0;
+  {
+    std::lock_guard<std::mutex> g(pimpl_->mu);
+    auto cit = pimpl_->conns.find(conn);
+    if (cit == pimpl_->conns.end()) return Status::kInvalidArg;
+    remote = cit->second.remote_name;
+
+    auto mit = pimpl_->mr_map.find(mr);
+    if (mit == pimpl_->mr_map.end()) return Status::kInvalidArg;
+    mem_id = mit->second;
+  }
+
+  auto xfer = Impl::make_transfer(pimpl_->sess.get(), remote);
+  if (!xfer) return Status::kInternal;
+
+  const size_t chunk = pimpl_->chunk_bytes;
+  if (chunk == 0) return Status::kInvalidArg;
+
+  // Post all chunks only; do not wait here (non-blocking).
+  size_t posted = 0; int idx = 0;
+  while (posted < total_bytes) {
+    size_t n = std::min(chunk, total_bytes - posted);
+    int rc = xfer->postSend(mem_id, /*offset=*/posted, /*size=*/n,
+                            /*tag=*/tag_base + idx);
+    if (rc != 0) return Status::kInternal;
+    posted += n; ++idx;
+  }
+
+  TxHandle th = pimpl_->next_tx.fetch_add(1);
+  {
+    std::lock_guard<std::mutex> g(pimpl_->mu);
+    pimpl_->tx_map.emplace(th, Impl::TxState{std::move(xfer)});
+  }
+  out_tx = th;
+  return Status::kOk;
+}
+
+Status Transport::recv_async(ConnHandle conn,
+                             MrHandle   mr,
+                             size_t     total_bytes,
+                             int        tag_base,
+                             TxHandle&  out_tx) {
+  if (conn == 0 || mr == 0 || total_bytes == 0) return invalid();
+
+  // Ensure we are on the configured CUDA device during posting
+  ScopedCudaDevice guard(pimpl_->cfg.gpu_id);
+
+  std::string remote;
+  MemId mem_id = 0;
+  {
+    std::lock_guard<std::mutex> g(pimpl_->mu);
+    auto cit = pimpl_->conns.find(conn);
+    if (cit == pimpl_->conns.end()) return Status::kInvalidArg;
+    remote = cit->second.remote_name;
+
+    auto mit = pimpl_->mr_map.find(mr);
+    if (mit == pimpl_->mr_map.end()) return Status::kInvalidArg;
+    mem_id = mit->second;
+  }
+
+  auto xfer = Impl::make_transfer(pimpl_->sess.get(), remote);
+  if (!xfer) return Status::kInternal;
+
+  const size_t chunk = pimpl_->chunk_bytes;
+  if (chunk == 0) return Status::kInvalidArg;
+
+  // Post all chunks only; do not wait here (non-blocking).
+  size_t recvd = 0; int idx = 0;
+  while (recvd < total_bytes) {
+    size_t n = std::min(chunk, total_bytes - recvd);
+    int rc = xfer->postRecv(mem_id, /*offset=*/recvd, /*size=*/n,
+                            /*tag=*/tag_base + idx);
+    if (rc != 0) return Status::kInternal;
+    recvd += n; ++idx;
+  }
+
+  TxHandle th = pimpl_->next_tx.fetch_add(1);
+  {
+    std::lock_guard<std::mutex> g(pimpl_->mu);
+    pimpl_->tx_map.emplace(th, Impl::TxState{std::move(xfer)});
+  }
+  out_tx = th;
+  return Status::kOk;
+}
+
+Status Transport::poll_transfer(TxHandle tx, bool& is_done) {
+  if (tx == 0) return invalid();
+
+  std::unique_ptr<tcpx::TcpxTransfer> xfer_to_finalize;
+
+  {
+    std::lock_guard<std::mutex> g(pimpl_->mu);
+    auto it = pimpl_->tx_map.find(tx);
+    if (it == pimpl_->tx_map.end()) return Status::kInvalidArg;
+
+    // Non-blocking completion check across all channels
+    is_done = it->second.xfer->isComplete();
+
+    if (is_done) {
+      // Drain and release before erasing
+      if (it->second.xfer->wait() != 0) return Status::kInternal;
+      if (it->second.xfer->release() != 0) return Status::kInternal;
+      pimpl_->tx_map.erase(it);
+    }
+  }
+
+  return Status::kOk;
+}
+
+}  // namespace tcpx_plugin

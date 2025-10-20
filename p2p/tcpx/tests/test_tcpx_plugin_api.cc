@@ -1,43 +1,77 @@
-// tests/test_tcpx_plugin_api.cc
 #include "tcpx_plugin_api.h"
-#include "bootstrap.h"
+
 #include <cuda.h>
 #include <cuda_runtime.h>
-
-#include <algorithm>
+#include <unistd.h>
 #include <chrono>
-#include <cstdlib>
-#include <cstring>
 #include <iostream>
 #include <string>
-#include <thread>
-#include <unistd.h>
+#include <cstdlib>
+#include <cstring>
+#include <cstdint>
+#include <vector>
+#include <algorithm>
 
 using namespace tcpx_plugin;
 
-static inline int getEnvInt(char const* name, int def) {
-  char const* v = std::getenv(name);
-  return v ? std::atoi(v) : def;
+// -------------------------------
+// Env helpers
+// -------------------------------
+static int getEnvInt(const char* name, int defaultVal) {
+  const char* val = std::getenv(name);
+  return val ? std::atoi(val) : defaultVal;
+}
+static size_t getEnvSize(const char* name, size_t defaultVal) {
+  const char* val = std::getenv(name);
+  return val ? static_cast<size_t>(std::strtoull(val, nullptr, 10)) : defaultVal;
 }
 
-static inline size_t getEnvSize(char const* name, size_t def) {
-  char const* v = std::getenv(name);
-  return v ? static_cast<size_t>(std::atoll(v)) : def;
-}
+// -------------------------------
+// Alignment helpers
+// -------------------------------
+static inline size_t align_up_4k(size_t x)   { return (x + 4095ull) & ~4095ull; }
+static inline size_t align_down_4k(size_t x) { return (x & ~4095ull); }
 
-static void* cuda_alloc_aligned(size_t bytes, void** base_out) {
-  // 4KB alignment
+// -------------------------------
+// Aligned CUDA allocation (4KB)
+// -------------------------------
+static bool cuda_alloc_4k_aligned(size_t want_bytes, void** out_aligned_ptr,
+                                  CUdeviceptr* out_base, size_t* out_usable_bytes) {
+  if (!out_aligned_ptr || !out_base || !out_usable_bytes) return false;
+  *out_aligned_ptr = nullptr; *out_base = 0; *out_usable_bytes = 0;
+
+  // Over-allocate +4096 to guarantee we can align up to 4KB.
+  size_t alloc_bytes = want_bytes + 4096ull;
   CUdeviceptr d_base = 0;
-  size_t alloc = bytes + 4096;
-  if (cuMemAlloc(&d_base, alloc) != CUDA_SUCCESS) return nullptr;
+  CUresult rc = cuMemAlloc(&d_base, alloc_bytes);
+  if (rc != CUDA_SUCCESS) return false;
+
   uintptr_t addr = static_cast<uintptr_t>(d_base);
-  addr = (addr + 4095) & ~static_cast<uintptr_t>(4095);
-  if (base_out) *base_out = reinterpret_cast<void*>(d_base);
-  return reinterpret_cast<void*>(addr);
+  uintptr_t aligned = (addr + 4095ull) & ~4095ull;
+  size_t usable = alloc_bytes - (aligned - addr);
+
+  *out_base = d_base;
+  *out_aligned_ptr = reinterpret_cast<void*>(aligned);
+  *out_usable_bytes = usable;
+  return true;
+}
+
+// -------------------------------
+// Pretty print Status
+// -------------------------------
+static const char* status_str(Status s) {
+  switch (s) {
+    case Status::kOk:          return "kOk";
+    case Status::kUnavailable: return "kUnavailable";
+    case Status::kInvalidArg:  return "kInvalidArg";
+    case Status::kInternal:    return "kInternal";
+    case Status::kTimeout:     return "kTimeout";
+  }
+  return "Unknown";
 }
 
 int main(int argc, char** argv) {
-  // Default env settings for testing
+  // Recommended defaults for devmem TCP
   setenv("NCCL_MIN_ZCOPY_SIZE", "4096", 0);
   setenv("NCCL_GPUDIRECTTCPX_MIN_ZCOPY_SIZE", "4096", 0);
   setenv("NCCL_GPUDIRECTTCPX_RECV_SYNC", "1", 0);
@@ -52,8 +86,8 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  std::string mode = argv[1];
-  bool is_server = (mode == "server");
+  const std::string mode = argv[1];
+  const bool is_server = (mode == "server");
   std::string server_ip;
   int gpu_id = 0;
 
@@ -65,157 +99,292 @@ int main(int argc, char** argv) {
       return 1;
     }
     server_ip = argv[2];
-    gpu_id    = (argc > 3) ? std::atoi(argv[3]) : 0;
+    gpu_id = (argc > 3) ? std::atoi(argv[3]) : 0;
   }
 
-  // Config via env
-  int    num_channels  = getEnvInt("UCCL_TCPX_NUM_CHANNELS", 1);
-  size_t total_bytes   = getEnvSize("UCCL_TCPX_PERF_SIZE", 32 * 1024 * 1024);
-  size_t chunk_bytes   = getEnvSize("UCCL_TCPX_CHUNK_BYTES", 512 * 1024);
-  int    port_base     = getEnvInt("UCCL_TCPX_BOOTSTRAP_PORT_BASE", 12345);
-  int    port          = port_base + gpu_id;
-  int    iterations    = getEnvInt("UCCL_TCPX_PERF_ITERS", 1);  
-  std::string remote_name = is_server ? "client" : "server";
+  // Basic configuration via env
+  const int    num_channels     = getEnvInt("UCCL_TCPX_NUM_CHANNELS", 1);
+  const size_t total_bytes_raw  = getEnvSize("UCCL_TCPX_PERF_SIZE",   32ull * 1024 * 1024);
+  const size_t chunk_bytes_raw  = getEnvSize("UCCL_TCPX_CHUNK_BYTES", 512ull * 1024);
+  const int    port_base        = getEnvInt("UCCL_TCPX_BOOTSTRAP_PORT_BASE", 12345);
+  const int    port             = port_base + gpu_id;
+  const int    iterations       = getEnvInt("UCCL_TCPX_PERF_ITERS", 1);
+  const std::string remote_name = is_server ? "client" : "server";
 
-  std::cout << "=========== tcpx_plugin_api smoke test ===========\n";
+  // Async test knobs (env)
+  const int    async_inflight_max = std::max(1, getEnvInt("UCCL_TCPX_ASYNC_INFLIGHT", 4));
+  const int    async_poll_us      = std::max(1, getEnvInt("UCCL_TCPX_ASYNC_POLL_US", 200)); // microseconds
+  const int    do_async_test      = getEnvInt("UCCL_TCPX_DO_ASYNC", 1); // set 0 to skip async test
+
+  // Force 4KB alignment for chunk size (safer with device recv scatter layout)
+  size_t chunk_bytes = align_up_4k(chunk_bytes_raw);
+  if (chunk_bytes != chunk_bytes_raw) {
+    std::cout << "[WARN] UCCL_TCPX_CHUNK_BYTES (" << chunk_bytes_raw
+              << ") is not 4KB aligned. Using " << chunk_bytes << " instead.\n";
+  }
+
+  // We'll align the registered size down to 4KB.
+  size_t total_bytes = total_bytes_raw;
+
+  std::cout << "=========== tcpx new API smoke test ===========\n";
   std::cout << "Mode          : " << (is_server ? "SERVER" : "CLIENT") << "\n";
   std::cout << "GPU           : " << gpu_id << "\n";
   std::cout << "Channels      : " << num_channels << "\n";
-  std::cout << "Total bytes   : " << (total_bytes / 1024 / 1024) << " MB\n";
-  std::cout << "Chunk bytes   : " << (chunk_bytes / 1024) << " KB\n";
+  std::cout << "Total bytes   : " << (total_bytes / (1024.0 * 1024.0)) << " MB\n";
+  std::cout << "Chunk bytes   : " << (chunk_bytes / 1024.0) << " KB\n";
   std::cout << "Iterations    : " << iterations << "\n";
   std::cout << "Bootstrap port: " << port << "\n";
   if (!is_server) std::cout << "Server IP    : " << server_ip << "\n";
-  std::cout << "===================================================\n";
+  std::cout << "Async inflight: " << async_inflight_max << "\n";
+  std::cout << "Async poll(us): " << async_poll_us << "\n";
+  std::cout << "Run async test: " << (do_async_test ? "yes" : "no") << "\n";
+  std::cout << "================================================\n";
 
-  // 1) Init plugin
-  InitOptions opts{};
-  if (init(opts) != Status::kOk) {
-    std::cerr << "tcpx_plugin::init failed\n";
-    return 2;
-  }
+  // Transport configuration
+  Config cfg;
+  cfg.plugin_path = nullptr;     // use default loader path
+  cfg.gpu_id      = gpu_id;
+  cfg.channels    = num_channels;
+  cfg.chunk_bytes = chunk_bytes; // already 4KB aligned
+  cfg.enable      = true;
 
-  // 2) CUDA init
+  Transport t(cfg);
+
+  // CUDA init
   if (cuInit(0) != CUDA_SUCCESS) {
-    std::cerr << "cuInit failed\n"; return 3;
+    std::cerr << "cuInit failed\n";
+    return 3;
   }
   CUdevice cu_dev = 0;
   if (cuDeviceGet(&cu_dev, gpu_id) != CUDA_SUCCESS) {
-    std::cerr << "cuDeviceGet failed\n"; return 3;
+    std::cerr << "cuDeviceGet failed\n";
+    return 3;
   }
   CUcontext cu_ctx = nullptr;
   if (cuDevicePrimaryCtxRetain(&cu_ctx, cu_dev) != CUDA_SUCCESS) {
-    std::cerr << "cuDevicePrimaryCtxRetain failed\n"; return 3;
+    std::cerr << "cuDevicePrimaryCtxRetain failed\n";
+    return 3;
   }
   if (cuCtxSetCurrent(cu_ctx) != CUDA_SUCCESS) {
-    std::cerr << "cuCtxSetCurrent failed\n"; return 3;
+    std::cerr << "cuCtxSetCurrent failed\n";
+    return 3;
   }
   cudaSetDevice(gpu_id);
 
-  // 3) Create session
-  Session sess(gpu_id, num_channels, "", -1);
-
-  // 4) TCP bootstrap
-  int sock_fd = -1;
+  // Bootstrap + connect
+  ConnHandle conn = 0;
+  Status st = Status::kOk;
   if (is_server) {
-    if (bootstrap_server_create(port, &sock_fd) != 0) {
-      std::cerr << "bootstrap_server_create failed\n"; return 4;
-    }
-    if (server_send_conn_json(&sess, sock_fd) != Status::kOk) {
-      std::cerr << "server_send_conn_json failed\n"; return 4;
-    }
+    st = t.accept(port, remote_name, conn);
   } else {
-    if (bootstrap_client_connect(server_ip.c_str(), port, &sock_fd) != 0) {
-      std::cerr << "bootstrap_client_connect failed\n"; return 4;
-    }
-    if (client_recv_conn_json(&sess, sock_fd, remote_name) != Status::kOk) {
-      std::cerr << "client_recv_conn_json failed\n"; return 4;
-    }
-    if (sess.connect(remote_name) != Status::kOk) {
-      std::cerr << "sess.connect failed\n"; return 4;
-    }
+    st = t.connect(server_ip, port, remote_name, conn);
   }
-  if (is_server) {
-    if (sess.accept(remote_name) != Status::kOk) {
-      std::cerr << "sess.accept failed\n"; return 4;
-    }
+  if (st != Status::kOk) {
+    std::cerr << "connect/accept failed, status=" << static_cast<int>(st)
+              << " (" << status_str(st) << ")\n";
+    cuCtxSetCurrent(nullptr);
+    cuDevicePrimaryCtxRelease(cu_dev);
+    return 4;
   }
 
-  // 5) Allocate device memory
-  void* base_ptr = nullptr;
-  void* aligned  = cuda_alloc_aligned(total_bytes, &base_ptr);
-  if (!aligned) {
-    std::cerr << "device alloc failed\n"; return 5;
+  // Device buffer (4KB aligned)
+  void* aligned_ptr = nullptr;
+  CUdeviceptr d_base = 0;
+  size_t usable = 0;
+
+  if (!cuda_alloc_4k_aligned(total_bytes, &aligned_ptr, &d_base, &usable) || aligned_ptr == nullptr) {
+    std::cerr << "cuMemAlloc (aligned) failed\n";
+    cuCtxSetCurrent(nullptr);
+    cuDevicePrimaryCtxRelease(cu_dev);
+    return 5;
   }
 
+  // Registered size must be <= usable and 4KB aligned down.
+  size_t reg_bytes = align_down_4k(std::min(usable, total_bytes));
+  if (reg_bytes == 0) {
+    std::cerr << "aligned usable size is too small after 4KB trim\n";
+    cuMemFree(d_base);
+    cuCtxSetCurrent(nullptr);
+    cuDevicePrimaryCtxRelease(cu_dev);
+    return 5;
+  }
+
+  // Initialize device buffer contents
   if (!is_server) {
-    cudaMemset(aligned, 0xAB, total_bytes);
-    cudaDeviceSynchronize();
+    cudaMemset(aligned_ptr, 0xAB, reg_bytes);
   } else {
-    cudaMemset(aligned, 0x00, total_bytes);
-    cudaDeviceSynchronize();
+    cudaMemset(aligned_ptr, 0x00, reg_bytes);
+  }
+  cudaDeviceSynchronize();
+
+  // Register memory (recv side uses is_recv=true)
+  MrHandle mr = 0;
+  st = t.register_memory(aligned_ptr, reg_bytes, /*is_recv*/ is_server, mr);
+  if (st != Status::kOk || mr == 0) {
+    std::cerr << "register_memory failed, status=" << static_cast<int>(st)
+              << " (" << status_str(st) << ")\n";
+    cuMemFree(d_base);
+    cuCtxSetCurrent(nullptr);
+    cuDevicePrimaryCtxRelease(cu_dev);
+    return 6;
   }
 
-  // 6) Register memory
-  uint64_t mem_id = sess.register_memory(aligned, total_bytes, is_server);
-  if (mem_id == 0) {
-    std::cerr << "register_memory failed\n"; return 6;
+  // =============== Blocking test ===============
+  {
+    const int tag_base = 100;
+    auto t0 = std::chrono::high_resolution_clock::now();
+    Status bst = Status::kOk;
+
+    for (int it = 0; it < iterations; ++it) {
+      if (is_server) {
+        bst = t.recv(conn, mr, reg_bytes, tag_base + it * 1000);
+      } else {
+        bst = t.send(conn, mr, reg_bytes, tag_base + it * 1000);
+      }
+      if (bst != Status::kOk) {
+        std::cerr << (is_server ? "recv" : "send")
+                  << " (blocking) failed at iter " << it
+                  << ", status=" << static_cast<int>(bst)
+                  << " (" << status_str(bst) << ")\n";
+        st = bst;
+        break;
+      }
+    }
+
+    auto t1 = std::chrono::high_resolution_clock::now();
+    double ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() / 1000.0;
+    double gb = (double)reg_bytes * iterations / (1024.0 * 1024.0 * 1024.0);
+
+    if (bst == Status::kOk) {
+      std::cout << (is_server ? "[SERVER] " : "[CLIENT] ")
+                << "[BLOCK] time=" << ms << " ms, size=" << gb
+                << " GB, bw=" << (gb / (ms / 1000.0)) << " GB/s\n";
+      if (is_server) {
+        unsigned char h0 = 0;
+        cudaMemcpy(&h0, aligned_ptr, 1, cudaMemcpyDeviceToHost);
+        std::cout << "[SERVER][BLOCK] first byte: 0x" << std::hex << (int)h0 << std::dec << "\n";
+      }
+    }
   }
 
-  // 7) Create transfer
-  ConnID cid{remote_name, -1};
-  Transfer* xfer = sess.create_transfer(cid);
-  if (!xfer) {
-    std::cerr << "create_transfer failed\n"; return 7;
-  }
-
-  // 8) Send/recv
-  int tag_base = 100;
-  auto t0 = std::chrono::high_resolution_clock::now();
-
-  for (int it = 0; it < iterations; ++it) {
+  // =============== Async test ===============
+  if (do_async_test) {
+    // Re-initialize server buffer to a known value; client keeps pattern 0xAB.
     if (is_server) {
-      if (xfer->recv_all(mem_id, total_bytes, 0, chunk_bytes, tag_base + it*1000)
-          != Status::kOk) {
-        std::cerr << "recv_all failed\n"; return 8;
+      cudaMemset(aligned_ptr, 0x00, reg_bytes);
+      cudaDeviceSynchronize();
+    }
+
+    const int tag_base = 50000; // separate tag space from blocking test
+    auto t0 = std::chrono::high_resolution_clock::now();
+
+    // We will queue up to async_inflight_max transfers; each iteration is one full reg_bytes transfer.
+    // For client: send_async; for server: recv_async.
+    struct Inflight {
+      TxHandle tx{0};
+      int      iter{-1};
+    };
+    std::vector<Inflight> inflight;
+
+    int next_iter_to_post = 0;
+    int completed = 0;
+    Status ast = Status::kOk;
+
+    auto post_one = [&](int it)->Status {
+      TxHandle tx = 0;
+      Status pst;
+      if (is_server) {
+        pst = t.recv_async(conn, mr, reg_bytes, tag_base + it * 1000, tx);
+      } else {
+        pst = t.send_async(conn, mr, reg_bytes, tag_base + it * 1000, tx);
+      }
+      if (pst == Status::kOk) {
+        inflight.push_back({tx, it});
+      }
+      return pst;
+    };
+
+    // Initially fill the window up to inflight cap or total iterations
+    for (; next_iter_to_post < iterations && (int)inflight.size() < async_inflight_max; ++next_iter_to_post) {
+      Status pst = post_one(next_iter_to_post);
+      if (pst != Status::kOk) {
+        std::cerr << "[ASYNC] post failed at iter " << next_iter_to_post
+                  << ", status=" << static_cast<int>(pst)
+                  << " (" << status_str(pst) << ")\n";
+        ast = pst;
+        break;
+      }
+    }
+
+    // Poll loop: progress until all iterations complete
+    while (ast == Status::kOk && completed < iterations) {
+      // Poll each inflight tx
+      for (size_t i = 0; i < inflight.size();) {
+        bool done = false;
+        Status pst = t.poll_transfer(inflight[i].tx, done);
+        if (pst != Status::kOk) {
+          std::cerr << "[ASYNC] poll_transfer failed for iter " << inflight[i].iter
+                    << ", status=" << static_cast<int>(pst)
+                    << " (" << status_str(pst) << ")\n";
+          ast = pst;
+          break;
+        }
+        if (done) {
+          // remove this entry
+          inflight.erase(inflight.begin() + i);
+          ++completed;
+
+          // Try to post a new one to keep the window full
+          if (next_iter_to_post < iterations) {
+            Status npst = post_one(next_iter_to_post);
+            if (npst != Status::kOk) {
+              std::cerr << "[ASYNC] post failed at iter " << next_iter_to_post
+                        << ", status=" << static_cast<int>(npst)
+                        << " (" << status_str(npst) << ")\n";
+              ast = npst;
+              break;
+            }
+            ++next_iter_to_post;
+          }
+        } else {
+          ++i; // not done, move to next inflight
+        }
+      }
+
+      if (ast != Status::kOk) break;
+
+      // Sleep a bit to avoid busy-wait (poll interval from env)
+      if (completed < iterations) {
+        usleep(async_poll_us);
+      }
+    }
+
+    auto t1 = std::chrono::high_resolution_clock::now();
+    double ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() / 1000.0;
+    double gb = (double)reg_bytes * iterations / (1024.0 * 1024.0 * 1024.0);
+
+    if (ast == Status::kOk) {
+      std::cout << (is_server ? "[SERVER] " : "[CLIENT] ")
+                << "[ASYNC] time=" << ms << " ms, size=" << gb
+                << " GB, bw=" << (gb / (ms / 1000.0)) << " GB/s"
+                << " (inflight=" << async_inflight_max << ", poll_us=" << async_poll_us << ")\n";
+      if (is_server) {
+        unsigned char h0 = 0;
+        cudaMemcpy(&h0, aligned_ptr, 1, cudaMemcpyDeviceToHost);
+        std::cout << "[SERVER][ASYNC] first byte: 0x" << std::hex << (int)h0 << std::dec << "\n";
       }
     } else {
-      if (xfer->send_all(mem_id, total_bytes, 0, chunk_bytes, tag_base + it*1000)
-          != Status::kOk) {
-        std::cerr << "send_all failed\n"; return 8;
-      }
+      st = ast;
     }
-    if (xfer->wait() != Status::kOk) {
-      std::cerr << "xfer->wait failed\n"; return 8;
-    }
-    xfer->release();
   }
 
-  auto t1 = std::chrono::high_resolution_clock::now();
-  double ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() / 1000.0;
-
-  // 9) Server-side check
-  if (is_server) {
-    unsigned char h0 = 0;
-    cudaMemcpy(&h0, aligned, 1, cudaMemcpyDeviceToHost);
-    std::cout << "[SERVER] first byte after recv: 0x" << std::hex
-              << (int)h0 << std::dec << "\n";
-  }
-
-  double gb = (double)total_bytes * iterations / (1024.0 * 1024.0 * 1024.0);
-  std::cout << (is_server ? "[SERVER] " : "[CLIENT] ")
-            << "Done. time=" << ms << " ms, size="
-            << gb << " GB, bw=" << (gb / (ms/1000.0)) << " GB/s\n";
-
-  // 10) Cleanup
-  delete xfer;
-  sess.deregister_memory(mem_id);
-
-  if (base_ptr) cuMemFree(reinterpret_cast<CUdeviceptr>(base_ptr));
-  if (sock_fd >= 0) close(sock_fd);
+  // Cleanup
+  t.deregister_memory(mr);
+  cuMemFree(d_base);
 
   cuCtxSetCurrent(nullptr);
   cuDevicePrimaryCtxRelease(cu_dev);
-  std::cout << "exit ok\n";
-  return 0;
+
+  std::cout << "exit " << ((st == Status::kOk) ? "ok" : "with error") << "\n";
+  return (st == Status::kOk) ? 0 : 8;
 }

@@ -6,6 +6,9 @@
 #include "util/net.h"
 #include "util/shared_pool.h"
 #include "util/util.h"
+#ifdef USE_TCPX
+#include "tcpx_plugin_api.h"
+#endif
 #include <infiniband/verbs.h>
 #include <pybind11/pybind11.h>
 #include <atomic>
