@@ -80,13 +80,9 @@ __global__ void lock_throughput_kernel(DeviceToHostCmdBuffer** ring_buffers,
   dummy_cmd.cmd = 1;
   dummy_cmd.dst_rank = proxy_id;
   dummy_cmd.dst_gpu = 0;
-  dummy_cmd.src_ptr = nullptr;
   dummy_cmd.bytes = config.payload_size;
   dummy_cmd.req_rptr = warp_id;
   dummy_cmd.req_lptr = 0;
-  dummy_cmd.lane_id = lane_id;
-  dummy_cmd.message_idx = 0;
-  dummy_cmd.is_atomic = false;
   dummy_cmd.value = warp_id;
   dummy_cmd.is_combine = false;
 
@@ -105,7 +101,6 @@ __global__ void lock_throughput_kernel(DeviceToHostCmdBuffer** ring_buffers,
     device_mutex_lock_system(spinlock);
 
     // Try to push to ring buffer
-    dummy_cmd.message_idx = metrics[warp_id].successful_ops;
     bool success = ring_buffer->push(dummy_cmd);
 
     // Release spinlock

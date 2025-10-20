@@ -998,7 +998,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         if (remote_addr < ctx->remote_addr ||
             remote_addr + cmd.bytes > remote_end) {
           fprintf(stderr,
-                  "[ERROR] Remote write OOB: addr=0x%llx len=%zu (base=0x%llx, "
+                  "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
                   "size=%zu), cmd.req_rptr: 0x%llx\n",
                   (unsigned long long)remote_addr, cmd.bytes,
                   (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,

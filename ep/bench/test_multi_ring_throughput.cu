@@ -58,13 +58,9 @@ __global__ void multi_ring_throughput_kernel(
   dummy_cmd.cmd = 1;
   dummy_cmd.dst_rank = warp_id / RINGS_PER_PROXY;
   dummy_cmd.dst_gpu = 0;
-  dummy_cmd.src_ptr = nullptr;
   dummy_cmd.bytes = config.payload_size;
   dummy_cmd.req_rptr = warp_id;
   dummy_cmd.req_lptr = 0;
-  dummy_cmd.lane_id = lane_id;
-  dummy_cmd.message_idx = 0;
-  dummy_cmd.is_atomic = false;
   dummy_cmd.value = warp_id;
   dummy_cmd.is_combine = false;
 
@@ -79,7 +75,6 @@ __global__ void multi_ring_throughput_kernel(
 
     uint64_t op_start = clock64();
 
-    dummy_cmd.message_idx = metrics[warp_id].successful_ops;
     bool success = ring_buffer->push(dummy_cmd);
 
     uint64_t op_end = clock64();

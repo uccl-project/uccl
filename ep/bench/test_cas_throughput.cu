@@ -62,13 +62,9 @@ __global__ void cas_throughput_kernel(DeviceToHostCmdBuffer** ring_buffers,
   dummy_cmd.cmd = 1;
   dummy_cmd.dst_rank = ring_idx;
   dummy_cmd.dst_gpu = 0;
-  dummy_cmd.src_ptr = nullptr;
   dummy_cmd.bytes = config.payload_size;
   dummy_cmd.req_rptr = warp_id;
   dummy_cmd.req_lptr = 0;
-  dummy_cmd.lane_id = lane_id;
-  dummy_cmd.message_idx = 0;
-  dummy_cmd.is_atomic = false;
   dummy_cmd.value = warp_id;
   dummy_cmd.is_combine = false;
 
@@ -85,7 +81,6 @@ __global__ void cas_throughput_kernel(DeviceToHostCmdBuffer** ring_buffers,
     uint32_t attempts = 0;
 
     // Use atomic_set_and_commit (CAS-based) from ring_buffer.cuh
-    dummy_cmd.message_idx = metrics[warp_id].successful_ops;
 
     // This function internally does CAS competition
     bool success = ring_buffer->atomic_set_and_commit(dummy_cmd);

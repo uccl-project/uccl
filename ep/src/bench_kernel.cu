@@ -36,7 +36,7 @@ __global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs) {
   __syncthreads();
 
   // Each thread dispatches its own commands with stride
-  for (int it = tid; it < kIterations; it += num_threads) {
+  for (uint32_t it = tid; it < kIterations; it += num_threads) {
     uint64_t cur_tail = rb->volatile_tail();
 
     // Check if there are any completed commands
@@ -63,23 +63,17 @@ __global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs) {
       if (inflight < kInflightSlotSize) {
         // Record start time
         unsigned long long t0 = clock64();
-        int message_idx = it + 1;
+        uint32_t message_idx = it + 1;
 
         uint64_t my_slot = cur_head;
         // Create the command
         TransferCmd cmd{.cmd_type = CmdType::WRITE,
-                        .cmd = (static_cast<uint64_t>(bid + 1) << 32) |
-                               (message_idx & 0xFFFFFFFF),
+                        .cmd = message_idx + 1,
                         .dst_rank = 1,
                         .dst_gpu = 0,
-                        .src_ptr = 0,
                         .bytes = kObjectSize,
                         .req_rptr = 0,
                         .req_lptr = 0,
-                        .warp_id = 0,
-                        .lane_id = 0,
-                        .message_idx = message_idx,
-                        .is_atomic = false,
                         .value = 0,
                         .is_combine = false};
 

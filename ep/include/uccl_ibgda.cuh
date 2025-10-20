@@ -64,17 +64,12 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       // TODO(MaoZiming): Check fields here.
       // NOTE(MaoZiming): cmd is needed for proxy to process the command.
       cmd.cmd_type = CmdType::WRITE;
-      cmd.cmd =
-          (static_cast<uint64_t>(expert_idx + 1) << 32) |
-          (message_idx & 0xFFFFFFFF);  // NOTE(MaoZiming): Use expert_idx + 1
-                                       // to avoid 0 as a valid command.
+      cmd.cmd = message_idx + 1;
       cmd.req_rptr = rptr_val;
       cmd.req_lptr = lptr_val;
       cmd.bytes = bytes_val;
       cmd.dst_rank = dst_rank;
       cmd.expert_idx = expert_idx;
-      cmd.lane_id = lane_id;
-      cmd.message_idx = message_idx;
       cmd.is_combine = is_combine;
       cmd.low_latency_buffer_idx = low_latency_buffer_idx;
 #ifdef USE_NORMAL_MODE
@@ -143,10 +138,8 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
         // TODO(MaoZiming): Check fields here.
         // NOTE(MaoZiming): cmd is needed for proxy to process the command.
         cmd.cmd = 1;  // to avoid 0 as a valid command.
-        cmd.warp_id = warp_id;
         cmd.value = value;
         cmd.dst_rank = dst_rank;
-        cmd.is_atomic = true;
         cmd.is_combine = is_combine;
         cmd.req_rptr = rptr;
         cmd.low_latency_buffer_idx = low_latency_buffer_idx;

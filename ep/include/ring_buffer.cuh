@@ -17,32 +17,27 @@
 #define COPY_RING_CAP 4096
 #endif
 
-enum class CmdType : uint64_t { EMPTY = 0, WRITE, ATOMIC, QUIET, BARRIER };
+enum class CmdType : uint8_t { EMPTY = 0, WRITE, ATOMIC, QUIET, BARRIER };
 
 // Command structure for each transfer
 struct TransferCmd {
   // NOTE(MaoZiming): cmd is used to identify the command type and needs to be
   // set in order for proxy to process the command.
   CmdType cmd_type;
-  uint64_t cmd;
+  uint32_t cmd;
   uint32_t dst_rank;  // remote node id (MPI-style)
   uint32_t dst_gpu;   // GPU id on remote node
-  void* src_ptr;      // device pointer to data
-  uint64_t bytes;     // transfer size
+  uint32_t bytes;     // transfer size
 
   uint64_t req_rptr;
   uint64_t req_lptr;
-  int warp_id;
-  int expert_idx;
-  int lane_id;
-  int message_idx;
-  bool is_atomic;
+  uint16_t expert_idx;
   int value;
   bool is_combine;
-  int low_latency_buffer_idx;
+  bool low_latency_buffer_idx;
 
-  uint64_t atomic_offset;
-  uint64_t atomic_val;
+  uint32_t atomic_offset;
+  uint32_t atomic_val;
 };
 
 struct CopyTask {

@@ -287,15 +287,10 @@ void FifoProxy::run_sender() {
     cmd.cmd = trigger.fst;
     cmd.dst_rank = 1;
     cmd.dst_gpu = 0;
-    cmd.src_ptr = reinterpret_cast<void*>(gpu_buffer_addr_);
     cmd.bytes = kObjectSize;
-    cmd.message_idx = trigger.snd & 0xFFFFFFFF;
-    cmd.warp_id = 0;
-    cmd.lane_id = 0;
     cmd.expert_idx = 0;
     cmd.req_rptr = 0;
     cmd.req_lptr = 0;
-    cmd.is_atomic = false;
     cmd.value = 0;
     cmd.is_combine = false;
     cmd.low_latency_buffer_idx = 0;

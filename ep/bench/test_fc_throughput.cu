@@ -84,7 +84,6 @@ __global__ void fc_throughput_kernel(
       TransferCmd cmd = {};
       cmd.cmd = 1;
       cmd.bytes = config.payload_size;  // Just record size, no actual data
-      cmd.message_idx = i;
       mgr_ptr->submit_request(warp_id, cmd);  // Use no-payload version
     }
 
@@ -100,9 +99,7 @@ __global__ void fc_throughput_kernel(
       // Create and submit request - metadata only
       TransferCmd cmd = {};
       cmd.cmd = 1;
-      cmd.bytes = config.payload_size;  // Just record size
-      cmd.message_idx = metrics[warp_id].request_count;
-
+      cmd.bytes = config.payload_size;        // Just record size
       mgr_ptr->submit_request(warp_id, cmd);  // No payload copying
 
       // Record metrics - only count requests

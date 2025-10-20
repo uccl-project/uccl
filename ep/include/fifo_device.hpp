@@ -5,6 +5,7 @@
 #define MSCCLPP_FIFO_DEVICE_HPP_
 
 #include "fifo_util.hpp"
+#include "ring_buffer.cuh"
 #include <cstdint>
 
 namespace mscclpp {
@@ -51,6 +52,111 @@ union alignas(16) ProxyTrigger {
 #if defined(MSCCLPP_DEVICE_COMPILE)
   /// Default constructor.
   MSCCLPP_INLINE ProxyTrigger() = default;
+
+  MSCCLPP_DEVICE_INLINE ProxyTrigger
+  ProxyTriggerFromTransferCmd(TransferCmd const& c, uint32_t semaphoreId = 0) {
+    // Map CmdType -> TriggerType (3 bits)
+    TriggerType type;
+    switch (c.cmd_type) {
+      case CmdType::WRITE:
+        type = TriggerData;
+        break;
+      case CmdType::ATOMIC:
+        type = TriggerData;
+        break;  // still a data op for the proxy
+      case CmdType::QUIET:
+        type = TriggerFlag;
+        break;
+      case CmdType::BARRIER:
+        type = TriggerSync;
+        break;
+      default:
+        type = TriggerFlag;
+        break;
+    }
+    /*
+     * NOTE: Fields in TransferCmd that are **NOT** captured by
+     * ProxyTriggerFromTransferCmd()
+     * ----------------------------------------------------------------------------
+     * The current mapping only encodes:
+     *   - bytes        -> fields.size              (32 bits, max 4 GiB - 1)
+     *   - req_lptr     -> fields.srcOffset         (32 bits; must fit < 2^32)
+     *   - req_rptr     -> fields.dstOffset         (32 bits; must fit < 2^32)
+     *   - dst_rank     -> fields.dstMemoryId       (9 bits; must be < 512)
+     *   - dst_gpu      -> fields.srcMemoryId       (9 bits; must be < 512)
+     *   - cmd_type     -> fields.type              (3 bits; values 0..7)  [only
+     * if we map it]
+     *   - semaphoreId  -> fields.semaphoreId       (10 bits)              [only
+     * if we map it]
+     *
+     * Everything else in TransferCmd is currently **omitted** from the 128-bit
+     * trigger:
+     *   - cmd                         (64 bits)
+     *   - src_ptr                     (64-bit pointer)
+     *   - warp_id                     (32 bits)
+     *   - expert_idx                  (32 bits)
+     *   - lane_id                     (32 bits)
+     *   - message_idx                 (32 bits)
+     *   - is_atomic                   (1 bit)
+     *   - value                       (32 bits)
+     *   - is_combine                  (1 bit)
+     *   - low_latency_buffer_idx      (32 bits)
+     *   - atomic_offset               (64 bits)
+     *   - atomic_val                  (64 bits)
+     */
+
+    // Derive IDs and offsets from TransferCmd
+    const uint32_t dstId = c.dst_rank;      // -> src/dstMemoryId (9 bits each)
+    const uint32_t srcId = c.dst_gpu;       // -> src/dstMemoryId (9 bits each)
+    const uint64_t dstOffset = c.req_rptr;  // -> dstOffset (32 bits)
+    const uint64_t srcOffset = c.req_lptr;  // -> srcOffset (32 bits)
+    const uint64_t bytes = c.bytes;         // -> size (32 bits)
+
+    // Bit-width checks (mirror MSCCL constructor)
+    MSCCLPP_ASSERT_DEVICE(type < (1ULL << TriggerBitsType),
+                          "type is too large");
+    MSCCLPP_ASSERT_DEVICE(dstId < (1ULL << TriggerBitsMemoryId),
+                          "dstId is too large");
+    MSCCLPP_ASSERT_DEVICE(dstOffset < (1ULL << TriggerBitsOffset),
+                          "dstOffset is too large");
+    MSCCLPP_ASSERT_DEVICE(srcId < (1ULL << TriggerBitsMemoryId),
+                          "srcId is too large");
+    MSCCLPP_ASSERT_DEVICE(srcOffset < (1ULL << TriggerBitsOffset),
+                          "srcOffset is too large");
+    MSCCLPP_ASSERT_DEVICE(bytes != 0, "bytes must not be zero");
+    MSCCLPP_ASSERT_DEVICE(bytes < (1ULL << TriggerBitsSize),
+                          "bytes is too large");
+    MSCCLPP_ASSERT_DEVICE(semaphoreId < (1ULL << TriggerBitsSemaphoreId),
+                          "semaphoreId is too large");
+
+    // Masks
+    constexpr uint64_t maskSize = (1ULL << TriggerBitsSize) - 1;
+    constexpr uint64_t maskSrcOffset = (1ULL << TriggerBitsOffset) - 1;
+    constexpr uint64_t maskDstOffset = (1ULL << TriggerBitsOffset) - 1;
+    constexpr uint64_t maskSrcMemoryId = (1ULL << TriggerBitsMemoryId) - 1;
+    constexpr uint64_t maskDstMemoryId = (1ULL << TriggerBitsMemoryId) - 1;
+    constexpr uint64_t maskType = (1ULL << TriggerBitsType) - 1;
+    constexpr uint64_t maskSemaphoreId = (1ULL << TriggerBitsSemaphoreId) - 1;
+
+    ProxyTrigger trig;
+    // fst: [ srcOffset (32b) | bytes (32b) ]
+    trig.fst =
+        (((srcOffset & maskSrcOffset) << TriggerBitsSize) | (bytes & maskSize));
+
+    // snd: [ dstOffset | srcId | dstId | type | semId ] packed high→low per
+    // MSCCL
+    trig.snd = (((((((((static_cast<uint64_t>(semaphoreId) & maskSemaphoreId)
+                       << TriggerBitsType) |
+                      (static_cast<uint64_t>(type) & maskType))
+                     << TriggerBitsMemoryId) |
+                    (static_cast<uint64_t>(dstId) & maskDstMemoryId))
+                   << TriggerBitsMemoryId) |
+                  (static_cast<uint64_t>(srcId) & maskSrcMemoryId))
+                 << TriggerBitsOffset) |
+                (dstOffset & maskDstOffset));
+
+    return trig;
+  }
 
   /// Constructor.
   /// @param type The type of the trigger.
