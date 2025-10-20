@@ -1,3 +1,4 @@
+#include "bench_kernel.cuh"
 #include "bench_utils.hpp"
 #include "common.hpp"
 #include "ep_config.hpp"
@@ -6,7 +7,6 @@
 #include "ep_proxy_registry.hpp"
 #include "ep_runtime.cuh"
 #include "ep_util.hpp"
-#include "bench_kernel.cuh"
 #include "internode.cuh"
 #include "internode_ll.cuh"
 #include "intranode.cuh"

@@ -30,4 +30,3 @@ cudaError_t launch_gpu_issue_batched_commands_fifo(
     uint32_t* op_count = nullptr);
 
 #endif  // BENCH_KERNEL_CUH
-

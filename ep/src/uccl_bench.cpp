@@ -1,6 +1,6 @@
 #include "uccl_bench.hpp"
-#include "bench_kernel.cuh"     // For kernel launchers
-#include "proxy.hpp"          // Proxy, make_cfg
+#include "bench_kernel.cuh"  // For kernel launchers
+#include "proxy.hpp"         // Proxy, make_cfg
 #include <stdexcept>
 
 Bench::Bench()

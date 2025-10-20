@@ -273,4 +273,3 @@ cudaError_t launch_gpu_issue_batched_commands_fifo(
 
   return cudaGetLastError();
 }
-
