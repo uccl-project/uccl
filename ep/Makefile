@@ -66,8 +66,7 @@ NVCCFLAGS += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS)
 LDFLAGS   += $(EFA_LDFLAGS)
 INCLUDES  += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS)
 
-SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp src/peer_copy_worker.cpp src/uccl_proxy.cpp src/uccl_bench.cpp src/uccl_bench_fifo.cpp src/uccl_fifo_proxy.cpp src/peer_copy_manager.cpp
-SRC_CC  := src/fifo.cc src/numa.cc src/errors.cc src/gpu_utils.cc
+SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp src/peer_copy_worker.cpp src/uccl_proxy.cpp src/uccl_bench.cpp src/uccl_bench_fifo.cpp src/uccl_fifo_proxy.cpp src/peer_copy_manager.cpp src/fifo.cpp
 SRC_CU  := src/gpu_kernel.cu src/gpu_kernel_fifo.cu src/peer_copy.cu src/py_cuda_shims.cu src/internode_ll.cu src/internode.cu src/layout.cu src/intranode.cu src/ep_runtime.cu
 
 SRC_LOCAL  := bench/benchmark_local.cu
@@ -75,12 +74,11 @@ SRC_REMOTE := bench/benchmark_remote.cu
 SRC_DUAL   := bench/benchmark_dual.cu
 
 OBJ_CPP := $(SRC_CPP:.cpp=.o)
-OBJ_CC  := $(SRC_CC:.cc=.o)
 OBJ_CU  := $(SRC_CU:.cu=.o)
 
-OBJ_LOCAL  := $(OBJ_CPP) $(OBJ_CC) $(OBJ_CU) $(SRC_LOCAL:.cu=.o)
-OBJ_REMOTE := $(OBJ_CPP) $(OBJ_CC) $(OBJ_CU) $(SRC_REMOTE:.cu=.o)
-OBJ_DUAL   := $(OBJ_CPP) $(OBJ_CC) $(OBJ_CU) $(SRC_DUAL:.cu=.o)
+OBJ_LOCAL  := $(OBJ_CPP) $(OBJ_CU) $(SRC_LOCAL:.cu=.o)
+OBJ_REMOTE := $(OBJ_CPP) $(OBJ_CU) $(SRC_REMOTE:.cu=.o)
+OBJ_DUAL   := $(OBJ_CPP) $(OBJ_CU) $(SRC_DUAL:.cu=.o)
 
 SRC_BIND := src/uccl_ep.cc
 OBJ_BIND := $(SRC_BIND:.cc=.o)
@@ -115,7 +113,7 @@ $(TARGET_REMOTE): $(OBJ_REMOTE)
 $(TARGET_DUAL): $(OBJ_DUAL)
 	$(NVCC) -arch=sm_$(SM) $(NVCCFLAGS) $(INCLUDES) $(OBJ_DUAL) -lcuda -lcudart $(LDFLAGS) -o $@
 
-$(EP_EXT): $(OBJ_CPP) $(OBJ_CC) $(OBJ_CU) $(OBJ_BIND)
+$(EP_EXT): $(OBJ_CPP) $(OBJ_CU) $(OBJ_BIND)
 	$(CXX) $(CXXFLAGS) -shared -fPIC \
 	    -D_GLIBCXX_USE_CXX11_ABI=$(TORCH_ABI) \
 	    $(INCLUDES) $(PYBIND11_INCLUDES) $^ \

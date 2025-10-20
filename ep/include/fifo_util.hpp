@@ -26,6 +26,9 @@ constexpr auto cudaSuccess = hipSuccess;
 constexpr auto cudaHostAllocMapped = hipHostMallocMapped;
 
 #define cudaGetDevice(...) hipGetDevice(__VA_ARGS__)
+#define cudaHostAlloc(...) hipHostMalloc(__VA_ARGS__)
+#define cudaMalloc(...) hipMalloc(__VA_ARGS__)
+#define cudaMemset(...) hipMemset(__VA_ARGS__)
 
 #else
 
@@ -359,8 +362,12 @@ inline void* gpuCallocHost(size_t bytes, unsigned int flags) {
   return ptr;
 }
 
-inline void gpuFree(void* ptr) {
-  cudaError_t err = cudaFree(ptr);
+inline void _gpuFree(void* ptr) {
+#if defined(__HIP_PLATFORM_AMD__)
+  cudaError_t err = ::hipFree(ptr);
+#else
+  cudaError_t err = ::cudaFree(ptr);
+#endif
   if (!isCudaTeardownError(err) && err != cudaSuccess) {
     throw ::mscclpp::CudaError(std::string("Call to cudaFree failed. ") +
                                    __FILE__ + ":" + std::to_string(__LINE__),
@@ -370,8 +377,12 @@ inline void gpuFree(void* ptr) {
   }
 }
 
-inline void gpuFreeHost(void* ptr) {
-  cudaError_t err = cudaFreeHost(ptr);
+inline void _gpuFreeHost(void* ptr) {
+#if defined(__HIP_PLATFORM_AMD__)
+  cudaError_t err = ::hipHostFree(ptr);
+#else
+  cudaError_t err = ::cudaFreeHost(ptr);
+#endif
   if (!isCudaTeardownError(err) && err != cudaSuccess) {
     throw ::mscclpp::CudaError(std::string("Call to cudaFreeHost failed. ") +
                                    __FILE__ + ":" + std::to_string(__LINE__),
@@ -381,18 +392,18 @@ inline void gpuFreeHost(void* ptr) {
   }
 }
 
-/// A deleter that calls gpuFree for use with std::unique_ptr or
+/// A deleter that calls _gpuFree for use with std::unique_ptr or
 /// std::shared_ptr.
 template <class T = void>
 struct GpuDeleter {
-  void operator()(void* ptr) { gpuFree(ptr); }
+  void operator()(void* ptr) { _gpuFree(ptr); }
 };
 
-/// A deleter that calls gpuFreeHost for use with std::unique_ptr or
+/// A deleter that calls _gpuFreeHost for use with std::unique_ptr or
 /// std::shared_ptr.
 template <class T = void>
 struct GpuHostDeleter {
-  void operator()(void* ptr) { gpuFreeHost(ptr); }
+  void operator()(void* ptr) { _gpuFreeHost(ptr); }
 };
 
 template <class T>
