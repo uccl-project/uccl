@@ -15,6 +15,8 @@
 #define MEASURE_PER_OP_LATENCY
 #define MEASURE_PER_VERB_LATENCY
 
+#define EFA
+
 #ifndef USE_NORMAL_MODE
 #ifndef USE_SENDER_BARRIER
 #ifdef EFA

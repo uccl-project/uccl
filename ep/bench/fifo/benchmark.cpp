@@ -3,7 +3,7 @@
  * Measures FIFO dispatch throughput and GPU-side latency
  * To run the benchmark:
  *    make
- *    torchrun --nproc_per_node=8 --standalone launch_fifo.py [-l] [-b] [-r]
+ *    torchrun --nproc_per_node=8 --standalone run.py [-l] [-b] [-r]
  *    -l: Latency mode (RTT measurement)
  *    -b: Burst mode (no polling)
  *    -r: Random mode (each thread randomly selects a FIFO)
