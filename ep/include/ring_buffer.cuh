@@ -93,26 +93,6 @@ struct alignas(128) RingBuffer {
   static constexpr size_t kNumWords = (Capacity + 63) / 64;
   uint64_t ack_mask[kNumWords] = {};
   static constexpr int kFenceBatch = 8;
-  static_assert(Capacity > 0 && (Capacity & (Capacity - 1)) == 0,
-                "RingBuffer Capacity must be a power of two and nonzero");
-
-  static inline int ctz64_nonzero(uint64_t x) {
-#if defined(__GNUG__) || defined(__clang__)
-    return __builtin_ctzll(x);
-#else
-    int n = 0;
-    while ((x & 1ull) == 0ull) {
-      x >>= 1;
-      ++n;
-    }
-    return n;
-#endif
-  }
-
-  static inline int ctz64(uint64_t x) {
-    return (x == 0ull) ? 64 : ctz64_nonzero(x);
-  }
-
   inline void mark_acked(size_t idx) noexcept {
     assert(idx < Capacity && "mark_acked: idx out of range");
     const size_t word = idx >> 6;  // idx / 64
@@ -142,63 +122,50 @@ struct alignas(128) RingBuffer {
 
     size_t remaining = Capacity - start_idx;
     size_t span = remaining < (64 - bit) ? remaining : (64 - bit);
-    if (span == 0) return Capacity;
 
-    // First partial word
+    // Mask the slice in this word to only the valid range
     uint64_t slice = (ack_mask[word] >> bit);
     uint64_t range_mask = (span == 64) ? ~0ull : ((1ull << span) - 1);
     slice &= range_mask;
 
+    // If there is any 0 in the slice, return its position
     uint64_t inv = (~slice) & range_mask;
-    if (inv != 0ull) {
-      return start_idx + (size_t)ctz64_nonzero(inv);
-    }
+    if (inv) return start_idx + __builtin_ctzll(inv);
 
-    // Full words
+    // Scan subsequent full words, but clamp the last word
     for (++word; word < kNumWords; ++word) {
       size_t base = word << 6;
       size_t valid =
-          (Capacity > base) ? (size_t)std::min<size_t>(64, Capacity - base) : 0;
+          Capacity > base ? (size_t)std::min<size_t>(64, Capacity - base) : 0;
       if (!valid) break;
 
       uint64_t m = (valid == 64) ? ~0ull : ((1ull << valid) - 1);
       uint64_t blk = ack_mask[word] & m;
       if (blk != m) {
-        uint64_t inv2 = (~blk) & m;  // guaranteed nonzero if blk != m
-        // still call the safe helper to be future-proof
-        return base + (size_t)ctz64_nonzero(inv2);
+        uint64_t inv2 = (~blk) & m;
+        return base + __builtin_ctzll(inv2);
       }
     }
     return Capacity;
   }
 
   inline void clear_acked_range(size_t start, size_t end) noexcept {
-    // Allow end == Capacity (we clear up to but not including 'end')
-    assert(start <= Capacity && "clear_acked_range: start out of range");
-    assert(end <= Capacity && "clear_acked_range: end out of range");
     if (start >= end) return;
     if (start >= Capacity) return;
+    assert(end <= Capacity);
 
     size_t start_word = start >> 6;
     size_t end_word = (end - 1) >> 6;
-
     if (start_word == end_word) {
-      size_t width = end - start;  // 1..64
-      uint64_t right = (width == 64) ? ~0ull : ((1ull << width) - 1);
-      uint64_t mask = (right << (start & 63));
+      uint64_t mask = ((~0ull >> (64 - (end - start))) << (start & 63));
       ack_mask[start_word] &= ~mask;
       return;
     }
-
-    // head partial
     if (start & 63) {
       ack_mask[start_word] &= ~((~0ull) << (start & 63));
       ++start_word;
     }
-    // middle full words
     for (size_t w = start_word; w < end_word; ++w) ack_mask[w] = 0;
-
-    // tail partial (if end not aligned) else clear entire last word
     if ((end & 63) != 0) {
       uint64_t mask = (~0ull) >> (64 - (end & 63));
       ack_mask[end_word] &= ~mask;
@@ -210,14 +177,16 @@ struct alignas(128) RingBuffer {
   inline uint64_t advance_tail_from_mask() noexcept {
     size_t local = (size_t)(tail % Capacity);
 
-    // [local, Capacity)
+    // First pass: [local, Capacity)
     size_t next0 = next_unacked(local);
     if (next0 == Capacity) {
-      // all acked to end; wrap
+      // Everything from local..end is acked; maybe we can wrap
       if (local != 0) {
+        // Consume [local, Capacity)
         clear_acked_range(local, Capacity);
         tail += (Capacity - local);
 
+        // Second pass: [0, new_local)
         size_t wrap0 = next_unacked(0);
         if (wrap0 > 0 && wrap0 <= local) {
           clear_acked_range(0, wrap0);
@@ -225,11 +194,12 @@ struct alignas(128) RingBuffer {
         }
       }
     } else if (next0 > local) {
+      // Consume [local, next0)
       clear_acked_range(local, next0);
       tail += (next0 - local);
     }
 
-    // publish
+    // Publish with release semantics
     cpu_volatile_store_tail(tail);
     return tail;
   }
