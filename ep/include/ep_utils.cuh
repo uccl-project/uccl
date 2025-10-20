@@ -7,9 +7,6 @@
 #define __syncwarp() __builtin_amdgcn_wave_barrier()
 #define clock wall_clock
 
-// for better performance
-// #define DISABLE_AGGRESSIVE_HIP_ATOMIC
-
 #ifndef DISABLE_AGGRESSIVE_ATOMIC
 #define HIP_ATOMIC_LOAD(ptr, order, scope) __builtin_nontemporal_load((ptr))
 #define HIP_ATOMIC_STORE(val, ptr, order, scope) \
@@ -660,13 +657,21 @@ __device__ __forceinline__ void st_release_cta(int const* ptr, int val) {
 #endif
 }
 
-__device__ inline void sync_barrier(int barrier_id, int num_threads) {
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+__device__ inline void shmem_sync_barrier(int UNUSED, int num_threads) {
+  EP_DEVICE_ASSERT(num_threads % WARP_SIZE == 0);
   if (num_threads <= WARP_SIZE) {
     __syncwarp();
   } else {
-    __syncthreads();
+    __threadfence_block();
+    __builtin_amdgcn_s_barrier();
   }
+}
+#endif
+
+__device__ inline void sync_barrier(int barrier_id, int num_threads) {
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  shmem_sync_barrier(barrier_id, num_threads);
 #else
   asm volatile("bar.sync %0, %1;" : : "r"(barrier_id), "r"(num_threads));
 #endif
@@ -674,11 +679,7 @@ __device__ inline void sync_barrier(int barrier_id, int num_threads) {
 
 __device__ inline void sync_barrier_1(int num_threads) {
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  if (num_threads <= WARP_SIZE) {
-    __syncwarp();
-  } else {
-    __syncthreads();
-  }
+  shmem_sync_barrier(0, num_threads);
 #else
   asm volatile("bar.sync 1, %0;" ::"r"(num_threads));
 #endif

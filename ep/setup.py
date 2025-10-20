@@ -11,7 +11,7 @@ from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 PROJECT_ROOT = Path(os.path.dirname(__file__)).resolve()
 
 if __name__ == '__main__':
-    
+
     cxx_flags = ['-O3', '-Wno-deprecated-declarations', '-Wno-unused-variable',
                  '-Wno-sign-compare', '-Wno-reorder', '-Wno-attributes']
     nvcc_flags = ['-O3', '-Xcompiler', '-O3']
@@ -21,7 +21,7 @@ if __name__ == '__main__':
     library_dirs = []
     nvcc_dlink = []
     extra_link_args = []
-    
+
     if torch.version.cuda:
         if int(os.getenv('DISABLE_SM90_FEATURES', 0)):
             # Prefer A100
@@ -40,12 +40,16 @@ if __name__ == '__main__':
             # CUDA 12 flags
             nvcc_flags.extend(
                 ['-rdc=true', '--ptxas-options=--register-usage-level=10'])
-            
+
         device_arch = os.environ['TORCH_CUDA_ARCH_LIST']
     else:
         # Disable SM90 features on AMD
         cxx_flags.append('-DDISABLE_SM90_FEATURES')
         nvcc_flags.append('-DDISABLE_SM90_FEATURES')
+
+        cxx_flags.append('-DDISABLE_AGGRESSIVE_ATOMIC')
+        nvcc_flags.append('-DDISABLE_AGGRESSIVE_ATOMIC')
+
         device_arch = os.getenv('TORCH_CUDA_ARCH_LIST', "gfx942")
         os.environ["PYTORCH_ROCM_ARCH"] = device_arch
 

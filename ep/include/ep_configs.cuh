@@ -59,6 +59,8 @@
 #define __NV_E4M3 __HIP_E4M3_FNUZ
 #define WARP_SIZE 64
 #define WARP_MASK 0xffffffffffffffff
+#define MAX_NTHREADS 1024
+#define MAX_GROUPS (MAX_NTHREADS/WARP_SIZE)
 
 #else
 #include <cuda_bf16.h>

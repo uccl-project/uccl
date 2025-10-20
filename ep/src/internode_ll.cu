@@ -103,7 +103,11 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   // 1. The first-kind warps for FP8 cast and sending top-k tokens
   // 2. The last warp for reading `topk_idx` and count for per-expert
   // information
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  if (warp_id < num_warps) {
+#else
   if (warp_id < num_warps - 1) {
+#endif
     constexpr int kNumElemsPerRead = sizeof(int4) / sizeof(nv_bfloat16);
     EP_STATIC_ASSERT(kHidden % (WARP_SIZE * kNumElemsPerRead) == 0,
                      "Invalid hidden");
@@ -223,7 +227,12 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                      : 0;
       }
     }
-  } else if (warp_id == num_warps - 1) {
+  }
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  if (warp_id == num_warps - 1) {
+#else
+  else if (warp_id == num_warps - 1) {
+#endif
     // NOTE(MaoZiming): These checks are ibgda specific.
     EP_DEVICE_ASSERT(num_sms > 1);
     if (sm_id == 0) {

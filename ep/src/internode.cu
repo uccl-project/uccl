@@ -88,7 +88,7 @@ __forceinline__ __device__ int translate_dst_rdma_rank(int const dst_rdma_rank,
   return kLowLatencyMode ? (dst_rdma_rank * NUM_MAX_NVL_PEERS + nvl_rank)
                          : dst_rdma_rank * NUM_MAX_NVL_PEERS;
 }
-#if 0
+#if __CUDA_ARCH__
 template <bool kLowLatencyMode, int kNumRDMARanks>
 __global__ void notify_dispatch(
     int const* num_tokens_per_rank, int* moe_recv_counter_mapped, int num_ranks,
