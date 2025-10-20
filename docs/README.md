@@ -24,8 +24,10 @@ source ~/miniconda3/bin/activate
 source ~/.bashrc # or .zshrc and others
 conda init
 
-# Install python ssh lib into conda-default base env
+# Install python ssh lib
 pip install paramiko pybind11
+# Upgrade conda glic to modern ones
+conda install -c conda-forge "libstdcxx-ng>=12" "libgcc-ng>=12"
 ```
 </details>
 
