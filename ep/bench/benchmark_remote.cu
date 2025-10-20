@@ -1,5 +1,5 @@
 #include "bench_utils.hpp"
-#include "gpu_kernel.cuh"
+#include "bench_kernel.cuh"
 #include "peer_copy_worker.hpp"
 #include "proxy.hpp"
 #include "rdma.hpp"

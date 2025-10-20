@@ -6,16 +6,14 @@
 #include "ep_proxy_registry.hpp"
 #include "ep_runtime.cuh"
 #include "ep_util.hpp"
+#include "bench_kernel.cuh"
 #include "internode.cuh"
 #include "internode_ll.cuh"
 #include "intranode.cuh"
 #include "layout.hpp"
 #include "peer_copy_manager.hpp"
-#include "py_cuda_shims.hpp"
 #include "ring_buffer.cuh"
 #include "uccl_bench.hpp"
-#include "uccl_bench_fifo.hpp"
-#include "uccl_fifo_proxy.hpp"
 #include "uccl_proxy.hpp"
 #include <ATen/cuda/CUDAContext.h>
 #include <ATen/cuda/CUDADataType.h>
