@@ -1,5 +1,5 @@
+#include "bench_kernel.cuh"
 #include "bench_utils.hpp"
-#include "gpu_kernel.cuh"
 #include "proxy.hpp"
 #include <thread>
 

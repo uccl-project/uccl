@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-UCCL GPU-driven benchmark (Python) — Remote-only (torchrun)
+UCCL GPU-driven benchmark (Python) — Remote-only with FIFO (torchrun)
 
 Usage
 -----
 # Node 0
 torchrun --nnodes=2 --nproc_per_node=1 --node_rank=0 \
   --master_addr=10.141.1.1 --master_port=12356 \
-  bench/benchmark_remote.py
+  bench/benchmark_remote_fifo.py
 
 # Node 1
 torchrun --nnodes=2 --nproc_per_node=1 --node_rank=1 \
   --master_addr=10.141.1.1 --master_port=12356 \
-  bench/benchmark_remote.py
+  bench/benchmark_remote_fifo.py
 """
 
 import argparse
@@ -32,8 +32,8 @@ except ImportError as exc:
 from utils import init_dist, get_peer_ip, detect_ib_hca, get_cpu_proxies_meta
 
 
-def make_proxies(
-    bench: ep.Bench,
+def make_fifo_proxies(
+    bench: ep.BenchFifo,
     buf_addr: int,
     total_size: int,
     rank: int,
@@ -42,13 +42,18 @@ def make_proxies(
     peer_ip: str,
     mode: str,
     peers_meta_list=None,
-) -> List[ep.Proxy]:
+) -> List[ep.FifoProxy]:
+    """Create FIFO-based proxies instead of ring buffer proxies"""
     env = bench.env_info()
     num_blocks = int(env.blocks)
-    proxies: List[ep.Proxy] = []
+    proxies: List[ep.FifoProxy] = []
+
     for i in range(num_blocks):
-        rb_i = bench.ring_addr(i)
-        p = ep.Proxy(
+        # Get the FIFO for this block
+        fifo = bench.get_fifo(i)
+
+        # Create FIFO proxy
+        p = ep.FifoProxy(
             thread_idx=i,
             gpu_buffer_addr=buf_addr,
             total_size=total_size,
@@ -57,10 +62,16 @@ def make_proxies(
             local_rank=local_rank,
             peer_ip=peer_ip or "",
         )
+
+        # Set the FIFO for this proxy
+        p.set_fifo(fifo)
+
         if peers_meta_list is not None:
             p.set_peers_meta(peers_meta_list)
-        p.set_bench_ring_addrs([rb_i])
+
         proxies.append(p)
+
+    # Start proxies based on mode
     for p in proxies:
         if mode == "sender":
             p.start_sender()
@@ -68,6 +79,7 @@ def make_proxies(
             p.start_remote()
         else:
             raise ValueError(f"Unknown mode: {mode}")
+
     return proxies
 
 
@@ -87,14 +99,15 @@ def run_rank0_sender(
         flush=True,
     )
 
-    bench = ep.Bench()
+    bench = ep.BenchFifo()
     env = bench.env_info()
     print(
         f"[rank 0] peer={peer_ip} blocks={int(env.blocks)} "
-        f"tpb={int(env.threads_per_block)} iters={int(env.iterations)}",
+        f"tpb={int(env.threads_per_block)} iters={int(env.iterations)} (FIFO mode)",
         flush=True,
     )
-    proxies = make_proxies(
+
+    proxies = make_fifo_proxies(
         bench,
         buf_addr,
         nbytes,
@@ -105,6 +118,7 @@ def run_rank0_sender(
         mode="sender",
         peers_meta_list=peers_meta_list,
     )
+
     bench.launch_gpu_issue_batched_commands()
     try:
         bench.sync_stream_interruptible(poll_ms=5, timeout_ms=5000)
@@ -115,10 +129,13 @@ def run_rank0_sender(
 
     try:
         for p in proxies:
-            print(f"Proxy {p.thread_idx} avg_wr_latency_us: {p.avg_wr_latency_us()} µs")
+            print(
+                f"FifoProxy {p.thread_idx} avg_wr_latency_us: {p.avg_wr_latency_us()} µs"
+            )
+            print(f"FifoProxy {p.thread_idx} processed_count: {p.processed_count()}")
             p.stop()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Error stopping proxies: {e}")
 
     bench.print_block_latencies()
     stats = bench.compute_stats()
@@ -137,9 +154,11 @@ def run_rank1_remote(
 ):
     dev = torch.cuda.current_device()
     ep.set_device(dev)
-    bench = ep.Bench()
+    bench = ep.BenchFifo()
     env = bench.env_info()
-    proxies = make_proxies(
+    print(f"[rank 1] Starting remote mode with {int(env.blocks)} FIFOs", flush=True)
+
+    proxies = make_fifo_proxies(
         bench,
         buf_addr,
         nbytes,
@@ -150,17 +169,22 @@ def run_rank1_remote(
         mode="remote",
         peers_meta_list=peers_meta_list,
     )
+
     device_index = int(os.environ.get("LOCAL_RANK", "0"))
     workers = ep.PeerCopyManager(src_device=device_index)
-    workers.start_for_proxies(proxies)
-    print("[rank 1] PeerCopyManager started.", flush=True)
+
+    print("[rank 1] FifoProxies started.", flush=True)
     time.sleep(5)
+
     try:
         workers.stop()
     except Exception:
         pass
     try:
         for p in proxies:
+            print(
+                f"[rank 1] FifoProxy {p.thread_idx} processed {p.processed_count()} entries"
+            )
             p.stop()
     except Exception:
         pass
@@ -168,7 +192,7 @@ def run_rank1_remote(
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="UCCL GPU-driven benchmark (remote-only, torchrun)"
+        description="UCCL GPU-driven benchmark (remote-only, FIFO mode, torchrun)"
     )
     p.add_argument("--size-mb", type=int, default=256, help="Total buffer size in MiB")
     return p.parse_args()
@@ -239,4 +263,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    print("Test completed.", flush=True)
+    print("FIFO benchmark completed.", flush=True)

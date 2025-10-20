@@ -34,12 +34,11 @@ LIBS += -L$(CUDA_PATH)/lib64
 
 # Source files
 SRC_CU := launch_kernel_shim.cu
-SRC_CPP := benchmark_fifo.cpp ../../src/fifo.cc
+SRC_CPP := benchmark_fifo.cpp ../../src/fifo.cpp
 
 # Object files
 OBJ_CU := $(SRC_CU:.cu=.o)
-OBJ_CPP := $(SRC_CPP:.cc=.o)
-OBJ_CPP := $(OBJ_CPP:.cpp=.o)
+OBJ_CPP := $(SRC_CPP:.cpp=.o)
 
 # ===============================================================================
 # Build Rules
@@ -64,7 +63,7 @@ $(TARGET): $(OBJ_CU) $(OBJ_CPP)
 	$(CXX) $(CXX_FLAGS) $(INCLUDES) -c $< -o $@
 
 # C++ compilation rule for ep/src files
-../../src/%.o: ../../src/%.cc
+../../src/%.o: ../../src/%.cpp
 	@echo "Compiling C++: $<"
 	$(CXX) $(CXX_FLAGS) $(INCLUDES) -c $< -o $@
 
