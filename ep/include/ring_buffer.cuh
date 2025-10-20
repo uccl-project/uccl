@@ -354,7 +354,7 @@ struct alignas(128) RingBuffer {
     while (prevHead >= capacity + tail_snap) {
       if ((++spins & 0x3F) == 0) tail_snap = ld_volatile(&tail);
 #if defined(__HIP_DEVICE_COMPILE__)
-        __builtin_amdgcn_s_sleep(8);
+      __builtin_amdgcn_s_sleep(8);
 #else
       __nanosleep(64);
 #endif
