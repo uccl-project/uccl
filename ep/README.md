@@ -14,6 +14,56 @@ Alternatively, in a Python environment
 ```bash
 make -j install
 ```
+
+## Build on ROCm for testing
+
+build rocm image
+```bash
+bash build.sh rocm all 3.10
+```
+
+start docker container
+```bash
+docker run -d \
+    --name dev_uccl-builder-rocm \
+    --ipc=host \
+    --network=host \
+    --device=/dev/kfd \
+    --device=/dev/dri \
+    --device=/dev/infiniband \
+    --cap-add=SYS_PTRACE \
+    --cap-add=CAP_SYS_ADMIN \
+    --security-opt seccomp=unconfined \
+    --group-add video \
+    --privileged \
+    -v "$PWD":/workspace/uccl \
+    -w "/workspace/uccl" \
+    uccl-builder-rocm sleep infinity
+```
+build ep
+```bash
+docker exec -it dev_uccl-builder-rocm /bin/bash
+
+cd ep
+bash install_deps.sh base
+
+python3 setup.py build
+mkdir -p uccl/lib
+cp ep/build/**/*.so uccl/
+```
+
+build uccl for develop
+
+```bash
+cd /workspace/uccl
+python3 setup.py develop
+```
+
+test import uccl.ep
+```bash
+python3 -c "import torch;import uccl.ep"
+```
+
 ## Example APIs
 
 Dispatch and combine: 
