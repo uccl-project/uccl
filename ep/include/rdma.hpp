@@ -67,93 +67,108 @@ struct ImmType {
 
 class AtomicsImm {
  public:
-  // Bit layout (updated):
-  // [31]     is_atomics  (1 bit)
-  // [30]     is_combine  (1 bit)
-  // [29]     buffer_idx  (1 bit)
-  // [28:13]  v16         (16 bits, signed, range [-32768, 32767])
-  // [12:0]   off13       (13 bits, unsigned, < 8192)
+  // Bit layout (final):
+  // [31]     is_atomics  (1)
+  // [30]     is_combine  (1)     // reused as seq[3] in PackAtomicWithSeq
+  // [29]     buffer_idx  (1)     // reused as seq[2] in PackAtomicWithSeq
+  // [28]     reorderable (1)     // NEW: dedicated bit
+  // [27:13]  v15         (15 bits, signed, [-16384, 16383])
+  // [12:0]   off13       (13 bits, must be < 8192; low 2 bits carry seq[1:0]
+  // when used)
   constexpr static int kOFF = 0;
-  constexpr static int kV16 = 13;
+  constexpr static int kV = 13;  // shift for value field
+  constexpr static int kREORDERABLE = 28;
   constexpr static int kBUFFER_IDX = 29;
   constexpr static int kIS_COMBINE = 30;
   constexpr static int kIS_ATOMICS = 31;
 
   constexpr static uint32_t kOFF_MASK = 0x1FFF;  // 13 bits
-  constexpr static uint32_t kV16_MASK = 0xFFFF;  // 16 bits
+  constexpr static int kV_BITS = 15;
+  constexpr static uint32_t kV_MASK = (1u << kV_BITS) - 1;  // 0x7FFF
 
   AtomicsImm(uint32_t imm_data = 0) : imm_data_(imm_data) {}
 
-  static AtomicsImm Pack(bool is_atomics, bool is_combine, int v16,
-                         uint16_t off13, int buffer_idx) {
-    constexpr uint32_t kIS_ATOMICS_MASK = 0x1u;
-    constexpr uint32_t kIS_COMBINE_MASK = 0x1u;
-    constexpr uint32_t kBUFFER_IDX_MASK = 0x1u;
+  inline bool IsAtomics() const { return (imm_data_ >> kIS_ATOMICS) & 0x1u; }
+  inline bool IsCombine() const { return (imm_data_ >> kIS_COMBINE) & 0x1u; }
+  inline int GetBufferIdx() const { return (imm_data_ >> kBUFFER_IDX) & 0x1u; }
+  inline bool IsReorderable() const {
+    return (imm_data_ >> kREORDERABLE) & 0x1u;
+  }
+  inline uint16_t GetOff() const { return imm_data_ & kOFF_MASK; }
 
-    if (is_atomics & ~kIS_ATOMICS_MASK) {
+  inline int GetValue() const {
+    // sign-extend 15 bits located at [27:13]
+    int32_t x = static_cast<int32_t>(imm_data_);
+    return (x << 4) >> (4 + kV);  // == (x << 4) >> 17
+  }
+
+  static AtomicsImm Pack(bool is_atomics, bool is_combine, int v15,
+                         uint16_t off13, int buffer_idx,
+                         bool reorderable = false) {
+    // range checks
+    if (v15 < -(1 << (kV_BITS - 1)) || v15 > ((1 << (kV_BITS - 1)) - 1)) {
       fprintf(stderr,
-              "[AtomicsImm::Pack] is_atomics overflow: value=%d (mask=0x%X)\n",
-              is_atomics, kIS_ATOMICS_MASK);
-      assert(false && "is_atomics overflow");
+              "[AtomicsImm::Pack] v15 overflow: value=%d (expected in "
+              "[-16384,16383])\n",
+              v15);
+      assert(false && "v15 overflow 15 bits");
     }
-    if (is_combine & ~kIS_COMBINE_MASK) {
-      fprintf(stderr,
-              "[AtomicsImm::Pack] is_combine overflow: value=%d (mask=0x%X)\n",
-              is_combine, kIS_COMBINE_MASK);
-      assert(false && "is_combine overflow");
-    }
-    if (buffer_idx & ~kBUFFER_IDX_MASK) {
-      fprintf(stderr,
-              "[AtomicsImm::Pack] buffer_idx overflow: value=%d (mask=0x%X)\n",
-              buffer_idx, kBUFFER_IDX_MASK);
-      assert(false && "buffer_idx overflow");
-    }
-    if (v16 < -32768 || v16 > 32767) {
-      fprintf(stderr,
-              "[AtomicsImm::Pack] v16 overflow: value=%d (expected in [-32768, "
-              "32767])\n",
-              v16);
-      assert(false && "v16 overflow 16 bits");
-    }
-    if (off13 > 0x1FFF) {
+    if (off13 > kOFF_MASK) {
       fprintf(
           stderr,
           "[AtomicsImm::Pack] off13 overflow: value=%u (expected <= 8191)\n",
           off13);
       assert(false && "off13 overflow 13 bits");
     }
+    if ((buffer_idx & ~0x1) != 0) {
+      fprintf(stderr,
+              "[AtomicsImm::Pack] buffer_idx overflow: value=%d (mask=0x1)\n",
+              buffer_idx);
+      assert(false && "buffer_idx overflow");
+    }
 
-    uint32_t vfield = static_cast<uint32_t>(v16) & kV16_MASK;
-    uint32_t imm = (static_cast<uint32_t>(is_atomics) << kIS_ATOMICS) |
-                   (static_cast<uint32_t>(is_combine) << kIS_COMBINE) |
-                   ((buffer_idx & 0x1u) << kBUFFER_IDX) | (vfield << kV16) |
-                   (off13 & kOFF_MASK);
+    uint32_t vfield = static_cast<uint32_t>(v15) & kV_MASK;
+    uint32_t imm = 0;
+    imm |= (static_cast<uint32_t>(is_atomics) & 0x1u) << kIS_ATOMICS;
+    imm |= (static_cast<uint32_t>(is_combine) & 0x1u) << kIS_COMBINE;
+    imm |= (static_cast<uint32_t>(buffer_idx) & 0x1u) << kBUFFER_IDX;
+    imm |= (static_cast<uint32_t>(reorderable) & 0x1u) << kREORDERABLE;
+    imm |= (vfield << kV);
+    imm |= (off13 & kOFF_MASK);
     return AtomicsImm(imm);
   }
 
-  inline bool IsAtomics() const { return (imm_data_ >> kIS_ATOMICS) & 0x1u; }
-  inline bool IsCombine() const { return (imm_data_ >> kIS_COMBINE) & 0x1u; }
-  inline int GetBufferIdx() const { return (imm_data_ >> kBUFFER_IDX) & 0x1u; }
-  inline uint16_t GetOff() const { return imm_data_ & kOFF_MASK; }
-
-  inline int GetValue() const {
-    // 16-bit signed extract from bits [28:13]
-    return (static_cast<int32_t>(imm_data_) << 3) >> 16;
+  static AtomicsImm PackAtomic(int v15, uint16_t off_aligned_bytes) {
+    assert((off_aligned_bytes & 0x3u) == 0);
+    return Pack(/*is_atomics=*/true, /*is_combine=*/false, v15,
+                static_cast<uint16_t>(off_aligned_bytes & kOFF_MASK),
+                /*buffer_idx=*/0, /*reorderable=*/false);
   }
 
-  inline void SetAtomics(bool is_atomics) {
-    imm_data_ |= (static_cast<uint32_t>(is_atomics) & 0x1u) << kIS_ATOMICS;
+  inline uint8_t GetSeq() const {
+    // low 2 bits of off13 + bits 29–30 -> 4-bit seq
+    uint8_t seq = static_cast<uint8_t>(imm_data_ & 0x3u);
+    seq |= static_cast<uint8_t>(((imm_data_ >> kBUFFER_IDX) & 0x1u) << 2);
+    seq |= static_cast<uint8_t>(((imm_data_ >> kIS_COMBINE) & 0x1u) << 3);
+    return seq;
   }
-  inline void SetCombine(bool is_combine) {
-    imm_data_ |= (static_cast<uint32_t>(is_combine) & 0x1u) << kIS_COMBINE;
+
+  static AtomicsImm PackAtomicWithSeq(int v15, uint16_t off_aligned_bytes,
+                                      uint8_t seq, bool reorderable = true) {
+    assert((off_aligned_bytes & 0x3u) == 0);
+    assert((seq % kReorderingBufferSize) == seq);
+    uint16_t off13 =
+        static_cast<uint16_t>((off_aligned_bytes & 0x1FFFu) | (seq & 0x3u));
+    int is_combine_as_seq3 = (seq >> 3) & 0x1;
+    int bufidx_as_seq2 = (seq >> 2) & 0x1;
+    return Pack(/*is_atomics=*/true, /*is_combine=*/is_combine_as_seq3, v15,
+                off13, bufidx_as_seq2, reorderable);
   }
-  inline void SetBufferIdx(uint32_t idx) {
-    imm_data_ |= (idx & 0x1u) << kBUFFER_IDX;
-  }
-  inline void SetOff(uint16_t off) { imm_data_ |= (off & kOFF_MASK); }
-  inline void SetV16(int v16) {
-    uint32_t vfield = static_cast<uint32_t>(v16) & kV16_MASK;
-    imm_data_ |= (vfield << kV16);
+
+  // (Optional) safer setters that clear target bits before setting:
+  inline void SetReorderable(bool r) {
+    imm_data_ = (imm_data_ & ~(1u << kREORDERABLE)) |
+                (static_cast<uint32_t>(r) << kREORDERABLE);
   }
 
   inline uint32_t GetImmData() const { return imm_data_; }

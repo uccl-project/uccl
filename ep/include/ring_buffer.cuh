@@ -336,56 +336,61 @@ struct alignas(128) RingBuffer {
     return val;
   }
 
-__host__ __device__ inline bool atomic_set_and_commit(const T& item, uint64_t* out_slot = nullptr) {
-  // Reserve a unique slot (no retry loop)
+  __host__ __device__ inline bool atomic_set_and_commit(
+      const T& item, uint64_t* out_slot = nullptr) {
+    // Reserve a unique slot (no retry loop)
 #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
-  uint64_t prevHead = atomicAdd(reinterpret_cast<unsigned long long*>(&head), 1ULL);
+    uint64_t prevHead =
+        atomicAdd(reinterpret_cast<unsigned long long*>(&head), 1ULL);
 #else
-  uint64_t prevHead = __atomic_fetch_add(&head, 1ULL, __ATOMIC_RELAXED);
+    uint64_t prevHead = __atomic_fetch_add(&head, 1ULL, __ATOMIC_RELAXED);
 #endif
 
-  // Throttle if reservation would overflow ring
+    // Throttle if reservation would overflow ring
 #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
-  // Snapshot to cut PCIe traffic; refresh occasionally
-  uint64_t tail_snap = ld_volatile(&tail);
-  int spins = 0;
-  while (prevHead >= capacity + tail_snap) {
-    if ((++spins & 0x3F) == 0) tail_snap = ld_volatile(&tail);
-    __nanosleep(64);
-  }
+    // Snapshot to cut PCIe traffic; refresh occasionally
+    uint64_t tail_snap = ld_volatile(&tail);
+    int spins = 0;
+    while (prevHead >= capacity + tail_snap) {
+      if ((++spins & 0x3F) == 0) tail_snap = ld_volatile(&tail);
+      __nanosleep(64);
+    }
 #else
-  while (prevHead >= capacity + __atomic_load_n(&tail, __ATOMIC_ACQUIRE)) {
-    cpu_relax();
-  }
+    while (prevHead >= capacity + __atomic_load_n(&tail, __ATOMIC_ACQUIRE)) {
+      cpu_relax();
+    }
 #endif
 
-  // Now it’s safe to write the payload
-  const uint32_t idx = static_cast<uint32_t>(prevHead) & mask();
+    // Now it’s safe to write the payload
+    const uint32_t idx = static_cast<uint32_t>(prevHead) & mask();
 
-  T tmp = item;
-  auto ready_flag = tmp.cmd;     // your “visible when non-zero” flag
-  // tmp.cmd = 0;                   // keep flag clear in the payload copy if you want
-  buf[idx] = tmp;
+    T tmp = item;
+    auto ready_flag = tmp.cmd;  // your “visible when non-zero” flag
+    // tmp.cmd = 0;                   // keep flag clear in the payload copy if
+    // you want
+    buf[idx] = tmp;
 
-  // Single 16B publish of the header (system-scope)
+    // Single 16B publish of the header (system-scope)
 #if defined(__CUDA_ARCH__)
-  #if __CUDA_ARCH__ >= 900
-    asm volatile("st.global.release.sys.v2.u64 [%0], {%1,%2};"
-                 :: "l"(&hdr[idx]), "l"(ready_flag), "l"((uint64_t)idx) : "memory");
-  #else
-    __threadfence_system();
-    asm volatile("st.global.relaxed.sys.v2.u64 [%0], {%1,%2};"
-                 :: "l"( &hdr[idx] ), "l"(ready_flag), "l"((uint64_t)idx) : "memory");
-  #endif
+#if __CUDA_ARCH__ >= 900
+    asm volatile("st.global.release.sys.v2.u64 [%0], {%1,%2};" ::"l"(&hdr[idx]),
+                 "l"(ready_flag), "l"((uint64_t)idx)
+                 : "memory");
 #else
-  std::atomic_thread_fence(std::memory_order_release);
-  __atomic_store_n(&hdr[idx].snd, (uint64_t)idx, __ATOMIC_RELAXED);
-  __atomic_store_n(&hdr[idx].fst, ready_flag, __ATOMIC_RELEASE);
+    __threadfence_system();
+    asm volatile("st.global.relaxed.sys.v2.u64 [%0], {%1,%2};" ::"l"(&hdr[idx]),
+                 "l"(ready_flag), "l"((uint64_t)idx)
+                 : "memory");
+#endif
+#else
+    std::atomic_thread_fence(std::memory_order_release);
+    __atomic_store_n(&hdr[idx].snd, (uint64_t)idx, __ATOMIC_RELAXED);
+    __atomic_store_n(&hdr[idx].fst, ready_flag, __ATOMIC_RELEASE);
 #endif
 
-  if (out_slot) *out_slot = prevHead;
-  return true;
-}
+    if (out_slot) *out_slot = prevHead;
+    return true;
+  }
 };
 
 typedef RingBuffer<TransferCmd, FlowDirection::DeviceToHost, kQueueSize>

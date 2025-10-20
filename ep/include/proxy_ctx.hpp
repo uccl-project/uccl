@@ -122,4 +122,11 @@ struct ProxyCtx {
 
   static constexpr int kNotifyGpuCounter = 5000;
   int notify_gpu_counter = kNotifyGpuCounter;
+
+  std::unordered_map<uint64_t, uint8_t> next_seq_per_index;
+  inline uint64_t seq_key(int dst_rank, size_t index) {
+    // assumes dst_rank fits 32 bits; if index > 32 bits, prefer Pair Hash below
+    return (static_cast<uint64_t>(static_cast<uint32_t>(dst_rank)) << 32) ^
+           static_cast<uint64_t>(static_cast<uint32_t>(index));
+  }
 };

@@ -776,10 +776,26 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
             fprintf(stderr, "[EFA] atomic value=%d won't fit in 15 bits\n", v);
             std::abort();
           }
+          size_t index = static_cast<size_t>(cmd.atomic_offset / sizeof(int));
+          // Initialize missing entries lazily
+          auto key = ctx->seq_key(dst_rank, index);
+          if (ctx->next_seq_per_index.find(key) ==
+              ctx->next_seq_per_index.end())
+            ctx->next_seq_per_index[key] = 0;
+
+          uint8_t seq = ctx->next_seq_per_index[key];
+          ctx->next_seq_per_index[key] =
+              (seq + 1) % kReorderingBufferSize;  // 4-bit wrap (0–15)
+
+          // printf("[EFA] Posting atomic write: val=%d offset=%zu index=%zu
+          // seq=%u, ring_idx_raw=%zu\n",
+          //         v, cmd.atomic_offset, index, seq, ring_idx_raw);
           uint32_t imm =
-              AtomicsImm::Pack(true, false, cmd.atomic_val, cmd.atomic_offset,
-                               cmd.low_latency_buffer_idx)
+              AtomicsImm::PackAtomicWithSeq(v, cmd.atomic_offset, seq, true)
                   .GetImmData();
+          AtomicsImm aimm(imm);
+          assert(aimm.GetSeq() == seq);
+
           ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
         } else if (j + 1 == idxs.size()) {
           uint32_t imm =
@@ -1498,7 +1514,70 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
 #endif
 #endif
       if (value == kMaxSendAtomicValue) value = kLargeAtomicValue;
-      addr32->fetch_add(value, std::memory_order_release);
+
+      if (!aimm.IsReorderable()) {
+        addr32->fetch_add(value, std::memory_order_release);
+      } else {
+        struct SeqBuf {
+          uint8_t expected = 0;       // next seq expected
+          uint16_t present_mask = 0;  // bitmask of buffered seqs
+          int vals[kReorderingBufferSize] = {0};
+        };
+
+        // Thread-local map to maintain per-index state
+        static thread_local std::unordered_map<size_t, SeqBuf> seqbufs;
+        auto& sb = seqbufs[index];
+
+        auto commit = [&](int delta) {
+          addr32->fetch_add(delta, std::memory_order_release);
+        };
+        uint8_t seq = aimm.GetSeq();
+        if (seq >= kReorderingBufferSize) {
+          fprintf(stderr, "Error: seq %u out of range\n", seq);
+          std::abort();
+        }
+        if (seq == sb.expected) {
+          // if (my_rank % MAX_NUM_GPUS == 0)
+          //   printf("seq: %u in order, applying immediately\n", seq);
+          // Apply immediately
+          commit(value);
+          sb.expected = (sb.expected + 1) % kReorderingBufferSize;
+
+          // Drain buffered consecutive entries
+          for (int step = 0; step < kReorderingBufferSize; ++step) {
+            uint8_t e = sb.expected;
+            uint16_t bit = static_cast<uint16_t>(1u << e);
+            if (!(sb.present_mask & bit)) break;
+            commit(sb.vals[e]);
+            sb.present_mask &= static_cast<uint16_t>(~bit);
+            sb.expected = (sb.expected + 1) % kReorderingBufferSize;
+          }
+        } else {
+          // Out-of-order arrival — buffer it
+          if (seq >= kReorderingBufferSize) {
+            fprintf(stderr, "Error: seq %u out of range\n", seq);
+            std::abort();
+          }
+          // if (my_rank % MAX_NUM_GPUS == 0)
+          //   printf("seq: %u out of order (expected %u), buffering\n", seq,
+          //         sb.expected);
+
+          if (sb.present_mask & (1u << seq)) {
+            fprintf(stderr, "Error: duplicate seq %u arrival\n", seq);
+            std::abort();
+          }
+          uint16_t bit = static_cast<uint16_t>(1u << seq);
+          if (sb.present_mask & bit) {
+            // Duplicate (possible with UD/SRD). Ignore safely.
+            // If you prefer strictness, keep the abort here.
+            fprintf(stderr, "Error: duplicate seq %u arrival\n", seq);
+            std::abort();
+          } else {
+            sb.present_mask |= bit;
+            sb.vals[seq] = value;
+          }
+        }
+      }
 #endif
     } else if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
                ImmType::IsBarrier(ntohl(cqe.imm_data))) {
@@ -1815,9 +1894,7 @@ void post_atomic_operations(ProxyCtx& S,
           std::abort();
         }
 
-        uint32_t imm = AtomicsImm::Pack(true, cmd.is_combine, v, offset,
-                                        low_latency_buffer_idx)
-                           .GetImmData();
+        uint32_t imm = AtomicsImm::PackAtomic(v, offset).GetImmData();
 
         qpx->wr_id = kAtomicWrTag | (wr_id & kAtomicMask);
         qpx->comp_mask = 0;

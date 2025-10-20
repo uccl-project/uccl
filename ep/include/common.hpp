@@ -37,7 +37,7 @@
 #define kQueueSize 1024
 #define kQueueMask (kQueueSize - 1)
 #ifdef EFA
-#define kMaxInflight 3
+#define kMaxInflight 8
 #else
 #define kMaxInflight 32
 #endif
@@ -51,6 +51,9 @@
 #define kSenderAckQueueDepth 2048 * 2
 #define kWarmupOps 10000
 #define kRingsPerProxy 8
+// TODO(MaoZiming): I tried to fit more bits, but this eats into offset and
+// values.
+#define kReorderingBufferSize 16  // Right now only 4 bits.
 #define kRemoteBufferSize (kBatchSize * kNumThBlocks * kObjectSize * 100)
 #define MAIN_THREAD_CPU_IDX 31
 #define MAX_NUM_GPUS 8
@@ -68,7 +71,7 @@
 #define QKEY 0x11111111u
 // #define kLargeAtomicValue 33554352
 #define kLargeAtomicValue 33550000
-#define kMaxSendAtomicValue 32767
+#define kMaxSendAtomicValue 16383
 // P2P enable flags (once per GPU pair)
 extern std::once_flag peer_ok_flag[MAX_NUM_GPUS][MAX_NUM_GPUS];
 bool pin_thread_to_cpu(int cpu);
