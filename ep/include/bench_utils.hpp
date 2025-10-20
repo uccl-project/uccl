@@ -33,6 +33,7 @@ inline void init_env(BenchEnv& env, int blocks = kNumThBlocks,
       gpuHostAllocMapped));
 #endif
   for (int i = 0; i < blocks; ++i) {
+    new (&env.rbs[i]) DeviceToHostCmdBuffer();
     env.rbs[i].head = 0;
     env.rbs[i].tail = 0;
 #ifdef MEASURE_PER_OP_LATENCY

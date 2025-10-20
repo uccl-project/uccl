@@ -84,11 +84,6 @@ struct alignas(128) RingBuffer {
   uint64_t head = 0;
   uint64_t tail = 0;
   T buf[Capacity];
-  // 16B publish header (CPU polls here). Must be 16B aligned.
-  struct alignas(16) Header128 {
-    uint64_t fst, snd;
-  };
-  Header128 hdr[Capacity] = {};
   uint64_t cycle_accum = 0;
   uint64_t op_count = 0;
   uint64_t cycle_start = 0;
@@ -98,20 +93,22 @@ struct alignas(128) RingBuffer {
   static constexpr size_t kNumWords = (Capacity + 63) / 64;
   uint64_t ack_mask[kNumWords] = {};
   static constexpr int kFenceBatch = 8;
-
   inline void mark_acked(size_t idx) noexcept {
+    assert(idx < Capacity && "mark_acked: idx out of range");
     const size_t word = idx >> 6;  // idx / 64
     const size_t bit = idx & 63;   // idx % 64
     ack_mask[word] |= (1ull << bit);
   }
 
   inline void clear_acked(size_t idx) noexcept {
+    assert(idx < Capacity && "clear_acked: idx out of range");
     const size_t word = idx >> 6;
     const size_t bit = idx & 63;
     ack_mask[word] &= ~(1ull << bit);
   }
 
   inline bool is_acked(size_t idx) const noexcept {
+    assert(idx < Capacity && "is_acked: idx out of range");
     const size_t word = idx >> 6;
     const size_t bit = idx & 63;
     return (ack_mask[word] >> bit) & 1ull;
@@ -120,11 +117,9 @@ struct alignas(128) RingBuffer {
   // Return next index >= start_idx whose bit is UNSET (0)
   inline size_t next_unacked(size_t start_idx) const noexcept {
     if (start_idx >= Capacity) return Capacity;
-
     size_t word = start_idx >> 6;
     size_t bit = start_idx & 63;
 
-    // How many valid bits remain in [start_idx, Capacity)
     size_t remaining = Capacity - start_idx;
     size_t span = remaining < (64 - bit) ? remaining : (64 - bit);
 
@@ -151,7 +146,7 @@ struct alignas(128) RingBuffer {
         return base + __builtin_ctzll(inv2);
       }
     }
-    return Capacity;  // all set up to Capacity
+    return Capacity;
   }
 
   inline void clear_acked_range(size_t start, size_t end) noexcept {
@@ -226,13 +221,13 @@ struct alignas(128) RingBuffer {
   }
 
   inline uint64_t volatile_load_cmd(int idx) const {
-    return __atomic_load_n(&hdr[idx & mask()].fst, __ATOMIC_ACQUIRE);
+    return __atomic_load_n(&buf[idx & mask()].cmd, __ATOMIC_ACQUIRE);
   }
 
   inline T& load_cmd_entry(int idx) { return buf[idx & mask()]; }
 
   inline void volatile_store_cmd(int idx, uint64_t val) {
-    __atomic_store_n(&hdr[idx & mask()].fst, val, __ATOMIC_RELEASE);
+    __atomic_store_n(&buf[idx & mask()].cmd, val, __ATOMIC_RELEASE);
   }
 
   __host__ __device__ static constexpr uint32_t mask() { return Capacity - 1; }
@@ -338,57 +333,55 @@ struct alignas(128) RingBuffer {
 
   __host__ __device__ inline bool atomic_set_and_commit(
       const T& item, uint64_t* out_slot = nullptr) {
-    // Reserve a unique slot (no retry loop)
+    uint64_t slot;
+    while (true) {
 #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
-    uint64_t prevHead =
-        atomicAdd(reinterpret_cast<unsigned long long*>(&head), 1ULL);
+      uint64_t h = ld_volatile(&head);
+      uint64_t t = ld_volatile(&tail);
+      if (h - t == Capacity) {
+        __nanosleep(64);
+        continue;
+      }
+      unsigned long long prev =
+          atomicCAS((unsigned long long*)&head, (unsigned long long)h,
+                    (unsigned long long)(h + 1));
+      if (prev == h) {
+        slot = h;
+        break;
+      }
 #else
-    uint64_t prevHead = __atomic_fetch_add(&head, 1ULL, __ATOMIC_RELAXED);
+      uint64_t h = __atomic_load_n(&head, __ATOMIC_RELAXED);
+      uint64_t t = __atomic_load_n(&tail, __ATOMIC_RELAXED);
+      if (h - t == Capacity) {
+        cpu_relax();
+        continue;
+      }
+      uint64_t expected = h;
+      if (__atomic_compare_exchange_n(&head, &expected, h + 1, true,
+                                      __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+        slot = h;
+        break;
+      }
 #endif
-
-    // Throttle if reservation would overflow ring
-#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
-    // Snapshot to cut PCIe traffic; refresh occasionally
-    uint64_t tail_snap = ld_volatile(&tail);
-    int spins = 0;
-    while (prevHead >= capacity + tail_snap) {
-      if ((++spins & 0x3F) == 0) tail_snap = ld_volatile(&tail);
-      __nanosleep(64);
     }
-#else
-    while (prevHead >= capacity + __atomic_load_n(&tail, __ATOMIC_ACQUIRE)) {
-      cpu_relax();
-    }
-#endif
-
-    // Now it’s safe to write the payload
-    const uint32_t idx = static_cast<uint32_t>(prevHead) & mask();
+    uint32_t idx = (uint32_t)slot & mask();
 
     T tmp = item;
-    auto ready_flag = tmp.cmd;  // your “visible when non-zero” flag
-    // tmp.cmd = 0;                   // keep flag clear in the payload copy if
-    // you want
+    auto saved_cmd = tmp.cmd;
+    tmp.cmd = 0;
     buf[idx] = tmp;
 
-    // Single 16B publish of the header (system-scope)
-#if defined(__CUDA_ARCH__)
-#if __CUDA_ARCH__ >= 900
-    asm volatile("st.global.release.sys.v2.u64 [%0], {%1,%2};" ::"l"(&hdr[idx]),
-                 "l"(ready_flag), "l"((uint64_t)idx)
-                 : "memory");
-#else
-    __threadfence_system();
-    asm volatile("st.global.relaxed.sys.v2.u64 [%0], {%1,%2};" ::"l"(&hdr[idx]),
-                 "l"(ready_flag), "l"((uint64_t)idx)
-                 : "memory");
-#endif
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+    if constexpr (Dir == FlowDirection::DeviceToHost)
+      __threadfence_system();
+    else
+      __threadfence();
 #else
     std::atomic_thread_fence(std::memory_order_release);
-    __atomic_store_n(&hdr[idx].snd, (uint64_t)idx, __ATOMIC_RELAXED);
-    __atomic_store_n(&hdr[idx].fst, ready_flag, __ATOMIC_RELEASE);
 #endif
 
-    if (out_slot) *out_slot = prevHead;
+    buf[idx].cmd = saved_cmd;
+    if (out_slot) *out_slot = slot;
     return true;
   }
 };

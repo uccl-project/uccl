@@ -356,8 +356,10 @@ void Proxy::run_remote() {
                             atomic_buffer_ptr_, cfg_.num_ranks,
                             cfg_.num_experts, pending_atomic_updates, cfg_.rank,
                             cfg_.num_nodes);
+#ifdef USE_RECEIVER_BARRIER
     apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
                           cfg_.num_experts, cfg_.num_ranks);
+#endif
   }
 }
 
@@ -408,7 +410,6 @@ void Proxy::run_dual() {
   }
 }
 
-#ifndef FALSE
 void Proxy::notify_gpu_completion(uint64_t& my_tail) {
   if (acked_wrs_.empty()) return;
 
@@ -434,34 +435,6 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
     ring_tails_[rb_idx] = ring_buffer->advance_tail_from_mask();
   }
 }
-#else
-void Proxy::notify_gpu_completion(uint64_t& my_tail) {
-  if (acked_wrs_.empty()) return;
-
-  for (size_t rb_idx = 0; rb_idx < cfg_.ring_buffers.size(); ++rb_idx) {
-    auto* ring_buffer = cfg_.ring_buffers[rb_idx];
-    uint64_t& ring_tail = ring_tails_[rb_idx];
-
-    // Keep advancing tail while current cmd is acked
-    while (true) {
-      uint64_t wr_id = (rb_idx << 32) | (ring_tail & 0xFFFFFFFFull);
-      if (acked_wrs_.find(wr_id) == acked_wrs_.end()) break;
-
-      // Clear the command slot
-      ring_buffer->volatile_store_cmd(ring_tail, 0);
-
-      // Remove from acked_wrs_
-      acked_wrs_.erase(wr_id);
-
-      // Advance tail
-      ring_tail++;
-    }
-
-    // Publish updated tail to GPU
-    ring_buffer->cpu_volatile_store_tail(ring_tail);
-  }
-}
-#endif
 
 void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
   // Multi-ring buffer processing: collect commands from all ring buffers
