@@ -12,9 +12,6 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#define MEASURE_PER_OP_LATENCY
-#define MEASURE_PER_VERB_LATENCY
-
 #ifndef USE_NORMAL_MODE
 #ifndef USE_SENDER_BARRIER
 #ifdef EFA
@@ -28,7 +25,7 @@
 #define kAtomicBufferSize 81960
 #define kQueueSize 1024
 #define kQueueMask (kQueueSize - 1)
-#define kMaxInflight 1
+#define kMaxInflight 32
 #define kBatchSize 32
 #define kIterations 40000
 #define kNumThBlocks 4
@@ -41,6 +38,9 @@
 #define kSenderAckQueueDepth 2048 * 2
 #define kWarmupOps 10000
 #define kRingsPerProxy 8
+// TODO(MaoZiming): I tried to fit more bits, but this eats into offset and
+// values.
+#define kReorderingBufferSize 16  // Right now only 4 bits.
 #define kRemoteBufferSize (kBatchSize * kNumThBlocks * kObjectSize * 100)
 #define MAIN_THREAD_CPU_IDX 31
 #define MAX_NUM_GPUS 8
@@ -58,11 +58,13 @@
 #define QKEY 0x11111111u
 // #define kLargeAtomicValue 33554352
 #define kLargeAtomicValue 33550000
-#define kMaxSendAtomicValue 32767
+#define kMaxSendAtomicValue 16383
 // P2P enable flags (once per GPU pair)
 extern std::once_flag peer_ok_flag[MAX_NUM_GPUS][MAX_NUM_GPUS];
 bool pin_thread_to_cpu(int cpu);
 bool pin_thread_to_numa(int numa_node);
+bool pin_thread_unique(int numa_node, int local_rank, int thread_idx,
+                       int threads_per_rank);
 void cpu_relax();
 int get_num_max_nvl_peers();
 
