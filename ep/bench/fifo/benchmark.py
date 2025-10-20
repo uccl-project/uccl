@@ -9,13 +9,13 @@ parser.add_argument("-r", action="store_true", help="Run random mode")
 args = parser.parse_args()
 
 if args.l:
-    cmd = ["./benchmark_fifo", "-l"]
+    cmd = ["./benchmark", "-l"]
 elif args.b:
-    cmd = ["./benchmark_fifo", "-b"]
+    cmd = ["./benchmark", "-b"]
 elif args.r:
-    cmd = ["./benchmark_fifo", "-r"]
+    cmd = ["./benchmark", "-r"]
 else:
-    cmd = ["./benchmark_fifo"]
+    cmd = ["./benchmark"]
 
 local_rank = int(os.environ["LOCAL_RANK"])
 world_size = int(os.environ["WORLD_SIZE"])

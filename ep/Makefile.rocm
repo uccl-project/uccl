@@ -4,7 +4,7 @@ HIPCC      := $(HIP_HOME)/bin/hipcc
 CONDA_LIB_HOME?=/usr/lib
 
 CXXFLAGS  := -O0 -std=c++17 -Wall -pthread -D__HIP_PLATFORM_AMD__ -I${CONDA_LIB_HOME}/../include
-LDFLAGS   := -lpthread -L${CONDA_LIB_HOME} -lglog -lgflags -lgtest -lz -lelf
+LDFLAGS   := -lpthread -L${CONDA_LIB_HOME} -lglog -lgflags -lgtest -lz -lelf -lnuma
 
 # CXXFLAGS  += -mclwb
 LDFLAGS   += -libverbs -lnl-3 -lnl-route-3
@@ -13,7 +13,7 @@ HIPCCFLAGS := -g -O0 -std=c++17 -D__HIP_PLATFORM_AMD__ --offload-arch=gfx942
 INCLUDES := -Iinclude -I$(HIP_HOME)/include -I/usr/include -I../include
 
 SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp src/peer_copy_worker.cpp
-SRC_CU  := src/gpu_kernel.cu src/peer_copy.cu
+SRC_CU  := src/bench_kernel.cu src/peer_copy.cu
 SRC_LOCAL  := bench/benchmark_local.cu
 SRC_REMOTE := bench/benchmark_remote.cu
 SRC_DUAL	:= bench/benchmark_dual.cu

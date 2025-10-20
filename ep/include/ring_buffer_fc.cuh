@@ -27,7 +27,7 @@ struct ProxyWarpList {
 // Publication Record - each warp has one record
 struct alignas(128) PublicationRecord {
   // Request state
-  volatile uint64_t request_flag;  // 0=empty, 1=has_request, 2=being_processed
+  uint64_t volatile request_flag;  // 0=empty, 1=has_request, 2=being_processed
   TransferCmd cmd;                 // Command to be published
   uint32_t warp_id;                // Source warp ID
 
@@ -36,14 +36,14 @@ struct alignas(128) PublicationRecord {
   uint32_t payload_size;  // Size of payload data
 
   // Response state
-  volatile uint64_t response_flag;  // 0=not_completed, 1=completed
+  uint64_t volatile response_flag;  // 0=not_completed, 1=completed
 
   // Timing for benchmarking
   uint64_t submit_time;    // GPU clock when submitted
   uint64_t complete_time;  // GPU clock when completed
 
   // Padding to avoid false sharing
-  uint8_t padding[128 - sizeof(request_flag) - sizeof(cmd) - sizeof(warp_id) -
+  uint8_t padding[256 - sizeof(request_flag) - sizeof(cmd) - sizeof(warp_id) -
                   sizeof(payload_ptr) - sizeof(payload_size) -
                   sizeof(response_flag) - sizeof(submit_time) -
                   sizeof(complete_time)];

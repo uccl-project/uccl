@@ -7,12 +7,12 @@ Usage
 # Node 0
 torchrun --nnodes=2 --nproc_per_node=1 --node_rank=0 \
   --master_addr=10.141.1.1 --master_port=12356 \
-  bench/benchmark_remote.py
+  bench/benchmark_rdma_rb.py
 
 # Node 1
 torchrun --nnodes=2 --nproc_per_node=1 --node_rank=1 \
   --master_addr=10.141.1.1 --master_port=12356 \
-  bench/benchmark_remote.py
+  bench/benchmark_rdma_rb.py
 """
 
 import argparse
