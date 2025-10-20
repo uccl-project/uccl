@@ -136,7 +136,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
       cur_head = rb->head;
       cur_tail = rb->volatile_tail();
       inflight = cur_head - cur_tail;
-      if (inflight < 1) {
+      if (inflight < kMaxInflight) {
         uint64_t slot = cur_head;
         TransferCmd cmd{};
         cmd.cmd_type = CmdType::ATOMIC;
