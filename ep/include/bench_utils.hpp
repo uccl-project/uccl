@@ -33,6 +33,7 @@ inline void init_env(BenchEnv& env, int blocks = kNumThBlocks,
       gpuHostAllocMapped));
 #endif
   for (int i = 0; i < blocks; ++i) {
+    new (&env.rbs[i]) DeviceToHostCmdBuffer();
     env.rbs[i].head = 0;
     env.rbs[i].tail = 0;
 #ifdef MEASURE_PER_OP_LATENCY
@@ -42,8 +43,9 @@ inline void init_env(BenchEnv& env, int blocks = kNumThBlocks,
     env.rbs[i].cycle_end = 0ULL;
 #endif
     for (uint32_t j = 0; j < kQueueSize; ++j) {
-      env.rbs[i].volatile_store_cmd(j, 0ULL);
+      env.rbs[i].buf[j].cmd = 0ULL;
     }
+    printf("rb capacity: %u\n", env.rbs[i].capacity);
   }
 }
 

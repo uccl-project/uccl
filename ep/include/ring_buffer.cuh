@@ -84,11 +84,6 @@ struct alignas(128) RingBuffer {
   uint64_t head = 0;
   uint64_t tail = 0;
   T buf[Capacity];
-  // 16B publish header (CPU polls here). Must be 16B aligned.
-  struct alignas(16) Header128 {
-    uint64_t fst, snd;
-  };
-  Header128 hdr[Capacity] = {};
   uint64_t cycle_accum = 0;
   uint64_t op_count = 0;
   uint64_t cycle_start = 0;
@@ -98,20 +93,42 @@ struct alignas(128) RingBuffer {
   static constexpr size_t kNumWords = (Capacity + 63) / 64;
   uint64_t ack_mask[kNumWords] = {};
   static constexpr int kFenceBatch = 8;
+  static_assert(Capacity > 0 && (Capacity & (Capacity - 1)) == 0,
+                "RingBuffer Capacity must be a power of two and nonzero");
+
+  static inline int ctz64_nonzero(uint64_t x) {
+#if defined(__GNUG__) || defined(__clang__)
+    return __builtin_ctzll(x);
+#else
+    int n = 0;
+    while ((x & 1ull) == 0ull) {
+      x >>= 1;
+      ++n;
+    }
+    return n;
+#endif
+  }
+
+  static inline int ctz64(uint64_t x) {
+    return (x == 0ull) ? 64 : ctz64_nonzero(x);
+  }
 
   inline void mark_acked(size_t idx) noexcept {
+    assert(idx < Capacity && "mark_acked: idx out of range");
     const size_t word = idx >> 6;  // idx / 64
     const size_t bit = idx & 63;   // idx % 64
     ack_mask[word] |= (1ull << bit);
   }
 
   inline void clear_acked(size_t idx) noexcept {
+    assert(idx < Capacity && "clear_acked: idx out of range");
     const size_t word = idx >> 6;
     const size_t bit = idx & 63;
     ack_mask[word] &= ~(1ull << bit);
   }
 
   inline bool is_acked(size_t idx) const noexcept {
+    assert(idx < Capacity && "is_acked: idx out of range");
     const size_t word = idx >> 6;
     const size_t bit = idx & 63;
     return (ack_mask[word] >> bit) & 1ull;
@@ -120,57 +137,68 @@ struct alignas(128) RingBuffer {
   // Return next index >= start_idx whose bit is UNSET (0)
   inline size_t next_unacked(size_t start_idx) const noexcept {
     if (start_idx >= Capacity) return Capacity;
-
     size_t word = start_idx >> 6;
     size_t bit = start_idx & 63;
 
-    // How many valid bits remain in [start_idx, Capacity)
     size_t remaining = Capacity - start_idx;
     size_t span = remaining < (64 - bit) ? remaining : (64 - bit);
+    if (span == 0) return Capacity;
 
-    // Mask the slice in this word to only the valid range
+    // First partial word
     uint64_t slice = (ack_mask[word] >> bit);
     uint64_t range_mask = (span == 64) ? ~0ull : ((1ull << span) - 1);
     slice &= range_mask;
 
-    // If there is any 0 in the slice, return its position
     uint64_t inv = (~slice) & range_mask;
-    if (inv) return start_idx + __builtin_ctzll(inv);
+    if (inv != 0ull) {
+      return start_idx + (size_t)ctz64_nonzero(inv);
+    }
 
-    // Scan subsequent full words, but clamp the last word
+    // Full words
     for (++word; word < kNumWords; ++word) {
       size_t base = word << 6;
       size_t valid =
-          Capacity > base ? (size_t)std::min<size_t>(64, Capacity - base) : 0;
+          (Capacity > base) ? (size_t)std::min<size_t>(64, Capacity - base) : 0;
       if (!valid) break;
 
       uint64_t m = (valid == 64) ? ~0ull : ((1ull << valid) - 1);
       uint64_t blk = ack_mask[word] & m;
       if (blk != m) {
-        uint64_t inv2 = (~blk) & m;
-        return base + __builtin_ctzll(inv2);
+        uint64_t inv2 = (~blk) & m;  // guaranteed nonzero if blk != m
+        // still call the safe helper to be future-proof
+        return base + (size_t)ctz64_nonzero(inv2);
       }
     }
-    return Capacity;  // all set up to Capacity
+    return Capacity;
   }
 
   inline void clear_acked_range(size_t start, size_t end) noexcept {
+    // Allow end == Capacity (we clear up to but not including 'end')
+    assert(start <= Capacity && "clear_acked_range: start out of range");
+    assert(end <= Capacity && "clear_acked_range: end out of range");
     if (start >= end) return;
     if (start >= Capacity) return;
-    assert(end <= Capacity);
 
     size_t start_word = start >> 6;
     size_t end_word = (end - 1) >> 6;
+
     if (start_word == end_word) {
-      uint64_t mask = ((~0ull >> (64 - (end - start))) << (start & 63));
+      size_t width = end - start;  // 1..64
+      uint64_t right = (width == 64) ? ~0ull : ((1ull << width) - 1);
+      uint64_t mask = (right << (start & 63));
       ack_mask[start_word] &= ~mask;
       return;
     }
+
+    // head partial
     if (start & 63) {
       ack_mask[start_word] &= ~((~0ull) << (start & 63));
       ++start_word;
     }
+    // middle full words
     for (size_t w = start_word; w < end_word; ++w) ack_mask[w] = 0;
+
+    // tail partial (if end not aligned) else clear entire last word
     if ((end & 63) != 0) {
       uint64_t mask = (~0ull) >> (64 - (end & 63));
       ack_mask[end_word] &= ~mask;
@@ -182,16 +210,14 @@ struct alignas(128) RingBuffer {
   inline uint64_t advance_tail_from_mask() noexcept {
     size_t local = (size_t)(tail % Capacity);
 
-    // First pass: [local, Capacity)
+    // [local, Capacity)
     size_t next0 = next_unacked(local);
     if (next0 == Capacity) {
-      // Everything from local..end is acked; maybe we can wrap
+      // all acked to end; wrap
       if (local != 0) {
-        // Consume [local, Capacity)
         clear_acked_range(local, Capacity);
         tail += (Capacity - local);
 
-        // Second pass: [0, new_local)
         size_t wrap0 = next_unacked(0);
         if (wrap0 > 0 && wrap0 <= local) {
           clear_acked_range(0, wrap0);
@@ -199,12 +225,11 @@ struct alignas(128) RingBuffer {
         }
       }
     } else if (next0 > local) {
-      // Consume [local, next0)
       clear_acked_range(local, next0);
       tail += (next0 - local);
     }
 
-    // Publish with release semantics
+    // publish
     cpu_volatile_store_tail(tail);
     return tail;
   }
@@ -226,13 +251,13 @@ struct alignas(128) RingBuffer {
   }
 
   inline uint64_t volatile_load_cmd(int idx) const {
-    return __atomic_load_n(&hdr[idx & mask()].fst, __ATOMIC_ACQUIRE);
+    return __atomic_load_n(&buf[idx & mask()].cmd, __ATOMIC_ACQUIRE);
   }
 
   inline T& load_cmd_entry(int idx) { return buf[idx & mask()]; }
 
   inline void volatile_store_cmd(int idx, uint64_t val) {
-    __atomic_store_n(&hdr[idx & mask()].fst, val, __ATOMIC_RELEASE);
+    __atomic_store_n(&buf[idx & mask()].cmd, val, __ATOMIC_RELEASE);
   }
 
   __host__ __device__ static constexpr uint32_t mask() { return Capacity - 1; }
@@ -338,57 +363,55 @@ struct alignas(128) RingBuffer {
 
   __host__ __device__ inline bool atomic_set_and_commit(
       const T& item, uint64_t* out_slot = nullptr) {
-    // Reserve a unique slot (no retry loop)
+    uint64_t slot;
+    while (true) {
 #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
-    uint64_t prevHead =
-        atomicAdd(reinterpret_cast<unsigned long long*>(&head), 1ULL);
+      uint64_t h = ld_volatile(&head);
+      uint64_t t = ld_volatile(&tail);
+      if (h - t == Capacity) {
+        __nanosleep(64);
+        continue;
+      }
+      unsigned long long prev =
+          atomicCAS((unsigned long long*)&head, (unsigned long long)h,
+                    (unsigned long long)(h + 1));
+      if (prev == h) {
+        slot = h;
+        break;
+      }
 #else
-    uint64_t prevHead = __atomic_fetch_add(&head, 1ULL, __ATOMIC_RELAXED);
+      uint64_t h = __atomic_load_n(&head, __ATOMIC_RELAXED);
+      uint64_t t = __atomic_load_n(&tail, __ATOMIC_RELAXED);
+      if (h - t == Capacity) {
+        cpu_relax();
+        continue;
+      }
+      uint64_t expected = h;
+      if (__atomic_compare_exchange_n(&head, &expected, h + 1, true,
+                                      __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+        slot = h;
+        break;
+      }
 #endif
-
-    // Throttle if reservation would overflow ring
-#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
-    // Snapshot to cut PCIe traffic; refresh occasionally
-    uint64_t tail_snap = ld_volatile(&tail);
-    int spins = 0;
-    while (prevHead >= capacity + tail_snap) {
-      if ((++spins & 0x3F) == 0) tail_snap = ld_volatile(&tail);
-      __nanosleep(64);
     }
-#else
-    while (prevHead >= capacity + __atomic_load_n(&tail, __ATOMIC_ACQUIRE)) {
-      cpu_relax();
-    }
-#endif
-
-    // Now it’s safe to write the payload
-    const uint32_t idx = static_cast<uint32_t>(prevHead) & mask();
+    uint32_t idx = (uint32_t)slot & mask();
 
     T tmp = item;
-    auto ready_flag = tmp.cmd;  // your “visible when non-zero” flag
-    // tmp.cmd = 0;                   // keep flag clear in the payload copy if
-    // you want
+    auto saved_cmd = tmp.cmd;
+    tmp.cmd = 0;
     buf[idx] = tmp;
 
-    // Single 16B publish of the header (system-scope)
-#if defined(__CUDA_ARCH__)
-#if __CUDA_ARCH__ >= 900
-    asm volatile("st.global.release.sys.v2.u64 [%0], {%1,%2};" ::"l"(&hdr[idx]),
-                 "l"(ready_flag), "l"((uint64_t)idx)
-                 : "memory");
-#else
-    __threadfence_system();
-    asm volatile("st.global.relaxed.sys.v2.u64 [%0], {%1,%2};" ::"l"(&hdr[idx]),
-                 "l"(ready_flag), "l"((uint64_t)idx)
-                 : "memory");
-#endif
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+    if constexpr (Dir == FlowDirection::DeviceToHost)
+      __threadfence_system();
+    else
+      __threadfence();
 #else
     std::atomic_thread_fence(std::memory_order_release);
-    __atomic_store_n(&hdr[idx].snd, (uint64_t)idx, __ATOMIC_RELAXED);
-    __atomic_store_n(&hdr[idx].fst, ready_flag, __ATOMIC_RELEASE);
 #endif
 
-    if (out_slot) *out_slot = prevHead;
+    buf[idx].cmd = saved_cmd;
+    if (out_slot) *out_slot = slot;
     return true;
   }
 };
