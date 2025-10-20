@@ -676,8 +676,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              std::vector<uint64_t> const& wrs_to_post,
                              std::vector<TransferCmd> const& cmds_to_post,
                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                             int my_rank, int thread_idx,
-                             std::unordered_set<uint64_t>& finished_wrs) {
+                             int my_rank, int thread_idx) {
   if (num_wrs == 0) return;
   if (wrs_to_post.size() != num_wrs || cmds_to_post.size() != num_wrs) {
     fprintf(stderr, "Size mismatch (num_wrs=%zu, wr_ids=%zu, cmds=%zu)\n",
@@ -786,10 +785,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
           uint8_t seq = ctx->next_seq_per_index[key];
           ctx->next_seq_per_index[key] =
               (seq + 1) % kReorderingBufferSize;  // 4-bit wrap (0–15)
-
-          // printf("[EFA] Posting atomic write: val=%d offset=%zu index=%zu
-          // seq=%u, ring_idx_raw=%zu\n",
-          //         v, cmd.atomic_offset, index, seq, ring_idx_raw);
           uint32_t imm =
               AtomicsImm::PackAtomicWithSeq(v, cmd.atomic_offset, seq, true)
                   .GetImmData();
@@ -922,23 +917,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
           std::abort();
         }
 #endif
-      // Map the tail of this ring-group batch
-      // uint64_t const tail_wr = ring_wrids.back();
-      // {
-      //   auto [it, inserted] =
-      //       S.wr_id_to_wr_ids.try_emplace(tail_wr, std::move(ring_wrids));
-      //   if (!inserted) {
-      //     fprintf(
-      //         stderr,
-      //         "thread_idx: %d, Error: tail wr_id %lu already exists
-      //         (map=%p)\n", thread_idx, tail_wr, (void*)&S.wr_id_to_wr_ids);
-      //     std::abort();
-      //   } else {
-      //     for (auto const& wr_id : it->second) {
-      //       finished_wrs.insert(wr_id);
-      //     }
-      //   }
-      // }
     }
   }
 }
@@ -949,8 +927,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              std::vector<uint64_t> const& wrs_to_post,
                              std::vector<TransferCmd> const& cmds_to_post,
                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                             int my_rank, int thread_idx,
-                             std::unordered_set<uint64_t>& finished_wrs) {
+                             int my_rank, int thread_idx) {
   if (num_wrs == 0) return;
   if (wrs_to_post.size() != num_wrs || cmds_to_post.size() != num_wrs) {
     fprintf(stderr,
@@ -1086,10 +1063,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                   "(map=%p)\n",
                   thread_idx, expert_tail_wr, (void*)&S.wr_id_to_wr_ids);
           std::abort();
-        } else {
-          for (auto const& wr_id : it->second) {
-            finished_wrs.insert(wr_id);
-          }
         }
       }
     }
@@ -1104,10 +1077,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                 "(map=%p)\n",
                 thread_idx, tail_wr, (void*)&S.wr_id_to_wr_ids);
         std::abort();
-      } else {
-        for (auto const& wr_id : it->second) {
-          finished_wrs.insert(wr_id);
-        }
       }
     }
 #endif
@@ -1183,10 +1152,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                   "(map=%p)\n",
                   thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
           std::abort();
-        } else {
-          for (auto const& wr_id : it->second) {
-            finished_wrs.insert(wr_id);
-          }
         }
       }
 #endif
@@ -1195,7 +1160,6 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
 #endif
 
 void local_process_completions(ProxyCtx& S,
-                               std::unordered_set<uint64_t>& finished_wrs,
                                std::unordered_set<uint64_t>& acked_wrs,
                                int thread_idx, ibv_wc* wc, int ne,
                                std::vector<ProxyCtx*>& ctx_by_tag) {
@@ -1254,13 +1218,6 @@ void local_process_completions(ProxyCtx& S,
           if (it != S.wr_id_to_wr_ids.end()) {
             for (uint64_t sub_wr : it->second) {
               acked_wrs.insert(sub_wr);
-              if (finished_wrs.find(sub_wr) == finished_wrs.end()) {
-                fprintf(stderr,
-                        "Error: finished_wrs received ACK for unknown wr_id "
-                        "%lu\n",
-                        sub_wr);
-                std::abort();
-              }
             }
             S.wr_id_to_wr_ids.erase(it);
           } else {
@@ -1313,7 +1270,6 @@ int poll_cq_once(ibv_cq* cq, ibv_wc* wc, int max_cqes) {
 }
 
 void local_poll_completions(ProxyCtx& S,
-                            std::unordered_set<uint64_t>& finished_wrs,
                             std::unordered_set<uint64_t>& acked_wrs,
                             int thread_idx,
                             std::vector<ProxyCtx*>& ctx_by_tag) {
@@ -1321,26 +1277,24 @@ void local_poll_completions(ProxyCtx& S,
   auto poll_one = [&](ibv_cq* cq) {
     int ne = poll_cq_once(cq, wc, kMaxOutstandingSends);
     if (ne > 0) {
-      local_process_completions(S, finished_wrs, acked_wrs, thread_idx, wc, ne,
-                                ctx_by_tag);
+      local_process_completions(S, acked_wrs, thread_idx, wc, ne, ctx_by_tag);
     }
   };
   if (S.cq) poll_one(S.cq);
   // for (auto* cq : S.extra_cqs) poll_one(cq);
 }
 
-void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
-                  std::unordered_set<uint64_t>& acked_wrs, int thread_idx,
-                  CopyRingBuffer& g_ring, std::vector<ProxyCtx*>& ctx_by_tag,
-                  void* atomic_buffer_ptr, int num_ranks, int num_experts,
+void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& acked_wrs,
+                  int thread_idx, CopyRingBuffer& g_ring,
+                  std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr,
+                  int num_ranks, int num_experts,
                   std::set<PendingUpdate>& pending_atomic_updates, int my_rank,
                   int num_nodes) {
   ibv_wc wc[kMaxOutstandingSends];
   auto poll_one = [&](ibv_cq* cq) {
     int ne = poll_cq_once(cq, wc, kMaxOutstandingSends);
     if (ne > 0) {
-      local_process_completions(S, finished_wrs, acked_wrs, thread_idx, wc, ne,
-                                ctx_by_tag);
+      local_process_completions(S, acked_wrs, thread_idx, wc, ne, ctx_by_tag);
       remote_process_completions(S, thread_idx, g_ring, ne, wc, ctx_by_tag,
                                  atomic_buffer_ptr, num_ranks, num_experts,
                                  pending_atomic_updates, my_rank, num_nodes);
@@ -1814,7 +1768,6 @@ void post_atomic_operations(ProxyCtx& S,
                             std::vector<TransferCmd> const& cmds_to_post,
                             std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
                             int my_rank, int thread_idx,
-                            std::unordered_set<uint64_t>& finished_wrs,
                             std::unordered_set<uint64_t>& acked_wrs) {
   if (cmds_to_post.size() > ProxyCtx::kMaxAtomicOps) {
     fprintf(stderr, "Too many atomic operations: %zu > %zu\n",
@@ -1985,29 +1938,7 @@ void post_atomic_operations(ProxyCtx& S,
           std::abort();
         }
 #endif
-      // Map tail WR for this ring group; mark finished and acked immediately
-      // uint64_t const batch_tail_wr = group_wrids.back();
-      // {
-      //   auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
-      //       batch_tail_wr, std::move(group_wrids));
-      //   if (!inserted) {
-      //     fprintf(stderr,
-      //             "thread_idx: %d, Error: tail wr_id %lu already exists "
-      //             "(map=%p, size=%zu, dst_rank=%d)\n",
-      //             thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
-      //             S.wr_id_to_wr_ids.size(), dst_rank);
-      //     std::abort();
-      //   } else {
-      //     for (auto const& wid : it->second) {
-      //       finished_wrs.insert(wid);
-      //       acked_wrs.insert(wid);
-      //     }
-      //   }
-      // }
-      // for (auto const& wid : group_wrids) {
-      //   acked_wrs.insert(wid);
-      // }
-    }  // end per-ring loop
+    }
   }
 }
 #else
@@ -2016,7 +1947,6 @@ void post_atomic_operations(ProxyCtx& S,
                             std::vector<TransferCmd> const& cmds_to_post,
                             std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
                             int my_rank, int thread_idx,
-                            std::unordered_set<uint64_t>& finished_wrs,
                             std::unordered_set<uint64_t>& acked_wrs) {
   if (cmds_to_post.size() > ProxyCtx::kMaxAtomicOps) {
     fprintf(stderr, "Too many atomic operations: %zu > %zu\n",
@@ -2146,7 +2076,6 @@ void post_atomic_operations(ProxyCtx& S,
       } else {
         // TODO(MaoZiming): ack for atomic operations?
         for (auto const& wr_id : it->second) {
-          finished_wrs.insert(wr_id);
           acked_wrs.insert(wr_id);
         }
       }

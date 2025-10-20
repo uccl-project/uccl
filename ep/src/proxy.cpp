@@ -341,8 +341,7 @@ void Proxy::run_sender() {
   size_t seen = 0;
   uint64_t my_tail = 0;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    local_poll_completions(ctx_, finished_wrs_, acked_wrs_, cfg_.thread_idx,
-                           ctx_by_tag_);
+    local_poll_completions(ctx_, acked_wrs_, cfg_.thread_idx, ctx_by_tag_);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
   }
@@ -383,15 +382,10 @@ void Proxy::run_dual() {
   size_t seen = 0;
   std::set<PendingUpdate> pending_atomic_updates;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    ctx_.notify_gpu_counter--;
-    poll_cq_dual(ctx_, finished_wrs_, acked_wrs_, cfg_.thread_idx, ring,
-                 ctx_by_tag_, atomic_buffer_ptr_, cfg_.num_ranks,
-                 cfg_.num_experts, pending_atomic_updates, cfg_.rank,
-                 cfg_.num_nodes);
-    // if (ctx_.notify_gpu_counter <= 0) {
+    poll_cq_dual(ctx_, acked_wrs_, cfg_.thread_idx, ring, ctx_by_tag_,
+                 atomic_buffer_ptr_, cfg_.num_ranks, cfg_.num_experts,
+                 pending_atomic_updates, cfg_.rank, cfg_.num_nodes);
     notify_gpu_completion(my_tail);
-    // ctx_.notify_gpu_counter = ProxyCtx::kNotifyGpuCounter;
-    // }
     post_gpu_command(my_tail, seen);
 #ifdef USE_RECEIVER_BARRIER
     apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
@@ -730,19 +724,15 @@ void Proxy::post_gpu_commands_mixed(
       0) {
     return;
   }
-  // printf("Posting %zu RDMA writes, %zu atomics, %zu barriers, %zu quiets\n",
-  //        rdma_wrs.size(), atomic_wrs.size(), barrier_cmds.size(),
-  //        quiet_cmds.size());
   // Handle regular RDMA writes
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
                             rdma_cmds, ctxs_for_all_ranks_, cfg_.rank,
-                            cfg_.thread_idx, finished_wrs_);
+                            cfg_.thread_idx);
   }
   if (!atomic_wrs.empty()) {
     post_atomic_operations(ctx_, atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
-                           cfg_.rank, cfg_.thread_idx, finished_wrs_,
-                           acked_wrs_);
+                           cfg_.rank, cfg_.thread_idx, acked_wrs_);
   }
   if (!barrier_cmds.empty()) {
     // barrier(barrier_wrs, barrier_cmds);
@@ -774,8 +764,8 @@ void Proxy::quiet_cq() {
     int ne = poll_cq_once(ctx_.cq, wc, kMaxOutstandingSends);
     if (ne > 0) {
       empty_iters = 0;
-      local_process_completions(ctx_, finished_wrs_, acked_wrs_,
-                                cfg_.thread_idx, wc, ne, ctx_by_tag_);
+      local_process_completions(ctx_, acked_wrs_, cfg_.thread_idx, wc, ne,
+                                ctx_by_tag_);
       remote_process_completions(
           ctx_, cfg_.thread_idx, ring, ne, wc, ctx_by_tag_, atomic_buffer_ptr_,
           cfg_.num_ranks, cfg_.num_experts, pending_atomic_updates, cfg_.rank,
@@ -802,9 +792,7 @@ void Proxy::quiet_cq() {
 void Proxy::quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds) {
   assert(cmds.size() == 1 && "quiet size must be 1");
   quiet_cq();
-  // finished_wrs_.insert(wrs[0]);
   acked_wrs_.insert(wrs[0]);
-  ctx_.notify_gpu_counter = 0;
 }
 
 void Proxy::destroy(bool free_gpu_buffer) {
@@ -898,7 +886,6 @@ void Proxy::destroy(bool free_gpu_buffer) {
   ctx_.lb_owner = false;
   // }
 
-  finished_wrs_.clear();
   acked_wrs_.clear();
   wr_id_to_start_time_.clear();
   ctxs_for_all_ranks_.clear();
@@ -965,7 +952,6 @@ void Proxy::send_barrier(uint64_t wr) {
   ctx_.barrier_inflight = true;
   ctx_.barrier_wr = wr;
   ctx_.barrier_seq = ctx_.barrier_seq + 1;
-  // finished_wrs_.insert(wr);
 
   if (cfg_.rank == ctx_.node_leader_rank) {
     if (ctx_.barrier_arrived.size() != static_cast<size_t>(cfg_.num_nodes)) {
@@ -1044,7 +1030,6 @@ void Proxy::barrier_check() {
           ctx_.barrier_arrival_count = 0;
 
           acked_wrs_.insert(ctx_.barrier_wr);
-          ctx_.notify_gpu_counter = 0;
           ctx_.barrier_inflight = false;
           ctx_.barrier_wr = 0;
           return;
@@ -1062,7 +1047,6 @@ void Proxy::barrier_check() {
 
         // Complete WR
         acked_wrs_.insert(ctx_.barrier_wr);
-        ctx_.notify_gpu_counter = 0;
         ctx_.barrier_inflight = false;
         ctx_.barrier_wr = 0;
       }
@@ -1078,6 +1062,5 @@ void Proxy::barrier_check() {
     acked_wrs_.insert(ctx_.barrier_wr);
     ctx_.barrier_inflight = false;
     ctx_.barrier_wr = 0;
-    ctx_.notify_gpu_counter = 0;
   }
 }

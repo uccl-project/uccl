@@ -301,7 +301,6 @@ void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info);
 
 void modify_qp_to_init(ProxyCtx& S);
 void local_poll_completions(ProxyCtx& S,
-                            std::unordered_set<uint64_t>& finished_wrs,
                             std::unordered_set<uint64_t>& acked_wrs,
                             int thread_idx, std::vector<ProxyCtx*>& ctx_by_tag);
 void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& ring,
@@ -331,17 +330,15 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              std::vector<uint64_t> const& wrs_to_post,
                              std::vector<TransferCmd> const& cmds_to_post,
                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                             int my_rank, int thread_idx,
-                             std::unordered_set<uint64_t>& finished_wrs);
+                             int my_rank, int thread_idx);
 void local_process_completions(ProxyCtx& S,
-                               std::unordered_set<uint64_t>& finished_wrs,
                                std::unordered_set<uint64_t>& acked_wrs,
                                int thread_idx, ibv_wc* wc, int ne,
                                std::vector<ProxyCtx*>& ctx_by_tag);
-void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& finished_wrs,
-                  std::unordered_set<uint64_t>& acked_wrs, int thread_idx,
-                  CopyRingBuffer& g_ring, std::vector<ProxyCtx*>& ctx_by_tag,
-                  void* atomic_buffer_ptr, int num_ranks, int num_experts,
+void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& acked_wrs,
+                  int thread_idx, CopyRingBuffer& g_ring,
+                  std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr,
+                  int num_ranks, int num_experts,
                   std::set<PendingUpdate>& pending_atomic_updates, int my_rank,
                   int num_nodes);
 void post_atomic_operations(ProxyCtx& S,
@@ -349,7 +346,6 @@ void post_atomic_operations(ProxyCtx& S,
                             std::vector<TransferCmd> const& cmds_to_post,
                             std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
                             int my_rank, int thread_idx,
-                            std::unordered_set<uint64_t>& finished_wrs,
                             std::unordered_set<uint64_t>& acked_wrs);
 
 void apply_pending_updates(ProxyCtx& ctx,

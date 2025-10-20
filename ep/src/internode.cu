@@ -1056,20 +1056,6 @@ __global__ void __launch_bounds__(
       auto src_rdma_tail =
           __shfl_sync(0xffffffff, cached_rdma_channel_tail, src_rdma_rank);
 
-      int src_rdma_tail_ready = src_rdma_head;
-      for (int t = src_rdma_head; t < src_rdma_tail; ++t) {
-        int slot = t % num_max_rdma_chunked_recv_tokens;
-        auto meta_ptr = reinterpret_cast<SourceMeta*>(
-            rdma_channel_data.recv_buffer(src_rdma_rank) +
-            slot * num_bytes_per_token + hidden_bytes + scale_bytes);
-        int seen_bits =
-            ld_acquire_sys_global(&meta_ptr->is_token_in_nvl_rank_bits);
-        if (seen_bits == 0) break;  // not yet written
-        src_rdma_tail_ready = t + 1;
-      }
-      src_rdma_tail = src_rdma_tail_ready;
-      if (src_rdma_head == src_rdma_tail) continue;
-
       // Iterate over every token from the RDMA buffer
       for (int i = src_rdma_head, num_tokens_sent = 0; i < src_rdma_tail; ++i) {
         auto rdma_slot_idx = i % num_max_rdma_chunked_recv_tokens;
