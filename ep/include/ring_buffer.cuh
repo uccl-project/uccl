@@ -17,6 +17,10 @@
 #define COPY_RING_CAP 4096
 #endif
 
+#if defined(__HIP_DEVICE_COMPILE__)
+#include "amd_nanosleep.cuh"
+#endif
+
 enum class CmdType : uint64_t { EMPTY = 0, WRITE, ATOMIC, QUIET, BARRIER };
 
 // Command structure for each transfer
@@ -353,11 +357,7 @@ struct alignas(128) RingBuffer {
     int spins = 0;
     while (prevHead >= capacity + tail_snap) {
       if ((++spins & 0x3F) == 0) tail_snap = ld_volatile(&tail);
-#if defined(__HIP_DEVICE_COMPILE__)
-      __builtin_amdgcn_s_sleep(8);
-#else
       __nanosleep(64);
-#endif
     }
 #else
     while (prevHead >= capacity + __atomic_load_n(&tail, __ATOMIC_ACQUIRE)) {
@@ -386,6 +386,11 @@ struct alignas(128) RingBuffer {
                  "l"(ready_flag), "l"((uint64_t)idx)
                  : "memory");
 #endif
+#elif defined(__HIP_DEVICE_COMPILE__)
+    __threadfence_system();
+    __atomic_store_n(&hdr[idx].snd, (uint64_t)idx, __ATOMIC_RELAXED);
+    __atomic_store_n(&hdr[idx].fst, ready_flag, __ATOMIC_RELEASE);
+
 #else
     std::atomic_thread_fence(std::memory_order_release);
     __atomic_store_n(&hdr[idx].snd, (uint64_t)idx, __ATOMIC_RELAXED);

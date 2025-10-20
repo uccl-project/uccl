@@ -458,62 +458,6 @@ __device__ __forceinline__ int ld_acquire_sys_global(int const* ptr) {
   return ret;
 }
 
-<<<<<<< HEAD
-=======
-__device__ __forceinline__ uint32_t ld_sys_cv_u32(uint32_t const volatile* p) {
-  uint32_t v;
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  EP_DEVICE_ASSERT(false);
-#else
-  // Coherent, volatile load from global memory
-  asm volatile("ld.global.cv.u32 %0, [%1];" : "=r"(v) : "l"(p));
-  // TODO(MaoZiming): double check.
-#ifdef USE_GRACE_HOPPER
-  // Hopper/GH200: lightweight acquire fence at system scope
-  asm volatile("fence.acq_rel.sys;" ::: "memory");
-#elif __CUDA_ARCH__ >= 800
-  // Ampere fallback (sm_80–sm_89)
-  asm volatile("fence.acquire.sys;" ::: "memory");
-#else
-  // Older architectures (Volta and below)
-  asm volatile("membar.sys;" ::: "memory");
-#endif
-#endif
-  return v;
-}
-
-__device__ __forceinline__ uint64_t
-ld_acquire_sys_u64(uint64_t const volatile* p) {
-  uint64_t x;
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  x = HIP_ATOMIC_LOAD(p, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM);
-#else
-  asm volatile("ld.acquire.sys.global.u64 %0, [%1];" : "=l"(x) : "l"(p));
-#endif
-  return x;
-}
-
-__device__ __forceinline__ uint64_t ld_sys_cv_u64(uint64_t const volatile* p) {
-  uint64_t v;
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  EP_DEVICE_ASSERT(false);
-#else
-  asm volatile("ld.global.cv.u64 %0, [%1];" : "=l"(v) : "l"(p));
-#ifdef USE_GRACE_HOPPER
-  // Hopper/GH200: lightweight acquire fence at system scope
-  asm volatile("fence.acq_rel.sys;" ::: "memory");
-#elif __CUDA_ARCH__ >= 800
-  // Ampere fallback (sm_80–sm_89)
-  asm volatile("fence.acquire.sys;" ::: "memory");
-#else
-  // Older architectures (Volta and below)
-  asm volatile("membar.sys;" ::: "memory");
-#endif
-#endif
-  return v;
-}
-
->>>>>>> 9182e94 (EP: improve intranode performance)
 template <typename dtype_a_t, typename dtype_b_t>
 __device__ __forceinline__ dtype_b_t pack2(dtype_a_t const& x,
                                            dtype_a_t const& y) {
