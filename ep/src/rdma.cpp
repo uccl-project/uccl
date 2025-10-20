@@ -1181,7 +1181,20 @@ void local_process_completions(ProxyCtx& S,
         uint64_t wrid = wc[i].wr_id;
         if ((wrid & kAtomicWrTag) == kAtomicWrTag) {
           wrid &= kAtomicMask;
+#ifdef EFA
           acked_wrs.insert(wrid);
+#else
+          auto it = S.wr_id_to_wr_ids.find(wrid);
+          if (it != S.wr_id_to_wr_ids.end()) {
+            for (uint64_t sub_wr : it->second) {
+              acked_wrs.insert(sub_wr);
+            }
+            S.wr_id_to_wr_ids.erase(it);
+          } else {
+            printf("Error: ACK for unknown wr_id %lu\n", wrid);
+            std::abort();
+          }
+#endif
           break;
         }
         if ((wrid & kBarrierWrTag) == kBarrierWrTag) {
@@ -1206,14 +1219,10 @@ void local_process_completions(ProxyCtx& S,
         }
 #endif
         {
+          uint64_t const wr_done = wc[i].wr_id;
 #ifdef EFA
-          uint64_t const wr_done = wc[i].wr_id;
           acked_wrs.insert(wr_done);
-          // if (S.wr_id_to_wr_ids.find(wr_done) != S.wr_id_to_wr_ids.end()) {
-          //   S.wr_id_to_wr_ids.erase(wr_done);
-          // }
 #else
-          uint64_t const wr_done = wc[i].wr_id;
           auto it = S.wr_id_to_wr_ids.find(wr_done);
           if (it != S.wr_id_to_wr_ids.end()) {
             for (uint64_t sub_wr : it->second) {
@@ -2073,11 +2082,6 @@ void post_atomic_operations(ProxyCtx& S,
                 thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
                 S.wr_id_to_wr_ids.size(), dst_rank);
         std::abort();
-      } else {
-        // TODO(MaoZiming): ack for atomic operations?
-        for (auto const& wr_id : it->second) {
-          acked_wrs.insert(wr_id);
-        }
       }
     }
   }
