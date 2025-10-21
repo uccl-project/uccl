@@ -804,8 +804,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         }
 
         uintptr_t laddr =
-            cmd.req_lptr ? cmd.req_lptr
-                         : reinterpret_cast<uintptr_t>(buf) + i * cmd.bytes;
+            cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
         ibv_wr_set_ud_addr(qpx, ctx->dst_ah, dst_qpn, QKEY);
         ibv_wr_set_sge(qpx, ctx->mr->lkey, laddr,
                        static_cast<uint32_t>(cmd.bytes));
@@ -861,8 +860,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
 
           // Local SGE
           uintptr_t laddr =
-              cmd.req_lptr ? cmd.req_lptr
-                           : reinterpret_cast<uintptr_t>(buf) + i * cmd.bytes;
+              cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
           sges[j] = {
               .addr = laddr,
               .length = static_cast<uint32_t>(cmd.bytes),
@@ -1046,8 +1044,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       }
 #endif
         uintptr_t laddr =
-            cmd.req_lptr ? cmd.req_lptr
-                         : reinterpret_cast<uintptr_t>(buf) + i * cmd.bytes;
+            cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
         ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_qpn, QKEY);
         ibv_wr_set_sge(qpx, ctx->mr->lkey, laddr,
                        static_cast<uint32_t>(cmd.bytes));
@@ -1095,9 +1092,8 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         size_t i = wr_ids[j];
         auto const& cmd = cmds_to_post[i];
         wr_ids[j] = wrs_to_post[i];
-        sges[j].addr = cmd.req_lptr
-                           ? cmd.req_lptr
-                           : reinterpret_cast<uintptr_t>(buf) + i * cmd.bytes;
+        sges[j].addr =
+            cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
         sges[j].length = static_cast<uint32_t>(cmd.bytes);
         sges[j].lkey = ctx->mr->lkey;
         std::memset(&wrs[j], 0, sizeof(wrs[j]));

@@ -67,10 +67,9 @@ __global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs) {
         // Create the command
         TransferCmd cmd{.cmd_type = make_cmd_type(CmdType::WRITE, false, 0),
                         .dst_rank = 1,
-                        .bytes = kObjectSize,
+                        .bytes_and_val = 7168,
                         .req_rptr = 0,
-                        .req_lptr = 0,
-                        .value = 0};
+                        .req_lptr = 0};
 
         // Space available, atomically reserve and commit
         rb->atomic_set_and_commit(cmd, &my_slot);

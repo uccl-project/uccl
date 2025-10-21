@@ -190,7 +190,8 @@ __global__ void notify_dispatch(
             rdma_recv_num_tokens_mixed.send_buffer(i));
         uccl::nvshmemi_ibgda_put_nbi_warp(
             dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
-            src_ptr, (NUM_MAX_NVL_PEERS + num_rdma_experts + 1) * sizeof(int),
+            src_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
+            (NUM_MAX_NVL_PEERS + num_rdma_experts + 1) * sizeof(int),
             translate_dst_rdma_rank<kLowLatencyMode>(i, nvl_rank),
             0,  // NOTE(MaoZiming): use 0 for rb.
             lane_id, 0, ring_addrs, num_ring_addrs, false, -1);
@@ -654,7 +655,8 @@ __global__ void __launch_bounds__(
                 rdma_channel_meta.recv_buffer(rdma_rank)) -
                 reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
             reinterpret_cast<uint64_t>(
-                rdma_channel_meta.send_buffer(dst_rdma_rank)),
+                rdma_channel_meta.send_buffer(dst_rdma_rank)) -
+                reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
             sizeof(int) * (NUM_MAX_NVL_PEERS * 2 + 2),
             translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank),
             channel_id,  // NOTE(MaoZiming): use channel_id for rb.
@@ -900,7 +902,8 @@ __global__ void __launch_bounds__(
               dst_slot_idx * num_bytes_per_token);
           uccl::nvshmemi_ibgda_put_nbi_warp(
               dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
-              src_ptr, num_bytes_per_msg,
+              src_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
+              num_bytes_per_msg,
               translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank),
               channel_id,  // NOTE(MaoZiming): use channel_id for rb.
               lane_id, 0, ring_addrs, num_ring_addrs, false, -1,
@@ -2284,7 +2287,8 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                 rdma_slot_idx * num_bytes_per_token);
             uccl::nvshmemi_ibgda_put_nbi_warp(
                 dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
-                src_ptr, num_bytes_per_msg,
+                src_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
+                num_bytes_per_msg,
                 translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank,
                                                          nvl_rank),
                 channel_id,  // NOTE(MaoZiming): use channel_id for rb.

@@ -191,7 +191,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         if (dst_p2p_ptr == 0) {
           __threadfence_system();
           uccl::nvshmemi_ibgda_put_nbi_warp(
-              dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), src_ptr,
+              dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
+              src_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
               num_bytes_per_msg, dst_rank,
               /*warp_id=*/dst_expert_local_idx,  // NOTE(Yang): for selecting
                                                  // rb.
@@ -807,7 +808,8 @@ __global__ __launch_bounds__(1024, 1) void combine(
       if (dst_p2p_ptr == 0) {
         __threadfence_system();
         nvshmemi_ibgda_put_nbi_warp(
-            dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), buf_ptr,
+            dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
+            buf_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
             hidden * sizeof(nv_bfloat16), dst_rank,
             /*warp_id=*/global_expert_idx,  // NOTE(Yang): for selecting rb.
             // NOTE(Ziming): this is global_expert_idx because destination is

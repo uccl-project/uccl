@@ -69,10 +69,27 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       cmd.req_lptr = lptr_val;
       cmd.bytes = bytes_val;
       cmd.dst_rank = dst_rank;
-      cmd.expert_idx = expert_idx;
+      if (bytes_val >> 24) {
+        printf("[nvshmemi_ibgda_put_nbi_warp] bytes too large: %llu\n",
+               (unsigned long long)bytes_val);
+        trap();
+      }
+
 #ifdef USE_NORMAL_MODE
+      if (atomic_offset >> 16) {
+        printf("[nvshmemi_ibgda_put_nbi_warp] atomic_offset too large: %llu\n",
+               (unsigned long long)atomic_offset);
+        trap();
+      }
+      if (atomic_val >> 8) {
+        printf("[nvshmemi_ibgda_put_nbi_warp] atomic_val too large: %llu\n",
+               (unsigned long long)atomic_val);
+        trap();
+      }
       cmd.atomic_offset = atomic_offset;
       cmd.atomic_val = atomic_val;
+#else
+      cmd.expert_idx = expert_idx;
 #endif
       rb->atomic_set_and_commit(cmd, &slot);
       break;

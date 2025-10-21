@@ -50,23 +50,41 @@ __host__ __device__ inline CmdType get_base_cmd(CmdType c) {
 }
 
 // Command structure for each transfer
+#pragma pack(push, 1)
 struct TransferCmd {
-  CmdType cmd_type;  // uint8_t
-  uint16_t dst_rank;
-  uint32_t bytes;
-  uint64_t req_rptr;
-  uint64_t req_lptr;
-
+  // uint8_t
+  CmdType cmd_type;
+  // uint8_t, assuming 256 ranks.
+  uint8_t dst_rank;
   union {
-    uint16_t expert_idx;     // Low-latency mode.
-    uint32_t atomic_offset;  // Normal mode.
+    struct {
+      // upper 8 bits, assuming 256 tokens per batch.
+      uint32_t atomic_val : 8;
+      // lower 24 bits: transfer size
+      uint32_t bytes : 24;
+    };
+    // raw 32-bit view if needed
+    uint32_t bytes_and_val;
   };
-
+  uint32_t req_rptr;
   union {
-    int value;            // nvshmemi_ibgda_amo_nonfetch_add
-    uint32_t atomic_val;  // pigyback on write during normal mode.
+    // write
+    uint32_t req_lptr;
+    // atomic
+    int value;
+  };
+  union {
+    // Low-latency mode
+    uint16_t expert_idx;
+    // Normal mode
+    uint16_t atomic_offset;
   };
 };
+#pragma pack(pop)
+
+#if defined(__x86_64__) || defined(_M_X64)
+static_assert(sizeof(TransferCmd) * 8 == 128, "TransferCmd must be 128 bits");
+#endif
 
 struct CopyTask {
   uint64_t wr_id;
