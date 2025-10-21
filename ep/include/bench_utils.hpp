@@ -1,5 +1,6 @@
 #pragma once
 #include "common.hpp"
+#include "d2h_queue_host.hpp"
 #include "fifo.hpp"
 #include "proxy.hpp"
 #include "ring_buffer.cuh"
@@ -11,10 +12,20 @@
 #include <vector>
 
 struct BenchEnv {
-  DeviceToHostCmdBuffer* rbs = nullptr;
   int blocks = kNumThBlocks;
   gpuStream_t stream = nullptr;
   gpuDeviceProp prop{};
+
+  // Unified D2H handles visible to the application
+  std::vector<d2hq::HostD2HHandle> d2h_storage;  // owns handles
+  std::vector<d2hq::HostD2HHandle*> d2h_queues;  // pointers to storage
+
+#ifndef USE_MSCCLPP_FIFO_BACKEND
+  DeviceToHostCmdBuffer* rbs = nullptr;
+#else
+  std::vector<std::unique_ptr<mscclpp::Fifo>> fifos;
+  mscclpp::FifoDeviceHandle* d_fifo_handles = nullptr;
+#endif
 };
 
 inline void init_env(BenchEnv& env, int blocks = kNumThBlocks,
@@ -24,6 +35,7 @@ inline void init_env(BenchEnv& env, int blocks = kNumThBlocks,
   GPU_RT_CHECK(gpuGetDeviceProperties(&env.prop, device));
   GPU_RT_CHECK(gpuStreamCreate(&env.stream));
 
+#ifndef USE_MSCCLPP_FIFO_BACKEND
 #ifdef USE_GRACE_HOPPER
   GPU_RT_CHECK(cudaMallocManaged(
       &env.rbs, sizeof(DeviceToHostCmdBuffer) * static_cast<size_t>(blocks)));
@@ -32,6 +44,7 @@ inline void init_env(BenchEnv& env, int blocks = kNumThBlocks,
       &env.rbs, sizeof(DeviceToHostCmdBuffer) * static_cast<size_t>(blocks),
       gpuHostAllocMapped));
 #endif
+
   for (int i = 0; i < blocks; ++i) {
     new (&env.rbs[i]) DeviceToHostCmdBuffer();
     env.rbs[i].head = 0;
@@ -46,9 +59,43 @@ inline void init_env(BenchEnv& env, int blocks = kNumThBlocks,
       env.rbs[i].volatile_clear_cmd_type(j);
     }
   }
+
+  // Build backend-agnostic handles for the ring buffers
+  d2hq::init_d2h_from_ring(env.rbs, static_cast<size_t>(blocks),
+                           env.d2h_storage, env.d2h_queues);
+
+#else
+  env.fifos.clear();
+  env.fifos.reserve(blocks);
+
+  std::vector<mscclpp::FifoDeviceHandle> host_handles;
+  host_handles.reserve(blocks);
+
+  for (int i = 0; i < blocks; ++i) {
+    // Use default FIFO size unless you want to pass one in
+    auto fifo =
+        std::make_unique<mscclpp::Fifo>((int)mscclpp::DEFAULT_FIFO_SIZE);
+    host_handles.push_back(fifo->deviceHandle());
+    env.fifos.push_back(std::move(fifo));
+  }
+
+  // Optional: copy device handles to GPU if your kernels need them
+  if (!host_handles.empty()) {
+    GPU_RT_CHECK(cudaMalloc(&env.d_fifo_handles,
+                            sizeof(mscclpp::FifoDeviceHandle) * blocks));
+    GPU_RT_CHECK(cudaMemcpy(env.d_fifo_handles, host_handles.data(),
+                            sizeof(mscclpp::FifoDeviceHandle) * blocks,
+                            cudaMemcpyHostToDevice));
+  }
+
+  // Build backend-agnostic handles for the FIFOs (3-arg overload)
+  d2hq::init_d2h_from_fifo(env.fifos, env.d2h_storage, env.d2h_queues);
+#endif
 }
 
 inline void destroy_env(BenchEnv& env) {
+#ifndef USE_MSCCLPP_FIFO_BACKEND
+  // Ring backend
   if (env.rbs) {
 #ifdef USE_GRACE_HOPPER
     GPU_RT_CHECK(cudaFree(env.rbs));
@@ -57,6 +104,18 @@ inline void destroy_env(BenchEnv& env) {
 #endif
     env.rbs = nullptr;
   }
+#else
+  // FIFO backend
+  if (env.d_fifo_handles) {
+    GPU_RT_CHECK(cudaFree(env.d_fifo_handles));
+    env.d_fifo_handles = nullptr;
+  }
+  env.fifos.clear();
+#endif
+
+  env.d2h_queues.clear();
+  env.d2h_storage.clear();
+
   if (env.stream) {
     GPU_RT_CHECK(gpuStreamDestroy(env.stream));
     env.stream = nullptr;
@@ -67,7 +126,8 @@ inline Proxy::Config make_cfg(BenchEnv const& env, int thread_idx, int rank,
                               char const* peer_ip, void* gpu_buffer = nullptr,
                               size_t total_size = 0, bool pin_thread = true) {
   Proxy::Config cfg{};
-  cfg.ring_buffers.push_back(&env.rbs[thread_idx]);
+  // expose unified handle only
+  cfg.d2h_queues.push_back(env.d2h_queues.at(thread_idx));
   cfg.thread_idx = thread_idx;
   cfg.rank = rank;
   cfg.peer_ip = peer_ip;
@@ -122,10 +182,17 @@ inline Stats compute_stats(BenchEnv const& env,
                            std::chrono::high_resolution_clock::time_point t1) {
   Stats s{};
 #ifdef MEASURE_PER_OP_LATENCY
+#ifndef USE_MSCCLPP_FIFO_BACKEND
+  // Ring path: read per-block GPU counters from ring buffer
   for (int b = 0; b < env.blocks; ++b) {
     s.tot_cycles += env.rbs[b].cycle_accum;
     s.tot_ops += env.rbs[b].op_count;
   }
+#else
+  // FIFO path: no per-slot counters available here by default
+  s.tot_cycles = 0ULL;
+  s.tot_ops = 0U;
+#endif
 #else
   s.tot_ops = static_cast<unsigned int>(env.blocks) *
               static_cast<unsigned int>(kIterations);
@@ -134,6 +201,7 @@ inline Stats compute_stats(BenchEnv const& env,
   s.wall_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
 #ifdef MEASURE_PER_OP_LATENCY
+#ifndef USE_MSCCLPP_FIFO_BACKEND
   s.wall_ms_gpu = (env.rbs[0].cycle_end - env.rbs[0].cycle_start) * 1000.0 /
                   static_cast<double>(env.prop.clockRate) / 1000.0;
 
@@ -147,6 +215,16 @@ inline Stats compute_stats(BenchEnv const& env,
   if (s.wall_ms > 0.0) {
     s.throughput_mops = static_cast<double>(env.blocks) *
                         static_cast<double>(kIterations) / (s.wall_ms * 1000.0);
+    s.wall_ms_gpu = s.wall_ms;  // report same for visibility
+  } else {
+    s.throughput_mops = 0.0;
+    s.wall_ms_gpu = 0.0;
+  }
+#endif
+#else
+  if (s.wall_ms > 0.0) {
+    s.throughput_mops = static_cast<double>(env.blocks) *
+                        static_cast<double>(kIterations) / (s.wall_ms * 1000.0);
   } else {
     s.throughput_mops = 0.0;
   }
@@ -156,6 +234,7 @@ inline Stats compute_stats(BenchEnv const& env,
 
 inline void print_block_latencies(BenchEnv const& env) {
 #ifdef MEASURE_PER_OP_LATENCY
+#ifndef USE_MSCCLPP_FIFO_BACKEND
   std::printf("\nPer-block avg latency:\n");
   for (int b = 0; b < env.blocks; ++b) {
     if (env.rbs[b].op_count == 0) {
@@ -168,6 +247,10 @@ inline void print_block_latencies(BenchEnv const& env) {
     std::printf("  Block %d : %.3f µs over %lu ops\n", b, us,
                 env.rbs[b].op_count);
   }
+#else
+  std::printf(
+      "\nPer-block avg latency: N/A (FIFO backend has no ring counters)\n");
+#endif
 #endif
 }
 

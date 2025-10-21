@@ -1,5 +1,6 @@
 #pragma once
 #include "common.hpp"
+#include "d2h_queue_adapter.cuh"
 #include "ring_buffer.cuh"
 #include <cstddef>
 #include <cstdint>
@@ -38,7 +39,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   unsigned long long lptr_val = static_cast<unsigned long long>(req_lptr);
   unsigned long long bytes_val = static_cast<unsigned long long>(bytes);
 
-  auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
+  auto* h = reinterpret_cast<d2hq::D2HHandle*>(
       static_cast<uintptr_t>(ring_addrs[ring_idx]));
 
   uint64_t cur_head;
@@ -55,8 +56,8 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   auto last_print = clock64();
   while (true) {
     // NOTE(MaoZiming): update the view.
-    cur_head = rb->head;
-    cur_tail = rb->volatile_tail();
+    cur_head = h->head();
+    cur_tail = h->tail();
     inflight = cur_head - cur_tail;
     if (inflight < kMaxInflight) {
       uint64_t slot = cur_head;
@@ -91,7 +92,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
 #else
       cmd.expert_idx = expert_idx;
 #endif
-      rb->atomic_set_and_commit(cmd, &slot);
+      h->atomic_set_and_commit(cmd, &slot);
       break;
     }
     if (clock64() - last_print > kPrintCycleInterval) {
@@ -129,7 +130,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     assert(ring_buffer_idx < kRingsPerProxy);
     int ring_idx = thread_idx * kRingsPerProxy + ring_buffer_idx;
     assert(ring_idx < num_ring_addrs);
-    auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
+    auto* h = reinterpret_cast<d2hq::D2HHandle*>(
         static_cast<uintptr_t>(ring_addrs[ring_idx]));
     uint64_t cur_head;
     uint64_t cur_tail;
@@ -143,8 +144,8 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
 #endif
     while (true) {
       // NOTE(MaoZiming): update the view.
-      cur_head = rb->head;
-      cur_tail = rb->volatile_tail();
+      cur_head = h->head();
+      cur_tail = h->tail();
       inflight = cur_head - cur_tail;
       if (inflight < kMaxInflight) {
         uint64_t slot = cur_head;
@@ -156,7 +157,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
         cmd.value = value;
         cmd.dst_rank = dst_rank;
         cmd.req_rptr = rptr;
-        rb->atomic_set_and_commit(cmd, &slot);
+        h->atomic_set_and_commit(cmd, &slot);
         break;
       } else {
         auto now = clock64();
@@ -165,7 +166,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
               "[nvshmemi_ibgda_amo_nonfetch_add] %p waiting ring_idx: %d, "
               "cur_head: "
               "%llu, cur_tail: %llu, inflight: %llu\n",
-              rb, ring_idx, cur_head, cur_tail, inflight);
+              h, ring_idx, cur_head, cur_tail, inflight);
           last_print = now;
         }
       }
@@ -210,11 +211,11 @@ __device__ __forceinline__ uint64_t get_ipc_p2p_ptr(uint64_t const& local_ptr,
 }
 
 __device__ static __forceinline__ void wait_until_cmd_consumed(
-    DeviceToHostCmdBuffer* rb, uint64_t slot, int nvl_rank = -1,
+    d2hq::D2HHandle* h, uint64_t slot, int nvl_rank = -1,
     CmdType cmd_type = CmdType::EMPTY, int label = -1) {
   auto last_print = clock64();
   while (true) {
-    uint64_t cur_tail = rb->volatile_tail();
+    uint64_t cur_tail = h->tail();
     if (cur_tail > slot) {
       break;
     }
@@ -224,7 +225,7 @@ __device__ static __forceinline__ void wait_until_cmd_consumed(
           "waiting, "
           "head=%lu tail=%lu "
           "slot=%lu\n",
-          nvl_rank, static_cast<int>(cmd_type), label, (unsigned long)rb->head,
+          nvl_rank, static_cast<int>(cmd_type), label, (unsigned long)h->head(),
           (unsigned long)cur_tail, (unsigned long)slot);
       last_print = clock64();
     }
@@ -246,18 +247,18 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
   int num_posted = 0;
   for (int ring_idx = 0; ring_idx < num_ring_addrs;
        ring_idx += kRingsPerProxy) {
-    auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
+    auto* h = reinterpret_cast<d2hq::D2HHandle*>(
         static_cast<uintptr_t>(ring_addrs[ring_idx]));
 
     while (true) {
-      uint64_t cur_head = rb->head;
-      uint64_t cur_tail = rb->volatile_tail();
+      uint64_t cur_head = h->head();
+      uint64_t cur_tail = h->tail();
       uint64_t inflight = cur_head - cur_tail;
       if (inflight < 1) {
         uint64_t slot = cur_head;
         TransferCmd cmd{};
         cmd.cmd_type = CmdType::QUIET;
-        rb->atomic_set_and_commit(cmd, &slot);
+        h->atomic_set_and_commit(cmd, &slot);
         slots[num_posted] = slot;
         ++num_posted;
         break;
@@ -268,9 +269,9 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
 
   // Then wait for all QUIET commands to complete
   for (int i = 0; i < num_posted; ++i) {
-    auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
+    auto* h = reinterpret_cast<d2hq::D2HHandle*>(
         static_cast<uintptr_t>(ring_addrs[i * kRingsPerProxy]));
-    wait_until_cmd_consumed(rb, slots[i], nvl_rank, CmdType::QUIET);
+    wait_until_cmd_consumed(h, slots[i], nvl_rank, CmdType::QUIET);
   }
 }
 
@@ -286,18 +287,18 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
   // First, post one BARRIER command per proxy
   for (int ring_idx = 0; ring_idx < num_ring_addrs;
        ring_idx += kRingsPerProxy) {
-    auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
+    auto* h = reinterpret_cast<d2hq::D2HHandle*>(
         static_cast<uintptr_t>(ring_addrs[ring_idx]));
 
     while (true) {
-      uint64_t cur_head = rb->head;
-      uint64_t cur_tail = rb->volatile_tail();
+      uint64_t cur_head = h->head();
+      uint64_t cur_tail = h->tail();
       uint64_t inflight = cur_head - cur_tail;
       if (inflight < 1) {
         uint64_t slot = cur_head;
         TransferCmd cmd{};
         cmd.cmd_type = CmdType::BARRIER;
-        rb->atomic_set_and_commit(cmd, &slot);
+        h->atomic_set_and_commit(cmd, &slot);
         slots[num_posted++] = slot;
         break;
       }
@@ -307,9 +308,9 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
 
   // Then wait for each proxy’s barrier to complete
   for (int i = 0; i < num_posted; ++i) {
-    auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
+    auto* h = reinterpret_cast<d2hq::D2HHandle*>(
         static_cast<uintptr_t>(ring_addrs[i * kRingsPerProxy]));
-    wait_until_cmd_consumed(rb, slots[i], nvl_rank, CmdType::BARRIER, label);
+    wait_until_cmd_consumed(h, slots[i], nvl_rank, CmdType::BARRIER, label);
   }
 }
 

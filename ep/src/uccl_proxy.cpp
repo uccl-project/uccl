@@ -20,21 +20,28 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
     return;
   }
 
-  // Allocate multiple ring buffers for this proxy
+  // Allocate multiple D2H queues for this proxy
   ring_buffer_addrs_.reserve(kRingsPerProxy);
   for (size_t i = 0; i < kRingsPerProxy; ++i) {
-    uintptr_t ring_addr = alloc_cmd_ring();
-    ring_buffer_addrs_.push_back(ring_addr);
+    uintptr_t addr = alloc_cmd_ring();  // Could be FIFO or ring backend
+    ring_buffer_addrs_.push_back(addr);
   }
 
-  Proxy::Config cfg;
+  Proxy::Config cfg{};
   thread_idx_ = thread_idx;
   gpu_buffer_addr_ = reinterpret_cast<void*>(gpu_buffer_addr);
 
-  // Convert addresses to DeviceToHostCmdBuffer pointers
-  cfg.ring_buffers.reserve(kRingsPerProxy);
+  // --- Unified handle initialization ---
+  cfg.d2h_queues.reserve(kRingsPerProxy);
+  static std::vector<d2hq::HostD2HHandle> handle_storage;
+  handle_storage.clear();
+  handle_storage.reserve(kRingsPerProxy);
+
   for (auto addr : ring_buffer_addrs_) {
-    cfg.ring_buffers.push_back(reinterpret_cast<DeviceToHostCmdBuffer*>(addr));
+    d2hq::HostD2HHandle h{};
+    d2hq::init_from_addr(h, addr);  // unified across FIFO / ring
+    handle_storage.push_back(h);
+    cfg.d2h_queues.push_back(&handle_storage.back());
   }
 
   cfg.thread_idx = thread_idx;
@@ -51,9 +58,6 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   node_idx_ = node_idx;
 
   if (thread_idx == 0) {
-    // size_t atomic_buffer_bytes = 2 * align<size_t>(num_experts * sizeof(int),
-    // 128);
-    // TODO(MaoZiming)
 #ifdef USE_GRACE_HOPPER
     cudaMallocManaged(&atomic_buffer_ptr_, kAtomicBufferSize);
 #else

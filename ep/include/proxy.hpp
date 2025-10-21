@@ -19,6 +19,7 @@
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
+#include "d2h_queue_host.hpp"
 #include <set>
 #include <tuple>
 
@@ -34,7 +35,7 @@ class Proxy {
   enum class Mode { Sender, Remote, Local, Dual };
 
   struct Config {
-    std::vector<DeviceToHostCmdBuffer*> ring_buffers;
+    std::vector<d2hq::HostD2HHandle*> d2h_queues;
     int thread_idx = 0;
     void* gpu_buffer = nullptr;
     size_t total_size = 0;
@@ -50,8 +51,8 @@ class Proxy {
 
   explicit Proxy(Config const& cfg) : cfg_(cfg) {
     // Initialize state tracking for each ring buffer
-    ring_tails_.resize(cfg_.ring_buffers.size(), 0);
-    ring_seen_.resize(cfg_.ring_buffers.size(), 0);
+    ring_tails_.resize(cfg_.d2h_queues.size(), 0);
+    ring_seen_.resize(cfg_.d2h_queues.size(), 0);
   }
 
   void set_progress_run(bool run) {

@@ -28,7 +28,13 @@ EnvInfo Bench::env_info() const {
   e.threads_per_block = kNumThPerBlock;
   e.iterations = kIterations;
   e.stream_addr = reinterpret_cast<uintptr_t>(env_.stream);
+
+#ifndef USE_MSCCLPP_FIFO_BACKEND
   e.rbs_addr = reinterpret_cast<uintptr_t>(env_.rbs);
+#else
+  e.rbs_addr = reinterpret_cast<uintptr_t>(env_.d_fifo_handles);
+#endif
+
   return e;
 }
 
@@ -40,13 +46,23 @@ bool Bench::is_running() const {
 
 uintptr_t Bench::ring_addr(int i) const {
   if (i < 0 || i >= env_.blocks) throw std::out_of_range("ring index");
+
+#ifndef USE_MSCCLPP_FIFO_BACKEND
+  // Ring-buffer backend
   return reinterpret_cast<uintptr_t>(&env_.rbs[i]);
+#else
+  // FIFO backend — use the HostD2HHandle abstraction
+  if (i >= static_cast<int>(env_.d2h_storage.size()))
+    throw std::out_of_range("fifo index");
+  return reinterpret_cast<uintptr_t>(env_.d2h_storage[i].fifo);
+#endif
 }
 
 void Bench::timing_start() {
   t0_ = std::chrono::high_resolution_clock::now();
   have_t0_ = true;
 }
+
 void Bench::timing_stop() {
   t1_ = std::chrono::high_resolution_clock::now();
   have_t1_ = true;
@@ -56,6 +72,7 @@ void Bench::start_local_proxies(int rank, std::string const& peer_ip) {
   if (running_.load(std::memory_order_acquire)) {
     throw std::runtime_error("Proxies already running");
   }
+
   threads_.reserve(env_.blocks);
   for (int i = 0; i < env_.blocks; ++i) {
     threads_.emplace_back([this, i, rank, peer_ip]() {
@@ -64,65 +81,28 @@ void Bench::start_local_proxies(int rank, std::string const& peer_ip) {
       p.run_local();
     });
   }
+
   running_.store(true, std::memory_order_release);
 }
 
 void Bench::launch_gpu_issue_batched_commands() {
   timing_start();
+
+#ifndef USE_MSCCLPP_FIFO_BACKEND
   const size_t shmem_bytes = kQueueSize * 2 * sizeof(unsigned long long);
   auto st = launch_gpu_issue_batched_commands_shim(
       env_.blocks, kNumThPerBlock, shmem_bytes, env_.stream, env_.rbs);
+
   if (st != cudaSuccess) {
     throw std::runtime_error(std::string("kernel launch failed: ") +
                              cudaGetErrorString(st));
   }
+#else
+  // FIFO backend not GPU-launched
+  abort();
+#endif
+
   GPU_RT_CHECK(cudaEventRecord(done_evt_, env_.stream));
-}
-
-void Bench::sync_stream() {
-  auto st = cudaStreamSynchronize(env_.stream);
-  if (st != cudaSuccess) {
-    throw std::runtime_error(std::string("cudaStreamSynchronize failed: ") +
-                             cudaGetErrorString(st));
-  }
-  timing_stop();
-}
-
-void Bench::sync_stream_interruptible(
-    int poll_ms, long long timeout_ms,
-    std::function<bool()> const& should_abort) {
-  auto start = std::chrono::steady_clock::now();
-  while (true) {
-    cudaError_t st = cudaEventQuery(done_evt_);
-    if (st == cudaSuccess) break;
-    if (st != cudaErrorNotReady) {
-      (void)cudaGetLastError();
-      throw std::runtime_error(std::string("cudaEventQuery failed: ") +
-                               cudaGetErrorString(st));
-    }
-
-    if (should_abort && should_abort()) {
-      throw std::runtime_error("aborted");
-    }
-
-    if (timeout_ms >= 0) {
-      auto now = std::chrono::steady_clock::now();
-      auto elapsed =
-          std::chrono::duration_cast<std::chrono::milliseconds>(now - start);
-      if (elapsed.count() >= timeout_ms) {
-        throw std::runtime_error("Stream sync timed out");
-      }
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(poll_ms));
-  }
-  timing_stop();
-}
-
-void Bench::join_proxies() {
-  for (auto& t : threads_)
-    if (t.joinable()) t.join();
-  threads_.clear();
-  running_.store(false, std::memory_order_release);
 }
 
 void Bench::print_block_latencies() { ::print_block_latencies(env_); }
@@ -137,6 +117,7 @@ Stats Bench::compute_stats() const {
 }
 
 void Bench::print_summary(Stats const& s) const { ::print_summary(env_, s); }
+
 void Bench::print_summary_last() const {
   ::print_summary(env_, compute_stats());
 }
@@ -145,7 +126,6 @@ double Bench::last_elapsed_ms() const {
   if (!have_t0_ || !have_t1_) return 0.0;
   return std::chrono::duration<double, std::milli>(t1_ - t0_).count();
 }
-
 // ============================================================================
 // BenchFifo Implementation
 // ============================================================================
