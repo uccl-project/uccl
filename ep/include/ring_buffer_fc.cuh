@@ -276,7 +276,7 @@ class FCRingBufferManager {
                 payload_buffers_[proxy_id] != nullptr) {
               // Use circular buffer approach - wrap around when full
               uint32_t write_pos = atomicAdd(&payload_write_ptrs_[proxy_id],
-                                             record->payload_size);
+                                             record->payload_ size);
               uint32_t actual_pos = write_pos % payload_buffer_size_;
 
               // Check if we have enough contiguous space
@@ -286,14 +286,12 @@ class FCRingBufferManager {
                 memcpy(dst, record->payload_ptr, record->payload_size);
 
                 // Update command to point to staging buffer
-                ring_buffer->buf[idx].src_ptr = dst;
                 ring_buffer->buf[idx].bytes = record->payload_size;
               } else {
                 // Wrap around - split the copy (simplified: just reset to
                 // beginning)
                 uint8_t* dst = payload_buffers_[proxy_id];
                 memcpy(dst, record->payload_ptr, record->payload_size);
-                ring_buffer->buf[idx].src_ptr = dst;
                 ring_buffer->buf[idx].bytes = record->payload_size;
                 // Reset write pointer to avoid overflow
                 atomicExch(&payload_write_ptrs_[proxy_id],
