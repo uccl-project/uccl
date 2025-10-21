@@ -18,8 +18,11 @@
 #include <unistd.h>
 
 int const kMaxNumGPUs = 8;
+#ifdef USE_TCPX
+#else
 // Assume the local and remote GPUs have the same GPU-NIC mapping.
 uint8_t gpu_to_dev[kMaxNumGPUs] = {0};
+#endif
 std::once_flag glog_init_once;
 constexpr uint32_t kGpuStreamId = 0;
 thread_local bool inside_python = false;
@@ -62,6 +65,35 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
 
   google::InstallFailureSignalHandler();
 
+#ifdef USE_TCPX
+  setenv("NCCL_MIN_ZCOPY_SIZE", "4096", 0);
+  setenv("NCCL_GPUDIRECTTCPX_MIN_ZCOPY_SIZE", "4096", 0);
+  setenv("NCCL_GPUDIRECTTCPX_RECV_SYNC", "1", 0);
+  setenv("UCCL_TCPX_DEBUG", "1", 0);
+  setenv("UCCL_TCPX_KERNEL_DEBUG", "0", 0);
+  const int port_base = getEnvInt("UCCL_TCPX_BOOTSTRAP_PORT_BASE", 12345);
+  tp_server_port_ = port_base + local_gpu_idx_;
+
+  const int num_channels = getEnvInt("UCCL_TCPX_NUM_CHANNELS", 1);
+  const size_t chunk_bytes_raw = getEnvSize("UCCL_TCPX_CHUNK_BYTES", 512ull * 1024);
+  size_t chunk_bytes = align_up_4k(chunk_bytes_raw);
+  if (chunk_bytes != chunk_bytes_raw) {
+    std::cout << "[WARN] UCCL_TCPX_CHUNK_BYTES not 4K aligned, adjusted to "
+              << chunk_bytes << std::endl;
+  }
+
+  tp::Config cfg;
+  cfg.plugin_path = nullptr;
+  cfg.gpu_id = local_gpu_idx_;
+  cfg.channels = num_channels;
+  cfg.chunk_bytes = chunk_bytes;
+  cfg.enable = true;
+
+  ep_ = new tp::Transport(cfg);
+  numa_node_ = get_gpu_numa_node(local_gpu_idx_);
+
+  std::cout << "Lazy creation of TCPX transport for GPU " << local_gpu_idx_ << std::endl;
+#else
   // Initialize the RDMA endpoint with lazy creation.
   ep_ = new uccl::RDMAEndpoint(num_cpus_);
 
@@ -83,6 +115,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
             << std::endl;
   ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_], true);
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
+#endif
 
   send_unified_task_ring_ =
       uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
@@ -145,6 +178,34 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
   std::cout << "Attempting to connect to " << ip_addr << ":" << remote_gpu_idx
             << " via port " << remote_port << std::endl;
 
+#ifdef USE_TCPX
+  std::string remote_name = "gpu" + std::to_string(remote_gpu_idx);
+  uint64_t tp_conn_id = 0;
+
+  std::future<tp::Status> conn_future = std::async(
+      std::launch::async, [this, &ip_addr, remote_port, &remote_name, &tp_conn_id]() {
+        return ep_->connect(ip_addr, remote_port, remote_name, tp_conn_id);
+      });
+
+  while (conn_future.wait_for(std::chrono::milliseconds(200)) != std::future_status::ready) {
+    if (inside_python) check_python_signals();
+  }
+
+  tp::Status st = conn_future.get();
+  if (st != tp::Status::kOk) {
+    std::cerr << "[TCPX] connect() failed: " << static_cast<int>(st) << std::endl;
+    return false;
+  }
+
+  conn_id = tp_conn_id;
+  {
+    std::unique_lock<std::shared_mutex> lock(conn_mu_);
+    conn_id_to_conn_[conn_id] = new Conn{conn_id, {}, ip_addr, remote_gpu_idx};
+  }
+
+  std::cout << "[TCPX] Connection established, id=" << conn_id << std::endl;
+  return true;
+#else
   // Create a new connection ID
   conn_id = next_conn_id_.fetch_add(1);
 
@@ -170,11 +231,16 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
         new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
   }
   return true;
+#endif
 }
 
 std::vector<uint8_t> Endpoint::get_metadata() {
   std::string ip_str = get_oob_ip();
+#ifdef USE_TCPX
+  uint16_t port = tp_server_port_;
+#else
   uint16_t port = ep_->get_p2p_listen_port(gpu_to_dev[local_gpu_idx_]);
+#endif
 
   bool is_ipv6 = ip_str.find(':') != std::string::npos;
   size_t ip_len = is_ipv6 ? 16 : 4;
@@ -250,6 +316,37 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
                       uint64_t& conn_id) {
   std::cout << "Waiting to accept incoming connection..." << std::endl;
 
+// TODO
+#ifdef USE_TCPX
+  ip_addr = "0.0.0.0";
+  remote_gpu_idx = -1;
+
+  std::string remote_name = "gpu" + std::to_string(local_gpu_idx_);
+  uint64_t tp_conn_id = 0;
+
+  std::future<tp::Status> accept_future = std::async(
+      std::launch::async, [this, &remote_name, &tp_conn_id]() {
+        return ep_->accept(tp_server_port_, remote_name, tp_conn_id);
+      });
+
+  while (accept_future.wait_for(std::chrono::milliseconds(200)) != std::future_status::ready) {
+    if (inside_python) check_python_signals();
+  }
+
+  tp::Status st = accept_future.get();
+  if (st != tp::Status::kOk) {
+    std::cerr << "[TCPX] accept() failed, status=" << static_cast<int>(st) << std::endl;
+    return false;
+  }
+
+  conn_id = tp_conn_id;
+  {
+    std::unique_lock<std::shared_mutex> lock(conn_mu_);
+    conn_id_to_conn_[conn_id] = new Conn{conn_id, {}, ip_addr, remote_gpu_idx};
+  }
+
+  std::cout << "[TCPX] Connection accepted, id=" << conn_id << std::endl;
+#else
   // For demo purposes, simulate accepted connection
   conn_id = next_conn_id_.fetch_add(1);
 
@@ -276,11 +373,23 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
     conn_id_to_conn_[conn_id] =
         new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
   }
-
+#endif
   return true;
 }
 
 bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
+#ifdef USE_TCPX
+  mr_id = next_mr_id_.fetch_add(1);
+  tp::MrHandle mr = 0;
+  auto st = ep_->register_memory(const_cast<void*>(data), size, /*is_recv=*/false, mr);
+  if (st != tp::Status::kOk) {
+    std::cerr << "[TCPX] register_memory failed: " << static_cast<int>(st) << std::endl;
+    return false;
+  }
+  std::unique_lock<std::shared_mutex> lock(mr_mu_);
+  tp_mr_map_[mr_id] = mr;
+  return true;
+#else
   mr_id = next_mr_id_.fetch_add(1);
 
   uccl::Mhandle* mhandle;
@@ -297,11 +406,35 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
   }
 
   return true;
+#endif
 }
 
 bool Endpoint::regv(std::vector<void const*> const& data_v,
                     std::vector<size_t> const& size_v,
                     std::vector<uint64_t>& mr_id_v) {
+#ifdef USE_TCPX
+  if (data_v.size() != size_v.size())
+    throw std::invalid_argument("[Endpoint::regv] data_v/size_v length mismatch");
+
+  size_t const n = data_v.size();
+  mr_id_v.resize(n);
+
+  for (size_t i = 0; i < n; ++i) {
+    uint64_t id = next_mr_id_.fetch_add(1);
+    tp::MrHandle mr = 0;
+    auto st = ep_->register_memory(const_cast<void*>(data_v[i]), size_v[i], /*is_recv=*/false, mr);
+    if (st != tp::Status::kOk) {
+      std::cerr << "[TCPX] register_memory failed at i=" << i << " status=" << static_cast<int>(st) << "\n";
+      return false;
+    }
+    {
+      std::unique_lock<std::shared_mutex> lock(mr_mu_);
+      tp_mr_map_[id] = mr;
+    }
+    mr_id_v[i] = id;
+  }
+  return true;
+#else
   if (data_v.size() != size_v.size())
     throw std::invalid_argument(
         "[Endpoint::regv] data_v/size_v length mismatch");
@@ -333,9 +466,26 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
     mr_id_v[i] = id;
   }
   return true;
+#endif
 }
 
 bool Endpoint::dereg(uint64_t mr_id) {
+#ifdef USE_TCPX
+  tp::MrHandle mr = 0;
+  {
+    std::unique_lock<std::shared_mutex> lock(mr_mu_);
+    auto it = tp_mr_map_.find(mr_id);
+    if (it == tp_mr_map_.end()) return true; // 视为已释放
+    mr = it->second;
+    tp_mr_map_.erase(it);
+  }
+  auto st = ep_->deregister_memory(mr);
+  if (st != tp::Status::kOk) {
+    std::cerr << "[TCPX] deregister_memory failed: " << static_cast<int>(st) << std::endl;
+    return false;
+  }
+  return true;
+#else
   {
     std::unique_lock<std::shared_mutex> lock(mr_mu_);
     MR* mr = mr_id_to_mr_[mr_id];
@@ -344,12 +494,31 @@ bool Endpoint::dereg(uint64_t mr_id) {
     mr_id_to_mr_.erase(mr_id);
   }
   return true;
+#endif
 }
 
 bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
                     size_t size) {
+#ifdef USE_TCPX
+  // 在 TCPX 下：conn_id == ConnHandle，mr_id -> MrHandle
+  tp::MrHandle mr = 0;
+  {
+    std::shared_lock<std::shared_mutex> lock(mr_mu_);
+    auto it = tp_mr_map_.find(mr_id);
+    if (it == tp_mr_map_.end()) {
+      std::cerr << "[TCPX] send: invalid mr_id " << mr_id << std::endl;
+      return false;
+    }
+    mr = it->second;
+  }
+  auto st = ep_->send(static_cast<tp::ConnHandle>(conn_id), mr, size, /*tag_base=*/100);
+  if (st != tp::Status::kOk) {
+    std::cerr << "[TCPX] send failed: " << static_cast<int>(st) << std::endl;
+    return false;
+  }
+  return true;
+#else
   DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
-
   Conn* conn;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
@@ -404,9 +573,28 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
   }
 
   return true;
+#endif
 }
 
 bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
+#ifdef USE_TCPX
+  tp::MrHandle mr = 0;
+  {
+    std::shared_lock<std::shared_mutex> lock(mr_mu_);
+    auto it = tp_mr_map_.find(mr_id);
+    if (it == tp_mr_map_.end()) {
+      std::cerr << "[TCPX] recv: invalid mr_id " << mr_id << std::endl;
+      return false;
+    }
+    mr = it->second;
+  }
+  auto st = ep_->recv(static_cast<tp::ConnHandle>(conn_id), mr, size, /*tag_base=*/100);
+  if (st != tp::Status::kOk) {
+    std::cerr << "[TCPX] recv failed: " << static_cast<int>(st) << std::endl;
+    return false;
+  }
+  return true;
+#else
   Conn* conn;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
@@ -462,10 +650,33 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
   }
 
   return true;
+#endif
 }
 
 bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
                           size_t size, uint64_t* transfer_id) {
+#ifdef USE_TCPX
+  tp::MrHandle mr = 0;
+  {
+    std::shared_lock<std::shared_mutex> lock(mr_mu_);
+    auto it = tp_mr_map_.find(mr_id);
+    if (it == tp_mr_map_.end()) {
+      std::cerr << "[TCPX] send_async: invalid mr_id " << mr_id << std::endl;
+      return false;
+    }
+    mr = it->second;
+  }
+
+  tp::TxHandle tx_handle = 0;
+  auto st = ep_->send_async(static_cast<tp::ConnHandle>(conn_id), mr, size, /*tag*/100, tx_handle);
+  if (st != tp::Status::kOk) {
+    std::cerr << "[TCPX] send_async failed: " << static_cast<int>(st) << std::endl;
+    return false;
+  }
+
+  *transfer_id = reinterpret_cast<uint64_t>(tx_handle);
+  return true;
+#else
   UnifiedTask* task = create_task(conn_id, mr_id, TaskType::SEND_NET,
                                   const_cast<void*>(data), size);
   if (unlikely(task == nullptr)) {
@@ -479,10 +690,34 @@ bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
   }
 
   return true;
+#endif
 }
 
 bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
                           size_t size, uint64_t* transfer_id) {
+#ifdef USE_TCPX
+  // TCPX 异步路径：直接调用 tp::recv_async
+  tp::MrHandle mr = 0;
+  {
+    std::shared_lock<std::shared_mutex> lock(mr_mu_);
+    auto it = tp_mr_map_.find(mr_id);
+    if (it == tp_mr_map_.end()) {
+      std::cerr << "[TCPX] recv_async: invalid mr_id " << mr_id << std::endl;
+      return false;
+    }
+    mr = it->second;
+  }
+
+  tp::TxHandle tx_handle = 0;
+  auto st = ep_->recv_async(static_cast<tp::ConnHandle>(conn_id), mr, size, /*tag*/100, tx_handle);
+  if (st != tp::Status::kOk) {
+    std::cerr << "[TCPX] recv_async failed: " << static_cast<int>(st) << std::endl;
+    return false;
+  }
+
+  *transfer_id = reinterpret_cast<uint64_t>(tx_handle);
+  return true;
+#else
   UnifiedTask* task =
       create_task(conn_id, mr_id, TaskType::RECV_NET, data, size);
   if (unlikely(task == nullptr)) {
@@ -496,11 +731,22 @@ bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
   }
 
   return true;
+#endif
 }
 
 bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void const*> data_v,
                      std::vector<size_t> size_v, size_t num_iovs) {
+#ifdef USE_TCPX
+  if (mr_id_v.size() != num_iovs || data_v.size() != num_iovs || size_v.size() != num_iovs) {
+    std::cerr << "[TCPX] sendv: arguments size mismatch\n";
+    return false;
+  }
+  for (size_t i = 0; i < num_iovs; ++i) {
+    if (!send(conn_id, mr_id_v[i], data_v[i], size_v[i])) return false;
+  }
+  return true;
+#else
   Conn* conn;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
@@ -586,11 +832,22 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   }
 
   return true;
+#endif
 }
 
 bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void*> data_v, std::vector<size_t> size_v,
                      size_t num_iovs) {
+#ifdef USE_TCPX
+  if (mr_id_v.size() != num_iovs || data_v.size() != num_iovs || size_v.size() != num_iovs) {
+    std::cerr << "[TCPX] recvv: arguments size mismatch\n";
+    return false;
+  }
+  for (size_t i = 0; i < num_iovs; ++i) {
+    if (!recv(conn_id, mr_id_v[i], data_v[i], size_v[i])) return false;
+  }
+  return true;
+#else
   Conn* conn;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
@@ -686,10 +943,15 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   }
 
   return true;
+#endif
 }
 
 bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
                     uccl::FifoItem const& slot_item) {
+#ifdef USE_TCPX
+  std::cerr << "[TCPX] " << __func__ << " is not supported on TCPX backend.\n";
+  return false;
+#else
   if (!ucclParamRCMode()) {
     DCHECK(false) << "RDMA READ is only supported in RC mode, toggle RCMODE to "
                      "be True in transport_config.h";
@@ -754,11 +1016,16 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
   }
 
   return true;
+#endif
 }
 
 bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
                           size_t size, uccl::FifoItem const& slot_item,
                           uint64_t* transfer_id) {
+#ifdef USE_TCPX
+  std::cerr << "[TCPX] " << __func__ << " is not supported on TCPX backend.\n";
+  return false;
+#else
   UnifiedTask* rw_task =
       create_net_task(conn_id, mr_id, TaskType::READ_NET, dst, size, slot_item);
   if (unlikely(rw_task == nullptr)) {
@@ -772,12 +1039,17 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
   }
 
   return true;
+#endif
 }
 
 bool Endpoint::sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                            std::vector<void const*> data_v,
                            std::vector<size_t> size_v, size_t num_iovs,
                            uint64_t* transfer_id) {
+#ifdef USE_TCPX
+  std::cerr << "[TCPX] " << __func__ << " is not supported on TCPX backend.\n";
+  return false;
+#else
   auto const_data_ptr =
       std::make_shared<std::vector<void const*>>(std::move(data_v));
   auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
@@ -797,12 +1069,17 @@ bool Endpoint::sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   }
 
   return true;
+#endif
 }
 
 bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                            std::vector<void*> data_v,
                            std::vector<size_t> size_v, size_t num_iovs,
                            uint64_t* transfer_id) {
+#ifdef USE_TCPX
+  std::cerr << "[TCPX] " << __func__ << " is not supported on TCPX backend.\n";
+  return false;
+#else
   // Use move semantics to reduce memory copies
   UnifiedTask* task = create_recvv_task(conn_id, std::move(data_v),
                                         std::move(size_v), std::move(mr_id_v));
@@ -817,11 +1094,16 @@ bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   }
 
   return true;
+#endif
 }
 
 bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void*> dst_v, std::vector<size_t> size_v,
                      std::vector<uccl::FifoItem> slot_item_v, size_t num_iovs) {
+#ifdef USE_TCPX
+  std::cerr << "[TCPX] " << __func__ << " is not supported on TCPX backend.\n";
+  return false;
+#else
   auto conn = conn_id_to_conn_[conn_id];
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
@@ -907,11 +1189,16 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   }
 
   return true;
+#endif
 }
 
 bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
                            size_t size, uccl::FifoItem const& slot_item,
                            uint64_t* transfer_id) {
+#ifdef USE_TCPX
+  std::cerr << "[TCPX] " << __func__ << " is not supported on TCPX backend.\n";
+  return false;
+#else
   UnifiedTask* rw_task = create_net_task(conn_id, mr_id, TaskType::WRITE_NET,
                                          src, size, slot_item);
   if (unlikely(rw_task == nullptr)) {
@@ -924,12 +1211,17 @@ bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
   }
 
   return true;
+#endif
 }
 
 bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                       std::vector<void*> src_v, std::vector<size_t> size_v,
                       std::vector<uccl::FifoItem> slot_item_v,
                       size_t num_iovs) {
+#ifdef USE_TCPX
+  std::cerr << "[TCPX] " << __func__ << " is not supported on TCPX backend.\n";
+  return false;
+#else
   auto conn = conn_id_to_conn_[conn_id];
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
@@ -1015,10 +1307,15 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   }
 
   return true;
+#endif
 }
 
 bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
                      uccl::FifoItem const& slot_item) {
+#ifdef USE_TCPX
+  std::cerr << "[TCPX] " << __func__ << " is not supported on TCPX backend.\n";
+  return false;
+#else
   if (!ucclParamRCMode()) {
     DCHECK(false) << "We only support RC mode for now.";
     std::abort();
@@ -1081,10 +1378,15 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
     }
   }
   return true;
+#endif
 }
 
 bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
                          size_t len, char* out_buf) {
+#ifdef USE_TCPX
+  std::cerr << "[TCPX] " << __func__ << " is not supported on TCPX backend.\n";
+  return false;
+#else
   auto* conn = conn_id_to_conn_[conn_id];
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
   uccl::ucclRequest req_data;
@@ -1093,11 +1395,16 @@ bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
           addr, len, out_buf) == -1)
     return false;
   return true;
+#endif
 }
 
 bool Endpoint::advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                           std::vector<void*> addr_v, std::vector<size_t> len_v,
                           std::vector<char*> out_buf_v, size_t num_iovs) {
+#ifdef USE_TCPX
+  std::cerr << "[TCPX] " << __func__ << " is not supported on TCPX backend.\n";
+  return false;
+#else
   auto* conn = conn_id_to_conn_[conn_id];
   for (size_t i = 0; i < num_iovs; ++i) {
     auto mhandle = mr_id_to_mr_[mr_id_v[i]]->mhandle_;
@@ -1108,6 +1415,7 @@ bool Endpoint::advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     }
   }
   return true;
+#endif
 }
 
 bool Endpoint::connect_local(int remote_gpu_idx, uint64_t& conn_id) {
@@ -1608,12 +1916,22 @@ bool Endpoint::advertisev_ipc(uint64_t conn_id, std::vector<void*> addr_v,
 }
 
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
+#ifdef USE_TCPX
+  tp::TxHandle tx_handle = reinterpret_cast<tp::TxHandle>(transfer_id);
+  auto st = ep_->poll_transfer(tx_handle, *is_done);
+  if (st != tp::Status::kOk && st != tp::Status::kInProgress) {
+    std::cerr << "[TCPX] poll_transfer failed: " << static_cast<int>(st) << std::endl;
+    return false;
+  }
+  return true;
+#else
   auto task = reinterpret_cast<UnifiedTask*>(transfer_id);
   *is_done = task->done.load(std::memory_order_acquire);
   if (*is_done) {
     delete task;
   }
   return true;
+#endif
 }
 
 void Endpoint::init_uds_socket() {
