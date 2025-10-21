@@ -89,7 +89,9 @@ class CollectiveContext:
         self.local_connections = (
             None  # array indexed by rank - True if local, False if remote
         )
-        self.memory_regions: Dict[int, int] = {}  # ptr -> mr_id
+        self.memory_regions: Dict[int, Tuple[int, int, int]] = (
+            {}
+        )  # mr_id -> (ptr, size, mr_id)
         self.initialized = False
 
         # check and setup fd limit and somaxconn for UDS
@@ -322,31 +324,48 @@ class CollectiveContext:
         return ptr, size
 
     def _register_memory(self, ptr: int, size: int) -> int:
-        """Register memory and cache the memory region ID."""
-        if ptr in self.memory_regions:
-            return self.memory_regions[ptr]
-
+        """Register memory and cache the memory region information."""
+        existing_mr_id = self._check_register(ptr, size)
+        if existing_mr_id is not None:
+            return existing_mr_id
         ok, mr_id = self.ep.reg(ptr, size)
         if not ok:
             raise RuntimeError("Failed to register memory")
-        self.memory_regions[ptr] = mr_id
+        self.memory_regions[mr_id] = (ptr, size, mr_id)
         return mr_id
 
-    def register_tensor(self, tensor: torch.Tensor):
+    def _check_register(self, ptr: int, size: int) -> Optional[int]:
+        end_ptr = ptr + size
+        for region_ptr, region_size, mr_id in self.memory_regions.values():
+            region_end = region_ptr + region_size
+            if ptr >= region_ptr and end_ptr <= region_end:
+                return mr_id
+
+        return None
+
+    def check_tensor_registered(self, tensor: torch.Tensor) -> Optional[int]:
+        if not self.initialized:
+            raise RuntimeError("CollectiveContext not initialized. Call init() first.")
+
+        ptr, size = self._get_buffer_info(tensor)
+        return self._check_register(ptr, size)
+
+    def register_tensor(self, tensor: torch.Tensor) -> int:
         """
         Register a tensor for efficient memory access.
-
         Note: Registration is only required for tensors used with remote (RDMA) connections.
         Local IPC connections do not require memory registration.
 
         Args:
             tensor: Tensor to register
+
+        Returns:
+            mr_id of the registered memory region
         """
         if not self.initialized:
             raise RuntimeError("CollectiveContext not initialized. Call init() first.")
-
         ptr, size = self._get_buffer_info(tensor)
-        self._register_memory(ptr, size)
+        return self._register_memory(ptr, size)
 
     def _deregister_memory(self, ptr: int):
         """Deregister memory and remove the cached memory region ID."""
@@ -400,12 +419,12 @@ class CollectiveContext:
                     raise RuntimeError(f"Failed to initiate IPC send to rank {dst}")
         else:
             # Use RDMA for remote connection (requires memory registration)
-            if ptr not in self.memory_regions:
+            mr_id = self.check_tensor_registered(tensor)
+            if mr_id == None:
                 raise RuntimeError(
                     f"Tensor memory not registered for remote communication with rank {dst}. "
                     f"Call register_tensor() first for tensors used with remote ranks."
                 )
-            mr_id = self.memory_regions[ptr]
             ok = self.ep.send(conn_id, mr_id, ptr, size)
             if not ok:
                 raise RuntimeError(f"Failed to initiate RDMA send to rank {dst}")
@@ -440,12 +459,12 @@ class CollectiveContext:
                     raise RuntimeError(f"Failed to initiate IPC recv from rank {src}")
         else:
             # Use RDMA for remote connection (requires memory registration)
-            if ptr not in self.memory_regions:
+            mr_id = self.check_tensor_registered(tensor)
+            if mr_id == None:
                 raise RuntimeError(
                     f"Tensor memory not registered for remote communication with rank {src}. "
                     f"Call register_tensor() first for tensors used with remote ranks."
                 )
-            mr_id = self.memory_regions[ptr]
             ok = self.ep.recv(conn_id, mr_id, ptr, size)
             if not ok:
                 raise RuntimeError(f"Failed to initiate RDMA recv from rank {src}")
@@ -487,12 +506,12 @@ class CollectiveContext:
                 return transfer_id
         else:
             # Use RDMA async for remote connection (requires memory registration)
-            if ptr not in self.memory_regions:
+            mr_id = self.check_tensor_registered(tensor)
+            if mr_id == None:
                 raise RuntimeError(
                     f"Tensor memory not registered for remote communication with rank {dst}. "
                     f"Call register_tensor() first for tensors used with remote ranks."
                 )
-            mr_id = self.memory_regions[ptr]
             ok, transfer_id = self.ep.send_async(conn_id, mr_id, ptr, size)
             if not ok:
                 raise RuntimeError(f"Failed to initiate async RDMA send to rank {dst}")
@@ -537,12 +556,12 @@ class CollectiveContext:
                 return transfer_id
         else:
             # Use RDMA async for remote connection (requires memory registration)
-            if ptr not in self.memory_regions:
+            mr_id = self.check_tensor_registered(tensor)
+            if mr_id == None:
                 raise RuntimeError(
                     f"Tensor memory not registered for remote communication with rank {src}. "
                     f"Call register_tensor() first for tensors used with remote ranks."
                 )
-            mr_id = self.memory_regions[ptr]
             ok, transfer_id = self.ep.recv_async(conn_id, mr_id, ptr, size)
             if not ok:
                 raise RuntimeError(
