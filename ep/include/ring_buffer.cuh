@@ -59,15 +59,15 @@ struct TransferCmd {
   uint64_t req_rptr;
   uint64_t req_lptr;
 
-  // union {
-  uint16_t expert_idx;     // Low-latency mode.
-  uint32_t atomic_offset;  // Normal mode.
-  // };
+  union {
+    uint16_t expert_idx;     // Low-latency mode.
+    uint32_t atomic_offset;  // Normal mode.
+  };
 
-  // union {
-  int value;            // nvshmemi_ibgda_amo_nonfetch_add
-  uint32_t atomic_val;  // pigyback on write during normal mode.
-  // };
+  union {
+    int value;            // nvshmemi_ibgda_amo_nonfetch_add
+    uint32_t atomic_val;  // pigyback on write during normal mode.
+  };
 };
 
 struct CopyTask {
