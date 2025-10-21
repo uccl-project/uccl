@@ -155,13 +155,16 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
           EP_STATIC_ASSERT(kNumElemsPerRead * WARP_SIZE / kNumPerChannels == 4,
                            "Invalid vectorization");
+          amax = warp_reduce_max<8>(amax);
+          calculate_fp8_scales(amax, scale, scale_inv, round_scale);
+          if (lane_id == 0)
 #else
           EP_STATIC_ASSERT(kNumElemsPerRead * WARP_SIZE / kNumPerChannels == 2,
                            "Invalid vectorization");
-#endif
           amax = warp_reduce_max<16>(amax);
           calculate_fp8_scales(amax, scale, scale_inv, round_scale);
           if (lane_id == 0 or lane_id == 16)
+#endif
             rdma_x_scales[i * kNumElemsPerRead / 128] = scale_inv;
 
           // Cast into send buffer
@@ -638,6 +641,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
     int offset, num_tokens_to_send;
     unpack2(layout, num_tokens_to_send, offset);
 
+#if __CUDA_ARCH__
     // TMA stuffs
     constexpr int kNumTMABufferBytes = sizeof(int4) * WARP_SIZE * kNumUnrolls;
     constexpr int kNumStages = 3;
@@ -678,6 +682,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
           kNumTMABufferBytes,
           static_cast<int>((hidden_bf16_int4 - offset_int4) * sizeof(int4)));
     };
+#endif
 
     // Issue IBGDA send
     for (int token_idx = offset + sub_warp_id;
@@ -718,6 +723,13 @@ __global__ __launch_bounds__(1024, 1) void combine(
             dst_p2p_ptr == 0 ? reinterpret_cast<int4*>(buf_ptr)
                              : reinterpret_cast<int4*>(dst_p2p_ptr);
 
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+        // TODO:  Simulated cast
+        EP_DEVICE_ASSERT(not kUseLogFMT);
+        UNROLLED_WARP_COPY(7, lane_id, hidden_bf16_int4, cpy_dst_int4_ptr,
+                           cpy_src_int4_ptr, ld_nc_global, st_na_global);
+
+#else
         // Prefetch
         if (elect_one_sync(lane_id))
           tma_load_and_arrive(0, cpy_src_int4_ptr, get_num_tma_bytes(0));
@@ -798,12 +810,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
             // quarter-warps)
             if (amax <= kThreshold and log_amin < log_amax) {
               // Transform
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-              auto transform =
-                  [=](float const& log_abs_value) -> __hip_bfloat16 {
-#else
               auto transform = [=](float const& log_abs_value) -> nv_bfloat16 {
-#endif
                 auto const encoded =
                     floorf((log_abs_value - log_amin) * step_inv + rounding);
                 auto const decoded =
@@ -830,10 +837,14 @@ __global__ __launch_bounds__(1024, 1) void combine(
                          get_num_tma_bytes(i));
           __syncwarp();
         }
+#endif
       }
+
+#if __CUDA_ARCH__
       // Flush all stores
       tma_store_wait();
       __syncwarp();
+#endif
 
       // Issue RDMA only if we couldn't use IPC
       // NOTES: for zero-copy mode, we assume the data is already in the send
@@ -1015,7 +1026,7 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
              void* atomic_buffer_ptr, int* rdma_recv_flag_internode) {
   constexpr int kNumMaxTopk = 9;
   int const num_warp_groups = ceil_div(num_experts, num_device_sms);
-  int const num_warps_per_group = 32 / num_warp_groups;
+  int const num_warps_per_group = kNumMaxWarpGroups / num_warp_groups;
   EP_HOST_ASSERT(num_warp_groups > 0 and num_warps_per_group > 0);
 
   auto const num_warps = num_warp_groups * num_warps_per_group;
@@ -1051,7 +1062,11 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
   }                                                                            \
   break
 
-  SETUP_LAUNCH_CONFIG(num_sms, num_warps * 32, stream);
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  EP_HOST_ASSERT(num_warps * WARP_SIZE <= 1024);
+#endif
+
+  SETUP_LAUNCH_CONFIG(num_sms, num_warps * WARP_SIZE, stream);
   SWITCH_HIDDEN(COMBINE_LAUNCH_CASE);
   auto err = cudaGetLastError();
   if (err != cudaSuccess) {

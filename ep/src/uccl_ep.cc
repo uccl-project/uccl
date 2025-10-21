@@ -197,7 +197,12 @@ class Buffer {
                                  barrier_signal_bytes, comm_stream));
     }
 
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+    CUDA_CHECK(hipExtMallocWithFlags(&workspace, NUM_WORKSPACE_BYTES,
+                                     hipDeviceMallocUncached));
+#else
     CUDA_CHECK(cudaMalloc(&workspace, NUM_WORKSPACE_BYTES));
+#endif
     CUDA_CHECK(cudaMemsetAsync(workspace, 0, NUM_WORKSPACE_BYTES, comm_stream));
     CUDA_CHECK(cudaMallocHost(&moe_recv_counter, sizeof(int64_t),
                               cudaHostAllocMapped));

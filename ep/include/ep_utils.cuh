@@ -38,9 +38,15 @@ __host__ __device__ constexpr dtype_t ceil_div(dtype_t a, dtype_t b) {
   return (a + b - 1) / b;
 }
 
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+constexpr float kFP8Margin = 1e-4;
+constexpr float kFinfoAmaxE4M3 = 240.0f;
+constexpr float kFinfoAmaxInvE4M3 = 1 / 240.0f;
+#else
 constexpr float kFP8Margin = 1e-4;
 constexpr float kFinfoAmaxE4M3 = 448.0f;
 constexpr float kFinfoAmaxInvE4M3 = 1 / 448.0f;
+#endif
 
 template <int kBytes>
 struct VecInt {};
