@@ -63,7 +63,8 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       TransferCmd cmd{};
       // TODO(MaoZiming): Check fields here.
       // NOTE(MaoZiming): cmd is needed for proxy to process the command.
-      cmd.cmd_type = make_cmd_type(CmdType::WRITE, is_combine, low_latency_buffer_idx);
+      cmd.cmd_type =
+          make_cmd_type(CmdType::WRITE, is_combine, low_latency_buffer_idx);
       cmd.req_rptr = rptr_val;
       cmd.req_lptr = lptr_val;
       cmd.bytes = bytes_val;
@@ -131,7 +132,8 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
       if (inflight < kMaxInflight) {
         uint64_t slot = cur_head;
         TransferCmd cmd{};
-        cmd.cmd_type = make_cmd_type(CmdType::ATOMIC, is_combine, low_latency_buffer_idx);
+        cmd.cmd_type =
+            make_cmd_type(CmdType::ATOMIC, is_combine, low_latency_buffer_idx);
         // TODO(MaoZiming): Check fields here.
         // NOTE(MaoZiming): cmd is needed for proxy to process the command.
         cmd.value = value;

@@ -107,7 +107,7 @@ union alignas(16) ProxyTrigger {
 
     // Derive IDs and offsets from TransferCmd
     const uint32_t dstId = c.dst_rank;      // -> src/dstMemoryId (9 bits each)
-    const uint32_t srcId = 0;       // -> src/dstMemoryId (9 bits each)
+    const uint32_t srcId = 0;               // -> src/dstMemoryId (9 bits each)
     const uint64_t dstOffset = c.req_rptr;  // -> dstOffset (32 bits)
     const uint64_t srcOffset = c.req_lptr;  // -> srcOffset (32 bits)
     const uint64_t bytes = c.bytes;         // -> size (32 bits)

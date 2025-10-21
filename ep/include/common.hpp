@@ -28,6 +28,8 @@
 #define kAtomicBufferSize 81960
 #define kQueueSize 1024
 #define kQueueMask (kQueueSize - 1)
+// This is the highest we can get due to the number of bits we allocate in the
+// imm for reordering buffer sequence tracking.
 #define kMaxInflight 8
 #define kBatchSize 32
 #define kIterations 40000

@@ -252,10 +252,8 @@ struct alignas(128) RingBuffer {
   inline T& load_cmd_entry(int idx) { return buf[idx & mask()]; }
 
   inline void volatile_clear_cmd_type(int idx) {
-    __atomic_store_n(
-        reinterpret_cast<uint8_t*>(&buf[idx & mask()].cmd_type),
-        static_cast<uint8_t>(CmdType::EMPTY),
-        __ATOMIC_RELEASE);
+    __atomic_store_n(reinterpret_cast<uint8_t*>(&buf[idx & mask()].cmd_type),
+                     static_cast<uint8_t>(CmdType::EMPTY), __ATOMIC_RELEASE);
   }
 
   __host__ __device__ static constexpr uint32_t mask() { return Capacity - 1; }
