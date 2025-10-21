@@ -59,9 +59,7 @@ __global__ void cas_throughput_kernel(DeviceToHostCmdBuffer** ring_buffers,
 
   // Create dummy transfer command
   TransferCmd dummy_cmd;
-  dummy_cmd.cmd = 1;
   dummy_cmd.dst_rank = ring_idx;
-  dummy_cmd.dst_gpu = 0;
   dummy_cmd.bytes = config.payload_size;
   dummy_cmd.req_rptr = warp_id;
   dummy_cmd.req_lptr = 0;
@@ -124,9 +122,8 @@ void cpu_proxy_thread(DeviceToHostCmdBuffer* ring_buffer, int proxy_id,
 
     // Collect batch of commands (like proxy.cpp)
     for (size_t i = seen; i < cur_head; ++i) {
-      uint64_t cmd = ring_buffer->volatile_load_cmd(i);
-      // Non-blocking: break if cmd not ready
-      if (cmd == 0) break;
+      CmdType cmd = ring_buffer->volatile_load_cmd_type(i);
+      if (cmd == CmdType::EMPTY) break;
 
       TransferCmd& cmd_entry = ring_buffer->load_cmd_entry(i);
       cmds_to_process.push_back(cmd_entry);

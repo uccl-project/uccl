@@ -424,7 +424,7 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
     }
 
     auto* ring_buffer = cfg_.ring_buffers[rb_idx];
-    ring_buffer->volatile_store_cmd(cmd_idx, 0);
+    ring_buffer->volatile_clear_cmd_type(cmd_idx);
     ring_buffer->mark_acked(cmd_idx % ring_buffer->capacity);
   }
   acked_wrs_.clear();
@@ -465,22 +465,22 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 
     // Collect batch of commands from this ring buffer
     for (size_t i = ring_seen; i < cur_head; ++i) {
-      uint64_t cmd = ring_buffer->volatile_load_cmd(i);
+      CmdType cmd = ring_buffer->volatile_load_cmd_type(i);
       // NOTE(MaoZiming): Non-blocking. prevent local and remote both while
       // loop.
-      if (cmd == 0) break;
+      if (cmd == CmdType::EMPTY) break;
 
       TransferCmd& cmd_entry = ring_buffer->load_cmd_entry(i);
       if (cmd_entry.cmd_type == CmdType::EMPTY) break;
 
-      if (cmd_entry.cmd_type == CmdType::WRITE ||
-          cmd_entry.cmd_type == CmdType::ATOMIC) {
+      if (get_base_cmd(cmd_entry.cmd_type) == CmdType::WRITE ||
+          get_base_cmd(cmd_entry.cmd_type) == CmdType::ATOMIC) {
         if (static_cast<int>(cmd_entry.dst_rank) == cfg_.rank) {
           fprintf(stderr,
                   "[ERROR] Local command!, cmd.dst_rank: %d, cfg_.rank: %d, "
-                  "cmd_entry.cmd_type: %d, cur_head: %lu, i: %lu, cmd: %lu\n",
+                  "cmd_entry.cmd_type: %d, cur_head: %lu, i: %lu\n",
                   cmd_entry.dst_rank, cfg_.rank,
-                  static_cast<int>(cmd_entry.cmd_type), cur_head, i, cmd);
+                  static_cast<int>(cmd_entry.cmd_type), cur_head, i);
           cudaDeviceSynchronize();
           std::abort();
         }
@@ -488,9 +488,9 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
           fprintf(
               stderr,
               "[ERROR] Intra-node command!, cmd.dst_rank: %d, cfg_.rank: %d, "
-              "cmd_entry.cmd_type: %d, cur_head: %lu, i: %lu, cmd: %lu\n",
+              "cmd_entry.cmd_type: %d, cur_head: %lu, i: %lu\n",
               cmd_entry.dst_rank, cfg_.rank,
-              static_cast<int>(cmd_entry.cmd_type), cur_head, i, cmd);
+              static_cast<int>(cmd_entry.cmd_type), cur_head, i);
           cudaDeviceSynchronize();
           std::abort();
         }
@@ -559,21 +559,20 @@ void Proxy::run_local() {
       // Process commands from this ring buffer
       while (ring_tail < cur_head) {
         uint64_t const idx = ring_tail & kQueueMask;
-        uint64_t cmd;
-
+        CmdType cmd;
         auto last_print = std::chrono::steady_clock::now();
         size_t spin_count = 0;
         do {
-          cmd = ring_buffer->volatile_load_cmd(idx);
+          cmd = ring_buffer->volatile_load_cmd_type(idx);
           cpu_relax();
 
           auto now = std::chrono::steady_clock::now();
           if (now - last_print > std::chrono::seconds(10)) {
             printf(
                 "Still waiting at thread %d, ring %zu, total_seen=%d, "
-                "spin_count=%zu, ring_tail=%lu, cmd: %lu\n",
+                "spin_count=%zu, ring_tail=%lu, cmd: %d\n",
                 cfg_.thread_idx, rb_idx, total_seen, spin_count, ring_tail,
-                cmd);
+                static_cast<int>(cmd));
             last_print = now;
             spin_count++;
           }
@@ -583,7 +582,7 @@ void Proxy::run_local() {
                    cfg_.thread_idx, total_seen);
             return;
           }
-        } while (cmd == 0);
+        } while (cmd == CmdType::EMPTY);
 
 #ifdef DEBUG_PRINT
         printf(
@@ -594,16 +593,9 @@ void Proxy::run_local() {
 #endif
 
         std::atomic_thread_fence(std::memory_order_acquire);
-        if (cmd == 1) {
-          TransferCmd& cmd_entry = ring_buffer->buf[idx];
-          printf(
-              "Received command 1: thread %d, ring %zu, total_seen=%d, value: "
-              "%d\n",
-              cfg_.thread_idx, rb_idx, total_seen, cmd_entry.value);
-        }
 
         // Mark command as processed
-        ring_buffer->volatile_store_cmd(idx, 0);
+        ring_buffer->volatile_clear_cmd_type(idx);
         ring_tail++;
         ring_buffer->cpu_volatile_store_tail(ring_tail);
         total_seen++;
@@ -635,7 +627,7 @@ void Proxy::post_gpu_commands_mixed(
   std::vector<TransferCmd> quiet_cmds, barrier_cmds;
 
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
-    if (cmds_to_post[i].cmd_type == CmdType::ATOMIC) {
+    if (get_base_cmd(cmds_to_post[i].cmd_type) == CmdType::ATOMIC) {
 #ifdef USE_SENDER_BARRIER
       int value = cmds_to_post[i].value;
       uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
@@ -677,13 +669,13 @@ void Proxy::post_gpu_commands_mixed(
              cmds_to_post[i].dst_rank});
       }
 #endif
-    } else if (cmds_to_post[i].cmd_type == CmdType::WRITE) {
+    } else if (get_base_cmd(cmds_to_post[i].cmd_type) == CmdType::WRITE) {
       rdma_wrs.push_back(wrs_to_post[i]);
       rdma_cmds.push_back(cmds_to_post[i]);
-    } else if (cmds_to_post[i].cmd_type == CmdType::QUIET) {
+    } else if (get_base_cmd(cmds_to_post[i].cmd_type) == CmdType::QUIET) {
       quiet_cmds.push_back(cmds_to_post[i]);
       quiet_wrs.push_back(wrs_to_post[i]);
-    } else if (cmds_to_post[i].cmd_type == CmdType::BARRIER) {
+    } else if (get_base_cmd(cmds_to_post[i].cmd_type) == CmdType::BARRIER) {
       barrier_cmds.push_back(cmds_to_post[i]);
       barrier_wrs.push_back(wrs_to_post[i]);
     } else {

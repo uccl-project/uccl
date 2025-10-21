@@ -17,27 +17,57 @@
 #define COPY_RING_CAP 4096
 #endif
 
-enum class CmdType : uint8_t { EMPTY = 0, WRITE, ATOMIC, QUIET, BARRIER };
+enum class CmdType : uint8_t {
+  EMPTY = 0,    // 000
+  WRITE = 1,    // 001
+  ATOMIC = 2,   // 010
+  QUIET = 3,    // 011
+  BARRIER = 4,  // 100
+  // Bits layout:
+  // [7]     = low_latency_buffer_idx
+  // [6]     = is_combine
+  // [5:0]   = command type (0–63)
+};
+
+__host__ __device__ inline CmdType make_cmd_type(CmdType base, bool is_combine,
+                                                 bool low_latency) {
+  uint8_t v = static_cast<uint8_t>(base);
+  if (is_combine) v |= (1u << 6);
+  if (low_latency) v |= (1u << 7);
+  return static_cast<CmdType>(v);
+}
+
+__host__ __device__ inline bool get_is_combine(CmdType c) {
+  return (static_cast<uint8_t>(c) >> 6) & 1u;
+}
+
+__host__ __device__ inline bool get_low_latency(CmdType c) {
+  return (static_cast<uint8_t>(c) >> 7) & 1u;
+}
+
+__host__ __device__ inline CmdType get_base_cmd(CmdType c) {
+  return static_cast<CmdType>(static_cast<uint8_t>(c) & 0x3Fu);
+}
 
 // Command structure for each transfer
 struct TransferCmd {
   // NOTE(MaoZiming): cmd is used to identify the command type and needs to be
   // set in order for proxy to process the command.
-  CmdType cmd_type;
-  uint32_t cmd;
-  uint32_t dst_rank;  // remote node id (MPI-style)
-  uint32_t dst_gpu;   // GPU id on remote node
+  CmdType cmd_type;   // uint8_t
+  uint16_t dst_rank;  // remote node id (MPI-style)
   uint32_t bytes;     // transfer size
-
   uint64_t req_rptr;
   uint64_t req_lptr;
-  uint16_t expert_idx;
-  int value;
-  bool is_combine;
-  bool low_latency_buffer_idx;
 
-  uint32_t atomic_offset;
-  uint32_t atomic_val;
+  // union {
+  uint16_t expert_idx;     // Low-latency mode.
+  uint32_t atomic_offset;  // Normal mode.
+  // };
+
+  // union {
+  int value;            // nvshmemi_ibgda_amo_nonfetch_add
+  uint32_t atomic_val;  // pigyback on write during normal mode.
+  // };
 };
 
 struct CopyTask {
@@ -90,22 +120,22 @@ struct alignas(128) RingBuffer {
   static constexpr int kFenceBatch = 8;
   inline void mark_acked(size_t idx) noexcept {
     assert(idx < Capacity && "mark_acked: idx out of range");
-    const size_t word = idx >> 6;  // idx / 64
-    const size_t bit = idx & 63;   // idx % 64
+    size_t const word = idx >> 6;  // idx / 64
+    size_t const bit = idx & 63;   // idx % 64
     ack_mask[word] |= (1ull << bit);
   }
 
   inline void clear_acked(size_t idx) noexcept {
     assert(idx < Capacity && "clear_acked: idx out of range");
-    const size_t word = idx >> 6;
-    const size_t bit = idx & 63;
+    size_t const word = idx >> 6;
+    size_t const bit = idx & 63;
     ack_mask[word] &= ~(1ull << bit);
   }
 
   inline bool is_acked(size_t idx) const noexcept {
     assert(idx < Capacity && "is_acked: idx out of range");
-    const size_t word = idx >> 6;
-    const size_t bit = idx & 63;
+    size_t const word = idx >> 6;
+    size_t const bit = idx & 63;
     return (ack_mask[word] >> bit) & 1ull;
   }
 
@@ -215,14 +245,17 @@ struct alignas(128) RingBuffer {
     __atomic_store_n(&tail, new_tail, __ATOMIC_RELEASE);
   }
 
-  inline uint64_t volatile_load_cmd(int idx) const {
-    return __atomic_load_n(&buf[idx & mask()].cmd, __ATOMIC_ACQUIRE);
+  inline CmdType volatile_load_cmd_type(int idx) const {
+    return __atomic_load_n(&buf[idx & mask()].cmd_type, __ATOMIC_ACQUIRE);
   }
 
   inline T& load_cmd_entry(int idx) { return buf[idx & mask()]; }
 
-  inline void volatile_store_cmd(int idx, uint64_t val) {
-    __atomic_store_n(&buf[idx & mask()].cmd, val, __ATOMIC_RELEASE);
+  inline void volatile_clear_cmd_type(int idx) {
+    __atomic_store_n(
+        reinterpret_cast<uint8_t*>(&buf[idx & mask()].cmd_type),
+        static_cast<uint8_t>(CmdType::EMPTY),
+        __ATOMIC_RELEASE);
   }
 
   __host__ __device__ static constexpr uint32_t mask() { return Capacity - 1; }
@@ -327,7 +360,7 @@ struct alignas(128) RingBuffer {
   }
 
   __host__ __device__ inline bool atomic_set_and_commit(
-      const T& item, uint64_t* out_slot = nullptr) {
+      T const& item, uint64_t* out_slot = nullptr) {
     uint64_t slot;
     while (true) {
 #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
@@ -362,8 +395,8 @@ struct alignas(128) RingBuffer {
     uint32_t idx = (uint32_t)slot & mask();
 
     T tmp = item;
-    auto saved_cmd = tmp.cmd;
-    tmp.cmd = 0;
+    auto saved_cmd = tmp.cmd_type;
+    tmp.cmd_type = CmdType::EMPTY;
     buf[idx] = tmp;
 
 #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
@@ -375,7 +408,7 @@ struct alignas(128) RingBuffer {
     std::atomic_thread_fence(std::memory_order_release);
 #endif
 
-    buf[idx].cmd = saved_cmd;
+    buf[idx].cmd_type = saved_cmd;
     if (out_slot) *out_slot = slot;
     return true;
   }

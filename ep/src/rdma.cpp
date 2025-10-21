@@ -756,7 +756,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         if (remote_addr < ctx->remote_addr ||
             remote_addr + cmd.bytes > remote_end) {
           fprintf(stderr,
-                  "[ERROR] Remote write OOB: addr=0x%llx len=%zu (base=0x%llx, "
+                  "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
                   "size=%zu), cmd.req_rptr: 0x%llx\n",
                   (unsigned long long)remote_addr, cmd.bytes,
                   (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
@@ -794,7 +794,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
           ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
         } else if (j + 1 == idxs.size()) {
           uint32_t imm =
-              WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
+              WriteImm::Pack(get_is_combine(cmd.cmd_type), get_low_latency(cmd.cmd_type),
                              cmd.expert_idx, (uint32_t)idxs.size(), my_rank)
                   .GetImmData();
           ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
@@ -887,14 +887,14 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
             }
             uint32_t imm =
                 AtomicsImm::Pack(true, false, cmd.atomic_val, cmd.atomic_offset,
-                                 cmd.low_latency_buffer_idx)
+                                 get_low_latency(cmd.cmd_type))
                     .GetImmData();
             wrs[j].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
             wrs[j].imm_data = htonl(imm);
           } else if (j + 1 == kgroup) {
             // Put WriteImm only on the tail WR
             uint32_t imm =
-                WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
+                WriteImm::Pack(get_is_combine(cmd.cmd_type), get_low_latency(cmd.cmd_type),
                                cmd.expert_idx, static_cast<uint32_t>(kgroup),
                                my_rank)
                     .GetImmData();
@@ -1013,12 +1013,12 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         }
 #ifdef USE_SENDER_BARRIER
         S.wr_id_to_write_struct[qpx->wr_id] = {cmd.expert_idx, dst_rank,
-                                               cmd.is_combine,
-                                               cmd.low_latency_buffer_idx};
+                                               get_is_combine(cmd.cmd_type),
+                                               get_low_latency(cmd.cmd_type)};
 #endif
 #ifdef USE_RECEIVER_BARRIER
         uint32_t imm =
-            WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
+            WriteImm::Pack(get_is_combine(cmd.cmd_type), get_low_latency(cmd.cmd_type),
                            cmd.expert_idx, 1, my_rank)
                 .GetImmData();
         ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
@@ -1031,12 +1031,12 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         }
         uint32_t imm =
             AtomicsImm::Pack(true, false, cmd.atomic_val, cmd.atomic_offset,
-                             cmd.low_latency_buffer_idx)
+                             get_low_latency(cmd.cmd_type))
                 .GetImmData();
         ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
       } else if (j + 1 == k) {
         uint32_t imm =
-            WriteImm::Pack(cmd.is_combine, cmd.low_latency_buffer_idx,
+            WriteImm::Pack(get_is_combine(cmd.cmd_type), get_low_latency(cmd.cmd_type),
                            cmd.expert_idx, k, my_rank)
                 .GetImmData();
         ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
@@ -1849,7 +1849,7 @@ void post_atomic_operations(ProxyCtx& S,
         }
 
         uint32_t offset = static_cast<int64_t>(cmd.req_rptr);
-        int low_latency_buffer_idx = cmd.low_latency_buffer_idx;
+        int low_latency_buffer_idx = get_low_latency(cmd.cmd_type);
         if (low_latency_buffer_idx < 0 || low_latency_buffer_idx > 1) {
           fprintf(stderr, "Invalid low_latency_buffer_idx: %d\n",
                   low_latency_buffer_idx);
@@ -1906,7 +1906,7 @@ void post_atomic_operations(ProxyCtx& S,
           // If your AtomicsImm for non-EFA expects 16-bit offsets, keep the
           // mask:
           uint32_t off16 = static_cast<uint32_t>(cmd.req_rptr) & 0xFFFFu;
-          int low_latency_buffer_idx = cmd.low_latency_buffer_idx;
+          int low_latency_buffer_idx = get_low_latency(cmd.cmd_type);
           if (low_latency_buffer_idx < 0 || low_latency_buffer_idx > 1) {
             fprintf(stderr, "Invalid low_latency_buffer_idx: %d\n",
                     low_latency_buffer_idx);
@@ -1914,7 +1914,7 @@ void post_atomic_operations(ProxyCtx& S,
           }
           uint32_t imm =
               AtomicsImm::Pack(
-                  /*is_atomic*/ true, /*is_combine*/ cmd.is_combine, v,
+                  /*is_atomic*/ true, /*is_combine*/ get_is_combine(cmd.cmd_type), v,
                   /*offset*/ off16, low_latency_buffer_idx)
                   .GetImmData();
 
@@ -1997,13 +1997,13 @@ void post_atomic_operations(ProxyCtx& S,
         std::abort();
       }
       uint32_t offset = static_cast<int64_t>(cmd.req_rptr);
-      int low_latency_buffer_idx = cmd.low_latency_buffer_idx;
+      int low_latency_buffer_idx = get_low_latency(cmd.cmd_type);
       if (low_latency_buffer_idx < 0 || low_latency_buffer_idx > 1) {
         fprintf(stderr, "Invalid low_latency_buffer_idx: %d\n",
                 low_latency_buffer_idx);
         std::abort();
       }
-      uint32_t imm = AtomicsImm::Pack(true, cmd.is_combine, v, offset,
+      uint32_t imm = AtomicsImm::Pack(true, get_is_combine(cmd.cmd_type), v, offset,
                                       low_latency_buffer_idx)
                          .GetImmData();
 
@@ -2038,8 +2038,8 @@ void post_atomic_operations(ProxyCtx& S,
         std::abort();
       }
       uint32_t const off16 = static_cast<uint32_t>(cmd.req_rptr) & 0xFFFFu;
-      int low_latency_buffer_idx = cmd.low_latency_buffer_idx;
-      uint32_t const imm = AtomicsImm::Pack(true, cmd.is_combine, v, off16,
+      int low_latency_buffer_idx = get_low_latency(cmd.cmd_type);
+      uint32_t const imm = AtomicsImm::Pack(true, get_is_combine(cmd.cmd_type), v, off16,
                                             low_latency_buffer_idx)
                                .GetImmData();
       sge[i].addr = reinterpret_cast<uintptr_t>(ctx->mr->addr);

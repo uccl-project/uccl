@@ -63,19 +63,14 @@ __global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs) {
       if (inflight < kInflightSlotSize) {
         // Record start time
         unsigned long long t0 = clock64();
-        uint32_t message_idx = it + 1;
-
         uint64_t my_slot = cur_head;
         // Create the command
-        TransferCmd cmd{.cmd_type = CmdType::WRITE,
-                        .cmd = message_idx + 1,
+        TransferCmd cmd{.cmd_type = make_cmd_type(CmdType::WRITE, false, 0),
                         .dst_rank = 1,
-                        .dst_gpu = 0,
                         .bytes = kObjectSize,
                         .req_rptr = 0,
                         .req_lptr = 0,
-                        .value = 0,
-                        .is_combine = false};
+                        .value = 0};
 
         // Space available, atomically reserve and commit
         rb->atomic_set_and_commit(cmd, &my_slot);

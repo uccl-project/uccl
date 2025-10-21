@@ -283,17 +283,13 @@ void FifoProxy::run_sender() {
 
     // Convert trigger to TransferCmd
     TransferCmd cmd;
-    cmd.cmd_type = CmdType::WRITE;
-    cmd.cmd = trigger.fst;
+    cmd.cmd_type = make_cmd_type(CmdType::WRITE, false, 0);
     cmd.dst_rank = 1;
-    cmd.dst_gpu = 0;
     cmd.bytes = kObjectSize;
     cmd.expert_idx = 0;
     cmd.req_rptr = 0;
     cmd.req_lptr = 0;
     cmd.value = 0;
-    cmd.is_combine = false;
-    cmd.low_latency_buffer_idx = 0;
 
     // Post immediately (no batching)
     std::vector<uint64_t> wrs_to_post{fifo_head_seen};
