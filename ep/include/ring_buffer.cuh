@@ -51,11 +51,9 @@ __host__ __device__ inline CmdType get_base_cmd(CmdType c) {
 
 // Command structure for each transfer
 struct TransferCmd {
-  // NOTE(MaoZiming): cmd is used to identify the command type and needs to be
-  // set in order for proxy to process the command.
-  CmdType cmd_type;   // uint8_t
-  uint16_t dst_rank;  // remote node id (MPI-style)
-  uint32_t bytes;     // transfer size
+  CmdType cmd_type;  // uint8_t
+  uint16_t dst_rank;
+  uint32_t bytes;
   uint64_t req_rptr;
   uint64_t req_lptr;
 
