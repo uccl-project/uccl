@@ -30,14 +30,15 @@ current_dir = Path(__file__).parent
 if str(current_dir) not in sys.path:
     sys.path.insert(0, str(current_dir))
 
+# Import from installed baseline_api package
+from pplx_kernels import PyTorchStreamWrapper, nvshmem_init
+
 from all_to_all_utils import (
     MoEConfig,
     RankTestData,
     ProcessGroupInfo,
     parallel_launch,
     parallel_launch_from_env,
-    PyTorchStreamWrapper,
-    nvshmem_init,
 )
 
 # Try to import CUDA kernel version
@@ -256,7 +257,11 @@ def bench_all_to_all(
 
     # ========== MoE Input Data (unified input format) ==========
     num_tokens = rank_data.num_tokens
-    x = torch.randn((num_tokens, moe.hidden_dim), dtype=moe.in_dtype, device=device)
+    # For float8 types, create tensor in float16 first then convert
+    if moe.in_dtype in [torch.float8_e4m3fn, torch.float8_e5m2]:
+        x = torch.randn((num_tokens, moe.hidden_dim), dtype=torch.float16, device=device).to(moe.in_dtype)
+    else:
+        x = torch.randn((num_tokens, moe.hidden_dim), dtype=moe.in_dtype, device=device)
     topk_idx = rank_data.indices.to(
         device
     )  # (num_tokens, experts_per_token) - ensure on GPU
@@ -804,21 +809,21 @@ def _worker_bench_all_to_all(
 
     configs = [
         # V2-Lite:  64 Experts, 6 Experts per Token, 2048 Hidden Dim
-        MoEConfig(64, 6, 2048, 1, in_dtype, out_dtype),
-        MoEConfig(64, 6, 2048, 4, in_dtype, out_dtype),
-        MoEConfig(64, 6, 2048, 8, in_dtype, out_dtype),
-        MoEConfig(64, 6, 2048, 16, in_dtype, out_dtype),
-        MoEConfig(64, 6, 2048, 32, in_dtype, out_dtype),
-        MoEConfig(64, 6, 2048, 64, in_dtype, out_dtype),
         MoEConfig(64, 6, 2048, 128, in_dtype, out_dtype),
+        MoEConfig(64, 6, 2048, 256, in_dtype, out_dtype),
+        MoEConfig(64, 6, 2048, 512, in_dtype, out_dtype),
+        MoEConfig(64, 6, 2048, 768, in_dtype, out_dtype),
+        MoEConfig(64, 6, 2048, 1024, in_dtype, out_dtype),
+        MoEConfig(64, 6, 2048, 2048, in_dtype, out_dtype),
+        MoEConfig(64, 6, 2048, 4096, in_dtype, out_dtype),
         # R1     : 256 Experts, 8 Experts per Token, 7168 Hidden Dim
-        MoEConfig(256, 8, 7168, 1, in_dtype, out_dtype),
-        MoEConfig(256, 8, 7168, 4, in_dtype, out_dtype),
-        MoEConfig(256, 8, 7168, 8, in_dtype, out_dtype),
-        MoEConfig(256, 8, 7168, 16, in_dtype, out_dtype),
-        MoEConfig(256, 8, 7168, 32, in_dtype, out_dtype),
-        MoEConfig(256, 8, 7168, 64, in_dtype, out_dtype),
         MoEConfig(256, 8, 7168, 128, in_dtype, out_dtype),
+        MoEConfig(256, 8, 7168, 256, in_dtype, out_dtype),
+        MoEConfig(256, 8, 7168, 512, in_dtype, out_dtype),
+        MoEConfig(256, 8, 7168, 768, in_dtype, out_dtype),
+        MoEConfig(256, 8, 7168, 1024, in_dtype, out_dtype),
+        MoEConfig(256, 8, 7168, 2048, in_dtype, out_dtype),
+        MoEConfig(256, 8, 7168, 4096, in_dtype, out_dtype),
     ]
 
     if pgi.rank == 0:
@@ -986,10 +991,14 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dp-size", type=int, default=1)
     parser.add_argument(
-        "--in-dtype", choices=["bfloat16", "float16"], default="bfloat16"
+        "--in-dtype",
+        choices=["bfloat16", "float16", "float8_e4m3fn", "float8_e5m2"],
+        default="float8_e4m3fn",
     )
     parser.add_argument(
-        "--out-dtype", choices=["bfloat16", "float16"], default="bfloat16"
+        "--out-dtype",
+        choices=["bfloat16", "float16", "float8_e4m3fn", "float8_e5m2"],
+        default="bfloat16",
     )
     args = parser.parse_args()
 
