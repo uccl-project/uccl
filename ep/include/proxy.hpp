@@ -35,7 +35,7 @@ class Proxy {
   enum class Mode { Sender, Remote, Local, Dual };
 
   struct Config {
-    std::vector<d2hq::HostD2HHandle*> d2h_queues;
+    std::vector<d2hq::HostD2HHandle> d2h_queues;
     int thread_idx = 0;
     void* gpu_buffer = nullptr;
     size_t total_size = 0;

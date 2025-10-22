@@ -20,7 +20,6 @@ int main(int argc, char** argv) {
   }
   auto t0 = std::chrono::high_resolution_clock::now();
 #ifndef USE_MSCCLPP_FIFO_BACKEND
-  // --- Ring buffer backend ---
   const size_t shmem_bytes = kQueueSize * sizeof(unsigned long long);
   gpu_issue_batched_commands<<<env.blocks, kNumThPerBlock, shmem_bytes,
                                env.stream>>>(env.rbs);

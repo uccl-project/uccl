@@ -105,6 +105,52 @@ void Bench::launch_gpu_issue_batched_commands() {
   GPU_RT_CHECK(cudaEventRecord(done_evt_, env_.stream));
 }
 
+void Bench::sync_stream() {
+  auto st = cudaStreamSynchronize(env_.stream);
+  if (st != cudaSuccess) {
+    throw std::runtime_error(std::string("cudaStreamSynchronize failed: ") +
+                             cudaGetErrorString(st));
+  }
+  timing_stop();
+}
+
+void Bench::sync_stream_interruptible(
+    int poll_ms, long long timeout_ms,
+    std::function<bool()> const& should_abort) {
+  auto start = std::chrono::steady_clock::now();
+  while (true) {
+    cudaError_t st = cudaEventQuery(done_evt_);
+    if (st == cudaSuccess) break;
+    if (st != cudaErrorNotReady) {
+      (void)cudaGetLastError();
+      throw std::runtime_error(std::string("cudaEventQuery failed: ") +
+                               cudaGetErrorString(st));
+    }
+
+    if (should_abort && should_abort()) {
+      throw std::runtime_error("aborted");
+    }
+
+    if (timeout_ms >= 0) {
+      auto now = std::chrono::steady_clock::now();
+      auto elapsed =
+          std::chrono::duration_cast<std::chrono::milliseconds>(now - start);
+      if (elapsed.count() >= timeout_ms) {
+        throw std::runtime_error("Stream sync timed out");
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(poll_ms));
+  }
+  timing_stop();
+}
+
+void Bench::join_proxies() {
+  for (auto& t : threads_)
+    if (t.joinable()) t.join();
+  threads_.clear();
+  running_.store(false, std::memory_order_release);
+}
+
 void Bench::print_block_latencies() { ::print_block_latencies(env_); }
 
 Stats Bench::compute_stats() const {

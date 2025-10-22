@@ -6,6 +6,14 @@
 #include "fifo_cmd_queue.hpp"
 #endif
 
+#define NOT_IMPLEMENTED()                                                    \
+  do {                                                                       \
+    std::fprintf(stderr, "ERROR: Not implemented (%s:%d in %s)\n", __FILE__, \
+                 __LINE__, __func__);                                        \
+    assert(false && "NOT IMPLEMENTED");                                      \
+    std::abort();                                                            \
+  } while (0)
+
 namespace d2hq {
 
 struct HostD2HHandle {
@@ -20,6 +28,7 @@ struct HostD2HHandle {
     // No random-access head in FIFO; provide a conservative value (no new work)
     // so callers using ring-style scans do nothing. Real consumption should
     // use try_pop() via host_try_pop_next().
+    NOT_IMPLEMENTED();
     return 0;
 #else
     return ring->volatile_head();
@@ -29,6 +38,7 @@ struct HostD2HHandle {
   inline uint64_t volatile_tail() const noexcept {
 #ifdef USE_MSCCLPP_FIFO_BACKEND
     // Same note as above; return 0 to keep scans inert under FIFO.
+    NOT_IMPLEMENTED();
     return 0;
 #else
     return ring->volatile_tail();
@@ -41,6 +51,7 @@ struct HostD2HHandle {
 #else
     // FIFO has no indexed view; return EMPTY so scan-based callers will skip.
     (void)idx;
+    NOT_IMPLEMENTED();
     return CmdType::EMPTY;
 #endif
   }
@@ -55,6 +66,7 @@ struct HostD2HHandle {
       tmp.cmd_type = CmdType::EMPTY;
     }
     (void)idx;  // ignored in FIFO
+    NOT_IMPLEMENTED();
     return tmp;
 #endif
   }
@@ -64,6 +76,7 @@ struct HostD2HHandle {
     ring->volatile_clear_cmd_type(static_cast<int>(idx));
 #else
     (void)idx;
+    NOT_IMPLEMENTED();
 #endif
   }
 
@@ -72,6 +85,7 @@ struct HostD2HHandle {
     ring->cpu_volatile_store_tail(new_tail);
 #else
     (void)new_tail;
+    NOT_IMPLEMENTED();
 #endif
   }
 
@@ -80,6 +94,7 @@ struct HostD2HHandle {
     ring->mark_acked(idx);
 #else
     (void)idx;
+    NOT_IMPLEMENTED();
 #endif
   }
 
@@ -96,6 +111,7 @@ struct HostD2HHandle {
     return ring->is_acked(idx);
 #else
     (void)idx;
+    NOT_IMPLEMENTED();
     return false;
 #endif
   }
@@ -104,6 +120,7 @@ struct HostD2HHandle {
 #ifndef USE_MSCCLPP_FIFO_BACKEND
     return ring->advance_tail_from_mask();
 #else
+    NOT_IMPLEMENTED();
     return 0;
 #endif
   }
@@ -112,71 +129,31 @@ struct HostD2HHandle {
 #ifndef USE_MSCCLPP_FIFO_BACKEND
     return ring->capacity;
 #else
+    NOT_IMPLEMENTED();
     return fifo ? static_cast<size_t>(fifo->size()) : 0;
 #endif
   }
 };
 
-// Unified pop helper (kept as-is; works for both backends)
-inline bool host_try_pop_next(HostD2HHandle& h, uint64_t ring_tail,
-                              size_t& seen, size_t q_idx, TransferCmd& out,
-                              uint64_t& wr_id) {
-#ifdef USE_MSCCLPP_FIFO_BACKEND
-  if (!h.fifo || !h.fifo->try_pop(out)) return false;
-  wr_id = (q_idx << 32) | static_cast<uint32_t>(seen);
-  ++seen;  // monotonically increasing per-queue sequence
-  return true;
-#else
-  auto* ring = h.ring;
-  uint64_t cur_head = ring->volatile_head();
-  if (cur_head == ring_tail) return false;
-  if (seen >= cur_head) return false;
-
-  CmdType cmd = ring->volatile_load_cmd_type(seen);
-  if (cmd == CmdType::EMPTY) return false;
-
-  out = ring->load_cmd_entry(seen);
-  if (out.cmd_type == CmdType::EMPTY) return false;
-
-  wr_id = (q_idx << 32) | static_cast<uint32_t>(seen);
-  ++seen;
-  return true;
-#endif
-}
-
-inline void init_handle(HostD2HHandle& h, DeviceToHostCmdBuffer* rb) {
-#ifndef USE_MSCCLPP_FIFO_BACKEND
-  h.ring = rb;
-#else
-  (void)rb;                               // ring not used in FIFO builds
-#endif
-}
-inline HostD2HHandle make_handle(DeviceToHostCmdBuffer* rb) {
-  HostD2HHandle h{};
-  init_handle(h, rb);
-  return h;
-}
-
 #ifdef USE_MSCCLPP_FIFO_BACKEND
 inline void init_handle(HostD2HHandle& h, d2hq::FifoCmdQueue* q) { h.fifo = q; }
+
 inline HostD2HHandle make_handle(d2hq::FifoCmdQueue* q) {
   HostD2HHandle h{};
   init_handle(h, q);
   return h;
 }
-#endif
-
-inline void init_d2h_from_ring(DeviceToHostCmdBuffer* rbs, size_t count,
-                               std::vector<HostD2HHandle>& storage,
-                               std::vector<HostD2HHandle*>& out) {
-  storage.resize(count);
-  out.clear();
-  out.reserve(count);
-  for (size_t i = 0; i < count; ++i) {
-    storage[i] = make_handle(&rbs[i]);
-    out.push_back(&storage[i]);
-  }
+#else
+inline void init_handle(HostD2HHandle& h, DeviceToHostCmdBuffer* rb) {
+  h.ring = rb;
 }
+
+inline HostD2HHandle make_handle(DeviceToHostCmdBuffer* rb) {
+  HostD2HHandle h{};
+  init_handle(h, rb);
+  return h;
+}
+#endif
 
 #ifdef USE_MSCCLPP_FIFO_BACKEND
 
@@ -214,7 +191,7 @@ inline void init_d2h_from_fifo(
 // Uses a TLS wrapper shelf so BenchEnv doesn't need to store wrappers.
 inline void init_d2h_from_fifo(
     std::vector<std::unique_ptr<mscclpp::Fifo>> const& fifo_uptrs,
-    std::vector<HostD2HHandle>& storage, std::vector<HostD2HHandle*>& out) {
+    std::vector<HostD2HHandle>& storage) {
   static thread_local std::vector<std::unique_ptr<d2hq::FifoCmdQueue>>
       fifo_wrappers_tls;
 
@@ -222,14 +199,19 @@ inline void init_d2h_from_fifo(
   fifo_wrappers_tls.reserve(fifo_uptrs.size());
 
   storage.resize(fifo_uptrs.size());
-  out.clear();
-  out.reserve(fifo_uptrs.size());
-
   for (size_t i = 0; i < fifo_uptrs.size(); ++i) {
     auto wrapper = std::make_unique<d2hq::FifoCmdQueue>(fifo_uptrs[i].get());
     storage[i].fifo = wrapper.get();
     fifo_wrappers_tls.push_back(std::move(wrapper));
-    out.push_back(&storage[i]);
+  }
+}
+#else
+
+inline void init_d2h_from_ring(DeviceToHostCmdBuffer* rbs, size_t count,
+                               std::vector<HostD2HHandle>& storage) {
+  storage.resize(count);
+  for (size_t i = 0; i < count; ++i) {
+    storage[i] = make_handle(&rbs[i]);
   }
 }
 
@@ -239,8 +221,7 @@ inline void init_from_addr(HostD2HHandle& h, uintptr_t addr) {
 #ifdef USE_MSCCLPP_FIFO_BACKEND
   h.fifo = reinterpret_cast<d2hq::FifoCmdQueue*>(addr);
 #else
-  h.ptr = reinterpret_cast<void*>(addr);  // fallback generic pointer
-  h.ring_buffer = reinterpret_cast<DeviceToHostCmdBuffer*>(addr);
+  h.ring = reinterpret_cast<DeviceToHostCmdBuffer*>(addr);
 #endif
 }
 

@@ -17,8 +17,7 @@ struct BenchEnv {
   gpuDeviceProp prop{};
 
   // Unified D2H handles visible to the application
-  std::vector<d2hq::HostD2HHandle> d2h_storage;  // owns handles
-  std::vector<d2hq::HostD2HHandle*> d2h_queues;  // pointers to storage
+  std::vector<d2hq::HostD2HHandle> d2h_queues;  // pointers to storage
 
 #ifndef USE_MSCCLPP_FIFO_BACKEND
   DeviceToHostCmdBuffer* rbs = nullptr;
@@ -62,7 +61,7 @@ inline void init_env(BenchEnv& env, int blocks = kNumThBlocks,
 
   // Build backend-agnostic handles for the ring buffers
   d2hq::init_d2h_from_ring(env.rbs, static_cast<size_t>(blocks),
-                           env.d2h_storage, env.d2h_queues);
+                           env.d2h_queues);
 
 #else
   env.fifos.clear();
@@ -89,7 +88,7 @@ inline void init_env(BenchEnv& env, int blocks = kNumThBlocks,
   }
 
   // Build backend-agnostic handles for the FIFOs (3-arg overload)
-  d2hq::init_d2h_from_fifo(env.fifos, env.d2h_storage, env.d2h_queues);
+  d2hq::init_d2h_from_fifo(env.fifos, env.d2h_queues);
 #endif
 }
 
@@ -114,7 +113,6 @@ inline void destroy_env(BenchEnv& env) {
 #endif
 
   env.d2h_queues.clear();
-  env.d2h_storage.clear();
 
   if (env.stream) {
     GPU_RT_CHECK(gpuStreamDestroy(env.stream));

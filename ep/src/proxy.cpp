@@ -144,16 +144,10 @@ void Proxy::set_bench_ring_addrs(std::vector<uintptr_t> const& addrs) {
   ring_seen_.resize(addrs.size(), 0);
   cfg_.d2h_queues.reserve(addrs.size());
 
-  // Keep per-ring HostD2HHandle storage alive across calls.
-  static std::vector<d2hq::HostD2HHandle> handle_storage;
-  handle_storage.clear();
-  handle_storage.reserve(addrs.size());
-
   for (auto addr : addrs) {
     d2hq::HostD2HHandle h{};
     d2hq::init_from_addr(h, addr);  // unified initialization
-    handle_storage.push_back(h);
-    cfg_.d2h_queues.push_back(&handle_storage.back());
+    cfg_.d2h_queues.push_back(h);
   }
 }
 
@@ -432,7 +426,7 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
       continue;
     }
 
-    d2hq::HostD2HHandle* h = cfg_.d2h_queues[rb_idx];
+    d2hq::HostD2HHandle* h = &cfg_.d2h_queues[rb_idx];
     h->volatile_clear_cmd_type(cmd_idx);
     h->mark_acked(cmd_idx % h->capacity());
   }
@@ -440,7 +434,7 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
 
   // Advance tails for each ring buffer based on contiguous acked bits
   for (size_t rb_idx = 0; rb_idx < cfg_.d2h_queues.size(); ++rb_idx) {
-    d2hq::HostD2HHandle* h = cfg_.d2h_queues[rb_idx];
+    d2hq::HostD2HHandle* h = &cfg_.d2h_queues[rb_idx];
     ring_tails_[rb_idx] = h->advance_tail_from_mask();
   }
 }
@@ -453,7 +447,7 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 
   // Process each ring buffer (similar to test_multi_ring_throughput.cu)
   for (size_t rb_idx = 0; rb_idx < cfg_.d2h_queues.size(); rb_idx++) {
-    d2hq::HostD2HHandle* h = cfg_.d2h_queues[rb_idx];
+    d2hq::HostD2HHandle* h = &cfg_.d2h_queues[rb_idx];
     uint64_t& ring_tail = ring_tails_[rb_idx];
     size_t& ring_seen = ring_seen_[rb_idx];
 
@@ -556,7 +550,7 @@ void Proxy::run_local() {
 
     // Multi-ring buffer polling (consistent with other modes)
     for (size_t rb_idx = 0; rb_idx < cfg_.d2h_queues.size(); rb_idx++) {
-      d2hq::HostD2HHandle* h = cfg_.d2h_queues[rb_idx];
+      d2hq::HostD2HHandle* h = &cfg_.d2h_queues[rb_idx];
       uint64_t& ring_tail = ring_tails_[rb_idx];
 
       // Check for new work in this ring buffer

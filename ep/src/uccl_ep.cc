@@ -1,6 +1,7 @@
 #include "bench_kernel.cuh"
 #include "bench_utils.hpp"
 #include "common.hpp"
+#include "d2h_queue_adapter.cuh"
 #include "ep_config.hpp"
 #include "ep_configs.cuh"
 #include "ep_event.hpp"
@@ -93,6 +94,7 @@ class Buffer {
     max_nvl_peers = num_local_ranks;
     {
       cudaGetDevice(&device_index);
+      printf("buffer initialization\n");
       {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
         auto it = uccl::g_proxies_by_dev.find(device_index);
@@ -110,8 +112,11 @@ class Buffer {
         auto host_addrs = collect_ring_addrs_for_device(device_index);
         num_ring_addrs = static_cast<int>(host_addrs.size());
         if (num_ring_addrs > 0) {
-          CUDA_CHECK(cudaMallocManaged(&d_ring_addrs,
-                                       num_ring_addrs * sizeof(uint64_t)));
+          CUDA_CHECK(cudaMallocManaged(
+              &d_handle_objs, num_ring_addrs * sizeof(d2hq::D2HHandle)));
+
+          CUDA_CHECK(
+              cudaMallocManaged(&d_handles, num_ring_addrs * sizeof(uint64_t)));
 
           for (int i = 0; i < num_ring_addrs; ++i) {
             void* host_ptr = reinterpret_cast<void*>(host_addrs[i]);
@@ -121,12 +126,20 @@ class Buffer {
 #else
             dev_ptr = host_ptr;
 #endif
-            d_ring_addrs[i] = reinterpret_cast<uint64_t>(dev_ptr);
-            // printf("Ring buffer %d addr: host %p, dev %p\n", i, host_ptr,
-            //        dev_ptr);
+            // Initialize object with the ring's device pointer
+            d_handle_objs[i].init_from_dev_ptr(dev_ptr);
+            // Store the device address of the object for the kernel
+            d_handles[i] = reinterpret_cast<uint64_t>(&d_handle_objs[i]);
           }
+
+          // Prefetch so the device immediately sees initialized contents
+          CUDA_CHECK(cudaMemPrefetchAsync(
+              d_handle_objs, num_ring_addrs * sizeof(d2hq::D2HHandle),
+              device_index));
+          CUDA_CHECK(cudaMemPrefetchAsync(
+              d_handles, num_ring_addrs * sizeof(uint64_t), device_index));
+          CUDA_CHECK(cudaDeviceSynchronize());
         }
-        CUDA_CHECK(cudaDeviceSynchronize());
         // Allocate device memory for IPC base pointers
         CUDA_CHECK(
             cudaMalloc(&d_ipc_rdma_base_ptrs, max_nvl_peers * sizeof(void*)));
@@ -338,7 +351,14 @@ class Buffer {
 
     // Free chunked mode staffs
     CUDA_CHECK(cudaFreeHost(const_cast<int*>(moe_recv_expert_counter)));
-
+    // Free D2HHandle device-side arrays if allocated
+    if (d_handle_objs) {
+      CUDA_CHECK(cudaFree(d_handle_objs));
+      d_handle_objs = nullptr;
+    }
+    if (d_handles) {
+      CUDA_CHECK(cudaFree(d_handles));
+    }
     destroyed = true;
     available = false;
   }
@@ -523,7 +543,7 @@ class Buffer {
           comm_stream,
           config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4),
                                            num_ranks),
-          num_nvl_bytes, true, low_latency_mode, d_ring_addrs, num_ring_addrs,
+          num_nvl_bytes, true, low_latency_mode, d_handles, num_ring_addrs,
           atomic_buffer_ptr);
     } else {
       rdma_channel_prefix_matrix =
@@ -556,7 +576,7 @@ class Buffer {
           comm_stream,
           config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4),
                                            num_ranks),
-          num_nvl_bytes, low_latency_mode, d_ring_addrs, num_ring_addrs,
+          num_nvl_bytes, low_latency_mode, d_handles, num_ring_addrs,
           atomic_buffer_ptr);
 
       // Synchronize total received tokens and tokens per expert
@@ -658,8 +678,8 @@ class Buffer {
         config.num_max_rdma_chunked_recv_tokens, buffer_ptrs_gpu,
         config.num_max_nvl_chunked_send_tokens,
         config.num_max_nvl_chunked_recv_tokens, rank, num_ranks, cached_mode,
-        comm_stream, num_channels, low_latency_mode, d_ring_addrs,
-        num_ring_addrs, atomic_buffer_ptr);
+        comm_stream, num_channels, low_latency_mode, d_handles, num_ring_addrs,
+        atomic_buffer_ptr);
     // Wait streams
     std::optional<EventHandle> event;
     if (async) {
@@ -818,7 +838,7 @@ class Buffer {
         buffer_ptrs_gpu, config.num_max_nvl_chunked_recv_tokens,
         barrier_signal_ptrs_gpu, rank, comm_stream,
         config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4), num_ranks),
-        num_nvl_bytes, false, low_latency_mode, d_ring_addrs, num_ring_addrs,
+        num_nvl_bytes, false, low_latency_mode, d_handles, num_ring_addrs,
         atomic_buffer_ptr);
 
     // Assign bias pointers
@@ -851,7 +871,7 @@ class Buffer {
         config.num_max_rdma_chunked_recv_tokens, buffer_ptrs_gpu,
         config.num_max_nvl_chunked_send_tokens,
         config.num_max_nvl_chunked_recv_tokens, rank, num_ranks, comm_stream,
-        num_channels, low_latency_mode, d_ring_addrs, num_ring_addrs,
+        num_channels, low_latency_mode, d_handles, num_ring_addrs,
         atomic_buffer_ptr);
 
     // Wait streams
@@ -1475,7 +1495,7 @@ class Buffer {
           topk_idx.data_ptr<int64_t>(), ptr0, ptr_internode0, count0,
           num_tokens, hidden, num_max_dispatch_tokens_per_rank, num_topk,
           num_experts, rank, num_ranks, use_fp8, round_scale, use_ue8m0,
-          workspace, num_device_sms, launch_stream, phases, d_ring_addrs,
+          workspace, num_device_sms, launch_stream, phases, d_handles,
           num_ring_addrs, max_nvl_peers, low_latency_buffer_idx_used,
           d_ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr,
           buffer.dispatch_rdma_recv_count_buffer_internode);  // Added IPC base
@@ -1601,7 +1621,7 @@ class Buffer {
           ptr0, ptr_internode0, count0, num_combined_tokens, hidden,
           num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
           num_ranks, use_logfmt, workspace, num_device_sms, launch_stream,
-          phases, zero_copy, d_ring_addrs, num_ring_addrs, max_nvl_peers,
+          phases, zero_copy, d_handles, num_ring_addrs, max_nvl_peers,
           low_latency_buffer_idx_used, d_ipc_rdma_base_ptrs, rdma_buffer_ptr,
           atomic_buffer_ptr,
           buffer.combine_rdma_recv_flag_buffer_internode);  // Added IPC base
@@ -1884,7 +1904,8 @@ class Buffer {
 
   // Ring buffers
   int num_ring_addrs{0};
-  uint64_t* d_ring_addrs{nullptr};
+  d2hq::D2HHandle* d_handle_objs{nullptr};
+  uint64_t* d_handles{nullptr};
 
   // IPC base pointers for GPU access (for replacing nvshmemi_get_p2p_ptr)
   void** d_ipc_rdma_base_ptrs{

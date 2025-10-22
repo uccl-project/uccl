@@ -55,6 +55,14 @@ struct D2HHandle {
 #endif
   }
 
+  __host__ inline void init_from_dev_ptr(void* dev_ptr) noexcept {
+#ifndef USE_MSCCLPP_FIFO_BACKEND
+    ring = reinterpret_cast<DeviceToHostCmdBuffer*>(dev_ptr);
+#else
+    fifo = *reinterpret_cast<mscclpp::FifoDeviceHandle*>(dev_ptr);
+#endif
+  }
+
   __device__ __forceinline__ uint64_t tail() const {
 #ifdef USE_MSCCLPP_FIFO_BACKEND
     return 0;

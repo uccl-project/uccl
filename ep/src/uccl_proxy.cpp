@@ -20,28 +20,25 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
     return;
   }
 
-  // Allocate multiple D2H queues for this proxy
-  ring_buffer_addrs_.reserve(kRingsPerProxy);
-  for (size_t i = 0; i < kRingsPerProxy; ++i) {
-    uintptr_t addr = alloc_cmd_ring();  // Could be FIFO or ring backend
-    ring_buffer_addrs_.push_back(addr);
-  }
-
   Proxy::Config cfg{};
   thread_idx_ = thread_idx;
   gpu_buffer_addr_ = reinterpret_cast<void*>(gpu_buffer_addr);
 
-  // --- Unified handle initialization ---
   cfg.d2h_queues.reserve(kRingsPerProxy);
-  static std::vector<d2hq::HostD2HHandle> handle_storage;
-  handle_storage.clear();
-  handle_storage.reserve(kRingsPerProxy);
-
-  for (auto addr : ring_buffer_addrs_) {
-    d2hq::HostD2HHandle h{};
-    d2hq::init_from_addr(h, addr);  // unified across FIFO / ring
-    handle_storage.push_back(h);
-    cfg.d2h_queues.push_back(&handle_storage.back());
+  d2h_queues.reserve(kRingsPerProxy);
+  for (size_t i = 0; i < kRingsPerProxy; ++i) {
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+    abort();
+    // We should pass the raw fifo address here.
+#else
+    uintptr_t addr = alloc_cmd_ring();
+#endif
+    d2hq::init_from_addr(d2h_queues[i], addr);
+    cfg.d2h_queues.push_back(d2h_queues[i]);
+    ring_buffer_addrs_.push_back(addr);
+    printf("UcclProxy: thread %d ring buffer %zu addr: %p, HostD2HHandle: %p\n",
+           thread_idx, i, reinterpret_cast<void*>(addr),
+           &cfg.d2h_queues.back());
   }
 
   cfg.thread_idx = thread_idx;

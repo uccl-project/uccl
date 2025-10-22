@@ -94,6 +94,7 @@ class UcclProxy {
   int local_rank_;
   void* atomic_buffer_ptr_;
   int node_idx_;
+  std::vector<d2hq::HostD2HHandle> d2h_queues;
 };
 
 // ============================================================================
