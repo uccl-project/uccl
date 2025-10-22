@@ -14,15 +14,13 @@ CUDA_LIBS  := -L$(CUDA_HOME)/lib64 -lcuda -lcudart
 # Source files
 # Note: unpack_descriptor.h is header-only, no .cc files needed
 DEVICE_SRCS := device/unpack_kernels.cu device/unpack_launch.cu
-CORE_SRCS   := src/bootstrap.cc src/channel_manager.cc src/transfer_flow.cc src/session_manager.cc src/transfer_manager.cc src/tcpx_plugin_api.cc
+CORE_SRCS   := src/bootstrap.cc src/channel_manager.cc src/transfer_flow.cc src/session_manager.cc src/transfer_manager.cc
 TEST_SRCS   := tests/tcpx_perf_runner.cc
-PLUGIN_TEST_SRCS := tests/test_tcpx_plugin_api.cc
 
 # Object files
 DEVICE_OBJS := device/unpack_kernels.o device/unpack_launch.o
-CORE_OBJS   := src/bootstrap.o src/channel_manager.o src/transfer_flow.o src/session_manager.o src/transfer_manager.o src/tcpx_plugin_api.o
+CORE_OBJS   := src/bootstrap.o src/channel_manager.o src/transfer_flow.o src/session_manager.o src/transfer_manager.o
 TEST_OBJS   := tests/tcpx_perf_runner.o
-PLUGIN_TEST_OBJS := tests/test_tcpx_plugin_api.o
 
 # Build object files
 %.o: %.cc
@@ -56,13 +54,8 @@ test_tcpx_perf_multi: $(DEVICE_OBJS) $(CORE_OBJS) $(TEST_OBJS)
 	@echo "Building test_tcpx_perf_multi (Phase 1 API)..."
 	$(NVCC) $(NVCCFLAGS) -o tests/test_tcpx_perf_multi tests/test_tcpx_perf_multi_new.cc tcpx_impl.cc $(TEST_OBJS) $(DEVICE_OBJS) $(CORE_OBJS) $(LIBS) $(CUDA_LIBS)
 
-# tcpx_plugin_api
-test_tcpx_plugin_api: $(DEVICE_OBJS) $(CORE_OBJS) $(PLUGIN_TEST_OBJS)
-	@echo "Building test_tcpx_plugin_api..."
-	$(NVCC) $(NVCCFLAGS) -o tests/test_tcpx_plugin_api tcpx_impl.cc $(PLUGIN_TEST_OBJS) $(DEVICE_OBJS) $(CORE_OBJS) $(LIBS) $(CUDA_LIBS)
-
 # Build targets
-all: core test_tcpx_perf_multi test_tcpx_plugin_api
+all: core test_tcpx_perf_multi
 
 # Quick test - just core components
 quick: core
@@ -89,8 +82,8 @@ check:
 # Clean built files
 clean:
 	@echo "Cleaning build artifacts..."
-	rm -f tests/test_tcpx_perf_multi tests/test_tcpx_perf_multi_original tests/test_tcpx_plugin_api
-	rm -f $(DEVICE_OBJS) $(CORE_OBJS) $(TEST_OBJS) $(PLUGIN_TEST_OBJS) *.o
+	rm -f tests/test_tcpx_perf_multi tests/test_tcpx_perf_multi_original
+	rm -f $(DEVICE_OBJS) $(CORE_OBJS) $(TEST_OBJS) *.o
 	@echo "Clean completed."
 
-.PHONY: all core quick check clean test_tcpx_perf_multi test_tcpx_perf_multi_original test_tcpx_plugin_api
+.PHONY: all core quick check clean test_tcpx_perf_multi test_tcpx_perf_multi_original
