@@ -1,9 +1,9 @@
 #pragma once
 
-#include <vector>
-#include <string>
 #include <shared_mutex>
+#include <string>
 #include <unordered_map>
+#include <vector>
 
 extern thread_local bool inside_python;
 
@@ -22,10 +22,11 @@ struct FifoItem {
   char padding[52];
 };
 static_assert(sizeof(struct FifoItem) == 64, "FifoItem size is not 64 bytes");
-// TODO: Nix plugin need #define FIFO_ITEM_SIZE 64 -> #define FIFO_ITEM_SIZE sizeof(FifoItem)
+// TODO: Nix plugin need #define FIFO_ITEM_SIZE 64 -> #define FIFO_ITEM_SIZE
+// sizeof(FifoItem)
 
 class Endpoint {
-public:
+ public:
   /*
    * Create engine threads running in background for a single interface.
    *
@@ -49,8 +50,8 @@ public:
    */
   bool connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
                uint64_t& conn_id);
-  
-   /*
+
+  /*
    * Accept an incoming connection via TCP.
    *
    * output:
@@ -84,13 +85,13 @@ public:
   /* Receive data from the remote server asynchronously. */
   bool recv_async(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
                   uint64_t* transfer_id);
-  
+
   /* Poll the status of the asynchronous receive. */
   bool poll_async(uint64_t transfer_id, bool* is_done);
 
-private:
+ private:
   mutable std::shared_mutex conn_mu_;
   std::unordered_map<uint64_t, Conn*> conn_id_to_conn_;
 };
 
-}
+}  // namespace tcpx
