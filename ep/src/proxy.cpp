@@ -102,11 +102,22 @@ void Proxy::pin_thread_to_cpu_wrapper() {
 void Proxy::pin_thread_to_numa_wrapper() {
   if (cfg_.pin_thread) {
     assert(ctx_.numa_node != -1);
-    pin_thread_to_numa(ctx_.numa_node);
+    pin_thread_unique(ctx_.numa_node, cfg_.local_rank, cfg_.thread_idx,
+                      kNumThBlocks);
+
+    // Get the actual CPU this thread is running on
+    int cpu = sched_getcpu();
+
+    // Get the affinity mask (optional but useful)
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    pthread_getaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+
     printf(
-        "Local CPU thread pinned to NUMA node %d, thread_idx: %d, "
-        "local_rank: %d\n",
-        ctx_.numa_node, cfg_.thread_idx, cfg_.local_rank);
+        "Local CPU thread pinned to NUMA node %d, thread_idx: %d, local_rank: "
+        "%d, "
+        "running on CPU %d.\n",
+        ctx_.numa_node, cfg_.thread_idx, cfg_.local_rank, cpu);
   }
 }
 
@@ -330,8 +341,7 @@ void Proxy::run_sender() {
   size_t seen = 0;
   uint64_t my_tail = 0;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    local_poll_completions(ctx_, finished_wrs_, acked_wrs_, cfg_.thread_idx,
-                           ctx_by_tag_);
+    local_poll_completions(ctx_, acked_wrs_, cfg_.thread_idx, ctx_by_tag_);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
   }
@@ -346,8 +356,10 @@ void Proxy::run_remote() {
                             atomic_buffer_ptr_, cfg_.num_ranks,
                             cfg_.num_experts, pending_atomic_updates, cfg_.rank,
                             cfg_.num_nodes);
+#ifdef USE_RECEIVER_BARRIER
     apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
                           cfg_.num_experts, cfg_.num_ranks);
+#endif
   }
 }
 
@@ -372,10 +384,9 @@ void Proxy::run_dual() {
   size_t seen = 0;
   std::set<PendingUpdate> pending_atomic_updates;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    poll_cq_dual(ctx_, finished_wrs_, acked_wrs_, cfg_.thread_idx, ring,
-                 ctx_by_tag_, atomic_buffer_ptr_, cfg_.num_ranks,
-                 cfg_.num_experts, pending_atomic_updates, cfg_.rank,
-                 cfg_.num_nodes);
+    poll_cq_dual(ctx_, acked_wrs_, cfg_.thread_idx, ring, ctx_by_tag_,
+                 atomic_buffer_ptr_, cfg_.num_ranks, cfg_.num_experts,
+                 pending_atomic_updates, cfg_.rank, cfg_.num_nodes);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
 #ifdef USE_RECEIVER_BARRIER
@@ -400,63 +411,28 @@ void Proxy::run_dual() {
 }
 
 void Proxy::notify_gpu_completion(uint64_t& my_tail) {
-  if (finished_wrs_.empty()) return;
   if (acked_wrs_.empty()) return;
 
-  // Group completed work requests by ring buffer
-  std::map<size_t, std::vector<std::pair<uint64_t, uint64_t>>>
-      completed_by_ring;
+  // Mark all acked command slots in each ring's bitmask
+  for (auto wr_id : acked_wrs_) {
+    const size_t rb_idx = (wr_id >> 32) & 0xFFFFFFFF;
+    const size_t cmd_idx = wr_id & 0xFFFFFFFF;
 
-  // Copy to iterate safely while erasing.
-  std::vector<uint64_t> finished_copy(finished_wrs_.begin(),
-                                      finished_wrs_.end());
-  std::sort(finished_copy.begin(), finished_copy.end());
-
-  for (auto wr_id : finished_copy) {
-    if (acked_wrs_.find(wr_id) == acked_wrs_.end()) break;
-    // Decode ring buffer index and command index from unique_wr_id
-    size_t rb_idx = (wr_id >> 32) & 0xFFFFFFFF;
-    uint64_t cmd_idx = wr_id & 0xFFFFFFFF;
-
-    completed_by_ring[rb_idx].push_back({wr_id, cmd_idx});
-
-    finished_wrs_.erase(wr_id);
-    acked_wrs_.erase(wr_id);
-
-#ifdef MEASURE_PER_VERB_LATENCY
-    auto it = wr_id_to_start_time_.find(wr_id);
-    if (it == wr_id_to_start_time_.end()) {
-      fprintf(stderr, "Error: WR ID %lu not found in wr_id_to_start_time\n",
-              wr_id);
-      std::abort();
-    }
-    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
-        std::chrono::high_resolution_clock::now() - it->second);
-    if (completion_count_ > kWarmupOps) {
-      wr_time_total_us_ += duration.count();
-    }
-    completion_count_++;
-#endif
-  }
-
-  // Process completions for each ring buffer
-  for (auto& [rb_idx, completions] : completed_by_ring) {
     if (rb_idx >= cfg_.ring_buffers.size()) {
-      fprintf(stderr, "Error: Invalid ring buffer index %zu\n", rb_idx);
+      fprintf(stderr, "Invalid rb_idx %zu in acked_wrs_\n", rb_idx);
       continue;
     }
 
     auto* ring_buffer = cfg_.ring_buffers[rb_idx];
-    uint64_t& ring_tail = ring_tails_[rb_idx];
+    ring_buffer->volatile_clear_cmd_type(cmd_idx);
+    ring_buffer->mark_acked(cmd_idx % ring_buffer->capacity);
+  }
+  acked_wrs_.clear();
 
-    // Clear ring entries and update tail
-    for (auto& [wr_id, cmd_idx] : completions) {
-      ring_buffer->volatile_store_cmd(cmd_idx, 0);
-    }
-
-    // Update tail for this ring buffer
-    ring_tail += completions.size();
-    ring_buffer->cpu_volatile_store_tail(ring_tail);
+  // Advance tails for each ring buffer based on contiguous acked bits
+  for (size_t rb_idx = 0; rb_idx < cfg_.ring_buffers.size(); ++rb_idx) {
+    auto* ring_buffer = cfg_.ring_buffers[rb_idx];
+    ring_tails_[rb_idx] = ring_buffer->advance_tail_from_mask();
   }
 }
 
@@ -489,22 +465,22 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 
     // Collect batch of commands from this ring buffer
     for (size_t i = ring_seen; i < cur_head; ++i) {
-      uint64_t cmd = ring_buffer->volatile_load_cmd(i);
+      CmdType cmd = ring_buffer->volatile_load_cmd_type(i);
       // NOTE(MaoZiming): Non-blocking. prevent local and remote both while
       // loop.
-      if (cmd == 0) break;
+      if (cmd == CmdType::EMPTY) break;
 
       TransferCmd& cmd_entry = ring_buffer->load_cmd_entry(i);
       if (cmd_entry.cmd_type == CmdType::EMPTY) break;
 
-      if (cmd_entry.cmd_type == CmdType::WRITE ||
-          cmd_entry.cmd_type == CmdType::ATOMIC) {
+      if (get_base_cmd(cmd_entry.cmd_type) == CmdType::WRITE ||
+          get_base_cmd(cmd_entry.cmd_type) == CmdType::ATOMIC) {
         if (static_cast<int>(cmd_entry.dst_rank) == cfg_.rank) {
           fprintf(stderr,
                   "[ERROR] Local command!, cmd.dst_rank: %d, cfg_.rank: %d, "
-                  "cmd_entry.cmd_type: %d, cur_head: %lu, i: %lu, cmd: %lu\n",
+                  "cmd_entry.cmd_type: %d, cur_head: %lu, i: %lu\n",
                   cmd_entry.dst_rank, cfg_.rank,
-                  static_cast<int>(cmd_entry.cmd_type), cur_head, i, cmd);
+                  static_cast<int>(cmd_entry.cmd_type), cur_head, i);
           cudaDeviceSynchronize();
           std::abort();
         }
@@ -512,9 +488,9 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
           fprintf(
               stderr,
               "[ERROR] Intra-node command!, cmd.dst_rank: %d, cfg_.rank: %d, "
-              "cmd_entry.cmd_type: %d, cur_head: %lu, i: %lu, cmd: %lu\n",
+              "cmd_entry.cmd_type: %d, cur_head: %lu, i: %lu\n",
               cmd_entry.dst_rank, cfg_.rank,
-              static_cast<int>(cmd_entry.cmd_type), cur_head, i, cmd);
+              static_cast<int>(cmd_entry.cmd_type), cur_head, i);
           cudaDeviceSynchronize();
           std::abort();
         }
@@ -583,21 +559,20 @@ void Proxy::run_local() {
       // Process commands from this ring buffer
       while (ring_tail < cur_head) {
         uint64_t const idx = ring_tail & kQueueMask;
-        uint64_t cmd;
-
+        CmdType cmd;
         auto last_print = std::chrono::steady_clock::now();
         size_t spin_count = 0;
         do {
-          cmd = ring_buffer->volatile_load_cmd(idx);
+          cmd = ring_buffer->volatile_load_cmd_type(idx);
           cpu_relax();
 
           auto now = std::chrono::steady_clock::now();
           if (now - last_print > std::chrono::seconds(10)) {
             printf(
                 "Still waiting at thread %d, ring %zu, total_seen=%d, "
-                "spin_count=%zu, ring_tail=%lu, cmd: %lu\n",
+                "spin_count=%zu, ring_tail=%lu, cmd: %d\n",
                 cfg_.thread_idx, rb_idx, total_seen, spin_count, ring_tail,
-                cmd);
+                static_cast<int>(cmd));
             last_print = now;
             spin_count++;
           }
@@ -607,7 +582,7 @@ void Proxy::run_local() {
                    cfg_.thread_idx, total_seen);
             return;
           }
-        } while (cmd == 0);
+        } while (cmd == CmdType::EMPTY);
 
 #ifdef DEBUG_PRINT
         printf(
@@ -618,16 +593,9 @@ void Proxy::run_local() {
 #endif
 
         std::atomic_thread_fence(std::memory_order_acquire);
-        if (cmd == 1) {
-          TransferCmd& cmd_entry = ring_buffer->buf[idx];
-          printf(
-              "Received command 1: thread %d, ring %zu, total_seen=%d, value: "
-              "%d\n",
-              cfg_.thread_idx, rb_idx, total_seen, cmd_entry.value);
-        }
 
         // Mark command as processed
-        ring_buffer->volatile_store_cmd(idx, 0);
+        ring_buffer->volatile_clear_cmd_type(idx);
         ring_tail++;
         ring_buffer->cpu_volatile_store_tail(ring_tail);
         total_seen++;
@@ -659,7 +627,7 @@ void Proxy::post_gpu_commands_mixed(
   std::vector<TransferCmd> quiet_cmds, barrier_cmds;
 
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
-    if (cmds_to_post[i].cmd_type == CmdType::ATOMIC) {
+    if (get_base_cmd(cmds_to_post[i].cmd_type) == CmdType::ATOMIC) {
 #ifdef USE_SENDER_BARRIER
       int value = cmds_to_post[i].value;
       uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
@@ -701,13 +669,13 @@ void Proxy::post_gpu_commands_mixed(
              cmds_to_post[i].dst_rank});
       }
 #endif
-    } else if (cmds_to_post[i].cmd_type == CmdType::WRITE) {
+    } else if (get_base_cmd(cmds_to_post[i].cmd_type) == CmdType::WRITE) {
       rdma_wrs.push_back(wrs_to_post[i]);
       rdma_cmds.push_back(cmds_to_post[i]);
-    } else if (cmds_to_post[i].cmd_type == CmdType::QUIET) {
+    } else if (get_base_cmd(cmds_to_post[i].cmd_type) == CmdType::QUIET) {
       quiet_cmds.push_back(cmds_to_post[i]);
       quiet_wrs.push_back(wrs_to_post[i]);
-    } else if (cmds_to_post[i].cmd_type == CmdType::BARRIER) {
+    } else if (get_base_cmd(cmds_to_post[i].cmd_type) == CmdType::BARRIER) {
       barrier_cmds.push_back(cmds_to_post[i]);
       barrier_wrs.push_back(wrs_to_post[i]);
     } else {
@@ -725,12 +693,11 @@ void Proxy::post_gpu_commands_mixed(
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
                             rdma_cmds, ctxs_for_all_ranks_, cfg_.rank,
-                            cfg_.thread_idx, finished_wrs_);
+                            cfg_.thread_idx);
   }
   if (!atomic_wrs.empty()) {
     post_atomic_operations(ctx_, atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
-                           cfg_.rank, cfg_.thread_idx, finished_wrs_,
-                           acked_wrs_);
+                           cfg_.rank, cfg_.thread_idx, acked_wrs_);
   }
   if (!barrier_cmds.empty()) {
     // barrier(barrier_wrs, barrier_cmds);
@@ -741,30 +708,6 @@ void Proxy::post_gpu_commands_mixed(
     assert(quiet_wrs.size() == 1);
     quiet(quiet_wrs, quiet_cmds);
   }
-}
-
-static inline int poll_cq_once(ibv_cq* cq, ibv_wc* wc, int max_cqes) {
-#ifdef EFA
-  auto cqx = reinterpret_cast<ibv_cq_ex*>(cq);
-  ibv_poll_cq_attr attr{.comp_mask = 0};
-  if (ibv_start_poll(cqx, &attr)) return 0;
-
-  int n = 0;
-  while (n < max_cqes) {
-    wc[n].status = cqx->status;
-    wc[n].wr_id = cqx->wr_id;
-    wc[n].opcode = ibv_wc_read_opcode(cqx);
-    wc[n].wc_flags = ibv_wc_read_wc_flags(cqx);
-    wc[n].imm_data = ibv_wc_read_imm_data(cqx);
-    wc[n].byte_len = ibv_wc_read_byte_len(cqx);
-    ++n;
-    if (ibv_next_poll(cqx)) break;
-  }
-  ibv_end_poll(cqx);
-  return n;
-#else
-  return ibv_poll_cq(cq, max_cqes, wc);
-#endif
 }
 
 void Proxy::quiet_cq() {
@@ -786,8 +729,8 @@ void Proxy::quiet_cq() {
     int ne = poll_cq_once(ctx_.cq, wc, kMaxOutstandingSends);
     if (ne > 0) {
       empty_iters = 0;
-      local_process_completions(ctx_, finished_wrs_, acked_wrs_,
-                                cfg_.thread_idx, wc, ne, ctx_by_tag_);
+      local_process_completions(ctx_, acked_wrs_, cfg_.thread_idx, wc, ne,
+                                ctx_by_tag_);
       remote_process_completions(
           ctx_, cfg_.thread_idx, ring, ne, wc, ctx_by_tag_, atomic_buffer_ptr_,
           cfg_.num_ranks, cfg_.num_experts, pending_atomic_updates, cfg_.rank,
@@ -814,7 +757,6 @@ void Proxy::quiet_cq() {
 void Proxy::quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds) {
   assert(cmds.size() == 1 && "quiet size must be 1");
   quiet_cq();
-  finished_wrs_.insert(wrs[0]);
   acked_wrs_.insert(wrs[0]);
 }
 
@@ -909,7 +851,6 @@ void Proxy::destroy(bool free_gpu_buffer) {
   ctx_.lb_owner = false;
   // }
 
-  finished_wrs_.clear();
   acked_wrs_.clear();
   wr_id_to_start_time_.clear();
   ctxs_for_all_ranks_.clear();
@@ -949,7 +890,8 @@ void Proxy::post_barrier_msg(int dst_rank, bool ack, uint64_t seq) {
   sge.lkey = ctx->mr->lkey;
 
   ibv_send_wr wr{};
-  wr.wr_id = 0;
+  int barrier_seq = 0;
+  wr.wr_id = kBarrierWrTag | (barrier_seq & kBarrierMask);
   wr.sg_list = &sge;
   wr.num_sge = 1;
   wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
@@ -975,7 +917,6 @@ void Proxy::send_barrier(uint64_t wr) {
   ctx_.barrier_inflight = true;
   ctx_.barrier_wr = wr;
   ctx_.barrier_seq = ctx_.barrier_seq + 1;
-  finished_wrs_.insert(wr);
 
   if (cfg_.rank == ctx_.node_leader_rank) {
     if (ctx_.barrier_arrived.size() != static_cast<size_t>(cfg_.num_nodes)) {
@@ -1010,7 +951,6 @@ void Proxy::barrier_check() {
         break;
       }
     }
-
     if (all_local_arrived) {
       static thread_local uint64_t last_sent_seq = 0;
       if (last_sent_seq != seq) {

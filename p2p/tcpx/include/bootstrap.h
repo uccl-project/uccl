@@ -14,10 +14,22 @@
 
 #pragma once
 
-#include "tcpx_handles.h"
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+
+/**
+ * @brief NCCL network handle (version 7)
+ *
+ * Opaque 128-byte structure used by TCPX plugin for connection handshake.
+ * Contains serialized connection information (IP, port, etc.).
+ */
+struct ncclNetHandle_v7 {
+  char data[128];
+};
+
+static_assert(sizeof(ncclNetHandle_v7) == 128,
+              "ncclNetHandle_v7 must be exactly 128 bytes");
 
 // Bootstrap protocol constants
 constexpr int kBootstrapPort = 12347;

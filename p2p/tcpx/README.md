@@ -1,6 +1,10 @@
-# TCPX P2P Performance Benchmark
+# TCPX P2P Library
 
-Multi-channel TCPX GPU-to-GPU performance test using Google's nccl-plugin-gpudirecttcpx.
+High-performance GPU-to-GPU communication library using Google's TCPX (GPUDirect over TCP).
+
+**Status**: ✅ Phase 1 Complete - API layer working, benchmark validated (~9 GB/s)
+
+---
 
 ## Quick Start
 
@@ -39,15 +43,17 @@ make all
 ### Step 4: Run
 ```bash
 # Server (node 1)
+cd scripts
 ./run_p2p_fullmesh.sh server
 
 # Client (node 2)
+cd scripts
 ./run_p2p_fullmesh.sh client <server_ip>
 ```
 
-### Expected Output in each server's log
+### Expected Output
 ```
-[PERF] Avg (10 iter): 22.42 ms, BW: 2.85 GB/s
+[PERF] Bandwidth: 9.XX GB/s (per GPU)
 ```
 
 ---
@@ -56,13 +62,12 @@ make all
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `UCCL_TCPX_NUM_CHANNELS` | 2 | Number of TCPX channels |
-| `UCCL_TCPX_PERF_SIZE` | 4MB | Transfer size per iteration |
+| `UCCL_TCPX_NUM_CHANNELS` | 2 | Number of TCPX channels per GPU |
+| `UCCL_TCPX_PERF_SIZE` | 64MB | Transfer size per iteration |
 | `UCCL_TCPX_PERF_ITERS` | 10 | Number of iterations |
-| `UCCL_TCPX_CHUNK_BYTES` | 512KB | Chunk size |
-| `UCCL_TCPX_UNPACK_IMPL` | kernel | Unpack mode: kernel/d2d/host |
-| `NCCL_NSOCKS_PERTHREAD` | 2 | Sockets per thread (TCPX plugin) |
-| `NCCL_SOCKET_NTHREADS` | 1 | Threads per comm (TCPX plugin) |
+| `UCCL_TCPX_CHUNK_BYTES` | 512KB | Chunk size for pipelining |
+| `NCCL_NSOCKS_PERTHREAD` | 2 | Sockets per TCPX channel |
+| `NCCL_SOCKET_NTHREADS` | 1 | Threads per TCPX comm |
 
 ---
 
@@ -70,29 +75,40 @@ make all
 
 ### Components
 
-- **ChannelManager**: Manages multiple TCPX connections per GPU
-- **Bootstrap**: Exchanges connection handles between server/client
-- **SlidingWindow**: Prevents exhausting TCPX request pool (MAX_REQUESTS=16)
-- **UnpackKernel**: GPU kernel to copy scattered 4KB fragments to contiguous memory
-- **UnpackLauncher**: Manages CUDA streams and events
+**Phase 1 API Layer** (✅ Complete):
+- **TcpxSession**: Session management (listen, accept, connect, memory registration)
+- **TcpxTransfer**: Data plane operations (send, recv, completion tracking)
+- **TcpxHelpers**: Core logic (completion polling, event management)
+
+**Foundation Layer**:
+- **ChannelManager**: Multi-channel TCPX connection management
+- **Bootstrap**: Connection handle exchange between nodes
+- **Transfer Flow Control**: Managed within `TcpxTransfer` via per-channel windows
+- **UnpackKernel**: GPU kernel for scattered-to-contiguous memory copy
 
 ### Data Flow
 
 **Server (Receiver)**:
-1. Listen on all channels → Bootstrap send handles → Accept connections
-2. CUDA init → Register GPU receive buffer
-3. Main loop:
-   - Post `tcpx_irecv` (round-robin across channels)
-   - Wait for completion via `tcpx_test`
-   - Launch GPU unpack kernel
-   - Call `tcpx_irecv_consumed` after kernel completes
+1. `TcpxSession::listen()` → Get connection info
+2. Bootstrap: Send connection info to client
+3. `TcpxSession::accept()` → Accept connections
+4. `TcpxSession::registerMemory()` → Register GPU buffer
+5. `TcpxTransfer::createTransfer()` → Create transfer object
+6. Loop:
+   - `transfer->postRecv()` → Post receive requests
+   - `transfer->wait()` → Wait for completion
+   - `transfer->release()` → Release resources
 
 **Client (Sender)**:
-1. Bootstrap receive handles → Connect to all channels
-2. CUDA init → Register GPU send buffer
-3. Main loop:
-   - Post `tcpx_isend` (round-robin across channels)
-   - Wait for completion via `tcpx_test`
+1. Bootstrap: Receive connection info from server
+2. `TcpxSession::loadRemoteConnInfo()` → Load server handles
+3. `TcpxSession::connect()` → Connect to server
+4. `TcpxSession::registerMemory()` → Register GPU buffer
+5. `TcpxTransfer::createTransfer()` → Create transfer object
+6. Loop:
+   - `transfer->postSend()` → Post send requests
+   - `transfer->wait()` → Wait for completion
+   - `transfer->release()` → Release resources
 
 ---
 
@@ -100,43 +116,145 @@ make all
 
 ```
 p2p/tcpx/
-├── Makefile
-├── tcpx_impl.cc                      # TCPX plugin wrapper
-├── include/                          # Headers (8 files)
-│   ├── tcpx_interface.h
-│   ├── tcpx_structs.h
-│   ├── channel_manager.h
-│   ├── bootstrap.h
-│   ├── sliding_window.h
-│   └── rx_descriptor.h
-├── src/                              # Implementation (3 files)
-│   ├── channel_manager.cc
-│   ├── bootstrap.cc
-│   └── sliding_window.cc
-├── device/                           # GPU code (3 files)
-│   ├── unpack_kernels.cu
-│   ├── unpack_launch.cu
-│   └── unpack_launch.h
-└── tests/
-    └── test_tcpx_perf_multi.cc       # Main program
+├── README.md                     # This file
+├── Makefile                      # Build system
+├── docs/
+│   ├── roadmap.md                # Long-term development plan
+│   └── history.md                # Development history and fixes
+│
+├── include/                      # Public API headers
+│   ├── session_manager.h         # Session management API
+│   ├── transfer_manager.h        # Transfer API
+│   ├── transfer_flow.h           # Core flow types + helper declarations
+│   ├── tcpx_logging.h            # Logging utilities
+│   ├── unpack_descriptor.h       # Unpack descriptor helpers + plugin structs
+│   ├── channel_manager.h         # Channel management facade
+│   └── bootstrap.h               # Bootstrap protocol + handle definition
+│
+├── src/                          # Implementation
+│   ├── session_manager.cc        # Session implementation
+│   ├── transfer_manager.cc       # Transfer implementation
+│   ├── transfer_flow.cc          # Helper implementation (stage 2 flow)
+│   ├── channel_manager.cc        # Channel management
+│   └── bootstrap.cc              # Bootstrap protocol
+│
+├── device/                       # GPU kernels
+│   ├── unpack_kernels.cu         # Unpack kernel
+│   ├── unpack_launch.cu          # Kernel launcher
+│   └── unpack_launch.h           # Launcher API
+│
+├── tests/                        # Tests and benchmarks
+│   ├── test_tcpx_perf_multi.cc   # Main benchmark (Phase 1 API)
+│   ├── tcpx_perf_runner.h        # Benchmark runner API
+│   └── tcpx_perf_runner.cc       # Benchmark runner implementation
+│
+├── archive/                      # Historical reference
+│   └── test_tcpx_perf_multi.cc.original  # Original working implementation
+│
+└── tcpx_impl.cc                  # TCPX plugin wrapper
 ```
 
 ---
 
-## Advanced Usage
+## API Usage Example
 
-### Multi-Channel Configuration
+### Server
 
-```bash
-# 1 channel × 8 sockets (maximize single channel bandwidth)
-UCCL_TCPX_NUM_CHANNELS=1 NCCL_NSOCKS_PERTHREAD=8 ./tests/test_tcpx_perf_multi server 0
+```cpp
+#include "session_manager.h"
+#include "transfer_manager.h"
 
-# 2 channels × 4 sockets (balanced)
-UCCL_TCPX_NUM_CHANNELS=2 NCCL_NSOCKS_PERTHREAD=4 ./tests/test_tcpx_perf_multi server 0
+// 1. Create session
+TcpxSession session(gpu_id, num_channels);
 
-# 4 channels × 2 sockets (current default)
-UCCL_TCPX_NUM_CHANNELS=4 NCCL_NSOCKS_PERTHREAD=2 ./tests/test_tcpx_perf_multi server 0
+// 2. Listen and get connection info
+std::string conn_info = session.listen();
+// ... send conn_info to client via bootstrap ...
+
+// 3. Accept connection
+session.accept("client");
+
+// 4. Register memory
+void* gpu_buffer = allocate_gpu_buffer(size);
+uint64_t mem_id = session.registerMemory(gpu_buffer, size, NCCL_PTR_CUDA, true);
+
+// 5. Create transfer
+TcpxTransfer* transfer = session.createTransfer("client");
+
+// 6. Receive data
+for (int i = 0; i < num_chunks; i++) {
+  transfer->postRecv(mem_id, offset, chunk_size);
+}
+transfer->wait();
+transfer->release();
+
+delete transfer;
 ```
 
-**Note**: `total_sockets = UCCL_TCPX_NUM_CHANNELS × NCCL_NSOCKS_PERTHREAD × NCCL_SOCKET_NTHREADS`
+### Client
 
+```cpp
+  #include "session_manager.h"
+  #include "transfer_manager.h"
+
+// 1. Create session
+TcpxSession session(gpu_id, num_channels);
+
+// 2. Load server connection info
+// ... receive conn_info from server via bootstrap ...
+session.loadRemoteConnInfo("server", conn_info);
+
+// 3. Connect to server
+session.connect("server");
+
+// 4. Register memory
+void* gpu_buffer = allocate_gpu_buffer(size);
+uint64_t mem_id = session.registerMemory(gpu_buffer, size, NCCL_PTR_CUDA, false);
+
+// 5. Create transfer
+TcpxTransfer* transfer = session.createTransfer("server");
+
+// 6. Send data
+for (int i = 0; i < num_chunks; i++) {
+  transfer->postSend(mem_id, offset, chunk_size);
+}
+transfer->wait();
+transfer->release();
+
+delete transfer;
+```
+
+---
+
+## Performance
+
+- **Hardware**: 2 nodes, 8x H100 GPUs, 4x gVNIC (200 Gbps each)
+- **Configuration**: 4 channels × 2 sockets per GPU
+- **Bandwidth**: ~9 GB/s per GPU (validated)
+- **Latency**: ~8 ms for 64MB transfer
+
+---
+
+
+## Debugging
+
+```bash
+# Enable TCPX debug logs
+export NCCL_DEBUG=INFO
+export NCCL_DEBUG_SUBSYS=NET,INIT
+export NCCL_GPUDIRECTTCPX_DEBUG_LEVEL=TRACE
+
+# Enable internal debug logs
+export TCPX_DEBUG=1
+export TCPX_PERF=1
+
+```
+
+---
+
+## Documentation
+
+- **docs/roadmap.md**: Long-term development plan (Phase 2: NIXL plugin, Phase 3: Integration)
+- **docs/history.md**: Development history, critical fixes, and lessons learned
+
+---

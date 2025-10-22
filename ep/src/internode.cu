@@ -190,7 +190,8 @@ __global__ void notify_dispatch(
             rdma_recv_num_tokens_mixed.send_buffer(i));
         uccl::nvshmemi_ibgda_put_nbi_warp(
             dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
-            src_ptr, (NUM_MAX_NVL_PEERS + num_rdma_experts + 1) * sizeof(int),
+            src_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
+            (NUM_MAX_NVL_PEERS + num_rdma_experts + 1) * sizeof(int),
             translate_dst_rdma_rank<kLowLatencyMode>(i, nvl_rank),
             0,  // NOTE(MaoZiming): use 0 for rb.
             lane_id, 0, ring_addrs, num_ring_addrs, false, -1);
@@ -654,7 +655,8 @@ __global__ void __launch_bounds__(
                 rdma_channel_meta.recv_buffer(rdma_rank)) -
                 reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
             reinterpret_cast<uint64_t>(
-                rdma_channel_meta.send_buffer(dst_rdma_rank)),
+                rdma_channel_meta.send_buffer(dst_rdma_rank)) -
+                reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
             sizeof(int) * (NUM_MAX_NVL_PEERS * 2 + 2),
             translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank),
             channel_id,  // NOTE(MaoZiming): use channel_id for rb.
@@ -900,7 +902,8 @@ __global__ void __launch_bounds__(
               dst_slot_idx * num_bytes_per_token);
           uccl::nvshmemi_ibgda_put_nbi_warp(
               dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
-              src_ptr, num_bytes_per_msg,
+              src_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
+              num_bytes_per_msg,
               translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank),
               channel_id,  // NOTE(MaoZiming): use channel_id for rb.
               lane_id, 0, ring_addrs, num_ring_addrs, false, -1,
@@ -1055,21 +1058,6 @@ __global__ void __launch_bounds__(
           __shfl_sync(0xffffffff, cached_rdma_channel_head, src_rdma_rank);
       auto src_rdma_tail =
           __shfl_sync(0xffffffff, cached_rdma_channel_tail, src_rdma_rank);
-
-      int src_rdma_tail_ready = src_rdma_head;
-      for (int t = src_rdma_head; t < src_rdma_tail; ++t) {
-        int slot = t % num_max_rdma_chunked_recv_tokens;
-        auto meta_ptr = reinterpret_cast<SourceMeta*>(
-            rdma_channel_data.recv_buffer(src_rdma_rank) +
-            slot * num_bytes_per_token + hidden_bytes + scale_bytes);
-
-        int seen_bits =
-            ld_acquire_sys_global(&meta_ptr->is_token_in_nvl_rank_bits);
-        if (seen_bits == 0) break;  // not yet written
-        src_rdma_tail_ready = t + 1;
-      }
-      src_rdma_tail = src_rdma_tail_ready;
-      if (src_rdma_head == src_rdma_tail) continue;
 
       // Iterate over every token from the RDMA buffer
       for (int i = src_rdma_head, num_tokens_sent = 0; i < src_rdma_tail; ++i) {
@@ -2299,7 +2287,8 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                 rdma_slot_idx * num_bytes_per_token);
             uccl::nvshmemi_ibgda_put_nbi_warp(
                 dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
-                src_ptr, num_bytes_per_msg,
+                src_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
+                num_bytes_per_msg,
                 translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank,
                                                          nvl_rank),
                 channel_id,  // NOTE(MaoZiming): use channel_id for rb.
@@ -2377,7 +2366,6 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
           }
         }
         __syncwarp();
-
         // Combine current token
         auto get_addr_fn = [&](int src_rdma_rank, int slot_idx,
                                int hidden_int4_idx) -> int4* {
@@ -2497,7 +2485,8 @@ void combine(cudaDataType_t type, void* combined_x,
              cudaStream_t stream, int num_channels, bool low_latency_mode,
              uint64_t const* ring_addrs, int num_ring_addrs,
              void* atomic_buffer_ptr) {
-  constexpr int kNumCombineForwarderWarps = 24;
+  // NOTE(MaoZiming): I changed here from 24 to 16.
+  constexpr int kNumCombineForwarderWarps = 16;
   constexpr int kNumTMABytesPerSenderWarp = 16384;
   constexpr int kNumTMABytesPerForwarderWarp = 9248;
   constexpr int smem_size =

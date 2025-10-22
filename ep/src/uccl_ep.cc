@@ -1,3 +1,4 @@
+#include "bench_kernel.cuh"
 #include "bench_utils.hpp"
 #include "common.hpp"
 #include "ep_config.hpp"
@@ -11,7 +12,6 @@
 #include "intranode.cuh"
 #include "layout.hpp"
 #include "peer_copy_manager.hpp"
-#include "py_cuda_shims.hpp"
 #include "ring_buffer.cuh"
 #include "uccl_bench.hpp"
 #include "uccl_proxy.hpp"
@@ -2199,4 +2199,64 @@ PYBIND11_MODULE(ep, m) {
              mgr.start_for_proxies(vec);
            })
       .def("stop", &PeerCopyManager::stop);
+
+  // MSCCLPP Fifo class - must be registered before BenchFifo which uses it
+  py::class_<mscclpp::Fifo>(m, "Fifo").def(py::init<uint32_t>(),
+                                           py::arg("size") = 2048);
+
+  // FIFO-based benchmarking classes
+  py::class_<BenchFifo>(m, "BenchFifo")
+      .def(py::init<>())
+      .def("env_info", &BenchFifo::env_info)
+      .def("blocks", &BenchFifo::blocks)
+      .def("num_proxies", &BenchFifo::num_proxies)
+      .def("get_fifo", &BenchFifo::get_fifo, py::return_value_policy::reference)
+      .def("timing_start", &BenchFifo::timing_start)
+      .def("timing_stop", &BenchFifo::timing_stop)
+      .def("is_running", &BenchFifo::is_running)
+      .def("launch_gpu_issue_batched_commands",
+           &BenchFifo::launch_gpu_issue_batched_commands)
+      .def("sync_stream", &BenchFifo::sync_stream)
+      .def("sync_stream_interruptible", &BenchFifo::sync_stream_interruptible,
+           py::arg("poll_ms") = 5, py::arg("timeout_ms") = -1,
+           py::arg("should_abort") = nullptr)
+      .def("join_proxies", &BenchFifo::join_proxies)
+      .def("print_block_latencies", &BenchFifo::print_block_latencies)
+      .def("compute_stats", &BenchFifo::compute_stats)
+      .def("print_summary", &BenchFifo::print_summary)
+      .def("print_summary_last", &BenchFifo::print_summary_last)
+      .def("last_elapsed_ms", &BenchFifo::last_elapsed_ms);
+
+  py::class_<FifoProxy>(m, "FifoProxy")
+      .def(
+          py::init<int, uintptr_t, size_t, int, int, int, std::string const&>(),
+          py::arg("thread_idx"), py::arg("gpu_buffer_addr"),
+          py::arg("total_size"), py::arg("rank"), py::arg("node_idx"),
+          py::arg("local_rank"), py::arg("peer_ip"))
+      .def("set_fifo", &FifoProxy::set_fifo, py::arg("fifo"))
+      .def("set_peers_meta",
+           [](FifoProxy& proxy, py::list meta_list) {
+             std::vector<std::tuple<int, uintptr_t, size_t, std::string>> vec;
+             for (py::handle h : meta_list) {
+               // Handle both dict and tuple formats
+               if (py::isinstance<py::dict>(h)) {
+                 auto d = h.cast<py::dict>();
+                 vec.emplace_back(
+                     d["rank"].cast<int>(), d["ptr"].cast<uintptr_t>(),
+                     d["nbytes"].cast<size_t>(), d["ip"].cast<std::string>());
+               } else {
+                 auto t = h.cast<py::tuple>();
+                 vec.emplace_back(t[0].cast<int>(), t[1].cast<uintptr_t>(),
+                                  t[2].cast<size_t>(),
+                                  t[3].cast<std::string>());
+               }
+             }
+             proxy.set_peers_meta(vec);
+           })
+      .def("start_sender", &FifoProxy::start_sender)
+      .def("start_remote", &FifoProxy::start_remote)
+      .def("stop", &FifoProxy::stop)
+      .def("avg_wr_latency_us", &FifoProxy::avg_wr_latency_us)
+      .def("processed_count", &FifoProxy::processed_count)
+      .def_readonly("thread_idx", &FifoProxy::thread_idx);
 }

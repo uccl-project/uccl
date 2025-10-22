@@ -83,6 +83,7 @@ class Proxy {
   CopyRingBuffer ring;
 
  private:
+  friend class FifoProxy;  // Allow FifoProxy to access private methods
   ProxyCtx ctx_;
   void init_common();
   void init_sender();
@@ -101,10 +102,7 @@ class Proxy {
   RDMAConnectionInfo local_info_{}, remote_info_{};
 
   // Completion tracking
-  std::unordered_set<uint64_t> finished_wrs_;
   std::unordered_set<uint64_t> acked_wrs_;
-  std::mutex finished_wrs_mutex_;
-
   std::unordered_map<uint64_t, std::chrono::high_resolution_clock::time_point>
       wr_id_to_start_time_;
   uint64_t completion_count_ = 0;

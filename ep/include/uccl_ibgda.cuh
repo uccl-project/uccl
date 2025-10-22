@@ -41,9 +41,9 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
       static_cast<uintptr_t>(ring_addrs[ring_idx]));
 
-  uint64_t cur_head = rb->head;
-  uint64_t cur_tail = rb->volatile_tail();
-  uint64_t inflight = cur_head - cur_tail;
+  uint64_t cur_head;
+  uint64_t cur_tail;
+  uint64_t inflight;
 #ifdef USE_NORMAL_MODE
   if (low_latency_buffer_idx == -1) {
     /* Normal mode */
@@ -63,28 +63,38 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       TransferCmd cmd{};
       // TODO(MaoZiming): Check fields here.
       // NOTE(MaoZiming): cmd is needed for proxy to process the command.
-      cmd.cmd_type = CmdType::WRITE;
-      cmd.cmd =
-          (static_cast<uint64_t>(expert_idx + 1) << 32) |
-          (message_idx & 0xFFFFFFFF);  // NOTE(MaoZiming): Use expert_idx + 1
-                                       // to avoid 0 as a valid command.
+      cmd.cmd_type =
+          make_cmd_type(CmdType::WRITE, is_combine, low_latency_buffer_idx);
       cmd.req_rptr = rptr_val;
       cmd.req_lptr = lptr_val;
       cmd.bytes = bytes_val;
       cmd.dst_rank = dst_rank;
-      cmd.expert_idx = expert_idx;
-      cmd.lane_id = lane_id;
-      cmd.message_idx = message_idx;
-      cmd.is_combine = is_combine;
-      cmd.low_latency_buffer_idx = low_latency_buffer_idx;
+      if (bytes_val >> 24) {
+        printf("[nvshmemi_ibgda_put_nbi_warp] bytes too large: %llu\n",
+               (unsigned long long)bytes_val);
+        trap();
+      }
+
 #ifdef USE_NORMAL_MODE
+      if (atomic_offset >> 16) {
+        printf("[nvshmemi_ibgda_put_nbi_warp] atomic_offset too large: %llu\n",
+               (unsigned long long)atomic_offset);
+        trap();
+      }
+      if (atomic_val >> 8) {
+        printf("[nvshmemi_ibgda_put_nbi_warp] atomic_val too large: %llu\n",
+               (unsigned long long)atomic_val);
+        trap();
+      }
       cmd.atomic_offset = atomic_offset;
       cmd.atomic_val = atomic_val;
+#else
+      cmd.expert_idx = expert_idx;
 #endif
       rb->atomic_set_and_commit(cmd, &slot);
       break;
     }
-    if ((clock64() - last_print) > kPrintCycleInterval) {
+    if (clock64() - last_print > kPrintCycleInterval) {
       if (threadIdx.x == 0 && blockIdx.x == 0) {
         printf(
             "[dispatch] stuck waiting, inflight=%ld (cur_head=%lu "
@@ -121,9 +131,9 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     assert(ring_idx < num_ring_addrs);
     auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
         static_cast<uintptr_t>(ring_addrs[ring_idx]));
-    uint64_t cur_head = rb->head;
-    uint64_t cur_tail = rb->volatile_tail();
-    uint64_t inflight = cur_head - cur_tail;
+    uint64_t cur_head;
+    uint64_t cur_tail;
+    uint64_t inflight;
     auto last_print = clock64();
 #ifdef USE_NORMAL_MODE
     if (low_latency_buffer_idx == -1) {
@@ -139,28 +149,23 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
       if (inflight < kMaxInflight) {
         uint64_t slot = cur_head;
         TransferCmd cmd{};
-        cmd.cmd_type = CmdType::ATOMIC;
+        cmd.cmd_type =
+            make_cmd_type(CmdType::ATOMIC, is_combine, low_latency_buffer_idx);
         // TODO(MaoZiming): Check fields here.
         // NOTE(MaoZiming): cmd is needed for proxy to process the command.
-        cmd.cmd = 1;  // to avoid 0 as a valid command.
-        cmd.warp_id = warp_id;
         cmd.value = value;
         cmd.dst_rank = dst_rank;
-        cmd.is_atomic = true;
-        cmd.is_combine = is_combine;
         cmd.req_rptr = rptr;
-        cmd.low_latency_buffer_idx = low_latency_buffer_idx;
         rb->atomic_set_and_commit(cmd, &slot);
         break;
       } else {
         auto now = clock64();
         if (now - last_print > kPrintCycleInterval) {
-          uint64_t tail_cmd = rb->buf[cur_tail & rb->mask()].cmd;
           printf(
               "[nvshmemi_ibgda_amo_nonfetch_add] %p waiting ring_idx: %d, "
               "cur_head: "
-              "%llu, cur_tail: %llu, inflight: %llu, tail_cmd: %llu\n",
-              rb, ring_idx, cur_head, cur_tail, inflight, tail_cmd);
+              "%llu, cur_tail: %llu, inflight: %llu\n",
+              rb, ring_idx, cur_head, cur_tail, inflight);
           last_print = now;
         }
       }
@@ -248,10 +253,9 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
       uint64_t cur_head = rb->head;
       uint64_t cur_tail = rb->volatile_tail();
       uint64_t inflight = cur_head - cur_tail;
-      if (inflight < kMaxInflight) {
+      if (inflight < 1) {
         uint64_t slot = cur_head;
         TransferCmd cmd{};
-        cmd.cmd = 1;
         cmd.cmd_type = CmdType::QUIET;
         rb->atomic_set_and_commit(cmd, &slot);
         slots[num_posted] = slot;
@@ -259,6 +263,7 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
         break;
       }
     }
+    break;
   }
 
   // Then wait for all QUIET commands to complete
@@ -288,16 +293,16 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
       uint64_t cur_head = rb->head;
       uint64_t cur_tail = rb->volatile_tail();
       uint64_t inflight = cur_head - cur_tail;
-      if (inflight < kMaxInflight) {
+      if (inflight < 1) {
         uint64_t slot = cur_head;
         TransferCmd cmd{};
-        cmd.cmd = 1;  // dummy valid cmd
         cmd.cmd_type = CmdType::BARRIER;
         rb->atomic_set_and_commit(cmd, &slot);
         slots[num_posted++] = slot;
         break;
       }
     }
+    break;
   }
 
   // Then wait for each proxy’s barrier to complete

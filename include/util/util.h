@@ -1216,29 +1216,28 @@ static uint32_t safe_pcie_distance(fs::path const& gpu, fs::path const& nic) {
   }
 }
 
-static inline bool is_iface_up(std::string const& ifname) {
-  std::string path = "/sys/class/net/" + ifname + "/operstate";
+static inline bool is_iface_up(std::string const& dev) {
+  // Try InfiniBand verbs device first:
+  // /sys/class/infiniband/mlx5_x/ports/*/state
+  for (int port = 1; port <= 4; ++port) {
+    std::string path = "/sys/class/infiniband/" + dev + "/ports/" +
+                       std::to_string(port) + "/state";
+    std::ifstream inf(path);
+    if (!inf) continue;
+    std::string line;
+    std::getline(inf, line);
+    if (line.find("ACTIVE") != std::string::npos) return true;
+  }
+
+  // Fallback to netdev operstate
+  std::string path = "/sys/class/net/" + dev + "/operstate";
   std::ifstream f(path);
   if (f) {
-    std::string state;
-    f >> state;
-    return (state == "up");
+    std::string s;
+    f >> s;
+    return s == "up";
   }
-
-  // Option 2 (fallback): use ioctl
-  int fd = socket(AF_INET, SOCK_DGRAM, 0);
-  if (fd < 0) return false;
-
-  struct ifreq ifr;
-  std::memset(&ifr, 0, sizeof(ifr));
-  std::strncpy(ifr.ifr_name, ifname.c_str(), IFNAMSIZ - 1);
-  if (ioctl(fd, SIOCGIFFLAGS, &ifr) < 0) {
-    close(fd);
-    return false;
-  }
-  close(fd);
-
-  return (ifr.ifr_flags & IFF_UP) && (ifr.ifr_flags & IFF_RUNNING);
+  return false;
 }
 
 static inline std::string normalize_pci_bus_id(std::string const& pci_bus_id) {
