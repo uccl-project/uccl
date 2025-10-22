@@ -447,22 +447,23 @@ Status Transport::recv_async(ConnHandle conn,
 Status Transport::poll_transfer(TxHandle tx, bool& is_done) {
   if (tx == 0) return invalid();
 
-  std::unique_ptr<tcpx::TcpxTransfer> xfer_to_finalize;
+  std::unique_ptr<tcpx::TcpxTransfer> to_finalize;
 
   {
     std::lock_guard<std::mutex> g(pimpl_->mu);
     auto it = pimpl_->tx_map.find(tx);
     if (it == pimpl_->tx_map.end()) return Status::kInvalidArg;
 
-    // Non-blocking completion check across all channels
     is_done = it->second.xfer->isComplete();
-
     if (is_done) {
-      // Drain and release before erasing
-      if (it->second.xfer->wait() != 0) return Status::kInternal;
-      if (it->second.xfer->release() != 0) return Status::kInternal;
+      to_finalize = std::move(it->second.xfer);
       pimpl_->tx_map.erase(it);
     }
+  }
+
+  if (to_finalize) {
+    if (to_finalize->wait() != 0) return Status::kInternal;
+    if (to_finalize->release() != 0) return Status::kInternal;
   }
 
   return Status::kOk;

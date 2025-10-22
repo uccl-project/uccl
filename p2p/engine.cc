@@ -66,6 +66,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   google::InstallFailureSignalHandler();
 
 #ifdef USE_TCPX
+  std::cout << "USE TCPX" << std::endl;
   setenv("NCCL_MIN_ZCOPY_SIZE", "4096", 0);
   setenv("NCCL_GPUDIRECTTCPX_MIN_ZCOPY_SIZE", "4096", 0);
   setenv("NCCL_GPUDIRECTTCPX_RECV_SYNC", "1", 0);
@@ -94,6 +95,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
 
   std::cout << "Lazy creation of TCPX transport for GPU " << local_gpu_idx_ << std::endl;
 #else
+  std::cout << "USE RDMA" << std::endl;
   // Initialize the RDMA endpoint with lazy creation.
   ep_ = new uccl::RDMAEndpoint(num_cpus_);
 
@@ -1919,7 +1921,7 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
 #ifdef USE_TCPX
   tp::TxHandle tx_handle = reinterpret_cast<tp::TxHandle>(transfer_id);
   auto st = ep_->poll_transfer(tx_handle, *is_done);
-  if (st != tp::Status::kOk && st != tp::Status::kInProgress) {
+  if (st != tp::Status::kOk) {
     std::cerr << "[TCPX] poll_transfer failed: " << static_cast<int>(st) << std::endl;
     return false;
   }

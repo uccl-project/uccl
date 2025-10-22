@@ -251,6 +251,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -e IS_EFA="${IS_EFA}" \
   -e WHEEL_DIR="${WHEEL_DIR}" \
   -e BUILD_TYPE="${BUILD_TYPE}" \
+  -e USE_TCPX="${USE_TCPX:-0}" \
   -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_rdma build_efa build_p2p build_ep build_eccl)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
@@ -333,7 +334,7 @@ def initialize():
       mv ${BACKUP_FN} setup.py
     fi
 
-    auditwheel repair dist/uccl-*.whl --exclude "libtorch*.so" --exclude "libc10*.so" --exclude "libibverbs.so.1" --exclude "libcudart.so.12" --exclude "libamdhip64.so.*" -w /io/${WHEEL_DIR}
+    auditwheel repair dist/uccl-*.whl --exclude "libtorch*.so" --exclude "libc10*.so" --exclude "libibverbs.so.1" --exclude "libcudart.so.12" --exclude "libamdhip64.so.*" --exclude "libcuda.so.1" -w /io/${WHEEL_DIR}
 
     # Add backend tag to wheel filename using local version identifier
     if [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
