@@ -1,9 +1,14 @@
 #pragma once
 
+#include "util/jring.h"
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <atomic>
+#include <mutex>
+#include <shared_mutex>
+#include <thread>
 
 extern thread_local bool inside_python;
 
@@ -13,7 +18,9 @@ struct Conn {
   uint64_t conn_id_;
   std::string ip_addr_;
   int remote_gpu_idx_;
-  int sock_fd;
+  int remote_port_;
+  void* tcpx_comm_;
+  int ctrl_sock_fd_;
 };
 
 struct FifoItem {
@@ -62,6 +69,12 @@ class Endpoint {
   bool accept(std::string& ip_addr, int& remote_gpu_idx, uint64_t& conn_id);
 
   std::vector<uint8_t> get_metadata();
+  /*
+   * Parse endpoint metadata to extract IP address, port, and GPU index.
+   * Returns a tuple of (ip_address, port, gpu_index).
+   */
+  static std::tuple<std::string, uint16_t, int> parse_metadata(
+      std::vector<uint8_t> const& metadata);
 
   bool advertise(uint64_t conn_id, uint64_t mr_id, void* addr, size_t len,
                  char* out_buf);
@@ -69,7 +82,7 @@ class Endpoint {
   int get_sock_fd(uint64_t conn_id) const {
     auto it = conn_id_to_conn_.find(conn_id);
     if (it == conn_id_to_conn_.end()) return -1;
-    return it->second->sock_fd;
+    return it->second->ctrl_sock_fd_;
   }
 
   /*Register the data with a specific interface. */
@@ -90,8 +103,22 @@ class Endpoint {
   bool poll_async(uint64_t transfer_id, bool* is_done);
 
  private:
+  int dev_id_ = -1;
+  int ctrl_listen_fd_ = -1;
+  void* listen_comms_ = nullptr;
+  uint32_t local_gpu_idx_ = 0;
+
+  std::atomic<uint64_t> next_conn_id_ = 0;
   mutable std::shared_mutex conn_mu_;
   std::unordered_map<uint64_t, Conn*> conn_id_to_conn_;
+  mutable std::shared_mutex recv_transfer_status_mu_;
+  std::unordered_map<uint64_t, bool> recv_transfer_status_; // transfer_id: unpack finished?
+
+  jring_t* unpacker_desc_ring_;
+  std::thread unpacker_thread_;
+
+  static void free_conn_(Conn* conn);
+  void unpacker_thread_func_();
 };
 
 }  // namespace tcpx
