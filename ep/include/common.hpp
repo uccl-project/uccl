@@ -25,7 +25,7 @@
 // #define USE_SENDER_BARRIER
 #endif
 
-// #define USE_MSCCLPP_FIFO_BACKEND
+#define USE_MSCCLPP_FIFO_BACKEND
 #define kAtomicBufferSize 81960
 #define kQueueSize 1024
 #define kQueueMask (kQueueSize - 1)

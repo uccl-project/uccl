@@ -32,7 +32,7 @@ EnvInfo Bench::env_info() const {
 #ifndef USE_MSCCLPP_FIFO_BACKEND
   e.rbs_addr = reinterpret_cast<uintptr_t>(env_.rbs);
 #else
-  e.rbs_addr = reinterpret_cast<uintptr_t>(env_.d_fifo_handles);
+  abort();
 #endif
 
   return e;
@@ -52,9 +52,7 @@ uintptr_t Bench::ring_addr(int i) const {
   return reinterpret_cast<uintptr_t>(&env_.rbs[i]);
 #else
   // FIFO backend — use the HostD2HHandle abstraction
-  if (i >= static_cast<int>(env_.d2h_storage.size()))
-    throw std::out_of_range("fifo index");
-  return reinterpret_cast<uintptr_t>(env_.d2h_storage[i].fifo);
+  abort();
 #endif
 }
 

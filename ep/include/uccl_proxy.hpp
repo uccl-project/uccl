@@ -95,6 +95,7 @@ class UcclProxy {
   void* atomic_buffer_ptr_;
   int node_idx_;
   std::vector<d2hq::HostD2HHandle> d2h_queues;
+  std::vector<std::unique_ptr<mscclpp::Fifo>> tls_fifos;
 };
 
 // ============================================================================

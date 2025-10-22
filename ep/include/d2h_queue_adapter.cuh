@@ -9,9 +9,8 @@ namespace d2hq {
 
 static_assert(sizeof(TransferCmd) == 16, "TransferCmd must be 128 bits");
 
-__host__ __device__ inline void pack_transfer_cmd(TransferCmd const& c,
-                                                  uint64_t& fst,
-                                                  uint64_t& snd) {
+__device__ inline void pack_transfer_cmd(TransferCmd const& c, uint64_t& fst,
+                                         uint64_t& snd) {
   // Layout (explicit, endian-agnostic):
   // fst[  7:0 ]   = cmd_type (8)
   // fst[ 15:8 ]   = dst_rank (8)
@@ -27,7 +26,20 @@ __host__ __device__ inline void pack_transfer_cmd(TransferCmd const& c,
   uint64_t bytes_and_val_u32 = static_cast<uint32_t>(c.bytes_and_val);
   uint64_t idx_or_off_u16 = static_cast<uint16_t>(c.expert_idx);  // union
   uint64_t req_rptr_u32 = static_cast<uint32_t>(c.req_rptr);
-  uint64_t req_lptr_u32 = static_cast<uint32_t>(c.req_lptr);  // union
+  uint64_t req_lptr_u32;
+  {
+    CmdType base = get_base_cmd(c.cmd_type);
+    if (base == CmdType::ATOMIC) {
+      req_lptr_u32 = static_cast<uint32_t>(static_cast<int32_t>(c.value));
+    } else {
+      req_lptr_u32 = static_cast<uint32_t>(c.req_lptr);
+    }
+  }
+  // printf("Packing TransferCmd: cmd_type=%lu, dst_rank=%lu, "
+  //        "bytes_and_val=0x%08lx, idx_or_off=%lu, req_rptr=0x%08lx, "
+  //        "req_lptr=0x%08lx\n",
+  //        cmd_type_u8, dst_rank_u8, bytes_and_val_u32, idx_or_off_u16,
+  //        req_rptr_u32, req_lptr_u32);
 
   fst |= (cmd_type_u8 & 0xFFull);
   fst |= ((dst_rank_u8 & 0xFFull) << 8);
@@ -49,17 +61,25 @@ struct D2HHandle {
   __device__ __forceinline__ uint64_t head() const {
 #ifdef USE_MSCCLPP_FIFO_BACKEND
     // FIFO backend does not have a volatile head/tail; just return dummy.
-    return kMaxInflight - 1;
+    return 0;
 #else
     return ring->head;
 #endif
   }
 
+  // For FIFO, initialize from a *host* value (don’t deref device ptrs on host).
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+  __host__ inline void init_from_host_value(
+      mscclpp::FifoDeviceHandle const& v) noexcept {
+    fifo = v;
+  }
+#endif
   __host__ inline void init_from_dev_ptr(void* dev_ptr) noexcept {
 #ifndef USE_MSCCLPP_FIFO_BACKEND
     ring = reinterpret_cast<DeviceToHostCmdBuffer*>(dev_ptr);
 #else
-    fifo = *reinterpret_cast<mscclpp::FifoDeviceHandle*>(dev_ptr);
+    // No-op on FIFO: host must not read device memory here.
+    (void)dev_ptr;
 #endif
   }
 
@@ -78,6 +98,7 @@ struct D2HHandle {
     mscclpp::ProxyTrigger trig;
     uint64_t fst, snd;
     pack_transfer_cmd(item, fst, snd);
+    // printf("atomic_set_and_commit called!\n");
     trig.fst = fst;
     trig.snd = snd;
     // Only available inside device compilation

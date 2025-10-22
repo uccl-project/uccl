@@ -64,6 +64,7 @@ inline void init_env(BenchEnv& env, int blocks = kNumThBlocks,
                            env.d2h_queues);
 
 #else
+  abort();
   env.fifos.clear();
   env.fifos.reserve(blocks);
 

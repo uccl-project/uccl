@@ -28,8 +28,9 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   d2h_queues.reserve(kRingsPerProxy);
   for (size_t i = 0; i < kRingsPerProxy; ++i) {
 #ifdef USE_MSCCLPP_FIFO_BACKEND
-    abort();
-    // We should pass the raw fifo address here.
+    auto fifo = std::make_unique<mscclpp::Fifo>(kQueueSize);
+    uintptr_t addr = reinterpret_cast<uintptr_t>(fifo.get());
+    tls_fifos.push_back(std::move(fifo));
 #else
     uintptr_t addr = alloc_cmd_ring();
 #endif
@@ -73,15 +74,19 @@ UcclProxy::~UcclProxy() {
   }
 
   // Free all allocated ring buffers
+#ifndef USE_MSCCLPP_FIFO_BACKEND
   for (auto ring_addr : ring_buffer_addrs_) {
     free_cmd_ring(ring_addr);
   }
+#endif
   ring_buffer_addrs_.clear();
 }
 
 std::vector<uint64_t> UcclProxy::get_ring_buffer_addrs() const {
   std::vector<uint64_t> addrs;
   addrs.reserve(ring_buffer_addrs_.size());
+  // printf("get_ring_buffer_addrs called, size: %lu\n",
+  // ring_buffer_addrs_.size());
   for (auto addr : ring_buffer_addrs_) {
     addrs.push_back(static_cast<uint64_t>(addr));
   }

@@ -42,9 +42,6 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   auto* h = reinterpret_cast<d2hq::D2HHandle*>(
       static_cast<uintptr_t>(ring_addrs[ring_idx]));
 
-  uint64_t cur_head;
-  uint64_t cur_tail;
-  uint64_t inflight;
 #ifdef USE_NORMAL_MODE
   if (low_latency_buffer_idx == -1) {
     /* Normal mode */
@@ -52,6 +49,54 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     low_latency_buffer_idx = 0;
   }
 #endif
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+  // FIFO path: no head/tail; push does backpressure.
+  {
+    uint64_t slot = 0;
+    TransferCmd cmd{};
+    cmd.cmd_type =
+        make_cmd_type(CmdType::WRITE, is_combine, low_latency_buffer_idx);
+    cmd.req_rptr = rptr_val;
+    cmd.req_lptr = lptr_val;
+    cmd.bytes = bytes_val;
+    cmd.dst_rank = dst_rank;
+    if (req_lptr >> 32) {
+      printf("[nvshmemi_ibgda_put_nbi_warp] req_lptr too large: %llu\n",
+             (unsigned long long)req_lptr);
+      trap();
+    }
+    if (req_rptr >> 32) {
+      printf("[nvshmemi_ibgda_put_nbi_warp] req_rptr too large: %llu\n",
+             (unsigned long long)req_rptr);
+      trap();
+    }
+    if (bytes_val >> 24) {
+      printf("[nvshmemi_ibgda_put_nbi_warp] bytes too large: %llu\n",
+             (unsigned long long)bytes_val);
+      trap();
+    }
+#ifdef USE_NORMAL_MODE
+    if (atomic_offset >> 16) {
+      printf("[nvshmemi_ibgda_put_nbi_warp] atomic_offset too large: %llu\n",
+             (unsigned long long)atomic_offset);
+      trap();
+    }
+    if (atomic_val >> 8) {
+      printf("[nvshmemi_ibgda_put_nbi_warp] atomic_val too large: %llu\n",
+             (unsigned long long)atomic_val);
+      trap();
+    }
+    cmd.atomic_offset = atomic_offset;
+    cmd.atomic_val = atomic_val;
+#else
+    cmd.expert_idx = expert_idx;
+#endif
+    h->atomic_set_and_commit(cmd, &slot);
+  }
+#else
+  uint64_t cur_head;
+  uint64_t cur_tail;
+  uint64_t inflight;
   // NOTE(MaoZiming): Spins until there is a free slot in the ring buffer.
   auto last_print = clock64();
   while (true) {
@@ -105,6 +150,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       last_print = clock64();
     }
   }
+#endif
 }
 
 // TODO(MaoZiming): Fix. This should be a non-fetch add operation. This could be
@@ -132,9 +178,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     assert(ring_idx < num_ring_addrs);
     auto* h = reinterpret_cast<d2hq::D2HHandle*>(
         static_cast<uintptr_t>(ring_addrs[ring_idx]));
-    uint64_t cur_head;
-    uint64_t cur_tail;
-    uint64_t inflight;
+
     auto last_print = clock64();
 #ifdef USE_NORMAL_MODE
     if (low_latency_buffer_idx == -1) {
@@ -142,6 +186,22 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
       low_latency_buffer_idx = 0;
     }
 #endif
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+    // FIFO: push directly (backpressure inside push).
+    {
+      uint64_t slot = 0;
+      TransferCmd cmd{};
+      cmd.cmd_type =
+          make_cmd_type(CmdType::ATOMIC, is_combine, low_latency_buffer_idx);
+      cmd.value = value;
+      cmd.dst_rank = dst_rank;
+      cmd.req_rptr = rptr;
+      h->atomic_set_and_commit(cmd, &slot);
+    }
+#else
+    uint64_t cur_head;
+    uint64_t cur_tail;
+    uint64_t inflight;
     while (true) {
       // NOTE(MaoZiming): update the view.
       cur_head = h->head();
@@ -171,6 +231,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
         }
       }
     }
+#endif
   }
 }
 
@@ -215,18 +276,24 @@ __device__ static __forceinline__ void wait_until_cmd_consumed(
     CmdType cmd_type = CmdType::EMPTY, int label = -1) {
   auto last_print = clock64();
   while (true) {
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+    if (h->fifo.poll(slot)) break;
+#else
     uint64_t cur_tail = h->tail();
-    if (cur_tail > slot) {
-      break;
-    }
+    if (cur_tail > slot) break;
+#endif
     if ((clock64() - last_print) > kPrintCycleInterval) {
+#ifndef USE_MSCCLPP_FIFO_BACKEND
       printf(
-          "[wait_until_cmd_consumed, nvl_rank: %d, cmd: %d, label: %d] still "
-          "waiting, "
-          "head=%lu tail=%lu "
-          "slot=%lu\n",
+          "[wait_until_cmd_consumed nvl:%d cmd:%d label:%d] waiting head=%lu "
+          "tail=%lu slot=%lu\n",
           nvl_rank, static_cast<int>(cmd_type), label, (unsigned long)h->head(),
           (unsigned long)cur_tail, (unsigned long)slot);
+#else
+      printf(
+          "[wait_until_cmd_consumed nvl:%d cmd:%d label:%d] waiting slot=%lu\n",
+          nvl_rank, static_cast<int>(cmd_type), label, (unsigned long)slot);
+#endif
       last_print = clock64();
     }
   }
@@ -249,7 +316,18 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
        ring_idx += kRingsPerProxy) {
     auto* h = reinterpret_cast<d2hq::D2HHandle*>(
         static_cast<uintptr_t>(ring_addrs[ring_idx]));
-
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+    // FIFO: just push QUIET; FIFO ordering guarantees it will serialize.
+    {
+      // printf("posting quiet\n");
+      uint64_t slot = 0;
+      TransferCmd cmd{};
+      cmd.cmd_type = CmdType::QUIET;
+      h->atomic_set_and_commit(cmd, &slot);
+      slots[num_posted++] = slot;
+      // printf("quiet posted\n");
+    }
+#else
     while (true) {
       uint64_t cur_head = h->head();
       uint64_t cur_tail = h->tail();
@@ -264,6 +342,7 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
         break;
       }
     }
+#endif
     break;
   }
 
@@ -289,7 +368,18 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
        ring_idx += kRingsPerProxy) {
     auto* h = reinterpret_cast<d2hq::D2HHandle*>(
         static_cast<uintptr_t>(ring_addrs[ring_idx]));
-
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+    // FIFO: push BARRIER directly.
+    {
+      // printf("posting barrier\n");
+      uint64_t slot = 0;
+      TransferCmd cmd{};
+      cmd.cmd_type = CmdType::BARRIER;
+      h->atomic_set_and_commit(cmd, &slot);
+      slots[num_posted++] = slot;
+      // printf("posted barrier\n");
+    }
+#else
     while (true) {
       uint64_t cur_head = h->head();
       uint64_t cur_tail = h->tail();
@@ -303,6 +393,7 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
         break;
       }
     }
+#endif
     break;
   }
 

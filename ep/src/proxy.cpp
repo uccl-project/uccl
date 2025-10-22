@@ -317,6 +317,11 @@ void Proxy::init_common() {
     while (ctx_.lb->full_mask == 0ULL) cpu_relax();
   }
 #endif
+
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+  fifo_seq_.assign(cfg_.d2h_queues.size(), 0);
+  fifo_pending_.assign(cfg_.d2h_queues.size(), std::deque<uint64_t>{});
+#endif
 }
 
 void Proxy::init_sender() {
@@ -416,7 +421,23 @@ void Proxy::run_dual() {
 void Proxy::notify_gpu_completion(uint64_t& my_tail) {
   if (acked_wrs_.empty()) return;
 
-  // Mark all acked command slots in each ring's bitmask
+    // Mark all acked command slots in each ring's bitmask
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+  // FIFO path: pop in order using the pending deque and the completion set.
+  for (size_t rb_idx = 0; rb_idx < cfg_.d2h_queues.size(); ++rb_idx) {
+    auto* fifo = cfg_.d2h_queues[rb_idx].fifo;
+    if (!fifo) continue;
+    auto& pend = fifo_pending_[rb_idx];
+    while (!pend.empty()) {
+      uint64_t front_wr = pend.front();
+      if (acked_wrs_.find(front_wr) == acked_wrs_.end())
+        break;                     // not contiguous
+      fifo->pop();                 // now free this slot on the FIFO
+      acked_wrs_.erase(front_wr);  // consume this completion
+      pend.pop_front();
+    }
+  }
+#else
   for (auto wr_id : acked_wrs_) {
     const size_t rb_idx = (wr_id >> 32) & 0xFFFFFFFF;
     const size_t cmd_idx = wr_id & 0xFFFFFFFF;
@@ -437,6 +458,7 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
     d2hq::HostD2HHandle* h = &cfg_.d2h_queues[rb_idx];
     ring_tails_[rb_idx] = h->advance_tail_from_mask();
   }
+#endif
 }
 
 void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
@@ -444,10 +466,28 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
   std::vector<uint64_t> wrs_to_post;
   std::vector<TransferCmd> cmds_to_post;
   bool found_work = false;
-
   // Process each ring buffer (similar to test_multi_ring_throughput.cu)
   for (size_t rb_idx = 0; rb_idx < cfg_.d2h_queues.size(); rb_idx++) {
     d2hq::HostD2HHandle* h = &cfg_.d2h_queues[rb_idx];
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+    assert(h && "h is empty!\n");
+    assert(h->fifo && "h->fifo is empty!\n");
+    // FIFO path: one trigger == one command. Do NOT pop yet.
+    auto* fifo = h->fifo;
+    if (!fifo) continue;
+    if (!fifo_pending_[rb_idx].empty()) continue;
+    auto trig = fifo->poll();
+    if (trig.fst != 0) {
+      TransferCmd cmd = d2hq::decode_from_trigger(trig);
+      // Give this command a unique WR id (monotonic within FIFO).
+      uint64_t unique_wr_id = (static_cast<uint64_t>(rb_idx) << 32) |
+                              (fifo_seq_[rb_idx]++ & 0xFFFFFFFFULL);
+      wrs_to_post.push_back(unique_wr_id);
+      cmds_to_post.push_back(cmd);
+      fifo_pending_[rb_idx].push_back(unique_wr_id);  // acknowledge later
+      found_work = true;
+    }
+#else
     uint64_t& ring_tail = ring_tails_[rb_idx];
     size_t& ring_seen = ring_seen_[rb_idx];
 
@@ -510,6 +550,7 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
       ring_seen = i + 1;
       found_work = true;
     }
+#endif
   }
 
   // If no work found across all ring buffers, relax CPU
@@ -551,6 +592,17 @@ void Proxy::run_local() {
     // Multi-ring buffer polling (consistent with other modes)
     for (size_t rb_idx = 0; rb_idx < cfg_.d2h_queues.size(); rb_idx++) {
       d2hq::HostD2HHandle* h = &cfg_.d2h_queues[rb_idx];
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+      auto* fifo = h->fifo;
+      if (!fifo) continue;
+      auto trig = fifo->poll();
+      if (trig.fst != 0) {
+        d2hq::decode_from_trigger(trig);
+        fifo->pop();
+        total_seen++;
+        found_work = true;
+      }
+#else
       uint64_t& ring_tail = ring_tails_[rb_idx];
 
       // Check for new work in this ring buffer
@@ -607,6 +659,7 @@ void Proxy::run_local() {
         // Break to check other ring buffers and progress_run flag
         break;
       }
+#endif
     }
 
     // If no work found across all ring buffers, relax CPU
@@ -692,6 +745,10 @@ void Proxy::post_gpu_commands_mixed(
       0) {
     return;
   }
+
+  // printf("Posting %zu RDMA writes, %zu atomics, %zu barriers, %zu quiets\n",
+  //        rdma_wrs.size(), atomic_wrs.size(), barrier_cmds.size(),
+  //        quiet_cmds.size());
   // Handle regular RDMA writes
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
