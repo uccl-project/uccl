@@ -236,7 +236,7 @@ void PmdPort::InitDriver(uint16_t mtu) {
     }
 
     // TODO(Nelson): Cannot Enable Promiscuous Mode.
-
+    LOG(INFO) << "Promiscuous mode: " << rte_eth_promiscuous_get(port_id_);
     // ret = rte_eth_promiscuous_enable(port_id_);
     // if (ret != 0)
     //   LOG(WARNING) << "rte_eth_promiscuous_enable() failed.";

@@ -18,13 +18,17 @@ class DPDKSocket {
     this->rx_ring_ = rx_ring_;
     this->tx_ring_ = tx_ring_;
     this->packet_pool_ = packet_pool_;
+    this->total_recv_packets_ = 0;
+    this->total_sent_packets_ = 0;
   }
 
   inline void push_packet(Packet* pkt) { Packet::Free(pkt); }
   inline Packet* pop_packet() { return packet_pool_->PacketAlloc(); }
 
   uint32_t send_packets(Packet** pkts, uint32_t nb_pkts) {
-    return tx_ring_->TrySendPackets(pkts, nb_pkts);
+    uint32_t sent = tx_ring_->TrySendPackets(pkts, nb_pkts);
+    total_sent_packets_ += sent;
+    return sent;
   }
 
   uint32_t send_packet(Packet* pkt) {
@@ -40,8 +44,7 @@ class DPDKSocket {
   inline uint64_t send_queue_estimated_latency_ns() { return 0; }
 
   std::string to_string() {
-    std::string s;
-    return s;
+    return Format("⬆️%u ⬇️%u", total_sent_packets_, total_recv_packets_);
   }
 
  private:
@@ -53,6 +56,9 @@ class DPDKSocket {
   // The following packet pool is used for all TX packets;
   // should not be shared with other engines/threads.
   PacketPool* packet_pool_;
+
+  uint32_t total_recv_packets_;
+  uint32_t total_sent_packets_;
 };
 
 class DPDKFactory {

@@ -1004,7 +1004,11 @@ void UcclEngine::run() {
     }
 
     uint32_t rcvd = socket_->recv_packets(pkts, RECV_BATCH_SIZE);
-    if (rcvd) process_rx_msg(pkts, rcvd);
+
+    if (rcvd) {
+      // LOG(INFO) << "rcvd: " << rcvd;
+      process_rx_msg(pkts, rcvd);
+    }
 
     if (Channel::dequeue_sc(channel_->tx_deser_q_, &tx_deser_work)) {
       // Make data written by the app thread visible to the engine.
@@ -1143,6 +1147,20 @@ void UcclEngine::process_rx_msg(Packet** pkts, uint32_t rcvd) {
 
     auto* msgbuf = PacketBuf::Create(pkt);
     auto* pkt_addr = msgbuf->get_pkt_addr();
+
+    auto* ethh = reinterpret_cast<ethhdr*>(pkt_addr);
+    if (ntohs(ethh->h_proto) != ETH_P_IP) {
+      LOG(INFO) << "Non-IP packet, EtherType: 0x" << std::hex
+                << ntohs(ethh->h_proto);
+      continue;
+    }
+
+    auto* iph = reinterpret_cast<iphdr*>(pkt_addr + sizeof(ethhdr));
+    if (iph->protocol != IPPROTO_UDP) {
+      LOG(INFO) << "Non-UDP packet, IP protocol: " << (int)iph->protocol;
+      continue;
+    }
+
     auto* ucclh = reinterpret_cast<UcclPktHdr*>(pkt_addr + kNetHdrLen);
 
     // Record the incoming packet UcclPktHdr.msg_flags in
@@ -1427,7 +1445,13 @@ Endpoint::~Endpoint() {
   stats_thread_.join();
 }
 
-ConnID Endpoint::uccl_connect(std::string remote_ip) {
+/*
+[Nelson Cheung]: ens1f1np1 is occupied by the dpdk, so we need to use eno49np0
+to connect to the server.
+*/
+
+ConnID Endpoint::uccl_connect(std::string bootstrap_remote_ip,
+                              std::string bootstrap_local_ip) {
   struct sockaddr_in serv_addr;
   struct hostent* server;
   int bootstrap_fd;
@@ -1435,7 +1459,7 @@ ConnID Endpoint::uccl_connect(std::string remote_ip) {
   bootstrap_fd = socket(AF_INET, SOCK_STREAM, 0);
   DCHECK(bootstrap_fd >= 0);
 
-  server = gethostbyname(remote_ip.c_str());
+  server = gethostbyname(bootstrap_remote_ip.c_str());
   DCHECK(server);
 
   bzero((char*)&serv_addr, sizeof(serv_addr));
@@ -1447,10 +1471,10 @@ ConnID Endpoint::uccl_connect(std::string remote_ip) {
   // Force the socket to bind to the local IP address.
   sockaddr_in localaddr = {};
   localaddr.sin_family = AF_INET;
-  localaddr.sin_addr.s_addr = str_to_ip(local_ip_str_.c_str());
+  localaddr.sin_addr.s_addr = str_to_ip(bootstrap_local_ip.c_str());
   bind(bootstrap_fd, (sockaddr*)&localaddr, sizeof(localaddr));
 
-  LOG(INFO) << "[Endpoint] connecting to " << remote_ip << ":"
+  LOG(INFO) << "[Endpoint] connecting to " << bootstrap_remote_ip << ":"
             << kBootstrapPort;
 
   // Connect and set nonblocking and nodelay
@@ -1487,6 +1511,19 @@ ConnID Endpoint::uccl_connect(std::string remote_ip) {
     if (unique) break;
   }
 
+  uint32_t local_ip_int = str_to_ip(local_ip_str_);
+  int ret = send_message(bootstrap_fd, &local_ip_int, sizeof(local_ip_int));
+  DCHECK(ret == sizeof(local_ip_int));
+
+  uint32_t remote_ip_int;
+  ret = receive_message(bootstrap_fd, &remote_ip_int, sizeof(remote_ip_int));
+  DCHECK(ret == sizeof(remote_ip_int));
+  std::string remote_ip = ip_to_str(remote_ip_int);
+
+  LOG(INFO) << "[Endpoint] remote IP: " << remote_ip;
+
+  while (true);
+  
   install_flow_on_engine(flow_id, remote_ip, local_engine_idx, bootstrap_fd);
 
   return ConnID{.flow_id = flow_id,
@@ -1494,7 +1531,7 @@ ConnID Endpoint::uccl_connect(std::string remote_ip) {
                 .boostrap_id = bootstrap_fd};
 }
 
-ConnID Endpoint::uccl_accept(std::string& remote_ip) {
+ConnID Endpoint::uccl_accept() {
   struct sockaddr_in cli_addr;
   socklen_t clilen = sizeof(cli_addr);
   int bootstrap_fd;
@@ -1502,9 +1539,9 @@ ConnID Endpoint::uccl_accept(std::string& remote_ip) {
   // Accept connection and set nonblocking and nodelay
   bootstrap_fd = accept(listen_fd_, (struct sockaddr*)&cli_addr, &clilen);
   DCHECK(bootstrap_fd >= 0);
-  remote_ip = ip_to_str(cli_addr.sin_addr.s_addr);
+  std::string client_ip = ip_to_str(cli_addr.sin_addr.s_addr);
 
-  LOG(INFO) << "[Endpoint] accept from " << remote_ip << ":"
+  LOG(INFO) << "[Endpoint] accept from " << client_ip << ":"
             << cli_addr.sin_port;
 
   int flag = 1;
@@ -1547,6 +1584,20 @@ ConnID Endpoint::uccl_accept(std::string& remote_ip) {
       DCHECK(1 == bootstrap_fd_map_.erase(flow_id));
     }
   }
+
+  uint32_t remote_ip_int;
+  int ret =
+      receive_message(bootstrap_fd, &remote_ip_int, sizeof(remote_ip_int));
+  DCHECK(ret == sizeof(remote_ip_int));
+
+  uint32_t local_ip_int = str_to_ip(local_ip_str_);
+  ret = send_message(bootstrap_fd, &local_ip_int, sizeof(local_ip_int));
+  DCHECK(ret == sizeof(local_ip_int));
+
+  std::string remote_ip = ip_to_str(remote_ip_int);
+  LOG(INFO) << "[Endpoint] remote IP: " << remote_ip;
+
+  while (true);
 
   install_flow_on_engine(flow_id, remote_ip, local_engine_idx, bootstrap_fd);
 

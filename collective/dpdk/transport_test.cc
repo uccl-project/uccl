@@ -54,7 +54,7 @@ int main(int argc, char* argv[]) {
   dpdk.InitDpdk(1, argv);
 
   LOG(INFO) << "Getting port ID for device " << DEV_DEFAULT;
-  
+
   std::string mac_str = get_dev_mac(DEV_DEFAULT);
   uint16_t port_id = dpdk.GetPmdPortIdByMac(mac_str.c_str());
   if (port_id == (uint16_t)-1) {
@@ -98,23 +98,26 @@ int main(int argc, char* argv[]) {
   if (FLAGS_client) {
     auto ep = Endpoint(port_id, DEV_DEFAULT, NUM_QUEUES, ENGINE_CPU_START);
     DCHECK(FLAGS_serverip != "");
-    auto conn_id = ep.uccl_connect(FLAGS_serverip);
+    auto conn_id =
+        ep.uccl_connect(FLAGS_serverip, FLAGS_clientip);
     ConnID conn_id2;
     ConnID conn_id_vec[NUM_QUEUES];
     if (test_type == kMc) {
-      conn_id2 = ep.uccl_connect(FLAGS_serverip);
+      conn_id2 =
+          ep.uccl_connect(FLAGS_serverip, FLAGS_clientip);
     } else if (test_type == kMq) {
       conn_id_vec[0] = conn_id;
       for (uint32_t i = 1; i < NUM_QUEUES; i++)
-        conn_id_vec[i] = ep.uccl_connect(FLAGS_serverip);
+        conn_id_vec[i] =
+            ep.uccl_connect(FLAGS_serverip, FLAGS_clientip);
     } else if (test_type == kBiMq) {
       conn_id_vec[0] = conn_id;
       for (uint32_t i = 1; i < NUM_QUEUES; i++) {
-        std::string remote_ip;
         if (i % 2 == 0)
-          conn_id_vec[i] = ep.uccl_connect(FLAGS_serverip);
+          conn_id_vec[i] =
+              ep.uccl_connect(FLAGS_serverip, FLAGS_clientip);
         else
-          conn_id_vec[i] = ep.uccl_accept(remote_ip);
+          conn_id_vec[i] = ep.uccl_accept();
       }
     }
 
@@ -237,7 +240,7 @@ int main(int argc, char* argv[]) {
             for (size_t j = 0; j < NUM_QUEUES; j++) {
               auto* poll_ctx =
                   (j % 2 == 0)
-                      ? ep.uccl_send_async( conn_id_vec[j], data, send_len)
+                      ? ep.uccl_send_async(conn_id_vec[j], data, send_len)
                       : ep.uccl_recv_async(conn_id_vec[j], data, &recv_len);
               poll_ctx->timestamp = rdtsc();
               poll_ctxs.push_back(poll_ctx);
@@ -305,24 +308,23 @@ int main(int argc, char* argv[]) {
     }
   } else {
     auto ep = Endpoint(port_id, DEV_DEFAULT, NUM_QUEUES, ENGINE_CPU_START);
-    std::string remote_ip;
-    auto conn_id = ep.uccl_accept(remote_ip);
+    auto conn_id = ep.uccl_accept();
     ConnID conn_id2;
     ConnID conn_id_vec[NUM_QUEUES];
     if (test_type == kMc) {
-      conn_id2 = ep.uccl_accept(remote_ip);
+      conn_id2 = ep.uccl_accept();
     } else if (test_type == kMq) {
       conn_id_vec[0] = conn_id;
       for (uint32_t i = 1; i < NUM_QUEUES; i++)
-        conn_id_vec[i] = ep.uccl_accept(remote_ip);
+        conn_id_vec[i] = ep.uccl_accept();
     } else if (test_type == kBiMq) {
       conn_id_vec[0] = conn_id;
       for (uint32_t i = 1; i < NUM_QUEUES; i++) {
-        std::string remote_ip;
         if (i % 2 == 0)
-          conn_id_vec[i] = ep.uccl_accept(remote_ip);
+          conn_id_vec[i] = ep.uccl_accept();
         else
-          conn_id_vec[i] = ep.uccl_connect(FLAGS_clientip);
+          conn_id_vec[i] =
+              ep.uccl_connect(FLAGS_serverip, FLAGS_clientip);
       }
     }
 

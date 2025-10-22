@@ -208,12 +208,8 @@ class TXTracking {
               uint32_t num_frames, PollCtx* poll_ctx);
   std::optional<PacketBuf*> get_and_update_oldest_unsent();
 
-  inline uint32_t num_unacked_msgbufs() const {
-    return num_unacked_msgbufs_;
-  }
-  inline uint32_t num_unsent_msgbufs() const {
-    return num_unsent_msgbufs_;
-  }
+  inline uint32_t num_unacked_msgbufs() const { return num_unacked_msgbufs_; }
+  inline uint32_t num_unsent_msgbufs() const { return num_unsent_msgbufs_; }
   inline PacketBuf* get_oldest_unacked_msgbuf() const {
     return oldest_unacked_msgbuf_;
   }
@@ -697,9 +693,10 @@ class Endpoint {
   ~Endpoint();
 
   // Connecting to a remote address; thread-safe
-  ConnID uccl_connect(std::string remote_ip);
+  ConnID uccl_connect(std::string bootstrap_remote_ip,
+                      std::string bootstrap_local_ip);
   // Accepting a connection from a remote address; thread-safe
-  ConnID uccl_accept(std::string& remote_ip);
+  ConnID uccl_accept();
 
   // Sending the data by leveraging multiple port combinations.
   bool uccl_send(ConnID flow_id, void const* data, size_t const len,
