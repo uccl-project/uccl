@@ -6,11 +6,6 @@
 #include "util/net.h"
 #include "util/shared_pool.h"
 #include "util/util.h"
-#ifdef USE_TCPX
-#include "tcpx_plugin_api.h"
-#include <cuda.h>
-#include <cuda_runtime.h>
-#endif
 #include <infiniband/verbs.h>
 #include <pybind11/pybind11.h>
 #include <atomic>
@@ -20,58 +15,6 @@
 #include <tuple>
 #include <unordered_map>
 #include <vector>
-
-#ifdef USE_TCPX
-namespace tp = tcpx_plugin;
-
-static int getEnvInt(const char* name, int defaultVal) {
-  const char* val = std::getenv(name);
-  return val ? std::atoi(val) : defaultVal;
-}
-
-static size_t getEnvSize(const char* name, size_t defaultVal) {
-  const char* val = std::getenv(name);
-  return val ? static_cast<size_t>(std::strtoull(val, nullptr, 10)) : defaultVal;
-}
-
-static inline size_t align_up_4k(size_t x)   { return (x + 4095ull) & ~4095ull; }
-
-static bool cuda_alloc_4k_aligned(size_t want_bytes, void** out_aligned_ptr,
-                                  CUdeviceptr* out_base, size_t* out_usable_bytes) {
-  if (!out_aligned_ptr || !out_base || !out_usable_bytes) return false;
-  *out_aligned_ptr = nullptr; *out_base = 0; *out_usable_bytes = 0;
-
-  // Over-allocate +4096 to guarantee we can align up to 4KB.
-  size_t alloc_bytes = want_bytes + 4096ull;
-  CUdeviceptr d_base = 0;
-  CUresult rc = cuMemAlloc(&d_base, alloc_bytes);
-  if (rc != CUDA_SUCCESS) return false;
-
-  uintptr_t addr = static_cast<uintptr_t>(d_base);
-  uintptr_t aligned = (addr + 4095ull) & ~4095ull;
-  size_t usable = alloc_bytes - (aligned - addr);
-
-  *out_base = d_base;
-  *out_aligned_ptr = reinterpret_cast<void*>(aligned);
-  *out_usable_bytes = usable;
-  return true;
-}
-
-static int get_gpu_numa_node(int gpu_id) {
-  cudaDeviceProp prop;
-  cudaGetDeviceProperties(&prop, gpu_id);
-  char path[128];
-  snprintf(path, sizeof(path), "/sys/class/pci_bus/%02x/device/numa_node", prop.pciBusID);
-  std::ifstream f(path);
-  int numa = -1;
-  if (f.is_open()) f >> numa;
-  return numa; // -1: no numa bind
-}
-
-#define NetEndpoint tp::Transport
-#else
-#define NetEndpoint uccl::RDMAEndpoint
-#endif
 
 namespace py = pybind11;
 
@@ -327,14 +270,7 @@ class Endpoint {
   uint32_t num_cpus_;
   int numa_node_;
 
-  NetEndpoint* ep_;
-#ifdef USE_TCPX
-  tp::ConnHandle tp_conn_ = 0;
-  void* tp_aligned_ptr = nullptr;
-  CUdeviceptr tp_d_base = 0;
-  int tp_server_port_ = 0;
-  std::unordered_map<uint64_t, tp::MrHandle> tp_mr_map_;
-#endif
+  uccl::RDMAEndpoint* ep_;
 
   std::atomic<uint64_t> next_conn_id_ = 0;
   std::atomic<uint64_t> next_mr_id_ = 0;
