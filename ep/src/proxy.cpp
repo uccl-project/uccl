@@ -135,13 +135,15 @@ void Proxy::set_peers_meta(std::vector<PeerMeta> const& peers) {
   }
 }
 
-void Proxy::set_bench_ring_addrs(std::vector<uintptr_t> const& addrs) {
+void Proxy::set_bench_d2h_channel_addrs(std::vector<uintptr_t> const& addrs) {
+#ifndef USE_MSCCLPP_FIFO_BACKEND
   ring_tails_.clear();
   ring_seen_.clear();
-  cfg_.d2h_queues.clear();
 
   ring_tails_.resize(addrs.size(), 0);
   ring_seen_.resize(addrs.size(), 0);
+#endif
+  cfg_.d2h_queues.clear();
   cfg_.d2h_queues.reserve(addrs.size());
 
   for (auto addr : addrs) {
@@ -299,7 +301,7 @@ void Proxy::init_common() {
     std::abort();
   }
   // if (cfg_.thread_idx != 0) return;
-  const std::string shm_name = shm_name_for_barrier(my_ip, cfg_.thread_idx);
+  std::string const shm_name = shm_name_for_barrier(my_ip, cfg_.thread_idx);
   ctx_.lb = map_local_barrier_shm(shm_name, &ctx_.lb_owner);
   if (!ctx_.lb) {
     fprintf(stderr, "Failed to map local barrier shm: %s\n", shm_name.c_str());
@@ -449,8 +451,8 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
   }
 #else
   for (auto wr_id : acked_wrs_) {
-    const size_t rb_idx = (wr_id >> 32) & 0xFFFFFFFF;
-    const size_t cmd_idx = wr_id & 0xFFFFFFFF;
+    size_t const rb_idx = (wr_id >> 32) & 0xFFFFFFFF;
+    size_t const cmd_idx = wr_id & 0xFFFFFFFF;
 
     if (rb_idx >= cfg_.d2h_queues.size()) {
       fprintf(stderr, "Invalid rb_idx %zu in acked_wrs_\n", rb_idx);
@@ -870,7 +872,7 @@ void Proxy::destroy(bool free_gpu_buffer) {
     if (!ctx_ptr) continue;
     qp_to_error(ctx_ptr->qp);
     qp_to_error(ctx_ptr->ack_qp);
-    for (auto* q : ctx_ptr->data_qps_by_ring) {
+    for (auto* q : ctx_ptr->data_qps_by_channel) {
       if (q) qp_to_error(q);
     }
   }
@@ -886,13 +888,13 @@ void Proxy::destroy(bool free_gpu_buffer) {
       ibv_destroy_qp(ctx_ptr->qp);
       ctx_ptr->qp = nullptr;
     }
-    for (auto*& q : ctx_ptr->data_qps_by_ring) {
+    for (auto*& q : ctx_ptr->data_qps_by_channel) {
       if (q) {
         ibv_destroy_qp(q);
         q = nullptr;
       }
     }
-    ctx_ptr->data_qps_by_ring.clear();
+    ctx_ptr->data_qps_by_channel.clear();
     if (ctx_ptr->ack_qp) {
       ibv_destroy_qp(ctx_ptr->ack_qp);
       ctx_ptr->ack_qp = nullptr;

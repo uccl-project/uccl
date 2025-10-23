@@ -44,17 +44,17 @@ int main(int argc, char** argv) {
   std::vector<std::unique_ptr<Proxy>> proxies;
   proxies.reserve(env.blocks);
   std::vector<d2hq::HostD2HHandle> d2h_queues;
-  std::vector<std::unique_ptr<mscclpp::Fifo>> tls_fifos;
+  std::vector<std::unique_ptr<mscclpp::Fifo>> fifos;
   for (int i = 0; i < env.blocks; ++i) {
     Proxy::Config cfg{};
 
-    cfg.d2h_queues.reserve(kRingsPerProxy);
-    d2h_queues.reserve(kRingsPerProxy);
-    for (size_t j = 0; j < kRingsPerProxy; ++j) {
+    cfg.d2h_queues.reserve(kChannelPerProxy);
+    d2h_queues.reserve(kChannelPerProxy);
+    for (size_t j = 0; j < kChannelPerProxy; ++j) {
 #ifdef USE_MSCCLPP_FIFO_BACKEND
       auto fifo = std::make_unique<mscclpp::Fifo>(kQueueSize);
       uintptr_t addr = reinterpret_cast<uintptr_t>(fifo.get());
-      tls_fifos.push_back(std::move(fifo));
+      fifos.push_back(std::move(fifo));
 #else
       uintptr_t addr = alloc_cmd_ring();
 #endif

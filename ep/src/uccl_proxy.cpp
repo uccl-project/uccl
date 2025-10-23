@@ -1,7 +1,7 @@
 #include "uccl_proxy.hpp"
 #include "common.hpp"
 #include "proxy_ctx.hpp"
-#include "rdma.hpp"  // For local_poll_completions, remote_poll_completions, apply_pending_updates
+#include "rdma.hpp"
 #include "ring_buffer.cuh"
 #include <chrono>
 #include <cstdio>
@@ -24,19 +24,19 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   thread_idx_ = thread_idx;
   gpu_buffer_addr_ = reinterpret_cast<void*>(gpu_buffer_addr);
 
-  cfg.d2h_queues.reserve(kRingsPerProxy);
-  d2h_queues.reserve(kRingsPerProxy);
-  for (size_t i = 0; i < kRingsPerProxy; ++i) {
+  cfg.d2h_queues.reserve(kChannelPerProxy);
+  d2h_queues.reserve(kChannelPerProxy);
+  for (size_t i = 0; i < kChannelPerProxy; ++i) {
 #ifdef USE_MSCCLPP_FIFO_BACKEND
     auto fifo = std::make_unique<mscclpp::Fifo>(kQueueSize);
     uintptr_t addr = reinterpret_cast<uintptr_t>(fifo.get());
-    tls_fifos.push_back(std::move(fifo));
+    fifos.push_back(std::move(fifo));
 #else
     uintptr_t addr = alloc_cmd_ring();
 #endif
     d2hq::init_from_addr(d2h_queues[i], addr);
     cfg.d2h_queues.push_back(d2h_queues[i]);
-    ring_buffer_addrs_.push_back(addr);
+    d2h_channel_addrs_.push_back(addr);
   }
 
   cfg.thread_idx = thread_idx;
@@ -72,17 +72,17 @@ UcclProxy::~UcclProxy() {
 
   // Free all allocated ring buffers
 #ifndef USE_MSCCLPP_FIFO_BACKEND
-  for (auto ring_addr : ring_buffer_addrs_) {
-    free_cmd_ring(ring_addr);
+  for (auto d2h_channel_addr : d2h_channel_addrs_) {
+    free_cmd_ring(d2h_channel_addr);
   }
 #endif
-  ring_buffer_addrs_.clear();
+  d2h_channel_addrs_.clear();
 }
 
-std::vector<uint64_t> UcclProxy::get_ring_buffer_addrs() const {
+std::vector<uint64_t> UcclProxy::get_d2h_channel_addrs() const {
   std::vector<uint64_t> addrs;
-  addrs.reserve(ring_buffer_addrs_.size());
-  for (auto addr : ring_buffer_addrs_) {
+  addrs.reserve(d2h_channel_addrs_.size());
+  for (auto addr : d2h_channel_addrs_) {
     addrs.push_back(static_cast<uint64_t>(addr));
   }
   return addrs;

@@ -52,8 +52,10 @@ class Proxy {
 
   explicit Proxy(Config const& cfg) : cfg_(cfg) {
     // Initialize state tracking for each ring buffer
+#ifndef USE_MSCCLPP_FIFO_BACKEND
     ring_tails_.resize(cfg_.d2h_queues.size(), 0);
     ring_seen_.resize(cfg_.d2h_queues.size(), 0);
+#endif
   }
 
   void set_progress_run(bool run) {
@@ -80,7 +82,7 @@ class Proxy {
   uint64_t completed_wr() const;
 
   void set_peers_meta(std::vector<PeerMeta> const& peers);
-  void set_bench_ring_addrs(std::vector<uintptr_t> const& addrs);
+  void set_bench_d2h_channel_addrs(std::vector<uintptr_t> const& addrs);
 
   CopyRingBuffer ring;
 
@@ -122,13 +124,12 @@ class Proxy {
   std::vector<TransferCmd> postponed_atomics_;
   std::vector<uint64_t> postponed_wr_ids_;
 
-  // Multi-ring buffer state tracking (one per ring buffer)
-  std::vector<uint64_t> ring_tails_;
-  std::vector<size_t> ring_seen_;
-
 #ifdef USE_MSCCLPP_FIFO_BACKEND
   std::vector<uint64_t> fifo_seq_;
   std::vector<std::deque<uint64_t>> fifo_pending_;
+#else
+  std::vector<uint64_t> ring_tails_;
+  std::vector<size_t> ring_seen_;
 #endif
 };
 
