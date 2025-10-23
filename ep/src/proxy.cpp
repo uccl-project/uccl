@@ -430,24 +430,19 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
     auto& pend = fifo_pending_[rb_idx];
     while (!pend.empty()) {
       uint64_t front_wr = pend.front();
-      if (acked_wrs_.find(front_wr) == acked_wrs_.end())
-        break;                     // not contiguous
+      if (acked_wrs_.find(front_wr) == acked_wrs_.end()) break;
       acked_wrs_.erase(front_wr);  // consume this completion
       pend.pop_front();            // retire pending entry
 
       if (ctx_.quiet_wr != -1 && front_wr == (uint64_t)ctx_.quiet_wr) {
         ctx_.quiet_inflight = false;
         ctx_.quiet_wr = -1;
-        // printf("local_rank: %d : quiet finished: %ld\n", cfg_.rank,
-        // front_wr);
         fifo->pop();
       }
 
       if (ctx_.barrier_wr != -1 && front_wr == (uint64_t)ctx_.barrier_wr) {
-        ctx_.barrier_wr = -1;
         ctx_.barrier_inflight = false;
-        // printf("local_rank: %d : barrier finished: %ld\n", cfg_.rank,
-        // front_wr);
+        ctx_.barrier_wr = -1;
         fifo->pop();
       }
     }
@@ -495,11 +490,8 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
     size_t budget = (kMaxInflight > pending) ? (kMaxInflight - pending) : 0;
     for (size_t take = 0; take < budget; ++take) {
       auto trig = fifo->poll();
-      if (trig.fst == 0) break;  // nothing new at current tail
-
-      // Decode and stage the command.
+      if (trig.fst == 0) break;
       TransferCmd cmd = d2hq::decode_from_trigger(trig);
-      // CmdType base = get_base_cmd(cmd.cmd_type);
 
       /* For some reason, this is important for correctness */
       /* It cannot be if (ctx_.barrier_inflight) */
@@ -512,13 +504,6 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
         break;
       }
 
-      if (get_base_cmd(cmd.cmd_type) == CmdType::BARRIER ||
-          get_base_cmd(cmd.cmd_type) == CmdType::QUIET) {
-        if (!fifo_pending_[rb_idx].empty()) {
-          break;
-        }
-      }
-
       uint64_t unique_wr_id = (static_cast<uint64_t>(rb_idx) << 32) |
                               (fifo_seq_[rb_idx]++ & 0xFFFFFFFFULL);
 
@@ -527,33 +512,22 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
       fifo_pending_[rb_idx].push_back(unique_wr_id);
       found_work = true;
 
-      // We have consumed the element from the FIFO: free the slot now.
-      // Completion handling only retires from fifo_pending_ (no pop there).
-
       if (get_base_cmd(cmd.cmd_type) == CmdType::BARRIER ||
           get_base_cmd(cmd.cmd_type) == CmdType::QUIET) {
         if (get_base_cmd(cmd.cmd_type) == CmdType::BARRIER) {
-          // printf("local_rank: %d : received barrier message %ld\n",
-          // cfg_.rank, unique_wr_id);
           assert(!ctx_.barrier_inflight);
           assert(ctx_.barrier_wr == -1);
           ctx_.barrier_inflight = true;
         } else if (get_base_cmd(cmd.cmd_type) == CmdType::QUIET) {
-          // printf("local_rank: %d : received quiet message %ld\n", cfg_.rank,
-          // unique_wr_id);
           assert(!ctx_.quiet_inflight);
           assert(ctx_.quiet_wr == -1);
           ctx_.quiet_inflight = true;
         }
         break;
-        // This will be popped in notify_gpu_completion.
       } else {
         // Other operations just pop.
         fifo->pop();
       }
-
-      // Loop to try fetching the next element (tail advanced by pop()).
-      // Stop early if we reach the in-flight budget.
     }
 #else
     uint64_t& ring_tail = ring_tails_[rb_idx];
@@ -813,10 +787,6 @@ void Proxy::post_gpu_commands_mixed(
       0) {
     return;
   }
-
-  // printf("Posting %zu RDMA writes, %zu atomics, %zu barriers, %zu quiets\n",
-  //        rdma_wrs.size(), atomic_wrs.size(), barrier_cmds.size(),
-  //        quiet_cmds.size());
   // Handle regular RDMA writes
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
@@ -829,23 +799,18 @@ void Proxy::post_gpu_commands_mixed(
   }
   if (!barrier_cmds.empty()) {
     // barrier(barrier_wrs, barrier_cmds);
+#ifdef USE_MSCCLPP_FIFO_BACKEND
     assert(barrier_wrs.size() == 1);
-#ifndef USE_MSCCLPP_FIFO_BACKEND
-    assert(!ctx_.barrier_inflight);
-    ctx_.barrier_inflight = true;
-#endif
     assert(ctx_.barrier_wr == -1);
+#endif
     send_barrier(barrier_wrs[0]);
   }
   if (!quiet_cmds.empty()) {
+#ifdef USE_MSCCLPP_FIFO_BACKEND
     assert(quiet_wrs.size() == 1);
-#ifndef USE_MSCCLPP_FIFO_BACKEND
-    assert(!ctx_.quiet_inflight);
-    ctx_.quiet_inflight = true;
-#endif
     assert(ctx_.quiet_wr == -1);
+#endif
     ctx_.quiet_wr = quiet_wrs[0];
-    // printf("quiet_wr: %d\n", ctx_.quiet_wr);
     quiet(quiet_wrs, quiet_cmds);
   }
 }
@@ -898,7 +863,6 @@ void Proxy::quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds) {
   assert(cmds.size() == 1 && "quiet size must be 1");
   quiet_cq();
   acked_wrs_.insert(wrs[0]);
-  // printf("quiet finished: %ld\n", wrs[0]);
 }
 
 void Proxy::destroy(bool free_gpu_buffer) {
@@ -1053,9 +1017,11 @@ void Proxy::post_barrier_msg(int dst_rank, bool ack, uint64_t seq) {
 }
 
 void Proxy::send_barrier(uint64_t wr) {
-  // assert(!ctx_.barrier_inflight && "only one barrier at a time");
+#ifndef USE_MSCCLPP_FIFO_BACKEND
+  assert(!ctx_.barrier_inflight && "only one barrier at a time");
+  ctx_.barrier_inflight = true;
+#endif
   assert(ctx_.barrier_wr == -1 && "barrier_wr should be 0");
-  // ctx_.barrier_inflight = true;
   ctx_.barrier_wr = wr;
   ctx_.barrier_seq = ctx_.barrier_seq + 1;
 
@@ -1136,8 +1102,10 @@ void Proxy::barrier_check() {
           ctx_.barrier_arrival_count = 0;
 
           acked_wrs_.insert(ctx_.barrier_wr);
-          // ctx_.barrier_inflight = false;
-          // ctx_.barrier_wr = 0;
+#ifndef USE_MSCCLPP_FIFO_BACKEND
+          ctx_.barrier_inflight = false;
+          ctx_.barrier_wr = -1;
+#endif
           return;
         }
       }
@@ -1153,8 +1121,10 @@ void Proxy::barrier_check() {
 
         // Complete WR
         acked_wrs_.insert(ctx_.barrier_wr);
-        // ctx_.barrier_inflight = false;
-        // ctx_.barrier_wr = 0;
+#ifndef USE_MSCCLPP_FIFO_BACKEND
+        ctx_.barrier_inflight = false;
+        ctx_.barrier_wr = -1;
+#endif
       }
     }
     return;
@@ -1166,7 +1136,9 @@ void Proxy::barrier_check() {
   // Followers: wait until leader sets our release_seq
   if (lb->release_seq[ctx_.local_rank].load(std::memory_order_acquire) == seq) {
     acked_wrs_.insert(ctx_.barrier_wr);
-    // ctx_.barrier_inflight = false;
-    // ctx_.barrier_wr = -1;
+#ifndef USE_MSCCLPP_FIFO_BACKEND
+    ctx_.barrier_inflight = false;
+    ctx_.barrier_wr = -1;
+#endif
   }
 }
