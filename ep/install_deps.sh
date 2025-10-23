@@ -1,41 +1,14 @@
 #!/bin/bash
 set -e
 
-CONDA_ENV_NAME="${1}"
-if [ -z "$CONDA_ENV_NAME" ]; then
-    echo "Please provide the conda environment name as the first argument, e.g., bash install_deps.sh myenv"
-    exit 1
-fi
-
 sudo apt update
 sudo apt install -y libgoogle-glog-dev
 sudo apt install -y clang-format-14
 
+uv pip install black
 
-# Ensure conda is available
-if ! command -v conda &> /dev/null; then
-    echo "Conda is not installed. Please install Anaconda or Miniconda first."
-    exit 1
-fi
-
-# Activate conda environment
-echo "Activating conda environment: $CONDA_ENV_NAME"
-eval "$(conda shell.bash hook)"
-conda activate $CONDA_ENV_NAME
-
-conda install -c conda-forge libstdcxx-ng
-pip install black
-
-# Check if pip is installed in the environment
-if ! command -v pip3 &> /dev/null; then
-    echo "Installing pip3..."
-    sudo apt update
-    sudo apt install -y python3-pip
-fi
-
-# Install pybind11
 echo "Installing pybind11..."
-pip3 install pybind11 --upgrade
+uv pip install pybind11 --upgrade
 
 # Check CUDA availability and get version
 check_cuda() {
@@ -46,7 +19,6 @@ check_cuda() {
 check_rocm() {
     command -v hipcc &> /dev/null
 }
-
 
 get_cuda_version() {
     # Extracts version like "12.8" from nvcc output
@@ -75,13 +47,13 @@ if check_cuda; then
         PYTORCH_SUFFIX="cu${CUDA_MAJOR}1"  # Fallback to major version + .1
     fi
     
-    pip3 install torch torchvision torchaudio --index-url "https://download.pytorch.org/whl/$PYTORCH_SUFFIX"
+    uv pip install torch torchvision torchaudio --index-url "https://download.pytorch.org/whl/$PYTORCH_SUFFIX"
 elif check_rocm; then
     # Install ROCM dependencies
     sudo apt-get install -y hipsolver hipblas hipsparse rocthrust hipblaslt 
 
     # Install Pytorch using nightly
-    pip3 install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
+    uv pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
 else
     echo "No CUDA or ROCM detected"
     exit 1

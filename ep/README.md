@@ -40,28 +40,34 @@ docker run -d \
     -w "/workspace/uccl" \
     uccl-builder-rocm sleep infinity
 ```
+
 build ep
 ```bash
 docker exec -it dev_uccl-builder-rocm /bin/bash
 
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source $HOME/.local/bin/env
+uv venv
+source .venv/bin/activate
+
 cd ep
 bash install_deps.sh base
 
-python3 setup.py build
+python setup.py build
 mkdir -p uccl/lib
-cp ep/build/**/*.so uccl/
+cp build/**/*.so uccl/
 ```
 
 build uccl for develop
 
 ```bash
-cd /workspace/uccl
-python3 setup.py develop
+cd /workspace/uccl/ep
+python setup.py develop
 ```
 
 test import uccl.ep
 ```bash
-python3 -c "import torch;import uccl.ep"
+python -c "import torch;import uccl.ep"
 ```
 
 ## Example APIs
