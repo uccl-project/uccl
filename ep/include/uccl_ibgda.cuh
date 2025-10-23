@@ -1,6 +1,6 @@
 #pragma once
 #include "common.hpp"
-#include "d2h_queue_adapter.cuh"
+#include "d2h_queue_device.cuh"
 #include "ring_buffer.cuh"
 #include <cstddef>
 #include <cstdint>

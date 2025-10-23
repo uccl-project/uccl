@@ -1,7 +1,7 @@
 #include "bench_kernel.cuh"
 #include "bench_utils.hpp"
 #include "common.hpp"
-#include "d2h_queue_adapter.cuh"
+#include "d2h_queue_device.cuh"
 #include "ep_config.hpp"
 #include "ep_configs.cuh"
 #include "ep_event.hpp"

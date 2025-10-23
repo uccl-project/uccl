@@ -30,7 +30,6 @@ inline void decode_packed_transfer_cmd(uint64_t fst, uint64_t snd,
   const uint32_t req_lptr_u32 =
       static_cast<uint32_t>((snd >> 32) & 0xFFFFFFFFull);
 
-  // Populate TransferCmd
   out.cmd_type = static_cast<CmdType>(cmd_type_u8);
   out.dst_rank = static_cast<int>(dst_rank_u8);
   out.bytes_and_val = bytes_and_val_u32;
@@ -38,22 +37,13 @@ inline void decode_packed_transfer_cmd(uint64_t fst, uint64_t snd,
   out.req_rptr = static_cast<uint64_t>(req_rptr_u32);
   auto base = get_base_cmd(static_cast<CmdType>(cmd_type_u8));
   if (base == CmdType::ATOMIC) {
-    // upper 32 bits carry the atomic immediate (signed)
     out.value = static_cast<int32_t>(req_lptr_u32);
   } else {
-    // non-atomic: upper 32 bits carry req_lptr
     out.req_lptr = static_cast<uint64_t>(req_lptr_u32);
   }
-
-  // printf("Decoded cmd: type=%d, dst_rank=%d, bytes_and_val=%u, idx_or_off=%u,
-  // req_rptr=%u, req_lptr=%u\n",
-  //        static_cast<int>(out.cmd_type), out.dst_rank, out.bytes_and_val,
-  //        out.expert_idx, static_cast<uint32_t>(out.req_rptr),
-  //        static_cast<uint32_t>(out.req_lptr));
 }
 
 #ifdef USE_MSCCLPP_FIFO_BACKEND
-// Convenience return-by-value variant
 inline TransferCmd decode_packed_transfer_cmd(uint64_t fst,
                                               uint64_t snd) noexcept {
   TransferCmd c{};
@@ -61,7 +51,6 @@ inline TransferCmd decode_packed_transfer_cmd(uint64_t fst,
   return c;
 }
 
-// Direct decode from a ProxyTrigger (FIFO poll result)
 inline TransferCmd decode_from_trigger(
     mscclpp::ProxyTrigger const& trig) noexcept {
   return decode_packed_transfer_cmd(trig.fst, trig.snd);
@@ -70,9 +59,9 @@ inline TransferCmd decode_from_trigger(
 
 struct HostD2HHandle {
 #ifdef USE_MSCCLPP_FIFO_BACKEND
-  mscclpp::Fifo* fifo = nullptr;  // queue wrapper (pop-based)
+  mscclpp::Fifo* fifo = nullptr;
 #else
-  DeviceToHostCmdBuffer* ring = nullptr;  // indexed ring buffer
+  DeviceToHostCmdBuffer* ring = nullptr;
 #endif
 
 #ifndef USE_MSCCLPP_FIFO_BACKEND
@@ -137,7 +126,6 @@ inline HostD2HHandle make_handle(DeviceToHostCmdBuffer* rb) {
 
 #ifdef USE_MSCCLPP_FIFO_BACKEND
 
-// Simple FIFO initialization helpers (no wrapper layer needed anymore)
 inline void init_d2h_from_fifo(mscclpp::Fifo* const* fifos, size_t count,
                                std::vector<HostD2HHandle>& storage,
                                std::vector<HostD2HHandle*>& out) {
@@ -177,7 +165,6 @@ inline void init_d2h_from_ring(DeviceToHostCmdBuffer* rbs, size_t count,
     storage[i] = make_handle(&rbs[i]);
   }
 }
-
 #endif  // USE_MSCCLPP_FIFO_BACKEND
 
 inline void init_from_addr(HostD2HHandle& h, uintptr_t addr) {

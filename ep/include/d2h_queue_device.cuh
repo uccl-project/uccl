@@ -35,12 +35,6 @@ __device__ inline void pack_transfer_cmd(TransferCmd const& c, uint64_t& fst,
       req_lptr_u32 = static_cast<uint32_t>(c.req_lptr);
     }
   }
-  // printf("Packing TransferCmd: cmd_type=%lu, dst_rank=%lu, "
-  //        "bytes_and_val=0x%08lx, idx_or_off=%lu, req_rptr=0x%08lx, "
-  //        "req_lptr=0x%08lx\n",
-  //        cmd_type_u8, dst_rank_u8, bytes_and_val_u32, idx_or_off_u16,
-  //        req_rptr_u32, req_lptr_u32);
-
   fst |= (cmd_type_u8 & 0xFFull);
   fst |= ((dst_rank_u8 & 0xFFull) << 8);
   fst |= ((bytes_and_val_u32 & 0xFFFFFFFFull) << 16);
@@ -57,39 +51,24 @@ struct D2HHandle {
   DeviceToHostCmdBuffer* ring;
 #endif
 
-  // Backend-aware accessors (now member functions)
-  __device__ __forceinline__ uint64_t head() const {
-#ifdef USE_MSCCLPP_FIFO_BACKEND
-    // FIFO backend does not have a volatile head/tail; just return dummy.
-    return 0;
-#else
-    return ring->head;
-#endif
-  }
+#ifndef USE_MSCCLPP_FIFO_BACKEND
+  __device__ __forceinline__ uint64_t head() const { return ring->head; }
 
-  // For FIFO, initialize from a *host* value (don’t deref device ptrs on host).
+  __device__ __forceinline__ uint64_t tail() const {
+    return ring->volatile_tail();
+  }
+#endif
+
 #ifdef USE_MSCCLPP_FIFO_BACKEND
   __host__ inline void init_from_host_value(
       mscclpp::FifoDeviceHandle const& v) noexcept {
     fifo = v;
   }
-#endif
+#else
   __host__ inline void init_from_dev_ptr(void* dev_ptr) noexcept {
-#ifndef USE_MSCCLPP_FIFO_BACKEND
     ring = reinterpret_cast<DeviceToHostCmdBuffer*>(dev_ptr);
-#else
-    // No-op on FIFO: host must not read device memory here.
-    (void)dev_ptr;
-#endif
   }
-
-  __device__ __forceinline__ uint64_t tail() const {
-#ifdef USE_MSCCLPP_FIFO_BACKEND
-    return 0;
-#else
-    return ring->volatile_tail();
 #endif
-  }
 
   __device__ __forceinline__ bool atomic_set_and_commit(
       TransferCmd const& item, uint64_t* out_slot = nullptr) {
@@ -98,20 +77,15 @@ struct D2HHandle {
     mscclpp::ProxyTrigger trig;
     uint64_t fst, snd;
     pack_transfer_cmd(item, fst, snd);
-    // printf("atomic_set_and_commit called!\n");
     trig.fst = fst;
     trig.snd = snd;
-    // Only available inside device compilation
     uint64_t slot = fifo.push(trig, /*maxSpinCount=*/-1);
     if (out_slot) *out_slot = slot;
 #else
-    // Host stub (no push)
     if (out_slot) *out_slot = 0;
 #endif
-
     return true;
 #else
-    // Ring buffer path
     return ring->atomic_set_and_commit(item, out_slot);
 #endif
   }
