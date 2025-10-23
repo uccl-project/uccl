@@ -37,9 +37,6 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
     d2hq::init_from_addr(d2h_queues[i], addr);
     cfg.d2h_queues.push_back(d2h_queues[i]);
     ring_buffer_addrs_.push_back(addr);
-    printf("UcclProxy: thread %d ring buffer %zu addr: %p, HostD2HHandle: %p\n",
-           thread_idx, i, reinterpret_cast<void*>(addr),
-           &cfg.d2h_queues.back());
   }
 
   cfg.thread_idx = thread_idx;
@@ -85,8 +82,6 @@ UcclProxy::~UcclProxy() {
 std::vector<uint64_t> UcclProxy::get_ring_buffer_addrs() const {
   std::vector<uint64_t> addrs;
   addrs.reserve(ring_buffer_addrs_.size());
-  // printf("get_ring_buffer_addrs called, size: %lu\n",
-  // ring_buffer_addrs_.size());
   for (auto addr : ring_buffer_addrs_) {
     addrs.push_back(static_cast<uint64_t>(addr));
   }

@@ -60,32 +60,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     cmd.req_lptr = lptr_val;
     cmd.bytes = bytes_val;
     cmd.dst_rank = dst_rank;
-    if (req_lptr >> 32) {
-      printf("[nvshmemi_ibgda_put_nbi_warp] req_lptr too large: %llu\n",
-             (unsigned long long)req_lptr);
-      trap();
-    }
-    if (req_rptr >> 32) {
-      printf("[nvshmemi_ibgda_put_nbi_warp] req_rptr too large: %llu\n",
-             (unsigned long long)req_rptr);
-      trap();
-    }
-    if (bytes_val >> 24) {
-      printf("[nvshmemi_ibgda_put_nbi_warp] bytes too large: %llu\n",
-             (unsigned long long)bytes_val);
-      trap();
-    }
 #ifdef USE_NORMAL_MODE
-    if (atomic_offset >> 16) {
-      printf("[nvshmemi_ibgda_put_nbi_warp] atomic_offset too large: %llu\n",
-             (unsigned long long)atomic_offset);
-      trap();
-    }
-    if (atomic_val >> 8) {
-      printf("[nvshmemi_ibgda_put_nbi_warp] atomic_val too large: %llu\n",
-             (unsigned long long)atomic_val);
-      trap();
-    }
     cmd.atomic_offset = atomic_offset;
     cmd.atomic_val = atomic_val;
 #else
@@ -187,7 +162,6 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     }
 #endif
 #ifdef USE_MSCCLPP_FIFO_BACKEND
-    // FIFO: push directly (backpressure inside push).
     {
       uint64_t slot = 0;
       TransferCmd cmd{};
@@ -317,15 +291,12 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
     auto* h = reinterpret_cast<d2hq::D2HHandle*>(
         static_cast<uintptr_t>(ring_addrs[ring_idx]));
 #ifdef USE_MSCCLPP_FIFO_BACKEND
-    // FIFO: just push QUIET; FIFO ordering guarantees it will serialize.
     {
-      // printf("posting quiet\n");
       uint64_t slot = 0;
       TransferCmd cmd{};
       cmd.cmd_type = CmdType::QUIET;
       h->atomic_set_and_commit(cmd, &slot);
       slots[num_posted++] = slot;
-      // printf("quiet posted\n");
     }
 #else
     while (true) {
@@ -369,15 +340,12 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
     auto* h = reinterpret_cast<d2hq::D2HHandle*>(
         static_cast<uintptr_t>(ring_addrs[ring_idx]));
 #ifdef USE_MSCCLPP_FIFO_BACKEND
-    // FIFO: push BARRIER directly.
     {
-      // printf("posting barrier\n");
       uint64_t slot = 0;
       TransferCmd cmd{};
       cmd.cmd_type = CmdType::BARRIER;
       h->atomic_set_and_commit(cmd, &slot);
       slots[num_posted++] = slot;
-      // printf("posted barrier\n");
     }
 #else
     while (true) {

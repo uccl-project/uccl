@@ -15,6 +15,9 @@ int main(int argc, char** argv) {
     std::cerr << "Usage: ./benchmark_remote <rank> <peer_ip>\n";
     return 1;
   }
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+  assert(false && "benchmark_remote does not support mscclpp fifo");
+#endif
   int const rank = std::atoi(argv[1]);
   char const* peer_ip = argv[2];
 

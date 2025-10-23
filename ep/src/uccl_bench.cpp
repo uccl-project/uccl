@@ -32,7 +32,7 @@ EnvInfo Bench::env_info() const {
 #ifndef USE_MSCCLPP_FIFO_BACKEND
   e.rbs_addr = reinterpret_cast<uintptr_t>(env_.rbs);
 #else
-  abort();
+  assert(false && "TODO: uccl_bench does not support mscclpp fifo");
 #endif
 
   return e;
@@ -48,11 +48,9 @@ uintptr_t Bench::ring_addr(int i) const {
   if (i < 0 || i >= env_.blocks) throw std::out_of_range("ring index");
 
 #ifndef USE_MSCCLPP_FIFO_BACKEND
-  // Ring-buffer backend
   return reinterpret_cast<uintptr_t>(&env_.rbs[i]);
 #else
-  // FIFO backend — use the HostD2HHandle abstraction
-  abort();
+  assert(false && "TODO: uccl_bench does not support mscclpp fifo");
 #endif
 }
 
@@ -96,8 +94,7 @@ void Bench::launch_gpu_issue_batched_commands() {
                              cudaGetErrorString(st));
   }
 #else
-  // FIFO backend not GPU-launched
-  abort();
+  assert(false && "TODO: uccl_bench does not support mscclpp fifo");
 #endif
 
   GPU_RT_CHECK(cudaEventRecord(done_evt_, env_.stream));

@@ -24,7 +24,6 @@ struct Fifo::Impl {
 Fifo::Fifo(int size) {
   int device;
   MSCCLPP_CUDATHROW(cudaGetDevice(&device));
-  printf("device: %d\n", device);
   int numaNode = getDeviceNumaNode(device);
   if (numaNode >= 0) {
     numaBind(numaNode);

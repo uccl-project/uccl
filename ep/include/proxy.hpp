@@ -127,9 +127,7 @@ class Proxy {
   std::vector<size_t> ring_seen_;
 
 #ifdef USE_MSCCLPP_FIFO_BACKEND
-  // Per-FIFO sequence number for unique WR IDs (low 32 bits).
   std::vector<uint64_t> fifo_seq_;
-  // Per-FIFO pending queue of WR IDs in issue order; we pop only on completion.
   std::vector<std::deque<uint64_t>> fifo_pending_;
 #endif
 };

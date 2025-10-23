@@ -66,7 +66,6 @@ static std::vector<uint64_t> collect_ring_addrs_for_device(int device_index) {
     // Each proxy now manages multiple ring buffers
     auto proxy_addrs =
         proxy.attr("get_ring_buffer_addrs")().cast<std::vector<uint64_t>>();
-    printf("proxy_addrs: %p\n", proxy_addrs.data());
     all_addrs.insert(all_addrs.end(), proxy_addrs.begin(), proxy_addrs.end());
   }
   return all_addrs;
@@ -95,7 +94,6 @@ class Buffer {
     max_nvl_peers = num_local_ranks;
     {
       cudaGetDevice(&device_index);
-      // printf("buffer initialization\n");
       {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
         auto it = uccl::g_proxies_by_dev.find(device_index);
@@ -128,18 +126,13 @@ class Buffer {
 #else
             dev_ptr = host_ptr;
 #endif
-            // Initialize object with the ring's device pointer
             d_handle_objs[i].init_from_dev_ptr(dev_ptr);
-            // Store the device address of the object for the kernel
             d_handles[i] = reinterpret_cast<uint64_t>(&d_handle_objs[i]);
 #else
-            // FIFO backend: host_addrs[i] holds mscclpp::Fifo*
             auto* fifo = reinterpret_cast<mscclpp::Fifo*>(host_addrs[i]);
             mscclpp::FifoDeviceHandle h = fifo->deviceHandle();
             d_handle_objs[i].init_from_host_value(h);
-            // printf("after init!\n");
             d_handles[i] = reinterpret_cast<uint64_t>(d_handle_objs + i);
-            // printf("d_handles[i]=%p\n", (void*)d_handles[i]);
 #endif
           }
 

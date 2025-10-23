@@ -19,12 +19,9 @@ struct BenchEnv {
   // Unified D2H handles visible to the application
   std::vector<d2hq::HostD2HHandle> d2h_queues;  // pointers to storage
 
-#ifndef USE_MSCCLPP_FIFO_BACKEND
   DeviceToHostCmdBuffer* rbs = nullptr;
-#else
   std::vector<std::unique_ptr<mscclpp::Fifo>> fifos;
   mscclpp::FifoDeviceHandle* d_fifo_handles = nullptr;
-#endif
 };
 
 inline void init_env(BenchEnv& env, int blocks = kNumThBlocks,
