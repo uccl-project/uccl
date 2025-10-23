@@ -223,6 +223,7 @@ int main(int argc, char* argv[]) {
                   ep.uccl_send_async(conn_id_vec[j], data, send_len);
               poll_ctx->timestamp = rdtsc();
               poll_ctxs.push_back(poll_ctx);
+              // LOG(INFO) << "[Transport Test] send async";
             }
           }
           while (poll_ctxs.size() > kMaxInflight * NUM_QUEUES) {
@@ -230,6 +231,7 @@ int main(int argc, char* argv[]) {
             poll_ctxs.pop_front();
             auto async_start = poll_ctx->timestamp;
             ep.uccl_poll(poll_ctx);
+            // LOG(INFO) << "[Transport Test] poll";
             rtts.push_back(to_usec(rdtsc() - async_start, freq_ghz));
             sent_bytes += send_len;
           }

@@ -23,7 +23,14 @@ class DPDKSocket {
   }
 
   inline void push_packet(Packet* pkt) { Packet::Free(pkt); }
+
   inline Packet* pop_packet() { return packet_pool_->PacketAlloc(); }
+
+  inline Packet* pop_packet(uint16_t pkt_len) {
+    Packet* pkt = pop_packet();
+    pkt->append<void*>(pkt_len);
+    return pkt;
+  }
 
   uint32_t send_packets(Packet** pkts, uint32_t nb_pkts) {
     uint32_t sent = tx_ring_->TrySendPackets(pkts, nb_pkts);
@@ -36,7 +43,9 @@ class DPDKSocket {
   }
 
   uint32_t recv_packets(Packet** pkts, uint32_t nb_pkts) {
-    return rx_ring_->RecvPackets(pkts, nb_pkts);
+    uint32_t rcvd = rx_ring_->RecvPackets(pkts, nb_pkts);
+    total_recv_packets_ += rcvd;
+    return rcvd;
   }
 
   int get_queue_id() const { return queue_id_; }
@@ -44,7 +53,7 @@ class DPDKSocket {
   inline uint64_t send_queue_estimated_latency_ns() { return 0; }
 
   std::string to_string() {
-    return Format("⬆️%u ⬇️%u", total_sent_packets_, total_recv_packets_);
+    return Format("[TX] %u [RX] %u", total_sent_packets_, total_recv_packets_);
   }
 
  private:
@@ -118,6 +127,7 @@ class PacketBuf {
 
  public:
   static PacketBuf* GetPacketBuf(Packet* pkt) {
+    // LOG(INFO) << "[PacketBuf] HEADROOM: " << pkt->headroom();
     uint64_t pkt_buf_addr = (uint64_t)pkt->head_data<void*>();
     return reinterpret_cast<PacketBuf*>(pkt_buf_addr - sizeof(PacketBuf));
   }

@@ -1,4 +1,8 @@
 #include "transport.h"
+#include "ether.h"
+#include "ipv4.h"
+#include "packet.h"
+#include "udp.h"
 #include "util/util.h"
 #include <cstdint>
 #include <set>
@@ -782,69 +786,51 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
 }
 
 void UcclFlow::prepare_l2header(uint8_t* pkt_addr) const {
-  auto* eh = (ethhdr*)pkt_addr;
-  memcpy(eh->h_source, local_l2_addr_, ETH_ALEN);
-  memcpy(eh->h_dest, remote_l2_addr_, ETH_ALEN);
-  eh->h_proto = htons(ETH_P_IP);
+  Ethernet* eth = reinterpret_cast<Ethernet*>(pkt_addr);
+  eth->src_addr = local_l2_addr_;
+  eth->dst_addr = remote_l2_addr_;
+  eth->eth_type = be16_t(Ethernet::kIpv4);
+
+  // memcpy(eh->h_source, local_l2_addr_, ETH_ALEN);
+  // memcpy(eh->h_dest, remote_l2_addr_, ETH_ALEN);
+  // eh->h_proto = htons(ETH_P_IP);
 }
 
 void UcclFlow::prepare_l3header(uint8_t* pkt_addr,
                                 uint32_t payload_bytes) const {
-  auto* ipv4h = (iphdr*)(pkt_addr + sizeof(ethhdr));
-  ipv4h->ihl = 5;
-  ipv4h->version = 4;
-  ipv4h->tos = 0x0;
-  ipv4h->id = htons(0x1513);
-  ipv4h->frag_off = htons(0);
-  ipv4h->ttl = 64;
-#ifdef USE_TCP
-  ipv4h->protocol = IPPROTO_TCP;
-  ipv4h->tot_len = htons(sizeof(iphdr) + sizeof(tcphdr) + payload_bytes);
-#else
-  ipv4h->protocol = IPPROTO_UDP;
-  ipv4h->tot_len = htons(sizeof(iphdr) + sizeof(udphdr) + payload_bytes);
-#endif
-  ipv4h->saddr = htonl(local_addr_);
-  ipv4h->daddr = htonl(remote_addr_);
-  ipv4h->check = 0;
-  // AWS would block traffic if ipv4 checksum is not calculated.
-  ipv4h->check = ipv4_checksum(ipv4h, sizeof(iphdr));
+  Ipv4* ipv4 = reinterpret_cast<Ipv4*>(pkt_addr + sizeof(Ethernet));
+  ipv4->version_ihl = 0x45;
+  ipv4->type_of_service = 0;
+  ipv4->packet_id = be16_t(0x1513);
+  ipv4->fragment_offset = be16_t(0);
+  ipv4->time_to_live = Ipv4::kDefaultTTL;
+  ipv4->total_length = be16_t(sizeof(iphdr) + sizeof(udphdr) + payload_bytes);
+  ipv4->next_proto_id = Ipv4::Proto::kUdp;
+  ipv4->src_addr = local_addr_;
+  ipv4->dst_addr = remote_addr_;
+  ipv4->hdr_checksum = 0;
 }
 
 void UcclFlow::prepare_l4header(uint8_t* pkt_addr, uint32_t payload_bytes,
                                 uint16_t dst_port) const {
-#ifdef USE_TCP
-  auto* tcph = (tcphdr*)(pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
-  memset(tcph, 0, sizeof(tcphdr));
+  Udp* udp = reinterpret_cast<Udp*>(pkt_addr + sizeof(Ethernet) + sizeof(Ipv4));
 #ifdef USE_MULTIPATH
-  tcph->source = htons(BASE_PORT);
-  tcph->dest = htons(dst_port);
+  udp->src_port = BASE_PORT;
+  udp->dst_port = dst_port;
 #else
-  tcph->source = htons(BASE_PORT);
-  tcph->dest = htons(BASE_PORT);
+  udp->src_port = BASE_PORT;
+  udp->dst_port = BASE_PORT;
 #endif
-  tcph->doff = 5;
-  tcph->check = 0;
-#ifdef ENABLE_CSUM
-  tcph->check = ipv4_udptcp_cksum(IPPROTO_TCP, local_addr_, remote_addr_,
-                                  sizeof(tcphdr) + payload_bytes, tcph);
-#endif
-#else
-  auto* udph = (udphdr*)(pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
-#ifdef USE_MULTIPATH
-  udph->source = htons(BASE_PORT);
-  udph->dest = htons(dst_port);
-#else
-  udph->source = htons(BASE_PORT);
-  udph->dest = htons(BASE_PORT);
-#endif
-  udph->len = htons(sizeof(udphdr) + payload_bytes);
-  udph->check = htons(0);
-#ifdef ENABLE_CSUM
-  udph->check = ipv4_udptcp_cksum(IPPROTO_UDP, local_addr_, remote_addr_,
-                                  sizeof(udphdr) + payload_bytes, udph);
-#endif
-#endif
+
+  udp->len = be16_t(sizeof(Udp) + payload_bytes);
+  udp->cksum = be16_t(0);
+}
+
+void UcclFlow::prepare_l3l4checksum(Packet* pkt) const {
+  // Offload IPv4 and UDP checksums to hardware.
+  pkt->set_l2_len(sizeof(Ethernet));
+  pkt->set_l3_len(sizeof(Ipv4));
+  pkt->offload_udpv4_csum();
 }
 
 void UcclFlow::prepare_datapacket(PacketBuf* msgbuf, uint32_t path_id,
@@ -880,6 +866,8 @@ void UcclFlow::prepare_datapacket(PacketBuf* msgbuf, uint32_t path_id,
           : 0;
 
   ucclh->timestamp2 = 0;  // let the receiver ebpf fill this in.
+
+  prepare_l3l4checksum(msgbuf->get_pkt());
 }
 
 Packet* UcclFlow::craft_ackpacket(uint32_t path_id, uint16_t dst_port,
@@ -887,7 +875,7 @@ Packet* UcclFlow::craft_ackpacket(uint32_t path_id, uint16_t dst_port,
                                   UcclPktHdr::UcclFlags const net_flags,
                                   uint64_t ts1, uint64_t ts2) {
   size_t const kControlPayloadBytes = kUcclHdrLen + kUcclSackHdrLen;
-  auto pkt = socket_->pop_packet();
+  auto pkt = socket_->pop_packet(kNetHdrLen + kControlPayloadBytes);
   auto msgbuf = PacketBuf::Create(pkt);
   // Let AFXDPSocket::pull_complete_queue() free control frames.
   msgbuf->mark_txpulltime_free();
@@ -925,12 +913,14 @@ Packet* UcclFlow::craft_ackpacket(uint32_t path_id, uint16_t dst_port,
           : 0;
   ucclsackh->timestamp4 = 0;  // let the sender ebpf fill this in.
 
+  prepare_l3l4checksum(msgbuf->get_pkt());
+
   return msgbuf->get_pkt();
 }
 
 Packet* UcclFlow::craft_rssprobe_packet(uint16_t dst_port) {
   size_t const kRssProbePayloadBytes = kUcclHdrLen;
-  auto pkt = socket_->pop_packet();
+  auto pkt = socket_->pop_packet(kNetHdrLen + kRssProbePayloadBytes);
   auto msgbuf = PacketBuf::Create(pkt);
   // Let AFXDPSocket::pull_complete_queue() free control frames.
   msgbuf->mark_txpulltime_free();
@@ -955,6 +945,8 @@ Packet* UcclFlow::craft_rssprobe_packet(uint16_t dst_port) {
   ucclh->flow_id = be64_t(flow_id_);
   ucclh->timestamp1 = 0;
   ucclh->timestamp2 = 0;
+
+  prepare_l3l4checksum(msgbuf->get_pkt());
 
   return msgbuf->get_pkt();
 }
@@ -1050,6 +1042,7 @@ void UcclEngine::deser_th_func(std::vector<UcclEngine*> engines) {
         // Make data written by the app thread visible to the deser
         // thread.
         tx_deser_work.poll_ctx->read_barrier();
+        // LOG(INFO) << "Tx jring dequeue";
         VLOG(3) << "Tx jring dequeue";
 
         // deser tx_work into a framebuf chain, then pass to deser_th.
@@ -1060,7 +1053,8 @@ void UcclEngine::deser_th_func(std::vector<UcclEngine*> engines) {
         while (remaining_bytes > 0) {
           auto payload_len = std::min(
               remaining_bytes, (size_t)DPDK_MTU - kNetHdrLen - kUcclHdrLen);
-          auto pkt = engine->socket_->pop_packet();
+          auto pkt = engine->socket_->pop_packet(payload_len + kNetHdrLen +
+                                                 kUcclHdrLen);
           auto* msgbuf = PacketBuf::Create(pkt);
 #ifndef EMULATE_ZC
           auto pkt_payload_addr =
@@ -1242,6 +1236,8 @@ void UcclEngine::handle_install_flow_on_engine(Channel::CtrlMsg& ctrl_work) {
   std::tie(std::ignore, ret) = active_flows_map_.insert({flow_id, flow});
   DCHECK(ret);
 
+  LOG(INFO) << "[Engine] start RSS probing";
+
   // RSS probing to get a list of dst_port matching remote engine queue and,
   // reversely, matching local engine queue. Basically, symmetric dst_ports.
   std::set<uint16_t> dst_ports_set;
@@ -1250,19 +1246,29 @@ void UcclEngine::handle_install_flow_on_engine(Channel::CtrlMsg& ctrl_work) {
   for (uint32_t i = BASE_PORT; i < 65536;
        i = (i + 1) % (65536 - BASE_PORT) + BASE_PORT) {
     uint16_t dst_port = i;
-    socket_->send_packet(flow->craft_rssprobe_packet(dst_port));
+    uint32_t sent = socket_->send_packet(flow->craft_rssprobe_packet(dst_port));
+
+    if (!sent) {
+      LOG(INFO) << "[Engine] failed to send RSS probe packet to port "
+                << dst_port;
+      continue;
+    }
 
     uint32_t rcvd = socket_->recv_packets(pkts, RECV_BATCH_SIZE);
-    for (uint32_t j = 0; j < rcvd; i++) {
-      auto* pkt = pkts[i];
+    if (rcvd) {
+      LOG(INFO) << "[Engine] received " << rcvd << " RSS probe packets";
+    }
+
+    for (uint32_t j = 0; j < rcvd; j++) {
+      auto* pkt = pkts[j];
       auto* msgbuf = PacketBuf::Create(pkt);
       auto* pkt_addr = msgbuf->get_pkt_addr();
-      auto* udph =
-          reinterpret_cast<udphdr*>(pkt_addr + sizeof(ethhdr) + sizeof(iphdr));
+      auto* udp =
+          reinterpret_cast<Udp*>(pkt_addr + sizeof(Ethernet) + sizeof(Ipv4));
       auto* ucclh = reinterpret_cast<UcclPktHdr*>(pkt_addr + kNetHdrLen);
 
       if (ucclh->net_flags == UcclPktHdr::UcclFlags::kRssProbe) {
-        VLOG(3) << "[Engine] received RSS probe packet";
+        LOG(INFO) << "[Engine] received RSS probe packet";
         if (ucclh->engine_id == local_engine_idx_) {
           // Probe packets arrive the remote engine!
           ucclh->net_flags = UcclPktHdr::UcclFlags::kRssProbeRsp;
@@ -1275,11 +1281,11 @@ void UcclEngine::handle_install_flow_on_engine(Channel::CtrlMsg& ctrl_work) {
           socket_->push_packet(pkt);
         }
       } else {
-        VLOG(3) << "[Engine] received RSS probe rsp packet";
+        LOG(INFO) << "[Engine] received RSS probe rsp packet";
         DCHECK(ucclh->net_flags == UcclPktHdr::UcclFlags::kRssProbeRsp);
         if (ucclh->engine_id == local_engine_idx_) {
           // Probe rsp packets arrive this engine!
-          dst_ports_set.insert(ntohs(udph->dest));
+          dst_ports_set.insert(ntohs(udp->dst_port.port.value()));
         }
         socket_->push_packet(pkt);
       }
@@ -1522,8 +1528,8 @@ ConnID Endpoint::uccl_connect(std::string bootstrap_remote_ip,
 
   LOG(INFO) << "[Endpoint] remote IP: " << remote_ip;
 
-  while (true);
-  
+  // while (true);
+
   install_flow_on_engine(flow_id, remote_ip, local_engine_idx, bootstrap_fd);
 
   return ConnID{.flow_id = flow_id,
@@ -1597,7 +1603,7 @@ ConnID Endpoint::uccl_accept() {
   std::string remote_ip = ip_to_str(remote_ip_int);
   LOG(INFO) << "[Endpoint] remote IP: " << remote_ip;
 
-  while (true);
+  // while (true);
 
   install_flow_on_engine(flow_id, remote_ip, local_engine_idx, bootstrap_fd);
 

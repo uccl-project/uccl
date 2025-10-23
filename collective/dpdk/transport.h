@@ -477,6 +477,7 @@ class UcclFlow {
   void prepare_l3header(uint8_t* pkt_addr, uint32_t payload_bytes) const;
   void prepare_l4header(uint8_t* pkt_addr, uint32_t payload_bytes,
                         uint16_t dst_port) const;
+  void prepare_l3l4checksum(Packet* pkt) const;
 
   void prepare_datapacket(PacketBuf* msgbuf, uint32_t path_id, uint32_t seqno,
                           UcclPktHdr::UcclFlags const net_flags);
@@ -489,8 +490,8 @@ class UcclFlow {
   // The following is used to fill packet headers.
   uint32_t local_addr_;
   uint32_t remote_addr_;
-  char local_l2_addr_[ETH_ALEN];
-  char remote_l2_addr_[ETH_ALEN];
+  uint8_t local_l2_addr_[ETH_ALEN];
+  uint8_t remote_l2_addr_[ETH_ALEN];
   // Which engine (also NIC queue and xsk) this flow belongs to.
   uint32_t local_engine_idx_;
   uint32_t remote_engine_idx_;

@@ -149,6 +149,8 @@ public:
     return eh->ToString() + " " + ipv4h->ToString();
   }
 
+  uint16_t headroom() const { return rte_pktmbuf_headroom(&mbuf_); }
+  
 private:
   struct rte_mbuf mbuf_; //!< Underlying DPDK mbuf structure.
 
