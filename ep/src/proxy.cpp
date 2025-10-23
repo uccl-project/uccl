@@ -1,5 +1,6 @@
 #include "proxy.hpp"
 #include "bench_utils.hpp"
+#include "d2h_queue_host.hpp"
 #include "ep_util.hpp"
 #include <arpa/inet.h>  // for htonl, ntohl
 #include <chrono>
@@ -134,16 +135,21 @@ void Proxy::set_peers_meta(std::vector<PeerMeta> const& peers) {
   }
 }
 
-void Proxy::set_bench_ring_addrs(std::vector<uintptr_t> const& addrs) {
+void Proxy::set_bench_d2h_channel_addrs(std::vector<uintptr_t> const& addrs) {
+#ifndef USE_MSCCLPP_FIFO_BACKEND
   ring_tails_.clear();
   ring_seen_.clear();
-  cfg_.ring_buffers.clear();
 
   ring_tails_.resize(addrs.size(), 0);
   ring_seen_.resize(addrs.size(), 0);
-  cfg_.ring_buffers.reserve(addrs.size());
+#endif
+  cfg_.d2h_queues.clear();
+  cfg_.d2h_queues.reserve(addrs.size());
+
   for (auto addr : addrs) {
-    cfg_.ring_buffers.push_back(reinterpret_cast<DeviceToHostCmdBuffer*>(addr));
+    d2hq::HostD2HHandle h{};
+    d2hq::init_from_addr(h, addr);  // unified initialization
+    cfg_.d2h_queues.push_back(h);
   }
 }
 
@@ -212,8 +218,7 @@ void Proxy::init_common() {
     if (std::abs(peer - my_rank) % MAX_NUM_GPUS != 0) continue;
 #endif
     create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
-                         &local_infos_[peer], my_rank,
-                         cfg_.ring_buffers.size());
+                         &local_infos_[peer], my_rank, cfg_.d2h_queues.size());
     modify_qp_to_init(c);
   }
 
@@ -296,7 +301,7 @@ void Proxy::init_common() {
     std::abort();
   }
   // if (cfg_.thread_idx != 0) return;
-  const std::string shm_name = shm_name_for_barrier(my_ip, cfg_.thread_idx);
+  std::string const shm_name = shm_name_for_barrier(my_ip, cfg_.thread_idx);
   ctx_.lb = map_local_barrier_shm(shm_name, &ctx_.lb_owner);
   if (!ctx_.lb) {
     fprintf(stderr, "Failed to map local barrier shm: %s\n", shm_name.c_str());
@@ -313,6 +318,11 @@ void Proxy::init_common() {
   } else {
     while (ctx_.lb->full_mask == 0ULL) cpu_relax();
   }
+#endif
+
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+  fifo_seq_.assign(cfg_.d2h_queues.size(), 0);
+  fifo_pending_.assign(cfg_.d2h_queues.size(), std::deque<uint64_t>{});
 #endif
 }
 
@@ -413,27 +423,54 @@ void Proxy::run_dual() {
 void Proxy::notify_gpu_completion(uint64_t& my_tail) {
   if (acked_wrs_.empty()) return;
 
-  // Mark all acked command slots in each ring's bitmask
-  for (auto wr_id : acked_wrs_) {
-    const size_t rb_idx = (wr_id >> 32) & 0xFFFFFFFF;
-    const size_t cmd_idx = wr_id & 0xFFFFFFFF;
+    // Mark all acked command slots in each ring's bitmask
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+  // FIFO path: pop in order using the pending deque and the completion set.
+  for (size_t rb_idx = 0; rb_idx < cfg_.d2h_queues.size(); ++rb_idx) {
+    auto* fifo = cfg_.d2h_queues[rb_idx].fifo;
+    if (!fifo) continue;
+    auto& pend = fifo_pending_[rb_idx];
+    while (!pend.empty()) {
+      uint64_t front_wr = pend.front();
+      if (acked_wrs_.find(front_wr) == acked_wrs_.end()) break;
+      acked_wrs_.erase(front_wr);  // consume this completion
+      pend.pop_front();            // retire pending entry
 
-    if (rb_idx >= cfg_.ring_buffers.size()) {
+      if (ctx_.quiet_wr != -1 && front_wr == (uint64_t)ctx_.quiet_wr) {
+        ctx_.quiet_inflight = false;
+        ctx_.quiet_wr = -1;
+        fifo->pop();
+      }
+
+      if (ctx_.barrier_wr != -1 && front_wr == (uint64_t)ctx_.barrier_wr) {
+        ctx_.barrier_inflight = false;
+        ctx_.barrier_wr = -1;
+        fifo->pop();
+      }
+    }
+  }
+#else
+  for (auto wr_id : acked_wrs_) {
+    size_t const rb_idx = (wr_id >> 32) & 0xFFFFFFFF;
+    size_t const cmd_idx = wr_id & 0xFFFFFFFF;
+
+    if (rb_idx >= cfg_.d2h_queues.size()) {
       fprintf(stderr, "Invalid rb_idx %zu in acked_wrs_\n", rb_idx);
       continue;
     }
 
-    auto* ring_buffer = cfg_.ring_buffers[rb_idx];
-    ring_buffer->volatile_clear_cmd_type(cmd_idx);
-    ring_buffer->mark_acked(cmd_idx % ring_buffer->capacity);
+    d2hq::HostD2HHandle* h = &cfg_.d2h_queues[rb_idx];
+    h->volatile_clear_cmd_type(cmd_idx);
+    h->mark_acked(cmd_idx % h->capacity());
   }
   acked_wrs_.clear();
 
   // Advance tails for each ring buffer based on contiguous acked bits
-  for (size_t rb_idx = 0; rb_idx < cfg_.ring_buffers.size(); ++rb_idx) {
-    auto* ring_buffer = cfg_.ring_buffers[rb_idx];
-    ring_tails_[rb_idx] = ring_buffer->advance_tail_from_mask();
+  for (size_t rb_idx = 0; rb_idx < cfg_.d2h_queues.size(); ++rb_idx) {
+    d2hq::HostD2HHandle* h = &cfg_.d2h_queues[rb_idx];
+    ring_tails_[rb_idx] = h->advance_tail_from_mask();
   }
+#endif
 }
 
 void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
@@ -441,15 +478,65 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
   std::vector<uint64_t> wrs_to_post;
   std::vector<TransferCmd> cmds_to_post;
   bool found_work = false;
-
   // Process each ring buffer (similar to test_multi_ring_throughput.cu)
-  for (size_t rb_idx = 0; rb_idx < cfg_.ring_buffers.size(); rb_idx++) {
-    auto* ring_buffer = cfg_.ring_buffers[rb_idx];
+  for (size_t rb_idx = 0; rb_idx < cfg_.d2h_queues.size(); rb_idx++) {
+    d2hq::HostD2HHandle* h = &cfg_.d2h_queues[rb_idx];
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+    assert(h && "h is empty!\n");
+    assert(h->fifo && "h->fifo is empty!\n");
+    // FIFO path: one trigger == one command. Do NOT pop yet.
+    auto* fifo = h->fifo;
+    if (!fifo) continue;
+    // Available budget for this FIFO.
+    size_t pending = fifo_pending_[rb_idx].size();
+    size_t budget = (kMaxInflight > pending) ? (kMaxInflight - pending) : 0;
+    for (size_t take = 0; take < budget; ++take) {
+      auto trig = fifo->poll();
+      if (trig.fst == 0) break;
+      TransferCmd cmd = d2hq::decode_from_trigger(trig);
+
+      /* For some reason, this is important for correctness */
+      /* It cannot be if (ctx_.barrier_inflight) */
+      if (get_base_cmd(cmd.cmd_type) == CmdType::BARRIER &&
+          ctx_.barrier_inflight) {
+        break;
+      }
+
+      if (get_base_cmd(cmd.cmd_type) == CmdType::QUIET && ctx_.quiet_inflight) {
+        break;
+      }
+
+      uint64_t unique_wr_id = (static_cast<uint64_t>(rb_idx) << 32) |
+                              (fifo_seq_[rb_idx]++ & 0xFFFFFFFFULL);
+
+      wrs_to_post.push_back(unique_wr_id);
+      cmds_to_post.push_back(cmd);
+      fifo_pending_[rb_idx].push_back(unique_wr_id);
+      found_work = true;
+
+      if (get_base_cmd(cmd.cmd_type) == CmdType::BARRIER ||
+          get_base_cmd(cmd.cmd_type) == CmdType::QUIET) {
+        if (get_base_cmd(cmd.cmd_type) == CmdType::BARRIER) {
+          assert(!ctx_.barrier_inflight);
+          assert(ctx_.barrier_wr == -1);
+          ctx_.barrier_inflight = true;
+        } else if (get_base_cmd(cmd.cmd_type) == CmdType::QUIET) {
+          assert(!ctx_.quiet_inflight);
+          assert(ctx_.quiet_wr == -1);
+          ctx_.quiet_inflight = true;
+        }
+        break;
+      } else {
+        // Other operations just pop.
+        fifo->pop();
+      }
+    }
+#else
     uint64_t& ring_tail = ring_tails_[rb_idx];
     size_t& ring_seen = ring_seen_[rb_idx];
 
     // Force load head from DRAM (like original code)
-    uint64_t cur_head = ring_buffer->volatile_head();
+    uint64_t cur_head = h->volatile_head();
     if (cur_head == ring_tail) {
       continue;  // No new work in this ring
     }
@@ -465,12 +552,12 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 
     // Collect batch of commands from this ring buffer
     for (size_t i = ring_seen; i < cur_head; ++i) {
-      CmdType cmd = ring_buffer->volatile_load_cmd_type(i);
+      CmdType cmd = h->volatile_load_cmd_type(i);
       // NOTE(MaoZiming): Non-blocking. prevent local and remote both while
       // loop.
       if (cmd == CmdType::EMPTY) break;
 
-      TransferCmd& cmd_entry = ring_buffer->load_cmd_entry(i);
+      TransferCmd& cmd_entry = h->load_cmd_entry(i);
       if (cmd_entry.cmd_type == CmdType::EMPTY) break;
 
       if (get_base_cmd(cmd_entry.cmd_type) == CmdType::WRITE ||
@@ -507,6 +594,7 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
       ring_seen = i + 1;
       found_work = true;
     }
+#endif
   }
 
   // If no work found across all ring buffers, relax CPU
@@ -528,9 +616,9 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 void Proxy::run_local() {
   pin_thread_to_cpu_wrapper();
   printf("Local CPU thread %d started with %zu ring buffers\n", cfg_.thread_idx,
-         cfg_.ring_buffers.size());
+         cfg_.d2h_queues.size());
 
-  if (cfg_.ring_buffers.empty()) {
+  if (cfg_.d2h_queues.empty()) {
     printf("Error: No ring buffers available for local mode\n");
     return;
   }
@@ -546,12 +634,23 @@ void Proxy::run_local() {
     bool found_work = false;
 
     // Multi-ring buffer polling (consistent with other modes)
-    for (size_t rb_idx = 0; rb_idx < cfg_.ring_buffers.size(); rb_idx++) {
-      auto* ring_buffer = cfg_.ring_buffers[rb_idx];
+    for (size_t rb_idx = 0; rb_idx < cfg_.d2h_queues.size(); rb_idx++) {
+      d2hq::HostD2HHandle* h = &cfg_.d2h_queues[rb_idx];
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+      auto* fifo = h->fifo;
+      if (!fifo) continue;
+      auto trig = fifo->poll();
+      if (trig.fst != 0) {
+        d2hq::decode_from_trigger(trig);
+        fifo->pop();
+        total_seen++;
+        found_work = true;
+      }
+#else
       uint64_t& ring_tail = ring_tails_[rb_idx];
 
       // Check for new work in this ring buffer
-      uint64_t cur_head = ring_buffer->volatile_head();
+      uint64_t cur_head = h->volatile_head();
       if (cur_head == ring_tail) {
         continue;  // No new work in this ring
       }
@@ -563,7 +662,7 @@ void Proxy::run_local() {
         auto last_print = std::chrono::steady_clock::now();
         size_t spin_count = 0;
         do {
-          cmd = ring_buffer->volatile_load_cmd_type(idx);
+          cmd = h->volatile_load_cmd_type(idx);
           cpu_relax();
 
           auto now = std::chrono::steady_clock::now();
@@ -588,22 +687,23 @@ void Proxy::run_local() {
         printf(
             "Local thread %d, ring %zu, total_seen=%d head=%lu tail=%lu "
             "consuming cmd=%llu\n",
-            cfg_.thread_idx, rb_idx, total_seen, ring_buffer->head, ring_tail,
+            cfg_.thread_idx, rb_idx, total_seen, h->head, ring_tail,
             static_cast<unsigned long long>(cmd));
 #endif
 
         std::atomic_thread_fence(std::memory_order_acquire);
 
         // Mark command as processed
-        ring_buffer->volatile_clear_cmd_type(idx);
+        h->volatile_clear_cmd_type(idx);
         ring_tail++;
-        ring_buffer->cpu_volatile_store_tail(ring_tail);
+        h->cpu_volatile_store_tail(ring_tail);
         total_seen++;
         found_work = true;
 
         // Break to check other ring buffers and progress_run flag
         break;
       }
+#endif
     }
 
     // If no work found across all ring buffers, relax CPU
@@ -613,7 +713,7 @@ void Proxy::run_local() {
   }
 
   printf("Local thread %d finished %d commands across %zu ring buffers\n",
-         cfg_.thread_idx, total_seen, cfg_.ring_buffers.size());
+         cfg_.thread_idx, total_seen, cfg_.d2h_queues.size());
 }
 
 void Proxy::post_gpu_commands_mixed(
@@ -701,11 +801,18 @@ void Proxy::post_gpu_commands_mixed(
   }
   if (!barrier_cmds.empty()) {
     // barrier(barrier_wrs, barrier_cmds);
+#ifdef USE_MSCCLPP_FIFO_BACKEND
     assert(barrier_wrs.size() == 1);
+    assert(ctx_.barrier_wr == -1);
+#endif
     send_barrier(barrier_wrs[0]);
   }
   if (!quiet_cmds.empty()) {
+#ifdef USE_MSCCLPP_FIFO_BACKEND
     assert(quiet_wrs.size() == 1);
+    assert(ctx_.quiet_wr == -1);
+#endif
+    ctx_.quiet_wr = quiet_wrs[0];
     quiet(quiet_wrs, quiet_cmds);
   }
 }
@@ -765,7 +872,7 @@ void Proxy::destroy(bool free_gpu_buffer) {
     if (!ctx_ptr) continue;
     qp_to_error(ctx_ptr->qp);
     qp_to_error(ctx_ptr->ack_qp);
-    for (auto* q : ctx_ptr->data_qps_by_ring) {
+    for (auto* q : ctx_ptr->data_qps_by_channel) {
       if (q) qp_to_error(q);
     }
   }
@@ -781,13 +888,13 @@ void Proxy::destroy(bool free_gpu_buffer) {
       ibv_destroy_qp(ctx_ptr->qp);
       ctx_ptr->qp = nullptr;
     }
-    for (auto*& q : ctx_ptr->data_qps_by_ring) {
+    for (auto*& q : ctx_ptr->data_qps_by_channel) {
       if (q) {
         ibv_destroy_qp(q);
         q = nullptr;
       }
     }
-    ctx_ptr->data_qps_by_ring.clear();
+    ctx_ptr->data_qps_by_channel.clear();
     if (ctx_ptr->ack_qp) {
       ibv_destroy_qp(ctx_ptr->ack_qp);
       ctx_ptr->ack_qp = nullptr;
@@ -912,9 +1019,11 @@ void Proxy::post_barrier_msg(int dst_rank, bool ack, uint64_t seq) {
 }
 
 void Proxy::send_barrier(uint64_t wr) {
+#ifndef USE_MSCCLPP_FIFO_BACKEND
   assert(!ctx_.barrier_inflight && "only one barrier at a time");
-  assert(ctx_.barrier_wr == 0 && "barrier_wr should be 0");
   ctx_.barrier_inflight = true;
+#endif
+  assert(ctx_.barrier_wr == -1 && "barrier_wr should be 0");
   ctx_.barrier_wr = wr;
   ctx_.barrier_seq = ctx_.barrier_seq + 1;
 
@@ -995,8 +1104,10 @@ void Proxy::barrier_check() {
           ctx_.barrier_arrival_count = 0;
 
           acked_wrs_.insert(ctx_.barrier_wr);
+#ifndef USE_MSCCLPP_FIFO_BACKEND
           ctx_.barrier_inflight = false;
-          ctx_.barrier_wr = 0;
+          ctx_.barrier_wr = -1;
+#endif
           return;
         }
       }
@@ -1012,8 +1123,10 @@ void Proxy::barrier_check() {
 
         // Complete WR
         acked_wrs_.insert(ctx_.barrier_wr);
+#ifndef USE_MSCCLPP_FIFO_BACKEND
         ctx_.barrier_inflight = false;
-        ctx_.barrier_wr = 0;
+        ctx_.barrier_wr = -1;
+#endif
       }
     }
     return;
@@ -1025,7 +1138,9 @@ void Proxy::barrier_check() {
   // Followers: wait until leader sets our release_seq
   if (lb->release_seq[ctx_.local_rank].load(std::memory_order_acquire) == seq) {
     acked_wrs_.insert(ctx_.barrier_wr);
+#ifndef USE_MSCCLPP_FIFO_BACKEND
     ctx_.barrier_inflight = false;
-    ctx_.barrier_wr = 0;
+    ctx_.barrier_wr = -1;
+#endif
   }
 }

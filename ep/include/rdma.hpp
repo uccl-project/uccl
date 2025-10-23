@@ -28,7 +28,7 @@ struct RDMAConnectionInfo {
 
   // #ifdef EFA
   uint32_t num_rings;
-  uint32_t data_qp_num[kRingsPerProxy];
+  uint32_t data_qp_num[kChannelPerProxy];
   // #endif
 };
 

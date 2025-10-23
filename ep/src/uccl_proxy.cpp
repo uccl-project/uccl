@@ -1,7 +1,7 @@
 #include "uccl_proxy.hpp"
 #include "common.hpp"
 #include "proxy_ctx.hpp"
-#include "rdma.hpp"  // For local_poll_completions, remote_poll_completions, apply_pending_updates
+#include "rdma.hpp"
 #include "ring_buffer.cuh"
 #include <chrono>
 #include <cstdio>
@@ -20,21 +20,23 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
     return;
   }
 
-  // Allocate multiple ring buffers for this proxy
-  ring_buffer_addrs_.reserve(kRingsPerProxy);
-  for (size_t i = 0; i < kRingsPerProxy; ++i) {
-    uintptr_t ring_addr = alloc_cmd_ring();
-    ring_buffer_addrs_.push_back(ring_addr);
-  }
-
-  Proxy::Config cfg;
+  Proxy::Config cfg{};
   thread_idx_ = thread_idx;
   gpu_buffer_addr_ = reinterpret_cast<void*>(gpu_buffer_addr);
 
-  // Convert addresses to DeviceToHostCmdBuffer pointers
-  cfg.ring_buffers.reserve(kRingsPerProxy);
-  for (auto addr : ring_buffer_addrs_) {
-    cfg.ring_buffers.push_back(reinterpret_cast<DeviceToHostCmdBuffer*>(addr));
+  cfg.d2h_queues.reserve(kChannelPerProxy);
+  d2h_queues.reserve(kChannelPerProxy);
+  for (size_t i = 0; i < kChannelPerProxy; ++i) {
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+    auto fifo = std::make_unique<mscclpp::Fifo>(kQueueSize);
+    uintptr_t addr = reinterpret_cast<uintptr_t>(fifo.get());
+    fifos.push_back(std::move(fifo));
+#else
+    uintptr_t addr = alloc_cmd_ring();
+#endif
+    d2hq::init_from_addr(d2h_queues[i], addr);
+    cfg.d2h_queues.push_back(d2h_queues[i]);
+    d2h_channel_addrs_.push_back(addr);
   }
 
   cfg.thread_idx = thread_idx;
@@ -51,9 +53,6 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   node_idx_ = node_idx;
 
   if (thread_idx == 0) {
-    // size_t atomic_buffer_bytes = 2 * align<size_t>(num_experts * sizeof(int),
-    // 128);
-    // TODO(MaoZiming)
 #ifdef USE_GRACE_HOPPER
     cudaMallocManaged(&atomic_buffer_ptr_, kAtomicBufferSize);
 #else
@@ -72,16 +71,18 @@ UcclProxy::~UcclProxy() {
   }
 
   // Free all allocated ring buffers
-  for (auto ring_addr : ring_buffer_addrs_) {
-    free_cmd_ring(ring_addr);
+#ifndef USE_MSCCLPP_FIFO_BACKEND
+  for (auto d2h_channel_addr : d2h_channel_addrs_) {
+    free_cmd_ring(d2h_channel_addr);
   }
-  ring_buffer_addrs_.clear();
+#endif
+  d2h_channel_addrs_.clear();
 }
 
-std::vector<uint64_t> UcclProxy::get_ring_buffer_addrs() const {
+std::vector<uint64_t> UcclProxy::get_d2h_channel_addrs() const {
   std::vector<uint64_t> addrs;
-  addrs.reserve(ring_buffer_addrs_.size());
-  for (auto addr : ring_buffer_addrs_) {
+  addrs.reserve(d2h_channel_addrs_.size());
+  for (auto addr : d2h_channel_addrs_) {
     addrs.push_back(static_cast<uint64_t>(addr));
   }
   return addrs;

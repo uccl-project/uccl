@@ -528,7 +528,6 @@ def destroy_uccl(proxies, workers):
             os.remove(shm_file)
     except Exception:
         pass
-    print("✓ UCCL destroyed", flush=True)
 
 
 def per_token_cast_to_fp8(x: torch.Tensor):

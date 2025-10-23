@@ -1,5 +1,6 @@
 #pragma once
 #include "common.hpp"
+#include "d2h_queue_device.cuh"
 #include "ring_buffer.cuh"
 #include <cstddef>
 #include <cstdint>
@@ -23,27 +24,27 @@ namespace uccl {
 // the number of ring buffers is small (say 6).
 __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     uint64_t req_rptr, uint64_t req_lptr, size_t bytes, int dst_rank,
-    int expert_idx, int lane_id, int message_idx, uint64_t const* ring_addrs,
-    int num_ring_addrs, bool is_combine, int low_latency_buffer_idx = 0,
-    uint64_t atomic_offset = 0, uint64_t atomic_val = 0) {
+    int expert_idx, int lane_id, int message_idx,
+    uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
+    bool is_combine, int low_latency_buffer_idx = 0, uint64_t atomic_offset = 0,
+    uint64_t atomic_val = 0) {
   // NOTE(MaoZiming): different from the nvshmemi_ibgda_put_nbi_warp in
   // ibgda_device.cuh, we don't do warp-cooperation.
   if (lane_id != 0) return;
-  int thread_idx = (expert_idx % num_ring_addrs) % kNumThBlocks;
-  int ring_buffer_idx = (expert_idx % num_ring_addrs) / kNumThBlocks;
-  assert(ring_buffer_idx < kRingsPerProxy);
-  int ring_idx = thread_idx * kRingsPerProxy + ring_buffer_idx;
-  assert(ring_idx < num_ring_addrs);
+  int thread_idx = (expert_idx % num_d2h_channel_addrs) % kNumThBlocks;
+  int per_thread_d2h_channel_idx =
+      (expert_idx % num_d2h_channel_addrs) / kNumThBlocks;
+  assert(per_thread_d2h_channel_idx < kChannelPerProxy);
+  int d2h_channel_idx =
+      thread_idx * kChannelPerProxy + per_thread_d2h_channel_idx;
+  assert(d2h_channel_idx < num_d2h_channel_addrs);
   unsigned long long rptr_val = static_cast<unsigned long long>(req_rptr);
   unsigned long long lptr_val = static_cast<unsigned long long>(req_lptr);
   unsigned long long bytes_val = static_cast<unsigned long long>(bytes);
 
-  auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
-      static_cast<uintptr_t>(ring_addrs[ring_idx]));
+  auto* h = reinterpret_cast<d2hq::D2HHandle*>(
+      static_cast<uintptr_t>(d2h_channel_addrs[d2h_channel_idx]));
 
-  uint64_t cur_head;
-  uint64_t cur_tail;
-  uint64_t inflight;
 #ifdef USE_NORMAL_MODE
   if (low_latency_buffer_idx == -1) {
     /* Normal mode */
@@ -51,12 +52,35 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     low_latency_buffer_idx = 0;
   }
 #endif
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+  // FIFO path: no head/tail; push does backpressure.
+  {
+    uint64_t slot = 0;
+    TransferCmd cmd{};
+    cmd.cmd_type =
+        make_cmd_type(CmdType::WRITE, is_combine, low_latency_buffer_idx);
+    cmd.req_rptr = rptr_val;
+    cmd.req_lptr = lptr_val;
+    cmd.bytes = bytes_val;
+    cmd.dst_rank = dst_rank;
+#ifdef USE_NORMAL_MODE
+    cmd.atomic_offset = atomic_offset;
+    cmd.atomic_val = atomic_val;
+#else
+    cmd.expert_idx = expert_idx;
+#endif
+    h->atomic_set_and_commit(cmd, &slot);
+  }
+#else
+  uint64_t cur_head;
+  uint64_t cur_tail;
+  uint64_t inflight;
   // NOTE(MaoZiming): Spins until there is a free slot in the ring buffer.
   auto last_print = clock64();
   while (true) {
     // NOTE(MaoZiming): update the view.
-    cur_head = rb->head;
-    cur_tail = rb->volatile_tail();
+    cur_head = h->head();
+    cur_tail = h->tail();
     inflight = cur_head - cur_tail;
     if (inflight < kMaxInflight) {
       uint64_t slot = cur_head;
@@ -91,7 +115,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
 #else
       cmd.expert_idx = expert_idx;
 #endif
-      rb->atomic_set_and_commit(cmd, &slot);
+      h->atomic_set_and_commit(cmd, &slot);
       break;
     }
     if (clock64() - last_print > kPrintCycleInterval) {
@@ -104,6 +128,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       last_print = clock64();
     }
   }
+#endif
 }
 
 // TODO(MaoZiming): Fix. This should be a non-fetch add operation. This could be
@@ -111,7 +136,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
 __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     uint64_t rptr, uint64_t atomic_base_addr, int const& value, int dst_rank,
     int warp_id, bool is_local_copy = false,
-    uint64_t const* ring_addrs = nullptr, int num_ring_addrs = 0,
+    uint64_t const* d2h_channel_addrs = nullptr, int num_d2h_channel_addrs = 0,
     bool is_combine = true, int low_latency_buffer_idx = 0,
     bool skip_remote = false) {
   if (is_local_copy) {
@@ -124,16 +149,16 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     }
 #endif
     rptr -= atomic_base_addr;
-    int thread_idx = (warp_id % num_ring_addrs) % kNumThBlocks;
-    int ring_buffer_idx = (warp_id % num_ring_addrs) / kNumThBlocks;
-    assert(ring_buffer_idx < kRingsPerProxy);
-    int ring_idx = thread_idx * kRingsPerProxy + ring_buffer_idx;
-    assert(ring_idx < num_ring_addrs);
-    auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
-        static_cast<uintptr_t>(ring_addrs[ring_idx]));
-    uint64_t cur_head;
-    uint64_t cur_tail;
-    uint64_t inflight;
+    int thread_idx = (warp_id % num_d2h_channel_addrs) % kNumThBlocks;
+    int per_thread_d2h_channel_idx =
+        (warp_id % num_d2h_channel_addrs) / kNumThBlocks;
+    assert(per_thread_d2h_channel_idx < kChannelPerProxy);
+    int d2h_channel_idx =
+        thread_idx * kChannelPerProxy + per_thread_d2h_channel_idx;
+    assert(d2h_channel_idx < num_d2h_channel_addrs);
+    auto* h = reinterpret_cast<d2hq::D2HHandle*>(
+        static_cast<uintptr_t>(d2h_channel_addrs[d2h_channel_idx]));
+
     auto last_print = clock64();
 #ifdef USE_NORMAL_MODE
     if (low_latency_buffer_idx == -1) {
@@ -141,10 +166,25 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
       low_latency_buffer_idx = 0;
     }
 #endif
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+    {
+      uint64_t slot = 0;
+      TransferCmd cmd{};
+      cmd.cmd_type =
+          make_cmd_type(CmdType::ATOMIC, is_combine, low_latency_buffer_idx);
+      cmd.value = value;
+      cmd.dst_rank = dst_rank;
+      cmd.req_rptr = rptr;
+      h->atomic_set_and_commit(cmd, &slot);
+    }
+#else
+    uint64_t cur_head;
+    uint64_t cur_tail;
+    uint64_t inflight;
     while (true) {
       // NOTE(MaoZiming): update the view.
-      cur_head = rb->head;
-      cur_tail = rb->volatile_tail();
+      cur_head = h->head();
+      cur_tail = h->tail();
       inflight = cur_head - cur_tail;
       if (inflight < kMaxInflight) {
         uint64_t slot = cur_head;
@@ -156,20 +196,22 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
         cmd.value = value;
         cmd.dst_rank = dst_rank;
         cmd.req_rptr = rptr;
-        rb->atomic_set_and_commit(cmd, &slot);
+        h->atomic_set_and_commit(cmd, &slot);
         break;
       } else {
         auto now = clock64();
         if (now - last_print > kPrintCycleInterval) {
           printf(
-              "[nvshmemi_ibgda_amo_nonfetch_add] %p waiting ring_idx: %d, "
+              "[nvshmemi_ibgda_amo_nonfetch_add] %p waiting d2h_channel_idx: "
+              "%d, "
               "cur_head: "
               "%llu, cur_tail: %llu, inflight: %llu\n",
-              rb, ring_idx, cur_head, cur_tail, inflight);
+              h, d2h_channel_idx, cur_head, cur_tail, inflight);
           last_print = now;
         }
       }
     }
+#endif
   }
 }
 
@@ -210,106 +252,130 @@ __device__ __forceinline__ uint64_t get_ipc_p2p_ptr(uint64_t const& local_ptr,
 }
 
 __device__ static __forceinline__ void wait_until_cmd_consumed(
-    DeviceToHostCmdBuffer* rb, uint64_t slot, int nvl_rank = -1,
+    d2hq::D2HHandle* h, uint64_t slot, int nvl_rank = -1,
     CmdType cmd_type = CmdType::EMPTY, int label = -1) {
   auto last_print = clock64();
   while (true) {
-    uint64_t cur_tail = rb->volatile_tail();
-    if (cur_tail > slot) {
-      break;
-    }
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+    if (h->fifo.poll(slot)) break;
+#else
+    uint64_t cur_tail = h->tail();
+    if (cur_tail > slot) break;
+#endif
     if ((clock64() - last_print) > kPrintCycleInterval) {
+#ifndef USE_MSCCLPP_FIFO_BACKEND
       printf(
-          "[wait_until_cmd_consumed, nvl_rank: %d, cmd: %d, label: %d] still "
-          "waiting, "
-          "head=%lu tail=%lu "
-          "slot=%lu\n",
-          nvl_rank, static_cast<int>(cmd_type), label, (unsigned long)rb->head,
+          "[wait_until_cmd_consumed nvl:%d cmd:%d label:%d] waiting head=%lu "
+          "tail=%lu slot=%lu\n",
+          nvl_rank, static_cast<int>(cmd_type), label, (unsigned long)h->head(),
           (unsigned long)cur_tail, (unsigned long)slot);
+#else
+      printf(
+          "[wait_until_cmd_consumed nvl:%d cmd:%d label:%d] waiting slot=%lu\n",
+          nvl_rank, static_cast<int>(cmd_type), label, (unsigned long)slot);
+#endif
       last_print = clock64();
     }
   }
 }
 
 __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
-    uint64_t const* ring_addrs, int num_ring_addrs, int nvl_rank = -1,
-    int label = -1) {
-  assert(num_ring_addrs % kRingsPerProxy == 0 &&
-         "num_ring_addrs must be multiple of kRingsPerProxy");
+    uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
+    int nvl_rank = -1, int label = -1) {
+  assert(num_d2h_channel_addrs % kChannelPerProxy == 0 &&
+         "num_d2h_channel_addrs must be multiple of kChannelPerProxy");
   /* NOTE(MaoZiming): This is sent to all proxy threads. Since each proxy
-   * thread manages kRingsPerProxy ring buffers, we just need to post a quiet
-   * command to one out of the kRingsPerProxy ring buffer per cpu thread. */
-  assert(num_ring_addrs % kRingsPerProxy == 0);
-  assert(num_ring_addrs / kRingsPerProxy == kNumThBlocks);
+   * thread manages kChannelPerProxy ring buffers, we just need to post a quiet
+   * command to one out of the kChannelPerProxy ring buffer per cpu thread. */
+  assert(num_d2h_channel_addrs % kChannelPerProxy == 0);
+  assert(num_d2h_channel_addrs / kChannelPerProxy == kNumThBlocks);
   // First, atomically commit QUIET to one ring per proxy
   uint64_t slots[kNumThBlocks];
   int num_posted = 0;
-  for (int ring_idx = 0; ring_idx < num_ring_addrs;
-       ring_idx += kRingsPerProxy) {
-    auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
-        static_cast<uintptr_t>(ring_addrs[ring_idx]));
-
+  for (int d2h_channel_idx = 0; d2h_channel_idx < num_d2h_channel_addrs;
+       d2h_channel_idx += kChannelPerProxy) {
+    auto* h = reinterpret_cast<d2hq::D2HHandle*>(
+        static_cast<uintptr_t>(d2h_channel_addrs[d2h_channel_idx]));
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+    {
+      uint64_t slot = 0;
+      TransferCmd cmd{};
+      cmd.cmd_type = CmdType::QUIET;
+      h->atomic_set_and_commit(cmd, &slot);
+      slots[num_posted++] = slot;
+    }
+#else
     while (true) {
-      uint64_t cur_head = rb->head;
-      uint64_t cur_tail = rb->volatile_tail();
+      uint64_t cur_head = h->head();
+      uint64_t cur_tail = h->tail();
       uint64_t inflight = cur_head - cur_tail;
       if (inflight < 1) {
         uint64_t slot = cur_head;
         TransferCmd cmd{};
         cmd.cmd_type = CmdType::QUIET;
-        rb->atomic_set_and_commit(cmd, &slot);
+        h->atomic_set_and_commit(cmd, &slot);
         slots[num_posted] = slot;
         ++num_posted;
         break;
       }
     }
+#endif
     break;
   }
 
   // Then wait for all QUIET commands to complete
   for (int i = 0; i < num_posted; ++i) {
-    auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
-        static_cast<uintptr_t>(ring_addrs[i * kRingsPerProxy]));
-    wait_until_cmd_consumed(rb, slots[i], nvl_rank, CmdType::QUIET);
+    auto* h = reinterpret_cast<d2hq::D2HHandle*>(
+        static_cast<uintptr_t>(d2h_channel_addrs[i * kChannelPerProxy]));
+    wait_until_cmd_consumed(h, slots[i], nvl_rank, CmdType::QUIET);
   }
 }
 
 __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
-    uint64_t const* ring_addrs, int num_ring_addrs, int nvl_rank = -1,
-    int label = -1) {
-  assert(num_ring_addrs % kRingsPerProxy == 0 &&
-         "num_ring_addrs must be multiple of kRingsPerProxy");
-  assert(num_ring_addrs / kRingsPerProxy == kNumThBlocks);
+    uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
+    int nvl_rank = -1, int label = -1) {
+  assert(num_d2h_channel_addrs % kChannelPerProxy == 0 &&
+         "num_d2h_channel_addrs must be multiple of kChannelPerProxy");
+  assert(num_d2h_channel_addrs / kChannelPerProxy == kNumThBlocks);
   uint64_t slots[kNumThBlocks];
   int num_posted = 0;
 
   // First, post one BARRIER command per proxy
-  for (int ring_idx = 0; ring_idx < num_ring_addrs;
-       ring_idx += kRingsPerProxy) {
-    auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
-        static_cast<uintptr_t>(ring_addrs[ring_idx]));
-
+  for (int d2h_channel_idx = 0; d2h_channel_idx < num_d2h_channel_addrs;
+       d2h_channel_idx += kChannelPerProxy) {
+    auto* h = reinterpret_cast<d2hq::D2HHandle*>(
+        static_cast<uintptr_t>(d2h_channel_addrs[d2h_channel_idx]));
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+    {
+      uint64_t slot = 0;
+      TransferCmd cmd{};
+      cmd.cmd_type = CmdType::BARRIER;
+      h->atomic_set_and_commit(cmd, &slot);
+      slots[num_posted++] = slot;
+    }
+#else
     while (true) {
-      uint64_t cur_head = rb->head;
-      uint64_t cur_tail = rb->volatile_tail();
+      uint64_t cur_head = h->head();
+      uint64_t cur_tail = h->tail();
       uint64_t inflight = cur_head - cur_tail;
       if (inflight < 1) {
         uint64_t slot = cur_head;
         TransferCmd cmd{};
         cmd.cmd_type = CmdType::BARRIER;
-        rb->atomic_set_and_commit(cmd, &slot);
+        h->atomic_set_and_commit(cmd, &slot);
         slots[num_posted++] = slot;
         break;
       }
     }
+#endif
     break;
   }
 
   // Then wait for each proxy’s barrier to complete
   for (int i = 0; i < num_posted; ++i) {
-    auto* rb = reinterpret_cast<DeviceToHostCmdBuffer*>(
-        static_cast<uintptr_t>(ring_addrs[i * kRingsPerProxy]));
-    wait_until_cmd_consumed(rb, slots[i], nvl_rank, CmdType::BARRIER, label);
+    auto* h = reinterpret_cast<d2hq::D2HHandle*>(
+        static_cast<uintptr_t>(d2h_channel_addrs[i * kChannelPerProxy]));
+    wait_until_cmd_consumed(h, slots[i], nvl_rank, CmdType::BARRIER, label);
   }
 }
 
