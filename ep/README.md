@@ -19,50 +19,7 @@ make -j install
 
 build rocm image
 ```bash
-bash build.sh rocm all 3.10
-```
-
-start docker container
-```bash
-docker run -d \
-    --name dev_uccl-builder-rocm \
-    --ipc=host \
-    --network=host \
-    --device=/dev/kfd \
-    --device=/dev/dri \
-    --device=/dev/infiniband \
-    --cap-add=SYS_PTRACE \
-    --cap-add=CAP_SYS_ADMIN \
-    --security-opt seccomp=unconfined \
-    --group-add video \
-    --privileged \
-    -v "$PWD":/workspace/uccl \
-    -w "/workspace/uccl" \
-    uccl-builder-rocm sleep infinity
-```
-
-build ep
-```bash
-docker exec -it dev_uccl-builder-rocm /bin/bash
-
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source $HOME/.local/bin/env
-uv venv
-source .venv/bin/activate
-
-cd ep
-bash install_deps.sh base
-
-python setup.py build
-mkdir -p uccl/lib
-cp build/**/*.so uccl/
-```
-
-build uccl for develop
-
-```bash
-cd /workspace/uccl/ep
-python setup.py develop
+bash build.sh rocm ep
 ```
 
 test import uccl.ep

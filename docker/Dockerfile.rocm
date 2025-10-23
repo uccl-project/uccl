@@ -30,6 +30,7 @@ RUN apt-get update && \
 \
 # ───── eccl use hiredis as oob backend ─────
     apt-get install -y libhiredis-dev && \
+    apt-get install -y hipsolver hipblas hipsparse rocthrust hipblaslt && \
 \
 # ───── Clean up apt cache ─────
     rm -rf /var/lib/apt/lists/*

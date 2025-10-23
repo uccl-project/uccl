@@ -1,14 +1,10 @@
 #!/bin/bash
 set -e
 
-sudo apt update
-sudo apt install -y libgoogle-glog-dev
-sudo apt install -y clang-format-14
-
-uv pip install black
+pip3 install black
 
 echo "Installing pybind11..."
-uv pip install pybind11 --upgrade
+pip3 install pybind11 --upgrade
 
 # Check CUDA availability and get version
 check_cuda() {
@@ -29,8 +25,6 @@ get_cuda_version() {
 echo "Checking CUDA environment..."
 if check_cuda; then
     # Install CUDA dependencies
-    sudo apt install -y nvtop
-
     CUDA_VERSION=$(get_cuda_version)
     echo "Detected CUDA version: $CUDA_VERSION"
     
@@ -47,13 +41,10 @@ if check_cuda; then
         PYTORCH_SUFFIX="cu${CUDA_MAJOR}1"  # Fallback to major version + .1
     fi
     
-    uv pip install torch torchvision torchaudio --index-url "https://download.pytorch.org/whl/$PYTORCH_SUFFIX"
+    pip3 install torch torchvision torchaudio --index-url "https://download.pytorch.org/whl/$PYTORCH_SUFFIX"
 elif check_rocm; then
-    # Install ROCM dependencies
-    sudo apt-get install -y hipsolver hipblas hipsparse rocthrust hipblaslt 
-
     # Install Pytorch using nightly
-    uv pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
+    pip3 install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
 else
     echo "No CUDA or ROCM detected"
     exit 1
