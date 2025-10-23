@@ -31,7 +31,15 @@
 #define kQueueMask (kQueueSize - 1)
 // This is the highest we can get due to the number of bits we allocate in the
 // imm for reordering buffer sequence tracking.
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+#ifdef USE_NORMAL_MODE
 #define kMaxInflight 8
+#else
+#define kMaxInflight 32
+#endif
+#else
+#define kMaxInflight 8
+#endif
 #define kBatchSize 32
 #define kIterations 40000
 #define kNumThBlocks 4
