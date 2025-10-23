@@ -23,10 +23,12 @@ import torch.distributed as dist
 
 try:
     from . import p2p
-    from . import utils
+    from .utils import utils as utils
+    from .utils.interval_tree import ClosedIntervalTree
 except ImportError:
     import p2p
-    import utils
+    import utils.utils as utils
+    from utils.interval_tree import ClosedIntervalTree
 
 
 class CollectiveContext:
@@ -89,9 +91,7 @@ class CollectiveContext:
         self.local_connections = (
             None  # array indexed by rank - True if local, False if remote
         )
-        self.memory_regions: Dict[int, Tuple[int, int, int]] = (
-            {}
-        )  # mr_id -> (ptr, size, mr_id)
+        self.memory_regions = ClosedIntervalTree()
         self.initialized = False
 
         # check and setup fd limit and somaxconn for UDS
@@ -331,16 +331,14 @@ class CollectiveContext:
         ok, mr_id = self.ep.reg(ptr, size)
         if not ok:
             raise RuntimeError("Failed to register memory")
-        self.memory_regions[mr_id] = (ptr, size, mr_id)
+        self.memory_regions.add(ptr, ptr + size, mr_id)
         return mr_id
 
     def _check_register(self, ptr: int, size: int) -> Optional[int]:
         end_ptr = ptr + size
-        for region_ptr, region_size, mr_id in self.memory_regions.values():
-            region_end = region_ptr + region_size
-            if ptr >= region_ptr and end_ptr <= region_end:
-                return mr_id
-
+        containing = self.memory_regions.query_containing(ptr, end_ptr)
+        if containing:
+            return containing[0][2]
         return None
 
     def check_tensor_registered(self, tensor: torch.Tensor) -> Optional[int]:
@@ -367,27 +365,39 @@ class CollectiveContext:
         ptr, size = self._get_buffer_info(tensor)
         return self._register_memory(ptr, size)
 
-    def _deregister_memory(self, ptr: int):
-        """Deregister memory and remove the cached memory region ID."""
-        if ptr not in self.memory_regions:
-            return
-
-        mr_id = self.memory_regions[ptr]
-        self.ep.dereg(mr_id)
-        del self.memory_regions[ptr]
-
-    def deregister_tensor(self, tensor: torch.Tensor):
+    def deregister_tensor(self, tensor: torch.Tensor) -> bool:
         """
-        Deregister a tensor that was previously registered.
+        Deregister a previously registered tensor.
 
         Args:
             tensor: Tensor to deregister
+
+        Returns:
+            bool: True if successfully deregistered, False if not found
+
+        Raises:
+            RuntimeError: If CollectiveContext is not initialized
         """
         if not self.initialized:
             raise RuntimeError("CollectiveContext not initialized. Call init() first.")
 
-        ptr, _ = self._get_buffer_info(tensor)
-        self._deregister_memory(ptr)
+        ptr, mem_size = self._get_buffer_info(tensor)
+        start, end = ptr, ptr + mem_size
+
+        matching_regions = self.memory_regions.query_exact_match(start, end)
+
+        if not matching_regions:
+            return False
+
+        for region_start, region_end, mr_id in matching_regions:
+            try:
+                self.ep.dereg(mr_id)
+                self.memory_regions.remove(region_start, region_end, mr_id)
+            except Exception as e:
+                print(f"Failed to deregister memory region {mr_id}: {e}")
+                continue
+
+        return True
 
     def send(self, tensor: torch.Tensor, dst: int):
         """

@@ -43,7 +43,6 @@ def warmup_all2all_check(
         device=device,
     )
 
-    # 为了保持与之前代码的兼容性，可以通过索引获取与之前一致的tensor
     send_chunks = [send_chunks_tensor[i] for i in range(world_size)]
     recv_chunks = [recv_chunks_tensor[i] for i in range(world_size)]
     # recv_chunks = torch.empty_like(send_chunks, device=device)

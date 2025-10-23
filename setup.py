@@ -32,6 +32,7 @@ setup(
             "collective.py",
             "transfer.py",
             "utils.py",
+            "interval_tree.py"
         ],
     },
     license="Apache-2.0",
