@@ -4,15 +4,17 @@ UCCL EP engine provides a similar interface from [DeepEP](https://github.com/dee
 
 For UCCL's host/CPU-driven P2P engine, see [p2p](../p2p/) folder.
 
-## Install
+## Build on CUDA for testing
 
 Installing `ep` as a Python package:
 ```bash
+# under uccl
 bash build_and_install.sh cuda ep
 ```
 
 Alternatively, in a Python environment 
 ```bash
+# under uccl/ep
 make -j install
 ```
 
@@ -20,6 +22,7 @@ make -j install
 
 build rocm image
 ```bash
+# under uccl
 bash build_and_install.sh rocm ep
 ```
 
