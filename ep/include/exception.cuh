@@ -41,16 +41,19 @@ class EPException : public std::exception {
   } while (0)
 #endif
 
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#define EP_DEVICE_ERROR_HANDLER() abort()
+#else
+#define EP_DEVICE_ERROR_HANDLER() asm("trap;")
+#endif
+
 #ifndef EP_DEVICE_ASSERT
 #define EP_DEVICE_ASSERT(cond)                                               \
   do {                                                                       \
     if (not(cond)) {                                                         \
       printf("Assertion failed: %s:%d, condition: %s\n", __FILE__, __LINE__, \
              #cond);                                                         \
-      _Pragma("if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)")      \
-          abort();                                                           \
-      _Pragma("else") asm("trap;");                                          \
-      _Pragma("endif")                                                       \
+      EP_DEVICE_ERROR_HANDLER();                                             \
     }                                                                        \
   } while (0)
 #endif
