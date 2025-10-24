@@ -5,6 +5,7 @@
 #include "proxy_ctx.hpp"
 #include "rdma_util.hpp"
 #include "util/gpu_rt.h"
+#include "util/net.h"
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <algorithm>
@@ -164,8 +165,25 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     }
   }
 
+  // Use UCCL_XXX first, if not set, use NCCL_XXX
+  char* ib_hca = getenv("UCCL_IB_HCA");
+  if (!ib_hca) ib_hca = getenv("NCCL_IB_HCA");
+
+  struct uccl::ib_dev user_ib_ifs[MAX_IB_DEVS];
+  bool searchNot = ib_hca && ib_hca[0] == '^';
+  if (searchNot) ib_hca++;
+  bool searchExact = ib_hca && ib_hca[0] == '=';
+  if (searchExact) ib_hca++;
+
+  int num_ib_ifs = uccl::parse_interfaces(ib_hca, user_ib_ifs, MAX_IB_DEVS);
+
   int selected_dev_idx = -1;
   for (int i = 0; i < num_devices; i++) {
+    if (!(uccl::match_if_list(ibv_get_device_name(dev_list[i]), 1, user_ib_ifs,
+                              num_ib_ifs, searchExact) ^
+          searchNot)) {
+      continue;
+    }
     if (strcmp(ibv_get_device_name(dev_list[i]), selected_nic_name.c_str()) ==
         0) {
       selected_dev_idx = i;
