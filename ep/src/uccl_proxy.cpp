@@ -15,10 +15,7 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
                      std::string const& peer_ip, int num_experts, int num_ranks,
                      int num_nodes)
     : peer_ip_{peer_ip}, thread_{}, mode_{Mode::None}, running_{false} {
-  if (peer_ip.empty()) {
-    printf("Intranode mode. UcclProxy returns\n");
-    return;
-  }
+  // EP 8 of internode_ll also need atomic_buffer_ptr
 
   Proxy::Config cfg{};
   thread_idx_ = thread_idx;

@@ -21,7 +21,7 @@ RUN apt-get update && \
     add-apt-repository ppa:deadsnakes/ppa && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
-        python${PY_VER} python${PY_VER}-dev python${PY_VER}-venv python3-setuptools && \
+        python${PY_VER} python${PY_VER}-dev python${PY_VER}-venv python3-setuptools python3-distutils && \
 \
 # ───── Bootstrap pip for Python ${PY_VER} ─────
     curl -sS https://bootstrap.pypa.io/get-pip.py | python${PY_VER} && \
@@ -30,6 +30,7 @@ RUN apt-get update && \
 \
 # ───── eccl use hiredis as oob backend ─────
     apt-get install -y libhiredis-dev && \
+    apt-get install -y hipsolver hipblas hipsparse rocthrust hipblaslt && \
 \
 # ───── Clean up apt cache ─────
     rm -rf /var/lib/apt/lists/*
@@ -38,6 +39,11 @@ RUN apt-get update && \
 # Install Python build back-end (for Python ${PY_VER})
 # ─────────────────────────────────────────────────────────
 RUN python${PY_VER} -m pip install --no-cache-dir build auditwheel pybind11
+
+RUN python${PY_VER} -m pip install --no-cache-dir --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
+
+RUN python${PY_VER} -m pip install --no-cache-dir --upgrade setuptools
+
 
 # ───── Set Python ${PY_VER} as default python3 and python3-config ─────
 RUN ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python3 && \

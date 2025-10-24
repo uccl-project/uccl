@@ -8,12 +8,26 @@ For UCCL's host/CPU-driven P2P engine, see [p2p](../p2p/) folder.
 
 Installing `ep` as a Python package:
 ```bash
-./build_and_install.sh cuda ep 3.11
+bash build_and_install.sh cuda ep
 ```
+
 Alternatively, in a Python environment 
 ```bash
 make -j install
 ```
+
+## Build on ROCm for testing
+
+build rocm image
+```bash
+bash build_and_install.sh rocm ep
+```
+
+test import uccl.ep
+```bash
+python -c "import torch;import uccl.ep"
+```
+
 ## Example APIs
 
 Dispatch and combine: 

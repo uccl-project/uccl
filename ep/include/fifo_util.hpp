@@ -14,28 +14,9 @@
 // ============================================================================
 // GPU Platform Abstraction (from gpu.hpp)
 // ============================================================================
-#if defined(__HIP_PLATFORM_AMD__)
-
-#include <hip/hip_runtime.h>
-
-using cudaError_t = hipError_t;
-using cudaStream_t = hipStream_t;
-using cudaMemcpyKind = hipMemcpyKind;
-
-constexpr auto cudaSuccess = hipSuccess;
-constexpr auto cudaHostAllocMapped = hipHostMallocMapped;
-
-#define cudaGetDevice(...) hipGetDevice(__VA_ARGS__)
-#define cudaHostAlloc(...) hipHostMalloc(__VA_ARGS__)
-#define cudaMalloc(...) hipMalloc(__VA_ARGS__)
-#define cudaMemset(...) hipMemset(__VA_ARGS__)
-
-#else
 
 #include <cuda.h>
 #include <cuda_runtime.h>
-
-#endif
 
 // ============================================================================
 // Device Compilation Macros (from device.hpp)

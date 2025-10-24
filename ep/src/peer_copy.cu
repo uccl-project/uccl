@@ -414,8 +414,12 @@ bool post_copy_task(HostToDeviceNVlinkBuffer* rb, CopyTask const* host_tasks,
 }
 
 __device__ __forceinline__ void st_release_sys_global(int* ptr, int val) {
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  __atomic_store_n(ptr, val, __ATOMIC_RELEASE);
+#else
   asm volatile("st.release.sys.global.s32 [%0], %1;" ::"l"(ptr), "r"(val)
                : "memory");
+#endif
 }
 
 __global__ void read_and_set_sys(int* addr, int new_val) {

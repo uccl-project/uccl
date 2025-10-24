@@ -45,9 +45,24 @@
 #endif
 
 #include <cstdint>
-#include <cuda_bf16.h>
 #include <cuda_runtime.h>
 
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#define nv_bfloat16 hip_bfloat16
+#define __nv_fp8x2_storage_t __hip_fp8x2_storage_t
+#define __nv_fp8_storage_t __hip_fp8_storage_t
+#define __nv_cvt_float2_to_fp8x2 __hip_cvt_float2_to_fp8x2
+#define __NV_SATFINITE __HIP_SATFINITE
+#define __NV_E4M3 __HIP_E4M3_FNUZ
+#define WARP_SIZE 64
+#define WARP_MASK 0xffffffffffffffff
+#define MAX_NTHREADS 1024
+#define MAX_GROUPS (MAX_NTHREADS / WARP_SIZE)
+
+#else
+#include <cuda_bf16.h>
+#define WARP_SIZE 32
+#define WARP_MASK 0xffffffff
 #ifndef DISABLE_SM90_FEATURES
 #include <cuda_fp8.h>
 #else
@@ -57,4 +72,5 @@
 typedef int __nv_fp8_interpretation_t;
 typedef int __nv_fp8x4_e4m3;
 typedef uint8_t __nv_fp8_storage_t;
+#endif
 #endif

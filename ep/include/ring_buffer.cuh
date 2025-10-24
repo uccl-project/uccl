@@ -17,6 +17,10 @@
 #define COPY_RING_CAP 4096
 #endif
 
+#if defined(__HIP_DEVICE_COMPILE__)
+#include "amd_nanosleep.cuh"
+#endif
+
 enum class CmdType : uint8_t {
   EMPTY = 0,    // 000
   WRITE = 1,    // 001

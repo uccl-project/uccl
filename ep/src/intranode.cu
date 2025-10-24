@@ -19,8 +19,8 @@ __global__ void notify_dispatch(
   auto sm_id = static_cast<int>(blockIdx.x);
   auto thread_id = static_cast<int>(threadIdx.x),
        num_threads = static_cast<int>(blockDim.x);
-  auto lane_id = thread_id % 32, warp_id = thread_id / 32,
-       num_warps = num_threads / 32;
+  auto lane_id = thread_id % WARP_SIZE, warp_id = thread_id / WARP_SIZE,
+       num_warps = num_threads / WARP_SIZE;
 
   if (sm_id == 0) {
     // Barrier first
@@ -99,7 +99,8 @@ __global__ void notify_dispatch(
 
       // Iterate over tokens
       int count = 0;
-      for (int64_t i = token_start_idx + lane_id; i < token_end_idx; i += 32)
+      for (int64_t i = token_start_idx + lane_id; i < token_end_idx;
+           i += WARP_SIZE)
         count += is_token_in_rank[i * kNumRanks + dst_rank];
       count = warp_reduce_sum(count);
       if (lane_id == 0)
@@ -208,7 +209,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
 
   int num_experts_per_rank = num_experts / kNumRanks;
   EP_DEVICE_ASSERT(num_experts_per_rank > 0 or num_topk == 0);
-  EP_DEVICE_ASSERT(num_topk <= 32);
+  EP_DEVICE_ASSERT(num_topk <= WARP_SIZE);
   EP_DEVICE_ASSERT((topk_idx == nullptr) == (topk_weights == nullptr));
   EP_DEVICE_ASSERT((recv_topk_idx == nullptr) ==
                    (recv_topk_weights == nullptr));
@@ -268,7 +269,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
   extern __shared__ __align__(1024) uint8_t smem_buffer[];
   auto half_hidden_int4 = hidden_int4 / 2;
   auto half_hidden_bytes = half_hidden_int4 * static_cast<int>(sizeof(int4));
-  auto tma_buffer = smem_buffer + (thread_id / 32) * kNumTMABytesPerWarp;
+  auto tma_buffer = smem_buffer + (thread_id / WARP_SIZE) * kNumTMABytesPerWarp;
   auto tma_mbarrier =
       reinterpret_cast<uint64_t*>(tma_buffer + half_hidden_bytes);
   uint32_t tma_phase = 0;
@@ -285,12 +286,12 @@ __global__ void __launch_bounds__(kNumThreads, 1)
 
   if (is_sender) {
     // Workers for sending
-    constexpr int num_send_warps = kNumThreads / 32;
+    constexpr int num_send_warps = kNumThreads / WARP_SIZE;
     constexpr int num_send_warps_per_rank = num_send_warps / kNumRanks;
     auto const send_thread_id = thread_id;
     auto const send_warp_id_in_rank =
-        send_thread_id % num_threads_per_rank / 32;
-    EP_DEVICE_ASSERT(kNumRanks <= 32);
+        send_thread_id % num_threads_per_rank / WARP_SIZE;
+    EP_DEVICE_ASSERT(kNumRanks <= WARP_SIZE);
     EP_DEVICE_ASSERT(num_send_warps % kNumRanks == 0);
 
     // Send offset by `-value - 1`, e.g. 0 -> -1, 1 -> -2
@@ -394,7 +395,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
 
 // Copy `x_scales`
 #pragma unroll
-          for (int i = lane_id; i < num_scales; i += 32) {
+          for (int i = lane_id; i < num_scales; i += WARP_SIZE) {
             auto offset =
                 token_idx * scale_token_stride + i * scale_hidden_stride;
             channel_x_scales_buffers[dst_slot_idx * num_scales + i] =
@@ -408,20 +409,19 @@ __global__ void __launch_bounds__(kNumThreads, 1)
 
       // Move tail index
       // NOTES: here all warps should share the same new tail
-      asm volatile("bar.sync %0, %1;" ::"r"(responsible_rank),
-                   "r"(num_threads_per_rank));
+      sync_barrier(responsible_rank, num_threads_per_rank);
       if (send_warp_id_in_rank == 0 and lane_id == 0)
         st_release_sys_global(channel_tail_idx.buffer(),
                               cached_channel_tail_idx);
     }
   } else {
     // Workers for receiving and copying into buffer
-    constexpr int num_recv_warps = kNumThreads / 32;
+    constexpr int num_recv_warps = kNumThreads / WARP_SIZE;
     constexpr int num_recv_warps_per_rank = num_recv_warps / kNumRanks;
     auto const recv_thread_id = thread_id;
     auto const recv_thread_id_in_rank = recv_thread_id % num_threads_per_rank;
-    auto const recv_warp_id_in_rank = recv_thread_id_in_rank / 32;
-    EP_DEVICE_ASSERT(kNumRanks <= 32);
+    auto const recv_warp_id_in_rank = recv_thread_id_in_rank / WARP_SIZE;
+    EP_DEVICE_ASSERT(kNumRanks <= WARP_SIZE);
     EP_DEVICE_ASSERT(recv_thread_id >= 0 and num_recv_warps % kNumRanks == 0);
 
     // Calculate offset first
@@ -447,9 +447,9 @@ __global__ void __launch_bounds__(kNumThreads, 1)
                             responsible_channel] = total_offset;
       num_tokens_to_recv -= total_offset;
     }
-    total_offset = __shfl_sync(0xffffffff, total_offset, 0);
+    total_offset = __shfl_sync(WARP_MASK, total_offset, 0);
     total_offset += rank_offset;
-    num_tokens_to_recv = __shfl_sync(0xffffffff, num_tokens_to_recv, 0);
+    num_tokens_to_recv = __shfl_sync(WARP_MASK, num_tokens_to_recv, 0);
 
     // Shared tail indices for different warps
     __shared__ int volatile shared_channel_tail_idx[kNumRanks];
@@ -480,8 +480,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
       }
 
       // Synchronize queue tail
-      asm volatile("bar.sync %0, %1;" ::"r"(responsible_rank),
-                   "r"(num_threads_per_rank));
+      sync_barrier(responsible_rank, num_threads_per_rank);
       cached_channel_tail_idx = shared_channel_tail_idx[responsible_rank];
 
       // Copy data
@@ -510,7 +509,11 @@ __global__ void __launch_bounds__(kNumThreads, 1)
           }
         __syncwarp();
 #else
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+        UNROLLED_WARP_COPY(2, lane_id, hidden_int4, shifted_recv_x_int4,
+#else
         UNROLLED_WARP_COPY(5, lane_id, hidden_int4, shifted_recv_x_int4,
+#endif
                            shifted_buffer_x_int4, ld_nc_global, st_na_global);
 #endif
       }
@@ -520,7 +523,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
 #pragma unroll 4
       for (int chunk_idx = cached_channel_head_idx + recv_thread_id_in_rank;
            chunk_idx < cached_channel_tail_idx;
-           chunk_idx += 32 * num_recv_warps_per_rank)
+           chunk_idx += WARP_SIZE * num_recv_warps_per_rank)
         recv_src_idx[total_offset + chunk_idx - cached_channel_head_idx] =
             ld_nc_global(channel_src_idx_buffers.buffer() +
                          chunk_idx % num_recv_buffer_tokens);
@@ -528,7 +531,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
 // Copy `topk_idx` and `topk_weights`
 #pragma unroll 4
       for (int idx = recv_thread_id_in_rank; idx < num_recv_tokens * num_topk;
-           idx += 32 * num_recv_warps_per_rank) {
+           idx += WARP_SIZE * num_recv_warps_per_rank) {
         int chunk_idx = idx / num_topk, token_topk_idx = idx % num_topk;
         int token_idx_in_buffer =
             (cached_channel_head_idx + chunk_idx) % num_recv_buffer_tokens;
@@ -547,7 +550,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
 // Copy `x_scales`
 #pragma unroll 4
       for (int i = recv_thread_id_in_rank; i < num_recv_tokens * num_scales;
-           i += 32 * num_recv_warps_per_rank) {
+           i += WARP_SIZE * num_recv_warps_per_rank) {
         int chunk_idx = i / num_scales, scales_idx = i % num_scales;
         int token_idx_in_buffer =
             (cached_channel_head_idx + chunk_idx) % num_recv_buffer_tokens;
@@ -561,8 +564,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
       // Move queue
       cached_channel_head_idx += num_recv_tokens;
       total_offset += num_recv_tokens;
-      asm volatile("bar.sync %0, %1;" ::"r"(responsible_rank),
-                   "r"(num_threads_per_rank));
+      sync_barrier(responsible_rank, num_threads_per_rank);
       if (recv_warp_id_in_rank == num_recv_warps_per_rank - 1 and lane_id == 0)
         st_relaxed_sys_global(channel_head_idx.buffer(),
                               cached_channel_head_idx);
@@ -602,10 +604,14 @@ void dispatch(void* recv_x, float* recv_x_scales, int* recv_src_idx,
               int scale_hidden_stride, void** buffer_ptrs, int rank,
               int num_ranks, cudaStream_t stream, int num_sms,
               int num_max_send_tokens, int num_recv_buffer_tokens) {
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  constexpr int kNumThreads = 1024;
+#else
   constexpr int kNumThreads = 768;
+#endif
   constexpr int kNumTMABytesPerWarp = 8192;
 #ifndef DISABLE_SM90_FEATURES
-  constexpr int smem_size = kNumTMABytesPerWarp * (kNumThreads / 32);
+  constexpr int smem_size = kNumTMABytesPerWarp * (kNumThreads / WARP_SIZE);
 #endif
 
   // Make sure never OOB
@@ -656,8 +662,8 @@ __global__ void cached_notify_combine(void** buffer_ptrs, int* send_head,
   } else {
     auto const channel_id = sm_id - 1;
     auto const thread_id = static_cast<int>(threadIdx.x);
-    auto const rank_id = thread_id / 32;
-    auto const lane_id = thread_id % 32;
+    auto const rank_id = thread_id / WARP_SIZE;
+    auto const lane_id = thread_id % WARP_SIZE;
     if (rank_id >= kNumRanks) return;
 
     int token_start_idx, token_end_idx;
@@ -668,14 +674,15 @@ __global__ void cached_notify_combine(void** buffer_ptrs, int* send_head,
     int last_head = 1 << 25;
 #pragma unroll
     for (int token_idx_tail = token_end_idx - 1;
-         token_idx_tail >= token_start_idx; token_idx_tail -= 32) {
+         token_idx_tail >= token_start_idx; token_idx_tail -= WARP_SIZE) {
       int token_idx = token_idx_tail - lane_id, expected_head = 0;
       auto current_head =
           (token_idx >= token_start_idx)
               ? __ldg(send_head + token_idx * kNumRanks + rank_id)
               : -1;
-      for (int i = 0; i < min(32, token_idx_tail - token_start_idx + 1); ++i) {
-        int const head = __shfl_sync(0xffffffff, current_head, i);
+      for (int i = 0; i < min(WARP_SIZE, token_idx_tail - token_start_idx + 1);
+           ++i) {
+        int const head = __shfl_sync(WARP_MASK, current_head, i);
         if (head < 0) {
           if (lane_id == i) expected_head = -last_head - 1;
         } else {
@@ -698,7 +705,7 @@ void cached_notify_combine(void** buffer_ptrs, int* send_head, int num_channels,
                 barrier_signal_ptrs, rank);                                 \
   break
 
-  int const num_threads = std::max(128, 32 * num_ranks);
+  int const num_threads = std::max(128, WARP_SIZE * num_ranks);
   EP_HOST_ASSERT(num_ranks <= num_threads);
   EP_HOST_ASSERT(num_threads <= 1024);
   EP_HOST_ASSERT(1 + num_channels <= num_channels * 2);
@@ -723,7 +730,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
   auto const num_channels = num_sms / 2;
   bool const is_sender = sm_id % 2 == 0;
   int const responsible_channel = sm_id / 2;
-  EP_DEVICE_ASSERT(num_topk <= 32);
+  EP_DEVICE_ASSERT(num_topk <= WARP_SIZE);
 
   constexpr int kDtypePerInt4 = sizeof(int4) / sizeof(dtype_t);
   int hidden_int4 = hidden * sizeof(dtype_t) / sizeof(int4);
@@ -735,20 +742,22 @@ __global__ void __launch_bounds__(kNumThreads, 1)
   // TMA stuffs
 #ifndef DISABLE_SM90_FEATURES
   extern __shared__ __align__(1024) uint8_t smem_buffer[];
-  auto tma_buffer = smem_buffer + (thread_id / 32) * kNumTMABytesPerWarp;
+  auto tma_buffer = smem_buffer + (thread_id / WARP_SIZE) * kNumTMABytesPerWarp;
 #endif
 
   if (is_sender) {
     // Workers for sending
     // Several warps are responsible for a single rank
-    constexpr int num_send_warps_per_rank = (kNumThreads / 32) / kNumRanks;
+    constexpr int num_send_warps_per_rank =
+        (kNumThreads / WARP_SIZE) / kNumRanks;
     constexpr int num_send_warps = num_send_warps_per_rank * kNumRanks;
-    auto const num_threads_per_rank = num_send_warps_per_rank * 32;
+    auto const num_threads_per_rank = num_send_warps_per_rank * WARP_SIZE;
     auto const send_thread_id = thread_id;
-    auto const send_warp_id = send_thread_id / 32;
+    auto const send_warp_id = send_thread_id / WARP_SIZE;
     auto const send_rank_id = (responsible_channel + send_warp_id) % kNumRanks;
     auto const send_warp_id_in_rank = send_warp_id / kNumRanks;
-    EP_STATIC_ASSERT(num_send_warps * 32 == kNumThreads, "Invalid warp count");
+    EP_STATIC_ASSERT(num_send_warps * WARP_SIZE == kNumThreads,
+                     "Invalid warp count");
 
     // Calculate pointers by the specific layout
     auto ptr = reinterpret_cast<void*>(
@@ -851,8 +860,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
       current_channel_tail_idx += num_round_tokens;
 
       // Move tail index
-      asm volatile("bar.sync %0, %1;" ::"r"(send_rank_id),
-                   "r"(num_threads_per_rank));
+      sync_barrier(send_rank_id, num_threads_per_rank);
       if (lane_id == 0 and send_warp_id_in_rank == 0)
         st_release_sys_global(channel_tail_idx.buffer(),
                               current_channel_tail_idx);
@@ -860,10 +868,10 @@ __global__ void __launch_bounds__(kNumThreads, 1)
   } else {
     // Workers for receiving
     // One warp for moving the queue head, others for reduction
-    constexpr int num_recv_warps = kNumThreads / 32;
-    auto const recv_warp_id = thread_id / 32;
-    EP_DEVICE_ASSERT(kNumRanks <= 32 and kNumThreads > 32);
-    EP_DEVICE_ASSERT(thread_id >= 0 and kNumThreads % 32 == 0);
+    constexpr int num_recv_warps = kNumThreads / WARP_SIZE;
+    auto const recv_warp_id = thread_id / WARP_SIZE;
+    EP_DEVICE_ASSERT(kNumRanks <= WARP_SIZE and kNumThreads > WARP_SIZE);
+    EP_DEVICE_ASSERT(thread_id >= 0 and kNumThreads % WARP_SIZE == 0);
 
     // Shared head, tail and retired flags for receiver warps
     __shared__ int volatile warp_channel_head_idx[num_recv_warps][kNumRanks];
@@ -872,9 +880,9 @@ __global__ void __launch_bounds__(kNumThreads, 1)
     if (thread_id < num_recv_warps) warp_retired[thread_id] = false;
     if (lane_id < kNumRanks) warp_channel_head_idx[recv_warp_id][lane_id] = 0;
     if (thread_id < kNumRanks) channel_tail_idx[thread_id] = 0;
-    asm volatile("bar.sync 0, %0;" ::"r"(kNumThreads));
+    __syncthreads();
 
-    if (thread_id < 32) {
+    if (thread_id < WARP_SIZE) {
       int* channel_head_idx_ptr = static_cast<int*>(buffer_ptrs[rank]) +
                                   responsible_channel * kNumRanks + lane_id;
       int* channel_tail_idx_ptr =
@@ -955,9 +963,9 @@ __global__ void __launch_bounds__(kNumThreads, 1)
               ld_nc_global(send_head + token_idx * kNumRanks + lane_id);
 
         auto start_time = clock64();
-        while (__any_sync(0xffffffff,
-                          channel_tail_idx[lane_id] <= expected_head and
-                              expected_head >= 0)) {
+        while (
+            __any_sync(WARP_MASK, channel_tail_idx[lane_id] <= expected_head and
+                                      expected_head >= 0)) {
           // Timeout check
           if (clock64() - start_time > NUM_TIMEOUT_CYCLES) {
             printf(
@@ -973,7 +981,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
         int num_topk_ranks = 0, topk_ranks[kNumRanks], slot_indices[kNumRanks];
 #pragma unroll
         for (int i = 0; i < kNumRanks; ++i) {
-          auto expected_head_i = __shfl_sync(0xffffffff, expected_head, i);
+          auto expected_head_i = __shfl_sync(WARP_MASK, expected_head, i);
           if (expected_head_i >= 0) {
             slot_indices[num_topk_ranks] =
                 expected_head_i % num_recv_buffer_tokens;
@@ -985,14 +993,15 @@ __global__ void __launch_bounds__(kNumThreads, 1)
 #ifndef DISABLE_SM90_FEATURES
         if (lane_id == 0) tma_store_wait();
         __syncwarp();
-#endif
 
         // Reduce data with pipeline
         constexpr int kNumStages = 8;
-        EP_STATIC_ASSERT(kNumStages * 32 * sizeof(int4) <= kNumTMABytesPerWarp,
-                         "Invalid count");
+        EP_STATIC_ASSERT(
+            kNumStages * WARP_SIZE * sizeof(int4) <= kNumTMABytesPerWarp,
+            "Invalid count");
+#endif
 #pragma unroll
-        for (int i = lane_id; i < hidden_int4; i += 32) {
+        for (int i = lane_id; i < hidden_int4; i += WARP_SIZE) {
           // Read bias
           // TODO: make it as a template
           int4 bias_0_value_int4 =
@@ -1046,18 +1055,18 @@ __global__ void __launch_bounds__(kNumThreads, 1)
           __syncwarp();
 
           // Write into TMA buffer
-          auto tma_stage_idx = (i / 32) % kNumStages;
-          reinterpret_cast<int4*>(tma_buffer)[tma_stage_idx * 32 + lane_id] =
-              out_int4;
+          auto tma_stage_idx = (i / WARP_SIZE) % kNumStages;
+          reinterpret_cast<int4*>(
+              tma_buffer)[tma_stage_idx * WARP_SIZE + lane_id] = out_int4;
 
           // Issue TMA
           tma_store_fence();
           __syncwarp();
           if (lane_id == 0) {
-            auto tma_bytes =
-                min(32, hidden_int4 - i) * static_cast<int>(sizeof(int4));
+            auto tma_bytes = min(WARP_SIZE, hidden_int4 - i) *
+                             static_cast<int>(sizeof(int4));
             tma_store_1d(
-                reinterpret_cast<int4*>(tma_buffer) + tma_stage_idx * 32,
+                reinterpret_cast<int4*>(tma_buffer) + tma_stage_idx * WARP_SIZE,
                 recv_int4 + token_idx * hidden_int4 + i, tma_bytes, false);
           }
           __syncwarp();
@@ -1103,10 +1112,14 @@ void combine(cudaDataType_t type, void* recv_x, float* recv_topk_weights,
              int num_topk, void** buffer_ptrs, int rank, int num_ranks,
              cudaStream_t stream, int num_sms, int num_max_send_tokens,
              int num_recv_buffer_tokens) {
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  constexpr int kNumThreads = 1024;
+#else
   constexpr int kNumThreads = 768;
+#endif
   constexpr int kNumTMABytesPerWarp = 4096;
 #ifndef DISABLE_SM90_FEATURES
-  constexpr int smem_size = kNumTMABytesPerWarp * (kNumThreads / 32);
+  constexpr int smem_size = kNumTMABytesPerWarp * (kNumThreads / WARP_SIZE);
 #endif
 
 #define COMBINE_LAUNCH_CASE(dtype, ranks)                                     \
@@ -1128,7 +1141,7 @@ void combine(cudaDataType_t type, void* recv_x, float* recv_topk_weights,
 
   // Even-numbered blocks for sending, odd-numbered blocks for receiving
   EP_HOST_ASSERT(num_sms % 2 == 0);
-  EP_HOST_ASSERT(kNumThreads >= num_ranks * 32);
+  EP_HOST_ASSERT(kNumThreads >= num_ranks * WARP_SIZE);
   SETUP_LAUNCH_CONFIG(num_sms, kNumThreads, stream);
   SWITCH_TYPES(COMBINE_DTYPE_LAUNCH_CASE);
 #undef COMBINE_DTYPE_LAUNCH_CASE
