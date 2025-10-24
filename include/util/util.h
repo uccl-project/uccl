@@ -875,19 +875,19 @@ static inline std::string mac_to_str(char const mac[6]) {
 }
 
 static inline std::string get_dev_mac(char const* dev_name) {
+  std::string path = Format("/sys/class/net/%s/address", dev_name);
+  std::ifstream file(path);
+  if (!file.is_open()) {
+    LOG(ERROR) << "Failed to open " << path;
+    return "";
+  }
+
   std::string mac;
-  std::string cmd = Format("cat /sys/class/net/%s/address", dev_name);
-  FILE* fp = popen(cmd.c_str(), "r");
-  if (fp == nullptr) {
-    LOG(ERROR) << "Failed to get MAC address.";
-    return mac;
+  if (!std::getline(file, mac)) {
+    LOG(ERROR) << "Failed to read " << path;
+    return "";
   }
-  char buffer[18];
-  if (fgets(buffer, sizeof(buffer), fp) != nullptr) {
-    mac = std::string(buffer);
-    mac.erase(std::remove(mac.begin(), mac.end(), '\n'), mac.end());
-  }
-  pclose(fp);
+
   return mac;
 }
 
@@ -1075,17 +1075,21 @@ inline void checkMemoryLocation(void* ptr) {
 #endif
 
 inline int get_dev_numa_node(char const* dev_name) {
-  std::string cmd =
-      Format("cat /sys/class/infiniband/%s/device/numa_node", dev_name);
-  FILE* fp = popen(cmd.c_str(), "r");
-  DCHECK(fp != nullptr) << "Failed to open " << cmd;
+  std::string path =
+      Format("/sys/class/infiniband/%s/device/numa_node", dev_name);
+  std::ifstream file(path);
+  if (!file.is_open()) {
+    LOG(ERROR) << "Failed to open " << path;
+    return -1;
+  }
 
-  char buffer[10];
-  DCHECK(fgets(buffer, sizeof(buffer), fp) != nullptr)
-      << "Failed to read " << cmd;
-  pclose(fp);
+  std::string line;
+  if (!std::getline(file, line)) {
+    LOG(ERROR) << "Failed to read " << path;
+    return -1;
+  }
 
-  auto numa_node = atoi(buffer);
+  auto numa_node = std::stoi(line);
   DCHECK(numa_node != -1) << "NUMA node is -1 for " << dev_name;
   return numa_node;
 }

@@ -29,7 +29,7 @@ INCLUDES := -I../../include -I../../src
 INCLUDES += -I$(CUDA_PATH)/include
 
 # Libraries
-LIBS := -lpthread -lcudart -lcuda -lnuma
+LIBS := -lpthread -lcudart -lcuda
 LIBS += -L$(CUDA_PATH)/lib64
 
 # Source files

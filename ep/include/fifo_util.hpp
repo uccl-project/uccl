@@ -9,7 +9,6 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <numa.h>
 
 // ============================================================================
 // GPU Platform Abstraction (from gpu.hpp)
@@ -156,18 +155,6 @@ inline int getDeviceNumaNode(int deviceId) {
     return -1;
   }
   return numaNode;
-}
-
-inline void numaBind(int node) {
-  int totalNumNumaNodes = numa_num_configured_nodes();
-  if (node < 0 || node >= totalNumNumaNodes) {
-    // Invalid node - just return
-    return;
-  }
-  nodemask_t mask;
-  nodemask_zero(&mask);
-  nodemask_set_compat(&mask, node);
-  numa_bind_compat(&mask);
 }
 
 // ============================================================================
