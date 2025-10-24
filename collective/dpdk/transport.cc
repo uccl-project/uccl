@@ -1124,9 +1124,10 @@ void UcclEngine::deser_th_func(std::vector<UcclEngine*> engines) {
             VLOG(2) << "Received a complete message " << cur_offset << " bytes";
           }
 
+          Packet *ready_msg_tmp = ready_msg->get_pkt();
           ready_msg = ready_msg->next();
           // Free received frames that have been copied to app buf.
-          engine->socket_->push_packet(ready_msg->get_pkt());
+          engine->socket_->push_packet(ready_msg_tmp);
         }
       }
     }
@@ -1256,7 +1257,7 @@ void UcclEngine::handle_install_flow_on_engine(Channel::CtrlMsg& ctrl_work) {
 
     uint32_t rcvd = socket_->recv_packets(pkts, RECV_BATCH_SIZE);
     if (rcvd) {
-      LOG(INFO) << "[Engine] received " << rcvd << " RSS probe packets";
+      VLOG(3) << "[Engine] received " << rcvd << " RSS probe packets";
     }
 
     for (uint32_t j = 0; j < rcvd; j++) {
@@ -1268,7 +1269,7 @@ void UcclEngine::handle_install_flow_on_engine(Channel::CtrlMsg& ctrl_work) {
       auto* ucclh = reinterpret_cast<UcclPktHdr*>(pkt_addr + kNetHdrLen);
 
       if (ucclh->net_flags == UcclPktHdr::UcclFlags::kRssProbe) {
-        LOG(INFO) << "[Engine] received RSS probe packet";
+        VLOG(3) << "[Engine] received RSS probe packet";
         if (ucclh->engine_id == local_engine_idx_) {
           // Probe packets arrive the remote engine!
           ucclh->net_flags = UcclPktHdr::UcclFlags::kRssProbeRsp;
@@ -1281,7 +1282,7 @@ void UcclEngine::handle_install_flow_on_engine(Channel::CtrlMsg& ctrl_work) {
           socket_->push_packet(pkt);
         }
       } else {
-        LOG(INFO) << "[Engine] received RSS probe rsp packet";
+        VLOG(3) << "[Engine] received RSS probe rsp packet";
         DCHECK(ucclh->net_flags == UcclPktHdr::UcclFlags::kRssProbeRsp);
         if (ucclh->engine_id == local_engine_idx_) {
           // Probe rsp packets arrive this engine!

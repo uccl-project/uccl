@@ -20,13 +20,24 @@ class DPDKSocket {
     this->packet_pool_ = packet_pool_;
     this->total_recv_packets_ = 0;
     this->total_sent_packets_ = 0;
+    this->unsent_packets_ = 0;
   }
 
   inline void push_packet(Packet* pkt) { Packet::Free(pkt); }
 
-  inline Packet* pop_packet() { return packet_pool_->PacketAlloc(); }
+  inline Packet* pop_packet() { 
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      unsent_packets_++;
+    }
+    return packet_pool_->PacketAlloc(); 
+  }
 
   inline Packet* pop_packet(uint16_t pkt_len) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      unsent_packets_--;
+    }
     Packet* pkt = pop_packet();
     pkt->append<void*>(pkt_len);
     return pkt;
@@ -53,7 +64,12 @@ class DPDKSocket {
   inline uint64_t send_queue_estimated_latency_ns() { return 0; }
 
   std::string to_string() {
-    return Format("[TX] %u [RX] %u", total_sent_packets_, total_recv_packets_);
+    uint32_t unsent_packets = 0;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      unsent_packets = unsent_packets_;
+    }
+    return Format("[TX] %u [RX] %u [UNSENT] %u", total_sent_packets_, total_recv_packets_, unsent_packets);
   }
 
  private:
@@ -68,6 +84,9 @@ class DPDKSocket {
 
   uint32_t total_recv_packets_;
   uint32_t total_sent_packets_;
+
+  uint32_t unsent_packets_;
+  std::mutex mutex_;
 };
 
 class DPDKFactory {
