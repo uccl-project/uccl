@@ -12,6 +12,9 @@
 #include <stdio.h>
 #include <unistd.h>
 
+#define MEASURE_PER_OP_LATENCY
+#define MEASURE_PER_VERB_LATENCY
+
 #ifndef USE_NORMAL_MODE
 #ifndef USE_SENDER_BARRIER
 #ifdef EFA
@@ -22,10 +25,21 @@
 // #define USE_SENDER_BARRIER
 #endif
 
+#define USE_MSCCLPP_FIFO_BACKEND
 #define kAtomicBufferSize 81960
 #define kQueueSize 1024
 #define kQueueMask (kQueueSize - 1)
+// This is the highest we can get due to the number of bits we allocate in the
+// imm for reordering buffer sequence tracking.
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+#ifdef USE_NORMAL_MODE
+#define kMaxInflight 8
+#else
 #define kMaxInflight 32
+#endif
+#else
+#define kMaxInflight 8
+#endif
 #define kBatchSize 32
 #define kIterations 40000
 #define kNumThBlocks 4
@@ -37,7 +51,7 @@
 #define kMaxOutstandingRecvs 2048 * 2
 #define kSenderAckQueueDepth 2048 * 2
 #define kWarmupOps 10000
-#define kRingsPerProxy 8
+#define kChannelPerProxy 8
 // TODO(MaoZiming): I tried to fit more bits, but this eats into offset and
 // values.
 #define kReorderingBufferSize 16  // Right now only 4 bits.

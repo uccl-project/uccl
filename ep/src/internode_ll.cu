@@ -57,9 +57,10 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     int num_tokens, int num_max_dispatch_tokens_per_rank, int num_topk,
     int num_experts, int rank, int num_ranks, int num_warp_groups,
     int num_warps_per_group, bool round_scale, int phases,
-    uint64_t const* ring_addrs, int num_ring_addrs, int max_nvl_peers,
-    int low_latency_buffer_idx, void** ipc_rdma_base_ptrs = nullptr,
-    void* rdma_buffer_ptr = nullptr, void* atomic_buffer_ptr = nullptr,
+    uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
+    int max_nvl_peers, int low_latency_buffer_idx,
+    void** ipc_rdma_base_ptrs = nullptr, void* rdma_buffer_ptr = nullptr,
+    void* atomic_buffer_ptr = nullptr,
     int* rdma_recv_count_internode = nullptr) {
   auto const sm_id = static_cast<int>(blockIdx.x);
   auto const thread_id = static_cast<int>(threadIdx.x);
@@ -210,12 +211,13 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         if (dst_p2p_ptr == 0) {
           __threadfence_system();
           uccl::nvshmemi_ibgda_put_nbi_warp(
-              dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), src_ptr,
+              dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
+              src_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
               num_bytes_per_msg, dst_rank,
               /*warp_id=*/dst_expert_local_idx,  // NOTE(Yang): for selecting
                                                  // rb.
-              lane_id, slot_idx, ring_addrs, num_ring_addrs, false,
-              low_latency_buffer_idx);
+              lane_id, slot_idx, d2h_channel_addrs, num_d2h_channel_addrs,
+              false, low_latency_buffer_idx);
         } else {
           // Intra-node: use direct memory copy via IPC
           auto const* src_int4_ptr = reinterpret_cast<int4 const*>(src_ptr);
@@ -309,7 +311,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           dst_ptr_internode, reinterpret_cast<uint64_t>(atomic_buffer_ptr),
           -num_tokens_sent - 1, dst_rank,
           /*warp_id=*/dst_expert_local_idx,  // NOTE(Yang): for selecting rb.
-          false, ring_addrs, num_ring_addrs, false, low_latency_buffer_idx);
+          false, d2h_channel_addrs, num_d2h_channel_addrs, false,
+          low_latency_buffer_idx);
 
     } else {
       // Intra-node: use direct atomic operation
@@ -505,10 +508,10 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
               int num_experts, int rank, int num_ranks, bool use_fp8,
               bool round_scale, bool use_ue8m0, void* workspace,
               int num_device_sms, cudaStream_t stream, int phases,
-              uint64_t const* ring_addrs, int num_ring_addrs, int max_nvl_peers,
-              int low_latency_buffer_idx, void** ipc_rdma_base_ptrs,
-              void* rdma_buffer_ptr, void* atomic_buffer_ptr,
-              int* rdma_recv_count_internode) {
+              uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
+              int max_nvl_peers, int low_latency_buffer_idx,
+              void** ipc_rdma_base_ptrs, void* rdma_buffer_ptr,
+              void* atomic_buffer_ptr, int* rdma_recv_count_internode) {
   constexpr int kNumMaxTopK = 9;
   int const num_warp_groups = ceil_div(num_experts, num_device_sms);
   int const num_warps_per_group = kNumMaxWarpGroups / num_warp_groups;
@@ -544,9 +547,9 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
         next_clean, next_clean_second, num_next_clean_int, num_tokens,        \
         num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,        \
         num_ranks, num_warp_groups, num_warps_per_group, round_scale, phases, \
-        ring_addrs, num_ring_addrs, max_nvl_peers, low_latency_buffer_idx,    \
-        ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr,               \
-        rdma_recv_count_internode);                                           \
+        d2h_channel_addrs, num_d2h_channel_addrs, max_nvl_peers,              \
+        low_latency_buffer_idx, ipc_rdma_base_ptrs, rdma_buffer_ptr,          \
+        atomic_buffer_ptr, rdma_recv_count_internode);                        \
   }                                                                           \
   break
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
@@ -574,8 +577,8 @@ __global__ __launch_bounds__(1024, 1) void combine(
     int num_combined_tokens, int hidden, int num_topk,
     int num_max_dispatch_tokens_per_rank, int num_experts, int rank,
     int num_ranks, int num_warp_groups, int num_warps_per_group, int phases,
-    bool zero_copy, uint64_t const* ring_addrs, int num_ring_addrs,
-    int max_nvl_peers, int low_latency_buffer_idx,
+    bool zero_copy, uint64_t const* d2h_channel_addrs,
+    int num_d2h_channel_addrs, int max_nvl_peers, int low_latency_buffer_idx,
     void** ipc_rdma_base_ptrs = nullptr, void* rdma_buffer_ptr = nullptr,
     void* atomic_buffer_ptr = nullptr,
     int* rdma_recv_flag_internode = nullptr) {
@@ -852,13 +855,14 @@ __global__ __launch_bounds__(1024, 1) void combine(
       if (dst_p2p_ptr == 0) {
         __threadfence_system();
         nvshmemi_ibgda_put_nbi_warp(
-            dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), buf_ptr,
+            dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
+            buf_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
             hidden * sizeof(nv_bfloat16), dst_rank,
             /*warp_id=*/global_expert_idx,  // NOTE(Yang): for selecting rb.
             // NOTE(Ziming): this is global_expert_idx because destination is
             // indexed by global_expert_idx
-            lane_id, token_idx - offset, ring_addrs, num_ring_addrs, true,
-            low_latency_buffer_idx);
+            lane_id, token_idx - offset, d2h_channel_addrs,
+            num_d2h_channel_addrs, true, low_latency_buffer_idx);
       }
     }
 
@@ -895,7 +899,8 @@ __global__ __launch_bounds__(1024, 1) void combine(
             num_tokens_to_send /* Will be changed to 1 in the proxy */,
             dst_rank,
             /*warp_id=*/global_expert_idx,  // NOTE(Yang): for selecting rb.
-            false, ring_addrs, num_ring_addrs, true, low_latency_buffer_idx);
+            false, d2h_channel_addrs, num_d2h_channel_addrs, true,
+            low_latency_buffer_idx);
       }
       atomic_add_release_global(atomic_clean_flag, -1);
     }
@@ -1020,10 +1025,11 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
              int num_max_dispatch_tokens_per_rank, int num_topk,
              int num_experts, int rank, int num_ranks, bool use_logfmt,
              void* workspace, int num_device_sms, cudaStream_t stream,
-             int phases, bool zero_copy, uint64_t const* ring_addrs,
-             int num_ring_addrs, int max_nvl_peers, int low_latency_buffer_idx,
-             void** ipc_rdma_base_ptrs, void* rdma_buffer_ptr,
-             void* atomic_buffer_ptr, int* rdma_recv_flag_internode) {
+             int phases, bool zero_copy, uint64_t const* d2h_channel_addrs,
+             int num_d2h_channel_addrs, int max_nvl_peers,
+             int low_latency_buffer_idx, void** ipc_rdma_base_ptrs,
+             void* rdma_buffer_ptr, void* atomic_buffer_ptr,
+             int* rdma_recv_flag_internode) {
   constexpr int kNumMaxTopk = 9;
   int const num_warp_groups = ceil_div(num_experts, num_device_sms);
   int const num_warps_per_group = kNumMaxWarpGroups / num_warp_groups;
@@ -1044,22 +1050,22 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
   int const smem_size = kNumTMABytesPerWarp * num_warps;
   // printf("Combine launched\n");
 
-#define COMBINE_LAUNCH_CASE(hidden)                                            \
-  {                                                                            \
-    auto combine_func = use_logfmt ? combine<true, hidden, kNumMaxTopk>        \
-                                   : combine<false, hidden, kNumMaxTopk>;      \
-    SET_SHARED_MEMORY_FOR_TMA(combine_func);                                   \
-    LAUNCH_KERNEL(&cfg, combine_func, combined_x, rdma_recv_x, rdma_recv_flag, \
-                  rdma_send_x, x, topk_idx, topk_weights, src_info,            \
-                  layout_range, combine_wait_recv_cost_stats, next_clean,      \
-                  next_clean_second, num_next_clean_int, atomic_clean_flag,    \
-                  num_combined_tokens, hidden, num_topk,                       \
-                  num_max_dispatch_tokens_per_rank, num_experts, rank,         \
-                  num_ranks, num_warp_groups, num_warps_per_group, phases,     \
-                  zero_copy, ring_addrs, num_ring_addrs, max_nvl_peers,        \
-                  low_latency_buffer_idx, ipc_rdma_base_ptrs, rdma_buffer_ptr, \
-                  atomic_buffer_ptr, rdma_recv_flag_internode);                \
-  }                                                                            \
+#define COMBINE_LAUNCH_CASE(hidden)                                         \
+  {                                                                         \
+    auto combine_func = use_logfmt ? combine<true, hidden, kNumMaxTopk>     \
+                                   : combine<false, hidden, kNumMaxTopk>;   \
+    SET_SHARED_MEMORY_FOR_TMA(combine_func);                                \
+    LAUNCH_KERNEL(                                                          \
+        &cfg, combine_func, combined_x, rdma_recv_x, rdma_recv_flag,        \
+        rdma_send_x, x, topk_idx, topk_weights, src_info, layout_range,     \
+        combine_wait_recv_cost_stats, next_clean, next_clean_second,        \
+        num_next_clean_int, atomic_clean_flag, num_combined_tokens, hidden, \
+        num_topk, num_max_dispatch_tokens_per_rank, num_experts, rank,      \
+        num_ranks, num_warp_groups, num_warps_per_group, phases, zero_copy, \
+        d2h_channel_addrs, num_d2h_channel_addrs, max_nvl_peers,            \
+        low_latency_buffer_idx, ipc_rdma_base_ptrs, rdma_buffer_ptr,        \
+        atomic_buffer_ptr, rdma_recv_flag_internode);                       \
+  }                                                                         \
   break
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)

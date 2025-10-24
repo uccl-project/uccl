@@ -21,33 +21,74 @@
 #include "amd_nanosleep.cuh"
 #endif
 
-enum class CmdType : uint64_t { EMPTY = 0, WRITE, ATOMIC, QUIET, BARRIER };
+enum class CmdType : uint8_t {
+  EMPTY = 0,    // 000
+  WRITE = 1,    // 001
+  ATOMIC = 2,   // 010
+  QUIET = 3,    // 011
+  BARRIER = 4,  // 100
+  // Bits layout:
+  // [7]     = low_latency_buffer_idx
+  // [6]     = is_combine
+  // [5:0]   = command type (0–63)
+};
+
+__host__ __device__ inline CmdType make_cmd_type(CmdType base, bool is_combine,
+                                                 bool low_latency) {
+  uint8_t v = static_cast<uint8_t>(base);
+  if (is_combine) v |= (1u << 6);
+  if (low_latency) v |= (1u << 7);
+  return static_cast<CmdType>(v);
+}
+
+__host__ __device__ inline bool get_is_combine(CmdType c) {
+  return (static_cast<uint8_t>(c) >> 6) & 1u;
+}
+
+__host__ __device__ inline bool get_low_latency(CmdType c) {
+  return (static_cast<uint8_t>(c) >> 7) & 1u;
+}
+
+__host__ __device__ inline CmdType get_base_cmd(CmdType c) {
+  return static_cast<CmdType>(static_cast<uint8_t>(c) & 0x3Fu);
+}
 
 // Command structure for each transfer
+#pragma pack(push, 1)
 struct TransferCmd {
-  // NOTE(MaoZiming): cmd is used to identify the command type and needs to be
-  // set in order for proxy to process the command.
+  // uint8_t
   CmdType cmd_type;
-  uint64_t cmd;
-  uint32_t dst_rank;  // remote node id (MPI-style)
-  uint32_t dst_gpu;   // GPU id on remote node
-  void* src_ptr;      // device pointer to data
-  uint64_t bytes;     // transfer size
-
-  uint64_t req_rptr;
-  uint64_t req_lptr;
-  int warp_id;
-  int expert_idx;
-  int lane_id;
-  int message_idx;
-  bool is_atomic;
-  int value;
-  bool is_combine;
-  int low_latency_buffer_idx;
-
-  uint64_t atomic_offset;
-  uint64_t atomic_val;
+  // uint8_t, assuming 256 ranks.
+  uint8_t dst_rank;
+  union {
+    struct {
+      // upper 8 bits, assuming 256 tokens per batch.
+      uint32_t atomic_val : 8;
+      // lower 24 bits: transfer size
+      uint32_t bytes : 24;
+    };
+    // raw 32-bit view if needed
+    uint32_t bytes_and_val;
+  };
+  uint32_t req_rptr;
+  union {
+    // write
+    uint32_t req_lptr;
+    // atomic
+    int value;
+  };
+  union {
+    // Low-latency mode
+    uint16_t expert_idx;
+    // Normal mode
+    uint16_t atomic_offset;
+  };
 };
+#pragma pack(pop)
+
+#if defined(__x86_64__) || defined(_M_X64)
+static_assert(sizeof(TransferCmd) * 8 == 128, "TransferCmd must be 128 bits");
+#endif
 
 struct CopyTask {
   uint64_t wr_id;
@@ -88,11 +129,6 @@ struct alignas(128) RingBuffer {
   uint64_t head = 0;
   uint64_t tail = 0;
   T buf[Capacity];
-  // 16B publish header (CPU polls here). Must be 16B aligned.
-  struct alignas(16) Header128 {
-    uint64_t fst, snd;
-  };
-  Header128 hdr[Capacity] = {};
   uint64_t cycle_accum = 0;
   uint64_t op_count = 0;
   uint64_t cycle_start = 0;
@@ -102,33 +138,33 @@ struct alignas(128) RingBuffer {
   static constexpr size_t kNumWords = (Capacity + 63) / 64;
   uint64_t ack_mask[kNumWords] = {};
   static constexpr int kFenceBatch = 8;
-
   inline void mark_acked(size_t idx) noexcept {
-    const size_t word = idx >> 6;  // idx / 64
-    const size_t bit = idx & 63;   // idx % 64
+    assert(idx < Capacity && "mark_acked: idx out of range");
+    size_t const word = idx >> 6;  // idx / 64
+    size_t const bit = idx & 63;   // idx % 64
     ack_mask[word] |= (1ull << bit);
   }
 
   inline void clear_acked(size_t idx) noexcept {
-    const size_t word = idx >> 6;
-    const size_t bit = idx & 63;
+    assert(idx < Capacity && "clear_acked: idx out of range");
+    size_t const word = idx >> 6;
+    size_t const bit = idx & 63;
     ack_mask[word] &= ~(1ull << bit);
   }
 
   inline bool is_acked(size_t idx) const noexcept {
-    const size_t word = idx >> 6;
-    const size_t bit = idx & 63;
+    assert(idx < Capacity && "is_acked: idx out of range");
+    size_t const word = idx >> 6;
+    size_t const bit = idx & 63;
     return (ack_mask[word] >> bit) & 1ull;
   }
 
   // Return next index >= start_idx whose bit is UNSET (0)
   inline size_t next_unacked(size_t start_idx) const noexcept {
     if (start_idx >= Capacity) return Capacity;
-
     size_t word = start_idx >> 6;
     size_t bit = start_idx & 63;
 
-    // How many valid bits remain in [start_idx, Capacity)
     size_t remaining = Capacity - start_idx;
     size_t span = remaining < (64 - bit) ? remaining : (64 - bit);
 
@@ -155,7 +191,7 @@ struct alignas(128) RingBuffer {
         return base + __builtin_ctzll(inv2);
       }
     }
-    return Capacity;  // all set up to Capacity
+    return Capacity;
   }
 
   inline void clear_acked_range(size_t start, size_t end) noexcept {
@@ -229,14 +265,15 @@ struct alignas(128) RingBuffer {
     __atomic_store_n(&tail, new_tail, __ATOMIC_RELEASE);
   }
 
-  inline uint64_t volatile_load_cmd(int idx) const {
-    return __atomic_load_n(&hdr[idx & mask()].fst, __ATOMIC_ACQUIRE);
+  inline CmdType volatile_load_cmd_type(int idx) const {
+    return __atomic_load_n(&buf[idx & mask()].cmd_type, __ATOMIC_ACQUIRE);
   }
 
   inline T& load_cmd_entry(int idx) { return buf[idx & mask()]; }
 
-  inline void volatile_store_cmd(int idx, uint64_t val) {
-    __atomic_store_n(&hdr[idx & mask()].fst, val, __ATOMIC_RELEASE);
+  inline void volatile_clear_cmd_type(int idx) {
+    __atomic_store_n(reinterpret_cast<uint8_t*>(&buf[idx & mask()].cmd_type),
+                     static_cast<uint8_t>(CmdType::EMPTY), __ATOMIC_RELEASE);
   }
 
   __host__ __device__ static constexpr uint32_t mask() { return Capacity - 1; }
@@ -341,63 +378,56 @@ struct alignas(128) RingBuffer {
   }
 
   __host__ __device__ inline bool atomic_set_and_commit(
-      const T& item, uint64_t* out_slot = nullptr) {
-    // Reserve a unique slot (no retry loop)
+      T const& item, uint64_t* out_slot = nullptr) {
+    uint64_t slot;
+    while (true) {
 #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
-    uint64_t prevHead =
-        atomicAdd(reinterpret_cast<unsigned long long*>(&head), 1ULL);
+      uint64_t h = ld_volatile(&head);
+      uint64_t t = ld_volatile(&tail);
+      if (h - t == Capacity) {
+        __nanosleep(64);
+        continue;
+      }
+      unsigned long long prev =
+          atomicCAS((unsigned long long*)&head, (unsigned long long)h,
+                    (unsigned long long)(h + 1));
+      if (prev == h) {
+        slot = h;
+        break;
+      }
 #else
-    uint64_t prevHead = __atomic_fetch_add(&head, 1ULL, __ATOMIC_RELAXED);
+      uint64_t h = __atomic_load_n(&head, __ATOMIC_RELAXED);
+      uint64_t t = __atomic_load_n(&tail, __ATOMIC_RELAXED);
+      if (h - t == Capacity) {
+        cpu_relax();
+        continue;
+      }
+      uint64_t expected = h;
+      if (__atomic_compare_exchange_n(&head, &expected, h + 1, true,
+                                      __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+        slot = h;
+        break;
+      }
 #endif
-
-    // Throttle if reservation would overflow ring
-#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
-    // Snapshot to cut PCIe traffic; refresh occasionally
-    uint64_t tail_snap = ld_volatile(&tail);
-    int spins = 0;
-    while (prevHead >= capacity + tail_snap) {
-      if ((++spins & 0x3F) == 0) tail_snap = ld_volatile(&tail);
-      __nanosleep(64);
     }
-#else
-    while (prevHead >= capacity + __atomic_load_n(&tail, __ATOMIC_ACQUIRE)) {
-      cpu_relax();
-    }
-#endif
-
-    // Now it’s safe to write the payload
-    const uint32_t idx = static_cast<uint32_t>(prevHead) & mask();
+    uint32_t idx = (uint32_t)slot & mask();
 
     T tmp = item;
-    auto ready_flag = tmp.cmd;  // your “visible when non-zero” flag
-    // tmp.cmd = 0;                   // keep flag clear in the payload copy if
-    // you want
+    auto saved_cmd = tmp.cmd_type;
+    tmp.cmd_type = CmdType::EMPTY;
     buf[idx] = tmp;
 
-    // Single 16B publish of the header (system-scope)
-#if defined(__CUDA_ARCH__)
-#if __CUDA_ARCH__ >= 900
-    asm volatile("st.global.release.sys.v2.u64 [%0], {%1,%2};" ::"l"(&hdr[idx]),
-                 "l"(ready_flag), "l"((uint64_t)idx)
-                 : "memory");
-#else
-    __threadfence_system();
-    asm volatile("st.global.relaxed.sys.v2.u64 [%0], {%1,%2};" ::"l"(&hdr[idx]),
-                 "l"(ready_flag), "l"((uint64_t)idx)
-                 : "memory");
-#endif
-#elif defined(__HIP_DEVICE_COMPILE__)
-    __threadfence_system();
-    __atomic_store_n(&hdr[idx].snd, (uint64_t)idx, __ATOMIC_RELAXED);
-    __atomic_store_n(&hdr[idx].fst, ready_flag, __ATOMIC_RELEASE);
-
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+    if constexpr (Dir == FlowDirection::DeviceToHost)
+      __threadfence_system();
+    else
+      __threadfence();
 #else
     std::atomic_thread_fence(std::memory_order_release);
-    __atomic_store_n(&hdr[idx].snd, (uint64_t)idx, __ATOMIC_RELAXED);
-    __atomic_store_n(&hdr[idx].fst, ready_flag, __ATOMIC_RELEASE);
 #endif
 
-    if (out_slot) *out_slot = prevHead;
+    buf[idx].cmd_type = saved_cmd;
+    if (out_slot) *out_slot = slot;
     return true;
   }
 };

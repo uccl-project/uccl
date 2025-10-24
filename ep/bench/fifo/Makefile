@@ -9,7 +9,7 @@ CXX := g++
 # Auto-detect GPU architecture
 GPU_ARCH := $(shell nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1 | sed 's/\.//' || echo "90")
 
-TARGET := benchmark_fifo
+TARGET := benchmark
 
 # NVCC flags (release mode)
 NVCC_FLAGS := -std=c++17
@@ -34,7 +34,7 @@ LIBS += -L$(CUDA_PATH)/lib64
 
 # Source files
 SRC_CU := launch_kernel_shim.cu
-SRC_CPP := benchmark_fifo.cpp ../../src/fifo.cpp
+SRC_CPP := benchmark.cpp ../../src/fifo.cpp
 
 # Object files
 OBJ_CU := $(SRC_CU:.cu=.o)

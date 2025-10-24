@@ -19,10 +19,14 @@ int main(int argc, char** argv) {
     });
   }
   auto t0 = std::chrono::high_resolution_clock::now();
+#ifndef USE_MSCCLPP_FIFO_BACKEND
   const size_t shmem_bytes = kQueueSize * sizeof(unsigned long long);
   gpu_issue_batched_commands<<<env.blocks, kNumThPerBlock, shmem_bytes,
                                env.stream>>>(env.rbs);
   GPU_RT_CHECK_ERRORS("gpu_issue_batched_commands failed");
+#else
+  printf("[WARN] FIFO backend: gpu_issue_batched_commands skipped.\n");
+#endif
   GPU_RT_CHECK(gpuStreamSynchronize(env.stream));
   auto t1 = std::chrono::high_resolution_clock::now();
 

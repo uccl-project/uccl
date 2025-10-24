@@ -4,7 +4,7 @@
 #include "../../include/fifo_device.hpp"
 #include <cstdint>
 
-// Metrics structure (matching benchmark_fifo.cpp)
+// Metrics structure (matching benchmark.cpp)
 struct ThreadMetrics {
   uint64_t push_count;
   uint64_t total_cycles;

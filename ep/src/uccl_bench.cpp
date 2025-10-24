@@ -28,7 +28,13 @@ EnvInfo Bench::env_info() const {
   e.threads_per_block = kNumThPerBlock;
   e.iterations = kIterations;
   e.stream_addr = reinterpret_cast<uintptr_t>(env_.stream);
+
+#ifndef USE_MSCCLPP_FIFO_BACKEND
   e.rbs_addr = reinterpret_cast<uintptr_t>(env_.rbs);
+#else
+  assert(false && "TODO: uccl_bench does not support mscclpp fifo");
+#endif
+
   return e;
 }
 
@@ -40,13 +46,19 @@ bool Bench::is_running() const {
 
 uintptr_t Bench::ring_addr(int i) const {
   if (i < 0 || i >= env_.blocks) throw std::out_of_range("ring index");
+
+#ifndef USE_MSCCLPP_FIFO_BACKEND
   return reinterpret_cast<uintptr_t>(&env_.rbs[i]);
+#else
+  assert(false && "TODO: uccl_bench does not support mscclpp fifo");
+#endif
 }
 
 void Bench::timing_start() {
   t0_ = std::chrono::high_resolution_clock::now();
   have_t0_ = true;
 }
+
 void Bench::timing_stop() {
   t1_ = std::chrono::high_resolution_clock::now();
   have_t1_ = true;
@@ -56,6 +68,7 @@ void Bench::start_local_proxies(int rank, std::string const& peer_ip) {
   if (running_.load(std::memory_order_acquire)) {
     throw std::runtime_error("Proxies already running");
   }
+
   threads_.reserve(env_.blocks);
   for (int i = 0; i < env_.blocks; ++i) {
     threads_.emplace_back([this, i, rank, peer_ip]() {
@@ -64,18 +77,26 @@ void Bench::start_local_proxies(int rank, std::string const& peer_ip) {
       p.run_local();
     });
   }
+
   running_.store(true, std::memory_order_release);
 }
 
 void Bench::launch_gpu_issue_batched_commands() {
   timing_start();
+
+#ifndef USE_MSCCLPP_FIFO_BACKEND
   const size_t shmem_bytes = kQueueSize * 2 * sizeof(unsigned long long);
   auto st = launch_gpu_issue_batched_commands_shim(
       env_.blocks, kNumThPerBlock, shmem_bytes, env_.stream, env_.rbs);
+
   if (st != cudaSuccess) {
     throw std::runtime_error(std::string("kernel launch failed: ") +
                              cudaGetErrorString(st));
   }
+#else
+  assert(false && "TODO: uccl_bench does not support mscclpp fifo");
+#endif
+
   GPU_RT_CHECK(cudaEventRecord(done_evt_, env_.stream));
 }
 
@@ -137,6 +158,7 @@ Stats Bench::compute_stats() const {
 }
 
 void Bench::print_summary(Stats const& s) const { ::print_summary(env_, s); }
+
 void Bench::print_summary_last() const {
   ::print_summary(env_, compute_stats());
 }
@@ -145,7 +167,6 @@ double Bench::last_elapsed_ms() const {
   if (!have_t0_ || !have_t1_) return 0.0;
   return std::chrono::duration<double, std::milli>(t1_ - t0_).count();
 }
-
 // ============================================================================
 // BenchFifo Implementation
 // ============================================================================
