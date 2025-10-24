@@ -8,8 +8,9 @@ For UCCL's host/CPU-driven P2P engine, see [p2p](../p2p/) folder.
 
 Installing `ep` as a Python package:
 ```bash
-./build_and_install.sh cuda ep 3.11
+bash build_and_install.sh cuda ep
 ```
+
 Alternatively, in a Python environment 
 ```bash
 make -j install
@@ -19,7 +20,7 @@ make -j install
 
 build rocm image
 ```bash
-bash build.sh rocm ep
+bash build_and_install.sh rocm ep
 ```
 
 test import uccl.ep

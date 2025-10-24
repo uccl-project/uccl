@@ -1,11 +1,6 @@
 #!/bin/bash
 set -e
 
-pip3 install black
-
-echo "Installing pybind11..."
-pip3 install pybind11 --upgrade
-
 # Check CUDA availability and get version
 check_cuda() {
     command -v nvcc &> /dev/null
@@ -43,8 +38,10 @@ if check_cuda; then
     
     pip3 install torch torchvision torchaudio --index-url "https://download.pytorch.org/whl/$PYTORCH_SUFFIX"
 elif check_rocm; then
+    echo "Detected ROCM"
+    # Yang: moved to Dockerfile.rocm to reuse it inside the container for faster rebuild
     # Install Pytorch using nightly
-    pip3 install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
+    # pip3 install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
 else
     echo "No CUDA or ROCM detected"
     exit 1
