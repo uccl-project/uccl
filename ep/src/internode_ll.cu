@@ -644,7 +644,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
     int offset, num_tokens_to_send;
     unpack2(layout, num_tokens_to_send, offset);
 
-#if defined(__NVCC__) || defined(__CUDACC__)
+#if defined(__NVCC__)
     // TMA stuffs
     constexpr int kNumTMABufferBytes = sizeof(int4) * WARP_SIZE * kNumUnrolls;
     constexpr int kNumStages = 3;
@@ -843,7 +843,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
 #endif
       }
 
-#if defined(__NVCC__) || defined(__CUDACC__)
+#if defined(__NVCC__)
       // Flush all stores
       tma_store_wait();
       __syncwarp();
