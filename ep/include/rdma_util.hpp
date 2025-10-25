@@ -84,28 +84,28 @@ void fill_local_gid(ProxyCtx& S, RDMAConnectionInfo* local_info) {
 // Helper functions for ncclIbGetGidIndex
 static inline int get_gid_index_from_env() {
   static int gid_index = -1;
-  char const* env = getenv("NCCL_IB_GID_INDEX");
+  char const* env = getenv("UCCL_IB_GID_INDEX");
   if (env) gid_index = atoi(env);
   return gid_index;
 }
 
 static inline int get_routable_flid_gid_index_from_env() {
   static int routable_flid_gid_index = 1;
-  char const* env = getenv("NCCL_IB_ROUTABLE_FLID_GID_INDEX");
+  char const* env = getenv("UCCL_IB_ROUTABLE_FLID_GID_INDEX");
   if (env) routable_flid_gid_index = atoi(env);
   return routable_flid_gid_index;
 }
 
 static inline int get_roce_version_from_env() {
   static int roce_version = 2;
-  char const* env = getenv("NCCL_IB_ROCE_VERSION_NUM");
+  char const* env = getenv("UCCL_IB_ROCE_VERSION_NUM");
   if (env) roce_version = atoi(env);
   return roce_version;
 }
 
 static sa_family_t envIbAddrFamily(void) {
   sa_family_t family = AF_INET;
-  char const* env = getenv("NCCL_IB_ADDR_FAMILY");
+  char const* env = getenv("UCCL_IB_ADDR_FAMILY");
   if (env == NULL || strlen(env) == 0) {
     return family;
   }
@@ -125,7 +125,7 @@ static void* envIbAddrRange(sa_family_t af, int* mask) {
   static struct in6_addr addr6;
   void* ret = (af == AF_INET) ? (void*)&addr : (void*)&addr6;
 
-  char const* env = getenv("NCCL_IB_ADDR_RANGE");
+  char const* env = getenv("UCCL_IB_ADDR_RANGE");
   if (NULL == env || strlen(env) == 0) {
     return NULL;
   }
