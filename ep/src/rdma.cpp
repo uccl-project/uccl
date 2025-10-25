@@ -411,6 +411,7 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
     perror("Failed to query port");
     exit(1);
   }
+  ncclIbGetGidIndex(S.context, 1, &port_attr, &S.gid_index);
   local_info->qp_num = S.qp->qp_num;
   local_info->ack_qp_num = S.ack_qp->qp_num;
   local_info->recv_ack_qp_num = S.recv_ack_qp->qp_num;
@@ -542,12 +543,13 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote) {
   if (is_roce) {
     attr.ah_attr.is_global = 1;
     attr.ah_attr.port_num = 1;
-    attr.ah_attr.sl = 0;
+    attr.ah_attr.sl = 135;
     attr.ah_attr.src_path_bits = 0;
+    attr.ah_attr.grh.traffic_class = 3;
     attr.ah_attr.grh.hop_limit = 64;
     // Fill GID from remote_info
     memcpy(&attr.ah_attr.grh.dgid, remote->gid, 16);
-    attr.ah_attr.grh.sgid_index = 1;  // Assume GID index 1
+    attr.ah_attr.grh.sgid_index = S.gid_index;
   } else {
     attr.ah_attr.is_global = 0;
     attr.ah_attr.dlid = remote->lid;
@@ -863,7 +865,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
               remote_addr + cmd.bytes > remote_end) {
             fprintf(
                 stderr,
-                "[ERROR] Remote write OOB: addr=0x%llx len=%zu (base=0x%llx, "
+                "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
                 "size=%zu), cmd.req_rptr: 0x%llx\n",
                 (unsigned long long)remote_addr, cmd.bytes,
                 (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
@@ -1125,7 +1127,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         if (wrs[j].wr.rdma.remote_addr < ctx->remote_addr ||
             wrs[j].wr.rdma.remote_addr + cmd.bytes > remote_end) {
           fprintf(stderr,
-                  "[ERROR] Remote write OOB: addr=0x%llx len=%zu (base=0x%llx, "
+                  "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
                   "size=%zu), cmd.req_rptr: 0x%llx\n",
                   (unsigned long long)wrs[j].wr.rdma.remote_addr, cmd.bytes,
                   (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,

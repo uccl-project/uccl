@@ -19,6 +19,8 @@ if __name__ == "__main__":
         "-Wno-sign-compare",
         "-Wno-reorder",
         "-Wno-attributes",
+        "-Wno-unused-result",
+        "-Wno-unused-function",
     ]
     nvcc_flags = ["-O3", "-Xcompiler", "-O3"]
     sources = glob("./src/*.cu") + glob("./src/*.cpp") + glob("./src/*.cc")
