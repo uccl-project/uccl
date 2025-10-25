@@ -4,9 +4,11 @@ import numpy as np
 # ---------------------------
 # Data (Throughput in GB/s)
 # ---------------------------
-systems = ["UCCL-EP", "DeepEP", "UCCL-EP (EFA)"]
+systems = ["UCCL-EP", "DeepEP"]
+# systems = ["UCCL-EP", "DeepEP", "UCCL-EP (EFA)"]
 
 throughput_gbps = [42.5, 27.8, 10.9]
+throughput_gbps = [42.5, 27.8]
 
 idx = np.arange(len(systems))
 
@@ -28,7 +30,7 @@ plt.rcParams.update(
 # ---------------------------
 # Plot Throughput
 # ---------------------------
-plt.figure(figsize=(9, 6))
+plt.figure(figsize=(6, 6))
 bars = plt.bar(idx, throughput_gbps, color=["#1f77b4", "#ff7f0e", "#1f77b4"])
 plt.xticks(idx, systems, rotation=0)
 plt.xlabel("System")

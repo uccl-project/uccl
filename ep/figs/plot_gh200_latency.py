@@ -32,7 +32,7 @@ plt.rcParams.update(
 # ---------------------------
 # Plot Average Latency
 # ---------------------------
-plt.figure(figsize=(9, 6))
+plt.figure(figsize=(6, 6))
 bars = plt.bar(idx, lat_avg_us, color=["#1f77b4", "#ff7f0e", "#1f77b4"])
 plt.xticks(idx, systems, rotation=0)
 plt.xlabel("System")
