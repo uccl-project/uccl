@@ -135,10 +135,11 @@ build_p2p() {
   echo "[container] Copying P2P .so, collective.py and utils.py to uccl/"
   mkdir -p uccl
   mkdir -p uccl/lib
+  mkdir -p uccl/utils
   cp p2p/p2p.*.so uccl/
   cp p2p/collective.py uccl/
   cp p2p/transfer.py uccl/
-  cp p2p/utils.py uccl/
+  cp p2p/utils/* uccl/utils
 }
 
 build_ep() {
