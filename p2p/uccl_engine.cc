@@ -1,5 +1,9 @@
 #include "uccl_engine.h"
+#ifdef USE_TCPX
+#include "tcpx_engine.h"
+#else
 #include "engine.h"
+#endif
 #include "util/util.h"
 #include <arpa/inet.h>
 #include <algorithm>
@@ -16,6 +20,14 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+
+#ifdef USE_TCPX
+using FifoItem = tcpx::FifoItem;
+using Endpoint = tcpx::Endpoint;
+#else
+using FifoItem = uccl::FifoItem;
+using Endpoint = Endpoint;
+#endif
 
 struct uccl_engine {
   Endpoint* endpoint;
@@ -36,7 +48,7 @@ struct uccl_mr {
 };
 
 typedef struct {
-  uccl::FifoItem fifo_item;
+  FifoItem fifo_item;
   bool is_valid;
 } fifo_item_t;
 
@@ -96,7 +108,7 @@ void listener_thread_func(uccl_conn_t* conn) {
         }
         mr_id = local_mem_iter->second;
 
-        char out_buf[sizeof(uccl::FifoItem)];
+        char out_buf[sizeof(FifoItem)];
         conn->engine->endpoint->advertise(conn->conn_id, mr_id,
                                           (void*)tx_data.data_ptr,
                                           tx_data.data_size, out_buf);
@@ -104,7 +116,7 @@ void listener_thread_func(uccl_conn_t* conn) {
         md_t response_md;
         response_md.op = UCCL_FIFO;
         fifo_msg_t fifo_data;
-        memcpy(fifo_data.fifo_buf, out_buf, sizeof(uccl::FifoItem));
+        memcpy(fifo_data.fifo_buf, out_buf, sizeof(FifoItem));
         response_md.data.fifo_data = fifo_data;
 
         ssize_t result = send(conn->sock_fd, &response_md, sizeof(md_t), 0);
@@ -173,7 +185,7 @@ void listener_thread_func(uccl_conn_t* conn) {
           }
           mr_id = local_mem_iter->second;
 
-          char out_buf[sizeof(uccl::FifoItem)];
+          char out_buf[sizeof(FifoItem)];
           conn->engine->endpoint->advertise(conn->conn_id, mr_id,
                                             (void*)tx_data.data_ptr,
                                             tx_data.data_size, out_buf);
@@ -182,7 +194,7 @@ void listener_thread_func(uccl_conn_t* conn) {
           response_md.op = UCCL_FIFO;
           fifo_msg_t fifo_data;
           fifo_data.id = i;
-          memcpy(fifo_data.fifo_buf, out_buf, sizeof(uccl::FifoItem));
+          memcpy(fifo_data.fifo_buf, out_buf, sizeof(FifoItem));
           response_md.data.fifo_data = fifo_data;
 
           // TODO: Check if this has to sent in bulk or individually
@@ -251,8 +263,8 @@ void listener_thread_func(uccl_conn_t* conn) {
       }
       case UCCL_FIFO: {
         fifo_msg_t fifo_data = md.data.fifo_data;
-        uccl::FifoItem fifo_item;
-        memcpy(&fifo_item, fifo_data.fifo_buf, sizeof(uccl::FifoItem));
+        FifoItem fifo_item;
+        memcpy(&fifo_item, fifo_data.fifo_buf, sizeof(FifoItem));
         fifo_item_t* f_item = new fifo_item_t;
         f_item->fifo_item = fifo_item;
         f_item->is_valid = true;
@@ -355,8 +367,8 @@ int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
                      size_t size, void* slot_item_ptr, uint64_t* transfer_id) {
   if (!conn || !mr || !data) return -1;
 
-  uccl::FifoItem slot_item;
-  slot_item = *static_cast<uccl::FifoItem*>(slot_item_ptr);
+  FifoItem slot_item;
+  slot_item = *static_cast<FifoItem*>(slot_item_ptr);
 
   return conn->engine->endpoint->read_async(conn->conn_id, mr->mr_id,
                                             const_cast<void*>(data), size,
@@ -535,7 +547,7 @@ int uccl_engine_get_fifo_item(uccl_conn_t* conn, int id, void* fifo_item) {
     return -1;
   }
   if (it->second->is_valid) {
-    memcpy(fifo_item, &it->second->fifo_item, sizeof(uccl::FifoItem));
+    memcpy(fifo_item, &it->second->fifo_item, sizeof(FifoItem));
     it->second->is_valid = false;
     return 0;
   } else {

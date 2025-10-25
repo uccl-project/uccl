@@ -1,5 +1,8 @@
 # Makefile for UCCL P2P Engine pybind11 project
 
+# TCPX optional integration
+USE_TCPX ?= $(shell echo $${USE_TCPX:-0})
+
 # Compiler and flags
 CUDA_HOME ?= /usr/local/cuda
 CUDA_INC  := $(CUDA_HOME)/include
@@ -8,7 +11,13 @@ RDMA_HOME := ../collective/rdma
 CXX := g++
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I../include -I$(RDMA_HOME) -I$(CUDA_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
-	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -lglog -lgflags -lgtest -lz -lelf -libverbs -lpthread
+	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -lglog -lgflags -lgtest -lz -lelf -lpthread
+
+ifeq ($(USE_TCPX),1)
+	CXXFLAGS += -DUSE_TCPX
+else
+	CXXFLAGS += -libverbs
+endif
 
 # Python and pybind11 configuration
 PYTHON          ?= python3
@@ -16,7 +25,6 @@ PYTHON_CONFIG    = $(PYTHON)-config
 PYEXT           := $(shell $(PYTHON_CONFIG) --extension-suffix)
 PYBIND11_INCLUDES := $(shell $(PYTHON) -m pybind11 --includes)
 PYTHON_LDFLAGS := $(shell $(PYTHON_CONFIG) --ldflags)
-
 PYTHON_LIB := $(shell $(PYTHON_CONFIG) --ldflags | grep -o 'python[0-9.]*' | head -1 | sed 's/^/-l/')
 
 # Installation path
@@ -28,7 +36,11 @@ INCDIR ?= $(PREFIX)/include
 
 LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda \
                   -Wl,-rpath,$(CUDA_LIB) -lglog -lgflags -lgtest \
-                  -lz -lelf -libverbs -lpthread
+                  -lz -lelf -lpthread
+				  
+ifneq ($(USE_TCPX),1)
+	LDFLAGS += -libverbs
+endif
 
 # Target and source files
 TARGET   := p2p$(PYEXT)
@@ -36,14 +48,30 @@ PLUGIN_SO := libuccl_engine.so
 CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
+ifeq ($(USE_TCPX),1)
+SOURCES := tcpx_engine.cc # TODO: pybind_tcpx_engine.cc
+CORE_OBJECT := tcpx_engine.o
+else
 SOURCES := engine.cc pybind_engine.cc
 CORE_OBJECT := engine.o
+endif
 OBJECTS := $(SOURCES:.cc=.o)
 
+# Build the shared libraries
+ifeq ($(USE_TCPX),1)
+# Default target
+all: $(PLUGIN_SO)
+
+# only build plugin for tcpx now, TODO: add tcpx to p2p		  
+$(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECT)
+	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) \
+	      -L$(CUDA_LIB) -lcudart -lcuda \
+	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
+	      -Wl,-rpath,$(CUDA_LIB) $(PYTHON_LIB) -lz -lelf
+else
 # Default target
 all: $(TARGET) $(PLUGIN_SO)
 
-# Build the shared libraries
 $(TARGET): $(OBJECTS) $(RDMA_HOME)/librdma.a
 	$(CXX) $(OBJECTS) $(RDMA_HOME)/librdma.a \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
@@ -56,12 +84,12 @@ $(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_HOME)/librdma_plugin.a
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB) $(PYTHON_LIB) -libverbs -lz -lelf
 
-
 $(RDMA_HOME)/librdma.a: $(filter-out $(RDMA_HOME)/nccl_plugin.cc, $(wildcard $(RDMA_HOME)/*.cc)) $(RDMA_HOME)/*.h
 	make -C $(RDMA_HOME) librdma.a -j$(nproc)
 
 $(RDMA_HOME)/librdma_plugin.a: $(filter-out $(RDMA_HOME)/nccl_plugin.cc, $(wildcard $(RDMA_HOME)/*.cc)) $(RDMA_HOME)/*.h
 	make CXXFLAGS="-DDISABLE_CALL_ONCE_STATIC" -C $(RDMA_HOME) librdma_plugin.a
+endif
 
 # Compile source files
 %.o: %.cc
@@ -73,16 +101,23 @@ install: $(TARGET) $(PLUGIN_SO)
 	@cp $(TARGET) $(INSTALL_DIR)/
 	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(TARGET)"
 	install -m 755 $(PLUGIN_SO) $(LIBDIR)/
+ifneq ($(USE_TCPX),1)
 	install -m 755 $(RDMA_HOME)/librdma_plugin.a $(LIBDIR)/
+endif
 	install -m 644 $(CAPI_HEADER) $(INCDIR)/
 # Clean build artifacts
 clean:
-	rm -f $(OBJECTS) $(CORE_OBJECT) $(CAPI_OBJECT) $(TARGET) $(PLUGIN_SO)
+	rm -f $(OBJECTS) $(CORE_OBJECT) $(CAPI_OBJECT) $(PLUGIN_SO)
+ifneq ($(USE_TCPX),1)
+	rm -f $(TARGET)
 	make -C $(RDMA_HOME) clean -j$(nproc)
+endif
 
 # Test the module
 test: $(TARGET)
+ifneq ($(USE_TCPX),1)
 	$(PYTHON) tests/test_engine_write.py
+endif
 
 # Install pybind11 if not available
 install-deps:
