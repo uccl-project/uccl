@@ -116,16 +116,30 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   // Get GPU pcie path
   auto gpu_device_path = gpu_cards[gpu_idx];
   // Find the RDMA NIC that is closest to the GPU.
-
   std::vector<std::pair<std::string, uint32_t>> dist;
   dist.reserve(ib_nics.size());
 
+  // Conforming to UCCL_IB_HCA filter.
+  char* ib_hca = getenv("UCCL_IB_HCA");
+  struct uccl::ib_dev user_ib_ifs[MAX_IB_DEVS];
+  bool searchNot = ib_hca && ib_hca[0] == '^';
+  if (searchNot) ib_hca++;
+  bool searchExact = ib_hca && ib_hca[0] == '=';
+  if (searchExact) ib_hca++;
+  int num_ib_ifs = uccl::parse_interfaces(ib_hca, user_ib_ifs, MAX_IB_DEVS);
+
   std::string selected_nic_name;
   for (auto& nic : ib_nics) {
+    if (!(uccl::match_if_list(nic.first.c_str(), 1, user_ib_ifs, num_ib_ifs,
+                              searchExact) ^
+          searchNot)) {
+      continue;
+    }
     uint32_t d = uccl::safe_pcie_distance(gpu_device_path, nic.second);
     dist.emplace_back(nic.first, d);
   }
 
+  // Find the NIC with the minimum distance.
   if (dist.empty()) {
     fprintf(stderr, "[WARN] no NIC found, defaulting to empty\n");
     selected_nic_name.clear();
@@ -165,25 +179,8 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     }
   }
 
-  // Use UCCL_XXX first, if not set, use NCCL_XXX
-  char* ib_hca = getenv("UCCL_IB_HCA");
-  if (!ib_hca) ib_hca = getenv("NCCL_IB_HCA");
-
-  struct uccl::ib_dev user_ib_ifs[MAX_IB_DEVS];
-  bool searchNot = ib_hca && ib_hca[0] == '^';
-  if (searchNot) ib_hca++;
-  bool searchExact = ib_hca && ib_hca[0] == '=';
-  if (searchExact) ib_hca++;
-
-  int num_ib_ifs = uccl::parse_interfaces(ib_hca, user_ib_ifs, MAX_IB_DEVS);
-
   int selected_dev_idx = -1;
   for (int i = 0; i < num_devices; i++) {
-    if (!(uccl::match_if_list(ibv_get_device_name(dev_list[i]), 1, user_ib_ifs,
-                              num_ib_ifs, searchExact) ^
-          searchNot)) {
-      continue;
-    }
     if (strcmp(ibv_get_device_name(dev_list[i]), selected_nic_name.c_str()) ==
         0) {
       selected_dev_idx = i;
