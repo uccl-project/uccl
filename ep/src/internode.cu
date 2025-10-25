@@ -577,7 +577,7 @@ __global__ void __launch_bounds__(
   __shared__ uint32_t rdma_send_channel_window[kNumRDMARanks];
   auto sync_rdma_sender_smem = []() {
     asm volatile(
-        "barrier.sync 0, %0;" ::"r"((kNumDispatchRDMASenderWarps + 1) * 32));
+        "bar.sync 0, %0;" ::"r"((kNumDispatchRDMASenderWarps + 1) * 32));
   };
 
   // TMA stuffs
@@ -602,7 +602,7 @@ __global__ void __launch_bounds__(
                                               [kNumRDMARanks];
   __shared__ bool volatile forward_channel_retired[NUM_MAX_NVL_PEERS];
   auto sync_forwarder_smem = []() {
-    asm volatile("barrier.sync 1, %0;" ::"r"((NUM_MAX_NVL_PEERS + 1) * 32));
+    asm volatile("bar.sync 1, %0;" ::"r"((NUM_MAX_NVL_PEERS + 1) * 32));
   };
 
   if (warp_role == WarpRole::kRDMASender) {
@@ -1917,13 +1917,13 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
     auto tma_buffer =
         smem_tma_buffer + dst_nvl_rank * kNumTMABytesPerSenderWarp;
     auto tma_mbarrier =
-        reinterpret_cast<uint64_t*>(tma_buffer + num_bytes_per_token);
+        reinterpret_cast<uint64_t*>(tma_buffer + hidden_bytes);
     uint32_t tma_phase = 0;
     if (lane_id == 0) {
       mbarrier_init(tma_mbarrier, 1);
       fence_view_async_shared();
       fence_barrier_init();
-      EP_DEVICE_ASSERT(num_bytes_per_token + sizeof(uint64_t) <=
+      EP_DEVICE_ASSERT(hidden_bytes + sizeof(uint64_t) <=
                        kNumTMABytesPerSenderWarp);
     }
     __syncwarp();
@@ -2097,10 +2097,10 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                                                    [kNumRDMARanks];
     __shared__ bool volatile rdma_receiver_retired[kNumRDMAReceivers];
     auto sync_forwarder_smem = [=]() {
-      asm volatile("barrier.sync 0, %0;" ::"r"((kNumForwarders + 1) * 32));
+      asm volatile("bar.sync 0, %0;" ::"r"((kNumForwarders + 1) * 32));
     };
     auto sync_rdma_receiver_smem = [=]() {
-      asm volatile("barrier.sync 1, %0;" ::"r"((kNumRDMAReceivers + 1) * 32));
+      asm volatile("bar.sync 1, %0;" ::"r"((kNumRDMAReceivers + 1) * 32));
     };
 
     if (warp_role == WarpRole::kNVLAndRDMAForwarder) {
@@ -2190,7 +2190,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
           // num_chunked_tokens` Here, `token_start_idx` is the actual tail
           int num_used_slots =
               token_start_idx -
-              ld_acquire_sys_global(rdma_channel_head.buffer(dst_rdma_rank));
+              ld_volatile_global(rdma_channel_head.buffer(dst_rdma_rank));
           if (num_max_rdma_chunked_recv_tokens - num_used_slots >=
               num_chunked_tokens)
             break;
@@ -2202,13 +2202,12 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                 "RDMA: %d, nvl: %d, dst RDMA: %d, head: %ld, tail: %d, "
                 "chunked: %d\n",
                 channel_id, rdma_rank, nvl_rank, dst_rdma_rank,
-                ld_acquire_sys_global(rdma_channel_head.buffer(dst_rdma_rank)),
+                ld_volatile_global(rdma_channel_head.buffer(dst_rdma_rank)),
                 token_start_idx, num_chunked_tokens);
             trap();
           }
         }
         sync_large_warp();
-        unsigned long long rdma_wait_end = clock64();
 
         // Combine and write to the RDMA buffer
         for (int token_idx = token_start_idx + sub_warp_id;
