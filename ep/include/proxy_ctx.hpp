@@ -47,6 +47,7 @@ struct ProxyCtx {
   ibv_qp* ack_qp = nullptr;
   ibv_qp* recv_ack_qp = nullptr;
   int numa_node = -1;
+  int gid_index = -1;
 
   uint32_t dst_qpn;
   uint32_t dst_ack_qpn;

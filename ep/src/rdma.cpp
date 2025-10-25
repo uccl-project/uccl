@@ -411,6 +411,7 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
     perror("Failed to query port");
     exit(1);
   }
+  ncclIbGetGidIndex(S.context, 1, &port_attr, &S.gid_index);
   local_info->qp_num = S.qp->qp_num;
   local_info->ack_qp_num = S.ack_qp->qp_num;
   local_info->recv_ack_qp_num = S.recv_ack_qp->qp_num;
@@ -548,7 +549,7 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote) {
     attr.ah_attr.grh.hop_limit = 64;
     // Fill GID from remote_info
     memcpy(&attr.ah_attr.grh.dgid, remote->gid, 16);
-    attr.ah_attr.grh.sgid_index = 1;  // Assume GID index 1
+    attr.ah_attr.grh.sgid_index = S.gid_index;
   } else {
     attr.ah_attr.is_global = 0;
     attr.ah_attr.dlid = remote->lid;
