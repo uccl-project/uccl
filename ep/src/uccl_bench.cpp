@@ -51,6 +51,7 @@ uintptr_t Bench::ring_addr(int i) const {
   return reinterpret_cast<uintptr_t>(&env_.rbs[i]);
 #else
   assert(false && "TODO: uccl_bench does not support mscclpp fifo");
+  return 0;
 #endif
 }
 
