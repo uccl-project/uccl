@@ -23,7 +23,7 @@ make -j install
 build rocm image
 ```bash
 # requiring rocm7
-pip install --no-cache-dir --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
+pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
 # under uccl
 bash build_and_install.sh rocm ep
 ```
