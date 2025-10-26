@@ -1,15 +1,15 @@
-# UCCL GPU-Driven Expert-parallelism Engine
+# UCCL GPU-Driven Expert Parallelism Engine
 
-UCCL EP engine provides a similar interface from [DeepEP](https://github.com/deepseek-ai/DeepEP). 
+GPU-driven communication (e.g., DeepEP) is the key to efficient and large-scale EP, but it cannot run on heterogeneous platforms in the public cloud due to tight coupling between GPU and NIC. UCCL-EP has exactly the same interface and functionality as [DeepEP](https://github.com/deepseek-ai/DeepEP), but allows you to run GPU-driven communication for MoE models on public clouds, such as AWS, with superior performance to the state-of-the-art. Our ultimate goal with UCCL-EP is to democratize EP for heterogeneous GPUs and NIC vendors, including AMD GPUs, Broadcom NICs, AMD Pensando NICs, and more. 
 
 For UCCL's host/CPU-driven P2P engine, see [p2p](../p2p/) folder.
 
 ## Installing dependencies
 
-We provide a script to install dependencies (Tested on p5en)
+We provide a script to install dependencies (tested on p5en)
 
 ```bash
-./install_deps.sh [env_name]
+./install_deps.sh
 ```
 
 ## Build on CUDA for testing
@@ -20,7 +20,7 @@ Installing `ep` as a Python package:
 bash build_and_install.sh cuda ep
 ```
 
-Alternatively, in a Python environment 
+Alternatively, in a Python environment:
 ```bash
 # under uccl/ep
 make -j install
@@ -83,28 +83,26 @@ In `ep` folder, the benchmark can be run with `torchrun`.
 ### Intranode Test
 
 ```bash
-OMP_NUM_THREADS=8 torchrun \
-  --standalone --nproc_per_node=8 bench/test_intranode.py \
-  --num-tokens 4096 --hidden 7168 --num-topk 8 --num-experts 256
+torchrun --standalone --nproc_per_node=8 \
+  bench/test_intranode.py --num-tokens 4096 \
+  --hidden 7168 --num-topk 8 --num-experts 256
 ```
 
 ### Internode Low Latency Test
 
 ```bash
-OMP_NUM_THREADS=8 torchrun \
-  --nnodes=3 --nproc_per_node=8 \
-  --node_rank=0 \
-  --master_addr=10.1.227.34 --master_port=12357 \
-  bench/test_low_latency.py \
-  --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=288
+torchrun --nnodes=4 --nproc_per_node=8 --node_rank=<rank> \
+  --master_addr=<ip> --master_port=12355 \
+  bench/test_low_latency.py --num-tokens=128 \
+  --hidden=7168 --num-topk=8 --num-experts=288
 ```
 
 ### Internode Normal Mode (Throughput) Test
 
 ```bash
-torchrun --nnodes=4 --nproc_per_node=8 --node_rank=0 \
-  --master_addr=ip --master_port=12355 \
- bench/test_internode.py  --num-tokens=4096 \
+torchrun --nnodes=4 --nproc_per_node=8 --node_rank=<rank> \
+  --master_addr=<ip> --master_port=12355 \
+  bench/test_internode.py  --num-tokens=4096 \
   --hidden=7168 --num-topk=8 --num-experts=288 --test-ll-compatibility
 ```
 
