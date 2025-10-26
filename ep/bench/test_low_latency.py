@@ -4,13 +4,13 @@ On first node:
 torchrun --nnodes=2 --nproc_per_node=1 --node_rank=0 \
   --master_addr=10.1.1.171 --master_port=12355 \
   bench/test_low_latency.py --num-tokens=128 \
-  --hidden=7168 --num-topk=1 --num-experts=28
+  --hidden=7168 --num-topk=8 --num-experts=288
 
 On second node:
 torchrun --nnodes=2 --nproc_per_node=1 --node_rank=1 \
   --master_addr=10.1.1.171 --master_port=12355 \
   bench/test_low_latency.py --num-tokens=128 \
-  --hidden=7168 --num-topk=1 --num-experts=28
+  --hidden=7168 --num-topk=8 --num-experts=288
 """
 
 import argparse
@@ -350,6 +350,7 @@ def test_main(
             return_recv_hook=return_recv_hook,
         )
         large_gemm_with_hook(hook) if return_recv_hook else None
+        dist.barrier(group=group)
 
     print("✓ All correctness tests passed!", flush=True)
     # Calculate bandwidth
