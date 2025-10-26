@@ -384,6 +384,7 @@ def bench_kineto(
                 for _ in range(num_tests):
                     fn()
                 torch.cuda.synchronize()
+                dist.barrier()
                 prof.step()
 
     # Parse the profiling table

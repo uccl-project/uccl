@@ -1,7 +1,7 @@
 """
 This is the same test_intranode.py test in DeepEP's repo.
 OMP_NUM_THREADS=8 torchrun --standalone --nproc_per_node=8 bench/test_intranode.py \
-    --num-tokens 2048 --hidden 3584 --num-topk 4 --num-experts 128
+    --num-tokens 4096 --hidden 7168 --num-topk 8 --num-experts 256
 """
 
 import argparse
