@@ -113,7 +113,7 @@ torchrun --nnodes=4 --nproc_per_node=8 --node_rank=0 \
 ### Normal kernels with NVLink and RDMA forwarding
 
 We test normal kernels on **H200 (8× GPUs per node)** with each node connected to an **EFA 400 Gb/s RDMA** network card.
-We follow the **DeepSeek-V3/R1 pretraining** configuration (4096 tokens per batch, 7168 hidden, top-4 groups, top-8 experts, FP8 dispatching and BF16 combining).
+We follow the **DeepSeek-V3 pretraining** configuration (4096 tokens per batch, 7168 hidden, top-4 groups, top-8 experts, FP8 dispatching and BF16 combining).
 
 |   Type    | Dispatch #EP | Bottleneck bandwidth | Combine #EP | Bottleneck bandwidth |
 |:---------:|:-------------:|:--------------------:|:------------:|:--------------------:|
@@ -124,7 +124,7 @@ We follow the **DeepSeek-V3/R1 pretraining** configuration (4096 tokens per batc
 
 ### Low-latency kernels with pure RDMA
 
-We test low-latency kernels on **H200 (8× GPUs + EFA 400 Gb/s)** following a **DeepSeek-V3/R1 production-style** setting (128 tokens per batch, 7168 hidden, top-8 experts, FP8 dispatch / BF16 combine).
+We test low-latency kernels on **H200 (8× GPUs + EFA 400 Gb/s)** following a **DeepSeek-V3 inference** setting (128 tokens per batch, 7168 hidden, top-8 experts, FP8 dispatch / BF16 combine).
 
 | Dispatch #EP | Latency | RDMA bandwidth | Combine #EP | Latency | RDMA bandwidth |
 |:-------------:|:--------:|:---------------:|:------------:|:--------:|:---------------:|
