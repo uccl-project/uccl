@@ -4,6 +4,14 @@ UCCL EP engine provides a similar interface from [DeepEP](https://github.com/dee
 
 For UCCL's host/CPU-driven P2P engine, see [p2p](../p2p/) folder.
 
+## Installing dependencies
+
+We provide a script to install dependencies (Tested on p5en)
+
+```bash
+./install_deps.sh [env_name]
+```
+
 ## Build on CUDA for testing
 
 Installing `ep` as a Python package:
