@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "transport_efa.h"
 #include "util/util.h"
 #include <arpa/inet.h>
 #include <glog/logging.h>
@@ -20,6 +21,7 @@
 int const kMaxNumGPUs = 8;
 // Assume the local and remote GPUs have the same GPU-NIC mapping.
 uint8_t gpu_to_dev[kMaxNumGPUs] = {0};
+std::vector<int> gpu_to_dev_efa[kMaxNumGPUs];
 std::once_flag glog_init_once;
 constexpr uint32_t kGpuStreamId = 0;
 thread_local bool inside_python = false;
@@ -35,8 +37,11 @@ inline void check_python_signals() {
 
 Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
     : local_gpu_idx_(local_gpu_idx), num_cpus_(num_cpus) {
+  is_efa_available_ = transport_efa::is_efa_available();
   std::cout << "Creating Engine with GPU index: " << local_gpu_idx
-            << ", CPUs: " << num_cpus << std::endl;
+      << ", CPUs: " << num_cpus << std::endl;
+
+
   int n_streams = std::max(1, (int)ucclParamNumGpuRtStreams());
 
   int ngpus = 0;
@@ -63,25 +68,45 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   google::InstallFailureSignalHandler();
 
   // Initialize the RDMA endpoint with lazy creation.
-  ep_ = new uccl::RDMAEndpoint(num_cpus_);
+  if (is_efa_available_) {
+    ep_efa_ = new transport_efa::RDMAEndpoint(local_gpu_idx_);
+  }
+  else {
+    ep_ = new uccl::RDMAEndpoint(num_cpus_);
+  }
 
   // Only initialize mapping for detected GPUs
   int ngpus_detected = 0;
   GPU_RT_CHECK(gpuGetDeviceCount(&ngpus_detected));
   for (int i = 0; i < std::min(ngpus_detected, kMaxNumGPUs); i++) {
-    gpu_to_dev[i] = ep_->get_best_dev_idx(i);
+    if (is_efa_available_) {
+      gpu_to_dev_efa[i] = ep_efa_->get_best_dev_idx(i);
+    } else {
+      gpu_to_dev[i] = ep_->get_best_dev_idx(i);
+    }
   }
   // Initialize remaining slots to 0 (fallback to first device)
   for (int i = ngpus_detected; i < kMaxNumGPUs; i++) {
-    gpu_to_dev[i] = 0;
+    if (is_efa_available_) {
+      gpu_to_dev_efa[i].clear();
+    } else {
+      gpu_to_dev[i] = 0;
+    }
   }
+  
+  /* TODO
   numa_node_ =
       uccl::RDMAFactory::get_factory_dev(gpu_to_dev[local_gpu_idx_])->numa_node;
+  */
 
   // Initialize the engine based on the GPU index.
   std::cout << "Lazy creation of engine, GPU index: " << local_gpu_idx_
             << std::endl;
-  ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_], true);
+  if (is_efa_available_) {
+    ep_efa_->initialize_engine_by_dev(gpu_to_dev_efa[local_gpu_idx_]);
+  } else {
+    ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_], true);
+  }
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
 
   send_unified_task_ring_ =
@@ -89,11 +114,13 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   recv_unified_task_ring_ =
       uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
 
+  /* TODO
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
 
   // Initialize UDS socket for local connections
   init_uds_socket();
+  */
 
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
@@ -101,17 +128,21 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
 Endpoint::~Endpoint() {
   std::cout << "Destroying Engine..." << std::endl;
 
-  stop_.store(true, std::memory_order_release);
+  /*stop_.store(true, std::memory_order_release);
 
   send_proxy_thread_.join();
-  recv_proxy_thread_.join();
+  recv_proxy_thread_.join();*/
 
   free(send_unified_task_ring_);
   free(recv_unified_task_ring_);
 
-  delete ep_;
+  if (is_efa_available_) {
+    delete ep_efa_;
+  } else {
+    delete ep_;
+  }
 
-  {
+  /*{
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
     for (auto& [conn_id, conn] : conn_id_to_conn_) {
       // Close UDS socket if it exists
@@ -126,7 +157,7 @@ Endpoint::~Endpoint() {
     for (auto& [mr_id, mr] : mr_id_to_mr_) {
       delete mr;
     }
-  }
+  }*/
 
   if (!streams_.empty()) {
     GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
@@ -135,7 +166,7 @@ Endpoint::~Endpoint() {
   }
 
   // Cleanup UDS socket
-  cleanup_uds_socket();
+  /*cleanup_uds_socket();*/
 
   std::cout << "Engine destroyed" << std::endl;
 }
@@ -174,7 +205,12 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
 
 std::vector<uint8_t> Endpoint::get_metadata() {
   std::string ip_str = get_oob_ip();
-  uint16_t port = ep_->get_p2p_listen_port(gpu_to_dev[local_gpu_idx_]);
+  uint16_t port;
+  if (is_efa_available_) {
+    port = ep_efa_->get_p2p_listen_port();
+  } else {
+    port = ep_->get_p2p_listen_port(gpu_to_dev[local_gpu_idx_]);
+  }
 
   bool is_ipv6 = ip_str.find(':') != std::string::npos;
   size_t ip_len = is_ipv6 ? 16 : 4;

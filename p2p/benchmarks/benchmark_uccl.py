@@ -49,6 +49,8 @@ def _pretty_size(num_bytes: int) -> str:
 
 
 def _run_server(args, ep, remote_metadata):
+    pass
+    """ TODO:
     ok, r_ip, r_gpu, conn_id = ep.accept()
     assert ok, "[Server] Failed to accept RDMA connection"
     print(f"[Server] Accept from {r_ip} (GPU {r_gpu}) conn_id={conn_id}")
@@ -145,10 +147,12 @@ def _run_server(args, ep, remote_metadata):
             f"[Server] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
         )
     print("[Server] Benchmark complete")
+    """
 
 
 def _run_client(args, ep, remote_metadata):
     ip, port, r_gpu = p2p.Endpoint.parse_metadata(remote_metadata)
+    """ TODO
     ok, conn_id = ep.connect(ip, r_gpu, remote_port=port)
     assert ok, "[Client] Failed to connect to server"
     print(f"[Client] Connected to {ip}:{port} (GPU {r_gpu}) conn_id={conn_id}")
@@ -242,6 +246,7 @@ def _run_client(args, ep, remote_metadata):
             f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
         )
     print("[Client] Benchmark complete")
+    """
 
 
 def _run_server_dual(args, ep, remote_metadata):
@@ -552,6 +557,7 @@ def main():
 
     ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
     local_metadata = ep.get_metadata()
+    print(f"Local metadata: {local_metadata}")
 
     # This also serves as a barrier to guarantee both processes have created the endpoint
     if rank == 0:
