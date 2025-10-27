@@ -82,28 +82,7 @@ pytest -svx tests/test_all_to_all.py ##pplx
 
 Results saved to: `uccl/ep/bench/data/<timestamp>_unified_moe_separated.tsv`
 
-## Command Line Options
 
-- `--dp-size`: Data parallel size (default: 1)
-- `--in-dtype`: Input dtype: `bfloat16`, `float16`, `float8_e4m3fn`, `float8_e5m2` (default: `float8_e4m3fn`)
-- `--out-dtype`: Output dtype: `bfloat16`, `float16`, `float8_e4m3fn`, `float8_e5m2`  (default: `bfloat16`)
-
-## Configuration
-
-### Default Data Types
-- `--in-dtype`: Default is `float8_e4m3fn` (options: `bfloat16`, `float16`, `float8_e4m3fn`, `float8_e5m2`)
-- `--out-dtype`: Default is `bfloat16` (options: `bfloat16`, `float16`, `float8_e4m3fn`, `float8_e5m2`)
-
-### Testing Larger Workloads
-To test with larger workloads, you can manually configure the `configs` list in `bench_nvshmem_spare_uccl.py`:
-```python
-configs = [
-    # Custom configurations: (num_experts, experts_per_token, hidden_dim, max_num_tokens)
-    MoEConfig(128, 8, 4096, 8192, in_dtype, out_dtype),
-    MoEConfig(256, 16, 8192, 16384, in_dtype, out_dtype),
-    # Add your custom configs here...
-]
-```
 
 
 
