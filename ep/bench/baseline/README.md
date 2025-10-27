@@ -3,20 +3,10 @@
 ## Methods
 
 1. **PPLX Kernel EP**  
-   Specialized expert parallelism kernel implementation
-### Standard Implementations
-2. **PyTorch Distributed**  
-3. **NVSHMEM**  
-   
+2. **CUDA + PyTorch Distributed**  
+3. **CUDA + NVSHMEM**  
 
-### Optimized Implementations
-4. **CUDA + PyTorch Distributed**  
-5. **CUDA + NVSHMEM**  
 
----
-**Standard:** Python-based packing/unpacking operations.
-
-**Key Optimization:** Efficient CUDA kernels for packing/unpacking operations significantly reduce overhead compared to Python-based implementations.
 
 ## Requirements
 ### 1. Build and install [pplx-kernels](https://github.com/perplexityai/pplx-kernels)
@@ -45,7 +35,7 @@ python bench_nvshmem_sparse_uccl.py --dp-size 1
 python bench_nvshmem_sparse_uccl.py --dp-size 1 --in-dtype float16
 ```
 
-### 3. Run Benchmark for pplx (if you already installed)
+### 3. Run Benchmark for pplx 
 
 ```bash
 cd pplx-kernels
@@ -62,9 +52,13 @@ export MASTER_PORT=29500
 export WORLD_SIZE=<total_gpus>
 export WORLD_LOCAL_SIZE=<gpus_per_node>
 export NODE_RANK=0
+## Run NVSHMEM and PyTorch Distributed
 python bench_nvshmem_sparse_uccl.py --dp-size 1
-pytest -svx tests/test_all_to_all.py ##pplx
+## Run PPLX Kernel EP
+pytest -svx tests/test_all_to_all.py 
 ```
+
+
 
 **Node 1+ (Workers):**
 ```bash
@@ -73,8 +67,10 @@ export MASTER_PORT=29500
 export WORLD_SIZE=<total_gpus>
 export WORLD_LOCAL_SIZE=<gpus_per_node>
 export NODE_RANK=<node_id>
+## Run NVSHMEM and PyTorch Distributed
 python bench_nvshmem_sparse_uccl.py --dp-size 1
-pytest -svx tests/test_all_to_all.py ##pplx
+## Run PPLX Kernel EP
+pytest -svx tests/test_all_to_all.py 
 ```
 
 ## Output
