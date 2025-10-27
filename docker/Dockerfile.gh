@@ -47,4 +47,6 @@ RUN ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python3 && \
 
 WORKDIR /io
 
+ENV GPU_NAME=GH200
+
 CMD ["bash"]

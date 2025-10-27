@@ -22,7 +22,7 @@ else
 endif
 
 ARCH := $(shell uname -m)
-GPU_NAME := $(shell nvidia-smi --query-gpu=name --format=csv,noheader | head -n1)
+GPU_NAME ?= $(shell nvidia-smi --query-gpu=name --format=csv,noheader | head -n1)
 CPU_IS_ARM64 := 0
 GPU_IS_HOPPER := 0
 ifeq ($(ARCH),aarch64)
