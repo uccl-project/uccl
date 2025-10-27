@@ -29,24 +29,22 @@ def warmup_all2all_check(
     world_size = dist.get_world_size()
     rank = dist.get_rank()
 
-    send_chunks = [
-        torch.full(
-            (1, chunk),
-            fill_value=float(rank + 1),
-            dtype=dtype,
-            device=device,
-        )
-        for _ in range(world_size)
-    ]
-    recv_chunks = [
-        torch.full(
-            (1, chunk),
-            fill_value=float(888),
-            dtype=dtype,
-            device=device,
-        )
-        for _ in range(world_size)
-    ]
+    send_chunks_tensor = torch.full(
+        (world_size, 1, chunk),
+        fill_value=float(rank + 1),
+        dtype=dtype,
+        device=device,
+    )
+
+    recv_chunks_tensor = torch.full(
+        (world_size, 1, chunk),
+        fill_value=float(888),
+        dtype=dtype,
+        device=device,
+    )
+
+    send_chunks = [send_chunks_tensor[i] for i in range(world_size)]
+    recv_chunks = [recv_chunks_tensor[i] for i in range(world_size)]
     # recv_chunks = torch.empty_like(send_chunks, device=device)
 
     sync_all()
@@ -58,24 +56,28 @@ def warmup_all2all_check(
     # recv_chunks = recv_tensor.view(world_size, -1)
     # send
     print(f"[Rank {rank}] send_chunks: {send_chunks}")
-
+    collective.register_tensor(send_chunks_tensor)
+    print(send_chunks_tensor.data_ptr())
+    print(send_chunks_tensor.size())
+    collective.register_tensor(recv_chunks_tensor)
     for r in range(world_size):
         if r == rank:
             recv_chunks[r].copy_(send_chunks[r].contiguous())
         else:
-            t = send_chunks[r].contiguous()
-            collective.register_tensor(t)
-            tid = collective.isend(t, r)
+            print(f"send_chunks[r]:{send_chunks[r].data_ptr()}")
+            print(send_chunks[r].size())
+            tid = collective.isend(send_chunks[r], r)
+
             send_ids.append(tid)
-            registered_tensors.append(t)
     # sync_all()
     # # recv
     for r in range(world_size):
         if not r == rank:
-            collective.register_tensor(recv_chunks[r].contiguous())
-            tid = collective.irecv(recv_chunks[r].contiguous(), r)
+            # print(f"[Rank {rank}] : posting irecv from rank before {r} {recv_chunks[r].contiguous()}")
+            tid = collective.irecv(recv_chunks[r], r)
+            # print(f"[Rank {rank}] : posting irecv from rank {r} {recv_chunks[r].contiguous()}")
             recv_ids.append(tid)
-            registered_tensors.append(recv_chunks[r].contiguous())
+            # print(f"[Rank {rank}] : posted irecv from rank {r} {recv_chunks[r].contiguous()}")
 
     collective.wait_all(send_ids + recv_ids)
     sync_all()
@@ -101,8 +103,10 @@ def warmup_all2all_check(
             ), f"[Rank {rank}] : ERROR in chunk from rank {src}, expected {expected_val}"
         print(f"[Rank {rank}] : verification PASSED")
     print(f"[Rank {rank}] : warmup all2all done")
-    for t in registered_tensors:
-        collective.deregister_tensor(t)
+    # for t in registered_tensors:
+    #     collective.deregister_tensor(t)
+    collective.deregister_tensor(send_chunks_tensor)
+    collective.deregister_tensor(recv_chunks_tensor)
 
 
 def run_fcp_p2p(
