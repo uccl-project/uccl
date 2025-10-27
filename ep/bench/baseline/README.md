@@ -16,7 +16,7 @@
    Specialized expert parallelism kernel implementation
 
 ---
-**Standard** Python-based packing/unpacking operations
+**Standard:** Python-based packing/unpacking operations
 
 **Key Optimization:** Efficient CUDA kernels for packing/unpacking operations significantly reduce overhead compared to Python-based implementations.
 
