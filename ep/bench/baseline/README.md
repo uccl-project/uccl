@@ -7,7 +7,7 @@ Benchmark comparing different MoE all-to-all communication methods:
 4. CUDA + NVSHMEM (with CUDA kernels)
 5. pplx kernel EP
 
-##Assumption 
+## Assumption 
 ### 1. Build and install [pplx-kernels](https://github.com/perplexityai/pplx-kernels)
 
 > **Note:** Our baseline implementations are adapted from pplx-kernels. To maintain consistency and fair comparison, we continue to use PyTorchStreamWrapper, nvshmem_init APIs provided by pplx-kernels.
