@@ -10,8 +10,6 @@
 ## Requirements
 ### 1. Build and install [pplx-kernels](https://github.com/perplexityai/pplx-kernels)
 
-> **Note:** Our baseline implementations are adapted from pplx-kernels. To maintain consistency and fair comparison, we continue to use PyTorchStreamWrapper, nvshmem_init APIs provided by pplx-kernels.
-
 ## Quick Start
 
 
