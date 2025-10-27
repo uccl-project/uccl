@@ -27,12 +27,7 @@ cd /path/to/uccl/ep/bench/baseline
 python bench_nvshmem_sparse_uccl.py --dp-size 1
 ```
 
-**With different data types:**
-```bash
-python bench_nvshmem_sparse_uccl.py --dp-size 1 --in-dtype float16
-```
-
-### 3. Run benchmark for PPLX 
+### 3. Run benchmark for PPLX Kernel
 
 ```bash
 cd pplx-kernels
@@ -51,7 +46,7 @@ export WORLD_LOCAL_SIZE=<gpus_per_node>
 export NODE_RANK=0
 ## Run NVSHMEM and PyTorch Distributed
 python bench_nvshmem_sparse_uccl.py --dp-size 1
-## Run PPLX Kernel EP
+## Run PPLX Kernel
 pytest -svx tests/test_all_to_all.py 
 ```
 
@@ -66,7 +61,7 @@ export WORLD_LOCAL_SIZE=<gpus_per_node>
 export NODE_RANK=<node_id>
 ## Run NVSHMEM and PyTorch Distributed
 python bench_nvshmem_sparse_uccl.py --dp-size 1
-## Run PPLX Kernel EP
+## Run PPLX Kernel
 pytest -svx tests/test_all_to_all.py 
 ```
 
