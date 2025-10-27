@@ -12,8 +12,6 @@ We provide a script to install dependencies (tested on p5en). Then under a Pytho
 ./install_deps.sh
 ```
 
-# Under uccl/ep
-
 We first configure the environmental variable before `make install`
 ```bash
 # Normal mode
