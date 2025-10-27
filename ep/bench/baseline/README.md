@@ -1,6 +1,6 @@
 # MoE All-to-All Baseline Benchmarks
 
-## Methods
+## Baselines
 
 1. **PPLX Kernel**  
 2. **PyTorch Distributed**  
