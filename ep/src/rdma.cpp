@@ -1541,38 +1541,101 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
 #endif
     } else if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
                ImmType::IsBarrier(ntohl(cqe.imm_data))) {
-      BarrierImm bimm(ntohl(cqe.imm_data));
+      uint32_t imm_data = ntohl(cqe.imm_data);
+      BarrierImm bimm(imm_data);
       bool is_ack = bimm.GetIsAck();
       uint32_t seq = bimm.GetSeq();
       uint16_t src = bimm.GetRank();
-      if (my_rank == 0) {
-        if (!is_ack) {
-          if (S.barrier_arrived.empty()) {
-            assert(S.barrier_arrival_count == 0 &&
-                   "Barrier arrival count should be 0");
-            S.barrier_arrived.resize((size_t)num_nodes, 0);
-          }
-          int num_ranks_per_node = num_ranks / num_nodes;
-          size_t node_rank = src / num_ranks_per_node;
-          if (node_rank < S.barrier_arrived.size() &&
-              !S.barrier_arrived[node_rank]) {
-            S.barrier_arrived[node_rank] = 1;
-            ++S.barrier_arrival_count;
-          } else {
-            assert(false &&
-                   "Duplicate barrier arrival or local_rank out of range");
-          }
+
+      // Extract subset_id from bits 8-10 (encoded directly as 0-7)
+      int subset_id_encoded = (imm_data >> 8) & 0x7;  // 3 bits
+      int subset_id = subset_id_encoded;  // Direct mapping: 0->0, 1->1, ..., 7->7
+
+      // Also extract the actual seq from bits 11-28 (18 bits)
+      uint32_t actual_seq = (imm_data >> 11) & 0x3FFFF;
+
+      fprintf(stderr, "[rdma] Barrier msg: imm_data=0x%08x, subset_id_enc=%d, subset_id=%d, is_ack=%d, seq=%u, actual_seq=%u, src=%u, my_rank=%d\n",
+              imm_data, subset_id_encoded, subset_id, is_ack, seq, actual_seq, src, my_rank);
+
+      // Force all barriers to be subset barriers
+      // Check if this is a subset barrier message (subset_id should be 0-7)
+      if (subset_id >= 0 && subset_id < MAX_NUM_GPUS) {
+        // This is a subset barrier message
+        // Now we can access S.subset_barriers directly (moved to ProxyCtx)
+        if (subset_id >= static_cast<int>(S.subset_barriers.size())) {
+          fprintf(stderr, "[rdma] Invalid subset_id %d, ignoring message\n", subset_id);
         } else {
-          assert(false && "Rank 0 should not receive barrier ack");
+          auto& bs = S.subset_barriers[subset_id];
+
+          fprintf(stderr, "[rdma] Received subset barrier msg: subset_id=%d, is_ack=%d, actual_seq=%u, src=%u, leader=%d\n",
+                  subset_id, is_ack, actual_seq, src, bs.leader_rank);
+
+          if (my_rank == bs.leader_rank) {
+            // Leader: process arrival messages
+            if (!is_ack) {
+              // This is an arrival message from a follower
+              // Find src's index in the subset and mark it as arrived
+              // Note: We need to know which position src is in the subset
+              // For simplicity, we use a hash approach or just increment count
+              if (!bs.arrived.empty() && actual_seq == bs.seq) {
+                // Mark arrival (simplified: just increment count)
+                // In barrier_check_subset(), leader will send release when all arrived
+                ++bs.arrival_count;
+                fprintf(stderr, "[rdma] Leader %d: received arrival from %u, count=%d/%zu\n",
+                        my_rank, src, bs.arrival_count, bs.arrived.size());
+              }
+            } else {
+              fprintf(stderr, "[rdma] Leader should not receive ack message\n");
+            }
+          } else {
+            // Follower: process release messages
+            if (is_ack) {
+              // This is a release message from leader
+              bs.released = true;
+              bs.release_seq = actual_seq;
+              fprintf(stderr, "[rdma] Follower %d: received release, actual_seq=%u\n", my_rank, actual_seq);
+            } else {
+              fprintf(stderr, "[rdma] Follower should not receive arrival message\n");
+            }
+          }
         }
       } else {
-        if (is_ack) {
-          S.barrier_released = true;
-          S.barrier_release_seq = seq;
-        } else {
-          assert(false && "Non-leader rank should not receive barrier request");
-        }
+        // subset_id out of range [0, MAX_NUM_GPUS)
+        fprintf(stderr, "[rdma] ERROR: Received barrier with invalid subset_id=%d (out of range [0,%d))\n", subset_id, MAX_NUM_GPUS);
+        fprintf(stderr, "[rdma] imm_data=0x%08x, src=%u, my_rank=%d\n", imm_data, src, my_rank);
+        assert(false && "Received barrier with invalid subset_id");
       }
+//       } else {
+//         // This is a global barrier message (original logic)
+//         if (my_rank == 0) {
+//           if (!is_ack) {
+//             if (S.barrier_arrived.empty()) {
+//               assert(S.barrier_arrival_count == 0 &&
+//                      "Barrier arrival count should be 0");
+//               S.barrier_arrived.resize((size_t)num_nodes, 0);
+//             }
+//             int num_ranks_per_node = num_ranks / num_nodes;
+//             size_t node_rank = src / num_ranks_per_node;
+//             if (node_rank < S.barrier_arrived.size() &&
+//                 !S.barrier_arrived[node_rank]) {
+//               S.barrier_arrived[node_rank] = 1;
+//               ++S.barrier_arrival_count;
+//             } else {
+//               assert(false &&
+//                      "Duplicate barrier arrival or local_rank out of range");
+//             }
+//           } else {
+//             assert(false && "Rank 0 should not receive barrier ack");
+//           }
+//         } else {
+//           if (is_ack) {
+//             S.barrier_released = true;
+//             S.barrier_release_seq = seq;
+//           } else {
+//             assert(false && "Non-leader rank should not receive barrier request");
+//           }
+//         }
+//       }
     } else if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
                ImmType::IsWrite(ntohl(cqe.imm_data))) {
 #ifdef USE_RECEIVER_BARRIER

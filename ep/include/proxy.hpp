@@ -102,6 +102,14 @@ class Proxy {
   void barrier_check();
   void quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds);
   void quiet_cq();
+
+  // Subset support functions
+  void init_subsets();
+  void quiet_subset(int subset_id);
+  int get_subset_id(int rank) const;
+  void send_barrier_subset(uint64_t wr, int subset_id);
+  void barrier_check_subset(int subset_id);
+  void post_barrier_msg_subset(int dst_rank, bool ack, uint64_t seq, int subset_id);
   Config cfg_;
   RDMAConnectionInfo local_info_{}, remote_info_{};
 
@@ -123,6 +131,13 @@ class Proxy {
   void* atomic_buffer_ptr_;
   std::vector<TransferCmd> postponed_atomics_;
   std::vector<uint64_t> postponed_wr_ids_;
+
+  // Subset synchronization data structures (Phase 2 & 3)
+  std::vector<std::vector<int>> all_subsets_;  // all_subsets_[subset_id] = {ranks...}
+  std::vector<int> rank_to_subset_;             // rank_to_subset_[rank] = subset_id
+  std::vector<std::unordered_set<uint64_t>> pending_wrs_by_subset_;  // [subset_id] -> {wr_ids}
+
+  // Note: SubsetBarrierState is now in ProxyCtx (proxy_ctx.hpp) for access from rdma.cpp
 
 #ifdef USE_MSCCLPP_FIFO_BACKEND
   std::vector<uint64_t> fifo_seq_;

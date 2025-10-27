@@ -129,4 +129,17 @@ struct ProxyCtx {
     return (static_cast<uint64_t>(static_cast<uint32_t>(dst_rank)) << 32) ^
            static_cast<uint64_t>(static_cast<uint32_t>(index));
   }
+
+  // Subset barrier state (Phase 3) - moved here so rdma.cpp can access
+  struct SubsetBarrierState {
+    bool inflight = false;
+    uint64_t wr = 0;                  // GPU work request ID
+    uint64_t seq = 0;                 // Barrier sequence number
+    std::vector<uint8_t> arrived;     // Which ranks in subset have arrived
+    int arrival_count = 0;
+    bool released = false;
+    uint64_t release_seq = 0;
+    int leader_rank = -1;             // Leader rank for this subset (lowest rank)
+  };
+  std::vector<SubsetBarrierState> subset_barriers;  // [subset_id] -> barrier state
 };
