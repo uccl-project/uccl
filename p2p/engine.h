@@ -1,12 +1,14 @@
 #pragma once
 
 #include "transport.h"
+#include "transport_efa.h"
 #include "util/gpu_rt.h"
 #include "util/jring.h"
 #include "util/net.h"
 #include "util/shared_pool.h"
 #include "util/util.h"
 #include <infiniband/verbs.h>
+#include <infiniband/efadv.h> // xz
 #include <pybind11/pybind11.h>
 #include <atomic>
 #include <shared_mutex>
@@ -28,6 +30,14 @@ struct MR {
 struct Conn {
   uint64_t conn_id_;
   uccl::ConnID uccl_conn_id_;
+  std::string ip_addr_;
+  int remote_gpu_idx_;
+  int uds_sockfd_ = -1;  // Unix Domain Socket file descriptor for local IPC
+};
+
+struct ConnEFA {
+  uint64_t conn_id_;
+  transport_efa::ConnID uccl_conn_id_;
   std::string ip_addr_;
   int remote_gpu_idx_;
   int uds_sockfd_ = -1;  // Unix Domain Socket file descriptor for local IPC
@@ -270,7 +280,10 @@ class Endpoint {
   uint32_t num_cpus_;
   int numa_node_;
 
+  bool is_efa_available_;
   uccl::RDMAEndpoint* ep_;
+  transport_efa::RDMAEndpoint* ep_efa_;
+
 
   std::atomic<uint64_t> next_conn_id_ = 0;
   std::atomic<uint64_t> next_mr_id_ = 0;
@@ -279,6 +292,7 @@ class Endpoint {
   // Accessed by both app thread and proxy thread.
   mutable std::shared_mutex conn_mu_;
   std::unordered_map<uint64_t, Conn*> conn_id_to_conn_;
+  std::unordered_map<uint64_t, ConnEFA*> conn_id_to_conn_efa_;
   mutable std::shared_mutex mr_mu_;
   std::unordered_map<uint64_t, MR*> mr_id_to_mr_;
 

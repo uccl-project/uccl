@@ -5,6 +5,7 @@ CUDA_HOME ?= /usr/local/cuda
 CUDA_INC  := $(CUDA_HOME)/include
 CUDA_LIB  := $(CUDA_HOME)/lib64
 RDMA_HOME := ../collective/rdma
+EFA_HOME ?= /opt/amazon/efa
 CXX := g++
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I../include -I$(RDMA_HOME) -I$(CUDA_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
@@ -30,13 +31,23 @@ LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda \
                   -Wl,-rpath,$(CUDA_LIB) -lglog -lgflags -lgtest \
                   -lz -lelf -libverbs -lpthread
 
+# All libraries go here; order matters and should come AFTER objects/archives
+LIBS := -lcudart -lcuda -libverbs -lrdmacm -lglog -lgflags -lpthread -ldl -lz -lelf
+
+# EFA support (conditional on EFA_HOME existence)
+ifneq ($(wildcard $(EFA_HOME)),)
+	CXXFLAGS += -I$(EFA_HOME)/include
+	LDFLAGS += -L$(EFA_HOME)/lib -Wl,-rpath,$(EFA_HOME)/lib
+	LIBS += -lefa
+endif
+
 # Target and source files
 TARGET   := p2p$(PYEXT)
 PLUGIN_SO := libuccl_engine.so
 CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
-SOURCES := engine.cc pybind_engine.cc
+SOURCES := engine.cc pybind_engine.cc transport_efa.cc
 CORE_OBJECT := engine.o
 OBJECTS := $(SOURCES:.cc=.o)
 
@@ -48,14 +59,13 @@ $(TARGET): $(OBJECTS) $(RDMA_HOME)/librdma.a
 	$(CXX) $(OBJECTS) $(RDMA_HOME)/librdma.a \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
-	      -Wl,-rpath,$(CUDA_LIB)
+	      -Wl,-rpath,$(CUDA_LIB) $(LIBS)
 
 $(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_HOME)/librdma_plugin.a
 	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_HOME)/librdma_plugin.a \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
-	      -Wl,-rpath,$(CUDA_LIB) $(PYTHON_LIB) -libverbs -lz -lelf
-
+	      -Wl,-rpath,$(CUDA_LIB) $(PYTHON_LIB) $(LIBS)
 
 $(RDMA_HOME)/librdma.a: $(filter-out $(RDMA_HOME)/nccl_plugin.cc, $(wildcard $(RDMA_HOME)/*.cc)) $(RDMA_HOME)/*.h
 	make -C $(RDMA_HOME) librdma.a -j$(nproc)
