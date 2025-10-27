@@ -259,7 +259,9 @@ def bench_all_to_all(
     num_tokens = rank_data.num_tokens
     # For float8 types, create tensor in float16 first then convert
     if moe.in_dtype in [torch.float8_e4m3fn, torch.float8_e5m2]:
-        x = torch.randn((num_tokens, moe.hidden_dim), dtype=torch.float16, device=device).to(moe.in_dtype)
+        x = torch.randn(
+            (num_tokens, moe.hidden_dim), dtype=torch.float16, device=device
+        ).to(moe.in_dtype)
     else:
         x = torch.randn((num_tokens, moe.hidden_dim), dtype=moe.in_dtype, device=device)
     topk_idx = rank_data.indices.to(

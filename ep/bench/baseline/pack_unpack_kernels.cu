@@ -196,7 +196,8 @@ void pack_moe_data_cuda(torch::Tensor const& x, torch::Tensor const& topk_idx,
   int threads = 256;
   int blocks = (total_items + threads - 1) / threads;
 
-  // Dispatch based on x dtype - support float32, float16, bfloat16, float8_e4m3fn, float8_e5m2
+  // Dispatch based on x dtype - support float32, float16, bfloat16,
+  // float8_e4m3fn, float8_e5m2
   auto x_dtype = x.scalar_type();
 
   if (x_dtype == at::ScalarType::Float) {
@@ -319,46 +320,48 @@ unpack_moe_data_cuda(std::vector<torch::Tensor> const& buffers,
   int threads = 256;
   int blocks = world_size;
 
-  // Dispatch based on x_dtype - support float32, float16, bfloat16, float8_e4m3fn, float8_e5m2
+  // Dispatch based on x_dtype - support float32, float16, bfloat16,
+  // float8_e4m3fn, float8_e5m2
   if (x_dtype == at::ScalarType::Float) {
     AT_DISPATCH_INDEX_TYPES(idx_dtype, "unpack_moe_kernel_idx", [&] {
       unpack_moe_kernel<float, index_t, float><<<blocks, threads>>>(
           d_buffer_ptrs, per_rank_recv_bytes.data_ptr<int>(),
           recv_x.data_ptr<float>(), recv_topk_idx.data_ptr<index_t>(),
-          recv_topk_weights.data_ptr<float>(),
-          d_item_offsets.data_ptr<int>(), hidden_dim, world_size);
+          recv_topk_weights.data_ptr<float>(), d_item_offsets.data_ptr<int>(),
+          hidden_dim, world_size);
     });
   } else if (x_dtype == at::ScalarType::Half) {
     AT_DISPATCH_INDEX_TYPES(idx_dtype, "unpack_moe_kernel_idx", [&] {
       unpack_moe_kernel<at::Half, index_t, float><<<blocks, threads>>>(
           d_buffer_ptrs, per_rank_recv_bytes.data_ptr<int>(),
           recv_x.data_ptr<at::Half>(), recv_topk_idx.data_ptr<index_t>(),
-          recv_topk_weights.data_ptr<float>(),
-          d_item_offsets.data_ptr<int>(), hidden_dim, world_size);
+          recv_topk_weights.data_ptr<float>(), d_item_offsets.data_ptr<int>(),
+          hidden_dim, world_size);
     });
   } else if (x_dtype == at::ScalarType::BFloat16) {
     AT_DISPATCH_INDEX_TYPES(idx_dtype, "unpack_moe_kernel_idx", [&] {
       unpack_moe_kernel<at::BFloat16, index_t, float><<<blocks, threads>>>(
           d_buffer_ptrs, per_rank_recv_bytes.data_ptr<int>(),
           recv_x.data_ptr<at::BFloat16>(), recv_topk_idx.data_ptr<index_t>(),
-          recv_topk_weights.data_ptr<float>(),
-          d_item_offsets.data_ptr<int>(), hidden_dim, world_size);
+          recv_topk_weights.data_ptr<float>(), d_item_offsets.data_ptr<int>(),
+          hidden_dim, world_size);
     });
   } else if (x_dtype == at::ScalarType::Float8_e4m3fn) {
     AT_DISPATCH_INDEX_TYPES(idx_dtype, "unpack_moe_kernel_idx", [&] {
       unpack_moe_kernel<at::Float8_e4m3fn, index_t, float><<<blocks, threads>>>(
           d_buffer_ptrs, per_rank_recv_bytes.data_ptr<int>(),
-          recv_x.data_ptr<at::Float8_e4m3fn>(), recv_topk_idx.data_ptr<index_t>(),
-          recv_topk_weights.data_ptr<float>(),
-          d_item_offsets.data_ptr<int>(), hidden_dim, world_size);
+          recv_x.data_ptr<at::Float8_e4m3fn>(),
+          recv_topk_idx.data_ptr<index_t>(),
+          recv_topk_weights.data_ptr<float>(), d_item_offsets.data_ptr<int>(),
+          hidden_dim, world_size);
     });
   } else if (x_dtype == at::ScalarType::Float8_e5m2) {
     AT_DISPATCH_INDEX_TYPES(idx_dtype, "unpack_moe_kernel_idx", [&] {
       unpack_moe_kernel<at::Float8_e5m2, index_t, float><<<blocks, threads>>>(
           d_buffer_ptrs, per_rank_recv_bytes.data_ptr<int>(),
           recv_x.data_ptr<at::Float8_e5m2>(), recv_topk_idx.data_ptr<index_t>(),
-          recv_topk_weights.data_ptr<float>(),
-          d_item_offsets.data_ptr<int>(), hidden_dim, world_size);
+          recv_topk_weights.data_ptr<float>(), d_item_offsets.data_ptr<int>(),
+          hidden_dim, world_size);
     });
   } else {
     TORCH_CHECK(false, "Unsupported dtype for x: ", toString(x_dtype));

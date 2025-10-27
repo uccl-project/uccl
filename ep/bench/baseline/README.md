@@ -5,18 +5,17 @@ Benchmark comparing different MoE all-to-all communication methods:
 2. CPU + NVSHMEM
 3. CUDA + PyTorch Distributed (with CUDA kernels)
 4. CUDA + NVSHMEM (with CUDA kernels)
+5. pplx kernel EP
+
+##Assumption 
+### 1. Build and install [pplx-kernels](https://github.com/perplexityai/pplx-kernels)
+
+> **Note:** Our baseline implementations are adapted from pplx-kernels. To maintain consistency and fair comparison, we continue to use PyTorchStreamWrapper, nvshmem_init APIs provided by pplx-kernels.
 
 ## Quick Start
 
-### 1. Setup Environment
 
-```bash
-export CUDA_HOME=/usr/local/cuda
-export PATH=$CUDA_HOME/bin:$PATH
-export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
-```
-
-### 2. Build CUDA Extension (Recommended)
+### 1. Build CUDA Extension (Recommended)
 
 ```bash
 cd /path/to/uccl/ep/bench/baseline
@@ -69,19 +68,25 @@ Results saved to: `uccl/ep/bench/data/<timestamp>_unified_moe_separated.tsv`
 ## Command Line Options
 
 - `--dp-size`: Data parallel size (default: 1)
-- `--in-dtype`: Input dtype: `bfloat16` or `float16` (default: `bfloat16`)
-- `--out-dtype`: Output dtype: `bfloat16` or `float16` (default: `bfloat16`)
+- `--in-dtype`: Input dtype: `bfloat16`, `float16`, `float8_e4m3fn`, `float8_e5m2` (default: `float8_e4m3fn`)
+- `--out-dtype`: Output dtype: `bfloat16`, `float16`, `float8_e4m3fn`, `float8_e5m2`  (default: `bfloat16`)
 
-## Benchmark Configurations
+## Configuration
 
-**V2-Lite**: 64 experts, 6 experts/token, 2048 hidden dim
-**R1**: 256 experts, 8 experts/token, 7168 hidden dim
-**Tokens**: 1, 4, 8, 16, 32, 64, 128
+### Default Data Types
+- `--in-dtype`: Default is `float8_e4m3fn` (options: `bfloat16`, `float16`, `float8_e4m3fn`, `float8_e5m2`)
+- `--out-dtype`: Default is `bfloat16` (options: `bfloat16`, `float16`, `float8_e4m3fn`, `float8_e5m2`)
 
-## Troubleshooting
+### Testing Larger Workloads
+To test with larger workloads, you can manually configure the `configs` list in `bench_nvshmem_spare_uccl.py`:
+```python
+configs = [
+    # Custom configurations: (num_experts, experts_per_token, hidden_dim, max_num_tokens)
+    MoEConfig(128, 8, 4096, 8192, in_dtype, out_dtype),
+    MoEConfig(256, 16, 8192, 16384, in_dtype, out_dtype),
+    # Add your custom configs here...
+]
+```
 
-**CUDA extension build fails**: Benchmark will fall back to CPU pack/unpack (slower but works)
 
-**Import error**: Rebuild extension with `./build_pack_unpack.sh`
 
-**OOM error**: Reduce token count or use fewer GPUs
