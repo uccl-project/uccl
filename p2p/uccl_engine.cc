@@ -124,6 +124,15 @@ void listener_thread_func(uccl_conn_t* conn) {
           std::cerr << "Failed to send FifoItem data: " << strerror(errno)
                     << std::endl;
         }
+
+        FifoItem fifo_item;
+        memcpy(&fifo_item, out_buf, sizeof(FifoItem));
+        // Immediately push the data over TCPX so the passive reader only needs
+        // the FIFO metadata to complete its read.
+        if (!conn->engine->endpoint->queue_read_response(conn->conn_id,
+                                                         fifo_item)) {
+          std::cerr << "Failed to queue read response" << std::endl;
+        }
         break;
       }
       case UCCL_WRITE: {
@@ -202,6 +211,16 @@ void listener_thread_func(uccl_conn_t* conn) {
           if (result < 0) {
             std::cerr << "Failed to send FifoItem data for item " << i << ": "
                       << strerror(errno) << std::endl;
+          }
+
+          FifoItem fifo_item;
+          memcpy(&fifo_item, out_buf, sizeof(FifoItem));
+          // Each advertised slice triggers a corresponding send so the remote
+          // side can simply post tagged receives.
+          if (!conn->engine->endpoint->queue_read_response(conn->conn_id,
+                                                           fifo_item)) {
+            std::cerr << "Failed to queue read response for item " << i
+                      << std::endl;
           }
         }
 

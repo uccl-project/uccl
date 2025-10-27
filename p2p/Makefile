@@ -38,8 +38,10 @@ LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda \
                   -Wl,-rpath,$(CUDA_LIB) -lglog -lgflags -lgtest \
                   -lz -lelf -lpthread
 				  
-ifneq ($(USE_TCPX),1)
-	LDFLAGS += -libverbs
+ifeq ($(USE_TCPX),1)
+    LDFLAGS += -ldl
+else
+    LDFLAGS += -libverbs
 endif
 
 # Target and source files
@@ -49,25 +51,38 @@ CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
 ifeq ($(USE_TCPX),1)
-SOURCES := tcpx_engine.cc # TODO: pybind_tcpx_engine.cc
-CORE_OBJECT := tcpx_engine.o
+NVCC ?= $(CUDA_HOME)/bin/nvcc
+NVCCFLAGS := -std=c++17 -Xcompiler "-fPIC -O3" -I../include -Itcpx -Itcpx/include -I$(CUDA_INC) -DUSE_TCPX
+SOURCES := tcpx_engine.cc tcpx/tcpx_impl.cc
+CU_SOURCES := tcpx/device/unpack_kernels.cu tcpx/device/unpack_launch.cu
+CORE_OBJECTS := $(SOURCES:.cc=.o)
+CU_OBJECTS := $(CU_SOURCES:.cu=.o)
+CXXFLAGS += -Itcpx -Itcpx/include
 else
 SOURCES := engine.cc pybind_engine.cc
 CORE_OBJECT := engine.o
 endif
+
+ifeq ($(USE_TCPX),1)
+OBJECTS := $(CORE_OBJECTS) $(CU_OBJECTS)
+else
 OBJECTS := $(SOURCES:.cc=.o)
+endif
 
 # Build the shared libraries
 ifeq ($(USE_TCPX),1)
 # Default target
 all: $(PLUGIN_SO)
 
-# only build plugin for tcpx now, TODO: add tcpx to p2p		  
-$(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECT)
-	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) \
+# only build plugin for tcpx now, TODO: add tcpx to p2p	  
+$(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECTS) $(CU_OBJECTS)
+	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECTS) $(CU_OBJECTS) \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
-	      -Wl,-rpath,$(CUDA_LIB) $(PYTHON_LIB) -lz -lelf
+	      -Wl,-rpath,$(CUDA_LIB) $(PYTHON_LIB)
+
+%.o: %.cu
+	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 else
 # Default target
 all: $(TARGET) $(PLUGIN_SO)
@@ -96,10 +111,15 @@ endif
 	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -c $< -o $@
 
 # Install the module
-install: $(TARGET) $(PLUGIN_SO)
+install: $(PLUGIN_SO)
+ifneq ($(USE_TCPX),1)
+	$(MAKE) $(TARGET)
 	@mkdir -p $(INSTALL_DIR)
 	@cp $(TARGET) $(INSTALL_DIR)/
 	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(TARGET)"
+else
+	@mkdir -p $(INSTALL_DIR)
+endif
 	install -m 755 $(PLUGIN_SO) $(LIBDIR)/
 ifneq ($(USE_TCPX),1)
 	install -m 755 $(RDMA_HOME)/librdma_plugin.a $(LIBDIR)/
@@ -107,15 +127,16 @@ endif
 	install -m 644 $(CAPI_HEADER) $(INCDIR)/
 # Clean build artifacts
 clean:
-	rm -f $(OBJECTS) $(CORE_OBJECT) $(CAPI_OBJECT) $(PLUGIN_SO)
+	rm -f $(OBJECTS) $(CAPI_OBJECT) $(PLUGIN_SO)
 ifneq ($(USE_TCPX),1)
 	rm -f $(TARGET)
 	make -C $(RDMA_HOME) clean -j$(nproc)
 endif
 
 # Test the module
-test: $(TARGET)
+test:
 ifneq ($(USE_TCPX),1)
+	$(MAKE) $(TARGET)
 	$(PYTHON) tests/test_engine_write.py
 endif
 
