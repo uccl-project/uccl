@@ -22,12 +22,7 @@ cd /path/to/uccl/ep/bench/baseline
 ./build_pack_unpack.sh
 ```
 
-Verify:
-```bash
-python -c "import moe_pack_unpack; print('CUDA extension loaded!')"
-```
-
-### 3. Run Benchmark
+### 3. Run Benchmark for torch and nvshmem 
 
 **Single node (all GPUs):**
 ```bash
@@ -39,6 +34,14 @@ python bench_nvshmem_sparse_uccl.py --dp-size 1
 python bench_nvshmem_sparse_uccl.py --dp-size 1 --in-dtype float16
 ```
 
+### 4. Run Benchmark for pplx (if you already installed)
+
+```bash
+cd pplx-kernels
+python3 -m tests.bench_all_to_all
+```
+
+
 ## Multi-Node Setup
 
 **Node 0 (Master):**
@@ -49,6 +52,7 @@ export WORLD_SIZE=<total_gpus>
 export WORLD_LOCAL_SIZE=<gpus_per_node>
 export NODE_RANK=0
 python bench_nvshmem_sparse_uccl.py --dp-size 1
+pytest -svx tests/test_all_to_all.py ##pplx
 ```
 
 **Node 1+ (Workers):**
@@ -59,6 +63,7 @@ export WORLD_SIZE=<total_gpus>
 export WORLD_LOCAL_SIZE=<gpus_per_node>
 export NODE_RANK=<node_id>
 python bench_nvshmem_sparse_uccl.py --dp-size 1
+pytest -svx tests/test_all_to_all.py ##pplx
 ```
 
 ## Output
