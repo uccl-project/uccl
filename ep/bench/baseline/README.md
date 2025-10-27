@@ -2,7 +2,7 @@
 
 ## Methods
 
-1. **PPLX Kernel EP**  
+1. **PPLX Kernel**  
 2. **PyTorch Distributed**  
 3. **NVSHMEM**  
 
