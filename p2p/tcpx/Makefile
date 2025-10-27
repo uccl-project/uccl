@@ -12,14 +12,24 @@ LIBS       := -ldl -lpthread
 CUDA_LIBS  := -L$(CUDA_HOME)/lib64 -lcuda -lcudart
 
 # Source files
-# Note: rx_descriptor.h is now header-only, no .cc files needed
+# Note: unpack_descriptor.h is header-only, no .cc files needed
 DEVICE_SRCS := device/unpack_kernels.cu device/unpack_launch.cu
+CORE_SRCS   := src/bootstrap.cc src/channel_manager.cc src/transfer_flow.cc src/session_manager.cc src/transfer_manager.cc
+TEST_SRCS   := tests/tcpx_perf_runner.cc
 
 # Object files
 DEVICE_OBJS := device/unpack_kernels.o device/unpack_launch.o
+CORE_OBJS   := src/bootstrap.o src/channel_manager.o src/transfer_flow.o src/session_manager.o src/transfer_manager.o
+TEST_OBJS   := tests/tcpx_perf_runner.o
 
 # Build object files
 %.o: %.cc
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+src/%.o: src/%.cc
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+tests/%.o: tests/%.cc
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 device/unpack_kernels.o: device/unpack_kernels.cu
@@ -28,26 +38,24 @@ device/unpack_kernels.o: device/unpack_kernels.cu
 device/unpack_launch.o: device/unpack_launch.cu
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 
-# Core components
-core: $(DEVICE_OBJS)
-	@echo "Core TCPX unpack components built successfully!"
-	@echo "Built objects: $(DEVICE_OBJS)"
+# Core components (device + multi-channel modules)
+core: $(DEVICE_OBJS) $(CORE_OBJS)
+	@echo "Core TCPX components built successfully!"
+	@echo "Device objects: $(DEVICE_OBJS)"
+	@echo "Core objects: $(CORE_OBJS)"
 
-# Main transfer test with unpack architecture
-test_tcpx_transfer: $(DEVICE_OBJS)
-	@echo "Building test_tcpx_transfer..."
-	$(NVCC) $(NVCCFLAGS) -o tests/test_tcpx_transfer tests/test_tcpx_transfer.cc tcpx_impl.cc $(DEVICE_OBJS) $(LIBS) $(CUDA_LIBS)
+# Performance test (original - inline implementation)
+test_tcpx_perf_multi_original: $(DEVICE_OBJS) $(CORE_OBJS)
+	@echo "Building test_tcpx_perf_multi (original)..."
+	$(NVCC) $(NVCCFLAGS) -o tests/test_tcpx_perf_multi_original tests/test_tcpx_perf_multi.cc tcpx_impl.cc $(DEVICE_OBJS) $(CORE_OBJS) $(LIBS) $(CUDA_LIBS)
 
-# Performance benchmark test
-test_tcpx_perf: $(DEVICE_OBJS)
-	@echo "Building test_tcpx_perf..."
-	$(NVCC) $(NVCCFLAGS) -o tests/test_tcpx_perf tests/test_tcpx_perf.cc tcpx_impl.cc $(DEVICE_OBJS) $(LIBS) $(CUDA_LIBS)
+# Performance test (new - Phase 1 API)
+test_tcpx_perf_multi: $(DEVICE_OBJS) $(CORE_OBJS) $(TEST_OBJS)
+	@echo "Building test_tcpx_perf_multi (Phase 1 API)..."
+	$(NVCC) $(NVCCFLAGS) -o tests/test_tcpx_perf_multi tests/test_tcpx_perf_multi_new.cc tcpx_impl.cc $(TEST_OBJS) $(DEVICE_OBJS) $(CORE_OBJS) $(LIBS) $(CUDA_LIBS)
 
 # Build targets
-all: core test_tcpx_transfer test_tcpx_perf
-
-# All tests (only integration test remains)
-all_tests: all
+all: core test_tcpx_perf_multi
 
 # Quick test - just core components
 quick: core
@@ -71,13 +79,11 @@ check:
 	@echo "Built objects:"
 	@ls -la $(DEVICE_OBJS) 2>/dev/null || echo "No objects built yet"
 
-# Clean built files (ONLY executables and objects, NOT source files)
+# Clean built files
 clean:
 	@echo "Cleaning build artifacts..."
-	@echo "Removing executable files..."
-	rm -f tests/test_tcpx_transfer tests/test_tcpx_perf
-	@echo "Removing object files..."
-	rm -f $(DEVICE_OBJS) *.o
-	@echo "Clean completed. Source files preserved."
+	rm -f tests/test_tcpx_perf_multi tests/test_tcpx_perf_multi_original
+	rm -f $(DEVICE_OBJS) $(CORE_OBJS) $(TEST_OBJS) *.o
+	@echo "Clean completed."
 
-.PHONY: all core quick check clean all_tests test_tcpx_transfer test_tcpx_perf
+.PHONY: all core quick check clean test_tcpx_perf_multi test_tcpx_perf_multi_original

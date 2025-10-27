@@ -1,5 +1,5 @@
+#include "bench_kernel.cuh"
 #include "bench_utils.hpp"
-#include "gpu_kernel.cuh"
 #include "peer_copy_worker.hpp"
 #include "proxy.hpp"
 #include "rdma.hpp"
@@ -18,6 +18,9 @@ int main(int argc, char** argv) {
                  "<peer_ip>\n";
     return 1;
   }
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+  assert(false && "benchmark_remote does not support mscclpp fifo");
+#endif
   int const rank = std::atoi(argv[1]);
   char const* peer_ip = argv[2];
 
@@ -40,9 +43,24 @@ int main(int argc, char** argv) {
   // Build Proxies (one per block), each bound to its ring buffer
   std::vector<std::unique_ptr<Proxy>> proxies;
   proxies.reserve(env.blocks);
+  std::vector<d2hq::HostD2HHandle> d2h_queues;
+  std::vector<std::unique_ptr<mscclpp::Fifo>> fifos;
   for (int i = 0; i < env.blocks; ++i) {
     Proxy::Config cfg{};
-    cfg.ring_buffers.push_back(&env.rbs[i]);  // ring for this block
+
+    cfg.d2h_queues.reserve(kChannelPerProxy);
+    d2h_queues.reserve(kChannelPerProxy);
+    for (size_t j = 0; j < kChannelPerProxy; ++j) {
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+      auto fifo = std::make_unique<mscclpp::Fifo>(kQueueSize);
+      uintptr_t addr = reinterpret_cast<uintptr_t>(fifo.get());
+      fifos.push_back(std::move(fifo));
+#else
+      uintptr_t addr = alloc_cmd_ring();
+#endif
+      d2hq::init_from_addr(d2h_queues[j], addr);
+      cfg.d2h_queues.push_back(d2h_queues[j]);
+    }
     cfg.thread_idx = i;
     cfg.gpu_buffer = gpu_buffer;  // RDMA-visible region
     cfg.total_size = total_size;

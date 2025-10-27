@@ -19,50 +19,68 @@ NCCL_IB_GID_INDEX=3 UCCL_ENTROPY=2 UCCL_CHUNK_SIZE_KB=64 torchrun --nnodes=2 --n
 def warmup_all2all_check(
     chunk: int = 4 * 1024,
     dtype: torch.dtype = torch.float16,
-    device: torch.device = torch.cuda.current_device(),
+    device: torch.device = None,
 ):
+    print("\n🔧 Running warmup_all2all_check...")
+    print(chunk)
+    if device == None:
+        print("No device specified for warmup_all2all_check, using current device")
+        device = torch.cuda.current_device()
     world_size = dist.get_world_size()
     rank = dist.get_rank()
 
-    send_tensor = torch.full(
-        (world_size * chunk,),
+    send_chunks_tensor = torch.full(
+        (world_size, 1, chunk),
         fill_value=float(rank + 1),
         dtype=dtype,
         device=device,
     )
-    recv_tensor = torch.empty_like(send_tensor, device=device)
+
+    recv_chunks_tensor = torch.full(
+        (world_size, 1, chunk),
+        fill_value=float(888),
+        dtype=dtype,
+        device=device,
+    )
+
+    send_chunks = [send_chunks_tensor[i] for i in range(world_size)]
+    recv_chunks = [recv_chunks_tensor[i] for i in range(world_size)]
+    # recv_chunks = torch.empty_like(send_chunks, device=device)
 
     sync_all()
-
-    send_tensor.fill_(float(rank + 1))
 
     send_ids, recv_ids = [], []
     registered_tensors = []
 
-    send_chunks = send_tensor.view(world_size, -1)
-    recv_chunks = recv_tensor.view(world_size, -1)
+    # send_chunks = send_tensor.view(world_size, -1)
+    # recv_chunks = recv_tensor.view(world_size, -1)
     # send
+    print(f"[Rank {rank}] send_chunks: {send_chunks}")
+    collective.register_tensor(send_chunks_tensor)
+    print(send_chunks_tensor.data_ptr())
+    print(send_chunks_tensor.size())
+    collective.register_tensor(recv_chunks_tensor)
     for r in range(world_size):
         if r == rank:
             recv_chunks[r].copy_(send_chunks[r].contiguous())
         else:
-            t = send_chunks[r].contiguous()
-            collective.register_tensor(t)
-            tid = collective.isend(t, r)
-            send_ids.append(tid)
-            registered_tensors.append(t)
+            print(f"send_chunks[r]:{send_chunks[r].data_ptr()}")
+            print(send_chunks[r].size())
+            tid = collective.isend(send_chunks[r], r)
 
-    # recv
+            send_ids.append(tid)
+    # sync_all()
+    # # recv
     for r in range(world_size):
         if not r == rank:
-            t = recv_chunks[r].contiguous()
-            collective.register_tensor(t)
-            tid = collective.irecv(t, r)
+            # print(f"[Rank {rank}] : posting irecv from rank before {r} {recv_chunks[r].contiguous()}")
+            tid = collective.irecv(recv_chunks[r], r)
+            # print(f"[Rank {rank}] : posting irecv from rank {r} {recv_chunks[r].contiguous()}")
             recv_ids.append(tid)
-            registered_tensors.append(t)
+            # print(f"[Rank {rank}] : posted irecv from rank {r} {recv_chunks[r].contiguous()}")
 
     collective.wait_all(send_ids + recv_ids)
-    print(f"[Rank {rank}] : warmup all2all started")
+    sync_all()
     if rank == 0:
         ok = True
         for src in range(world_size):
@@ -75,7 +93,7 @@ def warmup_all2all_check(
             ):
                 print(f"[Rank {rank}] : chunk from rank {src} PASSED")
             else:
-                print(recv_chunks[src])
+                print(recv_chunks)
                 print(
                     f"[Rank {rank}] : ERROR in chunk from rank {src}, expected {expected_val}"
                 )
@@ -85,8 +103,10 @@ def warmup_all2all_check(
             ), f"[Rank {rank}] : ERROR in chunk from rank {src}, expected {expected_val}"
         print(f"[Rank {rank}] : verification PASSED")
     print(f"[Rank {rank}] : warmup all2all done")
-    for t in registered_tensors:
-        collective.deregister_tensor(t)
+    # for t in registered_tensors:
+    #     collective.deregister_tensor(t)
+    collective.deregister_tensor(send_chunks_tensor)
+    collective.deregister_tensor(recv_chunks_tensor)
 
 
 def run_fcp_p2p(
@@ -96,8 +116,10 @@ def run_fcp_p2p(
     head_dim: int,
     num_iters: int,
     dtype: torch.dtype = torch.float16,
-    device: torch.device = torch.cuda.current_device(),
+    device: torch.device = None,
 ) -> Metrics:
+    if device == None:
+        device = torch.cuda.current_device()
     global_rank = dist.get_rank()
     world_size = dist.get_world_size()
 
@@ -158,8 +180,10 @@ def run_ring_p2p(
     head_dim: int,
     num_iters: int,
     dtype: torch.dtype = torch.float16,
-    device: torch.device = torch.cuda.current_device(),
+    device: torch.device = None,
 ) -> Metrics:
+    if device == None:
+        device = torch.cuda.current_device()
     global_rank = dist.get_rank()
     world_size = dist.get_world_size()
 
@@ -173,8 +197,9 @@ def run_ring_p2p(
         dtype=dtype,
         device=device,
     )
+    send_tensor.fill_(float(global_rank + 1))
     recv_tensor = torch.empty_like(send_tensor, device=device)
-
+    recv_tensor.fill_(0.0)
     send_rank = (global_rank + 1) % world_size
     recv_rank = (global_rank - 1) % world_size
 
@@ -242,7 +267,10 @@ def main():
     args = p.parse_args()
 
     setup_seed(330)
-    dist.init_process_group(backend="gloo")
+    device = torch.device(f"cuda:{int(os.environ['LOCAL_RANK'])}")
+    torch.cuda.set_device(device)
+    dist.init_process_group(backend="nccl", device_id=device)
+
     rank = dist.get_rank()
     world_size = dist.get_world_size()
     dtype_map = {
@@ -255,15 +283,12 @@ def main():
     results = []
 
     try:
-        collective.init_collective(args.num_cpus)
+        collective.init_collective(args.num_cpus, disable_uccl_intra=True)
         print(f"[Rank {rank}] UCCL Collective initialized successfully")
-        ctx = collective.get_collective()
-        local_gpu_idx = ctx.local_gpu_idx
-        torch.cuda.set_device(local_gpu_idx)
         dist.barrier()
         global_rank = dist.get_rank()
-
-        device = torch.device(f"cuda:{int(os.environ['LOCAL_RANK'])}")
+        if torch.cuda.is_available():
+            torch.cuda.set_device(device)
 
         for block_size in args.block_sizes:
             print(f"\n🚀 Running benchmark with block_size={block_size}")
@@ -275,8 +300,9 @@ def main():
                 // args.gqa_group_size
                 * args.head_dim,
                 dtype=dtype,
+                device=device,
             )
-
+            print("warmup_all2all_check")
             run_fcp_p2p(
                 block_size=block_size,
                 num_qo_heads=args.num_qo_heads,
@@ -286,7 +312,7 @@ def main():
                 dtype=dtype,
                 device=device,
             )
-
+            print("run_fcp_p2p")
             data = run_ring_p2p(
                 block_size=block_size,
                 num_qo_heads=args.num_qo_heads,

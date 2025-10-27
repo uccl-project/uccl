@@ -4,13 +4,13 @@ On first node:
 torchrun --nnodes=2 --nproc_per_node=1 --node_rank=0 \
   --master_addr=10.1.1.171 --master_port=12355 \
   bench/test_low_latency.py --num-tokens=128 \
-  --hidden=7168 --num-topk=1 --num-experts=28
+  --hidden=7168 --num-topk=8 --num-experts=288
 
 On second node:
 torchrun --nnodes=2 --nproc_per_node=1 --node_rank=1 \
   --master_addr=10.1.1.171 --master_port=12355 \
   bench/test_low_latency.py --num-tokens=128 \
-  --hidden=7168 --num-topk=1 --num-experts=28
+  --hidden=7168 --num-topk=8 --num-experts=288
 """
 
 import argparse
@@ -350,6 +350,7 @@ def test_main(
             return_recv_hook=return_recv_hook,
         )
         large_gemm_with_hook(hook) if return_recv_hook else None
+        dist.barrier(group=group)
 
     print("✓ All correctness tests passed!", flush=True)
     # Calculate bandwidth
@@ -495,10 +496,6 @@ if __name__ == "__main__":
             "To fix this, run the following before rebuilding:\n"
             "unset MAKE_NORMAL_MODE && make clean && make -j install\n"
         )
-    ib_dev = detect_ib_hca()
-    if ib_dev and ib_dev.startswith("mlx"):  # Mellanox IB devices show up like mlx5_0
-        os.environ["NCCL_IB_HCA"] = ib_dev
-        print(f"Set NCCL_IB_HCA={ib_dev}")
     parser = argparse.ArgumentParser(description="Test low-latency EP kernels")
     parser.add_argument(
         "--num-processes",

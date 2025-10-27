@@ -7,7 +7,7 @@ set -e
 # a purpose-built Docker image derived from Ubuntu 22.04.
 #
 # Usage:
-#   ./build.sh [cuda|rocm|therock] [all|rdma|p2p|efa|ep] [py_version] [rocm_index_url]
+#   ./build.sh [cuda|rocm|therock] [all|rdma|p2p|efa|ep] [py_version] [rocm_index_url] [therock_base_image]
 #
 # The wheels are written to wheelhouse-[cuda|rocm|therock]
 # -----------------------
@@ -16,13 +16,16 @@ TARGET=${1:-cuda}
 BUILD_TYPE=${2:-all}
 PY_VER=${3:-$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")}
 ARCH="$(uname -m)"
+# The default for ROCM_IDX_URL depends on the gfx architecture of your GPU and the index URLs may change.
 ROCM_IDX_URL=${4:-https://rocm.nightlies.amd.com/v2/gfx94X-dcgpu}
+# The default for THEROCK_BASE_IMAGE is current, but may change. Make sure to track TheRock's dockerfile.
+THEROCK_BASE_IMAGE=${5:-quay.io/pypa/manylinux_2_28_x86_64@sha256:d632b5e68ab39e59e128dcf0e59e438b26f122d7f2d45f3eea69ffd2877ab017}
 IS_EFA=$(ls /sys/class/infiniband/ | grep rdmap || true)
 
 
 if [[ $TARGET != cuda* && $TARGET != rocm* && $TARGET != "therock" ]]; then
   echo "Usage: $0 [cuda|rocm|therock] [all|rdma|p2p|efa|ep|eccl] [py_version] [rocm_index_url]" >&2
-
+  exit 1
 fi
 
 if [[ $ARCH == "aarch64" && ( $TARGET == rocm* || $TARGET == "therock" ) ]]; then
@@ -146,16 +149,23 @@ build_ep() {
   set -euo pipefail
   echo "[container] build_ep Target: $TARGET"
 
-  if [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
-    echo "Skipping GPU-driven build on ROCm (no GPU-driven support yet)."
-    return
+  if [[ "$TARGET" == "therock" ]]; then
+    echo "Skipping GPU-driven build on therock (no GPU-driven support yet)."
+  elif [[ "$TARGET" == rocm* ]]; then
+    cd ep
+    python3 setup.py build
+    cd ..
+    echo "[container] Copying GPU-driven .so to uccl/"
+    mkdir -p uccl/lib
+    cp ep/build/**/*.so uccl/
+  elif [[ "$TARGET" == cuda* ]]; then
+    cd ep
+    make clean && make -j$(nproc) all
+    cd ..
+    echo "[container] Copying GPU-driven .so to uccl/"
+    mkdir -p uccl/lib
+    cp ep/*.so uccl/
   fi
-
-  cd ep && make clean && make -j$(nproc) all && cd ..
-
-  echo "[container] Copying GPU-driven .so to uccl/"
-  mkdir -p uccl/lib
-  cp ep/*.so uccl/
 }
 
 build_eccl() {
@@ -215,6 +225,7 @@ elif [[ $TARGET == "rocm6" ]]; then
   IMAGE_NAME="uccl-builder-rocm"
 elif [[ $TARGET == "therock" ]]; then
   DOCKERFILE="docker/Dockerfile.therock"
+  BASE_IMAGE="${THEROCK_BASE_IMAGE}"
   IMAGE_NAME="uccl-builder-therock"
 fi
 
@@ -241,17 +252,24 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -v $HOME:$HOME \
   -v "$(pwd)":/io \
   -e TARGET="${TARGET}" \
+  -e PY_VER="${PY_VER}" \
   -e ARCH="${ARCH}" \
   -e ROCM_IDX_URL="${ROCM_IDX_URL}" \
   -e IS_EFA="${IS_EFA}" \
   -e WHEEL_DIR="${WHEEL_DIR}" \
   -e BUILD_TYPE="${BUILD_TYPE}" \
+  -e MAKE_NORMAL_MODE="${MAKE_NORMAL_MODE:-}" \
   -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_rdma build_efa build_p2p build_ep build_eccl)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
     set -euo pipefail
 
     if [[ "$TARGET" == "therock" ]]; then
+
+      # Setup requested Python (PyPA images have all versions pre-installed)
+      PY_V=$(echo ${PY_VER} | tr -d .)
+      export PATH=/opt/python/cp${PY_V}-cp${PY_V}/bin:$PATH
+
       # Python environment with ROCm from TheRock
       python3 -m venv /tmp/venv && . /tmp/venv/bin/activate
       pip3 install --no-cache-dir --upgrade pip
@@ -311,7 +329,7 @@ def initialize():
       # Back-up setup.py and emit UCCL package dependence on TheRock
       BACKUP_FN=$(mktemp -p . -t setup.py.XXXXXX)
       cp ./setup.py ${BACKUP_FN}
-      sed -i "s/\"rocm\": \[\],/\"rocm\": \[\"rocm\[libraries\]==$(rocm-sdk version)\"\]/;" setup.py
+      sed -i "s/\"rocm\": \[\],/\"rocm\": \[\"rocm\[libraries\]==$(rocm-sdk version)\"\, \"torch\", \"numpy\"],/;" setup.py
 
       export PIP_EXTRA_INDEX_URL=${ROCM_IDX_URL}
     fi

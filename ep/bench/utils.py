@@ -384,6 +384,7 @@ def bench_kineto(
                 for _ in range(num_tests):
                     fn()
                 torch.cuda.synchronize()
+                dist.barrier()
                 prof.step()
 
     # Parse the profiling table
@@ -448,7 +449,11 @@ def bench_kineto(
 def initialize_uccl(
     scratch, scratch_nbytes, rank, num_ranks, group, num_experts=0, is_intranode=False
 ):
-
+    try:
+        for shm_file in glob.glob("/dev/shm/uccl_barrier_*"):
+            os.remove(shm_file)
+    except Exception:
+        pass
     local_rank = int(os.environ["LOCAL_RANK"])
     nproc_per_node = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
     node_idx = rank // nproc_per_node
@@ -519,7 +524,11 @@ def destroy_uccl(proxies, workers):
         ep.unregister_proxy(device_index)
     except Exception:
         pass
-    print("✓ UCCL destroyed", flush=True)
+    try:
+        for shm_file in glob.glob("/dev/shm/uccl_barrier_*"):
+            os.remove(shm_file)
+    except Exception:
+        pass
 
 
 def per_token_cast_to_fp8(x: torch.Tensor):

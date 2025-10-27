@@ -18,8 +18,10 @@ typedef struct uccl_mr uccl_mr_t;
 enum uccl_msg_type {
   UCCL_READ = 0,
   UCCL_WRITE = 1,
-  UCCL_FIFO = 2,
-  UCCL_NOTIFY = 3
+  UCCL_VECTOR_READ = 2,
+  UCCL_VECTOR_WRITE = 3,
+  UCCL_FIFO = 4,
+  UCCL_NOTIFY = 5
 };
 
 typedef struct notify_msg {
@@ -28,6 +30,7 @@ typedef struct notify_msg {
 } notify_msg_t;
 
 typedef struct fifo_msg {
+  int id;
   char fifo_buf[MSG_SIZE];
 } fifo_msg_t;
 
@@ -36,12 +39,18 @@ typedef struct tx_msg {
   size_t data_size;   // Size of data to receive
 } tx_msg_t;
 
+typedef struct vector_msg {
+  size_t count;  // Number of items in the vector
+
+} vector_msg_t;
+
 typedef struct md {
   uccl_msg_type op;
   union {
     tx_msg_t tx_data;
     fifo_msg_t fifo_data;
     notify_msg_t notify_data;
+    vector_msg_t vector_data;
   } data;
 } md_t;
 
@@ -56,9 +65,11 @@ typedef struct metadata {
  * Create and initialize an engine instance.
  * @param local_gpu_idx The GPU index to use for the engine.
  * @param num_cpus      The number of CPUs to use for the engine.
+ * @param in_python     Whether the engine is being created in Python.
  * @return              Pointer to the engine instance, or NULL on failure.
  */
-uccl_engine_t* uccl_engine_create(int local_gpu_idx, int num_cpus);
+uccl_engine_t* uccl_engine_create(int local_gpu_idx, int num_cpus,
+                                  bool in_python);
 
 /**
  * Destroy the engine instance and free resources.
@@ -114,8 +125,14 @@ uccl_mr_t* uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size);
  */
 int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
                      size_t size, void* slot_item, uint64_t* transfer_id);
-
-int uccl_engine_get_fifo_item(uccl_conn_t* conn, void* fifo_item);
+/**
+ * Get a FIFO item.
+ * @param conn          Connection handle.
+ * @param id            FIFO item ID.
+ * @param fifo_item     Pointer to the FIFO item.
+ * @return              0 on success, non-zero on failure.
+ */
+int uccl_engine_get_fifo_item(uccl_conn_t* conn, int id, void* fifo_item);
 
 /**
  * Send data (Non blocking).
@@ -173,6 +190,16 @@ int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata_str);
  * @return              Number of bytes sent, or -1 on failure.
  */
 int uccl_engine_send_tx_md(uccl_conn_t* conn, md_t* md);
+
+/**
+ * Send multiple transfer metadata as a vector.
+ * @param conn          Connection handle.
+ * @param md_array      Array of transfer metadata.
+ * @param count         Number of metadata items in the array.
+ * @return              Number of bytes sent, or -1 on failure.
+ */
+int uccl_engine_send_tx_md_vector(uccl_conn_t* conn, md_t* md_array,
+                                  size_t count);
 
 /**
  * Get all notification messages and clear the list.

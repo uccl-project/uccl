@@ -1,7 +1,7 @@
 """
 This is the same test_intranode.py test in DeepEP's repo.
 OMP_NUM_THREADS=8 torchrun --standalone --nproc_per_node=8 bench/test_intranode.py \
-    --num-tokens 2048 --hidden 3584 --num-topk 4 --num-experts 128
+    --num-tokens 4096 --hidden 7168 --num-topk 8 --num-experts 256
 """
 
 import argparse
@@ -427,13 +427,23 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     )
     torch.manual_seed(rank)
 
-    for i in (24,):
+    num_sms = 24 if torch.version.cuda else 64
+
+    for i in (num_sms,):
         test_main(args, i, local_rank, num_ranks, rank, buffer, group)
         if local_rank == 0:
             print("", flush=True)
 
     # Test compatibility with low latency functions
     if test_ll_compatibility:
+        buffer.connect_atomic_buffer(proxies[0])
+        for proxy in proxies:
+            proxy.calculate_and_set_dispatch_recv_data_offset(
+                ll_num_tokens, ll_hidden, ll_num_experts
+            )
+
+        proxy.set_atomic_buffer_ptr(proxies[0].get_atomic_buffer_ptr())
+
         buffer.clean_low_latency_buffer(ll_num_tokens, ll_hidden, ll_num_experts)
         test_low_latency.test_main(
             ll_num_tokens,

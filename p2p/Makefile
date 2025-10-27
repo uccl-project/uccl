@@ -17,6 +17,8 @@ PYEXT           := $(shell $(PYTHON_CONFIG) --extension-suffix)
 PYBIND11_INCLUDES := $(shell $(PYTHON) -m pybind11 --includes)
 PYTHON_LDFLAGS := $(shell $(PYTHON_CONFIG) --ldflags)
 
+PYTHON_LIB := $(shell $(PYTHON_CONFIG) --ldflags | grep -o 'python[0-9.]*' | head -1 | sed 's/^/-l/')
+
 # Installation path
 PYTHON_SITE_PACKAGES := $(shell $(PYTHON) -c "import site; print(site.getsitepackages()[0])")
 INSTALL_DIR          := $(PYTHON_SITE_PACKAGES)/uccl
@@ -52,7 +54,7 @@ $(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_HOME)/librdma_plugin.a
 	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_HOME)/librdma_plugin.a \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
-	      -Wl,-rpath,$(CUDA_LIB)
+	      -Wl,-rpath,$(CUDA_LIB) $(PYTHON_LIB) -libverbs -lz -lelf
 
 
 $(RDMA_HOME)/librdma.a: $(filter-out $(RDMA_HOME)/nccl_plugin.cc, $(wildcard $(RDMA_HOME)/*.cc)) $(RDMA_HOME)/*.h
@@ -71,6 +73,7 @@ install: $(TARGET) $(PLUGIN_SO)
 	@cp $(TARGET) $(INSTALL_DIR)/
 	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(TARGET)"
 	install -m 755 $(PLUGIN_SO) $(LIBDIR)/
+	install -m 755 $(RDMA_HOME)/librdma_plugin.a $(LIBDIR)/
 	install -m 644 $(CAPI_HEADER) $(INCDIR)/
 # Clean build artifacts
 clean:

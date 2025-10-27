@@ -201,9 +201,9 @@ HEADERS += $(wildcard include/*.h include/*.cuh include/*.hpp)
 ifeq ($(HAS_EFA),1)
     SRC_CPP := ../src/proxy.cpp ../src/rdma.cpp ../src/common.cpp
     SRC_CPP += ../src/peer_copy_worker.cpp ../src/uccl_proxy.cpp
-    SRC_CPP += ../src/uccl_bench.cpp ../src/peer_copy_manager.cpp
+    SRC_CPP += ../src/uccl_bench.cpp ../src/peer_copy_manager.cpp ../src/fifo.cpp
 
-    SRC_CU := ../src/gpu_kernel.cu ../src/peer_copy.cu ../src/py_cuda_shims.cu
+    SRC_CU := ../src/bench_kernel.cu ../src/peer_copy.cu
     SRC_CU += ../src/internode_ll.cu ../src/internode.cu ../src/layout.cu
     SRC_CU += ../src/intranode.cu ../src/ep_runtime.cu
 

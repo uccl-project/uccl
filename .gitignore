@@ -94,3 +94,6 @@ ep/*.log
 nodes.txt
 pcie_test
 transport_test
+
+*.png
+ep/figs
