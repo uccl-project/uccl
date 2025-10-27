@@ -4,6 +4,7 @@
 #include "packet.h"
 #include "udp.h"
 #include "util/util.h"
+#include <glog/logging.h>
 #include <cstdint>
 #include <set>
 
@@ -17,20 +18,30 @@ void TXTracking::receive_acks(uint32_t num_acked_pkts) {
           << oldest_unacked_msgbuf_;
   DCHECK_LE(num_acked_pkts, num_tracked_msgbufs_);
   while (num_acked_pkts) {
+    // LOG(INFO) << "receive_acks: " << "\n\tnum_acked_pkts " << num_acked_pkts
+    //           << "\n\tnum_unacked_msgbufs_ " << num_unacked_msgbufs_
+    //           << "\n\tnum_unsent_msgbufs_ " << num_unsent_msgbufs_
+    //           << "\n\toldest_unacked_msgbuf_ " << oldest_unacked_msgbuf_
+    //           << "\n\tnewest_unacked_msgbuf_ " << newest_unacked_msgbuf_
+    //           << "\n\toldest_unsent_msgbuf_ " << oldest_unsent_msgbuf_
+    //           << "\n\tlast_msgbuf_ " << last_msgbuf_;
+
     auto msgbuf = oldest_unacked_msgbuf_;
     DCHECK(msgbuf != nullptr);
-    if (num_tracked_msgbufs_ > 1) {
-      DCHECK_NE(msgbuf, last_msgbuf_) << "Releasing the last msgbuf!";
-      DCHECK_NE(oldest_unacked_msgbuf_, oldest_unsent_msgbuf_)
-          << "Releasing an unsent msgbuf!";
-      oldest_unacked_msgbuf_ = msgbuf->next();
-      DCHECK(oldest_unacked_msgbuf_ != nullptr) << num_acked_pkts;
-    } else {
-      CHECK_EQ(num_tracked_msgbufs_, 1);
-      oldest_unacked_msgbuf_ = nullptr;
-      oldest_unsent_msgbuf_ = nullptr;
-      last_msgbuf_ = nullptr;
-    }
+
+    // if (num_acked_pkts > 1) {
+    //   // DCHECK_NE(msgbuf, last_msgbuf_) << "Releasing the last msgbuf!";
+    //   DCHECK_NE(oldest_unacked_msgbuf_, oldest_unsent_msgbuf_)
+    //       << "Releasing an unsent msgbuf!";
+    //   oldest_unacked_msgbuf_ = msgbuf->next();
+    //   DCHECK(oldest_unacked_msgbuf_ != nullptr) << num_acked_pkts;
+    // } else {
+    //   CHECK_EQ(num_tracked_msgbufs_, 1);
+    //   oldest_unacked_msgbuf_ = nullptr;
+    //   newest_unacked_msgbuf_ = nullptr;
+    //   oldest_unsent_msgbuf_ = nullptr;
+    //   last_msgbuf_ = nullptr;
+    // }
 
     if (msgbuf->is_last()) {
       VLOG(3) << "Transmitted a complete message";
@@ -45,11 +56,28 @@ void TXTracking::receive_acks(uint32_t num_acked_pkts) {
       }
     }
     // Free transmitted frames that are acked
-    socket_->push_packet(msgbuf->get_pkt());
+    oldest_unacked_msgbuf_ = msgbuf->next();
+    PacketBuf::Release(msgbuf);
 
     num_unacked_msgbufs_--;
     num_tracked_msgbufs_--;
     num_acked_pkts--;
+
+    if (oldest_unacked_msgbuf_ == nullptr) {
+      DCHECK(num_acked_pkts == 0) << "num_acked_pkts " << num_acked_pkts;
+      newest_unacked_msgbuf_ = nullptr;
+    }
+
+    if(num_tracked_msgbufs_ == 0) {
+
+      DCHECK(num_acked_pkts == 0) << "num_acked_pkts " << num_acked_pkts;
+      DCHECK(oldest_unacked_msgbuf_ == nullptr);
+      DCHECK(newest_unacked_msgbuf_ == nullptr);
+
+      oldest_unacked_msgbuf_ = nullptr;
+      newest_unacked_msgbuf_ = nullptr;
+    }
+
   }
 }
 
@@ -107,10 +135,34 @@ std::optional<PacketBuf*> TXTracking::get_and_update_oldest_unsent() {
     oldest_unsent_msgbuf_ = nullptr;
   }
 
-  if (oldest_unacked_msgbuf_ == nullptr) oldest_unacked_msgbuf_ = msgbuf;
+  PacketBuf* unacked_msgbuf = PacketBuf::Allocate();
+
+  DCHECK(unacked_msgbuf != nullptr);
+  unacked_msgbuf->set_msg_flags(msgbuf->msg_flags());
+
+  if (newest_unacked_msgbuf_ == nullptr) {
+    DCHECK(oldest_unacked_msgbuf_ == nullptr);
+    newest_unacked_msgbuf_ = unacked_msgbuf;
+    oldest_unacked_msgbuf_ = newest_unacked_msgbuf_;
+  } else {
+    DCHECK(oldest_unacked_msgbuf_ != nullptr);
+    DCHECK(unacked_msgbuf != nullptr);
+    newest_unacked_msgbuf_->set_next(unacked_msgbuf);
+    newest_unacked_msgbuf_ = unacked_msgbuf;
+  }
+
+  // if (oldest_unacked_msgbuf_ == nullptr) oldest_unacked_msgbuf_ = msgbuf;
 
   num_unacked_msgbufs_++;
   num_unsent_msgbufs_--;
+
+  // LOG(INFO) << "get_and_update_oldest_unsent: num_unacked_msgbufs_ "
+  //           << num_unacked_msgbufs_ << " num_unsent_msgbufs_ "
+  //           << num_unsent_msgbufs_ << " oldest_unacked_msgbuf_ "
+  //           << oldest_unacked_msgbuf_ << " newest_unacked_msgbuf_ "
+  //           << newest_unacked_msgbuf_ << " oldest_unsent_msgbuf_ "
+  //           << oldest_unsent_msgbuf_ << " last_msgbuf_ " << last_msgbuf_;
+
   return msgbuf;
 }
 
@@ -607,7 +659,7 @@ void UcclFlow::transmit_pending_packets() {
 
   // auto hard_budget = socket_->send_queue_free_entries();
   // NOTICE(Nelson): DPDK does not support send_queue_free_entries() anymore.
-  auto hard_budget = SEND_BATCH_SIZE;
+  auto hard_budget = socket_->avail_packets();
 
   uint32_t permitted_packets = 0;
 
@@ -700,88 +752,89 @@ void UcclFlow::transmit_pending_packets() {
   VLOG(3) << "tx packets " << pending_tx_frames_.size();
 
   socket_->send_packets(pending_tx_frames_.data(), pending_tx_frames_.size());
+
   pending_tx_frames_.clear();
 }
 
 void UcclFlow::deserialize_and_append_to_txtracking() {
-  if (pending_tx_msgs_.empty()) return;
-  if (tx_tracking_.num_unsent_msgbufs() >= kMaxTwPkts) return;
-  auto deser_budget = kMaxTwPkts - tx_tracking_.num_unsent_msgbufs();
+  while (tx_tracking_.num_unsent_msgbufs() < kMaxTwPkts &&
+         !pending_tx_msgs_.empty()) {
+    auto deser_budget = kMaxTwPkts - tx_tracking_.num_unsent_msgbufs();
 
-  auto& [tx_work, cur_offset] = pending_tx_msgs_.front();
-  PacketBuf* cur_msgbuf = tx_work.deser_msgs;
-  PacketBuf* tx_msgbuf_head = cur_msgbuf;
-  PacketBuf* tx_msgbuf_tail = nullptr;
-  uint32_t num_tx_frames = 0;
-  size_t remaining_bytes = tx_work.len - cur_offset;
+    auto& [tx_work, cur_offset] = pending_tx_msgs_.front();
+    PacketBuf* cur_msgbuf = tx_work.deser_msgs;
+    PacketBuf* tx_msgbuf_head = cur_msgbuf;
+    PacketBuf* tx_msgbuf_tail = nullptr;
+    uint32_t num_tx_frames = 0;
+    size_t remaining_bytes = tx_work.len - cur_offset;
 
-  uint32_t path_id = kMaxPath;
-  if constexpr (kCCType == CCType::kTimelyPP) {
-    path_id = get_path_id_with_lowest_rtt();
-  }
-
-  auto now_tsc = rdtsc();
-  while (cur_msgbuf != nullptr && num_tx_frames < deser_budget) {
-    // The flow will free these Tx frames when receiving ACKs.
-    cur_msgbuf->mark_not_txpulltime_free();
-    if (remaining_bytes == tx_work.len) cur_msgbuf->mark_first();
-
-    auto payload_len = cur_msgbuf->get_packet_len() - kNetHdrLen - kUcclHdrLen;
-
-    // Both queue on one timing wheel.
-    if constexpr (kCCType == CCType::kTimely) {
-      timely_g_.timely_pace_packet(
-          now_tsc, payload_len + kNetHdrLen + kUcclHdrLen, cur_msgbuf);
-    }
+    uint32_t path_id = kMaxPath;
     if constexpr (kCCType == CCType::kTimelyPP) {
-      // TODO(yang): consider per-path rate limiting? If so, we need to
-      // maintain prev_desired_tx_tsc_ for each path, calculate two
-      // timestamps (one from timely_g_, one from
-      // timely_pp_[path_id]), and insert the larger one into the
-      // timely_g_.
-      double rate = timely_pp_[path_id].timely_rate();
-      timely_g_.timely_pace_packet_with_rate(
-          now_tsc, payload_len + kNetHdrLen + kUcclHdrLen, cur_msgbuf, rate);
+      path_id = get_path_id_with_lowest_rtt();
     }
 
-    remaining_bytes -= payload_len;
+    auto now_tsc = rdtsc();
+    while (cur_msgbuf != nullptr && num_tx_frames < deser_budget) {
+      // The flow will free these Tx frames when receiving ACKs.
+      cur_msgbuf->mark_not_txpulltime_free();
+      if (remaining_bytes == tx_work.len) cur_msgbuf->mark_first();
+
+      auto payload_len =
+          cur_msgbuf->get_packet_len() - kNetHdrLen - kUcclHdrLen;
+
+      // Both queue on one timing wheel.
+      if constexpr (kCCType == CCType::kTimely) {
+        timely_g_.timely_pace_packet(
+            now_tsc, payload_len + kNetHdrLen + kUcclHdrLen, cur_msgbuf);
+      }
+      if constexpr (kCCType == CCType::kTimelyPP) {
+        // TODO(yang): consider per-path rate limiting? If so, we need to
+        // maintain prev_desired_tx_tsc_ for each path, calculate two
+        // timestamps (one from timely_g_, one from
+        // timely_pp_[path_id]), and insert the larger one into the
+        // timely_g_.
+        double rate = timely_pp_[path_id].timely_rate();
+        timely_g_.timely_pace_packet_with_rate(
+            now_tsc, payload_len + kNetHdrLen + kUcclHdrLen, cur_msgbuf, rate);
+      }
+
+      remaining_bytes -= payload_len;
+      if (remaining_bytes == 0) {
+        DCHECK_EQ(cur_msgbuf->next(), nullptr);
+        cur_msgbuf->mark_last();
+      }
+
+      tx_msgbuf_tail = cur_msgbuf;
+      cur_msgbuf = cur_msgbuf->next();
+      num_tx_frames++;
+    }
+
+    DCHECK(tx_msgbuf_tail != nullptr)
+        << deser_budget << " " << num_tx_frames << " ";
+
+    tx_msgbuf_tail->set_next(nullptr);
+
+    // LOG_EVERY_N(INFO, 10000)
+    //     << "deser unsent_msgbufs " << tx_tracking_.num_unsent_msgbufs()
+    //     << " deser_budget " << deser_budget << " pending_tx_msgs "
+    //     << pending_tx_msgs_.size() << " successfully added to timingwheel "
+    //     << num_tx_frames << " tx_tracking poll_ctxs "
+    //     << tx_tracking_.poll_ctxs_.size();
+
     if (remaining_bytes == 0) {
-      DCHECK_EQ(cur_msgbuf->next(), nullptr);
-      cur_msgbuf->mark_last();
+      // This message has been fully deserialized and added to tx tracking.
+      pending_tx_msgs_.pop_front();
+    } else {
+      // Resuming the deserialization of this message in the next iteration.
+      tx_work.deser_msgs = cur_msgbuf;
+      cur_offset = tx_work.len - remaining_bytes;
     }
 
-    tx_msgbuf_tail = cur_msgbuf;
-    cur_msgbuf = cur_msgbuf->next();
-    num_tx_frames++;
-  }
-  tx_msgbuf_tail->set_next(nullptr);
-
-  // LOG_EVERY_N(INFO, 10000)
-  //     << "deser unsent_msgbufs " << tx_tracking_.num_unsent_msgbufs()
-  //     << " deser_budget " << deser_budget << " pending_tx_msgs "
-  //     << pending_tx_msgs_.size() << " successfully added to timingwheel "
-  //     << num_tx_frames << " tx_tracking poll_ctxs "
-  //     << tx_tracking_.poll_ctxs_.size();
-
-  if (remaining_bytes == 0) {
-    // This message has been fully deserialized and added to tx tracking.
-    pending_tx_msgs_.pop_front();
-  } else {
-    // Resuming the deserialization of this message in the next iteration.
-    tx_work.deser_msgs = cur_msgbuf;
-    cur_offset = tx_work.len - remaining_bytes;
-  }
-
-  tx_tracking_.append(
-      tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames,
-      (tx_msgbuf_head && tx_msgbuf_head->is_first() && num_tx_frames)
-          ? tx_work.poll_ctx
-          : nullptr);
-
-  // Recursively call this function to append more messages to the tx.
-  if (tx_tracking_.num_unsent_msgbufs() < kMaxTwPkts &&
-      !pending_tx_msgs_.empty()) {
-    deserialize_and_append_to_txtracking();
+    tx_tracking_.append(
+        tx_msgbuf_head, tx_msgbuf_tail, num_tx_frames,
+        (tx_msgbuf_head && tx_msgbuf_head->is_first() && num_tx_frames)
+            ? tx_work.poll_ctx
+            : nullptr);
   }
 }
 
@@ -1124,7 +1177,7 @@ void UcclEngine::deser_th_func(std::vector<UcclEngine*> engines) {
             VLOG(2) << "Received a complete message " << cur_offset << " bytes";
           }
 
-          Packet *ready_msg_tmp = ready_msg->get_pkt();
+          Packet* ready_msg_tmp = ready_msg->get_pkt();
           ready_msg = ready_msg->next();
           // Free received frames that have been copied to app buf.
           engine->socket_->push_packet(ready_msg_tmp);

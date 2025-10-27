@@ -8,6 +8,7 @@
 #include <rte_errno.h>
 #include <rte_mbuf.h>
 #include <rte_mbuf_core.h>
+#include <rte_mempool.h>
 
 #include <cstdint>
 
@@ -111,6 +112,8 @@ public:
    */
   uint32_t AvailPacketsCount() { return rte_mempool_avail_count(mpool_); }
 
+  uint32_t InUsePacketsCount() {return rte_mempool_in_use_count(mpool_);}
+  
 private:
   const bool
       is_dpdk_primary_process_; //!< Indicates if it's a DPDK primary process.

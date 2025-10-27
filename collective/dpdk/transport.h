@@ -194,6 +194,7 @@ class TXTracking {
       : socket_(socket),
         channel_(channel),
         oldest_unacked_msgbuf_(nullptr),
+        newest_unacked_msgbuf_(nullptr),
         oldest_unsent_msgbuf_(nullptr),
         last_msgbuf_(nullptr),
         num_unacked_msgbufs_(0),
@@ -233,6 +234,7 @@ class TXTracking {
    */
 
   PacketBuf* oldest_unacked_msgbuf_;
+  PacketBuf* newest_unacked_msgbuf_;
   PacketBuf* oldest_unsent_msgbuf_;
   PacketBuf* last_msgbuf_;
 

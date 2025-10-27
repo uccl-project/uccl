@@ -3,6 +3,7 @@
 #include "pmd_port.h"
 #include "rx_ring.h"
 #include "tx_ring.h"
+#include <glog/logging.h>
 #include <cstdint>
 #include <deque>
 #include <mutex>
@@ -23,22 +24,32 @@ class DPDKSocket {
     this->unsent_packets_ = 0;
   }
 
+  inline uint32_t avail_packets() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return packet_pool_->AvailPacketsCount();
+  }
+
+  inline uint32_t in_use_packets() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return packet_pool_->InUsePacketsCount();
+  }
+
   inline void push_packet(Packet* pkt) { Packet::Free(pkt); }
 
-  inline Packet* pop_packet() { 
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      unsent_packets_++;
-    }
-    return packet_pool_->PacketAlloc(); 
+  inline Packet* pop_packet() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return packet_pool_->PacketAlloc();
   }
 
   inline Packet* pop_packet(uint16_t pkt_len) {
-    {
+    Packet* pkt = nullptr;
+    do {
       std::lock_guard<std::mutex> lock(mutex_);
-      unsent_packets_--;
-    }
-    Packet* pkt = pop_packet();
+      pkt = packet_pool_->PacketAlloc();
+    } while (pkt == nullptr);
+
+    // LOG(INFO) << "pop_packet(uint16_t) avail_packets: "
+    //           << packet_pool_->AvailPacketsCount();
     pkt->append<void*>(pkt_len);
     return pkt;
   }
@@ -64,12 +75,8 @@ class DPDKSocket {
   inline uint64_t send_queue_estimated_latency_ns() { return 0; }
 
   std::string to_string() {
-    uint32_t unsent_packets = 0;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      unsent_packets = unsent_packets_;
-    }
-    return Format("[TX] %u [RX] %u [UNSENT] %u", total_sent_packets_, total_recv_packets_, unsent_packets);
+    return Format("[TX] %u [RX] %u [POOL] (%u, %u)", total_sent_packets_,
+                  total_recv_packets_, avail_packets(), in_use_packets());
   }
 
  private:
@@ -142,7 +149,11 @@ class PacketBuf {
 #define UCCL_MSGBUF_FLAGS_TXPULLTIME_FREE (1 << 2)
   uint8_t msg_flags_;
 
-  PacketBuf() {}
+  PacketBuf() {
+    next_ = nullptr;
+    pkt_ = nullptr;
+    msg_flags_ = 0;
+  }
 
  public:
   static PacketBuf* GetPacketBuf(Packet* pkt) {
@@ -161,6 +172,14 @@ class PacketBuf {
     pkt_buf->next_ = nullptr;
     pkt_buf->msg_flags_ = 0;
     return pkt_buf;
+  }
+
+  static PacketBuf* Allocate() {
+    return new PacketBuf();
+  }
+
+  static void Release(PacketBuf* pkt_buf) {
+    delete pkt_buf;
   }
 
   Packet* get_pkt() const { return pkt_; }
