@@ -14,29 +14,30 @@ We provide a script to install dependencies (tested on p5en)
 
 ## Build on CUDA for testing
 
-Installing `ep` as a Python package:
-```bash
-# under uccl
-bash build_and_install.sh cuda ep
-```
-
-Alternatively, in a Python environment:
+Under a Python environment: 
 ```bash
 # under uccl/ep
 make -j install
 ```
 
-## Build on ROCm for testing
-
-build rocm image
+Alternatively, you can build `uccl.ep` wheel using docker:
 ```bash
-# requiring rocm7
-pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
 # under uccl
-bash build_and_install.sh rocm ep
+bash build_and_install.sh cuda ep
 ```
 
-test import uccl.ep
+## Build on ROCm for testing
+
+Build `uccl.ep` wheel for ROCm using docker:
+```bash
+# under uccl
+bash build_and_install.sh rocm ep
+
+# install rocm7 into local Python env
+pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
+```
+
+Test import `uccl.ep`
 ```bash
 python -c "import torch;import uccl.ep"
 ```
