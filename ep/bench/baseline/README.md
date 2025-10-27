@@ -1,13 +1,25 @@
 # MoE All-to-All Baseline Benchmarks
 
-Benchmark comparing different MoE all-to-all communication methods:
-1. CPU + PyTorch Distributed
-2. CPU + NVSHMEM
-3. CUDA + PyTorch Distributed (with CUDA kernels)
-4. CUDA + NVSHMEM (with CUDA kernels)
-5. pplx kernel EP
+## Methods
 
-## Assumption 
+### Standard Implementations
+1. **PyTorch Distributed**  
+2. **NVSHMEM**  
+   
+
+### Optimized Implementations
+3. **CUDA + PyTorch Distributed**  
+4. **CUDA + NVSHMEM**  
+
+
+5. **PPLX Kernel EP**  
+   Specialized expert parallelism kernel implementation
+
+---
+**Standard** Python-based packing/unpacking operations
+**Key Optimization:** Efficient CUDA kernels for packing/unpacking operations significantly reduce overhead compared to Python-based implementations.
+
+## Requirements
 ### 1. Build and install [pplx-kernels](https://github.com/perplexityai/pplx-kernels)
 
 > **Note:** Our baseline implementations are adapted from pplx-kernels. To maintain consistency and fair comparison, we continue to use PyTorchStreamWrapper, nvshmem_init APIs provided by pplx-kernels.

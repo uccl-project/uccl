@@ -810,15 +810,6 @@ def _worker_bench_all_to_all(
     out_dtype = getattr(torch, out_dtype_str)
 
     configs = [
-        # V2-Lite:  64 Experts, 6 Experts per Token, 2048 Hidden Dim
-        MoEConfig(64, 6, 2048, 128, in_dtype, out_dtype),
-        MoEConfig(64, 6, 2048, 256, in_dtype, out_dtype),
-        MoEConfig(64, 6, 2048, 512, in_dtype, out_dtype),
-        MoEConfig(64, 6, 2048, 768, in_dtype, out_dtype),
-        MoEConfig(64, 6, 2048, 1024, in_dtype, out_dtype),
-        MoEConfig(64, 6, 2048, 2048, in_dtype, out_dtype),
-        MoEConfig(64, 6, 2048, 4096, in_dtype, out_dtype),
-        # R1     : 256 Experts, 8 Experts per Token, 7168 Hidden Dim
         MoEConfig(256, 8, 7168, 128, in_dtype, out_dtype),
         MoEConfig(256, 8, 7168, 256, in_dtype, out_dtype),
         MoEConfig(256, 8, 7168, 512, in_dtype, out_dtype),
