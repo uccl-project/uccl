@@ -102,6 +102,10 @@ torchrun --nnodes=4 --nproc_per_node=8 --node_rank=<rank> \
   --hidden=7168 --num-topk=8 --num-experts=288 --test-ll-compatibility
 ```
 
+### More Baselines
+
+Please refer to [ep/bench/baseline/](ep/bench/baseline/) for details. 
+
 ## Results
 
 ### Normal kernels with NVLink and RDMA forwarding
