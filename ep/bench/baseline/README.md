@@ -1,13 +1,14 @@
 # MoE All-to-All Baseline Benchmarks
 
-Benchmark comparing different MoE all-to-all communication methods:
-1. CPU + PyTorch Distributed
-2. CPU + NVSHMEM
-3. CUDA + PyTorch Distributed (with CUDA kernels)
-4. CUDA + NVSHMEM (with CUDA kernels)
-5. pplx kernel EP
+## Methods
 
-## Assumption 
+1. **PPLX Kernel EP**  
+2. **CUDA + PyTorch Distributed**  
+3. **CUDA + NVSHMEM**  
+
+
+
+## Requirements
 ### 1. Build and install [pplx-kernels](https://github.com/perplexityai/pplx-kernels)
 
 > **Note:** Our baseline implementations are adapted from pplx-kernels. To maintain consistency and fair comparison, we continue to use PyTorchStreamWrapper, nvshmem_init APIs provided by pplx-kernels.
@@ -34,7 +35,7 @@ python bench_nvshmem_sparse_uccl.py --dp-size 1
 python bench_nvshmem_sparse_uccl.py --dp-size 1 --in-dtype float16
 ```
 
-### 3. Run Benchmark for pplx (if you already installed)
+### 3. Run Benchmark for pplx 
 
 ```bash
 cd pplx-kernels
@@ -51,9 +52,13 @@ export MASTER_PORT=29500
 export WORLD_SIZE=<total_gpus>
 export WORLD_LOCAL_SIZE=<gpus_per_node>
 export NODE_RANK=0
+## Run NVSHMEM and PyTorch Distributed
 python bench_nvshmem_sparse_uccl.py --dp-size 1
-pytest -svx tests/test_all_to_all.py ##pplx
+## Run PPLX Kernel EP
+pytest -svx tests/test_all_to_all.py 
 ```
+
+
 
 **Node 1+ (Workers):**
 ```bash
@@ -62,36 +67,17 @@ export MASTER_PORT=29500
 export WORLD_SIZE=<total_gpus>
 export WORLD_LOCAL_SIZE=<gpus_per_node>
 export NODE_RANK=<node_id>
+## Run NVSHMEM and PyTorch Distributed
 python bench_nvshmem_sparse_uccl.py --dp-size 1
-pytest -svx tests/test_all_to_all.py ##pplx
+## Run PPLX Kernel EP
+pytest -svx tests/test_all_to_all.py 
 ```
 
 ## Output
 
 Results saved to: `uccl/ep/bench/data/<timestamp>_unified_moe_separated.tsv`
 
-## Command Line Options
 
-- `--dp-size`: Data parallel size (default: 1)
-- `--in-dtype`: Input dtype: `bfloat16`, `float16`, `float8_e4m3fn`, `float8_e5m2` (default: `float8_e4m3fn`)
-- `--out-dtype`: Output dtype: `bfloat16`, `float16`, `float8_e4m3fn`, `float8_e5m2`  (default: `bfloat16`)
-
-## Configuration
-
-### Default Data Types
-- `--in-dtype`: Default is `float8_e4m3fn` (options: `bfloat16`, `float16`, `float8_e4m3fn`, `float8_e5m2`)
-- `--out-dtype`: Default is `bfloat16` (options: `bfloat16`, `float16`, `float8_e4m3fn`, `float8_e5m2`)
-
-### Testing Larger Workloads
-To test with larger workloads, you can manually configure the `configs` list in `bench_nvshmem_spare_uccl.py`:
-```python
-configs = [
-    # Custom configurations: (num_experts, experts_per_token, hidden_dim, max_num_tokens)
-    MoEConfig(128, 8, 4096, 8192, in_dtype, out_dtype),
-    MoEConfig(256, 16, 8192, 16384, in_dtype, out_dtype),
-    # Add your custom configs here...
-]
-```
 
 
 
