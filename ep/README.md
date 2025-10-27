@@ -10,8 +10,18 @@ We provide a script to install dependencies (tested on p5en). Then under a Pytho
 ```bash
 # Under uccl/ep
 ./install_deps.sh
+```
 
-# Under uccl/ep
+We first configure the environmental variable before `make install`
+```bash
+# Normal mode
+export MAKE_NORMAL_MODE=1
+# Low latency mode
+export MAKE_NORMAL_MODE=0
+```
+
+Next, in a conda environment: 
+```bash
 make -j install
 ```
 
@@ -102,7 +112,7 @@ torchrun --nnodes=4 --nproc_per_node=8 --node_rank=<rank> \
   --hidden=7168 --num-topk=8 --num-experts=288 --test-ll-compatibility
 ```
 
-Please refer to [ep/bench/baseline/](ep/bench/baseline/) for more baselines including `torch.distributed`, NVSHMEM, and pplx-kernels. 
+Please refer to [bench/baseline](bench/baseline) for running more baselines including Torch, NVSHMEM, and pplx-kernels on EFA. 
 
 ## Results
 
