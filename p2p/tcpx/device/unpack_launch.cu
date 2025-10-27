@@ -365,7 +365,9 @@ int UnpackLauncher::launchKernel(KernelLaunchParams const& params) {
     }
   }
 
-  if (config_.use_small_kernel) {
+  bool launch_small = params.use_small_kernel && config_.use_small_kernel;
+
+  if (launch_small) {
     std::cout << "[Debug Kernel] Launch Small: grid=" << params.grid_size.x
               << " block=" << params.block_size.x << std::endl;
     tcpxUnpackKernelSmall<<<params.grid_size, params.block_size,
