@@ -4,25 +4,20 @@ GPU-driven communication (e.g., DeepEP) is the key to efficient and large-scale 
 
 For UCCL's host/CPU-driven P2P engine, see [p2p](../p2p/) folder.
 
-## Installing dependencies
-
-We provide a script to install dependencies (tested on p5en)
-
-```bash
-./install_deps.sh
-```
-
 ## Build on CUDA for testing
 
-Under a Python environment: 
+We provide a script to install dependencies (tested on p5en). Then under a Python environment: 
 ```bash
-# under uccl/ep
+# Under uccl/ep
+./install_deps.sh
+
+# Under uccl/ep
 make -j install
 ```
 
 Alternatively, you can build `uccl.ep` wheel using docker:
 ```bash
-# under uccl
+# Under uccl
 bash build_and_install.sh cuda ep
 ```
 
@@ -30,16 +25,16 @@ bash build_and_install.sh cuda ep
 
 Build `uccl.ep` wheel for ROCm using docker:
 ```bash
-# under uccl
+# Under uccl
 bash build_and_install.sh rocm ep
 
-# install rocm7 into local Python env
+# Install rocm7 into local Python env
 pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
 ```
 
 Test import `uccl.ep`
 ```bash
-python -c "import torch;import uccl.ep"
+python -c "import torch; import uccl.ep"
 ```
 
 ## Example APIs

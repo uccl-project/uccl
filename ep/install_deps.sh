@@ -20,8 +20,8 @@ get_cuda_version() {
 echo "Checking CUDA environment..."
 if check_cuda; then
     sudo apt install -y nvtop libgoogle-glog-dev clang-format-14 python3-pip
-    pip3 install black
     pip3 install pybind11 --upgrade
+    pip3 install black
 
     # Check if we're in a conda environment
     if [[ ! -z "${CONDA_PREFIX}" ]]; then
