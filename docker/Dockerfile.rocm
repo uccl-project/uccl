@@ -40,7 +40,8 @@ RUN apt-get update && \
 # ─────────────────────────────────────────────────────────
 RUN python${PY_VER} -m pip install --no-cache-dir build auditwheel pybind11
 
-RUN python${PY_VER} -m pip install --no-cache-dir --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
+RUN python${PY_VER} -m pip install --no-cache-dir --pre torch torchvision \
+    --index-url https://download.pytorch.org/whl/nightly/rocm7.0 \
 
 RUN python${PY_VER} -m pip install --no-cache-dir --upgrade setuptools
 

@@ -151,22 +151,20 @@ build_ep() {
 
   if [[ "$TARGET" == "therock" ]]; then
     echo "Skipping GPU-driven build on therock (no GPU-driven support yet)."
-    return
   elif [[ "$TARGET" == rocm* ]]; then
     cd ep
-    bash install_deps.sh
     python3 setup.py build
     cd ..
     echo "[container] Copying GPU-driven .so to uccl/"
     mkdir -p uccl/lib
     cp ep/build/**/*.so uccl/
-    return
   elif [[ "$TARGET" == cuda* ]]; then
-    cd ep && make clean && make -j$(nproc) all && cd ..
+    cd ep
+    make clean && make -j$(nproc) all
+    cd ..
     echo "[container] Copying GPU-driven .so to uccl/"
     mkdir -p uccl/lib
     cp ep/*.so uccl/
-    return
   fi
 }
 
