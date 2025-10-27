@@ -21,7 +21,7 @@ thread_local bool inside_python = false;
 
 namespace {
 
-constexpr int kDefaultCtrlPort = 28900;
+constexpr int kDefaultOobPort = 28900;
 constexpr int kCtrlBacklog = 128;
 
 struct EndpointInfo {
@@ -180,7 +180,10 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const /*num_cpus*/) {
     throw std::runtime_error("tcpx: no available device");
   }
 
-  ctrl_port_ = get_env_int("UCCL_TCPX_CTRL_PORT", kDefaultCtrlPort);
+  // Allow overriding the out-of-band control port via either the new
+  // UCCL_TCPX_OOB_PORT or the legacy UCCL_TCPX_CTRL_PORT environment variable.
+  ctrl_port_ = get_env_int("UCCL_TCPX_OOB_PORT",
+                           get_env_int("UCCL_TCPX_CTRL_PORT", kDefaultOobPort));
 
   // Prepare TCP control listener
   ctrl_listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -285,6 +288,8 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx,
 
   if (remote_port < 0) remote_port = ctrl_port_;
 
+  auto conn = std::make_unique<Conn>();
+
   // Prepare reverse listen for recv path
   void* reverse_listen = nullptr;
   HandlePayload reverse_handle{};
@@ -350,56 +355,66 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx,
     return false;
   }
 
-  void* send_comm = nullptr;
-  void* send_dev_handle = nullptr;
   ncclNetHandle_v7 server_handle_copy = server_handle.handle;
-  if (tcpx_connect_v5(dev_id_, &server_handle_copy, &send_comm,
-                      &send_dev_handle) != 0 ||
-      !send_comm) {
+  if (tcpx_connect_v5(dev_id_, &server_handle_copy, &conn->send_comm,
+                      &conn->send_dev_handle) != 0 ||
+      !conn->send_comm) {
     std::cerr << "[tcpx] tcpx_connect_v5 failed (client)" << std::endl;
     ::close(sock_fd);
     tcpx_close_listen(reverse_listen);
+    free_conn_(conn);
     return false;
   }
 
   if (!send_ctrl_struct(sock_fd, reverse_handle)) {
     ::close(sock_fd);
-    tcpx_close_send(send_comm);
+    tcpx_close_send(conn->send_comm);
     tcpx_close_listen(reverse_listen);
+    free_conn_(conn);
     return false;
   }
 
-  void* recv_comm = nullptr;
-  void* recv_dev_handle = nullptr;
-  if (tcpx_accept_v5(reverse_listen, &recv_comm, &recv_dev_handle) != 0 ||
-      !recv_comm) {
-    std::cerr << "[tcpx] tcpx_accept_v5 failed (client reverse)" << std::endl;
-    ::close(sock_fd);
-    tcpx_close_send(send_comm);
-    tcpx_close_listen(reverse_listen);
-    return false;
+  {
+    constexpr int kMaxRetries = 100;
+    constexpr int kRetryMs = 50;
+    bool accepted = false;
+    for (int attempt = 0; attempt < kMaxRetries; ++attempt) {
+      int rc = tcpx_accept_v5(reverse_listen, &conn->recv_comm,
+                              &conn->recv_dev_handle);
+      if (rc == 0 && conn->recv_comm) {
+        accepted = true;
+        break;
+      }
+      std::cout << "[tcpx] client reverse accept retry rc=" << rc
+                << " attempt=" << attempt + 1 << std::endl;
+      std::this_thread::sleep_for(std::chrono::milliseconds(kRetryMs));
+    }
+    if (!accepted) {
+      std::cerr << "[tcpx] tcpx_accept_v5 failed (client reverse)" << std::endl;
+      ::close(sock_fd);
+      tcpx_close_send(conn->send_comm);
+      tcpx_close_listen(reverse_listen);
+      free_conn_(conn);
+      return false;
+    }
   }
   tcpx_close_listen(reverse_listen);
 
   if (!recv_ctrl_ack(sock_fd)) {
     std::cerr << "[tcpx] missing ACK from server" << std::endl;
     ::close(sock_fd);
-    tcpx_close_send(send_comm);
-    tcpx_close_recv(recv_comm);
+    tcpx_close_send(conn->send_comm);
+    tcpx_close_recv(conn->recv_comm);
+    free_conn_(conn);
     return false;
   }
 
   conn_id = next_conn_id_.fetch_add(1);
-  auto conn = std::make_unique<Conn>();
   conn->conn_id = conn_id;
   conn->ip_addr = ip_addr;
   conn->remote_gpu_idx = remote_info.gpu;
   conn->remote_port = remote_port;
   conn->ctrl_sock_fd = sock_fd;
-  conn->send_comm = send_comm;
-  conn->send_dev_handle = send_dev_handle;
-  conn->recv_comm = recv_comm;
-  conn->recv_dev_handle = recv_dev_handle;
 
   {
     std::unique_lock<std::shared_mutex> lock(conn_mu_);
@@ -443,6 +458,8 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
     return false;
   }
 
+  auto conn = std::make_unique<Conn>();
+
   HandlePayload listen_payload{};
   // Share the forward-path listen handle so the client can establish its send_comm.
   listen_payload.handle = listen_handle_;
@@ -451,53 +468,59 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
     return false;
   }
 
-  void* recv_comm = nullptr;
-  void* recv_dev_handle = nullptr;
-  if (tcpx_accept_v5(listen_comms_, &recv_comm, &recv_dev_handle) != 0 ||
-      !recv_comm) {
-    std::cerr << "[tcpx] tcpx_accept_v5 failed (server)" << std::endl;
-    ::close(sock_fd);
-    return false;
+  {
+    constexpr int kMaxRetries = 100;
+    constexpr int kRetryMs = 50;
+    bool accepted = false;
+    for (int attempt = 0; attempt < kMaxRetries; ++attempt) {
+      int rc = tcpx_accept_v5(listen_comms_, &conn->recv_comm,
+                              &conn->recv_dev_handle);
+      if (rc == 0 && conn->recv_comm) {
+        accepted = true;
+        break;
+      }
+      std::cout << "[tcpx] server accept retry rc=" << rc
+                << " attempt=" << attempt + 1 << std::endl;
+      std::this_thread::sleep_for(std::chrono::milliseconds(kRetryMs));
+    }
+    if (!accepted) {
+      std::cerr << "[tcpx] tcpx_accept_v5 failed (server)" << std::endl;
+      ::close(sock_fd);
+      return false;
+    }
   }
 
   HandlePayload client_handle{};
   // Client sends back the handle we should use for the reverse (recv_comm) direction.
   if (!recv_ctrl_struct(sock_fd, client_handle)) {
     ::close(sock_fd);
-    tcpx_close_recv(recv_comm);
+    tcpx_close_recv(conn->recv_comm);
     return false;
   }
 
-  void* send_comm = nullptr;
-  void* send_dev_handle = nullptr;
   ncclNetHandle_v7 client_handle_copy = client_handle.handle;
-  if (tcpx_connect_v5(dev_id_, &client_handle_copy, &send_comm,
-                      &send_dev_handle) != 0 ||
-      !send_comm) {
+  if (tcpx_connect_v5(dev_id_, &client_handle_copy, &conn->send_comm,
+                      &conn->send_dev_handle) != 0 ||
+      !conn->send_comm) {
     std::cerr << "[tcpx] tcpx_connect_v5 failed (server->client)" << std::endl;
     ::close(sock_fd);
-    tcpx_close_recv(recv_comm);
+    tcpx_close_recv(conn->recv_comm);
     return false;
   }
 
   if (!send_ctrl_ack(sock_fd)) {
     ::close(sock_fd);
-    tcpx_close_recv(recv_comm);
-    tcpx_close_send(send_comm);
+    tcpx_close_recv(conn->recv_comm);
+    tcpx_close_send(conn->send_comm);
     return false;
   }
 
   conn_id = next_conn_id_.fetch_add(1);
-  auto conn = std::make_unique<Conn>();
   conn->conn_id = conn_id;
   conn->ip_addr = ip_addr;
   conn->remote_gpu_idx = client_info.gpu;
   conn->remote_port = ntohs(client_addr.sin_port);
   conn->ctrl_sock_fd = sock_fd;
-  conn->send_comm = send_comm;
-  conn->send_dev_handle = send_dev_handle;
-  conn->recv_comm = recv_comm;
-  conn->recv_dev_handle = recv_dev_handle;
 
   {
     std::unique_lock<std::shared_mutex> lock(conn_mu_);
@@ -863,6 +886,8 @@ bool Endpoint::poll_request_(PendingTransfer& transfer, bool* done,
     std::cerr << "[tcpx] tcpx_test failed rc=" << rc << std::endl;
     return false;
   }
+  std::cerr << "[tcpx] tcpx_test transfer_id=" << transfer.transfer_id
+            << " completed=" << completed << " size=" << size << std::endl;
   if (!completed) return true;
 
   *done = true;
@@ -884,6 +909,9 @@ bool Endpoint::enqueue_unpack_(PendingTransfer& transfer,
     return false;
   }
   frag_cnt = *(request->unpack_slot.cnt);
+  std::cerr << "[tcpx] unpack transfer_id=" << transfer.transfer_id
+            << " frag_cnt=" << frag_cnt << " dst_ptr=" << transfer.dst_ptr
+            << std::endl;
   if (frag_cnt == 0 ||
       frag_cnt > MAX_UNPACK_DESCRIPTORS) {
     std::cerr << "[tcpx] invalid fragment count " << frag_cnt << std::endl;
@@ -899,6 +927,8 @@ bool Endpoint::enqueue_unpack_(PendingTransfer& transfer,
     std::cerr << "[tcpx] cuMemcpyDtoH failed " << cu_rc << std::endl;
     return false;
   }
+  std::cerr << "[tcpx] dev_handle bounce_buf=" << dev_handle.bounce_buf
+            << std::endl;
 
   auto* meta_entries =
       static_cast<tcpx::plugin::loadMeta*>(request->unpack_slot.mem);
@@ -909,9 +939,45 @@ bool Endpoint::enqueue_unpack_(PendingTransfer& transfer,
                                  static_cast<uint32_t>(frag_cnt),
                                  dev_handle.bounce_buf, transfer.dst_ptr,
                                  block);
+  if (frag_cnt > 0) {
+    auto const& m0 = block.descriptors[0];
+    size_t probe_len = std::min<size_t>(m0.len, 64);
+    std::vector<uint8_t> sample(probe_len);
+    CUresult sample_rc =
+        cuMemcpyDtoH(sample.data(),
+                     reinterpret_cast<CUdeviceptr>(dev_handle.bounce_buf +
+                                                   m0.src_off),
+                     probe_len);
+    if (sample_rc == CUDA_SUCCESS) {
+      std::cerr << "[tcpx] bounce sample @src_off=" << m0.src_off << ":";
+      for (size_t i = 0; i < probe_len; ++i) {
+        std::cerr << " " << static_cast<int>(sample[i]);
+      }
+      std::cerr << std::endl;
+    } else {
+      std::cerr << "[tcpx] bounce sample copy failed rc=" << sample_rc
+                << std::endl;
+    }
+  }
+  for (uint32_t i = 0; i < std::min<uint32_t>(frag_cnt, 4); ++i) {
+    auto const& m = block.descriptors[i];
+    std::cerr << "  meta[" << i << "] src_off=" << m.src_off
+              << " len=" << m.len << " dst_off=" << m.dst_off << std::endl;
+  }
+  if (frag_cnt > 4) {
+    for (uint32_t i = frag_cnt - std::min<uint32_t>(frag_cnt, 4); i < frag_cnt;
+         ++i) {
+      auto const& m = block.descriptors[i];
+      std::cerr << "  meta[" << i << "] src_off=" << m.src_off
+                << " len=" << m.len << " dst_off=" << m.dst_off
+                << " (tail)" << std::endl;
+    }
+  }
   block.ready_flag = request->unpack_slot.cnt;
   block.ready_threshold = frag_cnt;
 
+  std::cerr << "[tcpx] launch unpack: count=" << block.count
+            << " total_bytes=" << block.total_bytes << std::endl;
   int launch_rc = unpack_launcher_->launch(block, unpack_stream_);
   if (launch_rc != 0) {
     std::cerr << "[tcpx] unpack kernel launch failed rc=" << launch_rc

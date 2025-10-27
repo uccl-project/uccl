@@ -11,12 +11,14 @@ RDMA_HOME := ../collective/rdma
 CXX := g++
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I../include -I$(RDMA_HOME) -I$(CUDA_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
-	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -lglog -lgflags -lgtest -lz -lelf -lpthread
+	-Wl,-rpath=/usr/lib/x86_64-linux-gnu
 
 ifeq ($(USE_TCPX),1)
 	CXXFLAGS += -DUSE_TCPX
+	LINK_LIBS := -lglog -lgflags -lpthread -ldl
 else
 	CXXFLAGS += -libverbs
+	LINK_LIBS := -lglog -lgflags -lgtest -lz -lelf -lpthread -libverbs
 endif
 
 # Python and pybind11 configuration
@@ -34,15 +36,7 @@ PREFIX ?= /usr/local
 LIBDIR ?= $(PREFIX)/lib
 INCDIR ?= $(PREFIX)/include
 
-LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda \
-                  -Wl,-rpath,$(CUDA_LIB) -lglog -lgflags -lgtest \
-                  -lz -lelf -lpthread
-				  
-ifeq ($(USE_TCPX),1)
-    LDFLAGS += -ldl
-else
-    LDFLAGS += -libverbs
-endif
+LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) $(LINK_LIBS)
 
 # Target and source files
 TARGET   := p2p$(PYEXT)

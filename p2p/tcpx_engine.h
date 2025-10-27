@@ -4,8 +4,10 @@
 #include "tcpx/include/unpack_descriptor.h"
 #include "tcpx/device/unpack_launch.h"
 #include "tcpx/include/tcpx_interface.h"
+#include <array>
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -21,6 +23,15 @@ extern thread_local bool inside_python;
 namespace tcpx {
 
 struct Conn {
+  Conn() {
+    recv_dev_handle = recv_dev_handle_storage.data();
+    send_dev_handle = send_dev_handle_storage.data();
+    std::memset(recv_dev_handle_storage.data(), 0,
+                recv_dev_handle_storage.size());
+    std::memset(send_dev_handle_storage.data(), 0,
+                send_dev_handle_storage.size());
+  }
+
   uint64_t conn_id = 0;
   std::string ip_addr;
   int remote_gpu_idx = -1;
@@ -36,6 +47,9 @@ struct Conn {
   // Cached memory registrations per MR id
   std::unordered_map<uint64_t, void*> send_mhandles;
   std::unordered_map<uint64_t, void*> recv_mhandles;
+
+  alignas(16) std::array<uint8_t, 512> recv_dev_handle_storage;
+  alignas(16) std::array<uint8_t, 512> send_dev_handle_storage;
 };
 
 struct FifoItem {

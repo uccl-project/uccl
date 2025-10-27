@@ -125,6 +125,7 @@ void listener_thread_func(uccl_conn_t* conn) {
                     << std::endl;
         }
 
+#ifdef USE_TCPX
         FifoItem fifo_item;
         memcpy(&fifo_item, out_buf, sizeof(FifoItem));
         // Immediately push the data over TCPX so the passive reader only needs
@@ -133,6 +134,7 @@ void listener_thread_func(uccl_conn_t* conn) {
                                                          fifo_item)) {
           std::cerr << "Failed to queue read response" << std::endl;
         }
+#endif
         break;
       }
       case UCCL_WRITE: {
@@ -217,11 +219,13 @@ void listener_thread_func(uccl_conn_t* conn) {
           memcpy(&fifo_item, out_buf, sizeof(FifoItem));
           // Each advertised slice triggers a corresponding send so the remote
           // side can simply post tagged receives.
+#ifdef USE_TCPX
           if (!conn->engine->endpoint->queue_read_response(conn->conn_id,
                                                            fifo_item)) {
             std::cerr << "Failed to queue read response for item " << i
                       << std::endl;
           }
+#endif
         }
 
         delete[] tx_data_array;
