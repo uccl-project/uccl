@@ -659,7 +659,7 @@ void UcclFlow::transmit_pending_packets() {
 
   // auto hard_budget = socket_->send_queue_free_entries();
   // NOTICE(Nelson): DPDK does not support send_queue_free_entries() anymore.
-  auto hard_budget = socket_->avail_packets();
+  auto hard_budget = SEND_BATCH_SIZE;
 
   uint32_t permitted_packets = 0;
 
