@@ -22,7 +22,7 @@ cd /path/to/uccl/ep/bench/baseline
 ./build_pack_unpack.sh
 ```
 
-### 3. Run Benchmark for torch and nvshmem 
+### 2. Run Benchmark for torch and nvshmem 
 
 **Single node (all GPUs):**
 ```bash
@@ -34,7 +34,7 @@ python bench_nvshmem_sparse_uccl.py --dp-size 1
 python bench_nvshmem_sparse_uccl.py --dp-size 1 --in-dtype float16
 ```
 
-### 4. Run Benchmark for pplx (if you already installed)
+### 3. Run Benchmark for pplx (if you already installed)
 
 ```bash
 cd pplx-kernels
