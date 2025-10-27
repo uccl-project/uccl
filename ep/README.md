@@ -112,7 +112,7 @@ torchrun --nnodes=4 --nproc_per_node=8 --node_rank=<rank> \
   --hidden=7168 --num-topk=8 --num-experts=288 --test-ll-compatibility
 ```
 
-Please refer to [./bench/baseline/](bench/baseline/) for running more baselines including Torch, NVSHMEM, and pplx-kernels on EFA. 
+Please refer to [bench/baseline](bench/baseline) for running more baselines including Torch, NVSHMEM, and pplx-kernels on EFA. 
 
 ## Results
 
