@@ -59,7 +59,7 @@ def make_proxies(
         )
         if peers_meta_list is not None:
             p.set_peers_meta(peers_meta_list)
-        p.set_bench_ring_addrs([rb_i])
+        p.set_bench_d2h_channel_addrs([rb_i])
         proxies.append(p)
     for p in proxies:
         if mode == "sender":

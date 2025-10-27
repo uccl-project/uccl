@@ -773,12 +773,12 @@ class UcclRDMAEngine {
   }
 
   /**
-   * @brief Handling aysnc send requests from Endpoint for all flows.
+   * @brief Handling async send requests from Endpoint for all flows.
    */
   void handle_tx_work(void);
 
   /**
-   * @brief Handling aysnc recv requests from Endpoint for all flows.
+   * @brief Handling async recv requests from Endpoint for all flows.
    */
   void handle_rx_work(void);
 

@@ -3,6 +3,7 @@
 
 #include "fifo.hpp"
 #include "fifo_util.hpp"
+#include <numaif.h>
 
 namespace mscclpp {
 
@@ -25,8 +26,11 @@ Fifo::Fifo(int size) {
   int device;
   MSCCLPP_CUDATHROW(cudaGetDevice(&device));
   int numaNode = getDeviceNumaNode(device);
-  if (numaNode >= 0) {
-    numaBind(numaNode);
+  unsigned long nodemask = 1UL << numaNode;
+  if (set_mempolicy(MPOL_PREFERRED, &nodemask, 8 * sizeof(nodemask)) != 0) {
+    throw std::runtime_error(
+        "Failed to set mempolicy device: " + std::to_string(device) +
+        " numaNode: " + std::to_string(numaNode));
   }
   pimpl_ = std::make_unique<Impl>(size);
 }

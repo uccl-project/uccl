@@ -4,6 +4,9 @@
 #include "ring_buffer.cuh"
 #include <stdint.h>
 #include <stdio.h>
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#include "amd_nanosleep.cuh"
+#endif
 
 __global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs) {
   int const bid = blockIdx.x;

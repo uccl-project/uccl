@@ -41,12 +41,13 @@ struct ProxyCtx {
   ibv_mr* mr = nullptr;
   ibv_cq* cq = nullptr;
   ibv_qp* qp = nullptr;
-  std::vector<ibv_qp*> data_qps_by_ring;
+  std::vector<ibv_qp*> data_qps_by_channel;
   std::vector<uint32_t> dst_data_qpn_by_ring;
   // std::vector<ibv_cq*> extra_cqs;
   ibv_qp* ack_qp = nullptr;
   ibv_qp* recv_ack_qp = nullptr;
   int numa_node = -1;
+  int gid_index = -1;
 
   uint32_t dst_qpn;
   uint32_t dst_ack_qpn;
@@ -102,7 +103,10 @@ struct ProxyCtx {
   // Async-barrier state (single inflight assumed)
   bool barrier_inflight = false;
   uint64_t barrier_seq = 0;
-  uint64_t barrier_wr = 0;
+  int barrier_wr = -1;
+
+  bool quiet_inflight = false;
+  int quiet_wr = -1;
 
   // Rank-0 bookkeeping
   std::vector<uint8_t> barrier_arrived;  // size = num_ranks; 1 if arrival seen

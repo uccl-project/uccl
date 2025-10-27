@@ -25,7 +25,7 @@ IS_EFA=$(ls /sys/class/infiniband/ | grep rdmap || true)
 
 if [[ $TARGET != cuda* && $TARGET != rocm* && $TARGET != "therock" ]]; then
   echo "Usage: $0 [cuda|rocm|therock] [all|rdma|p2p|efa|ep|eccl] [py_version] [rocm_index_url]" >&2
-
+  exit 1
 fi
 
 if [[ $ARCH == "aarch64" && ( $TARGET == rocm* || $TARGET == "therock" ) ]]; then
@@ -150,16 +150,25 @@ build_ep() {
   set -euo pipefail
   echo "[container] build_ep Target: $TARGET"
 
-  if [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
-    echo "Skipping GPU-driven build on ROCm (no GPU-driven support yet)."
+  if [[ "$TARGET" == "therock" ]]; then
+    echo "Skipping GPU-driven build on therock (no GPU-driven support yet)."
+    return
+  elif [[ "$TARGET" == rocm* ]]; then
+    cd ep
+    bash install_deps.sh
+    python3 setup.py build
+    cd ..
+    echo "[container] Copying GPU-driven .so to uccl/"
+    mkdir -p uccl/lib
+    cp ep/build/**/*.so uccl/
+    return
+  elif [[ "$TARGET" == cuda* ]]; then
+    cd ep && make clean && make -j$(nproc) all && cd ..
+    echo "[container] Copying GPU-driven .so to uccl/"
+    mkdir -p uccl/lib
+    cp ep/*.so uccl/
     return
   fi
-
-  cd ep && make clean && make -j$(nproc) all && cd ..
-
-  echo "[container] Copying GPU-driven .so to uccl/"
-  mkdir -p uccl/lib
-  cp ep/*.so uccl/
 }
 
 build_eccl() {

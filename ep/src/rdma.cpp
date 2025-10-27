@@ -5,6 +5,7 @@
 #include "proxy_ctx.hpp"
 #include "rdma_util.hpp"
 #include "util/gpu_rt.h"
+#include "util/net.h"
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <algorithm>
@@ -115,16 +116,30 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   // Get GPU pcie path
   auto gpu_device_path = gpu_cards[gpu_idx];
   // Find the RDMA NIC that is closest to the GPU.
-
   std::vector<std::pair<std::string, uint32_t>> dist;
   dist.reserve(ib_nics.size());
 
+  // Conforming to UCCL_IB_HCA filter.
+  char* ib_hca = getenv("UCCL_IB_HCA");
+  struct uccl::ib_dev user_ib_ifs[MAX_IB_DEVS];
+  bool searchNot = ib_hca && ib_hca[0] == '^';
+  if (searchNot) ib_hca++;
+  bool searchExact = ib_hca && ib_hca[0] == '=';
+  if (searchExact) ib_hca++;
+  int num_ib_ifs = uccl::parse_interfaces(ib_hca, user_ib_ifs, MAX_IB_DEVS);
+
   std::string selected_nic_name;
   for (auto& nic : ib_nics) {
+    if (!(uccl::match_if_list(nic.first.c_str(), 1, user_ib_ifs, num_ib_ifs,
+                              searchExact) ^
+          searchNot)) {
+      continue;
+    }
     uint32_t d = uccl::safe_pcie_distance(gpu_device_path, nic.second);
     dist.emplace_back(nic.first, d);
   }
 
+  // Find the NIC with the minimum distance.
   if (dist.empty()) {
     fprintf(stderr, "[WARN] no NIC found, defaulting to empty\n");
     selected_nic_name.clear();
@@ -363,15 +378,15 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
 #endif
 
 #ifdef USE_NORMAL_MODE
-  const size_t rings_to_create = std::min(num_rings, (size_t)kRingsPerProxy);
-  S.data_qps_by_ring.resize(rings_to_create);
+  const size_t rings_to_create = std::min(num_rings, (size_t)kChannelPerProxy);
+  S.data_qps_by_channel.resize(rings_to_create);
   for (size_t r = 0; r < rings_to_create; ++r) {
 #ifdef EFA
-    S.data_qps_by_ring[r] = create_srd_qp_ex(S);
+    S.data_qps_by_channel[r] = create_srd_qp_ex(S);
 #else
-    S.data_qps_by_ring[r] = ibv_create_qp(S.pd, &qp_init_attr);
+    S.data_qps_by_channel[r] = ibv_create_qp(S.pd, &qp_init_attr);
 #endif
-    if (!S.data_qps_by_ring[r]) {
+    if (!S.data_qps_by_channel[r]) {
       perror("Failed to create data QP");
       exit(1);
     }
@@ -380,9 +395,9 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   // Advertise per-ring QPNs (zero-fill the rest for determinism)
   local_info->num_rings = static_cast<uint32_t>(rings_to_create);
   for (uint32_t r = 0; r < local_info->num_rings; ++r) {
-    local_info->data_qp_num[r] = S.data_qps_by_ring[r]->qp_num;
+    local_info->data_qp_num[r] = S.data_qps_by_channel[r]->qp_num;
   }
-  for (uint32_t r = local_info->num_rings; r < kRingsPerProxy; ++r) {
+  for (uint32_t r = local_info->num_rings; r < kChannelPerProxy; ++r) {
     local_info->data_qp_num[r] = 0;
   }
 #endif
@@ -393,6 +408,7 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
     perror("Failed to query port");
     exit(1);
   }
+  ncclIbGetGidIndex(S.context, 1, &port_attr, &S.gid_index);
   local_info->qp_num = S.qp->qp_num;
   local_info->ack_qp_num = S.ack_qp->qp_num;
   local_info->recv_ack_qp_num = S.recv_ack_qp->qp_num;
@@ -426,8 +442,8 @@ void modify_qp_to_init(ProxyCtx& S) {
     exit(1);
   }
 
-  for (size_t r = 0; r < S.data_qps_by_ring.size(); ++r) {
-    if (ibv_modify_qp(S.data_qps_by_ring[r], &attr, flags)) {
+  for (size_t r = 0; r < S.data_qps_by_channel.size(); ++r) {
+    if (ibv_modify_qp(S.data_qps_by_channel[r], &attr, flags)) {
       perror("Failed to modify QP to INIT");
       exit(1);
     }
@@ -481,8 +497,8 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote) {
 
 #ifdef USE_NORMAL_MODE
   S.dst_data_qpn_by_ring.clear();
-  const uint32_t remote_rings =
-      std::min(remote->num_rings, (uint32_t)kRingsPerProxy);
+  uint32_t const remote_rings =
+      std::min(remote->num_rings, (uint32_t)kChannelPerProxy);
   S.dst_data_qpn_by_ring.reserve(remote_rings);
   for (uint32_t r = 0; r < remote_rings; ++r) {
     S.dst_data_qpn_by_ring.push_back(remote->data_qp_num[r]);
@@ -524,12 +540,13 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote) {
   if (is_roce) {
     attr.ah_attr.is_global = 1;
     attr.ah_attr.port_num = 1;
-    attr.ah_attr.sl = 0;
+    attr.ah_attr.sl = 135;
     attr.ah_attr.src_path_bits = 0;
+    attr.ah_attr.grh.traffic_class = 3;
     attr.ah_attr.grh.hop_limit = 64;
     // Fill GID from remote_info
     memcpy(&attr.ah_attr.grh.dgid, remote->gid, 16);
-    attr.ah_attr.grh.sgid_index = 1;  // Assume GID index 1
+    attr.ah_attr.grh.sgid_index = S.gid_index;
   } else {
     attr.ah_attr.is_global = 0;
     attr.ah_attr.dlid = remote->lid;
@@ -562,9 +579,9 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote) {
     exit(1);
   }
 
-  for (size_t r = 0; r < S.data_qps_by_ring.size(); ++r) {
+  for (size_t r = 0; r < S.data_qps_by_channel.size(); ++r) {
     attr.dest_qp_num = remote->data_qp_num[r];
-    if (ibv_modify_qp(S.data_qps_by_ring[r], &attr, flags)) {
+    if (ibv_modify_qp(S.data_qps_by_channel[r], &attr, flags)) {
       perror("Failed to modify QP to RTR");
       exit(1);
     }
@@ -619,8 +636,8 @@ void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
     exit(1);
   }
 
-  for (size_t r = 0; r < S.data_qps_by_ring.size(); ++r) {
-    if (ibv_modify_qp(S.data_qps_by_ring[r], &attr, flags)) {
+  for (size_t r = 0; r < S.data_qps_by_channel.size(); ++r) {
+    if (ibv_modify_qp(S.data_qps_by_channel[r], &attr, flags)) {
       perror("Failed to modify QP to RTR");
       exit(1);
     }
@@ -666,7 +683,7 @@ void post_receive_buffer_for_imm_on_qp(ProxyCtx& S, ibv_qp* qp) {
 
 void post_receive_buffer_for_imm(ProxyCtx& S) {
   post_receive_buffer_for_imm_on_qp(S, S.qp);  // main QP
-  for (auto* q : S.data_qps_by_ring) {
+  for (auto* q : S.data_qps_by_channel) {
     post_receive_buffer_for_imm_on_qp(S, q);  // per-ring QPs
   }
 }
@@ -723,15 +740,15 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
 
     for (auto& [ring_idx_raw, idxs] : ring_to_indices) {
 #ifdef EFA
-      const size_t local_ring_count = ctx->data_qps_by_ring.size();
+      const size_t local_ring_count = ctx->data_qps_by_channel.size();
       struct ibv_qp_ex* qpx =
           (struct ibv_qp_ex*)(local_ring_count
-                                  ? ctx->data_qps_by_ring[ring_idx_raw %
-                                                          local_ring_count]
+                                  ? ctx->data_qps_by_channel[ring_idx_raw %
+                                                             local_ring_count]
                                   : ctx->ack_qp);
 
-      const size_t remote_ring_count = ctx->dst_data_qpn_by_ring.size();
-      const uint32_t dst_qpn =
+      size_t const remote_ring_count = ctx->dst_data_qpn_by_ring.size();
+      uint32_t const dst_qpn =
           remote_ring_count
               ? ctx->dst_data_qpn_by_ring[ring_idx_raw % remote_ring_count]
               : ctx->dst_qpn;
@@ -819,13 +836,13 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       }
 #else
       {
-        const size_t local_ring_count = ctx->data_qps_by_ring.size();
+        size_t const local_ring_count = ctx->data_qps_by_channel.size();
         struct ibv_qp* qp =
             local_ring_count
-                ? ctx->data_qps_by_ring[ring_idx_raw % local_ring_count]
+                ? ctx->data_qps_by_channel[ring_idx_raw % local_ring_count]
                 : ctx->ack_qp;
 
-        const size_t kgroup = idxs.size();
+        size_t const kgroup = idxs.size();
         std::vector<ibv_sge> sges(kgroup);
         std::vector<ibv_send_wr> wrs(kgroup);
         std::vector<uint64_t> ring_wrids;
@@ -845,7 +862,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
               remote_addr + cmd.bytes > remote_end) {
             fprintf(
                 stderr,
-                "[ERROR] Remote write OOB: addr=0x%llx len=%zu (base=0x%llx, "
+                "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
                 "size=%zu), cmd.req_rptr: 0x%llx\n",
                 (unsigned long long)remote_addr, cmd.bytes,
                 (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
@@ -1107,7 +1124,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
         if (wrs[j].wr.rdma.remote_addr < ctx->remote_addr ||
             wrs[j].wr.rdma.remote_addr + cmd.bytes > remote_end) {
           fprintf(stderr,
-                  "[ERROR] Remote write OOB: addr=0x%llx len=%zu (base=0x%llx, "
+                  "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
                   "size=%zu), cmd.req_rptr: 0x%llx\n",
                   (unsigned long long)wrs[j].wr.rdma.remote_addr, cmd.bytes,
                   (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
@@ -1350,7 +1367,7 @@ ibv_qp* qp_from_qpnum(ProxyCtx& S, uint32_t qpnum) {
   if (S.qp && S.qp->qp_num == qpnum) return S.qp;
   if (S.recv_ack_qp && S.recv_ack_qp->qp_num == qpnum) return S.recv_ack_qp;
   if (S.ack_qp && S.ack_qp->qp_num == qpnum) return S.ack_qp;
-  for (auto* q : S.data_qps_by_ring)
+  for (auto* q : S.data_qps_by_channel)
     if (q && q->qp_num == qpnum) return q;
   return nullptr;
 }
@@ -1600,7 +1617,7 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
     }
 #ifndef EFA
     if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
-      const uint32_t tag = wr_tag(cqe.wr_id);
+      uint32_t const tag = wr_tag(cqe.wr_id);
       if (tag >= ctx_by_tag.size() || ctx_by_tag[tag] == nullptr) {
         fprintf(stderr, "Invalid tag or uninitialized context for tag=%u\n",
                 tag);
@@ -1808,15 +1825,15 @@ void post_atomic_operations(ProxyCtx& S,
     }
 
     for (auto& [ring_idx_raw, idxs] : ring_to_indices) {
-      const size_t local_ring_count = ctx->data_qps_by_ring.size();
+      size_t const local_ring_count = ctx->data_qps_by_channel.size();
 #ifdef EFA
       struct ibv_qp_ex* qpx =
           (struct ibv_qp_ex*)(local_ring_count
-                                  ? ctx->data_qps_by_ring[ring_idx_raw %
-                                                          local_ring_count]
+                                  ? ctx->data_qps_by_channel[ring_idx_raw %
+                                                             local_ring_count]
                                   : ctx->ack_qp);
-      const size_t remote_ring_count = ctx->dst_data_qpn_by_ring.size();
-      const uint32_t dst_qpn =
+      size_t const remote_ring_count = ctx->dst_data_qpn_by_ring.size();
+      uint32_t const dst_qpn =
           remote_ring_count
               ? ctx->dst_data_qpn_by_ring[ring_idx_raw % remote_ring_count]
               : ctx->dst_qpn;
@@ -1874,10 +1891,10 @@ void post_atomic_operations(ProxyCtx& S,
 #else
         struct ibv_qp* qp =
             local_ring_count
-                ? ctx->data_qps_by_ring[ring_idx_raw % local_ring_count]
+                ? ctx->data_qps_by_channel[ring_idx_raw % local_ring_count]
                 : ctx->ack_qp;
 
-        const size_t k = idxs.size();
+        size_t const k = idxs.size();
         std::vector<ibv_sge> sge(k);
         std::vector<ibv_send_wr> wr(k);
         std::vector<uint64_t> group_wrids;
@@ -1886,7 +1903,7 @@ void post_atomic_operations(ProxyCtx& S,
         for (size_t t = 0; t < k; ++t) {
           size_t i = idxs[t];
           auto const& cmd = cmds_to_post[i];
-          const uint64_t wr_id = wrs_to_post[i];
+          uint64_t const wr_id = wrs_to_post[i];
           group_wrids.push_back(wr_id);
 
           int v = static_cast<int>(cmd.value);

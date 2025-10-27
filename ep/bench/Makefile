@@ -156,7 +156,7 @@ INCLUDES += -I../thirdparty/DeepEP/csrc
 INCLUDES += $(EFA_CFLAGS) $(GH_CFLAGS)
 
 # Libraries
-LIBS := -lpthread -lcuda -lcudart -lnuma
+LIBS := -lpthread -lcuda -lcudart
 LIBS += -L$(CUDA_PATH)/lib64 -Xlinker -rpath -Xlinker $(CUDA_PATH)/lib64
 
 # Add EFA libs if available
