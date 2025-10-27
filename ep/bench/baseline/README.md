@@ -3,9 +3,8 @@
 ## Methods
 
 1. **PPLX Kernel EP**  
-2. **CUDA + PyTorch Distributed**  
-3. **CUDA + NVSHMEM**  
-
+2. **PyTorch Distributed**  
+3. **NVSHMEM**  
 
 
 ## Requirements
@@ -23,7 +22,7 @@ cd /path/to/uccl/ep/bench/baseline
 ./build_pack_unpack.sh
 ```
 
-### 2. Run Benchmark for torch and nvshmem 
+### 2. Run single-node benchmark for PyTorch and nvshmem 
 
 **Single node (all GPUs):**
 ```bash
@@ -35,7 +34,7 @@ python bench_nvshmem_sparse_uccl.py --dp-size 1
 python bench_nvshmem_sparse_uccl.py --dp-size 1 --in-dtype float16
 ```
 
-### 3. Run Benchmark for pplx 
+### 3. Run benchmark for PPLX 
 
 ```bash
 cd pplx-kernels
