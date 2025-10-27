@@ -2,18 +2,16 @@
 
 ## Methods
 
+1. **PPLX Kernel EP**  
+   Specialized expert parallelism kernel implementation
 ### Standard Implementations
-1. **PyTorch Distributed**  
-2. **NVSHMEM**  
+2. **PyTorch Distributed**  
+3. **NVSHMEM**  
    
 
 ### Optimized Implementations
-3. **CUDA + PyTorch Distributed**  
-4. **CUDA + NVSHMEM**  
-
-
-5. **PPLX Kernel EP**  
-   Specialized expert parallelism kernel implementation
+4. **CUDA + PyTorch Distributed**  
+5. **CUDA + NVSHMEM**  
 
 ---
 **Standard:** Python-based packing/unpacking operations
