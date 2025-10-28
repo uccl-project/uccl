@@ -12,7 +12,7 @@ except ImportError as exc:
     raise
 
 from uccl.ep import EventHandle, Config
-from deep_ep.utils import EventOverlap, check_nvlink_connections
+from deep_ep.utils import EventOverlap, check_nvlink_connections, initialize_uccl, destroy_uccl
 
 
 class Buffer:
@@ -34,6 +34,11 @@ class Buffer:
 
     # TODO(MaoZiming): Reduce SMs. UCCL Proxy should reduce the usage of SMs.
     num_sms: int = 20
+
+    # Track UCCL initialization per device
+    _uccl_initialized_devices = set()
+    _uccl_proxies_dict = {}
+    _uccl_workers_dict = {}
 
     def __init__(
         self,
@@ -76,15 +81,40 @@ class Buffer:
         self.low_latency_mode = low_latency_mode
         self.explicitly_destroy = explicitly_destroy
 
-        # Allocate RDMA buffer if needed
-        self._rdma_buffer = None
-        if num_rdma_bytes > 0:
-            # Allocate RDMA buffer as a torch tensor
-            # Use at least 256MB or the requested size
-            rdma_buffer_size = max(num_rdma_bytes, 256 * 1024 * 1024)
-            self._rdma_buffer = torch.empty(
-                rdma_buffer_size, dtype=torch.uint8, device=torch.cuda.current_device()
+        # Get current device
+        device_index = torch.cuda.current_device()
+
+        # Allocate unified buffer for both UCCL proxies and runtime
+        # This ensures proxies and runtime use the SAME memory
+        buffer_size = max(num_nvl_bytes, num_rdma_bytes, 256 * 1024 * 1024)  # At least 256MB
+        self._buffer = torch.empty(
+            buffer_size, dtype=torch.uint8, device=f"cuda:{device_index}"
+        )
+
+        # Initialize UCCL proxies if not already done for this device
+        if device_index not in Buffer._uccl_initialized_devices:
+            # Determine if this is intranode
+            if "LOCAL_WORLD_SIZE" in os.environ:
+                local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])
+                is_intranode = (self.group_size <= local_world_size)
+            else:
+                num_gpus = torch.cuda.device_count()
+                is_intranode = (self.group_size <= num_gpus)
+
+            # Initialize UCCL with the same buffer
+            proxies, workers = initialize_uccl(
+                scratch=self._buffer,
+                scratch_nbytes=buffer_size,
+                rank=self.rank,
+                num_ranks=self.group_size,
+                group=group,
+                num_experts=0,
+                is_intranode=is_intranode
             )
+
+            Buffer._uccl_initialized_devices.add(device_index)
+            Buffer._uccl_proxies_dict[device_index] = proxies
+            Buffer._uccl_workers_dict[device_index] = workers
 
         # Create the C++ runtime
         self.runtime = ep.Buffer(
@@ -97,9 +127,9 @@ class Buffer:
             int(os.environ.get("LOCAL_WORLD_SIZE", -1)),
         )
 
-        # Set RDMA buffer pointer immediately after creating runtime
-        if self._rdma_buffer is not None:
-            self.runtime.set_rdma_buffer_raw(self._rdma_buffer.data_ptr())
+        # Set buffer pointer for runtime to use the SAME buffer as proxies
+        if num_rdma_bytes > 0:
+            self.runtime.set_rdma_buffer_raw(self._buffer.data_ptr())
 
         # Synchronize device IDs
         device_ids = [
@@ -132,6 +162,12 @@ class Buffer:
             rdma_ipc_handles,
         )
         assert self.runtime.is_available()
+
+        # Connect atomic buffer to link runtime with UCCL proxies
+        # This ensures they share the same memory for RDMA operations
+        proxies = Buffer._uccl_proxies_dict.get(device_index)
+        if proxies and len(proxies) > 0:
+            self.connect_atomic_buffer(proxies[0])
 
     def reset_rdma_buffer(self):
         """
