@@ -24,6 +24,7 @@ namespace {
 constexpr int kDefaultOobPort = 28900;
 constexpr int kCtrlBacklog = 128;
 
+// Payloads exchanged on the lightweight TCP control plane.
 struct EndpointInfo {
   char ip[INET_ADDRSTRLEN];
   uint16_t port;
@@ -111,6 +112,7 @@ bool recv_ctrl_ack(int fd) {
   return hdr.type == CTRL_ACK;
 }
 
+// Resolve a best effort control IP; used only to seed the metadata exchange.
 std::string get_local_ip() {
   char const* env_ip = std::getenv("UCCL_TCPX_CTRL_IP");
   if (env_ip && *env_ip) return env_ip;
@@ -144,6 +146,7 @@ int get_env_int(char const* name, int def_val) {
   return std::atoi(value);
 }
 
+// Score available TCPX NICs to find the best attachment for this GPU.
 int find_best_dev(uint32_t local_gpu_idx) {
   int device_count = tcpx_get_device_count();
   if (device_count <= 0) {
@@ -175,6 +178,8 @@ namespace tcpx {
 Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const /*num_cpus*/) {
   local_gpu_idx_ = local_gpu_idx;
 
+  // Bring up the control socket, pre-create the TCPX listen handle, and warm up
+  // the CUDA stream used by bounce-buffer unpack launches.
   dev_id_ = find_best_dev(local_gpu_idx_);
   if (dev_id_ < 0) {
     throw std::runtime_error("tcpx: no available device");
@@ -229,6 +234,8 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const /*num_cpus*/) {
 }
 
 Endpoint::~Endpoint() {
+  // Connections may still be cached in conn_map_; tear them down before closing
+  // shared resources.
   {
     std::unique_lock<std::shared_mutex> lock(conn_mu_);
     for (auto& kv : conn_map_) {
@@ -291,6 +298,9 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx,
   auto conn = std::make_unique<Conn>();
 
   // Prepare reverse listen for recv path
+  // Client temporarily listens so the server can push back a handle for the
+  // reverse (recv) direction. The handle itself is exchanged over the control
+  // TCP socket below.
   void* reverse_listen = nullptr;
   HandlePayload reverse_handle{};
   // Client publishes a temporary listener so the server can establish the recv
@@ -425,6 +435,9 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx,
 
 bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
                       uint64_t& conn_id) {
+  // Symmetric handshake to connect(): accept the control socket, exchange
+  // endpoint info, push back our listen handle, then finish the send/recv comm
+  // pair using handle payloads from the client.
   sockaddr_in client_addr{};
   socklen_t addrlen = sizeof(client_addr);
   int sock_fd =
@@ -601,6 +614,8 @@ bool Endpoint::populate_conn_handles_(Conn& conn, uint64_t mr_id,
 
 bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
                          size_t len, char* out_buf) {
+  // Produce a fixed-width description of a registered buffer so the peer can
+  // issue a tagged receive or read.
   if (!out_buf) return false;
 
   MrEntry mr;
@@ -629,6 +644,8 @@ bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
 }
 
 bool Endpoint::queue_read_response(uint64_t conn_id, FifoItem const& fifo_item) {
+  // Active side of a read: locate the advertised slice and push it using the
+  // tag recorded in the FIFO.
   Conn* conn_ptr = nullptr;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
@@ -795,6 +812,8 @@ bool Endpoint::recv_async_with_tag(uint64_t conn_id, uint64_t mr_id, void* data,
 bool Endpoint::post_send_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
                           void const* data, size_t size, int tag,
                           uint64_t& transfer_id) {
+  // Internal helper shared by send_async/queue_read_response. Ensures the MR is
+  // registered (lazy) and tracks the outstanding TCPX request in transfer_map_.
   if (!data || size == 0) return false;
 
   void* mhandle = nullptr;
@@ -833,6 +852,8 @@ bool Endpoint::post_send_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
 bool Endpoint::post_recv_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
                           void* data, size_t size, int tag,
                           uint64_t& transfer_id, bool needs_unpack) {
+  // Mirrors post_send_: queue a TCPX irecv, then stash bookkeeping so poll_async
+  // can match the request, trigger unpack, and free resources later.
   if (!data || size == 0) return false;
 
   void* mhandle = nullptr;
@@ -881,6 +902,9 @@ bool Endpoint::poll_request_(PendingTransfer& transfer, bool* done,
 
   int completed = 0;
   int size = 0;
+  // Stage 1: query TCPX progress. tcpx_test returns immediately and sets
+  // `completed` when the network transfer has finished populating the bounce
+  // buffer.
   int rc = tcpx_test(transfer.request, &completed, &size);
   if (rc != 0) {
     std::cerr << "[tcpx] tcpx_test failed rc=" << rc << std::endl;
@@ -997,6 +1021,8 @@ bool Endpoint::enqueue_unpack_(PendingTransfer& transfer,
 
 bool Endpoint::complete_pending_transfer_(PendingTransfer& transfer,
                                           bool success) {
+  // Finalise bookkeeping for a finished transfer and return resources to the
+  // TCPX plugin if appropriate.
   if (transfer.kind == PendingTransfer::Kind::kRecv && transfer.request) {
     Conn* conn_ptr = nullptr;
     {
@@ -1033,6 +1059,10 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
 
   bool completed = false;
   int size = 0;
+  // Completion happens in two stages:
+  //  1) tcpx_test indicates the TCP stack finished the transfer.
+  //  2) If we received data via the bounce buffer, launch the CUDA unpack and
+  //     wait for the event before we report completion to the caller.
   if (!poll_request_(transfer, &completed, &size)) return false;
 
   if (!completed) return true;
@@ -1076,6 +1106,8 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   return true;
 }
 
+// Helper invoked during teardown to make sure every comm and its registrations
+// are returned to the TCPX runtime.
 void Endpoint::free_conn_(std::unique_ptr<Conn>& conn) {
   if (!conn) return;
   if (conn->send_comm) {
