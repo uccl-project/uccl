@@ -562,8 +562,12 @@ def initialize_uccl(
 
     dist.barrier(group)
     if not is_intranode:
+        if rank == 0:
+            print(f"[UCCL] Starting dual mode for internode communication (num_nodes={num_nodes}, num_ranks={num_ranks})", flush=True)
         for proxy in proxies:
             proxy.start_dual()
+        if rank == 0:
+            print(f"[UCCL] Dual mode started, waiting for RDMA connections to establish...", flush=True)
 
     workers = None
     # if hasattr(ep, "PeerCopyManager"):
@@ -576,7 +580,18 @@ def initialize_uccl(
     #         if rank == 0:
     #             print(f"PeerCopyManager unavailable: {e}", flush=True)
 
-    time.sleep(3)
+    # Wait longer for internode RDMA connections to fully establish
+    # With more ranks and nodes, this needs more time
+    sleep_time = 10 if not is_intranode else 3
+    if rank == 0:
+        print(f"[UCCL] Waiting {sleep_time} seconds for connections to stabilize...", flush=True)
+    time.sleep(sleep_time)
+
+    dist.barrier(group)  # Extra barrier to ensure all ranks are ready
+
+    if rank == 0:
+        print(f"[UCCL] UCCL initialization complete!", flush=True)
+
     return proxies, workers
 
 
