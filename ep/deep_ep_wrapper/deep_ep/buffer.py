@@ -118,7 +118,7 @@ class Buffer:
                 num_experts=288,  # TODO: 是不是要写死？
                 is_intranode=is_intranode
             )
-            print('rank:', self.rank, 'group_size:', self.group_size, 'group:', self.group, 'num_nvl_bytes:', self.num_nvl_bytes, 'num_rdma_bytes:', self.num_rdma_bytes, 'low_latency_mode:', self.low_latency_mode, 'explicitly_destroy:', self.explicitly_destroy, 'device_id:', device_id, 'proxies:', proxies, 'workers:', workers)
+            print('rank:', self.rank, 'group_size:', self.group_size, 'group:', self.group, 'num_nvl_bytes:', self.num_nvl_bytes, 'num_rdma_bytes:', self.num_rdma_bytes, 'low_latency_mode:', self.low_latency_mode, 'explicitly_destroy:', self.explicitly_destroy, 'device_index:', device_index, 'local_world_size:', local_world_size 'proxies:', proxies, 'workers:', workers)
 
             Buffer._uccl_initialized_devices.add(device_index)
             Buffer._uccl_proxies_dict[device_index] = proxies
