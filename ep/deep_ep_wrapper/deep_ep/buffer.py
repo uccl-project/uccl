@@ -135,14 +135,12 @@ class Buffer:
             int(os.environ.get("LOCAL_WORLD_SIZE", -1)),
         )
 
-        # # Set RDMA buffer: use provided rdma_buffer_ptr or shared buffer
-        # if num_rdma_bytes > 0:
-        #     if rdma_buffer_ptr is not None:
-        #         self.runtime.set_rdma_buffer_raw(rdma_buffer_ptr)
-        #     else:
-        #         self.runtime.set_rdma_buffer_raw(self._buffer.data_ptr())
-        if num_rdma_bytes:
-            self.runtime.set_rdma_buffer_raw(rdma_buffer_ptr)
+        # Set RDMA buffer: use provided rdma_buffer_ptr or shared buffer
+        if num_rdma_bytes > 0:
+            if rdma_buffer_ptr is not None:
+                self.runtime.set_rdma_buffer_raw(rdma_buffer_ptr)
+            # else:  # TODO: 这个else要不要执行？因为rdma_buffer_ptr默认是None
+            #     self.runtime.set_rdma_buffer_raw(self._buffer.data_ptr())
 
         # Synchronize device IDs
         device_ids = [
