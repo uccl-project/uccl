@@ -34,9 +34,10 @@ RUN apt-get update && \
 # ─────────────────────────────────────────────────────────
 # Install Python build back-end (for Python ${PY_VER})
 # ─────────────────────────────────────────────────────────
-RUN python${PY_VER} -m pip install --no-cache-dir build auditwheel pybind11 numpy
+RUN python${PY_VER} -m pip install --no-cache-dir build auditwheel pybind11
 
-RUN python${PY_VER} -m pip install --no-cache-dir torch==2.6.0+cu126 --index-url https://download.pytorch.org/whl/cu126
+RUN python${PY_VER} -m pip install --no-cache-dir torch==2.6.0+cu126 \
+    --index-url https://download.pytorch.org/whl/cu126
 
 RUN python${PY_VER} -m pip install --no-cache-dir --upgrade setuptools
 
@@ -44,7 +45,8 @@ RUN python${PY_VER} -m pip install --no-cache-dir --upgrade setuptools
 RUN ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python3 && \
     ln -sf /usr/bin/python${PY_VER}-config /usr/local/bin/python3-config
 
-
-
 WORKDIR /io
+
+ENV GPU_NAME=GH200
+
 CMD ["bash"]

@@ -52,19 +52,23 @@ ARG EFA_VER=1.43.2
 RUN curl -O https://efa-installer.amazonaws.com/aws-efa-installer-${EFA_VER}.tar.gz && \
     tar -xf aws-efa-installer-${EFA_VER}.tar.gz && \
     cd aws-efa-installer && \
-    ./efa_installer.sh -y --skip-kmod -g --no-verify --minimal && \
+    ./efa_installer.sh -y --skip-kmod -g --no-verify && \
     cd .. && rm -rf aws-efa-installer*
 
-    # Set path to EFA libraries
-ENV LD_LIBRARY_PATH=/opt/amazon/efa/lib64:$LD_LIBRARY_PATH
-
 # Verify libfabric installation
-RUN fi_info -p efa || true
+RUN ls /opt/amazon/efa
+
+# Set path to EFA libraries
+ENV LD_LIBRARY_PATH=/opt/amazon/efa/lib64:$LD_LIBRARY_PATH
 
 # ─────────────────────────────────────────────────────────
 # Install Python build back-end (for Python ${PY_VER})
 # ─────────────────────────────────────────────────────────
 RUN python${PY_VER} -m pip install --no-cache-dir build auditwheel pybind11
+
+# ───── Install PyTorch with CUDA support ─────
+RUN python${PY_VER} -m pip install --no-cache-dir torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/cu128
 
 RUN python${PY_VER} -m pip install --no-cache-dir --upgrade setuptools
 

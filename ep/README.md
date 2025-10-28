@@ -4,41 +4,47 @@ GPU-driven communication (e.g., DeepEP) is the key to efficient and large-scale 
 
 For UCCL's host/CPU-driven P2P engine, see [p2p](../p2p/) folder.
 
-## Installing dependencies
+## Build on CUDA for testing
 
-We provide a script to install dependencies (tested on p5en)
-
+We provide a script to install dependencies (tested on p5en). Then under a Python environment: 
 ```bash
+# Under uccl/ep
 ./install_deps.sh
 ```
 
-## Build on CUDA for testing
-
-Installing `ep` as a Python package:
+We first configure the environmental variable before `make install`
 ```bash
-# under uccl
-bash build_and_install.sh cuda ep
+# Normal mode
+export MAKE_NORMAL_MODE=1
+# Low latency mode
+export MAKE_NORMAL_MODE=0
 ```
 
-Alternatively, in a Python environment:
+Next, in a conda environment: 
 ```bash
-# under uccl/ep
 make -j install
+```
+
+Alternatively, you can build `uccl.ep` wheel using docker:
+```bash
+# Under uccl
+bash build_and_install.sh cuda ep
 ```
 
 ## Build on ROCm for testing
 
-build rocm image
+Build `uccl.ep` wheel for ROCm using docker:
 ```bash
-# requiring rocm7
-pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
-# under uccl
+# Under uccl
 bash build_and_install.sh rocm ep
+
+# Install rocm7 into local Python env
+pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
 ```
 
-test import uccl.ep
+Test import `uccl.ep`
 ```bash
-python -c "import torch;import uccl.ep"
+python -c "import torch; import uccl.ep"
 ```
 
 ## Example APIs
@@ -105,6 +111,8 @@ torchrun --nnodes=4 --nproc_per_node=8 --node_rank=<rank> \
   bench/test_internode.py  --num-tokens=4096 \
   --hidden=7168 --num-topk=8 --num-experts=288 --test-ll-compatibility
 ```
+
+Please refer to [bench/baseline](bench/baseline) for running more baselines including Torch, NVSHMEM, and pplx-kernels on EFA. 
 
 ## Results
 

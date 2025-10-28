@@ -19,6 +19,15 @@ get_cuda_version() {
 # Install PyTorch with automatic CUDA version handling
 echo "Checking CUDA environment..."
 if check_cuda; then
+    sudo apt install -y nvtop libgoogle-glog-dev clang-format-14 python3-pip
+    pip3 install pybind11 --upgrade
+    pip3 install black
+
+    # Check if we're in a conda environment
+    if [[ ! -z "${CONDA_PREFIX}" ]]; then
+        conda install -c conda-forge libstdcxx-ng -y
+    fi
+
     # Install CUDA dependencies
     CUDA_VERSION=$(get_cuda_version)
     echo "Detected CUDA version: $CUDA_VERSION"
