@@ -6,6 +6,11 @@
 #include <map>
 #include <unordered_map>
 #include <vector>
+#ifdef USE_NORMAL_MODE
+#include <chrono>
+#endif
+
+struct TransferCmd;  // forward declaration
 
 template <typename Key>
 class TokenCounter {
@@ -130,4 +135,17 @@ struct ProxyCtx {
     return (static_cast<uint64_t>(static_cast<uint32_t>(dst_rank)) << 32) ^
            static_cast<uint64_t>(static_cast<uint32_t>(index));
   }
+
+#ifdef USE_NORMAL_MODE
+  // Batching state for delayed transmission
+  struct BatchState {
+    std::vector<uint64_t> wrs;
+    std::vector<TransferCmd> cmds;
+    std::chrono::steady_clock::time_point first_cmd_time;
+    bool has_pending = false;
+  };
+  std::unordered_map<int, BatchState> pending_batches;  // per dst_rank
+  static constexpr size_t kMaxBatchSize = 64;
+  static constexpr int64_t kMaxBatchDelayUs = 100;
+#endif
 };

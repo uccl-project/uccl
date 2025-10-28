@@ -689,82 +689,156 @@ void post_receive_buffer_for_imm(ProxyCtx& S) {
 }
 
 #ifdef USE_NORMAL_MODE
-void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
-                             std::vector<uint64_t> const& wrs_to_post,
-                             std::vector<TransferCmd> const& cmds_to_post,
-                             std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                             int my_rank, int thread_idx) {
-  if (num_wrs == 0) return;
-  if (wrs_to_post.size() != num_wrs || cmds_to_post.size() != num_wrs) {
-    fprintf(stderr, "Size mismatch (num_wrs=%zu, wr_ids=%zu, cmds=%zu)\n",
-            num_wrs, wrs_to_post.size(), cmds_to_post.size());
+// Forward declaration
+void flush_pending_batch_for_dst(ProxyCtx& S, int dst_rank, void* buf,
+                                 std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
+                                 int my_rank, int thread_idx);
+
+void flush_all_pending_batches(ProxyCtx& S, void* buf,
+                               std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
+                               int my_rank, int thread_idx) {
+  for (auto& [dst_rank, batch_state] : S.pending_batches) {
+    if (batch_state.has_pending && !batch_state.wrs.empty()) {
+      flush_pending_batch_for_dst(S, dst_rank, buf, ctxs, my_rank, thread_idx);
+    }
+  }
+}
+
+void flush_pending_batch_for_dst(ProxyCtx& S, int dst_rank, void* buf,
+                                 std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
+                                 int my_rank, int thread_idx) {
+  auto& batch = S.pending_batches[dst_rank];
+  if (!batch.has_pending || batch.wrs.empty()) {
+    return;
+  }
+
+  ProxyCtx* ctx = ctxs[dst_rank].get();
+  if (!ctx || !ctx->qp || !ctx->mr) {
+    fprintf(stderr, "Destination ctx missing fields for dst=%d\n", dst_rank);
     std::abort();
   }
 
-  std::unordered_map<int, std::vector<size_t>> dst_rank_wr_ids;
-  for (size_t i = 0; i < num_wrs; ++i) {
-    if (cmds_to_post[i].dst_rank == static_cast<uint32_t>(my_rank)) {
-      // NOTE(MaoZiming): this should not happen.
-      printf("Posting rdma to itself\n");
-      std::abort();
-      continue;
-    } else if (std::abs((int)cmds_to_post[i].dst_rank - (int)my_rank) %
-                   MAX_NUM_GPUS !=
-               0) {
-      // NOTE(MaoZiming): this should not happen.
-      printf("Posting rdma to a different rank\n");
-      std::abort();
-      continue;
-    } else {
-      dst_rank_wr_ids[cmds_to_post[i].dst_rank].push_back(i);
-    }
+  size_t const num_wrs = batch.wrs.size();
+
+  // Group by ring index
+  std::unordered_map<size_t, std::vector<size_t>> ring_to_indices;
+  ring_to_indices.reserve(num_wrs);
+  for (size_t j = 0; j < num_wrs; ++j) {
+    size_t ring_idx = static_cast<size_t>((batch.wrs[j] >> 32) & 0xFFFFFFFFu);
+    ring_to_indices[ring_idx].push_back(j);
   }
 
-  for (auto& [dst_rank, wr_ids] : dst_rank_wr_ids) {
-    if (wr_ids.empty()) continue;
+  for (auto& [ring_idx_raw, idxs] : ring_to_indices) {
+#ifdef EFA
+    const size_t local_ring_count = ctx->data_qps_by_channel.size();
+    struct ibv_qp_ex* qpx =
+        (struct ibv_qp_ex*)(local_ring_count
+                                ? ctx->data_qps_by_channel[ring_idx_raw %
+                                                           local_ring_count]
+                                : ctx->ack_qp);
 
-    ProxyCtx* ctx = ctxs[dst_rank].get();
-    if (!ctx || !ctx->qp || !ctx->mr) {
-      fprintf(stderr, "Destination ctx missing fields for dst=%d\n", dst_rank);
+    size_t const remote_ring_count = ctx->dst_data_qpn_by_ring.size();
+    uint32_t const dst_qpn =
+        remote_ring_count
+            ? ctx->dst_data_qpn_by_ring[ring_idx_raw % remote_ring_count]
+            : ctx->dst_qpn;
+
+    ibv_wr_start(qpx);
+    std::vector<uint64_t> ring_wrids;
+    ring_wrids.reserve(idxs.size());
+
+    for (size_t j = 0; j < idxs.size(); ++j) {
+      size_t i = idxs[j];
+      auto const& cmd = batch.cmds[i];
+
+      qpx->wr_id = batch.wrs[i];
+      qpx->comp_mask = 0;
+      qpx->wr_flags = IBV_SEND_SIGNALED;
+
+      uint64_t remote_addr =
+          ctx->remote_addr + (cmd.req_rptr ? cmd.req_rptr : 0);
+      uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
+
+      if (remote_addr < ctx->remote_addr ||
+          remote_addr + cmd.bytes > remote_end) {
+        fprintf(stderr,
+                "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
+                "size=%zu), cmd.req_rptr: 0x%llx\n",
+                (unsigned long long)remote_addr, cmd.bytes,
+                (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
+                (unsigned long long)cmd.req_rptr);
+        cudaError_t err = cudaDeviceSynchronize();
+        if (err != cudaSuccess) {
+          fprintf(stderr, "cudaDeviceSynchronize failed: %s\n",
+                  cudaGetErrorString(err));
+        }
+        std::abort();
+      }
+
+      // Optionally send an inline "atomic" via imm, else use imm only on tail
+      if (cmd.atomic_offset > 0 && cmd.atomic_val > 0) {
+        int v = static_cast<int>(cmd.atomic_val);
+        if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {
+          fprintf(stderr, "[EFA] atomic value=%d won't fit in 15 bits\n", v);
+          std::abort();
+        }
+        size_t index = static_cast<size_t>(cmd.atomic_offset / sizeof(int));
+        auto key = ctx->seq_key(dst_rank, index);
+        if (ctx->next_seq_per_index.find(key) == ctx->next_seq_per_index.end())
+          ctx->next_seq_per_index[key] = 0;
+
+        uint8_t seq = ctx->next_seq_per_index[key];
+        ctx->next_seq_per_index[key] = (seq + 1) % kReorderingBufferSize;
+        uint32_t imm =
+            AtomicsImm::PackAtomicWithSeq(v, cmd.atomic_offset, seq, true)
+                .GetImmData();
+        AtomicsImm aimm(imm);
+        assert(aimm.GetSeq() == seq);
+
+        ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
+      } else if (j + 1 == idxs.size()) {
+        uint32_t imm =
+            WriteImm::Pack(get_is_combine(cmd.cmd_type),
+                           get_low_latency(cmd.cmd_type), cmd.expert_idx,
+                           (uint32_t)idxs.size(), my_rank)
+                .GetImmData();
+        ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
+      } else {
+        ibv_wr_rdma_write(qpx, ctx->remote_rkey, remote_addr);
+      }
+
+      uintptr_t laddr =
+          cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
+      ibv_wr_set_ud_addr(qpx, ctx->dst_ah, dst_qpn, QKEY);
+      ibv_wr_set_sge(qpx, ctx->mr->lkey, laddr,
+                     static_cast<uint32_t>(cmd.bytes));
+
+      ring_wrids.push_back(batch.wrs[i]);
+    }
+    int ret = ibv_wr_complete(qpx);
+    if (ret) {
+      fprintf(stderr, "ibv_wr_complete failed (dst=%d): %s (ret=%d)\n",
+              dst_rank, strerror(ret), ret);
       std::abort();
     }
-    size_t const k = wr_ids.size();
-    std::unordered_map<size_t, std::vector<size_t>> ring_to_indices;
-    ring_to_indices.reserve(k);
-    for (size_t j = 0; j < k; ++j) {
-      size_t i = wr_ids[j];
-      size_t ring_idx =
-          static_cast<size_t>((wrs_to_post[i] >> 32) & 0xFFFFFFFFu);
-      ring_to_indices[ring_idx].push_back(i);
-    }
+#else
+    {
+      size_t const local_ring_count = ctx->data_qps_by_channel.size();
+      struct ibv_qp* qp =
+          local_ring_count
+              ? ctx->data_qps_by_channel[ring_idx_raw % local_ring_count]
+              : ctx->ack_qp;
 
-    for (auto& [ring_idx_raw, idxs] : ring_to_indices) {
-#ifdef EFA
-      const size_t local_ring_count = ctx->data_qps_by_channel.size();
-      struct ibv_qp_ex* qpx =
-          (struct ibv_qp_ex*)(local_ring_count
-                                  ? ctx->data_qps_by_channel[ring_idx_raw %
-                                                             local_ring_count]
-                                  : ctx->ack_qp);
-
-      size_t const remote_ring_count = ctx->dst_data_qpn_by_ring.size();
-      uint32_t const dst_qpn =
-          remote_ring_count
-              ? ctx->dst_data_qpn_by_ring[ring_idx_raw % remote_ring_count]
-              : ctx->dst_qpn;
-
-      ibv_wr_start(qpx);
-      // No receiver barrier: build a single chain for this ring group
+      size_t const kgroup = idxs.size();
+      std::vector<ibv_sge> sges(kgroup);
+      std::vector<ibv_send_wr> wrs(kgroup);
       std::vector<uint64_t> ring_wrids;
-      ring_wrids.reserve(idxs.size());
+      ring_wrids.reserve(kgroup);
 
-      for (size_t j = 0; j < idxs.size(); ++j) {
+      for (size_t j = 0; j < kgroup; ++j) {
         size_t i = idxs[j];
-        auto const& cmd = cmds_to_post[i];
-
-        qpx->wr_id = wrs_to_post[i];
-        qpx->comp_mask = 0;
-        qpx->wr_flags = IBV_SEND_SIGNALED;
+        auto const& cmd = batch.cmds[i];
+        ring_wrids.push_back(batch.wrs[i]);
 
         uint64_t remote_addr =
             ctx->remote_addr + (cmd.req_rptr ? cmd.req_rptr : 0);
@@ -785,154 +859,137 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
           }
           std::abort();
         }
-        // Optionally send an inline "atomic" via imm, else use imm only on tail
-        if (cmd.atomic_offset > 0 && cmd.atomic_val > 0) {
-          int v = static_cast<int>(cmd.atomic_val);
-          if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {
-            fprintf(stderr, "[EFA] atomic value=%d won't fit in 15 bits\n", v);
-            std::abort();
-          }
-          size_t index = static_cast<size_t>(cmd.atomic_offset / sizeof(int));
-          // Initialize missing entries lazily
-          auto key = ctx->seq_key(dst_rank, index);
-          if (ctx->next_seq_per_index.find(key) ==
-              ctx->next_seq_per_index.end())
-            ctx->next_seq_per_index[key] = 0;
-
-          uint8_t seq = ctx->next_seq_per_index[key];
-          ctx->next_seq_per_index[key] =
-              (seq + 1) % kReorderingBufferSize;  // 4-bit wrap (0–15)
-          uint32_t imm =
-              AtomicsImm::PackAtomicWithSeq(v, cmd.atomic_offset, seq, true)
-                  .GetImmData();
-          AtomicsImm aimm(imm);
-          assert(aimm.GetSeq() == seq);
-
-          ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
-        } else if (j + 1 == idxs.size()) {
-          uint32_t imm =
-              WriteImm::Pack(get_is_combine(cmd.cmd_type),
-                             get_low_latency(cmd.cmd_type), cmd.expert_idx,
-                             (uint32_t)idxs.size(), my_rank)
-                  .GetImmData();
-          ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
-        } else {
-          ibv_wr_rdma_write(qpx, ctx->remote_rkey, remote_addr);
-        }
 
         uintptr_t laddr =
             cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
-        ibv_wr_set_ud_addr(qpx, ctx->dst_ah, dst_qpn, QKEY);
-        ibv_wr_set_sge(qpx, ctx->mr->lkey, laddr,
-                       static_cast<uint32_t>(cmd.bytes));
+        sges[j] = {
+            .addr = laddr,
+            .length = static_cast<uint32_t>(cmd.bytes),
+            .lkey = ctx->mr->lkey,
+        };
 
-        ring_wrids.push_back(wrs_to_post[i]);
-      }
-      int ret = ibv_wr_complete(qpx);
-      if (ret) {
-        fprintf(stderr, "ibv_wr_complete failed (dst=%d): %s (ret=%d)\n",
-                dst_rank, strerror(ret), ret);
-        std::abort();
-      }
-#else
-      {
-        size_t const local_ring_count = ctx->data_qps_by_channel.size();
-        struct ibv_qp* qp =
-            local_ring_count
-                ? ctx->data_qps_by_channel[ring_idx_raw % local_ring_count]
-                : ctx->ack_qp;
+        std::memset(&wrs[j], 0, sizeof(wrs[j]));
+        wrs[j].wr_id = batch.wrs[i];
+        wrs[j].sg_list = &sges[j];
+        wrs[j].num_sge = 1;
+        wrs[j].wr.rdma.remote_addr = remote_addr;
+        wrs[j].wr.rdma.rkey = ctx->remote_rkey;
+        wrs[j].opcode = IBV_WR_RDMA_WRITE;
+        wrs[j].send_flags = (j + 1 == kgroup) ? IBV_SEND_SIGNALED : 0;
+        wrs[j].next = (j + 1 < kgroup) ? &wrs[j + 1] : nullptr;
 
-        size_t const kgroup = idxs.size();
-        std::vector<ibv_sge> sges(kgroup);
-        std::vector<ibv_send_wr> wrs(kgroup);
-        std::vector<uint64_t> ring_wrids;
-        ring_wrids.reserve(kgroup);
-
-        for (size_t j = 0; j < kgroup; ++j) {
-          size_t i = idxs[j];
-          auto const& cmd = cmds_to_post[i];
-          ring_wrids.push_back(wrs_to_post[i]);
-
-          // Remote address bounds check
-          uint64_t remote_addr =
-              ctx->remote_addr + (cmd.req_rptr ? cmd.req_rptr : 0);
-          uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
-
-          if (remote_addr < ctx->remote_addr ||
-              remote_addr + cmd.bytes > remote_end) {
-            fprintf(
-                stderr,
-                "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
-                "size=%zu), cmd.req_rptr: 0x%llx\n",
-                (unsigned long long)remote_addr, cmd.bytes,
-                (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
-                (unsigned long long)cmd.req_rptr);
-            cudaError_t err = cudaDeviceSynchronize();
-            if (err != cudaSuccess) {
-              fprintf(stderr, "cudaDeviceSynchronize failed: %s\n",
-                      cudaGetErrorString(err));
-            }
+        if (cmd.atomic_offset > 0 && cmd.atomic_val > 0) {
+          int v = static_cast<int>(cmd.atomic_val);
+          if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {
+            fprintf(stderr, "atomic value=%d won't fit in 15 bits\n", v);
             std::abort();
           }
-
-          // Local SGE
-          uintptr_t laddr =
-              cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
-          sges[j] = {
-              .addr = laddr,
-              .length = static_cast<uint32_t>(cmd.bytes),
-              .lkey = ctx->mr->lkey,
-          };
-
-          // Build WR
-          std::memset(&wrs[j], 0, sizeof(wrs[j]));
-          wrs[j].wr_id = wrs_to_post[i];
-          wrs[j].sg_list = &sges[j];
-          wrs[j].num_sge = 1;
-          wrs[j].wr.rdma.remote_addr = remote_addr;
-          wrs[j].wr.rdma.rkey = ctx->remote_rkey;
-          wrs[j].opcode = IBV_WR_RDMA_WRITE;  // default
-          wrs[j].send_flags = (j + 1 == kgroup) ? IBV_SEND_SIGNALED : 0;
-          wrs[j].next = (j + 1 < kgroup) ? &wrs[j + 1] : nullptr;
-
-          if (cmd.atomic_offset > 0 && cmd.atomic_val > 0) {
-            int v = static_cast<int>(cmd.atomic_val);
-            if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {
-              fprintf(stderr, "atomic value=%d won't fit in 15 bits\n", v);
-              std::abort();
-            }
-            uint32_t imm =
-                AtomicsImm::Pack(true, false, cmd.atomic_val, cmd.atomic_offset,
-                                 get_low_latency(cmd.cmd_type))
-                    .GetImmData();
-            wrs[j].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-            wrs[j].imm_data = htonl(imm);
-          } else if (j + 1 == kgroup) {
-            // Put WriteImm only on the tail WR
-            uint32_t imm =
-                WriteImm::Pack(get_is_combine(cmd.cmd_type),
-                               get_low_latency(cmd.cmd_type), cmd.expert_idx,
-                               static_cast<uint32_t>(kgroup), my_rank)
-                    .GetImmData();
-            wrs[j].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-            wrs[j].imm_data = htonl(imm);
-          } else {
-            wrs[j].opcode = IBV_WR_RDMA_WRITE;
-          }
+          uint32_t imm =
+              AtomicsImm::Pack(true, false, cmd.atomic_val, cmd.atomic_offset,
+                               get_low_latency(cmd.cmd_type))
+                  .GetImmData();
+          wrs[j].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+          wrs[j].imm_data = htonl(imm);
+        } else if (j + 1 == kgroup) {
+          uint32_t imm =
+              WriteImm::Pack(get_is_combine(cmd.cmd_type),
+                             get_low_latency(cmd.cmd_type), cmd.expert_idx,
+                             static_cast<uint32_t>(kgroup), my_rank)
+                  .GetImmData();
+          wrs[j].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+          wrs[j].imm_data = htonl(imm);
+        } else {
+          wrs[j].opcode = IBV_WR_RDMA_WRITE;
         }
+      }
 
-        // Post the chain
-        ibv_send_wr* bad = nullptr;
-        int ret = ibv_post_send(qp, &wrs[0], &bad);
-        if (ret) {
-          fprintf(stderr, "ibv_post_send failed (dst=%d): %s (ret=%d)\n",
-                  dst_rank, strerror(ret), ret);
-          if (bad)
-            fprintf(stderr, "Bad WR at %p (wr_id=%lu)\n", (void*)bad,
-                    bad->wr_id);
-          std::abort();
-        }
+      ibv_send_wr* bad = nullptr;
+      int ret = ibv_post_send(qp, &wrs[0], &bad);
+      if (ret) {
+        fprintf(stderr, "ibv_post_send failed (dst=%d): %s (ret=%d)\n",
+                dst_rank, strerror(ret), ret);
+        if (bad)
+          fprintf(stderr, "Bad WR at %p (wr_id=%lu)\n", (void*)bad, bad->wr_id);
+        std::abort();
+      }
+    }
 #endif
+  }
+
+  // Clear the batch
+  batch.wrs.clear();
+  batch.cmds.clear();
+  batch.has_pending = false;
+}
+
+void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
+                             std::vector<uint64_t> const& wrs_to_post,
+                             std::vector<TransferCmd> const& cmds_to_post,
+                             std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
+                             int my_rank, int thread_idx) {
+  if (num_wrs == 0) return;
+  if (wrs_to_post.size() != num_wrs || cmds_to_post.size() != num_wrs) {
+    fprintf(stderr, "Size mismatch (num_wrs=%zu, wr_ids=%zu, cmds=%zu)\n",
+            num_wrs, wrs_to_post.size(), cmds_to_post.size());
+    std::abort();
+  }
+
+  // Group by destination rank
+  std::unordered_map<int, std::vector<size_t>> dst_rank_wr_ids;
+  for (size_t i = 0; i < num_wrs; ++i) {
+    if (cmds_to_post[i].dst_rank == static_cast<uint32_t>(my_rank)) {
+      printf("Posting rdma to itself\n");
+      std::abort();
+      continue;
+    } else if (std::abs((int)cmds_to_post[i].dst_rank - (int)my_rank) %
+                   MAX_NUM_GPUS !=
+               0) {
+      printf("Posting rdma to a different rank\n");
+      std::abort();
+      continue;
+    } else {
+      dst_rank_wr_ids[cmds_to_post[i].dst_rank].push_back(i);
+    }
+  }
+
+  // Add to pending batches and flush if needed
+  auto now = std::chrono::steady_clock::now();
+
+  for (auto& [dst_rank, wr_ids] : dst_rank_wr_ids) {
+    if (wr_ids.empty()) continue;
+
+    auto& batch = S.pending_batches[dst_rank];
+
+    // Initialize batch if empty
+    if (!batch.has_pending) {
+      batch.first_cmd_time = now;
+      batch.has_pending = true;
+    }
+
+    // Add commands to batch
+    for (size_t idx : wr_ids) {
+      batch.wrs.push_back(wrs_to_post[idx]);
+      batch.cmds.push_back(cmds_to_post[idx]);
+    }
+
+    // Check if we should flush
+    bool should_flush = false;
+
+    // Flush if batch size exceeds max
+    if (batch.wrs.size() >= ProxyCtx::kMaxBatchSize) {
+      should_flush = true;
+    }
+
+    // Flush if delay exceeds max
+    auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                          now - batch.first_cmd_time)
+                          .count();
+    if (elapsed_us >= ProxyCtx::kMaxBatchDelayUs) {
+      should_flush = true;
+    }
+
+    if (should_flush) {
+      flush_pending_batch_for_dst(S, dst_rank, buf, ctxs, my_rank, thread_idx);
     }
   }
 }
@@ -1103,71 +1160,70 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       std::abort();
     }
 #else
-      std::vector<ibv_sge> sges(k);
-      std::vector<ibv_send_wr> wrs(k);
-      for (size_t j = 0; j < k; ++j) {
-        size_t i = wr_ids[j];
-        auto const& cmd = cmds_to_post[i];
-        wr_ids[j] = wrs_to_post[i];
-        sges[j].addr =
-            cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
-        sges[j].length = static_cast<uint32_t>(cmd.bytes);
-        sges[j].lkey = ctx->mr->lkey;
-        std::memset(&wrs[j], 0, sizeof(wrs[j]));
-        wrs[j].sg_list = &sges[j];
-        wrs[j].num_sge = 1;
-        wrs[j].wr_id = wr_ids[j];
+    std::vector<ibv_sge> sges(k);
+    std::vector<ibv_send_wr> wrs(k);
+    for (size_t j = 0; j < k; ++j) {
+      size_t i = wr_ids[j];
+      auto const& cmd = cmds_to_post[i];
+      wr_ids[j] = wrs_to_post[i];
+      sges[j].addr = cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
+      sges[j].length = static_cast<uint32_t>(cmd.bytes);
+      sges[j].lkey = ctx->mr->lkey;
+      std::memset(&wrs[j], 0, sizeof(wrs[j]));
+      wrs[j].sg_list = &sges[j];
+      wrs[j].num_sge = 1;
+      wrs[j].wr_id = wr_ids[j];
 
-        wrs[j].wr.rdma.remote_addr = ctx->remote_addr + cmd.req_rptr;
+      wrs[j].wr.rdma.remote_addr = ctx->remote_addr + cmd.req_rptr;
 
-        uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
-        if (wrs[j].wr.rdma.remote_addr < ctx->remote_addr ||
-            wrs[j].wr.rdma.remote_addr + cmd.bytes > remote_end) {
-          fprintf(stderr,
-                  "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
-                  "size=%zu), cmd.req_rptr: 0x%llx\n",
-                  (unsigned long long)wrs[j].wr.rdma.remote_addr, cmd.bytes,
-                  (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
-                  (unsigned long long)cmd.req_rptr);
-          cudaError_t err = cudaDeviceSynchronize();
-          if (err != cudaSuccess) {
-            fprintf(stderr, "cudaDeviceSynchronize failed: %s\n",
-                    cudaGetErrorString(err));
-            std::abort();
-          }
+      uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
+      if (wrs[j].wr.rdma.remote_addr < ctx->remote_addr ||
+          wrs[j].wr.rdma.remote_addr + cmd.bytes > remote_end) {
+        fprintf(stderr,
+                "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
+                "size=%zu), cmd.req_rptr: 0x%llx\n",
+                (unsigned long long)wrs[j].wr.rdma.remote_addr, cmd.bytes,
+                (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
+                (unsigned long long)cmd.req_rptr);
+        cudaError_t err = cudaDeviceSynchronize();
+        if (err != cudaSuccess) {
+          fprintf(stderr, "cudaDeviceSynchronize failed: %s\n",
+                  cudaGetErrorString(err));
           std::abort();
         }
-
-        wrs[j].wr.rdma.rkey = ctx->remote_rkey;
-        wrs[j].opcode = IBV_WR_RDMA_WRITE;
-        wrs[j].send_flags = 0;
-        wrs[j].next = (j + 1 < k) ? &wrs[j + 1] : nullptr;
-      }
-      size_t const last = k - 1;
-      uint64_t const batch_tail_wr = wr_ids[last];
-      wrs[last].send_flags |= IBV_SEND_SIGNALED;
-      wrs[last].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-      wrs[last].imm_data = htonl(static_cast<uint32_t>(batch_tail_wr));
-      ibv_send_wr* bad = nullptr;
-      int ret = ibv_post_send(ctx->qp, &wrs[0], &bad);
-      if (ret) {
-        fprintf(stderr, "ibv_post_send failed (dst=%d): %s (ret=%d)\n",
-                dst_rank, strerror(ret), ret);
-        if (bad)
-          fprintf(stderr, "Bad WR at %p (wr_id=%lu)\n", (void*)bad, bad->wr_id);
         std::abort();
       }
-      {
-        auto [it, inserted] =
-            S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
-        if (!inserted) {
-          fprintf(stderr,
-                  "thread_idx: %d, Error: tail wr_id %lu already exists "
-                  "(map=%p)\n",
-                  thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
-          std::abort();
-        }
+
+      wrs[j].wr.rdma.rkey = ctx->remote_rkey;
+      wrs[j].opcode = IBV_WR_RDMA_WRITE;
+      wrs[j].send_flags = 0;
+      wrs[j].next = (j + 1 < k) ? &wrs[j + 1] : nullptr;
+    }
+    size_t const last = k - 1;
+    uint64_t const batch_tail_wr = wr_ids[last];
+    wrs[last].send_flags |= IBV_SEND_SIGNALED;
+    wrs[last].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+    wrs[last].imm_data = htonl(static_cast<uint32_t>(batch_tail_wr));
+    ibv_send_wr* bad = nullptr;
+    int ret = ibv_post_send(ctx->qp, &wrs[0], &bad);
+    if (ret) {
+      fprintf(stderr, "ibv_post_send failed (dst=%d): %s (ret=%d)\n", dst_rank,
+              strerror(ret), ret);
+      if (bad)
+        fprintf(stderr, "Bad WR at %p (wr_id=%lu)\n", (void*)bad, bad->wr_id);
+      std::abort();
+    }
+    {
+      auto [it, inserted] =
+          S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
+      if (!inserted) {
+        fprintf(stderr,
+                "thread_idx: %d, Error: tail wr_id %lu already exists "
+                "(map=%p)\n",
+                thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
+        std::abort();
       }
+    }
 #endif
   }
 }
@@ -1889,77 +1945,76 @@ void post_atomic_operations(ProxyCtx& S,
         std::abort();
       }
 #else
-        struct ibv_qp* qp =
-            local_ring_count
-                ? ctx->data_qps_by_channel[ring_idx_raw % local_ring_count]
-                : ctx->ack_qp;
+      struct ibv_qp* qp =
+          local_ring_count
+              ? ctx->data_qps_by_channel[ring_idx_raw % local_ring_count]
+              : ctx->ack_qp;
 
-        size_t const k = idxs.size();
-        std::vector<ibv_sge> sge(k);
-        std::vector<ibv_send_wr> wr(k);
-        std::vector<uint64_t> group_wrids;
-        group_wrids.reserve(k);
+      size_t const k = idxs.size();
+      std::vector<ibv_sge> sge(k);
+      std::vector<ibv_send_wr> wr(k);
+      std::vector<uint64_t> group_wrids;
+      group_wrids.reserve(k);
 
-        for (size_t t = 0; t < k; ++t) {
-          size_t i = idxs[t];
-          auto const& cmd = cmds_to_post[i];
-          uint64_t const wr_id = wrs_to_post[i];
-          group_wrids.push_back(wr_id);
+      for (size_t t = 0; t < k; ++t) {
+        size_t i = idxs[t];
+        auto const& cmd = cmds_to_post[i];
+        uint64_t const wr_id = wrs_to_post[i];
+        group_wrids.push_back(wr_id);
 
-          int v = static_cast<int>(cmd.value);
-          if (v > kLargeAtomicValue)
-            v = kMaxSendAtomicValue;  // saturate for imm
-          if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {
-            fprintf(stderr,
-                    "value=%d (cmd.value=%lu) won't fit in 15 bits for imm; "
-                    "use a different scheme.\n",
-                    v, (unsigned long)cmd.value);
-            std::abort();
-          }
-
-          // If your AtomicsImm for non-EFA expects 16-bit offsets, keep the
-          // mask:
-          uint32_t off16 = static_cast<uint32_t>(cmd.req_rptr) & 0xFFFFu;
-          int low_latency_buffer_idx = get_low_latency(cmd.cmd_type);
-          if (low_latency_buffer_idx < 0 || low_latency_buffer_idx > 1) {
-            fprintf(stderr, "Invalid low_latency_buffer_idx: %d\n",
-                    low_latency_buffer_idx);
-            std::abort();
-          }
-          uint32_t imm = AtomicsImm::Pack(
-                             /*is_atomic*/ true,
-                             /*is_combine*/ get_is_combine(cmd.cmd_type), v,
-                             /*offset*/ off16, low_latency_buffer_idx)
-                             .GetImmData();
-
-          // Zero-length write-with-imm on RC QP
-          sge[t].addr = reinterpret_cast<uintptr_t>(ctx->mr->addr);
-          sge[t].length = 0;
-          sge[t].lkey = ctx->mr->lkey;
-
-          std::memset(&wr[t], 0, sizeof(wr[t]));
-          wr[t].wr_id = kAtomicWrTag | (wr_id & kAtomicMask);
-          wr[t].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-          wr[t].send_flags = (t + 1 == k) ? IBV_SEND_SIGNALED : 0;
-          wr[t].imm_data = htonl(imm);
-          wr[t].sg_list = &sge[t];
-          wr[t].num_sge = 1;
-          wr[t].wr.rdma.remote_addr = ctx->remote_addr;
-          wr[t].wr.rdma.rkey = ctx->remote_rkey;
-          wr[t].next = (t + 1 < k) ? &wr[t + 1] : nullptr;
-        }
-
-        ibv_send_wr* bad = nullptr;
-        int ret = ibv_post_send(qp, &wr[0], &bad);
-        if (ret) {
-          fprintf(stderr, "[RC] post_send(atomic imm) failed: %s (ret=%d)\n",
-                  strerror(ret), ret);
-          if (bad) {
-            fprintf(stderr, "  bad wr_id=0x%llx opcode=%u\n",
-                    (unsigned long long)bad->wr_id, bad->opcode);
-          }
+        int v = static_cast<int>(cmd.value);
+        if (v > kLargeAtomicValue) v = kMaxSendAtomicValue;  // saturate for imm
+        if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {
+          fprintf(stderr,
+                  "value=%d (cmd.value=%lu) won't fit in 15 bits for imm; "
+                  "use a different scheme.\n",
+                  v, (unsigned long)cmd.value);
           std::abort();
         }
+
+        // If your AtomicsImm for non-EFA expects 16-bit offsets, keep the
+        // mask:
+        uint32_t off16 = static_cast<uint32_t>(cmd.req_rptr) & 0xFFFFu;
+        int low_latency_buffer_idx = get_low_latency(cmd.cmd_type);
+        if (low_latency_buffer_idx < 0 || low_latency_buffer_idx > 1) {
+          fprintf(stderr, "Invalid low_latency_buffer_idx: %d\n",
+                  low_latency_buffer_idx);
+          std::abort();
+        }
+        uint32_t imm = AtomicsImm::Pack(
+                           /*is_atomic*/ true,
+                           /*is_combine*/ get_is_combine(cmd.cmd_type), v,
+                           /*offset*/ off16, low_latency_buffer_idx)
+                           .GetImmData();
+
+        // Zero-length write-with-imm on RC QP
+        sge[t].addr = reinterpret_cast<uintptr_t>(ctx->mr->addr);
+        sge[t].length = 0;
+        sge[t].lkey = ctx->mr->lkey;
+
+        std::memset(&wr[t], 0, sizeof(wr[t]));
+        wr[t].wr_id = kAtomicWrTag | (wr_id & kAtomicMask);
+        wr[t].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+        wr[t].send_flags = (t + 1 == k) ? IBV_SEND_SIGNALED : 0;
+        wr[t].imm_data = htonl(imm);
+        wr[t].sg_list = &sge[t];
+        wr[t].num_sge = 1;
+        wr[t].wr.rdma.remote_addr = ctx->remote_addr;
+        wr[t].wr.rdma.rkey = ctx->remote_rkey;
+        wr[t].next = (t + 1 < k) ? &wr[t + 1] : nullptr;
+      }
+
+      ibv_send_wr* bad = nullptr;
+      int ret = ibv_post_send(qp, &wr[0], &bad);
+      if (ret) {
+        fprintf(stderr, "[RC] post_send(atomic imm) failed: %s (ret=%d)\n",
+                strerror(ret), ret);
+        if (bad) {
+          fprintf(stderr, "  bad wr_id=0x%llx opcode=%u\n",
+                  (unsigned long long)bad->wr_id, bad->opcode);
+        }
+        std::abort();
+      }
 #endif
     }
   }
