@@ -38,7 +38,6 @@ class Buffer:
     def __init__(
         self,
         group: dist.ProcessGroup,
-        rdma_buffer_ptr: Optional[torch.Tensor] = None,
         num_nvl_bytes: int = 0,
         num_rdma_bytes: int = 0,
         low_latency_mode: bool = False,
@@ -76,6 +75,8 @@ class Buffer:
         self.num_rdma_bytes = num_rdma_bytes
         self.low_latency_mode = low_latency_mode
         self.explicitly_destroy = explicitly_destroy
+
+        # Note: rdma_buffer_ptr will be set later by the wrapper in __init__.py
         self.runtime = ep.Buffer(
             self.rank,
             self.group_size,
@@ -85,8 +86,6 @@ class Buffer:
             explicitly_destroy,
             int(os.environ.get("LOCAL_WORLD_SIZE", -1)),
         )
-        if num_rdma_bytes:
-            self.runtime.set_rdma_buffer_raw(rdma_buffer_ptr)
 
         # Synchronize device IDs
         device_ids = [

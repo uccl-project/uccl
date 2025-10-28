@@ -48,13 +48,9 @@ class Buffer(_OriginalBuffer):
         num_ranks = group.size()
 
         # Extract buffer sizes from args/kwargs
-        # Signature: __init__(self, group, rdma_buffer_ptr=None, num_nvl_bytes=0, num_rdma_bytes=0, ...)
-        if len(args) > 2:
-            num_nvl_bytes = args[2] if len(args) > 2 else kwargs.get('num_nvl_bytes', 0)
-            num_rdma_bytes = args[3] if len(args) > 3 else kwargs.get('num_rdma_bytes', 0)
-        else:
-            num_nvl_bytes = kwargs.get('num_nvl_bytes', 0)
-            num_rdma_bytes = kwargs.get('num_rdma_bytes', 0)
+        # New signature matches DeepEP: __init__(self, group, num_nvl_bytes=0, num_rdma_bytes=0, ...)
+        num_nvl_bytes = args[1] if len(args) > 1 else kwargs.get('num_nvl_bytes', 0)
+        num_rdma_bytes = args[2] if len(args) > 2 else kwargs.get('num_rdma_bytes', 0)
 
         # Initialize UCCL proxies if not already done for this device
         if device_index not in Buffer._initialized_devices:
@@ -87,21 +83,11 @@ class Buffer(_OriginalBuffer):
             Buffer._workers_dict[device_index] = workers
             Buffer._scratch_buffers[device_index] = scratch
 
-            # If no rdma_buffer_ptr provided, use our scratch buffer
-            if len(args) > 1:
-                if args[1] is None and num_rdma_bytes > 0:
-                    # Update args tuple with scratch data_ptr
-                    args = list(args)
-                    args[1] = scratch.data_ptr()
-                    args = tuple(args)
-            elif 'rdma_buffer_ptr' not in kwargs or kwargs['rdma_buffer_ptr'] is None:
-                if num_rdma_bytes > 0:
-                    kwargs['rdma_buffer_ptr'] = scratch.data_ptr()
-
         # Call original Buffer.__init__
         super().__init__(*args, **kwargs)
 
-        # Connect atomic buffer using the first proxy
+        # Connect atomic buffer to link the runtime with UCCL proxies
+        # This ensures the runtime and proxies share the same memory buffer
         proxies = Buffer._proxies_dict.get(device_index)
         if proxies and len(proxies) > 0:
             self.connect_atomic_buffer(proxies[0])
