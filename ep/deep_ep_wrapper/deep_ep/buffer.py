@@ -39,6 +39,7 @@ class Buffer:
     _uccl_initialized_devices = set()
     _uccl_proxies_dict = {}
     _uccl_workers_dict = {}
+    _uccl_buffers_dict = {}  # Shared buffer for all Buffer instances on each device
 
     def __init__(
         self,
@@ -84,12 +85,16 @@ class Buffer:
         # Get current device
         device_index = torch.cuda.current_device()
 
-        # Allocate unified buffer for both UCCL proxies and runtime
-        # This ensures proxies and runtime use the SAME memory
-        buffer_size = max(num_nvl_bytes, num_rdma_bytes, 256 * 1024 * 1024)  # At least 256MB
-        self._buffer = torch.empty(
-            buffer_size, dtype=torch.uint8, device=f"cuda:{device_index}"
-        )
+        # Allocate unified buffer at class level (once per device)
+        # This ensures ALL Buffer instances on the same device share the SAME memory
+        if device_index not in Buffer._uccl_buffers_dict:
+            buffer_size = max(num_nvl_bytes, num_rdma_bytes, 256 * 1024 * 1024)  # At least 256MB
+            Buffer._uccl_buffers_dict[device_index] = torch.empty(
+                buffer_size, dtype=torch.uint8, device=f"cuda:{device_index}"
+            )
+
+        # Use the shared buffer for this device
+        self._buffer = Buffer._uccl_buffers_dict[device_index]
 
         # Initialize UCCL proxies if not already done for this device
         if device_index not in Buffer._uccl_initialized_devices:
@@ -189,6 +194,39 @@ class Buffer:
 
         self.runtime.destroy()
         self.runtime = None
+
+    @staticmethod
+    def cleanup_uccl(device_index=None):
+        """
+        Clean up UCCL proxies and shared buffers for a specific device or all devices.
+
+        Arguments:
+            device_index: The device index to clean up. If None, clean up all devices.
+        """
+        from deep_ep.utils import destroy_uccl
+
+        if device_index is None:
+            # Clean up all devices
+            for dev_idx in list(Buffer._uccl_initialized_devices):
+                proxies = Buffer._uccl_proxies_dict.get(dev_idx)
+                workers = Buffer._uccl_workers_dict.get(dev_idx)
+                if proxies:
+                    destroy_uccl(proxies, workers)
+            Buffer._uccl_initialized_devices.clear()
+            Buffer._uccl_proxies_dict.clear()
+            Buffer._uccl_workers_dict.clear()
+            Buffer._uccl_buffers_dict.clear()
+        else:
+            # Clean up specific device
+            if device_index in Buffer._uccl_initialized_devices:
+                proxies = Buffer._uccl_proxies_dict.get(device_index)
+                workers = Buffer._uccl_workers_dict.get(device_index)
+                if proxies:
+                    destroy_uccl(proxies, workers)
+                Buffer._uccl_initialized_devices.discard(device_index)
+                Buffer._uccl_proxies_dict.pop(device_index, None)
+                Buffer._uccl_workers_dict.pop(device_index, None)
+                Buffer._uccl_buffers_dict.pop(device_index, None)
 
     @staticmethod
     def is_sm90_compiled():
