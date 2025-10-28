@@ -40,10 +40,12 @@ class Buffer:
     _uccl_proxies_dict = {}
     _uccl_workers_dict = {}
     _uccl_buffers_dict = {}  # Shared buffer for all Buffer instances on each device
+    _uccl_proxies_configured = set()  # Track which devices have configured proxies
 
     def __init__(
         self,
         group: dist.ProcessGroup,
+        rdma_buffer_ptr: Optional[int] = None,
         num_nvl_bytes: int = 0,
         num_rdma_bytes: int = 0,
         low_latency_mode: bool = False,
@@ -109,7 +111,7 @@ class Buffer:
             # Initialize UCCL with the same buffer
             proxies, workers = initialize_uccl(
                 scratch=self._buffer,
-                scratch_nbytes=buffer_size,
+                scratch_nbytes=self._buffer.numel(),
                 rank=self.rank,
                 num_ranks=self.group_size,
                 group=group,
@@ -132,9 +134,12 @@ class Buffer:
             int(os.environ.get("LOCAL_WORLD_SIZE", -1)),
         )
 
-        # Set buffer pointer for runtime to use the SAME buffer as proxies
+        # Set RDMA buffer: use provided rdma_buffer_ptr or shared buffer
         if num_rdma_bytes > 0:
-            self.runtime.set_rdma_buffer_raw(self._buffer.data_ptr())
+            if rdma_buffer_ptr is not None:
+                self.runtime.set_rdma_buffer_raw(rdma_buffer_ptr)
+            else:
+                self.runtime.set_rdma_buffer_raw(self._buffer.data_ptr())
 
         # Synchronize device IDs
         device_ids = [
