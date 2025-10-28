@@ -136,7 +136,11 @@ def get_cpu_proxies_meta(rank, scratch_ptr, scratch_bytes, num_ranks, group):
         "ip": _discover_local_ip(),
     }
     all_meta = [None] * num_ranks
-    device_index = int(os.environ.get("LOCAL_RANK", 0))
+    # Use current device or fallback to LOCAL_RANK or 0
+    if "LOCAL_RANK" in os.environ:
+        device_index = int(os.environ["LOCAL_RANK"])
+    else:
+        device_index = torch.cuda.current_device()
     torch.cuda.set_device(device_index)
     dist.all_gather_object(all_meta, meta, group=group)
     rank2meta = {m["rank"]: m for m in all_meta}
@@ -454,12 +458,35 @@ def initialize_uccl(
             os.remove(shm_file)
     except Exception:
         pass
-    local_rank = int(os.environ["LOCAL_RANK"])
-    nproc_per_node = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
-    node_idx = rank // nproc_per_node
 
-    if int(os.environ.get("WORLD_SIZE")) % nproc_per_node != 0:
-        raise ValueError("WORLD_SIZE must be divisible by LOCAL_WORLD_SIZE")
+    # Try to get local_rank from environment or infer from current device
+    if "LOCAL_RANK" in os.environ:
+        local_rank = int(os.environ["LOCAL_RANK"])
+    else:
+        # Fallback: use current CUDA device as local_rank
+        local_rank = torch.cuda.current_device()
+
+    # Try to get nproc_per_node from environment
+    if "LOCAL_WORLD_SIZE" in os.environ:
+        nproc_per_node = int(os.environ["LOCAL_WORLD_SIZE"])
+    else:
+        # Fallback: infer from is_intranode and num_ranks
+        if is_intranode:
+            # All ranks are on the same node
+            nproc_per_node = num_ranks
+        else:
+            # Assume uniform distribution across nodes
+            # If we have N GPUs, assume each node has same number of GPUs
+            num_gpus = torch.cuda.device_count()
+            nproc_per_node = num_gpus if num_gpus > 0 else 1
+
+    node_idx = rank // nproc_per_node if nproc_per_node > 0 else 0
+
+    # Only check WORLD_SIZE consistency if it's defined
+    if "WORLD_SIZE" in os.environ and nproc_per_node > 0:
+        world_size = int(os.environ.get("WORLD_SIZE"))
+        if world_size % nproc_per_node != 0:
+            raise ValueError("WORLD_SIZE must be divisible by LOCAL_WORLD_SIZE")
 
     proxies = []
     scratch_ptr = scratch.data_ptr()
@@ -468,6 +495,12 @@ def initialize_uccl(
     )
     peers_meta_list = [rank2meta[r] for r in range(num_ranks)]
     peer_ip = rank2meta[(rank + 1) % num_ranks]["ip"]
+
+    # Calculate num_nodes from num_ranks and nproc_per_node
+    if nproc_per_node > 0:
+        num_nodes = num_ranks // nproc_per_node
+    else:
+        num_nodes = num_ranks  # Fallback: assume each rank is on a different node
 
     for i in range(ep.get_num_proxy_threads()):
         proxy = ep.Proxy(
@@ -480,7 +513,7 @@ def initialize_uccl(
             peer_ip="" if is_intranode else peer_ip,
             num_experts=num_experts,
             num_ranks=num_ranks,
-            num_nodes=int(os.environ.get("WORLD_SIZE")) // nproc_per_node,
+            num_nodes=num_nodes,
         )
         if not is_intranode:
             proxy.set_peers_meta(peers_meta_list)
@@ -508,7 +541,12 @@ def initialize_uccl(
 
 
 def destroy_uccl(proxies, workers):
-    device_index = int(os.environ["LOCAL_RANK"])
+    # Use current device or fallback to LOCAL_RANK
+    if "LOCAL_RANK" in os.environ:
+        device_index = int(os.environ["LOCAL_RANK"])
+    else:
+        device_index = torch.cuda.current_device()
+
     if workers is not None:
         try:
             workers.stop()

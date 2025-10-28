@@ -63,8 +63,13 @@ class Buffer(_OriginalBuffer):
             scratch = torch.empty(scratch_nbytes, dtype=torch.uint8, device=f"cuda:{device_index}")
 
             # Determine if this is intranode
-            local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
-            is_intranode = (num_ranks <= local_world_size)
+            if "LOCAL_WORLD_SIZE" in os.environ:
+                local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])
+                is_intranode = (num_ranks <= local_world_size)
+            else:
+                # Fallback: check if all ranks can fit on current node
+                num_gpus = torch.cuda.device_count()
+                is_intranode = (num_ranks <= num_gpus)
 
             # Initialize UCCL
             proxies, workers = initialize_uccl(
