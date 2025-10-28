@@ -115,9 +115,10 @@ class Buffer:
                 rank=self.rank,
                 num_ranks=self.group_size,
                 group=group,
-                num_experts=0,
+                num_experts=288,  # TODO: 是不是要写死？
                 is_intranode=is_intranode
             )
+            print('rank:', self.rank, 'group_size:', self.group_size, 'group:', self.group, 'num_nvl_bytes:', self.num_nvl_bytes, 'num_rdma_bytes:', self.num_rdma_bytes, 'low_latency_mode:', self.low_latency_mode, 'explicitly_destroy:', self.explicitly_destroy, 'device_id:', device_id, 'proxies:', proxies, 'workers:', workers)
 
             Buffer._uccl_initialized_devices.add(device_index)
             Buffer._uccl_proxies_dict[device_index] = proxies
@@ -134,12 +135,14 @@ class Buffer:
             int(os.environ.get("LOCAL_WORLD_SIZE", -1)),
         )
 
-        # Set RDMA buffer: use provided rdma_buffer_ptr or shared buffer
-        if num_rdma_bytes > 0:
-            if rdma_buffer_ptr is not None:
-                self.runtime.set_rdma_buffer_raw(rdma_buffer_ptr)
-            else:
-                self.runtime.set_rdma_buffer_raw(self._buffer.data_ptr())
+        # # Set RDMA buffer: use provided rdma_buffer_ptr or shared buffer
+        # if num_rdma_bytes > 0:
+        #     if rdma_buffer_ptr is not None:
+        #         self.runtime.set_rdma_buffer_raw(rdma_buffer_ptr)
+        #     else:
+        #         self.runtime.set_rdma_buffer_raw(self._buffer.data_ptr())
+        if num_rdma_bytes:
+            self.runtime.set_rdma_buffer_raw(rdma_buffer_ptr)
 
         # Synchronize device IDs
         device_ids = [
@@ -178,6 +181,12 @@ class Buffer:
         proxies = Buffer._uccl_proxies_dict.get(device_index)
         if proxies and len(proxies) > 0:
             self.connect_atomic_buffer(proxies[0])
+            # TODO 这里要不要写？
+            for proxy in proxies:
+                proxy.calculate_and_set_dispatch_recv_data_offset(
+                    num_tokens=4096, hidden=7168, num_experts=288
+                )
+                proxy.set_atomic_buffer_ptr(proxies[0].get_atomic_buffer_ptr())
 
     def reset_rdma_buffer(self):
         """
