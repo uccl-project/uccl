@@ -76,7 +76,17 @@ class Buffer:
         self.low_latency_mode = low_latency_mode
         self.explicitly_destroy = explicitly_destroy
 
-        # Note: rdma_buffer_ptr will be set later by the wrapper in __init__.py
+        # Allocate RDMA buffer if needed
+        self._rdma_buffer = None
+        if num_rdma_bytes > 0:
+            # Allocate RDMA buffer as a torch tensor
+            # Use at least 256MB or the requested size
+            rdma_buffer_size = max(num_rdma_bytes, 256 * 1024 * 1024)
+            self._rdma_buffer = torch.empty(
+                rdma_buffer_size, dtype=torch.uint8, device=torch.cuda.current_device()
+            )
+
+        # Create the C++ runtime
         self.runtime = ep.Buffer(
             self.rank,
             self.group_size,
@@ -86,6 +96,10 @@ class Buffer:
             explicitly_destroy,
             int(os.environ.get("LOCAL_WORLD_SIZE", -1)),
         )
+
+        # Set RDMA buffer pointer immediately after creating runtime
+        if self._rdma_buffer is not None:
+            self.runtime.set_rdma_buffer_raw(self._rdma_buffer.data_ptr())
 
         # Synchronize device IDs
         device_ids = [
