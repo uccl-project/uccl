@@ -92,7 +92,7 @@ class Buffer:
 
         # Initialize UCCL with the same buffer
         self.proxies, self.workers = initialize_uccl(
-            scratch=scratch,
+            scratch_ptr=scratch.data_ptr(),
             scratch_nbytes=self.num_rdma_bytes,
             rank=self.rank,
             num_ranks=self.group_size,
