@@ -21,7 +21,7 @@ RUN apt-get update && \
     add-apt-repository ppa:deadsnakes/ppa && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
-        python${PY_VER} python${PY_VER}-dev python${PY_VER}-venv python3-setuptools && \
+        python${PY_VER} python${PY_VER}-dev python${PY_VER}-venv python3-setuptools python3-distutils && \
 \
 # ───── Bootstrap pip for Python ${PY_VER} ─────
     curl -sS https://bootstrap.pypa.io/get-pip.py | python${PY_VER} && \
@@ -34,14 +34,19 @@ RUN apt-get update && \
 # ─────────────────────────────────────────────────────────
 # Install Python build back-end (for Python ${PY_VER})
 # ─────────────────────────────────────────────────────────
-RUN python${PY_VER} -m pip install --no-cache-dir build auditwheel pybind11 numpy
+RUN python${PY_VER} -m pip install --no-cache-dir build auditwheel pybind11
+
+RUN python${PY_VER} -m pip install --no-cache-dir torch==2.6.0+cu126 \
+    --index-url https://download.pytorch.org/whl/cu126
+
+RUN python${PY_VER} -m pip install --no-cache-dir --upgrade setuptools
 
 # ───── Set Python ${PY_VER} as default python3 and python3-config ─────
 RUN ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python3 && \
     ln -sf /usr/bin/python${PY_VER}-config /usr/local/bin/python3-config
 
-RUN python${PY_VER} -m pip install --no-cache-dir torch==2.6.0+cu126 --index-url https://download.pytorch.org/whl/cu126
-
-
 WORKDIR /io
+
+ENV GPU_NAME=GH200
+
 CMD ["bash"]

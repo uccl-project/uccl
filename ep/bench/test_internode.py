@@ -173,6 +173,8 @@ def test_main(
     # Config
     # This seems really high.
     rdma_buffer_size, nvl_buffer_size = 512, (720 if num_ranks in (144, 160) else 512)
+    if num_ranks == 24:
+        nvl_buffer_size = 540
     config = Config(num_sms, 8, nvl_buffer_size, 16, rdma_buffer_size)
 
     # Test dispatch

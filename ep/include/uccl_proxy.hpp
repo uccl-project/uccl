@@ -1,5 +1,6 @@
 #pragma once
 #include "bench_utils.hpp"
+#include "fifo.hpp"
 #include "proxy.hpp"
 #include "ring_buffer.cuh"
 #include <algorithm>
@@ -7,6 +8,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 class PeerCopyManager;
 
@@ -66,14 +68,14 @@ class UcclProxy {
     proxy_->set_dispatch_recv_data_offset(dispatch_recv_data_offset);
   }
 
-  std::vector<uint64_t> get_ring_buffer_addrs() const;
+  std::vector<uint64_t> get_d2h_channel_addrs() const;
   int thread_idx() const noexcept { return thread_idx_; }
   void* gpu_buffer_addr() const noexcept { return gpu_buffer_addr_; }
   double avg_rdma_write_us() const { return proxy_->avg_rdma_write_us(); }
   double avg_wr_latency_us() const { return proxy_->avg_wr_latency_us(); }
   void set_peers_meta(std::vector<PeerMeta> const& peers);
-  void set_bench_ring_addrs(std::vector<uintptr_t> const& addrs) {
-    proxy_->set_bench_ring_addrs(addrs);
+  void set_bench_d2h_channel_addrs(std::vector<uintptr_t> const& addrs) {
+    proxy_->set_bench_d2h_channel_addrs(addrs);
   }
 
  private:
@@ -85,11 +87,56 @@ class UcclProxy {
   std::thread thread_;
   Mode mode_;
   std::atomic<bool> running_;
-  std::vector<uintptr_t> ring_buffer_addrs_;
+  std::vector<uintptr_t> d2h_channel_addrs_;
   int thread_idx_;
   void* gpu_buffer_addr_;
   std::vector<PeerMeta> peers_;
   int local_rank_;
   void* atomic_buffer_ptr_;
   int node_idx_;
+  std::vector<d2hq::HostD2HHandle> d2h_queues;
+  std::vector<std::unique_ptr<mscclpp::Fifo>> fifos;
+};
+
+// ============================================================================
+// FIFO-based Proxy Wrapper
+// ============================================================================
+
+// Python-facing FIFO proxy wrapper that wraps the real Proxy class
+class FifoProxy {
+ public:
+  FifoProxy(int thread_idx, uintptr_t gpu_buffer_addr, size_t total_size,
+            int rank, int node_idx, int local_rank, std::string const& peer_ip);
+  ~FifoProxy();
+
+  void set_fifo(mscclpp::Fifo* fifo);
+  void set_peers_meta(
+      std::vector<std::tuple<int, uintptr_t, size_t, std::string>> const& meta);
+
+  void start_sender();
+  void start_remote();
+  void stop();
+
+  double avg_wr_latency_us() const;
+  uint64_t processed_count() const;
+
+  int thread_idx;
+
+ private:
+  void run_sender();
+  void run_remote();
+
+  mscclpp::Fifo* fifo_;
+  std::unique_ptr<Proxy> proxy_;  // Underlying Proxy for RDMA operations
+  std::unique_ptr<std::thread> thread_;
+  std::atomic<bool> stop_flag_;
+
+  uintptr_t gpu_buffer_addr_;
+  size_t total_size_;
+  int rank_;
+  int node_idx_;
+  int local_rank_;
+  std::string peer_ip_;
+
+  std::vector<std::tuple<int, uintptr_t, size_t, std::string>> peers_meta_;
 };

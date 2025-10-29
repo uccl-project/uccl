@@ -38,8 +38,8 @@ void notify_dispatch(
     int num_max_rdma_chunked_recv_tokens, void** buffer_ptrs,
     int num_max_nvl_chunked_recv_tokens, int** barrier_signal_ptrs, int rank,
     cudaStream_t stream, int64_t num_rdma_bytes, int64_t num_nvl_bytes,
-    bool low_latency_mode, uint64_t const* ring_addrs, int num_ring_addrs,
-    void* atomic_buffer_ptr);
+    bool low_latency_mode, uint64_t const* d2h_channel_addrs,
+    int num_d2h_channel_addrs, void* atomic_buffer_ptr);
 
 void cached_notify(int hidden_int4, int num_scales, int num_topk_idx,
                    int num_topk_weights, int num_ranks, int num_channels,
@@ -51,7 +51,7 @@ void cached_notify(int hidden_int4, int num_scales, int num_topk_idx,
                    int** barrier_signal_ptrs, int rank, cudaStream_t stream,
                    int64_t num_rdma_bytes, int64_t num_nvl_bytes,
                    bool is_cached_dispatch, bool low_latency_mode,
-                   uint64_t const* ring_addrs, int num_ring_addrs,
+                   uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
                    void* atomic_buffer_ptr);
 
 void dispatch(void* recv_x, float* recv_x_scales, int64_t* recv_topk_idx,
@@ -71,8 +71,8 @@ void dispatch(void* recv_x, float* recv_x_scales, int64_t* recv_topk_idx,
               int num_max_nvl_chunked_send_tokens,
               int num_max_nvl_chunked_recv_tokens, int rank, int num_ranks,
               bool is_cached_dispatch, cudaStream_t stream, int num_channels,
-              bool low_latency_mode, uint64_t const* ring_addrs,
-              int num_ring_addrs, void* atomic_buffer_ptr);
+              bool low_latency_mode, uint64_t const* d2h_channel_addrs,
+              int num_d2h_channel_addrs, void* atomic_buffer_ptr);
 
 void combine(cudaDataType_t type, void* combined_x,
              float* combined_topk_weights,
@@ -88,7 +88,7 @@ void combine(cudaDataType_t type, void* combined_x,
              int num_max_nvl_chunked_send_tokens,
              int num_max_nvl_chunked_recv_tokens, int rank, int num_ranks,
              cudaStream_t stream, int num_channels, bool low_latency_mode,
-             uint64_t const* ring_addrs, int num_ring_addrs,
+             uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
              void* atomic_buffer_ptr);
 
 }  // namespace internode
