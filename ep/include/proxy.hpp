@@ -85,6 +85,7 @@ class Proxy {
   void set_bench_d2h_channel_addrs(std::vector<uintptr_t> const& addrs);
 
   CopyRingBuffer ring;
+  Config cfg_;
 
  private:
   friend class FifoProxy;  // Allow FifoProxy to access private methods
@@ -102,7 +103,6 @@ class Proxy {
   void barrier_check();
   void quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds);
   void quiet_cq();
-  Config cfg_;
   RDMAConnectionInfo local_info_{}, remote_info_{};
 
   // Completion tracking
