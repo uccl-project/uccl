@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 try:
     from . import _rocm_init
@@ -8,7 +9,16 @@ else:
     _rocm_init.initialize()
     del _rocm_init
 
-is_efa = "rdmap" in " ".join(os.listdir("/sys/class/infiniband/"))
+def has_efa():
+    infiniband = Path("/sys/class/infiniband/")
+    try:
+        if infiniband.is_dir():
+            return any("rdmap" in child.name for child in infiniband.iterdir())
+        return False
+    except (OSError, PermissionError):
+        return False
+is_efa = has_efa()
+
 if not is_efa:
     try:
         from . import p2p

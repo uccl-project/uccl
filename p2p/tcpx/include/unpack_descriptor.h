@@ -90,7 +90,8 @@ using UnpackDescriptor = tcpx::plugin::loadMeta;
 
 // Descriptor block for GPU kernel
 struct UnpackDescriptorBlock {
-  UnpackDescriptor descriptors[MAX_UNPACK_DESCRIPTORS];
+  // Keep scalar header fields before the descriptor array so we can copy
+  // only the populated descriptors to device memory.
   uint32_t count;        // Number of valid descriptors
   uint32_t total_bytes;  // Total bytes to unpack
   void* bounce_buffer;   // Source bounce buffer base
@@ -98,6 +99,7 @@ struct UnpackDescriptorBlock {
   void* ready_flag;      // Device pointer to a 64-bit counter/flag (optional)
   uint64_t
       ready_threshold;  // Optional: expected minimal value to consider ready
+  UnpackDescriptor descriptors[MAX_UNPACK_DESCRIPTORS];
 
   UnpackDescriptorBlock()
       : count(0),

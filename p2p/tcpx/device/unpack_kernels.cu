@@ -344,6 +344,7 @@ extern "C" __host__ tcpx::device::KernelLaunchParams calculateLaunchParams(
     params.shared_mem_size =
         warps_per_block * kWarpShmPageCnt * sizeof(tcpx::rx::UnpackDescriptor);
   }
+  params.use_small_kernel = use_small_kernel;
 
   return params;
 }

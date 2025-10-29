@@ -85,8 +85,11 @@ template <bool kLowLatencyMode>
 __forceinline__ __device__ int translate_dst_rdma_rank(int const dst_rdma_rank,
                                                        int const nvl_rank) {
   // If not LowLatencyMode, forward to first rank of the remote node.
-  return kLowLatencyMode ? (dst_rdma_rank * NUM_MAX_NVL_PEERS + nvl_rank)
-                         : dst_rdma_rank * NUM_MAX_NVL_PEERS;
+  // return kLowLatencyMode ? (dst_rdma_rank * NUM_MAX_NVL_PEERS + nvl_rank)
+  //                        : dst_rdma_rank * NUM_MAX_NVL_PEERS;
+
+  // TODO(MaoZiming): always cross-rail.
+  return dst_rdma_rank * NUM_MAX_NVL_PEERS + nvl_rank;
 }
 #if defined(__NVCC__)
 template <bool kLowLatencyMode, int kNumRDMARanks>

@@ -447,7 +447,7 @@ def bench_kineto(
 
 
 def initialize_uccl(
-    scratch,
+    scratch_ptr,
     scratch_nbytes,
     rank,
     num_ranks,
@@ -469,7 +469,6 @@ def initialize_uccl(
         raise ValueError("WORLD_SIZE must be divisible by LOCAL_WORLD_SIZE")
 
     proxies = []
-    scratch_ptr = scratch.data_ptr()
     rank2meta = get_cpu_proxies_meta(
         rank, scratch_ptr, scratch_nbytes, num_ranks, group
     )
