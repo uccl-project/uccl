@@ -38,7 +38,6 @@ class Buffer:
     def __init__(
         self,
         group: dist.ProcessGroup,
-        rdma_buffer_ptr: Optional[int] = None,
         num_nvl_bytes: int = 0,
         num_rdma_bytes: int = 0,
         low_latency_mode: bool = False,
@@ -66,6 +65,19 @@ class Buffer:
                 otherwise, the resources will be released by the destructor.
                 Note: Releasing resources in the destructor may cause Python's exception handling process to hang.
         """
+        device_index = torch.cuda.current_device()
+        self.scratch = torch.zeros(
+            num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
+        )
+        rdma_buffer_ptr = self.scratch.data_ptr()
+        self.proxies, self.workers = initialize_uccl(
+            rdma_buffer_ptr,
+            num_rdma_bytes,
+            group.rank(),
+            dist.get_world_size(group),
+            group,
+            use_normal_mode=not low_latency_mode
+        )
         check_nvlink_connections(group)
 
         # Initialize the CPP runtime
@@ -77,34 +89,13 @@ class Buffer:
         self.low_latency_mode = low_latency_mode
         self.explicitly_destroy = explicitly_destroy
 
-        if rdma_buffer_ptr is None:
-            device_index = torch.cuda.current_device()
-            scratch = torch.zeros(
-                self.num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
-            )
-            rdma_buffer_ptr = scratch.data_ptr()
-
-        # Determine if this is intranode
         if "LOCAL_WORLD_SIZE" in os.environ:
             local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])
-            is_intranode = (self.group_size <= local_world_size)
         else:
             local_world_size = torch.cuda.device_count()
-            is_intranode = (self.group_size <= local_world_size)
+        
+        print('rank:', self.rank, 'group_size:', self.group_size, 'group:', self.group, 'num_nvl_bytes:', self.num_nvl_bytes, 'num_rdma_bytes:', self.num_rdma_bytes, 'low_latency_mode:', self.low_latency_mode, 'explicitly_destroy:', self.explicitly_destroy, 'device_index:', device_index, 'proxies:', self.proxies, 'workers:', self.workers, 'local_world_size:', local_world_size, 'rdma_buffer_ptr:', rdma_buffer_ptr)
 
-        # Initialize UCCL with the same buffer
-        self.proxies, self.workers = initialize_uccl(
-            scratch_ptr=rdma_buffer_ptr,
-            scratch_nbytes=self.num_rdma_bytes,
-            rank=self.rank,
-            num_ranks=self.group_size,
-            group=group,
-            # num_experts=288,  # TODO: 是不是要写死？
-            # is_intranode=is_intranode
-        )
-        print('rank:', self.rank, 'group_size:', self.group_size, 'group:', self.group, 'num_nvl_bytes:', self.num_nvl_bytes, 'num_rdma_bytes:', self.num_rdma_bytes, 'low_latency_mode:', self.low_latency_mode, 'explicitly_destroy:', self.explicitly_destroy, 'device_index:', device_index, 'proxies:', self.proxies, 'workers:', self.workers, 'local_world_size:', local_world_size, 'is_intranode:', is_intranode, 'rdma_buffer_ptr:', rdma_buffer_ptr)
-
-        # Create the C++ runtime
         self.runtime = ep.Buffer(
             self.rank,
             self.group_size,
@@ -148,9 +139,8 @@ class Buffer:
             rdma_ipc_handles,
         )
         assert self.runtime.is_available()
-
-        # TODO: 可能is_intranode=True不用执行？
         self.connect_atomic_buffer(self.proxies[0])
+        
         for proxy in self.proxies:
             proxy.set_atomic_buffer_ptr(self.proxies[0].get_atomic_buffer_ptr())
 
