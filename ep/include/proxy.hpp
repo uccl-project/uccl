@@ -103,7 +103,6 @@ class Proxy {
   void barrier_check();
   void quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds);
   void quiet_cq();
-  Config cfg_;
   RDMAConnectionInfo local_info_{}, remote_info_{};
 
   // Completion tracking
