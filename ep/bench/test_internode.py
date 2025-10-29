@@ -42,8 +42,6 @@ from utils import (
     inplace_unique,
     per_token_cast_to_fp8,
     per_token_cast_back,
-    initialize_uccl,
-    destroy_uccl,
     init_dist_under_torchrun,
     detect_ib_hca,
 )
@@ -472,9 +470,6 @@ def test_loop(
     scratch = torch.zeros(
         num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
     )
-    proxies, workers = initialize_uccl(
-        scratch, num_rdma_bytes, rank, num_ranks, group, num_experts=args.num_experts
-    )
 
     buffer = Buffer(
         group,
@@ -485,13 +480,6 @@ def test_loop(
         num_qps_per_rank=num_qps_per_rank,
         explicitly_destroy=True,
     )
-    buffer.connect_atomic_buffer(proxies[0])
-
-    for proxy in proxies:
-        proxy.calculate_and_set_dispatch_recv_data_offset(
-            args.num_tokens, args.hidden, args.num_experts
-        )
-        proxy.set_atomic_buffer_ptr(proxies[0].get_atomic_buffer_ptr())
 
     assert num_local_ranks == 8 and num_ranks > 8
     torch.manual_seed(rank)
@@ -512,10 +500,7 @@ def test_loop(
             print("", flush=True)
 
     # Destroy the buffer runtime and communication group
-    group.barrier()
     buffer.destroy()
-    dist.barrier()
-    destroy_uccl(proxies, workers)
     dist.barrier()
     dist.destroy_process_group()
 

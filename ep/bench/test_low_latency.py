@@ -410,10 +410,6 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     scratch = torch.zeros(
         num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
     )
-    proxies, workers = initialize_uccl(
-        scratch, num_rdma_bytes, rank, num_ranks, group, args.num_experts
-    )
-
     buffer = Buffer(
         group,
         rdma_buffer_ptr=scratch.data_ptr(),
@@ -424,15 +420,6 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         explicitly_destroy=True,
         allow_mnnvl=args.allow_mnnvl,
     )
-
-    buffer.connect_atomic_buffer(proxies[0])
-
-    for proxy in proxies:
-        proxy.calculate_and_set_dispatch_recv_data_offset(
-            num_tokens, hidden, num_experts
-        )
-        proxy.set_atomic_buffer_ptr(proxies[0].get_atomic_buffer_ptr())
-
     test_main(
         num_tokens,
         hidden,
@@ -480,10 +467,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
             ), f"Error: seed={seed}"
 
     # Destroy the buffer runtime and communication group
-    group.barrier()
     buffer.destroy()
-    dist.barrier()
-    destroy_uccl(proxies, workers)
     dist.barrier()
     dist.destroy_process_group()
 
