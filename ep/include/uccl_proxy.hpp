@@ -66,6 +66,7 @@ class UcclProxy {
     uintptr_t dispatch_recv_data_offset =
         signaling_buffer_bytes_aligned * 2 + send_buffer_bytes * 2;
     proxy_->set_dispatch_recv_data_offset(dispatch_recv_data_offset);
+    proxy_->cfg_.num_experts = num_experts;
   }
 
   std::vector<uint64_t> get_d2h_channel_addrs() const;
