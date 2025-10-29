@@ -1,7 +1,5 @@
-# 从 uccl.ep 导入需要的类
 from uccl.ep import Config, EventHandle
 
-# 从当前包的模块导入
 from .utils import EventOverlap, check_nvlink_connections, initialize_uccl, destroy_uccl
 from .buffer import Buffer as _Buffer
 import torch.distributed as dist
@@ -32,7 +30,6 @@ class Buffer(_Buffer):
             explicitly_destroy=explicitly_destroy,
         )
 
-# 定义 __all__ 来明确指定包的公共接口
 __all__ = [
     'Config',
     'EventHandle',

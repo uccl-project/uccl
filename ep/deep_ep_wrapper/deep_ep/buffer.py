@@ -91,16 +91,16 @@ class Buffer:
             is_intranode = (self.group_size <= local_world_size)
 
         # Initialize UCCL with the same buffer
-        proxies, workers = initialize_uccl(
+        self.proxies, self.workers = initialize_uccl(
             scratch=scratch,
             scratch_nbytes=self.num_rdma_bytes,
             rank=self.rank,
             num_ranks=self.group_size,
             group=group,
-            num_experts=288,  # TODO: 是不是要写死？
-            is_intranode=is_intranode
+            # num_experts=288,  # TODO: 是不是要写死？
+            # is_intranode=is_intranode
         )
-        print('rank:', self.rank, 'group_size:', self.group_size, 'group:', self.group, 'num_nvl_bytes:', self.num_nvl_bytes, 'num_rdma_bytes:', self.num_rdma_bytes, 'low_latency_mode:', self.low_latency_mode, 'explicitly_destroy:', self.explicitly_destroy, 'device_index:', device_index, 'proxies:', proxies, 'workers:', workers, 'is_intranode:', is_intranode)
+        print('rank:', self.rank, 'group_size:', self.group_size, 'group:', self.group, 'num_nvl_bytes:', self.num_nvl_bytes, 'num_rdma_bytes:', self.num_rdma_bytes, 'low_latency_mode:', self.low_latency_mode, 'explicitly_destroy:', self.explicitly_destroy, 'device_index:', device_index, 'proxies:', self.proxies, 'workers:', self.workers, 'local_world_size:', local_world_size, 'is_intranode:', is_intranode)
 
         # Create the C++ runtime
         self.runtime = ep.Buffer(
@@ -153,12 +153,12 @@ class Buffer:
         assert self.runtime.is_available()
 
         # TODO: 可能is_intranode=True不用执行？
-        self.connect_atomic_buffer(proxies[0])
-        for proxy in proxies:
-            proxy.calculate_and_set_dispatch_recv_data_offset(
-                num_tokens=4096, hidden=7168, num_experts=288  # TODO: 暂时写死
-            )
-            proxy.set_atomic_buffer_ptr(proxies[0].get_atomic_buffer_ptr())
+        self.connect_atomic_buffer(self.proxies[0])
+        for proxy in self.proxies:
+            # proxy.calculate_and_set_dispatch_recv_data_offset(
+            #     num_tokens=4096, hidden=7168, num_experts=288  # TODO: 暂时写死
+            # )
+            proxy.set_atomic_buffer_ptr(self.proxies[0].get_atomic_buffer_ptr())
 
     def reset_rdma_buffer(self):
         """
@@ -180,6 +180,7 @@ class Buffer:
 
         self.runtime.destroy()
         self.runtime = None
+        destroy_uccl(self.proxies, self.workers)
 
     @staticmethod
     def is_sm90_compiled():
@@ -271,6 +272,12 @@ class Buffer:
             event: the event after executing the kernel (valid only if `async_finish` is set).
             hook: the receiving hook function (valid only if `return_recv_hook` is set).
         """
+        for proxy in self.proxies:
+            proxy.calculate_and_set_dispatch_recv_data_offset(
+                num_tokens=x.shape[0],
+                hidden=x.shape[1],
+                num_experts=num_experts,
+            )
         (
             packed_recv_x,
             packed_recv_x_scales,

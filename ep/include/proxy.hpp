@@ -85,6 +85,7 @@ class Proxy {
   void set_bench_d2h_channel_addrs(std::vector<uintptr_t> const& addrs);
 
   CopyRingBuffer ring;
+  Config cfg_;
 
  private:
   friend class FifoProxy;  // Allow FifoProxy to access private methods
