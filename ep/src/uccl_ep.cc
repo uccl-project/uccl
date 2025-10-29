@@ -2139,12 +2139,12 @@ PYBIND11_MODULE(ep, m) {
   py::class_<Stats>(m, "Stats");
   py::class_<UcclProxy>(m, "Proxy")
       .def(py::init<int, uintptr_t, size_t, int, int, int, std::string const&,
-                    int, int, int>(),
+                    int, int, int, bool>(),
            py::arg("thread_idx"), py::arg("gpu_buffer_addr"),
            py::arg("total_size"), py::arg("rank") = 0, py::arg("node_idx") = -1,
            py::arg("local_rank") = 0, py::arg("peer_ip") = std::string(),
            py::arg("num_experts") = -1, py::arg("num_ranks") = -1,
-           py::arg("num_nodes") = 0)
+           py::arg("num_nodes") = 0, py::arg("use_normal_mode") = false)
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)
       .def("start_local", &UcclProxy::start_local)

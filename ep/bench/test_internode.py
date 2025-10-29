@@ -470,7 +470,7 @@ def test_loop(
         group,
         num_nvlink_bytes,
         num_rdma_bytes,
-        low_latency_mode=args.test_ll_compatibility,
+        low_latency_mode=False,
         num_qps_per_rank=num_qps_per_rank,
         explicitly_destroy=True,
     )
@@ -500,13 +500,6 @@ def test_loop(
 
 
 if __name__ == "__main__":
-    if os.getenv("MAKE_NORMAL_MODE") != "1":
-        raise RuntimeError(
-            "[ERROR] The environment variable MAKE_NORMAL_MODE is not set to 1 (normal mode disabled).\n"
-            "This script requires normal mode to be active.\n"
-            "To fix this, run the following before rebuilding:\n"
-            "export MAKE_NORMAL_MODE=1 && make clean && make -j install\n"
-        )
     parser = argparse.ArgumentParser(description="Test internode EP kernels")
     parser.add_argument(
         "--num-processes",

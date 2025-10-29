@@ -85,8 +85,11 @@ template <bool kLowLatencyMode>
 __forceinline__ __device__ int translate_dst_rdma_rank(int const dst_rdma_rank,
                                                        int const nvl_rank) {
   // If not LowLatencyMode, forward to first rank of the remote node.
-  return kLowLatencyMode ? (dst_rdma_rank * NUM_MAX_NVL_PEERS + nvl_rank)
-                         : dst_rdma_rank * NUM_MAX_NVL_PEERS;
+  // return kLowLatencyMode ? (dst_rdma_rank * NUM_MAX_NVL_PEERS + nvl_rank)
+  //                        : dst_rdma_rank * NUM_MAX_NVL_PEERS;
+
+  // TODO(MaoZiming): always cross-rail.
+  return dst_rdma_rank * NUM_MAX_NVL_PEERS + nvl_rank;
 }
 #if defined(__NVCC__)
 template <bool kLowLatencyMode, int kNumRDMARanks>
@@ -197,7 +200,8 @@ __global__ void notify_dispatch(
             (NUM_MAX_NVL_PEERS + num_rdma_experts + 1) * sizeof(int),
             translate_dst_rdma_rank<kLowLatencyMode>(i, nvl_rank),
             0,  // NOTE(MaoZiming): use 0 for rb.
-            lane_id, 0, d2h_channel_addrs, num_d2h_channel_addrs, false, -1);
+            lane_id, 0, d2h_channel_addrs, num_d2h_channel_addrs, false, -1, 0,
+            0, true);
       } else {
         UNROLLED_WARP_COPY(1, lane_id, NUM_MAX_NVL_PEERS + num_rdma_experts + 1,
                            rdma_recv_num_tokens_mixed.recv_buffer(rdma_rank),
@@ -664,7 +668,8 @@ __global__ void __launch_bounds__(
             sizeof(int) * (NUM_MAX_NVL_PEERS * 2 + 2),
             translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank),
             channel_id,  // NOTE(MaoZiming): use channel_id for rb.
-            lane_id, 0, d2h_channel_addrs, num_d2h_channel_addrs, false, -1);
+            lane_id, 0, d2h_channel_addrs, num_d2h_channel_addrs, false, -1, 0,
+            0, true);
       }
     }
     sync_rdma_sender_smem();
@@ -913,7 +918,7 @@ __global__ void __launch_bounds__(
               lane_id, 0, d2h_channel_addrs, num_d2h_channel_addrs, false, -1,
               reinterpret_cast<uint64_t>(rdma_channel_tail.buffer(rdma_rank)) -
                   reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
-              num_tokens_to_issue);
+              num_tokens_to_issue, true);
         } else {
           // Lighter fence for local RDMA rank
           memory_fence();
@@ -931,7 +936,7 @@ __global__ void __launch_bounds__(
               translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank),
               channel_id,  // NOTE(MaoZiming): use channel_id for rb.
               dst_rdma_rank == rdma_rank, d2h_channel_addrs,
-              num_d2h_channel_addrs, false, -1, true);
+              num_d2h_channel_addrs, false, -1, true, true);
         }
         __syncwarp();
       }
@@ -1162,7 +1167,7 @@ __global__ void __launch_bounds__(
             min_head - last_head,
             translate_dst_rdma_rank<kLowLatencyMode>(lane_id, nvl_rank),
             channel_id + num_channels, lane_id == rdma_rank, d2h_channel_addrs,
-            num_d2h_channel_addrs, false, -1, false);
+            num_d2h_channel_addrs, false, -1, false, true);
         last_head = min_head;
       }
 
@@ -2302,7 +2307,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                 reinterpret_cast<uint64_t>(
                     rdma_channel_tail.buffer(rdma_rank)) -
                     reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
-                num_chunked_tokens);
+                num_chunked_tokens, true);
           } else {
             memory_fence();
           }
@@ -2318,7 +2323,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                                                          nvl_rank),
                 channel_id,  // NOTE(MaoZiming): use warp_id for rb.
                 dst_rdma_rank == rdma_rank, d2h_channel_addrs,
-                num_d2h_channel_addrs, false, -1, true);
+                num_d2h_channel_addrs, false, -1, true, true);
           }
         }
       }
@@ -2446,7 +2451,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1)
                 channel_id +
                     num_channels,  // NOTE(MaoZiming): use channel_id for rb.
                 dst_rdma_rank == rdma_rank, d2h_channel_addrs,
-                num_d2h_channel_addrs, false, -1, false);
+                num_d2h_channel_addrs, false, -1, false, true);
             last_rdma_head = min_head;
           }
         } else {

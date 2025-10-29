@@ -454,6 +454,7 @@ def initialize_uccl(
     group,
     num_experts=0,
     is_intranode=False,
+    use_normal_mode=False,
 ):
     try:
         for shm_file in glob.glob("/dev/shm/uccl_barrier_*"):
@@ -486,6 +487,7 @@ def initialize_uccl(
             num_experts=num_experts,
             num_ranks=num_ranks,
             num_nodes=int(os.environ.get("WORLD_SIZE")) // nproc_per_node,
+            use_normal_mode=use_normal_mode,
         )
         if not is_intranode:
             proxy.set_peers_meta(peers_meta_list)

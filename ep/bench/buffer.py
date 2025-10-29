@@ -76,6 +76,7 @@ class Buffer:
             group.rank(),
             dist.get_world_size(group),
             group,
+            use_normal_mode=not low_latency_mode,
         )
         check_nvlink_connections(group)
 
