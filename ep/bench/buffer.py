@@ -12,7 +12,7 @@ except ImportError as exc:
     raise
 
 from uccl.ep import EventHandle, Config
-from utils import EventOverlap, check_nvlink_connections
+from utils import EventOverlap, check_nvlink_connections, initialize_uccl, destroy_uccl
 
 
 class Buffer:
@@ -38,7 +38,6 @@ class Buffer:
     def __init__(
         self,
         group: dist.ProcessGroup,
-        rdma_buffer_ptr: Optional[torch.Tensor] = None,
         num_nvl_bytes: int = 0,
         num_rdma_bytes: int = 0,
         low_latency_mode: bool = False,
@@ -66,6 +65,19 @@ class Buffer:
                 otherwise, the resources will be released by the destructor.
                 Note: Releasing resources in the destructor may cause Python's exception handling process to hang.
         """
+        device_index = int(os.environ["LOCAL_RANK"])
+        self.scratch = torch.zeros(
+            num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
+        )
+        rdma_buffer_ptr = self.scratch.data_ptr()
+        self.proxies, self.workers = initialize_uccl(
+            rdma_buffer_ptr,
+            num_rdma_bytes,
+            group.rank(),
+            dist.get_world_size(group),
+            group,
+            use_normal_mode=not low_latency_mode,
+        )
         check_nvlink_connections(group)
 
         # Initialize the CPP runtime
@@ -119,6 +131,10 @@ class Buffer:
             rdma_ipc_handles,
         )
         assert self.runtime.is_available()
+        self.connect_atomic_buffer(self.proxies[0])
+
+        for proxy in self.proxies:
+            proxy.set_atomic_buffer_ptr(self.proxies[0].get_atomic_buffer_ptr())
 
     def reset_rdma_buffer(self):
         """
@@ -140,6 +156,7 @@ class Buffer:
 
         self.runtime.destroy()
         self.runtime = None
+        destroy_uccl(self.proxies, self.workers)
 
     @staticmethod
     def is_sm90_compiled():
@@ -231,6 +248,12 @@ class Buffer:
             event: the event after executing the kernel (valid only if `async_finish` is set).
             hook: the receiving hook function (valid only if `return_recv_hook` is set).
         """
+        for proxy in self.proxies:
+            proxy.calculate_and_set_dispatch_recv_data_offset(
+                num_tokens=x.shape[0],
+                hidden=x.shape[1],
+                num_experts=num_experts,
+            )
         (
             packed_recv_x,
             packed_recv_x_scales,
