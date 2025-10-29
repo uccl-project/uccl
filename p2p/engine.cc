@@ -83,6 +83,56 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
             << std::endl;
   ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_], true);
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
+  engine_initialized_ = true;
+
+  send_unified_task_ring_ =
+      uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
+  recv_unified_task_ring_ =
+      uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
+
+  send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
+  recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
+
+  // Initialize UDS socket for local connections
+  init_uds_socket();
+
+  std::cout << "Endpoint initialized successfully" << std::endl;
+}
+
+Endpoint::Endpoint(uint32_t const num_cpus) : num_cpus_(num_cpus) {
+  std::cout << "Creating Engine with CPUs: " << num_cpus << std::endl;
+  int n_streams = std::max(1, (int)ucclParamNumGpuRtStreams());
+
+  int ngpus = 0;
+  GPU_RT_CHECK(gpuGetDeviceCount(&ngpus));
+  ipc_streams_.resize(ngpus);
+  for (int i = 0; i < ngpus; ++i) {
+    GPU_RT_CHECK(gpuSetDevice(i));
+    ipc_streams_[i].resize(n_streams);
+    for (int j = 0; j < n_streams; ++j) {
+      GPU_RT_CHECK(
+          gpuStreamCreateWithFlags(&ipc_streams_[i][j], gpuStreamNonBlocking));
+    }
+  }
+
+  std::call_once(glog_init_once,
+                 []() { google::InitGoogleLogging("uccl_p2p"); });
+
+  google::InstallFailureSignalHandler();
+
+  // Initialize the RDMA endpoint with lazy creation.
+  ep_ = new uccl::RDMAEndpoint(num_cpus_);
+
+  // Only initialize mapping for detected GPUs
+  int ngpus_detected = 0;
+  GPU_RT_CHECK(gpuGetDeviceCount(&ngpus_detected));
+  for (int i = 0; i < std::min(ngpus_detected, kMaxNumGPUs); i++) {
+    gpu_to_dev[i] = ep_->get_best_dev_idx(i);
+  }
+  // Initialize remaining slots to 0 (fallback to first device)
+  for (int i = ngpus_detected; i < kMaxNumGPUs; i++) {
+    gpu_to_dev[i] = 0;
+  }
 
   send_unified_task_ring_ =
       uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
@@ -138,6 +188,25 @@ Endpoint::~Endpoint() {
   cleanup_uds_socket();
 
   std::cout << "Engine destroyed" << std::endl;
+}
+
+void Endpoint::initialize_engine(uint32_t const local_gpu_idx) {
+  int n_streams = std::max(1, (int)ucclParamNumGpuRtStreams());
+
+  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+  streams_.resize(n_streams);
+  for (int i = 0; i < n_streams; ++i) {
+    GPU_RT_CHECK(gpuStreamCreateWithFlags(&streams_[i], gpuStreamNonBlocking));
+  }
+
+  numa_node_ =
+      uccl::RDMAFactory::get_factory_dev(gpu_to_dev[local_gpu_idx_])->numa_node;
+
+  // Initialize the engine based on the GPU index.
+  std::cout << "Lazy creation of engine, GPU index: " << local_gpu_idx_
+            << std::endl;
+  ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_], true);
+  std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
 }
 
 bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
@@ -282,6 +351,19 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
 
 bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
   mr_id = next_mr_id_.fetch_add(1);
+
+  if (!engine_initialized_) {
+    int idx = get_dev_idx(data);
+    if (idx != -1) {
+      // Pointer is on device idx
+      local_gpu_idx_ = idx;
+    } else {
+      // Host memory/unknown memory type - fallback to dev 0
+      local_gpu_idx_ = 0;
+    }
+    initialize_engine(local_gpu_idx_);
+    engine_initialized_ = true;
+  }
 
   uccl::Mhandle* mhandle;
   ep_->uccl_regmr(gpu_to_dev[local_gpu_idx_], const_cast<void*>(data), size, 0,

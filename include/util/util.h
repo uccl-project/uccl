@@ -1074,6 +1074,39 @@ inline void checkMemoryLocation(void* ptr) {
 }
 #endif
 
+inline int get_dev_idx(void* ptr) {
+#ifdef __CUDA_ARCH__
+  cudaPointerAttributes attributes;
+  cudaError_t err = cudaPointerGetAttributes(&attributes, ptr);
+  if (err == cudaSuccess) {
+    if (attributes.type == cudaMemoryTypeDevice) {
+      return attributes.device;
+    } else if (attributes.type == cudaMemoryTypeHost) {
+      // Host memory doesn't have a device index
+      return -1;
+    } else {
+      // Unknown memory type (e.g., cudaMemoryTypeManaged)
+      return -1;
+    }
+  }
+  return -1;
+#elif defined(__HIP_PLATFORM_AMD__)
+  hipPointerAttributes attributes;
+  hipError_t err = hipPointerGetAttributes(&attributes, ptr);
+  if (err == hipSuccess) {
+    if (attributes.memoryType == hipMemoryTypeDevice) {
+      return attributes.device;
+    } else {
+      // Host memory doesn't have a device index
+      return -1;
+    }
+  }
+  return -1;
+#else
+  return -1;
+#endif
+}
+
 inline int get_dev_numa_node(char const* dev_name) {
   std::string path =
       Format("/sys/class/infiniband/%s/device/numa_node", dev_name);

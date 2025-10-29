@@ -266,11 +266,18 @@ class Endpoint {
    */
   void cleanup_uds_socket();
 
+  /*
+   * Initialize the engine with the specified GPU index.
+   * Internal helper function for lazy initialization.
+   */
+  void initialize_engine(uint32_t const local_gpu_idx);
+
   int local_gpu_idx_;
   uint32_t num_cpus_;
   int numa_node_;
 
   uccl::RDMAEndpoint* ep_;
+  bool engine_initialized_ = false;
 
   std::atomic<uint64_t> next_conn_id_ = 0;
   std::atomic<uint64_t> next_mr_id_ = 0;
