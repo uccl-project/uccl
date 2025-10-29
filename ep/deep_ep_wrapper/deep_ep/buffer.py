@@ -77,10 +77,12 @@ class Buffer:
         self.low_latency_mode = low_latency_mode
         self.explicitly_destroy = explicitly_destroy
 
-        device_index = torch.cuda.current_device()
-        scratch = torch.zeros(
-            self.num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
-        )
+        if rdma_buffer_ptr is None:
+            device_index = torch.cuda.current_device()
+            scratch = torch.zeros(
+                self.num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
+            )
+            rdma_buffer_ptr = scratch.data_ptr()
 
         # Determine if this is intranode
         if "LOCAL_WORLD_SIZE" in os.environ:
@@ -92,7 +94,7 @@ class Buffer:
 
         # Initialize UCCL with the same buffer
         self.proxies, self.workers = initialize_uccl(
-            scratch_ptr=scratch.data_ptr(),
+            scratch_ptr=rdma_buffer_ptr,
             scratch_nbytes=self.num_rdma_bytes,
             rank=self.rank,
             num_ranks=self.group_size,
@@ -100,7 +102,7 @@ class Buffer:
             # num_experts=288,  # TODO: 是不是要写死？
             # is_intranode=is_intranode
         )
-        print('rank:', self.rank, 'group_size:', self.group_size, 'group:', self.group, 'num_nvl_bytes:', self.num_nvl_bytes, 'num_rdma_bytes:', self.num_rdma_bytes, 'low_latency_mode:', self.low_latency_mode, 'explicitly_destroy:', self.explicitly_destroy, 'device_index:', device_index, 'proxies:', self.proxies, 'workers:', self.workers, 'local_world_size:', local_world_size, 'is_intranode:', is_intranode)
+        print('rank:', self.rank, 'group_size:', self.group_size, 'group:', self.group, 'num_nvl_bytes:', self.num_nvl_bytes, 'num_rdma_bytes:', self.num_rdma_bytes, 'low_latency_mode:', self.low_latency_mode, 'explicitly_destroy:', self.explicitly_destroy, 'device_index:', device_index, 'proxies:', self.proxies, 'workers:', self.workers, 'local_world_size:', local_world_size, 'is_intranode:', is_intranode, 'rdma_buffer_ptr:', rdma_buffer_ptr)
 
         # Create the C++ runtime
         self.runtime = ep.Buffer(
@@ -112,6 +114,8 @@ class Buffer:
             explicitly_destroy,
             local_world_size,  # int(os.environ.get("LOCAL_WORLD_SIZE", -1)),
         )
+        if num_rdma_bytes:
+            self.runtime.set_rdma_buffer_raw(rdma_buffer_ptr)
 
         # Synchronize device IDs
         device_ids = [
