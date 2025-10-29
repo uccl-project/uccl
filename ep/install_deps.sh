@@ -19,8 +19,8 @@ get_cuda_version() {
 # Install PyTorch with automatic CUDA version handling
 echo "Checking CUDA environment..."
 if check_cuda; then
-    apt update
-    apt install -y nvtop libgoogle-glog-dev clang-format-14 python3-pip libnuma-dev
+    sudo apt update
+    sudo apt install -y nvtop libgoogle-glog-dev clang-format-14 python3-pip libnuma-dev
     pip3 install pybind11 --upgrade
     pip3 install black
 
