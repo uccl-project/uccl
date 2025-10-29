@@ -447,7 +447,13 @@ def bench_kineto(
 
 
 def initialize_uccl(
-    scratch_ptr, scratch_nbytes, rank, num_ranks, group, num_experts=0, is_intranode=False
+    scratch_ptr,
+    scratch_nbytes,
+    rank,
+    num_ranks,
+    group,
+    num_experts=0,
+    is_intranode=False,
 ):
     try:
         for shm_file in glob.glob("/dev/shm/uccl_barrier_*"):

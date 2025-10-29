@@ -14,6 +14,7 @@ except ImportError as exc:
 from uccl.ep import EventHandle, Config
 from utils import EventOverlap, check_nvlink_connections, initialize_uccl, destroy_uccl
 
+
 class Buffer:
     """
     The core expert-parallel (EP) communication buffers for Mixture of Experts (MoE) model, which supports:
@@ -66,7 +67,11 @@ class Buffer:
                 Note: Releasing resources in the destructor may cause Python's exception handling process to hang.
         """
         self.proxies, self.workers = initialize_uccl(
-            rdma_buffer_ptr, num_rdma_bytes, group.rank(), dist.get_world_size(group), group
+            rdma_buffer_ptr,
+            num_rdma_bytes,
+            group.rank(),
+            dist.get_world_size(group),
+            group,
         )
         check_nvlink_connections(group)
 
