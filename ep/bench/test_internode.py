@@ -473,7 +473,13 @@ def test_loop(
         num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
     )
     proxies, workers = initialize_uccl(
-        scratch, num_rdma_bytes, rank, num_ranks, group, num_experts=args.num_experts, use_normal_mode=True
+        scratch,
+        num_rdma_bytes,
+        rank,
+        num_ranks,
+        group,
+        num_experts=args.num_experts,
+        use_normal_mode=True,
     )
 
     buffer = Buffer(

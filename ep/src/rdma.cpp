@@ -1389,14 +1389,11 @@ ibv_qp* qp_from_qpnum(ProxyCtx& S, uint32_t qpnum) {
   return nullptr;
 }
 
-
-void remote_process_completions_normal_mode(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
-                                int ne, ibv_wc* wc,
-                                std::vector<ProxyCtx*>& ctx_by_tag,
-                                void* atomic_buffer_ptr, int num_ranks,
-                                int num_experts,
-                                std::set<PendingUpdate>& pending_atomic_updates,
-                                int my_rank, int num_nodes) {
+void remote_process_completions_normal_mode(
+    ProxyCtx& S, int idx, CopyRingBuffer& g_ring, int ne, ibv_wc* wc,
+    std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr, int num_ranks,
+    int num_experts, std::set<PendingUpdate>& pending_atomic_updates,
+    int my_rank, int num_nodes) {
   if (ne == 0) return;
   std::unordered_map<uint32_t, std::vector<ibv_recv_wr>> per_tag;
   per_tag.reserve(8);
@@ -1417,74 +1414,74 @@ void remote_process_completions_normal_mode(ProxyCtx& S, int idx, CopyRingBuffer
       uint32_t offset = aimm.GetOff();
       size_t index = offset / sizeof(int);
 
-        auto* addr32 =
-            reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
+      auto* addr32 =
+          reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
 
-        if (value == kMaxSendAtomicValue) value = kLargeAtomicValue;
+      if (value == kMaxSendAtomicValue) value = kLargeAtomicValue;
 
-        if (!aimm.IsReorderable()) {
-          addr32->fetch_add(value, std::memory_order_release);
+      if (!aimm.IsReorderable()) {
+        addr32->fetch_add(value, std::memory_order_release);
+      } else {
+        struct SeqBuf {
+          uint8_t expected = 0;       // next seq expected
+          uint16_t present_mask = 0;  // bitmask of buffered seqs
+          int vals[kReorderingBufferSize] = {0};
+        };
+
+        // Thread-local map to maintain per-index state
+        static thread_local std::unordered_map<size_t, SeqBuf> seqbufs;
+        auto& sb = seqbufs[index];
+
+        auto commit = [&](int delta) {
+          addr32->fetch_add(delta, std::memory_order_release);
+        };
+        uint8_t seq = aimm.GetSeq();
+        if (seq >= kReorderingBufferSize) {
+          fprintf(stderr, "Error: seq %u out of range\n", seq);
+          std::abort();
+        }
+        if (seq == sb.expected) {
+          // if (my_rank % MAX_NUM_GPUS == 0)
+          //   printf("seq: %u in order, applying immediately\n", seq);
+          // Apply immediately
+          commit(value);
+          sb.expected = (sb.expected + 1) % kReorderingBufferSize;
+
+          // Drain buffered consecutive entries
+          for (int step = 0; step < kReorderingBufferSize; ++step) {
+            uint8_t e = sb.expected;
+            uint16_t bit = static_cast<uint16_t>(1u << e);
+            if (!(sb.present_mask & bit)) break;
+            commit(sb.vals[e]);
+            sb.present_mask &= static_cast<uint16_t>(~bit);
+            sb.expected = (sb.expected + 1) % kReorderingBufferSize;
+          }
         } else {
-          struct SeqBuf {
-            uint8_t expected = 0;       // next seq expected
-            uint16_t present_mask = 0;  // bitmask of buffered seqs
-            int vals[kReorderingBufferSize] = {0};
-          };
-
-          // Thread-local map to maintain per-index state
-          static thread_local std::unordered_map<size_t, SeqBuf> seqbufs;
-          auto& sb = seqbufs[index];
-
-          auto commit = [&](int delta) {
-            addr32->fetch_add(delta, std::memory_order_release);
-          };
-          uint8_t seq = aimm.GetSeq();
+          // Out-of-order arrival — buffer it
           if (seq >= kReorderingBufferSize) {
             fprintf(stderr, "Error: seq %u out of range\n", seq);
             std::abort();
           }
-          if (seq == sb.expected) {
-            // if (my_rank % MAX_NUM_GPUS == 0)
-            //   printf("seq: %u in order, applying immediately\n", seq);
-            // Apply immediately
-            commit(value);
-            sb.expected = (sb.expected + 1) % kReorderingBufferSize;
+          // if (my_rank % MAX_NUM_GPUS == 0)
+          //   printf("seq: %u out of order (expected %u), buffering\n", seq,
+          //         sb.expected);
 
-            // Drain buffered consecutive entries
-            for (int step = 0; step < kReorderingBufferSize; ++step) {
-              uint8_t e = sb.expected;
-              uint16_t bit = static_cast<uint16_t>(1u << e);
-              if (!(sb.present_mask & bit)) break;
-              commit(sb.vals[e]);
-              sb.present_mask &= static_cast<uint16_t>(~bit);
-              sb.expected = (sb.expected + 1) % kReorderingBufferSize;
-            }
+          if (sb.present_mask & (1u << seq)) {
+            fprintf(stderr, "Error: duplicate seq %u arrival\n", seq);
+            std::abort();
+          }
+          uint16_t bit = static_cast<uint16_t>(1u << seq);
+          if (sb.present_mask & bit) {
+            // Duplicate (possible with UD/SRD). Ignore safely.
+            // If you prefer strictness, keep the abort here.
+            fprintf(stderr, "Error: duplicate seq %u arrival\n", seq);
+            std::abort();
           } else {
-            // Out-of-order arrival — buffer it
-            if (seq >= kReorderingBufferSize) {
-              fprintf(stderr, "Error: seq %u out of range\n", seq);
-              std::abort();
-            }
-            // if (my_rank % MAX_NUM_GPUS == 0)
-            //   printf("seq: %u out of order (expected %u), buffering\n", seq,
-            //         sb.expected);
-
-            if (sb.present_mask & (1u << seq)) {
-              fprintf(stderr, "Error: duplicate seq %u arrival\n", seq);
-              std::abort();
-            }
-            uint16_t bit = static_cast<uint16_t>(1u << seq);
-            if (sb.present_mask & bit) {
-              // Duplicate (possible with UD/SRD). Ignore safely.
-              // If you prefer strictness, keep the abort here.
-              fprintf(stderr, "Error: duplicate seq %u arrival\n", seq);
-              std::abort();
-            } else {
-              sb.present_mask |= bit;
-              sb.vals[seq] = value;
-            }
+            sb.present_mask |= bit;
+            sb.vals[seq] = value;
           }
         }
+      }
     } else if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
                ImmType::IsBarrier(ntohl(cqe.imm_data))) {
       BarrierImm bimm(ntohl(cqe.imm_data));
@@ -1521,7 +1518,6 @@ void remote_process_completions_normal_mode(ProxyCtx& S, int idx, CopyRingBuffer
       }
     } else if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
                ImmType::IsWrite(ntohl(cqe.imm_data))) {
-
     } else if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
       fprintf(stderr, "Unexpected CQE opcode: %d\n", cqe.opcode);
       std::abort();
@@ -1566,15 +1562,11 @@ void remote_process_completions_normal_mode(ProxyCtx& S, int idx, CopyRingBuffer
   }
 }
 
-
-
-void remote_process_completions_fast_mode(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
-                                int ne, ibv_wc* wc,
-                                std::vector<ProxyCtx*>& ctx_by_tag,
-                                void* atomic_buffer_ptr, int num_ranks,
-                                int num_experts,
-                                std::set<PendingUpdate>& pending_atomic_updates,
-                                int my_rank, int num_nodes) {
+void remote_process_completions_fast_mode(
+    ProxyCtx& S, int idx, CopyRingBuffer& g_ring, int ne, ibv_wc* wc,
+    std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr, int num_ranks,
+    int num_experts, std::set<PendingUpdate>& pending_atomic_updates,
+    int my_rank, int num_nodes) {
   if (ne == 0) return;
   std::unordered_map<uint32_t, std::vector<ibv_recv_wr>> per_tag;
   per_tag.reserve(8);
@@ -1852,15 +1844,11 @@ void remote_process_completions_fast_mode(ProxyCtx& S, int idx, CopyRingBuffer& 
   }
 }
 
-
-void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
-                                int ne, ibv_wc* wc,
-                                std::vector<ProxyCtx*>& ctx_by_tag,
-                                void* atomic_buffer_ptr, int num_ranks,
-                                int num_experts,
-                                std::set<PendingUpdate>& pending_atomic_updates,
-                                int my_rank, int num_nodes,
-                                bool use_normal_mode) {
+void remote_process_completions(
+    ProxyCtx& S, int idx, CopyRingBuffer& g_ring, int ne, ibv_wc* wc,
+    std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr, int num_ranks,
+    int num_experts, std::set<PendingUpdate>& pending_atomic_updates,
+    int my_rank, int num_nodes, bool use_normal_mode) {
   if (use_normal_mode) {
     remote_process_completions_normal_mode(
         S, idx, g_ring, ne, wc, ctx_by_tag, atomic_buffer_ptr, num_ranks,

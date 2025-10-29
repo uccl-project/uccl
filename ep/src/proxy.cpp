@@ -39,7 +39,7 @@ LocalBarrier* map_local_barrier_shm(std::string const& name, bool* out_owner) {
       perror("shm_open(existing)");
       return nullptr;
     }
-    struct stat st{};
+    struct stat st {};
     int tries = 1000;
     while (tries-- > 0) {
       if (fstat(fd, &st) == 0 && static_cast<size_t>(st.st_size) >= kSize)
@@ -396,7 +396,8 @@ void Proxy::run_dual() {
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     poll_cq_dual(ctx_, acked_wrs_, cfg_.thread_idx, ring, ctx_by_tag_,
                  atomic_buffer_ptr_, cfg_.num_ranks, cfg_.num_experts,
-                 pending_atomic_updates, cfg_.rank, cfg_.num_nodes, cfg_.use_normal_mode);
+                 pending_atomic_updates, cfg_.rank, cfg_.num_nodes,
+                 cfg_.use_normal_mode);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
 #ifdef USE_RECEIVER_BARRIER
@@ -427,7 +428,7 @@ void Proxy::run_dual() {
 void Proxy::notify_gpu_completion(uint64_t& my_tail) {
   if (acked_wrs_.empty()) return;
 
-  // Mark all acked command slots in each ring's bitmask
+    // Mark all acked command slots in each ring's bitmask
 #ifdef USE_MSCCLPP_FIFO_BACKEND
   // FIFO path: pop in order using the pending deque and the completion set.
   for (size_t rb_idx = 0; rb_idx < cfg_.d2h_queues.size(); ++rb_idx) {
@@ -493,6 +494,8 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
     if (!fifo) continue;
     // Available budget for this FIFO.
     size_t pending = fifo_pending_[rb_idx].size();
+    size_t kMaxInflight =
+        cfg_.use_normal_mode ? kMaxInflightNormal : kMaxInflightLowLatency;
     size_t budget = (kMaxInflight > pending) ? (kMaxInflight - pending) : 0;
     for (size_t take = 0; take < budget; ++take) {
       auto trig = fifo->poll();
@@ -776,8 +779,9 @@ void Proxy::post_gpu_commands_mixed(
         int expert_idx;
         if (cmds_to_post[i].is_combine) {
           expert_idx = new_index;
-          ctx_.combine_sent_counter.Reset({cmds_to_post[i].low_latency_buffer_idx,
-                                           expert_idx, cmds_to_post[i].dst_rank});
+          ctx_.combine_sent_counter.Reset(
+              {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
+               cmds_to_post[i].dst_rank});
         } else {
           expert_idx = new_index / cfg_.num_ranks;
           ctx_.dispatch_sent_counter.Reset(
@@ -859,7 +863,7 @@ void Proxy::quiet_cq() {
       remote_process_completions(
           ctx_, cfg_.thread_idx, ring, ne, wc, ctx_by_tag_, atomic_buffer_ptr_,
           cfg_.num_ranks, cfg_.num_experts, pending_atomic_updates, cfg_.rank,
-          cfg_.num_nodes);
+          cfg_.num_nodes, cfg_.use_normal_mode);
 #ifdef USE_RECEIVER_BARRIER
       if (!cfg_.use_normal_mode) {
         apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,

@@ -29,8 +29,8 @@
 #define kQueueMask (kQueueSize - 1)
 // This is the highest we can get due to the number of bits we allocate in the
 // imm for reordering buffer sequence tracking.
-// NOTE: Set to 32 for best performance in non-normal mode, or 8 for normal mode
-#define kMaxInflight 32
+#define kMaxInflightLowLatency 32
+#define kMaxInflightNormal 8
 #define kBatchSize 32
 #define kIterations 40000
 #define kNumThBlocks 4
