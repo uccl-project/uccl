@@ -34,7 +34,7 @@
 // imm for reordering buffer sequence tracking.
 #ifdef USE_MSCCLPP_FIFO_BACKEND
 #ifdef USE_NORMAL_MODE
-#define kMaxInflight 8
+#define kMaxInflight 16  // Increased for better combine throughput
 #else
 #define kMaxInflight 32
 #endif

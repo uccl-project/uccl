@@ -418,7 +418,7 @@ def test_main(
 
     # Tune combine performance
     best_time, best_results = 1e10, None
-    for nvl_chunk_size in range(1, 8, 1):
+    for nvl_chunk_size in range(1, 20, 2):
         for rdma_chunk_size in range(12 if num_nodes == 2 else 8, 33, 4):
             config = Config(
                 num_sms,

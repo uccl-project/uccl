@@ -420,26 +420,9 @@ void Proxy::run_dual() {
 #ifdef USE_NORMAL_MODE
     barrier_check();
 
-    // Check for pending batches that need flushing based on timeout
-    auto now = std::chrono::steady_clock::now();
-    if (now - last_flush_check >=
-        std::chrono::microseconds(ProxyCtx::kMaxBatchDelayUs)) {
-      // Check all pending batches and flush those that have exceeded delay
-      for (auto& [dst_rank, batch_state] : ctx_.pending_batches) {
-        if (batch_state.has_pending && !batch_state.wrs.empty()) {
-          auto elapsed_us =
-              std::chrono::duration_cast<std::chrono::microseconds>(
-                  now - batch_state.first_cmd_time)
-                  .count();
-          if (elapsed_us >= ProxyCtx::kMaxBatchDelayUs) {
-            flush_pending_batch_for_dst(ctx_, dst_rank, cfg_.gpu_buffer,
-                                        ctxs_for_all_ranks_, cfg_.rank,
-                                        cfg_.thread_idx);
-          }
-        }
-      }
-      last_flush_check = now;
-    }
+    // Note: Periodic flush removed - using size-only batching
+    // (kMaxBatchSize=64) for maximum throughput. Time-based flushing overhead
+    // was degrading performance.
 #endif
   }
 }

@@ -720,9 +720,17 @@ void flush_pending_batch_for_dst(ProxyCtx& S, int dst_rank, void* buf,
 
   size_t const num_wrs = batch.wrs.size();
 
-  // Group by ring index
-  std::unordered_map<size_t, std::vector<size_t>> ring_to_indices;
-  ring_to_indices.reserve(num_wrs);
+  // Group by ring index - use pre-allocated buffer (avoid repeated allocation)
+  auto& ring_to_indices = S.reusable_ring_to_indices;
+  // Fast clear: just mark vectors as empty without deallocating
+  for (auto& [key, vec] : ring_to_indices) {
+    vec.clear();
+  }
+  // Only clear map if it's getting too large (avoid rehashing overhead)
+  if (ring_to_indices.size() > 16) {
+    ring_to_indices.clear();
+  }
+
   for (size_t j = 0; j < num_wrs; ++j) {
     size_t ring_idx = static_cast<size_t>((batch.wrs[j] >> 32) & 0xFFFFFFFFu);
     ring_to_indices[ring_idx].push_back(j);
@@ -744,8 +752,21 @@ void flush_pending_batch_for_dst(ProxyCtx& S, int dst_rank, void* buf,
             : ctx->dst_qpn;
 
     ibv_wr_start(qpx);
-    std::vector<uint64_t> ring_wrids;
+    // Use pre-allocated buffer
+    auto& ring_wrids = S.reusable_ring_wrids;
+    ring_wrids.clear();
     ring_wrids.reserve(idxs.size());
+
+    // Cache UD address once per ring batch
+    auto& ud_cache = S.ud_addr_cache[ring_idx_raw];
+    if (ud_cache.ah != ctx->dst_ah || ud_cache.qpn != dst_qpn) {
+      ud_cache.ah = ctx->dst_ah;
+      ud_cache.qpn = dst_qpn;
+    }
+
+    // Set UD address ONCE for entire batch (persists across WRs on same QP)
+    // This eliminates 64 redundant calls per batch
+    ibv_wr_set_ud_addr(qpx, ud_cache.ah, ud_cache.qpn, ud_cache.qkey);
 
     for (size_t j = 0; j < idxs.size(); ++j) {
       size_t i = idxs[j];
@@ -783,12 +804,13 @@ void flush_pending_batch_for_dst(ProxyCtx& S, int dst_rank, void* buf,
           std::abort();
         }
         size_t index = static_cast<size_t>(cmd.atomic_offset / sizeof(int));
-        auto key = ctx->seq_key(dst_rank, index);
-        if (ctx->next_seq_per_index.find(key) == ctx->next_seq_per_index.end())
-          ctx->next_seq_per_index[key] = 0;
 
-        uint8_t seq = ctx->next_seq_per_index[key];
-        ctx->next_seq_per_index[key] = (seq + 1) % kReorderingBufferSize;
+        // Use pre-allocated array instead of map
+        size_t seq_idx = S.seq_hash(dst_rank, index);
+        uint8_t seq =
+            S.seq_array[seq_idx].fetch_add(1, std::memory_order_relaxed) %
+            kReorderingBufferSize;
+
         uint32_t imm =
             AtomicsImm::PackAtomicWithSeq(v, cmd.atomic_offset, seq, true)
                 .GetImmData();
@@ -809,7 +831,7 @@ void flush_pending_batch_for_dst(ProxyCtx& S, int dst_rank, void* buf,
 
       uintptr_t laddr =
           cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
-      ibv_wr_set_ud_addr(qpx, ctx->dst_ah, dst_qpn, QKEY);
+      // Set SGE for this WR
       ibv_wr_set_sge(qpx, ctx->mr->lkey, laddr,
                      static_cast<uint32_t>(cmd.bytes));
 
@@ -830,9 +852,15 @@ void flush_pending_batch_for_dst(ProxyCtx& S, int dst_rank, void* buf,
               : ctx->ack_qp;
 
       size_t const kgroup = idxs.size();
-      std::vector<ibv_sge> sges(kgroup);
-      std::vector<ibv_send_wr> wrs(kgroup);
-      std::vector<uint64_t> ring_wrids;
+      // Use pre-allocated buffers
+      auto& sges = S.reusable_sges;
+      auto& wrs = S.reusable_wrs;
+      auto& ring_wrids = S.reusable_ring_wrids;
+      sges.clear();
+      wrs.clear();
+      ring_wrids.clear();
+      sges.resize(kgroup);
+      wrs.resize(kgroup);
       ring_wrids.reserve(kgroup);
 
       for (size_t j = 0; j < kgroup; ++j) {
@@ -934,8 +962,13 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
     std::abort();
   }
 
-  // Group by destination rank
-  std::unordered_map<int, std::vector<size_t>> dst_rank_wr_ids;
+  // Group by destination rank - use pre-allocated buffer
+  auto& dst_rank_wr_ids = S.reusable_dst_rank_wr_ids;
+  // Clear existing entries and their vectors
+  for (auto& [key, vec] : dst_rank_wr_ids) {
+    vec.clear();
+  }
+  dst_rank_wr_ids.clear();
   for (size_t i = 0; i < num_wrs; ++i) {
     if (cmds_to_post[i].dst_rank == static_cast<uint32_t>(my_rank)) {
       printf("Posting rdma to itself\n");
@@ -972,23 +1005,8 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
       batch.cmds.push_back(cmds_to_post[idx]);
     }
 
-    // Check if we should flush
-    bool should_flush = false;
-
-    // Flush if batch size exceeds max
+    // Flush only when batch is full (remove time-based check for performance)
     if (batch.wrs.size() >= ProxyCtx::kMaxBatchSize) {
-      should_flush = true;
-    }
-
-    // Flush if delay exceeds max
-    auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
-                          now - batch.first_cmd_time)
-                          .count();
-    if (elapsed_us >= ProxyCtx::kMaxBatchDelayUs) {
-      should_flush = true;
-    }
-
-    if (should_flush) {
       flush_pending_batch_for_dst(S, dst_rank, buf, ctxs, my_rank, thread_idx);
     }
   }
@@ -1402,11 +1420,11 @@ void apply_pending_updates(ProxyCtx& ctx,
       }
     } else {
       int combine_num_tokens = ctx.combine_token_counter.Get(
-          {upd.low_latency_buffer_idx, upd.expert_idx});
+          upd.low_latency_buffer_idx, upd.expert_idx);
       if (value == combine_num_tokens) {
         is_atomic_ready = true;
-        ctx.combine_token_counter.Reset(
-            {upd.low_latency_buffer_idx, upd.expert_idx});
+        ctx.combine_token_counter.Reset(upd.low_latency_buffer_idx,
+                                        upd.expert_idx);
       }
     }
     if (is_atomic_ready) {
@@ -1494,7 +1512,7 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
           std::abort();
         }
         int combine_num_tokens =
-            S.combine_token_counter.Get({low_latency_buffer_idx, expert_idx});
+            S.combine_token_counter.Get(low_latency_buffer_idx, expert_idx);
         if (value == combine_num_tokens) {
           is_atomic_ready = true;
         }
@@ -1506,7 +1524,7 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                   value, combine_num_tokens, expert_idx);
         }
         if (is_atomic_ready) {
-          S.combine_token_counter.Reset({low_latency_buffer_idx, expert_idx});
+          S.combine_token_counter.Reset(low_latency_buffer_idx, expert_idx);
         }
       }
       auto* addr32 =
@@ -1664,7 +1682,7 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
         /* expert_idx here is the global expert index of the sender. */
         assert(expert_idx >= src_rank * (num_experts / num_ranks) &&
                expert_idx < (src_rank + 1) * (num_experts / num_ranks));
-        S.combine_token_counter.Add({buffer_idx, expert_idx}, k);
+        S.combine_token_counter.Add(buffer_idx, expert_idx, k);
       }
 #endif
     } else if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
