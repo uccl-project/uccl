@@ -587,18 +587,7 @@ def initialize_uccl(
     #         if rank == 0:
     #             print(f"PeerCopyManager unavailable: {e}", flush=True)
 
-    # Wait longer for internode RDMA connections to fully establish
-    # With more ranks and nodes, this needs more time
-    sleep_time = 10 if not is_intranode else 3
-    if rank == 0:
-        print(f"[UCCL] Waiting {sleep_time} seconds for connections to stabilize...", flush=True)
-    time.sleep(sleep_time)
-
-    dist.barrier(group)  # Extra barrier to ensure all ranks are ready
-
-    if rank == 0:
-        print(f"[UCCL] UCCL initialization complete!", flush=True)
-
+    time.sleep(3)
     return proxies, workers
 
 
