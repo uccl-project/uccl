@@ -411,7 +411,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
     )
     proxies, workers = initialize_uccl(
-        scratch, num_rdma_bytes, rank, num_ranks, group, args.num_experts
+        scratch, num_rdma_bytes, rank, num_ranks, group, args.num_experts, use_normal_mode=False
     )
 
     buffer = Buffer(
@@ -489,13 +489,6 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
 
 
 if __name__ == "__main__":
-    if os.getenv("MAKE_NORMAL_MODE") == "1":
-        raise RuntimeError(
-            "[ERROR] The environment variable MAKE_NORMAL_MODE=1 indicates normal mode is active.\n"
-            "This test requires low-latency mode.\n"
-            "To fix this, run the following before rebuilding:\n"
-            "unset MAKE_NORMAL_MODE && make clean && make -j install\n"
-        )
     parser = argparse.ArgumentParser(description="Test low-latency EP kernels")
     parser.add_argument(
         "--num-processes",
