@@ -113,13 +113,6 @@ class Buffer:
             local_world_size,  # int(os.environ.get("LOCAL_WORLD_SIZE", -1)),
         )
 
-        # Set RDMA buffer: use provided rdma_buffer_ptr or shared buffer
-        if num_rdma_bytes:
-            if rdma_buffer_ptr is not None:
-                self.runtime.set_rdma_buffer_raw(rdma_buffer_ptr)
-            else:
-                self.runtime.set_rdma_buffer_raw(scratch.data_ptr())
-
         # Synchronize device IDs
         device_ids = [
             None,
@@ -155,9 +148,6 @@ class Buffer:
         # TODO: 可能is_intranode=True不用执行？
         self.connect_atomic_buffer(self.proxies[0])
         for proxy in self.proxies:
-            # proxy.calculate_and_set_dispatch_recv_data_offset(
-            #     num_tokens=4096, hidden=7168, num_experts=288  # TODO: 暂时写死
-            # )
             proxy.set_atomic_buffer_ptr(self.proxies[0].get_atomic_buffer_ptr())
 
     def reset_rdma_buffer(self):
