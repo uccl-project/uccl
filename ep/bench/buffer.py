@@ -38,7 +38,6 @@ class Buffer:
     def __init__(
         self,
         group: dist.ProcessGroup,
-        rdma_buffer_ptr: Optional[torch.Tensor] = None,
         num_nvl_bytes: int = 0,
         num_rdma_bytes: int = 0,
         low_latency_mode: bool = False,
@@ -66,6 +65,11 @@ class Buffer:
                 otherwise, the resources will be released by the destructor.
                 Note: Releasing resources in the destructor may cause Python's exception handling process to hang.
         """
+        device_index = int(os.environ["LOCAL_RANK"])
+        self.scratch = torch.zeros(
+            num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
+        )
+        rdma_buffer_ptr = self.scratch.data_ptr()
         self.proxies, self.workers = initialize_uccl(
             rdma_buffer_ptr,
             num_rdma_bytes,

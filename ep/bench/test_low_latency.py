@@ -405,14 +405,8 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         num_tokens, hidden, num_ranks, num_experts
     )
 
-    # UCCL new code for initialization
-    device_index = int(os.environ["LOCAL_RANK"])
-    scratch = torch.zeros(
-        num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
-    )
     buffer = Buffer(
         group,
-        rdma_buffer_ptr=scratch.data_ptr(),
         num_rdma_bytes=num_rdma_bytes,
         low_latency_mode=True,
         num_qps_per_rank=num_experts // num_ranks,

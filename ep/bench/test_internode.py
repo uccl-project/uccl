@@ -466,14 +466,8 @@ def test_loop(
     num_nvlink_bytes = int(2e9)
     num_rdma_bytes = int(1e9)
 
-    device_index = int(os.environ["LOCAL_RANK"])
-    scratch = torch.zeros(
-        num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
-    )
-
     buffer = Buffer(
         group,
-        scratch.data_ptr(),
         num_nvlink_bytes,
         num_rdma_bytes,
         low_latency_mode=args.test_ll_compatibility,
