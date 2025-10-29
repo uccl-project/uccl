@@ -1,7 +1,6 @@
 #include "tcpx_engine.h"
-
-#include <cuda_runtime.h>
-
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
@@ -12,16 +11,16 @@
 #include <memory>
 #include <string>
 #include <thread>
-#include <vector>
 #include <type_traits>
+#include <vector>
+#include <cuda_runtime.h>
 #include <sys/socket.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
 #include <unistd.h>
 
 namespace {
 
-constexpr size_t kMaxChunkBytes = 4 * 1024 * 1024;  // Device-side descriptor limit (~8MB slack)
+constexpr size_t kMaxChunkBytes =
+    4 * 1024 * 1024;  // Device-side descriptor limit (~8MB slack)
 
 bool checkCuda(cudaError_t err, char const* where) {
   if (err != cudaSuccess) {
@@ -170,7 +169,8 @@ bool handshake_server(Options& opts) {
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = INADDR_ANY;
-  addr.sin_port = htons(static_cast<uint16_t>(opts.port + kHandshakePortOffset));
+  addr.sin_port =
+      htons(static_cast<uint16_t>(opts.port + kHandshakePortOffset));
   if (bind(listen_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
     std::cerr << "[TCPX Smoke] handshake bind() failed: "
               << std::strerror(errno) << std::endl;
@@ -228,7 +228,8 @@ bool handshake_client(Options const& opts) {
 
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
-  addr.sin_port = htons(static_cast<uint16_t>(opts.port + kHandshakePortOffset));
+  addr.sin_port =
+      htons(static_cast<uint16_t>(opts.port + kHandshakePortOffset));
   if (inet_pton(AF_INET, opts.ip.c_str(), &addr.sin_addr) != 1) {
     std::cerr << "[TCPX Smoke] handshake invalid IP " << opts.ip << std::endl;
     ::close(sock_fd);
@@ -239,7 +240,8 @@ bool handshake_client(Options const& opts) {
   constexpr int kConnectSleepMs = 100;
   bool connected = false;
   for (int attempt = 0; attempt < kMaxConnectRetries; ++attempt) {
-    if (connect(sock_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0) {
+    if (connect(sock_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) ==
+        0) {
       connected = true;
       break;
     }
@@ -307,11 +309,9 @@ int run_server(tcpx::Endpoint& endpoint, Options opts) {
   std::chrono::duration<double> total_unpack_time(0);
   int const warmup_iters = opts.iters > 1 ? 1 : 0;
   size_t const chunk_bytes = resolve_chunk_bytes(opts.size);
-  size_t const chunks_per_iter =
-      (opts.size + chunk_bytes - 1) / chunk_bytes;
-  std::cout << "[TCPX Smoke] Server chunk size " << chunk_bytes
-            << " bytes (" << chunks_per_iter << " chunks per iteration)"
-            << std::endl;
+  size_t const chunks_per_iter = (opts.size + chunk_bytes - 1) / chunk_bytes;
+  std::cout << "[TCPX Smoke] Server chunk size " << chunk_bytes << " bytes ("
+            << chunks_per_iter << " chunks per iteration)" << std::endl;
 
   for (int iter = 0; iter < opts.iters; ++iter) {
     if (!checkCuda(cudaMemset(raw_dev, 0, opts.size), "cudaMemset")) return 1;
@@ -319,8 +319,7 @@ int run_server(tcpx::Endpoint& endpoint, Options opts) {
     auto iter_start = std::chrono::high_resolution_clock::now();
     size_t offset = 0;
     for (size_t chunk = 0; chunk < chunks_per_iter; ++chunk) {
-      size_t const this_bytes =
-          std::min(chunk_bytes, opts.size - offset);
+      size_t const this_bytes = std::min(chunk_bytes, opts.size - offset);
       uint8_t* dst_ptr = raw_dev + offset;
       uint64_t transfer_id = 0;
       if (!endpoint.recv_async(conn_id, mr_id, dst_ptr, this_bytes,
@@ -349,17 +348,17 @@ int run_server(tcpx::Endpoint& endpoint, Options opts) {
         return 1;
       }
       if (!validate_pattern(host_buf.data(), opts.size)) {
-        std::cerr << "[TCPX Smoke] Validation failed on iteration "
-                  << iter + 1 << std::endl;
+        std::cerr << "[TCPX Smoke] Validation failed on iteration " << iter + 1
+                  << std::endl;
         return 1;
       }
     }
     if (iter < warmup_iters) {
-      std::cout << "[TCPX Smoke] Warmup iteration " << (iter + 1)
-                << "/" << opts.iters << " complete\n";
-    } else {
-      std::cout << "[TCPX Smoke] Iteration " << iter + 1 << "/"
+      std::cout << "[TCPX Smoke] Warmup iteration " << (iter + 1) << "/"
                 << opts.iters << " complete\n";
+    } else {
+      std::cout << "[TCPX Smoke] Iteration " << iter + 1 << "/" << opts.iters
+                << " complete\n";
     }
   }
 
@@ -370,8 +369,7 @@ int run_server(tcpx::Endpoint& endpoint, Options opts) {
     double server_seconds = total_unpack_time.count();
     double server_total_bytes =
         static_cast<double>(opts.size) * static_cast<double>(measured_iters);
-    double server_gib =
-        server_total_bytes / static_cast<double>(1ull << 30);
+    double server_gib = server_total_bytes / static_cast<double>(1ull << 30);
     double server_gbps =
         server_seconds > 0.0 ? server_gib / server_seconds : 0.0;
     std::cout << "[TCPX Smoke] Server observed throughput: " << server_gbps
@@ -413,18 +411,15 @@ int run_client(tcpx::Endpoint& endpoint, Options opts) {
   std::chrono::duration<double> total_send_time(0);
   int const warmup_iters = opts.iters > 1 ? 1 : 0;
   size_t const chunk_bytes = resolve_chunk_bytes(opts.size);
-  size_t const chunks_per_iter =
-      (opts.size + chunk_bytes - 1) / chunk_bytes;
-  std::cout << "[TCPX Smoke] Client chunk size " << chunk_bytes
-            << " bytes (" << chunks_per_iter << " chunks per iteration)"
-            << std::endl;
+  size_t const chunks_per_iter = (opts.size + chunk_bytes - 1) / chunk_bytes;
+  std::cout << "[TCPX Smoke] Client chunk size " << chunk_bytes << " bytes ("
+            << chunks_per_iter << " chunks per iteration)" << std::endl;
 
   for (int iter = 0; iter < opts.iters; ++iter) {
     auto iter_start = std::chrono::high_resolution_clock::now();
     size_t offset = 0;
     for (size_t chunk = 0; chunk < chunks_per_iter; ++chunk) {
-      size_t const this_bytes =
-          std::min(chunk_bytes, opts.size - offset);
+      size_t const this_bytes = std::min(chunk_bytes, opts.size - offset);
       uint8_t* src_ptr = raw_dev + offset;
       uint64_t transfer_id = 0;
       if (!endpoint.send_async(conn_id, mr_id, src_ptr, this_bytes,
@@ -455,12 +450,11 @@ int run_client(tcpx::Endpoint& endpoint, Options opts) {
   if (measured_iters > 0) {
     double seconds = total_send_time.count();
     double total_bytes = static_cast<double>(opts.size) * measured_iters;
-    double gib =
-        total_bytes / static_cast<double>(1ull << 30);  // binary GiB
+    double gib = total_bytes / static_cast<double>(1ull << 30);  // binary GiB
     double gbps = seconds > 0.0 ? gib / seconds : 0.0;
     std::cout << "[TCPX Smoke] Completed " << measured_iters
-              << " measured iteration(s) in " << seconds
-              << " s, throughput " << gbps << " GiB/s" << std::endl;
+              << " measured iteration(s) in " << seconds << " s, throughput "
+              << gbps << " GiB/s" << std::endl;
   } else {
     std::cout << "[TCPX Smoke] Only warmup iteration executed on client; no "
                  "bandwidth reported.\n";
@@ -473,10 +467,9 @@ int run_client(tcpx::Endpoint& endpoint, Options opts) {
 int main(int argc, char** argv) {
   Options opts;
   if (!parse_args(argc, argv, opts)) {
-    std::cerr
-        << "Usage: " << argv[0]
-        << " --mode=server|client [--ip=ADDR] [--port=NUM] [--gpu=ID] "
-           "[--size=BYTES] [--iters=N]\n";
+    std::cerr << "Usage: " << argv[0]
+              << " --mode=server|client [--ip=ADDR] [--port=NUM] [--gpu=ID] "
+                 "[--size=BYTES] [--iters=N]\n";
     return 1;
   }
 
@@ -501,9 +494,13 @@ int main(int argc, char** argv) {
   setenv("NCCL_P2P_NVL_CHUNKSIZE", "1048576", 0);
   setenv("NCCL_BUFFSIZE", "8388608", 0);
   setenv("NCCL_GPUDIRECTTCPX_TX_BINDINGS",
-         "eth1:8-21,112-125;eth2:8-21,112-125;eth3:60-73,164-177;eth4:60-73,164-177", 0);
+         "eth1:8-21,112-125;eth2:8-21,112-125;eth3:60-73,164-177;eth4:60-73,"
+         "164-177",
+         0);
   setenv("NCCL_GPUDIRECTTCPX_RX_BINDINGS",
-         "eth1:22-35,126-139;eth2:22-35,126-139;eth3:74-87,178-191;eth4:74-87,178-191", 0);
+         "eth1:22-35,126-139;eth2:22-35,126-139;eth3:74-87,178-191;eth4:74-87,"
+         "178-191",
+         0);
   setenv("NCCL_GPUDIRECTTCPX_PROGRAM_FLOW_STEERING_WAIT_MICROS", "50000", 0);
   setenv("NCCL_GPUDIRECTTCPX_FORCE_ACK", "0", 0);
   setenv("NCCL_GPUDIRECTTCPX_TX_COMPLETION_NANOSLEEP", "100", 0);

@@ -1,21 +1,20 @@
 #include "tcpx_engine.h"
-
 #include "tcpx/include/bootstrap.h"
 #include "tcpx/include/unpack_descriptor.h"
 #include <arpa/inet.h>
 #include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
-#include <netdb.h>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
 #include <thread>
 #include <vector>
+#include <netdb.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 thread_local bool inside_python = false;
 
@@ -86,16 +85,14 @@ bool recv_ctrl_header(int fd, CtrlMsgHeader& hdr) {
 
 template <typename T>
 bool send_ctrl_struct(int fd, T const& pod) {
-  static_assert(std::is_trivially_copyable<T>::value,
-                "payload must be POD");
+  static_assert(std::is_trivially_copyable<T>::value, "payload must be POD");
   if (!send_ctrl_header(fd, CTRL_STRUCT, sizeof(T))) return false;
   return send_all(fd, &pod, sizeof(T));
 }
 
 template <typename T>
 bool recv_ctrl_struct(int fd, T& pod) {
-  static_assert(std::is_trivially_copyable<T>::value,
-                "payload must be POD");
+  static_assert(std::is_trivially_copyable<T>::value, "payload must be POD");
   CtrlMsgHeader hdr{};
   if (!recv_ctrl_header(fd, hdr)) return false;
   if (hdr.type != CTRL_STRUCT || hdr.length != sizeof(T)) {
@@ -289,8 +286,8 @@ std::tuple<std::string, uint16_t, int> Endpoint::parse_metadata(
   return std::make_tuple(std::string(info.ip), info.port, info.gpu);
 }
 
-bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx,
-                       int remote_port, uint64_t& conn_id) {
+bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
+                       uint64_t& conn_id) {
   (void)remote_gpu_idx;
 
   if (remote_port < 0) remote_port = ctrl_port_;
@@ -440,9 +437,8 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   // pair using handle payloads from the client.
   sockaddr_in client_addr{};
   socklen_t addrlen = sizeof(client_addr);
-  int sock_fd =
-      ::accept(ctrl_listen_fd_, reinterpret_cast<sockaddr*>(&client_addr),
-               &addrlen);
+  int sock_fd = ::accept(ctrl_listen_fd_,
+                         reinterpret_cast<sockaddr*>(&client_addr), &addrlen);
   if (sock_fd < 0) {
     std::cerr << "[tcpx] accept() failed: " << strerror(errno) << std::endl;
     return false;
@@ -474,7 +470,8 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   auto conn = std::make_unique<Conn>();
 
   HandlePayload listen_payload{};
-  // Share the forward-path listen handle so the client can establish its send_comm.
+  // Share the forward-path listen handle so the client can establish its
+  // send_comm.
   listen_payload.handle = listen_handle_;
   if (!send_ctrl_struct(sock_fd, listen_payload)) {
     ::close(sock_fd);
@@ -504,7 +501,8 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   }
 
   HandlePayload client_handle{};
-  // Client sends back the handle we should use for the reverse (recv_comm) direction.
+  // Client sends back the handle we should use for the reverse (recv_comm)
+  // direction.
   if (!recv_ctrl_struct(sock_fd, client_handle)) {
     ::close(sock_fd);
     tcpx_close_recv(conn->recv_comm);
@@ -643,7 +641,8 @@ bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
   return true;
 }
 
-bool Endpoint::queue_read_response(uint64_t conn_id, FifoItem const& fifo_item) {
+bool Endpoint::queue_read_response(uint64_t conn_id,
+                                   FifoItem const& fifo_item) {
   // Active side of a read: locate the advertised slice and push it using the
   // tag recorded in the FIFO.
   Conn* conn_ptr = nullptr;
@@ -694,7 +693,8 @@ bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
 bool Endpoint::send_async_with_tag(uint64_t conn_id, uint64_t mr_id,
                                    void const* data, size_t size, uint32_t tag,
                                    uint64_t* transfer_id) {
-  // Variant used by queue_read_response / read_async where the caller controls the tag.
+  // Variant used by queue_read_response / read_async where the caller controls
+  // the tag.
   if (!data || size == 0) return false;
 
   Conn* conn_ptr = nullptr;
@@ -715,8 +715,7 @@ bool Endpoint::send_async_with_tag(uint64_t conn_id, uint64_t mr_id,
 
   uintptr_t base_addr = reinterpret_cast<uintptr_t>(mr.base);
   uintptr_t data_addr = reinterpret_cast<uintptr_t>(data);
-  if (data_addr < base_addr ||
-      data_addr + size > base_addr + mr.size) {
+  if (data_addr < base_addr || data_addr + size > base_addr + mr.size) {
     return false;
   }
 
@@ -756,14 +755,13 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
 
   uintptr_t base_addr = reinterpret_cast<uintptr_t>(mr.base);
   uintptr_t dst_addr = reinterpret_cast<uintptr_t>(dst);
-  if (dst_addr < base_addr ||
-      dst_addr + slot_item.size > base_addr + mr.size) {
+  if (dst_addr < base_addr || dst_addr + slot_item.size > base_addr + mr.size) {
     return false;
   }
 
   // Reuse the advertised tag so the active peer can match this recv.
-  return recv_async_with_tag(conn_id, mr_id, dst, slot_item.size,
-                             slot_item.tag, transfer_id);
+  return recv_async_with_tag(conn_id, mr_id, dst, slot_item.size, slot_item.tag,
+                             transfer_id);
 }
 
 bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
@@ -774,7 +772,8 @@ bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
 bool Endpoint::recv_async_with_tag(uint64_t conn_id, uint64_t mr_id, void* data,
                                    size_t size, uint32_t tag,
                                    uint64_t* transfer_id) {
-  // Allow callers (e.g. FIFO-driven reads) to enforce the tag that the sender will use.
+  // Allow callers (e.g. FIFO-driven reads) to enforce the tag that the sender
+  // will use.
   if (!data || size == 0) return false;
 
   Conn* conn_ptr = nullptr;
@@ -795,14 +794,13 @@ bool Endpoint::recv_async_with_tag(uint64_t conn_id, uint64_t mr_id, void* data,
 
   uintptr_t base_addr = reinterpret_cast<uintptr_t>(mr.base);
   uintptr_t dst_addr = reinterpret_cast<uintptr_t>(data);
-  if (dst_addr < base_addr ||
-      dst_addr + size > base_addr + mr.size) {
+  if (dst_addr < base_addr || dst_addr + size > base_addr + mr.size) {
     return false;
   }
 
   uint64_t tid = 0;
-  if (!post_recv_(*conn_ptr, mr_id, mr, data, size, static_cast<int>(tag),
-                  tid, /*needs_unpack=*/true)) {
+  if (!post_recv_(*conn_ptr, mr_id, mr, data, size, static_cast<int>(tag), tid,
+                  /*needs_unpack=*/true)) {
     return false;
   }
   if (transfer_id) *transfer_id = tid;
@@ -852,8 +850,8 @@ bool Endpoint::post_send_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
 bool Endpoint::post_recv_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
                           void* data, size_t size, int tag,
                           uint64_t& transfer_id, bool needs_unpack) {
-  // Mirrors post_send_: queue a TCPX irecv, then stash bookkeeping so poll_async
-  // can match the request, trigger unpack, and free resources later.
+  // Mirrors post_send_: queue a TCPX irecv, then stash bookkeeping so
+  // poll_async can match the request, trigger unpack, and free resources later.
   if (!data || size == 0) return false;
 
   void* mhandle = nullptr;
@@ -866,8 +864,8 @@ bool Endpoint::post_recv_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
   void* mhandles[1] = {mhandle};
   void* requests[1] = {nullptr};
 
-  int rc = tcpx_irecv(conn.recv_comm, 1, buffers, sizes, tags, mhandles,
-                      requests);
+  int rc =
+      tcpx_irecv(conn.recv_comm, 1, buffers, sizes, tags, mhandles, requests);
   if (rc != 0 || !requests[0]) {
     std::cerr << "[tcpx] tcpx_irecv failed rc=" << rc << std::endl;
     return false;
@@ -882,7 +880,8 @@ bool Endpoint::post_recv_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
   transfer.tag = tag;  // Tag must match the sender's isend to complete.
   transfer.request = requests[0];
   transfer.dst_ptr = data;
-  transfer.needs_unpack = needs_unpack;  // Bounce-buffer unpack handled later if true.
+  transfer.needs_unpack =
+      needs_unpack;  // Bounce-buffer unpack handled later if true.
   transfer.event_recorded = false;
   transfer.completion_event = nullptr;
 
@@ -920,8 +919,7 @@ bool Endpoint::poll_request_(PendingTransfer& transfer, bool* done,
 }
 
 bool Endpoint::enqueue_unpack_(PendingTransfer& transfer,
-                               tcpx::plugin::tcpxRequest* request,
-                               Conn& conn) {
+                               tcpx::plugin::tcpxRequest* request, Conn& conn) {
   auto* dev_handle_struct =
       reinterpret_cast<tcpx::plugin::NcclNetDeviceHandle*>(
           conn.recv_dev_handle);
@@ -936,16 +934,14 @@ bool Endpoint::enqueue_unpack_(PendingTransfer& transfer,
   std::cerr << "[tcpx] unpack transfer_id=" << transfer.transfer_id
             << " frag_cnt=" << frag_cnt << " dst_ptr=" << transfer.dst_ptr
             << std::endl;
-  if (frag_cnt == 0 ||
-      frag_cnt > MAX_UNPACK_DESCRIPTORS) {
+  if (frag_cnt == 0 || frag_cnt > MAX_UNPACK_DESCRIPTORS) {
     std::cerr << "[tcpx] invalid fragment count " << frag_cnt << std::endl;
     return false;
   }
 
   tcpx::plugin::unpackNetDeviceHandle dev_handle{};
   CUresult cu_rc = cuMemcpyDtoH(
-      &dev_handle,
-      reinterpret_cast<CUdeviceptr>(dev_handle_struct->handle),
+      &dev_handle, reinterpret_cast<CUdeviceptr>(dev_handle_struct->handle),
       sizeof(dev_handle));
   if (cu_rc != CUDA_SUCCESS) {
     std::cerr << "[tcpx] cuMemcpyDtoH failed " << cu_rc << std::endl;
@@ -959,19 +955,17 @@ bool Endpoint::enqueue_unpack_(PendingTransfer& transfer,
   tcpx::rx::UnpackDescriptorBlock block;
   // Translate the plugin-provided metadata into the format expected by the CUDA
   // unpack kernel.
-  tcpx::rx::buildDescriptorBlock(meta_entries,
-                                 static_cast<uint32_t>(frag_cnt),
+  tcpx::rx::buildDescriptorBlock(meta_entries, static_cast<uint32_t>(frag_cnt),
                                  dev_handle.bounce_buf, transfer.dst_ptr,
                                  block);
   if (frag_cnt > 0) {
     auto const& m0 = block.descriptors[0];
     size_t probe_len = std::min<size_t>(m0.len, 64);
     std::vector<uint8_t> sample(probe_len);
-    CUresult sample_rc =
-        cuMemcpyDtoH(sample.data(),
-                     reinterpret_cast<CUdeviceptr>(dev_handle.bounce_buf +
-                                                   m0.src_off),
-                     probe_len);
+    CUresult sample_rc = cuMemcpyDtoH(
+        sample.data(),
+        reinterpret_cast<CUdeviceptr>(dev_handle.bounce_buf + m0.src_off),
+        probe_len);
     if (sample_rc == CUDA_SUCCESS) {
       std::cerr << "[tcpx] bounce sample @src_off=" << m0.src_off << ":";
       for (size_t i = 0; i < probe_len; ++i) {
@@ -985,16 +979,16 @@ bool Endpoint::enqueue_unpack_(PendingTransfer& transfer,
   }
   for (uint32_t i = 0; i < std::min<uint32_t>(frag_cnt, 4); ++i) {
     auto const& m = block.descriptors[i];
-    std::cerr << "  meta[" << i << "] src_off=" << m.src_off
-              << " len=" << m.len << " dst_off=" << m.dst_off << std::endl;
+    std::cerr << "  meta[" << i << "] src_off=" << m.src_off << " len=" << m.len
+              << " dst_off=" << m.dst_off << std::endl;
   }
   if (frag_cnt > 4) {
     for (uint32_t i = frag_cnt - std::min<uint32_t>(frag_cnt, 4); i < frag_cnt;
          ++i) {
       auto const& m = block.descriptors[i];
       std::cerr << "  meta[" << i << "] src_off=" << m.src_off
-                << " len=" << m.len << " dst_off=" << m.dst_off
-                << " (tail)" << std::endl;
+                << " len=" << m.len << " dst_off=" << m.dst_off << " (tail)"
+                << std::endl;
     }
   }
   block.ready_flag = request->unpack_slot.cnt;

@@ -1,9 +1,9 @@
 #pragma once
 
-#include "tcpx/include/bootstrap.h"
-#include "tcpx/include/unpack_descriptor.h"
 #include "tcpx/device/unpack_launch.h"
+#include "tcpx/include/bootstrap.h"
 #include "tcpx/include/tcpx_interface.h"
+#include "tcpx/include/unpack_descriptor.h"
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -53,12 +53,12 @@ struct Conn {
 };
 
 struct FifoItem {
-  uint64_t mr_id;     // Registered memory identifier advertised to the peer
-  uint32_t size;      // Payload size that should be transferred
-  uint32_t tag;       // TCPX-side tag used to match isend/irecv operations
-  uint64_t offset;    // Byte offset within the registered MR base pointer
-  uint64_t token;     // Reserved for future metadata (kept for alignment)
-  char padding[32];   // Preserve 64-byte layout expected by uccl listener
+  uint64_t mr_id;    // Registered memory identifier advertised to the peer
+  uint32_t size;     // Payload size that should be transferred
+  uint32_t tag;      // TCPX-side tag used to match isend/irecv operations
+  uint64_t offset;   // Byte offset within the registered MR base pointer
+  uint64_t token;    // Reserved for future metadata (kept for alignment)
+  char padding[32];  // Preserve 64-byte layout expected by uccl listener
 };
 static_assert(sizeof(struct FifoItem) == 64, "FifoItem size is not 64 bytes");
 
@@ -159,14 +159,12 @@ class Endpoint {
   bool send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
                   size_t size, uint64_t* transfer_id);
   bool send_async_with_tag(uint64_t conn_id, uint64_t mr_id, void const* data,
-                           size_t size, uint32_t tag,
-                           uint64_t* transfer_id);
+                           size_t size, uint32_t tag, uint64_t* transfer_id);
   /* Receive data from the remote server asynchronously. */
   bool recv_async(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
                   uint64_t* transfer_id);
   bool recv_async_with_tag(uint64_t conn_id, uint64_t mr_id, void* data,
-                           size_t size, uint32_t tag,
-                           uint64_t* transfer_id);
+                           size_t size, uint32_t tag, uint64_t* transfer_id);
 
   /* Poll the status of the asynchronous receive. */
   bool poll_async(uint64_t transfer_id, bool* is_done);
@@ -200,8 +198,7 @@ class Endpoint {
   bool populate_conn_handles_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
                               bool is_recv, void** mhandle_out);
   bool enqueue_unpack_(PendingTransfer& transfer,
-                       tcpx::plugin::tcpxRequest* request,
-                       Conn& conn);
+                       tcpx::plugin::tcpxRequest* request, Conn& conn);
   bool complete_pending_transfer_(PendingTransfer& transfer, bool success);
   bool poll_request_(PendingTransfer& transfer, bool* done, int* received_size);
   bool post_send_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
