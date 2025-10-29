@@ -331,6 +331,14 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              std::vector<TransferCmd> const& cmds_to_post,
                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
                              int my_rank, int thread_idx);
+#ifdef USE_NORMAL_MODE
+void flush_pending_batch_for_dst(ProxyCtx& S, int dst_rank, void* buf,
+                                 std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
+                                 int my_rank, int thread_idx);
+void flush_all_pending_batches(ProxyCtx& S, void* buf,
+                               std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
+                               int my_rank, int thread_idx);
+#endif
 void local_process_completions(ProxyCtx& S,
                                std::unordered_set<uint64_t>& acked_wrs,
                                int thread_idx, ibv_wc* wc, int ne,

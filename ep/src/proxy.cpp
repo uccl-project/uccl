@@ -393,6 +393,9 @@ void Proxy::run_dual() {
   uint64_t my_tail = 0;
   size_t seen = 0;
   std::set<PendingUpdate> pending_atomic_updates;
+#ifdef USE_NORMAL_MODE
+  auto last_flush_check = std::chrono::steady_clock::now();
+#endif
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     poll_cq_dual(ctx_, acked_wrs_, cfg_.thread_idx, ring, ctx_by_tag_,
                  atomic_buffer_ptr_, cfg_.num_ranks, cfg_.num_experts,
@@ -416,6 +419,10 @@ void Proxy::run_dual() {
 
 #ifdef USE_NORMAL_MODE
     barrier_check();
+
+    // Note: Periodic flush removed - using size-only batching
+    // (kMaxBatchSize=64) for maximum throughput. Time-based flushing overhead
+    // was degrading performance.
 #endif
   }
 }

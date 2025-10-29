@@ -2,10 +2,16 @@
 #include "barrier_local.hpp"
 #include "util/gpu_rt.h"
 #include <infiniband/verbs.h>
+#include <array>
 #include <atomic>
 #include <map>
 #include <unordered_map>
 #include <vector>
+#ifdef USE_NORMAL_MODE
+#include <chrono>
+#endif
+
+struct TransferCmd;  // forward declaration
 
 template <typename Key>
 class TokenCounter {
@@ -21,6 +27,51 @@ class TokenCounter {
 
  private:
   MapType counter_;
+};
+
+// Fast array-based token counter for combine operations
+// Assumes max 4 buffers, 512 experts
+class FastCombineTokenCounter {
+ public:
+  static constexpr size_t kMaxBuffers = 8;  // Increased to be safe
+  static constexpr size_t kMaxExperts = 512;
+
+  void Add(int buffer_idx, int expert_idx, size_t k) {
+    if (buffer_idx >= 0 && buffer_idx < kMaxBuffers && expert_idx >= 0 &&
+        expert_idx < kMaxExperts) {
+      counters_[buffer_idx][expert_idx] += k;
+    } else {
+      // Fallback to map for out-of-range
+      fallback_[{buffer_idx, expert_idx}] += k;
+    }
+  }
+
+  size_t Get(int buffer_idx, int expert_idx) const {
+    if (buffer_idx >= 0 && buffer_idx < kMaxBuffers && expert_idx >= 0 &&
+        expert_idx < kMaxExperts) {
+      return counters_[buffer_idx][expert_idx];
+    }
+    auto it = fallback_.find({buffer_idx, expert_idx});
+    return (it == fallback_.end()) ? 0 : it->second;
+  }
+
+  void Reset(int buffer_idx, int expert_idx) {
+    if (buffer_idx >= 0 && buffer_idx < kMaxBuffers && expert_idx >= 0 &&
+        expert_idx < kMaxExperts) {
+      counters_[buffer_idx][expert_idx] = 0;
+    } else {
+      fallback_[{buffer_idx, expert_idx}] = 0;
+    }
+  }
+
+  void Clear() {
+    memset(counters_, 0, sizeof(counters_));
+    fallback_.clear();
+  }
+
+ private:
+  size_t counters_[kMaxBuffers][kMaxExperts] = {};
+  mutable std::map<std::pair<int, int>, size_t> fallback_;  // For out-of-range
 };
 
 using DispatchTokenKey = std::tuple<int, int, int>;
@@ -91,7 +142,7 @@ struct ProxyCtx {
   uint32_t tag = 0;
 
   TokenCounter<DispatchTokenKey> dispatch_token_counter;
-  TokenCounter<CombineTokenKey> combine_token_counter;
+  FastCombineTokenCounter combine_token_counter;  // Optimized for fast lookups
   TokenCounter<NormalTokenKey> normal_token_counter;
 
   /* low_latency_buffer_idx, expert_idx, dst_rank */
@@ -130,4 +181,44 @@ struct ProxyCtx {
     return (static_cast<uint64_t>(static_cast<uint32_t>(dst_rank)) << 32) ^
            static_cast<uint64_t>(static_cast<uint32_t>(index));
   }
+
+#ifdef USE_NORMAL_MODE
+  // Batching state for delayed transmission
+  struct BatchState {
+    std::vector<uint64_t> wrs;
+    std::vector<TransferCmd> cmds;
+    std::chrono::steady_clock::time_point first_cmd_time;
+    bool has_pending = false;
+  };
+  std::unordered_map<int, BatchState> pending_batches;  // per dst_rank
+  static constexpr size_t kMaxBatchSize = 64;  // Sweet spot for EFA UD mode
+  static constexpr int64_t kMaxBatchDelayUs =
+      10;  // Not used (size-only batching)
+
+  // Pre-allocated buffers to avoid allocation in hot path
+  std::unordered_map<int, std::vector<size_t>> reusable_dst_rank_wr_ids;
+  std::unordered_map<size_t, std::vector<size_t>> reusable_ring_to_indices;
+  std::vector<uint64_t> reusable_ring_wrids;
+  std::vector<ibv_sge> reusable_sges;
+  std::vector<ibv_send_wr> reusable_wrs;
+
+  // Cache for EFA UD addressing - avoid repeated ibv_wr_set_ud_addr
+  struct UDAddrCache {
+    ibv_ah* ah = nullptr;
+    uint32_t qpn = 0;
+    uint32_t qkey = QKEY;
+  };
+  std::unordered_map<size_t, UDAddrCache> ud_addr_cache;  // ring_idx -> cache
+
+  // Pre-allocated array for sequence numbers (replacing map)
+  static constexpr size_t kSeqArraySize =
+      16384;  // Support up to 16K unique (dst_rank, index) pairs
+  std::array<std::atomic<uint8_t>, kSeqArraySize> seq_array{};
+
+  // Hash function for sequence array indexing
+  inline size_t seq_hash(int dst_rank, size_t index) const {
+    // Simple hash combining dst_rank and index
+    return (static_cast<size_t>(dst_rank) * 4096 + index) % kSeqArraySize;
+  }
+#endif
 };
