@@ -35,13 +35,6 @@ class Buffer:
     # TODO(MaoZiming): Reduce SMs. UCCL Proxy should reduce the usage of SMs.
     num_sms: int = 20
 
-    # Track UCCL initialization per device
-    _uccl_initialized_devices = set()
-    _uccl_proxies_dict = {}
-    _uccl_workers_dict = {}
-    _uccl_buffers_dict = {}  # Shared buffer for all Buffer instances on each device
-    _uccl_proxies_configured = set()  # Track which devices have configured proxies
-
     def __init__(
         self,
         group: dist.ProcessGroup,
@@ -84,45 +77,30 @@ class Buffer:
         self.low_latency_mode = low_latency_mode
         self.explicitly_destroy = explicitly_destroy
 
-        # Get current device
         device_index = torch.cuda.current_device()
+        scratch = torch.zeros(
+            self.num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
+        )
 
-        # Allocate unified buffer at class level (once per device)
-        # This ensures ALL Buffer instances on the same device share the SAME memory
-        if device_index not in Buffer._uccl_buffers_dict:
-            buffer_size = max(num_nvl_bytes, num_rdma_bytes, 256 * 1024 * 1024)  # At least 256MB
-            Buffer._uccl_buffers_dict[device_index] = torch.empty(
-                buffer_size, dtype=torch.uint8, device=f"cuda:{device_index}"
-            )
+        # Determine if this is intranode
+        if "LOCAL_WORLD_SIZE" in os.environ:
+            local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])
+            is_intranode = (self.group_size <= local_world_size)
+        else:
+            local_world_size = torch.cuda.device_count()
+            is_intranode = (self.group_size <= local_world_size)
 
-        # Use the shared buffer for this device
-        self._buffer = Buffer._uccl_buffers_dict[device_index]
-
-        # Initialize UCCL proxies if not already done for this device
-        if device_index not in Buffer._uccl_initialized_devices:
-            # Determine if this is intranode
-            if "LOCAL_WORLD_SIZE" in os.environ:
-                local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])
-                is_intranode = (self.group_size <= local_world_size)
-            else:
-                num_gpus = torch.cuda.device_count()
-                is_intranode = (self.group_size <= num_gpus)
-
-            # Initialize UCCL with the same buffer
-            proxies, workers = initialize_uccl(
-                scratch=self._buffer,
-                scratch_nbytes=self._buffer.numel(),
-                rank=self.rank,
-                num_ranks=self.group_size,
-                group=group,
-                num_experts=288,  # TODO: 是不是要写死？
-                is_intranode=is_intranode
-            )
-            print('rank:', self.rank, 'group_size:', self.group_size, 'group:', self.group, 'num_nvl_bytes:', self.num_nvl_bytes, 'num_rdma_bytes:', self.num_rdma_bytes, 'low_latency_mode:', self.low_latency_mode, 'explicitly_destroy:', self.explicitly_destroy, 'device_index:', device_index, 'proxies:', proxies, 'workers:', workers)
-
-            Buffer._uccl_initialized_devices.add(device_index)
-            Buffer._uccl_proxies_dict[device_index] = proxies
-            Buffer._uccl_workers_dict[device_index] = workers
+        # Initialize UCCL with the same buffer
+        proxies, workers = initialize_uccl(
+            scratch=scratch,
+            scratch_nbytes=self.num_rdma_bytes,
+            rank=self.rank,
+            num_ranks=self.group_size,
+            group=group,
+            num_experts=288,  # TODO: 是不是要写死？
+            is_intranode=is_intranode
+        )
+        print('rank:', self.rank, 'group_size:', self.group_size, 'group:', self.group, 'num_nvl_bytes:', self.num_nvl_bytes, 'num_rdma_bytes:', self.num_rdma_bytes, 'low_latency_mode:', self.low_latency_mode, 'explicitly_destroy:', self.explicitly_destroy, 'device_index:', device_index, 'proxies:', proxies, 'workers:', workers, 'is_intranode:', is_intranode)
 
         # Create the C++ runtime
         self.runtime = ep.Buffer(
@@ -132,15 +110,15 @@ class Buffer:
             num_rdma_bytes,
             low_latency_mode,
             explicitly_destroy,
-            int(os.environ.get("LOCAL_WORLD_SIZE", -1)),
+            local_world_size,  # int(os.environ.get("LOCAL_WORLD_SIZE", -1)),
         )
 
         # Set RDMA buffer: use provided rdma_buffer_ptr or shared buffer
-        if num_rdma_bytes > 0:
+        if num_rdma_bytes:
             if rdma_buffer_ptr is not None:
                 self.runtime.set_rdma_buffer_raw(rdma_buffer_ptr)
-            # else:  # TODO: 这个else要不要执行？因为rdma_buffer_ptr默认是None
-            #     self.runtime.set_rdma_buffer_raw(self._buffer.data_ptr())
+            else:
+                self.runtime.set_rdma_buffer_raw(scratch.data_ptr())
 
         # Synchronize device IDs
         device_ids = [
@@ -174,17 +152,13 @@ class Buffer:
         )
         assert self.runtime.is_available()
 
-        # Connect atomic buffer to link runtime with UCCL proxies
-        # This ensures they share the same memory for RDMA operations
-        proxies = Buffer._uccl_proxies_dict.get(device_index)
-        if proxies and len(proxies) > 0:
-            self.connect_atomic_buffer(proxies[0])
-            # TODO 这里要不要写？
-            for proxy in proxies:
-                proxy.calculate_and_set_dispatch_recv_data_offset(
-                    num_tokens=4096, hidden=7168, num_experts=288
-                )
-                proxy.set_atomic_buffer_ptr(proxies[0].get_atomic_buffer_ptr())
+        # TODO: 可能is_intranode=True不用执行？
+        self.connect_atomic_buffer(proxies[0])
+        for proxy in proxies:
+            proxy.calculate_and_set_dispatch_recv_data_offset(
+                num_tokens=4096, hidden=7168, num_experts=288  # TODO: 暂时写死
+            )
+            proxy.set_atomic_buffer_ptr(proxies[0].get_atomic_buffer_ptr())
 
     def reset_rdma_buffer(self):
         """
@@ -206,39 +180,6 @@ class Buffer:
 
         self.runtime.destroy()
         self.runtime = None
-
-    @staticmethod
-    def cleanup_uccl(device_index=None):
-        """
-        Clean up UCCL proxies and shared buffers for a specific device or all devices.
-
-        Arguments:
-            device_index: The device index to clean up. If None, clean up all devices.
-        """
-        from deep_ep.utils import destroy_uccl
-
-        if device_index is None:
-            # Clean up all devices
-            for dev_idx in list(Buffer._uccl_initialized_devices):
-                proxies = Buffer._uccl_proxies_dict.get(dev_idx)
-                workers = Buffer._uccl_workers_dict.get(dev_idx)
-                if proxies:
-                    destroy_uccl(proxies, workers)
-            Buffer._uccl_initialized_devices.clear()
-            Buffer._uccl_proxies_dict.clear()
-            Buffer._uccl_workers_dict.clear()
-            Buffer._uccl_buffers_dict.clear()
-        else:
-            # Clean up specific device
-            if device_index in Buffer._uccl_initialized_devices:
-                proxies = Buffer._uccl_proxies_dict.get(device_index)
-                workers = Buffer._uccl_workers_dict.get(device_index)
-                if proxies:
-                    destroy_uccl(proxies, workers)
-                Buffer._uccl_initialized_devices.discard(device_index)
-                Buffer._uccl_proxies_dict.pop(device_index, None)
-                Buffer._uccl_workers_dict.pop(device_index, None)
-                Buffer._uccl_buffers_dict.pop(device_index, None)
 
     @staticmethod
     def is_sm90_compiled():
