@@ -1,0 +1,4 @@
+tests/test_modules
+tests/test_persistent_kernel
+tests/test_tcpx_perf_multi
+tests/test_tcpx_transfer_multi
