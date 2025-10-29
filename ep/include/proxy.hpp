@@ -19,6 +19,8 @@
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
+#include "d2h_queue_host.hpp"
+#include <deque>
 #include <set>
 #include <tuple>
 
@@ -34,7 +36,7 @@ class Proxy {
   enum class Mode { Sender, Remote, Local, Dual };
 
   struct Config {
-    std::vector<DeviceToHostCmdBuffer*> ring_buffers;
+    std::vector<d2hq::HostD2HHandle> d2h_queues;
     int thread_idx = 0;
     void* gpu_buffer = nullptr;
     size_t total_size = 0;
@@ -50,8 +52,10 @@ class Proxy {
 
   explicit Proxy(Config const& cfg) : cfg_(cfg) {
     // Initialize state tracking for each ring buffer
-    ring_tails_.resize(cfg_.ring_buffers.size(), 0);
-    ring_seen_.resize(cfg_.ring_buffers.size(), 0);
+#ifndef USE_MSCCLPP_FIFO_BACKEND
+    ring_tails_.resize(cfg_.d2h_queues.size(), 0);
+    ring_seen_.resize(cfg_.d2h_queues.size(), 0);
+#endif
   }
 
   void set_progress_run(bool run) {
@@ -78,11 +82,12 @@ class Proxy {
   uint64_t completed_wr() const;
 
   void set_peers_meta(std::vector<PeerMeta> const& peers);
-  void set_bench_ring_addrs(std::vector<uintptr_t> const& addrs);
+  void set_bench_d2h_channel_addrs(std::vector<uintptr_t> const& addrs);
 
   CopyRingBuffer ring;
 
  private:
+  friend class FifoProxy;  // Allow FifoProxy to access private methods
   ProxyCtx ctx_;
   void init_common();
   void init_sender();
@@ -101,10 +106,7 @@ class Proxy {
   RDMAConnectionInfo local_info_{}, remote_info_{};
 
   // Completion tracking
-  std::unordered_set<uint64_t> finished_wrs_;
   std::unordered_set<uint64_t> acked_wrs_;
-  std::mutex finished_wrs_mutex_;
-
   std::unordered_map<uint64_t, std::chrono::high_resolution_clock::time_point>
       wr_id_to_start_time_;
   uint64_t completion_count_ = 0;
@@ -122,9 +124,13 @@ class Proxy {
   std::vector<TransferCmd> postponed_atomics_;
   std::vector<uint64_t> postponed_wr_ids_;
 
-  // Multi-ring buffer state tracking (one per ring buffer)
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+  std::vector<uint64_t> fifo_seq_;
+  std::vector<std::deque<uint64_t>> fifo_pending_;
+#else
   std::vector<uint64_t> ring_tails_;
   std::vector<size_t> ring_seen_;
+#endif
 };
 
 #endif  // PROXY_HPP

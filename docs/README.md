@@ -17,21 +17,25 @@ sudo apt install linux-tools-$(uname -r) clang llvm cmake m4 build-essential \
                  libelf-dev libpcap-dev libc6-dev-i386 libpci-dev \
                  libopenmpi-dev libibverbs-dev clang-format -y
 
-# Install and activate Anaconda (you can choose any recent versions)
-wget https://repo.anaconda.com/archive/Anaconda3-2025.06-1-Linux-x86_64.sh
-bash ./Anaconda3-2025.06-1-Linux-x86_64.sh -b
-source ~/anaconda3/bin/activate
+# Install and activate Miniconda (you can choose any recent versions)
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+bash ./Miniconda3-latest-Linux-x86_64.sh -b
+source ~/miniconda3/bin/activate
 source ~/.bashrc # or .zshrc and others
 conda init
 
-# Install python ssh lib into conda-default base env
+# Install python ssh lib
 pip install paramiko pybind11
+# Upgrade conda glic to modern ones
+conda install -c conda-forge "libstdcxx-ng>=12" "libgcc-ng>=12"
 ```
 </details>
 
 For quick installation with docker, you can directly dive into: 
 * [`UCCL-Collective RDMA`](../collective/rdma/README.md): Collectives for Nvidia/AMD GPUs + IB/RoCE RDMA NICs (currently support Nvidia and Broadcom NICs)
 * [`UCCL-Collective EFA`](../collective/efa/README.md): Collectives for AWS EFA NIC (currently support p4d.24xlarge)
+
+    > On p5/p5e/p5en/p6, the offical [aws-ofi-nccl](https://github.com/aws/aws-ofi-nccl) NCCL plugin with proper [env variables](https://github.com/uccl-project/uccl/blob/deeeaa36ebe5440449273633652d2b7d77f4a7aa/collective/efa/run_nccl_test.sh#L76-L77) already makes NCCL perform excellent
 * [`UCCL-Collective AFXDP`](../collective/afxdp/README.md): Collectives for Non-RDMA NICs (currently support AWS ENA NICs and IBM VirtIO NICs)
 * [`UCCL-P2P`](../p2p/README.md): P2P for RDMA NICs and GPU IPCs (currently support Nvidia/AMD GPUs and Nvidia/Broadcom NICs)
 

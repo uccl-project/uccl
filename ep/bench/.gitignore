@@ -1,0 +1,7 @@
+test_cas_throughput
+test_fc_throughput
+test_lock_throughput
+test_multi_ring_throughput
+benchmark_dual
+benchmark_local
+benchmark_remote
