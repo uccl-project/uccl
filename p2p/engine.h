@@ -73,6 +73,15 @@ class Endpoint {
    */
   Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus);
 
+  /*
+   * Create endpoint without intializing the engine. Lazy creation of engine is
+   * done during  memory registration. Additionally, open a TCP listening thread
+   * waiting for incoming connections.
+   *
+   * input:
+   *   num_cpus: the number of CPUs to use for the engine
+   */
+  Endpoint(uint32_t const num_cpus);
   ~Endpoint();
 
   /*

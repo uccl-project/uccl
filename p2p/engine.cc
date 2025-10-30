@@ -353,7 +353,7 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
   mr_id = next_mr_id_.fetch_add(1);
 
   if (!engine_initialized_) {
-    int idx = get_dev_idx(data);
+    int idx = uccl::get_dev_idx((void*)data);
     if (idx != -1) {
       // Pointer is on device idx
       local_gpu_idx_ = idx;
