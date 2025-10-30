@@ -93,6 +93,9 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
 
+  // Initialize UDS socket for local connections
+  init_uds_socket();
+
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
 
@@ -130,17 +133,6 @@ Endpoint::Endpoint(uint32_t const num_cpus) : num_cpus_(num_cpus) {
   for (int i = ngpus_detected; i < kMaxNumGPUs; i++) {
     gpu_to_dev[i] = 0;
   }
-
-  send_unified_task_ring_ =
-      uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
-  recv_unified_task_ring_ =
-      uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
-
-  send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
-  recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
-
-  // Initialize UDS socket for local connections
-  init_uds_socket();
 
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
@@ -203,6 +195,14 @@ void Endpoint::initialize_engine() {
             << std::endl;
   ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_], false);
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
+
+  send_unified_task_ring_ =
+      uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
+  recv_unified_task_ring_ =
+      uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
+
+  send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
+  recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
 
   // Initialize UDS socket for local connections
   init_uds_socket();
