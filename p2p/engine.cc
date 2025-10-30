@@ -93,9 +93,6 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
 
-  // Initialize UDS socket for local connections
-  init_uds_socket();
-
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
 
@@ -122,7 +119,7 @@ Endpoint::Endpoint(uint32_t const num_cpus) : num_cpus_(num_cpus) {
 
   // Initialize the RDMA endpoint with lazy creation.
   ep_ = new uccl::RDMAEndpoint(num_cpus_);
-
+  ep_->create_p2p_socket();
   // Only initialize mapping for detected GPUs
   int ngpus_detected = 0;
   GPU_RT_CHECK(gpuGetDeviceCount(&ngpus_detected));
@@ -190,9 +187,8 @@ Endpoint::~Endpoint() {
   std::cout << "Engine destroyed" << std::endl;
 }
 
-void Endpoint::initialize_engine(uint32_t const local_gpu_idx) {
+void Endpoint::initialize_engine() {
   int n_streams = std::max(1, (int)ucclParamNumGpuRtStreams());
-
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
   streams_.resize(n_streams);
   for (int i = 0; i < n_streams; ++i) {
@@ -205,8 +201,11 @@ void Endpoint::initialize_engine(uint32_t const local_gpu_idx) {
   // Initialize the engine based on the GPU index.
   std::cout << "Lazy creation of engine, GPU index: " << local_gpu_idx_
             << std::endl;
-  ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_], true);
+  ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_], false);
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
+
+  // Initialize UDS socket for local connections
+  init_uds_socket();
 }
 
 bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
@@ -275,6 +274,40 @@ std::vector<uint8_t> Endpoint::get_metadata() {
   return metadata;
 }
 
+std::vector<uint8_t> Endpoint::get_fixed_metadata() {
+  int idx = 0;
+  std::string ip_str = get_oob_ip();
+  uint16_t port = ep_->get_p2p_listen_port(0);
+
+  bool is_ipv6 = ip_str.find(':') != std::string::npos;
+  size_t ip_len = is_ipv6 ? 16 : 4;
+
+  // Additional 2 bytes for port and 4 bytes for local_gpu_idx_
+  size_t total_len = ip_len + 2 + sizeof(int);
+  std::vector<uint8_t> metadata(total_len);
+
+  // Copy IP
+  if (is_ipv6) {
+    struct in6_addr ip6_bin;
+    if (inet_pton(AF_INET6, ip_str.c_str(), &ip6_bin) != 1)
+      throw std::runtime_error("Invalid IPv6 address: " + ip_str);
+    std::memcpy(metadata.data(), &ip6_bin, 16);
+  } else {
+    struct in_addr ip4_bin;
+    if (inet_pton(AF_INET, ip_str.c_str(), &ip4_bin) != 1)
+      throw std::runtime_error("Invalid IPv4 address: " + ip_str);
+    std::memcpy(metadata.data(), &ip4_bin, 4);
+  }
+
+  // Copy port in network byte order
+  uint16_t net_port = htons(port);
+  std::memcpy(metadata.data() + ip_len, &net_port, 2);
+
+  // Copy local_gpu_idx_ in host byte order
+  std::memcpy(metadata.data() + ip_len + 2, &idx, sizeof(int));
+
+  return metadata;
+}
 std::tuple<std::string, uint16_t, int> Endpoint::parse_metadata(
     std::vector<uint8_t> const& metadata) {
   if (metadata.size() == 10) {
@@ -361,7 +394,7 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
       // Host memory/unknown memory type - fallback to dev 0
       local_gpu_idx_ = 0;
     }
-    initialize_engine(local_gpu_idx_);
+    initialize_engine();
     engine_initialized_ = true;
   }
 

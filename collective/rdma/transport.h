@@ -1051,6 +1051,7 @@ class RDMAEndpoint {
 
   bool initialize_engine_by_dev(int dev, bool enable_p2p_listen);
 
+  void create_p2p_socket();
   /// For testing easily.
   ConnID test_uccl_connect(int dev, int gpu, int remote_dev, int remote_gpu,
                            std::string remote_ip, int remote_port) {

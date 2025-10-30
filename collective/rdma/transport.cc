@@ -762,6 +762,13 @@ int try_bind_listen_socket(int* sock_fd, int base_port,
   return -1;
 }
 
+void RDMAEndpoint::create_p2p_socket() {
+  p2p_listen_ports_[0] = create_listen_socket(&p2p_listen_fds_[0]);
+  DCHECK(p2p_listen_ports_[0] >= 0)
+      << "Failed to bind after trying many ports!";
+  printf("P2P listening on port %d\n", p2p_listen_ports_[0]);
+}
+
 bool RDMAEndpoint::initialize_engine_by_dev(int dev,
                                             bool enable_p2p_listen = false) {
   bool called = false;
