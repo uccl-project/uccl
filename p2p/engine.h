@@ -99,6 +99,8 @@ class Endpoint {
 
   std::vector<uint8_t> get_metadata();
 
+  std::vector<uint8_t> get_fixed_metadata();
+
   /*
    * Parse endpoint metadata to extract IP address, port, and GPU index.
    * Returns a tuple of (ip_address, port, gpu_index).
@@ -279,7 +281,7 @@ class Endpoint {
    * Initialize the engine with the specified GPU index.
    * Internal helper function for lazy initialization.
    */
-  void initialize_engine(uint32_t const local_gpu_idx);
+  void initialize_engine();
 
   int local_gpu_idx_;
   uint32_t num_cpus_;
