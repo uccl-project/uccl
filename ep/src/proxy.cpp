@@ -448,6 +448,7 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
       }
 
       if (ctx_.barrier_wr != -1 && front_wr == (uint64_t)ctx_.barrier_wr) {
+        // printf("local_rank: %d, barrier: %d, seq: %lu popped from fifo\n", cfg_.local_rank, ctx_.barrier_wr, ctx_.barrier_seq);
         ctx_.barrier_inflight = false;
         ctx_.barrier_wr = -1;
         fifo->pop();
@@ -810,6 +811,10 @@ void Proxy::post_gpu_commands_mixed(
       0) {
     return;
   }
+  // printf("[local_rank: %d, post_gpu_commands_mixed] rdma_wrs=%zu, atomic_wrs=%zu, "
+  //        "barrier_cmds=%zu, quiet_cmds=%zu\n",
+  //        cfg_.rank, rdma_wrs.size(), atomic_wrs.size(), barrier_cmds.size(),
+  //        quiet_cmds.size());
   // Handle regular RDMA writes
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
@@ -1050,6 +1055,8 @@ void Proxy::send_barrier(uint64_t wr) {
   assert(ctx_.barrier_wr == -1 && "barrier_wr should be 0");
   ctx_.barrier_wr = wr;
   ctx_.barrier_seq = ctx_.barrier_seq + 1;
+  // printf("local_rank: %d, send_barrier: wr=%lu, seq=%lu\n", cfg_.local_rank, wr,
+  //        ctx_.barrier_seq);
 
   if (cfg_.rank == ctx_.node_leader_rank) {
     if (ctx_.barrier_arrived.size() != static_cast<size_t>(cfg_.num_nodes)) {
@@ -1128,6 +1135,7 @@ void Proxy::barrier_check() {
           ctx_.barrier_arrival_count = 0;
 
           acked_wrs_.insert(ctx_.barrier_wr);
+          // printf("local_rank: %d, barrier: %d added to acked, seq=%lu\n", cfg_.local_rank, ctx_.barrier_wr, ctx_.barrier_seq);
 #ifndef USE_MSCCLPP_FIFO_BACKEND
           ctx_.barrier_inflight = false;
           ctx_.barrier_wr = -1;
@@ -1147,6 +1155,7 @@ void Proxy::barrier_check() {
 
         // Complete WR
         acked_wrs_.insert(ctx_.barrier_wr);
+        // printf("local_rank: %d, barrier: %d added to acked, seq=%lu\n", cfg_.local_rank, ctx_.barrier_wr, ctx_.barrier_seq);
 #ifndef USE_MSCCLPP_FIFO_BACKEND
         ctx_.barrier_inflight = false;
         ctx_.barrier_wr = -1;
@@ -1162,6 +1171,7 @@ void Proxy::barrier_check() {
   // Followers: wait until leader sets our release_seq
   if (lb->release_seq[ctx_.local_rank].load(std::memory_order_acquire) == seq) {
     acked_wrs_.insert(ctx_.barrier_wr);
+    // printf("local_rank: %d, barrier: %d added to acked, seq=%lu\n", cfg_.local_rank, ctx_.barrier_wr, ctx_.barrier_seq);
 #ifndef USE_MSCCLPP_FIFO_BACKEND
     ctx_.barrier_inflight = false;
     ctx_.barrier_wr = -1;
