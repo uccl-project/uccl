@@ -16,9 +16,6 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
                      int num_nodes, bool use_normal_mode)
     : peer_ip_{peer_ip}, thread_{}, mode_{Mode::None}, running_{false} {
   // EP 8 of internode_ll also need atomic_buffer_ptr
-  if (thread_idx == 0) {
-    printf("[local_rank: %d] UcclProxy started\n", local_rank);
-  }
 
   Proxy::Config cfg{};
   thread_idx_ = thread_idx;

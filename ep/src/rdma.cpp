@@ -1501,8 +1501,6 @@ void remote_process_completions_normal_mode(
               !S.barrier_arrived[node_rank]) {
             S.barrier_arrived[node_rank] = 1;
             ++S.barrier_arrival_count;
-            // printf("Rank %d received barrier request from rank %d\n", my_rank,
-            //        src);
           } else {
             assert(false &&
                    "Duplicate barrier arrival or local_rank out of range");
@@ -1514,8 +1512,6 @@ void remote_process_completions_normal_mode(
         if (is_ack) {
           S.barrier_released = true;
           S.barrier_release_seq = seq;
-          // printf("Rank %d received barrier ack from rank %d\n", my_rank,
-          //        src);
         } else {
           assert(false && "Non-leader rank should not receive barrier request");
         }
