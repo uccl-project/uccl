@@ -19,7 +19,8 @@ static std::string shm_name_for_barrier(std::string const& ip, int thread_idx) {
 LocalBarrier* map_local_barrier_shm(std::string const& name, bool* out_owner) {
   *out_owner = false;
   size_t const kSize = sizeof(LocalBarrier);
-  mode_t const kMode = 0600;
+  // ✅ Use 0666 to allow all processes (same user) to access the shared memory
+  mode_t const kMode = 0666;
   int fd = shm_open(name.c_str(), O_RDWR | O_CREAT | O_EXCL, kMode);
   if (fd >= 0) {
     *out_owner = true;
@@ -34,7 +35,8 @@ LocalBarrier* map_local_barrier_shm(std::string const& name, bool* out_owner) {
       perror("shm_open");
       return nullptr;
     }
-    fd = shm_open(name.c_str(), O_RDWR, kMode);
+    // ✅ Don't specify mode when opening existing shm (use 0 instead of kMode)
+    fd = shm_open(name.c_str(), O_RDWR, 0);
     if (fd < 0) {
       perror("shm_open(existing)");
       return nullptr;
@@ -835,41 +837,42 @@ void Proxy::post_gpu_commands_mixed(
       0) {
     return;
   }
+
+  // ✅ 计算当前rank的subset_id（只计算一次）
+  int my_subset_id = cfg_.rank % MAX_NUM_GPUS;
+
   // Handle regular RDMA writes
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
                             rdma_cmds, ctxs_for_all_ranks_, cfg_.rank,
                             cfg_.thread_idx);
 
-    // Track pending operations by subset
+    // ✅ Track pending operations by sender's subset (not destination's)
     for (size_t i = 0; i < rdma_wrs.size(); ++i) {
-      int dst_rank = rdma_cmds[i].dst_rank;
-      int subset_id = get_subset_id(dst_rank);
-      if (subset_id >= 0 && subset_id < static_cast<int>(pending_wrs_by_subset_.size())) {
-        pending_wrs_by_subset_[subset_id].insert(rdma_wrs[i]);
-      }
+      pending_wrs_by_subset_[my_subset_id].insert(rdma_wrs[i]);
     }
+    fprintf(stderr, "[post_gpu_commands_mixed] Rank %d: added %zu RDMA ops to subset %d, total=%zu\n",
+            cfg_.rank, rdma_wrs.size(), my_subset_id,
+            pending_wrs_by_subset_[my_subset_id].size());
   }
   if (!atomic_wrs.empty()) {
     post_atomic_operations(ctx_, atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
                            cfg_.rank, cfg_.thread_idx, acked_wrs_);
 
-    // Track pending atomic operations by subset
+    // ✅ Track pending atomic operations by sender's subset
     for (size_t i = 0; i < atomic_wrs.size(); ++i) {
-      int dst_rank = atomic_cmds[i].dst_rank;
-      int subset_id = get_subset_id(dst_rank);
-      if (subset_id >= 0 && subset_id < static_cast<int>(pending_wrs_by_subset_.size())) {
-        pending_wrs_by_subset_[subset_id].insert(atomic_wrs[i]);
-      }
+      pending_wrs_by_subset_[my_subset_id].insert(atomic_wrs[i]);
     }
+    fprintf(stderr, "[post_gpu_commands_mixed] Rank %d: added %zu ATOMIC ops to subset %d, total=%zu\n",
+            cfg_.rank, atomic_wrs.size(), my_subset_id,
+            pending_wrs_by_subset_[my_subset_id].size());
   }
   if (!barrier_cmds.empty()) {
     // Calculate subset_id from the current rank (the rank that issued the barrier)
     // All ranks with the same (rank % MAX_NUM_GPUS) belong to the same subset
-    int subset_id = cfg_.rank % MAX_NUM_GPUS;
     fprintf(stderr, "[Proxy::post_gpu_commands_mixed] Rank %d received %zu BARRIER commands, subset_id=%d, base_cmd=%d\n",
-            cfg_.rank, barrier_cmds.size(), subset_id, static_cast<int>(get_base_cmd(barrier_cmds[0].cmd_type)));
-    send_barrier_subset(barrier_wrs[0], subset_id);
+            cfg_.rank, barrier_cmds.size(), my_subset_id, static_cast<int>(get_base_cmd(barrier_cmds[0].cmd_type)));
+    send_barrier_subset(barrier_wrs[0], my_subset_id);
   }
   if (!quiet_cmds.empty()) {
 #ifdef USE_MSCCLPP_FIFO_BACKEND
@@ -928,17 +931,21 @@ void Proxy::quiet_cq() {
 void Proxy::quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds) {
   assert(cmds.size() == 1 && "quiet size must be 1");
 
-  // Calculate subset_id from the current rank (the rank that issued the quiet)
+  // ✅ Calculate subset_id from the current rank (the rank that issued the quiet)
   // All ranks with the same (rank % MAX_NUM_GPUS) belong to the same subset
   int subset_id = cfg_.rank % MAX_NUM_GPUS;
 
-  fprintf(stderr, "[Proxy::quiet] Received SubQUIET from rank=%d, subset_id=%d\n",
-          cfg_.rank, subset_id);
+  fprintf(stderr, "[Proxy::quiet] Rank %d (Thread %d): starting SubQUIET for subset %d\n",
+          cfg_.rank, cfg_.thread_idx, subset_id);
 
   // Wait for operations to complete for this subset only
   quiet_subset(subset_id);
 
+  // Mark quiet command as completed
   acked_wrs_.insert(wrs[0]);
+
+  fprintf(stderr, "[Proxy::quiet] Rank %d (Thread %d): SubQUIET completed for subset %d\n",
+          cfg_.rank, cfg_.thread_idx, subset_id);
 }
 
 // Initialize subset data structures (called during init_common)
@@ -959,17 +966,29 @@ void Proxy::init_subsets() {
     rank_to_subset_[rank] = subset_id;
   }
 
-  // Initialize barrier state for each subset
+  // ✅ Initialize barrier state for each subset
   for (int subset_id = 0; subset_id < num_subsets; ++subset_id) {
     auto& bs = ctx_.subset_barriers[subset_id];
-    bs.arrived.resize(all_subsets_[subset_id].size(), 0);
-    bs.leader_rank = all_subsets_[subset_id].empty() ? -1 : all_subsets_[subset_id][0];
+
+    // ✅ arrived 数组大小应该是节点数，不是 subset 中 rank 的数量
+    // 因为每个节点只有一个 rank 参与这个 subset 的 barrier
+    bs.arrived.resize(cfg_.num_nodes, 0);
+    bs.arrival_count = 0;
+    bs.inflight = false;
+    bs.wr = 0;
+    bs.seq = 0;
+    bs.released = false;
+    bs.release_seq = 0;
+
+    // ✅ Leader 是这个 subset 中最小的 rank（就是 subset_id）
+    bs.leader_rank = subset_id;
   }
 
-  fprintf(stderr, "[Proxy::init_subsets] Initialized %d subsets for %d ranks\n",
-          num_subsets, total_ranks);
+  fprintf(stderr, "[Proxy::init_subsets] Rank %d initialized %d subsets for %d ranks, %d nodes\n",
+          cfg_.rank, num_subsets, total_ranks, cfg_.num_nodes);
   for (int subset_id = 0; subset_id < num_subsets; ++subset_id) {
-    fprintf(stderr, "  Subset %d (leader=%d): [ ", subset_id, ctx_.subset_barriers[subset_id].leader_rank);
+    fprintf(stderr, "  Subset %d (leader=%d, num_nodes=%d): [ ",
+            subset_id, ctx_.subset_barriers[subset_id].leader_rank, cfg_.num_nodes);
     for (int rank : all_subsets_[subset_id]) {
       fprintf(stderr, "%d ", rank);
     }
@@ -996,6 +1015,11 @@ void Proxy::quiet_subset(int subset_id) {
     return pending_wrs_by_subset_[subset_id].size();
   };
 
+  // ✅ 添加初始日志
+  size_t initial_pending = outstanding_for_subset();
+  fprintf(stderr, "[quiet_subset %d] Rank %d (Thread %d): starting with %zu pending operations\n",
+          subset_id, cfg_.rank, cfg_.thread_idx, initial_pending);
+
   constexpr int kConsecutiveEmptyToExit = 3;
   int empty_iters = 0;
   ibv_wc wc[kMaxOutstandingSends];
@@ -1003,44 +1027,64 @@ void Proxy::quiet_subset(int subset_id) {
   auto last_log = clock::now();
   std::set<PendingUpdate> pending_atomic_updates;
 
+  size_t iterations = 0;
+  size_t total_completed = 0;
+
   // Poll until all operations for this subset complete
   for (;;) {
+    ++iterations;
+
     int ne = poll_cq_once(ctx_.cq, wc, kMaxOutstandingSends);
     if (ne > 0) {
       empty_iters = 0;
-      // Process completions and track which wr_ids completed
+
+      // 记录完成前的状态
       std::unordered_set<uint64_t> completed_wrs_before = acked_wrs_;
+      size_t pending_before = outstanding_for_subset();
+
+      // Process completions
       local_process_completions(ctx_, acked_wrs_, cfg_.thread_idx, wc, ne,
                                 ctx_by_tag_);
       remote_process_completions(
           ctx_, cfg_.thread_idx, ring, ne, wc, ctx_by_tag_, atomic_buffer_ptr_,
           cfg_.num_ranks, cfg_.num_experts, pending_atomic_updates, cfg_.rank,
-          0);
+          cfg_.num_nodes);
 
-      // Remove completed operations from pending_wrs_by_subset_
+      // ✅ Remove completed operations from pending_wrs_by_subset_
+      size_t removed_count = 0;
       for (const auto& wr_id : acked_wrs_) {
         if (completed_wrs_before.find(wr_id) == completed_wrs_before.end()) {
           // This wr_id was newly completed
-          pending_wrs_by_subset_[subset_id].erase(wr_id);
+          if (pending_wrs_by_subset_[subset_id].erase(wr_id)) {
+            ++removed_count;
+            ++total_completed;
+          }
         }
+      }
+
+      if (removed_count > 0) {
+        fprintf(stderr, "[quiet_subset %d] Rank %d: completed %zu ops, remaining=%zu (total_completed=%zu)\n",
+                subset_id, cfg_.rank, removed_count, outstanding_for_subset(), total_completed);
       }
     } else {
       ++empty_iters;
     }
 
+    // Check exit condition
     if (outstanding_for_subset() == 0 && empty_iters >= kConsecutiveEmptyToExit) {
+      fprintf(stderr, "[quiet_subset %d] Rank %d: all %zu operations completed after %zu iterations\n",
+              subset_id, cfg_.rank, initial_pending, iterations);
       break;
     }
 
+    // Periodic logging
     auto now = clock::now();
     if (now - last_log > std::chrono::milliseconds(1000)) {
-      fprintf(stderr, "[quiet_subset %d] polling... outstanding=%zu\n",
-              subset_id, outstanding_for_subset());
+      fprintf(stderr, "[quiet_subset %d] Rank %d: polling... outstanding=%zu (completed=%zu, iter=%zu)\n",
+              subset_id, cfg_.rank, outstanding_for_subset(), total_completed, iterations);
       last_log = now;
     }
   }
-
-  fprintf(stderr, "[Proxy::quiet_subset] Subset %d quiet completed\n", subset_id);
 }
 
 // Send barrier message for a specific subset (adapted from post_barrier_msg)
@@ -1051,17 +1095,12 @@ void Proxy::post_barrier_msg_subset(int dst_rank, bool ack, uint64_t seq, int su
     std::abort();
   }
 
-  // Pack barrier message with subset_id in bits 8-10 (use 3 bits for 0-7)
-  // BarrierImm uses: [31:non-atomic][30:control][29:ack][28-8:seq][7-0:src_rank]
-  // We steal bits 8-10 from seq for subset_id, leaving seq with 18 bits (bits 11-28)
-  // Encode subset_id directly (0-7) since we removed global barrier support
-  uint32_t imm = BarrierImm::Pack(ack, (uint32_t)seq, (uint8_t)cfg_.rank);
-  fprintf(stderr, "[post_barrier_msg_subset] rank=%d, dst=%d, ack=%d, seq=%lu, subset_id=%d, imm_before=0x%08x\n",
+  // ✅ Use SubsetBarrierImm to pack all fields correctly in one go
+  // Layout: [31:0][30:1][29:ack][28:11:seq(18bit)][10:8:subset_id(3bit)][7:0:rank]
+  uint32_t imm = SubsetBarrierImm::Pack(ack, (uint32_t)seq, (uint8_t)subset_id, (uint8_t)cfg_.rank);
+
+  fprintf(stderr, "[post_barrier_msg_subset] rank=%d, dst=%d, ack=%d, seq=%lu, subset_id=%d, imm=0x%08x\n",
           cfg_.rank, dst_rank, ack, seq, subset_id, imm);
-  // Clear bits 8-10 (from seq) and set subset_id directly (0-7)
-  imm = (imm & ~(0x7u << 8)) | (((uint32_t)subset_id & 0x7u) << 8);
-  fprintf(stderr, "[post_barrier_msg_subset] rank=%d, dst=%d, imm_after=0x%08x, subset_id_enc=%d\n",
-          cfg_.rank, dst_rank, imm, (imm >> 8) & 0x7);
 
 #ifdef EFA
   auto* qpx = (struct ibv_qp_ex*)ctx->qp;
@@ -1124,11 +1163,10 @@ void Proxy::send_barrier_subset(uint64_t wr, int subset_id) {
   bs.wr = wr;
   bs.seq = bs.seq + 1;
 
-  const auto& subset_ranks = all_subsets_[subset_id];
-
-  // Initialize arrival tracking for leader
+  // ✅ Leader 初始化 arrival tracking（已经在 init_subsets 中设置好了大小）
   if (cfg_.rank == bs.leader_rank) {
-    bs.arrived.assign(subset_ranks.size(), 0);
+    // arrived 数组已经是 cfg_.num_nodes 大小，只需要重置
+    bs.arrived.assign(cfg_.num_nodes, 0);
     bs.arrival_count = 0;
   }
 
@@ -1143,70 +1181,45 @@ void Proxy::barrier_check_subset(int subset_id) {
   }
 
   auto& bs = ctx_.subset_barriers[subset_id];
-
-  // DEBUG: Print inflight status periodically
-  if (bs.inflight) {
-    static thread_local int log_count = 0;
-    if (++log_count % 100 == 1) {  // 每100次打印一次，而不是1000万次
-      fprintf(stderr, "[barrier_check_subset] subset_id=%d, inflight=%d, my_rank=%d, seq=%lu, leader=%d\n",
-              subset_id, bs.inflight, cfg_.rank, bs.seq, bs.leader_rank);
-    }
-  }
-
   if (!bs.inflight) return;
 
-  fprintf(stderr, "[DEBUG_1] subset=%d, rank=%d, about to access all_subsets_[%d]\n",
-          subset_id, cfg_.rank, subset_id);
-  fflush(stderr);
-  const auto& subset_ranks = all_subsets_[subset_id];
-
-  fprintf(stderr, "[DEBUG_2] subset=%d, rank=%d, subset_ranks.size()=%zu\n",
-        subset_id, cfg_.rank, subset_ranks.size());
-  fflush(stderr);
   uint64_t const seq = bs.seq;
+  int my_node = cfg_.rank / MAX_NUM_GPUS;  // ✅ 计算当前节点ID
 
-  fprintf(stderr, "[DEBUG_3] subset=%d, rank=%d, seq=%lu, leader=%d\n",
-    subset_id, cfg_.rank, seq, bs.leader_rank);
-  fflush(stderr);
-
-  // Leader collects arrivals from all subset members
   if (cfg_.rank == bs.leader_rank) {
-    static thread_local std::unordered_map<int, uint64_t> last_sent_seq_per_subset;
-    if (last_sent_seq_per_subset[subset_id] != seq) {
-      last_sent_seq_per_subset[subset_id] = seq;
+    // === Leader ===
 
-      // Mark self-arrival
-      if (bs.arrived.empty()) {
-        bs.arrived.assign(subset_ranks.size(), 0);
-        bs.arrival_count = 0;
-      }
+    // ✅ 只在第一次标记自己到达
+    static thread_local std::unordered_map<int, uint64_t> last_self_arrival_seq;
+    if (last_self_arrival_seq[subset_id] != seq) {
+      last_self_arrival_seq[subset_id] = seq;
 
-      // Find my position in subset
-      for (size_t i = 0; i < subset_ranks.size(); ++i) {
-        if (subset_ranks[i] == cfg_.rank) {
-          if (!bs.arrived[i]) {
-            bs.arrived[i] = 1;
-            ++bs.arrival_count;
-          }
-          break;
-        }
+      if (!bs.arrived[my_node]) {
+        bs.arrived[my_node] = 1;
+        ++bs.arrival_count;
+        fprintf(stderr, "[barrier_check_subset] Leader %d (node %d): self-arrival for subset %d, count=%d/%d\n",
+                cfg_.rank, my_node, subset_id, bs.arrival_count, cfg_.num_nodes);
       }
     }
 
-    // Check if all members arrived
-    if (bs.arrival_count == static_cast<int>(subset_ranks.size())) {
-      fprintf(stderr, "[barrier_check_subset] Leader %d: all arrived for subset %d, sending release\n",
-              cfg_.rank, subset_id);
+    // ✅ 检查是否所有节点都到达
+    if (bs.arrival_count == cfg_.num_nodes) {
+      fprintf(stderr, "[barrier_check_subset] Leader %d: all %d nodes arrived for subset %d, sending release\n",
+              cfg_.rank, cfg_.num_nodes, subset_id);
 
-      // Send release to all other members
-      for (int member_rank : subset_ranks) {
-        if (member_rank != cfg_.rank) {
-          post_barrier_msg_subset(member_rank, /*ack=*/true, seq, subset_id);
+      // ✅ 向其他节点发送释放消息（按节点ID，不是按subset中的rank）
+      for (int node = 0; node < cfg_.num_nodes; ++node) {
+        if (node == my_node) continue;
+
+        // ✅ 每个节点中参与此subset的rank = subset_id + node * MAX_NUM_GPUS
+        int remote_rank = subset_id + node * MAX_NUM_GPUS;
+        if (remote_rank < cfg_.num_ranks) {
+          post_barrier_msg_subset(remote_rank, /*ack=*/true, seq, subset_id);
         }
       }
 
       // Complete barrier
-      bs.arrived.clear();
+      bs.arrived.assign(cfg_.num_nodes, 0);  // ✅ 重置为节点数大小
       bs.arrival_count = 0;
       acked_wrs_.insert(bs.wr);
       bs.inflight = false;
@@ -1214,27 +1227,26 @@ void Proxy::barrier_check_subset(int subset_id) {
 
       fprintf(stderr, "[barrier_check_subset] Leader %d: barrier completed for subset %d\n",
               cfg_.rank, subset_id);
-      return;
-    }
-  } else {
-    // Follower: send arrival message to leader (only once per seq)
-    static thread_local std::unordered_map<int, uint64_t> last_sent_arrival_per_subset;
-    if (last_sent_arrival_per_subset[subset_id] != seq) {
-      last_sent_arrival_per_subset[subset_id] = seq;
-      fprintf(stderr, "[barrier_check_subset] Follower %d: BEFORE post_barrier_msg_subset to leader %d for subset %d with seq=%lu\n",
-              cfg_.rank, bs.leader_rank, subset_id, seq);
-      post_barrier_msg_subset(bs.leader_rank, /*ack=*/false, seq, subset_id);
-      fprintf(stderr, "[barrier_check_subset] Follower %d: sent arrival to leader %d for subset %d\n",
-              cfg_.rank, bs.leader_rank, subset_id);
     }
 
-    // Wait for release from leader
+  } else {
+    // === Follower ===
+
+    // ✅ 只发送一次到达消息
+    static thread_local std::unordered_map<int, uint64_t> last_sent_arrival_seq;
+    if (last_sent_arrival_seq[subset_id] != seq) {
+      last_sent_arrival_seq[subset_id] = seq;
+      post_barrier_msg_subset(bs.leader_rank, /*ack=*/false, seq, subset_id);
+      fprintf(stderr, "[barrier_check_subset] Follower %d (node %d): sent arrival to leader %d for subset %d, seq=%lu\n",
+              cfg_.rank, my_node, bs.leader_rank, subset_id, seq);
+    }
+
+    // ✅ 等待释放
     if (bs.released && bs.release_seq == seq) {
       bs.released = false;
       acked_wrs_.insert(bs.wr);
       bs.inflight = false;
       bs.wr = 0;
-
       fprintf(stderr, "[barrier_check_subset] Follower %d: barrier completed for subset %d\n",
               cfg_.rank, subset_id);
     }

@@ -284,6 +284,42 @@ struct BarrierImm {
   uint32_t value;
 };
 
+// ✅ Subset Barrier Immediate Data
+// New layout to include subset_id without breaking seq:
+// [31]: 0 (non-atomic)
+// [30]: 1 (control/barrier)
+// [29]: ACK bit
+// [28:11]: SEQ (18 bits) - reduced from 21 bits
+// [10:8]: SUBSET_ID (3 bits) - new field for 0-7
+// [7:0]: SRC_RANK (8 bits)
+struct SubsetBarrierImm {
+  static constexpr uint32_t kCtrlBit = 1u << 30;
+  static constexpr uint32_t kAckBit = 1u << 29;
+
+  // ✅ Pack all fields correctly in one go
+  static inline uint32_t Pack(bool ack, uint32_t seq, uint8_t subset_id, uint8_t src_rank) {
+    return kCtrlBit |
+           (ack ? kAckBit : 0u) |
+           ((seq & 0x3FFFFu) << 11) |      // 18 bits for seq at [28:11]
+           ((subset_id & 0x7u) << 8) |      // 3 bits for subset_id at [10:8]
+           uint32_t(src_rank);               // 8 bits for rank at [7:0]
+  }
+
+  static inline bool IsAck(uint32_t imm) { return (imm & kAckBit) != 0u; }
+  static inline uint32_t GetSeq(uint32_t imm) { return (imm >> 11) & 0x3FFFFu; }
+  static inline uint8_t GetSubsetId(uint32_t imm) { return (imm >> 8) & 0x7u; }
+  static inline uint8_t GetRank(uint32_t imm) { return imm & 0xFFu; }
+
+  explicit SubsetBarrierImm(uint32_t imm = 0) : value(imm) {}
+  bool GetIsAck() const { return IsAck(value); }
+  uint32_t GetSeq() const { return GetSeq(value); }
+  uint8_t GetSubsetId() const { return GetSubsetId(value); }
+  uint8_t GetRank() const { return GetRank(value); }
+  uint32_t GetImmData() const { return value; }
+
+  uint32_t value;
+};
+
 // Setup RDMA resources (register GPU memory, create QP, etc.)
 void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info,
                 int rank);
