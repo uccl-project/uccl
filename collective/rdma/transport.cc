@@ -844,10 +844,11 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev,
     called = true;
     int start_engine_idx = dev * num_engines_per_dev_;
     int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
-    if (fixed_engine_offset) {
+    if (fixed_engine_offset_) {
       start_engine_idx = num_engines_per_dev_;
       end_engine_idx = num_engines_per_dev_ - 1;
     }
+    printf("Initialized engines: %d to %d\n", start_engine_idx, end_engine_idx);
     int numa_node = RDMAFactory::get_factory_dev(dev)->numa_node;
 
     for (int engine_id = start_engine_idx; engine_id <= end_engine_idx;
@@ -896,7 +897,6 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev,
 #ifndef DISABLE_CALL_ONCE_STATIC
   });
 #endif
-  printf("Initialized engines: %d to %d\n", start_engine_idx, end_engine_idx);
   return called;
 }
 inline uint32_t RDMAEndpoint::find_pot_load_engine_idx(int dev) {
