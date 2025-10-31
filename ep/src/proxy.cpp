@@ -239,25 +239,6 @@ void Proxy::init_common() {
               ctx_.num_local_ranks, (int)UCCL_MAX_LOCAL_RANKS);
       std::abort();
     }
-    // if (cfg_.thread_idx != 0) return;
-    std::string const shm_name = shm_name_for_barrier(my_ip, cfg_.thread_idx);
-    ctx_.lb = map_local_barrier_shm(shm_name, &ctx_.lb_owner);
-    if (!ctx_.lb) {
-      fprintf(stderr, "Failed to map local barrier shm: %s\n",
-              shm_name.c_str());
-      std::abort();
-    }
-    if (ctx_.lb_owner) {
-      ctx_.lb->full_mask = (ctx_.num_local_ranks >= 64)
-                               ? ~0ULL
-                               : ((1ULL << ctx_.num_local_ranks) - 1ULL);
-      for (int i = 0; i < ctx_.num_local_ranks; ++i) {
-        ctx_.lb->arrive_seq[i].store(0, std::memory_order_relaxed);
-        ctx_.lb->release_seq[i].store(0, std::memory_order_relaxed);
-      }
-    } else {
-      while (ctx_.lb->full_mask == 0ULL) cpu_relax();
-    }
   }
 
 #ifdef USE_MSCCLPP_FIFO_BACKEND
@@ -673,11 +654,6 @@ void Proxy::post_gpu_commands_mixed(
   std::vector<uint64_t> quiet_wrs, barrier_wrs;
   std::vector<TransferCmd> quiet_cmds, barrier_cmds;
 
-  // fprintf(stderr, "[DEBUG_BEFORE_MIXED] rank=%d, num_cmds=%zu,
-  // barrier_inflight=%d, quiet_inflight=%d\n",
-  //   cfg_.rank, cmds_to_post.size(), ctx_.barrier_inflight,
-  //   ctx_.quiet_inflight);
-
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
     if (get_base_cmd(cmds_to_post[i].cmd_type) == CmdType::ATOMIC) {
 #ifdef USE_SENDER_BARRIER
@@ -915,17 +891,6 @@ void Proxy::destroy(bool free_gpu_buffer) {
     ibv_close_device(ctx_.context);
     ctx_.context = nullptr;
   }
-
-  // Unmap local barrier shm
-  // if (cfg_.thread_idx == 0) {
-  std::string const my_ip =
-      (cfg_.rank < (int)peers_.size()) ? peers_[cfg_.rank].ip : "";
-  std::string const shm_name = shm_name_for_barrier(my_ip, cfg_.thread_idx);
-  unmap_local_barrier_shm(shm_name, ctx_.lb, ctx_.lb_owner);
-  ctx_.lb = nullptr;
-  ctx_.lb_owner = false;
-  // }
-
   acked_wrs_.clear();
   wr_id_to_start_time_.clear();
   ctxs_for_all_ranks_.clear();
@@ -1056,10 +1021,6 @@ void Proxy::barrier_check() {
 
   // When global release comes back (CQ handler should set these):
   if (ctx_.barrier_released && ctx_.barrier_release_seq == seq) {
-    // Fan-out to local ranks via shared memory
-    for (int lr = 0; lr < ctx_.num_local_ranks; ++lr) {
-      lb->release_seq[lr].store(seq, std::memory_order_release);
-    }
     // Reset local mask for next barrier and consume the global release
     ctx_.barrier_released = false;
 
