@@ -31,10 +31,31 @@ public:
     std::vector<int> get_best_dev_idx(int gpu_idx);
 
     bool initialize_engine_by_dev(std::vector<int> dev_indices);
+
+    uccl::ConnID uccl_connect(
+        const std::vector<int>& devs, int local_gpuidx,
+        const std::vector<int>& remote_devs, int remote_gpuidx,
+        std::string remote_ip, uint16_t remote_port);
+    
+    uccl::ConnID uccl_accept(
+        const std::vector<int>& devs, int listen_fd,
+        int local_gpuidx, std::string remote_ip,
+        const std::vector<int>& remote_devs, int remote_gpuidx);
     
     inline uint16_t get_p2p_listen_port() {
         CHECK(p2p_listen_port_ != 0) << "Error: p2p_listen_port_ is not set.";
         return p2p_listen_port_;
+    }
+
+    inline int get_p2p_listen_fd() {
+        CHECK(p2p_listen_fds_ >= 0) << "Error: p2p_listen_fds_ is not set.";
+        return p2p_listen_fds_;
+      }
+
+    inline const char* get_dev_name(int dev_idx) {
+        CHECK(dev_list_ != nullptr) << "Device list not initialized";
+        CHECK(dev_idx >= 0 && dev_idx < num_devices_) << "Invalid device index";
+        return ibv_get_device_name(dev_list_[dev_idx]);
     }
 
 private:

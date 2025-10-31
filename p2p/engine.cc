@@ -21,7 +21,7 @@
 int const kMaxNumGPUs = 8;
 // Assume the local and remote GPUs have the same GPU-NIC mapping.
 uint8_t gpu_to_dev[kMaxNumGPUs] = {0};
-std::vector<int> gpu_to_dev_efa[kMaxNumGPUs];
+std::vector<int> gpu_to_devs_efa[kMaxNumGPUs];
 std::once_flag glog_init_once;
 constexpr uint32_t kGpuStreamId = 0;
 thread_local bool inside_python = false;
@@ -40,8 +40,6 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   is_efa_available_ = transport_efa::is_efa_available();
   std::cout << "Creating Engine with GPU index: " << local_gpu_idx
       << ", CPUs: " << num_cpus << std::endl;
-
-
   int n_streams = std::max(1, (int)ucclParamNumGpuRtStreams());
 
   int ngpus = 0;
@@ -80,7 +78,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   GPU_RT_CHECK(gpuGetDeviceCount(&ngpus_detected));
   for (int i = 0; i < std::min(ngpus_detected, kMaxNumGPUs); i++) {
     if (is_efa_available_) {
-      gpu_to_dev_efa[i] = ep_efa_->get_best_dev_idx(i);
+      gpu_to_devs_efa[i] = ep_efa_->get_best_dev_idx(i);
     } else {
       gpu_to_dev[i] = ep_->get_best_dev_idx(i);
     }
@@ -88,22 +86,28 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   // Initialize remaining slots to 0 (fallback to first device)
   for (int i = ngpus_detected; i < kMaxNumGPUs; i++) {
     if (is_efa_available_) {
-      gpu_to_dev_efa[i].clear();
+      gpu_to_devs_efa[i].clear();
     } else {
       gpu_to_dev[i] = 0;
     }
   }
-  
-  /* TODO
-  numa_node_ =
-      uccl::RDMAFactory::get_factory_dev(gpu_to_dev[local_gpu_idx_])->numa_node;
-  */
+  if (is_efa_available_) {
+      // NUMA node is the same for all devices on the same GPU.
+      const char* dev_name = ep_efa_->get_dev_name(
+        gpu_to_devs_efa[local_gpu_idx_][0]);
+      numa_node_ = uccl::get_dev_numa_node(dev_name);
+      printf("[EFA] GPU %d: NUMA node %d\n", local_gpu_idx_, numa_node_);
+  } else {
+    numa_node_ = uccl::RDMAFactory::get_factory_dev(
+                     gpu_to_dev[local_gpu_idx_])
+                     ->numa_node;
+  }
 
   // Initialize the engine based on the GPU index.
   std::cout << "Lazy creation of engine, GPU index: " << local_gpu_idx_
             << std::endl;
   if (is_efa_available_) {
-    ep_efa_->initialize_engine_by_dev(gpu_to_dev_efa[local_gpu_idx_]);
+    ep_efa_->initialize_engine_by_dev(gpu_to_devs_efa[local_gpu_idx_]);
   } else {
     ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_], true);
   }
@@ -114,13 +118,11 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   recv_unified_task_ring_ =
       uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
 
-  /* TODO
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
 
   // Initialize UDS socket for local connections
   init_uds_socket();
-  */
 
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
@@ -128,10 +130,10 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
 Endpoint::~Endpoint() {
   std::cout << "Destroying Engine..." << std::endl;
 
-  /*stop_.store(true, std::memory_order_release);
+  stop_.store(true, std::memory_order_release);
 
   send_proxy_thread_.join();
-  recv_proxy_thread_.join();*/
+  recv_proxy_thread_.join();
 
   free(send_unified_task_ring_);
   free(recv_unified_task_ring_);
@@ -142,7 +144,7 @@ Endpoint::~Endpoint() {
     delete ep_;
   }
 
-  /*{
+  {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
     for (auto& [conn_id, conn] : conn_id_to_conn_) {
       // Close UDS socket if it exists
@@ -157,7 +159,7 @@ Endpoint::~Endpoint() {
     for (auto& [mr_id, mr] : mr_id_to_mr_) {
       delete mr;
     }
-  }*/
+  }
 
   if (!streams_.empty()) {
     GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
@@ -166,7 +168,7 @@ Endpoint::~Endpoint() {
   }
 
   // Cleanup UDS socket
-  /*cleanup_uds_socket();*/
+  cleanup_uds_socket();
 
   std::cout << "Engine destroyed" << std::endl;
 }
@@ -179,13 +181,24 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
   // Create a new connection ID
   conn_id = next_conn_id_.fetch_add(1);
 
-  std::future<uccl::ConnID> uccl_conn_id_future = std::async(
+  if (is_efa_available_) {
+    std::future<uccl::ConnID> uccl_conn_id_future = std::async(
+      std::launch::async, [this, remote_gpu_idx, &ip_addr, remote_port]() {
+        return ep_efa_->uccl_connect(
+          gpu_to_devs_efa[local_gpu_idx_], local_gpu_idx_,
+          gpu_to_devs_efa[remote_gpu_idx], remote_gpu_idx,
+          ip_addr, remote_port);
+      });
+  } else {
+    std::future<uccl::ConnID> uccl_conn_id_future = std::async(
       std::launch::async, [this, remote_gpu_idx, &ip_addr, remote_port]() {
         return ep_->uccl_connect(gpu_to_dev[local_gpu_idx_], local_gpu_idx_,
                                  gpu_to_dev[remote_gpu_idx], remote_gpu_idx,
                                  ip_addr, remote_port);
       });
+  }
 
+  /* TODO
   // Check for Python signals (eg, ctrl+c) while waiting for connection
   while (uccl_conn_id_future.wait_for(std::chrono::seconds(0)) !=
          std::future_status::ready) {
@@ -200,6 +213,7 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
     conn_id_to_conn_[conn_id] =
         new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
   }
+  */
   return true;
 }
 
@@ -289,15 +303,27 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   // For demo purposes, simulate accepted connection
   conn_id = next_conn_id_.fetch_add(1);
 
-  std::future<uccl::ConnID> uccl_conn_id_future =
-      std::async(std::launch::async, [this, &ip_addr, &remote_gpu_idx]() {
+  if (is_efa_available_) {
+    std::future<uccl::ConnID> uccl_conn_id_future =
+      std::async(std::launch::async, [this, &ip_addr, remote_gpu_idx]() {
+        auto devs_idx = gpu_to_devs_efa[local_gpu_idx_];
+        auto p2p_listen_fd = ep_efa_->get_p2p_listen_fd(;
+        std::vector<int> remote_devs_idx;
+        return ep_efa_->uccl_accept(devs_idx, p2p_listen_fd, local_gpu_idx_,
+                                    ip_addr, &remote_devs_idx, &remote_gpu_idx);
+      });
+  } else {
+    std::future<uccl::ConnID> uccl_conn_id_future =
+      std::async(std::launch::async, [this, &ip_addr, remote_gpu_idx]() {
         auto dev_idx = gpu_to_dev[local_gpu_idx_];
         auto p2p_listen_fd = ep_->get_p2p_listen_fd(dev_idx);
         int remote_dev_idx;
         return ep_->uccl_accept(dev_idx, p2p_listen_fd, local_gpu_idx_, ip_addr,
                                 &remote_dev_idx, &remote_gpu_idx);
       });
+  }
 
+  /* TODO
   // Check for Python signals (eg, ctrl+c) while waiting for connection
   while (uccl_conn_id_future.wait_for(std::chrono::seconds(0)) !=
          std::future_status::ready) {
@@ -312,7 +338,7 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
     conn_id_to_conn_[conn_id] =
         new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
   }
-
+  */
   return true;
 }
 

@@ -12,6 +12,9 @@
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <ctime>
+#include <chrono>
+#include <thread>
 #include "util/util.h"
 
 namespace transport_efa {
@@ -207,5 +210,21 @@ bool RDMAEndpoint::initialize_engine_by_dev(std::vector<int> dev_indices){
     
     return true;
 }
+
+uccl::ConnID RDMAEndpoint::uccl_connect(
+    const std::vector<int>& devs, int local_gpuidx,
+    const std::vector<int>& remote_devs, int remote_gpuidx,
+    std::string remote_ip, uint16_t remote_port) {
+    // TODO: Implement EFA connection
+}
+
+uccl::ConnID RDMAEndpoint::uccl_accept(
+    const std::vector<int>& devs, int listen_fd,
+    int local_gpuidx, std::string remote_ip,
+    const std::vector<int>& remote_devs, int remote_gpuidx) {
+   // TODO: Implement EFA accept
+}
+
+
 
 }

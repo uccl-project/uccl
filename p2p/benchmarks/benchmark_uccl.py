@@ -49,12 +49,11 @@ def _pretty_size(num_bytes: int) -> str:
 
 
 def _run_server(args, ep, remote_metadata):
-    pass
-    """ TODO:
     ok, r_ip, r_gpu, conn_id = ep.accept()
     assert ok, "[Server] Failed to accept RDMA connection"
     print(f"[Server] Accept from {r_ip} (GPU {r_gpu}) conn_id={conn_id}")
 
+    """ TODO:
     for size in args.sizes:
         size_per_block = size // args.num_kvblocks
         buf_v = []
@@ -152,11 +151,11 @@ def _run_server(args, ep, remote_metadata):
 
 def _run_client(args, ep, remote_metadata):
     ip, port, r_gpu = p2p.Endpoint.parse_metadata(remote_metadata)
-    """ TODO
     ok, conn_id = ep.connect(ip, r_gpu, remote_port=port)
     assert ok, "[Client] Failed to connect to server"
     print(f"[Client] Connected to {ip}:{port} (GPU {r_gpu}) conn_id={conn_id}")
 
+    """ TODO
     for size in args.sizes:
         size_per_block = size // args.num_kvblocks
         buf_v = []
