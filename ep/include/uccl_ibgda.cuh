@@ -300,7 +300,7 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
     {
       uint64_t slot = 0;
       TransferCmd cmd{};
-      cmd.cmd_type = CmdType::SubQUIET;
+      cmd.cmd_type = CmdType::QUIET;
       h->atomic_set_and_commit(cmd, &slot);
       slots[num_posted++] = slot;
     }
@@ -312,7 +312,7 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
       if (inflight < 1) {
         uint64_t slot = cur_head;
         TransferCmd cmd{};
-        cmd.cmd_type = CmdType::SubQUIET;
+        cmd.cmd_type = CmdType::QUIET;
         h->atomic_set_and_commit(cmd, &slot);
         slots[num_posted] = slot;
         ++num_posted;
@@ -326,7 +326,7 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
   for (int i = 0; i < num_posted; ++i) {
     auto* h = reinterpret_cast<d2hq::D2HHandle*>(
         static_cast<uintptr_t>(d2h_channel_addrs[i * kChannelPerProxy]));
-    wait_until_cmd_consumed(h, slots[i], nvl_rank, CmdType::SubQUIET);
+    wait_until_cmd_consumed(h, slots[i], nvl_rank, CmdType::QUIET);
   }
 }
 
@@ -348,7 +348,7 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
     {
       uint64_t slot = 0;
       TransferCmd cmd{};
-      cmd.cmd_type = CmdType::SubBARRIER;
+      cmd.cmd_type = CmdType::BARRIER;
       h->atomic_set_and_commit(cmd, &slot);
       slots[num_posted++] = slot;
     }
@@ -360,7 +360,7 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
       if (inflight < 1) {
         uint64_t slot = cur_head;
         TransferCmd cmd{};
-        cmd.cmd_type = CmdType::SubBARRIER;
+        cmd.cmd_type = CmdType::BARRIER;
         h->atomic_set_and_commit(cmd, &slot);
         slots[num_posted++] = slot;
         break;
@@ -373,7 +373,7 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
   for (int i = 0; i < num_posted; ++i) {
     auto* h = reinterpret_cast<d2hq::D2HHandle*>(
         static_cast<uintptr_t>(d2h_channel_addrs[i * kChannelPerProxy]));
-    wait_until_cmd_consumed(h, slots[i], nvl_rank, CmdType::SubBARRIER, label);
+    wait_until_cmd_consumed(h, slots[i], nvl_rank, CmdType::BARRIER, label);
   }
 }
 

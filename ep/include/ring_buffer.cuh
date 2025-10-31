@@ -23,8 +23,6 @@ enum class CmdType : uint8_t {
   ATOMIC = 2,   // 010
   QUIET = 3,    // 011
   BARRIER = 4,  // 100
-  SubQUIET = 5,   // 101 - Subset quiet (per-GPU synchronization)
-  SubBARRIER = 6, // 110 - Subset barrier (per-GPU synchronization)
   // Bits layout:
   // [7]     = low_latency_buffer_idx
   // [6]     = is_combine

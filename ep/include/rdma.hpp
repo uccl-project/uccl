@@ -263,40 +263,19 @@ class WriteImm {
   uint32_t imm_data_;
 };
 
-struct BarrierImm {
-  // [31]=0 (non-atomic), [30]=1 (control), [29]=ACK,
-  // [28:8]=SEQ (21 bits), [7:0]=SRC_RANK
-  static constexpr uint32_t kCtrlBit = 1u << 30;
-  static constexpr uint32_t kAckBit = 1u << 29;
-  static inline bool IsAck(uint32_t imm) { return (imm & kAckBit) != 0u; }
-  static inline uint32_t Pack(bool ack, uint32_t seq, uint8_t src_rank) {
-    return kCtrlBit | (ack ? kAckBit : 0u) |
-           ((seq & 0x1FFFFFu) << 8)  // 21 bits for seq
-           | uint32_t(src_rank);
-  }
-  static inline uint32_t Seq(uint32_t imm) { return (imm >> 8) & 0x1FFFFFu; }
-  static inline uint8_t Rank(uint32_t imm) { return imm & 0xFFu; }
-  explicit BarrierImm(uint32_t imm = 0) : value(imm) {}
-  bool GetIsAck() const { return IsAck(value); }
-  uint32_t GetSeq() const { return Seq(value); }
-  uint8_t GetRank() const { return Rank(value); }
-
-  uint32_t value;
-};
-
-// ✅ Subset Barrier Immediate Data
-// New layout to include subset_id without breaking seq:
+// Barrier Immediate Data
+// Barrier works per-subset: each subset = ranks with same (rank % MAX_NUM_GPUS)
+// Layout:
 // [31]: 0 (non-atomic)
 // [30]: 1 (control/barrier)
 // [29]: ACK bit
-// [28:11]: SEQ (18 bits) - reduced from 21 bits
-// [10:8]: SUBSET_ID (3 bits) - new field for 0-7
+// [28:11]: SEQ (18 bits)
+// [10:8]: SUBSET_ID (3 bits) - 0-7
 // [7:0]: SRC_RANK (8 bits)
-struct SubsetBarrierImm {
+struct BarrierImm {
   static constexpr uint32_t kCtrlBit = 1u << 30;
   static constexpr uint32_t kAckBit = 1u << 29;
 
-  // ✅ Pack all fields correctly in one go
   static inline uint32_t Pack(bool ack, uint32_t seq, uint8_t subset_id, uint8_t src_rank) {
     return kCtrlBit |
            (ack ? kAckBit : 0u) |
@@ -310,7 +289,7 @@ struct SubsetBarrierImm {
   static inline uint8_t GetSubsetId(uint32_t imm) { return (imm >> 8) & 0x7u; }
   static inline uint8_t GetRank(uint32_t imm) { return imm & 0xFFu; }
 
-  explicit SubsetBarrierImm(uint32_t imm = 0) : value(imm) {}
+  explicit BarrierImm(uint32_t imm = 0) : value(imm) {}
   bool GetIsAck() const { return IsAck(value); }
   uint32_t GetSeq() const { return GetSeq(value); }
   uint8_t GetSubsetId() const { return GetSubsetId(value); }

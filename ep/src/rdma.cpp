@@ -1543,54 +1543,93 @@ void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                ImmType::IsBarrier(ntohl(cqe.imm_data))) {
       uint32_t imm_data = ntohl(cqe.imm_data);
 
-      // ✅ Use SubsetBarrierImm to decode all fields consistently
-      SubsetBarrierImm sbimm(imm_data);
+      // ✅ Use BarrierImm to decode all fields consistently
+      BarrierImm sbimm(imm_data);
       bool is_ack = sbimm.GetIsAck();
       uint32_t seq = sbimm.GetSeq();
       uint8_t subset_id = sbimm.GetSubsetId();
       uint16_t src = sbimm.GetRank();
 
-      fprintf(stderr, "[rdma] Barrier msg: imm_data=0x%08x, subset_id=%d, is_ack=%d, seq=%u, src=%u, my_rank=%d\n",
-              imm_data, subset_id, is_ack, seq, src, my_rank);
+      // fprintf(stderr, "[rdma] Barrier msg: imm_data=0x%08x, subset_id=%d, is_ack=%d, seq=%u, src=%u, my_rank=%d\n",
+      //         imm_data, subset_id, is_ack, seq, src, my_rank);
 
       // Check if this is a subset barrier message (subset_id should be 0-7)
       if (subset_id >= 0 && subset_id < MAX_NUM_GPUS) {
         // This is a subset barrier message
-        if (subset_id >= static_cast<int>(S.subset_barriers.size())) {
-          fprintf(stderr, "[rdma] Invalid subset_id %d, ignoring message\n", subset_id);
-        } else {
-          auto& bs = S.subset_barriers[subset_id];
+        int leader_rank = subset_id;  // Leader is the smallest rank in subset
 
-          fprintf(stderr, "[rdma] Received subset barrier msg: subset_id=%d, is_ack=%d, seq=%u, src=%u, leader=%d\n",
-                  subset_id, is_ack, seq, src, bs.leader_rank);
+        // fprintf(stderr, "[rdma] Received subset barrier msg: subset_id=%d, is_ack=%d, seq=%u, src=%u, leader=%d\n",
+        //         subset_id, is_ack, seq, src, leader_rank);
 
-          if (my_rank == bs.leader_rank) {
+        if (my_rank == leader_rank) {
             // Leader: process arrival messages
             if (!is_ack) {
               // This is an arrival message from a follower
-
+              // Calculate source node ID (each node has MAX_NUM_GPUS ranks)
               int src_node = src / MAX_NUM_GPUS;
 
-              if (seq == bs.seq) {  
-                if (src_node >= 0 && src_node < static_cast<int>(bs.arrived.size())) {
-                  if (!bs.arrived[src_node]) {
-                    bs.arrived[src_node] = 1;
-                    ++bs.arrival_count;
+
+              // if (seq == S.barrier_seq + 1 && S.barrier_arrival_count == 0) {
+              //   // fprintf(stderr, "[rdma] Leader %d: accepting new barrier seq %u (was %lu)\n",
+              //   //         my_rank, seq, S.barrier_seq);
+              //   S.barrier_seq = seq;
+              //   S.barrier_inflight = true;
+              //   // Initialize barrier_arrived for the new barrier
+              //   if (S.barrier_arrived.size() != static_cast<size_t>(num_nodes)) {
+              //     S.barrier_arrived.assign(num_nodes, 0);
+              //     S.barrier_arrival_count = 0;
+              //     // fprintf(stderr, "[rdma] Leader %d: initialized barrier_arrived with size %d\n",
+              //     //         my_rank, num_nodes);
+              //   }
+              // }
+
+              if (seq == S.barrier_seq) {  // Use seq from BarrierImm
+                // Check if this node has already been marked
+                if (src_node >= 0 && src_node < static_cast<int>(S.barrier_arrived.size())) {
+                  if (!S.barrier_arrived[src_node]) {
+                    S.barrier_arrived[src_node] = 1;
+                    ++S.barrier_arrival_count;
                     // fprintf(stderr, "[rdma] Leader %d: node %d (rank %u) arrived for subset %d, count=%d/%zu\n",
-                    //         my_rank, src_node, src, subset_id, bs.arrival_count, bs.arrived.size());
+                    //         my_rank, src_node, src, subset_id, S.barrier_arrival_count, S.barrier_arrived.size());
+                  } else {
+                    // fprintf(stderr, "[rdma] Leader %d: node %d (rank %u) already marked as arrived\n",
+                    //         my_rank, src_node, src);
+                  }
+                } else {
+                  fprintf(stderr, "[rdma] Leader %d: invalid src_node %d from rank %u\n",
+                          my_rank, src_node, src);
+                }
+              } else {
+                fprintf(stderr, "[rdma] Leader %d: ignoring old arrival from %u (seq %u != current %lu)\n",
+                        my_rank, src, seq, S.barrier_seq);
+              }
+            } else {
+              // fprintf(stderr, "[rdma] Leader should not receive ack message\n");
+            }
           } else {
             // Follower: process release messages
             if (is_ack) {
               // This is a release message from leader
-              if (seq == bs.seq) {  
-                bs.released = true;
-                bs.release_seq = seq;
-                // fprintf(stderr, "[rdma] Follower %d: received release for subset %d, seq=%u\n",
-                //         my_rank, subset_id, seq);
+              fprintf(stderr, "[rdma] Follower %d: received release message for subset %d, seq=%u, current_barrier_seq=%lu\n",
+                      my_rank, subset_id, seq, S.barrier_seq);
+              if (seq == S.barrier_seq) {  // Use seq from BarrierImm
+                S.barrier_released = true;
+                S.barrier_release_seq = seq;
+                fprintf(stderr, "[rdma] Follower %d: accepted release for subset %d, seq=%u\n",
+                        my_rank, subset_id, seq);
+              } else {
+                fprintf(stderr, "[rdma] Follower %d: ignoring old release (seq %u != current %lu)\n",
+                        my_rank, seq, S.barrier_seq);
+              }
+            } else {
+              // fprintf(stderr, "[rdma] Follower should not receive arrival message\n");
+            }
           }
-        }
       } else {
-
+        // // subset_id out of range [0, MAX_NUM_GPUS)
+        // fprintf(stderr, "[rdma] ERROR: Received barrier with invalid subset_id=%d (out of range [0,%d))\n", subset_id, MAX_NUM_GPUS);
+        // fprintf(stderr, "[rdma] imm_data=0x%08x, src=%u, my_rank=%d\n", imm_data, src, my_rank);
+        // assert(false && "Received barrier with invalid subset_id");
       }
 //       } else {
 //         // This is a global barrier message (original logic)
