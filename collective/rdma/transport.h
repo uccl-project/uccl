@@ -1030,12 +1030,14 @@ class RDMAEndpoint {
   }
 
   inline uint16_t get_p2p_listen_port(int dev) {
+    if (fixed_engine_offset_) dev = 0;
     CHECK(p2p_listen_ports_[dev] != 0)
         << "Error: p2p_listen_ports_[" << dev << "] is not set.";
     return p2p_listen_ports_[dev];
   }
 
   inline int get_p2p_listen_fd(int dev) {
+    if (fixed_engine_offset_) dev = 0;
     CHECK(p2p_listen_fds_[dev] >= 0)
         << "Error: p2p_listen_fds_[" << dev << "] is not set.";
     return p2p_listen_fds_[dev];
@@ -1052,9 +1054,6 @@ class RDMAEndpoint {
   void cleanup_resources();
 
   bool initialize_engine_by_dev(int dev, bool enable_p2p_listen);
-
-  bool initialize_engine_by_dev(int dev, bool enable_p2p_listen,
-                                bool fixed_engine_offset);
 
   void create_p2p_socket();
   /// For testing easily.

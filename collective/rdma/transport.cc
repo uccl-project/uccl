@@ -763,6 +763,7 @@ int try_bind_listen_socket(int* sock_fd, int base_port,
 }
 
 void RDMAEndpoint::create_p2p_socket() {
+  fixed_engine_offset_ = true;
   p2p_listen_ports_[0] = create_listen_socket(&p2p_listen_fds_[0]);
   DCHECK(p2p_listen_ports_[0] >= 0)
       << "Failed to bind after trying many ports!";
@@ -780,75 +781,12 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev,
     called = true;
     int start_engine_idx = dev * num_engines_per_dev_;
     int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
-    int numa_node = RDMAFactory::get_factory_dev(dev)->numa_node;
-
-    for (int engine_id = start_engine_idx; engine_id <= end_engine_idx;
-         engine_id++) {
-      int engine_cpu_id =
-          ENGINE_CPU_START_LIST[dev] + engine_id % num_engines_per_dev_;
-      UcclRDMAEngine* engine_ptr;
-      {
-        std::lock_guard<std::mutex> lock(engine_map_mu_);
-        if (engine_id_to_engine_map_.find(engine_id) !=
-            engine_id_to_engine_map_.end()) {
-          UCCL_LOG_ENGINE << "Engine " << engine_id << " already exists.";
-          exit(EXIT_FAILURE);
-        }
-        engine_id_to_engine_map_[engine_id] = std::make_unique<UcclRDMAEngine>(
-            dev, engine_id, channel_vec_[engine_id], eqds_[dev]);
-
-        engine_ptr = engine_id_to_engine_map_[engine_id].get();
-      }
-      {
-        std::lock_guard<std::mutex> lock(engine_th_mu_);
-        engine_th_vec_.emplace_back(std::make_unique<std::thread>(
-            [engine_ptr, engine_id, engine_cpu_id, numa_node]() {
-              if (ucclParamPIN_TO_NUMA()) {
-                UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
-                                << "running on NUMA node " << numa_node;
-                pin_thread_to_numa(numa_node);
-              } else {
-                DCHECK(engine_cpu_id < NUM_CPUS)
-                    << "The target CPU id " << engine_cpu_id
-                    << " is out of range, available CPUs:" << NUM_CPUS;
-                UCCL_LOG_ENGINE << "[Engine#" << engine_id << "] "
-                                << "running on CPU " << engine_cpu_id;
-                pin_thread_to_cpu(engine_cpu_id);
-              }
-              engine_ptr->run();
-            }));
-      }
-    }
-    if (enable_p2p_listen) {
-      p2p_listen_ports_[dev] = create_listen_socket(&p2p_listen_fds_[dev]);
-      DCHECK(p2p_listen_ports_[dev] >= 0)
-          << "Failed to bind after trying many ports!";
-      printf("P2P listening on port %d\n", p2p_listen_ports_[dev]);
-    }
-#ifndef DISABLE_CALL_ONCE_STATIC
-  });
-#endif
-  return called;
-}
-
-bool RDMAEndpoint::initialize_engine_by_dev(int dev,
-                                            bool enable_p2p_listen = false,
-                                            bool fixed_engine_offset = false) {
-  bool called = false;
-  fixed_engine_offset_ = fixed_engine_offset;
-#ifndef DISABLE_CALL_ONCE_STATIC
-  static std::vector<std::once_flag> flags_per_dev_(MAX_IB_DEVS);
-  std::call_once(flags_per_dev_[dev], [this, dev, enable_p2p_listen,
-                                       &called]() {
-#endif
-    called = true;
-    int start_engine_idx = dev * num_engines_per_dev_;
-    int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
     if (fixed_engine_offset_) {
       start_engine_idx = 0;
       end_engine_idx = num_engines_per_dev_ - 1;
     }
-    printf("Initializing engines: %d to %d\n", start_engine_idx, end_engine_idx);
+    printf("Initializing engines: %d to %d\n", start_engine_idx,
+           end_engine_idx);
     int numa_node = RDMAFactory::get_factory_dev(dev)->numa_node;
 
     for (int engine_id = start_engine_idx; engine_id <= end_engine_idx;
@@ -899,6 +837,7 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev,
 #endif
   return called;
 }
+
 inline uint32_t RDMAEndpoint::find_pot_load_engine_idx(int dev) {
   auto c1 = find_oblivious_engine_idx(dev);
   auto c2 = find_least_loaded_engine_idx(dev);
