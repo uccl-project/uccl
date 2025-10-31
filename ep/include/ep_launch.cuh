@@ -1,6 +1,21 @@
 #pragma once
 #include "exception.cuh"
 
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#ifndef SETUP_LAUNCH_CONFIG
+#define SETUP_LAUNCH_CONFIG(num_sms, num_threads, stream)                    \
+  hipLaunchConfig_t cfg = {(num_sms), (num_threads), 0, stream, nullptr, 0}; \
+  hipLaunchAttribute attr[1];                                                \
+  attr[0].id = hipLaunchAttributeCooperative;                                \
+  attr[0].val.cooperative = 1;                                               \
+  cfg.attrs = attr;                                                          \
+  cfg.numAttrs = 1
+#endif
+#ifndef LAUNCH_KERNEL
+#define LAUNCH_KERNEL(config, kernel, ...) \
+  CUDA_CHECK(hipLaunchKernelEx(config, kernel, ##__VA_ARGS__))
+#endif
+#else
 #ifndef SETUP_LAUNCH_CONFIG
 #ifndef DISABLE_SM90_FEATURES
 #define SETUP_LAUNCH_CONFIG(num_sms, num_threads, stream)                     \
@@ -38,6 +53,7 @@
       throw cuda_exception;                                         \
     }                                                               \
   } while (0)
+#endif
 #endif
 #endif
 

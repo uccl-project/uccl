@@ -5,6 +5,7 @@ import time
 import struct
 import pickle
 from typing import Any
+from intervaltree import Interval, IntervalTree
 
 
 def set_files_limit():
@@ -108,3 +109,98 @@ def recv_obj(sock: socket.socket) -> Any:
         return None
     payload = _recv_exact(sock, length)
     return pickle.loads(payload)
+
+
+class ClosedIntervalTree:
+    def __init__(self):
+        self.tree = IntervalTree()
+
+    def add(self, start, end, data):
+        if end < start:
+            raise ValueError(f"Invalid closed interval: end ({end}) < start ({start})")
+        self.tree.add(Interval(start, end + 1, data))
+
+    def remove(self, start, end, data=None):
+        interval_start = start
+        interval_end = end + 1
+
+        intervals_to_remove = []
+        for interval in self.tree[interval_start:interval_end]:
+            if (
+                interval.begin == interval_start
+                and interval.end == interval_end
+                and (data is None or interval.data == data)
+            ):
+                intervals_to_remove.append(interval)
+
+        for interval in intervals_to_remove:
+            self.tree.remove(interval)
+
+        return len(intervals_to_remove)
+
+    def query_containing(self, query_start, query_end):
+        query_interval_start = query_start
+        query_interval_end = query_end + 1
+
+        results = []
+        for interval in self.tree[query_interval_start:query_interval_end]:
+            if (
+                interval.begin <= query_interval_start
+                and interval.end >= query_interval_end
+            ):
+                closed_interval = (interval.begin, interval.end - 1, interval.data)
+                results.append(closed_interval)
+
+        return results
+
+    def query_overlap(self, query_start, query_end):
+        query_interval_start = query_start
+        query_interval_end = query_end + 1
+
+        results = []
+        for interval in self.tree[query_interval_start:query_interval_end]:
+            closed_interval = (interval.begin, interval.end - 1, interval.data)
+            results.append(closed_interval)
+
+        return results
+
+    def query_exact_match(self, query_start, query_end, data=None):
+        """
+        Find intervals that exactly match the given [query_start, query_end]
+
+        Args:
+            query_start: Start of the query interval
+            query_end: End of the query interval
+            data: Optional data to match (if None, matches any data)
+
+        Returns:
+            List of matching intervals as (start, end, data) tuples
+        """
+        # Convert closed interval to half-open interval for internal representation
+        interval_start = query_start
+        interval_end = query_end + 1
+
+        results = []
+        for interval in self.tree[interval_start:interval_end]:
+            # Check for exact boundary match
+            if interval.begin == interval_start and interval.end == interval_end:
+                # Check data match if specified
+                if data is None or interval.data == data:
+                    closed_interval = (interval.begin, interval.end - 1, interval.data)
+                    results.append(closed_interval)
+
+        return results
+
+    def __iter__(self):
+        for interval in sorted(self.tree):
+            yield (interval.begin, interval.end - 1, interval.data)
+
+    def __str__(self):
+        lines = []
+        for start, end, data in self:
+            lines.append(f"[{start}, {end}] -> {data}")
+        return "\n".join(lines)
+
+    def clear(self):
+        """Remove all intervals from the tree"""
+        self.tree.clear()

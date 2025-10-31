@@ -17,6 +17,10 @@
 #define COPY_RING_CAP 4096
 #endif
 
+#if defined(__HIP_DEVICE_COMPILE__)
+#include "amd_nanosleep.cuh"
+#endif
+
 enum class CmdType : uint8_t {
   EMPTY = 0,    // 000
   WRITE = 1,    // 001
@@ -360,7 +364,7 @@ struct alignas(128) RingBuffer {
   }
 
   __host__ __device__ __forceinline__ uint64_t volatile_head() {
-    uint64_t val;
+    uint64_t val = 0;
 #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
     return ld_volatile(&head);
 #elif defined(__x86_64__)

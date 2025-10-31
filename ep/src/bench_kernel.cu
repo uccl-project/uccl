@@ -4,6 +4,9 @@
 #include "ring_buffer.cuh"
 #include <stdint.h>
 #include <stdio.h>
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#include "amd_nanosleep.cuh"
+#endif
 
 __global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs) {
   int const bid = blockIdx.x;
@@ -23,7 +26,7 @@ __global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs) {
   __shared__ uint64_t shared_cycle_start;
   __shared__ unsigned long long start_cycle_smem[kQueueSize];
 
-#define kInflightSlotSize (kMaxInflight * kNumThPerBlock)
+#define kInflightSlotSize (kMaxInflightLowLatency * kNumThPerBlock)
 #define kInflightSlotMask (kInflightSlotSize - 1)
   uint64_t inflight_slots[kInflightSlotSize];
 
@@ -132,7 +135,8 @@ cudaError_t launch_gpu_issue_batched_commands_shim(int blocks,
 // ============================================================================
 
 // FIFO-based GPU kernel - each block uses its own FIFO
-// Implements kMaxInflight limiting with proper polling and latency measurement
+// Implements kMaxInflightLowLatency limiting with proper polling and latency
+// measurement
 __global__ void gpu_issue_batched_commands_fifo(
     mscclpp::FifoDeviceHandle* fifos, uint64_t* cycle_start_out,
     uint64_t* cycle_end_out, uint64_t* cycle_accum_out,
@@ -162,8 +166,9 @@ __global__ void gpu_issue_batched_commands_fifo(
   __syncthreads();
 
   // Track in-flight requests using circular buffer (per-thread)
-  // When we reach kMaxInflight, we poll the oldest to maintain the limit
-  uint64_t head_buffer[kMaxInflight];
+  // When we reach kMaxInflightLowLatency, we poll the oldest to maintain the
+  // limit
+  uint64_t head_buffer[kMaxInflightLowLatency];
   uint32_t head_write_idx = 0;
   uint32_t head_read_idx = 0;
   uint32_t inflight_count = 0;
@@ -190,13 +195,14 @@ __global__ void gpu_issue_batched_commands_fifo(
 
     // Store head in circular buffer for tracking
     head_buffer[head_write_idx] = head;
-    head_write_idx = (head_write_idx + 1) % kMaxInflight;
+    head_write_idx = (head_write_idx + 1) % kMaxInflightLowLatency;
     inflight_count++;
 
-    // Once we reach kMaxInflight, poll the oldest request to keep under limit
-    if (inflight_count >= kMaxInflight) {
+    // Once we reach kMaxInflightLowLatency, poll the oldest request to keep
+    // under limit
+    if (inflight_count >= kMaxInflightLowLatency) {
       uint64_t oldest_head = head_buffer[head_read_idx];
-      head_read_idx = (head_read_idx + 1) % kMaxInflight;
+      head_read_idx = (head_read_idx + 1) % kMaxInflightLowLatency;
 
       // Wait for the oldest request to be consumed by host proxy
       fifo.sync(oldest_head, -1);
@@ -220,7 +226,7 @@ __global__ void gpu_issue_batched_commands_fifo(
   // Wait for all remaining in-flight operations to complete
   while (inflight_count > 0) {
     uint64_t oldest_head = head_buffer[head_read_idx];
-    head_read_idx = (head_read_idx + 1) % kMaxInflight;
+    head_read_idx = (head_read_idx + 1) % kMaxInflightLowLatency;
 
     fifo.sync(oldest_head, -1);
     inflight_count--;

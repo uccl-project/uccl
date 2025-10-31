@@ -123,7 +123,8 @@ class Buffer {
             void* host_ptr = reinterpret_cast<void*>(host_addrs[i]);
             void* dev_ptr = nullptr;
 #ifndef USE_GRACE_HOPPER
-            CUDA_CHECK(cudaHostGetDevicePointer(&dev_ptr, host_ptr, 0));
+            CUDA_CHECK(cudaHostGetDevicePointer(
+                reinterpret_cast<void**>(&dev_ptr), host_ptr, 0));
 #else
             dev_ptr = host_ptr;
 #endif
@@ -190,7 +191,13 @@ class Buffer {
       // Ensure we're on the correct device before memory allocation and IPC
       // handle creation
       CUDA_CHECK(cudaSetDevice(device_index));
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+      // aggressive atomic will work with malloc with uncached memory
+      CUDA_CHECK(hipExtMallocWithFlags(&buffer_ptrs[nvl_rank], total_bytes,
+                                       hipDeviceMallocUncached));
+#else
       CUDA_CHECK(cudaMalloc(&buffer_ptrs[nvl_rank], total_bytes));
+#endif
       CUDA_CHECK(
           cudaIpcGetMemHandle(&ipc_handles[nvl_rank], buffer_ptrs[nvl_rank]));
 
@@ -209,12 +216,18 @@ class Buffer {
                                  barrier_signal_bytes, comm_stream));
     }
 
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+    CUDA_CHECK(hipExtMallocWithFlags(&workspace, NUM_WORKSPACE_BYTES,
+                                     hipDeviceMallocUncached));
+#else
     CUDA_CHECK(cudaMalloc(&workspace, NUM_WORKSPACE_BYTES));
+#endif
     CUDA_CHECK(cudaMemsetAsync(workspace, 0, NUM_WORKSPACE_BYTES, comm_stream));
     CUDA_CHECK(cudaMallocHost(&moe_recv_counter, sizeof(int64_t),
                               cudaHostAllocMapped));
-    CUDA_CHECK(cudaHostGetDevicePointer(&moe_recv_counter_mapped,
-                                        const_cast<int*>(moe_recv_counter), 0));
+    CUDA_CHECK(cudaHostGetDevicePointer(
+        reinterpret_cast<void**>(&moe_recv_counter_mapped),
+        const_cast<int*>(moe_recv_counter), 0));
     *moe_recv_counter = -1;
 
     CUDA_CHECK(cudaMallocHost(&moe_recv_expert_counter,
@@ -392,6 +405,7 @@ class Buffer {
       int expert_alignment, uccl::Config const& config,
       std::optional<EventHandle>& previous_event, bool async,
       bool allocate_on_comm_stream) {
+#if !defined(__HIP_PLATFORM_AMD__) && !defined(__HIPCC__)
     // In dispatch, CPU will busy-wait until GPU receive tensor size metadata
     // from other ranks, which can be quite long. If users of DeepEP need to
     // execute other Python code on other threads, such as KV transfer, their
@@ -731,6 +745,9 @@ class Buffer {
             send_rdma_head,
             send_nvl_head,
             event};
+#else
+    return {};
+#endif
   }
 
   std::tuple<torch::Tensor, std::optional<torch::Tensor>,
@@ -749,6 +766,7 @@ class Buffer {
                     uccl::Config const& config,
                     std::optional<EventHandle>& previous_event, bool async,
                     bool allocate_on_comm_stream) {
+#if !defined(__HIP_PLATFORM_AMD__) && !defined(__HIPCC__)
     int const num_channels = config.num_sms / 2;
     EP_HOST_ASSERT(config.num_sms % 2 == 0);
 
@@ -905,6 +923,9 @@ class Buffer {
 
     // Return values
     return {combined_x, combined_topk_weights, event};
+#else
+    return {};
+#endif
   }
 
   std::tuple<torch::Tensor, std::optional<torch::Tensor>,
@@ -2118,12 +2139,12 @@ PYBIND11_MODULE(ep, m) {
   py::class_<Stats>(m, "Stats");
   py::class_<UcclProxy>(m, "Proxy")
       .def(py::init<int, uintptr_t, size_t, int, int, int, std::string const&,
-                    int, int, int>(),
+                    int, int, int, bool>(),
            py::arg("thread_idx"), py::arg("gpu_buffer_addr"),
            py::arg("total_size"), py::arg("rank") = 0, py::arg("node_idx") = -1,
            py::arg("local_rank") = 0, py::arg("peer_ip") = std::string(),
            py::arg("num_experts") = -1, py::arg("num_ranks") = -1,
-           py::arg("num_nodes") = 0)
+           py::arg("num_nodes") = 0, py::arg("use_normal_mode") = false)
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)
       .def("start_local", &UcclProxy::start_local)

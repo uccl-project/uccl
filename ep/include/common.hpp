@@ -12,17 +12,15 @@
 #include <stdio.h>
 #include <unistd.h>
 
+#define MAX_IB_DEVS 32
 #define MEASURE_PER_OP_LATENCY
 #define MEASURE_PER_VERB_LATENCY
 
-#ifndef USE_NORMAL_MODE
+// Barrier type selection (can be overridden at compile time)
 #ifndef USE_SENDER_BARRIER
 #ifdef EFA
 #define USE_RECEIVER_BARRIER
 #endif
-#endif
-#else
-// #define USE_SENDER_BARRIER
 #endif
 
 #define USE_MSCCLPP_FIFO_BACKEND
@@ -31,15 +29,8 @@
 #define kQueueMask (kQueueSize - 1)
 // This is the highest we can get due to the number of bits we allocate in the
 // imm for reordering buffer sequence tracking.
-#ifdef USE_MSCCLPP_FIFO_BACKEND
-#ifdef USE_NORMAL_MODE
-#define kMaxInflight 8
-#else
-#define kMaxInflight 32
-#endif
-#else
-#define kMaxInflight 8
-#endif
+#define kMaxInflightLowLatency 32
+#define kMaxInflightNormal 8
 #define kBatchSize 32
 #define kIterations 40000
 #define kNumThBlocks 4
@@ -64,7 +55,7 @@
 #define kAtomicMask 0x0000FFFFFFFFFFFFULL
 #define kBarrierWrTag 0xbaba000000000000ULL
 #define kBarrierMask 0x0000FFFFFFFFFFFFULL
-#define kPrintCycleInterval 5000000000ULL
+#define kPrintCycleInterval 100000000000ULL
 // Base TCP port for Proxy barrier rendezvous (rank0 server)
 #define TCP_PORT 18515
 #define MAX_RETRIES 100

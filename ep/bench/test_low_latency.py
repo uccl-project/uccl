@@ -4,13 +4,13 @@ On first node:
 torchrun --nnodes=2 --nproc_per_node=1 --node_rank=0 \
   --master_addr=10.1.1.171 --master_port=12355 \
   bench/test_low_latency.py --num-tokens=128 \
-  --hidden=7168 --num-topk=1 --num-experts=28
+  --hidden=7168 --num-topk=8 --num-experts=288
 
 On second node:
 torchrun --nnodes=2 --nproc_per_node=1 --node_rank=1 \
   --master_addr=10.1.1.171 --master_port=12355 \
   bench/test_low_latency.py --num-tokens=128 \
-  --hidden=7168 --num-topk=1 --num-experts=28
+  --hidden=7168 --num-topk=8 --num-experts=288
 """
 
 import argparse
@@ -350,6 +350,7 @@ def test_main(
             return_recv_hook=return_recv_hook,
         )
         large_gemm_with_hook(hook) if return_recv_hook else None
+        dist.barrier(group=group)
 
     print("✓ All correctness tests passed!", flush=True)
     # Calculate bandwidth
@@ -404,18 +405,8 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         num_tokens, hidden, num_ranks, num_experts
     )
 
-    # UCCL new code for initialization
-    device_index = int(os.environ["LOCAL_RANK"])
-    scratch = torch.zeros(
-        num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
-    )
-    proxies, workers = initialize_uccl(
-        scratch, num_rdma_bytes, rank, num_ranks, group, args.num_experts
-    )
-
     buffer = Buffer(
         group,
-        rdma_buffer_ptr=scratch.data_ptr(),
         num_rdma_bytes=num_rdma_bytes,
         low_latency_mode=True,
         num_qps_per_rank=num_experts // num_ranks,
@@ -423,15 +414,6 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         explicitly_destroy=True,
         allow_mnnvl=args.allow_mnnvl,
     )
-
-    buffer.connect_atomic_buffer(proxies[0])
-
-    for proxy in proxies:
-        proxy.calculate_and_set_dispatch_recv_data_offset(
-            num_tokens, hidden, num_experts
-        )
-        proxy.set_atomic_buffer_ptr(proxies[0].get_atomic_buffer_ptr())
-
     test_main(
         num_tokens,
         hidden,
@@ -479,22 +461,12 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
             ), f"Error: seed={seed}"
 
     # Destroy the buffer runtime and communication group
-    group.barrier()
     buffer.destroy()
-    dist.barrier()
-    destroy_uccl(proxies, workers)
     dist.barrier()
     dist.destroy_process_group()
 
 
 if __name__ == "__main__":
-    if os.getenv("MAKE_NORMAL_MODE") == "1":
-        raise RuntimeError(
-            "[ERROR] The environment variable MAKE_NORMAL_MODE=1 indicates normal mode is active.\n"
-            "This test requires low-latency mode.\n"
-            "To fix this, run the following before rebuilding:\n"
-            "unset MAKE_NORMAL_MODE && make clean && make -j install\n"
-        )
     parser = argparse.ArgumentParser(description="Test low-latency EP kernels")
     parser.add_argument(
         "--num-processes",

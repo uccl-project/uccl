@@ -13,16 +13,8 @@ else
   EFA_LDFLAGS := -L$(EFA_HOME)/lib -lefa
 endif
 
-ifeq ($(MAKE_NORMAL_MODE),1)
-  NORMAL_CFLAGS := -DUSE_NORMAL_MODE
-  $(info Building with normal mode)
-else
-  NORMAL_CFLAGS :=
-  $(info Building with low latency mode)
-endif
-
 ARCH := $(shell uname -m)
-GPU_NAME := $(shell nvidia-smi --query-gpu=name --format=csv,noheader | head -n1)
+GPU_NAME ?= $(shell nvidia-smi --query-gpu=name --format=csv,noheader | head -n1)
 CPU_IS_ARM64 := 0
 GPU_IS_HOPPER := 0
 ifeq ($(ARCH),aarch64)
@@ -57,7 +49,7 @@ INSTALL_DIR          := $(PYTHON_SITE_PACKAGES)/uccl
 # GPU arch (override with: make SM=90)
 SM ?= 90
 
-CXXFLAGS  := -O3 -std=c++17 -Wall -pthread -fPIC -fvisibility=hidden -Wno-interference-size
+CXXFLAGS  := -O3 -std=c++17 -Wall -pthread -fPIC -fvisibility=hidden -Wno-interference-size -Wno-unused-function
 LDFLAGS := -lpthread -lglog -libverbs -lnl-3 -lnl-route-3 -lnuma -Xlinker -rpath -Xlinker $(CUDA_PATH)/lib64
 NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread -fPIC -fvisibility=hidden" -ccbin /usr/bin/g++ --expt-relaxed-constexpr
 INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../include 
