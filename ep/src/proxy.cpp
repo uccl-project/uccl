@@ -12,67 +12,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static std::string shm_name_for_barrier(std::string const& ip, int thread_idx) {
-  return "/uccl_barrier_" + ip + "_th" + std::to_string(thread_idx);
-}
-
-LocalBarrier* map_local_barrier_shm(std::string const& name, bool* out_owner) {
-  *out_owner = false;
-  size_t const kSize = sizeof(LocalBarrier);
-  // Use 0666 to allow all processes (same user) to access the shared memory
-  mode_t const kMode = 0666;
-  int fd = shm_open(name.c_str(), O_RDWR | O_CREAT | O_EXCL, kMode);
-  if (fd >= 0) {
-    *out_owner = true;
-    if (ftruncate(fd, kSize) != 0) {
-      perror("ftruncate(LocalBarrier)");
-      close(fd);
-      shm_unlink(name.c_str());
-      return nullptr;
-    }
-  } else {
-    if (errno != EEXIST) {
-      perror("shm_open");
-      return nullptr;
-    }
-    // Don't specify mode when opening existing shm (use 0 instead of kMode)
-    fd = shm_open(name.c_str(), O_RDWR, 0);
-    if (fd < 0) {
-      perror("shm_open(existing)");
-      return nullptr;
-    }
-    struct stat st {};
-    int tries = 1000;
-    while (tries-- > 0) {
-      if (fstat(fd, &st) == 0 && static_cast<size_t>(st.st_size) >= kSize)
-        break;
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    if (tries < 0) {
-      fprintf(stderr,
-              "map_local_barrier_shm: existing shm '%s' never sized to %zu\n",
-              name.c_str(), kSize);
-      close(fd);
-      return nullptr;
-    }
-  }
-  void* p = mmap(nullptr, kSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-  int saved_errno = errno;
-  close(fd);
-  if (p == MAP_FAILED) {
-    errno = saved_errno;
-    perror("mmap(LocalBarrier)");
-    return nullptr;
-  }
-  return reinterpret_cast<LocalBarrier*>(p);
-}
-
-void unmap_local_barrier_shm(std::string const& name, LocalBarrier* lb,
-                             bool owner) {
-  if (lb) munmap(lb, sizeof(LocalBarrier));
-  if (owner) shm_unlink(name.c_str());
-}
-
 double Proxy::avg_rdma_write_us() const {
   if (kIterations == 0) return 0.0;
   return total_rdma_write_durations_.count() / static_cast<double>(kIterations);
@@ -326,9 +265,6 @@ void Proxy::init_common() {
   fifo_seq_.assign(cfg_.d2h_queues.size(), 0);
   fifo_pending_.assign(cfg_.d2h_queues.size(), std::deque<uint64_t>{});
 #endif
-
-  // Initialize subset synchronization data structures
-  init_subsets();
 }
 
 void Proxy::init_sender() {
@@ -351,8 +287,6 @@ void Proxy::init_remote() {
 }
 
 void Proxy::run_sender() {
-  fprintf(stderr, "=== [Proxy::run_sender] Rank %d, thread_idx %d, local_rank %d STARTED ===\n",
-          cfg_.rank, cfg_.thread_idx, cfg_.local_rank);
   printf("CPU sender thread %d started\n", cfg_.thread_idx);
   init_sender();
   size_t seen = 0;
@@ -365,8 +299,6 @@ void Proxy::run_sender() {
 }
 
 void Proxy::run_remote() {
-  fprintf(stderr, "=== [Proxy::run_remote] Rank %d, thread_idx %d, local_rank %d STARTED ===\n",
-          cfg_.rank, cfg_.thread_idx, cfg_.local_rank);
   printf("Remote CPU thread %d started\n", cfg_.thread_idx);
   init_remote();
   std::set<PendingUpdate> pending_atomic_updates;
@@ -383,8 +315,6 @@ void Proxy::run_remote() {
 }
 
 void Proxy::run_dual() {
-  fprintf(stderr, "=== [Proxy::run_dual] Rank %d, thread_idx %d, local_rank %d STARTED ===\n",
-          cfg_.rank, cfg_.thread_idx, cfg_.local_rank);
   init_common();
   for (int peer = 0; peer < (int)ctxs_for_all_ranks_.size(); ++peer) {
     if (peer == cfg_.rank) continue;
@@ -426,12 +356,9 @@ void Proxy::run_dual() {
 #endif
 
 
-    // barrier_check();  // COMMENTED OUT: Only use subset barriers
-
-    // Check all subset barriers
-    int my_subset_id = cfg_.rank % MAX_NUM_GPUS;
-    barrier_check_subset(my_subset_id);
-    
+#ifdef USE_NORMAL_MODE
+    barrier_check();
+#endif
 
   }
 }
@@ -446,33 +373,19 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
     auto* fifo = cfg_.d2h_queues[rb_idx].fifo;
     if (!fifo) continue;
     auto& pend = fifo_pending_[rb_idx];
-
-    // fprintf(stderr, "[notify_gpu_completion] Rank %d rb_idx=%zu: pending_size=%zu, acked_wrs_size=%zu, quiet_wr=%d, barrier_wr=%d\n",
-    //         cfg_.rank, rb_idx, pend.size(), acked_wrs_.size(), ctx_.quiet_wr, ctx_.barrier_wr);
-
     while (!pend.empty()) {
       uint64_t front_wr = pend.front();
-      if (acked_wrs_.find(front_wr) == acked_wrs_.end()) {
-        fprintf(stderr, "[notify_gpu_completion] Rank %d rb_idx=%zu: front_wr=%lu NOT in acked_wrs, breaking\n",
-                cfg_.rank, rb_idx, front_wr);
-        break;
-      }
-
-      fprintf(stderr, "[notify_gpu_completion] Rank %d rb_idx=%zu: processing front_wr=%lu\n",
-              cfg_.rank, rb_idx, front_wr);
-
+      if (acked_wrs_.find(front_wr) == acked_wrs_.end()) break;
       acked_wrs_.erase(front_wr);  // consume this completion
       pend.pop_front();            // retire pending entry
 
       if (ctx_.quiet_wr != -1 && front_wr == (uint64_t)ctx_.quiet_wr) {
-        fprintf(stderr, "[notify_gpu_completion] Rank %d: QUIET command completed, popping fifo\n", cfg_.rank);
         ctx_.quiet_inflight = false;
         ctx_.quiet_wr = -1;
         fifo->pop();
       }
 
       if (ctx_.barrier_wr != -1 && front_wr == (uint64_t)ctx_.barrier_wr) {
-        fprintf(stderr, "[notify_gpu_completion] Rank %d: BARRIER command completed, popping fifo\n", cfg_.rank);
         ctx_.barrier_inflight = false;
         ctx_.barrier_wr = -1;
         fifo->pop();
@@ -520,8 +433,6 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
     // Available budget for this FIFO.
     size_t pending = fifo_pending_[rb_idx].size();
     size_t budget = (kMaxInflight > pending) ? (kMaxInflight - pending) : 0;
-
-
     for (size_t take = 0; take < budget; ++take) {
       auto trig = fifo->poll();
       if (trig.fst == 0) break;
@@ -534,23 +445,15 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
         break;
       }
 
-      if (get_base_cmd(cmd.cmd_type) == CmdType::QUIET &&
-          ctx_.quiet_inflight) {
+      if (get_base_cmd(cmd.cmd_type) == CmdType::QUIET && ctx_.quiet_inflight) {
         break;
       }
 
       uint64_t unique_wr_id = (static_cast<uint64_t>(rb_idx) << 32) |
                               (fifo_seq_[rb_idx]++ & 0xFFFFFFFFULL);
-
-      fprintf(stderr, "[DEBUG_PUSH] rb_idx=%zu, wr_id=%lu, wrs_size_before=%zu, cmds_size_before=%zu\n",
-        rb_idx, unique_wr_id, wrs_to_post.size(), cmds_to_post.size());
-
       wrs_to_post.push_back(unique_wr_id);
       cmds_to_post.push_back(cmd);
       fifo_pending_[rb_idx].push_back(unique_wr_id);
-
-      fprintf(stderr, "[DEBUG_PUSH_AFTER] wrs_size=%zu, cmds_size=%zu\n",
-        wrs_to_post.size(), cmds_to_post.size());
       found_work = true;
 
       if (get_base_cmd(cmd.cmd_type) == CmdType::BARRIER ||
@@ -653,8 +556,6 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 }
 
 void Proxy::run_local() {
-  fprintf(stderr, "=== [Proxy::run_local] Rank %d, thread_idx %d, local_rank %d STARTED ===\n",
-          cfg_.rank, cfg_.thread_idx, cfg_.local_rank);
   pin_thread_to_cpu_wrapper();
   printf("Local CPU thread %d started with %zu ring buffers\n", cfg_.thread_idx,
          cfg_.d2h_queues.size());
@@ -833,7 +734,6 @@ void Proxy::post_gpu_commands_mixed(
       0) {
     return;
   }
-
   // Handle regular RDMA writes
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
@@ -845,16 +745,11 @@ void Proxy::post_gpu_commands_mixed(
                            cfg_.rank, cfg_.thread_idx, acked_wrs_);
   }
   if (!barrier_cmds.empty()) {
-    // Calculate subset_id from the current rank (the rank that issued the barrier)
-    // All ranks with the same (rank % MAX_NUM_GPUS) belong to the same subset
-    int my_subset_id = cfg_.rank % MAX_NUM_GPUS;
-    fprintf(stderr, "[Proxy::post_gpu_commands_mixed] Rank %d received %zu BARRIER commands, subset_id=%d, base_cmd=%d\n",
-            cfg_.rank, barrier_cmds.size(), my_subset_id, static_cast<int>(get_base_cmd(barrier_cmds[0].cmd_type)));
 #ifdef USE_MSCCLPP_FIFO_BACKEND
     assert(barrier_wrs.size() == 1);
     assert(ctx_.barrier_wr == -1);
 #endif
-    send_barrier_subset(barrier_wrs[0], my_subset_id);
+    send_barrier(barrier_wrs[0]);
   }
   if (!quiet_cmds.empty()) {
 #ifdef USE_MSCCLPP_FIFO_BACKEND
@@ -912,304 +807,8 @@ void Proxy::quiet_cq() {
 
 void Proxy::quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds) {
   assert(cmds.size() == 1 && "quiet size must be 1");
-
-  fprintf(stderr, "[Proxy::quiet] Rank %d (Thread %d): starting QUIET\n",
-          cfg_.rank, cfg_.thread_idx);
-
-  // Use the original quiet_cq() implementation - drain all pending operations
   quiet_cq();
-
-  // Mark quiet command as completed
   acked_wrs_.insert(wrs[0]);
-
-  fprintf(stderr, "[Proxy::quiet] Rank %d (Thread %d): QUIET completed\n",
-          cfg_.rank, cfg_.thread_idx);
-}
-
-// Initialize subset data structures (called during init_common)
-void Proxy::init_subsets() {
-  int total_ranks = cfg_.num_ranks;
-  int gpus_per_node = MAX_NUM_GPUS;  // Assuming 8 GPUs per node
-  int num_subsets = gpus_per_node;
-
-  all_subsets_.resize(num_subsets);
-  rank_to_subset_.resize(total_ranks);
-  pending_wrs_by_subset_.resize(num_subsets);
-
-  // Precompute all subsets at startup
-  for (int rank = 0; rank < total_ranks; ++rank) {
-    int subset_id = rank % gpus_per_node;
-    all_subsets_[subset_id].push_back(rank);
-    rank_to_subset_[rank] = subset_id;
-  }
-
-  fprintf(stderr, "[Proxy::init_subsets] Rank %d initialized %d subsets for %d ranks, %d nodes\n",
-          cfg_.rank, num_subsets, total_ranks, cfg_.num_nodes);
-  for (int subset_id = 0; subset_id < num_subsets; ++subset_id) {
-    fprintf(stderr, "  Subset %d (leader=%d, num_nodes=%d): [ ",
-            subset_id, subset_id, cfg_.num_nodes);
-    for (int rank : all_subsets_[subset_id]) {
-      fprintf(stderr, "%d ", rank);
-    }
-    fprintf(stderr, "]\n");
-  }
-}
-
-// Get subset_id for a given rank (O(1) lookup)
-int Proxy::get_subset_id(int rank) const {
-  if (rank < 0 || rank >= static_cast<int>(rank_to_subset_.size())) {
-    return -1;  // Invalid rank
-  }
-  return rank_to_subset_[rank];
-}
-
-// Wait for RDMA operations to complete for a specific subset
-void Proxy::quiet_subset(int subset_id) {
-  if (subset_id < 0 || subset_id >= static_cast<int>(pending_wrs_by_subset_.size())) {
-    fprintf(stderr, "[Proxy::quiet_subset] Invalid subset_id %d\n", subset_id);
-    return;
-  }
-
-  auto outstanding_for_subset = [&]() -> size_t {
-    return pending_wrs_by_subset_[subset_id].size();
-  };
-
-  // Log initial state
-  size_t initial_pending = outstanding_for_subset();
-  fprintf(stderr, "[quiet_subset %d] Rank %d (Thread %d): starting with %zu pending operations\n",
-          subset_id, cfg_.rank, cfg_.thread_idx, initial_pending);
-
-  constexpr int kConsecutiveEmptyToExit = 3;
-  int empty_iters = 0;
-  ibv_wc wc[kMaxOutstandingSends];
-  using clock = std::chrono::steady_clock;
-  auto last_log = clock::now();
-  std::set<PendingUpdate> pending_atomic_updates;
-
-  size_t iterations = 0;
-  size_t total_completed = 0;
-
-  // Poll until all operations for this subset complete
-  for (;;) {
-    ++iterations;
-
-    int ne = poll_cq_once(ctx_.cq, wc, kMaxOutstandingSends);
-    if (ne > 0) {
-      empty_iters = 0;
-
-      // Record state before processing completions
-      std::unordered_set<uint64_t> completed_wrs_before = acked_wrs_;
-      size_t pending_before = outstanding_for_subset();
-
-      // Process completions
-      local_process_completions(ctx_, acked_wrs_, cfg_.thread_idx, wc, ne,
-                                ctx_by_tag_);
-      remote_process_completions(
-          ctx_, cfg_.thread_idx, ring, ne, wc, ctx_by_tag_, atomic_buffer_ptr_,
-          cfg_.num_ranks, cfg_.num_experts, pending_atomic_updates, cfg_.rank,
-          cfg_.num_nodes);
-
-      // Remove completed operations from pending_wrs_by_subset_
-      size_t removed_count = 0;
-      for (const auto& wr_id : acked_wrs_) {
-        if (completed_wrs_before.find(wr_id) == completed_wrs_before.end()) {
-          // This wr_id was newly completed
-          if (pending_wrs_by_subset_[subset_id].erase(wr_id)) {
-            ++removed_count;
-            ++total_completed;
-          }
-        }
-      }
-
-      if (removed_count > 0) {
-        fprintf(stderr, "[quiet_subset %d] Rank %d: completed %zu ops, remaining=%zu (total_completed=%zu)\n",
-                subset_id, cfg_.rank, removed_count, outstanding_for_subset(), total_completed);
-      }
-    } else {
-      ++empty_iters;
-    }
-
-    // Check exit condition
-    if (outstanding_for_subset() == 0 && empty_iters >= kConsecutiveEmptyToExit) {
-      fprintf(stderr, "[quiet_subset %d] Rank %d: all %zu operations completed after %zu iterations\n",
-              subset_id, cfg_.rank, initial_pending, iterations);
-      break;
-    }
-
-    // Periodic logging
-    auto now = clock::now();
-    if (now - last_log > std::chrono::milliseconds(1000)) {
-      fprintf(stderr, "[quiet_subset %d] Rank %d: polling... outstanding=%zu (completed=%zu, iter=%zu)\n",
-              subset_id, cfg_.rank, outstanding_for_subset(), total_completed, iterations);
-      last_log = now;
-    }
-  }
-}
-
-// Send barrier message for a specific subset (adapted from post_barrier_msg)
-void Proxy::post_barrier_msg_subset(int dst_rank, bool ack, uint64_t seq, int subset_id) {
-  ProxyCtx* ctx = ctxs_for_all_ranks_[dst_rank].get();
-  if (!ctx || !ctx->qp || !ctx->mr) {
-    fprintf(stderr, "barrier_msg_subset: bad ctx for dst=%d\n", dst_rank);
-    std::abort();
-  }
-
-  // Use BarrierImm to pack all fields correctly in one go
-  // Layout: [31:0][30:1][29:ack][28:11:seq(18bit)][10:8:subset_id(3bit)][7:0:rank]
-  uint32_t imm = BarrierImm::Pack(ack, (uint32_t)seq, (uint8_t)subset_id, (uint8_t)cfg_.rank);
-
-  // fprintf(stderr, "[post_barrier_msg_subset] rank=%d, dst=%d, ack=%d, seq=%lu, subset_id=%d, imm=0x%08x\n",
-  //         cfg_.rank, dst_rank, ack, seq, subset_id, imm);
-
-#ifdef EFA
-  auto* qpx = (struct ibv_qp_ex*)ctx->qp;
-  int barrier_seq = 0;
-  ibv_wr_start(qpx);
-  qpx->wr_id = kBarrierWrTag | (barrier_seq & kBarrierMask);
-  qpx->comp_mask = 0;
-  qpx->wr_flags = IBV_SEND_SIGNALED;
-  ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, ctx->remote_addr, htonl(imm));
-  ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_qpn, QKEY);
-  ibv_wr_set_sge(qpx, ctx->mr->lkey, (uintptr_t)ctx->mr->addr, 0);
-  int ret = ibv_wr_complete(qpx);
-  if (ret) {
-    fprintf(stderr, "post_barrier_msg_subset (EFA) failed: %s (%d)\n", strerror(ret), ret);
-    std::abort();
-  }
-#else
-  ibv_sge sge{};
-  sge.addr = (uintptr_t)ctx->mr->addr;
-  sge.length = 0;
-  sge.lkey = ctx->mr->lkey;
-
-  ibv_send_wr wr{};
-  int barrier_seq = 0;
-  wr.wr_id = kBarrierWrTag | (barrier_seq & kBarrierMask);
-  wr.sg_list = &sge;
-  wr.num_sge = 1;
-  wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-  wr.send_flags = IBV_SEND_SIGNALED;
-  wr.imm_data = htonl(imm);
-  wr.wr.rdma.remote_addr = ctx->remote_addr;
-  wr.wr.rdma.rkey = ctx->remote_rkey;
-
-  ibv_send_wr* bad = nullptr;
-  int ret = ibv_post_send(ctx->qp, &wr, &bad);
-  if (ret) {
-    fprintf(stderr, "post_barrier_msg_subset failed: %s (%d)\n", strerror(ret), ret);
-    if (bad)
-      fprintf(stderr, "  bad wr_id=%llu\n", (unsigned long long)bad->wr_id);
-    std::abort();
-  }
-#endif
-}
-
-// Start barrier for a specific subset
-void Proxy::send_barrier_subset(uint64_t wr, int subset_id) {
-  fprintf(stderr, "[send_barrier_subset] Rank %d calling send_barrier_subset: subset_id=%d, current_inflight=%d\n",
-          cfg_.rank, subset_id, ctx_.barrier_inflight);
-
-  // assert(!ctx_.barrier_inflight && "only one barrier at a time");
-  assert(ctx_.barrier_wr == -1 && "barrier_wr should be 0");
-
-  ctx_.barrier_inflight = true;
-  ctx_.barrier_wr = wr;
-  ctx_.barrier_seq = ctx_.barrier_seq + 1;
-
-  // Determine leader for this subset (smallest rank in subset, which is subset_id itself)
-  int leader_rank = subset_id;
-
-  // Leader initializes arrival tracking
-  if (cfg_.rank == leader_rank) {
-    ctx_.barrier_arrived.assign(cfg_.num_nodes, 0);
-    ctx_.barrier_arrival_count = 0;
-  }
-
-  fprintf(stderr, "[send_barrier_subset] Rank %d started barrier: subset_id=%d, seq=%lu, leader=%d, now_inflight=%d\n",
-          cfg_.rank, subset_id, ctx_.barrier_seq, leader_rank, ctx_.barrier_inflight);
-}
-
-// Check and complete barrier for a specific subset
-void Proxy::barrier_check_subset(int subset_id) {
-  if (!ctx_.barrier_inflight) return;
-
-  uint64_t const seq = ctx_.barrier_seq;
-  int my_node = cfg_.rank / MAX_NUM_GPUS;  // Calculate current node ID
-  int leader_rank = subset_id;  // Leader is the smallest rank in subset
-
-  if (cfg_.rank == leader_rank) {
-    // === Leader ===
-
-    // Mark self-arrival only once per seq
-    static thread_local std::unordered_map<int, uint64_t> last_self_arrival_seq;
-    if (last_self_arrival_seq[subset_id] != seq) {
-      last_self_arrival_seq[subset_id] = seq;
-
-      if (!ctx_.barrier_arrived[my_node]) {
-        ctx_.barrier_arrived[my_node] = 1;
-        ++ctx_.barrier_arrival_count;
-        // fprintf(stderr, "[barrier_check_subset] Leader %d (node %d): self-arrival for subset %d, count=%d/%d\n",
-        //         cfg_.rank, my_node, subset_id, ctx_.barrier_arrival_count, cfg_.num_nodes);
-      } else {
-        // fprintf(stderr, "[barrier_check_subset] Leader %d (node %d): already marked as arrived for subset %d\n",
-        //         cfg_.rank, my_node, subset_id);
-      }
-    } else {
-      // fprintf(stderr, "[barrier_check_subset] Leader %d: seq %lu already processed for subset %d (last was %lu)\n",
-      //         cfg_.rank, seq, subset_id, last_self_arrival_seq[subset_id]);
-    }
-
-    // Check if all nodes have arrived
-    if (ctx_.barrier_arrival_count == cfg_.num_nodes) {
-      fprintf(stderr, "[barrier_check_subset] Leader %d: all %d nodes arrived for subset %d, sending release\n",
-              cfg_.rank, cfg_.num_nodes, subset_id);
-
-      // Send release messages to other nodes (by node ID, not subset ranks)
-      for (int node = 0; node < cfg_.num_nodes; ++node) {
-        if (node == my_node) continue;
-
-        // Each node's participating rank in this subset = subset_id + node * MAX_NUM_GPUS
-        int remote_rank = subset_id + node * MAX_NUM_GPUS;
-        if (remote_rank < cfg_.num_ranks) {
-          fprintf(stderr, "[barrier_check_subset] Leader %d: sending release to rank %d for subset %d, seq=%lu\n",
-                  cfg_.rank, remote_rank, subset_id, seq);
-          post_barrier_msg_subset(remote_rank, /*ack=*/true, seq, subset_id);
-        }
-      }
-
-      // Complete barrier
-      ctx_.barrier_arrived.assign(cfg_.num_nodes, 0);  // Reset to num_nodes size
-      ctx_.barrier_arrival_count = 0;
-      acked_wrs_.insert(ctx_.barrier_wr);
-      // ctx_.barrier_inflight = false;
-      // ctx_.barrier_wr = -1;
-
-      // fprintf(stderr, "[barrier_check_subset] Leader %d: barrier completed for subset %d\n",
-      //         cfg_.rank, subset_id);
-    }
-
-  } else {
-    // === Follower ===
-
-    // Send arrival message only once per seq
-    static thread_local std::unordered_map<int, uint64_t> last_sent_arrival_seq;
-    if (last_sent_arrival_seq[subset_id] != seq) {
-      last_sent_arrival_seq[subset_id] = seq;
-      post_barrier_msg_subset(leader_rank, /*ack=*/false, seq, subset_id);
-      // fprintf(stderr, "[barrier_check_subset] Follower %d (node %d): sent arrival to leader %d for subset %d, seq=%lu\n",
-      //         cfg_.rank, my_node, leader_rank, subset_id, seq);
-    }
-
-    // Wait for release
-    if (ctx_.barrier_released && ctx_.barrier_release_seq == seq) {
-      // fprintf(stderr, "[barrier_check_subset] Follower %d: received release for subset %d, seq=%lu, inserting wr=%lu into acked_wrs\n",
-      //         cfg_.rank, subset_id, seq, ctx_.barrier_wr);
-      ctx_.barrier_released = false;
-      acked_wrs_.insert(ctx_.barrier_wr);
-      // NOTE: Don't set barrier_wr = -1 or barrier_inflight = false here!
-      // Let notify_gpu_completion() handle that when it pops the FIFO.
-    }
-  }
 }
 
 void Proxy::destroy(bool free_gpu_buffer) {
@@ -1311,58 +910,57 @@ void Proxy::destroy(bool free_gpu_buffer) {
   remote_infos_.clear();
 }
 
-// COMMENTED OUT: Now using post_barrier_msg_subset for all barriers
-// void Proxy::post_barrier_msg(int dst_rank, bool ack, uint64_t seq) {
-//   ProxyCtx* ctx = ctxs_for_all_ranks_[dst_rank].get();
-//   if (!ctx || !ctx->qp || !ctx->mr) {
-//     fprintf(stderr, "barrier_msg: bad ctx for dst=%d\n", dst_rank);
-//     std::abort();
-//   }
-//   uint32_t imm = BarrierImm::Pack(ack, (uint32_t)seq, (uint8_t)cfg_.rank);
-// #ifdef EFA
-//   auto* qpx = (struct ibv_qp_ex*)ctx->qp;
-//   int barrier_seq = 0;
-//   ibv_wr_start(qpx);
-//   qpx->wr_id = kBarrierWrTag | (barrier_seq & kBarrierMask);
-//   qpx->comp_mask = 0;
-//   qpx->wr_flags = IBV_SEND_SIGNALED;
-//   // zero-length RDMA write with imm
-//   ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, ctx->remote_addr, htonl(imm));
-//   ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_qpn, QKEY);
-//   ibv_wr_set_sge(qpx, ctx->mr->lkey, (uintptr_t)ctx->mr->addr, 0);
-//   int ret = ibv_wr_complete(qpx);
-//   if (ret) {
-//     fprintf(stderr, "post_barrier_msg (EFA) failed: %s (%d)\n", strerror(ret),
-//             ret);
-//     std::abort();
-//   }
-// #else
-//   ibv_sge sge{};
-//   sge.addr = (uintptr_t)ctx->mr->addr;
-//   sge.length = 0;
-//   sge.lkey = ctx->mr->lkey;
-//
-//   ibv_send_wr wr{};
-//   int barrier_seq = 0;
-//   wr.wr_id = kBarrierWrTag | (barrier_seq & kBarrierMask);
-//   wr.sg_list = &sge;
-//   wr.num_sge = 1;
-//   wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-//   wr.send_flags = IBV_SEND_SIGNALED;
-//   wr.imm_data = htonl(imm);
-//   wr.wr.rdma.remote_addr = ctx->remote_addr;
-//   wr.wr.rdma.rkey = ctx->remote_rkey;
-//
-//   ibv_send_wr* bad = nullptr;
-//   int ret = ibv_post_send(ctx->qp, &wr, &bad);
-//   if (ret) {
-//     fprintf(stderr, "post_barrier_msg failed: %s (%d)\n", strerror(ret), ret);
-//     if (bad)
-//       fprintf(stderr, "  bad wr_id=%llu\n", (unsigned long long)bad->wr_id);
-//     std::abort();
-//   }
-// #endif
-// }
+void Proxy::post_barrier_msg(int dst_rank, bool ack, uint64_t seq) {
+  ProxyCtx* ctx = ctxs_for_all_ranks_[dst_rank].get();
+  if (!ctx || !ctx->qp || !ctx->mr) {
+    fprintf(stderr, "barrier_msg: bad ctx for dst=%d\n", dst_rank);
+    std::abort();
+  }
+  uint32_t imm = BarrierImm::Pack(ack, (uint32_t)seq, (uint8_t)cfg_.rank);
+#ifdef EFA
+  auto* qpx = (struct ibv_qp_ex*)ctx->qp;
+  int barrier_seq = 0;
+  ibv_wr_start(qpx);
+  qpx->wr_id = kBarrierWrTag | (barrier_seq & kBarrierMask);
+  qpx->comp_mask = 0;
+  qpx->wr_flags = IBV_SEND_SIGNALED;
+  // zero-length RDMA write with imm
+  ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, ctx->remote_addr, htonl(imm));
+  ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_qpn, QKEY);
+  ibv_wr_set_sge(qpx, ctx->mr->lkey, (uintptr_t)ctx->mr->addr, 0);
+  int ret = ibv_wr_complete(qpx);
+  if (ret) {
+    fprintf(stderr, "post_barrier_msg (EFA) failed: %s (%d)\n", strerror(ret),
+            ret);
+    std::abort();
+  }
+#else
+  ibv_sge sge{};
+  sge.addr = (uintptr_t)ctx->mr->addr;
+  sge.length = 0;
+  sge.lkey = ctx->mr->lkey;
+
+  ibv_send_wr wr{};
+  int barrier_seq = 0;
+  wr.wr_id = kBarrierWrTag | (barrier_seq & kBarrierMask);
+  wr.sg_list = &sge;
+  wr.num_sge = 1;
+  wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+  wr.send_flags = IBV_SEND_SIGNALED;
+  wr.imm_data = htonl(imm);
+  wr.wr.rdma.remote_addr = ctx->remote_addr;
+  wr.wr.rdma.rkey = ctx->remote_rkey;
+
+  ibv_send_wr* bad = nullptr;
+  int ret = ibv_post_send(ctx->qp, &wr, &bad);
+  if (ret) {
+    fprintf(stderr, "post_barrier_msg failed: %s (%d)\n", strerror(ret), ret);
+    if (bad)
+      fprintf(stderr, "  bad wr_id=%llu\n", (unsigned long long)bad->wr_id);
+    std::abort();
+  }
+#endif
+}
 
 void Proxy::send_barrier(uint64_t wr) {
 #ifndef USE_MSCCLPP_FIFO_BACKEND
@@ -1379,115 +977,72 @@ void Proxy::send_barrier(uint64_t wr) {
       ctx_.barrier_arrival_count = 0;
     }
   }
-
-  // Mark local arrival
-  auto* lb = ctx_.lb;
-  lb->seq.store(ctx_.barrier_seq, std::memory_order_release);
-  lb->arrive_seq[ctx_.local_rank].store((uint32_t)ctx_.barrier_seq,
-                                        std::memory_order_release);
-
-  uint64_t bit = (1ULL << (uint64_t)ctx_.local_rank);
-  lb->arrived_mask.fetch_or(bit, std::memory_order_acq_rel);
 }
 
-// COMMENTED OUT: Now using barrier_check_subset for all barriers
-// void Proxy::barrier_check() {
-//   if (!ctx_.barrier_inflight) return;
-//
-//   auto* lb = ctx_.lb;
-//   uint64_t const seq = ctx_.barrier_seq;
-//
-//   // Node leader aggregates local arrivals
-//   if (cfg_.rank == ctx_.node_leader_rank) {
-//     bool all_local_arrived = true;
-//     for (int lr = 0; lr < ctx_.num_local_ranks; ++lr) {
-//       uint32_t seen = lb->arrive_seq[lr].load(std::memory_order_acquire);
-//       if ((uint32_t)seen != seq) {
-//         all_local_arrived = false;
-//         break;
-//       }
-//     }
-//     if (all_local_arrived) {
-//       static thread_local uint64_t last_sent_seq = 0;
-//       if (last_sent_seq != seq) {
-//         last_sent_seq = seq;
-//         if (cfg_.rank == 0) {
-//           // Global leader: mark self-arrival; remote arrivals will come via
-//           // your existing CQ handler.
-//           if (ctx_.barrier_arrived.empty()) {
-//             ctx_.barrier_arrived.assign(ctxs_for_all_ranks_.size(), 0);
-//             ctx_.barrier_arrival_count = 0;
-//           }
-//           if (!ctx_.barrier_arrived[0]) {
-//             ctx_.barrier_arrived[0] = 1;
-//             ++ctx_.barrier_arrival_count;
-//           }
-//         } else {
-//           post_barrier_msg(/*dst=*/0, /*ack=*/false, seq);
-//         }
-//       }
-//
-//       if (cfg_.rank == 0) {
-//         if (ctx_.barrier_arrival_count == cfg_.num_nodes) {
-//           std::unordered_map<std::string, int> leader_for_ip;
-//           for (int r = 0; r < (int)peers_.size(); ++r) {
-//             auto it = leader_for_ip.find(peers_[r].ip);
-//             if (it == leader_for_ip.end() || r < it->second) {
-//               assert(r % MAX_NUM_GPUS == 0);
-//               leader_for_ip[peers_[r].ip] = r;
-//             }
-//           }
-//           for (auto const& kv : leader_for_ip) {
-//             std::string const& ip = kv.first;
-//             int leader_r = kv.second;
-//             if (ip == peers_[0].ip) continue;
-//             post_barrier_msg(leader_r, true, seq);
-//           }
-//
-//           for (int lr = 0; lr < ctx_.num_local_ranks; ++lr) {
-//             lb->release_seq[lr].store(seq, std::memory_order_release);
-//           }
-//           ctx_.barrier_arrived.clear();
-//           ctx_.barrier_arrival_count = 0;
-//
-//           acked_wrs_.insert(ctx_.barrier_wr);
-// #ifndef USE_MSCCLPP_FIFO_BACKEND
-//           ctx_.barrier_inflight = false;
-//           ctx_.barrier_wr = -1;
-// #endif
-//           return;
-//         }
-//       }
-//
-//       // When global release comes back (CQ handler should set these):
-//       if (ctx_.barrier_released && ctx_.barrier_release_seq == seq) {
-//         // Fan-out to local ranks via shared memory
-//         for (int lr = 0; lr < ctx_.num_local_ranks; ++lr) {
-//           lb->release_seq[lr].store(seq, std::memory_order_release);
-//         }
-//         // Reset local mask for next barrier and consume the global release
-//         ctx_.barrier_released = false;
-//
-//         // Complete WR
-//         acked_wrs_.insert(ctx_.barrier_wr);
-// #ifndef USE_MSCCLPP_FIFO_BACKEND
-//         ctx_.barrier_inflight = false;
-//         ctx_.barrier_wr = -1;
-// #endif
-//       }
-//     }
-//     return;
-//   } else {
-//     assert(!ctx_.barrier_released &&
-//            "This can only be set by local leader thread.");
-//   }
-//
-//   // Followers: wait until leader sets our release_seq
-//   if (lb->release_seq[ctx_.local_rank].load(std::memory_order_acquire) == seq) {
-//     acked_wrs_.insert(ctx_.barrier_wr);
-// #ifndef USE_MSCCLPP_FIFO_BACKEND
-//     ctx_.barrier_inflight = false;
-//     ctx_.barrier_wr = -1;
-// #endif
-//   }
-// }
+void Proxy::barrier_check() {
+  if (!ctx_.barrier_inflight) return;
+
+  uint64_t const seq = ctx_.barrier_seq;
+  // Node leader aggregates local arrivals
+  static thread_local uint64_t last_sent_seq = 0;
+  if (last_sent_seq != seq) {
+    last_sent_seq = seq;
+    if (cfg_.node_idx == 0) {
+      // Global leader: mark self-arrival; remote arrivals will come via
+      // your existing CQ handler.
+      if (ctx_.barrier_arrived.empty()) {
+        ctx_.barrier_arrived.assign(ctxs_for_all_ranks_.size(), 0);
+        ctx_.barrier_arrival_count = 0;
+      }
+      if (!ctx_.barrier_arrived[0]) {
+        ctx_.barrier_arrived[0] = 1;
+        ++ctx_.barrier_arrival_count;
+      }
+    } else {
+      post_barrier_msg(/*dst=*/cfg_.rank - cfg_.node_idx * MAX_NUM_GPUS, /*ack=*/false, seq);
+    }
+  }
+
+  if (cfg_.node_idx == 0) {
+    if (ctx_.barrier_arrival_count == cfg_.num_nodes) {
+      std::unordered_map<std::string, int> leader_for_ip;
+      for (int r = 0; r < (int)peers_.size(); ++r) {
+        if ((r - cfg_.rank) % MAX_NUM_GPUS == 0) {
+          leader_for_ip[peers_[r].ip] = r;
+        }
+      }
+      for (auto const& kv : leader_for_ip) {
+        std::string const& ip = kv.first;
+        int leader_r = kv.second;
+        if (ip == peers_[0].ip) continue;
+        post_barrier_msg(leader_r, true, seq);
+      }
+      ctx_.barrier_arrived.clear();
+      ctx_.barrier_arrival_count = 0;
+
+      acked_wrs_.insert(ctx_.barrier_wr);
+#ifndef USE_MSCCLPP_FIFO_BACKEND
+      ctx_.barrier_inflight = false;
+      ctx_.barrier_wr = -1;
+#endif
+      return;
+    }
+  }
+
+  // When global release comes back (CQ handler should set these):
+  if (ctx_.barrier_released && ctx_.barrier_release_seq == seq) {
+    // Fan-out to local ranks via shared memory
+    for (int lr = 0; lr < ctx_.num_local_ranks; ++lr) {
+      lb->release_seq[lr].store(seq, std::memory_order_release);
+    }
+    // Reset local mask for next barrier and consume the global release
+    ctx_.barrier_released = false;
+
+    // Complete WR
+    acked_wrs_.insert(ctx_.barrier_wr);
+#ifndef USE_MSCCLPP_FIFO_BACKEND
+    ctx_.barrier_inflight = false;
+    ctx_.barrier_wr = -1;
+#endif
+  }
+}

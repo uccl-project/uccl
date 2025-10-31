@@ -263,38 +263,23 @@ class WriteImm {
   uint32_t imm_data_;
 };
 
-// Barrier Immediate Data
-// Barrier works per-subset: each subset = ranks with same (rank % MAX_NUM_GPUS)
-// Layout:
-// [31]: 0 (non-atomic)
-// [30]: 1 (control/barrier)
-// [29]: ACK bit
-// [28:11]: SEQ (18 bits)
-// [10:8]: SUBSET_ID (3 bits) - 0-7
-// [7:0]: SRC_RANK (8 bits)
 struct BarrierImm {
+  // [31]=0 (non-atomic), [30]=1 (control), [29]=ACK,
+  // [28:8]=SEQ (21 bits), [7:0]=SRC_RANK
   static constexpr uint32_t kCtrlBit = 1u << 30;
   static constexpr uint32_t kAckBit = 1u << 29;
-
-  static inline uint32_t Pack(bool ack, uint32_t seq, uint8_t subset_id, uint8_t src_rank) {
-    return kCtrlBit |
-           (ack ? kAckBit : 0u) |
-           ((seq & 0x3FFFFu) << 11) |      // 18 bits for seq at [28:11]
-           ((subset_id & 0x7u) << 8) |      // 3 bits for subset_id at [10:8]
-           uint32_t(src_rank);               // 8 bits for rank at [7:0]
-  }
-
   static inline bool IsAck(uint32_t imm) { return (imm & kAckBit) != 0u; }
-  static inline uint32_t GetSeq(uint32_t imm) { return (imm >> 11) & 0x3FFFFu; }
-  static inline uint8_t GetSubsetId(uint32_t imm) { return (imm >> 8) & 0x7u; }
-  static inline uint8_t GetRank(uint32_t imm) { return imm & 0xFFu; }
-
+  static inline uint32_t Pack(bool ack, uint32_t seq, uint8_t src_rank) {
+    return kCtrlBit | (ack ? kAckBit : 0u) |
+           ((seq & 0x1FFFFFu) << 8)  // 21 bits for seq
+           | uint32_t(src_rank);
+  }
+  static inline uint32_t Seq(uint32_t imm) { return (imm >> 8) & 0x1FFFFFu; }
+  static inline uint8_t Rank(uint32_t imm) { return imm & 0xFFu; }
   explicit BarrierImm(uint32_t imm = 0) : value(imm) {}
   bool GetIsAck() const { return IsAck(value); }
-  uint32_t GetSeq() const { return GetSeq(value); }
-  uint8_t GetSubsetId() const { return GetSubsetId(value); }
-  uint8_t GetRank() const { return GetRank(value); }
-  uint32_t GetImmData() const { return value; }
+  uint32_t GetSeq() const { return Seq(value); }
+  uint8_t GetRank() const { return Rank(value); }
 
   uint32_t value;
 };
@@ -310,7 +295,8 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
                               RDMAConnectionInfo* local,
                               RDMAConnectionInfo* remote);
 
-void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote);
+void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
+                      bool use_normal_mode);
 
 void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info);
 
@@ -318,23 +304,22 @@ void modify_qp_to_init(ProxyCtx& S);
 void local_poll_completions(ProxyCtx& S,
                             std::unordered_set<uint64_t>& acked_wrs,
                             int thread_idx, std::vector<ProxyCtx*>& ctx_by_tag);
-void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& ring,
-                                int ne, ibv_wc* wc,
-                                std::vector<ProxyCtx*>& ctx_by_tag,
-                                void* atomic_buffer_ptr, int num_ranks,
-                                int num_experts,
-                                std::set<PendingUpdate>& pending_atomic_updates,
-                                int my_rank, int num_nodes);
+void remote_process_completions(
+    ProxyCtx& S, int idx, CopyRingBuffer& ring, int ne, ibv_wc* wc,
+    std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr, int num_ranks,
+    int num_experts, std::set<PendingUpdate>& pending_atomic_updates,
+    int my_rank, int num_nodes, bool use_normal_mode = false);
 void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
                           RDMAConnectionInfo* local_info, int rank,
-                          size_t num_rings);
+                          size_t num_rings, bool use_normal_mode);
 ibv_cq* create_per_thread_cq(ProxyCtx& S);
 void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                              std::vector<ProxyCtx*>& ctx_by_tag,
                              void* atomic_buffer_ptr, int num_ranks,
                              int num_experts,
                              std::set<PendingUpdate>& pending_atomic_updates,
-                             int my_rank, int num_nodes);
+                             int my_rank, int num_nodes,
+                             bool use_normal_mode = false);
 void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
                           int thread_idx, int local_rank);
 void remote_send_ack(ProxyCtx* ctx, struct ibv_qp* ack_qp, uint64_t& wr_id,
@@ -345,7 +330,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              std::vector<uint64_t> const& wrs_to_post,
                              std::vector<TransferCmd> const& cmds_to_post,
                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                             int my_rank, int thread_idx);
+                             int my_rank, int thread_idx, bool use_normal_mode);
 void local_process_completions(ProxyCtx& S,
                                std::unordered_set<uint64_t>& acked_wrs,
                                int thread_idx, ibv_wc* wc, int ne,
@@ -355,14 +340,14 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& acked_wrs,
                   std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr,
                   int num_ranks, int num_experts,
                   std::set<PendingUpdate>& pending_atomic_updates, int my_rank,
-                  int num_nodes);
+                  int num_nodes, bool use_normal_mode = false);
 void post_atomic_operations(ProxyCtx& S,
                             std::vector<uint64_t> const& wrs_to_post,
                             std::vector<TransferCmd> const& cmds_to_post,
                             std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
                             int my_rank, int thread_idx,
-                            std::unordered_set<uint64_t>& acked_wrs);
-
+                            std::unordered_set<uint64_t>& acked_wrs,
+                            bool use_normal_mode);
 void apply_pending_updates(ProxyCtx& ctx,
                            std::set<PendingUpdate>& pending_atomic_updates,
                            void* atomic_buffer_ptr, int num_experts,

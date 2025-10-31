@@ -27,7 +27,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     int expert_idx, int lane_id, int message_idx,
     uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
     bool is_combine, int low_latency_buffer_idx = 0, uint64_t atomic_offset = 0,
-    uint64_t atomic_val = 0) {
+    uint64_t atomic_val = 0, bool use_normal_mode = false) {
   // NOTE(MaoZiming): different from the nvshmemi_ibgda_put_nbi_warp in
   // ibgda_device.cuh, we don't do warp-cooperation.
   if (lane_id != 0) return;
@@ -45,13 +45,13 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   auto* h = reinterpret_cast<d2hq::D2HHandle*>(
       static_cast<uintptr_t>(d2h_channel_addrs[d2h_channel_idx]));
 
-#ifdef USE_NORMAL_MODE
-  if (low_latency_buffer_idx == -1) {
-    /* Normal mode */
-    expert_idx = 0;
-    low_latency_buffer_idx = 0;
+  if (use_normal_mode) {
+    if (low_latency_buffer_idx == -1) {
+      /* Normal mode */
+      expert_idx = 0;
+      low_latency_buffer_idx = 0;
+    }
   }
-#endif
 #ifdef USE_MSCCLPP_FIFO_BACKEND
   // FIFO path: no head/tail; push does backpressure.
   {
@@ -63,12 +63,12 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     cmd.req_lptr = lptr_val;
     cmd.bytes = bytes_val;
     cmd.dst_rank = dst_rank;
-#ifdef USE_NORMAL_MODE
-    cmd.atomic_offset = atomic_offset;
-    cmd.atomic_val = atomic_val;
-#else
-    cmd.expert_idx = expert_idx;
-#endif
+    if (use_normal_mode) {
+      cmd.atomic_offset = atomic_offset;
+      cmd.atomic_val = atomic_val;
+    } else {
+      cmd.expert_idx = expert_idx;
+    }
     h->atomic_set_and_commit(cmd, &slot);
   }
 #else
@@ -82,7 +82,8 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     cur_head = h->head();
     cur_tail = h->tail();
     inflight = cur_head - cur_tail;
-    if (inflight < kMaxInflight) {
+    if (inflight <
+        (use_normal_mode ? kMaxInflightNormal : kMaxInflightLowLatency)) {
       uint64_t slot = cur_head;
       TransferCmd cmd{};
       // TODO(MaoZiming): Check fields here.
@@ -99,22 +100,23 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
         trap();
       }
 
-#ifdef USE_NORMAL_MODE
-      if (atomic_offset >> 16) {
-        printf("[nvshmemi_ibgda_put_nbi_warp] atomic_offset too large: %llu\n",
-               (unsigned long long)atomic_offset);
-        trap();
+      if (use_normal_mode) {
+        if (atomic_offset >> 16) {
+          printf(
+              "[nvshmemi_ibgda_put_nbi_warp] atomic_offset too large: %llu\n",
+              (unsigned long long)atomic_offset);
+          trap();
+        }
+        if (atomic_val >> 8) {
+          printf("[nvshmemi_ibgda_put_nbi_warp] atomic_val too large: %llu\n",
+                 (unsigned long long)atomic_val);
+          trap();
+        }
+        cmd.atomic_offset = atomic_offset;
+        cmd.atomic_val = atomic_val;
+      } else {
+        cmd.expert_idx = expert_idx;
       }
-      if (atomic_val >> 8) {
-        printf("[nvshmemi_ibgda_put_nbi_warp] atomic_val too large: %llu\n",
-               (unsigned long long)atomic_val);
-        trap();
-      }
-      cmd.atomic_offset = atomic_offset;
-      cmd.atomic_val = atomic_val;
-#else
-      cmd.expert_idx = expert_idx;
-#endif
       h->atomic_set_and_commit(cmd, &slot);
       break;
     }
@@ -138,16 +140,14 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     int warp_id, bool is_local_copy = false,
     uint64_t const* d2h_channel_addrs = nullptr, int num_d2h_channel_addrs = 0,
     bool is_combine = true, int low_latency_buffer_idx = 0,
-    bool skip_remote = false) {
+    bool skip_remote = false, bool use_normal_mode = false) {
   if (is_local_copy) {
     atomicAdd(reinterpret_cast<unsigned long long*>(rptr),
               static_cast<unsigned long long>(value));
   } else {
-#ifdef USE_NORMAL_MODE
-    if (skip_remote) {
+    if (use_normal_mode && skip_remote) {
       return;
     }
-#endif
     rptr -= atomic_base_addr;
     int thread_idx = (warp_id % num_d2h_channel_addrs) % kNumThBlocks;
     int per_thread_d2h_channel_idx =
@@ -160,12 +160,12 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
         static_cast<uintptr_t>(d2h_channel_addrs[d2h_channel_idx]));
 
     auto last_print = clock64();
-#ifdef USE_NORMAL_MODE
-    if (low_latency_buffer_idx == -1) {
-      /* Normal mode */
-      low_latency_buffer_idx = 0;
+    if (use_normal_mode) {
+      if (low_latency_buffer_idx == -1) {
+        /* Normal mode */
+        low_latency_buffer_idx = 0;
+      }
     }
-#endif
 #ifdef USE_MSCCLPP_FIFO_BACKEND
     {
       uint64_t slot = 0;
@@ -186,7 +186,8 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
       cur_head = h->head();
       cur_tail = h->tail();
       inflight = cur_head - cur_tail;
-      if (inflight < kMaxInflight) {
+      if (inflight <
+          (use_normal_mode ? kMaxInflightNormal : kMaxInflightLowLatency)) {
         uint64_t slot = cur_head;
         TransferCmd cmd{};
         cmd.cmd_type =
@@ -320,6 +321,7 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
       }
     }
 #endif
+    break;
   }
 
   // Then wait for all QUIET commands to complete
@@ -367,9 +369,10 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
       }
     }
 #endif
+    break;
   }
 
-  // Then wait for each proxy's barrier to complete
+  // Then wait for each proxy’s barrier to complete
   for (int i = 0; i < num_posted; ++i) {
     auto* h = reinterpret_cast<d2hq::D2HHandle*>(
         static_cast<uintptr_t>(d2h_channel_addrs[i * kChannelPerProxy]));
