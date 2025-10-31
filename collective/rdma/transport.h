@@ -1016,6 +1016,8 @@ class RDMAEndpoint {
 
   int ib_relaxed_ordering_enabled_;
 
+  bool fixed_engine_offset_ = false;
+
  public:
   RDMAEndpoint(int num_engines_per_dev);
 
@@ -1050,6 +1052,9 @@ class RDMAEndpoint {
   void cleanup_resources();
 
   bool initialize_engine_by_dev(int dev, bool enable_p2p_listen);
+
+  bool initialize_engine_by_dev(int dev, bool enable_p2p_listen,
+                                bool fixed_engine_offset);
 
   void create_p2p_socket();
   /// For testing easily.
@@ -1201,6 +1206,9 @@ class RDMAEndpoint {
   inline uint32_t find_oblivious_engine_idx(int dev);
 
   inline int find_first_engine_idx_on_dev(int dev) {
+    if (fixed_engine_offset_) {
+      return 0;
+    }
     return dev * num_engines_per_dev_;
   }
 

@@ -193,7 +193,8 @@ void Endpoint::initialize_engine() {
   // Initialize the engine based on the GPU index.
   std::cout << "Lazy creation of engine, GPU index: " << local_gpu_idx_
             << std::endl;
-  ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_], false);
+  // Initialize engine by fixed engine offset since we did lazy initialization
+  ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_], false, true);
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
 
   send_unified_task_ring_ =
