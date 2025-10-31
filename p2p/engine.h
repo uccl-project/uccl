@@ -278,7 +278,7 @@ class Endpoint {
   void cleanup_uds_socket();
 
   /*
-   * Initialize the engine with the specified GPU index.
+   * Initialize the engine
    * Internal helper function for lazy initialization.
    */
   void initialize_engine();
