@@ -364,7 +364,7 @@ struct alignas(128) RingBuffer {
   }
 
   __host__ __device__ __forceinline__ uint64_t volatile_head() {
-    uint64_t val;
+    uint64_t val = 0;
 #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
     return ld_volatile(&head);
 #elif defined(__x86_64__)

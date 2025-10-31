@@ -115,7 +115,7 @@ def _discover_local_ip():
         # This usually returns the private IP in cloud environments
         local_ip = socket.gethostbyname(hostname)
         # Skip loopback addresses
-        if not local_ip.startswith('127.'):
+        if not local_ip.startswith("127."):
             return local_ip
     except:
         pass
@@ -491,14 +491,14 @@ def bench_kineto(
 
 
 def initialize_uccl(
-    scratch_ptr, 
-    scratch_nbytes, 
-    rank, 
-    num_ranks, 
-    group, 
-    num_experts=0, 
+    scratch_ptr,
+    scratch_nbytes,
+    rank,
+    num_ranks,
+    group,
+    num_experts=0,
     is_intranode=False,
-    use_normal_mode=False
+    use_normal_mode=False,
 ):
     try:
         for shm_file in glob.glob("/dev/shm/uccl_barrier_*"):
@@ -570,11 +570,17 @@ def initialize_uccl(
     dist.barrier(group)
     if not is_intranode:
         if rank == 0:
-            print(f"[UCCL] Starting dual mode for internode communication (num_nodes={num_nodes}, num_ranks={num_ranks})", flush=True)
+            print(
+                f"[UCCL] Starting dual mode for internode communication (num_nodes={num_nodes}, num_ranks={num_ranks})",
+                flush=True,
+            )
         for proxy in proxies:
             proxy.start_dual()
         if rank == 0:
-            print(f"[UCCL] Dual mode started, waiting for RDMA connections to establish...", flush=True)
+            print(
+                f"[UCCL] Dual mode started, waiting for RDMA connections to establish...",
+                flush=True,
+            )
 
     workers = None
     # if hasattr(ep, "PeerCopyManager"):
