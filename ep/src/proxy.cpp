@@ -988,7 +988,13 @@ void Proxy::barrier_check() {
         ++ctx_.barrier_arrival_count;
       }
     } else {
-      post_barrier_msg(/*dst=*/cfg_.rank - cfg_.node_idx * MAX_NUM_GPUS,
+      int rank = cfg_.rank - cfg_.node_idx * MAX_NUM_GPUS;
+      if (rank < 0 || rank >= MAX_NUM_GPUS) {
+        printf("rank: %d, node_idx: %d invalid for barrier\n", cfg_.rank,
+               cfg_.node_idx);
+      }
+      assert(rank >= 0 && rank < MAX_NUM_GPUS);
+      post_barrier_msg(/*dst=*/rank,
                        /*ack=*/false, seq);
     }
   }
@@ -997,7 +1003,7 @@ void Proxy::barrier_check() {
     if (ctx_.barrier_arrival_count == cfg_.num_nodes) {
       std::unordered_map<std::string, int> leader_for_ip;
       for (int r = 0; r < (int)peers_.size(); ++r) {
-        if ((r - cfg_.rank) % MAX_NUM_GPUS == 0) {
+        if (r >= MAX_NUM_GPUS && (r - cfg_.rank) % MAX_NUM_GPUS == 0) {
           leader_for_ip[peers_[r].ip] = r;
         }
       }

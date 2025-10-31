@@ -456,11 +456,6 @@ def initialize_uccl(
     is_intranode=False,
     use_normal_mode=False,
 ):
-    try:
-        for shm_file in glob.glob("/dev/shm/uccl_barrier_*"):
-            os.remove(shm_file)
-    except Exception:
-        pass
     local_rank = int(os.environ["LOCAL_RANK"])
     nproc_per_node = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
     node_idx = rank // nproc_per_node
@@ -529,11 +524,6 @@ def destroy_uccl(proxies, workers):
         pass
     try:
         ep.unregister_proxy(device_index)
-    except Exception:
-        pass
-    try:
-        for shm_file in glob.glob("/dev/shm/uccl_barrier_*"):
-            os.remove(shm_file)
     except Exception:
         pass
 

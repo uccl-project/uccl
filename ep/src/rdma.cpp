@@ -1488,7 +1488,9 @@ void remote_process_completions_normal_mode(
       bool is_ack = bimm.GetIsAck();
       uint32_t seq = bimm.GetSeq();
       uint16_t src = bimm.GetRank();
-      if (my_rank == 0) {
+      // First node.
+      // TODO(MaoZiming): pass node_idx instead.
+      if (my_rank < MAX_NUM_GPUS) {
         if (!is_ack) {
           if (S.barrier_arrived.empty()) {
             assert(S.barrier_arrival_count == 0 &&
