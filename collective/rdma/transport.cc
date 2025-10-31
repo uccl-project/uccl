@@ -845,10 +845,10 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev,
     int start_engine_idx = dev * num_engines_per_dev_;
     int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
     if (fixed_engine_offset_) {
-      start_engine_idx = num_engines_per_dev_;
+      start_engine_idx = 0;
       end_engine_idx = num_engines_per_dev_ - 1;
     }
-    printf("Initialized engines: %d to %d\n", start_engine_idx, end_engine_idx);
+    printf("Initializing engines: %d to %d\n", start_engine_idx, end_engine_idx);
     int numa_node = RDMAFactory::get_factory_dev(dev)->numa_node;
 
     for (int engine_id = start_engine_idx; engine_id <= end_engine_idx;
