@@ -12,7 +12,12 @@ except ImportError as exc:
     raise
 
 from uccl.ep import EventHandle, Config
-from deep_ep.utils import EventOverlap, check_nvlink_connections, initialize_uccl, destroy_uccl
+from deep_ep.utils import (
+    EventOverlap,
+    check_nvlink_connections,
+    initialize_uccl,
+    destroy_uccl,
+)
 
 
 class Buffer:
@@ -76,7 +81,7 @@ class Buffer:
             group.rank(),
             dist.get_world_size(group),
             group,
-            use_normal_mode=not low_latency_mode
+            use_normal_mode=not low_latency_mode,
         )
         check_nvlink_connections(group)
 
@@ -93,8 +98,33 @@ class Buffer:
             local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])
         else:
             local_world_size = torch.cuda.device_count()
-        
-        print('rank:', self.rank, 'group_size:', self.group_size, 'group:', self.group, 'num_nvl_bytes:', self.num_nvl_bytes, 'num_rdma_bytes:', self.num_rdma_bytes, 'low_latency_mode:', self.low_latency_mode, 'explicitly_destroy:', self.explicitly_destroy, 'device_index:', device_index, 'proxies:', self.proxies, 'workers:', self.workers, 'local_world_size:', local_world_size, 'rdma_buffer_ptr:', rdma_buffer_ptr)
+
+        print(
+            "rank:",
+            self.rank,
+            "group_size:",
+            self.group_size,
+            "group:",
+            self.group,
+            "num_nvl_bytes:",
+            self.num_nvl_bytes,
+            "num_rdma_bytes:",
+            self.num_rdma_bytes,
+            "low_latency_mode:",
+            self.low_latency_mode,
+            "explicitly_destroy:",
+            self.explicitly_destroy,
+            "device_index:",
+            device_index,
+            "proxies:",
+            self.proxies,
+            "workers:",
+            self.workers,
+            "local_world_size:",
+            local_world_size,
+            "rdma_buffer_ptr:",
+            rdma_buffer_ptr,
+        )
 
         self.runtime = ep.Buffer(
             self.rank,
@@ -140,7 +170,7 @@ class Buffer:
         )
         assert self.runtime.is_available()
         self.connect_atomic_buffer(self.proxies[0])
-        
+
         for proxy in self.proxies:
             proxy.set_atomic_buffer_ptr(self.proxies[0].get_atomic_buffer_ptr())
 

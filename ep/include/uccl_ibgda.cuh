@@ -186,8 +186,8 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
       cur_head = h->head();
       cur_tail = h->tail();
       inflight = cur_head - cur_tail;
-      if (inflight < (use_normal_mode ? kMaxInflightNormal
-                                           : kMaxInflightLowLatency)) {
+      if (inflight <
+          (use_normal_mode ? kMaxInflightNormal : kMaxInflightLowLatency)) {
         uint64_t slot = cur_head;
         TransferCmd cmd{};
         cmd.cmd_type =
