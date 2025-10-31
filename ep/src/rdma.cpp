@@ -934,6 +934,7 @@ static void post_rdma_async_batched_normal_mode(
                     bad->wr_id);
           std::abort();
         }
+      }
 #endif
     }
   }

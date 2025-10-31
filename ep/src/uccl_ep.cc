@@ -405,7 +405,7 @@ class Buffer {
       int expert_alignment, uccl::Config const& config,
       std::optional<EventHandle>& previous_event, bool async,
       bool allocate_on_comm_stream) {
-#if !defined(__HIP_PLATFORM_AMD__) && !defined(__HIPCC__)
+
     // In dispatch, CPU will busy-wait until GPU receive tensor size metadata
     // from other ranks, which can be quite long. If users of DeepEP need to
     // execute other Python code on other threads, such as KV transfer, their
@@ -745,9 +745,6 @@ class Buffer {
             send_rdma_head,
             send_nvl_head,
             event};
-#else
-    return {};
-#endif
   }
 
   std::tuple<torch::Tensor, std::optional<torch::Tensor>,

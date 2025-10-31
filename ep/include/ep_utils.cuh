@@ -4,8 +4,11 @@
 #include <atomic>
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#include "amd_nanosleep.cuh"
 #define __syncwarp() __builtin_amdgcn_wave_barrier()
-#define clock wall_clock
+#ifndef clock64
+#define clock64 wall_clock64
+#endif
 
 #ifndef DISABLE_AGGRESSIVE_ATOMIC
 #define HIP_ATOMIC_LOAD(ptr, order, scope) __builtin_nontemporal_load((ptr))
@@ -836,8 +839,7 @@ __device__ __forceinline__ int ld_acquire_cta(int const* ptr) {
 __forceinline__ __device__ void acquire_lock(int* mutex) {
   // To make later memory operations valid, we must use `acquire` for memory
   // semantics
-  while (atomic_cas_cta_acquire(mutex, 0, 1) != 0)
-    ;
+  while (atomic_cas_cta_acquire(mutex, 0, 1) != 0);
 }
 
 __forceinline__ __device__ void release_lock(int* mutex) {
