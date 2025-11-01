@@ -934,6 +934,19 @@ static void post_rdma_async_batched_normal_mode(
                     bad->wr_id);
           std::abort();
         }
+        size_t const last = kgroup - 1;
+        uint64_t const batch_tail_wr = wr_ids[last];
+        {
+          auto [it, inserted] =
+              S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
+          if (!inserted) {
+            fprintf(stderr,
+                    "thread_idx: %d, Error: tail wr_id %lu already exists "
+                    "(map=%p)\n",
+                    thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
+            std::abort();
+          }
+        }
       }
 #endif
     }
