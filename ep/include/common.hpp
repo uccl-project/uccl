@@ -24,6 +24,7 @@
 #endif
 
 #define USE_MSCCLPP_FIFO_BACKEND
+// #define USE_SUBSET_BARRIER
 #define kAtomicBufferSize 81960
 #define kQueueSize 1024
 #define kQueueMask (kQueueSize - 1)
@@ -50,7 +51,6 @@
 #define MAIN_THREAD_CPU_IDX 31
 #define MAX_NUM_GPUS 8
 #define RECEIVER_BATCH_SIZE 16
-#define NVLINK_SM_PER_PROCESS 1
 #define kAtomicWrTag 0xa70a000000000000ULL
 #define kAtomicMask 0x0000FFFFFFFFFFFFULL
 #define kBarrierWrTag 0xbaba000000000000ULL

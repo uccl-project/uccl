@@ -8,6 +8,8 @@
 #include <cuda_pipeline.h>
 #endif
 
+#define NVLINK_SM_PER_PROCESS 1
+
 __global__ void peer_copy_kernel(char const* __restrict__ src,
                                  char* __restrict__ dst, size_t num_bytes) {
   size_t idx = (blockIdx.y * gridDim.x + blockIdx.x) * blockDim.x + threadIdx.x;
