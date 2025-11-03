@@ -396,7 +396,7 @@ LOW_LATENCY_DISPATCH_RECV:
               "Same node but rdma_recv_count_internode is not zero! src_rank: "
               "%d, rank: %d, max_nvl_peers: %d\n",
               src_rank, rank, max_nvl_peers);
-          assert(false);
+          EP_DEVICE_ASSERT(false);
         }
       }
       if (src_rank / max_nvl_peers != rank / max_nvl_peers) {
@@ -407,7 +407,7 @@ LOW_LATENCY_DISPATCH_RECV:
               "Different node but rdma_recv_count is not zero! src_rank: %d, "
               "rank: %d, max_nvl_peers: %d\n",
               src_rank, rank, max_nvl_peers);
-          assert(false);
+          EP_DEVICE_ASSERT(false);
         }
       }
       auto wait_recv_cost = clock64() - start_time;
@@ -936,7 +936,7 @@ LOW_LATENCY_COMBINE_RECV:
               "Same node but rdma_recv_flag_internode is not zero! src_rank: "
               "%d, rank: %d, max_nvl_peers: %d\n",
               src_rank, rank, max_nvl_peers);
-          assert(false);
+          EP_DEVICE_ASSERT(false);
         }
       }
       if (src_rank / max_nvl_peers != rank / max_nvl_peers) {
@@ -946,7 +946,7 @@ LOW_LATENCY_COMBINE_RECV:
               "Different node but rdma_recv_flag is not zero! src_rank: %d, "
               "rank: %d, max_nvl_peers: %d\n",
               src_rank, rank, max_nvl_peers);
-          assert(false);
+          EP_DEVICE_ASSERT(false);
         }
       }
 
