@@ -12,12 +12,6 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-#ifndef clock64
-#define clock64 wall_clock64
-#endif
-#endif
-
 #define MAX_IB_DEVS 32
 #define MEASURE_PER_OP_LATENCY
 #define MEASURE_PER_VERB_LATENCY

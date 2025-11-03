@@ -14,22 +14,73 @@
 #define HIP_ATOMIC_LOAD(ptr, order, scope) __builtin_nontemporal_load((ptr))
 #define HIP_ATOMIC_STORE(val, ptr, order, scope) \
   __builtin_nontemporal_store((val), (ptr))
-#define HIP_ATOMIC_ADD(val, ptr, order, scope) \
-  (__builtin_nontemporal_load((ptr)) + (val))
 #else
 #define HIP_ATOMIC_LOAD(ptr, order, scope) \
   __hip_atomic_load((ptr), (order), (scope))
 #define HIP_ATOMIC_STORE(val, ptr, order, scope) \
   __hip_atomic_store((ptr), (val), (order), (scope))
-#define HIP_ATOMIC_ADD(val, ptr, order, scope) \
-  __hip_atomic_fetch_add((ptr), (val), (order), (scope))
 #endif
+
+// workgroup-level barrier sync used shared memory
+namespace amd {
+
+struct SharedData {
+  uint32_t barrier[MAX_GROUPS];
+};
+
+__shared__ SharedData shared_data;
+
+__device__ __forceinline__ void barrier_init(int barrier_id) {
+  shared_data.barrier[barrier_id] = 0;
+}
+
+template <typename T, int MemoryOrder = __ATOMIC_RELAXED,
+          int MemoryScope = __HIP_MEMORY_SCOPE_WORKGROUP>
+__device__ __forceinline__ T barrier_arrive(T* bar_ptr, int num_participants) {
+  T v = __hip_atomic_fetch_add(bar_ptr, 1U, MemoryOrder, MemoryScope);
+
+  if ((v & MAX_GROUPS_MASK) == num_participants - 1)
+    __hip_atomic_fetch_add(bar_ptr, MAX_GROUPS - num_participants, MemoryOrder,
+                           MemoryScope);
+
+  return v & ~MAX_GROUPS_MASK;
+}
+
+template <typename T, int MemoryOrder = __ATOMIC_RELAXED,
+          int MemoryScope = __HIP_MEMORY_SCOPE_WORKGROUP>
+__device__ __forceinline__ void barrier_wait(T* bar_ptr, T target) {
+  while ((__hip_atomic_load(bar_ptr, MemoryOrder, MemoryScope) &
+          ~MAX_GROUPS_MASK) == target)
+    __builtin_amdgcn_s_sleep(1);
+}
+
+template <typename T, int MemoryOrder = __ATOMIC_RELAXED,
+          int MemoryScope = __HIP_MEMORY_SCOPE_WORKGROUP>
+__device__ __forceinline__ void barrier_sync(T* bar_ptr,
+                                             uint32_t num_participants) {
+  // bound check
+  if (num_participants >= MAX_GROUPS) {
+    __syncthreads();
+    return;
+  }
+  if (num_participants == 1) {
+    __syncwarp();
+    return;
+  }
+
+  auto const lane_id = __lane_id();
+  if (lane_id == 0) {
+    barrier_wait(bar_ptr, barrier_arrive(bar_ptr, num_participants));
+  }
+  __syncwarp();
+}
+}  // namespace amd
 #endif
 
 __forceinline__ __device__ int get_lane_id() {
   int lane_id;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  lane_id = __builtin_amdgcn_mbcnt_hi(~0u, __builtin_amdgcn_mbcnt_lo(~0u, 0u));
+  lane_id = __lane_id();
 #else
   asm("mov.s32 %0, %laneid;" : "=r"(lane_id));
 #endif
@@ -551,8 +602,8 @@ __device__ __forceinline__ int atomic_add_release_global(int const* ptr,
                                                          int value) {
   int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = HIP_ATOMIC_ADD(value, const_cast<int*>(ptr), __ATOMIC_RELEASE,
-                       __HIP_MEMORY_SCOPE_AGENT);
+  ret = __hip_atomic_fetch_add(const_cast<int*>(ptr), value, __ATOMIC_RELEASE,
+                               __HIP_MEMORY_SCOPE_AGENT);
 #else
   asm volatile("atom.add.release.gpu.global.s32 %0, [%1], %2;"
                : "=r"(ret)
@@ -611,28 +662,40 @@ __device__ __forceinline__ void st_release_cta(int const* ptr, int val) {
 }
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-__device__ inline void shmem_sync_barrier(int UNUSED, int num_threads) {
-  EP_DEVICE_ASSERT(num_threads % WARP_SIZE == 0);
-  if (num_threads <= WARP_SIZE) {
-    __syncwarp();
+
+template <bool kUseUnsafeSync = false>
+__device__ inline void workgroup_sync_barrier(int barrier_id, int num_threads) {
+  // If __syncthreads is feasible in kernel,
+  // using __syncthreads directly will be better than shared memory based
+  // barrier.
+  if constexpr (kUseUnsafeSync) {
+    // maybe stuck in __syncthreads
+    num_threads >= WARP_SIZE ? __syncthreads() : __syncwarp();
   } else {
-    __threadfence_block();
-    __builtin_amdgcn_s_barrier();
+    EP_DEVICE_ASSERT(num_threads % WARP_SIZE == 0 and
+                     "invalid number of threads");
+
+    auto* bar_ptr = &amd::shared_data.barrier[barrier_id];
+    auto const num_participants =
+        static_cast<uint32_t>(num_threads / WARP_SIZE);
+    amd::barrier_sync(bar_ptr, num_participants);
   }
 }
 #endif
 
+template <bool kUseUnsafeSync = false>
 __device__ inline void sync_barrier(int barrier_id, int num_threads) {
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  shmem_sync_barrier(barrier_id, num_threads);
+  workgroup_sync_barrier<kUseUnsafeSync>(barrier_id, num_threads);
 #else
   asm volatile("bar.sync %0, %1;" : : "r"(barrier_id), "r"(num_threads));
 #endif
 }
 
+template <bool kUseUnsafedSync = false>
 __device__ inline void sync_barrier_1(int num_threads) {
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  shmem_sync_barrier(0, num_threads);
+  workgroup_sync_barrier<kUseUnsafedSync>(1, num_threads);
 #else
   asm volatile("bar.sync 1, %0;" ::"r"(num_threads));
 #endif
@@ -717,22 +780,28 @@ __device__ __forceinline__ void memory_fence() {
 }
 
 __forceinline__ __device__ int atomic_cas_cta_acquire(int* addr, int x, int y) {
-  int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  EP_DEVICE_ASSERT(false);
+  // TODO: __hip_atomic_compare_exchange_strong or
+  // __hip_atomic_compare_exchange_weak
+  __hip_atomic_compare_exchange_strong(addr, &x, y, __ATOMIC_ACQUIRE,
+                                       __ATOMIC_RELAXED,
+                                       __HIP_MEMORY_SCOPE_WORKGROUP);
+  return x;
 #else
+  int ret;
   asm volatile("atom.acquire.cta.shared::cta.cas.b32 %0, [%1], %2, %3;"
                : "=r"(ret)
                : "l"(addr), "r"(x), "r"(y)
                : "memory");
-#endif
   return ret;
+#endif
 }
 
 __forceinline__ __device__ int atomic_exch_cta_release(int* addr, int x) {
   int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  EP_DEVICE_ASSERT(false);
+  ret = __hip_atomic_exchange(addr, x, __ATOMIC_RELEASE,
+                              __HIP_MEMORY_SCOPE_WORKGROUP);
 #else
   asm volatile("atom.release.cta.shared::cta.exch.b32 %0, [%1], %2;"
                : "=r"(ret)
@@ -771,7 +840,8 @@ __forceinline__ __device__ void barrier_block(int** barrier_signal_ptrs,
 
     if (clock64() - start_time > NUM_TIMEOUT_CYCLES and thread_id < kNumRanks) {
       printf(
-          "DeepEP timeout check failed: rank = %d, thread = %d, value = %d)\n",
+          "DeepEP timeout check failed: rank = %d, thread = %d, value = "
+          "%d)\n",
           rank, thread_id, value);
       trap();
     }
@@ -839,11 +909,12 @@ __device__ __forceinline__ int ld_acquire_cta(int const* ptr) {
 __forceinline__ __device__ void acquire_lock(int* mutex) {
   // To make later memory operations valid, we must use `acquire` for memory
   // semantics
-  while (atomic_cas_cta_acquire(mutex, 0, 1) != 0);
+  while (atomic_cas_cta_acquire(mutex, 0, 1) != 0)
+    ;
 }
 
 __forceinline__ __device__ void release_lock(int* mutex) {
-  // To make previous memory operations visible to other threads, we must use
-  // `release` for memory semantics
+  // To make previous memory operations visible to other threads, we must
+  // use `release` for memory semantics
   atomic_exch_cta_release(mutex, 0);
 }

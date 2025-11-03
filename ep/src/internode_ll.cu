@@ -97,18 +97,19 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   // Expert counts
   __shared__ int shared_num_tokens_sent_per_expert[kNumMaxWarpGroups];
 
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  // initialize barrier
+  amd::shared_data.barrier[1] = 0;
+#endif
+
   // Sending phase
   if ((phases & LOW_LATENCY_SEND_PHASE) == 0) goto LOW_LATENCY_DISPATCH_RECV;
 
-    // There are 2 kinds of warps in this part:
-    // 1. The first-kind warps for FP8 cast and sending top-k tokens
-    // 2. The last warp for reading `topk_idx` and count for per-expert
-    // information
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  if (warp_id < num_warps) {
-#else
+  // There are 2 kinds of warps in this part:
+  // 1. The first-kind warps for FP8 cast and sending top-k tokens
+  // 2. The last warp for reading `topk_idx` and count for per-expert
+  // information
   if (warp_id < num_warps - 1) {
-#endif
     constexpr int kNumElemsPerRead = sizeof(int4) / sizeof(nv_bfloat16);
     EP_STATIC_ASSERT(kHidden % (WARP_SIZE * kNumElemsPerRead) == 0,
                      "Invalid hidden");
@@ -232,12 +233,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                      : 0;
       }
     }
-  }
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  if (warp_id == num_warps - 1) {
-#else
-  else if (warp_id == num_warps - 1) {
-#endif
+  } else if (warp_id == num_warps - 1) {
     // NOTE(MaoZiming): These checks are ibgda specific.
     EP_DEVICE_ASSERT(num_sms > 1);
     if (sm_id == 0) {
@@ -438,7 +434,7 @@ LOW_LATENCY_DISPATCH_RECV:
                       dispatch_wait_recv_cost_stats + src_rank),
                   wait_recv_cost);
     }
-    sync_barrier(warp_group_id + 2, num_warps_per_group * WARP_SIZE);
+    sync_barrier<true>(warp_group_id + 2, num_warps_per_group * WARP_SIZE);
     num_recv_tokens = shared_num_recv_tokens[warp_group_id];
     recv_token_begin_idx = shared_recv_token_begin_idx[warp_group_id];
 
@@ -868,7 +864,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
 
     // Put the finishing flag
     EP_DEVICE_ASSERT(num_warps_per_group > 1 and num_warp_groups < 16);
-    sync_barrier(warp_group_id + 1, num_warps_per_group * WARP_SIZE);
+    sync_barrier<true>(warp_group_id + 1, num_warps_per_group * WARP_SIZE);
     if (sub_warp_id == 1 and lane_id == 0) {
       while (ld_acquire_global(atomic_clean_flag) == 0)
         ;

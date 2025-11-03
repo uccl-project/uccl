@@ -74,7 +74,6 @@ if __name__ == "__main__":
         cxx_flags.append("-DDISABLE_AGGRESSIVE_PTX_INSTRS")
         nvcc_flags.append("-DDISABLE_AGGRESSIVE_PTX_INSTRS")
 
-
     # Put them together
     extra_compile_args = {
         "cxx": cxx_flags,
