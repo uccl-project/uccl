@@ -42,7 +42,6 @@ def _run_server_adv(args, ep, remote_metadata):
     peer = 0
     print("[Server] Waiting for connection …")
     ok, r_ip, r_gpu, conn_id = ep.accept()
-    """
     assert ok
     print(f"[Server] Connected to {r_ip} (GPU {r_gpu}) id={conn_id}")
     for sz in args.sizes:
@@ -55,6 +54,9 @@ def _run_server_adv(args, ep, remote_metadata):
             buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
             ok, mr_id = ep.reg(ptr, size_per_block)
             assert ok
+            break
+        break
+    """
             buf_v.append(buf)
             ptr_v.append(ptr)
             mr_id_v.append(mr_id)
@@ -74,7 +76,6 @@ def _run_client_write(args, ep, remote_metadata):
     peer = 1
     ip, port, r_gpu = p2p.Endpoint.parse_metadata(remote_metadata)
     ok, conn_id = ep.connect(ip, r_gpu, remote_port=port)
-    """
     assert ok
     print(f"[Client] Connected to {ip}:{port} id={conn_id}")
 
@@ -89,6 +90,9 @@ def _run_client_write(args, ep, remote_metadata):
             buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
             ok, mr_id = ep.reg(ptr, size_per_block)
             assert ok
+            break
+        break
+    """
             buf_v.append(buf)
             ptr_v.append(ptr)
             mr_id_v.append(mr_id)
@@ -147,7 +151,7 @@ def parse_sizes(v: str) -> List[int]:
 
 def main():
     p = argparse.ArgumentParser("UCCL WRITE benchmark (one-sided)")
-    p.add_argument("--local-gpu-idx", type=int, default=0)
+    p.add_argument("--local-gpu-idx", type=int, default=2)
     p.add_argument("--num-cpus", type=int, default=4)
     p.add_argument("--device", choices=["cpu", "gpu"], default="gpu")
     p.add_argument(

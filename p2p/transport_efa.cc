@@ -29,7 +29,7 @@ struct metadata {
 };
 
 RDMAEndpoint::RDMAEndpoint(int gpu_index) 
-    : p2p_listen_fd_(-1), p2p_listen_port_(0){
+    : p2p_listen_fd_(-1), p2p_listen_port_(0) {
     // Get the number of available EFA devices
     dev_list_ = ibv_get_device_list(&num_devices_);
     if (!dev_list_ || num_devices_ <= 0) {
@@ -42,6 +42,8 @@ RDMAEndpoint::RDMAEndpoint(int gpu_index)
     pd_list_.clear();
     cq_ex_list_.clear();
     qp_list_.clear();
+    ah_map_.clear();
+    qpn_map_.clear();
     mr_map_.clear();
     remote_rkey_list_.clear();
     remote_addr_list_.clear();
@@ -50,11 +52,22 @@ RDMAEndpoint::RDMAEndpoint(int gpu_index)
 RDMAEndpoint::~RDMAEndpoint() {
     // Clean up all memory regions in the map
     for (auto& pair : mr_map_) {
-        if (pair.second) {
-            ibv_dereg_mr(pair.second);
+        for (auto mr : pair.second) {
+            if (mr) {
+                ibv_dereg_mr(mr);
+            }
         }
     }
     mr_map_.clear();
+    // Clean up all address handles in the map
+    for (auto& [conn_id, ah_list] : ah_map_) {
+        for (auto ah : ah_list) {
+            if (ah) {
+                ibv_destroy_ah(ah);
+            }
+        }
+    }
+    ah_map_.clear();
     // Clean up all QPs in the vector
     for (auto qp : qp_list_) {
         if (qp) {
@@ -83,6 +96,7 @@ RDMAEndpoint::~RDMAEndpoint() {
         }
     }
     ctx_list_.clear();
+    qpn_map_.clear();
     remote_rkey_list_.clear();
     remote_addr_list_.clear();
 
@@ -322,7 +336,8 @@ bool RDMAEndpoint::initialize_engine_by_dev(std::vector<int> dev_indices){
     return true;
 }
 
-ConnID RDMAEndpoint::uccl_connect(
+bool RDMAEndpoint::uccl_connect(
+    uint64_t conn_id,
     const std::vector<int>& devs, int local_gpuidx,
     const std::vector<int>& remote_devs, int remote_gpuidx,
     std::string remote_ip, uint16_t remote_port) {
@@ -350,12 +365,8 @@ ConnID RDMAEndpoint::uccl_connect(
     struct timeval timeout = {5, 0};  // 5 seconds timeout
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     
-    struct ConnID conn_id = {
-        .qpn_list_ = {},
-        .ah_list_ = {},
-    };
-    
-    // Prepare local metadata for each device
+    auto& ah_list = ah_map_[conn_id];
+    auto& qpn_list = qpn_map_[conn_id];
     for (int i = 0; i < devs.size(); i++) {
         metadata local_meta, remote_meta;
         local_meta.qpn = qp_list_[i]->qp_num;
@@ -372,15 +383,17 @@ ConnID RDMAEndpoint::uccl_connect(
         printf("QPN and GID exchanged for device idx %d\n", devs[i]);
 
         // This is the key to enabling RDMA read/write over SRD.
-        conn_id.ah_list_.push_back(create_ah(pd_list_[i], remote_meta.gid));
-        conn_id.qpn_list_.push_back(remote_meta.qpn);
+        ah_list.push_back(create_ah(pd_list_[i], remote_meta.gid));
+        qpn_list.push_back(remote_meta.qpn);
     }
+    
     close(sock);
     
-    return conn_id;
+    return true;
 }
 
-ConnID RDMAEndpoint::uccl_accept(
+bool RDMAEndpoint::uccl_accept(
+    uint64_t conn_id,
     const std::vector<int>& devs, int listen_fd,
     int local_gpuidx, std::string& remote_ip,
     const std::vector<int>& remote_devs, int* remote_gpuidx) {
@@ -395,11 +408,8 @@ ConnID RDMAEndpoint::uccl_accept(
     struct timeval timeout = {5, 0};  // 5 seconds timeout
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     
-    struct ConnID conn_id = {
-        .qpn_list_ = {},
-        .ah_list_ = {},
-    };
-    
+    auto& ah_list = ah_map_[conn_id];
+    auto& qpn_list = qpn_map_[conn_id];
     for (int i = 0; i < devs.size(); i++) {
         metadata local_meta, remote_meta;
         local_meta.qpn = qp_list_[i]->qp_num;
@@ -416,13 +426,54 @@ ConnID RDMAEndpoint::uccl_accept(
         printf("QPN and GID exchanged for device idx %d\n", devs[i]);
 
         // This is the key to enabling RDMA read/write over SRD.
-        conn_id.ah_list_.push_back(create_ah(pd_list_[i], remote_meta.gid));
-        conn_id.qpn_list_.push_back(remote_meta.qpn);
+        ah_list.push_back(create_ah(pd_list_[i], remote_meta.gid));
+        qpn_list.push_back(remote_meta.qpn);
     }
 
     close(sock);
     
-    return conn_id;
+    return true;
+}
+
+int RDMAEndpoint::uccl_regmr(std::vector<int> devs, void* addr, size_t len,
+                            int type, uint64_t mr_id, 
+                            struct Mhandle** mhandle) {
+    std::vector<struct ibv_mr*> mr_list;
+    for (int i = 0; i < devs.size(); i++) {
+        struct ibv_mr* mr = ibv_reg_mr(pd_list_[i], addr, len,
+                                       IBV_ACCESS_LOCAL_WRITE);
+
+        if (!mr) {
+            fprintf(stderr, "Failed to register memory region\n");
+            for (auto m : mr_list) {
+                ibv_dereg_mr(m);
+            }
+            return -1;
+        }
+        mr_list.push_back(mr);
+    }
+    mr_map_[mr_id] = mr_list;
+    
+    // Create a single mhandle with the mr_id
+    *mhandle = new Mhandle();
+    (*mhandle)->mr_id = mr_id;
+    return 0;
+}
+
+void RDMAEndpoint::uccl_deregmr(struct Mhandle* mhandle) {
+    if (mhandle) {
+        // Find and deregister all MRs associated with this mr_id
+        auto it = mr_map_.find(mhandle->mr_id);
+        if (it != mr_map_.end()) {
+            for (auto mr : it->second) {
+                if (mr) {
+                    ibv_dereg_mr(mr);
+                }
+            }
+            mr_map_.erase(it);
+        }
+        delete mhandle;
+    }
 }
 
 }

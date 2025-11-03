@@ -27,6 +27,11 @@ struct MR {
   uccl::Mhandle* mhandle_;
 };
 
+struct MREFA {
+  uint64_t mr_id_;
+  transport_efa::Mhandle* mhandle_;
+};
+
 struct Conn {
   uint64_t conn_id_;
   uccl::ConnID uccl_conn_id_;
@@ -37,7 +42,6 @@ struct Conn {
 
 struct ConnEFA {
   uint64_t conn_id_;
-  transport_efa::ConnID uccl_conn_id_;
   std::string ip_addr_;
   int remote_gpu_idx_;
   int uds_sockfd_ = -1;  // Unix Domain Socket file descriptor for local IPC
@@ -295,6 +299,7 @@ class Endpoint {
   std::unordered_map<uint64_t, ConnEFA*> conn_id_to_conn_efa_;
   mutable std::shared_mutex mr_mu_;
   std::unordered_map<uint64_t, MR*> mr_id_to_mr_;
+  std::unordered_map<uint64_t, MREFA*> mr_id_to_mr_efa_;
 
   // Single-threaded.
   std::unordered_map<int, uint64_t> rank2conn_;

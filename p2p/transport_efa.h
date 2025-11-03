@@ -14,9 +14,8 @@ inline bool is_efa_available() {
     return std::filesystem::exists("/opt/amazon/efa");
 }
 
-struct ConnID {
-    std::vector<uint32_t> qpn_list_;
-    std::vector<struct ibv_ah*> ah_list_;
+struct Mhandle {
+  uint64_t mr_id;
 };
 
 class RDMAEndpoint {
@@ -37,13 +36,15 @@ public:
 
     bool initialize_engine_by_dev(std::vector<int> dev_indices);
 
-    ConnID uccl_connect(
+    bool uccl_connect(
+        uint64_t conn_id,
         const std::vector<int>& devs, int local_gpuidx,
         const std::vector<int>& remote_devs, int remote_gpuidx,
         std::string remote_ip, uint16_t remote_port);
         // get gid, qpn
     
-    ConnID uccl_accept(
+    bool uccl_accept(
+        uint64_t conn_id,
         const std::vector<int>& devs, int listen_fd,
         int local_gpuidx, std::string& remote_ip,
         const std::vector<int>& remote_devs, int* remote_gpuidx);
@@ -66,6 +67,11 @@ public:
 
     void get_gid(struct ibv_context* ctx, int gid_index, union ibv_gid* gid);
 
+    int uccl_regmr(std::vector<int> devs, void* data, size_t len, int type,
+                   uint64_t mr_id, struct Mhandle** mhandle);
+
+    void uccl_deregmr(struct Mhandle* mhandle);
+
 private:
     struct ibv_qp* create_qp(struct ibv_context* ctx,
                              struct ibv_pd* pd,
@@ -78,7 +84,9 @@ private:
     std::vector<struct ibv_pd*> pd_list_;
     std::vector<struct ibv_cq_ex*> cq_ex_list_;
     std::vector<struct ibv_qp*> qp_list_;
-    std::unordered_map<uint64_t, struct ibv_mr*> mr_map_;
+    std::unordered_map<uint64_t, std::vector<struct ibv_ah*>> ah_map_;
+    std::unordered_map<uint64_t, std::vector<uint32_t>> qpn_map_;
+    std::unordered_map<uint64_t, std::vector<struct ibv_mr*>> mr_map_;
     std::vector<uint32_t> remote_rkey_list_;
     std::vector<uint64_t> remote_addr_list_;
 };

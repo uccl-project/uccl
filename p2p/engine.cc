@@ -92,11 +92,10 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
     }
   }
   if (is_efa_available_) {
-      // NUMA node is the same for all devices on the same GPU.
-      const char* dev_name = ep_efa_->get_dev_name(
-        gpu_to_devs_efa[local_gpu_idx_][0]);
-      numa_node_ = uccl::get_dev_numa_node(dev_name);
-      printf("[EFA] GPU %d: NUMA node %d\n", local_gpu_idx_, numa_node_);
+    // NUMA node is the same for all devices on the same GPU.
+    const char* dev_name = ep_efa_->get_dev_name(
+      gpu_to_devs_efa[local_gpu_idx_][0]);
+    numa_node_ = uccl::get_dev_numa_node(dev_name);
   } else {
     numa_node_ = uccl::RDMAFactory::get_factory_dev(
                      gpu_to_dev[local_gpu_idx_])
@@ -114,9 +113,9 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
 
   send_unified_task_ring_ =
-      uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
+    uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
   recv_unified_task_ring_ =
-      uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
+    uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
 
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
@@ -182,27 +181,29 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
   conn_id = next_conn_id_.fetch_add(1);
 
   if (is_efa_available_) {
-    std::future<transport_efa::ConnID> uccl_conn_id_future = std::async(
-      std::launch::async, [this, remote_gpu_idx, &ip_addr, remote_port]() {
+    std::future<bool> uccl_conn_success_future = std::async(
+      std::launch::async, [this, conn_id, remote_gpu_idx, &ip_addr, remote_port]() {
         return ep_efa_->uccl_connect(
+          conn_id,
           gpu_to_devs_efa[local_gpu_idx_], local_gpu_idx_,
           gpu_to_devs_efa[remote_gpu_idx], remote_gpu_idx,
           ip_addr, remote_port);
       });
 
     // Check for Python signals (eg, ctrl+c) while waiting for connection
-    while (uccl_conn_id_future.wait_for(std::chrono::seconds(0)) !=
+    while (uccl_conn_success_future.wait_for(std::chrono::seconds(0)) !=
            std::future_status::ready) {
       auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
       std::this_thread::sleep_for(std::chrono::seconds(1));
     }
-    transport_efa::ConnID uccl_conn_id = uccl_conn_id_future.get();
+    bool uccl_conn_success = uccl_conn_success_future.get();
+    CHECK(uccl_conn_success) << "Failed to establish EFA connection";
 
     // Store the connection ID.
     {
       std::unique_lock<std::shared_mutex> lock(conn_mu_);
       conn_id_to_conn_efa_[conn_id] =
-          new ConnEFA{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
+        new ConnEFA{conn_id, ip_addr, remote_gpu_idx};
     }
   } else {
     std::future<uccl::ConnID> uccl_conn_id_future = std::async(
@@ -224,7 +225,7 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
       {
         std::unique_lock<std::shared_mutex> lock(conn_mu_);
         conn_id_to_conn_[conn_id] =
-            new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
+          new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
       }
   }
 
@@ -318,28 +319,29 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   conn_id = next_conn_id_.fetch_add(1);
 
   if (is_efa_available_) {
-    std::future<transport_efa::ConnID> uccl_conn_id_future =
-      std::async(std::launch::async, [this, &ip_addr, &remote_gpu_idx]() {
+    std::future<bool> uccl_conn_success_future =
+      std::async(std::launch::async, [this, conn_id, &ip_addr, &remote_gpu_idx]() {
         auto devs_idx = gpu_to_devs_efa[local_gpu_idx_];
         auto p2p_listen_fd = ep_efa_->get_p2p_listen_fd();
         std::vector<int> remote_devs_idx;
-        return ep_efa_->uccl_accept(devs_idx, p2p_listen_fd, local_gpu_idx_,
+        return ep_efa_->uccl_accept(conn_id, devs_idx, p2p_listen_fd, local_gpu_idx_,
                                     ip_addr, remote_devs_idx, &remote_gpu_idx);
       });
 
     // Check for Python signals (eg, ctrl+c) while waiting for connection
-    while (uccl_conn_id_future.wait_for(std::chrono::seconds(0)) !=
+    while (uccl_conn_success_future.wait_for(std::chrono::seconds(0)) !=
           std::future_status::ready) {
       auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
       std::this_thread::sleep_for(std::chrono::seconds(1));
     }
-    transport_efa::ConnID uccl_conn_id = uccl_conn_id_future.get();
+    bool uccl_conn_success = uccl_conn_success_future.get();
+    CHECK(uccl_conn_success) << "Failed to accept EFA connection";
 
     // Store the connection ID.
     {
       std::unique_lock<std::shared_mutex> lock(conn_mu_);
       conn_id_to_conn_efa_[conn_id] =
-          new ConnEFA{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
+          new ConnEFA{conn_id, ip_addr, remote_gpu_idx};
     }
   } else {
     std::future<uccl::ConnID> uccl_conn_id_future =
@@ -371,19 +373,34 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
 }
 
 bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
-  mr_id = next_mr_id_.fetch_add(1);
 
-  uccl::Mhandle* mhandle;
-  ep_->uccl_regmr(gpu_to_dev[local_gpu_idx_], const_cast<void*>(data), size, 0,
-                  &mhandle);
-  if (mhandle->mr == nullptr) {
-    std::cerr << "[Endpoint::reg] Failed to register memory region, "
-              << "mhandle->mr is null\n";
-    std::abort();
-  }
-  {
-    std::unique_lock<std::shared_mutex> lock(mr_mu_);
-    mr_id_to_mr_[mr_id] = new MR{mr_id, mhandle};
+  mr_id = next_mr_id_.fetch_add(1);
+  if (is_efa_available_) {
+    transport_efa::Mhandle* mhandle;
+    ep_efa_->uccl_regmr(gpu_to_devs_efa[local_gpu_idx_],
+                        const_cast<void*>(data), size, 0, mr_id, &mhandle);
+    if (mhandle == nullptr) {
+      std::cerr << "[Endpoint::reg] Failed to register memory region, "
+                << "mhandle is null\n";
+      std::abort();
+    }
+    {
+      std::unique_lock<std::shared_mutex> lock(mr_mu_);
+      mr_id_to_mr_efa_[mr_id] = new MREFA{mr_id, mhandle};
+    }
+  } else {
+    uccl::Mhandle* mhandle;
+    ep_->uccl_regmr(gpu_to_dev[local_gpu_idx_],
+                    const_cast<void*>(data), size, 0, &mhandle);
+    if (mhandle->mr == nullptr) {
+      std::cerr << "[Endpoint::reg] Failed to register memory region, "
+                << "mhandle->mr is null\n";
+      std::abort();
+    }
+    {
+      std::unique_lock<std::shared_mutex> lock(mr_mu_);
+      mr_id_to_mr_[mr_id] = new MR{mr_id, mhandle};
+    }
   }
 
   return true;
@@ -428,10 +445,17 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
 bool Endpoint::dereg(uint64_t mr_id) {
   {
     std::unique_lock<std::shared_mutex> lock(mr_mu_);
-    MR* mr = mr_id_to_mr_[mr_id];
-    ep_->uccl_deregmr(mr->mhandle_);
-    delete mr;
-    mr_id_to_mr_.erase(mr_id);
+    if (is_efa_available_) {
+      MREFA* mr = mr_id_to_mr_efa_[mr_id];
+      ep_efa_->uccl_deregmr(mr->mhandle_);
+      delete mr;
+      mr_id_to_mr_efa_.erase(mr_id);
+    } else {
+      MR* mr = mr_id_to_mr_[mr_id];
+      ep_->uccl_deregmr(mr->mhandle_);
+      delete mr;
+      mr_id_to_mr_.erase(mr_id);
+    }
   }
   return true;
 }
