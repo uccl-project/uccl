@@ -100,6 +100,14 @@ void listener_thread_func(uccl_conn_t* conn) {
     switch (md.op) {
       case UCCL_READ: {
         tx_msg_t tx_data = md.data.tx_data;
+#ifdef USE_TCPX
+        if (!conn->engine->endpoint->find_mr_by_addr(
+                tx_data.data_ptr, tx_data.data_size, &mr_id)) {
+          std::cerr << "Local memory not registered for address: "
+                    << tx_data.data_ptr << std::endl;
+          break;
+        }
+#else
         auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
         if (local_mem_iter == mem_reg_info.end()) {
           std::cerr << "Local memory not registered for address: "
@@ -107,6 +115,7 @@ void listener_thread_func(uccl_conn_t* conn) {
           break;
         }
         mr_id = local_mem_iter->second;
+#endif
 
         char out_buf[sizeof(FifoItem)];
         conn->engine->endpoint->advertise(conn->conn_id, mr_id,
@@ -139,6 +148,14 @@ void listener_thread_func(uccl_conn_t* conn) {
       }
       case UCCL_WRITE: {
         tx_msg_t tx_data = md.data.tx_data;
+#ifdef USE_TCPX
+        if (!conn->engine->endpoint->find_mr_by_addr(
+                tx_data.data_ptr, tx_data.data_size, &mr_id)) {
+          std::cerr << "Local memory not registered for address: "
+                    << tx_data.data_ptr << std::endl;
+          break;
+        }
+#else
         auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
         if (local_mem_iter == mem_reg_info.end()) {
           std::cerr << "Local memory not registered for address: "
@@ -146,6 +163,7 @@ void listener_thread_func(uccl_conn_t* conn) {
           break;
         }
         mr_id = local_mem_iter->second;
+#endif
 
         uccl_mr_t temp_mr;
         temp_mr.mr_id = mr_id;
@@ -188,6 +206,14 @@ void listener_thread_func(uccl_conn_t* conn) {
         }
         for (size_t i = 0; i < count; i++) {
           tx_msg_t tx_data = tx_data_array[i];
+#ifdef USE_TCPX
+          if (!conn->engine->endpoint->find_mr_by_addr(
+                  tx_data.data_ptr, tx_data.data_size, &mr_id)) {
+            std::cerr << "Local memory not registered for address: "
+                      << tx_data.data_ptr << " (item " << i << ")" << std::endl;
+            continue;
+          }
+#else
           auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
           if (local_mem_iter == mem_reg_info.end()) {
             std::cerr << "Local memory not registered for address: "
@@ -195,6 +221,7 @@ void listener_thread_func(uccl_conn_t* conn) {
             continue;
           }
           mr_id = local_mem_iter->second;
+#endif
 
           char out_buf[sizeof(FifoItem)];
           conn->engine->endpoint->advertise(conn->conn_id, mr_id,
@@ -262,6 +289,14 @@ void listener_thread_func(uccl_conn_t* conn) {
 
         for (size_t i = 0; i < count; i++) {
           tx_msg_t tx_data = tx_data_array[i];
+#ifdef USE_TCPX
+          if (!conn->engine->endpoint->find_mr_by_addr(
+                  tx_data.data_ptr, tx_data.data_size, &mr_id)) {
+            std::cerr << "Local memory not registered for address: "
+                      << tx_data.data_ptr << " (item " << i << ")" << std::endl;
+            continue;
+          }
+#else
           auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
           if (local_mem_iter == mem_reg_info.end()) {
             std::cerr << "Local memory not registered for address: "
@@ -269,6 +304,7 @@ void listener_thread_func(uccl_conn_t* conn) {
             continue;
           }
           mr_id = local_mem_iter->second;
+#endif
 
           uccl_mr_t temp_mr;
           temp_mr.mr_id = mr_id;

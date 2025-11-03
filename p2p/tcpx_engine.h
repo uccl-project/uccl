@@ -151,6 +151,7 @@ class Endpoint {
   /*Register the data with a specific interface. */
   bool reg(void const* data, size_t size, uint64_t& mr_id);
   bool dereg(uint64_t mr_id);
+  bool find_mr_by_addr(uintptr_t addr, size_t size, uint64_t* mr_id) const;
 
   /* Read data from the remote server asynchronously. */
   bool read_async(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,

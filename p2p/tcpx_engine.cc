@@ -586,6 +586,22 @@ bool Endpoint::dereg(uint64_t mr_id) {
   return true;
 }
 
+bool Endpoint::find_mr_by_addr(uintptr_t addr, size_t size,
+                               uint64_t* mr_id) const {
+  if (!mr_id || size == 0) return false;
+  std::lock_guard<std::mutex> lock(mr_mu_);
+  for (auto const& kv : mr_map_) {
+    uintptr_t base = reinterpret_cast<uintptr_t>(kv.second.base);
+    if (addr < base) continue;
+    size_t offset = static_cast<size_t>(addr - base);
+    if (offset + size <= kv.second.size) {
+      *mr_id = kv.first;
+      return true;
+    }
+  }
+  return false;
+}
+
 bool Endpoint::populate_conn_handles_(Conn& conn, uint64_t mr_id,
                                       MrEntry const& mr, bool is_recv,
                                       void** mhandle_out) {
