@@ -79,12 +79,7 @@ def create_nixl_agent_mc(role: str, dataset, zmq_socket, device_idx, backend):
     Create Nixl agents based on the role with Mooncake/UCCL backend
     """
     backend_name = "Mooncake" if backend == "mooncake" else "UCCL"
-    # device_idx is only supported by UCCL backend of nixl
-    config = (
-        nixl_agent_config(device_idx=device_idx, backends=[backend_name])
-        if backend == "uccl"
-        else nixl_agent_config(backends=[backend_name])
-    )
+    config = nixl_agent_config(backends=[backend_name])
     agent = nixl_agent(role, config)
     descs = agent.get_reg_descs(dataset)
     register_descs = agent.register_memory(descs)

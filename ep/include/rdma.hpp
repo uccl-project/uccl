@@ -295,7 +295,8 @@ void exchange_connection_info(int rank, char const* peer_ip, int tid,
                               RDMAConnectionInfo* local,
                               RDMAConnectionInfo* remote);
 
-void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote);
+void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
+                      bool use_normal_mode);
 
 void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info);
 
@@ -303,23 +304,22 @@ void modify_qp_to_init(ProxyCtx& S);
 void local_poll_completions(ProxyCtx& S,
                             std::unordered_set<uint64_t>& acked_wrs,
                             int thread_idx, std::vector<ProxyCtx*>& ctx_by_tag);
-void remote_process_completions(ProxyCtx& S, int idx, CopyRingBuffer& ring,
-                                int ne, ibv_wc* wc,
-                                std::vector<ProxyCtx*>& ctx_by_tag,
-                                void* atomic_buffer_ptr, int num_ranks,
-                                int num_experts,
-                                std::set<PendingUpdate>& pending_atomic_updates,
-                                int my_rank, int num_nodes);
+void remote_process_completions(
+    ProxyCtx& S, int idx, CopyRingBuffer& ring, int ne, ibv_wc* wc,
+    std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr, int num_ranks,
+    int num_experts, std::set<PendingUpdate>& pending_atomic_updates,
+    int my_rank, int num_nodes, bool use_normal_mode = false);
 void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
                           RDMAConnectionInfo* local_info, int rank,
-                          size_t num_rings);
+                          size_t num_rings, bool use_normal_mode);
 ibv_cq* create_per_thread_cq(ProxyCtx& S);
 void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                              std::vector<ProxyCtx*>& ctx_by_tag,
                              void* atomic_buffer_ptr, int num_ranks,
                              int num_experts,
                              std::set<PendingUpdate>& pending_atomic_updates,
-                             int my_rank, int num_nodes);
+                             int my_rank, int num_nodes,
+                             bool use_normal_mode = false);
 void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
                           int thread_idx, int local_rank);
 void remote_send_ack(ProxyCtx* ctx, struct ibv_qp* ack_qp, uint64_t& wr_id,
@@ -330,7 +330,7 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              std::vector<uint64_t> const& wrs_to_post,
                              std::vector<TransferCmd> const& cmds_to_post,
                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                             int my_rank, int thread_idx);
+                             int my_rank, int thread_idx, bool use_normal_mode);
 void local_process_completions(ProxyCtx& S,
                                std::unordered_set<uint64_t>& acked_wrs,
                                int thread_idx, ibv_wc* wc, int ne,
@@ -340,14 +340,14 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& acked_wrs,
                   std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr,
                   int num_ranks, int num_experts,
                   std::set<PendingUpdate>& pending_atomic_updates, int my_rank,
-                  int num_nodes);
+                  int num_nodes, bool use_normal_mode = false);
 void post_atomic_operations(ProxyCtx& S,
                             std::vector<uint64_t> const& wrs_to_post,
                             std::vector<TransferCmd> const& cmds_to_post,
                             std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
                             int my_rank, int thread_idx,
-                            std::unordered_set<uint64_t>& acked_wrs);
-
+                            std::unordered_set<uint64_t>& acked_wrs,
+                            bool use_normal_mode);
 void apply_pending_updates(ProxyCtx& ctx,
                            std::set<PendingUpdate>& pending_atomic_updates,
                            void* atomic_buffer_ptr, int num_experts,
