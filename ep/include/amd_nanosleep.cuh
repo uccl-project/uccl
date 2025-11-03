@@ -18,7 +18,7 @@
     uint64_t __stop = __builtin_readsteadycounter();                      \
     uint64_t __elapsed = (__stop - __start) * __tick_rate;                \
     if (__elapsed < __nsecs) {                                            \
-      printf("__nanosleep elapsed time less than %lu ns", __nsecs);      \
+      printf("__nanosleep elapsed time less than %lu ns", __nsecs);       \
       abort();                                                            \
     }                                                                     \
   } while (0)

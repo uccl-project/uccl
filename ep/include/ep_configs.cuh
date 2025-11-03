@@ -55,14 +55,15 @@
 #define __NV_SATFINITE __HIP_SATFINITE
 #define __NV_E4M3 __HIP_E4M3_FNUZ
 #define WARP_SIZE 64
-#define WARP_MASK 0xffffffffffffffff
+#define WARP_MASK 0xffffffffffffffffu
 #define MAX_NTHREADS 1024
-#define MAX_GROUPS (MAX_NTHREADS / WARP_SIZE)
+#define MAX_GROUPS (MAX_NTHREADS / WARP_SIZE)  // 16 warps in the block
+#define MAX_GROUPS_MASK 0xf
 
 #else
 #include <cuda_bf16.h>
 #define WARP_SIZE 32
-#define WARP_MASK 0xffffffff
+#define WARP_MASK 0xffffffffu
 #ifndef DISABLE_SM90_FEATURES
 #include <cuda_fp8.h>
 #else
