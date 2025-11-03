@@ -45,6 +45,7 @@ class Buffer:
         allow_nvlink_for_low_latency_mode: bool = True,
         allow_mnnvl: bool = False,
         explicitly_destroy: bool = False,
+        is_intranode: bool = False,
     ) -> None:
         """
         Initialize the communication buffer.
@@ -77,6 +78,7 @@ class Buffer:
             dist.get_world_size(group),
             group,
             use_normal_mode=not low_latency_mode,
+            is_intranode=is_intranode,
         )
         check_nvlink_connections(group)
 
