@@ -108,6 +108,19 @@ bool recv_ctrl_ack(int fd) {
   return hdr.type == CTRL_ACK;
 }
 
+constexpr uint64_t encode_chunk_token(uint32_t count, uint32_t bytes) {
+  return (static_cast<uint64_t>(count) << 32) |
+         static_cast<uint64_t>(bytes & 0xffffffffu);
+}
+
+inline uint32_t decode_chunk_count(uint64_t token) {
+  return static_cast<uint32_t>(token >> 32);
+}
+
+inline uint32_t decode_chunk_bytes(uint64_t token) {
+  return static_cast<uint32_t>(token & 0xffffffffu);
+}
+
 struct ChannelHandleMsg {
   uint32_t num_channels;
   uint32_t reserved;
@@ -832,6 +845,13 @@ bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
   item.size = static_cast<uint32_t>(len);
   item.offset = static_cast<uint64_t>(addr_u - base_addr);
   item.tag = next_tag_.fetch_add(1);
+  uint32_t chunk_bytes_hint =
+      static_cast<uint32_t>(std::min<size_t>(chunk_bytes_, 0xffffffffu));
+  uint32_t chunk_count_hint =
+      static_cast<uint32_t>((len + chunk_bytes_hint - 1) / chunk_bytes_hint);
+  if (chunk_count_hint == 0) chunk_count_hint = 1;
+  // Encode chunk scheduling hints so the passive side can mirror our pipeline.
+  item.token = encode_chunk_token(chunk_count_hint, chunk_bytes_hint);
   // Fifo item travels over the uccl control socket; the peer rehydrates it into
   // tag/offset parameters for TCPX operations.
   std::memcpy(out_buf, &item, sizeof(FifoItem));
@@ -862,6 +882,20 @@ bool Endpoint::queue_read_response(uint64_t conn_id,
   char* base_ptr =
       static_cast<char*>(mr.base) + static_cast<size_t>(fifo_item.offset);
   void const* base = static_cast<void const*>(base_ptr);
+
+  if (debug_enabled_) {
+    uint32_t hinted_chunks = decode_chunk_count(fifo_item.token);
+    uint32_t hinted_bytes = decode_chunk_bytes(fifo_item.token);
+    if (hinted_bytes == 0)
+      hinted_bytes = static_cast<uint32_t>(
+          std::min<size_t>(chunk_bytes_, 0xffffffffu));
+    if (hinted_chunks == 0)
+      hinted_chunks = static_cast<uint32_t>((fifo_item.size + hinted_bytes - 1) /
+                                            std::max<uint32_t>(hinted_bytes, 1));
+    std::cerr << "[tcpx] queue_read_response size=" << fifo_item.size
+              << " hinted_chunks=" << hinted_chunks
+              << " hinted_chunk_bytes=" << hinted_bytes << std::endl;
+  }
 
   uint64_t tid = 0;
   if (!post_send_(*conn_ptr, fifo_item.mr_id, mr, base, fifo_item.size,
@@ -931,6 +965,13 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
                           uint64_t* transfer_id) {
   if (!dst || size == 0) return false;
 
+  uint32_t advertised_chunk_count = decode_chunk_count(slot_item.token);
+  uint32_t advertised_chunk_bytes = decode_chunk_bytes(slot_item.token);
+  if (advertised_chunk_bytes == 0) {
+    advertised_chunk_bytes = static_cast<uint32_t>(
+        std::min<size_t>(chunk_bytes_, 0xffffffffu));
+  }
+
   Conn* conn_ptr = nullptr;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
@@ -954,6 +995,24 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
   uintptr_t dst_addr = reinterpret_cast<uintptr_t>(dst);
   if (dst_addr < base_addr || dst_addr + slot_item.size > base_addr + mr.size) {
     return false;
+  }
+
+  size_t local_chunk_bytes = chunk_bytes_;
+  size_t expected_chunks =
+      (slot_item.size + local_chunk_bytes - 1) /
+      std::max<size_t>(local_chunk_bytes, static_cast<size_t>(1));
+  if (advertised_chunk_count != 0 &&
+      expected_chunks != static_cast<size_t>(advertised_chunk_count) &&
+      debug_enabled_) {
+    std::cerr << "[tcpx] read_async chunk count mismatch (local="
+              << expected_chunks << " remote=" << advertised_chunk_count
+              << ")" << std::endl;
+  }
+  if (advertised_chunk_bytes != static_cast<uint32_t>(local_chunk_bytes) &&
+      debug_enabled_) {
+    std::cerr << "[tcpx] read_async chunk bytes mismatch (local="
+              << local_chunk_bytes << " remote=" << advertised_chunk_bytes
+              << ")" << std::endl;
   }
 
   // Reuse the advertised tag so the active peer can match this recv.
