@@ -63,6 +63,8 @@ struct MrEntry {
   size_t size = 0;
   int ptr_type = NCCL_PTR_CUDA;
   bool is_recv = true;
+  // Cache the TCPX registration handles for each connection so we only call
+  // tcpx_reg_mr once per direction.
   std::unordered_map<uint64_t, void*> send_handles;  // conn_id -> mhandle
   std::unordered_map<uint64_t, void*> recv_handles;  // conn_id -> mhandle
 };
@@ -77,6 +79,8 @@ struct PendingTransfer {
     bool needs_unpack = false;
     bool stage1_done = false;
     bool stage2_done = false;
+    // Bounce-buffer metadata used to launch the unpack kernel once the network
+    // transfer finishes.
     rx::UnpackDescriptorBlock desc_block{};
     cudaEvent_t event = nullptr;
   };
@@ -89,6 +93,8 @@ struct PendingTransfer {
   uint64_t mr_id = 0;
   size_t total_bytes = 0;
   uint32_t base_tag = 0;
+  // Transfer is expressed as a vector of chunks that flow through
+  // (TCP completion -> optional GPU unpack -> completion).
   std::vector<ChunkState> chunks;
   size_t chunks_completed = 0;
 };
@@ -199,6 +205,13 @@ class Endpoint {
   std::unique_ptr<device::UnpackLauncher> unpack_launcher_;
 
   size_t chunk_bytes_ = 0;
+  bool debug_enabled_ = false;
+
+  mutable std::mutex window_mu_;
+  // Sliding-window counters (how many chunks are currently in-flight per
+  // connection for send/recv directions).
+  std::unordered_map<uint64_t, size_t> send_inflight_chunks_;
+  std::unordered_map<uint64_t, size_t> recv_inflight_chunks_;
 
   static void free_conn_(std::unique_ptr<Conn>& conn);
   bool populate_conn_handles_(Conn& conn, uint64_t mr_id, bool is_recv,
