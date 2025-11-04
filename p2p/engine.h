@@ -75,8 +75,8 @@ class Endpoint {
 
   /*
    * Create endpoint without intializing the engine. Lazy creation of engine is
-   * done during  memory registration. Additionally, open a TCP listening thread
-   * waiting for incoming connections.
+   * done during  memory registration. Additionally, open a unified P2P socket
+   * for metadata exchanges.
    *
    * input:
    *   num_cpus: the number of CPUs to use for the engine
@@ -99,7 +99,10 @@ class Endpoint {
 
   std::vector<uint8_t> get_metadata();
 
-  std::vector<uint8_t> get_fixed_metadata();
+  /*
+   * Get the unified metadata for all devices.
+   */
+  std::vector<uint8_t> get_unified_metadata();
 
   /*
    * Parse endpoint metadata to extract IP address, port, and GPU index.

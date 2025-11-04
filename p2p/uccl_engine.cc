@@ -586,7 +586,8 @@ int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
   if (!engine || !metadata) return -1;
 
   try {
-    std::vector<uint8_t> metadata_vec = engine->endpoint->get_fixed_metadata();
+    std::vector<uint8_t> metadata_vec =
+        engine->endpoint->get_unified_metadata();
 
     std::string result;
     if (metadata_vec.size() == 10) {  // IPv4 format

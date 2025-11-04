@@ -122,7 +122,9 @@ Endpoint::Endpoint(uint32_t const num_cpus) : num_cpus_(num_cpus) {
 
   // Initialize the RDMA endpoint with lazy creation.
   ep_ = new uccl::RDMAEndpoint(num_cpus_);
-  ep_->create_p2p_socket();
+
+  // Create a unified P2P socket, which is used to synchronize dev_idx
+  ep_->create_unified_p2p_socket();
   // Only initialize mapping for detected GPUs
   int ngpus_detected = 0;
   GPU_RT_CHECK(gpuGetDeviceCount(&ngpus_detected));
@@ -275,7 +277,7 @@ std::vector<uint8_t> Endpoint::get_metadata() {
   return metadata;
 }
 
-std::vector<uint8_t> Endpoint::get_fixed_metadata() {
+std::vector<uint8_t> Endpoint::get_unified_metadata() {
   int idx = 0;
   std::string ip_str = get_oob_ip();
   uint16_t port = ep_->get_p2p_listen_port(0);
@@ -356,6 +358,10 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   // For demo purposes, simulate accepted connection
   conn_id = next_conn_id_.fetch_add(1);
 
+  // Wait until engine is intialized to get the correct local_gpu_idx_
+  while (!engine_initialized_) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
   std::future<uccl::ConnID> uccl_conn_id_future =
       std::async(std::launch::async, [this, &ip_addr, &remote_gpu_idx]() {
         auto dev_idx = gpu_to_dev[local_gpu_idx_];

@@ -762,8 +762,8 @@ int try_bind_listen_socket(int* sock_fd, int base_port,
   return -1;
 }
 
-void RDMAEndpoint::create_p2p_socket() {
-  fixed_engine_offset_ = true;
+void RDMAEndpoint::create_unified_p2p_socket() {
+  infer_dev_ = true;
   p2p_listen_ports_[0] = create_listen_socket(&p2p_listen_fds_[0]);
   DCHECK(p2p_listen_ports_[0] >= 0)
       << "Failed to bind after trying many ports!";
@@ -781,10 +781,6 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev,
     called = true;
     int start_engine_idx = dev * num_engines_per_dev_;
     int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
-    if (fixed_engine_offset_) {
-      start_engine_idx = 0;
-      end_engine_idx = num_engines_per_dev_ - 1;
-    }
     printf("Initializing engines: %d to %d\n", start_engine_idx,
            end_engine_idx);
     int numa_node = RDMAFactory::get_factory_dev(dev)->numa_node;
@@ -1084,8 +1080,8 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
               << std::endl;
   }
   std::cout << "UCCL: dev, local_gpuidx, remote_dev, remote_gpuidx: " << dev
-            << " " << local_gpuidx << " " << remote_dev << " "
-            << remote_gpuidx << std::endl;
+            << " " << local_gpuidx << " " << remote_dev << " " << remote_gpuidx
+            << std::endl;
 
   bool is_leader =
       is_local_leader(dev, local_gpuidx, factory_dev->local_ip_str, local_port,
