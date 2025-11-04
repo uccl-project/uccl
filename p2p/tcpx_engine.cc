@@ -2,11 +2,13 @@
 #include "tcpx/include/bootstrap.h"
 #include "tcpx/include/unpack_descriptor.h"
 #include <algorithm>
+#include <array>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <limits>
@@ -23,6 +25,7 @@ namespace {
 
 constexpr int kDefaultOobPort = 28900;
 constexpr int kCtrlBacklog = 128;
+constexpr size_t kDefaultChunkBytes = 512 * 1024;
 
 // Payloads exchanged on the lightweight TCP control plane.
 struct EndpointInfo {
@@ -33,12 +36,6 @@ struct EndpointInfo {
 };
 static_assert(std::is_trivially_copyable<EndpointInfo>::value,
               "EndpointInfo must be trivially copyable");
-
-struct HandlePayload {
-  ncclNetHandle_v7 handle;
-};
-static_assert(std::is_trivially_copyable<HandlePayload>::value,
-              "HandlePayload must be trivially copyable");
 
 enum CtrlMsgType : uint16_t {
   CTRL_ACK = 0x01,
@@ -110,6 +107,14 @@ bool recv_ctrl_ack(int fd) {
   return hdr.type == CTRL_ACK;
 }
 
+struct ChannelHandleMsg {
+  uint32_t num_channels;
+  uint32_t reserved;
+  std::array<ncclNetHandle_v7, 1> handles;
+};
+static_assert(std::is_trivially_copyable<ChannelHandleMsg>::value,
+              "ChannelHandleMsg must be trivially copyable");
+
 // Resolve a best effort control IP; used only to seed the metadata exchange.
 std::string get_local_ip() {
   char const* env_ip = std::getenv("UCCL_TCPX_CTRL_IP");
@@ -142,6 +147,15 @@ int get_env_int(char const* name, int def_val) {
   char const* value = std::getenv(name);
   if (!value || !*value) return def_val;
   return std::atoi(value);
+}
+
+size_t get_env_size_t(char const* name, size_t def_val) {
+  char const* value = std::getenv(name);
+  if (!value || !*value) return def_val;
+  char* end = nullptr;
+  unsigned long long parsed = std::strtoull(value, &end, 10);
+  if (end == value) return def_val;
+  return static_cast<size_t>(parsed);
 }
 
 // Score available TCPX NICs to find the best attachment for this GPU.
@@ -194,6 +208,13 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const /*num_cpus*/) {
   // UCCL_TCPX_OOB_PORT or the legacy UCCL_TCPX_CTRL_PORT environment variable.
   ctrl_port_ = get_env_int("UCCL_TCPX_OOB_PORT",
                            get_env_int("UCCL_TCPX_CTRL_PORT", kDefaultOobPort));
+
+  chunk_bytes_ = get_env_size_t("UCCL_TCPX_CHUNK_BYTES", kDefaultChunkBytes);
+  if (chunk_bytes_ == 0) {
+    chunk_bytes_ = kDefaultChunkBytes;
+  }
+  std::cerr << "[tcpx] chunk size configured to " << chunk_bytes_
+            << " bytes per transfer chunk" << std::endl;
 
   // Prepare TCP control listener
   ctrl_listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -257,7 +278,8 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const /*num_cpus*/) {
   if (cudaSetDevice(static_cast<int>(local_gpu_idx_)) != cudaSuccess) {
     throw std::runtime_error("tcpx: cudaSetDevice failed");
   }
-  if (cudaStreamCreate(&unpack_stream_) != cudaSuccess) {
+  if (cudaStreamCreateWithFlags(&unpack_stream_, cudaStreamNonBlocking) !=
+      cudaSuccess) {
     throw std::runtime_error("tcpx: failed to create CUDA stream");
   }
   device::UnpackLaunchConfig cfg;
@@ -385,23 +407,23 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
 
   auto conn = std::make_unique<Conn>();
 
-  // Prepare reverse listen for recv path
-  // Client temporarily listens so the server can push back a handle for the
-  // reverse (recv) direction. The handle itself is exchanged over the control
-  // TCP socket below.
   void* reverse_listen = nullptr;
-  HandlePayload reverse_handle{};
-  // Client publishes a temporary listener so the server can establish the recv
-  // direction once handles are exchanged.
-  if (tcpx_listen(dev_id_, &reverse_handle.handle, &reverse_listen) != 0 ||
+  ncclNetHandle_v7 reverse_handle{};
+  if (tcpx_listen(dev_id_, &reverse_handle, &reverse_listen) != 0 ||
       !reverse_listen) {
     std::cerr << "[tcpx] tcpx_listen (reverse) failed" << std::endl;
     return false;
   }
+  auto close_reverse_listen = [&]() {
+    if (reverse_listen) {
+      tcpx_close_listen(reverse_listen);
+      reverse_listen = nullptr;
+    }
+  };
 
   int sock_fd = ::socket(AF_INET, SOCK_STREAM, 0);
   if (sock_fd < 0) {
-    tcpx_close_listen(reverse_listen);
+    close_reverse_listen();
     return false;
   }
 
@@ -411,7 +433,7 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
   if (inet_pton(AF_INET, ip_addr.c_str(), &addr.sin_addr) != 1) {
     std::cerr << "[tcpx] invalid IP address " << ip_addr << std::endl;
     ::close(sock_fd);
-    tcpx_close_listen(reverse_listen);
+    close_reverse_listen();
     return false;
   }
 
@@ -420,7 +442,7 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
     std::cerr << "[tcpx] connect() to " << ip_addr << ":" << remote_port
               << " failed: " << strerror(errno) << std::endl;
     ::close(sock_fd);
-    tcpx_close_listen(reverse_listen);
+    close_reverse_listen();
     return false;
   }
 
@@ -434,40 +456,50 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
   // the TCPX handles.
   if (!send_ctrl_struct(sock_fd, local_info)) {
     ::close(sock_fd);
-    tcpx_close_listen(reverse_listen);
+    close_reverse_listen();
     return false;
   }
 
   EndpointInfo remote_info{};
   if (!recv_ctrl_struct(sock_fd, remote_info)) {
     ::close(sock_fd);
-    tcpx_close_listen(reverse_listen);
+    close_reverse_listen();
     return false;
   }
 
-  HandlePayload server_handle{};
-  // Server shares the forward-path TCPX handle; we connect immediately.
-  if (!recv_ctrl_struct(sock_fd, server_handle)) {
+  ChannelHandleMsg server_handles{};
+  if (!recv_ctrl_struct(sock_fd, server_handles)) {
     ::close(sock_fd);
-    tcpx_close_listen(reverse_listen);
+    close_reverse_listen();
+    return false;
+  }
+  if (server_handles.num_channels != 1) {
+    std::cerr << "[tcpx] unexpected channel count from server: "
+              << server_handles.num_channels << std::endl;
+    ::close(sock_fd);
+    close_reverse_listen();
     return false;
   }
 
-  ncclNetHandle_v7 server_handle_copy = server_handle.handle;
+  ncclNetHandle_v7 server_handle_copy = server_handles.handles[0];
   if (tcpx_connect_v5(dev_id_, &server_handle_copy, &conn->send_comm,
                       &conn->send_dev_handle) != 0 ||
       !conn->send_comm) {
     std::cerr << "[tcpx] tcpx_connect_v5 failed (client)" << std::endl;
     ::close(sock_fd);
-    tcpx_close_listen(reverse_listen);
+    close_reverse_listen();
     free_conn_(conn);
     return false;
   }
 
-  if (!send_ctrl_struct(sock_fd, reverse_handle)) {
+  ChannelHandleMsg client_handles{};
+  client_handles.num_channels = 1;
+  client_handles.reserved = 0;
+  client_handles.handles[0] = reverse_handle;
+  if (!send_ctrl_struct(sock_fd, client_handles)) {
     ::close(sock_fd);
     tcpx_close_send(conn->send_comm);
-    tcpx_close_listen(reverse_listen);
+    close_reverse_listen();
     free_conn_(conn);
     return false;
   }
@@ -491,12 +523,12 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
       std::cerr << "[tcpx] tcpx_accept_v5 failed (client reverse)" << std::endl;
       ::close(sock_fd);
       tcpx_close_send(conn->send_comm);
-      tcpx_close_listen(reverse_listen);
+      close_reverse_listen();
       free_conn_(conn);
       return false;
     }
   }
-  tcpx_close_listen(reverse_listen);
+  close_reverse_listen();
 
   if (!recv_ctrl_ack(sock_fd)) {
     std::cerr << "[tcpx] missing ACK from server" << std::endl;
@@ -560,11 +592,11 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
 
   auto conn = std::make_unique<Conn>();
 
-  HandlePayload listen_payload{};
-  // Share the forward-path listen handle so the client can establish its
-  // send_comm.
-  listen_payload.handle = listen_handle_;
-  if (!send_ctrl_struct(sock_fd, listen_payload)) {
+  ChannelHandleMsg server_handles{};
+  server_handles.num_channels = 1;
+  server_handles.reserved = 0;
+  server_handles.handles[0] = listen_handle_;
+  if (!send_ctrl_struct(sock_fd, server_handles)) {
     ::close(sock_fd);
     return false;
   }
@@ -591,16 +623,21 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
     }
   }
 
-  HandlePayload client_handle{};
-  // Client sends back the handle we should use for the reverse (recv_comm)
-  // direction.
-  if (!recv_ctrl_struct(sock_fd, client_handle)) {
+  ChannelHandleMsg client_handles{};
+  if (!recv_ctrl_struct(sock_fd, client_handles)) {
+    ::close(sock_fd);
+    tcpx_close_recv(conn->recv_comm);
+    return false;
+  }
+  if (client_handles.num_channels != 1) {
+    std::cerr << "[tcpx] unexpected channel count from client: "
+              << client_handles.num_channels << std::endl;
     ::close(sock_fd);
     tcpx_close_recv(conn->recv_comm);
     return false;
   }
 
-  ncclNetHandle_v7 client_handle_copy = client_handle.handle;
+  ncclNetHandle_v7 client_handle_copy = client_handles.handles[0];
   if (tcpx_connect_v5(dev_id_, &client_handle_copy, &conn->send_comm,
                       &conn->send_dev_handle) != 0 ||
       !conn->send_comm) {

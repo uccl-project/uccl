@@ -170,6 +170,8 @@ class Endpoint {
   /* Poll the status of the asynchronous receive. */
   bool poll_async(uint64_t transfer_id, bool* is_done);
 
+  size_t chunk_bytes() const { return chunk_bytes_; }
+
  private:
   int dev_id_ = -1;
   int ctrl_listen_fd_ = -1;
@@ -194,6 +196,8 @@ class Endpoint {
 
   cudaStream_t unpack_stream_ = nullptr;
   std::unique_ptr<device::UnpackLauncher> unpack_launcher_;
+
+  size_t chunk_bytes_ = 0;
 
   static void free_conn_(std::unique_ptr<Conn>& conn);
   bool populate_conn_handles_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
