@@ -294,6 +294,8 @@ class Buffer:
             packed_recv_layout_range,
             cumulative_local_expert_recv_stats,
         )
+        if use_fp8:
+            print(packed_recv_x)
         return (
             (packed_recv_x, packed_recv_x_scales) if use_fp8 else packed_recv_x,
             packed_recv_count,

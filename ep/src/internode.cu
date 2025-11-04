@@ -925,6 +925,13 @@ __global__ void __launch_bounds__(
           auto const src_ptr = reinterpret_cast<uint64_t>(
               rdma_channel_data.send_buffer(dst_rdma_rank) +
               dst_slot_idx * num_bytes_per_token);
+          
+          if (lane_id == 0) {
+            printf("nvshmemi_ibgda_put_nbi_warp, num_tokens: %d, bytes: %zu, "
+                   "from src %d to dst %d\n",
+                   num_tokens_to_issue, num_bytes_per_msg, rdma_rank,
+                   dst_rdma_rank);
+          }
           uccl::nvshmemi_ibgda_put_nbi_warp(
               dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
               src_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),

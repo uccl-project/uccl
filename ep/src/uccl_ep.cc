@@ -682,6 +682,8 @@ class Buffer {
 
     // Launch data dispatch
     // NOTES: the buffer size checks are moved into the `.cu` file
+
+    printf("Before dispatch internode\n");
     uccl::internode::dispatch(
         recv_x.data_ptr(), recv_x_scales_ptr, recv_topk_idx_ptr,
         recv_topk_weights_ptr,

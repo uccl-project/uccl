@@ -137,8 +137,8 @@ def test_main(
     hash_value, num_times = 0, 0
     for current_x in x_list:
         for return_recv_hook in (False, True):
-            # for dispatch_use_fp8 in (False, True):
-            for dispatch_use_fp8 in (False,):
+            for dispatch_use_fp8 in (False, True):
+            # for dispatch_use_fp8 in (False,):
                 for round_scale in (False,):
                     for round_scale in (False, True) if dispatch_use_fp8 else (False,):
                         for use_ue8m0 in (False, True) if round_scale else (False,):
@@ -178,8 +178,6 @@ def test_main(
                                     if return_recv_hook
                                     else event.current_stream_wait()
                                 )
-                            # print("Dispatch completed.", flush=True)
-                            # print("packed_recv_x: ", packed_recv_x)
                             packed_recv_x = (
                                 (packed_recv_x[0], packed_recv_x[1].contiguous())
                                 if dispatch_use_fp8
@@ -218,8 +216,6 @@ def test_main(
 
                                 # Check expert indices
                                 int_mask = (2**32) - 1
-                                # print("recv_count", recv_count)
-                                # print("recv_x address:", hex(recv_x.data_ptr()))
                                 num_valid_tokens = recv_count.item()
                                 assert (
                                     cumulative_local_expert_recv_stats[i].item()
@@ -240,10 +236,6 @@ def test_main(
                                     recv_x = recv_x[:num_valid_tokens]
                                     recv_x_amin = recv_x[:, :-128].amin(dim=-1)
                                     recv_src_info = recv_src_info[:num_valid_tokens]
-                                    # print("recv_x", recv_x)
-                                    # print("recv_x_amin", recv_x_amin)
-                                    # recv_x_amax = recv_x[:, :-128].amax(dim=-1)
-                                    # print("recv_x_amax", recv_x_amax)
                                     assert torch.equal(
                                         recv_x_amin, recv_x[:, :-128].amax(dim=-1)
                                     )
@@ -329,7 +321,6 @@ def test_main(
                                         9e-4 if dispatch_use_fp8 else 1e-5
                                     ), f"Error: {diff=}, {dispatch_use_fp8=}, {zero_copy=}"
                                     hash_value ^= hash_tensor(combined_x)
-                            dist.barrier()
     
     # noinspection PyShadowingNames
     def large_gemm_with_hook(hook):

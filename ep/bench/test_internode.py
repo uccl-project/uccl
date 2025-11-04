@@ -225,6 +225,7 @@ def test_main(
                         event,
                     ) = buffer.dispatch(**dispatch_args)
                     event.current_stream_wait() if async_mode else ()
+                    print("recv_x: ", recv_x)
                     recv_x = (
                         per_token_cast_back(*recv_x)
                         if isinstance(recv_x, tuple)
