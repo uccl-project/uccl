@@ -1721,12 +1721,7 @@ void remote_process_completions_fast_mode(
         assert(value <= -1 && "Dispatch atomic value should be <= -1");
       }
       if (is_combine) value = 1;
-      // sleep for 100 us
-      // std::this_thread::sleep_for(std::chrono::milliseconds(10));
       addr32->fetch_add(value, std::memory_order_release);
-      // if (value > 0)
-      //   printf("Applied atomic immediately: index=%zu, value=%d\n", index,
-      //           value);
 #endif
     } else if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
                ImmType::IsBarrier(ntohl(cqe.imm_data))) {
@@ -2245,14 +2240,6 @@ static void post_atomic_operations_fast_mode(
                 low_latency_buffer_idx);
         std::abort();
       }
-      // if (v > 0) {
-      //   printf("Posting atomic: index=%lu, value=%d\n",
-      //          static_cast<unsigned long>(cmd.req_rptr), v);
-      // }
-      /* This is for combine flag tracking. */
-      // if (get_is_combine(cmd.cmd_type)) {
-      //   v = 1;
-      // }
       uint32_t const imm = AtomicsImm::Pack(true, get_is_combine(cmd.cmd_type),
                                             v, off16, low_latency_buffer_idx)
                                .GetImmData();
