@@ -1078,14 +1078,14 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
     // Receive the fixed dev and remote_gpuidx
     ret = receive_message(bootstrap_fd, buf, sizeof(int) * 2);
     DCHECK(ret == sizeof(int) * 2) << "uccl_connect: receive_message()";
-    *remote_dev = buf[0];
-    *remote_gpuidx = buf[1];
-    srd::cout << "Receive dev and remote_gpuidx: " << buf[0] << " " << buf[1]
+    remote_dev = buf[0];
+    remote_gpuidx = buf[1];
+    std::cout << "Received dev and remote_gpuidx: " << buf[0] << " " << buf[1]
               << std::endl;
   }
   std::cout << "UCCL: dev, local_gpuidx, remote_dev, remote_gpuidx: " << dev
-            << " " << local_gpuidx << " " << *remote_dev << " "
-            << *remote_gpuidx << std::endl;
+            << " " << local_gpuidx << " " << remote_dev << " "
+            << remote_gpuidx << std::endl;
 
   bool is_leader =
       is_local_leader(dev, local_gpuidx, factory_dev->local_ip_str, local_port,
