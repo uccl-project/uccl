@@ -1,6 +1,7 @@
 #include "tcpx_engine.h"
 #include "tcpx/include/bootstrap.h"
 #include "tcpx/include/unpack_descriptor.h"
+#include <algorithm>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <cerrno>
@@ -174,6 +175,13 @@ namespace tcpx {
 
 Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const /*num_cpus*/) {
   local_gpu_idx_ = local_gpu_idx;
+  int override_gpu = get_env_int("UCCL_TCPX_LOCAL_DEVICE", -1);
+  if (override_gpu < 0) {
+    override_gpu = get_env_int("UCCL_TCPX_DEVICE_IDX", -1);
+  }
+  if (override_gpu >= 0) {
+    local_gpu_idx_ = static_cast<uint32_t>(override_gpu);
+  }
 
   // Bring up the control socket, pre-create the TCPX listen handle, and warm up
   // the CUDA stream used by bounce-buffer unpack launches.
@@ -195,15 +203,44 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const /*num_cpus*/) {
 
   int opt = 1;
   setsockopt(ctrl_listen_fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+  setsockopt(ctrl_listen_fd_, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
 
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = INADDR_ANY;
-  addr.sin_port = htons(ctrl_port_);
-  if (::bind(ctrl_listen_fd_, reinterpret_cast<sockaddr*>(&addr),
-             sizeof(addr)) < 0) {
+
+  int const max_attempts =
+      std::max(1, get_env_int("UCCL_TCPX_PORT_RETRIES", 16));
+  bool bound = false;
+  for (int attempt = 0; attempt < max_attempts; ++attempt) {
+    int try_port = ctrl_port_ + attempt;
+    addr.sin_port = htons(try_port);
+    if (::bind(ctrl_listen_fd_, reinterpret_cast<sockaddr*>(&addr),
+               sizeof(addr)) == 0) {
+      ctrl_port_ = try_port;
+      bound = true;
+      std::cerr << "[tcpx] control socket bound on port " << ctrl_port_ << " (attempt "
+                << (attempt + 1) << "/" << max_attempts << ")" << std::endl;
+      break;
+    }
+    if (errno != EADDRINUSE) {
+      std::cerr << "[tcpx] control bind failed on port " << try_port
+                << " with errno=" << errno << " (" << std::strerror(errno) << ")"
+                << std::endl;
+      break;
+    }
+    std::cerr << "[tcpx] control port " << try_port
+              << " busy, retrying next port (attempt " << (attempt + 1) << "/"
+              << max_attempts << ")" << std::endl;
+  }
+  if (!bound) {
+    int err = errno;
     ::close(ctrl_listen_fd_);
-    throw std::runtime_error("tcpx: failed to bind control socket");
+    std::string msg = "tcpx: failed to bind control socket on ports [" +
+                      std::to_string(ctrl_port_) + "," +
+                      std::to_string(ctrl_port_ + max_attempts - 1) +
+                      "]: " + std::strerror(err);
+    throw std::runtime_error(msg);
   }
   if (::listen(ctrl_listen_fd_, kCtrlBacklog) < 0) {
     ::close(ctrl_listen_fd_);
@@ -271,6 +308,28 @@ std::vector<uint8_t> Endpoint::get_metadata() {
   info.port = static_cast<uint16_t>(ctrl_port_);
   info.gpu = static_cast<int>(local_gpu_idx_);
 
+  in_addr ipv4{};
+  if (inet_pton(AF_INET, ip.c_str(), &ipv4) == 1) {
+    std::vector<uint8_t> meta(10);
+    std::memcpy(meta.data(), &ipv4, sizeof(ipv4));
+    uint16_t port_be = htons(info.port);
+    meta[4] = static_cast<uint8_t>((port_be >> 8) & 0xFF);
+    meta[5] = static_cast<uint8_t>(port_be & 0xFF);
+    std::memcpy(meta.data() + 6, &info.gpu, sizeof(info.gpu));
+    return meta;
+  }
+
+  in6_addr ipv6{};
+  if (inet_pton(AF_INET6, ip.c_str(), &ipv6) == 1) {
+    std::vector<uint8_t> meta(22);
+    std::memcpy(meta.data(), &ipv6, sizeof(ipv6));
+    uint16_t port_be = htons(info.port);
+    meta[16] = static_cast<uint8_t>((port_be >> 8) & 0xFF);
+    meta[17] = static_cast<uint8_t>(port_be & 0xFF);
+    std::memcpy(meta.data() + 18, &info.gpu, sizeof(info.gpu));
+    return meta;
+  }
+
   std::vector<uint8_t> meta(sizeof(EndpointInfo));
   std::memcpy(meta.data(), &info, sizeof(info));
   return meta;
@@ -278,12 +337,44 @@ std::vector<uint8_t> Endpoint::get_metadata() {
 
 std::tuple<std::string, uint16_t, int> Endpoint::parse_metadata(
     std::vector<uint8_t> const& metadata) {
-  if (metadata.size() != sizeof(EndpointInfo)) {
-    throw std::runtime_error("tcpx metadata size mismatch");
+  if (metadata.size() == 10) {
+    std::string ip = std::to_string(metadata[0]) + "." +
+                     std::to_string(metadata[1]) + "." +
+                     std::to_string(metadata[2]) + "." +
+                     std::to_string(metadata[3]);
+    uint16_t net_port = static_cast<uint16_t>(
+        (static_cast<uint16_t>(metadata[4]) << 8) |
+        static_cast<uint16_t>(metadata[5]));
+    uint16_t port = ntohs(net_port);
+    int gpu_idx = 0;
+    std::memcpy(&gpu_idx, metadata.data() + 6, sizeof(int));
+    return std::make_tuple(ip, port, gpu_idx);
   }
-  EndpointInfo info{};
-  std::memcpy(&info, metadata.data(), sizeof(info));
-  return std::make_tuple(std::string(info.ip), info.port, info.gpu);
+
+  if (metadata.size() == 22) {
+    char ip6_str[INET6_ADDRSTRLEN];
+    std::memset(ip6_str, 0, sizeof(ip6_str));
+    in6_addr ip6_addr{};
+    std::memcpy(&ip6_addr, metadata.data(), sizeof(ip6_addr));
+    if (!inet_ntop(AF_INET6, &ip6_addr, ip6_str, sizeof(ip6_str))) {
+      throw std::runtime_error("tcpx metadata IPv6 decode failed");
+    }
+    uint16_t net_port = static_cast<uint16_t>(
+        (static_cast<uint16_t>(metadata[16]) << 8) |
+        static_cast<uint16_t>(metadata[17]));
+    uint16_t port = ntohs(net_port);
+    int gpu_idx = 0;
+    std::memcpy(&gpu_idx, metadata.data() + 18, sizeof(int));
+    return std::make_tuple(std::string(ip6_str), port, gpu_idx);
+  }
+
+  if (metadata.size() == sizeof(EndpointInfo)) {
+    EndpointInfo info{};
+    std::memcpy(&info, metadata.data(), sizeof(info));
+    return std::make_tuple(std::string(info.ip), info.port, info.gpu);
+  }
+
+  throw std::runtime_error("tcpx metadata size mismatch");
 }
 
 bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,

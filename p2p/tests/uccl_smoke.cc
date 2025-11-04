@@ -403,9 +403,15 @@ void apply_env_defaults(int port) {
 int run_server(Options opts) {
   if (!checkCuda(cudaSetDevice(opts.gpu), "cudaSetDevice(server)")) return 1;
   apply_env_defaults(opts.port);
+#ifdef USE_TCPX
+  {
+    std::string gpu_env = std::to_string(opts.gpu);
+    setenv("UCCL_TCPX_LOCAL_DEVICE", gpu_env.c_str(), 1);
+  }
+#endif
 
   uccl_engine_t* eng =
-      uccl_engine_create(opts.gpu, /*num_cpus=*/1, /*in_python=*/false);
+      uccl_engine_create(/*num_cpus=*/1, /*in_python=*/false);
   if (!eng) {
     std::cerr << "[UCCL Smoke] server: uccl_engine_create failed" << std::endl;
     return 1;
@@ -491,9 +497,15 @@ int run_server(Options opts) {
 int run_client(Options opts) {
   if (!checkCuda(cudaSetDevice(opts.gpu), "cudaSetDevice(client)")) return 1;
   apply_env_defaults(opts.port);
+#ifdef USE_TCPX
+  {
+    std::string gpu_env = std::to_string(opts.gpu);
+    setenv("UCCL_TCPX_LOCAL_DEVICE", gpu_env.c_str(), 1);
+  }
+#endif
 
   uccl_engine_t* eng =
-      uccl_engine_create(opts.gpu, /*num_cpus=*/1, /*in_python=*/false);
+      uccl_engine_create(/*num_cpus=*/1, /*in_python=*/false);
   if (!eng) {
     std::cerr << "[UCCL Smoke] client: uccl_engine_create failed" << std::endl;
     return 1;
