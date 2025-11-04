@@ -54,13 +54,11 @@ def _run_server_adv(args, ep, remote_metadata):
             buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
             ok, mr_id = ep.reg(ptr, size_per_block)
             assert ok
-            break
-        break
-    """
             buf_v.append(buf)
             ptr_v.append(ptr)
             mr_id_v.append(mr_id)
             size_v.append(size_per_block)
+        """
         # Use advertisev to advertise all blocks at once
         ok, fifo_blob_v = ep.advertisev(conn_id, mr_id_v, ptr_v, size_v, args.num_iovs)
         assert ok and all(len(fifo_blob) == 64 for fifo_blob in fifo_blob_v)
@@ -68,7 +66,7 @@ def _run_server_adv(args, ep, remote_metadata):
         for fifo_blob in fifo_blob_v:
             dist.send(torch.ByteTensor(list(fifo_blob)), dst=peer)
         dist.barrier()
-    """
+        """
     print("[Server] Benchmark complete")
 
 
@@ -90,13 +88,11 @@ def _run_client_write(args, ep, remote_metadata):
             buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
             ok, mr_id = ep.reg(ptr, size_per_block)
             assert ok
-            break
-        break
-    """
             buf_v.append(buf)
             ptr_v.append(ptr)
             mr_id_v.append(mr_id)
             size_v.append(size_per_block)
+        """
         for _ in range(args.num_iovs):
             fifo_blob = torch.zeros(64, dtype=torch.uint8)
             dist.recv(fifo_blob, src=peer)
@@ -138,7 +134,7 @@ def _run_client_write(args, ep, remote_metadata):
             f"{elapsed/args.iters:6.6f} s"
         )
         dist.barrier()
-    """
+        """
     print("[Client] Benchmark complete")
 
 
