@@ -781,8 +781,6 @@ bool RDMAEndpoint::initialize_engine_by_dev(int dev,
     called = true;
     int start_engine_idx = dev * num_engines_per_dev_;
     int end_engine_idx = (dev + 1) * num_engines_per_dev_ - 1;
-    printf("Initializing engines: %d to %d\n", start_engine_idx,
-           end_engine_idx);
     int numa_node = RDMAFactory::get_factory_dev(dev)->numa_node;
 
     for (int engine_id = start_engine_idx; engine_id <= end_engine_idx;
@@ -1240,6 +1238,7 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
     first_call = false;
   }
   peer_map_mu_[dev]->unlock();
+
   if (is_leader) {
     // We are the leader, we can install ctx if we are the first call.
     should_install_ctx = first_call;
