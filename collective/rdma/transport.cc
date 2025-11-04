@@ -1070,7 +1070,7 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   ret = send_message(bootstrap_fd, buf, sizeof(int) * 2);
   DCHECK(ret == sizeof(int) * 2) << "uccl_connect: send_message()";
 
-  if (fixed_engine_offset_) {
+  if (infer_dev_) {
     // Receive the fixed dev and remote_gpuidx
     ret = receive_message(bootstrap_fd, buf, sizeof(int) * 2);
     DCHECK(ret == sizeof(int) * 2) << "uccl_connect: receive_message()";
@@ -1222,7 +1222,7 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   *remote_dev = buf[0];
   *remote_gpuidx = buf[1];
 
-  if (fixed_engine_offset_) {
+  if (infer_dev_) {
     // Send our dev, gpu to the other side.
     int buf[2] = {dev, local_gpuidx};
     ret = send_message(bootstrap_fd, buf, sizeof(int) * 2);
