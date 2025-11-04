@@ -14,6 +14,7 @@
 #include <limits>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 #include <vector>
 #include <netdb.h>
 #include <sys/socket.h>
@@ -687,28 +688,40 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
 }
 
 bool Endpoint::dereg(uint64_t mr_id) {
-  MrEntry entry;
+  std::vector<std::pair<uint64_t, void*>> send_handles;
+  std::vector<std::pair<uint64_t, void*>> recv_handles;
   {
     std::lock_guard<std::mutex> lock(mr_mu_);
     auto it = mr_map_.find(mr_id);
     if (it == mr_map_.end()) return false;
-    entry = it->second;
+    send_handles.reserve(it->second.send_handles.size());
+    recv_handles.reserve(it->second.recv_handles.size());
+    for (auto const& kv : it->second.send_handles) {
+      send_handles.emplace_back(kv.first, kv.second);
+    }
+    for (auto const& kv : it->second.recv_handles) {
+      recv_handles.emplace_back(kv.first, kv.second);
+    }
     mr_map_.erase(it);
   }
 
-  std::shared_lock<std::shared_mutex> lock(conn_mu_);
-  for (auto& kv : conn_map_) {
-    Conn& conn = *kv.second;
-    auto send_it = conn.send_mhandles.find(mr_id);
-    if (send_it != conn.send_mhandles.end()) {
-      tcpx_dereg_mr(conn.send_comm, send_it->second);
-      conn.send_mhandles.erase(send_it);
+  auto dereg_for_conn = [&](std::pair<uint64_t, void*> const& item,
+                            bool is_send) {
+    std::shared_lock<std::shared_mutex> conn_lock(conn_mu_);
+    auto conn_it = conn_map_.find(item.first);
+    if (conn_it == conn_map_.end()) return;
+    Conn* conn = conn_it->second.get();
+    void* comm = is_send ? conn->send_comm : conn->recv_comm;
+    if (comm) {
+      tcpx_dereg_mr(comm, item.second);
     }
-    auto recv_it = conn.recv_mhandles.find(mr_id);
-    if (recv_it != conn.recv_mhandles.end()) {
-      tcpx_dereg_mr(conn.recv_comm, recv_it->second);
-      conn.recv_mhandles.erase(recv_it);
-    }
+  };
+
+  for (auto const& kv : send_handles) {
+    dereg_for_conn(kv, /*is_send=*/true);
+  }
+  for (auto const& kv : recv_handles) {
+    dereg_for_conn(kv, /*is_send=*/false);
   }
 
   return true;
@@ -730,26 +743,59 @@ bool Endpoint::find_mr_by_addr(uintptr_t addr, size_t size,
   return false;
 }
 
-bool Endpoint::populate_conn_handles_(Conn& conn, uint64_t mr_id,
-                                      MrEntry const& mr, bool is_recv,
+bool Endpoint::populate_conn_handles_(Conn& conn, uint64_t mr_id, bool is_recv,
                                       void** mhandle_out) {
-  auto& map = is_recv ? conn.recv_mhandles : conn.send_mhandles;
-  auto it = map.find(mr_id);
-  if (it != map.end()) {
-    *mhandle_out = it->second;
-    return true;
-  }
-
   void* comm = is_recv ? conn.recv_comm : conn.send_comm;
   if (!comm) return false;
 
+  void* existing = nullptr;
+  void* base = nullptr;
+  size_t size = 0;
+  int ptr_type = NCCL_PTR_CUDA;
+
+  {
+    std::lock_guard<std::mutex> lock(mr_mu_);
+    auto it = mr_map_.find(mr_id);
+    if (it == mr_map_.end()) return false;
+    auto& table = is_recv ? it->second.recv_handles : it->second.send_handles;
+    auto handle_it = table.find(conn.conn_id);
+    if (handle_it != table.end()) {
+      existing = handle_it->second;
+    } else {
+      base = it->second.base;
+      size = it->second.size;
+      ptr_type = it->second.ptr_type;
+    }
+  }
+
+  if (existing) {
+    *mhandle_out = existing;
+    return true;
+  }
+
   void* mhandle = nullptr;
-  int rc = tcpx_reg_mr(comm, mr.base, mr.size, mr.ptr_type, &mhandle);
+  int rc = tcpx_reg_mr(comm, base, size, ptr_type, &mhandle);
   if (rc != 0 || !mhandle) {
     std::cerr << "[tcpx] tcpx_reg_mr failed rc=" << rc << std::endl;
     return false;
   }
-  map[mr_id] = mhandle;
+
+  {
+    std::lock_guard<std::mutex> lock(mr_mu_);
+    auto it = mr_map_.find(mr_id);
+    if (it == mr_map_.end()) {
+      tcpx_dereg_mr(comm, mhandle);
+      return false;
+    }
+    auto& table = is_recv ? it->second.recv_handles : it->second.send_handles;
+    auto [insert_it, inserted] = table.emplace(conn.conn_id, mhandle);
+    if (!inserted) {
+      tcpx_dereg_mr(comm, mhandle);
+      *mhandle_out = insert_it->second;
+      return true;
+    }
+  }
+
   *mhandle_out = mhandle;
   return true;
 }
@@ -959,7 +1005,7 @@ bool Endpoint::post_send_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
   if (!data || size == 0) return false;
 
   void* mhandle = nullptr;
-  if (!populate_conn_handles_(conn, mr_id, mr, /*is_recv=*/false, &mhandle))
+  if (!populate_conn_handles_(conn, mr_id, /*is_recv=*/false, &mhandle))
     return false;
 
   void* request = nullptr;
@@ -999,7 +1045,7 @@ bool Endpoint::post_recv_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
   if (!data || size == 0) return false;
 
   void* mhandle = nullptr;
-  if (!populate_conn_handles_(conn, mr_id, mr, /*is_recv=*/true, &mhandle))
+  if (!populate_conn_handles_(conn, mr_id, /*is_recv=*/true, &mhandle))
     return false;
 
   void* buffers[1] = {data};
@@ -1248,6 +1294,30 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
 // are returned to the TCPX runtime.
 void Endpoint::free_conn_(std::unique_ptr<Conn>& conn) {
   if (!conn) return;
+  std::vector<void*> send_handles;
+  std::vector<void*> recv_handles;
+  {
+    std::lock_guard<std::mutex> lock(mr_mu_);
+    for (auto& kv : mr_map_) {
+      auto& mr = kv.second;
+      auto send_it = mr.send_handles.find(conn->conn_id);
+      if (send_it != mr.send_handles.end()) {
+        send_handles.push_back(send_it->second);
+        mr.send_handles.erase(send_it);
+      }
+      auto recv_it = mr.recv_handles.find(conn->conn_id);
+      if (recv_it != mr.recv_handles.end()) {
+        recv_handles.push_back(recv_it->second);
+        mr.recv_handles.erase(recv_it);
+      }
+    }
+  }
+  for (void* handle : send_handles) {
+    if (conn->send_comm) tcpx_dereg_mr(conn->send_comm, handle);
+  }
+  for (void* handle : recv_handles) {
+    if (conn->recv_comm) tcpx_dereg_mr(conn->recv_comm, handle);
+  }
   if (conn->send_comm) {
     tcpx_close_send(conn->send_comm);
     conn->send_comm = nullptr;

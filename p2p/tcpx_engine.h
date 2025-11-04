@@ -44,10 +44,6 @@ struct Conn {
   void* send_dev_handle = nullptr;
   void* recv_dev_handle = nullptr;
 
-  // Cached memory registrations per MR id
-  std::unordered_map<uint64_t, void*> send_mhandles;
-  std::unordered_map<uint64_t, void*> recv_mhandles;
-
   alignas(16) std::array<uint8_t, 512> recv_dev_handle_storage;
   alignas(16) std::array<uint8_t, 512> send_dev_handle_storage;
 };
@@ -67,6 +63,8 @@ struct MrEntry {
   size_t size = 0;
   int ptr_type = NCCL_PTR_CUDA;
   bool is_recv = true;
+  std::unordered_map<uint64_t, void*> send_handles;  // conn_id -> mhandle
+  std::unordered_map<uint64_t, void*> recv_handles;  // conn_id -> mhandle
 };
 
 struct PendingTransfer {
@@ -200,8 +198,8 @@ class Endpoint {
   size_t chunk_bytes_ = 0;
 
   static void free_conn_(std::unique_ptr<Conn>& conn);
-  bool populate_conn_handles_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
-                              bool is_recv, void** mhandle_out);
+  bool populate_conn_handles_(Conn& conn, uint64_t mr_id, bool is_recv,
+                              void** mhandle_out);
   bool enqueue_unpack_(PendingTransfer& transfer,
                        tcpx::plugin::tcpxRequest* request, Conn& conn);
   bool complete_pending_transfer_(PendingTransfer& transfer, bool success);
