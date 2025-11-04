@@ -46,6 +46,7 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   cfg.num_ranks = num_ranks;
   cfg.num_nodes = num_nodes;
   cfg.use_normal_mode = use_normal_mode;
+  cfg.node_idx = node_idx;
   proxy_ = std::make_unique<Proxy>(cfg);
   local_rank_ = local_rank;
   node_idx_ = node_idx;
