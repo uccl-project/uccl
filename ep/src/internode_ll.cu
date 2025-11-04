@@ -373,6 +373,11 @@ LOW_LATENCY_DISPATCH_RECV:
 #endif
     if (sub_warp_id == 1 and lane_id == 0) {
       auto start_time = clock64();
+      // printf("[dispatch] waiting for tokens from src_rank: %d, rank: "
+      //        "%d, max_nvl_peers: %d, responsible_expert_idx: %d, num_experts: "
+      //        "%d, num_local_experts: %d\n",
+      //        src_rank, rank, max_nvl_peers, responsible_expert_idx,
+      //        num_experts, num_local_experts);
       while ((src_rank / max_nvl_peers == rank / max_nvl_peers) &&
              (num_recv_tokens_ipc = ld_acquire_sys_global(
                   rdma_recv_count + local_expert_idx * num_ranks + src_rank)) ==
@@ -411,13 +416,14 @@ LOW_LATENCY_DISPATCH_RECV:
           num_recv_tokens_internode != 0 ? -num_recv_tokens_internode - 1 : 0;
       num_recv_tokens_ipc =
           num_recv_tokens_ipc != 0 ? -num_recv_tokens_ipc - 1 : 0;
-      // printf(
-      //     "num_recv_tokens_internode: %d, num_recv_tokens_ipc: %d, src_rank:"
-      //     "%d, rank: %d, max_nvl_peers: %d, responsible_expert_idx: %d,"
-      //     "num_experts: %d, num_local_experts: %d\n",
-      //     num_recv_tokens_internode, num_recv_tokens_ipc, src_rank, rank,
-      //     max_nvl_peers, responsible_expert_idx, num_experts,
-      //     num_local_experts);
+      assert(num_recv_tokens_ipc >= 0 && "num_recv_tokens_ipc negative");
+      if (num_recv_tokens_internode < 0) {
+        printf(
+            "Warning: negative num_recv_tokens_internode: %d, src_rank: %d, "
+            "rank: %d, max_nvl_peers: %d\n",
+            num_recv_tokens_internode, src_rank, rank, max_nvl_peers);
+      }
+      assert(num_recv_tokens_internode >= 0 && "num_recv_tokens_internode negative");
       num_recv_tokens = num_recv_tokens_internode + num_recv_tokens_ipc;
       recv_token_begin_idx =
           atomicAdd(packed_recv_count + local_expert_idx, num_recv_tokens);
@@ -890,6 +896,15 @@ __global__ __launch_bounds__(1024, 1) void combine(
         // NOTE(MaoZiming): Without ibgda, we can only use atomic add
         // Pass offset to CPU proxy for atomic operation (similar to dispatch
         // phase)
+
+        // printf(
+        //     "[combine] IBGDA amo_nonfetch_add for atomic flag. num_tokens_to_send: %d\n",
+        //     num_tokens_to_send);
+        // if (num_tokens_to_send < 1) {
+        //   printf(
+        //       "[combine] Warning: num_tokens_to_send < 1 for expert_idx: %d, dst_rank: %d, num_tokens_to_send: %d\n",
+        //       responsible_expert_idx, dst_rank, num_tokens_to_send);
+        // }
         uccl::nvshmemi_ibgda_amo_nonfetch_add(
             dst_ptr_internode, reinterpret_cast<uint64_t>(atomic_buffer_ptr),
             num_tokens_to_send /* Will be changed to 1 in the proxy */,
@@ -916,6 +931,13 @@ LOW_LATENCY_COMBINE_RECV:
     if (sub_warp_id == 0 and lane_id == 0) {
       auto const src_rank = responsible_expert_idx / num_local_experts;
       auto start_time = clock64();
+      // if ((src_rank / max_nvl_peers != rank / max_nvl_peers))
+      //   printf(
+      //       "[combine] Waiting for RDMA recv flag. src_rank: %d, rank: %d, "
+      //       "max_nvl_peers: %d, responsible_expert_idx: %d, num_experts: %d, "
+      //       "num_local_experts: %d\n",
+      //       src_rank, rank, max_nvl_peers, responsible_expert_idx, num_experts,
+      //       num_local_experts);
       while ((src_rank / max_nvl_peers == rank / max_nvl_peers) &&
              ld_acquire_sys_global(rdma_recv_flag + responsible_expert_idx) ==
                  0)
@@ -924,7 +946,14 @@ LOW_LATENCY_COMBINE_RECV:
              ld_acquire_sys_global(rdma_recv_flag_internode +
                                    responsible_expert_idx) == 0)
         ;
-
+      // if ((src_rank / max_nvl_peers != rank / max_nvl_peers)) {
+      //   printf(
+      //       "[combine] RDMA recv flag received. src_rank: %d, rank: %d, "
+      //       "max_nvl_peers: %d, responsible_expert_idx: %d, num_experts: %d, "
+      //       "num_local_experts: %d\n",
+      //       src_rank, rank, max_nvl_peers, responsible_expert_idx, num_experts,
+      //       num_local_experts);
+      // }
       if (src_rank / max_nvl_peers == rank / max_nvl_peers) {
         if (ld_acquire_sys_global(rdma_recv_flag_internode +
                                   responsible_expert_idx) != 0) {
@@ -955,7 +984,13 @@ LOW_LATENCY_COMBINE_RECV:
       }
     }
   }
+  // if (blockIdx.x == 0 && threadIdx.x == 0)
+  //   printf("[combine] RDMA before cg::this_grid().sync()\n");
+
   cg::this_grid().sync();
+
+  // if (blockIdx.x == 0 && threadIdx.x == 0)
+  //   printf("[combine] RDMA after cg::this_grid().sync()\n");
 
   // Reduce tokens
   EP_DEVICE_ASSERT(num_topk <= WARP_SIZE);
