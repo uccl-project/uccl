@@ -68,26 +68,29 @@ struct MrEntry {
 };
 
 struct PendingTransfer {
+  struct ChunkState {
+    size_t offset = 0;
+    size_t bytes = 0;
+    uint32_t tag = 0;
+    void* request = nullptr;
+    void* dst_ptr = nullptr;
+    bool needs_unpack = false;
+    bool stage1_done = false;
+    bool stage2_done = false;
+    rx::UnpackDescriptorBlock desc_block{};
+    cudaEvent_t event = nullptr;
+  };
+
   enum class Kind { kSend, kRecv, kRead };
 
   Kind kind = Kind::kRecv;
   uint64_t transfer_id = 0;
   uint64_t conn_id = 0;
   uint64_t mr_id = 0;
-  size_t size = 0;
-  int tag = 0;
-
-  // TCPX request handle returned by isend/irecv/test
-  void* request = nullptr;
-
-  // Destination buffer for recv/read
-  void* dst_ptr = nullptr;
-
-  // Bounce buffer unpack
-  bool needs_unpack = false;
-  rx::UnpackDescriptorBlock desc_block{};
-  cudaEvent_t completion_event = nullptr;
-  bool event_recorded = false;
+  size_t total_bytes = 0;
+  uint32_t base_tag = 0;
+  std::vector<ChunkState> chunks;
+  size_t chunks_completed = 0;
 };
 
 class Endpoint {
@@ -200,6 +203,13 @@ class Endpoint {
   static void free_conn_(std::unique_ptr<Conn>& conn);
   bool populate_conn_handles_(Conn& conn, uint64_t mr_id, bool is_recv,
                               void** mhandle_out);
+  bool poll_chunk_request_(PendingTransfer& transfer,
+                           PendingTransfer::ChunkState& chunk, bool* done,
+                           int* received_size);
+  bool enqueue_chunk_unpack_(PendingTransfer& transfer,
+                             PendingTransfer::ChunkState& chunk,
+                             tcpx::plugin::tcpxRequest* request, Conn& conn);
+  bool finalize_recv_chunk_(Conn& conn, PendingTransfer::ChunkState& chunk);
   bool enqueue_unpack_(PendingTransfer& transfer,
                        tcpx::plugin::tcpxRequest* request, Conn& conn);
   bool complete_pending_transfer_(PendingTransfer& transfer, bool success);
