@@ -16,6 +16,26 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#ifdef USE_TCPX
+struct TcpxFifoView {
+  uint64_t mr_id;
+  uint32_t size;
+  uint32_t tag;
+  uint64_t offset;
+  uint64_t token;
+  char padding[32];
+};
+static_assert(sizeof(TcpxFifoView) == 64, "TcpxFifoView layout mismatch");
+
+inline uint32_t tcpx_decode_chunk_count(uint64_t token) {
+  return static_cast<uint32_t>(token >> 32);
+}
+
+inline uint32_t tcpx_decode_chunk_bytes(uint64_t token) {
+  return static_cast<uint32_t>(token & 0xffffffffu);
+}
+#endif
+
 namespace {
 
 constexpr int kHandshakePortOffset = 1;
@@ -555,129 +575,181 @@ int run_client(Options opts) {
     return 1;
   }
 
-  size_t chunk_bytes = resolve_chunk_bytes(opts.size);
-  size_t chunks_per_iter = (opts.size + chunk_bytes - 1) / chunk_bytes;
-  std::vector<size_t> chunk_sizes(chunks_per_iter);
-  std::vector<md_t> md_vec(chunks_per_iter);
-  {
+  auto run_vector_read = [&](size_t payload_bytes) -> bool {
+    size_t chunk_bytes = resolve_chunk_bytes(payload_bytes);
+    size_t chunks_per_iter =
+        (payload_bytes + chunk_bytes - 1) / std::max<size_t>(chunk_bytes, 1);
+    std::vector<size_t> chunk_sizes(chunks_per_iter);
+    std::vector<md_t> md_vec(chunks_per_iter);
     size_t offset = 0;
     for (size_t chunk = 0; chunk < chunks_per_iter; ++chunk) {
-      size_t this_bytes = std::min(chunk_bytes, opts.size - offset);
+      size_t this_bytes = std::min(chunk_bytes, payload_bytes - offset);
       chunk_sizes[chunk] = this_bytes;
       md_vec[chunk].op = UCCL_READ;
       md_vec[chunk].data.tx_data.data_ptr = remote_ptr + offset;
       md_vec[chunk].data.tx_data.data_size = this_bytes;
       offset += this_bytes;
     }
-  }
 
-  std::cout << "[UCCL Smoke] Client chunk size " << chunk_bytes << " bytes ("
-            << chunks_per_iter << " chunks per iteration)" << std::endl;
+    std::vector<SlotBuf> slots(chunks_per_iter);
+    std::vector<uint64_t> transfer_ids(chunks_per_iter);
+    std::vector<uint8_t> verify_host(payload_bytes);
+    int warmup_iters = opts.iters > 1 ? 1 : 0;
+    std::chrono::duration<double> total_recv_time(0);
+    bool debug_tokens =
+        []() {
+          char const* env = std::getenv("UCCL_TCPX_DEBUG");
+          return env && std::atoi(env) != 0;
+        }();
 
-  std::vector<SlotBuf> slots(chunks_per_iter);
-  std::vector<uint8_t> host(opts.size);
+    std::cout << "[UCCL Smoke] Client payload=" << payload_bytes
+              << " chunk_size=" << chunk_bytes
+              << " chunks=" << chunks_per_iter << std::endl;
 
-  int warmup_iters = opts.iters > 1 ? 1 : 0;
-  std::chrono::duration<double> total_recv_time(0);
-
-  for (int iter = 0; iter < opts.iters; ++iter) {
-    if (!checkCuda(cudaMemset(raw_dev, 0, opts.size),
-                   "cudaMemset(client loop)"))
-      return 1;
-
-    auto iter_start = std::chrono::high_resolution_clock::now();
-
-    if (uccl_engine_send_tx_md_vector(conn, md_vec.data(), md_vec.size()) < 0) {
-      std::cerr << "[UCCL Smoke] client: send_tx_md_vector failed" << std::endl;
-      return 1;
-    }
-
-    size_t offset = 0;
-    for (size_t chunk = 0; chunk < chunks_per_iter; ++chunk) {
-      bool got_fifo = false;
-      for (int spin = 0; spin < 20000; ++spin) {
-        if (uccl_engine_get_fifo_item(conn, static_cast<int>(chunk),
-                                      slots[chunk].bytes) == 0) {
-          got_fifo = true;
-          break;
-        }
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
-      }
-      if (!got_fifo) {
-        std::cerr << "[UCCL Smoke] client: timeout waiting for FIFO item "
-                  << chunk << std::endl;
-        return 1;
+    for (int iter = 0; iter < opts.iters; ++iter) {
+      if (!checkCuda(cudaMemset(raw_dev, 0, payload_bytes),
+                     "cudaMemset(client loop)")) {
+        return false;
       }
 
-      size_t this_bytes = chunk_sizes[chunk];
-      uint8_t* dst_ptr = raw_dev + offset;
-      uint64_t transfer_id = 0;
-      if (uccl_engine_read(conn, mr, dst_ptr, this_bytes, slots[chunk].bytes,
-                           &transfer_id) != 0) {
-        std::cerr << "[UCCL Smoke] client: uccl_engine_read failed for chunk "
-                  << chunk << std::endl;
-        return 1;
-      }
+      auto iter_start = std::chrono::high_resolution_clock::now();
 
-      bool done = false;
-      for (int spin = 0; spin < 60000; ++spin) {
-        done = uccl_engine_xfer_status(conn, transfer_id);
-        if (done) break;
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
-      }
-      if (!done) {
-        std::cerr << "[UCCL Smoke] client: transfer timeout for chunk " << chunk
+      if (uccl_engine_send_tx_md_vector(conn, md_vec.data(), md_vec.size()) <
+          0) {
+        std::cerr << "[UCCL Smoke] client: send_tx_md_vector failed"
                   << std::endl;
-        return 1;
+        return false;
       }
 
-      offset += this_bytes;
-    }
+      // Stage 1: collect FIFO tokens, sanity-check chunk hints, and enqueue
+      // reads without waiting for completion.
+      offset = 0;
+      for (size_t chunk = 0; chunk < chunks_per_iter; ++chunk) {
+        bool got_fifo = false;
+        for (int spin = 0; spin < 20000; ++spin) {
+          if (uccl_engine_get_fifo_item(conn, static_cast<int>(chunk),
+                                        slots[chunk].bytes) == 0) {
+            got_fifo = true;
+            break;
+          }
+          std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
+        if (!got_fifo) {
+          std::cerr << "[UCCL Smoke] client: timeout waiting for FIFO item "
+                    << chunk << std::endl;
+          return false;
+        }
 
-    auto iter_end = std::chrono::high_resolution_clock::now();
-    if (iter >= warmup_iters) {
-      total_recv_time +=
-          std::chrono::duration_cast<std::chrono::duration<double>>(iter_end -
-                                                                    iter_start);
-    }
+#ifdef USE_TCPX
+        auto* fifo_view =
+            reinterpret_cast<TcpxFifoView*>(slots[chunk].bytes);
+        uint32_t hint_chunks = tcpx_decode_chunk_count(fifo_view->token);
+        uint32_t hint_bytes = tcpx_decode_chunk_bytes(fifo_view->token);
+        if (hint_bytes == 0)
+          hint_bytes =
+              static_cast<uint32_t>(std::min<size_t>(chunk_bytes, 0xffffffffu));
+        if (hint_chunks == 0)
+          hint_chunks = static_cast<uint32_t>(chunks_per_iter);
+        if (debug_tokens &&
+            (hint_chunks != chunks_per_iter || hint_bytes != chunk_bytes)) {
+          std::cerr << "[UCCL Smoke] Warning: chunk hint mismatch (chunk "
+                    << chunk << ", hinted_chunks=" << hint_chunks
+                    << ", hinted_bytes=" << hint_bytes
+                    << ", local_chunks=" << chunks_per_iter
+                    << ", local_bytes=" << chunk_bytes << ")" << std::endl;
+        }
+#endif
 
-    bool verify_this_iter =
-        (opts.iters == 1) || (iter == 0) || (iter == opts.iters - 1);
-    if (verify_this_iter) {
-      if (!checkCuda(cudaMemcpy(host.data(), raw_dev, opts.size,
-                                cudaMemcpyDeviceToHost),
-                     "cudaMemcpy D2H (client)")) {
-        return 1;
+        size_t this_bytes = chunk_sizes[chunk];
+        uint8_t* dst_ptr = raw_dev + offset;
+        if (uccl_engine_read(conn, mr, dst_ptr, this_bytes,
+                             slots[chunk].bytes, &transfer_ids[chunk]) != 0) {
+          std::cerr << "[UCCL Smoke] client: uccl_engine_read failed for chunk "
+                    << chunk << std::endl;
+          return false;
+        }
+        offset += this_bytes;
       }
-      if (!validate_pattern(host.data(), opts.size)) {
-        std::cerr << "[UCCL Smoke] client: validation failed on iteration "
-                  << (iter + 1) << std::endl;
-        return 1;
+
+      // Stage 2: poll all outstanding transfers until each chunk completes.
+      std::vector<bool> completed(chunks_per_iter, false);
+      size_t num_completed = 0;
+      while (num_completed < chunks_per_iter) {
+        for (size_t chunk = 0; chunk < chunks_per_iter; ++chunk) {
+          if (completed[chunk]) continue;
+          if (uccl_engine_xfer_status(conn, transfer_ids[chunk])) {
+            completed[chunk] = true;
+            ++num_completed;
+          }
+        }
+        if (num_completed < chunks_per_iter) {
+          std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
+      }
+
+      auto iter_end = std::chrono::high_resolution_clock::now();
+      if (iter >= warmup_iters) {
+        total_recv_time +=
+            std::chrono::duration_cast<std::chrono::duration<double>>(
+                iter_end - iter_start);
+      }
+
+      bool verify_this_iter =
+          (opts.iters == 1) || (iter == 0) || (iter == opts.iters - 1);
+      if (verify_this_iter) {
+        if (!checkCuda(cudaMemcpy(verify_host.data(), raw_dev, payload_bytes,
+                                  cudaMemcpyDeviceToHost),
+                       "cudaMemcpy D2H (client)")) {
+          return false;
+        }
+        if (!validate_pattern(verify_host.data(), payload_bytes)) {
+          std::cerr << "[UCCL Smoke] client: validation failed on iteration "
+                    << (iter + 1) << " (payload " << payload_bytes << ")"
+                    << std::endl;
+          return false;
+        }
+      }
+
+      if (iter < warmup_iters) {
+        std::cout << "[UCCL Smoke] Client warmup iteration " << (iter + 1)
+                  << "/" << opts.iters << " complete" << std::endl;
+      } else {
+        std::cout << "[UCCL Smoke] Client iteration " << (iter + 1) << "/"
+                  << opts.iters << " complete" << std::endl;
       }
     }
 
-    if (iter < warmup_iters) {
-      std::cout << "[UCCL Smoke] Client warmup iteration " << (iter + 1) << "/"
-                << opts.iters << " complete" << std::endl;
+    int measured_iters = opts.iters - warmup_iters;
+    if (measured_iters > 0) {
+      double seconds = total_recv_time.count();
+      double total_bytes = static_cast<double>(payload_bytes) * measured_iters;
+      double gib = total_bytes / static_cast<double>(1ull << 30);
+      double gib_per_s = seconds > 0.0 ? gib / seconds : 0.0;
+      std::cout << "[UCCL Smoke] Client payload " << payload_bytes
+                << " measured " << measured_iters << " iteration(s) in "
+                << seconds << " s, bandwidth " << gib_per_s << " GiB/s"
+                << std::endl;
     } else {
-      std::cout << "[UCCL Smoke] Client iteration " << (iter + 1) << "/"
-                << opts.iters << " complete" << std::endl;
+      std::cout << "[UCCL Smoke] Client payload " << payload_bytes
+                << " ran warmup only; no bandwidth reported" << std::endl;
     }
+
+    return true;
+  };
+
+  // Run the primary payload size followed by a secondary partial size to stress
+  // the chunk pipeline with different tail fragments.
+  if (!run_vector_read(opts.size)) {
+    return 1;
   }
 
-  int measured_iters = opts.iters - warmup_iters;
-  if (measured_iters > 0) {
-    double seconds = total_recv_time.count();
-    double total_bytes = static_cast<double>(opts.size) * measured_iters;
-    double gib = total_bytes / static_cast<double>(1ull << 30);
-    double gib_per_s = seconds > 0.0 ? gib / seconds : 0.0;
-    std::cout << "[UCCL Smoke] Client measured " << measured_iters
-              << " iteration(s) in " << seconds << " s, bandwidth " << gib_per_s
-              << " GiB/s" << std::endl;
-  } else {
-    std::cout << "[UCCL Smoke] Client ran warmup iteration only; no bandwidth "
-                 "reported"
-              << std::endl;
+  size_t secondary_size = std::min<size_t>(
+      opts.size,
+      std::max<size_t>(opts.size / 3, resolve_chunk_bytes(opts.size) + 17));
+  if (secondary_size < opts.size) {
+    if (!run_vector_read(secondary_size)) {
+      return 1;
+    }
   }
 
   pointer_client_send_ack(ptr_fd);
