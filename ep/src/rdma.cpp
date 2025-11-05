@@ -949,6 +949,8 @@ static void post_rdma_async_batched_normal_mode(
         {
           auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
               batch_tail_wr, std::move(ring_wrids));
+          printf("pushed tail wr_id %lu into map (map=%p)\n", batch_tail_wr,
+                 (void*)&S.wr_id_to_wr_ids);
           if (!inserted) {
             fprintf(stderr,
                     "thread_idx: %d, Error: tail wr_id %lu already exists "
@@ -1244,7 +1246,7 @@ void local_process_completions(ProxyCtx& S,
             }
             S.wr_id_to_wr_ids.erase(it);
           } else {
-            printf("Error: ACK for unknown wr_id %lu\n", wrid);
+            printf("Error: Atomic ACK for unknown wr_id %lu\n", wrid);
             std::abort();
           }
 #endif
@@ -1283,7 +1285,7 @@ void local_process_completions(ProxyCtx& S,
             }
             S.wr_id_to_wr_ids.erase(it);
           } else {
-            printf("Error: ACK for unknown wr_id %lu\n", wr_done);
+            printf("Error: Write ACK for unknown wr_id %lu\n", wr_done);
             std::abort();
           }
 #endif
@@ -2141,6 +2143,20 @@ static void post_atomic_operations_normal_mode(
                   (unsigned long long)bad->wr_id, bad->opcode);
         }
         std::abort();
+      }
+      uint64_t const batch_tail_wr = group_wrids.back();
+      {
+        auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
+            batch_tail_wr, std::move(group_wrids));
+        if (!inserted) {
+          fprintf(stderr,
+                  "thread_idx: %d, Error: tail wr_id %lu already exists "
+                  "(map=%p, "
+                  "size=%zu, dst_rank=%d)\n",
+                  thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
+                  S.wr_id_to_wr_ids.size(), dst_rank);
+          std::abort();
+        }
       }
 #endif
     }

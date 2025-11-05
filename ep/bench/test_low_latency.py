@@ -138,7 +138,6 @@ def test_main(
     for current_x in x_list:
         for return_recv_hook in (False, True):
             for dispatch_use_fp8 in (False, True):
-                # for dispatch_use_fp8 in (False,):
                 for round_scale in (False,):
                     for round_scale in (False, True) if dispatch_use_fp8 else (False,):
                         for use_ue8m0 in (False, True) if round_scale else (False,):
