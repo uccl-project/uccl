@@ -909,6 +909,12 @@ static void post_rdma_async_batched_normal_mode(
                     .GetImmData();
             wrs[j].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
             wrs[j].imm_data = htonl(imm);
+            printf("Posting AtomicsImm with imm=0x%08x, atomic_offset: %d, atomic_val: %d\n", imm, cmd.atomic_offset, cmd.atomic_val);
+
+            AtomicsImm aimm(imm);
+            assert(aimm.GetValue() == cmd.atomic_val);
+            assert(aimm.GetOff() == cmd.atomic_offset);
+
           } else if (j + 1 == kgroup) {
             // Put WriteImm only on the tail WR
             uint32_t imm =
@@ -918,6 +924,7 @@ static void post_rdma_async_batched_normal_mode(
                     .GetImmData();
             wrs[j].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
             wrs[j].imm_data = htonl(imm);
+            printf("Posting WriteImm with imm=0x%08x\n", imm);
           } else {
             wrs[j].opcode = IBV_WR_RDMA_WRITE;
           }
@@ -935,10 +942,12 @@ static void post_rdma_async_batched_normal_mode(
           std::abort();
         }
         size_t const last = kgroup - 1;
-        uint64_t const batch_tail_wr = wr_ids[last];
+        uint64_t const batch_tail_wr = ring_wrids[last];
+        printf("adding tail wr_id %lu for dst_rank %d\n", batch_tail_wr,
+               dst_rank);
         {
           auto [it, inserted] =
-              S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
+              S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(ring_wrids));
           if (!inserted) {
             fprintf(stderr,
                     "thread_idx: %d, Error: tail wr_id %lu already exists "
@@ -1411,6 +1420,8 @@ void remote_process_completions_normal_mode(
   std::unordered_map<uint32_t, std::vector<ibv_recv_wr>> per_tag;
   per_tag.reserve(8);
 
+  printf("Remote thread %d: processing %d completions\n", idx, ne);
+
   for (int i = 0; i < ne; ++i) {
     ibv_wc const& cqe = wc[i];
     if (cqe.status != IBV_WC_SUCCESS) {
@@ -1433,8 +1444,12 @@ void remote_process_completions_normal_mode(
       if (value == kMaxSendAtomicValue) value = kLargeAtomicValue;
 
       if (!aimm.IsReorderable()) {
+        printf("Applying non-reorderable atomic at index %zu: +%d\n", index,
+               value);
         addr32->fetch_add(value, std::memory_order_release);
       } else {
+        printf("Applying reorderable atomic at index %zu: +%d\n", index,
+               value);
         struct SeqBuf {
           uint8_t expected = 0;       // next seq expected
           uint16_t present_mask = 0;  // bitmask of buffered seqs
@@ -1698,70 +1713,15 @@ void remote_process_completions_fast_mode(
 #endif
 #endif
       if (value == kMaxSendAtomicValue) value = kLargeAtomicValue;
-
-      if (!aimm.IsReorderable()) {
-        addr32->fetch_add(value, std::memory_order_release);
+      bool is_combine = aimm.IsCombine();
+      assert(!is_combine || value >= 0);
+      if (is_combine) {
+        assert(value >= 0 && "Combine atomic value should be non-negative");
       } else {
-        struct SeqBuf {
-          uint8_t expected = 0;       // next seq expected
-          uint16_t present_mask = 0;  // bitmask of buffered seqs
-          int vals[kReorderingBufferSize] = {0};
-        };
-
-        // Thread-local map to maintain per-index state
-        static thread_local std::unordered_map<size_t, SeqBuf> seqbufs;
-        auto& sb = seqbufs[index];
-
-        auto commit = [&](int delta) {
-          addr32->fetch_add(delta, std::memory_order_release);
-        };
-        uint8_t seq = aimm.GetSeq();
-        if (seq >= kReorderingBufferSize) {
-          fprintf(stderr, "Error: seq %u out of range\n", seq);
-          std::abort();
-        }
-        if (seq == sb.expected) {
-          // if (my_rank % MAX_NUM_GPUS == 0)
-          //   printf("seq: %u in order, applying immediately\n", seq);
-          // Apply immediately
-          commit(value);
-          sb.expected = (sb.expected + 1) % kReorderingBufferSize;
-
-          // Drain buffered consecutive entries
-          for (int step = 0; step < kReorderingBufferSize; ++step) {
-            uint8_t e = sb.expected;
-            uint16_t bit = static_cast<uint16_t>(1u << e);
-            if (!(sb.present_mask & bit)) break;
-            commit(sb.vals[e]);
-            sb.present_mask &= static_cast<uint16_t>(~bit);
-            sb.expected = (sb.expected + 1) % kReorderingBufferSize;
-          }
-        } else {
-          // Out-of-order arrival — buffer it
-          if (seq >= kReorderingBufferSize) {
-            fprintf(stderr, "Error: seq %u out of range\n", seq);
-            std::abort();
-          }
-          // if (my_rank % MAX_NUM_GPUS == 0)
-          //   printf("seq: %u out of order (expected %u), buffering\n", seq,
-          //         sb.expected);
-
-          if (sb.present_mask & (1u << seq)) {
-            fprintf(stderr, "Error: duplicate seq %u arrival\n", seq);
-            std::abort();
-          }
-          uint16_t bit = static_cast<uint16_t>(1u << seq);
-          if (sb.present_mask & bit) {
-            // Duplicate (possible with UD/SRD). Ignore safely.
-            // If you prefer strictness, keep the abort here.
-            fprintf(stderr, "Error: duplicate seq %u arrival\n", seq);
-            std::abort();
-          } else {
-            sb.present_mask |= bit;
-            sb.vals[seq] = value;
-          }
-        }
+        assert(value <= -1 && "Dispatch atomic value should be <= -1");
       }
+      if (is_combine) value = 1;
+      addr32->fetch_add(value, std::memory_order_release);
 #endif
     } else if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
                ImmType::IsBarrier(ntohl(cqe.imm_data))) {
@@ -2275,6 +2235,11 @@ static void post_atomic_operations_fast_mode(
       }
       uint32_t const off16 = static_cast<uint32_t>(cmd.req_rptr) & 0xFFFFu;
       int low_latency_buffer_idx = get_low_latency(cmd.cmd_type);
+      if (low_latency_buffer_idx < 0 || low_latency_buffer_idx > 1) {
+        fprintf(stderr, "Invalid low_latency_buffer_idx: %d\n",
+                low_latency_buffer_idx);
+        std::abort();
+      }
       uint32_t const imm = AtomicsImm::Pack(true, get_is_combine(cmd.cmd_type),
                                             v, off16, low_latency_buffer_idx)
                                .GetImmData();
