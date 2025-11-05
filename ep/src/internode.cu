@@ -1375,6 +1375,9 @@ __global__ void __launch_bounds__(
                               cached_channel_head_idx);
     }
   }
+  if (lane_id == 0) {
+    printf("[Dispatch]: warp %d finished!\n", warp_id);
+  }
 }
 
 void dispatch(void* recv_x, float* recv_x_scales, int64_t* recv_topk_idx,

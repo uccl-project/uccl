@@ -735,6 +735,11 @@ class Buffer {
     // Switch back compute stream
     if (allocate_on_comm_stream) at::cuda::setCurrentCUDAStream(compute_stream);
 
+    // synchronize
+    CUDA_CHECK(cudaStreamSynchronize(comm_stream));
+    // print error
+    CUDA_CHECK(cudaGetLastError());
+
     // Return values
     return {recv_x,
             recv_x_scales,
