@@ -762,6 +762,14 @@ int try_bind_listen_socket(int* sock_fd, int base_port,
   return -1;
 }
 
+void RDMAEndpoint::create_unified_p2p_socket() {
+  infer_dev_ = true;
+  p2p_listen_ports_[0] = create_listen_socket(&p2p_listen_fds_[0]);
+  DCHECK(p2p_listen_ports_[0] >= 0)
+      << "Failed to bind after trying many ports!";
+  printf("P2P listening on port %d\n", p2p_listen_ports_[0]);
+}
+
 bool RDMAEndpoint::initialize_engine_by_dev(int dev,
                                             bool enable_p2p_listen = false) {
   bool called = false;
@@ -1060,6 +1068,14 @@ ConnID RDMAEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   ret = send_message(bootstrap_fd, buf, sizeof(int) * 2);
   DCHECK(ret == sizeof(int) * 2) << "uccl_connect: send_message()";
 
+  if (infer_dev_) {
+    // Receive the fixed dev and remote_gpuidx
+    ret = receive_message(bootstrap_fd, buf, sizeof(int) * 2);
+    DCHECK(ret == sizeof(int) * 2) << "uccl_connect: receive_message()";
+    remote_dev = buf[0];
+    remote_gpuidx = buf[1];
+  }
+
   bool is_leader =
       is_local_leader(dev, local_gpuidx, factory_dev->local_ip_str, local_port,
                       remote_dev, remote_gpuidx, remote_ip, remote_port);
@@ -1198,6 +1214,14 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   DCHECK(ret == sizeof(int) * 2) << "uccl_accept: receive_message()";
   *remote_dev = buf[0];
   *remote_gpuidx = buf[1];
+
+  if (infer_dev_) {
+    // Send our dev, gpu to the other side.
+    int buf[2] = {dev, local_gpuidx};
+    ret = send_message(bootstrap_fd, buf, sizeof(int) * 2);
+    DCHECK(ret == sizeof(int) * 2) << "uccl_connect: send_message()";
+  }
+
   uint16_t remote_port = ntohs(cli_addr.sin_port);
   bool is_leader =
       is_local_leader(dev, local_gpuidx, factory_dev->local_ip_str, local_port,
