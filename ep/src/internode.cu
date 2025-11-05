@@ -957,9 +957,6 @@ __global__ void __launch_bounds__(
         __syncwarp();
       }
     }
-    if (lane_id == 0 && warp_id == kNumDispatchRDMASenderWarps) {
-      printf("[RDMASenderCoordinator]: finished!\n");
-    }
   } else if (warp_role == WarpRole::kRDMAAndNVLForwarder) {
     // RDMA consumers and NVL producers
     auto const dst_nvl_rank = target_rank;
