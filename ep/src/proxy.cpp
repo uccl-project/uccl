@@ -820,8 +820,8 @@ void Proxy::post_gpu_commands_mixed(
   printf(
       "[post_gpu_commands_mixed] thread %d: Posting %zu RDMA writes, %zu "
       "atomics, %zu barriers, %zu quiets\n",
-      cfg_.thread_idx, rdma_wrs.size(), atomic_wrs.size(),
-      barrier_cmds.size(), quiet_cmds.size());
+      cfg_.thread_idx, rdma_wrs.size(), atomic_wrs.size(), barrier_cmds.size(),
+      quiet_cmds.size());
   // Handle regular RDMA writes
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,

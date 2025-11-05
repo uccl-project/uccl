@@ -21,8 +21,8 @@ constexpr int kNumMaxWarpGroups = 32;
 #ifndef UCCL_DEBUG_NAN
 #define UCCL_DEBUG_NAN 1
 #endif
-#define DBG_ROOT (blockIdx.x==0 && threadIdx.x==0)
-#define DBG_WARP0 (blockIdx.x==0 && (threadIdx.x/32)==0)
+#define DBG_ROOT (blockIdx.x == 0 && threadIdx.x == 0)
+#define DBG_WARP0 (blockIdx.x == 0 && (threadIdx.x / 32) == 0)
 
 template <int kNumThreads>
 __launch_bounds__(kNumThreads, 1) __global__
@@ -107,7 +107,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   // initialize barrier
-  amd::shared_data.barrier[1] = 0;
+  amd::barrier_init(1);
 #endif
 
   // Sending phase
@@ -178,28 +178,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                            "Invalid vectorization");
           amax = warp_reduce_max<16>(amax);
           calculate_fp8_scales(amax, scale, scale_inv, round_scale);
-          {
-            const float kGuardMax = nextafterf(kFinfoAmaxE4M3, 0.0f); // just below 240 on AMD
-            const float eps_amin = 1e-8f;
-            if (!round_scale) {
-              // recompute scale just under the boundary
-              scale     = kGuardMax / fmaxf(amax, eps_amin);
-              scale_inv = 1.0f / scale;
-            } else {
-              // keep pow2-ish scale but pull it down by 1 ulp
-              scale     = nextafterf(scale, 0.0f);
-              scale_inv = 1.0f / scale;
-            }
-          }
-          if ((lane_id & 0x0F) == 0)
-            rdma_x_scales[i * kNumElemsPerRead / 128] = scale_inv;
-          EP_DEVICE_ASSERT(isfinite(amax));
-          if (blockIdx.x==0 && threadIdx.x==0 && (!isfinite(scale) || !isfinite(scale_inv) || amax<=0.f)) {
-            printf("[dispatch][AMD] WARN scale nan/inf or amax<=0 "
-              "token=%d i=%d amax=%e scale=%e inv=%e round=%d\n",
-              token_idx, i, (double)amax, (double)scale, (double)scale_inv, (int)round_scale);
-          }
-
+          if (lane_id % 16 == 0)
 #else
           EP_STATIC_ASSERT(kNumElemsPerRead * WARP_SIZE / kNumPerChannels == 2,
                            "Invalid vectorization");
@@ -207,13 +186,13 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           calculate_fp8_scales(amax, scale, scale_inv, round_scale);
           if (lane_id == 0 or lane_id == 16)
             rdma_x_scales[i * kNumElemsPerRead / 128] = scale_inv;
-#endif     
-          if (blockIdx.x==0 && threadIdx.x==0) {
-            float s_chk = reinterpret_cast<float const*>(rdma_x_scales)
-                          [i * kNumElemsPerRead / 128];
-            printf("[dispatch] token=%d lane=%d i=%d scale_inv(sample)=%e\n",
-              token_idx, lane_id, i, (double)s_chk);
-          }
+#endif
+            if (blockIdx.x == 0 && threadIdx.x == 0) {
+              float s_chk = reinterpret_cast<float const*>(
+                  rdma_x_scales)[i * kNumElemsPerRead / 128];
+              printf("[dispatch] token=%d lane=%d i=%d scale_inv(sample)=%e\n",
+                     token_idx, lane_id, i, (double)s_chk);
+            }
 
           // Cast into send buffer
           vec_t int2_value;
@@ -227,11 +206,11 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                 __nv_cvt_float2_to_fp8x2(fp32x2, __NV_SATFINITE, __NV_E4M3);
 #if UCCL_DEBUG_NAN
             if (blockIdx.x == 0 && lane_id == 0 && i == 0 && j == 0) {
-              printf("[dispatch][FP8-PACK] token=%d i=%d j=%d a=%e b=%e "
-                     "scale=%e inv=%e amax=%e\n",
-                     token_idx, i, j,
-                     (double)fp32x2.x, (double)fp32x2.y,
-                     (double)scale, (double)scale_inv, (double)amax);
+              printf(
+                  "[dispatch][FP8-PACK] token=%d i=%d j=%d a=%e b=%e "
+                  "scale=%e inv=%e amax=%e\n",
+                  token_idx, i, j, (double)fp32x2.x, (double)fp32x2.y,
+                  (double)scale, (double)scale_inv, (double)amax);
               unsigned short raw16 =
                   *reinterpret_cast<unsigned short*>(&fp8x2_values[0]);
               printf("[dispatch][FP8-PACK] token=%d raw16(first)=0x%04hx\n",
@@ -243,20 +222,25 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           if (blockIdx.x == 0 && lane_id == 0 && i == 0) {
             unsigned long long raw8 =
                 *reinterpret_cast<unsigned long long*>(&rdma_x_vec[0]);
-            printf("[dispatch][SEND] token=%d raw8(fp8 first 8B)=0x%016llx "
-                   "scale=%e inv=%e amax=%e\n",
-                   token_idx, raw8, (double)scale, (double)scale_inv,
-                   (double)amax);
+            printf(
+                "[dispatch][SEND] token=%d raw8(fp8 first 8B)=0x%016llx "
+                "scale=%e inv=%e amax=%e\n",
+                token_idx, raw8, (double)scale, (double)scale_inv,
+                (double)amax);
           }
 #endif
           rdma_x_vec[i] = int2_value;
 #if UCCL_DEBUG_NAN
-         if (DBG_WARP0 && i==0 && lane_id==0) {
-           // dump first 8 FP8 bytes of the message payload we just wrote
-           unsigned long long raw8 = *reinterpret_cast<unsigned long long*>(&rdma_x_vec[0]);
-           printf("[dispatch][SEND] token=%d raw8(fp8 bytes)=0x%016llx scale=%e inv=%e amax=%e\n",
-                  token_idx, raw8, (double)scale, (double)scale_inv, (double)amax);
-         }
+          if (DBG_WARP0 && i == 0 && lane_id == 0) {
+            // dump first 8 FP8 bytes of the message payload we just wrote
+            unsigned long long raw8 =
+                *reinterpret_cast<unsigned long long*>(&rdma_x_vec[0]);
+            printf(
+                "[dispatch][SEND] token=%d raw8(fp8 bytes)=0x%016llx scale=%e "
+                "inv=%e amax=%e\n",
+                token_idx, raw8, (double)scale, (double)scale_inv,
+                (double)amax);
+          }
 #endif
         } else {
           // Reinterpret-cast is for C++14 compatibility
@@ -436,9 +420,11 @@ LOW_LATENCY_DISPATCH_RECV:
                                    num_aligned_scales;
 #if UCCL_DEBUG_NAN
     if (DBG_ROOT) {
-      printf("[dispatch][RECV-SETUP] expert=%d src_rank=%d local_expert=%d hidden_bytes=%zu num_scales=%d aligned=%d\n",
-             responsible_expert_idx, src_rank, local_expert_idx,
-             (size_t)hidden_bytes, num_scales, num_aligned_scales);
+      printf(
+          "[dispatch][RECV-SETUP] expert=%d src_rank=%d local_expert=%d "
+          "hidden_bytes=%zu num_scales=%d aligned=%d\n",
+          responsible_expert_idx, src_rank, local_expert_idx,
+          (size_t)hidden_bytes, num_scales, num_aligned_scales);
     }
 #endif
     // Shared between sub-warps in warp groups
@@ -511,8 +497,11 @@ LOW_LATENCY_DISPATCH_RECV:
       // Add stats for diagnosis
 #if UCCL_DEBUG_NAN
       if (DBG_ROOT) {
-        printf("[dispatch][RECV-COUNT] src_rank=%d num_recv_tokens=%d begin=%d (ipc=%d, ib=%d)\n",
-               src_rank, num_recv_tokens, recv_token_begin_idx, num_recv_tokens_ipc, num_recv_tokens_internode);
+        printf(
+            "[dispatch][RECV-COUNT] src_rank=%d num_recv_tokens=%d begin=%d "
+            "(ipc=%d, ib=%d)\n",
+            src_rank, num_recv_tokens, recv_token_begin_idx,
+            num_recv_tokens_ipc, num_recv_tokens_internode);
       }
 #endif
       if (cumulative_local_expert_recv_stats != nullptr)
@@ -544,25 +533,33 @@ LOW_LATENCY_DISPATCH_RECV:
       auto const dst_data =
           recv_x_int4 + (recv_token_begin_idx + i) * hidden_int4;
 #if UCCL_DEBUG_NAN
-      if (DBG_WARP0 && i==0 && lane_id==0) {
+      if (DBG_WARP0 && i == 0 && lane_id == 0) {
         // peek first 16B (int4) of FP8 payload at source before copy
         int4 peek_src = src_data[0];
-        unsigned long long lo = *reinterpret_cast<unsigned long long*>(&peek_src);
-        unsigned long long hi = *reinterpret_cast<unsigned long long*>(((char*)&peek_src)+8);
-        printf("[dispatch][RECV-BEFORE] token_off=%d src_raw16=0x%016llx 0x%016llx\n",
-               recv_token_begin_idx, lo, hi);
+        unsigned long long lo =
+            *reinterpret_cast<unsigned long long*>(&peek_src);
+        unsigned long long hi =
+            *reinterpret_cast<unsigned long long*>(((char*)&peek_src) + 8);
+        printf(
+            "[dispatch][RECV-BEFORE] token_off=%d src_raw16=0x%016llx "
+            "0x%016llx\n",
+            recv_token_begin_idx, lo, hi);
       }
 #endif
       UNROLLED_WARP_COPY(7, lane_id, hidden_int4, dst_data, src_data,
                          ld_nc_global, st_na_global);
 #if UCCL_DEBUG_NAN
-      if (DBG_WARP0 && i==0 && lane_id==0) {
+      if (DBG_WARP0 && i == 0 && lane_id == 0) {
         // peek first 16B (int4) of packed_recv_x after copy
         int4 peek_dst = dst_data[0];
-        unsigned long long lo = *reinterpret_cast<unsigned long long*>(&peek_dst);
-        unsigned long long hi = *reinterpret_cast<unsigned long long*>(((char*)&peek_dst)+8);
-        printf("[dispatch][RECV-AFTER]  token_off=%d dst_raw16=0x%016llx 0x%016llx\n",
-               recv_token_begin_idx, lo, hi);
+        unsigned long long lo =
+            *reinterpret_cast<unsigned long long*>(&peek_dst);
+        unsigned long long hi =
+            *reinterpret_cast<unsigned long long*>(((char*)&peek_dst) + 8);
+        printf(
+            "[dispatch][RECV-AFTER]  token_off=%d dst_raw16=0x%016llx "
+            "0x%016llx\n",
+            recv_token_begin_idx, lo, hi);
       }
 #endif
       // Copy scales
@@ -586,7 +583,8 @@ LOW_LATENCY_DISPATCH_RECV:
           recv_x_scales[token_idx * token_stride + pack_idx * pack_stride +
                         elem_idx] = scale;
 #if UCCL_DEBUG_NAN
-          if (DBG_WARP0 && token_idx==recv_token_begin_idx && pack_idx==0 && elem_idx==0) {
+          if (DBG_WARP0 && token_idx == recv_token_begin_idx && pack_idx == 0 &&
+              elem_idx == 0) {
             float sc = (float)scale;
             printf("[dispatch][RECV-SCALE] first_scale=%e\n", (double)sc);
           }
@@ -600,9 +598,11 @@ LOW_LATENCY_DISPATCH_RECV:
           recv_x_scales[token_idx * token_stride + pack_idx * pack_stride +
                         elem_idx] = scale;
 #if UCCL_DEBUG_NAN
-          if (DBG_WARP0 && token_idx==recv_token_begin_idx && pack_idx==0 && elem_idx==0) {
+          if (DBG_WARP0 && token_idx == recv_token_begin_idx && pack_idx == 0 &&
+              elem_idx == 0) {
             float sc2 = (float)scale;
-            printf("[dispatch][RECV-SCALE-2] first_scale_lane+W=%e\n", (double)sc2);
+            printf("[dispatch][RECV-SCALE-2] first_scale_lane+W=%e\n",
+                   (double)sc2);
           }
 #endif
         }
@@ -669,7 +669,7 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
   }                                                                           \
   break
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  EP_HOST_ASSERT(num_warps * WARP_SIZE <= 1024);
+  EP_HOST_ASSERT(num_warps * WARP_SIZE <= MAX_NTHREADS);
 #endif
 
   SETUP_LAUNCH_CONFIG(num_sms, num_warps * WARP_SIZE, stream);
@@ -1185,7 +1185,7 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
   break
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  EP_HOST_ASSERT(num_warps * WARP_SIZE <= 1024);
+  EP_HOST_ASSERT(num_warps * WARP_SIZE <= MAX_NTHREADS);
 #endif
 
   SETUP_LAUNCH_CONFIG(num_sms, num_warps * WARP_SIZE, stream);

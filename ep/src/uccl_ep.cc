@@ -1467,10 +1467,16 @@ class Buffer {
     if (not return_recv_hook) stream_wait(launch_stream, compute_stream);
 
     // Allocate packed tensors
-    auto packed_recv_x = torch::empty(
-        {num_local_experts, num_ranks * num_max_dispatch_tokens_per_rank,
-         hidden},
-        x.options().dtype(use_fp8 ? torch::kFloat8_e4m3fn : torch::kBFloat16));
+    auto packed_recv_x =
+        torch::empty({num_local_experts,
+                      num_ranks * num_max_dispatch_tokens_per_rank, hidden},
+                     x.options().dtype(use_fp8 ?
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+                                               torch::kFloat8_e4m3fnuz
+#else
+                                               torch::kFloat8_e4m3fn
+#endif
+                                               : torch::kBFloat16));
     auto packed_recv_src_info = torch::empty(
         {num_local_experts, num_ranks * num_max_dispatch_tokens_per_rank},
         torch::dtype(torch::kInt32).device(torch::kCUDA));

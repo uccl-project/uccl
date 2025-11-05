@@ -1016,6 +1016,8 @@ class RDMAEndpoint {
 
   int ib_relaxed_ordering_enabled_;
 
+  bool infer_dev_ = false;
+
  public:
   RDMAEndpoint(int num_engines_per_dev);
 
@@ -1028,12 +1030,14 @@ class RDMAEndpoint {
   }
 
   inline uint16_t get_p2p_listen_port(int dev) {
+    if (infer_dev_) dev = 0;
     CHECK(p2p_listen_ports_[dev] != 0)
         << "Error: p2p_listen_ports_[" << dev << "] is not set.";
     return p2p_listen_ports_[dev];
   }
 
   inline int get_p2p_listen_fd(int dev) {
+    if (infer_dev_) dev = 0;
     CHECK(p2p_listen_fds_[dev] >= 0)
         << "Error: p2p_listen_fds_[" << dev << "] is not set.";
     return p2p_listen_fds_[dev];
@@ -1050,6 +1054,9 @@ class RDMAEndpoint {
   void cleanup_resources();
 
   bool initialize_engine_by_dev(int dev, bool enable_p2p_listen);
+
+  // Create a unified p2p socket for all devices.
+  void create_unified_p2p_socket();
 
   /// For testing easily.
   ConnID test_uccl_connect(int dev, int gpu, int remote_dev, int remote_gpu,

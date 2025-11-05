@@ -93,6 +93,8 @@ __host__ __device__ constexpr dtype_t ceil_div(dtype_t a, dtype_t b) {
 }
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+// support for AMD GPU MI300X (gfx942)
+// TODO: support AMD GPU MI350X (gfx950)
 constexpr float kFP8Margin = 1e-4;
 constexpr float kFinfoAmaxE4M3 = 240.0f;
 constexpr float kFinfoAmaxInvE4M3 = 1 / 240.0f;
@@ -359,12 +361,12 @@ __forceinline__ __device__ void calculate_fp8_scales(float amax, float& scale,
     int e;
     frexpf(t, &e);
     scale_inv = ldexpf(1.0f, e);
-    scale     = ldexpf(1.0f, -e);
+    scale = ldexpf(1.0f, -e);
   } else {
     scale_inv = t;
-    scale     = kFinfoAmaxE4M3 / amax;
+    scale = kFinfoAmaxE4M3 / amax;
   }
-  if (!isfinite(scale) || scale <= 0.0f)       scale = 1.0f;
+  if (!isfinite(scale) || scale <= 0.0f) scale = 1.0f;
   if (!isfinite(scale_inv) || scale_inv <= 0.0f) scale_inv = 1.0f;
 }
 #else

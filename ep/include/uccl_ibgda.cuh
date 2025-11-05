@@ -45,8 +45,11 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   auto* h = reinterpret_cast<d2hq::D2HHandle*>(
       static_cast<uintptr_t>(d2h_channel_addrs[d2h_channel_idx]));
 
-  printf("[nvshmemi_ibgda_put_nbi_warp] normal mode put: atomic_offset=%llu, atomic_val=%llu, use_normal_mode=%d\n",
-          (unsigned long long)atomic_offset, (unsigned long long)atomic_val, use_normal_mode);
+  printf(
+      "[nvshmemi_ibgda_put_nbi_warp] normal mode put: atomic_offset=%llu, "
+      "atomic_val=%llu, use_normal_mode=%d\n",
+      (unsigned long long)atomic_offset, (unsigned long long)atomic_val,
+      use_normal_mode);
   if (use_normal_mode) {
     if (low_latency_buffer_idx == -1) {
       /* Normal mode */

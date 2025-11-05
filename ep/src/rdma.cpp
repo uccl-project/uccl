@@ -909,7 +909,10 @@ static void post_rdma_async_batched_normal_mode(
                     .GetImmData();
             wrs[j].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
             wrs[j].imm_data = htonl(imm);
-            printf("Posting AtomicsImm with imm=0x%08x, atomic_offset: %d, atomic_val: %d\n", imm, cmd.atomic_offset, cmd.atomic_val);
+            printf(
+                "Posting AtomicsImm with imm=0x%08x, atomic_offset: %d, "
+                "atomic_val: %d\n",
+                imm, cmd.atomic_offset, cmd.atomic_val);
 
             AtomicsImm aimm(imm);
             assert(aimm.GetValue() == cmd.atomic_val);
@@ -943,11 +946,9 @@ static void post_rdma_async_batched_normal_mode(
         }
         size_t const last = kgroup - 1;
         uint64_t const batch_tail_wr = ring_wrids[last];
-        printf("adding tail wr_id %lu for dst_rank %d\n", batch_tail_wr,
-               dst_rank);
         {
-          auto [it, inserted] =
-              S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(ring_wrids));
+          auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
+              batch_tail_wr, std::move(ring_wrids));
           if (!inserted) {
             fprintf(stderr,
                     "thread_idx: %d, Error: tail wr_id %lu already exists "
@@ -1448,8 +1449,7 @@ void remote_process_completions_normal_mode(
                value);
         addr32->fetch_add(value, std::memory_order_release);
       } else {
-        printf("Applying reorderable atomic at index %zu: +%d\n", index,
-               value);
+        printf("Applying reorderable atomic at index %zu: +%d\n", index, value);
         struct SeqBuf {
           uint8_t expected = 0;       // next seq expected
           uint16_t present_mask = 0;  // bitmask of buffered seqs
