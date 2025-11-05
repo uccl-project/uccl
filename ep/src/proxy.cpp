@@ -12,8 +12,13 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#ifndef USE_SUBSET_BARRIER
 static std::string shm_name_for_barrier(std::string const& ip, int thread_idx) {
-  return "/uccl_barrier_" + ip + "_th" + std::to_string(thread_idx);
+  // Include UID to avoid cross-user collisions on /dev/shm which cause EACCES
+  // when a leftover object is owned by a different user.
+  uid_t uid = getuid();
+  return "/uccl_barrier_" + ip + "_uid" + std::to_string(uid) + "_th" +
+         std::to_string(thread_idx);
 }
 
 LocalBarrier* map_local_barrier_shm(std::string const& name, bool* out_owner) {
@@ -70,6 +75,7 @@ void unmap_local_barrier_shm(std::string const& name, LocalBarrier* lb,
   if (lb) munmap(lb, sizeof(LocalBarrier));
   if (owner) shm_unlink(name.c_str());
 }
+#endif
 
 double Proxy::avg_rdma_write_us() const {
   if (kIterations == 0) return 0.0;
@@ -214,11 +220,11 @@ void Proxy::init_common() {
     if (peer == my_rank) continue;
     // Skip rdma connection for intra-node.
     if (peers_[peer].ip == peers_[my_rank].ip) continue;
-#ifdef USE_NORMAL_MODE
-    if (std::abs(peer - my_rank) % MAX_NUM_GPUS != 0) continue;
-#endif
+    if (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0)
+      continue;
     create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
-                         &local_infos_[peer], my_rank, cfg_.d2h_queues.size());
+                         &local_infos_[peer], my_rank, cfg_.d2h_queues.size(),
+                         cfg_.use_normal_mode);
     modify_qp_to_init(c);
   }
 
@@ -229,9 +235,8 @@ void Proxy::init_common() {
     if (peer == my_rank) continue;
     // Skip rdma connection for intra-node.
     if (peers_[peer].ip == peers_[my_rank].ip) continue;
-#ifdef USE_NORMAL_MODE
-    if (std::abs(peer - my_rank) % MAX_NUM_GPUS != 0) continue;
-#endif
+    if (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0)
+      continue;
     bool const i_listen = (my_rank < peer);
     int const tid = pair_tid_block(my_rank, peer, num_ranks, cfg_.thread_idx);
     char const* ip = peers_[peer].ip.c_str();
@@ -254,13 +259,12 @@ void Proxy::init_common() {
     if (peer == my_rank) continue;
     // Skip rdma connection for intra-node.
     if (peers_[peer].ip == peers_[my_rank].ip) continue;
-#ifdef USE_NORMAL_MODE
-    if (std::abs(peer - my_rank) % MAX_NUM_GPUS != 0) continue;
-#endif
+    if (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0)
+      continue;
     auto& c = *ctxs_for_all_ranks_[peer];
 
     // qp is different from each rank.
-    modify_qp_to_rtr(c, &remote_infos_[peer]);
+    modify_qp_to_rtr(c, &remote_infos_[peer], cfg_.use_normal_mode);
     modify_qp_to_rts(c, &local_infos_[peer]);
 
     c.remote_addr = remote_infos_[peer].addr;
@@ -275,50 +279,52 @@ void Proxy::init_common() {
     }
   }
   usleep(50 * 1000);
-#ifdef USE_NORMAL_MODE
-  // if (cfg_.thread_idx != 0) {
-  //   return;
-  // }
-  // Discover local ranks (same IP as me)
-  std::string const my_ip = peers_[cfg_.rank].ip;
-  std::vector<int> local_ranks;
-  local_ranks.reserve(ctxs_for_all_ranks_.size());
-  int leader_rank = cfg_.rank;
-  for (int r = 0; r < (int)peers_.size(); ++r) {
-    if (peers_[r].ip == my_ip) {
-      local_ranks.push_back(r);
-      if (r < leader_rank) leader_rank = r;
+  if (cfg_.use_normal_mode) {
+    // if (cfg_.thread_idx != 0) {
+    //   return;
+    // }
+    // Discover local ranks (same IP as me)
+    std::string const my_ip = peers_[cfg_.rank].ip;
+    std::vector<int> local_ranks;
+    local_ranks.reserve(ctxs_for_all_ranks_.size());
+    int leader_rank = cfg_.rank;
+    for (int r = 0; r < (int)peers_.size(); ++r) {
+      if (peers_[r].ip == my_ip) {
+        local_ranks.push_back(r);
+        if (r < leader_rank) leader_rank = r;
+      }
     }
-  }
-  ctx_.num_local_ranks = (int)local_ranks.size();
-  ctx_.node_leader_rank = leader_rank;
-  ctx_.local_rank = cfg_.local_rank;
-  ctx_.thread_idx = cfg_.thread_idx;
+    ctx_.num_local_ranks = (int)local_ranks.size();
+    ctx_.node_leader_rank = leader_rank;
+    ctx_.local_rank = cfg_.local_rank;
+    ctx_.thread_idx = cfg_.thread_idx;
 
-  if (ctx_.num_local_ranks > UCCL_MAX_LOCAL_RANKS) {
-    fprintf(stderr, "num_local_ranks=%d exceeds UCCL_MAX_LOCAL_RANKS=%d\n",
-            ctx_.num_local_ranks, (int)UCCL_MAX_LOCAL_RANKS);
-    std::abort();
-  }
-  // if (cfg_.thread_idx != 0) return;
-  std::string const shm_name = shm_name_for_barrier(my_ip, cfg_.thread_idx);
-  ctx_.lb = map_local_barrier_shm(shm_name, &ctx_.lb_owner);
-  if (!ctx_.lb) {
-    fprintf(stderr, "Failed to map local barrier shm: %s\n", shm_name.c_str());
-    std::abort();
-  }
-  if (ctx_.lb_owner) {
-    ctx_.lb->full_mask = (ctx_.num_local_ranks >= 64)
-                             ? ~0ULL
-                             : ((1ULL << ctx_.num_local_ranks) - 1ULL);
-    for (int i = 0; i < ctx_.num_local_ranks; ++i) {
-      ctx_.lb->arrive_seq[i].store(0, std::memory_order_relaxed);
-      ctx_.lb->release_seq[i].store(0, std::memory_order_relaxed);
+    if (ctx_.num_local_ranks > UCCL_MAX_LOCAL_RANKS) {
+      fprintf(stderr, "num_local_ranks=%d exceeds UCCL_MAX_LOCAL_RANKS=%d\n",
+              ctx_.num_local_ranks, (int)UCCL_MAX_LOCAL_RANKS);
+      std::abort();
     }
-  } else {
-    while (ctx_.lb->full_mask == 0ULL) cpu_relax();
-  }
+#ifndef USE_SUBSET_BARRIER
+    std::string const shm_name = shm_name_for_barrier(my_ip, cfg_.thread_idx);
+    ctx_.lb = map_local_barrier_shm(shm_name, &ctx_.lb_owner);
+    if (!ctx_.lb) {
+      fprintf(stderr, "Failed to map local barrier shm: %s\n",
+              shm_name.c_str());
+      std::abort();
+    }
+    if (ctx_.lb_owner) {
+      ctx_.lb->full_mask = (ctx_.num_local_ranks >= 64)
+                               ? ~0ULL
+                               : ((1ULL << ctx_.num_local_ranks) - 1ULL);
+      for (int i = 0; i < ctx_.num_local_ranks; ++i) {
+        ctx_.lb->arrive_seq[i].store(0, std::memory_order_relaxed);
+        ctx_.lb->release_seq[i].store(0, std::memory_order_relaxed);
+      }
+    } else {
+      while (ctx_.lb->full_mask == 0ULL) cpu_relax();
+    }
 #endif
+  }
 
 #ifdef USE_MSCCLPP_FIFO_BACKEND
   fifo_seq_.assign(cfg_.d2h_queues.size(), 0);
@@ -365,10 +371,12 @@ void Proxy::run_remote() {
     remote_poll_completions(ctx_, cfg_.thread_idx, ring, ctx_by_tag_,
                             atomic_buffer_ptr_, cfg_.num_ranks,
                             cfg_.num_experts, pending_atomic_updates, cfg_.rank,
-                            cfg_.num_nodes);
+                            cfg_.num_nodes, cfg_.use_normal_mode);
 #ifdef USE_RECEIVER_BARRIER
-    apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
-                          cfg_.num_experts, cfg_.num_ranks);
+    if (!cfg_.use_normal_mode) {
+      apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
+                            cfg_.num_experts, cfg_.num_ranks);
+    }
 #endif
   }
 }
@@ -378,9 +386,8 @@ void Proxy::run_dual() {
   for (int peer = 0; peer < (int)ctxs_for_all_ranks_.size(); ++peer) {
     if (peer == cfg_.rank) continue;
     if (peers_[peer].ip == peers_[cfg_.rank].ip) continue;
-#ifdef USE_NORMAL_MODE
-    if (std::abs(peer - cfg_.rank) % MAX_NUM_GPUS != 0) continue;
-#endif
+    if (cfg_.use_normal_mode && std::abs(peer - cfg_.rank) % MAX_NUM_GPUS != 0)
+      continue;
     auto& ctx_ptr = ctxs_for_all_ranks_[peer];
     if (!ctx_ptr) continue;
     local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
@@ -396,27 +403,32 @@ void Proxy::run_dual() {
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     poll_cq_dual(ctx_, acked_wrs_, cfg_.thread_idx, ring, ctx_by_tag_,
                  atomic_buffer_ptr_, cfg_.num_ranks, cfg_.num_experts,
-                 pending_atomic_updates, cfg_.rank, cfg_.num_nodes);
+                 pending_atomic_updates, cfg_.rank, cfg_.num_nodes,
+                 cfg_.use_normal_mode);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
 #ifdef USE_RECEIVER_BARRIER
-    apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
-                          cfg_.num_experts, cfg_.num_ranks);
+    if (!cfg_.use_normal_mode) {
+      apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
+                            cfg_.num_experts, cfg_.num_ranks);
+    }
 #endif
 
 #ifdef USE_SENDER_BARRIER
-    auto postponed_wr_ids = postponed_wr_ids_;
-    auto postponed_atomics = postponed_atomics_;
-    postponed_wr_ids_.clear();
-    postponed_atomics_.clear();
-    assert(postponed_wr_ids.size() == postponed_atomics.size());
-    assert(postponed_wr_ids_.size() == 0);
-    post_gpu_commands_mixed(postponed_wr_ids, postponed_atomics);
+    if (!cfg_.use_normal_mode) {
+      auto postponed_wr_ids = postponed_wr_ids_;
+      auto postponed_atomics = postponed_atomics_;
+      postponed_wr_ids_.clear();
+      postponed_atomics_.clear();
+      assert(postponed_wr_ids.size() == postponed_atomics.size());
+      assert(postponed_wr_ids_.size() == 0);
+      post_gpu_commands_mixed(postponed_wr_ids, postponed_atomics);
+    }
 #endif
 
-#ifdef USE_NORMAL_MODE
-    barrier_check();
-#endif
+    if (cfg_.use_normal_mode) {
+      barrier_check();
+    }
   }
 }
 
@@ -489,6 +501,8 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
     if (!fifo) continue;
     // Available budget for this FIFO.
     size_t pending = fifo_pending_[rb_idx].size();
+    size_t kMaxInflight =
+        cfg_.use_normal_mode ? kMaxInflightNormal : kMaxInflightLowLatency;
     size_t budget = (kMaxInflight > pending) ? (kMaxInflight - pending) : 0;
     for (size_t take = 0; take < budget; ++take) {
       auto trig = fifo->poll();
@@ -508,7 +522,6 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 
       uint64_t unique_wr_id = (static_cast<uint64_t>(rb_idx) << 32) |
                               (fifo_seq_[rb_idx]++ & 0xFFFFFFFFULL);
-
       wrs_to_post.push_back(unique_wr_id);
       cmds_to_post.push_back(cmd);
       fifo_pending_[rb_idx].push_back(unique_wr_id);
@@ -729,44 +742,58 @@ void Proxy::post_gpu_commands_mixed(
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
     if (get_base_cmd(cmds_to_post[i].cmd_type) == CmdType::ATOMIC) {
 #ifdef USE_SENDER_BARRIER
-      int value = cmds_to_post[i].value;
-      uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
-      uint32_t new_offset =
-          offset - cmds_to_post[i].low_latency_buffer_idx *
-                       align<size_t>(cfg_.num_experts * sizeof(int), 128);
-      size_t new_index = new_offset / sizeof(int);
-      int expert_idx;
+      if (!cfg_.use_normal_mode) {
+        int value = cmds_to_post[i].value;
+        uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
+        uint32_t new_offset =
+            offset - cmds_to_post[i].low_latency_buffer_idx *
+                         align<size_t>(cfg_.num_experts * sizeof(int), 128);
+        size_t new_index = new_offset / sizeof(int);
+        int expected_value;
+        int expert_idx;
 
-      if (cmds_to_post[i].is_combine) {
-        expert_idx = new_index;
-        expected_value = ctx_.combine_sent_counter.Get(
-            {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
-             cmds_to_post[i].dst_rank});
-      } else {
-        expert_idx = new_index / cfg_.num_ranks;
-        expected_value = ctx_.dispatch_sent_counter.Get(
-            {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
-             cmds_to_post[i].dst_rank});
-        value = -value - 1;
-      }
-      if (value != expected_value) {
-        postponed_atomics_.push_back(cmds_to_post[i]);
-        postponed_wr_ids_.push_back(wrs_to_post[i]);
-        assert(postponed_atomics_.size() == postponed_wr_ids_.size());
-        continue;
+        if (cmds_to_post[i].is_combine) {
+          expert_idx = new_index;
+          expected_value = ctx_.combine_sent_counter.Get(
+              {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
+               cmds_to_post[i].dst_rank});
+        } else {
+          expert_idx = new_index / cfg_.num_ranks;
+          expected_value = ctx_.dispatch_sent_counter.Get(
+              {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
+               cmds_to_post[i].dst_rank});
+          value = -value - 1;
+        }
+        if (value != expected_value) {
+          postponed_atomics_.push_back(cmds_to_post[i]);
+          postponed_wr_ids_.push_back(wrs_to_post[i]);
+          assert(postponed_atomics_.size() == postponed_wr_ids_.size());
+          continue;
+        }
       }
 #endif
       atomic_wrs.push_back(wrs_to_post[i]);
       atomic_cmds.push_back(cmds_to_post[i]);
 
 #ifdef USE_SENDER_BARRIER
-      if (cmds_to_post[i].is_combine) {
-        ctx_.combine_sent_counter.Reset({cmds_to_post[i].low_latency_buffer_idx,
-                                         expert_idx, cmds_to_post[i].dst_rank});
-      } else {
-        ctx_.dispatch_sent_counter.Reset(
-            {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
-             cmds_to_post[i].dst_rank});
+      if (!cfg_.use_normal_mode) {
+        uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
+        uint32_t new_offset =
+            offset - cmds_to_post[i].low_latency_buffer_idx *
+                         align<size_t>(cfg_.num_experts * sizeof(int), 128);
+        size_t new_index = new_offset / sizeof(int);
+        int expert_idx;
+        if (cmds_to_post[i].is_combine) {
+          expert_idx = new_index;
+          ctx_.combine_sent_counter.Reset(
+              {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
+               cmds_to_post[i].dst_rank});
+        } else {
+          expert_idx = new_index / cfg_.num_ranks;
+          ctx_.dispatch_sent_counter.Reset(
+              {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
+               cmds_to_post[i].dst_rank});
+        }
       }
 #endif
     } else if (get_base_cmd(cmds_to_post[i].cmd_type) == CmdType::WRITE) {
@@ -793,14 +820,14 @@ void Proxy::post_gpu_commands_mixed(
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
                             rdma_cmds, ctxs_for_all_ranks_, cfg_.rank,
-                            cfg_.thread_idx);
+                            cfg_.thread_idx, cfg_.use_normal_mode);
   }
   if (!atomic_wrs.empty()) {
     post_atomic_operations(ctx_, atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
-                           cfg_.rank, cfg_.thread_idx, acked_wrs_);
+                           cfg_.rank, cfg_.thread_idx, acked_wrs_,
+                           cfg_.use_normal_mode);
   }
   if (!barrier_cmds.empty()) {
-    // barrier(barrier_wrs, barrier_cmds);
 #ifdef USE_MSCCLPP_FIFO_BACKEND
     assert(barrier_wrs.size() == 1);
     assert(ctx_.barrier_wr == -1);
@@ -841,10 +868,12 @@ void Proxy::quiet_cq() {
       remote_process_completions(
           ctx_, cfg_.thread_idx, ring, ne, wc, ctx_by_tag_, atomic_buffer_ptr_,
           cfg_.num_ranks, cfg_.num_experts, pending_atomic_updates, cfg_.rank,
-          cfg_.num_nodes);
+          cfg_.num_nodes, cfg_.use_normal_mode);
 #ifdef USE_RECEIVER_BARRIER
-      apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
-                            cfg_.num_experts, cfg_.num_ranks);
+      if (!cfg_.use_normal_mode) {
+        apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
+                              cfg_.num_experts, cfg_.num_ranks);
+      }
 #endif
     } else {
       ++empty_iters;
@@ -947,16 +976,14 @@ void Proxy::destroy(bool free_gpu_buffer) {
     ibv_close_device(ctx_.context);
     ctx_.context = nullptr;
   }
-
-  // Unmap local barrier shm
-  // if (cfg_.thread_idx == 0) {
+#ifndef USE_SUBSET_BARRIER
   std::string const my_ip =
       (cfg_.rank < (int)peers_.size()) ? peers_[cfg_.rank].ip : "";
   std::string const shm_name = shm_name_for_barrier(my_ip, cfg_.thread_idx);
   unmap_local_barrier_shm(shm_name, ctx_.lb, ctx_.lb_owner);
   ctx_.lb = nullptr;
   ctx_.lb_owner = false;
-  // }
+#endif
 
   acked_wrs_.clear();
   wr_id_to_start_time_.clear();
@@ -1033,8 +1060,7 @@ void Proxy::send_barrier(uint64_t wr) {
       ctx_.barrier_arrival_count = 0;
     }
   }
-
-  // Mark local arrival
+#ifndef USE_SUBSET_BARRIER
   auto* lb = ctx_.lb;
   lb->seq.store(ctx_.barrier_seq, std::memory_order_release);
   lb->arrive_seq[ctx_.local_rank].store((uint32_t)ctx_.barrier_seq,
@@ -1042,7 +1068,81 @@ void Proxy::send_barrier(uint64_t wr) {
 
   uint64_t bit = (1ULL << (uint64_t)ctx_.local_rank);
   lb->arrived_mask.fetch_or(bit, std::memory_order_acq_rel);
+#endif
 }
+
+#ifdef USE_SUBSET_BARRIER
+void Proxy::barrier_check() {
+  if (!ctx_.barrier_inflight) return;
+
+  uint64_t const seq = ctx_.barrier_seq;
+  // Node leader aggregates local arrivals
+  static thread_local uint64_t last_sent_seq = 0;
+  if (last_sent_seq != seq) {
+    last_sent_seq = seq;
+    if (cfg_.node_idx == 0) {
+      // Global leader: mark self-arrival; remote arrivals will come via
+      // your existing CQ handler.
+      if (ctx_.barrier_arrived.empty()) {
+        ctx_.barrier_arrived.assign(ctxs_for_all_ranks_.size(), 0);
+        ctx_.barrier_arrival_count = 0;
+      }
+      if (!ctx_.barrier_arrived[0]) {
+        ctx_.barrier_arrived[0] = 1;
+        ++ctx_.barrier_arrival_count;
+      }
+    } else {
+      int rank = cfg_.rank - cfg_.node_idx * MAX_NUM_GPUS;
+      if (rank < 0 || rank >= MAX_NUM_GPUS) {
+        printf("rank: %d, node_idx: %d invalid for barrier\n", cfg_.rank,
+               cfg_.node_idx);
+      }
+      assert(rank >= 0 && rank < MAX_NUM_GPUS);
+      post_barrier_msg(/*dst=*/rank,
+                       /*ack=*/false, seq);
+    }
+  }
+
+  if (cfg_.node_idx == 0) {
+    if (ctx_.barrier_arrival_count == cfg_.num_nodes) {
+      std::unordered_map<std::string, int> leader_for_ip;
+      for (int r = 0; r < (int)peers_.size(); ++r) {
+        if (r >= MAX_NUM_GPUS && (r - cfg_.rank) % MAX_NUM_GPUS == 0) {
+          leader_for_ip[peers_[r].ip] = r;
+        }
+      }
+      for (auto const& kv : leader_for_ip) {
+        std::string const& ip = kv.first;
+        int leader_r = kv.second;
+        if (ip == peers_[0].ip) continue;
+        post_barrier_msg(leader_r, true, seq);
+      }
+      ctx_.barrier_arrived.clear();
+      ctx_.barrier_arrival_count = 0;
+
+      acked_wrs_.insert(ctx_.barrier_wr);
+#ifndef USE_MSCCLPP_FIFO_BACKEND
+      ctx_.barrier_inflight = false;
+      ctx_.barrier_wr = -1;
+#endif
+      return;
+    }
+  }
+
+  // When global release comes back (CQ handler should set these):
+  if (ctx_.barrier_released && ctx_.barrier_release_seq == seq) {
+    // Reset local mask for next barrier and consume the global release
+    ctx_.barrier_released = false;
+
+    // Complete WR
+    acked_wrs_.insert(ctx_.barrier_wr);
+#ifndef USE_MSCCLPP_FIFO_BACKEND
+    ctx_.barrier_inflight = false;
+    ctx_.barrier_wr = -1;
+#endif
+  }
+}
+#else
 
 void Proxy::barrier_check() {
   if (!ctx_.barrier_inflight) return;
@@ -1144,3 +1244,4 @@ void Proxy::barrier_check() {
 #endif
   }
 }
+#endif

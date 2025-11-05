@@ -35,7 +35,7 @@ setup(
         ],
     },
     license="Apache-2.0",
-    install_requires=[],
+    install_requires=["intervaltree"],
     classifiers=[
         "Programming Language :: Python :: 3",
     ],

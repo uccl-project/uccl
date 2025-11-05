@@ -13,14 +13,6 @@ else
   EFA_LDFLAGS := -L$(EFA_HOME)/lib -lefa
 endif
 
-ifeq ($(MAKE_NORMAL_MODE),1)
-  NORMAL_CFLAGS := -DUSE_NORMAL_MODE
-  $(info Building with normal mode)
-else
-  NORMAL_CFLAGS :=
-  $(info Building with low latency mode)
-endif
-
 ARCH := $(shell uname -m)
 GPU_NAME ?= $(shell nvidia-smi --query-gpu=name --format=csv,noheader | head -n1)
 CPU_IS_ARM64 := 0

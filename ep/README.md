@@ -12,16 +12,7 @@ We provide a script to install dependencies (tested on p5en). Then under a Pytho
 ./install_deps.sh
 ```
 
-# Under uccl/ep
-
-We first configure the environmental variable before `make install`
-```bash
-# Normal mode
-export MAKE_NORMAL_MODE=1
-# Low latency mode
-export MAKE_NORMAL_MODE=0
-```
-Next, in a conda environment: 
+In a conda environment: 
 ```bash
 make -j install
 ```
@@ -113,7 +104,7 @@ torchrun --nnodes=4 --nproc_per_node=8 --node_rank=<rank> \
   --hidden=7168 --num-topk=8 --num-experts=288 --test-ll-compatibility
 ```
 
-Please refer to [ep/bench/baseline/](ep/bench/baseline/) for more baselines including `torch.distributed`, NVSHMEM, and pplx-kernels. 
+Please refer to [bench/baseline](bench/baseline) for running more baselines including Torch, NVSHMEM, and pplx-kernels on EFA. 
 
 ## Results
 
@@ -128,6 +119,15 @@ We follow the **DeepSeek-V3 pretraining** configuration (4096 tokens per batch, 
 | Internode | 16 | 50 GB/s (RDMA)    | 16 | 18 GB/s (RDMA)    |
 | Internode | 24 | 53 GB/s (RDMA)    | 24 | 26 GB/s (RDMA)    |
 | Internode | 32 | 54 GB/s (RDMA)    | 32 | 43 GB/s (RDMA)    |
+
+**Latency:**
+
+| #EP | Dispatch (FP8) | Dispatch (BF16) | Combine |
+|:----:|:---------------:|:----------------:|:--------:|
+| 8  | 500 µs | 922 µs | 973 µs |
+| 16 | 1196 µs | 1988 µs | 6379 µs |
+| 24 | 1633 µs | 2863 µs | 6365 µs |
+| 32 | 2022 µs | 3702 µs | 4899 µs |
 
 ### Low-latency kernels with pure RDMA
 

@@ -22,7 +22,7 @@ UCCL is an efficient communication library for GPUs, covering collectives, P2P (
 
 An UCCL overview can be found in this [slide deck](https://docs.google.com/presentation/d/1LQxZzxghRmua4FkfQjWu69wXy9hrs9V_tXrXt_DT-F4/edit?usp=sharing) with the following components: 
 
-* **UCCL-collective** serves as a drop-in replacement for NCCL/RCCL (e.g., requiring no changes to application code), and significantly outperforms them in both latency and throughput across various settings. 
+* **[UCCL-collective](collective/)** serves as a drop-in replacement for NCCL/RCCL (e.g., requiring no changes to application code), and significantly outperforms them in both latency and throughput across various settings. 
 
   <details>
   <summary>UCCL-collective performance comparison</summary>
@@ -46,9 +46,9 @@ An UCCL overview can be found in this [slide deck](https://docs.google.com/prese
   More benefits include: 1) packet spraying with 256 paths, 2) advanced congestion control such as latency-based and receiver-driven ones, 3) efficient loss recovery by selective repeat, and 4) widely usable in public clouds with legacy NICs and Ethernet. Feel free to check out our full [technical report](https://arxiv.org/pdf/2504.17307).
   </details>
 
-* **UCCL-P2P** provides both NIXL-style initiator-target tranfer APIs and NCCL-style collective APIs, with the same or better performance than both. UCCL-P2P is purposely designed for the next-gen 800Gbps NICs with efficient multi-threaded transfer engines. 
+* **[UCCL-P2P](p2p/)** provides both NIXL-style initiator-target tranfer APIs and NCCL-style collective APIs, with the same or better performance than both. UCCL-P2P is purposely designed for the next-gen 800Gbps NICs with efficient multi-threaded transfer engines. 
 
-* **UCCL-EP** allows running DeepEP atop of heterogeneous hardware platforms, including AMD and Nvidia GPUs, and any RDMA NICs such as AWS EFA NICs and Broadcom NICs, while achieving IBGDA-level performance. UCCL-EP also makes DeepEP SM-free, devoting all GPU SMs to compute. 
+* **[UCCL-EP](ep/)** allows running DeepEP atop of heterogeneous hardware platforms, including AMD and Nvidia GPUs, and any RDMA NICs such as AWS EFA NICs and Broadcom NICs, while achieving IBGDA-level performance. UCCL-EP also makes DeepEP SM-free, devoting all GPU SMs to compute. 
 
 UCCL has been adopted as part of the AMD [TheRock](https://github.com/ROCm/TheRock) ecosystem.
 
@@ -75,7 +75,7 @@ git clone https://github.com/uccl-project/uccl.git --recursive
 cd uccl && bash build_and_install.sh [cuda|rocm|therock] [all|rdma|p2p|efa|ep] [py_version] [rocm_index_url]
 ```
 > Note: 
-> - when building for ROCm with python packaging through TheRock, please specify your ROCm index url; the default is `https://rocm.nightlies.amd.com/v2/gfx94X-dcgpu` and it may not be what you want. When installing UCCL wheels for TheRock, please provide pip with the index url and add the optional extra `[rocm]` to the wheel, e.g., `pip install --extra-index-url https://rocm.nightlies.amd.com/v2/gfx94X-dcgpu wheelhouse-therock/uccl-0.0.1.post4+therock-py3-none-manylinux_2_35_x86_64.whl[rocm]`.
+> - when building for ROCm with python packaging through TheRock, please specify your ROCm index url; the default is `https://rocm.prereleases.amd.com/whl/gfx94X-dcgpu` and it may not be what you want. When installing UCCL wheels for TheRock, please provide pip with the index url and add the optional extra `[rocm]` to the wheel, e.g., `pip install --extra-index-url https://rocm.prereleases.amd.com/whl/gfx94X-dcgpu wheelhouse-therock/uccl-0.0.1.post4-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl[rocm]`.
 > - you can build with different CUDA or ROCm versions by specifying tags such as cuda13 or rocm6. The default versions are CUDA 12.x for the "cuda" tag and ROCm 7.x for the "rocm" tag.
 
 Then, when running your PyTorch applications, set the environment variable accordingly: 
